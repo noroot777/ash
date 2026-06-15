@@ -6,8 +6,10 @@ import { fileURLToPath } from "node:url";
 import { join, extname, normalize } from "node:path";
 import { api } from "./routes.js";
 import { ensureSchema } from "./db/index.js";
+import { startScheduler } from "./schedules.js";
 
 await ensureSchema();
+startScheduler();
 
 const app = new Hono();
 app.route("/api", api);

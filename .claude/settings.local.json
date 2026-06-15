@@ -36,7 +36,12 @@
       "Bash(git -c user.name=harness -c user.email=harness@local commit -q -m 'M2: Linear-style task management UI *)",
       "Bash(codex exec *)",
       "Bash(git -c user.name=harness -c user.email=harness@local commit -q -m 'M3: group parallel/serial scheduling + CodexExecutor *)",
-      "Bash(git -c user.name=harness -c user.email=harness@local commit -q -m 'M4: /debate symmetric adversarial pipeline *)"
+      "Bash(git -c user.name=harness -c user.email=harness@local commit -q -m 'M4: /debate symmetric adversarial pipeline *)",
+      "Bash(node --input-type=module -e ' *)",
+      "Bash(pkill -f \"npm -w server\")",
+      "Bash(lsof -ti:4317)",
+      "Bash(xargs kill)",
+      "Bash(git -c user.name=harness -c user.email=harness@local commit -q -m 'M5: task scheduling \\(one-shot + cron\\) *)"
     ]
   }
 }

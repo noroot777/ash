@@ -1,4 +1,4 @@
-import type { Project, Task, Session, Group, GateAction } from "@harness/shared";
+import type { Project, Task, Session, Group, GateAction, Schedule } from "@harness/shared";
 
 const j = async (r: Response) => {
   if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
@@ -49,6 +49,20 @@ export const api = {
       headers: { "content-type": "application/json" },
       body: JSON.stringify(action),
     }).then(j),
+
+  schedule: (taskId: string): Promise<Schedule | null> =>
+    fetch(`/api/tasks/${taskId}/schedule`).then(j),
+  setSchedule: (
+    taskId: string,
+    s: { kind: "once" | "cron"; at?: string | null; cron?: string | null },
+  ): Promise<Schedule> =>
+    fetch(`/api/tasks/${taskId}/schedule`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(s),
+    }).then(j),
+  clearSchedule: (taskId: string): Promise<unknown> =>
+    fetch(`/api/tasks/${taskId}/schedule`, { method: "DELETE" }).then(j),
 
   sessions: (taskId: string): Promise<Session[]> =>
     fetch(`/api/tasks/${taskId}/sessions`).then(j),

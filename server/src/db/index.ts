@@ -42,5 +42,10 @@ export async function ensureSchema() {
       worktree_path TEXT, branch TEXT, cli_session_id TEXT, resume_command TEXT,
       command_line TEXT, started_at TEXT NOT NULL, exit_status INTEGER
     );
+    CREATE TABLE IF NOT EXISTS schedules (
+      id TEXT PRIMARY KEY, task_id TEXT NOT NULL, kind TEXT NOT NULL,
+      at TEXT, cron TEXT, enabled INTEGER NOT NULL DEFAULT 1,
+      last_run_at TEXT, created_at TEXT NOT NULL
+    );
   `);
 }

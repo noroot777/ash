@@ -63,3 +63,14 @@ export const sessions = sqliteTable("sessions", {
   startedAt: text("started_at").notNull(),
   exitStatus: integer("exit_status"),
 });
+
+export const schedules = sqliteTable("schedules", {
+  id: text("id").primaryKey(),
+  taskId: text("task_id").notNull(),
+  kind: text("kind").notNull(), // once | cron
+  at: text("at"), // ISO timestamp for one-shot
+  cron: text("cron"), // 5-field expression for recurring
+  enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
+  lastRunAt: text("last_run_at"),
+  createdAt: text("created_at").notNull(),
+});

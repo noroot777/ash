@@ -11,7 +11,7 @@ import type {
   TaskStatus,
 } from "@harness/shared";
 import { db } from "./db/index.js";
-import { projects, groups, tasks, sessions } from "./db/schema.js";
+import { projects, groups, tasks, sessions, schedules } from "./db/schema.js";
 import { bus } from "./bus.js";
 import { id, now } from "./util.js";
 import { runTask } from "./orchestrator.js";
@@ -210,6 +210,38 @@ api.post("/tasks/:id/gate", async (c) => {
   const ok = resolveGate(taskId, action);
   if (!ok) return c.json({ error: "no open gate for this task" }, 409);
   return c.json({ ok: true });
+});
+
+// ── schedules (§9) — one schedule per task ──────────────────────────────────
+api.get("/tasks/:id/schedule", async (c) => {
+  const row = (await db.select().from(schedules).where(eq(schedules.taskId, c.req.param("id")))).at(0);
+  return c.json(row ?? null);
+});
+
+api.put("/tasks/:id/schedule", async (c) => {
+  const taskId = c.req.param("id");
+  const b = await c.req.json<{ kind: "once" | "cron"; at?: string | null; cron?: string | null; enabled?: boolean }>();
+  const existing = (await db.select().from(schedules).where(eq(schedules.taskId, taskId))).at(0);
+  const row = {
+    id: existing?.id ?? id(),
+    taskId,
+    kind: b.kind,
+    at: b.at ?? null,
+    cron: b.cron ?? null,
+    enabled: b.enabled ?? true,
+    lastRunAt: null,
+    createdAt: existing?.createdAt ?? now(),
+  };
+  if (existing) await db.update(schedules).set(row).where(eq(schedules.id, existing.id));
+  else await db.insert(schedules).values(row);
+  await db.update(tasks).set({ scheduleId: row.id, updatedAt: now() }).where(eq(tasks.id, taskId));
+  return c.json(row);
+});
+
+api.delete("/tasks/:id/schedule", async (c) => {
+  await db.delete(schedules).where(eq(schedules.taskId, c.req.param("id")));
+  await db.update(tasks).set({ scheduleId: null, updatedAt: now() }).where(eq(tasks.id, c.req.param("id")));
+  return c.json({ deleted: true });
 });
 
 // ── SSE stream (§12) ───────────────────────────────────────────────────────

@@ -3,6 +3,7 @@ import type { Task, Group, Session, TaskStatus, Priority } from "@harness/shared
 import { api } from "./api";
 import { STATUSES, PRIORITIES } from "./constants";
 import { Credential } from "./ui";
+import { ScheduleControl } from "./ScheduleControl";
 
 export type LogLine = {
   kind: "text" | "thinking" | "tool" | "error" | "done";
@@ -148,6 +149,10 @@ export function TaskDetail({
               ))}
           </select>
           {task.dependsOn.length === 0 && <span className="text-neutral-700">无（同组并行时按依赖排序）</span>}
+        </div>
+
+        <div className="mt-2">
+          <ScheduleControl taskId={task.id} />
         </div>
       </header>
 

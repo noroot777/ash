@@ -118,6 +118,20 @@ export interface Session {
   exitStatus: number | null;
 }
 
+// ── Scheduling (§9) ──────────────────────────────────────────────────────────
+// Schedules attach to a Task. Once = fire at a timestamp then disable; cron =
+// recurring 5-field expression in local time. The scheduler only enqueues.
+export interface Schedule {
+  id: string;
+  taskId: string;
+  kind: "once" | "cron";
+  at: string | null;
+  cron: string | null;
+  enabled: boolean;
+  lastRunAt: string | null;
+  createdAt: string;
+}
+
 // ── HITL gates (§7) ──────────────────────────────────────────────────────────
 export type GateName = "G1" | "G2"; // G1 = consensus gate, G2 = code gate
 export type GateAction =

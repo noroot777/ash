@@ -1,0 +1,89 @@
+import { eq } from "drizzle-orm";
+import { db } from "./db/index.js";
+import { schedules, tasks } from "./db/schema.js";
+import { runTask } from "./orchestrator.js";
+import { runDebate } from "./debate/index.js";
+
+// ── Minimal 5-field cron matcher (minute hour dom month dow), local time ──────
+// Supports *, n, a-b, */n, and comma lists. No seconds, no names.
+function fieldMatches(field: string, value: number, min: number, max: number): boolean {
+  return field.split(",").some((part) => {
+    let step = 1;
+    let range = part;
+    const slash = part.indexOf("/");
+    if (slash !== -1) {
+      step = Number(part.slice(slash + 1)) || 1;
+      range = part.slice(0, slash);
+    }
+    let lo = min;
+    let hi = max;
+    if (range !== "*") {
+      const dash = range.indexOf("-");
+      if (dash !== -1) {
+        lo = Number(range.slice(0, dash));
+        hi = Number(range.slice(dash + 1));
+      } else {
+        lo = hi = Number(range);
+      }
+    }
+    if (value < lo || value > hi) return false;
+    return (value - lo) % step === 0;
+  });
+}
+
+export function cronMatches(expr: string, d: Date): boolean {
+  const parts = expr.trim().split(/\s+/);
+  if (parts.length !== 5) return false;
+  const [mi, ho, dom, mo, dow] = parts;
+  return (
+    fieldMatches(mi, d.getMinutes(), 0, 59) &&
+    fieldMatches(ho, d.getHours(), 0, 23) &&
+    fieldMatches(dom, d.getDate(), 1, 31) &&
+    fieldMatches(mo, d.getMonth() + 1, 1, 12) &&
+    fieldMatches(dow, d.getDay(), 0, 6)
+  );
+}
+
+const sameMinute = (a: string, b: Date) => {
+  const da = new Date(a);
+  return da.getFullYear() === b.getFullYear() && da.getMonth() === b.getMonth() && da.getDate() === b.getDate() && da.getHours() === b.getHours() && da.getMinutes() === b.getMinutes();
+};
+
+// Enqueue + run a task via the normal path (DESIGN.md §9: schedule only enqueues).
+async function fire(taskId: string) {
+  const t = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
+  if (!t || t.status === "running" || t.status === "queued") return;
+  if (t.mode === "debate") void runDebate(taskId);
+  else void runTask(taskId);
+}
+
+async function tick() {
+  const now = new Date();
+  const rows = await db.select().from(schedules).where(eq(schedules.enabled, true));
+  for (const s of rows) {
+    try {
+      if (s.kind === "once") {
+        if (s.at && new Date(s.at) <= now && !s.lastRunAt) {
+          await db.update(schedules).set({ lastRunAt: now.toISOString(), enabled: false }).where(eq(schedules.id, s.id));
+          await fire(s.taskId);
+        }
+      } else if (s.kind === "cron" && s.cron && cronMatches(s.cron, now)) {
+        // guard against double-fire within the same minute (tick runs more often)
+        if (s.lastRunAt && sameMinute(s.lastRunAt, now)) continue;
+        await db.update(schedules).set({ lastRunAt: now.toISOString() }).where(eq(schedules.id, s.id));
+        await fire(s.taskId);
+      }
+    } catch {
+      /* keep ticking */
+    }
+  }
+}
+
+// Catch-up on startup: missed one-shots (at < now, never fired) fire once via the
+// normal tick. Missed cron runs are NOT backfilled — only the next match fires
+// (DESIGN.md §9: recurring only runs the most recent, no pile-up).
+export function startScheduler(intervalMs = 30_000) {
+  void tick();
+  setInterval(() => void tick(), intervalMs);
+  console.log("[harness] scheduler started");
+}

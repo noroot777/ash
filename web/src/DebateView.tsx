@@ -3,6 +3,7 @@ import type { Task, Session, DebateConfig, GateAction } from "@harness/shared";
 import type { DebateState, DebateTurn } from "./debateState";
 import { Credential } from "./ui";
 import { api } from "./api";
+import { ScheduleControl } from "./ScheduleControl";
 
 export function DebateView({
   task,
@@ -69,6 +70,9 @@ export function DebateView({
             {cfg.maxRounds ?? "不设限"} · G1 {cfg.gateG1 === "on" ? "开" : "关"} · G2 {cfg.gateG2 === "on" ? "开" : "关"}
           </p>
         )}
+        <div className="mt-2">
+          <ScheduleControl taskId={task.id} />
+        </div>
       </header>
 
       {sessions.length > 0 && (
