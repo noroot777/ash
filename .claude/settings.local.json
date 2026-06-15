@@ -1,0 +1,34 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//Users/fjh/bin/**)",
+      "Bash(python3 -)",
+      "Bash(date -v+32M \"+%Y-%m-%d %H:%M:%S %Z\")",
+      "Bash(rm -rf /Users/fjh/.claude/scheduled-tasks/harness-build-start)",
+      "Bash(npm -v)",
+      "Bash(git --version)",
+      "Bash(command -v claude codex)",
+      "Bash(git init *)",
+      "Bash(git branch *)",
+      "Bash(npm install *)",
+      "Bash(npm approve-scripts *)",
+      "Bash(npm -w shared run build)",
+      "Bash(PORT=4317 npx tsx server/src/index.ts)",
+      "Read(//tmp/**)",
+      "Bash(curl -s http://localhost:4317/api/health)",
+      "Bash(curl -s http://localhost:4317/api/tasks)",
+      "Bash(curl -s -N --max-time 2 http://localhost:4317/api/events)",
+      "Bash(npm -w web run build)",
+      "Bash(pkill -f \"tsx server/src\")",
+      "Bash(npm run *)",
+      "Bash(npm -w server run build)",
+      "Bash(PORT=4317 npm -w server run start)",
+      "Bash(curl -s http://localhost:4317/)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code} %{content_type}\\\\n\" http://localhost:4317/tasks/abc)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code} %{content_type}\\\\n\" \"http://localhost:4317/assets/$\\(ls web/dist/assets)",
+      "Bash(pkill -f \"node dist/index.js\")",
+      "Bash(git add *)",
+      "Bash(git -c user.name=harness -c user.email=harness@local commit -q -m 'M0: project skeleton \\(Hono + Vite/React/Tailwind + SQLite/Drizzle\\) *)"
+    ]
+  }
+}

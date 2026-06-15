@@ -1,0 +1,10 @@
+node_modules/
+dist/
+*.log
+
+# local data: sqlite db + agent run artifacts (per DESIGN.md §11)
+data/
+.worktrees/
+
+.DS_Store
+*.local
