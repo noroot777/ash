@@ -15,6 +15,7 @@ import { projects, groups, tasks, sessions } from "./db/schema.js";
 import { bus } from "./bus.js";
 import { id, now } from "./util.js";
 import { runTask } from "./orchestrator.js";
+import { runGroup } from "./scheduler.js";
 
 export const api = new Hono();
 
@@ -144,6 +145,15 @@ api.get("/groups", async (c) => {
     ? await db.select().from(groups).where(eq(groups.projectId, pid))
     : await db.select().from(groups);
   return c.json(rows);
+});
+
+// Run an entire group honoring parallel/serial + dependsOn (§1/§3).
+api.post("/groups/:id/run", async (c) => {
+  const gid = c.req.param("id");
+  const g = (await db.select().from(groups).where(eq(groups.id, gid))).at(0);
+  if (!g) return c.json({ error: "not found" }, 404);
+  void runGroup(gid);
+  return c.json({ started: true }, 202);
 });
 
 // ── sessions (traceability credentials, §13) ───────────────────────────────

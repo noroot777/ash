@@ -135,8 +135,15 @@ export function App() {
     for (const p of projects)
       if (p.id !== projectId)
         cmds.push({ id: "proj-" + p.id, group: "切换项目", label: p.name, run: () => setProjectId(p.id) });
+    for (const g of groups)
+      cmds.push({
+        id: "rg-" + g.id,
+        group: "运行分组",
+        label: `${g.name} · ${g.mode === "parallel" ? "并行" : "串行"}`,
+        run: () => api.runGroup(g.id),
+      });
     return cmds;
-  }, [current, projects, projectId, run, del, patch, newGroup]);
+  }, [current, projects, projectId, groups, run, del, patch, newGroup]);
 
   return (
     <div className="grid h-full grid-cols-[320px_1fr]">
@@ -182,6 +189,7 @@ export function App() {
           key={current.id}
           task={current}
           groups={groups}
+          allTasks={visible}
           logs={logs[current.id] ?? []}
           sessionsBump={sessionsBump}
           onRun={() => run(current.id)}

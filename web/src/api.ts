@@ -22,6 +22,8 @@ export const api = {
       headers: { "content-type": "application/json" },
       body: JSON.stringify(g),
     }).then(j),
+  runGroup: (id: string): Promise<unknown> =>
+    fetch(`/api/groups/${id}/run`, { method: "POST" }).then(j),
 
   tasks: (): Promise<Task[]> => fetch("/api/tasks").then(j),
   task: (id: string): Promise<Task> => fetch(`/api/tasks/${id}`).then(j),

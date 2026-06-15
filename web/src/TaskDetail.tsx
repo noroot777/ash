@@ -11,6 +11,7 @@ export type LogLine = {
 export function TaskDetail({
   task,
   groups,
+  allTasks,
   logs,
   sessionsBump,
   onRun,
@@ -20,6 +21,7 @@ export function TaskDetail({
 }: {
   task: Task;
   groups: Group[];
+  allTasks: Task[];
   logs: LogLine[];
   sessionsBump: number;
   onRun: () => void;
@@ -111,6 +113,40 @@ export function TaskDetail({
           <span className="ml-auto text-neutral-600">
             {task.mode} {task.mode === "single" ? `· @${task.agentType ?? "—"}` : ""}
           </span>
+        </div>
+
+        <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+          <span className="text-neutral-600">依赖</span>
+          {task.dependsOn.map((d) => {
+            const dep = allTasks.find((t) => t.id === d);
+            return (
+              <button
+                key={d}
+                onClick={() => onPatch({ dependsOn: task.dependsOn.filter((x) => x !== d) })}
+                className="rounded bg-neutral-800 px-1.5 py-0.5 text-neutral-300 hover:line-through"
+                title="点击移除依赖"
+              >
+                {dep?.title ?? d}
+              </button>
+            );
+          })}
+          <select
+            value=""
+            onChange={(e) => {
+              if (e.target.value) onPatch({ dependsOn: [...task.dependsOn, e.target.value] });
+            }}
+            className="rounded-md border border-neutral-800 bg-neutral-900 px-2 py-1 text-neutral-400 outline-none"
+          >
+            <option value="">+ 添加依赖</option>
+            {allTasks
+              .filter((t) => t.id !== task.id && !task.dependsOn.includes(t.id))
+              .map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.title}
+                </option>
+              ))}
+          </select>
+          {task.dependsOn.length === 0 && <span className="text-neutral-700">无（同组并行时按依赖排序）</span>}
         </div>
       </header>
 
