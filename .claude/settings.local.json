@@ -35,7 +35,8 @@
       "Bash(git -c user.name=harness -c user.email=harness@local commit -q -m 'M1: single-agent vertical slice \\(CLI driving + worktree + SSE + credentials\\) *)",
       "Bash(git -c user.name=harness -c user.email=harness@local commit -q -m 'M2: Linear-style task management UI *)",
       "Bash(codex exec *)",
-      "Bash(git -c user.name=harness -c user.email=harness@local commit -q -m 'M3: group parallel/serial scheduling + CodexExecutor *)"
+      "Bash(git -c user.name=harness -c user.email=harness@local commit -q -m 'M3: group parallel/serial scheduling + CodexExecutor *)",
+      "Bash(git -c user.name=harness -c user.email=harness@local commit -q -m 'M4: /debate symmetric adversarial pipeline *)"
     ]
   }
 }

@@ -1,4 +1,4 @@
-import type { Project, Task, Session, Group } from "@harness/shared";
+import type { Project, Task, Session, Group, GateAction } from "@harness/shared";
 
 const j = async (r: Response) => {
   if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
@@ -43,9 +43,19 @@ export const api = {
     fetch(`/api/tasks/${id}`, { method: "DELETE" }).then(j),
   runTask: (id: string): Promise<unknown> =>
     fetch(`/api/tasks/${id}/run`, { method: "POST" }).then(j),
+  gate: (id: string, action: GateAction): Promise<unknown> =>
+    fetch(`/api/tasks/${id}/gate`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(action),
+    }).then(j),
 
   sessions: (taskId: string): Promise<Session[]> =>
     fetch(`/api/tasks/${taskId}/sessions`).then(j),
   sessionOutput: (id: string): Promise<string> =>
     fetch(`/api/sessions/${id}/output`).then((r) => r.text()),
+  debateTranscript: (
+    taskId: string,
+  ): Promise<{ round: number; speaker: "A" | "B" | "impl"; text: string; raised: boolean }[]> =>
+    fetch(`/api/tasks/${taskId}/debate`).then(j),
 };

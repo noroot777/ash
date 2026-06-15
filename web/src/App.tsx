@@ -7,6 +7,9 @@ import { TaskDetail, type LogLine } from "./TaskDetail";
 import { CommandPalette, type Command } from "./CommandPalette";
 import { STATUSES, PRIORITIES } from "./constants";
 import { CreateTask } from "./CreateTask";
+import { Composer } from "./DebateComposer";
+import { DebateView } from "./DebateView";
+import { applyDebateEvent, emptyDebate, type DebateState } from "./debateState";
 
 export function App() {
   const [projects, setProjects] = useState<Project[]>([]);
@@ -15,6 +18,7 @@ export function App() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [logs, setLogs] = useState<Record<string, LogLine[]>>({});
+  const [debates, setDebates] = useState<Record<string, DebateState>>({});
   const [sessionsBump, setSessionsBump] = useState(0);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
@@ -25,8 +29,14 @@ export function App() {
         setTasks((ts) => ts.map((t) => (t.id === ev.taskId ? { ...t, status: ev.status } : t)));
         if (ev.status === "done" || ev.status === "failed") setSessionsBump((n) => n + 1);
       } else if (ev.type === "agent.event") {
-        const line = renderEvent(ev.event);
-        if (line) setLogs((m) => ({ ...m, [ev.taskId]: [...(m[ev.taskId] ?? []), line] }));
+        if (ev.role === "single") {
+          const line = renderEvent(ev.event);
+          if (line) setLogs((m) => ({ ...m, [ev.taskId]: [...(m[ev.taskId] ?? []), line] }));
+        } else {
+          setDebates((m) => ({ ...m, [ev.taskId]: applyDebateEvent(m[ev.taskId] ?? emptyDebate(), ev) }));
+        }
+      } else if (ev.type === "debate.progress" || ev.type === "debate.gate") {
+        setDebates((m) => ({ ...m, [ev.taskId]: applyDebateEvent(m[ev.taskId] ?? emptyDebate(), ev) }));
       }
     }, []),
   );
@@ -62,8 +72,11 @@ export function App() {
 
   const run = useCallback(async (id: string) => {
     setLogs((m) => ({ ...m, [id]: [] }));
+    setDebates((m) => ({ ...m, [id]: emptyDebate() }));
     await api.runTask(id);
   }, []);
+
+  const gate = useCallback((id: string, action: Parameters<typeof api.gate>[1]) => api.gate(id, action), []);
 
   const del = useCallback(
     async (id: string) => {
@@ -175,31 +188,48 @@ export function App() {
             </span>
           </div>
         </div>
-        <button
-          onClick={() => setCreateOpen(true)}
-          className="mx-4 mb-1 rounded-md border border-neutral-800 py-1.5 text-xs text-neutral-400 hover:bg-neutral-900"
-        >
-          + 新建任务 <span className="text-neutral-600">C</span>
-        </button>
+        <Composer
+          projectId={projectId ?? ""}
+          onCreated={(t, doRun) => {
+            setTasks((ts) => [t, ...ts]);
+            setSelected(t.id);
+            if (doRun) {
+              setDebates((m) => ({ ...m, [t.id]: emptyDebate() }));
+              api.runTask(t.id);
+            }
+          }}
+        />
         <TaskList tasks={visible} groups={groups} selected={selected} onSelect={setSelected} />
       </aside>
 
       {current ? (
-        <TaskDetail
-          key={current.id}
-          task={current}
-          groups={groups}
-          allTasks={visible}
-          logs={logs[current.id] ?? []}
-          sessionsBump={sessionsBump}
-          onRun={() => run(current.id)}
-          onPatch={(p) => patch(current.id, p)}
-          onCreateGroup={newGroup}
-          onDelete={() => del(current.id)}
-        />
+        current.mode === "debate" ? (
+          <DebateView
+            key={current.id}
+            task={current}
+            state={debates[current.id] ?? emptyDebate()}
+            sessionsBump={sessionsBump}
+            onRun={() => run(current.id)}
+            onGate={(a) => gate(current.id, a)}
+            onDelete={() => del(current.id)}
+          />
+        ) : (
+          <TaskDetail
+            key={current.id}
+            task={current}
+            groups={groups}
+            allTasks={visible}
+            logs={logs[current.id] ?? []}
+            sessionsBump={sessionsBump}
+            onRun={() => run(current.id)}
+            onPatch={(p) => patch(current.id, p)}
+            onCreateGroup={newGroup}
+            onDelete={() => del(current.id)}
+          />
+        )
       ) : (
         <div className="flex items-center justify-center text-sm text-neutral-600">
-          选择任务，或按 C 新建
+          选择任务，或在左上输入框新建 / 输入 /debate
         </div>
       )}
 

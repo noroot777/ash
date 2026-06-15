@@ -16,6 +16,9 @@ import { bus } from "./bus.js";
 import { id, now } from "./util.js";
 import { runTask } from "./orchestrator.js";
 import { runGroup } from "./scheduler.js";
+import { runDebate } from "./debate/index.js";
+import { resolveGate } from "./debate/gates.js";
+import type { GateAction } from "@harness/shared";
 
 export const api = new Hono();
 
@@ -175,14 +178,38 @@ api.get("/sessions/:id/output", async (c) => {
   }
 });
 
+// Persisted debate transcript (rebuilds the timeline on reload, §12).
+api.get("/tasks/:id/debate", async (c) => {
+  try {
+    const raw = await readFile(join("./data/runs", c.req.param("id"), "transcript.jsonl"), "utf8");
+    const turns = raw
+      .split("\n")
+      .filter(Boolean)
+      .map((l) => JSON.parse(l));
+    return c.json(turns);
+  } catch {
+    return c.json([]);
+  }
+});
+
 // ── run a task (§1/§12) ─────────────────────────────────────────────────────
 api.post("/tasks/:id/run", async (c) => {
   const taskId = c.req.param("id");
   const r = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!r) return c.json({ error: "not found" }, 404);
   // Fire-and-forget; progress streams over /api/events.
-  void runTask(taskId);
+  if (r.mode === "debate") void runDebate(taskId);
+  else void runTask(taskId);
   return c.json({ started: true }, 202);
+});
+
+// ── HITL gate decision (§7) — 放行 / 打回 / 注入意见 / 提问 ───────────────────
+api.post("/tasks/:id/gate", async (c) => {
+  const taskId = c.req.param("id");
+  const action = await c.req.json<GateAction>();
+  const ok = resolveGate(taskId, action);
+  if (!ok) return c.json({ error: "no open gate for this task" }, 409);
+  return c.json({ ok: true });
 });
 
 // ── SSE stream (§12) ───────────────────────────────────────────────────────

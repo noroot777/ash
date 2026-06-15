@@ -118,6 +118,14 @@ export interface Session {
   exitStatus: number | null;
 }
 
+// ── HITL gates (§7) ──────────────────────────────────────────────────────────
+export type GateName = "G1" | "G2"; // G1 = consensus gate, G2 = code gate
+export type GateAction =
+  | { kind: "approve"; text?: string } // 放行 (text = optional note carried into implement)
+  | { kind: "reject" } // 打回终止
+  | { kind: "inject"; text: string } // 注入意见 → 回炉再辩
+  | { kind: "ask"; text: string }; // 提问 → 答完继续
+
 // ── Executor streaming events (§12) ──────────────────────────────────────────
 export type AgentEvent =
   | { kind: "thinking"; text: string }
@@ -126,6 +134,8 @@ export type AgentEvent =
   | { kind: "session"; cliSessionId: string }
   | { kind: "error"; message: string }
   | { kind: "done"; exitStatus: number };
+
+export type DebateSpeaker = "A" | "B" | "impl";
 
 // SSE envelope pushed to the web client.
 export type ServerEvent =
@@ -137,4 +147,12 @@ export type ServerEvent =
       role: SessionRole;
       event: AgentEvent;
     }
-  | { type: "debate.progress"; taskId: string; round: number; speaker: "A" | "B"; raisedHand: boolean };
+  | {
+      type: "debate.progress";
+      taskId: string;
+      round: number;
+      speaker: DebateSpeaker;
+      phase: "start" | "end";
+      raisedHand?: boolean;
+    }
+  | { type: "debate.gate"; taskId: string; gate: GateName; open: boolean };

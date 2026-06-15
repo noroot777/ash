@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { Task, Group, Session, TaskStatus, Priority } from "@harness/shared";
 import { api } from "./api";
 import { STATUSES, PRIORITIES } from "./constants";
+import { Credential } from "./ui";
 
 export type LogLine = {
   kind: "text" | "thinking" | "tool" | "error" | "done";
@@ -210,34 +211,4 @@ function Line({ l }: { l: LogLine }) {
   if (l.kind === "thinking")
     return <div className="my-0.5 whitespace-pre-wrap break-words italic text-neutral-600">{l.text}</div>;
   return <div className="my-0.5 whitespace-pre-wrap break-words text-neutral-200">{l.text}</div>;
-}
-
-function Credential({ s }: { s: Session }) {
-  const [copied, setCopied] = useState<string | null>(null);
-  const copy = (label: string, text: string) => {
-    navigator.clipboard.writeText(text);
-    setCopied(label);
-    setTimeout(() => setCopied(null), 1200);
-  };
-  return (
-    <div className="flex items-center gap-1.5 rounded-md border border-neutral-800 bg-neutral-900/40 px-2 py-1 text-xs">
-      <span className="text-neutral-400">{s.role}</span>
-      <span className="text-neutral-600">·</span>
-      <span className="text-neutral-500">{s.executor}</span>
-      <button
-        onClick={() => copy("cmd", s.resumeCommand ?? "")}
-        className="ml-1 rounded bg-neutral-800 px-1.5 py-0.5 text-neutral-300 hover:bg-neutral-700"
-        title={s.resumeCommand ?? ""}
-      >
-        {copied === "cmd" ? "已复制" : "复制 resume 命令"}
-      </button>
-      <button
-        onClick={() => copy("id", s.cliSessionId ?? "")}
-        className="rounded bg-neutral-800 px-1.5 py-0.5 text-neutral-400 hover:bg-neutral-700"
-        title={s.cliSessionId ?? ""}
-      >
-        {copied === "id" ? "✓" : "ID"}
-      </button>
-    </div>
-  );
 }

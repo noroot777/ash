@@ -47,3 +47,28 @@ export async function prepareWorkspace(
   }
   return { path, branch, isWorktree: true };
 }
+
+// Commit whatever the implementer changed in its worktree (DESIGN.md §4: default
+// auto-commit). No-op if nothing changed. Returns the commit sha or null.
+export async function commitWorktree(path: string, message: string): Promise<string | null> {
+  try {
+    await exec("git", ["-C", path, "add", "-A"]);
+    const { stdout: status } = await exec("git", ["-C", path, "status", "--porcelain"]);
+    if (!status.trim()) return null; // nothing to commit
+    await exec("git", [
+      "-C",
+      path,
+      "-c",
+      "user.name=harness",
+      "-c",
+      "user.email=harness@local",
+      "commit",
+      "-m",
+      message,
+    ]);
+    const { stdout: sha } = await exec("git", ["-C", path, "rev-parse", "HEAD"]);
+    return sha.trim();
+  } catch {
+    return null;
+  }
+}
