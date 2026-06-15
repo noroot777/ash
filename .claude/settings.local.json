@@ -28,7 +28,11 @@
       "Bash(curl -s -o /dev/null -w \"%{http_code} %{content_type}\\\\n\" \"http://localhost:4317/assets/$\\(ls web/dist/assets)",
       "Bash(pkill -f \"node dist/index.js\")",
       "Bash(git add *)",
-      "Bash(git -c user.name=harness -c user.email=harness@local commit -q -m 'M0: project skeleton \\(Hono + Vite/React/Tailwind + SQLite/Drizzle\\) *)"
+      "Bash(git -c user.name=harness -c user.email=harness@local commit -q -m 'M0: project skeleton \\(Hono + Vite/React/Tailwind + SQLite/Drizzle\\) *)",
+      "mcp__scheduled-tasks__list_scheduled_tasks",
+      "Bash(cd /Users/fjh/code/harness; pkill -f \"node dist/index.js\" 2>/dev/null; sleep 1; echo \"old server stopped\"; mkdir -p .claude)",
+      "mcp__Claude_Preview__preview_start",
+      "Bash(git -c user.name=harness -c user.email=harness@local commit -q -m 'M1: single-agent vertical slice \\(CLI driving + worktree + SSE + credentials\\) *)"
     ]
   }
 }

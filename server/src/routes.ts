@@ -1,6 +1,8 @@
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import { eq } from "drizzle-orm";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import type {
   Project,
   Group,
@@ -12,6 +14,7 @@ import { db } from "./db/index.js";
 import { projects, groups, tasks, sessions } from "./db/schema.js";
 import { bus } from "./bus.js";
 import { id, now } from "./util.js";
+import { runTask } from "./orchestrator.js";
 
 export const api = new Hono();
 
@@ -111,6 +114,29 @@ api.post("/tasks", async (c) => {
 api.get("/tasks/:id/sessions", async (c) => {
   const rows = await db.select().from(sessions).where(eq(sessions.taskId, c.req.param("id")));
   return c.json(rows.map(toSession));
+});
+
+// Persisted output of a session (for reloads; live output comes via SSE).
+api.get("/sessions/:id/output", async (c) => {
+  const sid = c.req.param("id");
+  const row = (await db.select().from(sessions).where(eq(sessions.id, sid))).at(0);
+  if (!row) return c.json({ error: "not found" }, 404);
+  try {
+    const text = await readFile(join("./data/runs", row.taskId, `${sid}.md`), "utf8");
+    return c.text(text);
+  } catch {
+    return c.text("");
+  }
+});
+
+// ── run a task (§1/§12) ─────────────────────────────────────────────────────
+api.post("/tasks/:id/run", async (c) => {
+  const taskId = c.req.param("id");
+  const r = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
+  if (!r) return c.json({ error: "not found" }, 404);
+  // Fire-and-forget; progress streams over /api/events.
+  void runTask(taskId);
+  return c.json({ started: true }, 202);
 });
 
 // ── SSE stream (§12) ───────────────────────────────────────────────────────
