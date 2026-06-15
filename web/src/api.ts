@@ -1,4 +1,4 @@
-import type { Project, Task, Session } from "@harness/shared";
+import type { Project, Task, Session, Group } from "@harness/shared";
 
 const j = async (r: Response) => {
   if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
@@ -14,6 +14,15 @@ export const api = {
       body: JSON.stringify({ name, repoPath }),
     }).then(j),
 
+  groups: (projectId?: string): Promise<Group[]> =>
+    fetch(`/api/groups${projectId ? `?projectId=${projectId}` : ""}`).then(j),
+  createGroup: (g: Partial<Group> & { projectId: string; name: string }): Promise<Group> =>
+    fetch("/api/groups", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(g),
+    }).then(j),
+
   tasks: (): Promise<Task[]> => fetch("/api/tasks").then(j),
   task: (id: string): Promise<Task> => fetch(`/api/tasks/${id}`).then(j),
   createTask: (t: Partial<Task> & { projectId: string; title: string }): Promise<Task> =>
@@ -22,6 +31,14 @@ export const api = {
       headers: { "content-type": "application/json" },
       body: JSON.stringify(t),
     }).then(j),
+  patchTask: (id: string, patch: Partial<Task>): Promise<Task> =>
+    fetch(`/api/tasks/${id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(patch),
+    }).then(j),
+  deleteTask: (id: string): Promise<unknown> =>
+    fetch(`/api/tasks/${id}`, { method: "DELETE" }).then(j),
   runTask: (id: string): Promise<unknown> =>
     fetch(`/api/tasks/${id}/run`, { method: "POST" }).then(j),
 

@@ -110,6 +110,42 @@ api.post("/tasks", async (c) => {
   return c.json(toTask(row as typeof tasks.$inferSelect), 201);
 });
 
+// Partial update: title/body/status/priority/labels/groupId/agentType/mode/debate.
+api.patch("/tasks/:id", async (c) => {
+  const tid = c.req.param("id");
+  const existing = (await db.select().from(tasks).where(eq(tasks.id, tid))).at(0);
+  if (!existing) return c.json({ error: "not found" }, 404);
+  const b = await c.req.json<Partial<Task>>();
+  const patch: Record<string, unknown> = { updatedAt: now() };
+  if (b.title !== undefined) patch.title = b.title;
+  if (b.body !== undefined) patch.body = b.body;
+  if (b.status !== undefined) patch.status = b.status;
+  if (b.priority !== undefined) patch.priority = b.priority;
+  if (b.labels !== undefined) patch.labels = JSON.stringify(b.labels);
+  if (b.groupId !== undefined) patch.groupId = b.groupId;
+  if (b.agentType !== undefined) patch.agentType = b.agentType;
+  if (b.mode !== undefined) patch.mode = b.mode;
+  if (b.debate !== undefined) patch.debate = b.debate ? JSON.stringify(b.debate) : null;
+  await db.update(tasks).set(patch).where(eq(tasks.id, tid));
+  if (b.status !== undefined) bus.publish({ type: "task.status", taskId: tid, status: b.status });
+  const updated = (await db.select().from(tasks).where(eq(tasks.id, tid))).at(0)!;
+  return c.json(toTask(updated));
+});
+
+api.delete("/tasks/:id", async (c) => {
+  await db.delete(tasks).where(eq(tasks.id, c.req.param("id")));
+  return c.json({ deleted: true });
+});
+
+// ── groups (transient batch containers, §3) ─────────────────────────────────
+api.get("/groups", async (c) => {
+  const pid = c.req.query("projectId");
+  const rows = pid
+    ? await db.select().from(groups).where(eq(groups.projectId, pid))
+    : await db.select().from(groups);
+  return c.json(rows);
+});
+
 // ── sessions (traceability credentials, §13) ───────────────────────────────
 api.get("/tasks/:id/sessions", async (c) => {
   const rows = await db.select().from(sessions).where(eq(sessions.taskId, c.req.param("id")));

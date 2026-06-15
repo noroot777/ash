@@ -1,44 +1,43 @@
 import { useEffect, useRef, useState } from "react";
-import type { Task, Session, TaskStatus } from "@harness/shared";
+import type { Task, Group, Session, TaskStatus, Priority } from "@harness/shared";
 import { api } from "./api";
+import { STATUSES, PRIORITIES } from "./constants";
 
 export type LogLine = {
   kind: "text" | "thinking" | "tool" | "error" | "done";
   text: string;
 };
 
-const STATUS_LABEL: Record<TaskStatus, string> = {
-  backlog: "待排期",
-  queued: "排队中",
-  running: "运行中",
-  awaiting_review: "等待审核",
-  done: "完成",
-  failed: "失败",
-  canceled: "已取消",
-};
-
 export function TaskDetail({
   task,
+  groups,
   logs,
   sessionsBump,
   onRun,
+  onPatch,
+  onCreateGroup,
+  onDelete,
 }: {
   task: Task;
+  groups: Group[];
   logs: LogLine[];
   sessionsBump: number;
   onRun: () => void;
+  onPatch: (patch: Partial<Task>) => void;
+  onCreateGroup: () => void;
+  onDelete: () => void;
 }) {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [history, setHistory] = useState<string>("");
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  // Load credentials + persisted output on select and when a run finishes.
   useEffect(() => {
     api.sessions(task.id).then(async (ss) => {
       setSessions(ss);
       if (ss.length && logs.length === 0) {
-        const txt = await api.sessionOutput(ss[ss.length - 1].id).catch(() => "");
-        setHistory(txt);
+        setHistory(await api.sessionOutput(ss[ss.length - 1].id).catch(() => ""));
+      } else {
+        setHistory("");
       }
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -50,22 +49,69 @@ export function TaskDetail({
 
   const busy = task.status === "running" || task.status === "queued";
 
+  const addLabel = () => {
+    const l = prompt("标签？")?.trim();
+    if (l && !task.labels.includes(l)) onPatch({ labels: [...task.labels, l] });
+  };
+
   return (
     <main className="flex h-full min-h-0 flex-col">
-      <header className="flex items-center gap-3 border-b border-neutral-800 px-6 py-4">
-        <div className="min-w-0">
+      <header className="border-b border-neutral-800 px-6 py-4">
+        <div className="flex items-center gap-3">
           <h1 className="truncate text-lg font-medium tracking-tight">{task.title}</h1>
-          <p className="mt-0.5 text-xs text-neutral-500">
-            {STATUS_LABEL[task.status]} · {task.mode} · @{task.agentType ?? "—"}
-          </p>
+          <button
+            onClick={onRun}
+            disabled={busy}
+            className="ml-auto rounded-md bg-neutral-200 px-4 py-1.5 text-sm font-medium text-neutral-900 disabled:opacity-40"
+          >
+            {busy ? "运行中…" : "运行"}
+          </button>
+          <button
+            onClick={onDelete}
+            className="rounded-md border border-neutral-800 px-2 py-1.5 text-sm text-neutral-500 hover:text-red-400"
+            title="删除任务"
+          >
+            删除
+          </button>
         </div>
-        <button
-          onClick={onRun}
-          disabled={busy}
-          className="ml-auto rounded-md bg-neutral-200 px-4 py-1.5 text-sm font-medium text-neutral-900 disabled:opacity-40"
-        >
-          {busy ? "运行中…" : "运行"}
-        </button>
+
+        <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
+          <Select
+            value={task.status}
+            onChange={(v) => onPatch({ status: v as TaskStatus })}
+            options={STATUSES.map((s) => ({ value: s.key, label: s.label }))}
+          />
+          <Select
+            value={task.priority}
+            onChange={(v) => onPatch({ priority: v as Priority })}
+            options={PRIORITIES.map((p) => ({ value: p.key, label: `优先级·${p.label}` }))}
+          />
+          <Select
+            value={task.groupId ?? ""}
+            onChange={(v) => (v === "__new" ? onCreateGroup() : onPatch({ groupId: v || null }))}
+            options={[
+              { value: "", label: "无分组" },
+              ...groups.map((g) => ({ value: g.id, label: `${g.name} · ${g.mode}` })),
+              { value: "__new", label: "+ 新建分组" },
+            ]}
+          />
+          {task.labels.map((l) => (
+            <button
+              key={l}
+              onClick={() => onPatch({ labels: task.labels.filter((x) => x !== l) })}
+              className="rounded-full bg-neutral-800 px-2 py-0.5 text-neutral-300 hover:line-through"
+              title="点击移除"
+            >
+              {l}
+            </button>
+          ))}
+          <button onClick={addLabel} className="rounded-full border border-neutral-800 px-2 py-0.5 text-neutral-500">
+            + 标签
+          </button>
+          <span className="ml-auto text-neutral-600">
+            {task.mode} {task.mode === "single" ? `· @${task.agentType ?? "—"}` : ""}
+          </span>
+        </div>
       </header>
 
       {sessions.length > 0 && (
@@ -76,15 +122,16 @@ export function TaskDetail({
         </div>
       )}
 
-      <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-6 py-4 font-mono text-[13px] leading-relaxed break-words">
+      <div
+        ref={scrollRef}
+        className="min-h-0 flex-1 overflow-y-auto break-words px-6 py-4 font-mono text-[13px] leading-relaxed"
+      >
         {task.body && (
           <p className="mb-4 whitespace-pre-wrap break-words border-l-2 border-neutral-700 pl-3 text-neutral-500">
             {task.body}
           </p>
         )}
-        {history && logs.length === 0 && (
-          <pre className="whitespace-pre-wrap break-words text-neutral-300">{history}</pre>
-        )}
+        {history && logs.length === 0 && <pre className="whitespace-pre-wrap break-words text-neutral-300">{history}</pre>}
         {logs.map((l, i) => (
           <Line key={i} l={l} />
         ))}
@@ -96,14 +143,36 @@ export function TaskDetail({
   );
 }
 
+function Select({
+  value,
+  onChange,
+  options,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  options: { value: string; label: string }[];
+}) {
+  return (
+    <select
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      className="rounded-md border border-neutral-800 bg-neutral-900 px-2 py-1 text-neutral-300 outline-none hover:bg-neutral-800"
+    >
+      {options.map((o) => (
+        <option key={o.value} value={o.value}>
+          {o.label}
+        </option>
+      ))}
+    </select>
+  );
+}
+
 function Line({ l }: { l: LogLine }) {
-  if (l.kind === "tool")
-    return <div className="my-0.5 break-words text-amber-300/80">⚙ {l.text}</div>;
+  if (l.kind === "tool") return <div className="my-0.5 break-words text-amber-300/80">⚙ {l.text}</div>;
   if (l.kind === "error") return <div className="my-0.5 break-words text-red-400">✕ {l.text}</div>;
-  if (l.kind === "done")
-    return <div className="my-2 text-center text-xs text-neutral-600">{l.text}</div>;
+  if (l.kind === "done") return <div className="my-2 text-center text-xs text-neutral-600">{l.text}</div>;
   if (l.kind === "thinking")
-    return <div className="my-0.5 whitespace-pre-wrap break-words text-neutral-600 italic">{l.text}</div>;
+    return <div className="my-0.5 whitespace-pre-wrap break-words italic text-neutral-600">{l.text}</div>;
   return <div className="my-0.5 whitespace-pre-wrap break-words text-neutral-200">{l.text}</div>;
 }
 

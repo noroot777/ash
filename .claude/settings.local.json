@@ -32,7 +32,8 @@
       "mcp__scheduled-tasks__list_scheduled_tasks",
       "Bash(cd /Users/fjh/code/harness; pkill -f \"node dist/index.js\" 2>/dev/null; sleep 1; echo \"old server stopped\"; mkdir -p .claude)",
       "mcp__Claude_Preview__preview_start",
-      "Bash(git -c user.name=harness -c user.email=harness@local commit -q -m 'M1: single-agent vertical slice \\(CLI driving + worktree + SSE + credentials\\) *)"
+      "Bash(git -c user.name=harness -c user.email=harness@local commit -q -m 'M1: single-agent vertical slice \\(CLI driving + worktree + SSE + credentials\\) *)",
+      "Bash(git -c user.name=harness -c user.email=harness@local commit -q -m 'M2: Linear-style task management UI *)"
     ]
   }
 }
