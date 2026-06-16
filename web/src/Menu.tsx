@@ -38,6 +38,15 @@ export function Menu({
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const mouse = useRef(false); // distinguishes pointer-focus from keyboard(Tab)-focus
+  // refs so the listener effect can stay subscribed without resetting `active`
+  const activeRef = useRef(0);
+  activeRef.current = active;
+  const optionsRef = useRef(options);
+  optionsRef.current = options;
+  const valueRef = useRef(value);
+  valueRef.current = value;
+  const onChangeRef = useRef(onChange);
+  onChangeRef.current = onChange;
 
   const close = useCallback(() => {
     setOpen(false);
@@ -77,9 +86,15 @@ export function Menu({
     return () => el.removeEventListener("focus", onFocus);
   }, [openMenu]);
 
+  // Set the highlighted option to the current value when the menu opens.
+  useEffect(() => {
+    if (open) setActive(Math.max(0, optionsRef.current.findIndex((o) => o.value === valueRef.current)));
+  }, [open]);
+
+  // Listeners while open. Reads dynamic data from refs so it stays subscribed
+  // across renders without resetting `active` (the arrow-key bug).
   useEffect(() => {
     if (!open) return;
-    setActive(Math.max(0, options.findIndex((o) => o.value === value)));
     const onDoc = (e: MouseEvent) => {
       const t = e.target as Node;
       if (!triggerRef.current?.contains(t) && !menuRef.current?.contains(t)) close();
@@ -91,15 +106,15 @@ export function Menu({
         triggerRef.current?.focus();
       } else if (e.key === "ArrowDown") {
         e.preventDefault();
-        setActive((a) => Math.min(a + 1, options.length - 1));
+        setActive((a) => Math.min(a + 1, optionsRef.current.length - 1));
       } else if (e.key === "ArrowUp") {
         e.preventDefault();
         setActive((a) => Math.max(a - 1, 0));
       } else if (e.key === "Enter" || e.key === " ") {
         e.preventDefault();
-        const o = options[active];
+        const o = optionsRef.current[activeRef.current];
         if (o) {
-          onChange(o.value);
+          onChangeRef.current(o.value);
           close();
         }
       }
@@ -116,7 +131,7 @@ export function Menu({
       window.removeEventListener("scroll", onScroll, true);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, active, options, value, onChange, close]);
+  }, [open, close]);
 
   return (
     <>
@@ -164,10 +179,12 @@ export function Menu({
                   ) : (
                     <span
                       role="button"
-                      title="设为默认"
+                      title="设为默认（并选中）"
                       onClick={(e) => {
                         e.stopPropagation();
                         onSetDefault(o.value);
+                        onChange(o.value);
+                        close();
                       }}
                       className="text-faint opacity-0 transition-opacity hover:text-accent group-hover:opacity-100"
                     >
