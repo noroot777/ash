@@ -21,8 +21,19 @@ export function DebateModal({
   onCreated: (t: Task, run: boolean) => void;
 }) {
   const [cfg, setCfg] = useState<DebateConfig>(() => ({ ...loadDefaults(), topic: "" }));
+  const [defaults, setDefaults] = useState(loadDefaults);
   const [busy, setBusy] = useState(false);
   const set = <K extends keyof DebateConfig>(k: K, v: DebateConfig[K]) => setCfg((c) => ({ ...c, [k]: v }));
+  // Per-slot "set as default" (pin inside each dropdown).
+  const pinDefault = (k: keyof DebateConfig, raw: string) => {
+    const v = (k === "maxRounds" ? (raw === "" ? null : Number(raw)) : raw) as never;
+    saveDefault(k, v);
+    setDefaults((d) => ({ ...d, [k]: v }));
+  };
+  const defStr = (k: keyof DebateConfig) => {
+    const v = defaults[k];
+    return k === "maxRounds" ? (v === null ? "" : String(v)) : String(v ?? "");
+  };
 
   const launch = async () => {
     if (!cfg.topic.trim() || busy) return;
@@ -41,12 +52,6 @@ export function DebateModal({
     }
   };
 
-  const saveDefaults = () => {
-    (["debaterA", "debaterB", "implementer", "maxRounds", "gateG1", "gateG2"] as const).forEach((k) =>
-      saveDefault(k, cfg[k]),
-    );
-  };
-
   return (
     <Modal
       title="发起对抗 · /debate"
@@ -54,9 +59,6 @@ export function DebateModal({
       width={640}
       footer={
         <>
-          <button onClick={saveDefaults} className="mr-auto rounded-md border border-line px-3 py-1.5 text-[12px] text-muted hover:bg-raised hover:text-ink">
-            存为默认
-          </button>
           <button onClick={onClose} className="px-3 py-1.5 text-[13px] text-muted">取消</button>
           <button
             disabled={!cfg.topic.trim() || busy}
@@ -77,8 +79,8 @@ export function DebateModal({
           className="w-full rounded-md border border-line bg-canvas px-3 py-2 text-[14px] text-ink outline-none placeholder:text-faint focus:border-accent"
         />
         <div className="flex flex-wrap items-center gap-1.5">
-          <Pill icon={<Robot size={14} />} label={`辩手A ${cfg.debaterA}`} value={cfg.debaterA} onChange={(v) => set("debaterA", v as AgentType)} options={agentOpts} />
-          <Pill icon={<Robot size={14} />} label={`辩手B ${cfg.debaterB}`} value={cfg.debaterB} onChange={(v) => set("debaterB", v as AgentType)} options={agentOpts} />
+          <Pill icon={<Robot size={14} />} label={`辩手A ${cfg.debaterA}`} value={cfg.debaterA} onChange={(v) => set("debaterA", v as AgentType)} options={agentOpts} defaultValue={defStr("debaterA")} onSetDefault={(v) => pinDefault("debaterA", v)} />
+          <Pill icon={<Robot size={14} />} label={`辩手B ${cfg.debaterB}`} value={cfg.debaterB} onChange={(v) => set("debaterB", v as AgentType)} options={agentOpts} defaultValue={defStr("debaterB")} onSetDefault={(v) => pinDefault("debaterB", v)} />
           <Pill
             icon={<Hammer size={14} />}
             label={`实现方 ${cfg.implementer === "A" ? "辩手A" : "辩手B"}`}
@@ -88,6 +90,8 @@ export function DebateModal({
               { value: "A", label: "辩手A" },
               { value: "B", label: "辩手B" },
             ]}
+            defaultValue={defStr("implementer")}
+            onSetDefault={(v) => pinDefault("implementer", v)}
           />
           <Pill
             icon={<ArrowsClockwise size={14} />}
@@ -102,6 +106,8 @@ export function DebateModal({
               { value: "5", label: "5 轮" },
               { value: "8", label: "8 轮" },
             ]}
+            defaultValue={defStr("maxRounds")}
+            onSetDefault={(v) => pinDefault("maxRounds", v)}
           />
           <Pill
             icon={<ShieldCheck size={14} />}
@@ -112,6 +118,8 @@ export function DebateModal({
               { value: "on", label: "开" },
               { value: "off", label: "关" },
             ]}
+            defaultValue={defStr("gateG1")}
+            onSetDefault={(v) => pinDefault("gateG1", v)}
           />
           <Pill
             icon={<ShieldCheck size={14} />}
@@ -122,10 +130,12 @@ export function DebateModal({
               { value: "on", label: "开" },
               { value: "off", label: "关" },
             ]}
+            defaultValue={defStr("gateG2")}
+            onSetDefault={(v) => pinDefault("gateG2", v)}
           />
         </div>
         <p className="text-[11px] text-faint">
-          两个 AI 盲态开局、逐轮对抗;门开则在共识/出码处等你裁决(放行/打回/注入/提问),全关则全自动到提交。
+          Tab 切到某项会自动展开;方向键选、回车定、⌘↵ 开跑。每项下拉里点图钉=设为默认。门全关=全自动到提交。
         </p>
       </div>
     </Modal>
