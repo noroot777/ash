@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, useMemo } from "react";
-import type { Task, Project, Group, AgentEvent } from "@harness/shared";
-import { NotePencil, CaretDown, MagnifyingGlass } from "@phosphor-icons/react";
+import type { Task, ProjectView, Group, AgentEvent } from "@harness/shared";
+import { NotePencil, CaretDown, MagnifyingGlass, GearSix } from "@phosphor-icons/react";
 import { api } from "./api";
 import { useServerEvents } from "./useEvents";
 import { TaskList, orderedTasks } from "./TaskList";
@@ -15,13 +15,20 @@ import { AgentsPanel } from "./AgentsPanel";
 import { Board } from "./Board";
 import { Menu } from "./Menu";
 import { NewProjectModal, NewGroupModal, ConfirmModal } from "./Modal";
+import { ProjectSettings } from "./ProjectSettings";
+import { HealthDot } from "./ui";
+import { shortPath } from "./util";
+import { runAction } from "./taskActions";
 
 export function App() {
-  const [projects, setProjects] = useState<Project[]>([]);
-  const [projectId, setProjectId] = useState<string | null>(null);
+  // Deep-link state via the URL (?project=…&task=…): a refresh stays on the same
+  // project/task, and the link is shareable. Seeded here, kept in sync below.
+  const urlParams = new URLSearchParams(window.location.search);
+  const [projects, setProjects] = useState<ProjectView[]>([]);
+  const [projectId, setProjectId] = useState<string | null>(urlParams.get("project"));
   const [groups, setGroups] = useState<Group[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
-  const [selected, setSelected] = useState<string | null>(null);
+  const [selected, setSelected] = useState<string | null>(urlParams.get("task"));
   const [logs, setLogs] = useState<Record<string, LogLine[]>>({});
   const [debates, setDebates] = useState<Record<string, DebateState>>({});
   const [sessionsBump, setSessionsBump] = useState(0);
@@ -29,6 +36,7 @@ export function App() {
   const [createOpen, setCreateOpen] = useState(false);
   const [agentsOpen, setAgentsOpen] = useState(false);
   const [newProjectOpen, setNewProjectOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [newGroupOpen, setNewGroupOpen] = useState(false);
   const [debateOpen, setDebateOpen] = useState(false);
   const [confirmDel, setConfirmDel] = useState<{ id: string; title: string } | null>(null);
@@ -57,9 +65,20 @@ export function App() {
   useEffect(() => {
     api.projects().then((ps) => {
       setProjects(ps);
-      if (ps.length) setProjectId((cur) => cur ?? ps[0].id);
+      // Honor ?project=… if it's valid, else fall back to the first project.
+      setProjectId((cur) => (cur && ps.some((p) => p.id === cur) ? cur : (ps[0]?.id ?? null)));
     });
   }, []);
+
+  // Keep the URL in sync with the current project/task (replaceState — no history
+  // spam) so refresh/share lands on the same place.
+  useEffect(() => {
+    const p = new URLSearchParams();
+    if (projectId) p.set("project", projectId);
+    if (selected) p.set("task", selected);
+    const qs = p.toString();
+    window.history.replaceState(null, "", qs ? `?${qs}` : window.location.pathname);
+  }, [projectId, selected]);
 
   useEffect(() => {
     if (!projectId) return;
@@ -74,7 +93,8 @@ export function App() {
   const visible = tasks;
   const ordered = useMemo(() => orderedTasks(visible), [visible]);
   const current = visible.find((t) => t.id === selected) ?? null;
-  const projectName = projects.find((p) => p.id === projectId)?.name ?? "项目";
+  const project = projects.find((p) => p.id === projectId) ?? null;
+  const projectName = project?.name ?? "项目";
 
   const patch = useCallback(async (id: string, p: Partial<Task>) => {
     const updated = await api.patchTask(id, p);
@@ -84,8 +104,29 @@ export function App() {
   const run = useCallback(async (id: string) => {
     setLogs((m) => ({ ...m, [id]: [] }));
     setDebates((m) => ({ ...m, [id]: emptyDebate() }));
-    await api.runTask(id);
+    try { await api.runTask(id); } catch (e) { console.warn("run rejected:", e); }
   }, []);
+
+  // Retry a failed debate: drop the failed (last) turn from the live timeline so
+  // the re-run doesn't duplicate it, then ask the backend to resume.
+  const retry = useCallback(async (id: string) => {
+    setDebates((m) => {
+      const d = m[id];
+      return d ? { ...m, [id]: { ...d, turns: d.turns.slice(0, -1), gate: null } } : m;
+    });
+    try { await api.retryTask(id); } catch (e) { console.warn("retry rejected:", e); }
+  }, []);
+
+  // The single primary action for a task, dispatched by its status — used by the
+  // `r` key and Cmd-K so they agree with the buttons (no re-running a done task).
+  const primary = useCallback(
+    (t: Task) => {
+      const a = runAction(t.status);
+      if (a.kind === "run") run(t.id);
+      else if (a.kind === "retry") retry(t.id);
+    },
+    [run, retry],
+  );
 
   const gate = useCallback((id: string, action: Parameters<typeof api.gate>[1]) => api.gate(id, action), []);
 
@@ -112,6 +153,32 @@ export function App() {
     setNewProjectOpen(false);
   }, []);
 
+  const doUpdateProject = useCallback(
+    async (patch: { name: string; repoPath: string }) => {
+      if (!projectId) return;
+      const p = await api.updateProject(projectId, patch);
+      setProjects((ps) => ps.map((x) => (x.id === p.id ? p : x)));
+      setSettingsOpen(false);
+    },
+    [projectId],
+  );
+
+  const doDeleteProject = useCallback(async () => {
+    if (!projectId) return;
+    try {
+      await api.deleteProject(projectId);
+    } catch (e) {
+      alert(e instanceof Error ? e.message : String(e)); // e.g. 409 有任务在跑
+      return;
+    }
+    setProjects((ps) => {
+      const rest = ps.filter((x) => x.id !== projectId);
+      setProjectId(rest[0]?.id ?? null);
+      return rest;
+    });
+    setSettingsOpen(false);
+  }, [projectId]);
+
   const doCreateGroup = useCallback(
     async (name: string, mode: "parallel" | "serial") => {
       if (!projectId) return;
@@ -122,7 +189,7 @@ export function App() {
     [projectId],
   );
 
-  const anyModal = createOpen || agentsOpen || newProjectOpen || newGroupOpen || debateOpen || !!confirmDel;
+  const anyModal = createOpen || agentsOpen || newProjectOpen || settingsOpen || newGroupOpen || debateOpen || !!confirmDel;
 
   // ── keyboard navigation ────────────────────────────────────────────────
   useEffect(() => {
@@ -149,12 +216,12 @@ export function App() {
         setCreateOpen(true);
       } else if (e.key === "r" && current) {
         e.preventDefault();
-        run(current.id);
+        primary(current);
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [ordered, selected, current, paletteOpen, anyModal, run]);
+  }, [ordered, selected, current, paletteOpen, anyModal, primary]);
 
   useEffect(() => {
     if (selected) document.querySelector(`[data-task-id="${selected}"]`)?.scrollIntoView({ block: "nearest" });
@@ -169,8 +236,10 @@ export function App() {
       { id: "newproject", label: "新建项目", run: () => setNewProjectOpen(true) },
       { id: "agents", label: "管理智能体执行器", run: () => setAgentsOpen(true) },
     ];
+    if (project) cmds.push({ id: "projsettings", label: `项目设置：${project.name}`, run: () => setSettingsOpen(true) });
     if (current) {
-      cmds.push({ id: "run", label: `运行：${current.title}`, hint: "R", run: () => run(current.id) });
+      const a = runAction(current.status);
+      if (a.canClick) cmds.push({ id: "run", label: `${a.label}：${current.title}`, hint: "R", run: () => primary(current) });
       cmds.push({ id: "del", label: `删除：${current.title}`, run: () => del(current.id, current.title) });
       for (const s of STATUSES)
         cmds.push({ id: "st-" + s.key, group: "设为状态", label: s.label, run: () => patch(current.id, { status: s.key }) });
@@ -179,7 +248,7 @@ export function App() {
     }
     for (const p of projects)
       if (p.id !== projectId)
-        cmds.push({ id: "proj-" + p.id, group: "切换项目", label: p.name, run: () => setProjectId(p.id) });
+        cmds.push({ id: "proj-" + p.id, group: "切换项目", label: p.name, hint: shortPath(p.repoPath), run: () => setProjectId(p.id) });
     for (const g of groups)
       cmds.push({
         id: "rg-" + g.id,
@@ -188,7 +257,7 @@ export function App() {
         run: () => api.runGroup(g.id),
       });
     return cmds;
-  }, [current, projects, projectId, groups, run, del, patch]);
+  }, [current, projects, projectId, groups, primary, del, patch]);
 
   return (
     <div className="flex h-full flex-col">
@@ -197,18 +266,20 @@ export function App() {
         <div className="flex items-center gap-1.5">
           <Menu
             value={projectId ?? ""}
-            onChange={(v) => (v === "__new" ? setNewProjectOpen(true) : setProjectId(v))}
+            onChange={(v) => (v === "__new" ? setNewProjectOpen(true) : v === "__settings" ? setSettingsOpen(true) : setProjectId(v))}
             options={[
-              ...projects.map((p) => ({ value: p.id, label: p.name })),
+              ...projects.map((p) => ({ value: p.id, label: p.name, detail: shortPath(p.repoPath), icon: <HealthDot health={p.health} /> })),
+              ...(project ? [{ value: "__settings", label: "项目设置…", icon: <GearSix size={13} className="text-muted" /> }] : []),
               { value: "__new", label: "+ 新建项目…" },
             ]}
-            menuWidth={220}
+            menuWidth={260}
             triggerClassName="flex items-center gap-2 rounded-md px-1.5 py-1 hover:bg-raised"
           >
             <span className="grid h-6 w-6 place-items-center rounded-md bg-accent text-[12px] font-semibold text-accent-fg">
               {projectName.slice(0, 1).toUpperCase()}
             </span>
             <span className="max-w-[180px] truncate text-[13px] font-semibold text-ink">{projectName}</span>
+            {project && <HealthDot health={project.health} />}
             <CaretDown size={12} className="text-faint" />
           </Menu>
           <span className={`h-1.5 w-1.5 rounded-full ${connected ? "bg-emerald-500" : "bg-faint"}`} title={connected ? "实时已连接" : "未连接"} />
@@ -254,7 +325,7 @@ export function App() {
             <div className="min-w-0 flex-1">
               {current ? (
                 current.mode === "debate" ? (
-                  <DebateView key={current.id} task={current} state={debates[current.id] ?? emptyDebate()} sessionsBump={sessionsBump} onRun={() => run(current.id)} onGate={(a) => gate(current.id, a)} onDelete={() => del(current.id, current.title)} />
+                  <DebateView key={current.id} task={current} state={debates[current.id] ?? emptyDebate()} sessionsBump={sessionsBump} onRun={() => run(current.id)} onRetry={() => retry(current.id)} onGate={(a) => gate(current.id, a)} onDelete={() => del(current.id, current.title)} />
                 ) : (
                   <TaskDetail key={current.id} task={current} groups={groups} allTasks={visible} logs={logs[current.id] ?? []} sessionsBump={sessionsBump} onRun={() => run(current.id)} onPatch={(p) => patch(current.id, p)} onCreateGroup={() => setNewGroupOpen(true)} onDelete={() => del(current.id, current.title)} />
                 )
@@ -272,6 +343,9 @@ export function App() {
       <CommandPalette open={paletteOpen} commands={commands} onClose={() => setPaletteOpen(false)} />
       {agentsOpen && <AgentsPanel onClose={() => setAgentsOpen(false)} />}
       {newProjectOpen && <NewProjectModal onClose={() => setNewProjectOpen(false)} onCreate={doCreateProject} />}
+      {settingsOpen && project && (
+        <ProjectSettings project={project} onClose={() => setSettingsOpen(false)} onSave={doUpdateProject} onDelete={doDeleteProject} />
+      )}
       {newGroupOpen && <NewGroupModal onClose={() => setNewGroupOpen(false)} onCreate={doCreateGroup} />}
       {confirmDel && (
         <ConfirmModal
@@ -283,11 +357,10 @@ export function App() {
           onClose={() => setConfirmDel(null)}
         />
       )}
-      {debateOpen && projectId && <DebateModal projectId={projectId} onClose={() => setDebateOpen(false)} onCreated={onTaskCreated} />}
-      {createOpen && projectId && (
+      {debateOpen && project && <DebateModal project={project} onClose={() => setDebateOpen(false)} onCreated={onTaskCreated} />}
+      {createOpen && project && (
         <CreateTask
-          projectId={projectId}
-          projectName={projectName}
+          project={project}
           groups={groups}
           onClose={() => setCreateOpen(false)}
           onCreated={(t) => onTaskCreated(t)}

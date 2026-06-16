@@ -1,15 +1,44 @@
-import { useEffect, useRef, useState } from "react";
-import type { Task, Session, DebateConfig, GateAction } from "@harness/shared";
-import type { DebateState, DebateTurn } from "./debateState";
-import { Credential } from "./ui";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { Task, Session, DebateConfig, GateAction, AgentType, DebateSpeaker, TaskStatus } from "@harness/shared";
+import type { DebateState, DebateTurn, DebateGate } from "./debateState";
+import { ResumeButtons } from "./ui";
+import { Markdown } from "./Markdown";
 import { api } from "./api";
 import { ScheduleControl } from "./ScheduleControl";
+import { StatusIcon } from "./StatusIcon";
+import { STATUSES } from "./constants";
+import { runAction } from "./taskActions";
+
+// Animated "thinking" indicator — three dots flashing in sequence.
+function TypingDots() {
+  return (
+    <span className="inline-flex items-center gap-1 text-sky-600">
+      <span className="typing-dot" style={{ animationDelay: "0ms" }} />
+      <span className="typing-dot" style={{ animationDelay: "150ms" }} />
+      <span className="typing-dot" style={{ animationDelay: "300ms" }} />
+    </span>
+  );
+}
+
+// Always-visible run-state pill so the debate's status (esp. failed/running) is
+// unambiguous and survives reload — task.status is persisted.
+function StatusPill({ status }: { status: TaskStatus }) {
+  const label = STATUSES.find((s) => s.key === status)?.label ?? status;
+  const running = status === "running" || status === "queued";
+  return (
+    <span className={`inline-flex items-center gap-1.5 rounded-full bg-raised px-2 py-0.5 text-[11px] text-muted ${running ? "animate-pulse" : ""}`}>
+      <StatusIcon status={status} size={12} />
+      {label}
+    </span>
+  );
+}
 
 export function DebateView({
   task,
   state,
   sessionsBump,
   onRun,
+  onRetry,
   onGate,
   onDelete,
 }: {
@@ -17,6 +46,7 @@ export function DebateView({
   state: DebateState;
   sessionsBump: number;
   onRun: () => void;
+  onRetry: () => void;
   onGate: (a: GateAction) => void;
   onDelete: () => void;
 }) {
@@ -24,9 +54,17 @@ export function DebateView({
   const [sessions, setSessions] = useState<Session[]>([]);
   const [history, setHistory] = useState<DebateTurn[]>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
+  // Stick to the bottom only when the user is already near it. If they scrolled
+  // up to read, incoming tokens must not yank them back down.
+  const atBottomRef = useRef(true);
+  const onScroll = () => {
+    const el = scrollRef.current;
+    if (el) atBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+  };
   useEffect(() => {
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
-  }, [state.turns]);
+    const el = scrollRef.current;
+    if (el && atBottomRef.current) el.scrollTo({ top: el.scrollHeight });
+  }, [state.turns, history]);
   useEffect(() => {
     api.sessions(task.id).then(setSessions);
   }, [task.id, sessionsBump, state.turns.length]);
@@ -44,7 +82,48 @@ export function DebateView({
   }, [task.id, sessionsBump]);
 
   const busy = task.status === "running" || task.status === "queued";
-  const turns = state.turns.length > 0 ? state.turns : history;
+  // Merge persisted history with live turns: on a fresh run, history is empty and
+  // turns = live; on retry-after-reload, history holds the earlier rounds while
+  // live carries the re-run + later turns (deduped by round:speaker, live wins).
+  const turns = useMemo<DebateTurn[]>(() => {
+    if (state.turns.length === 0) return history;
+    const liveKeys = new Set(state.turns.map((t) => `${t.round}:${t.speaker}`));
+    const head = history.filter((h) => !liveKeys.has(`${h.round}:${h.speaker}`));
+    return [...head, ...state.turns];
+  }, [state.turns, history]);
+
+  // The gate comes live via SSE, but on reload (state empty) we rebuild it from
+  // the persisted timeline so the bar — and the consensus/disagreement verdict —
+  // survives a refresh while the backend is still waiting at the gate.
+  const gate: DebateGate | null = useMemo(() => {
+    if (state.gate) return state.gate;
+    if (task.status !== "awaiting_review") return null;
+    const hasImpl = turns.some((t) => t.speaker === "impl");
+    const lastA = [...turns].reverse().find((t) => t.speaker === "A");
+    const lastB = [...turns].reverse().find((t) => t.speaker === "B");
+    return {
+      gate: hasImpl ? "G2" : "G1",
+      open: true,
+      consensus: !!(lastA?.agrees && lastB?.agrees),
+      conclusionA: lastA?.conclusion ?? null,
+      conclusionB: lastB?.conclusion ?? null,
+    };
+  }, [state.gate, task.status, turns]);
+
+  // Each speaker reuses one session row across its turns; resolve the latest per
+  // role so a bubble's resume credential points at the live session. Falls back
+  // to the configured agent type before the session row has loaded.
+  const latestByRole = useMemo(() => {
+    const m: Record<string, Session> = {};
+    for (const s of sessions) {
+      if (!m[s.role] || s.startedAt > m[s.role].startedAt) m[s.role] = s;
+    }
+    return m;
+  }, [sessions]);
+  const sessionFor = (sp: DebateSpeaker): Session | undefined =>
+    latestByRole[sp === "A" ? "debaterA" : sp === "B" ? "debaterB" : "implementer"];
+  const agentFor = (sp: DebateSpeaker): AgentType | undefined =>
+    sp === "A" ? cfg?.debaterA : sp === "B" ? cfg?.debaterB : cfg?.implementer === "B" ? cfg?.debaterB : cfg?.debaterA;
 
   return (
     <main className="flex h-full min-h-0 flex-col">
@@ -52,13 +131,20 @@ export function DebateView({
         <div className="flex items-center gap-3">
           <span className="rounded bg-violet-500/20 px-1.5 py-0.5 text-[10px] font-medium text-violet-700">debate</span>
           <h1 className="truncate text-lg font-medium tracking-tight">{cfg?.topic ?? task.title}</h1>
-          <button
-            onClick={onRun}
-            disabled={busy}
-            className="ml-auto rounded-md bg-accent hover:bg-accent-hover px-4 py-1.5 text-sm font-medium text-accent-fg disabled:opacity-40"
-          >
-            {busy ? "进行中…" : "运行"}
-          </button>
+          <StatusPill status={task.status} />
+          {(() => {
+            const a = runAction(task.status);
+            return (
+              <button
+                onClick={a.kind === "retry" ? onRetry : onRun}
+                disabled={!a.canClick}
+                title={a.kind === "retry" ? "只重跑失败的那一轮，再继续后续" : undefined}
+                className="ml-auto rounded-md bg-accent hover:bg-accent-hover px-4 py-1.5 text-sm font-medium text-accent-fg disabled:opacity-40 disabled:hover:bg-accent"
+              >
+                {a.label}
+              </button>
+            );
+          })()}
           <button onClick={onDelete} className="rounded-md border border-line px-2 py-1.5 text-sm text-muted hover:text-red-600">
             删除
           </button>
@@ -75,31 +161,50 @@ export function DebateView({
         </div>
       </header>
 
-      {sessions.length > 0 && (
-        <div className="flex flex-wrap gap-2 border-b border-line px-6 py-3">
-          {sessions.map((s) => (
-            <Credential key={s.id} s={s} />
-          ))}
-        </div>
-      )}
-
-      <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
+      <div ref={scrollRef} onScroll={onScroll} className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
         {turns.length === 0 && (
           <p className="text-sm text-faint">点击「运行」开始对抗。双方逐回合的发言会实时显示在这里。</p>
         )}
         {turns.map((t, i) => (
-          <Bubble key={i} turn={t} prevRound={turns[i - 1]?.round} />
+          <Bubble
+            key={i}
+            turn={t}
+            prevRound={turns[i - 1]?.round}
+            session={sessionFor(t.speaker)}
+            agentType={agentFor(t.speaker)}
+          />
         ))}
+        {/* Between-turn liveness: busy but no open bubble → still working. */}
+        {busy && turns.length > 0 && turns[turns.length - 1].done && (
+          <div className="mb-3 flex items-center gap-2 text-[12px] text-muted">
+            <TypingDots /> 运行中…
+          </div>
+        )}
+        {/* Terminal markers so a stopped debate reads as stopped, not stuck. */}
+        {task.status === "failed" && (
+          <div className="mb-3 text-center text-[12px] text-red-600">✕ 本次对抗已失败并停止</div>
+        )}
+        {task.status === "canceled" && (
+          <div className="mb-3 text-center text-[12px] text-faint">— 已取消 —</div>
+        )}
       </div>
 
-      {state.gate?.open && task.status === "awaiting_review" && (
-        <GateBar gate={state.gate.gate} onGate={onGate} />
-      )}
+      {gate?.open && task.status === "awaiting_review" && <GateBar gate={gate} onGate={onGate} />}
     </main>
   );
 }
 
-function Bubble({ turn, prevRound }: { turn: DebateTurn; prevRound?: number }) {
+function Bubble({
+  turn,
+  prevRound,
+  session,
+  agentType,
+}: {
+  turn: DebateTurn;
+  prevRound?: number;
+  session?: Session;
+  agentType?: AgentType;
+}) {
   const showDivider = turn.round !== prevRound;
   const side = turn.speaker;
   const align = side === "A" ? "items-start" : side === "B" ? "items-end" : "items-center";
@@ -110,6 +215,9 @@ function Bubble({ turn, prevRound }: { turn: DebateTurn; prevRound?: number }) {
         ? "border-emerald-500/40 bg-emerald-500/8"
         : "border-violet-500/40 bg-violet-500/[0.07]";
   const who = side === "A" ? "辩手A" : side === "B" ? "辩手B" : "实现方";
+  // Prefer the concrete executor label (e.g. "codex@local"); fall back to the
+  // configured agent type before the session row has loaded.
+  const agentLabel = session?.executor ?? agentType;
 
   return (
     <div className="mb-3 rise">
@@ -121,34 +229,84 @@ function Bubble({ turn, prevRound }: { turn: DebateTurn; prevRound?: number }) {
       <div className={`flex flex-col ${align}`}>
         <div className={`max-w-[88%] rounded-lg border px-3 py-2 ${color} ${side === "impl" ? "w-full max-w-full" : ""}`}>
           <div className="mb-1 flex items-center gap-2 text-[11px] text-muted">
-            <span>{who}</span>
+            <span className="font-medium text-ink/70">{who}</span>
+            {agentLabel && (
+              <>
+                <span className="text-faint">·</span>
+                <span className="text-muted">{agentLabel}</span>
+              </>
+            )}
             {turn.raised && <span className="text-amber-700">✋ 可收敛</span>}
-            {!turn.done && <span className="text-sky-700">…</span>}
+            {!turn.done && <TypingDots />}
           </div>
           {turn.tools.map((t, i) => (
             <div key={i} className="my-0.5 break-words font-mono text-[11px] text-amber-700/70">⚙ {t}</div>
           ))}
-          <div className="whitespace-pre-wrap break-words text-[13px] leading-relaxed text-ink">{turn.text}</div>
+          {!turn.done && !turn.text && turn.tools.length === 0 && (
+            <div className="py-0.5 text-[12px] text-muted">思考中…</div>
+          )}
+          <Markdown text={turn.text} />
           {turn.error && <div className="mt-1 break-words text-xs text-red-600">✕ {turn.error}</div>}
+          {session && (session.resumeCommand || session.cliSessionId) && <ResumeButtons s={session} />}
         </div>
       </div>
     </div>
   );
 }
 
-function GateBar({ gate, onGate }: { gate: string; onGate: (a: GateAction) => void }) {
+function GateBar({ gate, onGate }: { gate: DebateGate; onGate: (a: GateAction) => void }) {
   const [mode, setMode] = useState<"inject" | "ask" | null>(null);
   const [text, setText] = useState("");
-  const label = gate === "G1" ? "共识门 · 等待你裁决" : "代码门 · 等待你裁决";
+  const isG1 = gate.gate === "G1";
+  const consensus = !!gate.consensus;
+  const label = !isG1
+    ? "代码门 · 等待你裁决"
+    : consensus
+      ? "共识门 · 双方已达成共识"
+      : "共识门 · 双方仍有分歧，请你拍板";
 
   return (
     <div className="border-t border-violet-500/40 bg-violet-500/[0.07] px-6 py-3">
+      {/* G1: always show BOTH sides' final conclusions so a self-reported
+          "consensus" that actually differs can be caught at a glance. */}
+      {isG1 && (
+        <div className="mb-2 flex flex-col gap-0.5 text-xs">
+          <div className={consensus ? "text-emerald-700" : "text-amber-700"}>
+            {consensus
+              ? "✓ 双方均表示可收敛、自评结论一致（结论如下，若实际不符可打回或回炉）"
+              : "⚠ 双方未达成一致，选择按哪一方的方案实现："}
+          </div>
+          {gate.conclusionA || gate.conclusionB ? (
+            <>
+              {gate.conclusionA && (
+                <div className="text-ink"><b className="text-sky-700">辩手A</b> · {gate.conclusionA}</div>
+              )}
+              {gate.conclusionB && (
+                <div className="text-ink"><b className="text-emerald-700">辩手B</b> · {gate.conclusionB}</div>
+              )}
+            </>
+          ) : (
+            <div className="text-faint">（双方未给出明确「结论」行）</div>
+          )}
+        </div>
+      )}
       <div className="flex flex-wrap items-center gap-2 text-sm">
         <span className="text-violet-700">{label}</span>
         <div className="ml-auto flex flex-wrap gap-2">
-          <button onClick={() => onGate({ kind: "approve" })} className="rounded-md bg-emerald-500 px-3 py-1 text-xs font-medium text-white">
-            放行
-          </button>
+          {isG1 && !consensus ? (
+            <>
+              <button onClick={() => onGate({ kind: "approve", side: "A" })} className="rounded-md bg-sky-500 px-3 py-1 text-xs font-medium text-white">
+                采用A方案→实现
+              </button>
+              <button onClick={() => onGate({ kind: "approve", side: "B" })} className="rounded-md bg-emerald-500 px-3 py-1 text-xs font-medium text-white">
+                采用B方案→实现
+              </button>
+            </>
+          ) : (
+            <button onClick={() => onGate({ kind: "approve" })} className="rounded-md bg-emerald-500 px-3 py-1 text-xs font-medium text-white">
+              放行
+            </button>
+          )}
           <button onClick={() => onGate({ kind: "reject" })} className="rounded-md border border-line2 px-3 py-1 text-xs text-ink">
             打回终止
           </button>

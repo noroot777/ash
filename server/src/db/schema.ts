@@ -58,6 +58,7 @@ export const sessions = sqliteTable("sessions", {
   target: text("target").notNull(),
   worktreePath: text("worktree_path"),
   branch: text("branch"),
+  cwd: text("cwd"),
   cliSessionId: text("cli_session_id"),
   resumeCommand: text("resume_command"),
   commandLine: text("command_line"),

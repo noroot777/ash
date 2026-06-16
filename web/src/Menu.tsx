@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNo
 import { createPortal } from "react-dom";
 import { Check, PushPin } from "@phosphor-icons/react";
 
-export type MenuOption = { value: string; label: string; icon?: ReactNode };
+export type MenuOption = { value: string; label: string; icon?: ReactNode; detail?: string };
 
 // Only one menu open at a time (so Tab-focusing a new pill closes the previous).
 let activeClose: (() => void) | null = null;
@@ -182,7 +182,10 @@ export function Menu({
                 }`}
               >
                 {o.icon}
-                <span className="flex-1 truncate text-ink">{o.label}</span>
+                <span className="flex min-w-0 flex-1 flex-col">
+                  <span className="truncate text-ink">{o.label}</span>
+                  {o.detail && <span className="truncate text-[11px] text-faint">{o.detail}</span>}
+                </span>
                 {onSetDefault &&
                   (defaultValue === o.value ? (
                     <span className="inline-flex items-center gap-1 text-[10px] text-accent">

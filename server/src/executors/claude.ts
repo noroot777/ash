@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { createInterface } from "node:readline";
 import type { AgentEvent, ExecTarget } from "@harness/shared";
 import type { AgentExecutor, RunHandle, RunOpts } from "./types.js";
-import { spawnAgent, resumeFor } from "./spawn.js";
+import { spawnAgent, resumeFor, spawnErrorMessage } from "./spawn.js";
 
 // Drives the real `claude` CLI in headless stream-json mode (prompt via stdin).
 //   claude -p --output-format stream-json --verbose --dangerously-skip-permissions
@@ -77,10 +77,7 @@ async function* parseClaudeStream(child: ReturnType<typeof spawnAgent>): AsyncIt
   child.stderr?.on("data", (d) => (stderr += d.toString()));
   child.on("error", (err: NodeJS.ErrnoException) => {
     if (finished) return;
-    push({
-      kind: "error",
-      message: err.code === "ENOENT" ? `找不到 claude 命令(PATH 未包含其所在目录)` : `启动 claude 失败：${err.message}`,
-    });
+    push({ kind: "error", message: spawnErrorMessage("claude", err) });
     push({ kind: "done", exitStatus: 1 });
     finished = true;
     resolve?.();

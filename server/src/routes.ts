@@ -2,24 +2,28 @@ import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import { eq } from "drizzle-orm";
 import { readFile } from "node:fs/promises";
+import { rmSync } from "node:fs";
 import { join } from "node:path";
-import { RUNS_DIR } from "./paths.js";
+import { RUNS_DIR, DATA_DIR } from "./paths.js";
 import type {
   Project,
+  ProjectView,
   Group,
   Task,
   Session,
   TaskStatus,
 } from "@harness/shared";
+import { canStartTask } from "@harness/shared";
 import { db } from "./db/index.js";
 import { projects, groups, tasks, sessions, schedules, agents } from "./db/schema.js";
 import { bus } from "./bus.js";
 import { id, now } from "./util.js";
 import { runTask } from "./orchestrator.js";
 import { runGroup } from "./scheduler.js";
-import { runDebate } from "./debate/index.js";
+import { runDebate, resumeDebate, resumeAtGate } from "./debate/index.js";
 import { resolveGate } from "./debate/gates.js";
 import { detectLocalAgents } from "./detect.js";
+import { projectHealthLight, projectHealthFull, removeWorktree } from "./git.js";
 import type { GateAction } from "@harness/shared";
 
 export const api = new Hono();
@@ -112,13 +116,72 @@ const toSession = (r: typeof sessions.$inferSelect): Session => ({
 });
 
 // ── projects ───────────────────────────────────────────────────────────────
-api.get("/projects", async (c) => c.json((await db.select().from(projects)) as Project[]));
+// repoPath health is computed, never persisted (§ path-awareness). The list
+// uses the cheap sync check; per-id and path-check endpoints do the full git probe.
+const toProject = (r: typeof projects.$inferSelect): ProjectView => ({
+  ...r,
+  health: projectHealthLight(r.repoPath),
+});
+
+api.get("/projects", async (c) =>
+  c.json((await db.select().from(projects)).map(toProject)),
+);
 
 api.post("/projects", async (c) => {
   const b = await c.req.json<{ name: string; repoPath: string }>();
-  const row: Project = { id: id(), name: b.name, repoPath: b.repoPath, createdAt: now() };
+  if (!b.name?.trim()) return c.json({ error: "name required" }, 400);
+  const row = { id: id(), name: b.name.trim(), repoPath: b.repoPath ?? "", createdAt: now() };
   await db.insert(projects).values(row);
-  return c.json(row, 201);
+  return c.json(toProject(row), 201);
+});
+
+api.patch("/projects/:id", async (c) => {
+  const pid = c.req.param("id");
+  const existing = (await db.select().from(projects).where(eq(projects.id, pid))).at(0);
+  if (!existing) return c.json({ error: "not found" }, 404);
+  const b = await c.req.json<Partial<Project>>();
+  const patch: Record<string, unknown> = {};
+  if (b.name !== undefined) {
+    if (!b.name.trim()) return c.json({ error: "name required" }, 400);
+    patch.name = b.name.trim();
+  }
+  if (b.repoPath !== undefined) patch.repoPath = b.repoPath;
+  if (Object.keys(patch).length) await db.update(projects).set(patch).where(eq(projects.id, pid));
+  const updated = (await db.select().from(projects).where(eq(projects.id, pid))).at(0)!;
+  return c.json(toProject(updated));
+});
+
+// Full delete: cascade tasks → their sessions/schedules/run-artifacts/worktrees,
+// then groups, then the project. Refuses while any task is live (§ safety).
+api.delete("/projects/:id", async (c) => {
+  const pid = c.req.param("id");
+  const ptasks = await db.select().from(tasks).where(eq(tasks.projectId, pid));
+  const live = ptasks.find((t) => t.status === "running" || t.status === "queued");
+  if (live) return c.json({ error: "项目有正在运行/排队的任务，无法删除", taskId: live.id }, 409);
+  const project = (await db.select().from(projects).where(eq(projects.id, pid))).at(0);
+  for (const t of ptasks) {
+    await db.delete(sessions).where(eq(sessions.taskId, t.id));
+    await db.delete(schedules).where(eq(schedules.taskId, t.id));
+    rmSync(join(RUNS_DIR, t.id), { recursive: true, force: true });
+    rmSync(join(DATA_DIR, "scratch", t.id), { recursive: true, force: true });
+    if (project?.repoPath) await removeWorktree(project.repoPath, t.id);
+  }
+  await db.delete(tasks).where(eq(tasks.projectId, pid));
+  await db.delete(groups).where(eq(groups.projectId, pid));
+  await db.delete(projects).where(eq(projects.id, pid));
+  return c.json({ deleted: true });
+});
+
+// Health probes: by id (settings panel) and by raw path (validate unsaved input).
+api.get("/projects/:id/health", async (c) => {
+  const p = (await db.select().from(projects).where(eq(projects.id, c.req.param("id")))).at(0);
+  if (!p) return c.json({ error: "not found" }, 404);
+  return c.json(await projectHealthFull(p.repoPath));
+});
+
+api.post("/projects/check", async (c) => {
+  const b = await c.req.json<{ repoPath: string }>();
+  return c.json(await projectHealthFull(b.repoPath));
 });
 
 // ── groups ───────────────────────────────────────────────────────────────
@@ -259,8 +322,22 @@ api.post("/tasks/:id/run", async (c) => {
   const taskId = c.req.param("id");
   const r = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!r) return c.json({ error: "not found" }, 404);
+  // Guard the state machine: only settled, non-terminal-success tasks may start.
+  if (!canStartTask(r.status as TaskStatus)) return c.json({ error: "任务当前状态不可运行", status: r.status }, 409);
   // Fire-and-forget; progress streams over /api/events.
   if (r.mode === "debate") void runDebate(taskId);
+  else void runTask(taskId);
+  return c.json({ started: true }, 202);
+});
+
+// Retry a failed debate: re-run only the failed (last) turn, then continue —
+// instead of re-running the whole debate. Single tasks just re-run.
+api.post("/tasks/:id/retry", async (c) => {
+  const taskId = c.req.param("id");
+  const r = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
+  if (!r) return c.json({ error: "not found" }, 404);
+  if (r.status !== "failed") return c.json({ error: "只有失败的任务可以重试", status: r.status }, 409);
+  if (r.mode === "debate") void resumeDebate(taskId);
   else void runTask(taskId);
   return c.json({ started: true }, 202);
 });
@@ -269,9 +346,15 @@ api.post("/tasks/:id/run", async (c) => {
 api.post("/tasks/:id/gate", async (c) => {
   const taskId = c.req.param("id");
   const action = await c.req.json<GateAction>();
-  const ok = resolveGate(taskId, action);
-  if (!ok) return c.json({ error: "no open gate for this task" }, 409);
-  return c.json({ ok: true });
+  if (resolveGate(taskId, action)) return c.json({ ok: true });
+  // No in-memory gate (e.g. the server restarted). If the task is still awaiting
+  // a decision, resume the debate from the gate and apply the action.
+  const t = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
+  if (t?.status === "awaiting_review" && t.mode === "debate") {
+    void resumeAtGate(taskId, action);
+    return c.json({ ok: true, resumed: true });
+  }
+  return c.json({ error: "no open gate for this task" }, 409);
 });
 
 // ── schedules (§9) — one schedule per task ──────────────────────────────────

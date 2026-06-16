@@ -5,6 +5,14 @@
 
 export const RAISE_MARK = "[可收敛]";
 
+// When a debater is ready to stop, it must close with this exact 3-line block so
+// the program can tell consensus (both 与对方一致：是) from a clarified
+// disagreement (the human then breaks the tie). [可收敛] only means "I'm ready to
+// stop", NOT "we agree".
+const CONVERGE_BLOCK = `${RAISE_MARK}
+结论：<一句话写出你的最终结论>
+与对方一致：是 或 否（你的最终结论是否与对方最新结论一致）`;
+
 export function opening(topic: string, cwd: string): string {
   return `你正在与另一位 AI 辩手就一个技术议题展开对抗式讨论。你们地位平等，没有谁是审查者或实现者。最终由人类裁判判定，但现在请你独立、深入地给出你的立场。
 
@@ -16,7 +24,7 @@ export function opening(topic: string, cwd: string): string {
 - 这是盲态开局，你看不到对方的观点——请完全独立思考，不要揣测附和。
 - 主动暴露你方案的风险与边界。
 
-只有当你真心认为"讨论已充分、可以收敛"时，才在回复最后单起一行写 ${RAISE_MARK}。开局阶段通常不应收敛。全程中文。`;
+这是盲态开局，看不到对方，不要写 ${RAISE_MARK}。全程中文。`;
 }
 
 export function rebuttal(opponentLatest: string, round: number): string {
@@ -27,7 +35,9 @@ ${opponentLatest}
 === 你的第 ${round} 轮 ===
 认真回应对方刚才的每一个关键论点：哪里同意、哪里不同意，给出具体理由。如发现对方遗漏、误判或风险，直接指出。必要时读文件验证。不要无原则附和，也不要为反对而反对。
 
-如果你认为双方分歧已澄清、方案已明确、可以收敛了，就在回复最后单起一行写 ${RAISE_MARK}；否则继续推进讨论。全程中文。`;
+只有当你认为"再辩也只是重复、可以停了"时，才在回复**最后严格按如下三行收尾（缺一不可，顺序固定）**：
+${CONVERGE_BLOCK}
+否则不要写这三行，继续推进讨论。注意：${RAISE_MARK} 表示"我认为可以停了"，并不代表你必须同意对方——若你最终结论与对方不同，请如实写"与对方一致：否"。全程中文。`;
 }
 
 export function injectFeedback(text: string, round: number): string {
@@ -35,7 +45,11 @@ export function injectFeedback(text: string, round: number): string {
 
 ${text}
 
-请作为辩手认真对待这条意见，重新审视并据此调整你的立场（这是第 ${round} 轮）。说明你如何采纳或回应。如调整后你认为可收敛，最后单起一行写 ${RAISE_MARK}。本阶段仍不要修改文件。全程中文。`;
+请作为辩手认真对待这条意见，重新审视并据此调整你的立场（这是第 ${round} 轮）。说明你如何采纳或回应。本阶段仍不要修改文件。
+
+如调整后你认为可以停了，就在回复**最后严格按如下三行收尾**：
+${CONVERGE_BLOCK}
+否则继续讨论。全程中文。`;
 }
 
 export function question(text: string, round: number): string {
@@ -46,20 +60,24 @@ ${text}
 请直接、简洁地回答这个问题（第 ${round} 轮）。回答后讨论继续。本轮不要写 ${RAISE_MARK} 除非你确实认为可以收敛了。全程中文。`;
 }
 
-// Given to the chosen implementer after consensus. This is the ONLY stage that
-// writes code; it runs in an isolated worktree.
-export function implement(topic: string, consensus: string, note: string, cwd: string): string {
-  const extra = note ? `\n\n=== 人类在放行时补充的要求（必须遵循）===\n${note}\n` : "";
-  return `=== 辩论已收敛，进入实现阶段 ===
+// Given to the chosen implementer after the debate ends. This is the ONLY stage
+// that writes code; it runs in an isolated worktree. `directive` is computed by
+// the orchestrator — it states honestly whether this is a real consensus or a
+// human-/config-chosen side, so the implementer never acts on a fake "consensus".
+export function implement(topic: string, finalDiscussion: string, directive: string, cwd: string): string {
+  return `=== 辩论结束，进入实现阶段 ===
 
 议题：${topic}
 
-你和另一位辩手已就方案达成共识。以下是收敛时的最终讨论内容：
+以下是双方最终的讨论内容：
 
-${consensus}
-${extra}
-现在请你作为实现者，在当前工作目录（${cwd}，这是为本任务隔离出的 git worktree）中，严格按共识方案实现代码改动。
+${finalDiscussion}
+
+=== 实现指令（必须遵循）===
+${directive}
+
+现在请你作为实现者，在当前工作目录（${cwd}，这是为本任务隔离出的 git worktree）中，严格按上面的实现指令落地代码改动。
 - 确保能通过编译与现有测试。
-- 如发现共识中有遗漏或需调整的细节，在回复中说明原因。
+- 如发现指令中有遗漏或需调整的细节，在回复中说明原因。
 - 实现完成后，总结你做了哪些改动。全程中文。`;
 }

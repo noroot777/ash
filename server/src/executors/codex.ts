@@ -1,7 +1,7 @@
 import { createInterface } from "node:readline";
 import type { AgentEvent, ExecTarget } from "@harness/shared";
 import type { AgentExecutor, RunHandle, RunOpts } from "./types.js";
-import { spawnAgent, resumeFor } from "./spawn.js";
+import { spawnAgent, resumeFor, spawnErrorMessage } from "./spawn.js";
 
 // Drives the real `codex` CLI in non-interactive JSON mode (prompt via stdin, `-`).
 //   first:  codex exec --json --skip-git-repo-check -C <cwd>
@@ -30,8 +30,11 @@ export class CodexExecutor implements AgentExecutor {
     const common = ["--json", "--skip-git-repo-check", "-C", opts.cwd, "--dangerously-bypass-approvals-and-sandbox"];
     if (model) common.push("-m", model);
     if (opts.extraArgs?.length) common.push(...opts.extraArgs);
+    // `-C`/`--json`/`-m`/sandbox are `codex exec` options; `resume` is a
+    // subcommand that takes only its own flags + [SESSION_ID] [PROMPT]. So the
+    // exec options must precede `resume`, not follow it (else: "unexpected argument '-C'").
     const args = opts.sessionId
-      ? ["exec", "resume", ...common, opts.sessionId, "-"]
+      ? ["exec", ...common, "resume", opts.sessionId, "-"]
       : ["exec", ...common, "-"];
 
     const commandLine = `${this.bin} ${args.join(" ")} <prompt via stdin>`;
@@ -77,10 +80,7 @@ async function* parseCodexStream(child: ReturnType<typeof spawnAgent>): AsyncIte
   child.stderr?.on("data", (d) => (stderr += d.toString()));
   child.on("error", (err: NodeJS.ErrnoException) => {
     if (finished) return;
-    push({
-      kind: "error",
-      message: err.code === "ENOENT" ? `找不到 codex 命令(PATH 未包含其所在目录)` : `启动 codex 失败：${err.message}`,
-    });
+    push({ kind: "error", message: spawnErrorMessage("codex", err) });
     push({ kind: "done", exitStatus: 1 });
     finished = true;
     resolve?.();

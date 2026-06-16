@@ -1,4 +1,6 @@
 import { eq } from "drizzle-orm";
+import { canStartTask } from "@harness/shared";
+import type { TaskStatus } from "@harness/shared";
 import { db } from "./db/index.js";
 import { tasks, groups } from "./db/schema.js";
 import { bus } from "./bus.js";
@@ -26,8 +28,10 @@ export async function runGroup(groupId: string): Promise<void> {
   const group = (await db.select().from(groups).where(eq(groups.id, groupId))).at(0);
   if (!group) throw new Error("group not found");
 
+  // Only (re)start settled tasks — skip running/queued/awaiting_review/done so a
+  // group re-run doesn't re-run already-finished or in-flight tasks.
   const rows = (await db.select().from(tasks).where(eq(tasks.groupId, groupId))).filter(
-    (t) => t.status !== "running",
+    (t) => canStartTask(t.status as TaskStatus),
   );
   if (!rows.length) return;
 

@@ -40,7 +40,7 @@ export async function ensureSchema() {
     CREATE TABLE IF NOT EXISTS sessions (
       id TEXT PRIMARY KEY, task_id TEXT NOT NULL, role TEXT NOT NULL,
       agent_type TEXT NOT NULL, executor TEXT NOT NULL, target TEXT NOT NULL,
-      worktree_path TEXT, branch TEXT, cli_session_id TEXT, resume_command TEXT,
+      worktree_path TEXT, branch TEXT, cwd TEXT, cli_session_id TEXT, resume_command TEXT,
       command_line TEXT, started_at TEXT NOT NULL, exit_status INTEGER
     );
     CREATE TABLE IF NOT EXISTS schedules (
@@ -52,6 +52,11 @@ export async function ensureSchema() {
   // Tolerant migration for DBs created before columns were added.
   try {
     await client.execute("ALTER TABLE tasks ADD COLUMN auto_title INTEGER NOT NULL DEFAULT 0");
+  } catch {
+    /* column already exists */
+  }
+  try {
+    await client.execute("ALTER TABLE sessions ADD COLUMN cwd TEXT");
   } catch {
     /* column already exists */
   }

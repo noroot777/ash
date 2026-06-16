@@ -6,13 +6,23 @@ export type DebateTurn = {
   text: string;
   tools: string[];
   raised: boolean;
+  agrees?: boolean; // self-declared agreement with the opponent (only when raised)
+  conclusion?: string; // self-declared one-line 结论
   done: boolean;
   error?: string;
 };
 
+export type DebateGate = {
+  gate: GateName;
+  open: boolean;
+  consensus?: boolean;
+  conclusionA?: string | null;
+  conclusionB?: string | null;
+};
+
 export type DebateState = {
   turns: DebateTurn[];
-  gate: { gate: GateName; open: boolean } | null;
+  gate: DebateGate | null;
 };
 
 export const emptyDebate = (): DebateState => ({ turns: [], gate: null });
@@ -37,7 +47,12 @@ export function applyDebateEvent(s: DebateState, ev: ServerEvent): DebateState {
     return { ...s, turns };
   }
   if (ev.type === "debate.gate") {
-    return { ...s, gate: ev.open ? { gate: ev.gate, open: true } : null };
+    return {
+      ...s,
+      gate: ev.open
+        ? { gate: ev.gate, open: true, consensus: ev.consensus, conclusionA: ev.conclusionA, conclusionB: ev.conclusionB }
+        : null,
+    };
   }
   if (ev.type === "agent.event") {
     const sp = speakerOf(ev.role);

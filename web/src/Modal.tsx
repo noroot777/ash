@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from "react";
 import { X } from "@phosphor-icons/react";
 import { useEscape } from "./useEscape";
+import { PathHealth } from "./ui";
 
 // Shared modal shell: dimmed overlay, centered card, Esc-close, click-outside,
 // width prop. One consistent style for every dialog in the app.
@@ -38,9 +39,9 @@ export function Modal({
   );
 }
 
-const fieldCls =
+export const fieldCls =
   "w-full rounded-md border border-line bg-canvas px-2.5 py-1.5 text-[13px] text-ink outline-none placeholder:text-faint focus:border-accent";
-const primaryCls =
+export const primaryCls =
   "rounded-md bg-accent px-3.5 py-1.5 text-[13px] font-medium text-accent-fg hover:bg-accent-hover disabled:opacity-40";
 
 // Styled confirm dialog (replaces window.confirm) — app-consistent, Esc-closable.
@@ -118,6 +119,7 @@ export function NewProjectModal({
         <label className="flex flex-col gap-1.5">
           <span className="text-[12px] text-muted">git 仓库路径</span>
           <input value={repoPath} onChange={(e) => setRepoPath(e.target.value)} placeholder="/Users/you/code/my-app" className={`${fieldCls} font-mono`} />
+          <PathHealth path={repoPath} />
         </label>
       </div>
     </Modal>

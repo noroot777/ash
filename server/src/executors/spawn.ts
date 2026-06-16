@@ -1,5 +1,10 @@
 import { spawn } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import { homedir } from "node:os";
+import { statSync, accessSync, constants } from "node:fs";
+import { join } from "node:path";
+import { EventEmitter } from "node:events";
+import { Readable } from "node:stream";
 import type { ExecTarget } from "@harness/shared";
 
 // shell-quote a single argument for a remote (ssh) command line
@@ -23,17 +28,67 @@ function augmentedEnv() {
   return { ...process.env, PATH: extra.length ? `${cur}:${extra.join(":")}` : cur };
 }
 
+// Resolve a bare command name to an absolute executable path by scanning PATH +
+// EXTRA_PATHS. Returns null if it can't be found anywhere. Spawning the absolute
+// path removes all dependence on the child's inherited PATH — so a remaining
+// ENOENT can only mean a bad cwd, never a missing binary.
+function resolveBin(bin: string): string | null {
+  if (bin.includes("/")) {
+    try { accessSync(bin, constants.X_OK); return bin; } catch { return null; }
+  }
+  const dirs = [...(process.env.PATH ?? "").split(":"), ...EXTRA_PATHS].filter(Boolean);
+  for (const d of dirs) {
+    const p = join(d, bin);
+    try { accessSync(p, constants.X_OK); return p; } catch { /* keep looking */ }
+  }
+  return null;
+}
+
+const isDir = (p: string) => {
+  try { return statSync(p).isDirectory(); } catch { return false; }
+};
+
+// A stand-in child that fails immediately with a precise, human-readable reason.
+// Used when a pre-flight check already rules out a successful spawn, so the
+// stream parsers surface the real cause instead of a generic `spawn ENOENT`.
+function failedChild(message: string): ChildProcess {
+  const child: any = new EventEmitter();
+  child.stdout = Readable.from([]);
+  child.stderr = Readable.from([]);
+  child.stdin = { write() {}, end() {} };
+  queueMicrotask(() => {
+    const err: any = new Error(message);
+    err.precise = true; // tells spawnErrorMessage to use this message verbatim
+    child.emit("error", err);
+  });
+  return child as ChildProcess;
+}
+
+// Turn a spawn error into a truthful message. `precise` errors (from pre-flight)
+// pass through; a raw ENOENT here is the rare in-flight case (binary vanished).
+export function spawnErrorMessage(bin: string, err: NodeJS.ErrnoException): string {
+  if ((err as any).precise) return err.message;
+  if (err.code === "ENOENT") return `找不到 ${bin} 命令(PATH 未包含其所在目录)`;
+  return `启动 ${bin} 失败：${err.message}`;
+}
+
 // Spawn an agent CLI either locally or over ssh, feeding the prompt via stdin
 // (avoids escaping large prompts in argv, and works identically for both
 // targets — DESIGN.md §0/§2: local spawn vs `ssh host "cd repo && <cli> …"`).
-export function spawnAgent(target: ExecTarget, cwd: string, bin: string, args: string[], prompt: string) {
-  let child;
+export function spawnAgent(target: ExecTarget, cwd: string, bin: string, args: string[], prompt: string): ChildProcess {
   if (target.kind === "ssh") {
     const remote = `cd ${shq(cwd)} && ${bin} ${args.map(shq).join(" ")}`;
-    child = spawn("ssh", [target.host, remote], { stdio: ["pipe", "pipe", "pipe"], env: augmentedEnv() });
-  } else {
-    child = spawn(bin, args, { cwd, stdio: ["pipe", "pipe", "pipe"], env: augmentedEnv() });
+    const child = spawn("ssh", [target.host, remote], { stdio: ["pipe", "pipe", "pipe"], env: augmentedEnv() });
+    child.stdin?.write(prompt);
+    child.stdin?.end();
+    return child;
   }
+  // Local pre-flight: distinguish "cwd missing" from "binary missing" so the
+  // error never lies (both raise ENOENT from spawn, indistinguishable by code).
+  if (!isDir(cwd)) return failedChild(`工作目录不存在：${cwd}`);
+  const abs = resolveBin(bin);
+  if (!abs) return failedChild(`找不到 ${bin} 命令(不在 PATH，也不在常见目录)`);
+  const child = spawn(abs, args, { cwd, stdio: ["pipe", "pipe", "pipe"], env: augmentedEnv() });
   child.stdin?.write(prompt);
   child.stdin?.end();
   return child;

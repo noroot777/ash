@@ -8,6 +8,7 @@ import { StatusIcon } from "./StatusIcon";
 import { PriorityIcon, LabelAdder } from "./ui";
 import { ScheduleControl } from "./ScheduleControl";
 import { Menu } from "./Menu";
+import { runAction } from "./taskActions";
 
 export type LogLine = {
   kind: "text" | "thinking" | "tool" | "error" | "done";
@@ -55,8 +56,6 @@ export function TaskDetail({
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
   }, [logs.length, history]);
 
-  const busy = task.status === "running" || task.status === "queued";
-
   const depOptions = allTasks.filter((t) => t.id !== task.id && !task.dependsOn.includes(t.id));
 
   return (
@@ -64,14 +63,19 @@ export function TaskDetail({
       <header className="border-b border-line px-6 pb-3 pt-5">
         <div className="flex items-start gap-3">
           <EditableTitle title={task.title} onSave={(t) => onPatch({ title: t, autoTitle: false })} />
-          <button
-            onClick={onRun}
-            disabled={busy}
-            className="inline-flex items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-[13px] font-medium text-accent-fg transition-colors hover:bg-accent-hover disabled:opacity-40"
-          >
-            <Play size={13} weight="fill" />
-            {busy ? "运行中" : "运行"}
-          </button>
+          {(() => {
+            const a = runAction(task.status);
+            return (
+              <button
+                onClick={onRun}
+                disabled={!a.canClick}
+                className="inline-flex items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-[13px] font-medium text-accent-fg transition-colors hover:bg-accent-hover disabled:opacity-40 disabled:hover:bg-accent"
+              >
+                <Play size={13} weight="fill" />
+                {a.label}
+              </button>
+            );
+          })()}
           <button
             onClick={onDelete}
             className="grid h-[30px] w-[30px] place-items-center rounded-md text-muted transition-colors hover:bg-raised hover:text-red-600"

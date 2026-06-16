@@ -6,7 +6,7 @@ import { db } from "./db/index.js";
 import { tasks, projects, groups, sessions } from "./db/schema.js";
 import { bus } from "./bus.js";
 import { id, now } from "./util.js";
-import { prepareWorkspace } from "./git.js";
+import { resolveWorkspace } from "./git.js";
 import { resolveExecutor } from "./executors/index.js";
 import { RUNS_DIR } from "./paths.js";
 
@@ -37,7 +37,7 @@ export async function runTask(taskId: string): Promise<void> {
       : undefined;
     const useWorktree = group ? group.useWorktree : true;
 
-    const ws = await prepareWorkspace(project.repoPath, taskId, useWorktree);
+    const ws = await resolveWorkspace(project.repoPath, taskId, useWorktree);
     const agentType = (task.agentType as AgentType) ?? "claude";
     const ex = await resolveExecutor(agentType);
 
@@ -59,6 +59,7 @@ export async function runTask(taskId: string): Promise<void> {
       target: "local",
       worktreePath: ws.isWorktree ? ws.path : null,
       branch: ws.branch,
+      cwd: ws.path,
       cliSessionId,
       resumeCommand: ex.resumeCommand(ws.path, cliSessionId),
       commandLine: handle.commandLine,

@@ -29,6 +29,22 @@ export interface Project {
   createdAt: string;
 }
 
+// repoPath is load-bearing (it's the cwd of every run). Health is computed
+// server-side and is NEVER persisted — see ProjectView. 🔴 !exists / 🟡 exists
+// but not a git repo / 🟢 git repo (with branch + dirty in the full check).
+export interface ProjectHealth {
+  exists: boolean;
+  isRepo: boolean;
+  branch?: string | null; // only in the full check (settings panel / path validation)
+  dirty?: boolean; // working tree has uncommitted changes (full check only)
+}
+
+// Wire shape returned by the project endpoints: the persisted row + computed
+// health. The web client uses this everywhere; it never inserts a bare Project.
+export interface ProjectView extends Project {
+  health: ProjectHealth;
+}
+
 export type GroupMode = "parallel" | "serial";
 
 // Group = transient homogeneous batch container (§3). Not persistent-by-design,
@@ -54,6 +70,14 @@ export type TaskStatus =
   | "canceled";
 
 export type Priority = "none" | "low" | "medium" | "high" | "urgent";
+
+// A task can be (re)started only from a settled, non-terminal-success state.
+// running/queued = already in flight; awaiting_review = waiting on a gate;
+// done = finished (must not be casually re-run). Single source of truth for the
+// run guard across the UI (button/Cmd-K/key) and the server (/run, group run).
+export function canStartTask(status: TaskStatus): boolean {
+  return status === "backlog" || status === "canceled" || status === "failed";
+}
 
 export interface Task {
   id: string;
@@ -112,6 +136,7 @@ export interface Session {
   target: string; // "local" | "ssh:host"
   worktreePath: string | null;
   branch: string | null;
+  cwd: string | null; // the actual working directory this run executed in (truth, incl. scratch fallback)
   cliSessionId: string | null; // the CLI's own session/thread id = core credential
   resumeCommand: string | null; // ready-to-paste resume command
   commandLine: string | null; // full command invoked
@@ -136,7 +161,7 @@ export interface Schedule {
 // ── HITL gates (§7) ──────────────────────────────────────────────────────────
 export type GateName = "G1" | "G2"; // G1 = consensus gate, G2 = code gate
 export type GateAction =
-  | { kind: "approve"; text?: string } // 放行 (text = optional note carried into implement)
+  | { kind: "approve"; text?: string; side?: "A" | "B" } // 放行 (text = note; side = chosen plan when debaters disagreed)
   | { kind: "reject" } // 打回终止
   | { kind: "inject"; text: string } // 注入意见 → 回炉再辩
   | { kind: "ask"; text: string }; // 提问 → 答完继续
@@ -171,4 +196,4 @@ export type ServerEvent =
       phase: "start" | "end";
       raisedHand?: boolean;
     }
-  | { type: "debate.gate"; taskId: string; gate: GateName; open: boolean };
+  | { type: "debate.gate"; taskId: string; gate: GateName; open: boolean; consensus?: boolean; conclusionA?: string | null; conclusionB?: string | null };

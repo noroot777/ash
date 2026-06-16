@@ -1,4 +1,4 @@
-import type { Project, Task, Session, Group, GateAction, Schedule, AgentExecutorProfile } from "@harness/shared";
+import type { Project, ProjectView, ProjectHealth, Task, Session, Group, GateAction, Schedule, AgentExecutorProfile } from "@harness/shared";
 
 const j = async (r: Response) => {
   if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
@@ -6,12 +6,28 @@ const j = async (r: Response) => {
 };
 
 export const api = {
-  projects: (): Promise<Project[]> => fetch("/api/projects").then(j),
-  createProject: (name: string, repoPath: string): Promise<Project> =>
+  projects: (): Promise<ProjectView[]> => fetch("/api/projects").then(j),
+  createProject: (name: string, repoPath: string): Promise<ProjectView> =>
     fetch("/api/projects", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ name, repoPath }),
+    }).then(j),
+  updateProject: (id: string, patch: Partial<Pick<Project, "name" | "repoPath">>): Promise<ProjectView> =>
+    fetch(`/api/projects/${id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(patch),
+    }).then(j),
+  deleteProject: (id: string): Promise<unknown> =>
+    fetch(`/api/projects/${id}`, { method: "DELETE" }).then(j),
+  projectHealth: (id: string): Promise<ProjectHealth> =>
+    fetch(`/api/projects/${id}/health`).then(j),
+  checkPath: (repoPath: string): Promise<ProjectHealth> =>
+    fetch("/api/projects/check", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ repoPath }),
     }).then(j),
 
   groups: (projectId?: string): Promise<Group[]> =>
@@ -43,6 +59,8 @@ export const api = {
     fetch(`/api/tasks/${id}`, { method: "DELETE" }).then(j),
   runTask: (id: string): Promise<unknown> =>
     fetch(`/api/tasks/${id}/run`, { method: "POST" }).then(j),
+  retryTask: (id: string): Promise<unknown> =>
+    fetch(`/api/tasks/${id}/retry`, { method: "POST" }).then(j),
   gate: (id: string, action: GateAction): Promise<unknown> =>
     fetch(`/api/tasks/${id}/gate`, {
       method: "POST",
@@ -89,6 +107,6 @@ export const api = {
     fetch(`/api/sessions/${id}/output`).then((r) => r.text()),
   debateTranscript: (
     taskId: string,
-  ): Promise<{ round: number; speaker: "A" | "B" | "impl"; text: string; raised: boolean }[]> =>
+  ): Promise<{ round: number; speaker: "A" | "B" | "impl"; text: string; raised: boolean; agrees?: boolean; conclusion?: string; error?: string }[]> =>
     fetch(`/api/tasks/${taskId}/debate`).then(j),
 };

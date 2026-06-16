@@ -1,10 +1,12 @@
 import { useState } from "react";
-import type { Task, AgentType, DebateConfig } from "@harness/shared";
+import type { Task, AgentType, DebateConfig, ProjectView } from "@harness/shared";
 import { Robot, Hammer, ArrowsClockwise, ShieldCheck } from "@phosphor-icons/react";
 import { api } from "./api";
 import { loadDefaults, saveDefault } from "./debateDefaults";
 import { Modal } from "./Modal";
 import { Pill } from "./Menu";
+import { HealthDot } from "./ui";
+import { shortPath } from "./util";
 
 const AGENTS: AgentType[] = ["claude", "codex", "antigravity"];
 const agentOpts = AGENTS.map((a) => ({ value: a, label: a }));
@@ -12,14 +14,15 @@ const agentOpts = AGENTS.map((a) => ({ value: a, label: a }));
 // /debate config, built from the same Pill + Menu components as the create modal
 // for one consistent visual language (DESIGN.md §7).
 export function DebateModal({
-  projectId,
+  project,
   onClose,
   onCreated,
 }: {
-  projectId: string;
+  project: ProjectView;
   onClose: () => void;
   onCreated: (t: Task, run: boolean) => void;
 }) {
+  const projectId = project.id;
   const [cfg, setCfg] = useState<DebateConfig>(() => ({ ...loadDefaults(), topic: "" }));
   const [defaults, setDefaults] = useState(loadDefaults);
   const [busy, setBusy] = useState(false);
@@ -78,6 +81,15 @@ export function DebateModal({
           placeholder="议题（必填）：让两个 AI 就什么展开对抗…"
           className="w-full rounded-md border border-line bg-canvas px-3 py-2 text-[14px] text-ink outline-none placeholder:text-faint focus:border-accent"
         />
+        {/* Run location — discussion reads here; implement writes here (temp dir if missing) */}
+        <div className="flex items-center gap-1.5 text-[11px]">
+          <HealthDot health={project.health} size={7} />
+          <span className="text-muted">{project.name}</span>
+          <span className="font-mono text-faint" title={project.repoPath}>
+            · 将在 {shortPath(project.repoPath) || "（未设置路径）"} 运行
+          </span>
+          {!project.health.exists && <span className="text-amber-600">· 目录不存在，将用临时目录</span>}
+        </div>
         <div className="flex flex-wrap items-center gap-1.5">
           <Pill icon={<Robot size={14} />} label={`辩手A ${cfg.debaterA}`} value={cfg.debaterA} onChange={(v) => set("debaterA", v as AgentType)} options={agentOpts} defaultValue={defStr("debaterA")} onSetDefault={(v) => pinDefault("debaterA", v)} />
           <Pill icon={<Robot size={14} />} label={`辩手B ${cfg.debaterB}`} value={cfg.debaterB} onChange={(v) => set("debaterB", v as AgentType)} options={agentOpts} defaultValue={defStr("debaterB")} onSetDefault={(v) => pinDefault("debaterB", v)} />
