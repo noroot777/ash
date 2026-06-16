@@ -8,6 +8,7 @@ import { bus } from "./bus.js";
 import { id, now } from "./util.js";
 import { prepareWorkspace } from "./git.js";
 import { resolveExecutor } from "./executors/index.js";
+import { RUNS_DIR } from "./paths.js";
 
 const running = new Set<string>(); // taskIds currently executing (single-flight)
 
@@ -38,7 +39,7 @@ export async function runTask(taskId: string): Promise<void> {
 
     const ws = await prepareWorkspace(project.repoPath, taskId, useWorktree);
     const agentType = (task.agentType as AgentType) ?? "claude";
-    const ex = resolveExecutor(agentType);
+    const ex = await resolveExecutor(agentType);
 
     const prompt = task.body?.trim() || task.title;
     const handle = ex.run({ prompt, cwd: ws.path });
@@ -63,7 +64,7 @@ export async function runTask(taskId: string): Promise<void> {
     await db.insert(sessions).values(sessRow);
 
     // Persist raw output alongside the DB row (DESIGN.md §11: long text -> files).
-    const runDir = join("./data/runs", taskId);
+    const runDir = join(RUNS_DIR, taskId);
     mkdirSync(runDir, { recursive: true });
     const out = createWriteStream(join(runDir, `${sessId}.md`), { flags: "a" });
 

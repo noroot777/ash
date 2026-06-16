@@ -10,6 +10,7 @@ import { CreateTask } from "./CreateTask";
 import { Composer } from "./DebateComposer";
 import { DebateView } from "./DebateView";
 import { applyDebateEvent, emptyDebate, type DebateState } from "./debateState";
+import { AgentsPanel } from "./AgentsPanel";
 
 export function App() {
   const [projects, setProjects] = useState<Project[]>([]);
@@ -22,6 +23,7 @@ export function App() {
   const [sessionsBump, setSessionsBump] = useState(0);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
+  const [agentsOpen, setAgentsOpen] = useState(false);
 
   const connected = useServerEvents(
     useCallback((ev) => {
@@ -136,6 +138,7 @@ export function App() {
     const cmds: Command[] = [
       { id: "new", label: "新建任务", hint: "C", run: () => setCreateOpen(true) },
       { id: "newgroup", label: "新建分组", run: newGroup },
+      { id: "agents", label: "管理智能体执行器", run: () => setAgentsOpen(true) },
     ];
     if (current) {
       cmds.push({ id: "run", label: `运行：${current.title}`, hint: "R", run: () => run(current.id) });
@@ -176,6 +179,13 @@ export function App() {
             {!projects.length && <option value="">无项目</option>}
           </select>
           <div className="flex items-center gap-2">
+            <button
+              onClick={() => setAgentsOpen(true)}
+              className="rounded border border-neutral-800 px-1.5 py-0.5 text-[10px] text-neutral-500 hover:text-neutral-300"
+              title="智能体执行器"
+            >
+              智能体
+            </button>
             <button
               onClick={() => setPaletteOpen(true)}
               className="rounded border border-neutral-800 px-1.5 py-0.5 text-[10px] text-neutral-500"
@@ -234,6 +244,7 @@ export function App() {
       )}
 
       <CommandPalette open={paletteOpen} commands={commands} onClose={() => setPaletteOpen(false)} />
+      {agentsOpen && <AgentsPanel onClose={() => setAgentsOpen(false)} />}
       {createOpen && projectId && (
         <CreateTask
           projectId={projectId}

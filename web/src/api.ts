@@ -1,4 +1,4 @@
-import type { Project, Task, Session, Group, GateAction, Schedule } from "@harness/shared";
+import type { Project, Task, Session, Group, GateAction, Schedule, AgentExecutorProfile } from "@harness/shared";
 
 const j = async (r: Response) => {
   if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
@@ -63,6 +63,22 @@ export const api = {
     }).then(j),
   clearSchedule: (taskId: string): Promise<unknown> =>
     fetch(`/api/tasks/${taskId}/schedule`, { method: "DELETE" }).then(j),
+
+  agents: (): Promise<AgentExecutorProfile[]> => fetch("/api/agents").then(j),
+  createAgent: (a: Partial<AgentExecutorProfile>): Promise<AgentExecutorProfile> =>
+    fetch("/api/agents", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(a),
+    }).then(j),
+  patchAgent: (id: string, a: Partial<AgentExecutorProfile>): Promise<AgentExecutorProfile> =>
+    fetch(`/api/agents/${id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(a),
+    }).then(j),
+  deleteAgent: (id: string): Promise<unknown> =>
+    fetch(`/api/agents/${id}`, { method: "DELETE" }).then(j),
 
   sessions: (taskId: string): Promise<Session[]> =>
     fetch(`/api/tasks/${taskId}/sessions`).then(j),

@@ -2,6 +2,8 @@
 
 :root {
   color-scheme: dark;
+  --bg: #0a0a0b;
+  --panel: #0e0e10;
 }
 
 html,
@@ -12,9 +14,53 @@ body,
 
 body {
   margin: 0;
-  background: #0b0b0c;
+  background: var(--bg);
   color: #e7e7ea;
   font-family:
     ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica,
     Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+/* Tighten headings a touch (Linear-style). */
+h1,
+h2 {
+  letter-spacing: -0.012em;
+}
+
+/* Quiet, thin scrollbars that match the dark surface. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #2a2a2e transparent;
+}
+*::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+*::-webkit-scrollbar-thumb {
+  background: #26262a;
+  border-radius: 9px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: #34343a;
+  background-clip: padding-box;
+}
+
+::selection {
+  background: rgba(139, 92, 246, 0.3);
+}
+
+/* Make native controls feel at home in the dark theme. */
+select,
+input,
+textarea,
+button {
+  font: inherit;
+}
+select option {
+  background: #161618;
 }

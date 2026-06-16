@@ -41,7 +41,10 @@
       "Bash(pkill -f \"npm -w server\")",
       "Bash(lsof -ti:4317)",
       "Bash(xargs kill)",
-      "Bash(git -c user.name=harness -c user.email=harness@local commit -q -m 'M5: task scheduling \\(one-shot + cron\\) *)"
+      "Bash(git -c user.name=harness -c user.email=harness@local commit -q -m 'M5: task scheduling \\(one-shot + cron\\) *)",
+      "Bash(command -v antigravity)",
+      "Bash(command -v ssh)",
+      "Bash(git -c user.name=harness -c user.email=harness@local commit -q -m 'M6: agent registry, ssh executors, data-dir unify, design polish *)"
     ]
   }
 }

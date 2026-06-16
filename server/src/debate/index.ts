@@ -14,6 +14,7 @@ import { id, now } from "../util.js";
 import { prepareWorkspace, commitWorktree } from "../git.js";
 import { resolveExecutor } from "../executors/index.js";
 import type { AgentExecutor } from "../executors/types.js";
+import { RUNS_DIR } from "../paths.js";
 import * as P from "./prompts.js";
 import { waitForGate } from "./gates.js";
 
@@ -71,7 +72,7 @@ async function runTurn(args: {
 
   bus.publish({ type: "debate.progress", taskId, round, speaker, phase: "start" });
 
-  const runDir = join("./data/runs", taskId);
+  const runDir = join(RUNS_DIR, taskId);
   mkdirSync(runDir, { recursive: true });
   const out = createWriteStream(join(runDir, `${rowId}.md`), { flags: "a" });
   out.write(`\n\n### 第 ${round} 轮 · ${speaker}\n`);
@@ -124,8 +125,8 @@ export async function runDebate(taskId: string): Promise<void> {
     const project = (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0);
     if (!project) throw new Error("project not found");
 
-    const exA = resolveExecutor(cfg.debaterA);
-    const exB = resolveExecutor(cfg.debaterB);
+    const exA = await resolveExecutor(cfg.debaterA);
+    const exB = await resolveExecutor(cfg.debaterB);
     const cwd = project.repoPath; // discussion reads the repo; must not modify
 
     await setStatus(taskId, "running");

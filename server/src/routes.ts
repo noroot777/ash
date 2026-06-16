@@ -3,6 +3,7 @@ import { streamSSE } from "hono/streaming";
 import { eq } from "drizzle-orm";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { RUNS_DIR } from "./paths.js";
 import type {
   Project,
   Group,
@@ -11,7 +12,7 @@ import type {
   TaskStatus,
 } from "@harness/shared";
 import { db } from "./db/index.js";
-import { projects, groups, tasks, sessions, schedules } from "./db/schema.js";
+import { projects, groups, tasks, sessions, schedules, agents } from "./db/schema.js";
 import { bus } from "./bus.js";
 import { id, now } from "./util.js";
 import { runTask } from "./orchestrator.js";
@@ -24,6 +25,60 @@ export const api = new Hono();
 
 // ── health ───────────────────────────────────────────────────────────────
 api.get("/health", (c) => c.json({ ok: true, ts: now() }));
+
+// ── agents (executor registry, §5) ───────────────────────────────────────────
+const toAgent = (r: typeof agents.$inferSelect) => ({
+  id: r.id,
+  name: r.name,
+  type: r.type,
+  target: JSON.parse(r.target),
+  model: r.model ?? undefined,
+  extraArgs: JSON.parse(r.extraArgs),
+  isDefault: r.isDefault,
+});
+
+api.get("/agents", async (c) => c.json((await db.select().from(agents)).map(toAgent)));
+
+api.post("/agents", async (c) => {
+  const b = await c.req.json<any>();
+  const row = {
+    id: id(),
+    name: b.name,
+    type: b.type,
+    target: JSON.stringify(b.target ?? { kind: "local" }),
+    model: b.model ?? null,
+    extraArgs: JSON.stringify(b.extraArgs ?? []),
+    isDefault: !!b.isDefault,
+  };
+  // a type has at most one default
+  if (row.isDefault) await db.update(agents).set({ isDefault: false }).where(eq(agents.type, row.type));
+  await db.insert(agents).values(row);
+  return c.json(toAgent(row as typeof agents.$inferSelect), 201);
+});
+
+api.patch("/agents/:id", async (c) => {
+  const aid = c.req.param("id");
+  const existing = (await db.select().from(agents).where(eq(agents.id, aid))).at(0);
+  if (!existing) return c.json({ error: "not found" }, 404);
+  const b = await c.req.json<any>();
+  const patch: Record<string, unknown> = {};
+  if (b.name !== undefined) patch.name = b.name;
+  if (b.model !== undefined) patch.model = b.model || null;
+  if (b.target !== undefined) patch.target = JSON.stringify(b.target);
+  if (b.extraArgs !== undefined) patch.extraArgs = JSON.stringify(b.extraArgs);
+  if (b.isDefault === true) {
+    await db.update(agents).set({ isDefault: false }).where(eq(agents.type, existing.type));
+    patch.isDefault = true;
+  }
+  await db.update(agents).set(patch).where(eq(agents.id, aid));
+  const updated = (await db.select().from(agents).where(eq(agents.id, aid))).at(0)!;
+  return c.json(toAgent(updated));
+});
+
+api.delete("/agents/:id", async (c) => {
+  await db.delete(agents).where(eq(agents.id, c.req.param("id")));
+  return c.json({ deleted: true });
+});
 
 // ── row -> domain mappers (parse json columns) ─────────────────────────────
 const toTask = (r: typeof tasks.$inferSelect): Task => ({
@@ -171,7 +226,7 @@ api.get("/sessions/:id/output", async (c) => {
   const row = (await db.select().from(sessions).where(eq(sessions.id, sid))).at(0);
   if (!row) return c.json({ error: "not found" }, 404);
   try {
-    const text = await readFile(join("./data/runs", row.taskId, `${sid}.md`), "utf8");
+    const text = await readFile(join(RUNS_DIR, row.taskId, `${sid}.md`), "utf8");
     return c.text(text);
   } catch {
     return c.text("");
@@ -181,7 +236,7 @@ api.get("/sessions/:id/output", async (c) => {
 // Persisted debate transcript (rebuilds the timeline on reload, §12).
 api.get("/tasks/:id/debate", async (c) => {
   try {
-    const raw = await readFile(join("./data/runs", c.req.param("id"), "transcript.jsonl"), "utf8");
+    const raw = await readFile(join(RUNS_DIR, c.req.param("id"), "transcript.jsonl"), "utf8");
     const turns = raw
       .split("\n")
       .filter(Boolean)
