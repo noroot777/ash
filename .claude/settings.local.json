@@ -74,7 +74,8 @@
       "Bash(git -c user.name=harness -c user.email=harness@local commit -q -m 'fix\\(menu\\): arrow-key nav in dropdown + pin sets default AND selects *)",
       "Bash(curl -s -o /dev/null -w \"health %{http_code}\\\\n\" http://localhost:4317/api/health)",
       "Bash(curl -s -N --max-time 1 http://localhost:4317/api/events)",
-      "Bash(git -c user.name=harness -c user.email=harness@local commit -q -m 'fix: SSE-disconnect no longer crashes server; rounds pill gets custom input *)"
+      "Bash(git -c user.name=harness -c user.email=harness@local commit -q -m 'fix: SSE-disconnect no longer crashes server; rounds pill gets custom input *)",
+      "Bash(git -c user.name=harness -c user.email=harness@local commit -q -m 'fix: replace native window.confirm for delete with styled ConfirmModal *)"
     ]
   }
 }

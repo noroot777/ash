@@ -43,6 +43,52 @@ const fieldCls =
 const primaryCls =
   "rounded-md bg-accent px-3.5 py-1.5 text-[13px] font-medium text-accent-fg hover:bg-accent-hover disabled:opacity-40";
 
+// Styled confirm dialog (replaces window.confirm) — app-consistent, Esc-closable.
+export function ConfirmModal({
+  title,
+  message,
+  confirmLabel = "确定",
+  danger = false,
+  onConfirm,
+  onClose,
+}: {
+  title: string;
+  message: string;
+  confirmLabel?: string;
+  danger?: boolean;
+  onConfirm: () => void;
+  onClose: () => void;
+}) {
+  return (
+    <Modal
+      title={title}
+      onClose={onClose}
+      width={420}
+      footer={
+        <>
+          <button onClick={onClose} className="px-3 py-1.5 text-[13px] text-muted">取消</button>
+          <button
+            autoFocus
+            onClick={() => {
+              onConfirm();
+              onClose();
+            }}
+            className={
+              danger
+                ? "rounded-md bg-red-600 px-3.5 py-1.5 text-[13px] font-medium text-white hover:bg-red-700"
+                : primaryCls
+            }
+          >
+            {confirmLabel}
+          </button>
+        </>
+      }
+    >
+      <p className="text-[13px] leading-relaxed text-ink">{message}</p>
+    </Modal>
+  );
+}
+
 export function NewProjectModal({
   onClose,
   onCreate,

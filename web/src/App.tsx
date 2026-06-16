@@ -14,7 +14,7 @@ import { applyDebateEvent, emptyDebate, type DebateState } from "./debateState";
 import { AgentsPanel } from "./AgentsPanel";
 import { Board } from "./Board";
 import { Menu } from "./Menu";
-import { NewProjectModal, NewGroupModal } from "./Modal";
+import { NewProjectModal, NewGroupModal, ConfirmModal } from "./Modal";
 
 export function App() {
   const [projects, setProjects] = useState<Project[]>([]);
@@ -31,6 +31,7 @@ export function App() {
   const [newProjectOpen, setNewProjectOpen] = useState(false);
   const [newGroupOpen, setNewGroupOpen] = useState(false);
   const [debateOpen, setDebateOpen] = useState(false);
+  const [confirmDel, setConfirmDel] = useState<{ id: string; title: string } | null>(null);
   const [view, setView] = useState<"list" | "board">("list");
 
   const connected = useServerEvents(
@@ -88,8 +89,8 @@ export function App() {
 
   const gate = useCallback((id: string, action: Parameters<typeof api.gate>[1]) => api.gate(id, action), []);
 
-  const del = useCallback(async (id: string, title: string) => {
-    if (!window.confirm(`删除任务「${title}」？`)) return;
+  const del = useCallback((id: string, title: string) => setConfirmDel({ id, title }), []);
+  const doDelete = useCallback(async (id: string) => {
     await api.deleteTask(id);
     setTasks((ts) => ts.filter((t) => t.id !== id));
     setSelected((cur) => (cur === id ? null : cur));
@@ -121,7 +122,7 @@ export function App() {
     [projectId],
   );
 
-  const anyModal = createOpen || agentsOpen || newProjectOpen || newGroupOpen || debateOpen;
+  const anyModal = createOpen || agentsOpen || newProjectOpen || newGroupOpen || debateOpen || !!confirmDel;
 
   // ── keyboard navigation ────────────────────────────────────────────────
   useEffect(() => {
@@ -271,6 +272,16 @@ export function App() {
       {agentsOpen && <AgentsPanel onClose={() => setAgentsOpen(false)} />}
       {newProjectOpen && <NewProjectModal onClose={() => setNewProjectOpen(false)} onCreate={doCreateProject} />}
       {newGroupOpen && <NewGroupModal onClose={() => setNewGroupOpen(false)} onCreate={doCreateGroup} />}
+      {confirmDel && (
+        <ConfirmModal
+          title="删除任务"
+          message={`确定删除任务「${confirmDel.title}」？此操作不可撤销。`}
+          confirmLabel="删除"
+          danger
+          onConfirm={() => doDelete(confirmDel.id)}
+          onClose={() => setConfirmDel(null)}
+        />
+      )}
       {debateOpen && projectId && <DebateModal projectId={projectId} onClose={() => setDebateOpen(false)} onCreated={onTaskCreated} />}
       {createOpen && projectId && (
         <CreateTask
