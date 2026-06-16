@@ -75,7 +75,19 @@ async function* parseClaudeStream(child: ReturnType<typeof spawnAgent>): AsyncIt
 
   let stderr = "";
   child.stderr?.on("data", (d) => (stderr += d.toString()));
+  child.on("error", (err: NodeJS.ErrnoException) => {
+    if (finished) return;
+    push({
+      kind: "error",
+      message: err.code === "ENOENT" ? `找不到 claude 命令(PATH 未包含其所在目录)` : `启动 claude 失败：${err.message}`,
+    });
+    push({ kind: "done", exitStatus: 1 });
+    finished = true;
+    resolve?.();
+    resolve = null;
+  });
   child.on("close", (code) => {
+    if (finished) return;
     const exit = code ?? 0;
     if (exit !== 0 && stderr.trim()) push({ kind: "error", message: stderr.trim().slice(0, 2000) });
     push({ kind: "done", exitStatus: exit });

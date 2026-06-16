@@ -136,6 +136,7 @@ export function App() {
       const el = e.target as HTMLElement;
       if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT")) return;
       if (paletteOpen || anyModal) return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return; // don't hijack ⌘C/⌘V/etc.
       const idx = ordered.findIndex((t) => t.id === selected);
       if (e.key === "j" || e.key === "ArrowDown") {
         e.preventDefault();
