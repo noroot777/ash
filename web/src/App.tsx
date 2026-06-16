@@ -296,12 +296,12 @@ export function App() {
       {createOpen && projectId && (
         <CreateTask
           projectId={projectId}
+          projectName={projects.find((p) => p.id === projectId)?.name ?? "项目"}
           groups={groups}
           onClose={() => setCreateOpen(false)}
           onCreated={(t) => {
             setTasks((ts) => [t, ...ts]);
             setSelected(t.id);
-            setCreateOpen(false);
           }}
         />
       )}

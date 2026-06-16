@@ -159,7 +159,7 @@ api.post("/tasks", async (c) => {
     title: b.title,
     body: b.body ?? "",
     mode: b.mode ?? "single",
-    status: "backlog" as TaskStatus,
+    status: (b.status ?? "backlog") as TaskStatus,
     priority: b.priority ?? "none",
     labels: JSON.stringify(b.labels ?? []),
     dependsOn: JSON.stringify(b.dependsOn ?? []),
