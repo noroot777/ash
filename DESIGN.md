@@ -185,15 +185,18 @@ session = { id(内部uuid), taskId, role(辩手A|辩手B|实现方),
 
 ## 十四、实现路线图（里程碑）
 
+> 状态：M0–M6 全部完成并提交（见 git log）。下方为原计划，括注实测情况。
+
 每个里程碑独立可跑、可验证，后一个建立在前一个之上。每完成一个里程碑 git 提交一次。
 
-- **M0 · 项目骨架**：monorepo（`server/` + `web/` + `shared/`）；Hono 后端托管 Vite+React+Tailwind SPA；SQLite + Drizzle 初始 schema；`npm run dev`（Vite+后端并行、API 代理）与 `npm start`（后端 serve `dist/`）跑通；一个健康检查页。
-- **M1 · 单 agent 垂直切片（最关键，先打通端到端）**：`AgentExecutor` 接口 + `ClaudeExecutor`（本地 spawn、解析 stream-json、抽取 session id）；新建一个 single 模式 Task（`@claude`），在自动创建的 git worktree + 分支里跑，输出经 SSE 实时推到极简任务详情页，落 `sessions` 凭证记录（含可复制的 resume 命令）。证明"驱动 CLI + worktree + SSE + 溯源"整条链路成立。
-- **M2 · 任务管理 UI（Linear 式）**：`Project→Group→Task` 数据模型与列表视图；7 态状态机；优先级 + 标签；Cmd-K 命令面板、键盘导航；Task CRUD。设计走 `/design-taste-frontend` 或 `/minimalist-ui`。
-- **M3 · 分组并行/串行调度**：`Group.mode` 并行/串行、`useWorktree` 开关、`dependsOn` 依赖边；`Queued→Running` 调度器；加 `CodexExecutor`（验证多类型/多执行者与默认执行者解析）。
-- **M4 · /debate 对抗**：串行回合制编排器（信使 + 回合裁判）；盲态开局（首轮可并行）、举手收敛、轮数上限；裁判=人的 HITL 门 G1/G2 + 四动作（放行/打回/注入回炉/提问）；实现方阶段；`/debate` 内联配置 UI（Tab 切槽、弹层候选、设为默认、Enter 开跑）；凭证 chip。
-- **M5 · 定时执行**：调度器支持一次性 + cron；只负责入队、复用正常调度；错过补跑策略（一次性补跑一次、循环只补最近一次）。
-- **M6 · 打磨**：整体设计走查（design skill）；智能体列表管理 UI；`AntigravityExecutor`；（可选）按负载自动挑同类执行者；远程 ssh 执行者打通。
+- **M0 · 项目骨架** ✅：monorepo（`server/` + `web/` + `shared/`）；Hono 后端托管 Vite+React+Tailwind SPA；SQLite（**libsql 驱动**，替换 better-sqlite3 以避开 Node 26 的 node-gyp 编译）+ Drizzle；`npm run dev` / `npm start` 跑通。
+- **M1 · 单 agent 垂直切片** ✅：`AgentExecutor` + `ClaudeExecutor`；single 任务在自动 worktree+分支里跑；SSE 实时流；`sessions` 凭证（resume 命令）。e2e 验证。
+- **M2 · 任务管理 UI（Linear 式）** ✅：状态分组列表、7 态、优先级 bar、标签、Cmd-K 命令面板、键盘导航（j/k/c/r）、Task/Group CRUD。
+- **M3 · 分组并行/串行调度** ✅：`Group.mode`、`dependsOn` 边、调度器（并发上限+死锁兜底）、`CodexExecutor`。e2e 验证（claude+codex 并行）。
+- **M4 · /debate 对抗** ✅：串行回合制编排器（盲态开局并行、A 先、举手收敛、轮数上限）；HITL 门 G1/G2 四动作（rendezvous）；实现方在 worktree 实现并提交；composer + Tab 槽位条（设为默认）；聊天式时间线（实时 + 持久 transcript 重建）。e2e + 浏览器验证。门暂停→继续未做现场实测。
+- **M5 · 定时执行** ✅：挂 Task 的一次性 + cron（手写 5 字段匹配器）；tick 只入队复用运行路径；一次性补跑、cron 不堆积。e2e 验证。
+- **M6 · 打磨** ✅：智能体注册表（agents 表 + 管理面板 + 默认执行者解析）；ssh 执行目标（prompt 走 stdin；本地验证，远程因无主机未实测）；data 目录归一到 `<repo>/data`；设计微打磨（抗锯齿/滚动条/选区）。antigravity 因本机无该 CLI，登记为类型但暂无解析器。
+
 
 ## 待后续决定（本轮未展开）
 - `Event` 流的具体 schema 字段。

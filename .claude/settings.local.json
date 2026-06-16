@@ -44,7 +44,8 @@
       "Bash(git -c user.name=harness -c user.email=harness@local commit -q -m 'M5: task scheduling \\(one-shot + cron\\) *)",
       "Bash(command -v antigravity)",
       "Bash(command -v ssh)",
-      "Bash(git -c user.name=harness -c user.email=harness@local commit -q -m 'M6: agent registry, ssh executors, data-dir unify, design polish *)"
+      "Bash(git -c user.name=harness -c user.email=harness@local commit -q -m 'M6: agent registry, ssh executors, data-dir unify, design polish *)",
+      "Bash(git -c user.name=harness -c user.email=harness@local commit -q -m \"docs: mark M0-M6 roadmap complete in DESIGN.md\")"
     ]
   }
 }
