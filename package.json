@@ -10,7 +10,7 @@
   ],
   "scripts": {
     "dev": "concurrently -n server,web -c blue,magenta \"npm:dev:server\" \"npm:dev:web\"",
-    "dev:server": "npm -w server run dev",
+    "dev:server": "PORT=4317 npm -w server run dev",
     "dev:web": "npm -w web run dev",
     "build": "npm -w shared run build && npm -w web run build && npm -w server run build",
     "start": "npm -w server run start",
