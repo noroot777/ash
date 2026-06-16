@@ -19,6 +19,7 @@ import { runTask } from "./orchestrator.js";
 import { runGroup } from "./scheduler.js";
 import { runDebate } from "./debate/index.js";
 import { resolveGate } from "./debate/gates.js";
+import { detectLocalAgents } from "./detect.js";
 import type { GateAction } from "@harness/shared";
 
 export const api = new Hono();
@@ -38,6 +39,9 @@ const toAgent = (r: typeof agents.$inferSelect) => ({
 });
 
 api.get("/agents", async (c) => c.json((await db.select().from(agents)).map(toAgent)));
+
+// Detect which agent CLIs are installed on the local machine (§5).
+api.get("/agents/detect", async (c) => c.json(await detectLocalAgents()));
 
 api.post("/agents", async (c) => {
   const b = await c.req.json<any>();

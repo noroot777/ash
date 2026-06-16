@@ -1,46 +1,129 @@
 import { useEffect, useState } from "react";
 import type { AgentExecutorProfile, AgentType, ExecTarget } from "@harness/shared";
+import { MagnifyingGlass, Check, X, Plus, Trash, CircleNotch } from "@phosphor-icons/react";
 import { api } from "./api";
+import { useEscape } from "./useEscape";
 
 const TYPES: AgentType[] = ["claude", "codex", "antigravity"];
 
+type Detected = { type: string; bin: string; available: boolean; path: string | null; version: string | null };
+
 // Agent registry management (DESIGN.md §5): executor profiles under each type,
-// with a per-type default and local/ssh target.
+// per-type default, local/ssh target, plus local-CLI detection.
 export function AgentsPanel({ onClose }: { onClose: () => void }) {
   const [list, setList] = useState<AgentExecutorProfile[]>([]);
+  const [detected, setDetected] = useState<Detected[] | null>(null);
+  const [detecting, setDetecting] = useState(false);
   const reload = () => api.agents().then(setList);
+  useEscape(onClose);
   useEffect(() => {
     reload();
   }, []);
 
+  const detect = async () => {
+    setDetecting(true);
+    try {
+      setDetected(await api.detectAgents());
+    } finally {
+      setDetecting(false);
+    }
+  };
+
+  const registerDetected = async (d: Detected) => {
+    const hasAny = list.some((a) => a.type === d.type);
+    await api.createAgent({
+      type: d.type as AgentType,
+      name: `${d.type}@local`,
+      target: { kind: "local" },
+      isDefault: !hasAny,
+    });
+    reload();
+  };
+
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/50 pt-[10vh]" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/40 pt-[8vh]" onClick={onClose}>
       <div
-        className="flex max-h-[80vh] w-[640px] max-w-[92vw] flex-col overflow-hidden rounded-xl border border-line2 bg-panel shadow-2xl"
+        className="flex max-h-[82vh] w-[860px] max-w-[94vw] flex-col overflow-hidden rounded-xl border border-line2 bg-panel shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center justify-between border-b border-line px-4 py-3">
-          <h2 className="text-sm font-medium">智能体执行器</h2>
-          <button onClick={onClose} className="text-xs text-muted hover:text-ink">关闭 Esc</button>
+        <div className="flex items-center justify-between border-b border-line px-5 py-3.5">
+          <h2 className="text-[15px] font-semibold">智能体执行器</h2>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={detect}
+              disabled={detecting}
+              className="inline-flex items-center gap-1.5 rounded-md border border-line px-2.5 py-1.5 text-[12px] text-ink transition-colors hover:bg-raised disabled:opacity-50"
+            >
+              {detecting ? <CircleNotch size={13} className="animate-spin" /> : <MagnifyingGlass size={13} />}
+              检测本地智能体
+            </button>
+            <button onClick={onClose} className="inline-flex items-center gap-1.5 text-[12px] text-muted hover:text-ink">
+              关闭 <kbd>Esc</kbd>
+            </button>
+          </div>
         </div>
-        <div className="flex-1 overflow-y-auto p-4">
-          {TYPES.map((type) => {
-            const profiles = list.filter((a) => a.type === type);
-            return (
-              <div key={type} className="mb-5">
-                <div className="mb-1.5 text-xs font-medium uppercase tracking-wide text-muted">{type}</div>
-                {profiles.length === 0 && (
-                  <p className="mb-1 text-xs text-faint">
-                    {type === "antigravity" ? "无内置解析器；待该 CLI 可用后支持" : "未配置 · 将用内置本地默认执行者"}
-                  </p>
-                )}
-                {profiles.map((a) => (
-                  <Row key={a.id} a={a} onChange={reload} />
-                ))}
-                {type !== "antigravity" && <AddRow type={type} onAdded={reload} />}
+
+        <div className="flex-1 overflow-y-auto p-5">
+          {detected && (
+            <div className="mb-5 rounded-lg border border-line bg-raised/50 p-3">
+              <div className="mb-2 text-[11px] font-medium uppercase tracking-wide text-muted">本地检测结果</div>
+              <div className="grid gap-1.5">
+                {detected.map((d) => {
+                  const registered = list.some((a) => a.type === d.type && a.target.kind === "local");
+                  return (
+                    <div key={d.type} className="flex items-center gap-2 text-[12px]">
+                      {d.available ? (
+                        <Check size={14} weight="bold" className="text-emerald-600" />
+                      ) : (
+                        <X size={14} weight="bold" className="text-faint" />
+                      )}
+                      <span className="w-24 font-medium text-ink">{d.type}</span>
+                      {d.available ? (
+                        <>
+                          <span className="truncate font-mono text-[11px] text-muted">{d.path}</span>
+                          {d.version && <span className="shrink-0 font-mono text-[11px] text-faint">{d.version}</span>}
+                          <span className="ml-auto shrink-0">
+                            {registered ? (
+                              <span className="text-[11px] text-faint">已注册</span>
+                            ) : (
+                              <button
+                                onClick={() => registerDetected(d)}
+                                className="inline-flex items-center gap-1 rounded-md bg-accent px-2 py-0.5 text-[11px] font-medium text-accent-fg hover:bg-accent-hover"
+                              >
+                                <Plus size={11} weight="bold" /> 注册为执行者
+                              </button>
+                            )}
+                          </span>
+                        </>
+                      ) : (
+                        <span className="text-faint">未安装</span>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
-            );
-          })}
+            </div>
+          )}
+
+          <div className="grid grid-cols-2 gap-x-6 gap-y-5">
+            {TYPES.map((type) => {
+              const profiles = list.filter((a) => a.type === type);
+              return (
+                <div key={type}>
+                  <div className="mb-1.5 text-[11px] font-medium uppercase tracking-wide text-muted">{type}</div>
+                  {profiles.length === 0 && (
+                    <p className="mb-1 text-[12px] text-faint">
+                      {type === "antigravity" ? "无内置解析器；待该 CLI 可用后支持" : "未配置 · 将用内置本地默认执行者"}
+                    </p>
+                  )}
+                  {profiles.map((a) => (
+                    <Row key={a.id} a={a} onChange={reload} />
+                  ))}
+                  {type !== "antigravity" && <AddRow type={type} onAdded={reload} />}
+                </div>
+              );
+            })}
+          </div>
         </div>
       </div>
     </div>
@@ -53,25 +136,26 @@ function targetText(t: ExecTarget) {
 
 function Row({ a, onChange }: { a: AgentExecutorProfile; onChange: () => void }) {
   return (
-    <div className="mb-1 flex items-center gap-2 rounded-md border border-line bg-raised/40 px-2.5 py-1.5 text-xs">
+    <div className="mb-1.5 flex items-center gap-2 rounded-md border border-line bg-panel px-2.5 py-1.5 text-[12px]">
       <span className="font-medium text-ink">{a.name}</span>
       <span className="text-muted">{targetText(a.target)}</span>
       {a.model && <span className="text-muted">· {a.model}</span>}
       {a.isDefault ? (
-        <span className="rounded bg-emerald-500/20 px-1.5 py-0.5 text-emerald-700">默认</span>
+        <span className="rounded bg-emerald-500/15 px-1.5 py-0.5 text-[11px] text-emerald-700">默认</span>
       ) : (
         <button
           onClick={() => api.patchAgent(a.id, { isDefault: true }).then(onChange)}
-          className="rounded border border-line2 px-1.5 py-0.5 text-muted hover:text-ink"
+          className="rounded border border-line px-1.5 py-0.5 text-[11px] text-muted hover:text-ink"
         >
           设为默认
         </button>
       )}
       <button
         onClick={() => api.deleteAgent(a.id).then(onChange)}
-        className="ml-auto text-faint hover:text-red-600"
+        className="ml-auto grid h-6 w-6 place-items-center rounded text-faint hover:bg-raised hover:text-red-600"
+        title="删除"
       >
-        删除
+        <Trash size={13} />
       </button>
     </div>
   );
@@ -101,18 +185,20 @@ function AddRow({ type, onAdded }: { type: AgentType; onAdded: () => void }) {
 
   if (!open)
     return (
-      <button onClick={() => setOpen(true)} className="text-xs text-muted hover:text-ink">
-        + 添加执行者
+      <button onClick={() => setOpen(true)} className="inline-flex items-center gap-1 text-[12px] text-muted hover:text-ink">
+        <Plus size={12} weight="bold" /> 添加执行者
       </button>
     );
 
   return (
-    <div className="mt-1 flex flex-wrap items-center gap-1.5 rounded-md border border-line p-2 text-xs">
-      <input value={name} onChange={(e) => setName(e.target.value)} placeholder="名称（可选）" className="w-28 rounded bg-canvas px-2 py-1 outline-none placeholder:text-faint" />
-      <input value={model} onChange={(e) => setModel(e.target.value)} placeholder="模型（可选）" className="w-28 rounded bg-canvas px-2 py-1 outline-none placeholder:text-faint" />
-      <input value={host} onChange={(e) => setHost(e.target.value)} placeholder="ssh 主机（留空=本地）" className="w-36 rounded bg-canvas px-2 py-1 outline-none placeholder:text-faint" />
-      <button onClick={add} className="rounded bg-accent hover:bg-accent-hover px-2 py-1 font-medium text-accent-fg">添加</button>
-      <button onClick={() => setOpen(false)} className="px-2 py-1 text-muted">取消</button>
+    <div className="mt-1 flex flex-col gap-1.5 rounded-md border border-line p-2 text-[12px]">
+      <input value={name} onChange={(e) => setName(e.target.value)} placeholder="名称（可选）" className="rounded border border-line bg-canvas px-2 py-1 outline-none placeholder:text-faint" />
+      <input value={model} onChange={(e) => setModel(e.target.value)} placeholder="模型（可选，如 opus）" className="rounded border border-line bg-canvas px-2 py-1 outline-none placeholder:text-faint" />
+      <input value={host} onChange={(e) => setHost(e.target.value)} placeholder="ssh 主机（留空=本地）" className="rounded border border-line bg-canvas px-2 py-1 outline-none placeholder:text-faint" />
+      <div className="flex justify-end gap-2">
+        <button onClick={() => setOpen(false)} className="px-2 py-1 text-muted">取消</button>
+        <button onClick={add} className="rounded-md bg-accent px-2.5 py-1 font-medium text-accent-fg hover:bg-accent-hover">添加</button>
+      </div>
     </div>
   );
 }

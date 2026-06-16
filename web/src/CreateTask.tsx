@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { Task, Group, AgentType, Priority } from "@harness/shared";
 import { api } from "./api";
 import { PRIORITIES } from "./constants";
+import { useEscape } from "./useEscape";
 
 export function CreateTask({
   projectId,
@@ -14,6 +15,7 @@ export function CreateTask({
   onClose: () => void;
   onCreated: (t: Task) => void;
 }) {
+  useEscape(onClose);
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
   const [agentType, setAgentType] = useState<AgentType>("claude");

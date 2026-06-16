@@ -65,6 +65,9 @@ export const api = {
     fetch(`/api/tasks/${taskId}/schedule`, { method: "DELETE" }).then(j),
 
   agents: (): Promise<AgentExecutorProfile[]> => fetch("/api/agents").then(j),
+  detectAgents: (): Promise<
+    { type: string; bin: string; available: boolean; path: string | null; version: string | null }[]
+  > => fetch("/api/agents/detect").then(j),
   createAgent: (a: Partial<AgentExecutorProfile>): Promise<AgentExecutorProfile> =>
     fetch("/api/agents", {
       method: "POST",
