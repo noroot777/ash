@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { Priority, Session } from "@harness/shared";
+import { Plus } from "@phosphor-icons/react";
 
 // Linear-style priority glyph: three ascending bars (filled by level), and a
 // filled amber square with "!" for urgent.
@@ -25,6 +26,44 @@ export function PriorityIcon({ p }: { p: Priority }) {
         <rect key={i} x={b.x} y={b.y} width="3" height={b.h} rx="1" fill={i < n ? "#6b6f76" : "#d6d6dc"} />
       ))}
     </svg>
+  );
+}
+
+// Inline label adder (replaces prompt()): click reveals an input, Enter adds.
+export function LabelAdder({ onAdd }: { onAdd: (label: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const [v, setV] = useState("");
+  if (!open)
+    return (
+      <button
+        onClick={() => setOpen(true)}
+        className="inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-[12px] text-muted hover:bg-raised hover:text-ink"
+      >
+        <Plus size={12} weight="bold" /> 标签
+      </button>
+    );
+  return (
+    <input
+      autoFocus
+      value={v}
+      onChange={(e) => setV(e.target.value)}
+      onBlur={() => {
+        setOpen(false);
+        setV("");
+      }}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" && v.trim()) {
+          onAdd(v.trim());
+          setV("");
+          setOpen(false);
+        } else if (e.key === "Escape") {
+          setOpen(false);
+          setV("");
+        }
+      }}
+      placeholder="标签名 ↵"
+      className="w-24 rounded-md border border-line bg-panel px-2 py-1 text-[12px] text-ink outline-none placeholder:text-faint focus:border-accent"
+    />
   );
 }
 

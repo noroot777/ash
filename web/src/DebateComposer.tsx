@@ -2,47 +2,33 @@ import { useEffect, useRef, useState } from "react";
 import type { Task, AgentType, DebateConfig } from "@harness/shared";
 import { api } from "./api";
 import { loadDefaults, saveDefault } from "./debateDefaults";
+import { Modal } from "./Modal";
 
 const AGENTS: AgentType[] = ["claude", "codex", "antigravity"];
 
-// Composer input. Plain text + Enter → single task. Typing `/debate ` morphs the
-// input into the Tab-cyclable slot bar (DESIGN.md §7).
-export function Composer({
+// /debate entry, presented as a modal (opened from the command palette / compose).
+export function DebateModal({
   projectId,
+  onClose,
   onCreated,
 }: {
   projectId: string;
+  onClose: () => void;
   onCreated: (t: Task, run: boolean) => void;
 }) {
-  const [text, setText] = useState("");
-  const isDebate = text.trimStart().toLowerCase().startsWith("/debate");
-
-  if (isDebate) {
-    const seedTopic = text.replace(/^\s*\/debate\s?/i, "");
-    return <DebateSlots projectId={projectId} seedTopic={seedTopic} onCancel={() => setText("")} onCreated={onCreated} />;
-  }
-
   return (
-    <div className="mx-4 mb-1">
-      <input
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        onKeyDown={async (e) => {
-          if (e.key === "Enter" && text.trim()) {
-            const t = await api.createTask({ projectId, title: text.trim(), mode: "single", agentType: "claude" });
-            onCreated(t, false);
-            setText("");
-          }
+    <Modal title="发起对抗 · /debate" onClose={onClose} width={780}>
+      <DebateSlots
+        projectId={projectId}
+        seedTopic=""
+        bare
+        onCancel={onClose}
+        onCreated={(t, run) => {
+          onCreated(t, run);
+          onClose();
         }}
-        placeholder="新建任务，或输入 /debate 发起对抗…"
-        className="w-full rounded-md border border-line bg-raised/50 px-3 py-2 text-sm outline-none placeholder:text-faint focus:border-line2"
       />
-      {text === "/" && (
-        <div className="mt-1 rounded-md border border-line bg-panel px-3 py-1.5 text-xs text-muted">
-          <span className="text-ink">/debate</span> 发起两 AI 对抗
-        </div>
-      )}
-    </div>
+    </Modal>
   );
 }
 
@@ -63,11 +49,13 @@ function DebateSlots({
   seedTopic,
   onCancel,
   onCreated,
+  bare = false,
 }: {
   projectId: string;
   seedTopic: string;
   onCancel: () => void;
   onCreated: (t: Task, run: boolean) => void;
+  bare?: boolean;
 }) {
   const [cfg, setCfg] = useState<DebateConfig>(() => ({ ...loadDefaults(), topic: seedTopic }));
   const [focus, setFocus] = useState(0);
@@ -148,7 +136,7 @@ function DebateSlots({
 
   return (
     <div
-      className="mx-3 mb-1 rounded-lg border border-violet-500/40 bg-raised/60 p-2"
+      className={bare ? "" : "mx-3 mb-1 rounded-lg border border-violet-500/40 bg-raised/60 p-2"}
       onKeyDown={onKey}
       tabIndex={-1}
     >

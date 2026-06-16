@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { Task, Group, Session, TaskStatus, Priority } from "@harness/shared";
-import { CaretDown, Play, Trash, Plus, ArrowsDownUp } from "@phosphor-icons/react";
+import { CaretDown, Play, Trash, ArrowsDownUp } from "@phosphor-icons/react";
 import { api } from "./api";
 import { STATUSES, PRIORITIES } from "./constants";
 import { Credential } from "./ui";
 import { StatusIcon } from "./StatusIcon";
-import { PriorityIcon } from "./ui";
+import { PriorityIcon, LabelAdder } from "./ui";
 import { ScheduleControl } from "./ScheduleControl";
+import { Menu } from "./Menu";
 
 export type LogLine = {
   kind: "text" | "thinking" | "tool" | "error" | "done";
@@ -55,11 +56,6 @@ export function TaskDetail({
   }, [logs.length, history]);
 
   const busy = task.status === "running" || task.status === "queued";
-
-  const addLabel = () => {
-    const l = prompt("标签？")?.trim();
-    if (l && !task.labels.includes(l)) onPatch({ labels: [...task.labels, l] });
-  };
 
   const depOptions = allTasks.filter((t) => t.id !== task.id && !task.dependsOn.includes(t.id));
 
@@ -119,12 +115,7 @@ export function TaskDetail({
               {l}
             </button>
           ))}
-          <button
-            onClick={addLabel}
-            className="inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-[12px] text-muted hover:bg-raised hover:text-ink"
-          >
-            <Plus size={12} weight="bold" /> 标签
-          </button>
+          <LabelAdder onAdd={(l) => !task.labels.includes(l) && onPatch({ labels: [...task.labels, l] })} />
           <span className="ml-auto text-[12px] text-faint">
             {task.mode === "single" ? `@${task.agentType ?? "—"}` : "debate"}
           </span>
@@ -190,8 +181,7 @@ export function TaskDetail({
   );
 }
 
-// Linear-style property control: leading icon + value + caret, with an invisible
-// native <select> overlaid for accessibility + zero-dependency behavior.
+// Linear-style property control built on the custom Menu (no native select).
 function Prop({
   value,
   onChange,
@@ -205,22 +195,16 @@ function Prop({
 }) {
   const cur = options.find((o) => o.value === value);
   return (
-    <label className="relative inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-line bg-panel px-2 py-1 text-[12px] text-ink transition-colors hover:bg-raised">
+    <Menu
+      value={value}
+      onChange={onChange}
+      options={options.map((o) => ({ value: o.value, label: o.label, icon: leading?.(o.value) }))}
+      triggerClassName="inline-flex items-center gap-1.5 rounded-md border border-line bg-panel px-2 py-1 text-[12px] text-ink transition-colors hover:bg-raised"
+    >
       {leading?.(value)}
       <span className="whitespace-nowrap">{cur?.label ?? ""}</span>
       <CaretDown size={11} weight="bold" className="text-faint" />
-      <select
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className="absolute inset-0 cursor-pointer opacity-0"
-      >
-        {options.map((o) => (
-          <option key={o.value} value={o.value}>
-            {o.label}
-          </option>
-        ))}
-      </select>
-    </label>
+    </Menu>
   );
 }
 

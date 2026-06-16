@@ -1,11 +1,12 @@
 import { useRef, useState, type ReactNode } from "react";
 import type { Task, Group, AgentType, Priority, TaskStatus } from "@harness/shared";
-import { X, ArrowsOut, ArrowsIn, Robot, Stack, Tag, Plus } from "@phosphor-icons/react";
+import { X, ArrowsOut, ArrowsIn, Robot, Stack, Plus } from "@phosphor-icons/react";
 import { api } from "./api";
 import { STATUSES, PRIORITIES } from "./constants";
 import { StatusIcon } from "./StatusIcon";
-import { PriorityIcon } from "./ui";
+import { PriorityIcon, LabelAdder } from "./ui";
 import { useEscape } from "./useEscape";
+import { Menu } from "./Menu";
 
 const AGENTS: AgentType[] = ["claude", "codex", "antigravity"];
 
@@ -64,11 +65,6 @@ export function CreateTask({
     } finally {
       setBusy(false);
     }
-  };
-
-  const addLabel = () => {
-    const l = prompt("标签？")?.trim();
-    if (l && !labels.includes(l)) setLabels((ls) => [...ls, l]);
   };
 
   const groupLabel = groups.find((g) => g.id === groupId)?.name ?? "分组";
@@ -160,10 +156,7 @@ export function CreateTask({
               {l}
             </button>
           ))}
-          <button onClick={addLabel}
-            className="inline-flex items-center gap-1.5 rounded-full border border-line bg-panel px-2.5 py-1 text-[12px] text-ink hover:bg-raised">
-            <Tag size={14} /> 标签
-          </button>
+          <LabelAdder onAdd={(l) => !labels.includes(l) && setLabels((ls) => [...ls, l])} />
         </div>
 
         {/* Footer */}
@@ -192,8 +185,7 @@ export function CreateTask({
   );
 }
 
-// Linear-style property pill: rounded-full, leading icon + label, invisible
-// native <select> overlay for behavior.
+// Linear-style property pill (rounded-full) built on the custom Menu.
 function Pill({
   icon,
   label,
@@ -208,20 +200,14 @@ function Pill({
   options: { value: string; label: string }[];
 }) {
   return (
-    <label className="relative inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-line bg-panel px-2.5 py-1 text-[12px] text-ink transition-colors hover:bg-raised">
+    <Menu
+      value={value}
+      onChange={onChange}
+      options={options}
+      triggerClassName="inline-flex items-center gap-1.5 rounded-full border border-line bg-panel px-2.5 py-1 text-[12px] text-ink transition-colors hover:bg-raised"
+    >
       {icon}
       <span className="whitespace-nowrap">{label}</span>
-      <select
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className="absolute inset-0 cursor-pointer opacity-0"
-      >
-        {options.map((o) => (
-          <option key={o.value} value={o.value}>
-            {o.label}
-          </option>
-        ))}
-      </select>
-    </label>
+    </Menu>
   );
 }

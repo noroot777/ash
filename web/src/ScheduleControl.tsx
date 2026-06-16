@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import type { Schedule } from "@harness/shared";
+import { CaretDown } from "@phosphor-icons/react";
 import { api } from "./api";
+import { Menu } from "./Menu";
 
 // Compact schedule widget (DESIGN.md §9): none / one-shot / cron, attached to a task.
 export function ScheduleControl({ taskId }: { taskId: string }) {
@@ -39,21 +41,25 @@ export function ScheduleControl({ taskId }: { taskId: string }) {
   return (
     <div className="flex flex-wrap items-center gap-2 text-xs">
       <span className="text-faint">定时</span>
-      <select
+      <Menu
         value={kind}
-        onChange={(e) => setKind(e.target.value as typeof kind)}
-        className="rounded-md border border-line bg-panel px-2 py-1 text-ink outline-none"
+        onChange={(v) => setKind(v as typeof kind)}
+        options={[
+          { value: "none", label: "不定时" },
+          { value: "once", label: "一次性" },
+          { value: "cron", label: "循环 (cron)" },
+        ]}
+        triggerClassName="inline-flex items-center gap-1.5 rounded-md border border-line bg-panel px-2 py-1 text-[12px] text-ink hover:bg-raised"
       >
-        <option value="none">不定时</option>
-        <option value="once">一次性</option>
-        <option value="cron">循环 (cron)</option>
-      </select>
+        <span>{kind === "none" ? "不定时" : kind === "once" ? "一次性" : "循环 (cron)"}</span>
+        <CaretDown size={11} weight="bold" className="text-faint" />
+      </Menu>
       {kind === "once" && (
         <input
           type="datetime-local"
           value={at}
           onChange={(e) => setAt(e.target.value)}
-          className="rounded-md border border-line bg-panel px-2 py-1 text-ink outline-none [color-scheme:dark]"
+          className="rounded-md border border-line bg-panel px-2 py-1 text-ink outline-none"
         />
       )}
       {kind === "cron" && (
