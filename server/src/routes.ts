@@ -312,14 +312,18 @@ api.get("/events", (c) =>
     const unsub = bus.subscribe((ev) => {
       stream.writeSSE({ data: JSON.stringify(ev) }).catch(() => {});
     });
-    let alive = true;
     stream.onAbort(() => {
-      alive = false;
       unsub();
     });
-    while (alive) {
-      await stream.writeSSE({ event: "ping", data: "1" });
-      await stream.sleep(15000);
+    try {
+      while (!stream.aborted) {
+        await stream.writeSSE({ event: "ping", data: "1" });
+        await stream.sleep(15000);
+      }
+    } catch {
+      /* client disconnected mid-write — expected on page refresh */
+    } finally {
+      unsub();
     }
   }),
 );

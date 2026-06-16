@@ -98,16 +98,29 @@ export function DebateModal({
             label={`轮数 ${cfg.maxRounds ?? "不设限"}`}
             value={cfg.maxRounds === null ? "" : String(cfg.maxRounds)}
             onChange={(v) => set("maxRounds", v === "" ? null : Number(v))}
+            menuWidth={200}
             options={[
               { value: "", label: "不设限" },
-              { value: "1", label: "1 轮" },
-              { value: "2", label: "2 轮" },
               { value: "3", label: "3 轮" },
               { value: "5", label: "5 轮" },
-              { value: "8", label: "8 轮" },
+              { value: "10", label: "10 轮" },
             ]}
             defaultValue={defStr("maxRounds")}
             onSetDefault={(v) => pinDefault("maxRounds", v)}
+            header={({ select }) => (
+              <input
+                type="number"
+                min={1}
+                placeholder="自定义轮数，回车确认"
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    const n = Math.floor(Number((e.target as HTMLInputElement).value));
+                    if (n >= 1) select(String(n));
+                  }
+                }}
+                className="w-full rounded-md border border-line bg-canvas px-2 py-1 text-[12px] text-ink outline-none placeholder:text-faint focus:border-accent"
+              />
+            )}
           />
           <Pill
             icon={<ShieldCheck size={14} />}

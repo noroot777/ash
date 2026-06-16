@@ -71,7 +71,10 @@
       "Bash(git -c user.name=harness -c user.email=harness@local commit -q -m 'feat: AI-generated task titles + /debate slash popup + portal dropdowns *)",
       "Bash(git -c user.name=harness -c user.email=harness@local commit -q -m 'redesign\\(debate\\): rebuild /debate config with shared Pill + portal Menu *)",
       "Bash(git -c user.name=harness -c user.email=harness@local commit -q -m 'feat\\(menu\\): Tab-focus auto-opens dropdown + per-option '\\\\''set as default'\\\\'' pin *)",
-      "Bash(git -c user.name=harness -c user.email=harness@local commit -q -m 'fix\\(menu\\): arrow-key nav in dropdown + pin sets default AND selects *)"
+      "Bash(git -c user.name=harness -c user.email=harness@local commit -q -m 'fix\\(menu\\): arrow-key nav in dropdown + pin sets default AND selects *)",
+      "Bash(curl -s -o /dev/null -w \"health %{http_code}\\\\n\" http://localhost:4317/api/health)",
+      "Bash(curl -s -N --max-time 1 http://localhost:4317/api/events)",
+      "Bash(git -c user.name=harness -c user.email=harness@local commit -q -m 'fix: SSE-disconnect no longer crashes server; rounds pill gets custom input *)"
     ]
   }
 }

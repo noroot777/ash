@@ -8,6 +8,11 @@ import { api } from "./routes.js";
 import { ensureSchema } from "./db/index.js";
 import { startScheduler } from "./schedules.js";
 
+// Never let a stray async error (e.g. an SSE write to a disconnected client)
+// take the whole server down — log and keep running.
+process.on("unhandledRejection", (e) => console.error("[harness] unhandledRejection:", e));
+process.on("uncaughtException", (e) => console.error("[harness] uncaughtException:", e));
+
 await ensureSchema();
 startScheduler();
 

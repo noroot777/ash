@@ -21,6 +21,7 @@ export function Menu({
   menuWidth,
   onSetDefault,
   defaultValue,
+  header,
 }: {
   options: MenuOption[];
   value?: string;
@@ -31,6 +32,7 @@ export function Menu({
   menuWidth?: number;
   onSetDefault?: (v: string) => void;
   defaultValue?: string;
+  header?: (api: { select: (v: string) => void }) => ReactNode;
 }) {
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
@@ -100,11 +102,16 @@ export function Menu({
       if (!triggerRef.current?.contains(t) && !menuRef.current?.contains(t)) close();
     };
     const onKey = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement)?.tagName;
+      const inInput = tag === "INPUT" || tag === "TEXTAREA";
       if (e.key === "Escape") {
         e.stopPropagation();
         close();
         triggerRef.current?.focus();
-      } else if (e.key === "ArrowDown") {
+        return;
+      }
+      if (inInput) return; // let the header input handle typing / Enter
+      if (e.key === "ArrowDown") {
         e.preventDefault();
         setActive((a) => Math.min(a + 1, optionsRef.current.length - 1));
       } else if (e.key === "ArrowUp") {
@@ -155,6 +162,11 @@ export function Menu({
             className="fixed z-[100] max-h-72 overflow-y-auto rounded-lg border border-line2 bg-panel p-1 shadow-xl"
             style={{ left: pos.left, top: pos.top, bottom: pos.bottom, width: pos.width }}
           >
+            {header && (
+              <div className="mb-1 border-b border-line px-1 pb-1.5 pt-0.5">
+                {header({ select: (v: string) => { onChange(v); close(); } })}
+              </div>
+            )}
             {options.map((o, i) => (
               <button
                 key={o.value}
@@ -211,6 +223,7 @@ export function Pill({
   menuWidth,
   onSetDefault,
   defaultValue,
+  header,
 }: {
   icon?: ReactNode;
   label: string;
@@ -220,6 +233,7 @@ export function Pill({
   menuWidth?: number;
   onSetDefault?: (v: string) => void;
   defaultValue?: string;
+  header?: (api: { select: (v: string) => void }) => ReactNode;
 }) {
   return (
     <Menu
@@ -229,6 +243,7 @@ export function Pill({
       menuWidth={menuWidth}
       onSetDefault={onSetDefault}
       defaultValue={defaultValue}
+      header={header}
       triggerClassName="inline-flex items-center gap-1.5 rounded-full border border-line bg-panel px-2.5 py-1 text-[12px] text-ink transition-colors hover:bg-raised focus:border-accent focus:outline-none"
     >
       {icon}
