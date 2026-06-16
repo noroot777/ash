@@ -6,7 +6,7 @@ import { PRIORITY_META } from "./constants";
 export function PriorityIcon({ p }: { p: Priority }) {
   const meta = PRIORITY_META[p];
   if (p === "none")
-    return <span className="inline-block h-3 w-3 text-neutral-700" title="无优先级">·</span>;
+    return <span className="inline-block h-3 w-3 text-faint" title="无优先级">·</span>;
   return (
     <span className={`inline-flex items-end gap-[1.5px] ${meta.color}`} title={meta.label}>
       {[1, 2, 3].map((i) => (
@@ -36,20 +36,20 @@ export function Credential({ s }: { s: Session }) {
     setTimeout(() => setCopied(null), 1200);
   };
   return (
-    <div className="flex items-center gap-1.5 rounded-md border border-neutral-800 bg-neutral-900/40 px-2 py-1 text-xs">
-      <span className="text-neutral-400">{ROLE_LABEL[s.role] ?? s.role}</span>
-      <span className="text-neutral-600">·</span>
-      <span className="text-neutral-500">{s.executor}</span>
+    <div className="flex items-center gap-1.5 rounded-md border border-line bg-raised/50 px-2 py-1 text-xs">
+      <span className="text-muted">{ROLE_LABEL[s.role] ?? s.role}</span>
+      <span className="text-faint">·</span>
+      <span className="text-muted">{s.executor}</span>
       <button
         onClick={() => copy("cmd", s.resumeCommand ?? "")}
-        className="ml-1 rounded bg-neutral-800 px-1.5 py-0.5 text-neutral-300 hover:bg-neutral-700"
+        className="ml-1 rounded bg-overlay px-1.5 py-0.5 text-ink hover:bg-overlay"
         title={s.resumeCommand ?? ""}
       >
         {copied === "cmd" ? "已复制" : "复制 resume 命令"}
       </button>
       <button
         onClick={() => copy("id", s.cliSessionId ?? "")}
-        className="rounded bg-neutral-800 px-1.5 py-0.5 text-neutral-400 hover:bg-neutral-700"
+        className="rounded bg-overlay px-1.5 py-0.5 text-muted hover:bg-overlay"
         title={s.cliSessionId ?? ""}
       >
         {copied === "id" ? "✓" : "ID"}

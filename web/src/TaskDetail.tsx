@@ -60,19 +60,19 @@ export function TaskDetail({
 
   return (
     <main className="flex h-full min-h-0 flex-col">
-      <header className="border-b border-neutral-800 px-6 py-4">
+      <header className="border-b border-line px-6 py-4">
         <div className="flex items-center gap-3">
           <h1 className="truncate text-lg font-medium tracking-tight">{task.title}</h1>
           <button
             onClick={onRun}
             disabled={busy}
-            className="ml-auto rounded-md bg-neutral-200 px-4 py-1.5 text-sm font-medium text-neutral-900 disabled:opacity-40"
+            className="ml-auto rounded-md bg-ink px-4 py-1.5 text-sm font-medium text-canvas disabled:opacity-40"
           >
             {busy ? "运行中…" : "运行"}
           </button>
           <button
             onClick={onDelete}
-            className="rounded-md border border-neutral-800 px-2 py-1.5 text-sm text-neutral-500 hover:text-red-400"
+            className="rounded-md border border-line px-2 py-1.5 text-sm text-muted hover:text-red-400"
             title="删除任务"
           >
             删除
@@ -103,29 +103,29 @@ export function TaskDetail({
             <button
               key={l}
               onClick={() => onPatch({ labels: task.labels.filter((x) => x !== l) })}
-              className="rounded-full bg-neutral-800 px-2 py-0.5 text-neutral-300 hover:line-through"
+              className="rounded-full bg-overlay px-2 py-0.5 text-ink hover:line-through"
               title="点击移除"
             >
               {l}
             </button>
           ))}
-          <button onClick={addLabel} className="rounded-full border border-neutral-800 px-2 py-0.5 text-neutral-500">
+          <button onClick={addLabel} className="rounded-full border border-line px-2 py-0.5 text-muted">
             + 标签
           </button>
-          <span className="ml-auto text-neutral-600">
+          <span className="ml-auto text-faint">
             {task.mode} {task.mode === "single" ? `· @${task.agentType ?? "—"}` : ""}
           </span>
         </div>
 
         <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
-          <span className="text-neutral-600">依赖</span>
+          <span className="text-faint">依赖</span>
           {task.dependsOn.map((d) => {
             const dep = allTasks.find((t) => t.id === d);
             return (
               <button
                 key={d}
                 onClick={() => onPatch({ dependsOn: task.dependsOn.filter((x) => x !== d) })}
-                className="rounded bg-neutral-800 px-1.5 py-0.5 text-neutral-300 hover:line-through"
+                className="rounded bg-overlay px-1.5 py-0.5 text-ink hover:line-through"
                 title="点击移除依赖"
               >
                 {dep?.title ?? d}
@@ -137,7 +137,7 @@ export function TaskDetail({
             onChange={(e) => {
               if (e.target.value) onPatch({ dependsOn: [...task.dependsOn, e.target.value] });
             }}
-            className="rounded-md border border-neutral-800 bg-neutral-900 px-2 py-1 text-neutral-400 outline-none"
+            className="rounded-md border border-line bg-panel px-2 py-1 text-muted outline-none"
           >
             <option value="">+ 添加依赖</option>
             {allTasks
@@ -148,7 +148,7 @@ export function TaskDetail({
                 </option>
               ))}
           </select>
-          {task.dependsOn.length === 0 && <span className="text-neutral-700">无（同组并行时按依赖排序）</span>}
+          {task.dependsOn.length === 0 && <span className="text-faint">无（同组并行时按依赖排序）</span>}
         </div>
 
         <div className="mt-2">
@@ -157,7 +157,7 @@ export function TaskDetail({
       </header>
 
       {sessions.length > 0 && (
-        <div className="flex flex-wrap gap-2 border-b border-neutral-800 px-6 py-3">
+        <div className="flex flex-wrap gap-2 border-b border-line px-6 py-3">
           {sessions.map((s) => (
             <Credential key={s.id} s={s} />
           ))}
@@ -169,16 +169,16 @@ export function TaskDetail({
         className="min-h-0 flex-1 overflow-y-auto break-words px-6 py-4 font-mono text-[13px] leading-relaxed"
       >
         {task.body && (
-          <p className="mb-4 whitespace-pre-wrap break-words border-l-2 border-neutral-700 pl-3 text-neutral-500">
+          <p className="mb-4 whitespace-pre-wrap break-words border-l-2 border-line2 pl-3 text-muted">
             {task.body}
           </p>
         )}
-        {history && logs.length === 0 && <pre className="whitespace-pre-wrap break-words text-neutral-300">{history}</pre>}
+        {history && logs.length === 0 && <pre className="whitespace-pre-wrap break-words text-ink">{history}</pre>}
         {logs.map((l, i) => (
           <Line key={i} l={l} />
         ))}
         {!history && logs.length === 0 && (
-          <p className="text-neutral-600">点击「运行」开始。输出会实时流式显示在这里。</p>
+          <p className="text-faint">点击「运行」开始。输出会实时流式显示在这里。</p>
         )}
       </div>
     </main>
@@ -198,7 +198,7 @@ function Select({
     <select
       value={value}
       onChange={(e) => onChange(e.target.value)}
-      className="rounded-md border border-neutral-800 bg-neutral-900 px-2 py-1 text-neutral-300 outline-none hover:bg-neutral-800"
+      className="rounded-md border border-line bg-panel px-2 py-1 text-ink outline-none hover:bg-overlay"
     >
       {options.map((o) => (
         <option key={o.value} value={o.value}>
@@ -212,8 +212,8 @@ function Select({
 function Line({ l }: { l: LogLine }) {
   if (l.kind === "tool") return <div className="my-0.5 break-words text-amber-300/80">⚙ {l.text}</div>;
   if (l.kind === "error") return <div className="my-0.5 break-words text-red-400">✕ {l.text}</div>;
-  if (l.kind === "done") return <div className="my-2 text-center text-xs text-neutral-600">{l.text}</div>;
+  if (l.kind === "done") return <div className="my-2 text-center text-xs text-faint">{l.text}</div>;
   if (l.kind === "thinking")
-    return <div className="my-0.5 whitespace-pre-wrap break-words italic text-neutral-600">{l.text}</div>;
-  return <div className="my-0.5 whitespace-pre-wrap break-words text-neutral-200">{l.text}</div>;
+    return <div className="my-0.5 whitespace-pre-wrap break-words italic text-faint">{l.text}</div>;
+  return <div className="my-0.5 whitespace-pre-wrap break-words text-ink">{l.text}</div>;
 }

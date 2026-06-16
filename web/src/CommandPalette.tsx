@@ -50,7 +50,7 @@ export function CommandPalette({
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/50 pt-[15vh]" onClick={onClose}>
       <div
-        className="w-[560px] max-w-[92vw] overflow-hidden rounded-xl border border-neutral-700 bg-neutral-900 shadow-2xl"
+        className="w-[560px] max-w-[92vw] overflow-hidden rounded-xl border border-line2 bg-panel shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         <input
@@ -58,7 +58,7 @@ export function CommandPalette({
           value={q}
           onChange={(e) => setQ(e.target.value)}
           placeholder="输入命令…"
-          className="w-full border-b border-neutral-800 bg-transparent px-4 py-3 text-sm outline-none placeholder:text-neutral-600"
+          className="w-full border-b border-line bg-transparent px-4 py-3 text-sm outline-none placeholder:text-faint"
           onKeyDown={(e) => {
             if (e.key === "ArrowDown") {
               e.preventDefault();
@@ -81,15 +81,15 @@ export function CommandPalette({
               onMouseEnter={() => setActive(i)}
               onClick={() => run(c)}
               className={`flex w-full items-center gap-2 px-4 py-2 text-left text-sm ${
-                i === active ? "bg-neutral-800" : ""
+                i === active ? "bg-overlay" : ""
               }`}
             >
-              <span className="text-neutral-200">{c.label}</span>
-              {c.group && <span className="text-[10px] text-neutral-600">{c.group}</span>}
-              {c.hint && <span className="ml-auto text-xs text-neutral-500">{c.hint}</span>}
+              <span className="text-ink">{c.label}</span>
+              {c.group && <span className="text-[10px] text-faint">{c.group}</span>}
+              {c.hint && <span className="ml-auto text-xs text-muted">{c.hint}</span>}
             </button>
           ))}
-          {!filtered.length && <p className="px-4 py-6 text-center text-xs text-neutral-600">无匹配命令</p>}
+          {!filtered.length && <p className="px-4 py-6 text-center text-xs text-faint">无匹配命令</p>}
         </div>
       </div>
     </div>

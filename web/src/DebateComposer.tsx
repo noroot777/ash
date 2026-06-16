@@ -35,11 +35,11 @@ export function Composer({
           }
         }}
         placeholder="新建任务，或输入 /debate 发起对抗…"
-        className="w-full rounded-md border border-neutral-800 bg-neutral-900/50 px-3 py-2 text-sm outline-none placeholder:text-neutral-600 focus:border-neutral-700"
+        className="w-full rounded-md border border-line bg-raised/50 px-3 py-2 text-sm outline-none placeholder:text-faint focus:border-line2"
       />
       {text === "/" && (
-        <div className="mt-1 rounded-md border border-neutral-800 bg-neutral-900 px-3 py-1.5 text-xs text-neutral-400">
-          <span className="text-neutral-200">/debate</span> 发起两 AI 对抗
+        <div className="mt-1 rounded-md border border-line bg-panel px-3 py-1.5 text-xs text-muted">
+          <span className="text-ink">/debate</span> 发起两 AI 对抗
         </div>
       )}
     </div>
@@ -148,13 +148,13 @@ function DebateSlots({
 
   return (
     <div
-      className="mx-3 mb-1 rounded-lg border border-violet-500/40 bg-neutral-900/60 p-2"
+      className="mx-3 mb-1 rounded-lg border border-violet-500/40 bg-raised/60 p-2"
       onKeyDown={onKey}
       tabIndex={-1}
     >
       <div className="mb-1.5 flex items-center gap-1 px-1 text-[11px] text-violet-300/80">
         <span className="font-medium">/debate</span>
-        <span className="text-neutral-600">Tab 切槽 · ←→ 改值 · ⌘↵ 开跑 · Esc 取消</span>
+        <span className="text-faint">Tab 切槽 · ←→ 改值 · ⌘↵ 开跑 · Esc 取消</span>
       </div>
       <div className="flex flex-wrap items-center gap-1.5">
         {SLOT_ORDER.map((k, i) => {
@@ -164,10 +164,10 @@ function DebateSlots({
               key={k}
               onClick={() => setFocus(i)}
               className={`flex items-center gap-1 rounded-md border px-2 py-1 text-xs ${
-                active ? "border-violet-400 bg-violet-500/15" : "border-neutral-800 bg-neutral-900"
+                active ? "border-violet-400 bg-violet-500/15" : "border-line bg-panel"
               }`}
             >
-              <span className="text-neutral-500">{SLOT_LABEL[k]}</span>
+              <span className="text-muted">{SLOT_LABEL[k]}</span>
               {k === "topic" ? (
                 <input
                   ref={topicRef}
@@ -175,7 +175,7 @@ function DebateSlots({
                   onChange={(e) => setCfg((c) => ({ ...c, topic: e.target.value }))}
                   onFocus={() => setFocus(0)}
                   placeholder="必填…"
-                  className="w-40 bg-transparent text-neutral-100 outline-none placeholder:text-neutral-600"
+                  className="w-40 bg-transparent text-ink outline-none placeholder:text-faint"
                 />
               ) : k === "maxRounds" ? (
                 <input
@@ -187,10 +187,10 @@ function DebateSlots({
                   }}
                   onFocus={() => setFocus(4)}
                   placeholder="不设限"
-                  className="w-12 bg-transparent text-neutral-100 outline-none placeholder:text-neutral-500"
+                  className="w-12 bg-transparent text-ink outline-none placeholder:text-faint"
                 />
               ) : (
-                <span className="text-neutral-200">{valueText(k)}</span>
+                <span className="text-ink">{valueText(k)}</span>
               )}
             </button>
           );
@@ -202,14 +202,14 @@ function DebateSlots({
 
       {focusedOpts && (
         <div className="mt-1.5 flex items-center gap-1 px-1 text-xs">
-          <span className="text-neutral-600">{SLOT_LABEL[focusedKey]}:</span>
+          <span className="text-faint">{SLOT_LABEL[focusedKey]}:</span>
           {focusedOpts.map((o) => {
             const sel = String(cfg[focusedKey as keyof DebateConfig]) === o;
             return (
               <button
                 key={o}
                 onClick={() => setCfg((c) => ({ ...c, [focusedKey]: o }))}
-                className={`rounded px-2 py-0.5 ${sel ? "bg-violet-500/30 text-violet-200" : "bg-neutral-800 text-neutral-400"}`}
+                className={`rounded px-2 py-0.5 ${sel ? "bg-violet-500/30 text-violet-200" : "bg-overlay text-muted"}`}
               >
                 {focusedKey === "implementer" ? (o === "A" ? "辩手A" : "辩手B") : o === "on" ? "开" : o === "off" ? "关" : o}
               </button>
@@ -217,7 +217,7 @@ function DebateSlots({
           })}
           <button
             onClick={() => saveDefault(focusedKey as keyof DebateConfig, cfg[focusedKey as keyof DebateConfig])}
-            className="ml-2 rounded border border-neutral-700 px-2 py-0.5 text-neutral-500 hover:text-neutral-300"
+            className="ml-2 rounded border border-line2 px-2 py-0.5 text-muted hover:text-ink"
             title="把当前值设为以后 /debate 的默认"
           >
             设为默认

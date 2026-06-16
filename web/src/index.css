@@ -1,9 +1,31 @@
 @import "tailwindcss";
 
+/* ── Design tokens (dark, warm-neutral, hairline-structured) ─────────────────
+   Premium-minimalism philosophy applied to a dense tool surface: scarce color,
+   1px hairlines, off-white (never pure-white) text, SF/Geist-class type, mono
+   for meta. Exposed as Tailwind v4 theme colors → bg-/text-/border- utilities. */
+@theme {
+  --font-sans: "SF Pro Display", "SF Pro Text", -apple-system, BlinkMacSystemFont,
+    "Helvetica Neue", "Switzer", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "Geist Mono", "JetBrains Mono", monospace;
+
+  --color-canvas: #09090a;
+  --color-panel: #0d0d0f;
+  --color-raised: #161619;
+  --color-overlay: #1c1c20;
+
+  --color-line: rgba(255, 255, 255, 0.07);
+  --color-line2: rgba(255, 255, 255, 0.13);
+
+  --color-ink: #ededef;
+  --color-muted: #8a8a91;
+  --color-faint: #595960;
+
+  --color-accent: #a78bfa;
+}
+
 :root {
   color-scheme: dark;
-  --bg: #0a0a0b;
-  --panel: #0e0e10;
 }
 
 html,
@@ -14,23 +36,37 @@ body,
 
 body {
   margin: 0;
-  background: var(--bg);
-  color: #e7e7ea;
-  font-family:
-    ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica,
-    Arial, sans-serif;
+  background: var(--color-canvas);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  font-size: 14px;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
 }
 
-/* Tighten headings a touch (Linear-style). */
+/* Editorial tightening on headings. */
 h1,
-h2 {
-  letter-spacing: -0.012em;
+h2,
+h3 {
+  letter-spacing: -0.018em;
+  font-weight: 560;
 }
 
-/* Quiet, thin scrollbars that match the dark surface. */
+/* Physical keycaps for shortcuts. */
+kbd {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1;
+  padding: 2px 5px;
+  border: 1px solid var(--color-line2);
+  border-bottom-width: 2px;
+  border-radius: 5px;
+  background: var(--color-raised);
+  color: var(--color-muted);
+}
+
+/* Quiet, thin scrollbars matched to the surface. */
 * {
   scrollbar-width: thin;
   scrollbar-color: #2a2a2e transparent;
@@ -40,21 +76,20 @@ h2 {
   height: 9px;
 }
 *::-webkit-scrollbar-thumb {
-  background: #26262a;
+  background: #232327;
   border-radius: 9px;
   border: 2px solid transparent;
   background-clip: padding-box;
 }
 *::-webkit-scrollbar-thumb:hover {
-  background: #34343a;
+  background: #303036;
   background-clip: padding-box;
 }
 
 ::selection {
-  background: rgba(139, 92, 246, 0.3);
+  background: rgba(167, 139, 250, 0.28);
 }
 
-/* Make native controls feel at home in the dark theme. */
 select,
 input,
 textarea,
@@ -62,5 +97,20 @@ button {
   font: inherit;
 }
 select option {
-  background: #161618;
+  background: var(--color-overlay);
+}
+
+/* Quiet entrance for streamed/list content (transform+opacity only). */
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.rise {
+  animation: rise 0.28s cubic-bezier(0.16, 1, 0.3, 1) both;
 }

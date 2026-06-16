@@ -45,38 +45,41 @@ export function TaskList({
         if (!inStatus.length) return null;
         return (
           <div key={s.key}>
-            <div className="sticky top-0 flex items-center gap-2 bg-neutral-950/90 px-4 py-1.5 backdrop-blur">
-              <span className={`h-2 w-2 rounded-full ${s.dot}`} />
-              <span className="text-xs font-medium text-neutral-300">{s.label}</span>
-              <span className="text-xs text-neutral-600">{inStatus.length}</span>
+            <div className="sticky top-0 z-10 flex items-center gap-2 bg-canvas/85 px-4 py-2 backdrop-blur">
+              <span className={`h-1.5 w-1.5 rounded-full ${s.dot}`} />
+              <span className="text-[10px] font-medium uppercase tracking-[0.08em] text-muted">{s.label}</span>
+              <span className="font-mono text-[10px] text-faint">{inStatus.length}</span>
             </div>
             {inStatus.map((t) => (
               <button
                 key={t.id}
                 data-task-id={t.id}
                 onClick={() => onSelect(t.id)}
-                className={`flex w-full items-center gap-2.5 border-l-2 px-4 py-2 text-left text-sm ${
+                className={`flex w-full items-center gap-2.5 border-l-2 px-4 py-2 text-left text-sm transition-colors ${
                   selected === t.id
-                    ? "border-neutral-300 bg-neutral-900"
-                    : "border-transparent hover:bg-neutral-900/60"
+                    ? "border-ink bg-raised/70"
+                    : "border-transparent hover:bg-raised/50"
                 }`}
               >
                 <PriorityIcon p={t.priority} />
-                <span className="truncate text-neutral-200">{t.title}</span>
+                <span className="truncate text-ink">{t.title}</span>
                 <div className="ml-auto flex shrink-0 items-center gap-1.5">
                   {groupName(t.groupId) && (
-                    <span className="rounded bg-neutral-800 px-1.5 py-0.5 text-[10px] text-neutral-400">
+                    <span className="rounded bg-overlay px-1.5 py-0.5 font-mono text-[10px] text-muted">
                       {groupName(t.groupId)}
                     </span>
                   )}
                   {t.labels.map((l) => (
-                    <span key={l} className="rounded-full bg-neutral-800 px-2 py-0.5 text-[10px] text-neutral-400">
+                    <span
+                      key={l}
+                      className="rounded-full border border-line px-2 py-0.5 text-[10px] uppercase tracking-wide text-muted"
+                    >
                       {l}
                     </span>
                   ))}
                   <span
-                    className={`rounded px-1.5 py-0.5 text-[10px] ${
-                      t.mode === "debate" ? "bg-violet-500/20 text-violet-300" : "bg-neutral-800 text-neutral-500"
+                    className={`rounded px-1.5 py-0.5 font-mono text-[10px] ${
+                      t.mode === "debate" ? "bg-violet-500/20 text-violet-300" : "text-faint"
                     }`}
                   >
                     {t.mode === "debate" ? "debate" : `@${t.agentType ?? "—"}`}
@@ -87,7 +90,7 @@ export function TaskList({
           </div>
         );
       })}
-      {!tasks.length && <p className="px-4 py-10 text-center text-xs text-neutral-600">还没有任务 · 按 C 新建</p>}
+      {!tasks.length && <p className="px-4 py-10 text-center text-xs text-faint">还没有任务 · 按 C 新建</p>}
     </div>
   );
 }

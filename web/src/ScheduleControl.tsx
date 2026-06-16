@@ -38,11 +38,11 @@ export function ScheduleControl({ taskId }: { taskId: string }) {
 
   return (
     <div className="flex flex-wrap items-center gap-2 text-xs">
-      <span className="text-neutral-600">定时</span>
+      <span className="text-faint">定时</span>
       <select
         value={kind}
         onChange={(e) => setKind(e.target.value as typeof kind)}
-        className="rounded-md border border-neutral-800 bg-neutral-900 px-2 py-1 text-neutral-300 outline-none"
+        className="rounded-md border border-line bg-panel px-2 py-1 text-ink outline-none"
       >
         <option value="none">不定时</option>
         <option value="once">一次性</option>
@@ -53,7 +53,7 @@ export function ScheduleControl({ taskId }: { taskId: string }) {
           type="datetime-local"
           value={at}
           onChange={(e) => setAt(e.target.value)}
-          className="rounded-md border border-neutral-800 bg-neutral-900 px-2 py-1 text-neutral-300 outline-none [color-scheme:dark]"
+          className="rounded-md border border-line bg-panel px-2 py-1 text-ink outline-none [color-scheme:dark]"
         />
       )}
       {kind === "cron" && (
@@ -61,15 +61,15 @@ export function ScheduleControl({ taskId }: { taskId: string }) {
           value={cron}
           onChange={(e) => setCron(e.target.value)}
           placeholder="分 时 日 月 周"
-          className="w-32 rounded-md border border-neutral-800 bg-neutral-900 px-2 py-1 font-mono text-neutral-300 outline-none"
+          className="w-32 rounded-md border border-line bg-panel px-2 py-1 font-mono text-ink outline-none"
           title="5 字段 cron（本地时间）。例：0 9 * * 1-5 工作日 9 点"
         />
       )}
-      <button onClick={save} className="rounded-md bg-neutral-800 px-2 py-1 text-neutral-300 hover:bg-neutral-700">
+      <button onClick={save} className="rounded-md bg-overlay px-2 py-1 text-ink hover:bg-overlay">
         {kind === "none" ? "清除" : "保存"}
       </button>
       {sched && (
-        <span className="text-neutral-600">
+        <span className="text-faint">
           {sched.kind === "once" ? `将于 ${new Date(sched.at!).toLocaleString()} 运行` : `cron ${sched.cron}`}
           {sched.enabled ? "" : " · 已停用"}
           {sched.lastRunAt ? ` · 上次 ${new Date(sched.lastRunAt).toLocaleTimeString()}` : ""}

@@ -163,12 +163,12 @@ export function App() {
 
   return (
     <div className="grid h-full grid-cols-[320px_1fr]">
-      <aside className="flex min-h-0 flex-col border-r border-neutral-800">
+      <aside className="flex min-h-0 flex-col border-r border-line">
         <div className="flex items-center justify-between px-4 py-3">
           <select
             value={projectId ?? ""}
             onChange={(e) => (e.target.value === "__new" ? createProject(setProjects, setProjectId) : setProjectId(e.target.value))}
-            className="max-w-[180px] rounded bg-transparent text-sm font-medium tracking-tight text-neutral-100 outline-none"
+            className="max-w-[180px] rounded bg-transparent text-sm font-medium tracking-tight text-ink outline-none"
           >
             {projects.map((p) => (
               <option key={p.id} value={p.id}>
@@ -181,20 +181,16 @@ export function App() {
           <div className="flex items-center gap-2">
             <button
               onClick={() => setAgentsOpen(true)}
-              className="rounded border border-neutral-800 px-1.5 py-0.5 text-[10px] text-neutral-500 hover:text-neutral-300"
+              className="rounded-md border border-line px-2 py-1 text-[11px] text-muted transition-colors hover:bg-raised hover:text-ink"
               title="智能体执行器"
             >
               智能体
             </button>
-            <button
-              onClick={() => setPaletteOpen(true)}
-              className="rounded border border-neutral-800 px-1.5 py-0.5 text-[10px] text-neutral-500"
-              title="命令面板"
-            >
-              ⌘K
+            <button onClick={() => setPaletteOpen(true)} title="命令面板">
+              <kbd>⌘K</kbd>
             </button>
-            <span className="flex items-center gap-1 text-xs text-neutral-500">
-              <span className={`h-1.5 w-1.5 rounded-full ${connected ? "bg-emerald-400" : "bg-neutral-600"}`} />
+            <span className="flex items-center gap-1 text-xs text-muted">
+              <span className={`h-1.5 w-1.5 rounded-full ${connected ? "bg-emerald-400" : "bg-faint"}`} />
             </span>
           </div>
         </div>
@@ -238,7 +234,7 @@ export function App() {
           />
         )
       ) : (
-        <div className="flex items-center justify-center text-sm text-neutral-600">
+        <div className="flex items-center justify-center text-sm text-faint">
           选择任务，或在左上输入框新建 / 输入 /debate
         </div>
       )}
