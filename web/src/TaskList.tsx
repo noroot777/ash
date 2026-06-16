@@ -1,6 +1,7 @@
 import type { Task, Group } from "@harness/shared";
 import { STATUSES, STATUS_META, PRIORITY_ORDER } from "./constants";
 import { PriorityIcon } from "./ui";
+import { StatusIcon } from "./StatusIcon";
 
 // Flatten tasks into the same visual order the list renders (status groups,
 // then priority, then recency) — used for j/k keyboard navigation.
@@ -46,23 +47,21 @@ export function TaskList({
         return (
           <div key={s.key}>
             <div className="sticky top-0 z-10 flex items-center gap-2 bg-canvas/85 px-4 py-2 backdrop-blur">
-              <span className={`h-1.5 w-1.5 rounded-full ${s.dot}`} />
-              <span className="text-[10px] font-medium uppercase tracking-[0.08em] text-muted">{s.label}</span>
-              <span className="font-mono text-[10px] text-faint">{inStatus.length}</span>
+              <StatusIcon status={s.key} size={13} />
+              <span className="text-[12px] font-semibold text-ink">{s.label}</span>
+              <span className="font-mono text-[11px] text-faint">{inStatus.length}</span>
             </div>
             {inStatus.map((t) => (
               <button
                 key={t.id}
                 data-task-id={t.id}
                 onClick={() => onSelect(t.id)}
-                className={`flex w-full items-center gap-2.5 border-l-2 px-4 py-2 text-left text-sm transition-colors ${
-                  selected === t.id
-                    ? "border-ink bg-raised/70"
-                    : "border-transparent hover:bg-raised/50"
+                className={`flex w-full items-center gap-2.5 px-4 py-1.5 text-left transition-colors ${
+                  selected === t.id ? "bg-raised" : "hover:bg-raised/60"
                 }`}
               >
                 <PriorityIcon p={t.priority} />
-                <span className="truncate text-ink">{t.title}</span>
+                <span className="truncate text-[13px] text-ink">{t.title}</span>
                 <div className="ml-auto flex shrink-0 items-center gap-1.5">
                   {groupName(t.groupId) && (
                     <span className="rounded bg-overlay px-1.5 py-0.5 font-mono text-[10px] text-muted">
@@ -79,7 +78,7 @@ export function TaskList({
                   ))}
                   <span
                     className={`rounded px-1.5 py-0.5 font-mono text-[10px] ${
-                      t.mode === "debate" ? "bg-violet-500/20 text-violet-700" : "text-faint"
+                      t.mode === "debate" ? "bg-violet-500/15 text-violet-700" : "text-faint"
                     }`}
                   >
                     {t.mode === "debate" ? "debate" : `@${t.agentType ?? "—"}`}

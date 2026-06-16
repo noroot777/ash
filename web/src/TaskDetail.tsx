@@ -66,7 +66,7 @@ export function TaskDetail({
           <button
             onClick={onRun}
             disabled={busy}
-            className="ml-auto rounded-md bg-ink px-4 py-1.5 text-sm font-medium text-canvas disabled:opacity-40"
+            className="ml-auto rounded-md bg-accent hover:bg-accent-hover px-4 py-1.5 text-sm font-medium text-accent-fg disabled:opacity-40"
           >
             {busy ? "运行中…" : "运行"}
           </button>

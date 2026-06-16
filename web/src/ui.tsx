@@ -1,22 +1,30 @@
 import { useState } from "react";
 import type { Priority, Session } from "@harness/shared";
-import { PRIORITY_META } from "./constants";
 
-// Linear-style priority bars.
+// Linear-style priority glyph: three ascending bars (filled by level), and a
+// filled amber square with "!" for urgent.
 export function PriorityIcon({ p }: { p: Priority }) {
-  const meta = PRIORITY_META[p];
-  if (p === "none")
-    return <span className="inline-block h-3 w-3 text-faint" title="无优先级">·</span>;
+  if (p === "urgent")
+    return (
+      <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden>
+        <rect x="1" y="1" width="12" height="12" rx="3" fill="#fc7840" />
+        <rect x="6.25" y="3.2" width="1.5" height="4.6" rx="0.75" fill="#fff" />
+        <rect x="6.25" y="9" width="1.5" height="1.6" rx="0.75" fill="#fff" />
+      </svg>
+    );
+  const levels = { none: 0, low: 1, medium: 2, high: 3 } as const;
+  const n = levels[p as keyof typeof levels] ?? 0;
+  const bars = [
+    { x: 1.5, y: 9, h: 4 },
+    { x: 5.5, y: 6, h: 7 },
+    { x: 9.5, y: 3, h: 10 },
+  ];
   return (
-    <span className={`inline-flex items-end gap-[1.5px] ${meta.color}`} title={meta.label}>
-      {[1, 2, 3].map((i) => (
-        <span
-          key={i}
-          className="w-[2.5px] rounded-[1px] bg-current"
-          style={{ height: `${3 + i * 2.5}px`, opacity: meta.bars >= i + 1 || meta.bars === i ? 1 : 0.25 }}
-        />
+    <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden>
+      {bars.map((b, i) => (
+        <rect key={i} x={b.x} y={b.y} width="3" height={b.h} rx="1" fill={i < n ? "#6b6f76" : "#d6d6dc"} />
       ))}
-    </span>
+    </svg>
   );
 }
 

@@ -55,7 +55,7 @@ export function DebateView({
           <button
             onClick={onRun}
             disabled={busy}
-            className="ml-auto rounded-md bg-ink px-4 py-1.5 text-sm font-medium text-canvas disabled:opacity-40"
+            className="ml-auto rounded-md bg-accent hover:bg-accent-hover px-4 py-1.5 text-sm font-medium text-accent-fg disabled:opacity-40"
           >
             {busy ? "进行中…" : "运行"}
           </button>
@@ -177,7 +177,7 @@ function GateBar({ gate, onGate }: { gate: string; onGate: (a: GateAction) => vo
               setText("");
               setMode(null);
             }}
-            className="rounded-md bg-violet-500 px-3 py-1 text-xs font-medium text-white disabled:opacity-40"
+            className="rounded-md bg-accent hover:bg-accent-hover px-3 py-1 text-xs font-medium text-accent-fg disabled:opacity-40"
           >
             提交
           </button>

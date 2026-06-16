@@ -48,7 +48,9 @@
       "Bash(git -c user.name=harness -c user.email=harness@local commit -q -m \"docs: mark M0-M6 roadmap complete in DESIGN.md\")",
       "Bash(git -c user.name=harness -c user.email=harness@local commit -q -m 'design: dark premium-minimalism visual system \\(/minimalist-ui pass\\) *)",
       "Bash(git -c user.name=harness -c user.email=harness@local commit -q -m 'feat: Linear-style board \\(kanban\\) view + list/board toggle *)",
-      "Bash(git -c user.name=harness -c user.email=harness@local commit -q -m 'design: light theme redesign \\(/design-taste-frontend pass, no black\\) *)"
+      "Bash(git -c user.name=harness -c user.email=harness@local commit -q -m 'design: light theme redesign \\(/design-taste-frontend pass, no black\\) *)",
+      "Bash(npm i *)",
+      "Bash(git -c user.name=harness -c user.email=harness@local commit -q -m 'design: faithful Linear light theme *)"
     ]
   }
 }

@@ -111,7 +111,7 @@ function AddRow({ type, onAdded }: { type: AgentType; onAdded: () => void }) {
       <input value={name} onChange={(e) => setName(e.target.value)} placeholder="名称（可选）" className="w-28 rounded bg-canvas px-2 py-1 outline-none placeholder:text-faint" />
       <input value={model} onChange={(e) => setModel(e.target.value)} placeholder="模型（可选）" className="w-28 rounded bg-canvas px-2 py-1 outline-none placeholder:text-faint" />
       <input value={host} onChange={(e) => setHost(e.target.value)} placeholder="ssh 主机（留空=本地）" className="w-36 rounded bg-canvas px-2 py-1 outline-none placeholder:text-faint" />
-      <button onClick={add} className="rounded bg-ink px-2 py-1 font-medium text-canvas">添加</button>
+      <button onClick={add} className="rounded bg-accent hover:bg-accent-hover px-2 py-1 font-medium text-accent-fg">添加</button>
       <button onClick={() => setOpen(false)} className="px-2 py-1 text-muted">取消</button>
     </div>
   );

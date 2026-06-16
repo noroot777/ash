@@ -9,6 +9,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@fontsource-variable/inter": "^5.2.8",
     "@harness/shared": "*",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"

@@ -1,6 +1,7 @@
 import type { Task, TaskStatus } from "@harness/shared";
 import { STATUSES } from "./constants";
 import { PriorityIcon } from "./ui";
+import { StatusIcon } from "./StatusIcon";
 
 // Kanban board: one column per status, drag a card across columns to change its
 // status. Clicking a card opens it (switches back to list+detail).
@@ -28,9 +29,9 @@ export function Board({
             }}
           >
             <div className="flex items-center gap-2 border-b border-line px-3 py-2">
-              <span className={`h-1.5 w-1.5 rounded-full ${s.dot}`} />
-              <span className="text-[10px] font-medium uppercase tracking-[0.08em] text-muted">{s.label}</span>
-              <span className="font-mono text-[10px] text-faint">{col.length}</span>
+              <StatusIcon status={s.key} size={13} />
+              <span className="text-[12px] font-semibold text-ink">{s.label}</span>
+              <span className="font-mono text-[11px] text-faint">{col.length}</span>
             </div>
             <div className="flex-1 space-y-2 overflow-y-auto p-2">
               {col.map((t) => (

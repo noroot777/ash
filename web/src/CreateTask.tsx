@@ -105,7 +105,7 @@ export function CreateTask({
             <button
               disabled={!title.trim() || busy}
               onClick={submit}
-              className="rounded-md bg-ink px-3 py-1 font-medium text-canvas disabled:opacity-40"
+              className="rounded-md bg-accent hover:bg-accent-hover px-3 py-1 font-medium text-accent-fg disabled:opacity-40"
             >
               创建
             </button>

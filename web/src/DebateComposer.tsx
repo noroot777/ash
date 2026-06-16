@@ -195,7 +195,7 @@ function DebateSlots({
             </button>
           );
         })}
-        <button onClick={launch} className="rounded-md bg-violet-500 px-3 py-1 text-xs font-medium text-white">
+        <button onClick={launch} className="rounded-md bg-accent hover:bg-accent-hover px-3 py-1 text-xs font-medium text-accent-fg">
           开跑
         </button>
       </div>
