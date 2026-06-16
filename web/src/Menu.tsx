@@ -126,3 +126,33 @@ export function Menu({
     </>
   );
 }
+
+// Shared Linear-style property pill (rounded-full trigger + Menu dropdown).
+export function Pill({
+  icon,
+  label,
+  value,
+  onChange,
+  options,
+  menuWidth,
+}: {
+  icon?: ReactNode;
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  options: MenuOption[];
+  menuWidth?: number;
+}) {
+  return (
+    <Menu
+      value={value}
+      onChange={onChange}
+      options={options}
+      menuWidth={menuWidth}
+      triggerClassName="inline-flex items-center gap-1.5 rounded-full border border-line bg-panel px-2.5 py-1 text-[12px] text-ink transition-colors hover:bg-raised"
+    >
+      {icon}
+      <span className="whitespace-nowrap">{label}</span>
+    </Menu>
+  );
+}

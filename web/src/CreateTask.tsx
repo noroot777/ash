@@ -1,4 +1,4 @@
-import { useRef, useState, type ReactNode } from "react";
+import { useRef, useState } from "react";
 import type { Task, Group, AgentType, Priority, TaskStatus } from "@harness/shared";
 import { X, ArrowsOut, ArrowsIn, Robot, Stack, Plus, Sparkle } from "@phosphor-icons/react";
 import { api } from "./api";
@@ -6,7 +6,7 @@ import { STATUSES, PRIORITIES } from "./constants";
 import { StatusIcon } from "./StatusIcon";
 import { PriorityIcon, LabelAdder } from "./ui";
 import { useEscape } from "./useEscape";
-import { Menu } from "./Menu";
+import { Pill } from "./Menu";
 
 const AGENTS: AgentType[] = ["claude", "codex", "antigravity"];
 
@@ -143,7 +143,7 @@ export function CreateTask({
           </div>
 
           {slashOpen && (
-            <div className="absolute left-4 top-full z-10 w-64 overflow-hidden rounded-lg border border-line2 bg-panel p-1 shadow-xl">
+            <div className="absolute left-4 top-9 z-10 w-64 overflow-hidden rounded-lg border border-line2 bg-panel p-1 shadow-xl">
               <button
                 onClick={triggerDebate}
                 className="flex w-full items-center gap-2 rounded-md bg-raised px-2 py-1.5 text-left text-[13px]"
@@ -183,31 +183,5 @@ export function CreateTask({
         </div>
       </div>
     </div>
-  );
-}
-
-function Pill({
-  icon,
-  label,
-  value,
-  onChange,
-  options,
-}: {
-  icon: ReactNode;
-  label: string;
-  value: string;
-  onChange: (v: string) => void;
-  options: { value: string; label: string }[];
-}) {
-  return (
-    <Menu
-      value={value}
-      onChange={onChange}
-      options={options}
-      triggerClassName="inline-flex items-center gap-1.5 rounded-full border border-line bg-panel px-2.5 py-1 text-[12px] text-ink transition-colors hover:bg-raised"
-    >
-      {icon}
-      <span className="whitespace-nowrap">{label}</span>
-    </Menu>
   );
 }

@@ -68,7 +68,8 @@
       "Bash(git -c user.name=harness -c user.email=harness@local commit -q -m 'fix\\(dev\\): pin dev backend to PORT 4317 + add harness-dev launch config *)",
       "Bash(curl -s http://localhost:4317/api/projects)",
       "Bash(python3 -c 'import sys,json;t=json.load\\(sys.stdin\\);print\\(\"  id\",t[\"id\"],\"autoTitle\",t.get\\(\"autoTitle\"\\),\"title\",t[\"title\"]\\)')",
-      "Bash(git -c user.name=harness -c user.email=harness@local commit -q -m 'feat: AI-generated task titles + /debate slash popup + portal dropdowns *)"
+      "Bash(git -c user.name=harness -c user.email=harness@local commit -q -m 'feat: AI-generated task titles + /debate slash popup + portal dropdowns *)",
+      "Bash(git -c user.name=harness -c user.email=harness@local commit -q -m 'redesign\\(debate\\): rebuild /debate config with shared Pill + portal Menu *)"
     ]
   }
 }

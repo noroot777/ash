@@ -1,12 +1,16 @@
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import type { Task, AgentType, DebateConfig } from "@harness/shared";
+import { Robot, Hammer, ArrowsClockwise, ShieldCheck } from "@phosphor-icons/react";
 import { api } from "./api";
 import { loadDefaults, saveDefault } from "./debateDefaults";
 import { Modal } from "./Modal";
+import { Pill } from "./Menu";
 
 const AGENTS: AgentType[] = ["claude", "codex", "antigravity"];
+const agentOpts = AGENTS.map((a) => ({ value: a, label: a }));
 
-// /debate entry, presented as a modal (opened from the command palette / compose).
+// /debate config, built from the same Pill + Menu components as the create modal
+// for one consistent visual language (DESIGN.md §7).
 export function DebateModal({
   projectId,
   onClose,
@@ -16,202 +20,114 @@ export function DebateModal({
   onClose: () => void;
   onCreated: (t: Task, run: boolean) => void;
 }) {
-  return (
-    <Modal title="发起对抗 · /debate" onClose={onClose} width={780}>
-      <DebateSlots
-        projectId={projectId}
-        seedTopic=""
-        bare
-        onCancel={onClose}
-        onCreated={(t, run) => {
-          onCreated(t, run);
-          onClose();
-        }}
-      />
-    </Modal>
-  );
-}
-
-type SlotKey = "topic" | "debaterA" | "debaterB" | "implementer" | "maxRounds" | "gateG1" | "gateG2";
-const SLOT_ORDER: SlotKey[] = ["topic", "debaterA", "debaterB", "implementer", "maxRounds", "gateG1", "gateG2"];
-const SLOT_LABEL: Record<SlotKey, string> = {
-  topic: "议题",
-  debaterA: "辩手A",
-  debaterB: "辩手B",
-  implementer: "实现方",
-  maxRounds: "轮数",
-  gateG1: "共识门G1",
-  gateG2: "代码门G2",
-};
-
-function DebateSlots({
-  projectId,
-  seedTopic,
-  onCancel,
-  onCreated,
-  bare = false,
-}: {
-  projectId: string;
-  seedTopic: string;
-  onCancel: () => void;
-  onCreated: (t: Task, run: boolean) => void;
-  bare?: boolean;
-}) {
-  const [cfg, setCfg] = useState<DebateConfig>(() => ({ ...loadDefaults(), topic: seedTopic }));
-  const [focus, setFocus] = useState(0);
-  const topicRef = useRef<HTMLInputElement>(null);
-  const roundsRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    if (SLOT_ORDER[focus] === "topic") topicRef.current?.focus();
-    else if (SLOT_ORDER[focus] === "maxRounds") roundsRef.current?.focus();
-    else topicRef.current?.blur();
-  }, [focus]);
-
-  const options = (k: SlotKey): string[] | null => {
-    if (k === "debaterA" || k === "debaterB" || k === "implementer")
-      return k === "implementer" ? ["A", "B"] : AGENTS;
-    if (k === "gateG1" || k === "gateG2") return ["on", "off"];
-    return null;
-  };
-
-  const valueText = (k: SlotKey): string => {
-    if (k === "topic") return cfg.topic || "（必填）";
-    if (k === "maxRounds") return cfg.maxRounds === null ? "不设限" : String(cfg.maxRounds);
-    if (k === "implementer") return cfg.implementer === "A" ? "辩手A" : "辩手B";
-    if (k === "gateG1" || k === "gateG2") return cfg[k] === "on" ? "开" : "关";
-    return String(cfg[k]);
-  };
-
-  const cycle = (k: SlotKey, dir: 1 | -1) => {
-    const opts = options(k);
-    if (!opts) return;
-    const cur = String(cfg[k as keyof DebateConfig]);
-    const i = (opts.indexOf(cur) + dir + opts.length) % opts.length;
-    setCfg((c) => ({ ...c, [k]: opts[i] }));
-  };
+  const [cfg, setCfg] = useState<DebateConfig>(() => ({ ...loadDefaults(), topic: "" }));
+  const [busy, setBusy] = useState(false);
+  const set = <K extends keyof DebateConfig>(k: K, v: DebateConfig[K]) => setCfg((c) => ({ ...c, [k]: v }));
 
   const launch = async () => {
-    if (!cfg.topic.trim()) {
-      setFocus(0);
-      return;
-    }
-    const t = await api.createTask({
-      projectId,
-      title: cfg.topic.trim().slice(0, 80),
-      mode: "debate",
-      debate: { ...cfg, topic: cfg.topic.trim() },
-    });
-    onCreated(t, true);
-    onCancel();
-  };
-
-  const onKey = (e: React.KeyboardEvent) => {
-    if (e.key === "Tab") {
-      e.preventDefault();
-      setFocus((f) => (f + (e.shiftKey ? -1 : 1) + SLOT_ORDER.length) % SLOT_ORDER.length);
-    } else if (e.key === "Escape") {
-      onCancel();
-    } else if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
-      e.preventDefault();
-      launch();
-    } else if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
-      if (options(SLOT_ORDER[focus])) {
-        e.preventDefault();
-        cycle(SLOT_ORDER[focus], -1);
-      }
-    } else if (e.key === "ArrowRight" || e.key === "ArrowDown") {
-      if (options(SLOT_ORDER[focus])) {
-        e.preventDefault();
-        cycle(SLOT_ORDER[focus], 1);
-      }
-    } else if (e.key === "Enter") {
-      const k = SLOT_ORDER[focus];
-      if (k === "topic" || k === "maxRounds") launch();
+    if (!cfg.topic.trim() || busy) return;
+    setBusy(true);
+    try {
+      const t = await api.createTask({
+        projectId,
+        title: cfg.topic.trim().slice(0, 80),
+        mode: "debate",
+        debate: { ...cfg, topic: cfg.topic.trim() },
+      });
+      onCreated(t, true);
+      onClose();
+    } finally {
+      setBusy(false);
     }
   };
 
-  const focusedKey = SLOT_ORDER[focus];
-  const focusedOpts = options(focusedKey);
+  const saveDefaults = () => {
+    (["debaterA", "debaterB", "implementer", "maxRounds", "gateG1", "gateG2"] as const).forEach((k) =>
+      saveDefault(k, cfg[k]),
+    );
+  };
 
   return (
-    <div
-      className={bare ? "" : "mx-3 mb-1 rounded-lg border border-violet-500/40 bg-raised/60 p-2"}
-      onKeyDown={onKey}
-      tabIndex={-1}
-    >
-      <div className="mb-1.5 flex items-center gap-1 px-1 text-[11px] text-violet-700/80">
-        <span className="font-medium">/debate</span>
-        <span className="text-faint">Tab 切槽 · ←→ 改值 · ⌘↵ 开跑 · Esc 取消</span>
-      </div>
-      <div className="flex flex-wrap items-center gap-1.5">
-        {SLOT_ORDER.map((k, i) => {
-          const active = i === focus;
-          return (
-            <button
-              key={k}
-              onClick={() => setFocus(i)}
-              className={`flex items-center gap-1 rounded-md border px-2 py-1 text-xs ${
-                active ? "border-violet-400 bg-violet-500/15" : "border-line bg-panel"
-              }`}
-            >
-              <span className="text-muted">{SLOT_LABEL[k]}</span>
-              {k === "topic" ? (
-                <input
-                  ref={topicRef}
-                  value={cfg.topic}
-                  onChange={(e) => setCfg((c) => ({ ...c, topic: e.target.value }))}
-                  onFocus={() => setFocus(0)}
-                  placeholder="必填…"
-                  className="w-40 bg-transparent text-ink outline-none placeholder:text-faint"
-                />
-              ) : k === "maxRounds" ? (
-                <input
-                  ref={roundsRef}
-                  value={cfg.maxRounds === null ? "" : cfg.maxRounds}
-                  onChange={(e) => {
-                    const v = e.target.value.trim();
-                    setCfg((c) => ({ ...c, maxRounds: v === "" ? null : Math.max(1, Number(v) || 1) }));
-                  }}
-                  onFocus={() => setFocus(4)}
-                  placeholder="不设限"
-                  className="w-12 bg-transparent text-ink outline-none placeholder:text-faint"
-                />
-              ) : (
-                <span className="text-ink">{valueText(k)}</span>
-              )}
-            </button>
-          );
-        })}
-        <button onClick={launch} className="rounded-md bg-accent hover:bg-accent-hover px-3 py-1 text-xs font-medium text-accent-fg">
-          开跑
-        </button>
-      </div>
-
-      {focusedOpts && (
-        <div className="mt-1.5 flex items-center gap-1 px-1 text-xs">
-          <span className="text-faint">{SLOT_LABEL[focusedKey]}:</span>
-          {focusedOpts.map((o) => {
-            const sel = String(cfg[focusedKey as keyof DebateConfig]) === o;
-            return (
-              <button
-                key={o}
-                onClick={() => setCfg((c) => ({ ...c, [focusedKey]: o }))}
-                className={`rounded px-2 py-0.5 ${sel ? "bg-violet-500/30 text-violet-700" : "bg-overlay text-muted"}`}
-              >
-                {focusedKey === "implementer" ? (o === "A" ? "辩手A" : "辩手B") : o === "on" ? "开" : o === "off" ? "关" : o}
-              </button>
-            );
-          })}
-          <button
-            onClick={() => saveDefault(focusedKey as keyof DebateConfig, cfg[focusedKey as keyof DebateConfig])}
-            className="ml-2 rounded border border-line2 px-2 py-0.5 text-muted hover:text-ink"
-            title="把当前值设为以后 /debate 的默认"
-          >
-            设为默认
+    <Modal
+      title="发起对抗 · /debate"
+      onClose={onClose}
+      width={640}
+      footer={
+        <>
+          <button onClick={saveDefaults} className="mr-auto rounded-md border border-line px-3 py-1.5 text-[12px] text-muted hover:bg-raised hover:text-ink">
+            存为默认
           </button>
+          <button onClick={onClose} className="px-3 py-1.5 text-[13px] text-muted">取消</button>
+          <button
+            disabled={!cfg.topic.trim() || busy}
+            onClick={launch}
+            className="rounded-md bg-accent px-3.5 py-1.5 text-[13px] font-medium text-accent-fg hover:bg-accent-hover disabled:opacity-40"
+          >
+            开跑
+          </button>
+        </>
+      }
+    >
+      <div className="flex flex-col gap-3" onKeyDown={(e) => (e.metaKey || e.ctrlKey) && e.key === "Enter" && launch()}>
+        <input
+          autoFocus
+          value={cfg.topic}
+          onChange={(e) => set("topic", e.target.value)}
+          placeholder="议题（必填）：让两个 AI 就什么展开对抗…"
+          className="w-full rounded-md border border-line bg-canvas px-3 py-2 text-[14px] text-ink outline-none placeholder:text-faint focus:border-accent"
+        />
+        <div className="flex flex-wrap items-center gap-1.5">
+          <Pill icon={<Robot size={14} />} label={`辩手A ${cfg.debaterA}`} value={cfg.debaterA} onChange={(v) => set("debaterA", v as AgentType)} options={agentOpts} />
+          <Pill icon={<Robot size={14} />} label={`辩手B ${cfg.debaterB}`} value={cfg.debaterB} onChange={(v) => set("debaterB", v as AgentType)} options={agentOpts} />
+          <Pill
+            icon={<Hammer size={14} />}
+            label={`实现方 ${cfg.implementer === "A" ? "辩手A" : "辩手B"}`}
+            value={cfg.implementer}
+            onChange={(v) => set("implementer", v as "A" | "B")}
+            options={[
+              { value: "A", label: "辩手A" },
+              { value: "B", label: "辩手B" },
+            ]}
+          />
+          <Pill
+            icon={<ArrowsClockwise size={14} />}
+            label={`轮数 ${cfg.maxRounds ?? "不设限"}`}
+            value={cfg.maxRounds === null ? "" : String(cfg.maxRounds)}
+            onChange={(v) => set("maxRounds", v === "" ? null : Number(v))}
+            options={[
+              { value: "", label: "不设限" },
+              { value: "1", label: "1 轮" },
+              { value: "2", label: "2 轮" },
+              { value: "3", label: "3 轮" },
+              { value: "5", label: "5 轮" },
+              { value: "8", label: "8 轮" },
+            ]}
+          />
+          <Pill
+            icon={<ShieldCheck size={14} />}
+            label={`共识门 ${cfg.gateG1 === "on" ? "开" : "关"}`}
+            value={cfg.gateG1}
+            onChange={(v) => set("gateG1", v as "on" | "off")}
+            options={[
+              { value: "on", label: "开" },
+              { value: "off", label: "关" },
+            ]}
+          />
+          <Pill
+            icon={<ShieldCheck size={14} />}
+            label={`代码门 ${cfg.gateG2 === "on" ? "开" : "关"}`}
+            value={cfg.gateG2}
+            onChange={(v) => set("gateG2", v as "on" | "off")}
+            options={[
+              { value: "on", label: "开" },
+              { value: "off", label: "关" },
+            ]}
+          />
         </div>
-      )}
-    </div>
+        <p className="text-[11px] text-faint">
+          两个 AI 盲态开局、逐轮对抗;门开则在共识/出码处等你裁决(放行/打回/注入/提问),全关则全自动到提交。
+        </p>
+      </div>
+    </Modal>
   );
 }
