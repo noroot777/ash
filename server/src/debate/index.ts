@@ -31,6 +31,7 @@ interface Turn {
   cliId: string;
   text: string;
   raised: boolean;
+  exit: number;
 }
 
 // Run one debater/implementer turn: stream events tagged with role+round, persist
@@ -110,7 +111,7 @@ async function runTurn(args: {
     /* best effort */
   }
   bus.publish({ type: "debate.progress", taskId, round, speaker, phase: "end", raisedHand: raised });
-  return { rowId, cliId, text, raised };
+  return { rowId, cliId, text, raised, exit };
 }
 
 // Full /debate pipeline: blind opening (parallel) → serial rebuttal rounds
@@ -132,11 +133,14 @@ export async function runDebate(taskId: string): Promise<void> {
     await setStatus(taskId, "running");
 
     // Round 1 — blind opening, parallel.
+    const HARD_CAP = 50; // absolute safety cap, even when maxRounds is "不设限"
     let round = 1;
     const [a, b] = await Promise.all([
       runTurn({ taskId, role: "debaterA", speaker: "A", round, executor: exA, prompt: P.opening(cfg.topic, cwd), cwd }),
       runTurn({ taskId, role: "debaterB", speaker: "B", round, executor: exB, prompt: P.opening(cfg.topic, cwd), cwd }),
     ]);
+    // If an agent failed to even run (e.g. CLI not found), stop now — don't loop.
+    if (a.exit !== 0 || b.exit !== 0) return void (await setStatus(taskId, "failed"));
     const A = { rowId: a.rowId, cliId: a.cliId };
     const B = { rowId: b.rowId, cliId: b.cliId };
     let lastA = a.text,
@@ -145,12 +149,14 @@ export async function runDebate(taskId: string): Promise<void> {
       raisedB = b.raised;
 
     // Rounds 2+ — serial, A responds to B's latest, then B to A's latest.
-    while (!(raisedA && raisedB) && (cfg.maxRounds === null || round < cfg.maxRounds)) {
+    const cap = Math.min(cfg.maxRounds ?? HARD_CAP, HARD_CAP);
+    while (!(raisedA && raisedB) && round < cap) {
       round++;
       const at = await runTurn({
         taskId, role: "debaterA", speaker: "A", round, executor: exA,
         prompt: P.rebuttal(lastB, round), cwd, rowId: A.rowId, resumeCliId: A.cliId,
       });
+      if (at.exit !== 0) return void (await setStatus(taskId, "failed"));
       lastA = at.text;
       raisedA = at.raised;
       if (raisedA && raisedB) break;
@@ -158,6 +164,7 @@ export async function runDebate(taskId: string): Promise<void> {
         taskId, role: "debaterB", speaker: "B", round, executor: exB,
         prompt: P.rebuttal(lastA, round), cwd, rowId: B.rowId, resumeCliId: B.cliId,
       });
+      if (bt.exit !== 0) return void (await setStatus(taskId, "failed"));
       lastB = bt.text;
       raisedB = bt.raised;
     }

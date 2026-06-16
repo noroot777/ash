@@ -77,7 +77,11 @@
       "Bash(git -c user.name=harness -c user.email=harness@local commit -q -m 'fix: SSE-disconnect no longer crashes server; rounds pill gets custom input *)",
       "Bash(git -c user.name=harness -c user.email=harness@local commit -q -m 'fix: replace native window.confirm for delete with styled ConfirmModal *)",
       "Bash(python3 -c ' *)",
-      "Bash(git -c user.name=harness -c user.email=harness@local commit -q -m 'fix: agent spawn ENOENT \\(PATH\\) + crash on spawn error; don'\\\\''t hijack modified keys *)"
+      "Bash(git -c user.name=harness -c user.email=harness@local commit -q -m 'fix: agent spawn ENOENT \\(PATH\\) + crash on spawn error; don'\\\\''t hijack modified keys *)",
+      "Bash(curl -s http://localhost:4317/api/tasks/jxtpIQ9UclqL)",
+      "Bash(python3 -c 'import sys,json;t=json.load\\(sys.stdin\\);print\\(\"status:\",t[\"status\"]\\)')",
+      "Bash(curl -s -X PATCH http://localhost:4317/api/tasks/jxtpIQ9UclqL -H 'content-type: application/json' -d '{\"status\":\"backlog\"}')",
+      "Bash(git -c user.name=harness -c user.email=harness@local commit -q -m 'fix\\(debate\\): stop the infinite loop — hard cap + abort on failed turn *)"
     ]
   }
 }
