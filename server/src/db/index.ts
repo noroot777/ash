@@ -29,7 +29,7 @@ export async function ensureSchema() {
       title TEXT NOT NULL, body TEXT NOT NULL DEFAULT '', mode TEXT NOT NULL DEFAULT 'single',
       status TEXT NOT NULL DEFAULT 'backlog', priority TEXT NOT NULL DEFAULT 'none',
       labels TEXT NOT NULL DEFAULT '[]', depends_on TEXT NOT NULL DEFAULT '[]',
-      agent_type TEXT, debate TEXT, schedule_id TEXT,
+      agent_type TEXT, auto_title INTEGER NOT NULL DEFAULT 0, debate TEXT, schedule_id TEXT,
       created_at TEXT NOT NULL, updated_at TEXT NOT NULL
     );
     CREATE TABLE IF NOT EXISTS agents (
@@ -49,4 +49,10 @@ export async function ensureSchema() {
       last_run_at TEXT, created_at TEXT NOT NULL
     );
   `);
+  // Tolerant migration for DBs created before columns were added.
+  try {
+    await client.execute("ALTER TABLE tasks ADD COLUMN auto_title INTEGER NOT NULL DEFAULT 0");
+  } catch {
+    /* column already exists */
+  }
 }

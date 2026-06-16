@@ -38,6 +38,8 @@ export function App() {
       if (ev.type === "task.status") {
         setTasks((ts) => ts.map((t) => (t.id === ev.taskId ? { ...t, status: ev.status } : t)));
         if (ev.status === "done" || ev.status === "failed") setSessionsBump((n) => n + 1);
+      } else if (ev.type === "task.title") {
+        setTasks((ts) => ts.map((t) => (t.id === ev.taskId ? { ...t, title: ev.title } : t)));
       } else if (ev.type === "agent.event") {
         if (ev.role === "single") {
           const line = renderEvent(ev.event);
@@ -277,6 +279,10 @@ export function App() {
           groups={groups}
           onClose={() => setCreateOpen(false)}
           onCreated={(t) => onTaskCreated(t)}
+          onDebate={() => {
+            setCreateOpen(false);
+            setDebateOpen(true);
+          }}
         />
       )}
     </div>

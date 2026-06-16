@@ -67,6 +67,7 @@ export interface Task {
   priority: Priority;
   labels: string[];
   dependsOn: string[]; // cross-task dependency edges (§3)
+  autoTitle?: boolean; // title is AI-generated on first run until the user edits it
   // single mode:
   agentType?: AgentType;
   // debate mode config (§7):
@@ -154,6 +155,7 @@ export type DebateSpeaker = "A" | "B" | "impl";
 // SSE envelope pushed to the web client.
 export type ServerEvent =
   | { type: "task.status"; taskId: string; status: TaskStatus }
+  | { type: "task.title"; taskId: string; title: string }
   | {
       type: "agent.event";
       taskId: string;

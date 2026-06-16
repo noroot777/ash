@@ -41,7 +41,11 @@ export async function runTask(taskId: string): Promise<void> {
     const agentType = (task.agentType as AgentType) ?? "claude";
     const ex = await resolveExecutor(agentType);
 
-    const prompt = task.body?.trim() || task.title;
+    const autoTitle = !!task.autoTitle;
+    const TITLE_HINT =
+      "请在正式开始前，第一行只输出：标题：<不超过14字、概括本次任务的简短标题>，然后换行，再正常完成下面的任务。\n\n任务：\n";
+    const objective = task.body?.trim() || task.title;
+    const prompt = autoTitle ? TITLE_HINT + objective : objective;
     const handle = ex.run({ prompt, cwd: ws.path });
 
     const sessId = id();
@@ -63,26 +67,58 @@ export async function runTask(taskId: string): Promise<void> {
     };
     await db.insert(sessions).values(sessRow);
 
-    // Persist raw output alongside the DB row (DESIGN.md §11: long text -> files).
     const runDir = join(RUNS_DIR, taskId);
     mkdirSync(runDir, { recursive: true });
     const out = createWriteStream(join(runDir, `${sessId}.md`), { flags: "a" });
 
     let exitStatus = 0;
+    let titleDone = !autoTitle; // when autoTitle, swallow text until the title line is parsed
+    let head = "";
+    const emitText = (text: string) => {
+      if (!text) return;
+      out.write(text + "\n");
+      bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: "single", event: { kind: "text", text } });
+    };
+
     for await (const event of handle.events) {
-      bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: "single", event });
-      if (event.kind === "session" && event.cliSessionId !== cliSessionId) {
-        cliSessionId = event.cliSessionId;
-        await db
-          .update(sessions)
-          .set({ cliSessionId, resumeCommand: ex.resumeCommand(ws.path, cliSessionId) })
-          .where(eq(sessions.id, sessId));
-      } else if (event.kind === "text" || event.kind === "thinking") {
+      if (event.kind === "session") {
+        if (event.cliSessionId !== cliSessionId) {
+          cliSessionId = event.cliSessionId;
+          await db
+            .update(sessions)
+            .set({ cliSessionId, resumeCommand: ex.resumeCommand(ws.path, cliSessionId) })
+            .where(eq(sessions.id, sessId));
+        }
+        bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: "single", event });
+        continue;
+      }
+      if (event.kind === "text" && !titleDone) {
+        head += event.text;
+        const nl = head.indexOf("\n");
+        if (nl < 0) continue; // still buffering the first line
+        const firstLine = head.slice(0, nl);
+        const rest = head.slice(nl + 1);
+        const m = firstLine.match(/标题[:：]\s*(.+)/);
+        if (m) {
+          const newTitle = m[1].trim().replace(/[`*"]/g, "").slice(0, 30);
+          if (newTitle) {
+            await db.update(tasks).set({ title: newTitle, autoTitle: false, updatedAt: now() }).where(eq(tasks.id, taskId));
+            bus.publish({ type: "task.title", taskId, title: newTitle });
+          }
+        }
+        titleDone = true;
+        emitText(m ? rest : head); // matched: drop the title line; else flush buffer
+        continue;
+      }
+      if (event.kind === "text" || event.kind === "thinking") {
         out.write(event.text + "\n");
-      } else if (event.kind === "done") {
-        exitStatus = event.exitStatus;
+        bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: "single", event });
+      } else {
+        bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: "single", event });
+        if (event.kind === "done") exitStatus = event.exitStatus;
       }
     }
+    if (!titleDone && head) emitText(head); // agent never produced a newline
     out.end();
 
     await db.update(sessions).set({ exitStatus }).where(eq(sessions.id, sessId));

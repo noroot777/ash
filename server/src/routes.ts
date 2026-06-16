@@ -98,6 +98,7 @@ const toTask = (r: typeof tasks.$inferSelect): Task => ({
   labels: JSON.parse(r.labels),
   dependsOn: JSON.parse(r.dependsOn),
   agentType: (r.agentType as Task["agentType"]) ?? undefined,
+  autoTitle: r.autoTitle,
   debate: r.debate ? JSON.parse(r.debate) : undefined,
   scheduleId: r.scheduleId,
   createdAt: r.createdAt,
@@ -164,6 +165,7 @@ api.post("/tasks", async (c) => {
     labels: JSON.stringify(b.labels ?? []),
     dependsOn: JSON.stringify(b.dependsOn ?? []),
     agentType: b.agentType ?? null,
+    autoTitle: b.autoTitle ?? false,
     debate: b.debate ? JSON.stringify(b.debate) : null,
     scheduleId: null,
     createdAt: ts,
@@ -182,6 +184,7 @@ api.patch("/tasks/:id", async (c) => {
   const patch: Record<string, unknown> = { updatedAt: now() };
   if (b.title !== undefined) patch.title = b.title;
   if (b.body !== undefined) patch.body = b.body;
+  if (b.autoTitle !== undefined) patch.autoTitle = b.autoTitle;
   if (b.status !== undefined) patch.status = b.status;
   if (b.priority !== undefined) patch.priority = b.priority;
   if (b.labels !== undefined) patch.labels = JSON.stringify(b.labels);

@@ -32,6 +32,7 @@ export const tasks = sqliteTable("tasks", {
   labels: text("labels").notNull().default("[]"), // json
   dependsOn: text("depends_on").notNull().default("[]"), // json
   agentType: text("agent_type"),
+  autoTitle: integer("auto_title", { mode: "boolean" }).notNull().default(false),
   debate: text("debate"), // json DebateConfig
   scheduleId: text("schedule_id"),
   createdAt: text("created_at").notNull(),

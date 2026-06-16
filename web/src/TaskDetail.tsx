@@ -63,7 +63,7 @@ export function TaskDetail({
     <main className="flex h-full min-h-0 flex-col">
       <header className="border-b border-line px-6 pb-3 pt-5">
         <div className="flex items-start gap-3">
-          <h1 className="min-w-0 flex-1 text-[15px] font-semibold leading-snug text-ink">{task.title}</h1>
+          <EditableTitle title={task.title} onSave={(t) => onPatch({ title: t, autoTitle: false })} />
           <button
             onClick={onRun}
             disabled={busy}
@@ -205,6 +205,39 @@ function Prop({
       <span className="whitespace-nowrap">{cur?.label ?? ""}</span>
       <CaretDown size={11} weight="bold" className="text-faint" />
     </Menu>
+  );
+}
+
+// Inline-editable task title (click in, type, Enter/blur saves; Esc reverts).
+function EditableTitle({ title, onSave }: { title: string; onSave: (t: string) => void }) {
+  const [v, setV] = useState(title);
+  const [editing, setEditing] = useState(false);
+  useEffect(() => {
+    if (!editing) setV(title);
+  }, [title, editing]);
+  return (
+    <input
+      value={v}
+      onChange={(e) => setV(e.target.value)}
+      onFocus={() => setEditing(true)}
+      onBlur={() => {
+        setEditing(false);
+        const t = v.trim();
+        if (t && t !== title) onSave(t);
+        else setV(title);
+      }}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          e.currentTarget.blur();
+        } else if (e.key === "Escape") {
+          setV(title);
+          e.currentTarget.blur();
+        }
+      }}
+      className="-mx-1 min-w-0 flex-1 rounded px-1 text-[15px] font-semibold leading-snug text-ink outline-none hover:bg-raised/40 focus:bg-raised/60"
+      title="点击编辑标题"
+    />
   );
 }
 
