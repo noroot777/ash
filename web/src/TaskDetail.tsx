@@ -1,8 +1,11 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { Task, Group, Session, TaskStatus, Priority } from "@harness/shared";
+import { CaretDown, Play, Trash, Plus, ArrowsDownUp } from "@phosphor-icons/react";
 import { api } from "./api";
 import { STATUSES, PRIORITIES } from "./constants";
 import { Credential } from "./ui";
+import { StatusIcon } from "./StatusIcon";
+import { PriorityIcon } from "./ui";
 import { ScheduleControl } from "./ScheduleControl";
 
 export type LogLine = {
@@ -58,100 +61,102 @@ export function TaskDetail({
     if (l && !task.labels.includes(l)) onPatch({ labels: [...task.labels, l] });
   };
 
+  const depOptions = allTasks.filter((t) => t.id !== task.id && !task.dependsOn.includes(t.id));
+
   return (
     <main className="flex h-full min-h-0 flex-col">
-      <header className="border-b border-line px-6 py-4">
-        <div className="flex items-center gap-3">
-          <h1 className="truncate text-lg font-medium tracking-tight">{task.title}</h1>
+      <header className="border-b border-line px-6 pb-3 pt-5">
+        <div className="flex items-start gap-3">
+          <h1 className="min-w-0 flex-1 text-[15px] font-semibold leading-snug text-ink">{task.title}</h1>
           <button
             onClick={onRun}
             disabled={busy}
-            className="ml-auto rounded-md bg-accent hover:bg-accent-hover px-4 py-1.5 text-sm font-medium text-accent-fg disabled:opacity-40"
+            className="inline-flex items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-[13px] font-medium text-accent-fg transition-colors hover:bg-accent-hover disabled:opacity-40"
           >
-            {busy ? "运行中…" : "运行"}
+            <Play size={13} weight="fill" />
+            {busy ? "运行中" : "运行"}
           </button>
           <button
             onClick={onDelete}
-            className="rounded-md border border-line px-2 py-1.5 text-sm text-muted hover:text-red-600"
+            className="grid h-[30px] w-[30px] place-items-center rounded-md text-muted transition-colors hover:bg-raised hover:text-red-600"
             title="删除任务"
           >
-            删除
+            <Trash size={15} />
           </button>
         </div>
 
-        <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
-          <Select
+        {/* Property bar */}
+        <div className="mt-3 flex flex-wrap items-center gap-1.5">
+          <Prop
             value={task.status}
             onChange={(v) => onPatch({ status: v as TaskStatus })}
             options={STATUSES.map((s) => ({ value: s.key, label: s.label }))}
+            leading={(v) => <StatusIcon status={v as TaskStatus} size={13} />}
           />
-          <Select
+          <Prop
             value={task.priority}
             onChange={(v) => onPatch({ priority: v as Priority })}
-            options={PRIORITIES.map((p) => ({ value: p.key, label: `优先级·${p.label}` }))}
+            options={PRIORITIES.map((p) => ({ value: p.key, label: p.label }))}
+            leading={(v) => <PriorityIcon p={v as Priority} />}
           />
-          <Select
+          <Prop
             value={task.groupId ?? ""}
             onChange={(v) => (v === "__new" ? onCreateGroup() : onPatch({ groupId: v || null }))}
             options={[
               { value: "", label: "无分组" },
-              ...groups.map((g) => ({ value: g.id, label: `${g.name} · ${g.mode}` })),
+              ...groups.map((g) => ({ value: g.id, label: `${g.name} · ${g.mode === "parallel" ? "并行" : "串行"}` })),
               { value: "__new", label: "+ 新建分组" },
             ]}
           />
+          <span className="mx-1 h-4 w-px bg-line" />
           {task.labels.map((l) => (
             <button
               key={l}
               onClick={() => onPatch({ labels: task.labels.filter((x) => x !== l) })}
-              className="rounded-full bg-overlay px-2 py-0.5 text-ink hover:line-through"
+              className="rounded-full bg-overlay px-2 py-0.5 text-[11px] text-ink transition hover:bg-line2"
               title="点击移除"
             >
               {l}
             </button>
           ))}
-          <button onClick={addLabel} className="rounded-full border border-line px-2 py-0.5 text-muted">
-            + 标签
+          <button
+            onClick={addLabel}
+            className="inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-[12px] text-muted hover:bg-raised hover:text-ink"
+          >
+            <Plus size={12} weight="bold" /> 标签
           </button>
-          <span className="ml-auto text-faint">
-            {task.mode} {task.mode === "single" ? `· @${task.agentType ?? "—"}` : ""}
+          <span className="ml-auto text-[12px] text-faint">
+            {task.mode === "single" ? `@${task.agentType ?? "—"}` : "debate"}
           </span>
         </div>
 
-        <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
-          <span className="text-faint">依赖</span>
-          {task.dependsOn.map((d) => {
-            const dep = allTasks.find((t) => t.id === d);
-            return (
-              <button
-                key={d}
-                onClick={() => onPatch({ dependsOn: task.dependsOn.filter((x) => x !== d) })}
-                className="rounded bg-overlay px-1.5 py-0.5 text-ink hover:line-through"
-                title="点击移除依赖"
-              >
-                {dep?.title ?? d}
-              </button>
-            );
-          })}
-          <select
-            value=""
-            onChange={(e) => {
-              if (e.target.value) onPatch({ dependsOn: [...task.dependsOn, e.target.value] });
-            }}
-            className="rounded-md border border-line bg-panel px-2 py-1 text-muted outline-none"
-          >
-            <option value="">+ 添加依赖</option>
-            {allTasks
-              .filter((t) => t.id !== task.id && !task.dependsOn.includes(t.id))
-              .map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.title}
-                </option>
-              ))}
-          </select>
-          {task.dependsOn.length === 0 && <span className="text-faint">无（同组并行时按依赖排序）</span>}
-        </div>
-
-        <div className="mt-2">
+        {/* Secondary: dependencies + schedule */}
+        <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-line pt-2.5 text-[12px]">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <ArrowsDownUp size={13} className="text-faint" />
+            <span className="text-muted">依赖</span>
+            {task.dependsOn.map((d) => {
+              const dep = allTasks.find((t) => t.id === d);
+              return (
+                <button
+                  key={d}
+                  onClick={() => onPatch({ dependsOn: task.dependsOn.filter((x) => x !== d) })}
+                  className="rounded bg-overlay px-1.5 py-0.5 text-ink transition hover:bg-line2"
+                  title="点击移除依赖"
+                >
+                  {dep?.title ?? d}
+                </button>
+              );
+            })}
+            {depOptions.length > 0 && (
+              <Prop
+                value=""
+                onChange={(v) => v && onPatch({ dependsOn: [...task.dependsOn, v] })}
+                options={[{ value: "", label: "+ 添加" }, ...depOptions.map((t) => ({ value: t.id, label: t.title }))]}
+              />
+            )}
+            {task.dependsOn.length === 0 && depOptions.length === 0 && <span className="text-faint">无</span>}
+          </div>
           <ScheduleControl taskId={task.id} />
         </div>
       </header>
@@ -169,7 +174,7 @@ export function TaskDetail({
         className="min-h-0 flex-1 overflow-y-auto break-words px-6 py-4 font-mono text-[13px] leading-relaxed"
       >
         {task.body && (
-          <p className="mb-4 whitespace-pre-wrap break-words border-l-2 border-line2 pl-3 text-muted">
+          <p className="mb-4 whitespace-pre-wrap break-words rounded-md bg-raised/60 px-3 py-2 font-sans text-[13px] text-muted">
             {task.body}
           </p>
         )}
@@ -178,34 +183,44 @@ export function TaskDetail({
           <Line key={i} l={l} />
         ))}
         {!history && logs.length === 0 && (
-          <p className="text-faint">点击「运行」开始。输出会实时流式显示在这里。</p>
+          <p className="font-sans text-faint">点击「运行」开始，输出会实时流式显示在这里。</p>
         )}
       </div>
     </main>
   );
 }
 
-function Select({
+// Linear-style property control: leading icon + value + caret, with an invisible
+// native <select> overlaid for accessibility + zero-dependency behavior.
+function Prop({
   value,
   onChange,
   options,
+  leading,
 }: {
   value: string;
   onChange: (v: string) => void;
   options: { value: string; label: string }[];
+  leading?: (v: string) => ReactNode;
 }) {
+  const cur = options.find((o) => o.value === value);
   return (
-    <select
-      value={value}
-      onChange={(e) => onChange(e.target.value)}
-      className="rounded-md border border-line bg-panel px-2 py-1 text-ink outline-none hover:bg-overlay"
-    >
-      {options.map((o) => (
-        <option key={o.value} value={o.value}>
-          {o.label}
-        </option>
-      ))}
-    </select>
+    <label className="relative inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-line bg-panel px-2 py-1 text-[12px] text-ink transition-colors hover:bg-raised">
+      {leading?.(value)}
+      <span className="whitespace-nowrap">{cur?.label ?? ""}</span>
+      <CaretDown size={11} weight="bold" className="text-faint" />
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="absolute inset-0 cursor-pointer opacity-0"
+      >
+        {options.map((o) => (
+          <option key={o.value} value={o.value}>
+            {o.label}
+          </option>
+        ))}
+      </select>
+    </label>
   );
 }
 

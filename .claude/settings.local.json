@@ -50,7 +50,9 @@
       "Bash(git -c user.name=harness -c user.email=harness@local commit -q -m 'feat: Linear-style board \\(kanban\\) view + list/board toggle *)",
       "Bash(git -c user.name=harness -c user.email=harness@local commit -q -m 'design: light theme redesign \\(/design-taste-frontend pass, no black\\) *)",
       "Bash(npm i *)",
-      "Bash(git -c user.name=harness -c user.email=harness@local commit -q -m 'design: faithful Linear light theme *)"
+      "Bash(git -c user.name=harness -c user.email=harness@local commit -q -m 'design: faithful Linear light theme *)",
+      "Bash(node -e \"const p=require\\('./node_modules/@phosphor-icons/react/package.json'\\); console.log\\('version',p.version\\); console.log\\('types',p.types||p.typings\\); console.log\\('main',p.main\\); console.log\\('module',p.module\\); console.log\\('exports', JSON.stringify\\(p.exports\\).slice\\(0,300\\)\\)\")",
+      "Bash(git -c user.name=harness -c user.email=harness@local commit -q -m 'design: restructure chrome \\(fix cramped/wrapping top controls\\) *)"
     ]
   }
 }

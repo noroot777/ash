@@ -164,13 +164,17 @@ export function App() {
   }, [current, projects, projectId, groups, run, del, patch, newGroup]);
 
   return (
-    <div className="grid h-full grid-cols-[320px_1fr]">
-      <aside className="flex min-h-0 flex-col border-r border-line">
-        <div className="flex items-center justify-between px-4 py-3">
+    <div className="flex h-full flex-col">
+      {/* Full-width top bar: project switcher (left), view + global actions (right). */}
+      <header className="flex h-12 shrink-0 items-center justify-between border-b border-line bg-panel px-3">
+        <div className="flex items-center gap-2">
+          <div className="grid h-6 w-6 place-items-center rounded-md bg-accent text-[12px] font-semibold text-accent-fg">
+            {(projects.find((p) => p.id === projectId)?.name ?? "·").slice(0, 1).toUpperCase()}
+          </div>
           <select
             value={projectId ?? ""}
             onChange={(e) => (e.target.value === "__new" ? createProject(setProjects, setProjectId) : setProjectId(e.target.value))}
-            className="max-w-[180px] rounded bg-transparent text-sm font-medium tracking-tight text-ink outline-none"
+            className="max-w-[200px] rounded-md bg-transparent px-1 py-1 text-[13px] font-semibold tracking-tight text-ink outline-none hover:bg-raised"
           >
             {projects.map((p) => (
               <option key={p.id} value={p.id}>
@@ -180,89 +184,110 @@ export function App() {
             <option value="__new">+ 新建项目…</option>
             {!projects.length && <option value="">无项目</option>}
           </select>
-          <div className="flex items-center gap-2">
-            <div className="flex overflow-hidden rounded-md border border-line text-[11px]">
-              <button
-                onClick={() => setView("list")}
-                className={`px-2 py-1 ${view === "list" ? "bg-raised text-ink" : "text-muted hover:text-ink"}`}
-              >
-                列表
-              </button>
-              <button
-                onClick={() => setView("board")}
-                className={`border-l border-line px-2 py-1 ${view === "board" ? "bg-raised text-ink" : "text-muted hover:text-ink"}`}
-              >
-                看板
-              </button>
-            </div>
-            <button
-              onClick={() => setAgentsOpen(true)}
-              className="rounded-md border border-line px-2 py-1 text-[11px] text-muted transition-colors hover:bg-raised hover:text-ink"
-              title="智能体执行器"
-            >
-              智能体
-            </button>
-            <button onClick={() => setPaletteOpen(true)} title="命令面板">
-              <kbd>⌘K</kbd>
-            </button>
-            <span className="flex items-center gap-1 text-xs text-muted">
-              <span className={`h-1.5 w-1.5 rounded-full ${connected ? "bg-emerald-400" : "bg-faint"}`} />
-            </span>
-          </div>
+          <span className="ml-1 flex items-center gap-1.5 text-[11px] text-faint" title={connected ? "实时已连接" : "未连接"}>
+            <span className={`h-1.5 w-1.5 rounded-full ${connected ? "bg-emerald-500" : "bg-faint"}`} />
+          </span>
         </div>
-        <Composer
-          projectId={projectId ?? ""}
-          onCreated={(t, doRun) => {
-            setTasks((ts) => [t, ...ts]);
-            setSelected(t.id);
-            if (doRun) {
-              setDebates((m) => ({ ...m, [t.id]: emptyDebate() }));
-              api.runTask(t.id);
-            }
-          }}
-        />
-        <TaskList tasks={visible} groups={groups} selected={selected} onSelect={setSelected} />
-      </aside>
 
-      {view === "board" ? (
-        <Board
-          tasks={visible}
-          onMove={(id, status) => patch(id, { status })}
-          onOpen={(id) => {
-            setSelected(id);
-            setView("list");
-          }}
-        />
-      ) : current ? (
-        current.mode === "debate" ? (
-          <DebateView
-            key={current.id}
-            task={current}
-            state={debates[current.id] ?? emptyDebate()}
-            sessionsBump={sessionsBump}
-            onRun={() => run(current.id)}
-            onGate={(a) => gate(current.id, a)}
-            onDelete={() => del(current.id)}
-          />
-        ) : (
-          <TaskDetail
-            key={current.id}
-            task={current}
-            groups={groups}
-            allTasks={visible}
-            logs={logs[current.id] ?? []}
-            sessionsBump={sessionsBump}
-            onRun={() => run(current.id)}
-            onPatch={(p) => patch(current.id, p)}
-            onCreateGroup={newGroup}
-            onDelete={() => del(current.id)}
-          />
-        )
-      ) : (
-        <div className="flex items-center justify-center text-sm text-faint">
-          选择任务，或在左上输入框新建 / 输入 /debate
+        <div className="flex items-center gap-2">
+          <div className="flex items-center gap-0.5 rounded-lg bg-raised p-0.5 text-[12px]">
+            <button
+              onClick={() => setView("list")}
+              className={`rounded-md px-2.5 py-1 transition-colors ${view === "list" ? "bg-panel text-ink shadow-sm" : "text-muted hover:text-ink"}`}
+            >
+              列表
+            </button>
+            <button
+              onClick={() => setView("board")}
+              className={`rounded-md px-2.5 py-1 transition-colors ${view === "board" ? "bg-panel text-ink shadow-sm" : "text-muted hover:text-ink"}`}
+            >
+              看板
+            </button>
+          </div>
+          <button
+            onClick={() => setAgentsOpen(true)}
+            className="rounded-md px-2.5 py-1.5 text-[12px] text-muted transition-colors hover:bg-raised hover:text-ink"
+            title="智能体执行器"
+          >
+            智能体
+          </button>
+          <button
+            onClick={() => setPaletteOpen(true)}
+            className="flex items-center gap-1.5 rounded-md px-2 py-1 text-[12px] text-muted transition-colors hover:bg-raised hover:text-ink"
+            title="命令面板"
+          >
+            <span>搜索</span>
+            <kbd>⌘K</kbd>
+          </button>
         </div>
-      )}
+      </header>
+
+      <div className="flex min-h-0 flex-1">
+        {view === "board" ? (
+          <div className="min-w-0 flex-1">
+            <Board
+              tasks={visible}
+              onMove={(id, status) => patch(id, { status })}
+              onOpen={(id) => {
+                setSelected(id);
+                setView("list");
+              }}
+            />
+          </div>
+        ) : (
+          <>
+            <aside className="flex w-[300px] shrink-0 flex-col border-r border-line">
+              <div className="px-3 pb-1 pt-3">
+                <Composer
+                  projectId={projectId ?? ""}
+                  onCreated={(t, doRun) => {
+                    setTasks((ts) => [t, ...ts]);
+                    setSelected(t.id);
+                    if (doRun) {
+                      setDebates((m) => ({ ...m, [t.id]: emptyDebate() }));
+                      api.runTask(t.id);
+                    }
+                  }}
+                />
+              </div>
+              <TaskList tasks={visible} groups={groups} selected={selected} onSelect={setSelected} />
+            </aside>
+
+            <div className="min-w-0 flex-1">
+              {current ? (
+                current.mode === "debate" ? (
+                  <DebateView
+                    key={current.id}
+                    task={current}
+                    state={debates[current.id] ?? emptyDebate()}
+                    sessionsBump={sessionsBump}
+                    onRun={() => run(current.id)}
+                    onGate={(a) => gate(current.id, a)}
+                    onDelete={() => del(current.id)}
+                  />
+                ) : (
+                  <TaskDetail
+                    key={current.id}
+                    task={current}
+                    groups={groups}
+                    allTasks={visible}
+                    logs={logs[current.id] ?? []}
+                    sessionsBump={sessionsBump}
+                    onRun={() => run(current.id)}
+                    onPatch={(p) => patch(current.id, p)}
+                    onCreateGroup={newGroup}
+                    onDelete={() => del(current.id)}
+                  />
+                )
+              ) : (
+                <div className="flex h-full items-center justify-center text-[13px] text-faint">
+                  选择任务，或在左侧输入框新建 / 输入 /debate
+                </div>
+              )}
+            </div>
+          </>
+        )}
+      </div>
 
       <CommandPalette open={paletteOpen} commands={commands} onClose={() => setPaletteOpen(false)} />
       {agentsOpen && <AgentsPanel onClose={() => setAgentsOpen(false)} />}
