@@ -50,7 +50,7 @@ export function DebateView({
     <main className="flex h-full min-h-0 flex-col">
       <header className="border-b border-line px-6 py-4">
         <div className="flex items-center gap-3">
-          <span className="rounded bg-violet-500/20 px-1.5 py-0.5 text-[10px] font-medium text-violet-300">debate</span>
+          <span className="rounded bg-violet-500/20 px-1.5 py-0.5 text-[10px] font-medium text-violet-700">debate</span>
           <h1 className="truncate text-lg font-medium tracking-tight">{cfg?.topic ?? task.title}</h1>
           <button
             onClick={onRun}
@@ -59,7 +59,7 @@ export function DebateView({
           >
             {busy ? "进行中…" : "运行"}
           </button>
-          <button onClick={onDelete} className="rounded-md border border-line px-2 py-1.5 text-sm text-muted hover:text-red-400">
+          <button onClick={onDelete} className="rounded-md border border-line px-2 py-1.5 text-sm text-muted hover:text-red-600">
             删除
           </button>
         </div>
@@ -105,10 +105,10 @@ function Bubble({ turn, prevRound }: { turn: DebateTurn; prevRound?: number }) {
   const align = side === "A" ? "items-start" : side === "B" ? "items-end" : "items-center";
   const color =
     side === "A"
-      ? "border-sky-500/40 bg-sky-500/5"
+      ? "border-sky-500/40 bg-sky-500/8"
       : side === "B"
-        ? "border-emerald-500/40 bg-emerald-500/5"
-        : "border-violet-500/40 bg-violet-500/5";
+        ? "border-emerald-500/40 bg-emerald-500/8"
+        : "border-violet-500/40 bg-violet-500/[0.07]";
   const who = side === "A" ? "辩手A" : side === "B" ? "辩手B" : "实现方";
 
   return (
@@ -122,14 +122,14 @@ function Bubble({ turn, prevRound }: { turn: DebateTurn; prevRound?: number }) {
         <div className={`max-w-[88%] rounded-lg border px-3 py-2 ${color} ${side === "impl" ? "w-full max-w-full" : ""}`}>
           <div className="mb-1 flex items-center gap-2 text-[11px] text-muted">
             <span>{who}</span>
-            {turn.raised && <span className="text-amber-300">✋ 可收敛</span>}
-            {!turn.done && <span className="text-sky-300">…</span>}
+            {turn.raised && <span className="text-amber-700">✋ 可收敛</span>}
+            {!turn.done && <span className="text-sky-700">…</span>}
           </div>
           {turn.tools.map((t, i) => (
-            <div key={i} className="my-0.5 break-words font-mono text-[11px] text-amber-300/70">⚙ {t}</div>
+            <div key={i} className="my-0.5 break-words font-mono text-[11px] text-amber-700/70">⚙ {t}</div>
           ))}
           <div className="whitespace-pre-wrap break-words text-[13px] leading-relaxed text-ink">{turn.text}</div>
-          {turn.error && <div className="mt-1 break-words text-xs text-red-400">✕ {turn.error}</div>}
+          {turn.error && <div className="mt-1 break-words text-xs text-red-600">✕ {turn.error}</div>}
         </div>
       </div>
     </div>
@@ -142,9 +142,9 @@ function GateBar({ gate, onGate }: { gate: string; onGate: (a: GateAction) => vo
   const label = gate === "G1" ? "共识门 · 等待你裁决" : "代码门 · 等待你裁决";
 
   return (
-    <div className="border-t border-violet-500/40 bg-violet-500/5 px-6 py-3">
+    <div className="border-t border-violet-500/40 bg-violet-500/[0.07] px-6 py-3">
       <div className="flex flex-wrap items-center gap-2 text-sm">
-        <span className="text-violet-300">{label}</span>
+        <span className="text-violet-700">{label}</span>
         <div className="ml-auto flex flex-wrap gap-2">
           <button onClick={() => onGate({ kind: "approve" })} className="rounded-md bg-emerald-500 px-3 py-1 text-xs font-medium text-white">
             放行

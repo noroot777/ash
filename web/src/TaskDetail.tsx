@@ -72,7 +72,7 @@ export function TaskDetail({
           </button>
           <button
             onClick={onDelete}
-            className="rounded-md border border-line px-2 py-1.5 text-sm text-muted hover:text-red-400"
+            className="rounded-md border border-line px-2 py-1.5 text-sm text-muted hover:text-red-600"
             title="删除任务"
           >
             删除
@@ -210,8 +210,8 @@ function Select({
 }
 
 function Line({ l }: { l: LogLine }) {
-  if (l.kind === "tool") return <div className="my-0.5 break-words text-amber-300/80">⚙ {l.text}</div>;
-  if (l.kind === "error") return <div className="my-0.5 break-words text-red-400">✕ {l.text}</div>;
+  if (l.kind === "tool") return <div className="my-0.5 break-words text-amber-700/80">⚙ {l.text}</div>;
+  if (l.kind === "error") return <div className="my-0.5 break-words text-red-600">✕ {l.text}</div>;
   if (l.kind === "done") return <div className="my-2 text-center text-xs text-faint">{l.text}</div>;
   if (l.kind === "thinking")
     return <div className="my-0.5 whitespace-pre-wrap break-words italic text-faint">{l.text}</div>;

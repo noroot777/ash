@@ -58,7 +58,7 @@ function Row({ a, onChange }: { a: AgentExecutorProfile; onChange: () => void })
       <span className="text-muted">{targetText(a.target)}</span>
       {a.model && <span className="text-muted">· {a.model}</span>}
       {a.isDefault ? (
-        <span className="rounded bg-emerald-500/20 px-1.5 py-0.5 text-emerald-300">默认</span>
+        <span className="rounded bg-emerald-500/20 px-1.5 py-0.5 text-emerald-700">默认</span>
       ) : (
         <button
           onClick={() => api.patchAgent(a.id, { isDefault: true }).then(onChange)}
@@ -69,7 +69,7 @@ function Row({ a, onChange }: { a: AgentExecutorProfile; onChange: () => void })
       )}
       <button
         onClick={() => api.deleteAgent(a.id).then(onChange)}
-        className="ml-auto text-faint hover:text-red-400"
+        className="ml-auto text-faint hover:text-red-600"
       >
         删除
       </button>

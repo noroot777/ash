@@ -152,7 +152,7 @@ function DebateSlots({
       onKeyDown={onKey}
       tabIndex={-1}
     >
-      <div className="mb-1.5 flex items-center gap-1 px-1 text-[11px] text-violet-300/80">
+      <div className="mb-1.5 flex items-center gap-1 px-1 text-[11px] text-violet-700/80">
         <span className="font-medium">/debate</span>
         <span className="text-faint">Tab 切槽 · ←→ 改值 · ⌘↵ 开跑 · Esc 取消</span>
       </div>
@@ -209,7 +209,7 @@ function DebateSlots({
               <button
                 key={o}
                 onClick={() => setCfg((c) => ({ ...c, [focusedKey]: o }))}
-                className={`rounded px-2 py-0.5 ${sel ? "bg-violet-500/30 text-violet-200" : "bg-overlay text-muted"}`}
+                className={`rounded px-2 py-0.5 ${sel ? "bg-violet-500/30 text-violet-700" : "bg-overlay text-muted"}`}
               >
                 {focusedKey === "implementer" ? (o === "A" ? "辩手A" : "辩手B") : o === "on" ? "开" : o === "off" ? "关" : o}
               </button>

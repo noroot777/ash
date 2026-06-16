@@ -1,31 +1,31 @@
 @import "tailwindcss";
 
-/* ── Design tokens (dark, warm-neutral, hairline-structured) ─────────────────
-   Premium-minimalism philosophy applied to a dense tool surface: scarce color,
-   1px hairlines, off-white (never pure-white) text, SF/Geist-class type, mono
-   for meta. Exposed as Tailwind v4 theme colors → bg-/text-/border- utilities. */
+/* ── Light design tokens ─────────────────────────────────────────────────────
+   Premium-minimalism on a dense tool: soft cool-neutral canvas, white panels,
+   hairline borders, charcoal (never pure-black) text, scarce accent. Status
+   colors stay semantic. (Redesign per user: light theme, no black.) */
 @theme {
   --font-sans: "SF Pro Display", "SF Pro Text", -apple-system, BlinkMacSystemFont,
     "Helvetica Neue", "Switzer", sans-serif;
   --font-mono: ui-monospace, "SF Mono", "Geist Mono", "JetBrains Mono", monospace;
 
-  --color-canvas: #09090a;
-  --color-panel: #0d0d0f;
-  --color-raised: #161619;
-  --color-overlay: #1c1c20;
+  --color-canvas: #f4f4f6;
+  --color-panel: #ffffff;
+  --color-raised: #efeff2;
+  --color-overlay: #e7e7ec;
 
-  --color-line: rgba(255, 255, 255, 0.07);
-  --color-line2: rgba(255, 255, 255, 0.13);
+  --color-line: rgba(17, 17, 20, 0.09);
+  --color-line2: rgba(17, 17, 20, 0.16);
 
-  --color-ink: #ededef;
-  --color-muted: #8a8a91;
-  --color-faint: #595960;
+  --color-ink: #1b1b1f;
+  --color-muted: #63636c;
+  --color-faint: #9a9aa4;
 
-  --color-accent: #a78bfa;
+  --color-accent: #6d4aff;
 }
 
 :root {
-  color-scheme: dark;
+  color-scheme: light;
 }
 
 html,
@@ -45,7 +45,6 @@ body {
   text-rendering: optimizeLegibility;
 }
 
-/* Editorial tightening on headings. */
 h1,
 h2,
 h3 {
@@ -66,28 +65,28 @@ kbd {
   color: var(--color-muted);
 }
 
-/* Quiet, thin scrollbars matched to the surface. */
+/* Quiet, thin scrollbars matched to the light surface. */
 * {
   scrollbar-width: thin;
-  scrollbar-color: #2a2a2e transparent;
+  scrollbar-color: #c9c9d0 transparent;
 }
 *::-webkit-scrollbar {
   width: 9px;
   height: 9px;
 }
 *::-webkit-scrollbar-thumb {
-  background: #232327;
+  background: #d2d2d9;
   border-radius: 9px;
   border: 2px solid transparent;
   background-clip: padding-box;
 }
 *::-webkit-scrollbar-thumb:hover {
-  background: #303036;
+  background: #bcbcc4;
   background-clip: padding-box;
 }
 
 ::selection {
-  background: rgba(167, 139, 250, 0.28);
+  background: rgba(109, 74, 255, 0.18);
 }
 
 select,
@@ -97,10 +96,10 @@ button {
   font: inherit;
 }
 select option {
-  background: var(--color-overlay);
+  background: var(--color-panel);
 }
 
-/* Quiet entrance for streamed/list content (transform+opacity only). */
+/* Quiet entrance (transform+opacity only). */
 @keyframes rise {
   from {
     opacity: 0;

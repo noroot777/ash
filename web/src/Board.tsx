@@ -55,7 +55,7 @@ export function Board({
                     ))}
                     <span
                       className={`ml-auto rounded px-1.5 py-0.5 font-mono text-[10px] ${
-                        t.mode === "debate" ? "bg-violet-500/20 text-violet-300" : "text-faint"
+                        t.mode === "debate" ? "bg-violet-500/20 text-violet-700" : "text-faint"
                       }`}
                     >
                       {t.mode === "debate" ? "debate" : `@${t.agentType ?? "—"}`}
