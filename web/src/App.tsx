@@ -11,6 +11,7 @@ import { Composer } from "./DebateComposer";
 import { DebateView } from "./DebateView";
 import { applyDebateEvent, emptyDebate, type DebateState } from "./debateState";
 import { AgentsPanel } from "./AgentsPanel";
+import { Board } from "./Board";
 
 export function App() {
   const [projects, setProjects] = useState<Project[]>([]);
@@ -24,6 +25,7 @@ export function App() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [agentsOpen, setAgentsOpen] = useState(false);
+  const [view, setView] = useState<"list" | "board">("list");
 
   const connected = useServerEvents(
     useCallback((ev) => {
@@ -179,6 +181,20 @@ export function App() {
             {!projects.length && <option value="">无项目</option>}
           </select>
           <div className="flex items-center gap-2">
+            <div className="flex overflow-hidden rounded-md border border-line text-[11px]">
+              <button
+                onClick={() => setView("list")}
+                className={`px-2 py-1 ${view === "list" ? "bg-raised text-ink" : "text-muted hover:text-ink"}`}
+              >
+                列表
+              </button>
+              <button
+                onClick={() => setView("board")}
+                className={`border-l border-line px-2 py-1 ${view === "board" ? "bg-raised text-ink" : "text-muted hover:text-ink"}`}
+              >
+                看板
+              </button>
+            </div>
             <button
               onClick={() => setAgentsOpen(true)}
               className="rounded-md border border-line px-2 py-1 text-[11px] text-muted transition-colors hover:bg-raised hover:text-ink"
@@ -208,7 +224,16 @@ export function App() {
         <TaskList tasks={visible} groups={groups} selected={selected} onSelect={setSelected} />
       </aside>
 
-      {current ? (
+      {view === "board" ? (
+        <Board
+          tasks={visible}
+          onMove={(id, status) => patch(id, { status })}
+          onOpen={(id) => {
+            setSelected(id);
+            setView("list");
+          }}
+        />
+      ) : current ? (
         current.mode === "debate" ? (
           <DebateView
             key={current.id}
