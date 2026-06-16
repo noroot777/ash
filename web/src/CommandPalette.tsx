@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useEscape } from "./useEscape";
 
 export type Command = {
   id: string;
@@ -20,6 +21,7 @@ export function CommandPalette({
   const [q, setQ] = useState("");
   const [active, setActive] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
+  useEscape(onClose, open);
 
   useEffect(() => {
     if (open) {

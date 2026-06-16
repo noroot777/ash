@@ -1,10 +1,12 @@
 import { useEffect } from "react";
 
 // Close-on-Esc for overlays. Window-level so it fires regardless of focus
-// (project convention: every modal/panel must be Esc-closable). Also locks
-// background scroll while open.
-export function useEscape(onClose: () => void) {
+// (project convention: every modal/panel must be Esc-closable). Locks background
+// scroll while active. `enabled` lets callers that render unconditionally (early
+// return) still call the hook unconditionally.
+export function useEscape(onClose: () => void, enabled = true) {
   useEffect(() => {
+    if (!enabled) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         e.stopPropagation();
@@ -18,5 +20,5 @@ export function useEscape(onClose: () => void) {
       window.removeEventListener("keydown", onKey);
       document.body.style.overflow = prev;
     };
-  }, [onClose]);
+  }, [onClose, enabled]);
 }

@@ -104,14 +104,16 @@ export function App() {
   // ── keyboard navigation ────────────────────────────────────────────────
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      const modalOpen = createOpen || agentsOpen; // these own the keyboard
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+        if (modalOpen) return;
         e.preventDefault();
         setPaletteOpen((o) => !o);
         return;
       }
       const el = e.target as HTMLElement;
       if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT")) return;
-      if (paletteOpen || createOpen) return;
+      if (paletteOpen || modalOpen) return;
       const idx = ordered.findIndex((t) => t.id === selected);
       if (e.key === "j" || e.key === "ArrowDown") {
         e.preventDefault();
@@ -129,7 +131,7 @@ export function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [ordered, selected, current, paletteOpen, createOpen, run]);
+  }, [ordered, selected, current, paletteOpen, createOpen, agentsOpen, run]);
 
   useEffect(() => {
     if (selected) document.querySelector(`[data-task-id="${selected}"]`)?.scrollIntoView({ block: "nearest" });
