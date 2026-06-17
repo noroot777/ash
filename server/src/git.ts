@@ -22,6 +22,24 @@ export function expandHome(p: string | null | undefined): string {
   return p;
 }
 
+// Canonicalize a repoPath for *storage*: trim, drop trailing slashes, but keep
+// `~` intact so the value stays portable/readable in the UI. `/Users/x/foo/`
+// and `/Users/x/foo` collapse to the same stored form.
+export function tidyRepoPath(p: string | null | undefined): string {
+  const t = (p ?? "").trim();
+  if (!t) return "";
+  const stripped = t.replace(/\/+$/, "");
+  return stripped || "/"; // a path of only slashes is root
+}
+
+// Canonical key for *comparing* two repoPaths that may be written differently —
+// `~/code/foo` vs `/Users/me/code/foo` (expandHome) and trailing slashes. Used to
+// find an existing project for a path without spawning a duplicate. Empty stays
+// empty, so path-less projects never collide with each other here.
+export function repoKey(p: string | null | undefined): string {
+  return tidyRepoPath(expandHome(p));
+}
+
 // Guarantee an existing working directory for a run. Prefer the project's
 // repoPath; if it is empty/missing — e.g. a pure-discussion debate, or a project
 // whose path was never created — fall back to a per-task scratch dir. This keeps

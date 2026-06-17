@@ -23,7 +23,7 @@ import { runGroup } from "./scheduler.js";
 import { runDebate, resumeDebate, resumeAtGate } from "./debate/index.js";
 import { resolveGate } from "./debate/gates.js";
 import { detectLocalAgents } from "./detect.js";
-import { projectHealthLight, projectHealthFull, removeWorktree } from "./git.js";
+import { projectHealthLight, projectHealthFull, removeWorktree, tidyRepoPath, repoKey } from "./git.js";
 import { resumeCommandFor } from "./executors/spawn.js";
 import type { GateAction, AgentType, BatchCreateTasksBody, BatchTaskInput } from "@harness/shared";
 
@@ -136,24 +136,43 @@ api.get("/projects", async (c) =>
 api.post("/projects", async (c) => {
   const b = await c.req.json<{ name: string; repoPath: string }>();
   if (!b.name?.trim()) return c.json({ error: "name required" }, 400);
-  const row = { id: id(), name: b.name.trim(), repoPath: b.repoPath ?? "", createdAt: now() };
+  const row = { id: id(), name: b.name.trim(), repoPath: tidyRepoPath(b.repoPath), createdAt: now() };
   await db.insert(projects).values(row);
   return c.json(toProject(row), 201);
 });
 
 // Find-or-create a project by repoPath — idempotent, agent-friendly. Lets an agent
 // go straight from a repo path to a stable projectId without first listing/creating
-// (call it every time without worrying about duplicates). name defaults to the
-// repo's directory name. Ambiguous (repoPath used by >1 project) → 409, so the
-// caller falls back to an explicit projectId. 200 = existing, 201 = created.
+// (call it every time without worrying about duplicates). Matching is by canonical
+// path key (repoKey), so `~/code/foo`, `/Users/me/code/foo`, and a trailing slash
+// all resolve to the same project. name defaults to the repo's directory name.
+// 200 = existing (matched or adopted), 201 = created, 409 = ambiguous.
 api.post("/projects/resolve", async (c) => {
   const b = await c.req.json<{ repoPath: string; name?: string }>();
-  const repoPath = b.repoPath?.trim();
+  const repoPath = tidyRepoPath(b.repoPath);
   if (!repoPath) return c.json({ error: "repoPath required" }, 400);
-  const hits = (await db.select().from(projects)).filter((p) => p.repoPath === repoPath);
-  if (hits.length > 1) return c.json({ error: "repoPath 匹配到多个项目，请改用 projectId", repoPath }, 409);
-  if (hits.length === 1) return c.json(toProject(hits[0]), 200);
-  const name = b.name?.trim() || basename(repoPath.replace(/\/+$/, "")) || "project";
+  const key = repoKey(repoPath);
+  const all = await db.select().from(projects);
+
+  // 1) Canonical path match — the happy path, fully idempotent across path spellings.
+  const pathHits = all.filter((p) => repoKey(p.repoPath) === key);
+  if (pathHits.length > 1) return c.json({ error: "repoPath 匹配到多个项目，请改用 projectId", repoPath }, 409);
+  if (pathHits.length === 1) return c.json(toProject(pathHits[0]), 200);
+
+  // 2) No path match: adopt a path-less project with the same name — the common
+  //    case where the user created the project in the UI by name only (no repoPath).
+  //    Backfill its repoPath so it becomes the stable target, instead of spawning a
+  //    confusing same-name duplicate. Ambiguous (>1 such project) → 409.
+  const name = b.name?.trim() || basename(repoPath) || "project";
+  const orphans = all.filter((p) => !repoKey(p.repoPath) && p.name === name);
+  if (orphans.length > 1) return c.json({ error: "有多个同名且未设路径的项目，请在界面里设置路径或改用 projectId", name }, 409);
+  if (orphans.length === 1) {
+    await db.update(projects).set({ repoPath }).where(eq(projects.id, orphans[0].id));
+    const adopted = (await db.select().from(projects).where(eq(projects.id, orphans[0].id))).at(0)!;
+    return c.json(toProject(adopted), 200);
+  }
+
+  // 3) Genuinely new project.
   const row = { id: id(), name, repoPath, createdAt: now() };
   await db.insert(projects).values(row);
   return c.json(toProject(row), 201);
@@ -169,7 +188,7 @@ api.patch("/projects/:id", async (c) => {
     if (!b.name.trim()) return c.json({ error: "name required" }, 400);
     patch.name = b.name.trim();
   }
-  if (b.repoPath !== undefined) patch.repoPath = b.repoPath;
+  if (b.repoPath !== undefined) patch.repoPath = tidyRepoPath(b.repoPath);
   if (Object.keys(patch).length) await db.update(projects).set(patch).where(eq(projects.id, pid));
   const updated = (await db.select().from(projects).where(eq(projects.id, pid))).at(0)!;
   return c.json(toProject(updated));
@@ -225,7 +244,8 @@ api.post("/groups", async (c) => {
     project = (await db.select().from(projects).where(eq(projects.id, b.projectId))).at(0);
     if (!project) return c.json({ error: "project not found", projectId: b.projectId }, 404);
   } else if (b.repoPath) {
-    const hits = (await db.select().from(projects)).filter((p) => p.repoPath === b.repoPath);
+    const key = repoKey(b.repoPath);
+    const hits = (await db.select().from(projects)).filter((p) => repoKey(p.repoPath) === key);
     if (hits.length === 0) return c.json({ error: "没有匹配 repoPath 的项目（可先调用 POST /api/projects/resolve 建项目）", repoPath: b.repoPath }, 404);
     if (hits.length > 1) return c.json({ error: "repoPath 匹配到多个项目，请改用 projectId", repoPath: b.repoPath }, 409);
     project = hits[0];
