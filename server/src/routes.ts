@@ -18,7 +18,7 @@ import { db } from "./db/index.js";
 import { projects, groups, tasks, sessions, schedules, agents } from "./db/schema.js";
 import { bus } from "./bus.js";
 import { id, now } from "./util.js";
-import { runTask } from "./orchestrator.js";
+import { runTask, continueTask } from "./orchestrator.js";
 import { runGroup } from "./scheduler.js";
 import { runDebate, resumeDebate, resumeAtGate } from "./debate/index.js";
 import { resolveGate } from "./debate/gates.js";
@@ -327,6 +327,20 @@ api.post("/tasks/:id/run", async (c) => {
   // Fire-and-forget; progress streams over /api/events.
   if (r.mode === "debate") void runDebate(taskId);
   else void runTask(taskId);
+  return c.json({ started: true }, 202);
+});
+
+// Reply to a single task: resume its CLI session with the user's message so an
+// agent that stopped to ask can be answered and keep going (same session).
+api.post("/tasks/:id/reply", async (c) => {
+  const taskId = c.req.param("id");
+  const b = await c.req.json<{ text: string }>();
+  if (!b.text?.trim()) return c.json({ error: "empty" }, 400);
+  const r = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
+  if (!r) return c.json({ error: "not found" }, 404);
+  if (r.mode !== "single") return c.json({ error: "仅单任务支持回复" }, 409);
+  if (r.status === "running" || r.status === "queued") return c.json({ error: "任务进行中" }, 409);
+  void continueTask(taskId, b.text.trim());
   return c.json({ started: true }, 202);
 });
 

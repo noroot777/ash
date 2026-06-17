@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Task, Session, DebateConfig, GateAction, AgentType, DebateSpeaker, TaskStatus } from "@harness/shared";
 import type { DebateState, DebateTurn, DebateGate } from "./debateState";
-import { ResumeButtons } from "./ui";
+import { ResumeButtons, ToolCall } from "./ui";
 import { Markdown } from "./Markdown";
 import { api } from "./api";
 import { ScheduleControl } from "./ScheduleControl";
@@ -240,7 +240,7 @@ function Bubble({
             {!turn.done && <TypingDots />}
           </div>
           {turn.tools.map((t, i) => (
-            <div key={i} className="my-0.5 break-words font-mono text-[11px] text-amber-700/70">⚙ {t}</div>
+            <ToolCall key={i} name={t.name} detail={t.detail} />
           ))}
           {!turn.done && !turn.text && turn.tools.length === 0 && (
             <div className="py-0.5 text-[12px] text-muted">思考中…</div>

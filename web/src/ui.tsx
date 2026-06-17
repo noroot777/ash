@@ -1,8 +1,52 @@
 import { useState, useEffect } from "react";
-import type { Priority, Session, ProjectHealth } from "@harness/shared";
-import { Plus } from "@phosphor-icons/react";
+import type { Priority, Session, ProjectHealth, ProjectView } from "@harness/shared";
+import { Plus, CaretRight } from "@phosphor-icons/react";
 import { shortPath } from "./util";
 import { api } from "./api";
+
+// Collapsible tool-call block (Claude-desktop style): a compact one-line summary
+// by default, click to expand the full command/input. Shared by the task log and
+// debate bubbles so both read the same.
+export function ToolCall({ name, detail }: { name: string; detail?: string }) {
+  const [open, setOpen] = useState(false);
+  const has = !!detail?.trim();
+  return (
+    <div className="my-1">
+      <button
+        type="button"
+        onClick={() => has && setOpen((o) => !o)}
+        className={`inline-flex max-w-full items-center gap-1 rounded-md bg-raised px-2 py-0.5 text-[11px] text-amber-700/90 ${has ? "hover:bg-overlay" : "cursor-default"}`}
+      >
+        <CaretRight size={10} weight="bold" className={`shrink-0 transition-transform ${open ? "rotate-90" : ""} ${has ? "" : "opacity-0"}`} />
+        <span className="font-mono">⚙ {name}</span>
+        {has && !open && <span className="truncate font-mono text-faint">{detail!.replace(/\s+/g, " ").slice(0, 80)}</span>}
+      </button>
+      {open && has && (
+        <pre className="mt-1 max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-md border border-line bg-raised px-2.5 py-1.5 font-mono text-[11px] leading-snug text-muted">{detail}</pre>
+      )}
+    </div>
+  );
+}
+
+// Collapsible "thinking" block — hidden by default, expand to read.
+export function ThinkingBlock({ text }: { text: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="my-1">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] text-faint hover:bg-raised"
+      >
+        <CaretRight size={10} weight="bold" className={`transition-transform ${open ? "rotate-90" : ""}`} />
+        思考{open ? "" : "…"}
+      </button>
+      {open && (
+        <div className="mt-1 whitespace-pre-wrap break-words border-l-2 border-line pl-3 text-[12px] italic text-faint">{text}</div>
+      )}
+    </div>
+  );
+}
 
 // repoPath health at a glance: 🔴 路径不存在 / 🟡 存在但非 git 仓库 / 🟢 git 仓库.
 // One dot, one source of truth — reused in the switcher, create/debate modals,
@@ -66,6 +110,27 @@ export function PathHealth({ path }: { path: string }) {
       </span>
     );
   return <span className="text-[12px] text-faint">{loading ? "校验中…" : ""}</span>;
+}
+
+// "Where will this run" line for the create / debate modals: health dot + path +
+// the repo's current branch (fetched fresh, since the list health is lightweight
+// and has no branch). Warns when the path is missing (→ scratch dir).
+export function RunLocation({ project }: { project: ProjectView }) {
+  const [full, setFull] = useState<ProjectHealth | null>(null);
+  useEffect(() => {
+    setFull(null);
+    if (project.health.isRepo) api.projectHealth(project.id).then(setFull).catch(() => {});
+  }, [project.id, project.health.isRepo]);
+  return (
+    <div className="flex items-center gap-1.5 text-[11px]">
+      <HealthDot health={full ?? project.health} size={7} />
+      <span className="font-mono text-faint" title={project.repoPath}>
+        将在 {shortPath(project.repoPath) || "（未设置路径）"} 运行
+      </span>
+      {full?.branch && <span className="text-muted">· 分支 {full.branch}</span>}
+      {!project.health.exists && <span className="text-amber-600">· 目录不存在，将用临时目录</span>}
+    </div>
+  );
 }
 
 // Linear-style priority glyph: three ascending bars (filled by level), and a

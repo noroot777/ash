@@ -61,6 +61,12 @@ export const api = {
     fetch(`/api/tasks/${id}/run`, { method: "POST" }).then(j),
   retryTask: (id: string): Promise<unknown> =>
     fetch(`/api/tasks/${id}/retry`, { method: "POST" }).then(j),
+  replyTask: (id: string, text: string): Promise<unknown> =>
+    fetch(`/api/tasks/${id}/reply`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text }),
+    }).then(j),
   gate: (id: string, action: GateAction): Promise<unknown> =>
     fetch(`/api/tasks/${id}/gate`, {
       method: "POST",

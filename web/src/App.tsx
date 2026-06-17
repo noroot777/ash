@@ -128,6 +128,13 @@ export function App() {
     [run, retry],
   );
 
+  // Reply to a single task: show the human turn immediately, then resume its
+  // session so the agent continues (used when an agent stopped to ask).
+  const reply = useCallback(async (id: string, text: string) => {
+    setLogs((m) => ({ ...m, [id]: [...(m[id] ?? []), { kind: "user", text }] }));
+    try { await api.replyTask(id, text); } catch (e) { console.warn("reply rejected:", e); }
+  }, []);
+
   const gate = useCallback((id: string, action: Parameters<typeof api.gate>[1]) => api.gate(id, action), []);
 
   const del = useCallback((id: string, title: string) => setConfirmDel({ id, title }), []);
@@ -327,7 +334,7 @@ export function App() {
                 current.mode === "debate" ? (
                   <DebateView key={current.id} task={current} state={debates[current.id] ?? emptyDebate()} sessionsBump={sessionsBump} onRun={() => run(current.id)} onRetry={() => retry(current.id)} onGate={(a) => gate(current.id, a)} onDelete={() => del(current.id, current.title)} />
                 ) : (
-                  <TaskDetail key={current.id} task={current} groups={groups} allTasks={visible} logs={logs[current.id] ?? []} sessionsBump={sessionsBump} onRun={() => run(current.id)} onPatch={(p) => patch(current.id, p)} onCreateGroup={() => setNewGroupOpen(true)} onDelete={() => del(current.id, current.title)} />
+                  <TaskDetail key={current.id} task={current} groups={groups} allTasks={visible} logs={logs[current.id] ?? []} sessionsBump={sessionsBump} onRun={() => run(current.id)} onReply={(text) => reply(current.id, text)} onPatch={(p) => patch(current.id, p)} onCreateGroup={() => setNewGroupOpen(true)} onDelete={() => del(current.id, current.title)} />
                 )
               ) : (
                 <div className="flex h-full flex-col items-center justify-center gap-1 text-[13px] text-faint">
@@ -381,7 +388,7 @@ function renderEvent(e: AgentEvent): LogLine | null {
     case "thinking":
       return { kind: "thinking", text: e.text };
     case "tool":
-      return { kind: "tool", text: `${e.name}${e.detail ? " " + e.detail : ""}` };
+      return { kind: "tool", name: e.name, text: e.detail ?? "" };
     case "error":
       return { kind: "error", text: e.message };
     case "done":

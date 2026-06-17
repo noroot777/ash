@@ -106,7 +106,7 @@ async function* parseClaudeStream(child: ReturnType<typeof spawnAgent>): AsyncIt
 const shortJson = (v: unknown) => {
   try {
     const s = JSON.stringify(v);
-    return s && s.length > 120 ? s.slice(0, 117) + "…" : s;
+    return s && s.length > 1500 ? s.slice(0, 1497) + "…" : s;
   } catch {
     return undefined;
   }

@@ -108,5 +108,5 @@ async function* parseCodexStream(child: ReturnType<typeof spawnAgent>): AsyncIte
 
 const shortStr = (v: unknown) => {
   const s = typeof v === "string" ? v : JSON.stringify(v ?? "");
-  return s.length > 120 ? s.slice(0, 117) + "…" : s;
+  return s.length > 1500 ? s.slice(0, 1497) + "…" : s;
 };

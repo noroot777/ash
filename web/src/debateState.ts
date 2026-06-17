@@ -4,7 +4,7 @@ export type DebateTurn = {
   round: number;
   speaker: DebateSpeaker;
   text: string;
-  tools: string[];
+  tools: { name: string; detail?: string }[];
   raised: boolean;
   agrees?: boolean; // self-declared agreement with the opponent (only when raised)
   conclusion?: string; // self-declared one-line 结论
@@ -62,7 +62,7 @@ export function applyDebateEvent(s: DebateState, ev: ServerEvent): DebateState {
         const t = { ...turns[i] };
         const e = ev.event;
         if (e.kind === "text") t.text += e.text;
-        else if (e.kind === "tool") t.tools = [...t.tools, `${e.name}${e.detail ? " " + e.detail : ""}`];
+        else if (e.kind === "tool") t.tools = [...t.tools, { name: e.name, detail: e.detail }];
         else if (e.kind === "error") t.error = e.message;
         turns[i] = t;
         break;

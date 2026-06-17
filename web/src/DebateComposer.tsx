@@ -5,8 +5,7 @@ import { api } from "./api";
 import { loadDefaults, saveDefault } from "./debateDefaults";
 import { Modal } from "./Modal";
 import { Pill } from "./Menu";
-import { HealthDot } from "./ui";
-import { shortPath } from "./util";
+import { RunLocation } from "./ui";
 
 const AGENTS: AgentType[] = ["claude", "codex", "antigravity"];
 const agentOpts = AGENTS.map((a) => ({ value: a, label: a }));
@@ -83,12 +82,8 @@ export function DebateModal({
         />
         {/* Run location — discussion reads here; implement writes here (temp dir if missing) */}
         <div className="flex items-center gap-1.5 text-[11px]">
-          <HealthDot health={project.health} size={7} />
           <span className="text-muted">{project.name}</span>
-          <span className="font-mono text-faint" title={project.repoPath}>
-            · 将在 {shortPath(project.repoPath) || "（未设置路径）"} 运行
-          </span>
-          {!project.health.exists && <span className="text-amber-600">· 目录不存在，将用临时目录</span>}
+          <RunLocation project={project} />
         </div>
         <div className="flex flex-wrap items-center gap-1.5">
           <Pill icon={<Robot size={14} />} label={`辩手A ${cfg.debaterA}`} value={cfg.debaterA} onChange={(v) => set("debaterA", v as AgentType)} options={agentOpts} defaultValue={defStr("debaterA")} onSetDefault={(v) => pinDefault("debaterA", v)} />

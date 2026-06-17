@@ -4,8 +4,7 @@ import { X, ArrowsOut, ArrowsIn, Robot, Stack, Plus, Sparkle } from "@phosphor-i
 import { api } from "./api";
 import { STATUSES, PRIORITIES } from "./constants";
 import { StatusIcon } from "./StatusIcon";
-import { PriorityIcon, LabelAdder, HealthDot } from "./ui";
-import { shortPath } from "./util";
+import { PriorityIcon, LabelAdder, RunLocation } from "./ui";
 import { useEscape } from "./useEscape";
 import { Pill } from "./Menu";
 
@@ -119,12 +118,8 @@ export function CreateTask({
           </div>
         </div>
         {/* Run location — agents run in this dir (or a temp dir if it's missing) */}
-        <div className="flex items-center gap-1.5 px-4 pt-1.5 text-[11px]">
-          <HealthDot health={project.health} size={7} />
-          <span className="font-mono text-faint" title={project.repoPath}>
-            将在 {shortPath(project.repoPath) || "（未设置路径）"} 运行
-          </span>
-          {!project.health.exists && <span className="text-amber-600">· 目录不存在，将用临时目录</span>}
+        <div className="px-4 pt-1.5">
+          <RunLocation project={project} />
         </div>
 
         {/* Objective (no title field — AI titles it) */}

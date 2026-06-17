@@ -3,7 +3,8 @@ import type { Task, Group, Session, TaskStatus, Priority } from "@harness/shared
 import { CaretDown, Play, Trash, ArrowsDownUp } from "@phosphor-icons/react";
 import { api } from "./api";
 import { STATUSES, PRIORITIES } from "./constants";
-import { Credential } from "./ui";
+import { Credential, ToolCall, ThinkingBlock } from "./ui";
+import { Markdown } from "./Markdown";
 import { StatusIcon } from "./StatusIcon";
 import { PriorityIcon, LabelAdder } from "./ui";
 import { ScheduleControl } from "./ScheduleControl";
@@ -11,8 +12,9 @@ import { Menu } from "./Menu";
 import { runAction } from "./taskActions";
 
 export type LogLine = {
-  kind: "text" | "thinking" | "tool" | "error" | "done";
+  kind: "text" | "thinking" | "tool" | "error" | "done" | "user";
   text: string;
+  name?: string; // tool name (for kind "tool")
 };
 
 export function TaskDetail({
@@ -22,6 +24,7 @@ export function TaskDetail({
   logs,
   sessionsBump,
   onRun,
+  onReply,
   onPatch,
   onCreateGroup,
   onDelete,
@@ -32,6 +35,7 @@ export function TaskDetail({
   logs: LogLine[];
   sessionsBump: number;
   onRun: () => void;
+  onReply: (text: string) => void;
   onPatch: (patch: Partial<Task>) => void;
   onCreateGroup: () => void;
   onDelete: () => void;
@@ -41,16 +45,26 @@ export function TaskDetail({
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    api.sessions(task.id).then(async (ss) => {
-      setSessions(ss);
-      if (ss.length && logs.length === 0) {
-        setHistory(await api.sessionOutput(ss[ss.length - 1].id).catch(() => ""));
-      } else {
-        setHistory("");
-      }
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    api.sessions(task.id).then(setSessions);
   }, [task.id, sessionsBump]);
+
+  // Prior output, fetched once per task when there are no in-memory logs (i.e. a
+  // reload). Sticky: a later reply (which fills logs) must not wipe it, so prior
+  // context stays above the new turns.
+  useEffect(() => {
+    if (logs.length > 0) {
+      setHistory("");
+      return;
+    }
+    let alive = true;
+    api.sessions(task.id).then(async (ss) => {
+      if (alive && ss.length) setHistory(await api.sessionOutput(ss[ss.length - 1].id).catch(() => ""));
+    });
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [task.id]);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
@@ -166,22 +180,92 @@ export function TaskDetail({
 
       <div
         ref={scrollRef}
-        className="min-h-0 flex-1 overflow-y-auto break-words px-6 py-4 font-mono text-[13px] leading-relaxed"
+        className="min-h-0 flex-1 overflow-y-auto break-words px-6 py-4 text-[13px] leading-relaxed"
       >
         {task.body && (
           <p className="mb-4 whitespace-pre-wrap break-words rounded-md bg-raised/60 px-3 py-2 font-sans text-[13px] text-muted">
             {task.body}
           </p>
         )}
-        {history && logs.length === 0 && <pre className="whitespace-pre-wrap break-words text-ink">{history}</pre>}
-        {logs.map((l, i) => (
-          <Line key={i} l={l} />
-        ))}
+        {history && <Markdown text={history} />}
+        <LogBlocks logs={logs} />
         {!history && logs.length === 0 && (
           <p className="font-sans text-faint">点击「运行」开始，输出会实时流式显示在这里。</p>
         )}
       </div>
+
+      {task.mode === "single" && (sessions.length > 0 || !!history || logs.length > 0) && (
+        <ReplyBox onReply={onReply} disabled={task.status === "running" || task.status === "queued"} />
+      )}
     </main>
+  );
+}
+
+// Render the live log as a chat-like stream: consecutive agent text is merged
+// into one Markdown block; tools/thinking are collapsible; the human's replies
+// show as right-aligned bubbles.
+function LogBlocks({ logs }: { logs: LogLine[] }) {
+  const blocks: ReactNode[] = [];
+  let buf = "";
+  let k = 0;
+  const flush = () => {
+    if (buf.trim()) blocks.push(<Markdown key={k++} text={buf} />);
+    buf = "";
+  };
+  for (const l of logs) {
+    if (l.kind === "text") {
+      buf += (buf ? "\n" : "") + l.text;
+      continue;
+    }
+    flush();
+    if (l.kind === "tool") blocks.push(<ToolCall key={k++} name={l.name ?? "tool"} detail={l.text} />);
+    else if (l.kind === "thinking") blocks.push(<ThinkingBlock key={k++} text={l.text} />);
+    else if (l.kind === "error") blocks.push(<div key={k++} className="my-1 break-words text-xs text-red-600">✕ {l.text}</div>);
+    else if (l.kind === "done") blocks.push(<div key={k++} className="my-2 text-center text-xs text-faint">{l.text}</div>);
+    else if (l.kind === "user")
+      blocks.push(
+        <div key={k++} className="my-2 flex justify-end">
+          <div className="max-w-[85%] whitespace-pre-wrap break-words rounded-lg bg-accent/10 px-3 py-1.5 text-[13px] text-ink">{l.text}</div>
+        </div>,
+      );
+  }
+  flush();
+  return <>{blocks}</>;
+}
+
+// Reply-and-continue box: answer an agent that stopped to ask; resumes its session.
+function ReplyBox({ onReply, disabled }: { onReply: (text: string) => void; disabled: boolean }) {
+  const [v, setV] = useState("");
+  const send = () => {
+    if (v.trim() && !disabled) {
+      onReply(v.trim());
+      setV("");
+    }
+  };
+  return (
+    <div className="flex items-end gap-2 border-t border-line px-6 py-3">
+      <textarea
+        value={v}
+        onChange={(e) => setV(e.target.value)}
+        onKeyDown={(e) => {
+          if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+            e.preventDefault();
+            send();
+          }
+        }}
+        rows={2}
+        disabled={disabled}
+        placeholder={disabled ? "进行中…" : "回复并继续（同一会话，⌘↵ 发送）…"}
+        className="flex-1 resize-none rounded-md border border-line bg-panel px-2.5 py-1.5 text-[13px] text-ink outline-none placeholder:text-faint focus:border-accent disabled:opacity-50"
+      />
+      <button
+        onClick={send}
+        disabled={!v.trim() || disabled}
+        className="rounded-md bg-accent px-3 py-2 text-[13px] font-medium text-accent-fg hover:bg-accent-hover disabled:opacity-40"
+      >
+        发送
+      </button>
+    </div>
   );
 }
 
@@ -245,11 +329,3 @@ function EditableTitle({ title, onSave }: { title: string; onSave: (t: string) =
   );
 }
 
-function Line({ l }: { l: LogLine }) {
-  if (l.kind === "tool") return <div className="my-0.5 break-words text-amber-700/80">⚙ {l.text}</div>;
-  if (l.kind === "error") return <div className="my-0.5 break-words text-red-600">✕ {l.text}</div>;
-  if (l.kind === "done") return <div className="my-2 text-center text-xs text-faint">{l.text}</div>;
-  if (l.kind === "thinking")
-    return <div className="my-0.5 whitespace-pre-wrap break-words italic text-faint">{l.text}</div>;
-  return <div className="my-0.5 whitespace-pre-wrap break-words text-ink">{l.text}</div>;
-}
