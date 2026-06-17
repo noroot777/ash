@@ -29,10 +29,10 @@ MCP 进程通过 `HARNESS_URL` 找 server，默认 `http://localhost:4317`。
 
 ```bash
 # 当前项目可用（local 作用域）
-claude mcp add -e HARNESS_URL=http://localhost:4317 -- node /Users/fjh/code/harness/mcp/dist/index.js
+claude mcp add harness -e HARNESS_URL=http://localhost:4317 -- node /Users/fjh/code/harness/mcp/dist/index.js
 
 # 或所有项目都可用（user 作用域）—— 推荐，编排别的仓库时也能用
-claude mcp add --scope user -e HARNESS_URL=http://localhost:4317 -- node /Users/fjh/code/harness/mcp/dist/index.js
+claude mcp add harness --scope user -e HARNESS_URL=http://localhost:4317 -- node /Users/fjh/code/harness/mcp/dist/index.js
 ```
 
 或提交进仓库、团队共享（项目根 `.mcp.json`）：
@@ -53,6 +53,23 @@ claude mcp add --scope user -e HARNESS_URL=http://localhost:4317 -- node /Users/
 验证：会话里 `/mcp` 看连接状态与工具数；CLI 用 `claude mcp list` / `claude mcp get harness`。重建后开新会话即可（stdio 进程下次调用时重连）。
 
 > Claude Desktop / Cursor 用同样的 `mcpServers` JSON，填到各自的配置文件即可。
+
+## 接入 Codex
+
+同一个 server 通用。Codex 的 `mcp add` 里**服务名是必填位置参数**，env 用 `--env`：
+
+```bash
+codex mcp add harness --env HARNESS_URL=http://localhost:4317 -- node /Users/fjh/code/harness/mcp/dist/index.js
+```
+
+查看 `codex mcp list` / `codex mcp get harness`；删除 `codex mcp remove harness`。写进 `~/.codex/config.toml`：
+
+```toml
+[mcp_servers.harness]
+command = "node"
+args = ["/Users/fjh/code/harness/mcp/dist/index.js"]
+env = { HARNESS_URL = "http://localhost:4317" }
+```
 
 ## 给智能体的话术示例
 
