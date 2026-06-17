@@ -32,7 +32,9 @@ export const api = {
 
   groups: (projectId?: string): Promise<Group[]> =>
     fetch(`/api/groups${projectId ? `?projectId=${projectId}` : ""}`).then(j),
-  createGroup: (g: Partial<Group> & { projectId: string; name: string }): Promise<Group> =>
+  // Create a group. projectId locates the project; repoPath is an agent-friendly
+  // alternative (resolved server-side). One of the two is required.
+  createGroup: (g: Partial<Group> & { name: string; projectId?: string; repoPath?: string }): Promise<Group> =>
     fetch("/api/groups", {
       method: "POST",
       headers: { "content-type": "application/json" },

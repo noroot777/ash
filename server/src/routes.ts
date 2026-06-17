@@ -191,12 +191,34 @@ api.post("/projects/check", async (c) => {
 });
 
 // ── groups ───────────────────────────────────────────────────────────────
+// Create a group inside a project — the entry point an agent calls first to get
+// a groupId for the batch endpoint. The project is resolved by `projectId` or,
+// more agent-friendly, by `repoPath` (agents know the repo, not the internal id).
+// We validate it exists so a group is never orphaned under a bad project id.
 api.post("/groups", async (c) => {
-  const b = await c.req.json<Partial<Group> & { projectId: string; name: string }>();
+  const b = await c.req.json<Partial<Group> & { projectId?: string; name: string; repoPath?: string }>();
+  if (!b.name?.trim()) return c.json({ error: "name required" }, 400);
+  if (b.mode && b.mode !== "parallel" && b.mode !== "serial") {
+    return c.json({ error: `mode 非法: ${b.mode}（只能是 parallel | serial）` }, 400);
+  }
+
+  let project;
+  if (b.projectId) {
+    project = (await db.select().from(projects).where(eq(projects.id, b.projectId))).at(0);
+    if (!project) return c.json({ error: "project not found", projectId: b.projectId }, 404);
+  } else if (b.repoPath) {
+    const hits = (await db.select().from(projects)).filter((p) => p.repoPath === b.repoPath);
+    if (hits.length === 0) return c.json({ error: "没有匹配 repoPath 的项目", repoPath: b.repoPath }, 404);
+    if (hits.length > 1) return c.json({ error: "repoPath 匹配到多个项目，请改用 projectId", repoPath: b.repoPath }, 409);
+    project = hits[0];
+  } else {
+    return c.json({ error: "需要 projectId 或 repoPath 来定位项目" }, 400);
+  }
+
   const row = {
     id: id(),
-    projectId: b.projectId,
-    name: b.name,
+    projectId: project.id,
+    name: b.name.trim(),
     mode: b.mode ?? "parallel",
     useWorktree: b.useWorktree ?? true,
     createdAt: now(),
