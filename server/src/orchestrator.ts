@@ -1,6 +1,6 @@
 import { mkdirSync, createWriteStream } from "node:fs";
 import { join } from "node:path";
-import { eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import type { AgentType, TaskStatus } from "@harness/shared";
 import { db } from "./db/index.js";
 import { tasks, projects, groups, sessions } from "./db/schema.js";
@@ -21,6 +21,20 @@ const AUTONOMY =
 async function setStatus(taskId: string, status: TaskStatus) {
   await db.update(tasks).set({ status, updatedAt: now() }).where(eq(tasks.id, taskId));
   bus.publish({ type: "task.status", taskId, status });
+}
+
+// On (re)start nothing is actually running, so any task still in an in-flight
+// status was interrupted (e.g. the server restarted mid-run). Mark those failed
+// so they're recoverable via retry/reply instead of being stuck forever.
+// awaiting_review is left alone — its gate can still be resolved after a restart.
+export async function reconcileInterrupted(): Promise<void> {
+  const orphaned = await db.select().from(tasks).where(inArray(tasks.status, ["running", "queued"]));
+  if (!orphaned.length) return;
+  await db
+    .update(tasks)
+    .set({ status: "failed", updatedAt: now() })
+    .where(inArray(tasks.status, ["running", "queued"]));
+  console.log(`[harness] reconciled ${orphaned.length} interrupted task(s) → failed`);
 }
 
 // M1: execute a single-agent task in an isolated worktree, stream output over

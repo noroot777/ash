@@ -13,7 +13,7 @@ import type {
   Session,
   TaskStatus,
 } from "@harness/shared";
-import { canStartTask } from "@harness/shared";
+import { canStartTask, isUserSettableStatus, AGENT_TYPES } from "@harness/shared";
 import { db } from "./db/index.js";
 import { projects, groups, tasks, sessions, schedules, agents } from "./db/schema.js";
 import { bus } from "./bus.js";
@@ -24,7 +24,8 @@ import { runDebate, resumeDebate, resumeAtGate } from "./debate/index.js";
 import { resolveGate } from "./debate/gates.js";
 import { detectLocalAgents } from "./detect.js";
 import { projectHealthLight, projectHealthFull, removeWorktree } from "./git.js";
-import type { GateAction } from "@harness/shared";
+import { resumeCommandFor } from "./executors/spawn.js";
+import type { GateAction, AgentType, BatchCreateTasksBody, BatchTaskInput } from "@harness/shared";
 
 export const api = new Hono();
 
@@ -113,6 +114,11 @@ const toSession = (r: typeof sessions.$inferSelect): Session => ({
   ...r,
   role: r.role as Session["role"],
   agentType: r.agentType as Session["agentType"],
+  // Recompute the copy-paste resume command from the session's own fields, so it
+  // always reflects the current format (old rows stored a now-outdated string).
+  resumeCommand: r.cliSessionId
+    ? resumeCommandFor(r.agentType, r.target, r.cwd ?? r.worktreePath ?? ".", r.cliSessionId)
+    : r.resumeCommand,
 });
 
 // ── projects ───────────────────────────────────────────────────────────────
@@ -223,7 +229,7 @@ api.post("/tasks", async (c) => {
     title: b.title,
     body: b.body ?? "",
     mode: b.mode ?? "single",
-    status: (b.status ?? "backlog") as TaskStatus,
+    status: (b.status && isUserSettableStatus(b.status) ? b.status : "backlog") as TaskStatus,
     priority: b.priority ?? "none",
     labels: JSON.stringify(b.labels ?? []),
     dependsOn: JSON.stringify(b.dependsOn ?? []),
@@ -244,6 +250,11 @@ api.patch("/tasks/:id", async (c) => {
   const existing = (await db.select().from(tasks).where(eq(tasks.id, tid))).at(0);
   if (!existing) return c.json({ error: "not found" }, 404);
   const b = await c.req.json<Partial<Task>>();
+  // running/queued/awaiting_review are system-owned — refuse manual changes so a
+  // human can't desync the state (e.g. mark a task "running" when nothing runs).
+  if (b.status !== undefined && !isUserSettableStatus(b.status)) {
+    return c.json({ error: "该状态由系统管理，不能手动设置", status: b.status }, 409);
+  }
   const patch: Record<string, unknown> = { updatedAt: now() };
   if (b.title !== undefined) patch.title = b.title;
   if (b.body !== undefined) patch.body = b.body;
@@ -282,6 +293,101 @@ api.post("/groups/:id/run", async (c) => {
   if (!g) return c.json({ error: "not found" }, 404);
   void runGroup(gid);
   return c.json({ started: true }, 202);
+});
+
+// Batch-create single-mode tasks into an EXISTING group, agent-facing (§ interfaces).
+// The caller passes a list of tasks; we pre-generate their ids so dependency edges
+// can reference siblings *by local key* (the real ids don't exist at call time),
+// and `chain:true` is sugar that wires A→B→C→D in array order. projectId is
+// inherited from the group. Optionally fires the group (runGroup) right after.
+api.post("/groups/:groupId/tasks/batch", async (c) => {
+  const groupId = c.req.param("groupId");
+  const g = (await db.select().from(groups).where(eq(groups.id, groupId))).at(0);
+  if (!g) return c.json({ error: "group not found" }, 404);
+
+  const b = await c.req.json<BatchCreateTasksBody>();
+  const specs: BatchTaskInput[] = Array.isArray(b.tasks) ? b.tasks : [];
+  if (specs.length === 0) return c.json({ error: "tasks 不能为空" }, 400);
+
+  // Validate every agent type up front (task-level or inherited default) so we
+  // fail the whole batch cleanly instead of half-inserting.
+  for (const [i, s] of specs.entries()) {
+    const at = s.agentType ?? b.defaults?.agentType;
+    if (at && !AGENT_TYPES.includes(at)) {
+      return c.json({ error: `tasks[${i}].agentType 未知: ${at}`, allowed: AGENT_TYPES }, 400);
+    }
+  }
+
+  // Pre-generate ids; map each declared local key → its id for dependency resolution.
+  const ids = specs.map(() => id());
+  const keyToId = new Map<string, string>();
+  specs.forEach((s, i) => { if (s.key) keyToId.set(s.key, ids[i]); });
+
+  const firstLine = (body?: string) =>
+    (body ?? "").split("\n").map((l) => l.trim()).find(Boolean)?.slice(0, 30) ?? "";
+
+  // Distinct, increasing timestamps so serial-mode ordering (sorted by createdAt)
+  // is stable too — not only the parallel-mode dependsOn path.
+  const base = Date.now();
+  const rows = specs.map((s, i) => {
+    const explicitTitle = (s.title ?? "").trim();
+    // dependsOn: sibling key → its id; otherwise treat as an existing task id.
+    const deps = new Set((s.dependsOn ?? []).map((d) => keyToId.get(d) ?? d));
+    if (b.chain && i > 0) deps.add(ids[i - 1]);
+    const ts = new Date(base + i).toISOString();
+    return {
+      id: ids[i],
+      projectId: g.projectId,
+      groupId,
+      parentId: null as string | null,
+      title: explicitTitle || firstLine(s.body) || `任务 ${i + 1}`,
+      body: s.body ?? "",
+      mode: "single",
+      status: "backlog",
+      priority: s.priority ?? b.defaults?.priority ?? "none",
+      labels: JSON.stringify(s.labels ?? b.defaults?.labels ?? []),
+      dependsOn: JSON.stringify([...deps]),
+      agentType: (s.agentType ?? b.defaults?.agentType ?? null) as AgentType | null,
+      autoTitle: !explicitTitle, // no explicit title → let the first run name it
+      debate: null as string | null,
+      scheduleId: null as string | null,
+      createdAt: ts,
+      updatedAt: ts,
+    };
+  });
+
+  await db.insert(tasks).values(rows);
+  if (b.run) void runGroup(groupId);
+  return c.json(
+    { groupId, run: !!b.run, tasks: rows.map((r) => toTask(r as typeof tasks.$inferSelect)) },
+    201,
+  );
+});
+
+// Edit a group (name / parallel-serial / worktree isolation).
+api.patch("/groups/:id", async (c) => {
+  const gid = c.req.param("id");
+  const existing = (await db.select().from(groups).where(eq(groups.id, gid))).at(0);
+  if (!existing) return c.json({ error: "not found" }, 404);
+  const b = await c.req.json<Partial<Group>>();
+  const patch: Record<string, unknown> = {};
+  if (b.name !== undefined) {
+    if (!b.name.trim()) return c.json({ error: "name required" }, 400);
+    patch.name = b.name.trim();
+  }
+  if (b.mode !== undefined) patch.mode = b.mode;
+  if (b.useWorktree !== undefined) patch.useWorktree = b.useWorktree;
+  if (Object.keys(patch).length) await db.update(groups).set(patch).where(eq(groups.id, gid));
+  const updated = (await db.select().from(groups).where(eq(groups.id, gid))).at(0)!;
+  return c.json(updated);
+});
+
+// Delete a group. Tasks are NOT deleted — they're just ungrouped (groupId null).
+api.delete("/groups/:id", async (c) => {
+  const gid = c.req.param("id");
+  await db.update(tasks).set({ groupId: null, updatedAt: now() }).where(eq(tasks.groupId, gid));
+  await db.delete(groups).where(eq(groups.id, gid));
+  return c.json({ deleted: true });
 });
 
 // ── sessions (traceability credentials, §13) ───────────────────────────────

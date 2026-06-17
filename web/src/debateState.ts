@@ -28,7 +28,7 @@ export type DebateState = {
 export const emptyDebate = (): DebateState => ({ turns: [], gate: null });
 
 const speakerOf = (role: string): DebateSpeaker =>
-  role === "debaterB" ? "B" : role === "implementer" ? "impl" : "A";
+  role === "debaterB" ? "B" : role === "implementer" ? "impl" : role === "reviewer" ? "review" : "A";
 
 // Fold a server event into a task's debate state (chat-timeline model, §12).
 export function applyDebateEvent(s: DebateState, ev: ServerEvent): DebateState {

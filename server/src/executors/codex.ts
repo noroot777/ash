@@ -1,7 +1,7 @@
 import { createInterface } from "node:readline";
 import type { AgentEvent, ExecTarget } from "@harness/shared";
 import type { AgentExecutor, RunHandle, RunOpts } from "./types.js";
-import { spawnAgent, resumeFor, spawnErrorMessage } from "./spawn.js";
+import { spawnAgent, resumeFor, resumeInner, spawnErrorMessage } from "./spawn.js";
 
 // Drives the real `codex` CLI in non-interactive JSON mode (prompt via stdin, `-`).
 //   first:  codex exec --json --skip-git-repo-check -C <cwd>
@@ -22,7 +22,9 @@ export class CodexExecutor implements AgentExecutor {
   }
 
   resumeCommand(cwd: string, sessionId: string): string {
-    return resumeFor(this.target, cwd, `codex exec resume ${sessionId}`);
+    // Human-friendly copy command: interactive resume (shows the session + lets
+    // you continue). The harness's own headless resume uses `exec resume` in run().
+    return resumeFor(this.target, cwd, resumeInner.codex(sessionId));
   }
 
   run(opts: RunOpts): RunHandle {

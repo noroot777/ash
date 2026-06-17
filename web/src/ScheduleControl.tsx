@@ -71,9 +71,11 @@ export function ScheduleControl({ taskId }: { taskId: string }) {
           title="5 字段 cron（本地时间）。例：0 9 * * 1-5 工作日 9 点"
         />
       )}
-      <button onClick={save} className="rounded-md bg-overlay px-2 py-1 text-ink hover:bg-overlay">
-        {kind === "none" ? "清除" : "保存"}
-      </button>
+      {(kind !== "none" || sched) && (
+        <button onClick={save} className="rounded-md bg-overlay px-2 py-1 text-ink hover:bg-overlay">
+          {kind === "none" ? "清除定时" : "保存"}
+        </button>
+      )}
       {sched && (
         <span className="text-faint">
           {sched.kind === "once" ? `将于 ${new Date(sched.at!).toLocaleString()} 运行` : `cron ${sched.cron}`}

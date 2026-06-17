@@ -1,4 +1,4 @@
-import type { Project, ProjectView, ProjectHealth, Task, Session, Group, GateAction, Schedule, AgentExecutorProfile } from "@harness/shared";
+import type { Project, ProjectView, ProjectHealth, Task, Session, Group, GateAction, Schedule, AgentExecutorProfile, BatchCreateTasksBody } from "@harness/shared";
 
 const j = async (r: Response) => {
   if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
@@ -40,6 +40,24 @@ export const api = {
     }).then(j),
   runGroup: (id: string): Promise<unknown> =>
     fetch(`/api/groups/${id}/run`, { method: "POST" }).then(j),
+  // Batch-create chained single tasks into an existing group (agent-facing API).
+  createTasksBatch: (
+    groupId: string,
+    body: BatchCreateTasksBody,
+  ): Promise<{ groupId: string; run: boolean; tasks: Task[] }> =>
+    fetch(`/api/groups/${groupId}/tasks/batch`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    }).then(j),
+  updateGroup: (id: string, patch: Partial<Pick<Group, "name" | "mode" | "useWorktree">>): Promise<Group> =>
+    fetch(`/api/groups/${id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(patch),
+    }).then(j),
+  deleteGroup: (id: string): Promise<unknown> =>
+    fetch(`/api/groups/${id}`, { method: "DELETE" }).then(j),
 
   tasks: (): Promise<Task[]> => fetch("/api/tasks").then(j),
   task: (id: string): Promise<Task> => fetch(`/api/tasks/${id}`).then(j),

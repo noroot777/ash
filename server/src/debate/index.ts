@@ -173,6 +173,12 @@ function applyTurn(ctx: Ctx, sp: "A" | "B", t: Turn) {
   }
 }
 
+// 收敛判定：协作=双方都标"可收敛"即合并完成（无分歧概念）；辩论=双方都就绪且都自称与对方一致才算共识，否则是澄清后的分歧。
+function isConsensus(ctx: Ctx): boolean {
+  const both = ctx.raisedA && ctx.raisedB;
+  return ctx.cfg.style === "collaborate" ? both : both && ctx.agreesA && ctx.agreesB;
+}
+
 async function loadBase(taskId: string) {
   const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!task || !task.debate) throw new Error("debate config missing");
@@ -197,10 +203,13 @@ export async function runDebate(taskId: string): Promise<void> {
     const { cfg, exA, exB, cwd } = base;
     await setStatus(taskId, "running");
 
+    // Title the task from its topic (concurrent, non-blocking) like a single task.
+    if (base.task.autoTitle) void genDebateTitle(taskId, cfg.topic, exA, cwd);
+
     // Round 1 — blind opening, parallel.
     const [a, b] = await Promise.all([
-      runTurn({ taskId, role: "debaterA", speaker: "A", round: 1, executor: exA, prompt: P.opening(cfg.topic, cwd), cwd }),
-      runTurn({ taskId, role: "debaterB", speaker: "B", round: 1, executor: exB, prompt: P.opening(cfg.topic, cwd), cwd }),
+      runTurn({ taskId, role: "debaterA", speaker: "A", round: 1, executor: exA, prompt: P.opening(cfg.topic, cwd, cfg.style), cwd }),
+      runTurn({ taskId, role: "debaterB", speaker: "B", round: 1, executor: exB, prompt: P.opening(cfg.topic, cwd, cfg.style), cwd }),
     ]);
     if (failed(a) || failed(b)) return void (await setStatus(taskId, "failed"));
 
@@ -211,7 +220,7 @@ export async function runDebate(taskId: string): Promise<void> {
       agreesA: a.agrees, agreesB: b.agrees, conclusionA: a.conclusion, conclusionB: b.conclusion,
     };
     if (!(await runRebuttalLoop(ctx))) return;
-    await gateAndImplement(ctx);
+    await concludeOrImplement(ctx);
   } catch (err) {
     failDebate(taskId, err);
   } finally {
@@ -275,7 +284,7 @@ export async function resumeDebate(taskId: string): Promise<void> {
       runTurn({
         taskId, role: s === "A" ? "debaterA" : "debaterB", speaker: s, round,
         executor: s === "A" ? exA : exB,
-        prompt: round === 1 ? P.opening(cfg.topic, cwd) : P.rebuttal(s === "A" ? ctx.lastB : ctx.lastA, round),
+        prompt: round === 1 ? P.opening(cfg.topic, cwd, cfg.style) : P.rebuttal(s === "A" ? ctx.lastB : ctx.lastA, round, cfg.style),
         cwd, rowId: s === "A" ? ctx.A.rowId : ctx.B.rowId,
         resumeCliId: (s === "A" ? ctx.A.cliId : ctx.B.cliId) || undefined,
       });
@@ -292,7 +301,7 @@ export async function resumeDebate(taskId: string): Promise<void> {
     ctx.round = R;
 
     if (!(await runRebuttalLoop(ctx))) return;
-    await gateAndImplement(ctx);
+    await concludeOrImplement(ctx);
   } catch (err) {
     failDebate(taskId, err);
   } finally {
@@ -306,6 +315,29 @@ function failDebate(taskId: string, err: unknown) {
     event: { kind: "error", message: String(err instanceof Error ? err.message : err) },
   });
   void setStatus(taskId, "failed");
+}
+
+// Auto-generate a short list-friendly title from the topic — the debate analog of
+// a single task's auto-title. Runs concurrently with round 1 (it doesn't block the
+// debate) and is best-effort: on any failure the provisional title simply stays.
+async function genDebateTitle(taskId: string, topic: string, ex: AgentExecutor, cwd: string): Promise<void> {
+  try {
+    const handle = ex.run({ prompt: P.title(topic), cwd });
+    let text = "";
+    for await (const event of handle.events) {
+      if (event.kind === "text") text += event.text;
+    }
+    const line = text.split("\n").map((l) => l.trim()).find(Boolean) ?? "";
+    const newTitle = line.replace(/^标题[:：]\s*/, "").replace(/[`*"「」]/g, "").trim().slice(0, 20);
+    if (!newTitle) return;
+    // Don't clobber a title the user edited in the meantime.
+    const cur = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
+    if (!cur?.autoTitle) return;
+    await db.update(tasks).set({ title: newTitle, autoTitle: false, updatedAt: now() }).where(eq(tasks.id, taskId));
+    bus.publish({ type: "task.title", taskId, title: newTitle });
+  } catch {
+    /* best effort */
+  }
 }
 
 // Resume a debate that is parked at a gate but whose in-memory gate was lost (the
@@ -343,8 +375,16 @@ export async function resumeAtGate(taskId: string, action: GateAction): Promise<
     await setStatus(taskId, "running");
 
     if (!hasImpl) {
-      // G1 (consensus gate).
+      // G1 gate (辩论=收敛门 / 协作=方案门).
       if (action.kind === "reject") return void (await setStatus(taskId, "canceled"));
+      if (base.cfg.style !== "collaborate") {
+        // 辩论：仅讨论 —— 放行=结束(done)，注入/提问=再辩后再停。不实现。
+        if (action.kind === "approve") return void (await setStatus(taskId, "done"));
+        await reDebate(ctx, action.kind, action.text);
+        await finishDiscussion(ctx);
+        return;
+      }
+      // 协作：放行=按方案实现，注入/提问=再议后重开方案门。
       if (action.kind === "approve") return void (await runImplement(ctx, { note: action.text ?? "", chosenSide: action.side }));
       await reDebate(ctx, action.kind, action.text); // inject / ask
       await gateAndImplement(ctx); // re-park G1, then implement
@@ -359,10 +399,10 @@ export async function resumeAtGate(taskId: string, action: GateAction): Promise<
     if (action.kind === "reject") return void (await setStatus(taskId, "canceled"));
     if (action.kind !== "approve") {
       // inject / ask → re-run the implementer with the feedback, then re-park G2.
-      const prompt = action.kind === "inject" ? P.injectFeedback(action.text, ctx.round) : P.question(action.text, ctx.round);
+      const prompt = action.kind === "inject" ? P.injectFeedback(action.text, ctx.round, base.cfg.style) : P.question(action.text, ctx.round, base.cfg.style);
       await runTurn({ taskId, role: "implementer", speaker: "impl", round: ctx.round + 1, executor: exImpl, prompt, cwd: ws.path, rowId: sImpl?.id, resumeCliId: sImpl?.cliSessionId ?? undefined, branch: ws.branch });
       const res = await runGate(taskId, "G2", async (k, t) => {
-        const p = k === "inject" ? P.injectFeedback(t, ctx.round) : P.question(t, ctx.round);
+        const p = k === "inject" ? P.injectFeedback(t, ctx.round, base.cfg.style) : P.question(t, ctx.round, base.cfg.style);
         await runTurn({ taskId, role: "implementer", speaker: "impl", round: ctx.round + 1, executor: exImpl, prompt: p, cwd: ws.path, rowId: sImpl?.id, resumeCliId: sImpl?.cliSessionId ?? undefined, branch: ws.branch });
       });
       if (!res.approved) return void (await setStatus(taskId, "canceled"));
@@ -384,14 +424,14 @@ async function runRebuttalLoop(ctx: Ctx): Promise<boolean> {
     ctx.round++;
     const at = await runTurn({
       taskId, role: "debaterA", speaker: "A", round: ctx.round, executor: exA,
-      prompt: P.rebuttal(ctx.lastB, ctx.round), cwd, rowId: ctx.A.rowId, resumeCliId: ctx.A.cliId || undefined,
+      prompt: P.rebuttal(ctx.lastB, ctx.round, ctx.cfg.style), cwd, rowId: ctx.A.rowId, resumeCliId: ctx.A.cliId || undefined,
     });
     if (failed(at)) { await setStatus(taskId, "failed"); return false; }
     applyTurn(ctx, "A", at);
     if (ctx.raisedA && ctx.raisedB) break;
     const bt = await runTurn({
       taskId, role: "debaterB", speaker: "B", round: ctx.round, executor: exB,
-      prompt: P.rebuttal(ctx.lastA, ctx.round), cwd, rowId: ctx.B.rowId, resumeCliId: ctx.B.cliId || undefined,
+      prompt: P.rebuttal(ctx.lastA, ctx.round, ctx.cfg.style), cwd, rowId: ctx.B.rowId, resumeCliId: ctx.B.cliId || undefined,
     });
     if (failed(bt)) { await setStatus(taskId, "failed"); return false; }
     applyTurn(ctx, "B", bt);
@@ -403,7 +443,7 @@ async function runRebuttalLoop(ctx: Ctx): Promise<boolean> {
 // and when resuming a gate after a restart).
 async function reDebate(ctx: Ctx, kind: "inject" | "ask", text: string) {
   ctx.round++;
-  const prompt = kind === "inject" ? P.injectFeedback(text, ctx.round) : P.question(text, ctx.round);
+  const prompt = kind === "inject" ? P.injectFeedback(text, ctx.round, ctx.cfg.style) : P.question(text, ctx.round, ctx.cfg.style);
   const at = await runTurn({ taskId: ctx.taskId, role: "debaterA", speaker: "A", round: ctx.round, executor: ctx.exA, prompt, cwd: ctx.cwd, rowId: ctx.A.rowId, resumeCliId: ctx.A.cliId || undefined });
   applyTurn(ctx, "A", at);
   const bt = await runTurn({ taskId: ctx.taskId, role: "debaterB", speaker: "B", round: ctx.round, executor: ctx.exB, prompt, cwd: ctx.cwd, rowId: ctx.B.rowId, resumeCliId: ctx.B.cliId || undefined });
@@ -417,7 +457,7 @@ async function gateAndImplement(ctx: Ctx): Promise<void> {
   let chosenSide: "A" | "B" | undefined;
   if (cfg.gateG1 === "on") {
     const res = await runGate(taskId, "G1", (k, t) => reDebate(ctx, k, t), () => ({
-      consensus: ctx.raisedA && ctx.raisedB && ctx.agreesA && ctx.agreesB,
+      consensus: isConsensus(ctx),
       conclusionA: ctx.conclusionA ?? null,
       conclusionB: ctx.conclusionB ?? null,
     }));
@@ -428,18 +468,48 @@ async function gateAndImplement(ctx: Ctx): Promise<void> {
   await runImplement(ctx, { note, chosenSide });
 }
 
+// 辩论=仅讨论：收敛后到此即止，结论就是交付物（不实现、不审查、不建 worktree）。
+// 收敛门(G1)开 → 让人读结论后放行(=结束)/打回(=取消)/注入·提问(=再辩)；关 → 直接 done。
+async function finishDiscussion(ctx: Ctx): Promise<void> {
+  const { taskId, cfg } = ctx;
+  if (cfg.gateG1 === "on") {
+    const res = await runGate(taskId, "G1", (k, t) => reDebate(ctx, k, t), () => ({
+      consensus: isConsensus(ctx),
+      conclusionA: ctx.conclusionA ?? null,
+      conclusionB: ctx.conclusionB ?? null,
+    }));
+    if (!res.approved) return void (await setStatus(taskId, "canceled"));
+  }
+  await setStatus(taskId, "done"); // 讨论结束，结论即是产出
+}
+
+// 风格分流：协作→门→实现+审查；辩论→出结论即止。
+async function concludeOrImplement(ctx: Ctx): Promise<void> {
+  if (ctx.cfg.style === "collaborate") await gateAndImplement(ctx);
+  else await finishDiscussion(ctx);
+}
+
 // Implement stage — chosen side implements in an isolated worktree, resuming its
 // own debate session. Honest directive: never claims consensus when there wasn't.
 async function runImplement(ctx: Ctx, opts: { note: string; chosenSide?: "A" | "B" }): Promise<void> {
   const { taskId, cfg, exA, exB } = ctx;
-  const consensus = ctx.raisedA && ctx.raisedB && ctx.agreesA && ctx.agreesB;
+  const consensus = isConsensus(ctx);
+  const collab = cfg.style === "collaborate";
   const side = opts.chosenSide ?? cfg.implementer; // human pick > config default
   const exImpl = side === "A" ? exA : exB;
   const implCliId = side === "A" ? ctx.A.cliId : ctx.B.cliId;
   const ws = await resolveWorkspace(ctx.project.repoPath, taskId, true);
-  const finalDiscussion = `【辩手A 最终】\n${ctx.lastA}\n\n【辩手B 最终】\n${ctx.lastB}`;
+  const nameA = collab ? "成员A" : "辩手A";
+  const nameB = collab ? "成员B" : "辩手B";
+  const finalDiscussion = `【${nameA} 最终】\n${ctx.lastA}\n\n【${nameB} 最终】\n${ctx.lastB}`;
   let directive: string;
-  if (consensus) {
+  if (collab) {
+    // 协作：实现一份合并出来的统一方案，不存在"选边"。
+    const plan = ctx.conclusionA || ctx.conclusionB || "见上方双方讨论";
+    directive = consensus
+      ? `你们已合并出一份统一方案。请按该统一方案实现：${plan}。`
+      : `请综合双方讨论，按你判断最完整的统一方案实现（由${side === "A" ? "成员A" : "成员B"}落地）。`;
+  } else if (consensus) {
     directive = `双方已达成共识。请按共识结论实现：${ctx.conclusionA || ctx.conclusionB || "见上方讨论"}。`;
   } else {
     const who = side === "A" ? "辩手A" : "辩手B";
@@ -455,9 +525,22 @@ async function runImplement(ctx: Ctx, opts: { note: string; chosenSide?: "A" | "
   });
   if (failed(it)) return void (await setStatus(taskId, "failed"));
 
+  // Code review by the OTHER debater (the non-implementer side) — it inspects the
+  // implementer's diff in the worktree and reports issues / approves. Resumes its
+  // own debate session so it reviews against the plan it argued. Best-effort: a
+  // failed review doesn't block (the human still gates at G2).
+  const reviewerSide = side === "A" ? "B" : "A";
+  const exRev = reviewerSide === "A" ? exA : exB;
+  const rev = reviewerSide === "A" ? ctx.A : ctx.B;
+  await runTurn({
+    taskId, role: "reviewer", speaker: "review", round: ctx.round + 2, executor: exRev,
+    prompt: P.review(cfg.topic, ws.path), cwd: ws.path,
+    rowId: rev.rowId, resumeCliId: rev.cliId || undefined, branch: ws.branch,
+  });
+
   if (cfg.gateG2 === "on") {
     const res = await runGate(taskId, "G2", async (kind, text) => {
-      const prompt = kind === "inject" ? P.injectFeedback(text, ctx.round) : P.question(text, ctx.round);
+      const prompt = kind === "inject" ? P.injectFeedback(text, ctx.round, cfg.style) : P.question(text, ctx.round, cfg.style);
       await runTurn({ taskId, role: "implementer", speaker: "impl", round: ctx.round + 1, executor: exImpl, prompt, cwd: ws.path, rowId: it.rowId, resumeCliId: it.cliId, branch: ws.branch });
     });
     if (!res.approved) return void (await setStatus(taskId, "canceled"));

@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { join, extname, normalize } from "node:path";
 import { api } from "./routes.js";
 import { ensureSchema } from "./db/index.js";
+import { reconcileInterrupted } from "./orchestrator.js";
 import { startScheduler } from "./schedules.js";
 
 // Never let a stray async error (e.g. an SSE write to a disconnected client)
@@ -14,6 +15,7 @@ process.on("unhandledRejection", (e) => console.error("[harness] unhandledReject
 process.on("uncaughtException", (e) => console.error("[harness] uncaughtException:", e));
 
 await ensureSchema();
+await reconcileInterrupted(); // recover tasks left "running"/"queued" by a previous crash/restart
 startScheduler();
 
 const app = new Hono();

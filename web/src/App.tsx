@@ -1,12 +1,12 @@
 import { useEffect, useState, useCallback, useMemo } from "react";
-import type { Task, ProjectView, Group, AgentEvent } from "@harness/shared";
+import type { Task, ProjectView, Group, AgentEvent, DebateStyle } from "@harness/shared";
 import { NotePencil, CaretDown, MagnifyingGlass, GearSix } from "@phosphor-icons/react";
 import { api } from "./api";
 import { useServerEvents } from "./useEvents";
 import { TaskList, orderedTasks } from "./TaskList";
 import { TaskDetail, type LogLine } from "./TaskDetail";
 import { CommandPalette, type Command } from "./CommandPalette";
-import { STATUSES, PRIORITIES } from "./constants";
+import { PRIORITIES } from "./constants";
 import { CreateTask } from "./CreateTask";
 import { DebateModal } from "./DebateComposer";
 import { DebateView } from "./DebateView";
@@ -15,6 +15,7 @@ import { AgentsPanel } from "./AgentsPanel";
 import { Board } from "./Board";
 import { Menu } from "./Menu";
 import { NewProjectModal, NewGroupModal, ConfirmModal } from "./Modal";
+import { GroupsPanel } from "./GroupsPanel";
 import { ProjectSettings } from "./ProjectSettings";
 import { HealthDot } from "./ui";
 import { shortPath } from "./util";
@@ -38,7 +39,8 @@ export function App() {
   const [newProjectOpen, setNewProjectOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [newGroupOpen, setNewGroupOpen] = useState(false);
-  const [debateOpen, setDebateOpen] = useState(false);
+  const [groupsOpen, setGroupsOpen] = useState(false);
+  const [debateOpen, setDebateOpen] = useState<DebateStyle | null>(null);
   const [confirmDel, setConfirmDel] = useState<{ id: string; title: string } | null>(null);
   const [view, setView] = useState<"list" | "board">("list");
 
@@ -186,17 +188,32 @@ export function App() {
     setSettingsOpen(false);
   }, [projectId]);
 
-  const doCreateGroup = useCallback(
+  const addGroup = useCallback(
     async (name: string, mode: "parallel" | "serial") => {
       if (!projectId) return;
       const g = await api.createGroup({ projectId, name, mode });
       setGroups((gs) => [...gs, g]);
-      setNewGroupOpen(false);
     },
     [projectId],
   );
+  const doCreateGroup = useCallback(
+    async (name: string, mode: "parallel" | "serial") => {
+      await addGroup(name, mode);
+      setNewGroupOpen(false);
+    },
+    [addGroup],
+  );
+  const updateGroup = useCallback(async (id: string, patch: Partial<Pick<Group, "name" | "mode" | "useWorktree">>) => {
+    const g = await api.updateGroup(id, patch);
+    setGroups((gs) => gs.map((x) => (x.id === id ? g : x)));
+  }, []);
+  const deleteGroup = useCallback(async (id: string) => {
+    await api.deleteGroup(id);
+    setGroups((gs) => gs.filter((x) => x.id !== id));
+    setTasks((ts) => ts.map((t) => (t.groupId === id ? { ...t, groupId: null } : t))); // members kept, just ungrouped
+  }, []);
 
-  const anyModal = createOpen || agentsOpen || newProjectOpen || settingsOpen || newGroupOpen || debateOpen || !!confirmDel;
+  const anyModal = createOpen || agentsOpen || newProjectOpen || settingsOpen || newGroupOpen || groupsOpen || !!debateOpen || !!confirmDel;
 
   // ── keyboard navigation ────────────────────────────────────────────────
   useEffect(() => {
@@ -238,8 +255,10 @@ export function App() {
   const commands = useMemo<Command[]>(() => {
     const cmds: Command[] = [
       { id: "new", label: "新建任务", hint: "C", run: () => setCreateOpen(true) },
-      { id: "debate", label: "发起对抗 (/debate)", run: () => setDebateOpen(true) },
+      { id: "pair-debate", label: "新建辩论 · 给你答案 (/pair)", run: () => setDebateOpen("debate") },
+      { id: "pair-collab", label: "新建协作 · 给你代码 (/pair)", run: () => setDebateOpen("collaborate") },
       { id: "newgroup", label: "新建分组", run: () => setNewGroupOpen(true) },
+      { id: "groups", label: "分组管理", run: () => setGroupsOpen(true) },
       { id: "newproject", label: "新建项目", run: () => setNewProjectOpen(true) },
       { id: "agents", label: "管理智能体执行器", run: () => setAgentsOpen(true) },
     ];
@@ -248,8 +267,8 @@ export function App() {
       const a = runAction(current.status);
       if (a.canClick) cmds.push({ id: "run", label: `${a.label}：${current.title}`, hint: "R", run: () => primary(current) });
       cmds.push({ id: "del", label: `删除：${current.title}`, run: () => del(current.id, current.title) });
-      for (const s of STATUSES)
-        cmds.push({ id: "st-" + s.key, group: "设为状态", label: s.label, run: () => patch(current.id, { status: s.key }) });
+      // Status is changed inside the task (detail dropdown) or by dragging on the
+      // board — not via a global command, so it stays tied to a specific task.
       for (const p of PRIORITIES)
         cmds.push({ id: "pr-" + p.key, group: "设为优先级", label: p.label, run: () => patch(current.id, { priority: p.key }) });
     }
@@ -308,6 +327,9 @@ export function App() {
               看板
             </button>
           </div>
+          <button onClick={() => setGroupsOpen(true)} className="rounded-md px-2.5 py-1.5 text-[12px] text-muted transition-colors hover:bg-raised hover:text-ink" title="分组管理">
+            分组
+          </button>
           <button onClick={() => setAgentsOpen(true)} className="rounded-md px-2.5 py-1.5 text-[12px] text-muted transition-colors hover:bg-raised hover:text-ink" title="智能体执行器">
             智能体
           </button>
@@ -354,6 +376,17 @@ export function App() {
         <ProjectSettings project={project} onClose={() => setSettingsOpen(false)} onSave={doUpdateProject} onDelete={doDeleteProject} />
       )}
       {newGroupOpen && <NewGroupModal onClose={() => setNewGroupOpen(false)} onCreate={doCreateGroup} />}
+      {groupsOpen && (
+        <GroupsPanel
+          groups={groups}
+          tasks={visible}
+          onClose={() => setGroupsOpen(false)}
+          onRun={(id) => api.runGroup(id)}
+          onUpdate={updateGroup}
+          onDelete={deleteGroup}
+          onCreate={addGroup}
+        />
+      )}
       {confirmDel && (
         <ConfirmModal
           title="删除任务"
@@ -364,16 +397,17 @@ export function App() {
           onClose={() => setConfirmDel(null)}
         />
       )}
-      {debateOpen && project && <DebateModal project={project} onClose={() => setDebateOpen(false)} onCreated={onTaskCreated} />}
+      {debateOpen && project && <DebateModal project={project} initialStyle={debateOpen} onClose={() => setDebateOpen(null)} onCreated={onTaskCreated} />}
       {createOpen && project && (
         <CreateTask
           project={project}
           groups={groups}
           onClose={() => setCreateOpen(false)}
           onCreated={(t) => onTaskCreated(t)}
-          onDebate={() => {
+          onCreateGroup={() => setNewGroupOpen(true)}
+          onDebate={(style) => {
             setCreateOpen(false);
-            setDebateOpen(true);
+            setDebateOpen(style);
           }}
         />
       )}

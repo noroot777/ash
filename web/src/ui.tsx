@@ -198,13 +198,6 @@ export function LabelAdder({ onAdd }: { onAdd: (label: string) => void }) {
   );
 }
 
-const ROLE_LABEL: Record<string, string> = {
-  single: "single",
-  debaterA: "辩手A",
-  debaterB: "辩手B",
-  implementer: "实现方",
-};
-
 // Slim per-speech variant — just the two copy buttons (resume command + session
 // id), to sit in a debate bubble footer where the role/agent are already shown.
 export function ResumeButtons({ s }: { s: Session }) {
@@ -237,7 +230,8 @@ export function ResumeButtons({ s }: { s: Session }) {
   );
 }
 
-// Traceability credential chip — copy the ready-to-paste resume command (§13).
+// Traceability credential chip — compact: executor + copy-resume + id. The cwd
+// and branch live in the executor's hover tooltip to keep it on one line (§13).
 export function Credential({ s }: { s: Session }) {
   const [copied, setCopied] = useState<string | null>(null);
   const copy = (label: string, text: string) => {
@@ -245,26 +239,19 @@ export function Credential({ s }: { s: Session }) {
     setCopied(label);
     setTimeout(() => setCopied(null), 1200);
   };
+  const cwdHint = [s.cwd, s.branch ? `分支 ${s.branch}` : ""].filter(Boolean).join("  ·  ");
   return (
-    <div className="flex items-center gap-1.5 rounded-md border border-line bg-raised/50 px-2 py-1 text-xs">
-      <span className="text-muted">{ROLE_LABEL[s.role] ?? s.role}</span>
-      <span className="text-faint">·</span>
-      <span className="text-muted">{s.executor}</span>
-      {s.cwd && (
-        <>
-          <span className="text-faint">·</span>
-          <span className="font-mono text-[11px] text-faint" title={s.cwd}>
-            {s.cwd.includes("/scratch/") ? "⚠ 临时目录" : shortPath(s.cwd)}
-            {s.branch ? ` (${s.branch})` : ""}
-          </span>
-        </>
+    <div className="inline-flex items-center gap-1.5 rounded-md border border-line bg-raised/50 px-2 py-1 text-[11px]">
+      <span className="text-muted" title={cwdHint || s.executor}>{s.executor}</span>
+      {s.cwd?.includes("/scratch/") && (
+        <span className="text-amber-600" title="临时目录（项目无有效仓库）">⚠</span>
       )}
       <button
         onClick={() => copy("cmd", s.resumeCommand ?? "")}
-        className="ml-1 rounded bg-overlay px-1.5 py-0.5 text-ink hover:bg-overlay"
+        className="ml-0.5 rounded bg-overlay px-1.5 py-0.5 text-ink hover:bg-overlay"
         title={s.resumeCommand ?? ""}
       >
-        {copied === "cmd" ? "已复制" : "复制 resume 命令"}
+        {copied === "cmd" ? "已复制" : "复制 resume"}
       </button>
       <button
         onClick={() => copy("id", s.cliSessionId ?? "")}

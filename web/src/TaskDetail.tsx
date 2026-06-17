@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { Task, Group, Session, TaskStatus, Priority } from "@harness/shared";
+import { isUserSettableStatus } from "@harness/shared";
 import { CaretDown, Play, Trash, ArrowsDownUp } from "@phosphor-icons/react";
 import { api } from "./api";
 import { STATUSES, PRIORITIES } from "./constants";
@@ -10,6 +11,7 @@ import { PriorityIcon, LabelAdder } from "./ui";
 import { ScheduleControl } from "./ScheduleControl";
 import { Menu } from "./Menu";
 import { runAction } from "./taskActions";
+import { groupLabel } from "./util";
 
 export type LogLine = {
   kind: "text" | "thinking" | "tool" | "error" | "done" | "user";
@@ -99,94 +101,100 @@ export function TaskDetail({
           </button>
         </div>
 
-        {/* Property bar */}
-        <div className="mt-3 flex flex-wrap items-center gap-1.5">
-          <Prop
-            value={task.status}
-            onChange={(v) => onPatch({ status: v as TaskStatus })}
-            options={STATUSES.map((s) => ({ value: s.key, label: s.label }))}
-            leading={(v) => <StatusIcon status={v as TaskStatus} size={13} />}
-          />
-          <Prop
-            value={task.priority}
-            onChange={(v) => onPatch({ priority: v as Priority })}
-            options={PRIORITIES.map((p) => ({ value: p.key, label: p.label }))}
-            leading={(v) => <PriorityIcon p={v as Priority} />}
-          />
-          <Prop
-            value={task.groupId ?? ""}
-            onChange={(v) => (v === "__new" ? onCreateGroup() : onPatch({ groupId: v || null }))}
-            options={[
-              { value: "", label: "无分组" },
-              ...groups.map((g) => ({ value: g.id, label: `${g.name} · ${g.mode === "parallel" ? "并行" : "串行"}` })),
-              { value: "__new", label: "+ 新建分组" },
-            ]}
-          />
-          <span className="mx-1 h-4 w-px bg-line" />
-          {task.labels.map((l) => (
-            <button
-              key={l}
-              onClick={() => onPatch({ labels: task.labels.filter((x) => x !== l) })}
-              className="rounded-full bg-overlay px-2 py-0.5 text-[11px] text-ink transition hover:bg-line2"
-              title="点击移除"
-            >
-              {l}
-            </button>
-          ))}
-          <LabelAdder onAdd={(l) => !task.labels.includes(l) && onPatch({ labels: [...task.labels, l] })} />
-          <span className="ml-auto text-[12px] text-faint">
-            {task.mode === "single" ? `@${task.agentType ?? "—"}` : "debate"}
-          </span>
-        </div>
+        {/* Task objective — shown right under the title (not buried in the log). */}
+        {task.body && (
+          <p className="mt-2 max-h-28 overflow-y-auto whitespace-pre-wrap break-words rounded-md bg-raised/60 px-3 py-2 text-[13px] text-muted">
+            {task.body}
+          </p>
+        )}
 
-        {/* Secondary: dependencies + schedule */}
-        <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-line pt-2.5 text-[12px]">
+        {/* All controls on one wrapping row: attributes | labels | deps·schedule | session */}
+        <div className="mt-3 flex flex-wrap items-center gap-x-2.5 gap-y-2 text-[12px]">
           <div className="flex flex-wrap items-center gap-1.5">
-            <ArrowsDownUp size={13} className="text-faint" />
-            <span className="text-muted">依赖</span>
-            {task.dependsOn.map((d) => {
-              const dep = allTasks.find((t) => t.id === d);
-              return (
-                <button
-                  key={d}
-                  onClick={() => onPatch({ dependsOn: task.dependsOn.filter((x) => x !== d) })}
-                  className="rounded bg-overlay px-1.5 py-0.5 text-ink transition hover:bg-line2"
-                  title="点击移除依赖"
-                >
-                  {dep?.title ?? d}
-                </button>
-              );
-            })}
-            {depOptions.length > 0 && (
-              <Prop
-                value=""
-                onChange={(v) => v && onPatch({ dependsOn: [...task.dependsOn, v] })}
-                options={[{ value: "", label: "+ 添加" }, ...depOptions.map((t) => ({ value: t.id, label: t.title }))]}
-              />
-            )}
-            {task.dependsOn.length === 0 && depOptions.length === 0 && <span className="text-faint">无</span>}
+            <Prop
+              value={task.status}
+              onChange={(v) => onPatch({ status: v as TaskStatus })}
+              options={STATUSES.filter((s) => isUserSettableStatus(s.key) || s.key === task.status).map((s) => ({ value: s.key, label: s.label }))}
+              leading={(v) => <StatusIcon status={v as TaskStatus} size={13} />}
+            />
+            <Prop
+              value={task.priority}
+              onChange={(v) => onPatch({ priority: v as Priority })}
+              options={PRIORITIES.map((p) => ({ value: p.key, label: p.label }))}
+              leading={(v) => <PriorityIcon p={v as Priority} />}
+            />
+            <Prop
+              value={task.groupId ?? ""}
+              onChange={(v) => (v === "__new" ? onCreateGroup() : onPatch({ groupId: v || null }))}
+              options={[
+                { value: "", label: "无分组" },
+                ...groups.map((g) => ({ value: g.id, label: groupLabel(g) })),
+                { value: "__new", label: "+ 新建分组" },
+              ]}
+            />
           </div>
-          <ScheduleControl taskId={task.id} />
+
+          <span className="h-4 w-px bg-line" />
+          <div className="flex flex-wrap items-center gap-1.5">
+            {task.labels.map((l) => (
+              <button
+                key={l}
+                onClick={() => onPatch({ labels: task.labels.filter((x) => x !== l) })}
+                className="rounded-full bg-overlay px-2 py-0.5 text-[11px] text-ink transition hover:bg-line2"
+                title="点击移除"
+              >
+                {l}
+              </button>
+            ))}
+            <LabelAdder onAdd={(l) => !task.labels.includes(l) && onPatch({ labels: [...task.labels, l] })} />
+          </div>
+
+          <span className="h-4 w-px bg-line" />
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+            <div className="flex flex-wrap items-center gap-1.5">
+              <ArrowsDownUp size={13} className="text-faint" />
+              <span className="text-muted">依赖</span>
+              {task.dependsOn.map((d) => {
+                const dep = allTasks.find((t) => t.id === d);
+                return (
+                  <button
+                    key={d}
+                    onClick={() => onPatch({ dependsOn: task.dependsOn.filter((x) => x !== d) })}
+                    className="rounded bg-overlay px-1.5 py-0.5 text-ink transition hover:bg-line2"
+                    title="点击移除依赖"
+                  >
+                    {dep?.title ?? d}
+                  </button>
+                );
+              })}
+              {depOptions.length > 0 && (
+                <Prop
+                  value=""
+                  onChange={(v) => v && onPatch({ dependsOn: [...task.dependsOn, v] })}
+                  options={[{ value: "", label: "+ 添加" }, ...depOptions.map((t) => ({ value: t.id, label: t.title }))]}
+                />
+              )}
+              {task.dependsOn.length === 0 && depOptions.length === 0 && <span className="text-faint">无</span>}
+            </div>
+            <ScheduleControl taskId={task.id} />
+          </div>
+
+          {/* session / agent — one place for who runs this + the live credentials */}
+          <span className="h-4 w-px bg-line" />
+          {sessions.length > 0 ? (
+            sessions.map((s) => <Credential key={s.id} s={s} />)
+          ) : (
+            <span className="text-faint">
+              将由 <b className="text-muted">@{task.agentType ?? "claude"}</b> 执行
+            </span>
+          )}
         </div>
       </header>
-
-      {sessions.length > 0 && (
-        <div className="flex flex-wrap gap-2 border-b border-line px-6 py-3">
-          {sessions.map((s) => (
-            <Credential key={s.id} s={s} />
-          ))}
-        </div>
-      )}
 
       <div
         ref={scrollRef}
         className="min-h-0 flex-1 overflow-y-auto break-words px-6 py-4 text-[13px] leading-relaxed"
       >
-        {task.body && (
-          <p className="mb-4 whitespace-pre-wrap break-words rounded-md bg-raised/60 px-3 py-2 font-sans text-[13px] text-muted">
-            {task.body}
-          </p>
-        )}
         {history && <Markdown text={history} />}
         <LogBlocks logs={logs} />
         {!history && logs.length === 0 && (

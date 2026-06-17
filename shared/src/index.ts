@@ -4,7 +4,10 @@
 
 // ── Agents (§5) ────────────────────────────────────────────────────────────
 // Abstraction layer: the *type* is what you @ / pick as a debater.
-export type AgentType = "claude" | "codex" | "antigravity";
+// Single source of truth: the runtime list drives both the union type and any
+// server-side validation (e.g. the batch API), so they can never drift.
+export const AGENT_TYPES = ["claude", "codex", "antigravity"] as const;
+export type AgentType = (typeof AGENT_TYPES)[number];
 
 // Execution layer: a concrete executor under a type (CLI + target + model).
 export interface AgentExecutorProfile {
@@ -79,6 +82,15 @@ export function canStartTask(status: TaskStatus): boolean {
   return status === "backlog" || status === "canceled" || status === "failed";
 }
 
+// running / queued / awaiting_review reflect live execution — only the
+// orchestrator/scheduler/gate set them. A human may only set these "settled"
+// statuses; the rest are system-owned (so you can't e.g. mark a task "running"
+// by hand, which would desync from reality).
+export const USER_SETTABLE_STATUSES: TaskStatus[] = ["backlog", "done", "failed", "canceled"];
+export function isUserSettableStatus(status: TaskStatus): boolean {
+  return USER_SETTABLE_STATUSES.includes(status);
+}
+
 export interface Task {
   id: string;
   projectId: string;
@@ -101,21 +113,60 @@ export interface Task {
   updatedAt: string;
 }
 
+// ── External batch API (agent-facing, § interfaces) ──────────────────────────
+// One call to create a whole batch of single-mode tasks into an EXISTING group,
+// wiring cross-task dependency edges that the in-group scheduler honors. The
+// chain case ("A 做完再做 B …") is the headline; arbitrary in-batch DAGs are
+// expressible via per-task `key` + `dependsOn`. projectId is inherited from the
+// group, so the caller never repeats it.
+export interface BatchTaskInput {
+  // Local id used ONLY to reference this task from a sibling's dependsOn within
+  // the same batch (ids don't exist yet at call time). Not persisted.
+  key?: string;
+  title?: string; // omitted → derived from body's first line, and autoTitle'd
+  body?: string; // the prompt / objective
+  agentType?: AgentType; // overrides defaults.agentType
+  priority?: Priority;
+  labels?: string[];
+  // Each entry is resolved against sibling `key`s first; anything that doesn't
+  // match a sibling key is treated as an existing task id and passed through.
+  dependsOn?: string[];
+}
+
+export interface BatchCreateTasksBody {
+  tasks: BatchTaskInput[];
+  chain?: boolean; // true → append the previous task's id to each task's deps (A→B→C→D)
+  run?: boolean; // true → kick off the group (runGroup) right after creating
+  defaults?: {
+    // applied to every task unless that task overrides the field
+    agentType?: AgentType;
+    priority?: Priority;
+    labels?: string[];
+  };
+}
+
 // ── Debate (§7) ──────────────────────────────────────────────────────────────
 export type HitlGate = "off" | "on";
 
+// Two ways two AIs can work together. "辩论给你答案,协作给你代码":
+//   debate      = 对抗 → 出结论（不改代码：无实现方/审查方/G2）
+//   collaborate = 协作 → 出代码（一方实现、另一方 review）
+export type DebateStyle = "debate" | "collaborate";
+
 export interface DebateConfig {
   topic: string;
+  style: DebateStyle; // 辩论 | 协作
   debaterA: AgentType;
   debaterB: AgentType;
-  implementer: "A" | "B"; // who implements after consensus (default A)
+  implementer: "A" | "B"; // (collaborate only) who implements; the OTHER reviews
   maxRounds: number | null; // null = unlimited
-  gateG1: HitlGate; // consensus gate, default on
-  gateG2: HitlGate; // code gate, default off
+  gateG1: HitlGate; // 收敛门(辩论) / 方案门(协作)
+  gateG2: HitlGate; // (collaborate only) 代码门
 }
 
 export const DEBATE_DEFAULTS: DebateConfig = {
   topic: "",
+  style: "debate",
   debaterA: "claude",
   debaterB: "codex",
   implementer: "A",
@@ -125,7 +176,7 @@ export const DEBATE_DEFAULTS: DebateConfig = {
 };
 
 // ── Sessions / traceability (§13) ─────────────────────────────────────────────
-export type SessionRole = "single" | "debaterA" | "debaterB" | "implementer";
+export type SessionRole = "single" | "debaterA" | "debaterB" | "implementer" | "reviewer";
 
 export interface Session {
   id: string;
@@ -175,7 +226,7 @@ export type AgentEvent =
   | { kind: "error"; message: string }
   | { kind: "done"; exitStatus: number };
 
-export type DebateSpeaker = "A" | "B" | "impl";
+export type DebateSpeaker = "A" | "B" | "impl" | "review";
 
 // SSE envelope pushed to the web client.
 export type ServerEvent =

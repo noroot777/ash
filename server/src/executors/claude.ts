@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { createInterface } from "node:readline";
 import type { AgentEvent, ExecTarget } from "@harness/shared";
 import type { AgentExecutor, RunHandle, RunOpts } from "./types.js";
-import { spawnAgent, resumeFor, spawnErrorMessage } from "./spawn.js";
+import { spawnAgent, resumeFor, resumeInner, spawnErrorMessage } from "./spawn.js";
 
 // Drives the real `claude` CLI in headless stream-json mode (prompt via stdin).
 //   claude -p --output-format stream-json --verbose --dangerously-skip-permissions
@@ -22,7 +22,7 @@ export class ClaudeExecutor implements AgentExecutor {
   }
 
   resumeCommand(cwd: string, sessionId: string): string {
-    return resumeFor(this.target, cwd, `claude --resume ${sessionId}`);
+    return resumeFor(this.target, cwd, resumeInner.claude(sessionId));
   }
 
   run(opts: RunOpts): RunHandle {

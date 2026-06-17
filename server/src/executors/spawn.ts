@@ -99,3 +99,28 @@ export function resumeFor(target: ExecTarget, cwd: string, inner: string): strin
   if (target.kind === "ssh") return `ssh ${target.host} "cd ${shq(cwd)} && ${inner}"`;
   return `cd ${shq(cwd)} && ${inner}`;
 }
+
+// The per-agent *interactive* resume command (what a human pastes to see the
+// session and continue) — single source of truth, used both when storing a
+// session and when recomputing the display command on read. (The harness's own
+// headless resume is built separately inside each executor's run().)
+export const resumeInner: Record<string, (id: string) => string> = {
+  claude: (id) => `claude --resume ${id}`,
+  codex: (id) => `codex resume ${id}`,
+  antigravity: (id) => `antigravity --resume ${id}`,
+};
+
+// Build the display resume command from persisted session fields, so it always
+// reflects the current format (no stale stored strings when the format changes).
+export function resumeCommandFor(
+  agentType: string,
+  targetStr: string | null | undefined,
+  cwd: string,
+  cliSessionId: string,
+): string {
+  const inner = (resumeInner[agentType] ?? resumeInner.claude)(cliSessionId);
+  const target: ExecTarget = targetStr?.startsWith("ssh:")
+    ? { kind: "ssh", host: targetStr.slice(4) }
+    : { kind: "local" };
+  return resumeFor(target, cwd, inner);
+}

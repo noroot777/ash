@@ -1,7 +1,9 @@
 import type { Task, TaskStatus } from "@harness/shared";
+import { isUserSettableStatus } from "@harness/shared";
 import { STATUSES } from "./constants";
 import { PriorityIcon } from "./ui";
 import { StatusIcon } from "./StatusIcon";
+import { pairBadge } from "./util";
 
 // Kanban board: one column per status, drag a card across columns to change its
 // status. Clicking a card opens it (switches back to list+detail).
@@ -18,12 +20,16 @@ export function Board({
     <div className="flex h-full gap-3 overflow-x-auto px-4 py-4">
       {STATUSES.map((s) => {
         const col = tasks.filter((t) => t.status === s.key);
+        // running/queued/awaiting_review are system-owned — you can't drop a card
+        // into them by hand (that would fake an execution state).
+        const droppable = isUserSettableStatus(s.key);
         return (
           <div
             key={s.key}
-            className="flex w-72 shrink-0 flex-col rounded-lg border border-line bg-panel"
-            onDragOver={(e) => e.preventDefault()}
+            className={`flex w-72 shrink-0 flex-col rounded-lg border border-line bg-panel ${droppable ? "" : "opacity-75"}`}
+            onDragOver={(e) => droppable && e.preventDefault()}
             onDrop={(e) => {
+              if (!droppable) return;
               const id = e.dataTransfer.getData("text/plain");
               if (id) onMove(id, s.key);
             }}
@@ -32,6 +38,7 @@ export function Board({
               <StatusIcon status={s.key} size={13} />
               <span className="text-[12px] font-semibold text-ink">{s.label}</span>
               <span className="font-mono text-[11px] text-faint">{col.length}</span>
+              {!droppable && <span className="ml-auto text-[10px] text-faint">系统态</span>}
             </div>
             <div className="flex-1 space-y-2 overflow-y-auto p-2">
               {col.map((t) => (
@@ -54,12 +61,8 @@ export function Board({
                         {l}
                       </span>
                     ))}
-                    <span
-                      className={`ml-auto rounded px-1.5 py-0.5 font-mono text-[10px] ${
-                        t.mode === "debate" ? "bg-violet-500/20 text-violet-700" : "text-faint"
-                      }`}
-                    >
-                      {t.mode === "debate" ? "debate" : `@${t.agentType ?? "—"}`}
+                    <span className={`ml-auto rounded px-1.5 py-0.5 font-mono text-[10px] ${pairBadge(t).cls}`}>
+                      {pairBadge(t).label}
                     </span>
                   </div>
                 </div>

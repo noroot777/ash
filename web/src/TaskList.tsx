@@ -2,6 +2,7 @@ import type { Task, Group } from "@harness/shared";
 import { STATUSES, STATUS_META, PRIORITY_ORDER } from "./constants";
 import { PriorityIcon } from "./ui";
 import { StatusIcon } from "./StatusIcon";
+import { pairBadge } from "./util";
 
 // Flatten tasks into the same visual order the list renders (status groups,
 // then priority, then recency) — used for j/k keyboard navigation.
@@ -76,12 +77,8 @@ export function TaskList({
                       {l}
                     </span>
                   ))}
-                  <span
-                    className={`rounded px-1.5 py-0.5 font-mono text-[10px] ${
-                      t.mode === "debate" ? "bg-violet-500/15 text-violet-700" : "text-faint"
-                    }`}
-                  >
-                    {t.mode === "debate" ? "debate" : `@${t.agentType ?? "—"}`}
+                  <span className={`rounded px-1.5 py-0.5 font-mono text-[10px] ${pairBadge(t).cls}`}>
+                    {pairBadge(t).label}
                   </span>
                 </div>
               </button>
