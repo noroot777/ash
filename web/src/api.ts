@@ -13,6 +13,13 @@ export const api = {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ name, repoPath }),
     }).then(j),
+  // Find-or-create a project by repoPath (idempotent, agent-friendly).
+  resolveProject: (repoPath: string, name?: string): Promise<ProjectView> =>
+    fetch("/api/projects/resolve", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ repoPath, name }),
+    }).then(j),
   updateProject: (id: string, patch: Partial<Pick<Project, "name" | "repoPath">>): Promise<ProjectView> =>
     fetch(`/api/projects/${id}`, {
       method: "PATCH",

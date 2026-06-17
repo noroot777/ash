@@ -3,7 +3,7 @@ import { streamSSE } from "hono/streaming";
 import { eq } from "drizzle-orm";
 import { readFile } from "node:fs/promises";
 import { rmSync } from "node:fs";
-import { join } from "node:path";
+import { join, basename } from "node:path";
 import { RUNS_DIR, DATA_DIR } from "./paths.js";
 import type {
   Project,
@@ -141,6 +141,24 @@ api.post("/projects", async (c) => {
   return c.json(toProject(row), 201);
 });
 
+// Find-or-create a project by repoPath — idempotent, agent-friendly. Lets an agent
+// go straight from a repo path to a stable projectId without first listing/creating
+// (call it every time without worrying about duplicates). name defaults to the
+// repo's directory name. Ambiguous (repoPath used by >1 project) → 409, so the
+// caller falls back to an explicit projectId. 200 = existing, 201 = created.
+api.post("/projects/resolve", async (c) => {
+  const b = await c.req.json<{ repoPath: string; name?: string }>();
+  const repoPath = b.repoPath?.trim();
+  if (!repoPath) return c.json({ error: "repoPath required" }, 400);
+  const hits = (await db.select().from(projects)).filter((p) => p.repoPath === repoPath);
+  if (hits.length > 1) return c.json({ error: "repoPath 匹配到多个项目，请改用 projectId", repoPath }, 409);
+  if (hits.length === 1) return c.json(toProject(hits[0]), 200);
+  const name = b.name?.trim() || basename(repoPath.replace(/\/+$/, "")) || "project";
+  const row = { id: id(), name, repoPath, createdAt: now() };
+  await db.insert(projects).values(row);
+  return c.json(toProject(row), 201);
+});
+
 api.patch("/projects/:id", async (c) => {
   const pid = c.req.param("id");
   const existing = (await db.select().from(projects).where(eq(projects.id, pid))).at(0);
@@ -208,7 +226,7 @@ api.post("/groups", async (c) => {
     if (!project) return c.json({ error: "project not found", projectId: b.projectId }, 404);
   } else if (b.repoPath) {
     const hits = (await db.select().from(projects)).filter((p) => p.repoPath === b.repoPath);
-    if (hits.length === 0) return c.json({ error: "没有匹配 repoPath 的项目", repoPath: b.repoPath }, 404);
+    if (hits.length === 0) return c.json({ error: "没有匹配 repoPath 的项目（可先调用 POST /api/projects/resolve 建项目）", repoPath: b.repoPath }, 404);
     if (hits.length > 1) return c.json({ error: "repoPath 匹配到多个项目，请改用 projectId", repoPath: b.repoPath }, 409);
     project = hits[0];
   } else {
