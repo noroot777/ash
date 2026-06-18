@@ -1,9 +1,49 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useLayoutEffect, useRef } from "react";
 import type { Priority, Session, ProjectHealth, ProjectView } from "@harness/shared";
-import { Plus, CaretRight } from "@phosphor-icons/react";
+import { Plus, CaretRight, CaretDown } from "@phosphor-icons/react";
 import { shortPath } from "./util";
 import { Duration, formatInstant } from "./time";
 import { api } from "./api";
+
+// Long free-text (a task's objective / a debate's topic) that would otherwise
+// dominate the header: clamp to two lines by default, reveal a 展开/收起 toggle
+// only when it actually overflows. Expanded, it's a scrollable box rather than an
+// unbounded wall. Shared by the task detail and the debate header so both read
+// the same.
+export function CollapsibleText({ text }: { text: string }) {
+  const [open, setOpen] = useState(false);
+  const [overflows, setOverflows] = useState(false);
+  const ref = useRef<HTMLParagraphElement>(null);
+  // Measure in the clamped state (scrollHeight > clientHeight ⇒ there's more to
+  // show). Re-measure on text change; skip while open (clientHeight grows then).
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (el && !open) setOverflows(el.scrollHeight > el.clientHeight + 1);
+  }, [text, open]);
+  return (
+    <div className="mt-2">
+      <p
+        ref={ref}
+        onClick={() => !open && overflows && setOpen(true)}
+        className={`whitespace-pre-wrap break-words rounded-md bg-raised/60 px-3 py-2 text-[13px] text-muted ${
+          open ? "max-h-48 overflow-y-auto" : `line-clamp-2 ${overflows ? "cursor-pointer" : ""}`
+        }`}
+      >
+        {text}
+      </p>
+      {overflows && (
+        <button
+          onClick={() => setOpen((o) => !o)}
+          className="mt-0.5 inline-flex items-center gap-0.5 text-[11px] text-faint transition-colors hover:text-muted"
+        >
+          {open ? "收起" : "展开"}
+          <CaretDown size={10} weight="bold" className={`transition-transform ${open ? "rotate-180" : ""}`} />
+        </button>
+      )}
+    </div>
+  );
+}
+
 
 // "⏱ 14m 3s" with the start/end instants in the tooltip — the session-run timing
 // (start, end, duration) attached to a credential. Live (ticking) only while the
@@ -253,38 +293,4 @@ export function ResumeButtons({ s }: { s: Session }) {
   );
 }
 
-// Traceability credential chip — compact: executor + copy-resume + id. The cwd
-// and branch live in the executor's hover tooltip to keep it on one line (§13).
-export function Credential({ s }: { s: Session }) {
-  const [copied, setCopied] = useState<string | null>(null);
-  const copy = (label: string, text: string) => {
-    navigator.clipboard.writeText(text);
-    setCopied(label);
-    setTimeout(() => setCopied(null), 1200);
-  };
-  const cwdHint = [s.cwd, s.branch ? `分支 ${s.branch}` : ""].filter(Boolean).join("  ·  ");
-  return (
-    <div className="inline-flex items-center gap-1.5 rounded-md border border-line bg-raised/50 px-2 py-1 text-[11px]">
-      <span className="text-muted" title={cwdHint || s.executor}>{s.executor}</span>
-      {s.cwd?.includes("/scratch/") && (
-        <span className="text-amber-600" title="临时目录（项目无有效仓库）">⚠</span>
-      )}
-      <button
-        onClick={() => copy("cmd", s.resumeCommand ?? "")}
-        className="ml-0.5 rounded bg-overlay px-1.5 py-0.5 text-ink hover:bg-overlay"
-        title={s.resumeCommand ?? ""}
-      >
-        {copied === "cmd" ? "已复制" : "复制 resume"}
-      </button>
-      <button
-        onClick={() => copy("id", s.cliSessionId ?? "")}
-        className="rounded bg-overlay px-1.5 py-0.5 text-muted hover:bg-overlay"
-        title={s.cliSessionId ?? ""}
-      >
-        {copied === "id" ? "✓" : "ID"}
-      </button>
-      <SessionTime s={s} />
-    </div>
-  );
-}
 

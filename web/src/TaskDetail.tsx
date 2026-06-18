@@ -4,7 +4,7 @@ import { isUserSettableStatus, AGENT_TYPES } from "@harness/shared";
 import { CaretDown, Play, Stop, Trash, ArrowsDownUp, Robot, X } from "@phosphor-icons/react";
 import { api } from "./api";
 import { STATUSES, PRIORITIES } from "./constants";
-import { Credential, ToolCall, ThinkingBlock } from "./ui";
+import { ToolCall, ThinkingBlock, ResumeButtons, CollapsibleText } from "./ui";
 import { Markdown } from "./Markdown";
 import { StatusIcon } from "./StatusIcon";
 import { PriorityIcon, LabelAdder } from "./ui";
@@ -12,7 +12,7 @@ import { ScheduleControl } from "./ScheduleControl";
 import { Menu } from "./Menu";
 import { runAction, canStopTask } from "./taskActions";
 import { groupLabel } from "./util";
-import { TaskTimes } from "./time";
+import { TaskTimes, formatInstant } from "./time";
 import { usePasteImages, ImageChips } from "./pasteImages";
 
 export type LogLine = {
@@ -50,24 +50,27 @@ export function TaskDetail({
   onDelete: () => void;
 }) {
   const [sessions, setSessions] = useState<Session[]>([]);
-  const [history, setHistory] = useState<string>("");
+  const [snapshot, setSnapshot] = useState<{ s: Session; out: string }[]>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     api.sessions(task.id).then(setSessions);
   }, [task.id, sessionsBump]);
 
-  // Prior output, fetched once per task when there are no in-memory logs (i.e. a
-  // reload). Sticky: a later reply (which fills logs) must not wipe it, so prior
-  // context stays above the new turns.
+  // Snapshot of prior output, taken once per task when there are no in-memory
+  // live logs (i.e. a reload / fresh navigation). Per session, so each run
+  // becomes its own bubble carrying its own resume credential. Sticky: a later
+  // reply (which fills logs) must not wipe it, so prior context stays above the
+  // new turns.
   useEffect(() => {
-    if (logs.length > 0) {
-      setHistory("");
-      return;
-    }
+    setSnapshot([]);
+    if (logs.length > 0) return;
     let alive = true;
     api.sessions(task.id).then(async (ss) => {
-      if (alive && ss.length) setHistory(await api.sessionOutput(ss[ss.length - 1].id).catch(() => ""));
+      const withOut = await Promise.all(
+        ss.map(async (s) => ({ s, out: await api.sessionOutput(s.id).catch(() => "") })),
+      );
+      if (alive) setSnapshot(withOut.filter(({ out }) => out.trim()));
     });
     return () => {
       alive = false;
@@ -77,7 +80,7 @@ export function TaskDetail({
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
-  }, [logs.length, history]);
+  }, [logs.length, snapshot.length]);
 
   const depOptions = allTasks.filter((t) => t.id !== task.id && !task.dependsOn.includes(t.id));
 
@@ -118,12 +121,9 @@ export function TaskDetail({
           </button>
         </div>
 
-        {/* Task objective — shown right under the title (not buried in the log). */}
-        {task.body && (
-          <p className="mt-2 max-h-28 overflow-y-auto whitespace-pre-wrap break-words rounded-md bg-raised/60 px-3 py-2 text-[13px] text-muted">
-            {task.body}
-          </p>
-        )}
+        {/* Task objective — shown right under the title (collapsed to 2 lines;
+            click 展开 for the full text). */}
+        {task.body && <CollapsibleText text={task.body} />}
 
         {/* All controls on one wrapping row: attributes | labels | deps·schedule | session */}
         <div className="mt-3 flex flex-wrap items-center gap-x-2.5 gap-y-2 text-[12px]">
@@ -196,14 +196,16 @@ export function TaskDetail({
             <ScheduleControl taskId={task.id} />
           </div>
 
-          {/* session / agent — one place for who runs this + the live credentials */}
-          <span className="h-4 w-px bg-line" />
-          {sessions.length > 0 ? (
-            sessions.map((s) => <Credential key={s.id} s={s} />)
-          ) : (
-            <span className="text-faint">
-              将由 <b className="text-muted">@{task.agentType ?? "claude"}</b> 执行
-            </span>
+          {/* Who will run this — shown only until the first run exists. The live
+              run credentials (resume / id / time) now live per-bubble in the
+              conversation below, not crammed into this header row. */}
+          {sessions.length === 0 && (
+            <>
+              <span className="h-4 w-px bg-line" />
+              <span className="text-faint">
+                将由 <b className="text-muted">@{task.agentType ?? "claude"}</b> 执行
+              </span>
+            </>
           )}
         </div>
 
@@ -214,66 +216,152 @@ export function TaskDetail({
         ref={scrollRef}
         className="min-h-0 flex-1 overflow-y-auto break-words px-6 py-4 text-[13px] leading-relaxed"
       >
-        {history && <Markdown text={history} />}
-        <LogBlocks logs={logs} primaryAgent={task.agentType ?? "claude"} />
-        {!history && logs.length === 0 && (
+        {/* Prior runs, snapshotted on load — one bubble per session, each
+            carrying its own resume credential. */}
+        {snapshot.map(({ s, out }) => (
+          <AgentBubble key={s.id} label={s.executor} time={s.startedAt} session={s}>
+            <Markdown text={out} />
+          </AgentBubble>
+        ))}
+        {/* Live stream from this app session, grouped into bubbles. */}
+        <LiveConversation logs={logs} sessions={sessions} primaryAgent={task.agentType ?? "claude"} />
+        {snapshot.length === 0 && logs.length === 0 && (
           <p className="font-sans text-faint">点击「运行」开始，输出会实时流式显示在这里。</p>
         )}
       </div>
 
-      {task.mode === "single" && (sessions.length > 0 || !!history || logs.length > 0) && (
+      {task.mode === "single" && (sessions.length > 0 || snapshot.length > 0 || logs.length > 0) && (
         <ReplyBox onReply={onReply} disabled={task.status === "running" || task.status === "queued"} />
       )}
     </main>
   );
 }
 
-// Render the live log as a chat-like stream: consecutive agent text is merged
-// into one Markdown block; tools/thinking are collapsible; the human's replies
-// show as right-aligned bubbles. When an @-mentioned agent takes over, a divider
-// marks the handoff so the two agents' output stays distinguishable.
-function LogBlocks({ logs, primaryAgent }: { logs: LogLine[]; primaryAgent: AgentType }) {
+// Render the live log as a conversation of bubbles (mirrors /pair): a contiguous
+// run of one session's output becomes one left-aligned agent bubble — merged
+// Markdown, collapsible tools/thinking, and a slim resume/id/time footer for that
+// run. The human's replies are right-aligned bubbles; an @-mention handoff simply
+// starts a new bubble carrying the new executor's label, so the divider is gone.
+function LiveConversation({
+  logs,
+  sessions,
+  primaryAgent,
+}: {
+  logs: LogLine[];
+  sessions: Session[];
+  primaryAgent: AgentType;
+}) {
   const blocks: ReactNode[] = [];
-  let buf = "";
   let k = 0;
-  let shownAgent: AgentType = primaryAgent;
+  let group: { sessionId?: string; agent?: AgentType; lines: LogLine[] } | null = null;
   const flush = () => {
-    if (buf.trim()) blocks.push(<Markdown key={k++} text={buf} />);
-    buf = "";
+    const g = group;
+    group = null;
+    if (!g) return;
+    const content = groupContent(g.lines);
+    if (!content.length) return;
+    const sess = g.sessionId ? sessions.find((s) => s.id === g.sessionId) : undefined;
+    blocks.push(
+      <AgentBubble key={`g${k++}`} label={sess?.executor ?? `@${g.agent ?? primaryAgent}`} time={sess?.startedAt} session={sess}>
+        {content}
+      </AgentBubble>,
+    );
   };
   for (const l of logs) {
-    if (l.agent && l.agent !== shownAgent) {
+    if (l.kind === "user") {
       flush();
-      shownAgent = l.agent;
-      blocks.push(<AgentDivider key={k++} agent={l.agent} />);
-    }
-    if (l.kind === "text") {
-      buf += (buf ? "\n" : "") + l.text;
+      blocks.push(<UserBubble key={`u${k++}`} text={l.text} at={l.at} />);
       continue;
     }
-    flush();
-    if (l.kind === "tool") blocks.push(<ToolCall key={k++} name={l.name ?? "tool"} detail={l.text} />);
-    else if (l.kind === "thinking") blocks.push(<ThinkingBlock key={k++} text={l.text} />);
-    else if (l.kind === "error") blocks.push(<div key={k++} className="my-1 break-words text-xs text-red-600">✕ {l.text}</div>);
-    else if (l.kind === "done") blocks.push(<div key={k++} className="my-2 text-center text-xs text-faint">{l.text}</div>);
-    else if (l.kind === "user")
-      blocks.push(
-        <div key={k++} className="my-2 flex justify-end">
-          <div className="max-w-[85%] whitespace-pre-wrap break-words rounded-lg bg-accent/10 px-3 py-1.5 text-[13px] text-ink">{l.text}</div>
-        </div>,
-      );
+    if (l.kind === "done") {
+      flush();
+      blocks.push(<div key={`d${k++}`} className="my-2 text-center text-xs text-faint">{l.text}</div>);
+      continue;
+    }
+    // text / thinking / tool / error → part of the current agent group
+    if (!group || group.sessionId !== l.sessionId || group.agent !== l.agent) {
+      flush();
+      group = { sessionId: l.sessionId, agent: l.agent, lines: [] };
+    }
+    group.lines.push(l);
   }
   flush();
   return <>{blocks}</>;
 }
 
-// Handoff marker shown when output starts coming from a different agent.
-function AgentDivider({ agent }: { agent: AgentType }) {
+// Inner nodes of one agent bubble: consecutive text merges into a Markdown block,
+// tools/thinking are collapsible, errors show inline red.
+function groupContent(lines: LogLine[]): ReactNode[] {
+  const nodes: ReactNode[] = [];
+  let buf = "";
+  let k = 0;
+  const flush = () => {
+    if (buf.trim()) nodes.push(<Markdown key={`t${k++}`} text={buf} />);
+    buf = "";
+  };
+  for (const l of lines) {
+    if (l.kind === "text") {
+      buf += (buf ? "\n" : "") + l.text;
+      continue;
+    }
+    flush();
+    if (l.kind === "tool") nodes.push(<ToolCall key={`x${k++}`} name={l.name ?? "tool"} detail={l.text} />);
+    else if (l.kind === "thinking") nodes.push(<ThinkingBlock key={`x${k++}`} text={l.text} />);
+    else if (l.kind === "error") nodes.push(<div key={`x${k++}`} className="my-1 break-words text-xs text-red-600">✕ {l.text}</div>);
+  }
+  flush();
+  return nodes;
+}
+
+// One agent turn / run: left-aligned card with an executor·time header, the
+// content, and a slim resume/id/time footer (the run's credential — its new home,
+// out of the page header).
+function AgentBubble({
+  label,
+  time,
+  session,
+  children,
+}: {
+  label?: string;
+  time?: string | null;
+  session?: Session;
+  children: ReactNode;
+}) {
   return (
-    <div className="my-3 flex items-center gap-2 text-[11px] text-faint">
-      <span className="h-px flex-1 bg-line" />
-      <span className="rounded-full bg-raised px-2 py-0.5 font-medium text-muted">@{agent} 接手</span>
-      <span className="h-px flex-1 bg-line" />
+    <div className="mb-3">
+      <div className="rounded-lg border border-line bg-raised/40 px-3 py-2">
+        <div className="mb-1 flex items-center gap-2 text-[11px] text-muted">
+          <span className="font-medium text-ink/70">{label || "智能体"}</span>
+          {time && (
+            <>
+              <span className="text-faint">·</span>
+              <span className="text-faint">{formatInstant(time)}</span>
+            </>
+          )}
+        </div>
+        {children}
+        {session && (session.resumeCommand || session.cliSessionId) && <ResumeButtons s={session} />}
+      </div>
+    </div>
+  );
+}
+
+// A human reply / continuation: right-aligned bubble with "你 · 时间".
+function UserBubble({ text, at }: { text: string; at?: string }) {
+  return (
+    <div className="mb-3 flex flex-col items-end">
+      <div className="max-w-[88%] rounded-lg border border-accent/30 bg-accent/[0.08] px-3 py-2">
+        <div className="mb-1 flex items-center gap-2 text-[11px] text-muted">
+          <span className="font-medium text-ink/70">你</span>
+          {at && (
+            <>
+              <span className="text-faint">·</span>
+              <span className="text-faint">{formatInstant(at)}</span>
+            </>
+          )}
+        </div>
+        <div className="whitespace-pre-wrap break-words text-[13px] text-ink">{text}</div>
+      </div>
     </div>
   );
 }

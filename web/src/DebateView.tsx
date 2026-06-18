@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { Task, Session, DebateConfig, GateAction, AgentType, DebateSpeaker, TaskStatus } from "@harness/shared";
 import { Stop } from "@phosphor-icons/react";
 import type { DebateState, DebateTurn, DebateGate } from "./debateState";
-import { ResumeButtons, ToolCall } from "./ui";
+import { ResumeButtons, ToolCall, CollapsibleText } from "./ui";
 import { Markdown } from "./Markdown";
 import { api } from "./api";
 import { ScheduleControl } from "./ScheduleControl";
@@ -174,12 +174,8 @@ export function DebateView({
             删除
           </button>
         </div>
-        {/* 议题/任务全文 —— 放在标题下的独立文本框（标题只放简短概括，太长会撑坏上面一行）。 */}
-        {cfg?.topic && (
-          <p className="mt-2 max-h-28 overflow-y-auto whitespace-pre-wrap break-words rounded-md bg-raised/60 px-3 py-2 text-[13px] text-muted">
-            {cfg.topic}
-          </p>
-        )}
+        {/* 议题/任务全文 —— 放在标题下的独立文本框（默认折叠成两行，点展开看全文）。 */}
+        {cfg?.topic && <CollapsibleText text={cfg.topic} />}
         {/* 配置摘要 + 定时（同一行，定时靠右）。 */}
         <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1.5">
           {cfg && (
