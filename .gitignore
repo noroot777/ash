@@ -8,3 +8,8 @@ data/
 
 .DS_Store
 *.local
+
+# generated build cache (tsc -b rewrites this every build) + machine-local
+# Claude Code permission allowlist — neither belongs in version control.
+*.tsbuildinfo
+.claude/settings.local.json
