@@ -230,6 +230,17 @@ export function App() {
     setGroups((gs) => gs.filter((x) => x.id !== id));
     setTasks((ts) => ts.map((t) => (t.groupId === id ? { ...t, groupId: null } : t))); // members kept, just ungrouped
   }, []);
+  // Run a group (also clears a pause → doubles as resume). Optimistically reflect
+  // the un-paused state so the panel button flips back immediately.
+  const runGroup = useCallback(async (id: string) => {
+    setGroups((gs) => gs.map((x) => (x.id === id ? { ...x, paused: false } : x)));
+    try { await api.runGroup(id); } catch (e) { console.warn("runGroup rejected:", e); }
+  }, []);
+  const pauseGroup = useCallback(async (id: string) => {
+    setGroups((gs) => gs.map((x) => (x.id === id ? { ...x, paused: true } : x)));
+    try { const g = await api.pauseGroup(id); setGroups((gs) => gs.map((x) => (x.id === id ? g : x))); }
+    catch (e) { console.warn("pauseGroup rejected:", e); }
+  }, []);
 
   const anyModal = createOpen || agentsOpen || newProjectOpen || settingsOpen || newGroupOpen || groupsOpen || !!debateOpen || !!confirmDel;
 
@@ -404,7 +415,8 @@ export function App() {
           groups={groups}
           tasks={visible}
           onClose={() => setGroupsOpen(false)}
-          onRun={(id) => api.runGroup(id)}
+          onRun={runGroup}
+          onPause={pauseGroup}
           onUpdate={updateGroup}
           onDelete={deleteGroup}
           onCreate={addGroup}

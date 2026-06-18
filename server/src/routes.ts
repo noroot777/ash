@@ -316,6 +316,7 @@ api.post("/groups", async (c) => {
     name: b.name.trim(),
     mode: b.mode ?? "parallel",
     useWorktree: b.useWorktree ?? true,
+    paused: false,
     createdAt: now(),
   };
   await db.insert(groups).values(row);
@@ -352,6 +353,7 @@ api.post("/groups/resolve", async (c) => {
     name,
     mode: b.mode ?? "parallel",
     useWorktree: b.useWorktree ?? true,
+    paused: false,
     createdAt: now(),
   };
   await db.insert(groups).values(row);
@@ -451,13 +453,31 @@ api.get("/groups", async (c) => {
   return c.json(rows);
 });
 
-// Run an entire group honoring parallel/serial + dependsOn (§1/§3).
+// Run an entire group honoring parallel/serial + dependsOn (§1/§3). Running also
+// clears a pause, so the same button doubles as "继续/resume".
 api.post("/groups/:id/run", async (c) => {
   const gid = c.req.param("id");
   const g = (await db.select().from(groups).where(eq(groups.id, gid))).at(0);
   if (!g) return c.json({ error: "not found" }, 404);
+  if (g.paused) await db.update(groups).set({ paused: false }).where(eq(groups.id, gid));
   void runGroup(gid);
   return c.json({ started: true }, 202);
+});
+
+// Pause a group: the scheduler stops launching tasks that haven't started yet —
+// a running task is NOT interrupted — and the waiting (queued) tasks are parked
+// back to backlog so they don't look stuck. Resume by running the group again.
+api.post("/groups/:id/pause", async (c) => {
+  const gid = c.req.param("id");
+  const g = (await db.select().from(groups).where(eq(groups.id, gid))).at(0);
+  if (!g) return c.json({ error: "not found" }, 404);
+  await db.update(groups).set({ paused: true }).where(eq(groups.id, gid));
+  const waiting = (await db.select().from(tasks).where(eq(tasks.groupId, gid))).filter(
+    (t) => t.status === "queued",
+  );
+  for (const t of waiting) await setTaskStatus(t.id, "backlog");
+  const updated = (await db.select().from(groups).where(eq(groups.id, gid))).at(0)!;
+  return c.json(updated);
 });
 
 // Batch-create single-mode tasks into an EXISTING group, agent-facing (§ interfaces).

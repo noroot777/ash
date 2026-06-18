@@ -49,6 +49,10 @@ export const api = {
     }).then(j),
   runGroup: (id: string): Promise<unknown> =>
     fetch(`/api/groups/${id}/run`, { method: "POST" }).then(j),
+  // Pause a group: holds not-yet-started tasks (running ones keep going). Resume
+  // by running the group again. Returns the updated group (paused=true).
+  pauseGroup: (id: string): Promise<Group> =>
+    fetch(`/api/groups/${id}/pause`, { method: "POST" }).then(j),
   // Batch-create chained single tasks into an existing group (agent-facing API).
   createTasksBatch: (
     groupId: string,

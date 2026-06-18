@@ -1,16 +1,17 @@
 import { useState } from "react";
 import type { Group, Task, GroupMode } from "@harness/shared";
-import { Stack, Play, Trash, Plus } from "@phosphor-icons/react";
+import { Stack, Play, Pause, Trash, Plus } from "@phosphor-icons/react";
 import { Modal, ConfirmModal } from "./Modal";
 
 // Manage a project's groups (transient parallel/serial batches, §3): rename,
-// switch parallel/serial, toggle worktree isolation, see member count, run, or
-// delete (members are kept — just ungrouped). Inline create at the bottom.
+// switch parallel/serial, toggle worktree isolation, see member count, run, pause,
+// or delete (members are kept — just ungrouped). Inline create at the bottom.
 export function GroupsPanel({
   groups,
   tasks,
   onClose,
   onRun,
+  onPause,
   onUpdate,
   onDelete,
   onCreate,
@@ -19,6 +20,7 @@ export function GroupsPanel({
   tasks: Task[];
   onClose: () => void;
   onRun: (id: string) => void;
+  onPause: (id: string) => void;
   onUpdate: (id: string, patch: Partial<Pick<Group, "name" | "mode" | "useWorktree">>) => void;
   onDelete: (id: string) => void;
   onCreate: (name: string, mode: GroupMode) => void;
@@ -74,13 +76,35 @@ export function GroupsPanel({
                 worktree
               </button>
               <span className="shrink-0 text-[12px] text-faint">{count(g.id)} 个任务</span>
-              <button
-                onClick={() => onRun(g.id)}
-                className="ml-auto inline-flex shrink-0 items-center gap-1 rounded-md bg-accent px-2.5 py-1 text-[12px] font-medium text-accent-fg hover:bg-accent-hover"
-                title="运行整组"
-              >
-                <Play size={12} weight="fill" /> 运行
-              </button>
+              {g.paused ? (
+                <>
+                  <span className="ml-auto shrink-0 rounded bg-amber-500/15 px-1.5 py-0.5 text-[11px] font-medium text-amber-700">已暂停</span>
+                  <button
+                    onClick={() => onRun(g.id)}
+                    className="inline-flex shrink-0 items-center gap-1 rounded-md bg-accent px-2.5 py-1 text-[12px] font-medium text-accent-fg hover:bg-accent-hover"
+                    title="继续：恢复运行未开始的任务"
+                  >
+                    <Play size={12} weight="fill" /> 继续
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button
+                    onClick={() => onRun(g.id)}
+                    className="ml-auto inline-flex shrink-0 items-center gap-1 rounded-md bg-accent px-2.5 py-1 text-[12px] font-medium text-accent-fg hover:bg-accent-hover"
+                    title="运行整组"
+                  >
+                    <Play size={12} weight="fill" /> 运行
+                  </button>
+                  <button
+                    onClick={() => onPause(g.id)}
+                    className="inline-flex shrink-0 items-center gap-1 rounded-md border border-line2 px-2.5 py-1 text-[12px] font-medium text-muted hover:bg-raised hover:text-ink"
+                    title="暂停：未开始的任务先挂起，运行中的不打断；再点「运行/继续」恢复"
+                  >
+                    <Pause size={12} weight="fill" /> 暂停
+                  </button>
+                </>
+              )}
               <button
                 onClick={() => setConfirmDel(g)}
                 className="grid h-7 w-7 shrink-0 place-items-center rounded-md text-muted hover:bg-raised hover:text-red-600"

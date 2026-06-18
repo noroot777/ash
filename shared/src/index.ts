@@ -58,6 +58,7 @@ export interface Group {
   name: string;
   mode: GroupMode;
   useWorktree: boolean; // default true
+  paused: boolean; // 暂停后调度器不再启动该组里"还没开始"的任务（运行中的不打断），直到再次运行
   createdAt: string;
 }
 

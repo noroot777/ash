@@ -22,7 +22,8 @@ export async function ensureSchema() {
     );
     CREATE TABLE IF NOT EXISTS groups (
       id TEXT PRIMARY KEY, project_id TEXT NOT NULL, name TEXT NOT NULL,
-      mode TEXT NOT NULL DEFAULT 'parallel', use_worktree INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL
+      mode TEXT NOT NULL DEFAULT 'parallel', use_worktree INTEGER NOT NULL DEFAULT 1,
+      paused INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL
     );
     CREATE TABLE IF NOT EXISTS tasks (
       id TEXT PRIMARY KEY, project_id TEXT NOT NULL, group_id TEXT, parent_id TEXT,
@@ -66,6 +67,7 @@ export async function ensureSchema() {
     "ALTER TABLE tasks ADD COLUMN started_at TEXT",
     "ALTER TABLE tasks ADD COLUMN ended_at TEXT",
     "ALTER TABLE sessions ADD COLUMN ended_at TEXT",
+    "ALTER TABLE groups ADD COLUMN paused INTEGER NOT NULL DEFAULT 0",
   ]) {
     try {
       await client.execute(sql);
