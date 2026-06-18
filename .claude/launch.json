@@ -12,6 +12,12 @@
       "runtimeExecutable": "npm",
       "runtimeArgs": ["start"],
       "port": 4317
+    },
+    {
+      "name": "harness-preview",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": ["-c", "PORT=4400 HARNESS_DB=/tmp/hpreview.db node server/dist/index.js"],
+      "port": 4400
     }
   ]
 }
