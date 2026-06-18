@@ -20,6 +20,8 @@ export type LogLine = {
   text: string;
   name?: string; // tool name (for kind "tool")
   agent?: AgentType; // which agent produced it (for @-mention multi-agent threads)
+  sessionId?: string; // the run/session this line belongs to (groups lines into bubbles + finds the credential)
+  at?: string; // ISO time the line was added (user replies show "你 · 时间")
 };
 
 export function TaskDetail({

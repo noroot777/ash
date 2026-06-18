@@ -64,7 +64,7 @@ export function App() {
         setTasks((ts) => ts.map((t) => (t.id === ev.taskId ? { ...t, title: ev.title } : t)));
       } else if (ev.type === "agent.event") {
         if (ev.role === "single") {
-          const line = renderEvent(ev.event, ev.agentType);
+          const line = renderEvent(ev.event, ev.agentType, ev.sessionId);
           if (line) setLogs((m) => ({ ...m, [ev.taskId]: [...(m[ev.taskId] ?? []), line] }));
         } else {
           setDebates((m) => ({ ...m, [ev.taskId]: applyDebateEvent(m[ev.taskId] ?? emptyDebate(), ev) }));
@@ -151,7 +151,7 @@ export function App() {
   // session so the agent continues (used when an agent stopped to ask).
   const reply = useCallback(async (id: string, text: string, opts?: { images?: string[]; agent?: AgentType }) => {
     const display = (text || "[图片]") + (opts?.agent ? `  ·  指派给 @${opts.agent}` : "");
-    setLogs((m) => ({ ...m, [id]: [...(m[id] ?? []), { kind: "user", text: display }] }));
+    setLogs((m) => ({ ...m, [id]: [...(m[id] ?? []), { kind: "user", text: display, at: new Date().toISOString() }] }));
     try { await api.replyTask(id, text, opts); } catch (e) { console.warn("reply rejected:", e); }
   }, []);
 
@@ -450,8 +450,8 @@ export function App() {
   );
 }
 
-function renderEvent(e: AgentEvent, agent?: AgentType): LogLine | null {
-  const base = (l: LogLine): LogLine => ({ ...l, agent });
+function renderEvent(e: AgentEvent, agent?: AgentType, sessionId?: string): LogLine | null {
+  const base = (l: LogLine): LogLine => ({ ...l, agent, sessionId });
   switch (e.kind) {
     case "text":
       return base({ kind: "text", text: e.text });
