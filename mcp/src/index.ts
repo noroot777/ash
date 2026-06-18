@@ -107,12 +107,41 @@ server.registerTool(
   "run_group",
   {
     title: "运行分组",
-    description: "启动（或恢复）分组里所有可运行的任务，遵循 parallel/serial 与 dependsOn。",
+    description: "启动（或恢复）分组里所有可运行的任务，遵循 parallel/serial 与 dependsOn。需要 groupId——不知道就先用 list_groups 按项目/repoPath 查出来。",
     inputSchema: { groupId: z.string() },
   },
   async ({ groupId }) => {
     try { return ok(await call("POST", `/groups/${groupId}/run`)); }
     catch (e) { return fail(e); }
+  },
+);
+
+server.registerTool(
+  "list_groups",
+  {
+    title: "列出分组",
+    description: "列出某项目的分组（批次容器），用 projectId 或 repoPath 定位项目；都不传则列出全部。每个分组附带任务状态汇总（total + 各状态计数），便于决定运行哪个。配合 run_group 使用。",
+    inputSchema: { projectId: z.string().optional(), repoPath: z.string().optional().describe("projectId 的替代：按仓库路径定位（不会新建项目）") },
+  },
+  async ({ projectId, repoPath }) => {
+    try {
+      const qs = new URLSearchParams();
+      if (projectId) qs.set("projectId", projectId);
+      if (repoPath) qs.set("repoPath", repoPath);
+      const q = qs.toString();
+      const groups = (await call("GET", `/groups${q ? `?${q}` : ""}`)) as Array<Record<string, unknown>>;
+      const allTasks = (await call("GET", "/tasks")) as Array<Record<string, unknown>>;
+      return ok(groups.map((g) => {
+        const mine = allTasks.filter((t) => t.groupId === g.id);
+        const byStatus: Record<string, number> = {};
+        for (const t of mine) byStatus[t.status as string] = (byStatus[t.status as string] ?? 0) + 1;
+        return {
+          id: g.id, name: g.name, mode: g.mode, useWorktree: g.useWorktree,
+          projectId: g.projectId,
+          tasks: { total: mine.length, byStatus },
+        };
+      }));
+    } catch (e) { return fail(e); }
   },
 );
 

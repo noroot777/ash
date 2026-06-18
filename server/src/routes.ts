@@ -338,11 +338,22 @@ api.delete("/tasks/:id", async (c) => {
 });
 
 // ── groups (transient batch containers, §3) ─────────────────────────────────
+// List groups, optionally scoped to a project by `projectId` or — agent-friendly —
+// by `repoPath` (canonical match, same as POST /groups). repoPath that resolves to
+// no project yields an empty list (never creates anything). Shape is plain Group
+// rows; the MCP layer enriches with a task rollup for "which group to run".
 api.get("/groups", async (c) => {
   const pid = c.req.query("projectId");
-  const rows = pid
-    ? await db.select().from(groups).where(eq(groups.projectId, pid))
-    : await db.select().from(groups);
+  const repo = c.req.query("repoPath");
+  let rows = await db.select().from(groups);
+  if (pid) rows = rows.filter((g) => g.projectId === pid);
+  if (repo) {
+    const key = repoKey(repo);
+    const projIds = new Set(
+      (await db.select().from(projects)).filter((p) => repoKey(p.repoPath) === key).map((p) => p.id),
+    );
+    rows = rows.filter((g) => projIds.has(g.projectId));
+  }
   return c.json(rows);
 });
 
