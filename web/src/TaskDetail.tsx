@@ -257,7 +257,7 @@ type ConvItem =
   | AgentItem
   | { kind: "user"; text: string; at?: string }
   | { kind: "system"; text: string; at?: string }
-  | { kind: "done"; text: string };
+  | { kind: "done"; text: string; at?: string };
 
 // A persisted session .md is mostly agent Markdown, but backend continues and
 // 你→@agent replies are interleaved as their own turns. New runs write each as a
@@ -327,19 +327,19 @@ function Conversation({
   sessions: Session[];
   primaryAgent: AgentType;
 }) {
-  // A run's 用时 needs an end. Most have session.endedAt; an interrupted/legacy run
-  // (no recorded end) is bounded instead by the NEXT run's start — the moment it
-  // was superseded — falling back to the task's own end. Never "now", so nothing
-  // ticks in this historical view.
+  // The end fallback for a run's LAST turn, when the session itself recorded none:
+  // the next run's start (it was superseded then), else the task's own end. The
+  // per-turn ends below come from the interjection markers; this is only the tail.
+  // Never "now", so nothing ticks in a finished, historical view.
   const byStart = [...sessions].sort((a, b) => (a.startedAt ?? "").localeCompare(b.startedAt ?? ""));
   const runEnd = new Map<string, string | null>();
   byStart.forEach((s, i) => runEnd.set(s.id, s.endedAt ?? byStart[i + 1]?.startedAt ?? task.endedAt ?? null));
 
   const items: ConvItem[] = [];
   for (const { s, out } of snapshot) {
-    // One session can now yield several bubbles (agent turns split by interjections).
-    // The run's credential (resume/id) belongs on its LAST agent turn only; every
-    // bubble still carries the run's start·用时 in its header.
+    // One session can yield several bubbles — agent turns split by 你→/〔系统〕
+    // interjections. Each turn is its own bubble; per-turn 用时 is assigned in the
+    // timing pass below. The run's credential (resume/id) rides only its LAST turn.
     const segs = parseSnapshot(out);
     const lastAgent = segs.reduce((acc, seg, i) => (seg.kind === "agent" ? i : acc), -1);
     segs.forEach((seg, i) => {
@@ -352,8 +352,6 @@ function Conversation({
         session: s,
         showResume: i === lastAgent,
         label: s.executor,
-        time: s.startedAt,
-        endedAt: runEnd.get(s.id) ?? null,
         nodes: [<Markdown key={`snap-${s.id}-${i}`} text={seg.text} />],
         lines: [],
       });
@@ -381,10 +379,37 @@ function Conversation({
     // text / thinking / tool / error → part of the current run's bubble
     if (!cur || cur.sessionId !== l.sessionId || cur.agent !== l.agent) {
       const sess = l.sessionId ? sessions.find((s) => s.id === l.sessionId) : undefined;
-      cur = { kind: "agent", sessionId: l.sessionId, agent: l.agent, session: sess, showResume: true, label: sess?.executor ?? `@${l.agent ?? primaryAgent}`, time: sess?.startedAt, endedAt: sess ? runEnd.get(sess.id) ?? null : null, nodes: [], lines: [] };
+      cur = { kind: "agent", sessionId: l.sessionId, agent: l.agent, session: sess, showResume: true, label: sess?.executor ?? `@${l.agent ?? primaryAgent}`, nodes: [], lines: [] };
       items.push(cur);
     }
     cur.lines.push(l);
+  }
+
+  // Per-turn timing. A resumed session shows as several bubbles, and each must
+  // carry ITS OWN 用时 — not the whole session's span (which would print the same
+  // total on every bubble). A turn (re)starts at the 你→/〔系统〕 interjection just
+  // before it (or its session's start, for the first turn) and ends at the
+  // interjection/exit marker just after it (or runEnd, for the last). Two ordered
+  // passes over the assembled items so it covers snapshot + live alike; a session
+  // change with no marker between (a new run, an @-invited agent) resets the
+  // bracket so one run's clock never bleeds into the next.
+  let prevAt: string | null = null; // 'at' of the interjection before the current turn
+  const seen = new Set<string>();
+  for (const it of items) {
+    if (it.kind === "user" || it.kind === "system") prevAt = it.at ?? prevAt;
+    if (it.kind !== "agent") continue;
+    const firstOfRun = !it.sessionId || !seen.has(it.sessionId);
+    if (it.sessionId) seen.add(it.sessionId);
+    it.time = firstOfRun ? it.session?.startedAt ?? null : prevAt ?? it.session?.startedAt ?? null;
+  }
+  let nextAt: string | null = null; // 'at' of the interjection/exit after the current turn
+  let rightRun: string | undefined; // sessionId of the run to the right (detect run changes)
+  for (let i = items.length - 1; i >= 0; i--) {
+    const it = items[i];
+    if (it.kind === "user" || it.kind === "system" || it.kind === "done") nextAt = it.at ?? nextAt;
+    if (it.kind !== "agent") continue;
+    if (it.sessionId !== rightRun) (nextAt = null), (rightRun = it.sessionId); // new run → fresh bracket
+    it.endedAt = nextAt ?? (it.sessionId ? runEnd.get(it.sessionId) ?? null : null);
   }
 
   return (
