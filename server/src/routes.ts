@@ -464,18 +464,22 @@ api.post("/groups/:id/run", async (c) => {
   return c.json({ started: true }, 202);
 });
 
-// Pause a group: the scheduler stops launching tasks that haven't started yet —
-// a running task is NOT interrupted — and the waiting (queued) tasks are parked
-// back to backlog so they don't look stuck. Resume by running the group again.
+// Pause a group = halt the whole group now. The scheduler stops launching tasks
+// that haven't started, the waiting (queued) tasks are parked back to backlog,
+// AND any in-flight task is stopped too (its agent subprocess is killed → the run
+// loop settles it as `canceled`, which is resumable). Resuming the group (运行/
+// 继续) re-runs the parked tasks and picks the canceled one back up from its
+// session — so pause loses no progress, it just freezes everything.
 api.post("/groups/:id/pause", async (c) => {
   const gid = c.req.param("id");
   const g = (await db.select().from(groups).where(eq(groups.id, gid))).at(0);
   if (!g) return c.json({ error: "not found" }, 404);
   await db.update(groups).set({ paused: true }).where(eq(groups.id, gid));
-  const waiting = (await db.select().from(tasks).where(eq(tasks.groupId, gid))).filter(
-    (t) => t.status === "queued",
-  );
-  for (const t of waiting) await setTaskStatus(t.id, "backlog");
+  const members = await db.select().from(tasks).where(eq(tasks.groupId, gid));
+  for (const t of members) {
+    if (t.status === "queued") await setTaskStatus(t.id, "backlog"); // park not-yet-started
+    else if (t.status === "running") stopTask(t.id); // kill in-flight → run loop settles it canceled
+  }
   const updated = (await db.select().from(groups).where(eq(groups.id, gid))).at(0)!;
   return c.json(updated);
 });

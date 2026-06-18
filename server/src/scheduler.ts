@@ -22,7 +22,8 @@ async function isPaused(groupId: string): Promise<boolean> {
 
 // Park tasks that were queued-but-never-started back to backlog so a paused group
 // shows them as parked (not stuck "queued") and a server restart won't reap them.
-// Running tasks are left alone — pause only holds what hasn't begun.
+// This only touches "queued" — a running task is stopped by the pause endpoint
+// (settles as canceled), not here.
 async function parkQueued(groupId: string): Promise<void> {
   const waiting = (await db.select().from(tasks).where(eq(tasks.groupId, groupId))).filter(
     (t) => t.status === "queued",
@@ -39,7 +40,9 @@ async function succeeded(taskId: string): Promise<boolean> {
 // dependsOn edges. The scheduler only queues + sequences; runTask does the work
 // and owns running/done/failed status (DESIGN.md §1/§3/§6 — same path as manual).
 // A paused group starts nothing; pausing mid-run stops launching the not-yet-
-// started tasks (the in-flight one finishes) and parks them back to backlog.
+// started tasks and parks them back to backlog. (The in-flight task is stopped by
+// the pause endpoint itself — see POST /groups/:id/pause — so once its run loop
+// settles, this loop just sees no inflight work and exits.)
 export async function runGroup(groupId: string): Promise<void> {
   const group = (await db.select().from(groups).where(eq(groups.id, groupId))).at(0);
   if (!group) throw new Error("group not found");

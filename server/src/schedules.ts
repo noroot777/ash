@@ -1,6 +1,6 @@
 import { eq } from "drizzle-orm";
 import { db } from "./db/index.js";
-import { schedules, tasks } from "./db/schema.js";
+import { schedules, tasks, groups } from "./db/schema.js";
 import { resumeOrRunTask } from "./orchestrator.js";
 import { runDebate } from "./debate/index.js";
 
@@ -53,6 +53,13 @@ const sameMinute = (a: string, b: Date) => {
 async function fire(taskId: string) {
   const t = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!t || t.status === "running" || t.status === "queued") return;
+  // Respect a paused group: a pause means "halt this group", so the scheduler
+  // must not sneak a group member past it. The task fires on the next due tick
+  // once the group is resumed.
+  if (t.groupId) {
+    const g = (await db.select().from(groups).where(eq(groups.id, t.groupId))).at(0);
+    if (g?.paused) return;
+  }
   if (t.mode === "debate") void runDebate(taskId);
   else void resumeOrRunTask(taskId, { reason: "schedule" });
 }

@@ -82,7 +82,7 @@ export function GroupsPanel({
                   <button
                     onClick={() => onRun(g.id)}
                     className="inline-flex shrink-0 items-center gap-1 rounded-md bg-accent px-2.5 py-1 text-[12px] font-medium text-accent-fg hover:bg-accent-hover"
-                    title="继续：恢复运行未开始的任务"
+                    title="继续：恢复未开始的任务，并从中断处接着跑被暂停打断的那个"
                   >
                     <Play size={12} weight="fill" /> 继续
                   </button>
@@ -99,7 +99,7 @@ export function GroupsPanel({
                   <button
                     onClick={() => onPause(g.id)}
                     className="inline-flex shrink-0 items-center gap-1 rounded-md border border-line2 px-2.5 py-1 text-[12px] font-medium text-muted hover:bg-raised hover:text-ink"
-                    title="暂停：未开始的任务先挂起，运行中的不打断；再点「运行/继续」恢复"
+                    title="暂停：立刻冻结整组——未开始的挂起，正在运行的也停掉（可继续）；再点「运行/继续」恢复"
                   >
                     <Pause size={12} weight="fill" /> 暂停
                   </button>
