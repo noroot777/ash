@@ -13,7 +13,7 @@ import { Menu } from "./Menu";
 import { runAction, canStopTask } from "./taskActions";
 import { groupLabel } from "./util";
 import { TaskTimeChip, formatInstant, Duration } from "./time";
-import { usePasteImages, ImageChips } from "./pasteImages";
+import { usePasteAttachments, AttachmentChips } from "./pasteAttachments";
 
 export type LogLine = {
   kind: "text" | "thinking" | "tool" | "error" | "done" | "user" | "system";
@@ -44,7 +44,7 @@ export function TaskDetail({
   sessionsBump: number;
   onRun: () => void;
   onStop: () => void;
-  onReply: (text: string, opts?: { images?: string[]; agent?: AgentType }) => void;
+  onReply: (text: string, opts?: { attachments?: string[]; agent?: AgentType }) => void;
   onPatch: (patch: Partial<Task>) => void;
   onCreateGroup: () => void;
   onDelete: () => void;
@@ -548,11 +548,11 @@ function UserBubble({ text, at }: { text: string; at?: string }) {
 // Reply-and-continue box. Answers the task's own agent by default; typing `@` and
 // picking an agent assigns the reply to another agent, which is invited into the
 // same task (same working directory). Images can be pasted in too.
-function ReplyBox({ onReply, disabled }: { onReply: (text: string, opts?: { images?: string[]; agent?: AgentType }) => void; disabled: boolean }) {
+function ReplyBox({ onReply, disabled }: { onReply: (text: string, opts?: { attachments?: string[]; agent?: AgentType }) => void; disabled: boolean }) {
   const [v, setV] = useState("");
   const [target, setTarget] = useState<AgentType | null>(null);
   const [mIdx, setMIdx] = useState(0);
-  const { images, onPaste, remove, clear } = usePasteImages();
+  const { attachments, onPaste, remove, clear, error } = usePasteAttachments();
 
   // @-mention: when an "@word" token sits at the end of the text, offer the agent
   // list. Choosing one assigns the reply to that agent and strips the token.
@@ -567,8 +567,8 @@ function ReplyBox({ onReply, disabled }: { onReply: (text: string, opts?: { imag
   };
 
   const send = () => {
-    if ((v.trim() || images.length) && !disabled) {
-      onReply(v.trim(), { images: images.map((i) => i.path), agent: target ?? undefined });
+    if ((v.trim() || attachments.length) && !disabled) {
+      onReply(v.trim(), { attachments: attachments.map((a) => a.path), agent: target ?? undefined });
       setV("");
       clear();
       setTarget(null);
@@ -592,7 +592,7 @@ function ReplyBox({ onReply, disabled }: { onReply: (text: string, opts?: { imag
           ))}
         </div>
       )}
-      <ImageChips images={images} onRemove={remove} />
+      <AttachmentChips attachments={attachments} onRemove={remove} error={error} />
       {target && (
         <div className="flex items-center text-[12px]">
           <span className="inline-flex items-center gap-1 rounded-full bg-accent/10 px-2 py-0.5 text-ink">
@@ -621,12 +621,12 @@ function ReplyBox({ onReply, disabled }: { onReply: (text: string, opts?: { imag
           }}
           rows={2}
           disabled={disabled}
-          placeholder={disabled ? "进行中…" : "回复并继续（⌘↵ 发送，可粘贴图片，@ 召唤其它智能体）…"}
+          placeholder={disabled ? "进行中…" : "回复并继续（⌘↵ 发送，可粘贴图片或文件，@ 召唤其它智能体）…"}
           className="flex-1 resize-none rounded-md border border-line bg-panel px-2.5 py-1.5 text-[13px] text-ink outline-none placeholder:text-faint focus:border-accent disabled:opacity-50"
         />
         <button
           onClick={send}
-          disabled={(!v.trim() && !images.length) || disabled}
+          disabled={(!v.trim() && !attachments.length) || disabled}
           className="rounded-md bg-accent px-3 py-2 text-[13px] font-medium text-accent-fg hover:bg-accent-hover disabled:opacity-40"
         >
           发送

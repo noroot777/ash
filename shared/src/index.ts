@@ -119,6 +119,22 @@ export interface Task {
   endedAt?: string | null;
 }
 
+// ── Attachments (pasted into the composer / reply box) ───────────────────────
+// Pasted images OR files. We don't feed them to a vision API — each is persisted
+// to disk and its absolute path is appended to the prompt for the agent to Read
+// (see server util.attachmentsPrompt). So "type" only decides the web preview
+// (thumbnail vs file chip); the agent can Read any file. Limits mirror Claude
+// Code / Codex CLI: vision images PNG/JPEG/GIF/WebP ≤ 5MB, any other file ≤ 20MB.
+export const VISION_IMAGE_MIME = ["image/png", "image/jpeg", "image/gif", "image/webp"] as const;
+export const MAX_IMAGE_BYTES = 5 * 1024 * 1024; // 视觉图片：对齐 claude/codex 5MB
+export const MAX_FILE_BYTES = 20 * 1024 * 1024; // 其它文件：20MB
+
+export type AttachmentKind = "image" | "file";
+export const attachmentKind = (mime: string): AttachmentKind =>
+  (VISION_IMAGE_MIME as readonly string[]).includes(mime) ? "image" : "file";
+export const maxBytesFor = (mime: string): number =>
+  attachmentKind(mime) === "image" ? MAX_IMAGE_BYTES : MAX_FILE_BYTES;
+
 // ── External batch API (agent-facing, § interfaces) ──────────────────────────
 // One call to create a whole batch of single-mode tasks into an EXISTING group,
 // wiring cross-task dependency edges that the in-group scheduler honors. The

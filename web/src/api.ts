@@ -1,4 +1,4 @@
-import type { Project, ProjectView, ProjectHealth, Task, Session, Group, GateAction, Schedule, AgentExecutorProfile, BatchCreateTasksBody, AgentType, DebateSpeaker } from "@harness/shared";
+import type { Project, ProjectView, ProjectHealth, Task, Session, Group, GateAction, Schedule, AgentExecutorProfile, BatchCreateTasksBody, AgentType, DebateSpeaker, AttachmentKind } from "@harness/shared";
 
 const j = async (r: Response) => {
   if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
@@ -75,14 +75,15 @@ export const api = {
 
   tasks: (): Promise<Task[]> => fetch("/api/tasks").then(j),
   task: (id: string): Promise<Task> => fetch(`/api/tasks/${id}`).then(j),
-  // Persist a pasted image; returns its absolute path (for the agent) + url (preview).
-  uploadImage: (dataUrl: string): Promise<{ id: string; path: string; url: string }> =>
+  // Persist a pasted image/file; returns its absolute path (for the agent), a url
+  // (preview) and the kind (image vs file → which chip the composer shows).
+  uploadFile: (dataUrl: string, name: string): Promise<{ id: string; path: string; url: string; name: string; kind: AttachmentKind }> =>
     fetch("/api/uploads", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ dataUrl }),
+      body: JSON.stringify({ dataUrl, name }),
     }).then(j),
-  createTask: (t: Partial<Task> & { projectId: string; title: string; images?: string[] }): Promise<Task> =>
+  createTask: (t: Partial<Task> & { projectId: string; title: string; attachments?: string[] }): Promise<Task> =>
     fetch("/api/tasks", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -102,7 +103,7 @@ export const api = {
     fetch(`/api/tasks/${id}/stop`, { method: "POST" }).then(j),
   retryTask: (id: string): Promise<unknown> =>
     fetch(`/api/tasks/${id}/retry`, { method: "POST" }).then(j),
-  replyTask: (id: string, text: string, opts?: { images?: string[]; agent?: AgentType }): Promise<unknown> =>
+  replyTask: (id: string, text: string, opts?: { attachments?: string[]; agent?: AgentType }): Promise<unknown> =>
     fetch(`/api/tasks/${id}/reply`, {
       method: "POST",
       headers: { "content-type": "application/json" },

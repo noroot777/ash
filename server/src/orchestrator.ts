@@ -5,7 +5,7 @@ import type { AgentType } from "@harness/shared";
 import { db } from "./db/index.js";
 import { tasks, projects, groups, sessions } from "./db/schema.js";
 import { bus } from "./bus.js";
-import { id, now, imagesPrompt } from "./util.js";
+import { id, now, attachmentsPrompt } from "./util.js";
 import { setTaskStatus } from "./status.js";
 import { trackRun, untrackRun, takeCanceled } from "./runs.js";
 import { resolveWorkspace, ensureWorkdir } from "./git.js";
@@ -227,7 +227,7 @@ export async function resumeOrRunTask(
 export async function continueTask(
   taskId: string,
   userText: string,
-  opts: { agent?: AgentType; images?: string[]; system?: ResumeReason } = {},
+  opts: { agent?: AgentType; attachments?: string[]; system?: ResumeReason } = {},
 ): Promise<void> {
   if (running.has(taskId)) return;
   running.add(taskId);
@@ -258,7 +258,7 @@ export async function continueTask(
     await setStatus(taskId, "running");
 
     const invited = !prev; // first time this agent is pulled into the task
-    const prompt = (invited ? COLLAB_INVITE : "") + userText + imagesPrompt(opts.images);
+    const prompt = (invited ? COLLAB_INVITE : "") + userText + attachmentsPrompt(opts.attachments);
     handle = ex.run({ prompt, cwd, sessionId: resuming ? prev!.cliSessionId! : undefined });
     trackRun(taskId, handle);
 

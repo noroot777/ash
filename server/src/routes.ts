@@ -13,11 +13,11 @@ import type {
   Session,
   TaskStatus,
 } from "@harness/shared";
-import { canStartTask, isUserSettableStatus, AGENT_TYPES } from "@harness/shared";
+import { canStartTask, isUserSettableStatus, AGENT_TYPES, maxBytesFor, attachmentKind } from "@harness/shared";
 import { db } from "./db/index.js";
 import { projects, groups, tasks, sessions, schedules, agents } from "./db/schema.js";
 import { bus } from "./bus.js";
-import { id, now, imagesPrompt } from "./util.js";
+import { id, now, attachmentsPrompt } from "./util.js";
 import { resumeOrRunTask, continueTask } from "./orchestrator.js";
 import { setTaskStatus } from "./status.js";
 import { stopTask } from "./runs.js";
@@ -34,45 +34,76 @@ export const api = new Hono();
 // ── health ───────────────────────────────────────────────────────────────
 api.get("/health", (c) => c.json({ ok: true, ts: now() }));
 
-// ── image uploads (pasted into the composer / reply box) ─────────────────────
-// Agents take text on stdin, not binaries — so we persist the image and hand its
-// absolute path to the agent (it reads it with the Read tool). See imagesPrompt.
-const IMG_EXT: Record<string, string> = {
+// ── attachment uploads (pasted into the composer / reply box) ────────────────
+// Agents take text on stdin, not binaries — so we persist the pasted image/file
+// and hand its absolute path to the agent (it reads it with the Read tool). See
+// attachmentsPrompt. ANY type is accepted; size caps mirror Claude Code / Codex
+// (vision images ≤5MB, any other file ≤20MB — maxBytesFor).
+const MIME_EXT: Record<string, string> = {
   "image/png": "png",
   "image/jpeg": "jpg",
   "image/gif": "gif",
   "image/webp": "webp",
   "image/svg+xml": "svg",
+  "application/pdf": "pdf",
+  "text/plain": "txt",
+  "text/csv": "csv",
+  "application/json": "json",
 };
-const IMG_MIME: Record<string, string> = {
+const EXT_MIME: Record<string, string> = {
   ".png": "image/png",
   ".jpg": "image/jpeg",
   ".jpeg": "image/jpeg",
   ".gif": "image/gif",
   ".webp": "image/webp",
   ".svg": "image/svg+xml",
+  ".pdf": "application/pdf",
+  ".txt": "text/plain; charset=utf-8",
+  ".csv": "text/csv; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
 };
 
-// Accept a base64 data URL, persist it, return the absolute path (for the prompt)
-// and a url (for the web client to preview the thumbnail).
+// Keep stored filenames to a single safe path segment and bounded length.
+const sanitizeName = (name: string): string =>
+  (name || "").replace(/[^A-Za-z0-9._-]/g, "_").replace(/^[._-]+/, "").slice(-80);
+
+// Accept a base64 data URL of any type, persist it, return the absolute path (for
+// the prompt) plus a url (preview thumbnail) and the kind (image vs file → which
+// chip the web shows). The agent-facing filename keeps the original name when the
+// client sent one, prefixed with an id so concurrent pastes never collide.
 api.post("/uploads", async (c) => {
-  const { dataUrl } = await c.req.json<{ dataUrl?: string }>();
-  const m = /^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/s.exec(dataUrl ?? "");
-  if (!m) return c.json({ error: "需要 data:image/*;base64 格式的图片" }, 400);
-  const ext = IMG_EXT[m[1]] ?? "png";
+  const { dataUrl, name } = await c.req.json<{ dataUrl?: string; name?: string }>();
+  const m = /^data:([^;,]+);base64,(.+)$/s.exec(dataUrl ?? "");
+  if (!m) return c.json({ error: "需要 data:<mime>;base64 格式的数据" }, 400);
+  const mime = m[1];
+  const bytes = Buffer.from(m[2], "base64");
+  const cap = maxBytesFor(mime);
+  if (bytes.length > cap) {
+    return c.json(
+      { error: `文件过大：${(bytes.length / 1048576).toFixed(1)}MB，上限 ${Math.round(cap / 1048576)}MB`, max: cap },
+      413,
+    );
+  }
+  const display = sanitizeName(name ?? "") || `pasted.${MIME_EXT[mime] ?? "bin"}`;
   mkdirSync(UPLOADS_DIR, { recursive: true });
-  const file = `${id()}.${ext}`;
-  writeFileSync(join(UPLOADS_DIR, file), Buffer.from(m[2], "base64"));
-  return c.json({ id: file, path: join(UPLOADS_DIR, file), url: `/api/uploads/${file}` });
+  const file = `${id()}-${display}`;
+  writeFileSync(join(UPLOADS_DIR, file), bytes);
+  return c.json({
+    id: file,
+    path: join(UPLOADS_DIR, file),
+    url: `/api/uploads/${file}`,
+    name: display,
+    kind: attachmentKind(mime),
+  });
 });
 
-// Serve a stored image back (thumbnail preview). basename() strips any path so
-// `..` can't escape UPLOADS_DIR.
+// Serve a stored attachment back (thumbnail preview). basename() strips any path
+// so `..` can't escape UPLOADS_DIR. Non-previewable types fall back to octet-stream.
 api.get("/uploads/:file", async (c) => {
   const file = basename(c.req.param("file"));
   try {
     const body = await readFile(join(UPLOADS_DIR, file));
-    return c.body(body, 200, { "content-type": IMG_MIME[extname(file).toLowerCase()] ?? "application/octet-stream" });
+    return c.body(body, 200, { "content-type": EXT_MIME[extname(file).toLowerCase()] ?? "application/octet-stream" });
   } catch {
     return c.json({ error: "not found" }, 404);
   }
@@ -374,7 +405,7 @@ api.get("/tasks/:id", async (c) => {
 });
 
 api.post("/tasks", async (c) => {
-  const b = await c.req.json<Partial<Task> & { projectId: string; title: string; images?: string[] }>();
+  const b = await c.req.json<Partial<Task> & { projectId: string; title: string; attachments?: string[] }>();
   const ts = now();
   const row = {
     id: id(),
@@ -382,7 +413,7 @@ api.post("/tasks", async (c) => {
     groupId: b.groupId ?? null,
     parentId: b.parentId ?? null,
     title: b.title,
-    body: (b.body ?? "") + imagesPrompt(b.images),
+    body: (b.body ?? "") + attachmentsPrompt(b.attachments),
     mode: b.mode ?? "single",
     status: (b.status && isUserSettableStatus(b.status) ? b.status : "backlog") as TaskStatus,
     priority: b.priority ?? "none",
@@ -646,14 +677,14 @@ api.post("/tasks/:id/stop", async (c) => {
 // agent that stopped to ask can be answered and keep going (same session).
 api.post("/tasks/:id/reply", async (c) => {
   const taskId = c.req.param("id");
-  const b = await c.req.json<{ text?: string; images?: string[]; agent?: AgentType }>();
-  if (!b.text?.trim() && !b.images?.length) return c.json({ error: "empty" }, 400);
+  const b = await c.req.json<{ text?: string; attachments?: string[]; agent?: AgentType }>();
+  if (!b.text?.trim() && !b.attachments?.length) return c.json({ error: "empty" }, 400);
   if (b.agent && !AGENT_TYPES.includes(b.agent)) return c.json({ error: "未知的 agent", agent: b.agent }, 400);
   const r = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!r) return c.json({ error: "not found" }, 404);
   if (r.mode !== "single") return c.json({ error: "仅单任务支持回复" }, 409);
   if (r.status === "running" || r.status === "queued") return c.json({ error: "任务进行中" }, 409);
-  void continueTask(taskId, (b.text ?? "").trim(), { images: b.images, agent: b.agent });
+  void continueTask(taskId, (b.text ?? "").trim(), { attachments: b.attachments, agent: b.agent });
   return c.json({ started: true }, 202);
 });
 
