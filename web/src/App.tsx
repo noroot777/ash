@@ -457,6 +457,8 @@ function renderEvent(e: AgentEvent, agent?: AgentType, sessionId?: string): LogL
       return base({ kind: "text", text: e.text });
     case "thinking":
       return base({ kind: "thinking", text: e.text });
+    case "system":
+      return base({ kind: "system", text: e.text, at: new Date().toISOString() });
     case "tool":
       return base({ kind: "tool", name: e.name, text: e.detail ?? "" });
     case "error":

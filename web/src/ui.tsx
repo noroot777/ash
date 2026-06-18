@@ -6,8 +6,9 @@ import { Duration, formatInstant } from "./time";
 import { api } from "./api";
 
 // Long free-text (a task's objective / a debate's topic) that would otherwise
-// dominate the header: clamp to two lines by default, reveal a 展开/收起 toggle
-// only when it actually overflows. Expanded, it's a scrollable box rather than an
+// dominate the header: clamp to two lines by default, with an icon-only toggle
+// floating in the box's top-right corner (no separate row) — shown only when the
+// text actually overflows. Expanded, it's a scrollable box rather than an
 // unbounded wall. Shared by the task detail and the debate header so both read
 // the same.
 export function CollapsibleText({ text }: { text: string }) {
@@ -20,24 +21,26 @@ export function CollapsibleText({ text }: { text: string }) {
     const el = ref.current;
     if (el && !open) setOverflows(el.scrollHeight > el.clientHeight + 1);
   }, [text, open]);
+  const toggleable = overflows || open;
   return (
-    <div className="mt-2">
+    <div className="relative mt-2">
       <p
         ref={ref}
         onClick={() => !open && overflows && setOpen(true)}
         className={`whitespace-pre-wrap break-words rounded-md bg-raised/60 px-3 py-2 text-[13px] text-muted ${
-          open ? "max-h-48 overflow-y-auto" : `line-clamp-2 ${overflows ? "cursor-pointer" : ""}`
-        }`}
+          toggleable ? "pr-9" : ""
+        } ${open ? "max-h-48 overflow-y-auto" : `line-clamp-2 ${overflows ? "cursor-pointer" : ""}`}`}
       >
         {text}
       </p>
-      {overflows && (
+      {toggleable && (
         <button
           onClick={() => setOpen((o) => !o)}
-          className="mt-0.5 inline-flex items-center gap-0.5 text-[11px] text-faint transition-colors hover:text-muted"
+          title={open ? "收起" : "展开全文"}
+          aria-label={open ? "收起" : "展开全文"}
+          className="absolute right-1.5 top-1.5 grid h-6 w-6 place-items-center rounded-md text-faint transition-colors hover:bg-line2 hover:text-muted"
         >
-          {open ? "收起" : "展开"}
-          <CaretDown size={10} weight="bold" className={`transition-transform ${open ? "rotate-180" : ""}`} />
+          <CaretDown size={13} weight="bold" className={`transition-transform ${open ? "rotate-180" : ""}`} />
         </button>
       )}
     </div>

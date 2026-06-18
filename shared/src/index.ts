@@ -230,6 +230,7 @@ export type AgentEvent =
   | { kind: "text"; text: string }
   | { kind: "tool"; name: string; detail?: string }
   | { kind: "session"; cliSessionId: string }
+  | { kind: "system"; text: string } // a backend-initiated 〔系统〕 trace (e.g. 继续) — its own bubble, not agent text
   | { kind: "error"; message: string }
   | { kind: "done"; exitStatus: number };
 

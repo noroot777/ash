@@ -9,7 +9,7 @@ import { ScheduleControl } from "./ScheduleControl";
 import { StatusIcon } from "./StatusIcon";
 import { STATUSES } from "./constants";
 import { runAction, canStopTask } from "./taskActions";
-import { TaskTimes, formatInstant } from "./time";
+import { TaskTimeChip, formatInstant } from "./time";
 
 // Animated "thinking" indicator — three dots flashing in sequence.
 function TypingDots() {
@@ -147,6 +147,7 @@ export function DebateView({
           <span className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium ${collab ? "bg-teal-500/15 text-teal-700" : "bg-violet-500/20 text-violet-700"}`}>{collab ? "collab" : "debate"}</span>
           <h1 className="min-w-0 flex-1 truncate text-lg font-medium tracking-tight">{task.title}</h1>
           <StatusPill status={task.status} />
+          <TaskTimeChip task={task} />
           {canStopTask(task.status) ? (
             <button
               onClick={onStop}
@@ -193,7 +194,6 @@ export function DebateView({
             <ScheduleControl taskId={task.id} />
           </div>
         </div>
-        <TaskTimes task={task} />
       </header>
 
       <div ref={scrollRef} onScroll={onScroll} className="min-h-0 flex-1 overflow-y-auto px-6 py-4">

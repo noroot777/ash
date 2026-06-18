@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { Task, Group, Session, TaskStatus, Priority, AgentType } from "@harness/shared";
 import { isUserSettableStatus, AGENT_TYPES } from "@harness/shared";
-import { CaretDown, Play, Stop, Trash, ArrowsDownUp, Robot, X } from "@phosphor-icons/react";
+import { CaretDown, Play, Stop, Trash, ArrowsDownUp, ArrowsClockwise, Robot, X } from "@phosphor-icons/react";
 import { api } from "./api";
 import { STATUSES, PRIORITIES } from "./constants";
 import { ToolCall, ThinkingBlock, ResumeButtons, CollapsibleText } from "./ui";
@@ -12,11 +12,11 @@ import { ScheduleControl } from "./ScheduleControl";
 import { Menu } from "./Menu";
 import { runAction, canStopTask } from "./taskActions";
 import { groupLabel } from "./util";
-import { TaskTimes, formatInstant } from "./time";
+import { TaskTimeChip, formatInstant } from "./time";
 import { usePasteImages, ImageChips } from "./pasteImages";
 
 export type LogLine = {
-  kind: "text" | "thinking" | "tool" | "error" | "done" | "user";
+  kind: "text" | "thinking" | "tool" | "error" | "done" | "user" | "system";
   text: string;
   name?: string; // tool name (for kind "tool")
   agent?: AgentType; // which agent produced it (for @-mention multi-agent threads)
@@ -89,36 +89,39 @@ export function TaskDetail({
       <header className="border-b border-line px-6 pb-3 pt-5">
         <div className="flex items-start gap-3">
           <EditableTitle title={task.title} onSave={(t) => onPatch({ title: t, autoTitle: false })} />
-          {canStopTask(task.status) ? (
+          <div className="flex shrink-0 items-center gap-2">
+            <TaskTimeChip task={task} />
+            {canStopTask(task.status) ? (
+              <button
+                onClick={onStop}
+                className="inline-flex items-center gap-1.5 rounded-md border border-red-500/40 px-3 py-1.5 text-[13px] font-medium text-red-600 transition-colors hover:bg-red-500/10"
+              >
+                <Stop size={13} weight="fill" />
+                停止
+              </button>
+            ) : (
+              (() => {
+                const a = runAction(task.status);
+                return (
+                  <button
+                    onClick={onRun}
+                    disabled={!a.canClick}
+                    className="inline-flex items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-[13px] font-medium text-accent-fg transition-colors hover:bg-accent-hover disabled:opacity-40 disabled:hover:bg-accent"
+                  >
+                    <Play size={13} weight="fill" />
+                    {a.label}
+                  </button>
+                );
+              })()
+            )}
             <button
-              onClick={onStop}
-              className="inline-flex items-center gap-1.5 rounded-md border border-red-500/40 px-3 py-1.5 text-[13px] font-medium text-red-600 transition-colors hover:bg-red-500/10"
+              onClick={onDelete}
+              className="grid h-[30px] w-[30px] place-items-center rounded-md text-muted transition-colors hover:bg-raised hover:text-red-600"
+              title="删除任务"
             >
-              <Stop size={13} weight="fill" />
-              停止
+              <Trash size={15} />
             </button>
-          ) : (
-            (() => {
-              const a = runAction(task.status);
-              return (
-                <button
-                  onClick={onRun}
-                  disabled={!a.canClick}
-                  className="inline-flex items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-[13px] font-medium text-accent-fg transition-colors hover:bg-accent-hover disabled:opacity-40 disabled:hover:bg-accent"
-                >
-                  <Play size={13} weight="fill" />
-                  {a.label}
-                </button>
-              );
-            })()
-          )}
-          <button
-            onClick={onDelete}
-            className="grid h-[30px] w-[30px] place-items-center rounded-md text-muted transition-colors hover:bg-raised hover:text-red-600"
-            title="删除任务"
-          >
-            <Trash size={15} />
-          </button>
+          </div>
         </div>
 
         {/* Task objective — shown right under the title (collapsed to 2 lines;
@@ -208,8 +211,6 @@ export function TaskDetail({
             </>
           )}
         </div>
-
-        <TaskTimes task={task} />
       </header>
 
       <div
@@ -250,7 +251,66 @@ type AgentItem = {
   nodes: ReactNode[]; // pre-rendered snapshot content
   lines: LogLine[]; // live lines, rendered via groupContent
 };
-type ConvItem = AgentItem | { kind: "user"; text: string; at?: string } | { kind: "done"; text: string };
+type ConvItem =
+  | AgentItem
+  | { kind: "user"; text: string; at?: string }
+  | { kind: "system"; text: string; at?: string }
+  | { kind: "done"; text: string };
+
+// A persisted session .md is mostly agent Markdown, but backend continues and
+// 你→@agent replies are interleaved as their own turns. New runs write each as a
+// \x1e + JSON sentinel line (carrying a timestamp); older runs used inline
+// 〔系统〕…/〔你 → @x〕… markers. Split the blob back into ordered segments so each
+// turn renders as its own bubble instead of bleeding into the agent text around it.
+type Seg =
+  | { kind: "agent"; text: string }
+  | { kind: "user"; text: string; at?: string }
+  | { kind: "system"; text: string; at?: string };
+
+const LEGACY_SYS_MARKER = "〔系统〕继续（从中断处）";
+
+function parseSnapshot(out: string): Seg[] {
+  const segs: Seg[] = [];
+  let buf: string[] = [];
+  const flush = () => {
+    const t = buf.join("\n").trim();
+    if (t) segs.push({ kind: "agent", text: t });
+    buf = [];
+  };
+  for (const line of out.split("\n")) {
+    if (line.startsWith("\x1e")) {
+      try {
+        const j = JSON.parse(line.slice(1)) as { t?: string; text?: string; at?: string };
+        flush();
+        segs.push(
+          j.t === "system"
+            ? { kind: "system", text: j.text || LEGACY_SYS_MARKER, at: j.at }
+            : { kind: "user", text: j.text ?? "", at: j.at },
+        );
+        continue;
+      } catch {
+        /* not a turn line — fall through and treat as ordinary text */
+      }
+    }
+    const trimmed = line.trim();
+    if (trimmed === LEGACY_SYS_MARKER) {
+      flush();
+      segs.push({ kind: "system", text: LEGACY_SYS_MARKER });
+      continue;
+    }
+    // Legacy reply marker — best-effort (only the first line is recoverable, since
+    // old multi-line replies weren't fenced); the rest folds into the next bubble.
+    const m = /^〔你 → @[^〕]*〕([\s\S]*)$/.exec(trimmed);
+    if (m) {
+      flush();
+      segs.push({ kind: "user", text: m[1] ?? "" });
+      continue;
+    }
+    buf.push(line);
+  }
+  flush();
+  return segs;
+}
 
 function Conversation({
   snapshot,
@@ -265,7 +325,24 @@ function Conversation({
 }) {
   const items: ConvItem[] = [];
   for (const { s, out } of snapshot) {
-    items.push({ kind: "agent", sessionId: s.id, agent: s.agentType, session: s, label: s.executor, time: s.startedAt, nodes: [<Markdown key="snap" text={out} />], lines: [] });
+    // One session can now yield several bubbles (agent turns split by interjections).
+    // The run's credential (resume/id) belongs on its LAST agent turn only.
+    const segs = parseSnapshot(out);
+    const lastAgent = segs.reduce((acc, seg, i) => (seg.kind === "agent" ? i : acc), -1);
+    segs.forEach((seg, i) => {
+      if (seg.kind === "user") return void items.push({ kind: "user", text: seg.text, at: seg.at });
+      if (seg.kind === "system") return void items.push({ kind: "system", text: seg.text, at: seg.at });
+      items.push({
+        kind: "agent",
+        sessionId: s.id,
+        agent: s.agentType,
+        session: i === lastAgent ? s : undefined,
+        label: s.executor,
+        time: s.startedAt,
+        nodes: [<Markdown key={`snap-${s.id}-${i}`} text={seg.text} />],
+        lines: [],
+      });
+    });
   }
   // Continue into the last snapshot bubble if the live stream resumes that run.
   const last = items[items.length - 1];
@@ -273,6 +350,11 @@ function Conversation({
   for (const l of logs) {
     if (l.kind === "user") {
       items.push({ kind: "user", text: l.text, at: l.at });
+      cur = null;
+      continue;
+    }
+    if (l.kind === "system") {
+      items.push({ kind: "system", text: l.text, at: l.at });
       cur = null;
       continue;
     }
@@ -294,6 +376,7 @@ function Conversation({
     <>
       {items.map((it, i) => {
         if (it.kind === "user") return <UserBubble key={i} text={it.text} at={it.at} />;
+        if (it.kind === "system") return <SystemNote key={i} text={it.text} at={it.at} />;
         if (it.kind === "done") return <div key={i} className="my-2 text-center text-xs text-faint">{it.text}</div>;
         const content = [...it.nodes, ...groupContent(it.lines)];
         if (!content.length) return null;
@@ -360,6 +443,27 @@ function AgentBubble({
         {children}
         {session && (session.resumeCommand || session.cliSessionId) && <ResumeButtons s={session} />}
       </div>
+    </div>
+  );
+}
+
+// A backend interjection (e.g. 〔系统〕继续) — a centered, divider-flanked note so
+// it reads as a timeline marker between turns, not as agent or human speech.
+function SystemNote({ text, at }: { text: string; at?: string }) {
+  return (
+    <div className="my-3 flex items-center gap-2 text-[11px] text-faint">
+      <span className="h-px flex-1 bg-line" />
+      <span className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border border-line bg-raised/40 px-2.5 py-1">
+        <ArrowsClockwise size={11} />
+        <span>{text}</span>
+        {at && (
+          <>
+            <span className="text-line2">·</span>
+            <span>{formatInstant(at)}</span>
+          </>
+        )}
+      </span>
+      <span className="h-px flex-1 bg-line" />
     </div>
   );
 }

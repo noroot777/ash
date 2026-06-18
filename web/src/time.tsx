@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type { Task } from "@harness/shared";
+import { Clock } from "@phosphor-icons/react";
 
 // ── formatting ───────────────────────────────────────────────────────────────
 // Instant: compact local "MM/DD HH:mm" (e.g. 06/13 15:35).
@@ -64,34 +65,32 @@ export function Duration({
   return t ? <span className={className}>{t}</span> : null;
 }
 
-// One muted line summarizing a task's lifecycle times: 创建 · 开始 · 结束 · 用时.
-// Shown in the task detail / debate headers ("具体放哪儿" — under the controls).
-export function TaskTimes({ task }: { task: Task }) {
+// Compact lifecycle-time chip — the title-row replacement for the old full-width
+// 创建·开始·结束·用时 row. Shows the single most relevant figure (用时 once a run
+// exists, otherwise the 创建 instant); the full breakdown lives in the tooltip so
+// it costs no extra width and stays glued to the title. Live-ticks while running.
+export function TaskTimeChip({ task, className }: { task: Task; className?: string }) {
   const running = task.status === "running" || task.status === "queued";
-  const sep = <span className="text-line2">·</span>;
+  const tip = [
+    `创建 ${formatInstant(task.createdAt)}`,
+    task.startedAt && `开始 ${formatInstant(task.startedAt)}`,
+    task.endedAt && `结束 ${formatInstant(task.endedAt)}`,
+  ]
+    .filter(Boolean)
+    .join(" · ");
   return (
-    <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-faint">
-      <span>创建 {formatInstant(task.createdAt)}</span>
-      {task.startedAt && (
-        <>
-          {sep}
-          <span>开始 {formatInstant(task.startedAt)}</span>
-        </>
+    <span
+      title={tip}
+      className={`inline-flex shrink-0 items-center gap-1 whitespace-nowrap text-[11px] text-faint ${className ?? ""}`}
+    >
+      <Clock size={12} className="shrink-0" />
+      {task.startedAt ? (
+        <span className={running ? "text-muted" : undefined}>
+          用时 <Duration from={task.startedAt} to={task.endedAt} />
+        </span>
+      ) : (
+        <span>创建 {formatInstant(task.createdAt)}</span>
       )}
-      {task.endedAt && (
-        <>
-          {sep}
-          <span>结束 {formatInstant(task.endedAt)}</span>
-        </>
-      )}
-      {task.startedAt && (
-        <>
-          {sep}
-          <span className={running ? "text-muted" : ""}>
-            用时 <Duration from={task.startedAt} to={task.endedAt} />
-          </span>
-        </>
-      )}
-    </div>
+    </span>
   );
 }

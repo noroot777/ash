@@ -36,6 +36,19 @@ const RESUME_PROMPT =
 // user reply), shown identically live (SSE) and on reload (.md).
 const SYS_MARKER = "〔系统〕继续（从中断处）";
 
+// A non-text interjection in the run timeline — a 你→@agent reply or a 〔系统〕
+// continue — is persisted as ONE sentinel line: RS (\x1e, which never occurs in
+// agent text) + JSON. JSON keeps it to a single physical line even when the text
+// has newlines, so the reload parser can lift it back into its own bubble (with
+// the timestamp it carries) instead of letting it bleed into the surrounding
+// agent Markdown. Live, the same turn rides its own channel (a user reply shows
+// optimistically client-side; a system trace via a `system` event), so both
+// surfaces read identically.
+const TURN_SENTINEL = "\x1e";
+function writeTurn(out: NodeJS.WritableStream, turn: { t: "user" | "system"; agent: AgentType; text: string }): void {
+  out.write(`\n${TURN_SENTINEL}${JSON.stringify({ ...turn, at: now() })}\n`);
+}
+
 // Why a task is being (re)started — only used to label the resume; all reasons
 // behave the same (resume if there's a resumable session, else fresh).
 export type ResumeReason = "group" | "run" | "retry" | "schedule";
@@ -280,12 +293,14 @@ export async function continueTask(
     mkdirSync(runDir, { recursive: true });
     const out = createWriteStream(join(runDir, `${sessId}.md`), { flags: "a" });
     if (opts.system) {
-      // Backend-initiated 继续: a system trace, NOT a "你 →" reply. Persist to the
-      // .md (reload) and emit one matching text event (live) — same string both ways.
-      out.write(`\n\n${SYS_MARKER}\n`);
-      bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: "single", agentType: agent, event: { kind: "text", text: SYS_MARKER } });
+      // Backend-initiated 继续: a 〔系统〕 trace (its own bubble), NOT a 你→ reply.
+      // Persist as a structured turn (reload) and emit a matching system event (live).
+      writeTurn(out, { t: "system", agent, text: SYS_MARKER });
+      bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: "single", agentType: agent, event: { kind: "system", text: SYS_MARKER } });
     } else {
-      out.write(`\n\n〔你 → @${agent}〕${userText}\n`); // so a reloaded thread shows the human turn too
+      // 你→@agent reply, persisted as a structured turn so a reloaded thread shows
+      // the human turn as its own bubble (live, the client already shows it).
+      writeTurn(out, { t: "user", agent, text: userText });
     }
 
     let exitStatus = 0;
