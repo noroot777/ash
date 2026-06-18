@@ -216,15 +216,10 @@ export function TaskDetail({
         ref={scrollRef}
         className="min-h-0 flex-1 overflow-y-auto break-words px-6 py-4 text-[13px] leading-relaxed"
       >
-        {/* Prior runs, snapshotted on load — one bubble per session, each
-            carrying its own resume credential. */}
-        {snapshot.map(({ s, out }) => (
-          <AgentBubble key={s.id} label={s.executor} time={s.startedAt} session={s}>
-            <Markdown text={out} />
-          </AgentBubble>
-        ))}
-        {/* Live stream from this app session, grouped into bubbles. */}
-        <LiveConversation logs={logs} sessions={sessions} primaryAgent={task.agentType ?? "claude"} />
+        {/* The run as a conversation: prior output (snapshotted per session on
+            load) and the live stream merge into one bubble per run, so a running
+            task you reload doesn't split into a stale + live pair. */}
+        <Conversation snapshot={snapshot} logs={logs} sessions={sessions} primaryAgent={task.agentType ?? "claude"} />
         {snapshot.length === 0 && logs.length === 0 && (
           <p className="font-sans text-faint">点击「运行」开始，输出会实时流式显示在这里。</p>
         )}
@@ -237,56 +232,79 @@ export function TaskDetail({
   );
 }
 
-// Render the live log as a conversation of bubbles (mirrors /pair): a contiguous
-// run of one session's output becomes one left-aligned agent bubble — merged
-// Markdown, collapsible tools/thinking, and a slim resume/id/time footer for that
-// run. The human's replies are right-aligned bubbles; an @-mention handoff simply
-// starts a new bubble carrying the new executor's label, so the divider is gone.
-function LiveConversation({
+// Render the run as a conversation of bubbles (mirrors /pair). A contiguous run
+// of one session's output is one left-aligned agent bubble — merged Markdown,
+// collapsible tools/thinking, and a slim resume/id/time footer for that run.
+// Human replies are right-aligned bubbles; an @-mention handoff just starts a new
+// bubble carrying the new executor's label. The per-session snapshot (prior
+// output at load) and the live stream are stitched into the SAME bubble when they
+// belong to the same run, so reloading a running task never shows a stale + live
+// duplicate.
+type AgentItem = {
+  kind: "agent";
+  sessionId?: string;
+  agent?: AgentType;
+  session?: Session;
+  label: string;
+  time?: string | null;
+  nodes: ReactNode[]; // pre-rendered snapshot content
+  lines: LogLine[]; // live lines, rendered via groupContent
+};
+type ConvItem = AgentItem | { kind: "user"; text: string; at?: string } | { kind: "done"; text: string };
+
+function Conversation({
+  snapshot,
   logs,
   sessions,
   primaryAgent,
 }: {
+  snapshot: { s: Session; out: string }[];
   logs: LogLine[];
   sessions: Session[];
   primaryAgent: AgentType;
 }) {
-  const blocks: ReactNode[] = [];
-  let k = 0;
-  let group: { sessionId?: string; agent?: AgentType; lines: LogLine[] } | null = null;
-  const flush = () => {
-    const g = group;
-    group = null;
-    if (!g) return;
-    const content = groupContent(g.lines);
-    if (!content.length) return;
-    const sess = g.sessionId ? sessions.find((s) => s.id === g.sessionId) : undefined;
-    blocks.push(
-      <AgentBubble key={`g${k++}`} label={sess?.executor ?? `@${g.agent ?? primaryAgent}`} time={sess?.startedAt} session={sess}>
-        {content}
-      </AgentBubble>,
-    );
-  };
+  const items: ConvItem[] = [];
+  for (const { s, out } of snapshot) {
+    items.push({ kind: "agent", sessionId: s.id, agent: s.agentType, session: s, label: s.executor, time: s.startedAt, nodes: [<Markdown key="snap" text={out} />], lines: [] });
+  }
+  // Continue into the last snapshot bubble if the live stream resumes that run.
+  const last = items[items.length - 1];
+  let cur: AgentItem | null = last && last.kind === "agent" ? last : null;
   for (const l of logs) {
     if (l.kind === "user") {
-      flush();
-      blocks.push(<UserBubble key={`u${k++}`} text={l.text} at={l.at} />);
+      items.push({ kind: "user", text: l.text, at: l.at });
+      cur = null;
       continue;
     }
     if (l.kind === "done") {
-      flush();
-      blocks.push(<div key={`d${k++}`} className="my-2 text-center text-xs text-faint">{l.text}</div>);
+      items.push({ kind: "done", text: l.text });
+      cur = null;
       continue;
     }
-    // text / thinking / tool / error → part of the current agent group
-    if (!group || group.sessionId !== l.sessionId || group.agent !== l.agent) {
-      flush();
-      group = { sessionId: l.sessionId, agent: l.agent, lines: [] };
+    // text / thinking / tool / error → part of the current run's bubble
+    if (!cur || cur.sessionId !== l.sessionId || cur.agent !== l.agent) {
+      const sess = l.sessionId ? sessions.find((s) => s.id === l.sessionId) : undefined;
+      cur = { kind: "agent", sessionId: l.sessionId, agent: l.agent, session: sess, label: sess?.executor ?? `@${l.agent ?? primaryAgent}`, time: sess?.startedAt, nodes: [], lines: [] };
+      items.push(cur);
     }
-    group.lines.push(l);
+    cur.lines.push(l);
   }
-  flush();
-  return <>{blocks}</>;
+
+  return (
+    <>
+      {items.map((it, i) => {
+        if (it.kind === "user") return <UserBubble key={i} text={it.text} at={it.at} />;
+        if (it.kind === "done") return <div key={i} className="my-2 text-center text-xs text-faint">{it.text}</div>;
+        const content = [...it.nodes, ...groupContent(it.lines)];
+        if (!content.length) return null;
+        return (
+          <AgentBubble key={i} label={it.label} time={it.time} session={it.session}>
+            {content}
+          </AgentBubble>
+        );
+      })}
+    </>
+  );
 }
 
 // Inner nodes of one agent bubble: consecutive text merges into a Markdown block,

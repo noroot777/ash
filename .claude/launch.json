@@ -18,6 +18,12 @@
       "runtimeExecutable": "bash",
       "runtimeArgs": ["-c", "PORT=4400 HARNESS_DB=/tmp/hpreview.db node server/dist/index.js"],
       "port": 4400
+    },
+    {
+      "name": "harness-web",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["-w", "web", "run", "dev"],
+      "port": 5173
     }
   ]
 }
