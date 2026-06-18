@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { Task, Group, Session, TaskStatus, Priority, AgentType } from "@harness/shared";
 import { isUserSettableStatus, AGENT_TYPES } from "@harness/shared";
-import { CaretDown, Play, Trash, ArrowsDownUp, Robot, X } from "@phosphor-icons/react";
+import { CaretDown, Play, Stop, Trash, ArrowsDownUp, Robot, X } from "@phosphor-icons/react";
 import { api } from "./api";
 import { STATUSES, PRIORITIES } from "./constants";
 import { Credential, ToolCall, ThinkingBlock } from "./ui";
@@ -10,8 +10,9 @@ import { StatusIcon } from "./StatusIcon";
 import { PriorityIcon, LabelAdder } from "./ui";
 import { ScheduleControl } from "./ScheduleControl";
 import { Menu } from "./Menu";
-import { runAction } from "./taskActions";
+import { runAction, canStopTask } from "./taskActions";
 import { groupLabel } from "./util";
+import { TaskTimes } from "./time";
 import { usePasteImages, ImageChips } from "./pasteImages";
 
 export type LogLine = {
@@ -28,6 +29,7 @@ export function TaskDetail({
   logs,
   sessionsBump,
   onRun,
+  onStop,
   onReply,
   onPatch,
   onCreateGroup,
@@ -39,6 +41,7 @@ export function TaskDetail({
   logs: LogLine[];
   sessionsBump: number;
   onRun: () => void;
+  onStop: () => void;
   onReply: (text: string, opts?: { images?: string[]; agent?: AgentType }) => void;
   onPatch: (patch: Partial<Task>) => void;
   onCreateGroup: () => void;
@@ -81,19 +84,29 @@ export function TaskDetail({
       <header className="border-b border-line px-6 pb-3 pt-5">
         <div className="flex items-start gap-3">
           <EditableTitle title={task.title} onSave={(t) => onPatch({ title: t, autoTitle: false })} />
-          {(() => {
-            const a = runAction(task.status);
-            return (
-              <button
-                onClick={onRun}
-                disabled={!a.canClick}
-                className="inline-flex items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-[13px] font-medium text-accent-fg transition-colors hover:bg-accent-hover disabled:opacity-40 disabled:hover:bg-accent"
-              >
-                <Play size={13} weight="fill" />
-                {a.label}
-              </button>
-            );
-          })()}
+          {canStopTask(task.status) ? (
+            <button
+              onClick={onStop}
+              className="inline-flex items-center gap-1.5 rounded-md border border-red-500/40 px-3 py-1.5 text-[13px] font-medium text-red-600 transition-colors hover:bg-red-500/10"
+            >
+              <Stop size={13} weight="fill" />
+              停止
+            </button>
+          ) : (
+            (() => {
+              const a = runAction(task.status);
+              return (
+                <button
+                  onClick={onRun}
+                  disabled={!a.canClick}
+                  className="inline-flex items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-[13px] font-medium text-accent-fg transition-colors hover:bg-accent-hover disabled:opacity-40 disabled:hover:bg-accent"
+                >
+                  <Play size={13} weight="fill" />
+                  {a.label}
+                </button>
+              );
+            })()
+          )}
           <button
             onClick={onDelete}
             className="grid h-[30px] w-[30px] place-items-center rounded-md text-muted transition-colors hover:bg-raised hover:text-red-600"
@@ -191,6 +204,8 @@ export function TaskDetail({
             </span>
           )}
         </div>
+
+        <TaskTimes task={task} />
       </header>
 
       <div

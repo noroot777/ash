@@ -1,4 +1,4 @@
-import type { Project, ProjectView, ProjectHealth, Task, Session, Group, GateAction, Schedule, AgentExecutorProfile, BatchCreateTasksBody, AgentType } from "@harness/shared";
+import type { Project, ProjectView, ProjectHealth, Task, Session, Group, GateAction, Schedule, AgentExecutorProfile, BatchCreateTasksBody, AgentType, DebateSpeaker } from "@harness/shared";
 
 const j = async (r: Response) => {
   if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
@@ -93,6 +93,8 @@ export const api = {
     fetch(`/api/tasks/${id}`, { method: "DELETE" }).then(j),
   runTask: (id: string): Promise<unknown> =>
     fetch(`/api/tasks/${id}/run`, { method: "POST" }).then(j),
+  stopTask: (id: string): Promise<unknown> =>
+    fetch(`/api/tasks/${id}/stop`, { method: "POST" }).then(j),
   retryTask: (id: string): Promise<unknown> =>
     fetch(`/api/tasks/${id}/retry`, { method: "POST" }).then(j),
   replyTask: (id: string, text: string, opts?: { images?: string[]; agent?: AgentType }): Promise<unknown> =>
@@ -147,6 +149,6 @@ export const api = {
     fetch(`/api/sessions/${id}/output`).then((r) => r.text()),
   debateTranscript: (
     taskId: string,
-  ): Promise<{ round: number; speaker: "A" | "B" | "impl"; text: string; raised: boolean; agrees?: boolean; conclusion?: string; error?: string }[]> =>
+  ): Promise<{ round: number; speaker: DebateSpeaker; text: string; raised?: boolean; agrees?: boolean; conclusion?: string; error?: string; at?: string }[]> =>
     fetch(`/api/tasks/${taskId}/debate`).then(j),
 };

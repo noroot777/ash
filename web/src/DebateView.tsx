@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Task, Session, DebateConfig, GateAction, AgentType, DebateSpeaker, TaskStatus } from "@harness/shared";
+import { Stop } from "@phosphor-icons/react";
 import type { DebateState, DebateTurn, DebateGate } from "./debateState";
 import { ResumeButtons, ToolCall } from "./ui";
 import { Markdown } from "./Markdown";
@@ -7,7 +8,8 @@ import { api } from "./api";
 import { ScheduleControl } from "./ScheduleControl";
 import { StatusIcon } from "./StatusIcon";
 import { STATUSES } from "./constants";
-import { runAction } from "./taskActions";
+import { runAction, canStopTask } from "./taskActions";
+import { TaskTimes, formatInstant } from "./time";
 
 // Animated "thinking" indicator — three dots flashing in sequence.
 function TypingDots() {
@@ -38,6 +40,7 @@ export function DebateView({
   state,
   sessionsBump,
   onRun,
+  onStop,
   onRetry,
   onGate,
   onDelete,
@@ -46,6 +49,7 @@ export function DebateView({
   state: DebateState;
   sessionsBump: number;
   onRun: () => void;
+  onStop: () => void;
   onRetry: () => void;
   onGate: (a: GateAction) => void;
   onDelete: () => void;
@@ -75,7 +79,7 @@ export function DebateView({
       api
         .debateTranscript(task.id)
         .then((rows) =>
-          setHistory(rows.map((r) => ({ ...r, tools: [], done: true }))),
+          setHistory(rows.map((r) => ({ ...r, raised: !!r.raised, tools: [], done: true }))),
         )
         .catch(() => setHistory([]));
     }
@@ -143,19 +147,29 @@ export function DebateView({
           <span className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium ${collab ? "bg-teal-500/15 text-teal-700" : "bg-violet-500/20 text-violet-700"}`}>{collab ? "collab" : "debate"}</span>
           <h1 className="min-w-0 flex-1 truncate text-lg font-medium tracking-tight">{task.title}</h1>
           <StatusPill status={task.status} />
-          {(() => {
-            const a = runAction(task.status);
-            return (
-              <button
-                onClick={a.kind === "retry" ? onRetry : onRun}
-                disabled={!a.canClick}
-                title={a.kind === "retry" ? "只重跑失败的那一轮，再继续后续" : undefined}
-                className="shrink-0 whitespace-nowrap rounded-md bg-accent hover:bg-accent-hover px-4 py-1.5 text-sm font-medium text-accent-fg disabled:opacity-40 disabled:hover:bg-accent"
-              >
-                {a.label}
-              </button>
-            );
-          })()}
+          {canStopTask(task.status) ? (
+            <button
+              onClick={onStop}
+              className="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border border-red-500/40 px-4 py-1.5 text-sm font-medium text-red-600 transition-colors hover:bg-red-500/10"
+            >
+              <Stop size={13} weight="fill" />
+              停止
+            </button>
+          ) : (
+            (() => {
+              const a = runAction(task.status);
+              return (
+                <button
+                  onClick={a.kind === "retry" ? onRetry : onRun}
+                  disabled={!a.canClick}
+                  title={a.kind === "retry" ? "只重跑失败的那一轮，再继续后续" : undefined}
+                  className="shrink-0 whitespace-nowrap rounded-md bg-accent hover:bg-accent-hover px-4 py-1.5 text-sm font-medium text-accent-fg disabled:opacity-40 disabled:hover:bg-accent"
+                >
+                  {a.label}
+                </button>
+              );
+            })()
+          )}
           <button onClick={onDelete} className="shrink-0 rounded-md border border-line px-2 py-1.5 text-sm text-muted hover:text-red-600">
             删除
           </button>
@@ -183,6 +197,7 @@ export function DebateView({
             <ScheduleControl taskId={task.id} />
           </div>
         </div>
+        <TaskTimes task={task} />
       </header>
 
       <div ref={scrollRef} onScroll={onScroll} className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
@@ -247,6 +262,33 @@ function Bubble({
 }) {
   const showDivider = turn.round !== prevRound;
   const side = turn.speaker;
+
+  // A human intervention (gate inject/ask): a right-aligned bubble with the time
+  // the user spoke — the /pair analog of a single task's reply bubble.
+  if (side === "user") {
+    return (
+      <div className="mb-3 rise">
+        {showDivider && (
+          <div className="my-3 text-center text-xs text-faint">── 第 {turn.round} 轮 ──</div>
+        )}
+        <div className="flex flex-col items-end">
+          <div className="max-w-[88%] rounded-lg border border-accent/30 bg-accent/[0.08] px-3 py-2">
+            <div className="mb-1 flex items-center gap-2 text-[11px] text-muted">
+              <span className="font-medium text-ink/70">你</span>
+              {turn.at && (
+                <>
+                  <span className="text-faint">·</span>
+                  <span className="text-faint">{formatInstant(turn.at)}</span>
+                </>
+              )}
+            </div>
+            <div className="whitespace-pre-wrap break-words text-[13px] text-ink">{turn.text}</div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   const align = side === "A" ? "items-start" : side === "B" ? "items-end" : "items-center";
   const color =
     side === "A"

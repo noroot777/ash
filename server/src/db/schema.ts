@@ -37,6 +37,8 @@ export const tasks = sqliteTable("tasks", {
   scheduleId: text("schedule_id"),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
+  startedAt: text("started_at"), // first time the task entered `running`
+  endedAt: text("ended_at"), // last terminal transition (cleared while running)
 });
 
 export const agents = sqliteTable("agents", {
@@ -63,6 +65,7 @@ export const sessions = sqliteTable("sessions", {
   resumeCommand: text("resume_command"),
   commandLine: text("command_line"),
   startedAt: text("started_at").notNull(),
+  endedAt: text("ended_at"), // when this run finished (set with exit_status)
   exitStatus: integer("exit_status"),
 });
 

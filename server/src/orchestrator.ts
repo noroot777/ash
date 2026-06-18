@@ -1,13 +1,16 @@
 import { mkdirSync, createWriteStream } from "node:fs";
 import { join } from "node:path";
 import { eq, inArray } from "drizzle-orm";
-import type { AgentType, TaskStatus } from "@harness/shared";
+import type { AgentType } from "@harness/shared";
 import { db } from "./db/index.js";
 import { tasks, projects, groups, sessions } from "./db/schema.js";
 import { bus } from "./bus.js";
 import { id, now, imagesPrompt } from "./util.js";
+import { setTaskStatus } from "./status.js";
+import { trackRun, untrackRun, takeCanceled } from "./runs.js";
 import { resolveWorkspace, ensureWorkdir } from "./git.js";
 import { resolveExecutor } from "./executors/index.js";
+import type { RunHandle } from "./executors/types.js";
 import { RUNS_DIR } from "./paths.js";
 
 const running = new Set<string>(); // taskIds currently executing (single-flight)
@@ -23,9 +26,8 @@ const AUTONOMY =
 const COLLAB_INVITE =
   "你被叫来加入这个任务的协作。当前工作目录里可能已经有其他 agent 的产出，请先了解现状再动手。\n\n";
 
-async function setStatus(taskId: string, status: TaskStatus) {
-  await db.update(tasks).set({ status, updatedAt: now() }).where(eq(tasks.id, taskId));
-  bus.publish({ type: "task.status", taskId, status });
+async function setStatus(taskId: string, status: Parameters<typeof setTaskStatus>[1]) {
+  await setTaskStatus(taskId, status);
 }
 
 // On (re)start nothing is actually running, so any task still in an in-flight
@@ -37,7 +39,7 @@ export async function reconcileInterrupted(): Promise<void> {
   if (!orphaned.length) return;
   await db
     .update(tasks)
-    .set({ status: "failed", updatedAt: now() })
+    .set({ status: "failed", updatedAt: now(), endedAt: now() })
     .where(inArray(tasks.status, ["running", "queued"]));
   console.log(`[harness] reconciled ${orphaned.length} interrupted task(s) → failed`);
 }
@@ -47,6 +49,7 @@ export async function reconcileInterrupted(): Promise<void> {
 export async function runTask(taskId: string): Promise<void> {
   if (running.has(taskId)) return;
   running.add(taskId);
+  let handle: RunHandle | undefined;
   try {
     const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
     if (!task) throw new Error("task not found");
@@ -71,7 +74,8 @@ export async function runTask(taskId: string): Promise<void> {
       "请在正式开始前，第一行只输出：标题：<不超过14字、概括本次任务的简短标题>，然后换行，再正常完成下面的任务。\n\n任务：\n";
     const objective = task.body?.trim() || task.title;
     const prompt = AUTONOMY + (autoTitle ? TITLE_HINT + objective : objective);
-    const handle = ex.run({ prompt, cwd: ws.path });
+    handle = ex.run({ prompt, cwd: ws.path });
+    trackRun(taskId, handle);
 
     const sessId = id();
     let cliSessionId = handle.sessionId;
@@ -147,8 +151,11 @@ export async function runTask(taskId: string): Promise<void> {
     if (!titleDone && head) emitText(head); // agent never produced a newline
     out.end();
 
-    await db.update(sessions).set({ exitStatus }).where(eq(sessions.id, sessId));
-    await setStatus(taskId, exitStatus === 0 ? "done" : "failed");
+    // A manual stop kills the subprocess → the stream ends like a normal exit;
+    // settle as canceled (not done/failed) so it can be re-run / continued.
+    const canceled = takeCanceled(taskId);
+    await db.update(sessions).set({ exitStatus, endedAt: now() }).where(eq(sessions.id, sessId));
+    await setStatus(taskId, canceled ? "canceled" : exitStatus === 0 ? "done" : "failed");
   } catch (err) {
     bus.publish({
       type: "agent.event",
@@ -157,8 +164,9 @@ export async function runTask(taskId: string): Promise<void> {
       role: "single",
       event: { kind: "error", message: String(err instanceof Error ? err.message : err) },
     });
-    await setStatus(taskId, "failed");
+    await setStatus(taskId, takeCanceled(taskId) ? "canceled" : "failed");
   } finally {
+    if (handle) untrackRun(taskId, handle);
     running.delete(taskId);
   }
 }
@@ -176,6 +184,7 @@ export async function continueTask(
   if (running.has(taskId)) return;
   running.add(taskId);
   const agentType = opts.agent ?? "claude"; // re-derived below once the task loads; kept for the catch handler
+  let handle: RunHandle | undefined;
   try {
     const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
     if (!task) throw new Error("task not found");
@@ -202,7 +211,8 @@ export async function continueTask(
 
     const invited = !prev; // first time this agent is pulled into the task
     const prompt = (invited ? COLLAB_INVITE : "") + userText + imagesPrompt(opts.images);
-    const handle = ex.run({ prompt, cwd, sessionId: resuming ? prev!.cliSessionId! : undefined });
+    handle = ex.run({ prompt, cwd, sessionId: resuming ? prev!.cliSessionId! : undefined });
+    trackRun(taskId, handle);
 
     // Reuse the agent's session row when resuming; otherwise open a fresh line,
     // inheriting the task's worktree/branch from its first session.
@@ -255,15 +265,17 @@ export async function continueTask(
     }
     out.end();
 
-    await db.update(sessions).set({ exitStatus }).where(eq(sessions.id, sessId));
-    await setStatus(taskId, exitStatus === 0 ? "done" : "failed");
+    const canceled = takeCanceled(taskId);
+    await db.update(sessions).set({ exitStatus, endedAt: now() }).where(eq(sessions.id, sessId));
+    await setStatus(taskId, canceled ? "canceled" : exitStatus === 0 ? "done" : "failed");
   } catch (err) {
     bus.publish({
       type: "agent.event", taskId, sessionId: "", role: "single", agentType,
       event: { kind: "error", message: String(err instanceof Error ? err.message : err) },
     });
-    await setStatus(taskId, "failed");
+    await setStatus(taskId, takeCanceled(taskId) ? "canceled" : "failed");
   } finally {
+    if (handle) untrackRun(taskId, handle);
     running.delete(taskId);
   }
 }

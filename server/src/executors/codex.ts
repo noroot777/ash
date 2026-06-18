@@ -1,7 +1,7 @@
 import { createInterface } from "node:readline";
 import type { AgentEvent, ExecTarget } from "@harness/shared";
 import type { AgentExecutor, RunHandle, RunOpts } from "./types.js";
-import { spawnAgent, resumeFor, resumeInner, spawnErrorMessage } from "./spawn.js";
+import { spawnAgent, resumeFor, resumeInner, spawnErrorMessage, killChild } from "./spawn.js";
 
 // Drives the real `codex` CLI in non-interactive JSON mode (prompt via stdin, `-`).
 //   first:  codex exec --json --skip-git-repo-check -C <cwd>
@@ -41,7 +41,7 @@ export class CodexExecutor implements AgentExecutor {
 
     const commandLine = `${this.bin} ${args.join(" ")} <prompt via stdin>`;
     const child = spawnAgent(this.target, opts.cwd, this.bin, args, opts.prompt);
-    return { sessionId: opts.sessionId ?? "", commandLine, events: parseCodexStream(child) };
+    return { sessionId: opts.sessionId ?? "", commandLine, events: parseCodexStream(child), kill: () => killChild(child) };
   }
 }
 

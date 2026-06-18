@@ -19,6 +19,8 @@ import { projects, groups, tasks, sessions, schedules, agents } from "./db/schem
 import { bus } from "./bus.js";
 import { id, now, imagesPrompt } from "./util.js";
 import { runTask, continueTask } from "./orchestrator.js";
+import { setTaskStatus } from "./status.js";
+import { stopTask } from "./runs.js";
 import { runGroup } from "./scheduler.js";
 import { runDebate, resumeDebate, resumeAtGate } from "./debate/index.js";
 import { resolveGate } from "./debate/gates.js";
@@ -152,6 +154,8 @@ const toTask = (r: typeof tasks.$inferSelect): Task => ({
   scheduleId: r.scheduleId,
   createdAt: r.createdAt,
   updatedAt: r.updatedAt,
+  startedAt: r.startedAt,
+  endedAt: r.endedAt,
 });
 
 const toSession = (r: typeof sessions.$inferSelect): Session => ({
@@ -363,7 +367,6 @@ api.patch("/tasks/:id", async (c) => {
   if (b.title !== undefined) patch.title = b.title;
   if (b.body !== undefined) patch.body = b.body;
   if (b.autoTitle !== undefined) patch.autoTitle = b.autoTitle;
-  if (b.status !== undefined) patch.status = b.status;
   if (b.priority !== undefined) patch.priority = b.priority;
   if (b.labels !== undefined) patch.labels = JSON.stringify(b.labels);
   if (b.groupId !== undefined) patch.groupId = b.groupId;
@@ -371,7 +374,9 @@ api.patch("/tasks/:id", async (c) => {
   if (b.mode !== undefined) patch.mode = b.mode;
   if (b.debate !== undefined) patch.debate = b.debate ? JSON.stringify(b.debate) : null;
   await db.update(tasks).set(patch).where(eq(tasks.id, tid));
-  if (b.status !== undefined) bus.publish({ type: "task.status", taskId: tid, status: b.status });
+  // Status goes through the shared helper so manual changes maintain the run-time
+  // columns (startedAt/endedAt) and broadcast them just like a real run does.
+  if (b.status !== undefined) await setTaskStatus(tid, b.status);
   const updated = (await db.select().from(tasks).where(eq(tasks.id, tid))).at(0)!;
   return c.json(toTask(updated));
 });
@@ -549,6 +554,17 @@ api.post("/tasks/:id/run", async (c) => {
   if (r.mode === "debate") void runDebate(taskId);
   else void runTask(taskId);
   return c.json({ started: true }, 202);
+});
+
+// Manually stop a running task: kill its live agent subprocess(es). The run loop
+// then settles the task as `canceled` (re-runnable / continuable). 409 if nothing
+// is actually running for it.
+api.post("/tasks/:id/stop", async (c) => {
+  const taskId = c.req.param("id");
+  const r = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
+  if (!r) return c.json({ error: "not found" }, 404);
+  if (!stopTask(taskId)) return c.json({ error: "任务没有在运行的进程可停止", status: r.status }, 409);
+  return c.json({ stopped: true });
 });
 
 // Reply to a single task: resume its CLI session with the user's message so an

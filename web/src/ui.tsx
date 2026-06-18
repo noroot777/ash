@@ -2,7 +2,20 @@ import { useState, useEffect } from "react";
 import type { Priority, Session, ProjectHealth, ProjectView } from "@harness/shared";
 import { Plus, CaretRight } from "@phosphor-icons/react";
 import { shortPath } from "./util";
+import { Duration, formatInstant } from "./time";
 import { api } from "./api";
+
+// "⏱ 14m 3s" with the start/end instants in the tooltip — the session-run timing
+// (start, end, duration) attached to a credential. Live (ticking) until endedAt.
+function SessionTime({ s }: { s: Session }) {
+  if (!s.startedAt) return null;
+  const tip = `开始 ${formatInstant(s.startedAt)}${s.endedAt ? ` · 结束 ${formatInstant(s.endedAt)}` : "（进行中）"}`;
+  return (
+    <span className="inline-flex items-center gap-0.5 text-faint" title={tip}>
+      ⏱ <Duration from={s.startedAt} to={s.endedAt} />
+    </span>
+  );
+}
 
 // Collapsible tool-call block (Claude-desktop style): a compact one-line summary
 // by default, click to expand the full command/input. Shared by the task log and
@@ -210,6 +223,7 @@ export function ResumeButtons({ s }: { s: Session }) {
   };
   return (
     <div className="mt-1.5 flex items-center gap-1.5 text-[10px]">
+      <SessionTime s={s} />
       <button
         onClick={() => copy("cmd", s.resumeCommand ?? "")}
         className="rounded bg-overlay px-1.5 py-0.5 text-muted hover:text-ink disabled:opacity-40"
@@ -260,6 +274,7 @@ export function Credential({ s }: { s: Session }) {
       >
         {copied === "id" ? "✓" : "ID"}
       </button>
+      <SessionTime s={s} />
     </div>
   );
 }

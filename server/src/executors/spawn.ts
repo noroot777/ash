@@ -100,6 +100,28 @@ export function resumeFor(target: ExecTarget, cwd: string, inner: string): strin
   return `cd ${shq(cwd)} && ${inner}`;
 }
 
+// Terminate a running agent subprocess (manual stop). SIGTERM first so the CLI
+// can wind down; a short fallback SIGKILL guarantees the process — and thus our
+// output stream — actually ends even if the CLI ignores SIGTERM. Safe to call on
+// the pre-flight failedChild stub (it has no real pid) and after exit.
+export function killChild(child: ChildProcess): void {
+  if (typeof child.kill !== "function") return;
+  try {
+    child.kill("SIGTERM");
+  } catch {
+    /* already gone */
+  }
+  const t = setTimeout(() => {
+    try {
+      if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+    } catch {
+      /* already gone */
+    }
+  }, 2000);
+  // Don't keep the event loop alive just for the fallback timer.
+  (t as { unref?: () => void }).unref?.();
+}
+
 // The per-agent *interactive* resume command (what a human pastes to see the
 // session and continue) — single source of truth, used both when storing a
 // session and when recomputing the display command on read. (The harness's own

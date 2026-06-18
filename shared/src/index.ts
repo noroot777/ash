@@ -111,6 +111,11 @@ export interface Task {
   scheduleId?: string | null;
   createdAt: string;
   updatedAt: string;
+  // Run timing: startedAt = first time the task entered `running` (kept across
+  // re-runs); endedAt = the last time it reached a terminal state, cleared while
+  // running. Duration = (endedAt ?? now) − startedAt. Both null until first run.
+  startedAt?: string | null;
+  endedAt?: string | null;
 }
 
 // ── External batch API (agent-facing, § interfaces) ──────────────────────────
@@ -192,6 +197,7 @@ export interface Session {
   resumeCommand: string | null; // ready-to-paste resume command
   commandLine: string | null; // full command invoked
   startedAt: string;
+  endedAt: string | null; // when this run finished (set with exitStatus); null while live
   exitStatus: number | null;
 }
 
@@ -226,11 +232,11 @@ export type AgentEvent =
   | { kind: "error"; message: string }
   | { kind: "done"; exitStatus: number };
 
-export type DebateSpeaker = "A" | "B" | "impl" | "review";
+export type DebateSpeaker = "A" | "B" | "impl" | "review" | "user";
 
 // SSE envelope pushed to the web client.
 export type ServerEvent =
-  | { type: "task.status"; taskId: string; status: TaskStatus }
+  | { type: "task.status"; taskId: string; status: TaskStatus; startedAt?: string | null; endedAt?: string | null }
   | { type: "task.title"; taskId: string; title: string }
   | {
       type: "agent.event";
@@ -248,4 +254,7 @@ export type ServerEvent =
       phase: "start" | "end";
       raisedHand?: boolean;
     }
-  | { type: "debate.gate"; taskId: string; gate: GateName; open: boolean; consensus?: boolean; conclusionA?: string | null; conclusionB?: string | null };
+  | { type: "debate.gate"; taskId: string; gate: GateName; open: boolean; consensus?: boolean; conclusionA?: string | null; conclusionB?: string | null }
+  // A human intervention in a /pair timeline (gate inject/ask). Carries the time
+  // so the timeline can show when the user spoke. Persisted in the transcript too.
+  | { type: "debate.user"; taskId: string; round: number; text: string; at: string };

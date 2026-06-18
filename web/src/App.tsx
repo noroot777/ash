@@ -19,7 +19,7 @@ import { GroupsPanel } from "./GroupsPanel";
 import { ProjectSettings } from "./ProjectSettings";
 import { HealthDot } from "./ui";
 import { shortPath } from "./util";
-import { runAction } from "./taskActions";
+import { runAction, canStopTask } from "./taskActions";
 
 export function App() {
   // Deep-link state via the URL (?project=…&task=…): a refresh stays on the same
@@ -47,8 +47,19 @@ export function App() {
   const connected = useServerEvents(
     useCallback((ev) => {
       if (ev.type === "task.status") {
-        setTasks((ts) => ts.map((t) => (t.id === ev.taskId ? { ...t, status: ev.status } : t)));
-        if (ev.status === "done" || ev.status === "failed") setSessionsBump((n) => n + 1);
+        setTasks((ts) =>
+          ts.map((t) =>
+            t.id === ev.taskId
+              ? {
+                  ...t,
+                  status: ev.status,
+                  startedAt: ev.startedAt !== undefined ? ev.startedAt : t.startedAt,
+                  endedAt: ev.endedAt !== undefined ? ev.endedAt : t.endedAt,
+                }
+              : t,
+          ),
+        );
+        if (ev.status === "done" || ev.status === "failed" || ev.status === "canceled") setSessionsBump((n) => n + 1);
       } else if (ev.type === "task.title") {
         setTasks((ts) => ts.map((t) => (t.id === ev.taskId ? { ...t, title: ev.title } : t)));
       } else if (ev.type === "agent.event") {
@@ -58,7 +69,7 @@ export function App() {
         } else {
           setDebates((m) => ({ ...m, [ev.taskId]: applyDebateEvent(m[ev.taskId] ?? emptyDebate(), ev) }));
         }
-      } else if (ev.type === "debate.progress" || ev.type === "debate.gate") {
+      } else if (ev.type === "debate.progress" || ev.type === "debate.gate" || ev.type === "debate.user") {
         setDebates((m) => ({ ...m, [ev.taskId]: applyDebateEvent(m[ev.taskId] ?? emptyDebate(), ev) }));
       }
     }, []),
@@ -107,6 +118,12 @@ export function App() {
     setLogs((m) => ({ ...m, [id]: [] }));
     setDebates((m) => ({ ...m, [id]: emptyDebate() }));
     try { await api.runTask(id); } catch (e) { console.warn("run rejected:", e); }
+  }, []);
+
+  // Manually stop a running task (kill its agent). The backend flips it to
+  // canceled and broadcasts the status; it stays re-runnable / continuable.
+  const stop = useCallback(async (id: string) => {
+    try { await api.stopTask(id); } catch (e) { console.warn("stop rejected:", e); }
   }, []);
 
   // Retry a failed debate: drop the failed (last) turn from the live timeline so
@@ -253,26 +270,31 @@ export function App() {
   }, [selected]);
 
   // ── command palette ──────────────────────────────────────────────────────
+  // Grouped so current-task actions read separately from global ones (the
+  // palette renders a header per `group`, in first-appearance order).
   const commands = useMemo<Command[]>(() => {
-    const cmds: Command[] = [
-      { id: "new", label: "新建任务", hint: "C", run: () => setCreateOpen(true) },
-      { id: "pair-debate", label: "新建辩论 · 给你答案 (/pair)", run: () => setDebateOpen("debate") },
-      { id: "pair-collab", label: "新建协作 · 给你代码 (/pair)", run: () => setDebateOpen("collaborate") },
-      { id: "newgroup", label: "新建分组", run: () => setNewGroupOpen(true) },
-      { id: "groups", label: "分组管理", run: () => setGroupsOpen(true) },
-      { id: "newproject", label: "新建项目", run: () => setNewProjectOpen(true) },
-      { id: "agents", label: "管理智能体执行器", run: () => setAgentsOpen(true) },
-    ];
-    if (project) cmds.push({ id: "projsettings", label: `项目设置：${project.name}`, run: () => setSettingsOpen(true) });
+    const cmds: Command[] = [];
+    // Current task first — the most contextual block.
     if (current) {
       const a = runAction(current.status);
-      if (a.canClick) cmds.push({ id: "run", label: `${a.label}：${current.title}`, hint: "R", run: () => primary(current) });
-      cmds.push({ id: "del", label: `删除：${current.title}`, run: () => del(current.id, current.title) });
-      // Status is changed inside the task (detail dropdown) or by dragging on the
-      // board — not via a global command, so it stays tied to a specific task.
+      const g = `当前任务 · ${current.title}`;
+      if (a.canClick) cmds.push({ id: "run", group: g, label: a.label, hint: "R", run: () => primary(current) });
+      if (canStopTask(current.status)) cmds.push({ id: "stop", group: g, label: "停止运行", run: () => stop(current.id) });
+      cmds.push({ id: "del", group: g, label: "删除任务", run: () => del(current.id, current.title) });
       for (const p of PRIORITIES)
         cmds.push({ id: "pr-" + p.key, group: "设为优先级", label: p.label, run: () => patch(current.id, { priority: p.key }) });
     }
+    // Global: create / manage.
+    cmds.push(
+      { id: "new", group: "新建", label: "新建任务", hint: "C", run: () => setCreateOpen(true) },
+      { id: "pair-debate", group: "新建", label: "新建辩论 · 给你答案 (/pair)", run: () => setDebateOpen("debate") },
+      { id: "pair-collab", group: "新建", label: "新建协作 · 给你代码 (/pair)", run: () => setDebateOpen("collaborate") },
+      { id: "newgroup", group: "新建", label: "新建分组", run: () => setNewGroupOpen(true) },
+      { id: "newproject", group: "新建", label: "新建项目", run: () => setNewProjectOpen(true) },
+      { id: "groups", group: "管理", label: "分组管理", run: () => setGroupsOpen(true) },
+      { id: "agents", group: "管理", label: "管理智能体执行器", run: () => setAgentsOpen(true) },
+    );
+    if (project) cmds.push({ id: "projsettings", group: "管理", label: `项目设置：${project.name}`, run: () => setSettingsOpen(true) });
     for (const p of projects)
       if (p.id !== projectId)
         cmds.push({ id: "proj-" + p.id, group: "切换项目", label: p.name, hint: shortPath(p.repoPath), run: () => setProjectId(p.id) });
@@ -284,7 +306,7 @@ export function App() {
         run: () => api.runGroup(g.id),
       });
     return cmds;
-  }, [current, projects, projectId, groups, primary, del, patch]);
+  }, [current, projects, projectId, groups, project, primary, stop, del, patch]);
 
   return (
     <div className="flex h-full flex-col">
@@ -355,9 +377,9 @@ export function App() {
             <div className="min-w-0 flex-1">
               {current ? (
                 current.mode === "debate" ? (
-                  <DebateView key={current.id} task={current} state={debates[current.id] ?? emptyDebate()} sessionsBump={sessionsBump} onRun={() => run(current.id)} onRetry={() => retry(current.id)} onGate={(a) => gate(current.id, a)} onDelete={() => del(current.id, current.title)} />
+                  <DebateView key={current.id} task={current} state={debates[current.id] ?? emptyDebate()} sessionsBump={sessionsBump} onRun={() => run(current.id)} onStop={() => stop(current.id)} onRetry={() => retry(current.id)} onGate={(a) => gate(current.id, a)} onDelete={() => del(current.id, current.title)} />
                 ) : (
-                  <TaskDetail key={current.id} task={current} groups={groups} allTasks={visible} logs={logs[current.id] ?? []} sessionsBump={sessionsBump} onRun={() => run(current.id)} onReply={(text, opts) => reply(current.id, text, opts)} onPatch={(p) => patch(current.id, p)} onCreateGroup={() => setNewGroupOpen(true)} onDelete={() => del(current.id, current.title)} />
+                  <TaskDetail key={current.id} task={current} groups={groups} allTasks={visible} logs={logs[current.id] ?? []} sessionsBump={sessionsBump} onRun={() => run(current.id)} onStop={() => stop(current.id)} onReply={(text, opts) => reply(current.id, text, opts)} onPatch={(p) => patch(current.id, p)} onCreateGroup={() => setNewGroupOpen(true)} onDelete={() => del(current.id, current.title)} />
                 )
               ) : (
                 <div className="flex h-full flex-col items-center justify-center gap-1 text-[13px] text-faint">

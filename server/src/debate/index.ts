@@ -12,6 +12,8 @@ import { db } from "../db/index.js";
 import { tasks, projects, sessions } from "../db/schema.js";
 import { bus } from "../bus.js";
 import { id, now } from "../util.js";
+import { setTaskStatus } from "../status.js";
+import { trackRun, untrackRun, isCanceling, takeCanceled, CanceledRun } from "../runs.js";
 import { commitWorktree, ensureWorkdir, resolveWorkspace } from "../git.js";
 import { resolveExecutor } from "../executors/index.js";
 import type { AgentExecutor } from "../executors/types.js";
@@ -25,8 +27,23 @@ const CONC_RE = /结论[：:]\s*(.+)/; // one-line final conclusion
 const running = new Set<string>();
 
 async function setStatus(taskId: string, status: TaskStatus) {
-  await db.update(tasks).set({ status, updatedAt: now() }).where(eq(tasks.id, taskId));
-  bus.publish({ type: "task.status", taskId, status });
+  await setTaskStatus(taskId, status);
+}
+
+// Persist + broadcast a human intervention (gate inject/ask) as a `user` turn so
+// the /pair timeline shows when the user spoke. Best-effort transcript append;
+// the live event drives the open page.
+function recordUserTurn(taskId: string, round: number, text: string) {
+  const at = now();
+  try {
+    appendFileSync(
+      join(RUNS_DIR, taskId, "transcript.jsonl"),
+      JSON.stringify({ round, speaker: "user", text, at }) + "\n",
+    );
+  } catch {
+    /* best effort */
+  }
+  bus.publish({ type: "debate.user", taskId, round, text, at });
 }
 
 interface Turn {
@@ -55,7 +72,10 @@ async function runTurn(args: {
   branch?: string | null;
 }): Promise<Turn> {
   const { taskId, role, speaker, round, executor, prompt, cwd } = args;
+  // A stop requested between turns: don't even spawn the next one.
+  if (isCanceling(taskId)) throw new CanceledRun();
   const handle = executor.run({ prompt, cwd, sessionId: args.resumeCliId || undefined });
+  trackRun(taskId, handle);
   let cliId = handle.sessionId;
 
   const rowId = args.rowId ?? id();
@@ -88,25 +108,29 @@ async function runTurn(args: {
   let text = "";
   let exit = 0;
   let errorMsg: string | undefined;
-  for await (const event of handle.events) {
-    bus.publish({ type: "agent.event", taskId, sessionId: rowId, role, event });
-    if (event.kind === "session" && event.cliSessionId !== cliId) {
-      cliId = event.cliSessionId;
-      await db
-        .update(sessions)
-        .set({ cliSessionId: cliId, resumeCommand: executor.resumeCommand(cwd, cliId) })
-        .where(eq(sessions.id, rowId));
-    } else if (event.kind === "text") {
-      text += event.text;
-      out.write(event.text + "\n");
-    } else if (event.kind === "thinking") {
-      out.write("〔思考〕" + event.text + "\n");
-    } else if (event.kind === "error") {
-      errorMsg = event.message;
-      out.write("✕ " + event.message + "\n");
-    } else if (event.kind === "done") {
-      exit = event.exitStatus;
+  try {
+    for await (const event of handle.events) {
+      bus.publish({ type: "agent.event", taskId, sessionId: rowId, role, event });
+      if (event.kind === "session" && event.cliSessionId !== cliId) {
+        cliId = event.cliSessionId;
+        await db
+          .update(sessions)
+          .set({ cliSessionId: cliId, resumeCommand: executor.resumeCommand(cwd, cliId) })
+          .where(eq(sessions.id, rowId));
+      } else if (event.kind === "text") {
+        text += event.text;
+        out.write(event.text + "\n");
+      } else if (event.kind === "thinking") {
+        out.write("〔思考〕" + event.text + "\n");
+      } else if (event.kind === "error") {
+        errorMsg = event.message;
+        out.write("✕ " + event.message + "\n");
+      } else if (event.kind === "done") {
+        exit = event.exitStatus;
+      }
     }
+  } finally {
+    untrackRun(taskId, handle);
   }
   out.end();
 
@@ -121,7 +145,7 @@ async function runTurn(args: {
   if (!errorMsg && exit === 0 && isDebater && !text.trim()) {
     errorMsg = `${executor.type} 本轮没有产出任何内容（空回复），可能是会话恢复异常`;
   }
-  await db.update(sessions).set({ exitStatus: exit }).where(eq(sessions.id, rowId));
+  await db.update(sessions).set({ exitStatus: exit, endedAt: now() }).where(eq(sessions.id, rowId));
   // Persist the turn so a reloaded debate can rebuild its timeline (no live
   // events). Includes the error so a failed turn stays visibly failed on reload.
   try {
@@ -133,6 +157,9 @@ async function runTurn(args: {
     /* best effort */
   }
   bus.publish({ type: "debate.progress", taskId, round, speaker, phase: "end", raisedHand: raised });
+  // A manual stop killed this turn's subprocess → unwind to canceled (the top of
+  // each entry point catches CanceledRun).
+  if (isCanceling(taskId)) throw new CanceledRun();
   return { rowId, cliId, text, raised, agrees, conclusion, exit, error: errorMsg };
 }
 
@@ -310,6 +337,12 @@ export async function resumeDebate(taskId: string): Promise<void> {
 }
 
 function failDebate(taskId: string, err: unknown) {
+  // A manual stop unwinds here as CanceledRun → settle as canceled, not failed.
+  if (err instanceof CanceledRun) {
+    takeCanceled(taskId);
+    void setStatus(taskId, "canceled");
+    return;
+  }
   bus.publish({
     type: "agent.event", taskId, sessionId: "", role: "debaterA",
     event: { kind: "error", message: String(err instanceof Error ? err.message : err) },
@@ -399,9 +432,11 @@ export async function resumeAtGate(taskId: string, action: GateAction): Promise<
     if (action.kind === "reject") return void (await setStatus(taskId, "canceled"));
     if (action.kind !== "approve") {
       // inject / ask → re-run the implementer with the feedback, then re-park G2.
+      recordUserTurn(taskId, ctx.round + 1, action.text);
       const prompt = action.kind === "inject" ? P.injectFeedback(action.text, ctx.round, base.cfg.style) : P.question(action.text, ctx.round, base.cfg.style);
       await runTurn({ taskId, role: "implementer", speaker: "impl", round: ctx.round + 1, executor: exImpl, prompt, cwd: ws.path, rowId: sImpl?.id, resumeCliId: sImpl?.cliSessionId ?? undefined, branch: ws.branch });
       const res = await runGate(taskId, "G2", async (k, t) => {
+        recordUserTurn(taskId, ctx.round + 1, t);
         const p = k === "inject" ? P.injectFeedback(t, ctx.round, base.cfg.style) : P.question(t, ctx.round, base.cfg.style);
         await runTurn({ taskId, role: "implementer", speaker: "impl", round: ctx.round + 1, executor: exImpl, prompt: p, cwd: ws.path, rowId: sImpl?.id, resumeCliId: sImpl?.cliSessionId ?? undefined, branch: ws.branch });
       });
@@ -443,6 +478,7 @@ async function runRebuttalLoop(ctx: Ctx): Promise<boolean> {
 // and when resuming a gate after a restart).
 async function reDebate(ctx: Ctx, kind: "inject" | "ask", text: string) {
   ctx.round++;
+  recordUserTurn(ctx.taskId, ctx.round, text); // the human's words land in the timeline first
   const prompt = kind === "inject" ? P.injectFeedback(text, ctx.round, ctx.cfg.style) : P.question(text, ctx.round, ctx.cfg.style);
   const at = await runTurn({ taskId: ctx.taskId, role: "debaterA", speaker: "A", round: ctx.round, executor: ctx.exA, prompt, cwd: ctx.cwd, rowId: ctx.A.rowId, resumeCliId: ctx.A.cliId || undefined });
   applyTurn(ctx, "A", at);
@@ -540,6 +576,7 @@ async function runImplement(ctx: Ctx, opts: { note: string; chosenSide?: "A" | "
 
   if (cfg.gateG2 === "on") {
     const res = await runGate(taskId, "G2", async (kind, text) => {
+      recordUserTurn(taskId, ctx.round + 1, text);
       const prompt = kind === "inject" ? P.injectFeedback(text, ctx.round, cfg.style) : P.question(text, ctx.round, cfg.style);
       await runTurn({ taskId, role: "implementer", speaker: "impl", round: ctx.round + 1, executor: exImpl, prompt, cwd: ws.path, rowId: it.rowId, resumeCliId: it.cliId, branch: ws.branch });
     });

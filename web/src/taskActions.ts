@@ -30,3 +30,10 @@ export function runAction(status: TaskStatus): RunAction {
       return { kind: "busy", label: status, canClick: false };
   }
 }
+
+// A live agent subprocess exists only while `running`, so that's the only status
+// a manual stop applies to (queued has no process yet; a gate uses 打回 instead).
+// Single source of truth for the stop affordance across button / Cmd-K.
+export function canStopTask(status: TaskStatus): boolean {
+  return status === "running";
+}

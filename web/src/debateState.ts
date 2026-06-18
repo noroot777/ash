@@ -10,6 +10,7 @@ export type DebateTurn = {
   conclusion?: string; // self-declared one-line 结论
   done: boolean;
   error?: string;
+  at?: string; // for `user` turns: when the human spoke (instant)
 };
 
 export type DebateGate = {
@@ -52,6 +53,13 @@ export function applyDebateEvent(s: DebateState, ev: ServerEvent): DebateState {
       gate: ev.open
         ? { gate: ev.gate, open: true, consensus: ev.consensus, conclusionA: ev.conclusionA, conclusionB: ev.conclusionB }
         : null,
+    };
+  }
+  if (ev.type === "debate.user") {
+    // The human's gate intervention, dropped into the timeline as its own turn.
+    return {
+      ...s,
+      turns: [...s.turns, { round: ev.round, speaker: "user", text: ev.text, tools: [], raised: false, done: true, at: ev.at }],
     };
   }
   if (ev.type === "agent.event") {

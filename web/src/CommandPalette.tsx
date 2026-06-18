@@ -77,20 +77,28 @@ export function CommandPalette({
           }}
         />
         <div className="max-h-[50vh] overflow-y-auto py-1">
-          {filtered.map((c, i) => (
-            <button
-              key={c.id}
-              onMouseEnter={() => setActive(i)}
-              onClick={() => run(c)}
-              className={`flex w-full items-center gap-2 px-4 py-2 text-left text-sm ${
-                i === active ? "bg-overlay" : ""
-              }`}
-            >
-              <span className="text-ink">{c.label}</span>
-              {c.group && <span className="text-[10px] text-faint">{c.group}</span>}
-              {c.hint && <span className="ml-auto text-xs text-muted">{c.hint}</span>}
-            </button>
-          ))}
+          {filtered.map((c, i) => {
+            // Render a section header whenever the group changes, so current-task
+            // actions read separately from global ones.
+            const header = c.group && c.group !== filtered[i - 1]?.group ? c.group : null;
+            return (
+              <div key={c.id}>
+                {header && (
+                  <div className="px-4 pb-1 pt-2 text-[10px] font-medium uppercase tracking-wide text-faint">{header}</div>
+                )}
+                <button
+                  onMouseEnter={() => setActive(i)}
+                  onClick={() => run(c)}
+                  className={`flex w-full items-center gap-2 px-4 py-2 text-left text-sm ${
+                    i === active ? "bg-overlay" : ""
+                  }`}
+                >
+                  <span className="text-ink">{c.label}</span>
+                  {c.hint && <span className="ml-auto text-xs text-muted">{c.hint}</span>}
+                </button>
+              </div>
+            );
+          })}
           {!filtered.length && <p className="px-4 py-6 text-center text-xs text-faint">无匹配命令</p>}
         </div>
       </div>

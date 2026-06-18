@@ -3,8 +3,7 @@ import { canStartTask } from "@harness/shared";
 import type { TaskStatus } from "@harness/shared";
 import { db } from "./db/index.js";
 import { tasks, groups } from "./db/schema.js";
-import { bus } from "./bus.js";
-import { now } from "./util.js";
+import { setTaskStatus } from "./status.js";
 import { runTask } from "./orchestrator.js";
 
 const MAX_PARALLEL = 4;
@@ -12,8 +11,7 @@ const MAX_PARALLEL = 4;
 type Node = { id: string; dependsOn: string[]; createdAt: string };
 
 async function setQueued(taskId: string) {
-  await db.update(tasks).set({ status: "queued", updatedAt: now() }).where(eq(tasks.id, taskId));
-  bus.publish({ type: "task.status", taskId, status: "queued" });
+  await setTaskStatus(taskId, "queued");
 }
 
 async function succeeded(taskId: string): Promise<boolean> {
