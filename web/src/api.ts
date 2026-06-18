@@ -1,4 +1,4 @@
-import type { Project, ProjectView, ProjectHealth, Task, Session, Group, GateAction, Schedule, AgentExecutorProfile, BatchCreateTasksBody } from "@harness/shared";
+import type { Project, ProjectView, ProjectHealth, Task, Session, Group, GateAction, Schedule, AgentExecutorProfile, BatchCreateTasksBody, AgentType } from "@harness/shared";
 
 const j = async (r: Response) => {
   if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
@@ -95,7 +95,7 @@ export const api = {
     fetch(`/api/tasks/${id}/run`, { method: "POST" }).then(j),
   retryTask: (id: string): Promise<unknown> =>
     fetch(`/api/tasks/${id}/retry`, { method: "POST" }).then(j),
-  replyTask: (id: string, text: string, opts?: { images?: string[] }): Promise<unknown> =>
+  replyTask: (id: string, text: string, opts?: { images?: string[]; agent?: AgentType }): Promise<unknown> =>
     fetch(`/api/tasks/${id}/reply`, {
       method: "POST",
       headers: { "content-type": "application/json" },

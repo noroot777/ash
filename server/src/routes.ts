@@ -555,13 +555,14 @@ api.post("/tasks/:id/run", async (c) => {
 // agent that stopped to ask can be answered and keep going (same session).
 api.post("/tasks/:id/reply", async (c) => {
   const taskId = c.req.param("id");
-  const b = await c.req.json<{ text?: string; images?: string[] }>();
+  const b = await c.req.json<{ text?: string; images?: string[]; agent?: AgentType }>();
   if (!b.text?.trim() && !b.images?.length) return c.json({ error: "empty" }, 400);
+  if (b.agent && !AGENT_TYPES.includes(b.agent)) return c.json({ error: "未知的 agent", agent: b.agent }, 400);
   const r = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!r) return c.json({ error: "not found" }, 404);
   if (r.mode !== "single") return c.json({ error: "仅单任务支持回复" }, 409);
   if (r.status === "running" || r.status === "queued") return c.json({ error: "任务进行中" }, 409);
-  void continueTask(taskId, (b.text ?? "").trim(), { images: b.images });
+  void continueTask(taskId, (b.text ?? "").trim(), { images: b.images, agent: b.agent });
   return c.json({ started: true }, 202);
 });
 

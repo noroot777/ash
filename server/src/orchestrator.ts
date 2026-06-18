@@ -18,6 +18,11 @@ const running = new Set<string>(); // taskIds currently executing (single-flight
 const AUTONOMY =
   "你在一个无人值守的自动化环境中运行，没有人能实时回复你。请尽量自主完成：遇到多个合理方案时，选最稳妥的一个并在结果中说明假设与取舍；不要停下来等待人工确认，除非信息确实不足以继续。\n\n";
 
+// Prefix for an agent invited into an existing task via @-mention. It joins in
+// the SAME working directory, so it should read the current state before acting.
+const COLLAB_INVITE =
+  "你被叫来加入这个任务的协作。当前工作目录里可能已经有其他 agent 的产出，请先了解现状再动手。\n\n";
+
 async function setStatus(taskId: string, status: TaskStatus) {
   await db.update(tasks).set({ status, updatedAt: now() }).where(eq(tasks.id, taskId));
   bus.publish({ type: "task.status", taskId, status });
@@ -98,7 +103,7 @@ export async function runTask(taskId: string): Promise<void> {
     const emitText = (text: string) => {
       if (!text) return;
       out.write(text + "\n");
-      bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: "single", event: { kind: "text", text } });
+      bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: "single", agentType, event: { kind: "text", text } });
     };
 
     for await (const event of handle.events) {
@@ -110,7 +115,7 @@ export async function runTask(taskId: string): Promise<void> {
             .set({ cliSessionId, resumeCommand: ex.resumeCommand(ws.path, cliSessionId) })
             .where(eq(sessions.id, sessId));
         }
-        bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: "single", event });
+        bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: "single", agentType, event });
         continue;
       }
       if (event.kind === "text" && !titleDone) {
@@ -133,9 +138,9 @@ export async function runTask(taskId: string): Promise<void> {
       }
       if (event.kind === "text" || event.kind === "thinking") {
         out.write(event.text + "\n");
-        bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: "single", event });
+        bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: "single", agentType, event });
       } else {
-        bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: "single", event });
+        bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: "single", agentType, event });
         if (event.kind === "done") exitStatus = event.exitStatus;
       }
     }
@@ -158,35 +163,78 @@ export async function runTask(taskId: string): Promise<void> {
   }
 }
 
-// Continue a single task by resuming its CLI session with the user's reply — so
-// when an agent stops to ask, the human can answer and it keeps going in the
-// SAME session (full context retained), instead of the task being a dead end.
-export async function continueTask(taskId: string, userText: string, opts: { images?: string[] } = {}): Promise<void> {
+// Continue a single task. By default this resumes the task's own agent (answer
+// an agent that stopped to ask). With opts.agent it targets another agent: if
+// that agent already has a session here, resume it; otherwise invite it fresh
+// into the SAME working directory (same-dir collaboration). Single-flight by
+// taskId keeps invitees from running concurrently with the main agent.
+export async function continueTask(
+  taskId: string,
+  userText: string,
+  opts: { agent?: AgentType; images?: string[] } = {},
+): Promise<void> {
   if (running.has(taskId)) return;
   running.add(taskId);
+  const agentType = opts.agent ?? "claude"; // re-derived below once the task loads; kept for the catch handler
   try {
     const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
     if (!task) throw new Error("task not found");
     if (task.mode !== "single") throw new Error("reply is for single tasks");
 
-    const prev = (await db.select().from(sessions).where(eq(sessions.taskId, taskId)))
-      .filter((s) => s.role === "single")
-      .sort((a, b) => b.startedAt.localeCompare(a.startedAt))[0];
-    if (!prev || !prev.cliSessionId) throw new Error("没有可恢复的会话，请先运行一次");
-
-    const agentType = (task.agentType as AgentType) ?? "claude";
-    const ex = await resolveExecutor(agentType);
+    const agent = opts.agent ?? (task.agentType as AgentType) ?? "claude";
+    const ex = await resolveExecutor(agent);
     const project = (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0);
-    const cwd = prev.cwd || prev.worktreePath || (project ? ensureWorkdir(project.repoPath, taskId) : ".");
+
+    // A single task can now host several agents — one session line per agentType,
+    // each invited via @-mention. Newest first.
+    const all = (await db.select().from(sessions).where(eq(sessions.taskId, taskId)))
+      .sort((a, b) => b.startedAt.localeCompare(a.startedAt));
+    const prev = all.find((s) => s.agentType === agent); // this agent's own session, if any
+    const resuming = !!prev?.cliSessionId;
+    // Where the work lives: the agent's own cwd, else any session's cwd (so the
+    // invitee sees prior output), else materialize the task workdir.
+    const cwd =
+      prev?.cwd || prev?.worktreePath ||
+      all[0]?.cwd || all[0]?.worktreePath ||
+      (project ? ensureWorkdir(project.repoPath, taskId) : ".");
 
     await setStatus(taskId, "running");
-    let cliSessionId = prev.cliSessionId;
-    const handle = ex.run({ prompt: userText + imagesPrompt(opts.images), cwd, sessionId: cliSessionId });
+
+    const invited = !prev; // first time this agent is pulled into the task
+    const prompt = (invited ? COLLAB_INVITE : "") + userText + imagesPrompt(opts.images);
+    const handle = ex.run({ prompt, cwd, sessionId: resuming ? prev!.cliSessionId! : undefined });
+
+    // Reuse the agent's session row when resuming; otherwise open a fresh line,
+    // inheriting the task's worktree/branch from its first session.
+    let sessId: string;
+    let cliSessionId = resuming ? prev!.cliSessionId! : handle.sessionId;
+    if (resuming) {
+      sessId = prev!.id;
+    } else {
+      sessId = id();
+      const base = all[0];
+      await db.insert(sessions).values({
+        id: sessId,
+        taskId,
+        role: "single",
+        agentType: agent,
+        executor: ex.label,
+        target: "local",
+        worktreePath: base?.worktreePath ?? null,
+        branch: base?.branch ?? null,
+        cwd,
+        cliSessionId,
+        resumeCommand: ex.resumeCommand(cwd, cliSessionId),
+        commandLine: handle.commandLine,
+        startedAt: now(),
+        exitStatus: null,
+      });
+    }
 
     const runDir = join(RUNS_DIR, taskId);
     mkdirSync(runDir, { recursive: true });
-    const out = createWriteStream(join(runDir, `${prev.id}.md`), { flags: "a" });
-    out.write(`\n\n〔你〕${userText}\n`); // so a reloaded thread shows the human turn too
+    const out = createWriteStream(join(runDir, `${sessId}.md`), { flags: "a" });
+    out.write(`\n\n〔你 → @${agent}〕${userText}\n`); // so a reloaded thread shows the human turn too
 
     let exitStatus = 0;
     for await (const event of handle.events) {
@@ -196,22 +244,22 @@ export async function continueTask(taskId: string, userText: string, opts: { ima
           await db
             .update(sessions)
             .set({ cliSessionId, resumeCommand: ex.resumeCommand(cwd, cliSessionId) })
-            .where(eq(sessions.id, prev.id));
+            .where(eq(sessions.id, sessId));
         }
-        bus.publish({ type: "agent.event", taskId, sessionId: prev.id, role: "single", event });
+        bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: "single", agentType: agent, event });
         continue;
       }
       if (event.kind === "text" || event.kind === "thinking") out.write(event.text + "\n");
       if (event.kind === "done") exitStatus = event.exitStatus;
-      bus.publish({ type: "agent.event", taskId, sessionId: prev.id, role: "single", event });
+      bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: "single", agentType: agent, event });
     }
     out.end();
 
-    await db.update(sessions).set({ exitStatus }).where(eq(sessions.id, prev.id));
+    await db.update(sessions).set({ exitStatus }).where(eq(sessions.id, sessId));
     await setStatus(taskId, exitStatus === 0 ? "done" : "failed");
   } catch (err) {
     bus.publish({
-      type: "agent.event", taskId, sessionId: "", role: "single",
+      type: "agent.event", taskId, sessionId: "", role: "single", agentType,
       event: { kind: "error", message: String(err instanceof Error ? err.message : err) },
     });
     await setStatus(taskId, "failed");

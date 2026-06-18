@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useMemo } from "react";
-import type { Task, ProjectView, Group, AgentEvent, DebateStyle } from "@harness/shared";
+import type { Task, ProjectView, Group, AgentEvent, DebateStyle, AgentType } from "@harness/shared";
 import { NotePencil, CaretDown, MagnifyingGlass, GearSix } from "@phosphor-icons/react";
 import { api } from "./api";
 import { useServerEvents } from "./useEvents";
@@ -53,7 +53,7 @@ export function App() {
         setTasks((ts) => ts.map((t) => (t.id === ev.taskId ? { ...t, title: ev.title } : t)));
       } else if (ev.type === "agent.event") {
         if (ev.role === "single") {
-          const line = renderEvent(ev.event);
+          const line = renderEvent(ev.event, ev.agentType);
           if (line) setLogs((m) => ({ ...m, [ev.taskId]: [...(m[ev.taskId] ?? []), line] }));
         } else {
           setDebates((m) => ({ ...m, [ev.taskId]: applyDebateEvent(m[ev.taskId] ?? emptyDebate(), ev) }));
@@ -132,8 +132,9 @@ export function App() {
 
   // Reply to a single task: show the human turn immediately, then resume its
   // session so the agent continues (used when an agent stopped to ask).
-  const reply = useCallback(async (id: string, text: string, opts?: { images?: string[] }) => {
-    setLogs((m) => ({ ...m, [id]: [...(m[id] ?? []), { kind: "user", text: text || "[图片]" }] }));
+  const reply = useCallback(async (id: string, text: string, opts?: { images?: string[]; agent?: AgentType }) => {
+    const display = (text || "[图片]") + (opts?.agent ? `  ·  指派给 @${opts.agent}` : "");
+    setLogs((m) => ({ ...m, [id]: [...(m[id] ?? []), { kind: "user", text: display }] }));
     try { await api.replyTask(id, text, opts); } catch (e) { console.warn("reply rejected:", e); }
   }, []);
 
@@ -415,18 +416,19 @@ export function App() {
   );
 }
 
-function renderEvent(e: AgentEvent): LogLine | null {
+function renderEvent(e: AgentEvent, agent?: AgentType): LogLine | null {
+  const base = (l: LogLine): LogLine => ({ ...l, agent });
   switch (e.kind) {
     case "text":
-      return { kind: "text", text: e.text };
+      return base({ kind: "text", text: e.text });
     case "thinking":
-      return { kind: "thinking", text: e.text };
+      return base({ kind: "thinking", text: e.text });
     case "tool":
-      return { kind: "tool", name: e.name, text: e.detail ?? "" };
+      return base({ kind: "tool", name: e.name, text: e.detail ?? "" });
     case "error":
-      return { kind: "error", text: e.message };
+      return base({ kind: "error", text: e.message });
     case "done":
-      return { kind: "done", text: `— 结束 (exit ${e.exitStatus}) —` };
+      return base({ kind: "done", text: `— 结束 (exit ${e.exitStatus}) —` });
     default:
       return null;
   }

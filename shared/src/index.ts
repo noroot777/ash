@@ -237,6 +237,7 @@ export type ServerEvent =
       taskId: string;
       sessionId: string;
       role: SessionRole;
+      agentType?: AgentType; // which agent produced it (single tasks can host several via @-mention)
       event: AgentEvent;
     }
   | {

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import type { Task, Group, Session, TaskStatus, Priority } from "@harness/shared";
-import { isUserSettableStatus } from "@harness/shared";
-import { CaretDown, Play, Trash, ArrowsDownUp } from "@phosphor-icons/react";
+import type { Task, Group, Session, TaskStatus, Priority, AgentType } from "@harness/shared";
+import { isUserSettableStatus, AGENT_TYPES } from "@harness/shared";
+import { CaretDown, Play, Trash, ArrowsDownUp, Robot, X } from "@phosphor-icons/react";
 import { api } from "./api";
 import { STATUSES, PRIORITIES } from "./constants";
 import { Credential, ToolCall, ThinkingBlock } from "./ui";
@@ -18,6 +18,7 @@ export type LogLine = {
   kind: "text" | "thinking" | "tool" | "error" | "done" | "user";
   text: string;
   name?: string; // tool name (for kind "tool")
+  agent?: AgentType; // which agent produced it (for @-mention multi-agent threads)
 };
 
 export function TaskDetail({
@@ -38,7 +39,7 @@ export function TaskDetail({
   logs: LogLine[];
   sessionsBump: number;
   onRun: () => void;
-  onReply: (text: string, opts?: { images?: string[] }) => void;
+  onReply: (text: string, opts?: { images?: string[]; agent?: AgentType }) => void;
   onPatch: (patch: Partial<Task>) => void;
   onCreateGroup: () => void;
   onDelete: () => void;
@@ -197,7 +198,7 @@ export function TaskDetail({
         className="min-h-0 flex-1 overflow-y-auto break-words px-6 py-4 text-[13px] leading-relaxed"
       >
         {history && <Markdown text={history} />}
-        <LogBlocks logs={logs} />
+        <LogBlocks logs={logs} primaryAgent={task.agentType ?? "claude"} />
         {!history && logs.length === 0 && (
           <p className="font-sans text-faint">点击「运行」开始，输出会实时流式显示在这里。</p>
         )}
@@ -212,16 +213,23 @@ export function TaskDetail({
 
 // Render the live log as a chat-like stream: consecutive agent text is merged
 // into one Markdown block; tools/thinking are collapsible; the human's replies
-// show as right-aligned bubbles.
-function LogBlocks({ logs }: { logs: LogLine[] }) {
+// show as right-aligned bubbles. When an @-mentioned agent takes over, a divider
+// marks the handoff so the two agents' output stays distinguishable.
+function LogBlocks({ logs, primaryAgent }: { logs: LogLine[]; primaryAgent: AgentType }) {
   const blocks: ReactNode[] = [];
   let buf = "";
   let k = 0;
+  let shownAgent: AgentType = primaryAgent;
   const flush = () => {
     if (buf.trim()) blocks.push(<Markdown key={k++} text={buf} />);
     buf = "";
   };
   for (const l of logs) {
+    if (l.agent && l.agent !== shownAgent) {
+      flush();
+      shownAgent = l.agent;
+      blocks.push(<AgentDivider key={k++} agent={l.agent} />);
+    }
     if (l.kind === "text") {
       buf += (buf ? "\n" : "") + l.text;
       continue;
@@ -242,26 +250,86 @@ function LogBlocks({ logs }: { logs: LogLine[] }) {
   return <>{blocks}</>;
 }
 
-// Reply-and-continue box: answer an agent that stopped to ask; resumes its session.
-function ReplyBox({ onReply, disabled }: { onReply: (text: string, opts?: { images?: string[] }) => void; disabled: boolean }) {
+// Handoff marker shown when output starts coming from a different agent.
+function AgentDivider({ agent }: { agent: AgentType }) {
+  return (
+    <div className="my-3 flex items-center gap-2 text-[11px] text-faint">
+      <span className="h-px flex-1 bg-line" />
+      <span className="rounded-full bg-raised px-2 py-0.5 font-medium text-muted">@{agent} 接手</span>
+      <span className="h-px flex-1 bg-line" />
+    </div>
+  );
+}
+
+// Reply-and-continue box. Answers the task's own agent by default; typing `@` and
+// picking an agent assigns the reply to another agent, which is invited into the
+// same task (same working directory). Images can be pasted in too.
+function ReplyBox({ onReply, disabled }: { onReply: (text: string, opts?: { images?: string[]; agent?: AgentType }) => void; disabled: boolean }) {
   const [v, setV] = useState("");
+  const [target, setTarget] = useState<AgentType | null>(null);
+  const [mIdx, setMIdx] = useState(0);
   const { images, onPaste, remove, clear } = usePasteImages();
+
+  // @-mention: when an "@word" token sits at the end of the text, offer the agent
+  // list. Choosing one assigns the reply to that agent and strips the token.
+  const mMatch = /(?:^|\s)@(\w*)$/.exec(v);
+  const cands = mMatch ? AGENT_TYPES.filter((a) => a.startsWith((mMatch[1] ?? "").toLowerCase())) : [];
+  const mentionOpen = !disabled && !!mMatch && cands.length > 0;
+
+  const pick = (a: AgentType) => {
+    setTarget(a);
+    setV((s) => s.replace(/@\w*$/, "")); // drop the @token being typed
+    setMIdx(0);
+  };
+
   const send = () => {
     if ((v.trim() || images.length) && !disabled) {
-      onReply(v.trim(), { images: images.map((i) => i.path) });
+      onReply(v.trim(), { images: images.map((i) => i.path), agent: target ?? undefined });
       setV("");
       clear();
+      setTarget(null);
     }
   };
+
   return (
-    <div className="flex flex-col gap-2 border-t border-line px-6 py-3">
+    <div className="relative flex flex-col gap-2 border-t border-line px-6 py-3">
+      {mentionOpen && (
+        <div className="absolute bottom-full left-6 z-10 mb-1 w-56 overflow-hidden rounded-lg border border-line2 bg-panel p-1 shadow-xl">
+          <div className="px-2 py-1 text-[10px] text-faint">召唤智能体加入 · ↑↓ 选，回车确定</div>
+          {cands.map((a, i) => (
+            <button
+              key={a}
+              onMouseEnter={() => setMIdx(i)}
+              onClick={() => pick(a)}
+              className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] text-ink ${i === mIdx ? "bg-raised" : ""}`}
+            >
+              <Robot size={14} className="text-muted" /> @{a}
+            </button>
+          ))}
+        </div>
+      )}
       <ImageChips images={images} onRemove={remove} />
+      {target && (
+        <div className="flex items-center text-[12px]">
+          <span className="inline-flex items-center gap-1 rounded-full bg-accent/10 px-2 py-0.5 text-ink">
+            <Robot size={12} /> 指派给 @{target}
+            <button onClick={() => setTarget(null)} className="text-faint hover:text-ink" title="取消指派">
+              <X size={11} weight="bold" />
+            </button>
+          </span>
+        </div>
+      )}
       <div className="flex items-end gap-2">
         <textarea
           value={v}
           onChange={(e) => setV(e.target.value)}
           onPaste={onPaste}
           onKeyDown={(e) => {
+            if (mentionOpen) {
+              if (e.key === "ArrowDown") { e.preventDefault(); setMIdx((i) => Math.min(cands.length - 1, i + 1)); return; }
+              if (e.key === "ArrowUp") { e.preventDefault(); setMIdx((i) => Math.max(0, i - 1)); return; }
+              if (e.key === "Enter" && !e.metaKey && !e.ctrlKey) { e.preventDefault(); pick(cands[mIdx] ?? cands[0]); return; }
+            }
             if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
               e.preventDefault();
               send();
@@ -269,7 +337,7 @@ function ReplyBox({ onReply, disabled }: { onReply: (text: string, opts?: { imag
           }}
           rows={2}
           disabled={disabled}
-          placeholder={disabled ? "进行中…" : "回复并继续（同一会话，⌘↵ 发送，可粘贴图片）…"}
+          placeholder={disabled ? "进行中…" : "回复并继续（⌘↵ 发送，可粘贴图片，@ 召唤其它智能体）…"}
           className="flex-1 resize-none rounded-md border border-line bg-panel px-2.5 py-1.5 text-[13px] text-ink outline-none placeholder:text-faint focus:border-accent disabled:opacity-50"
         />
         <button
