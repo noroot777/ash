@@ -1,7 +1,7 @@
 import { eq } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { schedules, tasks } from "./db/schema.js";
-import { runTask } from "./orchestrator.js";
+import { resumeOrRunTask } from "./orchestrator.js";
 import { runDebate } from "./debate/index.js";
 
 // ── Minimal 5-field cron matcher (minute hour dom month dow), local time ──────
@@ -54,7 +54,7 @@ async function fire(taskId: string) {
   const t = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!t || t.status === "running" || t.status === "queued") return;
   if (t.mode === "debate") void runDebate(taskId);
-  else void runTask(taskId);
+  else void resumeOrRunTask(taskId, { reason: "schedule" });
 }
 
 async function tick() {

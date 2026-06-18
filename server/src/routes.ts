@@ -18,7 +18,7 @@ import { db } from "./db/index.js";
 import { projects, groups, tasks, sessions, schedules, agents } from "./db/schema.js";
 import { bus } from "./bus.js";
 import { id, now, imagesPrompt } from "./util.js";
-import { runTask, continueTask } from "./orchestrator.js";
+import { resumeOrRunTask, continueTask } from "./orchestrator.js";
 import { setTaskStatus } from "./status.js";
 import { stopTask } from "./runs.js";
 import { runGroup } from "./scheduler.js";
@@ -623,7 +623,7 @@ api.post("/tasks/:id/run", async (c) => {
   if (!canStartTask(r.status as TaskStatus)) return c.json({ error: "任务当前状态不可运行", status: r.status }, 409);
   // Fire-and-forget; progress streams over /api/events.
   if (r.mode === "debate") void runDebate(taskId);
-  else void runTask(taskId);
+  else void resumeOrRunTask(taskId, { reason: "run" });
   return c.json({ started: true }, 202);
 });
 
@@ -661,7 +661,7 @@ api.post("/tasks/:id/retry", async (c) => {
   if (!r) return c.json({ error: "not found" }, 404);
   if (r.status !== "failed") return c.json({ error: "只有失败的任务可以重试", status: r.status }, 409);
   if (r.mode === "debate") void resumeDebate(taskId);
-  else void runTask(taskId);
+  else void resumeOrRunTask(taskId, { reason: "retry" });
   return c.json({ started: true }, 202);
 });
 

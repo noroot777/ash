@@ -26,6 +26,20 @@ const AUTONOMY =
 const COLLAB_INVITE =
   "你被叫来加入这个任务的协作。当前工作目录里可能已经有其他 agent 的产出，请先了解现状再动手。\n\n";
 
+// When a task that was interrupted (server restart → failed, manual stop →
+// canceled, or a non-zero exit) is (re)started, we RESUME its existing CLI
+// session with this nudge instead of re-running from scratch — the agent already
+// holds the full prior context via --resume, so no AUTONOMY preamble.
+const RESUME_PROMPT =
+  "继续：你上一次的运行被中断了（可能是服务重启或被手动停止）。请从中断处接着完成这个任务，先简要说明你已做到哪一步、还差什么，然后继续推进直到完成。";
+// Backend-initiated continue leaves this trace in the timeline (distinct from a
+// user reply), shown identically live (SSE) and on reload (.md).
+const SYS_MARKER = "〔系统〕继续（从中断处）";
+
+// Why a task is being (re)started — only used to label the resume; all reasons
+// behave the same (resume if there's a resumable session, else fresh).
+export type ResumeReason = "group" | "run" | "retry" | "schedule";
+
 async function setStatus(taskId: string, status: Parameters<typeof setTaskStatus>[1]) {
   await setTaskStatus(taskId, status);
 }
@@ -171,6 +185,27 @@ export async function runTask(taskId: string): Promise<void> {
   }
 }
 
+// Decide between a fresh run and a resume when (re)starting a single task. A task
+// that was interrupted keeps a session row with a cliSessionId (server restart
+// leaves exitStatus null; manual stop / non-zero exit keep the id too) — resume
+// THAT session so the agent continues from where it stopped, like the user typing
+// 继续. A never-started task (no resumable session) runs fresh. Tail-returns the
+// delegate so callers (esp. the scheduler) keep chaining on the same promise.
+export async function resumeOrRunTask(
+  taskId: string,
+  opts: { reason?: ResumeReason } = {},
+): Promise<void> {
+  const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
+  if (!task || task.mode !== "single") return runTask(taskId); // debates/missing → unchanged path
+  const agent = (task.agentType as AgentType) ?? "claude";
+  const prev = (await db.select().from(sessions).where(eq(sessions.taskId, taskId)))
+    .filter((s) => s.agentType === agent)
+    .sort((a, b) => b.startedAt.localeCompare(a.startedAt))
+    .at(0);
+  if (prev?.cliSessionId) return continueTask(taskId, RESUME_PROMPT, { system: opts.reason ?? "run" });
+  return runTask(taskId); // no resumable session → fresh
+}
+
 // Continue a single task. By default this resumes the task's own agent (answer
 // an agent that stopped to ask). With opts.agent it targets another agent: if
 // that agent already has a session here, resume it; otherwise invite it fresh
@@ -179,7 +214,7 @@ export async function runTask(taskId: string): Promise<void> {
 export async function continueTask(
   taskId: string,
   userText: string,
-  opts: { agent?: AgentType; images?: string[] } = {},
+  opts: { agent?: AgentType; images?: string[]; system?: ResumeReason } = {},
 ): Promise<void> {
   if (running.has(taskId)) return;
   running.add(taskId);
@@ -244,7 +279,14 @@ export async function continueTask(
     const runDir = join(RUNS_DIR, taskId);
     mkdirSync(runDir, { recursive: true });
     const out = createWriteStream(join(runDir, `${sessId}.md`), { flags: "a" });
-    out.write(`\n\n〔你 → @${agent}〕${userText}\n`); // so a reloaded thread shows the human turn too
+    if (opts.system) {
+      // Backend-initiated 继续: a system trace, NOT a "你 →" reply. Persist to the
+      // .md (reload) and emit one matching text event (live) — same string both ways.
+      out.write(`\n\n${SYS_MARKER}\n`);
+      bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: "single", agentType: agent, event: { kind: "text", text: SYS_MARKER } });
+    } else {
+      out.write(`\n\n〔你 → @${agent}〕${userText}\n`); // so a reloaded thread shows the human turn too
+    }
 
     let exitStatus = 0;
     for await (const event of handle.events) {

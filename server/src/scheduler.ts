@@ -4,7 +4,7 @@ import type { TaskStatus } from "@harness/shared";
 import { db } from "./db/index.js";
 import { tasks, groups } from "./db/schema.js";
 import { setTaskStatus } from "./status.js";
-import { runTask } from "./orchestrator.js";
+import { resumeOrRunTask } from "./orchestrator.js";
 
 const MAX_PARALLEL = 4;
 
@@ -65,7 +65,7 @@ export async function runGroup(groupId: string): Promise<void> {
     const ordered = [...nodes].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
     for (const n of ordered) {
       if (await isPaused(groupId)) break; // 暂停：剩下未开始的不再启动
-      await runTask(n.id);
+      await resumeOrRunTask(n.id, { reason: "group" });
     }
     await parkQueued(groupId); // 暂停时把没轮到的那些归位为 backlog
     return;
@@ -79,7 +79,7 @@ export async function runGroup(groupId: string): Promise<void> {
 
   const launch = (n: Node) => {
     pending.delete(n.id);
-    const p = runTask(n.id)
+    const p = resumeOrRunTask(n.id, { reason: "group" })
       .then(async () => {
         await succeeded(n.id); // status already persisted by runTask
       })
