@@ -6,9 +6,18 @@ import { Duration, formatInstant } from "./time";
 import { api } from "./api";
 
 // "⏱ 14m 3s" with the start/end instants in the tooltip — the session-run timing
-// (start, end, duration) attached to a credential. Live (ticking) until endedAt.
+// (start, end, duration) attached to a credential. Live (ticking) only while the
+// run is unfinished; a finished session with no recorded end (legacy row, before
+// ended_at existed) falls back to just its start instant rather than ticking on.
 function SessionTime({ s }: { s: Session }) {
   if (!s.startedAt) return null;
+  if (!s.endedAt && s.exitStatus !== null) {
+    return (
+      <span className="text-faint" title={`开始 ${formatInstant(s.startedAt)}`}>
+        ⏱ {formatInstant(s.startedAt)} 起
+      </span>
+    );
+  }
   const tip = `开始 ${formatInstant(s.startedAt)}${s.endedAt ? ` · 结束 ${formatInstant(s.endedAt)}` : "（进行中）"}`;
   return (
     <span className="inline-flex items-center gap-0.5 text-faint" title={tip}>
