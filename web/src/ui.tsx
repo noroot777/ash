@@ -49,21 +49,21 @@ export function CollapsibleText({ text }: { text: string }) {
 
 
 // "⏱ 14m 3s" with the start/end instants in the tooltip — the session-run timing
-// (start, end, duration) attached to a credential. Live (ticking) only while the
-// run is unfinished; a finished session with no recorded end (legacy row, before
-// ended_at existed) falls back to just its start instant rather than ticking on.
-function SessionTime({ s }: { s: Session }) {
+// attached to a credential. This is always a FINISHED run's timing (footers live
+// in history / debate transcripts), so it never ticks: a row with no recorded end
+// (legacy, or interrupted before ended_at was written) shows its start instant
+// rather than spinning a counter up to "now".
+export function SessionTime({ s }: { s: Session }) {
   if (!s.startedAt) return null;
-  if (!s.endedAt && s.exitStatus !== null) {
+  if (!s.endedAt) {
     return (
-      <span className="text-faint" title={`开始 ${formatInstant(s.startedAt)}`}>
+      <span className="text-faint" title={`开始 ${formatInstant(s.startedAt)}（未记录结束）`}>
         ⏱ {formatInstant(s.startedAt)} 起
       </span>
     );
   }
-  const tip = `开始 ${formatInstant(s.startedAt)}${s.endedAt ? ` · 结束 ${formatInstant(s.endedAt)}` : "（进行中）"}`;
   return (
-    <span className="inline-flex items-center gap-0.5 text-faint" title={tip}>
+    <span className="inline-flex items-center gap-0.5 text-faint" title={`开始 ${formatInstant(s.startedAt)} · 结束 ${formatInstant(s.endedAt)}`}>
       ⏱ <Duration from={s.startedAt} to={s.endedAt} />
     </span>
   );
@@ -263,9 +263,10 @@ export function LabelAdder({ onAdd }: { onAdd: (label: string) => void }) {
   );
 }
 
-// Slim per-speech variant — just the two copy buttons (resume command + session
-// id), to sit in a debate bubble footer where the role/agent are already shown.
-export function ResumeButtons({ s }: { s: Session }) {
+// The two copy buttons of a run credential (resume command + session id), on
+// their own so a bubble footer can show them without the SessionTime (which the
+// task bubble now renders in its header instead).
+export function ResumeCopyButtons({ s }: { s: Session }) {
   const [copied, setCopied] = useState<string | null>(null);
   const copy = (label: string, text: string) => {
     if (!text) return;
@@ -274,8 +275,7 @@ export function ResumeButtons({ s }: { s: Session }) {
     setTimeout(() => setCopied(null), 1200);
   };
   return (
-    <div className="mt-1.5 flex items-center gap-1.5 text-[10px]">
-      <SessionTime s={s} />
+    <>
       <button
         onClick={() => copy("cmd", s.resumeCommand ?? "")}
         className="rounded bg-overlay px-1.5 py-0.5 text-muted hover:text-ink disabled:opacity-40"
@@ -292,6 +292,17 @@ export function ResumeButtons({ s }: { s: Session }) {
       >
         {copied === "id" ? "✓" : "ID"}
       </button>
+    </>
+  );
+}
+
+// Slim per-speech variant — SessionTime + the two copy buttons, to sit in a debate
+// bubble footer where the role/agent are already shown.
+export function ResumeButtons({ s }: { s: Session }) {
+  return (
+    <div className="mt-1.5 flex items-center gap-1.5 text-[10px]">
+      <SessionTime s={s} />
+      <ResumeCopyButtons s={s} />
     </div>
   );
 }

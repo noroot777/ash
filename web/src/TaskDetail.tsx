@@ -4,7 +4,7 @@ import { isUserSettableStatus, AGENT_TYPES } from "@harness/shared";
 import { CaretDown, Play, Stop, Trash, ArrowsDownUp, ArrowsClockwise, Robot, X } from "@phosphor-icons/react";
 import { api } from "./api";
 import { STATUSES, PRIORITIES } from "./constants";
-import { ToolCall, ThinkingBlock, ResumeButtons, CollapsibleText } from "./ui";
+import { ToolCall, ThinkingBlock, ResumeCopyButtons, CollapsibleText } from "./ui";
 import { Markdown } from "./Markdown";
 import { StatusIcon } from "./StatusIcon";
 import { PriorityIcon, LabelAdder } from "./ui";
@@ -12,7 +12,7 @@ import { ScheduleControl } from "./ScheduleControl";
 import { Menu } from "./Menu";
 import { runAction, canStopTask } from "./taskActions";
 import { groupLabel } from "./util";
-import { TaskTimeChip, formatInstant } from "./time";
+import { TaskTimeChip, formatInstant, Duration } from "./time";
 import { usePasteImages, ImageChips } from "./pasteImages";
 
 export type LogLine = {
@@ -220,7 +220,7 @@ export function TaskDetail({
         {/* The run as a conversation: prior output (snapshotted per session on
             load) and the live stream merge into one bubble per run, so a running
             task you reload doesn't split into a stale + live pair. */}
-        <Conversation snapshot={snapshot} logs={logs} sessions={sessions} primaryAgent={task.agentType ?? "claude"} />
+        <Conversation task={task} snapshot={snapshot} logs={logs} sessions={sessions} primaryAgent={task.agentType ?? "claude"} />
         {snapshot.length === 0 && logs.length === 0 && (
           <p className="font-sans text-faint">点击「运行」开始，输出会实时流式显示在这里。</p>
         )}
@@ -246,8 +246,10 @@ type AgentItem = {
   sessionId?: string;
   agent?: AgentType;
   session?: Session;
+  showResume?: boolean; // only the run's LAST bubble carries the resume credential
   label: string;
-  time?: string | null;
+  time?: string | null; // run start (header shows 开始时刻 · 用时)
+  endedAt?: string | null; // run end (real, or estimated from the next run's start) for a static 用时
   nodes: ReactNode[]; // pre-rendered snapshot content
   lines: LogLine[]; // live lines, rendered via groupContent
 };
@@ -313,20 +315,31 @@ function parseSnapshot(out: string): Seg[] {
 }
 
 function Conversation({
+  task,
   snapshot,
   logs,
   sessions,
   primaryAgent,
 }: {
+  task: Task;
   snapshot: { s: Session; out: string }[];
   logs: LogLine[];
   sessions: Session[];
   primaryAgent: AgentType;
 }) {
+  // A run's 用时 needs an end. Most have session.endedAt; an interrupted/legacy run
+  // (no recorded end) is bounded instead by the NEXT run's start — the moment it
+  // was superseded — falling back to the task's own end. Never "now", so nothing
+  // ticks in this historical view.
+  const byStart = [...sessions].sort((a, b) => (a.startedAt ?? "").localeCompare(b.startedAt ?? ""));
+  const runEnd = new Map<string, string | null>();
+  byStart.forEach((s, i) => runEnd.set(s.id, s.endedAt ?? byStart[i + 1]?.startedAt ?? task.endedAt ?? null));
+
   const items: ConvItem[] = [];
   for (const { s, out } of snapshot) {
     // One session can now yield several bubbles (agent turns split by interjections).
-    // The run's credential (resume/id) belongs on its LAST agent turn only.
+    // The run's credential (resume/id) belongs on its LAST agent turn only; every
+    // bubble still carries the run's start·用时 in its header.
     const segs = parseSnapshot(out);
     const lastAgent = segs.reduce((acc, seg, i) => (seg.kind === "agent" ? i : acc), -1);
     segs.forEach((seg, i) => {
@@ -336,9 +349,11 @@ function Conversation({
         kind: "agent",
         sessionId: s.id,
         agent: s.agentType,
-        session: i === lastAgent ? s : undefined,
+        session: s,
+        showResume: i === lastAgent,
         label: s.executor,
         time: s.startedAt,
+        endedAt: runEnd.get(s.id) ?? null,
         nodes: [<Markdown key={`snap-${s.id}-${i}`} text={seg.text} />],
         lines: [],
       });
@@ -366,7 +381,7 @@ function Conversation({
     // text / thinking / tool / error → part of the current run's bubble
     if (!cur || cur.sessionId !== l.sessionId || cur.agent !== l.agent) {
       const sess = l.sessionId ? sessions.find((s) => s.id === l.sessionId) : undefined;
-      cur = { kind: "agent", sessionId: l.sessionId, agent: l.agent, session: sess, label: sess?.executor ?? `@${l.agent ?? primaryAgent}`, time: sess?.startedAt, nodes: [], lines: [] };
+      cur = { kind: "agent", sessionId: l.sessionId, agent: l.agent, session: sess, showResume: true, label: sess?.executor ?? `@${l.agent ?? primaryAgent}`, time: sess?.startedAt, endedAt: sess ? runEnd.get(sess.id) ?? null : null, nodes: [], lines: [] };
       items.push(cur);
     }
     cur.lines.push(l);
@@ -381,7 +396,7 @@ function Conversation({
         const content = [...it.nodes, ...groupContent(it.lines)];
         if (!content.length) return null;
         return (
-          <AgentBubble key={i} label={it.label} time={it.time} session={it.session}>
+          <AgentBubble key={i} label={it.label} time={it.time} endedAt={it.endedAt} session={it.session} showResume={it.showResume}>
             {content}
           </AgentBubble>
         );
@@ -414,24 +429,29 @@ function groupContent(lines: LogLine[]): ReactNode[] {
   return nodes;
 }
 
-// One agent turn / run: left-aligned card with an executor·time header, the
-// content, and a slim resume/id/time footer (the run's credential — its new home,
-// out of the page header).
+// One agent turn / run: left-aligned card whose header carries the run's
+// executor · 开始时刻 · 用时 (static — a finished run never ticks; an interrupted
+// run's 用时 is bounded by the next run's start), the content, and — on the run's
+// LAST bubble only — the resume/id credential.
 function AgentBubble({
   label,
   time,
+  endedAt,
   session,
+  showResume,
   children,
 }: {
   label?: string;
   time?: string | null;
+  endedAt?: string | null;
   session?: Session;
+  showResume?: boolean;
   children: ReactNode;
 }) {
   return (
     <div className="mb-3">
       <div className="rounded-lg border border-line bg-raised/40 px-3 py-2">
-        <div className="mb-1 flex items-center gap-2 text-[11px] text-muted">
+        <div className="mb-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-muted">
           <span className="font-medium text-ink/70">{label || "智能体"}</span>
           {time && (
             <>
@@ -439,9 +459,21 @@ function AgentBubble({
               <span className="text-faint">{formatInstant(time)}</span>
             </>
           )}
+          {time && endedAt && (
+            <>
+              <span className="text-faint">·</span>
+              <span className="inline-flex items-center gap-0.5 text-faint" title={`开始 ${formatInstant(time)} · 结束 ${formatInstant(endedAt)}`}>
+                ⏱ <Duration from={time} to={endedAt} /> 用时
+              </span>
+            </>
+          )}
         </div>
         {children}
-        {session && (session.resumeCommand || session.cliSessionId) && <ResumeButtons s={session} />}
+        {showResume && session && (session.resumeCommand || session.cliSessionId) && (
+          <div className="mt-1.5 flex items-center gap-1.5 text-[10px]">
+            <ResumeCopyButtons s={session} />
+          </div>
+        )}
       </div>
     </div>
   );
