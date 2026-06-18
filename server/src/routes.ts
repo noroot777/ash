@@ -2,9 +2,9 @@ import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import { eq } from "drizzle-orm";
 import { readFile } from "node:fs/promises";
-import { rmSync } from "node:fs";
-import { join, basename } from "node:path";
-import { RUNS_DIR, DATA_DIR } from "./paths.js";
+import { rmSync, mkdirSync, writeFileSync } from "node:fs";
+import { join, basename, extname } from "node:path";
+import { RUNS_DIR, DATA_DIR, UPLOADS_DIR } from "./paths.js";
 import type {
   Project,
   ProjectView,
@@ -17,7 +17,7 @@ import { canStartTask, isUserSettableStatus, AGENT_TYPES } from "@harness/shared
 import { db } from "./db/index.js";
 import { projects, groups, tasks, sessions, schedules, agents } from "./db/schema.js";
 import { bus } from "./bus.js";
-import { id, now } from "./util.js";
+import { id, now, imagesPrompt } from "./util.js";
 import { runTask, continueTask } from "./orchestrator.js";
 import { runGroup } from "./scheduler.js";
 import { runDebate, resumeDebate, resumeAtGate } from "./debate/index.js";
@@ -31,6 +31,50 @@ export const api = new Hono();
 
 // ── health ───────────────────────────────────────────────────────────────
 api.get("/health", (c) => c.json({ ok: true, ts: now() }));
+
+// ── image uploads (pasted into the composer / reply box) ─────────────────────
+// Agents take text on stdin, not binaries — so we persist the image and hand its
+// absolute path to the agent (it reads it with the Read tool). See imagesPrompt.
+const IMG_EXT: Record<string, string> = {
+  "image/png": "png",
+  "image/jpeg": "jpg",
+  "image/gif": "gif",
+  "image/webp": "webp",
+  "image/svg+xml": "svg",
+};
+const IMG_MIME: Record<string, string> = {
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".gif": "image/gif",
+  ".webp": "image/webp",
+  ".svg": "image/svg+xml",
+};
+
+// Accept a base64 data URL, persist it, return the absolute path (for the prompt)
+// and a url (for the web client to preview the thumbnail).
+api.post("/uploads", async (c) => {
+  const { dataUrl } = await c.req.json<{ dataUrl?: string }>();
+  const m = /^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/s.exec(dataUrl ?? "");
+  if (!m) return c.json({ error: "需要 data:image/*;base64 格式的图片" }, 400);
+  const ext = IMG_EXT[m[1]] ?? "png";
+  mkdirSync(UPLOADS_DIR, { recursive: true });
+  const file = `${id()}.${ext}`;
+  writeFileSync(join(UPLOADS_DIR, file), Buffer.from(m[2], "base64"));
+  return c.json({ id: file, path: join(UPLOADS_DIR, file), url: `/api/uploads/${file}` });
+});
+
+// Serve a stored image back (thumbnail preview). basename() strips any path so
+// `..` can't escape UPLOADS_DIR.
+api.get("/uploads/:file", async (c) => {
+  const file = basename(c.req.param("file"));
+  try {
+    const body = await readFile(join(UPLOADS_DIR, file));
+    return c.body(body, 200, { "content-type": IMG_MIME[extname(file).toLowerCase()] ?? "application/octet-stream" });
+  } catch {
+    return c.json({ error: "not found" }, 404);
+  }
+});
 
 // ── agents (executor registry, §5) ───────────────────────────────────────────
 const toAgent = (r: typeof agents.$inferSelect) => ({
@@ -279,7 +323,7 @@ api.get("/tasks/:id", async (c) => {
 });
 
 api.post("/tasks", async (c) => {
-  const b = await c.req.json<Partial<Task> & { projectId: string; title: string }>();
+  const b = await c.req.json<Partial<Task> & { projectId: string; title: string; images?: string[] }>();
   const ts = now();
   const row = {
     id: id(),
@@ -287,7 +331,7 @@ api.post("/tasks", async (c) => {
     groupId: b.groupId ?? null,
     parentId: b.parentId ?? null,
     title: b.title,
-    body: b.body ?? "",
+    body: (b.body ?? "") + imagesPrompt(b.images),
     mode: b.mode ?? "single",
     status: (b.status && isUserSettableStatus(b.status) ? b.status : "backlog") as TaskStatus,
     priority: b.priority ?? "none",
@@ -511,13 +555,13 @@ api.post("/tasks/:id/run", async (c) => {
 // agent that stopped to ask can be answered and keep going (same session).
 api.post("/tasks/:id/reply", async (c) => {
   const taskId = c.req.param("id");
-  const b = await c.req.json<{ text: string }>();
-  if (!b.text?.trim()) return c.json({ error: "empty" }, 400);
+  const b = await c.req.json<{ text?: string; images?: string[] }>();
+  if (!b.text?.trim() && !b.images?.length) return c.json({ error: "empty" }, 400);
   const r = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!r) return c.json({ error: "not found" }, 404);
   if (r.mode !== "single") return c.json({ error: "仅单任务支持回复" }, 409);
   if (r.status === "running" || r.status === "queued") return c.json({ error: "任务进行中" }, 409);
-  void continueTask(taskId, b.text.trim());
+  void continueTask(taskId, (b.text ?? "").trim(), { images: b.images });
   return c.json({ started: true }, 202);
 });
 

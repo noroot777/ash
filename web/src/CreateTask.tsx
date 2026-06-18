@@ -7,6 +7,7 @@ import { PriorityIcon, LabelAdder, RunLocation } from "./ui";
 import { groupLabel } from "./util";
 import { useEscape } from "./useEscape";
 import { Pill } from "./Menu";
+import { usePasteImages, ImageChips } from "./pasteImages";
 
 const AGENTS: AgentType[] = ["claude", "codex", "antigravity"];
 
@@ -45,6 +46,7 @@ export function CreateTask({
   const [busy, setBusy] = useState(false);
   const [slashIdx, setSlashIdx] = useState(0); // highlighted style in the /pair picker
   const objRef = useRef<HTMLTextAreaElement>(null);
+  const { images, onPaste, remove, clear } = usePasteImages();
 
   // Slash command: when the input is just a "/word" token, expand /pair into a
   //辩论/协作 picker right under the text (↑↓ to move, Enter/click to choose).
@@ -59,7 +61,7 @@ export function CreateTask({
 
   const submit = async () => {
     const obj = body.trim();
-    if (!obj || busy) return;
+    if ((!obj && !images.length) || busy) return;
     if (/^\/pair\b/i.test(obj) || slashOpen) {
       triggerPair(PAIR_STYLES[slashIdx].key);
       return;
@@ -71,6 +73,7 @@ export function CreateTask({
         projectId,
         title: provisionalTitle,
         body: obj,
+        images: images.map((i) => i.path),
         mode: "single",
         agentType,
         priority,
@@ -81,6 +84,7 @@ export function CreateTask({
       if (more) {
         setBody("");
         setLabels([]);
+        clear();
         objRef.current?.focus();
       } else {
         onClose();
@@ -139,6 +143,7 @@ export function CreateTask({
             autoFocus
             value={body}
             onChange={(e) => setBody(e.target.value)}
+            onPaste={onPaste}
             onKeyDown={(e) => {
               if (slashOpen) {
                 if (e.key === "ArrowDown") {
@@ -162,6 +167,7 @@ export function CreateTask({
             <Sparkle size={12} weight="fill" className="text-accent/70" />
             标题将由首个执行的 agent 自动生成，可随后修改
           </div>
+          <ImageChips images={images} onRemove={remove} />
 
           {slashOpen && (
             <div className="absolute left-4 top-9 z-10 w-72 overflow-hidden rounded-lg border border-line2 bg-panel p-1 shadow-xl">
@@ -212,7 +218,7 @@ export function CreateTask({
               <span className={`absolute top-0.5 h-3 w-3 rounded-full bg-panel transition-all ${more ? "left-3.5" : "left-0.5"}`} />
             </button>
           </label>
-          <button disabled={!body.trim() || busy} onClick={submit} className="inline-flex items-center gap-1.5 rounded-md bg-accent px-3.5 py-1.5 text-[13px] font-medium text-accent-fg transition-colors hover:bg-accent-hover disabled:opacity-40">
+          <button disabled={(!body.trim() && !images.length) || busy} onClick={submit} className="inline-flex items-center gap-1.5 rounded-md bg-accent px-3.5 py-1.5 text-[13px] font-medium text-accent-fg transition-colors hover:bg-accent-hover disabled:opacity-40">
             <Plus size={14} weight="bold" /> 创建任务
           </button>
         </div>

@@ -70,7 +70,14 @@ export const api = {
 
   tasks: (): Promise<Task[]> => fetch("/api/tasks").then(j),
   task: (id: string): Promise<Task> => fetch(`/api/tasks/${id}`).then(j),
-  createTask: (t: Partial<Task> & { projectId: string; title: string }): Promise<Task> =>
+  // Persist a pasted image; returns its absolute path (for the agent) + url (preview).
+  uploadImage: (dataUrl: string): Promise<{ id: string; path: string; url: string }> =>
+    fetch("/api/uploads", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ dataUrl }),
+    }).then(j),
+  createTask: (t: Partial<Task> & { projectId: string; title: string; images?: string[] }): Promise<Task> =>
     fetch("/api/tasks", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -88,11 +95,11 @@ export const api = {
     fetch(`/api/tasks/${id}/run`, { method: "POST" }).then(j),
   retryTask: (id: string): Promise<unknown> =>
     fetch(`/api/tasks/${id}/retry`, { method: "POST" }).then(j),
-  replyTask: (id: string, text: string): Promise<unknown> =>
+  replyTask: (id: string, text: string, opts?: { images?: string[] }): Promise<unknown> =>
     fetch(`/api/tasks/${id}/reply`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ text }),
+      body: JSON.stringify({ text, ...opts }),
     }).then(j),
   gate: (id: string, action: GateAction): Promise<unknown> =>
     fetch(`/api/tasks/${id}/gate`, {

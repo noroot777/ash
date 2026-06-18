@@ -132,9 +132,9 @@ export function App() {
 
   // Reply to a single task: show the human turn immediately, then resume its
   // session so the agent continues (used when an agent stopped to ask).
-  const reply = useCallback(async (id: string, text: string) => {
-    setLogs((m) => ({ ...m, [id]: [...(m[id] ?? []), { kind: "user", text }] }));
-    try { await api.replyTask(id, text); } catch (e) { console.warn("reply rejected:", e); }
+  const reply = useCallback(async (id: string, text: string, opts?: { images?: string[] }) => {
+    setLogs((m) => ({ ...m, [id]: [...(m[id] ?? []), { kind: "user", text: text || "[图片]" }] }));
+    try { await api.replyTask(id, text, opts); } catch (e) { console.warn("reply rejected:", e); }
   }, []);
 
   const gate = useCallback((id: string, action: Parameters<typeof api.gate>[1]) => api.gate(id, action), []);
@@ -356,7 +356,7 @@ export function App() {
                 current.mode === "debate" ? (
                   <DebateView key={current.id} task={current} state={debates[current.id] ?? emptyDebate()} sessionsBump={sessionsBump} onRun={() => run(current.id)} onRetry={() => retry(current.id)} onGate={(a) => gate(current.id, a)} onDelete={() => del(current.id, current.title)} />
                 ) : (
-                  <TaskDetail key={current.id} task={current} groups={groups} allTasks={visible} logs={logs[current.id] ?? []} sessionsBump={sessionsBump} onRun={() => run(current.id)} onReply={(text) => reply(current.id, text)} onPatch={(p) => patch(current.id, p)} onCreateGroup={() => setNewGroupOpen(true)} onDelete={() => del(current.id, current.title)} />
+                  <TaskDetail key={current.id} task={current} groups={groups} allTasks={visible} logs={logs[current.id] ?? []} sessionsBump={sessionsBump} onRun={() => run(current.id)} onReply={(text, opts) => reply(current.id, text, opts)} onPatch={(p) => patch(current.id, p)} onCreateGroup={() => setNewGroupOpen(true)} onDelete={() => del(current.id, current.title)} />
                 )
               ) : (
                 <div className="flex h-full flex-col items-center justify-center gap-1 text-[13px] text-faint">

@@ -5,7 +5,7 @@ import type { AgentType, TaskStatus } from "@harness/shared";
 import { db } from "./db/index.js";
 import { tasks, projects, groups, sessions } from "./db/schema.js";
 import { bus } from "./bus.js";
-import { id, now } from "./util.js";
+import { id, now, imagesPrompt } from "./util.js";
 import { resolveWorkspace, ensureWorkdir } from "./git.js";
 import { resolveExecutor } from "./executors/index.js";
 import { RUNS_DIR } from "./paths.js";
@@ -161,7 +161,7 @@ export async function runTask(taskId: string): Promise<void> {
 // Continue a single task by resuming its CLI session with the user's reply — so
 // when an agent stops to ask, the human can answer and it keeps going in the
 // SAME session (full context retained), instead of the task being a dead end.
-export async function continueTask(taskId: string, userText: string): Promise<void> {
+export async function continueTask(taskId: string, userText: string, opts: { images?: string[] } = {}): Promise<void> {
   if (running.has(taskId)) return;
   running.add(taskId);
   try {
@@ -181,7 +181,7 @@ export async function continueTask(taskId: string, userText: string): Promise<vo
 
     await setStatus(taskId, "running");
     let cliSessionId = prev.cliSessionId;
-    const handle = ex.run({ prompt: userText, cwd, sessionId: cliSessionId });
+    const handle = ex.run({ prompt: userText + imagesPrompt(opts.images), cwd, sessionId: cliSessionId });
 
     const runDir = join(RUNS_DIR, taskId);
     mkdirSync(runDir, { recursive: true });

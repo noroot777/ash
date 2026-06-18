@@ -12,6 +12,7 @@ import { ScheduleControl } from "./ScheduleControl";
 import { Menu } from "./Menu";
 import { runAction } from "./taskActions";
 import { groupLabel } from "./util";
+import { usePasteImages, ImageChips } from "./pasteImages";
 
 export type LogLine = {
   kind: "text" | "thinking" | "tool" | "error" | "done" | "user";
@@ -37,7 +38,7 @@ export function TaskDetail({
   logs: LogLine[];
   sessionsBump: number;
   onRun: () => void;
-  onReply: (text: string) => void;
+  onReply: (text: string, opts?: { images?: string[] }) => void;
   onPatch: (patch: Partial<Task>) => void;
   onCreateGroup: () => void;
   onDelete: () => void;
@@ -242,37 +243,43 @@ function LogBlocks({ logs }: { logs: LogLine[] }) {
 }
 
 // Reply-and-continue box: answer an agent that stopped to ask; resumes its session.
-function ReplyBox({ onReply, disabled }: { onReply: (text: string) => void; disabled: boolean }) {
+function ReplyBox({ onReply, disabled }: { onReply: (text: string, opts?: { images?: string[] }) => void; disabled: boolean }) {
   const [v, setV] = useState("");
+  const { images, onPaste, remove, clear } = usePasteImages();
   const send = () => {
-    if (v.trim() && !disabled) {
-      onReply(v.trim());
+    if ((v.trim() || images.length) && !disabled) {
+      onReply(v.trim(), { images: images.map((i) => i.path) });
       setV("");
+      clear();
     }
   };
   return (
-    <div className="flex items-end gap-2 border-t border-line px-6 py-3">
-      <textarea
-        value={v}
-        onChange={(e) => setV(e.target.value)}
-        onKeyDown={(e) => {
-          if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
-            e.preventDefault();
-            send();
-          }
-        }}
-        rows={2}
-        disabled={disabled}
-        placeholder={disabled ? "进行中…" : "回复并继续（同一会话，⌘↵ 发送）…"}
-        className="flex-1 resize-none rounded-md border border-line bg-panel px-2.5 py-1.5 text-[13px] text-ink outline-none placeholder:text-faint focus:border-accent disabled:opacity-50"
-      />
-      <button
-        onClick={send}
-        disabled={!v.trim() || disabled}
-        className="rounded-md bg-accent px-3 py-2 text-[13px] font-medium text-accent-fg hover:bg-accent-hover disabled:opacity-40"
-      >
-        发送
-      </button>
+    <div className="flex flex-col gap-2 border-t border-line px-6 py-3">
+      <ImageChips images={images} onRemove={remove} />
+      <div className="flex items-end gap-2">
+        <textarea
+          value={v}
+          onChange={(e) => setV(e.target.value)}
+          onPaste={onPaste}
+          onKeyDown={(e) => {
+            if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+              e.preventDefault();
+              send();
+            }
+          }}
+          rows={2}
+          disabled={disabled}
+          placeholder={disabled ? "进行中…" : "回复并继续（同一会话，⌘↵ 发送，可粘贴图片）…"}
+          className="flex-1 resize-none rounded-md border border-line bg-panel px-2.5 py-1.5 text-[13px] text-ink outline-none placeholder:text-faint focus:border-accent disabled:opacity-50"
+        />
+        <button
+          onClick={send}
+          disabled={(!v.trim() && !images.length) || disabled}
+          className="rounded-md bg-accent px-3 py-2 text-[13px] font-medium text-accent-fg hover:bg-accent-hover disabled:opacity-40"
+        >
+          发送
+        </button>
+      </div>
     </div>
   );
 }
