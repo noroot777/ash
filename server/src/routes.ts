@@ -280,6 +280,26 @@ api.post("/projects/check", async (c) => {
 // a groupId for the batch endpoint. The project is resolved by `projectId` or,
 // more agent-friendly, by `repoPath` (agents know the repo, not the internal id).
 // We validate it exists so a group is never orphaned under a bad project id.
+// Locate a project by explicit id or by canonical repoPath key. Returns the row,
+// or a {status, body} to surface verbatim. Shared by POST /groups and
+// /groups/resolve so both resolve the project identically.
+async function locateProject(
+  b: { projectId?: string; repoPath?: string },
+): Promise<{ project: typeof projects.$inferSelect } | { status: 400 | 404 | 409; body: Record<string, unknown> }> {
+  if (b.projectId) {
+    const p = (await db.select().from(projects).where(eq(projects.id, b.projectId))).at(0);
+    return p ? { project: p } : { status: 404, body: { error: "project not found", projectId: b.projectId } };
+  }
+  if (b.repoPath) {
+    const key = repoKey(b.repoPath);
+    const hits = (await db.select().from(projects)).filter((p) => repoKey(p.repoPath) === key);
+    if (hits.length === 0) return { status: 404, body: { error: "没有匹配 repoPath 的项目（可先调用 POST /api/projects/resolve 建项目）", repoPath: b.repoPath } };
+    if (hits.length > 1) return { status: 409, body: { error: "repoPath 匹配到多个项目，请改用 projectId", repoPath: b.repoPath } };
+    return { project: hits[0] };
+  }
+  return { status: 400, body: { error: "需要 projectId 或 repoPath 来定位项目" } };
+}
+
 api.post("/groups", async (c) => {
   const b = await c.req.json<Partial<Group> & { projectId?: string; name: string; repoPath?: string }>();
   if (!b.name?.trim()) return c.json({ error: "name required" }, 400);
@@ -287,24 +307,49 @@ api.post("/groups", async (c) => {
     return c.json({ error: `mode 非法: ${b.mode}（只能是 parallel | serial）` }, 400);
   }
 
-  let project;
-  if (b.projectId) {
-    project = (await db.select().from(projects).where(eq(projects.id, b.projectId))).at(0);
-    if (!project) return c.json({ error: "project not found", projectId: b.projectId }, 404);
-  } else if (b.repoPath) {
-    const key = repoKey(b.repoPath);
-    const hits = (await db.select().from(projects)).filter((p) => repoKey(p.repoPath) === key);
-    if (hits.length === 0) return c.json({ error: "没有匹配 repoPath 的项目（可先调用 POST /api/projects/resolve 建项目）", repoPath: b.repoPath }, 404);
-    if (hits.length > 1) return c.json({ error: "repoPath 匹配到多个项目，请改用 projectId", repoPath: b.repoPath }, 409);
-    project = hits[0];
-  } else {
-    return c.json({ error: "需要 projectId 或 repoPath 来定位项目" }, 400);
-  }
+  const loc = await locateProject(b);
+  if ("status" in loc) return c.json(loc.body, loc.status);
 
   const row = {
     id: id(),
-    projectId: project.id,
+    projectId: loc.project.id,
     name: b.name.trim(),
+    mode: b.mode ?? "parallel",
+    useWorktree: b.useWorktree ?? true,
+    createdAt: now(),
+  };
+  await db.insert(groups).values(row);
+  return c.json(row, 201);
+});
+
+// Find-or-create a group by (project, name) — the group analog of
+// /projects/resolve, so an orchestrator (MCP create_task_chain / a skill) reuses
+// an existing batch container instead of spawning a duplicate on every run. A
+// name that already exists twice in one project is a hard 409 — we never guess.
+// On reuse the existing group's mode/useWorktree are KEPT (the caller's mode is
+// only a default for a fresh group), so resolving never silently flips a group
+// you set to serial back to parallel.
+api.post("/groups/resolve", async (c) => {
+  const b = await c.req.json<Partial<Group> & { projectId?: string; name: string; repoPath?: string }>();
+  if (!b.name?.trim()) return c.json({ error: "name required" }, 400);
+  if (b.mode && b.mode !== "parallel" && b.mode !== "serial") {
+    return c.json({ error: `mode 非法: ${b.mode}（只能是 parallel | serial）` }, 400);
+  }
+
+  const loc = await locateProject(b);
+  if ("status" in loc) return c.json(loc.body, loc.status);
+
+  const name = b.name.trim();
+  const existing = (await db.select().from(groups).where(eq(groups.projectId, loc.project.id))).filter((g) => g.name === name);
+  if (existing.length > 1) {
+    return c.json({ error: "同项目下有多个同名分组，请改用 groupId 指定要用哪个", name, ids: existing.map((g) => g.id) }, 409);
+  }
+  if (existing.length === 1) return c.json(existing[0], 200); // reuse as-is (mode/worktree untouched)
+
+  const row = {
+    id: id(),
+    projectId: loc.project.id,
+    name,
     mode: b.mode ?? "parallel",
     useWorktree: b.useWorktree ?? true,
     createdAt: now(),
@@ -478,8 +523,14 @@ api.post("/groups/:groupId/tasks/batch", async (c) => {
 
   await db.insert(tasks).values(rows);
   if (b.run) void runGroup(groupId);
+  // chain 串成的依赖链会让任务严格串行，即使分组是 parallel——这正是「设了并行却没并行」
+  // 的根因。命中这种自相矛盾的组合时回个提示，让调用方（含 MCP/skill）能察觉。
+  const warning =
+    b.chain && specs.length > 1 && g.mode === "parallel"
+      ? "本批用 chain 串成了依赖链：即使分组是 parallel，这些任务也会按链严格串行。要真正并行执行请去掉 chain（或把分组设为 serial 表达同样的串行意图）。"
+      : undefined;
   return c.json(
-    { groupId, run: !!b.run, tasks: rows.map((r) => toTask(r as typeof tasks.$inferSelect)) },
+    { groupId, run: !!b.run, ...(warning ? { warning } : {}), tasks: rows.map((r) => toTask(r as typeof tasks.$inferSelect)) },
     201,
   );
 });

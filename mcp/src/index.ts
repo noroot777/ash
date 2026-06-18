@@ -69,7 +69,7 @@ server.registerTool(
   "create_group",
   {
     title: "创建分组",
-    description: "在项目里创建一个分组（批次容器）。用 projectId 或 repoPath 定位项目。mode=parallel 时按 dependsOn 调度，serial 时按创建顺序串跑。",
+    description: "在项目里【新建】一个分组（批次容器）。用 projectId 或 repoPath 定位项目。mode=parallel 时按 dependsOn 调度，serial 时按创建顺序串跑。注意：每次都新建——要复用同名分组（避免重复建组）请改用 resolve_group。",
     inputSchema: {
       name: z.string(),
       projectId: z.string().optional(),
@@ -85,10 +85,30 @@ server.registerTool(
 );
 
 server.registerTool(
+  "resolve_group",
+  {
+    title: "找到或复用分组",
+    description:
+      "按 项目+名 找到或创建分组（幂等，分组版的 resolve_project）。已存在同名分组就复用它（其 mode/worktree 保持不变，不会被你传的 mode 覆盖）；同名出现多次会报错让你用 groupId 指定。要往一个固定名字的分组反复追加任务、又不想每次建重复组时，用这个而不是 create_group。",
+    inputSchema: {
+      name: z.string(),
+      projectId: z.string().optional(),
+      repoPath: z.string().optional().describe("projectId 的替代：按仓库路径定位项目"),
+      mode: MODE.optional().describe("仅在【新建】分组时作为默认；复用已有分组时忽略"),
+      useWorktree: z.boolean().optional().describe("仅在【新建】分组时生效；复用时忽略"),
+    },
+  },
+  async (args) => {
+    try { return ok(await call("POST", "/groups/resolve", args)); }
+    catch (e) { return fail(e); }
+  },
+);
+
+server.registerTool(
   "batch_create_tasks",
   {
     title: "批量建任务到已有分组",
-    description: "往一个已存在的分组里批量创建 single 任务。chain:true 自动串成 A→B→C→D 依赖链；run:true 建完立即开跑。",
+    description: "往一个已存在的分组里批量创建 single 任务。chain:true 自动串成 A→B→C→D 依赖链（=严格串行，即使分组是 parallel）；想要任务真正并行就别开 chain。run:true 建完立即开跑。",
     inputSchema: {
       groupId: z.string(),
       tasks: z.array(taskShape).min(1),
@@ -181,34 +201,37 @@ server.registerTool(
 server.registerTool(
   "create_task_chain",
   {
-    title: "一步建链式任务",
+    title: "一步建任务批次",
     description:
-      "便利工具：按 repoPath 找到/创建项目 → 建分组 → 把一批任务建成依赖链（A→B→C…），一次调用搞定。返回 {project, group, tasks}。run:true 立即开跑。多步编排首选这个。",
+      "便利工具：按 repoPath 找到/创建项目 → 找到或复用分组 → 把一批任务建进去，一次调用搞定。返回 {project, group, tasks}。chain 默认 true=串成依赖链 A→B→C（严格串行）；想真正并行就传 chain:false 并把 mode 设 parallel。run:true 立即开跑。多步编排首选这个。",
     inputSchema: {
       repoPath: z.string().describe("git 仓库绝对路径；项目按它找到或创建"),
-      tasks: z.array(taskShape).min(1).describe("按顺序串成依赖链"),
-      groupName: z.string().optional().describe("分组名，缺省 task-chain"),
+      tasks: z.array(taskShape).min(1).describe("按顺序排列；chain 时即依赖链顺序"),
+      groupName: z.string().optional().describe("分组名，缺省 task-chain。已存在同名分组会复用（不会重复建组）"),
       mode: MODE.optional(),
+      chain: z.boolean().optional().describe("默认 true=串成依赖链（串行）；false=互不依赖（配 mode=parallel 才真正并行）"),
       agentType: AGENT_TYPE.optional().describe("所有任务的默认 agent（任务可逐个覆盖）"),
       run: z.boolean().optional(),
     },
   },
-  async ({ repoPath, tasks, groupName, mode, agentType, run }) => {
+  async ({ repoPath, tasks, groupName, mode, chain, agentType, run }) => {
     try {
       const project = (await call("POST", "/projects/resolve", { repoPath })) as { id: string; name: string };
-      const group = (await call("POST", "/groups", { projectId: project.id, name: groupName ?? "task-chain", mode })) as {
+      // resolve（找到或复用）而非每次新建，避免同名分组被反复建出重复副本。
+      const group = (await call("POST", "/groups/resolve", { projectId: project.id, name: groupName ?? "task-chain", mode })) as {
         id: string; name: string; mode: string;
       };
       const batch = (await call("POST", `/groups/${group.id}/tasks/batch`, {
-        chain: true,
+        chain: chain ?? true,
         run: !!run,
         defaults: agentType ? { agentType } : undefined,
         tasks,
-      })) as { tasks: unknown[] };
+      })) as { tasks: unknown[]; warning?: string };
       return ok({
         project: { id: project.id, name: project.name },
         group: { id: group.id, name: group.name, mode: group.mode },
         tasks: batch.tasks,
+        ...(batch.warning ? { warning: batch.warning } : {}),
       });
     } catch (e) { return fail(e); }
   },

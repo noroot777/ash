@@ -70,6 +70,9 @@ async function runTurn(args: {
   rowId?: string; // reuse a debater's session row across turns
   resumeCliId?: string; // resume the CLI session
   branch?: string | null;
+  // 收敛状态下限:进入本轮前该方已有的 raised/结论。提问(ask)轮辩手被要求不写
+  // [可收敛],若它本轮没主动收敛就继承既有状态,避免一次澄清把已达成的共识打回。
+  inherit?: { raised: boolean; agrees: boolean; conclusion?: string };
 }): Promise<Turn> {
   const { taskId, role, speaker, round, executor, prompt, cwd } = args;
   // A stop requested between turns: don't even spawn the next one.
@@ -134,9 +137,16 @@ async function runTurn(args: {
   }
   out.end();
 
-  const raised = RAISE_RE.test(text);
-  const agrees = raised && AGREE_RE.test(text);
-  const conclusion = raised ? (text.match(CONC_RE)?.[1]?.trim().slice(0, 140) || undefined) : undefined;
+  let raised = RAISE_RE.test(text);
+  let agrees = raised && AGREE_RE.test(text);
+  let conclusion = raised ? (text.match(CONC_RE)?.[1]?.trim().slice(0, 140) || undefined) : undefined;
+  // 提问轮:辩手按 prompt 不写 [可收敛]。若它进入本轮前本就已收敛,一次澄清提问不该让它
+  // "放下手"——继承既有收敛状态，否则 isConsensus 会被一次提问打回为"未达成一致"。
+  if (args.inherit && !raised) {
+    raised = args.inherit.raised;
+    agrees = args.inherit.agrees;
+    conclusion = args.inherit.conclusion;
+  }
   // A debater turn that exits cleanly but says nothing is degenerate (e.g. a
   // resume that returned no text) — treat it as a failure so the debate stops
   // instead of feeding emptiness to the opponent. (Implementers may legitimately
@@ -480,9 +490,12 @@ async function reDebate(ctx: Ctx, kind: "inject" | "ask", text: string) {
   ctx.round++;
   recordUserTurn(ctx.taskId, ctx.round, text); // the human's words land in the timeline first
   const prompt = kind === "inject" ? P.injectFeedback(text, ctx.round, ctx.cfg.style) : P.question(text, ctx.round, ctx.cfg.style);
-  const at = await runTurn({ taskId: ctx.taskId, role: "debaterA", speaker: "A", round: ctx.round, executor: ctx.exA, prompt, cwd: ctx.cwd, rowId: ctx.A.rowId, resumeCliId: ctx.A.cliId || undefined });
+  // 提问=澄清,不该打回已达成的收敛/结论(继承既有状态);注入=回炉重议,允许双方改判(不继承)。
+  const inhA = kind === "ask" ? { raised: ctx.raisedA, agrees: ctx.agreesA, conclusion: ctx.conclusionA } : undefined;
+  const inhB = kind === "ask" ? { raised: ctx.raisedB, agrees: ctx.agreesB, conclusion: ctx.conclusionB } : undefined;
+  const at = await runTurn({ taskId: ctx.taskId, role: "debaterA", speaker: "A", round: ctx.round, executor: ctx.exA, prompt, cwd: ctx.cwd, rowId: ctx.A.rowId, resumeCliId: ctx.A.cliId || undefined, inherit: inhA });
   applyTurn(ctx, "A", at);
-  const bt = await runTurn({ taskId: ctx.taskId, role: "debaterB", speaker: "B", round: ctx.round, executor: ctx.exB, prompt, cwd: ctx.cwd, rowId: ctx.B.rowId, resumeCliId: ctx.B.cliId || undefined });
+  const bt = await runTurn({ taskId: ctx.taskId, role: "debaterB", speaker: "B", round: ctx.round, executor: ctx.exB, prompt, cwd: ctx.cwd, rowId: ctx.B.rowId, resumeCliId: ctx.B.cliId || undefined, inherit: inhB });
   applyTurn(ctx, "B", bt);
 }
 
