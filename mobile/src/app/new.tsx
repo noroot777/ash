@@ -17,7 +17,6 @@ export default function NewTask() {
   const projects = useStore((s) => s.projects);
   const storeProjectId = useStore((s) => s.projectId);
   const upsertTask = useStore((s) => s.upsertTask);
-  const clearLogs = useStore((s) => s.clearLogs);
 
   const [projectId, setProjectId] = useState<string | null>(storeProjectId);
   const [title, setTitle] = useState("");
@@ -51,7 +50,6 @@ export default function NewTask() {
       });
       upsertTask(t);
       if (run) {
-        clearLogs(t.id);
         await api.runTask(t.id).catch(() => {});
       }
       router.replace(`/task/${t.id}`);

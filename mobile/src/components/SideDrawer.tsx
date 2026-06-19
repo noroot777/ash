@@ -18,7 +18,7 @@ export function SideDrawer({ open, onClose }: { open: boolean; onClose: () => vo
   const projects = useStore((s) => s.projects);
   const projectId = useStore((s) => s.projectId);
   const setProjectId = useStore((s) => s.setProjectId);
-  const connected = useStore((s) => s.connected);
+  const online = useStore((s) => s.online);
 
   const tx = useRef(new Animated.Value(-PANEL_W)).current;
   const fade = useRef(new Animated.Value(0)).current;
@@ -145,9 +145,9 @@ export function SideDrawer({ open, onClose }: { open: boolean; onClose: () => vo
 
           <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
             <View
-              style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: connected ? theme.ok : theme.faint }}
+              style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: online ? theme.ok : theme.faint }}
             />
-            <Text style={{ color: theme.faint, fontSize: 12 }}>{connected ? "实时已连接" : "未连接"}</Text>
+            <Text style={{ color: theme.faint, fontSize: 12 }}>{online ? "已连接" : "未连接"}</Text>
           </View>
         </View>
       </Animated.View>

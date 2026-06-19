@@ -6,10 +6,12 @@ import { SafeAreaProvider } from "react-native-safe-area-context";
 import { useFonts, SpaceGrotesk_500Medium, SpaceGrotesk_700Bold } from "@expo-google-fonts/space-grotesk";
 import { Inter_400Regular, Inter_500Medium, Inter_600SemiBold } from "@expo-google-fonts/inter";
 import { IBMPlexMono_400Regular, IBMPlexMono_500Medium } from "@expo-google-fonts/ibm-plex-mono";
-import { loadBaseURL } from "@/lib/config";
-import { connectSSE } from "@/lib/sse";
+import { loadBaseURL, getBaseURL } from "@/lib/config";
 import { refreshAll } from "@/lib/data";
 import { useTheme, fonts } from "@/lib/theme";
+
+// How often the foregrounded app re-pulls the task list + statuses.
+const LIST_POLL_MS = 5000;
 
 export default function RootLayout() {
   const theme = useTheme();
@@ -26,27 +28,34 @@ export default function RootLayout() {
 
   useEffect(() => {
     (async () => {
-      const b = await loadBaseURL();
-      if (b) {
-        // Backfill on every (re)connect — we may have missed events while offline.
-        connectSSE(() => {
-          refreshAll().catch(() => {});
-        });
-        await refreshAll().catch(() => {});
-      }
+      await loadBaseURL();
       setBooted(true);
     })();
   }, []);
 
-  // The OS suspends the SSE socket while the app is backgrounded; on return to the
-  // foreground we may hold a dead-but-undetected stream. Force a reconnect — which
-  // bumps streamEpoch (→ screens reconcile from .md) and runs the onOpen backfill.
+  // List/status polling — no live connection. While the app is foregrounded we
+  // re-pull projects + tasks every few seconds so the list and statuses stay
+  // fresh; paused in the background, resumed with an immediate pull on return.
+  // (Per-task conversation has its own poll in app/task/[id].tsx.)
   useEffect(() => {
-    const sub = AppState.addEventListener("change", (s) => {
-      if (s === "active") connectSSE(() => { refreshAll().catch(() => {}); });
-    });
-    return () => sub.remove();
-  }, []);
+    if (!booted) return;
+    let timer: ReturnType<typeof setInterval> | null = null;
+    const tick = () => { if (getBaseURL()) refreshAll().catch(() => {}); };
+    const start = () => {
+      if (timer) return;
+      tick();
+      timer = setInterval(tick, LIST_POLL_MS);
+    };
+    const stop = () => {
+      if (timer) { clearInterval(timer); timer = null; }
+    };
+    start();
+    const sub = AppState.addEventListener("change", (s) => (s === "active" ? start() : stop()));
+    return () => {
+      stop();
+      sub.remove();
+    };
+  }, [booted]);
 
   if (!booted || !fontsLoaded) {
     return (

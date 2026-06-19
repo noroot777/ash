@@ -3,7 +3,6 @@ import { View, Text, ScrollView, KeyboardAvoidingView, Platform } from "react-na
 import { useRouter } from "expo-router";
 import { getBaseURL, setBaseURL } from "@/lib/config";
 import { api } from "@/lib/api";
-import { connectSSE } from "@/lib/sse";
 import { refreshAll } from "@/lib/data";
 import { useTheme } from "@/lib/theme";
 import { Button, Input } from "@/components/ui";
@@ -26,9 +25,6 @@ export default function Settings() {
     try {
       await api.health(v); // probe before persisting
       await setBaseURL(v);
-      connectSSE(() => {
-        refreshAll().catch(() => {});
-      });
       await refreshAll();
       setStatus({ kind: "ok", msg: "已连接" });
       if (router.canGoBack()) router.back();

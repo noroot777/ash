@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import {
   View,
   Text,
@@ -9,12 +9,14 @@ import {
   Platform,
   Alert,
   ActivityIndicator,
+  RefreshControl,
+  AppState,
 } from "react-native";
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import type { Session } from "@harness/shared";
 import { api } from "@/lib/api";
 import { useStore } from "@/lib/store";
+import { refreshAll } from "@/lib/data";
 import { runAction, canStopTask } from "@/lib/taskActions";
 import { STATUS_META } from "@/lib/constants";
 import { useTheme, radius, fonts } from "@/lib/theme";
@@ -25,9 +27,8 @@ import { SignalBar } from "@/components/SignalBar";
 import type { LogLine } from "@/lib/log";
 import { snapshotToLogLines } from "@/lib/log";
 
-// Stable empty array so the `logs` selector never returns a fresh `[]` (which
-// would make useSyncExternalStore see a new snapshot every render → infinite loop).
-const EMPTY_LOGS: LogLine[] = [];
+// How often a running task's conversation is re-pulled from its .md.
+const CONV_POLL_MS = 3000;
 
 export default function TaskDetail() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -36,16 +37,35 @@ export default function TaskDetail() {
   const theme = useTheme();
 
   const task = useStore((s) => s.tasks.find((t) => t.id === id));
-  const logs = useStore((s) => s.logs[id]) ?? EMPTY_LOGS;
-  const sessionsBump = useStore((s) => s.sessionsBump);
-  const streamEpoch = useStore((s) => s.streamEpoch);
   const upsertTask = useStore((s) => s.upsertTask);
   const removeTask = useStore((s) => s.removeTask);
-  const clearLogs = useStore((s) => s.clearLogs);
-  const appendUser = useStore((s) => s.appendUser);
 
+  // Conversation lives locally and is polled from the session .md — no global
+  // store, no live stream. `lines` is the parsed, displayable transcript.
+  const [lines, setLines] = useState<LogLine[]>([]);
   const [input, setInput] = useState("");
+  const [refreshing, setRefreshing] = useState(false);
   const scrollRef = useRef<ScrollView>(null);
+
+  // Pull every session's .md and rebuild the transcript. One call = one full
+  // snapshot; we replace rather than append, so the same call also fills any gap.
+  const loadConv = useCallback(async () => {
+    const ss = await api.sessions(id);
+    const withOut = await Promise.all(
+      ss.map(async (s) => ({ s, out: await api.sessionOutput(s.id).catch(() => "") })),
+    );
+    const all: LogLine[] = [];
+    for (const { s, out } of withOut.filter(({ out }) => out.trim())) {
+      all.push(...snapshotToLogLines(out, s.id, s.agentType));
+    }
+    setLines(all);
+  }, [id]);
+
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    await Promise.all([loadConv().catch(() => {}), refreshAll().catch(() => {})]);
+    setRefreshing(false);
+  }, [loadConv]);
 
   // Hydrate the task if we navigated straight here (e.g. deep link) without it
   // already being in the store.
@@ -53,34 +73,24 @@ export default function TaskDetail() {
     if (!task && id) api.task(id).then(upsertTask).catch(() => {});
   }, [id, task, upsertTask]);
 
-  // Reconcile this task's conversation from the server's authoritative .md: on a
-  // fresh open, when a run settles (sessionsBump), AND on every SSE (re)connect or
-  // return-to-foreground (streamEpoch). The mobile stream drops on lock / background
-  // / network switches and the bus has no replay, so live events emitted while we
-  // were offline are otherwise lost until you leave and re-enter. The server appends
-  // the .md as the run streams, so re-pulling it fills those gaps; later SSE chunks
-  // append on top. (We intentionally no longer skip when logs are non-empty — that
-  // skip is exactly what stranded the gaps.)
+  // Conversation polling — no live stream. Pull once on open; while the task is
+  // running keep pulling every few seconds; when it settles the dependency change
+  // pulls the final tail once and then stops (the .md no longer grows). Returning
+  // to the foreground forces an immediate catch-up pull.
   useEffect(() => {
-    let alive = true;
-    api.sessions(id).then(async (ss) => {
-      const withOut = await Promise.all(
-        ss.map(async (s) => ({ s, out: await api.sessionOutput(s.id).catch(() => "") })),
-      );
-      if (!alive) return;
-      const allLines: LogLine[] = [];
-      for (const { s, out } of withOut.filter(({ out }) => out.trim())) {
-        allLines.push(...snapshotToLogLines(out, s.id, s.agentType));
-      }
-      if (allLines.length > 0) {
-        useStore.setState((state) => ({ logs: { ...state.logs, [id]: allLines } }));
-      }
+    const running = task?.status === "running" || task?.status === "queued";
+    let timer: ReturnType<typeof setInterval> | null = null;
+    const pull = () => loadConv().catch(() => {});
+    pull();
+    if (running) timer = setInterval(pull, CONV_POLL_MS);
+    const sub = AppState.addEventListener("change", (s) => {
+      if (s === "active") pull();
     });
     return () => {
-      alive = false;
+      if (timer) clearInterval(timer);
+      sub.remove();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id, sessionsBump, streamEpoch]);
+  }, [id, task?.status, loadConv]);
 
   if (!task) {
     return (
@@ -96,13 +106,13 @@ export default function TaskDetail() {
 
   const onPrimary = () => {
     if (action.kind === "run") {
-      clearLogs(id);
-      api.runTask(id).catch(() => {});
+      setLines([]);
+      api.runTask(id).then(() => refreshAll()).catch(() => {});
     } else if (action.kind === "retry") {
-      api.retryTask(id).catch(() => {});
+      api.retryTask(id).then(() => refreshAll()).catch(() => {});
     }
   };
-  const onStop = () => api.stopTask(id).catch(() => {});
+  const onStop = () => api.stopTask(id).then(() => refreshAll()).catch(() => {});
 
   const confirmDelete = () =>
     Alert.alert("删除任务", `确定删除「${task.title}」？此操作不可撤销。`, [
@@ -123,9 +133,12 @@ export default function TaskDetail() {
     const text = input.trim();
     if (!text) return;
     setInput("");
-    appendUser(id, text);
+    // Optimistic local bubble; the poll replaces it with the .md's own record of
+    // the same turn once the reply lands.
+    setLines((ls) => [...ls, { kind: "user", text, at: new Date().toISOString() }]);
     try {
       await api.replyTask(id, text);
+      refreshAll().catch(() => {}); // pick up the running status → conversation poll kicks in
     } catch (e) {
       Alert.alert("回复失败", e instanceof Error ? e.message : String(e));
     }
@@ -216,6 +229,7 @@ export default function TaskDetail() {
         style={{ flex: 1 }}
         contentContainerStyle={{ padding: 16, gap: 12, paddingBottom: 24 }}
         onContentSizeChange={() => scrollRef.current?.scrollToEnd({ animated: true })}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={theme.muted} />}
       >
         {/* Objective */}
         {task.body ? (
@@ -232,10 +246,10 @@ export default function TaskDetail() {
           </View>
         ) : null}
 
-        {/* Conversation (both historical and live) */}
-        <Conversation lines={logs} />
+        {/* Conversation (polled from the session .md) */}
+        <Conversation lines={lines} />
 
-        {logs.length === 0 ? (
+        {lines.length === 0 ? (
           <Text style={{ color: theme.faint, fontSize: 13, textAlign: "center", paddingTop: 20 }}>
             还没有输出 — 点上方「{action.label}」开始
           </Text>
