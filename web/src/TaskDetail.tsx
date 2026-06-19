@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { Task, Group, Session, TaskStatus, Priority, AgentType } from "@harness/shared";
-import { isUserSettableStatus, AGENT_TYPES } from "@harness/shared";
+import { isUserSettableStatus, AGENT_TYPES, parseSessionOutput as parseSnapshot } from "@harness/shared";
 import { CaretDown, Play, Stop, Trash, ArrowsDownUp, ArrowsClockwise, Robot, X } from "@phosphor-icons/react";
 import { api } from "./api";
 import { STATUSES, PRIORITIES } from "./constants";
@@ -259,60 +259,8 @@ type ConvItem =
   | { kind: "system"; text: string; at?: string }
   | { kind: "done"; text: string; at?: string };
 
-// A persisted session .md is mostly agent Markdown, but backend continues and
-// 你→@agent replies are interleaved as their own turns. New runs write each as a
-// \x1e + JSON sentinel line (carrying a timestamp); older runs used inline
-// 〔系统〕…/〔你 → @x〕… markers. Split the blob back into ordered segments so each
-// turn renders as its own bubble instead of bleeding into the agent text around it.
-type Seg =
-  | { kind: "agent"; text: string }
-  | { kind: "user"; text: string; at?: string }
-  | { kind: "system"; text: string; at?: string };
-
-const LEGACY_SYS_MARKER = "〔系统〕继续（从中断处）";
-
-function parseSnapshot(out: string): Seg[] {
-  const segs: Seg[] = [];
-  let buf: string[] = [];
-  const flush = () => {
-    const t = buf.join("\n").trim();
-    if (t) segs.push({ kind: "agent", text: t });
-    buf = [];
-  };
-  for (const line of out.split("\n")) {
-    if (line.startsWith("\x1e")) {
-      try {
-        const j = JSON.parse(line.slice(1)) as { t?: string; text?: string; at?: string };
-        flush();
-        segs.push(
-          j.t === "system"
-            ? { kind: "system", text: j.text || LEGACY_SYS_MARKER, at: j.at }
-            : { kind: "user", text: j.text ?? "", at: j.at },
-        );
-        continue;
-      } catch {
-        /* not a turn line — fall through and treat as ordinary text */
-      }
-    }
-    const trimmed = line.trim();
-    if (trimmed === LEGACY_SYS_MARKER) {
-      flush();
-      segs.push({ kind: "system", text: LEGACY_SYS_MARKER });
-      continue;
-    }
-    // Legacy reply marker — best-effort (only the first line is recoverable, since
-    // old multi-line replies weren't fenced); the rest folds into the next bubble.
-    const m = /^〔你 → @[^〕]*〕([\s\S]*)$/.exec(trimmed);
-    if (m) {
-      flush();
-      segs.push({ kind: "user", text: m[1] ?? "" });
-      continue;
-    }
-    buf.push(line);
-  }
-  flush();
-  return segs;
-}
+// parseSnapshot / Seg / LEGACY_SYS_MARKER 已上移到 @harness/shared
+// （parseSessionOutput, ConvSeg），web 与 mobile 共用同一份解析逻辑，避免漂移。
 
 function Conversation({
   task,

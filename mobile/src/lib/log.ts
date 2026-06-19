@@ -2,6 +2,7 @@
 // LogLine). Each agent.event becomes one LogLine appended to the task's log; the
 // detail screen groups consecutive lines from the same session into bubbles.
 import type { AgentEvent, AgentType } from "@harness/shared";
+import { parseSessionOutput } from "@harness/shared";
 
 export type LogLine = {
   kind: "text" | "thinking" | "tool" | "error" | "done" | "user" | "system";
@@ -32,74 +33,15 @@ export function renderEvent(e: AgentEvent, agent?: AgentType, sessionId?: string
   }
 }
 
-// Parse a persisted session .md: agent Markdown + interleaved 你→@agent replies.
-// New runs write each as a \x1e + JSON sentinel line; older runs use inline markers.
-type ParsedSeg = { kind: "agent" | "user" | "system"; text: string; at?: string };
-
-function parseSnapshot(out: string): ParsedSeg[] {
-  const segs: ParsedSeg[] = [];
-  let buf: string[] = [];
-  const flush = () => {
-    const t = buf.join("\n").trim();
-    if (t) segs.push({ kind: "agent", text: t });
-    buf = [];
-  };
-
-  for (const line of out.split("\n")) {
-    // New sentinel format: \x1e + JSON
-    if (line.startsWith("\x1e")) {
-      flush();
-      try {
-        const json = JSON.parse(line.slice(1));
-        if (json.kind === "user" && json.text) {
-          segs.push({ kind: "user", text: json.text, at: json.at });
-        } else if (json.kind === "system" && json.text) {
-          segs.push({ kind: "system", text: json.text, at: json.at });
-        }
-      } catch {
-        // Malformed sentinel, skip
-      }
-      continue;
-    }
-
-    const trimmed = line.trim();
-    // Legacy system marker
-    if (trimmed === "〔系统〕继续（从中断处）") {
-      flush();
-      segs.push({ kind: "system", text: "〔系统〕继续（从中断处）" });
-      continue;
-    }
-    // Legacy user reply marker: 〔你 → @agent〕text
-    const m = /^〔你 → @[^〕]*〕([\s\S]*)$/.exec(trimmed);
-    if (m) {
-      flush();
-      segs.push({ kind: "user", text: m[1] ?? "" });
-      continue;
-    }
-    buf.push(line);
-  }
-  flush();
-  return segs;
-}
-
-// Convert parsed segments back into LogLines for display
-export function snapshotToLogLines(out: string, sessionId: string, agentType?: string): LogLine[] {
-  return parseSnapshot(out).map((seg, i) => {
-    if (seg.kind === "agent") {
-      // Agent text: split into multiple "text" lines that will be merged by Conversation
-      return {
-        kind: "text" as const,
-        text: seg.text,
-        agent: agentType,
-        sessionId,
-      };
-    }
-    return {
-      kind: seg.kind,
-      text: seg.text,
-      at: seg.at,
-      sessionId: `${sessionId}-seg-${i}`,
-    };
+// Turn a persisted session's output into display LogLines. Parsing lives in
+// @harness/shared (parseSessionOutput) so web and mobile share one source of
+// truth: the agent Markdown plus the interleaved 你→/〔系统〕 turns come back as
+// ordered segments. Agent prose becomes a "text" line (Conversation merges
+// consecutive ones into a single bubble); user/system turns keep their timestamp
+// and get a unique sessionId so each renders as its own bubble.
+export function snapshotToLogLines(out: string, sessionId: string, agentType?: AgentType): LogLine[] {
+  return parseSessionOutput(out).map((seg, i): LogLine => {
+    if (seg.kind === "agent") return { kind: "text", text: seg.text, agent: agentType, sessionId };
+    return { kind: seg.kind, text: seg.text, at: seg.at, sessionId: `${sessionId}-seg-${i}` };
   });
 }
-

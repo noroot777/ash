@@ -278,3 +278,60 @@ export type ServerEvent =
   // target: when a 提问 was directed at one debater, which side — so the timeline
   // can show 「你 → 辩手A」 (undefined = addressed to both).
   | { type: "debate.user"; taskId: string; round: number; text: string; at: string; target?: "A" | "B" };
+
+// ── Session-snapshot parsing ──────────────────────────────────────────────
+// A persisted session .md is mostly agent Markdown, but backend continues and
+// 你→@agent replies are interleaved as their own turns. New runs write each as a
+// \x1e + JSON sentinel line (carrying a timestamp); older runs used inline
+// 〔系统〕…/〔你 → @x〕… markers. Split the blob back into ordered segments so each
+// turn renders as its own bubble instead of bleeding into the agent text around it.
+// Shared by web (TaskDetail) and mobile (log.ts) so the two never drift apart.
+export const LEGACY_SYS_MARKER = "〔系统〕继续（从中断处）";
+
+export type ConvSeg =
+  | { kind: "agent"; text: string }
+  | { kind: "user"; text: string; at?: string }
+  | { kind: "system"; text: string; at?: string };
+
+export function parseSessionOutput(out: string): ConvSeg[] {
+  const segs: ConvSeg[] = [];
+  let buf: string[] = [];
+  const flush = () => {
+    const t = buf.join("\n").trim();
+    if (t) segs.push({ kind: "agent", text: t });
+    buf = [];
+  };
+  for (const line of out.split("\n")) {
+    if (line.startsWith("\x1e")) {
+      try {
+        const j = JSON.parse(line.slice(1)) as { t?: string; text?: string; at?: string };
+        flush();
+        segs.push(
+          j.t === "system"
+            ? { kind: "system", text: j.text || LEGACY_SYS_MARKER, at: j.at }
+            : { kind: "user", text: j.text ?? "", at: j.at },
+        );
+        continue;
+      } catch {
+        /* not a turn line — fall through and treat as ordinary text */
+      }
+    }
+    const trimmed = line.trim();
+    if (trimmed === LEGACY_SYS_MARKER) {
+      flush();
+      segs.push({ kind: "system", text: LEGACY_SYS_MARKER });
+      continue;
+    }
+    // Legacy reply marker — best-effort (only the first line is recoverable, since
+    // old multi-line replies weren't fenced); the rest folds into the next bubble.
+    const m = /^〔你 → @[^〕]*〕([\s\S]*)$/.exec(trimmed);
+    if (m) {
+      flush();
+      segs.push({ kind: "user", text: m[1] ?? "" });
+      continue;
+    }
+    buf.push(line);
+  }
+  flush();
+  return segs;
+}
