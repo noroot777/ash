@@ -1,12 +1,12 @@
 import { useState, type ReactNode } from "react";
-import { View, Text, TextInput, ScrollView, KeyboardAvoidingView, Platform } from "react-native";
+import { View, Text, ScrollView, KeyboardAvoidingView, Platform } from "react-native";
 import { useRouter } from "expo-router";
 import { AGENT_TYPES, type AgentType, type Priority } from "@harness/shared";
 import { useStore } from "@/lib/store";
 import { api } from "@/lib/api";
 import { PRIORITIES } from "@/lib/constants";
-import { useTheme, radius } from "@/lib/theme";
-import { Pill, Button } from "@/components/ui";
+import { useTheme } from "@/lib/theme";
+import { Pill, Button, Input } from "@/components/ui";
 
 const firstLine = (s: string) =>
   s.split("\n").map((l) => l.trim()).find(Boolean)?.slice(0, 40) ?? "";
@@ -26,17 +26,6 @@ export default function NewTask() {
   const [priority, setPriority] = useState<Priority>("none");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  const inputStyle = {
-    color: theme.ink,
-    backgroundColor: theme.panel,
-    borderWidth: 1,
-    borderColor: theme.line,
-    borderRadius: radius.md,
-    paddingHorizontal: 12,
-    paddingVertical: 11,
-    fontSize: 15,
-  } as const;
 
   const submit = async (run: boolean) => {
     if (!projectId) {
@@ -88,23 +77,16 @@ export default function NewTask() {
         </Field>
 
         <Field label="标题（留空则自动命名）">
-          <TextInput
-            value={title}
-            onChangeText={setTitle}
-            placeholder="任务标题"
-            placeholderTextColor={theme.faint}
-            style={inputStyle}
-          />
+          <Input value={title} onChangeText={setTitle} placeholder="任务标题" />
         </Field>
 
         <Field label="正文 / 指令">
-          <TextInput
+          <Input
             value={body}
             onChangeText={setBody}
             placeholder="要这个 agent 做什么…"
-            placeholderTextColor={theme.faint}
             multiline
-            style={[inputStyle, { minHeight: 120, textAlignVertical: "top" }]}
+            style={{ minHeight: 120, textAlignVertical: "top" }}
           />
         </Field>
 

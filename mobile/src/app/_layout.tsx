@@ -70,6 +70,17 @@ export default function RootLayout() {
             contentStyle: { backgroundColor: theme.panel },
           }}
         />
+        <Stack.Screen
+          name="project-switch"
+          options={{
+            headerShown: false,
+            presentation: "formSheet",
+            sheetAllowedDetents: [0.5, 0.9],
+            sheetGrabberVisible: true,
+            sheetCornerRadius: 20,
+            contentStyle: { backgroundColor: theme.panel },
+          }}
+        />
         <Stack.Screen name="task/[id]" options={{ title: "" }} />
       </Stack>
     </SafeAreaProvider>

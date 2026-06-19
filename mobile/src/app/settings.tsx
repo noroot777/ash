@@ -1,12 +1,12 @@
 import { useState } from "react";
-import { View, Text, TextInput, ScrollView, KeyboardAvoidingView, Platform } from "react-native";
+import { View, Text, ScrollView, KeyboardAvoidingView, Platform } from "react-native";
 import { useRouter } from "expo-router";
 import { getBaseURL, setBaseURL } from "@/lib/config";
 import { api } from "@/lib/api";
 import { connectSSE } from "@/lib/sse";
 import { refreshAll } from "@/lib/data";
-import { useTheme, radius } from "@/lib/theme";
-import { Button } from "@/components/ui";
+import { useTheme } from "@/lib/theme";
+import { Button, Input } from "@/components/ui";
 
 type Status = { kind: "idle" | "testing" | "ok" | "fail"; msg?: string };
 
@@ -51,24 +51,13 @@ export default function Settings() {
 
         <View style={{ gap: 6 }}>
           <Text style={{ color: theme.faint, fontSize: 12 }}>后端地址</Text>
-          <TextInput
+          <Input
             value={url}
             onChangeText={setUrl}
             placeholder="http://mac-ts:4317"
-            placeholderTextColor={theme.faint}
             autoCapitalize="none"
             autoCorrect={false}
             keyboardType="url"
-            style={{
-              color: theme.ink,
-              backgroundColor: theme.panel,
-              borderWidth: 1,
-              borderColor: theme.line,
-              borderRadius: radius.md,
-              paddingHorizontal: 12,
-              paddingVertical: 11,
-              fontSize: 15,
-            }}
           />
         </View>
 

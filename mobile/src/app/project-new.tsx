@@ -1,11 +1,11 @@
 import { useState } from "react";
-import { View, Text, TextInput, KeyboardAvoidingView, Platform, Pressable } from "react-native";
+import { View, Text, KeyboardAvoidingView, Platform, Pressable } from "react-native";
 import { useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { api } from "@/lib/api";
 import { useStore } from "@/lib/store";
-import { useTheme, radius } from "@/lib/theme";
-import { Button } from "@/components/ui";
+import { useTheme } from "@/lib/theme";
+import { Button, Input } from "@/components/ui";
 
 // Bottom-sheet form to create a project (name + optional repo path). Opened from
 // the `+` chip at the end of the project bar on the task list. On success we push
@@ -22,17 +22,6 @@ export default function NewProject() {
   const [repoPath, setRepoPath] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  const inputStyle = {
-    color: theme.ink,
-    backgroundColor: theme.bg,
-    borderWidth: 1,
-    borderColor: theme.line,
-    borderRadius: radius.md,
-    paddingHorizontal: 12,
-    paddingVertical: 11,
-    fontSize: 15,
-  } as const;
 
   const submit = async () => {
     if (!name.trim()) {
@@ -67,26 +56,17 @@ export default function NewProject() {
 
         <View style={{ gap: 8 }}>
           <Text style={{ color: theme.faint, fontSize: 12 }}>项目名</Text>
-          <TextInput
-            value={name}
-            onChangeText={setName}
-            placeholder="例如 Frontend"
-            placeholderTextColor={theme.faint}
-            autoFocus
-            style={inputStyle}
-          />
+          <Input value={name} onChangeText={setName} placeholder="例如 Frontend" autoFocus />
         </View>
 
         <View style={{ gap: 8 }}>
           <Text style={{ color: theme.faint, fontSize: 12 }}>仓库路径（可留空，之后在桌面端补）</Text>
-          <TextInput
+          <Input
             value={repoPath}
             onChangeText={setRepoPath}
             placeholder="~/code/foo"
-            placeholderTextColor={theme.faint}
             autoCapitalize="none"
             autoCorrect={false}
-            style={inputStyle}
           />
         </View>
 

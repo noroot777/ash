@@ -1,4 +1,4 @@
-import { View, Text, Pressable, type ViewStyle, type StyleProp } from "react-native";
+import { View, Text, TextInput, Pressable, type ViewStyle, type StyleProp, type TextInputProps } from "react-native";
 import type { TaskStatus, Priority } from "@harness/shared";
 import { STATUS_META, PRIORITY_META } from "@/lib/constants";
 import { useTheme, radius } from "@/lib/theme";
@@ -42,7 +42,8 @@ export function PriorityBars({ priority }: { priority: Priority }) {
   );
 }
 
-// Rounded chip used for status / labels / pickers.
+// Rounded chip used for labels / pickers. Filled style: active = accent fill,
+// inactive = subtle raised fill (no border) — matches the design system.
 export function Pill({
   label,
   color,
@@ -64,24 +65,47 @@ export function Pill({
           flexDirection: "row",
           alignItems: "center",
           gap: 6,
-          paddingHorizontal: 11,
-          paddingVertical: 6,
+          paddingHorizontal: 14,
+          paddingVertical: 8,
           borderRadius: radius.pill,
-          backgroundColor: active ? theme.accent : theme.overlay,
-          borderWidth: 1,
-          borderColor: active ? theme.accent : theme.line,
+          backgroundColor: active ? theme.accent : theme.raised,
         },
         style,
       ]}
     >
       {color ? <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: color }} /> : null}
-      <Text style={{ color: active ? theme.accentFg : theme.ink, fontSize: 13, fontWeight: "500" }}>{label}</Text>
+      <Text style={{ color: active ? theme.accentFg : theme.muted, fontSize: 14, fontWeight: active ? "600" : "500" }}>
+        {label}
+      </Text>
     </View>
   );
   return onPress ? <Pressable onPress={onPress}>{body}</Pressable> : body;
 }
 
-// Primary / secondary / danger button.
+// Unified text input — filled, borderless, generous padding. Used across new /
+// project-new / settings so every form looks the same.
+export function Input(props: TextInputProps) {
+  const theme = useTheme();
+  return (
+    <TextInput
+      placeholderTextColor={theme.faint}
+      {...props}
+      style={[
+        {
+          color: theme.ink,
+          backgroundColor: theme.raised,
+          borderRadius: radius.lg,
+          paddingHorizontal: 14,
+          paddingVertical: 12,
+          fontSize: 16,
+        },
+        props.style,
+      ]}
+    />
+  );
+}
+
+// Primary / secondary / danger button. Solid, thick, rounded — design-system feel.
 export function Button({
   label,
   onPress,
@@ -99,17 +123,17 @@ export function Button({
   const bg =
     variant === "primary" ? theme.accent : variant === "danger" ? "transparent" : theme.raised;
   const fg = variant === "primary" ? theme.accentFg : variant === "danger" ? theme.danger : theme.ink;
-  const border = variant === "danger" ? theme.danger : variant === "secondary" ? theme.line : "transparent";
+  const border = variant === "danger" ? theme.danger : "transparent";
   return (
     <Pressable
       onPress={disabled ? undefined : onPress}
       style={[
         {
-          paddingHorizontal: 16,
-          paddingVertical: 10,
-          borderRadius: radius.md,
+          paddingHorizontal: 18,
+          paddingVertical: 13,
+          borderRadius: radius.lg,
           backgroundColor: bg,
-          borderWidth: 1,
+          borderWidth: variant === "danger" ? 1 : 0,
           borderColor: border,
           opacity: disabled ? 0.4 : 1,
           alignItems: "center",
@@ -118,7 +142,7 @@ export function Button({
         style,
       ]}
     >
-      <Text style={{ color: fg, fontSize: 14, fontWeight: "600" }}>{label}</Text>
+      <Text style={{ color: fg, fontSize: 15, fontWeight: "600" }}>{label}</Text>
     </Pressable>
   );
 }

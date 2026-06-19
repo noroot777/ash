@@ -1,5 +1,5 @@
 import { useState, useMemo, useCallback } from "react";
-import { View, Text, Pressable, SectionList, RefreshControl, ScrollView } from "react-native";
+import { View, Text, Pressable, SectionList, RefreshControl } from "react-native";
 import { Redirect, useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { Task, TaskStatus } from "@harness/shared";
@@ -61,10 +61,10 @@ function TaskList() {
   const theme = useTheme();
   const projects = useStore((s) => s.projects);
   const projectId = useStore((s) => s.projectId);
-  const setProjectId = useStore((s) => s.setProjectId);
   const tasks = useStore((s) => s.tasks);
   const connected = useStore((s) => s.connected);
   const [refreshing, setRefreshing] = useState(false);
+  const currentProject = projects.find((p) => p.id === projectId) ?? null;
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -93,86 +93,29 @@ function TaskList() {
 
   return (
     <View style={{ flex: 1, backgroundColor: theme.bg }}>
-      {/* Custom header — left-aligned big title + status + settings */}
-      <View
-        style={{
-          flexDirection: "row",
-          alignItems: "center",
-          gap: 14,
-          paddingTop: insets.top + 6,
-          paddingHorizontal: 16,
-          paddingBottom: 8,
-        }}
-      >
-        <Text style={{ color: theme.ink, fontSize: 30, fontWeight: "700", flex: 1 }}>任务</Text>
-        <ConnDot connected={connected} />
-        <Pressable onPress={() => router.push("/settings")} hitSlop={10}>
-          <Ionicons name="options-outline" size={24} color={theme.muted} />
-        </Pressable>
-      </View>
-
-      {/* Project selector — segmented-control style */}
-      {projects.length > 0 && (
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={{ paddingHorizontal: 16, paddingVertical: 10 }}
-        >
-          <View
-            style={{
-              flexDirection: "row",
-              alignItems: "center",
-              gap: 2,
-              padding: 4,
-              borderRadius: radius.pill,
-              borderWidth: 1,
-              borderColor: theme.line,
-            }}
+      {/* Custom header — hamburger (project switch) + title + current project + settings */}
+      <View style={{ paddingTop: insets.top + 6, paddingHorizontal: 16, paddingBottom: 10, gap: 4 }}>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
+          <Pressable onPress={() => router.push("/project-switch")} hitSlop={10}>
+            <Ionicons name="menu" size={26} color={theme.ink} />
+          </Pressable>
+          <Text style={{ color: theme.ink, fontSize: 26, fontWeight: "700", flex: 1 }}>Tasks</Text>
+          <ConnDot connected={connected} />
+          <Pressable onPress={() => router.push("/settings")} hitSlop={10} style={{ marginLeft: 6 }}>
+            <Ionicons name="settings-outline" size={22} color={theme.muted} />
+          </Pressable>
+        </View>
+        {currentProject ? (
+          <Pressable
+            onPress={() => router.push("/project-switch")}
+            style={{ flexDirection: "row", alignItems: "center", gap: 4, marginLeft: 38 }}
+            hitSlop={6}
           >
-            {projects.map((p) => {
-              const active = p.id === projectId;
-              return (
-                <Pressable
-                  key={p.id}
-                  onPress={() => setProjectId(p.id)}
-                  style={{
-                    paddingHorizontal: 16,
-                    paddingVertical: 7,
-                    borderRadius: radius.pill,
-                    backgroundColor: active ? theme.panel : "transparent",
-                    ...(active
-                      ? {
-                          shadowColor: "#000",
-                          shadowOpacity: 0.12,
-                          shadowRadius: 3,
-                          shadowOffset: { width: 0, height: 1 },
-                          elevation: 2,
-                        }
-                      : null),
-                  }}
-                >
-                  <Text
-                    style={{
-                      color: active ? theme.ink : theme.muted,
-                      fontSize: 14,
-                      fontWeight: active ? "600" : "500",
-                    }}
-                  >
-                    {p.name}
-                  </Text>
-                </Pressable>
-              );
-            })}
-            <Pressable
-              onPress={() => router.push("/project-new")}
-              hitSlop={6}
-              style={{ paddingHorizontal: 12, paddingVertical: 7, alignItems: "center", justifyContent: "center" }}
-            >
-              <Ionicons name="add" size={18} color={theme.muted} />
-            </Pressable>
-          </View>
-        </ScrollView>
-      )}
+            <Text style={{ color: theme.muted, fontSize: 14, fontWeight: "500" }}>{currentProject.name}</Text>
+            <Ionicons name="chevron-down" size={14} color={theme.faint} />
+          </Pressable>
+        ) : null}
+      </View>
 
       <SectionList
         sections={sections}
