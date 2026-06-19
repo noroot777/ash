@@ -112,34 +112,42 @@ export function SideDrawer({ open, onClose }: { open: boolean; onClose: () => vo
           </Pressable>
         </ScrollView>
 
-        {/* Footer: settings + live-connection status */}
-        <View style={{ borderTopWidth: 1, borderTopColor: theme.line, paddingHorizontal: 12, paddingTop: 8, paddingBottom: insets.bottom + 12, gap: 2 }}>
+        {/* Footer: settings (left) + live-connection status (right), one row */}
+        <View
+          style={{
+            flexDirection: "row",
+            alignItems: "center",
+            justifyContent: "space-between",
+            borderTopWidth: 1,
+            borderTopColor: theme.line,
+            paddingHorizontal: 16,
+            paddingTop: 10,
+            paddingBottom: insets.bottom + 12,
+          }}
+        >
           <Pressable
             onPress={() => navAfterClose(() => router.push("/settings"))}
+            hitSlop={8}
             style={({ pressed }) => ({
               flexDirection: "row",
               alignItems: "center",
-              gap: 10,
-              paddingHorizontal: 12,
-              paddingVertical: 13,
+              gap: 8,
+              paddingVertical: 8,
+              paddingHorizontal: 10,
+              marginHorizontal: -10,
               borderRadius: radius.md,
               backgroundColor: pressed ? theme.raised : "transparent",
             })}
           >
             <Ionicons name="settings-outline" size={18} color={theme.muted} />
-            <Text style={{ color: theme.ink, fontSize: 16, fontWeight: "500" }}>设置</Text>
+            <Text style={{ color: theme.ink, fontSize: 15, fontWeight: "500" }}>设置</Text>
           </Pressable>
 
-          <View style={{ flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 12, paddingTop: 8 }}>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
             <View
-              style={{
-                width: 8,
-                height: 8,
-                borderRadius: 4,
-                backgroundColor: connected ? theme.ok : theme.faint,
-              }}
+              style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: connected ? theme.ok : theme.faint }}
             />
-            <Text style={{ color: theme.faint, fontSize: 13 }}>{connected ? "实时已连接" : "未连接"}</Text>
+            <Text style={{ color: theme.faint, fontSize: 12 }}>{connected ? "实时已连接" : "未连接"}</Text>
           </View>
         </View>
       </Animated.View>

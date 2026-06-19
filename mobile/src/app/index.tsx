@@ -94,24 +94,28 @@ function TaskList() {
 
   return (
     <View style={{ flex: 1, backgroundColor: theme.bg }}>
-      {/* Custom header — hamburger (drawer) + title + current project */}
-      <View style={{ paddingTop: insets.top + 6, paddingHorizontal: 16, paddingBottom: 10, gap: 4 }}>
-        <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
-          <Pressable onPress={() => setDrawerOpen(true)} hitSlop={10}>
-            <Ionicons name="menu" size={26} color={theme.ink} />
-          </Pressable>
-          <Text style={{ color: theme.ink, fontSize: 26, fontWeight: "700", flex: 1 }}>Tasks</Text>
-        </View>
+      {/* Custom header — hamburger (drawer) + title + current project label */}
+      <View
+        style={{
+          flexDirection: "row",
+          alignItems: "center",
+          gap: 12,
+          paddingTop: insets.top + 6,
+          paddingHorizontal: 16,
+          paddingBottom: 10,
+        }}
+      >
+        <Pressable onPress={() => setDrawerOpen(true)} hitSlop={10}>
+          <Ionicons name="menu" size={26} color={theme.ink} />
+        </Pressable>
+        <Text style={{ color: theme.ink, fontSize: 26, fontWeight: "700" }}>Tasks</Text>
         {currentProject ? (
-          <Pressable
-            onPress={() => setDrawerOpen(true)}
-            style={{ flexDirection: "row", alignItems: "center", gap: 4, marginLeft: 38 }}
-            hitSlop={6}
-          >
-            <Text style={{ color: theme.muted, fontSize: 14, fontWeight: "500" }}>{currentProject.name}</Text>
-            <Ionicons name="chevron-down" size={14} color={theme.faint} />
-          </Pressable>
-        ) : null}
+          <Text style={{ color: theme.muted, fontSize: 15, fontWeight: "500", flex: 1 }} numberOfLines={1}>
+            {currentProject.name}
+          </Text>
+        ) : (
+          <View style={{ flex: 1 }} />
+        )}
       </View>
 
       <SectionList
