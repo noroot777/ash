@@ -2,16 +2,20 @@
 // react-native-markdown-display, which lags new RN versions) — agent text is
 // mostly paragraphs, fenced code, inline code and bold, which is all we handle.
 import { Fragment, type ReactNode } from "react";
-import { View, Text } from "react-native";
+import { View, Text, Linking } from "react-native";
 import { useTheme } from "@/lib/theme";
 
 const mono = "ui-monospace";
 
-// Inline: **bold** and `code` inside a single line of text.
+// Inline: **bold**, `code`, [label](url) links, and bare http(s) URLs (autolinked).
+// Links render in the accent color, underlined, and open in the system browser.
 function Inline({ text, color }: { text: string; color: string }) {
   const theme = useTheme();
   const parts: ReactNode[] = [];
-  const re = /(\*\*([^*]+)\*\*|`([^`]+)`)/g;
+  // Order matters: markdown link before bare URL so a link's url isn't double-matched.
+  const re = /(\*\*([^*]+)\*\*|`([^`]+)`|\[([^\]]+)\]\(([^)\s]+)\)|(https?:\/\/[^\s，。、）)】」""'<>]+))/g;
+  const open = (url: string) => Linking.openURL(url).catch(() => {});
+  const linkStyle = { color: theme.accent, textDecorationLine: "underline" as const };
   let last = 0;
   let m: RegExpExecArray | null;
   let i = 0;
@@ -24,6 +28,21 @@ function Inline({ text, color }: { text: string; color: string }) {
           {" "}{m[3]}{" "}
         </Text>,
       );
+    else if (m[4] != null) {
+      const url = m[5];
+      parts.push(
+        <Text key={i++} onPress={() => open(url)} style={linkStyle}>
+          {m[4]}
+        </Text>,
+      );
+    } else if (m[6] != null) {
+      const url = m[6];
+      parts.push(
+        <Text key={i++} onPress={() => open(url)} style={linkStyle}>
+          {url}
+        </Text>,
+      );
+    }
     last = m.index + m[0].length;
   }
   if (last < text.length) parts.push(<Text key={i++}>{text.slice(last)}</Text>);
