@@ -7,7 +7,7 @@ import { getBaseURL } from "@/lib/config";
 import { useStore } from "@/lib/store";
 import { refreshAll } from "@/lib/data";
 import { STATUSES, STATUS_META } from "@/lib/constants";
-import { useTheme } from "@/lib/theme";
+import { useTheme, radius } from "@/lib/theme";
 import { StatusDot, PriorityBars, Pill } from "@/components/ui";
 
 const PRIORITY_RANK: Record<string, number> = { urgent: 0, high: 1, medium: 2, low: 3, none: 4 };
@@ -20,14 +20,18 @@ function TaskRow({ task, onPress }: { task: Task; onPress: () => void }) {
       style={({ pressed }) => ({
         flexDirection: "row",
         alignItems: "center",
-        gap: 11,
-        paddingHorizontal: 16,
-        paddingVertical: 13,
-        backgroundColor: pressed ? theme.raised : "transparent",
+        gap: 12,
+        marginHorizontal: 16,
+        paddingHorizontal: 14,
+        paddingVertical: 14,
+        borderRadius: radius.lg,
+        backgroundColor: pressed ? theme.raised : theme.panel,
+        borderWidth: 1,
+        borderColor: theme.line,
       })}
     >
       <StatusDot status={task.status} />
-      <View style={{ flex: 1, gap: 3 }}>
+      <View style={{ flex: 1, gap: 4 }}>
         <Text style={{ color: theme.ink, fontSize: 15, fontWeight: "500" }} numberOfLines={2}>
           {task.title || "(无标题)"}
         </Text>
@@ -93,11 +97,27 @@ function TaskList() {
           <ScrollView
             horizontal
             showsHorizontalScrollIndicator={false}
-            contentContainerStyle={{ gap: 8, paddingHorizontal: 16, paddingVertical: 10 }}
+            contentContainerStyle={{ gap: 8, paddingHorizontal: 16, paddingVertical: 10, alignItems: "center" }}
           >
             {projects.map((p) => (
               <Pill key={p.id} label={p.name} active={p.id === projectId} onPress={() => setProjectId(p.id)} />
             ))}
+            <Pressable
+              onPress={() => router.push("/project-new")}
+              hitSlop={8}
+              style={{
+                width: 32,
+                height: 32,
+                borderRadius: 16,
+                alignItems: "center",
+                justifyContent: "center",
+                borderWidth: 1,
+                borderColor: theme.line,
+                backgroundColor: theme.overlay,
+              }}
+            >
+              <Text style={{ color: theme.muted, fontSize: 18, marginTop: -2 }}>＋</Text>
+            </Pressable>
           </ScrollView>
         </View>
       )}
@@ -113,8 +133,8 @@ function TaskList() {
               alignItems: "center",
               gap: 8,
               paddingHorizontal: 16,
-              paddingTop: 16,
-              paddingBottom: 6,
+              paddingTop: 18,
+              paddingBottom: 8,
               backgroundColor: theme.bg,
             }}
           >
@@ -130,19 +150,59 @@ function TaskList() {
             <Text style={{ color: theme.faint, fontSize: 12 }}>{section.data.length}</Text>
           </View>
         )}
-        ItemSeparatorComponent={() => <View style={{ height: 1, backgroundColor: theme.line, marginLeft: 16 }} />}
+        ItemSeparatorComponent={() => <View style={{ height: 8 }} />}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={theme.muted} />}
-        contentContainerStyle={{ paddingBottom: insets.bottom + 24, flexGrow: 1 }}
+        contentContainerStyle={{ paddingBottom: insets.bottom + 96, flexGrow: 1 }}
         stickySectionHeadersEnabled={false}
         ListEmptyComponent={
-          <View style={{ flex: 1, alignItems: "center", justifyContent: "center", paddingTop: 80, gap: 6 }}>
+          <View style={{ flex: 1, alignItems: "center", justifyContent: "center", paddingTop: 80, gap: 10 }}>
             <Text style={{ color: theme.muted, fontSize: 15 }}>
               {projects.length === 0 ? "还没有项目" : "这个项目还没有任务"}
             </Text>
-            <Text style={{ color: theme.faint, fontSize: 13 }}>点右上角 ＋ 新建任务</Text>
+            {projects.length === 0 ? (
+              <Pressable
+                onPress={() => router.push("/project-new")}
+                style={{
+                  paddingHorizontal: 18,
+                  paddingVertical: 10,
+                  borderRadius: radius.md,
+                  backgroundColor: theme.accent,
+                }}
+              >
+                <Text style={{ color: theme.accentFg, fontSize: 14, fontWeight: "600" }}>＋ 新建项目</Text>
+              </Pressable>
+            ) : (
+              <Text style={{ color: theme.faint, fontSize: 13 }}>点右下角 ＋ 新建任务</Text>
+            )}
           </View>
         }
       />
+
+      {/* Floating action button — new task */}
+      {projects.length > 0 && (
+        <Pressable
+          onPress={() => router.push("/new")}
+          style={({ pressed }) => ({
+            position: "absolute",
+            right: 20,
+            bottom: insets.bottom + 20,
+            width: 56,
+            height: 56,
+            borderRadius: 28,
+            alignItems: "center",
+            justifyContent: "center",
+            backgroundColor: theme.accent,
+            opacity: pressed ? 0.85 : 1,
+            shadowColor: "#000",
+            shadowOpacity: 0.25,
+            shadowRadius: 8,
+            shadowOffset: { width: 0, height: 3 },
+            elevation: 5,
+          })}
+        >
+          <Text style={{ color: theme.accentFg, fontSize: 30, fontWeight: "300", marginTop: -3 }}>＋</Text>
+        </Pressable>
+      )}
     </View>
   );
 }

@@ -10,7 +10,8 @@ import { useStore } from "@/lib/store";
 import { useTheme } from "@/lib/theme";
 import { ConnDot } from "@/components/ui";
 
-// Header actions for the task list: live-connection dot, new-task, settings.
+// Header actions for the task list: live-connection dot, settings. (New-task now
+// lives in the floating action button on the list itself.)
 function ListHeaderRight() {
   const router = useRouter();
   const theme = useTheme();
@@ -18,9 +19,6 @@ function ListHeaderRight() {
   return (
     <View style={{ flexDirection: "row", alignItems: "center", gap: 16 }}>
       <ConnDot connected={connected} />
-      <Pressable onPress={() => router.push("/new")} hitSlop={10}>
-        <Text style={{ color: theme.accent, fontSize: 26, fontWeight: "300", marginTop: -2 }}>＋</Text>
-      </Pressable>
       <Pressable onPress={() => router.push("/settings")} hitSlop={10}>
         <Text style={{ color: theme.muted, fontSize: 18 }}>⚙︎</Text>
       </Pressable>
@@ -68,7 +66,27 @@ export default function RootLayout() {
       >
         <Stack.Screen name="index" options={{ title: "任务", headerRight: () => <ListHeaderRight /> }} />
         <Stack.Screen name="settings" options={{ title: "设置" }} />
-        <Stack.Screen name="new" options={{ title: "新建任务" }} />
+        <Stack.Screen
+          name="new"
+          options={{
+            title: "新建任务",
+            presentation: "formSheet",
+            sheetAllowedDetents: [0.85, 1],
+            sheetGrabberVisible: true,
+            sheetCornerRadius: 20,
+          }}
+        />
+        <Stack.Screen
+          name="project-new"
+          options={{
+            headerShown: false,
+            presentation: "formSheet",
+            sheetAllowedDetents: [0.45, 0.8],
+            sheetGrabberVisible: true,
+            sheetCornerRadius: 20,
+            contentStyle: { backgroundColor: theme.panel },
+          }}
+        />
         <Stack.Screen name="task/[id]" options={{ title: "" }} />
       </Stack>
     </SafeAreaProvider>

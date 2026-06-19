@@ -28,6 +28,8 @@ export const api = {
     fetch(`${(url ?? base()).replace(/\/+$/, "")}/api/health`).then(j),
 
   projects: (): Promise<ProjectView[]> => req("/projects").then(j),
+  createProject: (b: { name: string; repoPath?: string }): Promise<ProjectView> =>
+    req("/projects", { method: "POST", body: JSON.stringify(b) }).then(j),
 
   tasks: (): Promise<Task[]> => req("/tasks").then(j),
   task: (id: string): Promise<Task> => req(`/tasks/${id}`).then(j),
