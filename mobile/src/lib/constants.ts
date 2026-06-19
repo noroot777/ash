@@ -4,12 +4,12 @@
 import type { TaskStatus, Priority } from "@harness/shared";
 
 export const STATUSES: { key: TaskStatus; label: string; color: string }[] = [
-  { key: "running", label: "运行中", color: "#38bdf8" },
+  { key: "running", label: "运行中", color: "#5EE6C5" },
   { key: "awaiting_review", label: "等待审核", color: "#a78bfa" },
   { key: "queued", label: "排队中", color: "#fbbf24" },
   { key: "backlog", label: "待排期", color: "#8a8a90" },
   { key: "done", label: "完成", color: "#34d399" },
-  { key: "failed", label: "失败", color: "#f87171" },
+  { key: "failed", label: "失败", color: "#FF6B6B" },
   { key: "canceled", label: "已取消", color: "#737373" },
 ];
 

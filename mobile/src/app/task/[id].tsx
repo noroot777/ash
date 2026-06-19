@@ -17,10 +17,11 @@ import { api } from "@/lib/api";
 import { useStore } from "@/lib/store";
 import { runAction, canStopTask } from "@/lib/taskActions";
 import { STATUS_META } from "@/lib/constants";
-import { useTheme, radius } from "@/lib/theme";
+import { useTheme, radius, fonts } from "@/lib/theme";
 import { Conversation } from "@/components/Conversation";
 import { Markdown } from "@/components/Markdown";
 import { PriorityBars } from "@/components/ui";
+import { SignalBar } from "@/components/SignalBar";
 import type { LogLine } from "@/lib/log";
 import { snapshotToLogLines } from "@/lib/log";
 
@@ -152,59 +153,63 @@ export default function TaskDetail() {
       />
 
       {/* Frozen header: status + title + metadata (stays put while conversation scrolls) */}
-      <View style={{ paddingHorizontal: 16, paddingTop: 12, paddingBottom: 14, borderBottomWidth: 1, borderBottomColor: theme.line, gap: 12 }}>
-        {/* Status badge + run/stop action */}
-        <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-          <View style={{ width: 9, height: 9, borderRadius: 5, backgroundColor: meta?.color }} />
-          <Text style={{ color: theme.muted, fontSize: 13, fontWeight: "600" }}>{meta?.label}</Text>
-          <View style={{ flex: 1 }} />
-          {canStopTask(status) ? (
-            <Pressable
-              onPress={onStop}
-              style={{
-                paddingHorizontal: 14,
-                paddingVertical: 7,
-                borderRadius: radius.md,
-                borderWidth: 1,
-                borderColor: theme.danger,
-              }}
-            >
-              <Text style={{ color: theme.danger, fontSize: 13, fontWeight: "600" }}>停止</Text>
-            </Pressable>
-          ) : (
-            <Pressable
-              onPress={action.canClick ? onPrimary : undefined}
-              style={{
-                paddingHorizontal: 14,
-                paddingVertical: 7,
-                borderRadius: radius.md,
-                backgroundColor: action.canClick ? theme.accent : theme.raised,
-                opacity: action.canClick ? 1 : 0.6,
-              }}
-            >
-              <Text style={{ color: action.canClick ? theme.accentFg : theme.muted, fontSize: 13, fontWeight: "600" }}>
-                {action.label}
-              </Text>
-            </Pressable>
-          )}
-        </View>
-
-        {/* Title */}
-        <Text style={{ color: theme.ink, fontSize: 22, fontWeight: "700", lineHeight: 28 }} numberOfLines={2}>
-          {task.title || "(无标题)"}
-        </Text>
-
-        {/* Metadata: agent + priority + labels */}
-        <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
-          {task.agentType ? (
-            <Text style={{ color: theme.muted, fontSize: 13 }}>@{task.agentType}</Text>
-          ) : null}
-          <PriorityBars priority={task.priority} />
-          {task.labels.map((l) => (
-            <Text key={l} style={{ color: theme.faint, fontSize: 13 }}>
-              #{l}
+      <View style={{ flexDirection: "row", paddingHorizontal: 16, paddingTop: 12, paddingBottom: 14, borderBottomWidth: 1, borderBottomColor: theme.line, gap: 13 }}>
+        <SignalBar status={status} height={52} />
+        <View style={{ flex: 1, gap: 10 }}>
+          {/* Status label + run/stop action */}
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+            <Text style={{ color: meta?.color, fontSize: 11, fontFamily: fonts.monoMed, letterSpacing: 1 }}>
+              {status.toUpperCase().replace(/_/g, " ")}
             </Text>
-          ))}
+            <View style={{ flex: 1 }} />
+            {canStopTask(status) ? (
+              <Pressable
+                onPress={onStop}
+                style={{
+                  paddingHorizontal: 14,
+                  paddingVertical: 7,
+                  borderRadius: radius.md,
+                  borderWidth: 1,
+                  borderColor: theme.danger,
+                }}
+              >
+                <Text style={{ color: theme.danger, fontSize: 13, fontFamily: fonts.bodySemi }}>停止</Text>
+              </Pressable>
+            ) : (
+              <Pressable
+                onPress={action.canClick ? onPrimary : undefined}
+                style={{
+                  paddingHorizontal: 14,
+                  paddingVertical: 7,
+                  borderRadius: radius.md,
+                  backgroundColor: action.canClick ? theme.accent : theme.raised,
+                  opacity: action.canClick ? 1 : 0.6,
+                }}
+              >
+                <Text style={{ color: action.canClick ? theme.accentFg : theme.muted, fontSize: 13, fontFamily: fonts.bodySemi }}>
+                  {action.label}
+                </Text>
+              </Pressable>
+            )}
+          </View>
+
+          {/* Title */}
+          <Text style={{ color: theme.ink, fontSize: 21, fontFamily: fonts.display, lineHeight: 27 }} numberOfLines={2}>
+            {task.title || "(无标题)"}
+          </Text>
+
+          {/* Metadata: agent + priority + labels */}
+          <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
+            {task.agentType ? (
+              <Text style={{ color: theme.muted, fontSize: 12, fontFamily: fonts.mono }}>@{task.agentType}</Text>
+            ) : null}
+            <PriorityBars priority={task.priority} />
+            {task.labels.map((l) => (
+              <Text key={l} style={{ color: theme.faint, fontSize: 12, fontFamily: fonts.mono }}>
+                #{l}
+              </Text>
+            ))}
+          </View>
         </View>
       </View>
 

@@ -1,7 +1,7 @@
 import { View, Text, TextInput, Pressable, type ViewStyle, type StyleProp, type TextInputProps } from "react-native";
 import type { TaskStatus, Priority } from "@harness/shared";
 import { STATUS_META, PRIORITY_META } from "@/lib/constants";
-import { useTheme, radius } from "@/lib/theme";
+import { useTheme, radius, fonts } from "@/lib/theme";
 
 // Solid colored dot for a task status.
 export function StatusDot({ status, size = 9 }: { status: TaskStatus; size?: number }) {
@@ -74,7 +74,7 @@ export function Pill({
       ]}
     >
       {color ? <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: color }} /> : null}
-      <Text style={{ color: active ? theme.accentFg : theme.muted, fontSize: 14, fontWeight: active ? "600" : "500" }}>
+      <Text style={{ color: active ? theme.accentFg : theme.muted, fontSize: 14, fontFamily: active ? fonts.bodySemi : fonts.bodyMed }}>
         {label}
       </Text>
     </View>
@@ -98,6 +98,7 @@ export function Input(props: TextInputProps) {
           paddingHorizontal: 14,
           paddingVertical: 12,
           fontSize: 16,
+          fontFamily: fonts.body,
         },
         props.style,
       ]}
@@ -142,7 +143,7 @@ export function Button({
         style,
       ]}
     >
-      <Text style={{ color: fg, fontSize: 15, fontWeight: "600" }}>{label}</Text>
+      <Text style={{ color: fg, fontSize: 15, fontFamily: fonts.bodySemi }}>{label}</Text>
     </Pressable>
   );
 }

@@ -7,8 +7,9 @@ import { getBaseURL } from "@/lib/config";
 import { useStore } from "@/lib/store";
 import { refreshAll } from "@/lib/data";
 import { STATUSES, STATUS_META } from "@/lib/constants";
-import { useTheme, radius } from "@/lib/theme";
-import { StatusDot, PriorityBars } from "@/components/ui";
+import { useTheme, radius, fonts } from "@/lib/theme";
+import { PriorityBars } from "@/components/ui";
+import { SignalBar } from "@/components/SignalBar";
 import { SideDrawer } from "@/components/SideDrawer";
 import { Ionicons } from "@expo/vector-icons";
 
@@ -22,7 +23,7 @@ function TaskRow({ task, onPress }: { task: Task; onPress: () => void }) {
       style={({ pressed }) => ({
         flexDirection: "row",
         alignItems: "center",
-        gap: 12,
+        gap: 13,
         marginHorizontal: 16,
         paddingHorizontal: 14,
         paddingVertical: 14,
@@ -32,15 +33,17 @@ function TaskRow({ task, onPress }: { task: Task; onPress: () => void }) {
         borderColor: theme.line,
       })}
     >
-      <StatusDot status={task.status} />
-      <View style={{ flex: 1, gap: 4 }}>
-        <Text style={{ color: theme.ink, fontSize: 15, fontWeight: "500" }} numberOfLines={2}>
+      <SignalBar status={task.status} height={38} />
+      <View style={{ flex: 1, gap: 5 }}>
+        <Text style={{ color: theme.ink, fontSize: 15, fontFamily: fonts.bodySemi }} numberOfLines={2}>
           {task.title || "(无标题)"}
         </Text>
-        <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-          {task.agentType ? <Text style={{ color: theme.faint, fontSize: 12 }}>@{task.agentType}</Text> : null}
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+          {task.agentType ? (
+            <Text style={{ color: theme.muted, fontSize: 12, fontFamily: fonts.mono }}>@{task.agentType}</Text>
+          ) : null}
           {task.labels.slice(0, 2).map((l) => (
-            <Text key={l} style={{ color: theme.faint, fontSize: 12 }}>
+            <Text key={l} style={{ color: theme.faint, fontSize: 12, fontFamily: fonts.mono }}>
               #{l}
             </Text>
           ))}
@@ -108,9 +111,9 @@ function TaskList() {
         <Pressable onPress={() => setDrawerOpen(true)} hitSlop={10}>
           <Ionicons name="menu" size={26} color={theme.ink} />
         </Pressable>
-        <Text style={{ color: theme.ink, fontSize: 26, fontWeight: "700" }}>Tasks</Text>
+        <Text style={{ color: theme.ink, fontSize: 26, fontFamily: fonts.display }}>Tasks</Text>
         {currentProject ? (
-          <Text style={{ color: theme.muted, fontSize: 15, fontWeight: "500", flex: 1 }} numberOfLines={1}>
+          <Text style={{ color: theme.muted, fontSize: 14, fontFamily: fonts.mono, flex: 1 }} numberOfLines={1}>
             {currentProject.name}
           </Text>
         ) : (
@@ -142,8 +145,10 @@ function TaskList() {
                 backgroundColor: STATUS_META[section.key as TaskStatus]?.color,
               }}
             />
-            <Text style={{ color: theme.muted, fontSize: 12, fontWeight: "600" }}>{section.label}</Text>
-            <Text style={{ color: theme.faint, fontSize: 12 }}>{section.data.length}</Text>
+            <Text style={{ color: theme.muted, fontSize: 11, fontFamily: fonts.monoMed, letterSpacing: 1 }}>
+              {section.key.toUpperCase().replace(/_/g, " ")}
+            </Text>
+            <Text style={{ color: theme.faint, fontSize: 11, fontFamily: fonts.mono }}>· {section.data.length}</Text>
           </View>
         )}
         ItemSeparatorComponent={() => <View style={{ height: 8 }} />}

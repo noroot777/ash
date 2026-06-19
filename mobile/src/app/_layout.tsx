@@ -3,14 +3,26 @@ import { View, Text } from "react-native";
 import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { SafeAreaProvider } from "react-native-safe-area-context";
+import { useFonts, SpaceGrotesk_500Medium, SpaceGrotesk_700Bold } from "@expo-google-fonts/space-grotesk";
+import { Inter_400Regular, Inter_500Medium, Inter_600SemiBold } from "@expo-google-fonts/inter";
+import { IBMPlexMono_400Regular, IBMPlexMono_500Medium } from "@expo-google-fonts/ibm-plex-mono";
 import { loadBaseURL } from "@/lib/config";
 import { connectSSE } from "@/lib/sse";
 import { refreshAll } from "@/lib/data";
-import { useTheme } from "@/lib/theme";
+import { useTheme, fonts } from "@/lib/theme";
 
 export default function RootLayout() {
   const theme = useTheme();
   const [booted, setBooted] = useState(false);
+  const [fontsLoaded] = useFonts({
+    SpaceGrotesk_500Medium,
+    SpaceGrotesk_700Bold,
+    Inter_400Regular,
+    Inter_500Medium,
+    Inter_600SemiBold,
+    IBMPlexMono_400Regular,
+    IBMPlexMono_500Medium,
+  });
 
   useEffect(() => {
     (async () => {
@@ -26,11 +38,13 @@ export default function RootLayout() {
     })();
   }, []);
 
-  if (!booted) {
+  if (!booted || !fontsLoaded) {
     return (
       <View style={{ flex: 1, backgroundColor: theme.bg, alignItems: "center", justifyContent: "center" }}>
         <StatusBar style="auto" />
-        <Text style={{ color: theme.faint, fontSize: 14 }}>Ash…</Text>
+        <Text style={{ color: theme.faint, fontSize: 14, fontFamily: fontsLoaded ? fonts.mono : undefined }}>
+          Ash…
+        </Text>
       </View>
     );
   }
@@ -41,7 +55,7 @@ export default function RootLayout() {
       <Stack
         screenOptions={{
           headerStyle: { backgroundColor: theme.panel },
-          headerTitleStyle: { color: theme.ink },
+          headerTitleStyle: { color: theme.ink, fontFamily: fonts.displayMd },
           headerTintColor: theme.accent,
           contentStyle: { backgroundColor: theme.bg },
         }}
