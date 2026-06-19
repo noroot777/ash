@@ -42,7 +42,6 @@ export default function TaskDetail() {
   const clearLogs = useStore((s) => s.clearLogs);
   const appendUser = useStore((s) => s.appendUser);
 
-  const [snapshot, setSnapshot] = useState<{ s: Session; out: string }[]>([]);
   const [input, setInput] = useState("");
   const scrollRef = useRef<ScrollView>(null);
 
@@ -58,7 +57,6 @@ export default function TaskDetail() {
   useEffect(() => {
     let alive = true;
     if (logs.length > 0) {
-      setSnapshot([]);
       return;
     }
     api.sessions(id).then(async (ss) => {
@@ -67,11 +65,10 @@ export default function TaskDetail() {
       );
       if (alive) {
         const snapshotWithData = withOut.filter(({ out }) => out.trim());
-        setSnapshot(snapshotWithData);
-        // Parse and merge user/system messages from all sessions into logs
+        // Parse all sessions and merge into a single logs array
         const allLines: LogLine[] = [];
         for (const { s, out } of snapshotWithData) {
-          allLines.push(...snapshotToLogLines(out, s.id));
+          allLines.push(...snapshotToLogLines(out, s.id, s.agentType));
         }
         if (allLines.length > 0) {
           useStore.setState((state) => ({
@@ -225,34 +222,10 @@ export default function TaskDetail() {
           </View>
         ) : null}
 
-        {/* Prior runs (snapshot) */}
-        {snapshot.map(({ s, out }) => (
-          <View key={s.id} style={{ gap: 4 }}>
-            <Text style={{ color: theme.faint, fontSize: 11, marginLeft: 2 }}>@{s.agentType}</Text>
-            <View
-              style={{
-                backgroundColor: theme.panel,
-                borderWidth: 1,
-                borderColor: theme.line,
-                borderRadius: radius.lg,
-                borderTopLeftRadius: 4,
-                padding: 12,
-              }}
-            >
-              <Markdown text={out} />
-            </View>
-            {s.resumeCommand ? (
-              <Text selectable style={{ color: theme.faint, fontSize: 10.5, fontFamily: "ui-monospace", marginLeft: 2 }}>
-                {s.resumeCommand}
-              </Text>
-            ) : null}
-          </View>
-        ))}
-
-        {/* Live conversation */}
+        {/* Conversation (both historical and live) */}
         <Conversation lines={logs} />
 
-        {snapshot.length === 0 && logs.length === 0 ? (
+        {logs.length === 0 ? (
           <Text style={{ color: theme.faint, fontSize: 13, textAlign: "center", paddingTop: 20 }}>
             还没有输出 — 点上方「{action.label}」开始
           </Text>

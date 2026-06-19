@@ -83,12 +83,23 @@ function parseSnapshot(out: string): ParsedSeg[] {
 }
 
 // Convert parsed segments back into LogLines for display
-export function snapshotToLogLines(out: string, sessionId: string): LogLine[] {
-  return parseSnapshot(out).map((seg, i) => ({
-    kind: seg.kind,
-    text: seg.text,
-    at: seg.at,
-    sessionId: `${sessionId}-snap-${i}`,
-  }));
+export function snapshotToLogLines(out: string, sessionId: string, agentType?: string): LogLine[] {
+  return parseSnapshot(out).map((seg, i) => {
+    if (seg.kind === "agent") {
+      // Agent text: split into multiple "text" lines that will be merged by Conversation
+      return {
+        kind: "text" as const,
+        text: seg.text,
+        agent: agentType,
+        sessionId,
+      };
+    }
+    return {
+      kind: seg.kind,
+      text: seg.text,
+      at: seg.at,
+      sessionId: `${sessionId}-seg-${i}`,
+    };
+  });
 }
 
