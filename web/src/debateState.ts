@@ -11,6 +11,7 @@ export type DebateTurn = {
   done: boolean;
   error?: string;
   at?: string; // for `user` turns: when the human spoke (instant)
+  target?: "A" | "B"; // for `user` turns: a 提问 directed at one debater (undefined = both)
 };
 
 export type DebateGate = {
@@ -59,7 +60,7 @@ export function applyDebateEvent(s: DebateState, ev: ServerEvent): DebateState {
     // The human's gate intervention, dropped into the timeline as its own turn.
     return {
       ...s,
-      turns: [...s.turns, { round: ev.round, speaker: "user", text: ev.text, tools: [], raised: false, done: true, at: ev.at }],
+      turns: [...s.turns, { round: ev.round, speaker: "user", text: ev.text, tools: [], raised: false, done: true, at: ev.at, target: ev.target }],
     };
   }
   if (ev.type === "agent.event") {

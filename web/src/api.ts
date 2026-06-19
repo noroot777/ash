@@ -155,6 +155,6 @@ export const api = {
     fetch(`/api/sessions/${id}/output`).then((r) => r.text()),
   debateTranscript: (
     taskId: string,
-  ): Promise<{ round: number; speaker: DebateSpeaker; text: string; raised?: boolean; agrees?: boolean; conclusion?: string; error?: string; at?: string }[]> =>
+  ): Promise<{ round: number; speaker: DebateSpeaker; text: string; raised?: boolean; agrees?: boolean; conclusion?: string; error?: string; at?: string; target?: "A" | "B" }[]> =>
     fetch(`/api/tasks/${taskId}/debate`).then(j),
 };

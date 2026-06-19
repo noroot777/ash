@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Task, Session, DebateConfig, GateAction, AgentType, DebateSpeaker, TaskStatus } from "@harness/shared";
-import { Stop } from "@phosphor-icons/react";
+import { Stop, Robot, X } from "@phosphor-icons/react";
 import type { DebateState, DebateTurn, DebateGate } from "./debateState";
 import { ResumeButtons, ToolCall, CollapsibleText } from "./ui";
 import { Markdown } from "./Markdown";
@@ -271,6 +271,9 @@ function Bubble({
           <div className="max-w-[88%] rounded-lg border border-accent/30 bg-accent/[0.08] px-3 py-2">
             <div className="mb-1 flex items-center gap-2 text-[11px] text-muted">
               <span className="font-medium text-ink/70">你</span>
+              {turn.target && (
+                <span className="text-faint">→ {collab ? "成员" : "辩手"}{turn.target}</span>
+              )}
               {turn.at && (
                 <>
                   <span className="text-faint">·</span>
@@ -337,6 +340,8 @@ function Bubble({
 function GateBar({ gate, collab, onGate }: { gate: DebateGate; collab: boolean; onGate: (a: GateAction) => void }) {
   const [mode, setMode] = useState<"inject" | "ask" | null>(null);
   const [text, setText] = useState("");
+  const [target, setTarget] = useState<"A" | "B" | null>(null); // 提问定向到的辩手（仅 ask·G1）
+  const [mIdx, setMIdx] = useState(0);
   const isG1 = gate.gate === "G1";
   const consensus = !!gate.consensus;
   const label = !isG1
@@ -348,6 +353,36 @@ function GateBar({ gate, collab, onGate }: { gate: DebateGate; collab: boolean; 
         : "收敛门 · 双方仍有分歧（结论如下，供你定夺）";
   const nameA = collab ? "成员A" : "辩手A";
   const nameB = collab ? "成员B" : "辩手B";
+
+  // @-mention：仅 G1 的「提问」支持把问题定向给单个辩手（代码门只有实现方一个，不显示）。
+  // 末尾 @token 触发候选；选中即设定 target 并去掉 @token。中文名用宽松正则。
+  const canMention = isG1 && mode === "ask";
+  const mCands = [{ key: "A" as const, name: nameA }, { key: "B" as const, name: nameB }];
+  const mMatch = canMention ? /@([^\s@]*)$/.exec(text) : null;
+  const cands = mMatch
+    ? mCands.filter((c) => {
+        const q = (mMatch[1] ?? "").toLowerCase();
+        return !q || c.name.includes(mMatch[1]) || c.key.toLowerCase().startsWith(q);
+      })
+    : [];
+  const mentionOpen = !!mMatch && cands.length > 0;
+  const pick = (k: "A" | "B") => {
+    setTarget(k);
+    setText((s) => s.replace(/@[^\s@]*$/, ""));
+    setMIdx(0);
+  };
+  const switchMode = (m: "inject" | "ask") => {
+    setMode((cur) => (cur === m ? null : m));
+    setTarget(null); // 切换/收起输入框时清空定向
+  };
+  const submit = () => {
+    if (!text.trim() || !mode) return;
+    if (mode === "ask") onGate({ kind: "ask", text: text.trim(), target: target ?? undefined });
+    else onGate({ kind: "inject", text: text.trim() });
+    setText("");
+    setMode(null);
+    setTarget(null);
+  };
 
   return (
     <div className="border-t border-violet-500/40 bg-violet-500/[0.07] px-6 py-3">
@@ -385,35 +420,73 @@ function GateBar({ gate, collab, onGate }: { gate: DebateGate; collab: boolean; 
           <button onClick={() => onGate({ kind: "reject" })} className="rounded-md border border-line2 px-3 py-1 text-xs text-ink">
             打回终止
           </button>
-          <button onClick={() => setMode(mode === "inject" ? null : "inject")} className="rounded-md border border-line2 px-3 py-1 text-xs text-ink">
+          <button onClick={() => switchMode("inject")} className="rounded-md border border-line2 px-3 py-1 text-xs text-ink">
             注入意见→回炉
           </button>
-          <button onClick={() => setMode(mode === "ask" ? null : "ask")} className="rounded-md border border-line2 px-3 py-1 text-xs text-ink">
+          <button onClick={() => switchMode("ask")} className="rounded-md border border-line2 px-3 py-1 text-xs text-ink">
             提问→继续
           </button>
         </div>
       </div>
       {mode && (
-        <div className="mt-2 flex gap-2">
-          <textarea
-            autoFocus
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-            rows={2}
-            placeholder={mode === "inject" ? "补充意见，双方据此回炉再辩…" : "向双方提出的问题…"}
-            className="flex-1 resize-none rounded-md border border-line bg-panel px-2 py-1 text-sm outline-none"
-          />
-          <button
-            disabled={!text.trim()}
-            onClick={() => {
-              onGate({ kind: mode, text: text.trim() });
-              setText("");
-              setMode(null);
-            }}
-            className="rounded-md bg-accent hover:bg-accent-hover px-3 py-1 text-xs font-medium text-accent-fg disabled:opacity-40"
-          >
-            提交
-          </button>
+        <div className="relative mt-2">
+          {/* @-mention 候选：仅 ask·G1 出现，↑↓ 选、回车确定 */}
+          {mentionOpen && (
+            <div className="absolute bottom-full left-0 z-10 mb-1 w-56 overflow-hidden rounded-lg border border-line2 bg-panel p-1 shadow-xl">
+              <div className="px-2 py-1 text-[10px] text-faint">把问题定向给 · ↑↓ 选，回车确定</div>
+              {cands.map((c, i) => (
+                <button
+                  key={c.key}
+                  onMouseEnter={() => setMIdx(i)}
+                  onClick={() => pick(c.key)}
+                  className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] text-ink ${i === mIdx ? "bg-raised" : ""}`}
+                >
+                  <Robot size={14} className="text-muted" /> @{c.name}
+                </button>
+              ))}
+            </div>
+          )}
+          {target && (
+            <div className="mb-1.5 flex items-center text-[12px]">
+              <span className="inline-flex items-center gap-1 rounded-full bg-accent/10 px-2 py-0.5 text-ink">
+                <Robot size={12} /> 只问 @{target === "A" ? nameA : nameB}
+                <button onClick={() => setTarget(null)} className="text-faint hover:text-ink" title="改为问双方">
+                  <X size={11} weight="bold" />
+                </button>
+              </span>
+            </div>
+          )}
+          <div className="flex gap-2">
+            <textarea
+              autoFocus
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              onKeyDown={(e) => {
+                if (mentionOpen) {
+                  if (e.key === "ArrowDown") { e.preventDefault(); setMIdx((i) => Math.min(cands.length - 1, i + 1)); return; }
+                  if (e.key === "ArrowUp") { e.preventDefault(); setMIdx((i) => Math.max(0, i - 1)); return; }
+                  if (e.key === "Enter" && !e.metaKey && !e.ctrlKey) { e.preventDefault(); pick((cands[mIdx] ?? cands[0]).key); return; }
+                }
+                if ((e.metaKey || e.ctrlKey) && e.key === "Enter") { e.preventDefault(); submit(); }
+              }}
+              rows={2}
+              placeholder={
+                mode === "inject"
+                  ? "补充意见，双方据此回炉再辩…"
+                  : canMention
+                    ? "向某位辩手提问，@ 指向单个（不填=问双方）…"
+                    : "向实现方提出的问题…"
+              }
+              className="flex-1 resize-none rounded-md border border-line bg-panel px-2 py-1 text-sm outline-none"
+            />
+            <button
+              disabled={!text.trim()}
+              onClick={submit}
+              className="self-start rounded-md bg-accent hover:bg-accent-hover px-3 py-1 text-xs font-medium text-accent-fg disabled:opacity-40"
+            >
+              提交
+            </button>
+          </div>
         </div>
       )}
     </div>

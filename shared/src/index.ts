@@ -237,8 +237,8 @@ export type GateName = "G1" | "G2"; // G1 = consensus gate, G2 = code gate
 export type GateAction =
   | { kind: "approve"; text?: string; side?: "A" | "B" } // 放行 (text = note; side = chosen plan when debaters disagreed)
   | { kind: "reject" } // 打回终止
-  | { kind: "inject"; text: string } // 注入意见 → 回炉再辩
-  | { kind: "ask"; text: string }; // 提问 → 答完继续
+  | { kind: "inject"; text: string } // 注入意见 → 回炉再辩（始终双方一起回炉）
+  | { kind: "ask"; text: string; target?: "A" | "B" }; // 提问 → 答完继续；target 缺省=问双方，指定=只问那一位辩手
 
 // ── Executor streaming events (§12) ──────────────────────────────────────────
 export type AgentEvent =
@@ -275,4 +275,6 @@ export type ServerEvent =
   | { type: "debate.gate"; taskId: string; gate: GateName; open: boolean; consensus?: boolean; conclusionA?: string | null; conclusionB?: string | null }
   // A human intervention in a /pair timeline (gate inject/ask). Carries the time
   // so the timeline can show when the user spoke. Persisted in the transcript too.
-  | { type: "debate.user"; taskId: string; round: number; text: string; at: string };
+  // target: when a 提问 was directed at one debater, which side — so the timeline
+  // can show 「你 → 辩手A」 (undefined = addressed to both).
+  | { type: "debate.user"; taskId: string; round: number; text: string; at: string; target?: "A" | "B" };

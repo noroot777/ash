@@ -32,18 +32,19 @@ async function setStatus(taskId: string, status: TaskStatus) {
 
 // Persist + broadcast a human intervention (gate inject/ask) as a `user` turn so
 // the /pair timeline shows when the user spoke. Best-effort transcript append;
-// the live event drives the open page.
-function recordUserTurn(taskId: string, round: number, text: string) {
+// the live event drives the open page. `target` marks a 提问 directed at one
+// debater (so the timeline can show 「你 → 辩手A」).
+function recordUserTurn(taskId: string, round: number, text: string, target?: "A" | "B") {
   const at = now();
   try {
     appendFileSync(
       join(RUNS_DIR, taskId, "transcript.jsonl"),
-      JSON.stringify({ round, speaker: "user", text, at }) + "\n",
+      JSON.stringify({ round, speaker: "user", text, at, target }) + "\n",
     );
   } catch {
     /* best effort */
   }
-  bus.publish({ type: "debate.user", taskId, round, text, at });
+  bus.publish({ type: "debate.user", taskId, round, text, at, target });
 }
 
 interface Turn {
@@ -423,13 +424,13 @@ export async function resumeAtGate(taskId: string, action: GateAction): Promise<
       if (base.cfg.style !== "collaborate") {
         // 辩论：仅讨论 —— 放行=结束(done)，注入/提问=再辩后再停。不实现。
         if (action.kind === "approve") return void (await setStatus(taskId, "done"));
-        await reDebate(ctx, action.kind, action.text);
+        await reDebate(ctx, action.kind, action.text, action.kind === "ask" ? action.target : undefined);
         await finishDiscussion(ctx);
         return;
       }
       // 协作：放行=按方案实现，注入/提问=再议后重开方案门。
       if (action.kind === "approve") return void (await runImplement(ctx, { note: action.text ?? "", chosenSide: action.side }));
-      await reDebate(ctx, action.kind, action.text); // inject / ask
+      await reDebate(ctx, action.kind, action.text, action.kind === "ask" ? action.target : undefined); // inject / ask
       await gateAndImplement(ctx); // re-park G1, then implement
       return;
     }
@@ -484,19 +485,27 @@ async function runRebuttalLoop(ctx: Ctx): Promise<boolean> {
   return true;
 }
 
-// Human feedback/question → both debaters re-debate (used inside the gate loop
-// and when resuming a gate after a restart).
-async function reDebate(ctx: Ctx, kind: "inject" | "ask", text: string) {
+// Human feedback/question → debaters re-debate (used inside the gate loop and
+// when resuming a gate after a restart). `target` (ask only) directs the question
+// at a single debater: only that side runs, the other keeps its state untouched
+// (so a directed clarification can't knock the opponent off an already-raised
+// hand). inject always re-runs BOTH — 回炉 means both reconsider.
+async function reDebate(ctx: Ctx, kind: "inject" | "ask", text: string, target?: "A" | "B") {
   ctx.round++;
-  recordUserTurn(ctx.taskId, ctx.round, text); // the human's words land in the timeline first
+  const tgt = kind === "ask" ? target : undefined; // inject ignores target
+  recordUserTurn(ctx.taskId, ctx.round, text, tgt); // the human's words land in the timeline first
   const prompt = kind === "inject" ? P.injectFeedback(text, ctx.round, ctx.cfg.style) : P.question(text, ctx.round, ctx.cfg.style);
   // 提问=澄清,不该打回已达成的收敛/结论(继承既有状态);注入=回炉重议,允许双方改判(不继承)。
   const inhA = kind === "ask" ? { raised: ctx.raisedA, agrees: ctx.agreesA, conclusion: ctx.conclusionA } : undefined;
   const inhB = kind === "ask" ? { raised: ctx.raisedB, agrees: ctx.agreesB, conclusion: ctx.conclusionB } : undefined;
-  const at = await runTurn({ taskId: ctx.taskId, role: "debaterA", speaker: "A", round: ctx.round, executor: ctx.exA, prompt, cwd: ctx.cwd, rowId: ctx.A.rowId, resumeCliId: ctx.A.cliId || undefined, inherit: inhA });
-  applyTurn(ctx, "A", at);
-  const bt = await runTurn({ taskId: ctx.taskId, role: "debaterB", speaker: "B", round: ctx.round, executor: ctx.exB, prompt, cwd: ctx.cwd, rowId: ctx.B.rowId, resumeCliId: ctx.B.cliId || undefined, inherit: inhB });
-  applyTurn(ctx, "B", bt);
+  if (tgt !== "B") {
+    const at = await runTurn({ taskId: ctx.taskId, role: "debaterA", speaker: "A", round: ctx.round, executor: ctx.exA, prompt, cwd: ctx.cwd, rowId: ctx.A.rowId, resumeCliId: ctx.A.cliId || undefined, inherit: inhA });
+    applyTurn(ctx, "A", at);
+  }
+  if (tgt !== "A") {
+    const bt = await runTurn({ taskId: ctx.taskId, role: "debaterB", speaker: "B", round: ctx.round, executor: ctx.exB, prompt, cwd: ctx.cwd, rowId: ctx.B.rowId, resumeCliId: ctx.B.cliId || undefined, inherit: inhB });
+    applyTurn(ctx, "B", bt);
+  }
 }
 
 // Gate G1 → implement. Separated so resume can call runImplement directly.
@@ -505,7 +514,7 @@ async function gateAndImplement(ctx: Ctx): Promise<void> {
   let note = "";
   let chosenSide: "A" | "B" | undefined;
   if (cfg.gateG1 === "on") {
-    const res = await runGate(taskId, "G1", (k, t) => reDebate(ctx, k, t), () => ({
+    const res = await runGate(taskId, "G1", (k, t, target) => reDebate(ctx, k, t, target), () => ({
       consensus: isConsensus(ctx),
       conclusionA: ctx.conclusionA ?? null,
       conclusionB: ctx.conclusionB ?? null,
@@ -522,7 +531,7 @@ async function gateAndImplement(ctx: Ctx): Promise<void> {
 async function finishDiscussion(ctx: Ctx): Promise<void> {
   const { taskId, cfg } = ctx;
   if (cfg.gateG1 === "on") {
-    const res = await runGate(taskId, "G1", (k, t) => reDebate(ctx, k, t), () => ({
+    const res = await runGate(taskId, "G1", (k, t, target) => reDebate(ctx, k, t, target), () => ({
       consensus: isConsensus(ctx),
       conclusionA: ctx.conclusionA ?? null,
       conclusionB: ctx.conclusionB ?? null,
@@ -607,7 +616,7 @@ async function runImplement(ctx: Ctx, opts: { note: string; chosenSide?: "A" | "
 async function runGate(
   taskId: string,
   gate: "G1" | "G2",
-  reAction: (kind: "inject" | "ask", text: string) => Promise<void>,
+  reAction: (kind: "inject" | "ask", text: string, target?: "A" | "B") => Promise<void>,
   getInfo?: () => { consensus: boolean; conclusionA: string | null; conclusionB: string | null },
 ): Promise<{ approved: boolean; note: string; side?: "A" | "B" }> {
   while (true) {
@@ -625,6 +634,6 @@ async function runGate(
     }
     if (action.kind === "reject") return { approved: false, note: "" };
     await setStatus(taskId, "running");
-    await reAction(action.kind, action.text);
+    await reAction(action.kind, action.text, action.kind === "ask" ? action.target : undefined);
   }
 }
