@@ -8,7 +8,8 @@ import { useStore } from "@/lib/store";
 import { refreshAll } from "@/lib/data";
 import { STATUSES, STATUS_META } from "@/lib/constants";
 import { useTheme, radius } from "@/lib/theme";
-import { StatusDot, PriorityBars, ConnDot } from "@/components/ui";
+import { StatusDot, PriorityBars } from "@/components/ui";
+import { SideDrawer } from "@/components/SideDrawer";
 import { Ionicons } from "@expo/vector-icons";
 
 const PRIORITY_RANK: Record<string, number> = { urgent: 0, high: 1, medium: 2, low: 3, none: 4 };
@@ -62,8 +63,8 @@ function TaskList() {
   const projects = useStore((s) => s.projects);
   const projectId = useStore((s) => s.projectId);
   const tasks = useStore((s) => s.tasks);
-  const connected = useStore((s) => s.connected);
   const [refreshing, setRefreshing] = useState(false);
+  const [drawerOpen, setDrawerOpen] = useState(false);
   const currentProject = projects.find((p) => p.id === projectId) ?? null;
 
   const onRefresh = useCallback(async () => {
@@ -93,21 +94,17 @@ function TaskList() {
 
   return (
     <View style={{ flex: 1, backgroundColor: theme.bg }}>
-      {/* Custom header — hamburger (project switch) + title + current project + settings */}
+      {/* Custom header — hamburger (drawer) + title + current project */}
       <View style={{ paddingTop: insets.top + 6, paddingHorizontal: 16, paddingBottom: 10, gap: 4 }}>
         <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
-          <Pressable onPress={() => router.push("/project-switch")} hitSlop={10}>
+          <Pressable onPress={() => setDrawerOpen(true)} hitSlop={10}>
             <Ionicons name="menu" size={26} color={theme.ink} />
           </Pressable>
           <Text style={{ color: theme.ink, fontSize: 26, fontWeight: "700", flex: 1 }}>Tasks</Text>
-          <ConnDot connected={connected} />
-          <Pressable onPress={() => router.push("/settings")} hitSlop={10} style={{ marginLeft: 6 }}>
-            <Ionicons name="settings-outline" size={22} color={theme.muted} />
-          </Pressable>
         </View>
         {currentProject ? (
           <Pressable
-            onPress={() => router.push("/project-switch")}
+            onPress={() => setDrawerOpen(true)}
             style={{ flexDirection: "row", alignItems: "center", gap: 4, marginLeft: 38 }}
             hitSlop={6}
           >
@@ -198,6 +195,8 @@ function TaskList() {
           <Text style={{ color: theme.accentFg, fontSize: 30, fontWeight: "300", marginTop: -3 }}>＋</Text>
         </Pressable>
       )}
+
+      <SideDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} />
     </View>
   );
 }
