@@ -190,7 +190,7 @@ export default function TaskDetail() {
         </View>
 
         {/* Title */}
-        <Text style={{ color: theme.ink, fontSize: 22, fontWeight: "700", lineHeight: 28 }}>
+        <Text style={{ color: theme.ink, fontSize: 22, fontWeight: "700", lineHeight: 28 }} numberOfLines={2}>
           {task.title || "(无标题)"}
         </Text>
 

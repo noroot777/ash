@@ -1,30 +1,12 @@
 import { useEffect, useState } from "react";
-import { View, Text, Pressable } from "react-native";
-import { Stack, useRouter } from "expo-router";
+import { View, Text } from "react-native";
+import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { loadBaseURL } from "@/lib/config";
 import { connectSSE } from "@/lib/sse";
 import { refreshAll } from "@/lib/data";
-import { useStore } from "@/lib/store";
 import { useTheme } from "@/lib/theme";
-import { ConnDot } from "@/components/ui";
-
-// Header actions for the task list: live-connection dot, settings. (New-task now
-// lives in the floating action button on the list itself.)
-function ListHeaderRight() {
-  const router = useRouter();
-  const theme = useTheme();
-  const connected = useStore((s) => s.connected);
-  return (
-    <View style={{ flexDirection: "row", alignItems: "center", gap: 16 }}>
-      <ConnDot connected={connected} />
-      <Pressable onPress={() => router.push("/settings")} hitSlop={10}>
-        <Text style={{ color: theme.muted, fontSize: 18 }}>⚙︎</Text>
-      </Pressable>
-    </View>
-  );
-}
 
 export default function RootLayout() {
   const theme = useTheme();
@@ -64,7 +46,8 @@ export default function RootLayout() {
           contentStyle: { backgroundColor: theme.bg },
         }}
       >
-        <Stack.Screen name="index" options={{ title: "任务", headerRight: () => <ListHeaderRight /> }} />
+        {/* Task list owns its header (left-aligned big title) — hide the native one. */}
+        <Stack.Screen name="index" options={{ headerShown: false }} />
         <Stack.Screen name="settings" options={{ title: "设置" }} />
         <Stack.Screen
           name="new"

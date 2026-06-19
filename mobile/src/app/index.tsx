@@ -8,7 +8,7 @@ import { useStore } from "@/lib/store";
 import { refreshAll } from "@/lib/data";
 import { STATUSES, STATUS_META } from "@/lib/constants";
 import { useTheme, radius } from "@/lib/theme";
-import { StatusDot, PriorityBars, Pill } from "@/components/ui";
+import { StatusDot, PriorityBars, Pill, ConnDot } from "@/components/ui";
 
 const PRIORITY_RANK: Record<string, number> = { urgent: 0, high: 1, medium: 2, low: 3, none: 4 };
 
@@ -62,6 +62,7 @@ function TaskList() {
   const projectId = useStore((s) => s.projectId);
   const setProjectId = useStore((s) => s.setProjectId);
   const tasks = useStore((s) => s.tasks);
+  const connected = useStore((s) => s.connected);
   const [refreshing, setRefreshing] = useState(false);
 
   const onRefresh = useCallback(async () => {
@@ -91,6 +92,24 @@ function TaskList() {
 
   return (
     <View style={{ flex: 1, backgroundColor: theme.bg }}>
+      {/* Custom header — left-aligned big title + status + settings */}
+      <View
+        style={{
+          flexDirection: "row",
+          alignItems: "center",
+          gap: 14,
+          paddingTop: insets.top + 6,
+          paddingHorizontal: 16,
+          paddingBottom: 8,
+        }}
+      >
+        <Text style={{ color: theme.ink, fontSize: 30, fontWeight: "700", flex: 1 }}>任务</Text>
+        <ConnDot connected={connected} />
+        <Pressable onPress={() => router.push("/settings")} hitSlop={10}>
+          <Text style={{ color: theme.muted, fontSize: 20 }}>⚙︎</Text>
+        </Pressable>
+      </View>
+
       {/* Project selector */}
       {projects.length > 0 && (
         <View style={{ borderBottomWidth: 1, borderBottomColor: theme.line }}>
