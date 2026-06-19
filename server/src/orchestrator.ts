@@ -133,7 +133,7 @@ export async function runTask(taskId: string): Promise<void> {
     let head = "";
     const emitText = (text: string) => {
       if (!text) return;
-      out.write(text + "\n");
+      out.write(text);
       bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: "single", agentType, event: { kind: "text", text } });
     };
 
@@ -168,7 +168,7 @@ export async function runTask(taskId: string): Promise<void> {
         continue;
       }
       if (event.kind === "text" || event.kind === "thinking") {
-        out.write(event.text + "\n");
+        out.write(event.text);
         bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: "single", agentType, event });
       } else {
         bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: "single", agentType, event });
@@ -316,7 +316,7 @@ export async function continueTask(
         bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: "single", agentType: agent, event });
         continue;
       }
-      if (event.kind === "text" || event.kind === "thinking") out.write(event.text + "\n");
+      if (event.kind === "text" || event.kind === "thinking") out.write(event.text);
       if (event.kind === "done") exitStatus = event.exitStatus;
       bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: "single", agentType: agent, event });
     }

@@ -28,7 +28,12 @@ export class ClaudeExecutor implements AgentExecutor {
   run(opts: RunOpts): RunHandle {
     const sessionId = opts.sessionId ?? randomUUID();
     const model = opts.model ?? this.model;
-    const args = ["-p", "--output-format", "stream-json", "--verbose", "--dangerously-skip-permissions"];
+    // --include-partial-messages turns on token-level streaming: the CLI emits
+    // `stream_event` lines (content_block_delta) AS the model types, instead of
+    // only one complete `assistant` message per turn. Without it the mobile/web
+    // client sees nothing until a whole message lands, then the entire block
+    // appears at once — the "laggy, dumps-in-one-go" feel. See parseClaudeStream.
+    const args = ["-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--dangerously-skip-permissions"];
     if (opts.sessionId) args.push("--resume", sessionId);
     else args.push("--session-id", sessionId);
     if (model) args.push("--model", model);
@@ -50,6 +55,21 @@ async function* parseClaudeStream(child: ReturnType<typeof spawnAgent>): AsyncIt
     resolve = null;
   };
 
+  // Coalesce token-level text_delta into small chunks: flush on a newline or once
+  // ~40 chars have accrued, so the client streams smoothly without a re-render per
+  // character (a long reply would otherwise fire thousands of setStates). The
+  // chunks concatenate downstream with no separator, so the joined text is exactly
+  // the model's output. With partial streaming ON, the complete `assistant`
+  // message that trails the deltas is used ONLY for tool_use — replaying its text
+  // would duplicate everything the deltas already streamed.
+  let textBuf = "";
+  const flushText = () => {
+    if (textBuf) {
+      push({ kind: "text", text: textBuf });
+      textBuf = "";
+    }
+  };
+
   const rl = createInterface({ input: child.stdout! });
   rl.on("line", (line) => {
     const t = line.trim();
@@ -60,14 +80,26 @@ async function* parseClaudeStream(child: ReturnType<typeof spawnAgent>): AsyncIt
     } catch {
       return;
     }
+    if (ev.type === "stream_event") {
+      const se = ev.event;
+      if (se?.type === "content_block_delta" && se.delta?.type === "text_delta" && se.delta.text) {
+        textBuf += se.delta.text;
+        if (textBuf.length >= 40 || textBuf.includes("\n")) flushText();
+      }
+      return; // deltas drive the live stream; the trailing complete message handles tools
+    }
     if (ev.type === "system" && ev.session_id) {
       push({ kind: "session", cliSessionId: ev.session_id });
     } else if (ev.type === "assistant" && ev.message?.content) {
+      flushText(); // settle this message's text-delta tail before its tools
+      let hadText = false;
       for (const block of ev.message.content) {
-        if (block.type === "text" && block.text) push({ kind: "text", text: block.text });
+        if (block.type === "text") hadText = true; // already streamed via deltas — don't re-push
         else if (block.type === "tool_use") push({ kind: "tool", name: block.name, detail: shortJson(block.input) });
       }
+      if (hadText) push({ kind: "text", text: "\n\n" }); // paragraph break, identical live & on reload
     } else if (ev.type === "result") {
+      flushText();
       if (ev.session_id) push({ kind: "session", cliSessionId: ev.session_id });
       if (ev.subtype && ev.subtype !== "success") push({ kind: "error", message: `result: ${ev.subtype}` });
     }
@@ -85,6 +117,7 @@ async function* parseClaudeStream(child: ReturnType<typeof spawnAgent>): AsyncIt
   });
   child.on("close", (code) => {
     if (finished) return;
+    flushText(); // emit any text tail that never hit the flush threshold
     const exit = code ?? 0;
     if (exit !== 0 && stderr.trim()) push({ kind: "error", message: stderr.trim().slice(0, 2000) });
     push({ kind: "done", exitStatus: exit });

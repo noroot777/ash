@@ -69,8 +69,11 @@ async function* parseCodexStream(child: ReturnType<typeof spawnAgent>): AsyncIte
       push({ kind: "session", cliSessionId: ev.thread_id });
     } else if (ev.type === "item.completed" && ev.item) {
       const it = ev.item;
-      if (it.type === "agent_message" && it.text) push({ kind: "text", text: it.text });
-      else if (it.type === "reasoning" && it.text) push({ kind: "thinking", text: it.text });
+      // codex emits one complete agent_message / reasoning per turn (not token
+      // deltas). The orchestrator no longer appends newlines — text pieces are
+      // concatenated verbatim downstream — so carry the paragraph break here.
+      if (it.type === "agent_message" && it.text) push({ kind: "text", text: it.text + "\n\n" });
+      else if (it.type === "reasoning" && it.text) push({ kind: "thinking", text: it.text + "\n\n" });
       else if (it.type === "command_execution") push({ kind: "tool", name: "exec", detail: shortStr(it.command) });
       else if (it.type === "file_change" || it.type === "patch") push({ kind: "tool", name: "edit", detail: shortStr(it.path ?? it.summary) });
     } else if (ev.type === "error" && ev.message) {

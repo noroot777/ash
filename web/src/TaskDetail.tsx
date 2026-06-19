@@ -390,7 +390,7 @@ function groupContent(lines: LogLine[]): ReactNode[] {
   };
   for (const l of lines) {
     if (l.kind === "text") {
-      buf += (buf ? "\n" : "") + l.text;
+      buf += l.text; // pieces already carry their own breaks; concat verbatim (matches mobile + delta streaming)
       continue;
     }
     flush();
