@@ -38,6 +38,7 @@ export default function TaskDetail() {
   const task = useStore((s) => s.tasks.find((t) => t.id === id));
   const logs = useStore((s) => s.logs[id]) ?? EMPTY_LOGS;
   const sessionsBump = useStore((s) => s.sessionsBump);
+  const streamEpoch = useStore((s) => s.streamEpoch);
   const upsertTask = useStore((s) => s.upsertTask);
   const removeTask = useStore((s) => s.removeTask);
   const clearLogs = useStore((s) => s.clearLogs);
@@ -52,37 +53,34 @@ export default function TaskDetail() {
     if (!task && id) api.task(id).then(upsertTask).catch(() => {});
   }, [id, task, upsertTask]);
 
-  // Snapshot prior runs' output (per session → its own bubble) on a fresh open or
-  // when a run settles. Skipped while we already have live logs in memory, so a
-  // reply doesn't wipe the streamed conversation. Ported from web TaskDetail.
+  // Reconcile this task's conversation from the server's authoritative .md: on a
+  // fresh open, when a run settles (sessionsBump), AND on every SSE (re)connect or
+  // return-to-foreground (streamEpoch). The mobile stream drops on lock / background
+  // / network switches and the bus has no replay, so live events emitted while we
+  // were offline are otherwise lost until you leave and re-enter. The server appends
+  // the .md as the run streams, so re-pulling it fills those gaps; later SSE chunks
+  // append on top. (We intentionally no longer skip when logs are non-empty — that
+  // skip is exactly what stranded the gaps.)
   useEffect(() => {
     let alive = true;
-    if (logs.length > 0) {
-      return;
-    }
     api.sessions(id).then(async (ss) => {
       const withOut = await Promise.all(
         ss.map(async (s) => ({ s, out: await api.sessionOutput(s.id).catch(() => "") })),
       );
-      if (alive) {
-        const snapshotWithData = withOut.filter(({ out }) => out.trim());
-        // Parse all sessions and merge into a single logs array
-        const allLines: LogLine[] = [];
-        for (const { s, out } of snapshotWithData) {
-          allLines.push(...snapshotToLogLines(out, s.id, s.agentType));
-        }
-        if (allLines.length > 0) {
-          useStore.setState((state) => ({
-            logs: { ...state.logs, [id]: allLines },
-          }));
-        }
+      if (!alive) return;
+      const allLines: LogLine[] = [];
+      for (const { s, out } of withOut.filter(({ out }) => out.trim())) {
+        allLines.push(...snapshotToLogLines(out, s.id, s.agentType));
+      }
+      if (allLines.length > 0) {
+        useStore.setState((state) => ({ logs: { ...state.logs, [id]: allLines } }));
       }
     });
     return () => {
       alive = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id, sessionsBump]);
+  }, [id, sessionsBump, streamEpoch]);
 
   if (!task) {
     return (

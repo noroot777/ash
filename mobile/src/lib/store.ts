@@ -12,6 +12,7 @@ interface State {
   tasks: Task[];
   logs: Record<string, LogLine[]>;
   sessionsBump: number; // bumped on terminal status → detail re-pulls sessions
+  streamEpoch: number; // bumped on every SSE (re)connect → detail re-pulls .md to fill gaps missed while offline
 
   setConnected: (b: boolean) => void;
   setProjects: (p: ProjectView[]) => void;
@@ -31,8 +32,14 @@ export const useStore = create<State>((set) => ({
   tasks: [],
   logs: {},
   sessionsBump: 0,
+  streamEpoch: 0,
 
-  setConnected: (connected) => set({ connected }),
+  // Every (re)connect bumps streamEpoch — and we bump on each `true`, not only a
+  // false→true flip: a phone can hold a dead-but-undetected socket, so the detail
+  // screen must re-reconcile from .md on every fresh open() regardless of the
+  // prior connected value.
+  setConnected: (connected) =>
+    set((s) => ({ connected, streamEpoch: connected ? s.streamEpoch + 1 : s.streamEpoch })),
   setProjects: (projects) => set({ projects }),
   setProjectId: (projectId) => set({ projectId }),
   setTasks: (tasks) => set({ tasks }),

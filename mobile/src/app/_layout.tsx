@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { View, Text } from "react-native";
+import { AppState, View, Text } from "react-native";
 import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { SafeAreaProvider } from "react-native-safe-area-context";
@@ -36,6 +36,16 @@ export default function RootLayout() {
       }
       setBooted(true);
     })();
+  }, []);
+
+  // The OS suspends the SSE socket while the app is backgrounded; on return to the
+  // foreground we may hold a dead-but-undetected stream. Force a reconnect — which
+  // bumps streamEpoch (→ screens reconcile from .md) and runs the onOpen backfill.
+  useEffect(() => {
+    const sub = AppState.addEventListener("change", (s) => {
+      if (s === "active") connectSSE(() => { refreshAll().catch(() => {}); });
+    });
+    return () => sub.remove();
   }, []);
 
   if (!booted || !fontsLoaded) {
