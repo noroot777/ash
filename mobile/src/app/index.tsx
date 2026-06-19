@@ -8,7 +8,8 @@ import { useStore } from "@/lib/store";
 import { refreshAll } from "@/lib/data";
 import { STATUSES, STATUS_META } from "@/lib/constants";
 import { useTheme, radius } from "@/lib/theme";
-import { StatusDot, PriorityBars, Pill, ConnDot } from "@/components/ui";
+import { StatusDot, PriorityBars, ConnDot } from "@/components/ui";
+import { Ionicons } from "@expo/vector-icons";
 
 const PRIORITY_RANK: Record<string, number> = { urgent: 0, high: 1, medium: 2, low: 3, none: 4 };
 
@@ -106,39 +107,71 @@ function TaskList() {
         <Text style={{ color: theme.ink, fontSize: 30, fontWeight: "700", flex: 1 }}>任务</Text>
         <ConnDot connected={connected} />
         <Pressable onPress={() => router.push("/settings")} hitSlop={10}>
-          <Text style={{ color: theme.muted, fontSize: 20 }}>⚙︎</Text>
+          <Ionicons name="options-outline" size={24} color={theme.muted} />
         </Pressable>
       </View>
 
-      {/* Project selector */}
+      {/* Project selector — segmented-control style */}
       {projects.length > 0 && (
-        <View style={{ borderBottomWidth: 1, borderBottomColor: theme.line }}>
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={{ gap: 8, paddingHorizontal: 16, paddingVertical: 10, alignItems: "center" }}
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={{ paddingHorizontal: 16, paddingVertical: 10 }}
+        >
+          <View
+            style={{
+              flexDirection: "row",
+              alignItems: "center",
+              gap: 2,
+              padding: 4,
+              borderRadius: radius.pill,
+              borderWidth: 1,
+              borderColor: theme.line,
+            }}
           >
-            {projects.map((p) => (
-              <Pill key={p.id} label={p.name} active={p.id === projectId} onPress={() => setProjectId(p.id)} />
-            ))}
+            {projects.map((p) => {
+              const active = p.id === projectId;
+              return (
+                <Pressable
+                  key={p.id}
+                  onPress={() => setProjectId(p.id)}
+                  style={{
+                    paddingHorizontal: 16,
+                    paddingVertical: 7,
+                    borderRadius: radius.pill,
+                    backgroundColor: active ? theme.panel : "transparent",
+                    ...(active
+                      ? {
+                          shadowColor: "#000",
+                          shadowOpacity: 0.12,
+                          shadowRadius: 3,
+                          shadowOffset: { width: 0, height: 1 },
+                          elevation: 2,
+                        }
+                      : null),
+                  }}
+                >
+                  <Text
+                    style={{
+                      color: active ? theme.ink : theme.muted,
+                      fontSize: 14,
+                      fontWeight: active ? "600" : "500",
+                    }}
+                  >
+                    {p.name}
+                  </Text>
+                </Pressable>
+              );
+            })}
             <Pressable
               onPress={() => router.push("/project-new")}
-              hitSlop={8}
-              style={{
-                width: 32,
-                height: 32,
-                borderRadius: 16,
-                alignItems: "center",
-                justifyContent: "center",
-                borderWidth: 1,
-                borderColor: theme.line,
-                backgroundColor: theme.overlay,
-              }}
+              hitSlop={6}
+              style={{ paddingHorizontal: 12, paddingVertical: 7, alignItems: "center", justifyContent: "center" }}
             >
-              <Text style={{ color: theme.muted, fontSize: 18, marginTop: -2 }}>＋</Text>
+              <Ionicons name="add" size={18} color={theme.muted} />
             </Pressable>
-          </ScrollView>
-        </View>
+          </View>
+        </ScrollView>
       )}
 
       <SectionList
