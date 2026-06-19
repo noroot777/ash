@@ -3,6 +3,7 @@
 #
 #   npm run restart            # 或直接 ./scripts/restart.sh
 #   FORCE=1 npm run restart    # 即使有任务在跑也强制重启(会把它们判为 failed)
+#   SKIP_MCP=1 npm run restart # 只重建+重启 :4317,不刷新 MCP(不打断正在用 harness MCP 的会话)
 #
 # 跑法说明:
 #  - :4317 跑的是编译后的 dist,所以改完源码必须先 build 再重启,本脚本一并做掉。
@@ -47,15 +48,20 @@ else
 fi
 
 echo "▶ 3/3 刷新 harness MCP…"
-# 末尾锚定 $:只命中独立的 `node …/mcp/dist/index.js` 子进程,绝不误杀含该路径于 --mcp-config 里的
-# claude/codex 父进程(已验证)。
-MCP_PAT="$REPO/mcp/dist/index.js\$"
-N="$(pgrep -f "$MCP_PAT" 2>/dev/null | wc -l | tr -d ' ' || echo 0)"
-if [ "${N:-0}" -gt 0 ]; then
-  pkill -f "$MCP_PAT" 2>/dev/null || true
-  echo "  ✓ 清掉 $N 个旧 MCP 进程,下次会话/调用即用新代码"
+if [ -n "${SKIP_MCP:-}" ]; then
+  echo "  ⏭ SKIP_MCP:跳过——不动 MCP 子进程,正在用 harness MCP 的会话不会被打断。"
+  echo "     (代价:这些会话仍跑旧 mcp/dist;只有改了 mcp/ 才需去掉 SKIP_MCP 再跑一次。)"
 else
-  echo "  (没有在跑的旧 MCP 进程;新会话会直接用新 mcp/dist)"
+  # 末尾锚定 $:只命中独立的 `node …/mcp/dist/index.js` 子进程,绝不误杀含该路径于 --mcp-config 里的
+  # claude/codex 父进程(已验证)。
+  MCP_PAT="$REPO/mcp/dist/index.js\$"
+  N="$(pgrep -f "$MCP_PAT" 2>/dev/null | wc -l | tr -d ' ' || echo 0)"
+  if [ "${N:-0}" -gt 0 ]; then
+    pkill -f "$MCP_PAT" 2>/dev/null || true
+    echo "  ✓ 清掉 $N 个旧 MCP 进程,下次会话/调用即用新代码"
+  else
+    echo "  (没有在跑的旧 MCP 进程;新会话会直接用新 mcp/dist)"
+  fi
 fi
 
 echo "✅ 完成。提示:已经开着的 Codex/Claude 会话要重连或重开,才会用上新的 harness MCP。"
