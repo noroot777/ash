@@ -205,7 +205,7 @@ function TaskList() {
         </Pressable>
       )}
 
-      <SideDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} />
+      <SideDrawer open={drawerOpen} setOpen={setDrawerOpen} />
     </View>
   );
 }

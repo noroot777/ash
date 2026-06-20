@@ -9,6 +9,7 @@ import { IBMPlexMono_400Regular, IBMPlexMono_500Medium } from "@expo-google-font
 import { loadBaseURL, getBaseURL } from "@/lib/config";
 import { refreshAll } from "@/lib/data";
 import { useTheme, fonts } from "@/lib/theme";
+import { GestureHandlerRootView } from "react-native-gesture-handler";
 
 // How often the foregrounded app re-pulls the task list + statuses.
 const LIST_POLL_MS = 5000;
@@ -69,8 +70,9 @@ export default function RootLayout() {
   }
 
   return (
-    <SafeAreaProvider>
-      <StatusBar style="auto" />
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <SafeAreaProvider>
+        <StatusBar style="auto" />
       <Stack
         screenOptions={{
           headerStyle: { backgroundColor: theme.panel },
@@ -106,5 +108,6 @@ export default function RootLayout() {
         <Stack.Screen name="task/[id]" options={{ title: "" }} />
       </Stack>
     </SafeAreaProvider>
+    </GestureHandlerRootView>
   );
 }
