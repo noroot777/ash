@@ -32,7 +32,7 @@
     "typescript": "~5.9.2"
   },
   "scripts": {
-    "start": "REACT_NATIVE_PACKAGER_HOSTNAME=100.92.114.37 expo start",
+    "start": "REACT_NATIVE_PACKAGER_HOSTNAME=$(/Applications/Tailscale.app/Contents/MacOS/Tailscale ip -4 | head -1) expo start",
     "start:lan": "expo start",
     "android": "expo start --android",
     "ios": "expo start --ios",
