@@ -47,6 +47,7 @@ const taskShape = z.object({
   body: z.string().optional().describe("交给 agent 执行的 prompt / 目标"),
   agentType: AGENT_TYPE.optional().describe("覆盖批次默认 agent"),
   priority: PRIORITY.optional(),
+  labels: z.array(z.string()).optional().describe("任务标签"),
   dependsOn: z.array(z.string()).optional().describe("同批任务的 key（解析成 id）或已存在的任务 id"),
 });
 
@@ -114,7 +115,11 @@ server.registerTool(
       tasks: z.array(taskShape).min(1),
       chain: z.boolean().optional().describe("按数组顺序串依赖 A→B→C→D"),
       run: z.boolean().optional().describe("建完立即运行该分组"),
-      defaults: z.object({ agentType: AGENT_TYPE.optional(), priority: PRIORITY.optional() }).optional().describe("每个任务的兜底值，任务自身可覆盖"),
+      defaults: z.object({
+        agentType: AGENT_TYPE.optional(),
+        priority: PRIORITY.optional(),
+        labels: z.array(z.string()).optional(),
+      }).optional().describe("每个任务的兜底值，任务自身可覆盖"),
     },
   },
   async ({ groupId, ...body }) => {
@@ -179,7 +184,7 @@ server.registerTool(
         (t) => (!projectId || t.projectId === projectId) && (!groupId || t.groupId === groupId),
       );
       return ok(rows.map((t) => ({
-        id: t.id, title: t.title, status: t.status, agentType: t.agentType, dependsOn: t.dependsOn, groupId: t.groupId,
+        id: t.id, title: t.title, status: t.status, agentType: t.agentType, labels: t.labels, dependsOn: t.dependsOn, groupId: t.groupId,
       })));
     } catch (e) { return fail(e); }
   },
