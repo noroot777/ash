@@ -14,6 +14,7 @@
     "dev:server": "PORT=4317 npm -w server run dev",
     "dev:web": "npm -w web run dev",
     "build": "npm -w shared run build && npm -w web run build && npm -w server run build && npm -w mcp run build",
+    "build:mobile": "cd mobile && npx expo export -p web",
     "restart": "bash scripts/restart.sh",
     "start": "npm -w server run start",
     "mcp": "npm -w mcp run start",

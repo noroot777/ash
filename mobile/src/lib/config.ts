@@ -1,6 +1,7 @@
 // Backend base URL — the one piece of config the user sets. Persisted in
 // AsyncStorage and cached in-module so the api/sse layers can read it
 // synchronously after `loadBaseURL()` has run once at boot.
+import { Platform } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
 const KEY = "harness.baseURL";
@@ -14,6 +15,12 @@ export function getBaseURL(): string | null {
 
 export async function loadBaseURL(): Promise<string | null> {
   cached = await AsyncStorage.getItem(KEY);
+  // On web (the desktop preview, served from the harness itself) default to the
+  // serving origin so the preview talks to that same backend with zero setup.
+  // Native is left untouched — a phone can't assume the server's origin.
+  if (!cached && Platform.OS === "web" && typeof window !== "undefined" && window.location?.origin) {
+    cached = normalize(window.location.origin);
+  }
   return cached;
 }
 
