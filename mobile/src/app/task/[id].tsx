@@ -24,6 +24,8 @@ import { Conversation } from "@/components/Conversation";
 import { Markdown } from "@/components/Markdown";
 import { PriorityBars } from "@/components/ui";
 import { SignalBar } from "@/components/SignalBar";
+import { TaskTimeChip } from "@/lib/time";
+import type { Session } from "@harness/shared";
 import type { LogLine } from "@/lib/log";
 import { snapshotToLogLines } from "@/lib/log";
 
@@ -43,6 +45,7 @@ export default function TaskDetail() {
   // Conversation lives locally and is polled from the session .md — no global
   // store, no live stream. `lines` is the parsed, displayable transcript.
   const [lines, setLines] = useState<LogLine[]>([]);
+  const [sessions, setSessions] = useState<Session[]>([]);
   const [input, setInput] = useState("");
   const [refreshing, setRefreshing] = useState(false);
   const scrollRef = useRef<ScrollView>(null);
@@ -59,6 +62,7 @@ export default function TaskDetail() {
       all.push(...snapshotToLogLines(out, s.id, s.agentType));
     }
     setLines(all);
+    setSessions(ss);
   }, [id]);
 
   const onRefresh = useCallback(async () => {
@@ -220,6 +224,7 @@ export default function TaskDetail() {
                 #{l}
               </Text>
             ))}
+            <TaskTimeChip task={task} />
           </View>
         </View>
       </View>
@@ -247,7 +252,7 @@ export default function TaskDetail() {
         ) : null}
 
         {/* Conversation (polled from the session .md) */}
-        <Conversation lines={lines} />
+        <Conversation lines={lines} sessions={sessions} taskEndedAt={task.endedAt} />
 
         {lines.length === 0 ? (
           <Text style={{ color: theme.faint, fontSize: 13, textAlign: "center", paddingTop: 20 }}>

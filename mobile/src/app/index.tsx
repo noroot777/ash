@@ -8,6 +8,7 @@ import { useStore } from "@/lib/store";
 import { refreshAll } from "@/lib/data";
 import { STATUSES, STATUS_META } from "@/lib/constants";
 import { useTheme, radius, fonts } from "@/lib/theme";
+import { TaskTimeChip, useTick } from "@/lib/time";
 import { PriorityBars } from "@/components/ui";
 import { SignalBar } from "@/components/SignalBar";
 import { SideDrawer } from "@/components/SideDrawer";
@@ -15,7 +16,7 @@ import { Ionicons } from "@expo/vector-icons";
 
 const PRIORITY_RANK: Record<string, number> = { urgent: 0, high: 1, medium: 2, low: 3, none: 4 };
 
-function TaskRow({ task, onPress }: { task: Task; onPress: () => void }) {
+function TaskRow({ task, nowMs, onPress }: { task: Task; nowMs?: number; onPress: () => void }) {
   const theme = useTheme();
   return (
     <Pressable
@@ -38,7 +39,7 @@ function TaskRow({ task, onPress }: { task: Task; onPress: () => void }) {
         <Text style={{ color: theme.ink, fontSize: 15, fontFamily: fonts.bodySemi }} numberOfLines={2}>
           {task.title || "(无标题)"}
         </Text>
-        <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+        <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
           {task.agentType ? (
             <Text style={{ color: theme.muted, fontSize: 12, fontFamily: fonts.mono }}>@{task.agentType}</Text>
           ) : null}
@@ -47,6 +48,7 @@ function TaskRow({ task, onPress }: { task: Task; onPress: () => void }) {
               #{l}
             </Text>
           ))}
+          <TaskTimeChip task={task} nowMs={nowMs} />
         </View>
       </View>
       <PriorityBars priority={task.priority} />
@@ -69,6 +71,13 @@ function TaskList() {
   const [refreshing, setRefreshing] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const currentProject = projects.find((p) => p.id === projectId) ?? null;
+  // One shared ticker for the whole list — drives every running row's live 用时
+  // off a single interval instead of one per row.
+  const hasLive = useMemo(
+    () => tasks.some((t) => t.projectId === projectId && (t.status === "running" || t.status === "queued")),
+    [tasks, projectId],
+  );
+  const nowMs = useTick(hasLive);
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -124,7 +133,7 @@ function TaskList() {
       <SectionList
         sections={sections}
         keyExtractor={(t) => t.id}
-        renderItem={({ item }) => <TaskRow task={item} onPress={() => router.push(`/task/${item.id}`)} />}
+        renderItem={({ item }) => <TaskRow task={item} nowMs={nowMs} onPress={() => router.push(`/task/${item.id}`)} />}
         renderSectionHeader={({ section }) => (
           <View
             style={{
