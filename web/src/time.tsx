@@ -65,31 +65,32 @@ export function Duration({
   return t ? <span className={className}>{t}</span> : null;
 }
 
-// Compact lifecycle-time chip — the title-row replacement for the old full-width
-// 创建·开始·结束·用时 row. Shows the single most relevant figure (用时 once a run
-// exists, otherwise the 创建 instant); the full breakdown lives in the tooltip so
-// it costs no extra width and stays glued to the title. Live-ticks while running.
+// Lifecycle-time chip for the detail header. 创建/开始 used to hide in the tooltip;
+// now they sit inline and always-on (创建 … · 开始 … · 用时 …) so the timeline is
+// readable without hovering. 用时 live-ticks while running; 结束时刻 stays in the
+// tooltip to keep the row compact. The title is flex-1/min-w-0, so it absorbs the
+// extra width.
 export function TaskTimeChip({ task, className }: { task: Task; className?: string }) {
   const running = task.status === "running" || task.status === "queued";
-  const tip = [
-    `创建 ${formatInstant(task.createdAt)}`,
-    task.startedAt && `开始 ${formatInstant(task.startedAt)}`,
-    task.endedAt && `结束 ${formatInstant(task.endedAt)}`,
-  ]
-    .filter(Boolean)
-    .join(" · ");
+  const dot = <span className="text-line2">·</span>;
   return (
     <span
-      title={tip}
-      className={`inline-flex shrink-0 items-center gap-1 whitespace-nowrap text-[11px] text-faint ${className ?? ""}`}
+      className={`inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap text-[11px] text-faint ${className ?? ""}`}
     >
       <Clock size={12} className="shrink-0" />
-      {task.startedAt ? (
-        <span className={running ? "text-muted" : undefined}>
-          用时 <Duration from={task.startedAt} to={task.endedAt} />
-        </span>
-      ) : (
-        <span>创建 {formatInstant(task.createdAt)}</span>
+      <span>创建 {formatInstant(task.createdAt)}</span>
+      {task.startedAt && (
+        <>
+          {dot}
+          <span>开始 {formatInstant(task.startedAt)}</span>
+          {dot}
+          <span
+            className={running ? "text-muted" : undefined}
+            title={task.endedAt ? `结束 ${formatInstant(task.endedAt)}` : undefined}
+          >
+            用时 <Duration from={task.startedAt} to={task.endedAt} />
+          </span>
+        </>
       )}
     </span>
   );

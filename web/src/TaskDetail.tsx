@@ -1,10 +1,10 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { Task, Group, Session, TaskStatus, Priority, AgentType } from "@harness/shared";
 import { isUserSettableStatus, canArchive, AGENT_TYPES, parseSessionOutput as parseSnapshot } from "@harness/shared";
-import { CaretDown, Play, Stop, Trash, ArrowsDownUp, ArrowsClockwise, Robot, X } from "@phosphor-icons/react";
+import { CaretDown, Play, Stop, Trash, ArrowsDownUp, ArrowsClockwise, Robot, X, DownloadSimple } from "@phosphor-icons/react";
 import { api } from "./api";
 import { STATUSES, PRIORITIES } from "./constants";
-import { ToolCall, ThinkingBlock, ResumeCopyButtons, CollapsibleText } from "./ui";
+import { ToolCall, ThinkingBlock, ResumeCopyButtons, CollapsibleText, CopyButton } from "./ui";
 import { Markdown } from "./Markdown";
 import { StatusIcon } from "./StatusIcon";
 import { PriorityIcon, LabelAdder } from "./ui";
@@ -86,6 +86,13 @@ export function TaskDetail({
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
   }, [logs.length, snapshot.length]);
 
+  // The conversation, assembled once here so the header's copy/export and the body
+  // bubbles share exactly one source of truth.
+  const items = useMemo(
+    () => buildConversation({ task, snapshot, logs, sessions, primaryAgent: task.agentType ?? "claude" }),
+    [task, snapshot, logs, sessions],
+  );
+
   const depOptions = allTasks.filter((t) => t.id !== task.id && !task.dependsOn.includes(t.id));
 
   return (
@@ -139,6 +146,23 @@ export function TaskDetail({
               >
                 归档
               </button>
+            )}
+            {items.length > 0 && (
+              <>
+                <CopyButton
+                  text={conversationToText(items, task)}
+                  title="复制全部对话"
+                  size={15}
+                  className="h-[30px] w-[30px] hover:bg-raised"
+                />
+                <button
+                  onClick={() => downloadConversation(items, task)}
+                  className="grid h-[30px] w-[30px] place-items-center rounded-md text-muted transition-colors hover:bg-raised hover:text-ink"
+                  title="导出对话为 .md 文件"
+                >
+                  <DownloadSimple size={15} />
+                </button>
+              </>
             )}
             <button
               onClick={onDelete}
@@ -246,8 +270,8 @@ export function TaskDetail({
         {/* The run as a conversation: prior output (snapshotted per session on
             load) and the live stream merge into one bubble per run, so a running
             task you reload doesn't split into a stale + live pair. */}
-        <Conversation task={task} snapshot={snapshot} logs={logs} sessions={sessions} primaryAgent={task.agentType ?? "claude"} />
-        {snapshot.length === 0 && logs.length === 0 && (
+        <Conversation items={items} />
+        {items.length === 0 && (
           <p className="font-sans text-faint">点击「运行」开始，输出会实时流式显示在这里。</p>
         )}
       </div>
@@ -276,7 +300,7 @@ type AgentItem = {
   label: string;
   time?: string | null; // run start (header shows 开始时刻 · 用时)
   endedAt?: string | null; // run end (real, or estimated from the next run's start) for a static 用时
-  nodes: ReactNode[]; // pre-rendered snapshot content
+  snapshotText?: string; // raw snapshot markdown (rendered + serialized for copy)
   lines: LogLine[]; // live lines, rendered via groupContent
 };
 type ConvItem =
@@ -288,7 +312,10 @@ type ConvItem =
 // parseSnapshot / Seg / LEGACY_SYS_MARKER 已上移到 @harness/shared
 // （parseSessionOutput, ConvSeg），web 与 mobile 共用同一份解析逻辑，避免漂移。
 
-function Conversation({
+// Assemble the run into a flat list of conversation items (snapshot + live stream
+// stitched per session) with per-turn timing. Pure data — no JSX — so the same
+// list drives both rendering and copy/export serialization.
+function buildConversation({
   task,
   snapshot,
   logs,
@@ -300,7 +327,7 @@ function Conversation({
   logs: LogLine[];
   sessions: Session[];
   primaryAgent: AgentType;
-}) {
+}): ConvItem[] {
   // The end fallback for a run's LAST turn, when the session itself recorded none:
   // the next run's start (it was superseded then), else the task's own end. The
   // per-turn ends below come from the interjection markers; this is only the tail.
@@ -326,7 +353,7 @@ function Conversation({
         session: s,
         showResume: i === lastAgent,
         label: s.executor,
-        nodes: [<Markdown key={`snap-${s.id}-${i}`} text={seg.text} />],
+        snapshotText: seg.text,
         lines: [],
       });
     });
@@ -353,7 +380,7 @@ function Conversation({
     // text / thinking / tool / error → part of the current run's bubble
     if (!cur || cur.sessionId !== l.sessionId || cur.agent !== l.agent) {
       const sess = l.sessionId ? sessions.find((s) => s.id === l.sessionId) : undefined;
-      cur = { kind: "agent", sessionId: l.sessionId, agent: l.agent, session: sess, showResume: true, label: sess?.executor ?? `@${l.agent ?? primaryAgent}`, nodes: [], lines: [] };
+      cur = { kind: "agent", sessionId: l.sessionId, agent: l.agent, session: sess, showResume: true, label: sess?.executor ?? `@${l.agent ?? primaryAgent}`, lines: [] };
       items.push(cur);
     }
     cur.lines.push(l);
@@ -386,17 +413,72 @@ function Conversation({
     it.endedAt = nextAt ?? (it.sessionId ? runEnd.get(it.sessionId) ?? null : null);
   }
 
+  return items;
+}
+
+// One item's plain body text — the agent's markdown + only its live `text` lines,
+// the user's reply, or a 〔系统〕 marker. Folded 思考/工具/错误 are intentionally
+// omitted (用户选「仅对话正文」). Shared by per-bubble copy and full export.
+function itemBodyText(it: ConvItem): string {
+  if (it.kind === "user") return it.text;
+  if (it.kind === "system") return `〔系统〕${it.text}`;
+  if (it.kind === "done") return "";
+  const live = it.lines.filter((l) => l.kind === "text").map((l) => l.text).join("");
+  return [it.snapshotText ?? "", live].filter(Boolean).join("\n\n");
+}
+
+// The whole conversation as Markdown: title (+ objective), then one section per
+// turn carrying its speaker and time. Empty turns and 结束 markers are dropped.
+function conversationToText(items: ConvItem[], task: Task): string {
+  const parts: string[] = [`# ${task.title}`];
+  if (task.body?.trim()) parts.push(`> ${task.body.trim().replace(/\n/g, "\n> ")}`);
+  for (const it of items) {
+    if (it.kind === "system") {
+      parts.push(`_〔系统〕${it.text}${it.at ? ` · ${formatInstant(it.at)}` : ""}_`);
+      continue;
+    }
+    if (it.kind === "done") continue;
+    const body = itemBodyText(it).trim();
+    if (!body) continue;
+    const who = it.kind === "user" ? "你" : it.label;
+    const when = (it.kind === "user" ? it.at : it.time) ?? null;
+    parts.push(`## ${who}${when ? ` · ${formatInstant(when)}` : ""}\n\n${body}`);
+  }
+  return parts.join("\n\n") + "\n";
+}
+
+// Export the conversation as a downloaded .md file (client-side Blob, no server).
+function downloadConversation(items: ConvItem[], task: Task) {
+  const name = (task.title || task.id).replace(/[\\/:*?"<>|]/g, "_").slice(0, 80).trim() || "conversation";
+  const blob = new Blob([conversationToText(items, task)], { type: "text/markdown;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `${name}.md`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+// Render the assembled conversation: agent runs as left bubbles, human replies as
+// right bubbles, interjections as centered markers. Each agent/user bubble gets a
+// hover copy affordance (copies that turn's plain body).
+function Conversation({ items }: { items: ConvItem[] }) {
   return (
     <>
       {items.map((it, i) => {
         if (it.kind === "user") return <UserBubble key={i} text={it.text} at={it.at} />;
         if (it.kind === "system") return <SystemNote key={i} text={it.text} at={it.at} />;
         if (it.kind === "done") return <div key={i} className="my-2 text-center text-xs text-faint">{it.text}</div>;
-        const content = [...it.nodes, ...groupContent(it.lines)];
-        if (!content.length) return null;
+        const nodes = [
+          ...(it.snapshotText ? [<Markdown key="snap" text={it.snapshotText} />] : []),
+          ...groupContent(it.lines),
+        ];
+        if (!nodes.length) return null;
         return (
-          <AgentBubble key={i} label={it.label} time={it.time} endedAt={it.endedAt} session={it.session} showResume={it.showResume}>
-            {content}
+          <AgentBubble key={i} label={it.label} time={it.time} endedAt={it.endedAt} session={it.session} showResume={it.showResume} copyText={itemBodyText(it)}>
+            {nodes}
           </AgentBubble>
         );
       })}
@@ -438,6 +520,7 @@ function AgentBubble({
   endedAt,
   session,
   showResume,
+  copyText,
   children,
 }: {
   label?: string;
@@ -445,10 +528,11 @@ function AgentBubble({
   endedAt?: string | null;
   session?: Session;
   showResume?: boolean;
+  copyText?: string;
   children: ReactNode;
 }) {
   return (
-    <div className="mb-3">
+    <div className="group mb-3">
       <div className="rounded-lg border border-line bg-raised/40 px-3 py-2">
         <div className="mb-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-muted">
           <span className="font-medium text-ink/70">{label || "智能体"}</span>
@@ -465,6 +549,13 @@ function AgentBubble({
                 ⏱ <Duration from={time} to={endedAt} /> 用时
               </span>
             </>
+          )}
+          {copyText && (
+            <CopyButton
+              text={copyText}
+              title="复制这条"
+              className="ml-auto h-6 w-6 opacity-0 hover:bg-raised group-hover:opacity-100"
+            />
           )}
         </div>
         {children}
@@ -502,7 +593,7 @@ function SystemNote({ text, at }: { text: string; at?: string }) {
 // A human reply / continuation: right-aligned bubble with "你 · 时间".
 function UserBubble({ text, at }: { text: string; at?: string }) {
   return (
-    <div className="mb-3 flex flex-col items-end">
+    <div className="group mb-3 flex flex-col items-end">
       <div className="max-w-[88%] rounded-lg border border-accent/30 bg-accent/[0.08] px-3 py-2">
         <div className="mb-1 flex items-center gap-2 text-[11px] text-muted">
           <span className="font-medium text-ink/70">你</span>
@@ -512,6 +603,11 @@ function UserBubble({ text, at }: { text: string; at?: string }) {
               <span className="text-faint">{formatInstant(at)}</span>
             </>
           )}
+          <CopyButton
+            text={text}
+            title="复制这条"
+            className="ml-auto h-6 w-6 opacity-0 hover:bg-overlay group-hover:opacity-100"
+          />
         </div>
         <div className="whitespace-pre-wrap break-words text-[13px] text-ink">{text}</div>
       </div>

@@ -1,6 +1,6 @@
 import { useState, useEffect, useLayoutEffect, useRef } from "react";
 import type { Priority, Session, ProjectHealth, ProjectView } from "@harness/shared";
-import { Plus, CaretRight, CaretDown, GitBranch } from "@phosphor-icons/react";
+import { Plus, CaretRight, CaretDown, GitBranch, Copy, Check } from "@phosphor-icons/react";
 import { shortPath } from "./util";
 import { Duration, formatInstant } from "./time";
 import { api } from "./api";
@@ -345,6 +345,93 @@ export function ResumeButtons({ s }: { s: Session }) {
       <SessionTime s={s} />
       <ResumeCopyButtons s={s} />
     </div>
+  );
+}
+
+// Generic copy-to-clipboard icon button: writes `text`, then flips to a ✓ for
+// 1.2s. Sizing / rounding / hover all come from `className` so it works equally as
+// a header action and as a hover-reveal affordance inside a conversation bubble.
+export function CopyButton({
+  text,
+  title = "复制",
+  className = "",
+  size = 13,
+}: {
+  text: string;
+  title?: string;
+  className?: string;
+  size?: number;
+}) {
+  const [done, setDone] = useState(false);
+  return (
+    <button
+      type="button"
+      title={done ? "已复制" : title}
+      onClick={(e) => {
+        e.stopPropagation();
+        if (!text) return;
+        navigator.clipboard.writeText(text);
+        setDone(true);
+        setTimeout(() => setDone(false), 1200);
+      }}
+      className={`grid place-items-center rounded-md text-faint transition hover:text-ink ${className}`}
+    >
+      {done ? <Check size={size} weight="bold" className="text-emerald-600" /> : <Copy size={size} />}
+    </button>
+  );
+}
+
+// Drag handle for a sidebar's right edge. The parent owns the width (so it can
+// persist it); this just reports new values via onChange, clamped to [min, max].
+// Straddles the border for an easy grab target; double-click resets. The drag is
+// tracked on window so it keeps following the cursor outside the thin handle.
+export function ResizeHandle({
+  width,
+  onChange,
+  min = 220,
+  max = 560,
+  resetWidth = 300,
+}: {
+  width: number;
+  onChange: (w: number) => void;
+  min?: number;
+  max?: number;
+  resetWidth?: number;
+}) {
+  const start = useRef<{ x: number; w: number } | null>(null);
+  useEffect(() => {
+    const move = (e: MouseEvent) => {
+      if (!start.current) return;
+      const w = Math.min(max, Math.max(min, start.current.w + (e.clientX - start.current.x)));
+      onChange(w);
+    };
+    const up = () => {
+      if (!start.current) return;
+      start.current = null;
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    };
+    window.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", up);
+    return () => {
+      window.removeEventListener("mousemove", move);
+      window.removeEventListener("mouseup", up);
+    };
+  }, [min, max, onChange]);
+  return (
+    <div
+      role="separator"
+      aria-orientation="vertical"
+      title="拖动调整宽度（双击重置）"
+      onMouseDown={(e) => {
+        e.preventDefault();
+        start.current = { x: e.clientX, w: width };
+        document.body.style.cursor = "col-resize";
+        document.body.style.userSelect = "none";
+      }}
+      onDoubleClick={() => onChange(resetWidth)}
+      className="absolute right-0 top-0 z-10 h-full w-1.5 translate-x-1/2 cursor-col-resize transition-colors hover:bg-accent/30"
+    />
   );
 }
 

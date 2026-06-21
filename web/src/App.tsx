@@ -17,7 +17,7 @@ import { Menu } from "./Menu";
 import { NewProjectModal, NewGroupModal, ConfirmModal } from "./Modal";
 import { GroupsPanel } from "./GroupsPanel";
 import { ProjectSettings } from "./ProjectSettings";
-import { HealthDot, BranchChip, ProjectAvatar } from "./ui";
+import { HealthDot, BranchChip, ProjectAvatar, ResizeHandle } from "./ui";
 import { shortPath } from "./util";
 import { runAction, canStopTask } from "./taskActions";
 import { canArchive } from "@harness/shared";
@@ -46,6 +46,15 @@ export function App() {
   const [debateOpen, setDebateOpen] = useState<DebateStyle | null>(null);
   const [confirmDel, setConfirmDel] = useState<{ id: string; title: string } | null>(null);
   const [view, setView] = useState<"list" | "board" | "archived">("list");
+  // Sidebar width is user-draggable; persist so it survives reloads. Clamp on read
+  // in case of a stale/garbage value.
+  const [sidebarW, setSidebarW] = useState(() => {
+    const v = Number(localStorage.getItem("harness.sidebarWidth"));
+    return v >= 220 && v <= 560 ? v : 300;
+  });
+  useEffect(() => {
+    localStorage.setItem("harness.sidebarWidth", String(sidebarW));
+  }, [sidebarW]);
 
   const connected = useServerEvents(
     useCallback((ev) => {
@@ -474,8 +483,9 @@ export function App() {
           </div>
         ) : (
           <>
-            <aside className="flex w-[300px] shrink-0 flex-col border-r border-line">
+            <aside style={{ width: sidebarW }} className="relative flex shrink-0 flex-col border-r border-line">
               <TaskList tasks={visible} groups={groups} selected={selected} onSelect={setSelected} />
+              <ResizeHandle width={sidebarW} onChange={setSidebarW} />
             </aside>
             <div className="min-w-0 flex-1">
               {current ? (
