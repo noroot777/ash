@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { Task, Group, Session, TaskStatus, Priority, AgentType } from "@harness/shared";
-import { isUserSettableStatus, AGENT_TYPES, parseSessionOutput as parseSnapshot } from "@harness/shared";
+import { isUserSettableStatus, canArchive, AGENT_TYPES, parseSessionOutput as parseSnapshot } from "@harness/shared";
 import { CaretDown, Play, Stop, Trash, ArrowsDownUp, ArrowsClockwise, Robot, X } from "@phosphor-icons/react";
 import { api } from "./api";
 import { STATUSES, PRIORITIES } from "./constants";
@@ -36,6 +36,8 @@ export function TaskDetail({
   onPatch,
   onCreateGroup,
   onDelete,
+  onArchive,
+  onUnarchive,
 }: {
   task: Task;
   groups: Group[];
@@ -48,6 +50,8 @@ export function TaskDetail({
   onPatch: (patch: Partial<Task>) => void;
   onCreateGroup: () => void;
   onDelete: () => void;
+  onArchive: () => void;
+  onUnarchive: () => void;
 }) {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [snapshot, setSnapshot] = useState<{ s: Session; out: string }[]>([]);
@@ -91,7 +95,20 @@ export function TaskDetail({
           <EditableTitle title={task.title} onSave={(t) => onPatch({ title: t, autoTitle: false })} />
           <div className="flex shrink-0 items-center gap-2">
             <TaskTimeChip task={task} />
-            {canStopTask(task.status) ? (
+            {task.archived ? (
+              <>
+                <span className="inline-flex items-center gap-1.5 rounded-md bg-overlay px-3 py-1.5 text-[13px] font-medium text-muted" title="任务已归档（只读）">
+                  已归档
+                </span>
+                <button
+                  onClick={onUnarchive}
+                  className="inline-flex items-center gap-1.5 rounded-md border border-line px-3 py-1.5 text-[13px] font-medium text-muted transition-colors hover:bg-raised hover:text-ink"
+                >
+                  <ArrowsClockwise size={13} />
+                  取消归档
+                </button>
+              </>
+            ) : canStopTask(task.status) ? (
               <button
                 onClick={onStop}
                 className="inline-flex items-center gap-1.5 rounded-md border border-red-500/40 px-3 py-1.5 text-[13px] font-medium text-red-600 transition-colors hover:bg-red-500/10"
@@ -101,7 +118,7 @@ export function TaskDetail({
               </button>
             ) : (
               (() => {
-                const a = runAction(task.status);
+                const a = runAction(task.status, task.archived);
                 return (
                   <button
                     onClick={onRun}
@@ -113,6 +130,15 @@ export function TaskDetail({
                   </button>
                 );
               })()
+            )}
+            {!task.archived && canArchive(task.status) && (
+              <button
+                onClick={onArchive}
+                className="inline-flex items-center rounded-md px-2.5 py-1.5 text-[13px] font-medium text-muted transition-colors hover:bg-raised hover:text-ink"
+                title="归档任务（从列表收起，可恢复）"
+              >
+                归档
+              </button>
             )}
             <button
               onClick={onDelete}
@@ -130,7 +156,7 @@ export function TaskDetail({
 
         {/* All controls on one wrapping row: attributes | labels | deps·schedule | session */}
         <div className="mt-3 flex flex-wrap items-center gap-x-2.5 gap-y-2 text-[12px]">
-          <div className="flex flex-wrap items-center gap-1.5">
+          <div className={`flex flex-wrap items-center gap-1.5 ${task.archived ? "pointer-events-none opacity-60" : ""}`}>
             <Prop
               value={task.status}
               onChange={(v) => onPatch({ status: v as TaskStatus })}
@@ -227,7 +253,7 @@ export function TaskDetail({
       </div>
 
       {task.mode === "single" && (sessions.length > 0 || snapshot.length > 0 || logs.length > 0) && (
-        <ReplyBox onReply={onReply} disabled={task.status === "running" || task.status === "queued"} />
+        <ReplyBox onReply={onReply} disabled={task.status === "running" || task.status === "queued" || !!task.archived} />
       )}
     </main>
   );

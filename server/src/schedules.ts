@@ -53,6 +53,9 @@ const sameMinute = (a: string, b: Date) => {
 async function fire(taskId: string) {
   const t = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!t || t.status === "running" || t.status === "queued") return;
+  // Archived = frozen: a schedule never fires an archived task. We skip here
+  // rather than disabling the schedule, so unarchiving restores it automatically.
+  if (t.archived) return;
   // Respect a paused group: a pause means "halt this group", so the scheduler
   // must not sneak a group member past it. The task fires on the next due tick
   // once the group is resumed.

@@ -174,17 +174,17 @@ server.registerTool(
   "list_tasks",
   {
     title: "列出任务",
-    description: "列出任务，可按 projectId / groupId 过滤。返回精简字段（id/title/status/agentType/dependsOn/groupId）。",
-    inputSchema: { projectId: z.string().optional(), groupId: z.string().optional() },
+    description: "列出任务，可按 projectId / groupId 过滤。默认隐藏已归档任务（includeArchived:true 才带上）。返回精简字段（id/title/status/archived/agentType/dependsOn/groupId）。",
+    inputSchema: { projectId: z.string().optional(), groupId: z.string().optional(), includeArchived: z.boolean().optional().describe("默认 false：列表不含已归档任务") },
   },
-  async ({ projectId, groupId }) => {
+  async ({ projectId, groupId, includeArchived }) => {
     try {
       const all = (await call("GET", "/tasks")) as Array<Record<string, unknown>>;
       const rows = all.filter(
-        (t) => (!projectId || t.projectId === projectId) && (!groupId || t.groupId === groupId),
+        (t) => (!projectId || t.projectId === projectId) && (!groupId || t.groupId === groupId) && (includeArchived || !t.archived),
       );
       return ok(rows.map((t) => ({
-        id: t.id, title: t.title, status: t.status, agentType: t.agentType, labels: t.labels, dependsOn: t.dependsOn, groupId: t.groupId,
+        id: t.id, title: t.title, status: t.status, archived: t.archived, agentType: t.agentType, labels: t.labels, dependsOn: t.dependsOn, groupId: t.groupId,
       })));
     } catch (e) { return fail(e); }
   },

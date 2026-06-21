@@ -4,14 +4,15 @@ import type { TaskStatus } from "@harness/shared";
 // surface (task detail, debate view, Cmd-K, the `r` key) agrees on what's
 // allowed. Notably: a finished (done) task shows a disabled「已完成」, never a
 // live「运行」, so it can't be casually re-run.
-export type RunActionKind = "run" | "retry" | "busy" | "gate" | "done";
+export type RunActionKind = "run" | "retry" | "busy" | "gate" | "done" | "archived";
 export interface RunAction {
   kind: RunActionKind;
   label: string;
   canClick: boolean;
 }
 
-export function runAction(status: TaskStatus): RunAction {
+export function runAction(status: TaskStatus, archived = false): RunAction {
+  if (archived) return { kind: "archived", label: "已归档", canClick: false };
   switch (status) {
     case "backlog":
     case "canceled":

@@ -20,6 +20,7 @@ import { ProjectSettings } from "./ProjectSettings";
 import { HealthDot } from "./ui";
 import { shortPath } from "./util";
 import { runAction, canStopTask } from "./taskActions";
+import { canArchive } from "@harness/shared";
 
 export function App() {
   // Deep-link state via the URL (?project=…&task=…): a refresh stays on the same
@@ -42,7 +43,7 @@ export function App() {
   const [groupsOpen, setGroupsOpen] = useState(false);
   const [debateOpen, setDebateOpen] = useState<DebateStyle | null>(null);
   const [confirmDel, setConfirmDel] = useState<{ id: string; title: string } | null>(null);
-  const [view, setView] = useState<"list" | "board">("list");
+  const [view, setView] = useState<"list" | "board" | "archived">("list");
 
   const connected = useServerEvents(
     useCallback((ev) => {
@@ -103,9 +104,14 @@ export function App() {
     });
   }, [projectId]);
 
-  const visible = tasks;
+  const active = useMemo(() => tasks.filter((t) => !t.archived), [tasks]);
+  const archivedTasks = useMemo(
+    () => tasks.filter((t) => t.archived).sort((x, y) => (y.archivedAt ?? "").localeCompare(x.archivedAt ?? "")),
+    [tasks],
+  );
+  const visible = view === "archived" ? archivedTasks : active;
   const ordered = useMemo(() => orderedTasks(visible), [visible]);
-  const current = visible.find((t) => t.id === selected) ?? null;
+  const current = tasks.find((t) => t.id === selected) ?? null;
   const project = projects.find((p) => p.id === projectId) ?? null;
   const projectName = project?.name ?? "项目";
 
@@ -136,11 +142,20 @@ export function App() {
     try { await api.retryTask(id); } catch (e) { console.warn("retry rejected:", e); }
   }, []);
 
+  const archive = useCallback(async (id: string) => {
+    try { const t = await api.archiveTask(id); setTasks((ts) => ts.map((x) => (x.id === id ? t : x))); }
+    catch (e) { console.warn("archive rejected:", e); }
+  }, []);
+  const unarchive = useCallback(async (id: string) => {
+    try { const t = await api.unarchiveTask(id); setTasks((ts) => ts.map((x) => (x.id === id ? t : x))); }
+    catch (e) { console.warn("unarchive rejected:", e); }
+  }, []);
+
   // The single primary action for a task, dispatched by its status — used by the
   // `r` key and Cmd-K so they agree with the buttons (no re-running a done task).
   const primary = useCallback(
     (t: Task) => {
-      const a = runAction(t.status);
+      const a = runAction(t.status, t.archived);
       if (a.kind === "run") run(t.id);
       else if (a.kind === "retry") retry(t.id);
     },
@@ -287,10 +302,12 @@ export function App() {
     const cmds: Command[] = [];
     // Current task first — the most contextual block.
     if (current) {
-      const a = runAction(current.status);
+      const a = runAction(current.status, current.archived);
       const g = `当前任务 · ${current.title}`;
       if (a.canClick) cmds.push({ id: "run", group: g, label: a.label, hint: "R", run: () => primary(current) });
       if (canStopTask(current.status)) cmds.push({ id: "stop", group: g, label: "停止运行", run: () => stop(current.id) });
+      if (current.archived) cmds.push({ id: "unarchive", group: g, label: "取消归档", run: () => unarchive(current.id) });
+      else if (canArchive(current.status)) cmds.push({ id: "archive", group: g, label: "归档任务", run: () => archive(current.id) });
       cmds.push({ id: "del", group: g, label: "删除任务", run: () => del(current.id, current.title) });
       for (const p of PRIORITIES)
         cmds.push({ id: "pr-" + p.key, group: "设为优先级", label: p.label, run: () => patch(current.id, { priority: p.key }) });
@@ -317,7 +334,7 @@ export function App() {
         run: () => api.runGroup(g.id),
       });
     return cmds;
-  }, [current, projects, projectId, groups, project, primary, stop, del, patch]);
+  }, [current, projects, projectId, groups, project, primary, stop, del, patch, archive, unarchive]);
 
   return (
     <div className="flex h-full flex-col">
@@ -360,6 +377,9 @@ export function App() {
             <button onClick={() => setView("board")} className={`rounded-md px-2.5 py-1 transition-colors ${view === "board" ? "bg-panel text-ink shadow-sm" : "text-muted hover:text-ink"}`}>
               看板
             </button>
+            <button onClick={() => setView("archived")} className={`rounded-md px-2.5 py-1 transition-colors ${view === "archived" ? "bg-panel text-ink shadow-sm" : "text-muted hover:text-ink"}`}>
+              已归档{archivedTasks.length ? ` ${archivedTasks.length}` : ""}
+            </button>
           </div>
           <button onClick={() => setGroupsOpen(true)} className="rounded-md px-2.5 py-1.5 text-[12px] text-muted transition-colors hover:bg-raised hover:text-ink" title="分组管理">
             分组
@@ -388,9 +408,9 @@ export function App() {
             <div className="min-w-0 flex-1">
               {current ? (
                 current.mode === "debate" ? (
-                  <DebateView key={current.id} task={current} state={debates[current.id] ?? emptyDebate()} sessionsBump={sessionsBump} onRun={() => run(current.id)} onStop={() => stop(current.id)} onRetry={() => retry(current.id)} onGate={(a) => gate(current.id, a)} onDelete={() => del(current.id, current.title)} />
+                  <DebateView key={current.id} task={current} state={debates[current.id] ?? emptyDebate()} sessionsBump={sessionsBump} onRun={() => run(current.id)} onStop={() => stop(current.id)} onRetry={() => retry(current.id)} onGate={(a) => gate(current.id, a)} onDelete={() => del(current.id, current.title)} onArchive={() => archive(current.id)} onUnarchive={() => unarchive(current.id)} />
                 ) : (
-                  <TaskDetail key={current.id} task={current} groups={groups} allTasks={visible} logs={logs[current.id] ?? []} sessionsBump={sessionsBump} onRun={() => run(current.id)} onStop={() => stop(current.id)} onReply={(text, opts) => reply(current.id, text, opts)} onPatch={(p) => patch(current.id, p)} onCreateGroup={() => setNewGroupOpen(true)} onDelete={() => del(current.id, current.title)} />
+                  <TaskDetail key={current.id} task={current} groups={groups} allTasks={visible} logs={logs[current.id] ?? []} sessionsBump={sessionsBump} onRun={() => run(current.id)} onStop={() => stop(current.id)} onReply={(text, opts) => reply(current.id, text, opts)} onPatch={(p) => patch(current.id, p)} onCreateGroup={() => setNewGroupOpen(true)} onDelete={() => del(current.id, current.title)} onArchive={() => archive(current.id)} onUnarchive={() => unarchive(current.id)} />
                 )
               ) : (
                 <div className="flex h-full flex-col items-center justify-center gap-1 text-[13px] text-faint">

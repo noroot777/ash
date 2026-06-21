@@ -13,7 +13,7 @@ import type {
   Session,
   TaskStatus,
 } from "@harness/shared";
-import { canStartTask, isUserSettableStatus, AGENT_TYPES, maxBytesFor, attachmentKind } from "@harness/shared";
+import { canStartTask, canArchive, isUserSettableStatus, AGENT_TYPES, maxBytesFor, attachmentKind } from "@harness/shared";
 import { db } from "./db/index.js";
 import { projects, groups, tasks, sessions, schedules, agents } from "./db/schema.js";
 import { bus } from "./bus.js";
@@ -187,6 +187,8 @@ const toTask = (r: typeof tasks.$inferSelect): Task => ({
   updatedAt: r.updatedAt,
   startedAt: r.startedAt,
   endedAt: r.endedAt,
+  archived: r.archived,
+  archivedAt: r.archivedAt,
 });
 
 const toSession = (r: typeof sessions.$inferSelect): Session => ({
@@ -435,6 +437,9 @@ api.patch("/tasks/:id", async (c) => {
   const tid = c.req.param("id");
   const existing = (await db.select().from(tasks).where(eq(tasks.id, tid))).at(0);
   if (!existing) return c.json({ error: "not found" }, 404);
+  // Archived = frozen/read-only. Editing (incl. status) is refused until the task
+  // is unarchived (which goes through the dedicated endpoint, not PATCH).
+  if (existing.archived) return c.json({ error: "任务已归档，先取消归档再编辑", archived: true }, 409);
   const b = await c.req.json<Partial<Task>>();
   // running/queued/awaiting_review are system-owned — refuse manual changes so a
   // human can't desync the state (e.g. mark a task "running" when nothing runs).
@@ -654,6 +659,7 @@ api.post("/tasks/:id/run", async (c) => {
   const taskId = c.req.param("id");
   const r = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!r) return c.json({ error: "not found" }, 404);
+  if (r.archived) return c.json({ error: "任务已归档，先取消归档再运行", archived: true }, 409);
   // Guard the state machine: only settled, non-terminal-success tasks may start.
   if (!canStartTask(r.status as TaskStatus)) return c.json({ error: "任务当前状态不可运行", status: r.status }, 409);
   // Fire-and-forget; progress streams over /api/events.
@@ -682,6 +688,7 @@ api.post("/tasks/:id/reply", async (c) => {
   if (b.agent && !AGENT_TYPES.includes(b.agent)) return c.json({ error: "未知的 agent", agent: b.agent }, 400);
   const r = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!r) return c.json({ error: "not found" }, 404);
+  if (r.archived) return c.json({ error: "任务已归档，先取消归档再回复", archived: true }, 409);
   if (r.mode !== "single") return c.json({ error: "仅单任务支持回复" }, 409);
   if (r.status === "running" || r.status === "queued") return c.json({ error: "任务进行中" }, 409);
   void continueTask(taskId, (b.text ?? "").trim(), { attachments: b.attachments, agent: b.agent });
@@ -694,10 +701,37 @@ api.post("/tasks/:id/retry", async (c) => {
   const taskId = c.req.param("id");
   const r = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!r) return c.json({ error: "not found" }, 404);
+  if (r.archived) return c.json({ error: "任务已归档，先取消归档再重试", archived: true }, 409);
   if (r.status !== "failed") return c.json({ error: "只有失败的任务可以重试", status: r.status }, 409);
   if (r.mode === "debate") void resumeDebate(taskId);
   else void resumeOrRunTask(taskId, { reason: "retry" });
   return c.json({ started: true }, 202);
+});
+
+// ── archive / unarchive ──────────────────────────────────────────────────────
+// Archiving is orthogonal to status (a separate `archived` flag, not an 8th
+// status): a settled terminal task (done/failed/canceled) is frozen and tucked
+// away into the archive view. It does NOT go through setTaskStatus — the status
+// is preserved so unarchiving restores it. Both endpoints are idempotent (already
+// in the target state → just return the task) so a double-click never errors.
+api.post("/tasks/:id/archive", async (c) => {
+  const r = (await db.select().from(tasks).where(eq(tasks.id, c.req.param("id")))).at(0);
+  if (!r) return c.json({ error: "not found" }, 404);
+  if (r.archived) return c.json(toTask(r)); // idempotent
+  if (!canArchive(r.status as TaskStatus)) {
+    return c.json({ error: "只有已完成/失败/已取消的任务可以归档", status: r.status }, 409);
+  }
+  const ts = now();
+  await db.update(tasks).set({ archived: true, archivedAt: ts, updatedAt: ts }).where(eq(tasks.id, r.id));
+  return c.json(toTask((await db.select().from(tasks).where(eq(tasks.id, r.id))).at(0)!));
+});
+
+api.post("/tasks/:id/unarchive", async (c) => {
+  const r = (await db.select().from(tasks).where(eq(tasks.id, c.req.param("id")))).at(0);
+  if (!r) return c.json({ error: "not found" }, 404);
+  if (!r.archived) return c.json(toTask(r)); // idempotent
+  await db.update(tasks).set({ archived: false, archivedAt: null, updatedAt: now() }).where(eq(tasks.id, r.id));
+  return c.json(toTask((await db.select().from(tasks).where(eq(tasks.id, r.id))).at(0)!));
 });
 
 // ── HITL gate decision (§7) — 放行 / 打回 / 注入意见 / 提问 ───────────────────
@@ -723,6 +757,8 @@ api.get("/tasks/:id/schedule", async (c) => {
 
 api.put("/tasks/:id/schedule", async (c) => {
   const taskId = c.req.param("id");
+  const t = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
+  if (t?.archived) return c.json({ error: "任务已归档，不能设置定时", archived: true }, 409);
   const b = await c.req.json<{ kind: "once" | "cron"; at?: string | null; cron?: string | null; enabled?: boolean }>();
   const existing = (await db.select().from(schedules).where(eq(schedules.taskId, taskId))).at(0);
   const row = {

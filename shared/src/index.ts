@@ -92,6 +92,11 @@ export function isUserSettableStatus(status: TaskStatus): boolean {
   return USER_SETTABLE_STATUSES.includes(status);
 }
 
+export const ARCHIVABLE_STATUSES: TaskStatus[] = ["done", "failed", "canceled"];
+export function canArchive(status: TaskStatus): boolean {
+  return ARCHIVABLE_STATUSES.includes(status);
+}
+
 export interface Task {
   id: string;
   projectId: string;
@@ -117,6 +122,8 @@ export interface Task {
   // running. Duration = (endedAt ?? now) − startedAt. Both null until first run.
   startedAt?: string | null;
   endedAt?: string | null;
+  archived?: boolean;
+  archivedAt?: string | null;
 }
 
 // ── Attachments (pasted into the composer / reply box) ───────────────────────

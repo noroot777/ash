@@ -31,7 +31,8 @@ export async function ensureSchema() {
       status TEXT NOT NULL DEFAULT 'backlog', priority TEXT NOT NULL DEFAULT 'none',
       labels TEXT NOT NULL DEFAULT '[]', depends_on TEXT NOT NULL DEFAULT '[]',
       agent_type TEXT, auto_title INTEGER NOT NULL DEFAULT 0, debate TEXT, schedule_id TEXT,
-      created_at TEXT NOT NULL, updated_at TEXT NOT NULL, started_at TEXT, ended_at TEXT
+      created_at TEXT NOT NULL, updated_at TEXT NOT NULL, started_at TEXT, ended_at TEXT,
+      archived INTEGER NOT NULL DEFAULT 0, archived_at TEXT
     );
     CREATE TABLE IF NOT EXISTS agents (
       id TEXT PRIMARY KEY, name TEXT NOT NULL, type TEXT NOT NULL,
@@ -68,6 +69,8 @@ export async function ensureSchema() {
     "ALTER TABLE tasks ADD COLUMN ended_at TEXT",
     "ALTER TABLE sessions ADD COLUMN ended_at TEXT",
     "ALTER TABLE groups ADD COLUMN paused INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE tasks ADD COLUMN archived INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE tasks ADD COLUMN archived_at TEXT",
   ]) {
     try {
       await client.execute(sql);

@@ -9,6 +9,7 @@ import { ScheduleControl } from "./ScheduleControl";
 import { StatusIcon } from "./StatusIcon";
 import { STATUSES } from "./constants";
 import { runAction, canStopTask } from "./taskActions";
+import { canArchive } from "@harness/shared";
 import { TaskTimeChip, formatInstant } from "./time";
 
 // Animated "thinking" indicator — three dots flashing in sequence.
@@ -44,6 +45,8 @@ export function DebateView({
   onRetry,
   onGate,
   onDelete,
+  onArchive,
+  onUnarchive,
 }: {
   task: Task;
   state: DebateState;
@@ -53,6 +56,8 @@ export function DebateView({
   onRetry: () => void;
   onGate: (a: GateAction) => void;
   onDelete: () => void;
+  onArchive: () => void;
+  onUnarchive: () => void;
 }) {
   const cfg = task.debate as DebateConfig;
   const collab = cfg?.style === "collaborate"; // 协作=出代码（有实现/审查/代码门）；辩论=仅讨论
@@ -148,7 +153,12 @@ export function DebateView({
           <h1 className="min-w-0 flex-1 truncate text-lg font-medium tracking-tight">{task.title}</h1>
           <StatusPill status={task.status} />
           <TaskTimeChip task={task} />
-          {canStopTask(task.status) ? (
+          {task.archived ? (
+            <>
+              <span className="inline-flex shrink-0 items-center rounded-md bg-overlay px-3 py-1.5 text-sm text-muted" title="任务已归档（只读）">已归档</span>
+              <button onClick={onUnarchive} className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-line px-3 py-1.5 text-sm text-muted hover:text-ink">取消归档</button>
+            </>
+          ) : canStopTask(task.status) ? (
             <button
               onClick={onStop}
               className="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border border-red-500/40 px-4 py-1.5 text-sm font-medium text-red-600 transition-colors hover:bg-red-500/10"
@@ -171,7 +181,12 @@ export function DebateView({
               );
             })()
           )}
-          <button onClick={onDelete} className="shrink-0 rounded-md border border-line px-2 py-1.5 text-sm text-muted hover:text-red-600">
+          {!task.archived && canArchive(task.status) && (
+                <button onClick={onArchive} className="shrink-0 rounded-md border border-line px-2 py-1.5 text-sm text-muted hover:text-ink">
+                  归档
+                </button>
+              )}
+              <button onClick={onDelete} className="shrink-0 rounded-md border border-line px-2 py-1.5 text-sm text-muted hover:text-red-600">
             删除
           </button>
         </div>

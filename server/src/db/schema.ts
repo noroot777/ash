@@ -40,6 +40,8 @@ export const tasks = sqliteTable("tasks", {
   updatedAt: text("updated_at").notNull(),
   startedAt: text("started_at"), // first time the task entered `running`
   endedAt: text("ended_at"), // last terminal transition (cleared while running)
+  archived: integer("archived", { mode: "boolean" }).notNull().default(false),
+  archivedAt: text("archived_at"), // when it was archived (orders the archive view)
 });
 
 export const agents = sqliteTable("agents", {

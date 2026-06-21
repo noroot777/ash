@@ -49,9 +49,11 @@ export async function runGroup(groupId: string): Promise<void> {
   if (group.paused) return; // 已暂停：不启动任何任务，等再次「运行」
 
   // Only (re)start settled tasks — skip running/queued/awaiting_review/done so a
-  // group re-run doesn't re-run already-finished or in-flight tasks.
+  // group re-run doesn't re-run already-finished or in-flight tasks. Archived
+  // tasks are frozen too: never re-run by their group (else an archived
+  // failed/canceled would spring back to life on the next group run).
   const rows = (await db.select().from(tasks).where(eq(tasks.groupId, groupId))).filter(
-    (t) => canStartTask(t.status as TaskStatus),
+    (t) => canStartTask(t.status as TaskStatus) && !t.archived,
   );
   if (!rows.length) return;
 
