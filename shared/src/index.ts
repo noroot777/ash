@@ -239,6 +239,22 @@ export interface Schedule {
   createdAt: string;
 }
 
+// A reply scheduled to send to a task's agent at a future time. Unlike Schedule
+// (which re-runs a task), this delivers a message via continueTask once `sendAt`
+// passes and the task is idle. A task may have several pending messages.
+export type ScheduledMessageStatus = "pending" | "sent" | "canceled";
+export interface ScheduledMessage {
+  id: string;
+  taskId: string;
+  text: string;
+  attachments: string[];
+  agent: AgentType | null;
+  sendAt: string; // ISO 到期发送时间
+  status: ScheduledMessageStatus;
+  createdAt: string;
+  sentAt: string | null;
+}
+
 // ── HITL gates (§7) ──────────────────────────────────────────────────────────
 export type GateName = "G1" | "G2"; // G1 = consensus gate, G2 = code gate
 export type GateAction =

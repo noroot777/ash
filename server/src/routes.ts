@@ -15,7 +15,7 @@ import type {
 } from "@harness/shared";
 import { canStartTask, canArchive, isUserSettableStatus, AGENT_TYPES, maxBytesFor, attachmentKind } from "@harness/shared";
 import { db } from "./db/index.js";
-import { projects, groups, tasks, sessions, schedules, agents } from "./db/schema.js";
+import { projects, groups, tasks, sessions, schedules, scheduledMessages, agents } from "./db/schema.js";
 import { bus } from "./bus.js";
 import { id, now, attachmentsPrompt } from "./util.js";
 import { resumeOrRunTask, continueTask } from "./orchestrator.js";
@@ -27,7 +27,7 @@ import { resolveGate } from "./debate/gates.js";
 import { detectLocalAgents } from "./detect.js";
 import { projectHealthLight, projectHealthFull, tidyRepoPath, repoKey } from "./git.js";
 import { resumeCommandFor } from "./executors/spawn.js";
-import type { GateAction, AgentType, BatchCreateTasksBody, BatchTaskInput } from "@harness/shared";
+import type { GateAction, AgentType, BatchCreateTasksBody, BatchTaskInput, ScheduledMessage, ScheduledMessageStatus } from "@harness/shared";
 
 export const api = new Hono();
 
@@ -200,6 +200,13 @@ const toSession = (r: typeof sessions.$inferSelect): Session => ({
   resumeCommand: r.cliSessionId
     ? resumeCommandFor(r.agentType, r.target, r.cwd ?? r.worktreePath ?? ".", r.cliSessionId)
     : r.resumeCommand,
+});
+
+const toScheduledMessage = (r: typeof scheduledMessages.$inferSelect): ScheduledMessage => ({
+  ...r,
+  attachments: JSON.parse(r.attachments),
+  agent: (r.agent as AgentType) ?? null,
+  status: r.status as ScheduledMessageStatus,
 });
 
 // ── projects ───────────────────────────────────────────────────────────────
@@ -676,18 +683,58 @@ api.post("/tasks/:id/stop", async (c) => {
 
 // Reply to a single task: resume its CLI session with the user's message so an
 // agent that stopped to ask can be answered and keep going (same session).
+// With `sendAt` (a future ISO time), the reply is queued as a scheduled_message
+// and delivered later by the scheduler (schedules.ts) instead of fired now.
 api.post("/tasks/:id/reply", async (c) => {
   const taskId = c.req.param("id");
-  const b = await c.req.json<{ text?: string; attachments?: string[]; agent?: AgentType }>();
+  const b = await c.req.json<{ text?: string; attachments?: string[]; agent?: AgentType; sendAt?: string }>();
   if (!b.text?.trim() && !b.attachments?.length) return c.json({ error: "empty" }, 400);
   if (b.agent && !AGENT_TYPES.includes(b.agent)) return c.json({ error: "未知的 agent", agent: b.agent }, 400);
   const r = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!r) return c.json({ error: "not found" }, 404);
   if (r.archived) return c.json({ error: "任务已归档，先取消归档再回复", archived: true }, 409);
   if (r.mode !== "single") return c.json({ error: "仅单任务支持回复" }, 409);
+  // Scheduled send: persist and let the scheduler deliver it when due + idle.
+  // Allowed even while the task is running — it fires in the future, not now.
+  if (b.sendAt) {
+    const when = new Date(b.sendAt);
+    if (Number.isNaN(when.getTime()) || when.getTime() <= Date.now())
+      return c.json({ error: "定时时间必须是将来的有效时间" }, 400);
+    const row = {
+      id: id(),
+      taskId,
+      text: (b.text ?? "").trim(),
+      attachments: JSON.stringify(b.attachments ?? []),
+      agent: b.agent ?? null,
+      sendAt: when.toISOString(),
+      status: "pending" as const,
+      createdAt: now(),
+      sentAt: null,
+    };
+    await db.insert(scheduledMessages).values(row);
+    return c.json({ scheduled: true, message: toScheduledMessage(row) }, 202);
+  }
   if (r.status === "running" || r.status === "queued") return c.json({ error: "任务进行中" }, 409);
   void continueTask(taskId, (b.text ?? "").trim(), { attachments: b.attachments, agent: b.agent });
   return c.json({ started: true }, 202);
+});
+
+// List a task's pending scheduled messages (soonest first).
+api.get("/tasks/:id/scheduled-messages", async (c) => {
+  const rows = (await db.select().from(scheduledMessages).where(eq(scheduledMessages.taskId, c.req.param("id"))))
+    .filter((m) => m.status === "pending")
+    .sort((a, b) => a.sendAt.localeCompare(b.sendAt));
+  return c.json(rows.map(toScheduledMessage));
+});
+
+// Cancel a pending scheduled message (by message id).
+api.delete("/scheduled-messages/:mid", async (c) => {
+  const mid = c.req.param("mid");
+  const m = (await db.select().from(scheduledMessages).where(eq(scheduledMessages.id, mid))).at(0);
+  if (!m) return c.json({ error: "not found" }, 404);
+  if (m.status !== "pending") return c.json({ error: "只能取消待发送的消息", status: m.status }, 409);
+  await db.update(scheduledMessages).set({ status: "canceled" }).where(eq(scheduledMessages.id, mid));
+  return c.json({ canceled: true });
 });
 
 // Retry a failed debate: re-run only the failed (last) turn, then continue —

@@ -1,7 +1,8 @@
 import { eq } from "drizzle-orm";
+import type { AgentType } from "@harness/shared";
 import { db } from "./db/index.js";
-import { schedules, tasks, groups } from "./db/schema.js";
-import { resumeOrRunTask } from "./orchestrator.js";
+import { schedules, scheduledMessages, tasks, groups } from "./db/schema.js";
+import { resumeOrRunTask, continueTask } from "./orchestrator.js";
 import { runDebate } from "./debate/index.js";
 
 // ── Minimal 5-field cron matcher (minute hour dom month dow), local time ──────
@@ -83,6 +84,32 @@ async function tick() {
         await db.update(schedules).set({ lastRunAt: now.toISOString() }).where(eq(schedules.id, s.id));
         await fire(s.taskId);
       }
+    } catch {
+      /* keep ticking */
+    }
+  }
+
+  // ── Due scheduled messages (定时发消息；独立于 schedules 表) ─────────────────
+  // The once/cron loop above re-RUNS a task; these DELIVER a queued reply via
+  // continueTask. Fire only when the task is idle — continueTask silently drops a
+  // reply to a busy task — and mark sent before firing so an overlapping tick
+  // won't re-pick it (continueTask's own running.has single-flight is the final guard).
+  const due = (await db.select().from(scheduledMessages).where(eq(scheduledMessages.status, "pending")))
+    .filter((m) => new Date(m.sendAt) <= now);
+  const firedTasks = new Set<string>(); // at most one delivery per task per tick
+  for (const m of due) {
+    try {
+      if (firedTasks.has(m.taskId)) continue;
+      const t = (await db.select().from(tasks).where(eq(tasks.id, m.taskId))).at(0);
+      if (!t || t.archived || t.mode !== "single") {
+        // Can never be delivered → void it instead of retrying forever.
+        await db.update(scheduledMessages).set({ status: "canceled" }).where(eq(scheduledMessages.id, m.id));
+        continue;
+      }
+      if (t.status === "running" || t.status === "queued") continue; // busy → retry next tick
+      firedTasks.add(m.taskId);
+      await db.update(scheduledMessages).set({ status: "sent", sentAt: now.toISOString() }).where(eq(scheduledMessages.id, m.id));
+      void continueTask(m.taskId, m.text, { attachments: JSON.parse(m.attachments), agent: (m.agent as AgentType) ?? undefined });
     } catch {
       /* keep ticking */
     }

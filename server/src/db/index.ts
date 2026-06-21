@@ -50,6 +50,11 @@ export async function ensureSchema() {
       at TEXT, cron TEXT, enabled INTEGER NOT NULL DEFAULT 1,
       last_run_at TEXT, created_at TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS scheduled_messages (
+      id TEXT PRIMARY KEY, task_id TEXT NOT NULL, text TEXT NOT NULL DEFAULT '',
+      attachments TEXT NOT NULL DEFAULT '[]', agent TEXT, send_at TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending', created_at TEXT NOT NULL, sent_at TEXT
+    );
   `);
   // Tolerant migration for DBs created before columns were added.
   try {

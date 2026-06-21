@@ -81,3 +81,19 @@ export const schedules = sqliteTable("schedules", {
   lastRunAt: text("last_run_at"),
   createdAt: text("created_at").notNull(),
 });
+
+// Scheduled replies: a message to send to a task's agent at a future time
+// (continueTask at sendAt). Distinct from `schedules` (which re-runs a task):
+// a task may have several pending messages; the scheduler fires each when due
+// and the task is idle.
+export const scheduledMessages = sqliteTable("scheduled_messages", {
+  id: text("id").primaryKey(),
+  taskId: text("task_id").notNull(),
+  text: text("text").notNull().default(""),
+  attachments: text("attachments").notNull().default("[]"), // json string[]
+  agent: text("agent"), // AgentType | null（@指派目标）
+  sendAt: text("send_at").notNull(), // ISO 到期发送时间
+  status: text("status").notNull().default("pending"), // pending | sent | canceled
+  createdAt: text("created_at").notNull(),
+  sentAt: text("sent_at"),
+});
