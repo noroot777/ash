@@ -22,6 +22,7 @@ export function Menu({
   onSetDefault,
   defaultValue,
   header,
+  footer,
 }: {
   options: MenuOption[];
   value?: string;
@@ -32,7 +33,8 @@ export function Menu({
   menuWidth?: number;
   onSetDefault?: (v: string) => void;
   defaultValue?: string;
-  header?: (api: { select: (v: string) => void }) => ReactNode;
+  header?: (api: { select: (v: string) => void; close: () => void }) => ReactNode;
+  footer?: (api: { select: (v: string) => void; close: () => void }) => ReactNode;
 }) {
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
@@ -159,14 +161,15 @@ export function Menu({
         createPortal(
           <div
             ref={menuRef}
-            className="fixed z-[100] max-h-72 overflow-y-auto rounded-lg border border-line2 bg-panel p-1 shadow-xl"
+            className="fixed z-[100] flex max-h-72 flex-col rounded-lg border border-line2 bg-panel p-1 shadow-xl"
             style={{ left: pos.left, top: pos.top, bottom: pos.bottom, width: pos.width }}
           >
             {header && (
-              <div className="mb-1 border-b border-line px-1 pb-1.5 pt-0.5">
-                {header({ select: (v: string) => { onChange(v); close(); } })}
+              <div className="mb-1 shrink-0 border-b border-line px-1 pb-1.5 pt-0.5">
+                {header({ select: (v: string) => { onChange(v); close(); }, close })}
               </div>
             )}
+            <div className="min-h-0 flex-1 overflow-y-auto">
             {options.map((o, i) => (
               <button
                 key={o.value}
@@ -209,6 +212,12 @@ export function Menu({
                 {value === o.value && <Check size={13} weight="bold" className="text-accent" />}
               </button>
             ))}
+            </div>
+            {footer && (
+              <div className="mt-1 shrink-0 border-t border-line px-1 pt-1.5">
+                {footer({ select: (v: string) => { onChange(v); close(); }, close })}
+              </div>
+            )}
           </div>,
           document.body,
         )}

@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, useMemo } from "react";
 import type { Task, ProjectView, Group, AgentEvent, DebateStyle, AgentType, ProjectHealth } from "@harness/shared";
-import { NotePencil, CaretDown, MagnifyingGlass, GearSix } from "@phosphor-icons/react";
+import { NotePencil, CaretDown, MagnifyingGlass, GearSix, Plus } from "@phosphor-icons/react";
 import { api } from "./api";
 import { useServerEvents } from "./useEvents";
 import { TaskList, orderedTasks } from "./TaskList";
@@ -17,7 +17,7 @@ import { Menu } from "./Menu";
 import { NewProjectModal, NewGroupModal, ConfirmModal } from "./Modal";
 import { GroupsPanel } from "./GroupsPanel";
 import { ProjectSettings } from "./ProjectSettings";
-import { HealthDot, BranchChip } from "./ui";
+import { HealthDot, BranchChip, ProjectAvatar } from "./ui";
 import { shortPath } from "./util";
 import { runAction, canStopTask } from "./taskActions";
 import { canArchive } from "@harness/shared";
@@ -35,6 +35,7 @@ export function App() {
   const [debates, setDebates] = useState<Record<string, DebateState>>({});
   const [sessionsBump, setSessionsBump] = useState(0);
   const [curHealth, setCurHealth] = useState<ProjectHealth | null>(null);
+  const [projSearch, setProjSearch] = useState("");
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [agentsOpen, setAgentsOpen] = useState(false);
@@ -123,6 +124,15 @@ export function App() {
   const current = tasks.find((t) => t.id === selected) ?? null;
   const project = projects.find((p) => p.id === projectId) ?? null;
   const projectName = project?.name ?? "项目";
+
+  // Other projects to switch to (current lives in the switcher header), filtered
+  // by the search box when there are enough to warrant it.
+  const otherProjects = useMemo(() => {
+    const q = projSearch.trim().toLowerCase();
+    return projects.filter(
+      (p) => p.id !== projectId && (!q || p.name.toLowerCase().includes(q) || p.repoPath.toLowerCase().includes(q)),
+    );
+  }, [projects, projectId, projSearch]);
 
   const patch = useCallback(async (id: string, p: Partial<Task>) => {
     const updated = await api.patchTask(id, p);
@@ -352,24 +362,74 @@ export function App() {
         <div className="flex items-center gap-1.5">
           <Menu
             value={projectId ?? ""}
-            onChange={(v) => (v === "__new" ? setNewProjectOpen(true) : v === "__settings" ? setSettingsOpen(true) : setProjectId(v))}
-            options={[
-              ...projects.map((p) => ({ value: p.id, label: p.name, detail: shortPath(p.repoPath), icon: <HealthDot health={p.health} /> })),
-              ...(project ? [{ value: "__settings", label: "项目设置…", icon: <GearSix size={13} className="text-muted" /> }] : []),
-              { value: "__new", label: "+ 新建项目…" },
-            ]}
-            menuWidth={260}
+            onChange={(v) => { setProjSearch(""); setProjectId(v); }}
+            menuWidth={300}
+            options={otherProjects.map((p) => ({
+              value: p.id,
+              label: p.name,
+              detail: shortPath(p.repoPath),
+              icon: (
+                <span className="relative">
+                  <ProjectAvatar name={p.name} size={22} />
+                  {!p.health.isRepo && (
+                    <span className="absolute -bottom-0.5 -right-0.5 rounded-full ring-2 ring-panel">
+                      <HealthDot health={p.health} size={7} />
+                    </span>
+                  )}
+                </span>
+              ),
+            }))}
+            header={({ close }) => (
+              <div className="flex flex-col gap-1.5">
+                {project && (
+                  <div className="flex items-center gap-2 rounded-md px-1 py-0.5">
+                    <ProjectAvatar name={project.name} size={30} />
+                    <span className="flex min-w-0 flex-1 flex-col">
+                      <span className="truncate text-[13px] font-semibold text-ink">{project.name}</span>
+                      <span className="truncate text-[11px] text-faint">{shortPath(project.repoPath) || "未设置路径"}</span>
+                    </span>
+                    <button
+                      onClick={() => { close(); setSettingsOpen(true); }}
+                      title="项目设置"
+                      className="grid h-7 w-7 shrink-0 place-items-center rounded-md text-muted hover:bg-raised hover:text-ink"
+                    >
+                      <GearSix size={15} />
+                    </button>
+                  </div>
+                )}
+                {projects.length > 6 && (
+                  <input
+                    autoFocus
+                    value={projSearch}
+                    onChange={(e) => setProjSearch(e.target.value)}
+                    placeholder="搜索项目…"
+                    className="w-full rounded-md border border-line bg-canvas px-2 py-1 text-[12px] text-ink outline-none placeholder:text-faint focus:border-accent"
+                  />
+                )}
+                {otherProjects.length > 0 && (
+                  <div className="px-1 text-[10px] font-medium uppercase tracking-wide text-faint">切换到</div>
+                )}
+              </div>
+            )}
+            footer={({ close }) => (
+              <button
+                onClick={() => { close(); setNewProjectOpen(true); }}
+                className="flex w-full items-center gap-2 rounded-md px-1 py-1 text-left text-[13px] text-muted hover:bg-raised hover:text-ink"
+              >
+                <span className="grid h-[22px] w-[22px] shrink-0 place-items-center rounded-md border border-dashed border-line2">
+                  <Plus size={13} />
+                </span>
+                新建项目
+              </button>
+            )}
             triggerClassName="flex items-center gap-2 rounded-md px-1.5 py-1 hover:bg-raised"
           >
-            <span className="grid h-6 w-6 place-items-center rounded-md bg-accent text-[12px] font-semibold text-accent-fg">
-              {projectName.slice(0, 1).toUpperCase()}
-            </span>
+            <ProjectAvatar name={projectName} size={24} />
             <span className="max-w-[180px] truncate text-[13px] font-semibold text-ink">{projectName}</span>
-            {project && <HealthDot health={project.health} />}
+            {project && !project.health.isRepo && <HealthDot health={project.health} />}
             <CaretDown size={12} className="text-faint" />
           </Menu>
           <BranchChip health={curHealth} />
-          <span className={`h-1.5 w-1.5 rounded-full ${connected ? "bg-emerald-500" : "bg-faint"}`} title={connected ? "实时已连接" : "未连接"} />
           <button
             onClick={() => setCreateOpen(true)}
             className="ml-1 grid h-7 w-7 place-items-center rounded-md text-muted transition-colors hover:bg-raised hover:text-ink"
@@ -402,6 +462,7 @@ export function App() {
             <span>搜索</span>
             <kbd>⌘K</kbd>
           </button>
+          <span className={`ml-0.5 h-1.5 w-1.5 rounded-full ${connected ? "bg-emerald-500" : "bg-faint"}`} title={connected ? "实时已连接" : "未连接"} />
         </div>
       </header>
 

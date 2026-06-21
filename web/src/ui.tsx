@@ -114,8 +114,6 @@ export function ThinkingBlock({ text }: { text: string }) {
 }
 
 // repoPath health at a glance: 🔴 路径不存在 / 🟡 存在但非 git 仓库 / 🟢 git 仓库.
-// One dot, one source of truth — reused in the switcher, create/debate modals,
-// and the project settings panel.
 const HEALTH_RED = "#eb5757";
 const HEALTH_AMBER = "#e2a33b";
 const HEALTH_GREEN = "#3fae6b";
@@ -161,6 +159,27 @@ export function BranchChip({ health }: { health?: ProjectHealth | null }) {
       {health.isWorktree && (
         <span className="shrink-0 rounded bg-raised px-1 py-px text-[10px] text-faint">worktree</span>
       )}
+    </span>
+  );
+}
+
+// A project's color + initial avatar. A deterministic color from the name gives
+// each project a stable visual identity in the switcher (trigger + rows), so you
+// scan by color, not just text. Shared so the trigger and list never mismatch.
+const AVATAR_COLORS = ["#6366f1", "#8b5cf6", "#d946ef", "#ec4899", "#f43f5e", "#f59e0b", "#10b981", "#06b6d4", "#0ea5e9", "#14b8a6"];
+export function projectColor(name: string): string {
+  let h = 0;
+  for (let i = 0; i < name.length; i++) h = (Math.imul(h, 31) + name.charCodeAt(i)) >>> 0;
+  return AVATAR_COLORS[h % AVATAR_COLORS.length];
+}
+export function ProjectAvatar({ name, size = 24 }: { name: string; size?: number }) {
+  return (
+    <span
+      aria-hidden
+      className="grid shrink-0 place-items-center rounded-md font-semibold text-white"
+      style={{ width: size, height: size, backgroundColor: projectColor(name), fontSize: Math.round(size * 0.46) }}
+    >
+      {(name || "·").slice(0, 1).toUpperCase()}
     </span>
   );
 }
