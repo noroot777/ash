@@ -111,7 +111,10 @@ export function App() {
     api.tasks().then((ts) => {
       const mine = ts.filter((t) => t.projectId === projectId);
       setTasks(mine);
-      setSelected((cur) => (mine.some((t) => t.id === cur) ? cur : (mine[0]?.id ?? null)));
+      // Switching projects no longer auto-selects a task: keep the current one
+      // only if it belongs to the new project (deep-link ?task=), else clear to
+      // the empty state and let the user pick.
+      setSelected((cur) => (mine.some((t) => t.id === cur) ? cur : null));
     });
   }, [projectId]);
 
