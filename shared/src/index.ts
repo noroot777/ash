@@ -38,6 +38,7 @@ export interface Project {
 export interface ProjectHealth {
   exists: boolean;
   isRepo: boolean;
+  isWorktree?: boolean; // repoPath is itself a linked git worktree (.git is a file, not a dir)
   branch?: string | null; // only in the full check (settings panel / path validation)
   dirty?: boolean; // working tree has uncommitted changes (full check only)
 }

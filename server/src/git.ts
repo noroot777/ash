@@ -12,6 +12,10 @@ const isDir = (p: string) => {
   try { return statSync(p).isDirectory(); } catch { return false; }
 };
 
+const isFile = (p: string) => {
+  try { return statSync(p).isFile(); } catch { return false; }
+};
+
 // Users type `~/code/foo`, but Node's fs/git APIs don't understand `~` (only
 // shells do) — so expand a leading `~` to the home dir before any filesystem
 // use. Applied at every repoPath boundary below so `~` works system-wide.
@@ -70,8 +74,13 @@ export async function isGitRepo(repoPath: string): Promise<boolean> {
 export function projectHealthLight(repoPath: string | null | undefined): ProjectHealth {
   const p = expandHome(repoPath);
   const exists = !!p && isDir(p);
-  const isRepo = exists && existsSync(join(p, ".git"));
-  return { exists, isRepo };
+  const gitPath = join(p, ".git");
+  const isRepo = exists && existsSync(gitPath);
+  // A linked worktree (`git worktree add`) keeps `.git` as a FILE pointing back to
+  // the main repo; the main working tree keeps `.git` as a DIR. Surface it so the
+  // UI can show when a project's working dir is itself a user-managed worktree.
+  const isWorktree = isRepo && isFile(gitPath);
+  return { exists, isRepo, isWorktree };
 }
 
 // Full health — adds current branch + dirty state. Only spawns git when it's

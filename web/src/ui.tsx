@@ -1,6 +1,6 @@
 import { useState, useEffect, useLayoutEffect, useRef } from "react";
 import type { Priority, Session, ProjectHealth, ProjectView } from "@harness/shared";
-import { Plus, CaretRight, CaretDown } from "@phosphor-icons/react";
+import { Plus, CaretRight, CaretDown, GitBranch } from "@phosphor-icons/react";
 import { shortPath } from "./util";
 import { Duration, formatInstant } from "./time";
 import { api } from "./api";
@@ -127,7 +127,7 @@ export function healthColor(h?: ProjectHealth): string {
 export function healthLabel(h?: ProjectHealth): string {
   if (!h || !h.exists) return "路径不存在";
   if (!h.isRepo) return "存在，但不是 git 仓库";
-  let s = "git 仓库";
+  let s = h.isWorktree ? "git worktree" : "git 仓库";
   if (h.branch) s += ` · ${h.branch}`;
   if (h.dirty) s += " · 有改动";
   return s;
@@ -140,6 +140,28 @@ export function HealthDot({ health, size = 8 }: { health?: ProjectHealth; size?:
       className="inline-block shrink-0 rounded-full"
       style={{ width: size, height: size, backgroundColor: healthColor(health) }}
     />
+  );
+}
+
+// Current git context of a project's working dir: the branch, a dot when the tree
+// is dirty, and a quiet "worktree" tag when the dir is itself a linked worktree.
+// harness no longer creates worktrees — this only REPORTS what the user set up, so
+// they can see at a glance which branch (and whether a worktree) work lands on.
+// Sits unobtrusively in the top bar next to the project switcher.
+export function BranchChip({ health }: { health?: ProjectHealth | null }) {
+  if (!health?.isRepo || !health.branch) return null;
+  return (
+    <span
+      className="inline-flex min-w-0 items-center gap-1 text-[12px] text-muted"
+      title={`分支 ${health.branch}${health.isWorktree ? "（worktree）" : ""}${health.dirty ? " · 有未提交改动" : ""}`}
+    >
+      <GitBranch size={12} className="shrink-0 text-faint" />
+      <span className="max-w-[180px] truncate">{health.branch}</span>
+      {health.dirty && <span aria-hidden className="h-1.5 w-1.5 shrink-0 rounded-full bg-amber-500" />}
+      {health.isWorktree && (
+        <span className="shrink-0 rounded bg-raised px-1 py-px text-[10px] text-faint">worktree</span>
+      )}
+    </span>
   );
 }
 

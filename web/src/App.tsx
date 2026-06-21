@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useMemo } from "react";
-import type { Task, ProjectView, Group, AgentEvent, DebateStyle, AgentType } from "@harness/shared";
+import type { Task, ProjectView, Group, AgentEvent, DebateStyle, AgentType, ProjectHealth } from "@harness/shared";
 import { NotePencil, CaretDown, MagnifyingGlass, GearSix } from "@phosphor-icons/react";
 import { api } from "./api";
 import { useServerEvents } from "./useEvents";
@@ -17,7 +17,7 @@ import { Menu } from "./Menu";
 import { NewProjectModal, NewGroupModal, ConfirmModal } from "./Modal";
 import { GroupsPanel } from "./GroupsPanel";
 import { ProjectSettings } from "./ProjectSettings";
-import { HealthDot } from "./ui";
+import { HealthDot, BranchChip } from "./ui";
 import { shortPath } from "./util";
 import { runAction, canStopTask } from "./taskActions";
 import { canArchive } from "@harness/shared";
@@ -34,6 +34,7 @@ export function App() {
   const [logs, setLogs] = useState<Record<string, LogLine[]>>({});
   const [debates, setDebates] = useState<Record<string, DebateState>>({});
   const [sessionsBump, setSessionsBump] = useState(0);
+  const [curHealth, setCurHealth] = useState<ProjectHealth | null>(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [agentsOpen, setAgentsOpen] = useState(false);
@@ -103,6 +104,14 @@ export function App() {
       setSelected((cur) => (mine.some((t) => t.id === cur) ? cur : (mine[0]?.id ?? null)));
     });
   }, [projectId]);
+
+  // Live git context (branch + worktree) of the current project's working dir, for
+  // the top-bar chip. Refetch on project switch and after a run settles, since a
+  // commit/checkout may have moved the branch or changed the dirty state.
+  useEffect(() => {
+    setCurHealth(null);
+    if (projectId) api.projectHealth(projectId).then(setCurHealth).catch(() => {});
+  }, [projectId, sessionsBump]);
 
   const active = useMemo(() => tasks.filter((t) => !t.archived), [tasks]);
   const archivedTasks = useMemo(
@@ -359,6 +368,7 @@ export function App() {
             {project && <HealthDot health={project.health} />}
             <CaretDown size={12} className="text-faint" />
           </Menu>
+          <BranchChip health={curHealth} />
           <span className={`h-1.5 w-1.5 rounded-full ${connected ? "bg-emerald-500" : "bg-faint"}`} title={connected ? "实时已连接" : "未连接"} />
           <button
             onClick={() => setCreateOpen(true)}
