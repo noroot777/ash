@@ -19,6 +19,7 @@ export function Menu({
   triggerClassName = "",
   align = "left",
   menuWidth,
+  maxHeight = 288,
   onSetDefault,
   defaultValue,
   header,
@@ -31,6 +32,7 @@ export function Menu({
   triggerClassName?: string;
   align?: "left" | "right";
   menuWidth?: number;
+  maxHeight?: number;
   onSetDefault?: (v: string) => void;
   defaultValue?: string;
   header?: (api: { select: (v: string) => void; close: () => void }) => ReactNode;
@@ -38,7 +40,7 @@ export function Menu({
 }) {
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
-  const [pos, setPos] = useState<{ left: number; top?: number; bottom?: number; width: number } | null>(null);
+  const [pos, setPos] = useState<{ left: number; top?: number; bottom?: number; width: number; maxH: number } | null>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const mouse = useRef(false); // distinguishes pointer-focus from keyboard(Tab)-focus
@@ -69,8 +71,15 @@ export function Menu({
     const w = menuWidth ?? Math.max(r.width, 180);
     const left = align === "right" ? Math.max(8, r.right - w) : Math.min(r.left, window.innerWidth - w - 8);
     const spaceBelow = window.innerHeight - r.bottom;
-    if (spaceBelow < 260 && r.top > spaceBelow) setPos({ left, bottom: window.innerHeight - r.top + 4, width: w });
-    else setPos({ left, top: r.bottom + 4, width: w });
+    const spaceAbove = r.top;
+    // Flip up only when below is genuinely cramped and above is roomier. Either
+    // way cap the height to the space actually available so a tall menu (e.g. the
+    // project switcher) never spills past the viewport — the list scrolls instead.
+    const up = spaceBelow < Math.min(maxHeight, 280) && spaceAbove > spaceBelow;
+    const maxH = Math.min(maxHeight, Math.max(160, (up ? spaceAbove : spaceBelow) - 12));
+    setPos(up
+      ? { left, bottom: window.innerHeight - r.top + 4, width: w, maxH }
+      : { left, top: r.bottom + 4, width: w, maxH });
   };
 
   useLayoutEffect(() => {
@@ -161,8 +170,8 @@ export function Menu({
         createPortal(
           <div
             ref={menuRef}
-            className="fixed z-[100] flex max-h-72 flex-col rounded-lg border border-line2 bg-panel p-1 shadow-xl"
-            style={{ left: pos.left, top: pos.top, bottom: pos.bottom, width: pos.width }}
+            className="fixed z-[100] flex flex-col rounded-lg border border-line2 bg-panel p-1 shadow-xl"
+            style={{ left: pos.left, top: pos.top, bottom: pos.bottom, width: pos.width, maxHeight: pos.maxH }}
           >
             {header && (
               <div className="mb-1 shrink-0 border-b border-line px-1 pb-1.5 pt-0.5">

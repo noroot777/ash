@@ -364,6 +364,7 @@ export function App() {
             value={projectId ?? ""}
             onChange={(v) => { setProjSearch(""); setProjectId(v); }}
             menuWidth={300}
+            maxHeight={520}
             options={otherProjects.map((p) => ({
               value: p.id,
               label: p.name,
