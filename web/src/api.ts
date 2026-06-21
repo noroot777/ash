@@ -1,4 +1,4 @@
-import type { Project, ProjectView, ProjectHealth, Task, Session, Group, GateAction, Schedule, AgentExecutorProfile, BatchCreateTasksBody, AgentType, DebateSpeaker, AttachmentKind } from "@harness/shared";
+import type { Project, ProjectView, ProjectHealth, Task, Session, Group, GateAction, Schedule, ScheduledMessage, AgentExecutorProfile, BatchCreateTasksBody, AgentType, DebateSpeaker, AttachmentKind } from "@harness/shared";
 
 const j = async (r: Response) => {
   if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
@@ -107,7 +107,7 @@ export const api = {
     fetch(`/api/tasks/${id}/archive`, { method: "POST" }).then(j),
   unarchiveTask: (id: string): Promise<Task> =>
     fetch(`/api/tasks/${id}/unarchive`, { method: "POST" }).then(j),
-  replyTask: (id: string, text: string, opts?: { attachments?: string[]; agent?: AgentType }): Promise<unknown> =>
+  replyTask: (id: string, text: string, opts?: { attachments?: string[]; agent?: AgentType; sendAt?: string }): Promise<unknown> =>
     fetch(`/api/tasks/${id}/reply`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -133,6 +133,12 @@ export const api = {
     }).then(j),
   clearSchedule: (taskId: string): Promise<unknown> =>
     fetch(`/api/tasks/${taskId}/schedule`, { method: "DELETE" }).then(j),
+
+  // Scheduled replies (定时发送): list this task's pending ones; cancel by message id.
+  scheduledMessages: (taskId: string): Promise<ScheduledMessage[]> =>
+    fetch(`/api/tasks/${taskId}/scheduled-messages`).then(j),
+  cancelScheduledMessage: (mid: string): Promise<unknown> =>
+    fetch(`/api/scheduled-messages/${mid}`, { method: "DELETE" }).then(j),
 
   agents: (): Promise<AgentExecutorProfile[]> => fetch("/api/agents").then(j),
   detectAgents: (): Promise<
