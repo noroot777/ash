@@ -76,7 +76,6 @@ server.registerTool(
       projectId: z.string().optional(),
       repoPath: z.string().optional().describe("projectId 的替代：按仓库路径定位项目"),
       mode: MODE.optional(),
-      useWorktree: z.boolean().optional().describe("默认 true，每个任务独立 worktree 隔离"),
     },
   },
   async (args) => {
@@ -90,13 +89,12 @@ server.registerTool(
   {
     title: "找到或复用分组",
     description:
-      "按 项目+名 找到或创建分组（幂等，分组版的 resolve_project）。已存在同名分组就复用它（其 mode/worktree 保持不变，不会被你传的 mode 覆盖）；同名出现多次会报错让你用 groupId 指定。要往一个固定名字的分组反复追加任务、又不想每次建重复组时，用这个而不是 create_group。",
+      "按 项目+名 找到或创建分组（幂等，分组版的 resolve_project）。已存在同名分组就复用它（其 mode 保持不变，不会被你传的 mode 覆盖）；同名出现多次会报错让你用 groupId 指定。要往一个固定名字的分组反复追加任务、又不想每次建重复组时，用这个而不是 create_group。",
     inputSchema: {
       name: z.string(),
       projectId: z.string().optional(),
       repoPath: z.string().optional().describe("projectId 的替代：按仓库路径定位项目"),
       mode: MODE.optional().describe("仅在【新建】分组时作为默认；复用已有分组时忽略"),
-      useWorktree: z.boolean().optional().describe("仅在【新建】分组时生效；复用时忽略"),
     },
   },
   async (args) => {
@@ -161,7 +159,7 @@ server.registerTool(
         const byStatus: Record<string, number> = {};
         for (const t of mine) byStatus[t.status as string] = (byStatus[t.status as string] ?? 0) + 1;
         return {
-          id: g.id, name: g.name, mode: g.mode, useWorktree: g.useWorktree,
+          id: g.id, name: g.name, mode: g.mode,
           projectId: g.projectId,
           tasks: { total: mine.length, byStatus },
         };

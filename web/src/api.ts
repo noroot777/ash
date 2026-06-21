@@ -64,7 +64,7 @@ export const api = {
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
     }).then(j),
-  updateGroup: (id: string, patch: Partial<Pick<Group, "name" | "mode" | "useWorktree">>): Promise<Group> =>
+  updateGroup: (id: string, patch: Partial<Pick<Group, "name" | "mode">>): Promise<Group> =>
     fetch(`/api/groups/${id}`, {
       method: "PATCH",
       headers: { "content-type": "application/json" },

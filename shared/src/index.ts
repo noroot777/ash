@@ -52,13 +52,12 @@ export interface ProjectView extends Project {
 export type GroupMode = "parallel" | "serial";
 
 // Group = transient homogeneous batch container (§3). Not persistent-by-design,
-// not schedulable. Controls parallel/serial + worktree isolation default.
+// not schedulable. Controls parallel/serial scheduling.
 export interface Group {
   id: string;
   projectId: string;
   name: string;
   mode: GroupMode;
-  useWorktree: boolean; // default true
   paused: boolean; // 暂停 = 立刻冻结整组：调度器不再启动"还没开始"的任务，正在运行的也会被停掉（结算为 canceled，可继续）；再次「运行/继续」时恢复，被停的任务从中断处接着跑
   createdAt: string;
 }

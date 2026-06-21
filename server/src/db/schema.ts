@@ -15,7 +15,6 @@ export const groups = sqliteTable("groups", {
   projectId: text("project_id").notNull(),
   name: text("name").notNull(),
   mode: text("mode").notNull().default("parallel"), // parallel | serial
-  useWorktree: integer("use_worktree", { mode: "boolean" }).notNull().default(true),
   paused: integer("paused", { mode: "boolean" }).notNull().default(false),
   createdAt: text("created_at").notNull(),
 });

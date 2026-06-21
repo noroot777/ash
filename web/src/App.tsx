@@ -245,7 +245,7 @@ export function App() {
     },
     [addGroup],
   );
-  const updateGroup = useCallback(async (id: string, patch: Partial<Pick<Group, "name" | "mode" | "useWorktree">>) => {
+  const updateGroup = useCallback(async (id: string, patch: Partial<Pick<Group, "name" | "mode">>) => {
     const g = await api.updateGroup(id, patch);
     setGroups((gs) => gs.map((x) => (x.id === id ? g : x)));
   }, []);

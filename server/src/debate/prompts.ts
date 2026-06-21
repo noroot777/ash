@@ -122,20 +122,20 @@ ${text}
 }
 
 // Code review by the OTHER debater after the implementer writes code. It runs in
-// the implementer's worktree, so it can inspect the actual diff with git.
+// the implementer's working dir, so it can inspect the actual diff with git.
 export function review(topic: string, cwd: string): string {
   return `=== 代码审查 ===
 
 议题：${topic}
 
-实现方刚在当前工作目录（${cwd}，本任务的 git worktree）按你们讨论的方案实现了代码改动。现在请你作为**代码审查方**做一次 code review：
+实现方刚在当前工作目录（${cwd}）按你们讨论的方案实现了代码改动。现在请你作为**代码审查方**做一次 code review：
 - 先用 git 看实际改动：\`git -C . diff\`、\`git -C . status\`、必要时读相关文件。
 - 审查要点：是否有 bug / 边界遗漏 / 安全或健壮性问题 / 与方案不符之处 / 明显坏味道。
 - 简明扼要、列要点；指出问题时给出具体位置和修法建议。
 - 如果改动没问题，明确写一行结论「通过」。
 本阶段只读不改。全程中文。`;
 }
-// that writes code; it runs in an isolated worktree. `directive` is computed by
+// that writes code in the project's working dir. `directive` is computed by
 // the orchestrator — it states honestly whether this is a real consensus or a
 // human-/config-chosen side, so the implementer never acts on a fake "consensus".
 export function implement(topic: string, finalDiscussion: string, directive: string, cwd: string): string {
@@ -150,7 +150,7 @@ ${finalDiscussion}
 === 实现指令（必须遵循）===
 ${directive}
 
-现在请你作为实现者，在当前工作目录（${cwd}，这是为本任务隔离出的 git worktree）中，严格按上面的实现指令落地代码改动。
+现在请你作为实现者，在当前工作目录（${cwd}）中，严格按上面的实现指令落地代码改动。
 - 确保能通过编译与现有测试。
 - 如发现指令中有遗漏或需调整的细节，在回复中说明原因。
 - 实现完成后，总结你做了哪些改动。全程中文。`;

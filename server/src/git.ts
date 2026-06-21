@@ -102,85 +102,31 @@ export async function projectHealthFull(repoPath: string | null | undefined): Pr
   return { ...light, branch, dirty };
 }
 
-// Best-effort removal of a task's worktree when a project is deleted. Silent on
-// any failure (repo may be gone, worktree may never have existed).
-export async function removeWorktree(repoPath: string, taskId: string): Promise<void> {
-  const p = expandHome(repoPath);
-  try {
-    await exec("git", ["-C", p, "worktree", "remove", "--force", join(".worktrees", taskId)]);
-    await exec("git", ["-C", p, "worktree", "prune"]);
-  } catch { /* best effort */ }
-}
-
 export interface Workspace {
   path: string;
   branch: string | null;
   isWorktree: boolean;
 }
 
-// Create an isolated git worktree + branch for a task (DESIGN.md §4).
-// Falls back to the repo path itself when worktree isn't possible/wanted.
-export async function prepareWorkspace(
-  repoPath: string,
-  taskId: string,
-  useWorktree: boolean,
-): Promise<Workspace> {
-  repoPath = expandHome(repoPath);
-  if (!useWorktree || !(await isGitRepo(repoPath))) {
-    return { path: repoPath, branch: null, isWorktree: false };
+// Resolve where a run executes — and REPORT its git context, never creating
+// anything. harness no longer manages worktrees; that is the user's call now. A
+// run happens directly in the project's repoPath (or a per-task scratch dir when
+// there's no usable git repo — a repo-less discussion or a missing path). We just
+// record the current branch and whether that dir is itself a user-managed linked
+// worktree, so the UI can surface it.
+export async function resolveWorkspace(repoPath: string, taskId: string): Promise<Workspace> {
+  const p = expandHome(repoPath);
+  if (await isGitRepo(p)) {
+    return { path: p, branch: await currentBranch(p), isWorktree: isFile(join(p, ".git")) };
   }
-  const branch = `harness/${taskId}`;
-  const path = join(repoPath, ".worktrees", taskId);
-  try {
-    await exec("git", ["-C", repoPath, "worktree", "add", "-b", branch, path, "HEAD"]);
-  } catch (e: any) {
-    // Branch/worktree may already exist from a prior run — reuse it.
-    if (/already exists/i.test(e?.stderr ?? "")) {
-      try {
-        await exec("git", ["-C", repoPath, "worktree", "add", path, branch]);
-      } catch {
-        return { path: repoPath, branch: null, isWorktree: false };
-      }
-    } else {
-      return { path: repoPath, branch: null, isWorktree: false };
-    }
-  }
-  return { path, branch, isWorktree: true };
-}
-
-// Resolve where a run executes. A worktree only makes sense when the *project's*
-// repoPath is a real git repo; otherwise (repo-less discussion, or a missing
-// path) we run directly in a scratch dir — never trying to worktree the scratch
-// dir, which would create stray worktrees/branches in whatever repo contains it.
-export async function resolveWorkspace(
-  repoPath: string,
-  taskId: string,
-  useWorktree: boolean,
-): Promise<Workspace> {
-  if (await isGitRepo(repoPath)) return prepareWorkspace(repoPath, taskId, useWorktree);
   return { path: ensureWorkdir(repoPath, taskId), branch: null, isWorktree: false };
 }
 
-// Commit whatever the implementer changed in its worktree (DESIGN.md §4: default
-// auto-commit). No-op if nothing changed. Returns the commit sha or null.
-export async function commitWorktree(path: string, message: string): Promise<string | null> {
+// Current branch of a working dir ("HEAD" when detached); null if git can't tell.
+async function currentBranch(p: string): Promise<string | null> {
   try {
-    await exec("git", ["-C", path, "add", "-A"]);
-    const { stdout: status } = await exec("git", ["-C", path, "status", "--porcelain"]);
-    if (!status.trim()) return null; // nothing to commit
-    await exec("git", [
-      "-C",
-      path,
-      "-c",
-      "user.name=harness",
-      "-c",
-      "user.email=harness@local",
-      "commit",
-      "-m",
-      message,
-    ]);
-    const { stdout: sha } = await exec("git", ["-C", path, "rev-parse", "HEAD"]);
-    return sha.trim();
+    const { stdout } = await exec("git", ["-C", p, "rev-parse", "--abbrev-ref", "HEAD"]);
+    return stdout.trim() || null;
   } catch {
     return null;
   }

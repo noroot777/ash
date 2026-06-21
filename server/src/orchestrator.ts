@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { eq, inArray } from "drizzle-orm";
 import type { AgentType } from "@harness/shared";
 import { db } from "./db/index.js";
-import { tasks, projects, groups, sessions } from "./db/schema.js";
+import { tasks, projects, sessions } from "./db/schema.js";
 import { bus } from "./bus.js";
 import { id, now, attachmentsPrompt } from "./util.js";
 import { setTaskStatus } from "./status.js";
@@ -71,7 +71,7 @@ export async function reconcileInterrupted(): Promise<void> {
   console.log(`[harness] reconciled ${orphaned.length} interrupted task(s) → failed`);
 }
 
-// M1: execute a single-agent task in an isolated worktree, stream output over
+// M1: execute a single-agent task in the project's working dir, stream output over
 // SSE, and persist a session credential (DESIGN.md §1/§4/§12/§13).
 export async function runTask(taskId: string): Promise<void> {
   if (running.has(taskId)) return;
@@ -87,12 +87,7 @@ export async function runTask(taskId: string): Promise<void> {
 
     await setStatus(taskId, "running");
 
-    const group = task.groupId
-      ? (await db.select().from(groups).where(eq(groups.id, task.groupId))).at(0)
-      : undefined;
-    const useWorktree = group ? group.useWorktree : true;
-
-    const ws = await resolveWorkspace(project.repoPath, taskId, useWorktree);
+    const ws = await resolveWorkspace(project.repoPath, taskId);
     const agentType = (task.agentType as AgentType) ?? "claude";
     const ex = await resolveExecutor(agentType);
 

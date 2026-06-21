@@ -4,7 +4,7 @@ import { Stack, Play, Pause, Trash, Plus } from "@phosphor-icons/react";
 import { Modal, ConfirmModal } from "./Modal";
 
 // Manage a project's groups (transient parallel/serial batches, §3): rename,
-// switch parallel/serial, toggle worktree isolation, see member count, run, pause,
+// switch parallel/serial, see member count, run, pause,
 // or delete (members are kept — just ungrouped). Inline create at the bottom.
 export function GroupsPanel({
   groups,
@@ -21,7 +21,7 @@ export function GroupsPanel({
   onClose: () => void;
   onRun: (id: string) => void;
   onPause: (id: string) => void;
-  onUpdate: (id: string, patch: Partial<Pick<Group, "name" | "mode" | "useWorktree">>) => void;
+  onUpdate: (id: string, patch: Partial<Pick<Group, "name" | "mode">>) => void;
   onDelete: (id: string) => void;
   onCreate: (name: string, mode: GroupMode) => void;
 }) {
@@ -65,16 +65,6 @@ export function GroupsPanel({
                   </button>
                 ))}
               </div>
-              <button
-                onClick={() => onUpdate(g.id, { useWorktree: !g.useWorktree })}
-                className="inline-flex shrink-0 items-center gap-1.5 text-[12px] text-muted"
-                title="每个任务在独立 git worktree 中运行"
-              >
-                <span className={`relative h-4 w-7 rounded-full transition-colors ${g.useWorktree ? "bg-accent" : "bg-line2"}`}>
-                  <span className={`absolute top-0.5 h-3 w-3 rounded-full bg-panel transition-all ${g.useWorktree ? "left-3.5" : "left-0.5"}`} />
-                </span>
-                worktree
-              </button>
               <span className="shrink-0 text-[12px] text-faint">{count(g.id)} 个任务</span>
               {g.paused ? (
                 <>

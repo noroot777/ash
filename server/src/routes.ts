@@ -25,7 +25,7 @@ import { runGroup } from "./scheduler.js";
 import { runDebate, resumeDebate, resumeAtGate } from "./debate/index.js";
 import { resolveGate } from "./debate/gates.js";
 import { detectLocalAgents } from "./detect.js";
-import { projectHealthLight, projectHealthFull, removeWorktree, tidyRepoPath, repoKey } from "./git.js";
+import { projectHealthLight, projectHealthFull, tidyRepoPath, repoKey } from "./git.js";
 import { resumeCommandFor } from "./executors/spawn.js";
 import type { GateAction, AgentType, BatchCreateTasksBody, BatchTaskInput } from "@harness/shared";
 
@@ -275,20 +275,18 @@ api.patch("/projects/:id", async (c) => {
   return c.json(toProject(updated));
 });
 
-// Full delete: cascade tasks → their sessions/schedules/run-artifacts/worktrees,
-// then groups, then the project. Refuses while any task is live (§ safety).
+// Full delete: cascade tasks → their sessions/schedules/run-artifacts, then
+// groups, then the project. Refuses while any task is live (§ safety).
 api.delete("/projects/:id", async (c) => {
   const pid = c.req.param("id");
   const ptasks = await db.select().from(tasks).where(eq(tasks.projectId, pid));
   const live = ptasks.find((t) => t.status === "running" || t.status === "queued");
   if (live) return c.json({ error: "项目有正在运行/排队的任务，无法删除", taskId: live.id }, 409);
-  const project = (await db.select().from(projects).where(eq(projects.id, pid))).at(0);
   for (const t of ptasks) {
     await db.delete(sessions).where(eq(sessions.taskId, t.id));
     await db.delete(schedules).where(eq(schedules.taskId, t.id));
     rmSync(join(RUNS_DIR, t.id), { recursive: true, force: true });
     rmSync(join(DATA_DIR, "scratch", t.id), { recursive: true, force: true });
-    if (project?.repoPath) await removeWorktree(project.repoPath, t.id);
   }
   await db.delete(tasks).where(eq(tasks.projectId, pid));
   await db.delete(groups).where(eq(groups.projectId, pid));
@@ -348,7 +346,6 @@ api.post("/groups", async (c) => {
     projectId: loc.project.id,
     name: b.name.trim(),
     mode: b.mode ?? "parallel",
-    useWorktree: b.useWorktree ?? true,
     paused: false,
     createdAt: now(),
   };
@@ -360,7 +357,7 @@ api.post("/groups", async (c) => {
 // /projects/resolve, so an orchestrator (MCP create_task_chain / a skill) reuses
 // an existing batch container instead of spawning a duplicate on every run. A
 // name that already exists twice in one project is a hard 409 — we never guess.
-// On reuse the existing group's mode/useWorktree are KEPT (the caller's mode is
+// On reuse the existing group's mode is KEPT (the caller's mode is
 // only a default for a fresh group), so resolving never silently flips a group
 // you set to serial back to parallel.
 api.post("/groups/resolve", async (c) => {
@@ -378,14 +375,13 @@ api.post("/groups/resolve", async (c) => {
   if (existing.length > 1) {
     return c.json({ error: "同项目下有多个同名分组，请改用 groupId 指定要用哪个", name, ids: existing.map((g) => g.id) }, 409);
   }
-  if (existing.length === 1) return c.json(existing[0], 200); // reuse as-is (mode/worktree untouched)
+  if (existing.length === 1) return c.json(existing[0], 200); // reuse as-is (mode untouched)
 
   const row = {
     id: id(),
     projectId: loc.project.id,
     name,
     mode: b.mode ?? "parallel",
-    useWorktree: b.useWorktree ?? true,
     paused: false,
     createdAt: now(),
   };
@@ -595,7 +591,7 @@ api.post("/groups/:groupId/tasks/batch", async (c) => {
   );
 });
 
-// Edit a group (name / parallel-serial / worktree isolation).
+// Edit a group (name / parallel-serial).
 api.patch("/groups/:id", async (c) => {
   const gid = c.req.param("id");
   const existing = (await db.select().from(groups).where(eq(groups.id, gid))).at(0);
@@ -607,7 +603,6 @@ api.patch("/groups/:id", async (c) => {
     patch.name = b.name.trim();
   }
   if (b.mode !== undefined) patch.mode = b.mode;
-  if (b.useWorktree !== undefined) patch.useWorktree = b.useWorktree;
   if (Object.keys(patch).length) await db.update(groups).set(patch).where(eq(groups.id, gid));
   const updated = (await db.select().from(groups).where(eq(groups.id, gid))).at(0)!;
   return c.json(updated);

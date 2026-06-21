@@ -22,7 +22,7 @@ export async function ensureSchema() {
     );
     CREATE TABLE IF NOT EXISTS groups (
       id TEXT PRIMARY KEY, project_id TEXT NOT NULL, name TEXT NOT NULL,
-      mode TEXT NOT NULL DEFAULT 'parallel', use_worktree INTEGER NOT NULL DEFAULT 1,
+      mode TEXT NOT NULL DEFAULT 'parallel',
       paused INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL
     );
     CREATE TABLE IF NOT EXISTS tasks (

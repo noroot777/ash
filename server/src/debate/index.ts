@@ -14,7 +14,7 @@ import { bus } from "../bus.js";
 import { id, now } from "../util.js";
 import { setTaskStatus } from "../status.js";
 import { trackRun, untrackRun, isCanceling, takeCanceled, CanceledRun } from "../runs.js";
-import { commitWorktree, ensureWorkdir, resolveWorkspace } from "../git.js";
+import { ensureWorkdir, resolveWorkspace } from "../git.js";
 import { resolveExecutor } from "../executors/index.js";
 import type { AgentExecutor } from "../executors/types.js";
 import { RUNS_DIR } from "../paths.js";
@@ -232,7 +232,7 @@ async function loadBase(taskId: string) {
 }
 
 // Full /debate pipeline: blind opening (parallel) → serial rebuttal rounds
-// (A-first) → consensus gate G1 → implement in worktree → code gate G2 → commit.
+// (A-first) → consensus gate G1 → implement → code gate G2.
 export async function runDebate(taskId: string): Promise<void> {
   if (running.has(taskId)) return;
   running.add(taskId);
@@ -439,7 +439,7 @@ export async function resumeAtGate(taskId: string, action: GateAction): Promise<
     // persisted, so use the configured implementer for any further runs.
     const side = base.cfg.implementer;
     const exImpl = side === "A" ? base.exA : base.exB;
-    const ws = await resolveWorkspace(base.project.repoPath, taskId, true);
+    const ws = await resolveWorkspace(base.project.repoPath, taskId);
     if (action.kind === "reject") return void (await setStatus(taskId, "canceled"));
     if (action.kind !== "approve") {
       // inject / ask → re-run the implementer with the feedback, then re-park G2.
@@ -453,7 +453,6 @@ export async function resumeAtGate(taskId: string, action: GateAction): Promise<
       });
       if (!res.approved) return void (await setStatus(taskId, "canceled"));
     }
-    if (ws.isWorktree) await commitWorktree(ws.path, `debate: ${ctx.title}`);
     await setStatus(taskId, "done");
   } catch (err) {
     failDebate(taskId, err);
@@ -526,7 +525,7 @@ async function gateAndImplement(ctx: Ctx): Promise<void> {
   await runImplement(ctx, { note, chosenSide });
 }
 
-// 辩论=仅讨论：收敛后到此即止，结论就是交付物（不实现、不审查、不建 worktree）。
+// 辩论=仅讨论：收敛后到此即止，结论就是交付物（不实现、不审查）。
 // 收敛门(G1)开 → 让人读结论后放行(=结束)/打回(=取消)/注入·提问(=再辩)；关 → 直接 done。
 async function finishDiscussion(ctx: Ctx): Promise<void> {
   const { taskId, cfg } = ctx;
@@ -547,7 +546,7 @@ async function concludeOrImplement(ctx: Ctx): Promise<void> {
   else await finishDiscussion(ctx);
 }
 
-// Implement stage — chosen side implements in an isolated worktree, resuming its
+// Implement stage — chosen side implements in the project's working dir, resuming its
 // own debate session. Honest directive: never claims consensus when there wasn't.
 async function runImplement(ctx: Ctx, opts: { note: string; chosenSide?: "A" | "B" }): Promise<void> {
   const { taskId, cfg, exA, exB } = ctx;
@@ -556,7 +555,7 @@ async function runImplement(ctx: Ctx, opts: { note: string; chosenSide?: "A" | "
   const side = opts.chosenSide ?? cfg.implementer; // human pick > config default
   const exImpl = side === "A" ? exA : exB;
   const implCliId = side === "A" ? ctx.A.cliId : ctx.B.cliId;
-  const ws = await resolveWorkspace(ctx.project.repoPath, taskId, true);
+  const ws = await resolveWorkspace(ctx.project.repoPath, taskId);
   const nameA = collab ? "成员A" : "辩手A";
   const nameB = collab ? "成员B" : "辩手B";
   const finalDiscussion = `【${nameA} 最终】\n${ctx.lastA}\n\n【${nameB} 最终】\n${ctx.lastB}`;
@@ -584,7 +583,7 @@ async function runImplement(ctx: Ctx, opts: { note: string; chosenSide?: "A" | "
   if (failed(it)) return void (await setStatus(taskId, "failed"));
 
   // Code review by the OTHER debater (the non-implementer side) — it inspects the
-  // implementer's diff in the worktree and reports issues / approves. Resumes its
+  // implementer's diff and reports issues / approves. Resumes its
   // own debate session so it reviews against the plan it argued. Best-effort: a
   // failed review doesn't block (the human still gates at G2).
   const reviewerSide = side === "A" ? "B" : "A";
@@ -605,7 +604,6 @@ async function runImplement(ctx: Ctx, opts: { note: string; chosenSide?: "A" | "
     if (!res.approved) return void (await setStatus(taskId, "canceled"));
   }
 
-  if (ws.isWorktree) await commitWorktree(ws.path, `debate: ${ctx.title}`);
   await setStatus(taskId, "done");
 }
 
