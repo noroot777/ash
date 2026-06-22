@@ -16,6 +16,12 @@ import { Ionicons } from "@expo/vector-icons";
 
 const PRIORITY_RANK: Record<string, number> = { urgent: 0, high: 1, medium: 2, low: 3, none: 4 };
 
+// 列表 section 的元信息:活跃任务按状态分区,外加底部一个可折叠的「已归档」区。
+// (单元三的分组视图会再扩展出 group / ungrouped 两种 kind。)
+type SectionMeta =
+  | { kind: "status"; key: string }
+  | { kind: "archived"; key: "archived"; count: number };
+
 function TaskRow({ task, onPress }: { task: Task; onPress: () => void }) {
   const theme = useTheme();
   return (
@@ -70,6 +76,7 @@ function TaskList() {
   const tasks = useStore((s) => s.tasks);
   const [refreshing, setRefreshing] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [archivedOpen, setArchivedOpen] = useState(false); // 底部「已归档」区默认折叠
   const currentProject = projects.find((p) => p.id === projectId) ?? null;
 
   const onRefresh = useCallback(async () => {
@@ -82,20 +89,27 @@ function TaskList() {
     setRefreshing(false);
   }, []);
 
-  const sections = useMemo(() => {
+  const sections = useMemo<(SectionMeta & { data: Task[] })[]>(() => {
     const mine = tasks.filter((t) => t.projectId === projectId && t.mode !== "debate");
-    const byStatus = (st: TaskStatus) =>
-      mine
-        .filter((t) => t.status === st)
-        .sort(
-          (a, b) =>
-            (PRIORITY_RANK[a.priority] ?? 9) - (PRIORITY_RANK[b.priority] ?? 9) ||
-            b.updatedAt.localeCompare(a.updatedAt),
-        );
-    return STATUSES.map((s) => ({ key: s.key, label: s.label, data: byStatus(s.key) })).filter(
-      (s) => s.data.length > 0,
-    );
-  }, [tasks, projectId]);
+    const byPriority = (a: Task, b: Task) =>
+      (PRIORITY_RANK[a.priority] ?? 9) - (PRIORITY_RANK[b.priority] ?? 9) ||
+      b.updatedAt.localeCompare(a.updatedAt);
+    // 活跃任务按状态分区(排除已归档);归档任务收进底部可折叠的「已归档」区。
+    const statusSections = STATUSES.map((s) => ({
+      kind: "status" as const,
+      key: s.key,
+      data: mine.filter((t) => !t.archived && t.status === s.key).sort(byPriority),
+    })).filter((s) => s.data.length > 0);
+    const archived = mine
+      .filter((t) => t.archived)
+      .sort((a, b) => (b.archivedAt ?? "").localeCompare(a.archivedAt ?? ""));
+    return archived.length
+      ? [
+          ...statusSections,
+          { kind: "archived" as const, key: "archived", count: archived.length, data: archivedOpen ? archived : [] },
+        ]
+      : statusSections;
+  }, [tasks, projectId, archivedOpen]);
 
   return (
     <View style={{ flex: 1, backgroundColor: theme.bg }}>
@@ -123,36 +137,59 @@ function TaskList() {
         )}
       </View>
 
-      <SectionList
+      <SectionList<Task, SectionMeta>
         sections={sections}
         keyExtractor={(t) => t.id}
         renderItem={({ item }) => <TaskRow task={item} onPress={() => router.push(`/task/${item.id}`)} />}
-        renderSectionHeader={({ section }) => (
-          <View
-            style={{
-              flexDirection: "row",
-              alignItems: "center",
-              gap: 8,
-              paddingHorizontal: 16,
-              paddingTop: 18,
-              paddingBottom: 8,
-              backgroundColor: theme.bg,
-            }}
-          >
+        renderSectionHeader={({ section }) =>
+          section.kind === "archived" ? (
+            <Pressable
+              onPress={() => setArchivedOpen((v) => !v)}
+              style={({ pressed }) => ({
+                flexDirection: "row",
+                alignItems: "center",
+                gap: 8,
+                marginHorizontal: 16,
+                marginTop: 20,
+                paddingHorizontal: 12,
+                paddingVertical: 11,
+                borderRadius: radius.md,
+                backgroundColor: pressed ? theme.raised : theme.overlay,
+              })}
+            >
+              <Ionicons name="archive-outline" size={14} color={theme.faint} />
+              <Text style={{ color: theme.muted, fontSize: 11, fontFamily: fonts.monoMed, letterSpacing: 1 }}>已归档</Text>
+              <Text style={{ color: theme.faint, fontSize: 11, fontFamily: fonts.mono }}>· {section.count}</Text>
+              <View style={{ flex: 1 }} />
+              <Ionicons name={archivedOpen ? "chevron-up" : "chevron-down"} size={16} color={theme.faint} />
+            </Pressable>
+          ) : (
             <View
               style={{
-                width: 7,
-                height: 7,
-                borderRadius: 4,
-                backgroundColor: STATUS_META[section.key as TaskStatus]?.color,
+                flexDirection: "row",
+                alignItems: "center",
+                gap: 8,
+                paddingHorizontal: 16,
+                paddingTop: 18,
+                paddingBottom: 8,
+                backgroundColor: theme.bg,
               }}
-            />
-            <Text style={{ color: theme.muted, fontSize: 11, fontFamily: fonts.monoMed, letterSpacing: 1 }}>
-              {section.key.toUpperCase().replace(/_/g, " ")}
-            </Text>
-            <Text style={{ color: theme.faint, fontSize: 11, fontFamily: fonts.mono }}>· {section.data.length}</Text>
-          </View>
-        )}
+            >
+              <View
+                style={{
+                  width: 7,
+                  height: 7,
+                  borderRadius: 4,
+                  backgroundColor: STATUS_META[section.key as TaskStatus]?.color,
+                }}
+              />
+              <Text style={{ color: theme.muted, fontSize: 11, fontFamily: fonts.monoMed, letterSpacing: 1 }}>
+                {section.key.toUpperCase().replace(/_/g, " ")}
+              </Text>
+              <Text style={{ color: theme.faint, fontSize: 11, fontFamily: fonts.mono }}>· {section.data.length}</Text>
+            </View>
+          )
+        }
         ItemSeparatorComponent={() => <View style={{ height: 8 }} />}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={theme.muted} />}
         contentContainerStyle={{ paddingBottom: insets.bottom + 96, flexGrow: 1 }}

@@ -38,6 +38,9 @@ export const api = {
   patchTask: (id: string, patch: Partial<Task>): Promise<Task> =>
     req(`/tasks/${id}`, { method: "PATCH", body: JSON.stringify(patch) }).then(j),
   deleteTask: (id: string): Promise<unknown> => req(`/tasks/${id}`, { method: "DELETE" }).then(j),
+  // 归档/取消归档:server 仅允许归档 done/failed/canceled(canArchive),归档态只读(拒编辑/运行/回复)。
+  archiveTask: (id: string): Promise<Task> => req(`/tasks/${id}/archive`, { method: "POST" }).then(j),
+  unarchiveTask: (id: string): Promise<Task> => req(`/tasks/${id}/unarchive`, { method: "POST" }).then(j),
 
   runTask: (id: string): Promise<unknown> => req(`/tasks/${id}/run`, { method: "POST" }).then(j),
   stopTask: (id: string): Promise<unknown> => req(`/tasks/${id}/stop`, { method: "POST" }).then(j),

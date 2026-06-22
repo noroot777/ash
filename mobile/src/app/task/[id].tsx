@@ -27,6 +27,7 @@ import { PriorityBars } from "@/components/ui";
 import { SignalBar } from "@/components/SignalBar";
 import { DateTimeButton } from "@/components/DateTimeField";
 import { TaskTimeChip, formatInstant } from "@/lib/time";
+import { canArchive } from "@harness/shared";
 import type { Session, ScheduledMessage } from "@harness/shared";
 import type { LogLine } from "@/lib/log";
 import { snapshotToLogLines } from "@/lib/log";
@@ -142,6 +143,26 @@ export default function TaskDetail() {
   };
   const onStop = () => api.stopTask(id).then(() => refreshAll()).catch(() => {});
 
+  // 归档态只读(server 拒编辑/运行/回复):归档后退回列表落入「已归档」区;取消归档留在详情并解冻。
+  const frozen = !!task.archived;
+  const onArchive = () =>
+    api
+      .archiveTask(id)
+      .then(() => {
+        refreshAll().catch(() => {});
+        if (router.canGoBack()) router.back();
+        else router.replace("/");
+      })
+      .catch((e) => Alert.alert("归档失败", e instanceof Error ? e.message : String(e)));
+  const onUnarchive = () =>
+    api
+      .unarchiveTask(id)
+      .then((t) => {
+        upsertTask(t);
+        refreshAll().catch(() => {});
+      })
+      .catch((e) => Alert.alert("取消归档失败", e instanceof Error ? e.message : String(e)));
+
   const confirmDelete = () =>
     Alert.alert("删除任务", `确定删除「${task.title}」？此操作不可撤销。`, [
       { text: "取消", style: "cancel" },
@@ -209,9 +230,20 @@ export default function TaskDetail() {
         options={{
           title: "",
           headerRight: () => (
-            <Pressable onPress={confirmDelete} hitSlop={10}>
-              <Text style={{ color: theme.danger, fontSize: 17 }}>🗑</Text>
-            </Pressable>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 18 }}>
+              {task.archived ? (
+                <Pressable onPress={onUnarchive} hitSlop={10}>
+                  <Ionicons name="archive" size={20} color={theme.accent} />
+                </Pressable>
+              ) : canArchive(status) ? (
+                <Pressable onPress={onArchive} hitSlop={10}>
+                  <Ionicons name="archive-outline" size={20} color={theme.muted} />
+                </Pressable>
+              ) : null}
+              <Pressable onPress={confirmDelete} hitSlop={10}>
+                <Text style={{ color: theme.danger, fontSize: 17 }}>🗑</Text>
+              </Pressable>
+            </View>
           ),
         }}
       />
@@ -226,7 +258,12 @@ export default function TaskDetail() {
               {status.toUpperCase().replace(/_/g, " ")}
             </Text>
             <View style={{ flex: 1 }} />
-            {canStopTask(status) ? (
+            {frozen ? (
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 5 }}>
+                <Ionicons name="archive" size={13} color={theme.faint} />
+                <Text style={{ color: theme.faint, fontSize: 12, fontFamily: fonts.mono }}>已归档</Text>
+              </View>
+            ) : canStopTask(status) ? (
               <Pressable
                 onPress={onStop}
                 style={{
@@ -310,7 +347,25 @@ export default function TaskDetail() {
         ) : null}
       </ScrollView>
 
-      {/* Reply composer：上方待发列表（定时发送），下方输入行 [输入][🕐][发送] */}
+      {/* Reply composer：归档只读→提示条;否则待发列表(定时发送)+输入行 [输入][🕐][发送] */}
+      {frozen ? (
+        <View
+          style={{
+            flexDirection: "row",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 6,
+            paddingTop: 12,
+            paddingBottom: insets.bottom + 12,
+            borderTopWidth: 1,
+            borderTopColor: theme.line,
+            backgroundColor: theme.panel,
+          }}
+        >
+          <Ionicons name="archive" size={14} color={theme.faint} />
+          <Text style={{ color: theme.faint, fontSize: 13 }}>已归档——取消归档后可继续对话</Text>
+        </View>
+      ) : (
       <View
         style={{
           paddingHorizontal: 12,
@@ -403,6 +458,7 @@ export default function TaskDetail() {
           </Pressable>
         </View>
       </View>
+      )}
     </KeyboardAvoidingView>
   );
 }
