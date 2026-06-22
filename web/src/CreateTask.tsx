@@ -18,8 +18,8 @@ const PAIR_STYLES: { key: DebateStyle; label: string; hint: string }[] = [
   { key: "collaborate", label: "协作", hint: "一方实现、一方审查，给你代码" },
 ];
 
-// 启动时机 (§9)：创建一个任务时「什么时候开始跑」。create=仅落 backlog（默认，
-// 不误触开跑）；run=建完立即跑；once/cron=挂定时，由调度器到点入队（不立即跑）。
+// 启动时机 (§9)：创建一个任务时「什么时候开始跑」。create=仅落 backlog；run=建完
+// 立即跑（默认）；once/cron=挂定时，由调度器到点入队（不立即跑）。
 type LaunchMode = "create" | "run" | "once" | "cron";
 const LAUNCH_MODES: { key: LaunchMode; label: string; detail: string; icon: ReactNode; btn: string }[] = [
   { key: "create", label: "仅创建", detail: "进待办，手动再跑", icon: <Tray size={15} />, btn: "创建任务" },
@@ -55,7 +55,7 @@ export function CreateTask({
   const [more, setMore] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [launchMode, setLaunchMode] = useState<LaunchMode>("create");
+  const [launchMode, setLaunchMode] = useState<LaunchMode>("run"); // 默认：建完立即跑
   const [at, setAt] = useState(""); // datetime-local value (once)
   const [cron, setCron] = useState("0 9 * * *"); // 5-field expr (cron)
   const [slashIdx, setSlashIdx] = useState(0); // highlighted style in the /pair picker
