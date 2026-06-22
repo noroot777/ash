@@ -71,47 +71,16 @@ export function Duration({
   return t ? <Text style={style}>{t}</Text> : null;
 }
 
-// 紧凑的生命周期时间 chip(列表项 / 详情头共用)。有 startedAt 时显示执行时间:
-// measured(后端按轮累计的真实执行时长)显示「用时 X」并在运行中跳动;历史任务无
-// 法还原则显示「跨度 X」(墙钟,含等待回复的空闲)。无 startedAt 显示「创建 …」。
-// 列表传 `nowMs` 共享节拍;详情不传,自走 live。移动端无 hover,不带提示文案。
-export function TaskTimeChip({
-  task,
-  nowMs,
-  style,
-}: {
-  task: Task;
-  nowMs?: number;
-  style?: StyleProp<ViewStyle>;
-}) {
+// 紧凑的创建时间 chip(列表项 / 详情头共用)——统一显示任务创建时刻「创建 MM/DD HH:mm」。
+// (曾显示执行用时 / 墙钟跨度,现按需求一律回归创建时间;Duration 等耗时函数保留,
+// 仍由会话视图 Conversation 用来显示每段会话的耗时。)
+export function TaskTimeChip({ task, style }: { task: Task; style?: StyleProp<ViewStyle> }) {
   const theme = useTheme();
-  const running = task.status === "running" || task.status === "queued";
-  const measured = typeof task.activeMs === "number";
-  const legacy = task.activeMs === undefined; // 旧 server 未下发 → 兼容期沿用墙钟「用时」
-  const live = measured && !!task.liveSince && !task.endedAt;
-  // 列表传 nowMs(共享节拍)时不自起计时器;详情自走 live。
-  const selfTick = useTick(live && nowMs === undefined);
-  const clock = nowMs ?? selfTick;
-  const ms = measured ? task.activeMs! + (live ? Math.max(0, clock - Date.parse(task.liveSince!)) : 0) : 0;
-  const txt: TextStyle = { fontSize: 11, fontFamily: fonts.mono, color: running ? theme.muted : theme.faint };
   const faint: TextStyle = { fontSize: 11, fontFamily: fonts.mono, color: theme.faint };
   return (
     <View style={[{ flexDirection: "row", alignItems: "center", gap: 4 }, style]}>
       <Ionicons name="time-outline" size={12} color={theme.faint} />
-      {task.startedAt ? (
-        <View style={{ flexDirection: "row", alignItems: "center", gap: 3 }}>
-          <Text style={measured || legacy ? txt : faint}>{measured || legacy ? "用时" : "跨度"}</Text>
-          {measured ? (
-            <Text style={txt}>{formatDuration(ms)}</Text>
-          ) : legacy ? (
-            <Duration from={task.startedAt} to={task.endedAt} nowMs={nowMs} style={txt} />
-          ) : (
-            <Text style={faint}>{durationText(task.startedAt, task.endedAt, clock)}</Text>
-          )}
-        </View>
-      ) : (
-        <Text style={faint}>创建 {formatInstant(task.createdAt)}</Text>
-      )}
+      <Text style={faint}>创建 {formatInstant(task.createdAt)}</Text>
     </View>
   );
 }
