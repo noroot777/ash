@@ -31,16 +31,13 @@ export function ScheduleFields({
     );
   }
   return (
-    <>
-      <input
-        value={cron}
-        onChange={(e) => onCron(e.target.value)}
-        placeholder="分 时 日 月 周"
-        className="w-36 rounded-md border border-line bg-panel px-2 py-1 font-mono text-ink outline-none"
-        title="5 字段 cron（本地时间）。例：0 9 * * 1-5 工作日 9 点"
-      />
-      <span className="text-faint">本地时间 · 例 0 9 * * 1-5</span>
-    </>
+    <input
+      value={cron}
+      onChange={(e) => onCron(e.target.value)}
+      placeholder="分 时 日 月 周"
+      className="w-36 rounded-md border border-line bg-panel px-2 py-1 font-mono text-ink outline-none"
+      title="5 字段 cron（本地时间）。例：0 9 * * 1-5 工作日 9 点"
+    />
   );
 }
 

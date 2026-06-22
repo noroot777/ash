@@ -39,6 +39,14 @@ export function ScheduleControl({ taskId }: { taskId: string }) {
     setSched(s);
   };
 
+  // 仅当编辑值与已存定时不一致时才提示「保存 / 清除」——没改动就不显示按钮。
+  const dirty = (() => {
+    if (kind === "none") return !!sched;
+    if (!sched || sched.kind !== kind) return true;
+    if (kind === "once") return at !== (sched.at ? toLocalInput(sched.at) : "");
+    return cron.trim() !== (sched.cron ?? "");
+  })();
+
   return (
     <div className="flex flex-wrap items-center gap-2 text-xs">
       <span className="text-faint">定时</span>
@@ -56,17 +64,10 @@ export function ScheduleControl({ taskId }: { taskId: string }) {
         <CaretDown size={11} weight="bold" className="text-faint" />
       </Menu>
       {kind !== "none" && <ScheduleFields kind={kind} at={at} cron={cron} onAt={setAt} onCron={setCron} />}
-      {(kind !== "none" || sched) && (
+      {dirty && (
         <button onClick={save} className="rounded-md bg-overlay px-2 py-1 text-ink hover:bg-overlay">
           {kind === "none" ? "清除定时" : "保存"}
         </button>
-      )}
-      {sched && (
-        <span className="text-faint">
-          {sched.kind === "once" ? `将于 ${new Date(sched.at!).toLocaleString()} 运行` : `cron ${sched.cron}`}
-          {sched.enabled ? "" : " · 已停用"}
-          {sched.lastRunAt ? ` · 上次 ${new Date(sched.lastRunAt).toLocaleTimeString()}` : ""}
-        </span>
       )}
     </div>
   );
