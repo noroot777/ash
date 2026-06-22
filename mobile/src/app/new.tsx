@@ -5,6 +5,7 @@ import { AGENT_TYPES, type AgentType, type Priority } from "@harness/shared";
 import { useStore } from "@/lib/store";
 import { api } from "@/lib/api";
 import { PRIORITIES, LAUNCH_MODES, type LaunchMode } from "@/lib/constants";
+import { groupLabel } from "@/lib/util";
 import { useTheme } from "@/lib/theme";
 import { Pill, Button, Input } from "@/components/ui";
 import { ScheduleFields } from "@/components/ScheduleFields";
@@ -18,8 +19,13 @@ export default function NewTask() {
   const projects = useStore((s) => s.projects);
   const storeProjectId = useStore((s) => s.projectId);
   const upsertTask = useStore((s) => s.upsertTask);
+  const groups = useStore((s) => s.groups);
+  const upsertGroup = useStore((s) => s.upsertGroup);
 
   const [projectId, setProjectId] = useState<string | null>(storeProjectId);
+  const [groupId, setGroupId] = useState<string | null>(null);
+  const [creatingGroup, setCreatingGroup] = useState(false);
+  const [newGroupName, setNewGroupName] = useState("");
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
   const [agent, setAgent] = useState<AgentType>("claude");
@@ -34,6 +40,22 @@ export default function NewTask() {
   const pickLaunch = (m: LaunchMode) => {
     if (m === "once") Keyboard.dismiss(); // 让出键盘，给 iOS inline spinner 腾位
     setLaunch(m);
+  };
+
+  const projectGroups = groups.filter((g) => g.projectId === projectId);
+  // 内联新建分组(默认并行),建好即选中——避免依赖平台相关的 Alert.prompt。
+  const createGroup = async () => {
+    const name = newGroupName.trim();
+    if (!name || !projectId) return;
+    try {
+      const g = await api.createGroup({ name, mode: "parallel", projectId });
+      upsertGroup(g);
+      setGroupId(g.id);
+      setNewGroupName("");
+      setCreatingGroup(false);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
   };
 
   const submit = async () => {
@@ -59,6 +81,7 @@ export default function NewTask() {
       const explicit = title.trim();
       const t = await api.createTask({
         projectId,
+        groupId,
         title: explicit || firstLine(body) || "新任务",
         body: body.trim(),
         mode: "single",
@@ -90,7 +113,16 @@ export default function NewTask() {
         <Field label="项目">
           <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
             {projects.map((p) => (
-              <Pill key={p.id} label={p.name} active={p.id === projectId} onPress={() => setProjectId(p.id)} />
+              <Pill
+                key={p.id}
+                label={p.name}
+                active={p.id === projectId}
+                onPress={() => {
+                  setProjectId(p.id);
+                  setGroupId(null); // 换项目后清掉旧分组选择
+                  setCreatingGroup(false);
+                }}
+              />
             ))}
           </View>
         </Field>
@@ -129,6 +161,29 @@ export default function NewTask() {
               />
             ))}
           </View>
+        </Field>
+
+        <Field label="分组（可选）">
+          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+            <Pill label="无分组" active={!groupId} onPress={() => setGroupId(null)} />
+            {projectGroups.map((g) => (
+              <Pill key={g.id} label={groupLabel(g)} active={g.id === groupId} onPress={() => setGroupId(g.id)} />
+            ))}
+            <Pill label="＋ 新建分组" onPress={() => setCreatingGroup((v) => !v)} />
+          </View>
+          {creatingGroup ? (
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginTop: 10 }}>
+              <Input
+                value={newGroupName}
+                onChangeText={setNewGroupName}
+                placeholder="分组名…(默认并行)"
+                style={{ flex: 1 }}
+                onSubmitEditing={createGroup}
+                autoFocus
+              />
+              <Button label="创建" onPress={createGroup} disabled={!newGroupName.trim()} />
+            </View>
+          ) : null}
         </Field>
 
         <Field label="启动时机">

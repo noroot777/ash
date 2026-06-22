@@ -5,13 +5,14 @@
 // Conversation content is NOT here: the task screen owns it locally, polled from
 // the session .md (see app/task/[id].tsx).
 import { create } from "zustand";
-import type { ProjectView, Task } from "@harness/shared";
+import type { ProjectView, Task, Group } from "@harness/shared";
 
 interface State {
   online: boolean;
   projects: ProjectView[];
   projectId: string | null;
   tasks: Task[];
+  groups: Group[];
 
   setOnline: (b: boolean) => void;
   setProjects: (p: ProjectView[]) => void;
@@ -19,6 +20,9 @@ interface State {
   setTasks: (t: Task[]) => void;
   upsertTask: (t: Task) => void;
   removeTask: (id: string) => void;
+  setGroups: (g: Group[]) => void;
+  upsertGroup: (g: Group) => void;
+  removeGroup: (id: string) => void;
 }
 
 export const useStore = create<State>((set) => ({
@@ -26,6 +30,7 @@ export const useStore = create<State>((set) => ({
   projects: [],
   projectId: null,
   tasks: [],
+  groups: [],
 
   setOnline: (online) => set({ online }),
   setProjects: (projects) => set({ projects }),
@@ -36,4 +41,10 @@ export const useStore = create<State>((set) => ({
       tasks: s.tasks.some((x) => x.id === t.id) ? s.tasks.map((x) => (x.id === t.id ? t : x)) : [t, ...s.tasks],
     })),
   removeTask: (id) => set((s) => ({ tasks: s.tasks.filter((t) => t.id !== id) })),
+  setGroups: (groups) => set({ groups }),
+  upsertGroup: (g) =>
+    set((s) => ({
+      groups: s.groups.some((x) => x.id === g.id) ? s.groups.map((x) => (x.id === g.id ? g : x)) : [...s.groups, g],
+    })),
+  removeGroup: (id) => set((s) => ({ groups: s.groups.filter((g) => g.id !== id) })),
 }));

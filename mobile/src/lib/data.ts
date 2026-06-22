@@ -8,12 +8,13 @@ import { useStore } from "./store";
 
 export async function refreshAll(): Promise<void> {
   try {
-    const [projects, tasks] = await Promise.all([api.projects(), api.tasks()]);
+    const [projects, tasks, groups] = await Promise.all([api.projects(), api.tasks(), api.groups()]);
     const st = useStore.getState();
     st.setProjects(projects);
     const cur = st.projectId;
     st.setProjectId(cur && projects.some((p) => p.id === cur) ? cur : (projects[0]?.id ?? null));
     st.setTasks(tasks);
+    st.setGroups(groups);
     st.setOnline(true);
   } catch (e) {
     useStore.getState().setOnline(false);

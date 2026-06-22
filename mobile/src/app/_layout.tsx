@@ -106,6 +106,7 @@ export default function RootLayout() {
           }}
         />
         <Stack.Screen name="task/[id]" options={{ title: "" }} />
+        <Stack.Screen name="groups" options={{ title: "分组管理" }} />
       </Stack>
     </SafeAreaProvider>
     </GestureHandlerRootView>

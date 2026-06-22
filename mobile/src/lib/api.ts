@@ -1,7 +1,7 @@
 // REST client — the single-task subset of the harness web api (web/src/api.ts),
 // re-pointed at a configurable base URL. RN's fetch is a native client (no
 // browser CORS), so it talks straight to the backend over Tailscale.
-import type { ProjectView, Task, Session, AgentExecutorProfile, AgentType, Schedule, ScheduledMessage } from "@harness/shared";
+import type { ProjectView, Task, Session, AgentExecutorProfile, AgentType, Schedule, ScheduledMessage, Group, GroupMode } from "@harness/shared";
 import { getBaseURL } from "./config";
 
 function base(): string {
@@ -71,6 +71,17 @@ export const api = {
 
   sessions: (taskId: string): Promise<Session[]> => req(`/tasks/${taskId}/sessions`).then(j),
   sessionOutput: (id: string): Promise<string> => req(`/sessions/${id}/output`).then((r) => r.text()),
+
+  // —— 分组(并行/串行批次):列表/增删改 + 整组运行/暂停。group 无 archived,删除只解绑成员。
+  groups: (projectId?: string): Promise<Group[]> =>
+    req(`/groups${projectId ? `?projectId=${projectId}` : ""}`).then(j),
+  createGroup: (b: { name: string; mode?: GroupMode; projectId: string }): Promise<Group> =>
+    req("/groups", { method: "POST", body: JSON.stringify(b) }).then(j),
+  patchGroup: (id: string, patch: Partial<Pick<Group, "name" | "mode">>): Promise<Group> =>
+    req(`/groups/${id}`, { method: "PATCH", body: JSON.stringify(patch) }).then(j),
+  deleteGroup: (id: string): Promise<unknown> => req(`/groups/${id}`, { method: "DELETE" }).then(j),
+  runGroup: (id: string): Promise<unknown> => req(`/groups/${id}/run`, { method: "POST" }).then(j),
+  pauseGroup: (id: string): Promise<Group> => req(`/groups/${id}/pause`, { method: "POST" }).then(j),
 
   agents: (): Promise<AgentExecutorProfile[]> => req("/agents").then(j),
 };
