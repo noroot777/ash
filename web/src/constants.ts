@@ -29,3 +29,20 @@ export const PRIORITY_META: Record<Priority, (typeof PRIORITIES)[number]> = Obje
 ) as Record<Priority, (typeof PRIORITIES)[number]>;
 
 export const PRIORITY_ORDER: Priority[] = ["urgent", "high", "medium", "low", "none"];
+
+// Friendly cron presets (§9) — so picking a recurring schedule doesn't mean
+// hand-writing「分 时 日 月 周」. Each maps a label to a 5-field expr (local time,
+// matched by server/src/schedules.ts). An「自定义」escape hatch lives in the UI.
+export const CRON_PRESETS: { label: string; cron: string }[] = [
+  { label: "每天 09:00", cron: "0 9 * * *" },
+  { label: "每个工作日 09:00", cron: "0 9 * * 1-5" },
+  { label: "每小时", cron: "0 * * * *" },
+  { label: "每周一 09:00", cron: "0 9 * * 1" },
+  { label: "每月 1 号 09:00", cron: "0 9 1 * *" },
+];
+
+// Human label for a cron expr: a matching preset's label, else the raw expr.
+export function describeCron(expr: string): string {
+  const hit = CRON_PRESETS.find((p) => p.cron === expr.trim());
+  return hit ? hit.label : expr.trim();
+}
