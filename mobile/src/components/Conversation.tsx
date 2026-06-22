@@ -4,9 +4,10 @@
 // treatment. Input is the flat LogLine[] accumulated from agent.events.
 //
 // Time: the .md carries no per-line timestamp for agent prose (shared ConvSeg's
-// agent segment has no `at`), so a run's 开始时刻·用时 comes from its Session —
-// shown once, on the run's FIRST agent bubble. 你/〔系统〕 turns carry their own
-// `at`. Mirrors web's AgentBubble / SystemNote / UserBubble.
+// agent segment has no `at`), so per-turn 开始时刻·用时 is reconstructed from the
+// surrounding 你→/〔系统〕 markers (their `at`) + the Session's startedAt/endedAt.
+// Every agent bubble carries ITS OWN time — a resumed session prints one 用时 per
+// turn, never repeating the whole-session span. Mirrors web's buildConversation.
 import { Fragment } from "react";
 import { View, Text } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
@@ -68,26 +69,66 @@ export function Conversation({
 }) {
   const theme = useTheme();
   const blocks = toBlocks(lines);
-  // Each run's end instant: its own endedAt, else the next run's start, else the
-  // task's endedAt — same fallback chain as web, so a finished historical task's
-  // last bubble shows a static 用时 instead of ticking forever.
+  // Tail fallback for a run's LAST turn when nothing follows it in-stream: the
+  // session's own endedAt, else the next run's start, else the task's endedAt.
+  // Never "now", so finished historical views don't tick.
   const byStart = [...sessions].sort((a, b) => (a.startedAt ?? "").localeCompare(b.startedAt ?? ""));
   const runEnd = new Map<string, string | null>(
     byStart.map((s, i) => [s.id, s.endedAt ?? byStart[i + 1]?.startedAt ?? taskEndedAt ?? null]),
   );
   const startOf = new Map(sessions.map((s) => [s.id, s.startedAt] as const));
+
+  // Per-turn timing. A resumed session shows as several agent bubbles; each must
+  // carry ITS OWN 用时 (not the whole session's span). Two ordered passes:
+  //   ① forward — time = session.startedAt for the run's FIRST agent bubble,
+  //     else the preceding 你→/〔系统〕 marker's `at`.
+  //   ② reverse — endedAt = the next 你→/〔系统〕 marker's `at` within the same
+  //     run; a sessionId change resets the bracket so one run's clock never
+  //     bleeds into the next. Falls back to runEnd for the tail bubble.
+  // Mirrors web/src/TaskDetail.tsx buildConversation.
+  const timings = new Map<string, { time: string | null; endedAt: string | null }>();
   const seen = new Set<string>();
+  let prevAt: string | null = null;
+  for (const b of blocks) {
+    if (b.kind === "user" || b.kind === "system") {
+      if (b.at) prevAt = b.at;
+      continue;
+    }
+    if (b.kind !== "agentText") continue;
+    const sid = b.sessionId;
+    const firstOfRun = !sid || !seen.has(sid);
+    if (sid) seen.add(sid);
+    const sessStart = sid ? startOf.get(sid) ?? null : null;
+    const time = firstOfRun ? sessStart : prevAt ?? sessStart;
+    timings.set(b.key, { time, endedAt: null });
+  }
+  let nextAt: string | null = null;
+  let rightRun: string | undefined;
+  let rightRunSet = false;
+  for (let i = blocks.length - 1; i >= 0; i--) {
+    const b = blocks[i];
+    if (b.kind === "user" || b.kind === "system" || b.kind === "done") {
+      const at = (b as { at?: string }).at;
+      if (at) nextAt = at;
+      continue;
+    }
+    if (b.kind !== "agentText") continue;
+    if (!rightRunSet || b.sessionId !== rightRun) {
+      nextAt = null;
+      rightRun = b.sessionId;
+      rightRunSet = true;
+    }
+    const t = timings.get(b.key);
+    if (t) t.endedAt = nextAt ?? (b.sessionId ? runEnd.get(b.sessionId) ?? null : null);
+  }
+
   return (
     <View style={{ gap: 10 }}>
-      {blocks.map((b) => {
-        // A run's time is stamped once, on its first agent bubble.
-        let timing: { time: string | null; endedAt: string | null } | undefined;
-        if (b.kind === "agentText" && b.sessionId && !seen.has(b.sessionId)) {
-          seen.add(b.sessionId);
-          timing = { time: startOf.get(b.sessionId) ?? null, endedAt: runEnd.get(b.sessionId) ?? null };
-        }
-        return <Fragment key={b.key}>{renderBlock(b, theme, timing)}</Fragment>;
-      })}
+      {blocks.map((b) => (
+        <Fragment key={b.key}>
+          {renderBlock(b, theme, b.kind === "agentText" ? timings.get(b.key) : undefined)}
+        </Fragment>
+      ))}
     </View>
   );
 }
