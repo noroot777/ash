@@ -30,3 +30,16 @@ export const PRIORITY_META = Object.fromEntries(PRIORITIES.map((p) => [p.key, p]
   Priority,
   (typeof PRIORITIES)[number]
 >;
+
+// 创建任务时的「启动时机」——四种互斥:仅创建 / 立即执行 / 定时一次性 / 定时循环。
+// `btn` 是该模式下底部主按钮的文案。默认 run（与 web 端一致）。
+export type LaunchMode = "create" | "run" | "once" | "cron";
+export const LAUNCH_MODES: { key: LaunchMode; label: string; btn: string }[] = [
+  { key: "create", label: "仅创建", btn: "创建任务" },
+  { key: "run", label: "立即执行", btn: "创建并执行" },
+  { key: "once", label: "定时一次", btn: "创建并定时" },
+  { key: "cron", label: "定时循环", btn: "创建并定时" },
+];
+
+// 手机无 hover —— cron 示例要可见地显示在输入框下方（web 端放在 input title 里）。
+export const CRON_EXAMPLES = "例:0 9 * * 1-5 工作日9点 · */30 * * * * 每半小时";

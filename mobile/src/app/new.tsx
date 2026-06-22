@@ -1,12 +1,13 @@
 import { useState, type ReactNode } from "react";
-import { View, Text, ScrollView, KeyboardAvoidingView, Platform } from "react-native";
+import { View, Text, ScrollView, KeyboardAvoidingView, Platform, Keyboard } from "react-native";
 import { useRouter } from "expo-router";
 import { AGENT_TYPES, type AgentType, type Priority } from "@harness/shared";
 import { useStore } from "@/lib/store";
 import { api } from "@/lib/api";
-import { PRIORITIES } from "@/lib/constants";
+import { PRIORITIES, LAUNCH_MODES, type LaunchMode } from "@/lib/constants";
 import { useTheme } from "@/lib/theme";
 import { Pill, Button, Input } from "@/components/ui";
+import { ScheduleFields } from "@/components/ScheduleFields";
 
 const firstLine = (s: string) =>
   s.split("\n").map((l) => l.trim()).find(Boolean)?.slice(0, 40) ?? "";
@@ -23,16 +24,33 @@ export default function NewTask() {
   const [body, setBody] = useState("");
   const [agent, setAgent] = useState<AgentType>("claude");
   const [priority, setPriority] = useState<Priority>("none");
+  // 启动时机（§9）：默认「立即执行」，与 web 一致。once 用 Date，cron 用裸 5 字段表达式。
+  const [launch, setLaunch] = useState<LaunchMode>("run");
+  const [at, setAt] = useState<Date>(() => new Date(Date.now() + 3600_000)); // 默认 +1h
+  const [cron, setCron] = useState("0 9 * * *");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const submit = async (run: boolean) => {
+  const pickLaunch = (m: LaunchMode) => {
+    if (m === "once") Keyboard.dismiss(); // 让出键盘，给 iOS inline spinner 腾位
+    setLaunch(m);
+  };
+
+  const submit = async () => {
     if (!projectId) {
       setError("请选择项目");
       return;
     }
     if (!title.trim() && !body.trim()) {
       setError("请填写标题或正文");
+      return;
+    }
+    if (launch === "cron" && !cron.trim()) {
+      setError("请填写 cron 表达式");
+      return;
+    }
+    if (launch === "once" && at.getTime() <= Date.now()) {
+      setError("定时时间必须在将来");
       return;
     }
     setBusy(true);
@@ -49,15 +67,18 @@ export default function NewTask() {
         autoTitle: !explicit, // let the first run name it when no title given
       });
       upsertTask(t);
-      if (run) {
-        await api.runTask(t.id).catch(() => {});
-      }
+      // 启动时机分支：run=立即跑；once/cron=挂定时（调度器到点入队）；create=留 backlog。
+      if (launch === "run") await api.runTask(t.id).catch(() => {});
+      else if (launch === "once") await api.setSchedule(t.id, { kind: "once", at: at.toISOString() });
+      else if (launch === "cron") await api.setSchedule(t.id, { kind: "cron", cron: cron.trim() });
       router.replace(`/task/${t.id}`);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       setBusy(false);
     }
   };
+
+  const activeMode = LAUNCH_MODES.find((m) => m.key === launch)!;
 
   return (
     <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : undefined}>
@@ -110,12 +131,27 @@ export default function NewTask() {
           </View>
         </Field>
 
+        <Field label="启动时机">
+          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+            {LAUNCH_MODES.map((m) => (
+              <Pill key={m.key} label={m.label} active={m.key === launch} onPress={() => pickLaunch(m.key)} />
+            ))}
+          </View>
+          {launch === "once" || launch === "cron" ? (
+            <View style={{ marginTop: 10 }}>
+              <ScheduleFields kind={launch} at={at} cron={cron} onAt={setAt} onCron={setCron} />
+            </View>
+          ) : null}
+        </Field>
+
         {error ? <Text style={{ color: theme.danger, fontSize: 13 }}>{error}</Text> : null}
 
-        <View style={{ flexDirection: "row", gap: 10, marginTop: 4 }}>
-          <Button label="创建" variant="secondary" onPress={() => submit(false)} disabled={busy} style={{ flex: 1 }} />
-          <Button label={busy ? "提交中…" : "创建并运行"} onPress={() => submit(true)} disabled={busy} style={{ flex: 1 }} />
-        </View>
+        <Button
+          label={busy ? "提交中…" : activeMode.btn}
+          onPress={submit}
+          disabled={busy || (launch === "cron" && !cron.trim())}
+          style={{ marginTop: 4 }}
+        />
       </ScrollView>
     </KeyboardAvoidingView>
   );

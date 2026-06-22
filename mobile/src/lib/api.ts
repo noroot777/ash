@@ -1,7 +1,7 @@
 // REST client — the single-task subset of the harness web api (web/src/api.ts),
 // re-pointed at a configurable base URL. RN's fetch is a native client (no
 // browser CORS), so it talks straight to the backend over Tailscale.
-import type { ProjectView, Task, Session, AgentExecutorProfile, AgentType } from "@harness/shared";
+import type { ProjectView, Task, Session, AgentExecutorProfile, AgentType, Schedule, ScheduledMessage } from "@harness/shared";
 import { getBaseURL } from "./config";
 
 function base(): string {
@@ -42,8 +42,29 @@ export const api = {
   runTask: (id: string): Promise<unknown> => req(`/tasks/${id}/run`, { method: "POST" }).then(j),
   stopTask: (id: string): Promise<unknown> => req(`/tasks/${id}/stop`, { method: "POST" }).then(j),
   retryTask: (id: string): Promise<unknown> => req(`/tasks/${id}/retry`, { method: "POST" }).then(j),
-  replyTask: (id: string, text: string, opts?: { agent?: AgentType }): Promise<unknown> =>
+  // reply 带 sendAt 时后端返回 202 { scheduled, message }（排成待发）；否则 { started }。
+  replyTask: (
+    id: string,
+    text: string,
+    opts?: { agent?: AgentType; sendAt?: string },
+  ): Promise<{ started?: boolean; scheduled?: boolean; message?: ScheduledMessage }> =>
     req(`/tasks/${id}/reply`, { method: "POST", body: JSON.stringify({ text, ...opts }) }).then(j),
+
+  // —— 定时（启动时机 once/cron，挂在 task 上）——
+  schedule: (taskId: string): Promise<Schedule | null> => req(`/tasks/${taskId}/schedule`).then(j),
+  setSchedule: (
+    taskId: string,
+    s: { kind: "once" | "cron"; at?: string | null; cron?: string | null },
+  ): Promise<Schedule> =>
+    req(`/tasks/${taskId}/schedule`, { method: "PUT", body: JSON.stringify(s) }).then(j),
+  clearSchedule: (taskId: string): Promise<unknown> =>
+    req(`/tasks/${taskId}/schedule`, { method: "DELETE" }).then(j),
+
+  // —— 定时发送（约定时间投递一条回复；到点由调度器认领）——
+  scheduledMessages: (taskId: string): Promise<ScheduledMessage[]> =>
+    req(`/tasks/${taskId}/scheduled-messages`).then(j),
+  cancelScheduledMessage: (mid: string): Promise<unknown> =>
+    req(`/scheduled-messages/${mid}`, { method: "DELETE" }).then(j),
 
   sessions: (taskId: string): Promise<Session[]> => req(`/tasks/${taskId}/sessions`).then(j),
   sessionOutput: (id: string): Promise<string> => req(`/sessions/${id}/output`).then((r) => r.text()),

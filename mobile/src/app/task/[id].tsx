@@ -20,17 +20,21 @@ import { refreshAll } from "@/lib/data";
 import { runAction, canStopTask } from "@/lib/taskActions";
 import { STATUS_META } from "@/lib/constants";
 import { useTheme, radius, fonts } from "@/lib/theme";
+import { Ionicons } from "@expo/vector-icons";
 import { Conversation } from "@/components/Conversation";
 import { Markdown } from "@/components/Markdown";
 import { PriorityBars } from "@/components/ui";
 import { SignalBar } from "@/components/SignalBar";
-import { TaskTimeChip } from "@/lib/time";
-import type { Session } from "@harness/shared";
+import { DateTimeButton } from "@/components/DateTimeField";
+import { TaskTimeChip, formatInstant } from "@/lib/time";
+import type { Session, ScheduledMessage } from "@harness/shared";
 import type { LogLine } from "@/lib/log";
 import { snapshotToLogLines } from "@/lib/log";
 
 // How often a running task's conversation is re-pulled from its .md.
 const CONV_POLL_MS = 3000;
+// 待发送消息（定时发送）刷新节奏 —— 比会话慢，且与任务是否运行无关。
+const PENDING_POLL_MS = 8000;
 
 export default function TaskDetail() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -47,6 +51,7 @@ export default function TaskDetail() {
   const [lines, setLines] = useState<LogLine[]>([]);
   const [sessions, setSessions] = useState<Session[]>([]);
   const [input, setInput] = useState("");
+  const [pending, setPending] = useState<ScheduledMessage[]>([]);
   const [refreshing, setRefreshing] = useState(false);
   const scrollRef = useRef<ScrollView>(null);
 
@@ -63,6 +68,11 @@ export default function TaskDetail() {
     }
     setLines(all);
     setSessions(ss);
+  }, [id]);
+
+  // 待发送消息（定时发送）：独立加载，供下面的轮询 effect 与发送/取消复用。
+  const loadPending = useCallback(async () => {
+    setPending(await api.scheduledMessages(id).catch(() => []));
   }, [id]);
 
   const onRefresh = useCallback(async () => {
@@ -95,6 +105,20 @@ export default function TaskDetail() {
       sub.remove();
     };
   }, [id, task?.status, loadConv]);
+
+  // 待发送消息轮询：与任务是否 running 无关（idle 任务也可有待发消息），节奏比会话慢。
+  // 回前台立即补拉一次。
+  useEffect(() => {
+    loadPending();
+    const timer = setInterval(loadPending, PENDING_POLL_MS);
+    const sub = AppState.addEventListener("change", (s) => {
+      if (s === "active") loadPending();
+    });
+    return () => {
+      clearInterval(timer);
+      sub.remove();
+    };
+  }, [loadPending]);
 
   if (!task) {
     return (
@@ -133,9 +157,28 @@ export default function TaskDetail() {
       },
     ]);
 
-  const send = async () => {
+  const send = async (sendAt?: Date) => {
     const text = input.trim();
     if (!text) return;
+    // 定时发送：排到待发列表，到点由调度器投递。对 running 任务也允许（后端明确允许）。
+    if (sendAt) {
+      if (sendAt.getTime() <= Date.now()) {
+        Alert.alert("定时发送", "时间必须在将来");
+        return;
+      }
+      try {
+        const r = await api.replyTask(id, text, { sendAt: sendAt.toISOString() });
+        setInput("");
+        if (r?.message) {
+          setPending((ps) => [...ps, r.message!].sort((a, b) => a.sendAt.localeCompare(b.sendAt)));
+        } else {
+          loadPending();
+        }
+      } catch (e) {
+        Alert.alert("定时失败", e instanceof Error ? e.message : String(e));
+      }
+      return;
+    }
     setInput("");
     // Optimistic local bubble; the poll replaces it with the .md's own record of
     // the same turn once the reply lands.
@@ -146,6 +189,12 @@ export default function TaskDetail() {
     } catch (e) {
       Alert.alert("回复失败", e instanceof Error ? e.message : String(e));
     }
+  };
+
+  // 取消一条待发送消息：乐观移除，失败再拉回。
+  const cancelScheduled = async (mid: string) => {
+    setPending((ps) => ps.filter((m) => m.id !== mid));
+    await api.cancelScheduledMessage(mid).catch(() => loadPending());
   };
 
   const meta = STATUS_META[status];
@@ -261,54 +310,98 @@ export default function TaskDetail() {
         ) : null}
       </ScrollView>
 
-      {/* Reply composer */}
+      {/* Reply composer：上方待发列表（定时发送），下方输入行 [输入][🕐][发送] */}
       <View
         style={{
-          flexDirection: "row",
-          alignItems: "flex-end",
-          gap: 8,
           paddingHorizontal: 12,
           paddingTop: 8,
           paddingBottom: insets.bottom + 8,
           borderTopWidth: 1,
           borderTopColor: theme.line,
           backgroundColor: theme.panel,
+          gap: 8,
         }}
       >
-        <TextInput
-          value={input}
-          onChangeText={setInput}
-          editable={!replyBlocked}
-          placeholder={replyBlocked ? "运行中，暂不能回复…" : "回复（续接会话）…"}
-          placeholderTextColor={theme.faint}
-          multiline
-          style={{
-            flex: 1,
-            color: theme.ink,
-            backgroundColor: theme.bg,
-            borderWidth: 1,
-            borderColor: theme.line,
-            borderRadius: radius.lg,
-            paddingHorizontal: 12,
-            paddingVertical: 9,
-            fontSize: 15,
-            maxHeight: 120,
-            opacity: replyBlocked ? 0.5 : 1,
-          }}
-        />
-        <Pressable
-          onPress={send}
-          disabled={replyBlocked || !input.trim()}
-          style={{
-            paddingHorizontal: 16,
-            paddingVertical: 11,
-            borderRadius: radius.lg,
-            backgroundColor: theme.accent,
-            opacity: replyBlocked || !input.trim() ? 0.4 : 1,
-          }}
-        >
-          <Text style={{ color: theme.accentFg, fontSize: 14, fontWeight: "600" }}>发送</Text>
-        </Pressable>
+        {pending.map((m) => (
+          <View
+            key={m.id}
+            style={{
+              flexDirection: "row",
+              alignItems: "center",
+              gap: 8,
+              backgroundColor: theme.overlay,
+              borderRadius: radius.sm,
+              paddingHorizontal: 10,
+              paddingVertical: 6,
+            }}
+          >
+            <Ionicons name="time-outline" size={13} color={theme.faint} />
+            <Text style={{ color: theme.muted, fontSize: 12, fontFamily: fonts.mono }}>{formatInstant(m.sendAt)}</Text>
+            <Text numberOfLines={1} style={{ flex: 1, color: theme.ink, fontSize: 13 }}>
+              {m.text || "[附件]"}
+            </Text>
+            <Pressable onPress={() => cancelScheduled(m.id)} hitSlop={8}>
+              <Ionicons name="close" size={15} color={theme.faint} />
+            </Pressable>
+          </View>
+        ))}
+
+        <View style={{ flexDirection: "row", alignItems: "flex-end", gap: 8 }}>
+          <TextInput
+            value={input}
+            onChangeText={setInput}
+            editable={!replyBlocked}
+            placeholder={replyBlocked ? "运行中，暂不能回复…" : "回复（续接会话）…"}
+            placeholderTextColor={theme.faint}
+            multiline
+            style={{
+              flex: 1,
+              color: theme.ink,
+              backgroundColor: theme.bg,
+              borderWidth: 1,
+              borderColor: theme.line,
+              borderRadius: radius.lg,
+              paddingHorizontal: 12,
+              paddingVertical: 9,
+              fontSize: 15,
+              maxHeight: 120,
+              opacity: replyBlocked ? 0.5 : 1,
+            }}
+          />
+          {/* 🕐 定时发送：对 running 任务也允许排定时（后端允许），故只看是否有文字 */}
+          <DateTimeButton
+            defaultValue={() => new Date(Date.now() + 3600_000)}
+            minimumDate={new Date()}
+            disabled={!input.trim()}
+            onPick={(d) => send(d)}
+          >
+            <View
+              style={{
+                paddingHorizontal: 12,
+                paddingVertical: 10,
+                borderRadius: radius.lg,
+                borderWidth: 1,
+                borderColor: theme.line,
+                opacity: input.trim() ? 1 : 0.4,
+              }}
+            >
+              <Ionicons name="time-outline" size={18} color={theme.muted} />
+            </View>
+          </DateTimeButton>
+          <Pressable
+            onPress={() => send()}
+            disabled={replyBlocked || !input.trim()}
+            style={{
+              paddingHorizontal: 16,
+              paddingVertical: 11,
+              borderRadius: radius.lg,
+              backgroundColor: theme.accent,
+              opacity: replyBlocked || !input.trim() ? 0.4 : 1,
+            }}
+          >
+            <Text style={{ color: theme.accentFg, fontSize: 14, fontWeight: "600" }}>发送</Text>
+          </Pressable>
+        </View>
       </View>
     </KeyboardAvoidingView>
   );
