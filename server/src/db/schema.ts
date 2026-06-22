@@ -69,6 +69,14 @@ export const sessions = sqliteTable("sessions", {
   startedAt: text("started_at").notNull(),
   endedAt: text("ended_at"), // when this run finished (set with exit_status)
   exitStatus: integer("exit_status"),
+  // Execution-time accounting. active_ms accumulates each turn's active span
+  // [prompt sent → turn done], so idle waits between turns are excluded;
+  // turn_started_at marks the current/last turn's start (set when a turn begins,
+  // ended_at cleared on resume). Both null on rows created before these columns
+  // existed → that task reads as historical/unmeasured and surfaces show its
+  // lifespan instead of a (wrong) execution time.
+  activeMs: integer("active_ms"),
+  turnStartedAt: text("turn_started_at"),
 });
 
 export const schedules = sqliteTable("schedules", {

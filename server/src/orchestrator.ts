@@ -1,6 +1,6 @@
 import { mkdirSync, createWriteStream } from "node:fs";
 import { join } from "node:path";
-import { eq, inArray } from "drizzle-orm";
+import { eq, inArray, sql } from "drizzle-orm";
 import type { AgentType } from "@harness/shared";
 import { db } from "./db/index.js";
 import { tasks, projects, sessions } from "./db/schema.js";
@@ -96,6 +96,7 @@ export async function runTask(taskId: string): Promise<void> {
       "请在正式开始前，第一行只输出：标题：<不超过14字、概括本次任务的简短标题>，然后换行，再正常完成下面的任务。\n\n任务：\n";
     const objective = task.body?.trim() || task.title;
     const prompt = AUTONOMY + (autoTitle ? TITLE_HINT + objective : objective);
+    const turnStart = now();
     handle = ex.run({ prompt, cwd: ws.path });
     trackRun(taskId, handle);
 
@@ -114,7 +115,9 @@ export async function runTask(taskId: string): Promise<void> {
       cliSessionId,
       resumeCommand: ex.resumeCommand(ws.path, cliSessionId),
       commandLine: handle.commandLine,
-      startedAt: now(),
+      startedAt: turnStart,
+      turnStartedAt: turnStart,
+      activeMs: 0,
       exitStatus: null as number | null,
     };
     await db.insert(sessions).values(sessRow);
@@ -176,7 +179,11 @@ export async function runTask(taskId: string): Promise<void> {
     // A manual stop kills the subprocess → the stream ends like a normal exit;
     // settle as canceled (not done/failed) so it can be re-run / continued.
     const canceled = takeCanceled(taskId);
-    await db.update(sessions).set({ exitStatus, endedAt: now() }).where(eq(sessions.id, sessId));
+    const endIso = now();
+    await db
+      .update(sessions)
+      .set({ exitStatus, endedAt: endIso, activeMs: sql`COALESCE(${sessions.activeMs}, 0) + ${Math.max(0, Date.parse(endIso) - Date.parse(turnStart))}` })
+      .where(eq(sessions.id, sessId));
     await setStatus(taskId, canceled ? "canceled" : exitStatus === 0 ? "done" : "failed");
   } catch (err) {
     bus.publish({
@@ -254,6 +261,7 @@ export async function continueTask(
 
     const invited = !prev; // first time this agent is pulled into the task
     const prompt = (invited ? COLLAB_INVITE : "") + userText + attachmentsPrompt(opts.attachments);
+    const turnStart = now();
     handle = ex.run({ prompt, cwd, sessionId: resuming ? prev!.cliSessionId! : undefined });
     trackRun(taskId, handle);
 
@@ -263,6 +271,10 @@ export async function continueTask(
     let cliSessionId = resuming ? prev!.cliSessionId! : handle.sessionId;
     if (resuming) {
       sessId = prev!.id;
+      // New turn on the same session row: mark it live (clear the prior turn's
+      // end) and stamp this turn's start, so execution-time accounting and the
+      // live 用时 both track the turn actually running now.
+      await db.update(sessions).set({ turnStartedAt: turnStart, endedAt: null }).where(eq(sessions.id, sessId));
     } else {
       sessId = id();
       const base = all[0];
@@ -279,7 +291,9 @@ export async function continueTask(
         cliSessionId,
         resumeCommand: ex.resumeCommand(cwd, cliSessionId),
         commandLine: handle.commandLine,
-        startedAt: now(),
+        startedAt: turnStart,
+        turnStartedAt: turnStart,
+        activeMs: 0,
         exitStatus: null,
       });
     }
@@ -318,7 +332,11 @@ export async function continueTask(
     out.end();
 
     const canceled = takeCanceled(taskId);
-    await db.update(sessions).set({ exitStatus, endedAt: now() }).where(eq(sessions.id, sessId));
+    const endIso = now();
+    await db
+      .update(sessions)
+      .set({ exitStatus, endedAt: endIso, activeMs: sql`COALESCE(${sessions.activeMs}, 0) + ${Math.max(0, Date.parse(endIso) - Date.parse(turnStart))}` })
+      .where(eq(sessions.id, sessId));
     await setStatus(taskId, canceled ? "canceled" : exitStatus === 0 ? "done" : "failed");
   } catch (err) {
     bus.publish({

@@ -43,7 +43,8 @@ export async function ensureSchema() {
       id TEXT PRIMARY KEY, task_id TEXT NOT NULL, role TEXT NOT NULL,
       agent_type TEXT NOT NULL, executor TEXT NOT NULL, target TEXT NOT NULL,
       worktree_path TEXT, branch TEXT, cwd TEXT, cli_session_id TEXT, resume_command TEXT,
-      command_line TEXT, started_at TEXT NOT NULL, ended_at TEXT, exit_status INTEGER
+      command_line TEXT, started_at TEXT NOT NULL, ended_at TEXT, exit_status INTEGER,
+      active_ms INTEGER, turn_started_at TEXT
     );
     CREATE TABLE IF NOT EXISTS schedules (
       id TEXT PRIMARY KEY, task_id TEXT NOT NULL, kind TEXT NOT NULL,
@@ -76,6 +77,8 @@ export async function ensureSchema() {
     "ALTER TABLE groups ADD COLUMN paused INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE tasks ADD COLUMN archived INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE tasks ADD COLUMN archived_at TEXT",
+    "ALTER TABLE sessions ADD COLUMN active_ms INTEGER",
+    "ALTER TABLE sessions ADD COLUMN turn_started_at TEXT",
   ]) {
     try {
       await client.execute(sql);

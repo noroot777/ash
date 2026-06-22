@@ -67,6 +67,8 @@ export function App() {
                   status: ev.status,
                   startedAt: ev.startedAt !== undefined ? ev.startedAt : t.startedAt,
                   endedAt: ev.endedAt !== undefined ? ev.endedAt : t.endedAt,
+                  activeMs: ev.activeMs !== undefined ? ev.activeMs : t.activeMs,
+                  liveSince: ev.liveSince !== undefined ? ev.liveSince : t.liveSince,
                 }
               : t,
           ),

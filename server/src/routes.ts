@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
-import { eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import { readFile } from "node:fs/promises";
 import { rmSync, mkdirSync, writeFileSync } from "node:fs";
 import { join, basename, extname } from "node:path";
@@ -17,7 +17,7 @@ import { canStartTask, canArchive, isUserSettableStatus, AGENT_TYPES, maxBytesFo
 import { db } from "./db/index.js";
 import { projects, groups, tasks, sessions, schedules, scheduledMessages, agents } from "./db/schema.js";
 import { bus } from "./bus.js";
-import { id, now, attachmentsPrompt } from "./util.js";
+import { id, now, attachmentsPrompt, runsTiming } from "./util.js";
 import { resumeOrRunTask, continueTask } from "./orchestrator.js";
 import { setTaskStatus } from "./status.js";
 import { stopTask } from "./runs.js";
@@ -190,6 +190,29 @@ const toTask = (r: typeof tasks.$inferSelect): Task => ({
   archived: r.archived,
   archivedAt: r.archivedAt,
 });
+
+// Attach execution-time fields (activeMs/liveSince) to task rows. The session
+// lookup is batched (one query for the whole list) so listing tasks stays O(1)
+// queries; see util.runsTiming for the accounting.
+async function enrichTiming(rows: (typeof tasks.$inferSelect)[]): Promise<Task[]> {
+  if (rows.length === 0) return [];
+  const runs = await db
+    .select({
+      taskId: sessions.taskId,
+      activeMs: sessions.activeMs,
+      turnStartedAt: sessions.turnStartedAt,
+      endedAt: sessions.endedAt,
+    })
+    .from(sessions)
+    .where(inArray(sessions.taskId, rows.map((r) => r.id)));
+  const byTask = new Map<string, typeof runs>();
+  for (const s of runs) {
+    const arr = byTask.get(s.taskId) ?? [];
+    arr.push(s);
+    byTask.set(s.taskId, arr);
+  }
+  return rows.map((r) => ({ ...toTask(r), ...runsTiming(byTask.get(r.id) ?? []) }));
+}
 
 const toSession = (r: typeof sessions.$inferSelect): Session => ({
   ...r,
@@ -399,14 +422,14 @@ api.post("/groups/resolve", async (c) => {
 // ── tasks ───────────────────────────────────────────────────────────────
 api.get("/tasks", async (c) => {
   const rows = await db.select().from(tasks);
-  return c.json(rows.map(toTask));
+  return c.json(await enrichTiming(rows));
 });
 
 api.get("/tasks/:id", async (c) => {
   const rows = await db.select().from(tasks).where(eq(tasks.id, c.req.param("id")));
   const r = rows.at(0);
   if (!r) return c.json({ error: "not found" }, 404);
-  return c.json(toTask(r));
+  return c.json((await enrichTiming([r]))[0]);
 });
 
 api.post("/tasks", async (c) => {
@@ -432,7 +455,7 @@ api.post("/tasks", async (c) => {
     updatedAt: ts,
   };
   await db.insert(tasks).values(row);
-  return c.json(toTask(row as typeof tasks.$inferSelect), 201);
+  return c.json((await enrichTiming([row as typeof tasks.$inferSelect]))[0], 201);
 });
 
 // Partial update: title/body/status/priority/labels/groupId/agentType/mode/debate.
@@ -464,7 +487,7 @@ api.patch("/tasks/:id", async (c) => {
   // columns (startedAt/endedAt) and broadcast them just like a real run does.
   if (b.status !== undefined) await setTaskStatus(tid, b.status);
   const updated = (await db.select().from(tasks).where(eq(tasks.id, tid))).at(0)!;
-  return c.json(toTask(updated));
+  return c.json((await enrichTiming([updated]))[0]);
 });
 
 api.delete("/tasks/:id", async (c) => {
@@ -593,7 +616,7 @@ api.post("/groups/:groupId/tasks/batch", async (c) => {
       ? "本批用 chain 串成了依赖链：即使分组是 parallel，这些任务也会按链严格串行。要真正并行执行请去掉 chain（或把分组设为 serial 表达同样的串行意图）。"
       : undefined;
   return c.json(
-    { groupId, run: !!b.run, ...(warning ? { warning } : {}), tasks: rows.map((r) => toTask(r as typeof tasks.$inferSelect)) },
+    { groupId, run: !!b.run, ...(warning ? { warning } : {}), tasks: await enrichTiming(rows as (typeof tasks.$inferSelect)[]) },
     201,
   );
 });
@@ -759,21 +782,21 @@ api.post("/tasks/:id/retry", async (c) => {
 api.post("/tasks/:id/archive", async (c) => {
   const r = (await db.select().from(tasks).where(eq(tasks.id, c.req.param("id")))).at(0);
   if (!r) return c.json({ error: "not found" }, 404);
-  if (r.archived) return c.json(toTask(r)); // idempotent
+  if (r.archived) return c.json((await enrichTiming([r]))[0]); // idempotent
   if (!canArchive(r.status as TaskStatus)) {
     return c.json({ error: "只有已完成/失败/已取消的任务可以归档", status: r.status }, 409);
   }
   const ts = now();
   await db.update(tasks).set({ archived: true, archivedAt: ts, updatedAt: ts }).where(eq(tasks.id, r.id));
-  return c.json(toTask((await db.select().from(tasks).where(eq(tasks.id, r.id))).at(0)!));
+  return c.json((await enrichTiming([(await db.select().from(tasks).where(eq(tasks.id, r.id))).at(0)!]))[0]);
 });
 
 api.post("/tasks/:id/unarchive", async (c) => {
   const r = (await db.select().from(tasks).where(eq(tasks.id, c.req.param("id")))).at(0);
   if (!r) return c.json({ error: "not found" }, 404);
-  if (!r.archived) return c.json(toTask(r)); // idempotent
+  if (!r.archived) return c.json((await enrichTiming([r]))[0]); // idempotent
   await db.update(tasks).set({ archived: false, archivedAt: null, updatedAt: now() }).where(eq(tasks.id, r.id));
-  return c.json(toTask((await db.select().from(tasks).where(eq(tasks.id, r.id))).at(0)!));
+  return c.json((await enrichTiming([(await db.select().from(tasks).where(eq(tasks.id, r.id))).at(0)!]))[0]);
 });
 
 // ── HITL gate decision (§7) — 放行 / 打回 / 注入意见 / 提问 ───────────────────

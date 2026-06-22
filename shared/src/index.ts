@@ -117,11 +117,22 @@ export interface Task {
   scheduleId?: string | null;
   createdAt: string;
   updatedAt: string;
-  // Run timing: startedAt = first time the task entered `running` (kept across
-  // re-runs); endedAt = the last time it reached a terminal state, cleared while
-  // running. Duration = (endedAt ?? now) − startedAt. Both null until first run.
+  // Run timing. startedAt = first time the task entered `running` (kept across
+  // re-runs); endedAt = the last terminal time, cleared while running. These
+  // bracket the task's whole LIFESPAN, so `endedAt − startedAt` is a wall-clock
+  // SPAN, not execution time: a single session the user replies to over hours
+  // includes the idle waits between turns. Use `activeMs` for execution time.
   startedAt?: string | null;
   endedAt?: string | null;
+  // Execution time (server-computed): the sum of every run-turn's active span
+  // [prompt sent → turn finished], so the idle between turns (waiting for a reply
+  // / a gate) is excluded. null = the task has turns from before per-turn timing
+  // was recorded (historical) and can't be reconstructed — surfaces then fall
+  // back to showing the lifespan, labeled as a span rather than execution time.
+  activeMs?: number | null;
+  // While a turn is live, the ISO start of that turn so a client can tick
+  // `activeMs + (now − liveSince)`; null when idle/terminal.
+  liveSince?: string | null;
   archived?: boolean;
   archivedAt?: string | null;
 }
@@ -277,7 +288,7 @@ export type DebateSpeaker = "A" | "B" | "impl" | "review" | "user";
 
 // SSE envelope pushed to the web client.
 export type ServerEvent =
-  | { type: "task.status"; taskId: string; status: TaskStatus; startedAt?: string | null; endedAt?: string | null }
+  | { type: "task.status"; taskId: string; status: TaskStatus; startedAt?: string | null; endedAt?: string | null; activeMs?: number | null; liveSince?: string | null }
   | { type: "task.title"; taskId: string; title: string }
   | {
       type: "agent.event";

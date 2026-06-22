@@ -72,6 +72,17 @@ export function Duration({
 // extra width.
 export function TaskTimeChip({ task, className }: { task: Task; className?: string }) {
   const running = task.status === "running" || task.status === "queued";
+  // activeMs = real execution time (sum of each turn's active span); null on
+  // historical tasks whose per-turn timing was never recorded. liveSince ticks
+  // the currently-running turn on top of activeMs.
+  const measured = typeof task.activeMs === "number";
+  // 兼容期:server 重启前旧进程还没下发 activeMs(字段缺失=undefined)→ 暂沿用墙钟
+  // 「用时」,与改动前完全一致,避免重启前所有任务突然变「跨度」。重启后字段出现
+  // (数值=已测量 / null=历史无法还原)即切到新口径。
+  const legacy = task.activeMs === undefined;
+  const live = measured && !!task.liveSince && !task.endedAt;
+  const nowMs = useTick(live);
+  const ms = measured ? task.activeMs! + (live ? Math.max(0, nowMs - Date.parse(task.liveSince!)) : 0) : 0;
   const dot = <span className="text-line2">·</span>;
   return (
     <span
@@ -84,12 +95,33 @@ export function TaskTimeChip({ task, className }: { task: Task; className?: stri
           {dot}
           <span>开始 {formatInstant(task.startedAt)}</span>
           {dot}
-          <span
-            className={running ? "text-muted" : undefined}
-            title={task.endedAt ? `结束 ${formatInstant(task.endedAt)}` : undefined}
-          >
-            用时 <Duration from={task.startedAt} to={task.endedAt} />
-          </span>
+          {measured ? (
+            <span
+              className={running ? "text-muted" : undefined}
+              title={task.endedAt ? `结束 ${formatInstant(task.endedAt)}` : undefined}
+            >
+              用时 {formatDuration(ms)}
+            </span>
+          ) : legacy ? (
+            // 兼容期:旧 server 未下发执行时间 → 沿用墙钟,行为同改动前。
+            <span
+              className={running ? "text-muted" : undefined}
+              title={task.endedAt ? `结束 ${formatInstant(task.endedAt)}` : undefined}
+            >
+              用时 <Duration from={task.startedAt} to={task.endedAt} />
+            </span>
+          ) : (
+            // Historical task: turns predate per-turn timing, so execution time
+            // can't be reconstructed. Show the lifespan as 跨度 (with a note that
+            // it includes idle waits) instead of passing the wait-inflated wall
+            // clock off as 用时.
+            <span
+              className="text-faint"
+              title={`${task.endedAt ? `结束 ${formatInstant(task.endedAt)} · ` : ""}跨度含等待回复的空闲，非纯执行时长`}
+            >
+              跨度 {durationText(task.startedAt, task.endedAt)}
+            </span>
+          )}
         </>
       )}
     </span>

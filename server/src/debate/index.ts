@@ -1,6 +1,6 @@
 import { mkdirSync, createWriteStream, appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import type {
   DebateConfig,
   DebateSpeaker,
@@ -78,6 +78,7 @@ async function runTurn(args: {
   const { taskId, role, speaker, round, executor, prompt, cwd } = args;
   // A stop requested between turns: don't even spawn the next one.
   if (isCanceling(taskId)) throw new CanceledRun();
+  const turnStart = now();
   const handle = executor.run({ prompt, cwd, sessionId: args.resumeCliId || undefined });
   trackRun(taskId, handle);
   let cliId = handle.sessionId;
@@ -97,9 +98,16 @@ async function runTurn(args: {
       cliSessionId: cliId,
       resumeCommand: cliId ? executor.resumeCommand(cwd, cliId) : null,
       commandLine: handle.commandLine,
-      startedAt: now(),
+      startedAt: turnStart,
+      turnStartedAt: turnStart,
+      activeMs: 0,
       exitStatus: null,
     });
+  } else {
+    // Resuming the same session row for a new turn (e.g. after a G1/G2 gate the
+    // user took a while to resolve): stamp this turn's start and clear the prior
+    // end, so the gate wait is excluded from execution time.
+    await db.update(sessions).set({ turnStartedAt: turnStart, endedAt: null }).where(eq(sessions.id, rowId));
   }
 
   bus.publish({ type: "debate.progress", taskId, round, speaker, phase: "start" });
@@ -156,7 +164,11 @@ async function runTurn(args: {
   if (!errorMsg && exit === 0 && isDebater && !text.trim()) {
     errorMsg = `${executor.type} 本轮没有产出任何内容（空回复），可能是会话恢复异常`;
   }
-  await db.update(sessions).set({ exitStatus: exit, endedAt: now() }).where(eq(sessions.id, rowId));
+  const endIso = now();
+  await db
+    .update(sessions)
+    .set({ exitStatus: exit, endedAt: endIso, activeMs: sql`COALESCE(${sessions.activeMs}, 0) + ${Math.max(0, Date.parse(endIso) - Date.parse(turnStart))}` })
+    .where(eq(sessions.id, rowId));
   // Persist the turn so a reloaded debate can rebuild its timeline (no live
   // events). Includes the error so a failed turn stays visibly failed on reload.
   try {

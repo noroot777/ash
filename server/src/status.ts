@@ -1,9 +1,9 @@
 import { eq } from "drizzle-orm";
 import type { TaskStatus } from "@harness/shared";
 import { db } from "./db/index.js";
-import { tasks } from "./db/schema.js";
+import { tasks, sessions } from "./db/schema.js";
 import { bus } from "./bus.js";
-import { now } from "./util.js";
+import { now, runsTiming } from "./util.js";
 
 const TERMINAL: TaskStatus[] = ["done", "failed", "canceled"];
 
@@ -28,5 +28,15 @@ export async function setTaskStatus(taskId: string, status: TaskStatus): Promise
   }
 
   await db.update(tasks).set(patch).where(eq(tasks.id, taskId));
-  bus.publish({ type: "task.status", taskId, status, startedAt, endedAt });
+  // Carry execution-time fields so every surface updates live with the status —
+  // notably the terminal transition, where every turn now has ended_at so
+  // activeMs is final and liveSince clears. When no session rows exist yet (status
+  // flips to running just before the row is recorded) omit them, so the client
+  // keeps its last fetched value rather than seeing a transient null.
+  const runs = await db
+    .select({ activeMs: sessions.activeMs, turnStartedAt: sessions.turnStartedAt, endedAt: sessions.endedAt })
+    .from(sessions)
+    .where(eq(sessions.taskId, taskId));
+  const timing = runs.length ? runsTiming(runs) : {};
+  bus.publish({ type: "task.status", taskId, status, startedAt, endedAt, ...timing });
 }
