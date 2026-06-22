@@ -687,6 +687,20 @@ api.post("/tasks/:id/run", async (c) => {
   if (r.archived) return c.json({ error: "任务已归档，先取消归档再运行", archived: true }, 409);
   // Guard the state machine: only settled, non-terminal-success tasks may start.
   if (!canStartTask(r.status as TaskStatus)) return c.json({ error: "任务当前状态不可运行", status: r.status }, 409);
+  // Honor dependsOn even for single-task run: if a listed dep still exists and
+  // hasn't reached `done`, refuse — user should clear the edge or wait, not
+  // silently skip the dependency. Dangling ids (dep deleted) are ignored.
+  const deps = JSON.parse(r.dependsOn) as string[];
+  if (deps.length) {
+    const depRows = await db.select().from(tasks).where(inArray(tasks.id, deps));
+    const blockedBy = depRows.filter((d) => d.status !== "done").map((d) => d.id);
+    if (blockedBy.length) {
+      return c.json(
+        { error: "任务存在未完成的依赖，先撤销依赖或等其完成", blockedBy },
+        409,
+      );
+    }
+  }
   // Fire-and-forget; progress streams over /api/events.
   if (r.mode === "debate") void runDebate(taskId);
   else void resumeOrRunTask(taskId, { reason: "run" });
