@@ -2,8 +2,9 @@ import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import { eq, inArray } from "drizzle-orm";
 import { readFile } from "node:fs/promises";
-import { rmSync, mkdirSync, writeFileSync } from "node:fs";
-import { join, basename, extname } from "node:path";
+import { existsSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { join, basename, extname, resolve, sep } from "node:path";
 import { RUNS_DIR, DATA_DIR, UPLOADS_DIR } from "./paths.js";
 import type {
   Project,
@@ -33,6 +34,39 @@ export const api = new Hono();
 
 // ── health ───────────────────────────────────────────────────────────────
 api.get("/health", (c) => c.json({ ok: true, ts: now() }));
+
+const LOCAL_OPEN_ROOTS = (process.env.HARNESS_LOCAL_OPEN_ROOTS ??
+  "/Users/fjh/code/daily-report/videos:/Users/fjh/code/harness/review")
+  .split(":")
+  .map((p) => resolve(p))
+  .filter(Boolean);
+
+const isLoopbackHost = (host: string | null): boolean => {
+  const value = (host ?? "").toLowerCase();
+  if (value.startsWith("[::1]")) return true;
+  const h = value.split(":")[0];
+  return h === "localhost" || h === "127.0.0.1" || h === "::1" || h === "[::1]";
+};
+
+const isAllowedLocalPath = (path: string): boolean =>
+  LOCAL_OPEN_ROOTS.some((root) => path === root || path.startsWith(root + sep));
+
+api.all("/open-local", async (c) => {
+  if (!isLoopbackHost(c.req.header("host") ?? null)) {
+    return c.text("open-local is only available through localhost/127.0.0.1", 403);
+  }
+  const raw = c.req.query("path") ?? "";
+  const target = resolve(raw);
+  if (!raw || !isAllowedLocalPath(target) || !existsSync(target)) {
+    return c.text("local path is missing, outside the allowlist, or does not exist", 400);
+  }
+  const child = spawn("open", [target], { detached: true, stdio: "ignore" });
+  child.unref();
+  return c.html(
+    `<!doctype html><meta charset=utf-8><title>Opened</title>` +
+      `<body style="font:14px -apple-system,system-ui,sans-serif;padding:20px">已打开：<code>${target}</code></body>`,
+  );
+});
 
 // ── attachment uploads (pasted into the composer / reply box) ────────────────
 // Agents take text on stdin, not binaries — so we persist the pasted image/file

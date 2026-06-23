@@ -1,6 +1,21 @@
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
+function isLocalOpenHref(href?: string): href is string {
+  if (!href) return false;
+  try {
+    const url = new URL(href, window.location.origin);
+    return url.origin === window.location.origin && url.pathname === "/api/open-local";
+  } catch {
+    return false;
+  }
+}
+
+async function openLocalPath(href: string) {
+  const r = await fetch(href);
+  if (!r.ok) throw new Error(await r.text());
+}
+
 // Render agent/debate output as GitHub-flavored markdown, styled with the app's
 // design tokens (no typography plugin). Used inside chat bubbles (§12).
 export function Markdown({ text }: { text: string }) {
@@ -19,9 +34,24 @@ export function Markdown({ text }: { text: string }) {
           li: (p) => <li className="my-0.5 break-words" {...p} />,
           strong: (p) => <strong className="font-semibold text-ink" {...p} />,
           em: (p) => <em className="italic" {...p} />,
-          a: ({ node: _n, ...p }) => (
-            <a className="text-accent underline underline-offset-2 hover:text-accent-hover" target="_blank" rel="noreferrer" {...p} />
-          ),
+          a: ({ node: _n, href, onClick, ...p }) => {
+            const localOpen = isLocalOpenHref(href);
+            return (
+              <a
+                className="text-accent underline underline-offset-2 hover:text-accent-hover"
+                href={href}
+                target={localOpen ? undefined : "_blank"}
+                rel={localOpen ? undefined : "noreferrer"}
+                onClick={(e) => {
+                  onClick?.(e);
+                  if (!localOpen || e.defaultPrevented) return;
+                  e.preventDefault();
+                  void openLocalPath(href).catch((err) => alert(err instanceof Error ? err.message : String(err)));
+                }}
+                {...p}
+              />
+            );
+          },
           blockquote: (p) => (
             <blockquote className="my-1.5 border-l-2 border-line2 pl-3 text-muted" {...p} />
           ),
