@@ -50,8 +50,10 @@ function writeTurn(out: NodeJS.WritableStream, turn: { t: "user" | "system"; age
 }
 
 // Why a task is being (re)started — only used to label the resume; all reasons
-// behave the same (resume if there's a resumable session, else fresh).
-export type ResumeReason = "group" | "run" | "retry" | "schedule";
+// behave the same (resume if there's a resumable session, else fresh). Note: a
+// scheduled cron fire is NOT here — it always starts a fresh run via runTask
+// (schedules.ts), so it never resumes.
+export type ResumeReason = "group" | "run" | "retry";
 
 async function setStatus(taskId: string, status: Parameters<typeof setTaskStatus>[1]) {
   await setTaskStatus(taskId, status);

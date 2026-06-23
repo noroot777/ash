@@ -2,7 +2,7 @@ import { eq } from "drizzle-orm";
 import type { AgentType } from "@harness/shared";
 import { db } from "./db/index.js";
 import { schedules, scheduledMessages, tasks, groups } from "./db/schema.js";
-import { resumeOrRunTask, continueTask } from "./orchestrator.js";
+import { runTask, continueTask } from "./orchestrator.js";
 import { runDebate } from "./debate/index.js";
 
 // ── Minimal 5-field cron matcher (minute hour dom month dow), local time ──────
@@ -50,7 +50,12 @@ const sameMinute = (a: string, b: Date) => {
   return da.getFullYear() === b.getFullYear() && da.getMonth() === b.getMonth() && da.getDate() === b.getDate() && da.getHours() === b.getHours() && da.getMinutes() === b.getMinutes();
 };
 
-// Enqueue + run a task via the normal path (DESIGN.md §9: schedule only enqueues).
+// Fire a scheduled task = start a FRESH run (DESIGN.md §9: a schedule RE-RUNS its
+// task). Never resume the prior CLI session: a recurring cron must open a new run
+// each tick, not 继续 yesterday's conversation — interruption-recovery (resume) is
+// the manual run/retry/group path's job, and "continue at a future time" is what
+// scheduledMessages (定时发消息 → continueTask) is for. (See the bug where a daily
+// cron kept appending 〔系统〕继续 into the same session instead of running anew.)
 async function fire(taskId: string) {
   const t = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!t || t.status === "running" || t.status === "queued") return;
@@ -65,7 +70,7 @@ async function fire(taskId: string) {
     if (g?.paused) return;
   }
   if (t.mode === "debate") void runDebate(taskId);
-  else void resumeOrRunTask(taskId, { reason: "schedule" });
+  else void runTask(taskId); // 全新一轮(新 session),不接续上次会话
 }
 
 async function tick() {
@@ -90,8 +95,8 @@ async function tick() {
   }
 
   // ── Due scheduled messages (定时发消息；独立于 schedules 表) ─────────────────
-  // The once/cron loop above re-RUNS a task; these DELIVER a queued reply via
-  // continueTask. Fire only when the task is idle — continueTask silently drops a
+  // The once/cron loop above re-RUNS a task FRESH (new session); these DELIVER a
+  // queued reply via continueTask (resume the existing session). Fire only when the task is idle — continueTask silently drops a
   // reply to a busy task — and mark sent before firing so an overlapping tick
   // won't re-pick it (continueTask's own running.has single-flight is the final guard).
   const due = (await db.select().from(scheduledMessages).where(eq(scheduledMessages.status, "pending")))
