@@ -27,8 +27,10 @@ OLD="$(lsof -nP -iTCP:"$PORT" -sTCP:LISTEN -t 2>/dev/null || true)"
 if [ -n "$OLD" ]; then
   # 别盲目打断在跑的任务:默认有 running/queued 就中止(重启会把它们判为 failed)。
   # 确定要打断就 FORCE=1 npm run restart。
+  # grep 无匹配会返回非零;pipefail 下别让它污染计数,显式 `|| true` 吞掉,
+  # wc -l 必然输出一个数,tr 删掉 macOS wc 的前导空格 —— BUSY 保证是单个整数。
   BUSY="$(curl -fsS "localhost:$PORT/api/tasks" 2>/dev/null \
-    | grep -o '"status":"\(running\|queued\)"' | wc -l | tr -d ' ' || echo 0)"
+    | { grep -o '"status":"\(running\|queued\)"' || true; } | wc -l | tr -d ' ')"
   if [ "${BUSY:-0}" -gt 0 ] && [ -z "${FORCE:-}" ]; then
     echo "  ✋ 当前有 $BUSY 个任务在 running/queued —— 已中止,未重启服务端。"
     echo "     等它们跑完再来,或确定要打断就:  FORCE=1 npm run restart"
@@ -55,7 +57,8 @@ else
   # 末尾锚定 $:只命中独立的 `node …/mcp/dist/index.js` 子进程,绝不误杀含该路径于 --mcp-config 里的
   # claude/codex 父进程(已验证)。
   MCP_PAT="$REPO/mcp/dist/index.js\$"
-  N="$(pgrep -f "$MCP_PAT" 2>/dev/null | wc -l | tr -d ' ' || echo 0)"
+  # 同上:pgrep 无匹配返回非零,别让 pipefail 触发多余的 echo —— N 保证是单个整数。
+  N="$(pgrep -f "$MCP_PAT" 2>/dev/null | wc -l | tr -d ' ')"
   if [ "${N:-0}" -gt 0 ]; then
     pkill -f "$MCP_PAT" 2>/dev/null || true
     echo "  ✓ 清掉 $N 个旧 MCP 进程,下次会话/调用即用新代码"
