@@ -11,6 +11,8 @@ import {
   ActivityIndicator,
   RefreshControl,
   AppState,
+  type NativeScrollEvent,
+  type NativeSyntheticEvent,
 } from "react-native";
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -55,6 +57,19 @@ export default function TaskDetail() {
   const [pending, setPending] = useState<ScheduledMessage[]>([]);
   const [refreshing, setRefreshing] = useState(false);
   const scrollRef = useRef<ScrollView>(null);
+  // 是否「粘」在底部。轮询拉到新内容时,只有粘底状态才自动滚到底,
+  // 否则别打扰正在往回翻历史的用户。初始 true,所以首次内容到达会滚到底。
+  const stickToBottomRef = useRef(true);
+
+  const handleScroll = useCallback((e: NativeSyntheticEvent<NativeScrollEvent>) => {
+    const { layoutMeasurement, contentOffset, contentSize } = e.nativeEvent;
+    const distanceFromBottom = contentSize.height - (layoutMeasurement.height + contentOffset.y);
+    stickToBottomRef.current = distanceFromBottom < 80;
+  }, []);
+
+  const handleContentSizeChange = useCallback(() => {
+    if (stickToBottomRef.current) scrollRef.current?.scrollToEnd({ animated: true });
+  }, []);
 
   // Pull every session's .md and rebuild the transcript. One call = one full
   // snapshot; we replace rather than append, so the same call also fills any gap.
@@ -135,9 +150,11 @@ export default function TaskDetail() {
 
   const onPrimary = () => {
     if (action.kind === "run") {
+      stickToBottomRef.current = true;
       setLines([]);
       api.runTask(id).then(() => refreshAll()).catch(() => {});
     } else if (action.kind === "retry") {
+      stickToBottomRef.current = true;
       api.retryTask(id).then(() => refreshAll()).catch(() => {});
     }
   };
@@ -203,6 +220,7 @@ export default function TaskDetail() {
     setInput("");
     // Optimistic local bubble; the poll replaces it with the .md's own record of
     // the same turn once the reply lands.
+    stickToBottomRef.current = true;
     setLines((ls) => [...ls, { kind: "user", text, at: new Date().toISOString() }]);
     try {
       await api.replyTask(id, text);
@@ -319,7 +337,9 @@ export default function TaskDetail() {
         ref={scrollRef}
         style={{ flex: 1 }}
         contentContainerStyle={{ padding: 16, gap: 12, paddingBottom: 24 }}
-        onContentSizeChange={() => scrollRef.current?.scrollToEnd({ animated: true })}
+        onScroll={handleScroll}
+        scrollEventThrottle={64}
+        onContentSizeChange={handleContentSizeChange}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={theme.muted} />}
       >
         {/* Objective */}
