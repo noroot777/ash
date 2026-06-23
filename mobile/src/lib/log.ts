@@ -13,11 +13,12 @@ export type LogLine = {
   agent?: AgentType; // which agent produced it (@-mention multi-agent threads)
   sessionId?: string; // groups lines into bubbles + locates the resume credential
   at?: string; // ISO time (user replies / system traces show a timestamp)
+  endedAt?: string; // exec end of an agent turn (from the .md agentEnd marker) — excludes idle wait
 };
 
 export function snapshotToLogLines(out: string, sessionId: string, agentType?: AgentType): LogLine[] {
   return parseSessionOutput(out).map((seg, i): LogLine => {
-    if (seg.kind === "agent") return { kind: "text", text: seg.text, agent: agentType, sessionId };
+    if (seg.kind === "agent") return { kind: "text", text: seg.text, agent: agentType, sessionId, endedAt: seg.endedAt };
     return { kind: seg.kind, text: seg.text, at: seg.at, sessionId: `${sessionId}-seg-${i}` };
   });
 }

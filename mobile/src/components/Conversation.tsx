@@ -18,7 +18,7 @@ import { formatInstant, Duration } from "@/lib/time";
 import { Markdown } from "./Markdown";
 
 type Block =
-  | { kind: "agentText"; text: string; agent?: string; sessionId?: string; key: string }
+  | { kind: "agentText"; text: string; agent?: string; sessionId?: string; endedAt?: string; key: string }
   | { kind: "thinking"; text: string; key: string }
   | { kind: "tool"; name: string; detail: string; key: string }
   | { kind: "error"; text: string; key: string }
@@ -29,7 +29,7 @@ type Block =
 // Flatten LogLines into render blocks, concatenating runs of streamed text.
 function toBlocks(lines: LogLine[]): Block[] {
   const out: Block[] = [];
-  let buf: { text: string; agent?: string; sessionId?: string; key: string } | null = null;
+  let buf: { text: string; agent?: string; sessionId?: string; endedAt?: string; key: string } | null = null;
   const flush = () => {
     if (buf && buf.text.trim()) out.push({ kind: "agentText", ...buf });
     buf = null;
@@ -38,11 +38,14 @@ function toBlocks(lines: LogLine[]): Block[] {
     const key = `${l.sessionId ?? "s"}-${i}`;
     if (l.kind === "text") {
       // Same run AND same agent merges; a different session starts a fresh bubble
-      // (keeps each run's sessionId intact so its time tags the right bubble).
-      if (buf && buf.agent === l.agent && buf.sessionId === l.sessionId) buf.text += l.text;
-      else {
+      // (keeps each run's sessionId intact so its time tags the right bubble). The
+      // turn's exec end (endedAt, set on the last seg) rides the merged bubble.
+      if (buf && buf.agent === l.agent && buf.sessionId === l.sessionId) {
+        buf.text += l.text;
+        if (l.endedAt) buf.endedAt = l.endedAt;
+      } else {
         flush();
-        buf = { text: l.text, agent: l.agent, sessionId: l.sessionId, key };
+        buf = { text: l.text, agent: l.agent, sessionId: l.sessionId, endedAt: l.endedAt, key };
       }
       return;
     }
@@ -119,7 +122,9 @@ export function Conversation({
       rightRunSet = true;
     }
     const t = timings.get(b.key);
-    if (t) t.endedAt = nextAt ?? (b.sessionId ? runEnd.get(b.sessionId) ?? null : null);
+    // Prefer the agentEnd marker (real exec end, idle excluded); fall back to the
+    // wall-clock estimate (next marker / runEnd) for historical turns without it.
+    if (t) t.endedAt = b.endedAt ?? nextAt ?? (b.sessionId ? runEnd.get(b.sessionId) ?? null : null);
   }
 
   return (

@@ -323,7 +323,7 @@ export type ServerEvent =
 export const LEGACY_SYS_MARKER = "〔系统〕继续（从中断处）";
 
 export type ConvSeg =
-  | { kind: "agent"; text: string }
+  | { kind: "agent"; text: string; endedAt?: string }
   | { kind: "user"; text: string; at?: string }
   | { kind: "system"; text: string; at?: string };
 
@@ -340,6 +340,13 @@ export function parseSessionOutput(out: string): ConvSeg[] {
       try {
         const j = JSON.parse(line.slice(1)) as { t?: string; text?: string; at?: string };
         flush();
+        if (j.t === "agentEnd") {
+          // Not a new bubble — it stamps where the agent turn that just flushed
+          // actually finished, so per-turn 用时 excludes the idle wait that follows.
+          const last = segs[segs.length - 1];
+          if (last?.kind === "agent") last.endedAt = j.at;
+          continue;
+        }
         segs.push(
           j.t === "system"
             ? { kind: "system", text: j.text || LEGACY_SYS_MARKER, at: j.at }

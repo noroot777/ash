@@ -300,6 +300,7 @@ type AgentItem = {
   label: string;
   time?: string | null; // run start (header shows 开始时刻 · 用时)
   endedAt?: string | null; // run end (real, or estimated from the next run's start) for a static 用时
+  markerEndedAt?: string | null; // exec end stamped by the .md agentEnd marker — preferred over the wall-clock estimate when present (excludes the idle wait until the next reply)
   snapshotText?: string; // raw snapshot markdown (rendered + serialized for copy)
   lines: LogLine[]; // live lines, rendered via groupContent
 };
@@ -354,6 +355,7 @@ function buildConversation({
         showResume: i === lastAgent,
         label: s.executor,
         snapshotText: seg.text,
+        markerEndedAt: seg.endedAt ?? null, // real exec end (agentEnd marker), when present
         lines: [],
       });
     });
@@ -410,7 +412,10 @@ function buildConversation({
     if (it.kind === "user" || it.kind === "system" || it.kind === "done") nextAt = it.at ?? nextAt;
     if (it.kind !== "agent") continue;
     if (it.sessionId !== rightRun) (nextAt = null), (rightRun = it.sessionId); // new run → fresh bracket
-    it.endedAt = nextAt ?? (it.sessionId ? runEnd.get(it.sessionId) ?? null : null);
+    // Prefer the agentEnd marker (real exec end, idle excluded); fall back to the
+    // wall-clock estimate (next interjection / runEnd) for historical turns that
+    // predate the marker.
+    it.endedAt = it.markerEndedAt ?? nextAt ?? (it.sessionId ? runEnd.get(it.sessionId) ?? null : null);
   }
 
   return items;

@@ -49,6 +49,14 @@ function writeTurn(out: NodeJS.WritableStream, turn: { t: "user" | "system"; age
   out.write(`\n${TURN_SENTINEL}${JSON.stringify({ ...turn, at: now() })}\n`);
 }
 
+// Fence where an agent turn ACTUALLY finished (real exec end), so per-turn 用时 in
+// the conversation brackets [你→ reply → agent done] instead of [reply → your NEXT
+// reply] — i.e. it excludes the idle wait while the agent sat waiting for you.
+// Distinct from writeTurn (which fences human/system interjections, not exec ends).
+function writeTurnEnd(out: NodeJS.WritableStream, at: string): void {
+  out.write(`\n${TURN_SENTINEL}${JSON.stringify({ t: "agentEnd", at })}\n`);
+}
+
 // Why a task is being (re)started — only used to label the resume; all reasons
 // behave the same (resume if there's a resumable session, else fresh). Note: a
 // scheduled cron fire is NOT here — it always starts a fresh run via runTask
@@ -176,12 +184,13 @@ export async function runTask(taskId: string): Promise<void> {
       }
     }
     if (!titleDone && head) emitText(head); // agent never produced a newline
-    out.end();
 
     // A manual stop kills the subprocess → the stream ends like a normal exit;
     // settle as canceled (not done/failed) so it can be re-run / continued.
     const canceled = takeCanceled(taskId);
     const endIso = now();
+    writeTurnEnd(out, endIso); // fence this turn's real end before closing the .md
+    out.end();
     await db
       .update(sessions)
       .set({ exitStatus, endedAt: endIso, activeMs: sql`COALESCE(${sessions.activeMs}, 0) + ${Math.max(0, Date.parse(endIso) - Date.parse(turnStart))}` })
@@ -331,10 +340,10 @@ export async function continueTask(
       if (event.kind === "done") exitStatus = event.exitStatus;
       bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: "single", agentType: agent, event });
     }
-    out.end();
-
     const canceled = takeCanceled(taskId);
     const endIso = now();
+    writeTurnEnd(out, endIso); // fence this turn's real end before closing the .md
+    out.end();
     await db
       .update(sessions)
       .set({ exitStatus, endedAt: endIso, activeMs: sql`COALESCE(${sessions.activeMs}, 0) + ${Math.max(0, Date.parse(endIso) - Date.parse(turnStart))}` })
