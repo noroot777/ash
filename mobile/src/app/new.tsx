@@ -16,6 +16,7 @@ const firstLine = (s: string) =>
 export default function NewTask() {
   const router = useRouter();
   const theme = useTheme();
+  const insets = useSafeAreaInsets();
   const projects = useStore((s) => s.projects);
   const storeProjectId = useStore((s) => s.projectId);
   const upsertTask = useStore((s) => s.upsertTask);
