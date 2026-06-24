@@ -1,15 +1,15 @@
 import { useState, type ReactNode } from "react";
 import { X } from "@phosphor-icons/react";
 import { useEscape } from "./useEscape";
-import { useReveal, revealClass } from "./useReveal";
+import { useReveal } from "./useReveal";
 import { PathHealth } from "./ui";
 
 // Shared modal shell: dimmed overlay, centered card, Esc-close, click-outside,
-// width prop. One consistent style for every dialog in the app. The card scales
-// up on open and dips back down on close (transitions.dev `.t-modal`); the close
-// affordances (Esc / click-outside / ✕) route through `requestClose` so the exit
-// animation plays before the parent unmounts. A footer that needs to dismiss with
-// the same animation takes the function form `(close) => …`.
+// width prop. One consistent style for every dialog in the app. The card rises +
+// scales in on open and dips back down on close (transitions.dev `.t-modal`); the
+// close affordances (Esc / click-outside / ✕) route through `requestClose` so the
+// exit animation plays before the parent unmounts. A footer that needs to dismiss
+// with the same animation takes the function form `(close) => …`.
 export function Modal({
   title,
   onClose,
@@ -23,17 +23,15 @@ export function Modal({
   footer?: ReactNode | ((close: () => void) => ReactNode);
   width?: number;
 }) {
-  const { state, requestClose } = useReveal(onClose, "--modal-close-dur");
+  const { closing, requestClose } = useReveal(onClose, "--modal-close-dur");
   useEscape(requestClose);
   return (
     <div
-      className={`fixed inset-0 z-50 flex items-start justify-center bg-black/30 pt-[14vh] transition-opacity duration-200 ${
-        state === "open" ? "opacity-100" : "opacity-0"
-      }`}
+      className={`t-modal-overlay ${closing ? "is-closing" : ""} fixed inset-0 z-50 flex items-start justify-center bg-black/30 pt-[14vh]`}
       onClick={requestClose}
     >
       <div
-        className={`t-modal ${revealClass(state)} flex max-h-[80vh] w-full flex-col overflow-hidden rounded-xl border border-line2 bg-panel shadow-2xl`}
+        className={`t-modal ${closing ? "is-closing" : ""} flex max-h-[80vh] w-full flex-col overflow-hidden rounded-xl border border-line2 bg-panel shadow-2xl`}
         style={{ width, maxWidth: "94vw" }}
         onClick={(e) => e.stopPropagation()}
       >

@@ -39,10 +39,9 @@ export function Menu({
   footer?: (api: { select: (v: string) => void; close: () => void }) => ReactNode;
 }) {
   const [open, setOpen] = useState(false);
-  // `closing` keeps the portal mounted through the exit animation; `shown` flips
-  // on a frame after mount so the .t-dropdown grows in from its pre-open scale.
+  // `closing` keeps the portal mounted through the exit animation; the enter
+  // animation is pure CSS (the .t-dropdown keyframe plays when the portal mounts).
   const [closing, setClosing] = useState(false);
-  const [shown, setShown] = useState(false);
   const [active, setActive] = useState(0);
   const [pos, setPos] = useState<{ left: number; top?: number; bottom?: number; width: number; maxH: number } | null>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -94,12 +93,7 @@ export function Menu({
   };
 
   useLayoutEffect(() => {
-    if (open) {
-      place();
-      const id = requestAnimationFrame(() => setShown(true));
-      return () => cancelAnimationFrame(id);
-    }
-    setShown(false);
+    if (open) place();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
@@ -187,7 +181,7 @@ export function Menu({
           <div
             ref={menuRef}
             data-origin={`${pos.top !== undefined ? "top" : "bottom"}-${align === "right" ? "right" : "left"}`}
-            className={`t-dropdown ${shown ? "is-open" : closing ? "is-closing" : ""} fixed z-[100] flex flex-col rounded-lg border border-line2 bg-panel p-1 shadow-xl`}
+            className={`t-dropdown ${closing ? "is-closing" : ""} fixed z-[100] flex flex-col rounded-lg border border-line2 bg-panel p-1 shadow-xl`}
             style={{ left: pos.left, top: pos.top, bottom: pos.bottom, width: pos.width, maxHeight: pos.maxH }}
           >
             {header && (

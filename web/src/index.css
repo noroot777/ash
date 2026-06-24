@@ -138,78 +138,72 @@ select option {
 }
 
 /* ── transitions.dev: modal + dropdown ────────────────────────────────────────
-   Semantic motion tokens shared by every overlay. .t-modal scales up from center
-   (dialogs, command palette); .t-dropdown grows from its trigger's corner (the
-   Menu popovers). Both add .is-open to enter, swap to .is-closing to exit, then
-   the JS removes the node after the close duration. */
+   Keyframe-on-mount (not a transition + class-flip): a freshly mounted overlay
+   animates in on its own, which is robust under React re-renders / StrictMode —
+   no fragile "mount at base, flip a class next frame" dance. Exit adds .is-closing
+   to play the out keyframe, then the JS unmounts after the close duration. The
+   motion is deliberately legible (rise + scale + fade) so it reads at a glance. */
 :root {
-  --modal-open-dur: 250ms;
-  --modal-close-dur: 150ms;
-  --modal-scale: 0.96;
-  --modal-scale-close: 0.96;
+  --modal-open-dur: 300ms;
+  --modal-close-dur: 160ms;
   --modal-ease: cubic-bezier(0.22, 1, 0.36, 1);
 
-  --dropdown-open-dur: 250ms;
-  --dropdown-close-dur: 150ms;
-  --dropdown-pre-scale: 0.97;
-  --dropdown-closing-scale: 0.99;
+  --dropdown-open-dur: 200ms;
+  --dropdown-close-dur: 140ms;
   --dropdown-ease: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@keyframes t-overlay-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes t-overlay-out { from { opacity: 1; } to { opacity: 0; } }
+@keyframes t-modal-in {
+  from { opacity: 0; transform: translateY(12px) scale(0.94); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes t-modal-out {
+  from { opacity: 1; transform: translateY(0) scale(1); }
+  to { opacity: 0; transform: translateY(6px) scale(0.97); }
+}
+@keyframes t-dropdown-in {
+  from { opacity: 0; transform: scale(0.9); }
+  to { opacity: 1; transform: scale(1); }
+}
+@keyframes t-dropdown-out {
+  from { opacity: 1; transform: scale(1); }
+  to { opacity: 0; transform: scale(0.96); }
+}
+
+.t-modal-overlay {
+  animation: t-overlay-in var(--modal-open-dur) var(--modal-ease) both;
+}
+.t-modal-overlay.is-closing {
+  animation: t-overlay-out var(--modal-close-dur) var(--modal-ease) both;
 }
 
 .t-modal {
   transform-origin: center;
-  transform: scale(var(--modal-scale));
-  opacity: 0;
-  pointer-events: none;
-  transition:
-    transform var(--modal-open-dur) var(--modal-ease),
-    opacity var(--modal-open-dur) var(--modal-ease);
   will-change: transform, opacity;
-}
-.t-modal.is-open {
-  transform: scale(1);
-  opacity: 1;
-  pointer-events: auto;
+  animation: t-modal-in var(--modal-open-dur) var(--modal-ease) both;
 }
 .t-modal.is-closing {
-  transform: scale(var(--modal-scale-close));
-  opacity: 0;
-  pointer-events: none;
-  transition:
-    transform var(--modal-close-dur) var(--modal-ease),
-    opacity var(--modal-close-dur) var(--modal-ease);
+  animation: t-modal-out var(--modal-close-dur) var(--modal-ease) both;
 }
 
 .t-dropdown {
   transform-origin: top left;
-  transform: scale(var(--dropdown-pre-scale));
-  opacity: 0;
-  pointer-events: none;
-  transition:
-    transform var(--dropdown-open-dur) var(--dropdown-ease),
-    opacity var(--dropdown-open-dur) var(--dropdown-ease);
   will-change: transform, opacity;
+  animation: t-dropdown-in var(--dropdown-open-dur) var(--dropdown-ease) both;
 }
 .t-dropdown[data-origin="top-right"] { transform-origin: top right; }
 .t-dropdown[data-origin="top-center"] { transform-origin: top center; }
 .t-dropdown[data-origin="bottom-left"] { transform-origin: bottom left; }
 .t-dropdown[data-origin="bottom-center"] { transform-origin: bottom center; }
 .t-dropdown[data-origin="bottom-right"] { transform-origin: bottom right; }
-.t-dropdown.is-open {
-  transform: scale(1);
-  opacity: 1;
-  pointer-events: auto;
-}
 .t-dropdown.is-closing {
-  transform: scale(var(--dropdown-closing-scale));
-  opacity: 0;
-  pointer-events: none;
-  transition:
-    transform var(--dropdown-close-dur) var(--dropdown-ease),
-    opacity var(--dropdown-close-dur) var(--dropdown-ease);
+  animation: t-dropdown-out var(--dropdown-close-dur) var(--dropdown-ease) both;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .t-modal { transition: none !important; }
-  .t-dropdown { transition: none !important; }
+  .t-modal,
+  .t-modal-overlay,
+  .t-dropdown { animation: none !important; }
 }
