@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from "react";
 import { View, Text, ScrollView, KeyboardAvoidingView, Platform, Keyboard } from "react-native";
 import { useRouter } from "expo-router";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { AGENT_TYPES, type AgentType, type Priority } from "@harness/shared";
 import { useStore } from "@/lib/store";
 import { api } from "@/lib/api";
