@@ -516,6 +516,11 @@ api.patch("/tasks/:id", async (c) => {
   if (b.agentType !== undefined) patch.agentType = b.agentType;
   if (b.mode !== undefined) patch.mode = b.mode;
   if (b.debate !== undefined) patch.debate = b.debate ? JSON.stringify(b.debate) : null;
+  // dependsOn editing (the "依赖" picker). Sanitize: drop self-reference and
+  // dedupe so a buggy client can't deadlock the task on itself.
+  if (b.dependsOn !== undefined) {
+    patch.dependsOn = JSON.stringify([...new Set(b.dependsOn.filter((d) => d !== tid))]);
+  }
   await db.update(tasks).set(patch).where(eq(tasks.id, tid));
   // Status goes through the shared helper so manual changes maintain the run-time
   // columns (startedAt/endedAt) and broadcast them just like a real run does.
