@@ -70,9 +70,9 @@ export function DebateModal({
       title={collab ? "新建协作 · /pair" : "新建辩论 · /pair"}
       onClose={onClose}
       width={640}
-      footer={
+      footer={(close) => (
         <>
-          <button onClick={onClose} className="px-3 py-1.5 text-[13px] text-muted">取消</button>
+          <button onClick={close} className="px-3 py-1.5 text-[13px] text-muted">取消</button>
           <button
             disabled={!cfg.topic.trim() || busy}
             onClick={launch}
@@ -81,7 +81,7 @@ export function DebateModal({
             开跑
           </button>
         </>
-      }
+      )}
     >
       <div className="flex flex-col gap-3" onKeyDown={(e) => (e.metaKey || e.ctrlKey) && e.key === "Enter" && launch()}>
         {/* 当前模式（在 /pair 选择器里已选定，这里只读展示） */}

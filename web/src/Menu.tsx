@@ -39,6 +39,10 @@ export function Menu({
   footer?: (api: { select: (v: string) => void; close: () => void }) => ReactNode;
 }) {
   const [open, setOpen] = useState(false);
+  // `closing` keeps the portal mounted through the exit animation; `shown` flips
+  // on a frame after mount so the .t-dropdown grows in from its pre-open scale.
+  const [closing, setClosing] = useState(false);
+  const [shown, setShown] = useState(false);
   const [active, setActive] = useState(0);
   const [pos, setPos] = useState<{ left: number; top?: number; bottom?: number; width: number; maxH: number } | null>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -56,11 +60,18 @@ export function Menu({
 
   const close = useCallback(() => {
     setOpen(false);
+    setClosing(true);
+    const ms =
+      parseFloat(
+        getComputedStyle(document.documentElement).getPropertyValue("--dropdown-close-dur"),
+      ) || 150;
+    window.setTimeout(() => setClosing(false), ms);
     if (activeClose === close) activeClose = null;
   }, []);
   const openMenu = useCallback(() => {
     if (activeClose && activeClose !== close) activeClose();
     activeClose = close;
+    setClosing(false);
     setOpen(true);
   }, [close]);
 
@@ -83,7 +94,12 @@ export function Menu({
   };
 
   useLayoutEffect(() => {
-    if (open) place();
+    if (open) {
+      place();
+      const id = requestAnimationFrame(() => setShown(true));
+      return () => cancelAnimationFrame(id);
+    }
+    setShown(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
@@ -165,12 +181,13 @@ export function Menu({
       >
         {children}
       </button>
-      {open &&
+      {(open || closing) &&
         pos &&
         createPortal(
           <div
             ref={menuRef}
-            className="fixed z-[100] flex flex-col rounded-lg border border-line2 bg-panel p-1 shadow-xl"
+            data-origin={`${pos.top !== undefined ? "top" : "bottom"}-${align === "right" ? "right" : "left"}`}
+            className={`t-dropdown ${shown ? "is-open" : closing ? "is-closing" : ""} fixed z-[100] flex flex-col rounded-lg border border-line2 bg-panel p-1 shadow-xl`}
             style={{ left: pos.left, top: pos.top, bottom: pos.bottom, width: pos.width, maxHeight: pos.maxH }}
           >
             {header && (

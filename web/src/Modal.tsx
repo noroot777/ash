@@ -1,10 +1,15 @@
 import { useState, type ReactNode } from "react";
 import { X } from "@phosphor-icons/react";
 import { useEscape } from "./useEscape";
+import { useReveal, revealClass } from "./useReveal";
 import { PathHealth } from "./ui";
 
 // Shared modal shell: dimmed overlay, centered card, Esc-close, click-outside,
-// width prop. One consistent style for every dialog in the app.
+// width prop. One consistent style for every dialog in the app. The card scales
+// up on open and dips back down on close (transitions.dev `.t-modal`); the close
+// affordances (Esc / click-outside / ✕) route through `requestClose` so the exit
+// animation plays before the parent unmounts. A footer that needs to dismiss with
+// the same animation takes the function form `(close) => …`.
 export function Modal({
   title,
   onClose,
@@ -15,25 +20,35 @@ export function Modal({
   title: ReactNode;
   onClose: () => void;
   children: ReactNode;
-  footer?: ReactNode;
+  footer?: ReactNode | ((close: () => void) => ReactNode);
   width?: number;
 }) {
-  useEscape(onClose);
+  const { state, requestClose } = useReveal(onClose, "--modal-close-dur");
+  useEscape(requestClose);
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/30 pt-[14vh]" onClick={onClose}>
+    <div
+      className={`fixed inset-0 z-50 flex items-start justify-center bg-black/30 pt-[14vh] transition-opacity duration-200 ${
+        state === "open" ? "opacity-100" : "opacity-0"
+      }`}
+      onClick={requestClose}
+    >
       <div
-        className="flex max-h-[80vh] w-full flex-col overflow-hidden rounded-xl border border-line2 bg-panel shadow-2xl"
+        className={`t-modal ${revealClass(state)} flex max-h-[80vh] w-full flex-col overflow-hidden rounded-xl border border-line2 bg-panel shadow-2xl`}
         style={{ width, maxWidth: "94vw" }}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between border-b border-line px-4 py-3">
           <h2 className="text-[14px] font-semibold text-ink">{title}</h2>
-          <button onClick={onClose} className="grid h-7 w-7 place-items-center rounded-md text-muted hover:bg-raised hover:text-ink">
+          <button onClick={requestClose} className="grid h-7 w-7 place-items-center rounded-md text-muted hover:bg-raised hover:text-ink">
             <X size={16} />
           </button>
         </div>
         <div className="flex-1 overflow-y-auto p-4">{children}</div>
-        {footer && <div className="flex items-center justify-end gap-2 border-t border-line px-4 py-3">{footer}</div>}
+        {footer && (
+          <div className="flex items-center justify-end gap-2 border-t border-line px-4 py-3">
+            {typeof footer === "function" ? footer(requestClose) : footer}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -65,14 +80,14 @@ export function ConfirmModal({
       title={title}
       onClose={onClose}
       width={420}
-      footer={
+      footer={(close) => (
         <>
-          <button onClick={onClose} className="px-3 py-1.5 text-[13px] text-muted">取消</button>
+          <button onClick={close} className="px-3 py-1.5 text-[13px] text-muted">取消</button>
           <button
             autoFocus
             onClick={() => {
               onConfirm();
-              onClose();
+              close();
             }}
             className={
               danger
@@ -83,7 +98,7 @@ export function ConfirmModal({
             {confirmLabel}
           </button>
         </>
-      }
+      )}
     >
       <p className="text-[13px] leading-relaxed text-ink">{message}</p>
     </Modal>
@@ -104,12 +119,12 @@ export function NewProjectModal({
     <Modal
       title="新建项目"
       onClose={onClose}
-      footer={
+      footer={(close) => (
         <>
-          <button onClick={onClose} className="px-3 py-1.5 text-[13px] text-muted">取消</button>
+          <button onClick={close} className="px-3 py-1.5 text-[13px] text-muted">取消</button>
           <button disabled={!name.trim()} onClick={submit} className={primaryCls}>创建</button>
         </>
-      }
+      )}
     >
       <div className="flex flex-col gap-3" onKeyDown={(e) => (e.metaKey || e.ctrlKey) && e.key === "Enter" && submit()}>
         <label className="flex flex-col gap-1.5">
@@ -140,12 +155,12 @@ export function NewGroupModal({
     <Modal
       title="新建分组"
       onClose={onClose}
-      footer={
+      footer={(close) => (
         <>
-          <button onClick={onClose} className="px-3 py-1.5 text-[13px] text-muted">取消</button>
+          <button onClick={close} className="px-3 py-1.5 text-[13px] text-muted">取消</button>
           <button disabled={!name.trim()} onClick={submit} className={primaryCls}>创建</button>
         </>
-      }
+      )}
     >
       <div className="flex flex-col gap-3" onKeyDown={(e) => (e.metaKey || e.ctrlKey) && e.key === "Enter" && submit()}>
         <label className="flex flex-col gap-1.5">

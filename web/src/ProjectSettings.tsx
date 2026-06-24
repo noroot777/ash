@@ -27,7 +27,7 @@ export function ProjectSettings({
       <Modal
         title="项目设置"
         onClose={onClose}
-        footer={
+        footer={(close) => (
           <>
             <button
               onClick={() => setConfirmDel(true)}
@@ -35,10 +35,10 @@ export function ProjectSettings({
             >
               删除项目
             </button>
-            <button onClick={onClose} className="px-3 py-1.5 text-[13px] text-muted">取消</button>
+            <button onClick={close} className="px-3 py-1.5 text-[13px] text-muted">取消</button>
             <button disabled={!name.trim() || !dirty} onClick={save} className={primaryCls}>保存</button>
           </>
-        }
+        )}
       >
         <div className="flex flex-col gap-3" onKeyDown={(e) => (e.metaKey || e.ctrlKey) && e.key === "Enter" && save()}>
           <label className="flex flex-col gap-1.5">

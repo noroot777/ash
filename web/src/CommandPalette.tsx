@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useEscape } from "./useEscape";
+import { usePresence, revealClass } from "./useReveal";
 
 export type Command = {
   id: string;
@@ -21,6 +22,7 @@ export function CommandPalette({
   const [q, setQ] = useState("");
   const [active, setActive] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
+  const { mounted, state } = usePresence(open, "--modal-close-dur");
   useEscape(onClose, open);
 
   useEffect(() => {
@@ -41,7 +43,7 @@ export function CommandPalette({
     if (active >= filtered.length) setActive(0);
   }, [filtered.length, active]);
 
-  if (!open) return null;
+  if (!mounted) return null;
 
   const run = (c: Command | undefined) => {
     if (!c) return;
@@ -50,9 +52,14 @@ export function CommandPalette({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/50 pt-[15vh]" onClick={onClose}>
+    <div
+      className={`fixed inset-0 z-50 flex items-start justify-center bg-black/50 pt-[15vh] transition-opacity duration-200 ${
+        state === "open" ? "opacity-100" : "opacity-0"
+      }`}
+      onClick={onClose}
+    >
       <div
-        className="w-[560px] max-w-[92vw] overflow-hidden rounded-xl border border-line2 bg-panel shadow-2xl"
+        className={`t-modal ${revealClass(state)} w-[560px] max-w-[92vw] overflow-hidden rounded-xl border border-line2 bg-panel shadow-2xl`}
         onClick={(e) => e.stopPropagation()}
       >
         <input
