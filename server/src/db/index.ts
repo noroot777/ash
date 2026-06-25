@@ -61,13 +61,15 @@ export async function ensureSchema() {
       body TEXT NOT NULL DEFAULT '', source_text TEXT NOT NULL DEFAULT '',
       status TEXT NOT NULL DEFAULT 'open', priority TEXT NOT NULL DEFAULT 'none',
       labels TEXT NOT NULL DEFAULT '[]', ai_backend TEXT,
+      attachments TEXT NOT NULL DEFAULT '[]',
       parsed INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL, updated_at TEXT NOT NULL, closed_at TEXT
     );
     CREATE TABLE IF NOT EXISTS issue_comments (
       id TEXT PRIMARY KEY, issue_id TEXT NOT NULL,
       author TEXT NOT NULL DEFAULT '{"kind":"human"}',
-      body TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL
+      body TEXT NOT NULL DEFAULT '', attachments TEXT NOT NULL DEFAULT '[]',
+      created_at TEXT NOT NULL, updated_at TEXT
     );
     CREATE TABLE IF NOT EXISTS llm_providers (
       id TEXT PRIMARY KEY, name TEXT NOT NULL,
@@ -102,6 +104,9 @@ export async function ensureSchema() {
     "ALTER TABLE tasks ADD COLUMN worktree_base TEXT",
     "ALTER TABLE tasks ADD COLUMN issue_id TEXT",
     "ALTER TABLE projects ADD COLUMN api_keys TEXT",
+    "ALTER TABLE issues ADD COLUMN attachments TEXT NOT NULL DEFAULT '[]'",
+    "ALTER TABLE issue_comments ADD COLUMN attachments TEXT NOT NULL DEFAULT '[]'",
+    "ALTER TABLE issue_comments ADD COLUMN updated_at TEXT",
   ]) {
     try {
       await client.execute(sql);

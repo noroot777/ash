@@ -123,6 +123,7 @@ export const issues = sqliteTable("issues", {
   status: text("status").notNull().default("open"), // open | in_progress | done | canceled
   priority: text("priority").notNull().default("none"),
   labels: text("labels").notNull().default("[]"), // json
+  attachments: text("attachments").notNull().default("[]"), // json: absolute file paths
   aiBackend: text("ai_backend"), // json AiBackend({kind:'cli',agentType} | {kind:'api',model})
   parsed: integer("parsed", { mode: "boolean" }).notNull().default(false),
   createdAt: text("created_at").notNull(),
@@ -137,7 +138,9 @@ export const issueComments = sqliteTable("issue_comments", {
   issueId: text("issue_id").notNull(),
   author: text("author").notNull().default('{"kind":"human"}'), // json CommentAuthor
   body: text("body").notNull().default(""),
+  attachments: text("attachments").notNull().default("[]"), // json: absolute file paths
   createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at"), // set when edited
 });
 
 // Direct-LLM connections (中转站), system-level. Used only for issue parsing.

@@ -187,6 +187,9 @@ export interface Issue {
   status: IssueStatus;
   priority: Priority;
   labels: string[];
+  // Absolute paths of pasted/picked files (images + any file), handed to the agent
+  // to Read on @-execution (same model as task attachments — see attachmentsPrompt).
+  attachments: string[];
   aiBackend?: AiBackend | null; // who parsed it; also the default for the hero composer next time
   parsed: boolean; // false = AI parse failed and we fell back to raw text
   createdAt: string;
@@ -206,7 +209,9 @@ export interface IssueComment {
   issueId: string;
   author: CommentAuthor;
   body: string;
+  attachments: string[]; // absolute paths (see Issue.attachments)
   createdAt: string;
+  updatedAt?: string | null; // set when a comment is edited
 }
 
 // ── Attachments (pasted into the composer / reply box) ───────────────────────

@@ -28,6 +28,7 @@ import { bus } from "./bus.js";
 import { id, now, attachmentsPrompt, runsTiming } from "./util.js";
 import { resumeOrRunTask, continueTask } from "./orchestrator.js";
 import { parseIssue } from "./agentOnce.js";
+import { listModels } from "./llm.js";
 import { setTaskStatus } from "./status.js";
 import { stopTask } from "./runs.js";
 import { runGroup } from "./scheduler.js";
@@ -965,6 +966,7 @@ const toIssue = (r: typeof issues.$inferSelect): Issue => ({
   status: r.status as IssueStatus,
   priority: r.priority as Priority,
   labels: JSON.parse(r.labels),
+  attachments: JSON.parse(r.attachments),
   aiBackend: r.aiBackend ? (JSON.parse(r.aiBackend) as AiBackend) : null,
   parsed: r.parsed,
   createdAt: r.createdAt,
@@ -977,7 +979,9 @@ const toComment = (r: typeof issueComments.$inferSelect): IssueComment => ({
   issueId: r.issueId,
   author: JSON.parse(r.author),
   body: r.body,
+  attachments: JSON.parse(r.attachments),
   createdAt: r.createdAt,
+  updatedAt: r.updatedAt,
 });
 
 // Full context handed to the agent on execution: title + structured body + the
@@ -998,7 +1002,18 @@ function issueContext(issue: typeof issues.$inferSelect, comments: (typeof issue
     }
   }
   lines.push("", "（这是从上面这条事项转来的任务，请据此完成。）");
-  return lines.join("\n");
+  // Gather every pasted/picked file across the issue + thread so the agent can Read them.
+  const files: string[] = [];
+  const collect = (raw: string) => {
+    try {
+      for (const p of JSON.parse(raw) as string[]) if (p && !files.includes(p)) files.push(p);
+    } catch {
+      /* ignore malformed */
+    }
+  };
+  collect(issue.attachments);
+  for (const cm of comments) collect(cm.attachments);
+  return lines.join("\n") + attachmentsPrompt(files);
 }
 
 api.get("/issues", async (c) => {
@@ -1021,7 +1036,7 @@ api.get("/issues/:id", async (c) => {
 // pinned `projectId` from the composer overrides inference; failure degrades to
 // raw text (parsed:false) so the call always lands a usable issue.
 api.post("/issues", async (c) => {
-  const b = await c.req.json<{ text?: string; backend?: AiBackend | null; projectId?: string | null }>();
+  const b = await c.req.json<{ text?: string; backend?: AiBackend | null; projectId?: string | null; attachments?: string[] }>();
   if (!b.text?.trim()) return c.json({ error: "text required" }, 400);
   const projs = await db.select().from(projects);
   // For the direct-LLM backend, resolve the chosen connection (with its key) and
@@ -1047,6 +1062,7 @@ api.post("/issues", async (c) => {
     status: "open",
     priority: parsed.priority,
     labels: JSON.stringify(parsed.labels),
+    attachments: JSON.stringify(b.attachments ?? []),
     aiBackend: b.backend ? JSON.stringify(b.backend) : null,
     parsed: parsed.parsed,
     createdAt: ts,
@@ -1067,6 +1083,7 @@ api.patch("/issues/:id", async (c) => {
   if (b.body !== undefined) patch.body = b.body;
   if (b.priority !== undefined) patch.priority = b.priority;
   if (b.labels !== undefined) patch.labels = JSON.stringify(b.labels);
+  if (b.attachments !== undefined) patch.attachments = JSON.stringify(b.attachments);
   if (b.projectId !== undefined) patch.projectId = b.projectId; // 归类(含从未归类指定项目)
   if (b.status !== undefined) {
     patch.status = b.status;
@@ -1099,8 +1116,8 @@ api.post("/issues/:id/comments", async (c) => {
   const iid = c.req.param("id");
   const issue = (await db.select().from(issues).where(eq(issues.id, iid))).at(0);
   if (!issue) return c.json({ error: "not found" }, 404);
-  const b = await c.req.json<{ body?: string; mention?: AgentType }>();
-  if (!b.body?.trim()) return c.json({ error: "empty" }, 400);
+  const b = await c.req.json<{ body?: string; mention?: AgentType; attachments?: string[] }>();
+  if (!b.body?.trim() && !b.attachments?.length) return c.json({ error: "empty" }, 400);
   if (b.mention) {
     if (!AGENT_TYPES.includes(b.mention)) return c.json({ error: "未知的 agent（执行只支持本地 CLI 智能体）", agent: b.mention }, 400);
     if (!issue.projectId) return c.json({ error: "事项还没归到项目，先归类再 @ 智能体执行" }, 409);
@@ -1110,8 +1127,10 @@ api.post("/issues/:id/comments", async (c) => {
     id: id(),
     issueId: iid,
     author: JSON.stringify({ kind: "human" }), // 评论是人写的;@提及触发执行(副作用)
-    body: b.body.trim(),
+    body: (b.body ?? "").trim(),
+    attachments: JSON.stringify(b.attachments ?? []),
     createdAt: ts,
+    updatedAt: null as string | null,
   };
   await db.insert(issueComments).values(crow);
 
@@ -1151,6 +1170,30 @@ api.post("/issues/:id/comments", async (c) => {
   return c.json({ comment: toComment(crow as typeof issueComments.$inferSelect), task }, 201);
 });
 
+// Edit a comment's text/attachments. Only the body + attachments change; author
+// and createdAt stay. Editing never re-triggers execution (that's only @-mention
+// on create) — it just corrects the discussion record.
+api.patch("/issues/:id/comments/:cid", async (c) => {
+  const cid = c.req.param("cid");
+  const existing = (await db.select().from(issueComments).where(eq(issueComments.id, cid))).at(0);
+  if (!existing || existing.issueId !== c.req.param("id")) return c.json({ error: "not found" }, 404);
+  const b = await c.req.json<{ body?: string; attachments?: string[] }>();
+  const patch: Record<string, unknown> = { updatedAt: now() };
+  if (b.body !== undefined) patch.body = b.body.trim();
+  if (b.attachments !== undefined) patch.attachments = JSON.stringify(b.attachments);
+  await db.update(issueComments).set(patch).where(eq(issueComments.id, cid));
+  const updated = (await db.select().from(issueComments).where(eq(issueComments.id, cid))).at(0)!;
+  return c.json(toComment(updated));
+});
+
+api.delete("/issues/:id/comments/:cid", async (c) => {
+  const cid = c.req.param("cid");
+  const existing = (await db.select().from(issueComments).where(eq(issueComments.id, cid))).at(0);
+  if (!existing || existing.issueId !== c.req.param("id")) return c.json({ error: "not found" }, 404);
+  await db.delete(issueComments).where(eq(issueComments.id, cid));
+  return c.json({ deleted: true });
+});
+
 // Tasks derived from an issue (the 派生执行 list / backlink target).
 api.get("/issues/:id/tasks", async (c) => {
   const rows = await db.select().from(tasks).where(eq(tasks.issueId, c.req.param("id")));
@@ -1169,6 +1212,33 @@ const toProvider = (r: typeof llmProviders.$inferSelect): LlmProvider => ({
 });
 
 api.get("/llm-providers", async (c) => c.json((await db.select().from(llmProviders)).map(toProvider)));
+
+// Probe the available models for a connection. Used by the 设置 form to pick a
+// default model. Accepts ad-hoc creds {protocol, baseUrl, apiKey} for the add
+// form; if `id` is given and apiKey is omitted, the stored key is used (the key is
+// never sent to the client, so editing an existing row reuses it).
+api.post("/llm-providers/models", async (c) => {
+  const b = await c.req.json<{ protocol?: LlmProtocol; baseUrl?: string; apiKey?: string; id?: string }>();
+  let { protocol, baseUrl, apiKey } = b;
+  if (b.id) {
+    const row = (await db.select().from(llmProviders).where(eq(llmProviders.id, b.id))).at(0);
+    if (row) {
+      protocol = protocol ?? (row.protocol as LlmProtocol);
+      baseUrl = baseUrl || row.baseUrl;
+      if (!apiKey) apiKey = row.apiKey;
+    }
+  }
+  try {
+    const models = await listModels({
+      protocol: protocol === "anthropic" ? "anthropic" : "openai",
+      baseUrl: (baseUrl ?? "").trim(),
+      apiKey: (apiKey ?? "").trim(),
+    });
+    return c.json({ models });
+  } catch (e) {
+    return c.json({ error: e instanceof Error ? e.message : String(e) }, 502);
+  }
+});
 
 api.post("/llm-providers", async (c) => {
   const b = await c.req.json<Partial<LlmProvider> & { apiKey?: string }>();

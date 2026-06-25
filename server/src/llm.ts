@@ -46,3 +46,28 @@ export async function callModel(p: LlmCall, prompt: string): Promise<string> {
     clearTimeout(timer);
   }
 }
+
+// 列出某个中转站/端点可用的模型 id。OpenAI 兼容走 GET /models({data:[{id}]}),
+// Anthropic 走 GET /models(同结构,需 x-api-key + anthropic-version)。失败抛错由调用方处理。
+export async function listModels(p: Omit<LlmCall, "model">): Promise<string[]> {
+  if (!p.baseUrl) throw new Error("连接未配置网址(baseUrl)");
+  if (!p.apiKey) throw new Error("连接未配置 API Key");
+  const base = p.baseUrl.replace(/\/+$/, "");
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
+  try {
+    const headers: Record<string, string> =
+      p.protocol === "anthropic"
+        ? { "x-api-key": p.apiKey, "anthropic-version": "2023-06-01" }
+        : { authorization: `Bearer ${p.apiKey}` };
+    const r = await fetch(`${base}/models`, { headers, signal: ctrl.signal });
+    if (!r.ok) throw new Error(`${p.protocol} ${r.status}: ${(await r.text()).slice(0, 300)}`);
+    const j = (await r.json()) as { data?: { id?: string; name?: string }[]; models?: { id?: string; name?: string }[] };
+    const ids = (j.data ?? j.models ?? [])
+      .map((m) => m.id ?? m.name)
+      .filter((x): x is string => !!x);
+    return Array.from(new Set(ids)).sort();
+  } finally {
+    clearTimeout(timer);
+  }
+}
