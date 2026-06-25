@@ -24,7 +24,7 @@ import { STATUS_META } from "@/lib/constants";
 import { useTheme, radius, fonts } from "@/lib/theme";
 import { Ionicons } from "@expo/vector-icons";
 import { Conversation } from "@/components/Conversation";
-import { Markdown } from "@/components/Markdown";
+import { SelectableText } from "@/components/SelectableText";
 import { PriorityBars } from "@/components/ui";
 import { SignalBar } from "@/components/SignalBar";
 import { DateTimeButton } from "@/components/DateTimeField";
@@ -400,7 +400,7 @@ export default function TaskDetail() {
               padding: 12,
             }}
           >
-            <Text style={{ color: theme.muted, fontSize: 14, lineHeight: 20 }}>{task.body}</Text>
+            <SelectableText value={task.body} style={{ color: theme.muted, fontSize: 14, lineHeight: 20 }} />
           </View>
         ) : null}
 

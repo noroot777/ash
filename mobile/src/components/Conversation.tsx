@@ -15,7 +15,7 @@ import type { Session } from "@harness/shared";
 import type { LogLine } from "@/lib/log";
 import { useTheme, radius, fonts, type Theme } from "@/lib/theme";
 import { formatInstant, Duration } from "@/lib/time";
-import { Markdown } from "./Markdown";
+import { SelectableText } from "./SelectableText";
 
 type Block =
   | { kind: "agentText"; text: string; agent?: string; sessionId?: string; endedAt?: string; key: string }
@@ -173,7 +173,7 @@ function renderBlock(b: Block, theme: Theme, timing?: { time: string | null; end
             </View>
           ) : null}
           <View style={agentBubble}>
-            <Markdown text={b.text} />
+            <SelectableText value={b.text} style={{ color: theme.ink, fontSize: 14, lineHeight: 21 }} />
           </View>
         </View>
       );
@@ -181,7 +181,7 @@ function renderBlock(b: Block, theme: Theme, timing?: { time: string | null; end
       return (
         <View style={[agentBubble, { backgroundColor: "transparent", borderColor: theme.line }]}>
           <Text style={{ color: theme.faint, fontSize: 11, marginBottom: 3 }}>思考</Text>
-          <Text style={{ color: theme.muted, fontSize: 13, fontStyle: "italic", lineHeight: 19 }}>{b.text}</Text>
+          <SelectableText value={b.text} style={{ color: theme.muted, fontSize: 13, fontStyle: "italic", lineHeight: 19 }} />
         </View>
       );
     case "tool":
@@ -213,7 +213,7 @@ function renderBlock(b: Block, theme: Theme, timing?: { time: string | null; end
     case "error":
       return (
         <View style={[agentBubble, { borderColor: theme.danger, backgroundColor: "transparent" }]}>
-          <Text style={{ color: theme.danger, fontSize: 13, lineHeight: 19 }}>{b.text}</Text>
+          <SelectableText value={b.text} style={{ color: theme.danger, fontSize: 13, lineHeight: 19 }} />
         </View>
       );
     case "done":
@@ -245,7 +245,7 @@ function renderBlock(b: Block, theme: Theme, timing?: { time: string | null; end
               borderBottomRightRadius: 4,
             }}
           >
-            <Text style={{ color: theme.accentFg, fontSize: 14, lineHeight: 20 }}>{b.text}</Text>
+            <SelectableText value={b.text} style={{ color: theme.accentFg, fontSize: 14, lineHeight: 20 }} />
           </View>
         </View>
       );
