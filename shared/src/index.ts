@@ -143,6 +143,55 @@ export interface Task {
   // harness never removes worktrees on its own — the UI offers a one-click cleanup.
   useWorktree?: boolean;
   worktreeBase?: string | null;
+  // Backlink to the issue this task was derived from (§Issues). Null for tasks
+  // created directly. An issue can spawn many tasks over time.
+  issueId?: string | null;
+}
+
+// ── Issues (§Issues) ─────────────────────────────────────────────────────────
+// An Issue is the lightweight planning/discussion layer that sits UPSTREAM of
+// tasks (like GitHub Issues → Actions runs): you capture it in one line, the AI
+// structures it and infers its project, you discuss it, then you @-mention a CLI
+// agent to EXECUTE it — which derives a task carrying the full context.
+export type IssueStatus = "open" | "in_progress" | "done" | "canceled";
+export const ISSUE_STATUSES: IssueStatus[] = ["open", "in_progress", "done", "canceled"];
+
+// Which AI handled the parse/recognition for an issue. CLI = a local executor
+// (claude/codex/…, has tools); API = a direct LLM call via the project's API key
+// (text-only — fine for parsing, NOT for execution). Execution always uses CLI.
+export type AiBackend =
+  | { kind: "cli"; agentType: AgentType }
+  | { kind: "api"; model: string };
+
+export interface Issue {
+  id: string;
+  projectId: string | null; // null = 未归类: AI couldn't infer a project; surfaced for manual assignment
+  title: string;
+  body: string; // AI-structured description (Markdown)
+  sourceText: string; // the raw user input, kept for re-parsing / reference
+  status: IssueStatus;
+  priority: Priority;
+  labels: string[];
+  aiBackend?: AiBackend | null; // who parsed it; also the default for the hero composer next time
+  parsed: boolean; // false = AI parse failed and we fell back to raw text
+  createdAt: string;
+  updatedAt: string;
+  closedAt?: string | null;
+}
+
+// A comment on an issue. Plain human comments are discussion; an agent author
+// marks a turn produced by @-mentioning that agent (which also triggers execution
+// server-side — see POST /issues/:id/comments).
+export type CommentAuthor =
+  | { kind: "human" }
+  | { kind: "agent"; agentType: AgentType };
+
+export interface IssueComment {
+  id: string;
+  issueId: string;
+  author: CommentAuthor;
+  body: string;
+  createdAt: string;
 }
 
 // ── Attachments (pasted into the composer / reply box) ───────────────────────

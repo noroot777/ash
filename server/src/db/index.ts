@@ -56,6 +56,19 @@ export async function ensureSchema() {
       attachments TEXT NOT NULL DEFAULT '[]', agent TEXT, send_at TEXT NOT NULL,
       status TEXT NOT NULL DEFAULT 'pending', created_at TEXT NOT NULL, sent_at TEXT
     );
+    CREATE TABLE IF NOT EXISTS issues (
+      id TEXT PRIMARY KEY, project_id TEXT, title TEXT NOT NULL,
+      body TEXT NOT NULL DEFAULT '', source_text TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'open', priority TEXT NOT NULL DEFAULT 'none',
+      labels TEXT NOT NULL DEFAULT '[]', ai_backend TEXT,
+      parsed INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL, updated_at TEXT NOT NULL, closed_at TEXT
+    );
+    CREATE TABLE IF NOT EXISTS issue_comments (
+      id TEXT PRIMARY KEY, issue_id TEXT NOT NULL,
+      author TEXT NOT NULL DEFAULT '{"kind":"human"}',
+      body TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL
+    );
   `);
   // Tolerant migration for DBs created before columns were added.
   try {
@@ -81,6 +94,8 @@ export async function ensureSchema() {
     "ALTER TABLE sessions ADD COLUMN turn_started_at TEXT",
     "ALTER TABLE tasks ADD COLUMN use_worktree INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE tasks ADD COLUMN worktree_base TEXT",
+    "ALTER TABLE tasks ADD COLUMN issue_id TEXT",
+    "ALTER TABLE projects ADD COLUMN api_keys TEXT",
   ]) {
     try {
       await client.execute(sql);
