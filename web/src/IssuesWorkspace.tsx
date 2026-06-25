@@ -1,23 +1,20 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import type { Issue, IssueComment, Task, AgentType, AiBackend, ProjectView, Priority } from "@harness/shared";
+import type { Issue, IssueComment, Task, AgentType, AiBackend, ProjectView, Priority, LlmProvider } from "@harness/shared";
 import { ArrowUp, Plus, Robot, Sparkle } from "@phosphor-icons/react";
 import { api } from "./api";
 import { Menu, Pill } from "./Menu";
 import { PriorityIcon, ProjectAvatar } from "./ui";
 import { PRIORITIES } from "./constants";
 
-// AI backend choices for the hero composer: local CLI agents (have tools) OR a
-// direct model call via the project's API key (text-only — fine for parsing).
-type BackendChoice = { value: string; label: string; detail: string; backend: AiBackend };
-const BACKENDS: BackendChoice[] = [
-  { value: "cli:claude", label: "@claude", detail: "本地", backend: { kind: "cli", agentType: "claude" } },
-  { value: "cli:codex", label: "@codex", detail: "本地", backend: { kind: "cli", agentType: "codex" } },
-  { value: "cli:antigravity", label: "@antigravity", detail: "本地", backend: { kind: "cli", agentType: "antigravity" } },
-  { value: "api:claude-opus-4-8", label: "Claude Opus 4.x", detail: "API", backend: { kind: "api", model: "claude-opus-4-8" } },
-  { value: "api:claude-sonnet-4-6", label: "Claude Sonnet 4.x", detail: "API", backend: { kind: "api", model: "claude-sonnet-4-6" } },
-  { value: "api:gpt-4o", label: "GPT-4o", detail: "API", backend: { kind: "api", model: "gpt-4o" } },
+// Local CLI agents always available in the composer. Direct-LLM connections (中转站)
+// are loaded from the system-level config (智能体 panel) and appended at runtime.
+type BackendChoice = { value: string; label: string; backend: AiBackend };
+const CLI_BACKENDS: BackendChoice[] = [
+  { value: "cli:claude", label: "@claude", backend: { kind: "cli", agentType: "claude" } },
+  { value: "cli:codex", label: "@codex", backend: { kind: "cli", agentType: "codex" } },
+  { value: "cli:antigravity", label: "@antigravity", backend: { kind: "cli", agentType: "antigravity" } },
 ];
 
 const ISSUE_STATUS_META: Record<Issue["status"], { label: string; cls: string }> = {
@@ -129,6 +126,7 @@ function HeroComposer({
 }) {
   const [text, setText] = useState("");
   const [backendVal, setBackendVal] = useState("cli:claude");
+  const [providers, setProviders] = useState<LlmProvider[]>([]);
   const [busy, setBusy] = useState(false);
   const [user, setUser] = useState(""); // submitted text shown as a bubble
   const [staged, setStaged] = useState<Issue | null>(null); // 未归类待选项目
@@ -139,10 +137,16 @@ function HeroComposer({
   useEffect(() => {
     titleRef.current?.classList.add("is-shown");
     setTimeout(() => taRef.current?.focus(), 120);
+    api.llmProviders().then(setProviders).catch(() => {});
   }, []);
 
-  const backend = BACKENDS.find((b) => b.value === backendVal)?.backend;
-  const backendLabel = BACKENDS.find((b) => b.value === backendVal)?.label ?? "@claude";
+  // CLI agents + the configured direct-LLM connections (中转站).
+  const allBackends: BackendChoice[] = [
+    ...CLI_BACKENDS,
+    ...providers.map((p) => ({ value: `api:${p.id}`, label: p.name, backend: { kind: "api" as const, providerId: p.id } })),
+  ];
+  const backend = allBackends.find((b) => b.value === backendVal)?.backend;
+  const backendLabel = allBackends.find((b) => b.value === backendVal)?.label ?? "@claude";
 
   const submit = async () => {
     const t = text.trim();
@@ -226,10 +230,10 @@ function HeroComposer({
                   value={backendVal}
                   onChange={setBackendVal}
                   menuWidth={260}
-                  options={BACKENDS.map((b) => ({
+                  options={allBackends.map((b) => ({
                     value: b.value,
                     label: b.label,
-                    detail: b.detail === "本地" ? "本地智能体 · CLI" : "直连大模型 · API(项目设置里配 Key)",
+                    detail: b.value.startsWith("cli:") ? "本地智能体 · CLI" : "直连大模型 · 中转站",
                     icon: <Robot size={14} />,
                   }))}
                   triggerClassName="inline-flex items-center gap-1.5 rounded-lg border border-line px-2.5 py-1.5 text-[12.5px] text-muted hover:bg-raised hover:text-ink"

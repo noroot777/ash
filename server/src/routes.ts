@@ -18,10 +18,12 @@ import type {
   IssueStatus,
   AiBackend,
   Priority,
+  LlmProvider,
+  LlmProtocol,
 } from "@harness/shared";
 import { canStartTask, canArchive, isUserSettableStatus, AGENT_TYPES, maxBytesFor, attachmentKind } from "@harness/shared";
 import { db } from "./db/index.js";
-import { projects, groups, tasks, sessions, schedules, scheduledMessages, agents, issues, issueComments } from "./db/schema.js";
+import { projects, groups, tasks, sessions, schedules, scheduledMessages, agents, issues, issueComments, llmProviders } from "./db/schema.js";
 import { bus } from "./bus.js";
 import { id, now, attachmentsPrompt, runsTiming } from "./util.js";
 import { resumeOrRunTask, continueTask } from "./orchestrator.js";
@@ -1022,9 +1024,17 @@ api.post("/issues", async (c) => {
   const b = await c.req.json<{ text?: string; backend?: AiBackend | null; projectId?: string | null }>();
   if (!b.text?.trim()) return c.json({ error: "text required" }, 400);
   const projs = await db.select().from(projects);
+  // For the direct-LLM backend, resolve the chosen connection (with its key) and
+  // hand it to parseIssue; CLI backends ignore this.
+  let apiProvider: { protocol: LlmProtocol; baseUrl: string; apiKey: string; model: string } | undefined;
+  if (b.backend?.kind === "api") {
+    const row = (await db.select().from(llmProviders).where(eq(llmProviders.id, b.backend.providerId))).at(0);
+    if (row) apiProvider = { protocol: row.protocol as LlmProtocol, baseUrl: row.baseUrl, apiKey: row.apiKey, model: row.model };
+  }
   const parsed = await parseIssue(b.text.trim(), {
     backend: b.backend ?? null,
     projects: projs.map((p) => ({ id: p.id, name: p.name, repoPath: p.repoPath })),
+    apiProvider,
   });
   const projectId = b.projectId !== undefined ? b.projectId : parsed.projectId;
   const ts = now();
@@ -1147,26 +1157,54 @@ api.get("/issues/:id/tasks", async (c) => {
   return c.json(await enrichTiming(rows));
 });
 
-// Project-level API keys for direct-LLM issue parsing (local-only; the GET path
-// never returns plaintext — only whether a provider is configured).
-api.get("/projects/:id/api-keys", async (c) => {
-  const p = (await db.select().from(projects).where(eq(projects.id, c.req.param("id")))).at(0);
-  if (!p) return c.json({ error: "not found" }, 404);
-  const k = p.apiKeys ? JSON.parse(p.apiKeys) : {};
-  return c.json({ anthropic: !!k.anthropic, openai: !!k.openai });
+// ── direct-LLM connections (中转站, system-level) — for issue parsing only ────
+const toProvider = (r: typeof llmProviders.$inferSelect): LlmProvider => ({
+  id: r.id,
+  name: r.name,
+  protocol: r.protocol as LlmProtocol,
+  baseUrl: r.baseUrl,
+  model: r.model,
+  hasKey: !!r.apiKey, // never return the key itself
+  createdAt: r.createdAt,
 });
 
-api.put("/projects/:id/api-keys", async (c) => {
+api.get("/llm-providers", async (c) => c.json((await db.select().from(llmProviders)).map(toProvider)));
+
+api.post("/llm-providers", async (c) => {
+  const b = await c.req.json<Partial<LlmProvider> & { apiKey?: string }>();
+  if (!b.name?.trim() || !b.baseUrl?.trim()) return c.json({ error: "名称和网址(baseUrl)必填" }, 400);
+  const row = {
+    id: id(),
+    name: b.name.trim(),
+    protocol: b.protocol === "anthropic" ? "anthropic" : "openai",
+    baseUrl: b.baseUrl.trim(),
+    apiKey: (b.apiKey ?? "").trim(),
+    model: (b.model ?? "").trim(),
+    createdAt: now(),
+  };
+  await db.insert(llmProviders).values(row);
+  return c.json(toProvider(row as typeof llmProviders.$inferSelect), 201);
+});
+
+api.patch("/llm-providers/:id", async (c) => {
   const pid = c.req.param("id");
-  const p = (await db.select().from(projects).where(eq(projects.id, pid))).at(0);
-  if (!p) return c.json({ error: "not found" }, 404);
-  const b = await c.req.json<{ anthropic?: string; openai?: string }>();
-  const cur = p.apiKeys ? JSON.parse(p.apiKeys) : {};
-  const next = { ...cur };
-  if (b.anthropic !== undefined) next.anthropic = b.anthropic || undefined;
-  if (b.openai !== undefined) next.openai = b.openai || undefined;
-  await db.update(projects).set({ apiKeys: JSON.stringify(next) }).where(eq(projects.id, pid));
-  return c.json({ saved: true, has: { anthropic: !!next.anthropic, openai: !!next.openai } });
+  const existing = (await db.select().from(llmProviders).where(eq(llmProviders.id, pid))).at(0);
+  if (!existing) return c.json({ error: "not found" }, 404);
+  const b = await c.req.json<Partial<LlmProvider> & { apiKey?: string }>();
+  const patch: Record<string, unknown> = {};
+  if (b.name !== undefined) patch.name = b.name;
+  if (b.protocol !== undefined) patch.protocol = b.protocol === "anthropic" ? "anthropic" : "openai";
+  if (b.baseUrl !== undefined) patch.baseUrl = b.baseUrl;
+  if (b.model !== undefined) patch.model = b.model;
+  if (b.apiKey) patch.apiKey = b.apiKey; // 只在传了非空 key 时更新(留空=不动)
+  await db.update(llmProviders).set(patch).where(eq(llmProviders.id, pid));
+  const updated = (await db.select().from(llmProviders).where(eq(llmProviders.id, pid))).at(0)!;
+  return c.json(toProvider(updated));
+});
+
+api.delete("/llm-providers/:id", async (c) => {
+  await db.delete(llmProviders).where(eq(llmProviders.id, c.req.param("id")));
+  return c.json({ deleted: true });
 });
 
 // ── SSE stream (§12) ───────────────────────────────────────────────────────

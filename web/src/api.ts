@@ -1,4 +1,4 @@
-import type { Project, ProjectView, ProjectHealth, Task, Session, Group, GateAction, Schedule, ScheduledMessage, AgentExecutorProfile, BatchCreateTasksBody, AgentType, DebateSpeaker, AttachmentKind, Issue, IssueComment, AiBackend } from "@harness/shared";
+import type { Project, ProjectView, ProjectHealth, Task, Session, Group, GateAction, Schedule, ScheduledMessage, AgentExecutorProfile, BatchCreateTasksBody, AgentType, DebateSpeaker, AttachmentKind, Issue, IssueComment, AiBackend, LlmProvider, LlmProtocol } from "@harness/shared";
 
 const j = async (r: Response) => {
   if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
@@ -201,9 +201,13 @@ export const api = {
     fetch(`/api/issues/${id}/comments`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }).then(j),
   issueTasks: (id: string): Promise<Task[]> =>
     fetch(`/api/issues/${id}/tasks`).then(j),
-  // Project API keys for direct-LLM parsing. GET returns only presence flags.
-  projectApiKeys: (id: string): Promise<{ anthropic: boolean; openai: boolean }> =>
-    fetch(`/api/projects/${id}/api-keys`).then(j),
-  setProjectApiKeys: (id: string, keys: { anthropic?: string; openai?: string }): Promise<unknown> =>
-    fetch(`/api/projects/${id}/api-keys`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(keys) }).then(j),
+  // Direct-LLM connections (中转站, system-level) — issue parsing only. List never
+  // returns the key (hasKey flag only); send apiKey only when setting/changing it.
+  llmProviders: (): Promise<LlmProvider[]> => fetch("/api/llm-providers").then(j),
+  createLlmProvider: (p: { name: string; protocol: LlmProtocol; baseUrl: string; apiKey: string; model: string }): Promise<LlmProvider> =>
+    fetch("/api/llm-providers", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(p) }).then(j),
+  patchLlmProvider: (id: string, p: Partial<{ name: string; protocol: LlmProtocol; baseUrl: string; apiKey: string; model: string }>): Promise<LlmProvider> =>
+    fetch(`/api/llm-providers/${id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(p) }).then(j),
+  deleteLlmProvider: (id: string): Promise<unknown> =>
+    fetch(`/api/llm-providers/${id}`, { method: "DELETE" }).then(j),
 };

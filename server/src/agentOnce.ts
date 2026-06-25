@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentType, AiBackend, Priority } from "@harness/shared";
 import { resolveExecutor } from "./executors/index.js";
-import { callModel, anyApiKeys } from "./llm.js";
+import { callModel, type LlmCall } from "./llm.js";
 
 // 中立 cwd,放在 repo 树之外:claude CLI 会从 cwd 向上找 CLAUDE.md,落在仓库里会
 // 命中根目录的工作约定污染解析。tmpdir 彻底脱离 repo 树。
@@ -119,7 +119,7 @@ function extractJson(text: string): Record<string, unknown> | null {
 // title=首行、body=原文、projectId=单项目时取它否则 null、parsed=false。
 export async function parseIssue(
   rawText: string,
-  opts: { backend?: AiBackend | null; projects: ProjectLite[] },
+  opts: { backend?: AiBackend | null; projects: ProjectLite[]; apiProvider?: LlmCall },
 ): Promise<ParsedIssue> {
   const onlyProject = opts.projects.length === 1 ? opts.projects[0].id : null;
   const fallback = (): ParsedIssue => ({
@@ -133,8 +133,8 @@ export async function parseIssue(
 
   let out = "";
   try {
-    if (opts.backend?.kind === "api") {
-      out = await callModel(opts.backend.model, parsePrompt(rawText, opts.projects), await anyApiKeys());
+    if (opts.backend?.kind === "api" && opts.apiProvider) {
+      out = await callModel(opts.apiProvider, parsePrompt(rawText, opts.projects));
     } else {
       const r = await runAgentOnce(parsePrompt(rawText, opts.projects), {
         agentType: opts.backend?.kind === "cli" ? opts.backend.agentType : "claude",

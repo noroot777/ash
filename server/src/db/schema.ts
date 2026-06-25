@@ -139,3 +139,14 @@ export const issueComments = sqliteTable("issue_comments", {
   body: text("body").notNull().default(""),
   createdAt: text("created_at").notNull(),
 });
+
+// Direct-LLM connections (中转站), system-level. Used only for issue parsing.
+export const llmProviders = sqliteTable("llm_providers", {
+  id: text("id").primaryKey(),
+  name: text("name").notNull(),
+  protocol: text("protocol").notNull().default("openai"), // anthropic | openai
+  baseUrl: text("base_url").notNull(),
+  apiKey: text("api_key").notNull().default(""), // 本机存储,GET 不回传明文
+  model: text("model").notNull().default(""),
+  createdAt: text("created_at").notNull(),
+});

@@ -157,11 +157,26 @@ export type IssueStatus = "open" | "in_progress" | "done" | "canceled";
 export const ISSUE_STATUSES: IssueStatus[] = ["open", "in_progress", "done", "canceled"];
 
 // Which AI handled the parse/recognition for an issue. CLI = a local executor
-// (claude/codex/…, has tools); API = a direct LLM call via the project's API key
-// (text-only — fine for parsing, NOT for execution). Execution always uses CLI.
+// (claude/codex/…, has tools); API = a configured direct-LLM connection (LlmProvider,
+// text-only — fine for parsing, NOT for execution). Execution always uses CLI.
 export type AiBackend =
   | { kind: "cli"; agentType: AgentType }
-  | { kind: "api"; model: string };
+  | { kind: "api"; providerId: string };
+
+// ── Direct-LLM connections (中转站, system-level) ────────────────────────────
+// A configured way to call a model over HTTP — an official endpoint OR a relay
+// (中转站): pick the wire protocol, fill the base URL + API key + a model. Global
+// (not per-project). Used ONLY for issue parsing, never for execution.
+export type LlmProtocol = "anthropic" | "openai";
+export interface LlmProvider {
+  id: string;
+  name: string;
+  protocol: LlmProtocol; // anthropic-compatible (/messages) | openai-compatible (/chat/completions)
+  baseUrl: string; // e.g. https://api.openai.com/v1 — or a relay's base, version path included
+  model: string;
+  hasKey: boolean; // the key itself is never sent to the client; only whether one is set
+  createdAt: string;
+}
 
 export interface Issue {
   id: string;

@@ -69,6 +69,12 @@ export async function ensureSchema() {
       author TEXT NOT NULL DEFAULT '{"kind":"human"}',
       body TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS llm_providers (
+      id TEXT PRIMARY KEY, name TEXT NOT NULL,
+      protocol TEXT NOT NULL DEFAULT 'openai', base_url TEXT NOT NULL,
+      api_key TEXT NOT NULL DEFAULT '', model TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL
+    );
   `);
   // Tolerant migration for DBs created before columns were added.
   try {
