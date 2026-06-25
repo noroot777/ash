@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { Issue, IssueComment, Task, AgentType, AiBackend, ProjectView, Priority } from "@harness/shared";
-import { ArrowUp, Plus, Robot, Sparkle, GearSix } from "@phosphor-icons/react";
+import { ArrowUp, Plus, Robot, Sparkle } from "@phosphor-icons/react";
 import { api } from "./api";
 import { Menu, Pill } from "./Menu";
 import { PriorityIcon, ProjectAvatar } from "./ui";
@@ -99,7 +99,6 @@ export function IssuesWorkspace({
         ) : (
           <HeroComposer
             projects={projects}
-            projectId={projectId}
             onCreated={(iss) => {
               setIssues((prev) => [iss, ...prev]);
               onSelectIssue(iss.id);
@@ -117,14 +116,12 @@ export function IssuesWorkspace({
 // ── hero composer with the create morph ──────────────────────────────────────
 function HeroComposer({
   projects,
-  projectId,
   onCreated,
   onAssignNeeded,
   patchIssueLocal,
   onSelectIssue,
 }: {
   projects: ProjectView[];
-  projectId: string | null;
   onCreated: (i: Issue) => void;
   onAssignNeeded: (i: Issue) => void;
   patchIssueLocal: (i: Issue) => void;
@@ -146,22 +143,6 @@ function HeroComposer({
 
   const backend = BACKENDS.find((b) => b.value === backendVal)?.backend;
   const backendLabel = BACKENDS.find((b) => b.value === backendVal)?.label ?? "@claude";
-
-  const pickBackend = async (v: string) => {
-    if (v === "__cfg") {
-      if (!projectId) return alert("先选一个项目再配置它的 API Key");
-      const anthropic = window.prompt("粘贴 Anthropic API Key(留空跳过):", "") ?? "";
-      const openai = window.prompt("粘贴 OpenAI API Key(留空跳过):", "") ?? "";
-      try {
-        await api.setProjectApiKeys(projectId, { anthropic, openai });
-        alert("已保存到当前项目。现在可在菜单里选「直连大模型」。");
-      } catch (e) {
-        alert("保存失败:" + (e instanceof Error ? e.message : String(e)));
-      }
-      return;
-    }
-    setBackendVal(v);
-  };
 
   const submit = async () => {
     const t = text.trim();
@@ -243,12 +224,14 @@ function HeroComposer({
                 </button>
                 <Menu
                   value={backendVal}
-                  onChange={pickBackend}
+                  onChange={setBackendVal}
                   menuWidth={260}
-                  options={[
-                    ...BACKENDS.map((b) => ({ value: b.value, label: b.label, detail: b.detail === "本地" ? "本地智能体 · CLI" : "直连大模型 · API", icon: <Robot size={14} /> })),
-                    { value: "__cfg", label: "配置项目 API Key…", detail: "Anthropic / OpenAI", icon: <GearSix size={14} /> },
-                  ]}
+                  options={BACKENDS.map((b) => ({
+                    value: b.value,
+                    label: b.label,
+                    detail: b.detail === "本地" ? "本地智能体 · CLI" : "直连大模型 · API(项目设置里配 Key)",
+                    icon: <Robot size={14} />,
+                  }))}
                   triggerClassName="inline-flex items-center gap-1.5 rounded-lg border border-line px-2.5 py-1.5 text-[12.5px] text-muted hover:bg-raised hover:text-ink"
                 >
                   <Robot size={14} /> {backendLabel} <span className="text-[10px] text-faint">▾</span>
