@@ -2,11 +2,12 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { Issue, IssueComment, Task, AgentType, AiBackend, ProjectView, Priority, LlmProvider } from "@harness/shared";
-import { ArrowUp, Plus, Robot, Sparkle } from "@phosphor-icons/react";
+import { ArrowUp, Robot, Sparkle, Trash, PencilSimple, Check } from "@phosphor-icons/react";
 import { api } from "./api";
 import { Menu, Pill } from "./Menu";
 import { PriorityIcon, ProjectAvatar } from "./ui";
 import { PRIORITIES } from "./constants";
+import { usePasteAttachments, AttachmentChips, AttachButton, StoredAttachments } from "./pasteAttachments";
 
 // Local CLI agents always available in the composer. Direct-LLM connections (中转站)
 // are loaded from the system-level config (智能体 panel) and appended at runtime.
@@ -92,6 +93,10 @@ export function IssuesWorkspace({
             setIssues={setIssues}
             onOpenTask={onOpenTask}
             taskBump={taskBump}
+            onDeleted={() => {
+              setIssues((prev) => prev.filter((x) => x.id !== current.id));
+              onSelectIssue(null);
+            }}
           />
         ) : (
           <HeroComposer
@@ -130,6 +135,7 @@ function HeroComposer({
   const [busy, setBusy] = useState(false);
   const [user, setUser] = useState(""); // submitted text shown as a bubble
   const [staged, setStaged] = useState<Issue | null>(null); // 未归类待选项目
+  const { attachments, onPaste, addFiles, remove, clear, error } = usePasteAttachments();
   const heroTitle = useRef(randomHero());
   const taRef = useRef<HTMLTextAreaElement>(null);
   const titleRef = useRef<HTMLDivElement>(null);
@@ -150,12 +156,13 @@ function HeroComposer({
 
   const submit = async () => {
     const t = text.trim();
-    if (!t || busy) return;
+    if ((!t && !attachments.length) || busy) return;
     setBusy(true);
-    setUser(t);
+    setUser(t || "(附件)");
     titleRef.current?.classList.add("is-hiding");
     try {
-      const issue = await api.createIssue({ text: t, backend });
+      const issue = await api.createIssue({ text: t || "(见附件)", backend, attachments: attachments.map((a) => a.path) });
+      clear();
       if (issue.projectId == null) {
         onAssignNeeded(issue);
         setStaged(issue); // 让用户归类,不自动落定
@@ -212,20 +219,20 @@ function HeroComposer({
                   ref={taRef}
                   value={text}
                   onChange={(e) => setText(e.target.value)}
+                  onPaste={onPaste}
                   onKeyDown={(e) => {
                     if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
                       e.preventDefault();
                       submit();
                     }
                   }}
-                  placeholder="随手写下要做的事…"
+                  placeholder="随手写下要做的事…（可粘贴或选择图片/文件）"
                   className="min-h-[50px] w-full resize-none bg-transparent text-[16px] leading-relaxed text-ink outline-none placeholder:text-faint"
                 />
+                <AttachmentChips attachments={attachments} onRemove={remove} error={error} />
               </div>
               <div className="flex items-center gap-1.5 px-3 pb-3 pt-2">
-                <button className="grid h-[30px] w-[30px] place-items-center rounded-lg text-muted hover:bg-raised hover:text-ink" title="附件">
-                  <Plus size={16} />
-                </button>
+                <AttachButton addFiles={addFiles} className="grid h-[30px] w-[30px] place-items-center rounded-lg text-muted hover:bg-raised hover:text-ink" />
                 <Menu
                   value={backendVal}
                   onChange={setBackendVal}
@@ -243,7 +250,7 @@ function HeroComposer({
                 <span className="flex-1" />
                 <button
                   onClick={submit}
-                  disabled={!text.trim()}
+                  disabled={!text.trim() && !attachments.length}
                   className="grid h-[34px] w-[34px] place-items-center rounded-full bg-accent text-accent-fg transition-colors hover:bg-accent-hover disabled:bg-line2 disabled:text-faint"
                   title="记下来 ⌘↵"
                 >
@@ -352,17 +359,23 @@ function IssueDetail({
   setIssues,
   onOpenTask,
   taskBump,
+  onDeleted,
 }: {
   issue: Issue;
   projects: ProjectView[];
   setIssues: React.Dispatch<React.SetStateAction<Issue[]>>;
   onOpenTask: (taskId: string) => void;
   taskBump: number;
+  onDeleted: () => void;
 }) {
   const [comments, setComments] = useState<IssueComment[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [draft, setDraft] = useState("");
   const [execNote, setExecNote] = useState<string | null>(null);
+  const [editing, setEditing] = useState(false); // 编辑标题+描述
+  const [editTitle, setEditTitle] = useState(issue.title);
+  const [editBody, setEditBody] = useState(issue.body);
+  const { attachments, onPaste, addFiles, remove, clear, error } = usePasteAttachments();
   const project = projects.find((p) => p.id === issue.projectId) ?? null;
 
   useEffect(() => {
@@ -377,14 +390,37 @@ function IssueDetail({
     setIssues((prev) => prev.map((x) => (x.id === issue.id ? updated : x)));
   };
 
+  const startEdit = () => {
+    setEditTitle(issue.title);
+    setEditBody(issue.body);
+    setEditing(true);
+  };
+  const saveEdit = async () => {
+    const t = editTitle.trim();
+    if (!t) return;
+    await patch({ title: t, body: editBody });
+    setEditing(false);
+  };
+  const del = async () => {
+    if (!confirm("删除这条事项?讨论评论会一起删除(已派生的任务保留)。")) return;
+    try {
+      await api.deleteIssue(issue.id);
+      onDeleted();
+    } catch (e) {
+      alert(e instanceof Error ? e.message : String(e));
+    }
+  };
+
   const send = async () => {
     const body = draft.trim();
-    if (!body) return;
+    if (!body && !attachments.length) return;
     const m = body.match(/@(claude|codex|antigravity)/i);
     const mention = m ? (m[1].toLowerCase() as AgentType) : undefined;
+    const paths = attachments.map((a) => a.path);
     setDraft("");
+    clear();
     try {
-      const res = await api.postIssueComment(issue.id, { body, mention });
+      const res = await api.postIssueComment(issue.id, { body, mention, attachments: paths });
       setComments((prev) => [...prev, res.comment]);
       if (res.task) {
         setExecNote(`已派给 @${mention} · 任务运行中`);
@@ -397,16 +433,71 @@ function IssueDetail({
     }
   };
 
+  const onCommentUpdated = (c: IssueComment) => setComments((prev) => prev.map((x) => (x.id === c.id ? c : x)));
+  const onCommentDeleted = (cid: string) => setComments((prev) => prev.filter((x) => x.id !== cid));
+
   const priLabel = PRIORITIES.find((p) => p.key === issue.priority)?.label ?? "无";
 
   return (
     <div className="h-full overflow-y-auto px-9 py-7">
       <div className="max-w-[780px]">
-        <div className="mb-3.5 text-[12px] text-faint">{project?.name ?? "未归类"} › 事项</div>
-        <div className="mb-4 flex items-start gap-3">
-          <IssueDot status={issue.status} staged={issue.projectId == null} size={18} />
-          <h2 className="text-[21px] font-semibold leading-snug text-ink">{issue.title}</h2>
+        <div className="mb-3.5 flex items-center text-[12px] text-faint">
+          <span>{project?.name ?? "未归类"} › 事项</span>
+          <span className="flex-1" />
+          {!editing && (
+            <span className="flex items-center gap-1">
+              <button
+                onClick={startEdit}
+                className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-muted hover:bg-raised hover:text-ink"
+                title="编辑标题与描述"
+              >
+                <PencilSimple size={13} /> 编辑
+              </button>
+              <button
+                onClick={del}
+                className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-muted hover:bg-raised hover:text-red-600"
+                title="删除事项"
+              >
+                <Trash size={13} /> 删除
+              </button>
+            </span>
+          )}
         </div>
+
+        {editing ? (
+          <div className="mb-4">
+            <input
+              value={editTitle}
+              onChange={(e) => setEditTitle(e.target.value)}
+              className="mb-2 w-full rounded-[10px] border border-line2 bg-canvas px-3 py-2 text-[19px] font-semibold text-ink outline-none focus:border-accent"
+              placeholder="标题"
+            />
+            <textarea
+              value={editBody}
+              onChange={(e) => setEditBody(e.target.value)}
+              rows={8}
+              className="w-full resize-y rounded-[10px] border border-line2 bg-canvas px-3 py-2 text-[14px] leading-7 text-ink outline-none focus:border-accent"
+              placeholder="描述(支持 Markdown)"
+            />
+            <div className="mt-2 flex justify-end gap-2">
+              <button onClick={() => setEditing(false)} className="rounded-md px-3 py-1.5 text-[13px] text-muted hover:bg-raised">
+                取消
+              </button>
+              <button
+                onClick={saveEdit}
+                disabled={!editTitle.trim()}
+                className="inline-flex items-center gap-1 rounded-md bg-accent px-3 py-1.5 text-[13px] font-medium text-accent-fg hover:bg-accent-hover disabled:opacity-40"
+              >
+                <Check size={14} weight="bold" /> 保存
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="mb-4 flex items-start gap-3">
+            <IssueDot status={issue.status} staged={issue.projectId == null} size={18} />
+            <h2 className="text-[21px] font-semibold leading-snug text-ink">{issue.title}</h2>
+          </div>
+        )}
 
         <div className="mb-5 flex flex-wrap items-center gap-2">
           <Pill
@@ -437,11 +528,12 @@ function IssueDetail({
           />
         </div>
 
-        {issue.body && (
+        {!editing && issue.body && (
           <div className="markdown text-[14px] leading-7 text-[#33363d]">
             <ReactMarkdown remarkPlugins={[remarkGfm]}>{issue.body}</ReactMarkdown>
           </div>
         )}
+        {!editing && issue.attachments.length > 0 && <StoredAttachments paths={issue.attachments} className="mt-3" />}
 
         <div className="my-6 h-px bg-line" />
 
@@ -450,42 +542,33 @@ function IssueDetail({
           💬 讨论 <span className="font-normal text-faint">· 对齐后 @ 智能体执行</span>
         </div>
         <div className="space-y-3.5">
-          {comments.map((c) => {
-            const ai = c.author.kind === "agent";
-            const name = c.author.kind === "agent" ? `@${c.author.agentType}` : "我";
-            return (
-              <div key={c.id} className="flex gap-2.5">
-                <span className={`grid h-6 w-6 shrink-0 place-items-center rounded-full text-[11px] font-semibold text-white ${ai ? "bg-accent" : "bg-muted"}`}>
-                  {ai ? "C" : "我"}
-                </span>
-                <div className="min-w-0 flex-1">
-                  <div className="mb-0.5 text-[12px] text-muted">
-                    <b className={`font-semibold ${ai ? "text-accent" : "text-ink"}`}>{name}</b>
-                  </div>
-                  <div className="text-[13.5px] leading-relaxed text-[#33363d]">{c.body}</div>
-                </div>
-              </div>
-            );
-          })}
+          {comments.map((c) => (
+            <CommentItem key={c.id} issueId={issue.id} comment={c} onUpdated={onCommentUpdated} onDeleted={onCommentDeleted} />
+          ))}
         </div>
-        <div className="mt-1 flex items-center gap-2 rounded-[10px] border border-line2 py-1.5 pl-3 pr-2">
-          <button
-            onClick={() => setDraft((d) => (d.trim() ? d.trim() + " " : "") + "@claude ")}
-            className="grid h-7 w-7 shrink-0 place-items-center rounded-md font-bold text-accent hover:bg-raised"
-            title="@ 智能体"
-          >
-            @
-          </button>
-          <input
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && send()}
-            placeholder="写评论一起讨论;输入 @claude 交给它执行"
-            className="flex-1 bg-transparent text-[13.5px] text-ink outline-none placeholder:text-faint"
-          />
-          <button onClick={send} className="grid h-7 w-7 shrink-0 place-items-center rounded-md bg-accent text-accent-fg">
-            <ArrowUp size={14} weight="bold" />
-          </button>
+        <div className="mt-2 rounded-[10px] border border-line2 px-3 py-2">
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setDraft((d) => (d.trim() ? d.trim() + " " : "") + "@claude ")}
+              className="grid h-7 w-7 shrink-0 place-items-center rounded-md font-bold text-accent hover:bg-raised"
+              title="@ 智能体"
+            >
+              @
+            </button>
+            <AttachButton addFiles={addFiles} className="grid h-7 w-7 shrink-0 place-items-center rounded-md text-muted hover:bg-raised hover:text-ink" />
+            <input
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onPaste={onPaste}
+              onKeyDown={(e) => e.key === "Enter" && send()}
+              placeholder="写评论一起讨论;@claude 交给它执行(可粘贴/选择附件)"
+              className="flex-1 bg-transparent text-[13.5px] text-ink outline-none placeholder:text-faint"
+            />
+            <button onClick={send} className="grid h-7 w-7 shrink-0 place-items-center rounded-md bg-accent text-accent-fg">
+              <ArrowUp size={14} weight="bold" />
+            </button>
+          </div>
+          <AttachmentChips attachments={attachments} onRemove={remove} error={error} />
         </div>
         <div className="mt-1.5 text-[11.5px] text-faint">
           普通文字 = 评论讨论 · <b className="font-semibold text-accent">@claude</b> / <b className="font-semibold text-accent">@codex</b> = 交给它执行(把标题+描述+整条讨论一起打包发过去)
@@ -514,6 +597,99 @@ function IssueDetail({
           <div className="rounded-[10px] border border-dashed border-line2 p-3.5 text-[13px] text-faint">
             尚无派生执行 · 在上面输入框 <b className="text-accent">@claude</b> 交给它执行,会把标题、描述和整条讨论一起打包发给智能体,生成一个任务去跑
           </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── one discussion comment: shows body + attachments, with edit/delete ───────
+function CommentItem({
+  issueId,
+  comment,
+  onUpdated,
+  onDeleted,
+}: {
+  issueId: string;
+  comment: IssueComment;
+  onUpdated: (c: IssueComment) => void;
+  onDeleted: (cid: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [text, setText] = useState(comment.body);
+  const { attachments, onPaste, addFiles, remove, clear, error } = usePasteAttachments();
+  const ai = comment.author.kind === "agent";
+  const name = comment.author.kind === "agent" ? `@${comment.author.agentType}` : "我";
+
+  const startEdit = () => {
+    setText(comment.body);
+    clear();
+    setEditing(true);
+  };
+  const save = async () => {
+    // 编辑时,新粘贴的附件追加到已有附件后
+    const nextAttachments = [...comment.attachments, ...attachments.map((a) => a.path)];
+    const updated = await api.patchIssueComment(issueId, comment.id, { body: text.trim(), attachments: nextAttachments });
+    onUpdated(updated);
+    setEditing(false);
+  };
+  const del = async () => {
+    if (!confirm("删除这条评论?")) return;
+    await api.deleteIssueComment(issueId, comment.id);
+    onDeleted(comment.id);
+  };
+
+  return (
+    <div className="group flex gap-2.5">
+      <span className={`grid h-6 w-6 shrink-0 place-items-center rounded-full text-[11px] font-semibold text-white ${ai ? "bg-accent" : "bg-muted"}`}>
+        {ai ? "C" : "我"}
+      </span>
+      <div className="min-w-0 flex-1">
+        <div className="mb-0.5 flex items-center gap-2 text-[12px] text-muted">
+          <b className={`font-semibold ${ai ? "text-accent" : "text-ink"}`}>{name}</b>
+          {comment.updatedAt && <span className="text-[10.5px] text-faint">已编辑</span>}
+          {!editing && !ai && (
+            <span className="ml-auto flex items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
+              <button onClick={startEdit} className="grid h-6 w-6 place-items-center rounded text-faint hover:bg-raised hover:text-ink" title="编辑">
+                <PencilSimple size={12} />
+              </button>
+              <button onClick={del} className="grid h-6 w-6 place-items-center rounded text-faint hover:bg-raised hover:text-red-600" title="删除">
+                <Trash size={12} />
+              </button>
+            </span>
+          )}
+        </div>
+        {editing ? (
+          <div>
+            <textarea
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              onPaste={onPaste}
+              rows={3}
+              className="w-full resize-y rounded-[8px] border border-line2 bg-canvas px-2.5 py-1.5 text-[13.5px] leading-relaxed text-ink outline-none focus:border-accent"
+            />
+            {comment.attachments.length > 0 && <StoredAttachments paths={comment.attachments} className="mt-2" />}
+            <AttachmentChips attachments={attachments} onRemove={remove} error={error} />
+            <div className="mt-1.5 flex items-center gap-2">
+              <AttachButton addFiles={addFiles} className="grid h-7 w-7 place-items-center rounded-md text-muted hover:bg-raised hover:text-ink" />
+              <span className="flex-1" />
+              <button onClick={() => setEditing(false)} className="rounded-md px-2.5 py-1 text-[12.5px] text-muted hover:bg-raised">
+                取消
+              </button>
+              <button
+                onClick={save}
+                disabled={!text.trim() && !comment.attachments.length && !attachments.length}
+                className="inline-flex items-center gap-1 rounded-md bg-accent px-2.5 py-1 text-[12.5px] font-medium text-accent-fg hover:bg-accent-hover disabled:opacity-40"
+              >
+                <Check size={12} weight="bold" /> 保存
+              </button>
+            </div>
+          </div>
+        ) : (
+          <>
+            {comment.body && <div className="text-[13.5px] leading-relaxed text-[#33363d]">{comment.body}</div>}
+            {comment.attachments.length > 0 && <StoredAttachments paths={comment.attachments} className="mt-1.5" />}
+          </>
         )}
       </div>
     </div>

@@ -1,5 +1,5 @@
-import { useState, useCallback, type ClipboardEvent } from "react";
-import { X, File as FileIcon } from "@phosphor-icons/react";
+import { useState, useCallback, useRef, type ClipboardEvent } from "react";
+import { X, File as FileIcon, Paperclip } from "@phosphor-icons/react";
 import { maxBytesFor, type AttachmentKind } from "@harness/shared";
 import { api } from "./api";
 
@@ -26,16 +26,15 @@ function filesFromPaste(e: ClipboardEvent): File[] {
   return out;
 }
 
-// Shared paste-to-upload behavior for the composer + reply box. Captures pasted
-// images OR files, enforces the claude/codex-style size caps client-side (so an
-// oversize file never hits the wire), uploads the rest, and tracks the results.
+// Shared paste/pick-to-upload behavior for the composer + reply box. Captures
+// pasted OR file-picked images/files, enforces the claude/codex-style size caps
+// client-side (so an oversize file never hits the wire), uploads the rest, and
+// tracks the results. `addFiles` backs an explicit 「附件」 picker button.
 export function usePasteAttachments() {
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const onPaste = useCallback(async (e: ClipboardEvent) => {
-    const files = filesFromPaste(e);
-    if (!files.length) return; // no files → let normal text paste through
-    e.preventDefault();
+  const addFiles = useCallback(async (files: File[]) => {
+    if (!files.length) return;
     setError(null);
     for (const file of files) {
       const cap = maxBytesFor(file.type);
@@ -58,12 +57,59 @@ export function usePasteAttachments() {
       }
     }
   }, []);
+  const onPaste = useCallback(
+    (e: ClipboardEvent) => {
+      const files = filesFromPaste(e);
+      if (!files.length) return; // no files → let normal text paste through
+      e.preventDefault();
+      void addFiles(files);
+    },
+    [addFiles],
+  );
   const remove = useCallback((path: string) => setAttachments((xs) => xs.filter((x) => x.path !== path)), []);
   const clear = useCallback(() => {
     setAttachments([]);
     setError(null);
   }, []);
-  return { attachments, onPaste, remove, clear, error };
+  return { attachments, onPaste, addFiles, remove, clear, error };
+}
+
+// 「附件」 picker button: opens a hidden file input and feeds the chosen files to
+// `addFiles` from usePasteAttachments. `className` styles the trigger so callers
+// match their composer's look.
+export function AttachButton({
+  addFiles,
+  className,
+  title = "附件",
+}: {
+  addFiles: (files: File[]) => void | Promise<void>;
+  className?: string;
+  title?: string;
+}) {
+  const ref = useRef<HTMLInputElement>(null);
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => ref.current?.click()}
+        className={className}
+        title={title}
+      >
+        <Paperclip size={16} />
+      </button>
+      <input
+        ref={ref}
+        type="file"
+        multiple
+        className="hidden"
+        onChange={(e) => {
+          const files = Array.from(e.target.files ?? []);
+          if (files.length) void addFiles(files);
+          e.target.value = ""; // allow re-picking the same file
+        }}
+      />
+    </>
+  );
 }
 
 function RemoveBtn({ onClick }: { onClick: () => void }) {
@@ -120,6 +166,41 @@ export function AttachmentChips({
         </div>
       )}
       {error && <div className="pt-1.5 text-[11px] text-red-600">{error}</div>}
+    </div>
+  );
+}
+
+// Read-only chips for attachments already stored on an issue/comment (server sends
+// just absolute paths). basename → preview url (/api/uploads/<file>) + display name;
+// extension decides image-thumbnail vs file-chip.
+const IMAGE_EXT = /\.(png|jpe?g|gif|webp|svg)$/i;
+export function StoredAttachments({ paths, className = "" }: { paths: string[]; className?: string }) {
+  if (!paths.length) return null;
+  return (
+    <div className={`flex flex-wrap gap-2 ${className}`}>
+      {paths.map((p) => {
+        const file = p.split("/").pop() ?? p;
+        // Stored filename is `<id>-<original>`; show the original part if present.
+        const name = file.replace(/^[A-Za-z0-9]+-/, "");
+        const url = `/api/uploads/${file}`;
+        return IMAGE_EXT.test(file) ? (
+          <a key={p} href={url} target="_blank" rel="noreferrer" className="block h-14 w-14 overflow-hidden rounded-md border border-line2" title={name}>
+            <img src={url} alt={name} className="h-full w-full object-cover" />
+          </a>
+        ) : (
+          <a
+            key={p}
+            href={url}
+            target="_blank"
+            rel="noreferrer"
+            className="flex h-14 max-w-[180px] items-center gap-2 rounded-md border border-line2 bg-raised/50 py-1 pl-2 pr-3 hover:border-accent"
+            title={name}
+          >
+            <FileIcon size={20} className="shrink-0 text-muted" />
+            <span className="truncate text-[12px] text-ink">{name}</span>
+          </a>
+        );
+      })}
     </div>
   );
 }

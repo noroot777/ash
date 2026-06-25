@@ -187,7 +187,7 @@ export const api = {
   // Create from raw text — parsing is synchronous (the composer shows 「识别中…」
   // until this resolves). backend = which AI parses; projectId pins a project
   // (else the AI infers it; null/unset → 未归类 staging).
-  createIssue: (body: { text: string; backend?: AiBackend | null; projectId?: string | null }): Promise<Issue> =>
+  createIssue: (body: { text: string; backend?: AiBackend | null; projectId?: string | null; attachments?: string[] }): Promise<Issue> =>
     fetch("/api/issues", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }).then(j),
   patchIssue: (id: string, patch: Partial<Issue>): Promise<Issue> =>
     fetch(`/api/issues/${id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(patch) }).then(j),
@@ -197,13 +197,21 @@ export const api = {
     fetch(`/api/issues/${id}/comments`).then(j),
   // Post a comment. Plain = discussion. With `mention` (a CLI agentType) it ALSO
   // executes: derives a task carrying title + body + the whole thread.
-  postIssueComment: (id: string, body: { body: string; mention?: AgentType }): Promise<{ comment: IssueComment; task?: Task }> =>
+  postIssueComment: (id: string, body: { body: string; mention?: AgentType; attachments?: string[] }): Promise<{ comment: IssueComment; task?: Task }> =>
     fetch(`/api/issues/${id}/comments`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }).then(j),
+  patchIssueComment: (issueId: string, cid: string, patch: { body?: string; attachments?: string[] }): Promise<IssueComment> =>
+    fetch(`/api/issues/${issueId}/comments/${cid}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(patch) }).then(j),
+  deleteIssueComment: (issueId: string, cid: string): Promise<unknown> =>
+    fetch(`/api/issues/${issueId}/comments/${cid}`, { method: "DELETE" }).then(j),
   issueTasks: (id: string): Promise<Task[]> =>
     fetch(`/api/issues/${id}/tasks`).then(j),
   // Direct-LLM connections (中转站, system-level) — issue parsing only. List never
   // returns the key (hasKey flag only); send apiKey only when setting/changing it.
   llmProviders: (): Promise<LlmProvider[]> => fetch("/api/llm-providers").then(j),
+  // Probe available models for a connection (ad-hoc creds, or `id` to reuse a
+  // stored key). Used by 设置 to pick a default model.
+  probeModels: (body: { protocol: LlmProtocol; baseUrl: string; apiKey?: string; id?: string }): Promise<{ models: string[] }> =>
+    fetch("/api/llm-providers/models", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }).then(j),
   createLlmProvider: (p: { name: string; protocol: LlmProtocol; baseUrl: string; apiKey: string; model: string }): Promise<LlmProvider> =>
     fetch("/api/llm-providers", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(p) }).then(j),
   patchLlmProvider: (id: string, p: Partial<{ name: string; protocol: LlmProtocol; baseUrl: string; apiKey: string; model: string }>): Promise<LlmProvider> =>
