@@ -1,26 +1,26 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
-import type { Task, ProjectView, Group, AgentEvent, DebateStyle, AgentType, ProjectHealth } from "@harness/shared";
-import { NotePencil, CaretDown, MagnifyingGlass, GearSix, Plus } from "@phosphor-icons/react";
+import type { Task, ProjectView, Group, AgentEvent, DebateStyle, AgentType, ProjectHealth, Issue } from "@harness/shared";
+import { CaretDown, MagnifyingGlass, GearSix, Plus, ListChecks, PencilSimpleLine } from "@phosphor-icons/react";
 import { api } from "./api";
 import { useServerEvents } from "./useEvents";
-import { TaskList, orderedTasks } from "./TaskList";
-import { TaskDetail, type LogLine } from "./TaskDetail";
+import { orderedTasks } from "./TaskList";
+import { type LogLine } from "./TaskDetail";
 import { CommandPalette, type Command } from "./CommandPalette";
 import { PRIORITIES } from "./constants";
 import { CreateTask } from "./CreateTask";
 import { DebateModal } from "./DebateComposer";
-import { DebateView } from "./DebateView";
 import { applyDebateEvent, emptyDebate, type DebateState } from "./debateState";
 import { AgentsPanel } from "./AgentsPanel";
-import { Board } from "./Board";
 import { Menu } from "./Menu";
 import { NewProjectModal, NewGroupModal, ConfirmModal, WorktreeCleanupModal } from "./Modal";
 import { GroupsPanel } from "./GroupsPanel";
 import { ProjectSettings } from "./ProjectSettings";
-import { HealthDot, BranchChip, ProjectAvatar, ResizeHandle } from "./ui";
+import { HealthDot, ProjectAvatar } from "./ui";
 import { shortPath } from "./util";
 import { runAction, canStopTask } from "./taskActions";
 import { canArchive } from "@harness/shared";
+import { TasksWorkspace } from "./TasksWorkspace";
+import { IssuesWorkspace } from "./IssuesWorkspace";
 
 export function App() {
   // Deep-link state via the URL (?project=…&task=…): a refresh stays on the same
@@ -64,6 +64,15 @@ export function App() {
     localStorage.setItem("harness.sidebarWidth", String(sidebarW));
   }, [sidebarW]);
 
+  // Top-level plane: 规划(事项) vs 执行(任务). Issues are project-scoped, but the
+  // 未归类 (staging) ones surface across projects. Kept in the URL like project/task.
+  const [section, setSection] = useState<"issue" | "task">((urlParams.get("section") as "issue" | "task") || "task");
+  const [issues, setIssues] = useState<Issue[]>([]);
+  const [selectedIssue, setSelectedIssue] = useState<string | null>(urlParams.get("issue"));
+  // Bumps on every task.status so an open issue's derived-task list stays live
+  // without giving issues their own SSE channel.
+  const [taskBump, setTaskBump] = useState(0);
+
   const connected = useServerEvents(
     useCallback((ev) => {
       if (ev.type === "task.status") {
@@ -82,6 +91,7 @@ export function App() {
           ),
         );
         if (ev.status === "done" || ev.status === "failed" || ev.status === "canceled") setSessionsBump((n) => n + 1);
+        setTaskBump((n) => n + 1); // keep an open issue's derived-task list live
       } else if (ev.type === "task.title") {
         setTasks((ts) => ts.map((t) => (t.id === ev.taskId ? { ...t, title: ev.title } : t)));
       } else if (ev.type === "agent.event") {
@@ -105,15 +115,23 @@ export function App() {
     });
   }, []);
 
+  // Issues load once (not per-project): they're project-scoped in the list, but
+  // 未归类 staging issues surface across projects, so the client filters locally.
+  useEffect(() => {
+    api.issues().then(setIssues).catch(() => {});
+  }, []);
+
   // Keep the URL in sync with the current project/task (replaceState — no history
   // spam) so refresh/share lands on the same place.
   useEffect(() => {
     const p = new URLSearchParams();
     if (projectId) p.set("project", projectId);
-    if (selected) p.set("task", selected);
+    if (section !== "task") p.set("section", section);
+    if (section === "task" && selected) p.set("task", selected);
+    if (section === "issue" && selectedIssue) p.set("issue", selectedIssue);
     const qs = p.toString();
     window.history.replaceState(null, "", qs ? `?${qs}` : window.location.pathname);
-  }, [projectId, selected]);
+  }, [projectId, selected, section, selectedIssue]);
 
   useEffect(() => {
     if (!projectId) return;
@@ -137,6 +155,11 @@ export function App() {
   }, [projectId, sessionsBump]);
 
   const active = useMemo(() => tasks.filter((t) => !t.archived), [tasks]);
+  // Issue count for the rail: current project's issues + cross-project 未归类.
+  const issueCount = useMemo(
+    () => issues.filter((i) => i.projectId === projectId || i.projectId == null).length,
+    [issues, projectId],
+  );
   const archivedTasks = useMemo(
     () => tasks.filter((t) => t.archived).sort((x, y) => (y.archivedAt ?? "").localeCompare(x.archivedAt ?? "")),
     [tasks],
@@ -212,6 +235,29 @@ export function App() {
   }, []);
 
   const gate = useCallback((id: string, action: Parameters<typeof api.gate>[1]) => api.gate(id, action), []);
+
+  // Open a task from an issue's 派生执行 link: switch to the 执行 plane and select
+  // it, fetching it (and switching to its project) if the loaded list lacks it —
+  // e.g. a task just spawned by @-executing the issue isn't in `tasks` yet.
+  const openTask = useCallback(async (taskId: string) => {
+    setSection("task");
+    setSelected(taskId);
+    if (!tasksRef.current.some((t) => t.id === taskId)) {
+      try {
+        const t = await api.task(taskId);
+        setProjectId(t.projectId);
+        setTasks((ts) => (ts.some((x) => x.id === t.id) ? ts : [t, ...ts]));
+      } catch {
+        /* task gone */
+      }
+    }
+  }, []);
+
+  // The reverse jump: a task's 「← 来自事项」 backlink opens its source issue.
+  const openIssue = useCallback((issueId: string) => {
+    setSection("issue");
+    setSelectedIssue(issueId);
+  }, []);
 
   const del = useCallback((id: string, title: string) => setConfirmDel({ id, title }), []);
   const doDelete = useCallback(async (id: string) => {
@@ -319,6 +365,7 @@ export function App() {
       if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT")) return;
       if (paletteOpen || anyModal) return;
       if (e.metaKey || e.ctrlKey || e.altKey) return; // don't hijack ⌘C/⌘V/etc.
+      if (section !== "task") return; // j/k/c/r task nav only in the 执行 plane
       const idx = ordered.findIndex((t) => t.id === selected);
       if (e.key === "j" || e.key === "ArrowDown") {
         e.preventDefault();
@@ -336,7 +383,7 @@ export function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [ordered, selected, current, paletteOpen, anyModal, primary]);
+  }, [ordered, selected, current, paletteOpen, anyModal, primary, section]);
 
   useEffect(() => {
     if (selected) document.querySelector(`[data-task-id="${selected}"]`)?.scrollIntoView({ block: "nearest" });
@@ -384,145 +431,167 @@ export function App() {
   }, [current, projects, projectId, groups, project, primary, stop, del, patch, archive, unarchive]);
 
   return (
-    <div className="flex h-full flex-col">
-      {/* Full-width top bar */}
-      <header className="flex h-12 shrink-0 items-center justify-between border-b border-line bg-panel px-3">
-        <div className="flex items-center gap-1.5">
-          <Menu
-            value={projectId ?? ""}
-            onChange={(v) => { setProjSearch(""); setProjectId(v); }}
-            menuWidth={300}
-            maxHeight={520}
-            options={otherProjects.map((p) => ({
-              value: p.id,
-              label: p.name,
-              detail: shortPath(p.repoPath),
-              icon: (
-                <span className="relative">
-                  <ProjectAvatar name={p.name} size={22} />
-                  {!p.health.isRepo && (
-                    <span className="absolute -bottom-0.5 -right-0.5 rounded-full ring-2 ring-panel">
-                      <HealthDot health={p.health} size={7} />
-                    </span>
-                  )}
-                </span>
-              ),
-            }))}
-            header={({ close }) => (
-              <div className="flex flex-col gap-1.5">
-                {project && (
-                  <div className="flex items-center gap-2 rounded-md px-1 py-0.5">
-                    <ProjectAvatar name={project.name} size={30} />
-                    <span className="flex min-w-0 flex-1 flex-col">
-                      <span className="truncate text-[13px] font-semibold text-ink">{project.name}</span>
-                      <span className="truncate text-[11px] text-faint">{shortPath(project.repoPath) || "未设置路径"}</span>
-                    </span>
-                    <button
-                      onClick={() => { close(); setSettingsOpen(true); }}
-                      title="项目设置"
-                      className="grid h-7 w-7 shrink-0 place-items-center rounded-md text-muted hover:bg-raised hover:text-ink"
-                    >
-                      <GearSix size={15} />
-                    </button>
-                  </div>
+    <div className="flex h-full">
+      {/* Left rail (Linear-style): project switcher + 规划/执行 sections + tools */}
+      <aside className="flex w-[228px] shrink-0 flex-col border-r border-line bg-panel p-2">
+        <Menu
+          value={projectId ?? ""}
+          onChange={(v) => { setProjSearch(""); setProjectId(v); }}
+          menuWidth={300}
+          maxHeight={520}
+          options={otherProjects.map((p) => ({
+            value: p.id,
+            label: p.name,
+            detail: shortPath(p.repoPath),
+            icon: (
+              <span className="relative">
+                <ProjectAvatar name={p.name} size={22} />
+                {!p.health.isRepo && (
+                  <span className="absolute -bottom-0.5 -right-0.5 rounded-full ring-2 ring-panel">
+                    <HealthDot health={p.health} size={7} />
+                  </span>
                 )}
-                {projects.length > 6 && (
-                  <input
-                    autoFocus
-                    value={projSearch}
-                    onChange={(e) => setProjSearch(e.target.value)}
-                    placeholder="搜索项目…"
-                    className="w-full rounded-md border border-line bg-canvas px-2 py-1 text-[12px] text-ink outline-none placeholder:text-faint focus:border-accent"
-                  />
-                )}
-                {otherProjects.length > 0 && (
-                  <div className="px-1 text-[10px] font-medium uppercase tracking-wide text-faint">切换到</div>
-                )}
-              </div>
-            )}
-            footer={({ close }) => (
-              <button
-                onClick={() => { close(); setNewProjectOpen(true); }}
-                className="flex w-full items-center gap-2 rounded-md px-1 py-1 text-left text-[13px] text-muted hover:bg-raised hover:text-ink"
-              >
-                <span className="grid h-[22px] w-[22px] shrink-0 place-items-center rounded-md border border-dashed border-line2">
-                  <Plus size={13} />
-                </span>
-                新建项目
-              </button>
-            )}
-            triggerClassName="flex items-center gap-2 rounded-md px-1.5 py-1 hover:bg-raised"
-          >
-            <ProjectAvatar name={projectName} size={24} />
-            <span className="max-w-[180px] truncate text-[13px] font-semibold text-ink">{projectName}</span>
-            {project && !project.health.isRepo && <HealthDot health={project.health} />}
-            <CaretDown size={12} className="text-faint" />
-          </Menu>
-          <BranchChip health={curHealth} />
-          <button
-            onClick={() => setCreateOpen(true)}
-            className="ml-1 grid h-7 w-7 place-items-center rounded-md text-muted transition-colors hover:bg-raised hover:text-ink"
-            title="新建任务"
-          >
-            <NotePencil size={17} />
-          </button>
-        </div>
-
-        <div className="flex items-center gap-2">
-          <div className="flex items-center gap-0.5 rounded-lg bg-raised p-0.5 text-[12px]">
-            <button onClick={() => setView("list")} className={`rounded-md px-2.5 py-1 transition-colors ${view === "list" ? "bg-panel text-ink shadow-sm" : "text-muted hover:text-ink"}`}>
-              列表
-            </button>
-            <button onClick={() => setView("board")} className={`rounded-md px-2.5 py-1 transition-colors ${view === "board" ? "bg-panel text-ink shadow-sm" : "text-muted hover:text-ink"}`}>
-              看板
-            </button>
-            <button onClick={() => setView("archived")} className={`rounded-md px-2.5 py-1 transition-colors ${view === "archived" ? "bg-panel text-ink shadow-sm" : "text-muted hover:text-ink"}`}>
-              已归档{archivedTasks.length ? ` ${archivedTasks.length}` : ""}
-            </button>
-          </div>
-          <button onClick={() => setGroupsOpen(true)} className="rounded-md px-2.5 py-1.5 text-[12px] text-muted transition-colors hover:bg-raised hover:text-ink" title="分组管理">
-            分组
-          </button>
-          <button onClick={() => setAgentsOpen(true)} className="rounded-md px-2.5 py-1.5 text-[12px] text-muted transition-colors hover:bg-raised hover:text-ink" title="智能体执行器">
-            智能体
-          </button>
-          <button onClick={() => setPaletteOpen(true)} className="flex items-center gap-1.5 rounded-md px-2 py-1 text-[12px] text-muted transition-colors hover:bg-raised hover:text-ink" title="命令面板">
-            <MagnifyingGlass size={13} />
-            <span>搜索</span>
-            <kbd>⌘K</kbd>
-          </button>
-          <span className={`ml-0.5 h-1.5 w-1.5 rounded-full ${connected ? "bg-emerald-500" : "bg-faint"}`} title={connected ? "实时已连接" : "未连接"} />
-        </div>
-      </header>
-
-      <div className="flex min-h-0 flex-1">
-        {view === "board" ? (
-          <div className="min-w-0 flex-1">
-            <Board tasks={visible} onMove={(id, status) => patch(id, { status })} onOpen={(id) => { setSelected(id); setView("list"); }} />
-          </div>
-        ) : (
-          <>
-            <aside style={{ width: sidebarW }} className="relative flex shrink-0 flex-col border-r border-line">
-              <TaskList tasks={visible} groups={groups} selected={selected} onSelect={setSelected} />
-              <ResizeHandle width={sidebarW} onChange={setSidebarW} />
-            </aside>
-            <div className="min-w-0 flex-1">
-              {current ? (
-                current.mode === "debate" ? (
-                  <DebateView key={current.id} task={current} state={debates[current.id] ?? emptyDebate()} sessionsBump={sessionsBump} onRun={() => run(current.id)} onStop={() => stop(current.id)} onRetry={() => retry(current.id)} onGate={(a) => gate(current.id, a)} onDelete={() => del(current.id, current.title)} onArchive={() => archive(current.id)} onUnarchive={() => unarchive(current.id)} />
-                ) : (
-                  <TaskDetail key={current.id} task={current} groups={groups} allTasks={visible} logs={logs[current.id] ?? []} sessionsBump={sessionsBump} onRun={() => run(current.id)} onStop={() => stop(current.id)} onReply={(text, opts) => reply(current.id, text, opts)} onPatch={(p) => patch(current.id, p)} onCreateGroup={() => setNewGroupOpen(true)} onDelete={() => del(current.id, current.title)} onArchive={() => archive(current.id)} onUnarchive={() => unarchive(current.id)} />
-                )
-              ) : (
-                <div className="flex h-full flex-col items-center justify-center gap-1 text-[13px] text-faint">
-                  <span>选择左侧任务，或新建</span>
-                  <span className="text-[12px]">按 <kbd>C</kbd> 新建 · <kbd>⌘K</kbd> 命令面板</span>
+              </span>
+            ),
+          }))}
+          header={({ close }) => (
+            <div className="flex flex-col gap-1.5">
+              {project && (
+                <div className="flex items-center gap-2 rounded-md px-1 py-0.5">
+                  <ProjectAvatar name={project.name} size={30} />
+                  <span className="flex min-w-0 flex-1 flex-col">
+                    <span className="truncate text-[13px] font-semibold text-ink">{project.name}</span>
+                    <span className="truncate text-[11px] text-faint">{shortPath(project.repoPath) || "未设置路径"}</span>
+                  </span>
+                  <button
+                    onClick={() => { close(); setSettingsOpen(true); }}
+                    title="项目设置"
+                    className="grid h-7 w-7 shrink-0 place-items-center rounded-md text-muted hover:bg-raised hover:text-ink"
+                  >
+                    <GearSix size={15} />
+                  </button>
                 </div>
               )}
+              {projects.length > 6 && (
+                <input
+                  autoFocus
+                  value={projSearch}
+                  onChange={(e) => setProjSearch(e.target.value)}
+                  placeholder="搜索项目…"
+                  className="w-full rounded-md border border-line bg-canvas px-2 py-1 text-[12px] text-ink outline-none placeholder:text-faint focus:border-accent"
+                />
+              )}
+              {otherProjects.length > 0 && (
+                <div className="px-1 text-[10px] font-medium uppercase tracking-wide text-faint">切换到</div>
+              )}
             </div>
-          </>
+          )}
+          footer={({ close }) => (
+            <button
+              onClick={() => { close(); setNewProjectOpen(true); }}
+              className="flex w-full items-center gap-2 rounded-md px-1 py-1 text-left text-[13px] text-muted hover:bg-raised hover:text-ink"
+            >
+              <span className="grid h-[22px] w-[22px] shrink-0 place-items-center rounded-md border border-dashed border-line2">
+                <Plus size={13} />
+              </span>
+              新建项目
+            </button>
+          )}
+          triggerClassName="flex items-center gap-2 rounded-md px-1.5 py-1.5 hover:bg-raised"
+        >
+          <ProjectAvatar name={projectName} size={24} />
+          <span className="max-w-[150px] truncate text-[13px] font-semibold text-ink">{projectName}</span>
+          {project && !project.health.isRepo && <HealthDot health={project.health} />}
+          <CaretDown size={12} className="ml-auto text-faint" />
+        </Menu>
+
+        <nav className="mt-1.5 flex flex-col gap-px">
+          <div className="px-2 pb-1 pt-3 text-[10px] font-semibold uppercase tracking-[0.07em] text-faint">规划</div>
+          <button
+            onClick={() => setSection("issue")}
+            className={`group flex items-center gap-2.5 rounded-md px-2 py-1.5 text-[13px] ${section === "issue" ? "bg-raised font-medium text-ink" : "text-muted hover:bg-raised hover:text-ink"}`}
+          >
+            <PencilSimpleLine size={16} className={section === "issue" ? "text-accent" : ""} /> 事项
+            <span className="ml-auto flex items-center gap-1">
+              <span className="rounded-full bg-overlay px-1.5 text-[11px] text-faint">{issueCount}</span>
+              <span
+                role="button"
+                title="新建事项"
+                onClick={(e) => { e.stopPropagation(); setSection("issue"); setSelectedIssue(null); }}
+                className="grid h-[18px] w-[18px] place-items-center rounded text-faint opacity-0 hover:bg-line2 hover:text-ink group-hover:opacity-100"
+              >
+                <Plus size={12} />
+              </span>
+            </span>
+          </button>
+          <div className="px-2 pb-1 pt-3 text-[10px] font-semibold uppercase tracking-[0.07em] text-faint">执行</div>
+          <button
+            onClick={() => setSection("task")}
+            className={`flex items-center gap-2.5 rounded-md px-2 py-1.5 text-[13px] ${section === "task" ? "bg-raised font-medium text-ink" : "text-muted hover:bg-raised hover:text-ink"}`}
+          >
+            <ListChecks size={16} className={section === "task" ? "text-accent" : ""} /> 任务
+            <span className="ml-auto rounded-full bg-overlay px-1.5 text-[11px] text-faint">{active.length}</span>
+          </button>
+        </nav>
+
+        <div className="flex-1" />
+
+        <div className="flex flex-col gap-px border-t border-line pt-1.5">
+          <button onClick={() => setGroupsOpen(true)} className="flex items-center gap-2.5 rounded-md px-2 py-1.5 text-[13px] text-muted hover:bg-raised hover:text-ink">分组</button>
+          <button onClick={() => setAgentsOpen(true)} className="flex items-center gap-2.5 rounded-md px-2 py-1.5 text-[13px] text-muted hover:bg-raised hover:text-ink">智能体</button>
+          <button onClick={() => setPaletteOpen(true)} className="flex items-center gap-2.5 rounded-md px-2 py-1.5 text-[13px] text-muted hover:bg-raised hover:text-ink">
+            <MagnifyingGlass size={14} /> 搜索 <kbd className="ml-auto">⌘K</kbd>
+          </button>
+          <div className="flex items-center gap-2 px-2 py-1.5 text-[12px] text-faint">
+            <span className={`h-1.5 w-1.5 rounded-full ${connected ? "bg-emerald-500" : "bg-faint"}`} />
+            {connected ? "实时已连接" : "未连接"}
+          </div>
+        </div>
+      </aside>
+
+      <main className="flex min-h-0 flex-1 flex-col">
+        {section === "issue" ? (
+          <IssuesWorkspace
+            projects={projects}
+            projectId={projectId}
+            issues={issues}
+            setIssues={setIssues}
+            selectedIssue={selectedIssue}
+            onSelectIssue={setSelectedIssue}
+            onOpenTask={openTask}
+            taskBump={taskBump}
+          />
+        ) : (
+          <TasksWorkspace
+            view={view}
+            setView={setView}
+            visible={visible}
+            current={current}
+            groups={groups}
+            selected={selected}
+            onSelect={setSelected}
+            logs={logs}
+            debates={debates}
+            sessionsBump={sessionsBump}
+            curHealth={curHealth}
+            sidebarW={sidebarW}
+            setSidebarW={setSidebarW}
+            archivedCount={archivedTasks.length}
+            onNewTask={() => setCreateOpen(true)}
+            onRun={run}
+            onStop={stop}
+            onRetry={retry}
+            onReply={reply}
+            onPatch={patch}
+            onCreateGroup={() => setNewGroupOpen(true)}
+            onDelete={del}
+            onArchive={archive}
+            onUnarchive={unarchive}
+            onGate={gate}
+            onOpenIssue={openIssue}
+          />
         )}
-      </div>
+      </main>
 
       <CommandPalette open={paletteOpen} commands={commands} onClose={() => setPaletteOpen(false)} />
       {agentsOpen && <AgentsPanel onClose={() => setAgentsOpen(false)} />}

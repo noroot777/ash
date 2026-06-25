@@ -1,4 +1,4 @@
-import type { Project, ProjectView, ProjectHealth, Task, Session, Group, GateAction, Schedule, ScheduledMessage, AgentExecutorProfile, BatchCreateTasksBody, AgentType, DebateSpeaker, AttachmentKind } from "@harness/shared";
+import type { Project, ProjectView, ProjectHealth, Task, Session, Group, GateAction, Schedule, ScheduledMessage, AgentExecutorProfile, BatchCreateTasksBody, AgentType, DebateSpeaker, AttachmentKind, Issue, IssueComment, AiBackend } from "@harness/shared";
 
 const j = async (r: Response) => {
   if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
@@ -180,4 +180,30 @@ export const api = {
     taskId: string,
   ): Promise<{ round: number; speaker: DebateSpeaker; text: string; raised?: boolean; agrees?: boolean; conclusion?: string; error?: string; at?: string; target?: "A" | "B" }[]> =>
     fetch(`/api/tasks/${taskId}/debate`).then(j),
+
+  // ── issues (planning/discussion layer; see shared Issue) ───────────────────
+  issues: (projectId?: string): Promise<Issue[]> =>
+    fetch(`/api/issues${projectId ? `?projectId=${projectId}` : ""}`).then(j),
+  // Create from raw text — parsing is synchronous (the composer shows 「识别中…」
+  // until this resolves). backend = which AI parses; projectId pins a project
+  // (else the AI infers it; null/unset → 未归类 staging).
+  createIssue: (body: { text: string; backend?: AiBackend | null; projectId?: string | null }): Promise<Issue> =>
+    fetch("/api/issues", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }).then(j),
+  patchIssue: (id: string, patch: Partial<Issue>): Promise<Issue> =>
+    fetch(`/api/issues/${id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(patch) }).then(j),
+  deleteIssue: (id: string): Promise<unknown> =>
+    fetch(`/api/issues/${id}`, { method: "DELETE" }).then(j),
+  issueComments: (id: string): Promise<IssueComment[]> =>
+    fetch(`/api/issues/${id}/comments`).then(j),
+  // Post a comment. Plain = discussion. With `mention` (a CLI agentType) it ALSO
+  // executes: derives a task carrying title + body + the whole thread.
+  postIssueComment: (id: string, body: { body: string; mention?: AgentType }): Promise<{ comment: IssueComment; task?: Task }> =>
+    fetch(`/api/issues/${id}/comments`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }).then(j),
+  issueTasks: (id: string): Promise<Task[]> =>
+    fetch(`/api/issues/${id}/tasks`).then(j),
+  // Project API keys for direct-LLM parsing. GET returns only presence flags.
+  projectApiKeys: (id: string): Promise<{ anthropic: boolean; openai: boolean }> =>
+    fetch(`/api/projects/${id}/api-keys`).then(j),
+  setProjectApiKeys: (id: string, keys: { anthropic?: string; openai?: string }): Promise<unknown> =>
+    fetch(`/api/projects/${id}/api-keys`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(keys) }).then(j),
 };

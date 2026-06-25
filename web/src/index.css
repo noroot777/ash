@@ -207,3 +207,63 @@ select option {
   .t-modal-overlay,
   .t-dropdown { animation: none !important; }
 }
+
+/* ── Issue composer morph (transitions.dev: texts-reveal / shimmer / success-
+   check / card-resize / page-side-by-side). Tokens match the app's existing
+   --modal-ease so motion stays consistent. Used by IssuesWorkspace. ────────── */
+:root {
+  --stagger-dur: 560ms; --stagger-distance: 12px; --stagger-stagger: 46ms; --stagger-blur: 4px; --stagger-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --shimmer-dur: 1500ms; --shimmer-base: #9b9fa6; --shimmer-highlight: #3a3d44; --shimmer-band: 360%;
+  --resize-dur: 300ms; --resize-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --page-slide-dur: 300ms; --page-fade-dur: 260ms; --page-slide-distance: 10px; --page-blur: 3px; --page-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --check-dur: 500ms;
+}
+
+/* texts reveal — staggered blurred rise */
+.t-stagger-line { display: block; opacity: 0; transform: translateY(var(--stagger-distance)); filter: blur(var(--stagger-blur));
+  transition: opacity var(--stagger-dur) var(--stagger-ease), transform var(--stagger-dur) var(--stagger-ease), filter var(--stagger-dur) var(--stagger-ease); will-change: transform, opacity, filter; }
+.t-stagger-line--2 { transition-delay: var(--stagger-stagger); }
+.t-stagger.is-shown .t-stagger-line { opacity: 1; transform: translateY(0); filter: blur(0); }
+.t-stagger.is-hiding .t-stagger-line { opacity: 0; transform: translateY(0); filter: blur(0); transition: opacity 200ms ease; transition-delay: 0s; }
+
+/* shimmer text — "thinking" status */
+.t-shimmer { position: relative; display: inline-block; color: var(--shimmer-base); }
+.t-shimmer::before { content: attr(data-text); position: absolute; inset: 0; pointer-events: none;
+  background-image: linear-gradient(90deg, transparent 0%, transparent 40%, var(--shimmer-highlight) 50%, transparent 60%, transparent 100%);
+  background-size: var(--shimmer-band) 100%; background-repeat: no-repeat; -webkit-background-clip: text; background-clip: text;
+  color: transparent; -webkit-text-fill-color: transparent; animation: t-shimmer var(--shimmer-dur) linear infinite; }
+@keyframes t-shimmer { 0% { background-position: 100% 0; } 100% { background-position: 0% 0; } }
+
+/* success check — draw-on celebrate */
+.t-success-check { display: inline-block; transform-origin: center; opacity: 0; will-change: transform, opacity, filter; }
+.t-success-check svg { display: block; overflow: visible; }
+.t-success-check svg path { stroke-dasharray: 30; stroke-dashoffset: 30; }
+.t-success-check.is-in { animation: t-check-fade var(--check-dur) cubic-bezier(0.22,1,0.36,1) forwards, t-check-rotate var(--check-dur) cubic-bezier(0.22,1,0.36,1) forwards, t-check-bob var(--check-dur) cubic-bezier(0.34,1.35,0.64,1) forwards; }
+.t-success-check.is-in svg path { animation: t-check-draw var(--check-dur) cubic-bezier(0.22,1,0.36,1) 90ms forwards; }
+@keyframes t-check-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes t-check-rotate { from { transform: rotate(80deg); } to { transform: rotate(0); } }
+@keyframes t-check-bob { from { translate: 0 18px; } to { translate: 0 0; } }
+@keyframes t-check-draw { to { stroke-dashoffset: 0; } }
+
+/* card resize — tween min-height during morph */
+.t-resize { transition: min-height var(--resize-dur) var(--resize-ease); will-change: min-height; }
+
+/* page side-by-side — hero ↔ issue detail */
+.t-page-slide { position: relative; }
+.t-page-slide .t-page[data-page-id="1"] { --t-page-from-x: calc(var(--page-slide-distance) * -1); }
+.t-page-slide .t-page[data-page-id="2"] { --t-page-from-x: var(--page-slide-distance); }
+.t-page-slide .t-page { position: absolute; inset: 0; opacity: 0; pointer-events: none;
+  transform: translateX(var(--t-page-from-x, 0px)); filter: blur(var(--page-blur));
+  transition: opacity var(--page-fade-dur) var(--page-ease), transform var(--page-slide-dur) var(--page-ease), filter var(--page-slide-dur) var(--page-ease); will-change: opacity, transform, filter; }
+.t-page-slide[data-page="1"] .t-page[data-page-id="1"],
+.t-page-slide[data-page="2"] .t-page[data-page-id="2"] { opacity: 1; pointer-events: auto; transform: translateX(0); filter: blur(0); }
+
+/* timeline spinner reused by the narration */
+@keyframes spin360 { to { transform: rotate(360deg); } }
+.spin360 { animation: spin360 0.7s linear infinite; }
+
+@media (prefers-reduced-motion: reduce) {
+  .t-stagger-line, .t-resize, .t-page-slide .t-page { transition: none !important; }
+  .t-shimmer::before, .t-success-check, .t-success-check svg path, .spin360 { animation: none !important; }
+  .t-success-check { opacity: 1; } .t-success-check svg path { stroke-dashoffset: 0 !important; }
+}
