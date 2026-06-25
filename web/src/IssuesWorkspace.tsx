@@ -143,15 +143,20 @@ function HeroComposer({
   useEffect(() => {
     titleRef.current?.classList.add("is-shown");
     setTimeout(() => taRef.current?.focus(), 120);
-    api.llmProviders().then(setProviders).catch(() => {});
+    api.llmProviders().then((ps) => {
+      setProviders(ps);
+      // 直连大模型置顶并默认:有配置的连接就默认选第一个(仅覆盖初始的 cli:claude)
+      if (ps.length) setBackendVal((cur) => (cur === "cli:claude" ? `api:${ps[0].id}` : cur));
+    }).catch(() => {});
   }, []);
 
-  // CLI agents + the configured direct-LLM connections (中转站).
+  // 直连大模型(中转站)置顶,本地 CLI 在后。
   const allBackends: BackendChoice[] = [
-    ...CLI_BACKENDS,
     ...providers.map((p) => ({ value: `api:${p.id}`, label: p.name, backend: { kind: "api" as const, providerId: p.id } })),
+    ...CLI_BACKENDS,
   ];
   const backend = allBackends.find((b) => b.value === backendVal)?.backend;
+  const selProvider = backend?.kind === "api" ? providers.find((p) => p.id === backend.providerId) : null;
   const backendLabel = allBackends.find((b) => b.value === backendVal)?.label ?? "@claude";
 
   const submit = async () => {
@@ -237,15 +242,20 @@ function HeroComposer({
                   value={backendVal}
                   onChange={setBackendVal}
                   menuWidth={260}
-                  options={allBackends.map((b) => ({
-                    value: b.value,
-                    label: b.label,
-                    detail: b.value.startsWith("cli:") ? "本地智能体 · CLI" : "直连大模型 · 中转站",
-                    icon: <Robot size={14} />,
-                  }))}
+                  options={allBackends.map((b) => {
+                    const prov = b.value.startsWith("api:") ? providers.find((p) => `api:${p.id}` === b.value) : null;
+                    return {
+                      value: b.value,
+                      label: b.label,
+                      detail: prov ? `直连大模型 · ${prov.model || "未设模型"}` : "本地智能体 · CLI",
+                      icon: <Robot size={14} />,
+                    };
+                  })}
                   triggerClassName="inline-flex items-center gap-1.5 rounded-lg border border-line px-2.5 py-1.5 text-[12.5px] text-muted hover:bg-raised hover:text-ink"
                 >
-                  <Robot size={14} /> {backendLabel} <span className="text-[10px] text-faint">▾</span>
+                  <Robot size={14} /> {backendLabel}
+                  {selProvider?.model ? <span className="text-faint"> · {selProvider.model}</span> : null}
+                  <span className="text-[10px] text-faint">▾</span>
                 </Menu>
                 <span className="flex-1" />
                 <button
