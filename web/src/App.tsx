@@ -21,6 +21,7 @@ import { runAction, canStopTask } from "./taskActions";
 import { canArchive } from "@harness/shared";
 import { TasksWorkspace } from "./TasksWorkspace";
 import { IssuesWorkspace } from "./IssuesWorkspace";
+import { SettingsPanel } from "./SettingsPanel";
 
 export function App() {
   // Deep-link state via the URL (?project=…&task=…): a refresh stays on the same
@@ -47,6 +48,7 @@ export function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [newGroupOpen, setNewGroupOpen] = useState(false);
   const [groupsOpen, setGroupsOpen] = useState(false);
+  const [sysOpen, setSysOpen] = useState(false); // 系统设置面板(大模型连接等)
   const [debateOpen, setDebateOpen] = useState<DebateStyle | null>(null);
   const [confirmDel, setConfirmDel] = useState<{ id: string; title: string } | null>(null);
   // After deleting a task that used a worktree, prompt to clean it up (or keep).
@@ -350,7 +352,7 @@ export function App() {
     catch (e) { console.warn("pauseGroup rejected:", e); }
   }, []);
 
-  const anyModal = createOpen || agentsOpen || newProjectOpen || settingsOpen || newGroupOpen || groupsOpen || !!debateOpen || !!confirmDel || !!worktreePrompt;
+  const anyModal = createOpen || agentsOpen || newProjectOpen || settingsOpen || newGroupOpen || groupsOpen || sysOpen || !!debateOpen || !!confirmDel || !!worktreePrompt;
 
   // ── keyboard navigation ────────────────────────────────────────────────
   useEffect(() => {
@@ -415,6 +417,7 @@ export function App() {
       { id: "newproject", group: "新建", label: "新建项目", run: () => setNewProjectOpen(true) },
       { id: "groups", group: "管理", label: "分组管理", run: () => setGroupsOpen(true) },
       { id: "agents", group: "管理", label: "管理智能体执行器", run: () => setAgentsOpen(true) },
+      { id: "settings", group: "管理", label: "系统设置 · 大模型连接(中转站)", run: () => setSysOpen(true) },
     );
     if (project) cmds.push({ id: "projsettings", group: "管理", label: `项目设置：${project.name}`, run: () => setSettingsOpen(true) });
     for (const p of projects)
@@ -539,6 +542,7 @@ export function App() {
         <div className="flex flex-col gap-px border-t border-line pt-1.5">
           <button onClick={() => setGroupsOpen(true)} className="flex items-center gap-2.5 rounded-md px-2 py-1.5 text-[13px] text-muted hover:bg-raised hover:text-ink">分组</button>
           <button onClick={() => setAgentsOpen(true)} className="flex items-center gap-2.5 rounded-md px-2 py-1.5 text-[13px] text-muted hover:bg-raised hover:text-ink">智能体</button>
+          <button onClick={() => setSysOpen(true)} className="flex items-center gap-2.5 rounded-md px-2 py-1.5 text-[13px] text-muted hover:bg-raised hover:text-ink"><GearSix size={14} /> 设置</button>
           <button onClick={() => setPaletteOpen(true)} className="flex items-center gap-2.5 rounded-md px-2 py-1.5 text-[13px] text-muted hover:bg-raised hover:text-ink">
             <MagnifyingGlass size={14} /> 搜索 <kbd className="ml-auto">⌘K</kbd>
           </button>
@@ -595,6 +599,7 @@ export function App() {
 
       <CommandPalette open={paletteOpen} commands={commands} onClose={() => setPaletteOpen(false)} />
       {agentsOpen && <AgentsPanel onClose={() => setAgentsOpen(false)} />}
+      {sysOpen && <SettingsPanel onClose={() => setSysOpen(false)} />}
       {newProjectOpen && <NewProjectModal onClose={() => setNewProjectOpen(false)} onCreate={doCreateProject} />}
       {settingsOpen && project && (
         <ProjectSettings project={project} onClose={() => setSettingsOpen(false)} onSave={doUpdateProject} onDelete={doDeleteProject} />
