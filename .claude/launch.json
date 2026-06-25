@@ -30,6 +30,12 @@
       "runtimeExecutable": "npm",
       "runtimeArgs": ["-w", "mobile", "run", "web"],
       "port": 19000
+    },
+    {
+      "name": "mockup",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["-m", "http.server", "4500"],
+      "port": 4500
     }
   ]
 }
