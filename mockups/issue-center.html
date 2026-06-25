@@ -3,21 +3,16 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>事项区 · 变形流程原型 v2</title>
+<title>事项区 · 变形流程原型 v3</title>
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
 <style>
-  /* ── app 主题 token(取自 web/src/index.css)──────────────────────────── */
   :root{
     --canvas:#f9f9fb; --panel:#fff; --raised:#f1f1f4; --overlay:#e9e9ee;
-    --line:#e7e7ea; --line2:#d8d8de;
-    --ink:#282a30; --muted:#6b6f76; --faint:#9ca1a9;
-    --accent:#5e6ad2; --accent-hover:#535fc7; --accent-fg:#fff;
-    --green:#3f9c6d; --amber:#cf9430;
+    --line:#e7e7ea; --line2:#d8d8de; --ink:#282a30; --muted:#6b6f76; --faint:#9ca1a9;
+    --accent:#5e6ad2; --accent-hover:#535fc7; --accent-fg:#fff; --green:#3f9c6d; --amber:#cf9430;
     color-scheme:light;
-
-    /* ── transitions-dev motion token(只取本页用到的)───────────────────── */
     --resize-dur:300ms; --resize-ease:cubic-bezier(.22,1,.36,1);
     --page-slide-dur:300ms; --page-fade-dur:260ms; --page-slide-distance:10px; --page-blur:3px;
     --page-stagger:0ms; --page-exit-enabled:1; --page-slide-ease:cubic-bezier(.22,1,.36,1); --page-fade-ease:cubic-bezier(.22,1,.36,1);
@@ -28,219 +23,169 @@
     --check-ease-out:cubic-bezier(.22,1,.36,1); --check-ease-opacity:cubic-bezier(.22,1,.36,1); --check-ease-rotate:cubic-bezier(.22,1,.36,1);
     --check-ease-bob:cubic-bezier(.34,1.35,.64,1); --check-ease-path:cubic-bezier(.22,1,.36,1);
   }
-  *{box-sizing:border-box}
-  html,body{height:100%;margin:0}
-  body{background:var(--canvas);color:var(--ink);
-    font-family:"Inter",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
-    font-size:13px;line-height:1.5;-webkit-font-smoothing:antialiased;font-feature-settings:"cv11","ss01"}
+  *{box-sizing:border-box} html,body{height:100%;margin:0}
+  body{background:var(--canvas);color:var(--ink);font-family:"Inter",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;font-size:13px;line-height:1.5;-webkit-font-smoothing:antialiased;font-feature-settings:"cv11","ss01"}
   h1,h2,h3{letter-spacing:-.014em;font-weight:600;margin:0}
   button{font:inherit;color:inherit;border:0;background:none;cursor:pointer}
   kbd{font-size:11px;font-weight:500;padding:1px 5px;border:1px solid var(--line2);border-radius:4px;background:var(--raised);color:var(--muted)}
   ::selection{background:rgba(94,106,210,.18)}
 
-  /* ════ transitions-dev 片段(逐字搬入)════════════════════════════════ */
-  /* texts reveal */
-  .t-stagger-line{display:block;opacity:0;transform:translateY(var(--stagger-distance));filter:blur(var(--stagger-blur));
-    transition:opacity var(--stagger-dur) var(--stagger-ease),transform var(--stagger-dur) var(--stagger-ease),filter var(--stagger-dur) var(--stagger-ease);will-change:transform,opacity,filter}
+  /* transitions-dev 片段 */
+  .t-stagger-line{display:block;opacity:0;transform:translateY(var(--stagger-distance));filter:blur(var(--stagger-blur));transition:opacity var(--stagger-dur) var(--stagger-ease),transform var(--stagger-dur) var(--stagger-ease),filter var(--stagger-dur) var(--stagger-ease);will-change:transform,opacity,filter}
   .t-stagger-line--2{transition-delay:var(--stagger-stagger)}
   .t-stagger.is-shown .t-stagger-line{opacity:1;transform:translateY(0);filter:blur(0)}
-  .t-stagger.is-hiding .t-stagger-line{opacity:0;transform:translateY(0);filter:blur(0);transition:opacity 200ms ease,transform 0s linear,filter 0s linear;transition-delay:0s}
-  /* shimmer text */
+  .t-stagger.is-hiding .t-stagger-line{opacity:0;transform:translateY(0);filter:blur(0);transition:opacity 200ms ease;transition-delay:0s}
   .t-shimmer{position:relative;display:inline-block;color:var(--shimmer-base)}
-  .t-shimmer::before{content:attr(data-text);position:absolute;inset:0;pointer-events:none;
-    background-image:linear-gradient(90deg,transparent 0%,transparent 40%,var(--shimmer-highlight) 50%,transparent 60%,transparent 100%);
-    background-size:var(--shimmer-band) 100%;background-repeat:no-repeat;-webkit-background-clip:text;background-clip:text;color:transparent;-webkit-text-fill-color:transparent;
-    animation:t-shimmer var(--shimmer-dur) var(--shimmer-ease) infinite}
+  .t-shimmer::before{content:attr(data-text);position:absolute;inset:0;pointer-events:none;background-image:linear-gradient(90deg,transparent 0%,transparent 40%,var(--shimmer-highlight) 50%,transparent 60%,transparent 100%);background-size:var(--shimmer-band) 100%;background-repeat:no-repeat;-webkit-background-clip:text;background-clip:text;color:transparent;-webkit-text-fill-color:transparent;animation:t-shimmer var(--shimmer-dur) var(--shimmer-ease) infinite}
   @keyframes t-shimmer{0%{background-position:100% 0}100%{background-position:0% 0}}
-  /* success check */
   .t-success-check{display:inline-block;transform-origin:center;opacity:0;will-change:transform,opacity,filter}
-  .t-success-check svg{display:block;overflow:visible}
-  .t-success-check svg path{stroke-dasharray:30;stroke-dashoffset:30}
+  .t-success-check svg{display:block;overflow:visible} .t-success-check svg path{stroke-dasharray:30;stroke-dashoffset:30}
   .t-success-check[data-state="in"]{animation:t-check-fade var(--check-opacity-dur) var(--check-ease-opacity) forwards,t-check-rotate var(--check-rotate-dur) var(--check-ease-rotate) forwards,t-check-blur var(--check-blur-dur) var(--check-ease-out) forwards,t-check-bob var(--check-bob-dur) var(--check-ease-bob) forwards}
   .t-success-check[data-state="in"] svg path{animation:t-check-draw var(--check-path-dur) var(--check-ease-path) var(--check-path-delay,0ms) forwards}
-  @keyframes t-check-fade{from{opacity:0}to{opacity:1}}
-  @keyframes t-check-rotate{from{transform:rotate(var(--check-rotate-from))}to{transform:rotate(0)}}
-  @keyframes t-check-blur{from{filter:blur(var(--check-blur-from))}to{filter:blur(0)}}
-  @keyframes t-check-bob{from{translate:0 var(--check-y-amount)}to{translate:0 0}}
-  @keyframes t-check-draw{to{stroke-dashoffset:0}}
-  /* card resize */
-  .t-resize{transition:min-height var(--resize-dur) var(--resize-ease),height var(--resize-dur) var(--resize-ease);will-change:min-height,height}
-  /* page side-by-side */
+  @keyframes t-check-fade{from{opacity:0}to{opacity:1}}@keyframes t-check-rotate{from{transform:rotate(var(--check-rotate-from))}to{transform:rotate(0)}}
+  @keyframes t-check-blur{from{filter:blur(var(--check-blur-from))}to{filter:blur(0)}}@keyframes t-check-bob{from{translate:0 var(--check-y-amount)}to{translate:0 0}}@keyframes t-check-draw{to{stroke-dashoffset:0}}
+  .t-resize{transition:min-height var(--resize-dur) var(--resize-ease);will-change:min-height}
   .t-page-slide{position:relative}
   .t-page-slide .t-page[data-page-id="1"]{--t-page-from-x:calc(var(--page-slide-distance) * -1)}
   .t-page-slide .t-page[data-page-id="2"]{--t-page-from-x:var(--page-slide-distance)}
-  .t-page-slide .t-page{position:absolute;inset:0;opacity:0;pointer-events:none;
-    transform:translateX(calc(var(--t-page-from-x,0px) * var(--page-exit-enabled)));filter:blur(calc(var(--page-blur) * var(--page-exit-enabled)));
-    transition:opacity var(--page-fade-dur) var(--page-fade-ease),transform var(--page-slide-dur) var(--page-slide-ease),filter var(--page-slide-dur) var(--page-slide-ease);will-change:opacity,transform,filter}
-  .t-page-slide[data-page="1"] .t-page[data-page-id="1"],.t-page-slide[data-page="2"] .t-page[data-page-id="2"]{opacity:1;pointer-events:auto;transform:translateX(0);filter:blur(0);transition-delay:var(--page-stagger)}
-
-  @media (prefers-reduced-motion:reduce){
-    .t-stagger-line,.t-resize,.t-page-slide .t-page{transition:none !important}
-    .t-shimmer::before,.t-success-check,.t-success-check svg path{animation:none !important}
-    .t-success-check{opacity:1}.t-success-check svg path{stroke-dashoffset:0 !important}
-  }
+  .t-page-slide .t-page{position:absolute;inset:0;opacity:0;pointer-events:none;transform:translateX(calc(var(--t-page-from-x,0px) * var(--page-exit-enabled)));filter:blur(calc(var(--page-blur) * var(--page-exit-enabled)));transition:opacity var(--page-fade-dur) var(--page-fade-ease),transform var(--page-slide-dur) var(--page-slide-ease),filter var(--page-slide-dur) var(--page-slide-ease);will-change:opacity,transform,filter}
+  .t-page-slide[data-page="1"] .t-page[data-page-id="1"],.t-page-slide[data-page="2"] .t-page[data-page-id="2"]{opacity:1;pointer-events:auto;transform:translateX(0);filter:blur(0)}
+  @media (prefers-reduced-motion:reduce){.t-stagger-line,.t-resize,.t-page-slide .t-page{transition:none!important}.t-shimmer::before,.t-success-check,.t-success-check svg path{animation:none!important}.t-success-check{opacity:1}.t-success-check svg path{stroke-dashoffset:0!important}}
 
   .app{display:flex;height:100vh;overflow:hidden}
 
-  /* ── 左侧 rail ───────────────────────────────────────────────────────── */
-  .rail{width:224px;flex:none;background:var(--panel);border-right:1px solid var(--line);display:flex;flex-direction:column;padding:8px}
-  .proj{display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:8px;cursor:pointer}
-  .proj:hover{background:var(--raised)}
+  /* rail */
+  .rail{width:228px;flex:none;background:var(--panel);border-right:1px solid var(--line);display:flex;flex-direction:column;padding:8px}
+  .proj{display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:8px;cursor:pointer}.proj:hover{background:var(--raised)}
   .avatar{width:24px;height:24px;border-radius:6px;display:grid;place-items:center;color:#fff;font-weight:600;font-size:11px;flex:none}
-  .proj .nm{font-weight:600;font-size:13px}
-  .proj .ca{margin-left:auto;color:var(--faint)}
-  .nav{margin-top:10px;display:flex;flex-direction:column;gap:1px}
-  .navItem{display:flex;align-items:center;gap:9px;padding:6px 8px;border-radius:7px;color:var(--muted);font-size:13px;cursor:pointer}
-  .navItem:hover{background:var(--raised);color:var(--ink)}
-  .navItem.active{background:var(--raised);color:var(--ink);font-weight:500}
+  .proj .nm{font-weight:600;font-size:13px}.proj .ca{margin-left:auto;color:var(--faint)}
+  .nav{margin-top:8px;display:flex;flex-direction:column;gap:1px}
+  .zone{font-size:10px;font-weight:600;letter-spacing:.07em;text-transform:uppercase;color:var(--faint);padding:12px 8px 4px}
+  .navItem{display:flex;align-items:center;gap:9px;padding:7px 8px;border-radius:7px;color:var(--muted);font-size:13px;cursor:pointer}
+  .navItem:hover{background:var(--raised);color:var(--ink)} .navItem.active{background:var(--raised);color:var(--ink);font-weight:500}
   .navItem .ic{width:16px;display:grid;place-items:center;color:inherit}
+  .navItem.issue.active .ic{color:var(--accent)} .navItem.task.active .ic{color:var(--amber)}
   .navItem .ct{margin-left:auto;font-size:11px;color:var(--faint);background:var(--overlay);border-radius:999px;padding:0 6px;min-width:18px;text-align:center}
-  .navItem .plus{margin-left:auto;width:18px;height:18px;border-radius:5px;display:grid;place-items:center;color:var(--faint);opacity:0}
-  .navItem:hover .plus{opacity:1}
-  .navItem .plus:hover{background:var(--line2);color:var(--ink)}
+  .navItem .plus{margin-left:auto;width:18px;height:18px;border-radius:5px;display:grid;place-items:center;color:var(--faint);opacity:0}.navItem:hover .plus{opacity:1}.navItem .plus:hover{background:var(--line2);color:var(--ink)}
   .railSpace{flex:1}
   .railBottom{display:flex;flex-direction:column;gap:1px;border-top:1px solid var(--line);padding-top:6px}
   .dot{width:7px;height:7px;border-radius:999px;background:var(--green);display:inline-block}
 
-  /* ── 主区 ────────────────────────────────────────────────────────────── */
   .main{flex:1;position:relative;overflow:hidden;display:flex;flex-direction:column}
   .subhead{height:44px;flex:none;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:10px;padding:0 14px;background:var(--panel)}
   .subhead .crumb{font-size:13px;color:var(--muted)} .subhead .crumb b{color:var(--ink);font-weight:600}
   .subhead .sp{flex:1}
-  .iconbtn{width:28px;height:28px;border-radius:7px;display:grid;place-items:center;color:var(--muted)}
-  .iconbtn:hover{background:var(--raised);color:var(--ink)}
+  .seg{display:flex;gap:2px;background:var(--raised);border-radius:8px;padding:2px}
+  .seg button{font-size:12px;padding:3px 10px;border-radius:6px;color:var(--muted)}
+  .seg button.on{background:var(--panel);color:var(--ink);box-shadow:0 1px 2px rgba(0,0,0,.05)}
+  .chip{font-size:12px;padding:4px 9px;border-radius:7px;color:var(--muted)} .chip:hover{background:var(--raised);color:var(--ink)}
+  .iconbtn{width:28px;height:28px;border-radius:7px;display:grid;place-items:center;color:var(--muted)}.iconbtn:hover{background:var(--raised);color:var(--ink)}
 
-  .stage{flex:1;position:relative;overflow:hidden}
+  .secWrap{flex:1;position:relative;overflow:hidden}
+  .section{position:absolute;inset:0;display:none} .section.show{display:block}
 
-  /* ── PAGE 1:hero / 旁白 ──────────────────────────────────────────────── */
+  /* ===== 事项平面 ===== */
+  .stage{position:absolute;inset:0;overflow:hidden}
   .heroPage{display:flex;align-items:center;justify-content:center;padding:24px}
   .heroInner{width:min(660px,92%)}
   .heroTitle{text-align:center;margin-bottom:24px}
   .heroTitle .t-stagger-line--1{font-size:27px;font-weight:600;color:var(--ink);letter-spacing:-.02em}
   .heroTitle .t-stagger-line--2{margin-top:7px;font-size:13.5px;color:var(--faint)}
-
-  .card{background:var(--panel);border:1px solid var(--line2);border-radius:18px;
-    box-shadow:0 1px 2px rgba(0,0,0,.04),0 18px 44px -16px rgba(40,42,48,.18);overflow:hidden;
-    display:flex;flex-direction:column;min-height:128px}
+  .card{background:var(--panel);border:1px solid var(--line2);border-radius:18px;box-shadow:0 1px 2px rgba(0,0,0,.04),0 18px 44px -16px rgba(40,42,48,.18);overflow:hidden;display:flex;flex-direction:column;min-height:128px}
   .card.busy{box-shadow:0 1px 2px rgba(0,0,0,.04),0 22px 56px -16px rgba(94,106,210,.28);border-color:color-mix(in srgb,var(--accent) 30%,var(--line2))}
   .cInput{padding:18px 18px 2px;flex:1}
   .cInput textarea{width:100%;border:0;outline:0;resize:none;background:transparent;font-size:16px;line-height:1.55;color:var(--ink);min-height:50px;font-family:inherit}
   .cInput textarea::placeholder{color:var(--faint)}
   .toolbar{display:flex;align-items:center;gap:7px;padding:8px 12px 12px}
-  .tb{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 9px;border-radius:8px;color:var(--muted);font-size:12.5px}
-  .tb:hover{background:var(--raised);color:var(--ink)} .tb .ca{color:var(--faint);font-size:10px}
-  .tb.chip{border:1px solid var(--line)}
+  .tb{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 9px;border-radius:8px;color:var(--muted);font-size:12.5px}.tb:hover{background:var(--raised);color:var(--ink)}.tb .ca{color:var(--faint);font-size:10px}.tb.chip2{border:1px solid var(--line)}
   .tb-sp{flex:1}
-  .send{width:34px;height:34px;border-radius:999px;background:var(--accent);color:#fff;display:grid;place-items:center;transition:background .15s,transform .12s;font-size:16px}
-  .send:hover{background:var(--accent-hover)} .send:active{transform:scale(.94)}
-  .send:disabled{background:var(--line2);color:var(--faint);cursor:default}
-
-  /* 旁白(narration)—— card 变形后的内容 */
-  .narr{padding:16px 18px 18px;display:flex;flex-direction:column;gap:0}
-  .userBubble{align-self:flex-end;max-width:84%;background:color-mix(in srgb,var(--accent) 9%,#fff);border:1px solid color-mix(in srgb,var(--accent) 22%,#fff);
-    color:var(--ink);padding:9px 13px;border-radius:13px 13px 5px 13px;font-size:14px;margin-bottom:14px}
-  .timeline{display:flex;flex-direction:column;gap:0;position:relative;padding-left:6px}
+  .send{width:34px;height:34px;border-radius:999px;background:var(--accent);color:#fff;display:grid;place-items:center;transition:background .15s,transform .12s;font-size:16px}.send:hover{background:var(--accent-hover)}.send:active{transform:scale(.94)}.send:disabled{background:var(--line2);color:var(--faint);cursor:default}
+  .narr{padding:16px 18px 18px;display:flex;flex-direction:column}
+  .userBubble{align-self:flex-end;max-width:84%;background:color-mix(in srgb,var(--accent) 9%,#fff);border:1px solid color-mix(in srgb,var(--accent) 22%,#fff);color:var(--ink);padding:9px 13px;border-radius:13px 13px 5px 13px;font-size:14px;margin-bottom:14px}
+  .timeline{padding-left:6px}
   .tl-step{display:flex;gap:11px;align-items:flex-start;padding:5px 0}
   .tl-node{position:relative;width:18px;flex:none;display:flex;justify-content:center}
-  .tl-node::after{content:"";position:absolute;top:18px;bottom:-9px;width:1.5px;background:var(--line);left:50%;transform:translateX(-50%)}
-  .tl-step:last-child .tl-node::after{display:none}
+  .tl-node::after{content:"";position:absolute;top:18px;bottom:-9px;width:1.5px;background:var(--line);left:50%;transform:translateX(-50%)} .tl-step:last-child .tl-node::after{display:none}
   .tl-dot{width:15px;height:15px;border-radius:999px;display:grid;place-items:center;background:var(--panel)}
-  .spin{width:13px;height:13px;border-radius:999px;border:2px solid var(--line2);border-top-color:var(--accent);animation:sp .7s linear infinite}
-  @keyframes sp{to{transform:rotate(360deg)}}
-  .tickMini{color:var(--green);font-size:13px;line-height:1}
-  .warnMini{color:var(--amber);font-size:13px;line-height:1;font-weight:700}
-  .tl-body{flex:1;min-width:0;padding-top:0}
-  .tl-label{font-size:13.5px;color:var(--ink);line-height:1.45}
-  .tl-label.muted{color:var(--muted)}
-  .tag{display:inline-flex;align-items:center;gap:5px;margin-left:7px;font-size:11.5px;font-weight:500;padding:1px 9px;border-radius:999px;
-    background:color-mix(in srgb,var(--accent) 11%,#fff);color:var(--accent);border:1px solid color-mix(in srgb,var(--accent) 22%,#fff);vertical-align:middle}
-  .tag.warn{background:#fbf4e2;color:#9a7414;border-color:#f0e2bd}
+  .spin{width:13px;height:13px;border-radius:999px;border:2px solid var(--line2);border-top-color:var(--accent);animation:sp .7s linear infinite}@keyframes sp{to{transform:rotate(360deg)}}
+  .tickMini{color:var(--green);font-size:13px;line-height:1}.warnMini{color:var(--amber);font-size:13px;line-height:1;font-weight:700}
+  .tl-body{flex:1;min-width:0}.tl-label{font-size:13.5px;color:var(--ink)}.tl-label.muted{color:var(--muted)}
+  .tag{display:inline-flex;align-items:center;gap:5px;margin-left:7px;font-size:11.5px;font-weight:500;padding:1px 9px;border-radius:999px;background:color-mix(in srgb,var(--accent) 11%,#fff);color:var(--accent);border:1px solid color-mix(in srgb,var(--accent) 22%,#fff);vertical-align:middle}
   .tag .av{width:14px;height:14px;border-radius:4px;font-size:9px}
-
-  /* 完成时刻 */
   .created{display:flex;align-items:center;gap:11px;margin-top:14px;padding-top:14px;border-top:1px solid var(--line)}
   .checkRing{width:30px;height:30px;border-radius:999px;background:color-mix(in srgb,var(--green) 14%,#fff);display:grid;place-items:center;flex:none}
-  .created .ct{font-size:14px;font-weight:600;color:var(--ink)}
-  .created .cs{font-size:12px;color:var(--faint)}
-
-  /* 暂存(未识别项目)行内选择 */
+  .created .ct{font-size:14px;font-weight:600;color:var(--ink)}.created .cs{font-size:12px;color:var(--faint)}
   .assign{margin:6px 0 2px;border:1px dashed var(--line2);border-radius:13px;padding:13px 14px;background:var(--canvas)}
-  .assign .q{font-size:13px;color:var(--ink);margin-bottom:10px;display:flex;align-items:center;gap:7px}
-  .assign .opts{display:flex;gap:8px;flex-wrap:wrap}
-  .opt{border:1px solid var(--line2);background:var(--panel);border-radius:9px;padding:7px 11px;font-size:12.5px;display:flex;align-items:center;gap:7px}
-  .opt:hover{border-color:var(--accent);background:var(--raised)}
+  .assign .q{font-size:13px;color:var(--ink);margin-bottom:10px;display:flex;align-items:center;gap:7px}.assign .opts{display:flex;gap:8px;flex-wrap:wrap}
+  .opt{border:1px solid var(--line2);background:var(--panel);border-radius:9px;padding:7px 11px;font-size:12.5px;display:flex;align-items:center;gap:7px}.opt:hover{border-color:var(--accent);background:var(--raised)}
+  .recent{margin-top:26px}.recent .eyebrow{font-size:10.5px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--faint);padding:0 4px 9px}
+  .rrow{display:flex;align-items:center;gap:11px;padding:9px 12px;border-radius:10px;cursor:pointer}.rrow:hover{background:var(--panel);box-shadow:0 1px 2px rgba(0,0,0,.04),0 6px 16px -10px rgba(40,42,48,.2)}
+  .rti{flex:1;min-width:0;font-size:13px;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.rmeta{font-size:11.5px;color:var(--faint)}.jump{font-size:11.5px;color:var(--accent);opacity:0}.rrow:hover .jump{opacity:1}
 
-  /* 最近 */
-  .recent{margin-top:26px}
-  .recent .eyebrow{font-size:10.5px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--faint);padding:0 4px 9px}
-  .recent .rrow{display:flex;align-items:center;gap:11px;padding:9px 12px;border-radius:10px;cursor:pointer}
-  .recent .rrow:hover{background:var(--panel);box-shadow:0 1px 2px rgba(0,0,0,.04),0 6px 16px -10px rgba(40,42,48,.2)}
-  .recent .rti{flex:1;min-width:0;font-size:13px;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .recent .rmeta{font-size:11.5px;color:var(--faint);flex:none}
-  .recent .jump{font-size:11.5px;color:var(--accent);opacity:0;flex:none}
-  .recent .rrow:hover .jump{opacity:1}
-
-  /* ── PAGE 2:issue 两栏 ──────────────────────────────────────────────── */
-  .issuePage{display:flex}
+  /* 两栏(事项详情 / 任务详情共用) */
+  .two{position:absolute;inset:0;display:flex}
   .list{width:300px;flex:none;border-right:1px solid var(--line);overflow:auto;background:var(--panel)}
   .composerStrip{position:sticky;top:0;background:var(--panel);border-bottom:1px solid var(--line);padding:10px;z-index:2}
-  .miniInput{display:flex;align-items:center;gap:8px;border:1px solid var(--line2);border-radius:10px;padding:8px 10px;color:var(--faint);font-size:13px;cursor:pointer}
-  .miniInput:hover{border-color:var(--accent)}
+  .miniInput{display:flex;align-items:center;gap:8px;border:1px solid var(--line2);border-radius:10px;padding:8px 10px;color:var(--faint);font-size:13px;cursor:pointer}.miniInput:hover{border-color:var(--accent)}
   .miniInput .send2{margin-left:auto;width:24px;height:24px;border-radius:999px;background:var(--accent);color:#fff;display:grid;place-items:center;font-size:13px}
-  .grp{font-size:10.5px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--faint);padding:13px 14px 5px}
-  .grp.stg{color:#9a7414}
-  .row{display:flex;align-items:center;gap:10px;padding:9px 14px;border-bottom:1px solid var(--line);cursor:pointer}
-  .row:hover{background:var(--raised)} .row.sel{background:color-mix(in srgb,var(--accent) 7%,#fff);box-shadow:inset 2px 0 0 var(--accent)}
+  .grp{font-size:10.5px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--faint);padding:13px 14px 5px} .grp.stg{color:#9a7414}
+  .row{display:flex;align-items:center;gap:10px;padding:9px 14px;border-bottom:1px solid var(--line);cursor:pointer}.row:hover{background:var(--raised)}.row.sel{background:color-mix(in srgb,var(--accent) 7%,#fff);box-shadow:inset 2px 0 0 var(--accent)}
   .sdot{width:13px;height:13px;border-radius:999px;flex:none;border:2px solid var(--faint)}
-  .sdot.todo{border-color:#b3b7be}
-  .sdot.prog{border-color:var(--amber);background:conic-gradient(var(--amber) 62%,transparent 0)}
-  .sdot.done{border-color:var(--green);background:var(--green)}
-  .sdot.stg{border-style:dashed;border-color:var(--amber)}
-  .row .ti{flex:1;min-width:0;font-size:13px;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .sdot.todo{border-color:#b3b7be}.sdot.prog{border-color:var(--amber);background:conic-gradient(var(--amber) 62%,transparent 0)}.sdot.done{border-color:var(--green);background:var(--green)}.sdot.stg{border-style:dashed;border-color:var(--amber)}
+  .ti{flex:1;min-width:0;font-size:13px;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .utag{font-size:10.5px;color:#9a7414;background:#fbf4e2;border:1px solid #f0e2bd;border-radius:5px;padding:1px 6px;flex:none}
-  .pri{width:13px;display:flex;gap:1.5px;align-items:flex-end;height:11px;flex:none}
-  .pri i{width:3px;background:var(--line2);border-radius:1px}
-  .pri.high i{background:var(--accent)} .pri i:nth-child(1){height:4px}.pri i:nth-child(2){height:7px}.pri i:nth-child(3){height:11px}
+  .fromtag{font-size:10.5px;color:var(--accent);background:color-mix(in srgb,var(--accent) 9%,#fff);border:1px solid color-mix(in srgb,var(--accent) 20%,#fff);border-radius:5px;padding:1px 6px;flex:none}
+  .pri{width:13px;display:flex;gap:1.5px;align-items:flex-end;height:11px;flex:none}.pri i{width:3px;background:var(--line2);border-radius:1px}.pri.high i{background:var(--accent)}.pri i:nth-child(1){height:4px}.pri i:nth-child(2){height:7px}.pri i:nth-child(3){height:11px}
 
   .detail{flex:1;overflow:auto;padding:30px 38px;max-width:780px}
   .dcrumb{font-size:12px;color:var(--faint);margin-bottom:14px}
-  .dhead{display:flex;align-items:flex-start;gap:12px;margin-bottom:16px}
-  .detail h2{font-size:21px;line-height:1.3}
+  .backlink{display:inline-flex;align-items:center;gap:7px;font-size:12.5px;color:var(--accent);background:color-mix(in srgb,var(--accent) 8%,#fff);border:1px solid color-mix(in srgb,var(--accent) 20%,#fff);border-radius:8px;padding:5px 10px;margin-bottom:16px;cursor:pointer}
+  .dhead{display:flex;align-items:flex-start;gap:12px;margin-bottom:16px}.detail h2{font-size:21px;line-height:1.3}
   .metaRow{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:22px}
-  .pill{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 10px;border-radius:7px;border:1px solid var(--line);background:var(--panel);font-size:12.5px;color:var(--ink)}
-  .pill:hover{background:var(--raised)} .pill .mut{color:var(--muted)}
-  .pill.warn{border-color:#f0e2bd;background:#fbf4e2;color:#9a7414}
-  .body{font-size:14px;line-height:1.7;color:#33363d}
-  .body h4{font-size:13px;margin:18px 0 6px;color:var(--ink)} .body ul{margin:6px 0;padding-left:20px} .body li{margin:3px 0}
-  .divider{height:1px;background:var(--line);margin:26px 0}
-  .execRow{display:flex;align-items:center;gap:13px;min-height:36px}
-  .btnPrimary{display:inline-flex;align-items:center;gap:8px;height:36px;padding:0 16px;border-radius:9px;background:var(--accent);color:#fff;font-size:13.5px;font-weight:500}
-  .btnPrimary:hover{background:var(--accent-hover)}
-  .execHint{font-size:12px;color:var(--faint);max-width:330px}
-  .miniTl{display:flex;flex-direction:column;gap:7px}
-  .miniTl .ln{display:flex;align-items:center;gap:9px;font-size:13px;color:var(--muted)}
-  .linked{margin-top:18px}
-  .linkedTitle{font-size:12px;font-weight:600;color:var(--muted);margin-bottom:8px}
-  .taskChip{display:flex;align-items:center;gap:10px;border:1px solid var(--line);border-radius:10px;padding:10px 12px;background:var(--panel)}
-  .taskChip .run{width:8px;height:8px;border-radius:999px;background:var(--amber);box-shadow:0 0 0 3px color-mix(in srgb,var(--amber) 22%,#fff)}
+  .pill{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 10px;border-radius:7px;border:1px solid var(--line);background:var(--panel);font-size:12.5px;color:var(--ink)}.pill:hover{background:var(--raised)}.pill .mut{color:var(--muted)}.pill.warn{border-color:#f0e2bd;background:#fbf4e2;color:#9a7414}
+  .body{font-size:14px;line-height:1.7;color:#33363d}.body h4{font-size:13px;margin:18px 0 6px;color:var(--ink)}.body ul{margin:6px 0;padding-left:20px}.body li{margin:3px 0}
+  .divider{height:1px;background:var(--line);margin:24px 0}
+  .secTitle{font-size:12px;font-weight:600;color:var(--muted);margin-bottom:11px;display:flex;align-items:center;gap:7px}
+
+  /* 讨论 */
+  .cmt{display:flex;gap:10px;margin-bottom:14px}
+  .cav{width:24px;height:24px;border-radius:999px;flex:none;display:grid;place-items:center;font-size:11px;font-weight:600;color:#fff}
+  .cav.me{background:#6b6f76}.cav.ai{background:var(--accent)}
+  .cwrap{flex:1;min-width:0}
+  .cmeta{font-size:12px;color:var(--muted);margin-bottom:3px}.cmeta b{color:var(--ink);font-weight:600}.cmeta .ai{color:var(--accent)}.cmeta time{color:var(--faint);margin-left:6px}
+  .cbody{font-size:13.5px;color:#33363d;line-height:1.6}
+  .cmtComposer{display:flex;align-items:center;gap:8px;border:1px solid var(--line2);border-radius:10px;padding:7px 8px 7px 12px;margin-top:4px}
+  .cmtComposer input{flex:1;border:0;outline:0;background:transparent;font-size:13.5px;color:var(--ink);font-family:inherit}
+  .cmtComposer input::placeholder{color:var(--faint)}
+  .cmtSend{width:28px;height:28px;border-radius:7px;background:var(--accent);color:#fff;display:grid;place-items:center}
+
+  .execRow{display:flex;align-items:center;gap:13px;min-height:36px;margin-top:6px}
+  .btnPrimary{display:inline-flex;align-items:center;gap:8px;height:36px;padding:0 16px;border-radius:9px;background:var(--accent);color:#fff;font-size:13.5px;font-weight:500}.btnPrimary:hover{background:var(--accent-hover)}
+  .execHint{font-size:12px;color:var(--faint);max-width:340px}
+  .miniTl{display:flex;flex-direction:column;gap:7px}.miniTl .ln{display:flex;align-items:center;gap:9px;font-size:13px;color:var(--muted)}
+  .linked{margin-top:22px}
+  .taskChip{display:flex;align-items:center;gap:10px;border:1px solid var(--line);border-radius:10px;padding:10px 12px;background:var(--panel);cursor:pointer;margin-bottom:8px}.taskChip:hover{background:var(--raised)}
+  .taskChip .run{width:8px;height:8px;border-radius:999px;flex:none}.run.prog{background:var(--amber);box-shadow:0 0 0 3px color-mix(in srgb,var(--amber) 22%,#fff)}.run.done{background:var(--green)}
   .taskChip .open{margin-left:auto;color:var(--accent);font-size:12.5px}
   .empty{color:var(--faint);font-size:13px;border:1px dashed var(--line2);border-radius:10px;padding:14px}
+
+  /* 任务平面 board 占位 */
+  .board{display:flex;gap:12px;padding:16px;height:100%;overflow:auto}
+  .bcol{width:230px;flex:none;background:var(--raised);border-radius:10px;padding:8px}
+  .bcol h4{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);padding:4px 6px 8px}
+  .bcard{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:9px 10px;font-size:12.5px;margin-bottom:7px;box-shadow:0 1px 2px rgba(0,0,0,.03)}
 </style>
 </head>
 <body>
 <div class="app">
-  <!-- 左侧 rail -->
   <aside class="rail">
-    <div class="proj">
-      <span class="avatar" style="background:#5e6ad2">M</span>
-      <span class="nm">my-video</span><span class="ca">▾</span>
-    </div>
+    <div class="proj"><span class="avatar" style="background:#5e6ad2">M</span><span class="nm">my-video</span><span class="ca">▾</span></div>
     <div class="nav">
-      <div class="navItem active" id="nav-issue"><span class="ic">✎</span> 事项 <span class="ct">4</span>
+      <div class="zone">规划</div>
+      <div class="navItem issue active" id="nav-issue"><span class="ic">✎</span> 事项 <span class="ct">4</span>
         <button class="plus" title="新建事项" onclick="event.stopPropagation();gotoHero()">＋</button></div>
-      <div class="navItem" id="nav-task"><span class="ic">✓</span> 任务 <span class="ct">5</span></div>
-      <div class="navItem" id="nav-board"><span class="ic">▦</span> 看板</div>
-      <div class="navItem" id="nav-arch"><span class="ic">🗄</span> 已归档</div>
+      <div class="zone">执行</div>
+      <div class="navItem task" id="nav-task"><span class="ic">▷</span> 任务 <span class="ct">3</span></div>
     </div>
     <div class="railSpace"></div>
     <div class="railBottom">
@@ -251,285 +196,276 @@
     </div>
   </aside>
 
-  <!-- 主区 -->
   <main class="main">
     <div class="subhead">
-      <span class="crumb"><b>事项</b> · my-video</span><span class="sp"></span>
-      <button class="iconbtn" title="新建事项" onclick="gotoHero()">＋</button>
+      <span class="crumb" id="crumb"><b>事项</b> · my-video</span>
+      <span class="sp"></span>
+      <span id="headTools"></span>
     </div>
 
-    <div class="stage t-page-slide" id="stage" data-page="1" style="--page-exit-enabled:1">
-      <!-- PAGE 1:hero / 旁白 -->
-      <section class="t-page heroPage" data-page-id="1">
-        <div class="heroInner">
-          <div class="heroTitle t-stagger" id="heroTitle">
-            <strong class="t-stagger-line t-stagger-line--1" id="heroH">想做点什么?</strong>
-            <span class="t-stagger-line t-stagger-line--2">随手写,AI 帮你记成一条事项,并自动归到对应项目</span>
-          </div>
-
-          <div class="card t-resize" id="card">
-            <div class="cInput" id="cInput">
-              <textarea id="ta" placeholder="随手写下要做的事…"></textarea>
+    <div class="secWrap">
+      <!-- ===== 事项平面 ===== -->
+      <div class="section show" id="sec-issue">
+        <div class="stage t-page-slide" id="stage" data-page="1">
+          <section class="t-page heroPage" data-page-id="1">
+            <div class="heroInner">
+              <div class="heroTitle t-stagger" id="heroTitle">
+                <strong class="t-stagger-line t-stagger-line--1" id="heroH">想做点什么?</strong>
+                <span class="t-stagger-line t-stagger-line--2">随手写,AI 帮你记成一条事项,并自动归到对应项目</span>
+              </div>
+              <div class="card t-resize" id="card">
+                <div class="cInput" id="cInput"><textarea id="ta" placeholder="随手写下要做的事…"></textarea></div>
+                <div class="toolbar" id="cToolbar">
+                  <button class="tb" title="附件">＋</button>
+                  <button class="tb chip2" id="agentPick">🤖 @claude <span class="ca">▾</span></button>
+                  <span class="tb-sp"></span>
+                  <button class="send" id="send" title="记下来 ⌘↵" disabled>↑</button>
+                </div>
+                <div class="narr" id="narr" style="display:none"></div>
+              </div>
+              <div class="recent" id="recent">
+                <div class="eyebrow">最近</div>
+                <div class="rrow" data-open="i2"><span class="sdot prog"></span><span class="rti">登录超时后没有任何提示</span><span class="rmeta">进行中</span><span class="jump">打开 →</span></div>
+                <div class="rrow" data-gotask="t9"><span class="sdot done"></span><span class="rti">给定时任务加重试机制</span><span class="rmeta">任务·刚完成</span><span class="jump">去任务 →</span></div>
+                <div class="rrow" data-open="i4"><span class="sdot done"></span><span class="rti">移动端任务列表滚动卡顿</span><span class="rmeta">已完成</span><span class="jump">打开 →</span></div>
+              </div>
             </div>
-            <div class="toolbar" id="cToolbar">
-              <button class="tb" title="附件">＋</button>
-              <button class="tb chip" id="agentPick">🤖 @claude <span class="ca">▾</span></button>
-              <span class="tb-sp"></span>
-              <button class="send" id="send" title="执行 ⌘↵" disabled>↑</button>
+          </section>
+          <section class="t-page" data-page-id="2">
+            <div class="two">
+              <div class="list"><div class="composerStrip"><div class="miniInput" onclick="gotoHero()"><span>随手记一条新事项…</span><span class="send2">↑</span></div></div><div id="issueListBody"></div></div>
+              <div class="detail" id="issueDetail"></div>
             </div>
-            <div class="narr" id="narr" style="display:none"></div>
-          </div>
-
-          <div class="recent" id="recent">
-            <div class="eyebrow">最近</div>
-            <div class="rrow" data-open="i2"><span class="sdot prog"></span><span class="rti">登录超时后没有任何提示</span><span class="rmeta">进行中</span><span class="jump">打开 →</span></div>
-            <div class="rrow" data-task="1"><span class="sdot done"></span><span class="rti">给定时任务加重试机制</span><span class="rmeta">任务·刚完成</span><span class="jump">去任务区 →</span></div>
-            <div class="rrow" data-open="i4"><span class="sdot done"></span><span class="rti">移动端任务列表滚动卡顿</span><span class="rmeta">已完成</span><span class="jump">打开 →</span></div>
-          </div>
+          </section>
         </div>
-      </section>
+      </div>
 
-      <!-- PAGE 2:issue 两栏 -->
-      <section class="t-page issuePage" data-page-id="2">
-        <div class="list">
-          <div class="composerStrip">
-            <div class="miniInput" onclick="gotoHero()"><span>随手记一条新事项…</span><span class="send2">↑</span></div>
-          </div>
-          <div id="listBody"></div>
+      <!-- ===== 任务平面 ===== -->
+      <div class="section" id="sec-task">
+        <div class="two" id="taskTwo">
+          <div class="list"><div class="composerStrip"><div class="miniInput"><span>新建任务…</span><span class="send2">↑</span></div></div><div id="taskListBody"></div></div>
+          <div class="detail" id="taskDetail"></div>
         </div>
-        <div class="detail" id="detail"></div>
-      </section>
+        <div class="board" id="taskBoard" style="display:none"></div>
+      </div>
     </div>
   </main>
 </div>
 
 <script>
-// 勾 SVG(success-check 用)
-const CHECK_SVG = '<svg viewBox="0 0 24 24" fill="none" width="17" height="17"><path d="M5 12.5 L10 17.5 L19 7" stroke="#3f9c6d" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+const CHECK_SVG='<svg viewBox="0 0 24 24" fill="none" width="17" height="17"><path d="M5 12.5 L10 17.5 L19 7" stroke="#3f9c6d" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 
-// ── 假数据 ───────────────────────────────────────────────────────────────
-let ISSUES = [
-  {id:'u1', title:'梳理一下计费模块的边界情况', project:null, status:'todo', priority:'med', staged:true,
-   body:'<p>免费额度耗尽、退款、并发扣费等边界要列清楚。</p>'},
-  {id:'i2', title:'登录超时后没有任何提示', project:'my-video', status:'prog', priority:'high',
-   body:'<p>登录请求超时时页面卡住无反馈,应给出提示并允许重试。</p>', task:{status:'运行中'}},
-  {id:'i1', title:'落地页首屏文案不够吸引', project:'my-video', status:'todo', priority:'med',
-   body:'<p>当前首屏标题平淡,转化低。重写 3 版做对比。</p>'},
-  {id:'i3', title:'补一份部署文档', project:'my-video', status:'todo', priority:'low',
-   body:'<p>把起服务、迁移、环境变量整理成 README。</p>'},
-  {id:'i4', title:'移动端任务列表滚动卡顿', project:'my-video', status:'done', priority:'med',
-   body:'<p>长列表滚动掉帧,需虚拟化。</p>'},
+let ISSUES=[
+  {id:'u1',title:'梳理一下计费模块的边界情况',project:null,status:'todo',priority:'med',staged:true,body:'<p>免费额度耗尽、退款、并发扣费等边界要列清楚。</p>',comments:[]},
+  {id:'i2',title:'登录超时后没有任何提示',project:'my-video',status:'prog',priority:'high',body:'<p>登录请求超时时页面卡住无反馈,应给出提示并允许重试。</p>',taskIds:['t2'],comments:[]},
+  {id:'i1',title:'落地页首屏文案不够吸引',project:'my-video',status:'todo',priority:'med',
+   body:'<p>当前首屏标题平淡,转化低。</p>',
+   comments:[
+     {who:'me',name:'我',t:'10:02',body:'这版太平,想突出「3 分钟出成片」的效果承诺。'},
+     {who:'ai',name:'@claude',t:'10:03',body:'建议:主标打效果承诺,副标说清适用场景。我可以给 3 版做 A/B,你定方向我就动手。'},
+     {who:'me',name:'我',t:'10:05',body:'就按这个方向,3 版 A/B。对齐了,交给你执行。'},
+   ]},
+  {id:'i3',title:'补一份部署文档',project:'my-video',status:'todo',priority:'low',body:'<p>把起服务、迁移、环境变量整理成 README。</p>',comments:[]},
+  {id:'i4',title:'移动端任务列表滚动卡顿',project:'my-video',status:'done',priority:'med',body:'<p>长列表滚动掉帧,需虚拟化。</p>',comments:[]},
+];
+let TASKS=[
+  {id:'t2',title:'登录超时提示与重试',status:'prog',from:{id:'i2',title:'登录超时后没有任何提示'}},
+  {id:'t5',title:'升级 Vite 到 6',status:'done',from:null},
+  {id:'t6',title:'清理无用依赖',status:'todo',from:null},
 ];
 
-const HERO_TITLES = ["想做点什么?","今天有什么想做的?","脑子里在盘算什么?","有什么要安排的?","记点什么都行"];
-
-const SCRIPTS = {
-  0:{ project:'my-video',
-      issue:{title:'落地页深色模式开关', project:'my-video', status:'todo', priority:'high',
-        body:'<h4>目标</h4><p>给落地页加入深色模式切换开关,记住用户选择。</p><h4>要点</h4><ul><li>跟随系统 / 手动切换两种模式</li><li>切换状态持久化到 localStorage</li><li>覆盖首屏与主要组件的深色配色</li></ul>'},
-      steps:[{l:'识别意图',tag:'一条待办事项'},{l:'匹配项目',tag:'my-video',kind:'proj'},{l:'生成标题与描述'},{l:'整理属性',tag:'优先级 高 · 标签 ui'}]},
-  1:{ project:null,
-      issue:{title:'向量数据库选型调研', project:null, status:'todo', priority:'med',
-        body:'<h4>目标</h4><p>对比主流向量数据库,产出选型建议。</p><h4>候选</h4><ul><li>pgvector / Qdrant / Milvus / Weaviate</li><li>对比维度:性能、托管成本、生态、迁移难度</li></ul>'},
-      steps:[{l:'识别意图',tag:'一条待办事项'},{l:'匹配项目',kind:'nomatch'}]},
+const HERO_TITLES=["想做点什么?","今天有什么想做的?","脑子里在盘算什么?","有什么要安排的?","记点什么都行"];
+const SCRIPTS={
+  0:{project:'my-video',issue:{title:'落地页深色模式开关',project:'my-video',status:'todo',priority:'high',body:'<h4>目标</h4><p>给落地页加入深色模式切换开关,记住用户选择。</p><h4>要点</h4><ul><li>跟随系统 / 手动切换两种模式</li><li>切换状态持久化到 localStorage</li><li>覆盖首屏与主要组件的深色配色</li></ul>',comments:[]},steps:[{l:'识别意图',tag:'一条待办事项'},{l:'匹配项目',tag:'my-video',kind:'proj'},{l:'生成标题与描述'},{l:'整理属性',tag:'优先级 高 · 标签 ui'}]},
+  1:{project:null,issue:{title:'向量数据库选型调研',project:null,status:'todo',priority:'med',body:'<h4>目标</h4><p>对比主流向量数据库,产出选型建议。</p><h4>候选</h4><ul><li>pgvector / Qdrant / Milvus / Weaviate</li></ul>',comments:[]},steps:[{l:'识别意图',tag:'一条待办事项'},{l:'匹配项目',kind:'nomatch'}]},
 };
 
-const stage = document.getElementById('stage');
-const ta = document.getElementById('ta'), send = document.getElementById('send');
-const card = document.getElementById('card'), cInput = document.getElementById('cInput'), cToolbar = document.getElementById('cToolbar');
-const narr = document.getElementById('narr'), heroTitle = document.getElementById('heroTitle');
-let currentScript = 0;
+const $=id=>document.getElementById(id);
+const stage=$('stage'), ta=$('ta'), send=$('send'), card=$('card'), cInput=$('cInput'), cToolbar=$('cToolbar'), narr=$('narr'), heroTitle=$('heroTitle');
+let currentScript=0, section='issue';
 
-ta.addEventListener('input', ()=>{ send.disabled=!ta.value.trim(); currentScript = /深色|落地页|开关/.test(ta.value)?0:1; });
-ta.addEventListener('keydown', e=>{ if((e.metaKey||e.ctrlKey)&&e.key==='Enter'){e.preventDefault();run();} });
-send.addEventListener('click', run);
+ta.addEventListener('input',()=>{send.disabled=!ta.value.trim(); currentScript=/深色|落地页|开关/.test(ta.value)?0:1;});
+ta.addEventListener('keydown',e=>{if((e.metaKey||e.ctrlKey)&&e.key==='Enter'){e.preventDefault();run();}});
+send.addEventListener('click',run);
 document.querySelectorAll('.recent .rrow').forEach(r=>r.addEventListener('click',()=>{
-  if(r.dataset.task){ alert('跳到「任务」区 · 该任务(原型里只演示「事项」区)'); return; }
-  const it=ISSUES.find(x=>x.id===r.dataset.open); if(it){ enterIssue(it); }
+  if(r.dataset.gotask){ switchSection('task'); const t=TASKS.find(x=>x.status==='done'); openTask(t||TASKS[0]); return; }
+  const it=ISSUES.find(x=>x.id===r.dataset.open); if(it) enterIssue(it);
 }));
+$('nav-issue').addEventListener('click',()=>switchSection('issue'));
+$('nav-task').addEventListener('click',()=>{switchSection('task'); if(!$('taskDetail').innerHTML) openTask(TASKS[0]);});
+
+function switchSection(s){
+  section=s;
+  $('sec-issue').classList.toggle('show',s==='issue');
+  $('sec-task').classList.toggle('show',s==='task');
+  $('nav-issue').classList.toggle('active',s==='issue');
+  $('nav-task').classList.toggle('active',s==='task');
+  if(s==='issue'){ $('crumb').innerHTML='<b>事项</b> · my-video'; $('headTools').innerHTML=''; }
+  else { $('crumb').innerHTML='<b>任务</b> · my-video'; renderTaskTools(); renderTaskList(); }
+}
 
 function showHeroTitle(){
-  document.getElementById('heroH').textContent = HERO_TITLES[Math.floor(Math.random()*HERO_TITLES.length)];
-  heroTitle.classList.remove('is-hiding'); heroTitle.classList.remove('is-shown');
-  void heroTitle.offsetHeight; heroTitle.classList.add('is-shown');
+  $('heroH').textContent=HERO_TITLES[Math.floor(Math.random()*HERO_TITLES.length)];
+  heroTitle.classList.remove('is-hiding');heroTitle.classList.remove('is-shown');void heroTitle.offsetHeight;heroTitle.classList.add('is-shown');
 }
 function gotoHero(){
-  setActiveNav('nav-issue');
-  stage.setAttribute('data-page','1');
-  narr.style.display='none'; narr.innerHTML='';
-  cInput.style.display=''; cToolbar.style.display='';
-  card.classList.remove('busy'); card.style.minHeight='128px';
-  document.getElementById('recent').style.display='';
-  ta.value=''; send.disabled=true;
-  showHeroTitle();
-  setTimeout(()=>ta.focus(),60);
+  switchSection('issue'); stage.setAttribute('data-page','1');
+  narr.style.display='none';narr.innerHTML='';cInput.style.display='';cToolbar.style.display='';
+  card.classList.remove('busy');card.style.minHeight='128px';$('recent').style.display='';
+  ta.value='';send.disabled=true;showHeroTitle();setTimeout(()=>ta.focus(),60);
 }
 
-// ── 核心:hero → 旁白 → issue 页 ────────────────────────────────────────
+// hero → 旁白 → issue
 function run(){
-  const text = ta.value.trim(); if(!text) return;
-  const sc = JSON.parse(JSON.stringify(SCRIPTS[currentScript]));
-  sc.text = text;
-
-  // 标题淡出、最近隐藏;card 变形(card-resize 把 min-height 拉大),内容换成旁白
-  heroTitle.classList.add('is-hiding'); heroTitle.classList.remove('is-shown');
-  document.getElementById('recent').style.display='none';
-  cInput.style.display='none'; cToolbar.style.display='none';
-  card.classList.add('busy'); card.style.minHeight='210px';
-  narr.style.display='flex';
-  narr.innerHTML = `<div class="userBubble">${esc(text)}</div><div class="timeline" id="tl"></div>`;
-  const tl = document.getElementById('tl');
-
-  let i=0;
-  (function nextStep(){
+  const text=ta.value.trim(); if(!text) return;
+  const sc=JSON.parse(JSON.stringify(SCRIPTS[currentScript])); sc.text=text;
+  heroTitle.classList.add('is-hiding');heroTitle.classList.remove('is-shown');
+  $('recent').style.display='none';cInput.style.display='none';cToolbar.style.display='none';
+  card.classList.add('busy');card.style.minHeight='210px';narr.style.display='flex';
+  narr.innerHTML=`<div class="userBubble">${esc(text)}</div><div class="timeline" id="tl"></div>`;
+  const tl=$('tl'); let i=0;
+  (function next(){
     if(i>=sc.steps.length) return afterSteps(sc);
-    const s = sc.steps[i];
-    const el=document.createElement('div'); el.className='tl-step';
-    el.innerHTML=`<div class="tl-node"><div class="tl-dot"><span class="spin"></span></div></div>
-      <div class="tl-body"><span class="tl-label muted"><span class="t-shimmer" data-text="${s.l}…">${s.l}…</span></span></div>`;
-    tl.appendChild(el);
-    card.style.minHeight = (210 + i*16) + 'px';
+    const s=sc.steps[i];const el=document.createElement('div');el.className='tl-step';
+    el.innerHTML=`<div class="tl-node"><div class="tl-dot"><span class="spin"></span></div></div><div class="tl-body"><span class="tl-label muted"><span class="t-shimmer" data-text="${s.l}…">${s.l}…</span></span></div>`;
+    tl.appendChild(el);card.style.minHeight=(210+i*16)+'px';
     setTimeout(()=>{
-      const dot = el.querySelector('.tl-dot');
-      let label = s.l, tag='';
-      if(s.kind==='nomatch'){ dot.innerHTML='<span class="warnMini">!</span>'; label='没识别出属于哪个项目'; }
-      else { dot.innerHTML='<span class="tickMini">✓</span>'; }
-      if(s.tag){ const c=s.kind==='proj'?'<span class="av avatar" style="background:#5e6ad2">M</span>':''; tag=`<span class="tag">${c}${s.tag}</span>`; }
-      el.querySelector('.tl-body').innerHTML = `<span class="tl-label">${label}</span>${tag}`;
-      i++; setTimeout(nextStep, 340);
-    }, 720);
+      const dot=el.querySelector('.tl-dot');let label=s.l,tag='';
+      if(s.kind==='nomatch'){dot.innerHTML='<span class="warnMini">!</span>';label='没识别出属于哪个项目';}
+      else dot.innerHTML='<span class="tickMini">✓</span>';
+      if(s.tag){const c=s.kind==='proj'?'<span class="av avatar" style="background:#5e6ad2">M</span>':'';tag=`<span class="tag">${c}${s.tag}</span>`;}
+      el.querySelector('.tl-body').innerHTML=`<span class="tl-label">${label}</span>${tag}`;
+      i++;setTimeout(next,330);
+    },700);
   })();
 }
-
 function afterSteps(sc){
-  const tl = document.getElementById('tl');
   if(sc.project===null){
-    const a=document.createElement('div'); a.className='assign';
-    a.innerHTML=`<div class="q"><span class="warnMini">⌖</span> 这条暂时没识别出项目,选一个来归类:</div>
-      <div class="opts">
-        <button class="opt" data-p="my-video"><span class="avatar" style="width:18px;height:18px;border-radius:5px;background:#5e6ad2">M</span> my-video</button>
-        <button class="opt" data-p="api-svc"><span class="avatar" style="width:18px;height:18px;border-radius:5px;background:#3f9c6d">A</span> api-svc</button>
-        <button class="opt" data-p="__later">先存着,稍后归类</button>
-      </div>`;
-    narr.appendChild(a);
-    card.style.minHeight = (narr.scrollHeight+36)+'px';
-    a.querySelectorAll('.opt').forEach(b=>b.addEventListener('click',()=>{
-      sc.issue.project = b.dataset.p==='__later'?null:b.dataset.p;
-      sc.issue.staged = b.dataset.p==='__later';
-      a.remove(); celebrate(sc, b.dataset.p==='__later'?'已先存着 · 已在事项里标为未归类':('已归到 '+b.dataset.p));
-    }));
-  } else {
-    celebrate(sc, '已归到 '+sc.project);
-  }
+    const a=document.createElement('div');a.className='assign';
+    a.innerHTML=`<div class="q"><span class="warnMini">⌖</span> 这条暂时没识别出项目,选一个来归类:</div><div class="opts"><button class="opt" data-p="my-video"><span class="avatar" style="width:18px;height:18px;border-radius:5px;background:#5e6ad2">M</span> my-video</button><button class="opt" data-p="api-svc"><span class="avatar" style="width:18px;height:18px;border-radius:5px;background:#3f9c6d">A</span> api-svc</button><button class="opt" data-p="__later">先存着,稍后归类</button></div>`;
+    narr.appendChild(a);card.style.minHeight=(narr.scrollHeight+36)+'px';
+    a.querySelectorAll('.opt').forEach(b=>b.addEventListener('click',()=>{sc.issue.project=b.dataset.p==='__later'?null:b.dataset.p;sc.issue.staged=b.dataset.p==='__later';a.remove();celebrate(sc,b.dataset.p==='__later'?'已先存着 · 标为未归类':('已归到 '+b.dataset.p));}));
+  } else celebrate(sc,'已归到 '+sc.project);
 }
-
-function celebrate(sc, subtitle){
-  const created=document.createElement('div'); created.className='created';
-  created.innerHTML=`<span class="checkRing"><span class="t-success-check" data-state="out">${CHECK_SVG}</span></span>
-    <span><span class="ct">已创建事项</span><br><span class="cs">${subtitle}</span></span>`;
-  narr.appendChild(created);
-  card.style.minHeight=(narr.scrollHeight+36)+'px';
-  // 触发 success-check
-  const chk=created.querySelector('.t-success-check');
-  const path=chk.querySelector('path'); const len=Math.ceil(path.getTotalLength());
-  path.style.strokeDasharray=len; path.style.strokeDashoffset=len;
-  void chk.offsetWidth; chk.setAttribute('data-state','in');
-  // 落定为 issue 页(page-slide)
-  const issue={...sc.issue, id:'n'+Date.now()};
-  ISSUES.unshift(issue);
-  setTimeout(()=>enterIssue(issue), 900);
+function celebrate(sc,sub){
+  const c=document.createElement('div');c.className='created';
+  c.innerHTML=`<span class="checkRing"><span class="t-success-check" data-state="out">${CHECK_SVG}</span></span><span><span class="ct">已创建事项</span><br><span class="cs">${sub}</span></span>`;
+  narr.appendChild(c);card.style.minHeight=(narr.scrollHeight+36)+'px';
+  const chk=c.querySelector('.t-success-check'),p=chk.querySelector('path'),len=Math.ceil(p.getTotalLength());
+  p.style.strokeDasharray=len;p.style.strokeDashoffset=len;void chk.offsetWidth;chk.setAttribute('data-state','in');
+  const issue={...sc.issue,id:'n'+Date.now()};ISSUES.unshift(issue);
+  setTimeout(()=>enterIssue(issue),900);
 }
+function enterIssue(issue){ switchSection('issue'); renderIssueList(issue.id); renderIssueDetail(issue); stage.setAttribute('data-page','2'); }
 
-function enterIssue(issue){
-  renderList(issue.id); renderDetail(issue);
-  setActiveNav('nav-issue');
-  stage.setAttribute('data-page','2');
-}
-
-// ── 列表 + 详情 ──────────────────────────────────────────────────────────
+// 事项列表/详情
 const STAT={todo:{c:'todo',t:'待办'},prog:{c:'prog',t:'进行中'},done:{c:'done',t:'已完成'}};
-function renderList(selId){
-  const body=document.getElementById('listBody');
-  let html='';
-  // 未归类(暂存)置顶提醒——跨项目,程序内部暂存的露出
-  const staged=ISSUES.filter(x=>x.staged);
-  if(staged.length){
-    html+=`<div class="grp stg">未归类 · ${staged.length} · 待选项目</div>`;
-    for(const it of staged) html+=rowHtml(it,selId,true);
+function renderIssueList(selId){
+  let html='';const staged=ISSUES.filter(x=>x.staged);
+  if(staged.length){html+=`<div class="grp stg">未归类 · ${staged.length} · 待选项目</div>`;for(const it of staged)html+=issueRow(it,selId,true);}
+  for(const[name,st]of[['进行中','prog'],['待办','todo'],['已完成','done']]){
+    const items=ISSUES.filter(x=>x.status===st&&!x.staged);if(!items.length)continue;
+    html+=`<div class="grp">${name} · ${items.length}</div>`;for(const it of items)html+=issueRow(it,selId,false);
   }
-  for(const [name,st] of [['进行中','prog'],['待办','todo'],['已完成','done']]){
-    const items=ISSUES.filter(x=>x.status===st&&!x.staged);
-    if(!items.length) continue;
-    html+=`<div class="grp">${name} · ${items.length}</div>`;
-    for(const it of items) html+=rowHtml(it,selId,false);
-  }
-  body.innerHTML=html;
-  body.querySelectorAll('.row').forEach(r=>r.addEventListener('click',()=>{
-    const it=ISSUES.find(x=>x.id===r.dataset.id); renderList(it.id); renderDetail(it);
-  }));
+  $('issueListBody').innerHTML=html;
+  $('issueListBody').querySelectorAll('.row').forEach(r=>r.addEventListener('click',()=>{const it=ISSUES.find(x=>x.id===r.dataset.id);renderIssueList(it.id);renderIssueDetail(it);}));
 }
-function rowHtml(it,selId,staged){
-  const sel=it.id===selId?'sel':'';
-  const dotCls=staged?'stg':STAT[it.status].c;
-  const tag=staged?'<span class="utag">未归类</span>':'';   // 普通行不再显示项目标签
-  const pri=it.priority==='high'?'high':'';
-  return `<div class="row ${sel}" data-id="${it.id}">
-    <span class="sdot ${dotCls}"></span><span class="ti">${esc(it.title)}</span>${tag}
-    <span class="pri ${pri}"><i></i><i></i><i></i></span></div>`;
+function issueRow(it,selId,staged){
+  const sel=it.id===selId?'sel':'';const dot=staged?'stg':STAT[it.status].c;const tag=staged?'<span class="utag">未归类</span>':'';
+  const cm=(it.comments&&it.comments.length)?`<span class="rmeta" style="font-size:11px">💬 ${it.comments.length}</span>`:'';
+  return `<div class="row ${sel}" data-id="${it.id}"><span class="sdot ${dot}"></span><span class="ti">${esc(it.title)}</span>${tag}${cm}<span class="pri ${it.priority==='high'?'high':''}"><i></i><i></i><i></i></span></div>`;
 }
-function renderDetail(it){
-  const d=document.getElementById('detail');
+function renderIssueDetail(it){
   const priTxt={high:'高',med:'中',low:'低'}[it.priority]||'无';
-  const projPill=it.project
-    ? `<button class="pill"><span class="avatar" style="width:16px;height:16px;border-radius:4px;background:#5e6ad2">M</span> ${it.project}</button>`
-    : `<button class="pill warn">⚠ 选择项目归类 ▾</button>`;
-  const linked=it.task
-    ? `<div class="taskChip"><span class="run"></span><span>任务 · ${it.task.status}</span><span class="open">在任务区打开 →</span></div>`
-    : `<div class="empty">尚无关联任务 · 点「@claude 执行」会把这条事项的上下文发给智能体,生成一个任务去跑</div>`;
-  d.innerHTML=`
+  const projPill=it.project?`<button class="pill"><span class="avatar" style="width:16px;height:16px;border-radius:4px;background:#5e6ad2">M</span> ${it.project}</button>`:`<button class="pill warn">⚠ 选择项目归类 ▾</button>`;
+  const tasks=(it.taskIds||[]).map(id=>TASKS.find(t=>t.id===id)).filter(Boolean);
+  const linked=tasks.length?tasks.map(t=>`<div class="taskChip" data-task="${t.id}"><span class="run ${t.status}"></span><span>${esc(t.title)} · ${STAT[t.status].t}</span><span class="open">在任务区打开 →</span></div>`).join(''):`<div class="empty">尚无派生执行 · 讨论一致后点「@claude 执行」,会把这条事项的标题、描述和整条讨论一起发给智能体,生成一个任务去跑</div>`;
+  $('issueDetail').innerHTML=`
     <div class="dcrumb">${it.project||'未归类'} › 事项</div>
     <div class="dhead"><span class="sdot ${it.staged?'stg':STAT[it.status].c}" style="width:18px;height:18px;margin-top:3px"></span><h2>${esc(it.title)}</h2></div>
-    <div class="metaRow">
-      <button class="pill"><span class="sdot ${it.staged?'stg':STAT[it.status].c}" style="width:11px;height:11px"></span> ${it.staged?'待办':STAT[it.status].t}</button>
-      <button class="pill"><span class="mut">优先级</span> ${priTxt}</button>
-      ${projPill}
-      <button class="pill">🤖 @claude</button>
-      <button class="pill"><span class="mut">+ 标签</span></button>
-    </div>
+    <div class="metaRow"><button class="pill"><span class="sdot ${it.staged?'stg':STAT[it.status].c}" style="width:11px;height:11px"></span> ${it.staged?'待办':STAT[it.status].t}</button><button class="pill"><span class="mut">优先级</span> ${priTxt}</button>${projPill}<button class="pill">🤖 @claude</button><button class="pill"><span class="mut">+ 标签</span></button></div>
     <div class="body">${it.body||''}</div>
     <div class="divider"></div>
-    <div class="execRow" id="execRow">
-      <button class="btnPrimary" id="execBtn">🤖 @claude 执行</button>
-      <span class="execHint">执行 = 把这条事项的上下文发给智能体,生成一个任务并立即开跑;完成后回链显示在下方。</span>
-    </div>
-    <div class="linked"><div class="linkedTitle">关联任务</div>${linked}</div>`;
-  const eb=document.getElementById('execBtn'); if(eb) eb.addEventListener('click',()=>execIssue(it));
+    <div class="secTitle">💬 讨论 <span style="color:var(--faint);font-weight:400">· 对齐后再执行</span></div>
+    <div id="cmts"></div>
+    <div class="cmtComposer"><input id="cmtInput" placeholder="写条评论… 可 @claude 让它给意见"><button class="cmtSend" id="cmtSend">↑</button></div>
+    <div class="divider"></div>
+    <div class="execRow" id="execRow"><button class="btnPrimary" id="execBtn">🤖 @claude 执行</button><span class="execHint">执行 = 把标题、描述和上面整条讨论一起发给智能体,生成任务并立即开跑。</span></div>
+    <div class="linked"><div class="secTitle">派生的执行(任务)</div>${linked}</div>`;
+  renderComments(it);
+  $('cmtSend').addEventListener('click',()=>addComment(it));
+  $('cmtInput').addEventListener('keydown',e=>{if(e.key==='Enter')addComment(it);});
+  const eb=$('execBtn');if(eb)eb.addEventListener('click',()=>execIssue(it));
+  $('issueDetail').querySelectorAll('.taskChip').forEach(c=>c.addEventListener('click',()=>{switchSection('task');openTask(TASKS.find(t=>t.id===c.dataset.task));}));
 }
-
-// @执行:再变形一次,演示 issue → task 派发
+function renderComments(it){
+  $('cmts').innerHTML=(it.comments||[]).map(c=>`<div class="cmt"><span class="cav ${c.who}">${c.who==='ai'?'C':'我'}</span><div class="cwrap"><div class="cmeta"><b class="${c.who==='ai'?'ai':''}">${c.name}</b><time>${c.t||'刚刚'}</time></div><div class="cbody">${esc(c.body)}</div></div></div>`).join('');
+}
+function addComment(it){
+  const v=$('cmtInput').value.trim();if(!v)return;
+  it.comments=it.comments||[];it.comments.push({who:'me',name:'我',t:'刚刚',body:v});
+  const wantAI=/@claude|@codex/i.test(v);$('cmtInput').value='';renderComments(it);
+  if(wantAI){ setTimeout(()=>{it.comments.push({who:'ai',name:'@claude',t:'刚刚',body:'收到,我的看法是:先小步验证再铺开,具体可在执行时按这个思路来。'});renderComments(it);},900); }
+}
 function execIssue(it){
-  if(!it.project){ alert('这条还没归到项目,请先在上方「选择项目归类」'); return; }
-  const row=document.getElementById('execRow');
-  row.innerHTML=`<div class="miniTl" id="execTl"></div>`;
-  const seq=['把事项上下文发给 @claude','创建任务','开始运行']; let i=0;
+  if(!it.project){alert('这条还没归到项目,请先在上方「选择项目归类」');return;}
+  const row=$('execRow');row.innerHTML=`<div class="miniTl" id="execTl"></div>`;
+  const seq=['把事项 + 讨论上下文打包发给 @claude','创建任务','开始运行'];let i=0;
   (function step(){
-    if(i>=seq.length){ it.status='prog'; it.task={status:'运行中'}; renderList(it.id); renderDetail(it); return; }
-    const el=document.createElement('div'); el.className='ln';
-    el.innerHTML=`<span class="spin"></span><span class="t-shimmer" data-text="${seq[i]}…">${seq[i]}…</span>`;
-    document.getElementById('execTl').appendChild(el);
-    setTimeout(()=>{ el.innerHTML=`<span class="tickMini">✓</span><span>${seq[i]}</span>`; i++; setTimeout(step,280); },620);
+    if(i>=seq.length){
+      it.status='prog';const nt={id:'t'+Date.now(),title:it.title,status:'prog',from:{id:it.id,title:it.title}};
+      TASKS.unshift(nt);it.taskIds=(it.taskIds||[]).concat(nt.id);
+      renderIssueList(it.id);renderIssueDetail(it);return;
+    }
+    const el=document.createElement('div');el.className='ln';el.innerHTML=`<span class="spin"></span><span class="t-shimmer" data-text="${seq[i]}…">${seq[i]}…</span>`;
+    $('execTl').appendChild(el);setTimeout(()=>{el.innerHTML=`<span class="tickMini">✓</span><span>${seq[i]}</span>`;i++;setTimeout(step,280);},620);
   })();
 }
 
-function setActiveNav(id){ document.querySelectorAll('.nav .navItem').forEach(n=>n.classList.toggle('active',n.id===id)); }
-['nav-task','nav-board','nav-arch'].forEach(id=>document.getElementById(id).addEventListener('click',()=>{
-  const t=document.getElementById(id).innerText.trim(); alert('这是现有「'+t+'」区(原型只演示「事项」区)');
-}));
-function esc(s){return s.replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+// ===== 任务平面 =====
+let taskView='list';
+function renderTaskTools(){
+  $('headTools').innerHTML=`<span style="display:inline-flex;align-items:center;gap:10px"><span class="seg"><button id="tv-list" class="${taskView==='list'?'on':''}">列表</button><button id="tv-board" class="${taskView==='board'?'on':''}">看板</button></span><button class="chip" id="tv-arch">已归档</button></span>`;
+  $('tv-list').onclick=()=>{taskView='list';applyTaskView();renderTaskTools();};
+  $('tv-board').onclick=()=>{taskView='board';applyTaskView();renderTaskTools();};
+  $('tv-arch').onclick=()=>alert('已归档任务(任务内的筛选,不再占 rail 一行)');
+}
+function applyTaskView(){
+  $('taskTwo').style.display=taskView==='list'?'flex':'none';
+  $('taskBoard').style.display=taskView==='board'?'flex':'none';
+  if(taskView==='board') renderTaskBoard();
+}
+function renderTaskList(selId){
+  applyTaskView();
+  let html='';
+  for(const[name,st]of[['进行中','prog'],['待办','todo'],['已完成','done']]){
+    const items=TASKS.filter(t=>t.status===st);if(!items.length)continue;
+    html+=`<div class="grp">${name} · ${items.length}</div>`;
+    for(const t of items){const from=t.from?'<span class="fromtag">← 事项</span>':'';
+      html+=`<div class="row ${t.id===selId?'sel':''}" data-id="${t.id}"><span class="sdot ${t.status}"></span><span class="ti">${esc(t.title)}</span>${from}</div>`;}
+  }
+  $('taskListBody').innerHTML=html;
+  $('taskListBody').querySelectorAll('.row').forEach(r=>r.addEventListener('click',()=>openTask(TASKS.find(t=>t.id===r.dataset.id))));
+}
+function openTask(t){
+  if(!t)return; taskView='list'; switchSection('task'); applyTaskView(); renderTaskList(t.id);
+  const back=t.from?`<div class="backlink" data-issue="${t.from.id}">← 来自事项:${esc(t.from.title)} · 含讨论上下文</div>`:'';
+  $('taskDetail').innerHTML=`${back}
+    <div class="dhead"><span class="sdot ${t.status}" style="width:18px;height:18px;margin-top:3px"></span><h2>${esc(t.title)}</h2></div>
+    <div class="metaRow"><button class="pill"><span class="sdot ${t.status}" style="width:11px;height:11px"></span> ${STAT[t.status].t}</button><button class="pill">🤖 @claude</button>${t.from?'<button class="pill"><span class="mut">来源</span> 事项</button>':'<button class="pill"><span class="mut">来源</span> 直接创建</button>'}</div>
+    <div class="body">${t.from?'<p>执行目标来自事项「'+esc(t.from.title)+'」的标题、描述与整条讨论。</p>':'<p>这是一个直接创建的任务(无上游事项)。</p>'}</div>
+    <div class="divider"></div>
+    <div class="secTitle">运行输出</div>
+    <div class="empty">${t.status==='prog'?'● 运行中 · agent 正在执行…(此处是现有任务的实时输出/会话区)':t.status==='done'?'✓ 已完成 · 这里是现有任务的会话回放':'待运行'}</div>`;
+  const bl=$('taskDetail').querySelector('.backlink');if(bl)bl.addEventListener('click',()=>{switchSection('issue');const it=ISSUES.find(x=>x.id===bl.dataset.issue);if(it){renderIssueList(it.id);renderIssueDetail(it);stage.setAttribute('data-page','2');}});
+}
+function renderTaskBoard(){
+  const cols=[['待办','todo'],['进行中','prog'],['已完成','done']];
+  $('taskBoard').innerHTML=cols.map(([n,st])=>`<div class="bcol"><h4>${n}</h4>${TASKS.filter(t=>t.status===st).map(t=>`<div class="bcard">${esc(t.title)}${t.from?' <span class="fromtag">← 事项</span>':''}</div>`).join('')}</div>`).join('');
+}
 
-// 初始
-showHeroTitle();
-setTimeout(()=>ta.focus(),120);
+function esc(s){return s.replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+showHeroTitle();setTimeout(()=>ta.focus(),120);
 </script>
 </body>
 </html>
