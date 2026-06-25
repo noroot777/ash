@@ -26,7 +26,7 @@ import { runGroup } from "./scheduler.js";
 import { runDebate, resumeDebate, resumeAtGate } from "./debate/index.js";
 import { resolveGate } from "./debate/gates.js";
 import { detectLocalAgents } from "./detect.js";
-import { projectHealthLight, projectHealthFull, tidyRepoPath, repoKey } from "./git.js";
+import { projectHealthLight, projectHealthFull, tidyRepoPath, repoKey, listBranches, detectTaskWorktree, removeWorktree } from "./git.js";
 import { resumeCommandFor } from "./executors/spawn.js";
 import type { GateAction, AgentType, BatchCreateTasksBody, BatchTaskInput, ScheduledMessage, ScheduledMessageStatus } from "@harness/shared";
 
@@ -223,6 +223,8 @@ const toTask = (r: typeof tasks.$inferSelect): Task => ({
   endedAt: r.endedAt,
   archived: r.archived,
   archivedAt: r.archivedAt,
+  useWorktree: r.useWorktree,
+  worktreeBase: r.worktreeBase,
 });
 
 // Attach execution-time fields (activeMs/liveSince) to task rows. The session
@@ -370,6 +372,32 @@ api.post("/projects/check", async (c) => {
   return c.json(await projectHealthFull(b.repoPath));
 });
 
+// List the project's local git branches plus the current HEAD — drives the
+// new-task form's "base 分支" picker. Empty `{ branches: [], current: null }`
+// when the path isn't a git repo, so the UI can degrade to a text field.
+api.get("/projects/:id/branches", async (c) => {
+  const p = (await db.select().from(projects).where(eq(projects.id, c.req.param("id")))).at(0);
+  if (!p) return c.json({ error: "not found" }, 404);
+  return c.json(await listBranches(p.repoPath));
+});
+
+// One-click worktree cleanup — invoked from the delete-task confirmation when a
+// harness-managed worktree was detected. Wraps `git worktree remove [--force]
+// <path>`; failure (e.g. uncommitted changes) returns the raw git stderr so the
+// UI can offer a "强制清理" retry. harness still does NOT touch branches.
+api.post("/projects/:id/worktrees/remove", async (c) => {
+  const p = (await db.select().from(projects).where(eq(projects.id, c.req.param("id")))).at(0);
+  if (!p) return c.json({ error: "not found" }, 404);
+  const b = await c.req.json<{ path: string; force?: boolean }>();
+  if (!b?.path) return c.json({ error: "path required" }, 400);
+  try {
+    await removeWorktree(p.repoPath, b.path, !!b.force);
+    return c.json({ removed: true });
+  } catch (err) {
+    return c.json({ error: err instanceof Error ? err.message : String(err) }, 409);
+  }
+});
+
 // ── groups ───────────────────────────────────────────────────────────────
 // Create a group inside a project — the entry point an agent calls first to get
 // a groupId for the batch endpoint. The project is resolved by `projectId` or,
@@ -487,6 +515,8 @@ api.post("/tasks", async (c) => {
     scheduleId: null,
     createdAt: ts,
     updatedAt: ts,
+    useWorktree: b.useWorktree ?? false,
+    worktreeBase: b.worktreeBase ?? null,
   };
   await db.insert(tasks).values(row);
   return c.json((await enrichTiming([row as typeof tasks.$inferSelect]))[0], 201);
@@ -530,8 +560,18 @@ api.patch("/tasks/:id", async (c) => {
 });
 
 api.delete("/tasks/:id", async (c) => {
-  await db.delete(tasks).where(eq(tasks.id, c.req.param("id")));
-  return c.json({ deleted: true });
+  const tid = c.req.param("id");
+  const existing = (await db.select().from(tasks).where(eq(tasks.id, tid))).at(0);
+  // Before dropping the row, snapshot any worktree harness created for this
+  // task — the client uses this to surface a "清理 worktree" confirmation (path
+  // + branch) plus a one-click cleanup button. harness never auto-removes.
+  let worktreeHint: { path: string; branch: string } | null = null;
+  if (existing?.useWorktree) {
+    const project = (await db.select().from(projects).where(eq(projects.id, existing.projectId))).at(0);
+    if (project) worktreeHint = detectTaskWorktree(project.repoPath, tid);
+  }
+  await db.delete(tasks).where(eq(tasks.id, tid));
+  return c.json({ deleted: true, worktreeHint });
 });
 
 // ── groups (transient batch containers, §3) ─────────────────────────────────
@@ -643,6 +683,11 @@ api.post("/groups/:groupId/tasks/batch", async (c) => {
       scheduleId: null as string | null,
       createdAt: ts,
       updatedAt: ts,
+      // Batch path (MCP/agent-facing) doesn't take per-task worktree opts yet —
+      // those tasks run in the project's main tree. Web/mobile new-task forms
+      // are the only opt-in surface for now.
+      useWorktree: false,
+      worktreeBase: null as string | null,
     };
   });
 

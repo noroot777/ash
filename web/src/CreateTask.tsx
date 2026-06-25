@@ -1,6 +1,6 @@
-import { useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { Task, Group, AgentType, Priority, ProjectView, DebateStyle } from "@harness/shared";
-import { X, ArrowsOut, ArrowsIn, Robot, Stack, Plus, Sparkle, Scales, Handshake, CaretDown, Clock, Play, Tray, ArrowsClockwise } from "@phosphor-icons/react";
+import { X, ArrowsOut, ArrowsIn, Robot, Stack, Plus, Sparkle, Scales, Handshake, CaretDown, Clock, Play, Tray, ArrowsClockwise, GitBranch, TreeStructure } from "@phosphor-icons/react";
 import { api } from "./api";
 import { PRIORITIES } from "./constants";
 import { PriorityIcon, LabelAdder, RunLocation } from "./ui";
@@ -59,6 +59,26 @@ export function CreateTask({
   const [at, setAt] = useState(""); // datetime-local value (once)
   const [cron, setCron] = useState("0 9 * * *"); // 5-field expr (cron)
   const [slashIdx, setSlashIdx] = useState(0); // highlighted style in the /pair picker
+  // Per-task worktree opt-in. When on, the server creates <repo>/.worktrees/<id>
+  // on a fresh `harness/<id8>` branch off the user-picked base before running.
+  // Toggle is only meaningful for git projects; for non-repos we hide it.
+  const [useWorktree, setUseWorktree] = useState(false);
+  const [base, setBase] = useState(""); // empty = current HEAD
+  const [branches, setBranches] = useState<string[]>([]);
+  const [branchesLoaded, setBranchesLoaded] = useState(false);
+  // Lazy-load branches the first time the toggle opens — non-repos still get an
+  // empty list so the menu degrades gracefully.
+  useEffect(() => {
+    if (!useWorktree || branchesLoaded) return;
+    let alive = true;
+    api.projectBranches(project.id).then((r) => {
+      if (!alive) return;
+      setBranches(r.branches);
+      if (!base && r.current) setBase(r.current);
+      setBranchesLoaded(true);
+    }).catch(() => alive && setBranchesLoaded(true));
+    return () => { alive = false; };
+  }, [useWorktree, branchesLoaded, project.id, base]);
   const objRef = useRef<HTMLTextAreaElement>(null);
   const { attachments, onPaste, remove, clear, error } = usePasteAttachments();
 
@@ -95,6 +115,8 @@ export function CreateTask({
         priority,
         labels,
         autoTitle: true,
+        useWorktree: project.health.isRepo ? useWorktree : false,
+        worktreeBase: useWorktree && base ? base : null,
       });
       // 启动时机：run=立即跑；once/cron=挂定时（调度器到点入队，不在此刻跑）；
       // create=什么都不做（任务停在 backlog，手动再运行）。
@@ -120,6 +142,9 @@ export function CreateTask({
   const prioLabel = priority === "none" ? "优先级" : PRIORITIES.find((p) => p.key === priority)!.label;
 
   const active = LAUNCH_MODES.find((m) => m.key === launchMode)!;
+  // The exact derived branch (`harness/<id8>`) is only known after the server
+  // mints the task id — show a generic preview so the user knows the format.
+  const taskIdPreview = "harness/<id8>";
   // A scheduled mode needs a valid time/expr before it can submit.
   const schedInvalid = (launchMode === "once" && !at) || (launchMode === "cron" && !cron.trim());
   const canSubmit = (!!body.trim() || attachments.length > 0) && !busy && !schedInvalid;
@@ -165,6 +190,16 @@ export function CreateTask({
         <div className="px-4 pt-1.5">
           <RunLocation project={project} />
         </div>
+        {project.health.isRepo && (
+          <WorktreeField
+            taskIdPreview={taskIdPreview}
+            on={useWorktree}
+            base={base}
+            branches={branches}
+            onToggle={() => setUseWorktree((v) => !v)}
+            onBase={setBase}
+          />
+        )}
 
         {/* Objective (no title field — AI titles it) */}
         <div className={`relative flex min-h-0 flex-col px-4 pt-3 ${expanded ? "flex-1" : ""}`}>
@@ -276,6 +311,63 @@ export function CreateTask({
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+// 「在新 worktree 里跑」开关 + base 分支选择。和 RunLocation 同一视觉层，让用户
+// 一眼看清「这次任务跑在哪、用哪个分支」。关闭时只占一行；开启时展开一个紧凑的
+// base 选择面板（沿用 Pill / Menu 风格，和正文 Pill 一致）。
+function WorktreeField({
+  on,
+  base,
+  branches,
+  taskIdPreview,
+  onToggle,
+  onBase,
+}: {
+  on: boolean;
+  base: string;
+  branches: string[];
+  taskIdPreview: string;
+  onToggle: () => void;
+  onBase: (b: string) => void;
+}) {
+  const baseLabel = base || "当前分支";
+  return (
+    <div className="px-4 pt-1">
+      <button
+        type="button"
+        onClick={onToggle}
+        className="inline-flex items-center gap-1.5 rounded-md px-1.5 py-0.5 text-[11px] text-muted hover:bg-raised hover:text-ink"
+        title={on ? "关闭：直接在项目目录跑" : "开启：本次任务在新 worktree 里跑"}
+      >
+        <TreeStructure size={12} className={on ? "text-accent" : "text-faint"} />
+        <span>用 worktree 隔离</span>
+        <span
+          className={`relative ml-0.5 inline-block h-3 w-5 rounded-full transition-colors ${on ? "bg-accent" : "bg-line2"}`}
+          aria-pressed={on}
+        >
+          <span className={`absolute top-0.5 h-2 w-2 rounded-full bg-panel transition-all ${on ? "left-2.5" : "left-0.5"}`} />
+        </span>
+      </button>
+      {on && (
+        <div className="ml-1 mt-1 flex flex-wrap items-center gap-1.5 text-[11px] text-muted">
+          <span className="text-faint">base</span>
+          <Pill
+            icon={<GitBranch size={11} />}
+            label={baseLabel}
+            value={base}
+            onChange={onBase}
+            options={[
+              { value: "", label: "当前分支（HEAD）" },
+              ...branches.map((b) => ({ value: b, label: b })),
+            ]}
+            menuWidth={220}
+          />
+          <span className="text-faint">→ 新分支 {taskIdPreview}</span>
+        </div>
+      )}
     </div>
   );
 }

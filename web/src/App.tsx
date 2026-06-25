@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useMemo } from "react";
+import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import type { Task, ProjectView, Group, AgentEvent, DebateStyle, AgentType, ProjectHealth } from "@harness/shared";
 import { NotePencil, CaretDown, MagnifyingGlass, GearSix, Plus } from "@phosphor-icons/react";
 import { api } from "./api";
@@ -14,7 +14,7 @@ import { applyDebateEvent, emptyDebate, type DebateState } from "./debateState";
 import { AgentsPanel } from "./AgentsPanel";
 import { Board } from "./Board";
 import { Menu } from "./Menu";
-import { NewProjectModal, NewGroupModal, ConfirmModal } from "./Modal";
+import { NewProjectModal, NewGroupModal, ConfirmModal, WorktreeCleanupModal } from "./Modal";
 import { GroupsPanel } from "./GroupsPanel";
 import { ProjectSettings } from "./ProjectSettings";
 import { HealthDot, BranchChip, ProjectAvatar, ResizeHandle } from "./ui";
@@ -30,6 +30,10 @@ export function App() {
   const [projectId, setProjectId] = useState<string | null>(urlParams.get("project"));
   const [groups, setGroups] = useState<Group[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
+  // Mirror tasks for cross-effect reads (delete handler captures projectId before
+  // the row is removed — without a ref it would close over a stale snapshot).
+  const tasksRef = useRef<Task[]>([]);
+  tasksRef.current = tasks;
   const [selected, setSelected] = useState<string | null>(urlParams.get("task"));
   const [logs, setLogs] = useState<Record<string, LogLine[]>>({});
   const [debates, setDebates] = useState<Record<string, DebateState>>({});
@@ -45,6 +49,10 @@ export function App() {
   const [groupsOpen, setGroupsOpen] = useState(false);
   const [debateOpen, setDebateOpen] = useState<DebateStyle | null>(null);
   const [confirmDel, setConfirmDel] = useState<{ id: string; title: string } | null>(null);
+  // After deleting a task that used a worktree, prompt to clean it up (or keep).
+  const [worktreePrompt, setWorktreePrompt] = useState<
+    { projectId: string; path: string; branch: string } | null
+  >(null);
   const [view, setView] = useState<"list" | "board" | "archived">("list");
   // Sidebar width is user-draggable; persist so it survives reloads. Clamp on read
   // in case of a stale/garbage value.
@@ -207,9 +215,15 @@ export function App() {
 
   const del = useCallback((id: string, title: string) => setConfirmDel({ id, title }), []);
   const doDelete = useCallback(async (id: string) => {
-    await api.deleteTask(id);
+    // The task row carries projectId — capture it BEFORE setTasks removes the row,
+    // so the cleanup prompt knows which project's git to act against.
+    const victim = tasksRef.current.find((t) => t.id === id);
+    const res = await api.deleteTask(id);
     setTasks((ts) => ts.filter((t) => t.id !== id));
     setSelected((cur) => (cur === id ? null : cur));
+    if (res.worktreeHint && victim) {
+      setWorktreePrompt({ projectId: victim.projectId, ...res.worktreeHint });
+    }
   }, []);
 
   const onTaskCreated = useCallback((t: Task, doRun = false) => {
@@ -290,7 +304,7 @@ export function App() {
     catch (e) { console.warn("pauseGroup rejected:", e); }
   }, []);
 
-  const anyModal = createOpen || agentsOpen || newProjectOpen || settingsOpen || newGroupOpen || groupsOpen || !!debateOpen || !!confirmDel;
+  const anyModal = createOpen || agentsOpen || newProjectOpen || settingsOpen || newGroupOpen || groupsOpen || !!debateOpen || !!confirmDel || !!worktreePrompt;
 
   // ── keyboard navigation ────────────────────────────────────────────────
   useEffect(() => {
@@ -537,6 +551,14 @@ export function App() {
           danger
           onConfirm={() => doDelete(confirmDel.id)}
           onClose={() => setConfirmDel(null)}
+        />
+      )}
+      {worktreePrompt && (
+        <WorktreeCleanupModal
+          projectId={worktreePrompt.projectId}
+          path={worktreePrompt.path}
+          branch={worktreePrompt.branch}
+          onClose={() => setWorktreePrompt(null)}
         />
       )}
       {debateOpen && project && <DebateModal project={project} initialStyle={debateOpen} onClose={() => setDebateOpen(null)} onCreated={onTaskCreated} />}

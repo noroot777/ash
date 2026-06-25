@@ -30,6 +30,19 @@ export const api = {
     fetch(`/api/projects/${id}`, { method: "DELETE" }).then(j),
   projectHealth: (id: string): Promise<ProjectHealth> =>
     fetch(`/api/projects/${id}/health`).then(j),
+  // Local branches + current HEAD — drives the "base 分支" picker on the new-task
+  // form when worktree is toggled on. Empty list ⇒ not a git repo / not yet
+  // initialized; the picker falls back to a text input.
+  projectBranches: (id: string): Promise<{ branches: string[]; current: string | null }> =>
+    fetch(`/api/projects/${id}/branches`).then(j),
+  // One-click "清理 worktree" — wraps `git worktree remove [--force] <path>`.
+  // Called from the delete-task confirmation; throws on dirty unless force=true.
+  removeWorktree: (projectId: string, path: string, force = false): Promise<{ removed: true }> =>
+    fetch(`/api/projects/${projectId}/worktrees/remove`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ path, force }),
+    }).then(j),
   checkPath: (repoPath: string): Promise<ProjectHealth> =>
     fetch("/api/projects/check", {
       method: "POST",
@@ -95,7 +108,7 @@ export const api = {
       headers: { "content-type": "application/json" },
       body: JSON.stringify(patch),
     }).then(j),
-  deleteTask: (id: string): Promise<unknown> =>
+  deleteTask: (id: string): Promise<{ deleted: true; worktreeHint?: { path: string; branch: string } | null }> =>
     fetch(`/api/tasks/${id}`, { method: "DELETE" }).then(j),
   runTask: (id: string): Promise<unknown> =>
     fetch(`/api/tasks/${id}/run`, { method: "POST" }).then(j),

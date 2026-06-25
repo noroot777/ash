@@ -8,7 +8,7 @@ import { bus } from "./bus.js";
 import { id, now, attachmentsPrompt } from "./util.js";
 import { setTaskStatus } from "./status.js";
 import { trackRun, untrackRun, takeCanceled } from "./runs.js";
-import { resolveWorkspace, ensureWorkdir } from "./git.js";
+import { resolveWorkspace, ensureWorkdir, prepareWorktree } from "./git.js";
 import { resolveExecutor } from "./executors/index.js";
 import type { RunHandle } from "./executors/types.js";
 import { RUNS_DIR } from "./paths.js";
@@ -97,7 +97,13 @@ export async function runTask(taskId: string): Promise<void> {
 
     await setStatus(taskId, "running");
 
-    const ws = await resolveWorkspace(project.repoPath, taskId);
+    // Per-task worktree opt-in (§4): when the user ticked "worktree" in the new-
+    // task form, materialize (or reuse) <repo>/.worktrees/<id> on harness/<id8>
+    // before handing the cwd to the agent. Failure surfaces as the task failing,
+    // not a silent fallback to repoPath — the user explicitly asked for isolation.
+    const ws = task.useWorktree
+      ? await prepareWorktree(project.repoPath, taskId, task.worktreeBase)
+      : await resolveWorkspace(project.repoPath, taskId);
     const agentType = (task.agentType as AgentType) ?? "claude";
     const ex = await resolveExecutor(agentType);
 

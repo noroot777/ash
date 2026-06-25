@@ -135,6 +135,14 @@ export interface Task {
   liveSince?: string | null;
   archived?: boolean;
   archivedAt?: string | null;
+  // Per-task git worktree opt-in (§4). When `useWorktree` is true and the project
+  // is a real git repo, runTask materializes `<repoPath>/.worktrees/<taskId>` on a
+  // fresh branch `harness/<taskId 前 8 位>` BRANCHED OFF `worktreeBase` (the user-
+  // chosen base; null = current HEAD), and the agent runs there instead of the
+  // repoPath. Existing worktree → reused, not re-created (idempotent re-run).
+  // harness never removes worktrees on its own — the UI offers a one-click cleanup.
+  useWorktree?: boolean;
+  worktreeBase?: string | null;
 }
 
 // ── Attachments (pasted into the composer / reply box) ───────────────────────

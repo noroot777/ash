@@ -109,17 +109,120 @@ export interface Workspace {
 }
 
 // Resolve where a run executes — and REPORT its git context, never creating
-// anything. harness no longer manages worktrees; that is the user's call now. A
-// run happens directly in the project's repoPath (or a per-task scratch dir when
+// anything. This is the path for tasks that DIDN'T opt into a worktree. A run
+// happens directly in the project's repoPath (or a per-task scratch dir when
 // there's no usable git repo — a repo-less discussion or a missing path). We just
 // record the current branch and whether that dir is itself a user-managed linked
-// worktree, so the UI can surface it.
+// worktree, so the UI can surface it. Tasks with `useWorktree=true` go through
+// `prepareWorktree` instead — see below.
 export async function resolveWorkspace(repoPath: string, taskId: string): Promise<Workspace> {
   const p = expandHome(repoPath);
   if (await isGitRepo(p)) {
     return { path: p, branch: await currentBranch(p), isWorktree: isFile(join(p, ".git")) };
   }
   return { path: ensureWorkdir(repoPath, taskId), branch: null, isWorktree: false };
+}
+
+// ── Opt-in per-task worktree (§4) ────────────────────────────────────────────
+// Default is OFF; the new-task form has a toggle. When ON, runTask materializes
+// `<repoPath>/.worktrees/<taskId>` on branch `harness/<id8>` branched off the
+// user-picked `base` (null = current HEAD) BEFORE handing the cwd to the agent.
+// harness creates worktrees but never removes them on its own — cleanup is a
+// one-click UI action.
+
+// Stable derived branch name. taskId is opaque to users but unique; the first
+// 8 chars are enough entropy in practice and keep the ref short/legible.
+export function worktreeBranchName(taskId: string): string {
+  return `harness/${taskId.slice(0, 8)}`;
+}
+
+// Conventional location for harness-managed worktrees: a dotfile dir at the repo
+// root so it sits next to .git and stays out of the way. Each task gets its own
+// subdir keyed by taskId so re-runs of the same task land on the same worktree.
+export function worktreePathFor(repoPath: string, taskId: string): string {
+  return join(expandHome(repoPath), ".worktrees", taskId);
+}
+
+// If a worktree we previously created for this task still exists on disk, return
+// its path + branch so callers can surface it (DELETE /tasks/:id hint, "已存在"
+// reuse on re-run). Cheap sync check — no git spawn.
+export function detectTaskWorktree(repoPath: string, taskId: string): { path: string; branch: string } | null {
+  const path = worktreePathFor(repoPath, taskId);
+  if (!isDir(path)) return null;
+  // A linked worktree's .git is a file pointing back to the main repo. We don't
+  // verify the link target — if the dir is gone, `git worktree remove` from the
+  // main repo is what fixes it anyway.
+  return { path, branch: worktreeBranchName(taskId) };
+}
+
+// Materialize (or reuse) the worktree for this task. Idempotent:
+//   • dir exists  → return as-is (re-run, retry, continue)
+//   • dir missing → `git worktree add -b <branch> <path> [<base>]`
+// Failures (bad base, .worktrees taken by a non-worktree dir, git permissions)
+// throw — the caller (runTask) lets the task settle as failed so the user sees it
+// rather than silently falling back to repoPath. `base` is the user-picked ref;
+// empty string / null defers to git's default (current HEAD of repoPath).
+export async function prepareWorktree(
+  repoPath: string,
+  taskId: string,
+  base: string | null | undefined,
+): Promise<Workspace> {
+  const repo = expandHome(repoPath);
+  if (!(await isGitRepo(repo))) {
+    throw new Error(`项目 ${repoPath} 不是 git 仓库，无法创建 worktree`);
+  }
+  const path = worktreePathFor(repoPath, taskId);
+  const branch = worktreeBranchName(taskId);
+  if (isDir(path)) {
+    // Re-use: read whatever branch the existing worktree is actually on (might
+    // differ if the user manipulated it manually). isWorktree=true so callers
+    // know it's a linked worktree.
+    return { path, branch: (await currentBranch(path)) ?? branch, isWorktree: true };
+  }
+  // Ensure parent `<repo>/.worktrees/` exists; git itself won't auto-create it.
+  mkdirSync(join(repo, ".worktrees"), { recursive: true });
+  const args = ["-C", repo, "worktree", "add", "-b", branch, path];
+  const trimmedBase = (base ?? "").trim();
+  if (trimmedBase) args.push(trimmedBase);
+  try {
+    await exec("git", args);
+  } catch (err) {
+    const stderr = (err as { stderr?: string }).stderr?.trim() || (err as Error).message;
+    throw new Error(`git worktree add 失败：${stderr}`);
+  }
+  return { path, branch, isWorktree: true };
+}
+
+// `git worktree remove [--force] <path>` — wired to the one-click cleanup button
+// in the delete-task confirmation. Returns nothing on success; throws with the
+// raw git stderr so the UI can surface "dirty, use --force" etc.
+export async function removeWorktree(repoPath: string, path: string, force: boolean): Promise<void> {
+  const repo = expandHome(repoPath);
+  const args = ["-C", repo, "worktree", "remove"];
+  if (force) args.push("--force");
+  args.push(path);
+  try {
+    await exec("git", args);
+  } catch (err) {
+    const stderr = (err as { stderr?: string }).stderr?.trim() || (err as Error).message;
+    throw new Error(stderr);
+  }
+}
+
+// List the project's local branch names (for the new-task form's base picker),
+// plus the current branch so the UI can default-select it. Quietly returns
+// empty when the path isn't a git repo — the picker degrades to a plain text
+// field client-side.
+export async function listBranches(repoPath: string): Promise<{ branches: string[]; current: string | null }> {
+  const p = expandHome(repoPath);
+  if (!(await isGitRepo(p))) return { branches: [], current: null };
+  let branches: string[] = [];
+  try {
+    const { stdout } = await exec("git", ["-C", p, "for-each-ref", "--format=%(refname:short)", "refs/heads"]);
+    branches = stdout.split("\n").map((s) => s.trim()).filter(Boolean);
+  } catch { /* leave [] */ }
+  const current = await currentBranch(p);
+  return { branches, current };
 }
 
 // Current branch of a working dir ("HEAD" when detached); null if git can't tell.

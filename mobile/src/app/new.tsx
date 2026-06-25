@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { View, Text, ScrollView, KeyboardAvoidingView, Platform, Keyboard } from "react-native";
 import { useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -38,6 +38,34 @@ export default function NewTask() {
   const [cron, setCron] = useState("0 9 * * *");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Per-task worktree opt-in — when on, server materializes <repo>/.worktrees/<id>
+  // on a fresh `harness/<id8>` branch off `base` (empty = current HEAD).
+  const [useWorktree, setUseWorktree] = useState(false);
+  const [base, setBase] = useState("");
+  const [branches, setBranches] = useState<string[]>([]);
+  const [branchesLoaded, setBranchesLoaded] = useState(false);
+  // Project the form is targeting determines which branch list we fetch.
+  const project = projects.find((p) => p.id === projectId) ?? null;
+  // Lazy-load branches when the toggle opens for the current project; reset
+  // when the user switches projects.
+  useEffect(() => {
+    if (!useWorktree || !projectId) return;
+    if (branchesLoaded) return;
+    let alive = true;
+    api.projectBranches(projectId).then((r) => {
+      if (!alive) return;
+      setBranches(r.branches);
+      if (!base && r.current) setBase(r.current);
+      setBranchesLoaded(true);
+    }).catch(() => alive && setBranchesLoaded(true));
+    return () => { alive = false; };
+  }, [useWorktree, projectId, branchesLoaded, base]);
+  useEffect(() => {
+    // Switching projects invalidates the cached branch list.
+    setBranches([]);
+    setBranchesLoaded(false);
+    setBase("");
+  }, [projectId]);
 
   const pickLaunch = (m: LaunchMode) => {
     if (m === "once") Keyboard.dismiss(); // 让出键盘，给 iOS inline spinner 腾位
@@ -90,6 +118,8 @@ export default function NewTask() {
         agentType: agent,
         priority,
         autoTitle: !explicit, // let the first run name it when no title given
+        useWorktree: project?.health.isRepo ? useWorktree : false,
+        worktreeBase: useWorktree && base ? base : null,
       });
       upsertTask(t);
       // 启动时机分支：run=立即跑；once/cron=挂定时（调度器到点入队）；create=留 backlog。
@@ -200,6 +230,28 @@ export default function NewTask() {
             </View>
           ) : null}
         </Field>
+
+        {project?.health.isRepo ? (
+          <Field label="worktree（隔离运行）">
+            <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+              <Pill label={useWorktree ? "✓ 用新 worktree" : "直接在项目跑"} active={useWorktree} onPress={() => setUseWorktree((v) => !v)} />
+            </View>
+            {useWorktree ? (
+              <View style={{ marginTop: 8, gap: 8 }}>
+                <Text style={{ color: theme.faint, fontSize: 11 }}>base 分支</Text>
+                <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+                  <Pill label="当前分支" active={!base} onPress={() => setBase("")} />
+                  {branches.map((b) => (
+                    <Pill key={b} label={b} active={b === base} onPress={() => setBase(b)} />
+                  ))}
+                </View>
+                <Text style={{ color: theme.faint, fontSize: 11 }}>
+                  将拉一个新分支 harness/&lt;id8&gt;，跑在 .worktrees/&lt;id&gt;/
+                </Text>
+              </View>
+            ) : null}
+          </Field>
+        ) : null}
 
         {error ? <Text style={{ color: theme.danger, fontSize: 13 }}>{error}</Text> : null}
 

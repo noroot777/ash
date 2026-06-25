@@ -37,7 +37,14 @@ export const api = {
     req("/tasks", { method: "POST", body: JSON.stringify(t) }).then(j),
   patchTask: (id: string, patch: Partial<Task>): Promise<Task> =>
     req(`/tasks/${id}`, { method: "PATCH", body: JSON.stringify(patch) }).then(j),
-  deleteTask: (id: string): Promise<unknown> => req(`/tasks/${id}`, { method: "DELETE" }).then(j),
+  deleteTask: (id: string): Promise<{ deleted: true; worktreeHint?: { path: string; branch: string } | null }> =>
+    req(`/tasks/${id}`, { method: "DELETE" }).then(j),
+  // Local branches + current HEAD for the new-task form's base picker.
+  projectBranches: (id: string): Promise<{ branches: string[]; current: string | null }> =>
+    req(`/projects/${id}/branches`).then(j),
+  // One-click cleanup for a harness-managed worktree (post-delete).
+  removeWorktree: (projectId: string, path: string, force = false): Promise<{ removed: true }> =>
+    req(`/projects/${projectId}/worktrees/remove`, { method: "POST", body: JSON.stringify({ path, force }) }).then(j),
   // 归档/取消归档:server 仅允许归档 done/failed/canceled(canArchive),归档态只读(拒编辑/运行/回复)。
   archiveTask: (id: string): Promise<Task> => req(`/tasks/${id}/archive`, { method: "POST" }).then(j),
   unarchiveTask: (id: string): Promise<Task> => req(`/tasks/${id}/unarchive`, { method: "POST" }).then(j),

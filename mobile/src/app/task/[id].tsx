@@ -187,13 +187,60 @@ export default function TaskDetail() {
         text: "删除",
         style: "destructive",
         onPress: async () => {
-          await api.deleteTask(id).catch(() => {});
+          // Capture projectId before removing the task from store; the worktree
+          // cleanup prompt needs it to address the right project's git.
+          const projectId = task.projectId;
+          const res = await api.deleteTask(id).catch((e) => {
+            Alert.alert("删除失败", e instanceof Error ? e.message : String(e));
+            return null;
+          });
           removeTask(id);
-          if (router.canGoBack()) router.back();
-          else router.replace("/");
+          if (res?.worktreeHint) {
+            const { path, branch } = res.worktreeHint;
+            Alert.alert(
+              "任务已删除",
+              `这个任务用过 worktree，目录还在：\n${path}\n分支 ${branch}\n\n清理只移除 worktree 目录，不删分支。`,
+              [
+                { text: "保留", style: "cancel", onPress: () => navigateBack() },
+                {
+                  text: "清理",
+                  style: "destructive",
+                  onPress: async () => {
+                    try {
+                      await api.removeWorktree(projectId, path, false);
+                    } catch (e) {
+                      // typical case: worktree dirty → offer --force
+                      const msg = e instanceof Error ? e.message : String(e);
+                      Alert.alert("清理失败", msg, [
+                        { text: "放弃", style: "cancel", onPress: () => navigateBack() },
+                        {
+                          text: "强制清理",
+                          style: "destructive",
+                          onPress: async () => {
+                            try { await api.removeWorktree(projectId, path, true); } catch (e2) {
+                              Alert.alert("强制清理失败", e2 instanceof Error ? e2.message : String(e2));
+                            }
+                            navigateBack();
+                          },
+                        },
+                      ]);
+                      return;
+                    }
+                    navigateBack();
+                  },
+                },
+              ],
+            );
+          } else {
+            navigateBack();
+          }
         },
       },
     ]);
+  const navigateBack = () => {
+    if (router.canGoBack()) router.back();
+    else router.replace("/");
+  };
 
   const send = async (sendAt?: Date) => {
     const text = input.trim();

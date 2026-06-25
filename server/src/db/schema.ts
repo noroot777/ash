@@ -41,6 +41,11 @@ export const tasks = sqliteTable("tasks", {
   endedAt: text("ended_at"), // last terminal transition (cleared while running)
   archived: integer("archived", { mode: "boolean" }).notNull().default(false),
   archivedAt: text("archived_at"), // when it was archived (orders the archive view)
+  // Opt-in per-task worktree. true → orchestrator builds <repoPath>/.worktrees/<id>
+  // on branch `harness/<id8>` based off `worktreeBase` (null = current HEAD) before
+  // running. False / missing repo → behaves like before (runs in repoPath).
+  useWorktree: integer("use_worktree", { mode: "boolean" }).notNull().default(false),
+  worktreeBase: text("worktree_base"),
 });
 
 export const agents = sqliteTable("agents", {

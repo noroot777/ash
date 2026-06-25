@@ -79,6 +79,8 @@ export async function ensureSchema() {
     "ALTER TABLE tasks ADD COLUMN archived_at TEXT",
     "ALTER TABLE sessions ADD COLUMN active_ms INTEGER",
     "ALTER TABLE sessions ADD COLUMN turn_started_at TEXT",
+    "ALTER TABLE tasks ADD COLUMN use_worktree INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE tasks ADD COLUMN worktree_base TEXT",
   ]) {
     try {
       await client.execute(sql);
