@@ -13,13 +13,19 @@ import type {
   Task,
   Session,
   TaskStatus,
+  Issue,
+  IssueComment,
+  IssueStatus,
+  AiBackend,
+  Priority,
 } from "@harness/shared";
 import { canStartTask, canArchive, isUserSettableStatus, AGENT_TYPES, maxBytesFor, attachmentKind } from "@harness/shared";
 import { db } from "./db/index.js";
-import { projects, groups, tasks, sessions, schedules, scheduledMessages, agents } from "./db/schema.js";
+import { projects, groups, tasks, sessions, schedules, scheduledMessages, agents, issues, issueComments } from "./db/schema.js";
 import { bus } from "./bus.js";
 import { id, now, attachmentsPrompt, runsTiming } from "./util.js";
 import { resumeOrRunTask, continueTask } from "./orchestrator.js";
+import { parseIssue } from "./agentOnce.js";
 import { setTaskStatus } from "./status.js";
 import { stopTask } from "./runs.js";
 import { runGroup } from "./scheduler.js";
@@ -225,6 +231,7 @@ const toTask = (r: typeof tasks.$inferSelect): Task => ({
   archivedAt: r.archivedAt,
   useWorktree: r.useWorktree,
   worktreeBase: r.worktreeBase,
+  issueId: r.issueId ?? null,
 });
 
 // Attach execution-time fields (activeMs/liveSince) to task rows. The session
@@ -283,7 +290,7 @@ api.get("/projects", async (c) =>
 api.post("/projects", async (c) => {
   const b = await c.req.json<{ name: string; repoPath: string }>();
   if (!b.name?.trim()) return c.json({ error: "name required" }, 400);
-  const row = { id: id(), name: b.name.trim(), repoPath: tidyRepoPath(b.repoPath), createdAt: now() };
+  const row = { id: id(), name: b.name.trim(), repoPath: tidyRepoPath(b.repoPath), apiKeys: null, createdAt: now() };
   await db.insert(projects).values(row);
   return c.json(toProject(row), 201);
 });
@@ -320,7 +327,7 @@ api.post("/projects/resolve", async (c) => {
   }
 
   // 3) Genuinely new project.
-  const row = { id: id(), name, repoPath, createdAt: now() };
+  const row = { id: id(), name, repoPath, apiKeys: null, createdAt: now() };
   await db.insert(projects).values(row);
   return c.json(toProject(row), 201);
 });
@@ -944,6 +951,222 @@ api.delete("/tasks/:id/schedule", async (c) => {
   await db.delete(schedules).where(eq(schedules.taskId, c.req.param("id")));
   await db.update(tasks).set({ scheduleId: null, updatedAt: now() }).where(eq(tasks.id, c.req.param("id")));
   return c.json({ deleted: true });
+});
+
+// ── issues (planning/discussion layer upstream of tasks) ─────────────────────
+const toIssue = (r: typeof issues.$inferSelect): Issue => ({
+  id: r.id,
+  projectId: r.projectId,
+  title: r.title,
+  body: r.body,
+  sourceText: r.sourceText,
+  status: r.status as IssueStatus,
+  priority: r.priority as Priority,
+  labels: JSON.parse(r.labels),
+  aiBackend: r.aiBackend ? (JSON.parse(r.aiBackend) as AiBackend) : null,
+  parsed: r.parsed,
+  createdAt: r.createdAt,
+  updatedAt: r.updatedAt,
+  closedAt: r.closedAt,
+});
+
+const toComment = (r: typeof issueComments.$inferSelect): IssueComment => ({
+  id: r.id,
+  issueId: r.issueId,
+  author: JSON.parse(r.author),
+  body: r.body,
+  createdAt: r.createdAt,
+});
+
+// Full context handed to the agent on execution: title + structured body + the
+// WHOLE discussion thread — so it sees how the consensus was reached.
+function issueContext(issue: typeof issues.$inferSelect, comments: (typeof issueComments.$inferSelect)[]): string {
+  const lines = [`事项：「${issue.title}」`, "", issue.body || "(无描述)"];
+  if (comments.length) {
+    lines.push("", "— 讨论 —");
+    for (const cm of comments) {
+      let who = "我";
+      try {
+        const a = JSON.parse(cm.author);
+        if (a?.kind === "agent") who = `@${a.agentType}`;
+      } catch {
+        /* default 我 */
+      }
+      lines.push(`${who}: ${cm.body}`);
+    }
+  }
+  lines.push("", "（这是从上面这条事项转来的任务，请据此完成。）");
+  return lines.join("\n");
+}
+
+api.get("/issues", async (c) => {
+  const pid = c.req.query("projectId");
+  const status = c.req.query("status");
+  let rows = await db.select().from(issues);
+  if (pid) rows = rows.filter((i) => i.projectId === pid);
+  if (status) rows = rows.filter((i) => i.status === status);
+  return c.json(rows.map(toIssue));
+});
+
+api.get("/issues/:id", async (c) => {
+  const r = (await db.select().from(issues).where(eq(issues.id, c.req.param("id")))).at(0);
+  if (!r) return c.json({ error: "not found" }, 404);
+  return c.json(toIssue(r));
+});
+
+// Create an issue from raw text. Parsing is SYNCHRONOUS (the web shows 「识别中…」
+// until this resolves): the AI structures the text AND infers the project. A
+// pinned `projectId` from the composer overrides inference; failure degrades to
+// raw text (parsed:false) so the call always lands a usable issue.
+api.post("/issues", async (c) => {
+  const b = await c.req.json<{ text?: string; backend?: AiBackend | null; projectId?: string | null }>();
+  if (!b.text?.trim()) return c.json({ error: "text required" }, 400);
+  const projs = await db.select().from(projects);
+  const parsed = await parseIssue(b.text.trim(), {
+    backend: b.backend ?? null,
+    projects: projs.map((p) => ({ id: p.id, name: p.name, repoPath: p.repoPath })),
+  });
+  const projectId = b.projectId !== undefined ? b.projectId : parsed.projectId;
+  const ts = now();
+  const row = {
+    id: id(),
+    projectId,
+    title: parsed.title,
+    body: parsed.body,
+    sourceText: b.text.trim(),
+    status: "open",
+    priority: parsed.priority,
+    labels: JSON.stringify(parsed.labels),
+    aiBackend: b.backend ? JSON.stringify(b.backend) : null,
+    parsed: parsed.parsed,
+    createdAt: ts,
+    updatedAt: ts,
+    closedAt: null as string | null,
+  };
+  await db.insert(issues).values(row);
+  return c.json(toIssue(row as typeof issues.$inferSelect), 201);
+});
+
+api.patch("/issues/:id", async (c) => {
+  const iid = c.req.param("id");
+  const existing = (await db.select().from(issues).where(eq(issues.id, iid))).at(0);
+  if (!existing) return c.json({ error: "not found" }, 404);
+  const b = await c.req.json<Partial<Issue>>();
+  const patch: Record<string, unknown> = { updatedAt: now() };
+  if (b.title !== undefined) patch.title = b.title;
+  if (b.body !== undefined) patch.body = b.body;
+  if (b.priority !== undefined) patch.priority = b.priority;
+  if (b.labels !== undefined) patch.labels = JSON.stringify(b.labels);
+  if (b.projectId !== undefined) patch.projectId = b.projectId; // 归类(含从未归类指定项目)
+  if (b.status !== undefined) {
+    patch.status = b.status;
+    patch.closedAt = b.status === "done" || b.status === "canceled" ? now() : null;
+  }
+  await db.update(issues).set(patch).where(eq(issues.id, iid));
+  const updated = (await db.select().from(issues).where(eq(issues.id, iid))).at(0)!;
+  return c.json(toIssue(updated));
+});
+
+api.delete("/issues/:id", async (c) => {
+  const iid = c.req.param("id");
+  await db.delete(issueComments).where(eq(issueComments.issueId, iid));
+  await db.delete(issues).where(eq(issues.id, iid));
+  return c.json({ deleted: true });
+});
+
+api.get("/issues/:id/comments", async (c) => {
+  const rows = (await db.select().from(issueComments).where(eq(issueComments.issueId, c.req.param("id")))).sort((a, b) =>
+    a.createdAt.localeCompare(b.createdAt),
+  );
+  return c.json(rows.map(toComment));
+});
+
+// Post a comment. Plain text = discussion. With `mention` (a CLI agentType) it
+// ALSO executes: packs title + body + the whole thread into a task handed to that
+// agent. Execution requires a project (refused on 未归类). API-model backends can
+// parse but NOT execute — only CLI agent types are accepted here.
+api.post("/issues/:id/comments", async (c) => {
+  const iid = c.req.param("id");
+  const issue = (await db.select().from(issues).where(eq(issues.id, iid))).at(0);
+  if (!issue) return c.json({ error: "not found" }, 404);
+  const b = await c.req.json<{ body?: string; mention?: AgentType }>();
+  if (!b.body?.trim()) return c.json({ error: "empty" }, 400);
+  if (b.mention) {
+    if (!AGENT_TYPES.includes(b.mention)) return c.json({ error: "未知的 agent（执行只支持本地 CLI 智能体）", agent: b.mention }, 400);
+    if (!issue.projectId) return c.json({ error: "事项还没归到项目，先归类再 @ 智能体执行" }, 409);
+  }
+  const ts = now();
+  const crow = {
+    id: id(),
+    issueId: iid,
+    author: JSON.stringify({ kind: "human" }), // 评论是人写的;@提及触发执行(副作用)
+    body: b.body.trim(),
+    createdAt: ts,
+  };
+  await db.insert(issueComments).values(crow);
+
+  let task: Task | undefined;
+  if (b.mention && issue.projectId) {
+    const comments = (await db.select().from(issueComments).where(eq(issueComments.issueId, iid))).sort((a, d) =>
+      a.createdAt.localeCompare(d.createdAt),
+    );
+    const tid = id();
+    const trow = {
+      id: tid,
+      projectId: issue.projectId,
+      groupId: null as string | null,
+      parentId: null as string | null,
+      title: issue.title,
+      body: issueContext(issue, comments),
+      mode: "single",
+      status: "backlog",
+      priority: issue.priority,
+      labels: "[]",
+      dependsOn: "[]",
+      agentType: b.mention as AgentType,
+      autoTitle: false,
+      debate: null as string | null,
+      scheduleId: null as string | null,
+      createdAt: ts,
+      updatedAt: ts,
+      useWorktree: false,
+      worktreeBase: null as string | null,
+      issueId: iid,
+    };
+    await db.insert(tasks).values(trow);
+    await db.update(issues).set({ status: "in_progress", updatedAt: ts }).where(eq(issues.id, iid));
+    void resumeOrRunTask(tid, { reason: "run" }); // 立即开跑,进度走 /api/events
+    task = (await enrichTiming([trow as typeof tasks.$inferSelect]))[0];
+  }
+  return c.json({ comment: toComment(crow as typeof issueComments.$inferSelect), task }, 201);
+});
+
+// Tasks derived from an issue (the 派生执行 list / backlink target).
+api.get("/issues/:id/tasks", async (c) => {
+  const rows = await db.select().from(tasks).where(eq(tasks.issueId, c.req.param("id")));
+  return c.json(await enrichTiming(rows));
+});
+
+// Project-level API keys for direct-LLM issue parsing (local-only; the GET path
+// never returns plaintext — only whether a provider is configured).
+api.get("/projects/:id/api-keys", async (c) => {
+  const p = (await db.select().from(projects).where(eq(projects.id, c.req.param("id")))).at(0);
+  if (!p) return c.json({ error: "not found" }, 404);
+  const k = p.apiKeys ? JSON.parse(p.apiKeys) : {};
+  return c.json({ anthropic: !!k.anthropic, openai: !!k.openai });
+});
+
+api.put("/projects/:id/api-keys", async (c) => {
+  const pid = c.req.param("id");
+  const p = (await db.select().from(projects).where(eq(projects.id, pid))).at(0);
+  if (!p) return c.json({ error: "not found" }, 404);
+  const b = await c.req.json<{ anthropic?: string; openai?: string }>();
+  const cur = p.apiKeys ? JSON.parse(p.apiKeys) : {};
+  const next = { ...cur };
+  if (b.anthropic !== undefined) next.anthropic = b.anthropic || undefined;
+  if (b.openai !== undefined) next.openai = b.openai || undefined;
+  await db.update(projects).set({ apiKeys: JSON.stringify(next) }).where(eq(projects.id, pid));
+  return c.json({ saved: true, has: { anthropic: !!next.anthropic, openai: !!next.openai } });
 });
 
 // ── SSE stream (§12) ───────────────────────────────────────────────────────
