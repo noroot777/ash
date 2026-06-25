@@ -91,7 +91,7 @@
   .heroTitle{text-align:center;margin-bottom:24px}
   .heroTitle .t-stagger-line--1{font-size:27px;font-weight:600;color:var(--ink);letter-spacing:-.02em}
   .heroTitle .t-stagger-line--2{margin-top:7px;font-size:13.5px;color:var(--faint)}
-  .card{background:var(--panel);border:1px solid var(--line2);border-radius:18px;box-shadow:0 1px 2px rgba(0,0,0,.04),0 18px 44px -16px rgba(40,42,48,.18);overflow:hidden;display:flex;flex-direction:column;min-height:128px}
+  .card{background:var(--panel);border:1px solid var(--line2);border-radius:18px;box-shadow:0 1px 2px rgba(0,0,0,.04),0 18px 44px -16px rgba(40,42,48,.18);overflow:visible;display:flex;flex-direction:column;min-height:128px}
   .card.busy{box-shadow:0 1px 2px rgba(0,0,0,.04),0 22px 56px -16px rgba(94,106,210,.28);border-color:color-mix(in srgb,var(--accent) 30%,var(--line2))}
   .cInput{padding:18px 18px 2px;flex:1}
   .cInput textarea{width:100%;border:0;outline:0;resize:none;background:transparent;font-size:16px;line-height:1.55;color:var(--ink);min-height:50px;font-family:inherit}
@@ -158,6 +158,16 @@
   .cmtComposer input{flex:1;border:0;outline:0;background:transparent;font-size:13.5px;color:var(--ink);font-family:inherit}
   .cmtComposer input::placeholder{color:var(--faint)}
   .cmtSend{width:28px;height:28px;border-radius:7px;background:var(--accent);color:#fff;display:grid;place-items:center}
+  .atBtn{width:26px;height:26px;border-radius:7px;display:grid;place-items:center;color:var(--accent);font-weight:700;flex:none}.atBtn:hover{background:var(--raised)}
+  .cmtHint{font-size:11.5px;color:var(--faint);margin-top:7px}.cmtHint b{color:var(--accent);font-weight:600}
+  /* hero AI 选择菜单(本地 CLI / 直连 API) */
+  .aWrap{position:relative;display:inline-block}
+  .aMenu{position:absolute;bottom:38px;left:0;width:252px;background:var(--panel);border:1px solid var(--line2);border-radius:12px;box-shadow:0 14px 36px -10px rgba(40,42,48,.28);padding:6px;display:none;z-index:30}
+  .aMenu.open{display:block}
+  .aMenu .mh{font-size:10px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--faint);padding:8px 8px 4px}
+  .aMenu .mi{display:flex;align-items:center;gap:9px;padding:7px 8px;border-radius:8px;font-size:13px;color:var(--ink);width:100%;text-align:left}
+  .aMenu .mi:hover{background:var(--raised)} .aMenu .mi .k{margin-left:auto;font-size:10.5px;color:var(--faint);background:var(--overlay);border-radius:5px;padding:1px 6px}
+  .aMenu .mi.cfg{color:var(--accent)} .aMenu .sep{height:1px;background:var(--line);margin:5px 4px}
 
   .execRow{display:flex;align-items:center;gap:13px;min-height:36px;margin-top:6px}
   .btnPrimary{display:inline-flex;align-items:center;gap:8px;height:36px;padding:0 16px;border-radius:9px;background:var(--accent);color:#fff;font-size:13.5px;font-weight:500}.btnPrimary:hover{background:var(--accent-hover)}
@@ -217,7 +227,22 @@
                 <div class="cInput" id="cInput"><textarea id="ta" placeholder="随手写下要做的事…"></textarea></div>
                 <div class="toolbar" id="cToolbar">
                   <button class="tb" title="附件">＋</button>
-                  <button class="tb chip2" id="agentPick">🤖 @claude <span class="ca">▾</span></button>
+                  <span class="aWrap">
+                    <button class="tb chip2" id="agentPick">🤖 @claude <span class="ca">▾</span></button>
+                    <div class="aMenu" id="aMenu">
+                      <div class="mh">本地智能体 · CLI</div>
+                      <button class="mi" data-a="@claude" data-ic="🤖">🤖 @claude<span class="k">本地</span></button>
+                      <button class="mi" data-a="@codex" data-ic="🤖">🤖 @codex<span class="k">本地</span></button>
+                      <button class="mi" data-a="@antigravity" data-ic="🤖">🤖 @antigravity<span class="k">本地</span></button>
+                      <div class="sep"></div>
+                      <div class="mh">直接调用大模型 · 项目 API Key</div>
+                      <button class="mi" data-a="Claude Opus 4.x" data-ic="✦">✦ Claude Opus 4.x<span class="k">API</span></button>
+                      <button class="mi" data-a="Claude Sonnet 4.x" data-ic="✦">✦ Claude Sonnet 4.x<span class="k">API</span></button>
+                      <button class="mi" data-a="GPT-4o" data-ic="✦">✦ GPT-4o<span class="k">API</span></button>
+                      <div class="sep"></div>
+                      <button class="mi cfg" data-cfg="1">⚙ 配置项目 API Key…</button>
+                    </div>
+                  </span>
                   <span class="tb-sp"></span>
                   <button class="send" id="send" title="记下来 ⌘↵" disabled>↑</button>
                 </div>
@@ -379,7 +404,7 @@ function renderIssueDetail(it){
   const priTxt={high:'高',med:'中',low:'低'}[it.priority]||'无';
   const projPill=it.project?`<button class="pill"><span class="avatar" style="width:16px;height:16px;border-radius:4px;background:#5e6ad2">M</span> ${it.project}</button>`:`<button class="pill warn">⚠ 选择项目归类 ▾</button>`;
   const tasks=(it.taskIds||[]).map(id=>TASKS.find(t=>t.id===id)).filter(Boolean);
-  const linked=tasks.length?tasks.map(t=>`<div class="taskChip" data-task="${t.id}"><span class="run ${t.status}"></span><span>${esc(t.title)} · ${STAT[t.status].t}</span><span class="open">在任务区打开 →</span></div>`).join(''):`<div class="empty">尚无派生执行 · 讨论一致后点「@claude 执行」,会把这条事项的标题、描述和整条讨论一起发给智能体,生成一个任务去跑</div>`;
+  const linked=tasks.length?tasks.map(t=>`<div class="taskChip" data-task="${t.id}"><span class="run ${t.status}"></span><span>${esc(t.title)} · ${STAT[t.status].t}</span><span class="open">在任务区打开 →</span></div>`).join(''):`<div class="empty">尚无派生执行 · 在上面输入框 <b style="color:var(--accent)">@claude</b> 交给它执行,会把这条事项的标题、描述和整条讨论一起打包发给智能体,生成一个任务去跑</div>`;
   $('issueDetail').innerHTML=`
     <div class="dcrumb">${it.project||'未归类'} › 事项</div>
     <div class="dhead"><span class="sdot ${it.staged?'stg':STAT[it.status].c}" style="width:18px;height:18px;margin-top:3px"></span><h2>${esc(it.title)}</h2></div>
@@ -388,14 +413,13 @@ function renderIssueDetail(it){
     <div class="divider"></div>
     <div class="secTitle">💬 讨论 <span style="color:var(--faint);font-weight:400">· 对齐后再执行</span></div>
     <div id="cmts"></div>
-    <div class="cmtComposer"><input id="cmtInput" placeholder="写条评论… 可 @claude 让它给意见"><button class="cmtSend" id="cmtSend">↑</button></div>
-    <div class="divider"></div>
-    <div class="execRow" id="execRow"><button class="btnPrimary" id="execBtn">🤖 @claude 执行</button><span class="execHint">执行 = 把标题、描述和上面整条讨论一起发给智能体,生成任务并立即开跑。</span></div>
-    <div class="linked"><div class="secTitle">派生的执行(任务)</div>${linked}</div>`;
+    <div class="cmtComposer"><button class="atBtn" id="atBtn" title="@ 智能体">@</button><input id="cmtInput" placeholder="写评论一起讨论;输入 @claude 交给它执行"><button class="cmtSend" id="cmtSend">↑</button></div>
+    <div class="cmtHint">普通文字 = 评论讨论 · <b>@claude</b> / <b>@codex</b> = 交给它执行(把标题+描述+整条讨论一起打包发过去)</div>
+    <div class="linked"><div class="secTitle">派生的执行(任务)</div><div id="derived">${linked}</div></div>`;
   renderComments(it);
   $('cmtSend').addEventListener('click',()=>addComment(it));
   $('cmtInput').addEventListener('keydown',e=>{if(e.key==='Enter')addComment(it);});
-  const eb=$('execBtn');if(eb)eb.addEventListener('click',()=>execIssue(it));
+  $('atBtn').addEventListener('click',()=>{const i=$('cmtInput');i.value=(i.value.trim()?i.value.trim()+' ':'')+'@claude ';i.focus();});
   $('issueDetail').querySelectorAll('.taskChip').forEach(c=>c.addEventListener('click',()=>{switchSection('task');openTask(TASKS.find(t=>t.id===c.dataset.task));}));
 }
 function renderComments(it){
@@ -403,17 +427,19 @@ function renderComments(it){
 }
 function addComment(it){
   const v=$('cmtInput').value.trim();if(!v)return;
+  const m=v.match(/@(claude|codex|antigravity)/i);
   it.comments=it.comments||[];it.comments.push({who:'me',name:'我',t:'刚刚',body:v});
-  const wantAI=/@claude|@codex/i.test(v);$('cmtInput').value='';renderComments(it);
-  if(wantAI){ setTimeout(()=>{it.comments.push({who:'ai',name:'@claude',t:'刚刚',body:'收到,我的看法是:先小步验证再铺开,具体可在执行时按这个思路来。'});renderComments(it);},900); }
+  $('cmtInput').value='';renderComments(it);
+  if(m) executeViaMention(it,m[1].toLowerCase()); // @智能体 = 交给它执行(不是普通评论)
 }
-function execIssue(it){
-  if(!it.project){alert('这条还没归到项目,请先在上方「选择项目归类」');return;}
-  const row=$('execRow');row.innerHTML=`<div class="miniTl" id="execTl"></div>`;
-  const seq=['把事项 + 讨论上下文打包发给 @claude','创建任务','开始运行'];let i=0;
+// 在事项输入框 @某个智能体 → 把 事项 + 整条讨论 打包发过去,派生一个任务
+function executeViaMention(it,agent){
+  if(!it.project){alert('这条还没归到项目,先在上方「选择项目归类」再 @ 智能体执行');return;}
+  const der=$('derived');der.innerHTML=`<div class="miniTl" id="execTl"></div>`;
+  const seq=[`把事项 + 整条讨论打包发给 @${agent}`,'创建任务','开始运行'];let i=0;
   (function step(){
     if(i>=seq.length){
-      it.status='prog';const nt={id:'t'+Date.now(),title:it.title,status:'prog',from:{id:it.id,title:it.title}};
+      it.status='prog';const nt={id:'t'+Date.now(),title:it.title,status:'prog',agent,from:{id:it.id,title:it.title}};
       TASKS.unshift(nt);it.taskIds=(it.taskIds||[]).concat(nt.id);
       renderIssueList(it.id);renderIssueDetail(it);return;
     }
@@ -452,7 +478,7 @@ function openTask(t){
   const back=t.from?`<div class="backlink" data-issue="${t.from.id}">← 来自事项:${esc(t.from.title)} · 含讨论上下文</div>`:'';
   $('taskDetail').innerHTML=`${back}
     <div class="dhead"><span class="sdot ${t.status}" style="width:18px;height:18px;margin-top:3px"></span><h2>${esc(t.title)}</h2></div>
-    <div class="metaRow"><button class="pill"><span class="sdot ${t.status}" style="width:11px;height:11px"></span> ${STAT[t.status].t}</button><button class="pill">🤖 @claude</button>${t.from?'<button class="pill"><span class="mut">来源</span> 事项</button>':'<button class="pill"><span class="mut">来源</span> 直接创建</button>'}</div>
+    <div class="metaRow"><button class="pill"><span class="sdot ${t.status}" style="width:11px;height:11px"></span> ${STAT[t.status].t}</button><button class="pill">🤖 @${t.agent||'claude'}</button>${t.from?'<button class="pill"><span class="mut">来源</span> 事项</button>':'<button class="pill"><span class="mut">来源</span> 直接创建</button>'}</div>
     <div class="body">${t.from?'<p>执行目标来自事项「'+esc(t.from.title)+'」的标题、描述与整条讨论。</p>':'<p>这是一个直接创建的任务(无上游事项)。</p>'}</div>
     <div class="divider"></div>
     <div class="secTitle">运行输出</div>
@@ -465,6 +491,17 @@ function renderTaskBoard(){
 }
 
 function esc(s){return s.replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+
+// Hero AI 选择:本地智能体(CLI) / 直连大模型(项目 API Key)
+$('agentPick').addEventListener('click',e=>{e.stopPropagation();$('aMenu').classList.toggle('open');});
+$('aMenu').addEventListener('click',e=>e.stopPropagation());
+$('aMenu').querySelectorAll('.mi').forEach(m=>m.addEventListener('click',()=>{
+  if(m.dataset.cfg){ alert('打开 项目设置 → API Key:配进 Anthropic / OpenAI 的 key 后,这里就能直接选用大模型,解析/执行走 API 而不是本地 CLI'); $('aMenu').classList.remove('open'); return; }
+  $('agentPick').innerHTML=`${m.dataset.ic} ${m.dataset.a} <span class="ca">▾</span>`;
+  $('aMenu').classList.remove('open');
+}));
+document.addEventListener('click',()=>$('aMenu').classList.remove('open'));
+
 showHeroTitle();setTimeout(()=>ta.focus(),120);
 </script>
 </body>
