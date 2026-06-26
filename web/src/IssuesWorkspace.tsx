@@ -80,6 +80,7 @@ export function IssuesWorkspace({
   const current = visible.find((i) => i.id === selectedIssue) ?? null;
   // Hero 草稿提到这里:未发送时切到别的 issue / 关掉 hero,再回来草稿还在(HeroComposer 卸载也不丢)。
   const [heroDraft, setHeroDraft] = useState("");
+  const heroAtt = usePasteAttachments(); // 草稿里的附件也提到这层,跟着文字一起留存
 
   return (
     <div className="flex min-h-0 flex-1">
@@ -117,6 +118,7 @@ export function IssuesWorkspace({
             projects={projects}
             text={heroDraft}
             setText={setHeroDraft}
+            att={heroAtt}
             onOpenSettings={onOpenSettings}
             onCreated={(iss) => {
               setIssues((prev) => [iss, ...prev]);
@@ -137,6 +139,7 @@ function HeroComposer({
   projects,
   text,
   setText,
+  att,
   onCreated,
   onAssignNeeded,
   patchIssueLocal,
@@ -146,6 +149,7 @@ function HeroComposer({
   projects: ProjectView[];
   text: string;
   setText: (v: string) => void;
+  att: ReturnType<typeof usePasteAttachments>;
   onCreated: (i: Issue) => void;
   onAssignNeeded: (i: Issue) => void;
   patchIssueLocal: (i: Issue) => void;
@@ -157,7 +161,8 @@ function HeroComposer({
   const [busy, setBusy] = useState(false);
   const [user, setUser] = useState(""); // submitted text shown as a bubble
   const [staged, setStaged] = useState<Issue | null>(null); // 未归类待选项目
-  const { attachments, onPaste, addFiles, remove, clear, error } = usePasteAttachments();
+  // 附件也提到 IssuesWorkspace(它不随 HeroComposer 卸载),粘贴的图随草稿一起留存。
+  const { attachments, onPaste, addFiles, remove, clear, error } = att;
   const heroTitle = useRef(randomHero());
   const taRef = useRef<HTMLTextAreaElement>(null);
   const titleRef = useRef<HTMLDivElement>(null);
