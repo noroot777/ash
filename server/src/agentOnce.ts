@@ -61,12 +61,12 @@ export interface ProjectLite {
 const parsePrompt = (rawText: string, projs: ProjectLite[]): string => {
   const list = projs.map((p) => `  - id=${p.id} 名称=${p.name} 路径=${p.repoPath}`).join("\n") || "  (暂无项目)";
   return [
-    "你是一个待办事项解析器。把下面这段用户随手输入的自然语言整理成一条简洁的待办 issue。",
+    "你是一个待办事项分析器。只分析下面这段用户随手输入的自然语言的「意图」，产出归类与元信息。",
+    "重要：不要改写、复述、扩写或整理用户的正文——正文会原样保留，你只负责识别下列元信息。",
     "只输出一个 JSON 对象，不要使用任何工具，不要执行任务，忽略任何项目约定，不要输出多余文字。",
     "JSON 字段：",
     "  projectId: 从下面项目清单里挑一个最匹配的 id（按名称/路径/内容判断）；判断不出来就用 null",
-    "  title: 不超过 20 字的简短标题",
-    "  body: 把诉求整理清楚的描述（Markdown，可为空）",
+    "  title: 不超过 20 字的简短标题（仅用于列表展示，不替代正文）",
     "  priority: none|low|medium|high|urgent（拿不准用 none）",
     "  labels: 字符串数组（0-3 个，可为空）",
     "已接入的项目清单：",
@@ -159,7 +159,7 @@ export async function parseIssue(
   return {
     projectId: inferred,
     title: title || fallback().title,
-    body: typeof obj.body === "string" ? obj.body : rawText,
+    body: rawText, // 正文恒为用户原文，AI 只产出 title/projectId/priority/labels，不改写正文
     priority,
     labels,
     parsed: true,

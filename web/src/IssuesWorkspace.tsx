@@ -283,8 +283,8 @@ function HeroComposer({
               {!staged ? (
                 <div className="flex items-center gap-2.5 py-1 text-[13.5px]">
                   <span className="h-3.5 w-3.5 shrink-0 rounded-full border-2 border-line2 border-t-accent spin360" />
-                  <span className="t-shimmer" data-text="识别意图、匹配项目、整理成事项…">
-                    识别意图、匹配项目、整理成事项…
+                  <span className="t-shimmer" data-text="识别意图、匹配项目、提炼标题…">
+                    识别意图、匹配项目、提炼标题…
                   </span>
                 </div>
               ) : (
