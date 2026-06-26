@@ -7,6 +7,7 @@ import { api } from "./api";
 import { Menu, Pill } from "./Menu";
 import { PriorityIcon, ProjectAvatar } from "./ui";
 import { PRIORITIES } from "./constants";
+import { ConfirmModal } from "./Modal";
 import { usePasteAttachments, AttachmentChips, AttachButton, StoredAttachments } from "./pasteAttachments";
 
 // Local CLI agents always available in the composer. Direct-LLM connections (中转站)
@@ -385,6 +386,7 @@ function IssueDetail({
   const [editing, setEditing] = useState(false); // 编辑标题+描述
   const [editTitle, setEditTitle] = useState(issue.title);
   const [editBody, setEditBody] = useState(issue.body);
+  const [confirmDel, setConfirmDel] = useState(false);
   const { attachments, onPaste, addFiles, remove, clear, error } = usePasteAttachments();
   const project = projects.find((p) => p.id === issue.projectId) ?? null;
 
@@ -412,7 +414,6 @@ function IssueDetail({
     setEditing(false);
   };
   const del = async () => {
-    if (!confirm("删除这条事项?讨论评论会一起删除(已派生的任务保留)。")) return;
     try {
       await api.deleteIssue(issue.id);
       onDeleted();
@@ -464,7 +465,7 @@ function IssueDetail({
                 <PencilSimple size={13} /> 编辑
               </button>
               <button
-                onClick={del}
+                onClick={() => setConfirmDel(true)}
                 className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-muted hover:bg-raised hover:text-red-600"
                 title="删除事项"
               >
@@ -609,6 +610,16 @@ function IssueDetail({
           </div>
         )}
       </div>
+      {confirmDel && (
+        <ConfirmModal
+          title="删除事项"
+          message="删除这条事项?讨论评论会一起删除(已派生的任务保留)。"
+          confirmLabel="删除"
+          danger
+          onConfirm={del}
+          onClose={() => setConfirmDel(false)}
+        />
+      )}
     </div>
   );
 }
@@ -627,6 +638,7 @@ function CommentItem({
 }) {
   const [editing, setEditing] = useState(false);
   const [text, setText] = useState(comment.body);
+  const [confirmDel, setConfirmDel] = useState(false);
   const { attachments, onPaste, addFiles, remove, clear, error } = usePasteAttachments();
   const ai = comment.author.kind === "agent";
   const name = comment.author.kind === "agent" ? `@${comment.author.agentType}` : "我";
@@ -644,7 +656,6 @@ function CommentItem({
     setEditing(false);
   };
   const del = async () => {
-    if (!confirm("删除这条评论?")) return;
     await api.deleteIssueComment(issueId, comment.id);
     onDeleted(comment.id);
   };
@@ -663,7 +674,7 @@ function CommentItem({
               <button onClick={startEdit} className="grid h-6 w-6 place-items-center rounded text-faint hover:bg-raised hover:text-ink" title="编辑">
                 <PencilSimple size={12} />
               </button>
-              <button onClick={del} className="grid h-6 w-6 place-items-center rounded text-faint hover:bg-raised hover:text-red-600" title="删除">
+              <button onClick={() => setConfirmDel(true)} className="grid h-6 w-6 place-items-center rounded text-faint hover:bg-raised hover:text-red-600" title="删除">
                 <Trash size={12} />
               </button>
             </span>
@@ -702,6 +713,16 @@ function CommentItem({
           </>
         )}
       </div>
+      {confirmDel && (
+        <ConfirmModal
+          title="删除评论"
+          message="删除这条评论?"
+          confirmLabel="删除"
+          danger
+          onConfirm={del}
+          onClose={() => setConfirmDel(false)}
+        />
+      )}
     </div>
   );
 }
