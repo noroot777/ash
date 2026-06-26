@@ -13,6 +13,7 @@ import { applyDebateEvent, emptyDebate, type DebateState } from "./debateState";
 import { AgentsPanel } from "./AgentsPanel";
 import { Menu } from "./Menu";
 import { NewProjectModal, NewGroupModal, ConfirmModal, WorktreeCleanupModal } from "./Modal";
+import { toast, Toaster } from "./toast";
 import { GroupsPanel } from "./GroupsPanel";
 import { ProjectSettings } from "./ProjectSettings";
 import { HealthDot, ProjectAvatar } from "./ui";
@@ -305,7 +306,7 @@ export function App() {
     try {
       await api.deleteProject(projectId);
     } catch (e) {
-      alert(e instanceof Error ? e.message : String(e)); // e.g. 409 有任务在跑
+      toast(e instanceof Error ? e.message : String(e)); // e.g. 409 有任务在跑
       return;
     }
     setProjects((ps) => {
@@ -649,6 +650,7 @@ export function App() {
           }}
         />
       )}
+      <Toaster />
     </div>
   );
 }

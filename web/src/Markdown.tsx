@@ -1,5 +1,6 @@
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { toast } from "./toast";
 
 function isLocalOpenHref(href?: string): href is string {
   if (!href) return false;
@@ -46,7 +47,7 @@ export function Markdown({ text }: { text: string }) {
                   onClick?.(e);
                   if (!localOpen || e.defaultPrevented) return;
                   e.preventDefault();
-                  void openLocalPath(href).catch((err) => alert(err instanceof Error ? err.message : String(err)));
+                  void openLocalPath(href).catch((err) => toast(err instanceof Error ? err.message : String(err)));
                 }}
                 {...p}
               />

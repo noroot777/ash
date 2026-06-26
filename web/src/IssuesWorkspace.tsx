@@ -8,6 +8,7 @@ import { Menu, Pill } from "./Menu";
 import { PriorityIcon, ProjectAvatar } from "./ui";
 import { PRIORITIES } from "./constants";
 import { ConfirmModal } from "./Modal";
+import { toast } from "./toast";
 import { usePasteAttachments, AttachmentChips, AttachButton, StoredAttachments } from "./pasteAttachments";
 
 // Local CLI agents always available in the composer. Direct-LLM connections (中转站)
@@ -176,7 +177,7 @@ function HeroComposer({
         onCreated(issue); // 选中它 → 主区切到详情
       }
     } catch (e) {
-      alert("创建失败:" + (e instanceof Error ? e.message : String(e)));
+      toast("创建失败:" + (e instanceof Error ? e.message : String(e)));
       setBusy(false);
       setUser("");
       titleRef.current?.classList.remove("is-hiding");
@@ -190,7 +191,7 @@ function HeroComposer({
       patchIssueLocal(updated);
       onSelectIssue(updated.id);
     } catch (e) {
-      alert("归类失败:" + (e instanceof Error ? e.message : String(e)));
+      toast("归类失败:" + (e instanceof Error ? e.message : String(e)));
     }
   };
 
@@ -418,7 +419,7 @@ function IssueDetail({
       await api.deleteIssue(issue.id);
       onDeleted();
     } catch (e) {
-      alert(e instanceof Error ? e.message : String(e));
+      toast(e instanceof Error ? e.message : String(e));
     }
   };
 
@@ -440,7 +441,7 @@ function IssueDetail({
       }
     } catch (e) {
       // 422/409 etc. — e.g. 未归类不能执行
-      alert(e instanceof Error ? e.message : String(e));
+      toast(e instanceof Error ? e.message : String(e));
     }
   };
 
