@@ -423,6 +423,7 @@ function IssueDetail({
   const { attachments, onPaste, addFiles, remove, clear, error } = usePasteAttachments();
   const editAtt = usePasteAttachments(); // 编辑态新加的附件(与下方评论框那套独立)
   const [editAttachments, setEditAttachments] = useState<string[]>(issue.attachments); // 编辑态保留的已有附件
+  const [execWorktree, setExecWorktree] = useState(false); // @执行是否隔离到 worktree(默认否,对齐任务的 opt-in)
   const project = projects.find((p) => p.id === issue.projectId) ?? null;
 
   useEffect(() => {
@@ -469,7 +470,7 @@ function IssueDetail({
     setDraft("");
     clear();
     try {
-      const res = await api.postIssueComment(issue.id, { body, mention, attachments: paths });
+      const res = await api.postIssueComment(issue.id, { body, mention, attachments: paths, useWorktree: execWorktree });
       setComments((prev) => [...prev, res.comment]);
       if (res.task) {
         setExecNote(`已派给 @${mention} · 任务运行中`);
@@ -632,6 +633,19 @@ function IssueDetail({
         <div className="mt-1.5 text-[11.5px] text-faint">
           普通文字 = 评论讨论 · <b className="font-semibold text-accent">@claude</b> / <b className="font-semibold text-accent">@codex</b> = 交给它执行(把标题+描述+整条讨论一起打包发过去)
         </div>
+        {project?.health.isRepo && (
+          <label className="mt-1.5 inline-flex cursor-pointer items-center gap-1.5 text-[11.5px] text-faint" title="默认直接在项目仓库改;开启则隔离到 harness/<id8> 分支(你自行 merge),并能在下方看到它的提交">
+            <button
+              type="button"
+              onClick={() => setExecWorktree((v) => !v)}
+              className={`relative h-3.5 w-6 shrink-0 rounded-full transition-colors ${execWorktree ? "bg-accent" : "bg-line2"}`}
+              aria-pressed={execWorktree}
+            >
+              <span className={`absolute top-0.5 h-2.5 w-2.5 rounded-full bg-panel transition-all ${execWorktree ? "left-3" : "left-0.5"}`} />
+            </button>
+            @执行用 worktree 隔离 · {execWorktree ? "改动落在独立分支(你自行 merge)" : "默认直接改主仓库"}
+          </label>
+        )}
 
         <div className="my-6 h-px bg-line" />
 

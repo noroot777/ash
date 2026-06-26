@@ -197,7 +197,7 @@ export const api = {
     fetch(`/api/issues/${id}/comments`).then(j),
   // Post a comment. Plain = discussion. With `mention` (a CLI agentType) it ALSO
   // executes: derives a task carrying title + body + the whole thread.
-  postIssueComment: (id: string, body: { body: string; mention?: AgentType; attachments?: string[] }): Promise<{ comment: IssueComment; task?: Task }> =>
+  postIssueComment: (id: string, body: { body: string; mention?: AgentType; attachments?: string[]; useWorktree?: boolean }): Promise<{ comment: IssueComment; task?: Task }> =>
     fetch(`/api/issues/${id}/comments`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }).then(j),
   patchIssueComment: (issueId: string, cid: string, patch: { body?: string; attachments?: string[] }): Promise<IssueComment> =>
     fetch(`/api/issues/${issueId}/comments/${cid}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(patch) }).then(j),

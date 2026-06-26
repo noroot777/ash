@@ -1116,7 +1116,7 @@ api.post("/issues/:id/comments", async (c) => {
   const iid = c.req.param("id");
   const issue = (await db.select().from(issues).where(eq(issues.id, iid))).at(0);
   if (!issue) return c.json({ error: "not found" }, 404);
-  const b = await c.req.json<{ body?: string; mention?: AgentType; attachments?: string[] }>();
+  const b = await c.req.json<{ body?: string; mention?: AgentType; attachments?: string[]; useWorktree?: boolean }>();
   if (!b.body?.trim() && !b.attachments?.length) return c.json({ error: "empty" }, 400);
   if (b.mention) {
     if (!AGENT_TYPES.includes(b.mention)) return c.json({ error: "未知的 agent（执行只支持本地 CLI 智能体）", agent: b.mention }, 400);
@@ -1140,11 +1140,12 @@ api.post("/issues/:id/comments", async (c) => {
       a.createdAt.localeCompare(d.createdAt),
     );
     const tid = id();
-    // Run the derived task in an isolated worktree (when the project is a git repo)
-    // so its commits land on a clean branch `harness/<id8>` — that's what links the
-    // issue to its code (see GET /tasks/:id/commits). Non-repos run in place.
+    // Worktree is OPT-IN (default off), mirroring the new-task form — the user
+    // manages isolation themselves. Only when they tick 「worktree 隔离」 at @执行
+    // (and the project is a git repo) does the derived task run on a clean branch;
+    // that's also what enables the issue → commits linkage (GET /tasks/:id/commits).
     const proj = (await db.select().from(projects).where(eq(projects.id, issue.projectId))).at(0);
-    const useWt = proj ? projectHealthLight(proj.repoPath).isRepo : false;
+    const useWt = !!b.useWorktree && (proj ? projectHealthLight(proj.repoPath).isRepo : false);
     const trow = {
       id: tid,
       projectId: issue.projectId,
