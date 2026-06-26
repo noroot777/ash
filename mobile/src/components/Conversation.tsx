@@ -8,8 +8,8 @@
 // surrounding 你→/〔系统〕 markers (their `at`) + the Session's startedAt/endedAt.
 // Every agent bubble carries ITS OWN time — a resumed session prints one 用时 per
 // turn, never repeating the whole-session span. Mirrors web's buildConversation.
-import { Fragment } from "react";
-import { View, Text } from "react-native";
+import { Fragment, useRef, useState } from "react";
+import { View, Text, Pressable } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import type { Session } from "@harness/shared";
 import type { LogLine } from "@/lib/log";
@@ -17,6 +17,7 @@ import { useTheme, radius, fonts, type Theme } from "@/lib/theme";
 import { formatInstant, Duration } from "@/lib/time";
 import { SelectableText } from "./SelectableText";
 import { MarkdownText } from "./MarkdownText";
+import { SelectSheet } from "./SelectSheet";
 
 type Block =
   | { kind: "agentText"; text: string; agent?: string; sessionId?: string; endedAt?: string; key: string }
@@ -73,6 +74,7 @@ export function Conversation({
 }) {
   const theme = useTheme();
   const blocks = toBlocks(lines);
+  const [selText, setSelText] = useState<string | null>(null);
   // Tail fallback for a run's LAST turn when nothing follows it in-stream: the
   // session's own endedAt, else the next run's start, else the task's endedAt.
   // Never "now", so finished historical views don't tick.
@@ -129,55 +131,85 @@ export function Conversation({
   }
 
   return (
-    <View style={{ gap: 10 }}>
-      {blocks.map((b) => (
-        <Fragment key={b.key}>
-          {renderBlock(b, theme, b.kind === "agentText" ? timings.get(b.key) : undefined)}
-        </Fragment>
-      ))}
+    <>
+      <View style={{ gap: 10 }}>
+        {blocks.map((b) => (
+          <Fragment key={b.key}>
+            {renderBlock(b, theme, b.kind === "agentText" ? timings.get(b.key) : undefined, setSelText)}
+          </Fragment>
+        ))}
+      </View>
+      {selText != null && <SelectSheet text={selText} onClose={() => setSelText(null)} />}
+    </>
+  );
+}
+
+const bubbleStyle = (theme: Theme) => ({
+  backgroundColor: theme.panel,
+  borderWidth: 1,
+  borderColor: theme.line,
+  borderRadius: radius.lg,
+  borderTopLeftRadius: 4,
+  paddingHorizontal: 12,
+  paddingVertical: 8,
+  alignSelf: "flex-start" as const,
+  maxWidth: "100%" as const,
+});
+
+// One agent text bubble: renders markdown (non-selectable — iOS UILabel gives no
+// drag handles anyway), and a double-tap OR long-press opens the raw text in a
+// full-screen SelectSheet whose UITextView-backed TextInput DOES give handles.
+// Pretty in the thread, freely selectable on demand. Mirrors the WeChat pattern.
+function AgentBubble({
+  b,
+  theme,
+  timing,
+  onSelect,
+}: {
+  b: Extract<Block, { kind: "agentText" }>;
+  theme: Theme;
+  timing?: { time: string | null; endedAt: string | null };
+  onSelect?: (t: string) => void;
+}) {
+  const lastTap = useRef(0);
+  const metaText = { color: theme.faint, fontSize: 11, fontFamily: fonts.mono } as const;
+  const onTap = () => {
+    const n = Date.now();
+    if (n - lastTap.current < 300) onSelect?.(b.text);
+    lastTap.current = n;
+  };
+  return (
+    <View>
+      {b.agent || timing?.time ? (
+        <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 6, marginBottom: 3, marginLeft: 2 }}>
+          {b.agent ? <Text style={metaText}>@{b.agent}</Text> : null}
+          {timing?.time ? (
+            <>
+              <Text style={{ color: theme.faint, fontSize: 11 }}>·</Text>
+              <Text style={metaText}>{formatInstant(timing.time)}</Text>
+              <Text style={{ color: theme.faint, fontSize: 11 }}>·</Text>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 2 }}>
+                <Ionicons name="time-outline" size={11} color={theme.faint} />
+                <Duration from={timing.time} to={timing.endedAt} style={metaText} />
+                <Text style={metaText}> 用时</Text>
+              </View>
+            </>
+          ) : null}
+        </View>
+      ) : null}
+      <Pressable onPress={onTap} onLongPress={() => onSelect?.(b.text)} delayLongPress={350} style={bubbleStyle(theme)}>
+        <MarkdownText value={b.text} selectable={false} style={{ color: theme.ink, fontSize: 14, lineHeight: 21 }} />
+      </Pressable>
     </View>
   );
 }
 
-function renderBlock(b: Block, theme: Theme, timing?: { time: string | null; endedAt: string | null }) {
-  const agentBubble = {
-    backgroundColor: theme.panel,
-    borderWidth: 1,
-    borderColor: theme.line,
-    borderRadius: radius.lg,
-    borderTopLeftRadius: 4,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    alignSelf: "flex-start" as const,
-    maxWidth: "100%" as const,
-  };
+function renderBlock(b: Block, theme: Theme, timing?: { time: string | null; endedAt: string | null }, onSelect?: (t: string) => void) {
+  const agentBubble = bubbleStyle(theme);
   const metaText = { color: theme.faint, fontSize: 11, fontFamily: fonts.mono } as const;
   switch (b.kind) {
     case "agentText":
-      return (
-        <View>
-          {b.agent || timing?.time ? (
-            <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 6, marginBottom: 3, marginLeft: 2 }}>
-              {b.agent ? <Text style={metaText}>@{b.agent}</Text> : null}
-              {timing?.time ? (
-                <>
-                  <Text style={{ color: theme.faint, fontSize: 11 }}>·</Text>
-                  <Text style={metaText}>{formatInstant(timing.time)}</Text>
-                  <Text style={{ color: theme.faint, fontSize: 11 }}>·</Text>
-                  <View style={{ flexDirection: "row", alignItems: "center", gap: 2 }}>
-                    <Ionicons name="time-outline" size={11} color={theme.faint} />
-                    <Duration from={timing.time} to={timing.endedAt} style={metaText} />
-                    <Text style={metaText}> 用时</Text>
-                  </View>
-                </>
-              ) : null}
-            </View>
-          ) : null}
-          <View style={agentBubble}>
-            <MarkdownText value={b.text} style={{ color: theme.ink, fontSize: 14, lineHeight: 21 }} />
-          </View>
-        </View>
-      );
+      return <AgentBubble b={b} theme={theme} timing={timing} onSelect={onSelect} />;
     case "thinking":
       return (
         <View style={[agentBubble, { backgroundColor: "transparent", borderColor: theme.line }]}>
