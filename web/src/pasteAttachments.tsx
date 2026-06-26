@@ -1,4 +1,5 @@
-import { useState, useCallback, useRef, type ClipboardEvent } from "react";
+import { useState, useCallback, useRef, useEffect, type ClipboardEvent } from "react";
+import { createPortal } from "react-dom";
 import { X, File as FileIcon, Paperclip } from "@phosphor-icons/react";
 import { maxBytesFor, type AttachmentKind } from "@harness/shared";
 import { api } from "./api";
@@ -175,6 +176,14 @@ export function AttachmentChips({
 // extension decides image-thumbnail vs file-chip.
 const IMAGE_EXT = /\.(png|jpe?g|gif|webp|svg)$/i;
 export function StoredAttachments({ paths, className = "" }: { paths: string[]; className?: string }) {
+  // Click an image → in-page lightbox (not a new browser tab). Esc / click-out closes.
+  const [zoom, setZoom] = useState<string | null>(null);
+  useEffect(() => {
+    if (!zoom) return;
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setZoom(null);
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [zoom]);
   if (!paths.length) return null;
   return (
     <div className={`flex flex-wrap gap-2 ${className}`}>
@@ -184,9 +193,15 @@ export function StoredAttachments({ paths, className = "" }: { paths: string[]; 
         const name = file.replace(/^[A-Za-z0-9]+-/, "");
         const url = `/api/uploads/${file}`;
         return IMAGE_EXT.test(file) ? (
-          <a key={p} href={url} target="_blank" rel="noreferrer" className="block h-14 w-14 overflow-hidden rounded-md border border-line2" title={name}>
+          <button
+            key={p}
+            type="button"
+            onClick={() => setZoom(url)}
+            className="block h-14 w-14 overflow-hidden rounded-md border border-line2 transition-colors hover:border-accent"
+            title={name}
+          >
             <img src={url} alt={name} className="h-full w-full object-cover" />
-          </a>
+          </button>
         ) : (
           <a
             key={p}
@@ -201,6 +216,20 @@ export function StoredAttachments({ paths, className = "" }: { paths: string[]; 
           </a>
         );
       })}
+      {zoom &&
+        createPortal(
+          <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/80 p-8" onClick={() => setZoom(null)}>
+            <img src={zoom} alt="" className="max-h-full max-w-full rounded-lg object-contain shadow-2xl" onClick={(e) => e.stopPropagation()} />
+            <button
+              onClick={() => setZoom(null)}
+              className="absolute right-5 top-5 grid h-9 w-9 place-items-center rounded-full bg-white/10 text-white hover:bg-white/20"
+              title="关闭 Esc"
+            >
+              <X size={18} />
+            </button>
+          </div>,
+          document.body,
+        )}
     </div>
   );
 }

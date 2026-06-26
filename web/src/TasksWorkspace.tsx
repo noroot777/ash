@@ -29,6 +29,7 @@ export function TasksWorkspace({
   setSidebarW,
   archivedCount,
   onNewTask,
+  onGroups,
   onRun,
   onStop,
   onRetry,
@@ -56,6 +57,7 @@ export function TasksWorkspace({
   setSidebarW: (w: number) => void;
   archivedCount: number;
   onNewTask: () => void;
+  onGroups: () => void;
   onRun: (id: string) => void;
   onStop: (id: string) => void;
   onRetry: (id: string) => void;
@@ -90,6 +92,13 @@ export function TasksWorkspace({
           <NotePencil size={17} />
         </button>
         <span className="flex-1" />
+        <button
+          onClick={onGroups}
+          className="rounded-md px-2.5 py-1 text-[12px] text-muted transition-colors hover:bg-raised hover:text-ink"
+          title="分组管理"
+        >
+          分组
+        </button>
         <div className="flex items-center gap-0.5 rounded-lg bg-raised p-0.5 text-[12px]">
           {tab("list", "列表")}
           {tab("board", "看板")}

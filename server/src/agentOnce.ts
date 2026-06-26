@@ -131,21 +131,27 @@ export async function parseIssue(
     parsed: false,
   });
 
-  let out = "";
+  const prompt = parsePrompt(rawText, opts.projects);
+  const cliAgent = opts.backend?.kind === "cli" ? opts.backend.agentType : "claude";
+  let obj: Record<string, unknown> | null = null;
   try {
-    if (opts.backend?.kind === "api" && opts.apiProvider) {
-      out = await callModel(opts.apiProvider, parsePrompt(rawText, opts.projects));
-    } else {
-      const r = await runAgentOnce(parsePrompt(rawText, opts.projects), {
-        agentType: opts.backend?.kind === "cli" ? opts.backend.agentType : "claude",
-      });
-      out = r.text;
-    }
+    const out =
+      opts.backend?.kind === "api" && opts.apiProvider
+        ? await callModel(opts.apiProvider, prompt)
+        : (await runAgentOnce(prompt, { agentType: cliAgent })).text;
+    obj = extractJson(out);
   } catch {
-    return fallback();
+    /* fall through to the CLI retry below */
   }
-
-  const obj = extractJson(out);
+  // 直连 API(中转站)失败或没产出可解析 JSON 时,退一步用本地 claude 再解析一次 ——
+  // 标题就不会因为中转站抽风而无声退化成「截断首行」。
+  if (!obj && opts.backend?.kind === "api") {
+    try {
+      obj = extractJson((await runAgentOnce(prompt, { agentType: "claude" })).text);
+    } catch {
+      /* give up → fallback */
+    }
+  }
   if (!obj) return fallback();
 
   const inferred = typeof obj.projectId === "string" && opts.projects.some((p) => p.id === obj.projectId)

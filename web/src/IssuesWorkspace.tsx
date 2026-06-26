@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { Issue, IssueComment, Task, AgentType, AiBackend, ProjectView, Priority, LlmProvider } from "@harness/shared";
-import { ArrowUp, Robot, Sparkle, Trash, PencilSimple, Check } from "@phosphor-icons/react";
+import { ArrowUp, Robot, Sparkle, Trash, PencilSimple, Check, GearSix, Plus } from "@phosphor-icons/react";
 import { api } from "./api";
 import { Menu, Pill } from "./Menu";
 import { PriorityIcon, ProjectAvatar } from "./ui";
@@ -42,6 +42,10 @@ const randomHero = () => {
   return t[Math.floor(Math.random() * t.length)];
 };
 
+// 正文恒为用户原文(逐行记的 1、2、3…)。markdown 会把段内单换行折叠成一行,所以把
+// 段内单换行转成硬换行(行尾两空格),空行(段落分隔)保持不变 —— 不引第三方插件。
+const mdBreaks = (s: string) => s.replace(/([^\n])\n(?!\n)/g, "$1  \n");
+
 export function IssuesWorkspace({
   projects,
   projectId,
@@ -51,6 +55,7 @@ export function IssuesWorkspace({
   onSelectIssue,
   onOpenTask,
   taskBump,
+  onOpenSettings,
 }: {
   projects: ProjectView[];
   projectId: string | null;
@@ -60,6 +65,7 @@ export function IssuesWorkspace({
   onSelectIssue: (id: string | null) => void;
   onOpenTask: (taskId: string) => void;
   taskBump: number;
+  onOpenSettings: () => void;
 }) {
   // The list shows the current project's issues + every 未归类 (staging) issue.
   const visible = useMemo(
@@ -72,20 +78,21 @@ export function IssuesWorkspace({
   // another project's issue and leak it into the wrong project. Scoping `current`
   // to `visible` makes that show nothing here instead.
   const current = visible.find((i) => i.id === selectedIssue) ?? null;
+  // Hero 草稿提到这里:未发送时切到别的 issue / 关掉 hero,再回来草稿还在(HeroComposer 卸载也不丢)。
+  const [heroDraft, setHeroDraft] = useState("");
 
   return (
     <div className="flex min-h-0 flex-1">
       {issues.length > 0 && (
         <aside className="flex w-[300px] shrink-0 flex-col border-r border-line bg-panel">
-          <div className="sticky top-0 z-[2] border-b border-line bg-panel p-2.5">
+          <div className="sticky top-0 z-[2] flex items-center justify-between border-b border-line bg-panel px-3 py-2">
+            <span className="text-[12px] font-medium text-muted">事项 · {visible.length}</span>
             <button
               onClick={() => onSelectIssue(null)}
-              className="flex w-full items-center gap-2 rounded-[10px] border border-line2 px-2.5 py-2 text-left text-[13px] text-faint hover:border-accent"
+              className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[12.5px] font-medium text-accent hover:bg-raised"
+              title="新建事项(回到输入框)"
             >
-              <span className="flex-1">随手记一条新事项…</span>
-              <span className="grid h-6 w-6 place-items-center rounded-full bg-accent text-accent-fg">
-                <ArrowUp size={13} weight="bold" />
-              </span>
+              <Plus size={13} weight="bold" /> 新事项
             </button>
           </div>
           <IssueList issues={visible} selected={selectedIssue} onSelect={onSelectIssue} />
@@ -108,6 +115,9 @@ export function IssuesWorkspace({
         ) : (
           <HeroComposer
             projects={projects}
+            text={heroDraft}
+            setText={setHeroDraft}
+            onOpenSettings={onOpenSettings}
             onCreated={(iss) => {
               setIssues((prev) => [iss, ...prev]);
               onSelectIssue(iss.id);
@@ -125,18 +135,23 @@ export function IssuesWorkspace({
 // ── hero composer with the create morph ──────────────────────────────────────
 function HeroComposer({
   projects,
+  text,
+  setText,
   onCreated,
   onAssignNeeded,
   patchIssueLocal,
   onSelectIssue,
+  onOpenSettings,
 }: {
   projects: ProjectView[];
+  text: string;
+  setText: (v: string) => void;
   onCreated: (i: Issue) => void;
   onAssignNeeded: (i: Issue) => void;
   patchIssueLocal: (i: Issue) => void;
   onSelectIssue: (id: string | null) => void;
+  onOpenSettings: () => void;
 }) {
-  const [text, setText] = useState("");
   const [backendVal, setBackendVal] = useState("cli:claude");
   const [providers, setProviders] = useState<LlmProvider[]>([]);
   const [busy, setBusy] = useState(false);
@@ -157,6 +172,14 @@ function HeroComposer({
     }).catch(() => {});
   }, []);
 
+  // hero 输入框随内容自动增高(上限 40vh,超出滚动)。
+  useEffect(() => {
+    const ta = taRef.current;
+    if (!ta) return;
+    ta.style.height = "auto";
+    ta.style.height = `${Math.min(ta.scrollHeight, Math.round(window.innerHeight * 0.4))}px`;
+  }, [text]);
+
   // 直连大模型(中转站)置顶,本地 CLI 在后。
   const allBackends: BackendChoice[] = [
     ...providers.map((p) => ({ value: `api:${p.id}`, label: p.name, backend: { kind: "api" as const, providerId: p.id } })),
@@ -175,6 +198,7 @@ function HeroComposer({
     try {
       const issue = await api.createIssue({ text: t || "(见附件)", backend, attachments: attachments.map((a) => a.path) });
       clear();
+      setText(""); // 草稿已落成事项,清空
       if (issue.projectId == null) {
         onAssignNeeded(issue);
         setStaged(issue); // 让用户归类,不自动落定
@@ -247,17 +271,20 @@ function HeroComposer({
                 <AttachButton addFiles={addFiles} className="grid h-[30px] w-[30px] place-items-center rounded-lg text-muted hover:bg-raised hover:text-ink" />
                 <Menu
                   value={backendVal}
-                  onChange={setBackendVal}
+                  onChange={(v) => (v === "__settings" ? onOpenSettings() : setBackendVal(v))}
                   menuWidth={260}
-                  options={allBackends.map((b) => {
-                    const prov = b.value.startsWith("api:") ? providers.find((p) => `api:${p.id}` === b.value) : null;
-                    return {
-                      value: b.value,
-                      label: b.label,
-                      detail: prov ? `直连大模型 · ${prov.model || "未设模型"}` : "本地智能体 · CLI",
-                      icon: <Robot size={14} />,
-                    };
-                  })}
+                  options={[
+                    ...allBackends.map((b) => {
+                      const prov = b.value.startsWith("api:") ? providers.find((p) => `api:${p.id}` === b.value) : null;
+                      return {
+                        value: b.value,
+                        label: b.label,
+                        detail: prov ? `直连大模型 · ${prov.model || "未设模型"}` : "本地智能体 · CLI",
+                        icon: <Robot size={14} />,
+                      };
+                    }),
+                    { value: "__settings", label: "管理大模型连接…", detail: "配置中转站 / API", icon: <GearSix size={14} /> },
+                  ]}
                   triggerClassName="inline-flex items-center gap-1.5 rounded-lg border border-line px-2.5 py-1.5 text-[12.5px] text-muted hover:bg-raised hover:text-ink"
                 >
                   <Robot size={14} /> {backendLabel}
@@ -496,6 +523,12 @@ function IssueDetail({
               className="w-full resize-y rounded-[10px] border border-line2 bg-canvas px-3 py-2 text-[14px] leading-7 text-ink outline-none focus:border-accent"
               placeholder="描述(支持 Markdown)"
             />
+            {issue.attachments.length > 0 && (
+              <div className="mt-2">
+                <div className="mb-1 text-[11px] text-faint">已有附件(编辑描述不影响附件)</div>
+                <StoredAttachments paths={issue.attachments} />
+              </div>
+            )}
             <div className="mt-2 flex justify-end gap-2">
               <button onClick={() => setEditing(false)} className="rounded-md px-3 py-1.5 text-[13px] text-muted hover:bg-raised">
                 取消
@@ -547,7 +580,7 @@ function IssueDetail({
 
         {!editing && issue.body && (
           <div className="markdown text-[14px] leading-7 text-[#33363d]">
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>{issue.body}</ReactMarkdown>
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>{mdBreaks(issue.body)}</ReactMarkdown>
           </div>
         )}
         {!editing && issue.attachments.length > 0 && <StoredAttachments paths={issue.attachments} className="mt-3" />}
@@ -714,7 +747,7 @@ function CommentItem({
           </div>
         ) : (
           <>
-            {comment.body && <div className="text-[13.5px] leading-relaxed text-[#33363d]">{comment.body}</div>}
+            {comment.body && <div className="whitespace-pre-wrap text-[13.5px] leading-relaxed text-[#33363d]">{comment.body}</div>}
             {comment.attachments.length > 0 && <StoredAttachments paths={comment.attachments} className="mt-1.5" />}
           </>
         )}

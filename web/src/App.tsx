@@ -526,17 +526,7 @@ export function App() {
             className={`group flex items-center gap-2.5 rounded-md px-2 py-1.5 text-[13px] ${section === "issue" ? "bg-raised font-medium text-ink" : "text-muted hover:bg-raised hover:text-ink"}`}
           >
             <PencilSimpleLine size={16} className={section === "issue" ? "text-accent" : ""} /> 事项
-            <span className="ml-auto flex items-center gap-1">
-              <span className="rounded-full bg-overlay px-1.5 text-[11px] text-faint">{issueCount}</span>
-              <span
-                role="button"
-                title="新建事项"
-                onClick={(e) => { e.stopPropagation(); setSection("issue"); setSelectedIssue(null); }}
-                className="grid h-[18px] w-[18px] place-items-center rounded text-faint opacity-0 hover:bg-line2 hover:text-ink group-hover:opacity-100"
-              >
-                <Plus size={12} />
-              </span>
-            </span>
+            <span className="ml-auto rounded-full bg-overlay px-1.5 text-[11px] text-faint">{issueCount}</span>
           </button>
           <div className="px-2 pb-1 pt-3 text-[10px] font-semibold uppercase tracking-[0.07em] text-faint">执行</div>
           <button
@@ -551,7 +541,6 @@ export function App() {
         <div className="flex-1" />
 
         <div className="flex flex-col gap-px border-t border-line pt-1.5">
-          <button onClick={() => setGroupsOpen(true)} className="flex items-center gap-2.5 rounded-md px-2 py-1.5 text-[13px] text-muted hover:bg-raised hover:text-ink">分组</button>
           <button onClick={() => setAgentsOpen(true)} className="flex items-center gap-2.5 rounded-md px-2 py-1.5 text-[13px] text-muted hover:bg-raised hover:text-ink">智能体</button>
           <button onClick={() => setSysOpen(true)} className="flex items-center gap-2.5 rounded-md px-2 py-1.5 text-[13px] text-muted hover:bg-raised hover:text-ink"><GearSix size={14} /> 设置</button>
           <button onClick={() => setPaletteOpen(true)} className="flex items-center gap-2.5 rounded-md px-2 py-1.5 text-[13px] text-muted hover:bg-raised hover:text-ink">
@@ -575,6 +564,7 @@ export function App() {
             onSelectIssue={setSelectedIssue}
             onOpenTask={openTask}
             taskBump={taskBump}
+            onOpenSettings={() => setSysOpen(true)}
           />
         ) : (
           <TasksWorkspace
@@ -593,6 +583,7 @@ export function App() {
             setSidebarW={setSidebarW}
             archivedCount={archivedTasks.length}
             onNewTask={() => setCreateOpen(true)}
+            onGroups={() => setGroupsOpen(true)}
             onRun={run}
             onStop={stop}
             onRetry={retry}
