@@ -16,6 +16,7 @@ import type { LogLine } from "@/lib/log";
 import { useTheme, radius, fonts, type Theme } from "@/lib/theme";
 import { formatInstant, Duration } from "@/lib/time";
 import { SelectableText } from "./SelectableText";
+import { MarkdownText } from "./MarkdownText";
 
 type Block =
   | { kind: "agentText"; text: string; agent?: string; sessionId?: string; endedAt?: string; key: string }
@@ -173,7 +174,7 @@ function renderBlock(b: Block, theme: Theme, timing?: { time: string | null; end
             </View>
           ) : null}
           <View style={agentBubble}>
-            <SelectableText value={b.text} style={{ color: theme.ink, fontSize: 14, lineHeight: 21 }} />
+            <MarkdownText value={b.text} style={{ color: theme.ink, fontSize: 14, lineHeight: 21 }} />
           </View>
         </View>
       );
