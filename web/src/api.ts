@@ -205,6 +205,9 @@ export const api = {
     fetch(`/api/issues/${issueId}/comments/${cid}`, { method: "DELETE" }).then(j),
   issueTasks: (id: string): Promise<Task[]> =>
     fetch(`/api/issues/${id}/tasks`).then(j),
+  // Commits a derived task produced on its worktree branch (issue → code linkage).
+  taskCommits: (id: string): Promise<{ branch: string | null; commits: { sha: string; subject: string; at: string }[] }> =>
+    fetch(`/api/tasks/${id}/commits`).then(j),
   // Direct-LLM connections (中转站, system-level) — issue parsing only. List never
   // returns the key (hasKey flag only); send apiKey only when setting/changing it.
   llmProviders: (): Promise<LlmProvider[]> => fetch("/api/llm-providers").then(j),

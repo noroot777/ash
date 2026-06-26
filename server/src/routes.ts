@@ -35,7 +35,7 @@ import { runGroup } from "./scheduler.js";
 import { runDebate, resumeDebate, resumeAtGate } from "./debate/index.js";
 import { resolveGate } from "./debate/gates.js";
 import { detectLocalAgents } from "./detect.js";
-import { projectHealthLight, projectHealthFull, tidyRepoPath, repoKey, listBranches, detectTaskWorktree, removeWorktree } from "./git.js";
+import { projectHealthLight, projectHealthFull, tidyRepoPath, repoKey, listBranches, detectTaskWorktree, removeWorktree, taskCommits } from "./git.js";
 import { resumeCommandFor } from "./executors/spawn.js";
 import type { GateAction, AgentType, BatchCreateTasksBody, BatchTaskInput, ScheduledMessage, ScheduledMessageStatus } from "@harness/shared";
 
@@ -1140,6 +1140,11 @@ api.post("/issues/:id/comments", async (c) => {
       a.createdAt.localeCompare(d.createdAt),
     );
     const tid = id();
+    // Run the derived task in an isolated worktree (when the project is a git repo)
+    // so its commits land on a clean branch `harness/<id8>` — that's what links the
+    // issue to its code (see GET /tasks/:id/commits). Non-repos run in place.
+    const proj = (await db.select().from(projects).where(eq(projects.id, issue.projectId))).at(0);
+    const useWt = proj ? projectHealthLight(proj.repoPath).isRepo : false;
     const trow = {
       id: tid,
       projectId: issue.projectId,
@@ -1158,7 +1163,7 @@ api.post("/issues/:id/comments", async (c) => {
       scheduleId: null as string | null,
       createdAt: ts,
       updatedAt: ts,
-      useWorktree: false,
+      useWorktree: useWt,
       worktreeBase: null as string | null,
       issueId: iid,
     };
@@ -1198,6 +1203,18 @@ api.delete("/issues/:id/comments/:cid", async (c) => {
 api.get("/issues/:id/tasks", async (c) => {
   const rows = await db.select().from(tasks).where(eq(tasks.issueId, c.req.param("id")));
   return c.json(await enrichTiming(rows));
+});
+
+// Commits a derived task produced on its isolated worktree branch — the concrete
+// issue → code linkage. Empty when the task ran in place (no worktree).
+api.get("/tasks/:id/commits", async (c) => {
+  const tid = c.req.param("id");
+  const t = (await db.select().from(tasks).where(eq(tasks.id, tid))).at(0);
+  if (!t) return c.json({ error: "not found" }, 404);
+  const project = (await db.select().from(projects).where(eq(projects.id, t.projectId))).at(0);
+  const sess = (await db.select().from(sessions).where(eq(sessions.taskId, tid))).find((s) => s.worktreePath);
+  if (!sess?.worktreePath || !project) return c.json({ branch: null, commits: [] });
+  return c.json(await taskCommits(sess.worktreePath, project.repoPath, t.worktreeBase));
 });
 
 // ── direct-LLM connections (中转站, system-level) — for issue parsing only ────

@@ -155,6 +155,37 @@ export function detectTaskWorktree(repoPath: string, taskId: string): { path: st
   return { path, branch: worktreeBranchName(taskId) };
 }
 
+// List the commits a worktree task produced (issue → code linkage). The agent's
+// commits live on the task's branch since it forked from `base`, so `base..HEAD`
+// is exactly them. base = the user-picked ref, else the main repo's current
+// branch. Empty when we can't isolate (no worktree / unknown base) — honest, not
+// noisy. Capped at 50.
+export async function taskCommits(
+  worktreePath: string | null | undefined,
+  repoPath: string,
+  base: string | null | undefined,
+): Promise<{ branch: string | null; commits: { sha: string; subject: string; at: string }[] }> {
+  const wt = expandHome(worktreePath);
+  if (!wt || !isDir(wt)) return { branch: null, commits: [] };
+  try {
+    const branch = (await currentBranch(wt)) ?? null;
+    let baseRef = (base ?? "").trim();
+    if (!baseRef) baseRef = (await currentBranch(expandHome(repoPath))) ?? "";
+    if (!baseRef || baseRef === branch) return { branch, commits: [] };
+    const { stdout } = await exec("git", ["-C", wt, "log", "--format=%H%x1f%s%x1f%cI", "-n", "50", `${baseRef}..HEAD`]);
+    const commits = stdout
+      .split("\n")
+      .filter(Boolean)
+      .map((l) => {
+        const [sha, subject, at] = l.split("\x1f");
+        return { sha, subject, at };
+      });
+    return { branch, commits };
+  } catch {
+    return { branch: null, commits: [] };
+  }
+}
+
 // Materialize (or reuse) the worktree for this task. Idempotent:
 //   • dir exists  → return as-is (re-run, retry, continue)
 //   • dir missing → `git worktree add -b <branch> <path> [<base>]`

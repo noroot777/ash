@@ -421,6 +421,8 @@ function IssueDetail({
   const [editBody, setEditBody] = useState(issue.body);
   const [confirmDel, setConfirmDel] = useState(false);
   const { attachments, onPaste, addFiles, remove, clear, error } = usePasteAttachments();
+  const editAtt = usePasteAttachments(); // 编辑态新加的附件(与下方评论框那套独立)
+  const [editAttachments, setEditAttachments] = useState<string[]>(issue.attachments); // 编辑态保留的已有附件
   const project = projects.find((p) => p.id === issue.projectId) ?? null;
 
   useEffect(() => {
@@ -438,12 +440,15 @@ function IssueDetail({
   const startEdit = () => {
     setEditTitle(issue.title);
     setEditBody(issue.body);
+    setEditAttachments(issue.attachments);
+    editAtt.clear();
     setEditing(true);
   };
   const saveEdit = async () => {
     const t = editTitle.trim();
     if (!t) return;
-    await patch({ title: t, body: editBody });
+    await patch({ title: t, body: editBody, attachments: [...editAttachments, ...editAtt.attachments.map((a) => a.path)] });
+    editAtt.clear();
     setEditing(false);
   };
   const del = async () => {
@@ -519,17 +524,21 @@ function IssueDetail({
             <textarea
               value={editBody}
               onChange={(e) => setEditBody(e.target.value)}
+              onPaste={editAtt.onPaste}
               rows={8}
               className="w-full resize-y rounded-[10px] border border-line2 bg-canvas px-3 py-2 text-[14px] leading-7 text-ink outline-none focus:border-accent"
-              placeholder="描述(支持 Markdown)"
+              placeholder="描述(支持 Markdown,可粘贴图片)"
             />
-            {issue.attachments.length > 0 && (
+            {(editAttachments.length > 0 || editAtt.attachments.length > 0) && (
               <div className="mt-2">
-                <div className="mb-1 text-[11px] text-faint">已有附件(编辑描述不影响附件)</div>
-                <StoredAttachments paths={issue.attachments} />
+                <div className="mb-1 text-[11px] text-faint">附件(× 删除,可粘贴/选择新增)</div>
+                <StoredAttachments paths={editAttachments} onRemove={(p) => setEditAttachments((xs) => xs.filter((x) => x !== p))} />
+                <AttachmentChips attachments={editAtt.attachments} onRemove={editAtt.remove} error={editAtt.error} />
               </div>
             )}
-            <div className="mt-2 flex justify-end gap-2">
+            <div className="mt-2 flex items-center gap-2">
+              <AttachButton addFiles={editAtt.addFiles} className="grid h-7 w-7 place-items-center rounded-md text-muted hover:bg-raised hover:text-ink" />
+              <span className="flex-1" />
               <button onClick={() => setEditing(false)} className="rounded-md px-3 py-1.5 text-[13px] text-muted hover:bg-raised">
                 取消
               </button>
@@ -632,15 +641,17 @@ function IssueDetail({
         {tasks.length ? (
           <div className="space-y-2">
             {tasks.map((t) => (
-              <button
-                key={t.id}
-                onClick={() => onOpenTask(t.id)}
-                className="flex w-full items-center gap-2.5 rounded-[10px] border border-line bg-panel px-3 py-2.5 text-left hover:bg-raised"
-              >
-                <span className={`h-2 w-2 shrink-0 rounded-full ${t.status === "done" ? "bg-emerald-500" : t.status === "failed" ? "bg-red-500" : "bg-amber-400 shadow-[0_0_0_3px_color-mix(in_srgb,theme(colors.amber.400)_22%,#fff)]"}`} />
-                <span className="min-w-0 flex-1 truncate text-[13px] text-ink">{t.title}</span>
-                <span className="shrink-0 text-[12.5px] text-accent">在任务区打开 →</span>
-              </button>
+              <div key={t.id}>
+                <button
+                  onClick={() => onOpenTask(t.id)}
+                  className="flex w-full items-center gap-2.5 rounded-[10px] border border-line bg-panel px-3 py-2.5 text-left hover:bg-raised"
+                >
+                  <span className={`h-2 w-2 shrink-0 rounded-full ${t.status === "done" ? "bg-emerald-500" : t.status === "failed" ? "bg-red-500" : "bg-amber-400 shadow-[0_0_0_3px_color-mix(in_srgb,theme(colors.amber.400)_22%,#fff)]"}`} />
+                  <span className="min-w-0 flex-1 truncate text-[13px] text-ink">{t.title}</span>
+                  <span className="shrink-0 text-[12.5px] text-accent">在任务区打开 →</span>
+                </button>
+                <TaskCommits taskId={t.id} bump={taskBump} />
+              </div>
             ))}
           </div>
         ) : (
@@ -664,6 +675,32 @@ function IssueDetail({
 }
 
 // ── one discussion comment: shows body + attachments, with edit/delete ───────
+// Show the branch + commits a derived task produced on its isolated worktree —
+// the concrete issue → code link. Silent when the task ran in place (no worktree).
+function TaskCommits({ taskId, bump }: { taskId: string; bump: number }) {
+  const [data, setData] = useState<{ branch: string | null; commits: { sha: string; subject: string; at: string }[] } | null>(null);
+  useEffect(() => {
+    api.taskCommits(taskId).then(setData).catch(() => {});
+  }, [taskId, bump]);
+  if (!data || (!data.branch && data.commits.length === 0)) return null;
+  return (
+    <div className="ml-3 mt-1 border-l-2 border-line pl-3">
+      {data.branch && (
+        <div className="text-[11.5px] text-faint">
+          分支 <code className="rounded bg-overlay px-1 text-[11px] text-muted">{data.branch}</code>
+          {data.commits.length > 0 && <span> · {data.commits.length} 个提交</span>}
+        </div>
+      )}
+      {data.commits.map((c) => (
+        <div key={c.sha} className="flex items-center gap-2 py-0.5 text-[12px]">
+          <code className="shrink-0 text-[11px] text-accent">{c.sha.slice(0, 7)}</code>
+          <span className="truncate text-muted">{c.subject}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function CommentItem({
   issueId,
   comment,
@@ -679,17 +716,18 @@ function CommentItem({
   const [text, setText] = useState(comment.body);
   const [confirmDel, setConfirmDel] = useState(false);
   const { attachments, onPaste, addFiles, remove, clear, error } = usePasteAttachments();
+  const [keepAttachments, setKeepAttachments] = useState<string[]>(comment.attachments); // 编辑态保留的已有附件
   const ai = comment.author.kind === "agent";
   const name = comment.author.kind === "agent" ? `@${comment.author.agentType}` : "我";
 
   const startEdit = () => {
     setText(comment.body);
+    setKeepAttachments(comment.attachments);
     clear();
     setEditing(true);
   };
   const save = async () => {
-    // 编辑时,新粘贴的附件追加到已有附件后
-    const nextAttachments = [...comment.attachments, ...attachments.map((a) => a.path)];
+    const nextAttachments = [...keepAttachments, ...attachments.map((a) => a.path)];
     const updated = await api.patchIssueComment(issueId, comment.id, { body: text.trim(), attachments: nextAttachments });
     onUpdated(updated);
     setEditing(false);
@@ -728,7 +766,9 @@ function CommentItem({
               rows={3}
               className="w-full resize-y rounded-[8px] border border-line2 bg-canvas px-2.5 py-1.5 text-[13.5px] leading-relaxed text-ink outline-none focus:border-accent"
             />
-            {comment.attachments.length > 0 && <StoredAttachments paths={comment.attachments} className="mt-2" />}
+            {keepAttachments.length > 0 && (
+              <StoredAttachments paths={keepAttachments} onRemove={(p) => setKeepAttachments((xs) => xs.filter((x) => x !== p))} className="mt-2" />
+            )}
             <AttachmentChips attachments={attachments} onRemove={remove} error={error} />
             <div className="mt-1.5 flex items-center gap-2">
               <AttachButton addFiles={addFiles} className="grid h-7 w-7 place-items-center rounded-md text-muted hover:bg-raised hover:text-ink" />
@@ -738,7 +778,7 @@ function CommentItem({
               </button>
               <button
                 onClick={save}
-                disabled={!text.trim() && !comment.attachments.length && !attachments.length}
+                disabled={!text.trim() && !keepAttachments.length && !attachments.length}
                 className="inline-flex items-center gap-1 rounded-md bg-accent px-2.5 py-1 text-[12.5px] font-medium text-accent-fg hover:bg-accent-hover disabled:opacity-40"
               >
                 <Check size={12} weight="bold" /> 保存

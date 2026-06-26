@@ -175,7 +175,15 @@ export function AttachmentChips({
 // just absolute paths). basename → preview url (/api/uploads/<file>) + display name;
 // extension decides image-thumbnail vs file-chip.
 const IMAGE_EXT = /\.(png|jpe?g|gif|webp|svg)$/i;
-export function StoredAttachments({ paths, className = "" }: { paths: string[]; className?: string }) {
+export function StoredAttachments({
+  paths,
+  className = "",
+  onRemove,
+}: {
+  paths: string[];
+  className?: string;
+  onRemove?: (path: string) => void; // 传了就在每个附件上显示 × 可删
+}) {
   // Click an image → in-page lightbox (not a new browser tab). Esc / click-out closes.
   const [zoom, setZoom] = useState<string | null>(null);
   useEffect(() => {
@@ -192,28 +200,31 @@ export function StoredAttachments({ paths, className = "" }: { paths: string[]; 
         // Stored filename is `<id>-<original>`; show the original part if present.
         const name = file.replace(/^[A-Za-z0-9]+-/, "");
         const url = `/api/uploads/${file}`;
-        return IMAGE_EXT.test(file) ? (
-          <button
-            key={p}
-            type="button"
-            onClick={() => setZoom(url)}
-            className="block h-14 w-14 overflow-hidden rounded-md border border-line2 transition-colors hover:border-accent"
-            title={name}
-          >
-            <img src={url} alt={name} className="h-full w-full object-cover" />
-          </button>
-        ) : (
-          <a
-            key={p}
-            href={url}
-            target="_blank"
-            rel="noreferrer"
-            className="flex h-14 max-w-[180px] items-center gap-2 rounded-md border border-line2 bg-raised/50 py-1 pl-2 pr-3 hover:border-accent"
-            title={name}
-          >
-            <FileIcon size={20} className="shrink-0 text-muted" />
-            <span className="truncate text-[12px] text-ink">{name}</span>
-          </a>
+        return (
+          <div key={p} className="group relative">
+            {IMAGE_EXT.test(file) ? (
+              <button
+                type="button"
+                onClick={() => setZoom(url)}
+                className="block h-14 w-14 overflow-hidden rounded-md border border-line2 transition-colors hover:border-accent"
+                title={name}
+              >
+                <img src={url} alt={name} className="h-full w-full object-cover" />
+              </button>
+            ) : (
+              <a
+                href={url}
+                target="_blank"
+                rel="noreferrer"
+                className="flex h-14 max-w-[180px] items-center gap-2 rounded-md border border-line2 bg-raised/50 py-1 pl-2 pr-3 hover:border-accent"
+                title={name}
+              >
+                <FileIcon size={20} className="shrink-0 text-muted" />
+                <span className="truncate text-[12px] text-ink">{name}</span>
+              </a>
+            )}
+            {onRemove && <RemoveBtn onClick={() => onRemove(p)} />}
+          </div>
         );
       })}
       {zoom &&
