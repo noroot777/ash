@@ -124,6 +124,16 @@ export function App() {
     api.issues().then(setIssues).catch(() => {});
   }, []);
 
+  // A selected issue must belong to the current project view (its own project, or
+  // 未归类 which surfaces everywhere). Switching projects without clearing ?issue=,
+  // or landing on a stale/mismatched URL, would otherwise keep another project's
+  // issue selected — clear it once issues have loaded so both state and URL self-heal.
+  useEffect(() => {
+    if (!selectedIssue || !issues.length) return;
+    const iss = issues.find((i) => i.id === selectedIssue);
+    if (iss && iss.projectId != null && iss.projectId !== projectId) setSelectedIssue(null);
+  }, [projectId, selectedIssue, issues]);
+
   // Keep the URL in sync with the current project/task (replaceState — no history
   // spam) so refresh/share lands on the same place.
   useEffect(() => {

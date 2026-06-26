@@ -61,12 +61,17 @@ export function IssuesWorkspace({
   onOpenTask: (taskId: string) => void;
   taskBump: number;
 }) {
-  const current = issues.find((i) => i.id === selectedIssue) ?? null;
   // The list shows the current project's issues + every 未归类 (staging) issue.
   const visible = useMemo(
     () => issues.filter((i) => i.projectId === projectId || i.projectId == null),
     [issues, projectId],
   );
+  // The detail pane stays within that SAME scope. `issues` holds every project's
+  // issues (fetched unfiltered so 未归类 can surface anywhere), so a stale URL —
+  // e.g. switching project without clearing ?issue= — could otherwise point at
+  // another project's issue and leak it into the wrong project. Scoping `current`
+  // to `visible` makes that show nothing here instead.
+  const current = visible.find((i) => i.id === selectedIssue) ?? null;
 
   return (
     <div className="flex min-h-0 flex-1">
