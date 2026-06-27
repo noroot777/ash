@@ -29,17 +29,17 @@ export function Markdown({ text }: { text: string }) {
           h2: (p) => <h2 className="mb-1 mt-2 text-[14px] font-semibold first:mt-0" {...p} />,
           h3: (p) => <h3 className="mb-1 mt-2 text-[13px] font-semibold first:mt-0" {...p} />,
           h4: (p) => <h4 className="mb-1 mt-2 text-[13px] font-medium first:mt-0" {...p} />,
-          p: (p) => <p className="my-1.5 break-words first:mt-0 last:mb-0" {...p} />,
+          p: (p) => <p className="my-1.5 wrap-anywhere first:mt-0 last:mb-0" {...p} />,
           ul: (p) => <ul className="my-1.5 list-disc pl-5" {...p} />,
           ol: (p) => <ol className="my-1.5 list-decimal pl-5" {...p} />,
-          li: (p) => <li className="my-0.5 break-words" {...p} />,
+          li: (p) => <li className="my-0.5 wrap-anywhere" {...p} />,
           strong: (p) => <strong className="font-semibold text-ink" {...p} />,
           em: (p) => <em className="italic" {...p} />,
           a: ({ node: _n, href, onClick, ...p }) => {
             const localOpen = isLocalOpenHref(href);
             return (
               <a
-                className="text-accent underline underline-offset-2 hover:text-accent-hover"
+                className="break-all text-accent underline underline-offset-2 hover:text-accent-hover"
                 href={href}
                 target={localOpen ? undefined : "_blank"}
                 rel={localOpen ? undefined : "noreferrer"}
@@ -68,7 +68,7 @@ export function Markdown({ text }: { text: string }) {
                 {children}
               </code>
             ) : (
-              <code className="rounded bg-overlay px-1 py-0.5 font-mono text-[12px]" {...p}>
+              <code className="break-all rounded bg-overlay px-1 py-0.5 font-mono text-[12px]" {...p}>
                 {children}
               </code>
             );
@@ -79,7 +79,7 @@ export function Markdown({ text }: { text: string }) {
             </div>
           ),
           th: (p) => <th className="border border-line px-2 py-1 text-left font-medium" {...p} />,
-          td: (p) => <td className="border border-line px-2 py-1 align-top" {...p} />,
+          td: (p) => <td className="border border-line px-2 py-1 align-top wrap-anywhere" {...p} />,
         }}
       >
         {text}
