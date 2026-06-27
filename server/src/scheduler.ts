@@ -52,7 +52,8 @@ export async function runGroup(groupId: string): Promise<void> {
   // group re-run doesn't re-run already-finished or in-flight tasks. Archived
   // tasks are frozen too: never re-run by their group (else an archived
   // failed/canceled would spring back to life on the next group run).
-  const rows = (await db.select().from(tasks).where(eq(tasks.groupId, groupId))).filter(
+  const groupRows = await db.select().from(tasks).where(eq(tasks.groupId, groupId));
+  const rows = groupRows.filter(
     (t) => canStartTask(t.status as TaskStatus) && !t.archived,
   );
   if (!rows.length) return;
@@ -62,7 +63,12 @@ export async function runGroup(groupId: string): Promise<void> {
     dependsOn: JSON.parse(r.dependsOn) as string[],
     createdAt: r.createdAt,
   }));
-  const ids = new Set(nodes.map((n) => n.id));
+  const ids = new Set(groupRows.map((r) => r.id));
+  const resolved = new Set(
+    groupRows
+      .filter((r) => r.status === "done")
+      .map((r) => r.id),
+  );
 
   await Promise.all(nodes.map((n) => setQueued(n.id)));
 
@@ -77,7 +83,6 @@ export async function runGroup(groupId: string): Promise<void> {
   }
 
   // parallel: launch tasks whose in-group deps are resolved; cap concurrency.
-  const resolved = new Set<string>();
   const pending = new Map(nodes.map((n) => [n.id, n]));
   const inflight = new Map<string, Promise<void>>();
   const ready = (n: Node) => n.dependsOn.every((d) => !ids.has(d) || resolved.has(d));
@@ -101,12 +106,11 @@ export async function runGroup(groupId: string): Promise<void> {
         if (inflight.size >= MAX_PARALLEL) break;
         if (ready(n)) launch(n);
       }
-      // Deadlock guard: nothing in flight but tasks remain (unresolved/cyclic deps).
+      // Nothing is runnable yet: dependencies may be running in a previous
+      // scheduler invocation. Leave these tasks parked for the next run_group
+      // instead of bypassing dependsOn.
       if (inflight.size === 0 && pending.size) {
-        for (const n of [...pending.values()]) {
-          if (inflight.size >= MAX_PARALLEL) break;
-          launch(n);
-        }
+        break;
       }
     }
     if (inflight.size) await Promise.race(inflight.values());
