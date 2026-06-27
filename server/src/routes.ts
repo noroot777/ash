@@ -562,6 +562,11 @@ api.patch("/tasks/:id", async (c) => {
   if (b.dependsOn !== undefined) {
     patch.dependsOn = JSON.stringify([...new Set(b.dependsOn.filter((d) => d !== tid))]);
   }
+  // resumePrompt：让用户编辑 agent 留下的续跑指令（写得不好就改、不想续跑就传空
+  // 串清空）。"" / null 都映射为 null —— 跟 settleTaskStatus 检查保持一致。
+  if (b.resumePrompt !== undefined) {
+    patch.resumePrompt = b.resumePrompt && String(b.resumePrompt).trim() ? String(b.resumePrompt) : null;
+  }
   await db.update(tasks).set(patch).where(eq(tasks.id, tid));
   // Status goes through the shared helper so manual changes maintain the run-time
   // columns (startedAt/endedAt) and broadcast them just like a real run does.

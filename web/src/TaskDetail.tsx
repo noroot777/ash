@@ -179,16 +179,13 @@ export function TaskDetail({
         {task.body && <CollapsibleText text={task.body} />}
 
         {/* 检查点续跑：paused 时露出 resumePrompt（agent 留下的「下次喂我什么」），
-            让用户知道一旦依赖满足、scheduler 唤醒它会发什么 user 消息。只读、
-            折叠展示，不让用户改 —— 这是 agent 自己写下的契约，改了就乱套。 */}
-        {task.status === "paused" && task.resumePrompt && (
-          <div className="mt-2 overflow-hidden rounded-md border border-cyan-500/40 bg-cyan-500/[0.06]">
-            <div className="flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-medium text-cyan-700">
-              <StatusIcon status="paused" size={11} />
-              <span>已到检查点 · 续跑时将发送：</span>
-            </div>
-            <pre className="max-h-40 overflow-y-auto whitespace-pre-wrap break-words px-2.5 pb-2 text-[12px] leading-snug text-ink">{task.resumePrompt}</pre>
-          </div>
+            让用户知道一旦依赖满足、scheduler 唤醒它会发什么 user 消息。可编辑
+            （改写不好的指令）或清空（清空 = 续跑时不携指令，用标准"继续"nudge）。 */}
+        {task.status === "paused" && (
+          <ResumePromptEditor
+            value={task.resumePrompt ?? ""}
+            onSave={(rp) => onPatch({ resumePrompt: rp || null })}
+          />
         )}
 
         {/* All controls on one wrapping row: attributes | labels | deps·schedule | session */}
@@ -878,6 +875,85 @@ function EditableTitle({ title, onSave }: { title: string; onSave: (t: string) =
       className="-mx-1 min-w-0 flex-1 rounded px-1 text-[15px] font-semibold leading-snug text-ink outline-none hover:bg-raised/40 focus:bg-raised/60"
       title="点击编辑标题"
     />
+  );
+}
+
+// paused 任务的「续跑指令」编辑面板。默认折叠展示 agent 写下的 resumePrompt；
+// 用户可以「编辑」改写、或「清空」让它续跑时落到标准的「继续」nudge（保留 paused
+// 状态、不影响依赖逻辑）。空值时给一个「添加」入口 —— 让用户主动写一段也行。
+function ResumePromptEditor({ value, onSave }: { value: string; onSave: (rp: string) => void }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value);
+  useEffect(() => {
+    if (!editing) setDraft(value);
+  }, [value, editing]);
+  const commit = () => {
+    const t = draft.trim();
+    onSave(t);
+    setEditing(false);
+  };
+  if (editing) {
+    return (
+      <div className="mt-2 overflow-hidden rounded-md border border-cyan-500/40 bg-cyan-500/[0.06]">
+        <div className="flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-medium text-cyan-700">
+          <StatusIcon status="paused" size={11} />
+          <span>编辑续跑指令</span>
+        </div>
+        <textarea
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if ((e.metaKey || e.ctrlKey) && e.key === "Enter") { e.preventDefault(); commit(); }
+            if (e.key === "Escape") { e.preventDefault(); setEditing(false); setDraft(value); }
+          }}
+          rows={4}
+          autoFocus
+          placeholder="续跑时发送给 agent 的 user 消息，比如：「继续做 tts 这一段」"
+          className="block w-full resize-y bg-transparent px-2.5 py-1.5 text-[12px] leading-snug text-ink outline-none placeholder:text-faint"
+        />
+        <div className="flex items-center justify-end gap-1.5 border-t border-cyan-500/20 px-2 py-1.5">
+          <button
+            onClick={() => { setEditing(false); setDraft(value); }}
+            className="rounded-md px-2 py-1 text-[11px] text-muted hover:text-ink"
+          >
+            取消
+          </button>
+          <button
+            onClick={commit}
+            className="rounded-md bg-cyan-600 px-2.5 py-1 text-[11px] font-medium text-white hover:bg-cyan-500"
+          >
+            保存（⌘↵）
+          </button>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="group/rp mt-2 overflow-hidden rounded-md border border-cyan-500/40 bg-cyan-500/[0.06]">
+      <div className="flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-medium text-cyan-700">
+        <StatusIcon status="paused" size={11} />
+        <span>{value ? "已到检查点 · 续跑时将发送：" : "已到检查点 · 无续跑指令（续跑用标准「继续」nudge）"}</span>
+        <button
+          onClick={() => setEditing(true)}
+          className="ml-auto rounded px-1.5 py-0.5 text-[10px] text-cyan-700 opacity-0 hover:bg-cyan-500/15 group-hover/rp:opacity-100"
+          title={value ? "编辑续跑指令" : "添加续跑指令"}
+        >
+          {value ? "编辑" : "+ 添加"}
+        </button>
+        {value && (
+          <button
+            onClick={() => onSave("")}
+            className="rounded px-1.5 py-0.5 text-[10px] text-cyan-700/80 opacity-0 hover:bg-cyan-500/15 hover:text-cyan-700 group-hover/rp:opacity-100"
+            title="清空：续跑时改用标准「继续」nudge"
+          >
+            清空
+          </button>
+        )}
+      </div>
+      {value && (
+        <pre className="max-h-40 overflow-y-auto whitespace-pre-wrap break-words px-2.5 pb-2 text-[12px] leading-snug text-ink">{value}</pre>
+      )}
+    </div>
   );
 }
 

@@ -23,6 +23,10 @@ export function runAction(status: TaskStatus, archived = false): RunAction {
       return { kind: "busy", label: "进行中…", canClick: false };
     case "awaiting_review":
       return { kind: "gate", label: "等待裁决", canClick: false };
+    case "paused":
+      // 用户手动点 = 不等依赖、立刻续跑；scheduler 自动唤起走的也是同一条路径
+      // （resumeOrRunTask → continueTask）。Run/retry kind 共用同一个按钮样式。
+      return { kind: "run", label: "继续", canClick: true };
     case "failed":
       return { kind: "retry", label: "重试", canClick: true };
     case "done":
