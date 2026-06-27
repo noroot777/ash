@@ -1,6 +1,6 @@
 import { useState, useEffect, useLayoutEffect, useRef } from "react";
-import type { Priority, Session, ProjectHealth, ProjectView } from "@harness/shared";
-import { Plus, CaretRight, CaretDown, GitBranch, Copy, Check } from "@phosphor-icons/react";
+import type { Priority, Session, ProjectHealth, ProjectView, Task } from "@harness/shared";
+import { Plus, CaretRight, CaretDown, GitBranch, Copy, Check, ArrowBendDownRight } from "@phosphor-icons/react";
 import { shortPath } from "./util";
 import { Duration, formatInstant } from "./time";
 import { api } from "./api";
@@ -378,6 +378,59 @@ export function CopyButton({
     >
       {done ? <Check size={size} weight="bold" className="text-emerald-600" /> : <Copy size={size} />}
     </button>
+  );
+}
+
+// PauseHint —— paused 状态卡片的"等谁"副标行（Board / TaskList 共用）。
+// 直接回答用户最想知道的「在等谁、能不能跳过去看」：
+//   • 全 dependsOn 都 done → "等待续跑"（瞬时态，scheduler 一轮就会唤起）
+//   • 单个未完成依赖 → "↳ 等「标题」"
+//   • 多个未完成依赖 → "↳ 等「标题」+N"
+// 点击跳到第一个阻塞任务；title 悬浮里列出所有阻塞 id。
+export function PauseHint({
+  task,
+  allTasks,
+  onOpen,
+}: {
+  task: Task;
+  allTasks: Task[];
+  onOpen?: (id: string) => void;
+}) {
+  if (task.status !== "paused") return null;
+  const deps = task.dependsOn
+    .map((id) => allTasks.find((t) => t.id === id))
+    .filter((t): t is Task => !!t);
+  const blockers = deps.filter((t) => t.status !== "done");
+  const first = blockers[0];
+  const extra = blockers.length - 1;
+  const click = (e: React.MouseEvent) => {
+    if (!first || !onOpen) return;
+    e.stopPropagation();
+    onOpen(first.id);
+  };
+  return (
+    <div
+      className="mt-1.5 flex items-center gap-1 text-[11px] text-cyan-700/90"
+      title={blockers.map((t) => `${t.title} · ${t.status}`).join("\n") || "等待 scheduler 续跑"}
+    >
+      <ArrowBendDownRight size={11} className="shrink-0 opacity-70" />
+      {first ? (
+        <>
+          <span className="shrink-0">等</span>
+          <button
+            type="button"
+            onClick={click}
+            className="-mx-1 min-w-0 max-w-[18rem] truncate rounded px-1 text-left hover:bg-cyan-500/10 hover:text-cyan-600"
+          >
+            「{first.title}」
+            {first.status === "paused" && <span className="ml-1 opacity-70">(也在等)</span>}
+          </button>
+          {extra > 0 && <span className="shrink-0 opacity-70">+{extra}</span>}
+        </>
+      ) : (
+        <span className="opacity-80">等待续跑（依赖已满足）</span>
+      )}
+    </div>
   );
 }
 

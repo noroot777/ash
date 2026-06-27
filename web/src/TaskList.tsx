@@ -1,6 +1,6 @@
 import type { Task, Group } from "@harness/shared";
 import { STATUSES, STATUS_META, PRIORITY_ORDER } from "./constants";
-import { PriorityIcon } from "./ui";
+import { PriorityIcon, PauseHint } from "./ui";
 import { StatusIcon } from "./StatusIcon";
 import { pairBadge } from "./util";
 
@@ -57,30 +57,33 @@ export function TaskList({
                 key={t.id}
                 data-task-id={t.id}
                 onClick={() => onSelect(t.id)}
-                className={`flex w-full items-center gap-2.5 px-4 py-1.5 text-left transition-colors ${
+                className={`flex w-full flex-col gap-0.5 px-4 py-1.5 text-left transition-colors ${
                   selected === t.id ? "bg-raised" : "hover:bg-raised/60"
                 }`}
               >
-                <PriorityIcon p={t.priority} />
-                <span className="truncate text-[13px] text-ink">{t.title}</span>
-                <div className="ml-auto flex shrink-0 items-center gap-1.5">
-                  {groupName(t.groupId) && (
-                    <span className="rounded bg-overlay px-1.5 py-0.5 font-mono text-[10px] text-muted">
-                      {groupName(t.groupId)}
+                <div className="flex w-full items-center gap-2.5">
+                  <PriorityIcon p={t.priority} />
+                  <span className="truncate text-[13px] text-ink">{t.title}</span>
+                  <div className="ml-auto flex shrink-0 items-center gap-1.5">
+                    {groupName(t.groupId) && (
+                      <span className="rounded bg-overlay px-1.5 py-0.5 font-mono text-[10px] text-muted">
+                        {groupName(t.groupId)}
+                      </span>
+                    )}
+                    {t.labels.map((l) => (
+                      <span
+                        key={l}
+                        className="rounded-full border border-line px-2 py-0.5 text-[10px] uppercase tracking-wide text-muted"
+                      >
+                        {l}
+                      </span>
+                    ))}
+                    <span className={`rounded px-1.5 py-0.5 font-mono text-[10px] ${pairBadge(t).cls}`}>
+                      {pairBadge(t).label}
                     </span>
-                  )}
-                  {t.labels.map((l) => (
-                    <span
-                      key={l}
-                      className="rounded-full border border-line px-2 py-0.5 text-[10px] uppercase tracking-wide text-muted"
-                    >
-                      {l}
-                    </span>
-                  ))}
-                  <span className={`rounded px-1.5 py-0.5 font-mono text-[10px] ${pairBadge(t).cls}`}>
-                    {pairBadge(t).label}
-                  </span>
+                  </div>
                 </div>
+                <PauseHint task={t} allTasks={tasks} onOpen={onSelect} />
               </button>
             ))}
           </div>

@@ -1,12 +1,14 @@
 import type { Task, TaskStatus } from "@harness/shared";
 import { isUserSettableStatus } from "@harness/shared";
 import { STATUSES } from "./constants";
-import { PriorityIcon } from "./ui";
+import { PriorityIcon, PauseHint } from "./ui";
 import { StatusIcon } from "./StatusIcon";
 import { pairBadge } from "./util";
 
 // Kanban board: one column per status, drag a card across columns to change its
 // status. Clicking a card opens it (switches back to list+detail).
+// paused 不单独成列 —— 它在视觉上属于"进行中"的一种（跑到检查点等续跑），
+// 跟 running 同住一列；卡片本身用 StatusIcon + PauseHint 区分。
 export function Board({
   tasks,
   onMove,
@@ -16,10 +18,13 @@ export function Board({
   onMove: (id: string, status: TaskStatus) => void;
   onOpen: (id: string) => void;
 }) {
+  const columns = STATUSES.filter((s) => s.key !== "paused");
   return (
     <div className="flex h-full gap-3 overflow-x-auto px-4 py-4">
-      {STATUSES.map((s) => {
-        const col = tasks.filter((t) => t.status === s.key);
+      {columns.map((s) => {
+        const col = tasks.filter((t) =>
+          s.key === "running" ? t.status === "running" || t.status === "paused" : t.status === s.key,
+        );
         // running/queued/awaiting_review are system-owned — you can't drop a card
         // into them by hand (that would fake an execution state).
         const droppable = isUserSettableStatus(s.key);
@@ -53,8 +58,15 @@ export function Board({
                     <span className="mt-0.5">
                       <PriorityIcon p={t.priority} />
                     </span>
+                    {/* paused 任务在 running 列里靠图标自我标识 */}
+                    {t.status === "paused" && (
+                      <span className="mt-0.5">
+                        <StatusIcon status="paused" size={13} />
+                      </span>
+                    )}
                     <span className="text-sm leading-snug text-ink">{t.title}</span>
                   </div>
+                  <PauseHint task={t} allTasks={tasks} onOpen={onOpen} />
                   <div className="mt-2 flex flex-wrap items-center gap-1.5">
                     {t.labels.map((l) => (
                       <span key={l} className="rounded-full border border-line px-2 py-0.5 text-[10px] uppercase tracking-wide text-muted">

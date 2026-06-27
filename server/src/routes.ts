@@ -235,6 +235,7 @@ const toTask = (r: typeof tasks.$inferSelect): Task => ({
   useWorktree: r.useWorktree,
   worktreeBase: r.worktreeBase,
   issueId: r.issueId ?? null,
+  resumePrompt: r.resumePrompt ?? null,
 });
 
 // Attach execution-time fields (activeMs/liveSince) to task rows. The session
@@ -810,6 +811,24 @@ api.post("/tasks/:id/stop", async (c) => {
   if (!r) return c.json({ error: "not found" }, 404);
   if (!stopTask(taskId)) return c.json({ error: "任务没有在运行的进程可停止", status: r.status }, 409);
   return c.json({ stopped: true });
+});
+
+// 检查点续跑：agent 在执行中调用，写下「下次继续时该喂给我的指令」。任务这一回合
+// 自然退出（agent 调完它就 return 了）后，settleTaskStatus 会因为 resumePrompt
+// 非空把状态落到 paused 而不是 done；scheduler 在依赖满足后会把 resumePrompt 当作
+// user 消息丢回 continueTask，清空字段、resume 同一 CLI 会话。**不**修改 status,
+// 让任务自然走完当前回合再结算 —— 避免 agent 主调 pause 后还想再输出几句却被截断。
+// 只接受 running 任务(agent 必须自己在跑才能合法地说"我到检查点了")。
+api.post("/tasks/:id/pause", async (c) => {
+  const taskId = c.req.param("id");
+  const b = await c.req.json<{ resumePrompt?: string }>().catch(() => ({}) as { resumePrompt?: string });
+  const rp = (b.resumePrompt ?? "").trim();
+  if (!rp) return c.json({ error: "resumePrompt 不能为空 —— 否则 resume 时没东西喂给 agent" }, 400);
+  const r = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
+  if (!r) return c.json({ error: "not found" }, 404);
+  if (r.status !== "running") return c.json({ error: "只能在任务正在运行时设置检查点", status: r.status }, 409);
+  await db.update(tasks).set({ resumePrompt: rp, updatedAt: now() }).where(eq(tasks.id, taskId));
+  return c.json({ paused: true, willSettleAs: "paused" });
 });
 
 // Reply to a single task: resume its CLI session with the user's message so an

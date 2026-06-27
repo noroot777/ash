@@ -178,6 +178,19 @@ export function TaskDetail({
             click 展开 for the full text). */}
         {task.body && <CollapsibleText text={task.body} />}
 
+        {/* 检查点续跑：paused 时露出 resumePrompt（agent 留下的「下次喂我什么」），
+            让用户知道一旦依赖满足、scheduler 唤醒它会发什么 user 消息。只读、
+            折叠展示，不让用户改 —— 这是 agent 自己写下的契约，改了就乱套。 */}
+        {task.status === "paused" && task.resumePrompt && (
+          <div className="mt-2 overflow-hidden rounded-md border border-cyan-500/40 bg-cyan-500/[0.06]">
+            <div className="flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-medium text-cyan-700">
+              <StatusIcon status="paused" size={11} />
+              <span>已到检查点 · 续跑时将发送：</span>
+            </div>
+            <pre className="max-h-40 overflow-y-auto whitespace-pre-wrap break-words px-2.5 pb-2 text-[12px] leading-snug text-ink">{task.resumePrompt}</pre>
+          </div>
+        )}
+
         {/* All controls on one wrapping row: attributes | labels | deps·schedule | session */}
         <div className="mt-3 flex flex-wrap items-center gap-x-2.5 gap-y-2 text-[12px]">
           <div className={`flex flex-wrap items-center gap-1.5 ${task.archived ? "pointer-events-none opacity-60" : ""}`}>

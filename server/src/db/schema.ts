@@ -48,6 +48,8 @@ export const tasks = sqliteTable("tasks", {
   useWorktree: integer("use_worktree", { mode: "boolean" }).notNull().default(false),
   worktreeBase: text("worktree_base"),
   issueId: text("issue_id"), // 回链来源事项(null = 直接创建)
+  // 检查点续跑：agent 调 pause_task 时填进来；下次 resume 时取出喂给 CLI 会话并清空。
+  resumePrompt: text("resume_prompt"),
 });
 
 export const agents = sqliteTable("agents", {

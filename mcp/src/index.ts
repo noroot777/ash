@@ -265,6 +265,23 @@ server.registerTool(
   },
 );
 
+server.registerTool(
+  "pause_task",
+  {
+    title: "在检查点暂停（等续跑）",
+    description:
+      "在执行中调用，告诉 harness：「我跑到一个检查点了，下次该继续时给我喂这段 prompt」。harness 会把 resumePrompt 写到 task 上；你这一回合自然结束后，状态落到 paused（而不是 done），等所有 dependsOn 任务完成后 scheduler 会用 resumePrompt 作为新一轮 user 消息把你叫醒、resume 同一个 CLI 会话。\n\n用法：先正常做完检查点前的所有工作；要暂停时调一次本工具，然后正常退出当前回合（return / 结束输出即可）。**只能在任务正在跑时调用**，且 resumePrompt 不能为空（否则 resume 时没东西喂你）。\n\n典型场景：dr-dig-ytb 一类「pre-tts 并行 + tts 串行」流水线 —— 把任务跑到 pre-tts 末尾时调本工具，resumePrompt 写下「现在做 tts 这一段」；harness 按 rank 顺序的 dependsOn 自动让你在前一个任务的 tts 完成后接着跑。",
+    inputSchema: {
+      taskId: z.string().describe("当前正在执行的任务 id"),
+      resumePrompt: z.string().min(1).describe("下次被 resume 时喂给你的 user 消息 —— 就当成一条「继续：…」replied 写"),
+    },
+  },
+  async ({ taskId, resumePrompt }) => {
+    try { return ok(await call("POST", `/tasks/${taskId}/pause`, { resumePrompt })); }
+    catch (e) { return fail(e); }
+  },
+);
+
 const transport = new StdioServerTransport();
 await server.connect(transport);
 console.error(`[harness-mcp] connected — tools ready (HARNESS_URL=${BASE})`);

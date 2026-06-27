@@ -107,6 +107,7 @@ export async function ensureSchema() {
     "ALTER TABLE issues ADD COLUMN attachments TEXT NOT NULL DEFAULT '[]'",
     "ALTER TABLE issue_comments ADD COLUMN attachments TEXT NOT NULL DEFAULT '[]'",
     "ALTER TABLE issue_comments ADD COLUMN updated_at TEXT",
+    "ALTER TABLE tasks ADD COLUMN resume_prompt TEXT",
   ]) {
     try {
       await client.execute(sql);

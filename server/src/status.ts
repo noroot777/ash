@@ -13,6 +13,8 @@ const TERMINAL: TaskStatus[] = ["done", "failed", "canceled"];
 // `endedAt` consistent and the web can show start/end/duration live:
 //   • → running  : stamp startedAt once (first run), clear endedAt.
 //   • → terminal : stamp endedAt (run finished).
+//   • → paused   : 跑到检查点（非终止），startedAt/endedAt 都不动；下次 resume
+//                  会走 → running 路径自动清掉 endedAt。
 //   • otherwise  : leave the timestamps untouched.
 export async function setTaskStatus(taskId: string, status: TaskStatus): Promise<void> {
   const cur = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);

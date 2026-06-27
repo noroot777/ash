@@ -69,6 +69,7 @@ export type TaskStatus =
   | "queued"
   | "running"
   | "awaiting_review"
+  | "paused" // 跑到检查点：agent 主动调 pause_task 后留下 resumePrompt，等依赖满足或用户手动继续
   | "done"
   | "failed"
   | "canceled";
@@ -77,10 +78,11 @@ export type Priority = "none" | "low" | "medium" | "high" | "urgent";
 
 // A task can be (re)started only from a settled, non-terminal-success state.
 // running/queued = already in flight; awaiting_review = waiting on a gate;
-// done = finished (must not be casually re-run). Single source of truth for the
-// run guard across the UI (button/Cmd-K/key) and the server (/run, group run).
+// done = finished (must not be casually re-run). paused = 跑到检查点等续跑，
+// 让 scheduler 在依赖满足时把它当作可继续任务来唤起。Single source of truth for
+// the run guard across the UI (button/Cmd-K/key) and the server (/run, group run).
 export function canStartTask(status: TaskStatus): boolean {
-  return status === "backlog" || status === "canceled" || status === "failed";
+  return status === "backlog" || status === "canceled" || status === "failed" || status === "paused";
 }
 
 // running / queued / awaiting_review reflect live execution — only the
@@ -146,6 +148,11 @@ export interface Task {
   // Backlink to the issue this task was derived from (§Issues). Null for tasks
   // created directly. An issue can spawn many tasks over time.
   issueId?: string | null;
+  // 检查点续跑（§Pause）：agent 在执行中调 pause_task 时写下的「下次继续时该
+  // 喂给我什么」prompt。任务结算时若此字段非空，则状态进入 `paused` 而不是
+  // `done`；scheduler 在依赖满足后把它当 continueTask 的 userText 喂回 CLI
+  // session，并清空此字段。null = 无待续跑指令。
+  resumePrompt?: string | null;
 }
 
 // ── Issues (§Issues) ─────────────────────────────────────────────────────────

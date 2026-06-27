@@ -3,6 +3,54 @@ import type { Group, Task, GroupMode } from "@harness/shared";
 import { Stack, Play, Pause, Trash, Plus } from "@phosphor-icons/react";
 import { Modal, ConfirmModal } from "./Modal";
 
+// 续跑队列条：把组里所有任务按 dependsOn 拓扑顺序排开，每个位置用一个圆点标记
+// 当前状态。只对「带检查点续跑」的组显示（即组里至少有一个 paused 任务）—— 普通
+// 组不会平白多出一条 UI。dr-dig-ytb 这种「pre-tts 并行 + tts 串行」流水线里，
+// 用户在 panel 这一层最想确认的就是「整支队伍跑到第几个、按 rank 顺序在不在」。
+function ResumeQueueBar({ tasks }: { tasks: Task[] }) {
+  if (!tasks.some((t) => t.status === "paused")) return null;
+  // 拓扑排：能放进 ready 的就是 dependsOn 已经全部出现在已排好里的；环 / 跨组依赖
+  // 自然忽略。createdAt 兜底次序，保证同一拓扑层内显示稳定。
+  const inSet = new Set(tasks.map((t) => t.id));
+  const placed = new Set<string>();
+  const ordered: Task[] = [];
+  const pool = [...tasks].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  while (pool.length) {
+    const i = pool.findIndex((t) => t.dependsOn.every((d) => !inSet.has(d) || placed.has(d)));
+    const t = i >= 0 ? pool.splice(i, 1)[0] : pool.shift()!;
+    placed.add(t.id);
+    ordered.push(t);
+  }
+  const dot = (t: Task) => {
+    if (t.status === "done") return { ch: "✅", cls: "text-emerald-500" };
+    if (t.status === "running") return { ch: "●", cls: "text-amber-500" };
+    if (t.status === "paused") return { ch: "○", cls: "text-cyan-500" };
+    if (t.status === "queued") return { ch: "○", cls: "text-amber-400/70" };
+    if (t.status === "failed") return { ch: "✕", cls: "text-red-500" };
+    if (t.status === "canceled") return { ch: "○", cls: "text-neutral-400" };
+    return { ch: "○", cls: "text-neutral-500" };
+  };
+  const doneCount = tasks.filter((t) => t.status === "done").length;
+  return (
+    <div className="flex w-full items-center gap-2 px-1 pb-1 text-[11px]">
+      <span className="shrink-0 text-faint">续跑队列</span>
+      <div className="flex min-w-0 flex-1 flex-wrap items-center gap-[3px] font-mono leading-none">
+        {ordered.map((t) => {
+          const d = dot(t);
+          return (
+            <span key={t.id} className={d.cls} title={`${t.title} · ${t.status}`}>
+              {d.ch}
+            </span>
+          );
+        })}
+      </div>
+      <span className="shrink-0 font-mono text-faint">
+        {doneCount}/{tasks.length}
+      </span>
+    </div>
+  );
+}
+
 // Manage a project's groups (transient parallel/serial batches, §3): rename,
 // switch parallel/serial, see member count, run, pause,
 // or delete (members are kept — just ungrouped). Inline create at the bottom.
@@ -28,6 +76,7 @@ export function GroupsPanel({
   const [confirmDel, setConfirmDel] = useState<Group | null>(null);
   const [newName, setNewName] = useState("");
   const count = (id: string) => tasks.filter((t) => t.groupId === id).length;
+  const groupTasks = (id: string) => tasks.filter((t) => t.groupId === id);
   const create = () => {
     if (newName.trim()) {
       onCreate(newName.trim(), "parallel");
@@ -42,7 +91,8 @@ export function GroupsPanel({
             <p className="text-[13px] text-faint">还没有分组。分组用来把同质化的任务打包，按并行或串行整组运行。</p>
           )}
           {groups.map((g) => (
-            <div key={g.id} className="flex flex-wrap items-center gap-2 rounded-lg border border-line bg-canvas px-3 py-2">
+            <div key={g.id} className="flex flex-col gap-1 rounded-lg border border-line bg-canvas px-3 py-2">
+            <div className="flex flex-wrap items-center gap-2">
               <Stack size={14} className="shrink-0 text-faint" />
               <input
                 defaultValue={g.name}
@@ -102,6 +152,8 @@ export function GroupsPanel({
               >
                 <Trash size={14} />
               </button>
+            </div>
+            <ResumeQueueBar tasks={groupTasks(g.id)} />
             </div>
           ))}
           <div className="mt-1 flex items-center gap-2 border-t border-line pt-3">

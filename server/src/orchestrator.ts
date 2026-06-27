@@ -67,6 +67,16 @@ async function setStatus(taskId: string, status: Parameters<typeof setTaskStatus
   await setTaskStatus(taskId, status);
 }
 
+// 任务跑完一回合时的状态落位：手停 → canceled；agent 在本回合内调过 pause_task
+// （写下 resumePrompt） → paused，等依赖满足或用户手动 resume；否则按退出码定
+// done/failed。一处算清楚，run / continue / 未来的 debate 共用同一规则。
+async function settleTaskStatus(taskId: string, exitStatus: number, canceled: boolean): Promise<void> {
+  if (canceled) return setStatus(taskId, "canceled");
+  const r = (await db.select({ rp: tasks.resumePrompt }).from(tasks).where(eq(tasks.id, taskId))).at(0);
+  if (r?.rp) return setStatus(taskId, "paused");
+  return setStatus(taskId, exitStatus === 0 ? "done" : "failed");
+}
+
 // On (re)start nothing is actually running, so any task still in an in-flight
 // status was interrupted (e.g. the server restarted mid-run). Mark those failed
 // so they're recoverable via retry/reply instead of being stuck forever.
@@ -201,7 +211,7 @@ export async function runTask(taskId: string): Promise<void> {
       .update(sessions)
       .set({ exitStatus, endedAt: endIso, activeMs: sql`COALESCE(${sessions.activeMs}, 0) + ${Math.max(0, Date.parse(endIso) - Date.parse(turnStart))}` })
       .where(eq(sessions.id, sessId));
-    await setStatus(taskId, canceled ? "canceled" : exitStatus === 0 ? "done" : "failed");
+    await settleTaskStatus(taskId, exitStatus, canceled);
   } catch (err) {
     bus.publish({
       type: "agent.event",
@@ -221,14 +231,23 @@ export async function runTask(taskId: string): Promise<void> {
 // that was interrupted keeps a session row with a cliSessionId (server restart
 // leaves exitStatus null; manual stop / non-zero exit keep the id too) — resume
 // THAT session so the agent continues from where it stopped, like the user typing
-// 继续. A never-started task (no resumable session) runs fresh. Tail-returns the
-// delegate so callers (esp. the scheduler) keep chaining on the same promise.
+// 继续. A never-started task (no resumable session) runs fresh. paused 任务带着
+// agent 写下的 resumePrompt 进来 —— 把它当作 user 输入回灌给 CLI 会话再清空，所以
+// 不会反复触发同一段 prompt。Tail-returns the delegate so callers (esp. the
+// scheduler) keep chaining on the same promise.
 export async function resumeOrRunTask(
   taskId: string,
   opts: { reason?: ResumeReason } = {},
 ): Promise<void> {
   const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!task || task.mode !== "single") return runTask(taskId); // debates/missing → unchanged path
+  // 检查点续跑：把 agent 写好的 resumePrompt 当作 user 消息丢回 continueTask，
+  // 跑同一会话同一目录；先清空字段避免回合内再次 settle 时又被认成 paused。
+  if (task.status === "paused" && task.resumePrompt) {
+    const rp = task.resumePrompt;
+    await db.update(tasks).set({ resumePrompt: null, updatedAt: now() }).where(eq(tasks.id, taskId));
+    return continueTask(taskId, rp, { system: opts.reason ?? "run" });
+  }
   const agent = (task.agentType as AgentType) ?? "claude";
   const prev = (await db.select().from(sessions).where(eq(sessions.taskId, taskId)))
     .filter((s) => s.agentType === agent)
@@ -354,7 +373,7 @@ export async function continueTask(
       .update(sessions)
       .set({ exitStatus, endedAt: endIso, activeMs: sql`COALESCE(${sessions.activeMs}, 0) + ${Math.max(0, Date.parse(endIso) - Date.parse(turnStart))}` })
       .where(eq(sessions.id, sessId));
-    await setStatus(taskId, canceled ? "canceled" : exitStatus === 0 ? "done" : "failed");
+    await settleTaskStatus(taskId, exitStatus, canceled);
   } catch (err) {
     bus.publish({
       type: "agent.event", taskId, sessionId: "", role: "single", agentType,

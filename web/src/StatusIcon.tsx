@@ -7,6 +7,7 @@ const COLOR: Record<TaskStatus, string> = {
   queued: "#9499a1",
   running: "#e2b203", // Linear in-progress yellow
   awaiting_review: "#8b5cf6",
+  paused: "#06b6d4", // cyan：跑到检查点等续跑——比 running 蓝、不抢 done 的 indigo
   done: "#5e6ad2", // Linear done indigo
   failed: "#eb5757",
   canceled: "#9ca1a9",
@@ -43,6 +44,16 @@ export function StatusIcon({ status, size = 14 }: { status: TaskStatus; size?: n
       return ring(pie(0.5));
     case "awaiting_review":
       return ring(pie(0.7));
+    case "paused":
+      // 虚线 ring（等待中）+ 经典的两根小竖条（pause 视觉语言）；颜色 cyan，
+      // 区别于 running 的 yellow。一眼能扫出「在等不在跑」。
+      return (
+        <svg width={size} height={size} viewBox="0 0 14 14" fill="none" aria-hidden>
+          <circle cx="7" cy="7" r="5.25" stroke={c} strokeWidth="1.5" strokeDasharray="1.6 1.6" />
+          <rect x="5" y="4.5" width="1.3" height="5" fill={c} />
+          <rect x="7.7" y="4.5" width="1.3" height="5" fill={c} />
+        </svg>
+      );
     case "done":
       return (
         <svg width={size} height={size} viewBox="0 0 14 14" fill="none" aria-hidden>

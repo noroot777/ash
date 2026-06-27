@@ -1,8 +1,11 @@
 import type { TaskStatus, Priority } from "@harness/shared";
 
 // Status metadata — ordered for the grouped list view (DESIGN.md §8).
+// paused 跟 running 是「进行中」的两个面：前者跑着、后者跑到检查点等续跑。Kanban
+// 列数不变 —— Board.tsx 自己 filter 掉 paused 这一列、把 paused 任务并入 running 列。
 export const STATUSES: { key: TaskStatus; label: string; dot: string; text: string }[] = [
   { key: "running", label: "运行中", dot: "bg-sky-400", text: "text-sky-300" },
+  { key: "paused", label: "暂停中", dot: "bg-cyan-400", text: "text-cyan-300" },
   { key: "awaiting_review", label: "等待审核", dot: "bg-violet-400", text: "text-violet-300" },
   { key: "queued", label: "排队中", dot: "bg-amber-400", text: "text-amber-300" },
   { key: "backlog", label: "待排期", dot: "bg-neutral-600", text: "text-neutral-400" },
