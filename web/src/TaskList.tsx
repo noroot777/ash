@@ -63,22 +63,22 @@ export function TaskList({
               >
                 <div className="flex w-full items-center gap-2.5">
                   <PriorityIcon p={t.priority} />
-                  <span className="truncate text-[13px] text-ink">{t.title}</span>
-                  <div className="ml-auto flex shrink-0 items-center gap-1.5">
+                  <span className="min-w-[80px] flex-1 truncate text-[13px] text-ink">{t.title}</span>
+                  <div className="ml-auto flex min-w-0 items-center gap-1.5 overflow-hidden">
                     {groupName(t.groupId) && (
-                      <span className="rounded bg-overlay px-1.5 py-0.5 font-mono text-[10px] text-muted">
+                      <span className="shrink-0 rounded bg-overlay px-1.5 py-0.5 font-mono text-[10px] text-muted">
                         {groupName(t.groupId)}
                       </span>
                     )}
                     {t.labels.map((l) => (
                       <span
                         key={l}
-                        className="rounded-full border border-line px-2 py-0.5 text-[10px] uppercase tracking-wide text-muted"
+                        className="shrink-0 rounded-full border border-line px-2 py-0.5 text-[10px] uppercase tracking-wide text-muted"
                       >
                         {l}
                       </span>
                     ))}
-                    <span className={`rounded px-1.5 py-0.5 font-mono text-[10px] ${pairBadge(t).cls}`}>
+                    <span className={`shrink-0 rounded px-1.5 py-0.5 font-mono text-[10px] ${pairBadge(t).cls}`}>
                       {pairBadge(t).label}
                     </span>
                   </div>

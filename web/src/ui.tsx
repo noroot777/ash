@@ -239,28 +239,39 @@ export function RunLocation({ project }: { project: ProjectView }) {
   );
 }
 
-// Linear-style priority glyph: three ascending bars (filled by level), and a
-// filled amber square with "!" for urgent.
+// Linear-style priority glyph: three ascending bars (filled by level) for
+// none/low/medium/high, and an amber square with "!" for urgent. Both variants
+// occupy the full 14×14 box and read at similar visual weight so a list of
+// mixed priorities doesn't look like icons of different sizes.
 export function PriorityIcon({ p }: { p: Priority }) {
   if (p === "urgent")
     return (
-      <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden>
-        <rect x="1" y="1" width="12" height="12" rx="3" fill="#fc7840" />
-        <rect x="6.25" y="3.2" width="1.5" height="4.6" rx="0.75" fill="#fff" />
-        <rect x="6.25" y="9" width="1.5" height="1.6" rx="0.75" fill="#fff" />
+      <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden className="shrink-0">
+        <rect x="1.5" y="1.5" width="11" height="11" rx="3" fill="#fc7840" />
+        <rect x="6.4" y="3.6" width="1.2" height="4.4" rx="0.6" fill="#fff" />
+        <rect x="6.4" y="9.2" width="1.2" height="1.4" rx="0.6" fill="#fff" />
       </svg>
     );
   const levels = { none: 0, low: 1, medium: 2, high: 3 } as const;
   const n = levels[p as keyof typeof levels] ?? 0;
+  // Bottom-aligned at y=13; heights step 4 / 7 / 10 for a clear ascending shape.
   const bars = [
-    { x: 1.5, y: 9, h: 4 },
-    { x: 5.5, y: 6, h: 7 },
-    { x: 9.5, y: 3, h: 10 },
+    { x: 1, h: 4 },
+    { x: 5.5, h: 7 },
+    { x: 10, h: 10 },
   ];
   return (
-    <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden>
+    <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden className="shrink-0">
       {bars.map((b, i) => (
-        <rect key={i} x={b.x} y={b.y} width="3" height={b.h} rx="1" fill={i < n ? "#6b6f76" : "#d6d6dc"} />
+        <rect
+          key={i}
+          x={b.x}
+          y={13 - b.h}
+          width="3"
+          height={b.h}
+          rx="0.75"
+          fill={i < n ? "#4b5563" : "#c5c8cf"}
+        />
       ))}
     </svg>
   );
