@@ -243,7 +243,8 @@ export async function resumeOrRunTask(
   if (!task || task.mode !== "single") return runTask(taskId); // debates/missing → unchanged path
   // 检查点续跑：把 agent 写好的 resumePrompt 当作 user 消息丢回 continueTask，
   // 跑同一会话同一目录；先清空字段避免回合内再次 settle 时又被认成 paused。
-  if (task.status === "paused" && task.resumePrompt) {
+  // 调度器会先把可启动任务标成 queued，因此这里不能只看 status === "paused"。
+  if (task.resumePrompt) {
     const rp = task.resumePrompt;
     await db.update(tasks).set({ resumePrompt: null, updatedAt: now() }).where(eq(tasks.id, taskId));
     return continueTask(taskId, rp, { system: opts.reason ?? "run" });

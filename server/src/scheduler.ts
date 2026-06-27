@@ -91,10 +91,9 @@ export async function runGroup(groupId: string): Promise<void> {
     pending.delete(n.id);
     const p = resumeOrRunTask(n.id, { reason: "group" })
       .then(async () => {
-        await succeeded(n.id); // status already persisted by runTask
+        if (await succeeded(n.id)) resolved.add(n.id); // status already persisted by runTask
       })
       .finally(() => {
-        resolved.add(n.id);
         inflight.delete(n.id);
       });
     inflight.set(n.id, p);
