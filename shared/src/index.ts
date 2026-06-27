@@ -111,6 +111,7 @@ export interface Task {
   priority: Priority;
   labels: string[];
   dependsOn: string[]; // cross-task dependency edges (§3)
+  resumeDependsOn: string[]; // checkpoint resume dependency edges (§Pause)
   autoTitle?: boolean; // title is AI-generated on first run until the user edits it
   // single mode:
   agentType?: AgentType;
@@ -255,6 +256,8 @@ export interface BatchTaskInput {
   // Each entry is resolved against sibling `key`s first; anything that doesn't
   // match a sibling key is treated as an existing task id and passed through.
   dependsOn?: string[];
+  // Same resolution as dependsOn, but checked only when resuming a paused task.
+  resumeDependsOn?: string[];
 }
 
 export interface BatchCreateTasksBody {

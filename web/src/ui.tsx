@@ -383,7 +383,7 @@ export function CopyButton({
 
 // PauseHint —— paused 状态卡片的"等谁"副标行（Board / TaskList 共用）。
 // 直接回答用户最想知道的「在等谁、能不能跳过去看」：
-//   • 全 dependsOn 都 done → "等待续跑"（瞬时态，scheduler 一轮就会唤起）
+//   • 全 resumeDependsOn 都 done → "等待续跑"（瞬时态，scheduler 一轮就会唤起）
 //   • 单个未完成依赖 → "↳ 等「标题」"
 //   • 多个未完成依赖 → "↳ 等「标题」+N"
 // 点击跳到第一个阻塞任务；title 悬浮里列出所有阻塞 id。
@@ -397,7 +397,7 @@ export function PauseHint({
   onOpen?: (id: string) => void;
 }) {
   if (task.status !== "paused") return null;
-  const deps = task.dependsOn
+  const deps = task.resumeDependsOn
     .map((id) => allTasks.find((t) => t.id === id))
     .filter((t): t is Task => !!t);
   const blockers = deps.filter((t) => t.status !== "done");
@@ -487,5 +487,4 @@ export function ResizeHandle({
     />
   );
 }
-
 

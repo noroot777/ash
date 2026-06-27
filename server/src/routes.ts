@@ -222,6 +222,7 @@ const toTask = (r: typeof tasks.$inferSelect): Task => ({
   priority: r.priority as Task["priority"],
   labels: JSON.parse(r.labels),
   dependsOn: JSON.parse(r.dependsOn),
+  resumeDependsOn: JSON.parse(r.resumeDependsOn),
   agentType: (r.agentType as Task["agentType"]) ?? undefined,
   autoTitle: r.autoTitle,
   debate: r.debate ? JSON.parse(r.debate) : undefined,
@@ -237,6 +238,9 @@ const toTask = (r: typeof tasks.$inferSelect): Task => ({
   issueId: r.issueId ?? null,
   resumePrompt: r.resumePrompt ?? null,
 });
+
+const taskBody = (body: string | undefined, taskId: string): string =>
+  (body ?? "").replaceAll("{{TASK_ID}}", taskId);
 
 // Attach execution-time fields (activeMs/liveSince) to task rows. The session
 // lookup is batched (one query for the whole list) so listing tasks stays O(1)
@@ -508,18 +512,20 @@ api.get("/tasks/:id", async (c) => {
 api.post("/tasks", async (c) => {
   const b = await c.req.json<Partial<Task> & { projectId: string; title: string; attachments?: string[] }>();
   const ts = now();
+  const taskId = id();
   const row = {
-    id: id(),
+    id: taskId,
     projectId: b.projectId,
     groupId: b.groupId ?? null,
     parentId: b.parentId ?? null,
     title: b.title,
-    body: (b.body ?? "") + attachmentsPrompt(b.attachments),
+    body: taskBody(b.body, taskId) + attachmentsPrompt(b.attachments),
     mode: b.mode ?? "single",
     status: (b.status && isUserSettableStatus(b.status) ? b.status : "backlog") as TaskStatus,
     priority: b.priority ?? "none",
     labels: JSON.stringify(b.labels ?? []),
     dependsOn: JSON.stringify(b.dependsOn ?? []),
+    resumeDependsOn: JSON.stringify(b.resumeDependsOn ?? []),
     agentType: b.agentType ?? null,
     autoTitle: b.autoTitle ?? false,
     debate: b.debate ? JSON.stringify(b.debate) : null,
@@ -561,6 +567,9 @@ api.patch("/tasks/:id", async (c) => {
   // dedupe so a buggy client can't deadlock the task on itself.
   if (b.dependsOn !== undefined) {
     patch.dependsOn = JSON.stringify([...new Set(b.dependsOn.filter((d) => d !== tid))]);
+  }
+  if (b.resumeDependsOn !== undefined) {
+    patch.resumeDependsOn = JSON.stringify([...new Set(b.resumeDependsOn.filter((d) => d !== tid))]);
   }
   // resumePrompt：让用户编辑 agent 留下的续跑指令（写得不好就改、不想续跑就传空
   // 串清空）。"" / null 都映射为 null —— 跟 settleTaskStatus 检查保持一致。
@@ -610,8 +619,9 @@ api.get("/groups", async (c) => {
   return c.json(rows);
 });
 
-// Run an entire group honoring parallel/serial + dependsOn (§1/§3). Running also
-// clears a pause, so the same button doubles as "继续/resume".
+// Run an entire group. Fresh starts honor dependsOn; paused checkpoint resumes
+// honor resumeDependsOn. Running also clears a group pause, so the same button
+// doubles as "继续/resume".
 api.post("/groups/:id/run", async (c) => {
   const gid = c.req.param("id");
   const g = (await db.select().from(groups).where(eq(groups.id, gid))).at(0);
@@ -679,6 +689,7 @@ api.post("/groups/:groupId/tasks/batch", async (c) => {
     const explicitTitle = (s.title ?? "").trim();
     // dependsOn: sibling key → its id; otherwise treat as an existing task id.
     const deps = new Set((s.dependsOn ?? []).map((d) => keyToId.get(d) ?? d));
+    const resumeDeps = new Set((s.resumeDependsOn ?? []).map((d) => keyToId.get(d) ?? d));
     if (b.chain && i > 0) deps.add(ids[i - 1]);
     const ts = new Date(base + i).toISOString();
     return {
@@ -687,12 +698,13 @@ api.post("/groups/:groupId/tasks/batch", async (c) => {
       groupId,
       parentId: null as string | null,
       title: explicitTitle || firstLine(s.body) || `任务 ${i + 1}`,
-      body: s.body ?? "",
+      body: taskBody(s.body, ids[i]),
       mode: "single",
       status: "backlog",
       priority: s.priority ?? b.defaults?.priority ?? "none",
       labels: JSON.stringify(s.labels ?? b.defaults?.labels ?? []),
       dependsOn: JSON.stringify([...deps]),
+      resumeDependsOn: JSON.stringify([...resumeDeps]),
       agentType: (s.agentType ?? b.defaults?.agentType ?? null) as AgentType | null,
       autoTitle: !explicitTitle, // no explicit title → let the first run name it
       debate: null as string | null,
@@ -787,10 +799,9 @@ api.post("/tasks/:id/run", async (c) => {
   if (r.archived) return c.json({ error: "任务已归档，先取消归档再运行", archived: true }, 409);
   // Guard the state machine: only settled, non-terminal-success tasks may start.
   if (!canStartTask(r.status as TaskStatus)) return c.json({ error: "任务当前状态不可运行", status: r.status }, 409);
-  // Honor dependsOn even for single-task run: if a listed dep still exists and
-  // hasn't reached `done`, refuse — user should clear the edge or wait, not
-  // silently skip the dependency. Dangling ids (dep deleted) are ignored.
-  const deps = JSON.parse(r.dependsOn) as string[];
+  // Honor dependency edges even for single-task run. Fresh starts use dependsOn;
+  // paused/checkpoint resumes use resumeDependsOn. Dangling ids are ignored.
+  const deps = JSON.parse(r.status === "paused" ? r.resumeDependsOn : r.dependsOn) as string[];
   if (deps.length) {
     const depRows = await db.select().from(tasks).where(inArray(tasks.id, deps));
     const blockedBy = depRows.filter((d) => d.status !== "done").map((d) => d.id);
@@ -1182,6 +1193,7 @@ api.post("/issues/:id/comments", async (c) => {
       priority: issue.priority,
       labels: "[]",
       dependsOn: "[]",
+      resumeDependsOn: "[]",
       agentType: b.mention as AgentType,
       autoTitle: false,
       debate: null as string | null,

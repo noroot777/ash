@@ -50,6 +50,7 @@ const taskShape = z.object({
   priority: PRIORITY.optional(),
   labels: z.array(z.string()).optional().describe("任务标签"),
   dependsOn: z.array(z.string()).optional().describe("同批任务的 key（解析成 id）或已存在的任务 id"),
+  resumeDependsOn: z.array(z.string()).optional().describe("续跑依赖：只在 paused/checkpointed 任务恢复时检查；支持同批 key 或已存在任务 id"),
 });
 
 const server = new McpServer({ name: "harness", version: "0.1.0" });
@@ -131,7 +132,7 @@ server.registerTool(
   "run_group",
   {
     title: "运行分组",
-    description: "启动（或恢复）分组里所有可运行的任务，遵循 parallel/serial 与 dependsOn。需要 groupId——不知道就先用 list_groups 按项目/repoPath 查出来。",
+    description: "启动（或恢复）分组里所有可运行的任务：首次启动看 dependsOn，paused 续跑看 resumeDependsOn。需要 groupId——不知道就先用 list_groups 按项目/repoPath 查出来。",
     inputSchema: { groupId: z.string() },
   },
   async ({ groupId }) => {
@@ -173,7 +174,7 @@ server.registerTool(
   "list_tasks",
   {
     title: "列出任务",
-    description: "列出任务，可按 projectId / groupId 过滤。默认隐藏已归档任务（includeArchived:true 才带上）。返回精简字段（id/title/status/archived/agentType/dependsOn/groupId）。",
+    description: "列出任务，可按 projectId / groupId 过滤。默认隐藏已归档任务（includeArchived:true 才带上）。返回精简字段（id/title/status/archived/agentType/dependsOn/resumeDependsOn/groupId）。",
     inputSchema: { projectId: z.string().optional(), groupId: z.string().optional(), includeArchived: z.boolean().optional().describe("默认 false：列表不含已归档任务") },
   },
   async ({ projectId, groupId, includeArchived }) => {
@@ -183,7 +184,7 @@ server.registerTool(
         (t) => (!projectId || t.projectId === projectId) && (!groupId || t.groupId === groupId) && (includeArchived || !t.archived),
       );
       return ok(rows.map((t) => ({
-        id: t.id, title: t.title, status: t.status, archived: t.archived, agentType: t.agentType, labels: t.labels, dependsOn: t.dependsOn, groupId: t.groupId,
+        id: t.id, title: t.title, status: t.status, archived: t.archived, agentType: t.agentType, labels: t.labels, dependsOn: t.dependsOn, resumeDependsOn: t.resumeDependsOn, groupId: t.groupId,
       })));
     } catch (e) { return fail(e); }
   },
@@ -193,7 +194,7 @@ server.registerTool(
   "get_task",
   {
     title: "查看任务",
-    description: "按 id 取单个任务的完整信息（含 status 与 dependsOn）。",
+    description: "按 id 取单个任务的完整信息（含 status、dependsOn、resumeDependsOn）。",
     inputSchema: { taskId: z.string() },
   },
   async ({ taskId }) => {
@@ -207,7 +208,7 @@ server.registerTool(
   {
     title: "更新任务",
     description:
-      "更新单个任务的可编辑字段，常用于编排时追加 dependsOn、调整 labels/priority，或把已停在中间检查点的 done 任务改回 backlog 以便 group 按新依赖继续调度。不能把任务手动设为 running/queued/awaiting_review。",
+      "更新单个任务的可编辑字段，常用于编排时追加 dependsOn/resumeDependsOn、调整 labels/priority，或修正检查点续跑指令。不能把任务手动设为 running/queued/awaiting_review。",
     inputSchema: {
       taskId: z.string(),
       title: z.string().optional(),
@@ -216,6 +217,7 @@ server.registerTool(
       priority: PRIORITY.optional(),
       labels: z.array(z.string()).optional(),
       dependsOn: z.array(z.string()).optional(),
+      resumeDependsOn: z.array(z.string()).optional(),
       groupId: z.string().nullable().optional(),
       agentType: AGENT_TYPE.nullable().optional(),
     },
@@ -270,7 +272,7 @@ server.registerTool(
   {
     title: "在检查点暂停（等续跑）",
     description:
-      "在执行中调用，告诉 harness：「我跑到一个检查点了，下次该继续时给我喂这段 prompt」。harness 会把 resumePrompt 写到 task 上；你这一回合自然结束后，状态落到 paused（而不是 done），等所有 dependsOn 任务完成后 scheduler 会用 resumePrompt 作为新一轮 user 消息把你叫醒、resume 同一个 CLI 会话。\n\n用法：先正常做完检查点前的所有工作；要暂停时调一次本工具，然后正常退出当前回合（return / 结束输出即可）。**只能在任务正在跑时调用**，且 resumePrompt 不能为空（否则 resume 时没东西喂你）。\n\n典型场景：dr-dig-ytb 一类「pre-tts 并行 + tts 串行」流水线 —— 把任务跑到 pre-tts 末尾时调本工具，resumePrompt 写下「现在做 tts 这一段」；harness 按 rank 顺序的 dependsOn 自动让你在前一个任务的 tts 完成后接着跑。",
+      "在执行中调用，告诉 harness：「我跑到一个检查点了，下次该继续时给我喂这段 prompt」。harness 会把 resumePrompt 写到 task 上；你这一回合自然结束后，状态落到 paused（而不是 done），等所有 resumeDependsOn 任务完成后 scheduler 会用 resumePrompt 作为新一轮 user 消息把你叫醒、resume 同一个 CLI 会话。\n\n用法：先正常做完检查点前的所有工作；要暂停时调一次本工具，然后正常退出当前回合（return / 结束输出即可）。**只能在任务正在跑时调用**，且 resumePrompt 不能为空（否则 resume 时没东西喂你）。\n\n典型场景：dr-dig-ytb 一类「pre-tts 并行 + tts 串行」流水线 —— 把任务跑到 pre-tts 末尾时调本工具，resumePrompt 写下「现在做 tts 这一段」；harness 按 rank 顺序的 resumeDependsOn 自动让你在前一个任务的 tts 完成后接着跑。",
     inputSchema: {
       taskId: z.string().describe("当前正在执行的任务 id"),
       resumePrompt: z.string().min(1).describe("下次被 resume 时喂给你的 user 消息 —— 就当成一条「继续：…」replied 写"),

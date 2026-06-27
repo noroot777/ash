@@ -30,6 +30,7 @@ export async function ensureSchema() {
       title TEXT NOT NULL, body TEXT NOT NULL DEFAULT '', mode TEXT NOT NULL DEFAULT 'single',
       status TEXT NOT NULL DEFAULT 'backlog', priority TEXT NOT NULL DEFAULT 'none',
       labels TEXT NOT NULL DEFAULT '[]', depends_on TEXT NOT NULL DEFAULT '[]',
+      resume_depends_on TEXT NOT NULL DEFAULT '[]',
       agent_type TEXT, auto_title INTEGER NOT NULL DEFAULT 0, debate TEXT, schedule_id TEXT,
       created_at TEXT NOT NULL, updated_at TEXT NOT NULL, started_at TEXT, ended_at TEXT,
       archived INTEGER NOT NULL DEFAULT 0, archived_at TEXT
@@ -108,6 +109,7 @@ export async function ensureSchema() {
     "ALTER TABLE issue_comments ADD COLUMN attachments TEXT NOT NULL DEFAULT '[]'",
     "ALTER TABLE issue_comments ADD COLUMN updated_at TEXT",
     "ALTER TABLE tasks ADD COLUMN resume_prompt TEXT",
+    "ALTER TABLE tasks ADD COLUMN resume_depends_on TEXT NOT NULL DEFAULT '[]'",
   ]) {
     try {
       await client.execute(sql);

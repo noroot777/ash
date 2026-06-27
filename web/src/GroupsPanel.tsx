@@ -3,20 +3,20 @@ import type { Group, Task, GroupMode } from "@harness/shared";
 import { Stack, Play, Pause, Trash, Plus } from "@phosphor-icons/react";
 import { Modal, ConfirmModal } from "./Modal";
 
-// 续跑队列条：把组里所有任务按 dependsOn 拓扑顺序排开，每个位置用一个圆点标记
+// 续跑队列条：把组里所有任务按 resumeDependsOn 拓扑顺序排开，每个位置用一个圆点标记
 // 当前状态。只对「带检查点续跑」的组显示（即组里至少有一个 paused 任务）—— 普通
 // 组不会平白多出一条 UI。dr-dig-ytb 这种「pre-tts 并行 + tts 串行」流水线里，
 // 用户在 panel 这一层最想确认的就是「整支队伍跑到第几个、按 rank 顺序在不在」。
 function ResumeQueueBar({ tasks }: { tasks: Task[] }) {
   if (!tasks.some((t) => t.status === "paused")) return null;
-  // 拓扑排：能放进 ready 的就是 dependsOn 已经全部出现在已排好里的；环 / 跨组依赖
+  // 拓扑排：能放进 ready 的就是 resumeDependsOn 已经全部出现在已排好里的；环 / 跨组依赖
   // 自然忽略。createdAt 兜底次序，保证同一拓扑层内显示稳定。
   const inSet = new Set(tasks.map((t) => t.id));
   const placed = new Set<string>();
   const ordered: Task[] = [];
   const pool = [...tasks].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   while (pool.length) {
-    const i = pool.findIndex((t) => t.dependsOn.every((d) => !inSet.has(d) || placed.has(d)));
+    const i = pool.findIndex((t) => t.resumeDependsOn.every((d) => !inSet.has(d) || placed.has(d)));
     const t = i >= 0 ? pool.splice(i, 1)[0] : pool.shift()!;
     placed.add(t.id);
     ordered.push(t);

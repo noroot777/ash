@@ -24,8 +24,7 @@ export function runAction(status: TaskStatus, archived = false): RunAction {
     case "awaiting_review":
       return { kind: "gate", label: "等待裁决", canClick: false };
     case "paused":
-      // 用户手动点 = 不等依赖、立刻续跑；scheduler 自动唤起走的也是同一条路径
-      // （resumeOrRunTask → continueTask）。Run/retry kind 共用同一个按钮样式。
+      // 继续同一个 CLI 会话；服务端会检查 resumeDependsOn，避免手动点击绕过续跑顺序。
       return { kind: "run", label: "继续", canClick: true };
     case "failed":
       return { kind: "retry", label: "重试", canClick: true };

@@ -8,7 +8,7 @@ import { resumeOrRunTask } from "./orchestrator.js";
 
 const MAX_PARALLEL = 4;
 
-type Node = { id: string; dependsOn: string[]; createdAt: string };
+type Node = { id: string; status: TaskStatus; dependsOn: string[]; resumeDependsOn: string[]; createdAt: string };
 
 async function setQueued(taskId: string) {
   await setTaskStatus(taskId, "queued");
@@ -36,9 +36,9 @@ async function succeeded(taskId: string): Promise<boolean> {
   return r?.status === "done";
 }
 
-// Run every task in a group honoring its mode (parallel/serial) and per-task
-// dependsOn edges. The scheduler only queues + sequences; runTask does the work
-// and owns running/done/failed status (DESIGN.md §1/§3/§6 — same path as manual).
+// Run every task in a group honoring its mode and dependency edges. Fresh starts
+// use dependsOn; checkpoint resumes use resumeDependsOn so pre-checkpoint work
+// can run in parallel while post-checkpoint work resumes in rank order.
 // A paused group starts nothing; pausing mid-run stops launching the not-yet-
 // started tasks and parks them back to backlog. (The in-flight task is stopped by
 // the pause endpoint itself — see POST /groups/:id/pause — so once its run loop
@@ -60,7 +60,9 @@ export async function runGroup(groupId: string): Promise<void> {
 
   const nodes: Node[] = rows.map((r) => ({
     id: r.id,
+    status: r.status as TaskStatus,
     dependsOn: JSON.parse(r.dependsOn) as string[],
+    resumeDependsOn: JSON.parse(r.resumeDependsOn) as string[],
     createdAt: r.createdAt,
   }));
   const ids = new Set(groupRows.map((r) => r.id));
@@ -70,13 +72,22 @@ export async function runGroup(groupId: string): Promise<void> {
       .map((r) => r.id),
   );
 
-  await Promise.all(nodes.map((n) => setQueued(n.id)));
+  const depsFor = (n: Node) => (n.status === "paused" ? n.resumeDependsOn : n.dependsOn);
+  const ready = (n: Node) => depsFor(n).every((d) => !ids.has(d) || resolved.has(d));
+
+  const launch = (n: Node): Promise<void> => {
+    return (async () => {
+      await setQueued(n.id);
+      await resumeOrRunTask(n.id, { reason: "group" });
+      if (await succeeded(n.id)) resolved.add(n.id); // status already persisted by runTask
+    })();
+  };
 
   if (group.mode === "serial") {
     const ordered = [...nodes].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
     for (const n of ordered) {
       if (await isPaused(groupId)) break; // 暂停：剩下未开始的不再启动
-      await resumeOrRunTask(n.id, { reason: "group" });
+      if (ready(n)) await launch(n);
     }
     await parkQueued(groupId); // 暂停时把没轮到的那些归位为 backlog
     return;
@@ -85,17 +96,12 @@ export async function runGroup(groupId: string): Promise<void> {
   // parallel: launch tasks whose in-group deps are resolved; cap concurrency.
   const pending = new Map(nodes.map((n) => [n.id, n]));
   const inflight = new Map<string, Promise<void>>();
-  const ready = (n: Node) => n.dependsOn.every((d) => !ids.has(d) || resolved.has(d));
 
-  const launch = (n: Node) => {
+  const launchParallel = (n: Node) => {
     pending.delete(n.id);
-    const p = resumeOrRunTask(n.id, { reason: "group" })
-      .then(async () => {
-        if (await succeeded(n.id)) resolved.add(n.id); // status already persisted by runTask
-      })
-      .finally(() => {
-        inflight.delete(n.id);
-      });
+    const p = launch(n).finally(() => {
+      inflight.delete(n.id);
+    });
     inflight.set(n.id, p);
   };
 
@@ -103,11 +109,11 @@ export async function runGroup(groupId: string): Promise<void> {
     if (!(await isPaused(groupId))) {
       for (const n of [...pending.values()]) {
         if (inflight.size >= MAX_PARALLEL) break;
-        if (ready(n)) launch(n);
+        if (ready(n)) launchParallel(n);
       }
       // Nothing is runnable yet: dependencies may be running in a previous
       // scheduler invocation. Leave these tasks parked for the next run_group
-      // instead of bypassing dependsOn.
+      // instead of bypassing dependency edges.
       if (inflight.size === 0 && pending.size) {
         break;
       }

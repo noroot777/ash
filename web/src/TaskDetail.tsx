@@ -94,6 +94,7 @@ export function TaskDetail({
   );
 
   const depOptions = allTasks.filter((t) => t.id !== task.id && !task.dependsOn.includes(t.id));
+  const resumeDepOptions = allTasks.filter((t) => t.id !== task.id && !task.resumeDependsOn.includes(t.id));
 
   return (
     <main className="flex h-full min-h-0 flex-col">
@@ -255,6 +256,31 @@ export function TaskDetail({
                 />
               )}
               {task.dependsOn.length === 0 && depOptions.length === 0 && <span className="text-faint">无</span>}
+            </div>
+            <div className="flex flex-wrap items-center gap-1.5">
+              <ArrowsDownUp size={13} className="text-cyan-600/70" />
+              <span className="text-muted">续跑依赖</span>
+              {task.resumeDependsOn.map((d) => {
+                const dep = allTasks.find((t) => t.id === d);
+                return (
+                  <button
+                    key={d}
+                    onClick={() => onPatch({ resumeDependsOn: task.resumeDependsOn.filter((x) => x !== d) })}
+                    className="rounded bg-cyan-500/10 px-1.5 py-0.5 text-cyan-800 transition hover:bg-cyan-500/20"
+                    title="点击移除续跑依赖"
+                  >
+                    {dep?.title ?? d}
+                  </button>
+                );
+              })}
+              {resumeDepOptions.length > 0 && (
+                <Prop
+                  value=""
+                  onChange={(v) => v && onPatch({ resumeDependsOn: [...task.resumeDependsOn, v] })}
+                  options={[{ value: "", label: "+ 添加" }, ...resumeDepOptions.map((t) => ({ value: t.id, label: t.title }))]}
+                />
+              )}
+              {task.resumeDependsOn.length === 0 && resumeDepOptions.length === 0 && <span className="text-faint">无</span>}
             </div>
             <ScheduleControl taskId={task.id} />
           </div>
@@ -956,4 +982,3 @@ function ResumePromptEditor({ value, onSave }: { value: string; onSave: (rp: str
     </div>
   );
 }
-
