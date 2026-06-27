@@ -39,6 +39,7 @@ const fail = (e: unknown) => ({
 const AGENT_TYPE = z.enum(["claude", "codex", "antigravity"]);
 const PRIORITY = z.enum(["none", "low", "medium", "high", "urgent"]);
 const MODE = z.enum(["parallel", "serial"]);
+const TASK_STATUS = z.enum(["backlog", "done", "failed", "canceled"]);
 
 // One task spec, reused by batch_create_tasks and create_task_chain.
 const taskShape = z.object({
@@ -197,6 +198,30 @@ server.registerTool(
   },
   async ({ taskId }) => {
     try { return ok(await call("GET", `/tasks/${taskId}`)); }
+    catch (e) { return fail(e); }
+  },
+);
+
+server.registerTool(
+  "patch_task",
+  {
+    title: "更新任务",
+    description:
+      "更新单个任务的可编辑字段，常用于编排时追加 dependsOn、调整 labels/priority，或把已停在中间检查点的 done 任务改回 backlog 以便 group 按新依赖继续调度。不能把任务手动设为 running/queued/awaiting_review。",
+    inputSchema: {
+      taskId: z.string(),
+      title: z.string().optional(),
+      body: z.string().optional(),
+      status: TASK_STATUS.optional(),
+      priority: PRIORITY.optional(),
+      labels: z.array(z.string()).optional(),
+      dependsOn: z.array(z.string()).optional(),
+      groupId: z.string().nullable().optional(),
+      agentType: AGENT_TYPE.nullable().optional(),
+    },
+  },
+  async ({ taskId, ...patch }) => {
+    try { return ok(await call("PATCH", `/tasks/${taskId}`, patch)); }
     catch (e) { return fail(e); }
   },
 );
