@@ -483,7 +483,7 @@ export function ResizeHandle({
         document.body.style.userSelect = "none";
       }}
       onDoubleClick={() => onChange(resetWidth)}
-      className="absolute right-0 top-0 z-10 h-full w-1.5 translate-x-1/2 cursor-col-resize transition-colors hover:bg-accent/30"
+      className="group absolute right-0 top-0 z-10 h-full w-3 translate-x-1/2 cursor-col-resize before:pointer-events-none before:absolute before:left-1/2 before:top-0 before:h-full before:w-px before:-translate-x-1/2 before:bg-accent/0 before:transition-colors hover:before:bg-accent/70"
     />
   );
 }

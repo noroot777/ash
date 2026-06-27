@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import type { Task, ProjectView, Group, AgentEvent, DebateStyle, AgentType, ProjectHealth, Issue } from "@harness/shared";
-import { CaretDown, MagnifyingGlass, GearSix, Plus, ListChecks, PencilSimpleLine } from "@phosphor-icons/react";
+import { CaretDown, MagnifyingGlass, GearSix, Plus, ListChecks, PencilSimpleLine, SidebarSimple, Robot } from "@phosphor-icons/react";
 import { api } from "./api";
 import { useServerEvents } from "./useEvents";
 import { orderedTasks } from "./TaskList";
@@ -66,6 +66,15 @@ export function App() {
   useEffect(() => {
     localStorage.setItem("harness.sidebarWidth", String(sidebarW));
   }, [sidebarW]);
+
+  // Left rail can collapse to icon-only to give the task list more room. The
+  // toggle lives at the rail's bottom; state persists across reloads.
+  const [railCollapsed, setRailCollapsed] = useState(
+    () => localStorage.getItem("harness.railCollapsed") === "1",
+  );
+  useEffect(() => {
+    localStorage.setItem("harness.railCollapsed", railCollapsed ? "1" : "0");
+  }, [railCollapsed]);
 
   // Top-level plane: 规划(事项) vs 执行(任务). Issues are project-scoped, but the
   // 未归类 (staging) ones surface across projects. Kept in the URL like project/task.
@@ -447,7 +456,7 @@ export function App() {
   return (
     <div className="flex h-full">
       {/* Left rail (Linear-style): project switcher + 规划/执行 sections + tools */}
-      <aside className="flex w-[228px] shrink-0 flex-col border-r border-line bg-panel p-2">
+      <aside className={`flex shrink-0 flex-col border-r border-line bg-panel p-2 ${railCollapsed ? "w-[52px]" : "w-[228px]"}`}>
         <Menu
           value={projectId ?? ""}
           onChange={(v) => { setProjSearch(""); setProjectId(v); }}
@@ -511,45 +520,103 @@ export function App() {
               新建项目
             </button>
           )}
-          triggerClassName="flex items-center gap-2 rounded-md px-1.5 py-1.5 hover:bg-raised"
+          triggerClassName={
+            railCollapsed
+              ? "flex items-center justify-center rounded-md p-1 hover:bg-raised"
+              : "flex items-center gap-2 rounded-md px-1.5 py-1.5 hover:bg-raised"
+          }
         >
           <ProjectAvatar name={projectName} size={24} />
-          <span className="max-w-[150px] truncate text-[13px] font-semibold text-ink">{projectName}</span>
-          {project && !project.health.isRepo && <HealthDot health={project.health} />}
-          <CaretDown size={12} className="ml-auto text-faint" />
+          {!railCollapsed && (
+            <>
+              <span className="max-w-[150px] truncate text-[13px] font-semibold text-ink">{projectName}</span>
+              {project && !project.health.isRepo && <HealthDot health={project.health} />}
+              <CaretDown size={12} className="ml-auto text-faint" />
+            </>
+          )}
         </Menu>
 
         <nav className="mt-1.5 flex flex-col gap-px">
-          <div className="px-2 pb-1 pt-3 text-[10px] font-semibold uppercase tracking-[0.07em] text-faint">规划</div>
+          {!railCollapsed && (
+            <div className="px-2 pb-1 pt-3 text-[10px] font-semibold uppercase tracking-[0.07em] text-faint">规划</div>
+          )}
           <button
             onClick={() => setSection("issue")}
-            className={`group flex items-center gap-2.5 rounded-md px-2 py-1.5 text-[13px] ${section === "issue" ? "bg-raised font-medium text-ink" : "text-muted hover:bg-raised hover:text-ink"}`}
+            title={railCollapsed ? `事项 (${issueCount})` : undefined}
+            className={`group flex items-center rounded-md text-[13px] ${railCollapsed ? "justify-center p-1.5" : "gap-2.5 px-2 py-1.5"} ${section === "issue" ? "bg-raised font-medium text-ink" : "text-muted hover:bg-raised hover:text-ink"}`}
           >
-            <PencilSimpleLine size={16} className={section === "issue" ? "text-accent" : ""} /> 事项
-            <span className="ml-auto rounded-full bg-overlay px-1.5 text-[11px] text-faint">{issueCount}</span>
+            <PencilSimpleLine size={16} className={section === "issue" ? "text-accent" : ""} />
+            {!railCollapsed && (
+              <>
+                事项
+                <span className="ml-auto rounded-full bg-overlay px-1.5 text-[11px] text-faint">{issueCount}</span>
+              </>
+            )}
           </button>
-          <div className="px-2 pb-1 pt-3 text-[10px] font-semibold uppercase tracking-[0.07em] text-faint">执行</div>
+          {!railCollapsed && (
+            <div className="px-2 pb-1 pt-3 text-[10px] font-semibold uppercase tracking-[0.07em] text-faint">执行</div>
+          )}
           <button
             onClick={() => setSection("task")}
-            className={`flex items-center gap-2.5 rounded-md px-2 py-1.5 text-[13px] ${section === "task" ? "bg-raised font-medium text-ink" : "text-muted hover:bg-raised hover:text-ink"}`}
+            title={railCollapsed ? `任务 (${active.length})` : undefined}
+            className={`flex items-center rounded-md text-[13px] ${railCollapsed ? "justify-center p-1.5" : "gap-2.5 px-2 py-1.5"} ${section === "task" ? "bg-raised font-medium text-ink" : "text-muted hover:bg-raised hover:text-ink"}`}
           >
-            <ListChecks size={16} className={section === "task" ? "text-accent" : ""} /> 任务
-            <span className="ml-auto rounded-full bg-overlay px-1.5 text-[11px] text-faint">{active.length}</span>
+            <ListChecks size={16} className={section === "task" ? "text-accent" : ""} />
+            {!railCollapsed && (
+              <>
+                任务
+                <span className="ml-auto rounded-full bg-overlay px-1.5 text-[11px] text-faint">{active.length}</span>
+              </>
+            )}
           </button>
         </nav>
 
         <div className="flex-1" />
 
         <div className="flex flex-col gap-px border-t border-line pt-1.5">
-          <button onClick={() => setAgentsOpen(true)} className="flex items-center gap-2.5 rounded-md px-2 py-1.5 text-[13px] text-muted hover:bg-raised hover:text-ink">智能体</button>
-          <button onClick={() => setSysOpen(true)} className="flex items-center gap-2.5 rounded-md px-2 py-1.5 text-[13px] text-muted hover:bg-raised hover:text-ink"><GearSix size={14} /> 设置</button>
-          <button onClick={() => setPaletteOpen(true)} className="flex items-center gap-2.5 rounded-md px-2 py-1.5 text-[13px] text-muted hover:bg-raised hover:text-ink">
-            <MagnifyingGlass size={14} /> 搜索 <kbd className="ml-auto">⌘K</kbd>
+          <button
+            onClick={() => setAgentsOpen(true)}
+            title={railCollapsed ? "智能体" : undefined}
+            className={`flex items-center rounded-md text-[13px] text-muted hover:bg-raised hover:text-ink ${railCollapsed ? "justify-center p-1.5" : "gap-2.5 px-2 py-1.5"}`}
+          >
+            <Robot size={14} />
+            {!railCollapsed && "智能体"}
           </button>
-          <div className="flex items-center gap-2 px-2 py-1.5 text-[12px] text-faint">
+          <button
+            onClick={() => setSysOpen(true)}
+            title={railCollapsed ? "设置" : undefined}
+            className={`flex items-center rounded-md text-[13px] text-muted hover:bg-raised hover:text-ink ${railCollapsed ? "justify-center p-1.5" : "gap-2.5 px-2 py-1.5"}`}
+          >
+            <GearSix size={14} />
+            {!railCollapsed && "设置"}
+          </button>
+          <button
+            onClick={() => setPaletteOpen(true)}
+            title={railCollapsed ? "搜索 (⌘K)" : undefined}
+            className={`flex items-center rounded-md text-[13px] text-muted hover:bg-raised hover:text-ink ${railCollapsed ? "justify-center p-1.5" : "gap-2.5 px-2 py-1.5"}`}
+          >
+            <MagnifyingGlass size={14} />
+            {!railCollapsed && (
+              <>
+                搜索 <kbd className="ml-auto">⌘K</kbd>
+              </>
+            )}
+          </button>
+          <div
+            className={`flex items-center text-[12px] text-faint ${railCollapsed ? "justify-center p-1.5" : "gap-2 px-2 py-1.5"}`}
+            title={railCollapsed ? (connected ? "实时已连接" : "未连接") : undefined}
+          >
             <span className={`h-1.5 w-1.5 rounded-full ${connected ? "bg-emerald-500" : "bg-faint"}`} />
-            {connected ? "实时已连接" : "未连接"}
+            {!railCollapsed && (connected ? "实时已连接" : "未连接")}
           </div>
+          <button
+            onClick={() => setRailCollapsed((v) => !v)}
+            title={railCollapsed ? "展开侧栏" : "收起侧栏"}
+            className={`flex items-center rounded-md text-[12px] text-faint hover:bg-raised hover:text-muted ${railCollapsed ? "justify-center p-1.5" : "gap-2.5 px-2 py-1.5"}`}
+          >
+            <SidebarSimple size={14} className={railCollapsed ? "" : "rotate-180"} />
+            {!railCollapsed && "收起侧栏"}
+          </button>
         </div>
       </aside>
 
