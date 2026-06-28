@@ -51,7 +51,7 @@ export async function advanceQueueFromTask(taskId: string): Promise<void> {
 //   - backlog → 拉起新 agent
 //   - paused → 用 resumePrompt 续跑(resumeOrRunTask 内部按 status 分流)
 // 每次推进只启动 head 一项;它跑完触发 advanceQueueFromTask 再推下一个。
-async function advanceQueue(queueId: string): Promise<void> {
+export async function advanceQueue(queueId: string): Promise<void> {
   const items = await db
     .select()
     .from(queueItems)

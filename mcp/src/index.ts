@@ -42,15 +42,15 @@ const MODE = z.enum(["parallel", "serial"]);
 const TASK_STATUS = z.enum(["backlog", "done", "failed", "canceled"]);
 
 // One task spec, reused by batch_create_tasks and create_task_chain.
+// 注意:不再接受 dependsOn / resumeDependsOn —— 顺序依赖统一走 queue,
+// chain:true 是创建队列的语法糖。要细调队列请用 queue_* 工具。
 const taskShape = z.object({
-  key: z.string().optional().describe("此任务的本地标识，供同批其它任务在 dependsOn 里引用（id 此刻还不存在）"),
+  key: z.string().optional().describe("此任务的本地标识(目前没有内部用途,保留供日志/调试)"),
   title: z.string().optional().describe("省略则首次运行时由 agent 自动起名"),
   body: z.string().optional().describe("交给 agent 执行的 prompt / 目标"),
   agentType: AGENT_TYPE.optional().describe("覆盖批次默认 agent"),
   priority: PRIORITY.optional(),
   labels: z.array(z.string()).optional().describe("任务标签"),
-  dependsOn: z.array(z.string()).optional().describe("同批任务的 key（解析成 id）或已存在的任务 id"),
-  resumeDependsOn: z.array(z.string()).optional().describe("续跑依赖：只在 paused/checkpointed 任务恢复时检查；支持同批 key 或已存在任务 id"),
 });
 
 const server = new McpServer({ name: "harness", version: "0.1.0" });
@@ -72,7 +72,7 @@ server.registerTool(
   "create_group",
   {
     title: "创建分组",
-    description: "在项目里【新建】一个分组（批次容器）。用 projectId 或 repoPath 定位项目。mode=parallel 时按 dependsOn 调度，serial 时按创建顺序串跑。注意：每次都新建——要复用同名分组（避免重复建组）请改用 resolve_group。",
+    description: "在项目里【新建】一个分组(批次容器)。用 projectId 或 repoPath 定位项目。mode=parallel 时任务相互独立并发跑;mode=serial 时配合 chain:true 自动建队列按顺序跑。注意:每次都新建——要复用同名分组(避免重复建组)请改用 resolve_group。",
     inputSchema: {
       name: z.string(),
       projectId: z.string().optional(),
@@ -109,7 +109,7 @@ server.registerTool(
   "batch_create_tasks",
   {
     title: "批量建任务到已有分组",
-    description: "往一个已存在的分组里批量创建 single 任务。chain:true 自动串成 A→B→C→D 依赖链（=严格串行，即使分组是 parallel）；想要任务真正并行就别开 chain。run:true 建完立即开跑。",
+    description: "往一个已存在的分组里批量创建 single 任务。chain:true → 创建一个 queue 把这批任务按数组顺序串成 A→B→C→D(前一个 done 后下一个自动启动)。**chain:true 只能用于 serial group**,parallel group 会返回 400。想真正并行就别开 chain。run:true 建完立即开跑。",
     inputSchema: {
       groupId: z.string(),
       tasks: z.array(taskShape).min(1),
@@ -132,7 +132,7 @@ server.registerTool(
   "run_group",
   {
     title: "运行分组",
-    description: "启动（或恢复）分组里所有可运行的任务：首次启动看 dependsOn，paused 续跑看 resumeDependsOn。需要 groupId——不知道就先用 list_groups 按项目/repoPath 查出来。",
+    description: "启动(或恢复)分组里所有可运行的任务。serial group 通过 queue 推进:前一个 done 后下一个自动启动;parallel group 并发拉起所有 backlog/paused。需要 groupId——不知道就先用 list_groups 按项目/repoPath 查出来。",
     inputSchema: { groupId: z.string() },
   },
   async ({ groupId }) => {
@@ -174,8 +174,8 @@ server.registerTool(
   "list_tasks",
   {
     title: "列出任务",
-    description: "列出任务，可按 projectId / groupId 过滤。默认隐藏已归档任务（includeArchived:true 才带上）。返回精简字段（id/title/status/archived/agentType/dependsOn/resumeDependsOn/groupId）。",
-    inputSchema: { projectId: z.string().optional(), groupId: z.string().optional(), includeArchived: z.boolean().optional().describe("默认 false：列表不含已归档任务") },
+    description: "列出任务,可按 projectId / groupId 过滤。默认隐藏已归档任务(includeArchived:true 才带上)。返回精简字段(id/title/status/archived/agentType/queueId/queuePosition/groupId)。",
+    inputSchema: { projectId: z.string().optional(), groupId: z.string().optional(), includeArchived: z.boolean().optional().describe("默认 false:列表不含已归档任务") },
   },
   async ({ projectId, groupId, includeArchived }) => {
     try {
@@ -184,7 +184,7 @@ server.registerTool(
         (t) => (!projectId || t.projectId === projectId) && (!groupId || t.groupId === groupId) && (includeArchived || !t.archived),
       );
       return ok(rows.map((t) => ({
-        id: t.id, title: t.title, status: t.status, archived: t.archived, agentType: t.agentType, labels: t.labels, dependsOn: t.dependsOn, resumeDependsOn: t.resumeDependsOn, groupId: t.groupId,
+        id: t.id, title: t.title, status: t.status, archived: t.archived, agentType: t.agentType, labels: t.labels, queueId: t.queueId, queuePosition: t.queuePosition, groupId: t.groupId,
       })));
     } catch (e) { return fail(e); }
   },
@@ -194,7 +194,7 @@ server.registerTool(
   "get_task",
   {
     title: "查看任务",
-    description: "按 id 取单个任务的完整信息（含 status、dependsOn、resumeDependsOn）。",
+    description: "按 id 取单个任务的完整信息(含 status、queueId、queuePosition)。",
     inputSchema: { taskId: z.string() },
   },
   async ({ taskId }) => {
@@ -208,7 +208,7 @@ server.registerTool(
   {
     title: "更新任务",
     description:
-      "更新单个任务的可编辑字段，常用于编排时追加 dependsOn/resumeDependsOn、调整 labels/priority，或修正检查点续跑指令。不能把任务手动设为 running/queued/awaiting_review。",
+      "更新单个任务的可编辑字段:title/body/status/labels/priority/groupId/agentType。**不能**用此工具改任务的队列归属——请用 queue_insert / queue_remove / queue_reorder。也不能把任务手动设为 running/queued/awaiting_review。",
     inputSchema: {
       taskId: z.string(),
       title: z.string().optional(),
@@ -216,8 +216,6 @@ server.registerTool(
       status: TASK_STATUS.optional(),
       priority: PRIORITY.optional(),
       labels: z.array(z.string()).optional(),
-      dependsOn: z.array(z.string()).optional(),
-      resumeDependsOn: z.array(z.string()).optional(),
       groupId: z.string().nullable().optional(),
       agentType: AGENT_TYPE.nullable().optional(),
     },
@@ -233,13 +231,13 @@ server.registerTool(
   {
     title: "一步建任务批次",
     description:
-      "便利工具：按 repoPath 找到/创建项目 → 找到或复用分组 → 把一批任务建进去，一次调用搞定。返回 {project, group, tasks}。chain 默认 true=串成依赖链 A→B→C（严格串行）；想真正并行就传 chain:false 并把 mode 设 parallel。run:true 立即开跑。多步编排首选这个。",
+      "便利工具:按 repoPath 找到/创建项目 → 找到或复用分组 → 把一批任务建进去,一次调用搞定。返回 {project, group, tasks}。chain 默认 true=创建一个 queue 串成 A→B→C(前一个 done 后下一个自动启动);想真正并行就传 chain:false 并把 mode 设 parallel。run:true 立即开跑。多步编排首选这个。",
     inputSchema: {
       repoPath: z.string().describe("git 仓库绝对路径；项目按它找到或创建"),
       tasks: z.array(taskShape).min(1).describe("按顺序排列；chain 时即依赖链顺序"),
-      groupName: z.string().optional().describe("分组名，缺省 task-chain。已存在同名分组会复用（不会重复建组）"),
+      groupName: z.string().optional().describe("分组名,缺省 task-chain。已存在同名分组会复用(不会重复建组)"),
       mode: MODE.optional(),
-      chain: z.boolean().optional().describe("默认 true=串成依赖链（串行）；false=互不依赖（配 mode=parallel 才真正并行）"),
+      chain: z.boolean().optional().describe("默认 true=创建 queue 串成依赖链(serial 才允许);false=互不依赖(配 mode=parallel 才真正并行)"),
       agentType: AGENT_TYPE.optional().describe("所有任务的默认 agent（任务可逐个覆盖）"),
       run: z.boolean().optional(),
     },
@@ -270,9 +268,9 @@ server.registerTool(
 server.registerTool(
   "pause_task",
   {
-    title: "在检查点暂停（等续跑）",
+    title: "在检查点暂停(等续跑)",
     description:
-      "在执行中调用，告诉 harness：「我跑到一个检查点了，下次该继续时给我喂这段 prompt」。harness 会把 resumePrompt 写到 task 上；你这一回合自然结束后，状态落到 paused（而不是 done），等所有 resumeDependsOn 任务完成后 scheduler 会用 resumePrompt 作为新一轮 user 消息把你叫醒、resume 同一个 CLI 会话。\n\n用法：先正常做完检查点前的所有工作；要暂停时调一次本工具，然后正常退出当前回合（return / 结束输出即可）。**只能在任务正在跑时调用**，且 resumePrompt 不能为空（否则 resume 时没东西喂你）。\n\n典型场景：dr-dig-ytb 一类「pre-tts 并行 + tts 串行」流水线 —— 把任务跑到 pre-tts 末尾时调本工具，resumePrompt 写下「现在做 tts 这一段」；harness 按 rank 顺序的 resumeDependsOn 自动让你在前一个任务的 tts 完成后接着跑。",
+      "在执行中调用,告诉 harness:「我跑到一个检查点了,下次该继续时给我喂这段 prompt」。harness 会把 resumePrompt 写到 task 上;你这一回合自然结束后,状态落到 paused(而不是 done),队列推进规则会在前一个任务 done 时用 resumePrompt 把你叫醒、resume 同一个 CLI 会话。\n\n用法:先正常做完检查点前的所有工作;要暂停时调一次本工具,然后正常退出当前回合(return / 结束输出即可)。**只能在任务正在跑时调用**,且 resumePrompt 不能为空(否则 resume 时没东西喂你)。\n\n典型场景:dr-dig-ytb 一类「pre-tts 并行 + tts 串行」流水线 —— 把任务跑到 pre-tts 末尾时调本工具,resumePrompt 写下「现在做 tts 这一段」;后续每个任务都在自己 queue 位置上等前一个 done 后自动续跑。",
     inputSchema: {
       taskId: z.string().describe("当前正在执行的任务 id"),
       resumePrompt: z.string().min(1).describe("下次被 resume 时喂给你的 user 消息 —— 就当成一条「继续：…」replied 写"),
@@ -280,6 +278,78 @@ server.registerTool(
   },
   async ({ taskId, resumePrompt }) => {
     try { return ok(await call("POST", `/tasks/${taskId}/pause`, { resumePrompt })); }
+    catch (e) { return fail(e); }
+  },
+);
+
+server.registerTool(
+  "get_queue",
+  {
+    title: "查看队列",
+    description: "按 queueId 列出队列内容(taskId/position/status)。任务详情里的 queueId 字段就是入口。",
+    inputSchema: { queueId: z.string() },
+  },
+  async ({ queueId }) => {
+    try { return ok(await call("GET", `/queues/${queueId}`)); }
+    catch (e) { return fail(e); }
+  },
+);
+
+server.registerTool(
+  "queue_reorder",
+  {
+    title: "重排队列",
+    description: "整批改 queue 的 task 顺序。taskIds 必须是该 queue 的完整成员(漏一个或多一个都报错)。running/queued 的 task 不能被移动位置(报 409)。",
+    inputSchema: {
+      queueId: z.string(),
+      taskIds: z.array(z.string()).min(1).describe("新顺序,必须等于 queue 当前成员集合"),
+    },
+  },
+  async ({ queueId, taskIds }) => {
+    try { return ok(await call("POST", `/queues/${queueId}/reorder`, { taskIds })); }
+    catch (e) { return fail(e); }
+  },
+);
+
+server.registerTool(
+  "queue_remove",
+  {
+    title: "从队列移除任务",
+    description: "把 task 移出 queue(task 本身不删,只是脱离队列变成独立任务)。下游会自动顶上。running/queued 的不能拔。",
+    inputSchema: { queueId: z.string(), taskId: z.string() },
+  },
+  async ({ queueId, taskId }) => {
+    try { return ok(await call("POST", `/queues/${queueId}/remove`, { taskId })); }
+    catch (e) { return fail(e); }
+  },
+);
+
+server.registerTool(
+  "queue_insert",
+  {
+    title: "插入任务到队列",
+    description: "在指定 position 插入(0 = 队首)。校验:候选 task 必须存在、不在其它 queue、跟 queue 同 group。",
+    inputSchema: {
+      queueId: z.string(),
+      taskId: z.string(),
+      position: z.number().int().optional().describe("0..length;省略或越界 = 追加到尾部"),
+    },
+  },
+  async ({ queueId, taskId, position }) => {
+    try { return ok(await call("POST", `/queues/${queueId}/insert`, { taskId, position })); }
+    catch (e) { return fail(e); }
+  },
+);
+
+server.registerTool(
+  "create_queue",
+  {
+    title: "新建队列",
+    description: "用一批已存在的 task id 新建一个 queue,按数组顺序占位置。要求:这批 task 都在同一个 group(或都无 group),且都不在其它 queue 里。",
+    inputSchema: { taskIds: z.array(z.string()).min(1) },
+  },
+  async ({ taskIds }) => {
+    try { return ok(await call("POST", "/queues", { taskIds })); }
     catch (e) { return fail(e); }
   },
 );

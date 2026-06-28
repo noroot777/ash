@@ -113,8 +113,12 @@ export interface Task {
   status: TaskStatus;
   priority: Priority;
   labels: string[];
-  dependsOn: string[]; // cross-task dependency edges (§3)
-  resumeDependsOn: string[]; // checkpoint resume dependency edges (§Pause)
+  dependsOn: string[]; // [废弃,保留为 []] 旧的指针依赖,被 queue 模型取代,见 DESIGN-scheduling.md
+  resumeDependsOn: string[]; // [废弃,保留为 []] 同上
+  // 队列归属(DESIGN-scheduling.md §1):任务在某个 queue 里的位置。null = 不在任何队列。
+  // 推进规则:前一个位置 done/canceled 时,这个位置才开始;前一个 failed 时链停。
+  queueId?: string | null;
+  queuePosition?: number | null;
   autoTitle?: boolean; // title is AI-generated on first run until the user edits it
   // single mode:
   agentType?: AgentType;

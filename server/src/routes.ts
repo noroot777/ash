@@ -31,7 +31,7 @@ import { parseIssue } from "./agentOnce.js";
 import { listModels } from "./llm.js";
 import { setTaskStatus } from "./status.js";
 import { stopTask } from "./runs.js";
-import { runGroup } from "./scheduler.js";
+import { runGroup, advanceQueue } from "./scheduler.js";
 import { runDebate, resumeDebate, resumeAtGate } from "./debate/index.js";
 import { resolveGate } from "./debate/gates.js";
 import { detectLocalAgents } from "./detect.js";
@@ -262,7 +262,21 @@ async function enrichTiming(rows: (typeof tasks.$inferSelect)[]): Promise<Task[]
     arr.push(s);
     byTask.set(s.taskId, arr);
   }
-  return rows.map((r) => ({ ...toTask(r), ...runsTiming(byTask.get(r.id) ?? []) }));
+  // 顺手把 queue 归属(queueId / queuePosition)也批查出来,前端 UI 要用
+  const qItems = await db
+    .select()
+    .from(queueItems)
+    .where(inArray(queueItems.taskId, rows.map((r) => r.id)));
+  const qByTask = new Map(qItems.map((q) => [q.taskId, q] as const));
+  return rows.map((r) => {
+    const q = qByTask.get(r.id);
+    return {
+      ...toTask(r),
+      ...runsTiming(byTask.get(r.id) ?? []),
+      queueId: q?.queueId ?? null,
+      queuePosition: q?.position ?? null,
+    };
+  });
 }
 
 const toSession = (r: typeof sessions.$inferSelect): Session => ({
@@ -510,7 +524,12 @@ api.get("/tasks/:id", async (c) => {
 });
 
 api.post("/tasks", async (c) => {
-  const b = await c.req.json<Partial<Task> & { projectId: string; title: string; attachments?: string[] }>();
+  const b = await c.req.json<Partial<Task> & {
+    projectId: string;
+    title: string;
+    attachments?: string[];
+    appendToQueue?: string; // 可选:把新任务追加到指定 queue 的尾部
+  }>();
   const ts = now();
   const taskId = id();
   const row = {
@@ -524,8 +543,10 @@ api.post("/tasks", async (c) => {
     status: (b.status && isUserSettableStatus(b.status) ? b.status : "backlog") as TaskStatus,
     priority: b.priority ?? "none",
     labels: JSON.stringify(b.labels ?? []),
-    dependsOn: JSON.stringify(b.dependsOn ?? []),
-    resumeDependsOn: JSON.stringify(b.resumeDependsOn ?? []),
+    // dependsOn / resumeDependsOn 字段保留为 []。新模型用 queue_items
+    // 表达顺序依赖(DESIGN-scheduling.md);input 上的这俩字段已不再接受。
+    dependsOn: "[]",
+    resumeDependsOn: "[]",
     agentType: b.agentType ?? null,
     autoTitle: b.autoTitle ?? false,
     debate: b.debate ? JSON.stringify(b.debate) : null,
@@ -536,6 +557,35 @@ api.post("/tasks", async (c) => {
     worktreeBase: b.worktreeBase ?? null,
   };
   await db.insert(tasks).values(row);
+  // 可选:追加到现有 queue 的尾部。要求:queue 已存在,且新 task 跟
+  // queue 已有任务的 groupId 一致(违反就 400,不静默)。
+  if (b.appendToQueue) {
+    const existing = await db
+      .select()
+      .from(queueItems)
+      .where(eq(queueItems.queueId, b.appendToQueue))
+      .orderBy(asc(queueItems.position));
+    if (existing.length === 0) {
+      return c.json({ error: `queue ${b.appendToQueue} 不存在` }, 400);
+    }
+    const firstTask = (
+      await db.select().from(tasks).where(eq(tasks.id, existing[0].taskId))
+    ).at(0);
+    if (firstTask && (firstTask.groupId ?? null) !== (row.groupId ?? null)) {
+      return c.json(
+        {
+          error: `跨 group 不允许:queue 属于 group ${firstTask.groupId},新任务属于 ${row.groupId}`,
+        },
+        400,
+      );
+    }
+    await db.insert(queueItems).values({
+      taskId,
+      queueId: b.appendToQueue,
+      position: existing.length,
+      createdAt: ts,
+    });
+  }
   return c.json((await enrichTiming([row as typeof tasks.$inferSelect]))[0], 201);
 });
 
@@ -563,14 +613,8 @@ api.patch("/tasks/:id", async (c) => {
   if (b.agentType !== undefined) patch.agentType = b.agentType;
   if (b.mode !== undefined) patch.mode = b.mode;
   if (b.debate !== undefined) patch.debate = b.debate ? JSON.stringify(b.debate) : null;
-  // dependsOn editing (the "依赖" picker). Sanitize: drop self-reference and
-  // dedupe so a buggy client can't deadlock the task on itself.
-  if (b.dependsOn !== undefined) {
-    patch.dependsOn = JSON.stringify([...new Set(b.dependsOn.filter((d) => d !== tid))]);
-  }
-  if (b.resumeDependsOn !== undefined) {
-    patch.resumeDependsOn = JSON.stringify([...new Set(b.resumeDependsOn.filter((d) => d !== tid))]);
-  }
+  // 注意:dependsOn / resumeDependsOn 不再可编辑(DESIGN-scheduling.md):
+  // 改顺序请用 /queues/:id/* 端点;调整队列归属请用 remove + insert/append。
   // resumePrompt：让用户编辑 agent 留下的续跑指令（写得不好就改、不想续跑就传空
   // 串清空）。"" / null 都映射为 null —— 跟 settleTaskStatus 检查保持一致。
   if (b.resumePrompt !== undefined) {
@@ -656,10 +700,9 @@ api.post("/groups/:id/pause", async (c) => {
 });
 
 // Batch-create single-mode tasks into an EXISTING group, agent-facing (§ interfaces).
-// The caller passes a list of tasks; we pre-generate their ids so dependency edges
-// can reference siblings *by local key* (the real ids don't exist at call time),
-// and `chain:true` is sugar that wires A→B→C→D in array order. projectId is
-// inherited from the group. Optionally fires the group (runGroup) right after.
+// `chain:true` creates a queue with these tasks in array order (DESIGN-scheduling.md);
+// arbitrary pairwise dependsOn between siblings is no longer supported (use chain
+// or split into multiple batches). projectId 从 group 继承。可选 run 立即触发 runGroup。
 api.post("/groups/:groupId/tasks/batch", async (c) => {
   const groupId = c.req.param("groupId");
   const g = (await db.select().from(groups).where(eq(groups.id, groupId))).at(0);
@@ -678,23 +721,39 @@ api.post("/groups/:groupId/tasks/batch", async (c) => {
     }
   }
 
-  // Pre-generate ids; map each declared local key → its id for dependency resolution.
+  // 拒绝 legacy 字段:本版本不再接受 dependsOn / resumeDependsOn(DESIGN-scheduling.md)。
+  // 想串行就用 chain:true,想跨组依赖就用 queue API。
+  for (const [i, s] of specs.entries()) {
+    if (s.dependsOn?.length || s.resumeDependsOn?.length) {
+      return c.json(
+        {
+          error: `tasks[${i}].dependsOn / resumeDependsOn 已废弃,请用 chain:true 表达顺序,或用 /queues/* 端点细调`,
+        },
+        400,
+      );
+    }
+  }
+
+  // chain:true 在 parallel group 上是自相矛盾(DESIGN §1.3:parallel group 无 queue)。
+  if (b.chain && specs.length > 1 && g.mode === "parallel") {
+    return c.json(
+      {
+        error: "chain:true 不能用于 parallel group:并行容器装不了串行队列。要串行请把 group 设为 serial,或不要传 chain。",
+      },
+      400,
+    );
+  }
+
+  // Pre-generate ids (chain 用得到).
   const ids = specs.map(() => id());
-  const keyToId = new Map<string, string>();
-  specs.forEach((s, i) => { if (s.key) keyToId.set(s.key, ids[i]); });
 
   const firstLine = (body?: string) =>
     (body ?? "").split("\n").map((l) => l.trim()).find(Boolean)?.slice(0, 30) ?? "";
 
-  // Distinct, increasing timestamps so serial-mode ordering (sorted by createdAt)
-  // is stable too — not only the parallel-mode dependsOn path.
+  // Distinct, increasing timestamps — UI 排序时序稳定。
   const base = Date.now();
   const rows = specs.map((s, i) => {
     const explicitTitle = (s.title ?? "").trim();
-    // dependsOn: sibling key → its id; otherwise treat as an existing task id.
-    const deps = new Set((s.dependsOn ?? []).map((d) => keyToId.get(d) ?? d));
-    const resumeDeps = new Set((s.resumeDependsOn ?? []).map((d) => keyToId.get(d) ?? d));
-    if (b.chain && i > 0) deps.add(ids[i - 1]);
     const ts = new Date(base + i).toISOString();
     return {
       id: ids[i],
@@ -707,8 +766,8 @@ api.post("/groups/:groupId/tasks/batch", async (c) => {
       status: "backlog",
       priority: s.priority ?? b.defaults?.priority ?? "none",
       labels: JSON.stringify(s.labels ?? b.defaults?.labels ?? []),
-      dependsOn: JSON.stringify([...deps]),
-      resumeDependsOn: JSON.stringify([...resumeDeps]),
+      dependsOn: "[]", // 字段保留为空(legacy)
+      resumeDependsOn: "[]",
       agentType: (s.agentType ?? b.defaults?.agentType ?? null) as AgentType | null,
       autoTitle: !explicitTitle, // no explicit title → let the first run name it
       debate: null as string | null,
@@ -724,15 +783,24 @@ api.post("/groups/:groupId/tasks/batch", async (c) => {
   });
 
   await db.insert(tasks).values(rows);
+
+  // chain:true → 创建一个 queue,把这批 task 按数组顺序加入(serial group 才走到这里)
+  if (b.chain && specs.length > 1) {
+    const queueId = id();
+    const qts = now();
+    await db.insert(queueItems).values(
+      ids.map((tid, i) => ({
+        taskId: tid,
+        queueId,
+        position: i,
+        createdAt: qts,
+      })),
+    );
+  }
+
   if (b.run) void runGroup(groupId);
-  // chain 串成的依赖链会让任务严格串行，即使分组是 parallel——这正是「设了并行却没并行」
-  // 的根因。命中这种自相矛盾的组合时回个提示，让调用方（含 MCP/skill）能察觉。
-  const warning =
-    b.chain && specs.length > 1 && g.mode === "parallel"
-      ? "本批用 chain 串成了依赖链：即使分组是 parallel，这些任务也会按链严格串行。要真正并行执行请去掉 chain（或把分组设为 serial 表达同样的串行意图）。"
-      : undefined;
   return c.json(
-    { groupId, run: !!b.run, ...(warning ? { warning } : {}), tasks: await enrichTiming(rows as (typeof tasks.$inferSelect)[]) },
+    { groupId, run: !!b.run, tasks: await enrichTiming(rows as (typeof tasks.$inferSelect)[]) },
     201,
   );
 });
@@ -1348,6 +1416,208 @@ api.patch("/llm-providers/:id", async (c) => {
 api.delete("/llm-providers/:id", async (c) => {
   await db.delete(llmProviders).where(eq(llmProviders.id, c.req.param("id")));
   return c.json({ deleted: true });
+});
+
+// ── queues (顺序依赖原语,DESIGN-scheduling.md §1) ─────────────────────────────
+// queue 是有序的 task id 列表。前一个 done/canceled 后,后一个自动启动。
+// 不变量:同一 queue 内所有 task 必须在同一个 group(或都无 group),应用层校验。
+
+// 内部:把 (queueId, [..items..]) 重排成 position 0..N-1,保持 dense
+async function repackQueue(queueId: string, orderedTaskIds: string[]): Promise<void> {
+  const ts = now();
+  // 先全删,再按新顺序插入(libsql 没有 batch txn 暴露,但 queue 通常很小)
+  await db.delete(queueItems).where(eq(queueItems.queueId, queueId));
+  if (orderedTaskIds.length === 0) return;
+  await db.insert(queueItems).values(
+    orderedTaskIds.map((tid, i) => ({
+      taskId: tid,
+      queueId,
+      position: i,
+      createdAt: ts,
+    })),
+  );
+}
+
+// 校验:queue 里所有 task 必须同 group(或都无 group)
+async function assertSameGroup(queueId: string, candidateTaskId?: string): Promise<string | null> {
+  const items = await db.select().from(queueItems).where(eq(queueItems.queueId, queueId));
+  const taskIds = [...items.map((i) => i.taskId), ...(candidateTaskId ? [candidateTaskId] : [])];
+  if (taskIds.length === 0) return null;
+  const rows = await db.select().from(tasks).where(inArray(tasks.id, taskIds));
+  const groups = new Set(rows.map((r) => r.groupId));
+  if (groups.size > 1) {
+    return `跨 group 不允许:queue ${queueId} 涉及多个 group ${[...groups].join(", ")}`;
+  }
+  return null;
+}
+
+// 列出某 queue 的内容(含每个 task 的状态)
+api.get("/queues/:queueId", async (c) => {
+  const qid = c.req.param("queueId");
+  const items = await db
+    .select()
+    .from(queueItems)
+    .where(eq(queueItems.queueId, qid))
+    .orderBy(asc(queueItems.position));
+  if (items.length === 0) return c.json({ error: "queue not found" }, 404);
+  const rows = await db.select().from(tasks).where(inArray(tasks.id, items.map((i) => i.taskId)));
+  const byId = new Map(rows.map((r) => [r.id, r] as const));
+  const groupId = rows[0]?.groupId ?? null;
+  return c.json({
+    queueId: qid,
+    groupId,
+    items: items.map((i) => {
+      const t = byId.get(i.taskId);
+      return {
+        taskId: i.taskId,
+        position: i.position,
+        title: t?.title ?? "",
+        status: t?.status ?? null,
+        archived: t?.archived ?? false,
+      };
+    }),
+  });
+});
+
+// 整批 reorder:body 必须是 queue 完整成员的新顺序(防止漏掉或重复)
+api.post("/queues/:queueId/reorder", async (c) => {
+  const qid = c.req.param("queueId");
+  const b = await c.req.json<{ taskIds?: string[] }>();
+  const want = b.taskIds ?? [];
+  if (!Array.isArray(want)) return c.json({ error: "taskIds 必须是数组" }, 400);
+
+  const current = await db.select().from(queueItems).where(eq(queueItems.queueId, qid));
+  if (current.length === 0) return c.json({ error: "queue not found" }, 404);
+
+  const haveSet = new Set(current.map((i) => i.taskId));
+  const wantSet = new Set(want);
+  if (haveSet.size !== wantSet.size || [...haveSet].some((id) => !wantSet.has(id))) {
+    return c.json(
+      {
+        error: "reorder 必须传 queue 的完整成员,不能漏或多",
+        have: [...haveSet],
+        got: [...wantSet],
+      },
+      400,
+    );
+  }
+
+  // running task 不能被移走/前面新插队
+  const taskRows = await db.select().from(tasks).where(inArray(tasks.id, want));
+  const runningId = taskRows.find((t) => t.status === "running" || t.status === "queued")?.id;
+  if (runningId) {
+    const oldPos = current.find((i) => i.taskId === runningId)!.position;
+    const newPos = want.indexOf(runningId);
+    if (oldPos !== newPos) {
+      return c.json({ error: `running/queued task ${runningId} 不能移动位置` }, 409);
+    }
+  }
+
+  await repackQueue(qid, want);
+  return c.json({ ok: true });
+});
+
+// 从 queue 移除一项(task 本身不删,只是脱离 queue → 成为独立 task)
+api.post("/queues/:queueId/remove", async (c) => {
+  const qid = c.req.param("queueId");
+  const b = await c.req.json<{ taskId?: string }>();
+  if (!b.taskId) return c.json({ error: "taskId required" }, 400);
+
+  const items = await db
+    .select()
+    .from(queueItems)
+    .where(eq(queueItems.queueId, qid))
+    .orderBy(asc(queueItems.position));
+  if (items.length === 0) return c.json({ error: "queue not found" }, 404);
+  if (!items.some((i) => i.taskId === b.taskId)) {
+    return c.json({ error: "task 不在此 queue 里" }, 404);
+  }
+
+  // running task 不能拔
+  const tr = (await db.select().from(tasks).where(eq(tasks.id, b.taskId))).at(0);
+  if (tr && (tr.status === "running" || tr.status === "queued")) {
+    return c.json({ error: `task ${b.taskId} 正在跑,不能移出 queue` }, 409);
+  }
+
+  const next = items.filter((i) => i.taskId !== b.taskId).map((i) => i.taskId);
+  await repackQueue(qid, next);
+  // 移除后立刻推一下,看看后面的 task 是否能动了
+  if (next.length > 0) void advanceQueue(qid);
+  return c.json({ ok: true });
+});
+
+// 在指定位置插入(校验跨 group)
+api.post("/queues/:queueId/insert", async (c) => {
+  const qid = c.req.param("queueId");
+  const b = await c.req.json<{ taskId?: string; position?: number }>();
+  if (!b.taskId) return c.json({ error: "taskId required" }, 400);
+  const pos = typeof b.position === "number" ? Math.max(0, b.position | 0) : -1;
+
+  const items = await db
+    .select()
+    .from(queueItems)
+    .where(eq(queueItems.queueId, qid))
+    .orderBy(asc(queueItems.position));
+  if (items.length === 0) return c.json({ error: "queue not found" }, 404);
+  if (items.some((i) => i.taskId === b.taskId)) {
+    return c.json({ error: "task 已在此 queue 里" }, 409);
+  }
+
+  // 候选 task 必须先存在
+  const tr = (await db.select().from(tasks).where(eq(tasks.id, b.taskId))).at(0);
+  if (!tr) return c.json({ error: "task not found" }, 404);
+
+  // 候选 task 不能已在别的 queue 里(task_id PK 保证,但提前给个友好错误)
+  const otherQueue = (
+    await db.select().from(queueItems).where(eq(queueItems.taskId, b.taskId))
+  ).at(0);
+  if (otherQueue && otherQueue.queueId !== qid) {
+    return c.json({ error: `task 已在另一个 queue ${otherQueue.queueId}` }, 409);
+  }
+
+  // 跨 group 校验
+  const violation = await assertSameGroup(qid, b.taskId);
+  if (violation) return c.json({ error: violation }, 400);
+
+  const insertAt = pos < 0 || pos > items.length ? items.length : pos;
+  const next = [
+    ...items.slice(0, insertAt).map((i) => i.taskId),
+    b.taskId,
+    ...items.slice(insertAt).map((i) => i.taskId),
+  ];
+  await repackQueue(qid, next);
+  return c.json({ ok: true });
+});
+
+// 新建一个 queue,用给定的 task ids
+api.post("/queues", async (c) => {
+  const b = await c.req.json<{ taskIds?: string[] }>();
+  const want = b.taskIds ?? [];
+  if (!Array.isArray(want) || want.length === 0) {
+    return c.json({ error: "taskIds 不能为空" }, 400);
+  }
+  // 候选 task 都得存在
+  const rows = await db.select().from(tasks).where(inArray(tasks.id, want));
+  if (rows.length !== want.length) {
+    return c.json({ error: "部分 taskId 不存在" }, 400);
+  }
+  // 同 group(或都无 group)
+  const gs = new Set(rows.map((r) => r.groupId));
+  if (gs.size > 1) return c.json({ error: "跨 group 不允许" }, 400);
+  // 任何一个 task 已在其他 queue?
+  const occupied = await db.select().from(queueItems).where(inArray(queueItems.taskId, want));
+  if (occupied.length > 0) {
+    return c.json(
+      { error: `这些 task 已在其他 queue: ${occupied.map((o) => o.taskId).join(", ")}` },
+      409,
+    );
+  }
+  const qid = id();
+  const ts = now();
+  await db.insert(queueItems).values(
+    want.map((tid, i) => ({ taskId: tid, queueId: qid, position: i, createdAt: ts })),
+  );
+  return c.json({ queueId: qid, taskIds: want }, 201);
 });
 
 // ── SSE stream (§12) ───────────────────────────────────────────────────────
