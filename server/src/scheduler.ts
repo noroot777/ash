@@ -52,6 +52,15 @@ export async function advanceQueueFromTask(taskId: string): Promise<void> {
 //   - paused → 用 resumePrompt 续跑(resumeOrRunTask 内部按 status 分流)
 // 每次推进只启动 head 一项;它跑完触发 advanceQueueFromTask 再推下一个。
 export async function advanceQueue(queueId: string): Promise<void> {
+  const next = await pickNextLaunchable(queueId);
+  if (!next) return;
+  await setQueued(next.id);
+  void resumeOrRunTask(next.id, { reason: "queue" });
+}
+
+// 给定 queue,挑出"现在应该被拉起来的下一个 task"(或 null = 没有)。
+// 纯函数(只读 DB,不变状态),便于测试 + 给 UI 用来高亮"下一个会跑的"。
+export async function pickNextLaunchable(queueId: string): Promise<typeof tasks.$inferSelect | null> {
   const items = await db
     .select()
     .from(queueItems)
@@ -60,17 +69,15 @@ export async function advanceQueue(queueId: string): Promise<void> {
 
   for (const item of items) {
     const t = (await db.select().from(tasks).where(eq(tasks.id, item.taskId))).at(0);
-    if (!t) continue; // dangling,跳过
-    if (t.archived) continue; // 归档任务在队列里也透明跳过
+    if (!t) continue;
+    if (t.archived) continue;
     const s = t.status as TaskStatus;
     if (s === "done" || s === "canceled") continue;
-    if (s === "failed" || s === "awaiting_review") return; // 链停
-    if (s === "running" || s === "queued") return; // 已在跑
-    // backlog / paused:启动它
-    await setQueued(t.id);
-    void resumeOrRunTask(t.id, { reason: "queue" });
-    return;
+    if (s === "failed" || s === "awaiting_review") return null; // 链停
+    if (s === "running" || s === "queued") return null; // 已在跑
+    return t; // backlog / paused
   }
+  return null;
 }
 
 // Run an entire group. parallel mode:扫所有 backlog/paused,限流并行启动。
