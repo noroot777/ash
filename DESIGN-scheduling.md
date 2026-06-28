@@ -42,16 +42,20 @@ Queue Q = [taskA, taskB, taskC, taskD]
 ### Queue 不是 Group
 
 - **Group**：用户面（UI 容器）。可并行可串行（mode 不变），是相关任务的视觉/逻辑容器。
-- **Queue**：调度器内部（不直接显示）。只表达"先后顺序"。
+- **Queue**：调度器内部（不直接显示）。表达"完成顺序"。
 
-两者**正交**：一个 task 可以在 0–1 个 group 里 + 在 0–1 个 queue 里。
+两者**正交但可共存**：一个 task 可以在 0–1 个 group 里 + 在 0–1 个 queue 里。
 
 **硬约束**：**同一个 queue 里的所有任务必须属于同一个 group（或都不属于任何 group）**。queue 不能跨 group。理由：跨 group 的依赖链 UI 上画不出一致视图，且产品上从未需要。
 
-| Group mode | 内部 queue 形态 |
-|---|---|
-| `serial` | 一个 queue，包含 group 所有 task |
-| `parallel` | 没有 queue，task 互相独立 |
+**Group.mode 控制初始启动方式,Queue 控制完成顺序——两者解耦**（这是真实数据揭示后的修订；最早一版以为"parallel group 不要 queue",但用户工作流大量出现"parallel group + resume chain",见 §8 实测）：
+
+| Group mode | 初始 runGroup 行为 | Queue 在其中的作用 |
+|---|---|---|
+| `serial` | 整组进一个 queue,按推进规则串行启动 | queue 是唯一启动入口 |
+| `parallel` | 所有 backlog 任务**并行**启动(不看 queue) | queue 只在**完成 / 暂停后**起作用——决定 paused 任务的 resume 顺序 |
+
+具体到 dr-ytb2b 那类"并行预处理 + 串行 TTS"工作流:放在 parallel group 里,所有视频先并行做 pre-TTS、各自 paused,后续按 queue 顺序逐个 resume 做 TTS。
 
 ---
 
@@ -82,18 +86,24 @@ Queue Q = [taskA, taskB, taskC, taskD]
 
 ```
 对队列 Q 中位置 N 的任务 t：
-  t 可以从 backlog → queued，当且仅当：
-    1. Q 里所有位于 t 之前的任务都处于 done 状态，且
+  t 可以从 backlog → queued（或从 paused → 续跑），当且仅当：
+    1. Q 里所有位于 t 之前的任务都处于 done 或 canceled 状态，且
     2. t 自身状态是 backlog 或 paused
 
   如果 t 是 paused：用 resumePrompt 续跑当前 session
   如果 t 是 backlog：开新 agent 跑
 ```
 
-**就这一条规则**。没有别的。它一并解释：
+**触发时机**:任何任务进入 `done` / `canceled` / `paused` 时,如果它在某个 queue 里,对那个 queue 调一次 advance。
+
+- `done` / `canceled` 触发是因为它们让位(head 透明跳过)
+- `paused` 触发是因为下游可能恰好是 head 且正等着续跑(dr-ytb2b 工作流核心场景:v2 跑完 pre-TTS 进 paused,v1 已 done,v2 该立刻 resume 做 TTS)
+- `failed` / `awaiting_review` 不触发——链停在这里,等用户处理
+
+**就这一条规则**。它一并解释：
 
 - 自动启动 backlog（前一项 done → 我从 backlog 推进）
-- 自动唤醒 paused（前一项 done → 我从 paused 续跑）
+- 自动唤醒 paused（前一项 done 或我刚进 paused → 我从 paused 续跑）
 - 链停在 failed（前一项 failed → 后面所有项都因第 1 条不成立而卡住）
 - 重复跑分组幂等（已经 `done` 的不会再跑，因为它已经不在 backlog/paused）
 
@@ -223,19 +233,24 @@ dr-ytb2b 的 skill 重写是本设计的**第三阶段交付物**，详见 §10�
 ```
 for each group g:
   if g.mode == 'serial':
-    create queue Q for g
-    topo-sort g 内 tasks（按 dependsOn 链 + createdAt 兜底）
-    把排好序的 task 按位置加入 Q
+    # serial = 所有任务一个接一个跑,整组进一个 queue
+    sort g 内 tasks 按 dependsOn 链 + createdAt 兜底拓扑排序
+    创建一个 queue 把所有 task 按顺序加入
   if g.mode == 'parallel':
-    跳过（parallel group 没有 queue）
+    # parallel = 没显式依赖的任务真并行;有依赖的小链各自一个 queue
+    for each connected-component C of g.tasks (按 deps 联通):
+      if size(C) >= 2 and C 有任何 deps:
+        创建 queue 把 C 内 task 按拓扑顺序加入
+      # 真独立的孤儿 task 不进 queue,跑起来就是真并行
 
-for each task t with groupId=null:
-  if t.dependsOn or t.resumeDependsOn 非空:
-    // 罕见情况，单独建一个 queue 把链条放进去
-    create queue Q
-    topo-sort 这些 task 加入 Q
-  else:
-    跳过（独立任务，无 queue）
+for each task t with group_id IS NULL:
+  按 deps 做 connected-components,有依赖的分量建独立 queue
+  孤儿独立任务不进 queue
+
+最后:UPDATE tasks SET depends_on='[]', resume_depends_on='[]'(清空,不动 schema)
+```
+
+**真实数据实测**(本仓库 06-28 时点,311 task / 1 个 parallel group "日常搬运" / 87 个 chained task):走完这套逻辑产出 **14 个 queue**(每天的搬运链各成一队,大小 2-10),独立"全流程"任务保持自由并行。
 
 清空所有 task 的 dependsOn / resumeDependsOn 字段（先清空，下个版本删字段）
 ```
