@@ -190,16 +190,37 @@ await test("迁移: serial group 拓扑入 queue,字段清空", async () => {
   }
 });
 
-await test("迁移: parallel group 不建 queue", async () => {
+await test("迁移: parallel group + resume chain → 也建 queue", async () => {
+  // 真实数据揭示:用户用"parallel group + resume_depends_on 链"表达
+  // 并行预处理→串行 TTS。queue 表达完成顺序,group.mode 表达初始启动方式,
+  // 两者正交。所以任何 group 只要有依赖链就建 queue。
   const p = await seedProject();
   const g = await seedGroup(p.id, "parallel");
-  const a = await seedTask(p.id, g.id);
-  await seedTask(p.id, g.id, { dependsOn: JSON.stringify([a.id]) }); // 极少见但兼容
-  // 注意 parallel group 上的 dependsOn 会被自检忽略——因为它在同 group
-  // 内,不是跨 group;DAG 检查也只看长度。我们直接走迁移看结果。
+  const a = await seedTask(p.id, g.id, { title: "v1" });
+  const b = await seedTask(p.id, g.id, {
+    title: "v2",
+    resumeDependsOn: JSON.stringify([a.id]),
+  });
+  const c = await seedTask(p.id, g.id, {
+    title: "v3",
+    resumeDependsOn: JSON.stringify([b.id]),
+  });
+  await migrateQueues();
+  const items = await db.select().from(queueItems).orderBy(asc(queueItems.position));
+  assertEq(items.length, 3, "parallel group 的 resume chain 也应建 queue");
+  assertEq(items[0].taskId, a.id, "v1 在前");
+  assertEq(items[1].taskId, b.id, "v2 在中");
+  assertEq(items[2].taskId, c.id, "v3 在后");
+});
+
+await test("迁移: parallel group 无 deps → 不建 queue", async () => {
+  const p = await seedProject();
+  const g = await seedGroup(p.id, "parallel");
+  await seedTask(p.id, g.id);
+  await seedTask(p.id, g.id);
   await migrateQueues();
   const items = await db.select().from(queueItems);
-  assertEq(items.length, 0, "parallel group 不应建 queue");
+  assertEq(items.length, 0, "纯独立任务不应建 queue");
 });
 
 await test("迁移: 幂等(无 legacy 数据时直接 return)", async () => {
@@ -331,6 +352,37 @@ await test("setTaskStatus(failed) 不触发推进(链停)", async () => {
   await new Promise((r) => setTimeout(r, 100));
   const bRow = (await db.select().from(tasks).where(eq(tasks.id, b.id))).at(0)!;
   assertEq(bRow.status, "backlog", "failed 不应推进 → b 仍 backlog");
+});
+
+await test("setTaskStatus(paused) 在 head → 推进(自我触发 resume)", async () => {
+  // 实际工作流:v2 跑完 pre-TTS 进入 paused,前面的 v1 已经 done。
+  // 此时 v2 应自动 resume(它是 queue head 的可启动 task)。
+  const p = await seedProject();
+  const g = await seedGroup(p.id, "parallel");
+  const a = await seedTask(p.id, g.id, { status: "done" });
+  const b = await seedTask(p.id, g.id, { resumePrompt: "继续 TTS" });
+  await seedQueue([a.id, b.id]);
+  await setTaskStatus(b.id, "paused");
+  await new Promise((r) => setTimeout(r, 100));
+  const bRow = (await db.select().from(tasks).where(eq(tasks.id, b.id))).at(0)!;
+  assertTrue(
+    bRow.status === "queued" || bRow.status === "running" || bRow.status === "failed",
+    `b 在 head + 上游 done → 应被 advance 推到 queued/running/failed,实际=${bRow.status}`,
+  );
+});
+
+await test("setTaskStatus(paused) 但不在 head → 不推进", async () => {
+  // v3 paused,但 v2(它前面)还在 running/backlog。v3 必须继续等。
+  const p = await seedProject();
+  const g = await seedGroup(p.id, "parallel");
+  const a = await seedTask(p.id, g.id, { status: "done" });
+  const b = await seedTask(p.id, g.id, { status: "running" });
+  const c = await seedTask(p.id, g.id, { resumePrompt: "继续" });
+  await seedQueue([a.id, b.id, c.id]);
+  await setTaskStatus(c.id, "paused");
+  await new Promise((r) => setTimeout(r, 100));
+  const cRow = (await db.select().from(tasks).where(eq(tasks.id, c.id))).at(0)!;
+  assertEq(cRow.status, "paused", "前面 b 还在 running,c 必须保持 paused");
 });
 
 // ── 5. 总结 ────────────────────────────────────────────────────────

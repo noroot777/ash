@@ -3,6 +3,46 @@ import { db } from "./index.js";
 import { tasks, queueItems, groups } from "./schema.js";
 import { id as makeId, now } from "../util.js";
 
+// 把一组 task 按依赖关系拆成连通分量。task A 依赖 task B(deps 或 resumeDeps)
+// 算它们连通。每个分量内部依赖关系完整保留(下游 topo 排序时用)。
+function connectedComponents<T extends { id: string; dependsOn: string; resumeDependsOn: string }>(
+  pool: T[],
+): T[][] {
+  const idSet = new Set(pool.map((t) => t.id));
+  const byId = new Map(pool.map((t) => [t.id, t] as const));
+  const components: T[][] = [];
+  const visited = new Set<string>();
+
+  for (const seed of pool) {
+    if (visited.has(seed.id)) continue;
+    const comp: T[] = [];
+    const stack = [seed.id];
+    while (stack.length) {
+      const tid = stack.pop()!;
+      if (visited.has(tid)) continue;
+      visited.add(tid);
+      const t = byId.get(tid)!;
+      comp.push(t);
+      // 前驱
+      for (const did of [
+        ...(JSON.parse(t.dependsOn) as string[]),
+        ...(JSON.parse(t.resumeDependsOn) as string[]),
+      ]) {
+        if (idSet.has(did) && !visited.has(did)) stack.push(did);
+      }
+      // 后继:扫一遍找谁依赖我
+      for (const other of pool) {
+        if (visited.has(other.id)) continue;
+        const od = JSON.parse(other.dependsOn) as string[];
+        const or = JSON.parse(other.resumeDependsOn) as string[];
+        if ([...od, ...or].includes(tid)) stack.push(other.id);
+      }
+    }
+    components.push(comp);
+  }
+  return components;
+}
+
 // 把 legacy 的 depends_on / resume_depends_on 数据迁到 queue_items 表。
 // 由 ensureSchema 完成后调一次。详见 DESIGN-scheduling.md §8。
 //
@@ -73,51 +113,57 @@ export async function migrateQueues(): Promise<void> {
   const buckets: Bucket[] = [];
 
   for (const g of allGroups) {
-    if (g.mode !== "serial") continue; // parallel 跳过
     const tasksInGroup = allTasks.filter((t) => t.groupId === g.id);
     if (tasksInGroup.length === 0) continue;
-    buckets.push({ label: `group ${g.id} (${g.name})`, tasks: tasksInGroup });
+
+    if (g.mode === "serial") {
+      // serial group:语义是"所有任务一个接一个跑",整组进一个 queue。
+      // 没有 deps 的任务按 createdAt 顺序占位。
+      const hasAny = tasksInGroup.some(
+        (t) =>
+          (JSON.parse(t.dependsOn) as string[]).length > 0 ||
+          (JSON.parse(t.resumeDependsOn) as string[]).length > 0,
+      );
+      // 即使没 deps,serial 也建一个 queue —— 没 queue 就跟 parallel 没区别了
+      // (跑起来会变成全并行)。
+      void hasAny;
+      buckets.push({ label: `serial group ${g.id} (${g.name})`, tasks: tasksInGroup });
+    } else {
+      // parallel group:用 deps 的"连通分量"拆;独立任务(连通分量只有自己且没
+      // deps)留在 queue 外、跑起来是真并行。
+      // 真实数据示例:group "日常搬运" 有 111 个 task,其中 06/28 那 7 个用
+      // resume chain 串成一条,其它各天也各自成链。每条链一个 queue。
+      const components = connectedComponents(tasksInGroup);
+      for (const comp of components) {
+        const hasDeps = comp.some(
+          (t) =>
+            (JSON.parse(t.dependsOn) as string[]).length > 0 ||
+            (JSON.parse(t.resumeDependsOn) as string[]).length > 0,
+        );
+        if (comp.length >= 2 && hasDeps) {
+          buckets.push({
+            label: `parallel group ${g.id} (${g.name}) 连通分量 ${comp.length} 个`,
+            tasks: comp,
+          });
+        }
+      }
+    }
   }
 
   // null group_id 的连通分量
   const nullGroupTasks = allTasks.filter((t) => t.groupId === null);
-  const nullGroupIdSet = new Set(nullGroupTasks.map((t) => t.id));
-  const visited = new Set<string>();
 
-  for (const seed of nullGroupTasks) {
-    if (visited.has(seed.id)) continue;
-    const component: typeof allTasks = [];
-    const stack = [seed.id];
-    while (stack.length) {
-      const id = stack.pop()!;
-      if (visited.has(id)) continue;
-      visited.add(id);
-      const t = taskById.get(id)!;
-      component.push(t);
-      // 前驱
-      for (const did of [
-        ...(JSON.parse(t.dependsOn) as string[]),
-        ...(JSON.parse(t.resumeDependsOn) as string[]),
-      ]) {
-        if (nullGroupIdSet.has(did) && !visited.has(did)) stack.push(did);
-      }
-      // 后继：扫一遍找谁依赖我
-      for (const other of nullGroupTasks) {
-        const od = JSON.parse(other.dependsOn) as string[];
-        const or = JSON.parse(other.resumeDependsOn) as string[];
-        if (([...od, ...or]).includes(id) && !visited.has(other.id)) {
-          stack.push(other.id);
-        }
-      }
-    }
-    // 只有真正有依赖关系的分量才需要 queue
-    const componentHasDeps = component.some(
+  for (const comp of connectedComponents(nullGroupTasks)) {
+    const hasDeps = comp.some(
       (t) =>
         (JSON.parse(t.dependsOn) as string[]).length > 0 ||
         (JSON.parse(t.resumeDependsOn) as string[]).length > 0,
     );
-    if (component.length >= 2 && componentHasDeps) {
-      buckets.push({ label: `null-group component (seed=${seed.id})`, tasks: component });
+    if (comp.length >= 2 && hasDeps) {
+      buckets.push({
+        label: `null-group component (size=${comp.length})`,
+        tasks: comp,
+      });
     }
   }
 

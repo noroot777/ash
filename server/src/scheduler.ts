@@ -116,34 +116,45 @@ export async function runGroup(groupId: string): Promise<void> {
   await runParallel(groupId);
 }
 
-// parallel mode 的执行:扫所有 backlog/paused 任务并行启动,限流 MAX_PARALLEL。
-// canceled / failed 不在这里被批量唤起 —— 那是 P0d-fY_Zi4RC 那个事故的根因
-// (DESIGN §0 #3)。用户想重跑某条 canceled / failed task 应在单条上点 Run。
+// parallel mode 的执行:扫所有 backlog 任务并行启动,限流 MAX_PARALLEL。
+// **不**主动唤起 paused 任务——那些得靠队列推进按顺序 resume(否则同链上所有
+// paused task 一起跑就破坏了 resume 顺序)。canceled / failed 也不在这里被
+// 批量唤起 —— 那是 P0d-fY_Zi4RC 那个事故的根因(DESIGN §0 #3)。
+// 启动后立刻对该 group 关联的所有 queue 调一次 advanceQueue,把"恰好是 head
+// 的 paused"task 资源化掉。
 async function runParallel(groupId: string): Promise<void> {
   const groupRows = await db.select().from(tasks).where(eq(tasks.groupId, groupId));
-  const launchable = groupRows.filter(
-    (t) => !t.archived && (t.status === "backlog" || t.status === "paused"),
-  );
-  if (!launchable.length) return;
+  const launchable = groupRows.filter((t) => !t.archived && t.status === "backlog");
 
-  const pending = [...launchable];
-  const inflight = new Map<string, Promise<void>>();
+  if (launchable.length) {
+    const pending = [...launchable];
+    const inflight = new Map<string, Promise<void>>();
 
-  const launch = async (taskId: string): Promise<void> => {
-    await setQueued(taskId);
-    await resumeOrRunTask(taskId, { reason: "group" });
-  };
+    const launch = async (taskId: string): Promise<void> => {
+      await setQueued(taskId);
+      await resumeOrRunTask(taskId, { reason: "group" });
+    };
 
-  while (pending.length || inflight.size) {
-    if (!(await isPaused(groupId))) {
-      while (pending.length && inflight.size < MAX_PARALLEL) {
-        const t = pending.shift()!;
-        const p = launch(t.id).finally(() => inflight.delete(t.id));
-        inflight.set(t.id, p);
+    while (pending.length || inflight.size) {
+      if (!(await isPaused(groupId))) {
+        while (pending.length && inflight.size < MAX_PARALLEL) {
+          const t = pending.shift()!;
+          const p = launch(t.id).finally(() => inflight.delete(t.id));
+          inflight.set(t.id, p);
+        }
       }
+      if (inflight.size) await Promise.race(inflight.values());
+      else break;
     }
-    if (inflight.size) await Promise.race(inflight.values());
-    else break;
+    await parkQueued(groupId);
   }
-  await parkQueued(groupId);
+
+  // 让本 group 关联的所有 queue 也推一下(关键:如果有 paused task 在 queue
+  // 头部、它的前驱都已 done,就应该自动 resume)
+  const items = await db
+    .select()
+    .from(queueItems)
+    .where(inArray(queueItems.taskId, groupRows.map((t) => t.id)));
+  const queueIds = [...new Set(items.map((i) => i.queueId))];
+  for (const qid of queueIds) await advanceQueue(qid);
 }
