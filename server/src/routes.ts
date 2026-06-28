@@ -26,7 +26,7 @@ import { db } from "./db/index.js";
 import { projects, groups, tasks, sessions, schedules, scheduledMessages, agents, issues, issueComments, llmProviders } from "./db/schema.js";
 import { bus } from "./bus.js";
 import { id, now, attachmentsPrompt, runsTiming } from "./util.js";
-import { resumeOrRunTask, continueTask } from "./orchestrator.js";
+import { resumeOrRunTask, continueTask, wakePausedDependents } from "./orchestrator.js";
 import { parseIssue } from "./agentOnce.js";
 import { listModels } from "./llm.js";
 import { setTaskStatus } from "./status.js";
@@ -579,7 +579,12 @@ api.patch("/tasks/:id", async (c) => {
   await db.update(tasks).set(patch).where(eq(tasks.id, tid));
   // Status goes through the shared helper so manual changes maintain the run-time
   // columns (startedAt/endedAt) and broadcast them just like a real run does.
-  if (b.status !== undefined) await setTaskStatus(tid, b.status);
+  if (b.status !== undefined) {
+    await setTaskStatus(tid, b.status);
+    // 手动改 done 也要唤醒下游 paused 任务 —— 不止 agent 自然跑完 done 时触发。
+    // 否则用户在 UI 上把一个任务手动标 done 后，下游永远不会被叫醒。
+    if (b.status === "done") void wakePausedDependents(tid);
+  }
   const updated = (await db.select().from(tasks).where(eq(tasks.id, tid))).at(0)!;
   return c.json((await enrichTiming([updated]))[0]);
 });
