@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
-import { eq, inArray } from "drizzle-orm";
+import { eq, inArray, and, lt, asc } from "drizzle-orm";
 import { readFile } from "node:fs/promises";
 import { existsSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
 import { spawn } from "node:child_process";
@@ -21,12 +21,12 @@ import type {
   LlmProvider,
   LlmProtocol,
 } from "@harness/shared";
-import { canStartTask, canArchive, isUserSettableStatus, AGENT_TYPES, maxBytesFor, attachmentKind } from "@harness/shared";
+import { canSingleRun, canArchive, isUserSettableStatus, AGENT_TYPES, maxBytesFor, attachmentKind } from "@harness/shared";
 import { db } from "./db/index.js";
-import { projects, groups, tasks, sessions, schedules, scheduledMessages, agents, issues, issueComments, llmProviders } from "./db/schema.js";
+import { projects, groups, tasks, sessions, schedules, scheduledMessages, agents, issues, issueComments, llmProviders, queueItems } from "./db/schema.js";
 import { bus } from "./bus.js";
 import { id, now, attachmentsPrompt, runsTiming } from "./util.js";
-import { resumeOrRunTask, continueTask, wakePausedDependents } from "./orchestrator.js";
+import { resumeOrRunTask, continueTask } from "./orchestrator.js";
 import { parseIssue } from "./agentOnce.js";
 import { listModels } from "./llm.js";
 import { setTaskStatus } from "./status.js";
@@ -579,11 +579,10 @@ api.patch("/tasks/:id", async (c) => {
   await db.update(tasks).set(patch).where(eq(tasks.id, tid));
   // Status goes through the shared helper so manual changes maintain the run-time
   // columns (startedAt/endedAt) and broadcast them just like a real run does.
+  // setTaskStatus 内部在 done/canceled 时会自动触发 queue 推进(DESIGN §3),
+  // 所以这里不需要再手动 wake 下游。
   if (b.status !== undefined) {
     await setTaskStatus(tid, b.status);
-    // 手动改 done 也要唤醒下游 paused 任务 —— 不止 agent 自然跑完 done 时触发。
-    // 否则用户在 UI 上把一个任务手动标 done 后，下游永远不会被叫醒。
-    if (b.status === "done") void wakePausedDependents(tid);
   }
   const updated = (await db.select().from(tasks).where(eq(tasks.id, tid))).at(0)!;
   return c.json((await enrichTiming([updated]))[0]);
@@ -802,19 +801,34 @@ api.post("/tasks/:id/run", async (c) => {
   const r = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!r) return c.json({ error: "not found" }, 404);
   if (r.archived) return c.json({ error: "任务已归档，先取消归档再运行", archived: true }, 409);
-  // Guard the state machine: only settled, non-terminal-success tasks may start.
-  if (!canStartTask(r.status as TaskStatus)) return c.json({ error: "任务当前状态不可运行", status: r.status }, 409);
-  // Honor dependency edges even for single-task run. Fresh starts use dependsOn;
-  // paused/checkpoint resumes use resumeDependsOn. Dangling ids are ignored.
-  const deps = JSON.parse(r.status === "paused" ? r.resumeDependsOn : r.dependsOn) as string[];
-  if (deps.length) {
-    const depRows = await db.select().from(tasks).where(inArray(tasks.id, deps));
-    const blockedBy = depRows.filter((d) => d.status !== "done").map((d) => d.id);
-    if (blockedBy.length) {
-      return c.json(
-        { error: "任务存在未完成的依赖，先撤销依赖或等其完成", blockedBy },
-        409,
-      );
+  // 单条手动 Run：允许 backlog / canceled / failed / paused。canceled 在这里
+  // 允许是因为用户明确点了 Run，跟 queue 推进里 canceled 透明跳过是两回事。
+  if (!canSingleRun(r.status as TaskStatus)) return c.json({ error: "任务当前状态不可运行", status: r.status }, 409);
+  // 队列前置检查：如果这个 task 在某个 queue 里，前面所有 item 必须是
+  // done / canceled (透明) 才允许跑。否则单击 Run 等于绕过队列顺序。
+  const myItem = (
+    await db.select().from(queueItems).where(eq(queueItems.taskId, taskId))
+  ).at(0);
+  if (myItem) {
+    const before = await db
+      .select()
+      .from(queueItems)
+      .where(and(eq(queueItems.queueId, myItem.queueId), lt(queueItems.position, myItem.position)))
+      .orderBy(asc(queueItems.position));
+    if (before.length) {
+      const beforeTasks = await db
+        .select()
+        .from(tasks)
+        .where(inArray(tasks.id, before.map((i) => i.taskId)));
+      const blockedBy = beforeTasks
+        .filter((t) => !t.archived && t.status !== "done" && t.status !== "canceled")
+        .map((t) => t.id);
+      if (blockedBy.length) {
+        return c.json(
+          { error: "队列前面还有未完成的任务，先把它们处理完或把本任务移出队列", blockedBy },
+          409,
+        );
+      }
     }
   }
   // Fire-and-forget; progress streams over /api/events.

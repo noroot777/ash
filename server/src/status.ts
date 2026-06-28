@@ -41,4 +41,15 @@ export async function setTaskStatus(taskId: string, status: TaskStatus): Promise
     .where(eq(sessions.taskId, taskId));
   const timing = runs.length ? runsTiming(runs) : {};
   bus.publish({ type: "task.status", taskId, status, startedAt, endedAt, ...timing });
+
+  // 队列推进钩子(DESIGN §3):任务进 done / canceled 时,如果它在某个 queue 里,
+  // 触发那个 queue 的下一位推进。failed / awaiting_review 不触发——链停在
+  // 这里等用户。动态 import scheduler 以避免和 scheduler → status 的循环。
+  if (status === "done" || status === "canceled") {
+    void import("./scheduler.js").then(({ advanceQueueFromTask }) =>
+      advanceQueueFromTask(taskId).catch((err) =>
+        console.error(`[harness] advanceQueueFromTask(${taskId}) failed:`, err),
+      ),
+    );
+  }
 }

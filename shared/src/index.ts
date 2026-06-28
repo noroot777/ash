@@ -76,13 +76,16 @@ export type TaskStatus =
 
 export type Priority = "none" | "low" | "medium" | "high" | "urgent";
 
-// A task can be (re)started only from a settled, non-terminal-success state.
-// running/queued = already in flight; awaiting_review = waiting on a gate;
-// done = finished (must not be casually re-run). paused = 跑到检查点等续跑，
-// 让 scheduler 在依赖满足时把它当作可继续任务来唤起。Single source of truth for
-// the run guard across the UI (button/Cmd-K/key) and the server (/run, group run).
-export function canStartTask(status: TaskStatus): boolean {
-  return status === "backlog" || status === "canceled" || status === "failed" || status === "paused";
+// Single-task user-Run guard (POST /tasks/:id/run). User explicitly clicked Run,
+// so `canceled` is allowed here — they want to redo it. running/queued = already
+// in flight; awaiting_review = waiting on a gate; done = finished (must not be
+// casually re-run via this endpoint). paused = 跑到检查点等续跑。
+// Distinct from the queue advance rule (DESIGN-scheduling.md §3) which treats
+// `canceled` as transparent and only advances on `done` — that's the
+// group/queue automation view, not direct user intent.
+export const SINGLE_RUN_FROM: TaskStatus[] = ["backlog", "canceled", "failed", "paused"];
+export function canSingleRun(status: TaskStatus): boolean {
+  return SINGLE_RUN_FROM.includes(status);
 }
 
 // running / queued / awaiting_review reflect live execution — only the
