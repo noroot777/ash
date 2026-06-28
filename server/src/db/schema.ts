@@ -1,4 +1,4 @@
-import { sqliteTable, text, integer } from "drizzle-orm/sqlite-core";
+import { sqliteTable, text, integer, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 // JSON columns are stored as text and parsed in the repository layer.
 // Schema mirrors shared/src/index.ts.
@@ -145,6 +145,28 @@ export const issueComments = sqliteTable("issue_comments", {
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at"), // set when edited
 });
+
+// Queue items: ordered list of tasks where each task waits for the one
+// immediately before it in the queue. Replaces the legacy depends_on /
+// resume_depends_on pointer model. See DESIGN-scheduling.md.
+//
+// Invariants (enforced at application layer, NOT DB constraints):
+//   - All tasks in one queue belong to the same group (or all have null group_id)
+//   - Position is dense (0..N-1) within a queue; reorder repacks
+//
+// task_id is PRIMARY KEY because a task is in at most one queue at a time.
+export const queueItems = sqliteTable(
+  "queue_items",
+  {
+    taskId: text("task_id").primaryKey(),
+    queueId: text("queue_id").notNull(),
+    position: integer("position").notNull(),
+    createdAt: text("created_at").notNull(),
+  },
+  (t) => ({
+    queuePosIdx: uniqueIndex("queue_items_queue_pos_idx").on(t.queueId, t.position),
+  }),
+);
 
 // Direct-LLM connections (中转站), system-level. Used only for issue parsing.
 export const llmProviders = sqliteTable("llm_providers", {

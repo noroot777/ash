@@ -78,6 +78,14 @@ export async function ensureSchema() {
       api_key TEXT NOT NULL DEFAULT '', model TEXT NOT NULL DEFAULT '',
       created_at TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS queue_items (
+      task_id TEXT PRIMARY KEY,
+      queue_id TEXT NOT NULL,
+      position INTEGER NOT NULL,
+      created_at TEXT NOT NULL
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS queue_items_queue_pos_idx
+      ON queue_items (queue_id, position);
   `);
   // Tolerant migration for DBs created before columns were added.
   try {
