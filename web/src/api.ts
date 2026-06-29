@@ -221,4 +221,16 @@ export const api = {
     fetch(`/api/llm-providers/${id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(p) }).then(j),
   deleteLlmProvider: (id: string): Promise<unknown> =>
     fetch(`/api/llm-providers/${id}`, { method: "DELETE" }).then(j),
+  // Queue ops (DESIGN-scheduling.md §1):任务在某个 queue 里的位置决定调度顺序。
+  // 这里只暴露查/改;创建队列通过 batch_create_tasks(chain:true) 或 create_queue
+  // 端点(后端走 MCP),前端用户不直接建队列。
+  queue: (qid: string): Promise<{
+    queueId: string;
+    groupId: string | null;
+    items: { taskId: string; position: number; title: string; status: string | null; archived: boolean }[];
+  }> => fetch(`/api/queues/${qid}`).then(j),
+  queueReorder: (qid: string, taskIds: string[]): Promise<{ ok: true }> =>
+    fetch(`/api/queues/${qid}/reorder`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ taskIds }) }).then(j),
+  queueRemove: (qid: string, taskId: string): Promise<{ ok: true }> =>
+    fetch(`/api/queues/${qid}/remove`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ taskId }) }).then(j),
 };

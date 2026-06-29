@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { Task, Group, Session, TaskStatus, Priority, AgentType, ScheduledMessage } from "@harness/shared";
 import { isUserSettableStatus, canArchive, AGENT_TYPES, parseSessionOutput as parseSnapshot } from "@harness/shared";
-import { CaretDown, Play, Stop, Trash, ArrowsDownUp, ArrowsClockwise, Robot, X, DownloadSimple, Clock } from "@phosphor-icons/react";
+import { CaretDown, Play, Stop, Trash, ArrowsClockwise, Robot, X, DownloadSimple, Clock, ListNumbers } from "@phosphor-icons/react";
 import { api } from "./api";
 import { STATUSES, PRIORITIES } from "./constants";
 import { ToolCall, ThinkingBlock, ResumeCopyButtons, CollapsibleText, CopyButton } from "./ui";
@@ -10,6 +10,7 @@ import { StatusIcon } from "./StatusIcon";
 import { PriorityIcon, LabelAdder } from "./ui";
 import { ScheduleControl } from "./ScheduleControl";
 import { Menu } from "./Menu";
+import { QueueModal } from "./QueueModal";
 import { runAction, canStopTask } from "./taskActions";
 import { groupLabel } from "./util";
 import { TaskTimeChip, formatInstant, Duration } from "./time";
@@ -27,7 +28,7 @@ export type LogLine = {
 export function TaskDetail({
   task,
   groups,
-  allTasks,
+  allTasks: _allTasks, // legacy:旧 dep picker 用过,现在 queue 模型不需要;callers 仍在传,留 prop 兼容,phase C 后续可一并清掉
   logs,
   sessionsBump,
   onRun,
@@ -93,8 +94,19 @@ export function TaskDetail({
     [task, snapshot, logs, sessions],
   );
 
-  const depOptions = allTasks.filter((t) => t.id !== task.id && !task.dependsOn.includes(t.id));
-  const resumeDepOptions = allTasks.filter((t) => t.id !== task.id && !task.resumeDependsOn.includes(t.id));
+  // 任务在哪条 queue 第几位?——allTasks 过滤了 archived,但归档任务仍占队列位置,
+  // 所以直接调 API 拿队列总长度,免得 N/M 里的 M 偏少。
+  const [queueSize, setQueueSize] = useState<number | null>(null);
+  const [queueModalOpen, setQueueModalOpen] = useState(false);
+  useEffect(() => {
+    if (!task.queueId) { setQueueSize(null); return; }
+    let alive = true;
+    api.queue(task.queueId).then(
+      (q) => { if (alive) setQueueSize(q.items.length); },
+      () => { if (alive) setQueueSize(null); },
+    );
+    return () => { alive = false; };
+  }, [task.queueId, queueModalOpen]);
 
   return (
     <main className="flex h-full min-h-0 flex-col">
@@ -232,57 +244,23 @@ export function TaskDetail({
 
           <span className="h-4 w-px bg-line" />
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
-            <div className="flex flex-wrap items-center gap-1.5">
-              <ArrowsDownUp size={13} className="text-faint" />
-              <span className="text-muted">依赖</span>
-              {task.dependsOn.map((d) => {
-                const dep = allTasks.find((t) => t.id === d);
-                const label = dep?.title ?? d;
-                return (
-                  <button
-                    key={d}
-                    onClick={() => onPatch({ dependsOn: task.dependsOn.filter((x) => x !== d) })}
-                    className="max-w-[14rem] truncate rounded bg-overlay px-1.5 py-0.5 text-ink transition hover:bg-line2"
-                    title={`${label}\n点击移除依赖`}
-                  >
-                    {label}
-                  </button>
-                );
-              })}
-              {depOptions.length > 0 && (
-                <Prop
-                  value=""
-                  onChange={(v) => v && onPatch({ dependsOn: [...task.dependsOn, v] })}
-                  options={[{ value: "", label: "+ 添加" }, ...depOptions.map((t) => ({ value: t.id, label: t.title }))]}
-                />
+            {/* 队列归属(DESIGN-scheduling.md §1):任务在某条 queue 里第几位。
+                点开看完整队列、改顺序、把任务移出队列。废弃的 depOptions /
+                resumeDepOptions 在新模型下永远空,挪开免得占视觉位。 */}
+            <div className="flex items-center gap-1.5">
+              <ListNumbers size={13} className="text-faint" />
+              <span className="text-muted">队列</span>
+              {task.queueId ? (
+                <button
+                  onClick={() => setQueueModalOpen(true)}
+                  className="rounded bg-overlay px-1.5 py-0.5 text-ink transition hover:bg-line2"
+                  title="点开看完整队列"
+                >
+                  第 {(task.queuePosition ?? 0) + 1}{queueSize != null ? ` / ${queueSize}` : ""} 位
+                </button>
+              ) : (
+                <span className="text-faint">不在任何队列(独立任务)</span>
               )}
-              {task.dependsOn.length === 0 && depOptions.length === 0 && <span className="text-faint">无</span>}
-            </div>
-            <div className="flex flex-wrap items-center gap-1.5">
-              <ArrowsDownUp size={13} className="text-cyan-600/70" />
-              <span className="text-muted">续跑依赖</span>
-              {task.resumeDependsOn.map((d) => {
-                const dep = allTasks.find((t) => t.id === d);
-                const label = dep?.title ?? d;
-                return (
-                  <button
-                    key={d}
-                    onClick={() => onPatch({ resumeDependsOn: task.resumeDependsOn.filter((x) => x !== d) })}
-                    className="max-w-[14rem] truncate rounded bg-cyan-500/10 px-1.5 py-0.5 text-cyan-800 transition hover:bg-cyan-500/20"
-                    title={`${label}\n点击移除续跑依赖`}
-                  >
-                    {label}
-                  </button>
-                );
-              })}
-              {resumeDepOptions.length > 0 && (
-                <Prop
-                  value=""
-                  onChange={(v) => v && onPatch({ resumeDependsOn: [...task.resumeDependsOn, v] })}
-                  options={[{ value: "", label: "+ 添加" }, ...resumeDepOptions.map((t) => ({ value: t.id, label: t.title }))]}
-                />
-              )}
-              {task.resumeDependsOn.length === 0 && resumeDepOptions.length === 0 && <span className="text-faint">无</span>}
             </div>
             <ScheduleControl taskId={task.id} />
           </div>
@@ -316,6 +294,13 @@ export function TaskDetail({
 
       {task.mode === "single" && (sessions.length > 0 || snapshot.length > 0 || logs.length > 0) && (
         <ReplyBox taskId={task.id} onReply={onReply} disabled={task.status === "running" || task.status === "queued" || !!task.archived} />
+      )}
+      {queueModalOpen && task.queueId && (
+        <QueueModal
+          queueId={task.queueId}
+          currentTaskId={task.id}
+          onClose={() => setQueueModalOpen(false)}
+        />
       )}
     </main>
   );
