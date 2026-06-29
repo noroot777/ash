@@ -585,6 +585,8 @@ api.post("/tasks", async (c) => {
       position: existing.length,
       createdAt: ts,
     });
+    // 追加到队尾后立刻推进:若前序全 done,新 task 应立刻起跑
+    void advanceQueue(b.appendToQueue);
   }
   return c.json((await enrichTiming([row as typeof tasks.$inferSelect]))[0], 201);
 });
@@ -1514,6 +1516,8 @@ api.post("/queues/:queueId/reorder", async (c) => {
   }
 
   await repackQueue(qid, want);
+  // reorder 后某个 backlog/paused 可能上位到 head,立刻推进一次
+  void advanceQueue(qid);
   return c.json({ ok: true });
 });
 
@@ -1586,6 +1590,9 @@ api.post("/queues/:queueId/insert", async (c) => {
     ...items.slice(insertAt).map((i) => i.taskId),
   ];
   await repackQueue(qid, next);
+  // 插入后:如果前序已全 done/canceled,新 task 应立刻起来(实测发现的竞态:
+  // codex skill 在链跑完后插尾任务,不推进会一直 backlog)
+  void advanceQueue(qid);
   return c.json({ ok: true });
 });
 
@@ -1617,6 +1624,8 @@ api.post("/queues", async (c) => {
   await db.insert(queueItems).values(
     want.map((tid, i) => ({ taskId: tid, queueId: qid, position: i, createdAt: ts })),
   );
+  // 新建 queue 也要推进:head 如果已经可启动(backlog/paused),让它立刻动
+  void advanceQueue(qid);
   return c.json({ queueId: qid, taskIds: want }, 201);
 });
 

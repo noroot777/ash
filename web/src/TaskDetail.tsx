@@ -237,14 +237,15 @@ export function TaskDetail({
               <span className="text-muted">依赖</span>
               {task.dependsOn.map((d) => {
                 const dep = allTasks.find((t) => t.id === d);
+                const label = dep?.title ?? d;
                 return (
                   <button
                     key={d}
                     onClick={() => onPatch({ dependsOn: task.dependsOn.filter((x) => x !== d) })}
-                    className="rounded bg-overlay px-1.5 py-0.5 text-ink transition hover:bg-line2"
-                    title="点击移除依赖"
+                    className="max-w-[14rem] truncate rounded bg-overlay px-1.5 py-0.5 text-ink transition hover:bg-line2"
+                    title={`${label}\n点击移除依赖`}
                   >
-                    {dep?.title ?? d}
+                    {label}
                   </button>
                 );
               })}
@@ -262,14 +263,15 @@ export function TaskDetail({
               <span className="text-muted">续跑依赖</span>
               {task.resumeDependsOn.map((d) => {
                 const dep = allTasks.find((t) => t.id === d);
+                const label = dep?.title ?? d;
                 return (
                   <button
                     key={d}
                     onClick={() => onPatch({ resumeDependsOn: task.resumeDependsOn.filter((x) => x !== d) })}
-                    className="rounded bg-cyan-500/10 px-1.5 py-0.5 text-cyan-800 transition hover:bg-cyan-500/20"
-                    title="点击移除续跑依赖"
+                    className="max-w-[14rem] truncate rounded bg-cyan-500/10 px-1.5 py-0.5 text-cyan-800 transition hover:bg-cyan-500/20"
+                    title={`${label}\n点击移除续跑依赖`}
                   >
-                    {dep?.title ?? d}
+                    {label}
                   </button>
                 );
               })}
