@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { join, extname, normalize } from "node:path";
 import { api } from "./routes.js";
 import { ensureSchema } from "./db/index.js";
+import { migrateQueues } from "./db/migrateQueues.js";
 import { reconcileInterrupted } from "./orchestrator.js";
 import { startScheduler } from "./schedules.js";
 
@@ -16,6 +17,7 @@ process.on("unhandledRejection", (e) => console.error("[harness] unhandledReject
 process.on("uncaughtException", (e) => console.error("[harness] uncaughtException:", e));
 
 await ensureSchema();
+await migrateQueues(); // 一次性把 legacy depends_on / resume_depends_on 迁到 queue_items（幂等）
 await reconcileInterrupted(); // recover tasks left "running"/"queued" by a previous crash/restart
 startScheduler();
 

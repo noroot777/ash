@@ -62,7 +62,7 @@ function writeTurnEnd(out: NodeJS.WritableStream, at: string): void {
 // scheduled cron fire is NOT here — it always starts a fresh run via runTask
 // (schedules.ts), so it never resumes. `wake` = an upstream task just settled
 // done and the settle hook is auto-resuming this paused dependent.
-export type ResumeReason = "group" | "run" | "retry" | "wake";
+export type ResumeReason = "group" | "run" | "retry" | "wake" | "queue";
 
 async function setStatus(taskId: string, status: Parameters<typeof setTaskStatus>[1]) {
   await setTaskStatus(taskId, status);
@@ -71,43 +71,14 @@ async function setStatus(taskId: string, status: Parameters<typeof setTaskStatus
 // 任务跑完一回合时的状态落位：手停 → canceled；agent 在本回合内调过 pause_task
 // （写下 resumePrompt） → paused，等依赖满足或用户手动 resume；否则按退出码定
 // done/failed。一处算清楚，run / continue / 未来的 debate 共用同一规则。
+// 队列推进：done / canceled 进 setTaskStatus 后会触发同 queue 的下一位。
+// 那个钩子在 status.ts 里(动态 import scheduler 以避免循环依赖)。
 async function settleTaskStatus(taskId: string, exitStatus: number, canceled: boolean): Promise<void> {
   if (canceled) return setStatus(taskId, "canceled");
   const r = (await db.select({ rp: tasks.resumePrompt }).from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (r?.rp) return setStatus(taskId, "paused");
   const final = exitStatus === 0 ? "done" : "failed";
   await setStatus(taskId, final);
-  // 自动唤醒：一个任务 done 时，同组里**直接以它为 resumeDependsOn** 的 paused
-  // 任务可能正等着这一刻 —— 检查它们 resumeDependsOn 是否**全部**满足，满足就
-  // launch。不调 runGroup（runGroup 会扫整组、扯进无关 backlog、还嵌套同步等
-  // 待所有 inflight done）。事件驱动、只唤醒被解锁的那一层；下一级 done 时再
-  // 触发下一轮 hook，沿 dependsOn 图链式传播。failed/canceled 不触发：
-  // resumeDependsOn 只看 done（跟 scheduler 的 resolved 集合一致）。
-  if (final === "done") void wakePausedDependents(taskId);
-}
-
-// 同组、直接依赖 doneTaskId、且所有 resumeDependsOn 都已 done 的 paused 任务。
-// resumeOrRunTask 内部有 single-flight (`running.has`)，所以并发触发（多个上游同时
-// done）不会启动两次。fire-and-forget：不等下游跑完，链式传播靠后续的 settle hook。
-export async function wakePausedDependents(doneTaskId: string): Promise<void> {
-  try {
-    const done = (await db.select().from(tasks).where(eq(tasks.id, doneTaskId))).at(0);
-    if (!done?.groupId) return; // 无 group 就不传播（跨组依赖少见，用户可手点继续）
-    const peers = await db.select().from(tasks).where(eq(tasks.groupId, done.groupId));
-    const doneIds = new Set(peers.filter((p) => p.status === "done").map((p) => p.id));
-    const peerIds = new Set(peers.map((p) => p.id));
-    for (const p of peers) {
-      if (p.status !== "paused" || p.archived) continue;
-      const deps = JSON.parse(p.resumeDependsOn) as string[];
-      if (!deps.includes(doneTaskId)) continue; // 不直接依赖刚 done 的，跳过
-      // 剩下的 deps 也要全 done（不在同组的 id 视作满足，跟 scheduler 一致）
-      const allReady = deps.every((d) => !peerIds.has(d) || doneIds.has(d));
-      if (allReady) void resumeOrRunTask(p.id, { reason: "wake" });
-    }
-  } catch (err) {
-    // hook 是兜底，失败不该让源任务的 done 回退。打日志、吞掉。
-    console.error(`[harness] wakePausedDependents(${doneTaskId}) failed:`, err);
-  }
 }
 
 // On (re)start nothing is actually running, so any task still in an in-flight

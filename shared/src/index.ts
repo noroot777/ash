@@ -76,13 +76,16 @@ export type TaskStatus =
 
 export type Priority = "none" | "low" | "medium" | "high" | "urgent";
 
-// A task can be (re)started only from a settled, non-terminal-success state.
-// running/queued = already in flight; awaiting_review = waiting on a gate;
-// done = finished (must not be casually re-run). paused = 跑到检查点等续跑，
-// 让 scheduler 在依赖满足时把它当作可继续任务来唤起。Single source of truth for
-// the run guard across the UI (button/Cmd-K/key) and the server (/run, group run).
-export function canStartTask(status: TaskStatus): boolean {
-  return status === "backlog" || status === "canceled" || status === "failed" || status === "paused";
+// Single-task user-Run guard (POST /tasks/:id/run). User explicitly clicked Run,
+// so `canceled` is allowed here — they want to redo it. running/queued = already
+// in flight; awaiting_review = waiting on a gate; done = finished (must not be
+// casually re-run via this endpoint). paused = 跑到检查点等续跑。
+// Distinct from the queue advance rule (DESIGN-scheduling.md §3) which treats
+// `canceled` as transparent and only advances on `done` — that's the
+// group/queue automation view, not direct user intent.
+export const SINGLE_RUN_FROM: TaskStatus[] = ["backlog", "canceled", "failed", "paused"];
+export function canSingleRun(status: TaskStatus): boolean {
+  return SINGLE_RUN_FROM.includes(status);
 }
 
 // running / queued / awaiting_review reflect live execution — only the
@@ -110,8 +113,12 @@ export interface Task {
   status: TaskStatus;
   priority: Priority;
   labels: string[];
-  dependsOn: string[]; // cross-task dependency edges (§3)
-  resumeDependsOn: string[]; // checkpoint resume dependency edges (§Pause)
+  dependsOn: string[]; // [废弃,保留为 []] 旧的指针依赖,被 queue 模型取代,见 DESIGN-scheduling.md
+  resumeDependsOn: string[]; // [废弃,保留为 []] 同上
+  // 队列归属(DESIGN-scheduling.md §1):任务在某个 queue 里的位置。null = 不在任何队列。
+  // 推进规则:前一个位置 done/canceled 时,这个位置才开始;前一个 failed 时链停。
+  queueId?: string | null;
+  queuePosition?: number | null;
   autoTitle?: boolean; // title is AI-generated on first run until the user edits it
   // single mode:
   agentType?: AgentType;
