@@ -13,3 +13,6 @@ data/
 # Claude Code permission allowlist — neither belongs in version control.
 *.tsbuildinfo
 .claude/settings.local.json
+
+# 本地 worktree 目录(由 EnterWorktree 创建,不入库)
+.claude/worktrees/
