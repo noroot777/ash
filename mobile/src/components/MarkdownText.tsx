@@ -6,7 +6,7 @@
 // outer Pressable's long-press/double-tap isn't swallowed by Text's own gesture.
 //
 // Parsing lives in @/lib/markdown (pure, unit-tested); this file is the view only.
-import { View, Text, type TextStyle } from "react-native";
+import { View, Text, Linking, type TextStyle } from "react-native";
 import { useTheme, fonts, radius, type Theme } from "@/lib/theme";
 import { parseBlocks, parseInline, type Span } from "@/lib/markdown";
 
@@ -16,6 +16,8 @@ function Inline({ spans, theme, codeSize }: { spans: Span[]; theme: Theme; codeS
       {spans.map((s, i) => (
         <Text
           key={i}
+          onPress={s.href ? () => { Linking.openURL(s.href!).catch(() => {}); } : undefined}
+          suppressHighlighting={s.href ? true : undefined}
           style={[
             s.bold ? { fontWeight: "700" as const } : null,
             s.italic ? { fontStyle: "italic" as const } : null,

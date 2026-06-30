@@ -3,7 +3,7 @@
 // the renderer stays a thin view layer. Covers the syntax agents actually emit;
 // anything unknown degrades to a plain paragraph and never throws.
 
-export type Span = { text: string; bold?: boolean; italic?: boolean; code?: boolean; href?: boolean };
+export type Span = { text: string; bold?: boolean; italic?: boolean; code?: boolean; href?: string };
 
 export type Block =
   | { kind: "heading"; level: number; text: string }
@@ -29,8 +29,8 @@ export function parseInline(line: string): Span[] {
     if (tok.startsWith("`")) spans.push({ text: tok.slice(1, -1), code: true });
     else if (tok.startsWith("**")) spans.push({ text: tok.slice(2, -2), bold: true });
     else if (tok.startsWith("[")) {
-      const mm = /\[([^\]]+)\]\([^)]+\)/.exec(tok)!;
-      spans.push({ text: mm[1], href: true });
+      const mm = /\[([^\]]+)\]\(([^)]+)\)/.exec(tok)!;
+      spans.push({ text: mm[1], href: mm[2] });
     } else spans.push({ text: tok.slice(1, -1), italic: true });
     rest = rest.slice(m.index + tok.length);
   }
