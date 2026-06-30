@@ -132,9 +132,11 @@ function TaskList() {
 
   const sections = useMemo<(SectionMeta & { data: Task[] })[]>(() => {
     const mine = tasks.filter((t) => t.projectId === projectId && t.mode !== "debate");
+    // 与网页端对齐(web/src/TaskList.tsx):同优先级用 createdAt 倒序,而非
+    // updatedAt —— 后者会让任何状态/正文改动都把卡片顶起,列表顺序飘。
     const byPriority = (a: Task, b: Task) =>
       (PRIORITY_RANK[a.priority] ?? 9) - (PRIORITY_RANK[b.priority] ?? 9) ||
-      b.updatedAt.localeCompare(a.updatedAt);
+      b.createdAt.localeCompare(a.createdAt);
 
     // 分组视图:每个分组一区(含空组,便于整组运行/查看结构) + 末尾「未分组」区。归档任务不出现。
     if (view === "group") {
