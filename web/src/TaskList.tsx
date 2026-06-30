@@ -1,4 +1,5 @@
 import type { Task, Group } from "@harness/shared";
+import { canArchive } from "@harness/shared";
 import { STATUSES, STATUS_META, PRIORITY_ORDER } from "./constants";
 import { PriorityIcon, PauseHint } from "./ui";
 import { StatusIcon } from "./StatusIcon";
@@ -65,7 +66,7 @@ export function TaskList({
                   <PriorityIcon p={t.priority} />
                   <span className="min-w-[80px] flex-1 truncate text-[13px] text-ink">{t.title}</span>
                   <div className="ml-auto flex min-w-0 items-center gap-1.5 overflow-hidden">
-                    {t.queueId != null && (
+                    {t.queueId != null && !canArchive(t.status) && (
                       <span
                         className="shrink-0 rounded bg-overlay px-1.5 py-0.5 font-mono text-[10px] text-muted"
                         title="在某个队列里的位置(详情页可以点开看完整队列)"

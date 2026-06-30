@@ -1,5 +1,5 @@
 import type { Task, TaskStatus } from "@harness/shared";
-import { isUserSettableStatus } from "@harness/shared";
+import { isUserSettableStatus, canArchive } from "@harness/shared";
 import { STATUSES } from "./constants";
 import { PriorityIcon, PauseHint } from "./ui";
 import { StatusIcon } from "./StatusIcon";
@@ -68,7 +68,7 @@ export function Board({
                   </div>
                   <PauseHint task={t} allTasks={tasks} onOpen={onOpen} />
                   <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                    {t.queueId != null && (
+                    {t.queueId != null && !canArchive(t.status) && (
                       <span
                         className="rounded bg-overlay px-1.5 py-0.5 font-mono text-[10px] text-muted"
                         title="在某个队列里的位置(详情页可以点开看完整队列)"
