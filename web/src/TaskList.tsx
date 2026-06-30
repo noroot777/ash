@@ -65,6 +65,14 @@ export function TaskList({
                   <PriorityIcon p={t.priority} />
                   <span className="min-w-[80px] flex-1 truncate text-[13px] text-ink">{t.title}</span>
                   <div className="ml-auto flex min-w-0 items-center gap-1.5 overflow-hidden">
+                    {t.queueId != null && (
+                      <span
+                        className="shrink-0 rounded bg-overlay px-1.5 py-0.5 font-mono text-[10px] text-muted"
+                        title="在某个队列里的位置(详情页可以点开看完整队列)"
+                      >
+                        ↳ #{(t.queuePosition ?? 0) + 1}
+                      </span>
+                    )}
                     {groupName(t.groupId) && (
                       <span className="shrink-0 rounded bg-overlay px-1.5 py-0.5 font-mono text-[10px] text-muted">
                         {groupName(t.groupId)}

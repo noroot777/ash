@@ -68,6 +68,14 @@ export function Board({
                   </div>
                   <PauseHint task={t} allTasks={tasks} onOpen={onOpen} />
                   <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                    {t.queueId != null && (
+                      <span
+                        className="rounded bg-overlay px-1.5 py-0.5 font-mono text-[10px] text-muted"
+                        title="在某个队列里的位置(详情页可以点开看完整队列)"
+                      >
+                        ↳ #{(t.queuePosition ?? 0) + 1}
+                      </span>
+                    )}
                     {t.labels.map((l) => (
                       <span key={l} className="rounded-full border border-line px-2 py-0.5 text-[10px] uppercase tracking-wide text-muted">
                         {l}

@@ -393,11 +393,11 @@ export function CopyButton({
 }
 
 // PauseHint —— paused 状态卡片的"等谁"副标行（Board / TaskList 共用）。
-// 直接回答用户最想知道的「在等谁、能不能跳过去看」：
-//   • 全 resumeDependsOn 都 done → "等待续跑"（瞬时态，scheduler 一轮就会唤起）
-//   • 单个未完成依赖 → "↳ 等「标题」"
-//   • 多个未完成依赖 → "↳ 等「标题」+N"
-// 点击跳到第一个阻塞任务；title 悬浮里列出所有阻塞 id。
+// 队列模型版(DESIGN-scheduling.md):paused 任务在 queue 里等"前面所有项 done/canceled"。
+// 看 task.queueId / queuePosition,从 allTasks 里找同 queue 排在前面的、还没让位的项。
+//   • 至少一个未让位前驱 → "↳ 等「标题」"(+N 如果还有更多)
+//   • 全部前驱都 done/canceled 或自己是队首 → "等待续跑"(瞬时态,scheduler 一轮就唤起)
+// 点击跳到第一个阻塞任务。
 export function PauseHint({
   task,
   allTasks,
@@ -408,10 +408,16 @@ export function PauseHint({
   onOpen?: (id: string) => void;
 }) {
   if (task.status !== "paused") return null;
-  const deps = task.resumeDependsOn
-    .map((id) => allTasks.find((t) => t.id === id))
-    .filter((t): t is Task => !!t);
-  const blockers = deps.filter((t) => t.status !== "done");
+  // 没在队列里(罕见:paused 但不在 queue),也算"等待续跑"
+  const queueMates = task.queueId
+    ? allTasks
+        .filter((t) => t.queueId === task.queueId)
+        .sort((a, b) => (a.queuePosition ?? 0) - (b.queuePosition ?? 0))
+    : [];
+  const myIdx = queueMates.findIndex((t) => t.id === task.id);
+  const blockers = (myIdx >= 0 ? queueMates.slice(0, myIdx) : []).filter(
+    (t) => t.status !== "done" && t.status !== "canceled",
+  );
   const first = blockers[0];
   const extra = blockers.length - 1;
   const click = (e: React.MouseEvent) => {
@@ -422,7 +428,10 @@ export function PauseHint({
   return (
     <div
       className="mt-1.5 flex items-center gap-1 text-[11px] text-cyan-700/90"
-      title={blockers.map((t) => `${t.title} · ${t.status}`).join("\n") || "等待 scheduler 续跑"}
+      title={
+        blockers.map((t) => `${t.title} · ${t.status}`).join("\n") ||
+        "等待 scheduler 续跑(队首,前置已全部让位)"
+      }
     >
       <ArrowBendDownRight size={11} className="shrink-0 opacity-70" />
       {first ? (
@@ -439,7 +448,7 @@ export function PauseHint({
           {extra > 0 && <span className="shrink-0 opacity-70">+{extra}</span>}
         </>
       ) : (
-        <span className="opacity-80">等待续跑（依赖已满足）</span>
+        <span className="opacity-80">等待续跑</span>
       )}
     </div>
   );
