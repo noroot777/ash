@@ -70,7 +70,8 @@ export async function ensureSchema() {
       id TEXT PRIMARY KEY, issue_id TEXT NOT NULL,
       author TEXT NOT NULL DEFAULT '{"kind":"human"}',
       body TEXT NOT NULL DEFAULT '', attachments TEXT NOT NULL DEFAULT '[]',
-      created_at TEXT NOT NULL, updated_at TEXT
+      created_at TEXT NOT NULL, updated_at TEXT,
+      status TEXT
     );
     CREATE TABLE IF NOT EXISTS llm_providers (
       id TEXT PRIMARY KEY, name TEXT NOT NULL,
@@ -118,6 +119,7 @@ export async function ensureSchema() {
     "ALTER TABLE issue_comments ADD COLUMN updated_at TEXT",
     "ALTER TABLE tasks ADD COLUMN resume_prompt TEXT",
     "ALTER TABLE tasks ADD COLUMN resume_depends_on TEXT NOT NULL DEFAULT '[]'",
+    "ALTER TABLE issue_comments ADD COLUMN status TEXT",
   ]) {
     try {
       await client.execute(sql);

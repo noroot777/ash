@@ -437,6 +437,16 @@ function IssueDetail({
   useEffect(() => {
     api.issueTasks(issue.id).then(setTasks).catch(() => {});
   }, [issue.id, taskBump]);
+  // discuss 回复是异步的:插入 pending 气泡 → 后台 CLI 跑完 update body+status。
+  // 本地轮询就够 —— pending 存在就 3s 拉一次;全 done/failed 就停。
+  const hasPending = comments.some((c) => c.status === "pending");
+  useEffect(() => {
+    if (!hasPending) return;
+    const t = setInterval(() => {
+      api.issueComments(issue.id).then(setComments).catch(() => {});
+    }, 3000);
+    return () => clearInterval(t);
+  }, [hasPending, issue.id]);
 
   const patch = async (p: Partial<Issue>) => {
     const updated = await api.patchIssue(issue.id, p);
@@ -476,7 +486,7 @@ function IssueDetail({
     clear();
     try {
       const res = await api.postIssueComment(issue.id, { body, mention, attachments: paths, useWorktree: execWorktree });
-      setComments((prev) => [...prev, res.comment]);
+      setComments((prev) => [...prev, res.comment, ...(res.agentComment ? [res.agentComment] : [])]);
       if (res.task) {
         setExecNote(`已派给 @${mention} · 任务运行中`);
         setIssues((prev) => prev.map((x) => (x.id === issue.id ? { ...x, status: "in_progress" } : x)));
@@ -806,7 +816,15 @@ function CommentItem({
           </div>
         ) : (
           <>
-            {comment.body && <div className="whitespace-pre-wrap text-[13.5px] leading-relaxed text-[#33363d]">{comment.body}</div>}
+            {ai && comment.status === "pending" ? (
+              <div className="text-[13.5px] italic text-faint">…正在思考</div>
+            ) : ai && comment.status === "failed" ? (
+              <div className="whitespace-pre-wrap text-[13.5px] leading-relaxed text-red-600/80">
+                {comment.body || "讨论回复失败"}
+              </div>
+            ) : comment.body ? (
+              <div className="whitespace-pre-wrap text-[13.5px] leading-relaxed text-[#33363d]">{comment.body}</div>
+            ) : null}
             {comment.attachments.length > 0 && <StoredAttachments paths={comment.attachments} className="mt-1.5" />}
           </>
         )}

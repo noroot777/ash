@@ -144,6 +144,9 @@ export const issueComments = sqliteTable("issue_comments", {
   attachments: text("attachments").notNull().default("[]"), // json: absolute file paths
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at"), // set when edited
+  // Only agent comments produced by a discuss @-mention use this: pending →
+  // done/failed. Human comments leave it null.
+  status: text("status"),
 });
 
 // Queue items: ordered list of tasks where each task waits for the one

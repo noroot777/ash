@@ -27,7 +27,7 @@ import { projects, groups, tasks, sessions, schedules, scheduledMessages, agents
 import { bus } from "./bus.js";
 import { id, now, attachmentsPrompt, runsTiming } from "./util.js";
 import { resumeOrRunTask, continueTask } from "./orchestrator.js";
-import { parseIssue } from "./agentOnce.js";
+import { parseIssue, classifyMention, buildDiscussPrompt, runAgentOnce, DISCUSS_TIMEOUT_MS } from "./agentOnce.js";
 import { listModels } from "./llm.js";
 import { setTaskStatus } from "./status.js";
 import { stopTask } from "./runs.js";
@@ -1106,6 +1106,7 @@ const toComment = (r: typeof issueComments.$inferSelect): IssueComment => ({
   attachments: JSON.parse(r.attachments),
   createdAt: r.createdAt,
   updatedAt: r.updatedAt,
+  status: (r.status as IssueComment["status"]) ?? null,
 });
 
 // Full context handed to the agent on execution: title + structured body + the
@@ -1233,9 +1234,12 @@ api.get("/issues/:id/comments", async (c) => {
 });
 
 // Post a comment. Plain text = discussion. With `mention` (a CLI agentType) it
-// ALSO executes: packs title + body + the whole thread into a task handed to that
-// agent. Execution requires a project (refused on 未归类). API-model backends can
-// parse but NOT execute — only CLI agent types are accepted here.
+// runs an intent classifier: "execute" packs title + body + the whole thread
+// into a task handed to that agent (worktree opt-in); "discuss" spawns a
+// one-shot CLI (cwd=repoPath, soft-limited by prompt: 结论先行 / 压水分 / 别改
+// 代码) and writes the reply back as an agent comment. Execution requires a
+// project. API-model backends can parse but NOT execute — only CLI agent types
+// are accepted here.
 api.post("/issues/:id/comments", async (c) => {
   const iid = c.req.param("id");
   const issue = (await db.select().from(issues).where(eq(issues.id, iid))).at(0);
@@ -1243,62 +1247,123 @@ api.post("/issues/:id/comments", async (c) => {
   const b = await c.req.json<{ body?: string; mention?: AgentType; attachments?: string[]; useWorktree?: boolean }>();
   if (!b.body?.trim() && !b.attachments?.length) return c.json({ error: "empty" }, 400);
   if (b.mention) {
-    if (!AGENT_TYPES.includes(b.mention)) return c.json({ error: "未知的 agent（执行只支持本地 CLI 智能体）", agent: b.mention }, 400);
-    if (!issue.projectId) return c.json({ error: "事项还没归到项目，先归类再 @ 智能体执行" }, 409);
+    if (!AGENT_TYPES.includes(b.mention)) return c.json({ error: "未知的 agent（只支持本地 CLI 智能体）", agent: b.mention }, 400);
+    if (!issue.projectId) return c.json({ error: "事项还没归到项目，先归类再 @ 智能体" }, 409);
   }
   const ts = now();
   const crow = {
     id: id(),
     issueId: iid,
-    author: JSON.stringify({ kind: "human" }), // 评论是人写的;@提及触发执行(副作用)
+    author: JSON.stringify({ kind: "human" }), // 评论是人写的;@提及触发意图分类(讨论/执行)
     body: (b.body ?? "").trim(),
     attachments: JSON.stringify(b.attachments ?? []),
     createdAt: ts,
     updatedAt: null as string | null,
+    status: null as string | null,
   };
   await db.insert(issueComments).values(crow);
 
   let task: Task | undefined;
+  let agentComment: IssueComment | undefined;
+
   if (b.mention && issue.projectId) {
-    const comments = (await db.select().from(issueComments).where(eq(issueComments.issueId, iid))).sort((a, d) =>
+    const allComments = (await db.select().from(issueComments).where(eq(issueComments.issueId, iid))).sort((a, d) =>
       a.createdAt.localeCompare(d.createdAt),
     );
-    const tid = id();
-    // Worktree is OPT-IN (default off), mirroring the new-task form — the user
-    // manages isolation themselves. Only when they tick 「worktree 隔离」 at @执行
-    // (and the project is a git repo) does the derived task run on a clean branch;
-    // that's also what enables the issue → commits linkage (GET /tasks/:id/commits).
+    // history 供分类器/讨论 CLI 参考 — 排除刚存的 @ 评论(它作为 mention 单独传)
+    const history = allComments
+      .filter((cm) => cm.id !== crow.id)
+      .map((cm) => {
+        let who = "我";
+        try {
+          const a = JSON.parse(cm.author);
+          if (a?.kind === "agent") who = `@${a.agentType}`;
+        } catch {
+          /* default 我 */
+        }
+        return { who, body: cm.body };
+      });
+    const ctx = { issueTitle: issue.title, issueBody: issue.body, history, mention: crow.body };
+
+    // 意图分类:跟 parseIssue 同一条路(issue 上记录的 backend,api 优先失败降 claude)。
+    // 拿不准/失败/超时一律 discuss —— 讨论便宜可逆,execute 一旦派出任务收不回。
+    const backend = issue.aiBackend ? (JSON.parse(issue.aiBackend) as AiBackend) : null;
+    let apiProvider: { protocol: LlmProtocol; baseUrl: string; apiKey: string; model: string } | undefined;
+    if (backend?.kind === "api") {
+      const row = (await db.select().from(llmProviders).where(eq(llmProviders.id, backend.providerId))).at(0);
+      if (row) apiProvider = { protocol: row.protocol as LlmProtocol, baseUrl: row.baseUrl, apiKey: row.apiKey, model: row.model };
+    }
+    const intent = await classifyMention(ctx, { backend, apiProvider });
+
     const proj = (await db.select().from(projects).where(eq(projects.id, issue.projectId))).at(0);
-    const useWt = !!b.useWorktree && (proj ? projectHealthLight(proj.repoPath).isRepo : false);
-    const trow = {
-      id: tid,
-      projectId: issue.projectId,
-      groupId: null as string | null,
-      parentId: null as string | null,
-      title: issue.title,
-      body: issueContext(issue, comments),
-      mode: "single",
-      status: "backlog",
-      priority: issue.priority,
-      labels: "[]",
-      dependsOn: "[]",
-      resumeDependsOn: "[]",
-      agentType: b.mention as AgentType,
-      autoTitle: false,
-      debate: null as string | null,
-      scheduleId: null as string | null,
-      createdAt: ts,
-      updatedAt: ts,
-      useWorktree: useWt,
-      worktreeBase: null as string | null,
-      issueId: iid,
-    };
-    await db.insert(tasks).values(trow);
-    await db.update(issues).set({ status: "in_progress", updatedAt: ts }).where(eq(issues.id, iid));
-    void resumeOrRunTask(tid, { reason: "run" }); // 立即开跑,进度走 /api/events
-    task = (await enrichTiming([trow as typeof tasks.$inferSelect]))[0];
+
+    if (intent === "discuss" && proj) {
+      // 讨论:插一条 pending agent 评论,异步跑 CLI,跑完 update body+status。
+      // 前端已有轮询会自然刷到 done/failed;这条 HTTP 请求不阻塞等 CLI。
+      const arow = {
+        id: id(),
+        issueId: iid,
+        author: JSON.stringify({ kind: "agent", agentType: b.mention }),
+        body: "",
+        attachments: "[]",
+        createdAt: now(),
+        updatedAt: null as string | null,
+        status: "pending" as string | null,
+      };
+      await db.insert(issueComments).values(arow);
+      agentComment = toComment(arow as typeof issueComments.$inferSelect);
+      void (async () => {
+        try {
+          const out = await runAgentOnce(buildDiscussPrompt(ctx), {
+            agentType: b.mention,
+            cwd: proj.repoPath,
+            timeoutMs: DISCUSS_TIMEOUT_MS,
+          });
+          const text = out.text.trim();
+          if (text && out.ok) {
+            await db.update(issueComments).set({ body: text, status: "done" }).where(eq(issueComments.id, arow.id));
+          } else {
+            await db.update(issueComments).set({ body: "(讨论回复为空,请重试或换一种问法)", status: "failed" }).where(eq(issueComments.id, arow.id));
+          }
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          await db.update(issueComments).set({ body: `讨论出错: ${msg}`, status: "failed" }).where(eq(issueComments.id, arow.id));
+        }
+      })();
+    } else {
+      // execute: 建 task,worktree 按 opt-in,立即开跑。跟原来一致。
+      const useWt = !!b.useWorktree && (proj ? projectHealthLight(proj.repoPath).isRepo : false);
+      const tid = id();
+      const trow = {
+        id: tid,
+        projectId: issue.projectId,
+        groupId: null as string | null,
+        parentId: null as string | null,
+        title: issue.title,
+        body: issueContext(issue, allComments),
+        mode: "single",
+        status: "backlog",
+        priority: issue.priority,
+        labels: "[]",
+        dependsOn: "[]",
+        resumeDependsOn: "[]",
+        agentType: b.mention as AgentType,
+        autoTitle: false,
+        debate: null as string | null,
+        scheduleId: null as string | null,
+        createdAt: ts,
+        updatedAt: ts,
+        useWorktree: useWt,
+        worktreeBase: null as string | null,
+        issueId: iid,
+      };
+      await db.insert(tasks).values(trow);
+      await db.update(issues).set({ status: "in_progress", updatedAt: ts }).where(eq(issues.id, iid));
+      void resumeOrRunTask(tid, { reason: "run" });
+      task = (await enrichTiming([trow as typeof tasks.$inferSelect]))[0];
+    }
   }
-  return c.json({ comment: toComment(crow as typeof issueComments.$inferSelect), task }, 201);
+  return c.json({ comment: toComment(crow as typeof issueComments.$inferSelect), task, agentComment }, 201);
 });
 
 // Edit a comment's text/attachments. Only the body + attachments change; author

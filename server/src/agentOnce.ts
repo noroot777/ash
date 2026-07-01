@@ -12,21 +12,26 @@ import { callModel, type LlmCall } from "./llm.js";
 // 命中根目录的工作约定污染解析。tmpdir 彻底脱离 repo 树。
 const PARSE_CWD = join(tmpdir(), "harness-issue-parse");
 const PARSE_TIMEOUT_MS = 30_000;
+// 讨论(discuss)走 CLI 一次调用,cwd 是 issue 项目 repoPath ——恰恰要读 CLAUDE.md 好答问题。
+// timeout 给 60s 够几轮 tool loop 去 Read/Grep 核实代码。
+export const DISCUSS_TIMEOUT_MS = 60_000;
 const PRIORITIES: Priority[] = ["none", "low", "medium", "high", "urgent"];
 
 // 跑一个 CLI 执行器到结束,返回全部文本。antigravity 无内置解析器 → 回退 claude。
+// cwd 默认 PARSE_CWD(解析场景,脱离 repo 树避免 CLAUDE.md 污染);讨论场景传项目 repoPath。
 export async function runAgentOnce(
   prompt: string,
-  opts: { agentType?: AgentType; timeoutMs?: number } = {},
+  opts: { agentType?: AgentType; timeoutMs?: number; cwd?: string } = {},
 ): Promise<{ text: string; ok: boolean }> {
-  mkdirSync(PARSE_CWD, { recursive: true });
+  const cwd = opts.cwd ?? PARSE_CWD;
+  if (cwd === PARSE_CWD) mkdirSync(PARSE_CWD, { recursive: true });
   let ex;
   try {
     ex = await resolveExecutor(opts.agentType ?? "claude");
   } catch {
     ex = await resolveExecutor("claude");
   }
-  const handle = ex.run({ prompt, cwd: PARSE_CWD });
+  const handle = ex.run({ prompt, cwd });
   let text = "";
   let ok = true;
   const timer = setTimeout(() => handle.kill(), opts.timeoutMs ?? PARSE_TIMEOUT_MS);
@@ -171,3 +176,104 @@ export async function parseIssue(
     parsed: true,
   };
 }
+
+// ── 讨论/执行意图分类 ────────────────────────────────────────────────────────
+// issue 讨论区里用户 @claude 时,先跑一次这个判"讨论还是执行"。跟 parseIssue
+// 一条链路(直连 API 优先、失败降本地 claude)。拿不准 / 失败 / 空 → 一律 discuss:
+// 讨论便宜且可逆,execute 一旦派出 worktree 就收不回。
+export type MentionIntent = "discuss" | "execute";
+
+export interface DiscussionCtx {
+  issueTitle: string;
+  issueBody: string;
+  history: { who: string; body: string }[]; // 已有的讨论,who="我" 或 "@claude" 等
+  mention: string; // 本次 @评论的正文
+}
+
+const classifyPrompt = (ctx: DiscussionCtx): string =>
+  [
+    "你是一个意图分类器。用户在 issue 讨论区里 @claude 发了一条评论,判断他想让 AI:",
+    '  "discuss" - 讨论/回答/核实/看看/解释/分析/给建议(不改代码)',
+    '  "execute" - 去改代码/修 bug/加功能/写文件/实现某个东西(要改代码)',
+    "只输出一个 JSON 对象,不要用任何工具,不要执行任何操作,不要输出多余文字。",
+    'JSON: {"mode":"discuss"} 或 {"mode":"execute"}。拿不准就返回 discuss。',
+    "",
+    `事项标题：${ctx.issueTitle}`,
+    `事项正文：${ctx.issueBody || "(无)"}`,
+    ctx.history.length ? "已有讨论：" : "",
+    ...ctx.history.map((h) => `  ${h.who}: ${h.body}`),
+    "",
+    `本次 @claude 评论：${ctx.mention}`,
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+export async function classifyMention(
+  ctx: DiscussionCtx,
+  opts: { backend?: AiBackend | null; apiProvider?: LlmCall } = {},
+): Promise<MentionIntent> {
+  const prompt = classifyPrompt(ctx);
+  const cliAgent = opts.backend?.kind === "cli" ? opts.backend.agentType : "claude";
+  let obj: Record<string, unknown> | null = null;
+  try {
+    const out =
+      opts.backend?.kind === "api" && opts.apiProvider
+        ? await callModel(opts.apiProvider, prompt)
+        : (await runAgentOnce(prompt, { agentType: cliAgent })).text;
+    obj = extractJson(out);
+  } catch {
+    /* fall through */
+  }
+  if (!obj && opts.backend?.kind === "api") {
+    try {
+      obj = extractJson((await runAgentOnce(prompt, { agentType: "claude" })).text);
+    } catch {
+      /* give up */
+    }
+  }
+  if (obj?.mode === "execute") return "execute";
+  return "discuss"; // 默认 / 拿不准 / 失败
+}
+
+// ── 讨论回复(discuss)的系统提示词 ────────────────────────────────────────────
+// 意图分类走 execute 就还是现状(建 task);走 discuss 就用这段提示词跑一次 CLI,
+// 结果写回一条 IssueComment(author=agent)。同一条 CLI 起动路径(--dangerously-skip-permissions),
+// 靠提示词软限"别改代码 / 结论先行 / 压水分"。工具白名单没做——万一 CLI 飘了改了主 repo,
+// git status 一看就能撤,不是灾难。
+const DISCUSS_SYSTEM_PROMPT = [
+  "你在 issue 讨论区回复用户,中文。",
+  "",
+  "【结论先行】",
+  "- 第一段直接给结论/答案,1-2 句。需要展开再往下写。",
+  "- 不复述用户问题,不开场白,不写「让我来/接下来我会」,不做事后汇报(不写「我查了 X 然后看了 Y」,直接说结论)。",
+  "",
+  "【格式】",
+  "- 不用大标题(# / ##),不用多级序号列表,最多一层小圆点。",
+  "- 引证代码用 `file_path:line`,不要整段贴代码。",
+  "- 简单问题一段搞定;复杂问题可以多段,但每段必须给新信息,不掺水、不复述、不总结上文。",
+  "",
+  "【改代码约束】",
+  "- 你在讨论模式,不改代码:不用 Edit / Write / NotebookEdit,不写文件。",
+  "- 用户就算说了「改 / 修 / 顺便动一下」,也回一句:「这条像是要改代码;如果确实要改,请再发一条清楚说 @claude 去改,我作为执行任务处理」,别动手。",
+  "- 你觉得代码有问题:说清楚哪儿有问题(file:line + 一句原因),不要自己动手改。",
+].join("\n");
+
+// 组装讨论 CLI 的完整 prompt: 系统提示 + issue 上下文 + 本次 @评论。
+export const buildDiscussPrompt = (ctx: DiscussionCtx): string =>
+  [
+    DISCUSS_SYSTEM_PROMPT,
+    "",
+    "── issue 上下文 ──",
+    `标题:${ctx.issueTitle}`,
+    `正文:${ctx.issueBody || "(无)"}`,
+    ctx.history.length ? "\n已有讨论:" : "",
+    ...ctx.history.map((h) => `  ${h.who}: ${h.body}`),
+    "",
+    "── 本次用户 @ 你的评论 ──",
+    ctx.mention,
+    "",
+    "请按上面的【结论先行/格式/改代码约束】回复。",
+  ]
+    .filter(Boolean)
+    .join("\n");
+

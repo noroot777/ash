@@ -195,9 +195,11 @@ export const api = {
     fetch(`/api/issues/${id}`, { method: "DELETE" }).then(j),
   issueComments: (id: string): Promise<IssueComment[]> =>
     fetch(`/api/issues/${id}/comments`).then(j),
-  // Post a comment. Plain = discussion. With `mention` (a CLI agentType) it ALSO
-  // executes: derives a task carrying title + body + the whole thread.
-  postIssueComment: (id: string, body: { body: string; mention?: AgentType; attachments?: string[]; useWorktree?: boolean }): Promise<{ comment: IssueComment; task?: Task }> =>
+  // Post a comment. Plain = discussion. With `mention` (a CLI agentType) the
+  // server classifies intent: "execute" derives a task (returns task); "discuss"
+  // spawns a one-shot CLI reply and returns a pending agent comment that gets
+  // filled in by polling (the discussion view refreshes while status=pending).
+  postIssueComment: (id: string, body: { body: string; mention?: AgentType; attachments?: string[]; useWorktree?: boolean }): Promise<{ comment: IssueComment; task?: Task; agentComment?: IssueComment }> =>
     fetch(`/api/issues/${id}/comments`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }).then(j),
   patchIssueComment: (issueId: string, cid: string, patch: { body?: string; attachments?: string[] }): Promise<IssueComment> =>
     fetch(`/api/issues/${issueId}/comments/${cid}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(patch) }).then(j),

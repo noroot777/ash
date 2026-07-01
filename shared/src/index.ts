@@ -227,6 +227,9 @@ export interface IssueComment {
   attachments: string[]; // absolute paths (see Issue.attachments)
   createdAt: string;
   updatedAt?: string | null; // set when a comment is edited
+  // Only set on agent comments produced by a discuss-intent @-mention:
+  // pending 时 body 还是空的、气泡显示「…正在思考」；done/failed 是终态。
+  status?: "pending" | "done" | "failed" | null;
 }
 
 // ── Attachments (pasted into the composer / reply box) ───────────────────────
