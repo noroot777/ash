@@ -7,7 +7,7 @@ import { tasks, projects, sessions } from "./db/schema.js";
 import { bus } from "./bus.js";
 import { id, now, attachmentsPrompt } from "./util.js";
 import { setTaskStatus } from "./status.js";
-import { trackRun, untrackRun, takeCanceled } from "./runs.js";
+import { trackRun, untrackRun, takeCanceled, takeConfirmed } from "./runs.js";
 import { resolveWorkspace, ensureWorkdir, prepareWorktree } from "./git.js";
 import { resolveExecutor } from "./executors/index.js";
 import type { RunHandle } from "./executors/types.js";
@@ -57,6 +57,14 @@ function writeTurnEnd(out: NodeJS.WritableStream, at: string): void {
   out.write(`\n${TURN_SENTINEL}${JSON.stringify({ t: "agentEnd", at })}\n`);
 }
 
+// 完成协议前言(严格 done):告诉 agent 它的 taskId 和「必须亲口确认完成」的
+// 规则。fresh run 用长版(第一回合,完整交代);reply/resume 回合用短版追加在
+// 消息尾部(每回合都提醒,上下文再长 agent 也不至于忘)。
+const COMPLETION_PROTOCOL = (taskId: string) =>
+  `【完成协议】本任务在 harness 的 taskId 是 ${taskId}。当且仅当你确定任务目标已经达成时,在结束前调用 harness MCP 的 complete_task(taskId="${taskId}")确认完成;未确认就结束,本回合会按未完成记为 failed。跑到需要等待外部条件的检查点时,改用 pause_task 写下续跑指令。\n\n`;
+const COMPLETION_REMINDER = (taskId: string) =>
+  `\n\n(harness 完成协议:taskId=${taskId}。若本回合结束时任务目标已达成,先调用 complete_task 确认再结束,否则按未完成记 failed;到等待检查点则用 pause_task。)`;
+
 // Why a task is being (re)started — only used to label the resume; all reasons
 // behave the same (resume if there's a resumable session, else fresh). Note: a
 // scheduled cron fire is NOT here — it always starts a fresh run via runTask
@@ -69,16 +77,42 @@ async function setStatus(taskId: string, status: Parameters<typeof setTaskStatus
 }
 
 // 任务跑完一回合时的状态落位：手停 → canceled；agent 在本回合内调过 pause_task
-// （写下 resumePrompt） → paused，等依赖满足或用户手动 resume；否则按退出码定
-// done/failed。一处算清楚，run / continue / 未来的 debate 共用同一规则。
-// 队列推进：done / canceled 进 setTaskStatus 后会触发同 queue 的下一位。
-// 那个钩子在 status.ts 里(动态 import scheduler 以避免循环依赖)。
-async function settleTaskStatus(taskId: string, exitStatus: number, canceled: boolean): Promise<void> {
-  if (canceled) return setStatus(taskId, "canceled");
+// （写下 resumePrompt） → paused，等依赖满足或用户手动 resume；退出码非 0 →
+// failed。exit 0 走严格 done 协议：agent 必须在回合内调过 complete_task 确认
+// 「目标真的达成了」才落 done —— exit 0 只证明 CLI 进程正常退出,agent 报错后
+// 退出照样 exit 0,假 done 会误推进队列、错误唤醒下游。未确认 → failed(重试
+// 会 resume 续跑,代价低)。逃生口:HARNESS_LAX_DONE=1 退回「exit 0 即 done」
+// (接没配 harness MCP 的 agent 时用)。一处算清楚,run / continue 共用。
+// 队列推进：done / canceled / paused 进 setTaskStatus 后会触发同 queue 推进。
+// 返回落位状态 + note(未确认降级的说明,调用方写进时间线让用户知道为什么)。
+const STRICT_DONE = !process.env.HARNESS_LAX_DONE;
+const UNCONFIRMED_NOTE =
+  "回合正常结束,但 agent 未调用 complete_task 确认任务完成 —— 按严格完成协议记为 failed。若任务其实已完成,可手动把状态改成已完成;重试则会从中断处续跑。";
+async function settleTaskStatus(
+  taskId: string,
+  exitStatus: number,
+  canceled: boolean,
+): Promise<{ status: "canceled" | "paused" | "done" | "failed"; note?: string }> {
+  const confirmed = takeConfirmed(taskId); // 无条件消费,别让标记漏到下一回合
+  if (canceled) {
+    await setStatus(taskId, "canceled");
+    return { status: "canceled" };
+  }
   const r = (await db.select({ rp: tasks.resumePrompt }).from(tasks).where(eq(tasks.id, taskId))).at(0);
-  if (r?.rp) return setStatus(taskId, "paused");
-  const final = exitStatus === 0 ? "done" : "failed";
-  await setStatus(taskId, final);
+  if (r?.rp) {
+    await setStatus(taskId, "paused");
+    return { status: "paused" };
+  }
+  if (exitStatus !== 0) {
+    await setStatus(taskId, "failed");
+    return { status: "failed" };
+  }
+  if (confirmed || !STRICT_DONE) {
+    await setStatus(taskId, "done");
+    return { status: "done" };
+  }
+  await setStatus(taskId, "failed");
+  return { status: "failed", note: UNCONFIRMED_NOTE };
 }
 
 // On (re)start nothing is actually running, so any task still in an in-flight
@@ -125,7 +159,7 @@ export async function runTask(taskId: string): Promise<void> {
     const TITLE_HINT =
       "请在正式开始前，第一行只输出：标题：<不超过14字、概括本次任务的简短标题>，然后换行，再正常完成下面的任务。\n\n任务：\n";
     const objective = task.body?.trim() || task.title;
-    const prompt = AUTONOMY + (autoTitle ? TITLE_HINT + objective : objective);
+    const prompt = AUTONOMY + COMPLETION_PROTOCOL(taskId) + (autoTitle ? TITLE_HINT + objective : objective);
     const turnStart = now();
     handle = ex.run({ prompt, cwd: ws.path });
     trackRun(taskId, handle);
@@ -209,13 +243,18 @@ export async function runTask(taskId: string): Promise<void> {
     // settle as canceled (not done/failed) so it can be re-run / continued.
     const canceled = takeCanceled(taskId);
     const endIso = now();
-    writeTurnEnd(out, endIso); // fence this turn's real end before closing the .md
-    out.end();
     await db
       .update(sessions)
       .set({ exitStatus, endedAt: endIso, activeMs: sql`COALESCE(${sessions.activeMs}, 0) + ${Math.max(0, Date.parse(endIso) - Date.parse(turnStart))}` })
       .where(eq(sessions.id, sessId));
-    await settleTaskStatus(taskId, exitStatus, canceled);
+    const settled = await settleTaskStatus(taskId, exitStatus, canceled);
+    if (settled.note) {
+      // 未确认降级为 failed:写进 .md(reload 可见)+ 广播(live 可见)
+      out.write(`\n> ${settled.note}\n`);
+      bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: "single", agentType, event: { kind: "error", message: settled.note } });
+    }
+    writeTurnEnd(out, endIso); // fence this turn's real end before closing the .md
+    out.end();
   } catch (err) {
     bus.publish({
       type: "agent.event",
@@ -301,7 +340,7 @@ export async function continueTask(
     await setStatus(taskId, "running");
 
     const invited = !prev; // first time this agent is pulled into the task
-    const prompt = (invited ? COLLAB_INVITE : "") + userText + attachmentsPrompt(opts.attachments);
+    const prompt = (invited ? COLLAB_INVITE : "") + userText + attachmentsPrompt(opts.attachments) + COMPLETION_REMINDER(taskId);
     const turnStart = now();
     handle = ex.run({ prompt, cwd, sessionId: resuming ? prev!.cliSessionId! : undefined });
     trackRun(taskId, handle);
@@ -372,13 +411,17 @@ export async function continueTask(
     }
     const canceled = takeCanceled(taskId);
     const endIso = now();
-    writeTurnEnd(out, endIso); // fence this turn's real end before closing the .md
-    out.end();
     await db
       .update(sessions)
       .set({ exitStatus, endedAt: endIso, activeMs: sql`COALESCE(${sessions.activeMs}, 0) + ${Math.max(0, Date.parse(endIso) - Date.parse(turnStart))}` })
       .where(eq(sessions.id, sessId));
-    await settleTaskStatus(taskId, exitStatus, canceled);
+    const settled = await settleTaskStatus(taskId, exitStatus, canceled);
+    if (settled.note) {
+      out.write(`\n> ${settled.note}\n`);
+      bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: "single", agentType: agent, event: { kind: "error", message: settled.note } });
+    }
+    writeTurnEnd(out, endIso); // fence this turn's real end before closing the .md
+    out.end();
   } catch (err) {
     bus.publish({
       type: "agent.event", taskId, sessionId: "", role: "single", agentType,

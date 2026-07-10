@@ -208,7 +208,7 @@ server.registerTool(
   {
     title: "更新任务",
     description:
-      "更新单个任务的可编辑字段:title/body/status/labels/priority/groupId/agentType。**不能**用此工具改任务的队列归属——请用 queue_insert / queue_remove / queue_reorder。也不能把任务手动设为 running/queued/awaiting_review。",
+      "更新单个任务的可编辑字段:title/body/status/labels/priority/groupId/agentType。**不能**用此工具改任务的队列归属——请用 queue_insert / queue_remove / queue_reorder。也不能把任务手动设为 running/queued/awaiting_review。**正在执行的任务要确认完成时,不要用 status=done——用 complete_task**:回合结束的严格结算只认 complete_task 的确认,这里 patch 的 done 会被结算覆盖。",
     inputSchema: {
       taskId: z.string(),
       title: z.string().optional(),
@@ -262,6 +262,22 @@ server.registerTool(
         ...(batch.warning ? { warning: batch.warning } : {}),
       });
     } catch (e) { return fail(e); }
+  },
+);
+
+server.registerTool(
+  "complete_task",
+  {
+    title: "确认任务完成(严格 done 协议)",
+    description:
+      "在执行中调用,告诉 harness:「本任务的目标我确定已经达成了」。回合结束结算时读到这个确认才会把任务落成 done;**没有确认的正常退出(exit 0)会按未完成记为 failed**——因为正常退出不代表目标达成(报错后退出也是 exit 0),假 done 会误推进队列、错误唤醒下游任务。\n\n用法:当且仅当你核实任务目标已达成(产物在、校验过),在结束回合前调一次本工具,然后正常结束输出。**只能在任务正在跑时调用**。没完成就不要调:需要等外部条件用 pause_task;做不下去直接说明原因退出(会记 failed,用户可重试续跑)。",
+    inputSchema: {
+      taskId: z.string().describe("当前正在执行的任务 id(任务 prompt 前言里有)"),
+    },
+  },
+  async ({ taskId }) => {
+    try { return ok(await call("POST", `/tasks/${taskId}/complete`, {})); }
+    catch (e) { return fail(e); }
   },
 );
 

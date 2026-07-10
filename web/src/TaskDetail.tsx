@@ -152,12 +152,13 @@ export function TaskDetail({
                 );
               })()
             )}
-            {/* 重新排队:队列里的终态任务(done/failed/canceled)回到 backlog,
-                轮到它时被队列自动拉起(有会话则从中断处续跑)。canceled 在队列
-                推进里是「透明跳过」,所以手动停过的任务想继续排队必须走这里,
-                而不是等它被绕过去。先等状态落库再推一次队列——顺序反了推进会
-                在它还是 canceled 时把它跳过。 */}
-            {!task.archived && task.queueId && ["done", "failed", "canceled"].includes(task.status) && (
+            {/* 重新排队:队列里的 failed/canceled 任务回到 backlog,轮到它时被
+                队列自动拉起(有会话则从中断处续跑)。canceled 在队列推进里是
+                「透明跳过」,所以手动停过的任务想继续排队必须走这里。done 不给
+                ——严格完成协议下 done 都是 agent 亲口确认过的,真要重跑走状态
+                下拉改回 backlog。先等状态落库再推一次队列——顺序反了推进会在
+                它还是终态时把它跳过。 */}
+            {!task.archived && task.queueId && ["failed", "canceled"].includes(task.status) && (
               <button
                 onClick={async () => {
                   await onPatch({ status: "backlog" });

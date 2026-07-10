@@ -30,7 +30,7 @@ import { resumeOrRunTask, continueTask } from "./orchestrator.js";
 import { parseIssue, classifyMention, buildDiscussPrompt, runAgentOnce, DISCUSS_TIMEOUT_MS } from "./agentOnce.js";
 import { listModels } from "./llm.js";
 import { setTaskStatus } from "./status.js";
-import { stopTask } from "./runs.js";
+import { stopTask, confirmDone } from "./runs.js";
 import { runGroup, advanceQueue } from "./scheduler.js";
 import { runDebate, resumeDebate, resumeAtGate } from "./debate/index.js";
 import { resolveGate } from "./debate/gates.js";
@@ -934,6 +934,19 @@ api.post("/tasks/:id/pause", async (c) => {
   if (r.status !== "running") return c.json({ error: "只能在任务正在运行时设置检查点", status: r.status }, 409);
   await db.update(tasks).set({ resumePrompt: rp, updatedAt: now() }).where(eq(tasks.id, taskId));
   return c.json({ paused: true, willSettleAs: "paused" });
+});
+
+// 完成确认(严格 done 协议,对称 /pause):agent 当且仅当确定任务目标已达成时
+// 调用;settle 时消费这个标记才落 done,否则 exit 0 也按 failed 结算(exit 0
+// 只证明进程正常退出,agent 报错后退出照样 exit 0 —— 假 done 会误推进队列)。
+// 只接受 running 任务;标记是回合内的内存态(见 runs.ts confirmDone)。
+api.post("/tasks/:id/complete", async (c) => {
+  const taskId = c.req.param("id");
+  const r = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
+  if (!r) return c.json({ error: "not found" }, 404);
+  if (r.status !== "running") return c.json({ error: "只能在任务正在运行时确认完成", status: r.status }, 409);
+  confirmDone(taskId);
+  return c.json({ confirmed: true, willSettleAs: "done" });
 });
 
 // Reply to a single task: resume its CLI session with the user's message so an

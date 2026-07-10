@@ -55,6 +55,23 @@ export function takeCanceled(taskId: string): boolean {
   return canceling.delete(taskId);
 }
 
+// ── 完成确认(严格 done 协议)────────────────────────────────────────────────
+// exit 0 只说明 CLI 进程正常退出,不代表任务目标达成(agent 报错后正常退出照样
+// exit 0)。done 必须由 agent 亲口确认:回合内调 complete_task(MCP → POST
+// /tasks/:id/complete)置标记,settle 时 take 消费。内存态即可——标记只活在
+// 「调用 ~ 本回合 settle」之间;server 重启时 running 任务本来就 reconcile 成
+// failed,标记一起丢掉正好。
+const confirmed = new Set<string>();
+
+export function confirmDone(taskId: string): void {
+  confirmed.add(taskId);
+}
+
+// Check-and-clear(对称 takeCanceled):settle 消费,失败重试的下一回合不残留。
+export function takeConfirmed(taskId: string): boolean {
+  return confirmed.delete(taskId);
+}
+
 // Thrown by a run step when a stop was requested mid-flight, so the debate
 // pipeline unwinds to its top-level catch and settles as `canceled`.
 export class CanceledRun extends Error {
