@@ -1,7 +1,7 @@
 import { createInterface } from "node:readline";
 import type { AgentEvent, ExecTarget } from "@harness/shared";
 import type { AgentExecutor, RunHandle, RunOpts } from "./types.js";
-import { spawnAgent, resumeFor, resumeInner, spawnErrorMessage, killChild } from "./spawn.js";
+import { spawnAgent, resumeFor, resumeInner, spawnErrorMessage, killChild, forceFinishOnExit } from "./spawn.js";
 
 // Drives the real `codex` CLI in non-interactive JSON mode (prompt via stdin, `-`).
 //   first:  codex exec --json --skip-git-repo-check -C <cwd>
@@ -95,6 +95,13 @@ async function* parseCodexStream(child: ReturnType<typeof spawnAgent>): AsyncIte
     if (finished) return;
     const exit = code ?? 0;
     if (exit !== 0 && stderr.trim()) push({ kind: "error", message: stderr.trim().slice(0, 2000) });
+    push({ kind: "done", exitStatus: exit });
+    finished = true;
+    resolve?.();
+    resolve = null;
+  });
+  forceFinishOnExit(child, () => finished, (exit) => {
+    push({ kind: "error", message: "进程已退出但输出流未正常收尾(疑有残留子进程占用管道),已强制结束本回合" });
     push({ kind: "done", exitStatus: exit });
     finished = true;
     resolve?.();
