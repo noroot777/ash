@@ -1,7 +1,19 @@
 import type { Project, ProjectView, ProjectHealth, Task, Session, Group, GateAction, Schedule, ScheduledMessage, AgentExecutorProfile, BatchCreateTasksBody, AgentType, DebateSpeaker, AttachmentKind, Issue, IssueComment, AiBackend, LlmProvider, LlmProtocol } from "@harness/shared";
 
 const j = async (r: Response) => {
-  if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
+  if (!r.ok) {
+    // 后端错误统一是 {error: "人话"};解析出来给 toast 用,免得用户看到
+    // `409 {"error":...}` 这种原始串。解析不了再退回原始文本。
+    const text = await r.text();
+    let msg = `${r.status} ${text}`;
+    try {
+      const body = JSON.parse(text);
+      if (body?.error) msg = body.error;
+    } catch {
+      /* not json */
+    }
+    throw new Error(msg);
+  }
   return r.json();
 };
 

@@ -206,16 +206,19 @@ export function App() {
     setTasks((ts) => ts.map((t) => (t.id === id ? updated : t)));
   }, []);
 
+  // 后端拒绝(409 等)必须让用户看见——静默吞掉就成了「点了没反应」。
+  const showErr = (e: unknown) => toast(e instanceof Error ? e.message : String(e));
+
   const run = useCallback(async (id: string) => {
     setLogs((m) => ({ ...m, [id]: [] }));
     setDebates((m) => ({ ...m, [id]: emptyDebate() }));
-    try { await api.runTask(id); } catch (e) { console.warn("run rejected:", e); }
+    try { await api.runTask(id); } catch (e) { showErr(e); }
   }, []);
 
   // Manually stop a running task (kill its agent). The backend flips it to
   // canceled and broadcasts the status; it stays re-runnable / continuable.
   const stop = useCallback(async (id: string) => {
-    try { await api.stopTask(id); } catch (e) { console.warn("stop rejected:", e); }
+    try { await api.stopTask(id); } catch (e) { showErr(e); }
   }, []);
 
   // Retry a failed debate: drop the failed (last) turn from the live timeline so
@@ -225,16 +228,16 @@ export function App() {
       const d = m[id];
       return d ? { ...m, [id]: { ...d, turns: d.turns.slice(0, -1), gate: null } } : m;
     });
-    try { await api.retryTask(id); } catch (e) { console.warn("retry rejected:", e); }
+    try { await api.retryTask(id); } catch (e) { showErr(e); }
   }, []);
 
   const archive = useCallback(async (id: string) => {
     try { const t = await api.archiveTask(id); setTasks((ts) => ts.map((x) => (x.id === id ? t : x))); }
-    catch (e) { console.warn("archive rejected:", e); }
+    catch (e) { showErr(e); }
   }, []);
   const unarchive = useCallback(async (id: string) => {
     try { const t = await api.unarchiveTask(id); setTasks((ts) => ts.map((x) => (x.id === id ? t : x))); }
-    catch (e) { console.warn("unarchive rejected:", e); }
+    catch (e) { showErr(e); }
   }, []);
 
   // The single primary action for a task, dispatched by its status — used by the
@@ -253,7 +256,7 @@ export function App() {
   const reply = useCallback(async (id: string, text: string, opts?: { attachments?: string[]; agent?: AgentType }) => {
     const display = (text || "[附件]") + (opts?.agent ? `  ·  指派给 @${opts.agent}` : "");
     setLogs((m) => ({ ...m, [id]: [...(m[id] ?? []), { kind: "user", text: display, at: new Date().toISOString() }] }));
-    try { await api.replyTask(id, text, opts); } catch (e) { console.warn("reply rejected:", e); }
+    try { await api.replyTask(id, text, opts); } catch (e) { showErr(e); }
   }, []);
 
   const gate = useCallback((id: string, action: Parameters<typeof api.gate>[1]) => api.gate(id, action), []);

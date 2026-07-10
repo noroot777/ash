@@ -12,6 +12,7 @@ import { ScheduleControl } from "./ScheduleControl";
 import { Menu } from "./Menu";
 import { QueueModal } from "./QueueModal";
 import { runAction, canStopTask } from "./taskActions";
+import { toast } from "./toast";
 import { groupLabel } from "./util";
 import { TaskTimeChip, formatInstant, Duration } from "./time";
 import { usePasteAttachments, AttachmentChips } from "./pasteAttachments";
@@ -48,7 +49,7 @@ export function TaskDetail({
   onRun: () => void;
   onStop: () => void;
   onReply: (text: string, opts?: { attachments?: string[]; agent?: AgentType }) => void;
-  onPatch: (patch: Partial<Task>) => void;
+  onPatch: (patch: Partial<Task>) => void | Promise<void>;
   onCreateGroup: () => void;
   onDelete: () => void;
   onArchive: () => void;
@@ -150,6 +151,26 @@ export function TaskDetail({
                   </button>
                 );
               })()
+            )}
+            {/* 重新排队:队列里的终态任务(done/failed/canceled)回到 backlog,
+                轮到它时被队列自动拉起(有会话则从中断处续跑)。canceled 在队列
+                推进里是「透明跳过」,所以手动停过的任务想继续排队必须走这里,
+                而不是等它被绕过去。先等状态落库再推一次队列——顺序反了推进会
+                在它还是 canceled 时把它跳过。 */}
+            {!task.archived && task.queueId && ["done", "failed", "canceled"].includes(task.status) && (
+              <button
+                onClick={async () => {
+                  await onPatch({ status: "backlog" });
+                  // 队列已停摆(前面全部完成)时立即推进;前面还有人在跑时幂等无害
+                  if (task.groupId) api.runGroup(task.groupId).catch(() => {});
+                  toast("已重新排队:轮到本任务时自动启动");
+                }}
+                className="inline-flex items-center gap-1.5 rounded-md border border-line px-3 py-1.5 text-[13px] font-medium text-muted transition-colors hover:bg-raised hover:text-ink"
+                title="回到队列等待:前面的任务完成后自动启动本任务"
+              >
+                <ListNumbers size={13} />
+                重新排队
+              </button>
             )}
             {!task.archived && canArchive(task.status) && (
               <button
