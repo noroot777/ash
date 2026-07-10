@@ -135,11 +135,50 @@ function targetText(t: ExecTarget) {
 }
 
 function Row({ a, onChange }: { a: AgentExecutorProfile; onChange: () => void }) {
+  const [editing, setEditing] = useState(false);
+  const [model, setModel] = useState("");
+
+  // 已注册的执行者也能随时改模型(检测注册进来的默认没填):点模型原地编辑,
+  // Enter/失焦保存,Esc 取消(stopPropagation 免得连面板一起关),留空=清掉、
+  // 回到 CLI 自己的默认模型(后端 PATCH 把空串落成 null)。
+  const save = async () => {
+    setEditing(false);
+    const next = model.trim();
+    if (next === (a.model ?? "")) return;
+    await api.patchAgent(a.id, { model: next });
+    onChange();
+  };
+
   return (
     <div className="mb-1.5 flex items-center gap-2 rounded-md border border-line bg-panel px-2.5 py-1.5 text-[12px]">
       <span className="font-medium text-ink">{a.name}</span>
       <span className="text-muted">{targetText(a.target)}</span>
-      {a.model && <span className="text-muted">· {a.model}</span>}
+      {editing ? (
+        <input
+          autoFocus
+          value={model}
+          onChange={(e) => setModel(e.target.value)}
+          onBlur={save}
+          onKeyDown={(e) => {
+            e.stopPropagation();
+            if (e.key === "Enter") save();
+            else if (e.key === "Escape") setEditing(false);
+          }}
+          placeholder="如 opus；留空用 CLI 默认"
+          className="w-44 rounded border border-line bg-canvas px-1.5 py-0.5 text-[11px] outline-none placeholder:text-faint"
+        />
+      ) : (
+        <button
+          onClick={() => {
+            setModel(a.model ?? "");
+            setEditing(true);
+          }}
+          title="指定模型（留空用 CLI 默认）"
+          className={a.model ? "text-muted hover:text-ink" : "rounded border border-dashed border-line px-1.5 py-0.5 text-[11px] text-faint hover:text-ink"}
+        >
+          {a.model ? `· ${a.model}` : "+ 模型"}
+        </button>
+      )}
       {a.isDefault ? (
         <span className="rounded bg-emerald-500/15 px-1.5 py-0.5 text-[11px] text-emerald-700">默认</span>
       ) : (
