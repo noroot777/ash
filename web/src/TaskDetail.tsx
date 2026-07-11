@@ -34,6 +34,7 @@ export function TaskDetail({
   sessionsBump,
   onRun,
   onStop,
+  onRetry,
   onReply,
   onPatch,
   onCreateGroup,
@@ -48,6 +49,7 @@ export function TaskDetail({
   sessionsBump: number;
   onRun: () => void;
   onStop: () => void;
+  onRetry: () => void;
   onReply: (text: string, opts?: { attachments?: string[]; agent?: AgentType }) => void;
   onPatch: (patch: Partial<Task>) => void | Promise<void>;
   onCreateGroup: () => void;
@@ -142,7 +144,10 @@ export function TaskDetail({
                 const a = runAction(task.status, task.archived);
                 return (
                   <button
-                    onClick={onRun}
+                    // 重试(failed)走 /retry:续跑原会话,不受「队列前面还有未完成」
+                    // 限制(顺序由任务自身检查点 + 队列唤醒保证);运行/继续走 /run。
+                    // 与列表、r 键、Cmd-K、DebateView 的分发保持一致。
+                    onClick={a.kind === "retry" ? onRetry : onRun}
                     disabled={!a.canClick}
                     className="inline-flex items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-[13px] font-medium text-accent-fg transition-colors hover:bg-accent-hover disabled:opacity-40 disabled:hover:bg-accent"
                   >

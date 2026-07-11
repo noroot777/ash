@@ -153,6 +153,7 @@ export function TasksWorkspace({
                       sessionsBump={sessionsBump}
                       onRun={() => onRun(current.id)}
                       onStop={() => onStop(current.id)}
+                      onRetry={() => onRetry(current.id)}
                       onReply={(text, opts) => onReply(current.id, text, opts)}
                       onPatch={(p) => onPatch(current.id, p)}
                       onCreateGroup={onCreateGroup}
