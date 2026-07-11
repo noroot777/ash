@@ -2,10 +2,10 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { Issue, IssueComment, Task, AgentType, AiBackend, ProjectView, Priority, LlmProvider } from "@harness/shared";
-import { ArrowUp, Robot, Sparkle, Trash, PencilSimple, Check, GearSix, Plus } from "@phosphor-icons/react";
+import { ArrowUp, Robot, Sparkle, Trash, PencilSimple, Check, GearSix, Plus, CaretRight } from "@phosphor-icons/react";
 import { api } from "./api";
 import { Menu, Pill } from "./Menu";
-import { PriorityIcon, ProjectAvatar } from "./ui";
+import { PriorityIcon, ProjectAvatar, useCollapsedGroups } from "./ui";
 import { PRIORITIES } from "./constants";
 import { ConfirmModal } from "./Modal";
 import { toast } from "./toast";
@@ -354,6 +354,7 @@ function HeroComposer({
 // ── issue list (staging on top, then grouped by status) ──────────────────────
 function IssueList({ issues, selected, onSelect }: { issues: Issue[]; selected: string | null; onSelect: (id: string) => void }) {
   const staged = issues.filter((i) => i.projectId == null);
+  const { collapsed, toggle } = useCollapsedGroups("harness:issueList:collapsedGroups");
   const groups: { label: string; status: Issue["status"] }[] = [
     { label: "进行中", status: "in_progress" },
     { label: "待办", status: "open" },
@@ -375,14 +376,30 @@ function IssueList({ issues, selected, onSelect }: { issues: Issue[]; selected: 
       {i.priority === "high" || i.priority === "urgent" ? <PriorityIcon p={i.priority} /> : null}
     </button>
   );
+  // A folding section header — matches the task list's caret affordance so both
+  // grouped lists behave the same. `tone` colors the 未归类 header amber; `hint`
+  // is the lighter trailing nudge (e.g. 待选项目).
+  const header = (key: string, label: string, count: number, tone: "amber" | "faint", hint?: string) => {
+    const isCollapsed = collapsed.has(key);
+    return (
+      <button
+        onClick={() => toggle(key)}
+        className={`flex w-full items-center gap-1 px-3.5 pb-1.5 pt-3 text-left text-[10.5px] font-semibold uppercase tracking-wide ${
+          tone === "amber" ? "text-[#9a7414]" : "text-faint"
+        }`}
+        title={isCollapsed ? "展开这一组" : "折叠这一组"}
+      >
+        <span>{label} · {count}{hint ? <span className="font-normal opacity-70"> · {hint}</span> : null}</span>
+        <CaretRight size={10} weight="bold" className={`transition-transform ${isCollapsed ? "" : "rotate-90"}`} />
+      </button>
+    );
+  };
   return (
     <div className="min-h-0 flex-1 overflow-y-auto">
       {staged.length > 0 && (
         <>
-          <div className="px-3.5 pb-1.5 pt-3 text-[10.5px] font-semibold uppercase tracking-wide text-[#9a7414]">
-            未归类 · {staged.length} · 待选项目
-          </div>
-          {staged.map(row)}
+          {header("staged", "未归类", staged.length, "amber", "待选项目")}
+          {!collapsed.has("staged") && staged.map(row)}
         </>
       )}
       {groups.map((g) => {
@@ -390,10 +407,8 @@ function IssueList({ issues, selected, onSelect }: { issues: Issue[]; selected: 
         if (!items.length) return null;
         return (
           <div key={g.status}>
-            <div className="px-3.5 pb-1.5 pt-3 text-[10.5px] font-semibold uppercase tracking-wide text-faint">
-              {g.label} · {items.length}
-            </div>
-            {items.map(row)}
+            {header(g.status, g.label, items.length, "faint")}
+            {!collapsed.has(g.status) && items.map(row)}
           </div>
         );
       })}

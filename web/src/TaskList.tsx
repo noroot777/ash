@@ -1,7 +1,8 @@
 import type { Task, Group } from "@harness/shared";
 import { canArchive } from "@harness/shared";
+import { CaretRight } from "@phosphor-icons/react";
 import { STATUSES, STATUS_META, PRIORITY_ORDER } from "./constants";
-import { PriorityIcon, PauseHint } from "./ui";
+import { PriorityIcon, PauseHint, useCollapsedGroups } from "./ui";
 import { StatusIcon } from "./StatusIcon";
 import { pairBadge } from "./util";
 
@@ -34,6 +35,8 @@ export function TaskList({
   onSelect: (id: string) => void;
 }) {
   const groupName = (id: string | null) => groups.find((g) => g.id === id)?.name;
+  // Fold long status groups (e.g. 完成 93) away; remembered per browser.
+  const { collapsed, toggle } = useCollapsedGroups("harness:taskList:collapsedStatuses");
 
   return (
     <div className="flex-1 overflow-y-auto">
@@ -46,14 +49,25 @@ export function TaskList({
               b.createdAt.localeCompare(a.createdAt),
           );
         if (!inStatus.length) return null;
+        const isCollapsed = collapsed.has(s.key);
         return (
           <div key={s.key}>
-            <div className="sticky top-0 z-10 flex items-center gap-2 bg-canvas/85 px-4 py-2 backdrop-blur">
+            <button
+              onClick={() => toggle(s.key)}
+              className="sticky top-0 z-10 flex w-full items-center gap-2 bg-canvas/85 px-4 py-2 text-left backdrop-blur transition-colors hover:bg-raised/50"
+              title={isCollapsed ? "展开这一组" : "折叠这一组"}
+            >
               <StatusIcon status={s.key} size={13} />
               <span className="text-[12px] font-semibold text-ink">{s.label}</span>
               <span className="font-mono text-[11px] text-faint">{inStatus.length}</span>
-            </div>
-            {inStatus.map((t) => (
+              <CaretRight
+                size={11}
+                weight="bold"
+                className={`text-faint transition-transform ${isCollapsed ? "" : "rotate-90"}`}
+              />
+            </button>
+            {!isCollapsed &&
+              inStatus.map((t) => (
               <button
                 key={t.id}
                 data-task-id={t.id}

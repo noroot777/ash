@@ -5,6 +5,33 @@ import { shortPath } from "./util";
 import { Duration, formatInstant } from "./time";
 import { api } from "./api";
 
+// Remember which sections of a status-grouped list the user folded away, keyed
+// per list so the choice survives reloads (localStorage). Shared by the task
+// list (完成/失败/…) and the issue list (进行中/待办/…) so both fold identically.
+export function useCollapsedGroups(storageKey: string) {
+  const [collapsed, setCollapsed] = useState<Set<string>>(() => {
+    try {
+      const raw = localStorage.getItem(storageKey);
+      return new Set(raw ? (JSON.parse(raw) as string[]) : []);
+    } catch {
+      return new Set();
+    }
+  });
+  const toggle = (key: string) =>
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      try {
+        localStorage.setItem(storageKey, JSON.stringify([...next]));
+      } catch {
+        /* private mode / quota — folding just won't persist */
+      }
+      return next;
+    });
+  return { collapsed, toggle };
+}
+
 // Long free-text (a task's objective / a debate's topic) that would otherwise
 // dominate the header: clamp to two lines by default, with an icon-only toggle
 // floating in the box's top-right corner (no separate row) — shown only when the
