@@ -160,6 +160,7 @@ const toAgent = (r: typeof agents.$inferSelect) => ({
   target: JSON.parse(r.target),
   model: r.model ?? undefined,
   extraArgs: JSON.parse(r.extraArgs),
+  reasoningEffort: r.reasoningEffort ?? undefined,
   speed: r.speed ?? undefined,
   isDefault: r.isDefault,
 });
@@ -178,6 +179,7 @@ api.post("/agents", async (c) => {
     target: JSON.stringify(b.target ?? { kind: "local" }),
     model: b.model ?? null,
     extraArgs: JSON.stringify(b.extraArgs ?? []),
+    reasoningEffort: b.reasoningEffort || null,
     // 只落 "fast";"standard"/空 归一成 null(标准=不传参,单一表示)
     speed: b.speed === "fast" ? "fast" : null,
     isDefault: !!b.isDefault,
@@ -198,6 +200,7 @@ api.patch("/agents/:id", async (c) => {
   if (b.model !== undefined) patch.model = b.model || null;
   if (b.target !== undefined) patch.target = JSON.stringify(b.target);
   if (b.extraArgs !== undefined) patch.extraArgs = JSON.stringify(b.extraArgs);
+  if (b.reasoningEffort !== undefined) patch.reasoningEffort = b.reasoningEffort || null;
   if (b.speed !== undefined) patch.speed = b.speed === "fast" ? "fast" : null;
   if (b.isDefault === true) {
     await db.update(agents).set({ isDefault: false }).where(eq(agents.type, existing.type));

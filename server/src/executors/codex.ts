@@ -14,10 +14,12 @@ export class CodexExecutor implements AgentExecutor {
   private bin: string;
   private model?: string;
   private extraArgs: string[];
+  private reasoningEffort?: string;
   private speed?: "fast";
-  constructor(opts: { model?: string; extraArgs?: string[]; speed?: "fast"; bin?: string; target?: ExecTarget; name?: string } = {}) {
+  constructor(opts: { model?: string; extraArgs?: string[]; reasoningEffort?: string; speed?: "fast"; bin?: string; target?: ExecTarget; name?: string } = {}) {
     this.model = opts.model;
     this.extraArgs = opts.extraArgs ?? [];
+    this.reasoningEffort = opts.reasoningEffort;
     this.speed = opts.speed;
     this.bin = opts.bin ?? "codex";
     this.target = opts.target ?? { kind: "local" };
@@ -35,8 +37,9 @@ export class CodexExecutor implements AgentExecutor {
     const model = opts.model ?? this.model;
     const common = ["--json", "--skip-git-repo-check", "-C", opts.cwd, "--dangerously-bypass-approvals-and-sandbox"];
     if (model) common.push("-m", model);
-    // 1.5x 加速档 = service_tier "priority"(值按 TOML 解析,须带引号成字符串)。
-    // 放在 extraArgs 之前,同 key 时用户参数在后覆盖。
+    // 结构化档位(-c 值按 TOML 解析,须带引号成字符串)。放在 extraArgs 之前,
+    // 同 key 时用户参数在后覆盖。
+    if (this.reasoningEffort) common.push("-c", `model_reasoning_effort="${this.reasoningEffort}"`);
     if (this.speed === "fast") common.push("-c", 'service_tier="priority"');
     // 注册表配置的固定参数在前,单次调用的 opts.extraArgs 在后(后者可覆盖前者)。
     if (this.extraArgs.length) common.push(...this.extraArgs);

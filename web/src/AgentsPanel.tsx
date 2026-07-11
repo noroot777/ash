@@ -2,16 +2,44 @@ import { useEffect, useState } from "react";
 import type { AgentExecutorProfile, AgentType, ExecTarget } from "@harness/shared";
 import { MagnifyingGlass, Check, X, Plus, Trash, CircleNotch } from "@phosphor-icons/react";
 import { api } from "./api";
-import { Menu } from "./Menu";
+import { Menu, type MenuOption } from "./Menu";
 import { useEscape } from "./useEscape";
 
 const TYPES: AgentType[] = ["claude", "codex", "antigravity"];
 
-// 速度档(§5):标准=不传参、跟随 CLI 默认;1.5x=加速档,executor 各自映射
-// (codex: -c service_tier="priority";claude: --settings '{"fastMode": true}',仅 Opus 生效)。
-const SPEED_OPTIONS = [
+// ── 可选配置项(§5)────────────────────────────────────────────────────────
+// 原则:常用参数全部页面可选,不逼用户手写 CLI 参数;extraArgs 仅作兜底。
+// 每组第一项 value="" = 不传参、跟随 CLI 自己的默认。
+
+// 模型预设按 type 给常用值;下拉 header 里可自由输入任意模型名。
+const MODEL_PRESETS: Record<AgentType, string[]> = {
+  claude: ["opus", "sonnet", "haiku"],
+  codex: ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4"],
+  antigravity: [],
+};
+
+// 推理强度:claude --effort(无 ultra);codex -c model_reasoning_effort。
+// 模型不支持的档位会被 API 拒绝(如 gpt-5.5 最高 xhigh、ultra 仅 gpt-5.6-sol/terra)。
+const EFFORT_VALUES: Record<AgentType, string[]> = {
+  claude: ["low", "medium", "high", "xhigh", "max"],
+  codex: ["low", "medium", "high", "xhigh", "ultra", "max"],
+  antigravity: [],
+};
+const EFFORT_DETAIL: Record<string, string> = {
+  xhigh: "gpt-5.5 支持的最高档",
+  ultra: "仅 gpt-5.6-sol/terra 等新模型支持",
+};
+
+// 速度档:标准=不传参;1.5x=加速档(codex: -c service_tier="priority";
+// claude: --settings '{"fastMode": true}',仅 Opus 生效)。
+const SPEED_OPTIONS: MenuOption[] = [
   { value: "standard", label: "标准", detail: "跟随 CLI 默认速度" },
   { value: "fast", label: "1.5x", detail: "加速档（用量消耗更快）" },
+];
+
+const withDefault = (values: string[], detail = "跟随 CLI 默认"): MenuOption[] => [
+  { value: "", label: "默认", detail },
+  ...values.map((v) => ({ value: v, label: v, detail: EFFORT_DETAIL[v] })),
 ];
 
 type Detected = { type: string; bin: string; available: boolean; path: string | null; version: string | null };
@@ -142,121 +170,137 @@ function targetText(t: ExecTarget) {
   return t.kind === "ssh" ? `ssh ${t.host}` : "本地";
 }
 
+// 属性 chip:带 faint 标签 + 当前值;未设置时整体虚线灰。
+const chipClass = (set: boolean) =>
+  `inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded border px-1.5 py-0.5 text-[11px] transition-colors hover:text-ink ${
+    set ? "border-line text-ink" : "border-dashed border-line text-faint"
+  }`;
+
+function ChipLabel({ label, value }: { label: string; value?: string }) {
+  return (
+    <>
+      <span className="text-faint">{label}</span>
+      {value && <span>{value}</span>}
+    </>
+  );
+}
+
+// 模型下拉:预设 + header 自由输入(Enter 提交)。
+function ModelMenu({ type, value, onPick }: { type: AgentType; value?: string; onPick: (v: string) => void }) {
+  return (
+    <Menu
+      options={withDefault(MODEL_PRESETS[type], "跟随 CLI 配置的默认模型")}
+      value={value ?? ""}
+      onChange={onPick}
+      menuWidth={230}
+      triggerClassName={chipClass(!!value)}
+      header={({ select }) => (
+        <input
+          placeholder="自定义模型名，Enter 确认"
+          defaultValue={value ?? ""}
+          autoFocus
+          onKeyDown={(e) => {
+            if (e.key === "Enter") select((e.target as HTMLInputElement).value.trim());
+          }}
+          className="w-full rounded border border-line bg-canvas px-1.5 py-1 text-[12px] outline-none placeholder:text-faint"
+        />
+      )}
+    >
+      <ChipLabel label="模型" value={value} />
+    </Menu>
+  );
+}
+
 function Row({ a, onChange }: { a: AgentExecutorProfile; onChange: () => void }) {
-  const [editing, setEditing] = useState(false);
-  const [model, setModel] = useState("");
   const [argsEditing, setArgsEditing] = useState(false);
   const [argsText, setArgsText] = useState("");
 
-  // 已注册的执行者也能随时改模型(检测注册进来的默认没填):点模型原地编辑,
-  // Enter/失焦保存,Esc 取消(stopPropagation 免得连面板一起关),留空=清掉、
-  // 回到 CLI 自己的默认模型(后端 PATCH 把空串落成 null)。
-  const save = async () => {
-    setEditing(false);
-    const next = model.trim();
-    if (next === (a.model ?? "")) return;
-    await api.patchAgent(a.id, { model: next });
-    onChange();
-  };
+  const patch = (p: Partial<AgentExecutorProfile>) => api.patchAgent(a.id, p).then(onChange);
 
-  // 额外 CLI 参数同款原地编辑:按空白拆成参数数组随命令行传给 CLI(如
-  // `-c model_reasoning_effort=xhigh`),留空=清掉。带空格的值 CLI 侧多为
-  // key=value 形态,不做引号解析。
+  // 额外 CLI 参数(兜底,常用参数请用左侧下拉):按空白拆成参数数组随命令行
+  // 传给 CLI,留空=清掉。带空格的值 CLI 侧多为 key=value 形态,不做引号解析。
   const extra = a.extraArgs ?? [];
   const saveArgs = async () => {
     setArgsEditing(false);
     const next = argsText.trim() ? argsText.trim().split(/\s+/) : [];
     if (next.join(" ") === extra.join(" ")) return;
-    await api.patchAgent(a.id, { extraArgs: next });
-    onChange();
+    await patch({ extraArgs: next });
   };
 
   return (
-    <div className="mb-1.5 flex items-center gap-2 rounded-md border border-line bg-panel px-2.5 py-1.5 text-[12px]">
-      <span className="font-medium text-ink">{a.name}</span>
-      <span className="text-muted">{targetText(a.target)}</span>
-      {editing ? (
-        <input
-          autoFocus
-          value={model}
-          onChange={(e) => setModel(e.target.value)}
-          onBlur={save}
-          onKeyDown={(e) => {
-            e.stopPropagation();
-            if (e.key === "Enter") save();
-            else if (e.key === "Escape") setEditing(false);
-          }}
-          placeholder="如 opus；留空用 CLI 默认"
-          className="w-44 rounded border border-line bg-canvas px-1.5 py-0.5 text-[11px] outline-none placeholder:text-faint"
-        />
-      ) : (
+    <div className="mb-1.5 rounded-md border border-line bg-panel px-2.5 py-2 text-[12px]">
+      <div className="flex items-center gap-2">
+        <span className="font-medium text-ink">{a.name}</span>
+        <span className="text-muted">{targetText(a.target)}</span>
+        {a.isDefault ? (
+          <span className="rounded bg-emerald-500/15 px-1.5 py-0.5 text-[11px] text-emerald-700">默认</span>
+        ) : (
+          <button
+            onClick={() => patch({ isDefault: true })}
+            className="rounded border border-line px-1.5 py-0.5 text-[11px] text-muted hover:text-ink"
+          >
+            设为默认
+          </button>
+        )}
         <button
-          onClick={() => {
-            setModel(a.model ?? "");
-            setEditing(true);
-          }}
-          title="指定模型（留空用 CLI 默认）"
-          className={a.model ? "text-muted hover:text-ink" : "rounded border border-dashed border-line px-1.5 py-0.5 text-[11px] text-faint hover:text-ink"}
+          onClick={() => api.deleteAgent(a.id).then(onChange)}
+          className="ml-auto grid h-6 w-6 place-items-center rounded text-faint hover:bg-raised hover:text-red-600"
+          title="删除"
         >
-          {a.model ? `· ${a.model}` : "+ 模型"}
+          <Trash size={13} />
         </button>
-      )}
-      <Menu
-        options={SPEED_OPTIONS}
-        value={a.speed ?? "standard"}
-        onChange={(v) => api.patchAgent(a.id, { speed: v as "standard" | "fast" }).then(onChange)}
-        menuWidth={220}
-        triggerClassName={
-          a.speed === "fast"
-            ? "shrink-0 whitespace-nowrap text-[11px] text-muted hover:text-ink"
-            : "shrink-0 whitespace-nowrap rounded border border-dashed border-line px-1.5 py-0.5 text-[11px] text-faint hover:text-ink"
-        }
-      >
-        <span title="速度档（1.5x 加速消耗用量更快）">{a.speed === "fast" ? "· 1.5x" : "标准"}</span>
-      </Menu>
-      {argsEditing ? (
-        <input
-          autoFocus
-          value={argsText}
-          onChange={(e) => setArgsText(e.target.value)}
-          onBlur={saveArgs}
-          onKeyDown={(e) => {
-            e.stopPropagation();
-            if (e.key === "Enter") saveArgs();
-            else if (e.key === "Escape") setArgsEditing(false);
-          }}
-          placeholder="如 -c model_reasoning_effort=xhigh"
-          className="w-56 rounded border border-line bg-canvas px-1.5 py-0.5 font-mono text-[11px] outline-none placeholder:text-faint"
-        />
-      ) : (
-        <button
-          onClick={() => {
-            setArgsText(extra.join(" "));
-            setArgsEditing(true);
-          }}
-          title="额外 CLI 参数，按空格分隔（留空清掉）"
-          className={extra.length ? "max-w-56 truncate font-mono text-[11px] text-muted hover:text-ink" : "rounded border border-dashed border-line px-1.5 py-0.5 text-[11px] text-faint hover:text-ink"}
+      </div>
+      <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+        <ModelMenu type={a.type} value={a.model} onPick={(v) => patch({ model: v })} />
+        <Menu
+          options={withDefault(EFFORT_VALUES[a.type])}
+          value={a.reasoningEffort ?? ""}
+          onChange={(v) => patch({ reasoningEffort: v })}
+          menuWidth={250}
+          triggerClassName={chipClass(!!a.reasoningEffort)}
         >
-          {extra.length ? extra.join(" ") : "+ 参数"}
-        </button>
-      )}
-      {a.isDefault ? (
-        <span className="rounded bg-emerald-500/15 px-1.5 py-0.5 text-[11px] text-emerald-700">默认</span>
-      ) : (
-        <button
-          onClick={() => api.patchAgent(a.id, { isDefault: true }).then(onChange)}
-          className="rounded border border-line px-1.5 py-0.5 text-[11px] text-muted hover:text-ink"
+          <ChipLabel label="强度" value={a.reasoningEffort} />
+        </Menu>
+        <Menu
+          options={SPEED_OPTIONS}
+          value={a.speed ?? "standard"}
+          onChange={(v) => patch({ speed: v as "standard" | "fast" })}
+          menuWidth={220}
+          triggerClassName={chipClass(a.speed === "fast")}
         >
-          设为默认
-        </button>
-      )}
-      <button
-        onClick={() => api.deleteAgent(a.id).then(onChange)}
-        className="ml-auto grid h-6 w-6 place-items-center rounded text-faint hover:bg-raised hover:text-red-600"
-        title="删除"
-      >
-        <Trash size={13} />
-      </button>
+          <ChipLabel label="速度" value={a.speed === "fast" ? "1.5x" : "标准"} />
+        </Menu>
+        {argsEditing ? (
+          <input
+            autoFocus
+            value={argsText}
+            onChange={(e) => setArgsText(e.target.value)}
+            onBlur={saveArgs}
+            onKeyDown={(e) => {
+              e.stopPropagation();
+              if (e.key === "Enter") saveArgs();
+              else if (e.key === "Escape") setArgsEditing(false);
+            }}
+            placeholder="额外 CLI 参数，空格分隔"
+            className="w-56 rounded border border-line bg-canvas px-1.5 py-0.5 font-mono text-[11px] outline-none placeholder:text-faint"
+          />
+        ) : (
+          <button
+            onClick={() => {
+              setArgsText(extra.join(" "));
+              setArgsEditing(true);
+            }}
+            title="额外 CLI 参数（兜底；常用配置请用左侧下拉），空格分隔，留空清掉"
+            className={
+              extra.length
+                ? "max-w-56 truncate font-mono text-[11px] text-muted hover:text-ink"
+                : "shrink-0 whitespace-nowrap rounded border border-dashed border-line px-1.5 py-0.5 text-[11px] text-faint hover:text-ink"
+            }
+          >
+            {extra.length ? extra.join(" ") : "+ 参数"}
+          </button>
+        )}
+      </div>
     </div>
   );
 }
@@ -265,9 +309,19 @@ function AddRow({ type, onAdded }: { type: AgentType; onAdded: () => void }) {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
   const [model, setModel] = useState("");
-  const [args, setArgs] = useState("");
+  const [effort, setEffort] = useState("");
   const [speed, setSpeed] = useState<"standard" | "fast">("standard");
+  const [args, setArgs] = useState("");
   const [host, setHost] = useState("");
+
+  const reset = () => {
+    setName("");
+    setModel("");
+    setEffort("");
+    setSpeed("standard");
+    setArgs("");
+    setHost("");
+  };
 
   const add = async () => {
     const target: ExecTarget = host.trim() ? { kind: "ssh", host: host.trim() } : { kind: "local" };
@@ -275,16 +329,13 @@ function AddRow({ type, onAdded }: { type: AgentType; onAdded: () => void }) {
       type,
       name: name.trim() || `${type}@${host.trim() || "local"}${model ? "·" + model : ""}`,
       model: model.trim() || undefined,
-      extraArgs: args.trim() ? args.trim().split(/\s+/) : undefined,
+      reasoningEffort: effort || undefined,
       speed: speed === "fast" ? "fast" : undefined,
+      extraArgs: args.trim() ? args.trim().split(/\s+/) : undefined,
       target,
       isDefault: false,
     });
-    setName("");
-    setModel("");
-    setArgs("");
-    setSpeed("standard");
-    setHost("");
+    reset();
     setOpen(false);
     onAdded();
   };
@@ -299,20 +350,28 @@ function AddRow({ type, onAdded }: { type: AgentType; onAdded: () => void }) {
   return (
     <div className="mt-1 flex flex-col gap-1.5 rounded-md border border-line p-2 text-[12px]">
       <input value={name} onChange={(e) => setName(e.target.value)} placeholder="名称（可选）" className="rounded border border-line bg-canvas px-2 py-1 outline-none placeholder:text-faint" />
-      <input value={model} onChange={(e) => setModel(e.target.value)} placeholder="模型（可选，如 opus）" className="rounded border border-line bg-canvas px-2 py-1 outline-none placeholder:text-faint" />
-      <input value={args} onChange={(e) => setArgs(e.target.value)} placeholder="额外 CLI 参数（可选，空格分隔）" className="rounded border border-line bg-canvas px-2 py-1 font-mono outline-none placeholder:text-faint" />
-      <div className="flex items-center gap-2">
-        <span className="text-muted">速度</span>
+      <div className="flex flex-wrap items-center gap-1.5">
+        <ModelMenu type={type} value={model || undefined} onPick={setModel} />
+        <Menu
+          options={withDefault(EFFORT_VALUES[type])}
+          value={effort}
+          onChange={setEffort}
+          menuWidth={250}
+          triggerClassName={chipClass(!!effort)}
+        >
+          <ChipLabel label="强度" value={effort || undefined} />
+        </Menu>
         <Menu
           options={SPEED_OPTIONS}
           value={speed}
           onChange={(v) => setSpeed(v as "standard" | "fast")}
           menuWidth={220}
-          triggerClassName="rounded border border-line px-1.5 py-0.5 text-[11px] text-muted hover:text-ink"
+          triggerClassName={chipClass(speed === "fast")}
         >
-          {speed === "fast" ? "1.5x" : "标准"}
+          <ChipLabel label="速度" value={speed === "fast" ? "1.5x" : "标准"} />
         </Menu>
       </div>
+      <input value={args} onChange={(e) => setArgs(e.target.value)} placeholder="额外 CLI 参数（可选，空格分隔）" className="rounded border border-line bg-canvas px-2 py-1 font-mono outline-none placeholder:text-faint" />
       <input value={host} onChange={(e) => setHost(e.target.value)} placeholder="ssh 主机（留空=本地）" className="rounded border border-line bg-canvas px-2 py-1 outline-none placeholder:text-faint" />
       <div className="flex justify-end gap-2">
         <button onClick={() => setOpen(false)} className="px-2 py-1 text-muted">取消</button>

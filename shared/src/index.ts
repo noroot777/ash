@@ -17,6 +17,9 @@ export interface AgentExecutorProfile {
   target: ExecTarget; // local spawn or ssh host
   model?: string;
   extraArgs?: string[];
+  // 推理强度。缺省 = 跟随 CLI 默认;claude: --effort <v>;codex: -c model_reasoning_effort="<v>"。
+  // 取值集按 CLI 而异(claude 无 ultra;模型不支持的档位会被 API 拒绝,如 gpt-5.5 最高 xhigh)。
+  reasoningEffort?: string;
   // 速度档。缺省/"standard" = 标准（不额外传参，跟随 CLI 自己的默认）；
   // "fast" = 1.5x 加速档（codex: -c service_tier="priority"）。
   speed?: "standard" | "fast";

@@ -60,6 +60,7 @@ export const agents = sqliteTable("agents", {
   target: text("target").notNull().default('{"kind":"local"}'), // json ExecTarget
   model: text("model"),
   extraArgs: text("extra_args").notNull().default("[]"), // json
+  reasoningEffort: text("reasoning_effort"), // null=跟随 CLI 默认
   speed: text("speed"), // null=标准；"fast"=1.5x 加速档
   isDefault: integer("is_default", { mode: "boolean" }).notNull().default(false),
 });
