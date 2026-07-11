@@ -68,11 +68,11 @@ export function TaskList({
             </button>
             {!isCollapsed &&
               inStatus.map((t) => (
-              <button
+              <div
                 key={t.id}
                 data-task-id={t.id}
                 onClick={() => onSelect(t.id)}
-                className={`flex w-full flex-col gap-0.5 px-4 py-1.5 text-left transition-colors ${
+                className={`flex w-full cursor-pointer flex-col gap-0.5 px-4 py-1.5 text-left transition-colors ${
                   selected === t.id ? "bg-raised" : "hover:bg-raised/60"
                 }`}
               >
@@ -107,7 +107,7 @@ export function TaskList({
                   </div>
                 </div>
                 <PauseHint task={t} allTasks={tasks} onOpen={onSelect} />
-              </button>
+              </div>
             ))}
           </div>
         );
