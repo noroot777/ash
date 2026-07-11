@@ -26,7 +26,7 @@ import { db } from "./db/index.js";
 import { projects, groups, tasks, sessions, schedules, scheduledMessages, agents, issues, issueComments, llmProviders, queueItems } from "./db/schema.js";
 import { bus } from "./bus.js";
 import { id, now, attachmentsPrompt, runsTiming } from "./util.js";
-import { resumeOrRunTask, continueTask } from "./orchestrator.js";
+import { resumeOrRunTask, continueTask, runTask } from "./orchestrator.js";
 import { parseIssue, classifyMention, buildDiscussPrompt, runAgentOnce, DISCUSS_TIMEOUT_MS } from "./agentOnce.js";
 import { listModels } from "./llm.js";
 import { setTaskStatus } from "./status.js";
@@ -866,6 +866,28 @@ api.get("/tasks/:id/debate", async (c) => {
 });
 
 // ── run a task (§1/§12) ─────────────────────────────────────────────────────
+// 队列前置检查:task 在某个 queue 里时,前面所有 item 必须 done / canceled(透明)
+// 才允许单独启动,否则等于绕过队列顺序。/run 与 /fire 共用。返回挡路的任务 id。
+async function queueBlockers(taskId: string): Promise<string[]> {
+  const myItem = (
+    await db.select().from(queueItems).where(eq(queueItems.taskId, taskId))
+  ).at(0);
+  if (!myItem) return [];
+  const before = await db
+    .select()
+    .from(queueItems)
+    .where(and(eq(queueItems.queueId, myItem.queueId), lt(queueItems.position, myItem.position)))
+    .orderBy(asc(queueItems.position));
+  if (!before.length) return [];
+  const beforeTasks = await db
+    .select()
+    .from(tasks)
+    .where(inArray(tasks.id, before.map((i) => i.taskId)));
+  return beforeTasks
+    .filter((t) => !t.archived && t.status !== "done" && t.status !== "canceled")
+    .map((t) => t.id);
+}
+
 api.post("/tasks/:id/run", async (c) => {
   const taskId = c.req.param("id");
   const r = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
@@ -874,37 +896,42 @@ api.post("/tasks/:id/run", async (c) => {
   // 单条手动 Run：允许 backlog / canceled / failed / paused。canceled 在这里
   // 允许是因为用户明确点了 Run，跟 queue 推进里 canceled 透明跳过是两回事。
   if (!canSingleRun(r.status as TaskStatus)) return c.json({ error: "任务当前状态不可运行", status: r.status }, 409);
-  // 队列前置检查：如果这个 task 在某个 queue 里，前面所有 item 必须是
-  // done / canceled (透明) 才允许跑。否则单击 Run 等于绕过队列顺序。
-  const myItem = (
-    await db.select().from(queueItems).where(eq(queueItems.taskId, taskId))
-  ).at(0);
-  if (myItem) {
-    const before = await db
-      .select()
-      .from(queueItems)
-      .where(and(eq(queueItems.queueId, myItem.queueId), lt(queueItems.position, myItem.position)))
-      .orderBy(asc(queueItems.position));
-    if (before.length) {
-      const beforeTasks = await db
-        .select()
-        .from(tasks)
-        .where(inArray(tasks.id, before.map((i) => i.taskId)));
-      const blockedBy = beforeTasks
-        .filter((t) => !t.archived && t.status !== "done" && t.status !== "canceled")
-        .map((t) => t.id);
-      if (blockedBy.length) {
-        return c.json(
-          { error: "队列前面还有未完成的任务，先把它们处理完或把本任务移出队列", blockedBy },
-          409,
-        );
-      }
-    }
+  const blockedBy = await queueBlockers(taskId);
+  if (blockedBy.length) {
+    return c.json(
+      { error: "队列前面还有未完成的任务，先把它们处理完或把本任务移出队列", blockedBy },
+      409,
+    );
   }
   // Fire-and-forget; progress streams over /api/events.
   if (r.mode === "debate") void runDebate(taskId);
   else void resumeOrRunTask(taskId, { reason: "run" });
   return c.json({ started: true }, 202);
+});
+
+// 立即触发一轮全新运行 = 调度器到点 fire 的效果:永远 fresh(新 CLI 会话、重新
+// 喂任务正文),绝不 resume 旧会话。「运行/重试」优先续会话,这里给「现在就跑
+// 一班新的」一个显式入口——典型场景:cron 任务错过班次,手动补跑今天这班。
+// done 也允许(定时本来就会重跑 done 任务);running/queued/审核中拒绝。
+api.post("/tasks/:id/fire", async (c) => {
+  const taskId = c.req.param("id");
+  const r = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
+  if (!r) return c.json({ error: "not found" }, 404);
+  if (r.archived) return c.json({ error: "任务已归档，先取消归档再触发", archived: true }, 409);
+  if (r.status === "running" || r.status === "queued")
+    return c.json({ error: "任务正在进行，等它结束再触发新一轮", status: r.status }, 409);
+  if (r.status === "awaiting_review")
+    return c.json({ error: "任务等待裁决中，先处理裁决再触发", status: r.status }, 409);
+  const blockedBy = await queueBlockers(taskId);
+  if (blockedBy.length) {
+    return c.json(
+      { error: "队列前面还有未完成的任务，先把它们处理完或把本任务移出队列", blockedBy },
+      409,
+    );
+  }
+  if (r.mode === "debate") void runDebate(taskId);
+  else void runTask(taskId); // 全新一轮,永不 resume
+  return c.json({ started: true, fresh: true }, 202);
 });
 
 // Manually stop a running task: kill its live agent subprocess(es). The run loop

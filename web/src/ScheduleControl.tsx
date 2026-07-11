@@ -3,6 +3,7 @@ import type { Schedule } from "@harness/shared";
 import { CaretDown } from "@phosphor-icons/react";
 import { api } from "./api";
 import { Menu } from "./Menu";
+import { toast } from "./toast";
 import { ScheduleFields, toLocalInput } from "./ScheduleFields";
 
 // Compact schedule widget (DESIGN.md §9): none / one-shot / cron, attached to a task.
@@ -11,6 +12,7 @@ export function ScheduleControl({ taskId }: { taskId: string }) {
   const [kind, setKind] = useState<"none" | "once" | "cron">("none");
   const [at, setAt] = useState("");
   const [cron, setCron] = useState("0 9 * * *");
+  const [firing, setFiring] = useState(false);
 
   useEffect(() => {
     api.schedule(taskId).then((s) => {
@@ -64,6 +66,27 @@ export function ScheduleControl({ taskId }: { taskId: string }) {
         <CaretDown size={11} weight="bold" className="text-faint" />
       </Menu>
       {kind !== "none" && <ScheduleFields kind={kind} at={at} cron={cron} onAt={setAt} onCron={setCron} />}
+      {kind === "cron" && (
+        <button
+          disabled={firing}
+          onClick={async () => {
+            // 错过班次手动补跑:等同调度器到点触发——全新一轮,不接续旧会话。
+            setFiring(true);
+            try {
+              await api.fireTask(taskId);
+              toast("已触发一轮全新运行(不接续旧会话)", "info");
+            } catch (e) {
+              toast(e instanceof Error ? e.message : String(e));
+            } finally {
+              setFiring(false);
+            }
+          }}
+          title="现在就跑一轮全新运行,效果等同定时到点触发(不接续旧会话)"
+          className="rounded-md border border-line px-2 py-1 text-ink hover:bg-raised disabled:opacity-50"
+        >
+          {firing ? "触发中…" : "立即触发"}
+        </button>
+      )}
       {dirty && (
         <button onClick={save} className="rounded-md bg-overlay px-2 py-1 text-ink hover:bg-overlay">
           {kind === "none" ? "清除定时" : "保存"}

@@ -128,6 +128,8 @@ export const api = {
     fetch(`/api/tasks/${id}/stop`, { method: "POST" }).then(j),
   retryTask: (id: string): Promise<unknown> =>
     fetch(`/api/tasks/${id}/retry`, { method: "POST" }).then(j),
+  fireTask: (id: string): Promise<unknown> =>
+    fetch(`/api/tasks/${id}/fire`, { method: "POST" }).then(j),
   archiveTask: (id: string): Promise<Task> =>
     fetch(`/api/tasks/${id}/archive`, { method: "POST" }).then(j),
   unarchiveTask: (id: string): Promise<Task> =>
