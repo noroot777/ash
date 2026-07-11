@@ -17,6 +17,9 @@ export interface AgentExecutorProfile {
   target: ExecTarget; // local spawn or ssh host
   model?: string;
   extraArgs?: string[];
+  // 速度档。缺省/"standard" = 标准（不额外传参，跟随 CLI 自己的默认）；
+  // "fast" = 1.5x 加速档（codex: -c service_tier="priority"）。
+  speed?: "standard" | "fast";
   isDefault: boolean; // the default executor resolved for its type
 }
 

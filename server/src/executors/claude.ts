@@ -14,9 +14,11 @@ export class ClaudeExecutor implements AgentExecutor {
   private bin: string;
   private model?: string;
   private extraArgs: string[];
-  constructor(opts: { model?: string; extraArgs?: string[]; bin?: string; target?: ExecTarget; name?: string } = {}) {
+  private speed?: "fast";
+  constructor(opts: { model?: string; extraArgs?: string[]; speed?: "fast"; bin?: string; target?: ExecTarget; name?: string } = {}) {
     this.model = opts.model;
     this.extraArgs = opts.extraArgs ?? [];
+    this.speed = opts.speed;
     this.bin = opts.bin ?? "claude";
     this.target = opts.target ?? { kind: "local" };
     const where = this.target.kind === "ssh" ? this.target.host : "local";
@@ -39,6 +41,10 @@ export class ClaudeExecutor implements AgentExecutor {
     if (opts.sessionId) args.push("--resume", sessionId);
     else args.push("--session-id", sessionId);
     if (model) args.push("--model", model);
+    // 1.5x 加速档:headless 下开 fast mode 的唯一官方通道是 --settings 传
+    // fastMode(无 --fast flag、无启用型环境变量;仅 Opus 系列生效,其余模型
+    // CLI 自行忽略)。放在 extraArgs 之前,用户如自带 --settings 以后者为准。
+    if (this.speed === "fast") args.push("--settings", '{"fastMode": true}');
     // 注册表配置的固定参数在前,单次调用的 opts.extraArgs 在后(后者可覆盖前者)。
     if (this.extraArgs.length) args.push(...this.extraArgs);
     if (opts.extraArgs?.length) args.push(...opts.extraArgs);

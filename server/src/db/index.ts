@@ -38,7 +38,7 @@ export async function ensureSchema() {
     CREATE TABLE IF NOT EXISTS agents (
       id TEXT PRIMARY KEY, name TEXT NOT NULL, type TEXT NOT NULL,
       target TEXT NOT NULL DEFAULT '{"kind":"local"}', model TEXT,
-      extra_args TEXT NOT NULL DEFAULT '[]', is_default INTEGER NOT NULL DEFAULT 0
+      extra_args TEXT NOT NULL DEFAULT '[]', speed TEXT, is_default INTEGER NOT NULL DEFAULT 0
     );
     CREATE TABLE IF NOT EXISTS sessions (
       id TEXT PRIMARY KEY, task_id TEXT NOT NULL, role TEXT NOT NULL,
@@ -120,6 +120,7 @@ export async function ensureSchema() {
     "ALTER TABLE tasks ADD COLUMN resume_prompt TEXT",
     "ALTER TABLE tasks ADD COLUMN resume_depends_on TEXT NOT NULL DEFAULT '[]'",
     "ALTER TABLE issue_comments ADD COLUMN status TEXT",
+    "ALTER TABLE agents ADD COLUMN speed TEXT",
   ]) {
     try {
       await client.execute(sql);

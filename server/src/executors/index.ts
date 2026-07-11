@@ -18,6 +18,7 @@ export async function resolveExecutor(type: AgentType): Promise<AgentExecutor> {
         name: profile.name,
         model: profile.model ?? undefined,
         extraArgs: JSON.parse(profile.extraArgs) as string[],
+        speed: profile.speed === "fast" ? ("fast" as const) : undefined,
         target: JSON.parse(profile.target) as ExecTarget,
         bin: undefined as string | undefined,
       }

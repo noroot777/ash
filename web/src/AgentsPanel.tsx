@@ -2,9 +2,17 @@ import { useEffect, useState } from "react";
 import type { AgentExecutorProfile, AgentType, ExecTarget } from "@harness/shared";
 import { MagnifyingGlass, Check, X, Plus, Trash, CircleNotch } from "@phosphor-icons/react";
 import { api } from "./api";
+import { Menu } from "./Menu";
 import { useEscape } from "./useEscape";
 
 const TYPES: AgentType[] = ["claude", "codex", "antigravity"];
+
+// 速度档(§5):标准=不传参、跟随 CLI 默认;1.5x=加速档,executor 各自映射
+// (codex: -c service_tier="priority";claude: --settings '{"fastMode": true}',仅 Opus 生效)。
+const SPEED_OPTIONS = [
+  { value: "standard", label: "标准", detail: "跟随 CLI 默认速度" },
+  { value: "fast", label: "1.5x", detail: "加速档（用量消耗更快）" },
+];
 
 type Detected = { type: string; bin: string; available: boolean; path: string | null; version: string | null };
 
@@ -193,6 +201,19 @@ function Row({ a, onChange }: { a: AgentExecutorProfile; onChange: () => void })
           {a.model ? `· ${a.model}` : "+ 模型"}
         </button>
       )}
+      <Menu
+        options={SPEED_OPTIONS}
+        value={a.speed ?? "standard"}
+        onChange={(v) => api.patchAgent(a.id, { speed: v as "standard" | "fast" }).then(onChange)}
+        menuWidth={220}
+        triggerClassName={
+          a.speed === "fast"
+            ? "shrink-0 whitespace-nowrap text-[11px] text-muted hover:text-ink"
+            : "shrink-0 whitespace-nowrap rounded border border-dashed border-line px-1.5 py-0.5 text-[11px] text-faint hover:text-ink"
+        }
+      >
+        <span title="速度档（1.5x 加速消耗用量更快）">{a.speed === "fast" ? "· 1.5x" : "标准"}</span>
+      </Menu>
       {argsEditing ? (
         <input
           autoFocus
@@ -245,6 +266,7 @@ function AddRow({ type, onAdded }: { type: AgentType; onAdded: () => void }) {
   const [name, setName] = useState("");
   const [model, setModel] = useState("");
   const [args, setArgs] = useState("");
+  const [speed, setSpeed] = useState<"standard" | "fast">("standard");
   const [host, setHost] = useState("");
 
   const add = async () => {
@@ -254,12 +276,14 @@ function AddRow({ type, onAdded }: { type: AgentType; onAdded: () => void }) {
       name: name.trim() || `${type}@${host.trim() || "local"}${model ? "·" + model : ""}`,
       model: model.trim() || undefined,
       extraArgs: args.trim() ? args.trim().split(/\s+/) : undefined,
+      speed: speed === "fast" ? "fast" : undefined,
       target,
       isDefault: false,
     });
     setName("");
     setModel("");
     setArgs("");
+    setSpeed("standard");
     setHost("");
     setOpen(false);
     onAdded();
@@ -277,6 +301,18 @@ function AddRow({ type, onAdded }: { type: AgentType; onAdded: () => void }) {
       <input value={name} onChange={(e) => setName(e.target.value)} placeholder="名称（可选）" className="rounded border border-line bg-canvas px-2 py-1 outline-none placeholder:text-faint" />
       <input value={model} onChange={(e) => setModel(e.target.value)} placeholder="模型（可选，如 opus）" className="rounded border border-line bg-canvas px-2 py-1 outline-none placeholder:text-faint" />
       <input value={args} onChange={(e) => setArgs(e.target.value)} placeholder="额外 CLI 参数（可选，空格分隔）" className="rounded border border-line bg-canvas px-2 py-1 font-mono outline-none placeholder:text-faint" />
+      <div className="flex items-center gap-2">
+        <span className="text-muted">速度</span>
+        <Menu
+          options={SPEED_OPTIONS}
+          value={speed}
+          onChange={(v) => setSpeed(v as "standard" | "fast")}
+          menuWidth={220}
+          triggerClassName="rounded border border-line px-1.5 py-0.5 text-[11px] text-muted hover:text-ink"
+        >
+          {speed === "fast" ? "1.5x" : "标准"}
+        </Menu>
+      </div>
       <input value={host} onChange={(e) => setHost(e.target.value)} placeholder="ssh 主机（留空=本地）" className="rounded border border-line bg-canvas px-2 py-1 outline-none placeholder:text-faint" />
       <div className="flex justify-end gap-2">
         <button onClick={() => setOpen(false)} className="px-2 py-1 text-muted">取消</button>
