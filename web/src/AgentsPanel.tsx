@@ -137,6 +137,8 @@ function targetText(t: ExecTarget) {
 function Row({ a, onChange }: { a: AgentExecutorProfile; onChange: () => void }) {
   const [editing, setEditing] = useState(false);
   const [model, setModel] = useState("");
+  const [argsEditing, setArgsEditing] = useState(false);
+  const [argsText, setArgsText] = useState("");
 
   // 已注册的执行者也能随时改模型(检测注册进来的默认没填):点模型原地编辑,
   // Enter/失焦保存,Esc 取消(stopPropagation 免得连面板一起关),留空=清掉、
@@ -146,6 +148,18 @@ function Row({ a, onChange }: { a: AgentExecutorProfile; onChange: () => void })
     const next = model.trim();
     if (next === (a.model ?? "")) return;
     await api.patchAgent(a.id, { model: next });
+    onChange();
+  };
+
+  // 额外 CLI 参数同款原地编辑:按空白拆成参数数组随命令行传给 CLI(如
+  // `-c model_reasoning_effort=xhigh`),留空=清掉。带空格的值 CLI 侧多为
+  // key=value 形态,不做引号解析。
+  const extra = a.extraArgs ?? [];
+  const saveArgs = async () => {
+    setArgsEditing(false);
+    const next = argsText.trim() ? argsText.trim().split(/\s+/) : [];
+    if (next.join(" ") === extra.join(" ")) return;
+    await api.patchAgent(a.id, { extraArgs: next });
     onChange();
   };
 
@@ -179,6 +193,32 @@ function Row({ a, onChange }: { a: AgentExecutorProfile; onChange: () => void })
           {a.model ? `· ${a.model}` : "+ 模型"}
         </button>
       )}
+      {argsEditing ? (
+        <input
+          autoFocus
+          value={argsText}
+          onChange={(e) => setArgsText(e.target.value)}
+          onBlur={saveArgs}
+          onKeyDown={(e) => {
+            e.stopPropagation();
+            if (e.key === "Enter") saveArgs();
+            else if (e.key === "Escape") setArgsEditing(false);
+          }}
+          placeholder="如 -c model_reasoning_effort=xhigh"
+          className="w-56 rounded border border-line bg-canvas px-1.5 py-0.5 font-mono text-[11px] outline-none placeholder:text-faint"
+        />
+      ) : (
+        <button
+          onClick={() => {
+            setArgsText(extra.join(" "));
+            setArgsEditing(true);
+          }}
+          title="额外 CLI 参数，按空格分隔（留空清掉）"
+          className={extra.length ? "max-w-56 truncate font-mono text-[11px] text-muted hover:text-ink" : "rounded border border-dashed border-line px-1.5 py-0.5 text-[11px] text-faint hover:text-ink"}
+        >
+          {extra.length ? extra.join(" ") : "+ 参数"}
+        </button>
+      )}
       {a.isDefault ? (
         <span className="rounded bg-emerald-500/15 px-1.5 py-0.5 text-[11px] text-emerald-700">默认</span>
       ) : (
@@ -204,6 +244,7 @@ function AddRow({ type, onAdded }: { type: AgentType; onAdded: () => void }) {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
   const [model, setModel] = useState("");
+  const [args, setArgs] = useState("");
   const [host, setHost] = useState("");
 
   const add = async () => {
@@ -212,11 +253,13 @@ function AddRow({ type, onAdded }: { type: AgentType; onAdded: () => void }) {
       type,
       name: name.trim() || `${type}@${host.trim() || "local"}${model ? "·" + model : ""}`,
       model: model.trim() || undefined,
+      extraArgs: args.trim() ? args.trim().split(/\s+/) : undefined,
       target,
       isDefault: false,
     });
     setName("");
     setModel("");
+    setArgs("");
     setHost("");
     setOpen(false);
     onAdded();
@@ -233,6 +276,7 @@ function AddRow({ type, onAdded }: { type: AgentType; onAdded: () => void }) {
     <div className="mt-1 flex flex-col gap-1.5 rounded-md border border-line p-2 text-[12px]">
       <input value={name} onChange={(e) => setName(e.target.value)} placeholder="名称（可选）" className="rounded border border-line bg-canvas px-2 py-1 outline-none placeholder:text-faint" />
       <input value={model} onChange={(e) => setModel(e.target.value)} placeholder="模型（可选，如 opus）" className="rounded border border-line bg-canvas px-2 py-1 outline-none placeholder:text-faint" />
+      <input value={args} onChange={(e) => setArgs(e.target.value)} placeholder="额外 CLI 参数（可选，空格分隔）" className="rounded border border-line bg-canvas px-2 py-1 font-mono outline-none placeholder:text-faint" />
       <input value={host} onChange={(e) => setHost(e.target.value)} placeholder="ssh 主机（留空=本地）" className="rounded border border-line bg-canvas px-2 py-1 outline-none placeholder:text-faint" />
       <div className="flex justify-end gap-2">
         <button onClick={() => setOpen(false)} className="px-2 py-1 text-muted">取消</button>

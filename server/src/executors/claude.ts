@@ -13,8 +13,10 @@ export class ClaudeExecutor implements AgentExecutor {
   private target: ExecTarget;
   private bin: string;
   private model?: string;
-  constructor(opts: { model?: string; bin?: string; target?: ExecTarget; name?: string } = {}) {
+  private extraArgs: string[];
+  constructor(opts: { model?: string; extraArgs?: string[]; bin?: string; target?: ExecTarget; name?: string } = {}) {
     this.model = opts.model;
+    this.extraArgs = opts.extraArgs ?? [];
     this.bin = opts.bin ?? "claude";
     this.target = opts.target ?? { kind: "local" };
     const where = this.target.kind === "ssh" ? this.target.host : "local";
@@ -37,6 +39,8 @@ export class ClaudeExecutor implements AgentExecutor {
     if (opts.sessionId) args.push("--resume", sessionId);
     else args.push("--session-id", sessionId);
     if (model) args.push("--model", model);
+    // 注册表配置的固定参数在前,单次调用的 opts.extraArgs 在后(后者可覆盖前者)。
+    if (this.extraArgs.length) args.push(...this.extraArgs);
     if (opts.extraArgs?.length) args.push(...opts.extraArgs);
 
     const commandLine = `${this.bin} ${args.join(" ")} <prompt via stdin>`;
