@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { getConnInfo } from "@hono/node-server/conninfo";
 import { streamSSE } from "hono/streaming";
 import { eq, inArray, and, lt, asc } from "drizzle-orm";
 import { readFile } from "node:fs/promises";
@@ -50,19 +51,23 @@ const LOCAL_OPEN_ROOTS = (process.env.HARNESS_LOCAL_OPEN_ROOTS ??
   .map((p) => resolve(p))
   .filter(Boolean);
 
-const isLoopbackHost = (host: string | null): boolean => {
-  const value = (host ?? "").toLowerCase();
-  if (value.startsWith("[::1]")) return true;
-  const h = value.split(":")[0];
-  return h === "localhost" || h === "127.0.0.1" || h === "::1" || h === "[::1]";
+// open-local 信任的是「连接来源 IP」而非 Host 头(Host 可随意伪造):本机 loopback
+// 或 Tailscale 网段(100.64.0.0/10 CGNAT + 其 IPv6 fd7a:115c:a1e0::/48)放行——
+// tailnet 里全是自己的设备,从手机/别的电脑点开也应该能在 Mac 上打开文件。
+const isTrustedRemote = (addr: string | undefined): boolean => {
+  const a = (addr ?? "").replace(/^::ffff:/i, "");
+  if (a === "127.0.0.1" || a === "::1") return true;
+  if (a.toLowerCase().startsWith("fd7a:115c:a1e0:")) return true;
+  const m = /^100\.(\d+)\./.exec(a);
+  return m !== null && Number(m[1]) >= 64 && Number(m[1]) <= 127;
 };
 
 const isAllowedLocalPath = (path: string): boolean =>
   LOCAL_OPEN_ROOTS.some((root) => path === root || path.startsWith(root + sep));
 
 api.all("/open-local", async (c) => {
-  if (!isLoopbackHost(c.req.header("host") ?? null)) {
-    return c.text("open-local is only available through localhost/127.0.0.1", 403);
+  if (!isTrustedRemote(getConnInfo(c).remote.address)) {
+    return c.text("只允许本机或 Tailscale 网内设备调用 open-local", 403);
   }
   const raw = c.req.query("path") ?? "";
   const target = resolve(raw);

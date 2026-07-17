@@ -2,18 +2,20 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { toast } from "./toast";
 
+// open-local 链接只认 pathname——agent 写链接时可能带 localhost / tailnet 任一 host,
+// 统一改写到当前 origin 请求,避免「在 tailnet 页面点到 localhost 链接」这类跨 host 失效。
 function isLocalOpenHref(href?: string): href is string {
   if (!href) return false;
   try {
-    const url = new URL(href, window.location.origin);
-    return url.origin === window.location.origin && url.pathname === "/api/open-local";
+    return new URL(href, window.location.origin).pathname === "/api/open-local";
   } catch {
     return false;
   }
 }
 
 async function openLocalPath(href: string) {
-  const r = await fetch(href);
+  const url = new URL(href, window.location.origin);
+  const r = await fetch(`/api/open-local?${url.searchParams.toString()}`);
   if (!r.ok) throw new Error(await r.text());
 }
 
