@@ -36,6 +36,7 @@ import { runGroup, advanceQueue } from "./scheduler.js";
 import { runDebate, resumeDebate, resumeAtGate } from "./debate/index.js";
 import { resolveGate } from "./debate/gates.js";
 import { detectLocalAgents } from "./detect.js";
+import { searchAll } from "./search.js";
 import { projectHealthLight, projectHealthFull, tidyRepoPath, repoKey, listBranches, detectTaskWorktree, removeWorktree, taskCommits } from "./git.js";
 import { resumeCommandFor } from "./executors/spawn.js";
 import type { GateAction, AgentType, BatchCreateTasksBody, BatchTaskInput, ScheduledMessage, ScheduledMessageStatus } from "@harness/shared";
@@ -44,6 +45,16 @@ export const api = new Hono();
 
 // ── health ───────────────────────────────────────────────────────────────
 api.get("/health", (c) => c.json({ ok: true, ts: now() }));
+
+// ── search ───────────────────────────────────────────────────────────────
+// Global search across tasks + session transcripts + issues (see search.ts).
+// Sub-2-char queries return empty instead of erroring — the palette calls this
+// on every keystroke.
+api.get("/search", async (c) => {
+  const q = (c.req.query("q") ?? "").trim();
+  if (q.length < 2) return c.json([]);
+  return c.json(await searchAll(q));
+});
 
 const LOCAL_OPEN_ROOTS = (process.env.HARNESS_LOCAL_OPEN_ROOTS ??
   "/Users/fjh/code/daily-report/videos:/Users/fjh/code/harness/review")

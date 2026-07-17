@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
-import type { Task, ProjectView, Group, AgentEvent, DebateStyle, AgentType, ProjectHealth, Issue } from "@harness/shared";
+import type { Task, ProjectView, Group, AgentEvent, DebateStyle, AgentType, ProjectHealth, Issue, SearchHit } from "@harness/shared";
 import { CaretDown, MagnifyingGlass, GearSix, Plus, ListChecks, PencilSimpleLine, SidebarSimple, Robot } from "@phosphor-icons/react";
 import { api } from "./api";
 import { useServerEvents } from "./useEvents";
@@ -261,28 +261,54 @@ export function App() {
 
   const gate = useCallback((id: string, action: Parameters<typeof api.gate>[1]) => api.gate(id, action), []);
 
-  // Open a task from an issue's 派生执行 link: switch to the 执行 plane and select
-  // it, fetching it (and switching to its project) if the loaded list lacks it —
-  // e.g. a task just spawned by @-executing the issue isn't in `tasks` yet.
+  // Open a task from an issue's 派生执行 link or a ⌘K search hit: switch to the
+  // 执行 plane and select it, fetching it (and switching to its project) if the
+  // loaded list lacks it — e.g. a task just spawned by @-executing the issue, or
+  // a search hit from another project. Archived hits also flip the view so the
+  // task is actually visible in the list.
   const openTask = useCallback(async (taskId: string) => {
     setSection("task");
     setSelected(taskId);
-    if (!tasksRef.current.some((t) => t.id === taskId)) {
+    const local = tasksRef.current.find((t) => t.id === taskId);
+    let target = local;
+    if (!local) {
       try {
         const t = await api.task(taskId);
         setProjectId(t.projectId);
         setTasks((ts) => (ts.some((x) => x.id === t.id) ? ts : [t, ...ts]));
+        target = t;
       } catch {
         /* task gone */
       }
     }
+    if (target) {
+      if (target.archived) setView("archived");
+      else setView((v) => (v === "archived" ? "list" : v));
+    }
   }, []);
 
-  // The reverse jump: a task's 「← 来自事项」 backlink opens its source issue.
-  const openIssue = useCallback((issueId: string) => {
-    setSection("issue");
-    setSelectedIssue(issueId);
-  }, []);
+  // The reverse jump: a task's 「← 来自事项」 backlink (or a search hit) opens its
+  // source issue. Cross-project hits must also switch the project, otherwise the
+  // self-heal effect above would immediately clear the selection.
+  const openIssue = useCallback(
+    (issueId: string) => {
+      setSection("issue");
+      setSelectedIssue(issueId);
+      const iss = issues.find((i) => i.id === issueId);
+      if (iss?.projectId) setProjectId(iss.projectId);
+    },
+    [issues],
+  );
+
+  // ⌘K search hit → the right plane. Tasks may live in another project or the
+  // archive; openTask handles both.
+  const openHit = useCallback(
+    (h: SearchHit) => {
+      if (h.kind === "task") openTask(h.id);
+      else openIssue(h.id);
+    },
+    [openTask, openIssue],
+  );
 
   const del = useCallback((id: string, title: string) => setConfirmDel({ id, title }), []);
   const doDelete = useCallback(async (id: string) => {
@@ -669,7 +695,7 @@ export function App() {
         )}
       </main>
 
-      <CommandPalette open={paletteOpen} commands={commands} onClose={() => setPaletteOpen(false)} />
+      <CommandPalette open={paletteOpen} commands={commands} onOpenHit={openHit} onClose={() => setPaletteOpen(false)} />
       {agentsOpen && <AgentsPanel onClose={() => setAgentsOpen(false)} />}
       {sysOpen && <SettingsPanel onClose={() => setSysOpen(false)} />}
       {newProjectOpen && <NewProjectModal onClose={() => setNewProjectOpen(false)} onCreate={doCreateProject} />}

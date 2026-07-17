@@ -1,4 +1,4 @@
-import type { Project, ProjectView, ProjectHealth, Task, Session, Group, GateAction, Schedule, ScheduledMessage, AgentExecutorProfile, BatchCreateTasksBody, AgentType, DebateSpeaker, AttachmentKind, Issue, IssueComment, AiBackend, LlmProvider, LlmProtocol } from "@harness/shared";
+import type { Project, ProjectView, ProjectHealth, Task, Session, Group, GateAction, Schedule, ScheduledMessage, AgentExecutorProfile, BatchCreateTasksBody, AgentType, DebateSpeaker, AttachmentKind, Issue, IssueComment, AiBackend, LlmProvider, LlmProtocol, SearchHit } from "@harness/shared";
 
 const j = async (r: Response) => {
   if (!r.ok) {
@@ -100,6 +100,9 @@ export const api = {
 
   tasks: (): Promise<Task[]> => fetch("/api/tasks").then(j),
   task: (id: string): Promise<Task> => fetch(`/api/tasks/${id}`).then(j),
+  // Global search (⌘K): tasks + session transcripts + issues, ranked server-side.
+  search: (q: string): Promise<SearchHit[]> =>
+    fetch(`/api/search?q=${encodeURIComponent(q)}`).then(j),
   // Persist a pasted image/file; returns its absolute path (for the agent), a url
   // (preview) and the kind (image vs file → which chip the composer shows).
   uploadFile: (dataUrl: string, name: string): Promise<{ id: string; path: string; url: string; name: string; kind: AttachmentKind }> =>

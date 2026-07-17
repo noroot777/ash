@@ -238,6 +238,27 @@ export interface IssueComment {
   status?: "pending" | "done" | "failed" | null;
 }
 
+// ── Global search (⌘K) ───────────────────────────────────────────────────────
+// One hit per task/issue — the best-matching field wins, ranked
+// title > body > comment > conversation. `conversation` means the match was
+// found inside the task's session transcripts (data/runs/<taskId>/*.md|jsonl),
+// which is where run artifacts like output directory names live.
+export type SearchField = "title" | "body" | "comment" | "conversation";
+export interface SearchHit {
+  kind: "task" | "issue";
+  id: string;
+  title: string;
+  status: TaskStatus | IssueStatus;
+  projectId: string | null;
+  projectName: string | null;
+  archived: boolean; // tasks only; issues are always false
+  field: SearchField;
+  // Context around the first match, whitespace-collapsed to one line.
+  // Empty for title hits (the title is already shown).
+  snippet: string;
+  updatedAt: string;
+}
+
 // ── Attachments (pasted into the composer / reply box) ───────────────────────
 // Pasted images OR files. We don't feed them to a vision API — each is persisted
 // to disk and its absolute path is appended to the prompt for the agent to Read

@@ -1,4 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { SearchHit, TaskStatus } from "@harness/shared";
+import { PencilSimpleLine } from "@phosphor-icons/react";
+import { api } from "./api";
+import { StatusIcon } from "./StatusIcon";
 import { useEscape } from "./useEscape";
 import { usePresence } from "./useReveal";
 
@@ -10,17 +14,52 @@ export type Command = {
   run: () => void;
 };
 
+// Where the match was found — tells the user WHY this hit surfaced (a directory
+// name usually lives in the conversation, not the title).
+const FIELD_LABEL: Record<SearchHit["field"], string | null> = {
+  title: null, // title matches highlight in the title itself, no chip needed
+  body: "正文",
+  comment: "讨论",
+  conversation: "会话",
+};
+
+// Highlight every occurrence of `q` (case-insensitive) inside `text`.
+function Highlight({ text, q }: { text: string; q: string }) {
+  const needle = q.trim().toLowerCase();
+  if (!needle) return <>{text}</>;
+  const lower = text.toLowerCase();
+  const parts: React.ReactNode[] = [];
+  let pos = 0;
+  for (let i = lower.indexOf(needle); i >= 0; i = lower.indexOf(needle, pos)) {
+    if (i > pos) parts.push(text.slice(pos, i));
+    parts.push(
+      <mark key={i} className="rounded-[2px] bg-accent/25 text-inherit">
+        {text.slice(i, i + needle.length)}
+      </mark>,
+    );
+    pos = i + needle.length;
+  }
+  parts.push(text.slice(pos));
+  return <>{parts}</>;
+}
+
 export function CommandPalette({
   open,
   commands,
   onClose,
+  onOpenHit,
 }: {
   open: boolean;
   commands: Command[];
   onClose: () => void;
+  onOpenHit: (hit: SearchHit) => void;
 }) {
   const [q, setQ] = useState("");
   const [active, setActive] = useState(0);
+  const [hits, setHits] = useState<SearchHit[]>([]);
+  const [searching, setSearching] = useState(false);
+  // Guards against out-of-order responses: only the latest query may land.
+  const seqRef = useRef(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const { mounted, closing } = usePresence(open, "--modal-close-dur");
   useEscape(onClose, open);
@@ -39,9 +78,38 @@ export function CommandPalette({
     return commands.filter((c) => (c.label + " " + (c.hint ?? "") + " " + (c.group ?? "")).toLowerCase().includes(s));
   }, [q, commands]);
 
+  // Debounced global search. Server ranks by field (title > body > … ), the
+  // client regroups tasks-before-issues so each kind reads as one section.
   useEffect(() => {
-    if (active >= filtered.length) setActive(0);
-  }, [filtered.length, active]);
+    const s = q.trim();
+    if (s.length < 2) {
+      setHits([]);
+      setSearching(false);
+      return;
+    }
+    setSearching(true);
+    const seq = ++seqRef.current;
+    const timer = setTimeout(() => {
+      api
+        .search(s)
+        .then((r) => {
+          if (seqRef.current !== seq) return;
+          setHits([...r.filter((h) => h.kind === "task"), ...r.filter((h) => h.kind === "issue")]);
+          setSearching(false);
+        })
+        .catch(() => {
+          if (seqRef.current !== seq) return;
+          setHits([]);
+          setSearching(false);
+        });
+    }, 200);
+    return () => clearTimeout(timer);
+  }, [q]);
+
+  const total = filtered.length + hits.length;
+  useEffect(() => {
+    if (active >= total) setActive(0);
+  }, [total, active]);
 
   if (!mounted) return null;
 
@@ -49,6 +117,15 @@ export function CommandPalette({
     if (!c) return;
     c.run();
     onClose();
+  };
+  const openHit = (h: SearchHit | undefined) => {
+    if (!h) return;
+    onOpenHit(h);
+    onClose();
+  };
+  const activate = (i: number) => {
+    if (i < filtered.length) run(filtered[i]);
+    else openHit(hits[i - filtered.length]);
   };
 
   return (
@@ -64,18 +141,18 @@ export function CommandPalette({
           ref={inputRef}
           value={q}
           onChange={(e) => setQ(e.target.value)}
-          placeholder="输入命令…"
+          placeholder="搜索任务、事项，或输入命令…"
           className="w-full border-b border-line bg-transparent px-4 py-3 text-sm outline-none placeholder:text-faint"
           onKeyDown={(e) => {
             if (e.key === "ArrowDown") {
               e.preventDefault();
-              setActive((a) => Math.min(a + 1, filtered.length - 1));
+              setActive((a) => Math.min(a + 1, total - 1));
             } else if (e.key === "ArrowUp") {
               e.preventDefault();
               setActive((a) => Math.max(a - 1, 0));
             } else if (e.key === "Enter") {
               e.preventDefault();
-              run(filtered[active]);
+              activate(active);
             } else if (e.key === "Escape") {
               onClose();
             }
@@ -104,7 +181,56 @@ export function CommandPalette({
               </div>
             );
           })}
-          {!filtered.length && <p className="px-4 py-6 text-center text-xs text-faint">无匹配命令</p>}
+          {hits.map((h, hi) => {
+            const i = filtered.length + hi;
+            const header = h.kind !== hits[hi - 1]?.kind ? (h.kind === "task" ? "任务" : "事项") : null;
+            const fieldChip = FIELD_LABEL[h.field];
+            return (
+              <div key={h.kind + h.id}>
+                {header && (
+                  <div className="px-4 pb-1 pt-2 text-[10px] font-medium uppercase tracking-wide text-faint">{header}</div>
+                )}
+                <button
+                  onMouseEnter={() => setActive(i)}
+                  onClick={() => openHit(h)}
+                  className={`flex w-full flex-col gap-0.5 px-4 py-2 text-left ${i === active ? "bg-overlay" : ""}`}
+                >
+                  <span className="flex w-full min-w-0 items-center gap-2 text-sm">
+                    <span className="shrink-0">
+                      {h.kind === "task" ? (
+                        <StatusIcon status={h.status as TaskStatus} />
+                      ) : (
+                        <PencilSimpleLine size={14} className="text-muted" />
+                      )}
+                    </span>
+                    <span className="min-w-0 truncate text-ink">
+                      <Highlight text={h.title} q={q} />
+                    </span>
+                    {h.archived && <span className="shrink-0 rounded bg-overlay px-1 text-[10px] text-faint">已归档</span>}
+                    {h.projectName && <span className="ml-auto shrink-0 text-xs text-faint">{h.projectName}</span>}
+                  </span>
+                  {h.snippet && (
+                    <span className="flex w-full min-w-0 items-center gap-1.5 pl-[22px]">
+                      {fieldChip && (
+                        <span className="shrink-0 rounded bg-overlay px-1 text-[10px] leading-4 text-faint">{fieldChip}</span>
+                      )}
+                      <span className="min-w-0 truncate font-mono text-[11px] text-muted">
+                        <Highlight text={h.snippet} q={q} />
+                      </span>
+                    </span>
+                  )}
+                </button>
+              </div>
+            );
+          })}
+          {searching && !hits.length && (
+            <p className="px-4 py-2 text-center text-xs text-faint">搜索中…</p>
+          )}
+          {!total && !searching && (
+            <p className="px-4 py-6 text-center text-xs text-faint">
+              {q.trim().length >= 2 ? "没有匹配的命令、任务或事项" : "无匹配命令"}
+            </p>
+          )}
         </div>
       </div>
     </div>
