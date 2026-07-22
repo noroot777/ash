@@ -2,6 +2,7 @@ import { createInterface } from "node:readline";
 import type { AgentEvent, ExecTarget } from "@harness/shared";
 import type { AgentExecutor, RunHandle, RunOpts } from "./types.js";
 import { spawnAgent, resumeFor, resumeInner, spawnErrorMessage, killChild, forceFinishOnExit } from "./spawn.js";
+import { formatFailureForTimeline, RunTraceRecorder, type RunTracePaths } from "./diagnostics.js";
 
 // Drives the real `codex` CLI in non-interactive JSON mode (prompt via stdin, `-`).
 //   first:  codex exec --json --skip-git-repo-check -C <cwd>
@@ -53,14 +54,34 @@ export class CodexExecutor implements AgentExecutor {
 
     const commandLine = `${this.bin} ${args.join(" ")} <prompt via stdin>`;
     const child = spawnAgent(this.target, opts.cwd, this.bin, args, opts.prompt);
-    return { sessionId: opts.sessionId ?? "", commandLine, events: parseCodexStream(child), kill: () => killChild(child) };
+    const lifecycle = { stopRequested: false };
+    return {
+      sessionId: opts.sessionId ?? "",
+      commandLine,
+      events: parseCodexStream(child, opts.trace, lifecycle),
+      kill: () => {
+        lifecycle.stopRequested = true;
+        killChild(child);
+      },
+    };
   }
 }
 
-async function* parseCodexStream(child: ReturnType<typeof spawnAgent>): AsyncIterable<AgentEvent> {
+async function* parseCodexStream(
+  child: ReturnType<typeof spawnAgent>,
+  tracePaths: RunTracePaths | undefined,
+  lifecycle: { stopRequested: boolean },
+): AsyncIterable<AgentEvent> {
   const queue: AgentEvent[] = [];
   let resolve: (() => void) | null = null;
   let finished = false;
+  let turnCompleted = false;
+  let turnFailedMessage: string | null = null;
+  let lastEventType: string | null = null;
+  let lastEventSummary: string | null = null;
+  let agentMessageCount = 0;
+  const structuredErrors: string[] = [];
+  const trace = new RunTraceRecorder(tracePaths);
   const push = (e: AgentEvent) => {
     queue.push(e);
     resolve?.();
@@ -71,53 +92,77 @@ async function* parseCodexStream(child: ReturnType<typeof spawnAgent>): AsyncIte
   rl.on("line", (line) => {
     const t = line.trim();
     if (!t) return;
+    trace.event(line);
     let ev: any;
     try {
       ev = JSON.parse(t);
     } catch {
+      lastEventType = "unparseable_stdout";
+      lastEventSummary = t.slice(0, 500);
       return;
     }
+    lastEventType = codexEventType(ev);
+    lastEventSummary = codexEventSummary(ev);
     if (ev.type === "thread.started" && ev.thread_id) {
       push({ kind: "session", cliSessionId: ev.thread_id });
+    } else if (ev.type === "turn.completed") {
+      turnCompleted = true;
+    } else if (ev.type === "turn.failed") {
+      turnFailedMessage = eventErrorMessage(ev) ?? "Codex 返回 turn.failed，但没有附带错误说明。";
+      structuredErrors.push(turnFailedMessage);
+      push({ kind: "error", message: turnFailedMessage });
     } else if (ev.type === "item.completed" && ev.item) {
       const it = ev.item;
       // codex emits one complete agent_message / reasoning per turn (not token
       // deltas). The orchestrator no longer appends newlines — text pieces are
       // concatenated verbatim downstream — so carry the paragraph break here.
-      if (it.type === "agent_message" && it.text) push({ kind: "text", text: it.text + "\n\n" });
+      if (it.type === "agent_message" && it.text) {
+        agentMessageCount += 1;
+        push({ kind: "text", text: it.text + "\n\n" });
+      }
       else if (it.type === "reasoning" && it.text) push({ kind: "thinking", text: it.text + "\n\n" });
       else if (it.type === "command_execution") push({ kind: "tool", name: "exec", detail: shortStr(it.command) });
       else if (it.type === "file_change" || it.type === "patch") push({ kind: "tool", name: "edit", detail: shortStr(it.path ?? it.summary) });
-    } else if (ev.type === "error" && ev.message) {
-      push({ kind: "error", message: String(ev.message).slice(0, 2000) });
+    } else if (ev.type === "error") {
+      const message = eventErrorMessage(ev) ?? "Codex 返回 error 事件，但没有附带错误说明。";
+      structuredErrors.push(message);
+      push({ kind: "error", message });
     }
   });
 
-  let stderr = "";
-  child.stderr?.on("data", (d) => (stderr += d.toString()));
+  child.stderr?.on("data", (d) => trace.stderr(d.toString()));
+  const finish = (opts: {
+    exitStatus: number;
+    exitSignal: NodeJS.Signals | null;
+    spawnError?: string | null;
+    forceFinished?: boolean;
+  }) => {
+    if (finished) return;
+    finished = true;
+    const diagnostics = trace.finish({
+      ...opts,
+      stopRequested: lifecycle.stopRequested,
+      turnCompleted,
+      turnFailedMessage,
+      structuredErrors,
+      lastEventType,
+      lastEventSummary,
+      agentMessageCount,
+    });
+    const failure = formatFailureForTimeline(diagnostics);
+    if (failure && !lifecycle.stopRequested) push({ kind: "error", message: failure });
+    push({ kind: "done", exitStatus: opts.exitStatus });
+    resolve?.();
+    resolve = null;
+  };
   child.on("error", (err: NodeJS.ErrnoException) => {
-    if (finished) return;
-    push({ kind: "error", message: spawnErrorMessage("codex", err) });
-    push({ kind: "done", exitStatus: 1 });
-    finished = true;
-    resolve?.();
-    resolve = null;
+    finish({ exitStatus: 1, exitSignal: null, spawnError: spawnErrorMessage("codex", err) });
   });
-  child.on("close", (code) => {
-    if (finished) return;
-    const exit = code ?? 0;
-    if (exit !== 0 && stderr.trim()) push({ kind: "error", message: stderr.trim().slice(0, 2000) });
-    push({ kind: "done", exitStatus: exit });
-    finished = true;
-    resolve?.();
-    resolve = null;
+  child.on("close", (code, signal) => {
+    finish({ exitStatus: code ?? (signal ? 1 : 0), exitSignal: signal });
   });
   forceFinishOnExit(child, () => finished, (exit) => {
-    push({ kind: "error", message: "进程已退出但输出流未正常收尾(疑有残留子进程占用管道),已强制结束本回合" });
-    push({ kind: "done", exitStatus: exit });
-    finished = true;
-    resolve?.();
-    resolve = null;
+    finish({ exitStatus: exit, exitSignal: child.signalCode, forceFinished: true });
   });
 
   while (true) {
@@ -129,6 +174,26 @@ async function* parseCodexStream(child: ReturnType<typeof spawnAgent>): AsyncIte
     await new Promise<void>((r) => (resolve = r));
   }
 }
+
+const eventErrorMessage = (ev: any): string | null => {
+  const value = ev?.message ?? ev?.error?.message ?? ev?.error ?? ev?.detail;
+  if (value === undefined || value === null) return null;
+  return shortStr(value).slice(0, 2000);
+};
+
+const codexEventType = (ev: any): string => {
+  const base = typeof ev?.type === "string" ? ev.type : "unknown";
+  const item = typeof ev?.item?.type === "string" ? ev.item.type : null;
+  return item ? `${base}:${item}` : base;
+};
+
+const codexEventSummary = (ev: any): string => {
+  const it = ev?.item;
+  if (it?.type === "command_execution") return shortStr(it.command).slice(0, 500);
+  if (it?.type === "mcp_tool_call") return shortStr({ server: it.server, tool: it.tool, status: it.status }).slice(0, 500);
+  if (it?.type === "agent_message") return shortStr(it.text).slice(0, 500);
+  return shortStr(eventErrorMessage(ev) ?? codexEventType(ev)).slice(0, 500);
+};
 
 const shortStr = (v: unknown) => {
   const s = typeof v === "string" ? v : JSON.stringify(v ?? "");

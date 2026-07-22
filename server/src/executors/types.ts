@@ -1,4 +1,5 @@
 import type { AgentEvent, AgentType } from "@harness/shared";
+import type { RunTracePaths } from "./diagnostics.js";
 
 export interface RunOpts {
   prompt: string;
@@ -6,6 +7,7 @@ export interface RunOpts {
   sessionId?: string; // resume an existing CLI session
   model?: string;
   extraArgs?: string[];
+  trace?: RunTracePaths;
 }
 
 // A planned invocation: the resolved session id + exact command, plus a live

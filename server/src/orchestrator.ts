@@ -57,6 +57,21 @@ function writeTurnEnd(out: NodeJS.WritableStream, at: string): void {
   out.write(`\n${TURN_SENTINEL}${JSON.stringify({ t: "agentEnd", at })}\n`);
 }
 
+function writeRunError(out: NodeJS.WritableStream, message: string): void {
+  const quoted = message.trim().split("\n").map((line) => `> ${line}`).join("\n");
+  out.write(`\n> **执行诊断**\n${quoted}\n`);
+}
+
+function runTracePaths(runDir: string, sessionId: string, turnStart: string) {
+  const turn = turnStart.replace(/[^0-9A-Za-z]/g, "");
+  const base = join(runDir, `${sessionId}-${turn}`);
+  return {
+    eventsPath: `${base}.codex-events.jsonl`,
+    stderrPath: `${base}.stderr.log`,
+    diagnosticsPath: `${base}.diagnostics.json`,
+  };
+}
+
 // 完成协议前言(严格 done):告诉 agent 它的 taskId 和「必须亲口确认完成」的
 // 规则。fresh run 用长版(第一回合,完整交代);reply/resume 回合用短版追加在
 // 消息尾部(每回合都提醒,上下文再长 agent 也不至于忘)。
@@ -161,10 +176,12 @@ export async function runTask(taskId: string): Promise<void> {
     const objective = task.body?.trim() || task.title;
     const prompt = AUTONOMY + COMPLETION_PROTOCOL(taskId) + (autoTitle ? TITLE_HINT + objective : objective);
     const turnStart = now();
-    handle = ex.run({ prompt, cwd: ws.path });
+    const sessId = id();
+    const runDir = join(RUNS_DIR, taskId);
+    mkdirSync(runDir, { recursive: true });
+    handle = ex.run({ prompt, cwd: ws.path, trace: runTracePaths(runDir, sessId, turnStart) });
     trackRun(taskId, handle);
 
-    const sessId = id();
     let cliSessionId = handle.sessionId;
     const sessRow = {
       id: sessId,
@@ -186,8 +203,6 @@ export async function runTask(taskId: string): Promise<void> {
     };
     await db.insert(sessions).values(sessRow);
 
-    const runDir = join(RUNS_DIR, taskId);
-    mkdirSync(runDir, { recursive: true });
     const out = createWriteStream(join(runDir, `${sessId}.md`), { flags: "a" });
 
     let exitStatus = 0;
@@ -233,6 +248,7 @@ export async function runTask(taskId: string): Promise<void> {
         out.write(event.text);
         bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: "single", agentType, event });
       } else {
+        if (event.kind === "error") writeRunError(out, event.message);
         bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: "single", agentType, event });
         if (event.kind === "done") exitStatus = event.exitStatus;
       }
@@ -342,21 +358,26 @@ export async function continueTask(
     const invited = !prev; // first time this agent is pulled into the task
     const prompt = (invited ? COLLAB_INVITE : "") + userText + attachmentsPrompt(opts.attachments) + COMPLETION_REMINDER(taskId);
     const turnStart = now();
-    handle = ex.run({ prompt, cwd, sessionId: resuming ? prev!.cliSessionId! : undefined });
+    const sessId = resuming ? prev!.id : id();
+    const runDir = join(RUNS_DIR, taskId);
+    mkdirSync(runDir, { recursive: true });
+    handle = ex.run({
+      prompt,
+      cwd,
+      sessionId: resuming ? prev!.cliSessionId! : undefined,
+      trace: runTracePaths(runDir, sessId, turnStart),
+    });
     trackRun(taskId, handle);
 
     // Reuse the agent's session row when resuming; otherwise open a fresh line,
     // inheriting the task's worktree/branch from its first session.
-    let sessId: string;
     let cliSessionId = resuming ? prev!.cliSessionId! : handle.sessionId;
     if (resuming) {
-      sessId = prev!.id;
       // New turn on the same session row: mark it live (clear the prior turn's
       // end) and stamp this turn's start, so execution-time accounting and the
       // live 用时 both track the turn actually running now.
       await db.update(sessions).set({ turnStartedAt: turnStart, endedAt: null }).where(eq(sessions.id, sessId));
     } else {
-      sessId = id();
       const base = all[0];
       await db.insert(sessions).values({
         id: sessId,
@@ -378,8 +399,6 @@ export async function continueTask(
       });
     }
 
-    const runDir = join(RUNS_DIR, taskId);
-    mkdirSync(runDir, { recursive: true });
     const out = createWriteStream(join(runDir, `${sessId}.md`), { flags: "a" });
     if (opts.system) {
       // Backend-initiated 继续: a 〔系统〕 trace (its own bubble), NOT a 你→ reply.
@@ -406,6 +425,7 @@ export async function continueTask(
         continue;
       }
       if (event.kind === "text" || event.kind === "thinking") out.write(event.text);
+      else if (event.kind === "error") writeRunError(out, event.message);
       if (event.kind === "done") exitStatus = event.exitStatus;
       bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: "single", agentType: agent, event });
     }

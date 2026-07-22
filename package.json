@@ -18,7 +18,8 @@
     "restart": "bash scripts/restart.sh",
     "start": "npm -w server run start",
     "mcp": "npm -w mcp run start",
-    "db:push": "npm -w server run db:push"
+    "db:push": "npm -w server run db:push",
+    "test:diagnostics": "npm -w server run test:diagnostics"
   },
   "devDependencies": {
     "concurrently": "^9.1.0",
