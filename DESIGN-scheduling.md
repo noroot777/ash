@@ -69,16 +69,16 @@ Queue Q = [taskA, taskB, taskC, taskD]
 | `queued` | 已被调度器拉起、排着等 slot | 短暂中转 |
 | `running` | agent 正在跑 | 占着队列位置 |
 | `awaiting_review` | 等审查门 | 占着位置，不前进 |
-| `paused` | 跑到 checkpoint，留了 `resumePrompt` 等续跑 | 占位置；前面的项 `done` 时**自动**用 `resumePrompt` 续跑 |
+| `paused` | 跑到 checkpoint 留了 `resumePrompt` 等续跑；或提问等答复；或**分组暂停打断**（无 resumePrompt/question） | 占位置；前面的项 `done` 时**自动**续跑（提问的除外——等答复） |
 | `done` | 任务的 mission 完成（包括"决定不做"也是完成） | **后继自动启动** |
-| `failed` | 真崩了，或任务的 mission 是"判断要不要继续"且决定不继续 | **队列停在这里**，等用户处理 |
-| `canceled` | 用户主动停（或系统因 pause 停） | 见下文操作语义 |
+| `failed` | 真崩了，或任务的 mission 是"判断要不要继续"且决定不继续 | **留在原地等用户处理，但不挡后面的**——后继照常推进 |
+| `canceled` | 用户主动停单个任务 | 见下文操作语义 |
 
 ### 关键澄清
 
 - **不引入 `skipped` 状态**。任务的 mission 是"做出决定 + 做事"，决定"不做"也是完成。45 分钟 gate 那个场景，pre-TTS 任务命中 gate 就报 `done`，因为它的 mission 已经完成。
-- **`failed` 涵盖两种情况**：真崩了 / 任务的使命就是判断要不要继续然后决定不继续。两者下游行为相同（链停下来等用户）。
-- **`canceled` 只来自用户/系统的主动停止**。不再当"合法跳过"用。
+- **`failed` 涵盖两种情况**：真崩了 / 任务的使命就是判断要不要继续然后决定不继续。两者下游行为相同：任务留在原地等用户重试/处理，**但队列不再链停**——一个环节挂了不拖整条流水线，后面的照常跑。要"挡住下游等人拍板"，用 `awaiting_review`（审查门仍然链停）。
+- **`canceled` 只来自用户对单个任务的主动停止**。不再当"合法跳过"用。**分组暂停**打断 running 任务落的是 `paused`（不是 canceled）——canceled 会被队列透明跳过，恢复分组时就会错启下一个；paused 占住 head，恢复时从原 CLI 会话续跑它自己。
 
 ---
 
@@ -87,24 +87,25 @@ Queue Q = [taskA, taskB, taskC, taskD]
 ```
 对队列 Q 中位置 N 的任务 t：
   t 可以从 backlog → queued（或从 paused → 续跑），当且仅当：
-    1. Q 里所有位于 t 之前的任务都处于 done 或 canceled 状态，且
-    2. t 自身状态是 backlog 或 paused
+    1. Q 里所有位于 t 之前的任务都处于 done、canceled 或 failed 状态，且
+    2. t 自身状态是 backlog 或 paused（提问 paused——question 非空——除外，等答复）
 
-  如果 t 是 paused：用 resumePrompt 续跑当前 session
+  如果 t 是 paused 且有 resumePrompt：用 resumePrompt 续跑当前 session
+  如果 t 是 paused 且无 resumePrompt（分组暂停打断）：用系统「继续」提示续跑当前 session
   如果 t 是 backlog：开新 agent 跑
 ```
 
-**触发时机**:任何任务进入 `done` / `canceled` / `paused` 时,如果它在某个 queue 里,对那个 queue 调一次 advance。
+**触发时机**:任何任务进入 `done` / `canceled` / `failed` / `paused` 时,如果它在某个 queue 里,对那个 queue 调一次 advance。
 
-- `done` / `canceled` 触发是因为它们让位(head 透明跳过)
+- `done` / `canceled` / `failed` 触发是因为它们让位(head 透明跳过;failed 留在原地等用户处理,但不挡后面的)
 - `paused` 触发是因为下游可能恰好是 head 且正等着续跑(dr-ytb2b 工作流核心场景:v2 跑完 pre-TTS 进 paused,v1 已 done,v2 该立刻 resume 做 TTS)
-- `failed` / `awaiting_review` 不触发——链停在这里,等用户处理
+- `awaiting_review` 不触发——审查门是明确的"等人"语义,链停
 
 **就这一条规则**。它一并解释：
 
 - 自动启动 backlog（前一项 done → 我从 backlog 推进）
 - 自动唤醒 paused（前一项 done 或我刚进 paused → 我从 paused 续跑）
-- 链停在 failed（前一项 failed → 后面所有项都因第 1 条不成立而卡住）
+- 失败不拖链（前一项 failed → 它留在原地等用户，后面照常推进；要挡链用 `awaiting_review`）
 - 重复跑分组幂等（已经 `done` 的不会再跑，因为它已经不在 backlog/paused）
 
 ### `canceled` 的处理
@@ -155,7 +156,8 @@ dr-ytb2b 那个事故的根因不是调度问题，是 **skill 把守门规则�
          队列 Q = [duration-check, real-work, ...]
          duration-check 的 mission: 检查时长，做决定
            - 满足：done → queue 推进到 real-work
-           - 不满足：failed → 链停（或 done + 后续任务自己读结果决定）
+           - 不满足：awaiting_review → 链停等用户拍板（failed 已不再挡链），
+             或 done + 后续任务自己读结果决定
          real-work 看不到时长这个变量，根本不可能决定 force run
 ```
 
@@ -282,7 +284,7 @@ for each task t with group_id IS NULL:
 2. 迁移脚本（含自检）
 3. 调度器重写（`runGroup` 走队列推进规则；删 `canStartTask`、删 041860b 那段）
 4. MCP / HTTP API 适配
-5. 测试覆盖：队列推进、移除、插入、reorder、paused 自动续跑、failed 链停、canceled 透明、跨 group 报错
+5. 测试覆盖：队列推进、移除、插入、reorder、paused 自动续跑、failed 透明（后继续推进）、canceled 透明、跨 group 报错
 
 ### 阶段 C：UI 改造（**由 Codex 或本会话后续完成**）
 

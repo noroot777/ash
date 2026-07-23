@@ -185,7 +185,7 @@ export function GroupsPanel({
                   <button
                     onClick={() => onPause(g.id)}
                     className="inline-flex shrink-0 items-center gap-1 rounded-md border border-line2 px-2.5 py-1 text-[12px] font-medium text-muted hover:bg-raised hover:text-ink"
-                    title="暂停：立刻冻结整组——未开始的挂起，正在运行的也停掉（可继续）；再点「运行/继续」恢复"
+                    title="暂停：立刻冻结整组——未开始的挂起，正在运行的原地暂停；再点「运行/继续」从被打断处接着跑"
                   >
                     <Pause size={12} weight="fill" /> 暂停
                   </button>

@@ -96,6 +96,7 @@ async function seedTask(
     useWorktree: false,
     worktreeBase: null,
     resumePrompt: opts.resumePrompt ?? null,
+    question: opts.question ?? null,
   } as typeof tasks.$inferInsert;
   await db.insert(tasks).values(row);
   return (await db.select().from(tasks).where(eq(tasks.id, tid))).at(0)!;
@@ -269,14 +270,14 @@ await test("pickNext: head canceled 透明 → 选下一个", async () => {
   assertEq(next?.id, c.id, "b canceled 透明,选 c");
 });
 
-await test("pickNext: head failed → 链停,返回 null", async () => {
+await test("pickNext: head failed 透明 → 选下一个(失败不拖链)", async () => {
   const p = await seedProject();
   const g = await seedGroup(p.id, "serial");
   const a = await seedTask(p.id, g.id, { status: "failed" });
   const b = await seedTask(p.id, g.id);
   const q = await seedQueue([a.id, b.id]);
   const next = await pickNextLaunchable(q);
-  assertEq(next, null, "a failed → 链停,b 不能动");
+  assertEq(next?.id, b.id, "a failed 透明跳过,选 b");
 });
 
 await test("pickNext: head awaiting_review → 链停", async () => {
@@ -307,6 +308,29 @@ await test("pickNext: paused 是合法 head(等续跑)", async () => {
   const q = await seedQueue([a.id, b.id]);
   const next = await pickNextLaunchable(q);
   assertEq(next?.id, b.id, "a done → b paused 该续跑");
+});
+
+await test("pickNext: 组暂停打断的 paused(无 resumePrompt) 恢复时选中它自己", async () => {
+  // 分组暂停会把 running 的 head 杀成 paused(无 resumePrompt / question)。
+  // 恢复分组时必须续跑它自己,而不是把它当 canceled 跳过去启动下一个。
+  const p = await seedProject();
+  const g = await seedGroup(p.id, "serial");
+  const a = await seedTask(p.id, g.id, { status: "done" });
+  const b = await seedTask(p.id, g.id, { status: "paused" });
+  const c = await seedTask(p.id, g.id);
+  const q = await seedQueue([a.id, b.id, c.id]);
+  const next = await pickNextLaunchable(q);
+  assertEq(next?.id, b.id, "恢复分组应续跑被打断的 b,而不是 c");
+});
+
+await test("pickNext: paused + question → 挡住等答复", async () => {
+  const p = await seedProject();
+  const g = await seedGroup(p.id, "serial");
+  const a = await seedTask(p.id, g.id, { status: "paused", question: "选 A 还是 B?" });
+  const b = await seedTask(p.id, g.id);
+  const q = await seedQueue([a.id, b.id]);
+  const next = await pickNextLaunchable(q);
+  assertEq(next, null, "提问暂停不能被空手唤醒,队列陪等");
 });
 
 await test("pickNext: archived 透明跳过", async () => {
@@ -342,7 +366,7 @@ await test("setTaskStatus(done) 触发队列推进(链式拉下一个)", async (
   );
 });
 
-await test("setTaskStatus(failed) 不触发推进(链停)", async () => {
+await test("setTaskStatus(failed) 也触发推进(失败不拖链)", async () => {
   const p = await seedProject();
   const g = await seedGroup(p.id, "serial");
   const a = await seedTask(p.id, g.id);
@@ -351,7 +375,10 @@ await test("setTaskStatus(failed) 不触发推进(链停)", async () => {
   await setTaskStatus(a.id, "failed");
   await new Promise((r) => setTimeout(r, 100));
   const bRow = (await db.select().from(tasks).where(eq(tasks.id, b.id))).at(0)!;
-  assertEq(bRow.status, "backlog", "failed 不应推进 → b 仍 backlog");
+  assertTrue(
+    bRow.status === "queued" || bRow.status === "running" || bRow.status === "failed",
+    `a failed → b 应被推进(非 backlog),实际 status=${bRow.status}`,
+  );
 });
 
 await test("setTaskStatus(paused) 在 head → 推进(自我触发 resume)", async () => {

@@ -26,8 +26,10 @@ async function parkQueued(groupId: string): Promise<void> {
   for (const t of waiting) await setTaskStatus(t.id, "backlog");
 }
 
-// 终态钩子：任务进 done / canceled 时,如果它在某个 queue 里,推进那个 queue。
-// failed / awaiting_review 不触发——链停在这里等用户处理(DESIGN §3)。
+// 终态钩子：任务进 done / canceled / failed 时,如果它在某个 queue 里,推进
+// 那个 queue。failed 不再链停——失败的留在原地等用户/协调者处理,但后面的
+// 继续跑(一个环节挂了不该拖住整条流水线)。awaiting_review 不触发——审查门
+// 是明确的"等人"语义(DESIGN §3)。
 // status.ts 在写完终态后会动态 import 调过来;保持纯函数,不依赖 status.ts。
 export async function advanceQueueFromTask(taskId: string): Promise<void> {
   const item = (
@@ -45,8 +47,9 @@ export async function advanceQueueFromTask(taskId: string): Promise<void> {
 
 // 队列推进的唯一规则(DESIGN §3)。
 // 沿 position 升序找 head:
-//   - done / canceled → 透明跳过,继续找
-//   - failed / awaiting_review → 停,链停在这里等用户
+//   - done / canceled / failed → 透明跳过,继续找(failed 留在原地等用户
+//     重试/处理,但不挡后面的;重试完成 done 时钩子会再推进一次)
+//   - awaiting_review → 停,审查门等用户
 //   - running / queued → 等已在跑的那个跑完
 //   - backlog → 拉起新 agent
 //   - paused → 用 resumePrompt 续跑(resumeOrRunTask 内部按 status 分流)
@@ -72,8 +75,8 @@ export async function pickNextLaunchable(queueId: string): Promise<typeof tasks.
     if (!t) continue;
     if (t.archived) continue;
     const s = t.status as TaskStatus;
-    if (s === "done" || s === "canceled") continue;
-    if (s === "failed" || s === "awaiting_review") return null; // 链停
+    if (s === "done" || s === "canceled" || s === "failed") continue;
+    if (s === "awaiting_review") return null; // 审查门:链停等用户
     if (s === "running" || s === "queued") return null; // 已在跑
     // 提问暂停(question 非空)≠ 检查点暂停:它在等 answer_question 带答复唤醒,
     // 队列跟着等,绝不能在这里用「继续」把它空手叫醒(问题会白问)。
@@ -120,14 +123,28 @@ export async function runGroup(groupId: string): Promise<void> {
 }
 
 // parallel mode 的执行:扫所有 backlog 任务并行启动,限流 MAX_PARALLEL。
-// **不**主动唤起 paused 任务——那些得靠队列推进按顺序 resume(否则同链上所有
-// paused task 一起跑就破坏了 resume 顺序)。canceled / failed 也不在这里被
+// **不**主动唤起检查点 paused(带 resumePrompt)/提问 paused(带 question)任务
+// ——那些得靠队列推进按顺序 resume / 等答复(否则同链上所有 paused task 一起跑
+// 就破坏了 resume 顺序)。canceled / failed 也不在这里被
 // 批量唤起 —— 那是 P0d-fY_Zi4RC 那个事故的根因(DESIGN §0 #3)。
+// 例外:「组暂停打断」的 paused(无 resumePrompt 无 question——唯一来源就是
+// group pause 杀掉 running 任务)且不在任何 queue 里的,恢复分组时在这里续跑;
+// 在 queue 里的同类交给末尾的 advanceQueue 按顺序处理。
 // 启动后立刻对该 group 关联的所有 queue 调一次 advanceQueue,把"恰好是 head
 // 的 paused"task 资源化掉。
 async function runParallel(groupId: string): Promise<void> {
   const groupRows = await db.select().from(tasks).where(eq(tasks.groupId, groupId));
-  const launchable = groupRows.filter((t) => !t.archived && t.status === "backlog");
+  const items = await db
+    .select()
+    .from(queueItems)
+    .where(inArray(queueItems.taskId, groupRows.map((t) => t.id)));
+  const inQueue = new Set(items.map((i) => i.taskId));
+  const launchable = groupRows.filter(
+    (t) =>
+      !t.archived &&
+      (t.status === "backlog" ||
+        (t.status === "paused" && !t.resumePrompt && !t.question && !inQueue.has(t.id))),
+  );
 
   if (launchable.length) {
     const pending = [...launchable];
@@ -154,10 +171,6 @@ async function runParallel(groupId: string): Promise<void> {
 
   // 让本 group 关联的所有 queue 也推一下(关键:如果有 paused task 在 queue
   // 头部、它的前驱都已 done,就应该自动 resume)
-  const items = await db
-    .select()
-    .from(queueItems)
-    .where(inArray(queueItems.taskId, groupRows.map((t) => t.id)));
   const queueIds = [...new Set(items.map((i) => i.queueId))];
   for (const qid of queueIds) await advanceQueue(qid);
 }

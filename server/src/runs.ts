@@ -1,15 +1,20 @@
 // Registry of in-flight agent subprocesses, keyed by task, so a running task can
-// be killed on demand (manual stop) — the orchestrator/debate register each live
-// run here and the /stop API calls stopTask. A separate `canceling` set lets the
-// run loops distinguish a user-requested kill (→ status canceled) from a crash
-// (→ failed).
+// be killed on demand (manual stop / group pause) — the orchestrator/debate
+// register each live run here and the /stop API calls stopTask. A `stopping` map
+// lets the run loops distinguish a requested kill from a crash (→ failed), AND
+// carries how the kill should settle: a manual stop settles `canceled`(可跳过),
+// a group pause settles `paused`(恢复分组时从原会话续跑,而不是被队列跳过)。
 
 export interface Killable {
   kill(): void;
 }
 
+// 被杀回合的结算落位:手动停 → canceled(队列把它当离队);分组暂停 → paused
+// (队列 head 停在它身上,恢复分组时先续跑它,再轮到后面的)。
+export type StopSettle = "canceled" | "paused";
+
 const handles = new Map<string, Set<Killable>>();
-const canceling = new Set<string>();
+const stopping = new Map<string, StopSettle>();
 
 export function trackRun(taskId: string, h: Killable): void {
   let set = handles.get(taskId);
@@ -29,12 +34,12 @@ export function isRunning(taskId: string): boolean {
   return (handles.get(taskId)?.size ?? 0) > 0;
 }
 
-// Request a stop: flag the task as canceling and kill its live subprocess(es).
-// Returns false if nothing was running (nothing to stop).
-export function stopTask(taskId: string): boolean {
+// Request a stop: flag how the kill should settle and kill the live
+// subprocess(es). Returns false if nothing was running (nothing to stop).
+export function stopTask(taskId: string, settle: StopSettle = "canceled"): boolean {
   const set = handles.get(taskId);
   if (!set || !set.size) return false;
-  canceling.add(taskId);
+  stopping.set(taskId, settle);
   for (const h of set) {
     try {
       h.kill();
@@ -46,13 +51,21 @@ export function stopTask(taskId: string): boolean {
 }
 
 export function isCanceling(taskId: string): boolean {
-  return canceling.has(taskId);
+  return stopping.has(taskId);
 }
 
-// Check-and-clear: the run loop calls this after a kill to decide canceled vs
-// done/failed, consuming the flag so a later run isn't wrongly canceled.
+// Check-and-clear: the run loop calls this after a kill to decide how to settle
+// (canceled / paused / not-stopped), consuming the flag so a later run isn't
+// wrongly settled.
+export function takeStopped(taskId: string): StopSettle | null {
+  const s = stopping.get(taskId) ?? null;
+  stopping.delete(taskId);
+  return s;
+}
+
+// 兼容旧语义(debate 用):是否被主动停止,不区分落位。消费标记,同 takeStopped。
 export function takeCanceled(taskId: string): boolean {
-  return canceling.delete(taskId);
+  return takeStopped(taskId) !== null;
 }
 
 // ── 完成确认(严格 done 协议)────────────────────────────────────────────────
