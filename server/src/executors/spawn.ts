@@ -1,7 +1,7 @@
-import { spawn } from "node:child_process";
+import { spawn, execFile } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
-import { homedir } from "node:os";
-import { statSync, accessSync, constants } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { statSync, accessSync, constants, openSync, closeSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { EventEmitter } from "node:events";
 import { Readable } from "node:stream";
@@ -72,6 +72,68 @@ export function spawnErrorMessage(bin: string, err: NodeJS.ErrnoException): stri
   return `启动 ${bin} 失败：${err.message}`;
 }
 
+// ── 逃逸进程追踪(继承 fd,systemd 同款思路)──────────────────────────────
+// 进程组击杀(kill -pid)只覆盖「还留在 agent 进程组里」的后代。但 codex/claude
+// 的 exec 层会给命令另开进程组,命令再 nohup/& 一放、父进程一退,整条流水线就
+// 变成 ppid=1、自成一组的孤儿 —— 组杀和树遍历都追不到(真实案例:暂停分组后
+// TTS 流水线 run_youtube_pipeline.sh 一家五口继续后台跑)。
+// 解法:spawn 时塞一个指向「本次运行专属追踪文件」的继承 fd(stdio[3])。所有
+// 后代都会带着这个 fd(bash/nohup 不关高位 fd),无论怎么改组、被谁收养;停止
+// 时 `lsof -t <file>` 反查持有者,再从每个持有者向下走 ppid 树补上被 python
+// close_fds 掐断继承的孙进程。局限:ssh 目标不适用(远端进程);双 fork 且中间
+// 层已死、又恰好隔着一层 close_fds 的深孤儿仍可能漏(实践中极少)。
+const trackFiles = new WeakMap<ChildProcess, string>();
+
+async function killEscapees(child: ChildProcess, sig: NodeJS.Signals): Promise<void> {
+  const targets = new Set<number>();
+  const trackPath = trackFiles.get(child);
+  if (trackPath) {
+    const out = await new Promise<string>((res) =>
+      execFile("lsof", ["-t", trackPath], (_e, stdout) => res(stdout || "")),
+    );
+    for (const line of out.split("\n")) {
+      const p = Number(line.trim());
+      if (p) targets.add(p);
+    }
+  }
+  // 每个 fd 持有者 + CLI 本体的存活后代(ppid 树)一并纳入
+  const roots = [...targets];
+  if (child.pid) roots.push(child.pid);
+  if (roots.length) {
+    const psOut = await new Promise<string>((res) =>
+      execFile("ps", ["-eo", "pid=,ppid="], (_e, so) => res(so || "")),
+    );
+    const kids = new Map<number, number[]>();
+    for (const line of psOut.split("\n")) {
+      const [pidS, ppidS] = line.trim().split(/\s+/);
+      const pid = Number(pidS), ppid = Number(ppidS);
+      if (!pid || !ppid) continue;
+      if (!kids.has(ppid)) kids.set(ppid, []);
+      kids.get(ppid)!.push(pid);
+    }
+    const stack = [...roots];
+    while (stack.length) {
+      const p = stack.pop()!;
+      for (const k of kids.get(p) ?? []) {
+        if (!targets.has(k)) {
+          targets.add(k);
+          stack.push(k);
+        }
+      }
+    }
+  }
+  targets.delete(process.pid);
+  if (child.pid) targets.delete(child.pid); // CLI 本体走进程组信号,不重复补刀
+  for (const pid of targets) {
+    if (pid <= 1) continue;
+    try {
+      process.kill(pid, sig);
+    } catch {
+      /* already gone */
+    }
+  }
+}
+
 // Spawn an agent CLI either locally or over ssh, feeding the prompt via stdin
 // (avoids escaping large prompts in argv, and works identically for both
 // targets — DESIGN.md §0/§2: local spawn vs `ssh host "cd repo && <cli> …"`).
@@ -93,7 +155,36 @@ export function spawnAgent(target: ExecTarget, cwd: string, bin: string, args: s
   if (!isDir(cwd)) return failedChild(`工作目录不存在：${cwd}`);
   const abs = resolveBin(bin);
   if (!abs) return failedChild(`找不到 ${bin} 命令(不在 PATH，也不在常见目录)`);
-  const child = spawn(abs, args, { cwd, stdio: ["pipe", "pipe", "pipe"], env: augmentedEnv(), detached: true });
+  // 追踪 fd(见 killEscapees):打开一个本次运行专属文件,把 fd 作为 stdio[3]
+  // 传给子进程 —— 后代无论怎么换组/被收养都带着它,stop 时可按文件反查。
+  // best-effort:开不出来就照旧 spawn,只是丢掉逃逸追踪能力。
+  let trackFd: number | null = null;
+  let trackPath: string | null = null;
+  try {
+    trackPath = join(tmpdir(), `harness-track-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+    trackFd = openSync(trackPath, "w");
+  } catch {
+    trackPath = null;
+  }
+  const stdio: Array<"pipe" | number> = trackFd === null ? ["pipe", "pipe", "pipe"] : ["pipe", "pipe", "pipe", trackFd];
+  const child = spawn(abs, args, { cwd, stdio, env: augmentedEnv(), detached: true });
+  if (trackFd !== null && trackPath) {
+    closeSync(trackFd); // 子进程已持有副本,父进程这份立即关掉
+    trackFiles.set(child, trackPath);
+    const cleanupPath = trackPath;
+    child.on("close", () => {
+      // 延迟删除:killChild 的补刀清扫(SIGTERM 后 2s)要靠文件名 lsof;
+      // unlink 早了就查不到了。60s 后基本尘埃落定。
+      const t = setTimeout(() => {
+        try {
+          unlinkSync(cleanupPath);
+        } catch {
+          /* already gone */
+        }
+      }, 60_000);
+      (t as { unref?: () => void }).unref?.();
+    });
+  }
   child.stdin?.write(prompt);
   child.stdin?.end();
   return child;
@@ -109,8 +200,9 @@ export function resumeFor(target: ExecTarget, cwd: string, inner: string): strin
 // can wind down; a short fallback SIGKILL guarantees the process — and thus our
 // output stream — actually ends even if the CLI ignores SIGTERM. Safe to call on
 // the pre-flight failedChild stub (it has no real pid) and after exit.
-// 信号发给整个进程组(-pid，spawn 时 detached 使 child 为组长)：孙进程与 CLI
-// 一起死，我们的输出管道才保证 EOF。组已不存在时退回只杀 child 本身。
+// 三层击杀:①信号发给整个进程组(-pid,spawn 时 detached 使 child 为组长);
+// ②killEscapees 按继承 fd 反查逃出进程组的后代(nohup 孤儿等)一并处理;
+// ③2s 后对残存者(含期间新逃逸的)统一补 SIGKILL。
 export function killChild(child: ChildProcess): void {
   if (typeof child.kill !== "function") return;
   const signal = (sig: NodeJS.Signals) => {
@@ -129,8 +221,11 @@ export function killChild(child: ChildProcess): void {
     }
   };
   signal("SIGTERM");
+  void killEscapees(child, "SIGTERM").catch(() => {});
   const t = setTimeout(() => {
     if (child.exitCode === null && child.signalCode === null) signal("SIGKILL");
+    // 无论 CLI 死没死透,逃逸者一律补 SIGKILL —— stop 的语义就是全家结束。
+    void killEscapees(child, "SIGKILL").catch(() => {});
   }, 2000);
   // Don't keep the event loop alive just for the fallback timer.
   (t as { unref?: () => void }).unref?.();
