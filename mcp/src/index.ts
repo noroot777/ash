@@ -208,7 +208,7 @@ server.registerTool(
   {
     title: "更新任务",
     description:
-      "更新单个任务的可编辑字段:title/body/status/labels/priority/groupId/agentType。**不能**用此工具改任务的队列归属——请用 queue_insert / queue_remove / queue_reorder。也不能把任务手动设为 running/queued/awaiting_review。**正在执行的任务要确认完成时,不要用 status=done——用 complete_task**:回合结束的严格结算只认 complete_task 的确认,这里 patch 的 done 会被结算覆盖。",
+      "更新单个任务的可编辑字段:title/body/status/labels/priority/groupId/agentType。**不能**用此工具改任务的队列归属——请用 queue_insert / queue_remove / queue_reorder。也不能把任务手动设为 running/queued/awaiting_review。**running/queued 任务的 status 一律不可改(会被 409 拒绝)——要停止/取消用 stop_task**,它才会真正杀掉 agent 进程树;直接 patch canceled 只改数据库,是 2026-07-21「complete_task 409 → failed 错乱」事故的根因。**正在执行的任务要确认完成时,也不要用 status=done——用 complete_task**:回合结束的严格结算只认 complete_task 的确认。",
     inputSchema: {
       taskId: z.string(),
       title: z.string().optional(),
@@ -294,6 +294,20 @@ server.registerTool(
   },
   async ({ taskId, resumePrompt }) => {
     try { return ok(await call("POST", `/tasks/${taskId}/pause`, { resumePrompt })); }
+    catch (e) { return fail(e); }
+  },
+);
+
+server.registerTool(
+  "stop_task",
+  {
+    title: "停止/取消任务(杀进程树)",
+    description:
+      "停止一个 running/queued 的任务:终止它的整棵 agent 进程树(claude/codex 及其子进程一起),由 run loop 结算为 canceled(可重试,重试会从中断处续跑);queued 还没拉起进程的直接落 canceled。**取消运行中的任务必须用这个,严禁 patch_task(status=canceled)**——那样只改数据库不停进程,会导致:队列被提前推进(串行变并行)、活着的 agent 调 complete_task 吃 409、结算再把 canceled 覆盖成 failed。",
+    inputSchema: { taskId: z.string() },
+  },
+  async ({ taskId }) => {
+    try { return ok(await call("POST", `/tasks/${taskId}/stop`, {})); }
     catch (e) { return fail(e); }
   },
 );

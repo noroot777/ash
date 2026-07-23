@@ -629,6 +629,16 @@ api.patch("/tasks/:id", async (c) => {
   if (b.status !== undefined && !isUserSettableStatus(b.status)) {
     return c.json({ error: "该状态由系统管理，不能手动设置", status: b.status }, 409);
   }
+  // 反向守卫(2026-07-21 事故):对 running/queued 任务 PATCH status 只改数据库、
+  // 不停进程 —— canceled 会立即推进队列(串行变并行),而活着的 agent 稍后调
+  // complete_task 吃 409,结算再把 canceled 覆盖成 failed,一错三连。要打断
+  // 运行中的任务必须走 POST /tasks/:id/stop(杀整棵进程树、由 run loop 结算)。
+  if (b.status !== undefined && (existing.status === "running" || existing.status === "queued")) {
+    return c.json(
+      { error: "任务正在 running/queued，不能直接改状态——要停止/取消请用 stop_task（POST /tasks/:id/stop），它会终止整棵进程树并结算为 canceled", status: existing.status },
+      409,
+    );
+  }
   const patch: Record<string, unknown> = { updatedAt: now() };
   if (b.title !== undefined) patch.title = b.title;
   if (b.body !== undefined) patch.body = b.body;
@@ -990,14 +1000,19 @@ api.post("/tasks/:id/fire", async (c) => {
 });
 
 // Manually stop a running task: kill its live agent subprocess(es). The run loop
-// then settles the task as `canceled` (re-runnable / continuable). 409 if nothing
-// is actually running for it.
+// then settles the task as `canceled` (re-runnable / continuable). queued(还没
+// spawn)或进程已丢(如 server 重启遗留)时直接落 canceled —— 这是取消任务的
+// 唯一正道;PATCH status=canceled 对 running/queued 已被禁止。
 api.post("/tasks/:id/stop", async (c) => {
   const taskId = c.req.param("id");
   const r = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!r) return c.json({ error: "not found" }, 404);
-  if (!stopTask(taskId)) return c.json({ error: "任务没有在运行的进程可停止", status: r.status }, 409);
-  return c.json({ stopped: true });
+  if (stopTask(taskId)) return c.json({ stopped: true });
+  if (r.status === "queued" || r.status === "running") {
+    await setTaskStatus(taskId, "canceled");
+    return c.json({ stopped: true, note: "没有存活的 agent 进程,已直接标记为 canceled" });
+  }
+  return c.json({ error: "任务没有在运行的进程可停止", status: r.status }, 409);
 });
 
 // 检查点续跑：agent 在执行中调用，写下「下次继续时该喂给我的指令」。任务这一回合

@@ -153,7 +153,7 @@ async function setStatus(taskId: string, status: Parameters<typeof setTaskStatus
 // 返回落位状态 + note(未确认降级的说明,调用方写进时间线让用户知道为什么)。
 const STRICT_DONE = !process.env.HARNESS_LAX_DONE;
 const UNCONFIRMED_NOTE =
-  "回合正常结束,但 agent 未调用 complete_task 确认任务完成 —— 按严格完成协议记为 failed。若任务其实已完成,可手动把状态改成已完成;重试则会从中断处续跑。";
+  "回合正常结束,但本回合内没有收到 complete_task 的完成确认 —— 按严格完成协议记为 failed。可能是 agent 没调用;也可能它调了但被拒(409,如任务状态在运行中被外部改动)。若任务其实已完成,可手动把状态改成已完成;重试则会从中断处续跑。";
 async function settleTaskStatus(
   taskId: string,
   exitStatus: number,
