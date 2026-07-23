@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { eq, inArray, sql } from "drizzle-orm";
 import type { AgentType } from "@harness/shared";
 import { db } from "./db/index.js";
-import { tasks, projects, sessions } from "./db/schema.js";
+import { tasks, projects, sessions, groups, scheduledMessages } from "./db/schema.js";
 import { bus } from "./bus.js";
 import { id, now, attachmentsPrompt } from "./util.js";
 import { setTaskStatus } from "./status.js";
@@ -80,6 +80,56 @@ const COMPLETION_PROTOCOL = (taskId: string) =>
 const COMPLETION_REMINDER = (taskId: string) =>
   `\n\n(harness 完成协议:taskId=${taskId}。若本回合结束时任务目标已达成,先调用 complete_task 确认再结束,否则按未完成记 failed;到等待检查点则用 pause_task。)`;
 
+// ── 编排组(Coordination)────────────────────────────────────────────────────
+// 组可以指定一个「协调者」任务(groups.coordinator_task_id)。此后:
+//   • 组内 worker 结算为 done / failed 时,自动给协调者投递一条唤醒消息;
+//   • worker 调 ask_question 提问后,结算落 paused(队列不推进、不自动续跑,
+//     见 scheduler.pickNextLaunchable),问题同样投递给协调者;
+//   • 协调者用 answer_question 答复 → 清空问题并带着答复 resume worker 会话。
+// 投递复用 scheduledMessages(sendAt=now):调度器只在目标空闲时发送,天然
+// 避开「协调者正在跑,continueTask 单飞锁静默丢消息」的竞态;协调者忙碌时
+// 消息排队等下一个 tick。
+const COORD_PREAMBLE = (taskId: string) =>
+  `【编排组协调者】你是所在分组的协调者:组内 worker 任务结束(done/failed)或提问时,harness 会把通知作为新消息自动唤醒你。收到提问 → 先调查(get_task 看它的任务、读仓库现状),再调用 answer_question(taskId=提问任务的 id)答复,答复会自动唤醒对方续跑;拿不准就 pause_task 把问题留给用户。收到结束通知 → 核查产物,决定验收/派修复任务/收尾。每个回合把手头的事处理完后,调用 complete_task(taskId="${taskId}")再结束回合。\n\n`;
+const WORKER_PREAMBLE = (taskId: string) =>
+  `【编排组成员】本组配有协调者。遇到不拍板就无法继续的问题(这正是上面「信息确实不足以继续」的正规通道),调用 harness MCP 的 ask_question(taskId="${taskId}", question=...),然后正常结束回合——问题会自动送达协调者,答复会作为新消息唤醒你接着干;不要为等答复空转,也不要用 pause_task 来提问。\n\n`;
+
+// 本任务在编排关系里的前言(没有编排关系 → 空串)。fresh run 时拼进 prompt。
+async function coordinationPreamble(task: { id: string; groupId: string | null }): Promise<string> {
+  if (!task.groupId) return "";
+  const g = (await db.select().from(groups).where(eq(groups.id, task.groupId))).at(0);
+  if (!g?.coordinatorTaskId) return "";
+  return g.coordinatorTaskId === task.id ? COORD_PREAMBLE(task.id) : WORKER_PREAMBLE(task.id);
+}
+
+// 给协调者投递一条唤醒消息(fire-and-forget;协调者缺席/已归档则静默跳过)。
+async function notifyCoordinator(
+  task: { id: string; title: string; groupId: string | null },
+  kind: "done" | "failed" | "failed_unconfirmed" | "question",
+  question?: string,
+): Promise<void> {
+  if (!task.groupId) return;
+  const g = (await db.select().from(groups).where(eq(groups.id, task.groupId))).at(0);
+  const coordId = g?.coordinatorTaskId;
+  if (!coordId || coordId === task.id) return; // 非编排组 / 协调者自己结算不通知
+  const coord = (await db.select().from(tasks).where(eq(tasks.id, coordId))).at(0);
+  if (!coord || coord.archived) return;
+  const text =
+    kind === "question"
+      ? `【worker 提问】任务「${task.title}」(taskId=${task.id})已暂停等待答复,问题:\n${question}\n\n请先调查(get_task 查它的任务详情、按需读仓库现状),再调用 answer_question(taskId="${task.id}", answer=...)答复——答复会自动唤醒它续跑。拿不准就 pause_task 把问题留给用户。`
+      : `【worker 结束】任务「${task.title}」(taskId=${task.id})本回合以 ${kind === "done" ? "done" : "failed"} 结束${kind === "failed_unconfirmed" ? "(回合正常退出但未调 complete_task——按严格协议记 failed,可能实际已完成)" : ""}。请核查其产物与状态:确实完成 → patch_task 修正;未完成 → 安排修复或重试;再决定组内下一步。`;
+  await db.insert(scheduledMessages).values({
+    id: id(),
+    taskId: coordId,
+    text,
+    attachments: "[]",
+    agent: null,
+    sendAt: now(),
+    status: "pending",
+    createdAt: now(),
+  });
+}
+
 // Why a task is being (re)started — only used to label the resume; all reasons
 // behave the same (resume if there's a resumable session, else fresh). Note: a
 // scheduled cron fire is NOT here — it always starts a fresh run via runTask
@@ -91,9 +141,10 @@ async function setStatus(taskId: string, status: Parameters<typeof setTaskStatus
   await setTaskStatus(taskId, status);
 }
 
-// 任务跑完一回合时的状态落位：手停 → canceled；agent 在本回合内调过 pause_task
-// （写下 resumePrompt） → paused，等依赖满足或用户手动 resume；退出码非 0 →
-// failed。exit 0 走严格 done 协议：agent 必须在回合内调过 complete_task 确认
+// 任务跑完一回合时的状态落位：手停 → canceled；agent 在本回合内调过 ask_question
+// （留下 question） → paused 且队列挂起等答复；调过 pause_task（写下 resumePrompt）
+// → paused，等依赖满足或用户手动 resume；退出码非 0 → failed。exit 0 走严格 done
+// 协议：agent 必须在回合内调过 complete_task 确认
 // 「目标真的达成了」才落 done —— exit 0 只证明 CLI 进程正常退出,agent 报错后
 // 退出照样 exit 0,假 done 会误推进队列、错误唤醒下游。未确认 → failed(重试
 // 会 resume 续跑,代价低)。逃生口:HARNESS_LAX_DONE=1 退回「exit 0 即 done」
@@ -113,20 +164,36 @@ async function settleTaskStatus(
     await setStatus(taskId, "canceled");
     return { status: "canceled" };
   }
-  const r = (await db.select({ rp: tasks.resumePrompt }).from(tasks).where(eq(tasks.id, taskId))).at(0);
-  if (r?.rp) {
+  const t = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
+  const notify = (kind: Parameters<typeof notifyCoordinator>[1], q?: string) => {
+    if (!t) return;
+    void notifyCoordinator({ id: t.id, title: t.title, groupId: t.groupId }, kind, q).catch((err) =>
+      console.error(`[harness] notifyCoordinator(${taskId}) failed:`, err),
+    );
+  };
+  // 提问优先于检查点:question 非空 → paused,但队列不推进、不自动续跑
+  // (pickNextLaunchable 会挡住),等 answer_question 带答复唤醒。
+  if (t?.question) {
+    await setStatus(taskId, "paused");
+    notify("question", t.question);
+    return { status: "paused", note: `本回合以提问暂停,等待答复:「${t.question}」` };
+  }
+  if (t?.resumePrompt) {
     await setStatus(taskId, "paused");
     return { status: "paused" };
   }
   if (exitStatus !== 0) {
     await setStatus(taskId, "failed");
+    notify("failed");
     return { status: "failed" };
   }
   if (confirmed || !STRICT_DONE) {
     await setStatus(taskId, "done");
+    notify("done");
     return { status: "done" };
   }
   await setStatus(taskId, "failed");
+  notify("failed_unconfirmed");
   return { status: "failed", note: UNCONFIRMED_NOTE };
 }
 
@@ -174,7 +241,8 @@ export async function runTask(taskId: string): Promise<void> {
     const TITLE_HINT =
       "请在正式开始前，第一行只输出：标题：<不超过14字、概括本次任务的简短标题>，然后换行，再正常完成下面的任务。\n\n任务：\n";
     const objective = task.body?.trim() || task.title;
-    const prompt = AUTONOMY + COMPLETION_PROTOCOL(taskId) + (autoTitle ? TITLE_HINT + objective : objective);
+    const coordination = await coordinationPreamble({ id: taskId, groupId: task.groupId });
+    const prompt = AUTONOMY + COMPLETION_PROTOCOL(taskId) + coordination + (autoTitle ? TITLE_HINT + objective : objective);
     const turnStart = now();
     const sessId = id();
     const runDir = join(RUNS_DIR, taskId);

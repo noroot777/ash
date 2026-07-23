@@ -260,6 +260,7 @@ const toTask = (r: typeof tasks.$inferSelect): Task => ({
   worktreeBase: r.worktreeBase,
   issueId: r.issueId ?? null,
   resumePrompt: r.resumePrompt ?? null,
+  question: r.question ?? null,
 });
 
 const taskBody = (body: string | undefined, taskId: string): string =>
@@ -724,6 +725,37 @@ api.post("/groups/:id/pause", async (c) => {
   return c.json(updated);
 });
 
+// 设/撤编排组协调者(§Coordination)。taskId 非空 → 该任务成为本组协调者:组内
+// 其它任务结束(done/failed)或提问(ask_question)时,harness 自动用消息唤醒它。
+// taskId=null → 撤销,组退回普通行为。校验:任务须存在、同项目、未归档,且不能
+// 在本组的串行队列里(它要随叫随醒,排进队列会和 worker 互相卡死)。
+api.post("/groups/:id/coordinator", async (c) => {
+  const gid = c.req.param("id");
+  const g = (await db.select().from(groups).where(eq(groups.id, gid))).at(0);
+  if (!g) return c.json({ error: "not found" }, 404);
+  const b = await c.req.json<{ taskId?: string | null }>().catch(() => ({}) as { taskId?: string | null });
+  if (b.taskId === undefined) return c.json({ error: "需要 taskId(设协调者)或 taskId:null(撤销)" }, 400);
+
+  if (b.taskId === null) {
+    await db.update(groups).set({ coordinatorTaskId: null }).where(eq(groups.id, gid));
+    return c.json({ ...g, coordinatorTaskId: null });
+  }
+
+  const t = (await db.select().from(tasks).where(eq(tasks.id, b.taskId))).at(0);
+  if (!t) return c.json({ error: "协调者任务不存在", taskId: b.taskId }, 404);
+  if (t.archived) return c.json({ error: "协调者任务已归档,先取消归档" }, 409);
+  if (t.projectId !== g.projectId) return c.json({ error: "协调者必须和分组同项目" }, 400);
+  const inQueue = (await db.select().from(queueItems).where(eq(queueItems.taskId, t.id))).at(0);
+  if (inQueue && t.groupId === gid) {
+    return c.json(
+      { error: "协调者不能排在本组的串行队列里(要随叫随醒)——先 queue_remove 把它移出队列", queueId: inQueue.queueId },
+      409,
+    );
+  }
+  await db.update(groups).set({ coordinatorTaskId: t.id }).where(eq(groups.id, gid));
+  return c.json({ ...g, coordinatorTaskId: t.id });
+});
+
 // Batch-create single-mode tasks into an EXISTING group, agent-facing (§ interfaces).
 // `chain:true` creates a queue with these tasks in array order (DESIGN-scheduling.md);
 // arbitrary pairwise dependsOn between siblings is no longer supported (use chain
@@ -997,6 +1029,43 @@ api.post("/tasks/:id/complete", async (c) => {
   if (r.status !== "running") return c.json({ error: "只能在任务正在运行时确认完成", status: r.status }, 409);
   confirmDone(taskId);
   return c.json({ confirmed: true, willSettleAs: "done" });
+});
+
+// 编排组提问(对称 /pause,§Coordination):worker 在执行中调用,写下「我被这个
+// 问题卡住了」。本回合自然退出后,settleTaskStatus 因 question 非空落 paused,
+// 且队列**不**自动续跑(pickNextLaunchable 挡住);问题以消息投递给组协调者,
+// answer_question 的答复会清空 question 并带着答复 resume 同一 CLI 会话。
+// 没配协调者也能用:任务停在 paused,问题留在 task.question 等用户答复。
+// 只接受 running 任务;不修改 status,让回合自然走完再结算(同 pause 的理由)。
+api.post("/tasks/:id/ask", async (c) => {
+  const taskId = c.req.param("id");
+  const b = await c.req.json<{ question?: string }>().catch(() => ({}) as { question?: string });
+  const q = (b.question ?? "").trim();
+  if (!q) return c.json({ error: "question 不能为空" }, 400);
+  const r = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
+  if (!r) return c.json({ error: "not found" }, 404);
+  if (r.status !== "running") return c.json({ error: "只能在任务正在运行时提问", status: r.status }, 409);
+  await db.update(tasks).set({ question: q, updatedAt: now() }).where(eq(tasks.id, taskId));
+  return c.json({ asked: true, willSettleAs: "paused" });
+});
+
+// 答复一个提问暂停中的任务(协调者或用户都可调):清空 question,把答复作为
+// 消息 resume 它的 CLI 会话继续跑。提问回合还没结算完(running/queued)时拒绝
+// ——等它落 paused 再答,否则答复会被单飞锁静默丢掉。
+api.post("/tasks/:id/answer", async (c) => {
+  const taskId = c.req.param("id");
+  const b = await c.req.json<{ answer?: string }>().catch(() => ({}) as { answer?: string });
+  const a = (b.answer ?? "").trim();
+  if (!a) return c.json({ error: "answer 不能为空" }, 400);
+  const r = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
+  if (!r) return c.json({ error: "not found" }, 404);
+  if (!r.question) return c.json({ error: "该任务没有待答复的问题", status: r.status }, 409);
+  if (r.status === "running" || r.status === "queued") {
+    return c.json({ error: "提问回合还没结束,等任务落 paused 再答复", status: r.status }, 409);
+  }
+  await db.update(tasks).set({ question: null, updatedAt: now() }).where(eq(tasks.id, taskId));
+  void continueTask(taskId, `【答复】你之前的提问:「${r.question}」\n\n${a}\n\n请据此继续完成任务。`);
+  return c.json({ answered: true, resumed: true });
 });
 
 // Reply to a single task: resume its CLI session with the user's message so an

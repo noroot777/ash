@@ -75,6 +75,9 @@ export async function pickNextLaunchable(queueId: string): Promise<typeof tasks.
     if (s === "done" || s === "canceled") continue;
     if (s === "failed" || s === "awaiting_review") return null; // 链停
     if (s === "running" || s === "queued") return null; // 已在跑
+    // 提问暂停(question 非空)≠ 检查点暂停:它在等 answer_question 带答复唤醒,
+    // 队列跟着等,绝不能在这里用「继续」把它空手叫醒(问题会白问)。
+    if (s === "paused" && t.question) return null;
     return t; // backlog / paused
   }
   return null;

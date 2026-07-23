@@ -65,6 +65,10 @@ export interface Group {
   name: string;
   mode: GroupMode;
   paused: boolean; // 暂停 = 立刻冻结整组：调度器不再启动"还没开始"的任务，正在运行的也会被停掉（结算为 canceled，可继续）；再次「运行/继续」时恢复，被停的任务从中断处接着跑
+  // 编排组（§Coordination）：指定组内的协调者任务。非空时：组内其它任务结束
+  // (done/failed) 或提问 (ask_question) 会以消息形式自动唤醒协调者；协调者
+  // 不能在本组的串行队列里（会互相卡死）。null = 普通组，行为不变。
+  coordinatorTaskId?: string | null;
   createdAt: string;
 }
 
@@ -167,6 +171,11 @@ export interface Task {
   // `done`；scheduler 在依赖满足后把它当 continueTask 的 userText 喂回 CLI
   // session，并清空此字段。null = 无待续跑指令。
   resumePrompt?: string | null;
+  // 编排组提问（§Coordination）：worker 在执行中调 ask_question 留下的问题。
+  // 结算时此字段非空 → 状态落 paused 且**队列不推进也不自动续跑**（区别于
+  // resumePrompt 检查点），同时通知协调者；answer_question 清空它并带着答复
+  // resume 会话。null = 没有待答复的问题。
+  question?: string | null;
 }
 
 // ── Issues (§Issues) ─────────────────────────────────────────────────────────

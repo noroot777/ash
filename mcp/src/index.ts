@@ -286,7 +286,7 @@ server.registerTool(
   {
     title: "在检查点暂停(等续跑)",
     description:
-      "在执行中调用,告诉 harness:「我跑到一个检查点了,下次该继续时给我喂这段 prompt」。harness 会把 resumePrompt 写到 task 上;你这一回合自然结束后,状态落到 paused(而不是 done),队列推进规则会在前一个任务 done 时用 resumePrompt 把你叫醒、resume 同一个 CLI 会话。\n\n用法:先正常做完检查点前的所有工作;要暂停时调一次本工具,然后正常退出当前回合(return / 结束输出即可)。**只能在任务正在跑时调用**,且 resumePrompt 不能为空(否则 resume 时没东西喂你)。\n\n典型场景:dr-dig-ytb 一类「pre-tts 并行 + tts 串行」流水线 —— 把任务跑到 pre-tts 末尾时调本工具,resumePrompt 写下「现在做 tts 这一段」;后续每个任务都在自己 queue 位置上等前一个 done 后自动续跑。",
+      "在执行中调用,告诉 harness:「我跑到一个检查点了,下次该继续时给我喂这段 prompt」。harness 会把 resumePrompt 写到 task 上;你这一回合自然结束后,状态落到 paused(而不是 done),队列推进规则会在前一个任务 done 时用 resumePrompt 把你叫醒、resume 同一个 CLI 会话。\n\n用法:先正常做完检查点前的所有工作;要暂停时调一次本工具,然后正常退出当前回合(return / 结束输出即可)。**只能在任务正在跑时调用**,且 resumePrompt 不能为空(否则 resume 时没东西喂你)。\n\n典型场景:dr-dig-ytb 一类「pre-tts 并行 + tts 串行」流水线 —— 把任务跑到 pre-tts 末尾时调本工具,resumePrompt 写下「现在做 tts 这一段」;后续每个任务都在自己 queue 位置上等前一个 done 后自动续跑。\n\n注意:被具体问题卡住、要等人拍板才能继续时,用 ask_question 而不是本工具——pause 是「到检查点等续跑」,ask 是「等答案」且会自动通知协调者。",
     inputSchema: {
       taskId: z.string().describe("当前正在执行的任务 id"),
       resumePrompt: z.string().min(1).describe("下次被 resume 时喂给你的 user 消息 —— 就当成一条「继续：…」replied 写"),
@@ -294,6 +294,57 @@ server.registerTool(
   },
   async ({ taskId, resumePrompt }) => {
     try { return ok(await call("POST", `/tasks/${taskId}/pause`, { resumePrompt })); }
+    catch (e) { return fail(e); }
+  },
+);
+
+server.registerTool(
+  "ask_question",
+  {
+    title: "提问并暂停(等协调者/用户答复)",
+    description:
+      "在执行中调用,告诉 harness:「我被一个不拍板就没法继续的问题卡住了」。调完后正常结束回合,任务落 paused 且**队列不会自动续跑**;问题会自动送达本组协调者(编排组),没有协调者就停在那等用户答复。答复通过 answer_question 送达,会作为新消息唤醒你的同一个 CLI 会话续跑。\n\n用法:只能在任务正在跑时调用;先把当下能做的都做完再提问,一次把问题问全(背景+选项+你的倾向),别挤牙膏式来回。跟 pause_task 的区别:pause 是「到检查点等续跑指令」,ask 是「等一个具体问题的答案」。",
+    inputSchema: {
+      taskId: z.string().describe("当前正在执行的任务 id(任务 prompt 前言里有)"),
+      question: z.string().min(1).describe("要问的问题:写清背景、可选方案和你的倾向,让答复者能直接拍板"),
+    },
+  },
+  async ({ taskId, question }) => {
+    try { return ok(await call("POST", `/tasks/${taskId}/ask`, { question })); }
+    catch (e) { return fail(e); }
+  },
+);
+
+server.registerTool(
+  "answer_question",
+  {
+    title: "答复提问中的任务并唤醒它",
+    description:
+      "给一个「提问暂停」中的任务(get_task 里 question 非空、status=paused)送答复:清空问题、把答复作为消息 resume 它的 CLI 会话继续跑。协调者收到【worker 提问】通知后用这个答;用户/其他 agent 也可以直接调。提问任务还在 running/queued(回合没结算完)时会被拒,稍等它落 paused 再调。",
+    inputSchema: {
+      taskId: z.string().describe("提问任务的 id(通知里有)"),
+      answer: z.string().min(1).describe("答复内容:直接给结论和理由,它会原样喂给对方续跑"),
+    },
+  },
+  async ({ taskId, answer }) => {
+    try { return ok(await call("POST", `/tasks/${taskId}/answer`, { answer })); }
+    catch (e) { return fail(e); }
+  },
+);
+
+server.registerTool(
+  "set_coordinator",
+  {
+    title: "设/撤分组协调者(编排组)",
+    description:
+      "把组内某个任务设为「协调者」,组就升级成编排组:此后组内其它任务结束(done/failed)或用 ask_question 提问时,harness 会自动把通知作为新消息唤醒协调者(它核查产物、答疑、派修复任务)。协调者会在 prompt 前言里被告知自己的角色;它**不能**排在本组的串行队列里(要随叫随醒,server 会校验拒绝)。taskId 传 null 撤销,组退回普通行为。典型用法:建一个 agentType=claude 的「协调/验收」任务(不进队列)→ set_coordinator 指到它 → worker 队列照常跑,收尾核查全自动。",
+    inputSchema: {
+      groupId: z.string(),
+      taskId: z.string().nullable().describe("协调者任务 id;null=撤销"),
+    },
+  },
+  async ({ groupId, taskId }) => {
+    try { return ok(await call("POST", `/groups/${groupId}/coordinator`, { taskId })); }
     catch (e) { return fail(e); }
   },
 );

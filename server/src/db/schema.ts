@@ -17,6 +17,9 @@ export const groups = sqliteTable("groups", {
   name: text("name").notNull(),
   mode: text("mode").notNull().default("parallel"), // parallel | serial
   paused: integer("paused", { mode: "boolean" }).notNull().default(false),
+  // 编排组：协调者任务 id。非空时组内其它任务结束/提问会自动唤醒它（见
+  // orchestrator.notifyCoordinator）；协调者不得在本组串行队列里。
+  coordinatorTaskId: text("coordinator_task_id"),
   createdAt: text("created_at").notNull(),
 });
 
@@ -51,6 +54,9 @@ export const tasks = sqliteTable("tasks", {
   issueId: text("issue_id"), // 回链来源事项(null = 直接创建)
   // 检查点续跑：agent 调 pause_task 时填进来；下次 resume 时取出喂给 CLI 会话并清空。
   resumePrompt: text("resume_prompt"),
+  // 编排组提问：agent 调 ask_question 时填进来。结算落 paused 且队列不自动续跑，
+  // 等 answer_question 清空并带答复 resume（见 scheduler.pickNextLaunchable 的挡板）。
+  question: text("question"),
 });
 
 export const agents = sqliteTable("agents", {

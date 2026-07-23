@@ -123,6 +123,8 @@ export async function ensureSchema() {
     "ALTER TABLE issue_comments ADD COLUMN status TEXT",
     "ALTER TABLE agents ADD COLUMN speed TEXT",
     "ALTER TABLE agents ADD COLUMN reasoning_effort TEXT",
+    "ALTER TABLE groups ADD COLUMN coordinator_task_id TEXT",
+    "ALTER TABLE tasks ADD COLUMN question TEXT",
   ]) {
     try {
       await client.execute(sql);
