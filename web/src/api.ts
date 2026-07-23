@@ -79,6 +79,23 @@ export const api = {
   // stopped task picks up from where it left off. Returns the group (paused=true).
   pauseGroup: (id: string): Promise<Group> =>
     fetch(`/api/groups/${id}/pause`, { method: "POST" }).then(j),
+  // 设/撤分组协调者(编排组):taskId=null 撤销。设了之后组内 worker 结束
+  // (done/failed)或提问(ask_question)会自动唤醒协调者。协调者不得在本组
+  // 串行队列里(server 校验 409)。
+  setCoordinator: (id: string, taskId: string | null): Promise<Group> =>
+    fetch(`/api/groups/${id}/coordinator`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ taskId }),
+    }).then(j),
+  // 答复一个「提问暂停」中的任务:清空 question,把答复作为消息 resume 它的
+  // CLI 会话继续跑。提问回合还没结算完(running/queued)会被 409。
+  answerTask: (id: string, answer: string): Promise<unknown> =>
+    fetch(`/api/tasks/${id}/answer`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ answer }),
+    }).then(j),
   // Batch-create chained single tasks into an existing group (agent-facing API).
   createTasksBatch: (
     groupId: string,

@@ -218,10 +218,14 @@ export function TaskDetail({
             click 展开 for the full text). */}
         {task.body && <CollapsibleText text={task.body} />}
 
+        {/* 编排组提问:agent 调 ask_question 后停在这等答案(队列陪等,不会
+            自动续跑)。协调者通常会自动来答;用户也可以直接在这里答复唤醒。 */}
+        {task.question && <QuestionCard task={task} />}
+
         {/* 检查点续跑：paused 时露出 resumePrompt（agent 留下的「下次喂我什么」），
             让用户知道一旦依赖满足、scheduler 唤醒它会发什么 user 消息。可编辑
             （改写不好的指令）或清空（清空 = 续跑时不携指令，用标准"继续"nudge）。 */}
-        {task.status === "paused" && (
+        {task.status === "paused" && !task.question && (
           <ResumePromptEditor
             value={task.resumePrompt ?? ""}
             onSave={(rp) => onPatch({ resumePrompt: rp || null })}
@@ -915,6 +919,59 @@ function EditableTitle({ title, onSave }: { title: string; onSave: (t: string) =
       className="-mx-1 min-w-0 flex-1 rounded px-1 text-[15px] font-semibold leading-snug text-ink outline-none hover:bg-raised/40 focus:bg-raised/60"
       title="点击编辑标题"
     />
+  );
+}
+
+// 编排组提问卡片:agent 调 ask_question 后任务停在 paused 等答案(队列陪等,
+// pickNextLaunchable 不会空手唤醒它)。协调者收到通知后通常会自动答;这里给
+// 用户一个手动答复入口 —— 没配协调者的组全靠它。回合还没结算完(running/
+// queued)时 server 会 409,按钮先禁用。
+function QuestionCard({ task }: { task: Task }) {
+  const [draft, setDraft] = useState("");
+  const [sending, setSending] = useState(false);
+  const settling = task.status === "running" || task.status === "queued";
+  const send = async () => {
+    const a = draft.trim();
+    if (!a || sending) return;
+    setSending(true);
+    try {
+      await api.answerTask(task.id, a);
+      toast("已答复，任务正在带着答案续跑");
+      setDraft("");
+    } catch (e) {
+      toast(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSending(false);
+    }
+  };
+  return (
+    <div className="mt-2 overflow-hidden rounded-md border border-violet-500/40 bg-violet-500/[0.06]">
+      <div className="flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-medium text-violet-700">
+        <StatusIcon status="paused" size={11} />
+        <span>任务提问，等待答复（队列陪等，不会自动续跑）</span>
+      </div>
+      <pre className="max-h-48 overflow-y-auto whitespace-pre-wrap break-words px-2.5 pb-1 text-[12px] leading-snug text-ink">{task.question}</pre>
+      <div className="flex items-start gap-1.5 border-t border-violet-500/20 px-2 py-1.5">
+        <textarea
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if ((e.metaKey || e.ctrlKey) && e.key === "Enter") { e.preventDefault(); void send(); }
+          }}
+          rows={2}
+          placeholder={settling ? "提问回合还没结束，稍候片刻再答…" : "写下答复，发送后会直接唤醒 agent 带着答案继续（⌘↵ 发送）"}
+          disabled={settling || sending}
+          className="block min-w-0 flex-1 resize-y rounded-md bg-transparent px-1.5 py-1 text-[12px] leading-snug text-ink outline-none placeholder:text-faint disabled:opacity-50"
+        />
+        <button
+          onClick={() => void send()}
+          disabled={settling || sending || !draft.trim()}
+          className="shrink-0 rounded-md bg-violet-600 px-2.5 py-1 text-[11px] font-medium text-white hover:bg-violet-500 disabled:opacity-40"
+        >
+          {sending ? "发送中…" : "答复并唤醒"}
+        </button>
+      </div>
+    </div>
   );
 }
 
