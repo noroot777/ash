@@ -183,8 +183,9 @@ export const api = {
     fetch(`/api/scheduled-messages/${mid}`, { method: "DELETE" }).then(j),
 
   agents: (): Promise<AgentExecutorProfile[]> => fetch("/api/agents").then(j),
+  /** `resident` = 这个类型的执行者支持常驻会话（openResident），也就是能当 /team 的指挥者。 */
   detectAgents: (): Promise<
-    { type: string; bin: string; available: boolean; path: string | null; version: string | null }[]
+    { type: AgentType; bin: string; available: boolean; path: string | null; version: string | null; resident: boolean }[]
   > => fetch("/api/agents/detect").then(j),
   createAgent: (a: Partial<AgentExecutorProfile>): Promise<AgentExecutorProfile> =>
     fetch("/api/agents", {

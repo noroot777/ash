@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>harness · /编排 UI 稿</title>
+<title>harness · /team UI 稿</title>
 <style>
   :root{
     --canvas:#f9f9fb; --panel:#fff; --raised:#f1f1f4; --overlay:#e9e9ee;
@@ -163,9 +163,9 @@
 <div class="wrap">
 
   <div class="tabs">
-    <button class="tab on" data-s="s2">② 编排主视图（核心）</button>
+    <button class="tab on" data-s="s2">② 团队主视图（核心）</button>
     <button class="tab" data-s="s3">③ 点开某个工人的会话</button>
-    <button class="tab" data-s="s1">① 怎么启动（/编排）</button>
+    <button class="tab" data-s="s1">① 怎么启动（/team）</button>
     <button class="tab" data-s="s4">④ 列表里长什么样</button>
   </div>
 
@@ -176,7 +176,7 @@
       <!-- header -->
       <div class="hd">
         <div class="hd-row">
-          <span class="chip crew">编排</span>
+          <span class="chip crew">团队</span>
           <h1>事项中心接 GitHub Issue 双向同步</h1>
           <span class="pill"><span class="dot run"></span>指挥中</span>
           <span class="pill">14m 20s</span>
@@ -310,7 +310,7 @@
     <div class="app drawer-wrap">
       <div class="hd">
         <div class="hd-row">
-          <span class="chip crew">编排</span>
+          <span class="chip crew">团队</span>
           <h1>事项中心接 GitHub Issue 双向同步</h1>
           <span class="pill"><span class="dot run"></span>指挥中</span>
           <button class="btn danger">停止全组</button>
@@ -378,40 +378,39 @@
 
   <!-- ════════════════ ① 启动 ════════════════ -->
   <section class="screen" id="s1">
-    <p class="note"><b>一句话：</b>跟 <span class="mono">/pair</span> 同一个入口——输入框敲 <span class="mono">/</span>，多一条「编排」。选中后属性条只多两个旋钮：谁当指挥、工人用什么。别的都由指挥者自己定。</p>
+    <p class="note"><b>一句话：</b>跟 <span class="mono">/pair</span> 同一个入口——输入框敲 <span class="mono">/</span>，多一条「团队」。选中后属性条只多两个旋钮：谁当指挥、工人用什么。别的都由指挥者自己定。</p>
     <div class="modal">
-      <div class="modal-hd"><span class="chip crew">编排</span><span>新建 · harness</span><span style="margin-left:auto" class="mono">⌘K</span></div>
+      <div class="modal-hd"><span class="chip crew">团队</span><span>新建 · harness</span><span style="margin-left:auto" class="mono">⌘K</span></div>
       <div class="ta">
         <div class="txt">/<span class="caret"></span></div>
         <div class="picker">
           <div class="pk-hd"><span class="chip pair">/</span><span>↑↓ 选，回车确定</span></div>
           <div class="pk"><span class="ic" style="background:var(--violet-bg);color:var(--violet)">⚖</span><span><span class="t">辩论 · 给你答案</span><span class="h">两个 AI 对抗到收敛</span></span></div>
           <div class="pk"><span class="ic" style="background:rgba(20,184,166,.15);color:#0f766e">🤝</span><span><span class="t">协作 · 给你代码</span><span class="h">两个 AI 一实现一审查</span></span></div>
-          <div class="pk on"><span class="ic" style="background:var(--violet-bg);color:var(--violet)">⇥</span><span><span class="t">编排 · 一个头儿带一队</span><span class="h">指挥者自己拆活、派给多个 agent、验收</span></span></div>
+          <div class="pk on"><span class="ic" style="background:var(--violet-bg);color:var(--violet)">⇥</span><span><span class="t">团队 · 一个头儿带一队</span><span class="h">指挥者自己拆活、派给多个 agent、验收</span></span></div>
         </div>
       </div>
       <div class="pills">
         <span class="p2">指挥 <b>@claude</b></span>
         <span class="p2">工人默认 <b>@codex</b></span>
-        <span class="p2">工人隔离 <b>各自 worktree</b></span>
         <span class="p2">分组 <b>自动新建</b></span>
         <span class="p2">优先级 <b>无</b></span>
       </div>
       <div class="modal-ft">
-        <span class="mono" style="flex:1">先让指挥者读需求 + 拆活 → 给你过一眼 → 再派（可关）</span>
+        <span class="mono" style="flex:1">不设计划门：直接派 —— 方向不对你插一句话就纠回来</span>
         <button class="btn">仅创建</button>
         <button class="btn primary">创建并开工 ⌘↵</button>
       </div>
     </div>
-    <p class="note" style="margin-top:12px">敲完一句「把事项中心接上 GitHub Issue 双向同步」→ 回车。剩下的拆几件、谁先谁后、派给谁，指挥者自己定；你只在它「拆完等你过一眼」和「工人提问」两个点上被打断。</p>
+    <p class="note" style="margin-top:12px">敲完一句「把事项中心接上 GitHub Issue 双向同步」→ 回车。剩下的拆几件、谁先谁后、派给谁，指挥者自己定；你只在「工人提问」和「有人挂了」这两种时候被叫。工人默认跟指挥者同目录跑，要隔离由指挥者派活时逐个开。</p>
   </section>
 
   <!-- ════════════════ ④ 列表 ════════════════ -->
   <section class="screen" id="s4">
-    <p class="note"><b>一句话：</b>列表里编排任务是一行父任务 + 缩进的工人行（默认折叠成一行摘要）。工人是真任务，所以看板/归档/筛选全都照旧能看见它们。</p>
+    <p class="note"><b>一句话：</b>列表里团队任务是一行父任务 + 缩进的工人行（默认折叠成一行摘要）。工人是真任务，所以看板/归档/筛选全都照旧能看见它们。</p>
     <div class="app">
       <div class="lst">
-        <div class="li"><span class="dot run"></span><span class="chip crew">编排</span><span class="t">事项中心接 GitHub Issue 双向同步</span><span class="mono">1 等答复 · 1 干活 · 1 排队 · 1 完成</span><span class="tag">claude</span><span class="mono">14m</span></div>
+        <div class="li"><span class="dot run"></span><span class="chip crew">团队</span><span class="t">事项中心接 GitHub Issue 双向同步</span><span class="mono">1 等答复 · 1 干活 · 1 排队 · 1 完成</span><span class="tag">claude</span><span class="mono">14m</span></div>
         <div class="li child"><span class="dot run"></span><span class="t">① 同步器骨架 + issues 表加 github_number</span><span class="tag">codex</span><span class="mono">9m</span></div>
         <div class="li child" style="background:#fffbeb"><span class="dot ask"></span><span class="t">② 入站：GitHub webhook → 事项</span><span class="tag">codex</span><span class="mono" style="color:var(--amber)">等答复 1m42s</span></div>
         <div class="li child"><span class="dot wait"></span><span class="t">③ 出站：事项变更 → GitHub</span><span class="tag">codex</span><span class="mono">等 ①</span></div>
