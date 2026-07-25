@@ -1100,6 +1100,9 @@ api.post("/tasks/:id/team/halt", async (c) => {
 // agent that stopped to ask can be answered and keep going (same session).
 // With `sendAt` (a future ISO time), the reply is queued as a scheduled_message
 // and delivered later by the scheduler (schedules.ts) instead of fired now.
+// 团队(§Team)的「插话」也走这个端点,但两道给一次性会话设的挡板对它不适用:
+// 指挥台是常驻进程,正在说话(running)时也接得住(continueTask → deliverToLead 直接
+// 写进 stdin),这就是「发出去当前会话就接住、看着从没断线」的手感。
 api.post("/tasks/:id/reply", async (c) => {
   const taskId = c.req.param("id");
   const b = await c.req.json<{ text?: string; attachments?: string[]; agent?: AgentType; sendAt?: string }>();
@@ -1108,7 +1111,8 @@ api.post("/tasks/:id/reply", async (c) => {
   const r = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!r) return c.json({ error: "not found" }, 404);
   if (r.archived) return c.json({ error: "任务已归档，先取消归档再回复", archived: true }, 409);
-  if (r.mode !== "single") return c.json({ error: "仅单任务支持回复" }, 409);
+  const isTeam = r.mode === "team";
+  if (!isTeam && r.mode !== "single") return c.json({ error: "仅单任务支持回复" }, 409);
   // Scheduled send: persist and let the scheduler deliver it when due + idle.
   // Allowed even while the task is running — it fires in the future, not now.
   if (b.sendAt) {
@@ -1129,7 +1133,7 @@ api.post("/tasks/:id/reply", async (c) => {
     await db.insert(scheduledMessages).values(row);
     return c.json({ scheduled: true, message: toScheduledMessage(row) }, 202);
   }
-  if (r.status === "running" || r.status === "queued") return c.json({ error: "任务进行中" }, 409);
+  if (!isTeam && (r.status === "running" || r.status === "queued")) return c.json({ error: "任务进行中" }, 409);
   void continueTask(taskId, (b.text ?? "").trim(), { attachments: b.attachments, agent: b.agent });
   return c.json({ started: true }, 202);
 });
