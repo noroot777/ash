@@ -142,9 +142,23 @@ async function killEscapees(child: ChildProcess, sig: NodeJS.Signals): Promise<v
 // stdout/stderr 管道不死，流永远不 EOF，run loop 收不到 close → 任务永远停不掉
 // (真实案例：codex CLI 重装期间 resume，任务卡 running 且 stop 无效)。
 // 代价：dev 前台 Ctrl-C 不再连带杀掉 agent(生产是 nohup 跑法，不受影响)。
-export function spawnAgent(target: ExecTarget, cwd: string, bin: string, args: string[], prompt: string): ChildProcess {
+// extraEnv: per-executor 的环境变量(中转站的 base_url / key)。本地合进 env,
+// ssh 拼成远程命令的 `KEY=值 ` 前缀 —— 二者对 CLI 是等价的。
+export function spawnAgent(
+  target: ExecTarget,
+  cwd: string,
+  bin: string,
+  args: string[],
+  prompt: string,
+  extraEnv?: Record<string, string>,
+): ChildProcess {
+  const envPrefix = extraEnv
+    ? Object.entries(extraEnv)
+        .map(([k, v]) => `${k}=${shq(v)} `)
+        .join("")
+    : "";
   if (target.kind === "ssh") {
-    const remote = `cd ${shq(cwd)} && ${bin} ${args.map(shq).join(" ")}`;
+    const remote = `cd ${shq(cwd)} && ${envPrefix}${bin} ${args.map(shq).join(" ")}`;
     const child = spawn("ssh", [target.host, remote], { stdio: ["pipe", "pipe", "pipe"], env: augmentedEnv(), detached: true });
     child.stdin?.write(prompt);
     child.stdin?.end();
@@ -167,7 +181,7 @@ export function spawnAgent(target: ExecTarget, cwd: string, bin: string, args: s
     trackPath = null;
   }
   const stdio: Array<"pipe" | number> = trackFd === null ? ["pipe", "pipe", "pipe"] : ["pipe", "pipe", "pipe", trackFd];
-  const child = spawn(abs, args, { cwd, stdio, env: augmentedEnv(), detached: true });
+  const child = spawn(abs, args, { cwd, stdio, env: { ...augmentedEnv(), ...extraEnv }, detached: true });
   if (trackFd !== null && trackPath) {
     closeSync(trackFd); // 子进程已持有副本,父进程这份立即关掉
     trackFiles.set(child, trackPath);
@@ -191,9 +205,21 @@ export function spawnAgent(target: ExecTarget, cwd: string, bin: string, args: s
 }
 
 // Wrap a resume command for the target so it is copy-paste runnable (§13).
-export function resumeFor(target: ExecTarget, cwd: string, inner: string): string {
-  if (target.kind === "ssh") return `ssh ${target.host} "cd ${shq(cwd)} && ${inner}"`;
-  return `cd ${shq(cwd)} && ${inner}`;
+// envPrefix(中转站的 `KEY=值 `,token 已换成占位符)拼在 CLI 前面 —— 不带它,
+// 粘到终端的命令会走 CLI 自己的官方账号,跟这次运行不是同一个来源。
+export function resumeFor(target: ExecTarget, cwd: string, inner: string, envPrefix = ""): string {
+  if (target.kind === "ssh") return `ssh ${target.host} "cd ${shq(cwd)} && ${envPrefix}${inner}"`;
+  return `cd ${shq(cwd)} && ${envPrefix}${inner}`;
+}
+
+// 命令行里出现的密钥兜底打码。executor 走 env / env_key 注入,正常不该有 key 落到
+// commandLine(它会存进 sessions.command_line 并在 UI 展示);这层是防以后有人手写
+// extraArgs 时把 key 带进来。
+export function redactSecrets(s: string): string {
+  return s
+    .replace(/\b(sk|sk-ant|sk-proj|ghp|gho)-[A-Za-z0-9_-]{8,}/g, "$1-***")
+    .replace(/\b(Bearer)\s+[A-Za-z0-9._-]{8,}/gi, "$1 ***")
+    .replace(/((?:token|api[_-]?key|auth[_-]?token|secret)["']?\s*[:=]\s*["']?)[A-Za-z0-9._-]{8,}/gi, "$1***");
 }
 
 // Terminate a running agent subprocess (manual stop). SIGTERM first so the CLI
@@ -262,15 +288,17 @@ export const resumeInner: Record<string, (id: string) => string> = {
 
 // Build the display resume command from persisted session fields, so it always
 // reflects the current format (no stale stored strings when the format changes).
+// relayEnv 是本次运行挂的中转站前缀(已脱敏),旧行为 null 就跟以前完全一样。
 export function resumeCommandFor(
   agentType: string,
   targetStr: string | null | undefined,
   cwd: string,
   cliSessionId: string,
+  relayEnv?: string | null,
 ): string {
   const inner = (resumeInner[agentType] ?? resumeInner.claude)(cliSessionId);
   const target: ExecTarget = targetStr?.startsWith("ssh:")
     ? { kind: "ssh", host: targetStr.slice(4) }
     : { kind: "local" };
-  return resumeFor(target, cwd, inner);
+  return resumeFor(target, cwd, inner, relayEnv ?? "");
 }

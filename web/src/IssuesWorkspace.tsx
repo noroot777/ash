@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import type { Issue, IssueComment, Task, AgentType, AiBackend, ProjectView, Priority, LlmProvider } from "@harness/shared";
+import type { Issue, IssueComment, Task, AgentType, AiBackend, ProjectView, Priority, AgentExecutorProfile } from "@harness/shared";
 import { ArrowUp, Robot, Sparkle, Trash, PencilSimple, Check, GearSix, Plus, CaretRight } from "@phosphor-icons/react";
 import { api } from "./api";
 import { Menu, Pill } from "./Menu";
@@ -11,14 +11,12 @@ import { ConfirmModal } from "./Modal";
 import { toast } from "./toast";
 import { usePasteAttachments, AttachmentChips, AttachButton, StoredAttachments } from "./pasteAttachments";
 
-// Local CLI agents always available in the composer. Direct-LLM connections (中转站)
-// are loaded from the system-level config (智能体 panel) and appended at runtime.
-type BackendChoice = { value: string; label: string; backend: AiBackend };
-const CLI_BACKENDS: BackendChoice[] = [
-  { value: "cli:claude", label: "@claude", backend: { kind: "cli", agentType: "claude" } },
-  { value: "cli:codex", label: "@codex", backend: { kind: "cli", agentType: "codex" } },
-  { value: "cli:antigravity", label: "@antigravity", backend: { kind: "cli", agentType: "antigravity" } },
-];
+// hero 底部的下拉列的是「智能体执行器」面板里注册的具体执行者(claude@local /
+// claude@公司中转 / codex@local…)。解析事项跟执行任务同一条路:都是派给某个执行者
+// 跑一次 CLI,没有第二条直连 HTTP 的路。
+const MANAGE_AGENTS = "__agents";
+// 一个执行者都没注册时的兜底项:服务端会用内置的本地 claude 默认执行者。
+const BUILTIN_DEFAULT = "";
 
 const ISSUE_STATUS_META: Record<Issue["status"], { label: string; cls: string }> = {
   open: { label: "待办", cls: "border-line2" },
@@ -55,7 +53,7 @@ export function IssuesWorkspace({
   onSelectIssue,
   onOpenTask,
   taskBump,
-  onOpenSettings,
+  onOpenAgents,
 }: {
   projects: ProjectView[];
   projectId: string | null;
@@ -65,7 +63,7 @@ export function IssuesWorkspace({
   onSelectIssue: (id: string | null) => void;
   onOpenTask: (taskId: string) => void;
   taskBump: number;
-  onOpenSettings: () => void;
+  onOpenAgents: () => void;
 }) {
   // The list shows the current project's issues + every 未归类 (staging) issue.
   const visible = useMemo(
@@ -119,7 +117,7 @@ export function IssuesWorkspace({
             text={heroDraft}
             setText={setHeroDraft}
             att={heroAtt}
-            onOpenSettings={onOpenSettings}
+            onOpenAgents={onOpenAgents}
             onCreated={(iss) => {
               setIssues((prev) => [iss, ...prev]);
               onSelectIssue(iss.id);
@@ -144,7 +142,7 @@ function HeroComposer({
   onAssignNeeded,
   patchIssueLocal,
   onSelectIssue,
-  onOpenSettings,
+  onOpenAgents,
 }: {
   projects: ProjectView[];
   text: string;
@@ -154,10 +152,10 @@ function HeroComposer({
   onAssignNeeded: (i: Issue) => void;
   patchIssueLocal: (i: Issue) => void;
   onSelectIssue: (id: string | null) => void;
-  onOpenSettings: () => void;
+  onOpenAgents: () => void;
 }) {
-  const [backendVal, setBackendVal] = useState("cli:claude");
-  const [providers, setProviders] = useState<LlmProvider[]>([]);
+  const [executorId, setExecutorId] = useState(BUILTIN_DEFAULT);
+  const [executors, setExecutors] = useState<AgentExecutorProfile[]>([]);
   const [busy, setBusy] = useState(false);
   const [user, setUser] = useState(""); // submitted text shown as a bubble
   const [staged, setStaged] = useState<Issue | null>(null); // 未归类待选项目
@@ -170,10 +168,11 @@ function HeroComposer({
   useEffect(() => {
     titleRef.current?.classList.add("is-shown");
     setTimeout(() => taRef.current?.focus(), 120);
-    api.llmProviders().then((ps) => {
-      setProviders(ps);
-      // 直连大模型置顶并默认:有配置的连接就默认选第一个(仅覆盖初始的 cli:claude)
-      if (ps.length) setBackendVal((cur) => (cur === "cli:claude" ? `api:${ps[0].id}` : cur));
+    api.agents().then((list) => {
+      setExecutors(list);
+      // 默认选 claude 的默认执行者(解析事项的老行为),没有就退到列表第一个。
+      const pick = list.find((a) => a.type === "claude" && a.isDefault) ?? list.find((a) => a.isDefault) ?? list[0];
+      if (pick) setExecutorId((cur) => (cur === BUILTIN_DEFAULT ? pick.id : cur));
     }).catch(() => {});
   }, []);
 
@@ -185,14 +184,9 @@ function HeroComposer({
     ta.style.height = `${Math.min(ta.scrollHeight, Math.round(window.innerHeight * 0.4))}px`;
   }, [text]);
 
-  // 直连大模型(中转站)置顶,本地 CLI 在后。
-  const allBackends: BackendChoice[] = [
-    ...providers.map((p) => ({ value: `api:${p.id}`, label: p.name, backend: { kind: "api" as const, providerId: p.id } })),
-    ...CLI_BACKENDS,
-  ];
-  const backend = allBackends.find((b) => b.value === backendVal)?.backend;
-  const selProvider = backend?.kind === "api" ? providers.find((p) => p.id === backend.providerId) : null;
-  const backendLabel = allBackends.find((b) => b.value === backendVal)?.label ?? "@claude";
+  const selected = executors.find((a) => a.id === executorId) ?? null;
+  const backend: AiBackend | undefined = executorId ? { executorId } : undefined;
+  const backendLabel = selected?.name ?? "@claude";
 
   const submit = async () => {
     const t = text.trim();
@@ -275,25 +269,23 @@ function HeroComposer({
               <div className="flex items-center gap-1.5 px-3 pb-3 pt-2">
                 <AttachButton addFiles={addFiles} className="grid h-[30px] w-[30px] place-items-center rounded-lg text-muted hover:bg-raised hover:text-ink" />
                 <Menu
-                  value={backendVal}
-                  onChange={(v) => (v === "__settings" ? onOpenSettings() : setBackendVal(v))}
+                  value={executorId}
+                  onChange={(v) => (v === MANAGE_AGENTS ? onOpenAgents() : setExecutorId(v))}
                   menuWidth={260}
                   options={[
-                    ...allBackends.map((b) => {
-                      const prov = b.value.startsWith("api:") ? providers.find((p) => `api:${p.id}` === b.value) : null;
-                      return {
-                        value: b.value,
-                        label: b.label,
-                        detail: prov ? `直连大模型 · ${prov.model || "未设模型"}` : "本地智能体 · CLI",
-                        icon: <Robot size={14} />,
-                      };
-                    }),
-                    { value: "__settings", label: "管理大模型连接…", detail: "配置中转站 / API", icon: <GearSix size={14} /> },
+                    ...(executors.length
+                      ? executors.map((a) => ({
+                          value: a.id,
+                          label: a.name,
+                          detail: [a.type, a.model, a.providerId ? "中转站" : null].filter(Boolean).join(" · "),
+                          icon: <Robot size={14} />,
+                        }))
+                      : [{ value: BUILTIN_DEFAULT, label: "@claude", detail: "内置默认 · 尚未注册执行者", icon: <Robot size={14} /> }]),
+                    { value: MANAGE_AGENTS, label: "管理执行器…", detail: "注册执行者 / 配置中转站", icon: <GearSix size={14} /> },
                   ]}
                   triggerClassName="inline-flex items-center gap-1.5 rounded-lg border border-line px-2.5 py-1.5 text-[12.5px] text-muted hover:bg-raised hover:text-ink"
                 >
                   <Robot size={14} /> {backendLabel}
-                  {selProvider?.model ? <span className="text-faint"> · {selProvider.model}</span> : null}
                   <span className="text-[10px] text-faint">▾</span>
                 </Menu>
                 <span className="flex-1" />

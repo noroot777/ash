@@ -1,8 +1,14 @@
 import { createInterface } from "node:readline";
 import type { AgentEvent, ExecTarget } from "@harness/shared";
-import type { AgentExecutor, RunHandle, RunOpts } from "./types.js";
-import { spawnAgent, resumeFor, resumeInner, spawnErrorMessage, killChild, forceFinishOnExit } from "./spawn.js";
+import type { AgentExecutor, RelayConfig, RunHandle, RunOpts } from "./types.js";
+import { spawnAgent, resumeFor, resumeInner, spawnErrorMessage, killChild, forceFinishOnExit, redactSecrets } from "./spawn.js";
 import { formatFailureForTimeline, RunTraceRecorder, type RunTracePaths } from "./diagnostics.js";
+
+// 中转站的 key 走环境变量,不进命令行 —— `-c` 参数会原样进 commandLine,而后者存进
+// sessions.command_line 并在 UI 展示。codex 的 model_providers 正好支持 env_key
+// 指向一个环境变量名,于是 TOML 里只出现变量名,真 key 只活在进程环境里。
+const RELAY_ENV_KEY = "HARNESS_RELAY_KEY";
+const RELAY_PROVIDER_ID = "harness_relay";
 
 // Drives the real `codex` CLI in non-interactive JSON mode (prompt via stdin, `-`).
 //   first:  codex exec --json --skip-git-repo-check -C <cwd>
@@ -11,19 +17,24 @@ import { formatFailureForTimeline, RunTraceRecorder, type RunTracePaths } from "
 export class CodexExecutor implements AgentExecutor {
   readonly type = "codex" as const;
   readonly label: string;
+  // 中转站的 env 前缀,token 已换成占位符 —— 存进 sessions.relay_env 供恢复命令展示。
+  readonly relayEnvHint?: string;
   private target: ExecTarget;
   private bin: string;
   private model?: string;
   private extraArgs: string[];
   private reasoningEffort?: string;
   private speed?: "fast";
-  constructor(opts: { model?: string; extraArgs?: string[]; reasoningEffort?: string; speed?: "fast"; bin?: string; target?: ExecTarget; name?: string } = {}) {
+  private relay?: RelayConfig;
+  constructor(opts: { model?: string; extraArgs?: string[]; reasoningEffort?: string; speed?: "fast"; bin?: string; target?: ExecTarget; name?: string; relay?: RelayConfig } = {}) {
     this.model = opts.model;
     this.extraArgs = opts.extraArgs ?? [];
     this.reasoningEffort = opts.reasoningEffort;
     this.speed = opts.speed;
     this.bin = opts.bin ?? "codex";
     this.target = opts.target ?? { kind: "local" };
+    this.relay = opts.relay;
+    this.relayEnvHint = this.relay ? `${RELAY_ENV_KEY}=<你的key> ` : undefined;
     const where = this.target.kind === "ssh" ? this.target.host : "local";
     this.label = opts.name ?? `codex@${where}${opts.model ? "·" + opts.model : ""}`;
   }
@@ -31,7 +42,25 @@ export class CodexExecutor implements AgentExecutor {
   resumeCommand(cwd: string, sessionId: string): string {
     // Human-friendly copy command: interactive resume (shows the session + lets
     // you continue). The harness's own headless resume uses `exec resume` in run().
-    return resumeFor(this.target, cwd, resumeInner.codex(sessionId));
+    return resumeFor(this.target, cwd, resumeInner.codex(sessionId), this.relayEnvHint ?? "");
+  }
+
+  // 挂了中转站就临时注册一个 provider 并切过去(-c 值按 TOML 解析,字符串须带引号)。
+  // base_url 要带 /v1(存的是根地址);key 只通过 env_key 间接引用,不出现在命令行。
+  private relayArgs(): string[] {
+    if (!this.relay) return [];
+    const p = `model_providers.${RELAY_PROVIDER_ID}`;
+    return [
+      "-c", `model_provider="${RELAY_PROVIDER_ID}"`,
+      "-c", `${p}.name="${this.relay.name.replace(/"/g, "")}"`,
+      "-c", `${p}.base_url="${this.relay.baseUrl}/v1"`,
+      "-c", `${p}.wire_api="chat"`,
+      "-c", `${p}.env_key="${RELAY_ENV_KEY}"`,
+    ];
+  }
+
+  private env(): Record<string, string> | undefined {
+    return this.relay ? { [RELAY_ENV_KEY]: this.relay.apiKey } : undefined;
   }
 
   run(opts: RunOpts): RunHandle {
@@ -42,6 +71,7 @@ export class CodexExecutor implements AgentExecutor {
     // 同 key 时用户参数在后覆盖。
     if (this.reasoningEffort) common.push("-c", `model_reasoning_effort="${this.reasoningEffort}"`);
     if (this.speed === "fast") common.push("-c", 'service_tier="priority"');
+    common.push(...this.relayArgs());
     // 注册表配置的固定参数在前,单次调用的 opts.extraArgs 在后(后者可覆盖前者)。
     if (this.extraArgs.length) common.push(...this.extraArgs);
     if (opts.extraArgs?.length) common.push(...opts.extraArgs);
@@ -52,8 +82,8 @@ export class CodexExecutor implements AgentExecutor {
       ? ["exec", ...common, "resume", opts.sessionId, "-"]
       : ["exec", ...common, "-"];
 
-    const commandLine = `${this.bin} ${args.join(" ")} <prompt via stdin>`;
-    const child = spawnAgent(this.target, opts.cwd, this.bin, args, opts.prompt);
+    const commandLine = redactSecrets(`${this.bin} ${args.join(" ")} <prompt via stdin>`);
+    const child = spawnAgent(this.target, opts.cwd, this.bin, args, opts.prompt, this.env());
     const lifecycle = { stopRequested: false };
     return {
       sessionId: opts.sessionId ?? "",

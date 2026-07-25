@@ -97,6 +97,7 @@ async function runTurn(args: {
       cwd,
       cliSessionId: cliId,
       resumeCommand: cliId ? executor.resumeCommand(cwd, cliId) : null,
+      relayEnv: executor.relayEnvHint ?? null,
       commandLine: handle.commandLine,
       startedAt: turnStart,
       turnStartedAt: turnStart,

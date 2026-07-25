@@ -5,29 +5,34 @@ import { mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentType, AiBackend, Priority } from "@harness/shared";
-import { resolveExecutor } from "./executors/index.js";
-import { callModel, type LlmCall } from "./llm.js";
+import { resolveExecutor, resolveExecutorById } from "./executors/index.js";
 
 // 中立 cwd,放在 repo 树之外:claude CLI 会从 cwd 向上找 CLAUDE.md,落在仓库里会
 // 命中根目录的工作约定污染解析。tmpdir 彻底脱离 repo 树。
 const PARSE_CWD = join(tmpdir(), "harness-issue-parse");
-const PARSE_TIMEOUT_MS = 30_000;
+// 起一个 CLI 进程比一次 HTTP 调用慢一个量级(冷启动 + 工具循环),30s 会把正常解析
+// 掐死在半路 —— 解析全部改走本地 CLI 后放宽到 90s。
+const PARSE_TIMEOUT_MS = 90_000;
 // 讨论(discuss)走 CLI 一次调用,cwd 是 issue 项目 repoPath ——恰恰要读 CLAUDE.md 好答问题。
 // timeout 给 60s 够几轮 tool loop 去 Read/Grep 核实代码。
 export const DISCUSS_TIMEOUT_MS = 60_000;
 const PRIORITIES: Priority[] = ["none", "low", "medium", "high", "urgent"];
 
-// 跑一个 CLI 执行器到结束,返回全部文本。antigravity 无内置解析器 → 回退 claude。
+// 跑一个 CLI 执行器到结束,返回全部文本。
+// executorId 指定具体执行者(用户在事项 hero 里挑的那个);查不到 / 没给 → 该类型
+// 或 claude 的默认执行者。antigravity 无内置解析器 → 回退 claude。
 // cwd 默认 PARSE_CWD(解析场景,脱离 repo 树避免 CLAUDE.md 污染);讨论场景传项目 repoPath。
 export async function runAgentOnce(
   prompt: string,
-  opts: { agentType?: AgentType; timeoutMs?: number; cwd?: string } = {},
+  opts: { executorId?: string | null; agentType?: AgentType; timeoutMs?: number; cwd?: string } = {},
 ): Promise<{ text: string; ok: boolean }> {
   const cwd = opts.cwd ?? PARSE_CWD;
   if (cwd === PARSE_CWD) mkdirSync(PARSE_CWD, { recursive: true });
   let ex;
   try {
-    ex = await resolveExecutor(opts.agentType ?? "claude");
+    ex = opts.executorId
+      ? await resolveExecutorById(opts.executorId)
+      : await resolveExecutor(opts.agentType ?? "claude");
   } catch {
     ex = await resolveExecutor("claude");
   }
@@ -124,7 +129,7 @@ function extractJson(text: string): Record<string, unknown> | null {
 // title=首行、body=原文、projectId=单项目时取它否则 null、parsed=false。
 export async function parseIssue(
   rawText: string,
-  opts: { backend?: AiBackend | null; projects: ProjectLite[]; apiProvider?: LlmCall },
+  opts: { backend?: AiBackend | null; projects: ProjectLite[] },
 ): Promise<ParsedIssue> {
   const onlyProject = opts.projects.length === 1 ? opts.projects[0].id : null;
   const fallback = (): ParsedIssue => ({
@@ -137,25 +142,11 @@ export async function parseIssue(
   });
 
   const prompt = parsePrompt(rawText, opts.projects);
-  const cliAgent = opts.backend?.kind === "cli" ? opts.backend.agentType : "claude";
   let obj: Record<string, unknown> | null = null;
   try {
-    const out =
-      opts.backend?.kind === "api" && opts.apiProvider
-        ? await callModel(opts.apiProvider, prompt)
-        : (await runAgentOnce(prompt, { agentType: cliAgent })).text;
-    obj = extractJson(out);
+    obj = extractJson((await runAgentOnce(prompt, { executorId: opts.backend?.executorId })).text);
   } catch {
-    /* fall through to the CLI retry below */
-  }
-  // 直连 API(中转站)失败或没产出可解析 JSON 时,退一步用本地 claude 再解析一次 ——
-  // 标题就不会因为中转站抽风而无声退化成「截断首行」。
-  if (!obj && opts.backend?.kind === "api") {
-    try {
-      obj = extractJson((await runAgentOnce(prompt, { agentType: "claude" })).text);
-    } catch {
-      /* give up → fallback */
-    }
+    /* fall through to fallback */
   }
   if (!obj) return fallback();
 
@@ -179,7 +170,7 @@ export async function parseIssue(
 
 // ── 讨论/执行意图分类 ────────────────────────────────────────────────────────
 // issue 讨论区里用户 @claude 时,先跑一次这个判"讨论还是执行"。跟 parseIssue
-// 一条链路(直连 API 优先、失败降本地 claude)。拿不准 / 失败 / 空 → 一律 discuss:
+// 一条链路(事项选定的执行者,查不到就默认 claude)。拿不准 / 失败 / 空 → 一律 discuss:
 // 讨论便宜且可逆,execute 一旦派出 worktree 就收不回。
 export type MentionIntent = "discuss" | "execute";
 
@@ -210,26 +201,14 @@ const classifyPrompt = (ctx: DiscussionCtx): string =>
 
 export async function classifyMention(
   ctx: DiscussionCtx,
-  opts: { backend?: AiBackend | null; apiProvider?: LlmCall } = {},
+  opts: { backend?: AiBackend | null } = {},
 ): Promise<MentionIntent> {
   const prompt = classifyPrompt(ctx);
-  const cliAgent = opts.backend?.kind === "cli" ? opts.backend.agentType : "claude";
   let obj: Record<string, unknown> | null = null;
   try {
-    const out =
-      opts.backend?.kind === "api" && opts.apiProvider
-        ? await callModel(opts.apiProvider, prompt)
-        : (await runAgentOnce(prompt, { agentType: cliAgent })).text;
-    obj = extractJson(out);
+    obj = extractJson((await runAgentOnce(prompt, { executorId: opts.backend?.executorId })).text);
   } catch {
     /* fall through */
-  }
-  if (!obj && opts.backend?.kind === "api") {
-    try {
-      obj = extractJson((await runAgentOnce(prompt, { agentType: "claude" })).text);
-    } catch {
-      /* give up */
-    }
   }
   if (obj?.mode === "execute") return "execute";
   return "discuss"; // 默认 / 拿不准 / 失败

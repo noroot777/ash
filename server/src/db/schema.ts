@@ -68,6 +68,9 @@ export const agents = sqliteTable("agents", {
   extraArgs: text("extra_args").notNull().default("[]"), // json
   reasoningEffort: text("reasoning_effort"), // null=跟随 CLI 默认
   speed: text("speed"), // null=标准；"fast"=1.5x 加速档
+  // 挂载的中转站(llm_providers.id)。null=用 CLI 自己的官方登录账号。
+  // 非空时启动 CLI 前注入 base_url + key(claude: env;codex: -c model_providers)。
+  providerId: text("provider_id"),
   isDefault: integer("is_default", { mode: "boolean" }).notNull().default(false),
 });
 
@@ -83,6 +86,9 @@ export const sessions = sqliteTable("sessions", {
   cwd: text("cwd"),
   cliSessionId: text("cli_session_id"),
   resumeCommand: text("resume_command"),
+  // 本次运行挂的中转站在恢复命令里要带的 env 前缀(token 已是占位符)。
+  // null = 走 CLI 官方账号。只用于展示,不含真 key。
+  relayEnv: text("relay_env"),
   commandLine: text("command_line"),
   startedAt: text("started_at").notNull(),
   endedAt: text("ended_at"), // when this run finished (set with exit_status)
@@ -135,7 +141,7 @@ export const issues = sqliteTable("issues", {
   priority: text("priority").notNull().default("none"),
   labels: text("labels").notNull().default("[]"), // json
   attachments: text("attachments").notNull().default("[]"), // json: absolute file paths
-  aiBackend: text("ai_backend"), // json AiBackend({kind:'cli',agentType} | {kind:'api',model})
+  aiBackend: text("ai_backend"), // json AiBackend({executorId}); 旧格式 {kind:…} 读到就降级为默认执行者
   parsed: integer("parsed", { mode: "boolean" }).notNull().default(false),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
@@ -179,12 +185,13 @@ export const queueItems = sqliteTable(
   }),
 );
 
-// Direct-LLM connections (中转站), system-level. Used only for issue parsing.
+// 中转站(relay), system-level. 挂给执行者用:启动 CLI 时注入 base_url + key,
+// 顶掉 CLI 自己的官方登录账号。harness 自己不再直连 HTTP 调模型。
 export const llmProviders = sqliteTable("llm_providers", {
   id: text("id").primaryKey(),
   name: text("name").notNull(),
   protocol: text("protocol").notNull().default("openai"), // anthropic | openai
-  baseUrl: text("base_url").notNull(),
+  baseUrl: text("base_url").notNull(), // 根地址,不含 /v1(各处按需自行补)
   apiKey: text("api_key").notNull().default(""), // 本机存储,GET 不回传明文
   model: text("model").notNull().default(""),
   createdAt: text("created_at").notNull(),

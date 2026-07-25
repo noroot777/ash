@@ -1,11 +1,20 @@
 import { useEffect, useState } from "react";
-import type { AgentExecutorProfile, AgentType, ExecTarget } from "@harness/shared";
+import type { AgentExecutorProfile, AgentType, ExecTarget, LlmProtocol, LlmProvider } from "@harness/shared";
 import { MagnifyingGlass, Check, X, Plus, Trash, CircleNotch } from "@phosphor-icons/react";
 import { api } from "./api";
 import { Menu, type MenuOption } from "./Menu";
+import { RelaySection } from "./Relays";
 import { useEscape } from "./useEscape";
 
 const TYPES: AgentType[] = ["claude", "codex", "antigravity"];
+
+// 哪种协议的中转站能挂给哪个 CLI:claude 认 Anthropic 端点,codex 认 OpenAI 端点。
+// null = 该类型不支持挂中转站(antigravity 无执行器实现)。
+const RELAY_PROTOCOL: Record<AgentType, LlmProtocol | null> = {
+  claude: "anthropic",
+  codex: "openai",
+  antigravity: null,
+};
 
 // ── 可选配置项(§5)────────────────────────────────────────────────────────
 // 原则:常用参数全部页面可选,不逼用户手写 CLI 参数;extraArgs 仅作兜底。
@@ -13,7 +22,7 @@ const TYPES: AgentType[] = ["claude", "codex", "antigravity"];
 
 // 模型预设按 type 给常用值;下拉 header 里可自由输入任意模型名。
 const MODEL_PRESETS: Record<AgentType, string[]> = {
-  claude: ["opus", "sonnet", "haiku"],
+  claude: ["opus", "sonnet", "haiku", "fable"],
   codex: ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4"],
   antigravity: [],
 };
@@ -48,12 +57,16 @@ type Detected = { type: string; bin: string; available: boolean; path: string | 
 // per-type default, local/ssh target, plus local-CLI detection.
 export function AgentsPanel({ onClose }: { onClose: () => void }) {
   const [list, setList] = useState<AgentExecutorProfile[]>([]);
+  const [relays, setRelays] = useState<LlmProvider[]>([]);
   const [detected, setDetected] = useState<Detected[] | null>(null);
   const [detecting, setDetecting] = useState(false);
   const reload = () => api.agents().then(setList);
+  // 删中转站会把挂着它的执行者置回官方账号(服务端做的),所以中转站变了要连执行者一起刷。
+  const reloadRelays = () => Promise.all([api.llmProviders().then(setRelays), reload()]).catch(() => {});
   useEscape(onClose);
   useEffect(() => {
     reload();
+    api.llmProviders().then(setRelays).catch(() => {});
   }, []);
 
   const detect = async () => {
@@ -153,12 +166,16 @@ export function AgentsPanel({ onClose }: { onClose: () => void }) {
                     </p>
                   )}
                   {profiles.map((a) => (
-                    <Row key={a.id} a={a} onChange={reload} />
+                    <Row key={a.id} a={a} relays={relays} onChange={reload} />
                   ))}
-                  {type !== "antigravity" && <AddRow type={type} onAdded={reload} />}
+                  {type !== "antigravity" && <AddRow type={type} relays={relays} onAdded={reload} />}
                 </div>
               );
             })}
+          </div>
+
+          <div className="mt-5 border-t border-line pt-4">
+            <RelaySection list={relays} onChange={reloadRelays} />
           </div>
         </div>
       </div>
@@ -211,7 +228,50 @@ function ModelMenu({ type, value, onPick }: { type: AgentType; value?: string; o
   );
 }
 
-function Row({ a, onChange }: { a: AgentExecutorProfile; onChange: () => void }) {
+// 中转站下拉:默认「官方账号」(不注入 env,CLI 用自己登录的账号)+ 协议匹配的中转站。
+// 挂上后该执行者的每次运行都注入 base_url + key,执行任务和解析事项都走中转站。
+function RelayMenu({
+  type,
+  relays,
+  value,
+  onPick,
+}: {
+  type: AgentType;
+  relays: LlmProvider[];
+  value?: string | null;
+  onPick: (v: string) => void;
+}) {
+  const protocol = RELAY_PROTOCOL[type];
+  if (!protocol) return null;
+  const usable = relays.filter((r) => r.protocol === protocol);
+  const current = usable.find((r) => r.id === value);
+  const options: MenuOption[] = [
+    { value: "", label: "官方账号", detail: `跟随 ${type} CLI 自己登录的账号` },
+    ...usable.map((r) => ({ value: r.id, label: r.name, detail: r.hasKey ? r.baseUrl : "缺 key，挂上也连不通" })),
+  ];
+  return (
+    <Menu
+      options={options}
+      value={value ?? ""}
+      onChange={onPick}
+      menuWidth={260}
+      triggerClassName={chipClass(!!value)}
+      header={
+        usable.length === 0
+          ? () => (
+              <div className="px-1.5 py-1 text-[11px] text-faint">
+                还没有 {protocol === "anthropic" ? "Anthropic" : "OpenAI"} 协议的中转站，去下面「中转站」里加
+              </div>
+            )
+          : undefined
+      }
+    >
+      <ChipLabel label="中转站" value={value ? current?.name ?? "已失效" : undefined} />
+    </Menu>
+  );
+}
+
+function Row({ a, relays, onChange }: { a: AgentExecutorProfile; relays: LlmProvider[]; onChange: () => void }) {
   const [argsEditing, setArgsEditing] = useState(false);
   const [argsText, setArgsText] = useState("");
 
@@ -230,21 +290,21 @@ function Row({ a, onChange }: { a: AgentExecutorProfile; onChange: () => void })
   return (
     <div className="mb-1.5 rounded-md border border-line bg-panel px-2.5 py-2 text-[12px]">
       <div className="flex items-center gap-2">
-        <span className="font-medium text-ink">{a.name}</span>
-        <span className="text-muted">{targetText(a.target)}</span>
+        <span className="truncate font-medium text-ink" title={a.name}>{a.name}</span>
+        <span className="shrink-0 text-muted">{targetText(a.target)}</span>
         {a.isDefault ? (
-          <span className="rounded bg-emerald-500/15 px-1.5 py-0.5 text-[11px] text-emerald-700">默认</span>
+          <span className="shrink-0 rounded bg-emerald-500/15 px-1.5 py-0.5 text-[11px] text-emerald-700">默认</span>
         ) : (
           <button
             onClick={() => patch({ isDefault: true })}
-            className="rounded border border-line px-1.5 py-0.5 text-[11px] text-muted hover:text-ink"
+            className="shrink-0 whitespace-nowrap rounded border border-line px-1.5 py-0.5 text-[11px] text-muted hover:text-ink"
           >
             设为默认
           </button>
         )}
         <button
           onClick={() => api.deleteAgent(a.id).then(onChange)}
-          className="ml-auto grid h-6 w-6 place-items-center rounded text-faint hover:bg-raised hover:text-red-600"
+          className="ml-auto grid h-6 w-6 shrink-0 place-items-center rounded text-faint hover:bg-raised hover:text-red-600"
           title="删除"
         >
           <Trash size={13} />
@@ -270,6 +330,7 @@ function Row({ a, onChange }: { a: AgentExecutorProfile; onChange: () => void })
         >
           <ChipLabel label="速度" value={a.speed === "fast" ? "1.5x" : "标准"} />
         </Menu>
+        <RelayMenu type={a.type} relays={relays} value={a.providerId} onPick={(v) => patch({ providerId: v || null })} />
         {argsEditing ? (
           <input
             autoFocus
@@ -305,12 +366,13 @@ function Row({ a, onChange }: { a: AgentExecutorProfile; onChange: () => void })
   );
 }
 
-function AddRow({ type, onAdded }: { type: AgentType; onAdded: () => void }) {
+function AddRow({ type, relays, onAdded }: { type: AgentType; relays: LlmProvider[]; onAdded: () => void }) {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
   const [model, setModel] = useState("");
   const [effort, setEffort] = useState("");
   const [speed, setSpeed] = useState<"standard" | "fast">("standard");
+  const [providerId, setProviderId] = useState("");
   const [args, setArgs] = useState("");
   const [host, setHost] = useState("");
 
@@ -319,18 +381,22 @@ function AddRow({ type, onAdded }: { type: AgentType; onAdded: () => void }) {
     setModel("");
     setEffort("");
     setSpeed("standard");
+    setProviderId("");
     setArgs("");
     setHost("");
   };
 
   const add = async () => {
     const target: ExecTarget = host.trim() ? { kind: "ssh", host: host.trim() } : { kind: "local" };
+    const relayName = relays.find((r) => r.id === providerId)?.name;
     await api.createAgent({
       type,
-      name: name.trim() || `${type}@${host.trim() || "local"}${model ? "·" + model : ""}`,
+      // 缺省名字带上中转站(claude@公司中转·opus),好在下拉里一眼分清同类型的多个执行者。
+      name: name.trim() || `${type}@${relayName || host.trim() || "local"}${model ? "·" + model : ""}`,
       model: model.trim() || undefined,
       reasoningEffort: effort || undefined,
       speed: speed === "fast" ? "fast" : undefined,
+      providerId: providerId || null,
       extraArgs: args.trim() ? args.trim().split(/\s+/) : undefined,
       target,
       isDefault: false,
@@ -370,6 +436,7 @@ function AddRow({ type, onAdded }: { type: AgentType; onAdded: () => void }) {
         >
           <ChipLabel label="速度" value={speed === "fast" ? "1.5x" : "标准"} />
         </Menu>
+        <RelayMenu type={type} relays={relays} value={providerId} onPick={setProviderId} />
       </div>
       <input value={args} onChange={(e) => setArgs(e.target.value)} placeholder="额外 CLI 参数（可选，空格分隔）" className="rounded border border-line bg-canvas px-2 py-1 font-mono outline-none placeholder:text-faint" />
       <input value={host} onChange={(e) => setHost(e.target.value)} placeholder="ssh 主机（留空=本地）" className="rounded border border-line bg-canvas px-2 py-1 outline-none placeholder:text-faint" />

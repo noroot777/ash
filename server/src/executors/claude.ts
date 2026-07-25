@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { createInterface } from "node:readline";
 import type { AgentEvent, ExecTarget } from "@harness/shared";
-import type { AgentExecutor, RunHandle, RunOpts } from "./types.js";
-import { spawnAgent, resumeFor, resumeInner, spawnErrorMessage, killChild, forceFinishOnExit } from "./spawn.js";
+import type { AgentExecutor, RelayConfig, RunHandle, RunOpts } from "./types.js";
+import { spawnAgent, resumeFor, resumeInner, spawnErrorMessage, killChild, forceFinishOnExit, redactSecrets } from "./spawn.js";
 
 // Drives the real `claude` CLI in headless stream-json mode (prompt via stdin).
 //   claude -p --output-format stream-json --verbose --dangerously-skip-permissions
@@ -10,25 +10,38 @@ import { spawnAgent, resumeFor, resumeInner, spawnErrorMessage, killChild, force
 export class ClaudeExecutor implements AgentExecutor {
   readonly type = "claude" as const;
   readonly label: string;
+  // 中转站的 env 前缀,token 已换成占位符 —— 存进 sessions.relay_env 供恢复命令展示。
+  readonly relayEnvHint?: string;
   private target: ExecTarget;
   private bin: string;
   private model?: string;
   private extraArgs: string[];
   private reasoningEffort?: string;
   private speed?: "fast";
-  constructor(opts: { model?: string; extraArgs?: string[]; reasoningEffort?: string; speed?: "fast"; bin?: string; target?: ExecTarget; name?: string } = {}) {
+  private relay?: RelayConfig;
+  constructor(opts: { model?: string; extraArgs?: string[]; reasoningEffort?: string; speed?: "fast"; bin?: string; target?: ExecTarget; name?: string; relay?: RelayConfig } = {}) {
     this.model = opts.model;
     this.extraArgs = opts.extraArgs ?? [];
     this.reasoningEffort = opts.reasoningEffort;
     this.speed = opts.speed;
     this.bin = opts.bin ?? "claude";
     this.target = opts.target ?? { kind: "local" };
+    this.relay = opts.relay;
+    this.relayEnvHint = this.relay
+      ? `ANTHROPIC_BASE_URL=${this.relay.baseUrl} ANTHROPIC_AUTH_TOKEN=<你的key> `
+      : undefined;
     const where = this.target.kind === "ssh" ? this.target.host : "local";
     this.label = opts.name ?? `claude@${where}${opts.model ? "·" + opts.model : ""}`;
   }
 
   resumeCommand(cwd: string, sessionId: string): string {
-    return resumeFor(this.target, cwd, resumeInner.claude(sessionId));
+    return resumeFor(this.target, cwd, resumeInner.claude(sessionId), this.relayEnvHint ?? "");
+  }
+
+  // 挂了中转站就顶掉 CLI 自己的登录态:BASE_URL 指到中转站根地址,AUTH_TOKEN 给它的 key。
+  private env(): Record<string, string> | undefined {
+    if (!this.relay) return undefined;
+    return { ANTHROPIC_BASE_URL: this.relay.baseUrl, ANTHROPIC_AUTH_TOKEN: this.relay.apiKey };
   }
 
   run(opts: RunOpts): RunHandle {
@@ -52,8 +65,8 @@ export class ClaudeExecutor implements AgentExecutor {
     if (this.extraArgs.length) args.push(...this.extraArgs);
     if (opts.extraArgs?.length) args.push(...opts.extraArgs);
 
-    const commandLine = `${this.bin} ${args.join(" ")} <prompt via stdin>`;
-    const child = spawnAgent(this.target, opts.cwd, this.bin, args, opts.prompt);
+    const commandLine = redactSecrets(`${this.bin} ${args.join(" ")} <prompt via stdin>`);
+    const child = spawnAgent(this.target, opts.cwd, this.bin, args, opts.prompt, this.env());
     return { sessionId, commandLine, events: parseClaudeStream(child), kill: () => killChild(child) };
   }
 }

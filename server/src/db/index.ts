@@ -125,6 +125,8 @@ export async function ensureSchema() {
     "ALTER TABLE agents ADD COLUMN reasoning_effort TEXT",
     "ALTER TABLE groups ADD COLUMN coordinator_task_id TEXT",
     "ALTER TABLE tasks ADD COLUMN question TEXT",
+    "ALTER TABLE agents ADD COLUMN provider_id TEXT",
+    "ALTER TABLE sessions ADD COLUMN relay_env TEXT",
   ]) {
     try {
       await client.execute(sql);

@@ -23,6 +23,9 @@ export interface AgentExecutorProfile {
   // 速度档。缺省/"standard" = 标准（不额外传参，跟随 CLI 自己的默认）；
   // "fast" = 1.5x 加速档（codex: -c service_tier="priority"）。
   speed?: "standard" | "fast";
+  // 挂载的中转站(LlmProvider.id)。缺省/null = 用 CLI 自己的官方登录账号。
+  // 非空时启动 CLI 前注入中转站的 base_url + key(见 executors/index.ts)。
+  providerId?: string | null;
   isDefault: boolean; // the default executor resolved for its type
 }
 
@@ -186,23 +189,22 @@ export interface Task {
 export type IssueStatus = "open" | "in_progress" | "done" | "canceled";
 export const ISSUE_STATUSES: IssueStatus[] = ["open", "in_progress", "done", "canceled"];
 
-// Which AI handled the parse/recognition for an issue. CLI = a local executor
-// (claude/codex/…, has tools); API = a configured direct-LLM connection (LlmProvider,
-// text-only — fine for parsing, NOT for execution). Execution always uses CLI.
-export type AiBackend =
-  | { kind: "cli"; agentType: AgentType }
-  | { kind: "api"; providerId: string };
+// Which AI handled the parse/recognition for an issue — always a concrete local
+// CLI executor (AgentExecutorProfile.id). There is no direct-HTTP path: a 中转站
+// is just an attribute of an executor, not a separate backend.
+// 历史数据里的旧格式({kind:'cli'|'api',…})没有 executorId,读到就降级为默认执行者。
+export type AiBackend = { executorId: string };
 
-// ── Direct-LLM connections (中转站, system-level) ────────────────────────────
-// A configured way to call a model over HTTP — an official endpoint OR a relay
-// (中转站): pick the wire protocol, fill the base URL + API key + a model. Global
-// (not per-project). Used ONLY for issue parsing, never for execution.
+// ── 中转站 (relay, system-level) ─────────────────────────────────────────────
+// 一个可挂到执行者上的模型来源:官方端点或第三方中转站。挂上后启动 CLI 时注入
+// base_url + key,顶掉 CLI 自己的登录账号 —— 于是 claude@官方 和 claude@公司
+// 可以并存。全局(不分项目)。harness 自己不再直连它调模型。
 export type LlmProtocol = "anthropic" | "openai";
 export interface LlmProvider {
   id: string;
   name: string;
-  protocol: LlmProtocol; // anthropic-compatible (/messages) | openai-compatible (/chat/completions)
-  baseUrl: string; // e.g. https://api.openai.com/v1 — or a relay's base, version path included
+  protocol: LlmProtocol; // anthropic-compatible (挂 claude) | openai-compatible (挂 codex)
+  baseUrl: string; // 根地址,不含 /v1 —— e.g. https://your-relay.com
   model: string;
   hasKey: boolean; // the key itself is never sent to the client; only whether one is set
   createdAt: string;

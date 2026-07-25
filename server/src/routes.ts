@@ -178,6 +178,7 @@ const toAgent = (r: typeof agents.$inferSelect) => ({
   extraArgs: JSON.parse(r.extraArgs),
   reasoningEffort: r.reasoningEffort ?? undefined,
   speed: r.speed ?? undefined,
+  providerId: r.providerId ?? null,
   isDefault: r.isDefault,
 });
 
@@ -198,6 +199,7 @@ api.post("/agents", async (c) => {
     reasoningEffort: b.reasoningEffort || null,
     // 只落 "fast";"standard"/空 归一成 null(标准=不传参,单一表示)
     speed: b.speed === "fast" ? "fast" : null,
+    providerId: b.providerId || null,
     isDefault: !!b.isDefault,
   };
   // a type has at most one default
@@ -218,6 +220,7 @@ api.patch("/agents/:id", async (c) => {
   if (b.extraArgs !== undefined) patch.extraArgs = JSON.stringify(b.extraArgs);
   if (b.reasoningEffort !== undefined) patch.reasoningEffort = b.reasoningEffort || null;
   if (b.speed !== undefined) patch.speed = b.speed === "fast" ? "fast" : null;
+  if (b.providerId !== undefined) patch.providerId = b.providerId || null;
   if (b.isDefault === true) {
     await db.update(agents).set({ isDefault: false }).where(eq(agents.type, existing.type));
     patch.isDefault = true;
@@ -310,7 +313,7 @@ const toSession = (r: typeof sessions.$inferSelect): Session => ({
   // Recompute the copy-paste resume command from the session's own fields, so it
   // always reflects the current format (old rows stored a now-outdated string).
   resumeCommand: r.cliSessionId
-    ? resumeCommandFor(r.agentType, r.target, r.cwd ?? r.worktreePath ?? ".", r.cliSessionId)
+    ? resumeCommandFor(r.agentType, r.target, r.cwd ?? r.worktreePath ?? ".", r.cliSessionId, r.relayEnv)
     : r.resumeCommand,
 });
 
@@ -1229,6 +1232,18 @@ api.delete("/tasks/:id/schedule", async (c) => {
 });
 
 // ── issues (planning/discussion layer upstream of tasks) ─────────────────────
+// 历史数据降级:老格式是 {kind:'cli',agentType} / {kind:'api',providerId},没有
+// executorId。读到就当「没记过执行者」→ 解析退回默认执行者,不报错。
+const parseBackend = (raw: string | null): AiBackend | null => {
+  if (!raw) return null;
+  try {
+    const v = JSON.parse(raw) as Partial<AiBackend>;
+    return typeof v?.executorId === "string" ? { executorId: v.executorId } : null;
+  } catch {
+    return null;
+  }
+};
+
 const toIssue = (r: typeof issues.$inferSelect): Issue => ({
   id: r.id,
   projectId: r.projectId,
@@ -1239,7 +1254,7 @@ const toIssue = (r: typeof issues.$inferSelect): Issue => ({
   priority: r.priority as Priority,
   labels: JSON.parse(r.labels),
   attachments: JSON.parse(r.attachments),
-  aiBackend: r.aiBackend ? (JSON.parse(r.aiBackend) as AiBackend) : null,
+  aiBackend: parseBackend(r.aiBackend),
   parsed: r.parsed,
   createdAt: r.createdAt,
   updatedAt: r.updatedAt,
@@ -1312,17 +1327,9 @@ api.post("/issues", async (c) => {
   const b = await c.req.json<{ text?: string; backend?: AiBackend | null; projectId?: string | null; attachments?: string[] }>();
   if (!b.text?.trim()) return c.json({ error: "text required" }, 400);
   const projs = await db.select().from(projects);
-  // For the direct-LLM backend, resolve the chosen connection (with its key) and
-  // hand it to parseIssue; CLI backends ignore this.
-  let apiProvider: { protocol: LlmProtocol; baseUrl: string; apiKey: string; model: string } | undefined;
-  if (b.backend?.kind === "api") {
-    const row = (await db.select().from(llmProviders).where(eq(llmProviders.id, b.backend.providerId))).at(0);
-    if (row) apiProvider = { protocol: row.protocol as LlmProtocol, baseUrl: row.baseUrl, apiKey: row.apiKey, model: row.model };
-  }
   const parsed = await parseIssue(b.text.trim(), {
     backend: b.backend ?? null,
     projects: projs.map((p) => ({ id: p.id, name: p.name, repoPath: p.repoPath })),
-    apiProvider,
   });
   const projectId = b.projectId !== undefined ? b.projectId : parsed.projectId;
   const ts = now();
@@ -1433,15 +1440,10 @@ api.post("/issues/:id/comments", async (c) => {
       });
     const ctx = { issueTitle: issue.title, issueBody: issue.body, history, mention: crow.body };
 
-    // 意图分类:跟 parseIssue 同一条路(issue 上记录的 backend,api 优先失败降 claude)。
+    // 意图分类:跟 parseIssue 同一条路(issue 上记录的执行者)。
     // 拿不准/失败/超时一律 discuss —— 讨论便宜可逆,execute 一旦派出任务收不回。
-    const backend = issue.aiBackend ? (JSON.parse(issue.aiBackend) as AiBackend) : null;
-    let apiProvider: { protocol: LlmProtocol; baseUrl: string; apiKey: string; model: string } | undefined;
-    if (backend?.kind === "api") {
-      const row = (await db.select().from(llmProviders).where(eq(llmProviders.id, backend.providerId))).at(0);
-      if (row) apiProvider = { protocol: row.protocol as LlmProtocol, baseUrl: row.baseUrl, apiKey: row.apiKey, model: row.model };
-    }
-    const intent = await classifyMention(ctx, { backend, apiProvider });
+    const backend = parseBackend(issue.aiBackend);
+    const intent = await classifyMention(ctx, { backend });
 
     const proj = (await db.select().from(projects).where(eq(projects.id, issue.projectId))).at(0);
 
@@ -1556,7 +1558,7 @@ api.get("/tasks/:id/commits", async (c) => {
   return c.json(await taskCommits(sess.worktreePath, project.repoPath, t.worktreeBase));
 });
 
-// ── direct-LLM connections (中转站, system-level) — for issue parsing only ────
+// ── 中转站 (relay, system-level) — 挂给执行者用,harness 不直连它跑推理 ────────
 const toProvider = (r: typeof llmProviders.$inferSelect): LlmProvider => ({
   id: r.id,
   name: r.name,
@@ -1569,8 +1571,8 @@ const toProvider = (r: typeof llmProviders.$inferSelect): LlmProvider => ({
 
 api.get("/llm-providers", async (c) => c.json((await db.select().from(llmProviders)).map(toProvider)));
 
-// Probe the available models for a connection. Used by the 设置 form to pick a
-// default model. Accepts ad-hoc creds {protocol, baseUrl, apiKey} for the add
+// Probe the available models for a connection. Used by the 智能体执行器 form to
+// pick a default model. Accepts ad-hoc creds {protocol, baseUrl, apiKey} for the add
 // form; if `id` is given and apiKey is omitted, the stored key is used (the key is
 // never sent to the client, so editing an existing row reuses it).
 api.post("/llm-providers/models", async (c) => {
@@ -1629,7 +1631,10 @@ api.patch("/llm-providers/:id", async (c) => {
 });
 
 api.delete("/llm-providers/:id", async (c) => {
-  await db.delete(llmProviders).where(eq(llmProviders.id, c.req.param("id")));
+  const pid = c.req.param("id");
+  await db.delete(llmProviders).where(eq(llmProviders.id, pid));
+  // 挂着它的执行者退回官方账号 —— 留悬空 id 会让「中转站」下拉显示成空白选项。
+  await db.update(agents).set({ providerId: null }).where(eq(agents.providerId, pid));
   return c.json({ deleted: true });
 });
 
