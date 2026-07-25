@@ -128,10 +128,11 @@ export async function runGroup(groupId: string): Promise<void> {
 // 就破坏了 resume 顺序)。canceled / failed 也不在这里被
 // 批量唤起 —— 那是 P0d-fY_Zi4RC 那个事故的根因(DESIGN §0 #3)。
 // 例外:「组暂停打断」的 paused(无 resumePrompt 无 question——唯一来源就是
-// group pause 杀掉 running 任务)且不在任何 queue 里的,恢复分组时在这里续跑;
-// 在 queue 里的同类交给末尾的 advanceQueue 按顺序处理。
-// 启动后立刻对该 group 关联的所有 queue 调一次 advanceQueue,把"恰好是 head
-// 的 paused"task 资源化掉。
+// group pause 杀掉 running 任务),恢复分组时在这里续跑。
+// 在 queue 里的任务(含 backlog)一律不在这里启动——parallel group 也可能
+// 挂着 queue(混合形态:queue 表达完成顺序,mode 表达初始启动方式,两者正交,
+// 见 migrateQueues),并行拉起会破坏队列顺序;统一交给末尾的 advanceQueue
+// 按位置逐个拉起。
 async function runParallel(groupId: string): Promise<void> {
   const groupRows = await db.select().from(tasks).where(eq(tasks.groupId, groupId));
   const items = await db
@@ -142,8 +143,9 @@ async function runParallel(groupId: string): Promise<void> {
   const launchable = groupRows.filter(
     (t) =>
       !t.archived &&
+      !inQueue.has(t.id) &&
       (t.status === "backlog" ||
-        (t.status === "paused" && !t.resumePrompt && !t.question && !inQueue.has(t.id))),
+        (t.status === "paused" && !t.resumePrompt && !t.question)),
   );
 
   if (launchable.length) {

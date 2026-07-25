@@ -19,7 +19,7 @@ const { db } = await import("../src/db/index.js");
 const { tasks, groups, projects, queueItems } = await import("../src/db/schema.js");
 const { ensureSchema } = await import("../src/db/index.js");
 const { migrateQueues } = await import("../src/db/migrateQueues.js");
-const { pickNextLaunchable } = await import("../src/scheduler.js");
+const { pickNextLaunchable, runGroup } = await import("../src/scheduler.js");
 const { setTaskStatus } = await import("../src/status.js");
 const { id, now } = await import("../src/util.js");
 
@@ -412,7 +412,32 @@ await test("setTaskStatus(paused) 但不在 head → 不推进", async () => {
   assertEq(cRow.status, "paused", "前面 b 还在 running,c 必须保持 paused");
 });
 
-// ── 5. 总结 ────────────────────────────────────────────────────────
+// ── 5. runGroup(parallel): queue 内任务不被并行拉起 ─────────────────
+
+await test("runGroup(parallel): queue 内 backlog 不被并行拉起,队外 backlog 照常启动", async () => {
+  // parallel group + queue 是合法混合形态(queue 表达完成顺序,mode 表达
+  // 初始启动方式,见上面迁移测试)。回归:runParallel 曾把 queue 里的 backlog
+  // 全部并行拉起,破坏队列顺序——它们必须留给 advanceQueue 按位置逐个拉。
+  // head 设成 running 挡住队列推进,让 b/c 的状态断言不受链式结算干扰。
+  const p = await seedProject();
+  const g = await seedGroup(p.id, "parallel");
+  const a = await seedTask(p.id, g.id, { title: "a", status: "running" });
+  const b = await seedTask(p.id, g.id, { title: "b" });
+  const c = await seedTask(p.id, g.id, { title: "c" });
+  const d = await seedTask(p.id, g.id, { title: "d" }); // 队外独立任务
+  await seedQueue([a.id, b.id, c.id]);
+  await runGroup(g.id).catch(() => {});
+  await new Promise((r) => setTimeout(r, 100));
+  const row = async (tid: string) =>
+    (await db.select().from(tasks).where(eq(tasks.id, tid))).at(0)!;
+  assertEq((await row(a.id)).status, "running", "head a 在跑,不该被动");
+  assertEq((await row(b.id)).status, "backlog", "queue 内 b 必须留在 backlog 等推进");
+  assertEq((await row(c.id)).status, "backlog", "queue 内 c 必须留在 backlog 等推进");
+  const dStatus = (await row(d.id)).status;
+  assertTrue(dStatus !== "backlog", `队外 d 应被并行启动(非 backlog),实际=${dStatus}`);
+});
+
+// ── 6. 总结 ────────────────────────────────────────────────────────
 
 console.log(`\n${pass} pass, ${fail} fail`);
 process.exit(fail > 0 ? 1 : 0);
