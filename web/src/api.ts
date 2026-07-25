@@ -229,7 +229,8 @@ export const api = {
   // server classifies intent: "execute" derives a task (returns task); "discuss"
   // spawns a one-shot CLI reply and returns a pending agent comment that gets
   // filled in by polling (the discussion view refreshes while status=pending).
-  postIssueComment: (id: string, body: { body: string; mention?: AgentType; attachments?: string[]; useWorktree?: boolean }): Promise<{ comment: IssueComment; task?: Task; agentComment?: IssueComment }> =>
+  // `mentionTeam`：被 @ 的那个类型当**指挥者**带一队（mode:"team"），而不是自己单干。
+  postIssueComment: (id: string, body: { body: string; mention?: AgentType; mentionTeam?: boolean; attachments?: string[]; useWorktree?: boolean }): Promise<{ comment: IssueComment; task?: Task; agentComment?: IssueComment }> =>
     fetch(`/api/issues/${id}/comments`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }).then(j),
   patchIssueComment: (issueId: string, cid: string, patch: { body?: string; attachments?: string[] }): Promise<IssueComment> =>
     fetch(`/api/issues/${issueId}/comments/${cid}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(patch) }).then(j),

@@ -41,6 +41,7 @@ import { detectLocalAgents } from "./detect.js";
 import { searchAll } from "./search.js";
 import { projectHealthLight, projectHealthFull, tidyRepoPath, repoKey, listBranches, detectTaskWorktree, removeWorktree, taskCommits } from "./git.js";
 import { resumeCommandFor } from "./executors/spawn.js";
+import { resolveExecutor } from "./executors/index.js";
 import type { GateAction, AgentType, BatchCreateTasksBody, BatchTaskInput, ScheduledMessage, ScheduledMessageStatus } from "@harness/shared";
 
 export const api = new Hono();
@@ -581,6 +582,9 @@ api.post("/tasks", async (c) => {
     agentType: b.agentType ?? null,
     autoTitle: b.autoTitle ?? false,
     debate: b.debate ? JSON.stringify(b.debate) : null,
+    // mode:"team" 的指挥者/默认工人类型(跟 debate 对称)。别漏 —— 漏了就静默退回
+    // TEAM_DEFAULTS,用户在启动器上挑的那两个旋钮全白挑。
+    team: b.team ? JSON.stringify(b.team) : null,
     scheduleId: null,
     createdAt: ts,
     updatedAt: ts,
@@ -1419,11 +1423,19 @@ api.post("/issues/:id/comments", async (c) => {
   const iid = c.req.param("id");
   const issue = (await db.select().from(issues).where(eq(issues.id, iid))).at(0);
   if (!issue) return c.json({ error: "not found" }, 404);
-  const b = await c.req.json<{ body?: string; mention?: AgentType; attachments?: string[]; useWorktree?: boolean }>();
+  const b = await c.req.json<{ body?: string; mention?: AgentType; mentionTeam?: boolean; attachments?: string[]; useWorktree?: boolean }>();
   if (!b.body?.trim() && !b.attachments?.length) return c.json({ error: "empty" }, 400);
   if (b.mention) {
     if (!AGENT_TYPES.includes(b.mention)) return c.json({ error: "未知的 agent（只支持本地 CLI 智能体）", agent: b.mention }, 400);
     if (!issue.projectId) return c.json({ error: "事项还没归到项目，先归类再 @ 智能体" }, 409);
+    // 「带一队」= 派一个团队任务,被 @ 的那个类型当指挥者 —— 它得支持常驻会话。
+    // 在这儿挡住比等到 startTeam 里 throw 好:那时候任务已经建出来了,用户只看到一个
+    // 刚生下来就 failed 的团队。
+    if (b.mentionTeam) {
+      const lead = await resolveExecutor(b.mention).catch(() => null);
+      if (!lead?.openResident)
+        return c.json({ error: `@${b.mention} 不支持常驻会话，当不了指挥者（换 @claude 带队）`, agent: b.mention }, 400);
+    }
   }
   const ts = now();
   const crow = {
@@ -1502,7 +1514,10 @@ api.post("/issues/:id/comments", async (c) => {
       })();
     } else {
       // execute: 建 task,worktree 按 opt-in,立即开跑。跟原来一致。
-      const useWt = !!b.useWorktree && (proj ? projectHealthLight(proj.repoPath).isRepo : false);
+      // `mentionTeam`(界面上的「@claude · 带一队」)只换一件事:建出来的是 mode:"team"
+      // 的常驻指挥台,它自己拆活派工人。团队不给指挥台开 worktree(工人是各自独立的任务、
+      // 跑在项目目录,只把指挥者挪走会让两边看到不同的文件),隔离留给它派活时逐个开。
+      const useWt = !b.mentionTeam && !!b.useWorktree && (proj ? projectHealthLight(proj.repoPath).isRepo : false);
       const tid = id();
       const trow = {
         id: tid,
@@ -1511,7 +1526,7 @@ api.post("/issues/:id/comments", async (c) => {
         parentId: null as string | null,
         title: issue.title,
         body: issueContext(issue, allComments),
-        mode: "single",
+        mode: b.mentionTeam ? "team" : "single",
         status: "backlog",
         priority: issue.priority,
         labels: "[]",
@@ -1520,6 +1535,8 @@ api.post("/issues/:id/comments", async (c) => {
         agentType: b.mention as AgentType,
         autoTitle: false,
         debate: null as string | null,
+        // 被 @ 的类型当指挥者;工人缺省同类型(指挥者派活时可逐个改)
+        team: b.mentionTeam ? JSON.stringify({ lead: b.mention, worker: b.mention }) : null,
         scheduleId: null as string | null,
         createdAt: ts,
         updatedAt: ts,
