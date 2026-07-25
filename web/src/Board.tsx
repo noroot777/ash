@@ -3,12 +3,17 @@ import { isUserSettableStatus, canArchive } from "@harness/shared";
 import { STATUSES } from "./constants";
 import { PriorityIcon, PauseHint } from "./ui";
 import { StatusIcon } from "./StatusIcon";
-import { pairBadge } from "./util";
+import { foldTeamStatus, pairBadge } from "./util";
+import { workersOf } from "./team/teamData";
+
+// paused/idle 不单独成列 —— 它们视觉上都属于"进行中"的一种（跑到检查点等续跑 /
+// 指挥台在线但这一刻没在说话），跟 running 同住一列；卡片本身用 StatusIcon 区分。
+const IN_RUNNING: TaskStatus[] = ["running", "paused", "idle"];
 
 // Kanban board: one column per status, drag a card across columns to change its
 // status. Clicking a card opens it (switches back to list+detail).
-// paused 不单独成列 —— 它在视觉上属于"进行中"的一种（跑到检查点等续跑），
-// 跟 running 同住一列；卡片本身用 StatusIcon + PauseHint 区分。
+// 团队任务只上一张卡（指挥台那张）；它的工人（parentId 非空）不上板 —— 一次派 6 个
+// 工人会把板冲垮，工人在团队视图/列表展开里看。
 export function Board({
   tasks,
   onMove,
@@ -18,12 +23,13 @@ export function Board({
   onMove: (id: string, status: TaskStatus) => void;
   onOpen: (id: string) => void;
 }) {
-  const columns = STATUSES.filter((s) => s.key !== "paused");
+  const columns = STATUSES.filter((s) => s.key === "running" || !IN_RUNNING.includes(s.key));
+  const onBoard = tasks.filter((t) => !t.parentId);
   return (
     <div className="flex h-full gap-3 overflow-x-auto px-4 py-4">
       {columns.map((s) => {
-        const col = tasks.filter((t) =>
-          s.key === "running" ? t.status === "running" || t.status === "paused" : t.status === s.key,
+        const col = onBoard.filter((t) =>
+          s.key === "running" ? IN_RUNNING.includes(t.status) : t.status === s.key,
         );
         // running/queued/awaiting_review are system-owned — you can't drop a card
         // into them by hand (that would fake an execution state).
@@ -58,12 +64,8 @@ export function Board({
                     <span className="mt-0.5">
                       <PriorityIcon p={t.priority} />
                     </span>
-                    {/* paused 任务在 running 列里靠图标自我标识 */}
-                    {t.status === "paused" && (
-                      <span className="mt-0.5">
-                        <StatusIcon status="paused" size={13} />
-                      </span>
-                    )}
+                    {/* running 列里混住 running/paused/idle，卡片自己把状态画出来 */}
+                    <CardStatus t={t} allTasks={tasks} />
                     <span className="text-sm leading-snug text-ink">{t.title}</span>
                   </div>
                   <PauseHint task={t} allTasks={tasks} onOpen={onOpen} />
@@ -93,5 +95,25 @@ export function Board({
         );
       })}
     </div>
+  );
+}
+
+// 卡片左上角那个状态点。纯 running 不用画（列头已经说了），paused/idle 得画，因为它们
+// 跟 running 挤在同一列里。团队卡画的是**折叠**状态：指挥台待命着、但某个工人卡在提问
+// 上时，这张卡要亮青色问号，别让它看着像没事。
+function CardStatus({ t, allTasks }: { t: Task; allTasks: Task[] }) {
+  if (t.mode === "team") {
+    const fold = foldTeamStatus(t, workersOf(allTasks, t.id));
+    return (
+      <span className="mt-0.5">
+        <StatusIcon status={fold.status} size={13} awaitingAnswer={fold.awaitingAnswer} />
+      </span>
+    );
+  }
+  if (t.status !== "paused" && t.status !== "idle") return null;
+  return (
+    <span className="mt-0.5">
+      <StatusIcon status={t.status} size={13} />
+    </span>
   );
 }
