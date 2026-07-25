@@ -100,14 +100,22 @@ export function App() {
               : t,
           ),
         );
-        if (ev.status === "done" || ev.status === "failed" || ev.status === "canceled") setSessionsBump((n) => n + 1);
+        // idle 也算「一段跑完了」：团队指挥台一个回合结束就落 idle，会话行这时才写上
+        // endedAt，刷一下 sessions 气泡的用时才停止跳动。
+        if (ev.status === "done" || ev.status === "failed" || ev.status === "canceled" || ev.status === "idle")
+          setSessionsBump((n) => n + 1);
         setTaskBump((n) => n + 1); // keep an open issue's derived-task list live
       } else if (ev.type === "task.title") {
         setTasks((ts) => ts.map((t) => (t.id === ev.taskId ? { ...t, title: ev.title } : t)));
       } else if (ev.type === "agent.event") {
-        if (ev.role === "single") {
+        // 团队指挥台(role:"lead")跟单任务共用一条日志流:它的回合、用户插话、工人汇报
+        // 在 TeamFeed 里用的就是 Conversation.tsx 那套气泡。
+        if (ev.role === "single" || ev.role === "lead") {
           const line = renderEvent(ev.event, ev.agentType, ev.sessionId);
-          if (line) setLogs((m) => ({ ...m, [ev.taskId]: [...(m[ev.taskId] ?? []), line] }));
+          // 指挥台进程退出不等于任务结束(空闲回收、意外退出都会发 done),系统提示里已经
+          // 说清楚了;.md 里也没有这一行,插了刷新后就不一致。
+          if (line && !(ev.role === "lead" && line.kind === "done"))
+            setLogs((m) => ({ ...m, [ev.taskId]: [...(m[ev.taskId] ?? []), line] }));
         } else {
           setDebates((m) => ({ ...m, [ev.taskId]: applyDebateEvent(m[ev.taskId] ?? emptyDebate(), ev) }));
         }

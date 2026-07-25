@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import type { Task, Group, Session, TaskStatus, Priority, AgentType } from "@harness/shared";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import type { Task, Group, TaskStatus, Priority, AgentType } from "@harness/shared";
 import { isUserSettableStatus, canArchive } from "@harness/shared";
 import { CaretDown, Play, Stop, Trash, ArrowsClockwise, DownloadSimple, ListNumbers } from "@phosphor-icons/react";
 import { api } from "./api";
@@ -15,7 +15,8 @@ import { toast } from "./toast";
 import { groupLabel } from "./util";
 import { TaskTimeChip } from "./time";
 // 会话渲染与插话框已拆成独立模块(/team 也复用它们)。
-import { buildConversation, Conversation, conversationToText, downloadConversation, type LogLine } from "./Conversation";
+import { Conversation, conversationToText, downloadConversation, type LogLine } from "./Conversation";
+import { useConversation } from "./useConversation";
 import { ReplyBox } from "./ReplyBox";
 export type { LogLine } from "./Conversation";
 
@@ -50,45 +51,20 @@ export function TaskDetail({
   onArchive: () => void;
   onUnarchive: () => void;
 }) {
-  const [sessions, setSessions] = useState<Session[]>([]);
-  const [snapshot, setSnapshot] = useState<{ s: Session; out: string }[]>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
-    api.sessions(task.id).then(setSessions);
-  }, [task.id, sessionsBump]);
-
-  // Snapshot of prior output, taken once per task when there are no in-memory
-  // live logs (i.e. a reload / fresh navigation). Per session, so each run
-  // becomes its own bubble carrying its own resume credential. Sticky: a later
-  // reply (which fills logs) must not wipe it, so prior context stays above the
-  // new turns.
-  useEffect(() => {
-    setSnapshot([]);
-    if (logs.length > 0) return;
-    let alive = true;
-    api.sessions(task.id).then(async (ss) => {
-      const withOut = await Promise.all(
-        ss.map(async (s) => ({ s, out: await api.sessionOutput(s.id).catch(() => "") })),
-      );
-      if (alive) setSnapshot(withOut.filter(({ out }) => out.trim()));
-    });
-    return () => {
-      alive = false;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [task.id]);
+  // 拉会话 + 快照历史输出 + 拼条目流,都在 useConversation 里(/team 指挥台共用同
+  // 一份装配,免得两个界面的「刷新后 vs 实时」各自漂移)。
+  const { items, sessions, snapshot } = useConversation({
+    task,
+    logs,
+    sessionsBump,
+    primaryAgent: task.agentType ?? "claude",
+  });
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
   }, [logs.length, snapshot.length]);
-
-  // The conversation, assembled once here so the header's copy/export and the body
-  // bubbles share exactly one source of truth.
-  const items = useMemo(
-    () => buildConversation({ task, snapshot, logs, sessions, primaryAgent: task.agentType ?? "claude" }),
-    [task, snapshot, logs, sessions],
-  );
 
   // 任务在哪条 queue 第几位?——allTasks 过滤了 archived,但归档任务仍占队列位置,
   // 所以直接调 API 拿队列总长度,免得 N/M 里的 M 偏少。
@@ -211,8 +187,8 @@ export function TaskDetail({
             click 展开 for the full text). */}
         {task.body && <CollapsibleText text={task.body} />}
 
-        {/* 编排组提问:agent 调 ask_question 后停在这等答案(队列陪等,不会
-            自动续跑)。协调者通常会自动来答;用户也可以直接在这里答复唤醒。 */}
+        {/* agent 提问:调 ask_question 后停在这等答案(队列陪等,不会自动续跑)。
+            团队模式下指挥者通常会自动来答;用户也可以直接在这里答复唤醒。 */}
         {task.question && <QuestionCard task={task} />}
 
         {/* 检查点续跑：paused 时露出 resumePrompt（agent 留下的「下次喂我什么」），
@@ -360,7 +336,8 @@ function Prop({
 }
 
 // Inline-editable task title (click in, type, Enter/blur saves; Esc reverts).
-function EditableTitle({ title, onSave }: { title: string; onSave: (t: string) => void }) {
+// 导出给 /team 的 header 复用 —— 团队任务的标题也当场改。
+export function EditableTitle({ title, onSave }: { title: string; onSave: (t: string) => void }) {
   const [v, setV] = useState(title);
   const [editing, setEditing] = useState(false);
   useEffect(() => {
@@ -392,11 +369,12 @@ function EditableTitle({ title, onSave }: { title: string; onSave: (t: string) =
   );
 }
 
-// 编排组提问卡片:agent 调 ask_question 后任务停在 paused 等答案(队列陪等,
-// pickNextLaunchable 不会空手唤醒它)。协调者收到通知后通常会自动答;这里给
-// 用户一个手动答复入口 —— 没配协调者的组全靠它。回合还没结算完(running/
-// queued)时 server 会 409,按钮先禁用。
-function QuestionCard({ task }: { task: Task }) {
+// 提问卡片:agent 调 ask_question 后任务停在 paused 等答案(队列陪等,
+// pickNextLaunchable 不会空手唤醒它)。团队模式下指挥者收到通知后通常会自动答;
+// 这里给用户一个手动答复入口 —— 没有指挥者的普通任务全靠它。**指挥者自己也会用
+// 这张卡**(它调 ask_question 问用户时),所以导出给 /team 复用。回合还没结算完
+// (running/queued)时 server 会 409,按钮先禁用。
+export function QuestionCard({ task }: { task: Task }) {
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const settling = task.status === "running" || task.status === "queued";

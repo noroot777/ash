@@ -23,7 +23,22 @@ function toLocalInput(d: Date): string {
 // same task (same working directory). Images can be pasted in too. The clock
 // button schedules the reply for a future time (scheduled_messages); pending ones
 // are listed above the input and can be canceled before they fire.
-export function ReplyBox({ taskId, onReply, disabled }: { taskId: string; onReply: (text: string, opts?: { attachments?: string[]; agent?: AgentType }) => void; disabled: boolean }) {
+export function ReplyBox({
+  taskId,
+  onReply,
+  disabled,
+  mention = true,
+  placeholder = "回复并继续（⌘↵ 发送，可粘贴图片或文件，@ 召唤其它智能体）…",
+  disabledPlaceholder = "进行中…",
+}: {
+  taskId: string;
+  onReply: (text: string, opts?: { attachments?: string[]; agent?: AgentType }) => void;
+  disabled: boolean;
+  /** 关掉 @ 召唤(/team 的插话永远是给指挥者的,换执行者没有意义)。 */
+  mention?: boolean;
+  placeholder?: string;
+  disabledPlaceholder?: string;
+}) {
   const [v, setV] = useState("");
   const [target, setTarget] = useState<AgentType | null>(null);
   const [mIdx, setMIdx] = useState(0);
@@ -41,7 +56,7 @@ export function ReplyBox({ taskId, onReply, disabled }: { taskId: string; onRepl
 
   // @-mention: when an "@word" token sits at the end of the text, offer the agent
   // list. Choosing one assigns the reply to that agent and strips the token.
-  const mMatch = /(?:^|\s)@(\w*)$/.exec(v);
+  const mMatch = mention ? /(?:^|\s)@(\w*)$/.exec(v) : null;
   const cands = mMatch ? AGENT_TYPES.filter((a) => a.startsWith((mMatch[1] ?? "").toLowerCase())) : [];
   const mentionOpen = !disabled && !!mMatch && cands.length > 0;
 
@@ -176,7 +191,7 @@ export function ReplyBox({ taskId, onReply, disabled }: { taskId: string; onRepl
           }}
           rows={2}
           disabled={disabled}
-          placeholder={disabled ? "进行中…" : "回复并继续（⌘↵ 发送，可粘贴图片或文件，@ 召唤其它智能体）…"}
+          placeholder={disabled ? disabledPlaceholder : placeholder}
           className="flex-1 resize-none rounded-md border border-line bg-panel px-2.5 py-1.5 text-[13px] text-ink outline-none placeholder:text-faint focus:border-accent disabled:opacity-50"
         />
         <button

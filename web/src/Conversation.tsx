@@ -209,22 +209,29 @@ export function downloadConversation(items: ConvItem[], task: Task) {
 export function Conversation({ items }: { items: ConvItem[] }) {
   return (
     <>
-      {items.map((it, i) => {
-        if (it.kind === "user") return <UserBubble key={i} text={it.text} at={it.at} />;
-        if (it.kind === "system") return <SystemNote key={i} text={it.text} at={it.at} />;
-        if (it.kind === "done") return <div key={i} className="my-2 text-center text-xs text-faint">{it.text}</div>;
-        const nodes = [
-          ...(it.snapshotText ? [<Markdown key="snap" text={it.snapshotText} />] : []),
-          ...groupContent(it.lines),
-        ];
-        if (!nodes.length) return null;
-        return (
-          <AgentBubble key={i} label={it.label} time={it.time} endedAt={it.endedAt} session={it.session} showResume={it.showResume} copyText={itemBodyText(it)}>
-            {nodes}
-          </AgentBubble>
-        );
-      })}
+      {items.map((it, i) => (
+        <ConvBubble key={i} item={it} />
+      ))}
     </>
+  );
+}
+
+// 单个会话条目 → 气泡。抽成组件是因为 /team 的流(web/src/team/TeamFeed.tsx)要在
+// 同一串条目里插自己的东西(派活卡、入站气泡),没法整段交给 <Conversation>,但气泡
+// 长相必须一模一样。
+export function ConvBubble({ item: it }: { item: ConvItem }) {
+  if (it.kind === "user") return <UserBubble text={it.text} at={it.at} />;
+  if (it.kind === "system") return <SystemNote text={it.text} at={it.at} />;
+  if (it.kind === "done") return <div className="my-2 text-center text-xs text-faint">{it.text}</div>;
+  const nodes = [
+    ...(it.snapshotText ? [<Markdown key="snap" text={it.snapshotText} />] : []),
+    ...groupContent(it.lines),
+  ];
+  if (!nodes.length) return null;
+  return (
+    <AgentBubble label={it.label} time={it.time} endedAt={it.endedAt} session={it.session} showResume={it.showResume} copyText={itemBodyText(it)}>
+      {nodes}
+    </AgentBubble>
   );
 }
 

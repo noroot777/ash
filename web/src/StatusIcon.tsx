@@ -23,6 +23,12 @@ const COLOR: Record<TaskStatus, string> = {
 
 const ATTENTION = "#06b6d4"; // 「等你答复」专用青
 
+// 同一套配色的取值口 —— 给不能用 <StatusIcon> 的地方(/team 时间轴的色条)用,
+// 免得再抄一份色号出去漂移。
+export function statusColor(status: TaskStatus, awaitingAnswer?: boolean): string {
+  return awaitingAnswer ? ATTENTION : COLOR[status];
+}
+
 export function StatusIcon({
   status,
   size = 14,

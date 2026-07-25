@@ -87,6 +87,10 @@ export const api = {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ answer }),
     }).then(j),
+  // 「停止全组」:杀掉指挥台常驻进程 + 暂停它所有内部组(在跑的工人落 paused,
+  // 可从中断处恢复)。指挥者本身落 idle —— 再说一句话就把它接回同一会话。
+  teamHalt: (id: string): Promise<{ ok: true }> =>
+    fetch(`/api/tasks/${id}/team/halt`, { method: "POST" }).then(j),
   // Batch-create chained single tasks into an existing group (agent-facing API).
   createTasksBatch: (
     groupId: string,

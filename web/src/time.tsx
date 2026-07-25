@@ -37,7 +37,8 @@ export function durationText(from?: string | null, to?: string | null, nowMs?: n
 
 // Re-render once a second while `active` (so a live "用时" ticks). Returns the
 // current epoch ms each render. Hook order is stable (always called).
-function useTick(active: boolean): number {
+// Exported because /team 的时间轴也要按秒推进正在跑的色条。
+export function useTick(active: boolean): number {
   const [, bump] = useState(0);
   useEffect(() => {
     if (!active) return;

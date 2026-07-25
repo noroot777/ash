@@ -3,6 +3,7 @@ import { NotePencil } from "@phosphor-icons/react";
 import { TaskList } from "./TaskList";
 import { TaskDetail, type LogLine } from "./TaskDetail";
 import { DebateView } from "./DebateView";
+import { TeamView } from "./team/TeamView";
 import { Board } from "./Board";
 import { type DebateState, emptyDebate } from "./debateState";
 import { BranchChip, ResizeHandle } from "./ui";
@@ -142,6 +143,27 @@ export function TasksWorkspace({
                       onDelete={() => onDelete(current.id, current.title)}
                       onArchive={() => onArchive(current.id)}
                       onUnarchive={() => onUnarchive(current.id)}
+                    />
+                  ) : current.mode === "team" ? (
+                    // 团队模式:整张 logs 表都给它 —— 指挥者的流、每个工人卡片上的
+                    // 实时最后一行、抽屉里那个工人的会话,取的是不同任务的日志。
+                    <TeamView
+                      key={current.id}
+                      task={current}
+                      groups={groups}
+                      allTasks={visible}
+                      logs={logs}
+                      sessionsBump={sessionsBump}
+                      onRun={onRun}
+                      onStop={onStop}
+                      onRetry={onRetry}
+                      onReply={onReply}
+                      onPatch={onPatch}
+                      onCreateGroup={onCreateGroup}
+                      onDelete={onDelete}
+                      onArchive={onArchive}
+                      onUnarchive={onUnarchive}
+                      onSelect={onSelect}
                     />
                   ) : (
                     <TaskDetail
