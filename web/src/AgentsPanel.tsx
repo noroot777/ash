@@ -60,23 +60,36 @@ export function AgentsPanel({ onClose }: { onClose: () => void }) {
   const [relays, setRelays] = useState<LlmProvider[]>([]);
   const [detected, setDetected] = useState<Detected[] | null>(null);
   const [detecting, setDetecting] = useState(false);
+  // 本机装了哪些 CLI。null=还没探完(先按「只显示已注册的」渲染,避免闪一下又消失)。
+  // 与 detected 分开:detected 只在用户手动点「检测」时出结果面板,这个是静默的渲染依据。
+  const [avail, setAvail] = useState<Set<string> | null>(null);
   const reload = () => api.agents().then(setList);
   // 删中转站会把挂着它的执行者置回官方账号(服务端做的),所以中转站变了要连执行者一起刷。
   const reloadRelays = () => Promise.all([api.llmProviders().then(setRelays), reload()]).catch(() => {});
+  const probe = () =>
+    api.detectAgents().then((d) => {
+      setAvail(new Set(d.filter((x) => x.available).map((x) => x.type)));
+      return d;
+    });
   useEscape(onClose);
   useEffect(() => {
     reload();
     api.llmProviders().then(setRelays).catch(() => {});
+    probe().catch(() => setAvail(new Set()));
   }, []);
 
   const detect = async () => {
     setDetecting(true);
     try {
-      setDetected(await api.detectAgents());
+      setDetected(await probe());
     } finally {
       setDetecting(false);
     }
   };
+
+  // 只列「本机装了的」和「已经注册过执行者的」类型 —— 没装的 CLI 摆在这儿只是灰噪声,
+  // 想用得先装。已注册的恒显示(可能是 ssh 远端执行者,本机自然探不到)。
+  const shownTypes = TYPES.filter((t) => list.some((a) => a.type === t) || avail?.has(t));
 
   const registerDetected = async (d: Detected) => {
     const hasAny = list.some((a) => a.type === d.type);
@@ -155,7 +168,7 @@ export function AgentsPanel({ onClose }: { onClose: () => void }) {
           )}
 
           <div className="grid grid-cols-2 gap-x-6 gap-y-5">
-            {TYPES.map((type) => {
+            {shownTypes.map((type) => {
               const profiles = list.filter((a) => a.type === type);
               return (
                 <div key={type}>
@@ -173,6 +186,11 @@ export function AgentsPanel({ onClose }: { onClose: () => void }) {
               );
             })}
           </div>
+          {shownTypes.length === 0 && (
+            <p className="text-[12px] text-faint">
+              {avail === null ? "检测本地智能体中…" : "本机没找到已安装的智能体 CLI（claude / codex）。装好后点右上角「检测本地智能体」。"}
+            </p>
+          )}
 
           <div className="mt-5 border-t border-line pt-4">
             <RelaySection list={relays} onChange={reloadRelays} />
