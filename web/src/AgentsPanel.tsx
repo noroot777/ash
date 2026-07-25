@@ -53,6 +53,10 @@ const withDefault = (values: string[], detail = "跟随 CLI 默认"): MenuOption
 
 type Detected = { type: string; bin: string; available: boolean; path: string | null; version: string | null };
 
+// 中转站 → 模型全名列表。同一中转站的多个执行者共享,免得每行各拉一次;
+// 中转站被增删改时(reloadRelays)整体清掉,避免拿着旧地址/旧 key 的陈旧列表。
+const relayModelCache = new Map<string, string[]>();
+
 // Agent registry management (DESIGN.md §5): executor profiles under each type,
 // per-type default, local/ssh target, plus local-CLI detection.
 export function AgentsPanel({ onClose }: { onClose: () => void }) {
@@ -65,7 +69,10 @@ export function AgentsPanel({ onClose }: { onClose: () => void }) {
   const [avail, setAvail] = useState<Set<string> | null>(null);
   const reload = () => api.agents().then(setList);
   // 删中转站会把挂着它的执行者置回官方账号(服务端做的),所以中转站变了要连执行者一起刷。
-  const reloadRelays = () => Promise.all([api.llmProviders().then(setRelays), reload()]).catch(() => {});
+  const reloadRelays = () => {
+    relayModelCache.clear();
+    return Promise.all([api.llmProviders().then(setRelays), reload()]).catch(() => {});
+  };
   const probe = () =>
     api.detectAgents().then((d) => {
       setAvail(new Set(d.filter((x) => x.available).map((x) => x.type)));
@@ -214,36 +221,95 @@ const chipClass = (set: boolean) =>
 function ChipLabel({ label, value }: { label: string; value?: string }) {
   return (
     <>
-      <span className="text-faint">{label}</span>
-      {value && <span>{value}</span>}
+      <span className="shrink-0 text-faint">{label}</span>
+      {value && <span className="truncate">{value}</span>}
     </>
   );
 }
 
-// 模型下拉:预设 + header 自由输入(Enter 提交)。
-function ModelMenu({ type, value, onPick }: { type: AgentType; value?: string; onPick: (v: string) => void }) {
+// 模型下拉:没挂中转站时给 CLI 别名预设;挂了就列该中转站 /v1/models 拉到的**全名**
+// (claude-opus-4-5-20251101 这种)——中转站认的是它自己那套模型 id,别名多半不存在。
+// 两种情况都能在 header 里自由输入。
+function ModelMenu({
+  type,
+  relay,
+  value,
+  onPick,
+}: {
+  type: AgentType;
+  relay?: LlmProvider;
+  value?: string;
+  onPick: (v: string) => void;
+}) {
+  const [models, setModels] = useState<string[] | null>(relay ? relayModelCache.get(relay.id) ?? null : null);
+  const [err, setErr] = useState<string | null>(null);
+  // 当前值可能是手输的、或中转站换了以后列表里没有的,并进去免得看着像没选中
+  const listed = relay ? models ?? [] : MODEL_PRESETS[type];
+  const values = value && !listed.includes(value) ? [value, ...listed] : listed;
   return (
     <Menu
-      options={withDefault(MODEL_PRESETS[type], "跟随 CLI 配置的默认模型")}
+      options={withDefault(values, relay ? `跟随中转站默认模型` : "跟随 CLI 配置的默认模型")}
       value={value ?? ""}
       onChange={onPick}
-      menuWidth={230}
-      triggerClassName={chipClass(!!value)}
+      menuWidth={relay ? 300 : 230}
+      triggerClassName={`${chipClass(!!value)} max-w-[240px] overflow-hidden`}
       header={({ select }) => (
-        <input
-          placeholder="自定义模型名，Enter 确认"
-          defaultValue={value ?? ""}
-          autoFocus
-          onKeyDown={(e) => {
-            if (e.key === "Enter") select((e.target as HTMLInputElement).value.trim());
-          }}
-          className="w-full rounded border border-line bg-canvas px-1.5 py-1 text-[12px] outline-none placeholder:text-faint"
-        />
+        <div className="flex flex-col gap-1">
+          <input
+            placeholder="自定义模型名，Enter 确认"
+            defaultValue={value ?? ""}
+            autoFocus
+            onKeyDown={(e) => {
+              if (e.key === "Enter") select((e.target as HTMLInputElement).value.trim());
+            }}
+            className="w-full rounded border border-line bg-canvas px-1.5 py-1 text-[12px] outline-none placeholder:text-faint"
+          />
+          {relay && (
+            <>
+              {/* header 只在下拉展开时渲染,所以拉取天然是懒的:开着面板不会为每个执行者打一串请求 */}
+              <RelayModels relay={relay} done={models !== null} onModels={setModels} onError={setErr} />
+              <div className={`px-0.5 text-[11px] ${err ? "text-red-600" : "text-faint"}`}>
+                {err ?? (models ? `中转站「${relay.name}」的 ${models.length} 个模型` : `正在从「${relay.name}」拉取模型…`)}
+              </div>
+            </>
+          )}
+        </div>
       )}
     >
       <ChipLabel label="模型" value={value} />
     </Menu>
   );
+}
+
+// 挂载即拉一次中转站的模型列表(结果进模块级缓存,同一中转站的多个执行者共享)。
+// 纯副作用组件,不渲染东西。
+function RelayModels({
+  relay,
+  done,
+  onModels,
+  onError,
+}: {
+  relay: LlmProvider;
+  done: boolean;
+  onModels: (m: string[]) => void;
+  onError: (e: string) => void;
+}) {
+  useEffect(() => {
+    if (done) return;
+    let alive = true;
+    api
+      .probeModels({ protocol: relay.protocol, baseUrl: relay.baseUrl, id: relay.id })
+      .then((r) => {
+        relayModelCache.set(relay.id, r.models);
+        if (alive) onModels(r.models);
+      })
+      .catch((e) => alive && onError(e instanceof Error ? e.message : String(e)));
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [relay.id, done]);
+  return null;
 }
 
 // 中转站下拉:默认「官方账号」(不注入 env,CLI 用自己登录的账号)+ 协议匹配的中转站。
@@ -329,7 +395,15 @@ function Row({ a, relays, onChange }: { a: AgentExecutorProfile; relays: LlmProv
         </button>
       </div>
       <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-        <ModelMenu type={a.type} value={a.model} onPick={(v) => patch({ model: v })} />
+        {/* 中转站排在最前:它决定了「模型」下拉里能选什么(官方账号=CLI 别名,中转站=它自己那套全名) */}
+        <RelayMenu type={a.type} relays={relays} value={a.providerId} onPick={(v) => patch({ providerId: v || null })} />
+        <ModelMenu
+          key={a.providerId ?? ""}
+          type={a.type}
+          relay={relays.find((r) => r.id === a.providerId)}
+          value={a.model}
+          onPick={(v) => patch({ model: v })}
+        />
         <Menu
           options={withDefault(EFFORT_VALUES[a.type])}
           value={a.reasoningEffort ?? ""}
@@ -348,7 +422,6 @@ function Row({ a, relays, onChange }: { a: AgentExecutorProfile; relays: LlmProv
         >
           <ChipLabel label="速度" value={a.speed === "fast" ? "1.5x" : "标准"} />
         </Menu>
-        <RelayMenu type={a.type} relays={relays} value={a.providerId} onPick={(v) => patch({ providerId: v || null })} />
         {argsEditing ? (
           <input
             autoFocus
@@ -435,7 +508,8 @@ function AddRow({ type, relays, onAdded }: { type: AgentType; relays: LlmProvide
     <div className="mt-1 flex flex-col gap-1.5 rounded-md border border-line p-2 text-[12px]">
       <input value={name} onChange={(e) => setName(e.target.value)} placeholder="名称（可选）" className="rounded border border-line bg-canvas px-2 py-1 outline-none placeholder:text-faint" />
       <div className="flex flex-wrap items-center gap-1.5">
-        <ModelMenu type={type} value={model || undefined} onPick={setModel} />
+        <RelayMenu type={type} relays={relays} value={providerId} onPick={setProviderId} />
+        <ModelMenu key={providerId} type={type} relay={relays.find((r) => r.id === providerId)} value={model || undefined} onPick={setModel} />
         <Menu
           options={withDefault(EFFORT_VALUES[type])}
           value={effort}
@@ -454,7 +528,6 @@ function AddRow({ type, relays, onAdded }: { type: AgentType; relays: LlmProvide
         >
           <ChipLabel label="速度" value={speed === "fast" ? "1.5x" : "标准"} />
         </Menu>
-        <RelayMenu type={type} relays={relays} value={providerId} onPick={setProviderId} />
       </div>
       <input value={args} onChange={(e) => setArgs(e.target.value)} placeholder="额外 CLI 参数（可选，空格分隔）" className="rounded border border-line bg-canvas px-2 py-1 font-mono outline-none placeholder:text-faint" />
       <input value={host} onChange={(e) => setHost(e.target.value)} placeholder="ssh 主机（留空=本地）" className="rounded border border-line bg-canvas px-2 py-1 outline-none placeholder:text-faint" />

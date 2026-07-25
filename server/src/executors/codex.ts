@@ -2,6 +2,7 @@ import { createInterface } from "node:readline";
 import type { AgentEvent, ExecTarget } from "@harness/shared";
 import type { AgentExecutor, RelayConfig, RunHandle, RunOpts } from "./types.js";
 import { spawnAgent, resumeFor, resumeInner, spawnErrorMessage, killChild, forceFinishOnExit, redactSecrets } from "./spawn.js";
+import { relayApi } from "../llm.js";
 import { formatFailureForTimeline, RunTraceRecorder, type RunTracePaths } from "./diagnostics.js";
 
 // 中转站的 key 走环境变量,不进命令行 —— `-c` 参数会原样进 commandLine,而后者存进
@@ -46,15 +47,18 @@ export class CodexExecutor implements AgentExecutor {
   }
 
   // 挂了中转站就临时注册一个 provider 并切过去(-c 值按 TOML 解析,字符串须带引号)。
-  // base_url 要带 /v1(存的是根地址);key 只通过 env_key 间接引用,不出现在命令行。
+  // base_url 要带版本段,交给 relayApi 归一(库里存的可能是根地址、也可能历史数据自带
+  // /v1,硬拼会拼出 /v1/v1);key 只通过 env_key 间接引用,不出现在命令行。
   private relayArgs(): string[] {
     if (!this.relay) return [];
     const p = `model_providers.${RELAY_PROVIDER_ID}`;
     return [
       "-c", `model_provider="${RELAY_PROVIDER_ID}"`,
       "-c", `${p}.name="${this.relay.name.replace(/"/g, "")}"`,
-      "-c", `${p}.base_url="${this.relay.baseUrl}/v1"`,
-      "-c", `${p}.wire_api="chat"`,
+      "-c", `${p}.base_url="${relayApi(this.relay.baseUrl)}"`,
+      // codex 0.14x 起废弃了 wire_api="chat"(启动直接报错退出),只认 Responses API。
+      // 所以给 codex 用的中转站必须支持 /v1/responses,光有 /v1/chat/completions 不行。
+      "-c", `${p}.wire_api="responses"`,
       "-c", `${p}.env_key="${RELAY_ENV_KEY}"`,
     ];
   }

@@ -11,9 +11,13 @@ export interface LlmCall {
 
 const TIMEOUT_MS = 30_000;
 
-// baseUrl 存的是根地址(不含 /v1);两种协议的 REST 端点都在 /v1 下。
-// 兼容历史数据:用户当年填的地址可能已经带了 /v1,那就不再重复补。
-const withVersion = (baseUrl: string): string => {
+// 中转站地址归一(单点)。库里存的应当是根地址(不含 /v1),但历史数据和手滑都可能
+// 带上,所以读取侧一律过这两个函数,而不是各处自己拼字符串:
+//   relayRoot —— 剥到根地址。claude 的 ANTHROPIC_BASE_URL 要这个(SDK 自己补 /v1)。
+//   relayApi  —— 保证带版本段。codex 的 model_providers.base_url 和下面的模型探测要这个。
+// 已经是 /v2 之类的就原样保留,不强行改成 /v1。
+export const relayRoot = (baseUrl: string): string => baseUrl.replace(/\/+$/, "").replace(/\/v\d+$/, "");
+export const relayApi = (baseUrl: string): string => {
   const base = baseUrl.replace(/\/+$/, "");
   return /\/v\d+$/.test(base) ? base : `${base}/v1`;
 };
@@ -30,7 +34,7 @@ export async function listModels(p: LlmCall): Promise<string[]> {
       p.protocol === "anthropic"
         ? { "x-api-key": p.apiKey, "anthropic-version": "2023-06-01" }
         : { authorization: `Bearer ${p.apiKey}` };
-    const r = await fetch(`${withVersion(p.baseUrl)}/models`, { headers, signal: ctrl.signal });
+    const r = await fetch(`${relayApi(p.baseUrl)}/models`, { headers, signal: ctrl.signal });
     if (!r.ok) throw new Error(`${p.protocol} ${r.status}: ${(await r.text()).slice(0, 300)}`);
     const j = (await r.json()) as { data?: { id?: string; name?: string }[]; models?: { id?: string; name?: string }[] };
     const ids = (j.data ?? j.models ?? [])

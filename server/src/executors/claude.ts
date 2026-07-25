@@ -3,6 +3,7 @@ import { createInterface } from "node:readline";
 import type { AgentEvent, ExecTarget } from "@harness/shared";
 import type { AgentExecutor, RelayConfig, RunHandle, RunOpts } from "./types.js";
 import { spawnAgent, resumeFor, resumeInner, spawnErrorMessage, killChild, forceFinishOnExit, redactSecrets } from "./spawn.js";
+import { relayRoot } from "../llm.js";
 
 // Drives the real `claude` CLI in headless stream-json mode (prompt via stdin).
 //   claude -p --output-format stream-json --verbose --dangerously-skip-permissions
@@ -28,7 +29,7 @@ export class ClaudeExecutor implements AgentExecutor {
     this.target = opts.target ?? { kind: "local" };
     this.relay = opts.relay;
     this.relayEnvHint = this.relay
-      ? `ANTHROPIC_BASE_URL=${this.relay.baseUrl} ANTHROPIC_AUTH_TOKEN=<你的key> `
+      ? `ANTHROPIC_BASE_URL=${relayRoot(this.relay.baseUrl)} ANTHROPIC_AUTH_TOKEN=<你的key> `
       : undefined;
     const where = this.target.kind === "ssh" ? this.target.host : "local";
     this.label = opts.name ?? `claude@${where}${opts.model ? "·" + opts.model : ""}`;
@@ -38,10 +39,11 @@ export class ClaudeExecutor implements AgentExecutor {
     return resumeFor(this.target, cwd, resumeInner.claude(sessionId), this.relayEnvHint ?? "");
   }
 
-  // 挂了中转站就顶掉 CLI 自己的登录态:BASE_URL 指到中转站根地址,AUTH_TOKEN 给它的 key。
+  // 挂了中转站就顶掉 CLI 自己的登录态:BASE_URL 指到中转站根地址(SDK 自己会补 /v1,
+  // 库里那份要是带了 /v1 得剥掉,否则打到 /v1/v1),AUTH_TOKEN 给它的 key。
   private env(): Record<string, string> | undefined {
     if (!this.relay) return undefined;
-    return { ANTHROPIC_BASE_URL: this.relay.baseUrl, ANTHROPIC_AUTH_TOKEN: this.relay.apiKey };
+    return { ANTHROPIC_BASE_URL: relayRoot(this.relay.baseUrl), ANTHROPIC_AUTH_TOKEN: this.relay.apiKey };
   }
 
   run(opts: RunOpts): RunHandle {
