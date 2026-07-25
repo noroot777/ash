@@ -8,8 +8,8 @@ import { useEscape } from "./useEscape";
 
 const TYPES: AgentType[] = ["claude", "codex", "antigravity"];
 
-// 哪种协议的中转站能挂给哪个 CLI:claude 认 Anthropic 端点,codex 认 OpenAI 端点。
-// null = 该类型不支持挂中转站(antigravity 无执行器实现)。
+// 哪种协议的供应商能挂给哪个 CLI:claude 认 Anthropic 端点,codex 认 OpenAI 端点。
+// null = 该类型不支持挂供应商(antigravity 无执行器实现)。
 const RELAY_PROTOCOL: Record<AgentType, LlmProtocol | null> = {
   claude: "anthropic",
   codex: "openai",
@@ -53,8 +53,8 @@ const withDefault = (values: string[], detail = "跟随 CLI 默认"): MenuOption
 
 type Detected = { type: string; bin: string; available: boolean; path: string | null; version: string | null };
 
-// 中转站 → 模型全名列表。同一中转站的多个执行者共享,免得每行各拉一次;
-// 中转站被增删改时(reloadRelays)整体清掉,避免拿着旧地址/旧 key 的陈旧列表。
+// 供应商 → 模型全名列表。同一供应商的多个执行者共享,免得每行各拉一次;
+// 供应商被增删改时(reloadRelays)整体清掉,避免拿着旧地址/旧 key 的陈旧列表。
 const relayModelCache = new Map<string, string[]>();
 
 // Agent registry management (DESIGN.md §5): executor profiles under each type,
@@ -68,7 +68,7 @@ export function AgentsPanel({ onClose }: { onClose: () => void }) {
   // 与 detected 分开:detected 只在用户手动点「检测」时出结果面板,这个是静默的渲染依据。
   const [avail, setAvail] = useState<Set<string> | null>(null);
   const reload = () => api.agents().then(setList);
-  // 删中转站会把挂着它的执行者置回官方账号(服务端做的),所以中转站变了要连执行者一起刷。
+  // 删供应商会把挂着它的执行者置回官方账号(服务端做的),所以供应商变了要连执行者一起刷。
   const reloadRelays = () => {
     relayModelCache.clear();
     return Promise.all([api.llmProviders().then(setRelays), reload()]).catch(() => {});
@@ -227,8 +227,8 @@ function ChipLabel({ label, value }: { label: string; value?: string }) {
   );
 }
 
-// 模型下拉:没挂中转站时给 CLI 别名预设;挂了就列该中转站 /v1/models 拉到的**全名**
-// (claude-opus-4-5-20251101 这种)——中转站认的是它自己那套模型 id,别名多半不存在。
+// 模型下拉:没挂供应商时给 CLI 别名预设;挂了就列该供应商 /v1/models 拉到的**全名**
+// (claude-opus-4-5-20251101 这种)——供应商认的是它自己那套模型 id,别名多半不存在。
 // 两种情况都能在 header 里自由输入。
 function ModelMenu({
   type,
@@ -243,12 +243,12 @@ function ModelMenu({
 }) {
   const [models, setModels] = useState<string[] | null>(relay ? relayModelCache.get(relay.id) ?? null : null);
   const [err, setErr] = useState<string | null>(null);
-  // 当前值可能是手输的、或中转站换了以后列表里没有的,并进去免得看着像没选中
+  // 当前值可能是手输的、或供应商换了以后列表里没有的,并进去免得看着像没选中
   const listed = relay ? models ?? [] : MODEL_PRESETS[type];
   const values = value && !listed.includes(value) ? [value, ...listed] : listed;
   return (
     <Menu
-      options={withDefault(values, relay ? `跟随中转站默认模型` : "跟随 CLI 配置的默认模型")}
+      options={withDefault(values, relay ? `跟随供应商默认模型` : "跟随 CLI 配置的默认模型")}
       value={value ?? ""}
       onChange={onPick}
       menuWidth={relay ? 300 : 230}
@@ -269,7 +269,7 @@ function ModelMenu({
               {/* header 只在下拉展开时渲染,所以拉取天然是懒的:开着面板不会为每个执行者打一串请求 */}
               <RelayModels relay={relay} done={models !== null} onModels={setModels} onError={setErr} />
               <div className={`px-0.5 text-[11px] ${err ? "text-red-600" : "text-faint"}`}>
-                {err ?? (models ? `中转站「${relay.name}」的 ${models.length} 个模型` : `正在从「${relay.name}」拉取模型…`)}
+                {err ?? (models ? `供应商「${relay.name}」的 ${models.length} 个模型` : `正在从「${relay.name}」拉取模型…`)}
               </div>
             </>
           )}
@@ -281,7 +281,7 @@ function ModelMenu({
   );
 }
 
-// 挂载即拉一次中转站的模型列表(结果进模块级缓存,同一中转站的多个执行者共享)。
+// 挂载即拉一次供应商的模型列表(结果进模块级缓存,同一供应商的多个执行者共享)。
 // 纯副作用组件,不渲染东西。
 function RelayModels({
   relay,
@@ -312,8 +312,8 @@ function RelayModels({
   return null;
 }
 
-// 中转站下拉:默认「官方账号」(不注入 env,CLI 用自己登录的账号)+ 协议匹配的中转站。
-// 挂上后该执行者的每次运行都注入 base_url + key,执行任务和解析事项都走中转站。
+// 供应商下拉:默认「官方账号」(不注入 env,CLI 用自己登录的账号)+ 协议匹配的供应商。
+// 挂上后该执行者的每次运行都注入 base_url + key,执行任务和解析事项都走供应商。
 function RelayMenu({
   type,
   relays,
@@ -344,13 +344,13 @@ function RelayMenu({
         usable.length === 0
           ? () => (
               <div className="px-1.5 py-1 text-[11px] text-faint">
-                还没有 {protocol === "anthropic" ? "Anthropic" : "OpenAI"} 协议的中转站，去下面「中转站」里加
+                还没有 {protocol === "anthropic" ? "Anthropic" : "OpenAI"} 协议的供应商，去下面「供应商」里加
               </div>
             )
           : undefined
       }
     >
-      <ChipLabel label="中转站" value={value ? current?.name ?? "已失效" : undefined} />
+      <ChipLabel label="供应商" value={value ? current?.name ?? "已失效" : undefined} />
     </Menu>
   );
 }
@@ -395,7 +395,7 @@ function Row({ a, relays, onChange }: { a: AgentExecutorProfile; relays: LlmProv
         </button>
       </div>
       <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-        {/* 中转站排在最前:它决定了「模型」下拉里能选什么(官方账号=CLI 别名,中转站=它自己那套全名) */}
+        {/* 供应商排在最前:它决定了「模型」下拉里能选什么(官方账号=CLI 别名,供应商=它自己那套全名) */}
         <RelayMenu type={a.type} relays={relays} value={a.providerId} onPick={(v) => patch({ providerId: v || null })} />
         <ModelMenu
           key={a.providerId ?? ""}
@@ -482,7 +482,7 @@ function AddRow({ type, relays, onAdded }: { type: AgentType; relays: LlmProvide
     const relayName = relays.find((r) => r.id === providerId)?.name;
     await api.createAgent({
       type,
-      // 缺省名字带上中转站(claude@公司中转·opus),好在下拉里一眼分清同类型的多个执行者。
+      // 缺省名字带上供应商(claude@公司自建·opus),好在下拉里一眼分清同类型的多个执行者。
       name: name.trim() || `${type}@${relayName || host.trim() || "local"}${model ? "·" + model : ""}`,
       model: model.trim() || undefined,
       reasoningEffort: effort || undefined,

@@ -244,11 +244,11 @@ export const api = {
   // Commits a derived task produced on its worktree branch (issue → code linkage).
   taskCommits: (id: string): Promise<{ branch: string | null; commits: { sha: string; subject: string; at: string }[] }> =>
     fetch(`/api/tasks/${id}/commits`).then(j),
-  // Direct-LLM connections (中转站, system-level) — issue parsing only. List never
-  // returns the key (hasKey flag only); send apiKey only when setting/changing it.
+  // 供应商 (provider, system-level) — mounted onto an executor as base_url + key.
+  // List never returns the key (hasKey flag only); send apiKey only when setting/changing it.
   llmProviders: (): Promise<LlmProvider[]> => fetch("/api/llm-providers").then(j),
-  // Probe available models for a connection (ad-hoc creds, or `id` to reuse a
-  // stored key). Used by 设置 to pick a default model.
+  // Probe available models for a provider (ad-hoc creds, or `id` to reuse a
+  // stored key). Fills the 供应商 form's default model and the executor's 模型 dropdown.
   probeModels: (body: { protocol: LlmProtocol; baseUrl: string; apiKey?: string; id?: string }): Promise<{ models: string[] }> =>
     fetch("/api/llm-providers/models", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }).then(j),
   createLlmProvider: (p: { name: string; protocol: LlmProtocol; baseUrl: string; apiKey: string; model: string }): Promise<LlmProvider> =>

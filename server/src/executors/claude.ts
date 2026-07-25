@@ -11,7 +11,7 @@ import { relayRoot } from "../llm.js";
 export class ClaudeExecutor implements AgentExecutor {
   readonly type = "claude" as const;
   readonly label: string;
-  // 中转站的 env 前缀,token 已换成占位符 —— 存进 sessions.relay_env 供恢复命令展示。
+  // 供应商的 env 前缀,token 已换成占位符 —— 存进 sessions.relay_env 供恢复命令展示。
   readonly relayEnvHint?: string;
   private target: ExecTarget;
   private bin: string;
@@ -39,7 +39,7 @@ export class ClaudeExecutor implements AgentExecutor {
     return resumeFor(this.target, cwd, resumeInner.claude(sessionId), this.relayEnvHint ?? "");
   }
 
-  // 挂了中转站就顶掉 CLI 自己的登录态:BASE_URL 指到中转站根地址(SDK 自己会补 /v1,
+  // 挂了供应商就顶掉 CLI 自己的登录态:BASE_URL 指到供应商根地址(SDK 自己会补 /v1,
   // 库里那份要是带了 /v1 得剥掉,否则打到 /v1/v1),AUTH_TOKEN 给它的 key。
   private env(): Record<string, string> | undefined {
     if (!this.relay) return undefined;

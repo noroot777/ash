@@ -51,7 +51,7 @@ async function build(profile: AgentRow | null, type: AgentType): Promise<AgentEx
   }
 }
 
-// 挂载的中转站 → 启动 CLI 时要注入的配置。中转站被删掉(悬空 providerId)或没配
+// 挂载的供应商 → 启动 CLI 时要注入的配置。供应商被删掉(悬空 providerId)或没配
 // key 时当作没挂,执行者退回 CLI 自己的官方登录账号 —— 宁可用官方账号跑通,也不
 // 拿半截配置去撞一个必然 401 的端点。
 async function loadRelay(providerId: string | null): Promise<RelayConfig | undefined> {

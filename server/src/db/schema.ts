@@ -68,7 +68,7 @@ export const agents = sqliteTable("agents", {
   extraArgs: text("extra_args").notNull().default("[]"), // json
   reasoningEffort: text("reasoning_effort"), // null=跟随 CLI 默认
   speed: text("speed"), // null=标准；"fast"=1.5x 加速档
-  // 挂载的中转站(llm_providers.id)。null=用 CLI 自己的官方登录账号。
+  // 挂载的供应商(llm_providers.id)。null=用 CLI 自己的官方登录账号。
   // 非空时启动 CLI 前注入 base_url + key(claude: env;codex: -c model_providers)。
   providerId: text("provider_id"),
   isDefault: integer("is_default", { mode: "boolean" }).notNull().default(false),
@@ -86,7 +86,7 @@ export const sessions = sqliteTable("sessions", {
   cwd: text("cwd"),
   cliSessionId: text("cli_session_id"),
   resumeCommand: text("resume_command"),
-  // 本次运行挂的中转站在恢复命令里要带的 env 前缀(token 已是占位符)。
+  // 本次运行挂的供应商在恢复命令里要带的 env 前缀(token 已是占位符)。
   // null = 走 CLI 官方账号。只用于展示,不含真 key。
   relayEnv: text("relay_env"),
   commandLine: text("command_line"),
@@ -185,7 +185,7 @@ export const queueItems = sqliteTable(
   }),
 );
 
-// 中转站(relay), system-level. 挂给执行者用:启动 CLI 时注入 base_url + key,
+// 供应商(relay), system-level. 挂给执行者用:启动 CLI 时注入 base_url + key,
 // 顶掉 CLI 自己的官方登录账号。harness 自己不再直连 HTTP 调模型。
 export const llmProviders = sqliteTable("llm_providers", {
   id: text("id").primaryKey(),

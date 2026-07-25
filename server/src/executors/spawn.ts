@@ -142,7 +142,7 @@ async function killEscapees(child: ChildProcess, sig: NodeJS.Signals): Promise<v
 // stdout/stderr 管道不死，流永远不 EOF，run loop 收不到 close → 任务永远停不掉
 // (真实案例：codex CLI 重装期间 resume，任务卡 running 且 stop 无效)。
 // 代价：dev 前台 Ctrl-C 不再连带杀掉 agent(生产是 nohup 跑法，不受影响)。
-// extraEnv: per-executor 的环境变量(中转站的 base_url / key)。本地合进 env,
+// extraEnv: per-executor 的环境变量(供应商的 base_url / key)。本地合进 env,
 // ssh 拼成远程命令的 `KEY=值 ` 前缀 —— 二者对 CLI 是等价的。
 export function spawnAgent(
   target: ExecTarget,
@@ -205,7 +205,7 @@ export function spawnAgent(
 }
 
 // Wrap a resume command for the target so it is copy-paste runnable (§13).
-// envPrefix(中转站的 `KEY=值 `,token 已换成占位符)拼在 CLI 前面 —— 不带它,
+// envPrefix(供应商的 `KEY=值 `,token 已换成占位符)拼在 CLI 前面 —— 不带它,
 // 粘到终端的命令会走 CLI 自己的官方账号,跟这次运行不是同一个来源。
 export function resumeFor(target: ExecTarget, cwd: string, inner: string, envPrefix = ""): string {
   if (target.kind === "ssh") return `ssh ${target.host} "cd ${shq(cwd)} && ${envPrefix}${inner}"`;
@@ -288,7 +288,7 @@ export const resumeInner: Record<string, (id: string) => string> = {
 
 // Build the display resume command from persisted session fields, so it always
 // reflects the current format (no stale stored strings when the format changes).
-// relayEnv 是本次运行挂的中转站前缀(已脱敏),旧行为 null 就跟以前完全一样。
+// relayEnv 是本次运行挂的供应商前缀(已脱敏),旧行为 null 就跟以前完全一样。
 export function resumeCommandFor(
   agentType: string,
   targetStr: string | null | undefined,

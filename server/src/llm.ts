@@ -1,6 +1,6 @@
-// 中转站(LlmProvider)的探测通道。harness 自己不再直连大模型跑推理 —— 所有 AI 调用
-// 都走本地 CLI 执行者(见 executors/),中转站只是挂到执行者上的 base_url + key。
-// 这里剩下的唯一职责是配置中转站时「拉取模型列表」,给下拉框填候选。
+// 供应商(LlmProvider)的探测通道。harness 自己不再直连大模型跑推理 —— 所有 AI 调用
+// 都走本地 CLI 执行者(见 executors/),供应商只是挂到执行者上的 base_url + key。
+// 这里剩下的唯一职责是配置供应商时「拉取模型列表」,给下拉框填候选。
 import type { LlmProtocol } from "@harness/shared";
 
 export interface LlmCall {
@@ -11,7 +11,7 @@ export interface LlmCall {
 
 const TIMEOUT_MS = 30_000;
 
-// 中转站地址归一(单点)。库里存的应当是根地址(不含 /v1),但历史数据和手滑都可能
+// 供应商地址归一(单点)。库里存的应当是根地址(不含 /v1),但历史数据和手滑都可能
 // 带上,所以读取侧一律过这两个函数,而不是各处自己拼字符串:
 //   relayRoot —— 剥到根地址。claude 的 ANTHROPIC_BASE_URL 要这个(SDK 自己补 /v1)。
 //   relayApi  —— 保证带版本段。codex 的 model_providers.base_url 和下面的模型探测要这个。
@@ -22,7 +22,7 @@ export const relayApi = (baseUrl: string): string => {
   return /\/v\d+$/.test(base) ? base : `${base}/v1`;
 };
 
-// 列出某个中转站/端点可用的模型 id。OpenAI 兼容走 GET /v1/models({data:[{id}]}),
+// 列出某个供应商/端点可用的模型 id。OpenAI 兼容走 GET /v1/models({data:[{id}]}),
 // Anthropic 走 GET /v1/models(同结构,需 x-api-key + anthropic-version)。失败抛错由调用方处理。
 export async function listModels(p: LlmCall): Promise<string[]> {
   if (!p.baseUrl) throw new Error("连接未配置网址(baseUrl)");

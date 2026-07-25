@@ -5,7 +5,7 @@ import { spawnAgent, resumeFor, resumeInner, spawnErrorMessage, killChild, force
 import { relayApi } from "../llm.js";
 import { formatFailureForTimeline, RunTraceRecorder, type RunTracePaths } from "./diagnostics.js";
 
-// 中转站的 key 走环境变量,不进命令行 —— `-c` 参数会原样进 commandLine,而后者存进
+// 供应商的 key 走环境变量,不进命令行 —— `-c` 参数会原样进 commandLine,而后者存进
 // sessions.command_line 并在 UI 展示。codex 的 model_providers 正好支持 env_key
 // 指向一个环境变量名,于是 TOML 里只出现变量名,真 key 只活在进程环境里。
 const RELAY_ENV_KEY = "HARNESS_RELAY_KEY";
@@ -18,7 +18,7 @@ const RELAY_PROVIDER_ID = "harness_relay";
 export class CodexExecutor implements AgentExecutor {
   readonly type = "codex" as const;
   readonly label: string;
-  // 中转站的 env 前缀,token 已换成占位符 —— 存进 sessions.relay_env 供恢复命令展示。
+  // 供应商的 env 前缀,token 已换成占位符 —— 存进 sessions.relay_env 供恢复命令展示。
   readonly relayEnvHint?: string;
   private target: ExecTarget;
   private bin: string;
@@ -46,7 +46,7 @@ export class CodexExecutor implements AgentExecutor {
     return resumeFor(this.target, cwd, resumeInner.codex(sessionId), this.relayEnvHint ?? "");
   }
 
-  // 挂了中转站就临时注册一个 provider 并切过去(-c 值按 TOML 解析,字符串须带引号)。
+  // 挂了供应商就临时注册一个 provider 并切过去(-c 值按 TOML 解析,字符串须带引号)。
   // base_url 要带版本段,交给 relayApi 归一(库里存的可能是根地址、也可能历史数据自带
   // /v1,硬拼会拼出 /v1/v1);key 只通过 env_key 间接引用,不出现在命令行。
   private relayArgs(): string[] {
@@ -57,7 +57,7 @@ export class CodexExecutor implements AgentExecutor {
       "-c", `${p}.name="${this.relay.name.replace(/"/g, "")}"`,
       "-c", `${p}.base_url="${relayApi(this.relay.baseUrl)}"`,
       // codex 0.14x 起废弃了 wire_api="chat"(启动直接报错退出),只认 Responses API。
-      // 所以给 codex 用的中转站必须支持 /v1/responses,光有 /v1/chat/completions 不行。
+      // 所以给 codex 用的供应商必须支持 /v1/responses,光有 /v1/chat/completions 不行。
       "-c", `${p}.wire_api="responses"`,
       "-c", `${p}.env_key="${RELAY_ENV_KEY}"`,
     ];

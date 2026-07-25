@@ -1558,7 +1558,7 @@ api.get("/tasks/:id/commits", async (c) => {
   return c.json(await taskCommits(sess.worktreePath, project.repoPath, t.worktreeBase));
 });
 
-// ── 中转站 (relay, system-level) — 挂给执行者用,harness 不直连它跑推理 ────────
+// ── 供应商 (relay, system-level) — 挂给执行者用,harness 不直连它跑推理 ────────
 const toProvider = (r: typeof llmProviders.$inferSelect): LlmProvider => ({
   id: r.id,
   name: r.name,
@@ -1633,7 +1633,7 @@ api.patch("/llm-providers/:id", async (c) => {
 api.delete("/llm-providers/:id", async (c) => {
   const pid = c.req.param("id");
   await db.delete(llmProviders).where(eq(llmProviders.id, pid));
-  // 挂着它的执行者退回官方账号 —— 留悬空 id 会让「中转站」下拉显示成空白选项。
+  // 挂着它的执行者退回官方账号 —— 留悬空 id 会让「供应商」下拉显示成空白选项。
   await db.update(agents).set({ providerId: null }).where(eq(agents.providerId, pid));
   return c.json({ deleted: true });
 });

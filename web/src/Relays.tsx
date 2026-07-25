@@ -4,15 +4,15 @@ import { Plus, Trash, PencilSimple, ArrowsClockwise } from "@phosphor-icons/reac
 import { api } from "./api";
 import { ConfirmModal } from "./Modal";
 
-// 中转站(relay)的增删改查。中转站不是「另一种后端」——它只是挂到执行者上的
+// 供应商(relay)的增删改查。供应商不是「另一种后端」——它只是挂到执行者上的
 // base_url + key,替换 CLI 自己的官方登录账号。harness 不直连它跑推理。
-// 列表 state 由 AgentsPanel 持有(执行者行的「中转站」下拉也要用),这里只负责渲染 + 改完回调。
+// 列表 state 由 AgentsPanel 持有(执行者行的「供应商」下拉也要用),这里只负责渲染 + 改完回调。
 export function RelaySection({ list, onChange }: { list: LlmProvider[]; onChange: () => void }) {
   return (
     <div>
-      <div className="mb-1.5 text-[11px] font-medium uppercase tracking-wide text-muted">中转站</div>
+      <div className="mb-1.5 text-[11px] font-medium uppercase tracking-wide text-muted">供应商</div>
       <div className="mb-2.5 text-[11px] text-faint">
-        填网址 + API Key,再在上面任一执行者的「中转站」下拉里挂上——那个执行者就改用中转站的额度和模型跑,
+        填网址 + API Key,再在上面任一执行者的「供应商」下拉里挂上——那个执行者就改用供应商的额度和模型跑,
         不再走 CLI 的官方登录账号。Anthropic 协议给 claude 用,OpenAI 协议给 codex 用。
       </div>
       {list.map((p) => (
@@ -49,7 +49,7 @@ function RelayRow({ p, onChange }: { p: LlmProvider; onChange: () => void }) {
       </button>
       {confirming && (
         <ConfirmModal
-          title="删除中转站"
+          title="删除供应商"
           message={`删除「${p.name}」后,挂着它的执行者会退回 CLI 官方登录账号。`}
           confirmLabel="删除"
           danger
@@ -61,7 +61,7 @@ function RelayRow({ p, onChange }: { p: LlmProvider; onChange: () => void }) {
   );
 }
 
-// 「拉取模型」按钮:探一下这个中转站活不活、有哪些模型可用。存下来的 model 只是
+// 「拉取模型」按钮:探一下这个供应商活不活、有哪些模型可用。存下来的 model 只是
 // 备注性质的默认值(执行者自己的「模型」下拉才是实际生效的),但拉一次能立刻验证配置对不对。
 // providerId 让已存在的行复用库里的 key,不必重新输入。
 function ModelField({
@@ -92,7 +92,7 @@ function ModelField({
     try {
       const res = await api.probeModels({ protocol, baseUrl: baseUrl.trim(), apiKey: apiKey.trim() || undefined, id: providerId });
       setModels(res.models);
-      if (!res.models.length) setErr("该中转站未返回模型");
+      if (!res.models.length) setErr("该供应商未返回模型");
       else if (!model) setModel(res.models[0]);
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
@@ -113,7 +113,7 @@ function ModelField({
           onClick={fetchModels}
           disabled={loading}
           className="inline-flex shrink-0 items-center gap-1 rounded border border-line px-2 py-1 text-muted hover:bg-raised hover:text-ink disabled:opacity-50"
-          title="从该中转站拉取可用模型列表（顺带验证网址和 key 对不对）"
+          title="从该供应商拉取可用模型列表（顺带验证网址和 key 对不对）"
         >
           <ArrowsClockwise size={12} className={loading ? "animate-spin" : ""} /> {loading ? "拉取中…" : "拉取模型"}
         </button>
@@ -139,7 +139,7 @@ function ModelField({
   );
 }
 
-// 编辑已有中转站——改名称 / 网址 / 协议 / 默认模型,或换 key(留空=保持库里那把)。
+// 编辑已有供应商——改名称 / 网址 / 协议 / 默认模型,或换 key(留空=保持库里那把)。
 function EditRelay({ p, onDone, onCancel }: { p: LlmProvider; onDone: () => void; onCancel: () => void }) {
   const [name, setName] = useState(p.name);
   const [protocol, setProtocol] = useState<LlmProtocol>(p.protocol);
@@ -203,12 +203,12 @@ function AddRelay({ onAdded }: { onAdded: () => void }) {
   if (!open)
     return (
       <button onClick={() => setOpen(true)} className="mt-1 inline-flex items-center gap-1 text-[12px] text-muted hover:text-ink">
-        <Plus size={12} weight="bold" /> 添加中转站
+        <Plus size={12} weight="bold" /> 添加供应商
       </button>
     );
   return (
     <div className="mt-1 flex flex-col gap-1.5 rounded-md border border-line p-2 text-[12px]">
-      <input value={name} onChange={(e) => setName(e.target.value)} placeholder="名称（如 公司中转）" className="rounded border border-line bg-canvas px-2 py-1 outline-none placeholder:text-faint" />
+      <input value={name} onChange={(e) => setName(e.target.value)} placeholder="名称（如 公司自建）" className="rounded border border-line bg-canvas px-2 py-1 outline-none placeholder:text-faint" />
       <div className="flex gap-1.5">
         <select value={protocol} onChange={(e) => setProtocol(e.target.value as LlmProtocol)} className="rounded border border-line bg-canvas px-2 py-1 outline-none">
           <option value="anthropic">Anthropic 兼容（给 claude 用）</option>
