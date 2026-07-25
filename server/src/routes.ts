@@ -32,7 +32,9 @@ import { parseIssue, classifyMention, buildDiscussPrompt, runAgentOnce, DISCUSS_
 import { listModels } from "./llm.js";
 import { setTaskStatus } from "./status.js";
 import { stopTask, confirmDone } from "./runs.js";
-import { runGroup, advanceQueue } from "./scheduler.js";
+import { runGroup, advanceQueue, pauseGroup } from "./scheduler.js";
+import { haltTeam } from "./team/session.js";
+import { dispatchWorkers, type DispatchSpec } from "./team/dispatch.js";
 import { runDebate, resumeDebate, resumeAtGate } from "./debate/index.js";
 import { resolveGate } from "./debate/gates.js";
 import { detectLocalAgents } from "./detect.js";
@@ -252,6 +254,8 @@ const toTask = (r: typeof tasks.$inferSelect): Task => ({
   agentType: (r.agentType as Task["agentType"]) ?? undefined,
   autoTitle: r.autoTitle,
   debate: r.debate ? JSON.parse(r.debate) : undefined,
+  team: r.team ? JSON.parse(r.team) : undefined,
+  reportBack: r.reportBack,
   scheduleId: r.scheduleId,
   createdAt: r.createdAt,
   updatedAt: r.updatedAt,
@@ -694,7 +698,12 @@ api.delete("/tasks/:id", async (c) => {
 api.get("/groups", async (c) => {
   const pid = c.req.query("projectId");
   const repo = c.req.query("repoPath");
+  // 团队任务派活时自建的内部组(owner_task_id 非空)不在这里露脸 —— 它们是 §Team
+  // 的内部结构(团队视图自己会展示工人),混进用户的分组列表只会当噪音。
+  // includeInternal=1 给调试/排查用。
+  const includeInternal = c.req.query("includeInternal") === "1";
   let rows = await db.select().from(groups);
+  if (!includeInternal) rows = rows.filter((g) => !g.ownerTaskId);
   if (pid) rows = rows.filter((g) => g.projectId === pid);
   if (repo) {
     const key = repoKey(repo);
@@ -729,45 +738,9 @@ api.post("/groups/:id/pause", async (c) => {
   const gid = c.req.param("id");
   const g = (await db.select().from(groups).where(eq(groups.id, gid))).at(0);
   if (!g) return c.json({ error: "not found" }, 404);
-  await db.update(groups).set({ paused: true }).where(eq(groups.id, gid));
-  const members = await db.select().from(tasks).where(eq(tasks.groupId, gid));
-  for (const t of members) {
-    if (t.status === "queued") await setTaskStatus(t.id, "backlog"); // park not-yet-started
-    else if (t.status === "running") stopTask(t.id, "paused"); // kill in-flight → settles paused, resumable in place
-  }
+  await pauseGroup(gid); // 与团队的「停止全组」共用同一份实现(scheduler.ts)
   const updated = (await db.select().from(groups).where(eq(groups.id, gid))).at(0)!;
   return c.json(updated);
-});
-
-// 设/撤编排组协调者(§Coordination)。taskId 非空 → 该任务成为本组协调者:组内
-// 其它任务结束(done/failed)或提问(ask_question)时,harness 自动用消息唤醒它。
-// taskId=null → 撤销,组退回普通行为。校验:任务须存在、同项目、未归档,且不能
-// 在本组的串行队列里(它要随叫随醒,排进队列会和 worker 互相卡死)。
-api.post("/groups/:id/coordinator", async (c) => {
-  const gid = c.req.param("id");
-  const g = (await db.select().from(groups).where(eq(groups.id, gid))).at(0);
-  if (!g) return c.json({ error: "not found" }, 404);
-  const b = await c.req.json<{ taskId?: string | null }>().catch(() => ({}) as { taskId?: string | null });
-  if (b.taskId === undefined) return c.json({ error: "需要 taskId(设协调者)或 taskId:null(撤销)" }, 400);
-
-  if (b.taskId === null) {
-    await db.update(groups).set({ coordinatorTaskId: null }).where(eq(groups.id, gid));
-    return c.json({ ...g, coordinatorTaskId: null });
-  }
-
-  const t = (await db.select().from(tasks).where(eq(tasks.id, b.taskId))).at(0);
-  if (!t) return c.json({ error: "协调者任务不存在", taskId: b.taskId }, 404);
-  if (t.archived) return c.json({ error: "协调者任务已归档,先取消归档" }, 409);
-  if (t.projectId !== g.projectId) return c.json({ error: "协调者必须和分组同项目" }, 400);
-  const inQueue = (await db.select().from(queueItems).where(eq(queueItems.taskId, t.id))).at(0);
-  if (inQueue && t.groupId === gid) {
-    return c.json(
-      { error: "协调者不能排在本组的串行队列里(要随叫随醒)——先 queue_remove 把它移出队列", queueId: inQueue.queueId },
-      409,
-    );
-  }
-  await db.update(groups).set({ coordinatorTaskId: t.id }).where(eq(groups.id, gid));
-  return c.json({ ...g, coordinatorTaskId: t.id });
 });
 
 // Batch-create single-mode tasks into an EXISTING group, agent-facing (§ interfaces).
@@ -1050,11 +1023,12 @@ api.post("/tasks/:id/complete", async (c) => {
   return c.json({ confirmed: true, willSettleAs: "done" });
 });
 
-// 编排组提问(对称 /pause,§Coordination):worker 在执行中调用,写下「我被这个
-// 问题卡住了」。本回合自然退出后,settleTaskStatus 因 question 非空落 paused,
-// 且队列**不**自动续跑(pickNextLaunchable 挡住);问题以消息投递给组协调者,
-// answer_question 的答复会清空 question 并带着答复 resume 同一 CLI 会话。
-// 没配协调者也能用:任务停在 paused,问题留在 task.question 等用户答复。
+// 提问(对称 /pause,§Team):agent 在执行中调用,写下「我被这个问题卡住了」。
+// 工人:本回合自然退出后,settleTaskStatus 因 question 非空落 paused,且队列**不**
+// 自动续跑(pickNextLaunchable 挡住);问题即时投递给团队指挥者,answer_question
+// 的答复会清空 question 并带着答复 resume 同一 CLI 会话。
+// 团队指挥者自己也能调 → 界面上就是「指挥者在等你答复」,答复喂回它的常驻会话。
+// 没人管也能用:任务停在 paused,问题留在 task.question 等用户答复。
 // 只接受 running 任务;不修改 status,让回合自然走完再结算(同 pause 的理由)。
 api.post("/tasks/:id/ask", async (c) => {
   const taskId = c.req.param("id");
@@ -1085,6 +1059,37 @@ api.post("/tasks/:id/answer", async (c) => {
   await db.update(tasks).set({ question: null, updatedAt: now() }).where(eq(tasks.id, taskId));
   void continueTask(taskId, `【答复】你之前的提问:「${r.question}」\n\n${a}\n\n请据此继续完成任务。`);
   return c.json({ answered: true, resumed: true });
+});
+
+// ── §Team ───────────────────────────────────────────────────────────────────
+// 派活:指挥者(mode:"team")调 MCP 的 dispatch 落到这里 —— 建 N 个工人任务 + 一个
+// 内部组(serial 顺带串成队列),默认立刻起跑。
+api.post("/tasks/:id/dispatch", async (c) => {
+  const leadTaskId = c.req.param("id");
+  type DispatchBody = { tasks?: DispatchSpec[]; mode?: "serial" | "parallel"; run?: boolean; batchName?: string };
+  const b = await c.req.json<DispatchBody>().catch(() => ({}) as DispatchBody);
+  const specs = (b.tasks ?? []).filter((s) => (s?.body ?? "").trim());
+  if (!specs.length) return c.json({ error: "tasks 不能为空(每项至少要有 body)" }, 400);
+  try {
+    const r = await dispatchWorkers(leadTaskId, specs, { mode: b.mode, run: b.run, batchName: b.batchName });
+    return c.json(
+      { groupId: r.groupId, mode: r.mode, run: b.run !== false, tasks: await enrichTiming(r.tasks) },
+      201,
+    );
+  } catch (err) {
+    return c.json({ error: err instanceof Error ? err.message : String(err) }, 400);
+  }
+});
+
+// 停止全组:指挥台进程 + 所有在跑的工人一起停。工人走分组暂停(落 paused,占住
+// 队列位置,恢复分组时从原会话续跑);指挥台落 idle(会话留着,再说话就接回)。
+api.post("/tasks/:id/team/halt", async (c) => {
+  const taskId = c.req.param("id");
+  const r = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
+  if (!r) return c.json({ error: "not found" }, 404);
+  if (r.mode !== "team") return c.json({ error: "只有团队任务能停止全组", mode: r.mode }, 400);
+  await haltTeam(taskId);
+  return c.json({ halted: true });
 });
 
 // Reply to a single task: resume its CLI session with the user's message so an
@@ -1170,6 +1175,16 @@ api.post("/tasks/:id/archive", async (c) => {
     return c.json({ error: "只有已完成/失败/已取消的任务可以归档", status: r.status }, 409);
   }
   const ts = now();
+  // 团队(§Team):归档才是「这件事结束了」—— 先停掉指挥台进程和所有在跑的工人,
+  // 再把工人一并归档(不管它们各自停在什么状态:团队没了,散在列表里的工人只是
+  // 噪音;取消归档时整支队伍一起回来)。
+  if (r.mode === "team") {
+    await haltTeam(r.id);
+    const workers = await db.select({ id: tasks.id }).from(tasks).where(eq(tasks.parentId, r.id));
+    for (const w of workers) {
+      await db.update(tasks).set({ archived: true, archivedAt: ts, updatedAt: ts }).where(eq(tasks.id, w.id));
+    }
+  }
   await db.update(tasks).set({ archived: true, archivedAt: ts, updatedAt: ts }).where(eq(tasks.id, r.id));
   return c.json((await enrichTiming([(await db.select().from(tasks).where(eq(tasks.id, r.id))).at(0)!]))[0]);
 });
@@ -1178,7 +1193,12 @@ api.post("/tasks/:id/unarchive", async (c) => {
   const r = (await db.select().from(tasks).where(eq(tasks.id, c.req.param("id")))).at(0);
   if (!r) return c.json({ error: "not found" }, 404);
   if (!r.archived) return c.json((await enrichTiming([r]))[0]); // idempotent
-  await db.update(tasks).set({ archived: false, archivedAt: null, updatedAt: now() }).where(eq(tasks.id, r.id));
+  const ts = now();
+  await db.update(tasks).set({ archived: false, archivedAt: null, updatedAt: ts }).where(eq(tasks.id, r.id));
+  // 对称:团队回来了,它的工人也一起回来(归档时是整支队伍一起走的)
+  if (r.mode === "team") {
+    await db.update(tasks).set({ archived: false, archivedAt: null, updatedAt: ts }).where(eq(tasks.parentId, r.id));
+  }
   return c.json((await enrichTiming([(await db.select().from(tasks).where(eq(tasks.id, r.id))).at(0)!]))[0]);
 });
 

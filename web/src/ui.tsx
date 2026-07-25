@@ -454,7 +454,7 @@ export function PauseHint({
   };
   return (
     <div
-      className="mt-1.5 flex items-center gap-1 text-[11px] text-cyan-700/90"
+      className="mt-1.5 flex items-center gap-1 text-[11px] text-slate-500"
       title={
         blockers.map((t) => `${t.title} · ${t.status}`).join("\n") ||
         "等待 scheduler 续跑(队首,前置已全部让位)"
@@ -467,7 +467,7 @@ export function PauseHint({
           <button
             type="button"
             onClick={click}
-            className="-mx-1 min-w-0 max-w-[18rem] truncate rounded px-1 text-left hover:bg-cyan-500/10 hover:text-cyan-600"
+            className="-mx-1 min-w-0 max-w-[18rem] truncate rounded px-1 text-left hover:bg-slate-500/10 hover:text-slate-700"
           >
             「{first.title}」
             {first.status === "paused" && <span className="ml-1 opacity-70">(也在等)</span>}

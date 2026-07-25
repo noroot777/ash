@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { eq, inArray, sql } from "drizzle-orm";
 import type { AgentType } from "@harness/shared";
 import { db } from "./db/index.js";
-import { tasks, projects, sessions, groups, scheduledMessages } from "./db/schema.js";
+import { tasks, projects, sessions } from "./db/schema.js";
 import { bus } from "./bus.js";
 import { id, now, attachmentsPrompt } from "./util.js";
 import { setTaskStatus } from "./status.js";
@@ -12,6 +12,10 @@ import { resolveWorkspace, ensureWorkdir, prepareWorktree } from "./git.js";
 import { resolveExecutor } from "./executors/index.js";
 import type { RunHandle } from "./executors/types.js";
 import { RUNS_DIR } from "./paths.js";
+import { writeTurn as writeTurnLine, writeTurnEnd, writeRunError, runTracePaths } from "./transcript.js";
+import { startTeam, deliverToLead } from "./team/session.js";
+import { workerPreambleFor } from "./team/dispatch.js";
+import { notifyTeamLead } from "./team/inbox.js";
 
 const running = new Set<string>(); // taskIds currently executing (single-flight)
 
@@ -37,40 +41,10 @@ const RESUME_PROMPT =
 // user reply), shown identically live (SSE) and on reload (.md).
 const SYS_MARKER = "〔系统〕继续（从中断处）";
 
-// A non-text interjection in the run timeline — a 你→@agent reply or a 〔系统〕
-// continue — is persisted as ONE sentinel line: RS (\x1e, which never occurs in
-// agent text) + JSON. JSON keeps it to a single physical line even when the text
-// has newlines, so the reload parser can lift it back into its own bubble (with
-// the timestamp it carries) instead of letting it bleed into the surrounding
-// agent Markdown. Live, the same turn rides its own channel (a user reply shows
-// optimistically client-side; a system trace via a `system` event), so both
-// surfaces read identically.
-const TURN_SENTINEL = "\x1e";
+// A non-text interjection in the run timeline is persisted as one sentinel line
+// (see transcript.ts) so live and reloaded views read identically.
 function writeTurn(out: NodeJS.WritableStream, turn: { t: "user" | "system"; agent: AgentType; text: string }): void {
-  out.write(`\n${TURN_SENTINEL}${JSON.stringify({ ...turn, at: now() })}\n`);
-}
-
-// Fence where an agent turn ACTUALLY finished (real exec end), so per-turn 用时 in
-// the conversation brackets [你→ reply → agent done] instead of [reply → your NEXT
-// reply] — i.e. it excludes the idle wait while the agent sat waiting for you.
-// Distinct from writeTurn (which fences human/system interjections, not exec ends).
-function writeTurnEnd(out: NodeJS.WritableStream, at: string): void {
-  out.write(`\n${TURN_SENTINEL}${JSON.stringify({ t: "agentEnd", at })}\n`);
-}
-
-function writeRunError(out: NodeJS.WritableStream, message: string): void {
-  const quoted = message.trim().split("\n").map((line) => `> ${line}`).join("\n");
-  out.write(`\n> **执行诊断**\n${quoted}\n`);
-}
-
-function runTracePaths(runDir: string, sessionId: string, turnStart: string) {
-  const turn = turnStart.replace(/[^0-9A-Za-z]/g, "");
-  const base = join(runDir, `${sessionId}-${turn}`);
-  return {
-    eventsPath: `${base}.codex-events.jsonl`,
-    stderrPath: `${base}.stderr.log`,
-    diagnosticsPath: `${base}.diagnostics.json`,
-  };
+  writeTurnLine(out, turn, now());
 }
 
 // 完成协议前言(严格 done):告诉 agent 它的 taskId 和「必须亲口确认完成」的
@@ -80,56 +54,6 @@ const COMPLETION_PROTOCOL = (taskId: string) =>
   `【完成协议】本任务在 harness 的 taskId 是 ${taskId}。当且仅当你确定任务目标已经达成时,在结束前调用 harness MCP 的 complete_task(taskId="${taskId}")确认完成;未确认就结束,本回合会按未完成记为 failed。跑到需要等待外部条件的检查点时,改用 pause_task 写下续跑指令。\n\n`;
 const COMPLETION_REMINDER = (taskId: string) =>
   `\n\n(harness 完成协议:taskId=${taskId}。若本回合结束时任务目标已达成,先调用 complete_task 确认再结束,否则按未完成记 failed;到等待检查点则用 pause_task。)`;
-
-// ── 编排组(Coordination)────────────────────────────────────────────────────
-// 组可以指定一个「协调者」任务(groups.coordinator_task_id)。此后:
-//   • 组内 worker 结算为 done / failed 时,自动给协调者投递一条唤醒消息;
-//   • worker 调 ask_question 提问后,结算落 paused(队列不推进、不自动续跑,
-//     见 scheduler.pickNextLaunchable),问题同样投递给协调者;
-//   • 协调者用 answer_question 答复 → 清空问题并带着答复 resume worker 会话。
-// 投递复用 scheduledMessages(sendAt=now):调度器只在目标空闲时发送,天然
-// 避开「协调者正在跑,continueTask 单飞锁静默丢消息」的竞态;协调者忙碌时
-// 消息排队等下一个 tick。
-const COORD_PREAMBLE = (taskId: string) =>
-  `【编排组协调者】你是所在分组的协调者:组内 worker 任务结束(done/failed)或提问时,harness 会把通知作为新消息自动唤醒你。收到提问 → 先调查(get_task 看它的任务、读仓库现状),再调用 answer_question(taskId=提问任务的 id)答复,答复会自动唤醒对方续跑;拿不准就 pause_task 把问题留给用户。收到结束通知 → 核查产物,决定验收/派修复任务/收尾。每个回合把手头的事处理完后,调用 complete_task(taskId="${taskId}")再结束回合。\n\n`;
-const WORKER_PREAMBLE = (taskId: string) =>
-  `【编排组成员】本组配有协调者。遇到不拍板就无法继续的问题(这正是上面「信息确实不足以继续」的正规通道),调用 harness MCP 的 ask_question(taskId="${taskId}", question=...),然后正常结束回合——问题会自动送达协调者,答复会作为新消息唤醒你接着干;不要为等答复空转,也不要用 pause_task 来提问。\n\n`;
-
-// 本任务在编排关系里的前言(没有编排关系 → 空串)。fresh run 时拼进 prompt。
-async function coordinationPreamble(task: { id: string; groupId: string | null }): Promise<string> {
-  if (!task.groupId) return "";
-  const g = (await db.select().from(groups).where(eq(groups.id, task.groupId))).at(0);
-  if (!g?.coordinatorTaskId) return "";
-  return g.coordinatorTaskId === task.id ? COORD_PREAMBLE(task.id) : WORKER_PREAMBLE(task.id);
-}
-
-// 给协调者投递一条唤醒消息(fire-and-forget;协调者缺席/已归档则静默跳过)。
-async function notifyCoordinator(
-  task: { id: string; title: string; groupId: string | null },
-  kind: "done" | "failed" | "failed_unconfirmed" | "question",
-  question?: string,
-): Promise<void> {
-  if (!task.groupId) return;
-  const g = (await db.select().from(groups).where(eq(groups.id, task.groupId))).at(0);
-  const coordId = g?.coordinatorTaskId;
-  if (!coordId || coordId === task.id) return; // 非编排组 / 协调者自己结算不通知
-  const coord = (await db.select().from(tasks).where(eq(tasks.id, coordId))).at(0);
-  if (!coord || coord.archived) return;
-  const text =
-    kind === "question"
-      ? `【worker 提问】任务「${task.title}」(taskId=${task.id})已暂停等待答复,问题:\n${question}\n\n请先调查(get_task 查它的任务详情、按需读仓库现状),再调用 answer_question(taskId="${task.id}", answer=...)答复——答复会自动唤醒它续跑。拿不准就 pause_task 把问题留给用户。`
-      : `【worker 结束】任务「${task.title}」(taskId=${task.id})本回合以 ${kind === "done" ? "done" : "failed"} 结束${kind === "failed_unconfirmed" ? "(回合正常退出但未调 complete_task——按严格协议记 failed,可能实际已完成)" : ""}。请核查其产物与状态:确实完成 → patch_task 修正;未完成 → 安排修复或重试;再决定组内下一步。`;
-  await db.insert(scheduledMessages).values({
-    id: id(),
-    taskId: coordId,
-    text,
-    attachments: "[]",
-    agent: null,
-    sendAt: now(),
-    status: "pending",
-    createdAt: now(),
-  });
-}
 
 // Why a task is being (re)started — only used to label the resume; all reasons
 // behave the same (resume if there's a resumable session, else fresh). Note: a
@@ -166,10 +90,13 @@ async function settleTaskStatus(
 ): Promise<{ status: "canceled" | "paused" | "done" | "failed"; note?: string }> {
   const confirmed = takeConfirmed(taskId); // 无条件消费,别让标记漏到下一回合
   const t = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
-  const notify = (kind: Parameters<typeof notifyCoordinator>[1], q?: string) => {
+  // 工人结算 → 按需唤醒团队指挥者(§Team)。只有提问、失败、以及 reportBack 的
+  // done 会投递;普通 done 静默(UI 自己会更新,不花一轮模型调用)。非团队任务
+  // (parentId 空)里 notifyTeamLead 直接返回。
+  const notify = (kind: Parameters<typeof notifyTeamLead>[1], q?: string) => {
     if (!t) return;
-    void notifyCoordinator({ id: t.id, title: t.title, groupId: t.groupId }, kind, q).catch((err) =>
-      console.error(`[harness] notifyCoordinator(${taskId}) failed:`, err),
+    void notifyTeamLead(t, kind, q).catch((err) =>
+      console.error(`[harness] notifyTeamLead(${taskId}) failed:`, err),
     );
   };
   if (stopped === "canceled") {
@@ -180,8 +107,8 @@ async function settleTaskStatus(
     // 组暂停打断:落 paused 占住队列位置(组是 paused 的,推进钩子不会动)。
     // 恢复分组 → advanceQueue 选中它 → resumeOrRunTask 无 resumePrompt 走
     // RESUME_PROMPT 续原会话。若它被杀前调过 ask_question,question 仍在,
-    // pickNextLaunchable 会继续挡住等答复——提问通知照发(scheduledMessages
-    // 排队,协调者空闲时送达),不因组暂停而丢。
+    // pickNextLaunchable 会继续挡住等答复——提问通知照发(团队指挥者那边该
+    // 知道它在等什么),不因组暂停而丢。
     await setStatus(taskId, "paused");
     if (t?.question) {
       notify("question", t.question);
@@ -219,19 +146,35 @@ async function settleTaskStatus(
 // status was interrupted (e.g. the server restarted mid-run). Mark those failed
 // so they're recoverable via retry/reply instead of being stuck forever.
 // awaiting_review is left alone — its gate can still be resolved after a restart.
+// 例外:团队任务(mode:"team")没有「失败」这回事 —— 指挥台进程随 server 一起
+// 死了,但 CLI 会话还在,下次有人说话就 --resume 接回。落 idle(待命)。
 export async function reconcileInterrupted(): Promise<void> {
   const orphaned = await db.select().from(tasks).where(inArray(tasks.status, ["running", "queued"]));
   if (!orphaned.length) return;
-  await db
-    .update(tasks)
-    .set({ status: "failed", updatedAt: now(), endedAt: now() })
-    .where(inArray(tasks.status, ["running", "queued"]));
-  console.log(`[harness] reconciled ${orphaned.length} interrupted task(s) → failed`);
+  const teamIds = orphaned.filter((t) => t.mode === "team").map((t) => t.id);
+  const failedIds = orphaned.filter((t) => t.mode !== "team").map((t) => t.id);
+  if (failedIds.length) {
+    await db
+      .update(tasks)
+      .set({ status: "failed", updatedAt: now(), endedAt: now() })
+      .where(inArray(tasks.id, failedIds));
+  }
+  if (teamIds.length) {
+    await db.update(tasks).set({ status: "idle", updatedAt: now() }).where(inArray(tasks.id, teamIds));
+  }
+  console.log(
+    `[harness] reconciled ${failedIds.length} interrupted task(s) → failed` +
+      (teamIds.length ? `, ${teamIds.length} team task(s) → idle` : ""),
+  );
 }
 
 // M1: execute a single-agent task in the project's working dir, stream output over
 // SSE, and persist a session credential (DESIGN.md §1/§4/§12/§13).
 export async function runTask(taskId: string): Promise<void> {
+  // 团队任务(§Team)走常驻指挥台,不占单飞锁 —— 它的「一次运行」是整段常驻,
+  // 不是一个回合。放在最前面,于是 /tasks/:id/run、retry、queue 推进都自动生效。
+  const mode = (await db.select({ mode: tasks.mode }).from(tasks).where(eq(tasks.id, taskId))).at(0)?.mode;
+  if (mode === "team") return startTeam(taskId);
   if (running.has(taskId)) return;
   running.add(taskId);
   let handle: RunHandle | undefined;
@@ -259,8 +202,11 @@ export async function runTask(taskId: string): Promise<void> {
     const TITLE_HINT =
       "请在正式开始前，第一行只输出：标题：<不超过14字、概括本次任务的简短标题>，然后换行，再正常完成下面的任务。\n\n任务：\n";
     const objective = task.body?.trim() || task.title;
-    const coordination = await coordinationPreamble({ id: taskId, groupId: task.groupId });
-    const prompt = AUTONOMY + COMPLETION_PROTOCOL(taskId) + coordination + (autoTitle ? TITLE_HINT + objective : objective);
+    // 团队工人多一段前言(卡住走 ask_question 直达指挥者、别自己扩张边界)。
+    // 只拼进 prompt,不写进 tasks.body —— body 是指挥者给的需求正文,界面展示那份。
+    const teamPreamble = await workerPreambleFor(task);
+    const prompt =
+      AUTONOMY + COMPLETION_PROTOCOL(taskId) + teamPreamble + (autoTitle ? TITLE_HINT + objective : objective);
     const turnStart = now();
     const sessId = id();
     const runDir = join(RUNS_DIR, taskId);
@@ -415,6 +361,11 @@ export async function continueTask(
   userText: string,
   opts: { agent?: AgentType; attachments?: string[]; system?: ResumeReason } = {},
 ): Promise<void> {
+  // 团队任务(§Team):插话直接写进常驻指挥台的 stdin —— 即时、同一会话、用户侧
+  // 感觉不断线。不占这里的单飞锁(那把锁是给「一次运行 = 一个回合」的单任务用的,
+  // 指挥台的一次运行是整段常驻)。于是 /reply、/answer、@提及全都自动生效。
+  const teamMode = (await db.select({ mode: tasks.mode }).from(tasks).where(eq(tasks.id, taskId))).at(0)?.mode;
+  if (teamMode === "team") return deliverToLead(taskId, userText, { attachments: opts.attachments });
   if (running.has(taskId)) return;
   running.add(taskId);
   const agentType = opts.agent ?? "claude"; // re-derived below once the task loads; kept for the catch handler

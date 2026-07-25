@@ -2,18 +2,37 @@ import type { TaskStatus } from "@harness/shared";
 
 // Linear-style status glyphs: ringed circles with a pie-fill for progress,
 // filled disc + check for done, etc. (Replaces plain colored dots.)
+//
+// 配色分工（照 Claude Code 里那套「一眼看出该不该管」的分级）：
+// - 「有人在问你话」= 青 #06b6d4 实心圈 + 白问号 —— 全表最扎眼的一格，因为它是
+//   唯一「不动手就永远停在这」的状态。它不是一个 TaskStatus，而是「paused/idle +
+//   question 非空」的组合，所以走 awaitingAnswer 这个额外入参，不进 COLOR 表。
+// - 检查点 paused（harness 自己会续跑，不用人管）让位到蓝灰 #64748b。
+// - idle 是团队指挥台专有：在线待命，空心圈 + 中心小点。
 const COLOR: Record<TaskStatus, string> = {
   backlog: "#9ca1a9",
   queued: "#9499a1",
   running: "#e2b203", // Linear in-progress yellow
   awaiting_review: "#8b5cf6",
-  paused: "#06b6d4", // cyan：跑到检查点等续跑——比 running 蓝、不抢 done 的 indigo
+  paused: "#64748b", // 蓝灰：跑到检查点等续跑，harness 自己会推进——不该抢注意力
+  idle: "#64748b", // 指挥台在线但这一刻没在说话
   done: "#5e6ad2", // Linear done indigo
   failed: "#eb5757",
   canceled: "#9ca1a9",
 };
 
-export function StatusIcon({ status, size = 14 }: { status: TaskStatus; size?: number }) {
+const ATTENTION = "#06b6d4"; // 「等你答复」专用青
+
+export function StatusIcon({
+  status,
+  size = 14,
+  awaitingAnswer,
+}: {
+  status: TaskStatus;
+  size?: number;
+  /** 有人在问你话（paused/idle + question 非空）：盖掉 status 图标，画成青色实心问号 */
+  awaitingAnswer?: boolean;
+}) {
   const c = COLOR[status];
   const ring = (extra?: React.ReactNode, dash?: string) => (
     <svg width={size} height={size} viewBox="0 0 14 14" fill="none" aria-hidden>
@@ -35,6 +54,22 @@ export function StatusIcon({ status, size = 14 }: { status: TaskStatus; size?: n
     />
   );
 
+  if (awaitingAnswer) {
+    return (
+      <svg width={size} height={size} viewBox="0 0 14 14" fill="none" aria-hidden>
+        <circle cx="7" cy="7" r="6" fill={ATTENTION} />
+        <path
+          d="M5.4 5.1c0-.9.75-1.5 1.6-1.5.9 0 1.6.6 1.6 1.45 0 .7-.42 1.02-.95 1.4-.5.36-.65.6-.65 1.05v.3"
+          stroke="#fff"
+          strokeWidth="1.25"
+          strokeLinecap="round"
+          fill="none"
+        />
+        <circle cx="7" cy="10.3" r="0.85" fill="#fff" />
+      </svg>
+    );
+  }
+
   switch (status) {
     case "backlog":
       return ring(undefined, "1.6 1.6");
@@ -44,9 +79,12 @@ export function StatusIcon({ status, size = 14 }: { status: TaskStatus; size?: n
       return ring(pie(0.5));
     case "awaiting_review":
       return ring(pie(0.7));
+    case "idle":
+      // 指挥台待命：空心圈 + 中心一个小点（「在线，但没在说话」）。
+      return ring(<circle cx="7" cy="7" r="1.6" fill={c} />);
     case "paused":
-      // 虚线 ring（等待中）+ 经典的两根小竖条（pause 视觉语言）；颜色 cyan，
-      // 区别于 running 的 yellow。一眼能扫出「在等不在跑」。
+      // 虚线 ring（等待中）+ 经典的两根小竖条（pause 视觉语言）。蓝灰色，
+      // 明确表示「harness 自己会续跑，不用你管」。
       return (
         <svg width={size} height={size} viewBox="0 0 14 14" fill="none" aria-hidden>
           <circle cx="7" cy="7" r="5.25" stroke={c} strokeWidth="1.5" strokeDasharray="1.6 1.6" />

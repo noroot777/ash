@@ -17,9 +17,9 @@ export const groups = sqliteTable("groups", {
   name: text("name").notNull(),
   mode: text("mode").notNull().default("parallel"), // parallel | serial
   paused: integer("paused", { mode: "boolean" }).notNull().default(false),
-  // 编排组：协调者任务 id。非空时组内其它任务结束/提问会自动唤醒它（见
-  // orchestrator.notifyCoordinator）；协调者不得在本组串行队列里。
-  coordinatorTaskId: text("coordinator_task_id"),
+  // 内部组：非空 = 这个组由某个团队任务(mode:"team")派活时自动创建，成员都是它的
+  // 工人。分组管理界面按此过滤掉（见 §Team）。
+  ownerTaskId: text("owner_task_id"),
   createdAt: text("created_at").notNull(),
 });
 
@@ -30,7 +30,7 @@ export const tasks = sqliteTable("tasks", {
   parentId: text("parent_id"),
   title: text("title").notNull(),
   body: text("body").notNull().default(""),
-  mode: text("mode").notNull().default("single"), // single | debate
+  mode: text("mode").notNull().default("single"), // single | debate | team
   status: text("status").notNull().default("backlog"),
   priority: text("priority").notNull().default("none"),
   labels: text("labels").notNull().default("[]"), // json
@@ -39,6 +39,9 @@ export const tasks = sqliteTable("tasks", {
   agentType: text("agent_type"),
   autoTitle: integer("auto_title", { mode: "boolean" }).notNull().default(false),
   debate: text("debate"), // json DebateConfig
+  team: text("team"), // json TeamConfig（mode:"team" 的指挥者/默认工人类型）
+  // 工人旗标：done 时是否汇报给指挥者（dispatch 时逐个指定）。
+  reportBack: integer("report_back", { mode: "boolean" }).notNull().default(false),
   scheduleId: text("schedule_id"),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
@@ -54,7 +57,7 @@ export const tasks = sqliteTable("tasks", {
   issueId: text("issue_id"), // 回链来源事项(null = 直接创建)
   // 检查点续跑：agent 调 pause_task 时填进来；下次 resume 时取出喂给 CLI 会话并清空。
   resumePrompt: text("resume_prompt"),
-  // 编排组提问：agent 调 ask_question 时填进来。结算落 paused 且队列不自动续跑，
+  // 提问：agent 调 ask_question 时填进来。结算落 paused 且队列不自动续跑，
   // 等 answer_question 清空并带答复 resume（见 scheduler.pickNextLaunchable 的挡板）。
   question: text("question"),
 });

@@ -3,9 +3,23 @@ import type { TaskStatus } from "@harness/shared";
 import { db } from "./db/index.js";
 import { tasks, groups, queueItems } from "./db/schema.js";
 import { setTaskStatus } from "./status.js";
+import { stopTask } from "./runs.js";
 import { resumeOrRunTask } from "./orchestrator.js";
 
 const MAX_PARALLEL = 4;
+
+// 暂停整组(POST /groups/:id/pause 与团队的「停止全组」共用这一份):置 paused、
+// 把还没起跑的 queued 退回 backlog、把正在跑的杀掉并**结算 paused**(不是
+// canceled——canceled 会被队列透明跳过,恢复分组时就错启下一个;paused 占住
+// head,恢复时从原 CLI 会话续跑被打断的那个)。
+export async function pauseGroup(groupId: string): Promise<void> {
+  await db.update(groups).set({ paused: true }).where(eq(groups.id, groupId));
+  const members = await db.select().from(tasks).where(eq(tasks.groupId, groupId));
+  for (const t of members) {
+    if (t.status === "queued") await setTaskStatus(t.id, "backlog");
+    else if (t.status === "running") stopTask(t.id, "paused");
+  }
+}
 
 async function setQueued(taskId: string) {
   await setTaskStatus(taskId, "queued");
@@ -74,6 +88,7 @@ export async function pickNextLaunchable(queueId: string): Promise<typeof tasks.
     const t = (await db.select().from(tasks).where(eq(tasks.id, item.taskId))).at(0);
     if (!t) continue;
     if (t.archived) continue;
+    if (t.mode === "team") continue; // 团队任务不该进队列(防御);它没有终态,会永久挡住
     const s = t.status as TaskStatus;
     if (s === "done" || s === "canceled" || s === "failed") continue;
     if (s === "awaiting_review") return null; // 审查门:链停等用户
@@ -143,6 +158,7 @@ async function runParallel(groupId: string): Promise<void> {
   const launchable = groupRows.filter(
     (t) =>
       !t.archived &&
+      t.mode !== "team" && // 防御:团队任务不进组,也不该被分组批量拉起
       !inQueue.has(t.id) &&
       (t.status === "backlog" ||
         (t.status === "paused" && !t.resumePrompt && !t.question)),

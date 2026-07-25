@@ -945,13 +945,13 @@ function QuestionCard({ task }: { task: Task }) {
     }
   };
   return (
-    <div className="mt-2 overflow-hidden rounded-md border border-violet-500/40 bg-violet-500/[0.06]">
-      <div className="flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-medium text-violet-700">
-        <StatusIcon status="paused" size={11} />
+    <div className="mt-2 overflow-hidden rounded-md border border-cyan-500/40 bg-cyan-500/[0.06]">
+      <div className="flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-medium text-cyan-700">
+        <StatusIcon status="paused" size={11} awaitingAnswer />
         <span>任务提问，等待答复（队列陪等，不会自动续跑）</span>
       </div>
       <pre className="max-h-48 overflow-y-auto whitespace-pre-wrap break-words px-2.5 pb-1 text-[12px] leading-snug text-ink">{task.question}</pre>
-      <div className="flex items-start gap-1.5 border-t border-violet-500/20 px-2 py-1.5">
+      <div className="flex items-start gap-1.5 border-t border-cyan-500/20 px-2 py-1.5">
         <textarea
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
@@ -966,7 +966,7 @@ function QuestionCard({ task }: { task: Task }) {
         <button
           onClick={() => void send()}
           disabled={settling || sending || !draft.trim()}
-          className="shrink-0 rounded-md bg-violet-600 px-2.5 py-1 text-[11px] font-medium text-white hover:bg-violet-500 disabled:opacity-40"
+          className="shrink-0 rounded-md bg-cyan-600 px-2.5 py-1 text-[11px] font-medium text-white hover:bg-cyan-500 disabled:opacity-40"
         >
           {sending ? "发送中…" : "答复并唤醒"}
         </button>
@@ -991,8 +991,8 @@ function ResumePromptEditor({ value, onSave }: { value: string; onSave: (rp: str
   };
   if (editing) {
     return (
-      <div className="mt-2 overflow-hidden rounded-md border border-cyan-500/40 bg-cyan-500/[0.06]">
-        <div className="flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-medium text-cyan-700">
+      <div className="mt-2 overflow-hidden rounded-md border border-slate-500/40 bg-slate-500/[0.06]">
+        <div className="flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-medium text-slate-600">
           <StatusIcon status="paused" size={11} />
           <span>编辑续跑指令</span>
         </div>
@@ -1008,7 +1008,7 @@ function ResumePromptEditor({ value, onSave }: { value: string; onSave: (rp: str
           placeholder="续跑时发送给 agent 的 user 消息，比如：「继续做 tts 这一段」"
           className="block w-full resize-y bg-transparent px-2.5 py-1.5 text-[12px] leading-snug text-ink outline-none placeholder:text-faint"
         />
-        <div className="flex items-center justify-end gap-1.5 border-t border-cyan-500/20 px-2 py-1.5">
+        <div className="flex items-center justify-end gap-1.5 border-t border-slate-500/20 px-2 py-1.5">
           <button
             onClick={() => { setEditing(false); setDraft(value); }}
             className="rounded-md px-2 py-1 text-[11px] text-muted hover:text-ink"
@@ -1017,7 +1017,7 @@ function ResumePromptEditor({ value, onSave }: { value: string; onSave: (rp: str
           </button>
           <button
             onClick={commit}
-            className="rounded-md bg-cyan-600 px-2.5 py-1 text-[11px] font-medium text-white hover:bg-cyan-500"
+            className="rounded-md bg-slate-600 px-2.5 py-1 text-[11px] font-medium text-white hover:bg-slate-500"
           >
             保存（⌘↵）
           </button>
@@ -1026,13 +1026,13 @@ function ResumePromptEditor({ value, onSave }: { value: string; onSave: (rp: str
     );
   }
   return (
-    <div className="group/rp mt-2 overflow-hidden rounded-md border border-cyan-500/40 bg-cyan-500/[0.06]">
-      <div className="flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-medium text-cyan-700">
+    <div className="group/rp mt-2 overflow-hidden rounded-md border border-slate-500/40 bg-slate-500/[0.06]">
+      <div className="flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-medium text-slate-600">
         <StatusIcon status="paused" size={11} />
         <span>{value ? "已到检查点 · 续跑时将发送：" : "已到检查点 · 无续跑指令（续跑用标准「继续」nudge）"}</span>
         <button
           onClick={() => setEditing(true)}
-          className="ml-auto rounded px-1.5 py-0.5 text-[10px] text-cyan-700 opacity-0 hover:bg-cyan-500/15 group-hover/rp:opacity-100"
+          className="ml-auto rounded px-1.5 py-0.5 text-[10px] text-slate-600 opacity-0 hover:bg-slate-500/15 group-hover/rp:opacity-100"
           title={value ? "编辑续跑指令" : "添加续跑指令"}
         >
           {value ? "编辑" : "+ 添加"}
@@ -1040,7 +1040,7 @@ function ResumePromptEditor({ value, onSave }: { value: string; onSave: (rp: str
         {value && (
           <button
             onClick={() => onSave("")}
-            className="rounded px-1.5 py-0.5 text-[10px] text-cyan-700/80 opacity-0 hover:bg-cyan-500/15 hover:text-cyan-700 group-hover/rp:opacity-100"
+            className="rounded px-1.5 py-0.5 text-[10px] text-slate-600/80 opacity-0 hover:bg-slate-500/15 hover:text-slate-600 group-hover/rp:opacity-100"
             title="清空：续跑时改用标准「继续」nudge"
           >
             清空

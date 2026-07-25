@@ -68,19 +68,19 @@ export interface Group {
   name: string;
   mode: GroupMode;
   paused: boolean; // 暂停 = 立刻冻结整组：调度器不再启动"还没开始"的任务，正在运行的也会被停掉（结算为 canceled，可继续）；再次「运行/继续」时恢复，被停的任务从中断处接着跑
-  // 编排组（§Coordination）：指定组内的协调者任务。非空时：组内其它任务结束
-  // (done/failed) 或提问 (ask_question) 会以消息形式自动唤醒协调者；协调者
-  // 不能在本组的串行队列里（会互相卡死）。null = 普通组，行为不变。
-  coordinatorTaskId?: string | null;
+  // 内部组（§Team）：非空 = 这个组是某个团队任务(mode:"team")派活时自动建的，
+  // 它的成员都是那个任务的工人。分组管理界面不列它 —— 用户在团队视图里看。
+  ownerTaskId?: string | null;
   createdAt: string;
 }
 
-export type TaskMode = "single" | "debate";
+export type TaskMode = "single" | "debate" | "team";
 
 export type TaskStatus =
   | "backlog"
   | "queued"
   | "running"
+  | "idle" // 只有 team：指挥台在线但这一刻没在说话（没有「完成」这个终态，归档才结束）
   | "awaiting_review"
   | "paused" // 跑到检查点：agent 主动调 pause_task 后留下 resumePrompt，等依赖满足或用户手动继续
   | "done"
@@ -110,7 +110,9 @@ export function isUserSettableStatus(status: TaskStatus): boolean {
   return USER_SETTABLE_STATUSES.includes(status);
 }
 
-export const ARCHIVABLE_STATUSES: TaskStatus[] = ["done", "failed", "canceled"];
+// 归档 = 结束。team 任务没有 done —— 它只在忙(running)/闲(idle)之间摆动，所以
+// `idle` 也算可归档：归档才是团队解散的那一刻。
+export const ARCHIVABLE_STATUSES: TaskStatus[] = ["done", "failed", "canceled", "idle"];
 export function canArchive(status: TaskStatus): boolean {
   return ARCHIVABLE_STATUSES.includes(status);
 }
@@ -137,6 +139,11 @@ export interface Task {
   agentType?: AgentType;
   // debate mode config (§7):
   debate?: DebateConfig;
+  // team mode config (§Team)：指挥者 + 默认工人类型。只有 mode:"team" 的任务有。
+  team?: TeamConfig;
+  // 工人旗标（§Team）：这个工人做完(done)要不要汇报给指挥者。派活时逐个指定；
+  // false = 静默完成（UI 自己会更新，不花一轮模型调用去叫醒指挥者）。
+  reportBack?: boolean;
   scheduleId?: string | null;
   createdAt: string;
   updatedAt: string;
@@ -174,12 +181,23 @@ export interface Task {
   // `done`；scheduler 在依赖满足后把它当 continueTask 的 userText 喂回 CLI
   // session，并清空此字段。null = 无待续跑指令。
   resumePrompt?: string | null;
-  // 编排组提问（§Coordination）：worker 在执行中调 ask_question 留下的问题。
-  // 结算时此字段非空 → 状态落 paused 且**队列不推进也不自动续跑**（区别于
-  // resumePrompt 检查点），同时通知协调者；answer_question 清空它并带着答复
-  // resume 会话。null = 没有待答复的问题。
+  // 提问（§Team）：agent 在执行中调 ask_question 留下的问题。结算时此字段非空 →
+  // 状态落 paused 且**队列不推进也不自动续跑**（区别于 resumePrompt 检查点），
+  // 同时通知它的指挥者；answer_question 清空它并带着答复 resume 会话。
+  // 团队任务自己也能用它 —— 那就是「指挥者在问用户」。null = 没有待答复的问题。
   question?: string | null;
 }
+
+// ── Team (§Team) ─────────────────────────────────────────────────────────────
+// 一个 mode:"team" 的任务 = 一个常驻的「指挥台」：进程不退、会话不断，你随时插话；
+// 它用 MCP 的 dispatch 派出真任务当工人（工人挂在 parentId 上，成批地放进自动建的
+// 内部组里，串行批次还配 queue）。指挥者没有「完成」这个状态，只有忙/闲。
+export interface TeamConfig {
+  lead: AgentType; // 指挥者的 CLI 类型 —— 必须支持常驻会话（见 executors 的 openResident）
+  worker: AgentType; // 派活时的默认工人类型（dispatch 可逐个覆盖）
+}
+
+export const TEAM_DEFAULTS: TeamConfig = { lead: "claude", worker: "claude" };
 
 // ── Issues (§Issues) ─────────────────────────────────────────────────────────
 // An Issue is the lightweight planning/discussion layer that sits UPSTREAM of
@@ -351,7 +369,9 @@ export const DEBATE_DEFAULTS: DebateConfig = {
 };
 
 // ── Sessions / traceability (§13) ─────────────────────────────────────────────
-export type SessionRole = "single" | "debaterA" | "debaterB" | "implementer" | "reviewer";
+// "lead" = 团队任务的常驻指挥台会话（一个进程跑很多回合，见 server/src/team）；
+// 工人自己的会话仍是 "single"。
+export type SessionRole = "single" | "lead" | "debaterA" | "debaterB" | "implementer" | "reviewer";
 
 export interface Session {
   id: string;
@@ -417,6 +437,9 @@ export type AgentEvent =
   | { kind: "session"; cliSessionId: string }
   | { kind: "system"; text: string } // a backend-initiated 〔系统〕 trace (e.g. 继续) — its own bubble, not agent text
   | { kind: "error"; message: string }
+  // 常驻会话（team 指挥台）专用：一个回合说完了，但进程还活着等下一条消息。
+  // 一次性 run() 永远不发这个 —— 它的回合结束就是进程结束(done)。
+  | { kind: "turnEnd" }
   | { kind: "done"; exitStatus: number };
 
 export type DebateSpeaker = "A" | "B" | "impl" | "review" | "user";

@@ -1,0 +1,436 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>harness · /编排 UI 稿</title>
+<style>
+  :root{
+    --canvas:#f9f9fb; --panel:#fff; --raised:#f1f1f4; --overlay:#e9e9ee;
+    --line:#e7e7ea; --line2:#d8d8de;
+    --ink:#282a30; --muted:#6b6f76; --faint:#9ca1a9;
+    --accent:#5e6ad2; --accent-hover:#535fc7;
+    --violet:#7c3aed; --violet-bg:rgba(124,58,237,.13);
+    --amber:#b45309; --amber-bg:rgba(245,158,11,.13); --amber-line:rgba(245,158,11,.45);
+    --green:#15803d; --green-bg:rgba(34,197,94,.14);
+    --sky:#0369a1; --sky-bg:rgba(14,165,233,.14);
+    --red:#b91c1c;
+    --font:"Inter Variable","Inter",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+    --mono:ui-monospace,"SF Mono","JetBrains Mono",monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--canvas);color:var(--ink);font:13px/1.5 var(--font);-webkit-font-smoothing:antialiased;padding:22px}
+  h1,h2,h3{letter-spacing:-.014em;font-weight:600;margin:0}
+  .wrap{max-width:1180px;margin:0 auto}
+  .tabs{display:flex;gap:6px;margin-bottom:12px;flex-wrap:wrap}
+  .tab{border:1px solid var(--line2);background:var(--panel);border-radius:7px;padding:5px 11px;font-size:12.5px;color:var(--muted);cursor:pointer}
+  .tab.on{background:var(--ink);border-color:var(--ink);color:#fff}
+  .note{font-size:12px;color:var(--faint);margin:0 2px 9px}
+  .note b{color:var(--muted);font-weight:600}
+  .app{background:var(--panel);border:1px solid var(--line);border-radius:11px;overflow:hidden;box-shadow:0 1px 2px rgba(0,0,0,.04),0 8px 28px -18px rgba(0,0,0,.25)}
+  .screen{display:none}
+  .screen.on{display:block}
+
+  /* chips & bits */
+  .chip{display:inline-flex;align-items:center;gap:5px;border-radius:5px;padding:2px 7px;font-size:10.5px;font-weight:600;letter-spacing:.01em}
+  .chip.crew{background:var(--violet-bg);color:var(--violet)}
+  .chip.pair{background:var(--violet-bg);color:var(--violet)}
+  .pill{display:inline-flex;align-items:center;gap:6px;background:var(--raised);border-radius:999px;padding:2px 9px;font-size:11px;color:var(--muted)}
+  .dot{width:8px;height:8px;border-radius:999px;flex:none;display:inline-block}
+  .dot.run{background:#0ea5e9;box-shadow:0 0 0 3px rgba(14,165,233,.18);animation:pulse 1.6s ease-in-out infinite}
+  .dot.ask{background:#f59e0b;box-shadow:0 0 0 3px rgba(245,158,11,.2)}
+  .dot.done{background:#22c55e}
+  .dot.wait{background:#c7c9d1}
+  .dot.fail{background:#ef4444}
+  @keyframes pulse{50%{opacity:.45}}
+  .btn{border:1px solid var(--line2);background:var(--panel);border-radius:6px;padding:5px 12px;font-size:12.5px;color:var(--muted);cursor:pointer}
+  .btn:hover{color:var(--ink)}
+  .btn.primary{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:500}
+  .btn.danger{border-color:rgba(239,68,68,.4);color:var(--red)}
+  .btn.sm{padding:3px 9px;font-size:11.5px}
+  .mono{font-family:var(--mono);font-size:11px;color:var(--faint)}
+
+  /* header */
+  .hd{border-bottom:1px solid var(--line);padding:14px 18px}
+  .hd-row{display:flex;align-items:center;gap:10px}
+  .hd h1{font-size:17px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .req{margin-top:9px;border:1px solid var(--line);background:var(--canvas);border-radius:7px;padding:8px 10px;color:var(--muted);font-size:12.5px;max-height:40px;overflow:hidden;position:relative}
+  .req .more{position:absolute;right:8px;bottom:5px;background:var(--canvas);color:var(--accent);font-size:11px;padding-left:6px;cursor:pointer}
+  .meta{margin-top:9px;display:flex;flex-wrap:wrap;align-items:center;gap:5px 14px;font-size:12px;color:var(--muted)}
+  .meta b{color:var(--ink);font-weight:600}
+  .count{display:inline-flex;align-items:center;gap:12px;font-size:12px}
+  .count span{display:inline-flex;align-items:center;gap:5px}
+
+  /* waterfall */
+  .wf{margin-top:11px;border-top:1px dashed var(--line);padding-top:9px}
+  .wf-hd{display:flex;align-items:center;gap:8px;font-size:11.5px;color:var(--faint);cursor:pointer;user-select:none}
+  .wf-body{margin-top:7px;display:grid;grid-template-columns:132px 1fr;gap:4px 10px;align-items:center}
+  .wf-name{font-size:11.5px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .track{position:relative;height:9px;background:var(--raised);border-radius:999px}
+  .bar{position:absolute;top:0;height:9px;border-radius:999px}
+  .bar.run{background:linear-gradient(90deg,#38bdf8,#0ea5e9)}
+  .bar.done{background:#86efac}
+  .bar.ask{background:linear-gradient(90deg,#0ea5e9 70%,#fbbf24 70%)}
+  .bar.wait{background:repeating-linear-gradient(45deg,#e2e3e8,#e2e3e8 4px,#eceef2 4px,#eceef2 8px)}
+  .ticks{grid-column:2;display:flex;justify-content:space-between;font-size:10px;color:var(--faint);margin-top:2px}
+
+  /* attention bar */
+  .att{display:flex;align-items:center;gap:10px;background:var(--amber-bg);border-bottom:1px solid var(--amber-line);padding:9px 18px;font-size:12.5px;color:var(--amber)}
+  .att b{color:#92400e}
+  .att .sp{flex:1}
+
+  /* body split */
+  .split{display:grid;grid-template-columns:1fr 268px;min-height:432px}
+  .feed{border-right:1px solid var(--line);padding:16px 18px 0;overflow:hidden}
+  .rail{background:var(--canvas);padding:13px 12px}
+  .rail-hd{display:flex;align-items:center;justify-content:space-between;font-size:11px;color:var(--faint);text-transform:uppercase;letter-spacing:.06em;margin-bottom:9px}
+  .wk{display:block;width:100%;text-align:left;border:1px solid transparent;background:var(--panel);border-radius:8px;padding:8px 9px;margin-bottom:6px;cursor:pointer;box-shadow:0 1px 1px rgba(0,0,0,.03)}
+  .wk:hover{border-color:var(--line2)}
+  .wk.sel{border-color:var(--accent);box-shadow:0 0 0 3px rgba(94,106,210,.12)}
+  .wk-top{display:flex;align-items:center;gap:7px}
+  .wk-title{flex:1;min-width:0;font-size:12.5px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .wk-sub{margin-top:4px;display:flex;align-items:center;gap:6px;font-size:11px;color:var(--faint)}
+  .tag{border:1px solid var(--line);border-radius:4px;padding:0 5px;font-size:10px;color:var(--muted);font-family:var(--mono)}
+  .wk-live{margin-top:5px;font-size:11px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .wk.ask{background:#fffbeb;border-color:var(--amber-line)}
+
+  /* bubbles */
+  .turn{margin-bottom:17px}
+  .who{display:flex;align-items:center;gap:7px;font-size:11.5px;color:var(--muted);margin-bottom:5px}
+  .who .av{width:19px;height:19px;border-radius:5px;display:grid;place-items:center;font-size:10px;font-weight:700;color:#fff;flex:none}
+  .av.lead{background:linear-gradient(135deg,#8b5cf6,#5e6ad2)}
+  .av.wk{background:#94a3b8}
+  .who b{color:var(--ink);font-weight:600;font-size:12px}
+  .bd{font-size:13px;line-height:1.62;color:#33363d;max-width:66ch}
+  .bd code{font-family:var(--mono);font-size:11.5px;background:var(--raised);padding:1px 4px;border-radius:4px}
+  .inbound{border-left:2px solid var(--line2);padding-left:11px}
+  .inbound.q{border-left-color:#f59e0b;background:linear-gradient(90deg,rgba(245,158,11,.07),transparent 55%);border-radius:0 8px 8px 0;padding:8px 11px}
+  .inbound .kind{font-size:10.5px;font-weight:600;letter-spacing:.02em;color:var(--faint)}
+  .qact{margin-top:9px;display:flex;gap:7px;align-items:center}
+
+  /* dispatch card */
+  .disp{border:1px solid var(--line);border-radius:9px;overflow:hidden}
+  .disp-hd{display:flex;align-items:center;gap:8px;background:var(--raised);padding:7px 10px;font-size:11.5px;color:var(--muted)}
+  .disp-hd b{color:var(--ink);font-size:12px}
+  .row{display:flex;align-items:center;gap:9px;padding:8px 10px;border-top:1px solid var(--line);cursor:pointer}
+  .row:hover{background:var(--canvas)}
+  .row-t{flex:1;min-width:0;font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .row-s{font-size:11px;color:var(--faint);font-family:var(--mono)}
+  .disp-ft{padding:6px 10px;border-top:1px solid var(--line);font-size:11px;color:var(--faint);background:var(--panel)}
+
+  /* composer at bottom */
+  .cmp{border-top:1px solid var(--line);padding:11px 18px;display:flex;align-items:center;gap:10px;background:var(--panel)}
+  .cmp .fake{flex:1;border:1px solid var(--line2);border-radius:8px;padding:8px 11px;color:var(--faint);font-size:12.5px}
+
+  /* drawer */
+  .drawer-wrap{position:relative}
+  .scrim{position:absolute;inset:0;background:rgba(20,20,25,.14)}
+  .drawer{position:absolute;top:0;right:0;bottom:0;width:min(560px,72%);background:var(--panel);border-left:1px solid var(--line2);box-shadow:-16px 0 40px -24px rgba(0,0,0,.35);display:flex;flex-direction:column}
+  .dr-hd{border-bottom:1px solid var(--line);padding:12px 15px}
+  .dr-bd{padding:14px 15px;overflow:auto}
+  .dr-ft{margin-top:auto;border-top:1px solid var(--line);padding:10px 15px;display:flex;gap:8px;align-items:center}
+
+  /* composer / launcher screen */
+  .modal{max-width:660px;margin:26px auto;background:var(--panel);border:1px solid var(--line2);border-radius:12px;box-shadow:0 24px 60px -30px rgba(0,0,0,.4);overflow:hidden}
+  .modal-hd{padding:12px 16px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:9px;font-size:12.5px;color:var(--muted)}
+  .ta{margin:14px 16px 0;position:relative}
+  .ta .txt{border:1px solid var(--line2);border-radius:9px;padding:11px 12px;min-height:74px;font-size:13.5px}
+  .caret{display:inline-block;width:1.5px;height:16px;background:var(--accent);vertical-align:-3px;animation:blink 1.1s steps(1) infinite}
+  @keyframes blink{50%{opacity:0}}
+  .picker{position:absolute;left:6px;top:38px;width:322px;background:var(--panel);border:1px solid var(--line2);border-radius:10px;box-shadow:0 18px 40px -20px rgba(0,0,0,.4);padding:5px;z-index:3}
+  .pk-hd{display:flex;align-items:center;gap:7px;padding:4px 8px;font-size:10.5px;color:var(--faint)}
+  .pk{display:flex;gap:10px;align-items:flex-start;padding:7px 8px;border-radius:7px;cursor:pointer}
+  .pk.on{background:var(--raised)}
+  .pk .ic{width:22px;height:22px;border-radius:6px;display:grid;place-items:center;font-size:12px;flex:none}
+  .pk .t{font-size:12.5px;font-weight:500}
+  .pk .h{font-size:11px;color:var(--faint)}
+  .pills{display:flex;flex-wrap:wrap;gap:6px;padding:13px 16px}
+  .p2{border:1px solid var(--line);background:var(--panel);border-radius:999px;padding:4px 10px;font-size:12px;color:var(--muted)}
+  .p2 b{color:var(--ink);font-weight:600}
+  .modal-ft{border-top:1px solid var(--line);padding:10px 16px;display:flex;align-items:center;gap:10px}
+
+  /* list screen */
+  .lst{padding:6px 0}
+  .li{display:flex;align-items:center;gap:10px;padding:9px 18px;border-bottom:1px solid var(--line)}
+  .li:hover{background:var(--canvas)}
+  .li .t{flex:1;min-width:0;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .li.child{padding-left:44px;position:relative}
+  .li.child::before{content:"";position:absolute;left:29px;top:-1px;bottom:50%;border-left:1px solid var(--line2);border-bottom:1px solid var(--line2);width:9px;border-bottom-left-radius:5px}
+  .rail-note{font-size:11px;color:var(--faint);margin-top:9px;padding:0 2px;line-height:1.5}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="tabs">
+    <button class="tab on" data-s="s2">② 编排主视图（核心）</button>
+    <button class="tab" data-s="s3">③ 点开某个工人的会话</button>
+    <button class="tab" data-s="s1">① 怎么启动（/编排）</button>
+    <button class="tab" data-s="s4">④ 列表里长什么样</button>
+  </div>
+
+  <!-- ════════════════ ② 主视图 ════════════════ -->
+  <section class="screen on" id="s2">
+    <p class="note"><b>一句话：</b>中间是指挥者的对话流（跟你现在看单任务一样），派活时插一张「派活卡」，工人回话时插一条「⇢ 来自…」气泡；右边一条常驻工人栏，永远知道谁在干、谁卡住了。</p>
+    <div class="app">
+      <!-- header -->
+      <div class="hd">
+        <div class="hd-row">
+          <span class="chip crew">编排</span>
+          <h1>事项中心接 GitHub Issue 双向同步</h1>
+          <span class="pill"><span class="dot run"></span>指挥中</span>
+          <span class="pill">14m 20s</span>
+          <button class="btn danger">停止全组</button>
+          <button class="btn">归档</button>
+        </div>
+        <div class="req">把事项中心跟 GitHub Issue 做成双向同步：GitHub 上新建/改 issue 要落进我们的事项，我们这边改状态、加标签也要推回去。注意事项正文恒为用户原文这条约定不能破…<span class="more">展开</span></div>
+        <div class="meta">
+          <span>指挥 <b>@claude</b></span>
+          <span>工人 <b>4</b>（codex×3 · claude×1）</span>
+          <span>分支 <span class="mono">harness/9f2ac1</span></span>
+          <span class="count" style="margin-left:auto">
+            <span><span class="dot run"></span>1 干活</span>
+            <span><span class="dot ask"></span>1 等答复</span>
+            <span><span class="dot wait"></span>1 排队</span>
+            <span><span class="dot done"></span>1 完成</span>
+          </span>
+        </div>
+        <div class="wf">
+          <div class="wf-hd">▾ 时间轴（谁跟谁在并行）</div>
+          <div class="wf-body">
+            <div class="wf-name">指挥 @claude</div>
+            <div class="track"><span class="bar done" style="left:0;width:14%"></span><span class="bar done" style="left:46%;width:6%"></span><span class="bar run" style="left:92%;width:8%"></span></div>
+            <div class="wf-name">① 同步器骨架</div>
+            <div class="track"><span class="bar run" style="left:15%;width:85%"></span></div>
+            <div class="wf-name">② 入站 Webhook</div>
+            <div class="track"><span class="bar ask" style="left:15%;width:70%"></span></div>
+            <div class="wf-name">③ 出站推送</div>
+            <div class="track"><span class="bar wait" style="left:85%;width:15%"></span></div>
+            <div class="wf-name">④ 文档 + 约定</div>
+            <div class="track"><span class="bar done" style="left:15%;width:28%"></span></div>
+            <div class="ticks"><span>0m</span><span>4m</span><span>8m</span><span>12m</span><span>现在</span></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- attention -->
+      <div class="att">
+        <span class="dot ask"></span>
+        <span><b>② 入站 Webhook</b> 在等答复 · 已等 1m 42s</span>
+        <span class="sp"></span>
+        <button class="btn sm">让指挥者答</button>
+        <button class="btn sm primary">我来答</button>
+      </div>
+
+      <!-- split -->
+      <div class="split">
+        <div class="feed">
+          <div class="turn">
+            <div class="who"><span class="av lead">指</span><b>指挥者</b><span class="mono">claude · 12:04</span></div>
+            <div class="bd">先摸了 <code>issues</code> 表和 <code>routes.ts</code> 的事项端点。双向同步拆成四件事：骨架（表加 <code>github_number</code> + 同步器模块）、入站 webhook、出站推送、文档与约定。骨架必须先落，后两件依赖它，所以我把①放前面、③排在①后头，②④可以现在就并行。</div>
+          </div>
+
+          <div class="turn">
+            <div class="disp">
+              <div class="disp-hd">⇥ <b>派活 · 4 个工人</b><span style="margin-left:auto" class="mono">12:05</span></div>
+              <div class="row"><span class="dot run"></span><span class="row-t">① 同步器骨架 + issues 表加 github_number</span><span class="tag">codex</span><span class="row-s">运行中 9m</span></div>
+              <div class="row"><span class="dot ask"></span><span class="row-t">② 入站：GitHub webhook → 事项</span><span class="tag">codex</span><span class="row-s">等答复</span></div>
+              <div class="row"><span class="dot wait"></span><span class="row-t">③ 出站：事项变更 → GitHub</span><span class="tag">codex</span><span class="row-s">等①</span></div>
+              <div class="row"><span class="dot done"></span><span class="row-t">④ 文档 + CLAUDE.md 约定</span><span class="tag">claude</span><span class="row-s">完成 3m12s</span></div>
+              <div class="disp-ft">点任一行 → 右侧滑出它的完整会话；也能单独重跑 / 换执行者</div>
+            </div>
+          </div>
+
+          <div class="turn">
+            <div class="inbound">
+              <div class="who" style="margin-bottom:3px"><span class="av wk">④</span><b>④ 文档 + 约定</b><span class="kind">· 汇报完成</span><span class="mono">12:09</span></div>
+              <div class="bd">CLAUDE.md 加了「GitHub 同步」一节：只同步元信息，正文永远以我们这边为准（对齐「正文恒为用户原文」）。已 commit <span class="mono">a71f3e2</span>。</div>
+            </div>
+          </div>
+
+          <div class="turn">
+            <div class="inbound q">
+              <div class="who" style="margin-bottom:3px"><span class="av wk">②</span><b>② 入站 Webhook</b><span class="kind" style="color:var(--amber)">· 提问，卡住了</span><span class="mono">12:12</span></div>
+              <div class="bd">GitHub 上把 label 删了，我们这边的 labels 要不要跟着删？强同步会覆盖用户在 harness 里手加的标签；不同步则两边会飘。选哪个？</div>
+              <div class="qact">
+                <button class="btn sm primary">我来答</button>
+                <button class="btn sm">让指挥者答</button>
+                <span class="mono">指挥者已被叫醒，正在查…</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="turn">
+            <div class="who"><span class="av lead">指</span><b>指挥者</b><span class="mono">claude · 12:13</span><span class="dot run" style="margin-left:2px"></span></div>
+            <div class="bd">读了 <code>issueComments</code> 和事项详情页的标签编辑逻辑，本地手加标签是常规操作，不能被远端删掉。答复②：以 <span class="mono">gh:</span> 前缀区分来源标签，只同步带前缀的那批…</div>
+          </div>
+        </div>
+
+        <!-- rail -->
+        <aside class="rail">
+          <div class="rail-hd"><span>工人（4）</span><span>⌘1–4</span></div>
+
+          <button class="wk">
+            <div class="wk-top"><span class="dot run"></span><span class="wk-title">① 同步器骨架</span><span class="tag">codex</span></div>
+            <div class="wk-sub"><span>运行中 · 9m 06s</span><span>·</span><span>18 工具调用</span></div>
+            <div class="wk-live">正在写 migration：issues 加 github_number…</div>
+          </button>
+
+          <button class="wk ask sel">
+            <div class="wk-top"><span class="dot ask"></span><span class="wk-title">② 入站 Webhook</span><span class="tag">codex</span></div>
+            <div class="wk-sub"><span style="color:var(--amber)">等答复 1m 42s</span></div>
+            <div class="wk-live">labels 要不要强同步？</div>
+          </button>
+
+          <button class="wk">
+            <div class="wk-top"><span class="dot wait"></span><span class="wk-title">③ 出站推送</span><span class="tag">codex</span></div>
+            <div class="wk-sub"><span>排队 · 等 ① 完成</span></div>
+          </button>
+
+          <button class="wk">
+            <div class="wk-top"><span class="dot done"></span><span class="wk-title">④ 文档 + 约定</span><span class="tag">claude</span></div>
+            <div class="wk-sub"><span>完成 · 3m 12s</span><span>·</span><span>1 commit</span></div>
+          </button>
+
+          <p class="rail-note">工人就是普通任务：能单独重跑、换执行者、看 diff。这条栏只是把它们钉在眼前。</p>
+        </aside>
+      </div>
+
+      <div class="cmp">
+        <span class="chip crew">→ 指挥者</span>
+        <div class="fake">插一句话（改方向、加要求、直接替它拍板）…<span class="caret"></span></div>
+        <button class="btn primary">发送 ⌘↵</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════════════ ③ 抽屉 ════════════════ -->
+  <section class="screen" id="s3">
+    <p class="note"><b>一句话：</b>点工人 → 右侧滑出它自己的会话（就是现有单任务详情那套），不跳页、不丢指挥者上下文；抽屉底部能直接答它的问题、单独重跑。</p>
+    <div class="app drawer-wrap">
+      <div class="hd">
+        <div class="hd-row">
+          <span class="chip crew">编排</span>
+          <h1>事项中心接 GitHub Issue 双向同步</h1>
+          <span class="pill"><span class="dot run"></span>指挥中</span>
+          <button class="btn danger">停止全组</button>
+        </div>
+      </div>
+      <div class="split" style="min-height:392px">
+        <div class="feed" style="filter:blur(.4px);opacity:.6">
+          <div class="turn">
+            <div class="who"><span class="av lead">指</span><b>指挥者</b><span class="mono">claude · 12:04</span></div>
+            <div class="bd">先摸了 <code>issues</code> 表和事项端点，双向同步拆成四件事…</div>
+          </div>
+          <div class="turn">
+            <div class="disp">
+              <div class="disp-hd">⇥ <b>派活 · 4 个工人</b></div>
+              <div class="row"><span class="dot run"></span><span class="row-t">① 同步器骨架</span><span class="row-s">运行中</span></div>
+              <div class="row"><span class="dot ask"></span><span class="row-t">② 入站 Webhook</span><span class="row-s">等答复</span></div>
+            </div>
+          </div>
+        </div>
+        <aside class="rail" style="filter:blur(.4px);opacity:.6">
+          <div class="rail-hd"><span>工人（4）</span></div>
+          <button class="wk ask sel"><div class="wk-top"><span class="dot ask"></span><span class="wk-title">② 入站 Webhook</span></div></button>
+        </aside>
+      </div>
+      <div class="scrim"></div>
+      <div class="drawer">
+        <div class="dr-hd">
+          <div class="hd-row">
+            <span class="dot ask"></span>
+            <h1 style="font-size:14.5px;flex:1">② 入站：GitHub webhook → 事项</h1>
+            <span class="pill">等答复</span>
+            <button class="btn sm">重跑</button>
+            <button class="btn sm">✕</button>
+          </div>
+          <div class="meta" style="margin-top:7px">
+            <span><b>codex</b> · gpt-5.5</span>
+            <span class="mono">harness/9f2ac1</span>
+            <span>3 commits</span>
+            <span style="margin-left:auto"><a href="#" style="color:var(--accent);text-decoration:none">整页打开 ↗</a></span>
+          </div>
+        </div>
+        <div class="dr-bd">
+          <div class="turn">
+            <div class="who"><span class="av wk">派</span><b>指挥者派的活</b></div>
+            <div class="bd">实现 GitHub → 事项的入站同步：验签、去重（按 <code>github_number</code>）、映射 open/closed 到我们的状态。别动事项正文。</div>
+          </div>
+          <div class="turn">
+            <div class="who"><span class="av wk">②</span><b>codex</b><span class="mono">12:06</span></div>
+            <div class="bd">读了 <code>routes.ts</code> 的 issues 段与 <code>schema.ts</code>。验签用 <code>X-Hub-Signature-256</code>，写了 <code>server/src/github/inbound.ts</code>，去重键落在 <code>issues.github_number</code> 上…</div>
+          </div>
+          <div class="turn">
+            <div class="inbound q">
+              <div class="who" style="margin-bottom:3px"><span class="av wk">②</span><b>提问 · 已送给指挥者</b><span class="mono">12:12</span></div>
+              <div class="bd">GitHub 上把 label 删了，我们这边要不要跟着删？</div>
+            </div>
+          </div>
+        </div>
+        <div class="dr-ft">
+          <div class="fake" style="flex:1;border:1px solid var(--line2);border-radius:8px;padding:7px 10px;color:var(--faint)">直接答它（会绕过指挥者，立刻续跑）…</div>
+          <button class="btn primary sm">答复并唤醒</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════════════ ① 启动 ════════════════ -->
+  <section class="screen" id="s1">
+    <p class="note"><b>一句话：</b>跟 <span class="mono">/pair</span> 同一个入口——输入框敲 <span class="mono">/</span>，多一条「编排」。选中后属性条只多两个旋钮：谁当指挥、工人用什么。别的都由指挥者自己定。</p>
+    <div class="modal">
+      <div class="modal-hd"><span class="chip crew">编排</span><span>新建 · harness</span><span style="margin-left:auto" class="mono">⌘K</span></div>
+      <div class="ta">
+        <div class="txt">/<span class="caret"></span></div>
+        <div class="picker">
+          <div class="pk-hd"><span class="chip pair">/</span><span>↑↓ 选，回车确定</span></div>
+          <div class="pk"><span class="ic" style="background:var(--violet-bg);color:var(--violet)">⚖</span><span><span class="t">辩论 · 给你答案</span><span class="h">两个 AI 对抗到收敛</span></span></div>
+          <div class="pk"><span class="ic" style="background:rgba(20,184,166,.15);color:#0f766e">🤝</span><span><span class="t">协作 · 给你代码</span><span class="h">两个 AI 一实现一审查</span></span></div>
+          <div class="pk on"><span class="ic" style="background:var(--violet-bg);color:var(--violet)">⇥</span><span><span class="t">编排 · 一个头儿带一队</span><span class="h">指挥者自己拆活、派给多个 agent、验收</span></span></div>
+        </div>
+      </div>
+      <div class="pills">
+        <span class="p2">指挥 <b>@claude</b></span>
+        <span class="p2">工人默认 <b>@codex</b></span>
+        <span class="p2">工人隔离 <b>各自 worktree</b></span>
+        <span class="p2">分组 <b>自动新建</b></span>
+        <span class="p2">优先级 <b>无</b></span>
+      </div>
+      <div class="modal-ft">
+        <span class="mono" style="flex:1">先让指挥者读需求 + 拆活 → 给你过一眼 → 再派（可关）</span>
+        <button class="btn">仅创建</button>
+        <button class="btn primary">创建并开工 ⌘↵</button>
+      </div>
+    </div>
+    <p class="note" style="margin-top:12px">敲完一句「把事项中心接上 GitHub Issue 双向同步」→ 回车。剩下的拆几件、谁先谁后、派给谁，指挥者自己定；你只在它「拆完等你过一眼」和「工人提问」两个点上被打断。</p>
+  </section>
+
+  <!-- ════════════════ ④ 列表 ════════════════ -->
+  <section class="screen" id="s4">
+    <p class="note"><b>一句话：</b>列表里编排任务是一行父任务 + 缩进的工人行（默认折叠成一行摘要）。工人是真任务，所以看板/归档/筛选全都照旧能看见它们。</p>
+    <div class="app">
+      <div class="lst">
+        <div class="li"><span class="dot run"></span><span class="chip crew">编排</span><span class="t">事项中心接 GitHub Issue 双向同步</span><span class="mono">1 等答复 · 1 干活 · 1 排队 · 1 完成</span><span class="tag">claude</span><span class="mono">14m</span></div>
+        <div class="li child"><span class="dot run"></span><span class="t">① 同步器骨架 + issues 表加 github_number</span><span class="tag">codex</span><span class="mono">9m</span></div>
+        <div class="li child" style="background:#fffbeb"><span class="dot ask"></span><span class="t">② 入站：GitHub webhook → 事项</span><span class="tag">codex</span><span class="mono" style="color:var(--amber)">等答复 1m42s</span></div>
+        <div class="li child"><span class="dot wait"></span><span class="t">③ 出站：事项变更 → GitHub</span><span class="tag">codex</span><span class="mono">等 ①</span></div>
+        <div class="li child"><span class="dot done"></span><span class="t">④ 文档 + CLAUDE.md 约定</span><span class="tag">claude</span><span class="mono">3m12s</span></div>
+        <div class="li"><span class="dot done"></span><span class="chip pair">collab</span><span class="t">供应商模型下拉列全名（协作）</span><span class="mono">已完成</span><span class="tag">claude+codex</span><span class="mono">昨天</span></div>
+        <div class="li"><span class="dot fail"></span><span class="t">修 mobile 拖选手柄</span><span class="tag">codex</span><span class="mono">失败</span></div>
+      </div>
+    </div>
+    <p class="note" style="margin-top:12px">折叠态（默认）：父任务那一行的「1 等答复 · 1 干活 · …」就是全部信息，点箭头才展开工人。</p>
+  </section>
+
+</div>
+<script>
+  document.querySelectorAll(".tab").forEach((b) => {
+    b.onclick = () => {
+      document.querySelectorAll(".tab").forEach((x) => x.classList.toggle("on", x === b));
+      document.querySelectorAll(".screen").forEach((s) => s.classList.toggle("on", s.id === b.dataset.s));
+    };
+  });
+</script>
+</body>
+</html>

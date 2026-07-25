@@ -144,6 +144,8 @@ async function killEscapees(child: ChildProcess, sig: NodeJS.Signals): Promise<v
 // 代价：dev 前台 Ctrl-C 不再连带杀掉 agent(生产是 nohup 跑法，不受影响)。
 // extraEnv: per-executor 的环境变量(供应商的 base_url / key)。本地合进 env,
 // ssh 拼成远程命令的 `KEY=值 ` 前缀 —— 二者对 CLI 是等价的。
+// keepStdin: 常驻会话(§Team 的指挥台)用 —— 写完首条消息不关 stdin,管道留给
+// 调用方继续注入后续回合(见 executors/claude.ts 的 openResident)。
 export function spawnAgent(
   target: ExecTarget,
   cwd: string,
@@ -151,6 +153,7 @@ export function spawnAgent(
   args: string[],
   prompt: string,
   extraEnv?: Record<string, string>,
+  opts?: { keepStdin?: boolean },
 ): ChildProcess {
   const envPrefix = extraEnv
     ? Object.entries(extraEnv)
@@ -161,7 +164,7 @@ export function spawnAgent(
     const remote = `cd ${shq(cwd)} && ${envPrefix}${bin} ${args.map(shq).join(" ")}`;
     const child = spawn("ssh", [target.host, remote], { stdio: ["pipe", "pipe", "pipe"], env: augmentedEnv(), detached: true });
     child.stdin?.write(prompt);
-    child.stdin?.end();
+    if (!opts?.keepStdin) child.stdin?.end();
     return child;
   }
   // Local pre-flight: distinguish "cwd missing" from "binary missing" so the
@@ -200,7 +203,7 @@ export function spawnAgent(
     });
   }
   child.stdin?.write(prompt);
-  child.stdin?.end();
+  if (!opts?.keepStdin) child.stdin?.end();
   return child;
 }
 

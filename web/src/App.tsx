@@ -398,18 +398,6 @@ export function App() {
     try { const g = await api.pauseGroup(id); setGroups((gs) => gs.map((x) => (x.id === id ? g : x))); }
     catch (e) { console.warn("pauseGroup rejected:", e); }
   }, []);
-  // 设/撤编排组协调者。失败(如协调者还在本组队列里)用 toast 把 server 的
-  // 人话错误顶给用户。
-  const setCoordinator = useCallback(async (id: string, taskId: string | null) => {
-    try {
-      const g = await api.setCoordinator(id, taskId);
-      setGroups((gs) => gs.map((x) => (x.id === id ? g : x)));
-      toast(taskId ? "已设为编排组：worker 结束/提问会自动唤醒协调者" : "已撤销协调者，组恢复普通行为");
-    } catch (e) {
-      toast(e instanceof Error ? e.message : String(e));
-    }
-  }, []);
-
   const anyModal = createOpen || agentsOpen || newProjectOpen || settingsOpen || newGroupOpen || groupsOpen || !!debateOpen || !!confirmDel || !!worktreePrompt;
 
   // ── keyboard navigation ────────────────────────────────────────────────
@@ -712,7 +700,6 @@ export function App() {
           onUpdate={updateGroup}
           onDelete={deleteGroup}
           onCreate={addGroup}
-          onSetCoordinator={setCoordinator}
         />
       )}
       {confirmDel && (

@@ -24,7 +24,7 @@ function ResumeQueueBar({ tasks }: { tasks: Task[] }) {
   const dot = (t: Task) => {
     if (t.status === "done") return { ch: "✅", cls: "text-emerald-500" };
     if (t.status === "running") return { ch: "●", cls: "text-amber-500" };
-    if (t.status === "paused") return { ch: "○", cls: "text-cyan-500" };
+    if (t.status === "paused") return { ch: "○", cls: "text-slate-500" };
     if (t.status === "queued") return { ch: "○", cls: "text-amber-400/70" };
     if (t.status === "failed") return { ch: "✕", cls: "text-red-500" };
     if (t.status === "canceled") return { ch: "○", cls: "text-neutral-400" };
@@ -51,50 +51,6 @@ function ResumeQueueBar({ tasks }: { tasks: Task[] }) {
   );
 }
 
-// 编排组:协调者选择行。选中组内某个任务当协调者后,组内其它任务结束(done/
-// failed)或提问(ask_question)时 harness 自动用消息唤醒它;撤销即退回普通组。
-// 协调者不能在本组串行队列里 —— server 会 409,错误经 onSetCoordinator 的
-// toast 透出,这里不重复校验。
-function CoordinatorRow({
-  group,
-  tasks,
-  onSet,
-}: {
-  group: Group;
-  tasks: Task[];
-  onSet: (taskId: string | null) => void;
-}) {
-  const candidates = tasks.filter((t) => !t.archived);
-  const current = group.coordinatorTaskId ?? "";
-  return (
-    <div className="flex w-full items-center gap-2 px-1 pb-1 text-[11px]">
-      <span className="shrink-0 text-faint" title="编排组:worker 结束/提问会自动唤醒协调者;协调者不能排在本组串行队列里">
-        协调者
-      </span>
-      <select
-        value={current}
-        onChange={(e) => {
-          const v = e.target.value || null;
-          if (v !== (group.coordinatorTaskId ?? null)) onSet(v);
-        }}
-        className="min-w-0 max-w-[16rem] flex-1 truncate rounded-md border border-line bg-canvas px-1.5 py-0.5 text-[11px] text-ink outline-none focus:border-accent"
-      >
-        <option value="">（无 — 普通组）</option>
-        {candidates.map((t) => (
-          <option key={t.id} value={t.id}>
-            {t.title}
-          </option>
-        ))}
-      </select>
-      {current && (
-        <span className="shrink-0 rounded bg-violet-500/15 px-1.5 py-0.5 text-[10px] font-medium text-violet-700">
-          编排组
-        </span>
-      )}
-    </div>
-  );
-}
-
 // Manage a project's groups (transient parallel/serial batches, §3): rename,
 // switch parallel/serial, see member count, run, pause,
 // or delete (members are kept — just ungrouped). Inline create at the bottom.
@@ -107,7 +63,6 @@ export function GroupsPanel({
   onUpdate,
   onDelete,
   onCreate,
-  onSetCoordinator,
 }: {
   groups: Group[];
   tasks: Task[];
@@ -117,7 +72,6 @@ export function GroupsPanel({
   onUpdate: (id: string, patch: Partial<Pick<Group, "name" | "mode">>) => void;
   onDelete: (id: string) => void;
   onCreate: (name: string, mode: GroupMode) => void;
-  onSetCoordinator: (id: string, taskId: string | null) => void;
 }) {
   const [confirmDel, setConfirmDel] = useState<Group | null>(null);
   const [newName, setNewName] = useState("");
@@ -199,7 +153,6 @@ export function GroupsPanel({
                 <Trash size={14} />
               </button>
             </div>
-            <CoordinatorRow group={g} tasks={groupTasks(g.id)} onSet={(taskId) => onSetCoordinator(g.id, taskId)} />
             <ResumeQueueBar tasks={groupTasks(g.id)} />
             </div>
           ))}

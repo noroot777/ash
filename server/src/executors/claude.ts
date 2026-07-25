@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { createInterface } from "node:readline";
 import type { AgentEvent, ExecTarget } from "@harness/shared";
-import type { AgentExecutor, RelayConfig, RunHandle, RunOpts } from "./types.js";
+import type { AgentExecutor, RelayConfig, ResidentHandle, RunHandle, RunOpts } from "./types.js";
 import { spawnAgent, resumeFor, resumeInner, spawnErrorMessage, killChild, forceFinishOnExit, redactSecrets } from "./spawn.js";
 import { relayRoot } from "../llm.js";
 
@@ -48,6 +48,48 @@ export class ClaudeExecutor implements AgentExecutor {
 
   run(opts: RunOpts): RunHandle {
     const sessionId = opts.sessionId ?? randomUUID();
+    const args = this.buildArgs(opts, sessionId, false);
+    const commandLine = redactSecrets(`${this.bin} ${args.join(" ")} <prompt via stdin>`);
+    const child = spawnAgent(this.target, opts.cwd, this.bin, args, opts.prompt, this.env());
+    return { sessionId, commandLine, events: parseClaudeStream(child), kill: () => killChild(child) };
+  }
+
+  // 常驻会话(§Team 的指挥台):一个进程吃多个回合,session_id 全程不变。跟 run()
+  // 的差别只有两处 —— `--input-format stream-json`(首条消息和后续插话都是一行
+  // JSON)和不关 stdin。实测事实与坑写在 server/src/team/session.ts 头部注释。
+  openResident(opts: RunOpts): ResidentHandle {
+    const sessionId = opts.sessionId ?? randomUUID();
+    const args = this.buildArgs(opts, sessionId, true);
+    const commandLine = redactSecrets(`${this.bin} ${args.join(" ")} <messages via stdin>`);
+    const child = spawnAgent(this.target, opts.cwd, this.bin, args, userLine(opts.prompt), this.env(), {
+      keepStdin: true,
+    });
+    const resident = { interruptPending: false };
+    let reqSeq = 0;
+    return {
+      sessionId,
+      commandLine,
+      events: parseClaudeStream(child, resident),
+      send: (text: string) => {
+        child.stdin?.write(userLine(text));
+      },
+      interrupt: () => {
+        resident.interruptPending = true;
+        child.stdin?.write(
+          JSON.stringify({
+            type: "control_request",
+            request_id: `harness_int_${++reqSeq}`,
+            request: { subtype: "interrupt" },
+          }) + "\n",
+        );
+      },
+      close: () => child.stdin?.end(),
+      kill: () => killChild(child),
+    };
+  }
+
+  // 两种形态共用的参数装配。resident 只多一个 --input-format。
+  private buildArgs(opts: RunOpts, sessionId: string, resident: boolean): string[] {
     const model = opts.model ?? this.model;
     // --include-partial-messages turns on token-level streaming: the CLI emits
     // `stream_event` lines (content_block_delta) AS the model types, instead of
@@ -55,6 +97,9 @@ export class ClaudeExecutor implements AgentExecutor {
     // client sees nothing until a whole message lands, then the entire block
     // appears at once — the "laggy, dumps-in-one-go" feel. See parseClaudeStream.
     const args = ["-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--dangerously-skip-permissions"];
+    // stdin 从「一次性 prompt」变成「一行行 JSON 消息」(CLI help 原文:realtime
+    // streaming input),于是同一进程能连吃多个回合。
+    if (resident) args.push("--input-format", "stream-json");
     if (opts.sessionId) args.push("--resume", sessionId);
     else args.push("--session-id", sessionId);
     if (model) args.push("--model", model);
@@ -66,14 +111,20 @@ export class ClaudeExecutor implements AgentExecutor {
     // 注册表配置的固定参数在前,单次调用的 opts.extraArgs 在后(后者可覆盖前者)。
     if (this.extraArgs.length) args.push(...this.extraArgs);
     if (opts.extraArgs?.length) args.push(...opts.extraArgs);
-
-    const commandLine = redactSecrets(`${this.bin} ${args.join(" ")} <prompt via stdin>`);
-    const child = spawnAgent(this.target, opts.cwd, this.bin, args, opts.prompt, this.env());
-    return { sessionId, commandLine, events: parseClaudeStream(child), kill: () => killChild(child) };
+    return args;
   }
 }
 
-async function* parseClaudeStream(child: ReturnType<typeof spawnAgent>): AsyncIterable<AgentEvent> {
+// stream-json 的入站格式:一条 user 消息 = 一行 JSON。
+const userLine = (text: string) =>
+  JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "text", text }] } }) + "\n";
+
+// resident 非空 = 常驻模式:`result` 行只代表「一个回合说完了」(→ turnEnd),
+// 流要一直开着;只有进程真的没了才 done。
+async function* parseClaudeStream(
+  child: ReturnType<typeof spawnAgent>,
+  resident?: { interruptPending: boolean },
+): AsyncIterable<AgentEvent> {
   const queue: AgentEvent[] = [];
   let resolve: (() => void) | null = null;
   let finished = false;
@@ -129,7 +180,14 @@ async function* parseClaudeStream(child: ReturnType<typeof spawnAgent>): AsyncIt
     } else if (ev.type === "result") {
       flushText();
       if (ev.session_id) push({ kind: "session", cliSessionId: ev.session_id });
-      if (ev.subtype && ev.subtype !== "success") push({ kind: "error", message: `result: ${ev.subtype}` });
+      // 我们自己发的 interrupt 会把本回合收成 error_during_execution —— 那是
+      // 「用户插话打断」的预期结果,不是故障,不报错。只吞掉紧跟其后的那一个
+      // result(标志立即清掉),所以最坏情况也只影响一个回合的错误上报。
+      const ownInterrupt = resident?.interruptPending === true;
+      if (resident) resident.interruptPending = false;
+      if (ev.subtype && ev.subtype !== "success" && !ownInterrupt) push({ kind: "error", message: `result: ${ev.subtype}` });
+      // 常驻:回合说完了,进程还活着等下一条消息 —— 流不结束。
+      if (resident) push({ kind: "turnEnd" });
     }
   });
 
