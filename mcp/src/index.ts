@@ -338,7 +338,7 @@ server.registerTool(
   {
     title: "答复提问中的任务并唤醒它",
     description:
-      "给一个「提问暂停」中的任务(get_task 里 question 非空、status=paused)送答复:清空问题、把答复作为消息 resume 它的 CLI 会话继续跑。团队指挥者收到【工人提问】通知后用这个答;用户/其他 agent 也可以直接调。提问任务还在 running/queued(回合没结算完)时会被拒,稍等它落 paused 再调。",
+      "给一个「提问暂停」中的任务(get_task 里 question 非空、status=paused)送答复:清空问题、把答复作为消息 resume 它的 CLI 会话继续跑。团队指挥者收到【工人提问】通知后用这个答;用户/其他 agent 也可以直接调。提问任务还在 running/queued(回合没结算完)时会被拒,稍等它落 paused 再调 —— 例外是团队指挥台(mode=team),它是常驻会话,忙着也接得住。",
     inputSchema: {
       taskId: z.string().describe("提问任务的 id(通知里有)"),
       answer: z.string().min(1).describe("答复内容:直接给结论和理由,它会原样喂给对方续跑"),

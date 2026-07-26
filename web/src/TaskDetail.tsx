@@ -372,19 +372,22 @@ export function EditableTitle({ title, onSave }: { title: string; onSave: (t: st
 // 提问卡片:agent 调 ask_question 后任务停在 paused 等答案(队列陪等,
 // pickNextLaunchable 不会空手唤醒它)。团队模式下指挥者收到通知后通常会自动答;
 // 这里给用户一个手动答复入口 —— 没有指挥者的普通任务全靠它。**指挥者自己也会用
-// 这张卡**(它调 ask_question 问用户时),所以导出给 /team 复用。回合还没结算完
-// (running/queued)时 server 会 409,按钮先禁用。
+// 这张卡**(它调 ask_question 问用户时),所以导出给 /team 复用。
+// 一次性任务在回合还没结算完(running/queued)时 server 会 409(答复会被单飞锁丢),
+// 按钮先禁用;常驻指挥台没这个问题 —— 它忙着也接得住(跟插话同一条路,先 interrupt
+// 再写 stdin),所以 team 不禁用、文案也换成指挥台那套。
 export function QuestionCard({ task }: { task: Task }) {
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
-  const settling = task.status === "running" || task.status === "queued";
+  const isLead = task.mode === "team";
+  const settling = !isLead && (task.status === "running" || task.status === "queued");
   const send = async () => {
     const a = draft.trim();
     if (!a || sending) return;
     setSending(true);
     try {
       await api.answerTask(task.id, a);
-      toast("已答复，任务正在带着答案续跑");
+      toast(isLead ? "已答复，指挥者收到了" : "已答复，任务正在带着答案续跑");
       setDraft("");
     } catch (e) {
       toast(e instanceof Error ? e.message : String(e));
@@ -396,7 +399,7 @@ export function QuestionCard({ task }: { task: Task }) {
     <div className="mt-2 overflow-hidden rounded-md border border-cyan-500/40 bg-cyan-500/[0.06]">
       <div className="flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-medium text-cyan-700">
         <StatusIcon status="paused" size={11} awaitingAnswer />
-        <span>任务提问，等待答复（队列陪等，不会自动续跑）</span>
+        <span>{isLead ? "指挥者在问你话，等待答复" : "任务提问，等待答复（队列陪等，不会自动续跑）"}</span>
       </div>
       <pre className="max-h-48 overflow-y-auto whitespace-pre-wrap break-words px-2.5 pb-1 text-[12px] leading-snug text-ink">{task.question}</pre>
       <div className="flex items-start gap-1.5 border-t border-cyan-500/20 px-2 py-1.5">
@@ -407,7 +410,7 @@ export function QuestionCard({ task }: { task: Task }) {
             if ((e.metaKey || e.ctrlKey) && e.key === "Enter") { e.preventDefault(); void send(); }
           }}
           rows={2}
-          placeholder={settling ? "提问回合还没结束，稍候片刻再答…" : "写下答复，发送后会直接唤醒 agent 带着答案继续（⌘↵ 发送）"}
+          placeholder={settling ? "提问回合还没结束，稍候片刻再答…" : isLead ? "写下答复，发送后直接进同一个常驻会话（⌘↵ 发送）" : "写下答复，发送后会直接唤醒 agent 带着答案继续（⌘↵ 发送）"}
           disabled={settling || sending}
           className="block min-w-0 flex-1 resize-y rounded-md bg-transparent px-1.5 py-1 text-[12px] leading-snug text-ink outline-none placeholder:text-faint disabled:opacity-50"
         />

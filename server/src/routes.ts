@@ -1046,9 +1046,12 @@ api.post("/tasks/:id/ask", async (c) => {
   return c.json({ asked: true, willSettleAs: "paused" });
 });
 
-// 答复一个提问暂停中的任务(协调者或用户都可调):清空 question,把答复作为
+// 答复一个提问暂停中的任务(指挥者或用户都可调):清空 question,把答复作为
 // 消息 resume 它的 CLI 会话继续跑。提问回合还没结算完(running/queued)时拒绝
 // ——等它落 paused 再答,否则答复会被单飞锁静默丢掉。
+// 例外:常驻指挥台(§Team)自己调 ask_question 问用户时,这道挡板不适用 —— 它正在
+// 说话时也接得住(continueTask → deliverToLead 先 interrupt 再写 stdin),跟
+// 「插话」走的是同一条路。挡住反而会让用户对着一个明明在线的指挥台干等。
 api.post("/tasks/:id/answer", async (c) => {
   const taskId = c.req.param("id");
   const b = await c.req.json<{ answer?: string }>().catch(() => ({}) as { answer?: string });
@@ -1057,11 +1060,13 @@ api.post("/tasks/:id/answer", async (c) => {
   const r = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!r) return c.json({ error: "not found" }, 404);
   if (!r.question) return c.json({ error: "该任务没有待答复的问题", status: r.status }, 409);
-  if (r.status === "running" || r.status === "queued") {
+  if (r.mode !== "team" && (r.status === "running" || r.status === "queued")) {
     return c.json({ error: "提问回合还没结束,等任务落 paused 再答复", status: r.status }, 409);
   }
   await db.update(tasks).set({ question: null, updatedAt: now() }).where(eq(tasks.id, taskId));
-  void continueTask(taskId, `【答复】你之前的提问:「${r.question}」\n\n${a}\n\n请据此继续完成任务。`);
+  // 指挥台不说「完成任务」——它没有完成一说,只是拿到答案接着安排。
+  const tail = r.mode === "team" ? "请据此接着安排。" : "请据此继续完成任务。";
+  void continueTask(taskId, `【答复】你之前的提问:「${r.question}」\n\n${a}\n\n${tail}`);
   return c.json({ answered: true, resumed: true });
 });
 
