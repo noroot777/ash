@@ -35,12 +35,3 @@ export function teamLeadExecutorLabel(task: Pick<Task, "team" | "executorLabel" 
 export function teamWorkerExecutorLabel(task: Pick<Task, "team">): string {
   return text(task.team?.workerExecutorLabel) ?? text(task.team?.worker) ?? "—";
 }
-
-export function executorMix(tasks: Pick<Task, "executorLabel" | "agentType">[]): string {
-  const by = new Map<string, number>();
-  for (const task of tasks) {
-    const k = executorLabel({ task });
-    by.set(k, (by.get(k) ?? 0) + 1);
-  }
-  return [...by.entries()].map(([label, n]) => `${label}×${n}`).join(" · ");
-}

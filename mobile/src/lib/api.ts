@@ -142,6 +142,10 @@ export const api = {
   // —— 分组(并行/串行批次):列表/增删改 + 整组运行/暂停。group 无 archived,删除只解绑成员。
   groups: (projectId?: string): Promise<Group[]> =>
     req(`/groups${projectId ? `?projectId=${projectId}` : ""}`).then(j),
+  // 普通 groups 列表刻意过滤团队内部组；团队详情必须按 ownerTaskId 单独拉取，
+  // 才能可靠读取 paused 并提供「恢复全组」。
+  groupsByOwnerTask: (ownerTaskId: string): Promise<Group[]> =>
+    req(`/groups?ownerTaskId=${encodeURIComponent(ownerTaskId)}`).then(j),
   createGroup: (b: { name: string; mode?: GroupMode; projectId: string }): Promise<Group> =>
     req("/groups", { method: "POST", body: JSON.stringify(b) }).then(j),
   patchGroup: (id: string, patch: Partial<Pick<Group, "name" | "mode">>): Promise<Group> =>

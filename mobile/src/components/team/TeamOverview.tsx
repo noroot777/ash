@@ -131,7 +131,7 @@ export function TeamOverview({
         {!task.archived && !stopped && !settled ? (
           <ActionButton label={action === "halt" ? "停止中…" : "停止全组"} icon="stop" danger disabled={!!action} onPress={onHalt} />
         ) : null}
-        {!task.archived && !hasPausedGroups && task.status !== "running" ? (
+        {!task.archived && !task.question && !hasPausedGroups && task.status !== "running" ? (
           <ActionButton label={action === "run" ? "接回中…" : task.status === "idle" ? "接回调度者" : "运行"} icon="play" disabled={!!action} onPress={onRun} />
         ) : null}
       </View>

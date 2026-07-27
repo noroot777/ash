@@ -21,6 +21,7 @@ import {
   isTeamSettled,
   teamGroupsOf,
   workersOf,
+  type Group,
   type Session,
   type Task,
 } from "@harness/shared";
@@ -71,21 +72,43 @@ export function TeamTaskDetail({
   const theme = useTheme();
   const allTasks = useStore((state) => state.tasks);
   const allGroups = useStore((state) => state.groups);
-  const upsertGroup = useStore((state) => state.upsertGroup);
+  const [internalGroups, setInternalGroups] = useState<Group[]>([]);
   const [action, setAction] = useState<"run" | "halt" | "resume" | null>(null);
   const [cuaStatus, setCuaStatus] = useState<TeamCuaStatus | null>(null);
   const [cuaChecking, setCuaChecking] = useState(false);
 
   const workers = useMemo(() => workersOf(allTasks, task.id), [allTasks, task.id]);
+  const availableGroups = useMemo(() => {
+    const byId = new Map(allGroups.map((group) => [group.id, group]));
+    internalGroups.forEach((group) => byId.set(group.id, group));
+    return [...byId.values()];
+  }, [allGroups, internalGroups]);
   const teamGroups = useMemo(
-    () => teamGroupsOf(allGroups, task.id, workers),
-    [allGroups, task.id, workers],
+    () => teamGroupsOf(availableGroups, task.id, workers),
+    [availableGroups, task.id, workers],
   );
   const pausedGroups = useMemo(() => teamGroups.filter((group) => group.paused), [teamGroups]);
   const batches = useMemo(() => batchesOf(workers, teamGroups), [workers, teamGroups]);
   const settled = isTeamSettled(task.status === "running", workers);
   const haltedByHistory = useMemo(() => activeTeamHaltMarker(lines), [lines]);
   const stopped = pausedGroups.length > 0 || (teamGroups.length === 0 && haltedByHistory);
+
+  const refreshInternalGroups = useCallback(async (showError = false) => {
+    try {
+      setInternalGroups(await api.groupsByOwnerTask(task.id));
+    } catch (error) {
+      if (showError) Alert.alert("刷新内部组失败", error instanceof Error ? error.message : String(error));
+    }
+  }, [task.id]);
+
+  useEffect(() => setInternalGroups([]), [task.id]);
+
+  // Reuse the app-wide 5s task-list refresh as the cadence signal instead of
+  // creating another timer. This keeps group.paused current when a halt/resume
+  // was triggered from web or another phone, while conversation polling stays 3s.
+  useEffect(() => {
+    void refreshInternalGroups();
+  }, [allTasks, refreshInternalGroups]);
 
   const refreshCuaStatus = useCallback(async (showError = false) => {
     setCuaChecking(true);
@@ -130,8 +153,11 @@ export function TeamTaskDetail({
             setAction("halt");
             try {
               await api.teamHalt(task.id);
-              teamGroups.forEach((group) => upsertGroup({ ...group, paused: true }));
-              await refreshAll().catch(() => {});
+              const affected = new Set(teamGroups.map((group) => group.id));
+              setInternalGroups((current) =>
+                current.map((group) => affected.has(group.id) ? { ...group, paused: true } : group),
+              );
+              await Promise.all([refreshInternalGroups(true), refreshAll().catch(() => {})]);
               await refreshCuaStatus();
             } catch (error) {
               Alert.alert("停止失败", error instanceof Error ? error.message : String(error));
@@ -148,10 +174,13 @@ export function TeamTaskDetail({
     setAction("resume");
     try {
       await Promise.all(pausedGroups.map((group) => api.runGroup(group.id)));
-      pausedGroups.forEach((group) => upsertGroup({ ...group, paused: false }));
+      const resumed = new Set(pausedGroups.map((group) => group.id));
+      setInternalGroups((current) =>
+        current.map((group) => resumed.has(group.id) ? { ...group, paused: false } : group),
+      );
       if (task.status !== "running") await api.runTask(task.id);
       setCuaStatus(null);
-      await refreshAll();
+      await Promise.all([refreshInternalGroups(true), refreshAll()]);
     } catch (error) {
       Alert.alert("恢复失败", error instanceof Error ? error.message : String(error));
     } finally {
