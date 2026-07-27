@@ -121,11 +121,10 @@ export async function ensureSchema() {
     "ALTER TABLE issue_comments ADD COLUMN status TEXT",
     "ALTER TABLE agents ADD COLUMN speed TEXT",
     "ALTER TABLE agents ADD COLUMN reasoning_effort TEXT",
-    "ALTER TABLE groups ADD COLUMN coordinator_task_id TEXT",
     "ALTER TABLE tasks ADD COLUMN question TEXT",
     "ALTER TABLE agents ADD COLUMN provider_id TEXT",
     "ALTER TABLE sessions ADD COLUMN relay_env TEXT",
-    // §Team：团队模式（替掉旧的 groups.coordinator_task_id —— 那一列留在库里不用）
+    // §Team：团队模式（替掉旧的「编排组/协调者」）
     "ALTER TABLE tasks ADD COLUMN team TEXT",
     "ALTER TABLE tasks ADD COLUMN report_back INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE groups ADD COLUMN owner_task_id TEXT",
@@ -142,6 +141,35 @@ export async function ensureSchema() {
       await client.execute(sql);
     } catch {
       /* column already exists */
+    }
+  }
+  await dropRetiredColumns();
+}
+
+// 退役列:功能改掉后没人再读、但老库里还留着的列。放这里一次性清掉,而不是让
+// 它们静静躺着 —— 否则 `db:push` 每次都会拿它们吓唬人(「about to delete
+// use_worktree column with 13 items / THIS ACTION WILL CAUSE DATA LOSS」),
+// 真正该看的 schema 变更反而淹没在里面,久了就养成无脑 abort 的习惯。
+// 新建库压根不会有这些列(上面的 CREATE TABLE 里没有),所以只对老库生效。
+// 加一条的前提:全仓 grep 确认没有任何读写,且列里的值已无恢复价值。
+const RETIRED_COLUMNS: { table: string; column: string; why: string }[] = [
+  // worktree 从「按分组配」改成「按任务 opt-in」(tasks.use_worktree)后废弃
+  { table: "groups", column: "use_worktree", why: "worktree 改为按任务 opt-in" },
+  // 「编排组/协调者」被 /team 团队模式取代(groups.owner_task_id + tasks.parent_id)
+  { table: "groups", column: "coordinator_task_id", why: "编排组已被 /team 取代" },
+];
+
+async function dropRetiredColumns(): Promise<void> {
+  for (const { table, column, why } of RETIRED_COLUMNS) {
+    const info = await client.execute(`PRAGMA table_info(${table})`);
+    if (!info.rows.some((r) => r.name === column)) continue; // 早就清过了
+    try {
+      await client.execute(`ALTER TABLE ${table} DROP COLUMN ${column}`);
+      console.log(`[harness] 清理退役列 ${table}.${column}(${why})`);
+    } catch (e) {
+      // 清不掉不该拦住启动(比如老 SQLite 不支持 DROP COLUMN):报一声继续跑,
+      // 这列本来就没人读。
+      console.warn(`[harness] 退役列 ${table}.${column} 没能清掉,忽略:`, e);
     }
   }
 }
