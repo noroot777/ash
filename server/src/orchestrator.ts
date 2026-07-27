@@ -470,10 +470,10 @@ export async function continueTask(
     await setStatus(taskId, "running");
 
     const invited = !prev; // first time this agent is pulled into the task
+    const userTurnText = userText + attachmentsPrompt(opts.attachments);
     const prompt =
       (invited ? COLLAB_INVITE : "") +
-      userText +
-      attachmentsPrompt(opts.attachments) +
+      userTurnText +
       (followUpFrom ? FOLLOW_UP_REMINDER(taskId, followUpFrom) : COMPLETION_REMINDER(taskId));
     const turnStart = now();
     const sessId = resuming ? prev!.id : id();
@@ -527,7 +527,7 @@ export async function continueTask(
     } else {
       // 你→@agent reply, persisted as a structured turn so a reloaded thread shows
       // the human turn as its own bubble (live, the client already shows it).
-      writeTurn(out, { t: "user", agent, text: userText });
+      writeTurn(out, { t: "user", agent, text: userTurnText });
     }
 
     let exitStatus = 0;

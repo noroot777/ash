@@ -15,6 +15,7 @@ import { TaskTimeChip, formatInstant } from "./time";
 import { executorLabel } from "./executorLabel";
 import { toast } from "./toast";
 import { buildDebateHandoffBody, isTeamCommand, latestDebateGate } from "./debateHandoff";
+import { AttachmentDisplay, parseAttachmentText } from "./messageAttachments";
 
 // Animated "thinking" indicator — three dots flashing in sequence.
 function TypingDots() {
@@ -66,6 +67,7 @@ export function DebateView({
   onTeamCreated: (task: Task) => void;
 }) {
   const cfg = normalizeDebateConfig(task.debate);
+  const topic = parseAttachmentText(task.body || cfg?.topic || "");
   const [sessions, setSessions] = useState<Session[]>([]);
   const [history, setHistory] = useState<DebateTurn[]>([]);
   const [persistedGate, setPersistedGate] = useState<DebateGate | null>(null);
@@ -226,7 +228,8 @@ export function DebateView({
           </button>
         </div>
         {/* 议题/任务全文 —— 放在标题下的独立文本框（默认折叠成两行，点展开看全文）。 */}
-        {cfg?.topic && <CollapsibleText text={cfg.topic} />}
+        {topic.body && <CollapsibleText text={topic.body} />}
+        <AttachmentDisplay paths={topic.paths} className="mt-2" />
         {/* 配置摘要 + 定时（同一行，定时靠右）。 */}
         <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1.5">
           {cfg && (
@@ -315,6 +318,7 @@ function Bubble({
   // A human intervention (gate inject/ask): a right-aligned bubble with the time
   // the user spoke — the /pair analog of a single task's reply bubble.
   if (side === "user") {
+    const content = parseAttachmentText(turn.text);
     return (
       <div className="mb-3 rise">
         {showDivider && (
@@ -334,7 +338,8 @@ function Bubble({
                 </>
               )}
             </div>
-            <div className="whitespace-pre-wrap break-words text-[13px] text-ink">{turn.text}</div>
+            {content.body && <div className="whitespace-pre-wrap break-words text-[13px] text-ink">{content.body}</div>}
+            <AttachmentDisplay paths={content.paths} className={content.body ? "mt-2" : ""} />
           </div>
         </div>
       </div>

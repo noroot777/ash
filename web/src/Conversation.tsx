@@ -11,6 +11,7 @@ import { ToolCall, ThinkingBlock, ResumeCopyButtons, CopyButton } from "./ui";
 import { Markdown } from "./Markdown";
 import { formatInstant, Duration } from "./time";
 import { executorLabel } from "./executorLabel";
+import { AttachmentDisplay, parseAttachmentText } from "./messageAttachments";
 
 export type LogLine = {
   kind: "text" | "thinking" | "tool" | "error" | "done" | "user" | "system";
@@ -19,6 +20,7 @@ export type LogLine = {
   agent?: AgentType; // which agent produced it (for @-mention multi-agent threads)
   sessionId?: string; // the run/session this line belongs to (groups lines into bubbles + finds the credential)
   at?: string; // ISO time the line was added (user replies show "你 · 时间")
+  attachments?: string[]; // optimistic user turn; snapshots carry these inside text
 };
 
 // Render the run as a conversation of bubbles (mirrors /pair). A contiguous run
@@ -44,7 +46,7 @@ export type AgentItem = {
 };
 export type ConvItem =
   | AgentItem
-  | { kind: "user"; text: string; at?: string }
+  | { kind: "user"; text: string; at?: string; attachments?: string[] }
   | { kind: "system"; text: string; at?: string }
   | { kind: "done"; text: string; at?: string };
 
@@ -103,7 +105,7 @@ export function buildConversation({
   let cur: AgentItem | null = last && last.kind === "agent" ? last : null;
   for (const l of logs) {
     if (l.kind === "user") {
-      items.push({ kind: "user", text: l.text, at: l.at });
+      items.push({ kind: "user", text: l.text, at: l.at, attachments: l.attachments });
       cur = null;
       continue;
     }
@@ -163,7 +165,7 @@ export function buildConversation({
 // the user's reply, or a 〔系统〕 marker. Folded 思考/工具/错误 are intentionally
 // omitted (用户选「仅对话正文」). Shared by per-bubble copy and full export.
 export function itemBodyText(it: ConvItem): string {
-  if (it.kind === "user") return it.text;
+  if (it.kind === "user") return parseAttachmentText(it.text).body;
   if (it.kind === "system") return `〔系统〕${it.text}`;
   if (it.kind === "done") return "";
   const live = it.lines.filter((l) => l.kind === "text").map((l) => l.text).join("");
@@ -221,7 +223,7 @@ export function Conversation({ items }: { items: ConvItem[] }) {
 // 同一串条目里插自己的东西(派活卡、入站气泡),没法整段交给 <Conversation>,但气泡
 // 长相必须一模一样。
 export function ConvBubble({ item: it }: { item: ConvItem }) {
-  if (it.kind === "user") return <UserBubble text={it.text} at={it.at} />;
+  if (it.kind === "user") return <UserBubble text={it.text} at={it.at} attachments={it.attachments} />;
   if (it.kind === "system") return <SystemNote text={it.text} at={it.at} />;
   if (it.kind === "done") return <div className="my-2 text-center text-xs text-faint">{it.text}</div>;
   const nodes = [
@@ -341,7 +343,9 @@ export function SystemNote({ text, at }: { text: string; at?: string }) {
 }
 
 // A human reply / continuation: right-aligned bubble with "你 · 时间".
-export function UserBubble({ text, at }: { text: string; at?: string }) {
+export function UserBubble({ text, at, attachments = [] }: { text: string; at?: string; attachments?: string[] }) {
+  const parsed = parseAttachmentText(text);
+  const paths = [...parsed.paths, ...attachments];
   return (
     <div className="group mb-3 flex flex-col items-end">
       <div className="max-w-[88%] rounded-lg border border-accent/30 bg-accent/[0.08] px-3 py-2">
@@ -353,13 +357,16 @@ export function UserBubble({ text, at }: { text: string; at?: string }) {
               <span className="text-faint">{formatInstant(at)}</span>
             </>
           )}
-          <CopyButton
-            text={text}
-            title="复制这条"
-            className="ml-auto h-6 w-6 opacity-0 hover:bg-overlay group-hover:opacity-100"
-          />
+          {parsed.body && (
+            <CopyButton
+              text={parsed.body}
+              title="复制这条"
+              className="ml-auto h-6 w-6 opacity-0 hover:bg-overlay group-hover:opacity-100"
+            />
+          )}
         </div>
-        <div className="whitespace-pre-wrap break-words text-[13px] text-ink">{text}</div>
+        {parsed.body && <div className="whitespace-pre-wrap break-words text-[13px] text-ink">{parsed.body}</div>}
+        <AttachmentDisplay paths={paths} className={parsed.body ? "mt-2" : ""} />
       </div>
     </div>
   );

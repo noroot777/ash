@@ -1,5 +1,4 @@
-import { useState, useCallback, useRef, useEffect, type ClipboardEvent } from "react";
-import { createPortal } from "react-dom";
+import { useState, useCallback, useRef, type ClipboardEvent } from "react";
 import { X, File as FileIcon, Paperclip } from "@phosphor-icons/react";
 import { maxBytesFor, type AttachmentKind } from "@harness/shared";
 import { api } from "./api";
@@ -167,80 +166,6 @@ export function AttachmentChips({
         </div>
       )}
       {error && <div className="pt-1.5 text-[11px] text-red-600">{error}</div>}
-    </div>
-  );
-}
-
-// Read-only chips for attachments already stored on an issue/comment (server sends
-// just absolute paths). basename → preview url (/api/uploads/<file>) + display name;
-// extension decides image-thumbnail vs file-chip.
-const IMAGE_EXT = /\.(png|jpe?g|gif|webp|svg)$/i;
-export function StoredAttachments({
-  paths,
-  className = "",
-  onRemove,
-}: {
-  paths: string[];
-  className?: string;
-  onRemove?: (path: string) => void; // 传了就在每个附件上显示 × 可删
-}) {
-  // Click an image → in-page lightbox (not a new browser tab). Esc / click-out closes.
-  const [zoom, setZoom] = useState<string | null>(null);
-  useEffect(() => {
-    if (!zoom) return;
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setZoom(null);
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [zoom]);
-  if (!paths.length) return null;
-  return (
-    <div className={`flex flex-wrap gap-2 ${className}`}>
-      {paths.map((p) => {
-        const file = p.split("/").pop() ?? p;
-        // Stored filename is `<id>-<original>`; show the original part if present.
-        const name = file.replace(/^[A-Za-z0-9]+-/, "");
-        const url = `/api/uploads/${file}`;
-        return (
-          <div key={p} className="group relative">
-            {IMAGE_EXT.test(file) ? (
-              <button
-                type="button"
-                onClick={() => setZoom(url)}
-                className="block h-14 w-14 overflow-hidden rounded-md border border-line2 transition-colors hover:border-accent"
-                title={name}
-              >
-                <img src={url} alt={name} className="h-full w-full object-cover" />
-              </button>
-            ) : (
-              <a
-                href={url}
-                target="_blank"
-                rel="noreferrer"
-                className="flex h-14 max-w-[180px] items-center gap-2 rounded-md border border-line2 bg-raised/50 py-1 pl-2 pr-3 hover:border-accent"
-                title={name}
-              >
-                <FileIcon size={20} className="shrink-0 text-muted" />
-                <span className="truncate text-[12px] text-ink">{name}</span>
-              </a>
-            )}
-            {onRemove && <RemoveBtn onClick={() => onRemove(p)} />}
-          </div>
-        );
-      })}
-      {zoom &&
-        createPortal(
-          <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/80 p-8" onClick={() => setZoom(null)}>
-            <img src={zoom} alt="" className="max-h-full max-w-full rounded-lg object-contain shadow-2xl" onClick={(e) => e.stopPropagation()} />
-            <button
-              onClick={() => setZoom(null)}
-              className="absolute right-5 top-5 grid h-9 w-9 place-items-center rounded-full bg-white/10 text-white hover:bg-white/20"
-              title="关闭 Esc"
-            >
-              <X size={18} />
-            </button>
-          </div>,
-          document.body,
-        )}
     </div>
   );
 }

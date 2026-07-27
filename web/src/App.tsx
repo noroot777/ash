@@ -299,8 +299,14 @@ export function App() {
   // Reply to a single task: show the human turn immediately, then resume its
   // session so the agent continues (used when an agent stopped to ask).
   const reply = useCallback(async (id: string, text: string, opts?: { attachments?: string[]; agent?: AgentType }) => {
-    const display = (text || "[附件]") + (opts?.agent ? `  ·  指派给 @${opts.agent}` : "");
-    setLogs((m) => ({ ...m, [id]: [...(m[id] ?? []), { kind: "user", text: display, at: new Date().toISOString() }] }));
+    const display = text + (opts?.agent ? `  ·  指派给 @${opts.agent}` : "");
+    setLogs((m) => ({
+      ...m,
+      [id]: [
+        ...(m[id] ?? []),
+        { kind: "user", text: display, attachments: opts?.attachments, at: new Date().toISOString() },
+      ],
+    }));
     try { await api.replyTask(id, text, opts); } catch (e) { showErr(e); }
   }, []);
 

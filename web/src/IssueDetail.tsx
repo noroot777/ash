@@ -9,8 +9,9 @@ import { PriorityIcon, ProjectAvatar } from "./ui";
 import { PRIORITIES } from "./constants";
 import { ConfirmModal } from "./Modal";
 import { toast } from "./toast";
-import { usePasteAttachments, AttachmentChips, AttachButton, StoredAttachments } from "./pasteAttachments";
+import { usePasteAttachments, AttachmentChips, AttachButton } from "./pasteAttachments";
 import { IssueDot, ISSUE_STATUS_META, mdBreaks } from "./issueBits";
+import { AttachmentDisplay, parseAttachmentText } from "./messageAttachments";
 
 // ── issue detail: meta + discussion (@execute) + derived tasks ───────────────
 export function IssueDetail({
@@ -47,6 +48,8 @@ export function IssueDetail({
   // 这份名单只有执行器层知道,前端别自己抄。
   const [detected, setDetected] = useState<{ type: AgentType; available: boolean; resident: boolean }[] | null>(null);
   const project = projects.find((p) => p.id === issue.projectId) ?? null;
+  const issueContent = parseAttachmentText(issue.body);
+  const issueAttachments = [...issueContent.paths, ...issue.attachments];
 
   useEffect(() => {
     api.issueComments(issue.id).then(setComments).catch(() => {});
@@ -211,7 +214,7 @@ export function IssueDetail({
             {(editAttachments.length > 0 || editAtt.attachments.length > 0) && (
               <div className="mt-2">
                 <div className="mb-1 text-[11px] text-faint">附件(× 删除,可粘贴/选择新增)</div>
-                <StoredAttachments paths={editAttachments} onRemove={(p) => setEditAttachments((xs) => xs.filter((x) => x !== p))} />
+                <AttachmentDisplay paths={editAttachments} onRemove={(p) => setEditAttachments((xs) => xs.filter((x) => x !== p))} />
                 <AttachmentChips attachments={editAtt.attachments} onRemove={editAtt.remove} error={editAtt.error} />
               </div>
             )}
@@ -266,12 +269,12 @@ export function IssueDetail({
           />
         </div>
 
-        {!editing && issue.body && (
+        {!editing && issueContent.body && (
           <div className="markdown text-[14px] leading-7 text-[#33363d]">
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>{mdBreaks(issue.body)}</ReactMarkdown>
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>{mdBreaks(issueContent.body)}</ReactMarkdown>
           </div>
         )}
-        {!editing && issue.attachments.length > 0 && <StoredAttachments paths={issue.attachments} className="mt-3" />}
+        {!editing && <AttachmentDisplay paths={issueAttachments} className={issueContent.body ? "mt-3" : ""} />}
 
         <div className="my-6 h-px bg-line" />
 
@@ -430,6 +433,8 @@ function CommentItem({
   const [keepAttachments, setKeepAttachments] = useState<string[]>(comment.attachments); // 编辑态保留的已有附件
   const ai = comment.author.kind === "agent";
   const name = comment.author.kind === "agent" ? `@${comment.author.agentType}` : "我";
+  const content = parseAttachmentText(comment.body);
+  const displayAttachments = [...content.paths, ...comment.attachments];
 
   const startEdit = () => {
     setText(comment.body);
@@ -478,7 +483,7 @@ function CommentItem({
               className="w-full resize-y rounded-[8px] border border-line2 bg-canvas px-2.5 py-1.5 text-[13.5px] leading-relaxed text-ink outline-none focus:border-accent"
             />
             {keepAttachments.length > 0 && (
-              <StoredAttachments paths={keepAttachments} onRemove={(p) => setKeepAttachments((xs) => xs.filter((x) => x !== p))} className="mt-2" />
+              <AttachmentDisplay paths={keepAttachments} onRemove={(p) => setKeepAttachments((xs) => xs.filter((x) => x !== p))} className="mt-2" />
             )}
             <AttachmentChips attachments={attachments} onRemove={remove} error={error} />
             <div className="mt-1.5 flex items-center gap-2">
@@ -502,12 +507,12 @@ function CommentItem({
               <div className="text-[13.5px] italic text-faint">…正在思考</div>
             ) : ai && comment.status === "failed" ? (
               <div className="whitespace-pre-wrap text-[13.5px] leading-relaxed text-red-600/80">
-                {comment.body || "讨论回复失败"}
+                {content.body || "讨论回复失败"}
               </div>
-            ) : comment.body ? (
-              <div className="whitespace-pre-wrap text-[13.5px] leading-relaxed text-[#33363d]">{comment.body}</div>
+            ) : content.body ? (
+              <div className="whitespace-pre-wrap text-[13.5px] leading-relaxed text-[#33363d]">{content.body}</div>
             ) : null}
-            {comment.attachments.length > 0 && <StoredAttachments paths={comment.attachments} className="mt-1.5" />}
+            <AttachmentDisplay paths={displayAttachments} className="mt-1.5" />
           </>
         )}
       </div>

@@ -19,6 +19,7 @@ import { shortPath } from "../util";
 import { TeamTimeline } from "./TeamTimeline";
 import { agentMix, isTeamSettled, statusCounts, workerHaltStats, type Waiting } from "./teamData";
 import { teamLeadExecutorLabel, teamWorkerExecutorLabel } from "../executorLabel";
+import { AttachmentDisplay, parseAttachmentText } from "../messageAttachments";
 
 export function TeamHeader({
   task,
@@ -65,6 +66,7 @@ export function TeamHeader({
   const last = sessions[sessions.length - 1];
   const leadLabel = teamLeadExecutorLabel(task);
   const workerLabel = teamWorkerExecutorLabel(task);
+  const objective = parseAttachmentText(task.body);
 
   return (
     <header className="shrink-0 border-b border-line px-6 pb-3 pt-5">
@@ -185,7 +187,8 @@ export function TeamHeader({
       </div>
 
       {/* 原始需求 —— 用户交给调度者的那段话,默认折两行。 */}
-      {task.body && <CollapsibleText text={task.body} />}
+      {objective.body && <CollapsibleText text={objective.body} />}
+      <AttachmentDisplay paths={objective.paths} className="mt-2" />
 
       {/* 调度者反过来问用户(它调 ask_question)。答复作为插话喂回同一个常驻会话。 */}
       {task.question && <QuestionCard task={task} />}

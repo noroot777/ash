@@ -21,6 +21,7 @@ import { ExecutorPicker, type ExecutorSelection, useExecutorProfiles } from "./E
 import { executorLabel } from "./executorLabel";
 import { QuestionCard } from "./QuestionCard";
 import { isDispatchedWorker } from "./taskPolicy";
+import { AttachmentDisplay, parseAttachmentText } from "./messageAttachments";
 export type { LogLine } from "./Conversation";
 
 export function TaskDetail({
@@ -60,6 +61,7 @@ export function TaskDetail({
   const scrollRef = useRef<HTMLDivElement>(null);
   const { profiles, providers } = useExecutorProfiles();
   const dispatchedWorker = isDispatchedWorker(task);
+  const objective = parseAttachmentText(task.body);
 
   // 拉会话 + 快照历史输出 + 拼条目流,都在 useConversation 里(/team 调度台共用同
   // 一份装配,免得两个界面的「刷新后 vs 实时」各自漂移)。
@@ -201,7 +203,8 @@ export function TaskDetail({
 
         {/* Task objective — shown right under the title (collapsed to 2 lines;
             click 展开 for the full text). */}
-        {task.body && <CollapsibleText text={task.body} />}
+        {objective.body && <CollapsibleText text={objective.body} />}
+        <AttachmentDisplay paths={objective.paths} className="mt-2" />
 
         {/* agent 提问:调 ask_question 后停在这等答案(队列陪等,不会自动续跑)。
             团队模式下调度者通常会自动来答;用户也可以直接在这里答复唤醒。 */}
