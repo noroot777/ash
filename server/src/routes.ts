@@ -257,6 +257,7 @@ const toSession = (r: typeof sessions.$inferSelect): Session => ({
   ...r,
   role: r.role as Session["role"],
   agentType: r.agentType as Session["agentType"],
+  transcriptPath: join(RUNS_DIR, r.taskId, `${r.id}.md`),
   // Recompute the copy-paste resume command from the session's own fields, so it
   // always reflects the current format (old rows stored a now-outdated string).
   resumeCommand: r.cliSessionId

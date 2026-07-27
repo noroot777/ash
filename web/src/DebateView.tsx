@@ -133,10 +133,14 @@ export function DebateView({
     setTeamBusy(true);
     let created: Task;
     try {
+      // Refresh at handoff time so a just-finished debate cannot create a team
+      // task with stale/missing transcript paths from the page's earlier fetch.
+      const handoffSessions = await api.sessions(task.id);
+      setSessions(handoffSessions);
       created = await api.createTask({
         projectId: task.projectId,
         title: `落实辩论结论：${task.title}`.slice(0, 60),
-        body: buildDebateHandoffBody(task, gate, turns, command),
+        body: buildDebateHandoffBody(task, gate, turns, command, handoffSessions),
         mode: "team",
         agentType: TEAM_DEFAULTS.lead,
         team: { ...TEAM_DEFAULTS },

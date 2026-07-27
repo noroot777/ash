@@ -447,6 +447,7 @@ export interface Session {
   worktreePath: string | null;
   branch: string | null;
   cwd: string | null; // the actual working directory this run executed in (truth, incl. scratch fallback)
+  transcriptPath: string; // absolute path to the persisted Markdown transcript for this session
   cliSessionId: string | null; // the CLI's own session/thread id = core credential
   resumeCommand: string | null; // ready-to-paste resume command
   commandLine: string | null; // full command invoked
