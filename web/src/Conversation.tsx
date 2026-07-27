@@ -10,6 +10,7 @@ import { ArrowsClockwise } from "@phosphor-icons/react";
 import { ToolCall, ThinkingBlock, ResumeCopyButtons, CopyButton } from "./ui";
 import { Markdown } from "./Markdown";
 import { formatInstant, Duration } from "./time";
+import { executorLabel } from "./executorLabel";
 
 export type LogLine = {
   kind: "text" | "thinking" | "tool" | "error" | "done" | "user" | "system";
@@ -119,7 +120,7 @@ export function buildConversation({
     // text / thinking / tool / error → part of the current run's bubble
     if (!cur || cur.sessionId !== l.sessionId || cur.agent !== l.agent) {
       const sess = l.sessionId ? sessions.find((s) => s.id === l.sessionId) : undefined;
-      cur = { kind: "agent", sessionId: l.sessionId, agent: l.agent, session: sess, showResume: true, label: sess?.executor ?? `@${l.agent ?? primaryAgent}`, lines: [] };
+      cur = { kind: "agent", sessionId: l.sessionId, agent: l.agent, session: sess, showResume: true, label: executorLabel({ session: sess, agentType: l.agent ?? primaryAgent }), lines: [] };
       items.push(cur);
     }
     cur.lines.push(l);

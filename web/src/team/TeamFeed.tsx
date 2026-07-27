@@ -12,6 +12,7 @@ import { CollapsibleText } from "../ui";
 import { formatInstant } from "../time";
 import { WorkerStatusText } from "./WorkerRail";
 import { parseInbound, type Batch, type FeedRow, type Inbound } from "./teamData";
+import { executorLabel } from "../executorLabel";
 
 export function TeamFeed({
   rows,
@@ -78,28 +79,40 @@ function BatchCard({
         <span className="ml-auto font-mono text-[10.5px] text-faint">{formatInstant(batch.at)}</span>
       </div>
       {batch.workers.map((w) => (
-        <button
+        <BatchWorkerRow
           key={w.id}
-          onClick={() => onOpenWorker(w.id)}
-          className="flex w-full items-center gap-2 border-t border-line px-2.5 py-2 text-left transition-colors hover:bg-canvas"
-        >
-          <StatusIcon status={w.status} size={12} awaitingAnswer={!!w.question} />
-          <span className="w-3.5 shrink-0 font-mono text-[10.5px] text-faint">
-            {workers.findIndex((x) => x.id === w.id) + 1}
-          </span>
-          <span className="min-w-0 flex-1 truncate text-[12.5px] text-ink">{w.title}</span>
-          <span className="shrink-0 rounded border border-line px-1 font-mono text-[10px] text-muted">
-            {w.agentType ?? "—"}
-          </span>
-          <span className="shrink-0 text-[11px] text-faint">
-            <WorkerStatusText w={w} />
-          </span>
-        </button>
+          w={w}
+          n={workers.findIndex((x) => x.id === w.id) + 1}
+          onOpen={() => onOpenWorker(w.id)}
+        />
       ))}
       <div className="border-t border-line bg-panel px-2.5 py-1.5 text-[11px] text-faint">
         点任一行 → 右侧滑出它的完整会话;也能单独重跑 / 换执行者
       </div>
     </div>
+  );
+}
+
+function BatchWorkerRow({ w, n, onOpen }: { w: Task; n: number; onOpen: () => void }) {
+  const label = executorLabel({ task: w });
+  return (
+    <button
+      onClick={onOpen}
+      className="flex w-full items-center gap-2 border-t border-line px-2.5 py-2 text-left transition-colors hover:bg-canvas"
+    >
+      <StatusIcon status={w.status} size={12} awaitingAnswer={!!w.question} />
+      <span className="w-3.5 shrink-0 font-mono text-[10.5px] text-faint">{n}</span>
+      <span className="min-w-0 flex-1 truncate text-[12.5px] text-ink">{w.title}</span>
+      <span
+        className="max-w-[112px] shrink truncate rounded border border-line px-1 font-mono text-[10px] text-muted"
+        title={label}
+      >
+        {label}
+      </span>
+      <span className="shrink-0 text-[11px] text-faint">
+        <WorkerStatusText w={w} />
+      </span>
+    </button>
   );
 }
 

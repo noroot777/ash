@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { Task, Group, TaskStatus, Priority, AgentType } from "@harness/shared";
-import { isUserSettableStatus, canArchive } from "@harness/shared";
+import { AGENT_TYPES, isUserSettableStatus, canArchive } from "@harness/shared";
 import { CaretDown, Play, Stop, Trash, ArrowsClockwise, DownloadSimple, ListNumbers } from "@phosphor-icons/react";
 import { api } from "./api";
 import { STATUSES, PRIORITIES } from "./constants";
@@ -18,6 +18,8 @@ import { TaskTimeChip } from "./time";
 import { Conversation, conversationToText, downloadConversation, type LogLine } from "./Conversation";
 import { useConversation } from "./useConversation";
 import { ReplyBox } from "./ReplyBox";
+import { ExecutorPicker, type ExecutorSelection, useExecutorProfiles } from "./ExecutorPicker";
+import { executorLabel } from "./executorLabel";
 export type { LogLine } from "./Conversation";
 
 export function TaskDetail({
@@ -55,6 +57,7 @@ export function TaskDetail({
   onRequeue: () => void;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  const { profiles, providers } = useExecutorProfiles();
 
   // 拉会话 + 快照历史输出 + 拼条目流,都在 useConversation 里(/team 指挥台共用同
   // 一份装配,免得两个界面的「刷新后 vs 实时」各自漂移)。
@@ -73,6 +76,10 @@ export function TaskDetail({
   // 所以直接调 API 拿队列总长度,免得 N/M 里的 M 偏少。
   const [queueSize, setQueueSize] = useState<number | null>(null);
   const [queueModalOpen, setQueueModalOpen] = useState(false);
+  const currentExecutor: ExecutorSelection = {
+    agentType: task.agentType ?? "claude",
+    executorId: task.executorId ?? null,
+  };
   useEffect(() => {
     if (!task.queueId) { setQueueSize(null); return; }
     let alive = true;
@@ -270,8 +277,19 @@ export function TaskDetail({
           {sessions.length === 0 && (
             <>
               <span className="h-4 w-px bg-line" />
-              <span className="text-faint">
-                将由 <b className="text-muted">@{task.agentType ?? "claude"}</b> 执行
+              <span className="inline-flex items-center gap-1.5 text-faint">
+                将由
+                <ExecutorPicker
+                  selection={currentExecutor}
+                  onSelect={(sel) => onPatch({ agentType: sel.agentType, executorId: sel.executorId })}
+                  profiles={profiles}
+                  providers={providers}
+                  types={[...AGENT_TYPES]}
+                  label={task.executorId ? executorLabel({ task }) : `默认 ${executorLabel({ task })}`}
+                  menuWidth={320}
+                  triggerClassName="inline-flex max-w-[260px] items-center gap-1 rounded-md border border-line bg-panel px-1.5 py-0.5 text-[12px] text-muted transition-colors hover:bg-raised hover:text-ink"
+                />
+                <span>执行</span>
               </span>
             </>
           )}

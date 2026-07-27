@@ -759,6 +759,7 @@ export function App() {
           onClose={() => setCreateOpen(false)}
           onCreated={(t) => onTaskCreated(t)}
           onCreateGroup={() => setNewGroupOpen(true)}
+          onOpenAgents={() => setAgentsOpen(true)}
           onDebate={(style) => {
             setCreateOpen(false);
             setDebateOpen(style);

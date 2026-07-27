@@ -3,6 +3,7 @@
 // 推导,也方便单独看懂。
 import type { Task, TaskStatus } from "@harness/shared";
 import type { ConvItem } from "../Conversation";
+import { executorMix } from "../executorLabel";
 
 // ── 批次(一次 dispatch)────────────────────────────────────────────────────
 // 一次 dispatch = 一个内部分组(groups.owner_task_id 指回团队任务)。内部组被
@@ -56,12 +57,7 @@ export function statusCounts(workers: Task[]): CountBucket[] {
 
 // 「工人 4（codex×3 · claude×1）」里括号那截。
 export function agentMix(workers: Task[]): string {
-  const by = new Map<string, number>();
-  for (const w of workers) {
-    const k = w.agentType ?? "—";
-    by.set(k, (by.get(k) ?? 0) + 1);
-  }
-  return [...by.entries()].map(([a, n]) => `${a}×${n}`).join(" · ");
+  return executorMix(workers);
 }
 
 // ── 入站消息(工人 → 指挥者)────────────────────────────────────────────────

@@ -8,6 +8,7 @@ import type { Task } from "@harness/shared";
 import { CaretDown } from "@phosphor-icons/react";
 import { statusColor } from "../StatusIcon";
 import { formatDuration, useTick } from "../time";
+import { teamLeadExecutorLabel } from "../executorLabel";
 
 type Bar = { from: number; to: number; color: string; hatch?: boolean; title: string };
 type Row = { id?: string; name: string; bars: Bar[]; pendingOnly?: boolean };
@@ -32,7 +33,7 @@ export function TeamTimeline({
   const ms = (iso?: string | null) => (iso ? Date.parse(iso) : NaN);
   const rows: Row[] = [
     {
-      name: `指挥 @${lead.agentType ?? lead.team?.lead ?? "claude"}`,
+      name: `指挥 ${teamLeadExecutorLabel(lead)}`,
       bars: leadTurns
         .map((t) => ({
           from: ms(t.from),

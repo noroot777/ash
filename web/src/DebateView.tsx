@@ -11,6 +11,7 @@ import { STATUSES } from "./constants";
 import { runAction, canStopTask } from "./taskActions";
 import { canArchive } from "@harness/shared";
 import { TaskTimeChip, formatInstant } from "./time";
+import { executorLabel } from "./executorLabel";
 
 // Animated "thinking" indicator — three dots flashing in sequence.
 function TypingDots() {
@@ -219,6 +220,7 @@ export function DebateView({
           <Bubble
             key={i}
             turn={t}
+            task={task}
             collab={collab}
             prevRound={turns[i - 1]?.round}
             session={sessionFor(t.speaker)}
@@ -260,12 +262,14 @@ export function DebateView({
 
 function Bubble({
   turn,
+  task,
   collab,
   prevRound,
   session,
   agentType,
 }: {
   turn: DebateTurn;
+  task: Task;
   collab: boolean;
   prevRound?: number;
   session?: Session;
@@ -315,7 +319,7 @@ function Bubble({
   const who = side === "A" ? (collab ? "成员A" : "辩手A") : side === "B" ? (collab ? "成员B" : "辩手B") : side === "review" ? "代码审查" : "实现方";
   // Prefer the concrete executor label (e.g. "codex@local"); fall back to the
   // configured agent type before the session row has loaded.
-  const agentLabel = session?.executor ?? agentType;
+  const agentLabel = executorLabel({ session, task, agentType, fallback: "" });
 
   return (
     <div className="mb-3 rise">

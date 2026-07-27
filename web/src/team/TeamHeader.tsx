@@ -17,6 +17,7 @@ import { Duration, TaskTimeChip } from "../time";
 import { shortPath } from "../util";
 import { TeamTimeline } from "./TeamTimeline";
 import { agentMix, statusCounts, type Waiting } from "./teamData";
+import { teamLeadExecutorLabel, teamWorkerExecutorLabel } from "../executorLabel";
 
 export function TeamHeader({
   task,
@@ -49,6 +50,8 @@ export function TeamHeader({
   // 分支/工作目录挂在 session 上(不是 task),取最近那次。默认不开 worktree,所以
   // 多数时候这里就是仓库当前分支 —— 仍然值得显示:它是「活干在哪」的唯一凭据。
   const last = sessions[sessions.length - 1];
+  const leadLabel = teamLeadExecutorLabel(task);
+  const workerLabel = teamWorkerExecutorLabel(task);
 
   return (
     <header className="shrink-0 border-b border-line px-6 pb-3 pt-5">
@@ -145,12 +148,12 @@ export function TeamHeader({
 
       <div className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[12px] text-faint">
         <span>
-          指挥 <b className="text-muted">@{task.team?.lead ?? task.agentType ?? "claude"}</b>
+          指挥 <b className="text-muted">{leadLabel}</b>
         </span>
         <span>
           工人 <b className="text-muted">{workers.length}</b>
           {workers.length > 0 && `（${agentMix(workers)}）`}
-          {workers.length === 0 && `（默认派 @${task.team?.worker ?? "claude"}）`}
+          {workers.length === 0 && `（默认派 ${workerLabel}）`}
         </span>
         {last?.branch && (
           <span>

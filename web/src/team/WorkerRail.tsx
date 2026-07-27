@@ -8,6 +8,7 @@ import type { Task } from "@harness/shared";
 import { StatusIcon } from "../StatusIcon";
 import { Duration } from "../time";
 import type { LogLine } from "../Conversation";
+import { executorLabel } from "../executorLabel";
 
 export function WorkerRail({
   workers,
@@ -82,6 +83,7 @@ function WorkerCard({
   onSelect: () => void;
 }) {
   const asking = !!w.question;
+  const label = executorLabel({ task: w });
   return (
     <button
       onClick={onSelect}
@@ -97,8 +99,11 @@ function WorkerCard({
       <div className="flex items-center gap-1.5">
         <StatusIcon status={w.status} size={12} awaitingAnswer={asking} />
         <span className="min-w-0 flex-1 truncate text-[12.5px] font-medium text-ink">{w.title}</span>
-        <span className="shrink-0 rounded border border-line px-1 font-mono text-[10px] text-muted">
-          {w.agentType ?? "—"}
+        <span
+          className="max-w-[92px] shrink truncate rounded border border-line px-1 font-mono text-[10px] text-muted"
+          title={label}
+        >
+          {label}
         </span>
         <span className="w-3 shrink-0 text-center font-mono text-[10px] text-faint">{n <= 9 ? n : ""}</span>
       </div>

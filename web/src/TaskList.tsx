@@ -7,6 +7,7 @@ import { PriorityIcon, PauseHint, useCollapsedGroups } from "./ui";
 import { StatusIcon } from "./StatusIcon";
 import { foldTeamStatus, pairBadge } from "./util";
 import { statusCounts, workersOf } from "./team/teamData";
+import { executorLabel } from "./executorLabel";
 
 // 列表只排**顶层**任务:团队任务的工人(parentId 非空)挂在它自己那一行下面,不单独
 // 占状态分组的位置 —— 否则一次派 6 个工人就把列表冲垮了。
@@ -234,10 +235,19 @@ function TeamRow({
                 ↳ #{(w.queuePosition ?? 0) + 1}
               </span>
             )}
-            <span className="shrink-0 font-mono text-[10px] text-faint">@{w.agentType ?? "—"}</span>
+            <WorkerExecutorChip w={w} />
           </div>
         ))}
     </>
+  );
+}
+
+function WorkerExecutorChip({ w }: { w: Task }) {
+  const label = executorLabel({ task: w });
+  return (
+    <span className="max-w-[112px] shrink truncate font-mono text-[10px] text-faint" title={label}>
+      {label}
+    </span>
   );
 }
 

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { Task, Group, AgentType, Priority, ProjectView, DebateStyle, TeamConfig } from "@harness/shared";
-import { TEAM_DEFAULTS } from "@harness/shared";
+import { AGENT_TYPES, TEAM_DEFAULTS } from "@harness/shared";
 import { X, ArrowsOut, ArrowsIn, Robot, Stack, Plus, Sparkle, Scales, Handshake, CaretDown, Clock, Play, Tray, ArrowsClockwise, GitBranch, TreeStructure, UsersThree, Crown } from "@phosphor-icons/react";
 import { api } from "./api";
 import { PRIORITIES } from "./constants";
@@ -10,8 +10,7 @@ import { useEscape } from "./useEscape";
 import { Menu, Pill } from "./Menu";
 import { usePasteAttachments, AttachmentChips } from "./pasteAttachments";
 import { ScheduleFields, toLocalInput } from "./ScheduleFields";
-
-const AGENTS: AgentType[] = ["claude", "codex", "antigravity"];
+import { ExecutorPicker, type ExecutorSelection, useExecutorProfiles } from "./ExecutorPicker";
 
 // 斜杠命令表。输入框里只剩一个 `/词` 时按前缀过滤它,列出的每一行都是一个**具体
 // 动作**(所以 `/pair` 展开成辩论/协作两行,`/team` 一行)。加命令只改这张表 ——
@@ -47,6 +46,7 @@ export function CreateTask({
   onCreated,
   onDebate,
   onCreateGroup,
+  onOpenAgents,
 }: {
   project: ProjectView;
   groups: Group[];
@@ -54,12 +54,13 @@ export function CreateTask({
   onCreated: (t: Task) => void;
   onDebate: (style: DebateStyle) => void;
   onCreateGroup: () => void;
+  onOpenAgents?: () => void;
 }) {
   const projectId = project.id;
   useEscape(onClose);
   const [body, setBody] = useState("");
   const [priority, setPriority] = useState<Priority>("none");
-  const [agentType, setAgentType] = useState<AgentType>("claude");
+  const [executorPick, setExecutorPick] = useState<ExecutorSelection>({ agentType: "claude", executorId: null });
   const [groupId, setGroupId] = useState("");
   const [labels, setLabels] = useState<string[]>([]);
   const [more, setMore] = useState(false);
@@ -73,9 +74,10 @@ export function CreateTask({
   // lead/worker 存的是**用户显式挑过的那个**,没挑就现算(见下面的 lead/worker) ——
   // 这样本机执行者的探测结果晚到也能把缺省补对,而用户挑过的永远不被覆盖。
   const [teamOn, setTeamOn] = useState(false);
-  const [leadPick, setLeadPick] = useState<AgentType | null>(null);
-  const [workerPick, setWorkerPick] = useState<AgentType | null>(null);
+  const [leadPick, setLeadPick] = useState<ExecutorSelection | null>(null);
+  const [workerPick, setWorkerPick] = useState<ExecutorSelection | null>(null);
   const [detected, setDetected] = useState<{ type: AgentType; available: boolean; resident: boolean }[] | null>(null);
+  const { profiles, providers } = useExecutorProfiles();
 
   // Per-task worktree opt-in. When on, the server creates <repo>/.worktrees/<id>
   // on a fresh `harness/<id8>` branch off the user-picked base before running.
@@ -113,18 +115,23 @@ export function CreateTask({
 
   // 「指挥」只能挑支持常驻会话的执行者(openResident,目前是 claude)—— 指挥台要一个
   // 进程吃很多回合,不支持的 CLI 根本当不了。探测失败就退回内置缺省,别把下拉变空。
-  const leadOptions = useMemo(() => {
+  const leadTypes = useMemo(() => {
     const ok = (detected ?? []).filter((d) => d.available && d.resident).map((d) => d.type);
     return ok.length ? ok : [TEAM_DEFAULTS.lead];
   }, [detected]);
   // 工人不限类型(它们是普通一次性任务)。缺省挑一个跟指挥者**不同**类型的本机执行者
   // —— 换个视角干活;都没有就跟指挥者同类型。
-  const workerOptions = useMemo(() => {
+  const workerTypes = useMemo(() => {
     const ok = (detected ?? []).filter((d) => d.available).map((d) => d.type);
-    return ok.length ? ok : AGENTS;
+    return ok.length ? ok : [...AGENT_TYPES];
   }, [detected]);
-  const lead = leadPick && leadOptions.includes(leadPick) ? leadPick : leadOptions[0]!;
-  const worker = workerPick ?? workerOptions.find((t) => t !== lead) ?? lead;
+  const leadSelection = leadPick && leadTypes.includes(leadPick.agentType) ? leadPick : { agentType: leadTypes[0]!, executorId: null };
+  const workerSelection =
+    workerPick && workerTypes.includes(workerPick.agentType)
+      ? workerPick
+      : { agentType: workerTypes.find((t) => t !== leadSelection.agentType) ?? leadSelection.agentType, executorId: null };
+  const lead = leadSelection.agentType;
+  const worker = workerSelection.agentType;
 
   // Slash command: when the input is just a "/word" token, list the matching
   // commands right under the text (↑↓ to move, Enter/click to choose).
@@ -161,7 +168,12 @@ export function CreateTask({
     setBusy(true);
     try {
       const provisionalTitle = obj.split("\n")[0].slice(0, 30) || "未命名任务";
-      const team: TeamConfig = { lead, worker };
+      const team: TeamConfig = {
+        lead,
+        worker,
+        leadExecutorId: leadSelection.executorId,
+        workerExecutorId: workerSelection.executorId,
+      };
       const t = await api.createTask({
         projectId,
         title: provisionalTitle,
@@ -170,7 +182,8 @@ export function CreateTask({
         mode: teamOn ? "team" : "single",
         // 团队任务的执行者由 team.lead 决定;agentType 跟着填一份,好让只认这个字段的
         // 列表/徽标显示对。
-        agentType: teamOn ? lead : agentType,
+        agentType: teamOn ? lead : executorPick.agentType,
+        executorId: teamOn ? null : executorPick.executorId,
         ...(teamOn ? { team } : {}),
         priority,
         labels,
@@ -349,25 +362,43 @@ export function CreateTask({
         <div className="flex flex-wrap items-center gap-1.5 px-4 pb-3 pt-3">
           {teamOn ? (
             <>
-              <Pill
+              <ExecutorPicker
                 icon={<Crown size={14} />}
-                label={`指挥 @${lead}`}
-                value={lead}
-                onChange={(v) => setLeadPick(v as AgentType)}
-                options={leadOptions.map((a) => ({ value: a, label: `@${a}`, detail: "常驻会话，可插话" }))}
-                menuWidth={216}
+                selection={leadSelection}
+                onSelect={setLeadPick}
+                profiles={profiles}
+                providers={providers}
+                types={leadTypes}
+                label={`指挥 ${profiles.find((a) => a.id === leadSelection.executorId)?.name ?? `默认 ${lead}`}`}
+                includeManage={!!onOpenAgents}
+                onOpenAgents={onOpenAgents}
+                menuWidth={320}
               />
-              <Pill
+              <ExecutorPicker
                 icon={<Robot size={14} />}
-                label={`工人 @${worker}`}
-                value={worker}
-                onChange={(v) => setWorkerPick(v as AgentType)}
-                options={workerOptions.map((a) => ({ value: a, label: `@${a}`, detail: a === lead ? "跟指挥者同类型" : "派活时可逐个改" }))}
-                menuWidth={216}
+                selection={workerSelection}
+                onSelect={setWorkerPick}
+                profiles={profiles}
+                providers={providers}
+                types={workerTypes}
+                label={`工人 ${profiles.find((a) => a.id === workerSelection.executorId)?.name ?? `默认 ${worker}`}`}
+                includeManage={!!onOpenAgents}
+                onOpenAgents={onOpenAgents}
+                menuWidth={320}
               />
             </>
           ) : (
-            <Pill icon={<Robot size={14} />} label={`@${agentType}`} value={agentType} onChange={(v) => setAgentType(v as AgentType)} options={AGENTS.map((a) => ({ value: a, label: `@${a}` }))} />
+            <ExecutorPicker
+              icon={<Robot size={14} />}
+              selection={executorPick}
+              onSelect={setExecutorPick}
+              profiles={profiles}
+              providers={providers}
+              types={[...AGENT_TYPES]}
+              includeManage={!!onOpenAgents}
+              onOpenAgents={onOpenAgents}
+              menuWidth={320}
+            />
           )}
 
           <Pill icon={<Stack size={14} />} label={groupTrigger} value={groupId} onChange={(v) => (v === "__new" ? onCreateGroup() : setGroupId(v))} options={[{ value: "", label: "无分组" }, ...groups.map((g) => ({ value: g.id, label: groupLabel(g) })), { value: "__new", label: "+ 新建分组" }]} />

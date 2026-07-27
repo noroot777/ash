@@ -1,4 +1,5 @@
 import type { TaskStatus } from "@harness/shared";
+import { executorLabel } from "./executorLabel";
 
 // Compact a filesystem path for display: keep the last 2–3 segments with a
 // leading "…/" so long absolute paths fit in a chip/menu row. The full path
@@ -22,10 +23,11 @@ export function groupLabel(g: { name: string; mode: string }): string {
 export function pairBadge(t: {
   mode: string;
   agentType?: string | null;
+  executorLabel?: string | null;
   debate?: { style?: string } | null;
 }): { label: string; cls: string } {
   if (t.mode === "team") return { label: "团队", cls: "bg-accent/10 text-accent" };
-  if (t.mode !== "debate") return { label: `@${t.agentType ?? "—"}`, cls: "text-faint" };
+  if (t.mode !== "debate") return { label: executorLabel({ executorLabel: t.executorLabel, agentType: t.agentType }), cls: "text-faint" };
   return t.debate?.style === "collaborate"
     ? { label: "collab", cls: "bg-teal-500/15 text-teal-700" }
     : { label: "debate", cls: "bg-violet-500/15 text-violet-700" };

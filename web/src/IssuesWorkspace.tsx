@@ -8,6 +8,7 @@ import { toast } from "./toast";
 import { usePasteAttachments, AttachmentChips, AttachButton } from "./pasteAttachments";
 import { IssueDetail } from "./IssueDetail";
 import { IssueDot } from "./issueBits";
+import { executorDetail } from "./ExecutorPicker";
 
 // hero 底部的下拉列的是「智能体执行器」面板里注册的具体执行者(claude@local /
 // claude@公司自建 / codex@local…)。解析事项跟执行任务同一条路:都是派给某个执行者
@@ -254,7 +255,7 @@ function HeroComposer({
                       ? executors.map((a) => ({
                           value: a.id,
                           label: a.name,
-                          detail: [a.type, a.model, a.providerId ? "供应商" : null].filter(Boolean).join(" · "),
+                          detail: executorDetail(a),
                           icon: <Robot size={14} />,
                         }))
                       : [{ value: BUILTIN_DEFAULT, label: "@claude", detail: "内置默认 · 尚未注册执行者", icon: <Robot size={14} /> }]),
