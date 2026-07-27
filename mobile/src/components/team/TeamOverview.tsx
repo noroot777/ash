@@ -1,12 +1,14 @@
 import { Pressable, Text, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
+import type {
+  Group,
+  Task,
+  TaskStatus,
+} from "@harness/shared";
 import {
   statusCounts,
   workerHaltStats,
-  type Group,
-  type Task,
-  type TaskStatus,
-} from "@harness/shared";
+} from "@harness/shared/team";
 import type { TeamCuaStatus } from "@/lib/api";
 import { STATUS_META } from "@/lib/constants";
 import { TaskTimeChip } from "@/lib/time";

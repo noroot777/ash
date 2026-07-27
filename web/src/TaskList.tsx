@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { canArchive, statusCounts, workersOf, type Group, type Task } from "@harness/shared";
+import { canArchive, type Group, type Task } from "@harness/shared";
+import { statusCounts, workersOf } from "@harness/shared/team";
 import { CaretRight } from "@phosphor-icons/react";
 import { STATUSES, STATUS_META, PRIORITY_ORDER } from "./constants";
 import { PriorityIcon, PauseHint, useCollapsedGroups } from "./ui";

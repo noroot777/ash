@@ -16,15 +16,17 @@ import { Ionicons } from "@expo/vector-icons";
 import { Stack, useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import {
-  batchesOf,
   canArchive,
-  isTeamSettled,
-  teamGroupsOf,
-  workersOf,
   type Group,
   type Session,
   type Task,
 } from "@harness/shared";
+import {
+  batchesOf,
+  isTeamSettled,
+  teamGroupsOf,
+  workersOf,
+} from "@harness/shared/team";
 import { api, type TeamCuaStatus } from "@/lib/api";
 import { refreshAll } from "@/lib/data";
 import type { LogLine } from "@/lib/log";

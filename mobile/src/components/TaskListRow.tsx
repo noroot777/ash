@@ -1,5 +1,6 @@
 import { View, Text, Pressable } from "react-native";
-import { statusCounts, type Task } from "@harness/shared";
+import type { Task } from "@harness/shared";
+import { statusCounts } from "@harness/shared/team";
 import { Ionicons } from "@expo/vector-icons";
 import { SignalBar } from "@/components/SignalBar";
 import { PriorityBars } from "@/components/ui";

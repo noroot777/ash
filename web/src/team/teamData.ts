@@ -1,6 +1,6 @@
 // /team 主视图里依赖 web 会话模型的装配。任务/分组的纯数据函数已经提升到
 // @harness/shared，web 和 mobile 共用；这里仅保留 ConvItem 相关解析。
-import type { Batch } from "@harness/shared";
+import type { Batch } from "@harness/shared/team";
 import type { ConvItem } from "../Conversation";
 
 const TEAM_HALT_TEXT = "你按了「停止全组」";

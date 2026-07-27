@@ -5,15 +5,17 @@
 // 执行者是**真任务**,所以抽屉里复用真正的 TaskDetail；TaskDetail 会统一收起由
 // 调度者拥有的元信息编辑，只保留会话、运行/停止/重试和答复。
 import { useEffect, useMemo, useState } from "react";
+import type {
+  AgentType,
+  Group,
+  Task,
+} from "@harness/shared";
 import {
   batchesOf,
   teamGroupsOf,
   waitingWorkers,
   workersOf,
-  type AgentType,
-  type Group,
-  type Task,
-} from "@harness/shared";
+} from "@harness/shared/team";
 import { ArrowSquareOut, Broom, WarningCircle, X } from "@phosphor-icons/react";
 import { api, type TeamCuaStatus } from "../api";
 import { toast } from "../toast";

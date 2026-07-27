@@ -610,5 +610,3 @@ export function parseSessionOutput(out: string): ConvSeg[] {
   flush();
   return segs;
 }
-
-export * from "./team";

@@ -4,7 +4,8 @@
 //
 // 调度者那条 track 没有独立的数据源,由客户端从已解析的会话推出来(每个回合一段)。
 import { useState } from "react";
-import { isTeamSettled, type Group, type Task } from "@harness/shared";
+import type { Group, Task } from "@harness/shared";
+import { isTeamSettled } from "@harness/shared/team";
 import { CaretDown } from "@phosphor-icons/react";
 import { statusColor } from "../StatusIcon";
 import { formatDuration, formatInstant, useTick } from "../time";
