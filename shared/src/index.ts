@@ -564,12 +564,32 @@ export type ConvSeg =
 export function parseSessionOutput(out: string): ConvSeg[] {
   const segs: ConvSeg[] = [];
   let buf: string[] = [];
+  let skippingDiagnostic = false;
   const flush = () => {
     const t = buf.join("\n").trim();
     if (t) segs.push({ kind: "agent", text: t });
     buf = [];
   };
   for (const line of out.split("\n")) {
+    const trimmed = line.trim();
+    // Backend failure diagnostics are persisted beside the conversation so they
+    // remain available in the raw run artifacts. They are not agent speech,
+    // though, and rendering them inline makes a normal transcript look like a
+    // stream of repeated reconnect errors. Keep them out of conversation bubbles.
+    if (!skippingDiagnostic && trimmed === "> **执行诊断**") {
+      flush();
+      skippingDiagnostic = true;
+      continue;
+    }
+    if (skippingDiagnostic) {
+      if (!trimmed) {
+        skippingDiagnostic = false;
+        continue;
+      }
+      if (!line.startsWith("\x1e")) continue;
+      skippingDiagnostic = false;
+    }
+    if (trimmed.startsWith("> 续聊回合异常结束(")) continue;
     if (line.startsWith("\x1e")) {
       try {
         const j = JSON.parse(line.slice(1)) as { t?: string; text?: string; at?: string };
@@ -591,7 +611,6 @@ export function parseSessionOutput(out: string): ConvSeg[] {
         /* not a turn line — fall through and treat as ordinary text */
       }
     }
-    const trimmed = line.trim();
     if (trimmed === LEGACY_SYS_MARKER) {
       flush();
       segs.push({ kind: "system", text: LEGACY_SYS_MARKER });
