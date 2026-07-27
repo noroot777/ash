@@ -133,6 +133,10 @@ export async function ensureSchema() {
     "ALTER TABLE tasks ADD COLUMN question_options TEXT",
     // 任务执行者 profile。非空时按 agents.id 精确解析；空/悬空时按 agent_type 默认执行者降级。
     "ALTER TABLE tasks ADD COLUMN executor_id TEXT",
+    // 续聊：终态任务的追加对话回合，记下续聊前的终态（队列按它看待该成员）
+    "ALTER TABLE tasks ADD COLUMN follow_up_from TEXT",
+    // 完成确认落库（严格 done 协议），确认与结算跨进程也不丢
+    "ALTER TABLE tasks ADD COLUMN complete_confirmed_at TEXT",
   ]) {
     try {
       await client.execute(sql);

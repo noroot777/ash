@@ -65,6 +65,14 @@ export const tasks = sqliteTable("tasks", {
   // 渲染成可点按钮（点一下 = 以该选项原文当答复送出，走的还是同一个 /answer）。
   // null/[] = 纯自由作答。答复时与 question 一起清空。
   questionOptions: text("question_options"),
+  // 续聊（follow-up）：任务已经到终态后用户又发消息，这一轮不是「任务的执行」而是
+  // 任务之后的对话。开跑时把续聊前的终态记在这里（done/failed/canceled），队列一律
+  // 按它看待该成员（既不挡后面的，也不会被当 backlog 拉起），结算后清空。
+  followUpFrom: text("follow_up_from"),
+  // 完成确认（严格 done 协议）：agent 调 complete_task 时盖时间戳，settle 消费后清空。
+  // 落库而不只放内存 —— 确认与结算若不在同一个进程里（历史事故：僵尸实例跑任务、
+  // HTTP 打到监听进程），内存标记会静默丢掉，agent 明明确认了却记 failed。
+  completeConfirmedAt: text("complete_confirmed_at"),
 });
 
 export const agents = sqliteTable("agents", {

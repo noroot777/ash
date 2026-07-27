@@ -208,6 +208,25 @@ if (hasBuild) {
   );
 }
 
-serve({ fetch: app.fetch, port }, (info) => {
+const server = serve({ fetch: app.fetch, port }, (info) => {
   console.log(`[harness] server on http://localhost:${info.port}`);
+});
+
+// 监听失败(几乎总是 EADDRINUSE:已经有一个 harness 占着端口)**必须退出**。
+// 曾经这里没有 error 处理,错误落进上面的 uncaughtException 兜底被一句日志吞掉,
+// 于是留下一个「不监听、但 scheduler 还在跑」的僵尸实例:它照样拿同一个库派任务、
+// 结算状态,而 agent 的 HTTP 回调(complete_task)打到的是真正在监听的那个进程
+// —— 确认与结算分家,任务明明确认完成却被记 failed,队列跟着停摆(2026-07-27
+// 事故)。单实例锁(acquireDbSingletonLock)是第一道闸,这里是第二道:锁没拦住
+// (比如 HARNESS_ALLOW_MULTI=1 或锁文件被清)也不能带着调度器活下去。
+// process.exit 会触发 singleton 的 exit 钩子释放锁,不必手动 release。
+server.on("error", (err: NodeJS.ErrnoException) => {
+  if (err.code === "EADDRINUSE") {
+    console.error(
+      `[harness] 端口 ${port} 已被占用 —— 已经有一个 harness server 在跑。本进程退出(绝不能留成僵尸调度器)。`,
+    );
+  } else {
+    console.error("[harness] server listen error:", err);
+  }
+  process.exit(1);
 });

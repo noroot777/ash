@@ -11,7 +11,7 @@ import { eq, and, lt, asc, inArray } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { tasks, queueItems } from "./db/schema.js";
 import { id, now } from "./util.js";
-import { advanceQueue } from "./scheduler.js";
+import { advanceQueue, queueStatus } from "./scheduler.js";
 
 // 内部:把 (queueId, [..items..]) 重排成 position 0..N-1,保持 dense
 export async function repackQueue(queueId: string, orderedTaskIds: string[]): Promise<void> {
@@ -46,6 +46,8 @@ async function assertSameGroup(queueId: string, candidateTaskId?: string): Promi
 // 否则等于绕过队列顺序。/run 与 /fire 共用。返回挡路的任务 id。
 // 「让位」的判定跟 selectNextInQueue 的透明跳过**同源**:done / canceled / failed
 // 三种都不算挡路 —— 自动推进会跳过失败的继续跑,人手动点运行却被拦住是两套说法。
+// 状态一律过 queueStatus():前面那位若正在「续聊」(终态任务的追加对话),按它
+// 续聊前的终态算,一段闲聊不该把后面的人挡住。
 export async function queueBlockers(taskId: string): Promise<string[]> {
   const myItem = (
     await db.select().from(queueItems).where(eq(queueItems.taskId, taskId))
@@ -62,10 +64,10 @@ export async function queueBlockers(taskId: string): Promise<string[]> {
     .from(tasks)
     .where(inArray(tasks.id, before.map((i) => i.taskId)));
   return beforeTasks
-    .filter(
-      (t) =>
-        !t.archived && t.status !== "done" && t.status !== "canceled" && t.status !== "failed",
-    )
+    .filter((t) => {
+      const s = queueStatus(t);
+      return !t.archived && s !== "done" && s !== "canceled" && s !== "failed";
+    })
     .map((t) => t.id);
 }
 

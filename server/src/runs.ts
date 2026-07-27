@@ -71,9 +71,11 @@ export function takeCanceled(taskId: string): boolean {
 // ── 完成确认(严格 done 协议)────────────────────────────────────────────────
 // exit 0 只说明 CLI 进程正常退出,不代表任务目标达成(agent 报错后正常退出照样
 // exit 0)。done 必须由 agent 亲口确认:回合内调 complete_task(MCP → POST
-// /tasks/:id/complete)置标记,settle 时 take 消费。内存态即可——标记只活在
-// 「调用 ~ 本回合 settle」之间;server 重启时 running 任务本来就 reconcile 成
-// failed,标记一起丢掉正好。
+// /tasks/:id/complete)置标记,settle 时 take 消费。
+// 这里是**同进程的快路**;权威那份落在 tasks.complete_confirmed_at(DB),因为
+// 确认走 HTTP 打到监听进程、而跑这个回合的未必是同一个进程 —— 只有内存标记时,
+// 跨进程的确认会静默丢掉(见 schema.completeConfirmedAt 的注释)。settle 两边
+// 任一命中即算确认。
 const confirmed = new Set<string>();
 
 export function confirmDone(taskId: string): void {
