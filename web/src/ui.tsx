@@ -419,7 +419,7 @@ export function CopyButton({
   );
 }
 
-// PauseHint —— paused 状态卡片的"等谁"副标行（Board / TaskList 共用）。
+// PauseHint —— paused 状态卡片的"等谁"副标行（TaskList 使用）。
 // 队列模型版(DESIGN-scheduling.md):paused 任务在 queue 里等"前面所有项 done/canceled"。
 // 看 task.queueId / queuePosition,从 allTasks 里找同 queue 排在前面的、还没让位的项。
 //   • 至少一个未让位前驱 → "↳ 等「标题」"(+N 如果还有更多)
@@ -534,4 +534,3 @@ export function ResizeHandle({
     />
   );
 }
-

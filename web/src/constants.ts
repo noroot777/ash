@@ -2,8 +2,8 @@ import type { TaskStatus, Priority } from "@harness/shared";
 
 // Status metadata — ordered for the grouped list view (DESIGN.md §8).
 // paused 跟 running 是「进行中」的两个面：前者跑着、后者跑到检查点等续跑。idle 是
-// 团队指挥台专有的第三面：进程在线但这一刻没在说话（`/team`）。Kanban 列数不变 ——
-// Board.tsx 自己 filter 掉 paused/idle 这两列、把它们的任务并入 running 列。
+// 团队指挥台专有的第三面：进程在线但这一刻没在说话（`/team`）。列表按这里的顺序
+// 展示状态分组，并为 paused / idle 保留独立的状态语义。
 //
 // 配色上 cyan 已经让给「有人在问你话」（见 StatusIcon.tsx），所以 paused/idle 一起
 // 收到中性的 slate：它们都是「harness 自己会推进，不用你管」。

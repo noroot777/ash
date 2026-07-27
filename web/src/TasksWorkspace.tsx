@@ -4,15 +4,14 @@ import { TaskList } from "./TaskList";
 import { TaskDetail, type LogLine } from "./TaskDetail";
 import { DebateView } from "./DebateView";
 import { TeamView } from "./team/TeamView";
-import { Board } from "./Board";
 import { type DebateState, emptyDebate } from "./debateState";
 import { BranchChip, ResizeHandle } from "./ui";
 
 // The "执行" plane: the existing task workspace, extracted from App so the rail can
-// switch between it and the issues plane. View (list/board) + archived filter live
-// here now (they're presentations of tasks, not top-level rail items). State stays
-// in App (single source); this component is presentational + raises callbacks.
-export type TaskView = "list" | "board" | "archived";
+// switch between it and the issues plane. View (list) + archived filter live here
+// now (they're presentations of tasks, not top-level rail items). State stays in
+// App (single source); this component is presentational + raises callbacks.
+export type TaskView = "list" | "archived";
 
 export function TasksWorkspace({
   view,
@@ -104,100 +103,91 @@ export function TasksWorkspace({
         </button>
         <div className="flex items-center gap-0.5 rounded-lg bg-raised p-0.5 text-[12px]">
           {tab("list", "列表")}
-          {tab("board", "看板")}
           {tab("archived", `已归档${archivedCount ? ` ${archivedCount}` : ""}`)}
         </div>
       </div>
 
       <div className="flex min-h-0 flex-1">
-        {view === "board" ? (
-          <div className="min-w-0 flex-1">
-            <Board tasks={visible} onMove={(id, status) => onPatch(id, { status })} onOpen={(id) => { onSelect(id); setView("list"); }} />
-          </div>
-        ) : (
-          <>
-            <aside style={{ width: sidebarW }} className="relative flex shrink-0 flex-col border-r border-line">
-              <TaskList tasks={visible} groups={groups} selected={selected} onSelect={onSelect} />
-              <ResizeHandle width={sidebarW} onChange={setSidebarW} />
-            </aside>
-            <div className="flex min-w-0 flex-1 flex-col">
-              {current?.issueId && (
-                <button
-                  onClick={() => onOpenIssue(current.issueId!)}
-                  className="flex shrink-0 items-center gap-2 border-b border-line bg-[color-mix(in_srgb,var(--color-accent)_6%,#fff)] px-3.5 py-2 text-left text-[12.5px] text-accent hover:bg-[color-mix(in_srgb,var(--color-accent)_11%,#fff)]"
-                  title="回到来源事项"
-                >
-                  ← 来自事项 · 含讨论上下文
-                </button>
-              )}
-              <div className="min-h-0 flex-1">
-                {current ? (
-                  current.mode === "debate" ? (
-                    <DebateView
-                      key={current.id}
-                      task={current}
-                      state={debates[current.id] ?? emptyDebate()}
-                      sessionsBump={sessionsBump}
-                      onRun={() => onRun(current.id)}
-                      onStop={() => onStop(current.id)}
-                      onRetry={() => onRetry(current.id)}
-                      onGate={(a) => onGate(current.id, a)}
-                      onDelete={() => onDelete(current.id, current.title)}
-                      onArchive={() => onArchive(current.id)}
-                      onUnarchive={() => onUnarchive(current.id)}
-                    />
-                  ) : current.mode === "team" ? (
-                    // 团队模式:整张 logs 表都给它 —— 指挥者的流、每个工人卡片上的
-                    // 实时最后一行、抽屉里那个工人的会话,取的是不同任务的日志。
-                    <TeamView
-                      key={current.id}
-                      task={current}
-                      groups={groups}
-                      allTasks={visible}
-                      logs={logs}
-                      sessionsBump={sessionsBump}
-                      onRun={onRun}
-                      onStop={onStop}
-                      onRetry={onRetry}
-                      onReply={onReply}
-                      onPatch={onPatch}
-                      onCreateGroup={onCreateGroup}
-                      onDelete={onDelete}
-                      onArchive={onArchive}
-                      onUnarchive={onUnarchive}
-                      onRequeue={onRequeue}
-                      onSelect={onSelect}
-                    />
-                  ) : (
-                    <TaskDetail
-                      key={current.id}
-                      task={current}
-                      groups={groups}
-                      allTasks={visible}
-                      logs={logs[current.id] ?? []}
-                      sessionsBump={sessionsBump}
-                      onRun={() => onRun(current.id)}
-                      onStop={() => onStop(current.id)}
-                      onRetry={() => onRetry(current.id)}
-                      onReply={(text, opts) => onReply(current.id, text, opts)}
-                      onPatch={(p) => onPatch(current.id, p)}
-                      onCreateGroup={onCreateGroup}
-                      onDelete={() => onDelete(current.id, current.title)}
-                      onArchive={() => onArchive(current.id)}
-                      onUnarchive={() => onUnarchive(current.id)}
-                      onRequeue={() => onRequeue(current.id)}
-                    />
-                  )
-                ) : (
-                  <div className="flex h-full flex-col items-center justify-center gap-1 text-[13px] text-faint">
-                    <span>选择左侧任务,或新建</span>
-                    <span className="text-[12px]">按 <kbd>C</kbd> 新建 · <kbd>⌘K</kbd> 命令面板</span>
-                  </div>
-                )}
+        <aside style={{ width: sidebarW }} className="relative flex shrink-0 flex-col border-r border-line">
+          <TaskList tasks={visible} groups={groups} selected={selected} onSelect={onSelect} />
+          <ResizeHandle width={sidebarW} onChange={setSidebarW} />
+        </aside>
+        <div className="flex min-w-0 flex-1 flex-col">
+          {current?.issueId && (
+            <button
+              onClick={() => onOpenIssue(current.issueId!)}
+              className="flex shrink-0 items-center gap-2 border-b border-line bg-[color-mix(in_srgb,var(--color-accent)_6%,#fff)] px-3.5 py-2 text-left text-[12.5px] text-accent hover:bg-[color-mix(in_srgb,var(--color-accent)_11%,#fff)]"
+              title="回到来源事项"
+            >
+              ← 来自事项 · 含讨论上下文
+            </button>
+          )}
+          <div className="min-h-0 flex-1">
+            {current ? (
+              current.mode === "debate" ? (
+                <DebateView
+                  key={current.id}
+                  task={current}
+                  state={debates[current.id] ?? emptyDebate()}
+                  sessionsBump={sessionsBump}
+                  onRun={() => onRun(current.id)}
+                  onStop={() => onStop(current.id)}
+                  onRetry={() => onRetry(current.id)}
+                  onGate={(a) => onGate(current.id, a)}
+                  onDelete={() => onDelete(current.id, current.title)}
+                  onArchive={() => onArchive(current.id)}
+                  onUnarchive={() => onUnarchive(current.id)}
+                />
+              ) : current.mode === "team" ? (
+                // 团队模式:整张 logs 表都给它 —— 指挥者的流、每个工人卡片上的
+                // 实时最后一行、抽屉里那个工人的会话,取的是不同任务的日志。
+                <TeamView
+                  key={current.id}
+                  task={current}
+                  groups={groups}
+                  allTasks={visible}
+                  logs={logs}
+                  sessionsBump={sessionsBump}
+                  onRun={onRun}
+                  onStop={onStop}
+                  onRetry={onRetry}
+                  onReply={onReply}
+                  onPatch={onPatch}
+                  onCreateGroup={onCreateGroup}
+                  onDelete={onDelete}
+                  onArchive={onArchive}
+                  onUnarchive={onUnarchive}
+                  onRequeue={onRequeue}
+                  onSelect={onSelect}
+                />
+              ) : (
+                <TaskDetail
+                  key={current.id}
+                  task={current}
+                  groups={groups}
+                  allTasks={visible}
+                  logs={logs[current.id] ?? []}
+                  sessionsBump={sessionsBump}
+                  onRun={() => onRun(current.id)}
+                  onStop={() => onStop(current.id)}
+                  onRetry={() => onRetry(current.id)}
+                  onReply={(text, opts) => onReply(current.id, text, opts)}
+                  onPatch={(p) => onPatch(current.id, p)}
+                  onCreateGroup={onCreateGroup}
+                  onDelete={() => onDelete(current.id, current.title)}
+                  onArchive={() => onArchive(current.id)}
+                  onUnarchive={() => onUnarchive(current.id)}
+                  onRequeue={() => onRequeue(current.id)}
+                />
+              )
+            ) : (
+              <div className="flex h-full flex-col items-center justify-center gap-1 text-[13px] text-faint">
+                <span>选择左侧任务,或新建</span>
+                <span className="text-[12px]">按 <kbd>C</kbd> 新建 · <kbd>⌘K</kbd> 命令面板</span>
               </div>
-            </div>
-          </>
-        )}
+            )}
+          </div>
+        </div>
       </div>
     </div>
   );

@@ -20,7 +20,7 @@ import { HealthDot, ProjectAvatar } from "./ui";
 import { shortPath } from "./util";
 import { runAction, canStopTask } from "./taskActions";
 import { canArchive } from "@harness/shared";
-import { TasksWorkspace } from "./TasksWorkspace";
+import { TasksWorkspace, type TaskView } from "./TasksWorkspace";
 import { IssuesWorkspace } from "./IssuesWorkspace";
 
 export function App() {
@@ -54,7 +54,7 @@ export function App() {
   const [worktreePrompt, setWorktreePrompt] = useState<
     { projectId: string; path: string; branch: string } | null
   >(null);
-  const [view, setView] = useState<"list" | "board" | "archived">("list");
+  const [view, setView] = useState<TaskView>("list");
   // Sidebar width is user-draggable; persist so it survives reloads. Clamp on read
   // in case of a stale/garbage value.
   const [sidebarW, setSidebarW] = useState(() => {
