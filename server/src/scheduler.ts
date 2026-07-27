@@ -75,30 +75,61 @@ export async function advanceQueue(queueId: string): Promise<void> {
   void resumeOrRunTask(next.id, { reason: "queue" });
 }
 
-// 给定 queue,挑出"现在应该被拉起来的下一个 task"(或 null = 没有)。
-// 纯函数(只读 DB,不变状态),便于测试 + 给 UI 用来高亮"下一个会跑的"。
-export async function pickNextLaunchable(queueId: string): Promise<typeof tasks.$inferSelect | null> {
-  const items = await db
-    .select()
-    .from(queueItems)
-    .where(eq(queueItems.queueId, queueId))
-    .orderBy(asc(queueItems.position));
+// selectNextInQueue 只需要这几列,写成结构类型,单测就能直接喂字面量。
+export type QueueMember = {
+  id: string;
+  status: string;
+  archived: boolean;
+  mode: string | null;
+  question: string | null;
+};
 
-  for (const item of items) {
-    const t = (await db.select().from(tasks).where(eq(tasks.id, item.taskId))).at(0);
-    if (!t) continue;
-    if (t.archived) continue;
-    if (t.mode === "team") continue; // 团队任务不该进队列(防御);它没有终态,会永久挡住
+// 队列推进的纯计算核心:给定按 position 排好的成员,挑出"现在该被拉起来的那个"。
+// **不变量:一个 queue 同一时刻至多一个成员在跑。** 所以先整体扫一遍,只要有人
+// running/queued 就一个都不启动 —— 不能只靠"顺序扫到才发现",因为被透明跳过的
+// 终态任务(典型:failed)一旦回到 backlog,它的位置就排在正在跑的那个**前面**,
+// 顺序扫描会先命中它,于是同一条串行队列上两个任务并跑(实测:05 失败 → 06 起跑
+// → 在 05 点重新排队 → 05 和 06 一起跑)。守卫放这里,所有推进入口
+// (advanceQueue / runGroup / queues 的 reorder·remove·insert / requeue)一起受益。
+export function selectNextInQueue<T extends QueueMember>(rows: T[]): T | null {
+  const live = rows.filter((t) => !t.archived && t.mode !== "team");
+  if (live.some((t) => t.status === "running" || t.status === "queued")) return null;
+
+  for (const t of live) {
     const s = t.status as TaskStatus;
     if (s === "done" || s === "canceled" || s === "failed") continue;
     if (s === "awaiting_review") return null; // 审查门:链停等用户
-    if (s === "running" || s === "queued") return null; // 已在跑
     // 提问暂停(question 非空)≠ 检查点暂停:它在等 answer_question 带答复唤醒,
     // 队列跟着等,绝不能在这里用「继续」把它空手叫醒(问题会白问)。
     if (s === "paused" && t.question) return null;
     return t; // backlog / paused
   }
   return null;
+}
+
+// 给定 queue,挑出"现在应该被拉起来的下一个 task"(或 null = 没有)。
+// 只读 DB、不变状态,便于给 UI 用来高亮"下一个会跑的";规则本身在
+// selectNextInQueue(纯函数,单测覆盖)。
+export async function pickNextLaunchable(queueId: string): Promise<typeof tasks.$inferSelect | null> {
+  const rows = await queueMembers(queueId);
+  return selectNextInQueue(rows);
+}
+
+// queue 成员按 position 升序取出(一次批查,避免逐条查库)。归档成员仍占位置,
+// 所以照样取回来 —— 由 selectNextInQueue 决定怎么对待。
+export async function queueMembers(queueId: string): Promise<(typeof tasks.$inferSelect)[]> {
+  const items = await db
+    .select()
+    .from(queueItems)
+    .where(eq(queueItems.queueId, queueId))
+    .orderBy(asc(queueItems.position));
+  if (items.length === 0) return [];
+  const rows = await db
+    .select()
+    .from(tasks)
+    .where(inArray(tasks.id, items.map((i) => i.taskId)));
+  const byId = new Map(rows.map((r) => [r.id, r] as const));
+  return items.map((i) => byId.get(i.taskId)).filter((t): t is typeof tasks.$inferSelect => !!t);
 }
 
 // Run an entire group. parallel mode:扫所有 backlog/paused,限流并行启动。

@@ -8,7 +8,8 @@
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
     "db:push": "drizzle-kit push",
-    "test:diagnostics": "tsx scripts/test-codex-diagnostics.ts"
+    "test:diagnostics": "tsx scripts/test-codex-diagnostics.ts",
+    "test:queue": "tsx scripts/test-queue-order.ts"
   },
   "dependencies": {
     "@harness/shared": "*",

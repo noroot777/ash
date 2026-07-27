@@ -143,6 +143,12 @@ export const api = {
     fetch(`/api/tasks/${id}/stop`, { method: "POST" }).then(j),
   retryTask: (id: string): Promise<unknown> =>
     fetch(`/api/tasks/${id}/retry`, { method: "POST" }).then(j),
+  // 重新排队:失败/取消的任务回队列等待。已经被队列越过(后面的任务开跑过)时
+  // 服务端会把它移到队尾 —— 留在原位会抢在正在跑的那个前面,造成串行队列并跑。
+  requeueTask: (
+    id: string,
+  ): Promise<{ task: Task; movedToEnd: boolean; position: number | null; queueSize: number }> =>
+    fetch(`/api/tasks/${id}/requeue`, { method: "POST" }).then(j),
   fireTask: (id: string): Promise<unknown> =>
     fetch(`/api/tasks/${id}/fire`, { method: "POST" }).then(j),
   archiveTask: (id: string): Promise<Task> =>

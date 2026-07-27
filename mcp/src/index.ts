@@ -212,7 +212,7 @@ server.registerTool(
   {
     title: "更新任务",
     description:
-      "更新单个任务的可编辑字段:title/body/status/labels/priority/groupId/agentType。**不能**用此工具改任务的队列归属——请用 queue_insert / queue_remove / queue_reorder。也不能把任务手动设为 running/queued/awaiting_review。**running/queued 任务的 status 一律不可改(会被 409 拒绝)——要停止/取消用 stop_task**,它才会真正杀掉 agent 进程树;直接 patch canceled 只改数据库,是 2026-07-21「complete_task 409 → failed 错乱」事故的根因。**正在执行的任务要确认完成时,也不要用 status=done——用 complete_task**:回合结束的严格结算只认 complete_task 的确认。",
+      "更新单个任务的可编辑字段:title/body/status/labels/priority/groupId/agentType。**不能**用此工具改任务的队列归属——请用 queue_insert / queue_remove / queue_reorder;**想让失败/取消的任务回队列等待用 requeue_task**(它会顺带处理位置:被越过就排到队尾)。也不能把任务手动设为 running/queued/awaiting_review。**running/queued 任务的 status 一律不可改(会被 409 拒绝)——要停止/取消用 stop_task**,它才会真正杀掉 agent 进程树;直接 patch canceled 只改数据库,是 2026-07-21「complete_task 409 → failed 错乱」事故的根因。**正在执行的任务要确认完成时,也不要用 status=done——用 complete_task**:回合结束的严格结算只认 complete_task 的确认。",
     inputSchema: {
       taskId: z.string(),
       title: z.string().optional(),
@@ -391,6 +391,20 @@ server.registerTool(
   },
   async ({ taskId }) => {
     try { return ok(await call("POST", `/tasks/${taskId}/run`, {})); }
+    catch (e) { return fail(e); }
+  },
+);
+
+server.registerTool(
+  "requeue_task",
+  {
+    title: "重新排队",
+    description:
+      "把一个 failed/canceled 的任务放回它所在队列等待,轮到它时自动启动(有会话就从中断处续跑)。跟 run_task 的区别:run 是现在就跑,requeue 是回队列排着。**位置**:失败任务是被队列透明跳过的,如果后面已经有任务开跑过(它的原位置名存实亡),服务端会自动把它移到**队尾**;后面没人跑过则原位不动。别再用 patch_task(status=backlog) + queue_reorder 手拼——留在原位会让它抢在正在跑的那个前面,同一条串行队列上两个任务并跑。",
+    inputSchema: { taskId: z.string().describe("要重新排队的任务 id(必须是 failed/canceled 且在某个 queue 里)") },
+  },
+  async ({ taskId }) => {
+    try { return ok(await call("POST", `/tasks/${taskId}/requeue`, {})); }
     catch (e) { return fail(e); }
   },
 );

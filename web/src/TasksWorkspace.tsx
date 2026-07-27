@@ -40,6 +40,7 @@ export function TasksWorkspace({
   onDelete,
   onArchive,
   onUnarchive,
+  onRequeue,
   onGate,
   onOpenIssue,
 }: {
@@ -68,6 +69,7 @@ export function TasksWorkspace({
   onDelete: (id: string, title: string) => void;
   onArchive: (id: string) => void;
   onUnarchive: (id: string) => void;
+  onRequeue: (id: string) => void;
   onGate: (id: string, action: GateAction) => void;
   onOpenIssue: (issueId: string) => void;
 }) {
@@ -163,6 +165,7 @@ export function TasksWorkspace({
                       onDelete={onDelete}
                       onArchive={onArchive}
                       onUnarchive={onUnarchive}
+                      onRequeue={onRequeue}
                       onSelect={onSelect}
                     />
                   ) : (
@@ -182,6 +185,7 @@ export function TasksWorkspace({
                       onDelete={() => onDelete(current.id, current.title)}
                       onArchive={() => onArchive(current.id)}
                       onUnarchive={() => onUnarchive(current.id)}
+                      onRequeue={() => onRequeue(current.id)}
                     />
                   )
                 ) : (

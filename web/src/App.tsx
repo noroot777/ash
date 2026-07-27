@@ -240,10 +240,24 @@ export function App() {
   const archive = useCallback(async (id: string) => {
     try { const t = await api.archiveTask(id); setTasks((ts) => ts.map((x) => (x.id === id ? t : x))); }
     catch (e) { showErr(e); }
-  }, []);
-  const unarchive = useCallback(async (id: string) => {
+  }, []);  const unarchive = useCallback(async (id: string) => {
     try { const t = await api.unarchiveTask(id); setTasks((ts) => ts.map((x) => (x.id === id ? t : x))); }
     catch (e) { showErr(e); }
+  }, []);
+
+  // 重新排队:服务端一次做完「回 backlog + 被越过则移到队尾 + 推进队列」。
+  // 返回的 task 带最新 queuePosition(SSE 只推 status,不推队列位置),直接覆盖行。
+  const requeue = useCallback(async (id: string) => {
+    try {
+      const r = await api.requeueTask(id);
+      setTasks((ts) => ts.map((x) => (x.id === id ? r.task : x)));
+      const at = r.position === null ? "" : `（第 ${r.position + 1}/${r.queueSize} 位）`;
+      toast(
+        r.movedToEnd
+          ? `已排到队尾${at}：前面的任务跑完后自动启动`
+          : `已重新排队${at}：轮到它时自动启动`,
+      );
+    } catch (e) { showErr(e); }
   }, []);
 
   // The single primary action for a task, dispatched by its status — used by the
@@ -685,6 +699,7 @@ export function App() {
             onDelete={del}
             onArchive={archive}
             onUnarchive={unarchive}
+            onRequeue={requeue}
             onGate={gate}
             onOpenIssue={openIssue}
           />

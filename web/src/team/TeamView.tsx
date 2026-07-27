@@ -32,6 +32,7 @@ export function TeamView({
   onDelete,
   onArchive,
   onUnarchive,
+  onRequeue,
   onSelect,
 }: {
   task: Task;
@@ -49,6 +50,8 @@ export function TeamView({
   onDelete: (id: string, title: string) => void;
   onArchive: (id: string) => void;
   onUnarchive: (id: string) => void;
+  /** 工人失败/取消后重新排队(位置由服务端定:被越过就到队尾)。 */
+  onRequeue: (id: string) => void;
   /** 整页打开某个工人(离开指挥台)。 */
   onSelect: (id: string) => void;
 }) {
@@ -151,6 +154,7 @@ export function TeamView({
           }}
           onArchive={() => onArchive(open.id)}
           onUnarchive={() => onUnarchive(open.id)}
+          onRequeue={() => onRequeue(open.id)}
         />
       )}
     </main>
@@ -180,6 +184,7 @@ function WorkerDrawer({
   onDelete: () => void;
   onArchive: () => void;
   onUnarchive: () => void;
+  onRequeue: () => void;
 }) {
   return (
     <>

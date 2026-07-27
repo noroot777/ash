@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { getConnInfo } from "@hono/node-server/conninfo";
 import { streamSSE } from "hono/streaming";
-import { eq, inArray, and, lt, asc } from "drizzle-orm";
+import { eq, inArray, asc } from "drizzle-orm";
 import { readFile } from "node:fs/promises";
 import { existsSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
 import { spawn } from "node:child_process";
@@ -33,6 +33,7 @@ import { listModels } from "./llm.js";
 import { setTaskStatus } from "./status.js";
 import { stopTask, confirmDone } from "./runs.js";
 import { runGroup, advanceQueue, pauseGroup } from "./scheduler.js";
+import { mountQueueRoutes, queueBlockers, repackQueue, isOvertaken, tailOrder } from "./queues.js";
 import { haltTeam } from "./team/session.js";
 import { dispatchWorkers, type DispatchSpec } from "./team/dispatch.js";
 import { runDebate, resumeDebate, resumeAtGate } from "./debate/index.js";
@@ -912,27 +913,7 @@ api.get("/tasks/:id/debate", async (c) => {
 });
 
 // ── run a task (§1/§12) ─────────────────────────────────────────────────────
-// 队列前置检查:task 在某个 queue 里时,前面所有 item 必须 done / canceled(透明)
-// 才允许单独启动,否则等于绕过队列顺序。/run 与 /fire 共用。返回挡路的任务 id。
-async function queueBlockers(taskId: string): Promise<string[]> {
-  const myItem = (
-    await db.select().from(queueItems).where(eq(queueItems.taskId, taskId))
-  ).at(0);
-  if (!myItem) return [];
-  const before = await db
-    .select()
-    .from(queueItems)
-    .where(and(eq(queueItems.queueId, myItem.queueId), lt(queueItems.position, myItem.position)))
-    .orderBy(asc(queueItems.position));
-  if (!before.length) return [];
-  const beforeTasks = await db
-    .select()
-    .from(tasks)
-    .where(inArray(tasks.id, before.map((i) => i.taskId)));
-  return beforeTasks
-    .filter((t) => !t.archived && t.status !== "done" && t.status !== "canceled")
-    .map((t) => t.id);
-}
+// 队列前置检查(queueBlockers)、queue 的增删改端点都在 ./queues.ts。
 
 api.post("/tasks/:id/run", async (c) => {
   const taskId = c.req.param("id");
@@ -1172,6 +1153,52 @@ api.post("/tasks/:id/retry", async (c) => {
   if (r.mode === "debate") void resumeDebate(taskId);
   else void resumeOrRunTask(taskId, { reason: "retry" });
   return c.json({ started: true }, 202);
+});
+
+// 重新排队:队列里失败/取消的任务回到 backlog 等待,轮到它时被队列自动拉起
+// (有会话就从中断处续跑)。跟「重试」的区别是不插队 —— 重试是立刻跑一遍。
+//
+// **被越过就排到队尾**:失败任务是被队列「透明跳过」的,后面的早就开跑了,原来
+// 那个位置已经名存实亡;留在原位会让它抢在正在跑的那个前面(实测:05 失败 → 06
+// 起跑 → 05 重新排队 → 两个一起跑)。反过来,如果后面根本没人跑过(整组还没
+// 启动),就原位不动,尊重用户原本编排的顺序。
+// 位置计算(isOvertaken/tailOrder)与状态改写在这里一次做完:前端曾用
+// 「PATCH backlog + runGroup」两步拼,中间那一瞬间正是并跑窗口。
+api.post("/tasks/:id/requeue", async (c) => {
+  const taskId = c.req.param("id");
+  const r = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
+  if (!r) return c.json({ error: "not found" }, 404);
+  if (r.archived) return c.json({ error: "任务已归档，先取消归档再重新排队", archived: true }, 409);
+  if (r.status === "running" || r.status === "queued")
+    return c.json({ error: "任务正在进行，不需要重新排队", status: r.status }, 409);
+  if (r.status !== "failed" && r.status !== "canceled")
+    return c.json({ error: "只有失败/已取消的任务需要重新排队", status: r.status }, 409);
+
+  const myItem = (await db.select().from(queueItems).where(eq(queueItems.taskId, taskId))).at(0);
+  if (!myItem) return c.json({ error: "任务不在任何队列里，直接点运行即可" }, 400);
+  const queueId = myItem.queueId;
+
+  const items = await db
+    .select()
+    .from(queueItems)
+    .where(eq(queueItems.queueId, queueId))
+    .orderBy(asc(queueItems.position));
+  const rows = await db.select().from(tasks).where(inArray(tasks.id, items.map((i) => i.taskId)));
+  const byId = new Map(rows.map((x) => [x.id, x] as const));
+  const ordered = items
+    .map((i) => byId.get(i.taskId))
+    .filter((t): t is typeof tasks.$inferSelect => !!t);
+
+  const movedToEnd = isOvertaken(ordered, taskId);
+  if (movedToEnd) await repackQueue(queueId, tailOrder(ordered.map((t) => t.id), taskId));
+
+  await setTaskStatus(taskId, "backlog");
+  // 前面若还有人在跑,advanceQueue 会被 selectNextInQueue 的守卫挡住,什么都不做。
+  void advanceQueue(queueId);
+
+  const updated = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0)!;
+  const task = (await enrichTiming([updated]))[0];
+  return c.json({ task, movedToEnd, position: task.queuePosition, queueSize: ordered.length });
 });
 
 // ── archive / unarchive ──────────────────────────────────────────────────────
@@ -1685,213 +1712,8 @@ api.delete("/llm-providers/:id", async (c) => {
 });
 
 // ── queues (顺序依赖原语,DESIGN-scheduling.md §1) ─────────────────────────────
-// queue 是有序的 task id 列表。前一个 done/canceled 后,后一个自动启动。
-// 不变量:同一 queue 内所有 task 必须在同一个 group(或都无 group),应用层校验。
-
-// 内部:把 (queueId, [..items..]) 重排成 position 0..N-1,保持 dense
-async function repackQueue(queueId: string, orderedTaskIds: string[]): Promise<void> {
-  const ts = now();
-  // 先全删,再按新顺序插入(libsql 没有 batch txn 暴露,但 queue 通常很小)
-  await db.delete(queueItems).where(eq(queueItems.queueId, queueId));
-  if (orderedTaskIds.length === 0) return;
-  await db.insert(queueItems).values(
-    orderedTaskIds.map((tid, i) => ({
-      taskId: tid,
-      queueId,
-      position: i,
-      createdAt: ts,
-    })),
-  );
-}
-
-// 校验:queue 里所有 task 必须同 group(或都无 group)
-async function assertSameGroup(queueId: string, candidateTaskId?: string): Promise<string | null> {
-  const items = await db.select().from(queueItems).where(eq(queueItems.queueId, queueId));
-  const taskIds = [...items.map((i) => i.taskId), ...(candidateTaskId ? [candidateTaskId] : [])];
-  if (taskIds.length === 0) return null;
-  const rows = await db.select().from(tasks).where(inArray(tasks.id, taskIds));
-  const groups = new Set(rows.map((r) => r.groupId));
-  if (groups.size > 1) {
-    return `跨 group 不允许:queue ${queueId} 涉及多个 group ${[...groups].join(", ")}`;
-  }
-  return null;
-}
-
-// 列出某 queue 的内容(含每个 task 的状态)
-api.get("/queues/:queueId", async (c) => {
-  const qid = c.req.param("queueId");
-  const items = await db
-    .select()
-    .from(queueItems)
-    .where(eq(queueItems.queueId, qid))
-    .orderBy(asc(queueItems.position));
-  if (items.length === 0) return c.json({ error: "queue not found" }, 404);
-  const rows = await db.select().from(tasks).where(inArray(tasks.id, items.map((i) => i.taskId)));
-  const byId = new Map(rows.map((r) => [r.id, r] as const));
-  const groupId = rows[0]?.groupId ?? null;
-  return c.json({
-    queueId: qid,
-    groupId,
-    items: items.map((i) => {
-      const t = byId.get(i.taskId);
-      return {
-        taskId: i.taskId,
-        position: i.position,
-        title: t?.title ?? "",
-        status: t?.status ?? null,
-        archived: t?.archived ?? false,
-      };
-    }),
-  });
-});
-
-// 整批 reorder:body 必须是 queue 完整成员的新顺序(防止漏掉或重复)
-api.post("/queues/:queueId/reorder", async (c) => {
-  const qid = c.req.param("queueId");
-  const b = await c.req.json<{ taskIds?: string[] }>();
-  const want = b.taskIds ?? [];
-  if (!Array.isArray(want)) return c.json({ error: "taskIds 必须是数组" }, 400);
-
-  const current = await db.select().from(queueItems).where(eq(queueItems.queueId, qid));
-  if (current.length === 0) return c.json({ error: "queue not found" }, 404);
-
-  const haveSet = new Set(current.map((i) => i.taskId));
-  const wantSet = new Set(want);
-  if (haveSet.size !== wantSet.size || [...haveSet].some((id) => !wantSet.has(id))) {
-    return c.json(
-      {
-        error: "reorder 必须传 queue 的完整成员,不能漏或多",
-        have: [...haveSet],
-        got: [...wantSet],
-      },
-      400,
-    );
-  }
-
-  // running task 不能被移走/前面新插队
-  const taskRows = await db.select().from(tasks).where(inArray(tasks.id, want));
-  const runningId = taskRows.find((t) => t.status === "running" || t.status === "queued")?.id;
-  if (runningId) {
-    const oldPos = current.find((i) => i.taskId === runningId)!.position;
-    const newPos = want.indexOf(runningId);
-    if (oldPos !== newPos) {
-      return c.json({ error: `running/queued task ${runningId} 不能移动位置` }, 409);
-    }
-  }
-
-  await repackQueue(qid, want);
-  // reorder 后某个 backlog/paused 可能上位到 head,立刻推进一次
-  void advanceQueue(qid);
-  return c.json({ ok: true });
-});
-
-// 从 queue 移除一项(task 本身不删,只是脱离 queue → 成为独立 task)
-api.post("/queues/:queueId/remove", async (c) => {
-  const qid = c.req.param("queueId");
-  const b = await c.req.json<{ taskId?: string }>();
-  if (!b.taskId) return c.json({ error: "taskId required" }, 400);
-
-  const items = await db
-    .select()
-    .from(queueItems)
-    .where(eq(queueItems.queueId, qid))
-    .orderBy(asc(queueItems.position));
-  if (items.length === 0) return c.json({ error: "queue not found" }, 404);
-  if (!items.some((i) => i.taskId === b.taskId)) {
-    return c.json({ error: "task 不在此 queue 里" }, 404);
-  }
-
-  // running task 不能拔
-  const tr = (await db.select().from(tasks).where(eq(tasks.id, b.taskId))).at(0);
-  if (tr && (tr.status === "running" || tr.status === "queued")) {
-    return c.json({ error: `task ${b.taskId} 正在跑,不能移出 queue` }, 409);
-  }
-
-  const next = items.filter((i) => i.taskId !== b.taskId).map((i) => i.taskId);
-  await repackQueue(qid, next);
-  // 移除后立刻推一下,看看后面的 task 是否能动了
-  if (next.length > 0) void advanceQueue(qid);
-  return c.json({ ok: true });
-});
-
-// 在指定位置插入(校验跨 group)
-api.post("/queues/:queueId/insert", async (c) => {
-  const qid = c.req.param("queueId");
-  const b = await c.req.json<{ taskId?: string; position?: number }>();
-  if (!b.taskId) return c.json({ error: "taskId required" }, 400);
-  const pos = typeof b.position === "number" ? Math.max(0, b.position | 0) : -1;
-
-  const items = await db
-    .select()
-    .from(queueItems)
-    .where(eq(queueItems.queueId, qid))
-    .orderBy(asc(queueItems.position));
-  if (items.length === 0) return c.json({ error: "queue not found" }, 404);
-  if (items.some((i) => i.taskId === b.taskId)) {
-    return c.json({ error: "task 已在此 queue 里" }, 409);
-  }
-
-  // 候选 task 必须先存在
-  const tr = (await db.select().from(tasks).where(eq(tasks.id, b.taskId))).at(0);
-  if (!tr) return c.json({ error: "task not found" }, 404);
-
-  // 候选 task 不能已在别的 queue 里(task_id PK 保证,但提前给个友好错误)
-  const otherQueue = (
-    await db.select().from(queueItems).where(eq(queueItems.taskId, b.taskId))
-  ).at(0);
-  if (otherQueue && otherQueue.queueId !== qid) {
-    return c.json({ error: `task 已在另一个 queue ${otherQueue.queueId}` }, 409);
-  }
-
-  // 跨 group 校验
-  const violation = await assertSameGroup(qid, b.taskId);
-  if (violation) return c.json({ error: violation }, 400);
-
-  const insertAt = pos < 0 || pos > items.length ? items.length : pos;
-  const next = [
-    ...items.slice(0, insertAt).map((i) => i.taskId),
-    b.taskId,
-    ...items.slice(insertAt).map((i) => i.taskId),
-  ];
-  await repackQueue(qid, next);
-  // 插入后:如果前序已全 done/canceled,新 task 应立刻起来(实测发现的竞态:
-  // codex skill 在链跑完后插尾任务,不推进会一直 backlog)
-  void advanceQueue(qid);
-  return c.json({ ok: true });
-});
-
-// 新建一个 queue,用给定的 task ids
-api.post("/queues", async (c) => {
-  const b = await c.req.json<{ taskIds?: string[] }>();
-  const want = b.taskIds ?? [];
-  if (!Array.isArray(want) || want.length === 0) {
-    return c.json({ error: "taskIds 不能为空" }, 400);
-  }
-  // 候选 task 都得存在
-  const rows = await db.select().from(tasks).where(inArray(tasks.id, want));
-  if (rows.length !== want.length) {
-    return c.json({ error: "部分 taskId 不存在" }, 400);
-  }
-  // 同 group(或都无 group)
-  const gs = new Set(rows.map((r) => r.groupId));
-  if (gs.size > 1) return c.json({ error: "跨 group 不允许" }, 400);
-  // 任何一个 task 已在其他 queue?
-  const occupied = await db.select().from(queueItems).where(inArray(queueItems.taskId, want));
-  if (occupied.length > 0) {
-    return c.json(
-      { error: `这些 task 已在其他 queue: ${occupied.map((o) => o.taskId).join(", ")}` },
-      409,
-    );
-  }
-  const qid = id();
-  const ts = now();
-  await db.insert(queueItems).values(
-    want.map((tid, i) => ({ taskId: tid, queueId: qid, position: i, createdAt: ts })),
-  );
-  // 新建 queue 也要推进:head 如果已经可启动(backlog/paused),让它立刻动
-  void advanceQueue(qid);
-  return c.json({ queueId: qid, taskIds: want }, 201);
-});
+// 端点实现与 helper 都在 ./queues.ts(routes.ts 已经很长,队列语义集中一处更好改)。
+mountQueueRoutes(api);
 
 // ── SSE stream (§12) ───────────────────────────────────────────────────────
 api.get("/events", (c) =>

@@ -35,6 +35,7 @@ export function TaskDetail({
   onDelete,
   onArchive,
   onUnarchive,
+  onRequeue,
 }: {
   task: Task;
   groups: Group[];
@@ -50,6 +51,8 @@ export function TaskDetail({
   onDelete: () => void;
   onArchive: () => void;
   onUnarchive: () => void;
+  // 重新排队(失败/取消 → 回队列等待)。位置由服务端定:被越过就到队尾。
+  onRequeue: () => void;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -130,18 +133,14 @@ export function TaskDetail({
                 队列自动拉起(有会话则从中断处续跑)。canceled 在队列推进里是
                 「透明跳过」,所以手动停过的任务想继续排队必须走这里。done 不给
                 ——严格完成协议下 done 都是 agent 亲口确认过的,真要重跑走状态
-                下拉改回 backlog。先等状态落库再推一次队列——顺序反了推进会在
-                它还是终态时把它跳过。 */}
+                下拉改回 backlog。一次调用做完「改状态 + 定位置 + 推进队列」:
+                前端曾经拆成 PATCH + runGroup 两步,中间那一瞬间会让本任务抢在
+                正在跑的下一个前面(串行队列并跑)。 */}
             {!task.archived && task.queueId && ["failed", "canceled"].includes(task.status) && (
               <button
-                onClick={async () => {
-                  await onPatch({ status: "backlog" });
-                  // 队列已停摆(前面全部完成)时立即推进;前面还有人在跑时幂等无害
-                  if (task.groupId) api.runGroup(task.groupId).catch(() => {});
-                  toast("已重新排队:轮到本任务时自动启动");
-                }}
+                onClick={onRequeue}
                 className="inline-flex items-center gap-1.5 rounded-md border border-line px-3 py-1.5 text-[13px] font-medium text-muted transition-colors hover:bg-raised hover:text-ink"
-                title="回到队列等待:前面的任务完成后自动启动本任务"
+                title="回到队列等待：前面的任务完成后自动启动。队列若已经跑过它，就排到队尾"
               >
                 <ListNumbers size={13} />
                 重新排队
