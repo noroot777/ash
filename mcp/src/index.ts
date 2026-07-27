@@ -50,7 +50,7 @@ const taskShape = z.object({
   title: z.string().optional().describe("省略则首次运行时由 agent 自动起名"),
   body: z.string().optional().describe("交给 agent 执行的 prompt / 目标"),
   agentType: AGENT_TYPE.optional().describe("覆盖批次默认 agent"),
-  executorId: z.string().nullable().optional().describe("覆盖批次默认执行者 profile(agents.id)。指定则优先用该 profile；为空/悬空时按 agentType 默认执行者降级"),
+  executorId: z.string().nullable().optional().describe("覆盖批次默认执行器 profile(agents.id)。指定则优先用该 profile；为空/悬空时按 agentType 默认执行器降级"),
   priority: PRIORITY.optional(),
   labels: z.array(z.string()).optional().describe("任务标签"),
 });
@@ -119,7 +119,7 @@ server.registerTool(
       run: z.boolean().optional().describe("建完立即运行该分组"),
       defaults: z.object({
         agentType: AGENT_TYPE.optional(),
-        executorId: z.string().nullable().optional().describe("默认执行者 profile(agents.id)。任务自身 executorId 可覆盖；为空/悬空时按 agentType 默认执行者降级"),
+        executorId: z.string().nullable().optional().describe("默认执行器 profile(agents.id)。任务自身 executorId 可覆盖；为空/悬空时按 agentType 默认执行器降级"),
         priority: PRIORITY.optional(),
         labels: z.array(z.string()).optional(),
       }).optional().describe("每个任务的兜底值，任务自身可覆盖"),
@@ -177,8 +177,8 @@ server.registerTool(
   "list_tasks",
   {
     title: "列出任务",
-    description: "列出任务,可按 projectId / groupId / parentId 过滤。团队指挥者查「我的工人现在都什么状态」用 parentId=自己的 taskId。默认隐藏已归档任务(includeArchived:true 才带上)。返回精简字段(id/title/status/archived/agentType/executorId/executorLabel/queueId/queuePosition/groupId/parentId/question)。",
-    inputSchema: { projectId: z.string().optional(), groupId: z.string().optional(), parentId: z.string().optional().describe("只列这个任务的下属工人(团队指挥者用)"), includeArchived: z.boolean().optional().describe("默认 false:列表不含已归档任务") },
+    description: "列出任务,可按 projectId / groupId / parentId 过滤。团队调度者查「我的执行者现在都什么状态」用 parentId=自己的 taskId。默认隐藏已归档任务(includeArchived:true 才带上)。返回精简字段(id/title/status/archived/agentType/executorId/executorLabel/queueId/queuePosition/groupId/parentId/question)。",
+    inputSchema: { projectId: z.string().optional(), groupId: z.string().optional(), parentId: z.string().optional().describe("只列这个任务的下属执行者(团队调度者用)"), includeArchived: z.boolean().optional().describe("默认 false:列表不含已归档任务") },
   },
   async ({ projectId, groupId, parentId, includeArchived }) => {
     try {
@@ -215,7 +215,7 @@ server.registerTool(
   {
     title: "更新任务",
     description:
-      "更新单个任务的可编辑字段:title/body/status/labels/priority/groupId/agentType/executorId。executorId 指具体执行者 profile(agents.id),指定则优先用它；为空/悬空时按 agentType 默认执行者降级。**不能**用此工具改任务的队列归属——请用 queue_insert / queue_remove / queue_reorder;**想让失败/取消的任务回队列等待用 requeue_task**(它会顺带处理位置:被越过就排到队尾)。也不能把任务手动设为 running/queued/awaiting_review。**running/queued 任务的 status 一律不可改(会被 409 拒绝)——要停止/取消用 stop_task**,它才会真正杀掉 agent 进程树;直接 patch canceled 只改数据库,是 2026-07-21「complete_task 409 → failed 错乱」事故的根因。**正在执行的任务要确认完成时,也不要用 status=done——用 complete_task**:回合结束的严格结算只认 complete_task 的确认。",
+      "更新单个任务的可编辑字段:title/body/status/labels/priority/groupId/agentType/executorId。executorId 指具体执行器 profile(agents.id),指定则优先用它；为空/悬空时按 agentType 默认执行器降级。**不能**用此工具改任务的队列归属——请用 queue_insert / queue_remove / queue_reorder;**想让失败/取消的任务回队列等待用 requeue_task**(它会顺带处理位置:被越过就排到队尾)。也不能把任务手动设为 running/queued/awaiting_review。**running/queued 任务的 status 一律不可改(会被 409 拒绝)——要停止/取消用 stop_task**,它才会真正杀掉 agent 进程树;直接 patch canceled 只改数据库,是 2026-07-21「complete_task 409 → failed 错乱」事故的根因。**正在执行的任务要确认完成时,也不要用 status=done——用 complete_task**:回合结束的严格结算只认 complete_task 的确认。",
     inputSchema: {
       taskId: z.string(),
       title: z.string().optional(),
@@ -225,7 +225,7 @@ server.registerTool(
       labels: z.array(z.string()).optional(),
       groupId: z.string().nullable().optional(),
       agentType: AGENT_TYPE.nullable().optional(),
-      executorId: z.string().nullable().optional().describe("具体执行者 profile 的 agents.id；传 null 清空并按 agentType 默认执行者降级"),
+      executorId: z.string().nullable().optional().describe("具体执行器 profile 的 agents.id；传 null 清空并按 agentType 默认执行器降级"),
     },
   },
   async ({ taskId, ...patch }) => {
@@ -247,7 +247,7 @@ server.registerTool(
       mode: MODE.optional(),
       chain: z.boolean().optional().describe("默认 true=创建 queue 串成依赖链(serial 才允许);false=互不依赖(配 mode=parallel 才真正并行)"),
       agentType: AGENT_TYPE.optional().describe("所有任务的默认 agent（任务可逐个覆盖）"),
-      executorId: z.string().nullable().optional().describe("所有任务的默认执行者 profile(agents.id)，任务可逐个覆盖；为空/悬空时按 agentType 默认执行者降级"),
+      executorId: z.string().nullable().optional().describe("所有任务的默认执行器 profile(agents.id)，任务可逐个覆盖；为空/悬空时按 agentType 默认执行器降级"),
       run: z.boolean().optional(),
     },
   },
@@ -295,7 +295,7 @@ server.registerTool(
   {
     title: "在检查点暂停(等续跑)",
     description:
-      "在执行中调用,告诉 harness:「我跑到一个检查点了,下次该继续时给我喂这段 prompt」。harness 会把 resumePrompt 写到 task 上;你这一回合自然结束后,状态落到 paused(而不是 done),队列推进规则会在前一个任务 done 时用 resumePrompt 把你叫醒、resume 同一个 CLI 会话。\n\n用法:先正常做完检查点前的所有工作;要暂停时调一次本工具,然后正常退出当前回合(return / 结束输出即可)。**只能在任务正在跑时调用**,且 resumePrompt 不能为空(否则 resume 时没东西喂你)。\n\n典型场景:dr-dig-ytb 一类「pre-tts 并行 + tts 串行」流水线 —— 把任务跑到 pre-tts 末尾时调本工具,resumePrompt 写下「现在做 tts 这一段」;后续每个任务都在自己 queue 位置上等前一个 done 后自动续跑。\n\n注意:被具体问题卡住、要等人拍板才能继续时,用 ask_question 而不是本工具——pause 是「到检查点等续跑」,ask 是「等答案」且会自动通知团队指挥者。",
+      "在执行中调用,告诉 harness:「我跑到一个检查点了,下次该继续时给我喂这段 prompt」。harness 会把 resumePrompt 写到 task 上;你这一回合自然结束后,状态落到 paused(而不是 done),队列推进规则会在前一个任务 done 时用 resumePrompt 把你叫醒、resume 同一个 CLI 会话。\n\n用法:先正常做完检查点前的所有工作;要暂停时调一次本工具,然后正常退出当前回合(return / 结束输出即可)。**只能在任务正在跑时调用**,且 resumePrompt 不能为空(否则 resume 时没东西喂你)。\n\n典型场景:dr-dig-ytb 一类「pre-tts 并行 + tts 串行」流水线 —— 把任务跑到 pre-tts 末尾时调本工具,resumePrompt 写下「现在做 tts 这一段」;后续每个任务都在自己 queue 位置上等前一个 done 后自动续跑。\n\n注意:被具体问题卡住、要等人拍板才能继续时,用 ask_question 而不是本工具——pause 是「到检查点等续跑」,ask 是「等答案」且会自动通知团队调度者。",
     inputSchema: {
       taskId: z.string().describe("当前正在执行的任务 id"),
       resumePrompt: z.string().min(1).describe("下次被 resume 时喂给你的 user 消息 —— 就当成一条「继续：…」replied 写"),
@@ -324,9 +324,9 @@ server.registerTool(
 server.registerTool(
   "ask_question",
   {
-    title: "提问并暂停(等指挥者/用户答复)",
+    title: "提问并暂停(等调度者/用户答复)",
     description:
-      `在执行中调用,告诉 harness:「我被不拍板就没法继续的决策卡住了」。调完后正常结束回合,任务落 paused 且**队列不会自动续跑**;问题会即时送达团队指挥者(你是工人时),没有指挥者就停在那等用户答复。你自己是团队指挥者时调它 = 问用户,界面上显示成「指挥者在等你答复」。答复通过 answer_question 送达,会作为一段文本唤醒你的同一个 CLI 会话续跑。\n\n用法:只能在任务正在跑时调用;先把当下能做的都做完再提问。一个决策用 question + options;有几个**相关且都需要同一个人拍板**的决策时,用 question 写共同背景,再用 questionItems 一次问完(最多 ${MAX_QUESTION_ITEMS} 个),避免挤牙膏式来回。不要把无关问题硬凑在一起。\n\noptions / questionItems[i].options 都是**建议答案,不是单选题**:每条只写一句能直接当答复读的话,理由和取舍留在对应 question 里。网页点击候选只会填入该问题的输入框,已有内容会换行追加;答复者仍可修改、组合多条或完全自由作答。最终所有问题的答案会编号合并成一段文本,仍走原来的 answer_question 协议。跟 pause_task 的区别:pause 是「到检查点等续跑指令」,ask 是「等具体问题的答案」。`,
+      `在执行中调用,告诉 harness:「我被不拍板就没法继续的决策卡住了」。调完后正常结束回合,任务落 paused 且**队列不会自动续跑**;问题会即时送达团队调度者(你是执行者时),没有调度者就停在那等用户答复。你自己是团队调度者时调它 = 问用户,界面上显示成「调度者在等你答复」。答复通过 answer_question 送达,会作为一段文本唤醒你的同一个 CLI 会话续跑。\n\n用法:只能在任务正在跑时调用;先把当下能做的都做完再提问。一个决策用 question + options;有几个**相关且都需要同一个人拍板**的决策时,用 question 写共同背景,再用 questionItems 一次问完(最多 ${MAX_QUESTION_ITEMS} 个),避免挤牙膏式来回。不要把无关问题硬凑在一起。\n\noptions / questionItems[i].options 都是**建议答案,不是单选题**:每条只写一句能直接当答复读的话,理由和取舍留在对应 question 里。网页点击候选只会填入该问题的输入框,已有内容会换行追加;答复者仍可修改、组合多条或完全自由作答。最终所有问题的答案会编号合并成一段文本,仍走原来的 answer_question 协议。跟 pause_task 的区别:pause 是「到检查点等续跑指令」,ask 是「等具体问题的答案」。`,
     inputSchema: {
       taskId: z.string().describe("当前正在执行的任务 id(任务 prompt 前言里有)"),
       question: z.string().min(1).describe("单问题时就是问题本体；传 questionItems 时写共同引言/背景"),
@@ -366,7 +366,7 @@ server.registerTool(
   {
     title: "答复提问中的任务并唤醒它",
     description:
-      "给一个「提问暂停」中的任务(get_task 里 question 非空、status=paused)送答复:清空问题、把答复作为消息 resume 它的 CLI 会话继续跑。团队指挥者收到【工人提问】通知后用这个答;用户/其他 agent 也可以直接调。提问任务还在 running/queued(回合没结算完)时会被拒,稍等它落 paused 再调 —— 例外是团队指挥台(mode=team),它是常驻会话,忙着也接得住。",
+      "给一个「提问暂停」中的任务(get_task 里 question 非空、status=paused)送答复:清空问题、把答复作为消息 resume 它的 CLI 会话继续跑。团队调度者收到【执行者提问】通知后用这个答;用户/其他 agent 也可以直接调。提问任务还在 running/queued(回合没结算完)时会被拒,稍等它落 paused 再调 —— 例外是团队调度台(mode=team),它是常驻会话,忙着也接得住。",
     inputSchema: {
       taskId: z.string().describe("提问任务的 id(通知里有)"),
       answer: z.string().min(1).describe("答复内容:直接给结论和理由,它会原样喂给对方续跑"),
@@ -381,24 +381,24 @@ server.registerTool(
 server.registerTool(
   "dispatch",
   {
-    title: "派活给工人(团队指挥者专用)",
+    title: "派活给执行者(团队调度者专用)",
     description:
-      "团队指挥者(mode=team 的任务)用这个派活:一次建 N 个工人任务,绑到自己名下,默认立刻起跑。每个工人是一个完整的 CLI agent(自己还能开子代理),在同一个仓库目录里干活。\n\n• mode=\"serial\"(多个任务时的默认)会把这批串成 A→B→C,前一个 done 后下一个自动起跑;mode=\"parallel\" 才是真并行(限流 4 个),确认互不干扰再用。\n• 每个 body 要自带完整上下文 —— 工人之间彼此不知情,也看不到你和用户的对话。**要划清文件/模块边界就自己写进每个工人的 body**,否则并行的工人会互相踩。\n• reportBack:true = 它做完要叫醒你(你打算接着安排下一步时用);false(默认)= 静默完成,你随时能用 list_tasks 查。\n• 你会被唤醒的时机只有三种:工人提问、工人失败、reportBack 的工人完成。\n\n返回工人的 id + 标题,后续用 get_task / run_task / answer_question 引用它们。",
+      "团队调度者(mode=team 的任务)用这个派活:一次建 N 个执行者任务,绑到自己名下,默认立刻起跑。每个执行者是一个完整的 CLI agent(自己还能开子代理),在同一个仓库目录里干活。\n\n• mode=\"serial\"(多个任务时的默认)会把这批串成 A→B→C,前一个 done 后下一个自动起跑;mode=\"parallel\" 才是真并行(限流 4 个),确认互不干扰再用。\n• 每个 body 要自带完整上下文 —— 执行者之间彼此不知情,也看不到你和用户的对话。**要划清文件/模块边界就自己写进每个执行者的 body**,否则并行的执行者会互相踩。\n• reportBack:true = 它做完要叫醒你(你打算接着安排下一步时用);false(默认)= 静默完成,你随时能用 list_tasks 查。\n• 你会被唤醒的时机只有三种:执行者提问、执行者失败、reportBack 的执行者完成。\n\n返回执行者的 id + 标题,后续用 get_task / run_task / answer_question 引用它们。",
     inputSchema: {
       leadTaskId: z.string().describe("你自己的 taskId(团队任务,prompt 前言里有)"),
       tasks: z
         .array(
           z.object({
-            body: z.string().min(1).describe("给工人的完整指令:目标、上下文、文件边界、验收标准"),
+            body: z.string().min(1).describe("给执行者的完整指令:目标、上下文、文件边界、验收标准"),
             title: z.string().optional().describe("简短标题(界面上显示);省略则取 body 第一行"),
-            agentType: AGENT_TYPE.optional().describe("覆盖团队默认的工人类型"),
-            executorId: z.string().nullable().optional().describe("覆盖团队默认的工人执行者 profile(agents.id)。指定则优先用该 profile；为空/悬空时按 agentType 默认执行者降级"),
+            agentType: AGENT_TYPE.optional().describe("覆盖团队默认的执行者类型"),
+            executorId: z.string().nullable().optional().describe("覆盖团队执行者任务的默认执行器 profile(agents.id)。指定则优先用该 profile；为空/悬空时按 agentType 默认执行器降级"),
             reportBack: z.boolean().optional().describe("true=它完成时叫醒你;默认 false 静默完成"),
-            useWorktree: z.boolean().optional().describe("true=这个工人单独开 worktree 隔离(默认 false,同目录干活)"),
+            useWorktree: z.boolean().optional().describe("true=这个执行者单独开 worktree 隔离(默认 false,同目录干活)"),
           }),
         )
         .min(1)
-        .describe("这一批工人,按顺序排列(serial 时即执行顺序)"),
+        .describe("这一批执行者,按顺序排列(serial 时即执行顺序)"),
       mode: MODE.optional().describe("serial=串成队列依次跑(多个任务时的默认);parallel=同时开工"),
       run: z.boolean().optional().describe("默认 true 立即起跑;false 只建不跑(之后用 run_task 手动起)"),
       batchName: z.string().optional().describe("这批活的名字(界面上的分组名),缺省自动生成"),
@@ -415,7 +415,7 @@ server.registerTool(
   {
     title: "起跑/续跑一个任务",
     description:
-      "启动一个任务,或让一个停下来的任务从**它自己的 CLI 会话**续跑(比新建任务便宜:上下文都还在)。失败的工人查明原因后用这个重试;backlog 的任务用这个开工。已经在跑的任务调用无副作用。",
+      "启动一个任务,或让一个停下来的任务从**它自己的 CLI 会话**续跑(比新建任务便宜:上下文都还在)。失败的执行者查明原因后用这个重试;backlog 的任务用这个开工。已经在跑的任务调用无副作用。",
     inputSchema: { taskId: z.string().describe("要起跑/续跑的任务 id") },
   },
   async ({ taskId }) => {

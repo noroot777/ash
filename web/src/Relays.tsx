@@ -4,15 +4,15 @@ import { Plus, Trash, PencilSimple, ArrowsClockwise } from "@phosphor-icons/reac
 import { api } from "./api";
 import { ConfirmModal } from "./Modal";
 
-// 供应商(relay)的增删改查。供应商不是「另一种后端」——它只是挂到执行者上的
+// 供应商(relay)的增删改查。供应商不是「另一种后端」——它只是挂到执行器上的
 // base_url + key,替换 CLI 自己的官方登录账号。harness 不直连它跑推理。
-// 列表 state 由 AgentsPanel 持有(执行者行的「供应商」下拉也要用),这里只负责渲染 + 改完回调。
+// 列表 state 由 AgentsPanel 持有(执行器行的「供应商」下拉也要用),这里只负责渲染 + 改完回调。
 export function RelaySection({ list, onChange }: { list: LlmProvider[]; onChange: () => void }) {
   return (
     <div>
       <div className="mb-1.5 text-[11px] font-medium uppercase tracking-wide text-muted">供应商</div>
       <div className="mb-2.5 text-[11px] text-faint">
-        填网址 + API Key,再在上面任一执行者的「供应商」下拉里挂上——那个执行者就改用供应商的额度和模型跑,
+        填网址 + API Key,再在上面任一执行器的「供应商」下拉里挂上——那个执行器就改用供应商的额度和模型跑,
         不再走 CLI 的官方登录账号。Anthropic 协议给 claude 用,OpenAI 协议给 codex 用。
       </div>
       {list.map((p) => (
@@ -50,7 +50,7 @@ function RelayRow({ p, onChange }: { p: LlmProvider; onChange: () => void }) {
       {confirming && (
         <ConfirmModal
           title="删除供应商"
-          message={`删除「${p.name}」后,挂着它的执行者会退回 CLI 官方登录账号。`}
+          message={`删除「${p.name}」后,挂着它的执行器会退回 CLI 官方登录账号。`}
           confirmLabel="删除"
           danger
           onConfirm={() => api.deleteLlmProvider(p.id).then(onChange)}
@@ -62,7 +62,7 @@ function RelayRow({ p, onChange }: { p: LlmProvider; onChange: () => void }) {
 }
 
 // 「拉取模型」按钮:探一下这个供应商活不活、有哪些模型可用。存下来的 model 只是
-// 备注性质的默认值(执行者自己的「模型」下拉才是实际生效的),但拉一次能立刻验证配置对不对。
+// 备注性质的默认值(执行器自己的「模型」下拉才是实际生效的),但拉一次能立刻验证配置对不对。
 // providerId 让已存在的行复用库里的 key,不必重新输入。
 function ModelField({
   protocol,
@@ -106,7 +106,7 @@ function ModelField({
         <input
           value={model}
           onChange={(e) => setModel(e.target.value)}
-          placeholder="默认模型（可选，执行者的「模型」下拉优先）"
+          placeholder="默认模型（可选，执行器的「模型」下拉优先）"
           className="min-w-0 flex-1 rounded border border-line bg-canvas px-2 py-1 outline-none placeholder:text-faint"
         />
         <button

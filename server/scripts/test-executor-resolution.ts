@@ -1,7 +1,7 @@
-// 执行者解析优先级回归测试:
+// 执行器解析优先级回归测试:
 //   executorId 命中 → 用该 profile
-//   executorId 悬空 → 按 type 默认执行者降级
-//   executorId 缺省 → 按 type 默认执行者
+//   executorId 悬空 → 按 type 默认执行器降级
+//   executorId 缺省 → 按 type 默认执行器
 //
 // 跑法:
 //   HARNESS_DB=/tmp/test-executor-resolution-$RANDOM.db npx tsx server/scripts/test-executor-resolution.ts

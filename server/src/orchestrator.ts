@@ -106,7 +106,7 @@ async function settleTaskStatus(
   if (t?.completeConfirmedAt) {
     await db.update(tasks).set({ completeConfirmedAt: null, updatedAt: now() }).where(eq(tasks.id, taskId));
   }
-  // 工人结算 → 按需唤醒团队指挥者(§Team)。只有提问、失败、以及 reportBack 的
+  // 执行者结算 → 按需唤醒团队调度者(§Team)。只有提问、失败、以及 reportBack 的
   // done 会投递;普通 done 静默(UI 自己会更新,不花一轮模型调用)。非团队任务
   // (parentId 空)里 notifyTeamLead 直接返回。
   const notify = (kind: Parameters<typeof notifyTeamLead>[1], q?: string) => {
@@ -153,7 +153,7 @@ async function settleTaskStatus(
     // 组暂停打断:落 paused 占住队列位置(组是 paused 的,推进钩子不会动)。
     // 恢复分组 → advanceQueue 选中它 → resumeOrRunTask 无 resumePrompt 走
     // RESUME_PROMPT 续原会话。若它被杀前调过 ask_question,question 仍在,
-    // pickNextLaunchable 会继续挡住等答复——提问通知照发(团队指挥者那边该
+    // pickNextLaunchable 会继续挡住等答复——提问通知照发(团队调度者那边该
     // 知道它在等什么),不因组暂停而丢。
     await setStatus(taskId, "paused");
     if (t?.question) {
@@ -192,7 +192,7 @@ async function settleTaskStatus(
 // status was interrupted (e.g. the server restarted mid-run). Mark those failed
 // so they're recoverable via retry/reply instead of being stuck forever.
 // awaiting_review is left alone — its gate can still be resolved after a restart.
-// 例外一:团队任务(mode:"team")没有「失败」这回事 —— 指挥台进程随 server 一起
+// 例外一:团队任务(mode:"team")没有「失败」这回事 —— 调度台进程随 server 一起
 // 死了,但 CLI 会话还在,下次有人说话就 --resume 接回。落 idle(待命)。
 // 例外二:被打断的是续聊回合(followUpFrom 非空)→ 回到续聊前的终态,别把一个
 // 早就完成的任务记成 failed。
@@ -227,7 +227,7 @@ export async function reconcileInterrupted(): Promise<void> {
 // M1: execute a single-agent task in the project's working dir, stream output over
 // SSE, and persist a session credential (DESIGN.md §1/§4/§12/§13).
 export async function runTask(taskId: string): Promise<void> {
-  // 团队任务(§Team)走常驻指挥台,不占单飞锁 —— 它的「一次运行」是整段常驻,
+  // 团队任务(§Team)走常驻调度台,不占单飞锁 —— 它的「一次运行」是整段常驻,
   // 不是一个回合。放在最前面,于是 /tasks/:id/run、retry、queue 推进都自动生效。
   const mode = (await db.select({ mode: tasks.mode }).from(tasks).where(eq(tasks.id, taskId))).at(0)?.mode;
   if (mode === "team") return startTeam(taskId);
@@ -263,8 +263,8 @@ export async function runTask(taskId: string): Promise<void> {
     const TITLE_HINT =
       "请在正式开始前，第一行只输出：标题：<不超过14字、概括本次任务的简短标题>，然后换行，再正常完成下面的任务。\n\n任务：\n";
     const objective = task.body?.trim() || task.title;
-    // 团队工人多一段前言(卡住走 ask_question 直达指挥者、别自己扩张边界)。
-    // 只拼进 prompt,不写进 tasks.body —— body 是指挥者给的需求正文,界面展示那份。
+    // 团队执行者多一段前言(卡住走 ask_question 直达调度者、别自己扩张边界)。
+    // 只拼进 prompt,不写进 tasks.body —— body 是调度者给的需求正文,界面展示那份。
     const teamPreamble = await workerPreambleFor(task);
     const prompt =
       AUTONOMY + COMPLETION_PROTOCOL(taskId) + teamPreamble + (autoTitle ? TITLE_HINT + objective : objective);
@@ -422,9 +422,9 @@ export async function continueTask(
   userText: string,
   opts: { agent?: AgentType; attachments?: string[]; system?: ResumeReason } = {},
 ): Promise<void> {
-  // 团队任务(§Team):插话直接写进常驻指挥台的 stdin —— 即时、同一会话、用户侧
+  // 团队任务(§Team):插话直接写进常驻调度台的 stdin —— 即时、同一会话、用户侧
   // 感觉不断线。不占这里的单飞锁(那把锁是给「一次运行 = 一个回合」的单任务用的,
-  // 指挥台的一次运行是整段常驻)。于是 /reply、/answer、@提及全都自动生效。
+  // 调度台的一次运行是整段常驻)。于是 /reply、/answer、@提及全都自动生效。
   const teamMode = (await db.select({ mode: tasks.mode }).from(tasks).where(eq(tasks.id, taskId))).at(0)?.mode;
   if (teamMode === "team") return deliverToLead(taskId, userText, { attachments: opts.attachments });
   if (running.has(taskId)) return;

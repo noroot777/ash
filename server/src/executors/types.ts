@@ -21,7 +21,7 @@ export interface RunHandle {
   kill(): void;
 }
 
-// 挂在执行者上的供应商(§5)。非空时启动 CLI 前注入 base_url + key,顶掉 CLI
+// 挂在执行器上的供应商(§5)。非空时启动 CLI 前注入 base_url + key,顶掉 CLI
 // 自己的官方登录账号。baseUrl 恒为根地址(不含 /v1),各 executor 按需自行补路径。
 export interface RelayConfig {
   name: string;
@@ -29,7 +29,7 @@ export interface RelayConfig {
   apiKey: string;
 }
 
-// 常驻会话(§Team 的指挥台):一个 CLI 进程活着吃多个回合,会话全程同一个。
+// 常驻会话(§Team 的调度台):一个 CLI 进程活着吃多个回合,会话全程同一个。
 // 跟 RunHandle 的区别只有两点 —— events 不会因为「一个回合说完」而结束(那是
 // {kind:"turnEnd"}),以及多了 send/interrupt/close 这几根注入管子。
 export interface ResidentHandle {
@@ -54,7 +54,7 @@ export interface AgentExecutor {
   readonly relayEnvHint?: string;
   run(opts: RunOpts): RunHandle;
   // 常驻会话。只有支持中途注入的 CLI 实现它(v1 = claude);codex exec 没有注入
-  // 通道,留 undefined —— 团队模式的「指挥」下拉据此过滤(§Team)。
+  // 通道,留 undefined —— 团队模式的「调度者」下拉据此过滤(§Team)。
   openResident?(opts: RunOpts): ResidentHandle;
   // Build the ready-to-paste resume command for a finished session (§13).
   resumeCommand(cwd: string, sessionId: string): string;

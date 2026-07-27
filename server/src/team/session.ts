@@ -1,6 +1,6 @@
-// ── 常驻指挥台(§Team)────────────────────────────────────────────────────────
+// ── 常驻调度台(§Team)────────────────────────────────────────────────────────
 // 一个 mode:"team" 的任务 = 一个不退的 CLI 进程(claude,stream-json 双向)。
-// 三种入站消息汇到同一根管子(进程 stdin):用户插话、工人汇报、工人提问。
+// 三种入站消息汇到同一根管子(进程 stdin):用户插话、执行者汇报、执行者提问。
 // 于是旧编排组的三个毛病一起消失:30s tick 延迟、continueTask 单飞锁丢消息、
 // 「协调者顶着一次性任务状态机反复 done→running」。
 //
@@ -18,8 +18,8 @@
 //   所以空闲回收进程是安全的。
 // 由 ②③ 定下两条投递策略:
 //   • 用户插话 → 先 interrupt 再送(要的就是立刻转向),时间线记一条「已打断」。
-//   • 工人汇报/提问 → 不打断(它手上的活更重要);忙就缓冲,回合结束合并成
-//     一条送 —— 天然聚合,N 个工人只花一次模型调用。
+//   • 执行者汇报/提问 → 不打断(它手上的活更重要);忙就缓冲,回合结束合并成
+//     一条送 —— 天然聚合,N 个执行者只花一次模型调用。
 import { mkdirSync, createWriteStream } from "node:fs";
 import type { WriteStream } from "node:fs";
 import { join } from "node:path";
@@ -45,10 +45,10 @@ const IDLE_MS = Number(process.env.HARNESS_TEAM_IDLE_MS ?? 30 * 60_000);
 // close() 之后还赖着不走的宽限,超时硬杀。
 const CLOSE_GRACE_MS = 10_000;
 
-const INTERRUPT_NOTE = "〔系统〕已打断指挥者当前回合,插入你的新指令";
-const HALT_NOTE = "〔系统〕你按了「停止全组」:指挥台进程与所有在跑的工人都已停止,工人可从中断处恢复。再说一句话就能把指挥者接回同一会话。";
+const INTERRUPT_NOTE = "〔系统〕已打断调度者当前回合,插入你的新指令";
+const HALT_NOTE = "〔系统〕你按了「停止全组」:调度台进程与所有在跑的执行者都已停止,执行者可从中断处恢复。再说一句话就能把调度者接回同一会话。";
 const RECYCLE_NOTE = (min: number) =>
-  `〔系统〕指挥台空闲超过 ${min} 分钟,进程已回收(待命)。你或工人再说话时会自动接回同一会话,上下文不丢。`;
+  `〔系统〕调度台空闲超过 ${min} 分钟,进程已回收(待命)。你或执行者再说话时会自动接回同一会话,上下文不丢。`;
 
 type Kind = "user" | "inbound" | "start";
 
@@ -63,7 +63,7 @@ interface Lead {
   out: WriteStream;
   busy: boolean;
   turnStart: string | null;
-  pending: string[]; // 回合进行中攒下的工人消息,turnEnd 时合并成一条送
+  pending: string[]; // 回合进行中攒下的执行者消息,turnEnd 时合并成一条送
   idleTimer: NodeJS.Timeout | null;
   closing: "recycle" | "halt" | null;
 }
@@ -84,7 +84,7 @@ export async function deliverToLead(
   await deliver(taskId, text + attachmentsPrompt(opts.attachments), "user");
 }
 
-// 工人汇报/提问,以及 harness 自己的唤醒语(inbox.ts 用)。
+// 执行者汇报/提问,以及 harness 自己的唤醒语(inbox.ts 用)。
 export async function sendInbound(taskId: string, text: string): Promise<void> {
   await deliver(taskId, text, "inbound");
 }
@@ -96,8 +96,8 @@ export async function startTeam(taskId: string): Promise<void> {
   await deliver(taskId, "", "start");
 }
 
-// 「停止全组」:指挥台进程 + 所有工人一起停。工人走分组暂停(落 paused,占住
-// 队列位置,恢复分组时从原会话续跑);指挥台落 idle(待命,会话留着)。
+// 「停止全组」:调度台进程 + 所有执行者一起停。执行者走分组暂停(落 paused,占住
+// 队列位置,恢复分组时从原会话续跑);调度台落 idle(待命,会话留着)。
 export async function haltTeam(taskId: string): Promise<void> {
   const lead = leads.get(taskId);
   if (lead) {
@@ -164,9 +164,9 @@ async function openLead(taskId: string, rawText: string, kind: Kind): Promise<Le
   const cfg: TeamConfig = task.team ? JSON.parse(task.team) : TEAM_DEFAULTS;
   const ex = await resolveExecutorFor({ executorId: cfg.leadExecutorId, type: cfg.lead });
   const openResident = ex.openResident?.bind(ex);
-  if (!openResident) throw new Error(`执行者 ${ex.label} 不支持常驻会话,不能当团队指挥者`);
+  if (!openResident) throw new Error(`执行器 ${ex.label} 不支持常驻会话,不能当团队调度者`);
 
-  // 团队默认不开 worktree(工人和指挥者同目录,用户明确要求)。
+  // 团队默认不开 worktree(执行者和调度者同目录,用户明确要求)。
   const ws = await resolveWorkspace(project.repoPath, taskId);
   // 上一段常驻会话:同一个 CLI 会话可以 --resume 接回,.md 也接着往下写。
   const prev = (await db.select().from(sessions).where(eq(sessions.taskId, taskId)))
@@ -177,7 +177,7 @@ async function openLead(taskId: string, rawText: string, kind: Kind): Promise<Le
   const objective = task.body?.trim() || task.title;
   const text = kind === "start" && resuming ? LEAD_NUDGE : rawText;
   // 接回:上下文都在 CLI 会话里,只补一句「你被中断过」。全新开台:前言 + 目标
-  // (哪怕这次是被一条消息带起来的,前言也必须有 —— 否则它不知道自己是指挥者)。
+  // (哪怕这次是被一条消息带起来的,前言也必须有 —— 否则它不知道自己是调度者)。
   const message = resuming
     ? LEAD_RESUMED + text
     : LEAD_PREAMBLE(taskId, cfg.worker) + objective + (text ? `\n\n【新消息】${text}` : "");
@@ -283,7 +283,7 @@ function publish(lead: Lead, event: AgentEvent): void {
   });
 }
 
-// 入站消息(工人汇报/提问、系统提示)记成 system turn:实时走 system 事件、
+// 入站消息(执行者汇报/提问、系统提示)记成 system turn:实时走 system 事件、
 // 刷新走 .md 的哨兵行,两边长得一样。
 function recordSystemTurn(lead: Lead, text: string, at = now()): void {
   writeTurn(lead.out, { t: "system", agent: lead.agentType, text }, at);
@@ -297,7 +297,7 @@ async function beginTurn(lead: Lead, at = now()): Promise<void> {
   await setTaskStatus(lead.taskId, "running");
 }
 
-// 一个回合说完了(进程还活着)。有攒下的工人消息就立刻合并成一条继续跑,
+// 一个回合说完了(进程还活着)。有攒下的执行者消息就立刻合并成一条继续跑,
 // 否则落 idle(待命)并起空闲回收计时。
 async function endTurn(lead: Lead): Promise<void> {
   const endIso = now();
@@ -336,7 +336,7 @@ async function closeLead(lead: Lead, exitStatus: number): Promise<void> {
     recordSystemTurn(lead, RECYCLE_NOTE(Math.round(IDLE_MS / 60_000)));
   } else if (!lead.closing && exitStatus !== 0) {
     // 既不是回收也不是手停 —— 进程自己没了。会话还在,说句话就能接回。
-    const msg = `指挥台进程意外退出(exit ${exitStatus})。CLI 会话还在,再说一句话会自动接回;需要的话也可以点「继续」。`;
+    const msg = `调度台进程意外退出(exit ${exitStatus})。CLI 会话还在,再说一句话会自动接回;需要的话也可以点「继续」。`;
     writeRunError(lead.out, msg);
     publish(lead, { kind: "error", message: msg });
   }

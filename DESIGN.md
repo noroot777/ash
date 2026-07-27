@@ -30,7 +30,7 @@ Project(边界 = 一个 git 仓库)
 ├─【规划层】 Issue「想做什么」── 用户原文(不可变)+ AI 解析的元信息
 │                │  @agent 派生 ↓（Task.issueId 回链）
 ├─【执行层】 Task「让谁干一件具体的事」
-│                ├─ Agent「谁来干」── 类型(claude/codex)→ 默认执行者；执行目标 = 本地 spawn / ssh shell
+│                ├─ Agent「谁来干」── 类型(claude/codex)→ 默认执行器；执行目标 = 本地 spawn / ssh shell
 │                └─ Session × N「每次执行的凭证」── resume / 多 agent 接力 / debate 角色
 │
 ├─【空间维度】Group：一组相关 Task 怎么调度（parallel/serial + dependsOn）
@@ -39,7 +39,7 @@ Project(边界 = 一个 git 仓库)
 
 **第一次分离(纵向):规划 `Issue` ↔ 执行 `Task`。** Issue 是"想做什么"——人话、可讨论、**正文恒为用户原文,AI 只解析元信息绝不改写**;Task 是"让 agent 去做"。`@agent` **派生** Task、`issueId` **回链**。把"想清楚"和"去做"解耦(Issue 的 project 可空,Task 必填)。
 
-**第二次分离(横向):做什么 `Task` × 谁做 `Agent` × 过程 `Session`。** Task 不绑死"谁做"。`@` 选的是**类型**(claude/codex),由"默认执行者"解析到具体 executor(本地 / ssh);本地与远程统一为"执行目标 = 一个 shell 环境"。正因三者分离,**同一个 Task 才能换 agent 重跑、多 agent 接力、对抗、并行选优——全是"一个 Task 挂多条 Session"**。Session 以"可直接粘贴的 resume 命令"为凭证(裸 ID 无用,需带 `cd` worktree、远程带 `ssh`)。**这是最核心的一刀。**
+**第二次分离(横向):做什么 `Task` × 谁做 `Agent` × 过程 `Session`。** Task 不绑死"谁做"。`@` 选的是**类型**(claude/codex),由"默认执行器"解析到具体 executor(本地 / ssh);本地与远程统一为"执行目标 = 一个 shell 环境"。正因三者分离,**同一个 Task 才能换 agent 重跑、多 agent 接力、对抗、并行选优——全是"一个 Task 挂多条 Session"**。Session 以"可直接粘贴的 resume 命令"为凭证(裸 ID 无用,需带 `cd` worktree、远程带 `ssh`)。**这是最核心的一刀。**
 
 **两个组织维度:`Group`(空间)+ `Schedule`(时间)。** Group 管"这组任务谁先谁后、能否同时";Schedule 管"何时自动启动"(定时**挂在 Task 上**,Group 可能临时;**定时触发 = 全新一轮 session,不续昨天会话**)。
 
@@ -48,7 +48,7 @@ Project(边界 = 一个 git 仓库)
 | Issue ↔ Task | 1 : N(Task 侧可空) | Issue 是 Task 的可选母体 |
 | Group ↔ Task | 1 : N(可 null) | Group 是 Task 的调度上下文,非分类盒 |
 | Task ↔ Session | 1 : N | 多 agent 协作 / resume 的根基 |
-| Agent ↔ Task | N : N | 类型 → 默认执行者,可复用 |
+| Agent ↔ Task | N : N | 类型 → 默认执行器,可复用 |
 
 ---
 

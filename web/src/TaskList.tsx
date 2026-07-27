@@ -16,14 +16,14 @@ const TASK_SECTIONS = [
 
 type TaskSection = (typeof TASK_SECTIONS)[number];
 
-// 列表只排**顶层**任务:团队任务的工人(parentId 非空)挂在它自己那一行下面,不单独
-// 占状态分组的位置 —— 否则一次派 6 个工人就把列表冲垮了。
+// 列表只排**顶层**任务:团队任务的执行者(parentId 非空)挂在它自己那一行下面,不单独
+// 占状态分组的位置 —— 否则一次派 6 个执行者就把列表冲垮了。
 function topLevel(tasks: Task[]): Task[] {
   return tasks.filter((t) => !t.parentId);
 }
 
 function groupedStatus(task: Task) {
-  // 团队指挥台在线即属于「运行中」；idle 只保留为任务本身的精确状态语义。
+  // 团队调度台在线即属于「运行中」；idle 只保留为任务本身的精确状态语义。
   return task.mode === "team" && task.status === "idle" ? "running" : task.status;
 }
 
@@ -65,7 +65,7 @@ export function TaskList({
   const topTasks = topLevel(tasks);
   // Fold long status groups (e.g. 完成 93) away; remembered per browser.
   const { collapsed, toggle } = useCollapsedGroups("harness:taskList:collapsedStatuses");
-  // 展开了工人行的团队任务。默认全折叠 —— 团队行本身已经带了状态摘要。
+  // 展开了执行者行的团队任务。默认全折叠 —— 团队行本身已经带了状态摘要。
   const [openTeams, setOpenTeams] = useState<Set<string>>(new Set());
   const toggleTeam = (id: string) =>
     setOpenTeams((s) => {
@@ -193,11 +193,11 @@ function TaskRow({
 }
 
 // 团队行。默认折叠成一行:图标是 foldTeamStatus 算出来的「最该你管的那个」,右边是
-// 工人状态摘要(「1 等答复 · 1 干活 · 1 完成」)。
+// 执行者状态摘要(「1 等答复 · 1 干活 · 1 完成」)。
 //
-// 这个图标可能跟本行所在的状态分组不一致 —— 指挥台待命着(归入「运行中」组),但某个
-// 工人正卡在提问上,于是行首是青色问号。这是故意的:分组按指挥台在线即运行中的语义
-// 放置(免得活着的团队因为工人全完掉进「完成」组),而图标要抢你的注意力。
+// 这个图标可能跟本行所在的状态分组不一致 —— 调度台待命着(归入「运行中」组),但某个
+// 执行者正卡在提问上,于是行首是青色问号。这是故意的:分组按调度台在线即运行中的语义
+// 放置(免得活着的团队因为执行者全完掉进「完成」组),而图标要抢你的注意力。
 function TeamRow({
   lead,
   workers,
@@ -234,7 +234,7 @@ function TeamRow({
           }}
           disabled={!workers.length}
           className="grid h-4 w-4 shrink-0 place-items-center rounded text-faint transition-colors hover:bg-overlay hover:text-ink disabled:opacity-0"
-          title={expanded ? "折叠工人" : `展开 ${workers.length} 个工人`}
+          title={expanded ? "折叠执行者" : `展开 ${workers.length} 个执行者`}
         >
           <CaretRight size={10} weight="bold" className={`transition-transform ${expanded ? "rotate-90" : ""}`} />
         </button>

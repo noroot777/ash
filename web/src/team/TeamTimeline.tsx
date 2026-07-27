@@ -1,8 +1,8 @@
-// /team 的瀑布时间轴:每个工人一条 track,色条 = startedAt → (endedAt ?? 现在),
+// /team 的瀑布时间轴:每个执行者一条 track,色条 = startedAt → (endedAt ?? 现在),
 // 按状态着色(色号统一取 StatusIcon 那套,不另立一套)。回答的是「谁跟谁在并行、
 // 谁把谁堵住了」——这是编排视图里唯一看不出来又必须看出来的信息。
 //
-// 指挥者那条 track 没有独立的数据源,由客户端从已解析的会话推出来(每个回合一段)。
+// 调度者那条 track 没有独立的数据源,由客户端从已解析的会话推出来(每个回合一段)。
 import { useState } from "react";
 import type { Group, Task } from "@harness/shared";
 import { CaretDown } from "@phosphor-icons/react";
@@ -39,7 +39,7 @@ export function TeamTimeline({
   const openEnd = settled ? fallbackEnd : nowMs;
   const rows: Row[] = [
     {
-      name: `指挥 ${teamLeadExecutorLabel(lead)}`,
+      name: `调度者 ${teamLeadExecutorLabel(lead)}`,
       bars: leadTurns
         .map((t) => {
           const ended = t.to ? ms(t.to) : openEnd;
@@ -81,7 +81,7 @@ export function TeamTimeline({
             to: end,
             color,
             hatch: w.status === "queued" || w.status === "backlog",
-            title: `${formatDuration(end - start)}${w.endedAt ? "" : " · 进行中"}${groupPaused ? ` · ${w.status === "done" ? "工人已正常完成，所属组已停止" : "所属组已停止"}` : ""}`,
+            title: `${formatDuration(end - start)}${w.endedAt ? "" : " · 进行中"}${groupPaused ? ` · ${w.status === "done" ? "执行者已正常完成，所属组已停止" : "所属组已停止"}` : ""}`,
           },
         ],
       };
@@ -135,7 +135,7 @@ function Track({ row, pct, onOpen }: { row: Row; pct: (t: number) => number; onO
       <div className="relative h-[9px] rounded-full bg-raised">
         {row.pendingOnly && (
           <span
-            title="尚未开始（排队等前面的工人）"
+            title="尚未开始（排队等前面的执行者）"
             className="absolute right-0 top-0 h-[9px] w-[7%] rounded-full"
             style={{
               background:

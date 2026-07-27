@@ -19,8 +19,8 @@ export const DISCUSS_TIMEOUT_MS = 60_000;
 const PRIORITIES: Priority[] = ["none", "low", "medium", "high", "urgent"];
 
 // 跑一个 CLI 执行器到结束,返回全部文本。
-// executorId 指定具体执行者(用户在事项 hero 里挑的那个);查不到 / 没给 → 该类型
-// 或 claude 的默认执行者。antigravity 无内置解析器 → 回退 claude。
+// executorId 指定具体执行器(用户在事项 hero 里挑的那个);查不到 / 没给 → 该类型
+// 或 claude 的默认执行器。antigravity 无内置解析器 → 回退 claude。
 // cwd 默认 PARSE_CWD(解析场景,脱离 repo 树避免 CLAUDE.md 污染);讨论场景传项目 repoPath。
 export async function runAgentOnce(
   prompt: string,
@@ -168,7 +168,7 @@ export async function parseIssue(
 
 // ── 讨论/执行意图分类 ────────────────────────────────────────────────────────
 // issue 讨论区里用户 @claude 时,先跑一次这个判"讨论还是执行"。跟 parseIssue
-// 一条链路(事项选定的执行者,查不到就默认 claude)。拿不准 / 失败 / 空 → 一律 discuss:
+// 一条链路(事项选定的执行器,查不到就默认 claude)。拿不准 / 失败 / 空 → 一律 discuss:
 // 讨论便宜且可逆,execute 一旦派出 worktree 就收不回。
 export type MentionIntent = "discuss" | "execute";
 

@@ -1,5 +1,5 @@
 // 供应商(LlmProvider)的探测通道。harness 自己不再直连大模型跑推理 —— 所有 AI 调用
-// 都走本地 CLI 执行者(见 executors/),供应商只是挂到执行者上的 base_url + key。
+// 都走本地 CLI 执行器(见 executors/),供应商只是挂到执行器上的 base_url + key。
 // 这里剩下的唯一职责是配置供应商时「拉取模型列表」,给下拉框填候选。
 import type { LlmProtocol } from "@harness/shared";
 

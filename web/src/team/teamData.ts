@@ -1,4 +1,4 @@
-// /team 主视图的纯数据装配:从任务列表 + 已解析的指挥台会话里推出「批次」「入站
+// /team 主视图的纯数据装配:从任务列表 + 已解析的调度台会话里推出「批次」「入站
 // 消息」「谁在等你」这些视图概念。纯函数、无 JSX、不碰 api —— 三个组件共用同一套
 // 推导,也方便单独看懂。
 import type { Group, Task, TaskStatus } from "@harness/shared";
@@ -7,7 +7,7 @@ import { executorMix } from "../executorLabel";
 
 // ── 批次(一次 dispatch)────────────────────────────────────────────────────
 // 一次 dispatch = 一个内部分组(groups.owner_task_id 指回团队任务)。批次主体仍从
-// 工人身上反推:groupId 分堆、最早的 createdAt 当批次时刻、有人带 queueId 就是
+// 执行者身上反推:groupId 分堆、最早的 createdAt 当批次时刻、有人带 queueId 就是
 // 串行批；如果后端把内部 group 行带来,再把 paused/mode 等组状态贴上。
 export type Batch = { key: string; workers: Task[]; serial: boolean; at: string; group?: Group };
 
@@ -39,7 +39,7 @@ export function batchesOf(workers: Task[], groups: Group[] = []): Batch[] {
 
 // 团队内部组来自两条线索:
 // - 新后端直接带 ownerTaskId;
-// - 兼容旧/迁移中的数据:工人身上的 groupId 指向的 group 也算这个团队的内部组。
+// - 兼容旧/迁移中的数据:执行者身上的 groupId 指向的 group 也算这个团队的内部组。
 export function teamGroupsOf(groups: Group[], leadId: string, workers: Task[]): Group[] {
   const workerGroupIds = new Set(workers.map((w) => w.groupId).filter((id): id is string => !!id));
   return groups
@@ -97,12 +97,12 @@ export function statusCounts(workers: Task[]): CountBucket[] {
   return buckets.filter((b) => b.n > 0);
 }
 
-// 「工人 4（codex×3 · claude×1）」里括号那截。
+// 「执行者 4（codex×3 · claude×1）」里括号那截。
 export function agentMix(workers: Task[]): string {
   return executorMix(workers);
 }
 
-// ── 入站消息(工人 → 指挥者)────────────────────────────────────────────────
+// ── 入站消息(执行者 → 调度者)────────────────────────────────────────────────
 // server 把三种唤醒写成 〔系统〕turn(server/src/team/prompts.ts 的 INBOUND_*),
 // 于是它们在会话里就是普通的 system 条目。这里按模板前缀认回来,画成「⇢ 来自④」
 // 那种气泡。解析只在这一个地方,模板改了就改这儿。
@@ -114,9 +114,9 @@ export type Inbound = {
   raw: string; // 原始整条(hover 可看,不丢信息)
 };
 
-const KIND: Record<string, Inbound["kind"]> = { 工人提问: "question", 工人失败: "failed", 工人完成: "done" };
-const HEAD = /^【(工人提问|工人失败|工人完成)】「([\s\S]+?)」\(taskId=([^)]+)\)/;
-// 每个模板尾部那段是写给指挥者的操作指引(「先调查…再 answer_question…」),对用户是
+const KIND: Record<string, Inbound["kind"]> = { 执行者提问: "question", 执行者失败: "failed", 执行者完成: "done" };
+const HEAD = /^【(执行者提问|执行者失败|执行者完成)】「([\s\S]+?)」\(taskId=([^)]+)\)/;
+// 每个模板尾部那段是写给调度者的操作指引(「先调查…再 answer_question…」),对用户是
 // 噪音,按各自的固定分界砍掉;原文仍留在 raw 里。模板(server/src/team/prompts.ts)
 // 改了这里要跟着改 —— 两边同一个 commit。
 const TAIL: Partial<Record<Inbound["kind"], RegExp>> = {
@@ -125,7 +125,7 @@ const TAIL: Partial<Record<Inbound["kind"], RegExp>> = {
   done: /。核查产物/,
 };
 const Q_PREFIX = /^已暂停等你答复[,，]问题[:：]\s*/;
-// 指挥者忙着的时候攒下的工人消息会被 session.ts 合并成一条送进去(这个分隔符相连),
+// 调度者忙着的时候攒下的执行者消息会被 session.ts 合并成一条送进去(这个分隔符相连),
 // 所以先拆开再逐条认。
 const MERGE_SEP = "\n\n---\n\n";
 
@@ -146,7 +146,7 @@ export function parseInbound(text: string): Inbound[] | null {
 }
 
 // ── 谁在等你 ─────────────────────────────────────────────────────────────────
-// 等得最久的那个排最前(它最该被处理)。等待起点用工人自己那个提问回合的结束时刻。
+// 等得最久的那个排最前(它最该被处理)。等待起点用执行者自己那个提问回合的结束时刻。
 export type Waiting = { task: Task; since: string | null };
 
 export function waitingWorkers(workers: Task[]): Waiting[] {
@@ -157,8 +157,8 @@ export function waitingWorkers(workers: Task[]): Waiting[] {
 }
 
 // ── feed 装配 ────────────────────────────────────────────────────────────────
-// 派活卡在指挥者的会话里没有留痕(dispatch 是个 MCP 工具调用),所以按时刻把它插进
-// 条目流:一批工人的 createdAt 落在某个回合的执行区间内,卡片就排在那个回合之后。
+// 派活卡在调度者的会话里没有留痕(dispatch 是个 MCP 工具调用),所以按时刻把它插进
+// 条目流:一批执行者的 createdAt 落在某个回合的执行区间内,卡片就排在那个回合之后。
 export type FeedRow =
   | { kind: "conv"; key: string; item: ConvItem }
   | { kind: "batch"; key: string; batch: Batch };
@@ -190,7 +190,7 @@ export function mergeFeed(items: ConvItem[], batches: Batch[]): FeedRow[] {
   return rows;
 }
 
-// 指挥者自己那条时间轴:从已解析的会话里把每个回合的执行区间捞出来。
+// 调度者自己那条时间轴:从已解析的会话里把每个回合的执行区间捞出来。
 export function leadTurns(items: ConvItem[]): { from: string; to: string | null }[] {
   return items
     .filter((it): it is Extract<ConvItem, { kind: "agent" }> => it.kind === "agent" && !!it.time)

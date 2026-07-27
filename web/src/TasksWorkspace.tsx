@@ -142,8 +142,8 @@ export function TasksWorkspace({
                   onTeamCreated={onTaskCreated}
                 />
               ) : current.mode === "team" ? (
-                // 团队模式:整张 logs 表都给它 —— 指挥者的流、每个工人卡片上的
-                // 实时最后一行、抽屉里那个工人的会话,取的是不同任务的日志。
+                // 团队模式:整张 logs 表都给它 —— 调度者的流、每个执行者卡片上的
+                // 实时最后一行、抽屉里那个执行者的会话,取的是不同任务的日志。
                 <TeamView
                   key={current.id}
                   task={current}

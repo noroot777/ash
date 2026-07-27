@@ -53,7 +53,7 @@ const withDefault = (values: string[], detail = "跟随 CLI 默认"): MenuOption
 
 type Detected = { type: string; bin: string; available: boolean; path: string | null; version: string | null };
 
-// 供应商 → 模型全名列表。同一供应商的多个执行者共享,免得每行各拉一次;
+// 供应商 → 模型全名列表。同一供应商的多个执行器共享,免得每行各拉一次;
 // 供应商被增删改时(reloadRelays)整体清掉,避免拿着旧地址/旧 key 的陈旧列表。
 const relayModelCache = new Map<string, string[]>();
 
@@ -68,7 +68,7 @@ export function AgentsPanel({ onClose }: { onClose: () => void }) {
   // 与 detected 分开:detected 只在用户手动点「检测」时出结果面板,这个是静默的渲染依据。
   const [avail, setAvail] = useState<Set<string> | null>(null);
   const reload = () => api.agents().then(setList);
-  // 删供应商会把挂着它的执行者置回官方账号(服务端做的),所以供应商变了要连执行者一起刷。
+  // 删供应商会把挂着它的执行器置回官方账号(服务端做的),所以供应商变了要连执行器一起刷。
   const reloadRelays = () => {
     relayModelCache.clear();
     return Promise.all([api.llmProviders().then(setRelays), reload()]).catch(() => {});
@@ -94,8 +94,8 @@ export function AgentsPanel({ onClose }: { onClose: () => void }) {
     }
   };
 
-  // 只列「本机装了的」和「已经注册过执行者的」类型 —— 没装的 CLI 摆在这儿只是灰噪声,
-  // 想用得先装。已注册的恒显示(可能是 ssh 远端执行者,本机自然探不到)。
+  // 只列「本机装了的」和「已经注册过执行器的」类型 —— 没装的 CLI 摆在这儿只是灰噪声,
+  // 想用得先装。已注册的恒显示(可能是 ssh 远端执行器,本机自然探不到)。
   const shownTypes = TYPES.filter((t) => list.some((a) => a.type === t) || avail?.has(t));
 
   const registerDetected = async (d: Detected) => {
@@ -159,7 +159,7 @@ export function AgentsPanel({ onClose }: { onClose: () => void }) {
                                 onClick={() => registerDetected(d)}
                                 className="inline-flex items-center gap-1 rounded-md bg-accent px-2 py-0.5 text-[11px] font-medium text-accent-fg hover:bg-accent-hover"
                               >
-                                <Plus size={11} weight="bold" /> 注册为执行者
+                                <Plus size={11} weight="bold" /> 注册为执行器
                               </button>
                             )}
                           </span>
@@ -182,7 +182,7 @@ export function AgentsPanel({ onClose }: { onClose: () => void }) {
                   <div className="mb-1.5 text-[11px] font-medium uppercase tracking-wide text-muted">{type}</div>
                   {profiles.length === 0 && (
                     <p className="mb-1 text-[12px] text-faint">
-                      {type === "antigravity" ? "无内置解析器；待该 CLI 可用后支持" : "未配置 · 将用内置本地默认执行者"}
+                      {type === "antigravity" ? "无内置解析器；待该 CLI 可用后支持" : "未配置 · 将用内置本地默认执行器"}
                     </p>
                   )}
                   {profiles.map((a) => (
@@ -266,7 +266,7 @@ function ModelMenu({
           />
           {relay && (
             <>
-              {/* header 只在下拉展开时渲染,所以拉取天然是懒的:开着面板不会为每个执行者打一串请求 */}
+              {/* header 只在下拉展开时渲染,所以拉取天然是懒的:开着面板不会为每个执行器打一串请求 */}
               <RelayModels relay={relay} done={models !== null} onModels={setModels} onError={setErr} />
               <div className={`px-0.5 text-[11px] ${err ? "text-red-600" : "text-faint"}`}>
                 {err ?? (models ? `供应商「${relay.name}」的 ${models.length} 个模型` : `正在从「${relay.name}」拉取模型…`)}
@@ -281,7 +281,7 @@ function ModelMenu({
   );
 }
 
-// 挂载即拉一次供应商的模型列表(结果进模块级缓存,同一供应商的多个执行者共享)。
+// 挂载即拉一次供应商的模型列表(结果进模块级缓存,同一供应商的多个执行器共享)。
 // 纯副作用组件,不渲染东西。
 function RelayModels({
   relay,
@@ -313,7 +313,7 @@ function RelayModels({
 }
 
 // 供应商下拉:默认「官方账号」(不注入 env,CLI 用自己登录的账号)+ 协议匹配的供应商。
-// 挂上后该执行者的每次运行都注入 base_url + key,执行任务和解析事项都走供应商。
+// 挂上后该执行器的每次运行都注入 base_url + key,执行任务和解析事项都走供应商。
 function RelayMenu({
   type,
   relays,
@@ -482,7 +482,7 @@ function AddRow({ type, relays, onAdded }: { type: AgentType; relays: LlmProvide
     const relayName = relays.find((r) => r.id === providerId)?.name;
     await api.createAgent({
       type,
-      // 缺省名字带上供应商(claude@公司自建·opus),好在下拉里一眼分清同类型的多个执行者。
+      // 缺省名字带上供应商(claude@公司自建·opus),好在下拉里一眼分清同类型的多个执行器。
       name: name.trim() || `${type}@${relayName || host.trim() || "local"}${model ? "·" + model : ""}`,
       model: model.trim() || undefined,
       reasoningEffort: effort || undefined,
@@ -500,7 +500,7 @@ function AddRow({ type, relays, onAdded }: { type: AgentType; relays: LlmProvide
   if (!open)
     return (
       <button onClick={() => setOpen(true)} className="inline-flex items-center gap-1 text-[12px] text-muted hover:text-ink">
-        <Plus size={12} weight="bold" /> 添加执行者
+        <Plus size={12} weight="bold" /> 添加执行器
       </button>
     );
 

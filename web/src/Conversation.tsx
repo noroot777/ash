@@ -1,7 +1,7 @@
 // 会话渲染层：把「快照(.md) + 实时流(SSE)」拼成一串会话条目，再画成气泡。
 //
-// 从 TaskDetail.tsx 拆出来的，因为 /team 的指挥台流(web/src/team/TeamFeed.tsx)要
-// 复用同一套渲染 —— 指挥者的回合、用户插话、系统提示在两个界面里必须长得一模一样。
+// 从 TaskDetail.tsx 拆出来的，因为 /team 的调度台流(web/src/team/TeamFeed.tsx)要
+// 复用同一套渲染 —— 调度者的回合、用户插话、系统提示在两个界面里必须长得一模一样。
 // 纯展示 + 纯数据装配，不碰 api，也不知道自己被谁用。
 import { type ReactNode } from "react";
 import type { Task, Session, AgentType } from "@harness/shared";

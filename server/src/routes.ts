@@ -648,7 +648,7 @@ api.post("/tasks", async (c) => {
     executorId: b.executorId ?? null,
     autoTitle: b.autoTitle ?? false,
     debate: b.debate ? JSON.stringify(b.debate) : null,
-    // mode:"team" 的指挥者/默认工人类型(跟 debate 对称)。别漏 —— 漏了就静默退回
+    // mode:"team" 的调度者/默认执行者类型(跟 debate 对称)。别漏 —— 漏了就静默退回
     // TEAM_DEFAULTS,用户在启动器上挑的那两个旋钮全白挑。
     team: teamConfig ? JSON.stringify(teamConfig) : null,
     scheduleId: null,
@@ -782,7 +782,7 @@ api.get("/groups", async (c) => {
   const repo = c.req.query("repoPath");
   const ownerTaskId = c.req.query("ownerTaskId");
   // 团队任务派活时自建的内部组(owner_task_id 非空)不在这里露脸 —— 它们是 §Team
-  // 的内部结构(团队视图自己会展示工人),混进用户的分组列表只会当噪音。
+  // 的内部结构(团队视图自己会展示执行者),混进用户的分组列表只会当噪音。
   // includeInternal=1 给调试/排查用。
   const includeInternal = c.req.query("includeInternal") === "1";
   let rows = await db.select().from(groups);
@@ -1012,7 +1012,7 @@ api.post("/tasks/:id/run", async (c) => {
   if (!r) return c.json({ error: "not found" }, 404);
   if (r.archived) return c.json({ error: "任务已归档，先取消归档再运行", archived: true }, 409);
   // 单条手动 Run：普通任务允许 backlog / canceled / failed / paused。team 的
-  // idle 也可运行:它不是终态,只是常驻指挥台待命,点击会接回同一 CLI 会话。
+  // idle 也可运行:它不是终态,只是常驻调度台待命,点击会接回同一 CLI 会话。
   const runnable =
     r.mode === "team"
       ? !["running", "queued", "awaiting_review"].includes(r.status)
@@ -1109,14 +1109,14 @@ api.post("/tasks/:id/complete", async (c) => {
 });
 
 // 提问(对称 /pause,§Team):agent 在执行中调用,写下「我被这个问题卡住了」。
-// 工人:本回合自然退出后,settleTaskStatus 因 question 非空落 paused,且队列**不**
-// 自动续跑(pickNextLaunchable 挡住);问题即时投递给团队指挥者,answer_question
+// 执行者:本回合自然退出后,settleTaskStatus 因 question 非空落 paused,且队列**不**
+// 自动续跑(pickNextLaunchable 挡住);问题即时投递给团队调度者,answer_question
 // 的答复会清空 question 并带着答复 resume 同一 CLI 会话。
-// 团队指挥者自己也能调 → 界面上就是「指挥者在等你答复」,答复喂回它的常驻会话。
+// 团队调度者自己也能调 → 界面上就是「调度者在等你答复」,答复喂回它的常驻会话。
 // 没人管也能用:任务停在 paused,问题留在 task.question 等用户答复。
 // 可选的 options = 单问题候选答案；questionItems = 一次并列问几个相关决策，每个
 // 问题有自己的 options。候选按钮只填入对应输入框，最终仍合成一段文本走 /answer。
-// 一次性任务只接受 running;常驻指挥台例外(§Team):它的 status 会在 running/idle
+// 一次性任务只接受 running;常驻调度台例外(§Team):它的 status 会在 running/idle
 // 间切换,但能发出 ask_question 就说明这一轮活着,不能被 idle 挡掉。
 function normalizeQuestionOptions(raw: unknown, field: string): { options: string[] } | { error: string } {
   if (raw === undefined) return { options: [] };
@@ -1207,12 +1207,12 @@ api.post("/tasks/:id/ask", async (c) => {
   });
 });
 
-// 答复一个提问暂停中的任务(指挥者或用户都可调):清空 question,把答复作为
+// 答复一个提问暂停中的任务(调度者或用户都可调):清空 question,把答复作为
 // 消息 resume 它的 CLI 会话继续跑。提问回合还没结算完(running/queued)时拒绝
 // ——等它落 paused 再答,否则答复会被单飞锁静默丢掉。
-// 例外:常驻指挥台(§Team)自己调 ask_question 问用户时,这道挡板不适用 —— 它正在
+// 例外:常驻调度台(§Team)自己调 ask_question 问用户时,这道挡板不适用 —— 它正在
 // 说话时也接得住(continueTask → deliverToLead 先 interrupt 再写 stdin),跟
-// 「插话」走的是同一条路。挡住反而会让用户对着一个明明在线的指挥台干等。
+// 「插话」走的是同一条路。挡住反而会让用户对着一个明明在线的调度台干等。
 api.post("/tasks/:id/answer", async (c) => {
   const taskId = c.req.param("id");
   const b = await c.req.json<{ answer?: string }>().catch(() => ({}) as { answer?: string });
@@ -1229,14 +1229,14 @@ api.post("/tasks/:id/answer", async (c) => {
     .set({ question: null, questionOptions: null, questionItems: null, updatedAt: now() })
     .where(eq(tasks.id, taskId));
   bus.publish({ type: "task.question", taskId, question: null, questionOptions: null, questionItems: null });
-  // 指挥台不说「完成任务」——它没有完成一说,只是拿到答案接着安排。
+  // 调度台不说「完成任务」——它没有完成一说,只是拿到答案接着安排。
   const tail = r.mode === "team" ? "请据此接着安排。" : "请据此继续完成任务。";
   void continueTask(taskId, `【答复】你之前的提问:「${r.question}」\n\n${a}\n\n${tail}`);
   return c.json({ answered: true, resumed: true });
 });
 
 // ── §Team ───────────────────────────────────────────────────────────────────
-// 派活:指挥者(mode:"team")调 MCP 的 dispatch 落到这里 —— 建 N 个工人任务 + 一个
+// 派活:调度者(mode:"team")调 MCP 的 dispatch 落到这里 —— 建 N 个执行者任务 + 一个
 // 内部组(serial 顺带串成队列),默认立刻起跑。
 api.post("/tasks/:id/dispatch", async (c) => {
   const leadTaskId = c.req.param("id");
@@ -1255,8 +1255,8 @@ api.post("/tasks/:id/dispatch", async (c) => {
   }
 });
 
-// 停止全组:指挥台进程 + 所有在跑的工人一起停。工人走分组暂停(落 paused,占住
-// 队列位置,恢复分组时从原会话续跑);指挥台落 idle(会话留着,再说话就接回)。
+// 停止全组:调度台进程 + 所有在跑的执行者一起停。执行者走分组暂停(落 paused,占住
+// 队列位置,恢复分组时从原会话续跑);调度台落 idle(会话留着,再说话就接回)。
 api.post("/tasks/:id/team/halt", async (c) => {
   const taskId = c.req.param("id");
   const r = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
@@ -1296,7 +1296,7 @@ api.post("/tasks/:id/team/kill-cua", async (c) => {
 // With `sendAt` (a future ISO time), the reply is queued as a scheduled_message
 // and delivered later by the scheduler (schedules.ts) instead of fired now.
 // 团队(§Team)的「插话」也走这个端点,但两道给一次性会话设的挡板对它不适用:
-// 指挥台是常驻进程,正在说话(running)时也接得住(continueTask → deliverToLead 直接
+// 调度台是常驻进程,正在说话(running)时也接得住(continueTask → deliverToLead 直接
 // 写进 stdin),这就是「发出去当前会话就接住、看着从没断线」的手感。
 api.post("/tasks/:id/reply", async (c) => {
   const taskId = c.req.param("id");
@@ -1424,8 +1424,8 @@ api.post("/tasks/:id/archive", async (c) => {
     return c.json({ error: "只有已完成/失败/已取消的任务可以归档", status: r.status }, 409);
   }
   const ts = now();
-  // 团队(§Team):归档才是「这件事结束了」—— 先停掉指挥台进程和所有在跑的工人,
-  // 再把工人一并归档(不管它们各自停在什么状态:团队没了,散在列表里的工人只是
+  // 团队(§Team):归档才是「这件事结束了」—— 先停掉调度台进程和所有在跑的执行者,
+  // 再把执行者一并归档(不管它们各自停在什么状态:团队没了,散在列表里的执行者只是
   // 噪音;取消归档时整支队伍一起回来)。
   if (r.mode === "team") {
     await haltTeam(r.id);
@@ -1444,7 +1444,7 @@ api.post("/tasks/:id/unarchive", async (c) => {
   if (!r.archived) return c.json((await enrichTiming([r]))[0]); // idempotent
   const ts = now();
   await db.update(tasks).set({ archived: false, archivedAt: null, updatedAt: ts }).where(eq(tasks.id, r.id));
-  // 对称:团队回来了,它的工人也一起回来(归档时是整支队伍一起走的)
+  // 对称:团队回来了,它的执行者也一起回来(归档时是整支队伍一起走的)
   if (r.mode === "team") {
     await db.update(tasks).set({ archived: false, archivedAt: null, updatedAt: ts }).where(eq(tasks.parentId, r.id));
   }
@@ -1502,7 +1502,7 @@ api.delete("/tasks/:id/schedule", async (c) => {
 
 // ── issues (planning/discussion layer upstream of tasks) ─────────────────────
 // 历史数据降级:老格式是 {kind:'cli',agentType} / {kind:'api',providerId},没有
-// executorId。读到就当「没记过执行者」→ 解析退回默认执行者,不报错。
+// executorId。读到就当「没记过执行器」→ 解析退回默认执行器,不报错。
 const parseBackend = (raw: string | null): AiBackend | null => {
   if (!raw) return null;
   try {
@@ -1673,13 +1673,13 @@ api.post("/issues/:id/comments", async (c) => {
   if (b.mention) {
     if (!AGENT_TYPES.includes(b.mention)) return c.json({ error: "未知的 agent（只支持本地 CLI 智能体）", agent: b.mention }, 400);
     if (!issue.projectId) return c.json({ error: "事项还没归到项目，先归类再 @ 智能体" }, 409);
-    // 「带一队」= 派一个团队任务,被 @ 的那个类型当指挥者 —— 它得支持常驻会话。
+    // 「带一队」= 派一个团队任务,被 @ 的那个类型当调度者 —— 它得支持常驻会话。
     // 在这儿挡住比等到 startTeam 里 throw 好:那时候任务已经建出来了,用户只看到一个
     // 刚生下来就 failed 的团队。
     if (b.mentionTeam) {
       const lead = await resolveExecutorFor({ type: b.mention }).catch(() => null);
       if (!lead?.openResident)
-        return c.json({ error: `@${b.mention} 不支持常驻会话，当不了指挥者（换 @claude 带队）`, agent: b.mention }, 400);
+        return c.json({ error: `@${b.mention} 不支持常驻会话，当不了调度者（换 @claude 带队）`, agent: b.mention }, 400);
     }
   }
   const ts = now();
@@ -1717,7 +1717,7 @@ api.post("/issues/:id/comments", async (c) => {
       });
     const ctx = { issueTitle: issue.title, issueBody: issue.body, history, mention: crow.body };
 
-    // 意图分类:跟 parseIssue 同一条路(issue 上记录的执行者)。
+    // 意图分类:跟 parseIssue 同一条路(issue 上记录的执行器)。
     // 拿不准/失败/超时一律 discuss —— 讨论便宜可逆,execute 一旦派出任务收不回。
     const backend = parseBackend(issue.aiBackend);
     const intent = await classifyMention(ctx, { backend });
@@ -1760,8 +1760,8 @@ api.post("/issues/:id/comments", async (c) => {
     } else {
       // execute: 建 task,worktree 按 opt-in,立即开跑。跟原来一致。
       // `mentionTeam`(界面上的「@claude · 带一队」)只换一件事:建出来的是 mode:"team"
-      // 的常驻指挥台,它自己拆活派工人。团队不给指挥台开 worktree(工人是各自独立的任务、
-      // 跑在项目目录,只把指挥者挪走会让两边看到不同的文件),隔离留给它派活时逐个开。
+      // 的常驻调度台,它自己拆活派执行者。团队不给调度台开 worktree(执行者是各自独立的任务、
+      // 跑在项目目录,只把调度者挪走会让两边看到不同的文件),隔离留给它派活时逐个开。
       const useWt = !b.mentionTeam && !!b.useWorktree && (proj ? projectHealthLight(proj.repoPath).isRepo : false);
       const tid = id();
       const trow = {
@@ -1780,7 +1780,7 @@ api.post("/issues/:id/comments", async (c) => {
         agentType: b.mention as AgentType,
         autoTitle: false,
         debate: null as string | null,
-        // 被 @ 的类型当指挥者;工人缺省同类型(指挥者派活时可逐个改)
+        // 被 @ 的类型当调度者;执行者缺省同类型(调度者派活时可逐个改)
         team: b.mentionTeam ? JSON.stringify({ lead: b.mention, worker: b.mention }) : null,
         scheduleId: null as string | null,
         createdAt: ts,
@@ -1840,7 +1840,7 @@ api.get("/tasks/:id/commits", async (c) => {
   return c.json(await taskCommits(sess.worktreePath, project.repoPath, t.worktreeBase));
 });
 
-// ── 供应商 (relay, system-level) — 挂给执行者用,harness 不直连它跑推理 ────────
+// ── 供应商 (relay, system-level) — 挂给执行器用,harness 不直连它跑推理 ────────
 const toProvider = (r: typeof llmProviders.$inferSelect): LlmProvider => ({
   id: r.id,
   name: r.name,
@@ -1915,7 +1915,7 @@ api.patch("/llm-providers/:id", async (c) => {
 api.delete("/llm-providers/:id", async (c) => {
   const pid = c.req.param("id");
   await db.delete(llmProviders).where(eq(llmProviders.id, pid));
-  // 挂着它的执行者退回官方账号 —— 留悬空 id 会让「供应商」下拉显示成空白选项。
+  // 挂着它的执行器退回官方账号 —— 留悬空 id 会让「供应商」下拉显示成空白选项。
   await db.update(agents).set({ providerId: null }).where(eq(agents.providerId, pid));
   return c.json({ deleted: true });
 });

@@ -1,4 +1,4 @@
-// 「答复并续跑」输入框。默认答任务自己的 agent；打 `@` 挑一个执行者就把这条
+// 「答复并续跑」输入框。默认答任务自己的 agent；打 `@` 挑一个执行器就把这条
 // 回复交给它，等于把它请进同一个任务(同一个工作目录)。可以粘图。时钟按钮把回复
 // 排到未来某个时刻发(scheduled_messages)，待发的列在输入框上方、发之前能撤。
 //
@@ -34,7 +34,7 @@ export function ReplyBox({
   taskId: string;
   onReply: (text: string, opts?: { attachments?: string[]; agent?: AgentType }) => void;
   disabled: boolean;
-  /** 关掉 @ 召唤(/team 的插话永远是给指挥者的,换执行者没有意义)。 */
+  /** 关掉 @ 召唤(/team 的插话永远是给调度者的,换执行器没有意义)。 */
   mention?: boolean;
   placeholder?: string;
   disabledPlaceholder?: string;

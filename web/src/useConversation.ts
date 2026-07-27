@@ -1,7 +1,7 @@
 // 「一个任务的会话」这份数据的装配钩子:拉 sessions、在没有实时日志时快照历史输出
 // (.md)、把两者 + SSE 流拼成条目流。
 //
-// 单独一个文件是因为 TaskDetail 和 /team 的指挥台都要它,而 Conversation.tsx 刻意
+// 单独一个文件是因为 TaskDetail 和 /team 的调度台都要它,而 Conversation.tsx 刻意
 // 保持「不碰 api」的纯展示层。两处共用同一份装配,刷新/实时的一致性就不会在某一个
 // 界面上偷偷漂掉。
 import { useEffect, useMemo, useState } from "react";

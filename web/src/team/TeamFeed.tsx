@@ -1,9 +1,9 @@
-// /team 中间那条流:指挥者的回合(气泡跟单任务一模一样)+ 派活卡 + 入站气泡。
+// /team 中间那条流:调度者的回合(气泡跟单任务一模一样)+ 派活卡 + 入站气泡。
 //
 // 三种东西的来源各不相同:
-// - 指挥者回合 / 用户插话 / 系统提示 → 会话条目(ConvItem),跟单任务同一套渲染。
-// - 入站气泡(工人提问/失败/汇报)→ 其实就是 system 条目,认出模板前缀后换个长相画。
-// - 派活卡 → 会话里没有留痕(dispatch 是个 MCP 工具调用),由工人反推出来按时刻插进流里。
+// - 调度者回合 / 用户插话 / 系统提示 → 会话条目(ConvItem),跟单任务同一套渲染。
+// - 入站气泡(执行者提问/失败/汇报)→ 其实就是 system 条目,认出模板前缀后换个长相画。
+// - 派活卡 → 会话里没有留痕(dispatch 是个 MCP 工具调用),由执行者反推出来按时刻插进流里。
 import type { Task } from "@harness/shared";
 import { ArrowElbowDownRight, ArrowRight } from "@phosphor-icons/react";
 import { ConvBubble } from "../Conversation";
@@ -31,7 +31,7 @@ export function TeamFeed({
     <div className="min-h-0 overflow-y-auto border-r border-line px-4 py-4">
       {empty && (
         <p className="text-[13px] text-faint">
-          点「运行」让指挥者开工:它会先读需求、拆活,再用 <span className="font-mono">dispatch</span> 把活派给工人。
+          点「运行」让调度者开工:它会先读需求、拆活,再用 <span className="font-mono">dispatch</span> 把活派给执行者。
         </p>
       )}
       {rows.map((row) => {
@@ -60,7 +60,7 @@ export function TeamFeed({
   );
 }
 
-// 一次 dispatch 一张卡。点任一行 → 右侧滑出那个工人的完整会话。
+// 一次 dispatch 一张卡。点任一行 → 右侧滑出那个执行者的完整会话。
 function BatchCard({
   batch,
   workers,
@@ -74,7 +74,7 @@ function BatchCard({
     <div className="mb-3.5 overflow-hidden rounded-lg border border-line">
       <div className="flex items-center gap-2 bg-raised px-2.5 py-1.5 text-[11.5px] text-muted">
         <ArrowElbowDownRight size={12} />
-        <b className="text-[12px] font-semibold text-ink">派活 · {batch.workers.length} 个工人</b>
+        <b className="text-[12px] font-semibold text-ink">派活 · {batch.workers.length} 个执行者</b>
         <span className="rounded bg-panel px-1.5 py-px text-[10.5px]">{batch.serial ? "串行" : "并行"}</span>
         {batch.group?.paused && (
           <span className="rounded border border-line bg-panel px-1.5 py-px text-[10.5px] font-medium text-muted">
@@ -93,7 +93,7 @@ function BatchCard({
         />
       ))}
       <div className="border-t border-line bg-panel px-2.5 py-1.5 text-[11px] text-faint">
-        {batch.group?.paused ? batchSummary(batch.workers) : "点任一行 → 右侧滑出它的完整会话;也能单独重跑 / 换执行者"}
+        {batch.group?.paused ? batchSummary(batch.workers) : "点任一行 → 右侧滑出它的完整会话;也能单独重跑 / 换执行器"}
       </div>
     </div>
   );
@@ -135,9 +135,9 @@ function BatchWorkerRow({
 function batchSummary(workers: Task[]): string {
   const interrupted = workers.filter((w) => w.status === "paused" && !w.question).length;
   const done = workers.filter((w) => w.status === "done").length;
-  if (interrupted > 0) return `本批组已停止 · ${interrupted} 个工人被暂停打断，${done} 个已完成`;
-  if (done > 0) return `本批组已停止 · ${done} 个工人已正常完成，没有被暂停打断`;
-  return "本批组已停止 · 暂无工人被暂停打断";
+  if (interrupted > 0) return `本批组已停止 · ${interrupted} 个执行者被暂停打断，${done} 个已完成`;
+  if (done > 0) return `本批组已停止 · ${done} 个执行者已正常完成，没有被暂停打断`;
+  return "本批组已停止 · 暂无执行者被暂停打断";
 }
 
 const KIND_LABEL: Record<Inbound["kind"], string> = {
@@ -147,8 +147,8 @@ const KIND_LABEL: Record<Inbound["kind"], string> = {
   note: "",
 };
 
-// 工人 → 指挥者的一条入站消息。「提问」用青色(全表最扎眼那格,因为不动手就永远停
-// 在这)、「失败」用红、「汇报完成」朴素。提问的正文优先取工人身上还挂着的 question
+// 执行者 → 调度者的一条入站消息。「提问」用青色(全表最扎眼那格,因为不动手就永远停
+// 在这)、「失败」用红、「汇报完成」朴素。提问的正文优先取执行者身上还挂着的 question
 // (最准),答复后它被清空,就退回模板里解析出来的那段。
 function InboundBubble({
   m,
@@ -190,7 +190,7 @@ function InboundBubble({
           </span>
         )}
         <ArrowRight size={10} className="text-faint" />
-        <span className="text-[10.5px] text-faint">指挥者</span>
+        <span className="text-[10.5px] text-faint">调度者</span>
         {at && <span className="ml-auto font-mono text-[10.5px] text-faint">{formatInstant(at)}</span>}
       </div>
       <CollapsibleText text={body} />

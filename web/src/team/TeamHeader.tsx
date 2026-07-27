@@ -1,7 +1,7 @@
 // /team 主视图的顶部:标题行(忙/闲、用时、停止全组、归档)、原始需求、meta 行、
 // 时间轴,再加下面那条「有人在等你答复」的提醒条。
 //
-// 跟单任务 header 的差别在于**指挥者没有「完成」**:它只有忙(running)/闲(idle),
+// 跟单任务 header 的差别在于**调度者没有「完成」**:它只有忙(running)/闲(idle),
 // 结束靠归档。所以这里没有状态下拉、没有「重新排队」、没有严格完成协议那套东西。
 import { useState } from "react";
 import type { Group, Task, Session } from "@harness/shared";
@@ -71,7 +71,7 @@ export function TeamHeader({
       <div className="flex items-start gap-3">
         <span
           className="mt-0.5 shrink-0 rounded bg-accent/10 px-1.5 py-0.5 text-[11px] font-semibold text-accent"
-          title="团队模式:一个常驻指挥者 + 它派出去的工人"
+          title="团队模式:一个常驻调度者 + 它派出去的执行者"
         >
           团队
         </span>
@@ -99,7 +99,7 @@ export function TeamHeader({
                 <button
                   onClick={() => setHaltOpen(true)}
                   className="inline-flex items-center gap-1.5 rounded-md border border-red-500/40 px-3 py-1.5 text-[13px] font-medium text-red-600 transition-colors hover:bg-red-500/10"
-                  title="停指挥台 + 暂停所有工人（工人落暂停，可恢复）"
+                  title="停调度台 + 暂停所有执行者（执行者落暂停，可恢复）"
                 >
                   <Stop size={13} weight="fill" />
                   停止全组
@@ -114,7 +114,7 @@ export function TeamHeader({
                       await Promise.all(pausedGroups.map((g) => api.runGroup(g.id)));
                       if (task.status !== "running") await onRun();
                       onTeamResumed();
-                      toast("已恢复全组：内部组已继续，指挥者会话已接回", "info");
+                      toast("已恢复全组：内部组已继续，调度者会话已接回", "info");
                     } catch (e) {
                       toast(e instanceof Error ? e.message : String(e));
                     } finally {
@@ -122,7 +122,7 @@ export function TeamHeader({
                     }
                   }}
                   className="inline-flex items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-[13px] font-medium text-accent-fg transition-colors hover:bg-accent-hover disabled:opacity-50"
-                  title={`恢复 ${pausedGroups.length} 个已暂停的内部组，并接回指挥者`}
+                  title={`恢复 ${pausedGroups.length} 个已暂停的内部组，并接回调度者`}
                 >
                   <Play size={13} weight="fill" />
                   {resuming ? "恢复中" : "恢复全组"}
@@ -137,21 +137,21 @@ export function TeamHeader({
                   已停止
                 </span>
               )}
-              {/* 冷启动/停过之后重新开工:指挥台是常驻会话,run 会接回同一个 CLI 会话。 */}
+              {/* 冷启动/停过之后重新开工:调度台是常驻会话,run 会接回同一个 CLI 会话。 */}
               {task.status !== "running" && (
                 <button
                   onClick={onRun}
                   className="inline-flex items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-[13px] font-medium text-accent-fg transition-colors hover:bg-accent-hover"
-                  title={sessions.length ? "接回指挥者的会话继续" : "让指挥者开工"}
+                  title={sessions.length ? "接回调度者的会话继续" : "让调度者开工"}
                 >
                   <Play size={13} weight="fill" />
-                  {sessions.length ? "接回指挥者" : "运行"}
+                  {sessions.length ? "接回调度者" : "运行"}
                 </button>
               )}
               <button
                 onClick={onArchive}
                 className="inline-flex items-center rounded-md px-2.5 py-1.5 text-[13px] font-medium text-muted transition-colors hover:bg-raised hover:text-ink"
-                title="归档：团队解散（工人一并归档）"
+                title="归档：团队解散（执行者一并归档）"
               >
                 归档
               </button>
@@ -161,7 +161,7 @@ export function TeamHeader({
             <>
               <CopyButton
                 text={conversationToText(items, task)}
-                title="复制指挥者的全部对话"
+                title="复制调度者的全部对话"
                 size={15}
                 className="h-[30px] w-[30px] hover:bg-raised"
               />
@@ -184,20 +184,20 @@ export function TeamHeader({
         </div>
       </div>
 
-      {/* 原始需求 —— 用户交给指挥者的那段话,默认折两行。 */}
+      {/* 原始需求 —— 用户交给调度者的那段话,默认折两行。 */}
       {task.body && <CollapsibleText text={task.body} />}
 
-      {/* 指挥者反过来问用户(它调 ask_question)。答复作为插话喂回同一个常驻会话。 */}
+      {/* 调度者反过来问用户(它调 ask_question)。答复作为插话喂回同一个常驻会话。 */}
       {task.question && <QuestionCard task={task} />}
 
       {stopped && <TeamHaltNotice workers={workers} pausedGroups={pausedGroups} hasGroupData={teamGroups.length > 0} />}
 
       <div className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[12px] text-faint">
         <span>
-          指挥 <b className="text-muted">{leadLabel}</b>
+          调度者 <b className="text-muted">{leadLabel}</b>
         </span>
         <span>
-          工人 <b className="text-muted">{workers.length}</b>
+          执行者 <b className="text-muted">{workers.length}</b>
           {workers.length > 0 && `（${agentMix(workers)}）`}
           {workers.length === 0 && `（默认派 ${workerLabel}）`}
         </span>
@@ -224,14 +224,14 @@ export function TeamHeader({
       {haltOpen && (
         <ConfirmModal
           title="停止全组？"
-          message="指挥台进程会被停掉（会话保留，之后能接回），正在跑的工人被暂停 —— 都可以恢复。"
+          message="调度台进程会被停掉（会话保留，之后能接回），正在跑的执行者被暂停 —— 都可以恢复。"
           confirmLabel="停止全组"
           danger
           onConfirm={async () => {
             try {
               await api.teamHalt(task.id);
               await onTeamHalted();
-              toast("已停止全组：指挥台已停，工人已暂停", "info");
+              toast("已停止全组：调度台已停，执行者已暂停", "info");
             } catch (e) {
               toast(e instanceof Error ? e.message : String(e));
             }
@@ -256,12 +256,12 @@ function TeamHaltNotice({
   const inferredGroups = new Set(workers.map((w) => w.groupId).filter(Boolean)).size;
   const workerText =
     stats.interrupted > 0
-      ? `${stats.interrupted} 个工人被暂停打断`
+      ? `${stats.interrupted} 个执行者被暂停打断`
       : stats.completed > 0
-        ? `${stats.completed} 个工人已正常完成，没有被暂停打断`
+        ? `${stats.completed} 个执行者已正常完成，没有被暂停打断`
         : workers.length > 0
-          ? "没有工人被暂停打断"
-          : "还没有工人";
+          ? "没有执行者被暂停打断"
+          : "还没有执行者";
   const groupText = hasGroupData
     ? pausedGroups.length > 0
       ? `${pausedGroups.length} 个内部组已停止`
@@ -290,15 +290,15 @@ function TeamHaltNotice({
   );
 }
 
-// 指挥者只有忙/闲两态(归档才算结束),所以这里不用 STATUSES 那张表。
+// 调度者只有忙/闲两态(归档才算结束),所以这里不用 STATUSES 那张表。
 function BusyPill({ task }: { task: Task }) {
   const label =
     task.status === "running"
-      ? "指挥中"
+      ? "调度中"
       : task.status === "idle"
         ? "待命"
         : task.status === "failed"
-          ? "指挥台异常"
+          ? "调度台异常"
           : task.status === "canceled"
             ? "已停止"
             : task.status === "backlog"
@@ -307,7 +307,7 @@ function BusyPill({ task }: { task: Task }) {
   return (
     <span
       className="inline-flex items-center gap-1.5 rounded-md bg-overlay px-2 py-1 text-[12px] text-muted"
-      title={task.status === "idle" ? "会话在线，这一刻没在说话；你或工人一说话就接回" : undefined}
+      title={task.status === "idle" ? "会话在线，这一刻没在说话；你或执行者一说话就接回" : undefined}
     >
       <StatusIcon status={task.status} size={11} awaitingAnswer={!!task.question} />
       {label}
@@ -346,9 +346,9 @@ export function AttentionBar({
         <button
           onClick={() => onAskLead(w.task)}
           className="rounded-md border border-line bg-panel px-2 py-1 text-[11.5px] text-muted transition-colors hover:bg-raised hover:text-ink"
-          title="把这个问题转给指挥者，让它去调查并答复"
+          title="把这个问题转给调度者，让它去调查并答复"
         >
-          让指挥者答
+          让调度者答
         </button>
         <button
           onClick={() => onOpenWorker(w.task.id)}

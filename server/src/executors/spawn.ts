@@ -144,7 +144,7 @@ async function killEscapees(child: ChildProcess, sig: NodeJS.Signals): Promise<v
 // 代价：dev 前台 Ctrl-C 不再连带杀掉 agent(生产是 nohup 跑法，不受影响)。
 // extraEnv: per-executor 的环境变量(供应商的 base_url / key)。本地合进 env,
 // ssh 拼成远程命令的 `KEY=值 ` 前缀 —— 二者对 CLI 是等价的。
-// keepStdin: 常驻会话(§Team 的指挥台)用 —— 写完首条消息不关 stdin,管道留给
+// keepStdin: 常驻会话(§Team 的调度台)用 —— 写完首条消息不关 stdin,管道留给
 // 调用方继续注入后续回合(见 executors/claude.ts 的 openResident)。
 export function spawnAgent(
   target: ExecTarget,

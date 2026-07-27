@@ -1,4 +1,4 @@
-// 会话落盘的写入格式(单点)。一次性 run(orchestrator.ts)和常驻指挥台
+// 会话落盘的写入格式(单点)。一次性 run(orchestrator.ts)和常驻调度台
 // (team/session.ts)都用这里的函数写 RUNS_DIR/<taskId>/<sessId>.md,于是
 // 「实时(SSE)看到的」和「刷新后(解析 .md)看到的」必然一致 —— 这是仓库既有约定。
 import { join } from "node:path";

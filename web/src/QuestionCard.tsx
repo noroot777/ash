@@ -6,7 +6,7 @@ import { api } from "./api";
 import { StatusIcon } from "./StatusIcon";
 import { toast } from "./toast";
 
-// ask_question 的答复卡片由单任务与 /team 指挥台共用。多问题只改变网页如何组织
+// ask_question 的答复卡片由单任务与 /team 调度台共用。多问题只改变网页如何组织
 // 输入：提交时仍合成一段无歧义文本走原来的 /answer，不新增结构化答复协议。
 export function QuestionCard({ task }: { task: Task }) {
   const items = task.questionItems ?? [];
@@ -39,7 +39,7 @@ export function QuestionCard({ task }: { task: Task }) {
     setSending(true);
     try {
       await api.answerTask(task.id, answerText);
-      toast(isLead ? "已答复，指挥者收到了" : "已答复，任务正在带着答案续跑");
+      toast(isLead ? "已答复，调度者收到了" : "已答复，任务正在带着答案续跑");
       setDraft("");
       setItemDrafts(items.map(() => ""));
     } catch (e) {
@@ -53,7 +53,7 @@ export function QuestionCard({ task }: { task: Task }) {
     <div className="mt-2 overflow-hidden rounded-md border border-cyan-500/40 bg-cyan-500/[0.06]">
       <div className="flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-medium text-cyan-700">
         <StatusIcon status="paused" size={11} awaitingAnswer />
-        <span>{isLead ? "指挥者在问你话，等待答复" : "任务提问，等待答复（队列陪等，不会自动续跑）"}</span>
+        <span>{isLead ? "调度者在问你话，等待答复" : "任务提问，等待答复（队列陪等，不会自动续跑）"}</span>
         {isMulti && (
           <span className="ml-auto text-[10px] font-normal text-cyan-800/70">
             {items.length}/{MAX_QUESTION_ITEMS} 个问题

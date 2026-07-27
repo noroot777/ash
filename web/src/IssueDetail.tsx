@@ -40,11 +40,11 @@ export function IssueDetail({
   const editAtt = usePasteAttachments(); // 编辑态新加的附件(与下方评论框那套独立)
   const [editAttachments, setEditAttachments] = useState<string[]>(issue.attachments); // 编辑态保留的已有附件
   const [execWorktree, setExecWorktree] = useState(false); // @执行是否隔离到 worktree(默认否,对齐任务的 opt-in)
-  // 「带一队」= 被 @ 的那个类型当指挥者派一队工人(mode:"team")。它是**用户显式选**的
+  // 「带一队」= 被 @ 的那个类型当调度者派一队执行者(mode:"team")。它是**用户显式选**的
   // (@ 菜单里的第二行),不从文字里猜 —— 手打 `@claude` 永远是自己干。
   const [mentionTeam, setMentionTeam] = useState(false);
   // 打开 @ 菜单才探测本机装了哪些 CLI:哪些能自己干、哪些能带队(带队要支持常驻会话),
-  // 这份名单只有执行者层知道,前端别自己抄。
+  // 这份名单只有执行器层知道,前端别自己抄。
   const [detected, setDetected] = useState<{ type: AgentType; available: boolean; resident: boolean }[] | null>(null);
   const project = projects.find((p) => p.id === issue.projectId) ?? null;
 
@@ -107,15 +107,15 @@ export function IssueDetail({
       const res = await api.postIssueComment(issue.id, {
         body,
         mention,
-        // 带一队时不给指挥台开 worktree(工人跑在项目目录,只挪走指挥者会让两边看到
-        // 不同的文件);要隔离由指挥者派活时逐个开。
+        // 带一队时不给调度台开 worktree(执行者跑在项目目录,只挪走调度者会让两边看到
+        // 不同的文件);要隔离由调度者派活时逐个开。
         ...(asTeam ? { mentionTeam: true } : {}),
         attachments: paths,
         useWorktree: asTeam ? false : execWorktree,
       });
       setComments((prev) => [...prev, res.comment, ...(res.agentComment ? [res.agentComment] : [])]);
       if (res.task) {
-        setExecNote(`已派给 @${mention}${asTeam ? " · 带一队(指挥台已上线)" : ""} · 任务运行中`);
+        setExecNote(`已派给 @${mention}${asTeam ? " · 带一队(调度台已上线)" : ""} · 任务运行中`);
         setIssues((prev) => prev.map((x) => (x.id === issue.id ? { ...x, status: "in_progress" } : x)));
         api.issueTasks(issue.id).then(setTasks).catch(() => {});
       }
@@ -125,8 +125,8 @@ export function IssueDetail({
     }
   };
 
-  // @ 菜单:每个装了的 CLI 一行「自己干」,支持常驻会话的再多一行「带一队」(能当指挥者)。
-  // 名单来自 /api/agents/detect —— 「谁能带队」只有执行者层知道,前端不抄。
+  // @ 菜单:每个装了的 CLI 一行「自己干」,支持常驻会话的再多一行「带一队」(能当调度者)。
+  // 名单来自 /api/agents/detect —— 「谁能带队」只有执行器层知道,前端不抄。
   const mentionOptions = useMemo(() => {
     const ok = (detected ?? []).filter((d) => d.available);
     // 探测还没回来(或失败)时先按内置默认的本地 claude 画,detected 到了自己纠正。
@@ -143,7 +143,7 @@ export function IssueDetail({
         .map((d) => ({
           value: `${d.type}:team`,
           label: `@${d.type} · 带一队`,
-          detail: "常驻指挥台,自己拆活派工人,你随时插话",
+          detail: "常驻调度台,自己拆活派执行者,你随时插话",
           icon: <UsersThree size={14} className="text-accent" />,
         })),
     ];
@@ -328,7 +328,7 @@ export function IssueDetail({
           <AttachmentChips attachments={attachments} onRemove={remove} error={error} />
         </div>
         <div className="mt-1.5 text-[11.5px] text-faint">
-          普通文字 = 评论讨论 · <b className="font-semibold text-accent">@claude</b> / <b className="font-semibold text-accent">@codex</b> = 交给它执行(把标题+描述+整条讨论一起打包发过去) · 点 <b className="font-semibold text-accent">@</b> 可以选「带一队」(指挥台带工人)
+          普通文字 = 评论讨论 · <b className="font-semibold text-accent">@claude</b> / <b className="font-semibold text-accent">@codex</b> = 交给它执行(把标题+描述+整条讨论一起打包发过去) · 点 <b className="font-semibold text-accent">@</b> 可以选「带一队」(调度台带执行者)
         </div>
         {project?.health.isRepo && !mentionTeam && (
           <label className="mt-1.5 inline-flex cursor-pointer items-center gap-1.5 text-[11.5px] text-faint" title="默认直接在项目仓库改;开启则隔离到 harness/<id8> 分支(你自行 merge),并能在下方看到它的提交">

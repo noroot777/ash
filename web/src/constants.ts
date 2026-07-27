@@ -1,7 +1,7 @@
 import type { TaskStatus, Priority } from "@harness/shared";
 
 // 完整状态 metadata。paused 跟 running 是「进行中」的两个面：前者跑到检查点等续跑，
-// 后者正在执行。idle 是团队指挥台专有状态：进程在线但这一刻没在说话（`/team`）。
+// 后者正在执行。idle 是团队调度台专有状态：进程在线但这一刻没在说话（`/team`）。
 // 它仍需要完整的图标、配色和 label，但任务列表不再为它单独渲染「待命」分组，而是把
 // idle 的团队任务归入「运行中」。分组顺序由下面的 STATUSES 单独维护。
 //

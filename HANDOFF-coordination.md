@@ -13,7 +13,7 @@
 2. **直接沟通的可能性**:「codex 那边可以 exec 调用 cli,claude 不也可以吗?直接让他们在 harness 里沟通不行吗?」
    结论:CLI 互调拉起的是无上下文的新实例,不是正在对话的那个 agent;通道必须走状态机 + 留痕。
 3. **对标 Orca**:用户让看 stablyai/orca,确认它的 Orchestration 层有 ask/reply 阻塞提问、decision gate、worker_done 严格确认、任务 DAG。又追问「原地阻塞等答复是怎么做到的,codex 也可以吗」——结论:阻塞 = 不返回的命令 + 消息总线 + 超时当检查点,任何能跑 shell 的 agent 都行,瓶颈在「谁来值班答题」。
-4. **把派单方搬进 harness**:「我现在一直是在 claude desktop 问你的,如果我在 harness 里直接跟 claude 说让他指挥 codex 干活,可不可以做到?」
+4. **把派单方搬进 harness**:「我现在一直是在 claude desktop 问你的,如果我在 harness 里直接跟 claude 说让他调度 codex 干活,可不可以做到?」
    结论:可以,harness 拉起的 claude 会自动读仓库 CLAUDE.md 和 harness MCP(全局配置),用「队列穿插 claude 验收任务」就能闭环。
 5. **要不要专门模式**:「是不是得让 harness 有个专门的模式会比较好?这样就不用每次都加上『读需求 X,按 CLAUDE.md 流程设计、派单』了,当时已有双 AI 模式,相当于再加一个?」
    我的判断(用户认可了动手,但**未必认可具体方案**):提示词模板靠项目文档解决;harness 该加的是三个**机制**——①角色前言注入、②提问路由(最值钱,pause 提问会堵死串行队列)、③worker 结束自动唤醒协调者。

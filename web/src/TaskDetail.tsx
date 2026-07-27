@@ -59,7 +59,7 @@ export function TaskDetail({
   const scrollRef = useRef<HTMLDivElement>(null);
   const { profiles, providers } = useExecutorProfiles();
 
-  // 拉会话 + 快照历史输出 + 拼条目流,都在 useConversation 里(/team 指挥台共用同
+  // 拉会话 + 快照历史输出 + 拼条目流,都在 useConversation 里(/team 调度台共用同
   // 一份装配,免得两个界面的「刷新后 vs 实时」各自漂移)。
   const { items, sessions, snapshot } = useConversation({
     task,
@@ -194,7 +194,7 @@ export function TaskDetail({
         {task.body && <CollapsibleText text={task.body} />}
 
         {/* agent 提问:调 ask_question 后停在这等答案(队列陪等,不会自动续跑)。
-            团队模式下指挥者通常会自动来答;用户也可以直接在这里答复唤醒。 */}
+            团队模式下调度者通常会自动来答;用户也可以直接在这里答复唤醒。 */}
         {task.question && <QuestionCard task={task} />}
 
         {/* 检查点续跑：paused 时露出 resumePrompt（agent 留下的「下次喂我什么」），

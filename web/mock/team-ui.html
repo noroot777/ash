@@ -164,29 +164,29 @@
 
   <div class="tabs">
     <button class="tab on" data-s="s2">② 团队主视图（核心）</button>
-    <button class="tab" data-s="s3">③ 点开某个工人的会话</button>
+    <button class="tab" data-s="s3">③ 点开某个执行者的会话</button>
     <button class="tab" data-s="s1">① 怎么启动（/team）</button>
     <button class="tab" data-s="s4">④ 列表里长什么样</button>
   </div>
 
   <!-- ════════════════ ② 主视图 ════════════════ -->
   <section class="screen on" id="s2">
-    <p class="note"><b>一句话：</b>中间是指挥者的对话流（跟你现在看单任务一样），派活时插一张「派活卡」，工人回话时插一条「⇢ 来自…」气泡；右边一条常驻工人栏，永远知道谁在干、谁卡住了。</p>
+    <p class="note"><b>一句话：</b>中间是调度者的对话流（跟你现在看单任务一样），派活时插一张「派活卡」，执行者回话时插一条「⇢ 来自…」气泡；右边一条常驻执行者栏，永远知道谁在干、谁卡住了。</p>
     <div class="app">
       <!-- header -->
       <div class="hd">
         <div class="hd-row">
           <span class="chip crew">团队</span>
           <h1>事项中心接 GitHub Issue 双向同步</h1>
-          <span class="pill"><span class="dot run"></span>指挥中</span>
+          <span class="pill"><span class="dot run"></span>调度中</span>
           <span class="pill">14m 20s</span>
           <button class="btn danger">停止全组</button>
           <button class="btn">归档</button>
         </div>
         <div class="req">把事项中心跟 GitHub Issue 做成双向同步：GitHub 上新建/改 issue 要落进我们的事项，我们这边改状态、加标签也要推回去。注意事项正文恒为用户原文这条约定不能破…<span class="more">展开</span></div>
         <div class="meta">
-          <span>指挥 <b>@claude</b></span>
-          <span>工人 <b>4</b>（codex×3 · claude×1）</span>
+          <span>调度者 <b>@claude</b></span>
+          <span>执行者 <b>4</b>（codex×3 · claude×1）</span>
           <span>分支 <span class="mono">harness/9f2ac1</span></span>
           <span class="count" style="margin-left:auto">
             <span><span class="dot run"></span>1 干活</span>
@@ -198,7 +198,7 @@
         <div class="wf">
           <div class="wf-hd">▾ 时间轴（谁跟谁在并行）</div>
           <div class="wf-body">
-            <div class="wf-name">指挥 @claude</div>
+            <div class="wf-name">调度者 @claude</div>
             <div class="track"><span class="bar done" style="left:0;width:14%"></span><span class="bar done" style="left:46%;width:6%"></span><span class="bar run" style="left:92%;width:8%"></span></div>
             <div class="wf-name">① 同步器骨架</div>
             <div class="track"><span class="bar run" style="left:15%;width:85%"></span></div>
@@ -218,7 +218,7 @@
         <span class="dot ask"></span>
         <span><b>② 入站 Webhook</b> 在等答复 · 已等 1m 42s</span>
         <span class="sp"></span>
-        <button class="btn sm">让指挥者答</button>
+        <button class="btn sm">让调度者答</button>
         <button class="btn sm primary">我来答</button>
       </div>
 
@@ -226,18 +226,18 @@
       <div class="split">
         <div class="feed">
           <div class="turn">
-            <div class="who"><span class="av lead">指</span><b>指挥者</b><span class="mono">claude · 12:04</span></div>
+            <div class="who"><span class="av lead">调</span><b>调度者</b><span class="mono">claude · 12:04</span></div>
             <div class="bd">先摸了 <code>issues</code> 表和 <code>routes.ts</code> 的事项端点。双向同步拆成四件事：骨架（表加 <code>github_number</code> + 同步器模块）、入站 webhook、出站推送、文档与约定。骨架必须先落，后两件依赖它，所以我把①放前面、③排在①后头，②④可以现在就并行。</div>
           </div>
 
           <div class="turn">
             <div class="disp">
-              <div class="disp-hd">⇥ <b>派活 · 4 个工人</b><span style="margin-left:auto" class="mono">12:05</span></div>
+              <div class="disp-hd">⇥ <b>派活 · 4 个执行者</b><span style="margin-left:auto" class="mono">12:05</span></div>
               <div class="row"><span class="dot run"></span><span class="row-t">① 同步器骨架 + issues 表加 github_number</span><span class="tag">codex</span><span class="row-s">运行中 9m</span></div>
               <div class="row"><span class="dot ask"></span><span class="row-t">② 入站：GitHub webhook → 事项</span><span class="tag">codex</span><span class="row-s">等答复</span></div>
               <div class="row"><span class="dot wait"></span><span class="row-t">③ 出站：事项变更 → GitHub</span><span class="tag">codex</span><span class="row-s">等①</span></div>
               <div class="row"><span class="dot done"></span><span class="row-t">④ 文档 + CLAUDE.md 约定</span><span class="tag">claude</span><span class="row-s">完成 3m12s</span></div>
-              <div class="disp-ft">点任一行 → 右侧滑出它的完整会话；也能单独重跑 / 换执行者</div>
+              <div class="disp-ft">点任一行 → 右侧滑出它的完整会话；也能单独重跑 / 换执行器</div>
             </div>
           </div>
 
@@ -254,21 +254,21 @@
               <div class="bd">GitHub 上把 label 删了，我们这边的 labels 要不要跟着删？强同步会覆盖用户在 harness 里手加的标签；不同步则两边会飘。选哪个？</div>
               <div class="qact">
                 <button class="btn sm primary">我来答</button>
-                <button class="btn sm">让指挥者答</button>
-                <span class="mono">指挥者已被叫醒，正在查…</span>
+                <button class="btn sm">让调度者答</button>
+                <span class="mono">调度者已被叫醒，正在查…</span>
               </div>
             </div>
           </div>
 
           <div class="turn">
-            <div class="who"><span class="av lead">指</span><b>指挥者</b><span class="mono">claude · 12:13</span><span class="dot run" style="margin-left:2px"></span></div>
+            <div class="who"><span class="av lead">调</span><b>调度者</b><span class="mono">claude · 12:13</span><span class="dot run" style="margin-left:2px"></span></div>
             <div class="bd">读了 <code>issueComments</code> 和事项详情页的标签编辑逻辑，本地手加标签是常规操作，不能被远端删掉。答复②：以 <span class="mono">gh:</span> 前缀区分来源标签，只同步带前缀的那批…</div>
           </div>
         </div>
 
         <!-- rail -->
         <aside class="rail">
-          <div class="rail-hd"><span>工人（4）</span><span>⌘1–4</span></div>
+          <div class="rail-hd"><span>执行者（4）</span><span>⌘1–4</span></div>
 
           <button class="wk">
             <div class="wk-top"><span class="dot run"></span><span class="wk-title">① 同步器骨架</span><span class="tag">codex</span></div>
@@ -292,12 +292,12 @@
             <div class="wk-sub"><span>完成 · 3m 12s</span><span>·</span><span>1 commit</span></div>
           </button>
 
-          <p class="rail-note">工人就是普通任务：能单独重跑、换执行者、看 diff。这条栏只是把它们钉在眼前。</p>
+          <p class="rail-note">执行者就是普通任务：能单独重跑、换执行器、看 diff。这条栏只是把它们钉在眼前。</p>
         </aside>
       </div>
 
       <div class="cmp">
-        <span class="chip crew">→ 指挥者</span>
+        <span class="chip crew">→ 调度者</span>
         <div class="fake">插一句话（改方向、加要求、直接替它拍板）…<span class="caret"></span></div>
         <button class="btn primary">发送 ⌘↵</button>
       </div>
@@ -306,32 +306,32 @@
 
   <!-- ════════════════ ③ 抽屉 ════════════════ -->
   <section class="screen" id="s3">
-    <p class="note"><b>一句话：</b>点工人 → 右侧滑出它自己的会话（就是现有单任务详情那套），不跳页、不丢指挥者上下文；抽屉底部能直接答它的问题、单独重跑。</p>
+    <p class="note"><b>一句话：</b>点执行者 → 右侧滑出它自己的会话（就是现有单任务详情那套），不跳页、不丢调度者上下文；抽屉底部能直接答它的问题、单独重跑。</p>
     <div class="app drawer-wrap">
       <div class="hd">
         <div class="hd-row">
           <span class="chip crew">团队</span>
           <h1>事项中心接 GitHub Issue 双向同步</h1>
-          <span class="pill"><span class="dot run"></span>指挥中</span>
+          <span class="pill"><span class="dot run"></span>调度中</span>
           <button class="btn danger">停止全组</button>
         </div>
       </div>
       <div class="split" style="min-height:392px">
         <div class="feed" style="filter:blur(.4px);opacity:.6">
           <div class="turn">
-            <div class="who"><span class="av lead">指</span><b>指挥者</b><span class="mono">claude · 12:04</span></div>
+            <div class="who"><span class="av lead">调</span><b>调度者</b><span class="mono">claude · 12:04</span></div>
             <div class="bd">先摸了 <code>issues</code> 表和事项端点，双向同步拆成四件事…</div>
           </div>
           <div class="turn">
             <div class="disp">
-              <div class="disp-hd">⇥ <b>派活 · 4 个工人</b></div>
+              <div class="disp-hd">⇥ <b>派活 · 4 个执行者</b></div>
               <div class="row"><span class="dot run"></span><span class="row-t">① 同步器骨架</span><span class="row-s">运行中</span></div>
               <div class="row"><span class="dot ask"></span><span class="row-t">② 入站 Webhook</span><span class="row-s">等答复</span></div>
             </div>
           </div>
         </div>
         <aside class="rail" style="filter:blur(.4px);opacity:.6">
-          <div class="rail-hd"><span>工人（4）</span></div>
+          <div class="rail-hd"><span>执行者（4）</span></div>
           <button class="wk ask sel"><div class="wk-top"><span class="dot ask"></span><span class="wk-title">② 入站 Webhook</span></div></button>
         </aside>
       </div>
@@ -354,7 +354,7 @@
         </div>
         <div class="dr-bd">
           <div class="turn">
-            <div class="who"><span class="av wk">派</span><b>指挥者派的活</b></div>
+            <div class="who"><span class="av wk">派</span><b>调度者派的活</b></div>
             <div class="bd">实现 GitHub → 事项的入站同步：验签、去重（按 <code>github_number</code>）、映射 open/closed 到我们的状态。别动事项正文。</div>
           </div>
           <div class="turn">
@@ -363,13 +363,13 @@
           </div>
           <div class="turn">
             <div class="inbound q">
-              <div class="who" style="margin-bottom:3px"><span class="av wk">②</span><b>提问 · 已送给指挥者</b><span class="mono">12:12</span></div>
+              <div class="who" style="margin-bottom:3px"><span class="av wk">②</span><b>提问 · 已送给调度者</b><span class="mono">12:12</span></div>
               <div class="bd">GitHub 上把 label 删了，我们这边要不要跟着删？</div>
             </div>
           </div>
         </div>
         <div class="dr-ft">
-          <div class="fake" style="flex:1;border:1px solid var(--line2);border-radius:8px;padding:7px 10px;color:var(--faint)">直接答它（会绕过指挥者，立刻续跑）…</div>
+          <div class="fake" style="flex:1;border:1px solid var(--line2);border-radius:8px;padding:7px 10px;color:var(--faint)">直接答它（会绕过调度者，立刻续跑）…</div>
           <button class="btn primary sm">答复并唤醒</button>
         </div>
       </div>
@@ -378,7 +378,7 @@
 
   <!-- ════════════════ ① 启动 ════════════════ -->
   <section class="screen" id="s1">
-    <p class="note"><b>一句话：</b>跟 <span class="mono">/pair</span> 同一个入口——输入框敲 <span class="mono">/</span>，多一条「团队」。选中后属性条只多两个旋钮：谁当指挥、工人用什么。别的都由指挥者自己定。</p>
+    <p class="note"><b>一句话：</b>跟 <span class="mono">/pair</span> 同一个入口——输入框敲 <span class="mono">/</span>，多一条「团队」。选中后属性条只多两个旋钮：谁当调度者、执行者用什么。别的都由调度者自己定。</p>
     <div class="modal">
       <div class="modal-hd"><span class="chip crew">团队</span><span>新建 · harness</span><span style="margin-left:auto" class="mono">⌘K</span></div>
       <div class="ta">
@@ -386,12 +386,12 @@
         <div class="picker">
           <div class="pk-hd"><span class="chip pair">/</span><span>↑↓ 选，回车确定</span></div>
           <div class="pk"><span class="ic" style="background:var(--violet-bg);color:var(--violet)">⚖</span><span><span class="t">辩论 · 给你答案</span><span class="h">两个 AI 对抗到收敛</span></span></div>
-          <div class="pk on"><span class="ic" style="background:var(--violet-bg);color:var(--violet)">⇥</span><span><span class="t">团队 · 一个头儿带一队</span><span class="h">指挥者自己拆活、派给多个 agent、验收</span></span></div>
+          <div class="pk on"><span class="ic" style="background:var(--violet-bg);color:var(--violet)">⇥</span><span><span class="t">团队 · 一个调度者带一队</span><span class="h">调度者自己拆活、派给多个 agent、验收</span></span></div>
         </div>
       </div>
       <div class="pills">
-        <span class="p2">指挥 <b>@claude</b></span>
-        <span class="p2">工人默认 <b>@codex</b></span>
+        <span class="p2">调度者 <b>@claude</b></span>
+        <span class="p2">执行者默认 <b>@codex</b></span>
         <span class="p2">分组 <b>自动新建</b></span>
         <span class="p2">优先级 <b>无</b></span>
       </div>
@@ -401,12 +401,12 @@
         <button class="btn primary">创建并开工 ⌘↵</button>
       </div>
     </div>
-    <p class="note" style="margin-top:12px">敲完一句「把事项中心接上 GitHub Issue 双向同步」→ 回车。剩下的拆几件、谁先谁后、派给谁，指挥者自己定；你只在「工人提问」和「有人挂了」这两种时候被叫。工人默认跟指挥者同目录跑，要隔离由指挥者派活时逐个开。</p>
+    <p class="note" style="margin-top:12px">敲完一句「把事项中心接上 GitHub Issue 双向同步」→ 回车。剩下的拆几件、谁先谁后、派给谁，调度者自己定；你只在「执行者提问」和「有人挂了」这两种时候被叫。执行者默认跟调度者同目录跑，要隔离由调度者派活时逐个开。</p>
   </section>
 
   <!-- ════════════════ ④ 列表 ════════════════ -->
   <section class="screen" id="s4">
-    <p class="note"><b>一句话：</b>列表里团队任务是一行父任务 + 缩进的工人行（默认折叠成一行摘要）。工人是真任务，所以归档和筛选全都照旧能看见它们。</p>
+    <p class="note"><b>一句话：</b>列表里团队任务是一行父任务 + 缩进的执行者行（默认折叠成一行摘要）。执行者是真任务，所以归档和筛选全都照旧能看见它们。</p>
     <div class="app">
       <div class="lst">
         <div class="li"><span class="dot run"></span><span class="chip crew">团队</span><span class="t">事项中心接 GitHub Issue 双向同步</span><span class="mono">1 等答复 · 1 干活 · 1 排队 · 1 完成</span><span class="tag">claude</span><span class="mono">14m</span></div>
@@ -418,7 +418,7 @@
         <div class="li"><span class="dot fail"></span><span class="t">修 mobile 拖选手柄</span><span class="tag">codex</span><span class="mono">失败</span></div>
       </div>
     </div>
-    <p class="note" style="margin-top:12px">折叠态（默认）：父任务那一行的「1 等答复 · 1 干活 · …」就是全部信息，点箭头才展开工人。</p>
+    <p class="note" style="margin-top:12px">折叠态（默认）：父任务那一行的「1 等答复 · 1 干活 · …」就是全部信息，点箭头才展开执行者。</p>
   </section>
 
 </div>

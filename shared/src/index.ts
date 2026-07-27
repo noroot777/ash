@@ -69,7 +69,7 @@ export interface Group {
   mode: GroupMode;
   paused: boolean; // 暂停 = 立刻冻结整组：调度器不再启动"还没开始"的任务，正在运行的也会被停掉（结算为 canceled，可继续）；再次「运行/继续」时恢复，被停的任务从中断处接着跑
   // 内部组（§Team）：非空 = 这个组是某个团队任务(mode:"team")派活时自动建的，
-  // 它的成员都是那个任务的工人。分组管理界面不列它 —— 用户在团队视图里看。
+  // 它的成员都是那个任务的执行者。分组管理界面不列它 —— 用户在团队视图里看。
   ownerTaskId?: string | null;
   createdAt: string;
 }
@@ -80,7 +80,7 @@ export type TaskStatus =
   | "backlog"
   | "queued"
   | "running"
-  | "idle" // 只有 team：指挥台在线但这一刻没在说话（没有「完成」这个终态，归档才结束）
+  | "idle" // 只有 team：调度台在线但这一刻没在说话（没有「完成」这个终态，归档才结束）
   | "awaiting_review"
   | "paused" // 跑到检查点：agent 主动调 pause_task 后留下 resumePrompt，等依赖满足或用户手动继续
   | "done"
@@ -145,10 +145,10 @@ export interface Task {
   executorLabel?: string | null;
   // debate mode config (§7):
   debate?: DebateConfig;
-  // team mode config (§Team)：指挥者 + 默认工人类型。只有 mode:"team" 的任务有。
+  // team mode config (§Team)：调度者 + 默认执行者类型。只有 mode:"team" 的任务有。
   team?: TeamConfig;
-  // 工人旗标（§Team）：这个工人做完(done)要不要汇报给指挥者。派活时逐个指定；
-  // false = 静默完成（UI 自己会更新，不花一轮模型调用去叫醒指挥者）。
+  // 执行者旗标（§Team）：这个执行者做完(done)要不要汇报给调度者。派活时逐个指定；
+  // false = 静默完成（UI 自己会更新，不花一轮模型调用去叫醒调度者）。
   reportBack?: boolean;
   scheduleId?: string | null;
   createdAt: string;
@@ -189,8 +189,8 @@ export interface Task {
   resumePrompt?: string | null;
   // 提问（§Team）：agent 在执行中调 ask_question 留下的问题。结算时此字段非空 →
   // 状态落 paused 且**队列不推进也不自动续跑**（区别于 resumePrompt 检查点），
-  // 同时通知它的指挥者；answer_question 清空它并带着答复 resume 会话。
-  // 团队任务自己也能用它 —— 那就是「指挥者在问用户」。null = 没有待答复的问题。
+  // 同时通知它的调度者；answer_question 清空它并带着答复 resume 会话。
+  // 团队任务自己也能用它 —— 那就是「调度者在问用户」。null = 没有待答复的问题。
   question?: string | null;
   // 提问的候选答案：agent 调 ask_question 时可选地附上的几个候选，网页把它们渲染
   // 成可点按钮 —— 点一下等价于把该选项**原文**填进答复框发出去，所以答复链路
@@ -218,14 +218,14 @@ export const MAX_QUESTION_OPTION_LEN = 200;
 export const MAX_QUESTION_ITEMS = 4;
 
 // ── Team (§Team) ─────────────────────────────────────────────────────────────
-// 一个 mode:"team" 的任务 = 一个常驻的「指挥台」：进程不退、会话不断，你随时插话；
-// 它用 MCP 的 dispatch 派出真任务当工人（工人挂在 parentId 上，成批地放进自动建的
-// 内部组里，串行批次还配 queue）。指挥者没有「完成」这个状态，只有忙/闲。
+// 一个 mode:"team" 的任务 = 一个常驻的「调度台」：进程不退、会话不断，你随时插话；
+// 它用 MCP 的 dispatch 派出真任务当执行者（执行者挂在 parentId 上，成批地放进自动建的
+// 内部组里，串行批次还配 queue）。调度者没有「完成」这个状态，只有忙/闲。
 export interface TeamConfig {
-  lead: AgentType; // 指挥者的 CLI 类型 —— 必须支持常驻会话（见 executors 的 openResident）
-  worker: AgentType; // 派活时的默认工人类型（dispatch 可逐个覆盖）
-  leadExecutorId?: string | null; // 指挥者具体执行者；缺省/悬空 → lead 类型默认执行者
-  workerExecutorId?: string | null; // 默认工人具体执行者；缺省/悬空 → worker 类型默认执行者
+  lead: AgentType; // 调度者的 CLI 类型 —— 必须支持常驻会话（见 executors 的 openResident）
+  worker: AgentType; // 派活时的默认执行者类型（dispatch 可逐个覆盖）
+  leadExecutorId?: string | null; // 调度者具体执行器；缺省/悬空 → lead 类型默认执行器
+  workerExecutorId?: string | null; // 执行者任务的默认执行器；缺省/悬空 → worker 类型默认执行器
   leadExecutorLabel?: string | null; // server 只读展示字段
   workerExecutorLabel?: string | null; // server 只读展示字段
 }
@@ -243,11 +243,11 @@ export const ISSUE_STATUSES: IssueStatus[] = ["open", "in_progress", "done", "ca
 // Which AI handled the parse/recognition for an issue — always a concrete local
 // CLI executor (AgentExecutorProfile.id). There is no direct-HTTP path: a provider
 // is just an attribute of an executor, not a separate backend.
-// 历史数据里的旧格式({kind:'cli'|'api',…})没有 executorId,读到就降级为默认执行者。
+// 历史数据里的旧格式({kind:'cli'|'api',…})没有 executorId,读到就降级为默认执行器。
 export type AiBackend = { executorId: string };
 
 // ── 供应商 (relay, system-level) ─────────────────────────────────────────────
-// 一个可挂到执行者上的模型来源:官方 API 端点,或第三方代理/聚合服务。挂上后启动 CLI 时注入
+// 一个可挂到执行器上的模型来源:官方 API 端点,或第三方代理/聚合服务。挂上后启动 CLI 时注入
 // base_url + key,顶掉 CLI 自己的登录账号 —— 于是 claude@官方 和 claude@公司
 // 可以并存。全局(不分项目)。harness 自己不再直连它调模型。
 export type LlmProtocol = "anthropic" | "openai";
@@ -421,8 +421,8 @@ export function normalizeDebateConfig(value: unknown): DebateConfig {
 }
 
 // ── Sessions / traceability (§13) ─────────────────────────────────────────────
-// "lead" = 团队任务的常驻指挥台会话（一个进程跑很多回合，见 server/src/team）；
-// 工人自己的会话仍是 "single"。
+// "lead" = 团队任务的常驻调度台会话（一个进程跑很多回合，见 server/src/team）；
+// 执行者自己的会话仍是 "single"。
 export type SessionRole =
   | "single"
   | "lead"
@@ -495,7 +495,7 @@ export type AgentEvent =
   | { kind: "session"; cliSessionId: string }
   | { kind: "system"; text: string } // a backend-initiated 〔系统〕 trace (e.g. 继续) — its own bubble, not agent text
   | { kind: "error"; message: string }
-  // 常驻会话（team 指挥台）专用：一个回合说完了，但进程还活着等下一条消息。
+  // 常驻会话（team 调度台）专用：一个回合说完了，但进程还活着等下一条消息。
   // 一次性 run() 永远不发这个 —— 它的回合结束就是进程结束(done)。
   | { kind: "turnEnd" }
   | { kind: "done"; exitStatus: number };

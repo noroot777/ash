@@ -121,8 +121,8 @@ export const api = {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ answer }),
     }).then(j),
-  // 「停止全组」:杀掉指挥台常驻进程 + 暂停它所有内部组(在跑的工人落 paused,
-  // 可从中断处恢复)。指挥者本身落 idle —— 再说一句话就把它接回同一会话。
+  // 「停止全组」:杀掉调度台常驻进程 + 暂停它所有内部组(在跑的执行者落 paused,
+  // 可从中断处恢复)。调度者本身落 idle —— 再说一句话就把它接回同一会话。
   teamHalt: (id: string): Promise<{ ok: true }> =>
     fetch(`/api/tasks/${id}/team/halt`, { method: "POST" }).then(j),
   teamCuaStatus: (id: string): Promise<TeamCuaStatus> =>
@@ -227,7 +227,7 @@ export const api = {
     fetch(`/api/scheduled-messages/${mid}`, { method: "DELETE" }).then(j),
 
   agents: (): Promise<AgentExecutorProfile[]> => fetch("/api/agents").then(j),
-  /** `resident` = 这个类型的执行者支持常驻会话（openResident），也就是能当 /team 的指挥者。 */
+  /** `resident` = 这个类型的执行器支持常驻会话（openResident），也就是能当 /team 的调度者。 */
   detectAgents: (): Promise<
     { type: AgentType; bin: string; available: boolean; path: string | null; version: string | null; resident: boolean }[]
   > => fetch("/api/agents/detect").then(j),
@@ -273,7 +273,7 @@ export const api = {
   // server classifies intent: "execute" derives a task (returns task); "discuss"
   // spawns a one-shot CLI reply and returns a pending agent comment that gets
   // filled in by polling (the discussion view refreshes while status=pending).
-  // `mentionTeam`：被 @ 的那个类型当**指挥者**带一队（mode:"team"），而不是自己单干。
+  // `mentionTeam`：被 @ 的那个类型当**调度者**带一队（mode:"team"），而不是自己单干。
   postIssueComment: (id: string, body: { body: string; mention?: AgentType; mentionTeam?: boolean; attachments?: string[]; useWorktree?: boolean }): Promise<{ comment: IssueComment; task?: Task; agentComment?: IssueComment }> =>
     fetch(`/api/issues/${id}/comments`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }).then(j),
   patchIssueComment: (issueId: string, cid: string, patch: { body?: string; attachments?: string[] }): Promise<IssueComment> =>

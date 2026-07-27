@@ -1,7 +1,7 @@
-// /team 右侧常驻工人栏:永远知道谁在干、谁卡住了。点一张卡 → 右侧滑出它自己的
-// 会话抽屉(TeamView 里的 WorkerDrawer),不跳页、不丢指挥者上下文。
+// /team 右侧常驻执行者栏:永远知道谁在干、谁卡住了。点一张卡 → 右侧滑出它自己的
+// 会话抽屉(TeamView 里的 WorkerDrawer),不跳页、不丢调度者上下文。
 //
-// 卡片上的「实时最后一行」只有在本次会话里收到过 SSE 的工人才有(刷新后 logs 是空
+// 卡片上的「实时最后一行」只有在本次会话里收到过 SSE 的执行者才有(刷新后 logs 是空
 // 的),所以它是锦上添花,不承载必要信息 —— 必要信息在状态行里。
 import { useEffect } from "react";
 import type { Group, Task } from "@harness/shared";
@@ -24,7 +24,7 @@ export function WorkerRail({
   onSelect: (id: string) => void;
 }) {
   const groupById = new Map(groups.map((g) => [g.id, g]));
-  // 1–9 直接点开第 N 个工人。用裸数字而不是 ⌘1–9:浏览器把 ⌘+数字占去切标签了,
+  // 1–9 直接点开第 N 个执行者。用裸数字而不是 ⌘1–9:浏览器把 ⌘+数字占去切标签了,
   // 承诺一个按不出来的快捷键不如给个真能用的。App 的全局键位没有数字键,不冲突。
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -45,12 +45,12 @@ export function WorkerRail({
   return (
     <aside className="min-h-0 overflow-y-auto bg-canvas px-3 py-3.5">
       <div className="mb-2 flex items-center justify-between text-[11px] uppercase tracking-[0.06em] text-faint">
-        <span>工人（{workers.length}）</span>
+        <span>执行者（{workers.length}）</span>
         {workers.length > 0 && <span className="normal-case tracking-normal">按 1–9</span>}
       </div>
       {workers.length === 0 && (
         <p className="text-[11.5px] leading-relaxed text-faint">
-          指挥者还没派活。它会自己拆活、调 <span className="font-mono">dispatch</span> 派出去,派出来的工人在这里排着。
+          调度者还没派活。它会自己拆活、调 <span className="font-mono">dispatch</span> 派出去,派出来的执行者在这里排着。
         </p>
       )}
       {workers.map((w, i) => (
@@ -66,7 +66,7 @@ export function WorkerRail({
       ))}
       {workers.length > 0 && (
         <p className="mt-2.5 px-0.5 text-[11px] leading-relaxed text-faint">
-          工人就是普通任务:能单独重跑、换执行者、看 diff。这条栏只是把它们钉在眼前。
+          执行者就是普通任务:能单独重跑、换执行器、看 diff。这条栏只是把它们钉在眼前。
         </p>
       )}
     </aside>
@@ -160,7 +160,7 @@ export function WorkerStatusText({ w, groupPaused = false }: { w: Task; groupPau
   }
 }
 
-// 工人最近吐的一行:优先正文尾部,否则最近一次工具调用。
+// 执行者最近吐的一行:优先正文尾部,否则最近一次工具调用。
 function lastLine(lines?: LogLine[]): string | null {
   if (!lines?.length) return null;
   for (let i = lines.length - 1; i >= 0; i--) {

@@ -54,7 +54,7 @@ export class ClaudeExecutor implements AgentExecutor {
     return { sessionId, commandLine, events: parseClaudeStream(child), kill: () => killChild(child) };
   }
 
-  // 常驻会话(§Team 的指挥台):一个进程吃多个回合,session_id 全程不变。跟 run()
+  // 常驻会话(§Team 的调度台):一个进程吃多个回合,session_id 全程不变。跟 run()
   // 的差别只有两处 —— `--input-format stream-json`(首条消息和后续插话都是一行
   // JSON)和不关 stdin。实测事实与坑写在 server/src/team/session.ts 头部注释。
   openResident(opts: RunOpts): ResidentHandle {

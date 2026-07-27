@@ -8,14 +8,14 @@ import type { TaskStatus } from "@harness/shared";
 //   唯一「不动手就永远停在这」的状态。它不是一个 TaskStatus，而是「paused/idle +
 //   question 非空」的组合，所以走 awaitingAnswer 这个额外入参，不进 COLOR 表。
 // - 检查点 paused（harness 自己会续跑，不用人管）让位到蓝灰 #64748b。
-// - idle 是团队指挥台专有：在线待命，空心圈 + 中心小点。
+// - idle 是团队调度台专有：在线待命，空心圈 + 中心小点。
 const COLOR: Record<TaskStatus, string> = {
   backlog: "#9ca1a9",
   queued: "#9499a1",
   running: "#e2b203", // Linear in-progress yellow
   awaiting_review: "#8b5cf6",
   paused: "#64748b", // 蓝灰：跑到检查点等续跑，harness 自己会推进——不该抢注意力
-  idle: "#64748b", // 指挥台在线但这一刻没在说话
+  idle: "#64748b", // 调度台在线但这一刻没在说话
   done: "#5e6ad2", // Linear done indigo
   failed: "#eb5757",
   canceled: "#9ca1a9",
@@ -86,7 +86,7 @@ export function StatusIcon({
     case "awaiting_review":
       return ring(pie(0.7));
     case "idle":
-      // 指挥台待命：空心圈 + 中心一个小点（「在线，但没在说话」）。
+      // 调度台待命：空心圈 + 中心一个小点（「在线，但没在说话」）。
       return ring(<circle cx="7" cy="7" r="1.6" fill={c} />);
     case "paused":
       // 虚线 ring（等待中）+ 经典的两根小竖条（pause 视觉语言）。蓝灰色，

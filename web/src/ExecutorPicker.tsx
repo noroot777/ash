@@ -71,7 +71,7 @@ export function executorOptions({
       options.push({
         value: typeDefaultExecutorValue(type),
         label: `按 ${type} 类型默认`,
-        detail: def ? `默认 · 当前会用 ${def.name}` : "默认 · 跟随该类型当前默认执行者",
+        detail: def ? `默认 · 当前会用 ${def.name}` : "默认 · 跟随该类型当前默认执行器",
         icon: <Robot size={14} />,
       });
     }
@@ -85,7 +85,7 @@ export function executorOptions({
     }
   }
   if (includeManage) {
-    options.push({ value: MANAGE_EXECUTORS, label: "管理执行器…", detail: "注册执行者 / 配置供应商", icon: <GearSix size={14} /> });
+    options.push({ value: MANAGE_EXECUTORS, label: "管理执行器…", detail: "注册执行器 / 配置供应商", icon: <GearSix size={14} /> });
   }
   return options;
 }

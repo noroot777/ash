@@ -18,7 +18,7 @@ export const groups = sqliteTable("groups", {
   mode: text("mode").notNull().default("parallel"), // parallel | serial
   paused: integer("paused", { mode: "boolean" }).notNull().default(false),
   // 内部组：非空 = 这个组由某个团队任务(mode:"team")派活时自动创建，成员都是它的
-  // 工人。分组管理界面按此过滤掉（见 §Team）。
+  // 执行者。分组管理界面按此过滤掉（见 §Team）。
   ownerTaskId: text("owner_task_id"),
   createdAt: text("created_at").notNull(),
 });
@@ -37,11 +37,11 @@ export const tasks = sqliteTable("tasks", {
   dependsOn: text("depends_on").notNull().default("[]"), // json
   resumeDependsOn: text("resume_depends_on").notNull().default("[]"), // json
   agentType: text("agent_type"),
-  executorId: text("executor_id"), // agents.id；非空时优先使用具体执行者，空则按 agentType 默认降级
+  executorId: text("executor_id"), // agents.id；非空时优先使用具体执行器，空则按 agentType 默认降级
   autoTitle: integer("auto_title", { mode: "boolean" }).notNull().default(false),
   debate: text("debate"), // json DebateConfig
-  team: text("team"), // json TeamConfig（mode:"team" 的指挥者/默认工人类型）
-  // 工人旗标：done 时是否汇报给指挥者（dispatch 时逐个指定）。
+  team: text("team"), // json TeamConfig（mode:"team" 的调度者/默认执行者类型）
+  // 执行者旗标：done 时是否汇报给调度者（dispatch 时逐个指定）。
   reportBack: integer("report_back", { mode: "boolean" }).notNull().default(false),
   scheduleId: text("schedule_id"),
   createdAt: text("created_at").notNull(),
@@ -160,7 +160,7 @@ export const issues = sqliteTable("issues", {
   priority: text("priority").notNull().default("none"),
   labels: text("labels").notNull().default("[]"), // json
   attachments: text("attachments").notNull().default("[]"), // json: absolute file paths
-  aiBackend: text("ai_backend"), // json AiBackend({executorId}); 旧格式 {kind:…} 读到就降级为默认执行者
+  aiBackend: text("ai_backend"), // json AiBackend({executorId}); 旧格式 {kind:…} 读到就降级为默认执行器
   parsed: integer("parsed", { mode: "boolean" }).notNull().default(false),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
@@ -204,7 +204,7 @@ export const queueItems = sqliteTable(
   }),
 );
 
-// 供应商(relay), system-level. 挂给执行者用:启动 CLI 时注入 base_url + key,
+// 供应商(relay), system-level. 挂给执行器用:启动 CLI 时注入 base_url + key,
 // 顶掉 CLI 自己的官方登录账号。harness 自己不再直连 HTTP 调模型。
 export const llmProviders = sqliteTable("llm_providers", {
   id: text("id").primaryKey(),

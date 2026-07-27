@@ -21,7 +21,7 @@ type SlashAction =
 
 const SLASH_COMMANDS: SlashAction[] = [
   { cmd: "pair", kind: "pair", label: "辩论", hint: "两个 AI 对抗，给你答案", icon: <Scales size={17} className="shrink-0 text-violet-600" /> },
-  { cmd: "team", kind: "team", label: "团队", hint: "一个指挥者带一队工人，你随时插话", icon: <UsersThree size={17} className="shrink-0 text-accent" /> },
+  { cmd: "team", kind: "team", label: "团队", hint: "一个调度者带一队执行者，你随时插话", icon: <UsersThree size={17} className="shrink-0 text-accent" /> },
 ];
 
 
@@ -69,9 +69,9 @@ export function CreateTask({
   const [at, setAt] = useState(""); // datetime-local value (once)
   const [cron, setCron] = useState("0 9 * * *"); // 5-field expr (cron)
   const [slashIdx, setSlashIdx] = useState(0); // highlighted row in the slash-command picker
-  // 团队模式(`/team`):不跳新弹窗,就地把这张单子改成「建一个常驻指挥台」。
+  // 团队模式(`/team`):不跳新弹窗,就地把这张单子改成「建一个常驻调度台」。
   // lead/worker 存的是**用户显式挑过的那个**,没挑就现算(见下面的 lead/worker) ——
-  // 这样本机执行者的探测结果晚到也能把缺省补对,而用户挑过的永远不被覆盖。
+  // 这样本机执行器的探测结果晚到也能把缺省补对,而用户挑过的永远不被覆盖。
   const [teamOn, setTeamOn] = useState(false);
   const [leadPick, setLeadPick] = useState<ExecutorSelection | null>(null);
   const [workerPick, setWorkerPick] = useState<ExecutorSelection | null>(null);
@@ -112,14 +112,14 @@ export function CreateTask({
     return () => { alive = false; };
   }, [teamOn, detected]);
 
-  // 「指挥」只能挑支持常驻会话的执行者(openResident,目前是 claude)—— 指挥台要一个
+  // 「调度者」只能挑支持常驻会话的执行器(openResident,目前是 claude)—— 调度台要一个
   // 进程吃很多回合,不支持的 CLI 根本当不了。探测失败就退回内置缺省,别把下拉变空。
   const leadTypes = useMemo(() => {
     const ok = (detected ?? []).filter((d) => d.available && d.resident).map((d) => d.type);
     return ok.length ? ok : [TEAM_DEFAULTS.lead];
   }, [detected]);
-  // 工人不限类型(它们是普通一次性任务)。缺省挑一个跟指挥者**不同**类型的本机执行者
-  // —— 换个视角干活;都没有就跟指挥者同类型。
+  // 执行者不限类型(它们是普通一次性任务)。缺省挑一个跟调度者**不同**类型的本机执行器
+  // —— 换个视角干活;都没有就跟调度者同类型。
   const workerTypes = useMemo(() => {
     const ok = (detected ?? []).filter((d) => d.available).map((d) => d.type);
     return ok.length ? ok : [...AGENT_TYPES];
@@ -179,18 +179,18 @@ export function CreateTask({
         body: obj,
         attachments: attachments.map((a) => a.path),
         mode: teamOn ? "team" : "single",
-        // 团队任务的执行者由 team.lead 决定;agentType 跟着填一份,好让只认这个字段的
+        // 团队任务的执行器由 team.lead 决定;agentType 跟着填一份,好让只认这个字段的
         // 列表/徽标显示对。
         agentType: teamOn ? lead : executorPick.agentType,
         executorId: teamOn ? null : executorPick.executorId,
         ...(teamOn ? { team } : {}),
         priority,
         labels,
-        // 指挥台不走「首个 agent 自动起名」那套协议(它是常驻会话,没有那个回合),
-        // 标题先取第一行,用户在指挥台 header 上随时改。
+        // 调度台不走「首个 agent 自动起名」那套协议(它是常驻会话,没有那个回合),
+        // 标题先取第一行,用户在调度台 header 上随时改。
         autoTitle: !teamOn,
-        // 团队模式不给指挥台开 worktree:工人是各自独立的任务、跑在项目目录,
-        // 只把指挥者挪进 worktree 只会让两边看到不同的文件。隔离在派活时逐个开。
+        // 团队模式不给调度台开 worktree:执行者是各自独立的任务、跑在项目目录,
+        // 只把调度者挪进 worktree 只会让两边看到不同的文件。隔离在派活时逐个开。
         useWorktree: project.health.isRepo && !teamOn ? useWorktree : false,
         worktreeBase: !teamOn && useWorktree && base ? base : null,
       });
@@ -313,7 +313,7 @@ export function CreateTask({
             }}
             placeholder={
               teamOn
-                ? "给指挥者的目标…（它会自己拆活、派工人、有问题问你）"
+                ? "给调度者的目标…（它会自己拆活、派执行者、有问题问你）"
                 : "描述要做什么 / 给 agent 的目标…（输入 / 唤起命令：/pair 双 AI 辩论，/team 一队）"
             }
             className={`resize-none bg-transparent text-[15px] leading-relaxed text-ink outline-none placeholder:text-faint ${
@@ -324,7 +324,7 @@ export function CreateTask({
             {teamOn ? (
               <>
                 <UsersThree size={12} weight="fill" className="text-accent/70" />
-                指挥者常驻不断线：随时插话改方向；标题先取第一行，之后在指挥台上改
+                调度者常驻不断线：随时插话改方向；标题先取第一行，之后在调度台上改
               </>
             ) : (
               <>
@@ -368,7 +368,7 @@ export function CreateTask({
                 profiles={profiles}
                 providers={providers}
                 types={leadTypes}
-                label={`指挥 ${profiles.find((a) => a.id === leadSelection.executorId)?.name ?? `默认 ${lead}`}`}
+                label={`调度者 ${profiles.find((a) => a.id === leadSelection.executorId)?.name ?? `默认 ${lead}`}`}
                 includeManage={!!onOpenAgents}
                 onOpenAgents={onOpenAgents}
                 menuWidth={320}
@@ -380,7 +380,7 @@ export function CreateTask({
                 profiles={profiles}
                 providers={providers}
                 types={workerTypes}
-                label={`工人 ${profiles.find((a) => a.id === workerSelection.executorId)?.name ?? `默认 ${worker}`}`}
+                label={`执行者 ${profiles.find((a) => a.id === workerSelection.executorId)?.name ?? `默认 ${worker}`}`}
                 includeManage={!!onOpenAgents}
                 onOpenAgents={onOpenAgents}
                 menuWidth={320}
