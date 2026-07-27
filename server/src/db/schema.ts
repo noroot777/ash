@@ -60,6 +60,10 @@ export const tasks = sqliteTable("tasks", {
   // 提问：agent 调 ask_question 时填进来。结算落 paused 且队列不自动续跑，
   // 等 answer_question 清空并带答复 resume（见 scheduler.pickNextLaunchable 的挡板）。
   question: text("question"),
+  // 提问的候选答案（json string[]）：ask_question 可选地附几个候选，网页在问题下方
+  // 渲染成可点按钮（点一下 = 以该选项原文当答复送出，走的还是同一个 /answer）。
+  // null/[] = 纯自由作答。答复时与 question 一起清空。
+  questionOptions: text("question_options"),
 });
 
 export const agents = sqliteTable("agents", {

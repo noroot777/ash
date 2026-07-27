@@ -186,7 +186,18 @@ export interface Task {
   // 同时通知它的指挥者；answer_question 清空它并带着答复 resume 会话。
   // 团队任务自己也能用它 —— 那就是「指挥者在问用户」。null = 没有待答复的问题。
   question?: string | null;
+  // 提问的候选答案：agent 调 ask_question 时可选地附上的几个候选，网页把它们渲染
+  // 成可点按钮 —— 点一下等价于把该选项**原文**填进答复框发出去，所以答复链路
+  // （/answer → resume 会话）跟自由作答完全一样，选项只是省掉打字。
+  // null/[] = 没给候选，只能自由作答。
+  questionOptions?: string[] | null;
 }
+
+// 候选答案的上限：server 校验、MCP 工具描述、网页渲染共用这一处来源（写死两遍
+// 必然改一处漏一处）。超限一律 400 而不是静默截断 —— 悄悄砍掉一个候选，agent
+// 以为它还在、用户压根没见过，两边对不上。
+export const MAX_QUESTION_OPTIONS = 6;
+export const MAX_QUESTION_OPTION_LEN = 200;
 
 // ── Team (§Team) ─────────────────────────────────────────────────────────────
 // 一个 mode:"team" 的任务 = 一个常驻的「指挥台」：进程不退、会话不断，你随时插话；
@@ -448,6 +459,10 @@ export type DebateSpeaker = "A" | "B" | "impl" | "review" | "user";
 export type ServerEvent =
   | { type: "task.status"; taskId: string; status: TaskStatus; startedAt?: string | null; endedAt?: string | null; activeMs?: number | null; liveSince?: string | null }
   | { type: "task.title"; taskId: string; title: string }
+  // 提问态变化（§Team）：agent 调 ask_question 提问、或答复把它清空。task.status
+  // 只带状态字段，question 不跟着走 —— 少了这条事件，卡片要等下次全量拉取才出现/
+  // 消失（答复完卡片还杵在那，像是没答上）。question=null 即「已答复，撤掉卡片」。
+  | { type: "task.question"; taskId: string; question: string | null; questionOptions: string[] | null }
   | {
       type: "agent.event";
       taskId: string;

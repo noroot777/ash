@@ -107,6 +107,14 @@ export function App() {
         setTaskBump((n) => n + 1); // keep an open issue's derived-task list live
       } else if (ev.type === "task.title") {
         setTasks((ts) => ts.map((t) => (t.id === ev.taskId ? { ...t, title: ev.title } : t)));
+      } else if (ev.type === "task.question") {
+        // 提问卡片的出现/消失走这条:agent 一提问卡片就冒出来,答复一成功就撤掉,
+        // 不用等下次全量拉取(task.status 不带 question)。
+        setTasks((ts) =>
+          ts.map((t) =>
+            t.id === ev.taskId ? { ...t, question: ev.question, questionOptions: ev.questionOptions } : t,
+          ),
+        );
       } else if (ev.type === "agent.event") {
         // 团队指挥台(role:"lead")跟单任务共用一条日志流:它的回合、用户插话、工人汇报
         // 在 TeamFeed 里用的就是 Conversation.tsx 那套气泡。

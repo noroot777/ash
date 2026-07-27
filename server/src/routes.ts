@@ -22,7 +22,7 @@ import type {
   LlmProvider,
   LlmProtocol,
 } from "@harness/shared";
-import { canSingleRun, canArchive, isUserSettableStatus, AGENT_TYPES, maxBytesFor, attachmentKind } from "@harness/shared";
+import { canSingleRun, canArchive, isUserSettableStatus, AGENT_TYPES, maxBytesFor, attachmentKind, MAX_QUESTION_OPTIONS, MAX_QUESTION_OPTION_LEN } from "@harness/shared";
 import { db } from "./db/index.js";
 import { projects, groups, tasks, sessions, schedules, scheduledMessages, agents, issues, issueComments, llmProviders, queueItems } from "./db/schema.js";
 import { bus } from "./bus.js";
@@ -270,6 +270,7 @@ const toTask = (r: typeof tasks.$inferSelect): Task => ({
   issueId: r.issueId ?? null,
   resumePrompt: r.resumePrompt ?? null,
   question: r.question ?? null,
+  questionOptions: r.questionOptions ? (JSON.parse(r.questionOptions) as string[]) : null,
 });
 
 const taskBody = (body: string | undefined, taskId: string): string =>
@@ -1014,17 +1015,37 @@ api.post("/tasks/:id/complete", async (c) => {
 // 的答复会清空 question 并带着答复 resume 同一 CLI 会话。
 // 团队指挥者自己也能调 → 界面上就是「指挥者在等你答复」,答复喂回它的常驻会话。
 // 没人管也能用:任务停在 paused,问题留在 task.question 等用户答复。
+// 可选的 options = 候选答案:网页在问题下方渲染成按钮,点一下就是以该选项**原文**
+// 走同一个 /answer —— 所以答复链路对「点按钮」和「自己打字」完全一样,选项只省打字。
 // 只接受 running 任务;不修改 status,让回合自然走完再结算(同 pause 的理由)。
 api.post("/tasks/:id/ask", async (c) => {
   const taskId = c.req.param("id");
-  const b = await c.req.json<{ question?: string }>().catch(() => ({}) as { question?: string });
+  const b = await c.req
+    .json<{ question?: string; options?: unknown }>()
+    .catch(() => ({}) as { question?: string; options?: unknown });
   const q = (b.question ?? "").trim();
   if (!q) return c.json({ error: "question 不能为空" }, 400);
+  if (b.options !== undefined && !Array.isArray(b.options))
+    return c.json({ error: "options 必须是字符串数组" }, 400);
+  // trim + 去空 + 去重后落库;超限明确报错,不静默截断(见 shared 常量处的理由)。
+  const opts = [...new Set((b.options ?? []).map((o) => String(o ?? "").trim()).filter(Boolean))];
+  if (opts.length > MAX_QUESTION_OPTIONS)
+    return c.json({ error: `最多 ${MAX_QUESTION_OPTIONS} 个候选答案，收到 ${opts.length} 个` }, 400);
+  const tooLong = opts.find((o) => o.length > MAX_QUESTION_OPTION_LEN);
+  if (tooLong)
+    return c.json(
+      { error: `单个候选答案不超过 ${MAX_QUESTION_OPTION_LEN} 字，展开说明请写进 question：「${tooLong.slice(0, 30)}…」` },
+      400,
+    );
   const r = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!r) return c.json({ error: "not found" }, 404);
   if (r.status !== "running") return c.json({ error: "只能在任务正在运行时提问", status: r.status }, 409);
-  await db.update(tasks).set({ question: q, updatedAt: now() }).where(eq(tasks.id, taskId));
-  return c.json({ asked: true, willSettleAs: "paused" });
+  await db
+    .update(tasks)
+    .set({ question: q, questionOptions: opts.length ? JSON.stringify(opts) : null, updatedAt: now() })
+    .where(eq(tasks.id, taskId));
+  bus.publish({ type: "task.question", taskId, question: q, questionOptions: opts.length ? opts : null });
+  return c.json({ asked: true, options: opts, willSettleAs: "paused" });
 });
 
 // 答复一个提问暂停中的任务(指挥者或用户都可调):清空 question,把答复作为
@@ -1044,7 +1065,11 @@ api.post("/tasks/:id/answer", async (c) => {
   if (r.mode !== "team" && (r.status === "running" || r.status === "queued")) {
     return c.json({ error: "提问回合还没结束,等任务落 paused 再答复", status: r.status }, 409);
   }
-  await db.update(tasks).set({ question: null, updatedAt: now() }).where(eq(tasks.id, taskId));
+  await db
+    .update(tasks)
+    .set({ question: null, questionOptions: null, updatedAt: now() })
+    .where(eq(tasks.id, taskId));
+  bus.publish({ type: "task.question", taskId, question: null, questionOptions: null });
   // 指挥台不说「完成任务」——它没有完成一说,只是拿到答案接着安排。
   const tail = r.mode === "team" ? "请据此接着安排。" : "请据此继续完成任务。";
   void continueTask(taskId, `【答复】你之前的提问:「${r.question}」\n\n${a}\n\n${tail}`);

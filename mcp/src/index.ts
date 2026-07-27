@@ -7,6 +7,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
+import { MAX_QUESTION_OPTIONS, MAX_QUESTION_OPTION_LEN } from "@harness/shared";
 
 const BASE = (process.env.HARNESS_URL ?? "http://localhost:4317").replace(/\/+$/, "");
 
@@ -321,14 +322,21 @@ server.registerTool(
   {
     title: "提问并暂停(等指挥者/用户答复)",
     description:
-      "在执行中调用,告诉 harness:「我被一个不拍板就没法继续的问题卡住了」。调完后正常结束回合,任务落 paused 且**队列不会自动续跑**;问题会即时送达团队指挥者(你是工人时),没有指挥者就停在那等用户答复。你自己是团队指挥者时调它 = 问用户,界面上显示成「指挥者在等你答复」。答复通过 answer_question 送达,会作为新消息唤醒你的同一个 CLI 会话续跑。\n\n用法:只能在任务正在跑时调用;先把当下能做的都做完再提问,一次把问题问全(背景+选项+你的倾向),别挤牙膏式来回。跟 pause_task 的区别:pause 是「到检查点等续跑指令」,ask 是「等一个具体问题的答案」。",
+      "在执行中调用,告诉 harness:「我被一个不拍板就没法继续的问题卡住了」。调完后正常结束回合,任务落 paused 且**队列不会自动续跑**;问题会即时送达团队指挥者(你是工人时),没有指挥者就停在那等用户答复。你自己是团队指挥者时调它 = 问用户,界面上显示成「指挥者在等你答复」。答复通过 answer_question 送达,会作为新消息唤醒你的同一个 CLI 会话续跑。\n\n用法:只能在任务正在跑时调用;先把当下能做的都做完再提问,一次把问题问全(背景+选项+你的倾向),别挤牙膏式来回。**心里已经有几个候选方案时就填 options** —— 网页会把它们渲染成按钮,用户点一下就答完了(点按钮 = 把该选项原文当 answer 送回来),不用打字;答复者也可以不选、自己写别的。跟 pause_task 的区别:pause 是「到检查点等续跑指令」,ask 是「等一个具体问题的答案」。",
     inputSchema: {
       taskId: z.string().describe("当前正在执行的任务 id(任务 prompt 前言里有)"),
       question: z.string().min(1).describe("要问的问题:写清背景、可选方案和你的倾向,让答复者能直接拍板"),
+      options: z
+        .array(z.string().min(1).max(MAX_QUESTION_OPTION_LEN))
+        .max(MAX_QUESTION_OPTIONS)
+        .optional()
+        .describe(
+          `候选答案(可选,最多 ${MAX_QUESTION_OPTIONS} 个、每个不超过 ${MAX_QUESTION_OPTION_LEN} 字):每条写成一句能直接当答复读的话(如「只在被越过时才到队尾」),网页渲染成可点按钮。理由和取舍写进 question,别塞进选项里。`,
+        ),
     },
   },
-  async ({ taskId, question }) => {
-    try { return ok(await call("POST", `/tasks/${taskId}/ask`, { question })); }
+  async ({ taskId, question, options }) => {
+    try { return ok(await call("POST", `/tasks/${taskId}/ask`, { question, options })); }
     catch (e) { return fail(e); }
   },
 );

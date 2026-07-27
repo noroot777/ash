@@ -131,6 +131,8 @@ export async function ensureSchema() {
     "ALTER TABLE tasks ADD COLUMN team TEXT",
     "ALTER TABLE tasks ADD COLUMN report_back INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE groups ADD COLUMN owner_task_id TEXT",
+    // ask_question 的候选答案（json string[]，null=只能自由作答）
+    "ALTER TABLE tasks ADD COLUMN question_options TEXT",
   ]) {
     try {
       await client.execute(sql);

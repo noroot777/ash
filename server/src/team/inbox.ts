@@ -27,9 +27,26 @@ export async function notifyTeamLead(
   const ref = { id: worker.id, title: worker.title || worker.id };
   const text =
     kind === "question"
-      ? INBOUND_QUESTION(ref, (question ?? worker.question ?? "").trim() || "(工人没写清问题,去它的会话里看)")
+      ? INBOUND_QUESTION(ref, withOptions(worker, question))
       : kind === "done"
         ? INBOUND_DONE(ref)
         : INBOUND_FAILED(ref, kind === "failed_unconfirmed");
   await sendInbound(lead.id, text);
+}
+
+// 工人提问时给了候选答案(ask_question 的 options)就一并列出来 —— 指挥者照着挑一个
+// 答,比自由发挥更贴合工人的处境;它也可以答别的,候选只是建议。脏 JSON 不该拖垮
+// 一条通知,解析失败就当没给候选。
+function withOptions(worker: typeof tasks.$inferSelect, question?: string | null): string {
+  const q = (question ?? worker.question ?? "").trim() || "(工人没写清问题,去它的会话里看)";
+  let opts: string[] = [];
+  try {
+    opts = worker.questionOptions ? (JSON.parse(worker.questionOptions) as string[]) : [];
+  } catch {
+    opts = [];
+  }
+  if (opts.length === 0) return q;
+  return `${q}\n\n它给的候选答案(可以直接选一个当 answer,也可以答别的):\n${opts
+    .map((o, i) => `${i + 1}. ${o}`)
+    .join("\n")}`;
 }

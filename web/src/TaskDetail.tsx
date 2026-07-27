@@ -375,15 +375,20 @@ export function EditableTitle({ title, onSave }: { title: string; onSave: (t: st
 // 一次性任务在回合还没结算完(running/queued)时 server 会 409(答复会被单飞锁丢),
 // 按钮先禁用;常驻指挥台没这个问题 —— 它忙着也接得住(跟插话同一条路,先 interrupt
 // 再写 stdin),所以 team 不禁用、文案也换成指挥台那套。
+// agent 给了候选答案(ask_question 的 options)就在问题下方渲染成按钮:点一下 = 把该
+// 选项**原文**当答复送出,走的还是同一个 answerTask —— 候选只是省掉打字,不是单选
+// 题,输入框始终在,用户随时可以答别的。
 export function QuestionCard({ task }: { task: Task }) {
   const [draft, setDraft] = useState("");
-  const [sending, setSending] = useState(false);
+  const [sending, setSending] = useState<string | null>(null); // 正在发的那条文本(null=空闲)
   const isLead = task.mode === "team";
   const settling = !isLead && (task.status === "running" || task.status === "queued");
-  const send = async () => {
-    const a = draft.trim();
-    if (!a || sending) return;
-    setSending(true);
+  const options = task.questionOptions ?? [];
+  const busy = sending !== null;
+  const send = async (text?: string) => {
+    const a = (text ?? draft).trim();
+    if (!a || busy) return;
+    setSending(a);
     try {
       await api.answerTask(task.id, a);
       toast(isLead ? "已答复，指挥者收到了" : "已答复，任务正在带着答案续跑");
@@ -391,7 +396,7 @@ export function QuestionCard({ task }: { task: Task }) {
     } catch (e) {
       toast(e instanceof Error ? e.message : String(e));
     } finally {
-      setSending(false);
+      setSending(null);
     }
   };
   return (
@@ -401,6 +406,23 @@ export function QuestionCard({ task }: { task: Task }) {
         <span>{isLead ? "指挥者在问你话，等待答复" : "任务提问，等待答复（队列陪等，不会自动续跑）"}</span>
       </div>
       <pre className="max-h-48 overflow-y-auto whitespace-pre-wrap break-words px-2.5 pb-1 text-[12px] leading-snug text-ink">{task.question}</pre>
+      {options.length > 0 && (
+        <div className="flex flex-col gap-1 px-2.5 pb-1.5 pt-0.5">
+          {options.map((opt, i) => (
+            <button
+              key={`${i}-${opt}`}
+              onClick={() => void send(opt)}
+              disabled={settling || busy}
+              title="点一下就以这句话作为答复发出"
+              className="flex w-full items-start gap-1.5 rounded-md border border-cyan-500/30 bg-cyan-500/[0.07] px-2 py-1 text-left text-[12px] leading-snug text-ink transition-colors hover:border-cyan-500/60 hover:bg-cyan-500/15 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <span className="mt-px shrink-0 font-mono text-[10px] text-cyan-700">{i + 1}</span>
+              <span className="min-w-0 flex-1 whitespace-pre-wrap break-words">{opt}</span>
+              {sending === opt && <span className="shrink-0 text-[10px] text-cyan-700">发送中…</span>}
+            </button>
+          ))}
+        </div>
+      )}
       <div className="flex items-start gap-1.5 border-t border-cyan-500/20 px-2 py-1.5">
         <textarea
           value={draft}
@@ -409,16 +431,24 @@ export function QuestionCard({ task }: { task: Task }) {
             if ((e.metaKey || e.ctrlKey) && e.key === "Enter") { e.preventDefault(); void send(); }
           }}
           rows={2}
-          placeholder={settling ? "提问回合还没结束，稍候片刻再答…" : isLead ? "写下答复，发送后直接进同一个常驻会话（⌘↵ 发送）" : "写下答复，发送后会直接唤醒 agent 带着答案继续（⌘↵ 发送）"}
-          disabled={settling || sending}
+          placeholder={
+            settling
+              ? "提问回合还没结束，稍候片刻再答…"
+              : options.length > 0
+                ? "都不合适？自己写一个答复（⌘↵ 发送）"
+                : isLead
+                  ? "写下答复，发送后直接进同一个常驻会话（⌘↵ 发送）"
+                  : "写下答复，发送后会直接唤醒 agent 带着答案继续（⌘↵ 发送）"
+          }
+          disabled={settling || busy}
           className="block min-w-0 flex-1 resize-y rounded-md bg-transparent px-1.5 py-1 text-[12px] leading-snug text-ink outline-none placeholder:text-faint disabled:opacity-50"
         />
         <button
           onClick={() => void send()}
-          disabled={settling || sending || !draft.trim()}
+          disabled={settling || busy || !draft.trim()}
           className="shrink-0 rounded-md bg-cyan-600 px-2.5 py-1 text-[11px] font-medium text-white hover:bg-cyan-500 disabled:opacity-40"
         >
-          {sending ? "发送中…" : "答复并唤醒"}
+          {sending !== null && sending === draft.trim() ? "发送中…" : "答复并唤醒"}
         </button>
       </div>
     </div>
