@@ -46,6 +46,7 @@ export function TeamView({
   onUnarchive,
   onRequeue,
   onSelect,
+  onTaskCreated,
 }: {
   task: Task;
   groups: Group[];
@@ -66,12 +67,14 @@ export function TeamView({
   onRequeue: (id: string) => void;
   /** 整页打开某个执行者(离开调度台)。 */
   onSelect: (id: string) => void;
+  onTaskCreated: (task: Task, doRun?: boolean, select?: boolean) => void;
 }) {
   const [openId, setOpenId] = useState<string | null>(null);
   const [localHalted, setLocalHalted] = useState(false);
   const [groupPaused, setGroupPaused] = useState<Record<string, boolean>>({});
   const [internalGroups, setInternalGroups] = useState<Group[]>([]);
   const [cuaStatus, setCuaStatus] = useState<TeamCuaStatus | null>(null);
+  const [iterateBusy, setIterateBusy] = useState(false);
 
   const workers = useMemo(() => workersOf(allTasks, task.id), [allTasks, task.id]);
   const rawGroups = useMemo(() => {
@@ -97,6 +100,27 @@ export function TeamView({
   const leadTurns = useMemo(() => turnsOf(items), [items]);
   const haltedByHistory = activeTeamHaltMarker(items);
   const stopped = teamGroups.some((g) => g.paused) || (teamGroups.length === 0 && (haltedByHistory || localHalted));
+  const canIterateDebate = allTasks.some((item) => item.id === task.originTaskId && item.mode === "debate")
+    && !allTasks.some((item) => item.mode === "debate" && item.originTaskId === task.id);
+
+  const iterateDebate = async () => {
+    if (iterateBusy) return;
+    const existing = allTasks.find((item) => item.mode === "debate" && item.originTaskId === task.id);
+    if (existing) {
+      onTaskCreated(existing, false, true);
+      return;
+    }
+    setIterateBusy(true);
+    try {
+      const created = await api.iterateTeamDebate(task.id);
+      onTaskCreated(created, true, true);
+      toast("已创建新一轮辩论并开跑", "info");
+    } catch (error) {
+      toast(error instanceof Error ? error.message : String(error));
+    } finally {
+      setIterateBusy(false);
+    }
+  };
 
   const refreshInternalGroups = async () => {
     try {
@@ -179,6 +203,9 @@ export function TeamView({
         onArchive={() => onArchive(task.id)}
         onUnarchive={() => onUnarchive(task.id)}
         onOpenWorker={setOpenId}
+        canIterateDebate={canIterateDebate}
+        iterateBusy={iterateBusy}
+        onIterateDebate={() => void iterateDebate()}
       />
 
       {stopped && <CuaResidualNotice taskId={task.id} status={cuaStatus} onStatus={setCuaStatus} />}

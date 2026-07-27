@@ -182,6 +182,9 @@ export interface Task {
   // Backlink to the issue this task was derived from (§Issues). Null for tasks
   // created directly. An issue can spawn many tasks over time.
   issueId?: string | null;
+  // Backlink to the task this task was derived from. Debate → team handoffs and
+  // team → debate iteration loops use this to form a traceable task chain.
+  originTaskId?: string | null;
   // 检查点续跑（§Pause）：agent 在执行中调 pause_task 时写下的「下次继续时该
   // 喂给我什么」prompt。任务结算时若此字段非空，则状态进入 `paused` 而不是
   // `done`；scheduler 在依赖满足后把它当 continueTask 的 userText 喂回 CLI
@@ -447,6 +450,7 @@ export interface Session {
   worktreePath: string | null;
   branch: string | null;
   cwd: string | null; // the actual working directory this run executed in (truth, incl. scratch fallback)
+  transcriptPath: string; // absolute path to the persisted Markdown transcript for this session
   cliSessionId: string | null; // the CLI's own session/thread id = core credential
   resumeCommand: string | null; // ready-to-paste resume command
   commandLine: string | null; // full command invoked

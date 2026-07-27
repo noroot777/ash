@@ -46,6 +46,8 @@ import { resumeCommandFor } from "./executors/spawn.js";
 import { resolveExecutorFor } from "./executors/index.js";
 import { forceKillCuaService, lastCuaResidualStatus, refreshCuaResidualStatus } from "./cua.js";
 import { createTasks, enrichTasks, publishTaskUpdated } from "./task-store.js";
+import { sessionTranscriptPath } from "./transcript.js";
+import { mountDebateIterationRoutes } from "./debate/iteration.js";
 import type { GateAction, AgentType, BatchCreateTasksBody, BatchTaskInput, ScheduledMessage, ScheduledMessageStatus } from "@harness/shared";
 
 export const api = new Hono();
@@ -257,6 +259,7 @@ const toSession = (r: typeof sessions.$inferSelect): Session => ({
   ...r,
   role: r.role as Session["role"],
   agentType: r.agentType as Session["agentType"],
+  transcriptPath: sessionTranscriptPath(r.taskId, r.id),
   // Recompute the copy-paste resume command from the session's own fields, so it
   // always reflects the current format (old rows stored a now-outdated string).
   resumeCommand: r.cliSessionId
@@ -554,6 +557,7 @@ api.post("/tasks", async (c) => {
     updatedAt: ts,
     useWorktree: b.useWorktree ?? false,
     worktreeBase: b.worktreeBase ?? null,
+    originTaskId: b.originTaskId ?? null,
   };
   // 可选:追加到现有 queue 的尾部。要求:queue 已存在,且新 task 跟
   // queue 已有任务的 groupId 一致(违反就 400,不静默)。
@@ -1822,6 +1826,7 @@ api.delete("/llm-providers/:id", async (c) => {
 // ── queues (顺序依赖原语,DESIGN-scheduling.md §1) ─────────────────────────────
 // 端点实现与 helper 都在 ./queues.ts(routes.ts 已经很长,队列语义集中一处更好改)。
 mountQueueRoutes(api);
+mountDebateIterationRoutes(api);
 
 // ── SSE stream (§12) ───────────────────────────────────────────────────────
 api.get("/events", (c) =>

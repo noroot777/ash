@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { Task, Group, AgentType, Priority, ProjectView, TeamConfig } from "@harness/shared";
-import { AGENT_TYPES, TEAM_DEFAULTS } from "@harness/shared";
+import { AGENT_TYPES } from "@harness/shared";
 import { X, ArrowsOut, ArrowsIn, Robot, Stack, Plus, Sparkle, Scales, CaretDown, Clock, Play, Tray, ArrowsClockwise, GitBranch, TreeStructure, UsersThree, Crown } from "@phosphor-icons/react";
 import { api } from "./api";
 import { PRIORITIES } from "./constants";
@@ -11,6 +11,7 @@ import { Menu, Pill } from "./Menu";
 import { usePasteAttachments, AttachmentChips } from "./pasteAttachments";
 import { ScheduleFields, toLocalInput } from "./ScheduleFields";
 import { ExecutorPicker, type ExecutorSelection, useExecutorProfiles } from "./ExecutorPicker";
+import { teamExecutorDefaults } from "./teamExecutorDefaults";
 
 // 斜杠命令表。输入框里只剩一个 `/词` 时按前缀过滤它,列出的每一行都是一个**具体
 // 动作**(`/pair` 是辩论,`/team` 是团队)。加命令只改这张表 ——
@@ -112,23 +113,10 @@ export function CreateTask({
     return () => { alive = false; };
   }, [teamOn, detected]);
 
-  // 「调度者」只能挑支持常驻会话的执行器(openResident,目前是 claude)—— 调度台要一个
-  // 进程吃很多回合,不支持的 CLI 根本当不了。探测失败就退回内置缺省,别把下拉变空。
-  const leadTypes = useMemo(() => {
-    const ok = (detected ?? []).filter((d) => d.available && d.resident).map((d) => d.type);
-    return ok.length ? ok : [TEAM_DEFAULTS.lead];
-  }, [detected]);
-  // 执行者不限类型(它们是普通一次性任务)。缺省挑一个跟调度者**不同**类型的本机执行器
-  // —— 换个视角干活;都没有就跟调度者同类型。
-  const workerTypes = useMemo(() => {
-    const ok = (detected ?? []).filter((d) => d.available).map((d) => d.type);
-    return ok.length ? ok : [...AGENT_TYPES];
-  }, [detected]);
-  const leadSelection = leadPick && leadTypes.includes(leadPick.agentType) ? leadPick : { agentType: leadTypes[0]!, executorId: null };
-  const workerSelection =
-    workerPick && workerTypes.includes(workerPick.agentType)
-      ? workerPick
-      : { agentType: workerTypes.find((t) => t !== leadSelection.agentType) ?? leadSelection.agentType, executorId: null };
+  const { leadTypes, workerTypes, leadSelection, workerSelection } = useMemo(
+    () => teamExecutorDefaults(detected, leadPick, workerPick),
+    [detected, leadPick, workerPick],
+  );
   const lead = leadSelection.agentType;
   const worker = workerSelection.agentType;
 

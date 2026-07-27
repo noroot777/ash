@@ -16,7 +16,7 @@ import {
   workerHaltStats,
   type Waiting,
 } from "@harness/shared/team";
-import { ArrowsClockwise, DownloadSimple, Stop, Trash, Play } from "@phosphor-icons/react";
+import { ArrowsClockwise, DownloadSimple, Stop, Trash, Play, Scales } from "@phosphor-icons/react";
 import { api } from "../api";
 import { toast } from "../toast";
 import { ConfirmModal } from "../Modal";
@@ -48,6 +48,9 @@ export function TeamHeader({
   onArchive,
   onUnarchive,
   onOpenWorker,
+  canIterateDebate,
+  iterateBusy,
+  onIterateDebate,
 }: {
   task: Task;
   workers: Task[];
@@ -64,6 +67,9 @@ export function TeamHeader({
   onArchive: () => void;
   onUnarchive: () => void;
   onOpenWorker: (id: string) => void;
+  canIterateDebate: boolean;
+  iterateBusy: boolean;
+  onIterateDebate: () => void;
 }) {
   const [haltOpen, setHaltOpen] = useState(false);
   const [resuming, setResuming] = useState(false);
@@ -92,6 +98,18 @@ export function TeamHeader({
         <div className="flex shrink-0 items-center gap-2">
           <BusyPill task={task} />
           <TaskTimeChip task={task} />
+          {settled && canIterateDebate && (
+            <button
+              type="button"
+              disabled={iterateBusy}
+              onClick={onIterateDebate}
+              className="inline-flex items-center gap-1.5 rounded-md border border-violet-500/35 bg-violet-500/[0.07] px-3 py-1.5 text-[13px] font-medium text-violet-700 transition-colors hover:bg-violet-500/[0.12] disabled:opacity-40"
+              title="读取这次团队执行记录，沿用原辩论配置创建新一轮"
+            >
+              <Scales size={13} weight="fill" />
+              {iterateBusy ? "创建中…" : "再辩一轮"}
+            </button>
+          )}
           {task.archived ? (
             <>
               <span className="inline-flex items-center gap-1.5 rounded-md bg-overlay px-3 py-1.5 text-[13px] font-medium text-muted" title="任务已归档（只读）">

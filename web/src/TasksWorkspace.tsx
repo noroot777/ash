@@ -6,6 +6,7 @@ import { DebateView } from "./DebateView";
 import { TeamView } from "./team/TeamView";
 import { type DebateState, emptyDebate } from "./debateState";
 import { BranchChip, ResizeHandle } from "./ui";
+import { OriginTaskBar } from "./taskOrigin";
 
 // The "执行" plane: the existing task workspace, extracted from App so the rail can
 // switch between it and the issues plane. View (list) + archived filter live here
@@ -17,6 +18,7 @@ export function TasksWorkspace({
   view,
   setView,
   visible,
+  allTasks,
   current,
   groups,
   selected,
@@ -42,11 +44,13 @@ export function TasksWorkspace({
   onRequeue,
   onGate,
   onOpenIssue,
+  onOpenTask,
   onTaskCreated,
 }: {
   view: TaskView;
   setView: (v: TaskView) => void;
   visible: Task[];
+  allTasks: Task[];
   current: Task | null;
   groups: Group[];
   selected: string | null;
@@ -72,7 +76,8 @@ export function TasksWorkspace({
   onRequeue: (id: string) => void;
   onGate: (id: string, action: GateAction) => void;
   onOpenIssue: (issueId: string) => void;
-  onTaskCreated: (task: Task) => void;
+  onOpenTask: (taskId: string) => void;
+  onTaskCreated: (task: Task, doRun?: boolean, select?: boolean) => void;
 }) {
   const tab = (v: TaskView, label: string) => (
     <button
@@ -111,10 +116,11 @@ export function TasksWorkspace({
 
       <div className="flex min-h-0 flex-1">
         <aside style={{ width: sidebarW }} className="relative flex shrink-0 flex-col border-r border-line">
-          <TaskList tasks={visible} groups={groups} selected={selected} onSelect={onSelect} />
+          <TaskList tasks={visible} allTasks={allTasks} groups={groups} selected={selected} onSelect={onSelect} onOpenTask={onOpenTask} />
           <ResizeHandle width={sidebarW} onChange={setSidebarW} />
         </aside>
         <div className="flex min-w-0 flex-1 flex-col">
+          {current && <OriginTaskBar task={current} allTasks={allTasks} onOpen={onOpenTask} />}
           {current?.issueId && (
             <button
               onClick={() => onOpenIssue(current.issueId!)}
@@ -130,6 +136,7 @@ export function TasksWorkspace({
                 <DebateView
                   key={current.id}
                   task={current}
+                  allTasks={allTasks}
                   state={debates[current.id] ?? emptyDebate()}
                   sessionsBump={sessionsBump}
                   onRun={() => onRun(current.id)}
@@ -139,6 +146,7 @@ export function TasksWorkspace({
                   onDelete={() => onDelete(current.id, current.title)}
                   onArchive={() => onArchive(current.id)}
                   onUnarchive={() => onUnarchive(current.id)}
+                  onOpenTask={onOpenTask}
                   onTeamCreated={onTaskCreated}
                 />
               ) : current.mode === "team" ? (
@@ -148,7 +156,7 @@ export function TasksWorkspace({
                   key={current.id}
                   task={current}
                   groups={groups}
-                  allTasks={visible}
+                  allTasks={allTasks}
                   logs={logs}
                   sessionsBump={sessionsBump}
                   onRun={onRun}
@@ -162,13 +170,14 @@ export function TasksWorkspace({
                   onUnarchive={onUnarchive}
                   onRequeue={onRequeue}
                   onSelect={onSelect}
+                  onTaskCreated={onTaskCreated}
                 />
               ) : (
                 <TaskDetail
                   key={current.id}
                   task={current}
                   groups={groups}
-                  allTasks={visible}
+                  allTasks={allTasks}
                   logs={logs[current.id] ?? []}
                   sessionsBump={sessionsBump}
                   onRun={() => onRun(current.id)}

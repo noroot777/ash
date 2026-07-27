@@ -3,6 +3,13 @@
 // 「实时(SSE)看到的」和「刷新后(解析 .md)看到的」必然一致 —— 这是仓库既有约定。
 import { join } from "node:path";
 import type { AgentType } from "@harness/shared";
+import { RUNS_DIR } from "./paths.js";
+
+// Canonical persisted Markdown path for one session. Keep API serialization and
+// cross-task handoffs on the same derivation as the writers in orchestrator/team.
+export function sessionTranscriptPath(taskId: string, sessionId: string): string {
+  return join(RUNS_DIR, taskId, `${sessionId}.md`);
+}
 
 // A non-text interjection in the run timeline — a 你→@agent reply or a 〔系统〕
 // continue — is persisted as ONE sentinel line: RS (\x1e, which never occurs in

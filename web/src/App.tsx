@@ -378,10 +378,10 @@ export function App() {
     }
   }, []);
 
-  const onTaskCreated = useCallback((t: Task, doRun = false) => {
+  const onTaskCreated = useCallback((t: Task, doRun = false, select = true) => {
     // POST 的响应和 task.created SSE 可能任意一个先到；统一 upsert 避免重复行。
     setTasks((ts) => upsertTask(ts, t));
-    setSelected(t.id);
+    if (select) setSelected(t.id);
     if (doRun) {
       setDebates((m) => ({ ...m, [t.id]: emptyDebate() }));
       api.runTask(t.id);
@@ -575,6 +575,7 @@ export function App() {
             view={view}
             setView={setView}
             visible={visible}
+            allTasks={tasks}
             current={current}
             groups={groups}
             selected={selected}
@@ -600,6 +601,7 @@ export function App() {
             onRequeue={requeue}
             onGate={gate}
             onOpenIssue={openIssue}
+            onOpenTask={openTask}
             onTaskCreated={onTaskCreated}
           />
         )}

@@ -8,6 +8,7 @@ import { StatusIcon } from "./StatusIcon";
 import { foldTeamStatus, pairBadge } from "./util";
 import { executorLabel } from "./executorLabel";
 import { isDispatchedWorker } from "./taskPolicy";
+import { OriginTaskChip } from "./taskOrigin";
 
 const TASK_SECTIONS = [
   { key: "collab", label: "协作任务", matches: (task: Task) => task.mode === "debate" || task.mode === "team" },
@@ -52,14 +53,18 @@ export function orderedTasks(tasks: Task[]): Task[] {
 
 export function TaskList({
   tasks,
+  allTasks,
   groups,
   selected,
   onSelect,
+  onOpenTask,
 }: {
   tasks: Task[];
+  allTasks: Task[];
   groups: Group[];
   selected: string | null;
   onSelect: (id: string) => void;
+  onOpenTask: (id: string) => void;
 }) {
   const groupName = (id: string | null) => groups.find((g) => g.id === id)?.name;
   const topTasks = topLevel(tasks);
@@ -113,13 +118,15 @@ export function TaskList({
                           key={t.id}
                           lead={t}
                           workers={workersOf(tasks, t.id)}
+                          allTasks={allTasks}
                           selected={selected}
                           expanded={openTeams.has(t.id)}
                           onToggle={() => toggleTeam(t.id)}
                           onSelect={onSelect}
+                          onOpenTask={onOpenTask}
                         />
                       ) : (
-                        <TaskRow key={t.id} t={t} allTasks={tasks} selected={selected} onSelect={onSelect} groupName={groupName} />
+                        <TaskRow key={t.id} t={t} allTasks={allTasks} selected={selected} onSelect={onSelect} onOpenTask={onOpenTask} groupName={groupName} />
                       ),
                     )}
                 </div>
@@ -138,12 +145,14 @@ function TaskRow({
   allTasks,
   selected,
   onSelect,
+  onOpenTask,
   groupName,
 }: {
   t: Task;
   allTasks: Task[];
   selected: string | null;
   onSelect: (id: string) => void;
+  onOpenTask: (id: string) => void;
   groupName: (id: string | null) => string | undefined;
 }) {
   return (
@@ -171,6 +180,7 @@ function TaskRow({
               {groupName(t.groupId)}
             </span>
           )}
+          <OriginTaskChip task={t} allTasks={allTasks} onOpen={onOpenTask} />
           {t.labels.map((l) => (
             <span
               key={l}
@@ -201,17 +211,21 @@ function TaskRow({
 function TeamRow({
   lead,
   workers,
+  allTasks,
   selected,
   expanded,
   onToggle,
   onSelect,
+  onOpenTask,
 }: {
   lead: Task;
   workers: Task[];
+  allTasks: Task[];
   selected: string | null;
   expanded: boolean;
   onToggle: () => void;
   onSelect: (id: string) => void;
+  onOpenTask: (id: string) => void;
 }) {
   const fold = foldTeamStatus(lead, workers);
   const summary = statusCounts(workers)
@@ -242,6 +256,7 @@ function TeamRow({
         <PriorityIcon p={lead.priority} />
         <span className="min-w-[80px] flex-1 truncate text-[13px] text-ink">{lead.title}</span>
         <div className="ml-auto flex min-w-0 items-center gap-1.5 overflow-hidden">
+          <OriginTaskChip task={lead} allTasks={allTasks} onOpen={onOpenTask} />
           {summary && <span className="shrink-0 truncate font-mono text-[10px] text-faint">{summary}</span>}
           <span className={`shrink-0 rounded px-1.5 py-0.5 font-mono text-[10px] ${badge.cls}`}>{badge.label}</span>
         </div>
