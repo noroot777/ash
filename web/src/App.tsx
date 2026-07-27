@@ -1,6 +1,5 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
-import type { Task, ProjectView, Group, AgentEvent, DebateStyle, AgentType, ProjectHealth, Issue, SearchHit } from "@harness/shared";
-import { CaretDown, MagnifyingGlass, GearSix, Plus, ListChecks, PencilSimpleLine, SidebarSimple, Robot } from "@phosphor-icons/react";
+import type { Task, ProjectView, Group, AgentEvent, AgentType, ProjectHealth, Issue, SearchHit } from "@harness/shared";
 import { api } from "./api";
 import { useServerEvents } from "./useEvents";
 import { orderedTasks } from "./TaskList";
@@ -11,17 +10,16 @@ import { CreateTask } from "./CreateTask";
 import { DebateModal } from "./DebateComposer";
 import { applyDebateEvent, emptyDebate, type DebateState } from "./debateState";
 import { AgentsPanel } from "./AgentsPanel";
-import { Menu } from "./Menu";
 import { NewProjectModal, NewGroupModal, ConfirmModal, WorktreeCleanupModal } from "./Modal";
 import { toast, Toaster } from "./toast";
 import { GroupsPanel } from "./GroupsPanel";
 import { ProjectSettings } from "./ProjectSettings";
-import { HealthDot, ProjectAvatar } from "./ui";
 import { shortPath } from "./util";
 import { runAction, canStopTask } from "./taskActions";
 import { canArchive } from "@harness/shared";
 import { TasksWorkspace, type TaskView } from "./TasksWorkspace";
 import { IssuesWorkspace } from "./IssuesWorkspace";
+import { ProjectRail } from "./ProjectRail";
 
 export function App() {
   // Deep-link state via the URL (?project=…&task=…): a refresh stays on the same
@@ -40,7 +38,6 @@ export function App() {
   const [debates, setDebates] = useState<Record<string, DebateState>>({});
   const [sessionsBump, setSessionsBump] = useState(0);
   const [curHealth, setCurHealth] = useState<ProjectHealth | null>(null);
-  const [projSearch, setProjSearch] = useState("");
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [agentsOpen, setAgentsOpen] = useState(false);
@@ -48,7 +45,7 @@ export function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [newGroupOpen, setNewGroupOpen] = useState(false);
   const [groupsOpen, setGroupsOpen] = useState(false);
-  const [debateOpen, setDebateOpen] = useState<DebateStyle | null>(null);
+  const [debateOpen, setDebateOpen] = useState(false);
   const [confirmDel, setConfirmDel] = useState<{ id: string; title: string } | null>(null);
   // After deleting a task that used a worktree, prompt to clean it up (or keep).
   const [worktreePrompt, setWorktreePrompt] = useState<
@@ -206,16 +203,6 @@ export function App() {
   const ordered = useMemo(() => orderedTasks(visible), [visible]);
   const current = tasks.find((t) => t.id === selected) ?? null;
   const project = projects.find((p) => p.id === projectId) ?? null;
-  const projectName = project?.name ?? "项目";
-
-  // Other projects to switch to (current lives in the switcher header), filtered
-  // by the search box when there are enough to warrant it.
-  const otherProjects = useMemo(() => {
-    const q = projSearch.trim().toLowerCase();
-    return projects.filter(
-      (p) => p.id !== projectId && (!q || p.name.toLowerCase().includes(q) || p.repoPath.toLowerCase().includes(q)),
-    );
-  }, [projects, projectId, projSearch]);
 
   const patch = useCallback(async (id: string, p: Partial<Task>) => {
     const updated = await api.patchTask(id, p);
@@ -489,8 +476,7 @@ export function App() {
     // Global: create / manage.
     cmds.push(
       { id: "new", group: "新建", label: "新建任务", hint: "C", run: () => setCreateOpen(true) },
-      { id: "pair-debate", group: "新建", label: "新建辩论 · 给你答案 (/pair)", run: () => setDebateOpen("debate") },
-      { id: "pair-collab", group: "新建", label: "新建协作 · 给你代码 (/pair)", run: () => setDebateOpen("collaborate") },
+      { id: "pair-debate", group: "新建", label: "新建辩论 · 给你答案 (/pair)", run: () => setDebateOpen(true) },
       { id: "newgroup", group: "新建", label: "新建分组", run: () => setNewGroupOpen(true) },
       { id: "newproject", group: "新建", label: "新建项目", run: () => setNewProjectOpen(true) },
       { id: "groups", group: "管理", label: "分组管理", run: () => setGroupsOpen(true) },
@@ -512,162 +498,22 @@ export function App() {
 
   return (
     <div className="flex h-full">
-      {/* Left rail (Linear-style): project switcher + 规划/执行 sections + tools */}
-      <aside className={`flex shrink-0 flex-col border-r border-line bg-panel p-2 ${railCollapsed ? "w-[52px]" : "w-[228px]"}`}>
-        <Menu
-          value={projectId ?? ""}
-          onChange={(v) => { setProjSearch(""); setProjectId(v); }}
-          menuWidth={300}
-          maxHeight={520}
-          options={otherProjects.map((p) => ({
-            value: p.id,
-            label: p.name,
-            detail: shortPath(p.repoPath),
-            icon: (
-              <span className="relative">
-                <ProjectAvatar name={p.name} size={22} />
-                {!p.health.isRepo && (
-                  <span className="absolute -bottom-0.5 -right-0.5 rounded-full ring-2 ring-panel">
-                    <HealthDot health={p.health} size={7} />
-                  </span>
-                )}
-              </span>
-            ),
-          }))}
-          header={({ close }) => (
-            <div className="flex flex-col gap-1.5">
-              {project && (
-                <div className="flex items-center gap-2 rounded-md px-1 py-0.5">
-                  <ProjectAvatar name={project.name} size={30} />
-                  <span className="flex min-w-0 flex-1 flex-col">
-                    <span className="truncate text-[13px] font-semibold text-ink">{project.name}</span>
-                    <span className="truncate text-[11px] text-faint">{shortPath(project.repoPath) || "未设置路径"}</span>
-                  </span>
-                  <button
-                    onClick={() => { close(); setSettingsOpen(true); }}
-                    title="项目设置"
-                    className="grid h-7 w-7 shrink-0 place-items-center rounded-md text-muted hover:bg-raised hover:text-ink"
-                  >
-                    <GearSix size={15} />
-                  </button>
-                </div>
-              )}
-              {projects.length > 6 && (
-                <input
-                  autoFocus
-                  value={projSearch}
-                  onChange={(e) => setProjSearch(e.target.value)}
-                  placeholder="搜索项目…"
-                  className="w-full rounded-md border border-line bg-canvas px-2 py-1 text-[12px] text-ink outline-none placeholder:text-faint focus:border-accent"
-                />
-              )}
-              {otherProjects.length > 0 && (
-                <div className="px-1 text-[10px] font-medium uppercase tracking-wide text-faint">切换到</div>
-              )}
-            </div>
-          )}
-          footer={({ close }) => (
-            <button
-              onClick={() => { close(); setNewProjectOpen(true); }}
-              className="flex w-full items-center gap-2 rounded-md px-1 py-1 text-left text-[13px] text-muted hover:bg-raised hover:text-ink"
-            >
-              <span className="grid h-[22px] w-[22px] shrink-0 place-items-center rounded-md border border-dashed border-line2">
-                <Plus size={13} />
-              </span>
-              新建项目
-            </button>
-          )}
-          triggerClassName={
-            railCollapsed
-              ? "flex items-center justify-center rounded-md p-1 hover:bg-raised"
-              : "flex items-center gap-2 rounded-md px-1.5 py-1.5 hover:bg-raised"
-          }
-        >
-          <ProjectAvatar name={projectName} size={24} />
-          {!railCollapsed && (
-            <>
-              <span className="max-w-[150px] truncate text-[13px] font-semibold text-ink">{projectName}</span>
-              {project && !project.health.isRepo && <HealthDot health={project.health} />}
-              <CaretDown size={12} className="ml-auto text-faint" />
-            </>
-          )}
-        </Menu>
-
-        <nav className="mt-1.5 flex flex-col gap-px">
-          {!railCollapsed && (
-            <div className="px-2 pb-1 pt-3 text-[10px] font-semibold uppercase tracking-[0.07em] text-faint">规划</div>
-          )}
-          <button
-            onClick={() => setSection("issue")}
-            title={railCollapsed ? `事项 (${issueCount})` : undefined}
-            className={`group flex items-center rounded-md text-[13px] ${railCollapsed ? "justify-center p-1.5" : "gap-2.5 px-2 py-1.5"} ${section === "issue" ? "bg-raised font-medium text-ink" : "text-muted hover:bg-raised hover:text-ink"}`}
-          >
-            <PencilSimpleLine size={16} className={section === "issue" ? "text-accent" : ""} />
-            {!railCollapsed && (
-              <>
-                事项
-                <span className="ml-auto rounded-full bg-overlay px-1.5 text-[11px] text-faint">{issueCount}</span>
-              </>
-            )}
-          </button>
-          {!railCollapsed && (
-            <div className="px-2 pb-1 pt-3 text-[10px] font-semibold uppercase tracking-[0.07em] text-faint">执行</div>
-          )}
-          <button
-            onClick={() => setSection("task")}
-            title={railCollapsed ? `任务 (${active.length})` : undefined}
-            className={`flex items-center rounded-md text-[13px] ${railCollapsed ? "justify-center p-1.5" : "gap-2.5 px-2 py-1.5"} ${section === "task" ? "bg-raised font-medium text-ink" : "text-muted hover:bg-raised hover:text-ink"}`}
-          >
-            <ListChecks size={16} className={section === "task" ? "text-accent" : ""} />
-            {!railCollapsed && (
-              <>
-                任务
-                <span className="ml-auto rounded-full bg-overlay px-1.5 text-[11px] text-faint">{active.length}</span>
-              </>
-            )}
-          </button>
-        </nav>
-
-        <div className="flex-1" />
-
-        <div className="flex flex-col gap-px border-t border-line pt-1.5">
-          <button
-            onClick={() => setAgentsOpen(true)}
-            title={railCollapsed ? "智能体" : undefined}
-            className={`flex items-center rounded-md text-[13px] text-muted hover:bg-raised hover:text-ink ${railCollapsed ? "justify-center p-1.5" : "gap-2.5 px-2 py-1.5"}`}
-          >
-            <Robot size={14} />
-            {!railCollapsed && "智能体"}
-          </button>
-          <button
-            onClick={() => setPaletteOpen(true)}
-            title={railCollapsed ? "搜索 (⌘K)" : undefined}
-            className={`flex items-center rounded-md text-[13px] text-muted hover:bg-raised hover:text-ink ${railCollapsed ? "justify-center p-1.5" : "gap-2.5 px-2 py-1.5"}`}
-          >
-            <MagnifyingGlass size={14} />
-            {!railCollapsed && (
-              <>
-                搜索 <kbd className="ml-auto">⌘K</kbd>
-              </>
-            )}
-          </button>
-          <div
-            className={`flex items-center text-[12px] text-faint ${railCollapsed ? "justify-center p-1.5" : "gap-2 px-2 py-1.5"}`}
-            title={railCollapsed ? (connected ? "实时已连接" : "未连接") : undefined}
-          >
-            <span className={`h-1.5 w-1.5 rounded-full ${connected ? "bg-emerald-500" : "bg-faint"}`} />
-            {!railCollapsed && (connected ? "实时已连接" : "未连接")}
-          </div>
-          <button
-            onClick={() => setRailCollapsed((v) => !v)}
-            title={railCollapsed ? "展开侧栏" : "收起侧栏"}
-            className={`flex items-center rounded-md text-[12px] text-faint hover:bg-raised hover:text-muted ${railCollapsed ? "justify-center p-1.5" : "gap-2.5 px-2 py-1.5"}`}
-          >
-            <SidebarSimple size={14} className={railCollapsed ? "" : "rotate-180"} />
-            {!railCollapsed && "收起侧栏"}
-          </button>
-        </div>
-      </aside>
+      <ProjectRail
+        projects={projects}
+        projectId={projectId}
+        railCollapsed={railCollapsed}
+        section={section}
+        issueCount={issueCount}
+        taskCount={active.length}
+        connected={connected}
+        onProject={setProjectId}
+        onSection={setSection}
+        onSettings={() => setSettingsOpen(true)}
+        onNewProject={() => setNewProjectOpen(true)}
+        onAgents={() => setAgentsOpen(true)}
+        onPalette={() => setPaletteOpen(true)}
+        onToggleCollapsed={() => setRailCollapsed((v) => !v)}
+      />
 
       <main className="flex min-h-0 min-w-0 flex-1 flex-col">
         {section === "issue" ? (
@@ -753,7 +599,7 @@ export function App() {
           onClose={() => setWorktreePrompt(null)}
         />
       )}
-      {debateOpen && project && <DebateModal project={project} initialStyle={debateOpen} onClose={() => setDebateOpen(null)} onCreated={onTaskCreated} />}
+      {debateOpen && project && <DebateModal project={project} onClose={() => setDebateOpen(false)} onCreated={onTaskCreated} />}
       {createOpen && project && (
         <CreateTask
           project={project}
@@ -762,9 +608,9 @@ export function App() {
           onCreated={(t) => onTaskCreated(t)}
           onCreateGroup={() => setNewGroupOpen(true)}
           onOpenAgents={() => setAgentsOpen(true)}
-          onDebate={(style) => {
+          onDebate={() => {
             setCreateOpen(false);
-            setDebateOpen(style);
+            setDebateOpen(true);
           }}
         />
       )}

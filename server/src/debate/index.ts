@@ -8,13 +8,14 @@ import type {
   SessionRole,
   TaskStatus,
 } from "@harness/shared";
+import { normalizeDebateConfig } from "@harness/shared";
 import { db } from "../db/index.js";
 import { tasks, projects, sessions } from "../db/schema.js";
 import { bus } from "../bus.js";
 import { id, now } from "../util.js";
 import { setTaskStatus } from "../status.js";
 import { trackRun, untrackRun, isCanceling, takeCanceled, CanceledRun } from "../runs.js";
-import { ensureWorkdir, resolveWorkspace } from "../git.js";
+import { ensureWorkdir } from "../git.js";
 import { resolveExecutorFor } from "../executors/index.js";
 import type { AgentExecutor } from "../executors/types.js";
 import { RUNS_DIR } from "../paths.js";
@@ -58,8 +59,8 @@ interface Turn {
   error?: string;
 }
 
-// Run one debater/implementer turn: stream events tagged with role+round, persist
-// output + credential, detect the raise-hand marker.
+// Run one debater turn: stream events tagged with role+round, persist output +
+// credential, and detect the raise-hand marker.
 async function runTurn(args: {
   taskId: string;
   role: SessionRole;
@@ -105,7 +106,7 @@ async function runTurn(args: {
       exitStatus: null,
     });
   } else {
-    // Resuming the same session row for a new turn (e.g. after a G1/G2 gate the
+    // Resuming the same session row for a new turn (e.g. after a gate the
     // user took a while to resolve): stamp this turn's start and clear the prior
     // end, so the gate wait is excluded from execution time.
     await db.update(sessions).set({ turnStartedAt: turnStart, endedAt: null }).where(eq(sessions.id, rowId));
@@ -159,8 +160,7 @@ async function runTurn(args: {
   }
   // A debater turn that exits cleanly but says nothing is degenerate (e.g. a
   // resume that returned no text) — treat it as a failure so the debate stops
-  // instead of feeding emptiness to the opponent. (Implementers may legitimately
-  // produce only tool/file output, so this only applies to debaters.)
+  // instead of feeding emptiness to the opponent.
   const isDebater = role === "debaterA" || role === "debaterB";
   if (!errorMsg && exit === 0 && isDebater && !text.trim()) {
     errorMsg = `${executor.type} 本轮没有产出任何内容（空回复），可能是会话恢复异常`;
@@ -193,12 +193,10 @@ const failed = (t: Turn) => t.exit !== 0 || !!t.error;
 const HARD_CAP = 50; // absolute safety cap, even when maxRounds is "不设限"
 
 // Mutable debate state threaded through the pipeline so fresh-start and resume
-// share one rebuttal loop / gate / implement tail (no duplicated logic).
+// share one rebuttal loop and consensus gate.
 interface Ctx {
   taskId: string;
-  title: string;
   cfg: DebateConfig;
-  project: typeof projects.$inferSelect;
   exA: AgentExecutor;
   exB: AgentExecutor;
   cwd: string;
@@ -224,16 +222,15 @@ function applyTurn(ctx: Ctx, sp: "A" | "B", t: Turn) {
   }
 }
 
-// 收敛判定：协作=双方都标"可收敛"即合并完成（无分歧概念）；辩论=双方都就绪且都自称与对方一致才算共识，否则是澄清后的分歧。
+// 双方都就绪且都自称与对方一致才算共识，否则是澄清后的分歧。
 function isConsensus(ctx: Ctx): boolean {
-  const both = ctx.raisedA && ctx.raisedB;
-  return ctx.cfg.style === "collaborate" ? both : both && ctx.agreesA && ctx.agreesB;
+  return ctx.raisedA && ctx.raisedB && ctx.agreesA && ctx.agreesB;
 }
 
 async function loadBase(taskId: string) {
   const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!task || !task.debate) throw new Error("debate config missing");
-  const cfg = JSON.parse(task.debate) as DebateConfig;
+  const cfg = normalizeDebateConfig(JSON.parse(task.debate));
   const project = (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0);
   if (!project) throw new Error("project not found");
   const exA = await resolveExecutorFor({ type: cfg.debaterA });
@@ -241,11 +238,11 @@ async function loadBase(taskId: string) {
   // Discussion only reads; repo-less debates fall back to a scratch cwd (§4).
   const cwd = ensureWorkdir(project.repoPath, taskId);
   const cap = Math.min(cfg.maxRounds ?? HARD_CAP, HARD_CAP);
-  return { task, title: task.title, cfg, project, exA, exB, cwd, cap };
+  return { task, cfg, exA, exB, cwd, cap };
 }
 
-// Full /debate pipeline: blind opening (parallel) → serial rebuttal rounds
-// (A-first) → consensus gate G1 → implement → code gate G2.
+// Full /pair pipeline: blind opening (parallel) → serial rebuttal rounds
+// (A-first) → optional consensus gate G1 → conclusion.
 export async function runDebate(taskId: string): Promise<void> {
   if (running.has(taskId)) return;
   running.add(taskId);
@@ -259,19 +256,19 @@ export async function runDebate(taskId: string): Promise<void> {
 
     // Round 1 — blind opening, parallel.
     const [a, b] = await Promise.all([
-      runTurn({ taskId, role: "debaterA", speaker: "A", round: 1, executor: exA, prompt: P.opening(cfg.topic, cwd, cfg.style), cwd }),
-      runTurn({ taskId, role: "debaterB", speaker: "B", round: 1, executor: exB, prompt: P.opening(cfg.topic, cwd, cfg.style), cwd }),
+      runTurn({ taskId, role: "debaterA", speaker: "A", round: 1, executor: exA, prompt: P.opening(cfg.topic, cwd), cwd }),
+      runTurn({ taskId, role: "debaterB", speaker: "B", round: 1, executor: exB, prompt: P.opening(cfg.topic, cwd), cwd }),
     ]);
     if (failed(a) || failed(b)) return void (await setStatus(taskId, "failed"));
 
     const ctx: Ctx = {
-      taskId, title: base.title, cfg, project: base.project, exA, exB, cwd, cap: base.cap,
+      taskId, cfg, exA, exB, cwd, cap: base.cap,
       A: { rowId: a.rowId, cliId: a.cliId }, B: { rowId: b.rowId, cliId: b.cliId }, round: 1,
       lastA: a.text, lastB: b.text, raisedA: a.raised, raisedB: b.raised,
       agreesA: a.agrees, agreesB: b.agrees, conclusionA: a.conclusion, conclusionB: b.conclusion,
     };
     if (!(await runRebuttalLoop(ctx))) return;
-    await concludeOrImplement(ctx);
+    await finishDiscussion(ctx);
   } catch (err) {
     failDebate(taskId, err);
   } finally {
@@ -308,7 +305,7 @@ export async function resumeDebate(taskId: string): Promise<void> {
     const ra = lastOf("A");
     const rb = lastOf("B");
     const ctx: Ctx = {
-      taskId, title: base.title, cfg, project: base.project, exA, exB, cwd, cap: base.cap,
+      taskId, cfg, exA, exB, cwd, cap: base.cap,
       A: { rowId: sA?.id ?? id(), cliId: sA?.cliSessionId ?? "" },
       B: { rowId: sB?.id ?? id(), cliId: sB?.cliSessionId ?? "" },
       round: failedTurn.round,
@@ -319,11 +316,10 @@ export async function resumeDebate(taskId: string): Promise<void> {
     };
     await setStatus(taskId, "running");
 
-    if (failedTurn.speaker === "impl") {
-      // Implement-phase failure: the gate decision wasn't persisted, so re-run
-      // implement with the configured side and finish (G2/commit/done).
-      ctx.round = Math.max(1, failedTurn.round - 1); // implement ran at round+1
-      await runImplement(ctx, { note: "", chosenSide: undefined });
+    if (failedTurn.speaker !== "A" && failedTurn.speaker !== "B") {
+      // A retired code-writing turn failed. The discussion itself is already a
+      // valid /pair result, so retrying the historical task now settles it there.
+      await setStatus(taskId, "done");
       return;
     }
 
@@ -335,7 +331,7 @@ export async function resumeDebate(taskId: string): Promise<void> {
       runTurn({
         taskId, role: s === "A" ? "debaterA" : "debaterB", speaker: s, round,
         executor: s === "A" ? exA : exB,
-        prompt: round === 1 ? P.opening(cfg.topic, cwd, cfg.style) : P.rebuttal(s === "A" ? ctx.lastB : ctx.lastA, round, cfg.style),
+        prompt: round === 1 ? P.opening(cfg.topic, cwd) : P.rebuttal(s === "A" ? ctx.lastB : ctx.lastA, round),
         cwd, rowId: s === "A" ? ctx.A.rowId : ctx.B.rowId,
         resumeCliId: (s === "A" ? ctx.A.cliId : ctx.B.cliId) || undefined,
       });
@@ -352,7 +348,7 @@ export async function resumeDebate(taskId: string): Promise<void> {
     ctx.round = R;
 
     if (!(await runRebuttalLoop(ctx))) return;
-    await concludeOrImplement(ctx);
+    await finishDiscussion(ctx);
   } catch (err) {
     failDebate(taskId, err);
   } finally {
@@ -410,16 +406,15 @@ export async function resumeAtGate(taskId: string, action: GateAction): Promise<
       sess.filter((s) => s.role === role).sort((x, y) => y.startedAt.localeCompare(x.startedAt))[0];
     const sA = latest("debaterA");
     const sB = latest("debaterB");
-    const sImpl = latest("implementer");
 
     let rows: any[] = [];
     try { rows = readFileSync(join(RUNS_DIR, taskId, "transcript.jsonl"), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)); } catch { /* none */ }
     const lastOf = (sp: string) => [...rows].reverse().find((r) => r.speaker === sp);
     const ra = lastOf("A");
     const rb = lastOf("B");
-    const debateRounds = rows.filter((r) => r.speaker !== "impl").map((r) => r.round);
+    const debateRounds = rows.filter((r) => r.speaker === "A" || r.speaker === "B").map((r) => r.round);
     const ctx: Ctx = {
-      taskId, title: base.title, cfg: base.cfg, project: base.project, exA: base.exA, exB: base.exB, cwd: base.cwd, cap: base.cap,
+      taskId, cfg: base.cfg, exA: base.exA, exB: base.exB, cwd: base.cwd, cap: base.cap,
       A: { rowId: sA?.id ?? id(), cliId: sA?.cliSessionId ?? "" },
       B: { rowId: sB?.id ?? id(), cliId: sB?.cliSessionId ?? "" },
       round: debateRounds.length ? Math.max(...debateRounds) : 1,
@@ -428,45 +423,12 @@ export async function resumeAtGate(taskId: string, action: GateAction): Promise<
       agreesA: ra?.agrees ?? false, agreesB: rb?.agrees ?? false,
       conclusionA: ra?.conclusion, conclusionB: rb?.conclusion,
     };
-    const hasImpl = rows.some((r) => r.speaker === "impl");
     await setStatus(taskId, "running");
 
-    if (!hasImpl) {
-      // G1 gate (辩论=收敛门 / 协作=方案门).
-      if (action.kind === "reject") return void (await setStatus(taskId, "canceled"));
-      if (base.cfg.style !== "collaborate") {
-        // 辩论：仅讨论 —— 放行=结束(done)，注入/提问=再辩后再停。不实现。
-        if (action.kind === "approve") return void (await setStatus(taskId, "done"));
-        await reDebate(ctx, action.kind, action.text, action.kind === "ask" ? action.target : undefined);
-        await finishDiscussion(ctx);
-        return;
-      }
-      // 协作：放行=按方案实现，注入/提问=再议后重开方案门。
-      if (action.kind === "approve") return void (await runImplement(ctx, { note: action.text ?? "", chosenSide: action.side }));
-      await reDebate(ctx, action.kind, action.text, action.kind === "ask" ? action.target : undefined); // inject / ask
-      await gateAndImplement(ctx); // re-park G1, then implement
-      return;
-    }
-
-    // G2 (code gate). The implement turn already ran; the gate side wasn't
-    // persisted, so use the configured implementer for any further runs.
-    const side = base.cfg.implementer;
-    const exImpl = side === "A" ? base.exA : base.exB;
-    const ws = await resolveWorkspace(base.project.repoPath, taskId);
     if (action.kind === "reject") return void (await setStatus(taskId, "canceled"));
-    if (action.kind !== "approve") {
-      // inject / ask → re-run the implementer with the feedback, then re-park G2.
-      recordUserTurn(taskId, ctx.round + 1, action.text);
-      const prompt = action.kind === "inject" ? P.injectFeedback(action.text, ctx.round, base.cfg.style) : P.question(action.text, ctx.round, base.cfg.style);
-      await runTurn({ taskId, role: "implementer", speaker: "impl", round: ctx.round + 1, executor: exImpl, prompt, cwd: ws.path, rowId: sImpl?.id, resumeCliId: sImpl?.cliSessionId ?? undefined, branch: ws.branch });
-      const res = await runGate(taskId, "G2", async (k, t) => {
-        recordUserTurn(taskId, ctx.round + 1, t);
-        const p = k === "inject" ? P.injectFeedback(t, ctx.round, base.cfg.style) : P.question(t, ctx.round, base.cfg.style);
-        await runTurn({ taskId, role: "implementer", speaker: "impl", round: ctx.round + 1, executor: exImpl, prompt: p, cwd: ws.path, rowId: sImpl?.id, resumeCliId: sImpl?.cliSessionId ?? undefined, branch: ws.branch });
-      });
-      if (!res.approved) return void (await setStatus(taskId, "canceled"));
-    }
-    await setStatus(taskId, "done");
+    if (action.kind === "approve") return void (await setStatus(taskId, "done"));
+    await reDebate(ctx, action.kind, action.text, action.kind === "ask" ? action.target : undefined);
+    await finishDiscussion(ctx);
   } catch (err) {
     failDebate(taskId, err);
   } finally {
@@ -482,14 +444,14 @@ async function runRebuttalLoop(ctx: Ctx): Promise<boolean> {
     ctx.round++;
     const at = await runTurn({
       taskId, role: "debaterA", speaker: "A", round: ctx.round, executor: exA,
-      prompt: P.rebuttal(ctx.lastB, ctx.round, ctx.cfg.style), cwd, rowId: ctx.A.rowId, resumeCliId: ctx.A.cliId || undefined,
+      prompt: P.rebuttal(ctx.lastB, ctx.round), cwd, rowId: ctx.A.rowId, resumeCliId: ctx.A.cliId || undefined,
     });
     if (failed(at)) { await setStatus(taskId, "failed"); return false; }
     applyTurn(ctx, "A", at);
     if (ctx.raisedA && ctx.raisedB) break;
     const bt = await runTurn({
       taskId, role: "debaterB", speaker: "B", round: ctx.round, executor: exB,
-      prompt: P.rebuttal(ctx.lastA, ctx.round, ctx.cfg.style), cwd, rowId: ctx.B.rowId, resumeCliId: ctx.B.cliId || undefined,
+      prompt: P.rebuttal(ctx.lastA, ctx.round), cwd, rowId: ctx.B.rowId, resumeCliId: ctx.B.cliId || undefined,
     });
     if (failed(bt)) { await setStatus(taskId, "failed"); return false; }
     applyTurn(ctx, "B", bt);
@@ -506,7 +468,7 @@ async function reDebate(ctx: Ctx, kind: "inject" | "ask", text: string, target?:
   ctx.round++;
   const tgt = kind === "ask" ? target : undefined; // inject ignores target
   recordUserTurn(ctx.taskId, ctx.round, text, tgt); // the human's words land in the timeline first
-  const prompt = kind === "inject" ? P.injectFeedback(text, ctx.round, ctx.cfg.style) : P.question(text, ctx.round, ctx.cfg.style);
+  const prompt = kind === "inject" ? P.injectFeedback(text, ctx.round) : P.question(text, ctx.round);
   // 提问=澄清,不该打回已达成的收敛/结论(继承既有状态);注入=回炉重议,允许双方改判(不继承)。
   const inhA = kind === "ask" ? { raised: ctx.raisedA, agrees: ctx.agreesA, conclusion: ctx.conclusionA } : undefined;
   const inhB = kind === "ask" ? { raised: ctx.raisedB, agrees: ctx.agreesB, conclusion: ctx.conclusionB } : undefined;
@@ -520,130 +482,44 @@ async function reDebate(ctx: Ctx, kind: "inject" | "ask", text: string, target?:
   }
 }
 
-// Gate G1 → implement. Separated so resume can call runImplement directly.
-async function gateAndImplement(ctx: Ctx): Promise<void> {
-  const { taskId, cfg } = ctx;
-  let note = "";
-  let chosenSide: "A" | "B" | undefined;
-  if (cfg.gateG1 === "on") {
-    const res = await runGate(taskId, "G1", (k, t, target) => reDebate(ctx, k, t, target), () => ({
-      consensus: isConsensus(ctx),
-      conclusionA: ctx.conclusionA ?? null,
-      conclusionB: ctx.conclusionB ?? null,
-    }));
-    if (!res.approved) return void (await setStatus(taskId, "canceled"));
-    note = res.note;
-    chosenSide = res.side;
-  }
-  await runImplement(ctx, { note, chosenSide });
-}
-
-// 辩论=仅讨论：收敛后到此即止，结论就是交付物（不实现、不审查）。
+// /pair is discussion-only: after convergence, the conclusions are the output.
 // 收敛门(G1)开 → 让人读结论后放行(=结束)/打回(=取消)/注入·提问(=再辩)；关 → 直接 done。
 async function finishDiscussion(ctx: Ctx): Promise<void> {
   const { taskId, cfg } = ctx;
   if (cfg.gateG1 === "on") {
-    const res = await runGate(taskId, "G1", (k, t, target) => reDebate(ctx, k, t, target), () => ({
+    const approved = await runGate(taskId, (k, t, target) => reDebate(ctx, k, t, target), () => ({
       consensus: isConsensus(ctx),
       conclusionA: ctx.conclusionA ?? null,
       conclusionB: ctx.conclusionB ?? null,
     }));
-    if (!res.approved) return void (await setStatus(taskId, "canceled"));
+    if (!approved) return void (await setStatus(taskId, "canceled"));
   }
   await setStatus(taskId, "done"); // 讨论结束，结论即是产出
 }
 
-// 风格分流：协作→门→实现+审查；辩论→出结论即止。
-async function concludeOrImplement(ctx: Ctx): Promise<void> {
-  if (ctx.cfg.style === "collaborate") await gateAndImplement(ctx);
-  else await finishDiscussion(ctx);
-}
-
-// Implement stage — chosen side implements in the project's working dir, resuming its
-// own debate session. Honest directive: never claims consensus when there wasn't.
-async function runImplement(ctx: Ctx, opts: { note: string; chosenSide?: "A" | "B" }): Promise<void> {
-  const { taskId, cfg, exA, exB } = ctx;
-  const consensus = isConsensus(ctx);
-  const collab = cfg.style === "collaborate";
-  const side = opts.chosenSide ?? cfg.implementer; // human pick > config default
-  const exImpl = side === "A" ? exA : exB;
-  const implCliId = side === "A" ? ctx.A.cliId : ctx.B.cliId;
-  const ws = await resolveWorkspace(ctx.project.repoPath, taskId);
-  const nameA = collab ? "成员A" : "辩手A";
-  const nameB = collab ? "成员B" : "辩手B";
-  const finalDiscussion = `【${nameA} 最终】\n${ctx.lastA}\n\n【${nameB} 最终】\n${ctx.lastB}`;
-  let directive: string;
-  if (collab) {
-    // 协作：实现一份合并出来的统一方案，不存在"选边"。
-    const plan = ctx.conclusionA || ctx.conclusionB || "见上方双方讨论";
-    directive = consensus
-      ? `你们已合并出一份统一方案。请按该统一方案实现：${plan}。`
-      : `请综合双方讨论，按你判断最完整的统一方案实现（由${side === "A" ? "成员A" : "成员B"}落地）。`;
-  } else if (consensus) {
-    directive = `双方已达成共识。请按共识结论实现：${ctx.conclusionA || ctx.conclusionB || "见上方讨论"}。`;
-  } else {
-    const who = side === "A" ? "辩手A" : "辩手B";
-    const concl = (side === "A" ? ctx.conclusionA : ctx.conclusionB) || "见上方该方的最终发言";
-    const by = opts.chosenSide ? "人类裁判已选择" : "双方未达成一致，按配置由实现方";
-    directive = `双方未达成一致。${by}采用【${who}】的方案：${concl}。请据此实现，不要混入对方相反的结论。`;
-  }
-  if (opts.note) directive += `\n\n人类补充要求（必须遵循）：${opts.note}`;
-  const it = await runTurn({
-    taskId, role: "implementer", speaker: "impl", round: ctx.round + 1, executor: exImpl,
-    prompt: P.implement(cfg.topic, finalDiscussion, directive, ws.path), cwd: ws.path,
-    resumeCliId: implCliId || undefined, branch: ws.branch,
-  });
-  if (failed(it)) return void (await setStatus(taskId, "failed"));
-
-  // Code review by the OTHER debater (the non-implementer side) — it inspects the
-  // implementer's diff and reports issues / approves. Resumes its
-  // own debate session so it reviews against the plan it argued. Best-effort: a
-  // failed review doesn't block (the human still gates at G2).
-  const reviewerSide = side === "A" ? "B" : "A";
-  const exRev = reviewerSide === "A" ? exA : exB;
-  const rev = reviewerSide === "A" ? ctx.A : ctx.B;
-  await runTurn({
-    taskId, role: "reviewer", speaker: "review", round: ctx.round + 2, executor: exRev,
-    prompt: P.review(cfg.topic, ws.path), cwd: ws.path,
-    rowId: rev.rowId, resumeCliId: rev.cliId || undefined, branch: ws.branch,
-  });
-
-  if (cfg.gateG2 === "on") {
-    const res = await runGate(taskId, "G2", async (kind, text) => {
-      recordUserTurn(taskId, ctx.round + 1, text);
-      const prompt = kind === "inject" ? P.injectFeedback(text, ctx.round, cfg.style) : P.question(text, ctx.round, cfg.style);
-      await runTurn({ taskId, role: "implementer", speaker: "impl", round: ctx.round + 1, executor: exImpl, prompt, cwd: ws.path, rowId: it.rowId, resumeCliId: it.cliId, branch: ws.branch });
-    });
-    if (!res.approved) return void (await setStatus(taskId, "canceled"));
-  }
-
-  await setStatus(taskId, "done");
-}
-
 // Open a HITL gate and act on the human's decision; loops on inject/ask. The
 // optional getInfo() supplies the current consensus + both conclusions so the
-// gate UI can show "已达成共识" vs "分歧待裁决" and offer a side pick (re-evaluated
-// each loop in case a re-debate changed things).
+// gate UI can show "已达成共识" vs "分歧待裁决" (re-evaluated each loop in case a
+// re-debate changed things).
 async function runGate(
   taskId: string,
-  gate: "G1" | "G2",
   reAction: (kind: "inject" | "ask", text: string, target?: "A" | "B") => Promise<void>,
   getInfo?: () => { consensus: boolean; conclusionA: string | null; conclusionB: string | null },
-): Promise<{ approved: boolean; note: string; side?: "A" | "B" }> {
+): Promise<boolean> {
   while (true) {
     await setStatus(taskId, "awaiting_review");
     const info = getInfo?.();
     bus.publish({
-      type: "debate.gate", taskId, gate, open: true,
+      type: "debate.gate", taskId, gate: "G1", open: true,
       consensus: info?.consensus, conclusionA: info?.conclusionA, conclusionB: info?.conclusionB,
     });
     const action = await waitForGate(taskId);
-    bus.publish({ type: "debate.gate", taskId, gate, open: false });
+    bus.publish({ type: "debate.gate", taskId, gate: "G1", open: false });
     if (action.kind === "approve") {
       await setStatus(taskId, "running");
-      return { approved: true, note: action.text ?? "", side: action.side };
+      return true;
     }
-    if (action.kind === "reject") return { approved: false, note: "" };
+    if (action.kind === "reject") return false;
     await setStatus(taskId, "running");
     await reAction(action.kind, action.text, action.kind === "ask" ? action.target : undefined);
   }

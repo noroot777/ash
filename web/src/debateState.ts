@@ -29,6 +29,7 @@ export type DebateState = {
 
 export const emptyDebate = (): DebateState => ({ turns: [], gate: null });
 
+// implementer/reviewer only occur in historical event streams.
 const speakerOf = (role: string): DebateSpeaker =>
   role === "debaterB" ? "B" : role === "implementer" ? "impl" : role === "reviewer" ? "review" : "A";
 

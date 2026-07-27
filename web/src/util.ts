@@ -17,20 +17,16 @@ export function groupLabel(g: { name: string; mode: string }): string {
   return `${g.name} · ${g.mode === "parallel" ? "并行" : "串行"}`;
 }
 
-// The mode badge shown on task cards/rows. A 双 AI (mode "debate") task shows
-// debate(violet)/collab(teal) by its style; 团队 (mode "team") 显示强调色的「团队」；
-// a single task shows @agent.
+// The mode badge shown on task cards/rows. /pair tasks show debate; 团队
+// (mode "team") 显示强调色的「团队」；a single task shows @agent.
 export function pairBadge(t: {
   mode: string;
   agentType?: string | null;
   executorLabel?: string | null;
-  debate?: { style?: string } | null;
 }): { label: string; cls: string } {
   if (t.mode === "team") return { label: "团队", cls: "bg-accent/10 text-accent" };
   if (t.mode !== "debate") return { label: executorLabel({ executorLabel: t.executorLabel, agentType: t.agentType }), cls: "text-faint" };
-  return t.debate?.style === "collaborate"
-    ? { label: "collab", cls: "bg-teal-500/15 text-teal-700" }
-    : { label: "debate", cls: "bg-violet-500/15 text-violet-700" };
+  return { label: "debate", cls: "bg-violet-500/15 text-violet-700" };
 }
 
 // 团队任务在列表里折叠成一行时，这一行的图标该画哪个状态 —— 取「最该你管的那个」：

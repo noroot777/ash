@@ -376,20 +376,17 @@ export interface BatchCreateTasksBody {
 // ── Debate (§7) ──────────────────────────────────────────────────────────────
 export type HitlGate = "off" | "on";
 
-// Two ways two AIs can work together. "辩论给你答案,协作给你代码":
-//   debate      = 对抗 → 出结论（不改代码：无实现方/审查方/G2）
-//   collaborate = 协作 → 出代码（一方实现、另一方 review）
-export type DebateStyle = "debate" | "collaborate";
+// /pair is discussion-only: two debaters challenge each other and produce a
+// conclusion. Code execution belongs to /team.
+export type DebateStyle = "debate";
 
 export interface DebateConfig {
   topic: string;
-  style: DebateStyle; // 辩论 | 协作
+  style: DebateStyle;
   debaterA: AgentType;
   debaterB: AgentType;
-  implementer: "A" | "B"; // (collaborate only) who implements; the OTHER reviews
   maxRounds: number | null; // null = unlimited
-  gateG1: HitlGate; // 收敛门(辩论) / 方案门(协作)
-  gateG2: HitlGate; // (collaborate only) 代码门
+  gateG1: HitlGate; // consensus gate
 }
 
 export const DEBATE_DEFAULTS: DebateConfig = {
@@ -397,16 +394,42 @@ export const DEBATE_DEFAULTS: DebateConfig = {
   style: "debate",
   debaterA: "claude",
   debaterB: "codex",
-  implementer: "A",
   maxRounds: null,
   gateG1: "on",
-  gateG2: "off",
 };
+
+// Database rows and localStorage may contain fields from retired /pair modes.
+// Normalize at every boundary so old tasks remain readable while all new runs
+// use the single supported debate shape.
+export function normalizeDebateConfig(value: unknown): DebateConfig {
+  const raw = value && typeof value === "object" ? value as Record<string, unknown> : {};
+  const agent = (v: unknown, fallback: AgentType): AgentType =>
+    typeof v === "string" && AGENT_TYPES.includes(v as AgentType) ? v as AgentType : fallback;
+  const maxRounds = raw.maxRounds === null
+    ? null
+    : typeof raw.maxRounds === "number" && Number.isFinite(raw.maxRounds) && raw.maxRounds >= 1
+      ? Math.floor(raw.maxRounds)
+      : DEBATE_DEFAULTS.maxRounds;
+  return {
+    topic: typeof raw.topic === "string" ? raw.topic : DEBATE_DEFAULTS.topic,
+    style: "debate",
+    debaterA: agent(raw.debaterA, DEBATE_DEFAULTS.debaterA),
+    debaterB: agent(raw.debaterB, DEBATE_DEFAULTS.debaterB),
+    maxRounds,
+    gateG1: raw.gateG1 === "off" ? "off" : "on",
+  };
+}
 
 // ── Sessions / traceability (§13) ─────────────────────────────────────────────
 // "lead" = 团队任务的常驻指挥台会话（一个进程跑很多回合，见 server/src/team）；
 // 工人自己的会话仍是 "single"。
-export type SessionRole = "single" | "lead" | "debaterA" | "debaterB" | "implementer" | "reviewer";
+export type SessionRole =
+  | "single"
+  | "lead"
+  | "debaterA"
+  | "debaterB"
+  | "implementer" // legacy: retained so historical sessions still decode
+  | "reviewer"; // legacy: retained so historical sessions still decode
 
 export interface Session {
   id: string;
@@ -457,9 +480,9 @@ export interface ScheduledMessage {
 }
 
 // ── HITL gates (§7) ──────────────────────────────────────────────────────────
-export type GateName = "G1" | "G2"; // G1 = consensus gate, G2 = code gate
+export type GateName = "G1" | "G2"; // G2 is legacy, retained for historical events
 export type GateAction =
-  | { kind: "approve"; text?: string; side?: "A" | "B" } // 放行 (text = note; side = chosen plan when debaters disagreed)
+  | { kind: "approve"; text?: string; side?: "A" | "B" } // side is retained for older clients
   | { kind: "reject" } // 打回终止
   | { kind: "inject"; text: string } // 注入意见 → 回炉再辩（始终双方一起回炉）
   | { kind: "ask"; text: string; target?: "A" | "B" }; // 提问 → 答完继续；target 缺省=问双方，指定=只问那一位辩手
@@ -477,7 +500,7 @@ export type AgentEvent =
   | { kind: "turnEnd" }
   | { kind: "done"; exitStatus: number };
 
-export type DebateSpeaker = "A" | "B" | "impl" | "review" | "user";
+export type DebateSpeaker = "A" | "B" | "impl" | "review" | "user"; // impl/review are legacy transcript speakers
 
 // SSE envelope pushed to the web client.
 export type ServerEvent =

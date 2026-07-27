@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { Task, Session, DebateConfig, GateAction, AgentType, DebateSpeaker, TaskStatus } from "@harness/shared";
+import type { Task, Session, GateAction, AgentType, DebateSpeaker, TaskStatus } from "@harness/shared";
 import { Stop, Robot, X } from "@phosphor-icons/react";
 import type { DebateState, DebateTurn, DebateGate } from "./debateState";
 import { ResumeButtons, ToolCall, CollapsibleText } from "./ui";
@@ -9,7 +9,7 @@ import { ScheduleControl } from "./ScheduleControl";
 import { StatusIcon } from "./StatusIcon";
 import { STATUSES } from "./constants";
 import { runAction, canStopTask } from "./taskActions";
-import { canArchive } from "@harness/shared";
+import { canArchive, normalizeDebateConfig } from "@harness/shared";
 import { TaskTimeChip, formatInstant } from "./time";
 import { executorLabel } from "./executorLabel";
 
@@ -60,8 +60,7 @@ export function DebateView({
   onArchive: () => void;
   onUnarchive: () => void;
 }) {
-  const cfg = task.debate as DebateConfig;
-  const collab = cfg?.style === "collaborate"; // 协作=出代码（有实现/审查/代码门）；辩论=仅讨论
+  const cfg = normalizeDebateConfig(task.debate);
   const [sessions, setSessions] = useState<Session[]>([]);
   const [history, setHistory] = useState<DebateTurn[]>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -109,11 +108,11 @@ export function DebateView({
   const gate: DebateGate | null = useMemo(() => {
     if (state.gate) return state.gate;
     if (task.status !== "awaiting_review") return null;
-    const hasImpl = turns.some((t) => t.speaker === "impl");
+    const hasLegacyCodeTurn = turns.some((t) => t.speaker === "impl" || t.speaker === "review");
     const lastA = [...turns].reverse().find((t) => t.speaker === "A");
     const lastB = [...turns].reverse().find((t) => t.speaker === "B");
     return {
-      gate: hasImpl ? "G2" : "G1",
+      gate: hasLegacyCodeTurn ? "G2" : "G1",
       open: true,
       consensus: !!(lastA?.agrees && lastB?.agrees),
       conclusionA: lastA?.conclusion ?? null,
@@ -131,26 +130,23 @@ export function DebateView({
     }
     return m;
   }, [sessions]);
-  // The reviewer is the non-implementer debater (it resumes that debater's session).
-  const reviewerSide = cfg?.implementer === "A" ? "B" : "A";
   const sessionFor = (sp: DebateSpeaker): Session | undefined =>
     latestByRole[
       sp === "A" ? "debaterA"
         : sp === "B" ? "debaterB"
-          : sp === "review" ? (reviewerSide === "A" ? "debaterA" : "debaterB")
-            : "implementer"
+          : sp === "review" ? "reviewer"
+            : sp === "impl" ? "implementer" : ""
     ];
   const agentFor = (sp: DebateSpeaker): AgentType | undefined =>
     sp === "A" ? cfg?.debaterA
       : sp === "B" ? cfg?.debaterB
-        : sp === "review" ? (reviewerSide === "A" ? cfg?.debaterA : cfg?.debaterB)
-          : cfg?.implementer === "B" ? cfg?.debaterB : cfg?.debaterA;
+        : undefined;
 
   return (
     <main className="flex h-full min-h-0 flex-col">
       <header className="border-b border-line px-6 py-4">
         <div className="flex items-center gap-3">
-          <span className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium ${collab ? "bg-teal-500/15 text-teal-700" : "bg-violet-500/20 text-violet-700"}`}>{collab ? "collab" : "debate"}</span>
+          <span className="shrink-0 rounded bg-violet-500/20 px-1.5 py-0.5 text-[10px] font-medium text-violet-700">debate</span>
           <h1 className="min-w-0 flex-1 truncate text-lg font-medium tracking-tight">{task.title}</h1>
           <StatusPill status={task.status} />
           <TaskTimeChip task={task} />
@@ -197,13 +193,11 @@ export function DebateView({
         <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1.5">
           {cfg && (
             <p className="text-xs text-muted">
-              {collab ? "成员A" : "辩手A"} <b className="text-ink">{cfg.debaterA}</b>
-              {collab ? " ＋ 成员B " : " ↔ 辩手B "}
+              辩手A <b className="text-ink">{cfg.debaterA}</b>
+              {" ↔ 辩手B "}
               <b className="text-ink">{cfg.debaterB}</b>
-              {collab && <> · 实现方 成员{cfg.implementer} · 审查方 成员{cfg.implementer === "A" ? "B" : "A"}</>}
               {" · 轮数 "}{cfg.maxRounds ?? "不设限"}
-              {" · "}{collab ? "方案门" : "收敛门"} {cfg.gateG1 === "on" ? "开" : "关"}
-              {collab && <> · 代码门 {cfg.gateG2 === "on" ? "开" : "关"}</>}
+              {" · 收敛门 "}{cfg.gateG1 === "on" ? "开" : "关"}
             </p>
           )}
           <div className="ml-auto">
@@ -221,14 +215,13 @@ export function DebateView({
             key={i}
             turn={t}
             task={task}
-            collab={collab}
             prevRound={turns[i - 1]?.round}
             session={sessionFor(t.speaker)}
             agentType={agentFor(t.speaker)}
           />
         ))}
-        {/* 辩论=仅讨论：结束后把双方结论提到末尾做一张「讨论结论」卡（协作不需要，它产出的是代码）。 */}
-        {!collab && task.status === "done" && (() => {
+        {/* 结束后把双方结论提到末尾做一张「讨论结论」卡。 */}
+        {task.status === "done" && (() => {
           const ca = [...turns].reverse().find((t) => t.speaker === "A")?.conclusion;
           const cb = [...turns].reverse().find((t) => t.speaker === "B")?.conclusion;
           if (!ca && !cb) return null;
@@ -255,7 +248,7 @@ export function DebateView({
         )}
       </div>
 
-      {gate?.open && task.status === "awaiting_review" && <GateBar gate={gate} collab={collab} onGate={onGate} />}
+      {gate?.open && task.status === "awaiting_review" && <GateBar gate={gate} onGate={onGate} />}
     </main>
   );
 }
@@ -263,14 +256,12 @@ export function DebateView({
 function Bubble({
   turn,
   task,
-  collab,
   prevRound,
   session,
   agentType,
 }: {
   turn: DebateTurn;
   task: Task;
-  collab: boolean;
   prevRound?: number;
   session?: Session;
   agentType?: AgentType;
@@ -291,7 +282,7 @@ function Bubble({
             <div className="mb-1 flex items-center gap-2 text-[11px] text-muted">
               <span className="font-medium text-ink/70">你</span>
               {turn.target && (
-                <span className="text-faint">→ {collab ? "成员" : "辩手"}{turn.target}</span>
+                <span className="text-faint">→ 辩手{turn.target}</span>
               )}
               {turn.at && (
                 <>
@@ -316,7 +307,7 @@ function Bubble({
         : side === "review"
           ? "border-amber-500/40 bg-amber-500/[0.08]"
           : "border-violet-500/40 bg-violet-500/[0.07]";
-  const who = side === "A" ? (collab ? "成员A" : "辩手A") : side === "B" ? (collab ? "成员B" : "辩手B") : side === "review" ? "代码审查" : "实现方";
+  const who = side === "A" ? "辩手A" : side === "B" ? "辩手B" : side === "review" ? "历史代码审查" : "历史实现";
   // Prefer the concrete executor label (e.g. "codex@local"); fall back to the
   // configured agent type before the session row has loaded.
   const agentLabel = executorLabel({ session, task, agentType, fallback: "" });
@@ -325,7 +316,7 @@ function Bubble({
     <div className="mb-3 rise">
       {showDivider && (
         <div className="my-3 text-center text-xs text-faint">
-          ── 第 {turn.round} 轮{turn.round === 1 ? (collab ? " · 各自提案" : " · 盲态开局") : ""} ──
+          ── 第 {turn.round} 轮{turn.round === 1 ? " · 盲态开局" : ""} ──
         </div>
       )}
       <div className={`flex flex-col ${align}`}>
@@ -356,7 +347,7 @@ function Bubble({
   );
 }
 
-function GateBar({ gate, collab, onGate }: { gate: DebateGate; collab: boolean; onGate: (a: GateAction) => void }) {
+function GateBar({ gate, onGate }: { gate: DebateGate; onGate: (a: GateAction) => void }) {
   const [mode, setMode] = useState<"inject" | "ask" | null>(null);
   const [text, setText] = useState("");
   const [target, setTarget] = useState<"A" | "B" | null>(null); // 提问定向到的辩手（仅 ask·G1）
@@ -364,16 +355,14 @@ function GateBar({ gate, collab, onGate }: { gate: DebateGate; collab: boolean; 
   const isG1 = gate.gate === "G1";
   const consensus = !!gate.consensus;
   const label = !isG1
-    ? "代码门 · 等待你裁决"
-    : collab
-      ? "方案门 · 统一方案就绪，待你确认"
-      : consensus
-        ? "收敛门 · 双方已达成共识"
-        : "收敛门 · 双方仍有分歧（结论如下，供你定夺）";
-  const nameA = collab ? "成员A" : "辩手A";
-  const nameB = collab ? "成员B" : "辩手B";
+    ? "历史代码门 · 等待你裁决"
+    : consensus
+      ? "收敛门 · 双方已达成共识"
+      : "收敛门 · 双方仍有分歧（结论如下，供你定夺）";
+  const nameA = "辩手A";
+  const nameB = "辩手B";
 
-  // @-mention：仅 G1 的「提问」支持把问题定向给单个辩手（代码门只有实现方一个，不显示）。
+  // @-mention：仅 G1 的「提问」支持把问题定向给单个辩手；历史代码门不显示候选。
   // 末尾 @token 触发候选；选中即设定 target 并去掉 @token。中文名用宽松正则。
   const canMention = isG1 && mode === "ask";
   const mCands = [{ key: "A" as const, name: nameA }, { key: "B" as const, name: nameB }];
@@ -409,12 +398,10 @@ function GateBar({ gate, collab, onGate }: { gate: DebateGate; collab: boolean; 
           "consensus" that actually differs can be caught at a glance. */}
       {isG1 && (
         <div className="mb-2 flex flex-col gap-0.5 text-xs">
-          <div className={collab || consensus ? "text-emerald-700" : "text-amber-700"}>
-            {collab
-              ? "✓ 两位成员已合并出统一方案（如下，若不符可打回或回炉）"
-              : consensus
-                ? "✓ 双方均表示可收敛、自评结论一致（结论如下，若实际不符可打回或回炉）"
-                : "⚠ 双方未达成一致，以下是两方各自结论："}
+          <div className={consensus ? "text-emerald-700" : "text-amber-700"}>
+            {consensus
+              ? "✓ 双方均表示可收敛、自评结论一致（结论如下，若实际不符可打回或回炉）"
+              : "⚠ 双方未达成一致，以下是两方各自结论："}
           </div>
           {gate.conclusionA || gate.conclusionB ? (
             <>
@@ -434,7 +421,7 @@ function GateBar({ gate, collab, onGate }: { gate: DebateGate; collab: boolean; 
         <span className="text-violet-700">{label}</span>
         <div className="ml-auto flex flex-wrap gap-2">
           <button onClick={() => onGate({ kind: "approve" })} className="rounded-md bg-emerald-500 px-3 py-1 text-xs font-medium text-white">
-            {isG1 ? (collab ? "放行→实现" : "放行→结束") : "放行"}
+            {isG1 ? "放行→结束" : "放行"}
           </button>
           <button onClick={() => onGate({ kind: "reject" })} className="rounded-md border border-line2 px-3 py-1 text-xs text-ink">
             打回终止
@@ -494,7 +481,7 @@ function GateBar({ gate, collab, onGate }: { gate: DebateGate; collab: boolean; 
                   ? "补充意见，双方据此回炉再辩…"
                   : canMention
                     ? "向某位辩手提问，@ 指向单个（不填=问双方）…"
-                    : "向实现方提出的问题…"
+                    : "补充问题；提交后回到辩论继续…"
               }
               className="flex-1 resize-none rounded-md border border-line bg-panel px-2 py-1 text-sm outline-none"
             />
