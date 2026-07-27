@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { Task, Group, TaskStatus, Priority, AgentType } from "@harness/shared";
 import { AGENT_TYPES, isUserSettableStatus, canArchive } from "@harness/shared";
-import { CaretDown, Play, Stop, Trash, ArrowsClockwise, DownloadSimple, ListNumbers } from "@phosphor-icons/react";
+import { CaretDown, Play, Stop, Trash, ArrowsClockwise, DownloadSimple, ListNumbers, PaperPlaneTilt } from "@phosphor-icons/react";
 import { api } from "./api";
 import { STATUSES, PRIORITIES } from "./constants";
 import { CollapsibleText, CopyButton } from "./ui";
@@ -393,11 +393,13 @@ export function EditableTitle({ title, onSave }: { title: string; onSave: (t: st
 // 一次性任务在回合还没结算完(running/queued)时 server 会 409(答复会被单飞锁丢),
 // 按钮先禁用;常驻指挥台没这个问题 —— 它忙着也接得住(跟插话同一条路,先 interrupt
 // 再写 stdin),所以 team 不禁用、文案也换成指挥台那套。
-// agent 给了候选答案(ask_question 的 options)就在问题下方渲染成按钮:点一下 = 把该
-// 选项**原文**当答复送出,走的还是同一个 answerTask —— 候选只是省掉打字,不是单选
-// 题,输入框始终在,用户随时可以答别的。
+// agent 给了候选答案(ask_question 的 options)就在问题下方渲染成按钮:点一下只把该
+// 选项**原文**填进输入框,用户确认或补充后再走同一个 answerTask。候选只是省掉打字,
+// 不是单选题,输入框始终在,用户随时可以答别的或组合多条建议。
 export function QuestionCard({ task }: { task: Task }) {
   const [draft, setDraft] = useState("");
+  const [selectedOption, setSelectedOption] = useState<number | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [sending, setSending] = useState<string | null>(null); // 正在发的那条文本(null=空闲)
   const isLead = task.mode === "team";
   const settling = !isLead && (task.status === "running" || task.status === "queued");
@@ -411,11 +413,23 @@ export function QuestionCard({ task }: { task: Task }) {
       await api.answerTask(task.id, a);
       toast(isLead ? "已答复，指挥者收到了" : "已答复，任务正在带着答案续跑");
       setDraft("");
+      setSelectedOption(null);
     } catch (e) {
       toast(e instanceof Error ? e.message : String(e));
     } finally {
       setSending(null);
     }
+  };
+  const chooseOption = (index: number, option: string) => {
+    // 未修改的上一条候选可以安全替换；已有自由文本则追加，避免一次误点抹掉手写内容。
+    const canReplace = !draft.trim() || (selectedOption !== null && draft === options[selectedOption]);
+    const next = canReplace ? option : `${draft.trimEnd()}\n${option}`;
+    setDraft(next);
+    setSelectedOption(index);
+    requestAnimationFrame(() => {
+      textareaRef.current?.focus();
+      textareaRef.current?.setSelectionRange(next.length, next.length);
+    });
   };
   return (
     <div className="mt-2 overflow-hidden rounded-md border border-cyan-500/40 bg-cyan-500/[0.06]">
@@ -426,25 +440,46 @@ export function QuestionCard({ task }: { task: Task }) {
       <pre className="max-h-48 overflow-y-auto whitespace-pre-wrap break-words px-2.5 pb-1 text-[12px] leading-snug text-ink">{task.question}</pre>
       {options.length > 0 && (
         <div className="flex flex-col gap-1 px-2.5 pb-1.5 pt-0.5">
-          {options.map((opt, i) => (
-            <button
-              key={`${i}-${opt}`}
-              onClick={() => void send(opt)}
-              disabled={settling || busy}
-              title="点一下就以这句话作为答复发出"
-              className="flex w-full items-start gap-1.5 rounded-md border border-cyan-500/30 bg-cyan-500/[0.07] px-2 py-1 text-left text-[12px] leading-snug text-ink transition-colors hover:border-cyan-500/60 hover:bg-cyan-500/15 disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              <span className="mt-px shrink-0 font-mono text-[10px] text-cyan-700">{i + 1}</span>
-              <span className="min-w-0 flex-1 whitespace-pre-wrap break-words">{opt}</span>
-              {sending === opt && <span className="shrink-0 text-[10px] text-cyan-700">发送中…</span>}
-            </button>
-          ))}
+          {options.map((opt, i) => {
+            const selected = selectedOption === i;
+            return (
+              <button
+                key={`${i}-${opt}`}
+                type="button"
+                onClick={() => chooseOption(i, opt)}
+                disabled={settling || busy}
+                aria-pressed={selected}
+                title={selected ? "已填入输入框；可修改，确认后再点“发送答复”" : "填入输入框，不会立即发送"}
+                className={`flex w-full items-start gap-1.5 rounded-md border px-2 py-1 text-left text-[12px] leading-snug text-ink transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
+                  selected
+                    ? "border-cyan-600 bg-cyan-500/20 ring-1 ring-cyan-500/25"
+                    : "border-cyan-500/30 bg-cyan-500/[0.07] hover:border-cyan-500/60 hover:bg-cyan-500/15"
+                }`}
+              >
+                <span className={`mt-px shrink-0 font-mono text-[10px] ${selected ? "font-semibold text-cyan-800" : "text-cyan-700"}`}>
+                  {i + 1}
+                </span>
+                <span className="min-w-0 flex-1 whitespace-pre-wrap break-words">{opt}</span>
+                {selected && <span className="shrink-0 text-[10px] font-medium text-cyan-800">已填入</span>}
+              </button>
+            );
+          })}
         </div>
       )}
-      <div className="flex items-start gap-1.5 border-t border-cyan-500/20 px-2 py-1.5">
+      {options.length > 0 && !settling && (
+        <div className="border-t border-cyan-500/20 px-2.5 pt-1.5 text-[10px] font-medium text-cyan-800/80">
+          选择只会填入下方输入框；检查或补充后，再点“发送答复”提交
+        </div>
+      )}
+      <div className={`${options.length > 0 && !settling ? "" : "border-t border-cyan-500/20"} flex items-start gap-1.5 px-2 py-1.5`}>
         <textarea
+          ref={textareaRef}
           value={draft}
-          onChange={(e) => setDraft(e.target.value)}
+          onChange={(e) => {
+            const next = e.target.value;
+            setDraft(next);
+            if (selectedOption !== null && !next.includes(options[selectedOption])) setSelectedOption(null);
+          }}
           onKeyDown={(e) => {
             if ((e.metaKey || e.ctrlKey) && e.key === "Enter") { e.preventDefault(); void send(); }
           }}
@@ -453,7 +488,7 @@ export function QuestionCard({ task }: { task: Task }) {
             settling
               ? "提问回合还没结束，稍候片刻再答…"
               : options.length > 0
-                ? "都不合适？自己写一个答复（⌘↵ 发送）"
+                ? "选择上方建议，或自己写答复（⌘↵ 发送）"
                 : isLead
                   ? "写下答复，发送后直接进同一个常驻会话（⌘↵ 发送）"
                   : "写下答复，发送后会直接唤醒 agent 带着答案继续（⌘↵ 发送）"
@@ -462,11 +497,14 @@ export function QuestionCard({ task }: { task: Task }) {
           className="block min-w-0 flex-1 resize-y rounded-md bg-transparent px-1.5 py-1 text-[12px] leading-snug text-ink outline-none placeholder:text-faint disabled:opacity-50"
         />
         <button
+          type="button"
           onClick={() => void send()}
           disabled={settling || busy || !draft.trim()}
-          className="shrink-0 rounded-md bg-cyan-600 px-2.5 py-1 text-[11px] font-medium text-white hover:bg-cyan-500 disabled:opacity-40"
+          title="发送输入框中的答复"
+          className="flex shrink-0 items-center gap-1 rounded-md border border-cyan-500 bg-cyan-600 px-3 py-1.5 text-[11px] font-semibold text-white shadow-sm transition-colors hover:bg-cyan-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/50 focus-visible:ring-offset-1 disabled:cursor-not-allowed disabled:opacity-40"
         >
-          {sending !== null && sending === draft.trim() ? "发送中…" : "答复并唤醒"}
+          <PaperPlaneTilt size={13} weight="fill" />
+          {busy ? "发送中…" : "发送答复"}
         </button>
       </div>
     </div>
