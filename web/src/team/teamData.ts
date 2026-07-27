@@ -66,36 +66,68 @@ export type FeedRow =
   | { kind: "conv"; key: string; item: ConvItem }
   | { kind: "batch"; key: string; batch: Batch };
 
-function itemTime(it: ConvItem): string | null {
-  return it.kind === "agent" ? it.endedAt ?? it.time ?? null : it.at ?? null;
+// 会话哨兵、session 元数据和任务字段虽然当前都写 ISO,历史/实时来源仍可能携带
+// 不同的可解析格式。所有团队时间对齐统一先过这一处,禁止再做格式字符串比较。
+export function timeMs(value?: string | null): number | null {
+  if (!value) return null;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function itemStartTime(it: ConvItem): number | null {
+  return timeMs(it.kind === "agent" ? it.time : it.at);
+}
+
+function itemEndTime(it: ConvItem): number | null {
+  return timeMs(it.kind === "agent" ? it.endedAt ?? it.time : it.at);
 }
 
 export function mergeFeed(items: ConvItem[], batches: Batch[]): FeedRow[] {
   // 单调化:没时间戳的条目继承前一个已知时刻,免得插入点乱跳。
-  let known: string | null = null;
-  const times = items.map((it) => (known = itemTime(it) ?? known));
-  const sorted = [...batches].sort((a, b) => a.at.localeCompare(b.at));
+  let known: number | null = null;
+  const times = items.map((it) => (known = itemEndTime(it) ?? known));
+  // 解析失败的批次没有可靠插入点,稳定地留到末尾；同一毫秒保持原输入顺序。
+  const sorted = batches
+    .map((batch, index) => ({ batch, index, at: timeMs(batch.at) }))
+    .sort((a, b) => {
+      if (a.at === null) return b.at === null ? a.index - b.index : 1;
+      if (b.at === null) return -1;
+      return a.at - b.at || a.index - b.index;
+    });
   const rows: FeedRow[] = [];
   let bi = 0;
-  const flush = (upTo: string | null) => {
-    while (bi < sorted.length && (upTo === null || sorted[bi]!.at <= upTo)) {
-      const b = sorted[bi++]!;
-      rows.push({ kind: "batch", key: `b:${b.key}`, batch: b });
+  const flushThrough = (upTo: number | null) => {
+    if (upTo === null) return;
+    while (bi < sorted.length && sorted[bi]!.at !== null && sorted[bi]!.at! <= upTo) {
+      const { batch } = sorted[bi++]!;
+      rows.push({ kind: "batch", key: `b:${batch.key}`, batch });
     }
   };
   items.forEach((item, i) => {
+    // TeamView 可能在已经收到实时日志后才挂载；此时 useConversation 为避免正文重复
+    // 不加载旧快照,首条可见消息会晚于历史派活。先把明确早于首条起点的卡放到它前面,
+    // 否则这些旧卡只能在最终兜底里全部堆到最新消息之后。
+    if (i === 0) flushThrough(itemStartTime(item));
     // 派活发生在某个回合执行期间,所以卡片要排在那个回合之后 —— 判据是「批次时刻
     // 早于上一条目的结束时刻」,而不是跟当前条目比(那会插到回合前面去)。
-    if (i > 0) flush(times[i - 1] ?? null);
+    if (i > 0) flushThrough(times[i - 1] ?? null);
     rows.push({ kind: "conv", key: `c:${i}`, item });
   });
-  flush(null); // 剩下的(比最后一个回合还新)排在末尾
+  // 剩下的(比最后一个回合还新,或时间不可解析)稳定地排在末尾。
+  while (bi < sorted.length) {
+    const { batch } = sorted[bi++]!;
+    rows.push({ kind: "batch", key: `b:${batch.key}`, batch });
+  }
   return rows;
 }
 
 // 调度者自己那条时间轴:从已解析的会话里把每个回合的执行区间捞出来。
-export function leadTurns(items: ConvItem[]): { from: string; to: string | null }[] {
-  return items
-    .filter((it): it is Extract<ConvItem, { kind: "agent" }> => it.kind === "agent" && !!it.time)
-    .map((it) => ({ from: it.time!, to: it.endedAt ?? null }));
+export type LeadTurn = { from: number; to: number | null };
+
+export function leadTurns(items: ConvItem[]): LeadTurn[] {
+  return items.flatMap((it) => {
+    if (it.kind !== "agent") return [];
+    const from = timeMs(it.time);
+    return from === null ? [] : [{ from, to: timeMs(it.endedAt) }];
+  });
 }

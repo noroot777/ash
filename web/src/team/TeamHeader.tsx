@@ -28,6 +28,7 @@ import { conversationToText, downloadConversation, type ConvItem } from "../Conv
 import { Duration, TaskTimeChip } from "../time";
 import { shortPath } from "../util";
 import { TeamTimeline } from "./TeamTimeline";
+import type { LeadTurn } from "./teamData";
 import { teamLeadExecutorLabel, teamWorkerExecutorLabel } from "../executorLabel";
 import { AttachmentDisplay, parseAttachmentText } from "../messageAttachments";
 
@@ -54,7 +55,7 @@ export function TeamHeader({
   haltedByHistory: boolean;
   sessions: Session[];
   items: ConvItem[];
-  leadTurns: { from: string; to: string | null }[];
+  leadTurns: LeadTurn[];
   onPatch: (patch: Partial<Task>) => void | Promise<void>;
   onRun: () => void | Promise<void>;
   onTeamHalted: () => void | Promise<void>;
