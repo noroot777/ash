@@ -111,11 +111,10 @@ export function IssueDetail({
       const res = await api.postIssueComment(issue.id, {
         body,
         mention,
-        // 带一队时不给调度台开 worktree(执行者跑在项目目录,只挪走调度者会让两边看到
-        // 不同的文件);要隔离由调度者派活时逐个开。
         ...(asTeam ? { mentionTeam: true } : {}),
         attachments: paths,
-        useWorktree: asTeam ? false : execWorktree,
+        // 带一队时，这个 opt-in 作用于整队共享目录；默认仍为 false。
+        useWorktree: execWorktree,
       });
       setComments((prev) => [...prev, res.comment, ...(res.agentComment ? [res.agentComment] : [])]);
       if (res.task) {
@@ -336,8 +335,11 @@ export function IssueDetail({
         <div className="mt-1.5 text-[11.5px] text-faint">
           普通文字 = 评论讨论 · <b className="font-semibold text-accent">@claude</b> / <b className="font-semibold text-accent">@codex</b> = 交给它执行(把标题+描述+整条讨论一起打包发过去) · 点 <b className="font-semibold text-accent">@</b> 可以选「带一队」(调度台带执行者)
         </div>
-        {project?.health.isRepo && !mentionTeam && (
-          <label className="mt-1.5 inline-flex cursor-pointer items-center gap-1.5 text-[11.5px] text-faint" title="默认直接在项目仓库改;开启则隔离到 harness/<id8> 分支(你自行 merge),并能在下方看到它的提交">
+        {project?.health.isRepo && (
+          <label
+            className="mt-1.5 inline-flex cursor-pointer items-center gap-1.5 text-[11.5px] text-faint"
+            title={mentionTeam ? "默认整队直接在项目仓库改;开启则调度台和默认执行者共用同一个 worktree" : "默认直接在项目仓库改;开启则隔离到 harness/<id8> 分支(你自行 merge),并能在下方看到它的提交"}
+          >
             <button
               type="button"
               onClick={() => setExecWorktree((v) => !v)}
@@ -346,7 +348,7 @@ export function IssueDetail({
             >
               <span className={`absolute top-0.5 h-2.5 w-2.5 rounded-full bg-panel transition-all ${execWorktree ? "left-3" : "left-0.5"}`} />
             </button>
-            @执行用 worktree 隔离 · {execWorktree ? "改动落在独立分支(你自行 merge)" : "默认直接改主仓库"}
+            {mentionTeam ? "@执行整队共用 worktree" : "@执行用 worktree 隔离"} · {execWorktree ? "改动落在独立分支(你自行 merge)" : "默认直接改主仓库"}
           </label>
         )}
 

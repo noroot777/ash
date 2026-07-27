@@ -11,6 +11,7 @@
     "test:diagnostics": "tsx scripts/test-codex-diagnostics.ts",
     "test:singleton": "tsx scripts/test-singleton.ts",
     "test:queue": "tsx scripts/test-queue-order.ts",
+    "test:task-workspace": "tsx scripts/test-task-workspace.ts",
     "test:executor-resolution": "tsx scripts/test-executor-resolution.ts"
   },
   "dependencies": {

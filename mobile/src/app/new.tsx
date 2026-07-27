@@ -177,10 +177,10 @@ export default function NewTask() {
         priority,
         // Resident consoles do not run the single-task auto-title turn.
         autoTitle: teamOn ? false : !explicit,
-        // A team lead and its dispatched workers must share the project view;
-        // moving only the lead into a worktree would split their filesystem.
-        useWorktree: project?.health.isRepo && !teamOn ? useWorktree : false,
-        worktreeBase: !teamOn && useWorktree && base ? base : null,
+        // Team worktree is opt-in too: when enabled, the resident lead and its
+        // default workers share it; a worker can still request its own isolation.
+        useWorktree: project?.health.isRepo ? useWorktree : false,
+        worktreeBase: useWorktree && base ? base : null,
       });
       upsertTask(t);
       // 启动时机分支：run=立即跑；once/cron=挂定时（调度器到点入队）；create=留 backlog。
@@ -308,10 +308,14 @@ export default function NewTask() {
           ) : null}
         </Field>
 
-        {project?.health.isRepo && !teamOn ? (
-          <Field label="worktree（隔离运行）">
+        {project?.health.isRepo ? (
+          <Field label={teamOn ? "worktree（团队共用）" : "worktree（隔离运行）"}>
             <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
-              <Pill label={useWorktree ? "✓ 用新 worktree" : "直接在项目跑"} active={useWorktree} onPress={() => setUseWorktree((v) => !v)} />
+              <Pill
+                label={useWorktree ? (teamOn ? "✓ 整队用新 worktree" : "✓ 用新 worktree") : "直接在项目跑"}
+                active={useWorktree}
+                onPress={() => setUseWorktree((v) => !v)}
+              />
             </View>
             {useWorktree ? (
               <View style={{ marginTop: 8, gap: 8 }}>

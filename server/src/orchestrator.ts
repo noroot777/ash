@@ -8,7 +8,8 @@ import { bus } from "./bus.js";
 import { id, now, attachmentsPrompt } from "./util.js";
 import { setTaskStatus } from "./status.js";
 import { trackRun, untrackRun, takeStopped, takeConfirmed, type StopSettle } from "./runs.js";
-import { resolveWorkspace, ensureWorkdir, prepareWorktree } from "./git.js";
+import { ensureWorkdir } from "./git.js";
+import { taskWorkspace } from "./task-workspace.js";
 import { resolveExecutorFor } from "./executors/index.js";
 import type { RunHandle } from "./executors/types.js";
 import { RUNS_DIR } from "./paths.js";
@@ -249,13 +250,9 @@ export async function runTask(taskId: string): Promise<void> {
       .where(eq(tasks.id, taskId));
     await setStatus(taskId, "running");
 
-    // Per-task worktree opt-in (§4): when the user ticked "worktree" in the new-
-    // task form, materialize (or reuse) <repo>/.worktrees/<id> on harness/<id8>
-    // before handing the cwd to the agent. Failure surfaces as the task failing,
-    // not a silent fallback to repoPath — the user explicitly asked for isolation.
-    const ws = task.useWorktree
-      ? await prepareWorktree(project.repoPath, taskId, task.worktreeBase)
-      : await resolveWorkspace(project.repoPath, taskId);
+    // Ordinary tasks resolve exactly as before. Team workers additionally inherit
+    // their lead's shared workspace unless they explicitly request another worktree.
+    const ws = await taskWorkspace(task, project.repoPath);
     const agentType = (task.agentType as AgentType) ?? "claude";
     const ex = await resolveExecutorFor({ executorId: task.executorId, type: agentType });
 

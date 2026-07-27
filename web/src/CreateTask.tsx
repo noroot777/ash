@@ -189,10 +189,10 @@ export function CreateTask({
         // 调度台不走「首个 agent 自动起名」那套协议(它是常驻会话,没有那个回合),
         // 标题先取第一行,用户在调度台 header 上随时改。
         autoTitle: !teamOn,
-        // 团队模式不给调度台开 worktree:执行者是各自独立的任务、跑在项目目录,
-        // 只把调度者挪进 worktree 只会让两边看到不同的文件。隔离在派活时逐个开。
-        useWorktree: project.health.isRepo && !teamOn ? useWorktree : false,
-        worktreeBase: !teamOn && useWorktree && base ? base : null,
+        // 默认仍直接在项目目录跑；团队显式开启后，调度台和默认执行者共用
+        // 同一个 worktree。执行者自己再 opt-in 时才另开一层隔离。
+        useWorktree: project.health.isRepo ? useWorktree : false,
+        worktreeBase: useWorktree && base ? base : null,
       });
       // 启动时机：run=立即跑；once/cron=挂定时（调度器到点入队，不在此刻跑）；
       // create=什么都不做（任务停在 backlog，手动再运行）。
@@ -278,9 +278,10 @@ export function CreateTask({
         <div className="px-4 pt-1.5">
           <RunLocation project={project} />
         </div>
-        {project.health.isRepo && !teamOn && (
+        {project.health.isRepo && (
           <WorktreeField
             taskIdPreview={taskIdPreview}
+            team={teamOn}
             on={useWorktree}
             base={base}
             branches={branches}
@@ -458,6 +459,7 @@ function WorktreeField({
   base,
   branches,
   taskIdPreview,
+  team,
   onToggle,
   onBase,
 }: {
@@ -465,6 +467,7 @@ function WorktreeField({
   base: string;
   branches: string[];
   taskIdPreview: string;
+  team: boolean;
   onToggle: () => void;
   onBase: (b: string) => void;
 }) {
@@ -475,10 +478,10 @@ function WorktreeField({
         type="button"
         onClick={onToggle}
         className="inline-flex items-center gap-1.5 rounded-md px-1.5 py-0.5 text-[11px] text-muted hover:bg-raised hover:text-ink"
-        title={on ? "关闭：直接在项目目录跑" : "开启：本次任务在新 worktree 里跑"}
+        title={on ? "关闭：直接在项目目录跑" : team ? "开启：整支团队在同一个新 worktree 里跑" : "开启：本次任务在新 worktree 里跑"}
       >
         <TreeStructure size={12} className={on ? "text-accent" : "text-faint"} />
-        <span>用 worktree 隔离</span>
+        <span>{team ? "团队共用 worktree" : "用 worktree 隔离"}</span>
         <span
           className={`relative ml-0.5 inline-block h-3 w-5 rounded-full transition-colors ${on ? "bg-accent" : "bg-line2"}`}
           aria-pressed={on}

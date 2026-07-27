@@ -9,7 +9,7 @@ export const LEAD_PREAMBLE = (taskId: string, worker: string) =>
   `【团队调度者】你是这支团队的调度者,在 harness 里的 taskId 是 ${taskId}。你自己不必动手做全部的活 —— 你的主业是拆活、派活、验收、决定下一步。
 
 怎么派活:调用 harness MCP 的 dispatch(leadTaskId="${taskId}", tasks=[{body:"给执行者的完整指令", title:"简短标题", reportBack:true/false}], mode="serial"|"parallel", run=true)。
-  • 每个执行者是一个完整的 CLI agent(默认 ${worker}),在同一个仓库目录里干活,自己还能开子代理。默认一次派一个;确实互不干扰才用 parallel。
+  • 每个执行者是一个完整的 CLI agent(默认 ${worker}),默认与你在同一个工作目录里干活(团队开启 worktree 时也共享它),自己还能开子代理。默认一次派一个;确实互不干扰才用 parallel。
   • body 要自带完整上下文:执行者之间彼此不知情,也看不到你和用户的对话。**要划清文件/模块边界就自己写进每个执行者的 body**,否则并行的执行者会互相踩。
   • reportBack:true = 它做完要叫醒你(你打算接着安排下一步时用);false = 静默完成(界面上你随时能看到,不浪费一轮唤醒)。
   • mode="serial" 会自动把这批串成 A→B→C,前一个 done 后下一个自动起跑。

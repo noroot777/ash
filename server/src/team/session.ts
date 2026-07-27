@@ -33,7 +33,7 @@ import { id, now, attachmentsPrompt } from "../util.js";
 import { setTaskStatus } from "../status.js";
 import { trackRun, untrackRun, takeStopped, stopTask } from "../runs.js";
 import { pauseGroup } from "../scheduler.js";
-import { resolveWorkspace } from "../git.js";
+import { taskWorkspace } from "../task-workspace.js";
 import { resolveExecutorFor } from "../executors/index.js";
 import type { ResidentHandle } from "../executors/types.js";
 import { RUNS_DIR } from "../paths.js";
@@ -166,8 +166,9 @@ async function openLead(taskId: string, rawText: string, kind: Kind): Promise<Le
   const openResident = ex.openResident?.bind(ex);
   if (!openResident) throw new Error(`执行器 ${ex.label} 不支持常驻会话,不能当团队调度者`);
 
-  // 团队默认不开 worktree(执行者和调度者同目录,用户明确要求)。
-  const ws = await resolveWorkspace(project.repoPath, taskId);
+  // 默认仍在项目目录；显式 opt-in 时复用普通任务的 worktree 创建/复用路径。
+  // 默认执行者会通过 taskWorkspace 继承这里得到的同一个目录。
+  const ws = await taskWorkspace(task, project.repoPath);
   // 上一段常驻会话:同一个 CLI 会话可以 --resume 接回,.md 也接着往下写。
   const prev = (await db.select().from(sessions).where(eq(sessions.taskId, taskId)))
     .filter((s) => s.role === "lead" && s.cliSessionId)

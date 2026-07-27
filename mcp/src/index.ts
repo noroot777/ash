@@ -383,7 +383,7 @@ server.registerTool(
   {
     title: "派活给执行者(团队调度者专用)",
     description:
-      "团队调度者(mode=team 的任务)用这个派活:一次建 N 个执行者任务,绑到自己名下,默认立刻起跑。每个执行者是一个完整的 CLI agent(自己还能开子代理),在同一个仓库目录里干活。\n\n• mode=\"serial\"(多个任务时的默认)会把这批串成 A→B→C,前一个 done 后下一个自动起跑;mode=\"parallel\" 才是真并行(限流 4 个),确认互不干扰再用。\n• 每个 body 要自带完整上下文 —— 执行者之间彼此不知情,也看不到你和用户的对话。**要划清文件/模块边界就自己写进每个执行者的 body**,否则并行的执行者会互相踩。\n• reportBack:true = 它做完要叫醒你(你打算接着安排下一步时用);false(默认)= 静默完成,你随时能用 list_tasks 查。\n• 你会被唤醒的时机只有三种:执行者提问、执行者失败、reportBack 的执行者完成。\n\n返回执行者的 id + 标题,后续用 get_task / run_task / answer_question 引用它们。",
+      "团队调度者(mode=team 的任务)用这个派活:一次建 N 个执行者任务,绑到自己名下,默认立刻起跑。每个执行者是一个完整的 CLI agent(自己还能开子代理),默认与调度台在同一个工作目录里干活;团队开启 worktree 时也共享它。\n\n• mode=\"serial\"(多个任务时的默认)会把这批串成 A→B→C,前一个 done 后下一个自动起跑;mode=\"parallel\" 才是真并行(限流 4 个),确认互不干扰再用。\n• 每个 body 要自带完整上下文 —— 执行者之间彼此不知情,也看不到你和用户的对话。**要划清文件/模块边界就自己写进每个执行者的 body**,否则并行的执行者会互相踩。\n• reportBack:true = 它做完要叫醒你(你打算接着安排下一步时用);false(默认)= 静默完成,你随时能用 list_tasks 查。\n• 你会被唤醒的时机只有三种:执行者提问、执行者失败、reportBack 的执行者完成。\n\n返回执行者的 id + 标题,后续用 get_task / run_task / answer_question 引用它们。",
     inputSchema: {
       leadTaskId: z.string().describe("你自己的 taskId(团队任务,prompt 前言里有)"),
       tasks: z
@@ -394,7 +394,7 @@ server.registerTool(
             agentType: AGENT_TYPE.optional().describe("覆盖团队默认的执行者类型"),
             executorId: z.string().nullable().optional().describe("覆盖团队执行者任务的默认执行器 profile(agents.id)。指定则优先用该 profile；为空/悬空时按 agentType 默认执行器降级"),
             reportBack: z.boolean().optional().describe("true=它完成时叫醒你;默认 false 静默完成"),
-            useWorktree: z.boolean().optional().describe("true=这个执行者单独开 worktree 隔离(默认 false,同目录干活)"),
+            useWorktree: z.boolean().optional().describe("true=这个执行者在团队共享目录之上再单独开 worktree 隔离(默认 false,继承调度台目录)"),
           }),
         )
         .min(1)

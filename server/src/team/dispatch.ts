@@ -109,7 +109,8 @@ export async function dispatchWorkers(
       scheduleId: null as string | null,
       createdAt: at,
       updatedAt: at,
-      // 团队默认同目录干活(用户明确要求);确实要隔离时逐个执行者 opt-in。
+      // false = 继承调度台的共享目录(可能就是团队 worktree)；true = 执行者
+      // 自己再开一个标准位置的 worktree，具体解析统一在 taskWorkspace。
       useWorktree: s.useWorktree ?? false,
       worktreeBase: null as string | null,
     };

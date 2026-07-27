@@ -1659,10 +1659,9 @@ api.post("/issues/:id/comments", async (c) => {
       })();
     } else {
       // execute: 建 task,worktree 按 opt-in,立即开跑。跟原来一致。
-      // `mentionTeam`(界面上的「@claude · 带一队」)只换一件事:建出来的是 mode:"team"
-      // 的常驻调度台,它自己拆活派执行者。团队不给调度台开 worktree(执行者是各自独立的任务、
-      // 跑在项目目录,只把调度者挪走会让两边看到不同的文件),隔离留给它派活时逐个开。
-      const useWt = !b.mentionTeam && !!b.useWorktree && (proj ? projectHealthLight(proj.repoPath).isRepo : false);
+      // `mentionTeam`(界面上的「@claude · 带一队」)建 mode:"team" 的常驻调度台。
+      // worktree 仍默认关闭；显式开启时整队共享，执行者可再逐个 opt-in 隔离。
+      const useWt = !!b.useWorktree && (proj ? projectHealthLight(proj.repoPath).isRepo : false);
       const tid = id();
       const trow = {
         id: tid,
