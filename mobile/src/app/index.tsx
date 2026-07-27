@@ -2,18 +2,17 @@ import { useState, useMemo, useCallback } from "react";
 import { View, Text, Pressable, SectionList, RefreshControl } from "react-native";
 import { Redirect, useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import type { Task, TaskStatus, Group } from "@harness/shared";
+import { workersOf, type Task, type TaskStatus, type Group } from "@harness/shared";
 import { getBaseURL } from "@/lib/config";
 import { api } from "@/lib/api";
 import { useStore } from "@/lib/store";
 import { refreshAll } from "@/lib/data";
 import { STATUSES, STATUS_META } from "@/lib/constants";
 import { useTheme, radius, fonts } from "@/lib/theme";
-import { TaskTimeChip } from "@/lib/time";
 import { groupLabel } from "@/lib/util";
-import { PriorityBars, Pill } from "@/components/ui";
-import { SignalBar } from "@/components/SignalBar";
+import { Pill } from "@/components/ui";
 import { SideDrawer } from "@/components/SideDrawer";
+import { TaskListRow } from "@/components/TaskListRow";
 import { Ionicons } from "@expo/vector-icons";
 
 const PRIORITY_RANK: Record<string, number> = { urgent: 0, high: 1, medium: 2, low: 3, none: 4 };
@@ -32,46 +31,6 @@ type SectionMeta =
   | { kind: "archived"; key: "archived"; count: number }
   | { kind: "group"; key: string; group: Group }
   | { kind: "ungrouped"; key: "ungrouped" };
-
-function TaskRow({ task, onPress }: { task: Task; onPress: () => void }) {
-  const theme = useTheme();
-  return (
-    <Pressable
-      onPress={onPress}
-      style={({ pressed }) => ({
-        flexDirection: "row",
-        alignItems: "center",
-        gap: 13,
-        marginHorizontal: 16,
-        paddingHorizontal: 14,
-        paddingVertical: 14,
-        borderRadius: radius.lg,
-        backgroundColor: pressed ? theme.raised : theme.panel,
-        borderWidth: 1,
-        borderColor: theme.line,
-      })}
-    >
-      <SignalBar status={task.status} height={38} />
-      <View style={{ flex: 1, gap: 5 }}>
-        <Text style={{ color: theme.ink, fontSize: 15, fontFamily: fonts.bodySemi }} numberOfLines={2}>
-          {task.title || "(无标题)"}
-        </Text>
-        <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
-          {task.agentType ? (
-            <Text style={{ color: theme.muted, fontSize: 12, fontFamily: fonts.mono }}>@{task.agentType}</Text>
-          ) : null}
-          {task.labels.slice(0, 2).map((l) => (
-            <Text key={l} style={{ color: theme.faint, fontSize: 12, fontFamily: fonts.mono }}>
-              #{l}
-            </Text>
-          ))}
-          <TaskTimeChip task={task} />
-        </View>
-      </View>
-      <PriorityBars priority={task.priority} />
-    </Pressable>
-  );
-}
 
 // 分组视图 section 头里的「运行/继续」按钮。
 function GroupRunChip({ label, onPress }: { label: string; onPress: () => void }) {
@@ -113,6 +72,7 @@ function TaskList() {
   const [refreshing, setRefreshing] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [archivedOpen, setArchivedOpen] = useState(false); // 底部「已归档」区默认折叠
+  const [openTeams, setOpenTeams] = useState<Set<string>>(new Set());
   const [view, setView] = useState<"status" | "group">("status"); // 列表视图:按状态 / 按分组
   const currentProject = projects.find((p) => p.id === projectId) ?? null;
 
@@ -138,6 +98,8 @@ function TaskList() {
 
   const sections = useMemo<(SectionMeta & { data: Task[] })[]>(() => {
     const mine = tasks.filter((t) => t.projectId === projectId && t.mode !== "debate");
+    // 与 web 一致：执行者只挂在所属团队卡片下面，不独占状态/分组列表位置。
+    const topLevel = mine.filter((task) => task.parentId === null);
     // 与网页端对齐(web/src/TaskList.tsx):同优先级用 createdAt 倒序,而非
     // updatedAt —— 后者会让任何状态/正文改动都把卡片顶起,列表顺序飘。
     const byPriority = (a: Task, b: Task) =>
@@ -146,9 +108,10 @@ function TaskList() {
 
     // 分组视图:每个分组一区(含空组,便于整组运行/查看结构) + 末尾「未分组」区。归档任务不出现。
     if (view === "group") {
-      const active = mine.filter((t) => !t.archived);
+      const active = topLevel.filter((t) => !t.archived);
       const projGroups = groups
-        .filter((g) => g.projectId === projectId)
+        // team dispatch 自动建的内部组由团队卡管理，不进入普通分组视图。
+        .filter((g) => g.projectId === projectId && !g.ownerTaskId)
         .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
       const groupSections = projGroups.map((g) => ({
         kind: "group" as const,
@@ -166,9 +129,9 @@ function TaskList() {
     const statusSections = STATUSES.map((s) => ({
       kind: "status" as const,
       key: s.key,
-      data: mine.filter((t) => !t.archived && groupedStatus(t) === s.key).sort(byPriority),
+      data: topLevel.filter((t) => !t.archived && groupedStatus(t) === s.key).sort(byPriority),
     })).filter((s) => s.data.length > 0);
-    const archived = mine
+    const archived = topLevel
       .filter((t) => t.archived)
       .sort((a, b) => (b.archivedAt ?? "").localeCompare(a.archivedAt ?? ""));
     return archived.length
@@ -233,7 +196,26 @@ function TaskList() {
       <SectionList<Task, SectionMeta>
         sections={sections}
         keyExtractor={(t) => t.id}
-        renderItem={({ item }) => <TaskRow task={item} onPress={() => router.push(`/task/${item.id}`)} />}
+        renderItem={({ item }) => {
+          const workers = item.mode === "team" ? workersOf(tasks, item.id) : [];
+          return (
+            <TaskListRow
+              task={item}
+              workers={workers}
+              expanded={openTeams.has(item.id)}
+              onToggle={() =>
+                setOpenTeams((current) => {
+                  const next = new Set(current);
+                  next.has(item.id) ? next.delete(item.id) : next.add(item.id);
+                  return next;
+                })
+              }
+              onPress={() => router.push(`/task/${item.id}`)}
+              onWorkerPress={(worker) => router.push(`/task/${worker.id}`)}
+            />
+          );
+        }}
+        extraData={openTeams}
         renderSectionHeader={({ section }) =>
           section.kind === "archived" ? (
             <Pressable

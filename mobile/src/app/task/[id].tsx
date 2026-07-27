@@ -26,6 +26,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { Conversation } from "@/components/Conversation";
 import { QuestionCard } from "@/components/QuestionCard";
 import { TeamTaskDetail } from "@/components/team/TeamTaskDetail";
+import { WorkerTeamLink } from "@/components/WorkerTeamLink";
 import { MarkdownText } from "@/components/MarkdownText";
 import { PriorityBars } from "@/components/ui";
 import { SignalBar } from "@/components/SignalBar";
@@ -47,7 +48,8 @@ export default function TaskDetail() {
   const insets = useSafeAreaInsets();
   const theme = useTheme();
 
-  const task = useStore((s) => s.tasks.find((t) => t.id === id));
+  const tasks = useStore((s) => s.tasks);
+  const task = tasks.find((item) => item.id === id);
   const upsertTask = useStore((s) => s.upsertTask);
   const removeTask = useStore((s) => s.removeTask);
 
@@ -147,6 +149,8 @@ export default function TaskDetail() {
   }
 
   const status = task.status;
+  const dispatchedWorker = task.parentId !== null;
+  const parentTeam = dispatchedWorker ? tasks.find((item) => item.id === task.parentId) : null;
   const action = runAction(status, { mode: task.mode, awaitingAnswer: !!task.question });
   // Resident team consoles accept interrupt + send while running. The same
   // running/queued guard remains correct for one-shot tasks.
@@ -319,22 +323,24 @@ export default function TaskDetail() {
       <Stack.Screen
         options={{
           title: "",
-          headerRight: () => (
-            <View style={{ flexDirection: "row", alignItems: "center", gap: 18 }}>
-              {task.archived ? (
-                <Pressable onPress={onUnarchive} hitSlop={10}>
-                  <Ionicons name="archive" size={20} color={theme.accent} />
-                </Pressable>
-              ) : canArchive(status) ? (
-                <Pressable onPress={onArchive} hitSlop={10}>
-                  <Ionicons name="archive-outline" size={20} color={theme.muted} />
-                </Pressable>
-              ) : null}
-              <Pressable onPress={confirmDelete} hitSlop={10}>
-                <Text style={{ color: theme.danger, fontSize: 17 }}>🗑</Text>
-              </Pressable>
-            </View>
-          ),
+          headerRight: dispatchedWorker
+            ? undefined
+            : () => (
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 18 }}>
+                  {task.archived ? (
+                    <Pressable onPress={onUnarchive} hitSlop={10}>
+                      <Ionicons name="archive" size={20} color={theme.accent} />
+                    </Pressable>
+                  ) : canArchive(status) ? (
+                    <Pressable onPress={onArchive} hitSlop={10}>
+                      <Ionicons name="archive-outline" size={20} color={theme.muted} />
+                    </Pressable>
+                  ) : null}
+                  <Pressable onPress={confirmDelete} hitSlop={10}>
+                    <Text style={{ color: theme.danger, fontSize: 17 }}>🗑</Text>
+                  </Pressable>
+                </View>
+              ),
         }}
       />
 
@@ -388,6 +394,13 @@ export default function TaskDetail() {
           <Text style={{ color: theme.ink, fontSize: 21, fontFamily: fonts.display, lineHeight: 27 }} numberOfLines={2}>
             {task.title || "(无标题)"}
           </Text>
+
+          {dispatchedWorker ? (
+            <WorkerTeamLink
+              title={parentTeam?.title || "返回团队调度台"}
+              onPress={() => router.push(`/task/${task.parentId}`)}
+            />
+          ) : null}
 
           {/* Metadata: agent + priority + labels */}
           <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
@@ -458,7 +471,9 @@ export default function TaskDetail() {
           }}
         >
           <Ionicons name="archive" size={14} color={theme.faint} />
-          <Text style={{ color: theme.faint, fontSize: 13 }}>已归档——取消归档后可继续对话</Text>
+          <Text style={{ color: theme.faint, fontSize: 13 }}>
+            {dispatchedWorker ? "已由所属团队归档" : "已归档——取消归档后可继续对话"}
+          </Text>
         </View>
       ) : (
       <View

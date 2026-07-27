@@ -1,15 +1,22 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { View, Text, ScrollView, KeyboardAvoidingView, Platform, Keyboard } from "react-native";
 import { useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { AGENT_TYPES, type AgentType, type Priority } from "@harness/shared";
+import {
+  AGENT_TYPES,
+  TEAM_DEFAULTS,
+  type AgentExecutorProfile,
+  type AgentType,
+  type Priority,
+} from "@harness/shared";
 import { useStore } from "@/lib/store";
-import { api } from "@/lib/api";
+import { api, type DetectedAgent } from "@/lib/api";
 import { PRIORITIES, LAUNCH_MODES, type LaunchMode } from "@/lib/constants";
 import { groupLabel } from "@/lib/util";
 import { useTheme } from "@/lib/theme";
 import { Pill, Button, Input } from "@/components/ui";
 import { ScheduleFields } from "@/components/ScheduleFields";
+import { TeamTaskOptions, type ExecutorSelection } from "@/components/TeamTaskOptions";
 
 const firstLine = (s: string) =>
   s.split("\n").map((l) => l.trim()).find(Boolean)?.slice(0, 40) ?? "";
@@ -31,6 +38,12 @@ export default function NewTask() {
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
   const [agent, setAgent] = useState<AgentType>("claude");
+  const [teamOn, setTeamOn] = useState(false);
+  const [teamProfiles, setTeamProfiles] = useState<AgentExecutorProfile[]>([]);
+  const [detectedAgents, setDetectedAgents] = useState<DetectedAgent[]>([]);
+  const [teamOptionsLoaded, setTeamOptionsLoaded] = useState(false);
+  const [leadPick, setLeadPick] = useState<ExecutorSelection | null>(null);
+  const [workerPick, setWorkerPick] = useState<ExecutorSelection | null>(null);
   const [priority, setPriority] = useState<Priority>("none");
   // 启动时机（§9）：默认「立即执行」，与 web 一致。once 用 Date，cron 用裸 5 字段表达式。
   const [launch, setLaunch] = useState<LaunchMode>("run");
@@ -66,6 +79,43 @@ export default function NewTask() {
     setBranchesLoaded(false);
     setBase("");
   }, [projectId]);
+
+  // Team creation uses the same two endpoints as web: registered executor
+  // profiles for concrete picks, plus local detection to keep the resident lead
+  // selector limited to executors that can actually hold a team console open.
+  useEffect(() => {
+    if (!teamOn || teamOptionsLoaded) return;
+    let alive = true;
+    Promise.all([api.agents().catch(() => []), api.detectAgents().catch(() => [])]).then(([profiles, detected]) => {
+      if (!alive) return;
+      setTeamProfiles(profiles);
+      setDetectedAgents(detected);
+      setTeamOptionsLoaded(true);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [teamOn, teamOptionsLoaded]);
+
+  const leadTypes = useMemo<AgentType[]>(() => {
+    const resident = detectedAgents.filter((item) => item.available && item.resident).map((item) => item.type);
+    return resident.length ? resident : [TEAM_DEFAULTS.lead];
+  }, [detectedAgents]);
+  const workerTypes = useMemo<AgentType[]>(() => {
+    const available = detectedAgents.filter((item) => item.available).map((item) => item.type);
+    return available.length ? available : [...AGENT_TYPES];
+  }, [detectedAgents]);
+  const leadSelection: ExecutorSelection =
+    leadPick && leadTypes.includes(leadPick.agentType)
+      ? leadPick
+      : { agentType: leadTypes[0]!, executorId: null };
+  const workerSelection: ExecutorSelection =
+    workerPick && workerTypes.includes(workerPick.agentType)
+      ? workerPick
+      : {
+          agentType: workerTypes.find((type) => type !== leadSelection.agentType) ?? leadSelection.agentType,
+          executorId: null,
+        };
 
   const pickLaunch = (m: LaunchMode) => {
     if (m === "once") Keyboard.dismiss(); // 让出键盘，给 iOS inline spinner 腾位
@@ -109,17 +159,28 @@ export default function NewTask() {
     setError(null);
     try {
       const explicit = title.trim();
+      const team = {
+        lead: leadSelection.agentType,
+        worker: workerSelection.agentType,
+        leadExecutorId: leadSelection.executorId,
+        workerExecutorId: workerSelection.executorId,
+      };
       const t = await api.createTask({
         projectId,
         groupId,
         title: explicit || firstLine(body) || "新任务",
         body: body.trim(),
-        mode: "single",
-        agentType: agent,
+        mode: teamOn ? "team" : "single",
+        agentType: teamOn ? leadSelection.agentType : agent,
+        executorId: teamOn ? null : undefined,
+        ...(teamOn ? { team } : {}),
         priority,
-        autoTitle: !explicit, // let the first run name it when no title given
-        useWorktree: project?.health.isRepo ? useWorktree : false,
-        worktreeBase: useWorktree && base ? base : null,
+        // Resident consoles do not run the single-task auto-title turn.
+        autoTitle: teamOn ? false : !explicit,
+        // A team lead and its dispatched workers must share the project view;
+        // moving only the lead into a worktree would split their filesystem.
+        useWorktree: project?.health.isRepo && !teamOn ? useWorktree : false,
+        worktreeBase: !teamOn && useWorktree && base ? base : null,
       });
       upsertTask(t);
       // 启动时机分支：run=立即跑；once/cron=挂定时（调度器到点入队）；create=留 backlog。
@@ -167,19 +228,35 @@ export default function NewTask() {
           <Input
             value={body}
             onChangeText={setBody}
-            placeholder="要这个 agent 做什么…"
+            placeholder={teamOn ? "给调度者的目标，它会拆活并派执行者…" : "要这个 agent 做什么…"}
             multiline
             style={{ minHeight: 120, textAlignVertical: "top" }}
           />
         </Field>
 
-        <Field label="执行 agent">
-          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
-            {AGENT_TYPES.map((a) => (
-              <Pill key={a} label={`@${a}`} active={a === agent} onPress={() => setAgent(a)} />
-            ))}
-          </View>
+        <Field label="任务模式">
+          <TeamTaskOptions
+            enabled={teamOn}
+            onEnabledChange={setTeamOn}
+            lead={leadSelection}
+            worker={workerSelection}
+            leadTypes={leadTypes}
+            workerTypes={workerTypes}
+            profiles={teamProfiles}
+            onLeadChange={setLeadPick}
+            onWorkerChange={setWorkerPick}
+          />
         </Field>
+
+        {!teamOn ? (
+          <Field label="执行 agent">
+            <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+              {AGENT_TYPES.map((a) => (
+                <Pill key={a} label={`@${a}`} active={a === agent} onPress={() => setAgent(a)} />
+              ))}
+            </View>
+          </Field>
+        ) : null}
 
         <Field label="优先级">
           <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
@@ -231,7 +308,7 @@ export default function NewTask() {
           ) : null}
         </Field>
 
-        {project?.health.isRepo ? (
+        {project?.health.isRepo && !teamOn ? (
           <Field label="worktree（隔离运行）">
             <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
               <Pill label={useWorktree ? "✓ 用新 worktree" : "直接在项目跑"} active={useWorktree} onPress={() => setUseWorktree((v) => !v)} />
@@ -275,4 +352,3 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
     </View>
   );
 }
-

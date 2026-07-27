@@ -1,8 +1,27 @@
 // REST client — the single-task subset of the harness web api (web/src/api.ts),
 // re-pointed at a configurable base URL. RN's fetch is a native client (no
 // browser CORS), so it talks straight to the backend over Tailscale.
-import type { ProjectView, Task, Session, AgentExecutorProfile, AgentType, Schedule, ScheduledMessage, Group, GroupMode } from "@harness/shared";
+import type {
+  ProjectView,
+  Task,
+  Session,
+  AgentExecutorProfile,
+  AgentType,
+  Schedule,
+  ScheduledMessage,
+  Group,
+  GroupMode,
+} from "@harness/shared";
 import { getBaseURL } from "./config";
+
+export type DetectedAgent = {
+  type: AgentType;
+  bin: string;
+  available: boolean;
+  path: string | null;
+  version: string | null;
+  resident: boolean;
+};
 
 export type CuaProcess = {
   pid: number;
@@ -132,4 +151,5 @@ export const api = {
   pauseGroup: (id: string): Promise<Group> => req(`/groups/${id}/pause`, { method: "POST" }).then(j),
 
   agents: (): Promise<AgentExecutorProfile[]> => req("/agents").then(j),
+  detectAgents: (): Promise<DetectedAgent[]> => req("/agents/detect").then(j),
 };
