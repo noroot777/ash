@@ -46,14 +46,25 @@ export async function dispatchWorkers(
   const profileTypes = new Map(
     (await db.select({ id: agents.id, type: agents.type }).from(agents)).map((a) => [a.id, a.type as AgentType] as const),
   );
-  for (const [i, s] of specs.entries()) {
-    const executorId = s.executorId !== undefined ? s.executorId : cfg.workerExecutorId;
-    const executorType = executorId ? profileTypes.get(executorId) : undefined;
-    const explicitType = s.agentType ?? cfg.worker;
-    if (executorType && explicitType && explicitType !== executorType) {
-      throw new Error(`tasks[${i}].executorId 属于 ${executorType},但 agentType 是 ${explicitType}`);
+  // 每个工人的「执行者 profile + 类型」。只有**同一次调用里显式给出的**两者冲突才算用户自相矛盾;
+  // 单给 agentType 是「这个工人换类型」,此时不能硬套团队默认 profile(类型对不上),按类型默认执行者走。
+  const picks = specs.map((s, i): { executorId: string | null; agentType: AgentType } => {
+    const ownType = s.agentType ?? null;
+    if (s.executorId) {
+      const t = profileTypes.get(s.executorId);
+      if (t && ownType && t !== ownType) {
+        throw new Error(`tasks[${i}].executorId 属于 ${t},但 agentType 是 ${ownType}`);
+      }
+      return { executorId: s.executorId, agentType: (ownType ?? t ?? cfg.worker) as AgentType };
     }
-  }
+    if (s.executorId === null) return { executorId: null, agentType: (ownType ?? cfg.worker) as AgentType };
+    const inherited = cfg.workerExecutorId ?? null;
+    const inheritedType = inherited ? profileTypes.get(inherited) : undefined;
+    if (ownType) {
+      return { executorId: inheritedType === ownType ? inherited : null, agentType: ownType };
+    }
+    return { executorId: inherited, agentType: (inheritedType ?? cfg.worker) as AgentType };
+  });
 
   const ts = now();
   const groupId = id();
@@ -74,8 +85,7 @@ export async function dispatchWorkers(
   const rows = specs.map((s, i) => {
     const explicitTitle = (s.title ?? "").trim();
     const at = new Date(base + i).toISOString(); // 递增时间戳,列表排序稳定
-    const executorId = s.executorId !== undefined ? s.executorId : cfg.workerExecutorId ?? null;
-    const executorType = executorId ? profileTypes.get(executorId) : undefined;
+    const pick = picks[i];
     return {
       id: id(),
       projectId: lead.projectId,
@@ -89,8 +99,8 @@ export async function dispatchWorkers(
       labels: "[]",
       dependsOn: "[]",
       resumeDependsOn: "[]",
-      agentType: (s.agentType ?? executorType ?? cfg.worker) as AgentType | null,
-      executorId,
+      agentType: pick.agentType as AgentType | null,
+      executorId: pick.executorId,
       autoTitle: false, // 指挥者派活时给的标题就是标题,不让工人自己改名
       debate: null as string | null,
       team: null as string | null,
