@@ -1,23 +1,32 @@
 import { execFile } from "node:child_process";
-import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { eq, inArray, or } from "drizzle-orm";
-import { db } from "./db/index.js";
-import { sessions, tasks } from "./db/schema.js";
+
+// Codex CUA cleanup findings (verified against an active CUA session on
+// 2026-07-27): SkyComputerUseClient `turn-ended` is not a usable cleanup API.
+// We called it with the real cliSessionId as `thread_id`, then tried three
+// variants (an empty `turn_id`, `codex.app_session_id`, and `threadID`). Every
+// call exited 0 while SkyComputerUseService stayed alive and the worker kept
+// taking screenshots. The client also silently exits 0 for arbitrary input,
+// including invalid JSON and nonexistent threads, so exit 0 is a false signal,
+// not an acknowledgement. Do not restore that call chain without new evidence.
+//
+// What did work: stopTask's normal killChild path killed the agent process;
+// SkyComputerUseService then exited on its own, matching its
+// `shouldTerminateWhenNoClientsRemain` behavior. Harness therefore only kills
+// processes it spawned and relies on the CUA service to notice that its client
+// disappeared. This module intentionally contains no automatic cleanup hook.
+//
+// Still unverified: whether SkyComputerUseService can remain after an agent
+// finishes normally instead of being killed. Two attempted control runs never
+// activated CUA because Codex chose Orca for screenshots. Do not turn that lack
+// of reproduction into a claim that normal completion cannot leave a service.
+// Detection and the explicit, user-triggered global kill below remain as the
+// truthful fallback for that unknown case.
 
 const CUA_ROOT = join(homedir(), ".codex", "computer-use", "Codex Computer Use.app");
-const CUA_CLIENT = join(
-  CUA_ROOT,
-  "Contents",
-  "SharedSupport",
-  "SkyComputerUseClient.app",
-  "Contents",
-  "MacOS",
-  "SkyComputerUseClient",
-);
 const CUA_SERVICE = join(CUA_ROOT, "Contents", "MacOS", "SkyComputerUseService");
-const TURN_ENDED_TIMEOUT_MS = 2500;
+const PS_TIMEOUT_MS = 1500;
 
 export type CuaProcess = {
   pid: number;
@@ -25,6 +34,8 @@ export type CuaProcess = {
   command: string;
 };
 
+// The legacy "Residual" name is kept for the existing web API shape. A
+// detected process is global and cannot be attributed to this scope.
 export type CuaResidualStatus = {
   scopeId: string;
   scopeType: "task" | "team";
@@ -36,19 +47,10 @@ export type CuaResidualStatus = {
   sideEffect: string;
 };
 
-export type CuaTurnEndedResult = {
-  threadId: string;
-  ok: boolean;
-  skipped?: boolean;
-  error?: string;
-  stdout?: string;
-  stderr?: string;
-};
-
-const residualByScope = new Map<string, CuaResidualStatus>();
+const statusByScope = new Map<string, CuaResidualStatus>();
 
 const sideEffect =
-  "SkyComputerUseService 是 ChatGPT.app 的全局 computer-use 服务；harness 自动流程不会终止它。显式强制清理会影响用户在 ChatGPT 桌面版里的其它 computer-use 会话。";
+  "SkyComputerUseService 是 ChatGPT.app 的全局 computer-use 服务；当前检测只能确认全局进程存在，不能证明它属于这个团队。harness 自动停止只终止自己启动的 agent 进程树，不会强杀该服务；显式强制清理会影响用户在 ChatGPT 桌面版里的其它 computer-use 会话。";
 
 function key(scopeType: "task" | "team", scopeId: string): string {
   return `${scopeType}:${scopeId}`;
@@ -62,7 +64,7 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function execFileText(file: string, args: string[], timeout = TURN_ENDED_TIMEOUT_MS): Promise<{
+async function execFileText(file: string, args: string[], timeout: number): Promise<{
   ok: boolean;
   stdout: string;
   stderr: string;
@@ -80,51 +82,8 @@ async function execFileText(file: string, args: string[], timeout = TURN_ENDED_T
   });
 }
 
-async function taskIdsForTeam(teamTaskId: string): Promise<string[]> {
-  const rows = await db
-    .select({ id: tasks.id })
-    .from(tasks)
-    .where(or(eq(tasks.id, teamTaskId), eq(tasks.parentId, teamTaskId)));
-  return rows.map((r) => r.id);
-}
-
-async function codexThreadIdsForTasks(taskIds: string[]): Promise<string[]> {
-  if (!taskIds.length) return [];
-  const rows = await db
-    .select({ threadId: sessions.cliSessionId, agentType: sessions.agentType })
-    .from(sessions)
-    .where(inArray(sessions.taskId, taskIds));
-  return [
-    ...new Set(
-      rows
-        .filter((s) => s.agentType === "codex")
-        .map((s) => s.threadId?.trim())
-        .filter((id): id is string => !!id),
-    ),
-  ];
-}
-
-async function notifyCodexTurnsEnded(threadIds: string[]): Promise<CuaTurnEndedResult[]> {
-  const unique = [...new Set(threadIds.filter(Boolean))];
-  if (!existsSync(CUA_CLIENT)) {
-    return unique.map((threadId) => ({
-      threadId,
-      ok: false,
-      skipped: true,
-      error: `missing CUA client: ${CUA_CLIENT}`,
-    }));
-  }
-  return Promise.all(
-    unique.map(async (threadId) => {
-      const payload = JSON.stringify({ thread_id: threadId });
-      const res = await execFileText(CUA_CLIENT, ["turn-ended", payload]);
-      return { threadId, ...res };
-    }),
-  );
-}
-
-async function detectCuaProcesses(): Promise<CuaProcess[]> {
-  const res = await execFileText("ps", ["-ww", "-axo", "pid=,ppid=,command="], 1500);
+export async function detectCuaProcesses(): Promise<CuaProcess[]> {
+  const res = await execFileText("ps", ["-ww", "-axo", "pid=,ppid=,command="], PS_TIMEOUT_MS);
   if (!res.ok) return [];
   const found: CuaProcess[] = [];
   for (const line of res.stdout.split("\n")) {
@@ -138,7 +97,7 @@ async function detectCuaProcesses(): Promise<CuaProcess[]> {
   return found;
 }
 
-async function recordResidual(scopeType: "task" | "team", scopeId: string): Promise<CuaResidualStatus> {
+async function recordStatus(scopeType: "task" | "team", scopeId: string): Promise<CuaResidualStatus> {
   const processes = await detectCuaProcesses();
   const status: CuaResidualStatus = {
     scopeId,
@@ -148,63 +107,29 @@ async function recordResidual(scopeType: "task" | "team", scopeId: string): Prom
     servicePath: CUA_SERVICE,
     processes,
     message: processes.length
-      ? "检测到 ChatGPT Computer Use 全局服务仍在运行；harness 不会在自动停止流程中终止它。"
-      : "未检测到 ChatGPT Computer Use 全局服务残留。",
+      ? "检测到 ChatGPT Computer Use 全局服务正在运行；无法从这个全局进程判断它是否由当前团队留下。"
+      : "未检测到 ChatGPT Computer Use 全局服务进程。",
     sideEffect,
   };
-  residualByScope.set(key(scopeType, scopeId), status);
+  statusByScope.set(key(scopeType, scopeId), status);
   if (status.detected) {
     console.warn(
-      `[cua] residual SkyComputerUseService after ${scopeType} ${scopeId}; not killing automatically. ${sideEffect}`,
+      `[cua] global SkyComputerUseService detected while checking ${scopeType} ${scopeId}; not killing automatically. ${sideEffect}`,
       processes,
     );
   }
   return status;
 }
 
-async function cleanupScope(scopeType: "task" | "team", scopeId: string, threadIds: string[]): Promise<void> {
-  try {
-    const results = await notifyCodexTurnsEnded(threadIds);
-    for (const r of results) {
-      if (!r.ok) {
-        console.warn(`[cua] turn-ended best-effort failed for thread ${r.threadId}: ${r.error ?? "unknown error"}`);
-      }
-    }
-  } catch (err) {
-    console.warn(`[cua] turn-ended best-effort failed for ${scopeType} ${scopeId}:`, err);
-  }
-  await sleep(300);
-  try {
-    await recordResidual(scopeType, scopeId);
-  } catch (err) {
-    console.warn(`[cua] residual detection failed for ${scopeType} ${scopeId}:`, err);
-  }
-}
-
-export function cleanupTaskCuaSessionsSoon(taskId: string): void {
-  void (async () => {
-    const threadIds = await codexThreadIdsForTasks([taskId]);
-    await cleanupScope("task", taskId, threadIds);
-  })().catch((err) => console.warn(`[cua] task cleanup failed for ${taskId}:`, err));
-}
-
-export function cleanupTeamCuaSessionsSoon(teamTaskId: string): void {
-  void (async () => {
-    const taskIds = await taskIdsForTeam(teamTaskId);
-    const threadIds = await codexThreadIdsForTasks(taskIds);
-    await cleanupScope("team", teamTaskId, threadIds);
-  })().catch((err) => console.warn(`[cua] team cleanup failed for ${teamTaskId}:`, err));
-}
-
 export async function refreshCuaResidualStatus(
   scopeType: "task" | "team",
   scopeId: string,
 ): Promise<CuaResidualStatus> {
-  return recordResidual(scopeType, scopeId);
+  return recordStatus(scopeType, scopeId);
 }
 
 export function lastCuaResidualStatus(scopeType: "task" | "team", scopeId: string): CuaResidualStatus | null {
-  return residualByScope.get(key(scopeType, scopeId)) ?? null;
+  return statusByScope.get(key(scopeType, scopeId)) ?? null;
 }
 
 export async function forceKillCuaService(scopeType: "task" | "team", scopeId: string): Promise<{
@@ -240,6 +165,6 @@ export async function forceKillCuaService(scopeType: "task" | "team", scopeId: s
         : "未检测到 ChatGPT Computer Use 全局服务，无需强制清理。",
     sideEffect,
   };
-  residualByScope.set(key(scopeType, scopeId), status);
+  statusByScope.set(key(scopeType, scopeId), status);
   return { killed, before, after, status, sideEffect };
 }

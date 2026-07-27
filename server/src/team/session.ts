@@ -38,7 +38,6 @@ import { resolveExecutorFor } from "../executors/index.js";
 import type { ResidentHandle } from "../executors/types.js";
 import { RUNS_DIR } from "../paths.js";
 import { writeTurn, writeTurnEnd, writeRunError } from "../transcript.js";
-import { cleanupTeamCuaSessionsSoon } from "../cua.js";
 import { LEAD_PREAMBLE, LEAD_NUDGE, LEAD_RESUMED } from "./prompts.js";
 
 // 空闲多久回收进程(0/负数 = 永不回收)。测试用 HARNESS_TEAM_IDLE_MS=5000。
@@ -108,7 +107,6 @@ export async function haltTeam(taskId: string): Promise<void> {
   stopTask(taskId); // 常驻 handle 已 trackRun → killChild 三层击杀
   const owned = await db.select().from(groups).where(eq(groups.ownerTaskId, taskId));
   for (const g of owned) await pauseGroup(g.id);
-  cleanupTeamCuaSessionsSoon(taskId); // 已结束工人的 codex/CUA 会话也要 best-effort 收口
   if (!lead) await setTaskStatus(taskId, "idle");
 }
 
