@@ -66,7 +66,7 @@ export function WorkerRail({
       ))}
       {workers.length > 0 && (
         <p className="mt-2.5 px-0.5 text-[11px] leading-relaxed text-faint">
-          执行者就是普通任务:能单独重跑、换执行器、看 diff。这条栏只是把它们钉在眼前。
+          执行者能单独重跑、答复和查看完整会话；元信息仍由调度者统一管理。
         </p>
       )}
     </aside>

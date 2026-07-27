@@ -8,6 +8,7 @@ import { StatusIcon } from "./StatusIcon";
 import { foldTeamStatus, pairBadge } from "./util";
 import { statusCounts, workersOf } from "./team/teamData";
 import { executorLabel } from "./executorLabel";
+import { isDispatchedWorker } from "./taskPolicy";
 
 const TASK_SECTIONS = [
   { key: "collab", label: "协作任务", matches: (task: Task) => task.mode === "debate" || task.mode === "team" },
@@ -19,7 +20,7 @@ type TaskSection = (typeof TASK_SECTIONS)[number];
 // 列表只排**顶层**任务:团队任务的执行者(parentId 非空)挂在它自己那一行下面,不单独
 // 占状态分组的位置 —— 否则一次派 6 个执行者就把列表冲垮了。
 function topLevel(tasks: Task[]): Task[] {
-  return tasks.filter((t) => !t.parentId);
+  return tasks.filter((t) => !isDispatchedWorker(t));
 }
 
 function groupedStatus(task: Task) {

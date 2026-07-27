@@ -93,7 +93,7 @@ function BatchCard({
         />
       ))}
       <div className="border-t border-line bg-panel px-2.5 py-1.5 text-[11px] text-faint">
-        {batch.group?.paused ? batchSummary(batch.workers) : "点任一行 → 右侧滑出它的完整会话;也能单独重跑 / 换执行器"}
+        {batch.group?.paused ? batchSummary(batch.workers) : "点任一行 → 右侧滑出它的完整会话；也能单独重跑 / 答复"}
       </div>
     </div>
   );

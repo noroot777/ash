@@ -20,6 +20,7 @@ import { canArchive } from "@harness/shared";
 import { TasksWorkspace, type TaskView } from "./TasksWorkspace";
 import { IssuesWorkspace } from "./IssuesWorkspace";
 import { ProjectRail } from "./ProjectRail";
+import { isDispatchedWorker } from "./taskPolicy";
 
 function upsertTask(tasks: Task[], task: Task): Task[] {
   return tasks.some((t) => t.id === task.id)
@@ -30,6 +31,12 @@ function upsertTask(tasks: Task[], task: Task): Task[] {
 function upsertProjectTask(tasks: Task[], task: Task, projectId: string | null): Task[] {
   if (task.projectId !== projectId) return tasks.filter((t) => t.id !== task.id);
   return upsertTask(tasks, task);
+}
+
+function rejectDispatchedWorkerMutation(task: Task | undefined): boolean {
+  if (!task || !isDispatchedWorker(task)) return false;
+  toast("执行者任务由调度者管理；这里只保留运行、停止、重试和答复", "info");
+  return true;
 }
 
 export function App() {
@@ -221,6 +228,7 @@ export function App() {
   const project = projects.find((p) => p.id === projectId) ?? null;
 
   const patch = useCallback(async (id: string, p: Partial<Task>) => {
+    if (rejectDispatchedWorkerMutation(tasksRef.current.find((t) => t.id === id))) return;
     const updated = await api.patchTask(id, p);
     setTasks((ts) => ts.map((t) => (t.id === id ? updated : t)));
   }, []);
@@ -251,9 +259,12 @@ export function App() {
   }, []);
 
   const archive = useCallback(async (id: string) => {
+    if (rejectDispatchedWorkerMutation(tasksRef.current.find((t) => t.id === id))) return;
     try { const t = await api.archiveTask(id); setTasks((ts) => ts.map((x) => (x.id === id ? t : x))); }
     catch (e) { showErr(e); }
-  }, []);  const unarchive = useCallback(async (id: string) => {
+  }, []);
+  const unarchive = useCallback(async (id: string) => {
+    if (rejectDispatchedWorkerMutation(tasksRef.current.find((t) => t.id === id))) return;
     try { const t = await api.unarchiveTask(id); setTasks((ts) => ts.map((x) => (x.id === id ? t : x))); }
     catch (e) { showErr(e); }
   }, []);
@@ -261,6 +272,7 @@ export function App() {
   // 重新排队:服务端一次做完「回 backlog + 被越过则移到队尾 + 推进队列」。
   // 返回的 task 带最新 queuePosition(SSE 只推 status,不推队列位置),直接覆盖行。
   const requeue = useCallback(async (id: string) => {
+    if (rejectDispatchedWorkerMutation(tasksRef.current.find((t) => t.id === id))) return;
     try {
       const r = await api.requeueTask(id);
       setTasks((ts) => ts.map((x) => (x.id === id ? r.task : x)));
@@ -343,11 +355,15 @@ export function App() {
     [openTask, openIssue],
   );
 
-  const del = useCallback((id: string, title: string) => setConfirmDel({ id, title }), []);
+  const del = useCallback((id: string, title: string) => {
+    if (rejectDispatchedWorkerMutation(tasksRef.current.find((t) => t.id === id))) return;
+    setConfirmDel({ id, title });
+  }, []);
   const doDelete = useCallback(async (id: string) => {
     // The task row carries projectId — capture it BEFORE setTasks removes the row,
     // so the cleanup prompt knows which project's git to act against.
     const victim = tasksRef.current.find((t) => t.id === id);
+    if (rejectDispatchedWorkerMutation(victim)) return;
     const res = await api.deleteTask(id);
     setTasks((ts) => ts.filter((t) => t.id !== id));
     setSelected((cur) => (cur === id ? null : cur));
@@ -482,13 +498,16 @@ export function App() {
     if (current) {
       const a = runAction(current.status, current.archived);
       const g = `当前任务 · ${current.title}`;
+      const dispatchedWorker = isDispatchedWorker(current);
       if (a.canClick) cmds.push({ id: "run", group: g, label: a.label, hint: "R", run: () => primary(current) });
       if (canStopTask(current.status)) cmds.push({ id: "stop", group: g, label: "停止运行", run: () => stop(current.id) });
-      if (current.archived) cmds.push({ id: "unarchive", group: g, label: "取消归档", run: () => unarchive(current.id) });
-      else if (canArchive(current.status)) cmds.push({ id: "archive", group: g, label: "归档任务", run: () => archive(current.id) });
-      cmds.push({ id: "del", group: g, label: "删除任务", run: () => del(current.id, current.title) });
-      for (const p of PRIORITIES)
-        cmds.push({ id: "pr-" + p.key, group: "设为优先级", label: p.label, run: () => patch(current.id, { priority: p.key }) });
+      if (!dispatchedWorker) {
+        if (current.archived) cmds.push({ id: "unarchive", group: g, label: "取消归档", run: () => unarchive(current.id) });
+        else if (canArchive(current.status)) cmds.push({ id: "archive", group: g, label: "归档任务", run: () => archive(current.id) });
+        cmds.push({ id: "del", group: g, label: "删除任务", run: () => del(current.id, current.title) });
+        for (const p of PRIORITIES)
+          cmds.push({ id: "pr-" + p.key, group: "设为优先级", label: p.label, run: () => patch(current.id, { priority: p.key }) });
+      }
     }
     // Global: create / manage.
     cmds.push(

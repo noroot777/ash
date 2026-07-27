@@ -2,8 +2,8 @@
 // 出它自己的完整会话(就是 TaskDetail 那套),不跳页、不丢调度者上下文。
 //
 // 数据装配全在 ./teamData 里(纯函数),这里只管把它们摆在版面上、把动作接到 api。
-// 一个刻意的取舍:执行者是**真任务**,所以抽屉里塞的是真正的 TaskDetail —— 重跑、改
-// 执行器、看队列、答它的提问,全部白嫖单任务那套 UI,不做第二份。
+// 执行者是**真任务**,所以抽屉里复用真正的 TaskDetail；TaskDetail 会统一收起由
+// 调度者拥有的元信息编辑，只保留会话、运行/停止/重试和答复。
 import { useEffect, useMemo, useState } from "react";
 import type { Task, Group, AgentType } from "@harness/shared";
 import { ArrowSquareOut, Broom, WarningCircle, X } from "@phosphor-icons/react";

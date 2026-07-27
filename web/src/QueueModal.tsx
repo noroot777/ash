@@ -16,15 +16,17 @@ type Item = {
 
 // 队列详情弹层(DESIGN-scheduling.md §1):列出 queue 里所有 task,支持
 // 拖拽改顺序 + 把某 task 移出队列。running/queued task 不能被改位置或
-// 移除(server 返回 409,这里 disable 掉对应的交互让用户少撞墙)。
+// 移除；含调度者派生执行者的队列整体只读，避免从别的任务详情间接改它。
 export function QueueModal({
   queueId,
   currentTaskId,
+  readOnlyTaskIds = [],
   onClose,
   onChanged,
 }: {
   queueId: string;
   currentTaskId?: string;
+  readOnlyTaskIds?: string[];
   onClose: () => void;
   onChanged?: () => void;
 }) {
@@ -33,6 +35,8 @@ export function QueueModal({
   const [confirmRemove, setConfirmRemove] = useState<Item | null>(null);
   const [dragIdx, setDragIdx] = useState<number | null>(null);
   const [overIdx, setOverIdx] = useState<number | null>(null);
+  const readOnlyTaskIdSet = new Set(readOnlyTaskIds);
+  const queueManagedByDispatcher = items.some((it) => readOnlyTaskIdSet.has(it.taskId));
 
   const load = () => {
     setLoading(true);
@@ -54,7 +58,7 @@ export function QueueModal({
   }, [queueId]);
 
   const isLocked = (it: Item) =>
-    it.status === "running" || it.status === "queued";
+    queueManagedByDispatcher || it.status === "running" || it.status === "queued";
 
   const onDragStart = (i: number) => (e: React.DragEvent) => {
     if (isLocked(items[i])) {
@@ -76,6 +80,7 @@ export function QueueModal({
   };
   const onDrop = (i: number) => async (e: React.DragEvent) => {
     e.preventDefault();
+    if (queueManagedByDispatcher) return;
     const from = dragIdx;
     setDragIdx(null);
     setOverIdx(null);
@@ -97,6 +102,7 @@ export function QueueModal({
   };
 
   const remove = async (it: Item) => {
+    if (queueManagedByDispatcher) return;
     try {
       await api.queueRemove(queueId, it.taskId);
       onChanged?.();
@@ -116,7 +122,9 @@ export function QueueModal({
         ) : (
           <div className="flex flex-col gap-1">
             <p className="mb-2 text-[12px] text-faint">
-              前一个 done / canceled 后下一个自动启动。拖拽可改顺序;摘出后任务本身保留、只是脱离队列。在跑的任务无法拖动或移出。
+              {queueManagedByDispatcher
+                ? "此队列包含调度者派出的执行者，只读展示；请由调度者统一管理顺序。"
+                : "前一个 done / canceled 后下一个自动启动。拖拽可改顺序;摘出后任务本身保留、只是脱离队列。在跑的任务无法拖动或移出。"}
             </p>
             {items.map((it, i) => {
               const isCurrent = currentTaskId === it.taskId;

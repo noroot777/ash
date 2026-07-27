@@ -20,12 +20,13 @@ import { ReplyBox } from "./ReplyBox";
 import { ExecutorPicker, type ExecutorSelection, useExecutorProfiles } from "./ExecutorPicker";
 import { executorLabel } from "./executorLabel";
 import { QuestionCard } from "./QuestionCard";
+import { isDispatchedWorker } from "./taskPolicy";
 export type { LogLine } from "./Conversation";
 
 export function TaskDetail({
   task,
   groups,
-  allTasks: _allTasks, // legacy:旧 dep picker 用过,现在 queue 模型不需要;callers 仍在传,留 prop 兼容,phase C 后续可一并清掉
+  allTasks,
   logs,
   sessionsBump,
   onRun,
@@ -58,6 +59,7 @@ export function TaskDetail({
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const { profiles, providers } = useExecutorProfiles();
+  const dispatchedWorker = isDispatchedWorker(task);
 
   // 拉会话 + 快照历史输出 + 拼条目流,都在 useConversation 里(/team 调度台共用同
   // 一份装配,免得两个界面的「刷新后 vs 实时」各自漂移)。
@@ -94,7 +96,11 @@ export function TaskDetail({
     <main className="flex h-full min-h-0 flex-col">
       <header className="border-b border-line px-6 pb-3 pt-5">
         <div className="flex items-start gap-3">
-          <EditableTitle title={task.title} onSave={(t) => onPatch({ title: t, autoTitle: false })} />
+          {dispatchedWorker ? (
+            <h1 className="min-w-0 flex-1 px-1 text-[15px] font-semibold leading-snug text-ink">{task.title}</h1>
+          ) : (
+            <EditableTitle title={task.title} onSave={(t) => onPatch({ title: t, autoTitle: false })} />
+          )}
           <div className="flex shrink-0 items-center gap-2">
             <TaskTimeChip task={task} />
             {task.archived ? (
@@ -102,13 +108,15 @@ export function TaskDetail({
                 <span className="inline-flex items-center gap-1.5 rounded-md bg-overlay px-3 py-1.5 text-[13px] font-medium text-muted" title="任务已归档（只读）">
                   已归档
                 </span>
-                <button
-                  onClick={onUnarchive}
-                  className="inline-flex items-center gap-1.5 rounded-md border border-line px-3 py-1.5 text-[13px] font-medium text-muted transition-colors hover:bg-raised hover:text-ink"
-                >
-                  <ArrowsClockwise size={13} />
-                  取消归档
-                </button>
+                {!dispatchedWorker && (
+                  <button
+                    onClick={onUnarchive}
+                    className="inline-flex items-center gap-1.5 rounded-md border border-line px-3 py-1.5 text-[13px] font-medium text-muted transition-colors hover:bg-raised hover:text-ink"
+                  >
+                    <ArrowsClockwise size={13} />
+                    取消归档
+                  </button>
+                )}
               </>
             ) : canStopTask(task.status) ? (
               <button
@@ -143,7 +151,7 @@ export function TaskDetail({
                 下拉改回 backlog。一次调用做完「改状态 + 定位置 + 推进队列」:
                 前端曾经拆成 PATCH + runGroup 两步,中间那一瞬间会让本任务抢在
                 正在跑的下一个前面(串行队列并跑)。 */}
-            {!task.archived && task.queueId && ["failed", "canceled"].includes(task.status) && (
+            {!dispatchedWorker && !task.archived && task.queueId && ["failed", "canceled"].includes(task.status) && (
               <button
                 onClick={onRequeue}
                 className="inline-flex items-center gap-1.5 rounded-md border border-line px-3 py-1.5 text-[13px] font-medium text-muted transition-colors hover:bg-raised hover:text-ink"
@@ -153,7 +161,7 @@ export function TaskDetail({
                 重新排队
               </button>
             )}
-            {!task.archived && canArchive(task.status) && (
+            {!dispatchedWorker && !task.archived && canArchive(task.status) && (
               <button
                 onClick={onArchive}
                 className="inline-flex items-center rounded-md px-2.5 py-1.5 text-[13px] font-medium text-muted transition-colors hover:bg-raised hover:text-ink"
@@ -179,13 +187,15 @@ export function TaskDetail({
                 </button>
               </>
             )}
-            <button
-              onClick={onDelete}
-              className="grid h-[30px] w-[30px] place-items-center rounded-md text-muted transition-colors hover:bg-raised hover:text-red-600"
-              title="删除任务"
-            >
-              <Trash size={15} />
-            </button>
+            {!dispatchedWorker && (
+              <button
+                onClick={onDelete}
+                className="grid h-[30px] w-[30px] place-items-center rounded-md text-muted transition-colors hover:bg-raised hover:text-red-600"
+                title="删除任务"
+              >
+                <Trash size={15} />
+              </button>
+            )}
           </div>
         </div>
 
@@ -204,98 +214,111 @@ export function TaskDetail({
           <ResumePromptEditor
             value={task.resumePrompt ?? ""}
             onSave={(rp) => onPatch({ resumePrompt: rp || null })}
+            readOnly={dispatchedWorker}
           />
         )}
 
         {/* All controls on one wrapping row: attributes | labels | deps·schedule | session */}
-        <div className="mt-3 flex flex-wrap items-center gap-x-2.5 gap-y-2 text-[12px]">
-          <div className={`flex flex-wrap items-center gap-1.5 ${task.archived ? "pointer-events-none opacity-60" : ""}`}>
-            <Prop
-              value={task.status}
-              onChange={(v) => onPatch({ status: v as TaskStatus })}
-              options={Object.values(STATUS_META)
-                .filter((s) => isUserSettableStatus(s.key) || s.key === task.status)
-                .map((s) => ({ value: s.key, label: s.label }))}
-              leading={(v) => <StatusIcon status={v as TaskStatus} size={13} />}
-            />
-            <Prop
-              value={task.priority}
-              onChange={(v) => onPatch({ priority: v as Priority })}
-              options={PRIORITIES.map((p) => ({ value: p.key, label: p.label }))}
-              leading={(v) => <PriorityIcon p={v as Priority} />}
-            />
-            <Prop
-              value={task.groupId ?? ""}
-              onChange={(v) => (v === "__new" ? onCreateGroup() : onPatch({ groupId: v || null }))}
-              options={[
-                { value: "", label: "无分组" },
-                ...groups.map((g) => ({ value: g.id, label: groupLabel(g) })),
-                { value: "__new", label: "+ 新建分组" },
-              ]}
-            />
-          </div>
-
-          <span className="h-4 w-px bg-line" />
-          <div className="flex flex-wrap items-center gap-1.5">
-            {task.labels.map((l) => (
-              <button
-                key={l}
-                onClick={() => onPatch({ labels: task.labels.filter((x) => x !== l) })}
-                className="rounded-full bg-overlay px-2 py-0.5 text-[11px] text-ink transition hover:bg-line2"
-                title="点击移除"
-              >
-                {l}
-              </button>
-            ))}
-            <LabelAdder onAdd={(l) => !task.labels.includes(l) && onPatch({ labels: [...task.labels, l] })} />
-          </div>
-
-          <span className="h-4 w-px bg-line" />
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
-            {/* 队列归属(DESIGN-scheduling.md §1):任务在某条 queue 里第几位。
-                点开看完整队列、改顺序、把任务移出队列。废弃的 depOptions /
-                resumeDepOptions 在新模型下永远空,挪开免得占视觉位。 */}
-            <div className="flex items-center gap-1.5">
+        {dispatchedWorker ? (
+          task.queueId && (
+            <div className="mt-3 flex items-center gap-1.5 text-[12px]">
               <ListNumbers size={13} className="text-faint" />
               <span className="text-muted">队列</span>
-              {task.queueId ? (
-                <button
-                  onClick={() => setQueueModalOpen(true)}
-                  className="rounded bg-overlay px-1.5 py-0.5 text-ink transition hover:bg-line2"
-                  title="点开看完整队列"
-                >
-                  第 {(task.queuePosition ?? 0) + 1}{queueSize != null ? ` / ${queueSize}` : ""} 位
-                </button>
-              ) : (
-                <span className="text-faint">不在任何队列(独立任务)</span>
-              )}
-            </div>
-            <ScheduleControl taskId={task.id} />
-          </div>
-
-          {/* Who will run this — shown only until the first run exists. The live
-              run credentials (resume / id / time) now live per-bubble in the
-              conversation below, not crammed into this header row. */}
-          {sessions.length === 0 && (
-            <>
-              <span className="h-4 w-px bg-line" />
-              <span className="inline-flex items-center gap-1.5 text-faint">
-                将由
-                <ExecutorPicker
-                  selection={currentExecutor}
-                  onSelect={(sel) => onPatch({ agentType: sel.agentType, executorId: sel.executorId })}
-                  profiles={profiles}
-                  providers={providers}
-                  types={[...AGENT_TYPES]}
-                  label={task.executorId ? executorLabel({ task }) : `默认 ${executorLabel({ task })}`}
-                  menuWidth={320}
-                  triggerClassName="inline-flex max-w-[260px] items-center gap-1 rounded-md border border-line bg-panel px-1.5 py-0.5 text-[12px] text-muted transition-colors hover:bg-raised hover:text-ink"
-                />
-                <span>执行</span>
+              <span className="rounded bg-overlay px-1.5 py-0.5 text-ink" title="队列位置由调度者管理">
+                第 {(task.queuePosition ?? 0) + 1}{queueSize != null ? ` / ${queueSize}` : ""} 位
               </span>
-            </>
-          )}
-        </div>
+            </div>
+          )
+        ) : (
+          <div className="mt-3 flex flex-wrap items-center gap-x-2.5 gap-y-2 text-[12px]">
+            <div className={`flex flex-wrap items-center gap-1.5 ${task.archived ? "pointer-events-none opacity-60" : ""}`}>
+              <Prop
+                value={task.status}
+                onChange={(v) => onPatch({ status: v as TaskStatus })}
+                options={Object.values(STATUS_META)
+                  .filter((s) => isUserSettableStatus(s.key) || s.key === task.status)
+                  .map((s) => ({ value: s.key, label: s.label }))}
+                leading={(v) => <StatusIcon status={v as TaskStatus} size={13} />}
+              />
+              <Prop
+                value={task.priority}
+                onChange={(v) => onPatch({ priority: v as Priority })}
+                options={PRIORITIES.map((p) => ({ value: p.key, label: p.label }))}
+                leading={(v) => <PriorityIcon p={v as Priority} />}
+              />
+              <Prop
+                value={task.groupId ?? ""}
+                onChange={(v) => (v === "__new" ? onCreateGroup() : onPatch({ groupId: v || null }))}
+                options={[
+                  { value: "", label: "无分组" },
+                  ...groups.map((g) => ({ value: g.id, label: groupLabel(g) })),
+                  { value: "__new", label: "+ 新建分组" },
+                ]}
+              />
+            </div>
+
+            <span className="h-4 w-px bg-line" />
+            <div className="flex flex-wrap items-center gap-1.5">
+              {task.labels.map((l) => (
+                <button
+                  key={l}
+                  onClick={() => onPatch({ labels: task.labels.filter((x) => x !== l) })}
+                  className="rounded-full bg-overlay px-2 py-0.5 text-[11px] text-ink transition hover:bg-line2"
+                  title="点击移除"
+                >
+                  {l}
+                </button>
+              ))}
+              <LabelAdder onAdd={(l) => !task.labels.includes(l) && onPatch({ labels: [...task.labels, l] })} />
+            </div>
+
+            <span className="h-4 w-px bg-line" />
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+              {/* 队列归属(DESIGN-scheduling.md §1):任务在某条 queue 里第几位。
+                  点开看完整队列、改顺序、把任务移出队列。废弃的 depOptions /
+                  resumeDepOptions 在新模型下永远空,挪开免得占视觉位。 */}
+              <div className="flex items-center gap-1.5">
+                <ListNumbers size={13} className="text-faint" />
+                <span className="text-muted">队列</span>
+                {task.queueId ? (
+                  <button
+                    onClick={() => setQueueModalOpen(true)}
+                    className="rounded bg-overlay px-1.5 py-0.5 text-ink transition hover:bg-line2"
+                    title="点开看完整队列"
+                  >
+                    第 {(task.queuePosition ?? 0) + 1}{queueSize != null ? ` / ${queueSize}` : ""} 位
+                  </button>
+                ) : (
+                  <span className="text-faint">不在任何队列(独立任务)</span>
+                )}
+              </div>
+              <ScheduleControl taskId={task.id} />
+            </div>
+
+            {/* Who will run this — shown only until the first run exists. The live
+                run credentials (resume / id / time) now live per-bubble in the
+                conversation below, not crammed into this header row. */}
+            {sessions.length === 0 && (
+              <>
+                <span className="h-4 w-px bg-line" />
+                <span className="inline-flex items-center gap-1.5 text-faint">
+                  将由
+                  <ExecutorPicker
+                    selection={currentExecutor}
+                    onSelect={(sel) => onPatch({ agentType: sel.agentType, executorId: sel.executorId })}
+                    profiles={profiles}
+                    providers={providers}
+                    types={[...AGENT_TYPES]}
+                    label={task.executorId ? executorLabel({ task }) : `默认 ${executorLabel({ task })}`}
+                    menuWidth={320}
+                    triggerClassName="inline-flex max-w-[260px] items-center gap-1 rounded-md border border-line bg-panel px-1.5 py-0.5 text-[12px] text-muted transition-colors hover:bg-raised hover:text-ink"
+                  />
+                  <span>执行</span>
+                </span>
+              </>
+            )}
+          </div>
+        )}
       </header>
 
       <div
@@ -314,10 +337,11 @@ export function TaskDetail({
       {task.mode === "single" && (sessions.length > 0 || snapshot.length > 0 || logs.length > 0) && (
         <ReplyBox taskId={task.id} onReply={onReply} disabled={task.status === "running" || task.status === "queued" || !!task.archived} />
       )}
-      {queueModalOpen && task.queueId && (
+      {!dispatchedWorker && queueModalOpen && task.queueId && (
         <QueueModal
           queueId={task.queueId}
           currentTaskId={task.id}
+          readOnlyTaskIds={allTasks.filter(isDispatchedWorker).map((t) => t.id)}
           onClose={() => setQueueModalOpen(false)}
         />
       )}
@@ -388,10 +412,16 @@ export function EditableTitle({ title, onSave }: { title: string; onSave: (t: st
   );
 }
 
-// paused 任务的「续跑指令」编辑面板。默认折叠展示 agent 写下的 resumePrompt；
-// 用户可以「编辑」改写、或「清空」让它续跑时落到标准的「继续」nudge（保留 paused
-// 状态、不影响依赖逻辑）。空值时给一个「添加」入口 —— 让用户主动写一段也行。
-function ResumePromptEditor({ value, onSave }: { value: string; onSave: (rp: string) => void }) {
+// paused 任务的「续跑指令」面板。普通任务可编辑/清空；调度者派出的执行者只读。
+function ResumePromptEditor({
+  value,
+  onSave,
+  readOnly = false,
+}: {
+  value: string;
+  onSave: (rp: string) => void;
+  readOnly?: boolean;
+}) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value);
   useEffect(() => {
@@ -402,7 +432,7 @@ function ResumePromptEditor({ value, onSave }: { value: string; onSave: (rp: str
     onSave(t);
     setEditing(false);
   };
-  if (editing) {
+  if (editing && !readOnly) {
     return (
       <div className="mt-2 overflow-hidden rounded-md border border-slate-500/40 bg-slate-500/[0.06]">
         <div className="flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-medium text-slate-600">
@@ -443,14 +473,16 @@ function ResumePromptEditor({ value, onSave }: { value: string; onSave: (rp: str
       <div className="flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-medium text-slate-600">
         <StatusIcon status="paused" size={11} />
         <span>{value ? "已到检查点 · 续跑时将发送：" : "已到检查点 · 无续跑指令（续跑用标准「继续」nudge）"}</span>
-        <button
-          onClick={() => setEditing(true)}
-          className="ml-auto rounded px-1.5 py-0.5 text-[10px] text-slate-600 opacity-0 hover:bg-slate-500/15 group-hover/rp:opacity-100"
-          title={value ? "编辑续跑指令" : "添加续跑指令"}
-        >
-          {value ? "编辑" : "+ 添加"}
-        </button>
-        {value && (
+        {!readOnly && (
+          <button
+            onClick={() => setEditing(true)}
+            className="ml-auto rounded px-1.5 py-0.5 text-[10px] text-slate-600 opacity-0 hover:bg-slate-500/15 group-hover/rp:opacity-100"
+            title={value ? "编辑续跑指令" : "添加续跑指令"}
+          >
+            {value ? "编辑" : "+ 添加"}
+          </button>
+        )}
+        {!readOnly && value && (
           <button
             onClick={() => onSave("")}
             className="rounded px-1.5 py-0.5 text-[10px] text-slate-600/80 opacity-0 hover:bg-slate-500/15 hover:text-slate-600 group-hover/rp:opacity-100"
