@@ -198,8 +198,13 @@ export function TeamHeader({
       </div>
 
       {/* 原始需求 —— 用户交给调度者的那段话,默认折两行。 */}
-      {objective.body && <CollapsibleText text={objective.body} />}
-      <AttachmentDisplay paths={objective.paths} className="mt-2" />
+      {objective.body ? (
+        <CollapsibleText text={objective.body}>
+          {objective.paths.length > 0 ? <AttachmentDisplay paths={objective.paths} className="px-3 pb-2" /> : null}
+        </CollapsibleText>
+      ) : (
+        <AttachmentDisplay paths={objective.paths} className="mt-2" />
+      )}
 
       {/* 调度者反过来问用户(它调 ask_question)。答复作为插话喂回同一个常驻会话。 */}
       {task.question && <QuestionCard task={task} />}

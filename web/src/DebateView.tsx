@@ -236,8 +236,13 @@ export function DebateView({
           </button>
         </div>
         {/* 议题/任务全文 —— 放在标题下的独立文本框（默认折叠成两行，点展开看全文）。 */}
-        {topic.body && <CollapsibleText text={topic.body} />}
-        <AttachmentDisplay paths={topic.paths} className="mt-2" />
+        {topic.body ? (
+          <CollapsibleText text={topic.body}>
+            {topic.paths.length > 0 ? <AttachmentDisplay paths={topic.paths} className="px-3 pb-2" /> : null}
+          </CollapsibleText>
+        ) : (
+          <AttachmentDisplay paths={topic.paths} className="mt-2" />
+        )}
         {/* 配置摘要 + 定时（同一行，定时靠右）。 */}
         <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1.5">
           {cfg && (

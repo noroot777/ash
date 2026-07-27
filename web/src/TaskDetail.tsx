@@ -214,8 +214,13 @@ export function TaskDetail({
 
         {/* Task objective — shown right under the title (collapsed to 2 lines;
             click 展开 for the full text). */}
-        {objective.body && <CollapsibleText text={objective.body} />}
-        <AttachmentDisplay paths={objective.paths} className="mt-2" />
+        {objective.body ? (
+          <CollapsibleText text={objective.body}>
+            {objective.paths.length > 0 ? <AttachmentDisplay paths={objective.paths} className="px-3 pb-2" /> : null}
+          </CollapsibleText>
+        ) : (
+          <AttachmentDisplay paths={objective.paths} className="mt-2" />
+        )}
 
         {/* agent 提问:调 ask_question 后停在这等答案(队列陪等,不会自动续跑)。
             团队模式下调度者通常会自动来答;用户也可以直接在这里答复唤醒。 */}

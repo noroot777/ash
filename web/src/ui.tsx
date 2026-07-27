@@ -1,4 +1,4 @@
-import { useState, useEffect, useLayoutEffect, useRef } from "react";
+import { useState, useEffect, useLayoutEffect, useRef, type ReactNode } from "react";
 import type { Priority, Session, ProjectHealth, ProjectView, Task } from "@harness/shared";
 import { Plus, CaretRight, CaretDown, GitBranch, Copy, Check, ArrowBendDownRight } from "@phosphor-icons/react";
 import { shortPath } from "./util";
@@ -34,11 +34,11 @@ export function useCollapsedGroups(storageKey: string) {
 
 // Long free-text (a task's objective / a debate's topic) that would otherwise
 // dominate the header: clamp to two lines by default, with an icon-only toggle
-// floating in the box's top-right corner (no separate row) — shown only when the
-// text actually overflows. Expanded, it's a scrollable box rather than an
-// unbounded wall. Shared by the task detail and the debate header so both read
-// the same.
-export function CollapsibleText({ text }: { text: string }) {
+// floating in the box's top-right corner (no separate row). Expanded, the text
+// and any related content (such as attachments) share one scrollable box rather
+// than becoming an unbounded wall. Shared by the task detail and debate headers
+// so all of them fold the same content together.
+export function CollapsibleText({ text, children }: { text: string; children?: ReactNode }) {
   const [open, setOpen] = useState(false);
   const [overflows, setOverflows] = useState(false);
   const ref = useRef<HTMLParagraphElement>(null);
@@ -48,18 +48,22 @@ export function CollapsibleText({ text }: { text: string }) {
     const el = ref.current;
     if (el && !open) setOverflows(el.scrollHeight > el.clientHeight + 1);
   }, [text, open]);
-  const toggleable = overflows || open;
+  const hasChildren = children != null;
+  const toggleable = overflows || hasChildren || open;
   return (
     <div className="relative mt-2">
-      <p
-        ref={ref}
-        onClick={() => !open && overflows && setOpen(true)}
-        className={`whitespace-pre-wrap break-words rounded-md bg-raised/60 px-3 py-2 text-[13px] text-muted ${
-          toggleable ? "pr-9" : ""
-        } ${open ? "max-h-48 overflow-y-auto" : `line-clamp-2 ${overflows ? "cursor-pointer" : ""}`}`}
-      >
-        {text}
-      </p>
+      <div className={`rounded-md bg-raised/60 ${open ? "max-h-48 overflow-y-auto" : ""}`}>
+        <p
+          ref={ref}
+          onClick={() => !open && toggleable && setOpen(true)}
+          className={`whitespace-pre-wrap break-words px-3 py-2 text-[13px] text-muted ${
+            toggleable ? "pr-9" : ""
+          } ${open ? "" : `line-clamp-2 ${toggleable ? "cursor-pointer" : ""}`}`}
+        >
+          {text}
+        </p>
+        {open && children}
+      </div>
       {toggleable && (
         <button
           onClick={() => setOpen((o) => !o)}
