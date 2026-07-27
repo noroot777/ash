@@ -10,6 +10,7 @@ import { CaretDown } from "@phosphor-icons/react";
 import { statusColor } from "../StatusIcon";
 import { formatDuration, formatInstant, useTick } from "../time";
 import { teamLeadExecutorLabel } from "../executorLabel";
+import { timeMs, type LeadTurn } from "./teamData";
 
 type Bar = { from: number; to: number; color: string; hatch?: boolean; title: string };
 type Row = { id?: string; name: string; bars: Bar[]; pendingOnly?: boolean };
@@ -22,34 +23,33 @@ export function TeamTimeline({
   onOpen,
 }: {
   lead: Task;
-  leadTurns: { from: string; to: string | null }[];
+  leadTurns: LeadTurn[];
   workers: Task[];
   groups: Group[];
   onOpen: (id: string) => void;
 }) {
   const [open, setOpen] = useState(true);
   const groupById = new Map(groups.map((g) => [g.id, g]));
-  const ms = (iso?: string | null) => (iso ? Date.parse(iso) : NaN);
   const leadLive = lead.status === "running";
   const settled = isTeamSettled(leadLive, workers);
   // 只有真的还在跑/排队时才按秒重算；paused/settled 都不会自发变化。
   const live = leadLive || workers.some((w) => w.status === "running" || w.status === "queued");
   const nowMs = useTick(open && live);
-  const fallbackEnd = ms(lead.endedAt) || ms(lead.updatedAt) || nowMs;
+  const fallbackEnd = timeMs(lead.endedAt) ?? timeMs(lead.updatedAt) ?? nowMs;
   const openEnd = settled ? fallbackEnd : nowMs;
   const rows: Row[] = [
     {
       name: `调度者 ${teamLeadExecutorLabel(lead)}`,
       bars: leadTurns
         .map((t) => {
-          const ended = t.to ? ms(t.to) : openEnd;
-          const openTurn = !t.to && live;
+          const ended = t.to ?? openEnd;
+          const openTurn = t.to === null && live;
           return {
-            from: ms(t.from),
+            from: t.from,
             to: ended,
             color: statusColor(openTurn ? "running" : "done"),
-            title: t.to
-              ? `回合用时 ${formatDuration(ended - ms(t.from))}`
+            title: t.to !== null
+              ? `回合用时 ${formatDuration(ended - t.from)}`
               : openTurn
                 ? "正在说话"
                 : "回合结束时间缺失",
@@ -59,9 +59,9 @@ export function TeamTimeline({
     },
     ...workers.map((w, i) => {
       const groupPaused = !!(w.groupId && groupById.get(w.groupId)?.paused);
-      const start = ms(w.startedAt);
+      const start = timeMs(w.startedAt);
       const color = statusColor(w.status, !!w.question);
-      if (!Number.isFinite(start)) {
+      if (start === null) {
         // 还没起跑(排队/待派):不编造过去的时间,只在轴的最右端画一小段斜纹,
         // 表示「从现在往后才轮到它」。
         return {
@@ -71,7 +71,8 @@ export function TeamTimeline({
           pendingOnly: true,
         };
       }
-      const end = w.endedAt ? ms(w.endedAt) : openEnd;
+      const recordedEnd = timeMs(w.endedAt);
+      const end = recordedEnd ?? openEnd;
       return {
         id: w.id,
         name: `${i + 1} ${w.title}${groupPaused ? " · 组已停止" : ""}`,
@@ -81,7 +82,7 @@ export function TeamTimeline({
             to: end,
             color,
             hatch: w.status === "queued" || w.status === "backlog",
-            title: `${formatDuration(end - start)}${w.endedAt ? "" : " · 进行中"}${groupPaused ? ` · ${w.status === "done" ? "执行者已正常完成，所属组已停止" : "所属组已停止"}` : ""}`,
+            title: `${formatDuration(end - start)}${recordedEnd === null ? " · 进行中" : ""}${groupPaused ? ` · ${w.status === "done" ? "执行者已正常完成，所属组已停止" : "所属组已停止"}` : ""}`,
           },
         ],
       };
