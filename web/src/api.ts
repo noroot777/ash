@@ -1,5 +1,36 @@
 import type { Project, ProjectView, ProjectHealth, Task, Session, Group, GateAction, Schedule, ScheduledMessage, AgentExecutorProfile, BatchCreateTasksBody, AgentType, DebateSpeaker, AttachmentKind, Issue, IssueComment, AiBackend, LlmProvider, LlmProtocol, SearchHit } from "@harness/shared";
 
+export type CuaProcess = {
+  pid: number;
+  ppid: number;
+  command: string;
+};
+
+export type CuaResidualStatus = {
+  scopeId: string;
+  scopeType: "task" | "team";
+  checkedAt: string;
+  detected: boolean;
+  servicePath: string;
+  processes: CuaProcess[];
+  message: string;
+  sideEffect: string;
+};
+
+export type TeamCuaStatus = {
+  taskId: string;
+  current: CuaResidualStatus;
+  last: CuaResidualStatus | null;
+};
+
+export type TeamCuaKillResult = {
+  killed: CuaProcess[];
+  before: CuaProcess[];
+  after: CuaProcess[];
+  status: CuaResidualStatus;
+  warning: string;
+};
+
 const j = async (r: Response) => {
   if (!r.ok) {
     // 后端错误统一是 {error: "人话"};解析出来给 toast 用,免得用户看到
@@ -64,6 +95,8 @@ export const api = {
 
   groups: (projectId?: string): Promise<Group[]> =>
     fetch(`/api/groups${projectId ? `?projectId=${projectId}` : ""}`).then(j),
+  groupsByOwnerTask: (ownerTaskId: string): Promise<Group[]> =>
+    fetch(`/api/groups?ownerTaskId=${encodeURIComponent(ownerTaskId)}`).then(j),
   // Create a group. projectId locates the project; repoPath is an agent-friendly
   // alternative (resolved server-side). One of the two is required.
   createGroup: (g: Partial<Group> & { name: string; projectId?: string; repoPath?: string }): Promise<Group> =>
@@ -91,6 +124,10 @@ export const api = {
   // 可从中断处恢复)。指挥者本身落 idle —— 再说一句话就把它接回同一会话。
   teamHalt: (id: string): Promise<{ ok: true }> =>
     fetch(`/api/tasks/${id}/team/halt`, { method: "POST" }).then(j),
+  teamCuaStatus: (id: string): Promise<TeamCuaStatus> =>
+    fetch(`/api/tasks/${id}/team/cua-status`).then(j),
+  killTeamCua: (id: string): Promise<TeamCuaKillResult> =>
+    fetch(`/api/tasks/${id}/team/kill-cua`, { method: "POST" }).then(j),
   // Batch-create chained single tasks into an existing group (agent-facing API).
   createTasksBatch: (
     groupId: string,

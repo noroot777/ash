@@ -6,12 +6,14 @@
 // 执行者、看队列、答它的提问,全部白嫖单任务那套 UI,不做第二份。
 import { useEffect, useMemo, useState } from "react";
 import type { Task, Group, AgentType } from "@harness/shared";
-import { ArrowSquareOut, X } from "@phosphor-icons/react";
+import { ArrowSquareOut, Broom, WarningCircle, X } from "@phosphor-icons/react";
+import { api, type TeamCuaStatus } from "../api";
 import { toast } from "../toast";
 import { StatusIcon } from "../StatusIcon";
 import { TaskDetail, type LogLine } from "../TaskDetail";
 import { ReplyBox } from "../ReplyBox";
 import { useConversation } from "../useConversation";
+import { ConfirmModal } from "../Modal";
 import { TeamHeader, AttentionBar } from "./TeamHeader";
 import { TeamFeed } from "./TeamFeed";
 import { WorkerRail, WorkerStatusText } from "./WorkerRail";
@@ -58,11 +60,18 @@ export function TeamView({
   const [openId, setOpenId] = useState<string | null>(null);
   const [localHalted, setLocalHalted] = useState(false);
   const [groupPaused, setGroupPaused] = useState<Record<string, boolean>>({});
+  const [internalGroups, setInternalGroups] = useState<Group[]>([]);
+  const [cuaStatus, setCuaStatus] = useState<TeamCuaStatus | null>(null);
 
   const workers = useMemo(() => workersOf(allTasks, task.id), [allTasks, task.id]);
+  const rawGroups = useMemo(() => {
+    const byId = new Map(groups.map((g) => [g.id, g]));
+    for (const g of internalGroups) byId.set(g.id, g);
+    return [...byId.values()];
+  }, [groups, internalGroups]);
   const viewGroups = useMemo(
-    () => groups.map((g) => (groupPaused[g.id] === undefined ? g : { ...g, paused: groupPaused[g.id]! })),
-    [groups, groupPaused],
+    () => rawGroups.map((g) => (groupPaused[g.id] === undefined ? g : { ...g, paused: groupPaused[g.id]! })),
+    [rawGroups, groupPaused],
   );
   const teamGroups = useMemo(() => teamGroupsOf(viewGroups, task.id, workers), [viewGroups, task.id, workers]);
   const batches = useMemo(() => batchesOf(workers, teamGroups), [workers, teamGroups]);
@@ -77,11 +86,35 @@ export function TeamView({
   const rows = useMemo(() => mergeFeed(items, batches), [items, batches]);
   const leadTurns = useMemo(() => turnsOf(items), [items]);
   const haltedByHistory = activeTeamHaltMarker(items);
+  const stopped = teamGroups.some((g) => g.paused) || (teamGroups.length === 0 && (haltedByHistory || localHalted));
+
+  const refreshInternalGroups = async () => {
+    try {
+      setInternalGroups(await api.groupsByOwnerTask(task.id));
+    } catch (e) {
+      toast(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const refreshCuaStatus = async () => {
+    try {
+      setCuaStatus(await api.teamCuaStatus(task.id));
+    } catch (e) {
+      toast(e instanceof Error ? e.message : String(e));
+    }
+  };
 
   useEffect(() => {
     setLocalHalted(false);
     setGroupPaused({});
+    setInternalGroups([]);
+    setCuaStatus(null);
+    void refreshInternalGroups();
   }, [task.id]);
+
+  useEffect(() => {
+    if (stopped) void refreshCuaStatus();
+  }, [task.id, stopped]);
 
   // 抽屉里的工人被归档/删掉后别留着空抽屉。
   const open = openId ? (allTasks.find((t) => t.id === openId) ?? null) : null;
@@ -121,19 +154,24 @@ export function TeamView({
         leadTurns={leadTurns}
         onPatch={(p) => onPatch(task.id, p)}
         onRun={() => onRun(task.id)}
-        onTeamHalted={() => {
+        onTeamHalted={async () => {
           setLocalHalted(true);
           setGroupPaused(Object.fromEntries(teamGroups.map((g) => [g.id, true])));
+          await refreshInternalGroups();
+          await refreshCuaStatus();
         }}
         onTeamResumed={() => {
           setLocalHalted(false);
           setGroupPaused((m) => ({ ...m, ...Object.fromEntries(teamGroups.map((g) => [g.id, false])) }));
+          setCuaStatus(null);
         }}
         onDelete={() => onDelete(task.id, task.title)}
         onArchive={() => onArchive(task.id)}
         onUnarchive={() => onUnarchive(task.id)}
         onOpenWorker={setOpenId}
       />
+
+      {stopped && <CuaResidualNotice taskId={task.id} status={cuaStatus} onStatus={setCuaStatus} />}
 
       <AttentionBar waiting={waiting} workers={workers} onOpenWorker={setOpenId} onAskLead={askLead} />
 
@@ -182,6 +220,66 @@ export function TeamView({
         />
       )}
     </main>
+  );
+}
+
+function CuaResidualNotice({
+  taskId,
+  status,
+  onStatus,
+}: {
+  taskId: string;
+  status: TeamCuaStatus | null;
+  onStatus: (status: TeamCuaStatus | null) => void;
+}) {
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [killing, setKilling] = useState(false);
+  const current = status?.current;
+  if (!current?.detected) return null;
+
+  const kill = async () => {
+    setKilling(true);
+    try {
+      const res = await api.killTeamCua(taskId);
+      onStatus({ taskId, current: res.status, last: current });
+      toast(res.warning ? `${res.status.message} ${res.warning}` : res.status.message, "info");
+    } catch (e) {
+      toast(e instanceof Error ? e.message : String(e));
+    } finally {
+      setKilling(false);
+    }
+  };
+
+  return (
+    <>
+      <div className="flex shrink-0 flex-wrap items-center gap-x-2 gap-y-1 border-b border-amber-500/30 bg-amber-500/[0.08] px-5 py-2 text-[12.5px]">
+        <WarningCircle size={14} weight="fill" className="text-amber-600" />
+        <b className="text-ink">检测到 computer-use 服务仍在运行</b>
+        <span className="text-muted">{current.sideEffect}</span>
+        {current.processes.length > 0 && (
+          <span className="font-mono text-faint">pid {current.processes.map((p) => p.pid).join(", ")}</span>
+        )}
+        <button
+          disabled={killing}
+          onClick={() => setConfirmOpen(true)}
+          className="ml-auto inline-flex items-center gap-1.5 rounded-md border border-amber-500/40 bg-panel px-2.5 py-1 text-[11.5px] font-medium text-amber-700 transition-colors hover:bg-raised disabled:opacity-50"
+          title="强制清理 ChatGPT.app 全局 computer-use 服务"
+        >
+          <Broom size={13} />
+          {killing ? "清理中" : "强制清理"}
+        </button>
+      </div>
+      {confirmOpen && (
+        <ConfirmModal
+          title="强制清理 computer-use？"
+          message={current.sideEffect}
+          confirmLabel="强制清理"
+          danger
+          onConfirm={kill}
+          onClose={() => setConfirmOpen(false)}
+        />
+      )}
+    </>
   );
 }
 

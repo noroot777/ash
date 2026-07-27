@@ -49,8 +49,8 @@ export function teamGroupsOf(groups: Group[], leadId: string, workers: Task[]): 
 
 const TEAM_HALT_TEXT = "你按了「停止全组」";
 
-// `/api/groups` 在旧后端不下发内部组时,至少用会话里持久存在的系统提示做降级呈现:
-// 它不能替代 group.paused,但能避免刷新后完全看不出用户曾经停止过全组。
+// 兜底:只有在团队页拿不到任何真实 group 行时,才用会话里持久存在的系统提示提示
+// 「曾经停止过」。一旦有 group 行,一律以 group.paused 为准。
 export function activeTeamHaltMarker(items: ConvItem[]): boolean {
   let lastHalt = -1;
   items.forEach((it, i) => {

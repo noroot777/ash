@@ -45,7 +45,7 @@ export function TeamHeader({
   leadTurns: { from: string; to: string | null }[];
   onPatch: (patch: Partial<Task>) => void | Promise<void>;
   onRun: () => void | Promise<void>;
-  onTeamHalted: () => void;
+  onTeamHalted: () => void | Promise<void>;
   onTeamResumed: () => void;
   onDelete: () => void;
   onArchive: () => void;
@@ -229,7 +229,7 @@ export function TeamHeader({
           onConfirm={async () => {
             try {
               await api.teamHalt(task.id);
-              onTeamHalted();
+              await onTeamHalted();
               toast("已停止全组：指挥台已停，工人已暂停", "info");
             } catch (e) {
               toast(e instanceof Error ? e.message : String(e));

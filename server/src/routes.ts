@@ -778,12 +778,14 @@ api.delete("/tasks/:id", async (c) => {
 api.get("/groups", async (c) => {
   const pid = c.req.query("projectId");
   const repo = c.req.query("repoPath");
+  const ownerTaskId = c.req.query("ownerTaskId");
   // 团队任务派活时自建的内部组(owner_task_id 非空)不在这里露脸 —— 它们是 §Team
   // 的内部结构(团队视图自己会展示工人),混进用户的分组列表只会当噪音。
   // includeInternal=1 给调试/排查用。
   const includeInternal = c.req.query("includeInternal") === "1";
   let rows = await db.select().from(groups);
-  if (!includeInternal) rows = rows.filter((g) => !g.ownerTaskId);
+  if (ownerTaskId) rows = rows.filter((g) => g.ownerTaskId === ownerTaskId);
+  else if (!includeInternal) rows = rows.filter((g) => !g.ownerTaskId);
   if (pid) rows = rows.filter((g) => g.projectId === pid);
   if (repo) {
     const key = repoKey(repo);
