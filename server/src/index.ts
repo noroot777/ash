@@ -1,40 +1,129 @@
 import { serve } from "@hono/node-server";
 import { Hono } from "hono";
+import { execFileSync } from "node:child_process";
 import { existsSync, statSync, createReadStream, readdirSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { join, extname, normalize } from "node:path";
-import { acquireDbSingletonLock, SingletonConflictError } from "./singleton.js";
+import {
+  acquireDbSingletonLock,
+  SingletonConflictError,
+  type SingletonLock,
+} from "./singleton.js";
+
+let singletonLock: SingletonLock | null = null;
+let activeServer: ReturnType<typeof serve> | null = null;
+let startupComplete = false;
+let startupExitInProgress = false;
 
 // Never let a stray async error (e.g. an SSE write to a disconnected client)
-// take the whole server down — log and keep running.
-process.on("unhandledRejection", (e) => console.error("[harness] unhandledRejection:", e));
-process.on("uncaughtException", (e) => console.error("[harness] uncaughtException:", e));
+// take the whole server down once it is healthy. During startup, however, an
+// unhandled error means the server never became usable and must be fatal.
+process.on("unhandledRejection", (e) => {
+  if (!startupComplete) exitAfterStartupFailure("unhandled rejection during startup", e);
+  console.error("[harness] unhandledRejection:", e);
+});
+process.on("uncaughtException", (e) => {
+  if (!startupComplete) exitAfterStartupFailure("uncaught exception during startup", e);
+  console.error("[harness] uncaughtException:", e);
+});
 
 const port = Number(process.env.PORT ?? 4317);
+
+function exitAfterStartupFailure(message: string, error?: unknown): never {
+  if (!startupExitInProgress) {
+    startupExitInProgress = true;
+    console.error(`[harness] Refusing to start: ${message}`);
+    if (error) console.error(error);
+
+    // The scheduler starts only after listen succeeds. If starting it throws
+    // after creating its interval, process.exit below still removes that timer.
+    if (activeServer?.listening) {
+      try {
+        activeServer.close();
+      } catch (closeError) {
+        console.error("[harness] failed to close server during startup cleanup:", closeError);
+      }
+    }
+    // release() verifies this process' PID + token before unlinking, so this
+    // cannot remove a lock subsequently acquired by another server.
+    singletonLock?.release();
+  }
+  process.exit(1);
+}
+
+function portConflictMessage(conflictingPort: number) {
+  const inspectCommand = `lsof -nP -iTCP:${conflictingPort} -sTCP:LISTEN`;
+  let pids: number[] = [];
+  try {
+    const output = execFileSync(
+      "lsof",
+      ["-nP", `-iTCP:${conflictingPort}`, "-sTCP:LISTEN", "-t"],
+      { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
+    );
+    pids = [
+      ...new Set(
+        output
+          .split(/\s+/)
+          .map(Number)
+          .filter((pid) => Number.isInteger(pid) && pid > 0),
+      ),
+    ];
+  } catch {
+    // The copy-pasteable lsof command below remains useful if inspection races
+    // with the listener exiting or lsof itself is unavailable to this process.
+  }
+
+  const lines = [`port ${conflictingPort} is already in use.`, `  Port: ${conflictingPort}`];
+  for (const pid of pids) {
+    let detail = "unknown command";
+    try {
+      detail =
+        execFileSync("ps", ["-p", String(pid), "-o", "user=", "-o", "command=", "-ww"], {
+          encoding: "utf8",
+          stdio: ["ignore", "pipe", "ignore"],
+        }).trim() || detail;
+    } catch {
+      // PID is still actionable even if ps inspection fails.
+    }
+    lines.push(`  Listener PID ${pid}: ${detail}`);
+  }
+  if (pids.length === 0) lines.push("  Listener: PID could not be determined");
+  lines.push("Inspect the listener with:", `  ${inspectCommand}`);
+  if (pids.length > 0) lines.push("Stop it, then retry:", `  kill ${pids.join(" ")}`);
+  return lines.join("\n");
+}
+
 try {
-  acquireDbSingletonLock({ port });
+  singletonLock = acquireDbSingletonLock({ port });
 } catch (e) {
   if (e instanceof SingletonConflictError) {
     console.error(e.message);
     process.exit(1);
   }
-  throw e;
+  exitAfterStartupFailure("failed to acquire the database singleton lock", e);
 }
 
-const [{ ensureSchema }, { migrateQueues }, { reconcileInterrupted }, { startScheduler }, { api }] = await Promise.all([
-  import("./db/index.js"),
-  import("./db/migrateQueues.js"),
-  import("./orchestrator.js"),
-  import("./schedules.js"),
-  import("./routes.js"),
-]);
+const { startScheduler, api } = await initializeServer().catch((e) =>
+  exitAfterStartupFailure("server initialization failed", e),
+);
 
-await ensureSchema();
-await migrateQueues(); // 一次性把 legacy depends_on / resume_depends_on 迁到 queue_items（幂等）
-await reconcileInterrupted(); // recover tasks left "running"/"queued" by a previous crash/restart
-startScheduler();
+async function initializeServer() {
+  const [{ ensureSchema }, { migrateQueues }, { reconcileInterrupted }, schedulesModule, routesModule] =
+    await Promise.all([
+      import("./db/index.js"),
+      import("./db/migrateQueues.js"),
+      import("./orchestrator.js"),
+      import("./schedules.js"),
+      import("./routes.js"),
+    ]);
+
+  await ensureSchema();
+  await migrateQueues(); // 一次性把 legacy depends_on / resume_depends_on 迁到 queue_items（幂等）
+  await reconcileInterrupted(); // recover tasks left "running"/"queued" by a previous crash/restart
+  return { startScheduler: schedulesModule.startScheduler, api: routesModule.api };
+}
 
 const app = new Hono();
 app.route("/api", api);
@@ -208,25 +297,21 @@ if (hasBuild) {
   );
 }
 
-const server = serve({ fetch: app.fetch, port }, (info) => {
+// Bind the port before starting the scheduler. A process that cannot accept
+// HTTP callbacks must never be allowed to poll schedules or launch agents.
+activeServer = serve({ fetch: app.fetch, port }, (info) => {
+  try {
+    startScheduler();
+  } catch (e) {
+    exitAfterStartupFailure("scheduler failed to start", e);
+  }
+  startupComplete = true;
   console.log(`[harness] server on http://localhost:${info.port}`);
 });
 
-// 监听失败(几乎总是 EADDRINUSE:已经有一个 harness 占着端口)**必须退出**。
-// 曾经这里没有 error 处理,错误落进上面的 uncaughtException 兜底被一句日志吞掉,
-// 于是留下一个「不监听、但 scheduler 还在跑」的僵尸实例:它照样拿同一个库派任务、
-// 结算状态,而 agent 的 HTTP 回调(complete_task)打到的是真正在监听的那个进程
-// —— 确认与结算分家,任务明明确认完成却被记 failed,队列跟着停摆(2026-07-27
-// 事故)。单实例锁(acquireDbSingletonLock)是第一道闸,这里是第二道:锁没拦住
-// (比如 HARNESS_ALLOW_MULTI=1 或锁文件被清)也不能带着调度器活下去。
-// process.exit 会触发 singleton 的 exit 钩子释放锁,不必手动 release。
-server.on("error", (err: NodeJS.ErrnoException) => {
+activeServer.on("error", (err: NodeJS.ErrnoException) => {
   if (err.code === "EADDRINUSE") {
-    console.error(
-      `[harness] 端口 ${port} 已被占用 —— 已经有一个 harness server 在跑。本进程退出(绝不能留成僵尸调度器)。`,
-    );
-  } else {
-    console.error("[harness] server listen error:", err);
+    exitAfterStartupFailure(portConflictMessage(port));
   }
-  process.exit(1);
+  exitAfterStartupFailure("server listen failed", err);
 });
