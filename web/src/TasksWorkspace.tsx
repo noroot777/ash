@@ -42,6 +42,7 @@ export function TasksWorkspace({
   onRequeue,
   onGate,
   onOpenIssue,
+  onTaskCreated,
 }: {
   view: TaskView;
   setView: (v: TaskView) => void;
@@ -71,6 +72,7 @@ export function TasksWorkspace({
   onRequeue: (id: string) => void;
   onGate: (id: string, action: GateAction) => void;
   onOpenIssue: (issueId: string) => void;
+  onTaskCreated: (task: Task) => void;
 }) {
   const tab = (v: TaskView, label: string) => (
     <button
@@ -137,6 +139,7 @@ export function TasksWorkspace({
                   onDelete={() => onDelete(current.id, current.title)}
                   onArchive={() => onArchive(current.id)}
                   onUnarchive={() => onUnarchive(current.id)}
+                  onTeamCreated={onTaskCreated}
                 />
               ) : current.mode === "team" ? (
                 // 团队模式:整张 logs 表都给它 —— 指挥者的流、每个工人卡片上的

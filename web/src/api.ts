@@ -1,4 +1,5 @@
-import type { Project, ProjectView, ProjectHealth, Task, Session, Group, GateAction, Schedule, ScheduledMessage, AgentExecutorProfile, BatchCreateTasksBody, AgentType, DebateSpeaker, AttachmentKind, Issue, IssueComment, AiBackend, LlmProvider, LlmProtocol, SearchHit } from "@harness/shared";
+import type { Project, ProjectView, ProjectHealth, Task, Session, Group, GateAction, Schedule, ScheduledMessage, AgentExecutorProfile, BatchCreateTasksBody, AgentType, AttachmentKind, Issue, IssueComment, AiBackend, LlmProvider, LlmProtocol, SearchHit } from "@harness/shared";
+import type { PersistedDebateEntry } from "./debateState";
 
 export type CuaProcess = {
   pid: number;
@@ -251,7 +252,7 @@ export const api = {
     fetch(`/api/sessions/${id}/output`).then((r) => r.text()),
   debateTranscript: (
     taskId: string,
-  ): Promise<{ round: number; speaker: DebateSpeaker; text: string; raised?: boolean; agrees?: boolean; conclusion?: string; error?: string; at?: string; target?: "A" | "B" }[]> =>
+  ): Promise<PersistedDebateEntry[]> =>
     fetch(`/api/tasks/${taskId}/debate`).then(j),
 
   // ── issues (planning/discussion layer; see shared Issue) ───────────────────

@@ -6,6 +6,7 @@ import type {
   DebateSpeaker,
   GateAction,
   SessionRole,
+  ServerEvent,
   TaskStatus,
 } from "@harness/shared";
 import { normalizeDebateConfig } from "@harness/shared";
@@ -46,6 +47,21 @@ function recordUserTurn(taskId: string, round: number, text: string, target?: "A
     /* best effort */
   }
   bus.publish({ type: "debate.user", taskId, round, text, at, target });
+}
+
+// Gate verdicts are part of the debate timeline too. Persisting both open and
+// close events lets the web rebuild the last consensus/conclusions after reload;
+// the close event intentionally omits verdict fields and the reducer retains the
+// values from its matching open event.
+function recordGateEvent(event: Extract<ServerEvent, { type: "debate.gate" }>) {
+  try {
+    const runDir = join(RUNS_DIR, event.taskId);
+    mkdirSync(runDir, { recursive: true });
+    appendFileSync(join(runDir, "transcript.jsonl"), JSON.stringify(event) + "\n");
+  } catch {
+    /* best effort */
+  }
+  bus.publish(event);
 }
 
 interface Turn {
@@ -423,6 +439,7 @@ export async function resumeAtGate(taskId: string, action: GateAction): Promise<
       agreesA: ra?.agrees ?? false, agreesB: rb?.agrees ?? false,
       conclusionA: ra?.conclusion, conclusionB: rb?.conclusion,
     };
+    recordGateEvent({ type: "debate.gate", taskId, gate: "G1", open: false });
     await setStatus(taskId, "running");
 
     if (action.kind === "reject") return void (await setStatus(taskId, "canceled"));
@@ -509,12 +526,12 @@ async function runGate(
   while (true) {
     await setStatus(taskId, "awaiting_review");
     const info = getInfo?.();
-    bus.publish({
+    recordGateEvent({
       type: "debate.gate", taskId, gate: "G1", open: true,
       consensus: info?.consensus, conclusionA: info?.conclusionA, conclusionB: info?.conclusionB,
     });
     const action = await waitForGate(taskId);
-    bus.publish({ type: "debate.gate", taskId, gate: "G1", open: false });
+    recordGateEvent({ type: "debate.gate", taskId, gate: "G1", open: false });
     if (action.kind === "approve") {
       await setStatus(taskId, "running");
       return true;

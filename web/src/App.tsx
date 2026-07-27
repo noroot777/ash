@@ -558,6 +558,7 @@ export function App() {
             onRequeue={requeue}
             onGate={gate}
             onOpenIssue={openIssue}
+            onTaskCreated={onTaskCreated}
           />
         )}
       </main>

@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Task, Session, GateAction, AgentType, DebateSpeaker, TaskStatus } from "@harness/shared";
+import { TEAM_DEFAULTS } from "@harness/shared";
 import { Stop, Robot, X } from "@phosphor-icons/react";
-import type { DebateState, DebateTurn, DebateGate } from "./debateState";
+import { rebuildDebateState, type DebateState, type DebateTurn, type DebateGate } from "./debateState";
 import { ResumeButtons, ToolCall, CollapsibleText } from "./ui";
 import { Markdown } from "./Markdown";
 import { api } from "./api";
@@ -12,6 +13,8 @@ import { runAction, canStopTask } from "./taskActions";
 import { canArchive, normalizeDebateConfig } from "@harness/shared";
 import { TaskTimeChip, formatInstant } from "./time";
 import { executorLabel } from "./executorLabel";
+import { toast } from "./toast";
+import { buildDebateHandoffBody, isTeamCommand, latestDebateGate } from "./debateHandoff";
 
 // Animated "thinking" indicator — three dots flashing in sequence.
 function TypingDots() {
@@ -48,6 +51,7 @@ export function DebateView({
   onDelete,
   onArchive,
   onUnarchive,
+  onTeamCreated,
 }: {
   task: Task;
   state: DebateState;
@@ -59,10 +63,13 @@ export function DebateView({
   onDelete: () => void;
   onArchive: () => void;
   onUnarchive: () => void;
+  onTeamCreated: (task: Task) => void;
 }) {
   const cfg = normalizeDebateConfig(task.debate);
   const [sessions, setSessions] = useState<Session[]>([]);
   const [history, setHistory] = useState<DebateTurn[]>([]);
+  const [persistedGate, setPersistedGate] = useState<DebateGate | null>(null);
+  const [teamBusy, setTeamBusy] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   // Stick to the bottom only when the user is already near it. If they scrolled
   // up to read, incoming tokens must not yank them back down.
@@ -83,10 +90,15 @@ export function DebateView({
     if (state.turns.length === 0) {
       api
         .debateTranscript(task.id)
-        .then((rows) =>
-          setHistory(rows.map((r) => ({ ...r, raised: !!r.raised, tools: [], done: true }))),
-        )
-        .catch(() => setHistory([]));
+        .then((rows) => {
+          const rebuilt = rebuildDebateState(rows);
+          setHistory(rebuilt.turns);
+          setPersistedGate(rebuilt.gate);
+        })
+        .catch(() => {
+          setHistory([]);
+          setPersistedGate(null);
+        });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [task.id, sessionsBump]);
@@ -107,18 +119,44 @@ export function DebateView({
   // survives a refresh while the backend is still waiting at the gate.
   const gate: DebateGate | null = useMemo(() => {
     if (state.gate) return state.gate;
-    if (task.status !== "awaiting_review") return null;
-    const hasLegacyCodeTurn = turns.some((t) => t.speaker === "impl" || t.speaker === "review");
-    const lastA = [...turns].reverse().find((t) => t.speaker === "A");
-    const lastB = [...turns].reverse().find((t) => t.speaker === "B");
-    return {
-      gate: hasLegacyCodeTurn ? "G2" : "G1",
-      open: true,
-      consensus: !!(lastA?.agrees && lastB?.agrees),
-      conclusionA: lastA?.conclusion ?? null,
-      conclusionB: lastB?.conclusion ?? null,
-    };
-  }, [state.gate, task.status, turns]);
+    if (persistedGate) return persistedGate;
+    return latestDebateGate(turns, task.status === "awaiting_review");
+  }, [state.gate, persistedGate, task.status, turns]);
+
+  const handoffToTeam = async (command: string): Promise<boolean> => {
+    if (teamBusy || !isTeamCommand(command)) return false;
+    setTeamBusy(true);
+    let created: Task;
+    try {
+      created = await api.createTask({
+        projectId: task.projectId,
+        title: `落实辩论结论：${task.title}`.slice(0, 60),
+        body: buildDebateHandoffBody(task, gate, turns, command),
+        mode: "team",
+        agentType: TEAM_DEFAULTS.lead,
+        team: { ...TEAM_DEFAULTS },
+        autoTitle: false,
+      });
+    } catch (error) {
+      toast(error instanceof Error ? error.message : String(error));
+      setTeamBusy(false);
+      return false;
+    }
+
+    // Select immediately after creation. Starting is a second request; if the
+    // resident lead is unavailable the user still lands on the usable task and
+    // can retry from its normal Run button.
+    onTeamCreated(created);
+    try {
+      await api.runTask(created.id);
+      toast("已创建团队任务，辩论结论已交给团队执行", "info");
+    } catch (error) {
+      toast(`团队任务已创建，但启动失败：${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setTeamBusy(false);
+    }
+    return true;
+  };
 
   // Each speaker reuses one session row across its turns; resolve the latest per
   // role so a bubble's resume credential points at the live session. Falls back
@@ -248,7 +286,12 @@ export function DebateView({
         )}
       </div>
 
-      {gate?.open && task.status === "awaiting_review" && <GateBar gate={gate} onGate={onGate} />}
+      {gate?.open && task.status === "awaiting_review" && (
+        <GateBar gate={gate} onGate={onGate} onTeam={handoffToTeam} teamBusy={teamBusy} />
+      )}
+      {(task.status === "done" || task.status === "failed" || task.status === "canceled") && (
+        <TeamHandoffBar onTeam={handoffToTeam} busy={teamBusy} />
+      )}
     </main>
   );
 }
@@ -347,7 +390,17 @@ function Bubble({
   );
 }
 
-function GateBar({ gate, onGate }: { gate: DebateGate; onGate: (a: GateAction) => void }) {
+function GateBar({
+  gate,
+  onGate,
+  onTeam,
+  teamBusy,
+}: {
+  gate: DebateGate;
+  onGate: (a: GateAction) => void;
+  onTeam: (command: string) => Promise<boolean>;
+  teamBusy: boolean;
+}) {
   const [mode, setMode] = useState<"inject" | "ask" | null>(null);
   const [text, setText] = useState("");
   const [target, setTarget] = useState<"A" | "B" | null>(null); // 提问定向到的辩手（仅 ask·G1）
@@ -383,8 +436,12 @@ function GateBar({ gate, onGate }: { gate: DebateGate; onGate: (a: GateAction) =
     setMode((cur) => (cur === m ? null : m));
     setTarget(null); // 切换/收起输入框时清空定向
   };
-  const submit = () => {
+  const submit = async () => {
     if (!text.trim() || !mode) return;
+    if (isTeamCommand(text)) {
+      if (await onTeam(text)) setText("");
+      return;
+    }
     if (mode === "ask") onGate({ kind: "ask", text: text.trim(), target: target ?? undefined });
     else onGate({ kind: "inject", text: text.trim() });
     setText("");
@@ -473,7 +530,7 @@ function GateBar({ gate, onGate }: { gate: DebateGate; onGate: (a: GateAction) =
                   if (e.key === "ArrowUp") { e.preventDefault(); setMIdx((i) => Math.max(0, i - 1)); return; }
                   if (e.key === "Enter" && !e.metaKey && !e.ctrlKey) { e.preventDefault(); pick((cands[mIdx] ?? cands[0]).key); return; }
                 }
-                if ((e.metaKey || e.ctrlKey) && e.key === "Enter") { e.preventDefault(); submit(); }
+                if ((e.metaKey || e.ctrlKey) && e.key === "Enter") { e.preventDefault(); void submit(); }
               }}
               rows={2}
               placeholder={
@@ -486,8 +543,8 @@ function GateBar({ gate, onGate }: { gate: DebateGate; onGate: (a: GateAction) =
               className="flex-1 resize-none rounded-md border border-line bg-panel px-2 py-1 text-sm outline-none"
             />
             <button
-              disabled={!text.trim()}
-              onClick={submit}
+              disabled={!text.trim() || teamBusy}
+              onClick={() => void submit()}
               className="self-start rounded-md bg-accent hover:bg-accent-hover px-3 py-1 text-xs font-medium text-accent-fg disabled:opacity-40"
             >
               提交
@@ -495,6 +552,46 @@ function GateBar({ gate, onGate }: { gate: DebateGate; onGate: (a: GateAction) =
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function TeamHandoffBar({
+  onTeam,
+  busy,
+}: {
+  onTeam: (command: string) => Promise<boolean>;
+  busy: boolean;
+}) {
+  const [text, setText] = useState("");
+  const submit = async () => {
+    if (!isTeamCommand(text) || busy) return;
+    if (await onTeam(text)) setText("");
+  };
+  return (
+    <div className="border-t border-line bg-panel px-6 py-3">
+      <div className="flex gap-2">
+        <textarea
+          value={text}
+          onChange={(event) => setText(event.target.value)}
+          onKeyDown={(event) => {
+            if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+              event.preventDefault();
+              void submit();
+            }
+          }}
+          rows={2}
+          placeholder="输入 /team 开干，把共识交给一支团队执行"
+          className="flex-1 resize-none rounded-md border border-line bg-canvas px-2.5 py-1.5 text-sm text-ink outline-none placeholder:text-faint focus:border-accent"
+        />
+        <button
+          disabled={!isTeamCommand(text) || busy}
+          onClick={() => void submit()}
+          className="self-start rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-accent-fg hover:bg-accent-hover disabled:opacity-40"
+        >
+          {busy ? "创建中…" : "交给团队"}
+        </button>
+      </div>
     </div>
   );
 }

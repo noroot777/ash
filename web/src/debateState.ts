@@ -27,6 +27,14 @@ export type DebateState = {
   gate: DebateGate | null;
 };
 
+export type PersistedDebateTurn = Omit<DebateTurn, "tools" | "done" | "raised"> & { raised?: boolean };
+export type PersistedDebateEntry = PersistedDebateTurn | Extract<ServerEvent, { type: "debate.gate" }>;
+
+const isPersistedGate = (
+  entry: PersistedDebateEntry,
+): entry is Extract<ServerEvent, { type: "debate.gate" }> =>
+  (entry as { type?: string }).type === "debate.gate";
+
 export const emptyDebate = (): DebateState => ({ turns: [], gate: null });
 
 // implementer/reviewer only occur in historical event streams.
@@ -50,11 +58,19 @@ export function applyDebateEvent(s: DebateState, ev: ServerEvent): DebateState {
     return { ...s, turns };
   }
   if (ev.type === "debate.gate") {
+    // A close event deliberately carries only `{open:false}`. Keep the verdict
+    // from the matching open event so a finished debate can still hand its last
+    // consensus/conclusions to `/team` instead of erasing them at approval time.
+    const previous = s.gate?.gate === ev.gate ? s.gate : null;
     return {
       ...s,
-      gate: ev.open
-        ? { gate: ev.gate, open: true, consensus: ev.consensus, conclusionA: ev.conclusionA, conclusionB: ev.conclusionB }
-        : null,
+      gate: {
+        gate: ev.gate,
+        open: ev.open,
+        consensus: ev.consensus ?? previous?.consensus,
+        conclusionA: ev.conclusionA ?? previous?.conclusionA,
+        conclusionB: ev.conclusionB ?? previous?.conclusionB,
+      },
     };
   }
   if (ev.type === "debate.user") {
@@ -81,4 +97,22 @@ export function applyDebateEvent(s: DebateState, ev: ServerEvent): DebateState {
     return { ...s, turns };
   }
   return s;
+}
+
+// Rebuild both the visible turns and the last gate verdict from transcript.jsonl.
+// Older transcripts contain turns only; newer ones also contain debate.gate
+// timeline events, which makes the handoff conclusion exact after a refresh.
+export function rebuildDebateState(entries: PersistedDebateEntry[]): DebateState {
+  let state = emptyDebate();
+  for (const entry of entries) {
+    if (isPersistedGate(entry)) {
+      state = applyDebateEvent(state, entry);
+      continue;
+    }
+    state = {
+      ...state,
+      turns: [...state.turns, { ...entry, raised: !!entry.raised, tools: [], done: true }],
+    };
+  }
+  return state;
 }
