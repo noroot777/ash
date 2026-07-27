@@ -3,10 +3,10 @@
 // 从 TaskDetail.tsx 拆出来的，因为 /team 的调度台流(web/src/team/TeamFeed.tsx)要
 // 复用同一套渲染 —— 调度者的回合、用户插话、系统提示在两个界面里必须长得一模一样。
 // 纯展示 + 纯数据装配，不碰 api，也不知道自己被谁用。
-import { type ReactNode } from "react";
+import { useCallback, useEffect, useState, type ReactNode, type RefObject } from "react";
 import type { Task, Session, AgentType } from "@harness/shared";
 import { parseSessionOutput as parseSnapshot } from "@harness/shared";
-import { ArrowsClockwise } from "@phosphor-icons/react";
+import { ArrowDown, ArrowUp, ArrowsClockwise } from "@phosphor-icons/react";
 import { ToolCall, ThinkingBlock, ResumeCopyButtons, CopyButton } from "./ui";
 import { Markdown } from "./Markdown";
 import { formatInstant, Duration } from "./time";
@@ -215,6 +215,87 @@ export function Conversation({ items }: { items: ConvItem[] }) {
       {items.map((it, i) => (
         <ConvBubble key={i} item={it} />
       ))}
+    </>
+  );
+}
+
+// Floating shortcuts shared by every conversation-shaped scroll container.
+// Scroll events drive the edge state; DOM/size observers keep it correct while
+// streaming content grows without requiring each caller to thread a content key.
+export function ConversationScrollButtons({
+  scrollRef,
+  threshold = 80,
+}: {
+  scrollRef: RefObject<HTMLElement | null>;
+  threshold?: number;
+}) {
+  const [edges, setEdges] = useState({ atTop: true, atBottom: true });
+  const updateEdges = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const next = {
+      atTop: el.scrollTop <= threshold,
+      atBottom: el.scrollHeight - el.scrollTop - el.clientHeight <= threshold,
+    };
+    setEdges((prev) => (prev.atTop === next.atTop && prev.atBottom === next.atBottom ? prev : next));
+  }, [scrollRef, threshold]);
+
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    let frame = 0;
+    const scheduleUpdate = () => {
+      if (frame) return;
+      frame = requestAnimationFrame(() => {
+        frame = 0;
+        updateEdges();
+      });
+    };
+    const resizeObserver = new ResizeObserver(scheduleUpdate);
+    const mutationObserver = new MutationObserver(scheduleUpdate);
+    el.addEventListener("scroll", scheduleUpdate, { passive: true });
+    resizeObserver.observe(el);
+    mutationObserver.observe(el, { childList: true, characterData: true, subtree: true });
+    scheduleUpdate();
+    return () => {
+      el.removeEventListener("scroll", scheduleUpdate);
+      resizeObserver.disconnect();
+      mutationObserver.disconnect();
+      if (frame) cancelAnimationFrame(frame);
+    };
+  }, [scrollRef, updateEdges]);
+
+  const scrollTo = (top: number) => {
+    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    scrollRef.current?.scrollTo({ top, behavior: reducedMotion ? "auto" : "smooth" });
+  };
+  const buttonClass =
+    "absolute left-1/2 z-10 grid h-8 w-8 -translate-x-1/2 place-items-center rounded-full border border-line bg-panel/70 text-muted shadow-sm backdrop-blur-sm transition-[opacity,transform,background-color,color] duration-200 hover:bg-panel/95 hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 motion-reduce:transition-none";
+
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => scrollTo(0)}
+        tabIndex={edges.atTop ? -1 : 0}
+        aria-hidden={edges.atTop}
+        aria-label="滚动到会话顶部"
+        title="滚动到顶部"
+        className={`${buttonClass} top-3 ${edges.atTop ? "pointer-events-none -translate-y-1 opacity-0" : "opacity-80 hover:opacity-100"}`}
+      >
+        <ArrowUp size={16} weight="bold" />
+      </button>
+      <button
+        type="button"
+        onClick={() => scrollTo(scrollRef.current?.scrollHeight ?? 0)}
+        tabIndex={edges.atBottom ? -1 : 0}
+        aria-hidden={edges.atBottom}
+        aria-label="滚动到会话底部"
+        title="滚动到底部"
+        className={`${buttonClass} bottom-3 ${edges.atBottom ? "pointer-events-none translate-y-1 opacity-0" : "opacity-80 hover:opacity-100"}`}
+      >
+        <ArrowDown size={16} weight="bold" />
+      </button>
     </>
   );
 }

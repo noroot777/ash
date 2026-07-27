@@ -4,7 +4,7 @@
 // 单独一个文件是因为 TaskDetail 和 /team 的调度台都要它,而 Conversation.tsx 刻意
 // 保持「不碰 api」的纯展示层。两处共用同一份装配,刷新/实时的一致性就不会在某一个
 // 界面上偷偷漂掉。
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { Task, Session, AgentType } from "@harness/shared";
 import { api } from "./api";
 import { buildConversation, type ConvItem, type LogLine } from "./Conversation";
@@ -19,9 +19,16 @@ export function useConversation({
   logs: LogLine[];
   sessionsBump: number;
   primaryAgent: AgentType;
-}): { items: ConvItem[]; sessions: Session[]; snapshot: { s: Session; out: string }[] } {
+}): {
+  items: ConvItem[];
+  sessions: Session[];
+  snapshot: { s: Session; out: string }[];
+  refetch: () => Promise<void>;
+  refreshing: boolean;
+} {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [snapshot, setSnapshot] = useState<{ s: Session; out: string }[]>([]);
+  const [refreshing, setRefreshing] = useState(false);
 
   useEffect(() => {
     api.sessions(task.id).then(setSessions);
@@ -48,6 +55,26 @@ export function useConversation({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [task.id]);
 
+  // Manual refresh follows the same snapshot rule as initial loading: persisted
+  // output is safe to reload when there is no in-memory SSE stream. When live
+  // logs exist, refresh session metadata only so the same tokens are not shown
+  // once from the snapshot and again from the live stream.
+  const refetch = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      const ss = await api.sessions(task.id);
+      setSessions(ss);
+      if (logs.length === 0) {
+        const withOut = await Promise.all(
+          ss.map(async (s) => ({ s, out: await api.sessionOutput(s.id).catch(() => "") })),
+        );
+        setSnapshot(withOut.filter(({ out }) => out.trim()));
+      }
+    } finally {
+      setRefreshing(false);
+    }
+  }, [task.id, logs.length]);
+
   // The conversation, assembled once here so a header's copy/export and the body
   // bubbles share exactly one source of truth.
   const items = useMemo(
@@ -55,5 +82,5 @@ export function useConversation({
     [task, snapshot, logs, sessions, primaryAgent],
   );
 
-  return { items, sessions, snapshot };
+  return { items, sessions, snapshot, refetch, refreshing };
 }

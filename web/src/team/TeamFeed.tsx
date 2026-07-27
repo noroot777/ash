@@ -4,10 +4,11 @@
 // - 调度者回合 / 用户插话 / 系统提示 → 会话条目(ConvItem),跟单任务同一套渲染。
 // - 入站气泡(执行者提问/失败/汇报)→ 其实就是 system 条目,认出模板前缀后换个长相画。
 // - 派活卡 → 会话里没有留痕(dispatch 是个 MCP 工具调用),由执行者反推出来按时刻插进流里。
+import { useRef } from "react";
 import type { Task } from "@harness/shared";
 import type { Batch } from "@harness/shared/team";
 import { ArrowElbowDownRight, ArrowRight } from "@phosphor-icons/react";
-import { ConvBubble } from "../Conversation";
+import { ConvBubble, ConversationScrollButtons } from "../Conversation";
 import { StatusIcon } from "../StatusIcon";
 import { CollapsibleText } from "../ui";
 import { formatInstant } from "../time";
@@ -26,37 +27,41 @@ export function TeamFeed({
   empty: boolean;
   onOpenWorker: (id: string) => void;
 }) {
+  const scrollRef = useRef<HTMLDivElement>(null);
   const byId = new Map(workers.map((w) => [w.id, w]));
   const indexOf = (id?: string) => (id ? workers.findIndex((w) => w.id === id) + 1 : 0);
   return (
-    <div className="min-h-0 overflow-y-auto border-r border-line px-4 py-4">
-      {empty && (
-        <p className="text-[13px] text-faint">
-          点「运行」让调度者开工:它会先读需求、拆活,再用 <span className="font-mono">dispatch</span> 把活派给执行者。
-        </p>
-      )}
-      {rows.map((row) => {
-        if (row.kind === "batch")
-          return <BatchCard key={row.key} batch={row.batch} workers={workers} onOpenWorker={onOpenWorker} />;
-        const it = row.item;
-        const inbound = it.kind === "system" ? parseInbound(it.text) : null;
-        if (inbound)
-          return (
-            <div key={row.key}>
-              {inbound.map((m, i) => (
-                <InboundBubble
-                  key={i}
-                  m={m}
-                  n={indexOf(m.taskId)}
-                  worker={m.taskId ? byId.get(m.taskId) : undefined}
-                  at={it.kind === "system" ? it.at : undefined}
-                  onOpen={onOpenWorker}
-                />
-              ))}
-            </div>
-          );
-        return <ConvBubble key={row.key} item={it} />;
-      })}
+    <div className="relative min-h-0 border-r border-line">
+      <div ref={scrollRef} className="h-full overflow-y-auto px-4 py-4">
+        {empty && (
+          <p className="text-[13px] text-faint">
+            点「运行」让调度者开工:它会先读需求、拆活,再用 <span className="font-mono">dispatch</span> 把活派给执行者。
+          </p>
+        )}
+        {rows.map((row) => {
+          if (row.kind === "batch")
+            return <BatchCard key={row.key} batch={row.batch} workers={workers} onOpenWorker={onOpenWorker} />;
+          const it = row.item;
+          const inbound = it.kind === "system" ? parseInbound(it.text) : null;
+          if (inbound)
+            return (
+              <div key={row.key}>
+                {inbound.map((m, i) => (
+                  <InboundBubble
+                    key={i}
+                    m={m}
+                    n={indexOf(m.taskId)}
+                    worker={m.taskId ? byId.get(m.taskId) : undefined}
+                    at={it.kind === "system" ? it.at : undefined}
+                    onOpen={onOpenWorker}
+                  />
+                ))}
+              </div>
+            );
+          return <ConvBubble key={row.key} item={it} />;
+        })}
+      </div>
+      <ConversationScrollButtons scrollRef={scrollRef} />
     </div>
   );
 }

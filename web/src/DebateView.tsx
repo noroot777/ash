@@ -17,6 +17,7 @@ import { toast } from "./toast";
 import { buildDebateHandoffBody, isTeamCommand, latestDebateGate } from "./debateHandoff";
 import { AttachmentDisplay, parseAttachmentText } from "./messageAttachments";
 import { useExecutorProfiles } from "./ExecutorPicker";
+import { ConversationScrollButtons } from "./Conversation";
 
 // Animated "thinking" indicator — three dots flashing in sequence.
 function TypingDots() {
@@ -254,46 +255,49 @@ export function DebateView({
         </div>
       </header>
 
-      <div ref={scrollRef} onScroll={onScroll} className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
-        {turns.length === 0 && (
-          <p className="text-sm text-faint">点击「运行」开始对抗。双方逐回合的发言会实时显示在这里。</p>
-        )}
-        {turns.map((t, i) => (
-          <Bubble
-            key={i}
-            turn={t}
-            task={task}
-            prevRound={turns[i - 1]?.round}
-            session={sessionFor(t.speaker)}
-            agentType={agentFor(t.speaker)}
-          />
-        ))}
-        {/* 结束后把双方结论提到末尾做一张「讨论结论」卡。 */}
-        {task.status === "done" && (() => {
-          const ca = [...turns].reverse().find((t) => t.speaker === "A")?.conclusion;
-          const cb = [...turns].reverse().find((t) => t.speaker === "B")?.conclusion;
-          if (!ca && !cb) return null;
-          return (
-            <div className="mb-3 rounded-lg border border-emerald-500/30 bg-emerald-500/[0.06] px-3 py-2 text-[13px]">
-              <div className="mb-1 text-[11px] font-medium text-emerald-700">讨论结论</div>
-              {ca && <div className="text-ink"><b className="text-sky-700">辩手A</b> · {ca}</div>}
-              {cb && <div className="text-ink"><b className="text-emerald-700">辩手B</b> · {cb}</div>}
+      <div className="relative min-h-0 flex-1">
+        <div ref={scrollRef} onScroll={onScroll} className="h-full overflow-y-auto px-6 py-4">
+          {turns.length === 0 && (
+            <p className="text-sm text-faint">点击「运行」开始对抗。双方逐回合的发言会实时显示在这里。</p>
+          )}
+          {turns.map((t, i) => (
+            <Bubble
+              key={i}
+              turn={t}
+              task={task}
+              prevRound={turns[i - 1]?.round}
+              session={sessionFor(t.speaker)}
+              agentType={agentFor(t.speaker)}
+            />
+          ))}
+          {/* 结束后把双方结论提到末尾做一张「讨论结论」卡。 */}
+          {task.status === "done" && (() => {
+            const ca = [...turns].reverse().find((t) => t.speaker === "A")?.conclusion;
+            const cb = [...turns].reverse().find((t) => t.speaker === "B")?.conclusion;
+            if (!ca && !cb) return null;
+            return (
+              <div className="mb-3 rounded-lg border border-emerald-500/30 bg-emerald-500/[0.06] px-3 py-2 text-[13px]">
+                <div className="mb-1 text-[11px] font-medium text-emerald-700">讨论结论</div>
+                {ca && <div className="text-ink"><b className="text-sky-700">辩手A</b> · {ca}</div>}
+                {cb && <div className="text-ink"><b className="text-emerald-700">辩手B</b> · {cb}</div>}
+              </div>
+            );
+          })()}
+          {/* Between-turn liveness: busy but no open bubble → still working. */}
+          {busy && turns.length > 0 && turns[turns.length - 1].done && (
+            <div className="mb-3 flex items-center gap-2 text-[12px] text-muted">
+              <TypingDots /> 运行中…
             </div>
-          );
-        })()}
-        {/* Between-turn liveness: busy but no open bubble → still working. */}
-        {busy && turns.length > 0 && turns[turns.length - 1].done && (
-          <div className="mb-3 flex items-center gap-2 text-[12px] text-muted">
-            <TypingDots /> 运行中…
-          </div>
-        )}
-        {/* Terminal markers so a stopped debate reads as stopped, not stuck. */}
-        {task.status === "failed" && (
-          <div className="mb-3 text-center text-[12px] text-red-600">✕ 本次对抗已失败并停止</div>
-        )}
-        {task.status === "canceled" && (
-          <div className="mb-3 text-center text-[12px] text-faint">— 已取消 —</div>
-        )}
+          )}
+          {/* Terminal markers so a stopped debate reads as stopped, not stuck. */}
+          {task.status === "failed" && (
+            <div className="mb-3 text-center text-[12px] text-red-600">✕ 本次对抗已失败并停止</div>
+          )}
+          {task.status === "canceled" && (
+            <div className="mb-3 text-center text-[12px] text-faint">— 已取消 —</div>
+          )}
+        </div>
+        <ConversationScrollButtons scrollRef={scrollRef} />
       </div>
 
       {gate?.open && task.status === "awaiting_review" && (

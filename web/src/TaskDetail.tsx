@@ -14,7 +14,7 @@ import { runAction, canStopTask } from "./taskActions";
 import { groupLabel } from "./util";
 import { TaskTimeChip } from "./time";
 // 会话渲染与插话框已拆成独立模块(/team 也复用它们)。
-import { Conversation, conversationToText, downloadConversation, type LogLine } from "./Conversation";
+import { Conversation, ConversationScrollButtons, conversationToText, downloadConversation, type LogLine } from "./Conversation";
 import { useConversation } from "./useConversation";
 import { ReplyBox } from "./ReplyBox";
 import { ExecutorPicker, type ExecutorSelection, useExecutorProfiles } from "./ExecutorPicker";
@@ -22,6 +22,7 @@ import { executorLabel } from "./executorLabel";
 import { QuestionCard } from "./QuestionCard";
 import { isDispatchedWorker } from "./taskPolicy";
 import { AttachmentDisplay, parseAttachmentText } from "./messageAttachments";
+import { toast } from "./toast";
 export type { LogLine } from "./Conversation";
 
 export function TaskDetail({
@@ -65,7 +66,7 @@ export function TaskDetail({
 
   // 拉会话 + 快照历史输出 + 拼条目流,都在 useConversation 里(/team 调度台共用同
   // 一份装配,免得两个界面的「刷新后 vs 实时」各自漂移)。
-  const { items, sessions, snapshot } = useConversation({
+  const { items, sessions, snapshot, refetch, refreshing } = useConversation({
     task,
     logs,
     sessionsBump,
@@ -172,6 +173,16 @@ export function TaskDetail({
                 归档
               </button>
             )}
+            <button
+              type="button"
+              onClick={() => void refetch().catch((error) => toast(error instanceof Error ? error.message : String(error)))}
+              disabled={refreshing}
+              className="inline-flex h-[30px] items-center gap-1.5 rounded-md px-2.5 text-[13px] font-medium text-muted transition-colors hover:bg-raised hover:text-ink disabled:cursor-wait disabled:opacity-60"
+              title="重新拉取会话内容"
+            >
+              <ArrowsClockwise size={14} className={refreshing ? "animate-spin" : ""} />
+              刷新
+            </button>
             {items.length > 0 && (
               <>
                 <CopyButton
@@ -324,17 +335,20 @@ export function TaskDetail({
         )}
       </header>
 
-      <div
-        ref={scrollRef}
-        className="min-h-0 flex-1 overflow-y-auto break-words px-6 py-4 text-[13px] leading-relaxed"
-      >
-        {/* The run as a conversation: prior output (snapshotted per session on
-            load) and the live stream merge into one bubble per run, so a running
-            task you reload doesn't split into a stale + live pair. */}
-        <Conversation items={items} />
-        {items.length === 0 && (
-          <p className="font-sans text-faint">点击「运行」开始，输出会实时流式显示在这里。</p>
-        )}
+      <div className="relative min-h-0 flex-1">
+        <div
+          ref={scrollRef}
+          className="h-full overflow-y-auto break-words px-6 py-4 text-[13px] leading-relaxed"
+        >
+          {/* The run as a conversation: prior output (snapshotted per session on
+              load) and the live stream merge into one bubble per run, so a running
+              task you reload doesn't split into a stale + live pair. */}
+          <Conversation items={items} />
+          {items.length === 0 && (
+            <p className="font-sans text-faint">点击「运行」开始，输出会实时流式显示在这里。</p>
+          )}
+        </div>
+        <ConversationScrollButtons scrollRef={scrollRef} />
       </div>
 
       {task.mode === "single" && (sessions.length > 0 || snapshot.length > 0 || logs.length > 0) && (
