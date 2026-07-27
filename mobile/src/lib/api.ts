@@ -59,6 +59,9 @@ export const api = {
     opts?: { agent?: AgentType; sendAt?: string },
   ): Promise<{ started?: boolean; scheduled?: boolean; message?: ScheduledMessage }> =>
     req(`/tasks/${id}/reply`, { method: "POST", body: JSON.stringify({ text, ...opts }) }).then(j),
+  // ask_question 的专用答复通道：清空待答问题并恢复同一个 CLI 会话。
+  answer: (id: string, answer: string): Promise<{ answered: true; resumed: true }> =>
+    req(`/tasks/${id}/answer`, { method: "POST", body: JSON.stringify({ answer }) }).then(j),
 
   // —— 定时（启动时机 once/cron，挂在 task 上）——
   schedule: (taskId: string): Promise<Schedule | null> => req(`/tasks/${taskId}/schedule`).then(j),

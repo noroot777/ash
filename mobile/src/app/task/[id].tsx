@@ -24,6 +24,7 @@ import { STATUS_META } from "@/lib/constants";
 import { useTheme, radius, fonts } from "@/lib/theme";
 import { Ionicons } from "@expo/vector-icons";
 import { Conversation } from "@/components/Conversation";
+import { QuestionCard } from "@/components/QuestionCard";
 import { MarkdownText } from "@/components/MarkdownText";
 import { PriorityBars } from "@/components/ui";
 import { SignalBar } from "@/components/SignalBar";
@@ -145,8 +146,10 @@ export default function TaskDetail() {
   }
 
   const status = task.status;
-  const action = runAction(status);
-  const replyBlocked = status === "running" || status === "queued";
+  const action = runAction(status, { mode: task.mode, awaitingAnswer: !!task.question });
+  // Resident team consoles accept interrupt + send while running. The same
+  // running/queued guard remains correct for one-shot tasks.
+  const replyBlocked = task.mode !== "team" && (status === "running" || status === "queued");
 
   const onPrimary = () => {
     if (action.kind === "run") {
@@ -407,7 +410,10 @@ export default function TaskDetail() {
         {/* Conversation (polled from the session .md) */}
         <Conversation lines={lines} sessions={sessions} taskEndedAt={task.endedAt} />
 
-        {lines.length === 0 ? (
+        {/* ask_question answer flow stays separate from ordinary conversation replies. */}
+        {task.question ? <QuestionCard task={task} /> : null}
+
+        {lines.length === 0 && !task.question ? (
           <Text style={{ color: theme.faint, fontSize: 13, textAlign: "center", paddingTop: 20 }}>
             还没有输出 — 点上方「{action.label}」开始
           </Text>

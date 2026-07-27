@@ -1,7 +1,6 @@
-// The single primary action for a task in a given status — ported verbatim from
-// web/src/taskActions.ts so the mobile button agrees with the web/server guard
-// (a `done` task shows a disabled「已完成」, never a casual re-run).
-import type { TaskStatus } from "@harness/shared";
+// The single primary action for a task in a given status. Team is a resident
+// console, so its idle state is runnable and resumes the same CLI session.
+import type { TaskMode, TaskStatus } from "@harness/shared";
 
 export type RunActionKind = "run" | "retry" | "busy" | "gate" | "done";
 export interface RunAction {
@@ -10,7 +9,33 @@ export interface RunAction {
   canClick: boolean;
 }
 
-export function runAction(status: TaskStatus): RunAction {
+export function runAction(
+  status: TaskStatus,
+  context: { mode?: TaskMode; awaitingAnswer?: boolean } = {},
+): RunAction {
+  const { mode = "single", awaitingAnswer = false } = context;
+
+  // ask_question is resumed only through /answer. Showing Continue/Retry here
+  // would imply the question can be bypassed by the normal run endpoint.
+  if (awaitingAnswer && (status === "paused" || mode === "team")) {
+    return { kind: "gate", label: "等待答复", canClick: false };
+  }
+
+  if (mode === "team") {
+    switch (status) {
+      case "running":
+        return { kind: "busy", label: "进行中…", canClick: false };
+      case "queued":
+        return { kind: "busy", label: "排队中", canClick: false };
+      case "awaiting_review":
+        return { kind: "gate", label: "等待裁决", canClick: false };
+      default:
+        // idle is not terminal. /run reconnects the resident console to its
+        // existing CLI session; the fallback also repairs stale team statuses.
+        return { kind: "run", label: "运行", canClick: true };
+    }
+  }
+
   switch (status) {
     case "backlog":
     case "canceled":
@@ -21,6 +46,8 @@ export function runAction(status: TaskStatus): RunAction {
       return { kind: "busy", label: "进行中…", canClick: false };
     case "awaiting_review":
       return { kind: "gate", label: "等待裁决", canClick: false };
+    case "paused":
+      return { kind: "run", label: "继续", canClick: true };
     case "failed":
       return { kind: "retry", label: "重试", canClick: true };
     case "done":
@@ -31,7 +58,8 @@ export function runAction(status: TaskStatus): RunAction {
 }
 
 // A live agent subprocess exists only while `running`, so that's the only status
-// a manual stop applies to.
+// a manual stop applies to. This intentionally includes a running team console;
+// its server-side stop settles back to idle rather than creating a terminal state.
 export function canStopTask(status: TaskStatus): boolean {
   return status === "running";
 }

@@ -1,22 +1,34 @@
 // Status & priority metadata, ported from web/src/constants.ts. Tailwind class
-// names are replaced with plain hex colors for RN. The STATUSES array order is
-// load-bearing: it drives the grouped list view (running → … → canceled).
+// names are replaced with plain hex colors for RN. `idle` is kept as precise
+// metadata but folded into the running section by the task list, just like web.
 import type { TaskStatus, Priority } from "@harness/shared";
 
-export const STATUSES: { key: TaskStatus; label: string; color: string }[] = [
-  { key: "running", label: "运行中", color: "#5EE6C5" },
-  { key: "awaiting_review", label: "等待审核", color: "#a78bfa" },
-  { key: "queued", label: "排队中", color: "#fbbf24" },
-  { key: "backlog", label: "待排期", color: "#8a8a90" },
-  { key: "done", label: "完成", color: "#34d399" },
-  { key: "failed", label: "失败", color: "#FF6B6B" },
-  { key: "canceled", label: "已取消", color: "#737373" },
-];
+type StatusMeta = { key: TaskStatus; label: string; color: string };
 
-export const STATUS_META = Object.fromEntries(STATUSES.map((s) => [s.key, s])) as Record<
-  TaskStatus,
-  (typeof STATUSES)[number]
->;
+export const STATUS_META = {
+  running: { key: "running", label: "运行中", color: "#5EE6C5" },
+  idle: { key: "idle", label: "待命", color: "#94A3B8" },
+  paused: { key: "paused", label: "暂停中", color: "#94A3B8" },
+  awaiting_review: { key: "awaiting_review", label: "等待审核", color: "#a78bfa" },
+  queued: { key: "queued", label: "排队中", color: "#fbbf24" },
+  backlog: { key: "backlog", label: "待排期", color: "#8a8a90" },
+  done: { key: "done", label: "完成", color: "#34d399" },
+  failed: { key: "failed", label: "失败", color: "#FF6B6B" },
+  canceled: { key: "canceled", label: "已取消", color: "#737373" },
+} satisfies Record<TaskStatus, StatusMeta>;
+
+// Load-bearing grouped-list order. Team idle is intentionally not a separate
+// section: the list folds it into running while retaining its slate signal bar.
+export const STATUSES: StatusMeta[] = [
+  STATUS_META.running,
+  STATUS_META.paused,
+  STATUS_META.awaiting_review,
+  STATUS_META.queued,
+  STATUS_META.backlog,
+  STATUS_META.done,
+  STATUS_META.failed,
+  STATUS_META.canceled,
+];
 
 export const PRIORITIES: { key: Priority; label: string; bars: number; color: string }[] = [
   { key: "urgent", label: "紧急", bars: 4, color: "#f87171" },

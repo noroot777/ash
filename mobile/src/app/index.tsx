@@ -18,6 +18,12 @@ import { Ionicons } from "@expo/vector-icons";
 
 const PRIORITY_RANK: Record<string, number> = { urgent: 0, high: 1, medium: 2, low: 3, none: 4 };
 
+function groupedStatus(task: Task): TaskStatus {
+  // A resident team console remains active while idle; keep it in the running
+  // section while its own signal bar still communicates the precise idle state.
+  return task.mode === "team" && task.status === "idle" ? "running" : task.status;
+}
+
 // 列表 section 的元信息。两种视图:
 //   状态视图——活跃任务按状态分区 + 底部可折叠「已归档」区;
 //   分组视图——每个分组一区(带整组运行/暂停) + 末尾「未分组」区。
@@ -160,7 +166,7 @@ function TaskList() {
     const statusSections = STATUSES.map((s) => ({
       kind: "status" as const,
       key: s.key,
-      data: mine.filter((t) => !t.archived && t.status === s.key).sort(byPriority),
+      data: mine.filter((t) => !t.archived && groupedStatus(t) === s.key).sort(byPriority),
     })).filter((s) => s.data.length > 0);
     const archived = mine
       .filter((t) => t.archived)
