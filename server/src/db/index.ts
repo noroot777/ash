@@ -130,6 +130,8 @@ export async function ensureSchema() {
     "ALTER TABLE groups ADD COLUMN owner_task_id TEXT",
     // ask_question 的候选答案（json string[]，null=只能自由作答）
     "ALTER TABLE tasks ADD COLUMN question_options TEXT",
+    // ask_question 的多问题列表（json {question, options?}[]，null=老式单问题）
+    "ALTER TABLE tasks ADD COLUMN question_items TEXT",
     // 任务执行者 profile。非空时按 agents.id 精确解析；空/悬空时按 agent_type 默认执行者降级。
     "ALTER TABLE tasks ADD COLUMN executor_id TEXT",
     // 续聊：终态任务的追加对话回合，记下续聊前的终态（队列按它看待该成员）

@@ -21,8 +21,9 @@ import type {
   Priority,
   LlmProvider,
   LlmProtocol,
+  QuestionItem,
 } from "@harness/shared";
-import { canSingleRun, canArchive, isUserSettableStatus, AGENT_TYPES, maxBytesFor, attachmentKind, MAX_QUESTION_OPTIONS, MAX_QUESTION_OPTION_LEN } from "@harness/shared";
+import { canSingleRun, canArchive, isUserSettableStatus, AGENT_TYPES, maxBytesFor, attachmentKind, MAX_QUESTION_OPTIONS, MAX_QUESTION_OPTION_LEN, MAX_QUESTION_ITEMS } from "@harness/shared";
 import { db } from "./db/index.js";
 import { projects, groups, tasks, sessions, schedules, scheduledMessages, agents, issues, issueComments, llmProviders, queueItems } from "./db/schema.js";
 import { bus } from "./bus.js";
@@ -308,6 +309,7 @@ const toTask = (r: typeof tasks.$inferSelect, profiles: AgentLabelRow[] = []): T
   resumePrompt: r.resumePrompt ?? null,
   question: r.question ?? null,
   questionOptions: r.questionOptions ? (JSON.parse(r.questionOptions) as string[]) : null,
+  questionItems: r.questionItems ? (JSON.parse(r.questionItems) as QuestionItem[]) : null,
 });
 
 const taskBody = (body: string | undefined, taskId: string): string =>
@@ -1112,39 +1114,97 @@ api.post("/tasks/:id/complete", async (c) => {
 // 的答复会清空 question 并带着答复 resume 同一 CLI 会话。
 // 团队指挥者自己也能调 → 界面上就是「指挥者在等你答复」,答复喂回它的常驻会话。
 // 没人管也能用:任务停在 paused,问题留在 task.question 等用户答复。
-// 可选的 options = 候选答案:网页在问题下方渲染成按钮,点一下就是以该选项**原文**
-// 走同一个 /answer —— 所以答复链路对「点按钮」和「自己打字」完全一样,选项只省打字。
+// 可选的 options = 单问题候选答案；questionItems = 一次并列问几个相关决策，每个
+// 问题有自己的 options。候选按钮只填入对应输入框，最终仍合成一段文本走 /answer。
 // 一次性任务只接受 running;常驻指挥台例外(§Team):它的 status 会在 running/idle
 // 间切换,但能发出 ask_question 就说明这一轮活着,不能被 idle 挡掉。
+function normalizeQuestionOptions(raw: unknown, field: string): { options: string[] } | { error: string } {
+  if (raw === undefined) return { options: [] };
+  if (!Array.isArray(raw) || raw.some((o) => typeof o !== "string")) {
+    return { error: `${field} 必须是字符串数组` };
+  }
+  // trim + 去空 + 去重后落库；超限明确报错，不静默截断。
+  const options = [...new Set(raw.map((o) => o.trim()).filter(Boolean))];
+  if (options.length > MAX_QUESTION_OPTIONS) {
+    return { error: `${field} 最多 ${MAX_QUESTION_OPTIONS} 个候选答案，收到 ${options.length} 个` };
+  }
+  const tooLong = options.find((o) => o.length > MAX_QUESTION_OPTION_LEN);
+  if (tooLong) {
+    return {
+      error: `${field} 的单个候选答案不超过 ${MAX_QUESTION_OPTION_LEN} 字，展开说明请写进 question：「${tooLong.slice(0, 30)}…」`,
+    };
+  }
+  return { options };
+}
+
+function normalizeQuestionItems(raw: unknown): { items: QuestionItem[] | null } | { error: string } {
+  if (raw === undefined) return { items: null };
+  if (!Array.isArray(raw)) return { error: "questionItems 必须是问题数组" };
+  if (raw.length > MAX_QUESTION_ITEMS) {
+    return { error: `一次最多 ${MAX_QUESTION_ITEMS} 个问题，收到 ${raw.length} 个` };
+  }
+  const items: QuestionItem[] = [];
+  for (let i = 0; i < raw.length; i += 1) {
+    const item = raw[i];
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      return { error: `questionItems[${i}] 必须是 { question, options? }` };
+    }
+    const record = item as Record<string, unknown>;
+    if (typeof record.question !== "string" || !record.question.trim()) {
+      return { error: `questionItems[${i}].question 不能为空` };
+    }
+    const normalized = normalizeQuestionOptions(record.options, `questionItems[${i}].options`);
+    if ("error" in normalized) return normalized;
+    items.push({
+      question: record.question.trim(),
+      ...(normalized.options.length ? { options: normalized.options } : {}),
+    });
+  }
+  return { items: items.length ? items : null };
+}
+
 api.post("/tasks/:id/ask", async (c) => {
   const taskId = c.req.param("id");
   const b = await c.req
-    .json<{ question?: string; options?: unknown }>()
-    .catch(() => ({}) as { question?: string; options?: unknown });
+    .json<{ question?: string; options?: unknown; questionItems?: unknown }>()
+    .catch(() => ({}) as { question?: string; options?: unknown; questionItems?: unknown });
   const q = (b.question ?? "").trim();
   if (!q) return c.json({ error: "question 不能为空" }, 400);
-  if (b.options !== undefined && !Array.isArray(b.options))
-    return c.json({ error: "options 必须是字符串数组" }, 400);
-  // trim + 去空 + 去重后落库;超限明确报错,不静默截断(见 shared 常量处的理由)。
-  const opts = [...new Set((b.options ?? []).map((o) => String(o ?? "").trim()).filter(Boolean))];
-  if (opts.length > MAX_QUESTION_OPTIONS)
-    return c.json({ error: `最多 ${MAX_QUESTION_OPTIONS} 个候选答案，收到 ${opts.length} 个` }, 400);
-  const tooLong = opts.find((o) => o.length > MAX_QUESTION_OPTION_LEN);
-  if (tooLong)
-    return c.json(
-      { error: `单个候选答案不超过 ${MAX_QUESTION_OPTION_LEN} 字，展开说明请写进 question：「${tooLong.slice(0, 30)}…」` },
-      400,
-    );
+  const normalizedOptions = normalizeQuestionOptions(b.options, "options");
+  if ("error" in normalizedOptions) return c.json({ error: normalizedOptions.error }, 400);
+  const normalizedItems = normalizeQuestionItems(b.questionItems);
+  if ("error" in normalizedItems) return c.json({ error: normalizedItems.error }, 400);
+  const opts = normalizedOptions.options;
+  const questionItems = normalizedItems.items;
+  if (questionItems && opts.length) {
+    return c.json({ error: "多问题请把候选答案放进各 questionItems[i].options，不要同时传顶层 options" }, 400);
+  }
   const r = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!r) return c.json({ error: "not found" }, 404);
   if (r.mode !== "team" && r.status !== "running")
     return c.json({ error: "只能在任务正在运行时提问", status: r.status }, 409);
   await db
     .update(tasks)
-    .set({ question: q, questionOptions: opts.length ? JSON.stringify(opts) : null, updatedAt: now() })
+    .set({
+      question: q,
+      questionOptions: opts.length ? JSON.stringify(opts) : null,
+      questionItems: questionItems ? JSON.stringify(questionItems) : null,
+      updatedAt: now(),
+    })
     .where(eq(tasks.id, taskId));
-  bus.publish({ type: "task.question", taskId, question: q, questionOptions: opts.length ? opts : null });
-  return c.json({ asked: true, options: opts, willSettleAs: r.mode === "team" ? "idle" : "paused" });
+  bus.publish({
+    type: "task.question",
+    taskId,
+    question: q,
+    questionOptions: opts.length ? opts : null,
+    questionItems,
+  });
+  return c.json({
+    asked: true,
+    options: opts,
+    questionItems,
+    willSettleAs: r.mode === "team" ? "idle" : "paused",
+  });
 });
 
 // 答复一个提问暂停中的任务(指挥者或用户都可调):清空 question,把答复作为
@@ -1166,9 +1226,9 @@ api.post("/tasks/:id/answer", async (c) => {
   }
   await db
     .update(tasks)
-    .set({ question: null, questionOptions: null, updatedAt: now() })
+    .set({ question: null, questionOptions: null, questionItems: null, updatedAt: now() })
     .where(eq(tasks.id, taskId));
-  bus.publish({ type: "task.question", taskId, question: null, questionOptions: null });
+  bus.publish({ type: "task.question", taskId, question: null, questionOptions: null, questionItems: null });
   // 指挥台不说「完成任务」——它没有完成一说,只是拿到答案接着安排。
   const tail = r.mode === "team" ? "请据此接着安排。" : "请据此继续完成任务。";
   void continueTask(taskId, `【答复】你之前的提问:「${r.question}」\n\n${a}\n\n${tail}`);

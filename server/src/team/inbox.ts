@@ -34,11 +34,26 @@ export async function notifyTeamLead(
   await sendInbound(lead.id, text);
 }
 
-// 工人提问时给了候选答案(ask_question 的 options)就一并列出来 —— 指挥者照着挑一个
-// 答,比自由发挥更贴合工人的处境;它也可以答别的,候选只是建议。脏 JSON 不该拖垮
-// 一条通知,解析失败就当没给候选。
+// 工人提问时把多问题和候选答案完整列出来，指挥者才能一次把相关决策都答完。
+// 候选只是建议，指挥者仍可自由组合；脏 JSON 不该拖垮通知，解析失败就退回纯问题。
 function withOptions(worker: typeof tasks.$inferSelect, question?: string | null): string {
   const q = (question ?? worker.question ?? "").trim() || "(工人没写清问题,去它的会话里看)";
+  let items: { question: string; options?: string[] }[] = [];
+  try {
+    items = worker.questionItems ? (JSON.parse(worker.questionItems) as typeof items) : [];
+  } catch {
+    items = [];
+  }
+  if (items.length > 0) {
+    return `${q}\n\n它一次问了 ${items.length} 个相关问题，请逐题答复（候选只是建议）：\n${items
+      .map((item, i) => {
+        const options = item.options?.length
+          ? `\n候选建议：\n${item.options.map((o, j) => `  ${j + 1}. ${o}`).join("\n")}`
+          : "";
+        return `【${i + 1}】${item.question}${options}`;
+      })
+      .join("\n\n")}`;
+  }
   let opts: string[] = [];
   try {
     opts = worker.questionOptions ? (JSON.parse(worker.questionOptions) as string[]) : [];

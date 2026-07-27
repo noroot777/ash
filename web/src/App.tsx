@@ -112,7 +112,9 @@ export function App() {
         // 不用等下次全量拉取(task.status 不带 question)。
         setTasks((ts) =>
           ts.map((t) =>
-            t.id === ev.taskId ? { ...t, question: ev.question, questionOptions: ev.questionOptions } : t,
+            t.id === ev.taskId
+              ? { ...t, question: ev.question, questionOptions: ev.questionOptions, questionItems: ev.questionItems }
+              : t,
           ),
         );
       } else if (ev.type === "agent.event") {

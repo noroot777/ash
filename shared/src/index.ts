@@ -197,6 +197,15 @@ export interface Task {
   // （/answer → resume 会话）跟自由作答完全一样，选项只是省掉打字。
   // null/[] = 没给候选，只能自由作答。
   questionOptions?: string[] | null;
+  // 一次询问多个相关决策：question 此时作为引言/背景，每个 item 才是一个需要
+  // 独立答复的问题；options 仍只是可编辑答复的快捷填充。null/[] = 沿用上面的
+  // 单问题 question + questionOptions 结构，老调用无需改动。
+  questionItems?: QuestionItem[] | null;
+}
+
+export interface QuestionItem {
+  question: string;
+  options?: string[];
 }
 
 // 候选答案的上限：server 校验、MCP 工具描述、网页渲染共用这一处来源（写死两遍
@@ -204,6 +213,9 @@ export interface Task {
 // 以为它还在、用户压根没见过，两边对不上。
 export const MAX_QUESTION_OPTIONS = 6;
 export const MAX_QUESTION_OPTION_LEN = 200;
+// 一次最多并列问 4 个相关问题（与 Claude Code 一致）。再多会让答复卡片过长，
+// 也通常意味着决策应拆成两轮；超限同样明确报 400，不静默截断。
+export const MAX_QUESTION_ITEMS = 4;
 
 // ── Team (§Team) ─────────────────────────────────────────────────────────────
 // 一个 mode:"team" 的任务 = 一个常驻的「指挥台」：进程不退、会话不断，你随时插话；
@@ -474,7 +486,13 @@ export type ServerEvent =
   // 提问态变化（§Team）：agent 调 ask_question 提问、或答复把它清空。task.status
   // 只带状态字段，question 不跟着走 —— 少了这条事件，卡片要等下次全量拉取才出现/
   // 消失（答复完卡片还杵在那，像是没答上）。question=null 即「已答复，撤掉卡片」。
-  | { type: "task.question"; taskId: string; question: string | null; questionOptions: string[] | null }
+  | {
+      type: "task.question";
+      taskId: string;
+      question: string | null;
+      questionOptions: string[] | null;
+      questionItems: QuestionItem[] | null;
+    }
   | {
       type: "agent.event";
       taskId: string;
