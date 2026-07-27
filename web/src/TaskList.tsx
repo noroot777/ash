@@ -154,7 +154,10 @@ function TaskRow({
               {l}
             </span>
           ))}
-          <span className={`shrink-0 rounded px-1.5 py-0.5 font-mono text-[10px] ${pairBadge(t).cls}`}>
+          <span
+            className={`max-w-[136px] shrink truncate rounded px-1.5 py-0.5 font-mono text-[10px] ${pairBadge(t).cls}`}
+            title={pairBadge(t).label}
+          >
             {pairBadge(t).label}
           </span>
         </div>

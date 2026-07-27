@@ -83,7 +83,10 @@ export function Board({
                         {l}
                       </span>
                     ))}
-                    <span className={`ml-auto rounded px-1.5 py-0.5 font-mono text-[10px] ${pairBadge(t).cls}`}>
+                    <span
+                      className={`ml-auto max-w-[136px] shrink truncate rounded px-1.5 py-0.5 font-mono text-[10px] ${pairBadge(t).cls}`}
+                      title={pairBadge(t).label}
+                    >
                       {pairBadge(t).label}
                     </span>
                   </div>
