@@ -2,6 +2,7 @@ import { useState, useCallback, useRef, type ClipboardEvent } from "react";
 import { X, File as FileIcon, Paperclip } from "@phosphor-icons/react";
 import { maxBytesFor, type AttachmentKind } from "@harness/shared";
 import { api } from "./api";
+import { PreviewableImage } from "./ImagePreview";
 
 // One pasted attachment: `url` previews an image thumbnail (image kind only),
 // `path` is the absolute file path handed to the agent (it reads it with its Read
@@ -115,7 +116,11 @@ export function AttachButton({
 function RemoveBtn({ onClick }: { onClick: () => void }) {
   return (
     <button
-      onClick={onClick}
+      type="button"
+      onClick={(event) => {
+        event.stopPropagation();
+        onClick();
+      }}
       className="absolute right-0 top-0 grid h-4 w-4 place-items-center rounded-bl bg-black/60 text-white opacity-0 transition-opacity group-hover:opacity-100"
       title="移除"
     >
@@ -144,7 +149,11 @@ export function AttachmentChips({
           {attachments.map((a) =>
             a.kind === "image" ? (
               <div key={a.path} className="group relative h-14 w-14 overflow-hidden rounded-md border border-line2">
-                <img src={a.url} alt={a.name} className="h-full w-full object-cover" />
+                <PreviewableImage
+                  src={a.url}
+                  alt={a.name}
+                  className="h-full w-full object-cover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent"
+                />
                 <RemoveBtn onClick={() => onRemove(a.path)} />
               </div>
             ) : (

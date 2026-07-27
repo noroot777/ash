@@ -1,5 +1,6 @@
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { PreviewableMarkdownImage } from "./ImagePreview";
 import { toast } from "./toast";
 
 // open-local 链接只认 pathname——agent 写链接时可能带 localhost / tailnet 任一 host,
@@ -37,6 +38,7 @@ export function Markdown({ text }: { text: string }) {
           li: (p) => <li className="my-0.5 wrap-anywhere" {...p} />,
           strong: (p) => <strong className="font-semibold text-ink" {...p} />,
           em: (p) => <em className="italic" {...p} />,
+          img: PreviewableMarkdownImage,
           a: ({ node: _n, href, onClick, ...p }) => {
             const localOpen = isLocalOpenHref(href);
             return (

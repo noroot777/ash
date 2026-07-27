@@ -12,6 +12,7 @@ import { toast } from "./toast";
 import { usePasteAttachments, AttachmentChips, AttachButton } from "./pasteAttachments";
 import { IssueDot, ISSUE_STATUS_META, mdBreaks } from "./issueBits";
 import { AttachmentDisplay, parseAttachmentText } from "./messageAttachments";
+import { PreviewableMarkdownImage } from "./ImagePreview";
 
 // ── issue detail: meta + discussion (@execute) + derived tasks ───────────────
 export function IssueDetail({
@@ -271,7 +272,9 @@ export function IssueDetail({
 
         {!editing && issueContent.body && (
           <div className="markdown text-[14px] leading-7 text-[#33363d]">
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>{mdBreaks(issueContent.body)}</ReactMarkdown>
+            <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ img: PreviewableMarkdownImage }}>
+              {mdBreaks(issueContent.body)}
+            </ReactMarkdown>
           </div>
         )}
         {!editing && <AttachmentDisplay paths={issueAttachments} className={issueContent.body ? "mt-3" : ""} />}

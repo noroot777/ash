@@ -1,6 +1,5 @@
-import { useState } from "react";
 import { File as FileIcon, X } from "@phosphor-icons/react";
-import { Modal } from "./Modal";
+import { PreviewableImage } from "./ImagePreview";
 
 export type ParsedAttachmentText = {
   body: string;
@@ -68,7 +67,10 @@ function RemoveButton({ onClick }: { onClick: () => void }) {
   return (
     <button
       type="button"
-      onClick={onClick}
+      onClick={(event) => {
+        event.stopPropagation();
+        onClick();
+      }}
       className="absolute right-0 top-0 grid h-4 w-4 place-items-center rounded-bl bg-black/60 text-white opacity-0 transition-opacity group-hover:opacity-100 focus:opacity-100"
       title="移除"
       aria-label="移除附件"
@@ -91,65 +93,50 @@ export function AttachmentDisplay({
   className?: string;
   onRemove?: (path: string) => void;
 }) {
-  const [preview, setPreview] = useState<{ name: string; url: string } | null>(null);
   const uniquePaths = [...new Set(paths.map((path) => path.trim()).filter(Boolean))];
   if (!uniquePaths.length) return null;
 
   return (
-    <>
-      <div className={`flex flex-wrap gap-2 ${className}`}>
-        {uniquePaths.map((path) => {
-          const file = uploadFile(path);
-          const name = displayName(path);
-          const url = file ? `/api/uploads/${encodeURIComponent(file)}` : null;
-          const image = !!url && IMAGE_EXT.test(file ?? "");
-          return (
-            <div key={path} className="group relative">
-              {image ? (
-                <button
-                  type="button"
-                  onClick={() => setPreview({ name, url })}
-                  className="block h-14 w-14 overflow-hidden rounded-md border border-line2 bg-raised transition-colors hover:border-accent focus-visible:border-accent focus-visible:outline-none"
-                  title={`预览 ${name}`}
-                >
-                  <img src={url} alt={name} className="h-full w-full object-cover" />
-                </button>
-              ) : url ? (
-                <a
-                  href={url}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="flex h-14 max-w-[220px] items-center gap-2 rounded-md border border-line2 bg-raised/50 py-1 pl-2 pr-3 transition-colors hover:border-accent focus-visible:border-accent focus-visible:outline-none"
-                  title={name}
-                >
-                  <FileIcon size={20} className="shrink-0 text-muted" />
-                  <span className="truncate text-[12px] text-ink">{name}</span>
-                </a>
-              ) : (
-                <div
-                  className="flex h-14 max-w-[220px] items-center gap-2 rounded-md border border-line2 bg-raised/50 py-1 pl-2 pr-3"
-                  title={name}
-                >
-                  <FileIcon size={20} className="shrink-0 text-muted" />
-                  <span className="truncate text-[12px] text-ink">{name}</span>
-                </div>
-              )}
-              {onRemove && <RemoveButton onClick={() => onRemove(path)} />}
-            </div>
-          );
-        })}
-      </div>
-      {preview && (
-        <Modal title={preview.name} onClose={() => setPreview(null)} width={960}>
-          <div className="flex min-h-48 items-center justify-center rounded-lg bg-black/[0.03]">
-            <img
-              src={preview.url}
-              alt={preview.name}
-              className="max-h-[66vh] max-w-full rounded-md object-contain"
-            />
+    <div className={`flex flex-wrap gap-2 ${className}`}>
+      {uniquePaths.map((path) => {
+        const file = uploadFile(path);
+        const name = displayName(path);
+        const url = file ? `/api/uploads/${encodeURIComponent(file)}` : null;
+        const image = !!url && IMAGE_EXT.test(file ?? "");
+        return (
+          <div key={path} className="group relative">
+            {image ? (
+              <div className="h-14 w-14 overflow-hidden rounded-md border border-line2 bg-raised transition-colors group-hover:border-accent">
+                <PreviewableImage
+                  src={url}
+                  alt={name}
+                  className="h-full w-full object-cover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent"
+                />
+              </div>
+            ) : url ? (
+              <a
+                href={url}
+                target="_blank"
+                rel="noreferrer"
+                className="flex h-14 max-w-[220px] items-center gap-2 rounded-md border border-line2 bg-raised/50 py-1 pl-2 pr-3 transition-colors hover:border-accent focus-visible:border-accent focus-visible:outline-none"
+                title={name}
+              >
+                <FileIcon size={20} className="shrink-0 text-muted" />
+                <span className="truncate text-[12px] text-ink">{name}</span>
+              </a>
+            ) : (
+              <div
+                className="flex h-14 max-w-[220px] items-center gap-2 rounded-md border border-line2 bg-raised/50 py-1 pl-2 pr-3"
+                title={name}
+              >
+                <FileIcon size={20} className="shrink-0 text-muted" />
+                <span className="truncate text-[12px] text-ink">{name}</span>
+              </div>
+            )}
+            {onRemove && <RemoveButton onClick={() => onRemove(path)} />}
           </div>
-        </Modal>
-      )}
-    </>
+        );
+      })}
+    </div>
   );
 }
