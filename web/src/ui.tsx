@@ -151,7 +151,7 @@ export function healthColor(h?: ProjectHealth): string {
 }
 export function healthLabel(h?: ProjectHealth): string {
   if (!h || !h.exists) return "路径不存在";
-  if (!h.isRepo) return "存在，但不是 git 仓库";
+  if (!h.isRepo) return "目录存在，但不是 git 仓库——任务可正常运行";
   let s = h.isWorktree ? "git worktree" : "git 仓库";
   if (h.branch) s += ` · ${h.branch}`;
   if (h.dirty) s += " · 有改动";
@@ -233,13 +233,19 @@ export function PathHealth({ path }: { path: string }) {
     return () => clearTimeout(t);
   }, [path]);
   if (!path.trim())
-    return <span className="text-[12px] text-faint">未填写路径——运行时将落到临时目录</span>;
+    return (
+      <span className="text-[12px] text-faint">
+        未填写工作目录——每个任务各自在独立临时目录（data/scratch/任务 ID）运行，彼此看不到产物；之后可在项目设置中补填
+      </span>
+    );
   if (health)
     return (
-      <span className="inline-flex items-center gap-1.5 text-[12px] text-muted">
+      <span className="inline-flex flex-wrap items-center gap-1.5 text-[12px] text-muted">
         <HealthDot health={health} />
         {healthLabel(health)}
-        {!health.exists && <span className="text-faint">（运行时将落到临时目录）</span>}
+        {!health.exists && (
+          <span className="text-faint">（不会自动创建该目录；每个任务将使用独立临时目录 data/scratch/任务 ID）</span>
+        )}
       </span>
     );
   return <span className="text-[12px] text-faint">{loading ? "校验中…" : ""}</span>;
@@ -255,13 +261,19 @@ export function RunLocation({ project }: { project: ProjectView }) {
     if (project.health.isRepo) api.projectHealth(project.id).then(setFull).catch(() => {});
   }, [project.id, project.health.isRepo]);
   return (
-    <div className="flex items-center gap-1.5 text-[11px]">
+    <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
       <HealthDot health={full ?? project.health} size={7} />
       <span className="font-mono text-faint" title={project.repoPath}>
-        将在 {shortPath(project.repoPath) || "（未设置路径）"} 运行
+        将在 {shortPath(project.repoPath) || "（未设置工作目录）"} 运行
       </span>
       {full?.branch && <span className="text-muted">· 分支 {full.branch}</span>}
-      {!project.health.exists && <span className="text-amber-600">· 目录不存在，将用临时目录</span>}
+      {!project.health.exists && (
+        <span className="text-amber-600">
+          {project.repoPath.trim()
+            ? "· 目录不存在，不会自动创建该目录；本任务将使用独立临时目录（data/scratch/任务 ID）"
+            : "· 未填写工作目录；本任务将使用独立临时目录（data/scratch/任务 ID），其他任务看不到其中产物"}
+        </span>
+      )}
     </div>
   );
 }

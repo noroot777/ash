@@ -75,7 +75,7 @@ export function ProjectRail({
                 <ProjectAvatar name={project.name} size={30} />
                 <span className="flex min-w-0 flex-1 flex-col">
                   <span className="truncate text-[13px] font-semibold text-ink">{project.name}</span>
-                  <span className="truncate text-[11px] text-faint">{shortPath(project.repoPath) || "未设置路径"}</span>
+                  <span className="truncate text-[11px] text-faint">{shortPath(project.repoPath) || "未设置工作目录"}</span>
                 </span>
                 <button
                   onClick={() => { close(); onSettings(); }}

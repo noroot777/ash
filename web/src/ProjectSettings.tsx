@@ -46,7 +46,8 @@ export function ProjectSettings({
             <input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="如 my-app" className={fieldCls} />
           </label>
           <label className="flex flex-col gap-1.5">
-            <span className="text-[12px] text-muted">git 仓库路径</span>
+            <span className="text-[12px] text-muted">工作目录</span>
+            <span className="text-[11px] text-faint">任务将在此目录运行；若为 git 仓库，可额外使用分支、diff 和 worktree 能力。</span>
             <input value={repoPath} onChange={(e) => setRepoPath(e.target.value)} placeholder="/Users/you/code/my-app" className={`${fieldCls} font-mono`} />
             <PathHealth path={repoPath} />
           </label>
