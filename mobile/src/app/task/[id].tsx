@@ -25,6 +25,7 @@ import { useTheme, radius, fonts } from "@/lib/theme";
 import { Ionicons } from "@expo/vector-icons";
 import { Conversation } from "@/components/Conversation";
 import { QuestionCard } from "@/components/QuestionCard";
+import { TeamTaskDetail } from "@/components/team/TeamTaskDetail";
 import { MarkdownText } from "@/components/MarkdownText";
 import { PriorityBars } from "@/components/ui";
 import { SignalBar } from "@/components/SignalBar";
@@ -287,6 +288,27 @@ export default function TaskDetail() {
   };
 
   const meta = STATUS_META[status];
+
+  if (task.mode === "team") {
+    return (
+      <TeamTaskDetail
+        task={task}
+        lines={lines}
+        sessions={sessions}
+        input={input}
+        refreshing={refreshing}
+        scrollRef={scrollRef}
+        onInputChange={setInput}
+        onSend={() => send()}
+        onRefresh={onRefresh}
+        onArchive={onArchive}
+        onUnarchive={onUnarchive}
+        onDelete={confirmDelete}
+        onScroll={handleScroll}
+        onContentSizeChange={handleContentSizeChange}
+      />
+    );
+  }
 
   return (
     <KeyboardAvoidingView

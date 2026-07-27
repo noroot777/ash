@@ -1,51 +1,7 @@
-// /team 主视图的纯数据装配:从任务列表 + 已解析的调度台会话里推出「批次」「入站
-// 消息」「谁在等你」这些视图概念。纯函数、无 JSX、不碰 api —— 三个组件共用同一套
-// 推导,也方便单独看懂。
-import type { Group, Task, TaskStatus } from "@harness/shared";
+// /team 主视图里依赖 web 会话模型的装配。任务/分组的纯数据函数已经提升到
+// @harness/shared，web 和 mobile 共用；这里仅保留 ConvItem 相关解析。
+import type { Batch } from "@harness/shared";
 import type { ConvItem } from "../Conversation";
-import { executorMix } from "../executorLabel";
-
-// ── 批次(一次 dispatch)────────────────────────────────────────────────────
-// 一次 dispatch = 一个内部分组(groups.owner_task_id 指回团队任务)。批次主体仍从
-// 执行者身上反推:groupId 分堆、最早的 createdAt 当批次时刻、有人带 queueId 就是
-// 串行批；如果后端把内部 group 行带来,再把 paused/mode 等组状态贴上。
-export type Batch = { key: string; workers: Task[]; serial: boolean; at: string; group?: Group };
-
-export function workersOf(all: Task[], leadId: string): Task[] {
-  return all
-    .filter((t) => t.parentId === leadId)
-    .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
-}
-
-export function batchesOf(workers: Task[], groups: Group[] = []): Batch[] {
-  const by = new Map<string, Task[]>();
-  for (const w of workers) {
-    const k = w.groupId ?? `solo:${w.id}`; // 理论上都有内部组;没有也别把它吞掉
-    const arr = by.get(k);
-    if (arr) arr.push(w);
-    else by.set(k, [w]);
-  }
-  const groupById = new Map(groups.map((g) => [g.id, g]));
-  return [...by.entries()]
-    .map(([key, ws]) => ({
-      key,
-      workers: ws,
-      serial: ws.some((w) => !!w.queueId),
-      at: ws.reduce((m, w) => (w.createdAt < m ? w.createdAt : m), ws[0]!.createdAt),
-      group: groupById.get(key),
-    }))
-    .sort((a, b) => a.at.localeCompare(b.at));
-}
-
-// 团队内部组来自两条线索:
-// - 新后端直接带 ownerTaskId;
-// - 兼容旧/迁移中的数据:执行者身上的 groupId 指向的 group 也算这个团队的内部组。
-export function teamGroupsOf(groups: Group[], leadId: string, workers: Task[]): Group[] {
-  const workerGroupIds = new Set(workers.map((w) => w.groupId).filter((id): id is string => !!id));
-  return groups
-    .filter((g) => g.ownerTaskId === leadId || workerGroupIds.has(g.id))
-    .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
-}
 
 const TEAM_HALT_TEXT = "你按了「停止全组」";
 
@@ -58,48 +14,6 @@ export function activeTeamHaltMarker(items: ConvItem[]): boolean {
   });
   if (lastHalt < 0) return false;
   return !items.slice(lastHalt + 1).some((it) => it.kind === "user" || it.kind === "agent");
-}
-
-export type WorkerHaltStats = { interrupted: number; completed: number; waiting: number; running: number };
-
-export function workerHaltStats(workers: Task[]): WorkerHaltStats {
-  return {
-    interrupted: workers.filter((w) => w.status === "paused" && !w.question).length,
-    completed: workers.filter((w) => w.status === "done").length,
-    waiting: workers.filter((w) => w.status === "backlog" || w.status === "queued").length,
-    running: workers.filter((w) => w.status === "running").length,
-  };
-}
-
-const ACTIVE_WORKER_STATUSES = new Set<TaskStatus>(["running", "queued", "paused"]);
-
-export function isTeamSettled(leadLive: boolean, workers: Task[]): boolean {
-  return !leadLive && !workers.some((w) => ACTIVE_WORKER_STATUSES.has(w.status));
-}
-
-// ── 状态计数(header 右侧那排)──────────────────────────────────────────────
-// 「等你答复」是 question 非空的组合态,不是一个 TaskStatus,所以单独一档,
-// 并且排在最前面 —— 它是唯一「不动手就永远停在这」的状态。
-export type CountBucket = { label: string; status: TaskStatus; awaitingAnswer?: boolean; n: number };
-
-export function statusCounts(workers: Task[]): CountBucket[] {
-  const n = (pick: (t: Task) => boolean) => workers.filter(pick).length;
-  const asking = (t: Task) => !!t.question;
-  const buckets: CountBucket[] = [
-    { label: "等答复", status: "paused", awaitingAnswer: true, n: n(asking) },
-    { label: "干活", status: "running", n: n((t) => !asking(t) && t.status === "running") },
-    { label: "排队", status: "queued", n: n((t) => !asking(t) && (t.status === "queued" || t.status === "backlog")) },
-    { label: "暂停", status: "paused", n: n((t) => !asking(t) && t.status === "paused") },
-    { label: "挂了", status: "failed", n: n((t) => t.status === "failed") },
-    { label: "完成", status: "done", n: n((t) => t.status === "done") },
-    { label: "取消", status: "canceled", n: n((t) => t.status === "canceled") },
-  ];
-  return buckets.filter((b) => b.n > 0);
-}
-
-// 「执行者 4（codex×3 · claude×1）」里括号那截。
-export function agentMix(workers: Task[]): string {
-  return executorMix(workers);
 }
 
 // ── 入站消息(执行者 → 调度者)────────────────────────────────────────────────
@@ -143,17 +57,6 @@ export function parseInbound(text: string): Inbound[] | null {
   });
   // 一条都不像入站消息 → 交回去当普通系统提示渲染(比如空闲回收、被接回的提示)。
   return rows.some((r) => r.kind !== "note") ? rows : null;
-}
-
-// ── 谁在等你 ─────────────────────────────────────────────────────────────────
-// 等得最久的那个排最前(它最该被处理)。等待起点用执行者自己那个提问回合的结束时刻。
-export type Waiting = { task: Task; since: string | null };
-
-export function waitingWorkers(workers: Task[]): Waiting[] {
-  return workers
-    .filter((w) => !!w.question)
-    .map((w) => ({ task: w, since: w.endedAt ?? w.startedAt ?? null }))
-    .sort((a, b) => (a.since ?? "").localeCompare(b.since ?? ""));
 }
 
 // ── feed 装配 ────────────────────────────────────────────────────────────────

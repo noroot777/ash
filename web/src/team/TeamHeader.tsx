@@ -4,7 +4,16 @@
 // 跟单任务 header 的差别在于**调度者没有「完成」**:它只有忙(running)/闲(idle),
 // 结束靠归档。所以这里没有状态下拉、没有「重新排队」、没有严格完成协议那套东西。
 import { useState } from "react";
-import type { Group, Task, Session } from "@harness/shared";
+import {
+  agentMix,
+  isTeamSettled,
+  statusCounts,
+  workerHaltStats,
+  type Group,
+  type Session,
+  type Task,
+  type Waiting,
+} from "@harness/shared";
 import { ArrowsClockwise, DownloadSimple, Stop, Trash, Play } from "@phosphor-icons/react";
 import { api } from "../api";
 import { toast } from "../toast";
@@ -17,7 +26,6 @@ import { conversationToText, downloadConversation, type ConvItem } from "../Conv
 import { Duration, TaskTimeChip } from "../time";
 import { shortPath } from "../util";
 import { TeamTimeline } from "./TeamTimeline";
-import { agentMix, isTeamSettled, statusCounts, workerHaltStats, type Waiting } from "./teamData";
 import { teamLeadExecutorLabel, teamWorkerExecutorLabel } from "../executorLabel";
 import { AttachmentDisplay, parseAttachmentText } from "../messageAttachments";
 

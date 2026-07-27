@@ -4,14 +4,14 @@
 // - 调度者回合 / 用户插话 / 系统提示 → 会话条目(ConvItem),跟单任务同一套渲染。
 // - 入站气泡(执行者提问/失败/汇报)→ 其实就是 system 条目,认出模板前缀后换个长相画。
 // - 派活卡 → 会话里没有留痕(dispatch 是个 MCP 工具调用),由执行者反推出来按时刻插进流里。
-import type { Task } from "@harness/shared";
+import type { Batch, Task } from "@harness/shared";
 import { ArrowElbowDownRight, ArrowRight } from "@phosphor-icons/react";
 import { ConvBubble } from "../Conversation";
 import { StatusIcon } from "../StatusIcon";
 import { CollapsibleText } from "../ui";
 import { formatInstant } from "../time";
 import { WorkerStatusText } from "./WorkerRail";
-import { parseInbound, type Batch, type FeedRow, type Inbound } from "./teamData";
+import { parseInbound, type FeedRow, type Inbound } from "./teamData";
 import { executorLabel } from "../executorLabel";
 
 export function TeamFeed({

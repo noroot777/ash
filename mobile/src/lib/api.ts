@@ -4,6 +4,37 @@
 import type { ProjectView, Task, Session, AgentExecutorProfile, AgentType, Schedule, ScheduledMessage, Group, GroupMode } from "@harness/shared";
 import { getBaseURL } from "./config";
 
+export type CuaProcess = {
+  pid: number;
+  ppid: number;
+  command: string;
+};
+
+export type CuaResidualStatus = {
+  scopeId: string;
+  scopeType: "task" | "team";
+  checkedAt: string;
+  detected: boolean;
+  servicePath: string;
+  processes: CuaProcess[];
+  message: string;
+  sideEffect: string;
+};
+
+export type TeamCuaStatus = {
+  taskId: string;
+  current: CuaResidualStatus;
+  last: CuaResidualStatus | null;
+};
+
+export type TeamCuaKillResult = {
+  killed: CuaProcess[];
+  before: CuaProcess[];
+  after: CuaProcess[];
+  status: CuaResidualStatus;
+  warning: string;
+};
+
 function base(): string {
   const b = getBaseURL();
   if (!b) throw new Error("未配置后端地址");
@@ -62,6 +93,13 @@ export const api = {
   // ask_question 的专用答复通道：清空待答问题并恢复同一个 CLI 会话。
   answer: (id: string, answer: string): Promise<{ answered: true; resumed: true }> =>
     req(`/tasks/${id}/answer`, { method: "POST", body: JSON.stringify({ answer }) }).then(j),
+  // 团队停止会杀掉调度台常驻进程，并暂停它拥有的内部组；恢复沿用 runGroup。
+  teamHalt: (id: string): Promise<{ halted: true }> =>
+    req(`/tasks/${id}/team/halt`, { method: "POST" }).then(j),
+  teamCuaStatus: (id: string): Promise<TeamCuaStatus> =>
+    req(`/tasks/${id}/team/cua-status`).then(j),
+  killTeamCua: (id: string): Promise<TeamCuaKillResult> =>
+    req(`/tasks/${id}/team/kill-cua`, { method: "POST" }).then(j),
 
   // —— 定时（启动时机 once/cron，挂在 task 上）——
   schedule: (taskId: string): Promise<Schedule | null> => req(`/tasks/${taskId}/schedule`).then(j),

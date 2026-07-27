@@ -1,12 +1,10 @@
 import { useState } from "react";
-import type { Task, Group } from "@harness/shared";
-import { canArchive } from "@harness/shared";
+import { canArchive, statusCounts, workersOf, type Group, type Task } from "@harness/shared";
 import { CaretRight } from "@phosphor-icons/react";
 import { STATUSES, STATUS_META, PRIORITY_ORDER } from "./constants";
 import { PriorityIcon, PauseHint, useCollapsedGroups } from "./ui";
 import { StatusIcon } from "./StatusIcon";
 import { foldTeamStatus, pairBadge } from "./util";
-import { statusCounts, workersOf } from "./team/teamData";
 import { executorLabel } from "./executorLabel";
 import { isDispatchedWorker } from "./taskPolicy";
 

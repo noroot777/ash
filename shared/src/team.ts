@@ -1,0 +1,118 @@
+import type { Group, Task, TaskStatus } from "./index";
+
+// Pure team-view derivations shared by web and mobile. They deliberately know
+// nothing about either client's conversation model or rendering layer.
+
+export type Batch = {
+  key: string;
+  workers: Task[];
+  serial: boolean;
+  at: string;
+  group?: Group;
+};
+
+export function workersOf(all: Task[], leadId: string): Task[] {
+  return all
+    .filter((task) => task.parentId === leadId)
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+}
+
+export function batchesOf(workers: Task[], groups: Group[] = []): Batch[] {
+  const byGroup = new Map<string, Task[]>();
+  for (const worker of workers) {
+    const key = worker.groupId ?? `solo:${worker.id}`;
+    const batch = byGroup.get(key);
+    if (batch) batch.push(worker);
+    else byGroup.set(key, [worker]);
+  }
+  const groupById = new Map(groups.map((group) => [group.id, group]));
+  return [...byGroup.entries()]
+    .map(([key, batchWorkers]) => ({
+      key,
+      workers: batchWorkers,
+      serial: batchWorkers.some((worker) => !!worker.queueId),
+      at: batchWorkers.reduce(
+        (earliest, worker) => (worker.createdAt < earliest ? worker.createdAt : earliest),
+        batchWorkers[0]!.createdAt,
+      ),
+      group: groupById.get(key),
+    }))
+    .sort((a, b) => a.at.localeCompare(b.at));
+}
+
+// Prefer the explicit owner backlink. Worker group ids remain a compatibility
+// fallback for data created before ownerTaskId was returned to clients.
+export function teamGroupsOf(groups: Group[], leadId: string, workers: Task[]): Group[] {
+  const workerGroupIds = new Set(workers.map((worker) => worker.groupId).filter((id): id is string => !!id));
+  return groups
+    .filter((group) => group.ownerTaskId === leadId || workerGroupIds.has(group.id))
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+}
+
+export type WorkerHaltStats = {
+  interrupted: number;
+  completed: number;
+  waiting: number;
+  running: number;
+};
+
+export function workerHaltStats(workers: Task[]): WorkerHaltStats {
+  return {
+    interrupted: workers.filter((worker) => worker.status === "paused" && !worker.question).length,
+    completed: workers.filter((worker) => worker.status === "done").length,
+    waiting: workers.filter((worker) => worker.status === "backlog" || worker.status === "queued").length,
+    running: workers.filter((worker) => worker.status === "running").length,
+  };
+}
+
+const ACTIVE_WORKER_STATUSES = new Set<TaskStatus>(["running", "queued", "paused"]);
+
+// Settled is presentation-only: the lead is not speaking and no worker is live,
+// queued, or paused. It is intentionally independent from whether a group was halted.
+export function isTeamSettled(leadLive: boolean, workers: Task[]): boolean {
+  return !leadLive && !workers.some((worker) => ACTIVE_WORKER_STATUSES.has(worker.status));
+}
+
+export type CountBucket = {
+  label: string;
+  status: TaskStatus;
+  awaitingAnswer?: boolean;
+  n: number;
+};
+
+export function statusCounts(workers: Task[]): CountBucket[] {
+  const count = (pick: (task: Task) => boolean) => workers.filter(pick).length;
+  const asking = (task: Task) => !!task.question;
+  const buckets: CountBucket[] = [
+    { label: "等答复", status: "paused", awaitingAnswer: true, n: count(asking) },
+    { label: "干活", status: "running", n: count((task) => !asking(task) && task.status === "running") },
+    {
+      label: "排队",
+      status: "queued",
+      n: count((task) => !asking(task) && (task.status === "queued" || task.status === "backlog")),
+    },
+    { label: "暂停", status: "paused", n: count((task) => !asking(task) && task.status === "paused") },
+    { label: "挂了", status: "failed", n: count((task) => task.status === "failed") },
+    { label: "完成", status: "done", n: count((task) => task.status === "done") },
+    { label: "取消", status: "canceled", n: count((task) => task.status === "canceled") },
+  ];
+  return buckets.filter((bucket) => bucket.n > 0);
+}
+
+export type Waiting = { task: Task; since: string | null };
+
+export function waitingWorkers(workers: Task[]): Waiting[] {
+  return workers
+    .filter((worker) => !!worker.question)
+    .map((worker) => ({ task: worker, since: worker.endedAt ?? worker.startedAt ?? null }))
+    .sort((a, b) => (a.since ?? "").localeCompare(b.since ?? ""));
+}
+
+export function agentMix(workers: Pick<Task, "executorLabel" | "agentType">[]): string {
+  const counts = new Map<string, number>();
+  for (const worker of workers) {
+    const label = worker.executorLabel?.trim() || worker.agentType?.trim() || "—";
+    counts.set(label, (counts.get(label) ?? 0) + 1);
+  }
+  return [...counts.entries()].map(([label, count]) => `${label}×${count}`).join(" · ");
+}
