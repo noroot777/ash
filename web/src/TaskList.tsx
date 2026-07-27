@@ -9,26 +9,43 @@ import { foldTeamStatus, pairBadge } from "./util";
 import { statusCounts, workersOf } from "./team/teamData";
 import { executorLabel } from "./executorLabel";
 
+const TASK_SECTIONS = [
+  { key: "collab", label: "协作任务", matches: (task: Task) => task.mode === "debate" || task.mode === "team" },
+  { key: "single", label: "普通任务", matches: (task: Task) => task.mode === "single" },
+] as const;
+
+type TaskSection = (typeof TASK_SECTIONS)[number];
+
 // 列表只排**顶层**任务:团队任务的工人(parentId 非空)挂在它自己那一行下面,不单独
 // 占状态分组的位置 —— 否则一次派 6 个工人就把列表冲垮了。
 function topLevel(tasks: Task[]): Task[] {
   return tasks.filter((t) => !t.parentId);
 }
 
-// Flatten tasks into the same visual order the list renders (status groups,
-// then priority, then recency) — used for j/k keyboard navigation.
+function groupedStatus(task: Task) {
+  // 团队指挥台在线即属于「运行中」；idle 只保留为任务本身的精确状态语义。
+  return task.mode === "team" && task.status === "idle" ? "running" : task.status;
+}
+
+function tasksInStatus(tasks: Task[], section: TaskSection, status: Task["status"]): Task[] {
+  return tasks
+    .filter((task) => section.matches(task) && groupedStatus(task) === status)
+    .sort(
+      (a, b) =>
+        PRIORITY_ORDER.indexOf(a.priority) - PRIORITY_ORDER.indexOf(b.priority) ||
+        b.createdAt.localeCompare(a.createdAt),
+    );
+}
+
+// Flatten tasks into the same visual order the list renders (协作/普通任务，
+// 再按状态、优先级、时间) — used for j/k keyboard navigation.
 export function orderedTasks(tasks: Task[]): Task[] {
   const out: Task[] = [];
   const top = topLevel(tasks);
-  for (const s of STATUSES) {
-    const inStatus = top
-      .filter((t) => t.status === s.key)
-      .sort(
-        (a, b) =>
-          PRIORITY_ORDER.indexOf(a.priority) - PRIORITY_ORDER.indexOf(b.priority) ||
-          b.createdAt.localeCompare(a.createdAt),
-      );
-    out.push(...inStatus);
+  for (const section of TASK_SECTIONS) {
+    for (const status of STATUSES) {
+      out.push(...tasksInStatus(top, section, status.key));
+    }
   }
   return out;
 }
@@ -45,6 +62,7 @@ export function TaskList({
   onSelect: (id: string) => void;
 }) {
   const groupName = (id: string | null) => groups.find((g) => g.id === id)?.name;
+  const topTasks = topLevel(tasks);
   // Fold long status groups (e.g. 完成 93) away; remembered per browser.
   const { collapsed, toggle } = useCollapsedGroups("harness:taskList:collapsedStatuses");
   // 展开了工人行的团队任务。默认全折叠 —— 团队行本身已经带了状态摘要。
@@ -58,49 +76,56 @@ export function TaskList({
 
   return (
     <div className="flex-1 overflow-y-auto">
-      {STATUSES.map((s) => {
-        const inStatus = topLevel(tasks)
-          .filter((t) => t.status === s.key)
-          .sort(
-            (a, b) =>
-              PRIORITY_ORDER.indexOf(a.priority) - PRIORITY_ORDER.indexOf(b.priority) ||
-              b.createdAt.localeCompare(a.createdAt),
-          );
-        if (!inStatus.length) return null;
-        const isCollapsed = collapsed.has(s.key);
+      {TASK_SECTIONS.map((section) => {
+        const sectionTasks = topTasks.filter(section.matches);
+        if (!sectionTasks.length) return null;
         return (
-          <div key={s.key}>
-            <button
-              onClick={() => toggle(s.key)}
-              className="sticky top-0 z-10 flex w-full items-center gap-2 bg-canvas/85 px-4 py-2 text-left backdrop-blur transition-colors hover:bg-raised/50"
-              title={isCollapsed ? "展开这一组" : "折叠这一组"}
-            >
-              <StatusIcon status={s.key} size={13} />
-              <span className="text-[12px] font-semibold text-ink">{s.label}</span>
-              <span className="font-mono text-[11px] text-faint">{inStatus.length}</span>
-              <CaretRight
-                size={11}
-                weight="bold"
-                className={`text-faint transition-transform ${isCollapsed ? "" : "rotate-90"}`}
-              />
-            </button>
-            {!isCollapsed &&
-              inStatus.map((t) =>
-                t.mode === "team" ? (
-                  <TeamRow
-                    key={t.id}
-                    lead={t}
-                    workers={workersOf(tasks, t.id)}
-                    selected={selected}
-                    expanded={openTeams.has(t.id)}
-                    onToggle={() => toggleTeam(t.id)}
-                    onSelect={onSelect}
-                  />
-                ) : (
-                  <TaskRow key={t.id} t={t} allTasks={tasks} selected={selected} onSelect={onSelect} groupName={groupName} />
-                ),
-              )}
-          </div>
+          <section key={section.key} className="relative">
+            <div className="sticky top-0 z-20 flex h-10 w-full items-center gap-2 border-b border-line bg-canvas/95 px-4 backdrop-blur">
+              <span className="text-[13px] font-bold tracking-[0.04em] text-ink">{section.label}</span>
+              <span className="font-mono text-[11px] text-muted">{sectionTasks.length}</span>
+            </div>
+            {STATUSES.map((status) => {
+              const inStatus = tasksInStatus(sectionTasks, section, status.key);
+              if (!inStatus.length) return null;
+              const collapsedKey = `${section.key}:${status.key}`;
+              const isCollapsed = collapsed.has(collapsedKey);
+              return (
+                <div key={status.key}>
+                  <button
+                    onClick={() => toggle(collapsedKey)}
+                    className="sticky top-10 z-10 flex w-full items-center gap-2 bg-canvas/85 px-4 py-2 text-left backdrop-blur transition-colors hover:bg-raised/50"
+                    title={isCollapsed ? "展开这一组" : "折叠这一组"}
+                  >
+                    <StatusIcon status={status.key} size={13} />
+                    <span className="text-[12px] font-semibold text-ink">{status.label}</span>
+                    <span className="font-mono text-[11px] text-faint">{inStatus.length}</span>
+                    <CaretRight
+                      size={11}
+                      weight="bold"
+                      className={`text-faint transition-transform ${isCollapsed ? "" : "rotate-90"}`}
+                    />
+                  </button>
+                  {!isCollapsed &&
+                    inStatus.map((t) =>
+                      t.mode === "team" ? (
+                        <TeamRow
+                          key={t.id}
+                          lead={t}
+                          workers={workersOf(tasks, t.id)}
+                          selected={selected}
+                          expanded={openTeams.has(t.id)}
+                          onToggle={() => toggleTeam(t.id)}
+                          onSelect={onSelect}
+                        />
+                      ) : (
+                        <TaskRow key={t.id} t={t} allTasks={tasks} selected={selected} onSelect={onSelect} groupName={groupName} />
+                      ),
+                    )}
+                </div>
+              );
+            })}
+          </section>
         );
       })}
       {!tasks.length && <p className="px-4 py-10 text-center text-xs text-faint">还没有任务 · 按 C 新建</p>}
@@ -170,9 +195,9 @@ function TaskRow({
 // 团队行。默认折叠成一行:图标是 foldTeamStatus 算出来的「最该你管的那个」,右边是
 // 工人状态摘要(「1 等答复 · 1 干活 · 1 完成」)。
 //
-// 这个图标可能跟本行所在的状态分组不一致 —— 指挥台待命着(在「待命」组里),但某个
-// 工人正卡在提问上,于是行首是青色问号。这是故意的:分组按指挥台的真实状态(免得活着
-// 的团队因为工人全完掉进「完成」组),而图标要抢你的注意力。
+// 这个图标可能跟本行所在的状态分组不一致 —— 指挥台待命着(归入「运行中」组),但某个
+// 工人正卡在提问上,于是行首是青色问号。这是故意的:分组按指挥台在线即运行中的语义
+// 放置(免得活着的团队因为工人全完掉进「完成」组),而图标要抢你的注意力。
 function TeamRow({
   lead,
   workers,

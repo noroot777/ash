@@ -7,7 +7,7 @@ import { Markdown } from "./Markdown";
 import { api } from "./api";
 import { ScheduleControl } from "./ScheduleControl";
 import { StatusIcon } from "./StatusIcon";
-import { STATUSES } from "./constants";
+import { STATUS_META } from "./constants";
 import { runAction, canStopTask } from "./taskActions";
 import { canArchive, normalizeDebateConfig } from "@harness/shared";
 import { TaskTimeChip, formatInstant } from "./time";
@@ -27,7 +27,7 @@ function TypingDots() {
 // Always-visible run-state pill so the debate's status (esp. failed/running) is
 // unambiguous and survives reload — task.status is persisted.
 function StatusPill({ status }: { status: TaskStatus }) {
-  const label = STATUSES.find((s) => s.key === status)?.label ?? status;
+  const label = STATUS_META[status].label;
   const running = status === "running" || status === "queued";
   return (
     <span className={`inline-flex shrink-0 items-center gap-1.5 rounded-full bg-raised px-2 py-0.5 text-[11px] text-muted ${running ? "animate-pulse" : ""}`}>

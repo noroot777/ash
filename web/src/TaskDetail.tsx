@@ -3,7 +3,7 @@ import type { Task, Group, TaskStatus, Priority, AgentType } from "@harness/shar
 import { AGENT_TYPES, isUserSettableStatus, canArchive } from "@harness/shared";
 import { CaretDown, Play, Stop, Trash, ArrowsClockwise, DownloadSimple, ListNumbers } from "@phosphor-icons/react";
 import { api } from "./api";
-import { STATUSES, PRIORITIES } from "./constants";
+import { STATUS_META, PRIORITIES } from "./constants";
 import { CollapsibleText, CopyButton } from "./ui";
 import { StatusIcon } from "./StatusIcon";
 import { PriorityIcon, LabelAdder } from "./ui";
@@ -213,7 +213,9 @@ export function TaskDetail({
             <Prop
               value={task.status}
               onChange={(v) => onPatch({ status: v as TaskStatus })}
-              options={STATUSES.filter((s) => isUserSettableStatus(s.key) || s.key === task.status).map((s) => ({ value: s.key, label: s.label }))}
+              options={Object.values(STATUS_META)
+                .filter((s) => isUserSettableStatus(s.key) || s.key === task.status)
+                .map((s) => ({ value: s.key, label: s.label }))}
               leading={(v) => <StatusIcon status={v as TaskStatus} size={13} />}
             />
             <Prop
