@@ -71,6 +71,12 @@ export function workerHaltStats(workers: Task[]): WorkerHaltStats {
   };
 }
 
+const ACTIVE_WORKER_STATUSES = new Set<TaskStatus>(["running", "queued", "paused"]);
+
+export function isTeamSettled(leadLive: boolean, workers: Task[]): boolean {
+  return !leadLive && !workers.some((w) => ACTIVE_WORKER_STATUSES.has(w.status));
+}
+
 // ── 状态计数(header 右侧那排)──────────────────────────────────────────────
 // 「等你答复」是 question 非空的组合态,不是一个 TaskStatus,所以单独一档,
 // 并且排在最前面 —— 它是唯一「不动手就永远停在这」的状态。

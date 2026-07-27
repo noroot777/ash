@@ -7,8 +7,9 @@ import { useState } from "react";
 import type { Group, Task } from "@harness/shared";
 import { CaretDown } from "@phosphor-icons/react";
 import { statusColor } from "../StatusIcon";
-import { formatDuration, useTick } from "../time";
+import { formatDuration, formatInstant, useTick } from "../time";
 import { teamLeadExecutorLabel } from "../executorLabel";
+import { isTeamSettled } from "./teamData";
 
 type Bar = { from: number; to: number; color: string; hatch?: boolean; title: string };
 type Row = { id?: string; name: string; bars: Bar[]; pendingOnly?: boolean };
@@ -28,22 +29,32 @@ export function TeamTimeline({
 }) {
   const [open, setOpen] = useState(true);
   const groupById = new Map(groups.map((g) => [g.id, g]));
-  // 有任何一段还没结束就按秒重算,让色条自己长。
-  const live =
-    leadTurns.some((t) => !t.to) || workers.some((w) => !!w.startedAt && !w.endedAt);
-  const nowMs = useTick(open && live);
-
   const ms = (iso?: string | null) => (iso ? Date.parse(iso) : NaN);
+  const leadLive = lead.status === "running";
+  const settled = isTeamSettled(leadLive, workers);
+  // 只有真的还在跑/排队时才按秒重算；paused/settled 都不会自发变化。
+  const live = leadLive || workers.some((w) => w.status === "running" || w.status === "queued");
+  const nowMs = useTick(open && live);
+  const fallbackEnd = ms(lead.endedAt) || ms(lead.updatedAt) || nowMs;
+  const openEnd = settled ? fallbackEnd : nowMs;
   const rows: Row[] = [
     {
       name: `指挥 ${teamLeadExecutorLabel(lead)}`,
       bars: leadTurns
-        .map((t) => ({
-          from: ms(t.from),
-          to: t.to ? ms(t.to) : nowMs,
-          color: statusColor(t.to ? "done" : "running"),
-          title: t.to ? `回合用时 ${formatDuration(ms(t.to) - ms(t.from))}` : "正在说话",
-        }))
+        .map((t) => {
+          const ended = t.to ? ms(t.to) : openEnd;
+          const openTurn = !t.to && live;
+          return {
+            from: ms(t.from),
+            to: ended,
+            color: statusColor(openTurn ? "running" : "done"),
+            title: t.to
+              ? `回合用时 ${formatDuration(ended - ms(t.from))}`
+              : openTurn
+                ? "正在说话"
+                : "回合结束时间缺失",
+          };
+        })
         .filter((b) => Number.isFinite(b.from)),
     },
     ...workers.map((w, i) => {
@@ -60,7 +71,7 @@ export function TeamTimeline({
           pendingOnly: true,
         };
       }
-      const end = w.endedAt ? ms(w.endedAt) : nowMs;
+      const end = w.endedAt ? ms(w.endedAt) : openEnd;
       return {
         id: w.id,
         name: `${i + 1} ${w.title}${groupPaused ? " · 组已停止" : ""}`,
@@ -78,10 +89,11 @@ export function TeamTimeline({
   ];
 
   const all = rows.flatMap((r) => r.bars);
-  const t0 = Math.min(...all.map((b) => b.from), nowMs);
-  const t1 = Math.max(...all.map((b) => b.to), nowMs);
+  const t0 = all.length ? Math.min(...all.map((b) => b.from)) : nowMs;
+  const t1 = all.length ? Math.max(...all.map((b) => b.to)) : nowMs;
   const span = Math.max(1000, t1 - t0);
   const pct = (t: number) => ((t - t0) / span) * 100;
+  const rightLabel = settled ? `收工 ${formatInstant(new Date(t1).toISOString())}` : "现在";
 
   return (
     <div className="mt-2.5 border-t border-dashed border-line pt-2">
@@ -101,7 +113,7 @@ export function TeamTimeline({
             {[0, 0.25, 0.5, 0.75].map((f) => (
               <span key={f}>{formatDuration(span * f)}</span>
             ))}
-            <span>现在</span>
+            <span>{rightLabel}</span>
           </div>
         </div>
       )}

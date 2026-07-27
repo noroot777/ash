@@ -1009,9 +1009,13 @@ api.post("/tasks/:id/run", async (c) => {
   const r = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!r) return c.json({ error: "not found" }, 404);
   if (r.archived) return c.json({ error: "任务已归档，先取消归档再运行", archived: true }, 409);
-  // 单条手动 Run：允许 backlog / canceled / failed / paused。canceled 在这里
-  // 允许是因为用户明确点了 Run，跟 queue 推进里 canceled 透明跳过是两回事。
-  if (!canSingleRun(r.status as TaskStatus)) return c.json({ error: "任务当前状态不可运行", status: r.status }, 409);
+  // 单条手动 Run：普通任务允许 backlog / canceled / failed / paused。team 的
+  // idle 也可运行:它不是终态,只是常驻指挥台待命,点击会接回同一 CLI 会话。
+  const runnable =
+    r.mode === "team"
+      ? !["running", "queued", "awaiting_review"].includes(r.status)
+      : canSingleRun(r.status as TaskStatus);
+  if (!runnable) return c.json({ error: "任务当前状态不可运行", status: r.status }, 409);
   const blockedBy = await queueBlockers(taskId);
   if (blockedBy.length) {
     return c.json(
@@ -1110,7 +1114,8 @@ api.post("/tasks/:id/complete", async (c) => {
 // 没人管也能用:任务停在 paused,问题留在 task.question 等用户答复。
 // 可选的 options = 候选答案:网页在问题下方渲染成按钮,点一下就是以该选项**原文**
 // 走同一个 /answer —— 所以答复链路对「点按钮」和「自己打字」完全一样,选项只省打字。
-// 只接受 running 任务;不修改 status,让回合自然走完再结算(同 pause 的理由)。
+// 一次性任务只接受 running;常驻指挥台例外(§Team):它的 status 会在 running/idle
+// 间切换,但能发出 ask_question 就说明这一轮活着,不能被 idle 挡掉。
 api.post("/tasks/:id/ask", async (c) => {
   const taskId = c.req.param("id");
   const b = await c.req
@@ -1132,13 +1137,14 @@ api.post("/tasks/:id/ask", async (c) => {
     );
   const r = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!r) return c.json({ error: "not found" }, 404);
-  if (r.status !== "running") return c.json({ error: "只能在任务正在运行时提问", status: r.status }, 409);
+  if (r.mode !== "team" && r.status !== "running")
+    return c.json({ error: "只能在任务正在运行时提问", status: r.status }, 409);
   await db
     .update(tasks)
     .set({ question: q, questionOptions: opts.length ? JSON.stringify(opts) : null, updatedAt: now() })
     .where(eq(tasks.id, taskId));
   bus.publish({ type: "task.question", taskId, question: q, questionOptions: opts.length ? opts : null });
-  return c.json({ asked: true, options: opts, willSettleAs: "paused" });
+  return c.json({ asked: true, options: opts, willSettleAs: r.mode === "team" ? "idle" : "paused" });
 });
 
 // 答复一个提问暂停中的任务(指挥者或用户都可调):清空 question,把答复作为

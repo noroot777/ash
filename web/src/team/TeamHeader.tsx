@@ -16,7 +16,7 @@ import { conversationToText, downloadConversation, type ConvItem } from "../Conv
 import { Duration, TaskTimeChip } from "../time";
 import { shortPath } from "../util";
 import { TeamTimeline } from "./TeamTimeline";
-import { agentMix, statusCounts, workerHaltStats, type Waiting } from "./teamData";
+import { agentMix, isTeamSettled, statusCounts, workerHaltStats, type Waiting } from "./teamData";
 import { teamLeadExecutorLabel, teamWorkerExecutorLabel } from "../executorLabel";
 
 export function TeamHeader({
@@ -55,7 +55,8 @@ export function TeamHeader({
   const [haltOpen, setHaltOpen] = useState(false);
   const [resuming, setResuming] = useState(false);
   const counts = statusCounts(workers);
-  const live = sessions.length > 0 || task.status === "running";
+  const leadLive = task.status === "running";
+  const settled = isTeamSettled(leadLive, workers);
   const pausedGroups = teamGroups.filter((g) => g.paused);
   const stopped = pausedGroups.length > 0 || haltedByHistory;
   // 分支/工作目录挂在 session 上(不是 task),取最近那次。默认不开 worktree,所以
@@ -92,9 +93,8 @@ export function TeamHeader({
             </>
           ) : (
             <>
-              {/* 「停止全组」= 停指挥台进程 + 暂停所有内部组(工人落 paused 可恢复)。
-                  指挥台闲着(idle)时也给,因为工人可能还在跑。 */}
-              {(live || workers.length > 0) && !stopped && (
+              {/* 「停止全组」只在当前仍有活可停时出现；自然收工后不再挂红按钮。 */}
+              {!settled && !stopped && (
                 <button
                   onClick={() => setHaltOpen(true)}
                   className="inline-flex items-center gap-1.5 rounded-md border border-red-500/40 px-3 py-1.5 text-[13px] font-medium text-red-600 transition-colors hover:bg-red-500/10"
