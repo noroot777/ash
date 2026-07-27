@@ -1,15 +1,15 @@
 // /team 主视图的纯数据装配:从任务列表 + 已解析的指挥台会话里推出「批次」「入站
 // 消息」「谁在等你」这些视图概念。纯函数、无 JSX、不碰 api —— 三个组件共用同一套
 // 推导,也方便单独看懂。
-import type { Task, TaskStatus } from "@harness/shared";
+import type { Group, Task, TaskStatus } from "@harness/shared";
 import type { ConvItem } from "../Conversation";
 import { executorMix } from "../executorLabel";
 
 // ── 批次(一次 dispatch)────────────────────────────────────────────────────
-// 一次 dispatch = 一个内部分组(groups.owner_task_id 指回团队任务)。内部组被
-// GET /groups 过滤掉了(前端根本拿不到那些组行),所以批次信息全部从工人身上反推:
-// groupId 分堆、最早的 createdAt 当批次时刻、有人带 queueId 就是串行批。
-export type Batch = { key: string; workers: Task[]; serial: boolean; at: string };
+// 一次 dispatch = 一个内部分组(groups.owner_task_id 指回团队任务)。批次主体仍从
+// 工人身上反推:groupId 分堆、最早的 createdAt 当批次时刻、有人带 queueId 就是
+// 串行批；如果后端把内部 group 行带来,再把 paused/mode 等组状态贴上。
+export type Batch = { key: string; workers: Task[]; serial: boolean; at: string; group?: Group };
 
 export function workersOf(all: Task[], leadId: string): Task[] {
   return all
@@ -17,7 +17,7 @@ export function workersOf(all: Task[], leadId: string): Task[] {
     .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
 }
 
-export function batchesOf(workers: Task[]): Batch[] {
+export function batchesOf(workers: Task[], groups: Group[] = []): Batch[] {
   const by = new Map<string, Task[]>();
   for (const w of workers) {
     const k = w.groupId ?? `solo:${w.id}`; // 理论上都有内部组;没有也别把它吞掉
@@ -25,14 +25,50 @@ export function batchesOf(workers: Task[]): Batch[] {
     if (arr) arr.push(w);
     else by.set(k, [w]);
   }
+  const groupById = new Map(groups.map((g) => [g.id, g]));
   return [...by.entries()]
     .map(([key, ws]) => ({
       key,
       workers: ws,
       serial: ws.some((w) => !!w.queueId),
       at: ws.reduce((m, w) => (w.createdAt < m ? w.createdAt : m), ws[0]!.createdAt),
+      group: groupById.get(key),
     }))
     .sort((a, b) => a.at.localeCompare(b.at));
+}
+
+// 团队内部组来自两条线索:
+// - 新后端直接带 ownerTaskId;
+// - 兼容旧/迁移中的数据:工人身上的 groupId 指向的 group 也算这个团队的内部组。
+export function teamGroupsOf(groups: Group[], leadId: string, workers: Task[]): Group[] {
+  const workerGroupIds = new Set(workers.map((w) => w.groupId).filter((id): id is string => !!id));
+  return groups
+    .filter((g) => g.ownerTaskId === leadId || workerGroupIds.has(g.id))
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+}
+
+const TEAM_HALT_TEXT = "你按了「停止全组」";
+
+// `/api/groups` 在旧后端不下发内部组时,至少用会话里持久存在的系统提示做降级呈现:
+// 它不能替代 group.paused,但能避免刷新后完全看不出用户曾经停止过全组。
+export function activeTeamHaltMarker(items: ConvItem[]): boolean {
+  let lastHalt = -1;
+  items.forEach((it, i) => {
+    if (it.kind === "system" && it.text.includes(TEAM_HALT_TEXT)) lastHalt = i;
+  });
+  if (lastHalt < 0) return false;
+  return !items.slice(lastHalt + 1).some((it) => it.kind === "user" || it.kind === "agent");
+}
+
+export type WorkerHaltStats = { interrupted: number; completed: number; waiting: number; running: number };
+
+export function workerHaltStats(workers: Task[]): WorkerHaltStats {
+  return {
+    interrupted: workers.filter((w) => w.status === "paused" && !w.question).length,
+    completed: workers.filter((w) => w.status === "done").length,
+    waiting: workers.filter((w) => w.status === "backlog" || w.status === "queued").length,
+    running: workers.filter((w) => w.status === "running").length,
+  };
 }
 
 // ── 状态计数(header 右侧那排)──────────────────────────────────────────────

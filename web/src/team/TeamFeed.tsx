@@ -76,6 +76,11 @@ function BatchCard({
         <ArrowElbowDownRight size={12} />
         <b className="text-[12px] font-semibold text-ink">派活 · {batch.workers.length} 个工人</b>
         <span className="rounded bg-panel px-1.5 py-px text-[10.5px]">{batch.serial ? "串行" : "并行"}</span>
+        {batch.group?.paused && (
+          <span className="rounded border border-line bg-panel px-1.5 py-px text-[10.5px] font-medium text-muted">
+            组已停止
+          </span>
+        )}
         <span className="ml-auto font-mono text-[10.5px] text-faint">{formatInstant(batch.at)}</span>
       </div>
       {batch.workers.map((w) => (
@@ -83,17 +88,28 @@ function BatchCard({
           key={w.id}
           w={w}
           n={workers.findIndex((x) => x.id === w.id) + 1}
+          groupPaused={!!batch.group?.paused}
           onOpen={() => onOpenWorker(w.id)}
         />
       ))}
       <div className="border-t border-line bg-panel px-2.5 py-1.5 text-[11px] text-faint">
-        点任一行 → 右侧滑出它的完整会话;也能单独重跑 / 换执行者
+        {batch.group?.paused ? batchSummary(batch.workers) : "点任一行 → 右侧滑出它的完整会话;也能单独重跑 / 换执行者"}
       </div>
     </div>
   );
 }
 
-function BatchWorkerRow({ w, n, onOpen }: { w: Task; n: number; onOpen: () => void }) {
+function BatchWorkerRow({
+  w,
+  n,
+  groupPaused,
+  onOpen,
+}: {
+  w: Task;
+  n: number;
+  groupPaused: boolean;
+  onOpen: () => void;
+}) {
   const label = executorLabel({ task: w });
   return (
     <button
@@ -110,10 +126,18 @@ function BatchWorkerRow({ w, n, onOpen }: { w: Task; n: number; onOpen: () => vo
         {label}
       </span>
       <span className="shrink-0 text-[11px] text-faint">
-        <WorkerStatusText w={w} />
+        <WorkerStatusText w={w} groupPaused={groupPaused} />
       </span>
     </button>
   );
+}
+
+function batchSummary(workers: Task[]): string {
+  const interrupted = workers.filter((w) => w.status === "paused" && !w.question).length;
+  const done = workers.filter((w) => w.status === "done").length;
+  if (interrupted > 0) return `本批组已停止 · ${interrupted} 个工人被暂停打断，${done} 个已完成`;
+  if (done > 0) return `本批组已停止 · ${done} 个工人已正常完成，没有被暂停打断`;
+  return "本批组已停止 · 暂无工人被暂停打断";
 }
 
 const KIND_LABEL: Record<Inbound["kind"], string> = {

@@ -4,7 +4,7 @@
 // 卡片上的「实时最后一行」只有在本次会话里收到过 SSE 的工人才有(刷新后 logs 是空
 // 的),所以它是锦上添花,不承载必要信息 —— 必要信息在状态行里。
 import { useEffect } from "react";
-import type { Task } from "@harness/shared";
+import type { Group, Task } from "@harness/shared";
 import { StatusIcon } from "../StatusIcon";
 import { Duration } from "../time";
 import type { LogLine } from "../Conversation";
@@ -12,15 +12,18 @@ import { executorLabel } from "../executorLabel";
 
 export function WorkerRail({
   workers,
+  groups,
   logs,
   selected,
   onSelect,
 }: {
   workers: Task[];
+  groups: Group[];
   logs: Record<string, LogLine[]>;
   selected: string | null;
   onSelect: (id: string) => void;
 }) {
+  const groupById = new Map(groups.map((g) => [g.id, g]));
   // 1–9 直接点开第 N 个工人。用裸数字而不是 ⌘1–9:浏览器把 ⌘+数字占去切标签了,
   // 承诺一个按不出来的快捷键不如给个真能用的。App 的全局键位没有数字键,不冲突。
   useEffect(() => {
@@ -55,6 +58,7 @@ export function WorkerRail({
           key={w.id}
           w={w}
           n={i + 1}
+          groupPaused={!!(w.groupId && groupById.get(w.groupId)?.paused)}
           live={lastLine(logs[w.id])}
           selected={selected === w.id}
           onSelect={() => onSelect(w.id)}
@@ -72,12 +76,14 @@ export function WorkerRail({
 function WorkerCard({
   w,
   n,
+  groupPaused,
   live,
   selected,
   onSelect,
 }: {
   w: Task;
   n: number;
+  groupPaused: boolean;
   live: string | null;
   selected: boolean;
   onSelect: () => void;
@@ -108,7 +114,7 @@ function WorkerCard({
         <span className="w-3 shrink-0 text-center font-mono text-[10px] text-faint">{n <= 9 ? n : ""}</span>
       </div>
       <div className="mt-1 flex items-center gap-1.5 text-[11px] text-faint">
-        <WorkerStatusText w={w} />
+        <WorkerStatusText w={w} groupPaused={groupPaused} />
       </div>
       {live && <div className="mt-1 truncate text-[11px] text-muted">{live}</div>}
     </button>
@@ -116,7 +122,7 @@ function WorkerCard({
 }
 
 // 一行状态说明:等答复(青,带等待时长)/ 运行中(实时跳)/ 排队第几位 / 完成用时…
-export function WorkerStatusText({ w }: { w: Task }) {
+export function WorkerStatusText({ w, groupPaused = false }: { w: Task; groupPaused?: boolean }) {
   if (w.question)
     return (
       <span className="text-cyan-700">
@@ -128,19 +134,21 @@ export function WorkerStatusText({ w }: { w: Task }) {
       return (
         <span>
           运行中 · <Duration from={w.startedAt} />
+          {groupPaused && " · 所属组已停止"}
         </span>
       );
     case "queued":
     case "backlog":
-      return <span>{w.queuePosition != null ? `排队 · 第 ${w.queuePosition + 1} 位` : "待派"}</span>;
+      return <span>{groupPaused ? "未启动 · 所属组已停止" : w.queuePosition != null ? `排队 · 第 ${w.queuePosition + 1} 位` : "待派"}</span>;
     case "paused":
-      return <span>已暂停{w.resumePrompt ? " · 到检查点" : ""}</span>;
+      return <span>{groupPaused ? "已暂停 · 被停止全组打断" : `已暂停${w.resumePrompt ? " · 到检查点" : ""}`}</span>;
     case "awaiting_review":
       return <span>待审查</span>;
     case "done":
       return (
         <span>
           完成 · <Duration from={w.startedAt} to={w.endedAt} />
+          {groupPaused && " · 所属组已停止"}
         </span>
       );
     case "failed":

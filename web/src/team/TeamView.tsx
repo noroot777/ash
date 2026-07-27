@@ -15,7 +15,7 @@ import { useConversation } from "../useConversation";
 import { TeamHeader, AttentionBar } from "./TeamHeader";
 import { TeamFeed } from "./TeamFeed";
 import { WorkerRail, WorkerStatusText } from "./WorkerRail";
-import { batchesOf, leadTurns as turnsOf, mergeFeed, waitingWorkers, workersOf } from "./teamData";
+import { activeTeamHaltMarker, batchesOf, leadTurns as turnsOf, mergeFeed, teamGroupsOf, waitingWorkers, workersOf } from "./teamData";
 
 export function TeamView({
   task,
@@ -56,9 +56,16 @@ export function TeamView({
   onSelect: (id: string) => void;
 }) {
   const [openId, setOpenId] = useState<string | null>(null);
+  const [localHalted, setLocalHalted] = useState(false);
+  const [groupPaused, setGroupPaused] = useState<Record<string, boolean>>({});
 
   const workers = useMemo(() => workersOf(allTasks, task.id), [allTasks, task.id]);
-  const batches = useMemo(() => batchesOf(workers), [workers]);
+  const viewGroups = useMemo(
+    () => groups.map((g) => (groupPaused[g.id] === undefined ? g : { ...g, paused: groupPaused[g.id]! })),
+    [groups, groupPaused],
+  );
+  const teamGroups = useMemo(() => teamGroupsOf(viewGroups, task.id, workers), [viewGroups, task.id, workers]);
+  const batches = useMemo(() => batchesOf(workers, teamGroups), [workers, teamGroups]);
   const waiting = useMemo(() => waitingWorkers(workers), [workers]);
 
   const { items, sessions } = useConversation({
@@ -69,6 +76,12 @@ export function TeamView({
   });
   const rows = useMemo(() => mergeFeed(items, batches), [items, batches]);
   const leadTurns = useMemo(() => turnsOf(items), [items]);
+  const haltedByHistory = activeTeamHaltMarker(items);
+
+  useEffect(() => {
+    setLocalHalted(false);
+    setGroupPaused({});
+  }, [task.id]);
 
   // 抽屉里的工人被归档/删掉后别留着空抽屉。
   const open = openId ? (allTasks.find((t) => t.id === openId) ?? null) : null;
@@ -101,11 +114,21 @@ export function TeamView({
       <TeamHeader
         task={task}
         workers={workers}
+        teamGroups={teamGroups}
+        haltedByHistory={teamGroups.length === 0 && (haltedByHistory || localHalted)}
         sessions={sessions}
         items={items}
         leadTurns={leadTurns}
         onPatch={(p) => onPatch(task.id, p)}
         onRun={() => onRun(task.id)}
+        onTeamHalted={() => {
+          setLocalHalted(true);
+          setGroupPaused(Object.fromEntries(teamGroups.map((g) => [g.id, true])));
+        }}
+        onTeamResumed={() => {
+          setLocalHalted(false);
+          setGroupPaused((m) => ({ ...m, ...Object.fromEntries(teamGroups.map((g) => [g.id, false])) }));
+        }}
         onDelete={() => onDelete(task.id, task.title)}
         onArchive={() => onArchive(task.id)}
         onUnarchive={() => onUnarchive(task.id)}
@@ -116,7 +139,7 @@ export function TeamView({
 
       <div className="grid min-h-0 flex-1 grid-cols-[1fr_268px]">
         <TeamFeed rows={rows} workers={workers} empty={items.length === 0} onOpenWorker={setOpenId} />
-        <WorkerRail workers={workers} logs={logs} selected={openId} onSelect={setOpenId} />
+        <WorkerRail workers={workers} groups={teamGroups} logs={logs} selected={openId} onSelect={setOpenId} />
       </div>
 
       {/* 插话:发出去就进同一个常驻会话(指挥者正在说话时会被 interrupt 接住),所以
@@ -134,6 +157,7 @@ export function TeamView({
         <WorkerDrawer
           worker={open}
           groups={groups}
+          groupPaused={!!teamGroups.find((g) => g.id === open.groupId)?.paused}
           allTasks={allTasks}
           logs={logs[open.id] ?? []}
           sessionsBump={sessionsBump}
@@ -164,12 +188,14 @@ export function TeamView({
 // 工人会话抽屉。上面一条细带子(状态 / 标题 / 整页打开 / 关),下面整个 TaskDetail。
 function WorkerDrawer({
   worker,
+  groupPaused,
   onClose,
   onOpenFull,
   ...rest
 }: {
   worker: Task;
   groups: Group[];
+  groupPaused: boolean;
   allTasks: Task[];
   logs: LogLine[];
   sessionsBump: number;
@@ -198,7 +224,7 @@ function WorkerDrawer({
           <StatusIcon status={worker.status} size={12} awaitingAnswer={!!worker.question} />
           <span className="min-w-0 flex-1 truncate font-medium text-ink">{worker.title}</span>
           <span className="shrink-0 text-faint">
-            <WorkerStatusText w={worker} />
+            <WorkerStatusText w={worker} groupPaused={groupPaused} />
           </span>
           <button
             onClick={onOpenFull}

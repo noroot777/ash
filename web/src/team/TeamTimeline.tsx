@@ -4,7 +4,7 @@
 //
 // 指挥者那条 track 没有独立的数据源,由客户端从已解析的会话推出来(每个回合一段)。
 import { useState } from "react";
-import type { Task } from "@harness/shared";
+import type { Group, Task } from "@harness/shared";
 import { CaretDown } from "@phosphor-icons/react";
 import { statusColor } from "../StatusIcon";
 import { formatDuration, useTick } from "../time";
@@ -17,14 +17,17 @@ export function TeamTimeline({
   lead,
   leadTurns,
   workers,
+  groups,
   onOpen,
 }: {
   lead: Task;
   leadTurns: { from: string; to: string | null }[];
   workers: Task[];
+  groups: Group[];
   onOpen: (id: string) => void;
 }) {
   const [open, setOpen] = useState(true);
+  const groupById = new Map(groups.map((g) => [g.id, g]));
   // 有任何一段还没结束就按秒重算,让色条自己长。
   const live =
     leadTurns.some((t) => !t.to) || workers.some((w) => !!w.startedAt && !w.endedAt);
@@ -44,6 +47,7 @@ export function TeamTimeline({
         .filter((b) => Number.isFinite(b.from)),
     },
     ...workers.map((w, i) => {
+      const groupPaused = !!(w.groupId && groupById.get(w.groupId)?.paused);
       const start = ms(w.startedAt);
       const color = statusColor(w.status, !!w.question);
       if (!Number.isFinite(start)) {
@@ -51,7 +55,7 @@ export function TeamTimeline({
         // 表示「从现在往后才轮到它」。
         return {
           id: w.id,
-          name: `${i + 1} ${w.title}`,
+          name: `${i + 1} ${w.title}${groupPaused ? " · 组已停止" : ""}`,
           bars: [] as Bar[],
           pendingOnly: true,
         };
@@ -59,14 +63,14 @@ export function TeamTimeline({
       const end = w.endedAt ? ms(w.endedAt) : nowMs;
       return {
         id: w.id,
-        name: `${i + 1} ${w.title}`,
+        name: `${i + 1} ${w.title}${groupPaused ? " · 组已停止" : ""}`,
         bars: [
           {
             from: start,
             to: end,
             color,
             hatch: w.status === "queued" || w.status === "backlog",
-            title: `${formatDuration(end - start)}${w.endedAt ? "" : " · 进行中"}`,
+            title: `${formatDuration(end - start)}${w.endedAt ? "" : " · 进行中"}${groupPaused ? ` · ${w.status === "done" ? "工人已正常完成，所属组已停止" : "所属组已停止"}` : ""}`,
           },
         ],
       };

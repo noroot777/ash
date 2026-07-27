@@ -4,7 +4,7 @@
 // 跟单任务 header 的差别在于**指挥者没有「完成」**:它只有忙(running)/闲(idle),
 // 结束靠归档。所以这里没有状态下拉、没有「重新排队」、没有严格完成协议那套东西。
 import { useState } from "react";
-import type { Task, Session } from "@harness/shared";
+import type { Group, Task, Session } from "@harness/shared";
 import { ArrowsClockwise, DownloadSimple, Stop, Trash, Play } from "@phosphor-icons/react";
 import { api } from "../api";
 import { toast } from "../toast";
@@ -16,17 +16,21 @@ import { conversationToText, downloadConversation, type ConvItem } from "../Conv
 import { Duration, TaskTimeChip } from "../time";
 import { shortPath } from "../util";
 import { TeamTimeline } from "./TeamTimeline";
-import { agentMix, statusCounts, type Waiting } from "./teamData";
+import { agentMix, statusCounts, workerHaltStats, type Waiting } from "./teamData";
 import { teamLeadExecutorLabel, teamWorkerExecutorLabel } from "../executorLabel";
 
 export function TeamHeader({
   task,
   workers,
+  teamGroups,
+  haltedByHistory,
   sessions,
   items,
   leadTurns,
   onPatch,
   onRun,
+  onTeamHalted,
+  onTeamResumed,
   onDelete,
   onArchive,
   onUnarchive,
@@ -34,19 +38,26 @@ export function TeamHeader({
 }: {
   task: Task;
   workers: Task[];
+  teamGroups: Group[];
+  haltedByHistory: boolean;
   sessions: Session[];
   items: ConvItem[];
   leadTurns: { from: string; to: string | null }[];
   onPatch: (patch: Partial<Task>) => void | Promise<void>;
-  onRun: () => void;
+  onRun: () => void | Promise<void>;
+  onTeamHalted: () => void;
+  onTeamResumed: () => void;
   onDelete: () => void;
   onArchive: () => void;
   onUnarchive: () => void;
   onOpenWorker: (id: string) => void;
 }) {
   const [haltOpen, setHaltOpen] = useState(false);
+  const [resuming, setResuming] = useState(false);
   const counts = statusCounts(workers);
   const live = sessions.length > 0 || task.status === "running";
+  const pausedGroups = teamGroups.filter((g) => g.paused);
+  const stopped = pausedGroups.length > 0 || haltedByHistory;
   // 分支/工作目录挂在 session 上(不是 task),取最近那次。默认不开 worktree,所以
   // 多数时候这里就是仓库当前分支 —— 仍然值得显示:它是「活干在哪」的唯一凭据。
   const last = sessions[sessions.length - 1];
@@ -83,7 +94,7 @@ export function TeamHeader({
             <>
               {/* 「停止全组」= 停指挥台进程 + 暂停所有内部组(工人落 paused 可恢复)。
                   指挥台闲着(idle)时也给,因为工人可能还在跑。 */}
-              {(live || workers.length > 0) && (
+              {(live || workers.length > 0) && !stopped && (
                 <button
                   onClick={() => setHaltOpen(true)}
                   className="inline-flex items-center gap-1.5 rounded-md border border-red-500/40 px-3 py-1.5 text-[13px] font-medium text-red-600 transition-colors hover:bg-red-500/10"
@@ -92,6 +103,38 @@ export function TeamHeader({
                   <Stop size={13} weight="fill" />
                   停止全组
                 </button>
+              )}
+              {stopped && pausedGroups.length > 0 && (
+                <button
+                  disabled={resuming}
+                  onClick={async () => {
+                    setResuming(true);
+                    try {
+                      await Promise.all(pausedGroups.map((g) => api.runGroup(g.id)));
+                      if (task.status !== "running") await onRun();
+                      onTeamResumed();
+                      toast("已恢复全组：内部组已继续，指挥者会话已接回", "info");
+                    } catch (e) {
+                      toast(e instanceof Error ? e.message : String(e));
+                    } finally {
+                      setResuming(false);
+                    }
+                  }}
+                  className="inline-flex items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-[13px] font-medium text-accent-fg transition-colors hover:bg-accent-hover disabled:opacity-50"
+                  title={`恢复 ${pausedGroups.length} 个已暂停的内部组，并接回指挥者`}
+                >
+                  <Play size={13} weight="fill" />
+                  {resuming ? "恢复中" : "恢复全组"}
+                </button>
+              )}
+              {stopped && pausedGroups.length === 0 && (
+                <span
+                  className="inline-flex items-center gap-1.5 rounded-md border border-line bg-raised px-3 py-1.5 text-[13px] font-medium text-muted"
+                  title="已从会话记录检测到停止全组；当前分组接口未下发内部组 paused 详情"
+                >
+                  <Stop size={13} weight="fill" />
+                  已停止
+                </span>
               )}
               {/* 冷启动/停过之后重新开工:指挥台是常驻会话,run 会接回同一个 CLI 会话。 */}
               {task.status !== "running" && (
@@ -146,6 +189,8 @@ export function TeamHeader({
       {/* 指挥者反过来问用户(它调 ask_question)。答复作为插话喂回同一个常驻会话。 */}
       {task.question && <QuestionCard task={task} />}
 
+      {stopped && <TeamHaltNotice workers={workers} pausedGroups={pausedGroups} hasGroupData={teamGroups.length > 0} />}
+
       <div className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[12px] text-faint">
         <span>
           指挥 <b className="text-muted">{leadLabel}</b>
@@ -173,7 +218,7 @@ export function TeamHeader({
         )}
       </div>
 
-      <TeamTimeline lead={task} leadTurns={leadTurns} workers={workers} onOpen={onOpenWorker} />
+      <TeamTimeline lead={task} leadTurns={leadTurns} workers={workers} groups={teamGroups} onOpen={onOpenWorker} />
 
       {haltOpen && (
         <ConfirmModal
@@ -184,7 +229,8 @@ export function TeamHeader({
           onConfirm={async () => {
             try {
               await api.teamHalt(task.id);
-              toast("已停止全组：指挥台已停，工人已暂停");
+              onTeamHalted();
+              toast("已停止全组：指挥台已停，工人已暂停", "info");
             } catch (e) {
               toast(e instanceof Error ? e.message : String(e));
             }
@@ -193,6 +239,53 @@ export function TeamHeader({
         />
       )}
     </header>
+  );
+}
+
+function TeamHaltNotice({
+  workers,
+  pausedGroups,
+  hasGroupData,
+}: {
+  workers: Task[];
+  pausedGroups: Group[];
+  hasGroupData: boolean;
+}) {
+  const stats = workerHaltStats(workers);
+  const inferredGroups = new Set(workers.map((w) => w.groupId).filter(Boolean)).size;
+  const workerText =
+    stats.interrupted > 0
+      ? `${stats.interrupted} 个工人被暂停打断`
+      : stats.completed > 0
+        ? `${stats.completed} 个工人已正常完成，没有被暂停打断`
+        : workers.length > 0
+          ? "没有工人被暂停打断"
+          : "还没有工人";
+  const groupText = hasGroupData
+    ? pausedGroups.length > 0
+      ? `${pausedGroups.length} 个内部组已停止`
+      : "内部组未暂停"
+    : inferredGroups > 0
+      ? `${inferredGroups} 个内部组有停止记录（paused 详情未下发）`
+      : "内部组 paused 详情未下发";
+  return (
+    <div className="mt-2.5 flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md border border-line bg-raised px-3 py-2 text-[12.5px]">
+      <StatusIcon status="paused" size={12} />
+      <b className="text-ink">已停止全组</b>
+      <span className="text-muted">{groupText}</span>
+      <span className="text-faint">·</span>
+      <span className="text-muted">{workerText}</span>
+      {(stats.waiting > 0 || stats.running > 0) && (
+        <>
+          <span className="text-faint">·</span>
+          <span className="text-muted">
+            {stats.running > 0 && `${stats.running} 个仍显示运行中`}
+            {stats.running > 0 && stats.waiting > 0 && "，"}
+            {stats.waiting > 0 && `${stats.waiting} 个未启动`}
+          </span>
+        </>
+      )}
+    </div>
   );
 }
 
