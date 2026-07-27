@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Task, Session, GateAction, AgentType, DebateSpeaker, TaskStatus } from "@harness/shared";
 import { TEAM_DEFAULTS } from "@harness/shared";
-import { Stop, Robot, X } from "@phosphor-icons/react";
+import { CircleNotch, Stop, Robot, UsersThree, X } from "@phosphor-icons/react";
 import { rebuildDebateState, type DebateState, type DebateTurn, type DebateGate } from "./debateState";
 import { ResumeButtons, ToolCall, CollapsibleText } from "./ui";
 import { Markdown } from "./Markdown";
@@ -489,6 +489,12 @@ function GateBar({
       <div className="flex flex-wrap items-center gap-2 text-sm">
         <span className="text-violet-700">{label}</span>
         <div className="ml-auto flex flex-wrap gap-2">
+          {isG1 && (
+            <TeamHandoffButton
+              busy={teamBusy}
+              onClick={() => void onTeam("/team 开干")}
+            />
+          )}
           <button onClick={() => onGate({ kind: "approve" })} className="rounded-md bg-emerald-500 px-3 py-1 text-xs font-medium text-white">
             {isG1 ? "放行→结束" : "放行"}
           </button>
@@ -568,6 +574,27 @@ function GateBar({
   );
 }
 
+function TeamHandoffButton({
+  busy,
+  onClick,
+}: {
+  busy: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      disabled={busy}
+      onClick={onClick}
+      title="带着辩题及当前共识或分歧结论创建团队任务并跳转"
+      className="inline-flex shrink-0 items-center gap-1.5 self-start rounded-md border border-cyan-500 bg-cyan-600 px-3 py-1 text-xs font-semibold text-white shadow-sm transition-colors hover:bg-cyan-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/50 focus-visible:ring-offset-1 disabled:cursor-not-allowed disabled:opacity-40"
+    >
+      {busy ? <CircleNotch size={13} className="animate-spin" /> : <UsersThree size={13} weight="bold" />}
+      {busy ? "创建中…" : "交给团队开干"}
+    </button>
+  );
+}
+
 function TeamHandoffBar({
   onTeam,
   busy,
@@ -577,8 +604,10 @@ function TeamHandoffBar({
 }) {
   const [text, setText] = useState("");
   const submit = async () => {
-    if (!isTeamCommand(text) || busy) return;
-    if (await onTeam(text)) setText("");
+    if (busy) return;
+    const note = text.trim();
+    const command = isTeamCommand(note) ? note : note ? `/team ${note}` : "/team 开干";
+    if (await onTeam(command)) setText("");
   };
   return (
     <div className="border-t border-line bg-panel px-6 py-3">
@@ -593,16 +622,10 @@ function TeamHandoffBar({
             }
           }}
           rows={2}
-          placeholder="输入 /team 开干，把共识交给一支团队执行"
+          placeholder="可选：补充给团队的交接附言…"
           className="flex-1 resize-none rounded-md border border-line bg-canvas px-2.5 py-1.5 text-sm text-ink outline-none placeholder:text-faint focus:border-accent"
         />
-        <button
-          disabled={!isTeamCommand(text) || busy}
-          onClick={() => void submit()}
-          className="self-start rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-accent-fg hover:bg-accent-hover disabled:opacity-40"
-        >
-          {busy ? "创建中…" : "交给团队"}
-        </button>
+        <TeamHandoffButton busy={busy} onClick={() => void submit()} />
       </div>
     </div>
   );
