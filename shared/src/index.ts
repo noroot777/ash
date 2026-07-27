@@ -137,6 +137,12 @@ export interface Task {
   autoTitle?: boolean; // title is AI-generated on first run until the user edits it
   // single mode:
   agentType?: AgentType;
+  // Concrete executor profile. If set and still exists, server runs that profile;
+  // if null/stale, it falls back to the current default executor for agentType.
+  executorId?: string | null;
+  // Read-only display label for the profile that will run this task:
+  // selected agents.name, else the current default profile name for agentType.
+  executorLabel?: string | null;
   // debate mode config (§7):
   debate?: DebateConfig;
   // team mode config (§Team)：指挥者 + 默认工人类型。只有 mode:"team" 的任务有。
@@ -206,6 +212,10 @@ export const MAX_QUESTION_OPTION_LEN = 200;
 export interface TeamConfig {
   lead: AgentType; // 指挥者的 CLI 类型 —— 必须支持常驻会话（见 executors 的 openResident）
   worker: AgentType; // 派活时的默认工人类型（dispatch 可逐个覆盖）
+  leadExecutorId?: string | null; // 指挥者具体执行者；缺省/悬空 → lead 类型默认执行者
+  workerExecutorId?: string | null; // 默认工人具体执行者；缺省/悬空 → worker 类型默认执行者
+  leadExecutorLabel?: string | null; // server 只读展示字段
+  workerExecutorLabel?: string | null; // server 只读展示字段
 }
 
 export const TEAM_DEFAULTS: TeamConfig = { lead: "claude", worker: "claude" };
@@ -328,6 +338,7 @@ export interface BatchTaskInput {
   title?: string; // omitted → derived from body's first line, and autoTitle'd
   body?: string; // the prompt / objective
   agentType?: AgentType; // overrides defaults.agentType
+  executorId?: string | null; // overrides defaults.executorId; stale id degrades by agentType
   priority?: Priority;
   labels?: string[];
   // Each entry is resolved against sibling `key`s first; anything that doesn't
@@ -344,6 +355,7 @@ export interface BatchCreateTasksBody {
   defaults?: {
     // applied to every task unless that task overrides the field
     agentType?: AgentType;
+    executorId?: string | null;
     priority?: Priority;
     labels?: string[];
   };

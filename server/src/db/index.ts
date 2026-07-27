@@ -31,7 +31,7 @@ export async function ensureSchema() {
       status TEXT NOT NULL DEFAULT 'backlog', priority TEXT NOT NULL DEFAULT 'none',
       labels TEXT NOT NULL DEFAULT '[]', depends_on TEXT NOT NULL DEFAULT '[]',
       resume_depends_on TEXT NOT NULL DEFAULT '[]',
-      agent_type TEXT, auto_title INTEGER NOT NULL DEFAULT 0, debate TEXT, schedule_id TEXT,
+      agent_type TEXT, executor_id TEXT, auto_title INTEGER NOT NULL DEFAULT 0, debate TEXT, schedule_id TEXT,
       created_at TEXT NOT NULL, updated_at TEXT NOT NULL, started_at TEXT, ended_at TEXT,
       archived INTEGER NOT NULL DEFAULT 0, archived_at TEXT
     );
@@ -133,6 +133,8 @@ export async function ensureSchema() {
     "ALTER TABLE groups ADD COLUMN owner_task_id TEXT",
     // ask_question 的候选答案（json string[]，null=只能自由作答）
     "ALTER TABLE tasks ADD COLUMN question_options TEXT",
+    // 任务执行者 profile。非空时按 agents.id 精确解析；空/悬空时按 agent_type 默认执行者降级。
+    "ALTER TABLE tasks ADD COLUMN executor_id TEXT",
   ]) {
     try {
       await client.execute(sql);

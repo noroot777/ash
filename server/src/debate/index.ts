@@ -15,7 +15,7 @@ import { id, now } from "../util.js";
 import { setTaskStatus } from "../status.js";
 import { trackRun, untrackRun, isCanceling, takeCanceled, CanceledRun } from "../runs.js";
 import { ensureWorkdir, resolveWorkspace } from "../git.js";
-import { resolveExecutor } from "../executors/index.js";
+import { resolveExecutorFor } from "../executors/index.js";
 import type { AgentExecutor } from "../executors/types.js";
 import { RUNS_DIR } from "../paths.js";
 import * as P from "./prompts.js";
@@ -236,8 +236,8 @@ async function loadBase(taskId: string) {
   const cfg = JSON.parse(task.debate) as DebateConfig;
   const project = (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0);
   if (!project) throw new Error("project not found");
-  const exA = await resolveExecutor(cfg.debaterA);
-  const exB = await resolveExecutor(cfg.debaterB);
+  const exA = await resolveExecutorFor({ type: cfg.debaterA });
+  const exB = await resolveExecutorFor({ type: cfg.debaterB });
   // Discussion only reads; repo-less debates fall back to a scratch cwd (§4).
   const cwd = ensureWorkdir(project.repoPath, taskId);
   const cap = Math.min(cfg.maxRounds ?? HARD_CAP, HARD_CAP);

@@ -27,6 +27,19 @@ export async function resolveExecutorById(id: string): Promise<AgentExecutor> {
   return build(row, row.type as AgentType);
 }
 
+// Task/team execution resolver. executorId is the precise user-selected profile;
+// if it is empty or stale, degrade to the type's current default executor.
+export async function resolveExecutorFor(opts: {
+  executorId?: string | null;
+  type?: AgentType | null;
+}): Promise<AgentExecutor> {
+  if (opts.executorId) {
+    const [row] = await db.select().from(agents).where(eq(agents.id, opts.executorId));
+    if (row) return resolveExecutorById(row.id);
+  }
+  return resolveExecutor(opts.type ?? "claude");
+}
+
 async function build(profile: AgentRow | null, type: AgentType): Promise<AgentExecutor> {
   const opts = profile
     ? {

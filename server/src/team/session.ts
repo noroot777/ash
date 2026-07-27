@@ -34,7 +34,7 @@ import { setTaskStatus } from "../status.js";
 import { trackRun, untrackRun, takeStopped, stopTask } from "../runs.js";
 import { pauseGroup } from "../scheduler.js";
 import { resolveWorkspace } from "../git.js";
-import { resolveExecutor } from "../executors/index.js";
+import { resolveExecutorFor } from "../executors/index.js";
 import type { ResidentHandle } from "../executors/types.js";
 import { RUNS_DIR } from "../paths.js";
 import { writeTurn, writeTurnEnd, writeRunError } from "../transcript.js";
@@ -57,6 +57,7 @@ interface Lead {
   sessId: string; // harness 会话行 id,同时是 .md 文件名
   cliSessionId: string;
   agentType: AgentType;
+  executorId: string | null;
   cwd: string;
   handle: ResidentHandle;
   out: WriteStream;
@@ -161,7 +162,7 @@ async function openLead(taskId: string, rawText: string, kind: Kind): Promise<Le
   const project = (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0);
   if (!project) throw new Error("project not found");
   const cfg: TeamConfig = task.team ? JSON.parse(task.team) : TEAM_DEFAULTS;
-  const ex = await resolveExecutor(cfg.lead);
+  const ex = await resolveExecutorFor({ executorId: cfg.leadExecutorId, type: cfg.lead });
   const openResident = ex.openResident?.bind(ex);
   if (!openResident) throw new Error(`执行者 ${ex.label} 不支持常驻会话,不能当团队指挥者`);
 
@@ -221,6 +222,7 @@ async function openLead(taskId: string, rawText: string, kind: Kind): Promise<Le
     sessId,
     cliSessionId,
     agentType: cfg.lead,
+    executorId: cfg.leadExecutorId ?? null,
     cwd: ws.path,
     handle,
     out: createWriteStream(join(runDir, `${sessId}.md`), { flags: "a" }),
@@ -253,7 +255,7 @@ async function consume(lead: Lead): Promise<void> {
     if (event.kind === "session") {
       if (event.cliSessionId !== lead.cliSessionId) {
         lead.cliSessionId = event.cliSessionId;
-        const ex = await resolveExecutor(lead.agentType);
+        const ex = await resolveExecutorFor({ executorId: lead.executorId, type: lead.agentType });
         await db
           .update(sessions)
           .set({ cliSessionId: event.cliSessionId, resumeCommand: ex.resumeCommand(lead.cwd, event.cliSessionId) })

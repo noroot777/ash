@@ -11,7 +11,7 @@ import { eq } from "drizzle-orm";
 import type { AgentType, TeamConfig } from "@harness/shared";
 import { TEAM_DEFAULTS } from "@harness/shared";
 import { db } from "../db/index.js";
-import { tasks, groups, queueItems } from "../db/schema.js";
+import { tasks, groups, queueItems, agents } from "../db/schema.js";
 import { id, now } from "../util.js";
 import { runGroup } from "../scheduler.js";
 import { TEAM_WORKER_PREAMBLE } from "./prompts.js";
@@ -20,6 +20,7 @@ export interface DispatchSpec {
   body: string;
   title?: string;
   agentType?: AgentType;
+  executorId?: string | null;
   reportBack?: boolean;
   useWorktree?: boolean;
 }
@@ -42,6 +43,17 @@ export async function dispatchWorkers(
   if (lead.archived) throw new Error("团队已归档,不能再派活");
   const cfg: TeamConfig = lead.team ? JSON.parse(lead.team) : TEAM_DEFAULTS;
   const mode = opts.mode ?? (specs.length > 1 ? "serial" : "parallel");
+  const profileTypes = new Map(
+    (await db.select({ id: agents.id, type: agents.type }).from(agents)).map((a) => [a.id, a.type as AgentType] as const),
+  );
+  for (const [i, s] of specs.entries()) {
+    const executorId = s.executorId !== undefined ? s.executorId : cfg.workerExecutorId;
+    const executorType = executorId ? profileTypes.get(executorId) : undefined;
+    const explicitType = s.agentType ?? cfg.worker;
+    if (executorType && explicitType && explicitType !== executorType) {
+      throw new Error(`tasks[${i}].executorId 属于 ${executorType},但 agentType 是 ${explicitType}`);
+    }
+  }
 
   const ts = now();
   const groupId = id();
@@ -62,6 +74,8 @@ export async function dispatchWorkers(
   const rows = specs.map((s, i) => {
     const explicitTitle = (s.title ?? "").trim();
     const at = new Date(base + i).toISOString(); // 递增时间戳,列表排序稳定
+    const executorId = s.executorId !== undefined ? s.executorId : cfg.workerExecutorId ?? null;
+    const executorType = executorId ? profileTypes.get(executorId) : undefined;
     return {
       id: id(),
       projectId: lead.projectId,
@@ -75,7 +89,8 @@ export async function dispatchWorkers(
       labels: "[]",
       dependsOn: "[]",
       resumeDependsOn: "[]",
-      agentType: (s.agentType ?? cfg.worker) as AgentType | null,
+      agentType: (s.agentType ?? executorType ?? cfg.worker) as AgentType | null,
+      executorId,
       autoTitle: false, // 指挥者派活时给的标题就是标题,不让工人自己改名
       debate: null as string | null,
       team: null as string | null,

@@ -5,7 +5,7 @@ import { mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentType, AiBackend, Priority } from "@harness/shared";
-import { resolveExecutor, resolveExecutorById } from "./executors/index.js";
+import { resolveExecutorFor } from "./executors/index.js";
 
 // 中立 cwd,放在 repo 树之外:claude CLI 会从 cwd 向上找 CLAUDE.md,落在仓库里会
 // 命中根目录的工作约定污染解析。tmpdir 彻底脱离 repo 树。
@@ -30,11 +30,9 @@ export async function runAgentOnce(
   if (cwd === PARSE_CWD) mkdirSync(PARSE_CWD, { recursive: true });
   let ex;
   try {
-    ex = opts.executorId
-      ? await resolveExecutorById(opts.executorId)
-      : await resolveExecutor(opts.agentType ?? "claude");
+    ex = await resolveExecutorFor({ executorId: opts.executorId, type: opts.agentType ?? "claude" });
   } catch {
-    ex = await resolveExecutor("claude");
+    ex = await resolveExecutorFor({ type: "claude" });
   }
   const handle = ex.run({ prompt, cwd });
   let text = "";
@@ -255,4 +253,3 @@ export const buildDiscussPrompt = (ctx: DiscussionCtx): string =>
   ]
     .filter(Boolean)
     .join("\n");
-

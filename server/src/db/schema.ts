@@ -37,6 +37,7 @@ export const tasks = sqliteTable("tasks", {
   dependsOn: text("depends_on").notNull().default("[]"), // json
   resumeDependsOn: text("resume_depends_on").notNull().default("[]"), // json
   agentType: text("agent_type"),
+  executorId: text("executor_id"), // agents.id；非空时优先使用具体执行者，空则按 agentType 默认降级
   autoTitle: integer("auto_title", { mode: "boolean" }).notNull().default(false),
   debate: text("debate"), // json DebateConfig
   team: text("team"), // json TeamConfig（mode:"team" 的指挥者/默认工人类型）

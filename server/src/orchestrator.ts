@@ -9,7 +9,7 @@ import { id, now, attachmentsPrompt } from "./util.js";
 import { setTaskStatus } from "./status.js";
 import { trackRun, untrackRun, takeStopped, takeConfirmed, type StopSettle } from "./runs.js";
 import { resolveWorkspace, ensureWorkdir, prepareWorktree } from "./git.js";
-import { resolveExecutor } from "./executors/index.js";
+import { resolveExecutorFor } from "./executors/index.js";
 import type { RunHandle } from "./executors/types.js";
 import { RUNS_DIR } from "./paths.js";
 import { writeTurn as writeTurnLine, writeTurnEnd, writeRunError, runTracePaths } from "./transcript.js";
@@ -196,7 +196,7 @@ export async function runTask(taskId: string): Promise<void> {
       ? await prepareWorktree(project.repoPath, taskId, task.worktreeBase)
       : await resolveWorkspace(project.repoPath, taskId);
     const agentType = (task.agentType as AgentType) ?? "claude";
-    const ex = await resolveExecutor(agentType);
+    const ex = await resolveExecutorFor({ executorId: task.executorId, type: agentType });
 
     const autoTitle = !!task.autoTitle;
     const TITLE_HINT =
@@ -376,7 +376,7 @@ export async function continueTask(
     if (task.mode !== "single") throw new Error("reply is for single tasks");
 
     const agent = opts.agent ?? (task.agentType as AgentType) ?? "claude";
-    const ex = await resolveExecutor(agent);
+    const ex = await resolveExecutorFor({ executorId: opts.agent ? null : task.executorId, type: agent });
     const project = (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0);
 
     // A single task can now host several agents — one session line per agentType,

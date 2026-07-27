@@ -42,7 +42,7 @@ import { detectLocalAgents } from "./detect.js";
 import { searchAll } from "./search.js";
 import { projectHealthLight, projectHealthFull, tidyRepoPath, repoKey, listBranches, detectTaskWorktree, removeWorktree, taskCommits } from "./git.js";
 import { resumeCommandFor } from "./executors/spawn.js";
-import { resolveExecutor } from "./executors/index.js";
+import { resolveExecutorFor } from "./executors/index.js";
 import type { GateAction, AgentType, BatchCreateTasksBody, BatchTaskInput, ScheduledMessage, ScheduledMessageStatus } from "@harness/shared";
 
 export const api = new Hono();
@@ -235,12 +235,46 @@ api.patch("/agents/:id", async (c) => {
 });
 
 api.delete("/agents/:id", async (c) => {
-  await db.delete(agents).where(eq(agents.id, c.req.param("id")));
+  const aid = c.req.param("id");
+  await db.delete(agents).where(eq(agents.id, aid));
+  await db.update(tasks).set({ executorId: null, updatedAt: now() }).where(eq(tasks.executorId, aid));
   return c.json({ deleted: true });
 });
 
 // ── row -> domain mappers (parse json columns) ─────────────────────────────
-const toTask = (r: typeof tasks.$inferSelect): Task => ({
+type AgentLabelRow = { id: string; name: string; type: string; isDefault: boolean };
+
+const agentTypeForExecutor = async (executorId?: string | null): Promise<AgentType | null> => {
+  if (!executorId) return null;
+  const row = (await db.select({ type: agents.type }).from(agents).where(eq(agents.id, executorId))).at(0);
+  return row ? (row.type as AgentType) : null;
+};
+
+const executorLabelFor = (
+  profiles: AgentLabelRow[],
+  executorId?: string | null,
+  type?: AgentType | null,
+): string | null => {
+  const selected = executorId ? profiles.find((a) => a.id === executorId) : null;
+  if (selected) return selected.name;
+  const fallbackType = type ?? "claude";
+  const sameType = profiles.filter((a) => a.type === fallbackType);
+  return (sameType.find((a) => a.isDefault) ?? sameType[0])?.name ?? null;
+};
+
+const enrichTeamExecutorLabels = (
+  team: Task["team"],
+  profiles: AgentLabelRow[],
+): Task["team"] => {
+  if (!team) return undefined;
+  return {
+    ...team,
+    leadExecutorLabel: executorLabelFor(profiles, team.leadExecutorId, team.lead),
+    workerExecutorLabel: executorLabelFor(profiles, team.workerExecutorId, team.worker),
+  };
+};
+
+const toTask = (r: typeof tasks.$inferSelect, profiles: AgentLabelRow[] = []): Task => ({
   id: r.id,
   projectId: r.projectId,
   groupId: r.groupId,
@@ -254,9 +288,11 @@ const toTask = (r: typeof tasks.$inferSelect): Task => ({
   dependsOn: JSON.parse(r.dependsOn),
   resumeDependsOn: JSON.parse(r.resumeDependsOn),
   agentType: (r.agentType as Task["agentType"]) ?? undefined,
+  executorId: r.executorId ?? null,
+  executorLabel: executorLabelFor(profiles, r.executorId, (r.agentType as AgentType) ?? null),
   autoTitle: r.autoTitle,
   debate: r.debate ? JSON.parse(r.debate) : undefined,
-  team: r.team ? JSON.parse(r.team) : undefined,
+  team: r.team ? enrichTeamExecutorLabels(JSON.parse(r.team), profiles) : undefined,
   reportBack: r.reportBack,
   scheduleId: r.scheduleId,
   createdAt: r.createdAt,
@@ -281,6 +317,9 @@ const taskBody = (body: string | undefined, taskId: string): string =>
 // queries; see util.runsTiming for the accounting.
 async function enrichTiming(rows: (typeof tasks.$inferSelect)[]): Promise<Task[]> {
   if (rows.length === 0) return [];
+  const profiles = await db
+    .select({ id: agents.id, name: agents.name, type: agents.type, isDefault: agents.isDefault })
+    .from(agents);
   const runs = await db
     .select({
       taskId: sessions.taskId,
@@ -305,7 +344,7 @@ async function enrichTiming(rows: (typeof tasks.$inferSelect)[]): Promise<Task[]
   return rows.map((r) => {
     const q = qByTask.get(r.id);
     return {
-      ...toTask(r),
+      ...toTask(r, profiles),
       ...runsTiming(byTask.get(r.id) ?? []),
       queueId: q?.queueId ?? null,
       queuePosition: q?.position ?? null,
@@ -566,6 +605,27 @@ api.post("/tasks", async (c) => {
   }>();
   const ts = now();
   const taskId = id();
+  const executorType = await agentTypeForExecutor(b.executorId);
+  if (executorType && b.agentType && b.agentType !== executorType) {
+    return c.json({ error: `executorId 属于 ${executorType},但 agentType 是 ${b.agentType}`, executorId: b.executorId }, 400);
+  }
+  const rawTeam = b.team;
+  const teamLeadType = rawTeam ? await agentTypeForExecutor(rawTeam.leadExecutorId) : null;
+  const teamWorkerType = rawTeam ? await agentTypeForExecutor(rawTeam.workerExecutorId) : null;
+  if (rawTeam && teamLeadType && rawTeam.lead !== teamLeadType) {
+    return c.json({ error: `team.leadExecutorId 属于 ${teamLeadType},但 team.lead 是 ${rawTeam.lead}`, executorId: rawTeam.leadExecutorId }, 400);
+  }
+  if (rawTeam && teamWorkerType && rawTeam.worker !== teamWorkerType) {
+    return c.json({ error: `team.workerExecutorId 属于 ${teamWorkerType},但 team.worker 是 ${rawTeam.worker}`, executorId: rawTeam.workerExecutorId }, 400);
+  }
+  const teamConfig = rawTeam
+    ? {
+        lead: rawTeam.lead,
+        worker: rawTeam.worker,
+        leadExecutorId: rawTeam.leadExecutorId ?? null,
+        workerExecutorId: rawTeam.workerExecutorId ?? null,
+      }
+    : null;
   const row = {
     id: taskId,
     projectId: b.projectId,
@@ -581,12 +641,13 @@ api.post("/tasks", async (c) => {
     // 表达顺序依赖(DESIGN-scheduling.md);input 上的这俩字段已不再接受。
     dependsOn: "[]",
     resumeDependsOn: "[]",
-    agentType: b.agentType ?? null,
+    agentType: b.agentType ?? (teamConfig ? teamConfig.lead : executorType) ?? null,
+    executorId: b.executorId ?? null,
     autoTitle: b.autoTitle ?? false,
     debate: b.debate ? JSON.stringify(b.debate) : null,
     // mode:"team" 的指挥者/默认工人类型(跟 debate 对称)。别漏 —— 漏了就静默退回
     // TEAM_DEFAULTS,用户在启动器上挑的那两个旋钮全白挑。
-    team: b.team ? JSON.stringify(b.team) : null,
+    team: teamConfig ? JSON.stringify(teamConfig) : null,
     scheduleId: null,
     createdAt: ts,
     updatedAt: ts,
@@ -628,7 +689,7 @@ api.post("/tasks", async (c) => {
   return c.json((await enrichTiming([row as typeof tasks.$inferSelect]))[0], 201);
 });
 
-// Partial update: title/body/status/priority/labels/groupId/agentType/mode/debate.
+// Partial update: title/body/status/priority/labels/groupId/agentType/executorId/mode/debate.
 api.patch("/tasks/:id", async (c) => {
   const tid = c.req.param("id");
   const existing = (await db.select().from(tasks).where(eq(tasks.id, tid))).at(0);
@@ -659,7 +720,19 @@ api.patch("/tasks/:id", async (c) => {
   if (b.priority !== undefined) patch.priority = b.priority;
   if (b.labels !== undefined) patch.labels = JSON.stringify(b.labels);
   if (b.groupId !== undefined) patch.groupId = b.groupId;
-  if (b.agentType !== undefined) patch.agentType = b.agentType;
+  const requestedExecutorId = b.executorId === "" ? null : b.executorId;
+  const executorType = await agentTypeForExecutor(requestedExecutorId);
+  if (executorType && b.agentType && b.agentType !== executorType) {
+    return c.json({ error: `executorId 属于 ${executorType},但 agentType 是 ${b.agentType}`, executorId: requestedExecutorId }, 400);
+  }
+  if (b.agentType !== undefined) {
+    patch.agentType = b.agentType;
+    if (b.executorId === undefined) patch.executorId = null;
+  }
+  if (b.executorId !== undefined) {
+    patch.executorId = requestedExecutorId ?? null;
+    if (executorType && b.agentType === undefined) patch.agentType = executorType;
+  }
   if (b.mode !== undefined) patch.mode = b.mode;
   if (b.debate !== undefined) patch.debate = b.debate ? JSON.stringify(b.debate) : null;
   // 注意:dependsOn / resumeDependsOn 不再可编辑(DESIGN-scheduling.md):
@@ -761,13 +834,22 @@ api.post("/groups/:groupId/tasks/batch", async (c) => {
   const b = await c.req.json<BatchCreateTasksBody>();
   const specs: BatchTaskInput[] = Array.isArray(b.tasks) ? b.tasks : [];
   if (specs.length === 0) return c.json({ error: "tasks 不能为空" }, 400);
+  const profileTypes = new Map(
+    (await db.select({ id: agents.id, type: agents.type }).from(agents)).map((a) => [a.id, a.type as AgentType] as const),
+  );
 
   // Validate every agent type up front (task-level or inherited default) so we
   // fail the whole batch cleanly instead of half-inserting.
   for (const [i, s] of specs.entries()) {
-    const at = s.agentType ?? b.defaults?.agentType;
+    const executorId = s.executorId !== undefined ? s.executorId : b.defaults?.executorId;
+    const executorType = executorId ? profileTypes.get(executorId) : undefined;
+    const explicitType = s.agentType ?? b.defaults?.agentType;
+    const at = explicitType ?? executorType;
     if (at && !AGENT_TYPES.includes(at)) {
       return c.json({ error: `tasks[${i}].agentType 未知: ${at}`, allowed: AGENT_TYPES }, 400);
+    }
+    if (executorType && explicitType && explicitType !== executorType) {
+      return c.json({ error: `tasks[${i}].executorId 属于 ${executorType},但 agentType 是 ${explicitType}`, executorId }, 400);
     }
   }
 
@@ -805,6 +887,8 @@ api.post("/groups/:groupId/tasks/batch", async (c) => {
   const rows = specs.map((s, i) => {
     const explicitTitle = (s.title ?? "").trim();
     const ts = new Date(base + i).toISOString();
+    const executorId = s.executorId !== undefined ? s.executorId : b.defaults?.executorId ?? null;
+    const agentType = s.agentType ?? b.defaults?.agentType ?? (executorId ? profileTypes.get(executorId) : null) ?? null;
     return {
       id: ids[i],
       projectId: g.projectId,
@@ -818,7 +902,8 @@ api.post("/groups/:groupId/tasks/batch", async (c) => {
       labels: JSON.stringify(s.labels ?? b.defaults?.labels ?? []),
       dependsOn: "[]", // 字段保留为空(legacy)
       resumeDependsOn: "[]",
-      agentType: (s.agentType ?? b.defaults?.agentType ?? null) as AgentType | null,
+      agentType: agentType as AgentType | null,
+      executorId,
       autoTitle: !explicitTitle, // no explicit title → let the first run name it
       debate: null as string | null,
       scheduleId: null as string | null,
@@ -1493,7 +1578,7 @@ api.post("/issues/:id/comments", async (c) => {
     // 在这儿挡住比等到 startTeam 里 throw 好:那时候任务已经建出来了,用户只看到一个
     // 刚生下来就 failed 的团队。
     if (b.mentionTeam) {
-      const lead = await resolveExecutor(b.mention).catch(() => null);
+      const lead = await resolveExecutorFor({ type: b.mention }).catch(() => null);
       if (!lead?.openResident)
         return c.json({ error: `@${b.mention} 不支持常驻会话，当不了指挥者（换 @claude 带队）`, agent: b.mention }, 400);
     }

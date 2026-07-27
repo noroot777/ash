@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type { AgentType } from "@harness/shared";
-import { resolveExecutor } from "./executors/index.js";
+import { resolveExecutorFor } from "./executors/index.js";
 
 const exec = promisify(execFile);
 
@@ -54,7 +54,7 @@ export async function detectLocalAgents(): Promise<DetectedAgent[]> {
         available: !!path,
         path,
         version: path ? await version(bin) : null,
-        resident: path ? !!(await resolveExecutor(type).then((e) => e.openResident, () => null)) : false,
+        resident: path ? !!(await resolveExecutorFor({ type }).then((e) => e.openResident, () => null)) : false,
       };
     }),
   );
