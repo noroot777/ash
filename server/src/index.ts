@@ -5,16 +5,31 @@ import { readFile } from "node:fs/promises";
 import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { join, extname, normalize } from "node:path";
-import { api } from "./routes.js";
-import { ensureSchema } from "./db/index.js";
-import { migrateQueues } from "./db/migrateQueues.js";
-import { reconcileInterrupted } from "./orchestrator.js";
-import { startScheduler } from "./schedules.js";
+import { acquireDbSingletonLock, SingletonConflictError } from "./singleton.js";
 
 // Never let a stray async error (e.g. an SSE write to a disconnected client)
 // take the whole server down — log and keep running.
 process.on("unhandledRejection", (e) => console.error("[harness] unhandledRejection:", e));
 process.on("uncaughtException", (e) => console.error("[harness] uncaughtException:", e));
+
+const port = Number(process.env.PORT ?? 4317);
+try {
+  acquireDbSingletonLock({ port });
+} catch (e) {
+  if (e instanceof SingletonConflictError) {
+    console.error(e.message);
+    process.exit(1);
+  }
+  throw e;
+}
+
+const [{ ensureSchema }, { migrateQueues }, { reconcileInterrupted }, { startScheduler }, { api }] = await Promise.all([
+  import("./db/index.js"),
+  import("./db/migrateQueues.js"),
+  import("./orchestrator.js"),
+  import("./schedules.js"),
+  import("./routes.js"),
+]);
 
 await ensureSchema();
 await migrateQueues(); // 一次性把 legacy depends_on / resume_depends_on 迁到 queue_items（幂等）
@@ -193,7 +208,6 @@ if (hasBuild) {
   );
 }
 
-const port = Number(process.env.PORT ?? 4317);
 serve({ fetch: app.fetch, port }, (info) => {
   console.log(`[harness] server on http://localhost:${info.port}`);
 });

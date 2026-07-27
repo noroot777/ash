@@ -1,15 +1,13 @@
 import { drizzle } from "drizzle-orm/libsql";
 import { createClient } from "@libsql/client";
-import { mkdirSync } from "node:fs";
-import { dirname, resolve, join } from "node:path";
 import * as schema from "./schema.js";
-import { DATA_DIR } from "../paths.js";
+import { ensureHarnessDbDir, resolveHarnessDbFile } from "./path.js";
 
-const dbFile = process.env.HARNESS_DB ?? join(DATA_DIR, "harness.db");
-mkdirSync(dirname(dbFile), { recursive: true });
+const dbFile = resolveHarnessDbFile();
+ensureHarnessDbDir(dbFile);
 
 // libsql: N-API prebuilt binary (no node-gyp), ABI-stable across Node versions.
-const client = createClient({ url: `file:${resolve(dbFile)}` });
+const client = createClient({ url: `file:${dbFile}` });
 
 export const db = drizzle(client, { schema });
 
