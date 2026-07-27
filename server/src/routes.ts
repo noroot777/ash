@@ -43,6 +43,7 @@ import { searchAll } from "./search.js";
 import { projectHealthLight, projectHealthFull, tidyRepoPath, repoKey, listBranches, detectTaskWorktree, removeWorktree, taskCommits } from "./git.js";
 import { resumeCommandFor } from "./executors/spawn.js";
 import { resolveExecutorFor } from "./executors/index.js";
+import { forceKillCuaService, lastCuaResidualStatus, refreshCuaResidualStatus } from "./cua.js";
 import type { GateAction, AgentType, BatchCreateTasksBody, BatchTaskInput, ScheduledMessage, ScheduledMessageStatus } from "@harness/shared";
 
 export const api = new Hono();
@@ -1190,6 +1191,31 @@ api.post("/tasks/:id/team/halt", async (c) => {
   if (r.mode !== "team") return c.json({ error: "只有团队任务能停止全组", mode: r.mode }, 400);
   await haltTeam(taskId);
   return c.json({ halted: true });
+});
+
+api.get("/tasks/:id/team/cua-status", async (c) => {
+  const taskId = c.req.param("id");
+  const r = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
+  if (!r) return c.json({ error: "not found" }, 404);
+  if (r.mode !== "team") return c.json({ error: "只有团队任务有 team CUA 状态", mode: r.mode }, 400);
+  const last = lastCuaResidualStatus("team", taskId);
+  const current = await refreshCuaResidualStatus("team", taskId);
+  return c.json({ taskId, current, last });
+});
+
+api.post("/tasks/:id/team/kill-cua", async (c) => {
+  const taskId = c.req.param("id");
+  const r = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
+  if (!r) return c.json({ error: "not found" }, 404);
+  if (r.mode !== "team") return c.json({ error: "只有团队任务能强制清理 CUA", mode: r.mode }, 400);
+  const result = await forceKillCuaService("team", taskId);
+  return c.json({
+    killed: result.killed,
+    before: result.before,
+    after: result.after,
+    status: result.status,
+    warning: result.sideEffect,
+  });
 });
 
 // Reply to a single task: resume its CLI session with the user's message so an

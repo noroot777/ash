@@ -4,6 +4,7 @@
 // lets the run loops distinguish a requested kill from a crash (→ failed), AND
 // carries how the kill should settle: a manual stop settles `canceled`(可跳过),
 // a group pause settles `paused`(恢复分组时从原会话续跑,而不是被队列跳过)。
+import { cleanupTaskCuaSessionsSoon } from "./cua.js";
 
 export interface Killable {
   kill(): void;
@@ -37,6 +38,7 @@ export function isRunning(taskId: string): boolean {
 // Request a stop: flag how the kill should settle and kill the live
 // subprocess(es). Returns false if nothing was running (nothing to stop).
 export function stopTask(taskId: string, settle: StopSettle = "canceled"): boolean {
+  cleanupTaskCuaSessionsSoon(taskId);
   const set = handles.get(taskId);
   if (!set || !set.size) return false;
   stopping.set(taskId, settle);
