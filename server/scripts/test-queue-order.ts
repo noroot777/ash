@@ -56,6 +56,30 @@ assert.equal(selectNextInQueue([m("01", "backlog", { mode: "team" }), m("02", "b
 assert.equal(selectNextInQueue([m("01", "done"), m("02", "failed")]), null);
 assert.equal(selectNextInQueue([]), null);
 
+// 续聊(follow-up):终态任务被用户追加消息,这一轮 status=running 但队列按
+// followUpFrom 那个终态看待它 —— 既不冻住整条线,也不会被当可启动项拉起。
+// (实测事故:11:30 给已完成的 01 发了条定时消息,后面刚跑完的 08 就再也推不动 09。)
+assert.equal(
+  selectNextInQueue([m("01", "running", { followUpFrom: "done" }), m("02", "backlog")])?.id,
+  "02",
+  "续聊回合不占队列:后面的照常启动",
+);
+assert.equal(
+  selectNextInQueue([m("01", "running", { followUpFrom: "done" }), m("02", "running")]),
+  null,
+  "续聊之外真有人在跑 → 仍然按兵不动",
+);
+assert.equal(
+  selectNextInQueue([m("01", "running", { followUpFrom: "done" })]),
+  null,
+  "续聊成员自己不会被当可启动项拉起",
+);
+assert.equal(
+  selectNextInQueue([m("01", "running", { followUpFrom: "failed", question: "选 A 还是 B?" }), m("02", "backlog")])?.id,
+  "02",
+  "续聊里提问也不挡路(任务本体仍是终态)",
+);
+
 // ── isOvertaken ──────────────────────────────────────────────────────────────
 
 const q = (id: string, status: string, startedAt: string | null = null) => ({ id, status, startedAt });

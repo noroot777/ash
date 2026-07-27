@@ -82,7 +82,19 @@ export type QueueMember = {
   archived: boolean;
   mode: string | null;
   question: string | null;
+  // 非空 = 这一轮是「续聊」(终态任务的追加对话),队列按这个终态看待它。
+  followUpFrom?: string | null;
 };
+
+// 队列眼里的成员状态:续聊回合(followUpFrom 非空)虽然 status=running,但那一轮
+// 不是任务的执行 —— 任务早就到终态、位置早就被透明跳过了。所以队列一律按续聊前
+// 的终态看它:既不算「有人在跑」把整条线冻住,也不会被当成可启动项拉起来。
+// (实测事故:队列 head 是个 done 任务,用户 11:30 给它发了条消息续聊,后面刚跑完
+// 的那位就再也推进不了,整条流水线白等了六分钟。)
+// 导出:queues.ts 的 queueBlockers(手点「运行」的前置检查)必须用同一把尺子。
+export function queueStatus(t: { status: string; followUpFrom?: string | null }): string {
+  return t.followUpFrom || t.status;
+}
 
 // 队列推进的纯计算核心:给定按 position 排好的成员,挑出"现在该被拉起来的那个"。
 // **不变量:一个 queue 同一时刻至多一个成员在跑。** 所以先整体扫一遍,只要有人
@@ -93,10 +105,10 @@ export type QueueMember = {
 // (advanceQueue / runGroup / queues 的 reorder·remove·insert / requeue)一起受益。
 export function selectNextInQueue<T extends QueueMember>(rows: T[]): T | null {
   const live = rows.filter((t) => !t.archived && t.mode !== "team");
-  if (live.some((t) => t.status === "running" || t.status === "queued")) return null;
+  if (live.some((t) => queueStatus(t) === "running" || queueStatus(t) === "queued")) return null;
 
   for (const t of live) {
-    const s = t.status as TaskStatus;
+    const s = queueStatus(t) as TaskStatus;
     if (s === "done" || s === "canceled" || s === "failed") continue;
     if (s === "awaiting_review") return null; // 审查门:链停等用户
     // 提问暂停(question 非空)≠ 检查点暂停:它在等 answer_question 带答复唤醒,

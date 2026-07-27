@@ -55,6 +55,13 @@ const COMPLETION_PROTOCOL = (taskId: string) =>
 const COMPLETION_REMINDER = (taskId: string) =>
   `\n\n(harness 完成协议:taskId=${taskId}。若本回合结束时任务目标已达成,先调用 complete_task 确认再结束,否则按未完成记 failed;到等待检查点则用 pause_task。)`;
 
+// 续聊(follow-up)回合的尾巴:任务早就到终态了,这一轮是「完成之后的对话」,
+// 不该拿严格完成协议吓唬 agent(不确认就 failed)—— 这一轮不确认,任务状态原样
+// 不动。只有它真把任务推进到新的完成时才需要确认。
+const FOLLOW_UP_LABEL: Record<string, string> = { done: "已完成", failed: "失败", canceled: "已取消" };
+const FOLLOW_UP_REMINDER = (taskId: string, from: string) =>
+  `\n\n(harness:这是任务在「${FOLLOW_UP_LABEL[from] ?? from}」之后的续聊,taskId=${taskId}。任务状态不会因为本回合而改变,本回合不需要 complete_task;只有当你在这一轮把任务推进到了新的完成状态时,才调用 complete_task(taskId="${taskId}")确认。)`;
+
 // Why a task is being (re)started — only used to label the resume; all reasons
 // behave the same (resume if there's a resumable session, else fresh). Note: a
 // scheduled cron fire is NOT here — it always starts a fresh run via runTask
@@ -66,7 +73,8 @@ async function setStatus(taskId: string, status: Parameters<typeof setTaskStatus
   await setTaskStatus(taskId, status);
 }
 
-// 任务跑完一回合时的状态落位：手停 → canceled；分组暂停停 → paused（恢复分组时
+// 任务跑完一回合时的状态落位：续聊回合(followUpFrom 非空) → 除非确认完成,否则
+// 回到续聊前的终态；手停 → canceled；分组暂停停 → paused（恢复分组时
 // 队列 head 还是它，从原 CLI 会话续跑，而不是被当 canceled 跳过去启动下一个）；
 // agent 在本回合内调过 ask_question（留下 question） → paused 且队列挂起等答复；
 // 调过 pause_task（写下 resumePrompt） → paused，等依赖满足或用户手动 resume；
@@ -88,8 +96,16 @@ async function settleTaskStatus(
   exitStatus: number,
   stopped: StopSettle | null,
 ): Promise<{ status: "canceled" | "paused" | "done" | "failed"; note?: string }> {
-  const confirmed = takeConfirmed(taskId); // 无条件消费,别让标记漏到下一回合
+  const memConfirmed = takeConfirmed(taskId); // 无条件消费,别让标记漏到下一回合
   const t = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
+  // 完成确认有两条道:同进程的内存标记,和落库的时间戳(complete_confirmed_at)。
+  // 任一命中即算确认 —— 确认与结算未必在同一个进程里(历史事故:僵尸实例在跑这
+  // 个回合,agent 的 complete_task 走 HTTP 打到了监听进程,内存标记落在别人家,
+  // 结算这边什么都没看见,于是 agent 明明确认了却记 failed)。DB 那份无条件清掉。
+  const confirmed = memConfirmed || !!t?.completeConfirmedAt;
+  if (t?.completeConfirmedAt) {
+    await db.update(tasks).set({ completeConfirmedAt: null, updatedAt: now() }).where(eq(tasks.id, taskId));
+  }
   // 工人结算 → 按需唤醒团队指挥者(§Team)。只有提问、失败、以及 reportBack 的
   // done 会投递;普通 done 静默(UI 自己会更新,不花一轮模型调用)。非团队任务
   // (parentId 空)里 notifyTeamLead 直接返回。
@@ -99,6 +115,36 @@ async function settleTaskStatus(
       console.error(`[harness] notifyTeamLead(${taskId}) failed:`, err),
     );
   };
+  // 续聊(follow-up)回合:任务早就是终态,这一轮是终态之后的对话,不是任务的执行。
+  // 规则一句话:**续聊只能把任务变成 done(本回合亲口确认),不会让它变差** ——
+  // 其余情况(没确认、异常退出、手停、组暂停)一律回到续聊前的那个终态。理由:
+  // 用户给一个已完成的任务发条消息(「再发布一下」),不该因为 agent 这一轮没调
+  // complete_task 就把 done 打成 failed;手停一轮闲聊也不该把它抹成 canceled。
+  if (t?.followUpFrom) {
+    const back = t.followUpFrom as "done" | "failed" | "canceled";
+    await db.update(tasks).set({ followUpFrom: null, updatedAt: now() }).where(eq(tasks.id, taskId));
+    if (confirmed) {
+      await setStatus(taskId, "done");
+      notify("done");
+      return { status: "done" };
+    }
+    await setStatus(taskId, back);
+    const label = FOLLOW_UP_LABEL[back] ?? back;
+    if (t.question) {
+      // 提问照常通知/展示(问题卡片不看状态),但不把终态改成 paused —— 那会让它
+      // 重新占住队列位置。答复走 /answer,又是一个续聊回合。
+      notify("question", t.question);
+      return { status: back, note: `续聊回合以提问结束,等待答复:「${t.question}」(任务状态仍为「${label}」)` };
+    }
+    if (stopped) {
+      const why = stopped === "paused" ? "分组被暂停" : "被手动停止";
+      return { status: back, note: `续聊回合${why},任务状态保持「${label}」不变。` };
+    }
+    if (exitStatus !== 0) {
+      return { status: back, note: `续聊回合异常结束(退出码 ${exitStatus}),任务状态保持「${label}」不变。` };
+    }
+    return { status: back };
+  }
   if (stopped === "canceled") {
     await setStatus(taskId, "canceled");
     return { status: "canceled" };
@@ -146,24 +192,34 @@ async function settleTaskStatus(
 // status was interrupted (e.g. the server restarted mid-run). Mark those failed
 // so they're recoverable via retry/reply instead of being stuck forever.
 // awaiting_review is left alone — its gate can still be resolved after a restart.
-// 例外:团队任务(mode:"team")没有「失败」这回事 —— 指挥台进程随 server 一起
+// 例外一:团队任务(mode:"team")没有「失败」这回事 —— 指挥台进程随 server 一起
 // 死了,但 CLI 会话还在,下次有人说话就 --resume 接回。落 idle(待命)。
+// 例外二:被打断的是续聊回合(followUpFrom 非空)→ 回到续聊前的终态,别把一个
+// 早就完成的任务记成 failed。
+// **逐个走 setTaskStatus 单点**(而不是一条 UPDATE 批量改):它维护
+// startedAt/endedAt、广播 task.status,并且触发队列推进 —— 否则重启把队列 head
+// 打成 failed 之后没有任何人去推,整条串行队列就一直停在那等(实测:重启后
+// 后面的任务再也不会自动开始,得手点一次「运行分组」)。
 export async function reconcileInterrupted(): Promise<void> {
   const orphaned = await db.select().from(tasks).where(inArray(tasks.status, ["running", "queued"]));
   if (!orphaned.length) return;
   const teamIds = orphaned.filter((t) => t.mode === "team").map((t) => t.id);
-  const failedIds = orphaned.filter((t) => t.mode !== "team").map((t) => t.id);
-  if (failedIds.length) {
-    await db
-      .update(tasks)
-      .set({ status: "failed", updatedAt: now(), endedAt: now() })
-      .where(inArray(tasks.id, failedIds));
+  const others = orphaned.filter((t) => t.mode !== "team");
+  for (const t of others) {
+    const back = (t.followUpFrom as "done" | "failed" | "canceled" | null) ?? "failed";
+    if (t.followUpFrom || t.completeConfirmedAt) {
+      await db
+        .update(tasks)
+        .set({ followUpFrom: null, completeConfirmedAt: null, updatedAt: now() })
+        .where(eq(tasks.id, t.id));
+    }
+    await setTaskStatus(t.id, back);
   }
-  if (teamIds.length) {
-    await db.update(tasks).set({ status: "idle", updatedAt: now() }).where(inArray(tasks.id, teamIds));
-  }
+  for (const teamId of teamIds) await setTaskStatus(teamId, "idle");
+  const followUps = others.filter((t) => t.followUpFrom).length;
   console.log(
-    `[harness] reconciled ${failedIds.length} interrupted task(s) → failed` +
+    `[harness] reconciled ${others.length - followUps} interrupted task(s) → failed` +
+      (followUps ? `, ${followUps} follow-up turn(s) → 原终态` : "") +
       (teamIds.length ? `, ${teamIds.length} team task(s) → idle` : ""),
   );
 }
@@ -186,6 +242,11 @@ export async function runTask(taskId: string): Promise<void> {
     const project = (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0);
     if (!project) throw new Error("project not found");
 
+    // 新回合起点:清掉上一轮可能残留的完成确认/续聊标记(fresh run 从来不是续聊)。
+    await db
+      .update(tasks)
+      .set({ followUpFrom: null, completeConfirmedAt: null, updatedAt: now() })
+      .where(eq(tasks.id, taskId));
     await setStatus(taskId, "running");
 
     // Per-task worktree opt-in (§4): when the user ticked "worktree" in the new-
@@ -392,10 +453,28 @@ export async function continueTask(
       all[0]?.cwd || all[0]?.worktreePath ||
       (project ? ensureWorkdir(project.repoPath, taskId) : ".");
 
+    // 续聊(follow-up):任务已经到终态了,用户又发来一条消息 —— 这一轮是「任务
+    // 之后的对话」,不是任务的执行。把续聊前的终态记下来:队列一律按它看待这个
+    // 成员(既不算「有人在跑」冻住整条线,也不会被当成可启动项拉起来),结算时
+    // 再回到它(见 settleTaskStatus 的续聊分支)。
+    // 只认真人消息:后端发起的续跑(retry / 手点运行 / 队列推进 / 上游唤醒)带
+    // opts.system,那是真的在执行这个任务,照旧占住队列位置。
+    const followUpFrom =
+      !opts.system && ["done", "failed", "canceled"].includes(task.status) ? task.status : null;
+    // 新回合起点:顺手清掉上一轮残留的完成确认(确认只在本回合内有效)。
+    await db
+      .update(tasks)
+      .set({ followUpFrom, completeConfirmedAt: null, updatedAt: now() })
+      .where(eq(tasks.id, taskId));
+
     await setStatus(taskId, "running");
 
     const invited = !prev; // first time this agent is pulled into the task
-    const prompt = (invited ? COLLAB_INVITE : "") + userText + attachmentsPrompt(opts.attachments) + COMPLETION_REMINDER(taskId);
+    const prompt =
+      (invited ? COLLAB_INVITE : "") +
+      userText +
+      attachmentsPrompt(opts.attachments) +
+      (followUpFrom ? FOLLOW_UP_REMINDER(taskId, followUpFrom) : COMPLETION_REMINDER(taskId));
     const turnStart = now();
     const sessId = resuming ? prev!.id : id();
     const runDir = join(RUNS_DIR, taskId);
