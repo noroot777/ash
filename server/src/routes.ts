@@ -27,7 +27,7 @@ import { canSingleRun, canArchive, isUserSettableStatus, AGENT_TYPES, maxBytesFo
 import { db } from "./db/index.js";
 import { projects, groups, tasks, sessions, schedules, scheduledMessages, agents, issues, issueComments, llmProviders, queueItems } from "./db/schema.js";
 import { bus } from "./bus.js";
-import { id, now, attachmentsPrompt, runsTiming } from "./util.js";
+import { id, now, attachmentsPrompt } from "./util.js";
 import { resumeOrRunTask, continueTask, runTask } from "./orchestrator.js";
 import { parseIssue, classifyMention, buildDiscussPrompt, runAgentOnce, DISCUSS_TIMEOUT_MS } from "./agentOnce.js";
 import { listModels } from "./llm.js";
@@ -45,6 +45,7 @@ import { projectHealthLight, projectHealthFull, tidyRepoPath, repoKey, listBranc
 import { resumeCommandFor } from "./executors/spawn.js";
 import { resolveExecutorFor } from "./executors/index.js";
 import { forceKillCuaService, lastCuaResidualStatus, refreshCuaResidualStatus } from "./cua.js";
+import { createTasks, enrichTasks, publishTaskUpdated } from "./task-store.js";
 import type { GateAction, AgentType, BatchCreateTasksBody, BatchTaskInput, ScheduledMessage, ScheduledMessageStatus } from "@harness/shared";
 
 export const api = new Hono();
@@ -243,117 +244,14 @@ api.delete("/agents/:id", async (c) => {
   return c.json({ deleted: true });
 });
 
-// ── row -> domain mappers (parse json columns) ─────────────────────────────
-type AgentLabelRow = { id: string; name: string; type: string; isDefault: boolean };
-
 const agentTypeForExecutor = async (executorId?: string | null): Promise<AgentType | null> => {
   if (!executorId) return null;
   const row = (await db.select({ type: agents.type }).from(agents).where(eq(agents.id, executorId))).at(0);
   return row ? (row.type as AgentType) : null;
 };
 
-const executorLabelFor = (
-  profiles: AgentLabelRow[],
-  executorId?: string | null,
-  type?: AgentType | null,
-): string | null => {
-  const selected = executorId ? profiles.find((a) => a.id === executorId) : null;
-  if (selected) return selected.name;
-  const fallbackType = type ?? "claude";
-  const sameType = profiles.filter((a) => a.type === fallbackType);
-  return (sameType.find((a) => a.isDefault) ?? sameType[0])?.name ?? null;
-};
-
-const enrichTeamExecutorLabels = (
-  team: Task["team"],
-  profiles: AgentLabelRow[],
-): Task["team"] => {
-  if (!team) return undefined;
-  return {
-    ...team,
-    leadExecutorLabel: executorLabelFor(profiles, team.leadExecutorId, team.lead),
-    workerExecutorLabel: executorLabelFor(profiles, team.workerExecutorId, team.worker),
-  };
-};
-
-const toTask = (r: typeof tasks.$inferSelect, profiles: AgentLabelRow[] = []): Task => ({
-  id: r.id,
-  projectId: r.projectId,
-  groupId: r.groupId,
-  parentId: r.parentId,
-  title: r.title,
-  body: r.body,
-  mode: r.mode as Task["mode"],
-  status: r.status as TaskStatus,
-  priority: r.priority as Task["priority"],
-  labels: JSON.parse(r.labels),
-  dependsOn: JSON.parse(r.dependsOn),
-  resumeDependsOn: JSON.parse(r.resumeDependsOn),
-  agentType: (r.agentType as Task["agentType"]) ?? undefined,
-  executorId: r.executorId ?? null,
-  executorLabel: executorLabelFor(profiles, r.executorId, (r.agentType as AgentType) ?? null),
-  autoTitle: r.autoTitle,
-  debate: r.debate ? JSON.parse(r.debate) : undefined,
-  team: r.team ? enrichTeamExecutorLabels(JSON.parse(r.team), profiles) : undefined,
-  reportBack: r.reportBack,
-  scheduleId: r.scheduleId,
-  createdAt: r.createdAt,
-  updatedAt: r.updatedAt,
-  startedAt: r.startedAt,
-  endedAt: r.endedAt,
-  archived: r.archived,
-  archivedAt: r.archivedAt,
-  useWorktree: r.useWorktree,
-  worktreeBase: r.worktreeBase,
-  issueId: r.issueId ?? null,
-  resumePrompt: r.resumePrompt ?? null,
-  question: r.question ?? null,
-  questionOptions: r.questionOptions ? (JSON.parse(r.questionOptions) as string[]) : null,
-  questionItems: r.questionItems ? (JSON.parse(r.questionItems) as QuestionItem[]) : null,
-});
-
 const taskBody = (body: string | undefined, taskId: string): string =>
   (body ?? "").replaceAll("{{TASK_ID}}", taskId);
-
-// Attach execution-time fields (activeMs/liveSince) to task rows. The session
-// lookup is batched (one query for the whole list) so listing tasks stays O(1)
-// queries; see util.runsTiming for the accounting.
-async function enrichTiming(rows: (typeof tasks.$inferSelect)[]): Promise<Task[]> {
-  if (rows.length === 0) return [];
-  const profiles = await db
-    .select({ id: agents.id, name: agents.name, type: agents.type, isDefault: agents.isDefault })
-    .from(agents);
-  const runs = await db
-    .select({
-      taskId: sessions.taskId,
-      activeMs: sessions.activeMs,
-      turnStartedAt: sessions.turnStartedAt,
-      endedAt: sessions.endedAt,
-    })
-    .from(sessions)
-    .where(inArray(sessions.taskId, rows.map((r) => r.id)));
-  const byTask = new Map<string, typeof runs>();
-  for (const s of runs) {
-    const arr = byTask.get(s.taskId) ?? [];
-    arr.push(s);
-    byTask.set(s.taskId, arr);
-  }
-  // 顺手把 queue 归属(queueId / queuePosition)也批查出来,前端 UI 要用
-  const qItems = await db
-    .select()
-    .from(queueItems)
-    .where(inArray(queueItems.taskId, rows.map((r) => r.id)));
-  const qByTask = new Map(qItems.map((q) => [q.taskId, q] as const));
-  return rows.map((r) => {
-    const q = qByTask.get(r.id);
-    return {
-      ...toTask(r, profiles),
-      ...runsTiming(byTask.get(r.id) ?? []),
-      queueId: q?.queueId ?? null,
-      queuePosition: q?.position ?? null,
-    };
-  });
-}
 
 const toSession = (r: typeof sessions.$inferSelect): Session => ({
   ...r,
@@ -589,14 +487,14 @@ api.post("/groups/resolve", async (c) => {
 // ── tasks ───────────────────────────────────────────────────────────────
 api.get("/tasks", async (c) => {
   const rows = await db.select().from(tasks);
-  return c.json(await enrichTiming(rows));
+  return c.json(await enrichTasks(rows));
 });
 
 api.get("/tasks/:id", async (c) => {
   const rows = await db.select().from(tasks).where(eq(tasks.id, c.req.param("id")));
   const r = rows.at(0);
   if (!r) return c.json({ error: "not found" }, 404);
-  return c.json((await enrichTiming([r]))[0]);
+  return c.json((await enrichTasks([r]))[0]);
 });
 
 api.post("/tasks", async (c) => {
@@ -657,9 +555,9 @@ api.post("/tasks", async (c) => {
     useWorktree: b.useWorktree ?? false,
     worktreeBase: b.worktreeBase ?? null,
   };
-  await db.insert(tasks).values(row);
   // 可选:追加到现有 queue 的尾部。要求:queue 已存在,且新 task 跟
   // queue 已有任务的 groupId 一致(违反就 400,不静默)。
+  let appendPosition: number | null = null;
   if (b.appendToQueue) {
     const existing = await db
       .select()
@@ -680,16 +578,23 @@ api.post("/tasks", async (c) => {
         400,
       );
     }
-    await db.insert(queueItems).values({
-      taskId,
-      queueId: b.appendToQueue,
-      position: existing.length,
-      createdAt: ts,
-    });
+    appendPosition = existing.length;
+  }
+  const [created] = await createTasks([row], b.appendToQueue && appendPosition !== null
+    ? async () => {
+        await db.insert(queueItems).values({
+          taskId,
+          queueId: b.appendToQueue!,
+          position: appendPosition!,
+          createdAt: ts,
+        });
+      }
+    : undefined);
+  if (b.appendToQueue) {
     // 追加到队尾后立刻推进:若前序全 done,新 task 应立刻起跑
     void advanceQueue(b.appendToQueue);
   }
-  return c.json((await enrichTiming([row as typeof tasks.$inferSelect]))[0], 201);
+  return c.json(created!, 201);
 });
 
 // Partial update: title/body/status/priority/labels/groupId/agentType/executorId/mode/debate.
@@ -753,8 +658,8 @@ api.patch("/tasks/:id", async (c) => {
   if (b.status !== undefined) {
     await setTaskStatus(tid, b.status);
   }
-  const updated = (await db.select().from(tasks).where(eq(tasks.id, tid))).at(0)!;
-  return c.json((await enrichTiming([updated]))[0]);
+  const updated = await publishTaskUpdated(tid);
+  return c.json(updated!);
 });
 
 api.delete("/tasks/:id", async (c) => {
@@ -922,25 +827,20 @@ api.post("/groups/:groupId/tasks/batch", async (c) => {
     };
   });
 
-  await db.insert(tasks).values(rows);
-
   // chain:true → 创建一个 queue,把这批 task 按数组顺序加入(serial group 才走到这里)
-  if (b.chain && specs.length > 1) {
-    const queueId = id();
-    const qts = now();
-    await db.insert(queueItems).values(
-      ids.map((tid, i) => ({
-        taskId: tid,
-        queueId,
-        position: i,
-        createdAt: qts,
-      })),
-    );
-  }
+  const queueId = b.chain && specs.length > 1 ? id() : null;
+  const created = await createTasks(rows, queueId
+    ? async () => {
+        const qts = now();
+        await db.insert(queueItems).values(
+          ids.map((tid, i) => ({ taskId: tid, queueId, position: i, createdAt: qts })),
+        );
+      }
+    : undefined);
 
   if (b.run) void runGroup(groupId);
   return c.json(
-    { groupId, run: !!b.run, tasks: await enrichTiming(rows as (typeof tasks.$inferSelect)[]) },
+    { groupId, run: !!b.run, tasks: created },
     201,
   );
 });
@@ -1247,7 +1147,7 @@ api.post("/tasks/:id/dispatch", async (c) => {
   try {
     const r = await dispatchWorkers(leadTaskId, specs, { mode: b.mode, run: b.run, batchName: b.batchName });
     return c.json(
-      { groupId: r.groupId, mode: r.mode, run: b.run !== false, tasks: await enrichTiming(r.tasks) },
+      { groupId: r.groupId, mode: r.mode, run: b.run !== false, tasks: r.tasks },
       201,
     );
   } catch (err) {
@@ -1406,7 +1306,7 @@ api.post("/tasks/:id/requeue", async (c) => {
   void advanceQueue(queueId);
 
   const updated = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0)!;
-  const task = (await enrichTiming([updated]))[0];
+  const task = (await enrichTasks([updated]))[0];
   return c.json({ task, movedToEnd, position: task.queuePosition, queueSize: ordered.length });
 });
 
@@ -1419,7 +1319,7 @@ api.post("/tasks/:id/requeue", async (c) => {
 api.post("/tasks/:id/archive", async (c) => {
   const r = (await db.select().from(tasks).where(eq(tasks.id, c.req.param("id")))).at(0);
   if (!r) return c.json({ error: "not found" }, 404);
-  if (r.archived) return c.json((await enrichTiming([r]))[0]); // idempotent
+  if (r.archived) return c.json((await enrichTasks([r]))[0]); // idempotent
   if (!canArchive(r.status as TaskStatus)) {
     return c.json({ error: "只有已完成/失败/已取消的任务可以归档", status: r.status }, 409);
   }
@@ -1435,20 +1335,20 @@ api.post("/tasks/:id/archive", async (c) => {
     }
   }
   await db.update(tasks).set({ archived: true, archivedAt: ts, updatedAt: ts }).where(eq(tasks.id, r.id));
-  return c.json((await enrichTiming([(await db.select().from(tasks).where(eq(tasks.id, r.id))).at(0)!]))[0]);
+  return c.json((await enrichTasks([(await db.select().from(tasks).where(eq(tasks.id, r.id))).at(0)!]))[0]);
 });
 
 api.post("/tasks/:id/unarchive", async (c) => {
   const r = (await db.select().from(tasks).where(eq(tasks.id, c.req.param("id")))).at(0);
   if (!r) return c.json({ error: "not found" }, 404);
-  if (!r.archived) return c.json((await enrichTiming([r]))[0]); // idempotent
+  if (!r.archived) return c.json((await enrichTasks([r]))[0]); // idempotent
   const ts = now();
   await db.update(tasks).set({ archived: false, archivedAt: null, updatedAt: ts }).where(eq(tasks.id, r.id));
   // 对称:团队回来了,它的执行者也一起回来(归档时是整支队伍一起走的)
   if (r.mode === "team") {
     await db.update(tasks).set({ archived: false, archivedAt: null, updatedAt: ts }).where(eq(tasks.parentId, r.id));
   }
-  return c.json((await enrichTiming([(await db.select().from(tasks).where(eq(tasks.id, r.id))).at(0)!]))[0]);
+  return c.json((await enrichTasks([(await db.select().from(tasks).where(eq(tasks.id, r.id))).at(0)!]))[0]);
 });
 
 // ── HITL gate decision (§7) — 放行 / 打回 / 注入意见 / 提问 ───────────────────
@@ -1789,10 +1689,10 @@ api.post("/issues/:id/comments", async (c) => {
         worktreeBase: null as string | null,
         issueId: iid,
       };
-      await db.insert(tasks).values(trow);
+      const [created] = await createTasks([trow]);
       await db.update(issues).set({ status: "in_progress", updatedAt: ts }).where(eq(issues.id, iid));
       void resumeOrRunTask(tid, { reason: "run" });
-      task = (await enrichTiming([trow as typeof tasks.$inferSelect]))[0];
+      task = created!;
     }
   }
   return c.json({ comment: toComment(crow as typeof issueComments.$inferSelect), task, agentComment }, 201);
@@ -1825,7 +1725,7 @@ api.delete("/issues/:id/comments/:cid", async (c) => {
 // Tasks derived from an issue (the 派生执行 list / backlink target).
 api.get("/issues/:id/tasks", async (c) => {
   const rows = await db.select().from(tasks).where(eq(tasks.issueId, c.req.param("id")));
-  return c.json(await enrichTiming(rows));
+  return c.json(await enrichTasks(rows));
 });
 
 // Commits a derived task produced on its isolated worktree branch — the concrete

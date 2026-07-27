@@ -8,13 +8,14 @@
 // 一个团队任务可以有多个内部组(先派一批串行、再派一批并行),所以每次 dispatch
 // 都新建一个组,不复用。
 import { eq } from "drizzle-orm";
-import type { AgentType, TeamConfig } from "@harness/shared";
+import type { AgentType, Task, TeamConfig } from "@harness/shared";
 import { TEAM_DEFAULTS } from "@harness/shared";
 import { db } from "../db/index.js";
 import { tasks, groups, queueItems, agents } from "../db/schema.js";
 import { id, now } from "../util.js";
 import { runGroup } from "../scheduler.js";
 import { TEAM_WORKER_PREAMBLE } from "./prompts.js";
+import { createTasks } from "../task-store.js";
 
 export interface DispatchSpec {
   body: string;
@@ -28,7 +29,7 @@ export interface DispatchSpec {
 export interface DispatchResult {
   groupId: string;
   mode: "serial" | "parallel";
-  tasks: (typeof tasks.$inferSelect)[];
+  tasks: Task[];
 }
 
 export async function dispatchWorkers(
@@ -113,18 +114,18 @@ export async function dispatchWorkers(
       worktreeBase: null as string | null,
     };
   });
-  await db.insert(tasks).values(rows);
-
   // serial 批次串成 A→B→C:头一个 done 后 advanceQueueFromTask 自动起下一个。
-  if (mode === "serial" && rows.length > 1) {
-    const queueId = id(); // 一批一个 queue(整批共用同一个 id,顺序就是数组顺序)
-    await db.insert(queueItems).values(
-      rows.map((r, i) => ({ taskId: r.id, queueId, position: i, createdAt: ts })),
-    );
-  }
+  const queueId = mode === "serial" && rows.length > 1 ? id() : null;
+  const created = await createTasks(rows, queueId
+    ? async () => {
+        await db.insert(queueItems).values(
+          rows.map((r, i) => ({ taskId: r.id, queueId, position: i, createdAt: ts })),
+        );
+      }
+    : undefined);
 
   if (opts.run !== false) void runGroup(groupId);
-  return { groupId, mode, tasks: rows as unknown as (typeof tasks.$inferSelect)[] };
+  return { groupId, mode, tasks: created };
 }
 
 // 执行者的前言:只在 fresh run 时拼到 body 前面(不写进 tasks.body —— body 是调度者

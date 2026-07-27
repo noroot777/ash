@@ -21,12 +21,25 @@ import { TasksWorkspace, type TaskView } from "./TasksWorkspace";
 import { IssuesWorkspace } from "./IssuesWorkspace";
 import { ProjectRail } from "./ProjectRail";
 
+function upsertTask(tasks: Task[], task: Task): Task[] {
+  return tasks.some((t) => t.id === task.id)
+    ? tasks.map((t) => (t.id === task.id ? task : t))
+    : [task, ...tasks];
+}
+
+function upsertProjectTask(tasks: Task[], task: Task, projectId: string | null): Task[] {
+  if (task.projectId !== projectId) return tasks.filter((t) => t.id !== task.id);
+  return upsertTask(tasks, task);
+}
+
 export function App() {
   // Deep-link state via the URL (?project=…&task=…): a refresh stays on the same
   // project/task, and the link is shareable. Seeded here, kept in sync below.
   const urlParams = new URLSearchParams(window.location.search);
   const [projects, setProjects] = useState<ProjectView[]>([]);
   const [projectId, setProjectId] = useState<string | null>(urlParams.get("project"));
+  const projectIdRef = useRef<string | null>(projectId);
+  projectIdRef.current = projectId;
   const [groups, setGroups] = useState<Group[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
   // Mirror tasks for cross-effect reads (delete handler captures projectId before
@@ -82,7 +95,10 @@ export function App() {
 
   const connected = useServerEvents(
     useCallback((ev) => {
-      if (ev.type === "task.status") {
+      if (ev.type === "task.created" || ev.type === "task.updated") {
+        setTasks((ts) => upsertProjectTask(ts, ev.task, projectIdRef.current));
+        setTaskBump((n) => n + 1);
+      } else if (ev.type === "task.status") {
         setTasks((ts) =>
           ts.map((t) =>
             t.id === ev.taskId
@@ -341,7 +357,8 @@ export function App() {
   }, []);
 
   const onTaskCreated = useCallback((t: Task, doRun = false) => {
-    setTasks((ts) => [t, ...ts]);
+    // POST 的响应和 task.created SSE 可能任意一个先到；统一 upsert 避免重复行。
+    setTasks((ts) => upsertTask(ts, t));
     setSelected(t.id);
     if (doRun) {
       setDebates((m) => ({ ...m, [t.id]: emptyDebate() }));
