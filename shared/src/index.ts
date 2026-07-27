@@ -385,6 +385,8 @@ export interface DebateConfig {
   style: DebateStyle;
   debaterA: AgentType;
   debaterB: AgentType;
+  debaterAExecutorId?: string | null;
+  debaterBExecutorId?: string | null;
   maxRounds: number | null; // null = unlimited
   gateG1: HitlGate; // consensus gate
 }
@@ -394,6 +396,8 @@ export const DEBATE_DEFAULTS: DebateConfig = {
   style: "debate",
   debaterA: "claude",
   debaterB: "codex",
+  debaterAExecutorId: null,
+  debaterBExecutorId: null,
   maxRounds: null,
   gateG1: "on",
 };
@@ -415,6 +419,8 @@ export function normalizeDebateConfig(value: unknown): DebateConfig {
     style: "debate",
     debaterA: agent(raw.debaterA, DEBATE_DEFAULTS.debaterA),
     debaterB: agent(raw.debaterB, DEBATE_DEFAULTS.debaterB),
+    debaterAExecutorId: typeof raw.debaterAExecutorId === "string" ? raw.debaterAExecutorId : null,
+    debaterBExecutorId: typeof raw.debaterBExecutorId === "string" ? raw.debaterBExecutorId : null,
     maxRounds,
     gateG1: raw.gateG1 === "off" ? "off" : "on",
   };

@@ -14,8 +14,12 @@ export function loadDefaults(): DebateConfig {
 }
 
 export function saveDefault<K extends keyof DebateConfig>(key: K, value: DebateConfig[K]) {
+  saveDefaults({ [key]: value } as Partial<DebateConfig>);
+}
+
+export function saveDefaults(patch: Partial<DebateConfig>) {
   const cur = loadDefaults();
-  const next = { ...cur, [key]: value };
+  const next = { ...cur, ...patch };
   // never persist the topic as a default
   delete (next as Partial<DebateConfig>).topic;
   localStorage.setItem(KEY, JSON.stringify(normalizeDebateConfig(next)));

@@ -101,6 +101,8 @@ export function ExecutorPicker({
   includeTypeDefaults = true,
   includeManage = false,
   onOpenAgents,
+  onSetDefault,
+  defaultSelection,
   menuWidth = 300,
   triggerClassName,
 }: {
@@ -114,6 +116,8 @@ export function ExecutorPicker({
   includeTypeDefaults?: boolean;
   includeManage?: boolean;
   onOpenAgents?: () => void;
+  onSetDefault?: (sel: ExecutorSelection) => void;
+  defaultSelection?: ExecutorSelection;
   menuWidth?: number;
   triggerClassName?: string;
 }) {
@@ -137,6 +141,11 @@ export function ExecutorPicker({
       }}
       options={options}
       menuWidth={menuWidth}
+      onSetDefault={onSetDefault ? (v) => {
+        const next = parseExecutorValue(v, profiles, selection);
+        if (next) onSetDefault(next);
+      } : undefined}
+      defaultValue={defaultSelection ? executorValue(defaultSelection) : undefined}
       triggerClassName={
         triggerClassName ??
         "inline-flex items-center gap-1.5 rounded-full border border-line bg-panel px-2.5 py-1 text-[12px] text-ink transition-colors hover:bg-raised focus:border-accent focus:outline-none"

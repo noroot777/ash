@@ -1,14 +1,13 @@
 import { useState } from "react";
-import type { Task, AgentType, DebateConfig, ProjectView } from "@harness/shared";
+import type { Task, DebateConfig, ProjectView } from "@harness/shared";
+import { AGENT_TYPES } from "@harness/shared";
 import { Robot, ArrowsClockwise, ShieldCheck, Scales } from "@phosphor-icons/react";
 import { api } from "./api";
-import { loadDefaults, saveDefault } from "./debateDefaults";
+import { loadDefaults, saveDefault, saveDefaults } from "./debateDefaults";
+import { ExecutorPicker, type ExecutorSelection, useExecutorProfiles } from "./ExecutorPicker";
 import { Modal } from "./Modal";
 import { Pill } from "./Menu";
 import { RunLocation } from "./ui";
-
-const AGENTS: AgentType[] = ["claude", "codex", "antigravity"];
-const agentOpts = AGENTS.map((a) => ({ value: a, label: a }));
 
 // /pair is a two-AI debate that produces a conclusion without modifying code.
 export function DebateModal({
@@ -24,6 +23,7 @@ export function DebateModal({
   const [cfg, setCfg] = useState<DebateConfig>(() => ({ ...loadDefaults(), topic: "", style: "debate" }));
   const [defaults, setDefaults] = useState(loadDefaults);
   const [busy, setBusy] = useState(false);
+  const { profiles, providers } = useExecutorProfiles();
   const set = <K extends keyof DebateConfig>(k: K, v: DebateConfig[K]) => setCfg((c) => ({ ...c, [k]: v }));
   const who = (s: "A" | "B") => `辩手${s}`;
 
@@ -36,6 +36,26 @@ export function DebateModal({
   const defStr = (k: keyof DebateConfig) => {
     const v = defaults[k];
     return k === "maxRounds" ? (v === null ? "" : String(v)) : String(v ?? "");
+  };
+  const setDebater = (speaker: "A" | "B", selection: ExecutorSelection) => {
+    setCfg((current) => speaker === "A"
+      ? { ...current, debaterA: selection.agentType, debaterAExecutorId: selection.executorId }
+      : { ...current, debaterB: selection.agentType, debaterBExecutorId: selection.executorId });
+  };
+  const pinDebaterDefault = (speaker: "A" | "B", selection: ExecutorSelection) => {
+    const patch = speaker === "A"
+      ? { debaterA: selection.agentType, debaterAExecutorId: selection.executorId }
+      : { debaterB: selection.agentType, debaterBExecutorId: selection.executorId };
+    saveDefaults(patch);
+    setDefaults((current) => ({ ...current, ...patch }));
+  };
+  const selectionFor = (speaker: "A" | "B", source: DebateConfig): ExecutorSelection => speaker === "A"
+    ? { agentType: source.debaterA, executorId: source.debaterAExecutorId ?? null }
+    : { agentType: source.debaterB, executorId: source.debaterBExecutorId ?? null };
+  const debaterLabel = (speaker: "A" | "B") => {
+    const selection = selectionFor(speaker, cfg);
+    const profile = selection.executorId ? profiles.find((item) => item.id === selection.executorId) : null;
+    return `${who(speaker)} ${profile?.name ?? `默认 ${selection.agentType}`}`;
   };
 
   const launch = async () => {
@@ -97,8 +117,32 @@ export function DebateModal({
           <RunLocation project={project} />
         </div>
         <div className="flex flex-wrap items-center gap-1.5">
-          <Pill icon={<Robot size={14} />} label={`${who("A")} ${cfg.debaterA}`} value={cfg.debaterA} onChange={(v) => set("debaterA", v as AgentType)} options={agentOpts} defaultValue={defStr("debaterA")} onSetDefault={(v) => pinDefault("debaterA", v)} />
-          <Pill icon={<Robot size={14} />} label={`${who("B")} ${cfg.debaterB}`} value={cfg.debaterB} onChange={(v) => set("debaterB", v as AgentType)} options={agentOpts} defaultValue={defStr("debaterB")} onSetDefault={(v) => pinDefault("debaterB", v)} />
+          <ExecutorPicker
+            icon={<Robot size={14} />}
+            selection={selectionFor("A", cfg)}
+            onSelect={(selection) => setDebater("A", selection)}
+            profiles={profiles}
+            providers={providers}
+            types={[...AGENT_TYPES]}
+            includeTypeDefaults
+            label={debaterLabel("A")}
+            onSetDefault={(selection) => pinDebaterDefault("A", selection)}
+            defaultSelection={selectionFor("A", defaults)}
+            menuWidth={320}
+          />
+          <ExecutorPicker
+            icon={<Robot size={14} />}
+            selection={selectionFor("B", cfg)}
+            onSelect={(selection) => setDebater("B", selection)}
+            profiles={profiles}
+            providers={providers}
+            types={[...AGENT_TYPES]}
+            includeTypeDefaults
+            label={debaterLabel("B")}
+            onSetDefault={(selection) => pinDebaterDefault("B", selection)}
+            defaultSelection={selectionFor("B", defaults)}
+            menuWidth={320}
+          />
           <Pill
             icon={<ArrowsClockwise size={14} />}
             label={`轮数 ${cfg.maxRounds ?? "不设限"}`}

@@ -16,6 +16,7 @@ import { executorLabel } from "./executorLabel";
 import { toast } from "./toast";
 import { buildDebateHandoffBody, isTeamCommand, latestDebateGate } from "./debateHandoff";
 import { AttachmentDisplay, parseAttachmentText } from "./messageAttachments";
+import { useExecutorProfiles } from "./ExecutorPicker";
 
 // Animated "thinking" indicator — three dots flashing in sequence.
 function TypingDots() {
@@ -72,6 +73,7 @@ export function DebateView({
   const [history, setHistory] = useState<DebateTurn[]>([]);
   const [persistedGate, setPersistedGate] = useState<DebateGate | null>(null);
   const [teamBusy, setTeamBusy] = useState(false);
+  const { profiles } = useExecutorProfiles();
   const scrollRef = useRef<HTMLDivElement>(null);
   // Stick to the bottom only when the user is already near it. If they scrolled
   // up to read, incoming tokens must not yank them back down.
@@ -181,6 +183,11 @@ export function DebateView({
     sp === "A" ? cfg?.debaterA
       : sp === "B" ? cfg?.debaterB
         : undefined;
+  const debaterName = (speaker: "A" | "B") => {
+    const type = speaker === "A" ? cfg.debaterA : cfg.debaterB;
+    const executorId = speaker === "A" ? cfg.debaterAExecutorId : cfg.debaterBExecutorId;
+    return (executorId ? profiles.find((profile) => profile.id === executorId)?.name : null) ?? type;
+  };
 
   return (
     <main className="flex h-full min-h-0 flex-col">
@@ -234,9 +241,9 @@ export function DebateView({
         <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1.5">
           {cfg && (
             <p className="text-xs text-muted">
-              辩手A <b className="text-ink">{cfg.debaterA}</b>
+              辩手A <b className="text-ink">{debaterName("A")}</b>
               {" ↔ 辩手B "}
-              <b className="text-ink">{cfg.debaterB}</b>
+              <b className="text-ink">{debaterName("B")}</b>
               {" · 轮数 "}{cfg.maxRounds ?? "不设限"}
               {" · 收敛门 "}{cfg.gateG1 === "on" ? "开" : "关"}
             </p>

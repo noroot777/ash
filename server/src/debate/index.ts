@@ -249,8 +249,8 @@ async function loadBase(taskId: string) {
   const cfg = normalizeDebateConfig(JSON.parse(task.debate));
   const project = (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0);
   if (!project) throw new Error("project not found");
-  const exA = await resolveExecutorFor({ type: cfg.debaterA });
-  const exB = await resolveExecutorFor({ type: cfg.debaterB });
+  const exA = await resolveExecutorFor({ executorId: cfg.debaterAExecutorId, type: cfg.debaterA });
+  const exB = await resolveExecutorFor({ executorId: cfg.debaterBExecutorId, type: cfg.debaterB });
   // Discussion only reads; repo-less debates fall back to a scratch cwd (§4).
   const cwd = ensureWorkdir(project.repoPath, taskId);
   const cap = Math.min(cfg.maxRounds ?? HARD_CAP, HARD_CAP);
