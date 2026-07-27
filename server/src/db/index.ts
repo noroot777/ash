@@ -112,6 +112,7 @@ export async function ensureSchema() {
     "ALTER TABLE tasks ADD COLUMN use_worktree INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE tasks ADD COLUMN worktree_base TEXT",
     "ALTER TABLE tasks ADD COLUMN issue_id TEXT",
+    "ALTER TABLE tasks ADD COLUMN origin_task_id TEXT",
     "ALTER TABLE projects ADD COLUMN api_keys TEXT",
     "ALTER TABLE issues ADD COLUMN attachments TEXT NOT NULL DEFAULT '[]'",
     "ALTER TABLE issue_comments ADD COLUMN attachments TEXT NOT NULL DEFAULT '[]'",

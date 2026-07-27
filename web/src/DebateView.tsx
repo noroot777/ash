@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Task, Session, GateAction, AgentType, DebateSpeaker, TaskStatus } from "@harness/shared";
 import { TEAM_DEFAULTS } from "@harness/shared";
-import { CircleNotch, Stop, Robot, UsersThree, X } from "@phosphor-icons/react";
+import { Stop, Robot, X } from "@phosphor-icons/react";
 import { rebuildDebateState, type DebateState, type DebateTurn, type DebateGate } from "./debateState";
 import { ResumeButtons, ToolCall, CollapsibleText } from "./ui";
 import { Markdown } from "./Markdown";
@@ -18,6 +18,14 @@ import { buildDebateHandoffBody, isTeamCommand, latestDebateGate } from "./debat
 import { AttachmentDisplay, parseAttachmentText } from "./messageAttachments";
 import { useExecutorProfiles } from "./ExecutorPicker";
 import { ConversationScrollButtons } from "./Conversation";
+import {
+  defaultTeamConfig,
+  FinishedTeamHandoffBar,
+  LinkedTeamCard,
+  TeamHandoffButton,
+  TeamHandoffModal,
+  type TeamHandoffChoice,
+} from "./DebateTeamHandoff";
 
 // Animated "thinking" indicator — three dots flashing in sequence.
 function TypingDots() {
@@ -45,6 +53,7 @@ function StatusPill({ status }: { status: TaskStatus }) {
 
 export function DebateView({
   task,
+  allTasks,
   state,
   sessionsBump,
   onRun,
@@ -54,19 +63,22 @@ export function DebateView({
   onDelete,
   onArchive,
   onUnarchive,
+  onOpenTask,
   onTeamCreated,
 }: {
   task: Task;
+  allTasks: Task[];
   state: DebateState;
   sessionsBump: number;
   onRun: () => void;
   onStop: () => void;
   onRetry: () => void;
-  onGate: (a: GateAction) => void;
+  onGate: (a: GateAction) => void | Promise<unknown>;
   onDelete: () => void;
   onArchive: () => void;
   onUnarchive: () => void;
-  onTeamCreated: (task: Task) => void;
+  onOpenTask: (taskId: string) => void;
+  onTeamCreated: (task: Task, doRun?: boolean, select?: boolean) => void;
 }) {
   const cfg = normalizeDebateConfig(task.debate);
   const topic = parseAttachmentText(task.body || cfg?.topic || "");
@@ -74,6 +86,8 @@ export function DebateView({
   const [history, setHistory] = useState<DebateTurn[]>([]);
   const [persistedGate, setPersistedGate] = useState<DebateGate | null>(null);
   const [teamBusy, setTeamBusy] = useState(false);
+  const [teamModalOpen, setTeamModalOpen] = useState(false);
+  const [iterateBusy, setIterateBusy] = useState(false);
   const { profiles } = useExecutorProfiles();
   const scrollRef = useRef<HTMLDivElement>(null);
   // Stick to the bottom only when the user is already near it. If they scrolled
@@ -128,7 +142,14 @@ export function DebateView({
     return latestDebateGate(turns, task.status === "awaiting_review");
   }, [state.gate, persistedGate, task.status, turns]);
 
-  const handoffToTeam = async (command: string): Promise<boolean> => {
+  const linkedTeam = useMemo(
+    () => allTasks
+      .filter((item) => item.mode === "team" && item.originTaskId === task.id)
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0],
+    [allTasks, task.id],
+  );
+
+  const handoffToTeam = async (command: string, choice?: TeamHandoffChoice): Promise<boolean> => {
     if (teamBusy || !isTeamCommand(command)) return false;
     setTeamBusy(true);
     let created: Task;
@@ -142,8 +163,9 @@ export function DebateView({
         title: `落实辩论结论：${task.title}`.slice(0, 60),
         body: buildDebateHandoffBody(task, gate, turns, command, handoffSessions),
         mode: "team",
-        agentType: TEAM_DEFAULTS.lead,
-        team: { ...TEAM_DEFAULTS },
+        originTaskId: task.id,
+        agentType: choice?.lead.agentType ?? TEAM_DEFAULTS.lead,
+        team: choice ? defaultTeamConfig(choice) : { ...TEAM_DEFAULTS },
         autoTitle: false,
       });
     } catch (error) {
@@ -152,10 +174,16 @@ export function DebateView({
       return false;
     }
 
-    // Select immediately after creation. Starting is a second request; if the
-    // resident lead is unavailable the user still lands on the usable task and
-    // can retry from its normal Run button.
-    onTeamCreated(created);
+    // Upsert without navigating: the gate/footer changes into the live linked
+    // team card in place. The card is the explicit navigation affordance.
+    onTeamCreated(created, false, false);
+    if (gate?.gate === "G1" && gate.consensus) {
+      try {
+        await onGate({ kind: "approve" });
+      } catch (error) {
+        toast(`团队任务已创建，但辩论自动放行失败：${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
     try {
       await api.runTask(created.id);
       toast("已创建团队任务，辩论结论已交给团队执行", "info");
@@ -165,6 +193,28 @@ export function DebateView({
       setTeamBusy(false);
     }
     return true;
+  };
+  const confirmTeamHandoff = (choice: TeamHandoffChoice) => {
+    const command = choice.note.trim() ? `/team ${choice.note.trim()}` : "/team 开干";
+    return handoffToTeam(command, choice);
+  };
+  const iterateTeam = async (team: Task) => {
+    if (iterateBusy) return;
+    const existing = allTasks.find((item) => item.mode === "debate" && item.originTaskId === team.id);
+    if (existing) {
+      onTeamCreated(existing, false, true);
+      return;
+    }
+    setIterateBusy(true);
+    try {
+      const created = await api.iterateTeamDebate(team.id);
+      onTeamCreated(created, true, true);
+      toast("已创建新一轮辩论并开跑", "info");
+    } catch (error) {
+      toast(error instanceof Error ? error.message : String(error));
+    } finally {
+      setIterateBusy(false);
+    }
   };
 
   // Each speaker reuses one session row across its turns; resolve the latest per
@@ -305,10 +355,37 @@ export function DebateView({
       </div>
 
       {gate?.open && task.status === "awaiting_review" && (
-        <GateBar gate={gate} onGate={onGate} onTeam={handoffToTeam} teamBusy={teamBusy} />
+        <GateBar
+          gate={gate}
+          onGate={onGate}
+          onTeam={handoffToTeam}
+          onOpenTeam={() => setTeamModalOpen(true)}
+          teamBusy={teamBusy}
+          linkedTeam={linkedTeam}
+          allTasks={allTasks}
+          onOpenTask={onOpenTask}
+          onDebateAgain={(team) => void iterateTeam(team)}
+          debateAgainBusy={iterateBusy}
+        />
       )}
       {(task.status === "done" || task.status === "failed" || task.status === "canceled") && (
-        <TeamHandoffBar onTeam={handoffToTeam} busy={teamBusy} />
+        <FinishedTeamHandoffBar
+          linkedTeam={linkedTeam}
+          allTasks={allTasks}
+          busy={teamBusy}
+          onOpenTask={onOpenTask}
+          onOpenPicker={() => setTeamModalOpen(true)}
+          onDirectTeam={handoffToTeam}
+          onDebateAgain={(team) => void iterateTeam(team)}
+          debateAgainBusy={iterateBusy}
+        />
+      )}
+      {teamModalOpen && (
+        <TeamHandoffModal
+          busy={teamBusy}
+          onClose={() => setTeamModalOpen(false)}
+          onConfirm={confirmTeamHandoff}
+        />
       )}
     </main>
   );
@@ -414,12 +491,24 @@ function GateBar({
   gate,
   onGate,
   onTeam,
+  onOpenTeam,
   teamBusy,
+  linkedTeam,
+  allTasks,
+  onOpenTask,
+  onDebateAgain,
+  debateAgainBusy,
 }: {
   gate: DebateGate;
-  onGate: (a: GateAction) => void;
+  onGate: (a: GateAction) => void | Promise<unknown>;
   onTeam: (command: string) => Promise<boolean>;
+  onOpenTeam: () => void;
   teamBusy: boolean;
+  linkedTeam?: Task;
+  allTasks: Task[];
+  onOpenTask: (taskId: string) => void;
+  onDebateAgain: (team: Task) => void;
+  debateAgainBusy: boolean;
 }) {
   const [mode, setMode] = useState<"inject" | "ask" | null>(null);
   const [text, setText] = useState("");
@@ -498,10 +587,18 @@ function GateBar({
         <span className="text-violet-700">{label}</span>
         <div className="ml-auto flex flex-wrap gap-2">
           {isG1 && (
-            <TeamHandoffButton
-              busy={teamBusy}
-              onClick={() => void onTeam("/team 开干")}
-            />
+            linkedTeam ? (
+              <LinkedTeamCard
+                team={linkedTeam}
+                allTasks={allTasks}
+                onOpen={onOpenTask}
+                compact
+                onDebateAgain={onDebateAgain}
+                debateAgainBusy={debateAgainBusy}
+              />
+            ) : (
+              <TeamHandoffButton busy={teamBusy} onClick={onOpenTeam} />
+            )
           )}
           <button onClick={() => onGate({ kind: "approve" })} className="rounded-md bg-emerald-500 px-3 py-1 text-xs font-medium text-white">
             {isG1 ? "放行→结束" : "放行"}
@@ -578,63 +675,6 @@ function GateBar({
           </div>
         </div>
       )}
-    </div>
-  );
-}
-
-function TeamHandoffButton({
-  busy,
-  onClick,
-}: {
-  busy: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      disabled={busy}
-      onClick={onClick}
-      title="带着辩题及当前共识或分歧结论创建团队任务并跳转"
-      className="inline-flex shrink-0 items-center gap-1.5 self-start rounded-md border border-cyan-500 bg-cyan-600 px-3 py-1 text-xs font-semibold text-white shadow-sm transition-colors hover:bg-cyan-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/50 focus-visible:ring-offset-1 disabled:cursor-not-allowed disabled:opacity-40"
-    >
-      {busy ? <CircleNotch size={13} className="animate-spin" /> : <UsersThree size={13} weight="bold" />}
-      {busy ? "创建中…" : "交给团队开干"}
-    </button>
-  );
-}
-
-function TeamHandoffBar({
-  onTeam,
-  busy,
-}: {
-  onTeam: (command: string) => Promise<boolean>;
-  busy: boolean;
-}) {
-  const [text, setText] = useState("");
-  const submit = async () => {
-    if (busy) return;
-    const note = text.trim();
-    const command = isTeamCommand(note) ? note : note ? `/team ${note}` : "/team 开干";
-    if (await onTeam(command)) setText("");
-  };
-  return (
-    <div className="border-t border-line bg-panel px-6 py-3">
-      <div className="flex gap-2">
-        <textarea
-          value={text}
-          onChange={(event) => setText(event.target.value)}
-          onKeyDown={(event) => {
-            if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
-              event.preventDefault();
-              void submit();
-            }
-          }}
-          rows={2}
-          placeholder="可选：补充给团队的交接附言…"
-          className="flex-1 resize-none rounded-md border border-line bg-canvas px-2.5 py-1.5 text-sm text-ink outline-none placeholder:text-faint focus:border-accent"
-        />
-        <TeamHandoffButton busy={busy} onClick={() => void submit()} />
-      </div>
     </div>
   );
 }

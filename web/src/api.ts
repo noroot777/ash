@@ -129,6 +129,8 @@ export const api = {
     fetch(`/api/tasks/${id}/team/cua-status`).then(j),
   killTeamCua: (id: string): Promise<TeamCuaKillResult> =>
     fetch(`/api/tasks/${id}/team/kill-cua`, { method: "POST" }).then(j),
+  iterateTeamDebate: (teamId: string): Promise<Task> =>
+    fetch(`/api/tasks/${teamId}/team/iterate-debate`, { method: "POST" }).then(j),
   // Batch-create chained single tasks into an existing group (agent-facing API).
   createTasksBatch: (
     groupId: string,

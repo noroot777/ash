@@ -246,7 +246,15 @@ function isConsensus(ctx: Ctx): boolean {
 async function loadBase(taskId: string) {
   const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!task || !task.debate) throw new Error("debate config missing");
-  const cfg = normalizeDebateConfig(JSON.parse(task.debate));
+  const storedCfg = normalizeDebateConfig(JSON.parse(task.debate));
+  const origin = task.originTaskId
+    ? (await db.select().from(tasks).where(eq(tasks.id, task.originTaskId))).at(0)
+    : null;
+  // Only team -> debate iterations keep the previous config intact and put their
+  // execution-aware brief in task.body. Every other debate preserves the legacy
+  // cfg.topic semantics even if an API caller happened to also provide a body.
+  const iterationBody = origin?.mode === "team" ? task.body.trim() : "";
+  const cfg = iterationBody ? { ...storedCfg, topic: iterationBody } : storedCfg;
   const project = (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0);
   if (!project) throw new Error("project not found");
   const exA = await resolveExecutorFor({ executorId: cfg.debaterAExecutorId, type: cfg.debaterA });
