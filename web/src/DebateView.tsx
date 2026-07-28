@@ -11,7 +11,7 @@ import { StatusIcon } from "./StatusIcon";
 import { STATUS_META } from "./constants";
 import { runAction, canStopTask } from "./taskActions";
 import { canArchive, normalizeDebateConfig } from "@harness/shared";
-import { TaskTimeChip, formatInstant } from "./time";
+import { TaskTimeChip, formatDuration, formatInstant } from "./time";
 import { executorLabel } from "./executorLabel";
 import { toast } from "./toast";
 import { buildDebateHandoffBody, isTeamCommand, latestDebateGate } from "./debateHandoff";
@@ -50,6 +50,11 @@ function StatusPill({ status }: { status: TaskStatus }) {
     </span>
   );
 }
+
+const timeMs = (iso?: string | null): number => {
+  const ms = iso ? Date.parse(iso) : NaN;
+  return Number.isFinite(ms) ? ms : 0;
+};
 
 export function DebateView({
   task,
@@ -145,7 +150,7 @@ export function DebateView({
   const linkedTeam = useMemo(
     () => allTasks
       .filter((item) => item.mode === "team" && item.originTaskId === task.id)
-      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0],
+      .sort((a, b) => timeMs(b.createdAt) - timeMs(a.createdAt))[0],
     [allTasks, task.id],
   );
 
@@ -223,7 +228,7 @@ export function DebateView({
   const latestByRole = useMemo(() => {
     const m: Record<string, Session> = {};
     for (const s of sessions) {
-      if (!m[s.role] || s.startedAt > m[s.role].startedAt) m[s.role] = s;
+      if (!m[s.role] || timeMs(s.startedAt) > timeMs(m[s.role].startedAt)) m[s.role] = s;
     }
     return m;
   }, [sessions]);
@@ -474,6 +479,8 @@ function Bubble({
                 <span className="text-muted">{agentLabel}</span>
               </>
             )}
+            {turn.at && <><span className="text-faint">·</span><span className="text-faint">{formatInstant(turn.at)}</span></>}
+            {typeof turn.durationMs === "number" && <><span className="text-faint">·</span><span className="text-faint">用时 {formatDuration(turn.durationMs)}</span></>}
             {turn.raised && <span className="text-amber-700">✋ 可收敛</span>}
             {!turn.done && <TypingDots />}
           </div>
@@ -485,7 +492,7 @@ function Bubble({
           )}
           <Markdown text={turn.text} />
           {turn.error && <div className="mt-1 break-words text-xs text-red-600">✕ {turn.error}</div>}
-          {session && (session.resumeCommand || session.cliSessionId) && <ResumeButtons s={session} />}
+          {session && (session.resumeCommand || session.cliSessionId) && <ResumeButtons s={session} showTime={false} />}
         </div>
       </div>
     </div>

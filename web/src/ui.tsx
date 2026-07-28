@@ -393,10 +393,10 @@ export function ResumeCopyButtons({ s }: { s: Session }) {
 
 // Slim per-speech variant — SessionTime + the two copy buttons, to sit in a debate
 // bubble footer where the role/agent are already shown.
-export function ResumeButtons({ s }: { s: Session }) {
+export function ResumeButtons({ s, showTime = true }: { s: Session; showTime?: boolean }) {
   return (
     <div className="mt-1.5 flex items-center gap-1.5 text-[10px]">
-      <SessionTime s={s} />
+      {showTime && <SessionTime s={s} />}
       <ResumeCopyButtons s={s} />
     </div>
   );

@@ -128,7 +128,7 @@ async function runTurn(args: {
     await db.update(sessions).set({ turnStartedAt: turnStart, endedAt: null }).where(eq(sessions.id, rowId));
   }
 
-  bus.publish({ type: "debate.progress", taskId, round, speaker, phase: "start" });
+  bus.publish({ type: "debate.progress", taskId, round, speaker, phase: "start", startedAt: turnStart });
 
   const runDir = join(RUNS_DIR, taskId);
   mkdirSync(runDir, { recursive: true });
@@ -182,21 +182,22 @@ async function runTurn(args: {
     errorMsg = `${executor.type} 本轮没有产出任何内容（空回复），可能是会话恢复异常`;
   }
   const endIso = now();
+  const durationMs = Math.max(0, Date.parse(endIso) - Date.parse(turnStart));
   await db
     .update(sessions)
-    .set({ exitStatus: exit, endedAt: endIso, activeMs: sql`COALESCE(${sessions.activeMs}, 0) + ${Math.max(0, Date.parse(endIso) - Date.parse(turnStart))}` })
+    .set({ exitStatus: exit, endedAt: endIso, activeMs: sql`COALESCE(${sessions.activeMs}, 0) + ${durationMs}` })
     .where(eq(sessions.id, rowId));
   // Persist the turn so a reloaded debate can rebuild its timeline (no live
   // events). Includes the error so a failed turn stays visibly failed on reload.
   try {
     appendFileSync(
       join(runDir, "transcript.jsonl"),
-      JSON.stringify({ round, speaker, text, raised, agrees, conclusion, error: errorMsg }) + "\n",
+      JSON.stringify({ round, speaker, text, raised, agrees, conclusion, error: errorMsg, startedAt: turnStart, at: endIso, durationMs }) + "\n",
     );
   } catch {
     /* best effort */
   }
-  bus.publish({ type: "debate.progress", taskId, round, speaker, phase: "end", raisedHand: raised });
+  bus.publish({ type: "debate.progress", taskId, round, speaker, phase: "end", raisedHand: raised, at: endIso, startedAt: turnStart, durationMs });
   // A manual stop killed this turn's subprocess → unwind to canceled (the top of
   // each entry point catches CanceledRun).
   if (isCanceling(taskId)) throw new CanceledRun();

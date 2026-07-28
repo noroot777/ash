@@ -543,6 +543,9 @@ export type ServerEvent =
       speaker: DebateSpeaker;
       phase: "start" | "end";
       raisedHand?: boolean;
+      at?: string;
+      startedAt?: string;
+      durationMs?: number;
     }
   | { type: "debate.gate"; taskId: string; gate: GateName; open: boolean; consensus?: boolean; conclusionA?: string | null; conclusionB?: string | null }
   // A human intervention in a /pair timeline (gate inject/ask). Carries the time

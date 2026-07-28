@@ -10,7 +10,9 @@ export type DebateTurn = {
   conclusion?: string; // self-declared one-line 结论
   done: boolean;
   error?: string;
-  at?: string; // for `user` turns: when the human spoke (instant)
+  at?: string; // persisted speech instant; for user turns, when the human spoke
+  startedAt?: string;
+  durationMs?: number;
   target?: "A" | "B"; // for `user` turns: a 提问 directed at one debater (undefined = both)
 };
 
@@ -45,13 +47,13 @@ const speakerOf = (role: string): DebateSpeaker =>
 export function applyDebateEvent(s: DebateState, ev: ServerEvent): DebateState {
   if (ev.type === "debate.progress") {
     if (ev.phase === "start") {
-      return { ...s, turns: [...s.turns, { round: ev.round, speaker: ev.speaker, text: "", tools: [], raised: false, done: false }] };
+      return { ...s, turns: [...s.turns, { round: ev.round, speaker: ev.speaker, text: "", tools: [], raised: false, done: false, startedAt: ev.startedAt ?? ev.at }] };
     }
     // phase end → mark the matching open turn done + raised
     const turns = [...s.turns];
     for (let i = turns.length - 1; i >= 0; i--) {
       if (turns[i].speaker === ev.speaker && !turns[i].done) {
-        turns[i] = { ...turns[i], done: true, raised: !!ev.raisedHand };
+        turns[i] = { ...turns[i], done: true, raised: !!ev.raisedHand, at: ev.at, startedAt: ev.startedAt ?? turns[i].startedAt, durationMs: ev.durationMs };
         break;
       }
     }
