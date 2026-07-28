@@ -479,7 +479,7 @@ function Bubble({
                 <span className="text-muted">{agentLabel}</span>
               </>
             )}
-            {turn.at && <><span className="text-faint">·</span><span className="text-faint">{formatInstant(turn.at)}</span></>}
+            {(turn.at ?? turn.startedAt) && <><span className="text-faint">·</span><span className="text-faint">{formatInstant(turn.at ?? turn.startedAt)}</span></>}
             {typeof turn.durationMs === "number" && <><span className="text-faint">·</span><span className="text-faint">用时 {formatDuration(turn.durationMs)}</span></>}
             {turn.raised && <span className="text-amber-700">✋ 可收敛</span>}
             {!turn.done && <TypingDots />}
@@ -492,7 +492,9 @@ function Bubble({
           )}
           <Markdown text={turn.text} />
           {turn.error && <div className="mt-1 break-words text-xs text-red-600">✕ {turn.error}</div>}
-          {session && (session.resumeCommand || session.cliSessionId) && <ResumeButtons s={session} showTime={false} />}
+          {/* 老转写没有 per-turn 时间戳:退回会话级时间(「⏱ … 起」明确是会话时间,
+              不冒充发言时刻),别让整页一个时间都没有。新数据有 turn 时刻就不重复。 */}
+          {session && (session.resumeCommand || session.cliSessionId) && <ResumeButtons s={session} showTime={!turn.at && !turn.startedAt} />}
         </div>
       </div>
     </div>
