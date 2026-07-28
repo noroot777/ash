@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { DebateConfig, Task, TeamConfig } from "@harness/shared";
 import { DEFAULT_APP_SETTINGS } from "@harness/shared";
-import { Crown, GitBranch, Robot, Scales, TreeStructure, UsersThree, X } from "@phosphor-icons/react";
+import { GitBranch, Scales, TreeStructure, UsersThree, X } from "@phosphor-icons/react";
 import { api } from "./api";
 import { createDebateConfig, DebateComposerFields } from "./DebateComposer";
-import { ExecutorPicker, type ExecutorSelection, useExecutorProfiles } from "./ExecutorPicker";
+import { type ExecutorSelection, useExecutorProfiles } from "./ExecutorPicker";
+import { TeamExecutorFields } from "./composer/ExecutorFields";
 import { teamExecutorDefaults, type DetectedAgent } from "./teamExecutorDefaults";
 import {
   buildTaskDerivationBody,
@@ -25,11 +26,15 @@ type WorktreeContext = {
 export function TaskDerivationComposer({
   task,
   command,
+  live = false,
   onClose,
   onCreated,
 }: {
   task: Task;
   command: TaskDerivationCommand;
+  /** true = 命令还在回复框里打着（即时预览）：不抢焦点，命令尾巴实时同步进
+      附言/辩题；回车提交后转为 false，输入框清空、焦点移进卡片。 */
+  live?: boolean;
   onClose: () => void;
   onCreated: (task: Task, doRun?: boolean, select?: boolean) => void;
 }) {
@@ -43,8 +48,29 @@ export function TaskDerivationComposer({
   }));
   const [leadPick, setLeadPick] = useState<ExecutorSelection | null>(null);
   const [workerPick, setWorkerPick] = useState<ExecutorSelection | null>(null);
+  const [leadModel, setLeadModel] = useState("");
+  const [leadEffort, setLeadEffort] = useState("");
+  const [workerModel, setWorkerModel] = useState("");
+  const [workerEffort, setWorkerEffort] = useState("");
   const [detected, setDetected] = useState<DetectedAgent[] | null>(null);
   const [worktreeContext, setWorktreeContext] = useState<WorktreeContext | null>(null);
+  // 用户一旦亲手改过附言/辩题，就停止从回复框同步，免得把手改的内容冲掉。
+  const noteTouched = useRef(false);
+  const topicTouched = useRef(false);
+  const noteRef = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    if (!live) return;
+    if (teamMode && !noteTouched.current) setNote(command.note);
+    if (!teamMode && !topicTouched.current) {
+      setDebate((cur) => ({ ...cur, topic: defaultPairTopic(task, command.note) }));
+    }
+  }, [live, teamMode, command.note, task]);
+
+  // 预览转正式（回车）：焦点从回复框移进卡片，接着补充附言不用再点一下。
+  useEffect(() => {
+    if (!live) noteRef.current?.focus();
+  }, [live]);
 
   useEffect(() => {
     let alive = true;
@@ -82,11 +108,6 @@ export function TaskDerivationComposer({
     worktreeContext?.worktreeDefault ?? DEFAULT_APP_SETTINGS.worktreeDefault,
   );
 
-  const executorLabel = (role: "调度者" | "执行者", selection: ExecutorSelection) => {
-    const profile = selection.executorId ? profiles.find((item) => item.id === selection.executorId) : null;
-    return `${role} ${profile?.name ?? `默认 ${selection.agentType}`}`;
-  };
-
   const submit = async () => {
     const topic = debate.topic.trim();
     if (busy || !worktreeContext || (!teamMode && !topic)) return;
@@ -102,6 +123,10 @@ export function TaskDerivationComposer({
           worker: workerSelection.agentType,
           leadExecutorId: leadSelection.executorId,
           workerExecutorId: workerSelection.executorId,
+          leadModel: leadModel || null,
+          leadReasoningEffort: leadEffort || null,
+          workerModel: workerModel || null,
+          workerReasoningEffort: workerEffort || null,
         };
         created = await api.createTask({
           projectId: task.projectId,
@@ -182,33 +207,38 @@ export function TaskDerivationComposer({
         {teamMode ? (
           <div className="space-y-3">
             <div className="flex flex-wrap gap-2">
-              <ExecutorPicker
-                icon={<Crown size={14} />}
-                selection={leadSelection}
-                onSelect={setLeadPick}
+              <TeamExecutorFields
+                lead={{
+                  selection: leadSelection,
+                  types: leadTypes,
+                  model: leadModel,
+                  reasoningEffort: leadEffort,
+                  onSelect: setLeadPick,
+                  onModel: setLeadModel,
+                  onReasoningEffort: setLeadEffort,
+                }}
+                worker={{
+                  selection: workerSelection,
+                  types: workerTypes,
+                  model: workerModel,
+                  reasoningEffort: workerEffort,
+                  onSelect: setWorkerPick,
+                  onModel: setWorkerModel,
+                  onReasoningEffort: setWorkerEffort,
+                }}
                 profiles={profiles}
                 providers={providers}
-                types={leadTypes}
-                label={executorLabel("调度者", leadSelection)}
-                menuWidth={320}
-              />
-              <ExecutorPicker
-                icon={<Robot size={14} />}
-                selection={workerSelection}
-                onSelect={setWorkerPick}
-                profiles={profiles}
-                providers={providers}
-                types={workerTypes}
-                label={executorLabel("执行者", workerSelection)}
-                menuWidth={320}
               />
             </div>
             <label className="block text-[12px] font-medium text-muted">
               可选附言
               <textarea
-                autoFocus
+                ref={noteRef}
                 value={note}
-                onChange={(event) => setNote(event.target.value)}
+                onChange={(event) => {
+                  noteTouched.current = true;
+                  setNote(event.target.value);
+                }}
                 rows={3}
                 placeholder="补充执行重点、边界或验收要求…"
                 className="mt-1.5 w-full resize-y rounded-md border border-line bg-canvas px-3 py-2 text-[13px] leading-relaxed text-ink outline-none placeholder:text-faint focus:border-accent"
@@ -218,7 +248,10 @@ export function TaskDerivationComposer({
         ) : (
           <DebateComposerFields
             value={debate}
-            onChange={setDebate}
+            onChange={(next) => {
+              if (next.topic !== debate.topic) topicTouched.current = true;
+              setDebate(next);
+            }}
             profiles={profiles}
             providers={providers}
           />

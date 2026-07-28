@@ -76,7 +76,7 @@ export function TaskDetail({
   const { profiles, providers } = useExecutorProfiles();
   const dispatchedWorker = isDispatchedWorker(task);
   const objective = parseAttachmentText(task.body);
-  const [derivationCommand, setDerivationCommand] = useState<TaskDerivationCommand | null>(null);
+  const [derivation, setDerivation] = useState<{ command: TaskDerivationCommand; committed: boolean } | null>(null);
 
   // 拉会话 + 快照历史输出 + 拼条目流,都在 useConversation 里(/team 调度台共用同
   // 一份装配,免得两个界面的「刷新后 vs 实时」各自漂移)。
@@ -415,16 +415,28 @@ export function TaskDetail({
           toolbar={hasConversation ? runConfigControls : undefined}
           command={{
             matches: isTaskDerivationCommand,
+            // 回车 = 定稿：输入框清空，卡片接管焦点继续补充。
             onSubmit: (text) => {
               const parsed = parseTaskDerivationCommand(text);
-              if (parsed) setDerivationCommand(parsed);
+              if (parsed) setDerivation({ command: parsed, committed: true });
+            },
+            // 边打边预览：命中即弹卡，尾巴文本实时进附言/辩题；已定稿的卡不受
+            // 后续输入影响（只能用卡上的 X 关掉）。
+            onChange: (text) => {
+              setDerivation((cur) => {
+                if (cur?.committed) return cur;
+                const parsed = parseTaskDerivationCommand(text);
+                return parsed ? { command: parsed, committed: false } : null;
+              });
             },
           }}
-          inlinePanel={derivationCommand ? (
+          inlinePanel={derivation ? (
             <TaskDerivationComposer
+              key={derivation.command.kind}
               task={task}
-              command={derivationCommand}
-              onClose={() => setDerivationCommand(null)}
+              command={derivation.command}
+              live={!derivation.committed}
+              onClose={() => setDerivation(null)}
               onCreated={onTaskCreated}
             />
           ) : undefined}

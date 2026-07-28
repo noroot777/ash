@@ -44,10 +44,12 @@ export function ReplyBox({
   toolbar?: ReactNode;
   /** 由输入命令展开的任务级内联配置卡。 */
   inlinePanel?: ReactNode;
-  /** 命令可以在普通回复被禁用时继续输入；命中后只展开卡片，不发给 agent。 */
+  /** 命令可以在普通回复被禁用时继续输入；命中后只展开卡片，不发给 agent。
+      onChange 每次输入都回调，让父级在命中时即时弹出配置卡（无需先点按钮）。 */
   command?: {
     matches: (text: string) => boolean;
     onSubmit: (text: string) => void;
+    onChange?: (text: string) => void;
   };
   placeholder?: string;
   disabledPlaceholder?: string;
@@ -204,7 +206,10 @@ export function ReplyBox({
       <div className="relative">
         <TopResizableTextarea
           value={v}
-          onChange={(e) => setV(e.target.value)}
+          onChange={(e) => {
+            setV(e.target.value);
+            command?.onChange?.(e.target.value);
+          }}
           onPaste={onPaste}
           onKeyDown={(e) => {
             if (mentionOpen) {
