@@ -6,8 +6,7 @@ import { orderedTasks } from "./TaskList";
 import { type LogLine } from "./TaskDetail";
 import { CommandPalette, type Command } from "./CommandPalette";
 import { PRIORITIES } from "./constants";
-import { CreateTask } from "./CreateTask";
-import { DebateModal } from "./DebateComposer";
+import { CreateTask, type CreateTaskMode } from "./CreateTask";
 import { applyDebateEvent, emptyDebate, type DebateState } from "./debateState";
 import { AgentsPanel } from "./AgentsPanel";
 import { NewProjectModal, NewGroupModal, ConfirmModal, WorktreeCleanupModal } from "./Modal";
@@ -60,6 +59,7 @@ export function App() {
   const [curHealth, setCurHealth] = useState<ProjectHealth | null>(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
+  const [createInitialMode, setCreateInitialMode] = useState<CreateTaskMode>("single");
   const [notesMode, setNotesMode] = useState<"new" | "list" | null>(null);
   const [noteTarget, setNoteTarget] = useState<string | null>(null);
   const [noteDraft, setNoteDraft] = useState<NoteTaskDraft | null>(null);
@@ -68,7 +68,6 @@ export function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [newGroupOpen, setNewGroupOpen] = useState(false);
   const [groupsOpen, setGroupsOpen] = useState(false);
-  const [debateOpen, setDebateOpen] = useState(false);
   const [confirmDel, setConfirmDel] = useState<{ id: string; title: string } | null>(null);
   // After deleting a task that used a worktree, prompt to clean it up (or keep).
   const [worktreePrompt, setWorktreePrompt] = useState<
@@ -342,6 +341,12 @@ export function App() {
   }, []);
   const openCreate = useCallback(() => {
     setNoteDraft(null);
+    setCreateInitialMode("single");
+    setCreateOpen(true);
+  }, []);
+  const openDebateCreate = useCallback(() => {
+    setNoteDraft(null);
+    setCreateInitialMode("debate");
     setCreateOpen(true);
   }, []);
   const onCreateTaskCreated = useCallback((task: Task) => {
@@ -422,7 +427,7 @@ export function App() {
     try { const g = await api.pauseGroup(id); setGroups((gs) => gs.map((x) => (x.id === id ? g : x))); }
     catch (e) { console.warn("pauseGroup rejected:", e); }
   }, []);
-  const anyModal = createOpen || !!notesMode || agentsOpen || newProjectOpen || settingsOpen || newGroupOpen || groupsOpen || !!debateOpen || !!confirmDel || !!worktreePrompt;
+  const anyModal = createOpen || !!notesMode || agentsOpen || newProjectOpen || settingsOpen || newGroupOpen || groupsOpen || !!confirmDel || !!worktreePrompt;
 
   // ── keyboard navigation ────────────────────────────────────────────────
   useEffect(() => {
@@ -484,7 +489,7 @@ export function App() {
     cmds.push({ id: "new", group: "新建", label: "新建任务", hint: "C", run: openCreate });
     if (project) cmds.push({ id: "new-note", group: "新建", label: "新建随手记", keys: "NI", run: () => setNotesMode("new") });
     cmds.push(
-      { id: "pair-debate", group: "新建", label: "新建辩论 · 给你答案 (/pair)", run: () => setDebateOpen(true) },
+      { id: "new-debate", group: "新建", label: "新建辩论 · 给你答案", run: openDebateCreate },
       { id: "newgroup", group: "新建", label: "新建分组", run: () => setNewGroupOpen(true) },
       { id: "newproject", group: "新建", label: "新建项目", run: () => setNewProjectOpen(true) },
       { id: "groups", group: "管理", label: "分组管理", run: () => setGroupsOpen(true) },
@@ -503,7 +508,7 @@ export function App() {
         run: () => api.runGroup(g.id),
       });
     return cmds;
-  }, [current, projects, projectId, groups, project, primary, stop, del, patch, archive, unarchive, openCreate]);
+  }, [current, projects, projectId, groups, project, primary, stop, del, patch, archive, unarchive, openCreate, openDebateCreate]);
 
   return (
     <div className="flex h-full">
@@ -593,7 +598,6 @@ export function App() {
           onClose={() => setWorktreePrompt(null)}
         />
       )}
-      {debateOpen && project && <DebateModal project={project} onClose={() => setDebateOpen(false)} onCreated={onTaskCreated} />}
       {notesMode === "new" && project && <NewNoteModal project={project} onClose={() => setNotesMode(null)} />}
       {notesMode === "list" && project && (
         <NotesModal
@@ -606,6 +610,7 @@ export function App() {
             setNoteTarget(null);
             setView("list");
             setNoteDraft(draft);
+            setCreateInitialMode("single");
             setCreateOpen(true);
           }}
         />
@@ -614,16 +619,13 @@ export function App() {
         <CreateTask
           project={project}
           groups={groups}
+          initialMode={createInitialMode}
           initialBody={noteDraft?.body}
           initialAttachments={noteDraft?.attachments}
           onClose={() => { setCreateOpen(false); setNoteDraft(null); }}
           onCreated={onCreateTaskCreated}
           onCreateGroup={() => setNewGroupOpen(true)}
           onOpenAgents={() => setAgentsOpen(true)}
-          onDebate={() => {
-            setCreateOpen(false);
-            setDebateOpen(true);
-          }}
         />
       )}
       <Toaster />
