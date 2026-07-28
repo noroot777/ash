@@ -40,6 +40,10 @@ export async function ensureSchema() {
       extra_args TEXT NOT NULL DEFAULT '[]', reasoning_effort TEXT, speed TEXT,
       is_default INTEGER NOT NULL DEFAULT 0
     );
+    CREATE TABLE IF NOT EXISTS team_presets (
+      id TEXT PRIMARY KEY, name TEXT NOT NULL, config TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
     CREATE TABLE IF NOT EXISTS sessions (
       id TEXT PRIMARY KEY, task_id TEXT NOT NULL, role TEXT NOT NULL,
       agent_type TEXT NOT NULL, executor TEXT NOT NULL, target TEXT NOT NULL,

@@ -96,6 +96,15 @@ export const agents = sqliteTable("agents", {
   isDefault: integer("is_default", { mode: "boolean" }).notNull().default(false),
 });
 
+// Global team-creation shortcuts. config stores only the configurable TeamConfig
+// fields; executor labels are resolved at read time so stale ids degrade cleanly.
+export const teamPresets = sqliteTable("team_presets", {
+  id: text("id").primaryKey(),
+  name: text("name").notNull(),
+  config: text("config").notNull(), // json TeamPresetConfig (without display labels)
+  createdAt: text("created_at").notNull(),
+});
+
 export const sessions = sqliteTable("sessions", {
   id: text("id").primaryKey(),
   taskId: text("task_id").notNull(),

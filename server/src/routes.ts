@@ -48,6 +48,7 @@ import { forceKillCuaService, lastCuaResidualStatus, refreshCuaResidualStatus } 
 import { createTasks, enrichTasks, publishTaskUpdated } from "./task-store.js";
 import { sessionTranscriptPath } from "./transcript.js";
 import { mountDebateIterationRoutes } from "./debate/iteration.js";
+import { mountTeamPresetRoutes } from "./team-presets.js";
 import type { GateAction, AgentType, BatchCreateTasksBody, BatchTaskInput, ScheduledMessage, ScheduledMessageStatus } from "@harness/shared";
 
 export const api = new Hono();
@@ -1838,6 +1839,7 @@ api.delete("/llm-providers/:id", async (c) => {
 // 端点实现与 helper 都在 ./queues.ts(routes.ts 已经很长,队列语义集中一处更好改)。
 mountQueueRoutes(api);
 mountDebateIterationRoutes(api);
+mountTeamPresetRoutes(api);
 
 // ── SSE stream (§12) ───────────────────────────────────────────────────────
 api.get("/events", (c) =>

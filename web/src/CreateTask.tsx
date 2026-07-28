@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import type { Task, Group, AgentType, Priority, ProjectView, TeamConfig } from "@harness/shared";
+import type { Task, Group, AgentType, Priority, ProjectView, TeamConfig, TeamPresetConfig } from "@harness/shared";
 import { AGENT_TYPES } from "@harness/shared";
 import { X, ArrowsOut, ArrowsIn, Robot, Stack, Plus, Sparkle, Scales, CaretDown, Clock, Play, Tray, ArrowsClockwise, GitBranch, TreeStructure, UsersThree, Crown } from "@phosphor-icons/react";
 import { api } from "./api";
@@ -13,6 +13,7 @@ import { ScheduleFields, toLocalInput } from "./ScheduleFields";
 import { ExecutorPicker, type ExecutorSelection, useExecutorProfiles } from "./ExecutorPicker";
 import { teamExecutorDefaults } from "./teamExecutorDefaults";
 import { TaskModelControls } from "./TaskModelControls";
+import { TeamPresetBar } from "./TeamPresetBar";
 
 // 斜杠命令表。输入框里只剩一个 `/词` 时按前缀过滤它,列出的每一行都是一个**具体
 // 动作**(`/pair` 是辩论,`/team` 是团队)。加命令只改这张表 ——
@@ -58,7 +59,8 @@ export function CreateTask({
   onOpenAgents?: () => void;
 }) {
   const projectId = project.id;
-  useEscape(onClose);
+  const [presetDialogOpen, setPresetDialogOpen] = useState(false);
+  useEscape(onClose, !presetDialogOpen);
   const [body, setBody] = useState("");
   const [priority, setPriority] = useState<Priority>("none");
   const [executorPick, setExecutorPick] = useState<ExecutorSelection>({ agentType: "claude", executorId: null });
@@ -126,6 +128,55 @@ export function CreateTask({
   );
   const lead = leadSelection.agentType;
   const worker = workerSelection.agentType;
+  const currentTeamPresetConfig: TeamPresetConfig = {
+    lead,
+    worker,
+    leadExecutorId: leadSelection.executorId,
+    workerExecutorId: workerSelection.executorId,
+    leadModel: leadModel || null,
+    leadReasoningEffort: leadReasoningEffort || null,
+    workerModel: workerModel || null,
+    workerReasoningEffort: workerReasoningEffort || null,
+  };
+  const applyTeamPreset = (config: TeamPresetConfig) => {
+    const leadType = detected === null || leadTypes.includes(config.lead)
+      ? config.lead
+      : leadSelection.agentType;
+    const workerType = detected === null || workerTypes.includes(config.worker)
+      ? config.worker
+      : workerSelection.agentType;
+    const leadCompatible = leadType === config.lead;
+    const workerCompatible = workerType === config.worker;
+    setLeadPick({
+      agentType: leadType,
+      executorId: leadCompatible ? config.leadExecutorId ?? null : null,
+    });
+    setWorkerPick({
+      agentType: workerType,
+      executorId: workerCompatible ? config.workerExecutorId ?? null : null,
+    });
+    setLeadModel(leadCompatible ? config.leadModel ?? "" : "");
+    setLeadReasoningEffort(leadCompatible ? config.leadReasoningEffort ?? "" : "");
+    setWorkerModel(workerCompatible ? config.workerModel ?? "" : "");
+    setWorkerReasoningEffort(workerCompatible ? config.workerReasoningEffort ?? "" : "");
+  };
+
+  // Agent detection can finish after a preset was clicked. If that reveals the
+  // chosen type cannot fill its role on this machine, degrade the whole role
+  // config together instead of leaving a model/effort from an incompatible CLI.
+  useEffect(() => {
+    if (detected === null) return;
+    if (leadPick && !leadTypes.includes(leadPick.agentType)) {
+      setLeadPick({ agentType: leadSelection.agentType, executorId: null });
+      setLeadModel("");
+      setLeadReasoningEffort("");
+    }
+    if (workerPick && !workerTypes.includes(workerPick.agentType)) {
+      setWorkerPick({ agentType: workerSelection.agentType, executorId: null });
+      setWorkerModel("");
+      setWorkerReasoningEffort("");
+    }
+  }, [detected, leadPick, workerPick, leadTypes, workerTypes, leadSelection, workerSelection]);
 
   // Slash command: when the input is just a "/word" token, list the matching
   // commands right under the text (↑↓ to move, Enter/click to choose).
@@ -291,6 +342,14 @@ export function CreateTask({
             branches={branches}
             onToggle={() => setUseWorktree((v) => !v)}
             onBase={setBase}
+          />
+        )}
+        {teamOn && (
+          <TeamPresetBar
+            currentConfig={currentTeamPresetConfig}
+            profiles={profiles}
+            onApply={applyTeamPreset}
+            onDialogOpenChange={setPresetDialogOpen}
           />
         )}
 

@@ -261,6 +261,29 @@ export interface TeamConfig {
   workerExecutorLabel?: string | null; // server 只读展示字段
 }
 
+// Global named shortcuts for filling a new TeamConfig. The two label fields are
+// read-only API enrichments; only the executor/model/effort choices are stored.
+export type TeamPresetConfig = Pick<
+  TeamConfig,
+  | "lead"
+  | "worker"
+  | "leadExecutorId"
+  | "workerExecutorId"
+  | "leadModel"
+  | "leadReasoningEffort"
+  | "workerModel"
+  | "workerReasoningEffort"
+  | "leadExecutorLabel"
+  | "workerExecutorLabel"
+>;
+
+export interface TeamPreset {
+  id: string;
+  name: string;
+  config: TeamPresetConfig;
+  createdAt: string;
+}
+
 export const TEAM_DEFAULTS: TeamConfig = { lead: "claude", worker: "claude" };
 
 // ── Issues (§Issues) ─────────────────────────────────────────────────────────
