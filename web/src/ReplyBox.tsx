@@ -30,6 +30,8 @@ export function ReplyBox({
   disabled,
   mention = true,
   toolbar,
+  inlinePanel,
+  command,
   placeholder = `回复并继续（${submitShortcutLabel()} 发送，可粘贴图片或文件，@ 召唤其它智能体）…`,
   disabledPlaceholder = "进行中…",
 }: {
@@ -40,6 +42,13 @@ export function ReplyBox({
   mention?: boolean;
   /** 输入框上方的任务级运行设置；运行中也保持可操作。 */
   toolbar?: ReactNode;
+  /** 由输入命令展开的任务级内联配置卡。 */
+  inlinePanel?: ReactNode;
+  /** 命令可以在普通回复被禁用时继续输入；命中后只展开卡片，不发给 agent。 */
+  command?: {
+    matches: (text: string) => boolean;
+    onSubmit: (text: string) => void;
+  };
   placeholder?: string;
   disabledPlaceholder?: string;
 }) {
@@ -63,6 +72,8 @@ export function ReplyBox({
   const mMatch = mention ? /(?:^|\s)@(\w*)$/.exec(v) : null;
   const cands = mMatch ? AGENT_TYPES.filter((a) => a.startsWith((mMatch[1] ?? "").toLowerCase())) : [];
   const mentionOpen = !disabled && !!mMatch && cands.length > 0;
+  const commandMatch = !!command && command.matches(v);
+  const inputDisabled = disabled && !command;
 
   const pick = (a: AgentType) => {
     setTarget(a);
@@ -71,6 +82,12 @@ export function ReplyBox({
   };
 
   const send = () => {
+    if (v.trim() && command?.matches(v)) {
+      command.onSubmit(v.trim());
+      setV("");
+      setTarget(null);
+      return;
+    }
     if ((v.trim() || attachments.length) && !disabled) {
       onReply(v.trim(), { attachments: attachments.map((a) => a.path), agent: target ?? undefined });
       setV("");
@@ -83,6 +100,11 @@ export function ReplyBox({
   // it and the scheduler delivers it when due + the task is idle.
   const sendScheduled = async () => {
     const when = new Date(at);
+    if (commandMatch) {
+      setSchedOpen(false);
+      send();
+      return;
+    }
     if (!(v.trim() || attachments.length) || disabled) return;
     if (Number.isNaN(when.getTime()) || when.getTime() <= Date.now()) return;
     try {
@@ -167,6 +189,7 @@ export function ReplyBox({
         </div>
       )}
       {toolbar}
+      {inlinePanel}
       <AttachmentChips attachments={attachments} onRemove={remove} error={error} />
       {target && (
         <div className="flex items-center text-[12px]">
@@ -194,7 +217,7 @@ export function ReplyBox({
               send();
             }
           }}
-          disabled={disabled}
+          disabled={inputDisabled}
           placeholder={disabled ? disabledPlaceholder : placeholder}
           initialHeight={72}
           minHeight={60}
@@ -204,7 +227,7 @@ export function ReplyBox({
         <div className="absolute bottom-2 right-2 flex h-8 items-stretch overflow-hidden rounded-md border border-line bg-canvas/95 shadow-sm">
           <button
             onClick={() => { if (!at) setAt(toLocalInput(new Date(Date.now() + 3600_000))); setSchedOpen((o) => !o); }}
-            disabled={disabled}
+            disabled={disabled || commandMatch}
             title="定时发送"
             className="grid w-9 place-items-center border-r border-line text-muted transition-colors hover:bg-raised hover:text-ink disabled:opacity-40"
           >
@@ -212,11 +235,11 @@ export function ReplyBox({
           </button>
           <button
             onClick={send}
-            disabled={(!v.trim() && !attachments.length) || disabled}
-            title={submitShortcutTitle("发送")}
+            disabled={(!v.trim() && !attachments.length) || (disabled && !commandMatch)}
+            title={submitShortcutTitle(commandMatch ? "展开配置" : "发送")}
             className="inline-flex items-center gap-1.5 bg-accent px-3 text-[12px] font-semibold text-accent-fg transition-colors hover:bg-accent-hover disabled:opacity-40"
           >
-            发送 <Kbd />
+            {commandMatch ? "配置" : "发送"} <Kbd />
           </button>
         </div>
       </div>

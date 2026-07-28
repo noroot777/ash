@@ -25,6 +25,13 @@ import { isDispatchedWorker } from "./taskPolicy";
 import { AttachmentDisplay, parseAttachmentText } from "./messageAttachments";
 import { toast } from "./toast";
 import { TaskWorktreeChip } from "./TaskWorktreeChip";
+import { TaskDerivationComposer } from "./TaskDerivationComposer";
+import { DerivedTaskLinks } from "./DerivedTaskLinks";
+import {
+  isTaskDerivationCommand,
+  parseTaskDerivationCommand,
+  type TaskDerivationCommand,
+} from "./taskDerivation";
 export type { LogLine } from "./Conversation";
 
 export function TaskDetail({
@@ -43,6 +50,8 @@ export function TaskDetail({
   onArchive,
   onUnarchive,
   onRequeue,
+  onOpenTask,
+  onTaskCreated,
 }: {
   task: Task;
   groups: Group[];
@@ -60,11 +69,14 @@ export function TaskDetail({
   onUnarchive: () => void;
   // 重新排队(失败/取消 → 回队列等待)。位置由服务端定:被越过就到队尾。
   onRequeue: () => void;
+  onOpenTask: (taskId: string) => void;
+  onTaskCreated: (task: Task, doRun?: boolean, select?: boolean) => void;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const { profiles, providers } = useExecutorProfiles();
   const dispatchedWorker = isDispatchedWorker(task);
   const objective = parseAttachmentText(task.body);
+  const [derivationCommand, setDerivationCommand] = useState<TaskDerivationCommand | null>(null);
 
   // 拉会话 + 快照历史输出 + 拼条目流,都在 useConversation 里(/team 调度台共用同
   // 一份装配,免得两个界面的「刷新后 vs 实时」各自漂移)。
@@ -74,6 +86,7 @@ export function TaskDetail({
     sessionsBump,
     primaryAgent: task.agentType ?? "claude",
   });
+  const hasConversation = sessions.length > 0 || snapshot.length > 0 || logs.length > 0;
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
@@ -386,12 +399,35 @@ export function TaskDetail({
         <ConversationScrollButtons scrollRef={scrollRef} />
       </div>
 
-      {task.mode === "single" && (sessions.length > 0 || snapshot.length > 0 || logs.length > 0) && (
+      <DerivedTaskLinks sourceTaskId={task.id} allTasks={allTasks} onOpen={onOpenTask} />
+      {task.mode === "single" && (
         <ReplyBox
           taskId={task.id}
           onReply={onReply}
-          disabled={task.status === "running" || task.status === "queued" || !!task.archived}
-          toolbar={runConfigControls}
+          disabled={!hasConversation || task.status === "running" || task.status === "queued" || !!task.archived}
+          disabledPlaceholder={
+            task.archived
+              ? "已归档；仍可输入 /team 或 /pair 创建派生任务…"
+              : task.status === "running" || task.status === "queued"
+                ? "当前任务进行中；可输入 /team 或 /pair 创建派生任务…"
+                : "输入 /team 或 /pair，以这个任务为背景创建协作任务…"
+          }
+          toolbar={hasConversation ? runConfigControls : undefined}
+          command={{
+            matches: isTaskDerivationCommand,
+            onSubmit: (text) => {
+              const parsed = parseTaskDerivationCommand(text);
+              if (parsed) setDerivationCommand(parsed);
+            },
+          }}
+          inlinePanel={derivationCommand ? (
+            <TaskDerivationComposer
+              task={task}
+              command={derivationCommand}
+              onClose={() => setDerivationCommand(null)}
+              onCreated={onTaskCreated}
+            />
+          ) : undefined}
         />
       )}
       {!dispatchedWorker && queueModalOpen && task.queueId && (

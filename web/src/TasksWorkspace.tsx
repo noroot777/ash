@@ -186,6 +186,8 @@ export function TasksWorkspace({
                   onArchive={() => onArchive(current.id)}
                   onUnarchive={() => onUnarchive(current.id)}
                   onRequeue={() => onRequeue(current.id)}
+                  onOpenTask={onOpenTask}
+                  onTaskCreated={onTaskCreated}
                 />
               )
             ) : (

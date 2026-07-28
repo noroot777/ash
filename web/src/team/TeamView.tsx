@@ -260,6 +260,11 @@ export function TeamView({
           onArchive={() => onArchive(open.id)}
           onUnarchive={() => onUnarchive(open.id)}
           onRequeue={() => onRequeue(open.id)}
+          onOpenTask={(taskId) => {
+            setOpenId(null);
+            onSelect(taskId);
+          }}
+          onTaskCreated={onTaskCreated}
         />
       )}
     </main>
@@ -352,6 +357,8 @@ function WorkerDrawer({
   onArchive: () => void;
   onUnarchive: () => void;
   onRequeue: () => void;
+  onOpenTask: (taskId: string) => void;
+  onTaskCreated: (task: Task, doRun?: boolean, select?: boolean) => void;
 }) {
   return (
     <>
