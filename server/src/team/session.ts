@@ -58,6 +58,8 @@ interface Lead {
   cliSessionId: string;
   agentType: AgentType;
   executorId: string | null;
+  model: string | null;
+  reasoningEffort: string | null;
   cwd: string;
   handle: ResidentHandle;
   out: WriteStream;
@@ -162,7 +164,12 @@ async function openLead(taskId: string, rawText: string, kind: Kind): Promise<Le
   const project = (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0);
   if (!project) throw new Error("project not found");
   const cfg: TeamConfig = task.team ? JSON.parse(task.team) : TEAM_DEFAULTS;
-  const ex = await resolveExecutorFor({ executorId: cfg.leadExecutorId, type: cfg.lead });
+  const ex = await resolveExecutorFor({
+    executorId: cfg.leadExecutorId,
+    type: cfg.lead,
+    model: task.model || cfg.leadModel,
+    reasoningEffort: task.reasoningEffort || cfg.leadReasoningEffort,
+  });
   const openResident = ex.openResident?.bind(ex);
   if (!openResident) throw new Error(`执行器 ${ex.label} 不支持常驻会话,不能当团队调度者`);
 
@@ -226,6 +233,8 @@ async function openLead(taskId: string, rawText: string, kind: Kind): Promise<Le
     cliSessionId,
     agentType: cfg.lead,
     executorId: cfg.leadExecutorId ?? null,
+    model: task.model || cfg.leadModel || null,
+    reasoningEffort: task.reasoningEffort || cfg.leadReasoningEffort || null,
     cwd: ws.path,
     handle,
     out: createWriteStream(join(runDir, `${sessId}.md`), { flags: "a" }),
@@ -258,7 +267,12 @@ async function consume(lead: Lead): Promise<void> {
     if (event.kind === "session") {
       if (event.cliSessionId !== lead.cliSessionId) {
         lead.cliSessionId = event.cliSessionId;
-        const ex = await resolveExecutorFor({ executorId: lead.executorId, type: lead.agentType });
+        const ex = await resolveExecutorFor({
+          executorId: lead.executorId,
+          type: lead.agentType,
+          model: lead.model,
+          reasoningEffort: lead.reasoningEffort,
+        });
         await db
           .update(sessions)
           .set({ cliSessionId: event.cliSessionId, resumeCommand: ex.resumeCommand(lead.cwd, event.cliSessionId) })

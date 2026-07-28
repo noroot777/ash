@@ -4,6 +4,7 @@
 // HERE, in a read-only multiline TextInput — which IS UITextView-backed, so it
 // gives real native selection handles + the copy menu, free selection of any
 // span. Pure RN (Modal + TextInput): no native module, works in Expo Go.
+import type { ReactNode } from "react";
 import { Modal, View, Text, TextInput, Pressable, Platform, ScrollView } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useTheme, fonts } from "@/lib/theme";
@@ -26,6 +27,7 @@ type OptionSelectSheetProps = {
   value: string;
   onSelect: (value: string) => void;
   onClose: () => void;
+  header?: ReactNode;
 };
 
 export function SelectSheet(props: TextSelectSheetProps | OptionSelectSheetProps) {
@@ -54,41 +56,46 @@ export function SelectSheet(props: TextSelectSheetProps | OptionSelectSheetProps
           </Pressable>
         </View>
         {optionMode ? (
-          <ScrollView contentContainerStyle={{ padding: 12, gap: 6, paddingBottom: insets.bottom + 20 }}>
-            {props.options.map((option) => {
-              const selected = option.value === props.value;
-              return (
-                <Pressable
-                  key={option.value}
-                  onPress={() => {
-                    props.onSelect(option.value);
-                    props.onClose();
-                  }}
-                  style={({ pressed }) => ({
-                    flexDirection: "row",
-                    alignItems: "center",
-                    gap: 12,
-                    paddingHorizontal: 14,
-                    paddingVertical: 12,
-                    borderRadius: 12,
-                    backgroundColor: pressed || selected ? theme.raised : "transparent",
-                  })}
-                >
-                  <View style={{ flex: 1, gap: 3 }}>
-                    <Text style={{ color: theme.ink, fontSize: 15, fontFamily: selected ? fonts.bodySemi : fonts.bodyMed }}>
-                      {option.label}
-                    </Text>
-                    {option.detail ? (
-                      <Text style={{ color: theme.faint, fontSize: 12, fontFamily: fonts.mono }} numberOfLines={2}>
-                        {option.detail}
+          <>
+            {props.header ? (
+              <View style={{ paddingHorizontal: 12, paddingTop: 12 }}>{props.header}</View>
+            ) : null}
+            <ScrollView contentContainerStyle={{ padding: 12, gap: 6, paddingBottom: insets.bottom + 20 }}>
+              {props.options.map((option) => {
+                const selected = option.value === props.value;
+                return (
+                  <Pressable
+                    key={option.value}
+                    onPress={() => {
+                      props.onSelect(option.value);
+                      props.onClose();
+                    }}
+                    style={({ pressed }) => ({
+                      flexDirection: "row",
+                      alignItems: "center",
+                      gap: 12,
+                      paddingHorizontal: 14,
+                      paddingVertical: 12,
+                      borderRadius: 12,
+                      backgroundColor: pressed || selected ? theme.raised : "transparent",
+                    })}
+                  >
+                    <View style={{ flex: 1, gap: 3 }}>
+                      <Text style={{ color: theme.ink, fontSize: 15, fontFamily: selected ? fonts.bodySemi : fonts.bodyMed }}>
+                        {option.label}
                       </Text>
-                    ) : null}
-                  </View>
-                  {selected ? <Ionicons name="checkmark-circle" size={20} color={theme.accent} /> : null}
-                </Pressable>
-              );
-            })}
-          </ScrollView>
+                      {option.detail ? (
+                        <Text style={{ color: theme.faint, fontSize: 12, fontFamily: fonts.mono }} numberOfLines={2}>
+                          {option.detail}
+                        </Text>
+                      ) : null}
+                    </View>
+                    {selected ? <Ionicons name="checkmark-circle" size={20} color={theme.accent} /> : null}
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+          </>
         ) : (
           /* Read-only multiline TextInput == UITextView on iOS == real drag handles. */
           <TextInput

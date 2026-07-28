@@ -9,6 +9,27 @@
 export const AGENT_TYPES = ["claude", "codex", "antigravity"] as const;
 export type AgentType = (typeof AGENT_TYPES)[number];
 
+// CLI-native model aliases used when an executor is on its official account.
+// Provider-backed executors replace these with that provider's /v1/models list.
+export const CLI_MODEL_PRESETS: Record<AgentType, readonly string[]> = {
+  claude: ["opus", "sonnet", "haiku", "fable"],
+  codex: ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4"],
+  antigravity: [],
+};
+
+// CLI-specific reasoning levels. Unsupported model/effort combinations are
+// rejected by the CLI/API at run time (for example gpt-5.5 tops out at xhigh).
+export const REASONING_EFFORT_VALUES: Record<AgentType, readonly string[]> = {
+  claude: ["low", "medium", "high", "xhigh", "max"],
+  codex: ["low", "medium", "high", "xhigh", "ultra", "max"],
+  antigravity: [],
+};
+
+export const REASONING_EFFORT_DETAIL: Record<string, string> = {
+  xhigh: "gpt-5.5 支持的最高档",
+  ultra: "仅 gpt-5.6-sol/terra 等新模型支持",
+};
+
 // Execution layer: a concrete executor under a type (CLI + target + model).
 export interface AgentExecutorProfile {
   id: string;
@@ -153,6 +174,9 @@ export interface Task {
   // Concrete executor profile. If set and still exists, server runs that profile;
   // if null/stale, it falls back to the current default executor for agentType.
   executorId?: string | null;
+  // Per-task CLI overrides. null/omitted follows the resolved executor profile.
+  model?: string | null;
+  reasoningEffort?: string | null;
   // Read-only display label for the profile that will run this task:
   // selected agents.name, else the current default profile name for agentType.
   executorLabel?: string | null;
@@ -239,8 +263,35 @@ export interface TeamConfig {
   worker: AgentType; // 派活时的默认执行者类型（dispatch 可逐个覆盖）
   leadExecutorId?: string | null; // 调度者具体执行器；缺省/悬空 → lead 类型默认执行器
   workerExecutorId?: string | null; // 执行者任务的默认执行器；缺省/悬空 → worker 类型默认执行器
+  leadModel?: string | null; // 调度台模型覆盖；缺省/null → 跟随 lead 执行器 profile
+  leadReasoningEffort?: string | null; // 调度台思考强度覆盖；缺省/null → 跟随 lead profile
+  workerModel?: string | null; // 新执行者任务的默认模型覆盖；缺省/null → 跟随 worker profile
+  workerReasoningEffort?: string | null; // 新执行者任务的默认思考强度覆盖
   leadExecutorLabel?: string | null; // server 只读展示字段
   workerExecutorLabel?: string | null; // server 只读展示字段
+}
+
+// Global named shortcuts for filling a new TeamConfig. The two label fields are
+// read-only API enrichments; only the executor/model/effort choices are stored.
+export type TeamPresetConfig = Pick<
+  TeamConfig,
+  | "lead"
+  | "worker"
+  | "leadExecutorId"
+  | "workerExecutorId"
+  | "leadModel"
+  | "leadReasoningEffort"
+  | "workerModel"
+  | "workerReasoningEffort"
+  | "leadExecutorLabel"
+  | "workerExecutorLabel"
+>;
+
+export interface TeamPreset {
+  id: string;
+  name: string;
+  config: TeamPresetConfig;
+  createdAt: string;
 }
 
 export const TEAM_DEFAULTS: TeamConfig = { lead: "claude", worker: "claude" };
@@ -325,6 +376,8 @@ export interface BatchTaskInput {
   body?: string; // the prompt / objective
   agentType?: AgentType; // overrides defaults.agentType
   executorId?: string | null; // overrides defaults.executorId; stale id degrades by agentType
+  model?: string | null; // overrides defaults.model; null follows the resolved executor profile
+  reasoningEffort?: string | null; // overrides defaults.reasoningEffort
   priority?: Priority;
   labels?: string[];
   // Each entry is resolved against sibling `key`s first; anything that doesn't
@@ -342,6 +395,8 @@ export interface BatchCreateTasksBody {
     // applied to every task unless that task overrides the field
     agentType?: AgentType;
     executorId?: string | null;
+    model?: string | null;
+    reasoningEffort?: string | null;
     priority?: Priority;
     labels?: string[];
   };

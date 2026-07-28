@@ -3,7 +3,7 @@
 // 排到未来某个时刻发(scheduled_messages)，待发的列在输入框上方、发之前能撤。
 //
 // 从 TaskDetail.tsx 拆出来的：/team 的插话框也是这一套(见 web/src/team/TeamView.tsx)。
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import type { AgentType, ScheduledMessage } from "@harness/shared";
 import { AGENT_TYPES } from "@harness/shared";
 import { Robot, X, Clock } from "@phosphor-icons/react";
@@ -28,6 +28,7 @@ export function ReplyBox({
   onReply,
   disabled,
   mention = true,
+  toolbar,
   placeholder = "回复并继续（⌘↵ 发送，可粘贴图片或文件，@ 召唤其它智能体）…",
   disabledPlaceholder = "进行中…",
 }: {
@@ -36,6 +37,8 @@ export function ReplyBox({
   disabled: boolean;
   /** 关掉 @ 召唤(/team 的插话永远是给调度者的,换执行器没有意义)。 */
   mention?: boolean;
+  /** 输入框上方的任务级运行设置；运行中也保持可操作。 */
+  toolbar?: ReactNode;
   placeholder?: string;
   disabledPlaceholder?: string;
 }) {
@@ -162,6 +165,7 @@ export function ReplyBox({
           ))}
         </div>
       )}
+      {toolbar}
       <AttachmentChips attachments={attachments} onRemove={remove} error={error} />
       {target && (
         <div className="flex items-center text-[12px]">

@@ -266,7 +266,12 @@ export async function runTask(taskId: string): Promise<void> {
     // their lead's shared workspace unless they explicitly request another worktree.
     const ws = await taskWorkspace(task, project.repoPath);
     const agentType = (task.agentType as AgentType) ?? "claude";
-    const ex = await resolveExecutorFor({ executorId: task.executorId, type: agentType });
+    const ex = await resolveExecutorFor({
+      executorId: task.executorId,
+      type: agentType,
+      model: task.model,
+      reasoningEffort: task.reasoningEffort,
+    });
 
     const autoTitle = !!task.autoTitle;
     const TITLE_HINT =
@@ -446,7 +451,12 @@ export async function continueTask(
     if (task.mode !== "single") throw new Error("reply is for single tasks");
 
     const agent = opts.agent ?? (task.agentType as AgentType) ?? "claude";
-    const ex = await resolveExecutorFor({ executorId: opts.agent ? null : task.executorId, type: agent });
+    const ex = await resolveExecutorFor({
+      executorId: opts.agent ? null : task.executorId,
+      type: agent,
+      model: task.model,
+      reasoningEffort: task.reasoningEffort,
+    });
     const project = (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0);
 
     // A single task can now host several agents — one session line per agentType,
@@ -520,8 +530,18 @@ export async function continueTask(
     if (resuming) {
       // New turn on the same session row: mark it live (clear the prior turn's
       // end) and stamp this turn's start, so execution-time accounting and the
-      // live 用时 both track the turn actually running now.
-      await db.update(sessions).set({ turnStartedAt: turnStart, endedAt: null }).where(eq(sessions.id, sessId));
+      // live 用时 both track the turn actually running now. commandLine must also
+      // reflect this invocation because task-level model/effort can change between turns.
+      await db
+        .update(sessions)
+        .set({
+          turnStartedAt: turnStart,
+          endedAt: null,
+          commandLine: handle.commandLine,
+          executor: ex.label,
+          relayEnv: ex.relayEnvHint ?? null,
+        })
+        .where(eq(sessions.id, sessId));
     } else {
       const base = all[0];
       await db.insert(sessions).values({

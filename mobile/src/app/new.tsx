@@ -7,6 +7,7 @@ import {
   TEAM_DEFAULTS,
   type AgentExecutorProfile,
   type AgentType,
+  type LlmProvider,
   type Priority,
 } from "@harness/shared";
 import { useStore } from "@/lib/store";
@@ -17,6 +18,7 @@ import { useTheme } from "@/lib/theme";
 import { Pill, Button, Input } from "@/components/ui";
 import { ScheduleFields } from "@/components/ScheduleFields";
 import { TeamTaskOptions, type ExecutorSelection } from "@/components/TeamTaskOptions";
+import { ExecutionConfig } from "@/components/ExecutionConfig";
 
 const firstLine = (s: string) =>
   s.split("\n").map((l) => l.trim()).find(Boolean)?.slice(0, 40) ?? "";
@@ -37,13 +39,20 @@ export default function NewTask() {
   const [newGroupName, setNewGroupName] = useState("");
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
-  const [agent, setAgent] = useState<AgentType>("claude");
+  const [executorPick, setExecutorPick] = useState<ExecutorSelection>({ agentType: "claude", executorId: null });
+  const [model, setModel] = useState("");
+  const [reasoningEffort, setReasoningEffort] = useState("");
   const [teamOn, setTeamOn] = useState(false);
-  const [teamProfiles, setTeamProfiles] = useState<AgentExecutorProfile[]>([]);
+  const [profiles, setProfiles] = useState<AgentExecutorProfile[]>([]);
+  const [providers, setProviders] = useState<LlmProvider[]>([]);
   const [detectedAgents, setDetectedAgents] = useState<DetectedAgent[]>([]);
-  const [teamOptionsLoaded, setTeamOptionsLoaded] = useState(false);
+  const [detectedLoaded, setDetectedLoaded] = useState(false);
   const [leadPick, setLeadPick] = useState<ExecutorSelection | null>(null);
   const [workerPick, setWorkerPick] = useState<ExecutorSelection | null>(null);
+  const [leadModel, setLeadModel] = useState("");
+  const [leadReasoningEffort, setLeadReasoningEffort] = useState("");
+  const [workerModel, setWorkerModel] = useState("");
+  const [workerReasoningEffort, setWorkerReasoningEffort] = useState("");
   const [priority, setPriority] = useState<Priority>("none");
   // 启动时机（§9）：默认「立即执行」，与 web 一致。once 用 Date，cron 用裸 5 字段表达式。
   const [launch, setLaunch] = useState<LaunchMode>("run");
@@ -80,22 +89,32 @@ export default function NewTask() {
     setBase("");
   }, [projectId]);
 
-  // Team creation uses the same two endpoints as web: registered executor
-  // profiles for concrete picks, plus local detection to keep the resident lead
-  // selector limited to executors that can actually hold a team console open.
+  // Executor profiles + providers drive ordinary and team model choices. Local
+  // detection remains team-only because it shells out to inspect resident support.
   useEffect(() => {
-    if (!teamOn || teamOptionsLoaded) return;
     let alive = true;
-    Promise.all([api.agents().catch(() => []), api.detectAgents().catch(() => [])]).then(([profiles, detected]) => {
+    Promise.all([api.agents().catch(() => []), api.llmProviders().catch(() => [])]).then(([nextProfiles, nextProviders]) => {
       if (!alive) return;
-      setTeamProfiles(profiles);
-      setDetectedAgents(detected);
-      setTeamOptionsLoaded(true);
+      setProfiles(nextProfiles);
+      setProviders(nextProviders);
     });
     return () => {
       alive = false;
     };
-  }, [teamOn, teamOptionsLoaded]);
+  }, []);
+
+  useEffect(() => {
+    if (!teamOn || detectedLoaded) return;
+    let alive = true;
+    api.detectAgents().catch(() => []).then((detected) => {
+      if (!alive) return;
+      setDetectedAgents(detected);
+      setDetectedLoaded(true);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [teamOn, detectedLoaded]);
 
   const leadTypes = useMemo<AgentType[]>(() => {
     const resident = detectedAgents.filter((item) => item.available && item.resident).map((item) => item.type);
@@ -164,6 +183,10 @@ export default function NewTask() {
         worker: workerSelection.agentType,
         leadExecutorId: leadSelection.executorId,
         workerExecutorId: workerSelection.executorId,
+        leadModel: leadModel || null,
+        leadReasoningEffort: leadReasoningEffort || null,
+        workerModel: workerModel || null,
+        workerReasoningEffort: workerReasoningEffort || null,
       };
       const t = await api.createTask({
         projectId,
@@ -171,9 +194,14 @@ export default function NewTask() {
         title: explicit || firstLine(body) || "新任务",
         body: body.trim(),
         mode: teamOn ? "team" : "single",
-        agentType: teamOn ? leadSelection.agentType : agent,
-        executorId: teamOn ? null : undefined,
-        ...(teamOn ? { team } : {}),
+        agentType: teamOn ? leadSelection.agentType : executorPick.agentType,
+        executorId: teamOn ? null : executorPick.executorId,
+        ...(teamOn
+          ? { team }
+          : {
+              model: model || null,
+              reasoningEffort: reasoningEffort || null,
+            }),
         priority,
         // Resident consoles do not run the single-task auto-title turn.
         autoTitle: teamOn ? false : !explicit,
@@ -242,19 +270,54 @@ export default function NewTask() {
             worker={workerSelection}
             leadTypes={leadTypes}
             workerTypes={workerTypes}
-            profiles={teamProfiles}
-            onLeadChange={setLeadPick}
-            onWorkerChange={setWorkerPick}
+            profiles={profiles}
+            providers={providers}
+            leadModel={leadModel}
+            leadReasoningEffort={leadReasoningEffort}
+            workerModel={workerModel}
+            workerReasoningEffort={workerReasoningEffort}
+            onLeadChange={(next) => {
+              if (next.agentType !== leadSelection.agentType) {
+                setLeadModel("");
+                setLeadReasoningEffort("");
+              }
+              setLeadPick(next);
+            }}
+            onWorkerChange={(next) => {
+              if (next.agentType !== workerSelection.agentType) {
+                setWorkerModel("");
+                setWorkerReasoningEffort("");
+              }
+              setWorkerPick(next);
+            }}
+            onLeadModelChange={setLeadModel}
+            onLeadReasoningEffortChange={setLeadReasoningEffort}
+            onWorkerModelChange={setWorkerModel}
+            onWorkerReasoningEffortChange={setWorkerReasoningEffort}
           />
         </Field>
 
         {!teamOn ? (
-          <Field label="执行 agent">
-            <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
-              {AGENT_TYPES.map((a) => (
-                <Pill key={a} label={`@${a}`} active={a === agent} onPress={() => setAgent(a)} />
-              ))}
-            </View>
+          <Field label="执行设置">
+            <ExecutionConfig
+              role="执行器"
+              icon="hardware-chip-outline"
+              selection={executorPick}
+              types={[...AGENT_TYPES]}
+              profiles={profiles}
+              providers={providers}
+              model={model}
+              reasoningEffort={reasoningEffort}
+              onSelectionChange={(next) => {
+                if (next.agentType !== executorPick.agentType) {
+                  setModel("");
+                  setReasoningEffort("");
+                }
+                setExecutorPick(next);
+              }}
+              onModelChange={setModel}
+              onReasoningEffortChange={setReasoningEffort}
+            />
           </Field>
         ) : null}
 

@@ -22,6 +22,8 @@ export interface DispatchSpec {
   title?: string;
   agentType?: AgentType;
   executorId?: string | null;
+  model?: string | null;
+  reasoningEffort?: string | null;
   reportBack?: boolean;
   useWorktree?: boolean;
 }
@@ -102,6 +104,9 @@ export async function dispatchWorkers(
       resumeDependsOn: "[]",
       agentType: pick.agentType as AgentType | null,
       executorId: pick.executorId,
+      model: (s.model !== undefined ? s.model : cfg.workerModel) || null,
+      reasoningEffort:
+        (s.reasoningEffort !== undefined ? s.reasoningEffort : cfg.workerReasoningEffort) || null,
       autoTitle: false, // 调度者派活时给的标题就是标题,不让执行者自己改名
       debate: null as string | null,
       team: null as string | null,

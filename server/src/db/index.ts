@@ -33,7 +33,8 @@ export async function ensureSchema() {
       status TEXT NOT NULL DEFAULT 'backlog', priority TEXT NOT NULL DEFAULT 'none',
       labels TEXT NOT NULL DEFAULT '[]', depends_on TEXT NOT NULL DEFAULT '[]',
       resume_depends_on TEXT NOT NULL DEFAULT '[]',
-      agent_type TEXT, executor_id TEXT, auto_title INTEGER NOT NULL DEFAULT 0, debate TEXT, schedule_id TEXT,
+      agent_type TEXT, executor_id TEXT, model TEXT, reasoning_effort TEXT,
+      auto_title INTEGER NOT NULL DEFAULT 0, debate TEXT, schedule_id TEXT,
       created_at TEXT NOT NULL, updated_at TEXT NOT NULL, started_at TEXT, ended_at TEXT,
       archived INTEGER NOT NULL DEFAULT 0, archived_at TEXT
     );
@@ -42,6 +43,10 @@ export async function ensureSchema() {
       target TEXT NOT NULL DEFAULT '{"kind":"local"}', model TEXT,
       extra_args TEXT NOT NULL DEFAULT '[]', reasoning_effort TEXT, speed TEXT,
       is_default INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE TABLE IF NOT EXISTS team_presets (
+      id TEXT PRIMARY KEY, name TEXT NOT NULL, config TEXT NOT NULL,
+      created_at TEXT NOT NULL
     );
     CREATE TABLE IF NOT EXISTS sessions (
       id TEXT PRIMARY KEY, task_id TEXT NOT NULL, role TEXT NOT NULL,
@@ -118,6 +123,9 @@ export async function ensureSchema() {
     "ALTER TABLE tasks ADD COLUMN question_items TEXT",
     // 任务执行器 profile。非空时按 agents.id 精确解析；空/悬空时按 agent_type 默认执行器降级。
     "ALTER TABLE tasks ADD COLUMN executor_id TEXT",
+    // 任务级模型/思考强度覆盖；null 时继续跟随执行器 profile。
+    "ALTER TABLE tasks ADD COLUMN model TEXT",
+    "ALTER TABLE tasks ADD COLUMN reasoning_effort TEXT",
     // 续聊：终态任务的追加对话回合，记下续聊前的终态（队列按它看待该成员）
     "ALTER TABLE tasks ADD COLUMN follow_up_from TEXT",
     // 完成确认落库（严格 done 协议），确认与结算跨进程也不丢

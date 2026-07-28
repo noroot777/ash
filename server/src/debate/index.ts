@@ -126,8 +126,18 @@ async function runTurn(args: {
   } else {
     // Resuming the same session row for a new turn (e.g. after a gate the
     // user took a while to resolve): stamp this turn's start and clear the prior
-    // end, so the gate wait is excluded from execution time.
-    await db.update(sessions).set({ turnStartedAt: turnStart, endedAt: null }).where(eq(sessions.id, rowId));
+    // end, so the gate wait is excluded from execution time. Persist the latest
+    // command too because task-level model/effort may have changed before resume.
+    await db
+      .update(sessions)
+      .set({
+        turnStartedAt: turnStart,
+        endedAt: null,
+        commandLine: handle.commandLine,
+        executor: executor.label,
+        relayEnv: executor.relayEnvHint ?? null,
+      })
+      .where(eq(sessions.id, rowId));
   }
 
   bus.publish({ type: "debate.progress", taskId, round, speaker, phase: "start", startedAt: turnStart });
@@ -255,8 +265,9 @@ async function loadBase(taskId: string) {
   const cfg = iterationBody ? { ...storedCfg, topic: iterationBody } : storedCfg;
   const project = (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0);
   if (!project) throw new Error("project not found");
-  const exA = await resolveExecutorFor({ executorId: cfg.debaterAExecutorId, type: cfg.debaterA });
-  const exB = await resolveExecutorFor({ executorId: cfg.debaterBExecutorId, type: cfg.debaterB });
+  const taskOverrides = { model: task.model, reasoningEffort: task.reasoningEffort };
+  const exA = await resolveExecutorFor({ executorId: cfg.debaterAExecutorId, type: cfg.debaterA, ...taskOverrides });
+  const exB = await resolveExecutorFor({ executorId: cfg.debaterBExecutorId, type: cfg.debaterB, ...taskOverrides });
   // Discussion only reads; repo-less debates fall back to a scratch cwd (§4).
   const cwd = ensureWorkdir(project.repoPath, taskId);
   const cap = Math.min(cfg.maxRounds ?? HARD_CAP, HARD_CAP);

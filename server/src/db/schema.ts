@@ -48,6 +48,8 @@ export const tasks = sqliteTable("tasks", {
   resumeDependsOn: text("resume_depends_on").notNull().default("[]"), // json
   agentType: text("agent_type"),
   executorId: text("executor_id"), // agents.id；非空时优先使用具体执行器，空则按 agentType 默认降级
+  model: text("model"), // null=跟随执行器 profile；非空=任务级覆盖
+  reasoningEffort: text("reasoning_effort"), // null=跟随执行器 profile；非空=任务级覆盖
   autoTitle: integer("auto_title", { mode: "boolean" }).notNull().default(false),
   debate: text("debate"), // json DebateConfig
   team: text("team"), // json TeamConfig（mode:"team" 的调度者/默认执行者类型）
@@ -101,6 +103,15 @@ export const agents = sqliteTable("agents", {
   // 非空时启动 CLI 前注入 base_url + key(claude: env;codex: -c model_providers)。
   providerId: text("provider_id"),
   isDefault: integer("is_default", { mode: "boolean" }).notNull().default(false),
+});
+
+// Global team-creation shortcuts. config stores only the configurable TeamConfig
+// fields; executor labels are resolved at read time so stale ids degrade cleanly.
+export const teamPresets = sqliteTable("team_presets", {
+  id: text("id").primaryKey(),
+  name: text("name").notNull(),
+  config: text("config").notNull(), // json TeamPresetConfig (without display labels)
+  createdAt: text("created_at").notNull(),
 });
 
 export const sessions = sqliteTable("sessions", {

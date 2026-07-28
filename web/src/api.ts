@@ -1,4 +1,4 @@
-import type { Project, ProjectView, ProjectHealth, Task, Note, Session, Group, GateAction, Schedule, ScheduledMessage, AgentExecutorProfile, BatchCreateTasksBody, AgentType, AttachmentKind, LlmProvider, LlmProtocol, SearchHit } from "@harness/shared";
+import type { Project, ProjectView, ProjectHealth, Task, Note, Session, Group, GateAction, Schedule, ScheduledMessage, AgentExecutorProfile, BatchCreateTasksBody, AgentType, AttachmentKind, LlmProvider, LlmProtocol, SearchHit, TeamPreset, TeamPresetConfig } from "@harness/shared";
 import type { PersistedDebateEntry } from "./debateState";
 
 export type CuaProcess = {
@@ -149,6 +149,22 @@ export const api = {
     }).then(j),
   deleteGroup: (id: string): Promise<unknown> =>
     fetch(`/api/groups/${id}`, { method: "DELETE" }).then(j),
+
+  teamPresets: (): Promise<TeamPreset[]> => fetch("/api/team-presets").then(j),
+  createTeamPreset: (name: string, config: TeamPresetConfig): Promise<TeamPreset> =>
+    fetch("/api/team-presets", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name, config }),
+    }).then(j),
+  patchTeamPreset: (id: string, patch: { name?: string; config?: TeamPresetConfig }): Promise<TeamPreset> =>
+    fetch(`/api/team-presets/${id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(patch),
+    }).then(j),
+  deleteTeamPreset: (id: string): Promise<{ deleted: true }> =>
+    fetch(`/api/team-presets/${id}`, { method: "DELETE" }).then(j),
 
   tasks: (): Promise<Task[]> => fetch("/api/tasks").then(j),
   task: (id: string): Promise<Task> => fetch(`/api/tasks/${id}`).then(j),

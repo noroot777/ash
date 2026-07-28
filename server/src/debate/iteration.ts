@@ -180,6 +180,8 @@ export function mountDebateIterationRoutes(api: Hono): void {
       resumeDependsOn: "[]",
       agentType: null,
       executorId: null,
+      model: originalRow.model,
+      reasoningEffort: originalRow.reasoningEffort,
       autoTitle: true,
       // Keep the original debate knobs byte-for-byte (debater profiles, round
       // cap, gate policy, and original topic). runDebate uses this task's body

@@ -19,6 +19,7 @@ import { useConversation } from "./useConversation";
 import { ReplyBox } from "./ReplyBox";
 import { ExecutorPicker, type ExecutorSelection, useExecutorProfiles } from "./ExecutorPicker";
 import { executorLabel } from "./executorLabel";
+import { TaskModelControls } from "./TaskModelControls";
 import { QuestionCard } from "./QuestionCard";
 import { isDispatchedWorker } from "./taskPolicy";
 import { AttachmentDisplay, parseAttachmentText } from "./messageAttachments";
@@ -95,6 +96,46 @@ export function TaskDetail({
     );
     return () => { alive = false; };
   }, [task.queueId, queueModalOpen]);
+
+  const patchRunConfig = async (patch: Partial<Task>) => {
+    try {
+      await onPatch(patch);
+      toast("运行设置已更新，将从下一回合生效");
+    } catch (error) {
+      toast(error instanceof Error ? error.message : String(error));
+    }
+  };
+  const runConfigControls = (
+    <div className={`flex flex-wrap items-center gap-1.5 ${task.archived ? "pointer-events-none opacity-60" : ""}`}>
+      <ExecutorPicker
+        selection={currentExecutor}
+        onSelect={(selection) => void patchRunConfig({
+          agentType: selection.agentType,
+          executorId: selection.executorId,
+          ...(selection.agentType !== currentExecutor.agentType
+            ? { model: null, reasoningEffort: null }
+            : {}),
+        })}
+        profiles={profiles}
+        providers={providers}
+        types={[...AGENT_TYPES]}
+        label={task.executorId ? executorLabel({ task }) : `默认 ${executorLabel({ task })}`}
+        menuWidth={320}
+      />
+      <TaskModelControls
+        selection={currentExecutor}
+        profiles={profiles}
+        providers={providers}
+        model={task.model}
+        reasoningEffort={task.reasoningEffort}
+        onModelChange={(model) => void patchRunConfig({ model: model || null })}
+        onReasoningEffortChange={(reasoningEffort) => void patchRunConfig({ reasoningEffort: reasoningEffort || null })}
+      />
+      <span className="inline-flex items-center gap-1 text-[11px] text-faint" title="当前已经开始的 CLI 回合不会热切换模型或思考强度">
+        {sessions.length === 0 ? "首次运行使用；之后改动" : "改动"}从下一回合生效
+      </span>
+    </div>
+  );
 
   return (
     <main className="flex h-full min-h-0 flex-col">
@@ -322,20 +363,7 @@ export function TaskDetail({
             {sessions.length === 0 && (
               <>
                 <span className="h-4 w-px bg-line" />
-                <span className="inline-flex items-center gap-1.5 text-faint">
-                  将由
-                  <ExecutorPicker
-                    selection={currentExecutor}
-                    onSelect={(sel) => onPatch({ agentType: sel.agentType, executorId: sel.executorId })}
-                    profiles={profiles}
-                    providers={providers}
-                    types={[...AGENT_TYPES]}
-                    label={task.executorId ? executorLabel({ task }) : `默认 ${executorLabel({ task })}`}
-                    menuWidth={320}
-                    triggerClassName="inline-flex max-w-[260px] items-center gap-1 rounded-md border border-line bg-panel px-1.5 py-0.5 text-[12px] text-muted transition-colors hover:bg-raised hover:text-ink"
-                  />
-                  <span>执行</span>
-                </span>
+                {runConfigControls}
               </>
             )}
           </div>
@@ -359,7 +387,12 @@ export function TaskDetail({
       </div>
 
       {task.mode === "single" && (sessions.length > 0 || snapshot.length > 0 || logs.length > 0) && (
-        <ReplyBox taskId={task.id} onReply={onReply} disabled={task.status === "running" || task.status === "queued" || !!task.archived} />
+        <ReplyBox
+          taskId={task.id}
+          onReply={onReply}
+          disabled={task.status === "running" || task.status === "queued" || !!task.archived}
+          toolbar={runConfigControls}
+        />
       )}
       {!dispatchedWorker && queueModalOpen && task.queueId && (
         <QueueModal
