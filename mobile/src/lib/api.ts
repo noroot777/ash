@@ -13,6 +13,8 @@ import type {
   GroupMode,
   DebateSpeaker,
   GateName,
+  LlmProvider,
+  LlmProtocol,
 } from "@harness/shared";
 import { getBaseURL } from "./config";
 
@@ -184,4 +186,11 @@ export const api = {
 
   agents: (): Promise<AgentExecutorProfile[]> => req("/agents").then(j),
   detectAgents: (): Promise<DetectedAgent[]> => req("/agents/detect").then(j),
+  llmProviders: (): Promise<LlmProvider[]> => req("/llm-providers").then(j),
+  probeModels: (body: {
+    protocol: LlmProtocol;
+    baseUrl: string;
+    id?: string;
+  }): Promise<{ models: string[] }> =>
+    req("/llm-providers/models", { method: "POST", body: JSON.stringify(body) }).then(j),
 };

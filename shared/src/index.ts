@@ -9,6 +9,27 @@
 export const AGENT_TYPES = ["claude", "codex", "antigravity"] as const;
 export type AgentType = (typeof AGENT_TYPES)[number];
 
+// CLI-native model aliases used when an executor is on its official account.
+// Provider-backed executors replace these with that provider's /v1/models list.
+export const CLI_MODEL_PRESETS: Record<AgentType, readonly string[]> = {
+  claude: ["opus", "sonnet", "haiku", "fable"],
+  codex: ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4"],
+  antigravity: [],
+};
+
+// CLI-specific reasoning levels. Unsupported model/effort combinations are
+// rejected by the CLI/API at run time (for example gpt-5.5 tops out at xhigh).
+export const REASONING_EFFORT_VALUES: Record<AgentType, readonly string[]> = {
+  claude: ["low", "medium", "high", "xhigh", "max"],
+  codex: ["low", "medium", "high", "xhigh", "ultra", "max"],
+  antigravity: [],
+};
+
+export const REASONING_EFFORT_DETAIL: Record<string, string> = {
+  xhigh: "gpt-5.5 支持的最高档",
+  ultra: "仅 gpt-5.6-sol/terra 等新模型支持",
+};
+
 // Execution layer: a concrete executor under a type (CLI + target + model).
 export interface AgentExecutorProfile {
   id: string;

@@ -12,6 +12,7 @@ import { usePasteAttachments, AttachmentChips } from "./pasteAttachments";
 import { ScheduleFields, toLocalInput } from "./ScheduleFields";
 import { ExecutorPicker, type ExecutorSelection, useExecutorProfiles } from "./ExecutorPicker";
 import { teamExecutorDefaults } from "./teamExecutorDefaults";
+import { TaskModelControls } from "./TaskModelControls";
 
 // 斜杠命令表。输入框里只剩一个 `/词` 时按前缀过滤它,列出的每一行都是一个**具体
 // 动作**(`/pair` 是辩论,`/team` 是团队)。加命令只改这张表 ——
@@ -61,6 +62,8 @@ export function CreateTask({
   const [body, setBody] = useState("");
   const [priority, setPriority] = useState<Priority>("none");
   const [executorPick, setExecutorPick] = useState<ExecutorSelection>({ agentType: "claude", executorId: null });
+  const [model, setModel] = useState("");
+  const [reasoningEffort, setReasoningEffort] = useState("");
   const [groupId, setGroupId] = useState("");
   const [labels, setLabels] = useState<string[]>([]);
   const [more, setMore] = useState(false);
@@ -76,6 +79,10 @@ export function CreateTask({
   const [teamOn, setTeamOn] = useState(false);
   const [leadPick, setLeadPick] = useState<ExecutorSelection | null>(null);
   const [workerPick, setWorkerPick] = useState<ExecutorSelection | null>(null);
+  const [leadModel, setLeadModel] = useState("");
+  const [leadReasoningEffort, setLeadReasoningEffort] = useState("");
+  const [workerModel, setWorkerModel] = useState("");
+  const [workerReasoningEffort, setWorkerReasoningEffort] = useState("");
   const [detected, setDetected] = useState<{ type: AgentType; available: boolean; resident: boolean }[] | null>(null);
   const { profiles, providers } = useExecutorProfiles();
 
@@ -160,6 +167,10 @@ export function CreateTask({
         worker,
         leadExecutorId: leadSelection.executorId,
         workerExecutorId: workerSelection.executorId,
+        leadModel: leadModel || null,
+        leadReasoningEffort: leadReasoningEffort || null,
+        workerModel: workerModel || null,
+        workerReasoningEffort: workerReasoningEffort || null,
       };
       const t = await api.createTask({
         projectId,
@@ -171,7 +182,12 @@ export function CreateTask({
         // 列表/徽标显示对。
         agentType: teamOn ? lead : executorPick.agentType,
         executorId: teamOn ? null : executorPick.executorId,
-        ...(teamOn ? { team } : {}),
+        ...(teamOn
+          ? { team }
+          : {
+              model: model || null,
+              reasoningEffort: reasoningEffort || null,
+            }),
         priority,
         labels,
         // 调度台不走「首个 agent 自动起名」那套协议(它是常驻会话,没有那个回合),
@@ -350,43 +366,94 @@ export function CreateTask({
         <div className="flex flex-wrap items-center gap-1.5 px-4 pb-3 pt-3">
           {teamOn ? (
             <>
-              <ExecutorPicker
-                icon={<Crown size={14} />}
-                selection={leadSelection}
-                onSelect={setLeadPick}
-                profiles={profiles}
-                providers={providers}
-                types={leadTypes}
-                label={`调度者 ${profiles.find((a) => a.id === leadSelection.executorId)?.name ?? `默认 ${lead}`}`}
-                includeManage={!!onOpenAgents}
-                onOpenAgents={onOpenAgents}
-                menuWidth={320}
-              />
-              <ExecutorPicker
-                icon={<Robot size={14} />}
-                selection={workerSelection}
-                onSelect={setWorkerPick}
-                profiles={profiles}
-                providers={providers}
-                types={workerTypes}
-                label={`执行者 ${profiles.find((a) => a.id === workerSelection.executorId)?.name ?? `默认 ${worker}`}`}
-                includeManage={!!onOpenAgents}
-                onOpenAgents={onOpenAgents}
-                menuWidth={320}
-              />
+              <div className="flex flex-wrap items-center gap-1.5 rounded-xl bg-raised/50 p-1">
+                <ExecutorPicker
+                  icon={<Crown size={14} />}
+                  selection={leadSelection}
+                  onSelect={(next) => {
+                    if (next.agentType !== leadSelection.agentType) {
+                      setLeadModel("");
+                      setLeadReasoningEffort("");
+                    }
+                    setLeadPick(next);
+                  }}
+                  profiles={profiles}
+                  providers={providers}
+                  types={leadTypes}
+                  label={`调度者 ${profiles.find((a) => a.id === leadSelection.executorId)?.name ?? `默认 ${lead}`}`}
+                  includeManage={!!onOpenAgents}
+                  onOpenAgents={onOpenAgents}
+                  menuWidth={320}
+                />
+                <TaskModelControls
+                  selection={leadSelection}
+                  profiles={profiles}
+                  providers={providers}
+                  model={leadModel}
+                  reasoningEffort={leadReasoningEffort}
+                  onModelChange={setLeadModel}
+                  onReasoningEffortChange={setLeadReasoningEffort}
+                />
+              </div>
+              <div className="flex flex-wrap items-center gap-1.5 rounded-xl bg-raised/50 p-1">
+                <ExecutorPicker
+                  icon={<Robot size={14} />}
+                  selection={workerSelection}
+                  onSelect={(next) => {
+                    if (next.agentType !== workerSelection.agentType) {
+                      setWorkerModel("");
+                      setWorkerReasoningEffort("");
+                    }
+                    setWorkerPick(next);
+                  }}
+                  profiles={profiles}
+                  providers={providers}
+                  types={workerTypes}
+                  label={`执行者 ${profiles.find((a) => a.id === workerSelection.executorId)?.name ?? `默认 ${worker}`}`}
+                  includeManage={!!onOpenAgents}
+                  onOpenAgents={onOpenAgents}
+                  menuWidth={320}
+                />
+                <TaskModelControls
+                  selection={workerSelection}
+                  profiles={profiles}
+                  providers={providers}
+                  model={workerModel}
+                  reasoningEffort={workerReasoningEffort}
+                  onModelChange={setWorkerModel}
+                  onReasoningEffortChange={setWorkerReasoningEffort}
+                />
+              </div>
             </>
           ) : (
-            <ExecutorPicker
-              icon={<Robot size={14} />}
-              selection={executorPick}
-              onSelect={setExecutorPick}
-              profiles={profiles}
-              providers={providers}
-              types={[...AGENT_TYPES]}
-              includeManage={!!onOpenAgents}
-              onOpenAgents={onOpenAgents}
-              menuWidth={320}
-            />
+            <>
+              <ExecutorPicker
+                icon={<Robot size={14} />}
+                selection={executorPick}
+                onSelect={(next) => {
+                  if (next.agentType !== executorPick.agentType) {
+                    setModel("");
+                    setReasoningEffort("");
+                  }
+                  setExecutorPick(next);
+                }}
+                profiles={profiles}
+                providers={providers}
+                types={[...AGENT_TYPES]}
+                includeManage={!!onOpenAgents}
+                onOpenAgents={onOpenAgents}
+                menuWidth={320}
+              />
+              <TaskModelControls
+                selection={executorPick}
+                profiles={profiles}
+                providers={providers}
+                model={model}
+                reasoningEffort={reasoningEffort}
+                onModelChange={setModel}
+                onReasoningEffortChange={setReasoningEffort}
+              />
+            </>
           )}
 
           <Pill icon={<Stack size={14} />} label={groupTrigger} value={groupId} onChange={(v) => (v === "__new" ? onCreateGroup() : setGroupId(v))} options={[{ value: "", label: "无分组" }, ...groups.map((g) => ({ value: g.id, label: groupLabel(g) })), { value: "__new", label: "+ 新建分组" }]} />
