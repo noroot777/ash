@@ -31,8 +31,8 @@ export function TeamFeed({
   const byId = new Map(workers.map((w) => [w.id, w]));
   const indexOf = (id?: string) => (id ? workers.findIndex((w) => w.id === id) + 1 : 0);
   return (
-    <div className="relative min-h-0 border-r border-line">
-      <div ref={scrollRef} className="h-full overflow-y-auto px-4 py-4">
+    <div className="relative min-h-0 min-w-0 border-r border-line">
+      <div ref={scrollRef} className="h-full overflow-y-auto break-words px-4 py-4">
         {empty && (
           <p className="text-[13px] text-faint">
             点「运行」让调度者开工:它会先读需求、拆活,再用 <span className="font-mono">dispatch</span> 把活派给执行者。
