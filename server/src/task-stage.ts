@@ -1,46 +1,22 @@
-import { createWriteStream, mkdirSync } from "node:fs";
-import { dirname } from "node:path";
-import type { AgentType, SessionRole, TaskStage } from "@harness/shared";
+import type { TaskStage } from "@harness/shared";
 import { isTaskStage, STAGE_LABELS, STAGE_ORDER } from "@harness/shared";
-import { desc, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import type { Hono } from "hono";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
-import { sessions, tasks } from "./db/schema.js";
-import { sessionTranscriptPath, writeTurn } from "./transcript.js";
+import { tasks } from "./db/schema.js";
+import { appendTaskTimeline } from "./task-timeline.js";
 import { now } from "./util.js";
 
-async function appendStageTimeline(taskId: string, stage: TaskStage): Promise<boolean> {
-  const session = (
-    await db
-      .select()
-      .from(sessions)
-      .where(eq(sessions.taskId, taskId))
-      .orderBy(desc(sessions.startedAt))
-      .limit(1)
-  ).at(0);
-  if (!session) return false;
-
-  const text = `验收阶段更新：${STAGE_LABELS[stage]}（${stage}）`;
-  const at = now();
-  const transcriptPath = sessionTranscriptPath(taskId, session.id);
-  mkdirSync(dirname(transcriptPath), { recursive: true });
-  await new Promise<void>((resolve, reject) => {
-    const out = createWriteStream(transcriptPath, { flags: "a" });
-    out.once("error", reject);
-    out.once("finish", resolve);
-    writeTurn(out, { t: "system", agent: session.agentType as AgentType, text }, at);
-    out.end();
-  });
-  bus.publish({
-    type: "agent.event",
-    taskId,
-    sessionId: session.id,
-    role: session.role as SessionRole,
-    agentType: session.agentType as AgentType,
-    event: { kind: "system", text },
-  });
-  return true;
+export async function setTaskStage(
+  taskId: string,
+  stage: TaskStage,
+): Promise<{ updatedAt: string; timelineRecorded: boolean }> {
+  const updatedAt = now();
+  await db.update(tasks).set({ stage, updatedAt }).where(eq(tasks.id, taskId));
+  bus.publish({ type: "task.stage", taskId, stage });
+  const timelineRecorded = await appendTaskTimeline(taskId, `验收阶段更新：${STAGE_LABELS[stage]}（${stage}）`);
+  return { updatedAt, timelineRecorded };
 }
 
 export function mountTaskStageRoutes(api: Hono): void {
@@ -62,10 +38,7 @@ export function mountTaskStageRoutes(api: Hono): void {
     }
     if (task.archived) return c.json({ error: "归档任务不能再上报验收阶段" }, 409);
 
-    const updatedAt = now();
-    await db.update(tasks).set({ stage: body.stage, updatedAt }).where(eq(tasks.id, taskId));
-    bus.publish({ type: "task.stage", taskId, stage: body.stage });
-    const timelineRecorded = await appendStageTimeline(taskId, body.stage);
+    const { updatedAt, timelineRecorded } = await setTaskStage(taskId, body.stage);
     return c.json({ reported: true, taskId, stage: body.stage, updatedAt, timelineRecorded });
   });
 }

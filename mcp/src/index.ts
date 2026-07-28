@@ -309,6 +309,22 @@ server.registerTool(
 );
 
 server.registerTool(
+  "accept_task",
+  {
+    title: "确认验收通过并合并清理",
+    description:
+      "仅在用户明确表示「验收通过」「可以合并」等最终验收意图时调用。服务端会确定性执行：把任务分支合并到 worktreeBase（空则项目当前分支），确认已合并后删除任务 worktree，并用 git branch -d 安全删除任务分支，最后把 stage 标为 accepted；status 不会改变。冲突、目标工作区脏或清理失败时会返回结构化原因，绝不强制合并。不要自行运行 git merge / worktree remove / branch -d，统一调用本工具。共享团队 worktree 的执行者只标记 accepted，由团队调度台验收统一清理。",
+    inputSchema: {
+      taskId: z.string().describe("用户明确验收通过的任务 id"),
+    },
+  },
+  async ({ taskId }) => {
+    try { return ok(await call("POST", `/tasks/${taskId}/accept`, {})); }
+    catch (e) { return fail(e); }
+  },
+);
+
+server.registerTool(
   "complete_task",
   {
     title: "确认任务完成(严格 done 协议)",
