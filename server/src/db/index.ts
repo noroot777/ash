@@ -33,7 +33,7 @@ export async function ensureSchema() {
     CREATE TABLE IF NOT EXISTS tasks (
       id TEXT PRIMARY KEY, project_id TEXT NOT NULL, group_id TEXT, parent_id TEXT,
       title TEXT NOT NULL, body TEXT NOT NULL DEFAULT '', mode TEXT NOT NULL DEFAULT 'single',
-      status TEXT NOT NULL DEFAULT 'backlog', priority TEXT NOT NULL DEFAULT 'none',
+      status TEXT NOT NULL DEFAULT 'backlog', stage TEXT, priority TEXT NOT NULL DEFAULT 'none',
       labels TEXT NOT NULL DEFAULT '[]', depends_on TEXT NOT NULL DEFAULT '[]',
       resume_depends_on TEXT NOT NULL DEFAULT '[]',
       agent_type TEXT, executor_id TEXT, model TEXT, reasoning_effort TEXT,
@@ -133,6 +133,8 @@ export async function ensureSchema() {
     "ALTER TABLE tasks ADD COLUMN follow_up_from TEXT",
     // 完成确认落库（严格 done 协议），确认与结算跨进程也不丢
     "ALTER TABLE tasks ADD COLUMN complete_confirmed_at TEXT",
+    // 正交验收阶段，只用于展示与协作，不进入 TaskStatus 调度/结算
+    "ALTER TABLE tasks ADD COLUMN stage TEXT",
   ]) {
     try {
       await client.execute(sql);

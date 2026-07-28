@@ -7,7 +7,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { MAX_QUESTION_ITEMS, MAX_QUESTION_OPTIONS, MAX_QUESTION_OPTION_LEN } from "@harness/shared";
+import { MAX_QUESTION_ITEMS, MAX_QUESTION_OPTIONS, MAX_QUESTION_OPTION_LEN, STAGE_ORDER } from "@harness/shared";
 
 const BASE = (process.env.HARNESS_URL ?? "http://localhost:4317").replace(/\/+$/, "");
 
@@ -41,6 +41,7 @@ const AGENT_TYPE = z.enum(["claude", "codex", "antigravity"]);
 const PRIORITY = z.enum(["none", "low", "medium", "high", "urgent"]);
 const MODE = z.enum(["parallel", "serial"]);
 const TASK_STATUS = z.enum(["backlog", "done", "failed", "canceled"]);
+const TASK_STAGE = z.enum(STAGE_ORDER);
 
 // One task spec, reused by batch_create_tasks and create_task_chain.
 // 注意:不再接受 dependsOn / resumeDependsOn —— 顺序依赖统一走 queue,
@@ -287,6 +288,23 @@ server.registerTool(
         ...(batch.warning ? { warning: batch.warning } : {}),
       });
     } catch (e) { return fail(e); }
+  },
+);
+
+server.registerTool(
+  "report_stage",
+  {
+    title: "上报实现/验证/验收阶段",
+    description:
+      "上报与 TaskStatus 正交的协作阶段，不会改变队列或任务结算。实现完成立即报 implemented；开始真实运行验证报 verifying；验证通过报 verified；验证未通过报 verify_failed，并在回复中说明失败原因；准备交给人工验收前报 awaiting_acceptance；后续合并到目标分支报 merged；目标分支验证并验收完成报 accepted。这里的验证必须实际运行产物：web 项目要启动服务并用浏览器/截图确认行为，只读代码或只过编译不算验证。团队调度台(mode=team)不适用，应由具体执行者上报。",
+    inputSchema: {
+      taskId: z.string().describe("当前任务 id（任务 prompt 前言里有）"),
+      stage: TASK_STAGE.describe(`阶段：${STAGE_ORDER.join(" | ")}`),
+    },
+  },
+  async ({ taskId, stage }) => {
+    try { return ok(await call("POST", `/tasks/${taskId}/stage`, { stage })); }
+    catch (e) { return fail(e); }
   },
 );
 

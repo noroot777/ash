@@ -50,17 +50,21 @@ function writeTurn(out: NodeJS.WritableStream, turn: { t: "user" | "system"; age
 // 完成协议前言(严格 done):告诉 agent 它的 taskId 和「必须亲口确认完成」的
 // 规则。fresh run 用长版(第一回合,完整交代);reply/resume 回合用短版追加在
 // 消息尾部(每回合都提醒,上下文再长 agent 也不至于忘)。
+const STAGE_PROTOCOL = (taskId: string) =>
+  `【阶段自报】实现完成后立即调用 report_stage(taskId="${taskId}", stage="implemented")。开始真实运行验证时报 verifying；验证通过报 verified；未通过报 verify_failed 并说明原因；准备交给人工验收前报 awaiting_acceptance。后续完成合并/最终验收时分别报 merged/accepted。这里的「验证」必须实际运行产物：web 项目要启动服务并用浏览器/截图确认行为，只读代码或只过编译不算验证。\n\n`;
+const STAGE_REMINDER = (taskId: string) =>
+  `阶段自报:taskId=${taskId}；实现完成报 implemented，真实运行验证开始/通过/失败报 verifying/verified/verify_failed（失败要说明），交人工前报 awaiting_acceptance，后续合并/验收完成报 merged/accepted；web 验证需起服务并用浏览器/截图确认。`;
 const COMPLETION_PROTOCOL = (taskId: string) =>
-  `【完成协议】本任务在 harness 的 taskId 是 ${taskId}。当且仅当你确定任务目标已经达成时,在结束前调用 harness MCP 的 complete_task(taskId="${taskId}")确认完成;未确认就结束,本回合会按未完成记为 failed。跑到需要等待外部条件的检查点时,改用 pause_task 写下续跑指令。\n\n`;
+  `【完成协议】本任务在 harness 的 taskId 是 ${taskId}。当且仅当你确定任务目标已经达成时,在结束前调用 harness MCP 的 complete_task(taskId="${taskId}")确认完成;未确认就结束,本回合会按未完成记为 failed。跑到需要等待外部条件的检查点时,改用 pause_task 写下续跑指令。\n\n${STAGE_PROTOCOL(taskId)}`;
 const COMPLETION_REMINDER = (taskId: string) =>
-  `\n\n(harness 完成协议:taskId=${taskId}。若本回合结束时任务目标已达成,先调用 complete_task 确认再结束,否则按未完成记 failed;到等待检查点则用 pause_task。)`;
+  `\n\n(harness 完成协议:taskId=${taskId}。若本回合结束时任务目标已达成,先调用 complete_task 确认再结束,否则按未完成记 failed;到等待检查点则用 pause_task。${STAGE_REMINDER(taskId)})`;
 
 // 续聊(follow-up)回合的尾巴:任务早就到终态了,这一轮是「完成之后的对话」,
 // 不该拿严格完成协议吓唬 agent(不确认就 failed)—— 这一轮不确认,任务状态原样
 // 不动。只有它真把任务推进到新的完成时才需要确认。
 const FOLLOW_UP_LABEL: Record<string, string> = { done: "已完成", failed: "失败", canceled: "已取消" };
 const FOLLOW_UP_REMINDER = (taskId: string, from: string) =>
-  `\n\n(harness:这是任务在「${FOLLOW_UP_LABEL[from] ?? from}」之后的续聊,taskId=${taskId}。任务状态不会因为本回合而改变,本回合不需要 complete_task;只有当你在这一轮把任务推进到了新的完成状态时,才调用 complete_task(taskId="${taskId}")确认。)`;
+  `\n\n(harness:这是任务在「${FOLLOW_UP_LABEL[from] ?? from}」之后的续聊,taskId=${taskId}。任务状态不会因为本回合而改变,本回合不需要 complete_task;只有当你在这一轮把任务推进到了新的完成状态时,才调用 complete_task(taskId="${taskId}")确认。${STAGE_REMINDER(taskId)})`;
 
 // The task's worktree was gone AND its branch with it, so we rebuilt an empty one.
 // The CLI conversation lives outside the worktree (~/.claude/projects/<escaped

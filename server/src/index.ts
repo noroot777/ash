@@ -110,18 +110,20 @@ const { startScheduler, api } = await initializeServer().catch((e) =>
 );
 
 async function initializeServer() {
-  const [{ ensureSchema }, { migrateQueues }, { reconcileInterrupted }, schedulesModule, routesModule] =
+  const [{ ensureSchema }, { migrateQueues }, { reconcileInterrupted }, schedulesModule, routesModule, stageModule] =
     await Promise.all([
       import("./db/index.js"),
       import("./db/migrateQueues.js"),
       import("./orchestrator.js"),
       import("./schedules.js"),
       import("./routes.js"),
+      import("./task-stage.js"),
     ]);
 
   await ensureSchema();
   await migrateQueues(); // 一次性把 legacy depends_on / resume_depends_on 迁到 queue_items（幂等）
   await reconcileInterrupted(); // recover tasks left "running"/"queued" by a previous crash/restart
+  stageModule.mountTaskStageRoutes(routesModule.api);
   return { startScheduler: schedulesModule.startScheduler, api: routesModule.api };
 }
 
