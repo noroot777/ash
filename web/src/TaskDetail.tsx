@@ -98,13 +98,13 @@ export function TaskDetail({
   return (
     <main className="flex h-full min-h-0 flex-col">
       <header className="border-b border-line px-6 pb-3 pt-5">
-        <div className="flex items-start gap-3">
+        <div className="flex flex-wrap items-start gap-x-3 gap-y-2">
           {dispatchedWorker ? (
-            <h1 className="min-w-0 flex-1 px-1 text-[15px] font-semibold leading-snug text-ink">{task.title}</h1>
+            <h1 className="min-w-48 flex-1 px-1 text-[15px] font-semibold leading-snug text-ink">{task.title}</h1>
           ) : (
             <EditableTitle title={task.title} onSave={(t) => onPatch({ title: t, autoTitle: false })} />
           )}
-          <div className="flex shrink-0 items-center gap-2">
+          <div className="ml-auto flex min-w-0 max-w-full flex-wrap items-center justify-end gap-2">
             <TaskTimeChip task={task} />
             {task.archived ? (
               <>
@@ -428,7 +428,7 @@ export function EditableTitle({ title, onSave }: { title: string; onSave: (t: st
           e.currentTarget.blur();
         }
       }}
-      className="-mx-1 min-w-0 flex-1 rounded px-1 text-[15px] font-semibold leading-snug text-ink outline-none hover:bg-raised/40 focus:bg-raised/60"
+      className="-mx-1 min-w-48 flex-1 rounded px-1 text-[15px] font-semibold leading-snug text-ink outline-none hover:bg-raised/40 focus:bg-raised/60"
       title="点击编辑标题"
     />
   );
