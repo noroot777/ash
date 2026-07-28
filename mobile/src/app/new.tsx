@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { View, Text, ScrollView, KeyboardAvoidingView, Platform, Keyboard } from "react-native";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Alert, Keyboard, KeyboardAvoidingView, Platform, Pressable, ScrollView, Text, View } from "react-native";
 import { useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import {
   AGENT_TYPES,
+  DEFAULT_APP_SETTINGS,
   TEAM_DEFAULTS,
   type AgentExecutorProfile,
   type AgentType,
@@ -60,14 +61,32 @@ export default function NewTask() {
   const [cron, setCron] = useState("0 9 * * *");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // Per-task worktree opt-in — when on, server materializes <repo>/.worktrees/<id>
-  // on a fresh `harness/<id8>` branch off `base` (empty = current HEAD).
-  const [useWorktree, setUseWorktree] = useState(false);
+  // Apply the factory default immediately, then hydrate the server-side global
+  // setting. A failed read deliberately stays at true. As on web, a choice the
+  // user makes before hydration completes is never overwritten.
+  const [worktreeDefault, setWorktreeDefault] = useState(DEFAULT_APP_SETTINGS.worktreeDefault);
+  const [useWorktree, setUseWorktree] = useState(DEFAULT_APP_SETTINGS.worktreeDefault);
+  const [savingWorktreeDefault, setSavingWorktreeDefault] = useState(false);
+  const worktreeChoiceTouched = useRef(false);
   const [base, setBase] = useState("");
   const [branches, setBranches] = useState<string[]>([]);
   const [branchesLoaded, setBranchesLoaded] = useState(false);
   // Project the form is targeting determines which branch list we fetch.
   const project = projects.find((p) => p.id === projectId) ?? null;
+  useEffect(() => {
+    let alive = true;
+    void (async () => {
+      try {
+        const settings = await api.settings();
+        if (!alive) return;
+        setWorktreeDefault(settings.worktreeDefault);
+        if (!worktreeChoiceTouched.current) setUseWorktree(settings.worktreeDefault);
+      } catch {
+        // Factory fallback is already applied; task creation can continue.
+      }
+    })();
+    return () => { alive = false; };
+  }, []);
   // Lazy-load branches when the toggle opens for the current project; reset
   // when the user switches projects.
   useEffect(() => {
@@ -139,6 +158,28 @@ export default function NewTask() {
   const pickLaunch = (m: LaunchMode) => {
     if (m === "once") Keyboard.dismiss(); // 让出键盘，给 iOS inline spinner 腾位
     setLaunch(m);
+  };
+
+  const toggleWorktree = () => {
+    worktreeChoiceTouched.current = true;
+    setUseWorktree((value) => !value);
+  };
+
+  const saveWorktreeDefault = async () => {
+    if (savingWorktreeDefault || useWorktree === worktreeDefault) return;
+    setSavingWorktreeDefault(true);
+    try {
+      const settings = await api.patchSettings({ worktreeDefault: useWorktree });
+      setWorktreeDefault(settings.worktreeDefault);
+      Alert.alert(
+        "已设为默认",
+        `以后新建任务将默认${useWorktree ? "使用 worktree" : "直接在项目运行"}`,
+      );
+    } catch (e) {
+      Alert.alert("保存失败", e instanceof Error ? e.message : String(e));
+    } finally {
+      setSavingWorktreeDefault(false);
+    }
   };
 
   const projectGroups = groups.filter((g) => g.projectId === projectId);
@@ -377,8 +418,18 @@ export default function NewTask() {
               <Pill
                 label={useWorktree ? (teamOn ? "✓ 整队用新 worktree" : "✓ 用新 worktree") : "直接在项目跑"}
                 active={useWorktree}
-                onPress={() => setUseWorktree((v) => !v)}
+                onPress={toggleWorktree}
               />
+              {useWorktree !== worktreeDefault ? (
+                <Pressable
+                  onPress={savingWorktreeDefault ? undefined : saveWorktreeDefault}
+                  style={{ justifyContent: "center", paddingHorizontal: 6, opacity: savingWorktreeDefault ? 0.5 : 1 }}
+                >
+                  <Text style={{ color: theme.faint, fontSize: 12 }}>
+                    {savingWorktreeDefault ? "保存中…" : "设为默认"}
+                  </Text>
+                </Pressable>
+              ) : null}
             </View>
             {useWorktree ? (
               <View style={{ marginTop: 8, gap: 8 }}>

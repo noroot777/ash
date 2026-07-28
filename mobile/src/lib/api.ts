@@ -2,6 +2,7 @@
 // re-pointed at a configurable base URL. RN's fetch is a native client (no
 // browser CORS), so it talks straight to the backend over Tailscale.
 import type {
+  AppSettings,
   ProjectView,
   Task,
   Session,
@@ -101,6 +102,10 @@ const req = (path: string, init?: RequestInit) =>
   });
 
 export const api = {
+  settings: (): Promise<AppSettings> => req("/settings").then(j),
+  patchSettings: (patch: Partial<AppSettings>): Promise<AppSettings> =>
+    req("/settings", { method: "PATCH", body: JSON.stringify(patch) }).then(j),
+
   // Connectivity probe — used by the settings screen BEFORE a URL is saved, so it
   // takes an explicit url and bypasses the cached base().
   health: (url?: string): Promise<{ ok: boolean; ts: string }> =>
