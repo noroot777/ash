@@ -13,7 +13,8 @@ type AcceptSuccess = {
   taskId: string;
   status: string;
   stage: "accepted";
-  kind: "already_accepted" | "shared_team_worktree" | "in_place" | "isolated_worktree";
+  kind: "already_accepted" | "in_place" | "isolated_worktree";
+  sharedWorkersAccepted?: number;
   targetBranch?: string;
   merge?: string;
   worktreePath?: string;
@@ -63,6 +64,45 @@ const mergeLabel: Record<string, string> = {
 };
 
 const acceptingTaskIds = new Set<string>();
+
+type SharedWorkerAcceptance = {
+  total: number;
+  updated: number;
+  skipped: number;
+};
+
+async function acceptSharedTeamWorkers(leadId: string): Promise<SharedWorkerAcceptance> {
+  const sharedWorkers = (await db.select().from(tasks).where(eq(tasks.parentId, leadId)))
+    .filter((worker) => !worker.useWorktree);
+  let updated = 0;
+  for (const worker of sharedWorkers) {
+    if (worker.stage === "accepted") continue;
+    await setTaskStage(worker.id, "accepted");
+    await publishTaskUpdated(worker.id);
+    updated += 1;
+  }
+  return { total: sharedWorkers.length, updated, skipped: sharedWorkers.length - updated };
+}
+
+function sharedWorkerAcceptanceMessage(result: SharedWorkerAcceptance): string {
+  if (result.total === 0) return "团队级验收联动：未发现共享执行者，无需同步阶段。";
+  return `团队级验收联动：已将 ${result.updated} 个共享执行者的 stage 置为 accepted` +
+    `${result.skipped ? `，另有 ${result.skipped} 个此前已是 accepted、已跳过` : ""}。`;
+}
+
+async function finalizeAcceptance(
+  task: typeof tasks.$inferSelect,
+  message: string,
+): Promise<SharedWorkerAcceptance | null> {
+  await setTaskStage(task.id, "accepted");
+  const sharedWorkers = task.mode === "team" ? await acceptSharedTeamWorkers(task.id) : null;
+  await appendTaskTimeline(
+    task.id,
+    `${message}${sharedWorkers ? ` ${sharedWorkerAcceptanceMessage(sharedWorkers)}` : ""}`,
+  );
+  await publishTaskUpdated(task.id);
+  return sharedWorkers;
+}
 
 async function acceptanceState(taskId: string): Promise<{
   task: typeof tasks.$inferSelect | null;
@@ -127,32 +167,55 @@ async function acceptWithoutCleanup(
   kind: AcceptSuccess["kind"],
   message: string,
 ): Promise<AcceptSuccess> {
-  await setTaskStage(task.id, "accepted");
-  await appendTaskTimeline(task.id, message);
-  await publishTaskUpdated(task.id);
-  return { accepted: true, taskId: task.id, status: task.status, stage: "accepted", kind };
+  const sharedWorkers = await finalizeAcceptance(task, message);
+  return {
+    accepted: true,
+    taskId: task.id,
+    status: task.status,
+    stage: "accepted",
+    kind,
+    ...(sharedWorkers ? { sharedWorkersAccepted: sharedWorkers.updated } : {}),
+  };
 }
 
 async function acceptTaskUnlocked(taskId: string): Promise<AcceptTaskResult> {
+  const requestedTask = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
+  if (!requestedTask) {
+    return { accepted: false, httpStatus: 404, taskId, reason: "not_found", error: "not found", phase: "initial" };
+  }
+  const requestedParent = requestedTask.parentId
+    ? (await db.select().from(tasks).where(eq(tasks.id, requestedTask.parentId))).at(0)
+    : null;
+  if (requestedTask.parentId && requestedParent?.mode === "team" && !requestedTask.useWorktree) {
+    return {
+      accepted: false,
+      httpStatus: 409,
+      taskId,
+      reason: "shared_worker_acceptance_not_applicable",
+      error: "执行者不需人工验收，请对团队整体验收",
+      status: requestedTask.status,
+      phase: "initial",
+    };
+  }
+
   const initial = await acceptanceGuard(taskId, "initial");
   if (initial.failure) return initial.failure;
   const task = initial.task!;
   if (task.stage === "accepted") {
-    await appendTaskTimeline(taskId, "验收动作重复调用：该任务此前已验收完成，本次未重复执行 git 操作。");
-    return { accepted: true, taskId, status: task.status, stage: "accepted", kind: "already_accepted" };
-  }
-
-  const parent = task.parentId
-    ? (await db.select().from(tasks).where(eq(tasks.id, task.parentId))).at(0)
-    : null;
-  if (task.parentId && parent?.mode === "team" && !task.useWorktree) {
-    const guard = await acceptanceGuard(taskId, "before_accept");
-    if (guard.failure) return guard.failure;
-    return acceptWithoutCleanup(
-      task,
-      "shared_team_worktree",
-      "验收通过：该执行者使用共享团队 worktree，本次只标记 accepted；共享 worktree 与分支由团队调度台验收时统一合并、清理。",
+    const sharedWorkers = task.mode === "team" ? await acceptSharedTeamWorkers(task.id) : null;
+    await appendTaskTimeline(
+      taskId,
+      `验收动作重复调用：该任务此前已验收完成，本次未重复执行 git 操作。` +
+        `${sharedWorkers ? ` ${sharedWorkerAcceptanceMessage(sharedWorkers)}` : ""}`,
     );
+    return {
+      accepted: true,
+      taskId,
+      status: task.status,
+      stage: "accepted",
+      kind: "already_accepted",
+      ...(sharedWorkers ? { sharedWorkersAccepted: sharedWorkers.updated } : {}),
+    };
   }
 
   // A task that deliberately ran in the project's existing checkout has no
@@ -198,9 +261,10 @@ async function acceptTaskUnlocked(taskId: string): Promise<AcceptTaskResult> {
     if (targetBranch) {
       const guard = await acceptanceGuard(taskId, "before_accept");
       if (guard.failure) return guard.failure;
-      await setTaskStage(taskId, "accepted");
-      await appendTaskTimeline(taskId, `任务分支已在先前清理中删除；沿用已记录的 merged 阶段，继续完成验收标记（目标 ${targetBranch}）。`);
-      await publishTaskUpdated(taskId);
+      const sharedWorkers = await finalizeAcceptance(
+        task,
+        `任务分支已在先前清理中删除；沿用已记录的 merged 阶段，继续完成验收标记（目标 ${targetBranch}）。`,
+      );
       return {
         accepted: true,
         taskId,
@@ -211,6 +275,7 @@ async function acceptTaskUnlocked(taskId: string): Promise<AcceptTaskResult> {
         merge: "already_merged",
         branch: merge.sourceBranch,
         branchDeleted: true,
+        ...(sharedWorkers ? { sharedWorkersAccepted: sharedWorkers.updated } : {}),
       };
     }
   }
@@ -282,9 +347,10 @@ async function acceptTaskUnlocked(taskId: string): Promise<AcceptTaskResult> {
     `清理完成：${cleanup.worktreeRemoved ? `已删除 worktree ${cleanup.worktreePath}` : "任务 worktree 已不存在"}；` +
       `${cleanup.branchDeleted ? `已用 git branch -d 删除 ${cleanup.sourceBranch}` : `分支 ${cleanup.sourceBranch} 已不存在`}。`,
   );
-  await setTaskStage(taskId, "accepted");
-  await appendTaskTimeline(taskId, `验收完成：目标分支 ${merge.targetBranch}；任务 status 保持 ${task.status}。`);
-  await publishTaskUpdated(taskId);
+  const sharedWorkers = await finalizeAcceptance(
+    task,
+    `验收完成：目标分支 ${merge.targetBranch}；任务 status 保持 ${task.status}。`,
+  );
   return {
     accepted: true,
     taskId,
@@ -298,6 +364,7 @@ async function acceptTaskUnlocked(taskId: string): Promise<AcceptTaskResult> {
     branch: cleanup.sourceBranch,
     branchDeleted: cleanup.branchDeleted,
     warnings: merge.warnings,
+    ...(sharedWorkers ? { sharedWorkersAccepted: sharedWorkers.updated } : {}),
   };
 }
 

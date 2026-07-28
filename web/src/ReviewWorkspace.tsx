@@ -20,6 +20,7 @@ import { ConfirmModal } from "./Modal";
 import { StatusIcon } from "./StatusIcon";
 import { toast } from "./toast";
 import { parseAttachmentText } from "./messageAttachments";
+import { isSharedTeamWorker, sharedWorkerDisplayStage, sharedWorkerStageLabel } from "./taskPolicy";
 
 type UserMessage = { text: string; at?: string };
 type Evidence = {
@@ -50,6 +51,13 @@ export function AcceptanceAction({
   const [busy, setBusy] = useState(false);
   const inFlight = task.status === "running" || task.status === "queued";
   const accepted = task.stage === "accepted";
+  const confirmationMessage = task.mode === "team"
+    ? `这会执行团队级确定性验收：${task.useWorktree
+      ? `共享分支将合并回 ${task.worktreeBase || "项目当前分支"}，随后清理团队 worktree 与分支`
+      : "当前项目工作区结果将直接确认通过，无需合并 harness 分支"}；同时联动把全部共享执行者标为 accepted。显式独立 worktree 的执行者仍在各自任务详情验收。已执行的合并和删除不可逆。`
+    : task.useWorktree
+      ? `这会执行确定性验收：任务分支将合并回 ${task.worktreeBase || "项目当前分支"}，随后删除任务 worktree 与分支。已执行的合并和删除不可逆。`
+      : "这会确认当前项目工作区中的任务结果，并把阶段标为 accepted；该任务没有 harness 分支或 worktree 需要合并清理。";
 
   const accept = async () => {
     setBusy(true);
@@ -96,7 +104,9 @@ export function AcceptanceAction({
         className={compact
           ? "inline-flex items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-[13px] font-medium text-accent-fg transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-45"
           : "inline-flex items-center gap-1.5 rounded-md bg-accent px-3.5 py-2 text-[12.5px] font-medium text-accent-fg transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-45"}
-        title={inFlight ? "任务仍在运行，结束后才能验收" : "确认合并并清理任务 worktree"}
+        title={inFlight
+          ? "任务仍在运行，结束后才能验收"
+          : task.mode === "team" ? "确认团队整体并联动共享执行者" : "确认任务验收通过"}
       >
         {busy ? <SpinnerGap size={14} className="animate-spin" /> : <CheckCircle size={14} weight="fill" />}
         {busy ? "验收中" : inFlight ? "执行中" : "验收通过"}
@@ -104,7 +114,7 @@ export function AcceptanceAction({
       {confirmOpen && (
         <ConfirmModal
           title="确认验收通过？"
-          message={`这会执行确定性验收：独立 worktree 的分支将合并回 ${task.worktreeBase || "项目当前分支"}，随后删除任务 worktree 与分支；共享团队 worktree 的执行者只标记通过，由调度台统一合并。已执行的合并和删除不可逆。`}
+          message={confirmationMessage}
           confirmLabel="验收通过"
           danger
           onConfirm={() => void accept()}
@@ -188,16 +198,24 @@ export function TeamReviewWorkspace({
   onClose: () => void;
   onTaskUpdated: (task: Task) => void;
 }) {
-  const awaiting = workers.filter((worker) => worker.stage === "awaiting_acceptance").length;
+  const [failure, setFailure] = useState<AcceptTaskFailure | null>(null);
+  const awaiting = workers.filter((worker) => worker.useWorktree && worker.stage === "awaiting_acceptance").length;
   return (
     <section className="flex min-h-0 flex-1 flex-col bg-canvas">
       <div className="flex shrink-0 items-center gap-3 border-b border-line bg-panel px-6 py-3">
         <div>
           <h2 className="text-[14px] font-semibold text-ink">团队验收台</h2>
           <p className="text-[11.5px] text-faint">
-            {workers.length} 个执行者{awaiting ? ` · ${awaiting} 个等待验收` : ""} · 问答卡答复不计入用户消息
+            团队级验收会{lead.useWorktree ? "合并并清理共享分支" : "确认共享项目工作区结果（启用 worktree 时合并并清理共享分支）"}，并联动标记全部共享执行者
+            {awaiting ? ` · ${awaiting} 个独立 worktree 执行者仍需在任务详情验收` : ""}
           </p>
         </div>
+        <AcceptanceAction
+          task={lead}
+          compact
+          onFailure={setFailure}
+          onAccepted={onTaskUpdated}
+        />
         <button
           type="button"
           onClick={onClose}
@@ -207,6 +225,7 @@ export function TeamReviewWorkspace({
           返回团队流
         </button>
       </div>
+      {failure && <div className="shrink-0 border-b border-line bg-panel px-6 pb-3"><AcceptanceFailureReport failure={failure} /></div>}
       <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
         <div className="mx-auto flex w-full max-w-[1180px] flex-col gap-4">
           <ReviewSection
@@ -214,6 +233,7 @@ export function TeamReviewWorkspace({
             role={lead.useWorktree ? "调度台 / 共享 worktree" : "调度台 / 项目工作区"}
             onTaskUpdated={onTaskUpdated}
             defaultOpen
+            showAcceptance={false}
           />
           {workers.map((worker, index) => (
             <ReviewSection
@@ -221,7 +241,9 @@ export function TeamReviewWorkspace({
               task={worker}
               role={`执行者 ${index + 1}`}
               onTaskUpdated={onTaskUpdated}
-              defaultOpen={worker.stage === "awaiting_acceptance"}
+              defaultOpen={!!worker.useWorktree && worker.stage === "awaiting_acceptance"}
+              showAcceptance={false}
+              sharedWorker={isSharedTeamWorker(worker, lead)}
             />
           ))}
           {workers.length === 0 && (
@@ -237,10 +259,12 @@ export function TeamReviewWorkspace({
 
 export function TaskDiffWorkspace({
   task,
+  sharedWorker = false,
   onClose,
   onTaskUpdated,
 }: {
   task: Task;
+  sharedWorker?: boolean;
   onClose: () => void;
   onTaskUpdated: (task: Task) => void;
 }) {
@@ -257,7 +281,15 @@ export function TaskDiffWorkspace({
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
         <div className="mx-auto w-full max-w-[1180px]">
-          <ReviewSection task={task} role="单任务" onTaskUpdated={onTaskUpdated} defaultOpen hideMessages />
+          <ReviewSection
+            task={task}
+            role="单任务"
+            onTaskUpdated={onTaskUpdated}
+            defaultOpen
+            hideMessages
+            showAcceptance={!sharedWorker}
+            sharedWorker={sharedWorker}
+          />
         </div>
       </div>
     </section>
@@ -270,18 +302,26 @@ function ReviewSection({
   onTaskUpdated,
   defaultOpen = false,
   hideMessages = false,
+  showAcceptance = true,
+  sharedWorker = false,
 }: {
   task: Task;
   role: string;
   onTaskUpdated: (task: Task) => void;
   defaultOpen?: boolean;
   hideMessages?: boolean;
+  showAcceptance?: boolean;
+  sharedWorker?: boolean;
 }) {
   const [open, setOpen] = useState(defaultOpen);
   const [evidence, setEvidence] = useState<Evidence | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [failure, setFailure] = useState<AcceptTaskFailure | null>(null);
   const objective = parseAttachmentText(task.body).body.trim();
+  const displayStage = sharedWorker ? sharedWorkerDisplayStage(task.stage) : task.stage;
+  const stageLabel = sharedWorker
+    ? sharedWorkerStageLabel(task.stage)
+    : displayStage ? STAGE_LABELS[displayStage] : task.status;
 
   useEffect(() => {
     let alive = true;
@@ -300,18 +340,18 @@ function ReviewSection({
         <button type="button" onClick={() => setOpen((value) => !value)} className="mt-0.5 grid h-6 w-6 shrink-0 place-items-center rounded-md text-faint hover:bg-raised hover:text-ink" aria-label={open ? "收起验收内容" : "展开验收内容"}>
           <CaretDown size={14} weight="bold" className={`transition-transform ${open ? "" : "-rotate-90"}`} />
         </button>
-        <StatusIcon status={task.status} stage={task.stage} awaitingAnswer={!!task.question} size={8} className="mt-2" />
+        <StatusIcon status={task.status} stage={displayStage} awaitingAnswer={!!task.question} size={8} className="mt-2" />
         <button type="button" onClick={() => setOpen((value) => !value)} className="min-w-0 flex-1 text-left">
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
             <h3 className="truncate text-[14px] font-semibold text-ink">{task.title}</h3>
             <span className="rounded bg-overlay px-1.5 py-0.5 text-[10.5px] font-medium text-muted">{role}</span>
-            <span className="text-[11px] text-faint">{task.stage ? STAGE_LABELS[task.stage] : task.status}</span>
+            <span className="text-[11px] text-faint">{stageLabel}</span>
           </div>
           <p className="mt-1 line-clamp-2 max-w-4xl whitespace-pre-wrap text-[12px] leading-relaxed text-muted">
             {objective || "未填写任务目标"}
           </p>
         </button>
-        <AcceptanceAction task={task} onAccepted={onTaskUpdated} onFailure={setFailure} />
+        {showAcceptance && <AcceptanceAction task={task} onAccepted={onTaskUpdated} onFailure={setFailure} />}
       </div>
       {failure && <div className="border-t border-line px-4 pb-3"><AcceptanceFailureReport failure={failure} /></div>}
       {open && (

@@ -51,7 +51,8 @@ export type AcceptTaskSuccess = {
   taskId: string;
   status: string;
   stage: "accepted";
-  kind: "already_accepted" | "shared_team_worktree" | "in_place" | "isolated_worktree";
+  kind: "already_accepted" | "in_place" | "isolated_worktree";
+  sharedWorkersAccepted?: number;
   targetBranch?: string;
   merge?: string;
   worktreePath?: string;

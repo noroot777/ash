@@ -21,7 +21,7 @@ import { ExecutorPicker, type ExecutorSelection, useExecutorProfiles } from "./E
 import { executorLabel } from "./executorLabel";
 import { TaskModelControls } from "./TaskModelControls";
 import { QuestionCard } from "./QuestionCard";
-import { isDispatchedWorker } from "./taskPolicy";
+import { isDispatchedWorker, isSharedTeamWorker } from "./taskPolicy";
 import { AttachmentDisplay, parseAttachmentText } from "./messageAttachments";
 import { toast } from "./toast";
 import { TaskWorktreeChip } from "./TaskWorktreeChip";
@@ -82,6 +82,8 @@ export function TaskDetail({
   const scrollRef = useRef<HTMLDivElement>(null);
   const { profiles, providers } = useExecutorProfiles();
   const dispatchedWorker = isDispatchedWorker(task);
+  const parentTask = task.parentId ? allTasks.find((candidate) => candidate.id === task.parentId) : null;
+  const sharedTeamWorker = isSharedTeamWorker(task, parentTask);
   const objective = parseAttachmentText(task.body);
   const [derivation, setDerivation] = useState<{ command: TaskDerivationCommand; committed: boolean } | null>(null);
   const [reviewOpen, setReviewOpen] = useState(false);
@@ -180,7 +182,7 @@ export function TaskDetail({
               <GitDiff size={14} />
               {reviewOpen ? "返回对话" : "查看改动"}
             </button>
-            {(task.status === "done" || task.stage === "awaiting_acceptance" || task.stage === "accepted") && (
+            {!sharedTeamWorker && (task.status === "done" || task.stage === "awaiting_acceptance" || task.stage === "accepted") && (
               <AcceptanceAction
                 task={task}
                 compact
@@ -304,7 +306,7 @@ export function TaskDetail({
           <AttachmentDisplay paths={objective.paths} className="mt-2" />
         )}
 
-        <StageProgress task={task} />
+        <StageProgress task={task} sharedWorker={sharedTeamWorker} />
         {acceptFailure && <AcceptanceFailureReport failure={acceptFailure} />}
 
         {/* agent 提问:调 ask_question 后停在这等答案(队列陪等,不会自动续跑)。
@@ -415,6 +417,7 @@ export function TaskDetail({
       {reviewOpen ? (
         <TaskDiffWorkspace
           task={task}
+          sharedWorker={sharedTeamWorker}
           onClose={() => setReviewOpen(false)}
           onTaskUpdated={(updated) => onTaskCreated(updated, false, false)}
         />
