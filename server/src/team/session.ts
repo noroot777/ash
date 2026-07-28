@@ -20,7 +20,7 @@
 //   • 用户插话 → 先 interrupt 再送(要的就是立刻转向),时间线记一条「已打断」。
 //   • 执行者汇报/提问 → 不打断(它手上的活更重要);忙就缓冲,回合结束合并成
 //     一条送 —— 天然聚合,N 个执行者只花一次模型调用。
-import { mkdirSync, createWriteStream } from "node:fs";
+import { mkdirSync, createWriteStream, existsSync } from "node:fs";
 import type { WriteStream } from "node:fs";
 import { join } from "node:path";
 import { eq, sql } from "drizzle-orm";
@@ -49,6 +49,9 @@ const INTERRUPT_NOTE = "〔系统〕已打断调度者当前回合,插入你的�
 const HALT_NOTE = "〔系统〕你按了「停止全组」:调度台进程与所有在跑的执行者都已停止,执行者可从中断处恢复。再说一句话就能把调度者接回同一会话。";
 const RECYCLE_NOTE = (min: number) =>
   `〔系统〕调度台空闲超过 ${min} 分钟,进程已回收(待命)。你或执行者再说话时会自动接回同一会话,上下文不丢。`;
+// 调度台脚下的工作目录没了(多半是它自己按吩咐删掉了所在的 worktree)。
+const WORKSPACE_GONE_NOTE = (cwd: string) =>
+  `〔系统〕检测到调度台的工作目录 ${cwd} 已不存在(worktree 被删除),当前进程已无法继续执行命令,先收掉它。这条消息会用同一个 CLI 会话重新接回:能恢复的会原样恢复,恢复不了则会新建一个空目录并明确告知。`;
 
 type Kind = "user" | "inbound" | "start";
 
@@ -67,7 +70,7 @@ interface Lead {
   turnStart: string | null;
   pending: string[]; // 回合进行中攒下的执行者消息,turnEnd 时合并成一条送
   idleTimer: NodeJS.Timeout | null;
-  closing: "recycle" | "halt" | null;
+  closing: "recycle" | "halt" | "workspace" | null;
 }
 
 const leads = new Map<string, Lead>();
@@ -115,15 +118,57 @@ export async function haltTeam(taskId: string): Promise<void> {
 // ── 投递 ────────────────────────────────────────────────────────────────────
 async function deliver(taskId: string, text: string, kind: Kind): Promise<void> {
   let lead = leads.get(taskId);
+  // 进程还活着,但它脚下的目录已经没了 —— 典型情形:调度者按用户吩咐删掉了自己
+  // 所在的那个 worktree(它嘴上说"我已回落到主检出",实际 cwd 还钉在被删的路径
+  // 上)。这时把消息送进去,它执行任何命令都会崩,用户白吃一次 exit 1,要等下一
+  // 条消息才触发重开。所以现在就收掉它,让下面的 open 重走一遍 taskWorkspace:
+  // 分支还在就恢复,恢复不了也会重建并明确告诉接回来的调度者文件已经不在了。
+  if (lead && !existsSync(lead.cwd)) {
+    lead.closing = "workspace";
+    recordSystemTurn(lead, WORKSPACE_GONE_NOTE(lead.cwd));
+    leads.delete(taskId); // 立刻腾位置,别让下面的 open 以为还在线
+    try {
+      lead.handle.kill();
+    } catch {
+      /* 进程可能已经自己没了 */
+    }
+    lead = undefined;
+  }
   if (!lead) {
     const inflight = opening.get(taskId);
     if (!inflight) {
-      await open(taskId, text, kind); // 本条消息就是首条消息,开台时一起送进去
+      // 开台失败(典型:worktree 建不出来)不能静默 —— 路由是 void 调用的,抛出去
+      // 只会变成被兜底吞掉的 unhandledRejection,用户什么都看不到。
+      await open(taskId, text, kind).catch((err) => reportOpenFailure(taskId, err));
       return;
     }
     lead = await inflight; // 别开第二个进程:等它开完,这条按普通消息送
   }
   push(lead, text, kind);
+}
+
+// 开台失败:把原因写进最近一条调度台会话的 .md(刷新后仍可见)并广播(实时可见),
+// 状态落回 idle —— 团队没有终态,开不起来就是待命。
+async function reportOpenFailure(taskId: string, err: unknown): Promise<void> {
+  const message = `调度台启动失败：${err instanceof Error ? err.message : String(err)}`;
+  const last = (await db.select().from(sessions).where(eq(sessions.taskId, taskId)))
+    .filter((s) => s.role === "lead")
+    .sort((a, b) => b.startedAt.localeCompare(a.startedAt))
+    .at(0);
+  if (last) {
+    const out = createWriteStream(join(RUNS_DIR, taskId, `${last.id}.md`), { flags: "a" });
+    writeRunError(out, message);
+    out.end();
+  }
+  bus.publish({
+    type: "agent.event",
+    taskId,
+    sessionId: last?.id ?? "",
+    role: "lead",
+    agentType: (last?.agentType as AgentType) ?? "claude",
+    event: { kind: "error", message },
+  });
+  await setTaskStatus(taskId, "idle");
 }
 
 function open(taskId: string, text: string, kind: Kind): Promise<Lead> {
@@ -342,7 +387,10 @@ async function closeLead(lead: Lead, exitStatus: number): Promise<void> {
   clearIdle(lead);
   takeStopped(lead.taskId); // 消费停止标记:团队不走 settleTaskStatus,别漏给下一次
   untrackRun(lead.taskId, lead.handle);
-  leads.delete(lead.taskId);
+  // 工作目录被抽走时我们会主动收掉旧进程、立刻开新的,旧进程的 close 事件晚一步
+  // 才到 —— 它不能把已经接管的新会话摘掉,更不能把新回合的 running 改回 idle。
+  const superseded = leads.get(lead.taskId) !== lead;
+  if (!superseded) leads.delete(lead.taskId);
   const endIso = now();
   const spent = lead.turnStart ? Math.max(0, Date.parse(endIso) - Date.parse(lead.turnStart)) : 0;
   await db
@@ -359,7 +407,7 @@ async function closeLead(lead: Lead, exitStatus: number): Promise<void> {
   }
   writeTurnEnd(lead.out, endIso);
   lead.out.end();
-  await setTaskStatus(lead.taskId, "idle"); // 团队没有终态,进程没了就是待命
+  if (!superseded) await setTaskStatus(lead.taskId, "idle"); // 团队没有终态,进程没了就是待命
 }
 
 // ── 空闲回收 ────────────────────────────────────────────────────────────────
