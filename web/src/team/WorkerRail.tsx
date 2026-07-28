@@ -4,7 +4,7 @@
 // 卡片上的「实时最后一行」只有在本次会话里收到过 SSE 的执行者才有(刷新后 logs 是空
 // 的),所以它是锦上添花,不承载必要信息 —— 必要信息在状态行里。
 import { useEffect } from "react";
-import type { Group, Task } from "@harness/shared";
+import { taskDisplayStatus, type Group, type Task } from "@harness/shared";
 import { StatusIcon } from "../StatusIcon";
 import { Duration } from "../time";
 import type { LogLine } from "../Conversation";
@@ -103,7 +103,7 @@ function WorkerCard({
       }`}
     >
       <div className="flex items-center gap-1.5">
-        <StatusIcon status={w.status} size={12} awaitingAnswer={asking} />
+        <StatusIcon status={w.status} stage={w.stage} awaitingAnswer={asking} />
         <span className="min-w-0 flex-1 truncate text-[12.5px] font-medium text-ink">{w.title}</span>
         <span
           className="max-w-[92px] shrink truncate rounded border border-line px-1 font-mono text-[10px] text-muted"
@@ -129,6 +129,16 @@ export function WorkerStatusText({ w, groupPaused = false }: { w: Task; groupPau
         等答复 <Duration from={w.endedAt ?? w.startedAt} />
       </span>
     );
+  const display = taskDisplayStatus(w.status, w.stage, false);
+  if (w.stage && w.status !== "failed" && w.status !== "canceled") {
+    return (
+      <span className={w.stage === "verify_failed" ? "text-red-600" : undefined}>
+        {display.label}
+        {w.status === "running" && <> · <Duration from={w.startedAt} /></>}
+        {groupPaused && " · 所属组已停止"}
+      </span>
+    );
+  }
   switch (w.status) {
     case "running":
       return (

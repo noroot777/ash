@@ -30,6 +30,7 @@ import { TeamFeed } from "./TeamFeed";
 import { WorkerRail, WorkerStatusText } from "./WorkerRail";
 import { activeTeamHaltMarker, leadTurns as turnsOf, teamFeedOptions } from "./teamData";
 import { submitShortcutLabel } from "../ui";
+import { TeamReviewWorkspace } from "../ReviewWorkspace";
 
 export function TeamView({
   task,
@@ -77,6 +78,7 @@ export function TeamView({
   const [internalGroups, setInternalGroups] = useState<Group[]>([]);
   const [cuaStatus, setCuaStatus] = useState<TeamCuaStatus | null>(null);
   const [iterateBusy, setIterateBusy] = useState(false);
+  const [reviewOpen, setReviewOpen] = useState(false);
 
   const workers = useMemo(() => workersOf(allTasks, task.id), [allTasks, task.id]);
   const rawGroups = useMemo(() => {
@@ -145,6 +147,7 @@ export function TeamView({
     setGroupPaused({});
     setInternalGroups([]);
     setCuaStatus(null);
+    setReviewOpen(false);
     void refreshInternalGroups();
   }, [task.id]);
 
@@ -205,36 +208,52 @@ export function TeamView({
         onArchive={() => onArchive(task.id)}
         onUnarchive={() => onUnarchive(task.id)}
         onOpenWorker={setOpenId}
+        reviewOpen={reviewOpen}
+        onToggleReview={() => {
+          setOpenId(null);
+          setReviewOpen((value) => !value);
+        }}
         canIterateDebate={canIterateDebate}
         iterateBusy={iterateBusy}
         onIterateDebate={() => void iterateDebate()}
       />
 
-      {stopped && <CuaResidualNotice taskId={task.id} status={cuaStatus} onStatus={setCuaStatus} />}
+      {reviewOpen ? (
+        <TeamReviewWorkspace
+          lead={task}
+          workers={workers}
+          onClose={() => setReviewOpen(false)}
+          onTaskUpdated={(updated) => onTaskCreated(updated, false, false)}
+        />
+      ) : (
+        <>
+          {stopped && <CuaResidualNotice taskId={task.id} status={cuaStatus} onStatus={setCuaStatus} />}
 
-      <AttentionBar waiting={waiting} workers={workers} onOpenWorker={setOpenId} onAskLead={askLead} />
+          <AttentionBar waiting={waiting} workers={workers} onOpenWorker={setOpenId} onAskLead={askLead} />
 
-      <div className="grid min-h-0 flex-1 grid-cols-[1fr_268px]">
-        <TeamFeed rows={rows} workers={workers} empty={items.length === 0} onOpenWorker={setOpenId} />
-        <WorkerRail workers={workers} groups={teamGroups} logs={logs} selected={openId} onSelect={setOpenId} />
-      </div>
+          <div className="grid min-h-0 flex-1 grid-cols-[1fr_268px]">
+            <TeamFeed rows={rows} workers={workers} empty={items.length === 0} onOpenWorker={setOpenId} />
+            <WorkerRail workers={workers} groups={teamGroups} logs={logs} selected={openId} onSelect={setOpenId} />
+          </div>
 
-      {/* 插话:发出去就进同一个常驻会话(调度者正在说话时会被 interrupt 接住),所以
-          除了归档之外不禁用 —— 这是 /team 跟单任务最大的手感差别。 */}
-      <ReplyBox
-        taskId={task.id}
-        onReply={(text, opts) => onReply(task.id, text, opts)}
-        disabled={!!task.archived}
-        mention={false}
-        placeholder={
-          task.status === "idle"
-            ? `调度者待命中，说句话就接回同一会话… ${submitShortcutLabel()} 发送`
-            : `插一句话（改方向、加要求、直接替它拍板）… ${submitShortcutLabel()} 发送`
-        }
-        disabledPlaceholder="已归档（只读）"
-      />
+          {/* 插话:发出去就进同一个常驻会话(调度者正在说话时会被 interrupt 接住),所以
+              除了归档之外不禁用 —— 这是 /team 跟单任务最大的手感差别。 */}
+          <ReplyBox
+            taskId={task.id}
+            onReply={(text, opts) => onReply(task.id, text, opts)}
+            disabled={!!task.archived}
+            mention={false}
+            placeholder={
+              task.status === "idle"
+                ? `调度者待命中，说句话就接回同一会话… ${submitShortcutLabel()} 发送`
+                : `插一句话（改方向、加要求、直接替它拍板）… ${submitShortcutLabel()} 发送`
+            }
+            disabledPlaceholder="已归档（只读）"
+          />
+        </>
+      )}
 
-      {open && (
+      {!reviewOpen && open && (
         <WorkerDrawer
           worker={open}
           groups={groups}
@@ -369,7 +388,7 @@ function WorkerDrawer({
       />
       <aside className="t-drawer absolute inset-y-0 right-0 z-30 flex w-[min(620px,74%)] flex-col border-l border-line2 bg-panel shadow-[-8px_0_28px_rgba(0,0,0,.13)]">
         <div className="flex shrink-0 items-center gap-2 border-b border-line bg-raised px-3 py-1.5 text-[12px]">
-          <StatusIcon status={worker.status} size={12} awaitingAnswer={!!worker.question} />
+          <StatusIcon status={worker.status} stage={worker.stage} awaitingAnswer={!!worker.question} />
           <span className="min-w-0 flex-1 truncate font-medium text-ink">{worker.title}</span>
           <span className="shrink-0 text-faint">
             <WorkerStatusText w={worker} groupPaused={groupPaused} />

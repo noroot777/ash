@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { Task, Group, TaskStatus, Priority, AgentType } from "@harness/shared";
 import { AGENT_TYPES, isUserSettableStatus, canArchive } from "@harness/shared";
-import { CaretDown, Play, Stop, Trash, ArrowsClockwise, DownloadSimple, ListNumbers } from "@phosphor-icons/react";
-import { api } from "./api";
+import { CaretDown, Play, Stop, Trash, ArrowsClockwise, DownloadSimple, GitDiff, ListNumbers } from "@phosphor-icons/react";
+import { api, type AcceptTaskFailure } from "./api";
 import { STATUS_META, PRIORITIES } from "./constants";
 import { CollapsibleText, CopyButton, Kbd, submitShortcutTitle } from "./ui";
 import { StatusIcon } from "./StatusIcon";
@@ -25,6 +25,7 @@ import { isDispatchedWorker } from "./taskPolicy";
 import { AttachmentDisplay, parseAttachmentText } from "./messageAttachments";
 import { toast } from "./toast";
 import { TaskWorktreeChip } from "./TaskWorktreeChip";
+import { StageProgress } from "./StageProgress";
 import { TaskDerivationComposer } from "./TaskDerivationComposer";
 import { DerivedTaskLinks } from "./DerivedTaskLinks";
 import {
@@ -32,6 +33,11 @@ import {
   parseTaskDerivationCommand,
   type TaskDerivationCommand,
 } from "./taskDerivation";
+import {
+  AcceptanceAction,
+  AcceptanceFailureReport,
+  TaskDiffWorkspace,
+} from "./ReviewWorkspace";
 export type { LogLine } from "./Conversation";
 
 export function TaskDetail({
@@ -77,6 +83,8 @@ export function TaskDetail({
   const dispatchedWorker = isDispatchedWorker(task);
   const objective = parseAttachmentText(task.body);
   const [derivation, setDerivation] = useState<{ command: TaskDerivationCommand; committed: boolean } | null>(null);
+  const [reviewOpen, setReviewOpen] = useState(false);
+  const [acceptFailure, setAcceptFailure] = useState<AcceptTaskFailure | null>(null);
 
   // 拉会话 + 快照历史输出 + 拼条目流,都在 useConversation 里(/team 调度台共用同
   // 一份装配,免得两个界面的「刷新后 vs 实时」各自漂移)。
@@ -160,8 +168,25 @@ export function TaskDetail({
             <EditableTitle title={task.title} onSave={(t) => onPatch({ title: t, autoTitle: false })} />
           )}
           <div className="ml-auto flex min-w-0 max-w-full flex-wrap items-center justify-end gap-2">
-            {task.useWorktree && <TaskWorktreeChip />}
+            {task.useWorktree && <TaskWorktreeChip cleaned={task.stage === "accepted"} />}
             <TaskTimeChip task={task} />
+            <button
+              type="button"
+              onClick={() => setReviewOpen((value) => !value)}
+              className={`inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-[13px] font-medium transition-colors ${reviewOpen ? "border-accent bg-accent/10 text-accent" : "border-line text-muted hover:bg-raised hover:text-ink"}`}
+              title="按文件查看任务分支相对基线的 diff"
+            >
+              <GitDiff size={14} />
+              {reviewOpen ? "返回对话" : "查看改动"}
+            </button>
+            {(task.status === "done" || task.stage === "awaiting_acceptance" || task.stage === "accepted") && (
+              <AcceptanceAction
+                task={task}
+                compact
+                onFailure={setAcceptFailure}
+                onAccepted={(updated) => onTaskCreated(updated, false, false)}
+              />
+            )}
             {task.archived ? (
               <>
                 <span className="inline-flex items-center gap-1.5 rounded-md bg-overlay px-3 py-1.5 text-[13px] font-medium text-muted" title="任务已归档（只读）">
@@ -278,6 +303,9 @@ export function TaskDetail({
           <AttachmentDisplay paths={objective.paths} className="mt-2" />
         )}
 
+        <StageProgress task={task} />
+        {acceptFailure && <AcceptanceFailureReport failure={acceptFailure} />}
+
         {/* agent 提问:调 ask_question 后停在这等答案(队列陪等,不会自动续跑)。
             团队模式下调度者通常会自动来答;用户也可以直接在这里答复唤醒。 */}
         {task.question && <QuestionCard task={task} />}
@@ -383,64 +411,74 @@ export function TaskDetail({
         )}
       </header>
 
-      <div className="relative min-h-0 flex-1">
-        <div
-          ref={scrollRef}
-          className="h-full overflow-y-auto break-words px-6 py-4 text-[13px] leading-relaxed"
-        >
-          {/* The run as a conversation: prior output (snapshotted per session on
-              load) and the live stream merge into one bubble per run, so a running
-              task you reload doesn't split into a stale + live pair. */}
-          <Conversation items={items} />
-          {items.length === 0 && (
-            <p className="font-sans text-faint">点击「运行」开始，输出会实时流式显示在这里。</p>
-          )}
-        </div>
-        <ConversationScrollButtons scrollRef={scrollRef} />
-      </div>
-
-      <DerivedTaskLinks sourceTaskId={task.id} allTasks={allTasks} onOpen={onOpenTask} />
-      {task.mode === "single" && (
-        <ReplyBox
-          taskId={task.id}
-          onReply={onReply}
-          disabled={!hasConversation || task.status === "running" || task.status === "queued" || !!task.archived}
-          disabledPlaceholder={
-            task.archived
-              ? "已归档；仍可输入 /team 或 /pair 创建派生任务…"
-              : task.status === "running" || task.status === "queued"
-                ? "当前任务进行中；可输入 /team 或 /pair 创建派生任务…"
-                : "输入 /team 或 /pair，以这个任务为背景创建协作任务…"
-          }
-          toolbar={hasConversation ? runConfigControls : undefined}
-          command={{
-            matches: isTaskDerivationCommand,
-            // 回车 = 定稿：输入框清空，卡片接管焦点继续补充。
-            onSubmit: (text) => {
-              const parsed = parseTaskDerivationCommand(text);
-              if (parsed) setDerivation({ command: parsed, committed: true });
-            },
-            // 边打边预览：命中即弹卡，尾巴文本实时进附言/辩题；已定稿的卡不受
-            // 后续输入影响（只能用卡上的 X 关掉）。
-            onChange: (text) => {
-              setDerivation((cur) => {
-                if (cur?.committed) return cur;
-                const parsed = parseTaskDerivationCommand(text);
-                return parsed ? { command: parsed, committed: false } : null;
-              });
-            },
-          }}
-          inlinePanel={derivation ? (
-            <TaskDerivationComposer
-              key={derivation.command.kind}
-              task={task}
-              command={derivation.command}
-              live={!derivation.committed}
-              onClose={() => setDerivation(null)}
-              onCreated={onTaskCreated}
-            />
-          ) : undefined}
+      {reviewOpen ? (
+        <TaskDiffWorkspace
+          task={task}
+          onClose={() => setReviewOpen(false)}
+          onTaskUpdated={(updated) => onTaskCreated(updated, false, false)}
         />
+      ) : (
+        <>
+          <div className="relative min-h-0 flex-1">
+            <div
+              ref={scrollRef}
+              className="h-full overflow-y-auto break-words px-6 py-4 text-[13px] leading-relaxed"
+            >
+              {/* The run as a conversation: prior output (snapshotted per session on
+                  load) and the live stream merge into one bubble per run, so a running
+                  task you reload doesn't split into a stale + live pair. */}
+              <Conversation items={items} />
+              {items.length === 0 && (
+                <p className="font-sans text-faint">点击「运行」开始，输出会实时流式显示在这里。</p>
+              )}
+            </div>
+            <ConversationScrollButtons scrollRef={scrollRef} />
+          </div>
+
+          <DerivedTaskLinks sourceTaskId={task.id} allTasks={allTasks} onOpen={onOpenTask} />
+          {task.mode === "single" && (
+            <ReplyBox
+              taskId={task.id}
+              onReply={onReply}
+              disabled={!hasConversation || task.status === "running" || task.status === "queued" || !!task.archived}
+              disabledPlaceholder={
+                task.archived
+                  ? "已归档；仍可输入 /team 或 /pair 创建派生任务…"
+                  : task.status === "running" || task.status === "queued"
+                    ? "当前任务进行中；可输入 /team 或 /pair 创建派生任务…"
+                    : "输入 /team 或 /pair，以这个任务为背景创建协作任务…"
+              }
+              toolbar={hasConversation ? runConfigControls : undefined}
+              command={{
+                matches: isTaskDerivationCommand,
+                // 回车 = 定稿：输入框清空，卡片接管焦点继续补充。
+                onSubmit: (text) => {
+                  const parsed = parseTaskDerivationCommand(text);
+                  if (parsed) setDerivation({ command: parsed, committed: true });
+                },
+                // 边打边预览：命中即弹卡，尾巴文本实时进附言/辩题；已定稿的卡不受
+                // 后续输入影响（只能用卡上的 X 关掉）。
+                onChange: (text) => {
+                  setDerivation((cur) => {
+                    if (cur?.committed) return cur;
+                    const parsed = parseTaskDerivationCommand(text);
+                    return parsed ? { command: parsed, committed: false } : null;
+                  });
+                },
+              }}
+              inlinePanel={derivation ? (
+                <TaskDerivationComposer
+                  key={derivation.command.kind}
+                  task={task}
+                  command={derivation.command}
+                  live={!derivation.committed}
+                  onClose={() => setDerivation(null)}
+                  onCreated={onTaskCreated}
+                />
+              ) : undefined}
+            />
+          )}
+        </>
       )}
       {!dispatchedWorker && queueModalOpen && task.queueId && (
         <QueueModal

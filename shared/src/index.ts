@@ -1,6 +1,8 @@
 // Core domain types shared between server and web.
 // Mirrors the decisions in DESIGN.md (§3 data model, §5 agents, §7 debate,
 // §8 statuses, §12 debate mechanism, §13 sessions).
+import type { SessionRole } from "./session.js";
+export type { Session, SessionRole } from "./session.js";
 
 // ── Global app settings ────────────────────────────────────────────────────
 // Stored server-side in the generic app_settings KV table. Consumers always
@@ -133,6 +135,34 @@ export type TaskStatus =
   | "failed"
   | "canceled";
 
+// 与 TaskStatus 正交的验收进度。status 只管调度/结算，stage 只管展示/协作。
+export const STAGE_ORDER = [
+  "implemented", "verifying", "verified", "verify_failed",
+  "awaiting_acceptance", "merged", "accepted",
+] as const;
+export type TaskStage = (typeof STAGE_ORDER)[number];
+export const STAGE_LABELS: Record<TaskStage, string> = {
+  implemented: "已实现", verifying: "验证中", verified: "已验证", verify_failed: "未通过验证",
+  awaiting_acceptance: "待验收", merged: "已合并", accepted: "验收完成",
+};
+export const TASK_STATUS_LABELS: Record<TaskStatus, string> = {
+  backlog: "待排期", queued: "排队中", running: "运行中", idle: "待命",
+  awaiting_review: "等待审核", paused: "暂停中", done: "完成", failed: "失败", canceled: "已取消",
+};
+export type TaskDisplayStatusKey = "awaiting_answer" | TaskStatus | TaskStage;
+export type TaskDisplayStatus = { key: TaskDisplayStatusKey; label: string };
+export function isTaskStage(value: unknown): value is TaskStage {
+  return typeof value === "string" && (STAGE_ORDER as readonly string[]).includes(value);
+}
+export function taskDisplayStatus(
+  status: TaskStatus, stage: TaskStage | null | undefined, awaitingAnswer: boolean,
+): TaskDisplayStatus {
+  if (awaitingAnswer) return { key: "awaiting_answer", label: "等答复" };
+  if (status === "failed" || status === "canceled") return { key: status, label: TASK_STATUS_LABELS[status] };
+  if (stage) return { key: stage, label: STAGE_LABELS[stage] };
+  return { key: status, label: TASK_STATUS_LABELS[status] };
+}
+
 export type Priority = "none" | "low" | "medium" | "high" | "urgent";
 
 // Single-task user-Run guard (POST /tasks/:id/run). User explicitly clicked Run,
@@ -172,6 +202,7 @@ export interface Task {
   body: string; // the prompt / objective
   mode: TaskMode;
   status: TaskStatus;
+  stage?: TaskStage | null;
   priority: Priority;
   labels: string[];
   dependsOn: string[]; // [废弃,保留为 []] 旧的指针依赖,被 queue 模型取代,见 DESIGN-scheduling.md
@@ -472,36 +503,6 @@ export function normalizeDebateConfig(value: unknown): DebateConfig {
   };
 }
 
-// ── Sessions / traceability (§13) ─────────────────────────────────────────────
-// "lead" = 团队任务的常驻调度台会话（一个进程跑很多回合，见 server/src/team）；
-// 执行者自己的会话仍是 "single"。
-export type SessionRole =
-  | "single"
-  | "lead"
-  | "debaterA"
-  | "debaterB"
-  | "implementer" // legacy: retained so historical sessions still decode
-  | "reviewer"; // legacy: retained so historical sessions still decode
-
-export interface Session {
-  id: string;
-  taskId: string;
-  role: SessionRole;
-  agentType: AgentType;
-  executor: string; // executor profile name
-  target: string; // "local" | "ssh:host"
-  worktreePath: string | null;
-  branch: string | null;
-  cwd: string | null; // the actual working directory this run executed in (truth, incl. scratch fallback)
-  transcriptPath: string; // absolute path to the persisted Markdown transcript for this session
-  cliSessionId: string | null; // the CLI's own session/thread id = core credential
-  resumeCommand: string | null; // ready-to-paste resume command
-  commandLine: string | null; // full command invoked
-  startedAt: string;
-  endedAt: string | null; // when this run finished (set with exitStatus); null while live
-  exitStatus: number | null;
-}
-
 // ── Scheduling (§9) ──────────────────────────────────────────────────────────
 // Schedules attach to a Task. Once = fire at a timestamp then disable; cron =
 // recurring 5-field expression in local time. The scheduler only enqueues.
@@ -560,6 +561,7 @@ export type ServerEvent =
   | { type: "task.created"; task: Task }
   | { type: "task.updated"; task: Task }
   | { type: "task.status"; taskId: string; status: TaskStatus; startedAt?: string | null; endedAt?: string | null; activeMs?: number | null; liveSince?: string | null }
+  | { type: "task.stage"; taskId: string; stage: TaskStage }
   | { type: "task.title"; taskId: string; title: string }
   // 提问态变化（§Team）：agent 调 ask_question 提问、或答复把它清空。task.status
   // 只带状态字段，question 不跟着走 —— 少了这条事件，卡片要等下次全量拉取才出现/

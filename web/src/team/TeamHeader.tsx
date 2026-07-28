@@ -17,7 +17,7 @@ import {
   workerHaltStats,
   type Waiting,
 } from "@harness/shared/team";
-import { ArrowsClockwise, DownloadSimple, Stop, Trash, Play, Scales } from "@phosphor-icons/react";
+import { ArrowsClockwise, ClipboardText, DownloadSimple, Stop, Trash, Play, Scales } from "@phosphor-icons/react";
 import { api } from "../api";
 import { toast } from "../toast";
 import { ConfirmModal } from "../Modal";
@@ -32,6 +32,7 @@ import { TeamTimeline } from "./TeamTimeline";
 import type { LeadTurn } from "./teamData";
 import { teamLeadExecutorLabel, teamWorkerExecutorLabel } from "../executorLabel";
 import { AttachmentDisplay, parseAttachmentText } from "../messageAttachments";
+import { TeamStageProgress } from "../StageProgress";
 
 export function TeamHeader({
   task,
@@ -49,6 +50,8 @@ export function TeamHeader({
   onArchive,
   onUnarchive,
   onOpenWorker,
+  reviewOpen,
+  onToggleReview,
   canIterateDebate,
   iterateBusy,
   onIterateDebate,
@@ -68,6 +71,8 @@ export function TeamHeader({
   onArchive: () => void;
   onUnarchive: () => void;
   onOpenWorker: (id: string) => void;
+  reviewOpen: boolean;
+  onToggleReview: () => void;
   canIterateDebate: boolean;
   iterateBusy: boolean;
   onIterateDebate: () => void;
@@ -85,6 +90,8 @@ export function TeamHeader({
   const leadLabel = teamLeadExecutorLabel(task);
   const workerLabel = teamWorkerExecutorLabel(task);
   const objective = parseAttachmentText(task.body);
+  const awaitingAcceptance = workers.filter((worker) => worker.stage === "awaiting_acceptance").length;
+  const reviewEmphasis = settled || awaitingAcceptance > 0;
 
   return (
     <header className="shrink-0 border-b border-line px-6 pb-3 pt-5">
@@ -99,6 +106,21 @@ export function TeamHeader({
         <div className="flex shrink-0 items-center gap-2">
           <BusyPill task={task} />
           <TaskTimeChip task={task} />
+          <button
+            type="button"
+            onClick={onToggleReview}
+            className={`inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-[13px] font-medium transition-colors ${
+              reviewOpen
+                ? "border-accent bg-accent text-accent-fg"
+                : reviewEmphasis
+                  ? "border-violet-500/40 bg-violet-500/[0.09] text-violet-700 hover:bg-violet-500/[0.15]"
+                  : "border-line text-muted hover:bg-raised hover:text-ink"
+            }`}
+            title={reviewOpen ? "返回团队协作流" : "汇总执行者目标、提交、diff 和用户消息"}
+          >
+            <ClipboardText size={14} weight={reviewEmphasis ? "fill" : "regular"} />
+            {reviewOpen ? "返回协作" : `验收${awaitingAcceptance ? ` ${awaitingAcceptance}` : ""}`}
+          </button>
           {settled && canIterateDebate && (
             <button
               type="button"
@@ -258,7 +280,9 @@ export function TeamHeader({
         )}
       </div>
 
-      <TeamTimeline lead={task} leadTurns={leadTurns} workers={workers} groups={teamGroups} onOpen={onOpenWorker} />
+      {!reviewOpen && <TeamStageProgress workers={workers} />}
+
+      {!reviewOpen && <TeamTimeline lead={task} leadTurns={leadTurns} workers={workers} groups={teamGroups} onOpen={onOpenWorker} />}
 
       {haltOpen && (
         <ConfirmModal
@@ -348,7 +372,7 @@ function BusyPill({ task }: { task: Task }) {
       className="inline-flex items-center gap-1.5 rounded-md bg-overlay px-2 py-1 text-[12px] text-muted"
       title={task.status === "idle" ? "会话在线，这一刻没在说话；你或执行者一说话就接回" : undefined}
     >
-      <StatusIcon status={task.status} size={11} awaitingAnswer={!!task.question} />
+      <StatusIcon status={task.status} stage={task.stage} awaitingAnswer={!!task.question} />
       {label}
     </span>
   );

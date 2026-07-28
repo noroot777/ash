@@ -1,6 +1,5 @@
-import type { Task } from "@harness/shared";
+import { taskDisplayStatus, type Task } from "@harness/shared";
 import { Scales, UsersThree } from "@phosphor-icons/react";
-import { STATUS_META } from "./constants";
 import { StatusIcon } from "./StatusIcon";
 
 export function DerivedTaskLinks({
@@ -22,6 +21,7 @@ export function DerivedTaskLinks({
       <span className="mr-0.5 text-[11px] font-medium text-faint">派生任务</span>
       {derived.map((task) => {
         const team = task.mode === "team";
+        const display = taskDisplayStatus(task.status, task.stage, !!task.question);
         return (
           <button
             key={task.id}
@@ -33,8 +33,8 @@ export function DerivedTaskLinks({
             {team ? <UsersThree size={12} weight="fill" className="shrink-0 text-cyan-700" /> : <Scales size={12} weight="fill" className="shrink-0 text-violet-700" />}
             <span className="truncate text-ink">{task.title}</span>
             <span className="inline-flex shrink-0 items-center gap-1 text-faint">
-              <StatusIcon status={task.status} size={10} />
-              {task.archived ? "已归档" : STATUS_META[task.status].label}
+              <StatusIcon status={task.status} stage={task.stage} awaitingAnswer={!!task.question} />
+              {task.archived ? "已归档" : display.label}
             </span>
             <span className="shrink-0 text-faint">→</span>
           </button>

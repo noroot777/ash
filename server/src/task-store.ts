@@ -1,5 +1,5 @@
 import { eq, inArray } from "drizzle-orm";
-import type { AgentType, QuestionItem, Task, TaskStatus } from "@harness/shared";
+import type { AgentType, QuestionItem, Task, TaskStage, TaskStatus } from "@harness/shared";
 import { db } from "./db/index.js";
 import { agents, projects, queueItems, sessions, tasks } from "./db/schema.js";
 import { bus } from "./bus.js";
@@ -45,6 +45,7 @@ const toTask = (r: TaskRow, profiles: AgentLabelRow[] = []): Task => ({
   body: r.body,
   mode: r.mode as Task["mode"],
   status: r.status as TaskStatus,
+  stage: (r.stage as TaskStage | null) ?? null,
   priority: r.priority as Task["priority"],
   labels: JSON.parse(r.labels),
   dependsOn: JSON.parse(r.dependsOn),

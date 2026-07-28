@@ -50,6 +50,7 @@ export const tasks = sqliteTable("tasks", {
   body: text("body").notNull().default(""),
   mode: text("mode").notNull().default("single"), // single | debate | team
   status: text("status").notNull().default("backlog"),
+  stage: text("stage"), // 正交验收阶段；不参与 status 调度/结算语义
   priority: text("priority").notNull().default("none"),
   labels: text("labels").notNull().default("[]"), // json
   dependsOn: text("depends_on").notNull().default("[]"), // json

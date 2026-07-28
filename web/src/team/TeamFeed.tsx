@@ -122,7 +122,7 @@ function BatchWorkerRow({
       onClick={onOpen}
       className="flex w-full items-center gap-2 border-t border-line px-2.5 py-2 text-left transition-colors hover:bg-canvas"
     >
-      <StatusIcon status={w.status} size={12} awaitingAnswer={!!w.question} />
+      <StatusIcon status={w.status} stage={w.stage} awaitingAnswer={!!w.question} />
       <span className="w-3.5 shrink-0 font-mono text-[10.5px] text-faint">{n}</span>
       <span className="min-w-0 flex-1 truncate text-[12.5px] text-ink">{w.title}</span>
       <span

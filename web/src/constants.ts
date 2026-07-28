@@ -2,23 +2,21 @@ import type { TaskStatus, Priority } from "@harness/shared";
 
 // 完整状态 metadata。paused 跟 running 是「进行中」的两个面：前者跑到检查点等续跑，
 // 后者正在执行。idle 是团队调度台专有状态：进程在线但这一刻没在说话（`/team`）。
-// 它仍需要完整的图标、配色和 label，但任务列表不再为它单独渲染「待命」分组，而是把
+// 它仍需要完整的 label，但任务列表不再为它单独渲染「待命」分组，而是把
 // idle 的团队任务归入「运行中」。分组顺序由下面的 STATUSES 单独维护。
-//
-// 配色上 cyan 已经让给「有人在问你话」（见 StatusIcon.tsx），所以 paused/idle 一起
-// 收到中性的 slate：它们都是「harness 自己会推进，不用你管」。
-type StatusMeta = { key: TaskStatus; label: string; dot: string; text: string };
+// 颜色只在 StatusIcon.tsx 维护，禁止 metadata 再放第二套色值。
+type StatusMeta = { key: TaskStatus; label: string };
 
 export const STATUS_META = {
-  running: { key: "running", label: "运行中", dot: "bg-sky-400", text: "text-sky-300" },
-  idle: { key: "idle", label: "待命", dot: "bg-slate-400", text: "text-slate-300" },
-  paused: { key: "paused", label: "暂停中", dot: "bg-slate-400", text: "text-slate-300" },
-  awaiting_review: { key: "awaiting_review", label: "等待审核", dot: "bg-violet-400", text: "text-violet-300" },
-  queued: { key: "queued", label: "排队中", dot: "bg-amber-400", text: "text-amber-300" },
-  backlog: { key: "backlog", label: "待排期", dot: "bg-neutral-600", text: "text-neutral-400" },
-  done: { key: "done", label: "完成", dot: "bg-emerald-400", text: "text-emerald-300" },
-  failed: { key: "failed", label: "失败", dot: "bg-red-400", text: "text-red-300" },
-  canceled: { key: "canceled", label: "已取消", dot: "bg-neutral-500", text: "text-neutral-400" },
+  running: { key: "running", label: "运行中" },
+  idle: { key: "idle", label: "待命" },
+  paused: { key: "paused", label: "暂停中" },
+  awaiting_review: { key: "awaiting_review", label: "等待审核" },
+  queued: { key: "queued", label: "排队中" },
+  backlog: { key: "backlog", label: "待排期" },
+  done: { key: "done", label: "完成" },
+  failed: { key: "failed", label: "失败" },
+  canceled: { key: "canceled", label: "已取消" },
 } satisfies Record<TaskStatus, StatusMeta>;
 
 // 任务列表的状态分组渲染顺序。idle 不单独成组，见上方说明。

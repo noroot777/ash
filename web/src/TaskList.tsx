@@ -165,10 +165,11 @@ function TaskRow({
       }`}
     >
       <div className="flex w-full items-center gap-2.5">
+        <StatusIcon status={t.status} stage={t.stage} awaitingAnswer={!!t.question} />
         <PriorityIcon p={t.priority} />
         <span className="min-w-[80px] flex-1 truncate text-[13px] text-ink">{t.title}</span>
         <div className="ml-auto flex min-w-0 items-center gap-1.5 overflow-hidden">
-          {t.useWorktree && <TaskWorktreeChip />}
+          {t.useWorktree && <TaskWorktreeChip cleaned={t.stage === "accepted"} />}
           {t.queueId != null && !canArchive(t.status) && (
             <span
               className="shrink-0 rounded bg-overlay px-1.5 py-0.5 font-mono text-[10px] text-muted"
@@ -204,12 +205,12 @@ function TaskRow({
   );
 }
 
-// 团队行。默认折叠成一行:图标是 foldTeamStatus 算出来的「最该你管的那个」,右边是
-// 执行者状态摘要(「1 等答复 · 1 干活 · 1 完成」)。
+// 团队行。默认折叠成一行:色点是 foldTeamStatus 算出来的「最该你管的那个」,右边只
+// 留执行者总数 + 状态微点，避免「1 等答复 · 1 干活 · 1 完成」与模式/队列互相争抢。
 //
-// 这个图标可能跟本行所在的状态分组不一致 —— 调度台待命着(归入「运行中」组),但某个
-// 执行者正卡在提问上,于是行首是青色问号。这是故意的:分组按调度台在线即运行中的语义
-// 放置(免得活着的团队因为执行者全完掉进「完成」组),而图标要抢你的注意力。
+// 这个色点可能跟本行所在的状态分组不一致 —— 调度台待命着(归入「运行中」组),但某个
+// 执行者正卡在提问上,于是行首是青色点。这是故意的:分组按调度台在线即运行中的语义
+// 放置(免得活着的团队因为执行者全完掉进「完成」组),而色点要抢你的注意力。
 function TeamRow({
   lead,
   workers,
@@ -230,9 +231,6 @@ function TeamRow({
   onOpenTask: (id: string) => void;
 }) {
   const fold = foldTeamStatus(lead, workers);
-  const summary = statusCounts(workers)
-    .map((b) => `${b.n} ${b.label}`)
-    .join(" · ");
   const badge = pairBadge(lead);
   return (
     <>
@@ -258,10 +256,17 @@ function TeamRow({
         <PriorityIcon p={lead.priority} />
         <span className="min-w-[80px] flex-1 truncate text-[13px] text-ink">{lead.title}</span>
         <div className="ml-auto flex min-w-0 items-center gap-1.5 overflow-hidden">
-          {lead.useWorktree && <TaskWorktreeChip />}
+          {lead.useWorktree && <TaskWorktreeChip cleaned={lead.stage === "accepted"} />}
           <OriginTaskChip task={lead} allTasks={allTasks} onOpen={onOpenTask} />
-          {summary && <span className="shrink-0 truncate font-mono text-[10px] text-faint">{summary}</span>}
-          <span className={`shrink-0 rounded px-1.5 py-0.5 font-mono text-[10px] ${badge.cls}`}>{badge.label}</span>
+          <WorkerSummary workers={workers} />
+          {lead.queueId != null && !canArchive(lead.status) && (
+            <span className="shrink-0 font-mono text-[10px] text-faint" title="队列位置">
+              #{(lead.queuePosition ?? 0) + 1}
+            </span>
+          )}
+          <span className="shrink-0 rounded border border-accent/20 px-1.5 py-px font-mono text-[9.5px] text-accent/80">
+            {badge.label}
+          </span>
         </div>
       </div>
       {expanded &&
@@ -274,9 +279,9 @@ function TeamRow({
               selected === w.id ? "bg-raised" : "hover:bg-raised/60"
             }`}
           >
-            <StatusIcon status={w.status} size={12} awaitingAnswer={!!w.question} />
+            <StatusIcon status={w.status} stage={w.stage} awaitingAnswer={!!w.question} />
             <span className="min-w-0 flex-1 truncate text-[12.5px] text-muted">{w.title}</span>
-            {w.useWorktree && <TaskWorktreeChip />}
+            {w.useWorktree && <TaskWorktreeChip cleaned={w.stage === "accepted"} />}
             {w.queueId != null && !canArchive(w.status) && (
               <span className="shrink-0 rounded bg-overlay px-1.5 py-0.5 font-mono text-[10px] text-muted" title="串行批次里的位置">
                 ↳ #{(w.queuePosition ?? 0) + 1}
@@ -286,6 +291,28 @@ function TeamRow({
           </div>
         ))}
     </>
+  );
+}
+
+function WorkerSummary({ workers }: { workers: Task[] }) {
+  if (!workers.length) return null;
+  const counts = statusCounts(workers);
+  const summary = counts.map((bucket) => `${bucket.n} ${bucket.label}`).join(" · ");
+  return (
+    <span className="inline-flex shrink-0 items-center gap-1" title={`${workers.length} 个执行者 · ${summary}`}>
+      <span className="font-mono text-[10px] text-faint">{workers.length}</span>
+      <span className="inline-flex items-center gap-[3px]" aria-label={summary}>
+        {counts.map((bucket) => (
+          <StatusIcon
+            key={bucket.label}
+            status={bucket.status}
+            awaitingAnswer={bucket.awaitingAnswer}
+            size={6}
+            title={`${bucket.n} ${bucket.label}`}
+          />
+        ))}
+      </span>
+    </span>
   );
 }
 

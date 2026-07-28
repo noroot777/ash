@@ -32,6 +32,60 @@ export type TeamCuaKillResult = {
   warning: string;
 };
 
+export type TaskCommit = { sha: string; subject: string; at: string };
+
+export type TaskDiffResult = {
+  available: boolean;
+  sourceBranch: string;
+  targetBranch: string | null;
+  mergeBase: string | null;
+  diff: string;
+  files: { path: string; additions: number | null; deletions: number | null }[];
+  truncated: boolean;
+  limitBytes: number;
+  reason?: string;
+};
+
+export type AcceptTaskSuccess = {
+  accepted: true;
+  taskId: string;
+  status: string;
+  stage: "accepted";
+  kind: "already_accepted" | "shared_team_worktree" | "in_place" | "isolated_worktree";
+  targetBranch?: string;
+  merge?: string;
+  worktreePath?: string;
+  worktreeRemoved?: boolean;
+  branch?: string;
+  branchDeleted?: boolean;
+  warnings?: AcceptTaskWarning[];
+};
+
+export type AcceptTaskWarning = {
+  reason: "temporary_cleanup_failed";
+  message: string;
+  worktreePath: string;
+};
+
+export type AcceptTaskFailure = {
+  accepted: false;
+  taskId: string;
+  reason: string;
+  error: string;
+  status?: string;
+  sourceBranch?: string;
+  targetBranch?: string | null;
+  conflictFiles?: string[];
+  dirtyFiles?: string[];
+  targetPath?: string;
+  worktreePath?: string;
+  phase?: "initial" | "before_accept" | "before_merge" | "before_cleanup";
+  inFlightTasks?: { id: string; title: string; status: string; role: "task" | "shared_worker" }[];
+  warnings?: AcceptTaskWarning[];
+};
+
+export type AcceptTaskResult = AcceptTaskSuccess | AcceptTaskFailure;
+
 const j = async (r: Response) => {
   if (!r.ok) {
     // 后端错误统一是 {error: "人话"};解析出来给 toast 用,免得用户看到
@@ -234,6 +288,14 @@ export const api = {
     fetch(`/api/tasks/${id}/archive`, { method: "POST" }).then(j),
   unarchiveTask: (id: string): Promise<Task> =>
     fetch(`/api/tasks/${id}/unarchive`, { method: "POST" }).then(j),
+  acceptTask: async (id: string): Promise<AcceptTaskResult> => {
+    const response = await fetch(`/api/tasks/${id}/accept`, { method: "POST" });
+    const body = await response.json().catch(() => null) as AcceptTaskResult | { error?: string } | null;
+    if (body && "accepted" in body) return body;
+    throw new Error((body && "error" in body && body.error) || `${response.status} 验收请求失败`);
+  },
+  taskDiff: (id: string): Promise<TaskDiffResult> =>
+    fetch(`/api/tasks/${id}/diff`).then(j),
   replyTask: (id: string, text: string, opts?: { attachments?: string[]; agent?: AgentType; sendAt?: string }): Promise<unknown> =>
     fetch(`/api/tasks/${id}/reply`, {
       method: "POST",
@@ -297,7 +359,7 @@ export const api = {
     fetch(`/api/tasks/${taskId}/debate`).then(j),
 
   // Commits produced by a task on its worktree branch.
-  taskCommits: (id: string): Promise<{ branch: string | null; commits: { sha: string; subject: string; at: string }[] }> =>
+  taskCommits: (id: string): Promise<{ branch: string | null; commits: TaskCommit[] }> =>
     fetch(`/api/tasks/${id}/commits`).then(j),
   // 供应商 (provider, system-level) — mounted onto an executor as base_url + key.
   // List never returns the key (hasKey flag only); send apiKey only when setting/changing it.

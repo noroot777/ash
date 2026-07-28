@@ -220,7 +220,7 @@ export function CommandPalette({
               onClick={() => openRunningTask(task)}
               className={`flex w-full min-w-0 items-center gap-2 px-4 py-2 text-left text-sm ${index === active ? "bg-overlay" : ""}`}
             >
-              <StatusIcon status={task.status} />
+              <StatusIcon status={task.status} stage={task.stage} awaitingAnswer={!!task.question} />
               <span className="min-w-0 truncate text-ink">{task.title}</span>
               <span className="ml-auto shrink-0 text-xs text-faint">{projectNames.get(task.projectId) ?? "未知项目"}</span>
             </button>
