@@ -8,7 +8,7 @@ export type DetectedAgent = {
   resident: boolean;
 };
 
-// Shared by CreateTask's /team mode and debate handoff. A lead must support a
+// Shared by TaskComposer's /team mode and debate handoff. A lead must support a
 // resident session; the default worker deliberately prefers another available
 // type so the team starts with a second perspective.
 export function teamExecutorDefaults(

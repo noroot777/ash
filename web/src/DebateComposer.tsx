@@ -10,7 +10,7 @@ export function createDebateConfig(): DebateConfig {
   return { ...loadDefaults(), topic: "", style: "debate" };
 }
 
-// The debate-specific fields live inside CreateTask. Keeping them controlled lets
+// The debate-specific fields live inside TaskComposer. Keeping them controlled lets
 // the parent own the common title, mode switch, submission, and keyboard shortcut.
 export function DebateComposerFields({
   value,

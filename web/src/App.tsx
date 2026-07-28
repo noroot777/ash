@@ -1,12 +1,14 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
-import type { Task, ProjectView, Group, AgentEvent, AgentType, ProjectHealth, SearchHit } from "@harness/shared";
+import type { Task, ProjectView, Group, AgentType, ProjectHealth, SearchHit } from "@harness/shared";
 import { api } from "./api";
 import { useServerEvents } from "./useEvents";
 import { orderedTasks } from "./TaskList";
 import { type LogLine } from "./TaskDetail";
+import { renderEvent } from "./renderEvent";
 import { CommandPalette, type Command } from "./CommandPalette";
 import { PRIORITIES } from "./constants";
-import { CreateTask, type CreateTaskMode } from "./CreateTask";
+import { TaskComposer } from "./TaskComposer";
+import { useComposer } from "./useComposer";
 import { applyDebateEvent, emptyDebate, type DebateState } from "./debateState";
 import { AgentsPanel } from "./AgentsPanel";
 import { NewProjectModal, NewGroupModal, ConfirmModal, WorktreeCleanupModal } from "./Modal";
@@ -19,7 +21,7 @@ import { canArchive } from "@harness/shared";
 import { TasksWorkspace, type TaskView } from "./TasksWorkspace";
 import { ProjectRail } from "./ProjectRail";
 import { isDispatchedWorker } from "./taskPolicy";
-import { NewNoteModal, NotesModal, type NoteTaskDraft } from "./NotesModal";
+import { NewNoteModal, NotesModal } from "./NotesModal";
 
 function upsertTask(tasks: Task[], task: Task): Task[] {
   return tasks.some((t) => t.id === task.id)
@@ -56,16 +58,18 @@ export function App() {
   const tasksRef = useRef<Task[]>([]);
   tasksRef.current = tasks;
   const [selected, setSelected] = useState<string | null>(urlParams.get("task"));
+  // 打开新建面板时要记住「打开前选中的是谁」，而回调不该因为换了选中就换身份。
+  const selectedRef = useRef<string | null>(selected);
+  selectedRef.current = selected;
   const [logs, setLogs] = useState<Record<string, LogLine[]>>({});
   const [debates, setDebates] = useState<Record<string, DebateState>>({});
   const [sessionsBump, setSessionsBump] = useState(0);
   const [curHealth, setCurHealth] = useState<ProjectHealth | null>(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
-  const [createOpen, setCreateOpen] = useState(false);
-  const [createInitialMode, setCreateInitialMode] = useState<CreateTaskMode>("single");
+  // 新建任务不是弹层：它把右侧详情区整个换成一张内嵌单子（见 TaskComposer）。
+  const { composer, openComposer, setComposerMode, closeComposer, clearComposerDraft } = useComposer();
   const [notesMode, setNotesMode] = useState<"new" | "list" | null>(null);
   const [noteTarget, setNoteTarget] = useState<string | null>(null);
-  const [noteDraft, setNoteDraft] = useState<NoteTaskDraft | null>(null);
   const [agentsOpen, setAgentsOpen] = useState(false);
   const [newProjectOpen, setNewProjectOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -297,6 +301,7 @@ export function App() {
   // switching to its project) if the loaded list lacks it. Archived hits also
   // flip the view so the task is actually visible in the list.
   const openTask = useCallback(async (taskId: string) => {
+    closeComposer();
     setSelected(taskId);
     const local = tasksRef.current.find((t) => t.id === taskId);
     let target = local;
@@ -314,7 +319,7 @@ export function App() {
       if (target.archived) setView("archived");
       else setView((v) => (v === "archived" ? "list" : v));
     }
-  }, []);
+  }, [closeComposer]);
 
   // Search hits may live in another project. Notes open their own notepad detail;
   // task hits retain the archived/list handling in openTask.
@@ -352,27 +357,43 @@ export function App() {
       api.runTask(t.id);
     }
   }, []);
-  const openCreate = useCallback(() => {
-    setNoteDraft(null);
-    setCreateInitialMode("single");
-    setCreateOpen(true);
-  }, []);
-  const openDebateCreate = useCallback(() => {
-    setNoteDraft(null);
-    setCreateInitialMode("debate");
-    setCreateOpen(true);
-  }, []);
+  // 打开内嵌新建面板：右侧切成 composer，同时清掉选中（左侧列表不再高亮某一行），
+  // 并记下原来选中的那个，取消时切回去。已经开着时只换模式、不动已填内容。
+  const openComposerAt = useCallback(
+    (mode: Parameters<typeof openComposer>[0]) => {
+      openComposer(mode, { returnTo: selectedRef.current });
+      setSelected(null);
+    },
+    [openComposer],
+  );
+  const openCreate = useCallback(() => openComposerAt("single"), [openComposerAt]);
+  const openDebateCreate = useCallback(() => openComposerAt("debate"), [openComposerAt]);
+  // 选中任务 = 离开新建面板（草稿丢弃，和原来点遮罩关闭是一个语义）。
+  const selectTask = useCallback(
+    (id: string | null) => {
+      closeComposer();
+      setSelected(id);
+    },
+    [closeComposer],
+  );
+  // 放弃这张单子：回到打开前选中的任务（它若已被删掉就落回空态）。开着「再建一个」
+  // 建过任务的话 selected 已经指向刚建出来的那个 —— 那才是用户想回到的地方。
+  const cancelComposer = useCallback(() => {
+    const back = selectedRef.current ?? composer?.returnTo ?? null;
+    closeComposer();
+    setSelected(back && tasksRef.current.some((t) => t.id === back) ? back : null);
+  }, [composer, closeComposer]);
   const openNewNote = useCallback(() => { setNoteTarget(null); setNotesMode("new"); }, []);
   const openNotes = useCallback(() => { setNoteTarget(null); setNotesMode("list"); }, []);
   const onCreateTaskCreated = useCallback((task: Task) => {
     onTaskCreated(task);
-    if (!noteDraft?.noteIds.length) return;
-    const ids = noteDraft.noteIds;
-    setNoteDraft(null);
+    const ids = composer?.draft?.noteIds ?? [];
+    if (!ids.length) return;
+    clearComposerDraft();
     void Promise.all(ids.map((noteId) => api.patchNote(noteId, { taskId: task.id })))
       .then(() => toast(`已关联 ${ids.length} 条随手记`))
       .catch(showErr);
-  }, [noteDraft, onTaskCreated]);
+  }, [composer, onTaskCreated, clearComposerDraft]);
 
   const doCreateProject = useCallback(async (name: string, repoPath: string) => {
     const p = await api.createProject(name, repoPath);
@@ -442,7 +463,9 @@ export function App() {
     try { const g = await api.pauseGroup(id); setGroups((gs) => gs.map((x) => (x.id === id ? g : x))); }
     catch (e) { console.warn("pauseGroup rejected:", e); }
   }, []);
-  const anyModal = createOpen || !!notesMode || agentsOpen || newProjectOpen || settingsOpen || newGroupOpen || groupsOpen || !!confirmDel || !!worktreePrompt;
+  // composer 不在其中：它是内嵌面板不是弹层，j/k/c 这些全局键在它开着时照样管用
+  // （光标落在正文里时由下面的 INPUT/TEXTAREA 判断挡住）。
+  const anyModal = !!notesMode || agentsOpen || newProjectOpen || settingsOpen || newGroupOpen || groupsOpen || !!confirmDel || !!worktreePrompt;
 
   // ── keyboard navigation ────────────────────────────────────────────────
   useEffect(() => {
@@ -459,21 +482,22 @@ export function App() {
       const idx = ordered.findIndex((t) => t.id === selected);
       if (e.key === "j" || e.key === "ArrowDown") {
         e.preventDefault();
-        if (ordered.length) setSelected(ordered[Math.min(idx + 1, ordered.length - 1)]?.id ?? selected);
+        if (ordered.length) selectTask(ordered[Math.min(idx + 1, ordered.length - 1)]?.id ?? selected);
       } else if (e.key === "k" || e.key === "ArrowUp") {
         e.preventDefault();
-        if (ordered.length) setSelected(ordered[Math.max(idx - 1, 0)]?.id ?? selected);
+        if (ordered.length) selectTask(ordered[Math.max(idx - 1, 0)]?.id ?? selected);
       } else if (e.key === "c") {
         e.preventDefault();
         openCreate();
-      } else if (e.key === "r" && current) {
+      } else if (e.key === "r" && current && !composer) {
+        // composer 开着时右侧根本看不到那个任务，别让 r 悄悄把它跑起来。
         e.preventDefault();
         primary(current);
       }
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [ordered, selected, current, paletteOpen, anyModal, primary, openCreate]);
+  }, [ordered, selected, current, paletteOpen, anyModal, primary, openCreate, selectTask, composer]);
 
   useEffect(() => {
     if (selected) document.querySelector(`[data-task-id="${selected}"]`)?.scrollIntoView({ block: "nearest" });
@@ -549,7 +573,7 @@ export function App() {
           current={current}
           groups={groups}
           selected={selected}
-          onSelect={setSelected}
+          onSelect={selectTask}
           logs={logs}
           debates={debates}
           sessionsBump={sessionsBump}
@@ -573,6 +597,22 @@ export function App() {
           onGate={gate}
           onOpenTask={openTask}
           onTaskCreated={onTaskCreated}
+          composer={composer && project ? (
+            <TaskComposer
+              key={composer.seq}
+              project={project}
+              groups={groups}
+              mode={composer.mode}
+              onMode={setComposerMode}
+              initialBody={composer.draft?.body}
+              initialAttachments={composer.draft?.attachments}
+              onCancel={cancelComposer}
+              onDone={closeComposer}
+              onCreated={onCreateTaskCreated}
+              onCreateGroup={() => setNewGroupOpen(true)}
+              onOpenAgents={() => setAgentsOpen(true)}
+            />
+          ) : null}
         />
       </main>
 
@@ -632,46 +672,12 @@ export function App() {
             setNotesMode(null);
             setNoteTarget(null);
             setView("list");
-            setNoteDraft(draft);
-            setCreateInitialMode("single");
-            setCreateOpen(true);
+            openComposer("single", { draft, returnTo: selectedRef.current });
+            setSelected(null);
           }}
-        />
-      )}
-      {createOpen && project && (
-        <CreateTask
-          project={project}
-          groups={groups}
-          initialMode={createInitialMode}
-          initialBody={noteDraft?.body}
-          initialAttachments={noteDraft?.attachments}
-          onClose={() => { setCreateOpen(false); setNoteDraft(null); }}
-          onCreated={onCreateTaskCreated}
-          onCreateGroup={() => setNewGroupOpen(true)}
-          onOpenAgents={() => setAgentsOpen(true)}
         />
       )}
       <Toaster />
     </div>
   );
-}
-
-function renderEvent(e: AgentEvent, agent?: AgentType, sessionId?: string): LogLine | null {
-  const base = (l: LogLine): LogLine => ({ ...l, agent, sessionId });
-  switch (e.kind) {
-    case "text":
-      return base({ kind: "text", text: e.text });
-    case "thinking":
-      return base({ kind: "thinking", text: e.text });
-    case "system":
-      return base({ kind: "system", text: e.text, at: new Date().toISOString() });
-    case "tool":
-      return base({ kind: "tool", name: e.name, text: e.detail ?? "" });
-    case "error":
-      return base({ kind: "error", text: e.message });
-    case "done":
-      return base({ kind: "done", text: `— 结束 (exit ${e.exitStatus}) —` });
-    default:
-      return null;
-  }
 }

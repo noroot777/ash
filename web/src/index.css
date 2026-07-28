@@ -206,6 +206,12 @@ select option {
   animation: note-task-in var(--modal-open-dur) var(--modal-ease) both;
 }
 
+/* 内嵌新建面板:它不是弹层,但仍然沿用同一个方向感 —— 从右侧轻推进场,承接
+   随手记「笔记向左退场 → 单子从右进场」那一下交接。 */
+.t-composer-enter {
+  animation: note-task-in var(--modal-open-dur) var(--modal-ease) both;
+}
+
 .t-dropdown {
   transform-origin: top left;
   will-change: transform, opacity;
@@ -237,5 +243,6 @@ select option {
   .t-drawer,
   .t-dropdown,
   .note-handoff-out,
-  .note-task-enter { animation: none !important; }
+  .note-task-enter,
+  .t-composer-enter { animation: none !important; }
 }

@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import type { Task, Group, ProjectHealth, AgentType, GateAction } from "@harness/shared";
 import { NotePencil } from "@phosphor-icons/react";
 import { TaskList } from "./TaskList";
@@ -44,6 +45,7 @@ export function TasksWorkspace({
   onGate,
   onOpenTask,
   onTaskCreated,
+  composer,
 }: {
   view: TaskView;
   setView: (v: TaskView) => void;
@@ -76,6 +78,8 @@ export function TasksWorkspace({
   onGate: (id: string, action: GateAction) => void;
   onOpenTask: (taskId: string) => void;
   onTaskCreated: (task: Task, doRun?: boolean, select?: boolean) => void;
+  // 内嵌的新建面板。非空时它顶掉详情区（此时上层已清空选中，列表不高亮任何一行）。
+  composer?: ReactNode;
 }) {
   const tab = (v: TaskView, label: string) => (
     <button
@@ -125,9 +129,11 @@ export function TasksWorkspace({
           <ResizeHandle width={sidebarW} onChange={setSidebarW} />
         </aside>
         <div className="flex min-w-0 flex-1 flex-col">
-          {current && <OriginTaskBar task={current} allTasks={allTasks} onOpen={onOpenTask} />}
+          {!composer && current && <OriginTaskBar task={current} allTasks={allTasks} onOpen={onOpenTask} />}
           <div className="min-h-0 flex-1">
-            {current ? (
+            {composer ? (
+              composer
+            ) : current ? (
               current.mode === "debate" ? (
                 <DebateView
                   key={current.id}

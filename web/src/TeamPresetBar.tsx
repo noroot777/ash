@@ -86,11 +86,14 @@ export function TeamPresetBar({
   profiles,
   onApply,
   onDialogOpenChange,
+  className = "px-4 pt-3",
 }: {
   currentConfig: TeamPresetConfig;
   profiles: AgentExecutorProfile[];
   onApply: (config: TeamPresetConfig) => void;
   onDialogOpenChange: (open: boolean) => void;
+  // 外框留白由宿主决定：弹窗时自带 px-4，内嵌 composer 里正文已经限宽居中了。
+  className?: string;
 }) {
   const [presets, setPresets] = useState<TeamPreset[]>([]);
   const [loading, setLoading] = useState(true);
@@ -164,7 +167,7 @@ export function TeamPresetBar({
 
   return (
     <>
-      <div className="px-4 pt-3">
+      <div className={className}>
         <div className="rounded-xl border border-line bg-raised/35 p-2.5">
           <div className="flex flex-wrap items-center gap-2">
             <span className="shrink-0 text-[11px] font-semibold tracking-wide text-muted">执行模式</span>

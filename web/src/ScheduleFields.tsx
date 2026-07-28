@@ -1,4 +1,4 @@
-// Shared schedule value editor (§9), used both at creation (CreateTask) and for
+// Shared schedule value editor (§9), used both at creation (TaskComposer) and for
 // post-creation editing (ScheduleControl) so the two stay in sync. It edits the
 // VALUE for a given kind only — the none/once/cron kind switch and any save/clear
 // affordance live in the parent.
