@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { canArchive, type Group, type Task } from "@harness/shared";
+import { canArchive, taskDisplayStatus, type Group, type Task } from "@harness/shared";
 import { statusCounts, workersOf } from "@harness/shared/team";
 import { CaretRight } from "@phosphor-icons/react";
 import { STATUSES, STATUS_META, PRIORITY_ORDER } from "./constants";
@@ -10,6 +10,7 @@ import { executorLabel } from "./executorLabel";
 import { isDispatchedWorker } from "./taskPolicy";
 import { OriginTaskChip } from "./taskOrigin";
 import { TaskWorktreeChip } from "./TaskWorktreeChip";
+import { useUnreadTeamTasks } from "./useUnreadTasks";
 
 const TASK_SECTIONS = [
   { key: "collab", label: "协作任务", matches: (task: Task) => task.mode === "debate" || task.mode === "team" },
@@ -71,6 +72,7 @@ export function TaskList({
   const topTasks = topLevel(tasks);
   // Fold long status groups (e.g. 完成 93) away; remembered per browser.
   const { collapsed, toggle } = useCollapsedGroups("harness:taskList:collapsedStatuses");
+  const unreadTeams = useUnreadTeamTasks(tasks, selected);
   // 展开了执行者行的团队任务。默认全折叠 —— 团队行本身已经带了状态摘要。
   const [openTeams, setOpenTeams] = useState<Set<string>>(new Set());
   const toggleTeam = (id: string) =>
@@ -121,6 +123,7 @@ export function TaskList({
                           workers={workersOf(tasks, t.id)}
                           allTasks={allTasks}
                           selected={selected}
+                          unread={unreadTeams.has(t.id)}
                           expanded={openTeams.has(t.id)}
                           onToggle={() => toggleTeam(t.id)}
                           onSelect={onSelect}
@@ -205,8 +208,8 @@ function TaskRow({
   );
 }
 
-// 团队行。默认折叠成一行:色点是 foldTeamStatus 算出来的「最该你管的那个」,右边只
-// 留执行者总数 + 状态微点，避免「1 等答复 · 1 干活 · 1 完成」与模式/队列互相争抢。
+// 团队行。默认折叠成一行:只有出现未读动态时，才用 foldTeamStatus 算出来的「最该
+// 你管的那个」色点提醒；右边只留执行者总数 + 状态微点，避免状态摘要互相争抢。
 //
 // 这个色点可能跟本行所在的状态分组不一致 —— 调度台待命着(归入「运行中」组),但某个
 // 执行者正卡在提问上,于是行首是青色点。这是故意的:分组按调度台在线即运行中的语义
@@ -216,6 +219,7 @@ function TeamRow({
   workers,
   allTasks,
   selected,
+  unread,
   expanded,
   onToggle,
   onSelect,
@@ -225,6 +229,7 @@ function TeamRow({
   workers: Task[];
   allTasks: Task[];
   selected: string | null;
+  unread: boolean;
   expanded: boolean;
   onToggle: () => void;
   onSelect: (id: string) => void;
@@ -232,6 +237,7 @@ function TeamRow({
 }) {
   const fold = foldTeamStatus(lead, workers);
   const badge = pairBadge(lead);
+  const unreadTitle = `有新动态 · ${taskDisplayStatus(fold.status, undefined, fold.awaitingAnswer).label}`;
   return (
     <>
       <div
@@ -241,19 +247,14 @@ function TeamRow({
           selected === lead.id ? "bg-raised" : "hover:bg-raised/60"
         }`}
       >
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            onToggle();
-          }}
-          disabled={!workers.length}
-          className="grid h-4 w-4 shrink-0 place-items-center rounded text-faint transition-colors hover:bg-overlay hover:text-ink disabled:opacity-0"
-          title={expanded ? "折叠执行者" : `展开 ${workers.length} 个执行者`}
-        >
-          <CaretRight size={10} weight="bold" className={`transition-transform ${expanded ? "rotate-90" : ""}`} />
-        </button>
-        <StatusIcon status={fold.status} size={13} awaitingAnswer={fold.awaitingAnswer} />
-        <PriorityIcon p={lead.priority} />
+        {unread && (
+          <StatusIcon
+            status={fold.status}
+            size={13}
+            awaitingAnswer={fold.awaitingAnswer}
+            title={unreadTitle}
+          />
+        )}
         <span className="min-w-[80px] flex-1 truncate text-[13px] text-ink">{lead.title}</span>
         <div className="ml-auto flex min-w-0 items-center gap-1.5 overflow-hidden">
           {lead.useWorktree && <TaskWorktreeChip cleaned={lead.stage === "accepted"} />}
@@ -267,6 +268,17 @@ function TeamRow({
           <span className="shrink-0 rounded border border-accent/20 px-1.5 py-px font-mono text-[9.5px] text-accent/80">
             {badge.label}
           </span>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onToggle();
+            }}
+            disabled={!workers.length}
+            className="grid h-4 w-4 shrink-0 place-items-center rounded text-faint transition-colors hover:bg-overlay hover:text-ink disabled:opacity-0"
+            title={expanded ? "折叠执行者" : `展开 ${workers.length} 个执行者`}
+          >
+            <CaretRight size={10} weight="bold" className={`transition-transform ${expanded ? "rotate-90" : ""}`} />
+          </button>
         </div>
       </div>
       {expanded &&
@@ -275,7 +287,7 @@ function TeamRow({
             key={w.id}
             data-task-id={w.id}
             onClick={() => onSelect(w.id)}
-            className={`flex w-full cursor-pointer items-center gap-2 py-1 pl-[42px] pr-4 text-left transition-colors ${
+            className={`flex w-full cursor-pointer items-center gap-2 py-1 pl-4 pr-4 text-left transition-colors ${
               selected === w.id ? "bg-raised" : "hover:bg-raised/60"
             }`}
           >
