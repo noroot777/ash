@@ -17,7 +17,7 @@ import { bus } from "../bus.js";
 import { id, now } from "../util.js";
 import { setTaskStatus } from "../status.js";
 import { trackRun, untrackRun, isCanceling, takeCanceled, CanceledRun } from "../runs.js";
-import { ensureWorkdir } from "../git.js";
+import { taskWorkspace } from "../task-workspace.js";
 import { resolveExecutorFor } from "../executors/index.js";
 import type { AgentExecutor } from "../executors/types.js";
 import { RUNS_DIR } from "../paths.js";
@@ -258,18 +258,20 @@ async function loadBase(taskId: string) {
   const origin = task.originTaskId
     ? (await db.select().from(tasks).where(eq(tasks.id, task.originTaskId))).at(0)
     : null;
-  // Only team -> debate iterations keep the previous config intact and put their
-  // execution-aware brief in task.body. Every other debate preserves the legacy
-  // cfg.topic semantics even if an API caller happened to also provide a body.
-  const iterationBody = origin?.mode === "team" ? task.body.trim() : "";
-  const cfg = iterationBody ? { ...storedCfg, topic: iterationBody } : storedCfg;
+  // Derived debates carry their source-aware brief in task.body. Directly-created
+  // debates preserve the legacy cfg.topic semantics even if an API caller also
+  // happened to provide a body.
+  const derivedBody = origin ? task.body.trim() : "";
+  const cfg = derivedBody ? { ...storedCfg, topic: derivedBody } : storedCfg;
   const project = (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0);
   if (!project) throw new Error("project not found");
   const taskOverrides = { model: task.model, reasoningEffort: task.reasoningEffort };
   const exA = await resolveExecutorFor({ executorId: cfg.debaterAExecutorId, type: cfg.debaterA, ...taskOverrides });
   const exB = await resolveExecutorFor({ executorId: cfg.debaterBExecutorId, type: cfg.debaterB, ...taskOverrides });
-  // Discussion only reads; repo-less debates fall back to a scratch cwd (§4).
-  const cwd = ensureWorkdir(project.repoPath, taskId);
+  // Discussion only reads, but still honors the task's worktree/base so a
+  // source-derived debate sees the source task's branch. Repo-less projects keep
+  // the existing scratch fallback through taskWorkspace.
+  const cwd = (await taskWorkspace(task, project.repoPath)).path;
   const cap = Math.min(cfg.maxRounds ?? HARD_CAP, HARD_CAP);
   return { task, cfg, exA, exB, cwd, cap };
 }
