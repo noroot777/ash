@@ -24,7 +24,7 @@ export type LogLine = {
   attachments?: string[]; // optimistic user turn; snapshots carry these inside text
 };
 
-// Render the run as a conversation of bubbles (mirrors /pair). A contiguous run
+// Render the run as a conversation of bubbles (mirrors the debate view). A contiguous run
 // of one session's output is one left-aligned agent bubble — merged Markdown,
 // collapsible tools/thinking, and a slim resume/id/time footer for that run.
 // Human replies are right-aligned bubbles; an @-mention handoff just starts a new

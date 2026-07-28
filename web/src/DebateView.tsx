@@ -418,7 +418,7 @@ function Bubble({
   const side = turn.speaker;
 
   // A human intervention (gate inject/ask): a right-aligned bubble with the time
-  // the user spoke — the /pair analog of a single task's reply bubble.
+  // the user spoke — the debate analog of a single task's reply bubble.
   if (side === "user") {
     const content = parseAttachmentText(turn.text);
     return (

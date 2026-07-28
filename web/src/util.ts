@@ -17,7 +17,7 @@ export function groupLabel(g: { name: string; mode: string }): string {
   return `${g.name} · ${g.mode === "parallel" ? "并行" : "串行"}`;
 }
 
-// The mode badge shown on task cards/rows. /pair tasks show debate; 团队
+// The mode badge shown on task cards/rows. 辩论任务（mode "debate"）显示「辩论」；团队
 // (mode "team") 显示强调色的「团队」；a single task shows @agent.
 export function pairBadge(t: {
   mode: string;
