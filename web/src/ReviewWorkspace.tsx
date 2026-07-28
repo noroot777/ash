@@ -199,7 +199,9 @@ export function TeamReviewWorkspace({
   onTaskUpdated: (task: Task) => void;
 }) {
   const [failure, setFailure] = useState<AcceptTaskFailure | null>(null);
-  const awaiting = workers.filter((worker) => worker.useWorktree && worker.stage === "awaiting_acceptance").length;
+  const sharedWorkers = workers.filter((worker) => isSharedTeamWorker(worker, lead));
+  const worktreeWorkers = workers.filter((worker) => worker.useWorktree);
+  const awaiting = worktreeWorkers.filter((worker) => worker.stage === "awaiting_acceptance").length;
   return (
     <section className="flex min-h-0 flex-1 flex-col bg-canvas">
       <div className="flex shrink-0 items-center gap-3 border-b border-line bg-panel px-6 py-3">
@@ -235,15 +237,15 @@ export function TeamReviewWorkspace({
             defaultOpen
             showAcceptance={false}
           />
-          {workers.map((worker, index) => (
+          {sharedWorkers.length > 0 && <SharedWorkerSummary workers={sharedWorkers} />}
+          {worktreeWorkers.map((worker, index) => (
             <ReviewSection
               key={worker.id}
               task={worker}
               role={`执行者 ${index + 1}`}
               onTaskUpdated={onTaskUpdated}
-              defaultOpen={!!worker.useWorktree && worker.stage === "awaiting_acceptance"}
+              defaultOpen={worker.stage === "awaiting_acceptance"}
               showAcceptance={false}
-              sharedWorker={isSharedTeamWorker(worker, lead)}
             />
           ))}
           {workers.length === 0 && (
@@ -252,6 +254,61 @@ export function TeamReviewWorkspace({
             </p>
           )}
         </div>
+      </div>
+    </section>
+  );
+}
+
+function SharedWorkerSummary({ workers }: { workers: Task[] }) {
+  const failed = workers.filter((worker) => sharedWorkerDisplayStage(worker.stage) === "verify_failed").length;
+
+  return (
+    <section
+      aria-label="共享执行者验证摘要"
+      className="overflow-hidden rounded-lg border border-line2 bg-panel"
+    >
+      <div className="flex flex-wrap items-start gap-x-3 gap-y-1 border-b border-line px-4 py-3">
+        <div className="min-w-0 flex-1">
+          <h3 className="text-[13px] font-semibold text-ink">共享执行者验证</h3>
+          <p className="mt-0.5 text-[11.5px] leading-relaxed text-faint">
+            共享执行者的代码改动已包含在上方共享分支 diff 中，验收团队整体即可。
+          </p>
+        </div>
+        <span className={`text-[11px] ${failed ? "font-semibold text-red-600" : "text-faint"}`}>
+          {failed ? `${failed} 个验证失败` : `${workers.length} 个共享执行者`}
+        </span>
+      </div>
+      <div className="grid gap-2 p-3 sm:grid-cols-2 xl:grid-cols-3">
+        {workers.map((worker) => {
+          const displayStage = sharedWorkerDisplayStage(worker.stage);
+          const stageLabel = sharedWorkerStageLabel(worker.stage) ?? worker.status;
+          const verifyFailed = displayStage === "verify_failed";
+          return (
+            <div
+              key={worker.id}
+              className={`flex min-w-0 items-center gap-2.5 rounded-md border px-3 py-2.5 ${verifyFailed
+                ? "border-red-500/40 bg-red-500/[0.06]"
+                : "border-line bg-canvas/45"}`}
+            >
+              <StatusIcon
+                status={worker.status}
+                stage={displayStage}
+                awaitingAnswer={!!worker.question}
+                title={stageLabel}
+                size={8}
+              />
+              <span className={`min-w-0 flex-1 truncate text-[12.5px] font-medium ${verifyFailed ? "text-red-700" : "text-ink"}`} title={worker.title}>
+                {worker.title}
+              </span>
+              <span className={`shrink-0 rounded px-1.5 py-0.5 text-[10.5px] font-medium ${verifyFailed
+                ? "bg-red-500/10 text-red-700"
+                : "bg-overlay text-muted"}`}
+              >
+                {stageLabel}
+              </span>
+            </div>
+          );
+        })}
       </div>
     </section>
   );
