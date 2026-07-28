@@ -90,7 +90,9 @@ export function TeamHeader({
   const leadLabel = teamLeadExecutorLabel(task);
   const workerLabel = teamWorkerExecutorLabel(task);
   const objective = parseAttachmentText(task.body);
-  const awaitingAcceptance = workers.filter((worker) => worker.stage === "awaiting_acceptance").length;
+  const awaitingAcceptance = workers.filter(
+    (worker) => worker.useWorktree && worker.stage === "awaiting_acceptance",
+  ).length;
   const reviewEmphasis = settled || awaitingAcceptance > 0;
 
   return (

@@ -229,7 +229,55 @@ try {
     );
   }
 
-  console.log("accept merge: git 场景 / 清理警告 / team 并发守卫全部通过");
+  // 8. Shared workers reject direct acceptance; team acceptance links all shared stages.
+  {
+    const repo = makeRepo("team-linked-acceptance");
+    const createdAt = new Date().toISOString();
+    const projectId = "team-linked-project";
+    const leadId = "teamlead0008";
+    const sharedId = "shared-done";
+    const sharedAcceptedId = "shared-accepted";
+    const isolatedId = "isolated-done";
+    await db.insert(projects).values({ id: projectId, name: "team linked", repoPath: repo, createdAt });
+    const common = {
+      projectId,
+      body: "",
+      priority: "none",
+      labels: "[]",
+      dependsOn: "[]",
+      resumeDependsOn: "[]",
+      createdAt,
+      updatedAt: createdAt,
+    };
+    await db.insert(tasks).values([
+      { ...common, id: leadId, title: "team lead", mode: "team", status: "idle", useWorktree: false },
+      { ...common, id: sharedId, parentId: leadId, title: "shared done", mode: "single", status: "done", stage: "verified", useWorktree: false },
+      { ...common, id: sharedAcceptedId, parentId: leadId, title: "shared accepted", mode: "single", status: "done", stage: "accepted", useWorktree: false },
+      { ...common, id: isolatedId, parentId: leadId, title: "isolated done", mode: "single", status: "done", stage: "awaiting_acceptance", useWorktree: true },
+    ]);
+
+    const workerAcceptance = await acceptTask(sharedId);
+    assert.equal(workerAcceptance.accepted, false);
+    if (workerAcceptance.accepted) throw new Error("shared worker accept unexpectedly succeeded");
+    assert.equal(workerAcceptance.httpStatus, 409);
+    assert.equal(workerAcceptance.reason, "shared_worker_acceptance_not_applicable");
+    assert.equal(workerAcceptance.error, "执行者不需人工验收，请对团队整体验收");
+
+    const teamAcceptance = await acceptTask(leadId);
+    assert.equal(teamAcceptance.accepted, true);
+    if (!teamAcceptance.accepted) throw new Error(teamAcceptance.error);
+    assert.equal(teamAcceptance.kind, "in_place");
+    assert.equal(teamAcceptance.sharedWorkersAccepted, 1, "已 accepted 的共享执行者应跳过，不重复发阶段事件");
+
+    const linked = await db.select().from(tasks);
+    const stageOf = (id: string) => linked.find((task) => task.id === id)?.stage;
+    assert.equal(stageOf(leadId), "accepted");
+    assert.equal(stageOf(sharedId), "accepted");
+    assert.equal(stageOf(sharedAcceptedId), "accepted");
+    assert.equal(stageOf(isolatedId), "awaiting_acceptance", "独立 worktree 执行者仍由自身验收");
+  }
+
+  console.log("accept merge: git 场景 / 清理警告 / team 并发守卫 / 共享执行者验收口径全部通过");
 } finally {
   rmSync(root, { recursive: true, force: true });
 }
