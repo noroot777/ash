@@ -58,6 +58,19 @@ export interface ProjectView extends Project {
   health: ProjectHealth;
 }
 
+// Quick notes are project-scoped scraps that keep the user's original text.
+// `taskId` is a backlink set after one or more notes are merged into a task;
+// the note itself remains available for reference.
+export interface Note {
+  id: string;
+  projectId: string;
+  body: string;
+  attachments: string[];
+  taskId: string | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
 export type GroupMode = "parallel" | "serial";
 
 // Group = transient homogeneous batch container (§3). Not persistent-by-design,
@@ -248,12 +261,12 @@ export interface LlmProvider {
 }
 
 // ── Global search (⌘K) ───────────────────────────────────────────────────────
-// One hit per task — the best-matching field wins, ranked title > body >
-// conversation. `conversation` means the match was
+// One hit per task or note. Task fields rank title > body > conversation, and
+// task hits are returned before note hits. `conversation` means the match was
 // found inside the task's session transcripts (data/runs/<taskId>/*.md|jsonl),
 // which is where run artifacts like output directory names live.
 export type SearchField = "title" | "body" | "conversation";
-export interface SearchHit {
+export interface TaskSearchHit {
   kind: "task";
   id: string;
   title: string;
@@ -267,6 +280,20 @@ export interface SearchHit {
   snippet: string;
   updatedAt: string;
 }
+
+export interface NoteSearchHit {
+  kind: "note";
+  id: string;
+  title: string;
+  projectId: string;
+  projectName: string | null;
+  field: "body";
+  snippet: string;
+  updatedAt: string;
+  taskId: string | null;
+}
+
+export type SearchHit = TaskSearchHit | NoteSearchHit;
 
 // ── Attachments (pasted into the composer / reply box) ───────────────────────
 // Pasted images OR files. We don't feed them to a vision API — each is persisted

@@ -1,4 +1,4 @@
-import type { Project, ProjectView, ProjectHealth, Task, Session, Group, GateAction, Schedule, ScheduledMessage, AgentExecutorProfile, BatchCreateTasksBody, AgentType, AttachmentKind, LlmProvider, LlmProtocol, SearchHit } from "@harness/shared";
+import type { Project, ProjectView, ProjectHealth, Task, Note, Session, Group, GateAction, Schedule, ScheduledMessage, AgentExecutorProfile, BatchCreateTasksBody, AgentType, AttachmentKind, LlmProvider, LlmProtocol, SearchHit } from "@harness/shared";
 import type { PersistedDebateEntry } from "./debateState";
 
 export type CuaProcess = {
@@ -152,6 +152,22 @@ export const api = {
 
   tasks: (): Promise<Task[]> => fetch("/api/tasks").then(j),
   task: (id: string): Promise<Task> => fetch(`/api/tasks/${id}`).then(j),
+  notes: (projectId?: string): Promise<Note[]> =>
+    fetch(`/api/notes${projectId ? `?projectId=${encodeURIComponent(projectId)}` : ""}`).then(j),
+  createNote: (note: { projectId: string; body: string; attachments?: string[] }): Promise<Note> =>
+    fetch("/api/notes", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(note),
+    }).then(j),
+  patchNote: (id: string, patch: Partial<Pick<Note, "body" | "attachments" | "taskId">>): Promise<Note> =>
+    fetch(`/api/notes/${id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(patch),
+    }).then(j),
+  deleteNote: (id: string): Promise<{ deleted: true }> =>
+    fetch(`/api/notes/${id}`, { method: "DELETE" }).then(j),
   // Global search (⌘K): tasks + session transcripts, ranked server-side.
   search: (q: string): Promise<SearchHit[]> =>
     fetch(`/api/search?q=${encodeURIComponent(q)}`).then(j),

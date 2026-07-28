@@ -18,6 +18,10 @@ export async function ensureSchema() {
     CREATE TABLE IF NOT EXISTS projects (
       id TEXT PRIMARY KEY, name TEXT NOT NULL, repo_path TEXT NOT NULL, created_at TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS notes (
+      id TEXT PRIMARY KEY, project_id TEXT NOT NULL, body TEXT NOT NULL,
+      attachments TEXT, task_id TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+    );
     CREATE TABLE IF NOT EXISTS groups (
       id TEXT PRIMARY KEY, project_id TEXT NOT NULL, name TEXT NOT NULL,
       mode TEXT NOT NULL DEFAULT 'parallel',

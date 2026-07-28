@@ -20,6 +20,7 @@ import { canArchive } from "@harness/shared";
 import { TasksWorkspace, type TaskView } from "./TasksWorkspace";
 import { ProjectRail } from "./ProjectRail";
 import { isDispatchedWorker } from "./taskPolicy";
+import { NewNoteModal, NotesModal, type NoteTaskDraft } from "./NotesModal";
 
 function upsertTask(tasks: Task[], task: Task): Task[] {
   return tasks.some((t) => t.id === task.id)
@@ -59,6 +60,9 @@ export function App() {
   const [curHealth, setCurHealth] = useState<ProjectHealth | null>(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
+  const [notesMode, setNotesMode] = useState<"new" | "list" | null>(null);
+  const [noteTarget, setNoteTarget] = useState<string | null>(null);
+  const [noteDraft, setNoteDraft] = useState<NoteTaskDraft | null>(null);
   const [agentsOpen, setAgentsOpen] = useState(false);
   const [newProjectOpen, setNewProjectOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -300,8 +304,15 @@ export function App() {
     }
   }, []);
 
-  // Search hits may live in another project or the archive; openTask handles both.
-  const openHit = useCallback((h: SearchHit) => openTask(h.id), [openTask]);
+  // Search hits may live in another project. Notes open their own notepad detail;
+  // task hits retain the archived/list handling in openTask.
+  const openHit = useCallback((h: SearchHit) => {
+    if (h.kind === "note") {
+      setProjectId(h.projectId);
+      setNoteTarget(h.id);
+      setNotesMode("list");
+    } else void openTask(h.id);
+  }, [openTask]);
 
   const del = useCallback((id: string, title: string) => {
     if (rejectDispatchedWorkerMutation(tasksRef.current.find((t) => t.id === id))) return;
@@ -329,6 +340,19 @@ export function App() {
       api.runTask(t.id);
     }
   }, []);
+  const openCreate = useCallback(() => {
+    setNoteDraft(null);
+    setCreateOpen(true);
+  }, []);
+  const onCreateTaskCreated = useCallback((task: Task) => {
+    onTaskCreated(task);
+    if (!noteDraft?.noteIds.length) return;
+    const ids = noteDraft.noteIds;
+    setNoteDraft(null);
+    void Promise.all(ids.map((noteId) => api.patchNote(noteId, { taskId: task.id })))
+      .then(() => toast(`已关联 ${ids.length} 条随手记`))
+      .catch(showErr);
+  }, [noteDraft, onTaskCreated]);
 
   const doCreateProject = useCallback(async (name: string, repoPath: string) => {
     const p = await api.createProject(name, repoPath);
@@ -398,7 +422,7 @@ export function App() {
     try { const g = await api.pauseGroup(id); setGroups((gs) => gs.map((x) => (x.id === id ? g : x))); }
     catch (e) { console.warn("pauseGroup rejected:", e); }
   }, []);
-  const anyModal = createOpen || agentsOpen || newProjectOpen || settingsOpen || newGroupOpen || groupsOpen || !!debateOpen || !!confirmDel || !!worktreePrompt;
+  const anyModal = createOpen || !!notesMode || agentsOpen || newProjectOpen || settingsOpen || newGroupOpen || groupsOpen || !!debateOpen || !!confirmDel || !!worktreePrompt;
 
   // ── keyboard navigation ────────────────────────────────────────────────
   useEffect(() => {
@@ -422,7 +446,7 @@ export function App() {
         if (ordered.length) setSelected(ordered[Math.max(idx - 1, 0)]?.id ?? selected);
       } else if (e.key === "c") {
         e.preventDefault();
-        setCreateOpen(true);
+        openCreate();
       } else if (e.key === "r" && current) {
         e.preventDefault();
         primary(current);
@@ -430,7 +454,7 @@ export function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [ordered, selected, current, paletteOpen, anyModal, primary]);
+  }, [ordered, selected, current, paletteOpen, anyModal, primary, openCreate]);
 
   useEffect(() => {
     if (selected) document.querySelector(`[data-task-id="${selected}"]`)?.scrollIntoView({ block: "nearest" });
@@ -457,14 +481,16 @@ export function App() {
       }
     }
     // Global: create / manage.
+    cmds.push({ id: "new", group: "新建", label: "新建任务", hint: "C", run: openCreate });
+    if (project) cmds.push({ id: "new-note", group: "新建", label: "新建随手记", keys: "NI", run: () => setNotesMode("new") });
     cmds.push(
-      { id: "new", group: "新建", label: "新建任务", hint: "C", run: () => setCreateOpen(true) },
       { id: "pair-debate", group: "新建", label: "新建辩论 · 给你答案 (/pair)", run: () => setDebateOpen(true) },
       { id: "newgroup", group: "新建", label: "新建分组", run: () => setNewGroupOpen(true) },
       { id: "newproject", group: "新建", label: "新建项目", run: () => setNewProjectOpen(true) },
       { id: "groups", group: "管理", label: "分组管理", run: () => setGroupsOpen(true) },
       { id: "agents", group: "管理", label: "管理智能体执行器", run: () => setAgentsOpen(true) },
     );
+    if (project) cmds.push({ id: "notes", group: "管理", label: "随手记列表", keys: "NL", run: () => { setNoteTarget(null); setNotesMode("list"); } });
     if (project) cmds.push({ id: "projsettings", group: "管理", label: `项目设置：${project.name}`, run: () => setSettingsOpen(true) });
     for (const p of projects)
       if (p.id !== projectId)
@@ -477,7 +503,7 @@ export function App() {
         run: () => api.runGroup(g.id),
       });
     return cmds;
-  }, [current, projects, projectId, groups, project, primary, stop, del, patch, archive, unarchive]);
+  }, [current, projects, projectId, groups, project, primary, stop, del, patch, archive, unarchive, openCreate]);
 
   return (
     <div className="flex h-full">
@@ -512,7 +538,7 @@ export function App() {
           sidebarW={sidebarW}
           setSidebarW={setSidebarW}
           archivedCount={archivedTasks.length}
-          onNewTask={() => setCreateOpen(true)}
+          onNewTask={openCreate}
           onGroups={() => setGroupsOpen(true)}
           onRun={run}
           onStop={stop}
@@ -568,12 +594,30 @@ export function App() {
         />
       )}
       {debateOpen && project && <DebateModal project={project} onClose={() => setDebateOpen(false)} onCreated={onTaskCreated} />}
+      {notesMode === "new" && project && <NewNoteModal project={project} onClose={() => setNotesMode(null)} />}
+      {notesMode === "list" && project && (
+        <NotesModal
+          project={project}
+          initialNoteId={noteTarget}
+          onClose={() => { setNotesMode(null); setNoteTarget(null); }}
+          onOpenTask={(taskId) => { setNotesMode(null); void openTask(taskId); }}
+          onCreateTask={(draft) => {
+            setNotesMode(null);
+            setNoteTarget(null);
+            setView("list");
+            setNoteDraft(draft);
+            setCreateOpen(true);
+          }}
+        />
+      )}
       {createOpen && project && (
         <CreateTask
           project={project}
           groups={groups}
-          onClose={() => setCreateOpen(false)}
-          onCreated={(t) => onTaskCreated(t)}
+          initialBody={noteDraft?.body}
+          initialAttachments={noteDraft?.attachments}
+          onClose={() => { setCreateOpen(false); setNoteDraft(null); }}
+          onCreated={onCreateTaskCreated}
           onCreateGroup={() => setNewGroupOpen(true)}
           onOpenAgents={() => setAgentsOpen(true)}
           onDebate={() => {

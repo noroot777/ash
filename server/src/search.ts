@@ -5,9 +5,9 @@
 // 全量扫,不建索引;matching is case-insensitive substring.
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { SearchHit, SearchField } from "@harness/shared";
+import type { SearchHit, SearchField, TaskStatus } from "@harness/shared";
 import { db } from "./db/index.js";
-import { projects, tasks } from "./db/schema.js";
+import { notes, projects, tasks } from "./db/schema.js";
 import { RUNS_DIR } from "./paths.js";
 
 const FIELD_RANK: Record<SearchField, number> = { title: 0, body: 1, conversation: 2 };
@@ -49,12 +49,13 @@ async function scanRunFiles(taskId: string, needle: string): Promise<string | nu
 
 export async function searchAll(query: string): Promise<SearchHit[]> {
   const q = query.toLowerCase();
-  const [projRows, taskRows] = await Promise.all([
+  const [projRows, taskRows, noteRows] = await Promise.all([
     db.select().from(projects),
     db.select().from(tasks),
+    db.select().from(notes),
   ]);
   const projName = new Map(projRows.map((p) => [p.id, p.name] as const));
-  const hits: SearchHit[] = [];
+  const taskHits: Extract<SearchHit, { kind: "task" }>[] = [];
 
   await Promise.all(
     taskRows.map(async (t) => {
@@ -73,11 +74,11 @@ export async function searchAll(query: string): Promise<SearchHit[]> {
         }
       }
       if (!field) return;
-      hits.push({
+      taskHits.push({
         kind: "task",
         id: t.id,
         title: t.title,
-        status: t.status as SearchHit["status"],
+        status: t.status as TaskStatus,
         projectId: t.projectId,
         projectName: projName.get(t.projectId) ?? null,
         archived: t.archived,
@@ -88,8 +89,24 @@ export async function searchAll(query: string): Promise<SearchHit[]> {
     }),
   );
 
-  hits.sort(
+  taskHits.sort(
     (a, b) => FIELD_RANK[a.field] - FIELD_RANK[b.field] || b.updatedAt.localeCompare(a.updatedAt),
   );
-  return hits.slice(0, MAX_HITS);
+  const noteHits: Extract<SearchHit, { kind: "note" }>[] = noteRows
+    .filter((note) => note.body.toLowerCase().includes(q))
+    .map<Extract<SearchHit, { kind: "note" }>>((note) => ({
+      kind: "note",
+      id: note.id,
+      title: note.body.split(/\r?\n/).map((line) => line.trim()).find(Boolean)?.slice(0, 40) || "无标题随手记",
+      projectId: note.projectId,
+      projectName: projName.get(note.projectId) ?? null,
+      field: "body",
+      snippet: findSnippet(note.body, q) ?? "",
+      updatedAt: new Date(note.updatedAt).toISOString(),
+      taskId: note.taskId,
+    }))
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+
+  // Product order is stable and intentional: task results first, quick notes after.
+  return [...taskHits, ...noteHits].slice(0, MAX_HITS);
 }

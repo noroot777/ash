@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import type { SearchHit } from "@harness/shared";
+import { NotePencil } from "@phosphor-icons/react";
 import { api } from "./api";
 import { StatusIcon } from "./StatusIcon";
 import { useEscape } from "./useEscape";
@@ -9,6 +10,7 @@ export type Command = {
   id: string;
   label: string;
   hint?: string;
+  keys?: string;
   group?: string;
   run: () => void;
 };
@@ -59,6 +61,7 @@ export function CommandPalette({
   // Guards against out-of-order responses: only the latest query may land.
   const seqRef = useRef(0);
   const inputRef = useRef<HTMLInputElement>(null);
+  const mouseRef = useRef<{ x: number; y: number } | null>(null);
   const { mounted, closing } = usePresence(open, "--modal-close-dur");
   useEscape(onClose, open);
 
@@ -66,6 +69,7 @@ export function CommandPalette({
     if (open) {
       setQ("");
       setActive(0);
+      mouseRef.current = null;
       setTimeout(() => inputRef.current?.focus(), 0);
     }
   }, [open]);
@@ -73,10 +77,10 @@ export function CommandPalette({
   const filtered = useMemo(() => {
     const s = q.trim().toLowerCase();
     if (!s) return commands;
-    return commands.filter((c) => (c.label + " " + (c.hint ?? "") + " " + (c.group ?? "")).toLowerCase().includes(s));
+    return commands.filter((c) => (c.label + " " + (c.hint ?? "") + " " + (c.keys ?? "") + " " + (c.group ?? "")).toLowerCase().includes(s));
   }, [q, commands]);
 
-  // Debounced global task search. The server ranks by field (title > body > …).
+  // Debounced global task/note search. The server keeps tasks ahead of notes.
   useEffect(() => {
     const s = q.trim();
     if (s.length < 2) {
@@ -124,6 +128,12 @@ export function CommandPalette({
     if (i < filtered.length) run(filtered[i]);
     else openHit(hits[i - filtered.length]);
   };
+  const hover = (i: number, event: ReactMouseEvent) => {
+    const previous = mouseRef.current;
+    mouseRef.current = { x: event.clientX, y: event.clientY };
+    if (previous && previous.x === event.clientX && previous.y === event.clientY) return;
+    setActive(i);
+  };
 
   return (
     <div
@@ -141,7 +151,17 @@ export function CommandPalette({
           placeholder="搜索任务，或输入命令…"
           className="w-full border-b border-line bg-transparent px-4 py-3 text-sm outline-none placeholder:text-faint"
           onKeyDown={(e) => {
-            if (e.key === "ArrowDown") {
+            const plainCharacter = !e.metaKey && !e.ctrlKey && !e.altKey && e.key.length === 1 && !e.nativeEvent.isComposing;
+            const completed = plainCharacter
+              ? commands.find((command) => {
+                  const keys = command.keys?.replace(/\s+/g, "").toLowerCase();
+                  return !!keys && q.toLowerCase() === keys.slice(0, -1) && (q + e.key).toLowerCase() === keys;
+                })
+              : undefined;
+            if (completed) {
+              e.preventDefault();
+              run(completed);
+            } else if (e.key === "ArrowDown") {
               e.preventDefault();
               setActive((a) => Math.min(a + 1, total - 1));
             } else if (e.key === "ArrowUp") {
@@ -166,38 +186,48 @@ export function CommandPalette({
                   <div className="px-4 pb-1 pt-2 text-[10px] font-medium uppercase tracking-wide text-faint">{header}</div>
                 )}
                 <button
-                  onMouseEnter={() => setActive(i)}
+                  onMouseMove={(event) => hover(i, event)}
                   onClick={() => run(c)}
                   className={`flex w-full items-center gap-2 px-4 py-2 text-left text-sm ${
                     i === active ? "bg-overlay" : ""
                   }`}
                 >
                   <span className="text-ink">{c.label}</span>
-                  {c.hint && <span className="ml-auto text-xs text-muted">{c.hint}</span>}
+                  <span className="ml-auto flex items-center gap-1.5">
+                    {c.keys && (
+                      <span className="flex gap-1" aria-label={`快捷键序列 ${c.keys}`}>
+                        {c.keys.replace(/\s+/g, "").toUpperCase().split("").map((key, index) => <kbd key={`${key}:${index}`}>{key}</kbd>)}
+                      </span>
+                    )}
+                    {c.hint && <span className="text-xs text-muted">{c.hint}</span>}
+                  </span>
                 </button>
               </div>
             );
           })}
           {hits.map((h, hi) => {
             const i = filtered.length + hi;
-            const header = hi === 0 ? "任务" : null;
+            const header = hi === 0 || hits[hi - 1]?.kind !== h.kind ? (h.kind === "task" ? "任务" : "随手记") : null;
             const fieldChip = FIELD_LABEL[h.field];
             return (
-              <div key={h.id}>
+              <div key={`${h.kind}:${h.id}`}>
                 {header && (
                   <div className="px-4 pb-1 pt-2 text-[10px] font-medium uppercase tracking-wide text-faint">{header}</div>
                 )}
                 <button
-                  onMouseEnter={() => setActive(i)}
+                  onMouseMove={(event) => hover(i, event)}
                   onClick={() => openHit(h)}
                   className={`flex w-full flex-col gap-0.5 px-4 py-2 text-left ${i === active ? "bg-overlay" : ""}`}
                 >
                   <span className="flex w-full min-w-0 items-center gap-2 text-sm">
-                    <span className="shrink-0"><StatusIcon status={h.status} /></span>
+                    <span className="shrink-0">
+                      {h.kind === "task" ? <StatusIcon status={h.status} /> : <NotePencil size={15} className="text-muted" />}
+                    </span>
                     <span className="min-w-0 truncate text-ink">
                       <Highlight text={h.title} q={q} />
                     </span>
-                    {h.archived && <span className="shrink-0 rounded bg-overlay px-1 text-[10px] text-faint">已归档</span>}
+                    {h.kind === "task" && h.archived && <span className="shrink-0 rounded bg-overlay px-1 text-[10px] text-faint">已归档</span>}
+                    {h.kind === "note" && h.taskId && <span className="shrink-0 rounded bg-overlay px-1 text-[10px] text-faint">已转任务</span>}
                     {h.projectName && <span className="ml-auto shrink-0 text-xs text-faint">{h.projectName}</span>}
                   </span>
                   {h.snippet && (
@@ -219,7 +249,7 @@ export function CommandPalette({
           )}
           {!total && !searching && (
             <p className="px-4 py-6 text-center text-xs text-faint">
-              {q.trim().length >= 2 ? "没有匹配的命令或任务" : "无匹配命令"}
+              {q.trim().length >= 2 ? "没有匹配的命令、任务或随手记" : "无匹配命令"}
             </p>
           )}
         </div>

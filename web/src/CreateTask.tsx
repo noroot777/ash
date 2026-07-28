@@ -9,6 +9,7 @@ import { groupLabel } from "./util";
 import { useEscape } from "./useEscape";
 import { Menu, Pill } from "./Menu";
 import { usePasteAttachments, AttachmentChips } from "./pasteAttachments";
+import { AttachmentDisplay } from "./messageAttachments";
 import { ScheduleFields, toLocalInput } from "./ScheduleFields";
 import { ExecutorPicker, type ExecutorSelection, useExecutorProfiles } from "./ExecutorPicker";
 import { teamExecutorDefaults } from "./teamExecutorDefaults";
@@ -47,6 +48,8 @@ export function CreateTask({
   onDebate,
   onCreateGroup,
   onOpenAgents,
+  initialBody,
+  initialAttachments,
 }: {
   project: ProjectView;
   groups: Group[];
@@ -55,10 +58,13 @@ export function CreateTask({
   onDebate: () => void;
   onCreateGroup: () => void;
   onOpenAgents?: () => void;
+  initialBody?: string;
+  initialAttachments?: string[];
 }) {
   const projectId = project.id;
   useEscape(onClose);
-  const [body, setBody] = useState("");
+  const [body, setBody] = useState(initialBody ?? "");
+  const [seedAttachments, setSeedAttachments] = useState(initialAttachments ?? []);
   const [priority, setPriority] = useState<Priority>("none");
   const [executorPick, setExecutorPick] = useState<ExecutorSelection>({ agentType: "claude", executorId: null });
   const [groupId, setGroupId] = useState("");
@@ -137,7 +143,7 @@ export function CreateTask({
 
   const submit = async () => {
     const obj = body.trim();
-    if ((!obj && !attachments.length) || busy) return;
+    if ((!obj && !seedAttachments.length && !attachments.length) || busy) return;
     if (slashOpen) {
       pickSlash(slashHits[slashSel]!);
       return;
@@ -165,7 +171,7 @@ export function CreateTask({
         projectId,
         title: provisionalTitle,
         body: obj,
-        attachments: attachments.map((a) => a.path),
+        attachments: [...new Set([...seedAttachments, ...attachments.map((a) => a.path)])],
         mode: teamOn ? "team" : "single",
         // 团队任务的执行器由 team.lead 决定;agentType 跟着填一份,好让只认这个字段的
         // 列表/徽标显示对。
@@ -182,15 +188,16 @@ export function CreateTask({
         useWorktree: project.health.isRepo ? useWorktree : false,
         worktreeBase: useWorktree && base ? base : null,
       });
+      onCreated(t);
       // 启动时机：run=立即跑；once/cron=挂定时（调度器到点入队，不在此刻跑）；
       // create=什么都不做（任务停在 backlog，手动再运行）。
       if (launchMode === "run") await api.runTask(t.id);
       else if (launchMode === "once") await api.setSchedule(t.id, { kind: "once", at: new Date(at).toISOString() });
       else if (launchMode === "cron") await api.setSchedule(t.id, { kind: "cron", cron: cron.trim() });
-      onCreated(t);
       if (more) {
         setBody("");
         setLabels([]);
+        setSeedAttachments([]);
         clear();
         objRef.current?.focus();
       } else {
@@ -211,16 +218,16 @@ export function CreateTask({
   const taskIdPreview = "harness/<id8>";
   // A scheduled mode needs a valid time/expr before it can submit.
   const schedInvalid = (launchMode === "once" && !at) || (launchMode === "cron" && !cron.trim());
-  const canSubmit = (!!body.trim() || attachments.length > 0) && !busy && !schedInvalid;
+  const canSubmit = (!!body.trim() || seedAttachments.length > 0 || attachments.length > 0) && !busy && !schedInvalid;
   const pickMode = (m: LaunchMode) => {
     if (m === "once" && !at) setAt(toLocalInput(new Date(Date.now() + 3600_000).toISOString())); // 默认 +1h
     setLaunchMode(m);
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/30 pt-[12vh]" onClick={onClose}>
+    <div className={`${initialBody !== undefined ? "t-modal-overlay note-task-overlay" : ""} fixed inset-0 z-50 flex items-start justify-center bg-black/30 pt-[12vh]`} onClick={onClose}>
       <div
-        className={`flex flex-col overflow-visible rounded-xl border border-line2 bg-panel shadow-2xl transition-all ${
+        className={`${initialBody !== undefined ? "t-modal note-task-enter" : ""} flex flex-col overflow-visible rounded-xl border border-line2 bg-panel shadow-2xl transition-all ${
           expanded ? "h-[78vh] w-[920px]" : "w-[640px]"
         } max-w-[94vw]`}
         onClick={(e) => e.stopPropagation()}
@@ -323,6 +330,11 @@ export function CreateTask({
             )}
           </div>
           <AttachmentChips attachments={attachments} onRemove={remove} error={error} />
+          <AttachmentDisplay
+            paths={seedAttachments}
+            className="pt-2"
+            onRemove={(path) => setSeedAttachments((paths) => paths.filter((item) => item !== path))}
+          />
 
           {slashOpen && (
             <div className="absolute left-4 top-9 z-10 w-80 overflow-hidden rounded-lg border border-line2 bg-panel p-1 shadow-xl">

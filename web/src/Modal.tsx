@@ -17,12 +17,16 @@ export function Modal({
   children,
   footer,
   width = 560,
+  cardClassName = "",
+  contentClassName = "overflow-y-auto p-4",
 }: {
   title: ReactNode;
   onClose: () => void;
   children: ReactNode;
   footer?: ReactNode | ((close: () => void) => ReactNode);
   width?: number;
+  cardClassName?: string;
+  contentClassName?: string;
 }) {
   const { closing, requestClose } = useReveal(onClose, "--modal-close-dur");
   useEscape(requestClose);
@@ -32,7 +36,7 @@ export function Modal({
       onClick={requestClose}
     >
       <div
-        className={`t-modal ${closing ? "is-closing" : ""} flex max-h-[80vh] w-full flex-col overflow-hidden rounded-xl border border-line2 bg-panel shadow-2xl`}
+        className={`t-modal ${closing ? "is-closing" : ""} flex max-h-[80vh] w-full flex-col overflow-hidden rounded-xl border border-line2 bg-panel shadow-2xl ${cardClassName}`}
         style={{ width, maxWidth: "94vw" }}
         onClick={(e) => e.stopPropagation()}
       >
@@ -42,7 +46,7 @@ export function Modal({
             <X size={16} />
           </button>
         </div>
-        <div className="flex-1 overflow-y-auto p-4">{children}</div>
+        <div className={`flex-1 ${contentClassName}`}>{children}</div>
         {footer && (
           <div className="flex items-center justify-end gap-2 border-t border-line px-4 py-3">
             {typeof footer === "function" ? footer(requestClose) : footer}

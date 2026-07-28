@@ -20,7 +20,7 @@ import type {
 } from "@harness/shared";
 import { canSingleRun, canArchive, isUserSettableStatus, AGENT_TYPES, maxBytesFor, attachmentKind, MAX_QUESTION_OPTIONS, MAX_QUESTION_OPTION_LEN, MAX_QUESTION_ITEMS } from "@harness/shared";
 import { db } from "./db/index.js";
-import { projects, groups, tasks, sessions, schedules, scheduledMessages, agents, llmProviders, queueItems } from "./db/schema.js";
+import { projects, groups, tasks, sessions, schedules, scheduledMessages, agents, llmProviders, queueItems, notes } from "./db/schema.js";
 import { bus } from "./bus.js";
 import { id, now, attachmentsPrompt } from "./util.js";
 import { resumeOrRunTask, continueTask, runTask } from "./orchestrator.js";
@@ -41,9 +41,11 @@ import { forceKillCuaService, lastCuaResidualStatus, refreshCuaResidualStatus } 
 import { createTasks, enrichTasks, publishTaskUpdated } from "./task-store.js";
 import { sessionTranscriptPath } from "./transcript.js";
 import { mountDebateIterationRoutes } from "./debate/iteration.js";
+import { mountNoteRoutes } from "./notes.js";
 import type { GateAction, AgentType, BatchCreateTasksBody, BatchTaskInput, ScheduledMessage, ScheduledMessageStatus } from "@harness/shared";
 
 export const api = new Hono();
+mountNoteRoutes(api);
 
 // ── health ───────────────────────────────────────────────────────────────
 api.get("/health", (c) => c.json({ ok: true, ts: now() }));
@@ -355,6 +357,7 @@ api.delete("/projects/:id", async (c) => {
   }
   await db.delete(tasks).where(eq(tasks.projectId, pid));
   await db.delete(groups).where(eq(groups.projectId, pid));
+  await db.delete(notes).where(eq(notes.projectId, pid));
   await db.delete(projects).where(eq(projects.id, pid));
   return c.json({ deleted: true });
 });

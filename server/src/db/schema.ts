@@ -11,6 +11,16 @@ export const projects = sqliteTable("projects", {
   createdAt: text("created_at").notNull(),
 });
 
+export const notes = sqliteTable("notes", {
+  id: text("id").primaryKey(),
+  projectId: text("project_id").notNull(),
+  body: text("body").notNull(),
+  attachments: text("attachments"), // json string[]
+  taskId: text("task_id"),
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at").notNull(),
+});
+
 export const groups = sqliteTable("groups", {
   id: text("id").primaryKey(),
   projectId: text("project_id").notNull(),

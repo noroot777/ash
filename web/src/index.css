@@ -188,6 +188,24 @@ select option {
   animation: t-modal-out var(--modal-close-dur) var(--modal-ease) both;
 }
 
+/* Quick-note → task handoff: the notepad leaves to the left, then the task
+   composer arrives from the right. One short, directional gesture makes the
+   relationship clear without turning the two dialogs into a carousel. */
+@keyframes note-handoff-out {
+  from { opacity: 1; transform: translateX(0) scale(1); }
+  to { opacity: 0; transform: translateX(-42px) scale(0.985); }
+}
+@keyframes note-task-in {
+  from { opacity: 0; transform: translateX(42px) scale(0.985); }
+  to { opacity: 1; transform: translateX(0) scale(1); }
+}
+.t-modal.note-handoff-out {
+  animation: note-handoff-out var(--modal-close-dur) ease-in both;
+}
+.t-modal.note-task-enter {
+  animation: note-task-in var(--modal-open-dur) var(--modal-ease) both;
+}
+
 .t-dropdown {
   transform-origin: top left;
   will-change: transform, opacity;
@@ -217,5 +235,7 @@ select option {
   .t-modal,
   .t-modal-overlay,
   .t-drawer,
-  .t-dropdown { animation: none !important; }
+  .t-dropdown,
+  .note-handoff-out,
+  .note-task-enter { animation: none !important; }
 }
