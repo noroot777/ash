@@ -3,6 +3,84 @@ import type { Group, Task, TaskStatus } from "./index";
 // Pure team-view derivations shared by web and mobile. They deliberately know
 // nothing about either client's conversation model or rendering layer.
 
+// Conversation markers, session metadata, and task fields can carry different
+// parseable timestamp formats. Team feeds must compare instants, never strings.
+export function timeMs(value?: string | null): number | null {
+  if (!value) return null;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+export type FeedRow<Item, BatchItem> =
+  | { kind: "conv"; key: string; item: Item }
+  | { kind: "batch"; key: string; batch: BatchItem };
+
+export type MergeFeedOptions<Item, BatchItem> = {
+  itemStartTime: (item: Item, index: number) => string | null | undefined;
+  itemEndTime: (item: Item, index: number) => string | null | undefined;
+  batchTime: (batch: BatchItem, index: number) => string | null | undefined;
+  itemKey?: (item: Item, index: number) => string | number;
+  batchKey?: (batch: BatchItem, index: number) => string | number;
+};
+
+// Merge timestamped cards into a conversation-like item stream. Items expose
+// only their start/end boundaries through callbacks, so web and mobile can keep
+// their own parsing models while sharing the ordering semantics.
+export function mergeFeed<Item, BatchItem>(
+  items: readonly Item[],
+  batches: readonly BatchItem[],
+  options: MergeFeedOptions<Item, BatchItem>,
+): FeedRow<Item, BatchItem>[] {
+  // Untimed items inherit the previous known end boundary so insertion points
+  // remain monotonic instead of jumping around sparse historical transcripts.
+  let known: number | null = null;
+  const itemEnds = items.map((item, index) => (
+    known = timeMs(options.itemEndTime(item, index)) ?? known
+  ));
+  // Invalid batch timestamps have no reliable insertion point and remain stable
+  // at the end. Batches at the same instant preserve their input order.
+  const sorted = batches
+    .map((batch, index) => ({ batch, index, at: timeMs(options.batchTime(batch, index)) }))
+    .sort((a, b) => {
+      if (a.at === null) return b.at === null ? a.index - b.index : 1;
+      if (b.at === null) return -1;
+      return a.at - b.at || a.index - b.index;
+    });
+  const rows: FeedRow<Item, BatchItem>[] = [];
+  const itemKey = options.itemKey ?? ((_item: Item, index: number) => index);
+  const batchKey = options.batchKey ?? ((_batch: BatchItem, index: number) => index);
+  let batchIndex = 0;
+  const flushThrough = (upTo: number | null) => {
+    if (upTo === null) return;
+    while (
+      batchIndex < sorted.length
+      && sorted[batchIndex]!.at !== null
+      && sorted[batchIndex]!.at! <= upTo
+    ) {
+      const { batch, index } = sorted[batchIndex++]!;
+      rows.push({ kind: "batch", key: `b:${batchKey(batch, index)}`, batch });
+    }
+  };
+
+  items.forEach((item, index) => {
+    // A client can mount after historical transcript rows were intentionally
+    // omitted. Cards clearly older than the first visible row belong before it.
+    if (index === 0) flushThrough(timeMs(options.itemStartTime(item, index)));
+    // A dispatch created during an item belongs after that item. Therefore each
+    // insertion is decided against the previous item's end, not the current start.
+    if (index > 0) flushThrough(itemEnds[index - 1] ?? null);
+    rows.push({ kind: "conv", key: `c:${itemKey(item, index)}`, item });
+  });
+
+  // Cards newer than the last known boundary, plus invalid timestamps, stay at
+  // the end in stable order.
+  while (batchIndex < sorted.length) {
+    const { batch, index } = sorted[batchIndex++]!;
+    rows.push({ kind: "batch", key: `b:${batchKey(batch, index)}`, batch });
+  }
+  return rows;
+}
+
 export type Batch = {
   key: string;
   workers: Task[];

@@ -12,6 +12,7 @@ import type {
 } from "@harness/shared";
 import {
   batchesOf,
+  mergeFeed,
   teamGroupsOf,
   waitingWorkers,
   workersOf,
@@ -27,7 +28,7 @@ import { ConfirmModal } from "../Modal";
 import { TeamHeader, AttentionBar } from "./TeamHeader";
 import { TeamFeed } from "./TeamFeed";
 import { WorkerRail, WorkerStatusText } from "./WorkerRail";
-import { activeTeamHaltMarker, leadTurns as turnsOf, mergeFeed } from "./teamData";
+import { activeTeamHaltMarker, leadTurns as turnsOf, teamFeedOptions } from "./teamData";
 
 export function TeamView({
   task,
@@ -96,7 +97,7 @@ export function TeamView({
     sessionsBump,
     primaryAgent: task.team?.lead ?? task.agentType ?? "claude",
   });
-  const rows = useMemo(() => mergeFeed(items, batches), [items, batches]);
+  const rows = useMemo(() => mergeFeed(items, batches, teamFeedOptions), [items, batches]);
   const leadTurns = useMemo(() => turnsOf(items), [items]);
   const haltedByHistory = activeTeamHaltMarker(items);
   const stopped = teamGroups.some((g) => g.paused) || (teamGroups.length === 0 && (haltedByHistory || localHalted));

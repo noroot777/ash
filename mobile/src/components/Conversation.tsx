@@ -8,10 +8,11 @@
 // surrounding 你→/〔系统〕 markers (their `at`) + the Session's startedAt/endedAt.
 // Every agent bubble carries ITS OWN time — a resumed session prints one 用时 per
 // turn, never repeating the whole-session span. Mirrors web's buildConversation.
-import { Fragment, useRef, useState } from "react";
+import { Fragment, useRef, useState, type ReactNode } from "react";
 import { View, Text, Pressable } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import type { Session } from "@harness/shared";
+import { mergeFeed } from "@harness/shared/team";
 import type { LogLine } from "@/lib/log";
 import { useTheme, radius, fonts, type Theme } from "@/lib/theme";
 import { formatInstant, Duration } from "@/lib/time";
@@ -21,12 +22,20 @@ import { SelectSheet } from "./SelectSheet";
 
 type Block =
   | { kind: "agentText"; text: string; agent?: string; sessionId?: string; endedAt?: string; key: string }
-  | { kind: "thinking"; text: string; key: string }
-  | { kind: "tool"; name: string; detail: string; key: string }
-  | { kind: "error"; text: string; key: string }
-  | { kind: "done"; text: string; key: string }
+  | { kind: "thinking"; text: string; agent?: string; sessionId?: string; key: string }
+  | { kind: "tool"; name: string; detail: string; agent?: string; sessionId?: string; key: string }
+  | { kind: "error"; text: string; agent?: string; sessionId?: string; key: string }
+  | { kind: "done"; text: string; at?: string; key: string }
   | { kind: "user"; text: string; at?: string; key: string }
   | { kind: "system"; text: string; at?: string; key: string };
+
+type Timing = { time: string | null; endedAt: string | null };
+
+export type ConversationInsertion = {
+  key: string;
+  at?: string | null;
+  content: ReactNode;
+};
 
 // Flatten LogLines into render blocks, concatenating runs of streamed text.
 function toBlocks(lines: LogLine[]): Block[] {
@@ -52,10 +61,10 @@ function toBlocks(lines: LogLine[]): Block[] {
       return;
     }
     flush();
-    if (l.kind === "thinking") out.push({ kind: "thinking", text: l.text, key });
-    else if (l.kind === "tool") out.push({ kind: "tool", name: l.name ?? "tool", detail: l.text, key });
-    else if (l.kind === "error") out.push({ kind: "error", text: l.text, key });
-    else if (l.kind === "done") out.push({ kind: "done", text: l.text, key });
+    if (l.kind === "thinking") out.push({ kind: "thinking", text: l.text, agent: l.agent, sessionId: l.sessionId, key });
+    else if (l.kind === "tool") out.push({ kind: "tool", name: l.name ?? "tool", detail: l.text, agent: l.agent, sessionId: l.sessionId, key });
+    else if (l.kind === "error") out.push({ kind: "error", text: l.text, agent: l.agent, sessionId: l.sessionId, key });
+    else if (l.kind === "done") out.push({ kind: "done", text: l.text, at: l.at, key });
     else if (l.kind === "user") out.push({ kind: "user", text: l.text, at: l.at, key });
     else if (l.kind === "system") out.push({ kind: "system", text: l.text, at: l.at, key });
   });
@@ -67,10 +76,12 @@ export function Conversation({
   lines,
   sessions = [],
   taskEndedAt,
+  insertions = [],
 }: {
   lines: LogLine[];
   sessions?: Session[];
   taskEndedAt?: string | null;
+  insertions?: ConversationInsertion[];
 }) {
   const theme = useTheme();
   const blocks = toBlocks(lines);
@@ -92,7 +103,7 @@ export function Conversation({
   //     run; a sessionId change resets the bracket so one run's clock never
   //     bleeds into the next. Falls back to runEnd for the tail bubble.
   // Mirrors web/src/TaskDetail.tsx buildConversation.
-  const timings = new Map<string, { time: string | null; endedAt: string | null }>();
+  const timings = new Map<string, Timing>();
   const seen = new Set<string>();
   let prevAt: string | null = null;
   for (const b of blocks) {
@@ -130,18 +141,77 @@ export function Conversation({
     if (t) t.endedAt = b.endedAt ?? nextAt ?? (b.sessionId ? runEnd.get(b.sessionId) ?? null : null);
   }
 
+  // Feed boundaries attach a turn's start to its first visual block and its end
+  // to its last one. This prevents a dispatch card from landing between an agent
+  // bubble and a tool/thinking row that belongs to the same turn.
+  const feedBounds = conversationFeedBounds(blocks, timings);
+  const rows = mergeFeed(blocks, insertions, {
+    itemStartTime: (block) => feedBounds.get(block.key)?.time,
+    itemEndTime: (block) => feedBounds.get(block.key)?.endedAt,
+    batchTime: (insertion) => insertion.at,
+    itemKey: (block) => block.key,
+    batchKey: (insertion) => insertion.key,
+  });
+
   return (
     <>
       <View style={{ gap: 10 }}>
-        {blocks.map((b) => (
-          <Fragment key={b.key}>
-            {renderBlock(b, theme, b.kind === "agentText" ? timings.get(b.key) : undefined, setSelText)}
+        {rows.map((row) => (
+          <Fragment key={row.key}>
+            {row.kind === "batch"
+              ? row.batch.content
+              : renderBlock(
+                  row.item,
+                  theme,
+                  row.item.kind === "agentText" ? timings.get(row.item.key) : undefined,
+                  setSelText,
+                )}
           </Fragment>
         ))}
       </View>
       {selText != null && <SelectSheet text={selText} onClose={() => setSelText(null)} />}
     </>
   );
+}
+
+function conversationFeedBounds(blocks: Block[], timings: Map<string, Timing>): Map<string, Timing> {
+  const bounds = new Map<string, Timing>();
+  let index = 0;
+  while (index < blocks.length) {
+    const block = blocks[index]!;
+    if (block.kind === "user" || block.kind === "system" || block.kind === "done") {
+      const at = block.at ?? null;
+      bounds.set(block.key, { time: at, endedAt: at });
+      index += 1;
+      continue;
+    }
+
+    const groupKey = block.sessionId ? `session:${block.sessionId}` : `agent:${block.agent ?? ""}`;
+    let end = index + 1;
+    while (end < blocks.length) {
+      const next = blocks[end]!;
+      if (next.kind === "user" || next.kind === "system" || next.kind === "done") break;
+      const nextGroupKey = next.sessionId ? `session:${next.sessionId}` : `agent:${next.agent ?? ""}`;
+      if (nextGroupKey !== groupKey) break;
+      end += 1;
+    }
+
+    const groupTimings = blocks
+      .slice(index, end)
+      .flatMap((item) => item.kind === "agentText" ? [timings.get(item.key)] : [])
+      .filter((timing): timing is Timing => !!timing);
+    const time = groupTimings[0]?.time ?? null;
+    const endedAt = groupTimings.reduce<string | null>(
+      (latest, timing) => timing.endedAt ?? timing.time ?? latest,
+      null,
+    );
+    const first = blocks[index]!;
+    const last = blocks[end - 1]!;
+    bounds.set(first.key, { time, endedAt: first.key === last.key ? endedAt : null });
+    if (first.key !== last.key) bounds.set(last.key, { time: null, endedAt });
+    index = end;
+  }
+  return bounds;
 }
 
 const bubbleStyle = (theme: Theme) => ({
@@ -168,7 +238,7 @@ function AgentBubble({
 }: {
   b: Extract<Block, { kind: "agentText" }>;
   theme: Theme;
-  timing?: { time: string | null; endedAt: string | null };
+  timing?: Timing;
   onSelect?: (t: string) => void;
 }) {
   const lastTap = useRef(0);
@@ -204,7 +274,7 @@ function AgentBubble({
   );
 }
 
-function renderBlock(b: Block, theme: Theme, timing?: { time: string | null; endedAt: string | null }, onSelect?: (t: string) => void) {
+function renderBlock(b: Block, theme: Theme, timing?: Timing, onSelect?: (t: string) => void) {
   const agentBubble = bubbleStyle(theme);
   const metaText = { color: theme.faint, fontSize: 11, fontFamily: fonts.mono } as const;
   switch (b.kind) {

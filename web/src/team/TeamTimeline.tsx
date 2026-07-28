@@ -5,12 +5,12 @@
 // 调度者那条 track 没有独立的数据源,由客户端从已解析的会话推出来(每个回合一段)。
 import { useState } from "react";
 import type { Group, Task } from "@harness/shared";
-import { isTeamSettled } from "@harness/shared/team";
+import { isTeamSettled, timeMs } from "@harness/shared/team";
 import { CaretDown } from "@phosphor-icons/react";
 import { statusColor } from "../StatusIcon";
 import { formatDuration, formatInstant, useTick } from "../time";
 import { teamLeadExecutorLabel } from "../executorLabel";
-import { timeMs, type LeadTurn } from "./teamData";
+import type { LeadTurn } from "./teamData";
 
 type Bar = { from: number; to: number; color: string; hatch?: boolean; title: string };
 type Row = { id?: string; name: string; bars: Bar[]; pendingOnly?: boolean };

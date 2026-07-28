@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { leadTurns, mergeFeed, timeMs } from "../src/team/teamData.ts";
+import { mergeFeed, timeMs } from "@harness/shared/team";
+import { leadTurns, teamFeedOptions } from "../src/team/teamData.ts";
 
 const batch = (key, at) => ({ key, at, workers: [], serial: false });
 const rowKinds = (rows) => rows.map((row) => (row.kind === "batch" ? `batch:${row.batch.key}` : `conv:${row.item.kind}`));
@@ -18,7 +19,7 @@ const rowKinds = (rows) => rows.map((row) => (row.kind === "batch" ? `batch:${ro
     },
     { kind: "system", text: "worker finished", at: "2026-07-27 16:41:29+08:00" },
   ];
-  const rows = mergeFeed(items, [batch("mixed-format", "2026-07-27T08:35:30.352Z")]);
+  const rows = mergeFeed(items, [batch("mixed-format", "2026-07-27T08:35:30.352Z")], teamFeedOptions);
   assert.deepEqual(rowKinds(rows), ["conv:agent", "batch:mixed-format", "conv:system"]);
 }
 
@@ -39,7 +40,7 @@ const rowKinds = (rows) => rows.map((row) => (row.kind === "batch" ? `batch:${ro
   const rows = mergeFeed(items, [
     batch("16:35", "2026-07-27T08:35:30.352Z"),
     batch("17:00", "2026-07-27T09:00:20.000Z"),
-  ]);
+  ], teamFeedOptions);
   assert.deepEqual(rowKinds(rows), ["batch:16:35", "batch:17:00", "conv:user", "conv:agent"]);
 }
 
@@ -55,7 +56,7 @@ const rowKinds = (rows) => rows.map((row) => (row.kind === "batch" ? `batch:${ro
     batch("known", "2026-07-27T09:59:00.000Z"),
     batch("invalid-a", "not-a-time"),
     batch("invalid-b", ""),
-  ]);
+  ], teamFeedOptions);
   assert.deepEqual(rowKinds(rows), [
     "batch:known",
     "conv:system",

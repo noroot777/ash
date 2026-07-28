@@ -32,11 +32,11 @@ import { refreshAll } from "@/lib/data";
 import type { LogLine } from "@/lib/log";
 import { useStore } from "@/lib/store";
 import { fonts, radius, useTheme } from "@/lib/theme";
-import { Conversation } from "@/components/Conversation";
+import { Conversation, type ConversationInsertion } from "@/components/Conversation";
 import { MarkdownText } from "@/components/MarkdownText";
 import { QuestionCard } from "@/components/QuestionCard";
 import { TeamOverview } from "./TeamOverview";
-import { TeamWorkers } from "./TeamWorkers";
+import { TeamWorkerBatchCard } from "./TeamWorkerBatchCard";
 
 export function TeamTaskDetail({
   task,
@@ -91,6 +91,26 @@ export function TeamTaskDetail({
   );
   const pausedGroups = useMemo(() => teamGroups.filter((group) => group.paused), [teamGroups]);
   const batches = useMemo(() => batchesOf(workers, teamGroups), [workers, teamGroups]);
+  const workerNumber = useMemo(
+    () => new Map(workers.map((worker, index) => [worker.id, index + 1])),
+    [workers],
+  );
+  const openWorker = useCallback((workerId: string) => router.push(`/task/${workerId}`), [router]);
+  const batchInsertions = useMemo<ConversationInsertion[]>(
+    () => batches.map((batch, index) => ({
+      key: batch.key,
+      at: batch.at,
+      content: (
+        <TeamWorkerBatchCard
+          batch={batch}
+          batchNumber={index + 1}
+          workerNumber={workerNumber}
+          onOpenWorker={openWorker}
+        />
+      ),
+    })),
+    [batches, openWorker, workerNumber],
+  );
   const settled = isTeamSettled(task.status === "running", workers);
   const haltedByHistory = useMemo(() => activeTeamHaltMarker(lines), [lines]);
   const stopped = pausedGroups.length > 0 || (teamGroups.length === 0 && haltedByHistory);
@@ -289,19 +309,18 @@ export function TeamTaskDetail({
               3s 轮询
             </Text>
           </View>
-          <Conversation lines={lines} sessions={sessions} taskEndedAt={task.endedAt} />
-          {lines.length === 0 && !task.question ? (
+          <Conversation
+            lines={lines}
+            sessions={sessions}
+            taskEndedAt={task.endedAt}
+            insertions={batchInsertions}
+          />
+          {lines.length === 0 && batches.length === 0 && !task.question ? (
             <Text style={{ color: theme.faint, fontSize: 13, lineHeight: 19, fontFamily: fonts.body }}>
               还没有调度记录。点“运行”让调度者读需求、拆活并派出执行者。
             </Text>
           ) : null}
         </View>
-
-        <TeamWorkers
-          batches={batches}
-          workers={workers}
-          onOpenWorker={(workerId) => router.push(`/task/${workerId}`)}
-        />
       </ScrollView>
 
       <TeamReplyBox

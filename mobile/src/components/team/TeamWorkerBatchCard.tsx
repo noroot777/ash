@@ -7,86 +7,59 @@ import { formatInstant } from "@/lib/time";
 import { fonts, radius, useTheme } from "@/lib/theme";
 import { StatusDot } from "@/components/ui";
 
-export function TeamWorkers({
-  batches,
-  workers,
+export function TeamWorkerBatchCard({
+  batch,
+  batchNumber,
+  workerNumber,
   onOpenWorker,
 }: {
-  batches: Batch[];
-  workers: Task[];
+  batch: Batch;
+  batchNumber: number;
+  workerNumber: ReadonlyMap<string, number>;
   onOpenWorker: (id: string) => void;
 }) {
   const theme = useTheme();
-  const workerNumber = new Map(workers.map((worker, index) => [worker.id, index + 1]));
 
   return (
-    <View style={{ gap: 10 }}>
-      <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-        <Text style={{ flex: 1, color: theme.ink, fontSize: 16, fontFamily: fonts.displayMd }}>
-          执行者
+    <View
+      style={{
+        overflow: "hidden",
+        borderRadius: radius.lg,
+        borderWidth: 1,
+        borderColor: batch.group?.paused ? theme.faint : theme.line,
+        backgroundColor: theme.panel,
+      }}
+    >
+      <View
+        style={{
+          flexDirection: "row",
+          alignItems: "center",
+          flexWrap: "wrap",
+          gap: 7,
+          paddingHorizontal: 11,
+          paddingVertical: 9,
+          backgroundColor: theme.raised,
+        }}
+      >
+        <Ionicons name="git-branch-outline" size={14} color={theme.muted} />
+        <Text style={{ color: theme.ink, fontSize: 13, fontFamily: fonts.bodySemi }}>
+          批次 {batchNumber}
         </Text>
-        <Text style={{ color: theme.faint, fontSize: 12, fontFamily: fonts.mono }}>{workers.length}</Text>
+        <BatchPill label={batch.serial ? "串行" : "并行"} />
+        {batch.group?.paused ? <BatchPill label="已停止" /> : null}
+        <Text style={{ marginLeft: "auto", color: theme.faint, fontSize: 10, fontFamily: fonts.mono }}>
+          {formatInstant(batch.at)}
+        </Text>
       </View>
 
-      {batches.length === 0 ? (
-        <View
-          style={{
-            borderRadius: radius.md,
-            borderWidth: 1,
-            borderColor: theme.line,
-            backgroundColor: theme.panel,
-            padding: 14,
-          }}
-        >
-          <Text style={{ color: theme.faint, fontSize: 13, lineHeight: 19, fontFamily: fonts.body }}>
-            调度者还没派活。开始调度后，内部批次和执行者会按时间出现在这里。
-          </Text>
-        </View>
-      ) : null}
-
-      {batches.map((batch, batchIndex) => (
-        <View
-          key={batch.key}
-          style={{
-            overflow: "hidden",
-            borderRadius: radius.lg,
-            borderWidth: 1,
-            borderColor: batch.group?.paused ? theme.faint : theme.line,
-            backgroundColor: theme.panel,
-          }}
-        >
-          <View
-            style={{
-              flexDirection: "row",
-              alignItems: "center",
-              flexWrap: "wrap",
-              gap: 7,
-              paddingHorizontal: 11,
-              paddingVertical: 9,
-              backgroundColor: theme.raised,
-            }}
-          >
-            <Ionicons name="git-branch-outline" size={14} color={theme.muted} />
-            <Text style={{ color: theme.ink, fontSize: 13, fontFamily: fonts.bodySemi }}>
-              批次 {batchIndex + 1}
-            </Text>
-            <BatchPill label={batch.serial ? "串行" : "并行"} />
-            {batch.group?.paused ? <BatchPill label="已停止" /> : null}
-            <Text style={{ marginLeft: "auto", color: theme.faint, fontSize: 10, fontFamily: fonts.mono }}>
-              {formatInstant(batch.at)}
-            </Text>
-          </View>
-
-          {batch.workers.map((worker) => (
-            <WorkerRow
-              key={worker.id}
-              worker={worker}
-              number={workerNumber.get(worker.id) ?? 0}
-              groupPaused={!!batch.group?.paused}
-              onPress={() => onOpenWorker(worker.id)}
-            />
-          ))}
-        </View>
+      {batch.workers.map((worker) => (
+        <WorkerRow
+          key={worker.id}
+          worker={worker}
+          number={workerNumber.get(worker.id) ?? 0}
+          groupPaused={!!batch.group?.paused}
+          onPress={() => onOpenWorker(worker.id)}
+        />
       ))}
     </View>
   );
