@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import type { DebateConfig, Task, TeamConfig } from "@harness/shared";
+import { DEFAULT_APP_SETTINGS } from "@harness/shared";
 import { Crown, GitBranch, Robot, Scales, TreeStructure, UsersThree, X } from "@phosphor-icons/react";
 import { api } from "./api";
 import { createDebateConfig, DebateComposerFields } from "./DebateComposer";
@@ -18,6 +19,7 @@ type WorktreeContext = {
   isRepo: boolean;
   branches: string[];
   current: string | null;
+  worktreeDefault: boolean;
 };
 
 export function TaskDerivationComposer({
@@ -46,13 +48,13 @@ export function TaskDerivationComposer({
 
   useEffect(() => {
     let alive = true;
-    Promise.all([api.projectHealth(task.projectId), api.projectBranches(task.projectId)]).then(
-      ([health, branches]) => {
-        if (alive) setWorktreeContext({ isRepo: health.isRepo, ...branches });
+    Promise.all([api.projectHealth(task.projectId), api.projectBranches(task.projectId), api.settings()]).then(
+      ([health, branches, settings]) => {
+        if (alive) setWorktreeContext({ isRepo: health.isRepo, ...branches, worktreeDefault: settings.worktreeDefault });
       },
       (error) => {
         if (!alive) return;
-        setWorktreeContext({ isRepo: false, branches: [], current: null });
+        setWorktreeContext({ isRepo: false, branches: [], current: null, worktreeDefault: DEFAULT_APP_SETTINGS.worktreeDefault });
         toast(`无法确认 worktree 基点：${error instanceof Error ? error.message : String(error)}`);
       },
     );
@@ -77,6 +79,7 @@ export function TaskDerivationComposer({
     task,
     worktreeContext?.branches ?? [],
     !!worktreeContext?.isRepo,
+    worktreeContext?.worktreeDefault ?? DEFAULT_APP_SETTINGS.worktreeDefault,
   );
 
   const executorLabel = (role: "调度者" | "执行者", selection: ExecutorSelection) => {
@@ -109,7 +112,6 @@ export function TaskDerivationComposer({
           agentType: leadSelection.agentType,
           team,
           autoTitle: false,
-          useWorktree: worktree.useWorktree,
           worktreeBase: worktree.worktreeBase,
         });
       } else {
@@ -121,7 +123,6 @@ export function TaskDerivationComposer({
           originTaskId: task.id,
           debate: { ...debate, topic, style: "debate" },
           autoTitle: false,
-          useWorktree: worktree.useWorktree,
           worktreeBase: worktree.worktreeBase,
         });
       }
@@ -252,6 +253,16 @@ function WorktreeHint({
   }
   if (!context.isRepo) {
     return <span className="inline-flex items-center gap-1 text-[11px] text-faint"><TreeStructure size={12} />项目不是 Git 仓库，将使用项目目录</span>;
+  }
+  if (!worktree.on) {
+    return (
+      <span className="inline-flex min-w-0 items-center gap-1 text-[11px] text-faint">
+        <TreeStructure size={12} className="shrink-0" />
+        <span className="truncate">
+          全局默认关闭 worktree · 将在项目目录工作{worktree.inheritsSource ? `，不含来源分支 ${worktree.sourceBranch} 的改动` : ""}
+        </span>
+      </span>
+    );
   }
   if (worktree.inheritsSource && worktree.worktreeBase) {
     return (

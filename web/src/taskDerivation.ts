@@ -34,12 +34,21 @@ export function sourceWorktreeBranch(task: Task): string | null {
   return task.useWorktree ? `harness/${task.id.slice(0, 8)}` : null;
 }
 
-export function derivedWorktreeDefaults(task: Task, branches: string[], isRepo: boolean) {
+// 派生卡片没有 worktree 开关，属于「未显式指定」的创建路径：payload 里省略
+// useWorktree，让 createTasks 单点按全局 worktreeDefault 决定；这里只算 base
+// 和展示用的预判(`on`)。worktreeBase 在 worktree 最终关闭时由服务端清空。
+export function derivedWorktreeDefaults(
+  task: Task,
+  branches: string[],
+  isRepo: boolean,
+  worktreeDefault: boolean,
+) {
   const sourceBranch = sourceWorktreeBranch(task);
   const inheritsSource = !!sourceBranch && branches.includes(sourceBranch);
+  const on = isRepo && worktreeDefault;
   return {
-    useWorktree: isRepo,
-    worktreeBase: isRepo && inheritsSource ? sourceBranch : null,
+    on,
+    worktreeBase: on && inheritsSource ? sourceBranch : null,
     sourceBranch,
     inheritsSource,
   };
