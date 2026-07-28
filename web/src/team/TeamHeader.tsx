@@ -357,12 +357,12 @@ function TeamHaltNotice({
 
 // 调度者只有忙/闲两态(归档才算结束),所以这里不用 STATUSES 那张表。
 function BusyPill({ task }: { task: Task }) {
+  if (task.status === "idle") return null;
+
   const label =
     task.status === "running"
       ? "调度中"
-      : task.status === "idle"
-        ? "待命"
-        : task.status === "failed"
+      : task.status === "failed"
           ? "调度台异常"
           : task.status === "canceled"
             ? "已停止"
@@ -372,7 +372,6 @@ function BusyPill({ task }: { task: Task }) {
   return (
     <span
       className="inline-flex items-center gap-1.5 rounded-md bg-overlay px-2 py-1 text-[12px] text-muted"
-      title={task.status === "idle" ? "会话在线，这一刻没在说话；你或执行者一说话就接回" : undefined}
     >
       <StatusIcon status={task.status} stage={task.stage} awaitingAnswer={!!task.question} />
       {label}

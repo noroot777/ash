@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { canArchive, taskDisplayStatus, type Group, type Task } from "@harness/shared";
 import { statusCounts, workersOf } from "@harness/shared/team";
-import { CaretRight } from "@phosphor-icons/react";
+import { CaretRight, UsersThree } from "@phosphor-icons/react";
 import { STATUSES, STATUS_META, PRIORITY_ORDER } from "./constants";
 import { PriorityIcon, PauseHint, useCollapsedGroups } from "./ui";
 import { StatusIcon } from "./StatusIcon";
@@ -236,7 +236,6 @@ function TeamRow({
   onOpenTask: (id: string) => void;
 }) {
   const fold = foldTeamStatus(lead, workers);
-  const badge = pairBadge(lead);
   const unreadTitle = `有新动态 · ${taskDisplayStatus(fold.status, undefined, fold.awaitingAnswer).label}`;
   return (
     <>
@@ -265,8 +264,12 @@ function TeamRow({
               #{(lead.queuePosition ?? 0) + 1}
             </span>
           )}
-          <span className="shrink-0 rounded border border-accent/20 px-1.5 py-px font-mono text-[9.5px] text-accent/80">
-            {badge.label}
+          <span
+            className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded bg-accent/10 text-accent"
+            title="团队任务"
+            aria-label="团队任务"
+          >
+            <UsersThree size={13} weight="fill" aria-hidden />
           </span>
           <button
             onClick={(e) => {
