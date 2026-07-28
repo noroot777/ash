@@ -43,6 +43,7 @@ import { sessionTranscriptPath } from "./transcript.js";
 import { mountDebateIterationRoutes } from "./debate/iteration.js";
 import { mountNoteRoutes } from "./notes.js";
 import { mountTeamPresetRoutes } from "./team-presets.js";
+import { getAppSettings, parseAppSettingsPatch, patchAppSettings } from "./app-settings.js";
 import type { GateAction, AgentType, BatchCreateTasksBody, BatchTaskInput, ScheduledMessage, ScheduledMessageStatus } from "@harness/shared";
 
 export const api = new Hono();
@@ -50,6 +51,18 @@ mountNoteRoutes(api);
 
 // ── health ───────────────────────────────────────────────────────────────
 api.get("/health", (c) => c.json({ ok: true, ts: now() }));
+
+// ── global settings ──────────────────────────────────────────────────────
+api.get("/settings", async (c) => c.json(await getAppSettings()));
+
+api.patch("/settings", async (c) => {
+  try {
+    const patch = parseAppSettingsPatch(await c.req.json<unknown>());
+    return c.json(await patchAppSettings(patch));
+  } catch (error) {
+    return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);
+  }
+});
 
 // ── search ───────────────────────────────────────────────────────────────
 // Global search across tasks + session transcripts (see search.ts).
@@ -558,7 +571,9 @@ api.post("/tasks", async (c) => {
     scheduleId: null,
     createdAt: ts,
     updatedAt: ts,
-    useWorktree: b.useWorktree ?? false,
+    // undefined is resolved centrally from AppSettings; explicit true/false is
+    // preserved, and createTasks still forces false for non-repo projects.
+    useWorktree: b.useWorktree,
     worktreeBase: b.worktreeBase ?? null,
     originTaskId: b.originTaskId ?? null,
   };
@@ -831,11 +846,11 @@ api.post("/groups/:groupId/tasks/batch", async (c) => {
       scheduleId: null as string | null,
       createdAt: ts,
       updatedAt: ts,
-      // Batch path (MCP/agent-facing) doesn't take per-task worktree opts yet —
-      // those tasks run in the project's main tree. Web/mobile new-task forms
-      // are the only opt-in surface for now.
-      useWorktree: false,
-      worktreeBase: null as string | null,
+      // Task-level choice wins over batch defaults; if both are omitted,
+      // createTasks resolves the global setting and enforces the git-repo guard.
+      useWorktree: s.useWorktree !== undefined ? s.useWorktree : b.defaults?.useWorktree,
+      worktreeBase:
+        s.worktreeBase !== undefined ? s.worktreeBase : b.defaults?.worktreeBase ?? null,
     };
   });
 

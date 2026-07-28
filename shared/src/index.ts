@@ -2,6 +2,18 @@
 // Mirrors the decisions in DESIGN.md (§3 data model, §5 agents, §7 debate,
 // §8 statuses, §12 debate mechanism, §13 sessions).
 
+// ── Global app settings ────────────────────────────────────────────────────
+// Stored server-side in the generic app_settings KV table. Consumers always
+// merge persisted values over this object so a fresh/older database gets the
+// current factory defaults without requiring seed rows.
+export interface AppSettings {
+  worktreeDefault: boolean;
+}
+
+export const DEFAULT_APP_SETTINGS: Readonly<AppSettings> = Object.freeze({
+  worktreeDefault: true,
+});
+
 // ── Agents (§5) ────────────────────────────────────────────────────────────
 // Abstraction layer: the *type* is what you @ / pick as a debater.
 // Single source of truth: the runtime list drives both the union type and any
@@ -378,6 +390,8 @@ export interface BatchTaskInput {
   executorId?: string | null; // overrides defaults.executorId; stale id degrades by agentType
   model?: string | null; // overrides defaults.model; null follows the resolved executor profile
   reasoningEffort?: string | null; // overrides defaults.reasoningEffort
+  useWorktree?: boolean; // overrides defaults.useWorktree; omitted follows the global setting
+  worktreeBase?: string | null; // base ref when this task uses a worktree
   priority?: Priority;
   labels?: string[];
   // Each entry is resolved against sibling `key`s first; anything that doesn't
@@ -397,6 +411,8 @@ export interface BatchCreateTasksBody {
     executorId?: string | null;
     model?: string | null;
     reasoningEffort?: string | null;
+    useWorktree?: boolean; // omitted follows DEFAULT_APP_SETTINGS.worktreeDefault
+    worktreeBase?: string | null;
     priority?: Priority;
     labels?: string[];
   };

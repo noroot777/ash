@@ -11,6 +11,14 @@ export const projects = sqliteTable("projects", {
   createdAt: text("created_at").notNull(),
 });
 
+// Generic global settings store. Values are JSON-encoded text; the typed
+// read/write boundary lives in app-settings.ts so future settings can reuse the
+// same table without another schema change.
+export const appSettings = sqliteTable("app_settings", {
+  key: text("key").primaryKey(),
+  value: text("value").notNull(),
+});
+
 export const notes = sqliteTable("notes", {
   id: text("id").primaryKey(),
   projectId: text("project_id").notNull(),
