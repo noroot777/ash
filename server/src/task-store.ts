@@ -1,9 +1,11 @@
 import { eq, inArray } from "drizzle-orm";
 import type { AgentType, QuestionItem, Task, TaskStatus } from "@harness/shared";
 import { db } from "./db/index.js";
-import { agents, queueItems, sessions, tasks } from "./db/schema.js";
+import { agents, projects, queueItems, sessions, tasks } from "./db/schema.js";
 import { bus } from "./bus.js";
 import { runsTiming } from "./util.js";
+import { getAppSettings } from "./app-settings.js";
+import { projectHealthLight } from "./git.js";
 
 export type TaskRow = typeof tasks.$inferSelect;
 export type NewTaskRow = typeof tasks.$inferInsert & { id: string };
@@ -117,14 +119,35 @@ export async function createTasks(
   afterInsert?: () => Promise<void>,
 ): Promise<Task[]> {
   if (rows.length === 0) return [];
-  await db.insert(tasks).values(rows);
+  // Creation defaults belong here so every ordinary path (HTTP single, batch /
+  // chain, debate handoff, future clients) gets the same behavior. Explicit
+  // true/false wins, but a non-repo project can never materialize a worktree.
+  const defaultUseWorktree = rows.some((row) => row.useWorktree === undefined)
+    ? (await getAppSettings()).worktreeDefault
+    : false;
+  const projectIds = [...new Set(rows.map((row) => row.projectId))];
+  const projectRows = await db
+    .select({ id: projects.id, repoPath: projects.repoPath })
+    .from(projects)
+    .where(inArray(projects.id, projectIds));
+  const repoByProject = new Map(projectRows.map((project) => [project.id, project.repoPath] as const));
+  const normalizedRows = rows.map((row): NewTaskRow => {
+    const requested = row.useWorktree ?? defaultUseWorktree;
+    const useWorktree = requested && projectHealthLight(repoByProject.get(row.projectId)).isRepo;
+    return {
+      ...row,
+      useWorktree,
+      worktreeBase: useWorktree ? row.worktreeBase ?? null : null,
+    };
+  });
+  await db.insert(tasks).values(normalizedRows);
   await afterInsert?.();
   const persisted = await db
     .select()
     .from(tasks)
-    .where(inArray(tasks.id, rows.map((r) => r.id)));
+    .where(inArray(tasks.id, normalizedRows.map((r) => r.id)));
   const byId = new Map(persisted.map((r) => [r.id, r] as const));
-  const ordered = rows.flatMap((r) => {
+  const ordered = normalizedRows.flatMap((r) => {
     const persistedRow = byId.get(r.id);
     return persistedRow ? [persistedRow] : [];
   });

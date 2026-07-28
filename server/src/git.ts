@@ -131,7 +131,8 @@ export async function resolveWorkspace(repoPath: string, taskId: string): Promis
 }
 
 // ── Opt-in per-task worktree (§4) ────────────────────────────────────────────
-// Default is OFF; the new-task form has a toggle. When ON, runTask materializes
+// The global factory default is ON; creation callers may explicitly override it.
+// When ON, runTask materializes
 // `<repoPath>/.worktrees/<taskId>` on branch `harness/<id8>` branched off the
 // user-picked `base` (null = current HEAD) BEFORE handing the cwd to the agent.
 // harness creates worktrees but never removes them on its own — cleanup is a

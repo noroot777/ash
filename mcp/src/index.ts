@@ -53,6 +53,8 @@ const taskShape = z.object({
   executorId: z.string().nullable().optional().describe("覆盖批次默认执行器 profile(agents.id)。指定则优先用该 profile；为空/悬空时按 agentType 默认执行器降级"),
   model: z.string().nullable().optional().describe("覆盖执行器 profile 的模型；缺省/null=跟随执行器"),
   reasoningEffort: z.string().nullable().optional().describe("覆盖执行器 profile 的思考强度；缺省/null=跟随执行器"),
+  useWorktree: z.boolean().optional().describe("是否在独立 worktree 中运行；缺省跟随全局默认，非 git 项目始终为 false"),
+  worktreeBase: z.string().nullable().optional().describe("worktree 的 base ref；缺省使用项目当前 HEAD"),
   priority: PRIORITY.optional(),
   labels: z.array(z.string()).optional().describe("任务标签"),
 });
@@ -124,6 +126,8 @@ server.registerTool(
         executorId: z.string().nullable().optional().describe("默认执行器 profile(agents.id)。任务自身 executorId 可覆盖；为空/悬空时按 agentType 默认执行器降级"),
         model: z.string().nullable().optional().describe("覆盖执行器 profile 的默认模型；缺省/null=跟随执行器，任务自身可覆盖"),
         reasoningEffort: z.string().nullable().optional().describe("覆盖执行器 profile 的默认思考强度；缺省/null=跟随执行器，任务自身可覆盖"),
+        useWorktree: z.boolean().optional().describe("默认是否使用 worktree；缺省跟随全局默认，任务自身可覆盖"),
+        worktreeBase: z.string().nullable().optional().describe("默认 worktree base ref；任务自身可覆盖"),
         priority: PRIORITY.optional(),
         labels: z.array(z.string()).optional(),
       }).optional().describe("每个任务的兜底值，任务自身可覆盖"),
@@ -256,10 +260,12 @@ server.registerTool(
       executorId: z.string().nullable().optional().describe("所有任务的默认执行器 profile(agents.id)，任务可逐个覆盖；为空/悬空时按 agentType 默认执行器降级"),
       model: z.string().nullable().optional().describe("所有任务的默认模型覆盖；缺省/null=跟随执行器，任务可逐个覆盖"),
       reasoningEffort: z.string().nullable().optional().describe("所有任务的默认思考强度覆盖；缺省/null=跟随执行器，任务可逐个覆盖"),
+      useWorktree: z.boolean().optional().describe("所有任务是否使用 worktree；缺省跟随全局默认，任务可逐个覆盖"),
+      worktreeBase: z.string().nullable().optional().describe("所有任务的默认 worktree base ref；任务可逐个覆盖"),
       run: z.boolean().optional(),
     },
   },
-  async ({ repoPath, tasks, groupName, mode, chain, agentType, executorId, model, reasoningEffort, run }) => {
+  async ({ repoPath, tasks, groupName, mode, chain, agentType, executorId, model, reasoningEffort, useWorktree, worktreeBase, run }) => {
     try {
       const project = (await call("POST", "/projects/resolve", { repoPath })) as { id: string; name: string };
       // resolve（找到或复用）而非每次新建，避免同名分组被反复建出重复副本。
@@ -269,8 +275,8 @@ server.registerTool(
       const batch = (await call("POST", `/groups/${group.id}/tasks/batch`, {
         chain: chain ?? true,
         run: !!run,
-        defaults: [agentType, executorId, model, reasoningEffort].some((v) => v !== undefined)
-          ? { agentType, executorId, model, reasoningEffort }
+        defaults: [agentType, executorId, model, reasoningEffort, useWorktree, worktreeBase].some((v) => v !== undefined)
+          ? { agentType, executorId, model, reasoningEffort, useWorktree, worktreeBase }
           : undefined,
         tasks,
       })) as { tasks: unknown[]; warning?: string };

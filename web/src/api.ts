@@ -1,4 +1,4 @@
-import type { Project, ProjectView, ProjectHealth, Task, Note, Session, Group, GateAction, Schedule, ScheduledMessage, AgentExecutorProfile, BatchCreateTasksBody, AgentType, AttachmentKind, LlmProvider, LlmProtocol, SearchHit, TeamPreset, TeamPresetConfig } from "@harness/shared";
+import type { AppSettings, Project, ProjectView, ProjectHealth, Task, Note, Session, Group, GateAction, Schedule, ScheduledMessage, AgentExecutorProfile, BatchCreateTasksBody, AgentType, AttachmentKind, LlmProvider, LlmProtocol, SearchHit, TeamPreset, TeamPresetConfig } from "@harness/shared";
 import type { PersistedDebateEntry } from "./debateState";
 
 export type CuaProcess = {
@@ -50,6 +50,13 @@ const j = async (r: Response) => {
 };
 
 export const api = {
+  settings: (): Promise<AppSettings> => fetch("/api/settings").then(j),
+  patchSettings: (patch: Partial<AppSettings>): Promise<AppSettings> =>
+    fetch("/api/settings", {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(patch),
+    }).then(j),
   projects: (): Promise<ProjectView[]> => fetch("/api/projects").then(j),
   createProject: (name: string, repoPath: string): Promise<ProjectView> =>
     fetch("/api/projects", {

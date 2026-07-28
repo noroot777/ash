@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { Task, Group, AgentType, Priority, ProjectView, TeamConfig, TeamPresetConfig } from "@harness/shared";
-import { AGENT_TYPES } from "@harness/shared";
+import { AGENT_TYPES, DEFAULT_APP_SETTINGS } from "@harness/shared";
 import { X, ArrowsOut, ArrowsIn, Robot, Stack, Plus, Sparkle, Scales, CaretDown, Clock, Play, Tray, ArrowsClockwise, GitBranch, TreeStructure, UsersThree, Crown } from "@phosphor-icons/react";
 import { api } from "./api";
 import { PRIORITIES } from "./constants";
@@ -16,6 +16,7 @@ import { teamExecutorDefaults } from "./teamExecutorDefaults";
 import { createDebateConfig, DebateComposerFields } from "./DebateComposer";
 import { TaskModelControls } from "./TaskModelControls";
 import { TeamPresetBar } from "./TeamPresetBar";
+import { toast } from "./toast";
 
 export type CreateTaskMode = "single" | "team" | "debate";
 const TASK_MODES: { key: CreateTaskMode; label: string; icon: ReactNode }[] = [
@@ -91,13 +92,27 @@ export function CreateTask({
   const [detected, setDetected] = useState<{ type: AgentType; available: boolean; resident: boolean }[] | null>(null);
   const { profiles, providers } = useExecutorProfiles();
 
-  // Per-task worktree opt-in. When on, the server creates <repo>/.worktrees/<id>
-  // on a fresh `harness/<id8>` branch off the user-picked base before running.
-  // Toggle is only meaningful for git projects; for non-repos we hide it.
-  const [useWorktree, setUseWorktree] = useState(false);
+  // Start at the factory default immediately, then hydrate from the server-side
+  // global setting. Failed reads intentionally stay at true. If the user toggles
+  // before the request returns, their in-progress choice is never overwritten.
+  const [worktreeDefault, setWorktreeDefault] = useState(DEFAULT_APP_SETTINGS.worktreeDefault);
+  const [useWorktree, setUseWorktree] = useState(DEFAULT_APP_SETTINGS.worktreeDefault);
+  const [savingWorktreeDefault, setSavingWorktreeDefault] = useState(false);
+  const worktreeChoiceTouched = useRef(false);
   const [base, setBase] = useState(""); // empty = current HEAD
   const [branches, setBranches] = useState<string[]>([]);
   const [branchesLoaded, setBranchesLoaded] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    api.settings().then((settings) => {
+      if (!alive) return;
+      setWorktreeDefault(settings.worktreeDefault);
+      if (!worktreeChoiceTouched.current) setUseWorktree(settings.worktreeDefault);
+    }).catch(() => {
+      // Factory fallback is already applied; creation can continue unattended.
+    });
+    return () => { alive = false; };
+  }, []);
   // Lazy-load branches the first time the toggle opens — non-repos still get an
   // empty list so the menu degrades gracefully.
   useEffect(() => {
@@ -111,6 +126,23 @@ export function CreateTask({
     }).catch(() => alive && setBranchesLoaded(true));
     return () => { alive = false; };
   }, [useWorktree, branchesLoaded, project.id, base]);
+  const toggleWorktree = () => {
+    worktreeChoiceTouched.current = true;
+    setUseWorktree((value) => !value);
+  };
+  const saveWorktreeDefault = async () => {
+    if (savingWorktreeDefault || useWorktree === worktreeDefault) return;
+    setSavingWorktreeDefault(true);
+    try {
+      const settings = await api.patchSettings({ worktreeDefault: useWorktree });
+      setWorktreeDefault(settings.worktreeDefault);
+      toast(`已把“${useWorktree ? "使用 worktree" : "不使用 worktree"}”设为全局默认`, "info");
+    } catch (error) {
+      toast(error instanceof Error ? error.message : String(error));
+    } finally {
+      setSavingWorktreeDefault(false);
+    }
+  };
   const objRef = useRef<HTMLTextAreaElement>(null);
   const { attachments, onPaste, remove, clear, error } = usePasteAttachments();
 
@@ -232,8 +264,8 @@ export function CreateTask({
             // 自定义名称一律关闭自动起名；留空时普通任务由首个 agent 起名，团队任务
             // 继续直接使用正文首行（调度台没有普通任务的首回合起名协议）。
             autoTitle: explicitTitle ? false : !teamOn,
-            // 默认仍直接在项目目录跑；团队显式开启后，调度台和默认执行者共用
-            // 同一个 worktree。执行者自己再 opt-in 时才另开一层隔离。
+            // 普通/团队共用全局默认；团队开启后，调度台和默认执行者共用同一个
+            // worktree。执行者自己再显式 opt-in 时才另开一层隔离。
             useWorktree: project.health.isRepo ? useWorktree : false,
             worktreeBase: useWorktree && base ? base : null,
           });
@@ -358,7 +390,10 @@ export function CreateTask({
             on={useWorktree}
             base={base}
             branches={branches}
-            onToggle={() => setUseWorktree((v) => !v)}
+            isGlobalDefault={useWorktree === worktreeDefault}
+            savingDefault={savingWorktreeDefault}
+            onToggle={toggleWorktree}
+            onSetDefault={() => void saveWorktreeDefault()}
             onBase={setBase}
           />
         )}
@@ -571,7 +606,10 @@ function WorktreeField({
   branches,
   taskIdPreview,
   team,
+  isGlobalDefault,
+  savingDefault,
   onToggle,
+  onSetDefault,
   onBase,
 }: {
   on: boolean;
@@ -579,7 +617,10 @@ function WorktreeField({
   branches: string[];
   taskIdPreview: string;
   team: boolean;
+  isGlobalDefault: boolean;
+  savingDefault: boolean;
   onToggle: () => void;
+  onSetDefault: () => void;
   onBase: (b: string) => void;
 }) {
   const baseLabel = base || "当前分支";
@@ -600,6 +641,17 @@ function WorktreeField({
           <span className={`absolute top-0.5 h-2 w-2 rounded-full bg-panel transition-all ${on ? "left-2.5" : "left-0.5"}`} />
         </span>
       </button>
+      {!isGlobalDefault && (
+        <button
+          type="button"
+          disabled={savingDefault}
+          onClick={onSetDefault}
+          className="ml-1 rounded px-1.5 py-0.5 text-[10px] text-faint hover:bg-raised hover:text-ink disabled:opacity-50"
+          title="把当前 worktree 选择保存为以后新建任务的默认值"
+        >
+          {savingDefault ? "保存中…" : "设为默认"}
+        </button>
+      )}
       {on && (
         <div className="ml-1 mt-1 flex flex-wrap items-center gap-1.5 text-[11px] text-muted">
           <span className="text-faint">base</span>
