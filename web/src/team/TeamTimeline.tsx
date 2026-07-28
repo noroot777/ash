@@ -7,6 +7,7 @@ import { useState } from "react";
 import type { Group, Task } from "@harness/shared";
 import { isTeamSettled, timeMs } from "@harness/shared/team";
 import { CaretDown } from "@phosphor-icons/react";
+import { TeamStageSummary } from "../StageProgress";
 import { statusColor } from "../StatusIcon";
 import { formatDuration, formatInstant, useTick } from "../time";
 import { teamLeadExecutorLabel } from "../executorLabel";
@@ -98,13 +99,16 @@ export function TeamTimeline({
 
   return (
     <div className="mt-2.5 border-t border-dashed border-line pt-2">
-      <button
-        onClick={() => setOpen((o) => !o)}
-        className="flex items-center gap-1 text-[11.5px] text-faint transition-colors hover:text-muted"
-      >
-        <CaretDown size={11} weight="bold" className={`transition-transform ${open ? "" : "-rotate-90"}`} />
-        时间轴（谁跟谁在并行）
-      </button>
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+        <button
+          onClick={() => setOpen((o) => !o)}
+          className="flex items-center gap-1 text-[11.5px] text-faint transition-colors hover:text-muted"
+        >
+          <CaretDown size={11} weight="bold" className={`transition-transform ${open ? "" : "-rotate-90"}`} />
+          时间轴（谁跟谁在并行）
+        </button>
+        <TeamStageSummary workers={workers} />
+      </div>
       {open && (
         <div className="mt-1.5 grid items-center gap-x-2.5 gap-y-1" style={{ gridTemplateColumns: "132px 1fr" }}>
           {rows.map((r, i) => (
