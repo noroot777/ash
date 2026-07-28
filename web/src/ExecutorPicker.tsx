@@ -66,6 +66,7 @@ export function executorOptions({
 }): MenuOption[] {
   const options: MenuOption[] = [];
   for (const type of types) {
+    const groupStart = options.length;
     if (includeTypeDefaults) {
       const def = profiles.find((a) => a.type === type && a.isDefault);
       options.push({
@@ -83,6 +84,7 @@ export function executorOptions({
         icon: <Robot size={14} />,
       });
     }
+    if (options.length > groupStart && groupStart > 0) options[groupStart]!.separatorBefore = true;
   }
   if (includeManage) {
     options.push({ value: MANAGE_EXECUTORS, label: "管理执行器…", detail: "注册执行器 / 配置供应商", icon: <GearSix size={14} /> });

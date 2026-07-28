@@ -305,7 +305,7 @@ export function CreateTask({
                 ? "给调度者的目标…（它会自己拆活、派执行者、有问题问你）"
                 : "描述要做什么 / 给 agent 的目标…（输入 / 唤起命令：/pair 双 AI 辩论，/team 一队）"
             }
-            className={`resize-none bg-transparent text-[15px] leading-relaxed text-ink outline-none placeholder:text-faint ${
+            className={`resize-y bg-transparent text-[15px] leading-relaxed text-ink outline-none placeholder:text-faint ${
               expanded ? "flex-1" : "min-h-[88px]"
             }`}
           />

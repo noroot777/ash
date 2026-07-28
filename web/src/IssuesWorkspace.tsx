@@ -142,6 +142,7 @@ function HeroComposer({
   const heroTitle = useRef(randomHero());
   const taRef = useRef<HTMLTextAreaElement>(null);
   const titleRef = useRef<HTMLDivElement>(null);
+  const manuallyResized = useRef(false);
 
   useEffect(() => {
     titleRef.current?.classList.add("is-shown");
@@ -154,10 +155,11 @@ function HeroComposer({
     }).catch(() => {});
   }, []);
 
-  // hero 输入框随内容自动增高(上限 40vh,超出滚动)。
+  // Auto-grow until the user grabs the textarea's bottom resize edge. After
+  // that, preserve their chosen height instead of resetting it on every edit.
   useEffect(() => {
     const ta = taRef.current;
-    if (!ta) return;
+    if (!ta || manuallyResized.current) return;
     ta.style.height = "auto";
     ta.style.height = `${Math.min(ta.scrollHeight, Math.round(window.innerHeight * 0.4))}px`;
   }, [text]);
@@ -233,6 +235,10 @@ function HeroComposer({
                   value={text}
                   onChange={(e) => setText(e.target.value)}
                   onPaste={onPaste}
+                  onPointerDown={(e) => {
+                    const rect = e.currentTarget.getBoundingClientRect();
+                    if (e.clientY >= rect.bottom - 16) manuallyResized.current = true;
+                  }}
                   onKeyDown={(e) => {
                     if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
                       e.preventDefault();
@@ -240,7 +246,7 @@ function HeroComposer({
                     }
                   }}
                   placeholder="随手写下要做的事…（可粘贴或选择图片/文件）"
-                  className="min-h-[50px] w-full resize-none bg-transparent text-[16px] leading-relaxed text-ink outline-none placeholder:text-faint"
+                  className="min-h-[50px] w-full resize-y bg-transparent text-[16px] leading-relaxed text-ink outline-none placeholder:text-faint"
                 />
                 <AttachmentChips attachments={attachments} onRemove={remove} error={error} />
               </div>

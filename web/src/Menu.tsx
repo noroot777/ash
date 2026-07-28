@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNo
 import { createPortal } from "react-dom";
 import { Check, PushPin } from "@phosphor-icons/react";
 
-export type MenuOption = { value: string; label: string; icon?: ReactNode; detail?: string };
+export type MenuOption = { value: string; label: string; icon?: ReactNode; detail?: string; separatorBefore?: boolean };
 
 // Only one menu open at a time (so Tab-focusing a new pill closes the previous).
 let activeClose: (() => void) | null = null;
@@ -191,46 +191,47 @@ export function Menu({
             )}
             <div className="min-h-0 flex-1 overflow-y-auto">
             {options.map((o, i) => (
-              <button
-                key={o.value}
-                type="button"
-                tabIndex={-1}
-                onMouseEnter={() => setActive(i)}
-                onClick={() => {
-                  onChange(o.value);
-                  close();
-                }}
-                className={`group flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] ${
-                  i === active ? "bg-raised" : ""
-                }`}
-              >
-                {o.icon}
-                <span className="flex min-w-0 flex-1 flex-col">
-                  <span className="truncate text-ink">{o.label}</span>
-                  {o.detail && <span className="truncate text-[11px] text-faint">{o.detail}</span>}
-                </span>
-                {onSetDefault &&
-                  (defaultValue === o.value ? (
-                    <span className="inline-flex items-center gap-1 text-[10px] text-accent">
-                      <PushPin size={11} weight="fill" />默认
-                    </span>
-                  ) : (
-                    <span
-                      role="button"
-                      title="设为默认（并选中）"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onSetDefault(o.value);
-                        onChange(o.value);
-                        close();
-                      }}
-                      className="text-faint opacity-0 transition-opacity hover:text-accent group-hover:opacity-100"
-                    >
-                      <PushPin size={13} />
-                    </span>
-                  ))}
-                {value === o.value && <Check size={13} weight="bold" className="text-accent" />}
-              </button>
+              <div key={o.value} className={o.separatorBefore ? "mt-1 border-t border-line pt-1" : ""}>
+                <button
+                  type="button"
+                  tabIndex={-1}
+                  onMouseEnter={() => setActive(i)}
+                  onClick={() => {
+                    onChange(o.value);
+                    close();
+                  }}
+                  className={`group flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] ${
+                    i === active ? "bg-raised" : ""
+                  }`}
+                >
+                  {o.icon}
+                  <span className="flex min-w-0 flex-1 flex-col">
+                    <span className="truncate text-ink">{o.label}</span>
+                    {o.detail && <span className="truncate text-[11px] text-faint">{o.detail}</span>}
+                  </span>
+                  {onSetDefault &&
+                    (defaultValue === o.value ? (
+                      <span className="inline-flex items-center gap-1 text-[10px] text-accent">
+                        <PushPin size={11} weight="fill" />默认
+                      </span>
+                    ) : (
+                      <span
+                        role="button"
+                        title="设为默认（并选中）"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onSetDefault(o.value);
+                          onChange(o.value);
+                          close();
+                        }}
+                        className="text-faint opacity-0 transition-opacity hover:text-accent group-hover:opacity-100"
+                      >
+                        <PushPin size={13} />
+                      </span>
+                    ))}
+                  {value === o.value && <Check size={13} weight="bold" className="text-accent" />}
+                </button>
+              </div>
             ))}
             </div>
             {footer && (

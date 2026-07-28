@@ -192,7 +192,7 @@ export function ReplyBox({
           rows={2}
           disabled={disabled}
           placeholder={disabled ? disabledPlaceholder : placeholder}
-          className="flex-1 resize-none rounded-md border border-line bg-panel px-2.5 py-1.5 text-[13px] text-ink outline-none placeholder:text-faint focus:border-accent disabled:opacity-50"
+          className="flex-1 resize-y rounded-md border border-line bg-panel px-2.5 py-1.5 text-[13px] text-ink outline-none placeholder:text-faint focus:border-accent disabled:opacity-50"
         />
         <button
           onClick={() => { if (!at) setAt(toLocalInput(new Date(Date.now() + 3600_000))); setSchedOpen((o) => !o); }}

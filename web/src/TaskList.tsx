@@ -9,6 +9,7 @@ import { foldTeamStatus, pairBadge } from "./util";
 import { executorLabel } from "./executorLabel";
 import { isDispatchedWorker } from "./taskPolicy";
 import { OriginTaskChip } from "./taskOrigin";
+import { TaskWorktreeChip } from "./TaskWorktreeChip";
 
 const TASK_SECTIONS = [
   { key: "collab", label: "协作任务", matches: (task: Task) => task.mode === "debate" || task.mode === "team" },
@@ -167,6 +168,7 @@ function TaskRow({
         <PriorityIcon p={t.priority} />
         <span className="min-w-[80px] flex-1 truncate text-[13px] text-ink">{t.title}</span>
         <div className="ml-auto flex min-w-0 items-center gap-1.5 overflow-hidden">
+          {t.useWorktree && <TaskWorktreeChip />}
           {t.queueId != null && !canArchive(t.status) && (
             <span
               className="shrink-0 rounded bg-overlay px-1.5 py-0.5 font-mono text-[10px] text-muted"
@@ -256,6 +258,7 @@ function TeamRow({
         <PriorityIcon p={lead.priority} />
         <span className="min-w-[80px] flex-1 truncate text-[13px] text-ink">{lead.title}</span>
         <div className="ml-auto flex min-w-0 items-center gap-1.5 overflow-hidden">
+          {lead.useWorktree && <TaskWorktreeChip />}
           <OriginTaskChip task={lead} allTasks={allTasks} onOpen={onOpenTask} />
           {summary && <span className="shrink-0 truncate font-mono text-[10px] text-faint">{summary}</span>}
           <span className={`shrink-0 rounded px-1.5 py-0.5 font-mono text-[10px] ${badge.cls}`}>{badge.label}</span>
@@ -273,6 +276,7 @@ function TeamRow({
           >
             <StatusIcon status={w.status} size={12} awaitingAnswer={!!w.question} />
             <span className="min-w-0 flex-1 truncate text-[12.5px] text-muted">{w.title}</span>
+            {w.useWorktree && <TaskWorktreeChip />}
             {w.queueId != null && !canArchive(w.status) && (
               <span className="shrink-0 rounded bg-overlay px-1.5 py-0.5 font-mono text-[10px] text-muted" title="串行批次里的位置">
                 ↳ #{(w.queuePosition ?? 0) + 1}

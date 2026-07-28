@@ -678,7 +678,7 @@ function GateBar({
                     ? "向某位辩手提问，@ 指向单个（不填=问双方）…"
                     : "补充问题；提交后回到辩论继续…"
               }
-              className="flex-1 resize-none rounded-md border border-line bg-panel px-2 py-1 text-sm outline-none"
+              className="flex-1 resize-y rounded-md border border-line bg-panel px-2 py-1 text-sm outline-none"
             />
             <button
               disabled={!text.trim() || teamBusy}

@@ -23,6 +23,7 @@ import { QuestionCard } from "./QuestionCard";
 import { isDispatchedWorker } from "./taskPolicy";
 import { AttachmentDisplay, parseAttachmentText } from "./messageAttachments";
 import { toast } from "./toast";
+import { TaskWorktreeChip } from "./TaskWorktreeChip";
 export type { LogLine } from "./Conversation";
 
 export function TaskDetail({
@@ -105,6 +106,7 @@ export function TaskDetail({
             <EditableTitle title={task.title} onSave={(t) => onPatch({ title: t, autoTitle: false })} />
           )}
           <div className="ml-auto flex min-w-0 max-w-full flex-wrap items-center justify-end gap-2">
+            {task.useWorktree && <TaskWorktreeChip />}
             <TaskTimeChip task={task} />
             {task.archived ? (
               <>

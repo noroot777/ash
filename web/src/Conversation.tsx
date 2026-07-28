@@ -416,19 +416,19 @@ export function AgentBubble({
 // it reads as a timeline marker between turns, not as agent or human speech.
 export function SystemNote({ text, at }: { text: string; at?: string }) {
   return (
-    <div className="my-3 flex items-center gap-2 text-[11px] text-faint">
-      <span className="h-px flex-1 bg-line" />
-      <span className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border border-line bg-raised/40 px-2.5 py-1">
-        <ArrowsClockwise size={11} />
-        <span>{text}</span>
+    <div className="my-3 flex min-w-0 items-center gap-2 text-[11px] text-faint">
+      <span className="h-px min-w-3 flex-1 bg-line" />
+      <span className="inline-flex min-w-0 max-w-[85%] flex-wrap items-center justify-center gap-x-1.5 gap-y-0.5 rounded-lg border border-line bg-raised/40 px-2.5 py-1">
+        <ArrowsClockwise size={11} className="shrink-0" />
+        <span className="min-w-0 break-words text-center">{text}</span>
         {at && (
-          <>
+          <span className="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap">
             <span className="text-line2">·</span>
             <span>{formatInstant(at)}</span>
-          </>
+          </span>
         )}
       </span>
-      <span className="h-px flex-1 bg-line" />
+      <span className="h-px min-w-3 flex-1 bg-line" />
     </div>
   );
 }
