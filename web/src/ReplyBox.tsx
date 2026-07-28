@@ -71,8 +71,8 @@ export function ReplyBox({
   // list. Choosing one assigns the reply to that agent and strips the token.
   const mMatch = mention ? /(?:^|\s)@(\w*)$/.exec(v) : null;
   const cands = mMatch ? AGENT_TYPES.filter((a) => a.startsWith((mMatch[1] ?? "").toLowerCase())) : [];
-  const mentionOpen = !disabled && !!mMatch && cands.length > 0;
   const commandMatch = !!command && command.matches(v);
+  const mentionOpen = !disabled && !commandMatch && !!mMatch && cands.length > 0;
   const inputDisabled = disabled && !command;
 
   const pick = (a: AgentType) => {
