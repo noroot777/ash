@@ -479,7 +479,21 @@ function Bubble({
                 <span className="text-muted">{agentLabel}</span>
               </>
             )}
-            {(turn.at ?? turn.startedAt) && <><span className="text-faint">·</span><span className="text-faint">{formatInstant(turn.at ?? turn.startedAt)}</span></>}
+            {(() => {
+              // 头部行的时刻:优先本轮真实时刻;老转写没记录时退回会话开始时刻并
+              // 标注「会话」——用户要的是在这里看到时间,底部 footer 的用时不够。
+              const exact = turn.at ?? turn.startedAt;
+              const shown = exact ?? session?.startedAt;
+              if (!shown) return null;
+              return (
+                <>
+                  <span className="text-faint">·</span>
+                  <span className="text-faint" title={exact ? undefined : "该轮当时未记录发言时刻,显示的是这位辩手会话的开始时间"}>
+                    {exact ? formatInstant(shown) : `会话 ${formatInstant(shown)} 起`}
+                  </span>
+                </>
+              );
+            })()}
             {typeof turn.durationMs === "number" && <><span className="text-faint">·</span><span className="text-faint">用时 {formatDuration(turn.durationMs)}</span></>}
             {turn.raised && <span className="text-amber-700">✋ 可收敛</span>}
             {!turn.done && <TypingDots />}
