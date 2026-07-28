@@ -80,7 +80,12 @@ export function CommandPalette({
       onClose();
     };
     window.addEventListener("keydown", closeFirst, true);
-    return () => window.removeEventListener("keydown", closeFirst, true);
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      window.removeEventListener("keydown", closeFirst, true);
+      document.body.style.overflow = prev;
+    };
   }, [open, onClose]);
 
   useEffect(() => {
