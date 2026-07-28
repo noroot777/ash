@@ -369,7 +369,7 @@ function WorkerDrawer({
       />
       <aside className="t-drawer absolute inset-y-0 right-0 z-30 flex w-[min(620px,74%)] flex-col border-l border-line2 bg-panel shadow-[-8px_0_28px_rgba(0,0,0,.13)]">
         <div className="flex shrink-0 items-center gap-2 border-b border-line bg-raised px-3 py-1.5 text-[12px]">
-          <StatusIcon status={worker.status} size={12} awaitingAnswer={!!worker.question} />
+          <StatusIcon status={worker.status} stage={worker.stage} awaitingAnswer={!!worker.question} />
           <span className="min-w-0 flex-1 truncate font-medium text-ink">{worker.title}</span>
           <span className="shrink-0 text-faint">
             <WorkerStatusText w={worker} groupPaused={groupPaused} />

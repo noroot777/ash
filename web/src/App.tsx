@@ -1,15 +1,13 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import type { Task, ProjectView, Group, AgentType, ProjectHealth, SearchHit } from "@harness/shared";
 import { api } from "./api";
-import { useServerEvents } from "./useEvents";
 import { orderedTasks } from "./TaskList";
 import { type LogLine } from "./TaskDetail";
-import { renderEvent } from "./renderEvent";
 import { CommandPalette, type Command } from "./CommandPalette";
 import { PRIORITIES } from "./constants";
 import { TaskComposer } from "./TaskComposer";
 import { useComposer } from "./useComposer";
-import { applyDebateEvent, emptyDebate, type DebateState } from "./debateState";
+import { emptyDebate, type DebateState } from "./debateState";
 import { AgentsPanel } from "./AgentsPanel";
 import { NewProjectModal, NewGroupModal, ConfirmModal, WorktreeCleanupModal } from "./Modal";
 import { toast, Toaster } from "./toast";
@@ -22,19 +20,7 @@ import { TasksWorkspace, type TaskView } from "./TasksWorkspace";
 import { ProjectRail } from "./ProjectRail";
 import { isDispatchedWorker } from "./taskPolicy";
 import { NewNoteModal, NotesModal } from "./NotesModal";
-
-function upsertTask(tasks: Task[], task: Task): Task[] {
-  return tasks.some((t) => t.id === task.id)
-    ? tasks.map((t) => (t.id === task.id ? task : t))
-    : [task, ...tasks];
-}
-
-function upsertProjectTask(tasks: Task[], task: Task, projectId: string | null): Task[] {
-  if (task.projectId !== projectId) return tasks.filter((t) => t.id !== task.id);
-  return upsertTask(tasks, task);
-}
-
-const runningOnly = (tasks: Task[]) => tasks.filter((task) => task.status === "running");
+import { runningOnly, upsertTask, useAppEvents } from "./useAppEvents";
 
 function rejectDispatchedWorkerMutation(task: Task | undefined): boolean {
   if (!task || !isDispatchedWorker(task)) return false;
@@ -100,60 +86,14 @@ export function App() {
     localStorage.setItem("harness.railCollapsed", railCollapsed ? "1" : "0");
   }, [railCollapsed]);
 
-  const connected = useServerEvents(
-    useCallback((ev) => {
-      if (ev.type === "task.created" || ev.type === "task.updated") {
-        setTasks((ts) => upsertProjectTask(ts, ev.task, projectIdRef.current));
-        setRunningTasks((ts) => ev.task.status === "running" ? upsertTask(ts, ev.task) : ts.filter((task) => task.id !== ev.task.id));
-      } else if (ev.type === "task.status") {
-        setTasks((ts) =>
-          ts.map((t) =>
-            t.id === ev.taskId
-              ? {
-                  ...t,
-                  status: ev.status,
-                  startedAt: ev.startedAt !== undefined ? ev.startedAt : t.startedAt,
-                  endedAt: ev.endedAt !== undefined ? ev.endedAt : t.endedAt,
-                  activeMs: ev.activeMs !== undefined ? ev.activeMs : t.activeMs,
-                  liveSince: ev.liveSince !== undefined ? ev.liveSince : t.liveSince,
-                }
-              : t,
-          ),
-        );
-        if (ev.status !== "running") setRunningTasks((ts) => ts.filter((task) => task.id !== ev.taskId));
-        // idle 也算「一段跑完了」：团队调度台一个回合结束就落 idle，会话行这时才写上
-        // endedAt，刷一下 sessions 气泡的用时才停止跳动。
-        if (ev.status === "done" || ev.status === "failed" || ev.status === "canceled" || ev.status === "idle")
-          setSessionsBump((n) => n + 1);
-      } else if (ev.type === "task.title") {
-        setTasks((ts) => ts.map((t) => (t.id === ev.taskId ? { ...t, title: ev.title } : t)));
-      } else if (ev.type === "task.question") {
-        // 提问卡片的出现/消失走这条:agent 一提问卡片就冒出来,答复一成功就撤掉,
-        // 不用等下次全量拉取(task.status 不带 question)。
-        setTasks((ts) =>
-          ts.map((t) =>
-            t.id === ev.taskId
-              ? { ...t, question: ev.question, questionOptions: ev.questionOptions, questionItems: ev.questionItems }
-              : t,
-          ),
-        );
-      } else if (ev.type === "agent.event") {
-        // 团队调度台(role:"lead")跟单任务共用一条日志流:它的回合、用户插话、执行者汇报
-        // 在 TeamFeed 里用的就是 Conversation.tsx 那套气泡。
-        if (ev.role === "single" || ev.role === "lead") {
-          const line = renderEvent(ev.event, ev.agentType, ev.sessionId);
-          // 调度台进程退出不等于任务结束(空闲回收、意外退出都会发 done),系统提示里已经
-          // 说清楚了;.md 里也没有这一行,插了刷新后就不一致。
-          if (line && !(ev.role === "lead" && line.kind === "done"))
-            setLogs((m) => ({ ...m, [ev.taskId]: [...(m[ev.taskId] ?? []), line] }));
-        } else {
-          setDebates((m) => ({ ...m, [ev.taskId]: applyDebateEvent(m[ev.taskId] ?? emptyDebate(), ev) }));
-        }
-      } else if (ev.type === "debate.progress" || ev.type === "debate.gate" || ev.type === "debate.user") {
-        setDebates((m) => ({ ...m, [ev.taskId]: applyDebateEvent(m[ev.taskId] ?? emptyDebate(), ev) }));
-      }
-    }, []),
-  );
+  const connected = useAppEvents({
+    projectIdRef,
+    setTasks,
+    setRunningTasks,
+    setLogs,
+    setDebates,
+    setSessionsBump,
+  });
 
   useEffect(() => {
     api.projects().then((ps) => {

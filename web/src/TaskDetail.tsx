@@ -25,6 +25,7 @@ import { isDispatchedWorker } from "./taskPolicy";
 import { AttachmentDisplay, parseAttachmentText } from "./messageAttachments";
 import { toast } from "./toast";
 import { TaskWorktreeChip } from "./TaskWorktreeChip";
+import { StageProgress } from "./StageProgress";
 import { TaskDerivationComposer } from "./TaskDerivationComposer";
 import { DerivedTaskLinks } from "./DerivedTaskLinks";
 import {
@@ -277,6 +278,8 @@ export function TaskDetail({
         ) : (
           <AttachmentDisplay paths={objective.paths} className="mt-2" />
         )}
+
+        <StageProgress task={task} />
 
         {/* agent 提问:调 ask_question 后停在这等答案(队列陪等,不会自动续跑)。
             团队模式下调度者通常会自动来答;用户也可以直接在这里答复唤醒。 */}

@@ -32,6 +32,7 @@ import { TeamTimeline } from "./TeamTimeline";
 import type { LeadTurn } from "./teamData";
 import { teamLeadExecutorLabel, teamWorkerExecutorLabel } from "../executorLabel";
 import { AttachmentDisplay, parseAttachmentText } from "../messageAttachments";
+import { TeamStageProgress } from "../StageProgress";
 
 export function TeamHeader({
   task,
@@ -258,6 +259,8 @@ export function TeamHeader({
         )}
       </div>
 
+      <TeamStageProgress workers={workers} />
+
       <TeamTimeline lead={task} leadTurns={leadTurns} workers={workers} groups={teamGroups} onOpen={onOpenWorker} />
 
       {haltOpen && (
@@ -348,7 +351,7 @@ function BusyPill({ task }: { task: Task }) {
       className="inline-flex items-center gap-1.5 rounded-md bg-overlay px-2 py-1 text-[12px] text-muted"
       title={task.status === "idle" ? "会话在线，这一刻没在说话；你或执行者一说话就接回" : undefined}
     >
-      <StatusIcon status={task.status} size={11} awaitingAnswer={!!task.question} />
+      <StatusIcon status={task.status} stage={task.stage} awaitingAnswer={!!task.question} />
       {label}
     </span>
   );

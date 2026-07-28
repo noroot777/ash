@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { Task, Session, GateAction, AgentType, DebateSpeaker, TaskStatus } from "@harness/shared";
-import { TEAM_DEFAULTS } from "@harness/shared";
+import type { Task, Session, GateAction, AgentType, DebateSpeaker } from "@harness/shared";
+import { taskDisplayStatus, TEAM_DEFAULTS } from "@harness/shared";
 import { Stop } from "@phosphor-icons/react";
 import { rebuildDebateState, type DebateState, type DebateTurn, type DebateGate } from "./debateState";
 import { ResumeButtons, ToolCall, CollapsibleText } from "./ui";
@@ -8,7 +8,6 @@ import { Markdown } from "./Markdown";
 import { api } from "./api";
 import { ScheduleControl } from "./ScheduleControl";
 import { StatusIcon } from "./StatusIcon";
-import { STATUS_META } from "./constants";
 import { runAction, canStopTask } from "./taskActions";
 import { canArchive, normalizeDebateConfig } from "@harness/shared";
 import { TaskTimeChip, formatDuration, formatInstant } from "./time";
@@ -39,13 +38,12 @@ function TypingDots() {
 
 // Always-visible run-state pill so the debate's status (esp. failed/running) is
 // unambiguous and survives reload — task.status is persisted.
-function StatusPill({ status }: { status: TaskStatus }) {
-  const label = STATUS_META[status].label;
-  const running = status === "running" || status === "queued";
+function StatusPill({ task }: { task: Task }) {
+  const display = taskDisplayStatus(task.status, task.stage, !!task.question);
   return (
-    <span className={`inline-flex shrink-0 items-center gap-1.5 rounded-full bg-raised px-2 py-0.5 text-[11px] text-muted ${running ? "animate-pulse" : ""}`}>
-      <StatusIcon status={status} size={12} />
-      {label}
+    <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-raised px-2 py-0.5 text-[11px] text-muted">
+      <StatusIcon status={task.status} stage={task.stage} awaitingAnswer={!!task.question} />
+      {display.label}
     </span>
   );
 }
@@ -254,7 +252,7 @@ export function DebateView({
         <div className="flex items-center gap-3">
           <span className="shrink-0 rounded bg-violet-500/20 px-1.5 py-0.5 text-[10px] font-medium text-violet-700">debate</span>
           <h1 className="min-w-0 flex-1 truncate text-lg font-medium tracking-tight">{task.title}</h1>
-          <StatusPill status={task.status} />
+          <StatusPill task={task} />
           <TaskTimeChip task={task} />
           {task.archived ? (
             <>

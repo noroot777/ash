@@ -2,8 +2,7 @@
 
 /* ── Linear-faithful light theme ─────────────────────────────────────────────
    Inter, near-white surfaces, very subtle borders, Linear indigo accent
-   (#5e6ad2), compact density. Status semantics rendered as Linear-style circle
-   glyphs (see StatusIcon). */
+   (#5e6ad2), compact density. Status semantics use quiet 7px dots (StatusIcon). */
 @theme {
   --font-sans: "Inter Variable", "Inter", -apple-system, BlinkMacSystemFont,
     "Segoe UI", sans-serif;
