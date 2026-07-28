@@ -1,5 +1,12 @@
 import { useState } from "react";
-import { canArchive, taskDisplayStatus, type Group, type Task } from "@harness/shared";
+import {
+  canArchive,
+  taskDisplayStatus,
+  type Group,
+  type Task,
+  type TaskStage,
+  type TaskStatus,
+} from "@harness/shared";
 import { statusCounts, workersOf } from "@harness/shared/team";
 import { CaretRight } from "@phosphor-icons/react";
 import { STATUSES, STATUS_META, PRIORITY_ORDER } from "./constants";
@@ -12,9 +19,49 @@ import { OriginTaskChip } from "./taskOrigin";
 import { TaskWorktreeChip } from "./TaskWorktreeChip";
 import { useUnreadTeamTasks } from "./useUnreadTasks";
 
+// 一个 section 内部的分组。两个 section 的分法**刻意不同**:普通任务按 status 分,
+// 协作任务按验收与否两分(见 COLLAB_GROUPS)。icon 只声明喂给 StatusIcon 的
+// status × stage,颜色仍单点在 StatusIcon.tsx。
+type TaskGroup = {
+  key: string;
+  label: string;
+  matches: (task: Task) => boolean;
+  icon: { status: TaskStatus; stage?: TaskStage };
+};
+
+// 协作任务(团队/辩论)不按 status 分组:调度台常驻,它的 status 只说明「这一刻忙不忙」,
+// 答不了「这支团队还要不要我管」——干完活的历史团队会全堆在「运行中」里。真正的分水岭
+// 是验收:stage=accepted 意味着已合并、worktree 已清理,这支团队彻底翻篇。
+const COLLAB_GROUPS: TaskGroup[] = [
+  {
+    key: "active",
+    label: "进行中",
+    matches: (t) => t.stage !== "accepted",
+    icon: { status: "running" },
+  },
+  {
+    key: "accepted",
+    label: "已验收",
+    matches: (t) => t.stage === "accepted",
+    icon: { status: "done", stage: "accepted" },
+  },
+];
+
+const STATUS_GROUPS: TaskGroup[] = STATUSES.map((s) => ({
+  key: s.key,
+  label: s.label,
+  matches: (task: Task) => groupedStatus(task) === s.key,
+  icon: { status: s.key },
+}));
+
 const TASK_SECTIONS = [
-  { key: "collab", label: "协作任务", matches: (task: Task) => task.mode === "debate" || task.mode === "team" },
-  { key: "single", label: "普通任务", matches: (task: Task) => task.mode === "single" },
+  {
+    key: "collab",
+    label: "协作任务",
+    matches: (task: Task) => task.mode === "debate" || task.mode === "team",
+    groups: COLLAB_GROUPS,
+  },
+  { key: "single", label: "普通任务", matches: (task: Task) => task.mode === "single", groups: STATUS_GROUPS },
 ] as const;
 
 type TaskSection = (typeof TASK_SECTIONS)[number];
@@ -26,13 +73,14 @@ function topLevel(tasks: Task[]): Task[] {
 }
 
 function groupedStatus(task: Task) {
-  // 团队调度台在线即属于「运行中」；idle 只保留为任务本身的精确状态语义。
+  // idle 只属于团队调度台,而协作区已经不按 status 分组了,所以这里实际不再折算什么。
+  // 保留是防御:万一将来别的 mode 也用上 idle,普通任务区不会凭空多出一个「待命」组。
   return task.mode === "team" && task.status === "idle" ? "running" : task.status;
 }
 
-function tasksInStatus(tasks: Task[], section: TaskSection, status: Task["status"]): Task[] {
+function tasksInGroup(tasks: Task[], section: TaskSection, group: TaskGroup): Task[] {
   return tasks
-    .filter((task) => section.matches(task) && groupedStatus(task) === status)
+    .filter((task) => section.matches(task) && group.matches(task))
     .sort(
       (a, b) =>
         PRIORITY_ORDER.indexOf(a.priority) - PRIORITY_ORDER.indexOf(b.priority) ||
@@ -40,14 +88,15 @@ function tasksInStatus(tasks: Task[], section: TaskSection, status: Task["status
     );
 }
 
-// Flatten tasks into the same visual order the list renders (协作/普通任务，
-// 再按状态、优先级、时间) — used for j/k keyboard navigation.
+// Flatten tasks into the same visual order the list renders (协作/普通任务，再按各自的
+// 分组、优先级、时间) — used for j/k keyboard navigation. 遍历方式必须跟渲染共用
+// section.groups,否则 j/k 的顺序会跟眼睛看到的对不上。
 export function orderedTasks(tasks: Task[]): Task[] {
   const out: Task[] = [];
   const top = topLevel(tasks);
   for (const section of TASK_SECTIONS) {
-    for (const status of STATUSES) {
-      out.push(...tasksInStatus(top, section, status.key));
+    for (const group of section.groups) {
+      out.push(...tasksInGroup(top, section, group));
     }
   }
   return out;
@@ -93,21 +142,21 @@ export function TaskList({
               <span className="text-[13px] font-bold tracking-[0.04em] text-ink">{section.label}</span>
               <span className="font-mono text-[11px] text-muted">{sectionTasks.length}</span>
             </div>
-            {STATUSES.map((status) => {
-              const inStatus = tasksInStatus(sectionTasks, section, status.key);
-              if (!inStatus.length) return null;
-              const collapsedKey = `${section.key}:${status.key}`;
+            {section.groups.map((group) => {
+              const inGroup = tasksInGroup(sectionTasks, section, group);
+              if (!inGroup.length) return null;
+              const collapsedKey = `${section.key}:${group.key}`;
               const isCollapsed = collapsed.has(collapsedKey);
               return (
-                <div key={status.key}>
+                <div key={group.key}>
                   <button
                     onClick={() => toggle(collapsedKey)}
                     className="sticky top-10 z-10 flex w-full items-center gap-2 bg-canvas/85 px-4 py-2 text-left backdrop-blur transition-colors hover:bg-raised/50"
                     title={isCollapsed ? "展开这一组" : "折叠这一组"}
                   >
-                    <StatusIcon status={status.key} size={13} />
-                    <span className="text-[12px] font-semibold text-ink">{status.label}</span>
-                    <span className="font-mono text-[11px] text-faint">{inStatus.length}</span>
+                    <StatusIcon status={group.icon.status} stage={group.icon.stage} size={13} title={group.label} />
+                    <span className="text-[12px] font-semibold text-ink">{group.label}</span>
+                    <span className="font-mono text-[11px] text-faint">{inGroup.length}</span>
                     <CaretRight
                       size={11}
                       weight="bold"
@@ -115,7 +164,7 @@ export function TaskList({
                     />
                   </button>
                   {!isCollapsed &&
-                    inStatus.map((t) =>
+                    inGroup.map((t) =>
                       t.mode === "team" ? (
                         <TeamRow
                           key={t.id}
@@ -211,9 +260,9 @@ function TaskRow({
 // 团队行。默认折叠成一行:只有出现未读动态时，才用 foldTeamStatus 算出来的「最该
 // 你管的那个」色点提醒；右边只留执行者总数 + 状态微点，避免状态摘要互相争抢。
 //
-// 这个色点可能跟本行所在的状态分组不一致 —— 调度台待命着(归入「运行中」组),但某个
-// 执行者正卡在提问上,于是行首是青色点。这是故意的:分组按调度台在线即运行中的语义
-// 放置(免得活着的团队因为执行者全完掉进「完成」组),而色点要抢你的注意力。
+// 这个色点可能跟本行所在的分组不一致 —— 团队还没验收(归入「进行中」组),但某个执行者
+// 正卡在提问上,于是行首是青色点。这是故意的:分组只回答「这支团队翻篇了没有」,而色点
+// 要抢你的注意力。
 function TeamRow({
   lead,
   workers,
