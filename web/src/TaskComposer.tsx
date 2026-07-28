@@ -444,10 +444,10 @@ export function TaskComposer({
                 placeholder={teamOn
                   ? "给调度者的目标…（它会自己拆活、派执行者、有问题问你）"
                   : "描述要做什么 / 给 agent 的目标…"}
-                className="min-h-[180px] flex-1 resize-none bg-transparent text-[15px] leading-relaxed text-ink outline-none placeholder:text-faint"
+                className="min-h-[180px] flex-1 resize-none rounded-md border border-line bg-canvas px-3 py-2 text-[14px] leading-relaxed text-ink outline-none placeholder:text-faint focus:border-accent"
               />
               {teamOn && (
-                <div className="flex items-center gap-1 pb-1 text-[11px] text-faint">
+                <div className="flex items-center gap-1 pb-1 pt-1.5 text-[11px] text-faint">
                   <UsersThree size={12} weight="fill" className="text-accent/70" />
                   调度者常驻不断线：随时插话改方向
                 </div>
