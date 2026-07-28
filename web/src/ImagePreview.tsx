@@ -17,8 +17,8 @@ function ImageLightbox({
 }) {
   const { closing, requestClose } = useReveal(onClose, "--modal-close-dur");
   useEscape(requestClose);
-  // Lightboxes often sit above another Esc-aware modal (task creation, issue
-  // panels, etc.). Intercept in capture phase so one Esc closes only the image,
+  // Lightboxes often sit above another Esc-aware modal or panel. Intercept in
+  // capture phase so one Esc closes only the image,
   // rather than also reaching the already-mounted parent overlay listener.
   useEffect(() => {
     const interceptEscape = (event: KeyboardEvent) => {

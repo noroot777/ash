@@ -14,22 +14,16 @@ import type {
   Task,
   Session,
   TaskStatus,
-  Issue,
-  IssueComment,
-  IssueStatus,
-  AiBackend,
-  Priority,
   LlmProvider,
   LlmProtocol,
   QuestionItem,
 } from "@harness/shared";
 import { canSingleRun, canArchive, isUserSettableStatus, AGENT_TYPES, maxBytesFor, attachmentKind, MAX_QUESTION_OPTIONS, MAX_QUESTION_OPTION_LEN, MAX_QUESTION_ITEMS } from "@harness/shared";
 import { db } from "./db/index.js";
-import { projects, groups, tasks, sessions, schedules, scheduledMessages, agents, issues, issueComments, llmProviders, queueItems } from "./db/schema.js";
+import { projects, groups, tasks, sessions, schedules, scheduledMessages, agents, llmProviders, queueItems, notes } from "./db/schema.js";
 import { bus } from "./bus.js";
 import { id, now, attachmentsPrompt } from "./util.js";
 import { resumeOrRunTask, continueTask, runTask } from "./orchestrator.js";
-import { parseIssue, classifyMention, buildDiscussPrompt, runAgentOnce, DISCUSS_TIMEOUT_MS } from "./agentOnce.js";
 import { listModels } from "./llm.js";
 import { setTaskStatus } from "./status.js";
 import { stopTask, confirmDone } from "./runs.js";
@@ -43,20 +37,21 @@ import { detectLocalAgents } from "./detect.js";
 import { searchAll } from "./search.js";
 import { projectHealthLight, projectHealthFull, tidyRepoPath, repoKey, listBranches, detectTaskWorktree, removeWorktree, taskCommits } from "./git.js";
 import { resumeCommandFor } from "./executors/spawn.js";
-import { resolveExecutorFor } from "./executors/index.js";
 import { forceKillCuaService, lastCuaResidualStatus, refreshCuaResidualStatus } from "./cua.js";
 import { createTasks, enrichTasks, publishTaskUpdated } from "./task-store.js";
 import { sessionTranscriptPath } from "./transcript.js";
 import { mountDebateIterationRoutes } from "./debate/iteration.js";
+import { mountNoteRoutes } from "./notes.js";
 import type { GateAction, AgentType, BatchCreateTasksBody, BatchTaskInput, ScheduledMessage, ScheduledMessageStatus } from "@harness/shared";
 
 export const api = new Hono();
+mountNoteRoutes(api);
 
 // ── health ───────────────────────────────────────────────────────────────
 api.get("/health", (c) => c.json({ ok: true, ts: now() }));
 
 // ── search ───────────────────────────────────────────────────────────────
-// Global search across tasks + session transcripts + issues (see search.ts).
+// Global search across tasks + session transcripts (see search.ts).
 // Sub-2-char queries return empty instead of erroring — the palette calls this
 // on every keystroke.
 api.get("/search", async (c) => {
@@ -362,6 +357,7 @@ api.delete("/projects/:id", async (c) => {
   }
   await db.delete(tasks).where(eq(tasks.projectId, pid));
   await db.delete(groups).where(eq(groups.projectId, pid));
+  await db.delete(notes).where(eq(notes.projectId, pid));
   await db.delete(projects).where(eq(projects.id, pid));
   return c.json({ deleted: true });
 });
@@ -1404,335 +1400,8 @@ api.delete("/tasks/:id/schedule", async (c) => {
   return c.json({ deleted: true });
 });
 
-// ── issues (planning/discussion layer upstream of tasks) ─────────────────────
-// 历史数据降级:老格式是 {kind:'cli',agentType} / {kind:'api',providerId},没有
-// executorId。读到就当「没记过执行器」→ 解析退回默认执行器,不报错。
-const parseBackend = (raw: string | null): AiBackend | null => {
-  if (!raw) return null;
-  try {
-    const v = JSON.parse(raw) as Partial<AiBackend>;
-    return typeof v?.executorId === "string" ? { executorId: v.executorId } : null;
-  } catch {
-    return null;
-  }
-};
-
-const toIssue = (r: typeof issues.$inferSelect): Issue => ({
-  id: r.id,
-  projectId: r.projectId,
-  title: r.title,
-  body: r.body,
-  sourceText: r.sourceText,
-  status: r.status as IssueStatus,
-  priority: r.priority as Priority,
-  labels: JSON.parse(r.labels),
-  attachments: JSON.parse(r.attachments),
-  aiBackend: parseBackend(r.aiBackend),
-  parsed: r.parsed,
-  createdAt: r.createdAt,
-  updatedAt: r.updatedAt,
-  closedAt: r.closedAt,
-});
-
-const toComment = (r: typeof issueComments.$inferSelect): IssueComment => ({
-  id: r.id,
-  issueId: r.issueId,
-  author: JSON.parse(r.author),
-  body: r.body,
-  attachments: JSON.parse(r.attachments),
-  createdAt: r.createdAt,
-  updatedAt: r.updatedAt,
-  status: (r.status as IssueComment["status"]) ?? null,
-});
-
-// Full context handed to the agent on execution: title + structured body + the
-// WHOLE discussion thread — so it sees how the consensus was reached.
-function issueContext(issue: typeof issues.$inferSelect, comments: (typeof issueComments.$inferSelect)[]): string {
-  const lines = [`事项：「${issue.title}」`, "", issue.body || "(无描述)"];
-  if (comments.length) {
-    lines.push("", "— 讨论 —");
-    for (const cm of comments) {
-      let who = "我";
-      try {
-        const a = JSON.parse(cm.author);
-        if (a?.kind === "agent") who = `@${a.agentType}`;
-      } catch {
-        /* default 我 */
-      }
-      lines.push(`${who}: ${cm.body}`);
-    }
-  }
-  lines.push("", "（这是从上面这条事项转来的任务，请据此完成。）");
-  // Gather every pasted/picked file across the issue + thread so the agent can Read them.
-  const files: string[] = [];
-  const collect = (raw: string) => {
-    try {
-      for (const p of JSON.parse(raw) as string[]) if (p && !files.includes(p)) files.push(p);
-    } catch {
-      /* ignore malformed */
-    }
-  };
-  collect(issue.attachments);
-  for (const cm of comments) collect(cm.attachments);
-  return lines.join("\n") + attachmentsPrompt(files);
-}
-
-api.get("/issues", async (c) => {
-  const pid = c.req.query("projectId");
-  const status = c.req.query("status");
-  let rows = await db.select().from(issues);
-  if (pid) rows = rows.filter((i) => i.projectId === pid);
-  if (status) rows = rows.filter((i) => i.status === status);
-  return c.json(rows.map(toIssue));
-});
-
-api.get("/issues/:id", async (c) => {
-  const r = (await db.select().from(issues).where(eq(issues.id, c.req.param("id")))).at(0);
-  if (!r) return c.json({ error: "not found" }, 404);
-  return c.json(toIssue(r));
-});
-
-// Create an issue from raw text. Parsing is SYNCHRONOUS (the web shows 「识别中…」
-// until this resolves): the AI structures the text AND infers the project. A
-// pinned `projectId` from the composer overrides inference; failure degrades to
-// raw text (parsed:false) so the call always lands a usable issue.
-api.post("/issues", async (c) => {
-  const b = await c.req.json<{ text?: string; backend?: AiBackend | null; projectId?: string | null; attachments?: string[] }>();
-  if (!b.text?.trim()) return c.json({ error: "text required" }, 400);
-  const projs = await db.select().from(projects);
-  const parsed = await parseIssue(b.text.trim(), {
-    backend: b.backend ?? null,
-    projects: projs.map((p) => ({ id: p.id, name: p.name, repoPath: p.repoPath })),
-  });
-  const projectId = b.projectId !== undefined ? b.projectId : parsed.projectId;
-  const ts = now();
-  const row = {
-    id: id(),
-    projectId,
-    title: parsed.title,
-    body: parsed.body,
-    sourceText: b.text.trim(),
-    status: "open",
-    priority: parsed.priority,
-    labels: JSON.stringify(parsed.labels),
-    attachments: JSON.stringify(b.attachments ?? []),
-    aiBackend: b.backend ? JSON.stringify(b.backend) : null,
-    parsed: parsed.parsed,
-    createdAt: ts,
-    updatedAt: ts,
-    closedAt: null as string | null,
-  };
-  await db.insert(issues).values(row);
-  return c.json(toIssue(row as typeof issues.$inferSelect), 201);
-});
-
-api.patch("/issues/:id", async (c) => {
-  const iid = c.req.param("id");
-  const existing = (await db.select().from(issues).where(eq(issues.id, iid))).at(0);
-  if (!existing) return c.json({ error: "not found" }, 404);
-  const b = await c.req.json<Partial<Issue>>();
-  const patch: Record<string, unknown> = { updatedAt: now() };
-  if (b.title !== undefined) patch.title = b.title;
-  if (b.body !== undefined) patch.body = b.body;
-  if (b.priority !== undefined) patch.priority = b.priority;
-  if (b.labels !== undefined) patch.labels = JSON.stringify(b.labels);
-  if (b.attachments !== undefined) patch.attachments = JSON.stringify(b.attachments);
-  if (b.projectId !== undefined) patch.projectId = b.projectId; // 归类(含从未归类指定项目)
-  if (b.status !== undefined) {
-    patch.status = b.status;
-    patch.closedAt = b.status === "done" || b.status === "canceled" ? now() : null;
-  }
-  await db.update(issues).set(patch).where(eq(issues.id, iid));
-  const updated = (await db.select().from(issues).where(eq(issues.id, iid))).at(0)!;
-  return c.json(toIssue(updated));
-});
-
-api.delete("/issues/:id", async (c) => {
-  const iid = c.req.param("id");
-  await db.delete(issueComments).where(eq(issueComments.issueId, iid));
-  await db.delete(issues).where(eq(issues.id, iid));
-  return c.json({ deleted: true });
-});
-
-api.get("/issues/:id/comments", async (c) => {
-  const rows = (await db.select().from(issueComments).where(eq(issueComments.issueId, c.req.param("id")))).sort((a, b) =>
-    a.createdAt.localeCompare(b.createdAt),
-  );
-  return c.json(rows.map(toComment));
-});
-
-// Post a comment. Plain text = discussion. With `mention` (a CLI agentType) it
-// runs an intent classifier: "execute" packs title + body + the whole thread
-// into a task handed to that agent (worktree opt-in); "discuss" spawns a
-// one-shot CLI (cwd=repoPath, soft-limited by prompt: 结论先行 / 压水分 / 别改
-// 代码) and writes the reply back as an agent comment. Execution requires a
-// project. API-model backends can parse but NOT execute — only CLI agent types
-// are accepted here.
-api.post("/issues/:id/comments", async (c) => {
-  const iid = c.req.param("id");
-  const issue = (await db.select().from(issues).where(eq(issues.id, iid))).at(0);
-  if (!issue) return c.json({ error: "not found" }, 404);
-  const b = await c.req.json<{ body?: string; mention?: AgentType; mentionTeam?: boolean; attachments?: string[]; useWorktree?: boolean }>();
-  if (!b.body?.trim() && !b.attachments?.length) return c.json({ error: "empty" }, 400);
-  if (b.mention) {
-    if (!AGENT_TYPES.includes(b.mention)) return c.json({ error: "未知的 agent（只支持本地 CLI 智能体）", agent: b.mention }, 400);
-    if (!issue.projectId) return c.json({ error: "事项还没归到项目，先归类再 @ 智能体" }, 409);
-    // 「带一队」= 派一个团队任务,被 @ 的那个类型当调度者 —— 它得支持常驻会话。
-    // 在这儿挡住比等到 startTeam 里 throw 好:那时候任务已经建出来了,用户只看到一个
-    // 刚生下来就 failed 的团队。
-    if (b.mentionTeam) {
-      const lead = await resolveExecutorFor({ type: b.mention }).catch(() => null);
-      if (!lead?.openResident)
-        return c.json({ error: `@${b.mention} 不支持常驻会话，当不了调度者（换 @claude 带队）`, agent: b.mention }, 400);
-    }
-  }
-  const ts = now();
-  const crow = {
-    id: id(),
-    issueId: iid,
-    author: JSON.stringify({ kind: "human" }), // 评论是人写的;@提及触发意图分类(讨论/执行)
-    body: (b.body ?? "").trim(),
-    attachments: JSON.stringify(b.attachments ?? []),
-    createdAt: ts,
-    updatedAt: null as string | null,
-    status: null as string | null,
-  };
-  await db.insert(issueComments).values(crow);
-
-  let task: Task | undefined;
-  let agentComment: IssueComment | undefined;
-
-  if (b.mention && issue.projectId) {
-    const allComments = (await db.select().from(issueComments).where(eq(issueComments.issueId, iid))).sort((a, d) =>
-      a.createdAt.localeCompare(d.createdAt),
-    );
-    // history 供分类器/讨论 CLI 参考 — 排除刚存的 @ 评论(它作为 mention 单独传)
-    const history = allComments
-      .filter((cm) => cm.id !== crow.id)
-      .map((cm) => {
-        let who = "我";
-        try {
-          const a = JSON.parse(cm.author);
-          if (a?.kind === "agent") who = `@${a.agentType}`;
-        } catch {
-          /* default 我 */
-        }
-        return { who, body: cm.body };
-      });
-    const ctx = { issueTitle: issue.title, issueBody: issue.body, history, mention: crow.body };
-
-    // 意图分类:跟 parseIssue 同一条路(issue 上记录的执行器)。
-    // 拿不准/失败/超时一律 discuss —— 讨论便宜可逆,execute 一旦派出任务收不回。
-    const backend = parseBackend(issue.aiBackend);
-    const intent = await classifyMention(ctx, { backend });
-
-    const proj = (await db.select().from(projects).where(eq(projects.id, issue.projectId))).at(0);
-
-    if (intent === "discuss" && proj) {
-      // 讨论:插一条 pending agent 评论,异步跑 CLI,跑完 update body+status。
-      // 前端已有轮询会自然刷到 done/failed;这条 HTTP 请求不阻塞等 CLI。
-      const arow = {
-        id: id(),
-        issueId: iid,
-        author: JSON.stringify({ kind: "agent", agentType: b.mention }),
-        body: "",
-        attachments: "[]",
-        createdAt: now(),
-        updatedAt: null as string | null,
-        status: "pending" as string | null,
-      };
-      await db.insert(issueComments).values(arow);
-      agentComment = toComment(arow as typeof issueComments.$inferSelect);
-      void (async () => {
-        try {
-          const out = await runAgentOnce(buildDiscussPrompt(ctx), {
-            agentType: b.mention,
-            cwd: proj.repoPath,
-            timeoutMs: DISCUSS_TIMEOUT_MS,
-          });
-          const text = out.text.trim();
-          if (text && out.ok) {
-            await db.update(issueComments).set({ body: text, status: "done" }).where(eq(issueComments.id, arow.id));
-          } else {
-            await db.update(issueComments).set({ body: "(讨论回复为空,请重试或换一种问法)", status: "failed" }).where(eq(issueComments.id, arow.id));
-          }
-        } catch (e) {
-          const msg = e instanceof Error ? e.message : String(e);
-          await db.update(issueComments).set({ body: `讨论出错: ${msg}`, status: "failed" }).where(eq(issueComments.id, arow.id));
-        }
-      })();
-    } else {
-      // execute: 建 task,worktree 按 opt-in,立即开跑。跟原来一致。
-      // `mentionTeam`(界面上的「@claude · 带一队」)建 mode:"team" 的常驻调度台。
-      // worktree 仍默认关闭；显式开启时整队共享，执行者可再逐个 opt-in 隔离。
-      const useWt = !!b.useWorktree && (proj ? projectHealthLight(proj.repoPath).isRepo : false);
-      const tid = id();
-      const trow = {
-        id: tid,
-        projectId: issue.projectId,
-        groupId: null as string | null,
-        parentId: null as string | null,
-        title: issue.title,
-        body: issueContext(issue, allComments),
-        mode: b.mentionTeam ? "team" : "single",
-        status: "backlog",
-        priority: issue.priority,
-        labels: "[]",
-        dependsOn: "[]",
-        resumeDependsOn: "[]",
-        agentType: b.mention as AgentType,
-        autoTitle: false,
-        debate: null as string | null,
-        // 被 @ 的类型当调度者;执行者缺省同类型(调度者派活时可逐个改)
-        team: b.mentionTeam ? JSON.stringify({ lead: b.mention, worker: b.mention }) : null,
-        scheduleId: null as string | null,
-        createdAt: ts,
-        updatedAt: ts,
-        useWorktree: useWt,
-        worktreeBase: null as string | null,
-        issueId: iid,
-      };
-      const [created] = await createTasks([trow]);
-      await db.update(issues).set({ status: "in_progress", updatedAt: ts }).where(eq(issues.id, iid));
-      void resumeOrRunTask(tid, { reason: "run" });
-      task = created!;
-    }
-  }
-  return c.json({ comment: toComment(crow as typeof issueComments.$inferSelect), task, agentComment }, 201);
-});
-
-// Edit a comment's text/attachments. Only the body + attachments change; author
-// and createdAt stay. Editing never re-triggers execution (that's only @-mention
-// on create) — it just corrects the discussion record.
-api.patch("/issues/:id/comments/:cid", async (c) => {
-  const cid = c.req.param("cid");
-  const existing = (await db.select().from(issueComments).where(eq(issueComments.id, cid))).at(0);
-  if (!existing || existing.issueId !== c.req.param("id")) return c.json({ error: "not found" }, 404);
-  const b = await c.req.json<{ body?: string; attachments?: string[] }>();
-  const patch: Record<string, unknown> = { updatedAt: now() };
-  if (b.body !== undefined) patch.body = b.body.trim();
-  if (b.attachments !== undefined) patch.attachments = JSON.stringify(b.attachments);
-  await db.update(issueComments).set(patch).where(eq(issueComments.id, cid));
-  const updated = (await db.select().from(issueComments).where(eq(issueComments.id, cid))).at(0)!;
-  return c.json(toComment(updated));
-});
-
-api.delete("/issues/:id/comments/:cid", async (c) => {
-  const cid = c.req.param("cid");
-  const existing = (await db.select().from(issueComments).where(eq(issueComments.id, cid))).at(0);
-  if (!existing || existing.issueId !== c.req.param("id")) return c.json({ error: "not found" }, 404);
-  await db.delete(issueComments).where(eq(issueComments.id, cid));
-  return c.json({ deleted: true });
-});
-
-// Tasks derived from an issue (the 派生执行 list / backlink target).
-api.get("/issues/:id/tasks", async (c) => {
-  const rows = await db.select().from(tasks).where(eq(tasks.issueId, c.req.param("id")));
-  return c.json(await enrichTasks(rows));
-});
-
-// Commits a derived task produced on its isolated worktree branch — the concrete
-// issue → code linkage. Empty when the task ran in place (no worktree).
+// Commits produced on a task's isolated worktree branch. Empty when the task ran
+// in place (no worktree).
 api.get("/tasks/:id/commits", async (c) => {
   const tid = c.req.param("id");
   const t = (await db.select().from(tasks).where(eq(tasks.id, tid))).at(0);

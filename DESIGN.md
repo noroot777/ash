@@ -2,7 +2,7 @@
 
 > **Harness 是一个编排多个本地 / 远程 CLI 编码智能体(claude / codex / antigravity…)跑任务的控制台**——"调度一群 agent 的那层"。
 > 全部设计围绕一件事:**把一个想法,变成可被多个 agent 可靠执行、可溯源、可迭代的工作。**
-> 状态:M0–M6 已实现(见 git log);标注「规划」的为方向。更新:2026-06。
+> 状态:M0–M6 已实现(见 git log);标注「规划」的为方向。更新:2026-07。
 
 ---
 
@@ -20,15 +20,13 @@
 
 ---
 
-## 1. 概念模型:两次分离 + 两个组织维度(精髓)
+## 1. 概念模型:核心分离 + 两个组织维度(精髓)
 
-七个概念是一套思想的七个落点。
+六个概念是一套思想的六个落点。
 
 ```
 Project(边界 = 一个 git 仓库)
 │
-├─【规划层】 Issue「想做什么」── 用户原文(不可变)+ AI 解析的元信息
-│                │  @agent 派生 ↓（Task.issueId 回链）
 ├─【执行层】 Task「让谁干一件具体的事」
 │                ├─ Agent「谁来干」── 类型(claude/codex)→ 默认执行器；执行目标 = 本地 spawn / ssh shell
 │                └─ Session × N「每次执行的凭证」── resume / 多 agent 接力 / debate 角色
@@ -37,15 +35,14 @@ Project(边界 = 一个 git 仓库)
 └─【时间维度】Schedule：Task 何时自动触发（once / cron）
 ```
 
-**第一次分离(纵向):规划 `Issue` ↔ 执行 `Task`。** Issue 是"想做什么"——人话、可讨论、**正文恒为用户原文,AI 只解析元信息绝不改写**;Task 是"让 agent 去做"。`@agent` **派生** Task、`issueId` **回链**。把"想清楚"和"去做"解耦(Issue 的 project 可空,Task 必填)。
+> 事项中心规划层已移除；用户输入现在直接创建 `Task`，不再维护独立的事项实体或回链。
 
-**第二次分离(横向):做什么 `Task` × 谁做 `Agent` × 过程 `Session`。** Task 不绑死"谁做"。`@` 选的是**类型**(claude/codex),由"默认执行器"解析到具体 executor(本地 / ssh);本地与远程统一为"执行目标 = 一个 shell 环境"。正因三者分离,**同一个 Task 才能换 agent 重跑、多 agent 接力、对抗、并行选优——全是"一个 Task 挂多条 Session"**。Session 以"可直接粘贴的 resume 命令"为凭证(裸 ID 无用,需带 `cd` worktree、远程带 `ssh`)。**这是最核心的一刀。**
+**核心分离:做什么 `Task` × 谁做 `Agent` × 过程 `Session`。** Task 不绑死"谁做"。`@` 选的是**类型**(claude/codex),由"默认执行器"解析到具体 executor(本地 / ssh);本地与远程统一为"执行目标 = 一个 shell 环境"。正因三者分离,**同一个 Task 才能换 agent 重跑、多 agent 接力、对抗、并行选优——全是"一个 Task 挂多条 Session"**。Session 以"可直接粘贴的 resume 命令"为凭证(裸 ID 无用,需带 `cd` worktree、远程带 `ssh`)。**这是最核心的一刀。**
 
 **两个组织维度:`Group`(空间)+ `Schedule`(时间)。** Group 管"这组任务谁先谁后、能否同时";Schedule 管"何时自动启动"(定时**挂在 Task 上**,Group 可能临时;**定时触发 = 全新一轮 session,不续昨天会话**)。
 
 | 关系 | 基数 | 一句话 |
 |---|---|---|
-| Issue ↔ Task | 1 : N(Task 侧可空) | Issue 是 Task 的可选母体 |
 | Group ↔ Task | 1 : N(可 null) | Group 是 Task 的调度上下文,非分类盒 |
 | Task ↔ Session | 1 : N | 多 agent 协作 / resume 的根基 |
 | Agent ↔ Task | N : N | 类型 → 默认执行器,可复用 |
@@ -54,13 +51,13 @@ Project(边界 = 一个 git 仓库)
 
 ## 2. 一个 Task 的一生
 
-1. **诞生** — Issue 区 `@codex` 派生(`body`=issue 上下文,`issueId` 回链);或不经 Issue 直接手建。
+1. **诞生** — 用户直接创建，或由 MCP / 团队调度派生。
 2. **归属** — 落到一个 **Project**(哪个 repo)+ 一个 **Group**(怎么和兄弟一起跑)。
 3. **排队** — Group `mode` + 自身 `dependsOn` 决定何时启动(`backlog → queued`)。
 4. **执行** — **Agent** 在一个隔离 **worktree**(默认开,`git worktree add` 出独立分支)里跑,落一条 **Session**(`queued → running`)。*隔离边界*:worktree 只隔 git 工作树 + 分支,**不隔**依赖 / 端口 / 外部 DB。
 5. **协作** — `@` 第二个 agent、`reply` 纠偏、或 debate 多角色——**每个动作都给这个 Task 再挂一条 Session**。
 6. **落幕** — `done / failed / canceled`(`awaiting_review` = 卡在 HITL 门,"机器停下等人"的特色态),留下分支 commits 与可 resume 的凭证。
-7. **转世**(规划) — 一键**复盘** → 产出新 Issue → 回到第 1 步。回路闭合,系统自我迭代。
+7. **复盘**(规划) — 结果 → 反思 → 新 Task / Group → 回到第 1 步。回路闭合,系统自我迭代。
 
 ---
 
@@ -81,7 +78,7 @@ Project(边界 = 一个 git 仓库)
 **角色**:`Task` = 干活单元;`Group` = 一组子任务的调度容器(管并行 + 依赖)。Group 在此从早期的"临时并行扇出容器"**演进**为"一组相关任务的容器"——并行扇出、或拆解出的子任务,都用它。
 
 **两个触发时机,同一套底层**(关键纪律:**别做成两套**):
-- **前置 · `@planner`**:派之前就知道要拆 → planner 把目标拆成子任务 DAG,落进一个绑定 Issue 的 Group。
+- **前置 · `@planner`**:派之前就知道要拆 → planner 把目标拆成子任务 DAG,落进一个 Group。
 - **运行时 · 自拆**:跑着才发现要拆 → **父 Task 生出一个子 Group 装子任务,自己挂起(`awaiting_children`)**,子组按调度跑完 → 唤醒父 Task 收尾。
 
 **为何用"父 Task 挂子 Group"而非 `parentId` 树**:延续早期决策——不做无限嵌套子任务,复杂结构用「Group + `dependsOn`」表达。父子关系 = "父 Task 拥有一个子 Group",复用现成调度,不引入树形层级与递归。
@@ -97,7 +94,7 @@ Project(边界 = 一个 git 仓库)
 - **race / best-of-N**(规划):N agent **独立隔离**并行 → 比 diff 选 1。**费 token 换命中率、不费脑**(广度)。**必须 per-candidate worktree 隔离**(同目录并行会互覆盖、多样性塌缩);**保持纯粹只选优、不内置 review**;受隔离边界限制,适合"改代码"非"起服务"。
 - **debate**:两 agent 盲态开局 → 多轮对抗 → 收敛并给出结论，可选 G1 共识门。**费 token + 脑力换深度**。机制:**编排器是唯一信使、严格串行回合、盲态开局、举手收敛**。需要落地代码时，辩论结束后交给 `/team` 拆解执行与验收。
 
-**复盘是第三件事(回路,非这两轴)**:用一个 agent 回看会话,把结果**反哺回规划层**(结果 → 反思 → 新 Issue → 新 Task)。要点:输入结构化、输出**可一键执行**(建议→Task / 问题→卡片)、落 Issue 须用户确认。
+**复盘是第三件事(回路,非这两轴)**:用一个 agent 回看会话,把结果转成可继续执行的新 Task / Group。要点:输入结构化、输出**可一键执行**(建议→Task / 问题→卡片)。
 
 > 三者不冲突:`拆解` 动"几个任务"(结构)、`single/race/debate` 动"每个怎么跑"(执行)、`复盘` 动"跑完反哺"(回路)——三个不同层面。`planner`/`自拆` 只是拆解的两个时机,不是独立概念。
 
@@ -116,7 +113,7 @@ Project(边界 = 一个 git 仓库)
 **用户视角增量**(守 §0③ 的界,按 ROI):
 - *一梯队*:① 主动通知 / push(`bus.ts` 事件已齐,缺出口;gate 打开主动提醒)② 完成摘要 TL;DR ③ Token / 成本落库(`claude.ts` 已算未存)+ burn-rate 预警 ④ "需要你关注"信号(卡住 / 打转 / 求助 / 等确认)。
 - *二梯队*:⑤ 实时干预(现 single-flight,跑偏只能等完 / kill)⑥ 预算护栏 + 失败分类重试 ⑦ race / 复盘 / planner 拆解(§3)⑧ diff 视图 + 一键起 dev server ⑨ 跨任务知识注入(文件级,不上 RAG)。
-- *更远 / 团队化*:模型路由([CCR](https://github.com/musistudio/claude-code-router) 式,有 `LlmProvider` 地基未接执行)、会话 checkpoint·回滚·fork、PR 闭环 + 自动 review→self-fix、GitHub Issue 双向同步、Autopilot、更多 agent CLI。
+- *更远 / 团队化*:模型路由([CCR](https://github.com/musistudio/claude-code-router) 式,有 `LlmProvider` 地基未接执行)、会话 checkpoint·回滚·fork、PR 闭环 + 自动 review→self-fix、Autopilot、更多 agent CLI。
 
 对标:[Archon](https://github.com/coleam00/Archon)(流程确定性)、[Multica](https://github.com/multica-ai/multica)(agent 当队友)、[vibe-kanban](https://github.com/BloopAI/vibe-kanban)(同层竞品)。
 
@@ -129,6 +126,6 @@ M0 骨架 → M1 单 agent 垂直切片 → M2 任务管理(Linear 式:状态/�
 ## 附 B. 待后续决定
 
 - 拆解落地:`childGroupId` + `awaiting_children` 状态机;运行时自拆的触发约定(agent ↔ harness MCP)。
-- race 产出闭环;复盘对象范围(task 会话 / issue 讨论)。
+- race 产出闭环;复盘对象范围(task 会话 / 团队执行记录)。
 - 跨任务知识注入的存储与检索形态(文件级)。
 - worktree 自动合并策略(ff / squash / 冲突);远程 target 密钥管理;附件清理。

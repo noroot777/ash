@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
-import type { Task, ProjectView, Group, AgentEvent, AgentType, ProjectHealth, Issue, SearchHit } from "@harness/shared";
+import type { Task, ProjectView, Group, AgentEvent, AgentType, ProjectHealth, SearchHit } from "@harness/shared";
 import { api } from "./api";
 import { useServerEvents } from "./useEvents";
 import { orderedTasks } from "./TaskList";
@@ -18,9 +18,9 @@ import { shortPath } from "./util";
 import { runAction, canStopTask } from "./taskActions";
 import { canArchive } from "@harness/shared";
 import { TasksWorkspace, type TaskView } from "./TasksWorkspace";
-import { IssuesWorkspace } from "./IssuesWorkspace";
 import { ProjectRail } from "./ProjectRail";
 import { isDispatchedWorker } from "./taskPolicy";
+import { NewNoteModal, NotesModal, type NoteTaskDraft } from "./NotesModal";
 
 function upsertTask(tasks: Task[], task: Task): Task[] {
   return tasks.some((t) => t.id === task.id)
@@ -60,6 +60,9 @@ export function App() {
   const [curHealth, setCurHealth] = useState<ProjectHealth | null>(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
+  const [notesMode, setNotesMode] = useState<"new" | "list" | null>(null);
+  const [noteTarget, setNoteTarget] = useState<string | null>(null);
+  const [noteDraft, setNoteDraft] = useState<NoteTaskDraft | null>(null);
   const [agentsOpen, setAgentsOpen] = useState(false);
   const [newProjectOpen, setNewProjectOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -91,20 +94,10 @@ export function App() {
     localStorage.setItem("harness.railCollapsed", railCollapsed ? "1" : "0");
   }, [railCollapsed]);
 
-  // Top-level plane: 规划(事项) vs 执行(任务). Issues are project-scoped, but the
-  // 未归类 (staging) ones surface across projects. Kept in the URL like project/task.
-  const [section, setSection] = useState<"issue" | "task">((urlParams.get("section") as "issue" | "task") || "task");
-  const [issues, setIssues] = useState<Issue[]>([]);
-  const [selectedIssue, setSelectedIssue] = useState<string | null>(urlParams.get("issue"));
-  // Bumps on every task.status so an open issue's derived-task list stays live
-  // without giving issues their own SSE channel.
-  const [taskBump, setTaskBump] = useState(0);
-
   const connected = useServerEvents(
     useCallback((ev) => {
       if (ev.type === "task.created" || ev.type === "task.updated") {
         setTasks((ts) => upsertProjectTask(ts, ev.task, projectIdRef.current));
-        setTaskBump((n) => n + 1);
       } else if (ev.type === "task.status") {
         setTasks((ts) =>
           ts.map((t) =>
@@ -124,7 +117,6 @@ export function App() {
         // endedAt，刷一下 sessions 气泡的用时才停止跳动。
         if (ev.status === "done" || ev.status === "failed" || ev.status === "canceled" || ev.status === "idle")
           setSessionsBump((n) => n + 1);
-        setTaskBump((n) => n + 1); // keep an open issue's derived-task list live
       } else if (ev.type === "task.title") {
         setTasks((ts) => ts.map((t) => (t.id === ev.taskId ? { ...t, title: ev.title } : t)));
       } else if (ev.type === "task.question") {
@@ -163,33 +155,15 @@ export function App() {
     });
   }, []);
 
-  // Issues load once (not per-project): they're project-scoped in the list, but
-  // 未归类 staging issues surface across projects, so the client filters locally.
-  useEffect(() => {
-    api.issues().then(setIssues).catch(() => {});
-  }, []);
-
-  // A selected issue must belong to the current project view (its own project, or
-  // 未归类 which surfaces everywhere). Switching projects without clearing ?issue=,
-  // or landing on a stale/mismatched URL, would otherwise keep another project's
-  // issue selected — clear it once issues have loaded so both state and URL self-heal.
-  useEffect(() => {
-    if (!selectedIssue || !issues.length) return;
-    const iss = issues.find((i) => i.id === selectedIssue);
-    if (iss && iss.projectId != null && iss.projectId !== projectId) setSelectedIssue(null);
-  }, [projectId, selectedIssue, issues]);
-
   // Keep the URL in sync with the current project/task (replaceState — no history
   // spam) so refresh/share lands on the same place.
   useEffect(() => {
     const p = new URLSearchParams();
     if (projectId) p.set("project", projectId);
-    if (section !== "task") p.set("section", section);
-    if (section === "task" && selected) p.set("task", selected);
-    if (section === "issue" && selectedIssue) p.set("issue", selectedIssue);
+    if (selected) p.set("task", selected);
     const qs = p.toString();
     window.history.replaceState(null, "", qs ? `?${qs}` : window.location.pathname);
-  }, [projectId, selected, section, selectedIssue]);
+  }, [projectId, selected]);
 
   useEffect(() => {
     if (!projectId) return;
@@ -213,11 +187,6 @@ export function App() {
   }, [projectId, sessionsBump]);
 
   const active = useMemo(() => tasks.filter((t) => !t.archived), [tasks]);
-  // Issue count for the rail: current project's issues + cross-project 未归类.
-  const issueCount = useMemo(
-    () => issues.filter((i) => i.projectId === projectId || i.projectId == null).length,
-    [issues, projectId],
-  );
   const archivedTasks = useMemo(
     () => tasks.filter((t) => t.archived).sort((x, y) => (y.archivedAt ?? "").localeCompare(x.archivedAt ?? "")),
     [tasks],
@@ -312,13 +281,10 @@ export function App() {
 
   const gate = useCallback((id: string, action: Parameters<typeof api.gate>[1]) => api.gate(id, action), []);
 
-  // Open a task from an issue's 派生执行 link or a ⌘K search hit: switch to the
-  // 执行 plane and select it, fetching it (and switching to its project) if the
-  // loaded list lacks it — e.g. a task just spawned by @-executing the issue, or
-  // a search hit from another project. Archived hits also flip the view so the
-  // task is actually visible in the list.
+  // Open a task from a ⌘K search hit or task-to-task link, fetching it (and
+  // switching to its project) if the loaded list lacks it. Archived hits also
+  // flip the view so the task is actually visible in the list.
   const openTask = useCallback(async (taskId: string) => {
-    setSection("task");
     setSelected(taskId);
     const local = tasksRef.current.find((t) => t.id === taskId);
     let target = local;
@@ -338,28 +304,15 @@ export function App() {
     }
   }, []);
 
-  // The reverse jump: a task's 「← 来自事项」 backlink (or a search hit) opens its
-  // source issue. Cross-project hits must also switch the project, otherwise the
-  // self-heal effect above would immediately clear the selection.
-  const openIssue = useCallback(
-    (issueId: string) => {
-      setSection("issue");
-      setSelectedIssue(issueId);
-      const iss = issues.find((i) => i.id === issueId);
-      if (iss?.projectId) setProjectId(iss.projectId);
-    },
-    [issues],
-  );
-
-  // ⌘K search hit → the right plane. Tasks may live in another project or the
-  // archive; openTask handles both.
-  const openHit = useCallback(
-    (h: SearchHit) => {
-      if (h.kind === "task") openTask(h.id);
-      else openIssue(h.id);
-    },
-    [openTask, openIssue],
-  );
+  // Search hits may live in another project. Notes open their own notepad detail;
+  // task hits retain the archived/list handling in openTask.
+  const openHit = useCallback((h: SearchHit) => {
+    if (h.kind === "note") {
+      setProjectId(h.projectId);
+      setNoteTarget(h.id);
+      setNotesMode("list");
+    } else void openTask(h.id);
+  }, [openTask]);
 
   const del = useCallback((id: string, title: string) => {
     if (rejectDispatchedWorkerMutation(tasksRef.current.find((t) => t.id === id))) return;
@@ -387,6 +340,19 @@ export function App() {
       api.runTask(t.id);
     }
   }, []);
+  const openCreate = useCallback(() => {
+    setNoteDraft(null);
+    setCreateOpen(true);
+  }, []);
+  const onCreateTaskCreated = useCallback((task: Task) => {
+    onTaskCreated(task);
+    if (!noteDraft?.noteIds.length) return;
+    const ids = noteDraft.noteIds;
+    setNoteDraft(null);
+    void Promise.all(ids.map((noteId) => api.patchNote(noteId, { taskId: task.id })))
+      .then(() => toast(`已关联 ${ids.length} 条随手记`))
+      .catch(showErr);
+  }, [noteDraft, onTaskCreated]);
 
   const doCreateProject = useCallback(async (name: string, repoPath: string) => {
     const p = await api.createProject(name, repoPath);
@@ -456,7 +422,7 @@ export function App() {
     try { const g = await api.pauseGroup(id); setGroups((gs) => gs.map((x) => (x.id === id ? g : x))); }
     catch (e) { console.warn("pauseGroup rejected:", e); }
   }, []);
-  const anyModal = createOpen || agentsOpen || newProjectOpen || settingsOpen || newGroupOpen || groupsOpen || !!debateOpen || !!confirmDel || !!worktreePrompt;
+  const anyModal = createOpen || !!notesMode || agentsOpen || newProjectOpen || settingsOpen || newGroupOpen || groupsOpen || !!debateOpen || !!confirmDel || !!worktreePrompt;
 
   // ── keyboard navigation ────────────────────────────────────────────────
   useEffect(() => {
@@ -471,7 +437,6 @@ export function App() {
       if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT")) return;
       if (paletteOpen || anyModal) return;
       if (e.metaKey || e.ctrlKey || e.altKey) return; // don't hijack ⌘C/⌘V/etc.
-      if (section !== "task") return; // j/k/c/r task nav only in the 执行 plane
       const idx = ordered.findIndex((t) => t.id === selected);
       if (e.key === "j" || e.key === "ArrowDown") {
         e.preventDefault();
@@ -481,7 +446,7 @@ export function App() {
         if (ordered.length) setSelected(ordered[Math.max(idx - 1, 0)]?.id ?? selected);
       } else if (e.key === "c") {
         e.preventDefault();
-        setCreateOpen(true);
+        openCreate();
       } else if (e.key === "r" && current) {
         e.preventDefault();
         primary(current);
@@ -489,7 +454,7 @@ export function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [ordered, selected, current, paletteOpen, anyModal, primary, section]);
+  }, [ordered, selected, current, paletteOpen, anyModal, primary, openCreate]);
 
   useEffect(() => {
     if (selected) document.querySelector(`[data-task-id="${selected}"]`)?.scrollIntoView({ block: "nearest" });
@@ -516,14 +481,16 @@ export function App() {
       }
     }
     // Global: create / manage.
+    cmds.push({ id: "new", group: "新建", label: "新建任务", hint: "C", run: openCreate });
+    if (project) cmds.push({ id: "new-note", group: "新建", label: "新建随手记", keys: "NI", run: () => setNotesMode("new") });
     cmds.push(
-      { id: "new", group: "新建", label: "新建任务", hint: "C", run: () => setCreateOpen(true) },
       { id: "pair-debate", group: "新建", label: "新建辩论 · 给你答案 (/pair)", run: () => setDebateOpen(true) },
       { id: "newgroup", group: "新建", label: "新建分组", run: () => setNewGroupOpen(true) },
       { id: "newproject", group: "新建", label: "新建项目", run: () => setNewProjectOpen(true) },
       { id: "groups", group: "管理", label: "分组管理", run: () => setGroupsOpen(true) },
       { id: "agents", group: "管理", label: "管理智能体执行器", run: () => setAgentsOpen(true) },
     );
+    if (project) cmds.push({ id: "notes", group: "管理", label: "随手记列表", keys: "NL", run: () => { setNoteTarget(null); setNotesMode("list"); } });
     if (project) cmds.push({ id: "projsettings", group: "管理", label: `项目设置：${project.name}`, run: () => setSettingsOpen(true) });
     for (const p of projects)
       if (p.id !== projectId)
@@ -536,7 +503,7 @@ export function App() {
         run: () => api.runGroup(g.id),
       });
     return cmds;
-  }, [current, projects, projectId, groups, project, primary, stop, del, patch, archive, unarchive]);
+  }, [current, projects, projectId, groups, project, primary, stop, del, patch, archive, unarchive, openCreate]);
 
   return (
     <div className="flex h-full">
@@ -544,12 +511,9 @@ export function App() {
         projects={projects}
         projectId={projectId}
         railCollapsed={railCollapsed}
-        section={section}
-        issueCount={issueCount}
         taskCount={active.length}
         connected={connected}
         onProject={setProjectId}
-        onSection={setSection}
         onSettings={() => setSettingsOpen(true)}
         onNewProject={() => setNewProjectOpen(true)}
         onAgents={() => setAgentsOpen(true)}
@@ -558,53 +522,38 @@ export function App() {
       />
 
       <main className="flex min-h-0 min-w-0 flex-1 flex-col">
-        {section === "issue" ? (
-          <IssuesWorkspace
-            projects={projects}
-            projectId={projectId}
-            issues={issues}
-            setIssues={setIssues}
-            selectedIssue={selectedIssue}
-            onSelectIssue={setSelectedIssue}
-            onOpenTask={openTask}
-            taskBump={taskBump}
-            onOpenAgents={() => setAgentsOpen(true)}
-          />
-        ) : (
-          <TasksWorkspace
-            view={view}
-            setView={setView}
-            visible={visible}
-            allTasks={tasks}
-            current={current}
-            groups={groups}
-            selected={selected}
-            onSelect={setSelected}
-            logs={logs}
-            debates={debates}
-            sessionsBump={sessionsBump}
-            curHealth={curHealth}
-            sidebarW={sidebarW}
-            setSidebarW={setSidebarW}
-            archivedCount={archivedTasks.length}
-            onNewTask={() => setCreateOpen(true)}
-            onGroups={() => setGroupsOpen(true)}
-            onRun={run}
-            onStop={stop}
-            onRetry={retry}
-            onReply={reply}
-            onPatch={patch}
-            onCreateGroup={() => setNewGroupOpen(true)}
-            onDelete={del}
-            onArchive={archive}
-            onUnarchive={unarchive}
-            onRequeue={requeue}
-            onGate={gate}
-            onOpenIssue={openIssue}
-            onOpenTask={openTask}
-            onTaskCreated={onTaskCreated}
-          />
-        )}
+        <TasksWorkspace
+          view={view}
+          setView={setView}
+          visible={visible}
+          allTasks={tasks}
+          current={current}
+          groups={groups}
+          selected={selected}
+          onSelect={setSelected}
+          logs={logs}
+          debates={debates}
+          sessionsBump={sessionsBump}
+          curHealth={curHealth}
+          sidebarW={sidebarW}
+          setSidebarW={setSidebarW}
+          archivedCount={archivedTasks.length}
+          onNewTask={openCreate}
+          onGroups={() => setGroupsOpen(true)}
+          onRun={run}
+          onStop={stop}
+          onRetry={retry}
+          onReply={reply}
+          onPatch={patch}
+          onCreateGroup={() => setNewGroupOpen(true)}
+          onDelete={del}
+          onArchive={archive}
+          onUnarchive={unarchive}
+          onRequeue={requeue}
+          onGate={gate}
+          onOpenTask={openTask}
+          onTaskCreated={onTaskCreated}
+        />
       </main>
 
       <CommandPalette open={paletteOpen} commands={commands} onOpenHit={openHit} onClose={() => setPaletteOpen(false)} />
@@ -645,12 +594,30 @@ export function App() {
         />
       )}
       {debateOpen && project && <DebateModal project={project} onClose={() => setDebateOpen(false)} onCreated={onTaskCreated} />}
+      {notesMode === "new" && project && <NewNoteModal project={project} onClose={() => setNotesMode(null)} />}
+      {notesMode === "list" && project && (
+        <NotesModal
+          project={project}
+          initialNoteId={noteTarget}
+          onClose={() => { setNotesMode(null); setNoteTarget(null); }}
+          onOpenTask={(taskId) => { setNotesMode(null); void openTask(taskId); }}
+          onCreateTask={(draft) => {
+            setNotesMode(null);
+            setNoteTarget(null);
+            setView("list");
+            setNoteDraft(draft);
+            setCreateOpen(true);
+          }}
+        />
+      )}
       {createOpen && project && (
         <CreateTask
           project={project}
           groups={groups}
-          onClose={() => setCreateOpen(false)}
-          onCreated={(t) => onTaskCreated(t)}
+          initialBody={noteDraft?.body}
+          initialAttachments={noteDraft?.attachments}
+          onClose={() => { setCreateOpen(false); setNoteDraft(null); }}
+          onCreated={onCreateTaskCreated}
           onCreateGroup={() => setNewGroupOpen(true)}
           onOpenAgents={() => setAgentsOpen(true)}
           onDebate={() => {

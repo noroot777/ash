@@ -58,6 +58,19 @@ export interface ProjectView extends Project {
   health: ProjectHealth;
 }
 
+// Quick notes are project-scoped scraps that keep the user's original text.
+// `taskId` is a backlink set after one or more notes are merged into a task;
+// the note itself remains available for reference.
+export interface Note {
+  id: string;
+  projectId: string;
+  body: string;
+  attachments: string[];
+  taskId: string | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
 export type GroupMode = "parallel" | "serial";
 
 // Group = transient homogeneous batch container (§3). Not persistent-by-design,
@@ -179,9 +192,6 @@ export interface Task {
   // harness never removes worktrees on its own — the UI offers a one-click cleanup.
   useWorktree?: boolean;
   worktreeBase?: string | null;
-  // Backlink to the issue this task was derived from (§Issues). Null for tasks
-  // created directly. An issue can spawn many tasks over time.
-  issueId?: string | null;
   // Backlink to the task this task was derived from. Debate → team handoffs and
   // team → debate iteration loops use this to form a traceable task chain.
   originTaskId?: string | null;
@@ -235,20 +245,6 @@ export interface TeamConfig {
 
 export const TEAM_DEFAULTS: TeamConfig = { lead: "claude", worker: "claude" };
 
-// ── Issues (§Issues) ─────────────────────────────────────────────────────────
-// An Issue is the lightweight planning/discussion layer that sits UPSTREAM of
-// tasks (like GitHub Issues → Actions runs): you capture it in one line, the AI
-// structures it and infers its project, you discuss it, then you @-mention a CLI
-// agent to EXECUTE it — which derives a task carrying the full context.
-export type IssueStatus = "open" | "in_progress" | "done" | "canceled";
-export const ISSUE_STATUSES: IssueStatus[] = ["open", "in_progress", "done", "canceled"];
-
-// Which AI handled the parse/recognition for an issue — always a concrete local
-// CLI executor (AgentExecutorProfile.id). There is no direct-HTTP path: a provider
-// is just an attribute of an executor, not a separate backend.
-// 历史数据里的旧格式({kind:'cli'|'api',…})没有 executorId,读到就降级为默认执行器。
-export type AiBackend = { executorId: string };
-
 // ── 供应商 (relay, system-level) ─────────────────────────────────────────────
 // 一个可挂到执行器上的模型来源:官方 API 端点,或第三方代理/聚合服务。挂上后启动 CLI 时注入
 // base_url + key,顶掉 CLI 自己的登录账号 —— 于是 claude@官方 和 claude@公司
@@ -264,65 +260,40 @@ export interface LlmProvider {
   createdAt: string;
 }
 
-export interface Issue {
-  id: string;
-  projectId: string | null; // null = 未归类: AI couldn't infer a project; surfaced for manual assignment
-  title: string;
-  body: string; // AI-structured description (Markdown)
-  sourceText: string; // the raw user input, kept for re-parsing / reference
-  status: IssueStatus;
-  priority: Priority;
-  labels: string[];
-  // Absolute paths of pasted/picked files (images + any file), handed to the agent
-  // to Read on @-execution (same model as task attachments — see attachmentsPrompt).
-  attachments: string[];
-  aiBackend?: AiBackend | null; // who parsed it; also the default for the hero composer next time
-  parsed: boolean; // false = AI parse failed and we fell back to raw text
-  createdAt: string;
-  updatedAt: string;
-  closedAt?: string | null;
-}
-
-// A comment on an issue. Plain human comments are discussion; an agent author
-// marks a turn produced by @-mentioning that agent (which also triggers execution
-// server-side — see POST /issues/:id/comments).
-export type CommentAuthor =
-  | { kind: "human" }
-  | { kind: "agent"; agentType: AgentType };
-
-export interface IssueComment {
-  id: string;
-  issueId: string;
-  author: CommentAuthor;
-  body: string;
-  attachments: string[]; // absolute paths (see Issue.attachments)
-  createdAt: string;
-  updatedAt?: string | null; // set when a comment is edited
-  // Only set on agent comments produced by a discuss-intent @-mention:
-  // pending 时 body 还是空的、气泡显示「…正在思考」；done/failed 是终态。
-  status?: "pending" | "done" | "failed" | null;
-}
-
 // ── Global search (⌘K) ───────────────────────────────────────────────────────
-// One hit per task/issue — the best-matching field wins, ranked
-// title > body > comment > conversation. `conversation` means the match was
+// One hit per task or note. Task fields rank title > body > conversation, and
+// task hits are returned before note hits. `conversation` means the match was
 // found inside the task's session transcripts (data/runs/<taskId>/*.md|jsonl),
 // which is where run artifacts like output directory names live.
-export type SearchField = "title" | "body" | "comment" | "conversation";
-export interface SearchHit {
-  kind: "task" | "issue";
+export type SearchField = "title" | "body" | "conversation";
+export interface TaskSearchHit {
+  kind: "task";
   id: string;
   title: string;
-  status: TaskStatus | IssueStatus;
-  projectId: string | null;
+  status: TaskStatus;
+  projectId: string;
   projectName: string | null;
-  archived: boolean; // tasks only; issues are always false
+  archived: boolean;
   field: SearchField;
   // Context around the first match, whitespace-collapsed to one line.
   // Empty for title hits (the title is already shown).
   snippet: string;
   updatedAt: string;
 }
+
+export interface NoteSearchHit {
+  kind: "note";
+  id: string;
+  title: string;
+  projectId: string;
+  projectName: string | null;
+  field: "body";
+  snippet: string;
+  updatedAt: string;
+  taskId: string | null;
+}
+
+export type SearchHit = TaskSearchHit | NoteSearchHit;
 
 // ── Attachments (pasted into the composer / reply box) ───────────────────────
 // Pasted images OR files. We don't feed them to a vision API — each is persisted
