@@ -480,21 +480,22 @@ function Bubble({
               </>
             )}
             {(() => {
-              // 头部行的时刻:优先本轮真实时刻;老转写没记录时退回会话开始时刻并
-              // 标注「会话」——用户要的是在这里看到时间,底部 footer 的用时不够。
-              const exact = turn.at ?? turn.startedAt;
-              const shown = exact ?? session?.startedAt;
-              if (!shown) return null;
-              return (
+              // 与普通任务 AgentBubble 头部同款:时刻 · ⏱ 用时。本轮没记录时刻的
+              // 老转写退回该辩手会话开始时刻,样式不另造。
+              const shown = turn.at ?? turn.startedAt ?? session?.startedAt;
+              return shown ? (
                 <>
                   <span className="text-faint">·</span>
-                  <span className="text-faint" title={exact ? undefined : "该轮当时未记录发言时刻,显示的是这位辩手会话的开始时间"}>
-                    {exact ? formatInstant(shown) : `会话 ${formatInstant(shown)} 起`}
-                  </span>
+                  <span className="text-faint">{formatInstant(shown)}</span>
                 </>
-              );
+              ) : null;
             })()}
-            {typeof turn.durationMs === "number" && <><span className="text-faint">·</span><span className="text-faint">用时 {formatDuration(turn.durationMs)}</span></>}
+            {typeof turn.durationMs === "number" && (
+              <>
+                <span className="text-faint">·</span>
+                <span className="inline-flex items-center gap-0.5 text-faint">⏱ {formatDuration(turn.durationMs)} 用时</span>
+              </>
+            )}
             {turn.raised && <span className="text-amber-700">✋ 可收敛</span>}
             {!turn.done && <TypingDots />}
           </div>
@@ -506,9 +507,8 @@ function Bubble({
           )}
           <Markdown text={turn.text} />
           {turn.error && <div className="mt-1 break-words text-xs text-red-600">✕ {turn.error}</div>}
-          {/* 老转写没有 per-turn 时间戳:退回会话级时间(「⏱ … 起」明确是会话时间,
-              不冒充发言时刻),别让整页一个时间都没有。新数据有 turn 时刻就不重复。 */}
-          {session && (session.resumeCommand || session.cliSessionId) && <ResumeButtons s={session} showTime={!turn.at && !turn.startedAt} />}
+          {/* 与普通任务一致:时间在头部行,footer 只留 resume 凭据按钮。 */}
+          {session && (session.resumeCommand || session.cliSessionId) && <ResumeButtons s={session} showTime={false} />}
         </div>
       </div>
     </div>
