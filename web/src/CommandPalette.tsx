@@ -151,8 +151,15 @@ export function CommandPalette({
           placeholder="搜索任务，或输入命令…"
           className="w-full border-b border-line bg-transparent px-4 py-3 text-sm outline-none placeholder:text-faint"
           onKeyDown={(e) => {
-            const sequence = e.key === "Enter" && !e.nativeEvent.isComposing
-              ? commands.find((command) => command.keys?.replace(/\s+/g, "").toLowerCase() === q.toLowerCase())
+            // 序列快捷键(如 NI/NL):敲完最后一个字母立即触发,不等 Enter。
+            // 代价是搜不了以序列开头的英文词——这里的搜索对象几乎全是中文,取快捷键优先。
+            const typed = e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey && !e.nativeEvent.isComposing
+              ? (q + e.key).toLowerCase()
+              : e.key === "Enter" && !e.nativeEvent.isComposing
+                ? q.toLowerCase()
+                : null;
+            const sequence = typed
+              ? commands.find((command) => command.keys?.replace(/\s+/g, "").toLowerCase() === typed)
               : undefined;
             if (sequence) {
               e.preventDefault();
