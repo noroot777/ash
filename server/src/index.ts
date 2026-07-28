@@ -267,6 +267,16 @@ pick(0);
 </script></body></html>`;
 
 app.get("/mobile", (c) => (hasMobile ? c.html(PHONE_FRAME) : c.text(mobileMiss, 503)));
+// 缓存策略:HTML 一律 no-cache(否则浏览器启发式缓存会让用户在 build 后仍拿旧
+// index.html → 旧 hash JS,「明明 build 了却看不到新效果」;2026-07-28 实锤过一次)。
+// Vite 的 /assets/* 文件名带内容 hash,可以放心 immutable 长缓存。
+const cacheHeader = (file: string): string =>
+  extname(file) === ".html"
+    ? "no-cache"
+    : file.includes("/assets/")
+      ? "public, max-age=31536000, immutable"
+      : "no-cache";
+
 app.get("/mobile/app", (c) => c.redirect("/mobile/app/"));
 app.get("/mobile/app/*", async (c) => {
   if (!hasMobile) return c.text(mobileMiss, 503);
@@ -276,7 +286,10 @@ app.get("/mobile/app/*", async (c) => {
   // SPA 兜底:expo-router 的客户端路由路径(非真实文件)回退到 index.html。
   const file = existsSync(candidate) && statSync(candidate).isFile() ? candidate : join(MOBILE_DIST, "index.html");
   const body = await readFile(file);
-  return c.body(body, 200, { "content-type": MIME[extname(file)] ?? "application/octet-stream" });
+  return c.body(body, 200, {
+    "content-type": MIME[extname(file)] ?? "application/octet-stream",
+    "cache-control": cacheHeader(file),
+  });
 });
 
 if (hasBuild) {
@@ -289,7 +302,10 @@ if (hasBuild) {
         ? candidate
         : join(DIST, "index.html");
     const body = await readFile(file);
-    return c.body(body, 200, { "content-type": MIME[extname(file)] ?? "application/octet-stream" });
+    return c.body(body, 200, {
+      "content-type": MIME[extname(file)] ?? "application/octet-stream",
+      "cache-control": cacheHeader(file),
+    });
   });
 } else {
   app.get("/", (c) =>
