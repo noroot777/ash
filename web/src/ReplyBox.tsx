@@ -45,11 +45,14 @@ export function ReplyBox({
   /** 由输入命令展开的任务级内联配置卡。 */
   inlinePanel?: ReactNode;
   /** 命令可以在普通回复被禁用时继续输入；命中后只展开卡片，不发给 agent。
-      onChange 每次输入都回调，让父级在命中时即时弹出配置卡（无需先点按钮）。 */
+      items 是斜杠命令菜单：输入以 `/` 起手（未打空格）时弹候选，↑↓ 选、回车把
+      选中命令交给 onSubmit（直达卡片）。onChange 每次输入都回调，让父级在打出
+      完整命令 + 尾巴文本时即时预览配置卡；菜单弹着时回调空串，两种弹层不同时出现。 */
   command?: {
     matches: (text: string) => boolean;
     onSubmit: (text: string) => void;
     onChange?: (text: string) => void;
+    items?: { command: string; label: string; hint?: string }[];
   };
   placeholder?: string;
   disabledPlaceholder?: string;
@@ -57,6 +60,7 @@ export function ReplyBox({
   const [v, setV] = useState("");
   const [target, setTarget] = useState<AgentType | null>(null);
   const [mIdx, setMIdx] = useState(0);
+  const [cIdx, setCIdx] = useState(0);
   const { attachments, onPaste, remove, clear, error } = usePasteAttachments();
   const [schedOpen, setSchedOpen] = useState(false);
   const [at, setAt] = useState("");
@@ -73,8 +77,18 @@ export function ReplyBox({
   // list. Choosing one assigns the reply to that agent and strips the token.
   const mMatch = mention ? /(?:^|\s)@(\w*)$/.exec(v) : null;
   const cands = mMatch ? AGENT_TYPES.filter((a) => a.startsWith((mMatch[1] ?? "").toLowerCase())) : [];
+  // 斜杠命令菜单：整段输入还只是「/」加一个没结束的词（尾部没空格）时给候选；
+  // 一旦打了空格就交还给命令本体 + 尾巴文本的 live 预览。
+  const commandCandidates = (text: string) => {
+    const token = /^\s*(\/\S*)$/.exec(text)?.[1]?.toLowerCase();
+    return token && command?.items ? command.items.filter((it) => it.command.startsWith(token)) : [];
+  };
+  const cmdCands = commandCandidates(v);
+  const ci = Math.min(cIdx, Math.max(0, cmdCands.length - 1));
+  const commandMenuOpen = cmdCands.length > 0;
   const commandMatch = !!command && command.matches(v);
-  const mentionOpen = !disabled && !commandMatch && !!mMatch && cands.length > 0;
+  const commandActive = commandMatch || commandMenuOpen;
+  const mentionOpen = !disabled && !commandActive && !!mMatch && cands.length > 0;
   const inputDisabled = disabled && !command;
 
   const pick = (a: AgentType) => {
@@ -83,7 +97,18 @@ export function ReplyBox({
     setMIdx(0);
   };
 
+  const pickCommand = (item: { command: string }) => {
+    command?.onSubmit(item.command);
+    setV("");
+    setTarget(null);
+    setCIdx(0);
+  };
+
   const send = () => {
+    if (commandMenuOpen) {
+      pickCommand(cmdCands[ci]!);
+      return;
+    }
     if (v.trim() && command?.matches(v)) {
       command.onSubmit(v.trim());
       setV("");
@@ -102,7 +127,7 @@ export function ReplyBox({
   // it and the scheduler delivers it when due + the task is idle.
   const sendScheduled = async () => {
     const when = new Date(at);
-    if (commandMatch) {
+    if (commandActive) {
       setSchedOpen(false);
       send();
       return;
@@ -137,6 +162,23 @@ export function ReplyBox({
 
   return (
     <div className="relative flex flex-col gap-2 border-t border-line px-6 py-3">
+      {commandMenuOpen && (
+        <div className="absolute bottom-full left-6 z-10 mb-1 w-80 overflow-hidden rounded-lg border border-line2 bg-panel p-1 shadow-xl">
+          <div className="px-2 py-1 text-[10px] text-faint">派生命令 · ↑↓ 选，回车确定</div>
+          {cmdCands.map((it, i) => (
+            <button
+              key={it.command}
+              onMouseEnter={() => setCIdx(i)}
+              onClick={() => pickCommand(it)}
+              className={`flex w-full items-baseline gap-2 rounded-md px-2 py-1.5 text-left ${i === ci ? "bg-raised" : ""}`}
+            >
+              <span className="shrink-0 font-mono text-[12px] font-semibold text-accent">{it.command}</span>
+              <span className="shrink-0 text-[13px] text-ink">{it.label}</span>
+              {it.hint && <span className="min-w-0 truncate text-[11px] text-faint">{it.hint}</span>}
+            </button>
+          ))}
+        </div>
+      )}
       {mentionOpen && (
         <div className="absolute bottom-full left-6 z-10 mb-1 w-56 overflow-hidden rounded-lg border border-line2 bg-panel p-1 shadow-xl">
           <div className="px-2 py-1 text-[10px] text-faint">召唤智能体加入 · ↑↓ 选，回车确定</div>
@@ -208,10 +250,16 @@ export function ReplyBox({
           value={v}
           onChange={(e) => {
             setV(e.target.value);
-            command?.onChange?.(e.target.value);
+            // 菜单弹着时不同时弹 live 卡；空串让父级收起预览。
+            command?.onChange?.(commandCandidates(e.target.value).length > 0 ? "" : e.target.value);
           }}
           onPaste={onPaste}
           onKeyDown={(e) => {
+            if (commandMenuOpen) {
+              if (e.key === "ArrowDown") { e.preventDefault(); setCIdx(Math.min(cmdCands.length - 1, ci + 1)); return; }
+              if (e.key === "ArrowUp") { e.preventDefault(); setCIdx(Math.max(0, ci - 1)); return; }
+              if (e.key === "Enter") { e.preventDefault(); pickCommand(cmdCands[ci]!); return; }
+            }
             if (mentionOpen) {
               if (e.key === "ArrowDown") { e.preventDefault(); setMIdx((i) => Math.min(cands.length - 1, i + 1)); return; }
               if (e.key === "ArrowUp") { e.preventDefault(); setMIdx((i) => Math.max(0, i - 1)); return; }
@@ -232,7 +280,7 @@ export function ReplyBox({
         <div className="absolute bottom-2 right-2 flex h-8 items-stretch overflow-hidden rounded-md border border-line bg-canvas/95 shadow-sm">
           <button
             onClick={() => { if (!at) setAt(toLocalInput(new Date(Date.now() + 3600_000))); setSchedOpen((o) => !o); }}
-            disabled={disabled || commandMatch}
+            disabled={disabled || commandActive}
             title="定时发送"
             className="grid w-9 place-items-center border-r border-line text-muted transition-colors hover:bg-raised hover:text-ink disabled:opacity-40"
           >
@@ -240,11 +288,11 @@ export function ReplyBox({
           </button>
           <button
             onClick={send}
-            disabled={(!v.trim() && !attachments.length) || (disabled && !commandMatch)}
-            title={submitShortcutTitle(commandMatch ? "展开配置" : "发送")}
+            disabled={(!v.trim() && !attachments.length) || (disabled && !commandActive)}
+            title={submitShortcutTitle(commandActive ? "展开配置" : "发送")}
             className="inline-flex items-center gap-1.5 bg-accent px-3 text-[12px] font-semibold text-accent-fg transition-colors hover:bg-accent-hover disabled:opacity-40"
           >
-            {commandMatch ? "配置" : "发送"} <Kbd />
+            {commandActive ? "配置" : "发送"} <Kbd />
           </button>
         </div>
       </div>

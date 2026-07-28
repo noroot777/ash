@@ -10,6 +10,12 @@ export type TaskDerivationCommand = {
 
 const DERIVATION_COMMAND = /^\/(team|pair)\b/i;
 
+// 回复框斜杠菜单的候选（`/` 起手即弹，回车选中后直达配置卡）。
+export const TASK_DERIVATION_COMMANDS = [
+  { command: "/team", label: "组队开干", hint: "以当前任务为背景创建团队" },
+  { command: "/pair", label: "发起辩论", hint: "以当前任务为背景发起辩论" },
+];
+
 export function parseTaskDerivationCommand(text: string): TaskDerivationCommand | null {
   const trimmed = text.trim();
   const match = DERIVATION_COMMAND.exec(trimmed);

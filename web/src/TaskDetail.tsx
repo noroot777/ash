@@ -31,6 +31,7 @@ import { DerivedTaskLinks } from "./DerivedTaskLinks";
 import {
   isTaskDerivationCommand,
   parseTaskDerivationCommand,
+  TASK_DERIVATION_COMMANDS,
   type TaskDerivationCommand,
 } from "./taskDerivation";
 import {
@@ -451,6 +452,7 @@ export function TaskDetail({
               toolbar={hasConversation ? runConfigControls : undefined}
               command={{
                 matches: isTaskDerivationCommand,
+                items: TASK_DERIVATION_COMMANDS,
                 // 回车 = 定稿：输入框清空，卡片接管焦点继续补充。
                 onSubmit: (text) => {
                   const parsed = parseTaskDerivationCommand(text);
