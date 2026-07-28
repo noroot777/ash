@@ -137,45 +137,33 @@ function overallStage(tasks: Task[]): TaskStage | null {
   return reported.reduce((earliest, stage) => (stageRank(stage) < stageRank(earliest) ? stage : earliest));
 }
 
-export function TeamStageProgress({ workers }: { workers: Task[] }) {
-  const tracked = workers
-    .map((worker, index) => ({ worker, index }))
-    .filter(({ worker }) => worker.stage || worker.useWorktree);
+export function TeamStageSummary({ workers }: { workers: Task[] }) {
+  const tracked = workers.filter((worker) => worker.stage || worker.useWorktree);
   if (!tracked.length) return null;
 
-  const trackedTasks = tracked.map(({ worker }) => worker);
-  const overall = overallStage(trackedTasks);
-  const unreported = trackedTasks.filter((worker) => !worker.stage).length;
-  const failed = trackedTasks.filter((worker) => worker.stage === "verify_failed").length;
-  const summary = failed
-    ? `${failed} 个验证失败`
-    : unreported
-      ? `${unreported} 个尚未上报阶段`
-      : `整体按最慢执行者：${STAGE_LABELS[overall!]}`;
+  const overall = overallStage(tracked);
+  const displayStages = tracked.map((worker) =>
+    worker.useWorktree ? worker.stage : sharedWorkerDisplayStage(worker.stage),
+  );
+  const unreported = displayStages.filter((stage) => !stage).length;
+  const failed = displayStages.filter((stage) => stage === "verify_failed").length;
+  const alerts = [
+    failed ? `${failed} 个验证失败` : null,
+    unreported ? `${unreported} 个尚未上报阶段` : null,
+  ].filter(Boolean);
+  const summary = alerts.length > 0
+    ? alerts.join(" · ")
+    : `整体按最慢执行者：${STAGE_LABELS[overall!]}`;
 
   return (
-    <section className="mt-3 rounded-lg border border-line bg-canvas/70 px-3 py-2.5" aria-label="团队交付进度">
-      <div className="mb-2 flex items-center gap-2 text-[11.5px]">
-        <span className="font-semibold text-muted">团队交付进度</span>
-        <span className={`ml-auto ${failed ? "font-semibold text-red-600" : "text-faint"}`}>{summary}</span>
-      </div>
-      <ProgressTrack stage={overall} />
-      <div className="mt-2.5 grid grid-cols-2 gap-x-5 gap-y-1.5 border-t border-line pt-2">
-        {tracked.map(({ worker, index }) => (
-          <div key={worker.id} className="flex min-w-0 items-center gap-2" title={worker.title}>
-            <span className="w-4 shrink-0 text-right font-mono text-[9.5px] text-faint">{index + 1}</span>
-            <span className="min-w-0 flex-1 truncate text-[11px] text-muted">{worker.title}</span>
-            <ProgressTrack stage={worker.stage} compact sharedWorker={!worker.useWorktree} />
-            <span
-              className={`w-[66px] shrink-0 truncate text-right text-[10px] ${worker.stage === "verify_failed" ? "font-medium text-red-600" : "text-faint"}`}
-            >
-              {worker.stage
-                ? worker.useWorktree ? STAGE_LABELS[worker.stage] : sharedWorkerStageLabel(worker.stage)
-                : "待上报"}
-            </span>
-          </div>
-        ))}
-      </div>
-    </section>
+    <div className="ml-auto flex min-w-0 items-center gap-2 text-[10.5px]" aria-label="团队交付进度">
+      <ProgressTrack stage={overall} compact />
+      <span
+        className={`whitespace-nowrap ${failed ? "font-semibold text-red-600" : "text-faint"}`}
+        title={summary}
+      >
+        {summary}
+      </span>
+    </div>
   );
 }

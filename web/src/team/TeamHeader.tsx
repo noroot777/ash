@@ -32,7 +32,6 @@ import { TeamTimeline } from "./TeamTimeline";
 import type { LeadTurn } from "./teamData";
 import { teamLeadExecutorLabel, teamWorkerExecutorLabel } from "../executorLabel";
 import { AttachmentDisplay, parseAttachmentText } from "../messageAttachments";
-import { TeamStageProgress } from "../StageProgress";
 
 export function TeamHeader({
   task,
@@ -281,8 +280,6 @@ export function TeamHeader({
           </span>
         )}
       </div>
-
-      {!reviewOpen && <TeamStageProgress workers={workers} />}
 
       {!reviewOpen && <TeamTimeline lead={task} leadTurns={leadTurns} workers={workers} groups={teamGroups} onOpen={onOpenWorker} />}
 
