@@ -46,7 +46,12 @@ export function Menu({
   const [pos, setPos] = useState<{ left: number; top?: number; bottom?: number; width: number; maxH: number } | null>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
-  const mouse = useRef(false); // distinguishes pointer-focus from keyboard(Tab)-focus
+  // 开/关的时刻:用来识别「刚由聚焦自动展开」和「刚被 Esc 关掉」这两个瞬间(见下)。
+  const openedAt = useRef(0);
+  const closedAt = useRef(0);
+  const pointerAt = useRef(0); // 最近一次落在 trigger 上的 pointerdown
+  const openRef = useRef(false);
+  openRef.current = open;
   // refs so the listener effect can stay subscribed without resetting `active`
   const activeRef = useRef(0);
   activeRef.current = active;
@@ -58,6 +63,7 @@ export function Menu({
   onChangeRef.current = onChange;
 
   const close = useCallback(() => {
+    closedAt.current = Date.now();
     setOpen(false);
     setClosing(true);
     const ms =
@@ -70,6 +76,7 @@ export function Menu({
   const openMenu = useCallback(() => {
     if (activeClose && activeClose !== close) activeClose();
     activeClose = close;
+    openedAt.current = Date.now();
     setClosing(false);
     setOpen(true);
   }, [close]);
@@ -97,13 +104,25 @@ export function Menu({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
-  // Keyboard (Tab) focus auto-opens the menu. Native listener fires reliably for
-  // both real Tab and programmatic focus; mouse-initiated focus is skipped.
+  // 键盘(Tab)聚焦自动展开;鼠标点击带来的聚焦不算——那条路由 pointerdown 负责开关。
+  // 判据用 `:focus-visible` 而不是自己维护「刚按过鼠标」的标志:从别的窗口切回来时,
+  // 浏览器会给原本就聚焦的元素**重新派发 focus**,而且它排在 pointerdown 之前,标志
+  // 那时早已过期 —— 于是 focus 先把菜单展开、紧跟着的 click 又当成收起把它关掉,表现
+  // 正是「点一下闪一下就没了,再点一次才正常弹出」。
   useEffect(() => {
     const el = triggerRef.current;
     if (!el) return;
     const onFocus = () => {
-      if (!mouse.current) openMenu();
+      if (openRef.current) return;
+      // Esc 关闭后会把焦点还给 trigger,别让它立刻又弹回来
+      if (Date.now() - closedAt.current < 250) return;
+      let keyboard = true;
+      try {
+        keyboard = el.matches(":focus-visible");
+      } catch {
+        /* 不认识 :focus-visible 的浏览器:退回旧行为(聚焦即展开) */
+      }
+      if (keyboard) openMenu();
     };
     el.addEventListener("focus", onFocus);
     return () => el.removeEventListener("focus", onFocus);
@@ -168,10 +187,20 @@ export function Menu({
         type="button"
         className={triggerClassName}
         onPointerDown={() => {
-          mouse.current = true;
-          setTimeout(() => (mouse.current = false), 400);
+          pointerAt.current = Date.now();
+          // 指针交互一律在 pointerdown 定开关,click 不再切换:否则「focus 先开、click 又关」。
+          // 刚展开 250ms 内的按下是「打开它的那一下」,不当作收起(人也来不及看一眼就关)。
+          if (open) {
+            if (Date.now() - openedAt.current > 250) close();
+          } else openMenu();
         }}
-        onClick={() => (open ? close() : openMenu())}
+        onClick={() => {
+          // 没有 pointerdown 的激活(键盘 Enter/Space、辅助技术派发的 click)才在这里处理;
+          // 指针那一路已经在 pointerdown 定过开关了。
+          if (Date.now() - pointerAt.current < 500) return;
+          if (!open) openMenu();
+          else if (Date.now() - openedAt.current > 250) close();
+        }}
       >
         {children}
       </button>

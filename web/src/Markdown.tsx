@@ -20,13 +20,38 @@ async function openLocalPath(href: string) {
   if (!r.ok) throw new Error(await r.text());
 }
 
+// 单个换行在标准 markdown 里会被当成软换行(渲染成空格),但这里的正文——随手记、
+// agent 输出、辩论发言——都是「聊天体」文本:用户/模型敲的回车就是想换行,原样保留
+// 才对得上编辑时看到的样子。等价于 remark-breaks,自己写是为了不为二十行逻辑加依赖。
+type MdNode = { type: string; value?: string; children?: MdNode[] };
+
+function hardenSoftBreaks(node: MdNode) {
+  if (!node.children) return;
+  const out: MdNode[] = [];
+  for (const child of node.children) {
+    // 代码块/行内代码是 code / inlineCode 节点(没有 children),天然不会走进这一支
+    if (child.type === "text" && child.value?.includes("\n")) {
+      child.value.split("\n").forEach((part, i) => {
+        if (i) out.push({ type: "break" });
+        if (part) out.push({ type: "text", value: part });
+      });
+    } else {
+      hardenSoftBreaks(child);
+      out.push(child);
+    }
+  }
+  node.children = out;
+}
+
+const remarkSoftBreaks = () => hardenSoftBreaks;
+
 // Render agent/debate output as GitHub-flavored markdown, styled with the app's
 // design tokens (no typography plugin). Used inside chat bubbles (§12).
 export function Markdown({ text }: { text: string }) {
   return (
     <div className="text-[13px] leading-relaxed text-ink">
       <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
+        remarkPlugins={[remarkGfm, remarkSoftBreaks]}
         components={{
           h1: (p) => <h1 className="mb-1 mt-2 text-[15px] font-semibold first:mt-0" {...p} />,
           h2: (p) => <h2 className="mb-1 mt-2 text-[14px] font-semibold first:mt-0" {...p} />,
