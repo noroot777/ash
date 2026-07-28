@@ -13,6 +13,7 @@ import {
   agentMix,
   isTeamSettled,
   statusCounts,
+  teamNeverStarted,
   workerHaltStats,
   type Waiting,
 } from "@harness/shared/team";
@@ -168,15 +169,16 @@ export function TeamHeader({
                   已停止
                 </span>
               )}
-              {/* 冷启动/停过之后重新开工:调度台是常驻会话,run 会接回同一个 CLI 会话。 */}
-              {task.status !== "running" && (
+              {/* 只服务「第一次开工」。开过台之后(idle)不再摆按钮:插一句话就会
+                  --resume 接回同一会话,再放一个入口纯属重复。 */}
+              {teamNeverStarted(task.status) && (
                 <button
                   onClick={onRun}
                   className="inline-flex items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-[13px] font-medium text-accent-fg transition-colors hover:bg-accent-hover"
-                  title={sessions.length ? "接回调度者的会话继续" : "让调度者开工"}
+                  title="让调度者开工"
                 >
                   <Play size={13} weight="fill" />
-                  {sessions.length ? "接回调度者" : "运行"}
+                  运行
                 </button>
               )}
               <button

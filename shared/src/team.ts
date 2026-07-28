@@ -73,6 +73,13 @@ export function isTeamSettled(leadLive: boolean, workers: Task[]): boolean {
   return !leadLive && !workers.some((worker) => ACTIVE_WORKER_STATUSES.has(worker.status));
 }
 
+// 团队从没开过台 ⟺ 还停在 backlog。开过之后调度台只在 running(忙)/idle(闲)之间
+// 摆动(重启后 reconcileInterrupted 也一律置 idle),而 idle 说句话就会 --resume 接回
+// 同一会话 —— 所以「运行」按钮只服务第一次开工,不再兼职做「接回」。
+export function teamNeverStarted(status: TaskStatus): boolean {
+  return status !== "running" && status !== "idle";
+}
+
 export type CountBucket = {
   label: string;
   status: TaskStatus;

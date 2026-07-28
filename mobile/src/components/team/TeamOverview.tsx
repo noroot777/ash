@@ -7,6 +7,7 @@ import type {
 } from "@harness/shared";
 import {
   statusCounts,
+  teamNeverStarted,
   workerHaltStats,
 } from "@harness/shared/team";
 import type { TeamCuaStatus } from "@/lib/api";
@@ -133,8 +134,9 @@ export function TeamOverview({
         {!task.archived && !stopped && !settled ? (
           <ActionButton label={action === "halt" ? "停止中…" : "停止全组"} icon="stop" danger disabled={!!action} onPress={onHalt} />
         ) : null}
-        {!task.archived && !task.question && !hasPausedGroups && task.status !== "running" ? (
-          <ActionButton label={action === "run" ? "接回中…" : task.status === "idle" ? "接回调度者" : "运行"} icon="play" disabled={!!action} onPress={onRun} />
+        {/* 同 web:只服务第一次开工。开过台之后(idle)插一句话就会接回同一会话。 */}
+        {!task.archived && !task.question && !hasPausedGroups && teamNeverStarted(task.status) ? (
+          <ActionButton label={action === "run" ? "启动中…" : "运行"} icon="play" disabled={!!action} onPress={onRun} />
         ) : null}
       </View>
 

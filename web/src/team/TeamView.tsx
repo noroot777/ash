@@ -224,7 +224,11 @@ export function TeamView({
         onReply={(text, opts) => onReply(task.id, text, opts)}
         disabled={!!task.archived}
         mention={false}
-        placeholder="插一句话（改方向、加要求、直接替它拍板）… ⌘↵ 发送"
+        placeholder={
+          task.status === "idle"
+            ? "调度者待命中，说句话就接回同一会话… ⌘↵ 发送"
+            : "插一句话（改方向、加要求、直接替它拍板）… ⌘↵ 发送"
+        }
         disabledPlaceholder="已归档（只读）"
       />
 
