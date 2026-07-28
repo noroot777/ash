@@ -4,7 +4,6 @@ import { api } from "./api";
 import { orderedTasks } from "./TaskList";
 import { type LogLine } from "./TaskDetail";
 import { CommandPalette, type Command } from "./CommandPalette";
-import { PRIORITIES } from "./constants";
 import { TaskComposer } from "./TaskComposer";
 import { useComposer } from "./useComposer";
 import { emptyDebate, type DebateState } from "./debateState";
@@ -459,8 +458,6 @@ export function App() {
         if (current.archived) cmds.push({ id: "unarchive", group: g, label: "取消归档", run: () => unarchive(current.id) });
         else if (canArchive(current.status)) cmds.push({ id: "archive", group: g, label: "归档任务", run: () => archive(current.id) });
         cmds.push({ id: "del", group: g, label: "删除任务", run: () => del(current.id, current.title) });
-        for (const p of PRIORITIES)
-          cmds.push({ id: "pr-" + p.key, group: "设为优先级", label: p.label, run: () => patch(current.id, { priority: p.key }) });
       }
     }
     // Global: create / manage.
@@ -486,7 +483,7 @@ export function App() {
         run: () => api.runGroup(g.id),
       });
     return cmds;
-  }, [current, projects, projectId, groups, project, primary, stop, del, patch, archive, unarchive, openCreate, openDebateCreate, openNewNote, openNotes]);
+  }, [current, projects, projectId, groups, project, primary, stop, del, archive, unarchive, openCreate, openDebateCreate, openNewNote, openNotes]);
 
   return (
     <div className="flex h-full">
