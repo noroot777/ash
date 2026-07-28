@@ -98,7 +98,7 @@ function TaskList() {
   }, []);
 
   const sections = useMemo<(SectionMeta & { data: Task[] })[]>(() => {
-    const mine = tasks.filter((t) => t.projectId === projectId && t.mode !== "debate");
+    const mine = tasks.filter((t) => t.projectId === projectId);
     // 与 web 一致：执行者只挂在所属团队卡片下面，不独占状态/分组列表位置。
     const topLevel = mine.filter((task) => task.parentId === null);
     // 与网页端对齐(web/src/TaskList.tsx):同优先级用 createdAt 倒序,而非

@@ -11,6 +11,8 @@ import type {
   ScheduledMessage,
   Group,
   GroupMode,
+  DebateSpeaker,
+  GateName,
 } from "@harness/shared";
 import { getBaseURL } from "./config";
 
@@ -53,6 +55,31 @@ export type TeamCuaKillResult = {
   status: CuaResidualStatus;
   warning: string;
 };
+
+export type DebateTranscriptTurn = {
+  type?: undefined;
+  round: number;
+  speaker: DebateSpeaker;
+  text: string;
+  raised?: boolean;
+  agrees?: boolean;
+  conclusion?: string;
+  error?: string;
+  at?: string;
+  target?: "A" | "B";
+};
+
+export type DebateTranscriptGate = {
+  type: "debate.gate";
+  taskId: string;
+  gate: GateName;
+  open: boolean;
+  consensus?: boolean;
+  conclusionA?: string | null;
+  conclusionB?: string | null;
+};
+
+export type DebateTranscriptEntry = DebateTranscriptTurn | DebateTranscriptGate;
 
 function base(): string {
   const b = getBaseURL();
@@ -138,6 +165,7 @@ export const api = {
 
   sessions: (taskId: string): Promise<Session[]> => req(`/tasks/${taskId}/sessions`).then(j),
   sessionOutput: (id: string): Promise<string> => req(`/sessions/${id}/output`).then((r) => r.text()),
+  debateTranscript: (taskId: string): Promise<DebateTranscriptEntry[]> => req(`/tasks/${taskId}/debate`).then(j),
 
   // —— 分组(并行/串行批次):列表/增删改 + 整组运行/暂停。group 无 archived,删除只解绑成员。
   groups: (projectId?: string): Promise<Group[]> =>

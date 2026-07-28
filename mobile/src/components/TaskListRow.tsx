@@ -7,6 +7,8 @@ import { PriorityBars } from "@/components/ui";
 import { TaskTimeChip } from "@/lib/time";
 import { useTheme, radius, fonts } from "@/lib/theme";
 
+const DEBATE_COLOR = "#8B5CF6";
+
 export function TaskListRow({
   task,
   workers,
@@ -90,20 +92,7 @@ function TeamCard({
       <SignalBar status={task.status} height={42} />
       <View style={{ flex: 1, gap: 6 }}>
         <View style={{ flexDirection: "row", alignItems: "center", gap: 7 }}>
-          <View
-            style={{
-              flexDirection: "row",
-              alignItems: "center",
-              gap: 4,
-              paddingHorizontal: 7,
-              paddingVertical: 3,
-              borderRadius: radius.pill,
-              backgroundColor: theme.raised,
-            }}
-          >
-            <Ionicons name="people" size={12} color={theme.accent} />
-            <Text style={{ color: theme.accent, fontSize: 10, fontFamily: fonts.monoMed }}>团队</Text>
-          </View>
+          <CollaborationBadge mode="team" />
           <Text style={{ flex: 1, color: theme.ink, fontSize: 15, fontFamily: fonts.bodySemi }} numberOfLines={2}>
             {task.title || "(无标题)"}
           </Text>
@@ -145,9 +134,15 @@ function TaskCard({ task, parentTitle, onPress }: { task: Task; parentTitle?: st
     >
       <SignalBar status={task.status} height={nested ? 34 : 38} />
       <View style={{ flex: 1, gap: 5 }}>
-        <Text style={{ color: theme.ink, fontSize: nested ? 14 : 15, fontFamily: fonts.bodySemi }} numberOfLines={2}>
-          {task.title || "(无标题)"}
-        </Text>
+        <View style={{ flexDirection: "row", alignItems: "flex-start", gap: 7 }}>
+          {task.mode === "debate" ? <CollaborationBadge mode="debate" /> : null}
+          <Text
+            style={{ flex: 1, color: theme.ink, fontSize: nested ? 14 : 15, fontFamily: fonts.bodySemi }}
+            numberOfLines={2}
+          >
+            {task.title || "(无标题)"}
+          </Text>
+        </View>
         {parentTitle ? (
           <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
             <Ionicons name="home-outline" size={11} color={theme.accent} />
@@ -172,5 +167,27 @@ function TaskCard({ task, parentTitle, onPress }: { task: Task; parentTitle?: st
       </View>
       <PriorityBars priority={task.priority} />
     </Pressable>
+  );
+}
+
+function CollaborationBadge({ mode }: { mode: "team" | "debate" }) {
+  const theme = useTheme();
+  const debate = mode === "debate";
+  const color = debate ? DEBATE_COLOR : theme.accent;
+  return (
+    <View
+      style={{
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 4,
+        paddingHorizontal: 7,
+        paddingVertical: 3,
+        borderRadius: radius.pill,
+        backgroundColor: debate ? `${DEBATE_COLOR}20` : theme.raised,
+      }}
+    >
+      <Ionicons name={debate ? "chatbubbles-outline" : "people"} size={12} color={color} />
+      <Text style={{ color, fontSize: 10, fontFamily: fonts.monoMed }}>{debate ? "辩论" : "团队"}</Text>
+    </View>
   );
 }

@@ -25,6 +25,7 @@ import { useTheme, radius, fonts } from "@/lib/theme";
 import { Ionicons } from "@expo/vector-icons";
 import { Conversation } from "@/components/Conversation";
 import { QuestionCard } from "@/components/QuestionCard";
+import { DebateTaskDetail } from "@/components/DebateTaskDetail";
 import { TeamTaskDetail } from "@/components/team/TeamTaskDetail";
 import { WorkerTeamLink } from "@/components/WorkerTeamLink";
 import { MarkdownText } from "@/components/MarkdownText";
@@ -112,6 +113,7 @@ export default function TaskDetail() {
   // pulls the final tail once and then stops (the .md no longer grows). Returning
   // to the foreground forces an immediate catch-up pull.
   useEffect(() => {
+    if (!task || task.mode === "debate") return;
     const running = task?.status === "running" || task?.status === "queued";
     let timer: ReturnType<typeof setInterval> | null = null;
     const pull = () => loadConv().catch(() => {});
@@ -124,11 +126,12 @@ export default function TaskDetail() {
       if (timer) clearInterval(timer);
       sub.remove();
     };
-  }, [id, task?.status, loadConv]);
+  }, [id, task?.mode, task?.status, loadConv]);
 
   // 待发送消息轮询：与任务是否 running 无关（idle 任务也可有待发消息），节奏比会话慢。
   // 回前台立即补拉一次。
   useEffect(() => {
+    if (!task || task.mode === "debate") return;
     loadPending();
     const timer = setInterval(loadPending, PENDING_POLL_MS);
     const sub = AppState.addEventListener("change", (s) => {
@@ -138,7 +141,7 @@ export default function TaskDetail() {
       clearInterval(timer);
       sub.remove();
     };
-  }, [loadPending]);
+  }, [loadPending, task?.mode]);
 
   if (!task) {
     return (
@@ -310,6 +313,17 @@ export default function TaskDetail() {
         onDelete={confirmDelete}
         onScroll={handleScroll}
         onContentSizeChange={handleContentSizeChange}
+      />
+    );
+  }
+
+  if (task.mode === "debate") {
+    return (
+      <DebateTaskDetail
+        task={task}
+        onArchive={onArchive}
+        onUnarchive={onUnarchive}
+        onDelete={confirmDelete}
       />
     );
   }

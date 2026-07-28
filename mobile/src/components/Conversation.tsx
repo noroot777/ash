@@ -225,6 +225,7 @@ function renderBlock(b: Block, theme: Theme, timing?: { time: string | null; end
             alignItems: "center",
             gap: 6,
             alignSelf: "flex-start",
+            maxWidth: "100%",
             paddingHorizontal: 9,
             paddingVertical: 5,
             borderRadius: radius.sm,
@@ -233,11 +234,11 @@ function renderBlock(b: Block, theme: Theme, timing?: { time: string | null; end
             borderColor: theme.line,
           }}
         >
-          <Text style={{ color: theme.accent, fontSize: 12, fontWeight: "600", fontFamily: "ui-monospace" }}>
+          <Text style={{ flexShrink: 1, color: theme.accent, fontSize: 12, fontWeight: "600", fontFamily: "ui-monospace" }}>
             {b.name}
           </Text>
           {b.detail ? (
-            <Text style={{ color: theme.muted, fontSize: 12 }} numberOfLines={1}>
+            <Text style={{ flexShrink: 1, color: theme.muted, fontSize: 12 }} numberOfLines={1}>
               {b.detail}
             </Text>
           ) : null}
@@ -252,9 +253,9 @@ function renderBlock(b: Block, theme: Theme, timing?: { time: string | null; end
     case "done":
       return (
         <View style={{ flexDirection: "row", alignItems: "center", gap: 8, paddingVertical: 2 }}>
-          <View style={{ flex: 1, height: 1, backgroundColor: theme.line }} />
-          <Text style={{ color: theme.faint, fontSize: 11 }}>{b.text}</Text>
-          <View style={{ flex: 1, height: 1, backgroundColor: theme.line }} />
+          <View style={{ flex: 1, minWidth: 12, height: 1, backgroundColor: theme.line }} />
+          <Text style={{ flexShrink: 1, color: theme.faint, fontSize: 11, textAlign: "center" }}>{b.text}</Text>
+          <View style={{ flex: 1, minWidth: 12, height: 1, backgroundColor: theme.line }} />
         </View>
       );
     case "user":
@@ -285,13 +286,34 @@ function renderBlock(b: Block, theme: Theme, timing?: { time: string | null; end
     case "system":
       return (
         <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginVertical: 2 }}>
-          <View style={{ flex: 1, height: 1, backgroundColor: theme.line }} />
-          <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+          <View style={{ flex: 1, minWidth: 12, height: 1, backgroundColor: theme.line }} />
+          <View
+            style={{
+              flexShrink: 1,
+              maxWidth: "100%",
+              flexDirection: "row",
+              flexWrap: "wrap",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 6,
+            }}
+          >
             <Ionicons name="refresh" size={11} color={theme.faint} />
-            <Text style={{ color: theme.faint, fontSize: 12, fontStyle: "italic" }}>{b.text}</Text>
+            <Text
+              style={{
+                flexShrink: 1,
+                minWidth: 0,
+                color: theme.faint,
+                fontSize: 12,
+                fontStyle: "italic",
+                textAlign: "center",
+              }}
+            >
+              {b.text}
+            </Text>
             {b.at ? <Text style={metaText}>· {formatInstant(b.at)}</Text> : null}
           </View>
-          <View style={{ flex: 1, height: 1, backgroundColor: theme.line }} />
+          <View style={{ flex: 1, minWidth: 12, height: 1, backgroundColor: theme.line }} />
         </View>
       );
   }
