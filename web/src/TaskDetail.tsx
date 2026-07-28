@@ -4,7 +4,7 @@ import { AGENT_TYPES, isUserSettableStatus, canArchive } from "@harness/shared";
 import { CaretDown, Play, Stop, Trash, ArrowsClockwise, DownloadSimple, ListNumbers } from "@phosphor-icons/react";
 import { api } from "./api";
 import { STATUS_META, PRIORITIES } from "./constants";
-import { CollapsibleText, CopyButton } from "./ui";
+import { CollapsibleText, CopyButton, Kbd, submitShortcutTitle } from "./ui";
 import { StatusIcon } from "./StatusIcon";
 import { PriorityIcon, LabelAdder } from "./ui";
 import { ScheduleControl } from "./ScheduleControl";
@@ -517,9 +517,10 @@ function ResumePromptEditor({
           </button>
           <button
             onClick={commit}
-            className="rounded-md bg-slate-600 px-2.5 py-1 text-[11px] font-medium text-white hover:bg-slate-500"
+            title={submitShortcutTitle("保存续跑指令")}
+            className="inline-flex items-center gap-1.5 rounded-md bg-slate-600 px-2.5 py-1 text-[11px] font-medium text-white hover:bg-slate-500"
           >
-            保存（⌘↵）
+            保存 <Kbd className="border-white/20 bg-white/10" />
           </button>
         </div>
       </div>

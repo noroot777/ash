@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Task, Session, GateAction, AgentType, DebateSpeaker, TaskStatus } from "@harness/shared";
 import { TEAM_DEFAULTS } from "@harness/shared";
-import { Stop, Robot, X } from "@phosphor-icons/react";
+import { Stop } from "@phosphor-icons/react";
 import { rebuildDebateState, type DebateState, type DebateTurn, type DebateGate } from "./debateState";
 import { ResumeButtons, ToolCall, CollapsibleText } from "./ui";
 import { Markdown } from "./Markdown";
@@ -21,11 +21,10 @@ import { ConversationScrollButtons } from "./Conversation";
 import {
   defaultTeamConfig,
   FinishedTeamHandoffBar,
-  LinkedTeamCard,
-  TeamHandoffButton,
   TeamHandoffModal,
   type TeamHandoffChoice,
 } from "./DebateTeamHandoff";
+import { DebateGateBar } from "./DebateGateBar";
 
 // Animated "thinking" indicator — three dots flashing in sequence.
 function TypingDots() {
@@ -365,7 +364,7 @@ export function DebateView({
       </div>
 
       {gate?.open && task.status === "awaiting_review" && (
-        <GateBar
+        <DebateGateBar
           gate={gate}
           onGate={onGate}
           onTeam={handoffToTeam}
@@ -511,201 +510,6 @@ function Bubble({
           {session && (session.resumeCommand || session.cliSessionId) && <ResumeButtons s={session} showTime={false} />}
         </div>
       </div>
-    </div>
-  );
-}
-
-function GateBar({
-  gate,
-  onGate,
-  onTeam,
-  onOpenTeam,
-  teamBusy,
-  linkedTeam,
-  allTasks,
-  onOpenTask,
-  onDebateAgain,
-  debateAgainBusy,
-}: {
-  gate: DebateGate;
-  onGate: (a: GateAction) => void | Promise<unknown>;
-  onTeam: (command: string) => Promise<boolean>;
-  onOpenTeam: () => void;
-  teamBusy: boolean;
-  linkedTeam?: Task;
-  allTasks: Task[];
-  onOpenTask: (taskId: string) => void;
-  onDebateAgain: (team: Task) => void;
-  debateAgainBusy: boolean;
-}) {
-  const [mode, setMode] = useState<"inject" | "ask" | null>(null);
-  const [text, setText] = useState("");
-  const [target, setTarget] = useState<"A" | "B" | null>(null); // 提问定向到的辩手（仅 ask·G1）
-  const [mIdx, setMIdx] = useState(0);
-  const isG1 = gate.gate === "G1";
-  const consensus = !!gate.consensus;
-  const consensusBy = gate.consensusBy ?? (consensus ? "both" : undefined);
-  const label = !isG1
-    ? "历史代码门 · 等待你裁决"
-    : consensus
-      ? `收敛门 · ${consensusBy === "both" ? "双方已达成共识" : "单方声明一致，待你确认"}`
-      : "收敛门 · 双方仍有分歧（结论如下，供你定夺）";
-  const nameA = "辩手A";
-  const nameB = "辩手B";
-
-  // @-mention：仅 G1 的「提问」支持把问题定向给单个辩手；历史代码门不显示候选。
-  // 末尾 @token 触发候选；选中即设定 target 并去掉 @token。中文名用宽松正则。
-  const canMention = isG1 && mode === "ask";
-  const mCands = [{ key: "A" as const, name: nameA }, { key: "B" as const, name: nameB }];
-  const mMatch = canMention ? /@([^\s@]*)$/.exec(text) : null;
-  const cands = mMatch
-    ? mCands.filter((c) => {
-        const q = (mMatch[1] ?? "").toLowerCase();
-        return !q || c.name.includes(mMatch[1]) || c.key.toLowerCase().startsWith(q);
-      })
-    : [];
-  const mentionOpen = !!mMatch && cands.length > 0;
-  const pick = (k: "A" | "B") => {
-    setTarget(k);
-    setText((s) => s.replace(/@[^\s@]*$/, ""));
-    setMIdx(0);
-  };
-  const switchMode = (m: "inject" | "ask") => {
-    setMode((cur) => (cur === m ? null : m));
-    setTarget(null); // 切换/收起输入框时清空定向
-  };
-  const submit = async () => {
-    if (!text.trim() || !mode) return;
-    if (isTeamCommand(text)) {
-      if (await onTeam(text)) setText("");
-      return;
-    }
-    if (mode === "ask") onGate({ kind: "ask", text: text.trim(), target: target ?? undefined });
-    else onGate({ kind: "inject", text: text.trim() });
-    setText("");
-    setMode(null);
-    setTarget(null);
-  };
-
-  return (
-    <div className="border-t border-violet-500/40 bg-violet-500/[0.07] px-6 py-3">
-      {/* G1: always show BOTH sides' final conclusions so a self-reported
-          "consensus" that actually differs can be caught at a glance. */}
-      {isG1 && (
-        <div className="mb-2 flex flex-col gap-0.5 text-xs">
-          <div className={consensus ? "text-emerald-700" : "text-amber-700"}>
-            {consensus
-              ? consensusBy === "both"
-                ? "✓ 双方均表示可收敛、自评结论一致（结论如下，若实际不符可打回或回炉）"
-                : `✓ 辩手${consensusBy}表示可收敛且自评与对方一致（对方未再表态；结论如下，可打回或回炉）`
-              : "⚠ 双方未达成一致，以下是两方各自结论："}
-          </div>
-          {gate.conclusionA || gate.conclusionB ? (
-            <>
-              {gate.conclusionA && (
-                <div className="text-ink"><b className="text-sky-700">{nameA}</b> · {gate.conclusionA}</div>
-              )}
-              {gate.conclusionB && (
-                <div className="text-ink"><b className="text-emerald-700">{nameB}</b> · {gate.conclusionB}</div>
-              )}
-            </>
-          ) : (
-            <div className="text-faint">（双方未给出明确「结论」行）</div>
-          )}
-        </div>
-      )}
-      <div className="flex flex-wrap items-center gap-2 text-sm">
-        <span className="text-violet-700">{label}</span>
-        <div className="ml-auto flex flex-wrap gap-2">
-          {isG1 && (
-            linkedTeam ? (
-              <LinkedTeamCard
-                team={linkedTeam}
-                allTasks={allTasks}
-                onOpen={onOpenTask}
-                compact
-                onDebateAgain={onDebateAgain}
-                debateAgainBusy={debateAgainBusy}
-              />
-            ) : (
-              <TeamHandoffButton busy={teamBusy} onClick={onOpenTeam} />
-            )
-          )}
-          <button onClick={() => onGate({ kind: "approve" })} className="rounded-md bg-emerald-500 px-3 py-1 text-xs font-medium text-white">
-            {isG1 ? "放行→结束" : "放行"}
-          </button>
-          <button onClick={() => onGate({ kind: "reject" })} className="rounded-md border border-line2 px-3 py-1 text-xs text-ink">
-            打回终止
-          </button>
-          <button onClick={() => switchMode("inject")} className="rounded-md border border-line2 px-3 py-1 text-xs text-ink">
-            注入意见→回炉
-          </button>
-          <button onClick={() => switchMode("ask")} className="rounded-md border border-line2 px-3 py-1 text-xs text-ink">
-            提问→继续
-          </button>
-        </div>
-      </div>
-      {mode && (
-        <div className="relative mt-2">
-          {/* @-mention 候选：仅 ask·G1 出现，↑↓ 选、回车确定 */}
-          {mentionOpen && (
-            <div className="absolute bottom-full left-0 z-10 mb-1 w-56 overflow-hidden rounded-lg border border-line2 bg-panel p-1 shadow-xl">
-              <div className="px-2 py-1 text-[10px] text-faint">把问题定向给 · ↑↓ 选，回车确定</div>
-              {cands.map((c, i) => (
-                <button
-                  key={c.key}
-                  onMouseEnter={() => setMIdx(i)}
-                  onClick={() => pick(c.key)}
-                  className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] text-ink ${i === mIdx ? "bg-raised" : ""}`}
-                >
-                  <Robot size={14} className="text-muted" /> @{c.name}
-                </button>
-              ))}
-            </div>
-          )}
-          {target && (
-            <div className="mb-1.5 flex items-center text-[12px]">
-              <span className="inline-flex items-center gap-1 rounded-full bg-accent/10 px-2 py-0.5 text-ink">
-                <Robot size={12} /> 只问 @{target === "A" ? nameA : nameB}
-                <button onClick={() => setTarget(null)} className="text-faint hover:text-ink" title="改为问双方">
-                  <X size={11} weight="bold" />
-                </button>
-              </span>
-            </div>
-          )}
-          <div className="flex gap-2">
-            <textarea
-              autoFocus
-              value={text}
-              onChange={(e) => setText(e.target.value)}
-              onKeyDown={(e) => {
-                if (mentionOpen) {
-                  if (e.key === "ArrowDown") { e.preventDefault(); setMIdx((i) => Math.min(cands.length - 1, i + 1)); return; }
-                  if (e.key === "ArrowUp") { e.preventDefault(); setMIdx((i) => Math.max(0, i - 1)); return; }
-                  if (e.key === "Enter" && !e.metaKey && !e.ctrlKey) { e.preventDefault(); pick((cands[mIdx] ?? cands[0]).key); return; }
-                }
-                if ((e.metaKey || e.ctrlKey) && e.key === "Enter") { e.preventDefault(); void submit(); }
-              }}
-              rows={2}
-              placeholder={
-                mode === "inject"
-                  ? "补充意见，双方据此回炉再辩…"
-                  : canMention
-                    ? "向某位辩手提问，@ 指向单个（不填=问双方）…"
-                    : "补充问题；提交后回到辩论继续…"
-              }
-              className="flex-1 resize-y rounded-md border border-line bg-panel px-2 py-1 text-sm outline-none"
-            />
-            <button
-              disabled={!text.trim() || teamBusy}
-              onClick={() => void submit()}
-              className="self-start rounded-md bg-accent hover:bg-accent-hover px-3 py-1 text-xs font-medium text-accent-fg disabled:opacity-40"
-            >
-              提交
-            </button>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

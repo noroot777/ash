@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { ProjectView } from "@harness/shared";
 import { Modal, ConfirmModal, fieldCls, primaryCls } from "./Modal";
-import { PathHealth } from "./ui";
+import { Kbd, PathHealth, submitShortcutTitle } from "./ui";
 
 // Project settings — the canonical home for editing a project's name + repoPath
 // (load-bearing: it's the cwd of every run), with live path validation and a
@@ -36,7 +36,9 @@ export function ProjectSettings({
               删除项目
             </button>
             <button onClick={close} className="px-3 py-1.5 text-[13px] text-muted">取消</button>
-            <button disabled={!name.trim() || !dirty} onClick={save} className={primaryCls}>保存</button>
+            <button disabled={!name.trim() || !dirty} onClick={save} title={submitShortcutTitle("保存项目设置")} className={`${primaryCls} inline-flex items-center gap-1.5`}>
+              保存 <Kbd />
+            </button>
           </>
         )}
       >

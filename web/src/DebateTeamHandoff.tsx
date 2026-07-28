@@ -11,6 +11,7 @@ import { foldTeamStatus } from "./util";
 import { STATUS_META } from "./constants";
 import { StatusIcon } from "./StatusIcon";
 import { isTeamCommand } from "./debateHandoff";
+import { Kbd, submitShortcutTitle } from "./ui";
 
 export type TeamHandoffChoice = {
   note: string;
@@ -66,9 +67,10 @@ export function TeamHandoffModal({
           <button
             onClick={() => void submit()}
             disabled={busy}
-            className="rounded-md bg-cyan-600 px-3.5 py-1.5 text-[13px] font-semibold text-white transition-colors hover:bg-cyan-500 disabled:opacity-40"
+            title={submitShortcutTitle("创建并开干")}
+            className="inline-flex items-center gap-1.5 rounded-md bg-cyan-600 px-3.5 py-1.5 text-[13px] font-semibold text-white transition-colors hover:bg-cyan-500 disabled:opacity-40"
           >
-            {busy ? "创建中…" : "创建并开干"}
+            {busy ? "创建中…" : "创建并开干"} <Kbd className="border-white/20 bg-white/10" />
           </button>
         </>
       )}
@@ -220,7 +222,10 @@ export function FinishedTeamHandoffBar({
                 value={text}
                 onChange={(event) => setText(event.target.value)}
                 onKeyDown={(event) => {
-                  if ((event.metaKey || event.ctrlKey) && event.key === "Enter") void submit();
+                  if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+                    event.preventDefault();
+                    void submit();
+                  }
                 }}
                 placeholder="/team 给另一组的附言"
                 className="min-w-0 flex-1 rounded-md border border-line bg-canvas px-2.5 py-1.5 text-[12px] text-ink outline-none placeholder:text-faint focus:border-accent"
@@ -229,9 +234,10 @@ export function FinishedTeamHandoffBar({
                 type="button"
                 disabled={busy || !isTeamCommand(text)}
                 onClick={() => void submit()}
-                className="rounded-md border border-line px-3 py-1.5 text-[12px] text-muted hover:text-ink disabled:opacity-40"
+                title={submitShortcutTitle("直通创建")}
+                className="inline-flex items-center gap-1.5 rounded-md border border-line px-3 py-1.5 text-[12px] text-muted hover:text-ink disabled:opacity-40"
               >
-                {busy ? "创建中…" : "直通创建"}
+                {busy ? "创建中…" : "直通创建"} <Kbd />
               </button>
             </div>
           </details>

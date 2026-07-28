@@ -1,4 +1,12 @@
-import { useState, useEffect, useLayoutEffect, useRef, type ReactNode } from "react";
+import {
+  useState,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  type ComponentProps,
+  type CSSProperties,
+  type ReactNode,
+} from "react";
 import type { Priority, Session, ProjectHealth, ProjectView, Task } from "@harness/shared";
 import { Plus, CaretRight, CaretDown, GitBranch, Copy, Check, ArrowBendDownRight } from "@phosphor-icons/react";
 import { shortPath } from "./util";
@@ -113,12 +121,121 @@ export function ToolCall({ name, detail }: { name: string; detail?: string }) {
         className={`inline-flex max-w-full items-center gap-1 rounded-md bg-raised px-2 py-0.5 text-[11px] text-amber-700/90 ${has ? "hover:bg-overlay" : "cursor-default"}`}
       >
         <CaretRight size={10} weight="bold" className={`shrink-0 transition-transform ${open ? "rotate-90" : ""} ${has ? "" : "opacity-0"}`} />
-        <span className="font-mono">⚙ {name}</span>
-        {has && !open && <span className="truncate font-mono text-faint">{detail!.replace(/\s+/g, " ").slice(0, 80)}</span>}
+        <span aria-hidden className="shrink-0">⚙</span>
+        <span className="min-w-0 shrink truncate whitespace-nowrap font-mono">{name}</span>
+        {has && !open && <span className="min-w-0 truncate font-mono text-faint">{detail!.replace(/\s+/g, " ").slice(0, 80)}</span>}
       </button>
       {open && has && (
         <pre className="mt-1 max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-md border border-line bg-raised px-2.5 py-1.5 font-mono text-[11px] leading-snug text-muted">{detail}</pre>
       )}
+    </div>
+  );
+}
+
+const isMacPlatform = () => typeof navigator === "undefined" || /Mac|iPhone|iPad|iPod/i.test(navigator.platform);
+
+export function submitShortcutLabel(): string {
+  return isMacPlatform() ? "⌘↵" : "Ctrl+↵";
+}
+
+export function submitShortcutTitle(action: string): string {
+  return `${action}（${submitShortcutLabel()}）`;
+}
+
+// Compact shortcut label shared by every button whose action is also bound to
+// Cmd/Ctrl+Enter. Keeping it inside the button makes the keyboard path visible
+// at the exact point where the pointer path lives.
+export function Kbd({ className = "" }: { className?: string }) {
+  return (
+    <kbd
+      className={`rounded border border-current/15 bg-black/5 px-1 py-px font-sans text-[9px] font-medium leading-none opacity-65 ${className}`}
+    >
+      {submitShortcutLabel()}
+    </kbd>
+  );
+}
+
+type TopResizableTextareaProps = Omit<ComponentProps<"textarea">, "style"> & {
+  initialHeight?: number;
+  minHeight?: number;
+  maxHeight?: number;
+  wrapperClassName?: string;
+  style?: CSSProperties;
+};
+
+// A textarea docked near the bottom cannot use the browser's lower-right resize
+// grip. This top-edge handle reverses the drag: upward grows, downward shrinks.
+// Pointer tracking stays on window so the drag remains stable outside the handle.
+export function TopResizableTextarea({
+  initialHeight = 56,
+  minHeight = 48,
+  maxHeight = 320,
+  wrapperClassName = "",
+  className = "",
+  style,
+  ...props
+}: TopResizableTextareaProps) {
+  const [height, setHeight] = useState(() => Math.min(maxHeight, Math.max(minHeight, initialHeight)));
+  const start = useRef<{ y: number; height: number } | null>(null);
+  const clamp = (next: number) => Math.min(maxHeight, Math.max(minHeight, next));
+
+  useEffect(() => {
+    const move = (event: PointerEvent) => {
+      if (!start.current) return;
+      setHeight(clamp(start.current.height + start.current.y - event.clientY));
+    };
+    const up = () => {
+      if (!start.current) return;
+      start.current = null;
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", up);
+    return () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", up);
+      if (start.current) {
+        document.body.style.cursor = "";
+        document.body.style.userSelect = "";
+      }
+    };
+  }, [minHeight, maxHeight]);
+
+  return (
+    <div className={`relative min-w-0 ${wrapperClassName}`}>
+      <textarea
+        {...props}
+        className={`block w-full resize-none ${className}`}
+        style={{ ...style, height }}
+      />
+      <div
+        role="separator"
+        aria-label="拖动调整输入框高度"
+        aria-orientation="horizontal"
+        aria-valuemin={minHeight}
+        aria-valuemax={maxHeight}
+        aria-valuenow={height}
+        tabIndex={0}
+        title="向上拖动增高，向下拖动缩小"
+        onPointerDown={(event) => {
+          event.preventDefault();
+          start.current = { y: event.clientY, height };
+          document.body.style.cursor = "row-resize";
+          document.body.style.userSelect = "none";
+        }}
+        onKeyDown={(event) => {
+          if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+            event.preventDefault();
+            setHeight((current) => clamp(current + (event.key === "ArrowUp" ? 12 : -12)));
+          }
+        }}
+        className="group absolute right-3 top-0 z-10 flex h-3 w-10 -translate-y-1/2 touch-none cursor-row-resize items-center justify-center rounded-full border border-line bg-panel shadow-sm outline-none transition-colors hover:border-accent/60 focus-visible:ring-2 focus-visible:ring-accent/30"
+      >
+        <span className="h-px w-5 rounded-full bg-muted/60 transition-colors group-hover:bg-accent/70" />
+      </div>
     </div>
   );
 }

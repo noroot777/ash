@@ -66,11 +66,9 @@ export function Duration({
   return t ? <span className={className}>{t}</span> : null;
 }
 
-// Lifecycle-time chip for the detail header. 创建/开始 used to hide in the tooltip;
-// now they sit inline and always-on (创建 … · 开始 … · 用时 …) so the timeline is
-// readable without hovering. 用时 live-ticks while running; 结束时刻 stays in the
-// tooltip to keep the row compact. The title is flex-1/min-w-0, so it absorbs the
-// extra width.
+// Lifecycle-time chip for the detail header: 创建 … · 用时 …. 用时 live-ticks
+// while running; 结束时刻 stays in the tooltip to keep the row compact. The title
+// is flex-1/min-w-0, so it absorbs the extra width.
 export function TaskTimeChip({ task, className }: { task: Task; className?: string }) {
   const running = task.status === "running" || task.status === "queued";
   // activeMs = real execution time (sum of each turn's active span); null on
@@ -93,8 +91,6 @@ export function TaskTimeChip({ task, className }: { task: Task; className?: stri
       <span>创建 {formatInstant(task.createdAt)}</span>
       {task.startedAt && (
         <>
-          {dot}
-          <span>开始 {formatInstant(task.startedAt)}</span>
           {dot}
           {measured ? (
             <span

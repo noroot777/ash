@@ -4,7 +4,7 @@ import { AGENT_TYPES } from "@harness/shared";
 import { X, ArrowsOut, ArrowsIn, Robot, Stack, Plus, Sparkle, Scales, CaretDown, Clock, Play, Tray, ArrowsClockwise, GitBranch, TreeStructure, UsersThree, Crown } from "@phosphor-icons/react";
 import { api } from "./api";
 import { PRIORITIES } from "./constants";
-import { PriorityIcon, LabelAdder, RunLocation } from "./ui";
+import { Kbd, PriorityIcon, LabelAdder, RunLocation, submitShortcutTitle } from "./ui";
 import { groupLabel } from "./util";
 import { useEscape } from "./useEscape";
 import { Menu, Pill } from "./Menu";
@@ -186,7 +186,7 @@ export function CreateTask({
     const topic = debate.topic.trim();
     const hasTaskContent = !!obj || seedAttachments.length > 0 || attachments.length > 0;
     if ((debateOn ? !topic : !hasTaskContent) || busy) return;
-    // A timed mode needs its time/expr (guards the ⌘↵ path, which skips the button).
+    // A timed mode needs its time/expr (guards the Cmd/Ctrl+Enter path, which skips the button).
     if (!debateOn && ((launchMode === "once" && !at) || (launchMode === "cron" && !cron.trim()))) return;
     setBusy(true);
     try {
@@ -535,8 +535,13 @@ export function CreateTask({
             </button>
           </label>
           <div className="inline-flex items-stretch overflow-hidden rounded-md">
-            <button disabled={!canSubmit} onClick={submit} className="inline-flex items-center gap-1.5 bg-accent px-3.5 py-1.5 text-[13px] font-medium text-accent-fg transition-colors hover:bg-accent-hover disabled:opacity-40">
-              <Plus size={14} weight="bold" /> {debateOn ? "开跑" : active.btn}
+            <button
+              disabled={!canSubmit}
+              onClick={submit}
+              title={submitShortcutTitle(debateOn ? "开跑" : active.btn)}
+              className="inline-flex items-center gap-1.5 bg-accent px-3.5 py-1.5 text-[13px] font-medium text-accent-fg transition-colors hover:bg-accent-hover disabled:opacity-40"
+            >
+              <Plus size={14} weight="bold" /> {debateOn ? "开跑" : active.btn} <Kbd />
             </button>
             {!debateOn && (
               <Menu

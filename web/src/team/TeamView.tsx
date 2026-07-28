@@ -29,6 +29,7 @@ import { TeamHeader, AttentionBar } from "./TeamHeader";
 import { TeamFeed } from "./TeamFeed";
 import { WorkerRail, WorkerStatusText } from "./WorkerRail";
 import { activeTeamHaltMarker, leadTurns as turnsOf, teamFeedOptions } from "./teamData";
+import { submitShortcutLabel } from "../ui";
 
 export function TeamView({
   task,
@@ -227,8 +228,8 @@ export function TeamView({
         mention={false}
         placeholder={
           task.status === "idle"
-            ? "调度者待命中，说句话就接回同一会话… ⌘↵ 发送"
-            : "插一句话（改方向、加要求、直接替它拍板）… ⌘↵ 发送"
+            ? `调度者待命中，说句话就接回同一会话… ${submitShortcutLabel()} 发送`
+            : `插一句话（改方向、加要求、直接替它拍板）… ${submitShortcutLabel()} 发送`
         }
         disabledPlaceholder="已归档（只读）"
       />

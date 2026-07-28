@@ -10,6 +10,7 @@ import { Robot, X, Clock } from "@phosphor-icons/react";
 import { api } from "./api";
 import { formatInstant } from "./time";
 import { usePasteAttachments, AttachmentChips } from "./pasteAttachments";
+import { Kbd, submitShortcutLabel, submitShortcutTitle, TopResizableTextarea } from "./ui";
 
 // Date → "YYYY-MM-DDTHH:mm"(本地时间)，给 <input type="datetime-local"> 当默认值
 // (跟 ScheduleControl 同一套约定)。
@@ -29,7 +30,7 @@ export function ReplyBox({
   disabled,
   mention = true,
   toolbar,
-  placeholder = "回复并继续（⌘↵ 发送，可粘贴图片或文件，@ 召唤其它智能体）…",
+  placeholder = `回复并继续（${submitShortcutLabel()} 发送，可粘贴图片或文件，@ 召唤其它智能体）…`,
   disabledPlaceholder = "进行中…",
 }: {
   taskId: string;
@@ -177,8 +178,8 @@ export function ReplyBox({
           </span>
         </div>
       )}
-      <div className="flex items-end gap-2">
-        <textarea
+      <div className="relative">
+        <TopResizableTextarea
           value={v}
           onChange={(e) => setV(e.target.value)}
           onPaste={onPaste}
@@ -193,26 +194,31 @@ export function ReplyBox({
               send();
             }
           }}
-          rows={2}
           disabled={disabled}
           placeholder={disabled ? disabledPlaceholder : placeholder}
-          className="flex-1 resize-y rounded-md border border-line bg-panel px-2.5 py-1.5 text-[13px] text-ink outline-none placeholder:text-faint focus:border-accent disabled:opacity-50"
+          initialHeight={72}
+          minHeight={60}
+          maxHeight={360}
+          className="rounded-lg border border-line bg-panel py-2 pl-2.5 pr-[140px] text-[13px] leading-relaxed text-ink outline-none placeholder:text-faint focus:border-accent disabled:opacity-50"
         />
-        <button
-          onClick={() => { if (!at) setAt(toLocalInput(new Date(Date.now() + 3600_000))); setSchedOpen((o) => !o); }}
-          disabled={disabled}
-          title="定时发送"
-          className="rounded-md border border-line bg-panel px-2.5 py-2 text-muted hover:bg-raised hover:text-ink disabled:opacity-40"
-        >
-          <Clock size={16} />
-        </button>
-        <button
-          onClick={send}
-          disabled={(!v.trim() && !attachments.length) || disabled}
-          className="rounded-md bg-accent px-3 py-2 text-[13px] font-medium text-accent-fg hover:bg-accent-hover disabled:opacity-40"
-        >
-          发送
-        </button>
+        <div className="absolute bottom-2 right-2 flex h-8 items-stretch overflow-hidden rounded-md border border-line bg-canvas/95 shadow-sm">
+          <button
+            onClick={() => { if (!at) setAt(toLocalInput(new Date(Date.now() + 3600_000))); setSchedOpen((o) => !o); }}
+            disabled={disabled}
+            title="定时发送"
+            className="grid w-9 place-items-center border-r border-line text-muted transition-colors hover:bg-raised hover:text-ink disabled:opacity-40"
+          >
+            <Clock size={15} />
+          </button>
+          <button
+            onClick={send}
+            disabled={(!v.trim() && !attachments.length) || disabled}
+            title={submitShortcutTitle("发送")}
+            className="inline-flex items-center gap-1.5 bg-accent px-3 text-[12px] font-semibold text-accent-fg transition-colors hover:bg-accent-hover disabled:opacity-40"
+          >
+            发送 <Kbd />
+          </button>
+        </div>
       </div>
     </div>
   );

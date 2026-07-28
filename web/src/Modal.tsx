@@ -2,7 +2,7 @@ import { useState, type ReactNode } from "react";
 import { X, TreeStructure, GitBranch } from "@phosphor-icons/react";
 import { useEscape } from "./useEscape";
 import { useReveal } from "./useReveal";
-import { PathHealth } from "./ui";
+import { Kbd, PathHealth, submitShortcutTitle } from "./ui";
 import { api } from "./api";
 
 // Shared modal shell: dimmed overlay, centered card, Esc-close, click-outside,
@@ -215,7 +215,9 @@ export function NewProjectModal({
       footer={(close) => (
         <>
           <button onClick={close} className="px-3 py-1.5 text-[13px] text-muted">取消</button>
-          <button disabled={!name.trim()} onClick={submit} className={primaryCls}>创建</button>
+          <button disabled={!name.trim()} onClick={submit} title={submitShortcutTitle("创建项目")} className={`${primaryCls} inline-flex items-center gap-1.5`}>
+            创建 <Kbd />
+          </button>
         </>
       )}
     >
@@ -252,7 +254,9 @@ export function NewGroupModal({
       footer={(close) => (
         <>
           <button onClick={close} className="px-3 py-1.5 text-[13px] text-muted">取消</button>
-          <button disabled={!name.trim()} onClick={submit} className={primaryCls}>创建</button>
+          <button disabled={!name.trim()} onClick={submit} title={submitShortcutTitle("创建分组")} className={`${primaryCls} inline-flex items-center gap-1.5`}>
+            创建 <Kbd />
+          </button>
         </>
       )}
     >

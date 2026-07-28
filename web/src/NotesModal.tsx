@@ -7,6 +7,7 @@ import { ConfirmModal, Modal, primaryCls } from "./Modal";
 import { AttachmentDisplay } from "./messageAttachments";
 import { AttachButton, AttachmentChips, usePasteAttachments } from "./pasteAttachments";
 import { toast } from "./toast";
+import { Kbd, submitShortcutTitle } from "./ui";
 
 export type NoteTaskDraft = {
   noteIds: string[];
@@ -59,8 +60,13 @@ export function NewNoteModal({ project, onClose }: { project: ProjectView; onClo
             title="添加图片或文件"
           />
           <button onClick={close} className="px-3 py-1.5 text-[13px] text-muted">取消</button>
-          <button disabled={!body.trim() || busy} onClick={() => void save(close)} className={primaryCls}>
-            {busy ? "保存中…" : "保存"}
+          <button
+            disabled={!body.trim() || busy}
+            onClick={() => void save(close)}
+            title={submitShortcutTitle("保存随手记")}
+            className={`${primaryCls} inline-flex items-center gap-1.5`}
+          >
+            {busy ? "保存中…" : "保存"} <Kbd />
           </button>
         </>
       )}
@@ -70,6 +76,12 @@ export function NewNoteModal({ project, onClose }: { project: ProjectView; onClo
         value={body}
         onChange={(event) => setBody(event.target.value)}
         onPaste={onPaste}
+        onKeyDown={(event) => {
+          if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+            event.preventDefault();
+            void save(onClose);
+          }
+        }}
         placeholder="记下临时想法…"
         className="min-h-[220px] w-full resize-y bg-transparent text-[14px] leading-relaxed text-ink outline-none placeholder:text-faint"
       />
@@ -256,6 +268,12 @@ export function NotesModal({
                   value={editBody}
                   onChange={(event) => setEditBody(event.target.value)}
                   onPaste={uploaded.onPaste}
+                  onKeyDown={(event) => {
+                    if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+                      event.preventDefault();
+                      void saveEdit();
+                    }
+                  }}
                   className="min-h-[220px] flex-1 resize-none bg-transparent text-[14px] leading-relaxed text-ink outline-none"
                 />
                 <AttachmentDisplay
@@ -271,8 +289,13 @@ export function NotesModal({
                     title="添加图片或文件"
                   />
                   <button onClick={cancelEdit} className="ml-auto px-3 py-1.5 text-[13px] text-muted">取消</button>
-                  <button disabled={!editBody.trim()} onClick={() => void saveEdit()} className={`${primaryCls} inline-flex items-center gap-1.5`}>
-                    <FloppyDisk size={14} /> 保存
+                  <button
+                    disabled={!editBody.trim()}
+                    onClick={() => void saveEdit()}
+                    title={submitShortcutTitle("保存随手记")}
+                    className={`${primaryCls} inline-flex items-center gap-1.5`}
+                  >
+                    <FloppyDisk size={14} /> 保存 <Kbd />
                   </button>
                 </div>
               </div>

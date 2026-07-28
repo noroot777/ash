@@ -5,10 +5,12 @@ import { PaperPlaneTilt } from "@phosphor-icons/react";
 import { api } from "./api";
 import { StatusIcon } from "./StatusIcon";
 import { toast } from "./toast";
+import { Kbd, submitShortcutLabel, submitShortcutTitle } from "./ui";
 
 // ask_question 的答复卡片由单任务与 /team 调度台共用。多问题只改变网页如何组织
 // 输入：提交时仍合成一段无歧义文本走原来的 /answer，不新增结构化答复协议。
 export function QuestionCard({ task }: { task: Task }) {
+  const shortcut = submitShortcutLabel();
   const items = task.questionItems ?? [];
   const isMulti = items.length > 0;
   const isLead = task.mode === "team";
@@ -112,10 +114,10 @@ export function QuestionCard({ task }: { task: Task }) {
               settling
                 ? "提问回合还没结束，稍候片刻再答…"
                 : (task.questionOptions?.length ?? 0) > 0
-                  ? "选择上方建议，或自己写答复（⌘↵ 发送）"
+                  ? `选择上方建议，或自己写答复（${shortcut} 发送）`
                   : isLead
-                    ? "写下答复，发送后直接进同一个常驻会话（⌘↵ 发送）"
-                    : "写下答复，发送后会直接唤醒 agent 带着答案继续（⌘↵ 发送）"
+                    ? `写下答复，发送后直接进同一个常驻会话（${shortcut} 发送）`
+                    : `写下答复，发送后会直接唤醒 agent 带着答案继续（${shortcut} 发送）`
             }
             ariaLabel="问题答复"
             onChange={setDraft}
@@ -240,11 +242,11 @@ function SendButton({
       type="button"
       onClick={onClick}
       disabled={disabled}
-      title={title}
+      title={submitShortcutTitle(title)}
       className="flex shrink-0 items-center gap-1 rounded-md border border-cyan-500 bg-cyan-600 px-3 py-1.5 text-[11px] font-semibold text-white shadow-sm transition-colors hover:bg-cyan-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/50 focus-visible:ring-offset-1 disabled:cursor-not-allowed disabled:opacity-40"
     >
       <PaperPlaneTilt size={13} weight="fill" />
-      {busy ? "发送中…" : "发送答复"}
+      {busy ? "发送中…" : "发送答复"} <Kbd className="border-white/20 bg-white/10" />
     </button>
   );
 }
