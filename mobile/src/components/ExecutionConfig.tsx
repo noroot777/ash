@@ -6,6 +6,7 @@ import {
   REASONING_EFFORT_DETAIL,
   REASONING_EFFORT_VALUES,
 } from "@harness/shared";
+import { sameExecutor } from "@harness/shared/executors";
 import { Ionicons } from "@expo/vector-icons";
 import { api } from "@/lib/api";
 import { useTheme, radius, fonts } from "@/lib/theme";
@@ -142,8 +143,17 @@ export function ExecutionConfig({
           options={options}
           value={value}
           onSelect={(next) => {
-            if (picker === "executor") onSelectionChange(parseSelection(next, profiles, selection));
-            else if (picker === "model") onModelChange(next);
+            if (picker === "executor") {
+              const selected = parseSelection(next, profiles, selection);
+              // 换执行器 = 旧的模型/思考强度覆盖作废（那套模型 id 多半在新执行器上
+              // 不存在）。清空动作放在这一层，三个调用点共用；判定走 shared 的
+              // sameExecutor，与 web 和服务端同一条口径。
+              if (!sameExecutor(selected, selection)) {
+                onModelChange("");
+                onReasoningEffortChange("");
+              }
+              onSelectionChange(selected);
+            } else if (picker === "model") onModelChange(next);
             else onReasoningEffortChange(next);
           }}
           onClose={() => setPicker(null)}

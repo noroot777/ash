@@ -10,6 +10,7 @@
 import { eq } from "drizzle-orm";
 import type { AgentType, Task, TeamConfig } from "@harness/shared";
 import { TEAM_DEFAULTS } from "@harness/shared";
+import { inheritExecutorOverrides, pickExecutor } from "@harness/shared/executors";
 import { db } from "../db/index.js";
 import { tasks, groups, queueItems, agents } from "../db/schema.js";
 import { id, now } from "../util.js";
@@ -49,24 +50,23 @@ export async function dispatchWorkers(
   const profileTypes = new Map(
     (await db.select({ id: agents.id, type: agents.type }).from(agents)).map((a) => [a.id, a.type as AgentType] as const),
   );
+  // 团队默认执行者 —— 既是「没指定就用它」的兜底，也是 cfg.workerModel /
+  // cfg.workerReasoningEffort 这两个默认覆盖所属的执行器。
+  const workerDefault = { executorId: cfg.workerExecutorId ?? null, agentType: cfg.worker };
+  const typeOf = (eid: string) => profileTypes.get(eid);
   // 每个执行者任务的「执行器 profile + 类型」。只有**同一次调用里显式给出的**两者冲突才算用户自相矛盾;
   // 单给 agentType 是「这个执行者换类型」,此时不能硬套团队默认 profile(类型对不上),按类型默认执行器走。
-  const picks = specs.map((s, i): { executorId: string | null; agentType: AgentType } => {
-    const ownType = s.agentType ?? null;
-    if (s.executorId) {
-      const t = profileTypes.get(s.executorId);
-      if (t && ownType && t !== ownType) {
-        throw new Error(`tasks[${i}].executorId 属于 ${t},但 agentType 是 ${ownType}`);
-      }
-      return { executorId: s.executorId, agentType: (ownType ?? t ?? cfg.worker) as AgentType };
+  const picks = specs.map((s, i) => {
+    const t = s.executorId ? typeOf(s.executorId) : undefined;
+    if (t && s.agentType && t !== s.agentType) {
+      throw new Error(`tasks[${i}].executorId 属于 ${t},但 agentType 是 ${s.agentType}`);
     }
-    if (s.executorId === null) return { executorId: null, agentType: (ownType ?? cfg.worker) as AgentType };
-    const inherited = cfg.workerExecutorId ?? null;
-    const inheritedType = inherited ? profileTypes.get(inherited) : undefined;
-    if (ownType) {
-      return { executorId: inheritedType === ownType ? inherited : null, agentType: ownType };
-    }
-    return { executorId: inherited, agentType: (inheritedType ?? cfg.worker) as AgentType };
+    return pickExecutor({
+      executorId: s.executorId,
+      agentType: s.agentType,
+      fallback: workerDefault,
+      typeOf,
+    });
   });
 
   const ts = now();
@@ -89,6 +89,14 @@ export async function dispatchWorkers(
     const explicitTitle = (s.title ?? "").trim();
     const at = new Date(base + i).toISOString(); // 递增时间戳,列表排序稳定
     const pick = picks[i];
+    const overrides = inheritExecutorOverrides({
+      from: workerDefault,
+      to: pick,
+      model: s.model,
+      reasoningEffort: s.reasoningEffort,
+      defaultModel: cfg.workerModel,
+      defaultReasoningEffort: cfg.workerReasoningEffort,
+    });
     return {
       id: id(),
       projectId: lead.projectId,
@@ -102,11 +110,10 @@ export async function dispatchWorkers(
       labels: "[]",
       dependsOn: "[]",
       resumeDependsOn: "[]",
-      agentType: pick.agentType as AgentType | null,
+      agentType: pick.agentType,
       executorId: pick.executorId,
-      model: (s.model !== undefined ? s.model : cfg.workerModel) || null,
-      reasoningEffort:
-        (s.reasoningEffort !== undefined ? s.reasoningEffort : cfg.workerReasoningEffort) || null,
+      model: overrides.model,
+      reasoningEffort: overrides.reasoningEffort,
       autoTitle: false, // 调度者派活时给的标题就是标题,不让执行者自己改名
       debate: null as string | null,
       team: null as string | null,

@@ -19,6 +19,7 @@ import type {
   QuestionItem,
 } from "@harness/shared";
 import { canSingleRun, canArchive, isUserSettableStatus, AGENT_TYPES, maxBytesFor, attachmentKind, MAX_QUESTION_OPTIONS, MAX_QUESTION_OPTION_LEN, MAX_QUESTION_ITEMS } from "@harness/shared";
+import { inheritExecutorOverrides, pickExecutor, sameExecutor } from "@harness/shared/executors";
 import { db } from "./db/index.js";
 import { projects, groups, tasks, sessions, schedules, scheduledMessages, agents, llmProviders, queueItems, notes } from "./db/schema.js";
 import { bus } from "./bus.js";
@@ -663,8 +664,25 @@ api.patch("/tasks/:id", async (c) => {
     patch.executorId = requestedExecutorId ?? null;
     if (executorType && b.agentType === undefined) patch.agentType = executorType;
   }
-  if (b.model !== undefined) patch.model = b.model || null;
-  if (b.reasoningEffort !== undefined) patch.reasoningEffort = b.reasoningEffort || null;
+  // 换执行器 = 旧的 model/思考强度覆盖作废（那套模型名多半在新 CLI 上根本不存在）。
+  // 同一次 PATCH 里显式给了新值就用新值，没给就自动清空 —— 与创建路径同一条口径
+  // （inheritExecutorOverrides，shared/src/executor-overrides.ts）。
+  const beforeExecutor = { executorId: existing.executorId, agentType: existing.agentType as AgentType | null };
+  const afterExecutor = {
+    executorId: (patch.executorId !== undefined ? (patch.executorId as string | null) : existing.executorId) ?? null,
+    agentType: ((patch.agentType !== undefined ? patch.agentType : existing.agentType) ?? null) as AgentType | null,
+  };
+  const patchedOverrides = inheritExecutorOverrides({
+    from: beforeExecutor,
+    to: afterExecutor,
+    model: b.model,
+    reasoningEffort: b.reasoningEffort,
+    defaultModel: existing.model,
+    defaultReasoningEffort: existing.reasoningEffort,
+  });
+  const executorChanged = !sameExecutor(beforeExecutor, afterExecutor);
+  if (b.model !== undefined || executorChanged) patch.model = patchedOverrides.model;
+  if (b.reasoningEffort !== undefined || executorChanged) patch.reasoningEffort = patchedOverrides.reasoningEffort;
   if (b.mode !== undefined) patch.mode = b.mode;
   if (b.debate !== undefined) patch.debate = b.debate ? JSON.stringify(b.debate) : null;
   // 注意:dependsOn / resumeDependsOn 不再可编辑(DESIGN-scheduling.md):
@@ -774,16 +792,22 @@ api.post("/groups/:groupId/tasks/batch", async (c) => {
 
   // Validate every agent type up front (task-level or inherited default) so we
   // fail the whole batch cleanly instead of half-inserting.
+  //
+  // 冲突只认「同一处显式给出的两者」(同一个 spec 里的 executorId + agentType,或
+  // defaults 里的那对)。任务自己的 agentType 撞上**继承来的** defaults.executorId
+  // 不是矛盾,而是「这个任务换类型」—— 按类型默认执行器降级,与 team dispatch 同口径。
+  const defaultsExecutorType = b.defaults?.executorId ? profileTypes.get(b.defaults.executorId) : undefined;
+  if (defaultsExecutorType && b.defaults?.agentType && defaultsExecutorType !== b.defaults.agentType) {
+    return c.json({ error: `defaults.executorId 属于 ${defaultsExecutorType},但 defaults.agentType 是 ${b.defaults.agentType}`, executorId: b.defaults.executorId }, 400);
+  }
   for (const [i, s] of specs.entries()) {
-    const executorId = s.executorId !== undefined ? s.executorId : b.defaults?.executorId;
-    const executorType = executorId ? profileTypes.get(executorId) : undefined;
-    const explicitType = s.agentType ?? b.defaults?.agentType;
-    const at = explicitType ?? executorType;
+    const executorType = s.executorId ? profileTypes.get(s.executorId) : undefined;
+    const at = s.agentType ?? b.defaults?.agentType ?? executorType ?? defaultsExecutorType;
     if (at && !AGENT_TYPES.includes(at)) {
       return c.json({ error: `tasks[${i}].agentType 未知: ${at}`, allowed: AGENT_TYPES }, 400);
     }
-    if (executorType && explicitType && explicitType !== executorType) {
-      return c.json({ error: `tasks[${i}].executorId 属于 ${executorType},但 agentType 是 ${explicitType}`, executorId }, 400);
+    if (executorType && s.agentType && s.agentType !== executorType) {
+      return c.json({ error: `tasks[${i}].executorId 属于 ${executorType},但 agentType 是 ${s.agentType}`, executorId: s.executorId }, 400);
     }
   }
 
@@ -818,11 +842,29 @@ api.post("/groups/:groupId/tasks/batch", async (c) => {
 
   // Distinct, increasing timestamps — UI 排序时序稳定。
   const base = Date.now();
+  // 批次 defaults 里的 model/reasoningEffort 属于 defaults 那个执行器；任务自己换了
+  // 执行器就不该继承（inheritExecutorOverrides 单点，与 team dispatch / PATCH 共用）。
+  const defaultsRef = {
+    executorId: b.defaults?.executorId ?? null,
+    agentType: (b.defaults?.agentType ?? defaultsExecutorType ?? null) as AgentType | null,
+  };
   const rows = specs.map((s, i) => {
     const explicitTitle = (s.title ?? "").trim();
     const ts = new Date(base + i).toISOString();
-    const executorId = s.executorId !== undefined ? s.executorId : b.defaults?.executorId ?? null;
-    const agentType = s.agentType ?? b.defaults?.agentType ?? (executorId ? profileTypes.get(executorId) : null) ?? null;
+    const pick = pickExecutor({
+      executorId: s.executorId,
+      agentType: s.agentType,
+      fallback: defaultsRef,
+      typeOf: (eid) => profileTypes.get(eid),
+    });
+    const overrides = inheritExecutorOverrides({
+      from: defaultsRef,
+      to: pick,
+      model: s.model,
+      reasoningEffort: s.reasoningEffort,
+      defaultModel: b.defaults?.model,
+      defaultReasoningEffort: b.defaults?.reasoningEffort,
+    });
     return {
       id: ids[i],
       projectId: g.projectId,
@@ -836,11 +878,10 @@ api.post("/groups/:groupId/tasks/batch", async (c) => {
       labels: JSON.stringify(s.labels ?? b.defaults?.labels ?? []),
       dependsOn: "[]", // 字段保留为空(legacy)
       resumeDependsOn: "[]",
-      agentType: agentType as AgentType | null,
-      executorId,
-      model: (s.model !== undefined ? s.model : b.defaults?.model) || null,
-      reasoningEffort:
-        (s.reasoningEffort !== undefined ? s.reasoningEffort : b.defaults?.reasoningEffort) || null,
+      agentType: pick.agentType,
+      executorId: pick.executorId,
+      model: overrides.model,
+      reasoningEffort: overrides.reasoningEffort,
       autoTitle: !explicitTitle, // no explicit title → let the first run name it
       debate: null as string | null,
       scheduleId: null as string | null,

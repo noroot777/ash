@@ -13,6 +13,10 @@
     "./team": {
       "types": "./src/team.ts",
       "default": "./src/team.ts"
+    },
+    "./executors": {
+      "types": "./src/executor-overrides.ts",
+      "default": "./src/executor-overrides.ts"
     }
   },
   "scripts": {

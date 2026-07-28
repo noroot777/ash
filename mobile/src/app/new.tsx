@@ -317,20 +317,8 @@ export default function NewTask() {
             leadReasoningEffort={leadReasoningEffort}
             workerModel={workerModel}
             workerReasoningEffort={workerReasoningEffort}
-            onLeadChange={(next) => {
-              if (next.agentType !== leadSelection.agentType) {
-                setLeadModel("");
-                setLeadReasoningEffort("");
-              }
-              setLeadPick(next);
-            }}
-            onWorkerChange={(next) => {
-              if (next.agentType !== workerSelection.agentType) {
-                setWorkerModel("");
-                setWorkerReasoningEffort("");
-              }
-              setWorkerPick(next);
-            }}
+            onLeadChange={setLeadPick}
+            onWorkerChange={setWorkerPick}
             onLeadModelChange={setLeadModel}
             onLeadReasoningEffortChange={setLeadReasoningEffort}
             onWorkerModelChange={setWorkerModel}
@@ -349,13 +337,7 @@ export default function NewTask() {
               providers={providers}
               model={model}
               reasoningEffort={reasoningEffort}
-              onSelectionChange={(next) => {
-                if (next.agentType !== executorPick.agentType) {
-                  setModel("");
-                  setReasoningEffort("");
-                }
-                setExecutorPick(next);
-              }}
+              onSelectionChange={setExecutorPick}
               onModelChange={setModel}
               onReasoningEffortChange={setReasoningEffort}
             />
