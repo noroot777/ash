@@ -528,6 +528,10 @@ api.post("/tasks", async (c) => {
         worker: rawTeam.worker,
         leadExecutorId: rawTeam.leadExecutorId ?? null,
         workerExecutorId: rawTeam.workerExecutorId ?? null,
+        leadModel: rawTeam.leadModel || null,
+        leadReasoningEffort: rawTeam.leadReasoningEffort || null,
+        workerModel: rawTeam.workerModel || null,
+        workerReasoningEffort: rawTeam.workerReasoningEffort || null,
       }
     : null;
   const row = {
@@ -547,6 +551,8 @@ api.post("/tasks", async (c) => {
     resumeDependsOn: "[]",
     agentType: b.agentType ?? (teamConfig ? teamConfig.lead : executorType) ?? null,
     executorId: b.executorId ?? null,
+    model: b.model || null,
+    reasoningEffort: b.reasoningEffort || null,
     autoTitle: b.autoTitle ?? false,
     debate: b.debate ? JSON.stringify(b.debate) : null,
     // mode:"team" 的调度者/默认执行者类型(跟 debate 对称)。别漏 —— 漏了就静默退回
@@ -601,7 +607,7 @@ api.post("/tasks", async (c) => {
   return c.json(created!, 201);
 });
 
-// Partial update: title/body/status/priority/labels/groupId/agentType/executorId/mode/debate.
+// Partial update: title/body/status/priority/labels/groupId/agentType/executorId/model/reasoningEffort/mode/debate.
 api.patch("/tasks/:id", async (c) => {
   const tid = c.req.param("id");
   const existing = (await db.select().from(tasks).where(eq(tasks.id, tid))).at(0);
@@ -645,6 +651,8 @@ api.patch("/tasks/:id", async (c) => {
     patch.executorId = requestedExecutorId ?? null;
     if (executorType && b.agentType === undefined) patch.agentType = executorType;
   }
+  if (b.model !== undefined) patch.model = b.model || null;
+  if (b.reasoningEffort !== undefined) patch.reasoningEffort = b.reasoningEffort || null;
   if (b.mode !== undefined) patch.mode = b.mode;
   if (b.debate !== undefined) patch.debate = b.debate ? JSON.stringify(b.debate) : null;
   // 注意:dependsOn / resumeDependsOn 不再可编辑(DESIGN-scheduling.md):
@@ -818,6 +826,9 @@ api.post("/groups/:groupId/tasks/batch", async (c) => {
       resumeDependsOn: "[]",
       agentType: agentType as AgentType | null,
       executorId,
+      model: (s.model !== undefined ? s.model : b.defaults?.model) || null,
+      reasoningEffort:
+        (s.reasoningEffort !== undefined ? s.reasoningEffort : b.defaults?.reasoningEffort) || null,
       autoTitle: !explicitTitle, // no explicit title → let the first run name it
       debate: null as string | null,
       scheduleId: null as string | null,

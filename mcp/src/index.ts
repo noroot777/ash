@@ -51,6 +51,8 @@ const taskShape = z.object({
   body: z.string().optional().describe("交给 agent 执行的 prompt / 目标"),
   agentType: AGENT_TYPE.optional().describe("覆盖批次默认 agent"),
   executorId: z.string().nullable().optional().describe("覆盖批次默认执行器 profile(agents.id)。指定则优先用该 profile；为空/悬空时按 agentType 默认执行器降级"),
+  model: z.string().nullable().optional().describe("覆盖执行器 profile 的模型；缺省/null=跟随执行器"),
+  reasoningEffort: z.string().nullable().optional().describe("覆盖执行器 profile 的思考强度；缺省/null=跟随执行器"),
   priority: PRIORITY.optional(),
   labels: z.array(z.string()).optional().describe("任务标签"),
 });
@@ -120,6 +122,8 @@ server.registerTool(
       defaults: z.object({
         agentType: AGENT_TYPE.optional(),
         executorId: z.string().nullable().optional().describe("默认执行器 profile(agents.id)。任务自身 executorId 可覆盖；为空/悬空时按 agentType 默认执行器降级"),
+        model: z.string().nullable().optional().describe("覆盖执行器 profile 的默认模型；缺省/null=跟随执行器，任务自身可覆盖"),
+        reasoningEffort: z.string().nullable().optional().describe("覆盖执行器 profile 的默认思考强度；缺省/null=跟随执行器，任务自身可覆盖"),
         priority: PRIORITY.optional(),
         labels: z.array(z.string()).optional(),
       }).optional().describe("每个任务的兜底值，任务自身可覆盖"),
@@ -215,7 +219,7 @@ server.registerTool(
   {
     title: "更新任务",
     description:
-      "更新单个任务的可编辑字段:title/body/status/labels/priority/groupId/agentType/executorId。executorId 指具体执行器 profile(agents.id),指定则优先用它；为空/悬空时按 agentType 默认执行器降级。**不能**用此工具改任务的队列归属——请用 queue_insert / queue_remove / queue_reorder;**想让失败/取消的任务回队列等待用 requeue_task**(它会顺带处理位置:被越过就排到队尾)。也不能把任务手动设为 running/queued/awaiting_review。**running/queued 任务的 status 一律不可改(会被 409 拒绝)——要停止/取消用 stop_task**,它才会真正杀掉 agent 进程树;直接 patch canceled 只改数据库,是 2026-07-21「complete_task 409 → failed 错乱」事故的根因。**正在执行的任务要确认完成时,也不要用 status=done——用 complete_task**:回合结束的严格结算只认 complete_task 的确认。",
+      "更新单个任务的可编辑字段:title/body/status/labels/priority/groupId/agentType/executorId/model/reasoningEffort。model/reasoningEffort 覆盖执行器 profile 的模型/思考强度，缺省或 null=跟随执行器；可在运行中修改，下一回合解析执行器时生效。executorId 指具体执行器 profile(agents.id),指定则优先用它；为空/悬空时按 agentType 默认执行器降级。**不能**用此工具改任务的队列归属——请用 queue_insert / queue_remove / queue_reorder;**想让失败/取消的任务回队列等待用 requeue_task**(它会顺带处理位置:被越过就排到队尾)。也不能把任务手动设为 running/queued/awaiting_review。**running/queued 任务的 status 一律不可改(会被 409 拒绝)——要停止/取消用 stop_task**,它才会真正杀掉 agent 进程树;直接 patch canceled 只改数据库,是 2026-07-21「complete_task 409 → failed 错乱」事故的根因。**正在执行的任务要确认完成时,也不要用 status=done——用 complete_task**:回合结束的严格结算只认 complete_task 的确认。",
     inputSchema: {
       taskId: z.string(),
       title: z.string().optional(),
@@ -226,6 +230,8 @@ server.registerTool(
       groupId: z.string().nullable().optional(),
       agentType: AGENT_TYPE.nullable().optional(),
       executorId: z.string().nullable().optional().describe("具体执行器 profile 的 agents.id；传 null 清空并按 agentType 默认执行器降级"),
+      model: z.string().nullable().optional().describe("覆盖执行器 profile 的模型；缺省/null=跟随执行器"),
+      reasoningEffort: z.string().nullable().optional().describe("覆盖执行器 profile 的思考强度；缺省/null=跟随执行器"),
     },
   },
   async ({ taskId, ...patch }) => {
@@ -248,10 +254,12 @@ server.registerTool(
       chain: z.boolean().optional().describe("默认 true=创建 queue 串成依赖链(serial 才允许);false=互不依赖(配 mode=parallel 才真正并行)"),
       agentType: AGENT_TYPE.optional().describe("所有任务的默认 agent（任务可逐个覆盖）"),
       executorId: z.string().nullable().optional().describe("所有任务的默认执行器 profile(agents.id)，任务可逐个覆盖；为空/悬空时按 agentType 默认执行器降级"),
+      model: z.string().nullable().optional().describe("所有任务的默认模型覆盖；缺省/null=跟随执行器，任务可逐个覆盖"),
+      reasoningEffort: z.string().nullable().optional().describe("所有任务的默认思考强度覆盖；缺省/null=跟随执行器，任务可逐个覆盖"),
       run: z.boolean().optional(),
     },
   },
-  async ({ repoPath, tasks, groupName, mode, chain, agentType, executorId, run }) => {
+  async ({ repoPath, tasks, groupName, mode, chain, agentType, executorId, model, reasoningEffort, run }) => {
     try {
       const project = (await call("POST", "/projects/resolve", { repoPath })) as { id: string; name: string };
       // resolve（找到或复用）而非每次新建，避免同名分组被反复建出重复副本。
@@ -261,7 +269,9 @@ server.registerTool(
       const batch = (await call("POST", `/groups/${group.id}/tasks/batch`, {
         chain: chain ?? true,
         run: !!run,
-        defaults: agentType || executorId ? { agentType, executorId } : undefined,
+        defaults: [agentType, executorId, model, reasoningEffort].some((v) => v !== undefined)
+          ? { agentType, executorId, model, reasoningEffort }
+          : undefined,
         tasks,
       })) as { tasks: unknown[]; warning?: string };
       return ok({
@@ -393,6 +403,8 @@ server.registerTool(
             title: z.string().optional().describe("简短标题(界面上显示);省略则取 body 第一行"),
             agentType: AGENT_TYPE.optional().describe("覆盖团队默认的执行者类型"),
             executorId: z.string().nullable().optional().describe("覆盖团队执行者任务的默认执行器 profile(agents.id)。指定则优先用该 profile；为空/悬空时按 agentType 默认执行器降级"),
+            model: z.string().nullable().optional().describe("覆盖执行器 profile 的模型；缺省=跟随团队默认，null=跟随执行器"),
+            reasoningEffort: z.string().nullable().optional().describe("覆盖执行器 profile 的思考强度；缺省=跟随团队默认，null=跟随执行器"),
             reportBack: z.boolean().optional().describe("true=它完成时叫醒你;默认 false 静默完成"),
             useWorktree: z.boolean().optional().describe("true=这个执行者在团队共享目录之上再单独开 worktree 隔离(默认 false,继承调度台目录)"),
           }),

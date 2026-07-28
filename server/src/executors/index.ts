@@ -7,14 +7,19 @@ import { ClaudeExecutor } from "./claude.js";
 import { CodexExecutor } from "./codex.js";
 
 type AgentRow = typeof agents.$inferSelect;
+type ExecutorOverrides = { model?: string | null; reasoningEffort?: string | null };
+
+async function defaultProfile(type: AgentType): Promise<AgentRow | null> {
+  const rows = await db.select().from(agents).where(eq(agents.type, type));
+  return rows.find((r) => r.isDefault) ?? rows[0] ?? null;
+}
 
 // Resolve an AgentType to a concrete executor (DESIGN.md §5: two-level model —
 // you pick a *type*, the registry resolves the default executor profile under
 // it, including model + local/ssh target). Falls back to a built-in local
 // default when no profile is registered.
 export async function resolveExecutor(type: AgentType): Promise<AgentExecutor> {
-  const rows = await db.select().from(agents).where(eq(agents.type, type));
-  return build(rows.find((r) => r.isDefault) ?? rows[0] ?? null, type);
+  return build(await defaultProfile(type), type);
 }
 
 // Resolve a *specific* executor profile by id — used where the user picked one
@@ -32,27 +37,37 @@ export async function resolveExecutorById(id: string): Promise<AgentExecutor> {
 export async function resolveExecutorFor(opts: {
   executorId?: string | null;
   type?: AgentType | null;
+  model?: string | null;
+  reasoningEffort?: string | null;
 }): Promise<AgentExecutor> {
   if (opts.executorId) {
     const [row] = await db.select().from(agents).where(eq(agents.id, opts.executorId));
-    if (row) return resolveExecutorById(row.id);
+    if (row) return build(row, row.type as AgentType, opts);
   }
-  return resolveExecutor(opts.type ?? "claude");
+  const type = opts.type ?? "claude";
+  return build(await defaultProfile(type), type, opts);
 }
 
-async function build(profile: AgentRow | null, type: AgentType): Promise<AgentExecutor> {
+async function build(
+  profile: AgentRow | null,
+  type: AgentType,
+  overrides: ExecutorOverrides = {},
+): Promise<AgentExecutor> {
   const opts = profile
     ? {
         name: profile.name,
-        model: profile.model ?? undefined,
+        model: overrides.model || profile.model || undefined,
         extraArgs: JSON.parse(profile.extraArgs) as string[],
-        reasoningEffort: profile.reasoningEffort ?? undefined,
+        reasoningEffort: overrides.reasoningEffort || profile.reasoningEffort || undefined,
         speed: profile.speed === "fast" ? ("fast" as const) : undefined,
         target: JSON.parse(profile.target) as ExecTarget,
         bin: undefined as string | undefined,
         relay: await loadRelay(profile.providerId),
       }
-    : {};
+    : {
+        model: overrides.model || undefined,
+        reasoningEffort: overrides.reasoningEffort || undefined,
+      };
 
   switch (type) {
     case "claude":

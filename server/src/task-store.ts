@@ -49,6 +49,8 @@ const toTask = (r: TaskRow, profiles: AgentLabelRow[] = []): Task => ({
   resumeDependsOn: JSON.parse(r.resumeDependsOn),
   agentType: (r.agentType as Task["agentType"]) ?? undefined,
   executorId: r.executorId ?? null,
+  model: r.model ?? null,
+  reasoningEffort: r.reasoningEffort ?? null,
   executorLabel: executorLabelFor(profiles, r.executorId, (r.agentType as AgentType) ?? null),
   autoTitle: r.autoTitle,
   debate: r.debate ? JSON.parse(r.debate) : undefined,

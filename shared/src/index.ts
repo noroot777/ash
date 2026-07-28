@@ -140,6 +140,9 @@ export interface Task {
   // Concrete executor profile. If set and still exists, server runs that profile;
   // if null/stale, it falls back to the current default executor for agentType.
   executorId?: string | null;
+  // Per-task CLI overrides. null/omitted follows the resolved executor profile.
+  model?: string | null;
+  reasoningEffort?: string | null;
   // Read-only display label for the profile that will run this task:
   // selected agents.name, else the current default profile name for agentType.
   executorLabel?: string | null;
@@ -229,6 +232,10 @@ export interface TeamConfig {
   worker: AgentType; // 派活时的默认执行者类型（dispatch 可逐个覆盖）
   leadExecutorId?: string | null; // 调度者具体执行器；缺省/悬空 → lead 类型默认执行器
   workerExecutorId?: string | null; // 执行者任务的默认执行器；缺省/悬空 → worker 类型默认执行器
+  leadModel?: string | null; // 调度台模型覆盖；缺省/null → 跟随 lead 执行器 profile
+  leadReasoningEffort?: string | null; // 调度台思考强度覆盖；缺省/null → 跟随 lead profile
+  workerModel?: string | null; // 新执行者任务的默认模型覆盖；缺省/null → 跟随 worker profile
+  workerReasoningEffort?: string | null; // 新执行者任务的默认思考强度覆盖
   leadExecutorLabel?: string | null; // server 只读展示字段
   workerExecutorLabel?: string | null; // server 只读展示字段
 }
@@ -354,6 +361,8 @@ export interface BatchTaskInput {
   body?: string; // the prompt / objective
   agentType?: AgentType; // overrides defaults.agentType
   executorId?: string | null; // overrides defaults.executorId; stale id degrades by agentType
+  model?: string | null; // overrides defaults.model; null follows the resolved executor profile
+  reasoningEffort?: string | null; // overrides defaults.reasoningEffort
   priority?: Priority;
   labels?: string[];
   // Each entry is resolved against sibling `key`s first; anything that doesn't
@@ -371,6 +380,8 @@ export interface BatchCreateTasksBody {
     // applied to every task unless that task overrides the field
     agentType?: AgentType;
     executorId?: string | null;
+    model?: string | null;
+    reasoningEffort?: string | null;
     priority?: Priority;
     labels?: string[];
   };
