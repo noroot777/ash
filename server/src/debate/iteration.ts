@@ -12,6 +12,7 @@ import { createTasks, enrichTasks } from "../task-store.js";
 import { sessionTranscriptPath } from "../transcript.js";
 import { id, now } from "../util.js";
 import { join } from "node:path";
+import { debateConsensusBy } from "./settlement.js";
 
 type DebateEntry = {
   type?: string;
@@ -19,6 +20,7 @@ type DebateEntry = {
   raised?: boolean;
   agrees?: boolean;
   consensus?: boolean;
+  consensusBy?: "both" | "A" | "B";
   conclusion?: string;
   conclusionA?: string | null;
   conclusionB?: string | null;
@@ -47,6 +49,16 @@ async function debateEntries(taskId: string): Promise<DebateEntry[]> {
   }
 }
 
+function consensusBy(lastA?: DebateEntry, lastB?: DebateEntry): DebateEntry["consensusBy"] {
+  if (!lastA && !lastB) return undefined;
+  return debateConsensusBy({
+    raisedA: !!lastA?.raised,
+    raisedB: !!lastB?.raised,
+    agreesA: !!lastA?.agrees,
+    agreesB: !!lastB?.agrees,
+  });
+}
+
 function conclusionLines(entries: DebateEntry[]): string[] {
   const verdict = [...entries].reverse().find((entry) =>
     entry.type === "debate.gate"
@@ -55,12 +67,13 @@ function conclusionLines(entries: DebateEntry[]): string[] {
   const lastB = [...entries].reverse().find((entry) => entry.speaker === "B");
   const a = nonEmpty(verdict?.conclusionA) ?? nonEmpty(lastA?.conclusion);
   const b = nonEmpty(verdict?.conclusionB) ?? nonEmpty(lastB?.conclusion);
+  const by = verdict?.consensusBy ?? (verdict?.consensus ? "both" : consensusBy(lastA, lastB));
   const consensus = verdict?.consensus
-    ?? !!(lastA?.raised && lastB?.raised && lastA?.agrees && lastB?.agrees);
+    ?? !!by;
 
   if (consensus && a && b && a === b) return [`共识结论：${a}`];
   const lines = consensus
-    ? ["上一轮记录为已达成共识；双方留下的结论如下："]
+    ? [by === "both" ? "上一轮记录为双方确认共识；双方留下的结论如下：" : "上一轮由单方声明与对方一致后收敛；双方留下的结论如下："]
     : ["上一轮未记录为双方达成共识；请把以下分歧也纳入复盘："];
   if (a) lines.push(`- 辩手 A：${a}`);
   if (b) lines.push(`- 辩手 B：${b}`);

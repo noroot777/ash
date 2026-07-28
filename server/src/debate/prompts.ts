@@ -1,6 +1,6 @@
 // Symmetric debate prompts (DESIGN.md §7): two EQUAL debaters, human is judge.
 // Raise-hand marker: a debater puts [可收敛] on its own line when it believes
-// consensus is reached. Convergence = BOTH raised in their latest turns.
+// convergence is reached. Convergence = BOTH raised, or one raised and agrees.
 
 export const RAISE_MARK = "[可收敛]";
 
@@ -15,7 +15,8 @@ ${topic}`;
 }
 
 // When a debater is ready to stop, it must close with this exact 3-line block so
-// the program can tell consensus (both 与对方一致：是) from a clarified
+// the program can tell consensus (both confirmed, or one declared agreement)
+// from a clarified
 // disagreement (the human then breaks the tie). [可收敛] only means "I'm ready to
 // stop", NOT "we agree".
 const CONVERGE_BLOCK = `${RAISE_MARK}
@@ -46,7 +47,7 @@ ${opponentLatest}
 
 只有当你认为"再辩也只是重复、可以停了"时，才在回复**最后严格按如下三行收尾（缺一不可，顺序固定）**：
 ${CONVERGE_BLOCK}
-否则不要写这三行，继续推进讨论。注意：${RAISE_MARK} 表示"我认为可以停了"，并不代表你必须同意对方——若你最终结论与对方不同，请如实写"与对方一致：否"。全程中文。`;
+否则不要写这三行，继续推进讨论。注意：${RAISE_MARK} 表示"我认为可以停了"，并不代表你必须同意对方——若你最终结论与对方不同，请如实写"与对方一致：否"。若你确认双方结论已一致，写下 ${RAISE_MARK} 且"与对方一致：是"后讨论将立即收敛，无需等待对方再确认；不要把关键结论留到下一轮。全程中文。`;
 }
 
 export function injectFeedback(text: string, round: number): string {

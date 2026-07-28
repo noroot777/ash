@@ -13,14 +13,23 @@ export function teamCommandNote(text: string): string {
   return text.trim().replace(TEAM_COMMAND, "").trim();
 }
 
+function consensusBy(lastA?: DebateTurn, lastB?: DebateTurn): DebateGate["consensusBy"] {
+  if (lastA?.raised && lastB?.raised) return lastA.agrees && lastB.agrees ? "both" : undefined;
+  if (lastA?.raised && lastA.agrees) return "A";
+  if (lastB?.raised && lastB.agrees) return "B";
+  return undefined;
+}
+
 export function latestDebateGate(turns: DebateTurn[], open: boolean): DebateGate | null {
   const lastA = [...turns].reverse().find((turn) => turn.speaker === "A");
   const lastB = [...turns].reverse().find((turn) => turn.speaker === "B");
   if (!lastA && !lastB) return null;
+  const by = consensusBy(lastA, lastB);
   return {
     gate: "G1",
     open,
-    consensus: !!(lastA?.raised && lastB?.raised && lastA?.agrees && lastB?.agrees),
+    consensus: !!by,
+    consensusBy: by,
     conclusionA: lastA?.conclusion ?? null,
     conclusionB: lastB?.conclusion ?? null,
   };
@@ -77,12 +86,13 @@ function finalTurnLines(turns: DebateTurn[]): string[] {
 }
 
 function statusLine(status: TaskStatus, gate: DebateGate | null): string {
-  if (status === "done" && gate?.consensus) return "辩论已结束，双方已达成共识。";
+  const by = gate?.consensusBy ?? (gate?.consensus ? "both" : undefined);
+  if (status === "done" && gate?.consensus) return by === "both" ? "辩论已结束，双方已确认达成共识。" : "辩论已结束，由单方声明与对方一致后收敛；请结合双方结论执行。";
   if (status === "done") return "辩论已结束，但未记录为双方达成共识；请结合双方结论执行并自行处理分歧。";
   if (status === "failed") return "辩论因失败而结束，未达成共识；请结合现有双方结论判断可执行范围。";
   if (status === "canceled") return "辩论已取消，未达成最终共识；请结合取消前的双方结论判断可执行范围。";
   if (gate?.consensus) {
-    return `辩论尚未结束（当前状态：${STATUS_META[status].label}），但双方当前已报告达成共识。`;
+    return `辩论尚未结束（当前状态：${STATUS_META[status].label}），但当前已${by === "both" ? "由双方确认共识" : "由单方声明一致而收敛"}。`;
   }
   return `辩论尚未结束且当前未达成共识（当前状态：${STATUS_META[status].label}），双方结论如下；执行前请自行裁决分歧。`;
 }

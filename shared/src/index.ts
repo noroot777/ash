@@ -378,6 +378,7 @@ export interface BatchCreateTasksBody {
 
 // ── Debate (§7) ──────────────────────────────────────────────────────────────
 export type HitlGate = "off" | "on";
+export type DebateConsensusBy = "both" | "A" | "B";
 
 // /pair is discussion-only: two debaters challenge each other and produce a
 // conclusion. Code execution belongs to /team.
@@ -547,7 +548,7 @@ export type ServerEvent =
       startedAt?: string;
       durationMs?: number;
     }
-  | { type: "debate.gate"; taskId: string; gate: GateName; open: boolean; consensus?: boolean; conclusionA?: string | null; conclusionB?: string | null }
+  | { type: "debate.gate"; taskId: string; gate: GateName; open: boolean; consensus?: boolean; consensusBy?: DebateConsensusBy; conclusionA?: string | null; conclusionB?: string | null }
   // A human intervention in a /pair timeline (gate inject/ask). Carries the time
   // so the timeline can show when the user spoke. Persisted in the transcript too.
   // target: when a 提问 was directed at one debater, which side — so the timeline

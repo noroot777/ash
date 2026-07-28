@@ -1,4 +1,4 @@
-import type { ServerEvent, DebateSpeaker, GateName } from "@harness/shared";
+import type { ServerEvent, DebateSpeaker, GateName, DebateConsensusBy } from "@harness/shared";
 
 export type DebateTurn = {
   round: number;
@@ -20,6 +20,7 @@ export type DebateGate = {
   gate: GateName;
   open: boolean;
   consensus?: boolean;
+  consensusBy?: DebateConsensusBy;
   conclusionA?: string | null;
   conclusionB?: string | null;
 };
@@ -70,6 +71,7 @@ export function applyDebateEvent(s: DebateState, ev: ServerEvent): DebateState {
         gate: ev.gate,
         open: ev.open,
         consensus: ev.consensus ?? previous?.consensus,
+        consensusBy: ev.consensusBy ?? previous?.consensusBy ?? (ev.consensus ? "both" : undefined),
         conclusionA: ev.conclusionA ?? previous?.conclusionA,
         conclusionB: ev.conclusionB ?? previous?.conclusionB,
       },

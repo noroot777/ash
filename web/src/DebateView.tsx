@@ -528,10 +528,11 @@ function GateBar({
   const [mIdx, setMIdx] = useState(0);
   const isG1 = gate.gate === "G1";
   const consensus = !!gate.consensus;
+  const consensusBy = gate.consensusBy ?? (consensus ? "both" : undefined);
   const label = !isG1
     ? "历史代码门 · 等待你裁决"
     : consensus
-      ? "收敛门 · 双方已达成共识"
+      ? `收敛门 · ${consensusBy === "both" ? "双方已达成共识" : "单方声明一致，待你确认"}`
       : "收敛门 · 双方仍有分歧（结论如下，供你定夺）";
   const nameA = "辩手A";
   const nameB = "辩手B";
@@ -578,7 +579,9 @@ function GateBar({
         <div className="mb-2 flex flex-col gap-0.5 text-xs">
           <div className={consensus ? "text-emerald-700" : "text-amber-700"}>
             {consensus
-              ? "✓ 双方均表示可收敛、自评结论一致（结论如下，若实际不符可打回或回炉）"
+              ? consensusBy === "both"
+                ? "✓ 双方均表示可收敛、自评结论一致（结论如下，若实际不符可打回或回炉）"
+                : `✓ 辩手${consensusBy}表示可收敛且自评与对方一致（对方未再表态；结论如下，可打回或回炉）`
               : "⚠ 双方未达成一致，以下是两方各自结论："}
           </div>
           {gate.conclusionA || gate.conclusionB ? (

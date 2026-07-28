@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { eq, sql } from "drizzle-orm";
 import type {
   DebateConfig,
+  DebateConsensusBy,
   DebateSpeaker,
   GateAction,
   SessionRole,
@@ -22,6 +23,7 @@ import type { AgentExecutor } from "../executors/types.js";
 import { RUNS_DIR } from "../paths.js";
 import * as P from "./prompts.js";
 import { waitForGate } from "./gates.js";
+import { canSettleDebate as canSettle, debateConsensusBy as consensusBy, isDebateConsensus as isConsensus } from "./settlement.js";
 
 const RAISE_RE = /(^|\n)\s*\[可收敛\]/;
 const AGREE_RE = /与对方一致[：:]\s*是/; // self-declared agreement with the opponent's conclusion
@@ -166,7 +168,7 @@ async function runTurn(args: {
 
   let raised = RAISE_RE.test(text);
   let agrees = raised && AGREE_RE.test(text);
-  let conclusion = raised ? (text.match(CONC_RE)?.[1]?.trim().slice(0, 140) || undefined) : undefined;
+  let conclusion = text.match(CONC_RE)?.[1]?.trim().slice(0, 140) || undefined;
   // 提问轮:辩手按 prompt 不写 [可收敛]。若它进入本轮前本就已收敛,一次澄清提问不该让它
   // "放下手"——继承既有收敛状态，否则 isConsensus 会被一次提问打回为"未达成一致"。
   if (args.inherit && !raised) {
@@ -237,11 +239,6 @@ function applyTurn(ctx: Ctx, sp: "A" | "B", t: Turn) {
   } else {
     ctx.B.cliId = t.cliId; ctx.lastB = t.text; ctx.raisedB = t.raised; ctx.agreesB = t.agrees; ctx.conclusionB = t.conclusion;
   }
-}
-
-// 双方都就绪且都自称与对方一致才算共识，否则是澄清后的分歧。
-function isConsensus(ctx: Ctx): boolean {
-  return ctx.raisedA && ctx.raisedB && ctx.agreesA && ctx.agreesB;
 }
 
 async function loadBase(taskId: string) {
@@ -365,7 +362,7 @@ export async function resumeDebate(taskId: string): Promise<void> {
     if (failed(t1)) return void (await setStatus(taskId, "failed"));
     applyTurn(ctx, sp, t1);
     // If A failed mid-round, B of the same round still needs to run.
-    if (R > 1 && sp === "A" && !(ctx.raisedA && ctx.raisedB)) {
+    if (R > 1 && sp === "A" && !canSettle(ctx)) {
       const t2 = await re("B", R);
       if (failed(t2)) return void (await setStatus(taskId, "failed"));
       applyTurn(ctx, "B", t2);
@@ -466,7 +463,7 @@ export async function resumeAtGate(taskId: string, action: GateAction): Promise<
 // turn is unusable; true when the loop ends normally (convergence or cap).
 async function runRebuttalLoop(ctx: Ctx): Promise<boolean> {
   const { taskId, exA, exB, cwd } = ctx;
-  while (!(ctx.raisedA && ctx.raisedB) && ctx.round < ctx.cap) {
+  while (!canSettle(ctx) && ctx.round < ctx.cap) {
     ctx.round++;
     const at = await runTurn({
       taskId, role: "debaterA", speaker: "A", round: ctx.round, executor: exA,
@@ -474,7 +471,7 @@ async function runRebuttalLoop(ctx: Ctx): Promise<boolean> {
     });
     if (failed(at)) { await setStatus(taskId, "failed"); return false; }
     applyTurn(ctx, "A", at);
-    if (ctx.raisedA && ctx.raisedB) break;
+    if (canSettle(ctx)) break;
     const bt = await runTurn({
       taskId, role: "debaterB", speaker: "B", round: ctx.round, executor: exB,
       prompt: P.rebuttal(ctx.lastA, ctx.round), cwd, rowId: ctx.B.rowId, resumeCliId: ctx.B.cliId || undefined,
@@ -515,6 +512,7 @@ async function finishDiscussion(ctx: Ctx): Promise<void> {
   if (cfg.gateG1 === "on") {
     const approved = await runGate(taskId, (k, t, target) => reDebate(ctx, k, t, target), () => ({
       consensus: isConsensus(ctx),
+      consensusBy: consensusBy(ctx),
       conclusionA: ctx.conclusionA ?? null,
       conclusionB: ctx.conclusionB ?? null,
     }));
@@ -530,14 +528,14 @@ async function finishDiscussion(ctx: Ctx): Promise<void> {
 async function runGate(
   taskId: string,
   reAction: (kind: "inject" | "ask", text: string, target?: "A" | "B") => Promise<void>,
-  getInfo?: () => { consensus: boolean; conclusionA: string | null; conclusionB: string | null },
+  getInfo?: () => { consensus: boolean; consensusBy?: DebateConsensusBy; conclusionA: string | null; conclusionB: string | null },
 ): Promise<boolean> {
   while (true) {
     await setStatus(taskId, "awaiting_review");
     const info = getInfo?.();
     recordGateEvent({
       type: "debate.gate", taskId, gate: "G1", open: true,
-      consensus: info?.consensus, conclusionA: info?.conclusionA, conclusionB: info?.conclusionB,
+      consensus: info?.consensus, consensusBy: info?.consensusBy, conclusionA: info?.conclusionA, conclusionB: info?.conclusionB,
     });
     const action = await waitForGate(taskId);
     recordGateEvent({ type: "debate.gate", taskId, gate: "G1", open: false });
