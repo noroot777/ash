@@ -169,7 +169,7 @@ function TaskRow({
         <PriorityIcon p={t.priority} />
         <span className="min-w-[80px] flex-1 truncate text-[13px] text-ink">{t.title}</span>
         <div className="ml-auto flex min-w-0 items-center gap-1.5 overflow-hidden">
-          {t.useWorktree && <TaskWorktreeChip />}
+          {t.useWorktree && <TaskWorktreeChip cleaned={t.stage === "accepted"} />}
           {t.queueId != null && !canArchive(t.status) && (
             <span
               className="shrink-0 rounded bg-overlay px-1.5 py-0.5 font-mono text-[10px] text-muted"
@@ -256,7 +256,7 @@ function TeamRow({
         <PriorityIcon p={lead.priority} />
         <span className="min-w-[80px] flex-1 truncate text-[13px] text-ink">{lead.title}</span>
         <div className="ml-auto flex min-w-0 items-center gap-1.5 overflow-hidden">
-          {lead.useWorktree && <TaskWorktreeChip />}
+          {lead.useWorktree && <TaskWorktreeChip cleaned={lead.stage === "accepted"} />}
           <OriginTaskChip task={lead} allTasks={allTasks} onOpen={onOpenTask} />
           <WorkerSummary workers={workers} />
           {lead.queueId != null && !canArchive(lead.status) && (
@@ -281,7 +281,7 @@ function TeamRow({
           >
             <StatusIcon status={w.status} stage={w.stage} awaitingAnswer={!!w.question} />
             <span className="min-w-0 flex-1 truncate text-[12.5px] text-muted">{w.title}</span>
-            {w.useWorktree && <TaskWorktreeChip />}
+            {w.useWorktree && <TaskWorktreeChip cleaned={w.stage === "accepted"} />}
             {w.queueId != null && !canArchive(w.status) && (
               <span className="shrink-0 rounded bg-overlay px-1.5 py-0.5 font-mono text-[10px] text-muted" title="串行批次里的位置">
                 ↳ #{(w.queuePosition ?? 0) + 1}

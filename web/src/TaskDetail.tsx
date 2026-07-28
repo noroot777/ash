@@ -168,7 +168,7 @@ export function TaskDetail({
             <EditableTitle title={task.title} onSave={(t) => onPatch({ title: t, autoTitle: false })} />
           )}
           <div className="ml-auto flex min-w-0 max-w-full flex-wrap items-center justify-end gap-2">
-            {task.useWorktree && <TaskWorktreeChip />}
+            {task.useWorktree && <TaskWorktreeChip cleaned={task.stage === "accepted"} />}
             <TaskTimeChip task={task} />
             <button
               type="button"

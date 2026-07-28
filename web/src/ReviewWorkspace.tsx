@@ -190,7 +190,12 @@ export function TeamReviewWorkspace({
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
         <div className="mx-auto flex w-full max-w-[1180px] flex-col gap-4">
-          <ReviewSection task={lead} role="调度台 / 共享 worktree" onTaskUpdated={onTaskUpdated} defaultOpen />
+          <ReviewSection
+            task={lead}
+            role={lead.useWorktree ? "调度台 / 共享 worktree" : "调度台 / 项目工作区"}
+            onTaskUpdated={onTaskUpdated}
+            defaultOpen
+          />
           {workers.map((worker, index) => (
             <ReviewSection
               key={worker.id}
@@ -202,7 +207,7 @@ export function TeamReviewWorkspace({
           ))}
           {workers.length === 0 && (
             <p className="rounded-lg border border-dashed border-line2 bg-panel px-4 py-8 text-center text-[13px] text-faint">
-              调度台还没有派出执行者；可先检查上方调度台的共享 worktree 与用户消息。
+              调度台还没有派出执行者；可先检查上方调度台的{lead.useWorktree ? "共享 worktree" : "项目工作区"}与用户消息。
             </p>
           )}
         </div>
