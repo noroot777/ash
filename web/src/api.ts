@@ -58,6 +58,13 @@ export type AcceptTaskSuccess = {
   worktreeRemoved?: boolean;
   branch?: string;
   branchDeleted?: boolean;
+  warnings?: AcceptTaskWarning[];
+};
+
+export type AcceptTaskWarning = {
+  reason: "temporary_cleanup_failed";
+  message: string;
+  worktreePath: string;
 };
 
 export type AcceptTaskFailure = {
@@ -72,6 +79,9 @@ export type AcceptTaskFailure = {
   dirtyFiles?: string[];
   targetPath?: string;
   worktreePath?: string;
+  phase?: "initial" | "before_accept" | "before_merge" | "before_cleanup";
+  inFlightTasks?: { id: string; title: string; status: string; role: "task" | "shared_worker" }[];
+  warnings?: AcceptTaskWarning[];
 };
 
 export type AcceptTaskResult = AcceptTaskSuccess | AcceptTaskFailure;

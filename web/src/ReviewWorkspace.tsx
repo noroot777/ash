@@ -62,7 +62,10 @@ export function AcceptanceAction({
       }
       const refreshed = await api.task(task.id);
       onAccepted(refreshed);
-      toast(result.kind === "already_accepted" ? "该任务此前已验收完成" : "验收通过，阶段已刷新", "info");
+      const message = result.warnings?.length
+        ? `验收通过，但有 ${result.warnings.length} 条临时 worktree 清理警告；详情已写入时间线`
+        : result.kind === "already_accepted" ? "该任务此前已验收完成" : "验收通过，阶段已刷新";
+      toast(message, "info");
     } catch (error) {
       onFailure?.({
         accepted: false,
@@ -115,6 +118,7 @@ export function AcceptanceAction({
 export function AcceptanceFailureReport({ failure }: { failure: AcceptTaskFailure }) {
   const details = [
     ["reason", failure.reason],
+    ["检查点", failure.phase],
     ["status", failure.status],
     ["源分支", failure.sourceBranch],
     ["目标分支", failure.targetBranch],
@@ -140,6 +144,21 @@ export function AcceptanceFailureReport({ failure }: { failure: AcceptTaskFailur
           )}
           <FileList title="冲突文件" files={failure.conflictFiles} />
           <FileList title="未提交文件" files={failure.dirtyFiles} />
+          {!!failure.inFlightTasks?.length && (
+            <div className="mt-2">
+              <p className="font-medium text-red-700">正在使用相关 worktree 的任务（{failure.inFlightTasks.length}）</p>
+              <ul className="mt-1 space-y-0.5 font-mono text-[11px] text-ink">
+                {failure.inFlightTasks.map((item) => (
+                  <li key={item.id} className="break-all">
+                    {item.title} · {item.id} · {item.status}{item.role === "shared_worker" ? " · 共享执行者" : ""}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {!!failure.warnings?.length && (
+            <FileList title="合并警告" files={failure.warnings.map((warning) => warning.message)} />
+          )}
         </div>
       </div>
     </div>

@@ -272,6 +272,11 @@ export async function removeWorktree(repoPath: string, path: string, force: bool
 // in a temporary worktree, so merging in place is the safe, explicit fallback.
 
 export type TaskMergeMethod = "already_merged" | "fast_forward" | "merge_commit";
+export type TaskMergeWarning = {
+  reason: "temporary_cleanup_failed";
+  message: string;
+  worktreePath: string;
+};
 export type TaskMergeFailureReason =
   | "not_git_repo"
   | "source_branch_missing"
@@ -291,6 +296,7 @@ export type TaskMergeResult =
       sourceBranch: string;
       targetBranch: string;
       method: TaskMergeMethod;
+      warnings?: TaskMergeWarning[];
     }
   | {
       ok: false;
@@ -415,15 +421,29 @@ async function addTemporaryWorktree(repo: string, ref: string, detached: boolean
 }
 
 async function removeTemporaryWorktree(repo: string, temp: TemporaryWorktree): Promise<string | null> {
-  let failure: string | null = null;
+  const failures: string[] = [];
   try {
     await exec("git", ["-C", repo, "worktree", "remove", "--force", temp.path]);
   } catch (error) {
-    failure = gitError(error);
+    failures.push(gitError(error));
   }
-  rmSync(temp.root, { recursive: true, force: true });
-  await exec("git", ["-C", repo, "worktree", "prune"]).catch(() => {});
-  return failure;
+  try { rmSync(temp.root, { recursive: true, force: true }); }
+  catch (error) { failures.push(`删除临时目录失败：${gitError(error)}`); }
+  try { await exec("git", ["-C", repo, "worktree", "prune"]); }
+  catch (error) { failures.push(`git worktree prune 失败：${gitError(error)}`); }
+  return failures.length > 0 ? failures.join("；") : null;
+}
+
+export function withTemporaryCleanupOutcome(
+  result: TaskMergeResult,
+  cleanupError: string | null,
+  worktreePath: string,
+): TaskMergeResult {
+  if (!cleanupError) return result;
+  const message = `临时合并 worktree ${worktreePath} 清理失败：${cleanupError}；合并结果已保留，可手动清理该路径并执行 git worktree prune，后续验收清理步骤也会再次 prune`;
+  if (!result.ok) return { ...result, message: `${result.message}；${message}` };
+  const warning: TaskMergeWarning = { reason: "temporary_cleanup_failed", message, worktreePath };
+  return { ...result, warnings: [...(result.warnings ?? []), warning] };
 }
 
 async function mergeInCheckedOutTarget(
@@ -547,17 +567,7 @@ export async function mergeTaskBranch(
     }
     const result = await mergeInCheckedOutTarget(temp.path, sourceBranch, targetBranch, false);
     const cleanupError = await removeTemporaryWorktree(repo, temp);
-    if (cleanupError && result.ok) {
-      return {
-        ok: false,
-        reason: "temporary_cleanup_failed",
-        message: `合并已完成，但临时 worktree 清理失败：${cleanupError}`,
-        sourceBranch,
-        targetBranch,
-      };
-    }
-    if (cleanupError && !result.ok) result.message += `；临时 worktree 清理失败：${cleanupError}`;
-    return result;
+    return withTemporaryCleanupOutcome(result, cleanupError, temp.path);
   }
 }
 

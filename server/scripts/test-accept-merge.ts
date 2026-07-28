@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const root = mkdtempSync(join(tmpdir(), "harness-accept-merge-test-"));
+process.env.HARNESS_DB = join(root, "harness.db");
 const git = (cwd: string, ...args: string[]) =>
   execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" }).trim();
 
@@ -36,9 +37,14 @@ try {
     cleanupAcceptedTask,
     mergeTaskBranch,
     prepareWorktree,
+    withTemporaryCleanupOutcome,
     worktreeBranchName,
   } = await import("../src/git.js");
   const { taskBranchDiff } = await import("../src/git-diff.js");
+  const { db, ensureSchema } = await import("../src/db/index.js");
+  const { projects, tasks } = await import("../src/db/schema.js");
+  const { acceptTask } = await import("../src/task-accept.js");
+  await ensureSchema();
 
   // 1. Pure ref-only fast-forward, followed by worktree + `branch -d` cleanup.
   {
@@ -165,7 +171,65 @@ try {
     assert.equal(hasRef(repo, worktreeBranchName(taskId)), true);
   }
 
-  console.log("accept merge: ff / no-ff / conflict / already-merged / dirty-target 全部通过");
+  // 6. A failed temporary-worktree cleanup is a warning, not a merge failure.
+  {
+    const worktreePath = "/tmp/harness-accept-test-cleanup/worktree";
+    const merged = withTemporaryCleanupOutcome({
+      ok: true,
+      sourceBranch: "harness/cleanup",
+      targetBranch: "main",
+      method: "merge_commit",
+    }, "permission denied", worktreePath);
+    assert.equal(merged.ok, true, "清理失败不能掩盖已经成功的合并");
+    if (!merged.ok) throw new Error(merged.message);
+    assert.equal(merged.warnings?.[0]?.reason, "temporary_cleanup_failed");
+    assert.equal(merged.warnings?.[0]?.worktreePath, worktreePath);
+    assert.match(merged.warnings?.[0]?.message ?? "", /合并结果已保留/);
+    assert.match(merged.warnings?.[0]?.message ?? "", /git worktree prune/);
+  }
+
+  // 7. An idle team lead cannot accept while shared-worktree workers are active.
+  {
+    const repo = makeRepo("team-in-flight");
+    const createdAt = new Date().toISOString();
+    const leadId = "teamlead0007";
+    await db.insert(projects).values({ id: "team-project", name: "team", repoPath: repo, createdAt });
+    const common = {
+      projectId: "team-project",
+      body: "",
+      priority: "none",
+      labels: "[]",
+      dependsOn: "[]",
+      resumeDependsOn: "[]",
+      createdAt,
+      updatedAt: createdAt,
+    };
+    await db.insert(tasks).values([
+      { ...common, id: leadId, title: "team lead", mode: "team", status: "idle", useWorktree: true, worktreeBase: "main" },
+      { ...common, id: "shared-running", parentId: leadId, title: "shared running", mode: "single", status: "running", useWorktree: false },
+      { ...common, id: "shared-queued", parentId: leadId, title: "shared queued", mode: "single", status: "queued", useWorktree: false },
+      { ...common, id: "isolated-running", parentId: leadId, title: "isolated running", mode: "single", status: "running", useWorktree: true },
+    ]);
+
+    const accepted = await acceptTask(leadId);
+    assert.equal(accepted.accepted, false);
+    if (accepted.accepted) throw new Error("team accept unexpectedly succeeded");
+    assert.equal(accepted.httpStatus, 409);
+    assert.equal(accepted.reason, "shared_team_workers_in_flight");
+    assert.equal(accepted.status, "idle", "调度台自身 idle，应由共享执行者而不是自身状态阻挡");
+    assert.equal(accepted.phase, "initial");
+    assert.deepEqual(
+      accepted.inFlightTasks
+        ?.map((task) => ({ id: task.id, status: task.status, role: task.role }))
+        .sort((a, b) => a.id.localeCompare(b.id)),
+      [
+        { id: "shared-queued", status: "queued", role: "shared_worker" },
+        { id: "shared-running", status: "running", role: "shared_worker" },
+      ],
+    );
+  }
+
+  console.log("accept merge: git 场景 / 清理警告 / team 并发守卫全部通过");
 } finally {
   rmSync(root, { recursive: true, force: true });
 }
