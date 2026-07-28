@@ -3,6 +3,7 @@ import type { SearchHit, Task, ProjectView } from "@harness/shared";
 import { NotePencil } from "@phosphor-icons/react";
 import { api } from "./api";
 import { StatusIcon } from "./StatusIcon";
+import { formatInstant } from "./time";
 import { usePresence } from "./useReveal";
 
 export type Command = {
@@ -40,6 +41,60 @@ function Highlight({ text, q }: { text: string; q: string }) {
   }
   parts.push(text.slice(pos));
   return <>{parts}</>;
+}
+
+function SearchPreview({ hit, q }: { hit: SearchHit | undefined; q: string }) {
+  if (!hit) {
+    return (
+      <aside className="grid min-h-0 place-items-center bg-panel/50 px-8 text-center">
+        <p className="max-w-[220px] text-xs leading-5 text-faint">选择一条搜索结果，在这里阅读全文</p>
+      </aside>
+    );
+  }
+
+  const previewLabel = hit.kind === "task" ? "任务正文" : "随手记正文";
+  const preview = hit.preview ?? "";
+
+  return (
+    <aside className="flex min-h-0 flex-col bg-panel/50">
+      <div className="shrink-0 border-b border-line px-5 py-4">
+        <div className="flex min-w-0 items-start gap-2.5">
+          <span className="mt-0.5 shrink-0">
+            {hit.kind === "task" ? <StatusIcon status={hit.status} /> : <NotePencil size={16} className="text-muted" />}
+          </span>
+          <div className="min-w-0 flex-1">
+            <h2 className="text-sm font-medium leading-5 text-ink">
+              <Highlight text={hit.title} q={q} />
+            </h2>
+            <p className="mt-1 flex flex-wrap items-center gap-x-1.5 text-[11px] text-faint">
+              <span>{hit.projectName ?? "未知项目"}</span>
+              <span aria-hidden="true">·</span>
+              <span>更新于 {formatInstant(hit.updatedAt)}</span>
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+        {hit.kind === "task" && hit.field === "conversation" && hit.snippet && (
+          <section className="mb-4 rounded-lg border border-line bg-raised/70 p-3">
+            <div className="mb-1.5 text-[10px] font-medium uppercase tracking-wide text-faint">会话命中</div>
+            <p className="break-words font-mono text-[11px] leading-5 text-muted">
+              <Highlight text={hit.snippet} q={q} />
+            </p>
+          </section>
+        )}
+        <div className="mb-2 text-[10px] font-medium uppercase tracking-wide text-faint">{previewLabel}</div>
+        {preview ? (
+          <div className="whitespace-pre-wrap break-words text-[13px] leading-6 text-muted">
+            <Highlight text={preview} q={q} />
+          </div>
+        ) : (
+          <p className="text-xs text-faint">暂无正文</p>
+        )}
+      </div>
+    </aside>
+  );
 }
 
 export function CommandPalette({
@@ -165,6 +220,9 @@ export function CommandPalette({
     if (!previous || (previous.x === event.clientX && previous.y === event.clientY)) return;
     setActive(i);
   };
+  const hitStart = leadingTasks.length + filtered.length;
+  const activeHit = active >= hitStart ? hits[active - hitStart] : undefined;
+  const hasHits = hits.length > 0;
 
   return (
     <div
@@ -172,7 +230,7 @@ export function CommandPalette({
       onClick={onClose}
     >
       <div
-        className={`t-modal ${closing ? "is-closing" : ""} w-[560px] max-w-[92vw] overflow-hidden rounded-xl border border-line2 bg-panel shadow-2xl`}
+        className={`t-modal ${closing ? "is-closing" : ""} ${hasHits ? "w-[860px]" : "w-[560px]"} max-w-[92vw] overflow-hidden rounded-xl border border-line2 bg-panel shadow-2xl`}
         onClick={(e) => e.stopPropagation()}
       >
         <input
@@ -182,15 +240,10 @@ export function CommandPalette({
           placeholder="搜索任务，或输入命令…"
           className="w-full border-b border-line bg-transparent px-4 py-3 text-sm outline-none placeholder:text-faint"
           onKeyDown={(e) => {
-            // 序列快捷键(如 NI/NL):敲完最后一个字母立即触发,不等 Enter。
-            // 代价是搜不了以序列开头的英文词——这里的搜索对象几乎全是中文,取快捷键优先。
-            const typed = e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey && !e.nativeEvent.isComposing
-              ? (q + e.key).toLowerCase()
-              : e.key === "Enter" && !e.nativeEvent.isComposing
-                ? q.toLowerCase()
-                : null;
-            const sequence = typed
-              ? commands.find((command) => command.keys?.replace(/\s+/g, "").toLowerCase() === typed)
+            // 序列快捷键(如 NI/NL)先作为搜索词参与过滤，只有输入精确匹配并按下 Enter 才执行。
+            // 这样仍能快速找到命令，也不会抢走以这些字母开头的正常搜索。
+            const sequence = e.key === "Enter" && !e.nativeEvent.isComposing
+              ? commands.find((command) => command.keys?.replace(/\s+/g, "").toLowerCase() === q.toLowerCase())
               : undefined;
             if (sequence) {
               e.preventDefault();
@@ -209,7 +262,8 @@ export function CommandPalette({
             }
           }}
         />
-        <div className="max-h-[50vh] overflow-y-auto py-1">
+        <div className={hasHits ? "grid h-[50vh] min-h-[320px] grid-cols-[42%_58%]" : "max-h-[50vh] overflow-y-auto"}>
+          <div className={hasHits ? "min-h-0 overflow-y-auto border-r border-line py-1" : "py-1"}>
           {leadingTasks.length > 0 && (
             <div className="px-4 pb-1 pt-2 text-[10px] font-medium uppercase tracking-wide text-faint">进行中</div>
           )}
@@ -302,6 +356,8 @@ export function CommandPalette({
               {q.trim().length >= 2 ? "没有匹配的命令、任务或随手记" : "无匹配命令"}
             </p>
           )}
+          </div>
+          {hasHits && <SearchPreview hit={activeHit} q={q} />}
         </div>
       </div>
     </div>

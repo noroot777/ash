@@ -80,7 +80,7 @@ export function NewNoteModal({ project, onClose }: { project: ProjectView; onClo
         onChange={(event) => setBody(event.target.value)}
         onPaste={onPaste}
         onKeyDown={(event) => {
-          if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
+          if (event.key !== "Enter" || (!event.metaKey && !event.ctrlKey) || event.nativeEvent.isComposing) return;
           event.preventDefault();
           void save(closeRef.current);
         }}

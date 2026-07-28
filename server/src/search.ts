@@ -13,6 +13,8 @@ import { RUNS_DIR } from "./paths.js";
 const FIELD_RANK: Record<SearchField, number> = { title: 0, body: 1, conversation: 2 };
 const SNIPPET_RADIUS = 60;
 const MAX_HITS = 50;
+const TASK_PREVIEW_LIMIT = 2_000;
+const NOTE_PREVIEW_LIMIT = 4_000;
 
 // Context slice around the first occurrence of `needle` (already lowercased),
 // collapsed to one line. Null when not found.
@@ -84,6 +86,7 @@ export async function searchAll(query: string): Promise<SearchHit[]> {
         archived: t.archived,
         field,
         snippet,
+        preview: t.body.slice(0, TASK_PREVIEW_LIMIT),
         updatedAt: t.updatedAt,
       });
     }),
@@ -102,6 +105,7 @@ export async function searchAll(query: string): Promise<SearchHit[]> {
       projectName: projName.get(note.projectId) ?? null,
       field: "body",
       snippet: findSnippet(note.body, q) ?? "",
+      preview: note.body.slice(0, NOTE_PREVIEW_LIMIT),
       updatedAt: new Date(note.updatedAt).toISOString(),
       taskId: note.taskId,
     }))

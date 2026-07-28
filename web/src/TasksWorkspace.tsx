@@ -105,10 +105,10 @@ export function TasksWorkspace({
         <span className="flex-1" />
         <button
           onClick={onNotes}
-          className="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[12px] text-muted transition-colors hover:bg-raised hover:text-ink"
+          className="rounded-md px-2.5 py-1 text-[12px] text-muted transition-colors hover:bg-raised hover:text-ink"
           title="随手记"
         >
-          <NotePencil size={14} /> 随手记
+          随手记
         </button>
         <button
           onClick={onGroups}

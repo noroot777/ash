@@ -341,6 +341,8 @@ export interface TaskSearchHit {
   // Context around the first match, whitespace-collapsed to one line.
   // Empty for title hits (the title is already shown).
   snippet: string;
+  // Task body prefix for the command-palette preview.
+  preview?: string;
   updatedAt: string;
 }
 
@@ -352,6 +354,8 @@ export interface NoteSearchHit {
   projectName: string | null;
   field: "body";
   snippet: string;
+  // Note body for the command-palette preview.
+  preview?: string;
   updatedAt: string;
   taskId: string | null;
 }
