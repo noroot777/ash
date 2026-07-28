@@ -12,6 +12,7 @@ import { CaretRight, UsersThree } from "@phosphor-icons/react";
 import { STATUSES, STATUS_META, PRIORITY_ORDER } from "./constants";
 import { PriorityIcon, PauseHint, useCollapsedGroups } from "./ui";
 import { StatusIcon } from "./StatusIcon";
+import { Tip } from "./Tip";
 import { foldTeamStatus, pairBadge } from "./util";
 import { executorLabel } from "./executorLabel";
 import { isDispatchedWorker } from "./taskPolicy";
@@ -313,13 +314,12 @@ function TeamRow({
               #{(lead.queuePosition ?? 0) + 1}
             </span>
           )}
-          <span
+          <Tip
+            label="团队任务"
             className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded text-muted"
-            title="团队任务"
-            aria-label="团队任务"
           >
-            <UsersThree size={13} weight="fill" aria-hidden className="pointer-events-none" />
-          </span>
+            <UsersThree size={13} weight="fill" aria-hidden />
+          </Tip>
           <button
             onClick={(e) => {
               e.stopPropagation();
