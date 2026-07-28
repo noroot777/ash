@@ -3,6 +3,10 @@
 // §8 statuses, §12 debate mechanism, §13 sessions).
 import type { SessionRole } from "./session.js";
 export type { Session, SessionRole } from "./session.js";
+// 执行器覆盖的继承规则住在 ./executor-overrides.ts,走 "@harness/shared/executors"
+// 子路径导出(跟 "@harness/shared/team" 同一套):index.ts 只做类型再导出,不能在这里
+// 转发运行时函数 —— 服务端直接跑 .ts 源码,而 Node 的类型擦除不会把 "./x.js" 映射
+// 回 "./x.ts",转发一加进程就起不来。
 
 // ── Global app settings ────────────────────────────────────────────────────
 // Stored server-side in the generic app_settings KV table. Consumers always

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { Task, Group, TaskStatus, Priority, AgentType } from "@harness/shared";
 import { AGENT_TYPES, isUserSettableStatus, canArchive } from "@harness/shared";
+import { sameExecutor } from "@harness/shared/executors";
 import { CaretDown, Play, Stop, Trash, ArrowsClockwise, DownloadSimple, GitDiff, ListNumbers } from "@phosphor-icons/react";
 import { api, type AcceptTaskFailure } from "./api";
 import { STATUS_META, PRIORITIES } from "./constants";
@@ -136,9 +137,11 @@ export function TaskDetail({
         onSelect={(selection) => void patchRunConfig({
           agentType: selection.agentType,
           executorId: selection.executorId,
-          ...(selection.agentType !== currentExecutor.agentType
-            ? { model: null, reasoningEffort: null }
-            : {}),
+          // 换执行器时旧的模型/思考强度覆盖作废（服务端 PATCH 也会自己清一遍，这里
+          // 一并显式带上，免得中间态在界面上闪一下旧值）。
+          ...(sameExecutor(selection, currentExecutor)
+            ? {}
+            : { model: null, reasoningEffort: null }),
         })}
         profiles={profiles}
         providers={providers}

@@ -1,13 +1,17 @@
 import type { ReactNode } from "react";
 import type { AgentExecutorProfile, AgentType, LlmProvider } from "@harness/shared";
+import { sameExecutor } from "@harness/shared/executors";
 import { Crown, Robot } from "@phosphor-icons/react";
 import { ExecutorPicker, type ExecutorSelection } from "../ExecutorPicker";
 import { TaskModelControls } from "../TaskModelControls";
 
-// 「谁来干活 + 用什么模型」是一组不可分的选择：换了执行器类型，原来那套模型/思考
-// 强度多半在新 CLI 上根本不存在，所以清空由这里统一负责——单任务和团队的调度者/
-// 执行者三处共用同一份逻辑，免得再漏掉一处（辩论链路就漏过一次）。
+// 「谁来干活 + 用什么模型」是一组不可分的选择：换了执行器，原来那套模型/思考强度
+// 多半在新执行器上根本不存在（换类型自不必说；同类型换 profile 也可能换了供应商，
+// 模型 id 各认各的），所以清空由这里统一负责——单任务和团队的调度者/执行者三处共用
+// 同一份逻辑，免得再漏掉一处（辩论链路就漏过一次）。判定走 shared 的 sameExecutor，
+// 与服务端创建/编辑路径同一条口径。
 export function ExecutorField({
+
   icon,
   selection,
   types,
@@ -42,7 +46,7 @@ export function ExecutorField({
         icon={icon}
         selection={selection}
         onSelect={(next) => {
-          if (next.agentType !== selection.agentType) {
+          if (!sameExecutor(next, selection)) {
             onModel("");
             onReasoningEffort("");
           }
