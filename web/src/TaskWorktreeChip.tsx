@@ -8,12 +8,17 @@ export function TaskWorktreeChip({ cleaned = false }: { cleaned?: boolean }) {
   return (
     <span
       className={`inline-flex h-4 w-4 shrink-0 items-center justify-center rounded ${
-        cleaned ? "bg-emerald-500/10 text-emerald-600" : "text-muted"
+        cleaned ? "text-muted" : "bg-emerald-500/10 text-emerald-600"
       }`}
       title={title}
       aria-label={title}
     >
-      <GitBranch size={13} weight={cleaned ? "bold" : "regular"} aria-hidden />
+      <GitBranch
+        size={13}
+        weight={cleaned ? "regular" : "bold"}
+        aria-hidden
+        className="pointer-events-none"
+      />
     </span>
   );
 }

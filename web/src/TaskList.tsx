@@ -314,11 +314,11 @@ function TeamRow({
             </span>
           )}
           <span
-            className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded bg-accent/10 text-accent"
+            className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded text-muted"
             title="团队任务"
             aria-label="团队任务"
           >
-            <UsersThree size={13} weight="fill" aria-hidden />
+            <UsersThree size={13} weight="fill" aria-hidden className="pointer-events-none" />
           </span>
           <button
             onClick={(e) => {
