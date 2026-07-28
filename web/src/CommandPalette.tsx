@@ -1,9 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
-import type { SearchHit } from "@harness/shared";
+import type { SearchHit, Task, ProjectView } from "@harness/shared";
 import { NotePencil } from "@phosphor-icons/react";
 import { api } from "./api";
 import { StatusIcon } from "./StatusIcon";
-import { useEscape } from "./useEscape";
 import { usePresence } from "./useReveal";
 
 export type Command = {
@@ -46,13 +45,19 @@ function Highlight({ text, q }: { text: string; q: string }) {
 export function CommandPalette({
   open,
   commands,
+  runningTasks,
+  projects,
   onClose,
   onOpenHit,
+  onOpenTask,
 }: {
   open: boolean;
   commands: Command[];
+  runningTasks: Task[];
+  projects: ProjectView[];
   onClose: () => void;
   onOpenHit: (hit: SearchHit) => void;
+  onOpenTask: (taskId: string) => void;
 }) {
   const [q, setQ] = useState("");
   const [active, setActive] = useState(0);
@@ -63,7 +68,20 @@ export function CommandPalette({
   const inputRef = useRef<HTMLInputElement>(null);
   const mouseRef = useRef<{ x: number; y: number } | null>(null);
   const { mounted, closing } = usePresence(open, "--modal-close-dur");
-  useEscape(onClose, open);
+
+  // The palette is the topmost keyboard layer. Capture Esc before the window-level
+  // handlers owned by any modal underneath it, so one key closes only the palette.
+  useEffect(() => {
+    if (!open) return;
+    const closeFirst = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      onClose();
+    };
+    window.addEventListener("keydown", closeFirst, true);
+    return () => window.removeEventListener("keydown", closeFirst, true);
+  }, [open, onClose]);
 
   useEffect(() => {
     if (open) {
@@ -79,6 +97,8 @@ export function CommandPalette({
     if (!s) return commands;
     return commands.filter((c) => (c.label + " " + (c.hint ?? "") + " " + (c.keys ?? "") + " " + (c.group ?? "")).toLowerCase().includes(s));
   }, [q, commands]);
+  const leadingTasks = q.trim() ? [] : runningTasks;
+  const projectNames = useMemo(() => new Map(projects.map((project) => [project.id, project.name])), [projects]);
 
   // Debounced global task/note search. The server keeps tasks ahead of notes.
   useEffect(() => {
@@ -107,7 +127,7 @@ export function CommandPalette({
     return () => clearTimeout(timer);
   }, [q]);
 
-  const total = filtered.length + hits.length;
+  const total = leadingTasks.length + filtered.length + hits.length;
   useEffect(() => {
     if (active >= total) setActive(0);
   }, [total, active]);
@@ -124,9 +144,15 @@ export function CommandPalette({
     onOpenHit(h);
     onClose();
   };
+  const openRunningTask = (task: Task | undefined) => {
+    if (!task) return;
+    onOpenTask(task.id);
+    onClose();
+  };
   const activate = (i: number) => {
-    if (i < filtered.length) run(filtered[i]);
-    else openHit(hits[i - filtered.length]);
+    if (i < leadingTasks.length) openRunningTask(leadingTasks[i]);
+    else if (i < leadingTasks.length + filtered.length) run(filtered[i - leadingTasks.length]);
+    else openHit(hits[i - leadingTasks.length - filtered.length]);
   };
   const hover = (i: number, event: ReactMouseEvent) => {
     const previous = mouseRef.current;
@@ -137,7 +163,7 @@ export function CommandPalette({
 
   return (
     <div
-      className={`t-modal-overlay ${closing ? "is-closing" : ""} fixed inset-0 z-50 flex items-start justify-center bg-black/50 pt-[15vh]`}
+      className={`t-modal-overlay ${closing ? "is-closing" : ""} fixed inset-0 z-[90] flex items-start justify-center bg-black/50 pt-[15vh]`}
       onClick={onClose}
     >
       <div
@@ -166,7 +192,7 @@ export function CommandPalette({
               run(sequence);
             } else if (e.key === "ArrowDown") {
               e.preventDefault();
-              setActive((a) => Math.min(a + 1, total - 1));
+              setActive((a) => Math.min(a + 1, Math.max(total - 1, 0)));
             } else if (e.key === "ArrowUp") {
               e.preventDefault();
               setActive((a) => Math.max(a - 1, 0));
@@ -179,7 +205,23 @@ export function CommandPalette({
           }}
         />
         <div className="max-h-[50vh] overflow-y-auto py-1">
+          {leadingTasks.length > 0 && (
+            <div className="px-4 pb-1 pt-2 text-[10px] font-medium uppercase tracking-wide text-faint">进行中</div>
+          )}
+          {leadingTasks.map((task, index) => (
+            <button
+              key={task.id}
+              onMouseMove={(event) => hover(index, event)}
+              onClick={() => openRunningTask(task)}
+              className={`flex w-full min-w-0 items-center gap-2 px-4 py-2 text-left text-sm ${index === active ? "bg-overlay" : ""}`}
+            >
+              <StatusIcon status={task.status} />
+              <span className="min-w-0 truncate text-ink">{task.title}</span>
+              <span className="ml-auto shrink-0 text-xs text-faint">{projectNames.get(task.projectId) ?? "未知项目"}</span>
+            </button>
+          ))}
           {filtered.map((c, i) => {
+            const itemIndex = leadingTasks.length + i;
             // Render a section header whenever the group changes, so current-task
             // actions read separately from global ones.
             const header = c.group && c.group !== filtered[i - 1]?.group ? c.group : null;
@@ -189,10 +231,10 @@ export function CommandPalette({
                   <div className="px-4 pb-1 pt-2 text-[10px] font-medium uppercase tracking-wide text-faint">{header}</div>
                 )}
                 <button
-                  onMouseMove={(event) => hover(i, event)}
+                  onMouseMove={(event) => hover(itemIndex, event)}
                   onClick={() => run(c)}
                   className={`flex w-full items-center gap-2 px-4 py-2 text-left text-sm ${
-                    i === active ? "bg-overlay" : ""
+                    itemIndex === active ? "bg-overlay" : ""
                   }`}
                 >
                   <span className="text-ink">{c.label}</span>
@@ -209,7 +251,7 @@ export function CommandPalette({
             );
           })}
           {hits.map((h, hi) => {
-            const i = filtered.length + hi;
+            const i = leadingTasks.length + filtered.length + hi;
             const header = hi === 0 || hits[hi - 1]?.kind !== h.kind ? (h.kind === "task" ? "任务" : "随手记") : null;
             const fieldChip = FIELD_LABEL[h.field];
             return (

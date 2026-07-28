@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useCallback, useRef, useState, type ReactNode } from "react";
 import { X, TreeStructure, GitBranch } from "@phosphor-icons/react";
 import { useEscape } from "./useEscape";
 import { useReveal } from "./useReveal";
@@ -19,6 +19,8 @@ export function Modal({
   width = 560,
   cardClassName = "",
   contentClassName = "overflow-y-auto p-4",
+  overlayClassName = "z-50",
+  beforeClose,
 }: {
   title: ReactNode;
   onClose: () => void;
@@ -27,12 +29,29 @@ export function Modal({
   width?: number;
   cardClassName?: string;
   contentClassName?: string;
+  overlayClassName?: string;
+  beforeClose?: () => boolean | Promise<boolean>;
 }) {
-  const { closing, requestClose } = useReveal(onClose, "--modal-close-dur");
+  const { closing, requestClose: revealClose } = useReveal(onClose, "--modal-close-dur");
+  const checkingClose = useRef(false);
+  const requestClose = useCallback(() => {
+    if (!beforeClose) {
+      revealClose();
+      return;
+    }
+    if (checkingClose.current) return;
+    checkingClose.current = true;
+    void Promise.resolve(beforeClose()).then((allowed) => {
+      checkingClose.current = false;
+      if (allowed !== false) revealClose();
+    }, () => {
+      checkingClose.current = false;
+    });
+  }, [beforeClose, revealClose]);
   useEscape(requestClose);
   return (
     <div
-      className={`t-modal-overlay ${closing ? "is-closing" : ""} fixed inset-0 z-50 flex items-start justify-center bg-black/30 pt-[14vh]`}
+      className={`t-modal-overlay ${closing ? "is-closing" : ""} fixed inset-0 ${overlayClassName} flex items-start justify-center bg-black/30 pt-[14vh]`}
       onClick={requestClose}
     >
       <div
@@ -70,6 +89,7 @@ export function ConfirmModal({
   danger = false,
   onConfirm,
   onClose,
+  overlayClassName,
 }: {
   title: string;
   message: string;
@@ -77,12 +97,14 @@ export function ConfirmModal({
   danger?: boolean;
   onConfirm: () => void;
   onClose: () => void;
+  overlayClassName?: string;
 }) {
   return (
     <Modal
       title={title}
       onClose={onClose}
       width={420}
+      overlayClassName={overlayClassName}
       footer={(close) => (
         <>
           <button onClick={close} className="px-3 py-1.5 text-[13px] text-muted">取消</button>

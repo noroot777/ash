@@ -32,6 +32,8 @@ function upsertProjectTask(tasks: Task[], task: Task, projectId: string | null):
   return upsertTask(tasks, task);
 }
 
+const runningOnly = (tasks: Task[]) => tasks.filter((task) => task.status === "running");
+
 function rejectDispatchedWorkerMutation(task: Task | undefined): boolean {
   if (!task || !isDispatchedWorker(task)) return false;
   toast("执行者任务由调度者管理；这里只保留运行、停止、重试和答复", "info");
@@ -48,6 +50,7 @@ export function App() {
   projectIdRef.current = projectId;
   const [groups, setGroups] = useState<Group[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
+  const [runningTasks, setRunningTasks] = useState<Task[]>([]);
   // Mirror tasks for cross-effect reads (delete handler captures projectId before
   // the row is removed — without a ref it would close over a stale snapshot).
   const tasksRef = useRef<Task[]>([]);
@@ -97,6 +100,7 @@ export function App() {
     useCallback((ev) => {
       if (ev.type === "task.created" || ev.type === "task.updated") {
         setTasks((ts) => upsertProjectTask(ts, ev.task, projectIdRef.current));
+        setRunningTasks((ts) => ev.task.status === "running" ? upsertTask(ts, ev.task) : ts.filter((task) => task.id !== ev.task.id));
       } else if (ev.type === "task.status") {
         setTasks((ts) =>
           ts.map((t) =>
@@ -112,6 +116,7 @@ export function App() {
               : t,
           ),
         );
+        if (ev.status !== "running") setRunningTasks((ts) => ts.filter((task) => task.id !== ev.taskId));
         // idle 也算「一段跑完了」：团队调度台一个回合结束就落 idle，会话行这时才写上
         // endedAt，刷一下 sessions 气泡的用时才停止跳动。
         if (ev.status === "done" || ev.status === "failed" || ev.status === "canceled" || ev.status === "idle")
@@ -168,6 +173,7 @@ export function App() {
     if (!projectId) return;
     api.groups(projectId).then(setGroups);
     api.tasks().then((ts) => {
+      setRunningTasks(runningOnly(ts));
       const mine = ts.filter((t) => t.projectId === projectId);
       setTasks(mine);
       // Switching projects no longer auto-selects a task: keep the current one
@@ -176,6 +182,13 @@ export function App() {
       setSelected((cur) => (mine.some((t) => t.id === cur) ? cur : null));
     });
   }, [projectId]);
+
+  useEffect(() => {
+    if (!paletteOpen) return;
+    let alive = true;
+    api.tasks().then((rows) => { if (alive) setRunningTasks(runningOnly(rows)); }).catch(() => {});
+    return () => { alive = false; };
+  }, [paletteOpen]);
 
   // Live git context (branch + worktree) of the current project's working dir, for
   // the top-bar chip. Refetch on project switch and after a run settles, since a
@@ -349,6 +362,8 @@ export function App() {
     setCreateInitialMode("debate");
     setCreateOpen(true);
   }, []);
+  const openNewNote = useCallback(() => { setNoteTarget(null); setNotesMode("new"); }, []);
+  const openNotes = useCallback(() => { setNoteTarget(null); setNotesMode("list"); }, []);
   const onCreateTaskCreated = useCallback((task: Task) => {
     onTaskCreated(task);
     if (!noteDraft?.noteIds.length) return;
@@ -433,7 +448,6 @@ export function App() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
-        if (anyModal) return;
         e.preventDefault();
         setPaletteOpen((o) => !o);
         return;
@@ -457,8 +471,8 @@ export function App() {
         primary(current);
       }
     };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
   }, [ordered, selected, current, paletteOpen, anyModal, primary, openCreate]);
 
   useEffect(() => {
@@ -487,7 +501,7 @@ export function App() {
     }
     // Global: create / manage.
     cmds.push({ id: "new", group: "新建", label: "新建任务", hint: "C", run: openCreate });
-    if (project) cmds.push({ id: "new-note", group: "新建", label: "新建随手记", keys: "NI", run: () => setNotesMode("new") });
+    if (project) cmds.push({ id: "new-note", group: "新建", label: "新建随手记", keys: "NI", run: openNewNote });
     cmds.push(
       { id: "new-debate", group: "新建", label: "新建辩论 · 给你答案", run: openDebateCreate },
       { id: "newgroup", group: "新建", label: "新建分组", run: () => setNewGroupOpen(true) },
@@ -495,7 +509,7 @@ export function App() {
       { id: "groups", group: "管理", label: "分组管理", run: () => setGroupsOpen(true) },
       { id: "agents", group: "管理", label: "管理智能体执行器", run: () => setAgentsOpen(true) },
     );
-    if (project) cmds.push({ id: "notes", group: "管理", label: "随手记列表", keys: "NL", run: () => { setNoteTarget(null); setNotesMode("list"); } });
+    if (project) cmds.push({ id: "notes", group: "管理", label: "随手记列表", keys: "NL", run: openNotes });
     if (project) cmds.push({ id: "projsettings", group: "管理", label: `项目设置：${project.name}`, run: () => setSettingsOpen(true) });
     for (const p of projects)
       if (p.id !== projectId)
@@ -508,7 +522,7 @@ export function App() {
         run: () => api.runGroup(g.id),
       });
     return cmds;
-  }, [current, projects, projectId, groups, project, primary, stop, del, patch, archive, unarchive, openCreate, openDebateCreate]);
+  }, [current, projects, projectId, groups, project, primary, stop, del, patch, archive, unarchive, openCreate, openDebateCreate, openNewNote, openNotes]);
 
   return (
     <div className="flex h-full">
@@ -544,6 +558,7 @@ export function App() {
           setSidebarW={setSidebarW}
           archivedCount={archivedTasks.length}
           onNewTask={openCreate}
+          onNotes={openNotes}
           onGroups={() => setGroupsOpen(true)}
           onRun={run}
           onStop={stop}
@@ -561,7 +576,15 @@ export function App() {
         />
       </main>
 
-      <CommandPalette open={paletteOpen} commands={commands} onOpenHit={openHit} onClose={() => setPaletteOpen(false)} />
+      <CommandPalette
+        open={paletteOpen}
+        commands={commands}
+        runningTasks={runningTasks}
+        projects={projects}
+        onOpenHit={openHit}
+        onOpenTask={(taskId) => { void openTask(taskId); }}
+        onClose={() => setPaletteOpen(false)}
+      />
       {agentsOpen && <AgentsPanel onClose={() => setAgentsOpen(false)} />}
       {newProjectOpen && <NewProjectModal onClose={() => setNewProjectOpen(false)} onCreate={doCreateProject} />}
       {settingsOpen && project && (
