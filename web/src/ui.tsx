@@ -6,8 +6,7 @@ import { Duration, formatInstant } from "./time";
 import { api } from "./api";
 
 // Remember which sections of a status-grouped list the user folded away, keyed
-// per list so the choice survives reloads (localStorage). Shared by the task
-// list (完成/失败/…) and the issue list (进行中/待办/…) so both fold identically.
+// per list so the choice survives reloads (localStorage).
 export function useCollapsedGroups(storageKey: string) {
   const [collapsed, setCollapsed] = useState<Set<string>>(() => {
     try {

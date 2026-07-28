@@ -1,4 +1,4 @@
-import type { Project, ProjectView, ProjectHealth, Task, Session, Group, GateAction, Schedule, ScheduledMessage, AgentExecutorProfile, BatchCreateTasksBody, AgentType, AttachmentKind, Issue, IssueComment, AiBackend, LlmProvider, LlmProtocol, SearchHit } from "@harness/shared";
+import type { Project, ProjectView, ProjectHealth, Task, Session, Group, GateAction, Schedule, ScheduledMessage, AgentExecutorProfile, BatchCreateTasksBody, AgentType, AttachmentKind, LlmProvider, LlmProtocol, SearchHit } from "@harness/shared";
 import type { PersistedDebateEntry } from "./debateState";
 
 export type CuaProcess = {
@@ -152,7 +152,7 @@ export const api = {
 
   tasks: (): Promise<Task[]> => fetch("/api/tasks").then(j),
   task: (id: string): Promise<Task> => fetch(`/api/tasks/${id}`).then(j),
-  // Global search (⌘K): tasks + session transcripts + issues, ranked server-side.
+  // Global search (⌘K): tasks + session transcripts, ranked server-side.
   search: (q: string): Promise<SearchHit[]> =>
     fetch(`/api/search?q=${encodeURIComponent(q)}`).then(j),
   // Persist a pasted image/file; returns its absolute path (for the agent), a url
@@ -257,34 +257,7 @@ export const api = {
   ): Promise<PersistedDebateEntry[]> =>
     fetch(`/api/tasks/${taskId}/debate`).then(j),
 
-  // ── issues (planning/discussion layer; see shared Issue) ───────────────────
-  issues: (projectId?: string): Promise<Issue[]> =>
-    fetch(`/api/issues${projectId ? `?projectId=${projectId}` : ""}`).then(j),
-  // Create from raw text — parsing is synchronous (the composer shows 「识别中…」
-  // until this resolves). backend = which AI parses; projectId pins a project
-  // (else the AI infers it; null/unset → 未归类 staging).
-  createIssue: (body: { text: string; backend?: AiBackend | null; projectId?: string | null; attachments?: string[] }): Promise<Issue> =>
-    fetch("/api/issues", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }).then(j),
-  patchIssue: (id: string, patch: Partial<Issue>): Promise<Issue> =>
-    fetch(`/api/issues/${id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(patch) }).then(j),
-  deleteIssue: (id: string): Promise<unknown> =>
-    fetch(`/api/issues/${id}`, { method: "DELETE" }).then(j),
-  issueComments: (id: string): Promise<IssueComment[]> =>
-    fetch(`/api/issues/${id}/comments`).then(j),
-  // Post a comment. Plain = discussion. With `mention` (a CLI agentType) the
-  // server classifies intent: "execute" derives a task (returns task); "discuss"
-  // spawns a one-shot CLI reply and returns a pending agent comment that gets
-  // filled in by polling (the discussion view refreshes while status=pending).
-  // `mentionTeam`：被 @ 的那个类型当**调度者**带一队（mode:"team"），而不是自己单干。
-  postIssueComment: (id: string, body: { body: string; mention?: AgentType; mentionTeam?: boolean; attachments?: string[]; useWorktree?: boolean }): Promise<{ comment: IssueComment; task?: Task; agentComment?: IssueComment }> =>
-    fetch(`/api/issues/${id}/comments`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }).then(j),
-  patchIssueComment: (issueId: string, cid: string, patch: { body?: string; attachments?: string[] }): Promise<IssueComment> =>
-    fetch(`/api/issues/${issueId}/comments/${cid}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(patch) }).then(j),
-  deleteIssueComment: (issueId: string, cid: string): Promise<unknown> =>
-    fetch(`/api/issues/${issueId}/comments/${cid}`, { method: "DELETE" }).then(j),
-  issueTasks: (id: string): Promise<Task[]> =>
-    fetch(`/api/issues/${id}/tasks`).then(j),
-  // Commits a derived task produced on its worktree branch (issue → code linkage).
+  // Commits produced by a task on its worktree branch.
   taskCommits: (id: string): Promise<{ branch: string | null; commits: { sha: string; subject: string; at: string }[] }> =>
     fetch(`/api/tasks/${id}/commits`).then(j),
   // 供应商 (provider, system-level) — mounted onto an executor as base_url + key.

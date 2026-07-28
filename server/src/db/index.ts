@@ -56,22 +56,6 @@ export async function ensureSchema() {
       attachments TEXT NOT NULL DEFAULT '[]', agent TEXT, send_at TEXT NOT NULL,
       status TEXT NOT NULL DEFAULT 'pending', created_at TEXT NOT NULL, sent_at TEXT
     );
-    CREATE TABLE IF NOT EXISTS issues (
-      id TEXT PRIMARY KEY, project_id TEXT, title TEXT NOT NULL,
-      body TEXT NOT NULL DEFAULT '', source_text TEXT NOT NULL DEFAULT '',
-      status TEXT NOT NULL DEFAULT 'open', priority TEXT NOT NULL DEFAULT 'none',
-      labels TEXT NOT NULL DEFAULT '[]', ai_backend TEXT,
-      attachments TEXT NOT NULL DEFAULT '[]',
-      parsed INTEGER NOT NULL DEFAULT 0,
-      created_at TEXT NOT NULL, updated_at TEXT NOT NULL, closed_at TEXT
-    );
-    CREATE TABLE IF NOT EXISTS issue_comments (
-      id TEXT PRIMARY KEY, issue_id TEXT NOT NULL,
-      author TEXT NOT NULL DEFAULT '{"kind":"human"}',
-      body TEXT NOT NULL DEFAULT '', attachments TEXT NOT NULL DEFAULT '[]',
-      created_at TEXT NOT NULL, updated_at TEXT,
-      status TEXT
-    );
     CREATE TABLE IF NOT EXISTS llm_providers (
       id TEXT PRIMARY KEY, name TEXT NOT NULL,
       protocol TEXT NOT NULL DEFAULT 'openai', base_url TEXT NOT NULL,
@@ -111,15 +95,10 @@ export async function ensureSchema() {
     "ALTER TABLE sessions ADD COLUMN turn_started_at TEXT",
     "ALTER TABLE tasks ADD COLUMN use_worktree INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE tasks ADD COLUMN worktree_base TEXT",
-    "ALTER TABLE tasks ADD COLUMN issue_id TEXT",
     "ALTER TABLE tasks ADD COLUMN origin_task_id TEXT",
     "ALTER TABLE projects ADD COLUMN api_keys TEXT",
-    "ALTER TABLE issues ADD COLUMN attachments TEXT NOT NULL DEFAULT '[]'",
-    "ALTER TABLE issue_comments ADD COLUMN attachments TEXT NOT NULL DEFAULT '[]'",
-    "ALTER TABLE issue_comments ADD COLUMN updated_at TEXT",
     "ALTER TABLE tasks ADD COLUMN resume_prompt TEXT",
     "ALTER TABLE tasks ADD COLUMN resume_depends_on TEXT NOT NULL DEFAULT '[]'",
-    "ALTER TABLE issue_comments ADD COLUMN status TEXT",
     "ALTER TABLE agents ADD COLUMN speed TEXT",
     "ALTER TABLE agents ADD COLUMN reasoning_effort TEXT",
     "ALTER TABLE tasks ADD COLUMN question TEXT",
@@ -147,6 +126,7 @@ export async function ensureSchema() {
     }
   }
   await dropRetiredColumns();
+  await dropRetiredTables();
 }
 
 // 退役列:功能改掉后没人再读、但老库里还留着的列。放这里一次性清掉,而不是让
@@ -160,6 +140,15 @@ const RETIRED_COLUMNS: { table: string; column: string; why: string }[] = [
   { table: "groups", column: "use_worktree", why: "worktree 改为按任务 opt-in" },
   // 「编排组/协调者」被 /team 团队模式取代(groups.owner_task_id + tasks.parent_id)
   { table: "groups", column: "coordinator_task_id", why: "编排组已被 /team 取代" },
+  // 事项中心移除后，任务不再回链事项
+  { table: "tasks", column: "issue_id", why: "事项中心已移除" },
+];
+
+// 退役整表与退役列遵循同一原则：新库不创建，老库启动时幂等清理，失败只告警。
+// 先删明细表再删主表，兼容未来可能启用外键约束的旧库。
+const RETIRED_TABLES: { table: string; why: string }[] = [
+  { table: "issue_comments", why: "事项中心已移除" },
+  { table: "issues", why: "事项中心已移除" },
 ];
 
 async function dropRetiredColumns(): Promise<void> {
@@ -173,6 +162,22 @@ async function dropRetiredColumns(): Promise<void> {
       // 清不掉不该拦住启动(比如老 SQLite 不支持 DROP COLUMN):报一声继续跑,
       // 这列本来就没人读。
       console.warn(`[harness] 退役列 ${table}.${column} 没能清掉,忽略:`, e);
+    }
+  }
+}
+
+async function dropRetiredTables(): Promise<void> {
+  for (const { table, why } of RETIRED_TABLES) {
+    try {
+      const found = await client.execute({
+        sql: "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+        args: [table],
+      });
+      if (!found.rows.length) continue;
+      await client.execute(`DROP TABLE IF EXISTS ${table}`);
+      console.log(`[harness] 清理退役表 ${table}(${why})`);
+    } catch (e) {
+      console.warn(`[harness] 退役表 ${table} 没能清掉,忽略:`, e);
     }
   }
 }

@@ -63,7 +63,6 @@ const toTask = (r: TaskRow, profiles: AgentLabelRow[] = []): Task => ({
   archivedAt: r.archivedAt,
   useWorktree: r.useWorktree,
   worktreeBase: r.worktreeBase,
-  issueId: r.issueId ?? null,
   originTaskId: r.originTaskId ?? null,
   resumePrompt: r.resumePrompt ?? null,
   question: r.question ?? null,

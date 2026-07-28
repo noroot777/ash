@@ -155,7 +155,7 @@ export function detectTaskWorktree(repoPath: string, taskId: string): { path: st
   return { path, branch: worktreeBranchName(taskId) };
 }
 
-// List the commits a worktree task produced (issue → code linkage). The agent's
+// List the commits a worktree task produced. The agent's
 // commits live on the task's branch since it forked from `base`, so `base..HEAD`
 // is exactly them. base = the user-picked ref, else the main repo's current
 // branch. Empty when we can't isolate (no worktree / unknown base) — honest, not

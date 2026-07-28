@@ -19,8 +19,8 @@ export async function resolveExecutor(type: AgentType): Promise<AgentExecutor> {
 
 // Resolve a *specific* executor profile by id — used where the user picked one
 // by name (事项解析的执行器下拉) rather than just a type. Unknown/deleted id
-// degrades to that type's default, then to claude's, so a stale reference in an
-// old issue never breaks parsing.
+// degrades to that type's default, then to claude's, so a stale stored reference
+// never breaks execution.
 export async function resolveExecutorById(id: string): Promise<AgentExecutor> {
   const [row] = await db.select().from(agents).where(eq(agents.id, id));
   if (!row) return resolveExecutor("claude");

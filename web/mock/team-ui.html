@@ -177,13 +177,13 @@
       <div class="hd">
         <div class="hd-row">
           <span class="chip crew">团队</span>
-          <h1>事项中心接 GitHub Issue 双向同步</h1>
+          <h1>给团队调度补预算护栏</h1>
           <span class="pill"><span class="dot run"></span>调度中</span>
           <span class="pill">14m 20s</span>
           <button class="btn danger">停止全组</button>
           <button class="btn">归档</button>
         </div>
-        <div class="req">把事项中心跟 GitHub Issue 做成双向同步：GitHub 上新建/改 issue 要落进我们的事项，我们这边改状态、加标签也要推回去。注意事项正文恒为用户原文这条约定不能破…<span class="more">展开</span></div>
+        <div class="req">给团队调度加预算护栏：每个批次可配置 token 与并发上限，超限时暂停并留下明确原因，已有队列行为不能被破坏…<span class="more">展开</span></div>
         <div class="meta">
           <span>调度者 <b>@claude</b></span>
           <span>执行者 <b>4</b>（codex×3 · claude×1）</span>
@@ -200,11 +200,11 @@
           <div class="wf-body">
             <div class="wf-name">调度者 @claude</div>
             <div class="track"><span class="bar done" style="left:0;width:14%"></span><span class="bar done" style="left:46%;width:6%"></span><span class="bar run" style="left:92%;width:8%"></span></div>
-            <div class="wf-name">① 同步器骨架</div>
+            <div class="wf-name">① 预算字段</div>
             <div class="track"><span class="bar run" style="left:15%;width:85%"></span></div>
-            <div class="wf-name">② 入站 Webhook</div>
+            <div class="wf-name">② 启动前挡板</div>
             <div class="track"><span class="bar ask" style="left:15%;width:70%"></span></div>
-            <div class="wf-name">③ 出站推送</div>
+            <div class="wf-name">③ 运行中告警</div>
             <div class="track"><span class="bar wait" style="left:85%;width:15%"></span></div>
             <div class="wf-name">④ 文档 + 约定</div>
             <div class="track"><span class="bar done" style="left:15%;width:28%"></span></div>
@@ -216,7 +216,7 @@
       <!-- attention -->
       <div class="att">
         <span class="dot ask"></span>
-        <span><b>② 入站 Webhook</b> 在等答复 · 已等 1m 42s</span>
+        <span><b>② 启动前挡板</b> 在等答复 · 已等 1m 42s</span>
         <span class="sp"></span>
         <button class="btn sm">让调度者答</button>
         <button class="btn sm primary">我来答</button>
@@ -227,15 +227,15 @@
         <div class="feed">
           <div class="turn">
             <div class="who"><span class="av lead">调</span><b>调度者</b><span class="mono">claude · 12:04</span></div>
-            <div class="bd">先摸了 <code>issues</code> 表和 <code>routes.ts</code> 的事项端点。双向同步拆成四件事：骨架（表加 <code>github_number</code> + 同步器模块）、入站 webhook、出站推送、文档与约定。骨架必须先落，后两件依赖它，所以我把①放前面、③排在①后头，②④可以现在就并行。</div>
+            <div class="bd">先摸了 <code>tasks</code> 表和 <code>scheduler.ts</code>。预算护栏拆成四件事：字段与计量、启动前挡板、运行中告警、文档与约定。字段必须先落，后两件依赖它，所以我把①放前面、③排在①后头，②④可以现在就并行。</div>
           </div>
 
           <div class="turn">
             <div class="disp">
               <div class="disp-hd">⇥ <b>派活 · 4 个执行者</b><span style="margin-left:auto" class="mono">12:05</span></div>
-              <div class="row"><span class="dot run"></span><span class="row-t">① 同步器骨架 + issues 表加 github_number</span><span class="tag">codex</span><span class="row-s">运行中 9m</span></div>
-              <div class="row"><span class="dot ask"></span><span class="row-t">② 入站：GitHub webhook → 事项</span><span class="tag">codex</span><span class="row-s">等答复</span></div>
-              <div class="row"><span class="dot wait"></span><span class="row-t">③ 出站：事项变更 → GitHub</span><span class="tag">codex</span><span class="row-s">等①</span></div>
+              <div class="row"><span class="dot run"></span><span class="row-t">① 预算字段 + scheduler 挡板</span><span class="tag">codex</span><span class="row-s">运行中 9m</span></div>
+              <div class="row"><span class="dot ask"></span><span class="row-t">② 启动前：预算不足时暂停</span><span class="tag">codex</span><span class="row-s">等答复</span></div>
+              <div class="row"><span class="dot wait"></span><span class="row-t">③ 运行中：接近上限时告警</span><span class="tag">codex</span><span class="row-s">等①</span></div>
               <div class="row"><span class="dot done"></span><span class="row-t">④ 文档 + CLAUDE.md 约定</span><span class="tag">claude</span><span class="row-s">完成 3m12s</span></div>
               <div class="disp-ft">点任一行 → 右侧滑出它的完整会话；也能单独重跑 / 换执行器</div>
             </div>
@@ -244,14 +244,14 @@
           <div class="turn">
             <div class="inbound">
               <div class="who" style="margin-bottom:3px"><span class="av wk">④</span><b>④ 文档 + 约定</b><span class="kind">· 汇报完成</span><span class="mono">12:09</span></div>
-              <div class="bd">CLAUDE.md 加了「GitHub 同步」一节：只同步元信息，正文永远以我们这边为准（对齐「正文恒为用户原文」）。已 commit <span class="mono">a71f3e2</span>。</div>
+              <div class="bd">CLAUDE.md 加了「预算暂停」约定：预算耗尽进入 paused，不得伪装成 failed 或自动推进队列。已 commit <span class="mono">a71f3e2</span>。</div>
             </div>
           </div>
 
           <div class="turn">
             <div class="inbound q">
-              <div class="who" style="margin-bottom:3px"><span class="av wk">②</span><b>② 入站 Webhook</b><span class="kind" style="color:var(--amber)">· 提问，卡住了</span><span class="mono">12:12</span></div>
-              <div class="bd">GitHub 上把 label 删了，我们这边的 labels 要不要跟着删？强同步会覆盖用户在 harness 里手加的标签；不同步则两边会飘。选哪个？</div>
+              <div class="who" style="margin-bottom:3px"><span class="av wk">②</span><b>② 启动前挡板</b><span class="kind" style="color:var(--amber)">· 提问，卡住了</span><span class="mono">12:12</span></div>
+              <div class="bd">预算不足时，当前任务要留在原位暂停，还是移到队尾让后续任务先跑？两种选择会改变串行队列语义。选哪个？</div>
               <div class="qact">
                 <button class="btn sm primary">我来答</button>
                 <button class="btn sm">让调度者答</button>
@@ -262,7 +262,7 @@
 
           <div class="turn">
             <div class="who"><span class="av lead">调</span><b>调度者</b><span class="mono">claude · 12:13</span><span class="dot run" style="margin-left:2px"></span></div>
-            <div class="bd">读了 <code>issueComments</code> 和事项详情页的标签编辑逻辑，本地手加标签是常规操作，不能被远端删掉。答复②：以 <span class="mono">gh:</span> 前缀区分来源标签，只同步带前缀的那批…</div>
+            <div class="bd">读了队列推进与失败重试逻辑，预算暂停不能被当成失败跳过。答复②：沿用 <span class="mono">paused</span>，并用独立原因字段区分预算触发…</div>
           </div>
         </div>
 
@@ -271,19 +271,19 @@
           <div class="rail-hd"><span>执行者（4）</span><span>⌘1–4</span></div>
 
           <button class="wk">
-            <div class="wk-top"><span class="dot run"></span><span class="wk-title">① 同步器骨架</span><span class="tag">codex</span></div>
+            <div class="wk-top"><span class="dot run"></span><span class="wk-title">① 预算字段</span><span class="tag">codex</span></div>
             <div class="wk-sub"><span>运行中 · 9m 06s</span><span>·</span><span>18 工具调用</span></div>
-            <div class="wk-live">正在写 migration：issues 加 github_number…</div>
+            <div class="wk-live">正在写 migration：tasks 加 token_budget…</div>
           </button>
 
           <button class="wk ask sel">
-            <div class="wk-top"><span class="dot ask"></span><span class="wk-title">② 入站 Webhook</span><span class="tag">codex</span></div>
+            <div class="wk-top"><span class="dot ask"></span><span class="wk-title">② 启动前挡板</span><span class="tag">codex</span></div>
             <div class="wk-sub"><span style="color:var(--amber)">等答复 1m 42s</span></div>
-            <div class="wk-live">labels 要不要强同步？</div>
+            <div class="wk-live">暂停后队列要不要推进？</div>
           </button>
 
           <button class="wk">
-            <div class="wk-top"><span class="dot wait"></span><span class="wk-title">③ 出站推送</span><span class="tag">codex</span></div>
+            <div class="wk-top"><span class="dot wait"></span><span class="wk-title">③ 运行中告警</span><span class="tag">codex</span></div>
             <div class="wk-sub"><span>排队 · 等 ① 完成</span></div>
           </button>
 
@@ -311,7 +311,7 @@
       <div class="hd">
         <div class="hd-row">
           <span class="chip crew">团队</span>
-          <h1>事项中心接 GitHub Issue 双向同步</h1>
+          <h1>给团队调度补预算护栏</h1>
           <span class="pill"><span class="dot run"></span>调度中</span>
           <button class="btn danger">停止全组</button>
         </div>
@@ -320,19 +320,19 @@
         <div class="feed" style="filter:blur(.4px);opacity:.6">
           <div class="turn">
             <div class="who"><span class="av lead">调</span><b>调度者</b><span class="mono">claude · 12:04</span></div>
-            <div class="bd">先摸了 <code>issues</code> 表和事项端点，双向同步拆成四件事…</div>
+            <div class="bd">先摸了 <code>tasks</code> 表和调度入口，预算护栏拆成四件事…</div>
           </div>
           <div class="turn">
             <div class="disp">
               <div class="disp-hd">⇥ <b>派活 · 4 个执行者</b></div>
-              <div class="row"><span class="dot run"></span><span class="row-t">① 同步器骨架</span><span class="row-s">运行中</span></div>
-              <div class="row"><span class="dot ask"></span><span class="row-t">② 入站 Webhook</span><span class="row-s">等答复</span></div>
+              <div class="row"><span class="dot run"></span><span class="row-t">① 预算字段</span><span class="row-s">运行中</span></div>
+              <div class="row"><span class="dot ask"></span><span class="row-t">② 启动前挡板</span><span class="row-s">等答复</span></div>
             </div>
           </div>
         </div>
         <aside class="rail" style="filter:blur(.4px);opacity:.6">
           <div class="rail-hd"><span>执行者（4）</span></div>
-          <button class="wk ask sel"><div class="wk-top"><span class="dot ask"></span><span class="wk-title">② 入站 Webhook</span></div></button>
+          <button class="wk ask sel"><div class="wk-top"><span class="dot ask"></span><span class="wk-title">② 启动前挡板</span></div></button>
         </aside>
       </div>
       <div class="scrim"></div>
@@ -340,7 +340,7 @@
         <div class="dr-hd">
           <div class="hd-row">
             <span class="dot ask"></span>
-            <h1 style="font-size:14.5px;flex:1">② 入站：GitHub webhook → 事项</h1>
+            <h1 style="font-size:14.5px;flex:1">② 启动前：预算不足时暂停</h1>
             <span class="pill">等答复</span>
             <button class="btn sm">重跑</button>
             <button class="btn sm">✕</button>
@@ -355,16 +355,16 @@
         <div class="dr-bd">
           <div class="turn">
             <div class="who"><span class="av wk">派</span><b>调度者派的活</b></div>
-            <div class="bd">实现 GitHub → 事项的入站同步：验签、去重（按 <code>github_number</code>）、映射 open/closed 到我们的状态。别动事项正文。</div>
+            <div class="bd">实现任务启动前的预算挡板：读取 <code>token_budget</code>、汇总已用额度，超限时进入 paused 并写清原因。</div>
           </div>
           <div class="turn">
             <div class="who"><span class="av wk">②</span><b>codex</b><span class="mono">12:06</span></div>
-            <div class="bd">读了 <code>routes.ts</code> 的 issues 段与 <code>schema.ts</code>。验签用 <code>X-Hub-Signature-256</code>，写了 <code>server/src/github/inbound.ts</code>，去重键落在 <code>issues.github_number</code> 上…</div>
+            <div class="bd">读了 <code>routes.ts</code> 的运行入口与 <code>schema.ts</code>。计量统一从 session 汇总，写了 <code>server/src/budget.ts</code>，挡板落在任务启动前…</div>
           </div>
           <div class="turn">
             <div class="inbound q">
               <div class="who" style="margin-bottom:3px"><span class="av wk">②</span><b>提问 · 已送给调度者</b><span class="mono">12:12</span></div>
-              <div class="bd">GitHub 上把 label 删了，我们这边要不要跟着删？</div>
+              <div class="bd">预算不足时，当前任务要留在原位暂停，还是移到队尾？</div>
             </div>
           </div>
         </div>
@@ -401,7 +401,7 @@
         <button class="btn primary">创建并开工 ⌘↵</button>
       </div>
     </div>
-    <p class="note" style="margin-top:12px">敲完一句「把事项中心接上 GitHub Issue 双向同步」→ 回车。剩下的拆几件、谁先谁后、派给谁，调度者自己定；你只在「执行者提问」和「有人挂了」这两种时候被叫。执行者默认跟调度者同目录跑，要隔离由调度者派活时逐个开。</p>
+    <p class="note" style="margin-top:12px">敲完一句「给团队调度补预算护栏」→ 回车。剩下的拆几件、谁先谁后、派给谁，调度者自己定；你只在「执行者提问」和「有人挂了」这两种时候被叫。执行者默认跟调度者同目录跑，要隔离由调度者派活时逐个开。</p>
   </section>
 
   <!-- ════════════════ ④ 列表 ════════════════ -->
@@ -409,10 +409,10 @@
     <p class="note"><b>一句话：</b>列表里团队任务是一行父任务 + 缩进的执行者行（默认折叠成一行摘要）。执行者是真任务，所以归档和筛选全都照旧能看见它们。</p>
     <div class="app">
       <div class="lst">
-        <div class="li"><span class="dot run"></span><span class="chip crew">团队</span><span class="t">事项中心接 GitHub Issue 双向同步</span><span class="mono">1 等答复 · 1 干活 · 1 排队 · 1 完成</span><span class="tag">claude</span><span class="mono">14m</span></div>
-        <div class="li child"><span class="dot run"></span><span class="t">① 同步器骨架 + issues 表加 github_number</span><span class="tag">codex</span><span class="mono">9m</span></div>
-        <div class="li child" style="background:#fffbeb"><span class="dot ask"></span><span class="t">② 入站：GitHub webhook → 事项</span><span class="tag">codex</span><span class="mono" style="color:var(--amber)">等答复 1m42s</span></div>
-        <div class="li child"><span class="dot wait"></span><span class="t">③ 出站：事项变更 → GitHub</span><span class="tag">codex</span><span class="mono">等 ①</span></div>
+        <div class="li"><span class="dot run"></span><span class="chip crew">团队</span><span class="t">给团队调度补预算护栏</span><span class="mono">1 等答复 · 1 干活 · 1 排队 · 1 完成</span><span class="tag">claude</span><span class="mono">14m</span></div>
+        <div class="li child"><span class="dot run"></span><span class="t">① 预算字段 + scheduler 挡板</span><span class="tag">codex</span><span class="mono">9m</span></div>
+        <div class="li child" style="background:#fffbeb"><span class="dot ask"></span><span class="t">② 启动前：预算不足时暂停</span><span class="tag">codex</span><span class="mono" style="color:var(--amber)">等答复 1m42s</span></div>
+        <div class="li child"><span class="dot wait"></span><span class="t">③ 运行中：接近上限时告警</span><span class="tag">codex</span><span class="mono">等 ①</span></div>
         <div class="li child"><span class="dot done"></span><span class="t">④ 文档 + CLAUDE.md 约定</span><span class="tag">claude</span><span class="mono">3m12s</span></div>
         <div class="li"><span class="dot done"></span><span class="chip pair">debate</span><span class="t">供应商模型命名规则讨论</span><span class="mono">已完成</span><span class="tag">claude+codex</span><span class="mono">昨天</span></div>
         <div class="li"><span class="dot fail"></span><span class="t">修 mobile 拖选手柄</span><span class="tag">codex</span><span class="mono">失败</span></div>

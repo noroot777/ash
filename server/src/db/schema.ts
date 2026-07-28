@@ -7,7 +7,7 @@ export const projects = sqliteTable("projects", {
   id: text("id").primaryKey(),
   name: text("name").notNull(),
   repoPath: text("repo_path").notNull(),
-  apiKeys: text("api_keys"), // json {anthropic?, openai?} — 本机用,给直连 LLM 解析事项
+  apiKeys: text("api_keys"), // legacy project-level credentials, kept for compatibility
   createdAt: text("created_at").notNull(),
 });
 
@@ -55,7 +55,6 @@ export const tasks = sqliteTable("tasks", {
   // running. False / missing repo → behaves like before (runs in repoPath).
   useWorktree: integer("use_worktree", { mode: "boolean" }).notNull().default(false),
   worktreeBase: text("worktree_base"),
-  issueId: text("issue_id"), // 回链来源事项(null = 直接创建)
   originTaskId: text("origin_task_id"), // 回链来源任务(null = 直接创建)
   // 检查点续跑：agent 调 pause_task 时填进来；下次 resume 时取出喂给 CLI 会话并清空。
   resumePrompt: text("resume_prompt"),
@@ -148,39 +147,6 @@ export const scheduledMessages = sqliteTable("scheduled_messages", {
   status: text("status").notNull().default("pending"), // pending | sent | canceled
   createdAt: text("created_at").notNull(),
   sentAt: text("sent_at"),
-});
-
-// Issues: the lightweight planning/discussion layer upstream of tasks.
-export const issues = sqliteTable("issues", {
-  id: text("id").primaryKey(),
-  projectId: text("project_id"), // null = 未归类(AI 没识别出项目,内部暂存)
-  title: text("title").notNull(),
-  body: text("body").notNull().default(""),
-  sourceText: text("source_text").notNull().default(""), // 用户原始输入
-  status: text("status").notNull().default("open"), // open | in_progress | done | canceled
-  priority: text("priority").notNull().default("none"),
-  labels: text("labels").notNull().default("[]"), // json
-  attachments: text("attachments").notNull().default("[]"), // json: absolute file paths
-  aiBackend: text("ai_backend"), // json AiBackend({executorId}); 旧格式 {kind:…} 读到就降级为默认执行器
-  parsed: integer("parsed", { mode: "boolean" }).notNull().default(false),
-  createdAt: text("created_at").notNull(),
-  updatedAt: text("updated_at").notNull(),
-  closedAt: text("closed_at"),
-});
-
-// Issue discussion: plain comments + agent turns. @-mentioning a CLI agent in a
-// comment records a turn AND triggers execution (see POST /issues/:id/comments).
-export const issueComments = sqliteTable("issue_comments", {
-  id: text("id").primaryKey(),
-  issueId: text("issue_id").notNull(),
-  author: text("author").notNull().default('{"kind":"human"}'), // json CommentAuthor
-  body: text("body").notNull().default(""),
-  attachments: text("attachments").notNull().default("[]"), // json: absolute file paths
-  createdAt: text("created_at").notNull(),
-  updatedAt: text("updated_at"), // set when edited
-  // Only agent comments produced by a discuss @-mention use this: pending →
-  // done/failed. Human comments leave it null.
-  status: text("status"),
 });
 
 // Queue items: ordered list of tasks where each task waits for the one

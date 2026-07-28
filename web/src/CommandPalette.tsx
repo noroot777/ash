@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { SearchHit, TaskStatus } from "@harness/shared";
-import { PencilSimpleLine } from "@phosphor-icons/react";
+import type { SearchHit } from "@harness/shared";
 import { api } from "./api";
 import { StatusIcon } from "./StatusIcon";
 import { useEscape } from "./useEscape";
@@ -19,7 +18,6 @@ export type Command = {
 const FIELD_LABEL: Record<SearchHit["field"], string | null> = {
   title: null, // title matches highlight in the title itself, no chip needed
   body: "正文",
-  comment: "讨论",
   conversation: "会话",
 };
 
@@ -78,8 +76,7 @@ export function CommandPalette({
     return commands.filter((c) => (c.label + " " + (c.hint ?? "") + " " + (c.group ?? "")).toLowerCase().includes(s));
   }, [q, commands]);
 
-  // Debounced global search. Server ranks by field (title > body > … ), the
-  // client regroups tasks-before-issues so each kind reads as one section.
+  // Debounced global task search. The server ranks by field (title > body > …).
   useEffect(() => {
     const s = q.trim();
     if (s.length < 2) {
@@ -94,7 +91,7 @@ export function CommandPalette({
         .search(s)
         .then((r) => {
           if (seqRef.current !== seq) return;
-          setHits([...r.filter((h) => h.kind === "task"), ...r.filter((h) => h.kind === "issue")]);
+          setHits(r);
           setSearching(false);
         })
         .catch(() => {
@@ -141,7 +138,7 @@ export function CommandPalette({
           ref={inputRef}
           value={q}
           onChange={(e) => setQ(e.target.value)}
-          placeholder="搜索任务、事项，或输入命令…"
+          placeholder="搜索任务，或输入命令…"
           className="w-full border-b border-line bg-transparent px-4 py-3 text-sm outline-none placeholder:text-faint"
           onKeyDown={(e) => {
             if (e.key === "ArrowDown") {
@@ -183,10 +180,10 @@ export function CommandPalette({
           })}
           {hits.map((h, hi) => {
             const i = filtered.length + hi;
-            const header = h.kind !== hits[hi - 1]?.kind ? (h.kind === "task" ? "任务" : "事项") : null;
+            const header = hi === 0 ? "任务" : null;
             const fieldChip = FIELD_LABEL[h.field];
             return (
-              <div key={h.kind + h.id}>
+              <div key={h.id}>
                 {header && (
                   <div className="px-4 pb-1 pt-2 text-[10px] font-medium uppercase tracking-wide text-faint">{header}</div>
                 )}
@@ -196,13 +193,7 @@ export function CommandPalette({
                   className={`flex w-full flex-col gap-0.5 px-4 py-2 text-left ${i === active ? "bg-overlay" : ""}`}
                 >
                   <span className="flex w-full min-w-0 items-center gap-2 text-sm">
-                    <span className="shrink-0">
-                      {h.kind === "task" ? (
-                        <StatusIcon status={h.status as TaskStatus} />
-                      ) : (
-                        <PencilSimpleLine size={14} className="text-muted" />
-                      )}
-                    </span>
+                    <span className="shrink-0"><StatusIcon status={h.status} /></span>
                     <span className="min-w-0 truncate text-ink">
                       <Highlight text={h.title} q={q} />
                     </span>
@@ -228,7 +219,7 @@ export function CommandPalette({
           )}
           {!total && !searching && (
             <p className="px-4 py-6 text-center text-xs text-faint">
-              {q.trim().length >= 2 ? "没有匹配的命令、任务或事项" : "无匹配命令"}
+              {q.trim().length >= 2 ? "没有匹配的命令或任务" : "无匹配命令"}
             </p>
           )}
         </div>

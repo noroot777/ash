@@ -81,7 +81,7 @@ function RemoveButton({ onClick }: { onClick: () => void }) {
 }
 
 // Read-only attachment renderer shared by task bodies, conversation bubbles,
-// debate interventions, and issue bodies/comments. A local path becomes a URL
+// and debate interventions. A local path becomes a URL
 // only when it ends in data/uploads/<single filename>; every other path stays a
 // non-clickable filename chip so arbitrary local paths can never be exposed.
 export function AttachmentDisplay({

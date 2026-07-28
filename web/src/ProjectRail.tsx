@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import type { ProjectView } from "@harness/shared";
-import { CaretDown, GearSix, ListChecks, MagnifyingGlass, PencilSimpleLine, Plus, Robot, SidebarSimple } from "@phosphor-icons/react";
+import { CaretDown, GearSix, ListChecks, MagnifyingGlass, Plus, Robot, SidebarSimple } from "@phosphor-icons/react";
 import { Menu } from "./Menu";
 import { HealthDot, ProjectAvatar } from "./ui";
 import { shortPath } from "./util";
@@ -9,12 +9,9 @@ export function ProjectRail({
   projects,
   projectId,
   railCollapsed,
-  section,
-  issueCount,
   taskCount,
   connected,
   onProject,
-  onSection,
   onSettings,
   onNewProject,
   onAgents,
@@ -24,12 +21,9 @@ export function ProjectRail({
   projects: ProjectView[];
   projectId: string | null;
   railCollapsed: boolean;
-  section: "issue" | "task";
-  issueCount: number;
   taskCount: number;
   connected: boolean;
   onProject: (id: string) => void;
-  onSection: (section: "issue" | "task") => void;
   onSettings: () => void;
   onNewProject: () => void;
   onAgents: () => void;
@@ -129,37 +123,20 @@ export function ProjectRail({
 
       <nav className="mt-1.5 flex flex-col gap-px">
         {!railCollapsed && (
-          <div className="px-2 pb-1 pt-3 text-[10px] font-semibold uppercase tracking-[0.07em] text-faint">规划</div>
-        )}
-        <button
-          onClick={() => onSection("issue")}
-          title={railCollapsed ? `事项 (${issueCount})` : undefined}
-          className={`group flex items-center rounded-md text-[13px] ${railCollapsed ? "justify-center p-1.5" : "gap-2.5 px-2 py-1.5"} ${section === "issue" ? "bg-raised font-medium text-ink" : "text-muted hover:bg-raised hover:text-ink"}`}
-        >
-          <PencilSimpleLine size={16} className={section === "issue" ? "text-accent" : ""} />
-          {!railCollapsed && (
-            <>
-              事项
-              <span className="ml-auto rounded-full bg-overlay px-1.5 text-[11px] text-faint">{issueCount}</span>
-            </>
-          )}
-        </button>
-        {!railCollapsed && (
           <div className="px-2 pb-1 pt-3 text-[10px] font-semibold uppercase tracking-[0.07em] text-faint">执行</div>
         )}
-        <button
-          onClick={() => onSection("task")}
+        <div
           title={railCollapsed ? `任务 (${taskCount})` : undefined}
-          className={`flex items-center rounded-md text-[13px] ${railCollapsed ? "justify-center p-1.5" : "gap-2.5 px-2 py-1.5"} ${section === "task" ? "bg-raised font-medium text-ink" : "text-muted hover:bg-raised hover:text-ink"}`}
+          className={`flex items-center rounded-md bg-raised text-[13px] font-medium text-ink ${railCollapsed ? "justify-center p-1.5" : "gap-2.5 px-2 py-1.5"}`}
         >
-          <ListChecks size={16} className={section === "task" ? "text-accent" : ""} />
+          <ListChecks size={16} className="text-accent" />
           {!railCollapsed && (
             <>
               任务
               <span className="ml-auto rounded-full bg-overlay px-1.5 text-[11px] text-faint">{taskCount}</span>
             </>
           )}
-        </button>
+        </div>
       </nav>
 
       <div className="flex-1" />

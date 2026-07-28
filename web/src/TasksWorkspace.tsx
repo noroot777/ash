@@ -8,10 +8,8 @@ import { type DebateState, emptyDebate } from "./debateState";
 import { BranchChip, ResizeHandle } from "./ui";
 import { OriginTaskBar } from "./taskOrigin";
 
-// The "执行" plane: the existing task workspace, extracted from App so the rail can
-// switch between it and the issues plane. View (list) + archived filter live here
-// now (they're presentations of tasks, not top-level rail items). State stays in
-// App (single source); this component is presentational + raises callbacks.
+// The task workspace. View (list) + archived filter live here; state stays in App
+// as the single source of truth, while this component raises callbacks.
 export type TaskView = "list" | "archived";
 
 export function TasksWorkspace({
@@ -43,7 +41,6 @@ export function TasksWorkspace({
   onUnarchive,
   onRequeue,
   onGate,
-  onOpenIssue,
   onOpenTask,
   onTaskCreated,
 }: {
@@ -75,7 +72,6 @@ export function TasksWorkspace({
   onUnarchive: (id: string) => void;
   onRequeue: (id: string) => void;
   onGate: (id: string, action: GateAction) => void;
-  onOpenIssue: (issueId: string) => void;
   onOpenTask: (taskId: string) => void;
   onTaskCreated: (task: Task, doRun?: boolean, select?: boolean) => void;
 }) {
@@ -121,15 +117,6 @@ export function TasksWorkspace({
         </aside>
         <div className="flex min-w-0 flex-1 flex-col">
           {current && <OriginTaskBar task={current} allTasks={allTasks} onOpen={onOpenTask} />}
-          {current?.issueId && (
-            <button
-              onClick={() => onOpenIssue(current.issueId!)}
-              className="flex shrink-0 items-center gap-2 border-b border-line bg-[color-mix(in_srgb,var(--color-accent)_6%,#fff)] px-3.5 py-2 text-left text-[12.5px] text-accent hover:bg-[color-mix(in_srgb,var(--color-accent)_11%,#fff)]"
-              title="回到来源事项"
-            >
-              ← 来自事项 · 含讨论上下文
-            </button>
-          )}
           <div className="min-h-0 flex-1">
             {current ? (
               current.mode === "debate" ? (
