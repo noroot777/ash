@@ -225,7 +225,7 @@ export function CreateTask({
   };
 
   return (
-    <div className={`${initialBody !== undefined ? "t-modal-overlay note-task-overlay" : ""} fixed inset-0 z-50 flex items-start justify-center bg-black/30 pt-[12vh]`} onClick={onClose}>
+    <div className={`${initialBody !== undefined ? "t-modal-overlay" : ""} fixed inset-0 z-50 flex items-start justify-center bg-black/30 pt-[12vh]`} onClick={onClose}>
       <div
         className={`${initialBody !== undefined ? "t-modal note-task-enter" : ""} flex flex-col overflow-visible rounded-xl border border-line2 bg-panel shadow-2xl transition-all ${
           expanded ? "h-[78vh] w-[920px]" : "w-[640px]"

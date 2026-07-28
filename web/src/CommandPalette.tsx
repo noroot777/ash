@@ -131,7 +131,7 @@ export function CommandPalette({
   const hover = (i: number, event: ReactMouseEvent) => {
     const previous = mouseRef.current;
     mouseRef.current = { x: event.clientX, y: event.clientY };
-    if (previous && previous.x === event.clientX && previous.y === event.clientY) return;
+    if (!previous || (previous.x === event.clientX && previous.y === event.clientY)) return;
     setActive(i);
   };
 
@@ -151,16 +151,12 @@ export function CommandPalette({
           placeholder="搜索任务，或输入命令…"
           className="w-full border-b border-line bg-transparent px-4 py-3 text-sm outline-none placeholder:text-faint"
           onKeyDown={(e) => {
-            const plainCharacter = !e.metaKey && !e.ctrlKey && !e.altKey && e.key.length === 1 && !e.nativeEvent.isComposing;
-            const completed = plainCharacter
-              ? commands.find((command) => {
-                  const keys = command.keys?.replace(/\s+/g, "").toLowerCase();
-                  return !!keys && q.toLowerCase() === keys.slice(0, -1) && (q + e.key).toLowerCase() === keys;
-                })
+            const sequence = e.key === "Enter" && !e.nativeEvent.isComposing
+              ? commands.find((command) => command.keys?.replace(/\s+/g, "").toLowerCase() === q.toLowerCase())
               : undefined;
-            if (completed) {
+            if (sequence) {
               e.preventDefault();
-              run(completed);
+              run(sequence);
             } else if (e.key === "ArrowDown") {
               e.preventDefault();
               setActive((a) => Math.min(a + 1, total - 1));
