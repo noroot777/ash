@@ -12,6 +12,7 @@ import { Markdown } from "./Markdown";
 import { formatInstant, Duration } from "./time";
 import { executorLabel } from "./executorLabel";
 import { AttachmentDisplay, parseAttachmentText } from "./messageAttachments";
+import { liveLogsAfterSnapshot } from "./conversationDedup";
 
 export type LogLine = {
   kind: "text" | "thinking" | "tool" | "error" | "done" | "user" | "system";
@@ -60,12 +61,16 @@ export function buildConversation({
   task,
   snapshot,
   logs,
+  snapshotLogCutoff = 0,
+  snapshotDedupeThrough = snapshotLogCutoff,
   sessions,
   primaryAgent,
 }: {
   task: Task;
   snapshot: { s: Session; out: string }[];
   logs: LogLine[];
+  snapshotLogCutoff?: number;
+  snapshotDedupeThrough?: number;
   sessions: Session[];
   primaryAgent: AgentType;
 }): ConvItem[] {
@@ -100,10 +105,15 @@ export function buildConversation({
       });
     });
   }
+  // A manual refresh replaces the live prefix with a newer persisted snapshot.
+  // Text that arrived while the request was in flight may already be in that
+  // snapshot too, so trim the covered tail before continuing the live stream.
+  const liveLogs = liveLogsAfterSnapshot(snapshot, logs, snapshotLogCutoff, snapshotDedupeThrough);
+
   // Continue into the last snapshot bubble if the live stream resumes that run.
   const last = items[items.length - 1];
   let cur: AgentItem | null = last && last.kind === "agent" ? last : null;
-  for (const l of logs) {
+  for (const l of liveLogs) {
     if (l.kind === "user") {
       items.push({ kind: "user", text: l.text, at: l.at, attachments: l.attachments });
       cur = null;
