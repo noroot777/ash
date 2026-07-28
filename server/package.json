@@ -12,6 +12,7 @@
     "test:singleton": "tsx scripts/test-singleton.ts",
     "test:queue": "tsx scripts/test-queue-order.ts",
     "test:task-workspace": "tsx scripts/test-task-workspace.ts",
+    "test:worktree-recovery": "tsx scripts/test-worktree-recovery.ts",
     "test:executor-resolution": "tsx scripts/test-executor-resolution.ts"
   },
   "dependencies": {

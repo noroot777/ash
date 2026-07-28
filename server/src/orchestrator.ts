@@ -1,4 +1,4 @@
-import { mkdirSync, createWriteStream } from "node:fs";
+import { mkdirSync, createWriteStream, existsSync } from "node:fs";
 import { join } from "node:path";
 import { eq, inArray, sql } from "drizzle-orm";
 import type { AgentType } from "@harness/shared";
@@ -8,7 +8,6 @@ import { bus } from "./bus.js";
 import { id, now, attachmentsPrompt } from "./util.js";
 import { setTaskStatus } from "./status.js";
 import { trackRun, untrackRun, takeStopped, takeConfirmed, type StopSettle } from "./runs.js";
-import { ensureWorkdir } from "./git.js";
 import { taskWorkspace } from "./task-workspace.js";
 import { resolveExecutorFor } from "./executors/index.js";
 import type { RunHandle } from "./executors/types.js";
@@ -62,6 +61,19 @@ const COMPLETION_REMINDER = (taskId: string) =>
 const FOLLOW_UP_LABEL: Record<string, string> = { done: "已完成", failed: "失败", canceled: "已取消" };
 const FOLLOW_UP_REMINDER = (taskId: string, from: string) =>
   `\n\n(harness:这是任务在「${FOLLOW_UP_LABEL[from] ?? from}」之后的续聊,taskId=${taskId}。任务状态不会因为本回合而改变,本回合不需要 complete_task;只有当你在这一轮把任务推进到了新的完成状态时,才调用 complete_task(taskId="${taskId}")确认。)`;
+
+// The task's worktree was gone AND its branch with it, so we rebuilt an empty one.
+// The CLI conversation lives outside the worktree (~/.claude/projects/<escaped
+// cwd>/), so `--resume` hands the agent a full memory of files that no longer
+// exist — it would happily "finish the last bit" on top of nothing. Break that
+// continuity explicitly: the agent must re-read reality before acting. Shown to
+// the user too (its own timeline bubble), since a silently reset workspace is
+// exactly the kind of thing you must not discover at review time.
+const WORKSPACE_RESET = (path: string) =>
+  `\n\n〔重要·工作目录已重建〕本任务原来的 worktree 和分支都已不存在(被删除了),harness 刚在 ${path} 建了一个空的工作目录:` +
+  `你在上文里创建或修改过的文件**现在全都不在了**,git 历史也回到了基线。请不要相信上文中「我已经改过某某文件」的记忆——` +
+  `动手之前先实际看一遍当前目录(ls / git status / git log),据此重新判断还要做什么。`;
+const WORKSPACE_RESET_MARKER = "〔系统〕原工作目录(worktree 与分支)已不存在，已重建为空目录并提醒 agent 重新确认现状";
 
 // Why a task is being (re)started — only used to label the resume; all reasons
 // behave the same (resume if there's a resumable session, else fresh). Note: a
@@ -443,19 +455,14 @@ export async function continueTask(
       .sort((a, b) => b.startedAt.localeCompare(a.startedAt));
     const prev = all.find((s) => s.agentType === agent); // this agent's own session, if any
     const resuming = !!prev?.cliSessionId;
-    // Where the work lives: the agent's own cwd, else any session's cwd (so the
-    // invitee sees prior output), else materialize the task workdir.
-    const cwd =
-      prev?.cwd || prev?.worktreePath ||
-      all[0]?.cwd || all[0]?.worktreePath ||
-      (project ? ensureWorkdir(project.repoPath, taskId) : ".");
-
     // 续聊(follow-up):任务已经到终态了,用户又发来一条消息 —— 这一轮是「任务
     // 之后的对话」,不是任务的执行。把续聊前的终态记下来:队列一律按它看待这个
     // 成员(既不算「有人在跑」冻住整条线,也不会被当成可启动项拉起来),结算时
     // 再回到它(见 settleTaskStatus 的续聊分支)。
     // 只认真人消息:后端发起的续跑(retry / 手点运行 / 队列推进 / 上游唤醒)带
     // opts.system,那是真的在执行这个任务,照旧占住队列位置。
+    // 先落库再解析工作目录:后者可能抛错(worktree 建不出来),catch 那边要靠这个
+    // 字段把任务放回原来的终态,而不是把一个 done 打成 failed。
     const followUpFrom =
       !opts.system && ["done", "failed", "canceled"].includes(task.status) ? task.status : null;
     // 新回合起点:顺手清掉上一轮残留的完成确认(确认只在本回合内有效)。
@@ -464,6 +471,28 @@ export async function continueTask(
       .set({ followUpFrom, completeConfirmedAt: null, updatedAt: now() })
       .where(eq(tasks.id, taskId));
 
+    // Where the work lives: the agent's own cwd, else any session's cwd (so the
+    // invitee sees prior output), else materialize the task workdir.
+    const recorded = prev?.cwd || prev?.worktreePath || all[0]?.cwd || all[0]?.worktreePath || "";
+    // A recorded cwd that has since vanished (worktree cleaned up, project moved)
+    // used to be handed to spawn as-is — which stuck the task in 'running' forever.
+    // Re-resolve through the same path a fresh run takes: it RESTORES the worktree
+    // when the branch outlived the directory, and only rebuilds an empty one when
+    // the branch is gone too.
+    let cwd = recorded;
+    let workspaceReset = false;
+    if (!existsSync(cwd)) {
+      if (project) {
+        const ws = await taskWorkspace(task, project.repoPath);
+        cwd = ws.path;
+        // Only a resumed session carries stale memory worth correcting; a fresh
+        // session starts empty-handed and needs no warning.
+        workspaceReset = !!ws.fresh && resuming;
+      } else if (!cwd) {
+        cwd = ".";
+      }
+    }
+
     await setStatus(taskId, "running");
 
     const invited = !prev; // first time this agent is pulled into the task
@@ -471,6 +500,7 @@ export async function continueTask(
     const prompt =
       (invited ? COLLAB_INVITE : "") +
       userTurnText +
+      (workspaceReset ? WORKSPACE_RESET(cwd) : "") +
       (followUpFrom ? FOLLOW_UP_REMINDER(taskId, followUpFrom) : COMPLETION_REMINDER(taskId));
     const turnStart = now();
     const sessId = resuming ? prev!.id : id();
@@ -526,6 +556,12 @@ export async function continueTask(
       // the human turn as its own bubble (live, the client already shows it).
       writeTurn(out, { t: "user", agent, text: userTurnText });
     }
+    if (workspaceReset) {
+      // 让用户也看见:agent 这一轮是在一个空目录上重新开始的。只发 toast 不算数,
+      // 刷新后仍要能看出来(见 CLAUDE.md 关于持久可见状态的约定)。
+      writeTurn(out, { t: "system", agent, text: WORKSPACE_RESET_MARKER });
+      bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: "single", agentType: agent, event: { kind: "system", text: WORKSPACE_RESET_MARKER } });
+    }
 
     let exitStatus = 0;
     for await (const event of handle.events) {
@@ -563,7 +599,12 @@ export async function continueTask(
       type: "agent.event", taskId, sessionId: "", role: "single", agentType,
       event: { kind: "error", message: String(err instanceof Error ? err.message : err) },
     });
-    await setStatus(taskId, takeStopped(taskId) ?? "failed");
+    // 续聊回合里出的岔子(典型:worktree 建不出来)不该把任务状态打差 —— 同
+    // settleTaskStatus 的约定:续聊只能让任务变好,不能让它变坏。
+    const row = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
+    const back = row?.followUpFrom as "done" | "failed" | "canceled" | null | undefined;
+    if (back) await db.update(tasks).set({ followUpFrom: null, updatedAt: now() }).where(eq(tasks.id, taskId));
+    await setStatus(taskId, takeStopped(taskId) ?? back ?? "failed");
   } finally {
     if (handle) untrackRun(taskId, handle);
     running.delete(taskId);

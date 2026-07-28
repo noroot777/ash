@@ -48,6 +48,13 @@ export const LEAD_NUDGE =
 export const LEAD_RESUMED =
   `〔系统〕你的进程之前被中断过(服务重启、被手动停止、或长时间空闲被回收),现在已经用同一个会话把你接回来了。上下文都还在,接着下面这条消息处理即可。\n\n`;
 
+// 团队共享 worktree 连同分支一起被删掉之后,harness 会重建一个空的。CLI 会话
+// 记在工作目录之外,所以调度者接回来时记忆完好、文件却全没了 —— 必须明说,否则
+// 它会照着记忆继续派活(派出去的执行者也在同一个空目录里)。
+export const LEAD_WORKSPACE_RESET = (path: string) =>
+  `\n\n〔重要·工作目录已重建〕团队原来的 worktree 和分支都已不存在(被删除了),harness 刚在 ${path} 建了一个空的工作目录:` +
+  `之前产出的文件**现在全都不在了**,git 历史也回到基线。别再按记忆里的文件状态派活——先实际看一遍当前目录(ls / git status / git log),据此重新安排。`;
+
 // 执行者状态在调度台时间线里的中文说法(入站气泡的标题用)。
 export const STATUS_CN: Partial<Record<TaskStatus, string>> = {
   running: "在跑",

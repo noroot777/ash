@@ -106,6 +106,13 @@ export interface Workspace {
   path: string;
   branch: string | null;
   isWorktree: boolean;
+  // True only when THIS call created an empty worktree on a brand-new branch —
+  // i.e. the task's previous work is gone (dir and branch both deleted). Callers
+  // that resume an agent's CLI session must break its memory of the old files
+  // (see WORKSPACE_RESET in orchestrator.ts): the conversation survives outside
+  // the worktree (~/.claude/projects/<escaped cwd>/), so a resumed agent would
+  // otherwise keep building on files that no longer exist.
+  fresh?: boolean;
 }
 
 // Resolve where a run executes — and REPORT its git context, never creating
@@ -186,9 +193,17 @@ export async function taskCommits(
   }
 }
 
-// Materialize (or reuse) the worktree for this task. Idempotent:
-//   • dir exists  → return as-is (re-run, retry, continue)
-//   • dir missing → `git worktree add -b <branch> <path> [<base>]`
+// Materialize (or reuse) the worktree for this task. Idempotent, and graded by
+// how much of the previous work survives:
+//   • dir exists         → return as-is (re-run, retry, continue)
+//   • dir gone, branch on → RESTORE: `git worktree add <path> <branch>` puts the
+//                           agent's files and commits back exactly as they were
+//   • dir + branch gone  → `git worktree add -b <branch> <path> [<base>]`, an
+//                           EMPTY worktree; flagged `fresh` so resuming callers
+//                           can tell the agent its old files are gone
+// A dir deleted with plain `rm -rf` leaves a stale registration behind (git still
+// lists it, and holds the branch), so prune first — that turns the common
+// "I deleted the folder by hand" case back into a clean restore.
 // Failures (bad base, .worktrees taken by a non-worktree dir, git permissions)
 // throw — the caller (runTask) lets the task settle as failed so the user sees it
 // rather than silently falling back to repoPath. `base` is the user-picked ref;
@@ -210,18 +225,27 @@ export async function prepareWorktree(
     // know it's a linked worktree.
     return { path, branch: (await currentBranch(path)) ?? branch, isWorktree: true };
   }
+  // Drop registrations whose directory is gone. Without this, git still considers
+  // the branch "checked out" at the missing path and refuses to touch it.
+  await exec("git", ["-C", repo, "worktree", "prune"]).catch(() => {});
   // Ensure parent `<repo>/.worktrees/` exists; git itself won't auto-create it.
   mkdirSync(join(repo, ".worktrees"), { recursive: true });
-  const args = ["-C", repo, "worktree", "add", "-b", branch, path];
-  const trimmedBase = (base ?? "").trim();
-  if (trimmedBase) args.push(trimmedBase);
+  const restore = await branchExists(repo, branch);
+  const args = ["-C", repo, "worktree", "add"];
+  if (restore) {
+    args.push(path, branch);
+  } else {
+    args.push("-b", branch, path);
+    const trimmedBase = (base ?? "").trim();
+    if (trimmedBase) args.push(trimmedBase);
+  }
   try {
     await exec("git", args);
   } catch (err) {
     const stderr = (err as { stderr?: string }).stderr?.trim() || (err as Error).message;
     throw new Error(`git worktree add 失败：${stderr}`);
   }
-  return { path, branch, isWorktree: true };
+  return { path, branch, isWorktree: true, fresh: !restore };
 }
 
 // `git worktree remove [--force] <path>` — wired to the one-click cleanup button
@@ -254,6 +278,16 @@ export async function listBranches(repoPath: string): Promise<{ branches: string
   } catch { /* leave [] */ }
   const current = await currentBranch(p);
   return { branches, current };
+}
+
+// Does this local branch exist? Decides restore-vs-create in prepareWorktree.
+async function branchExists(repo: string, branch: string): Promise<boolean> {
+  try {
+    await exec("git", ["-C", repo, "show-ref", "--verify", "--quiet", `refs/heads/${branch}`]);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 // Current branch of a working dir ("HEAD" when detached); null if git can't tell.

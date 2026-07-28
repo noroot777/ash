@@ -51,15 +51,29 @@ const isDir = (p: string) => {
 // A stand-in child that fails immediately with a precise, human-readable reason.
 // Used when a pre-flight check already rules out a successful spawn, so the
 // stream parsers surface the real cause instead of a generic `spawn ENOENT`.
+//
+// The 'error' MUST wait for a listener. The parsers (parseClaudeStream /
+// parseCodexStream) are lazy async generators — their `child.on("error")` only
+// runs once the run loop starts iterating, several awaits later. Emitting before
+// that means an 'error' with no listener, which EventEmitter escalates to an
+// uncaughtException; the server's runtime handler swallows it and the run loop
+// then waits forever for a `done` that never comes — the task is stuck 'running',
+// unstoppable, until a restart (2026-07-28: reproduced by replying to a task whose
+// worktree had been deleted). So we hold the error until someone subscribes.
 function failedChild(message: string): ChildProcess {
   const child: any = new EventEmitter();
   child.stdout = Readable.from([]);
   child.stderr = Readable.from([]);
   child.stdin = { write() {}, end() {} };
-  queueMicrotask(() => {
-    const err: any = new Error(message);
-    err.precise = true; // tells spawnErrorMessage to use this message verbatim
-    child.emit("error", err);
+  const err: any = new Error(message);
+  err.precise = true; // tells spawnErrorMessage to use this message verbatim
+  let sent = false;
+  child.on("newListener", (event: string) => {
+    if (event !== "error" || sent) return;
+    sent = true;
+    // newListener fires BEFORE the listener is registered — defer one microtask
+    // so the emit lands on a subscriber that actually exists.
+    queueMicrotask(() => child.emit("error", err));
   });
   return child as ChildProcess;
 }

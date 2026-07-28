@@ -38,7 +38,7 @@ import { resolveExecutorFor } from "../executors/index.js";
 import type { ResidentHandle } from "../executors/types.js";
 import { RUNS_DIR } from "../paths.js";
 import { writeTurn, writeTurnEnd, writeRunError } from "../transcript.js";
-import { LEAD_PREAMBLE, LEAD_NUDGE, LEAD_RESUMED } from "./prompts.js";
+import { LEAD_PREAMBLE, LEAD_NUDGE, LEAD_RESUMED, LEAD_WORKSPACE_RESET } from "./prompts.js";
 
 // 空闲多久回收进程(0/负数 = 永不回收)。测试用 HARNESS_TEAM_IDLE_MS=5000。
 const IDLE_MS = Number(process.env.HARNESS_TEAM_IDLE_MS ?? 30 * 60_000);
@@ -179,8 +179,10 @@ async function openLead(taskId: string, rawText: string, kind: Kind): Promise<Le
   const text = kind === "start" && resuming ? LEAD_NUDGE : rawText;
   // 接回:上下文都在 CLI 会话里,只补一句「你被中断过」。全新开台:前言 + 目标
   // (哪怕这次是被一条消息带起来的,前言也必须有 —— 否则它不知道自己是调度者)。
+  // ws.fresh = 原 worktree 连分支一起没了、这次是重建的空目录,接回的调度者记忆
+  // 还在但文件已经不在,必须打断这个连续性。
   const message = resuming
-    ? LEAD_RESUMED + text
+    ? LEAD_RESUMED + text + (ws.fresh ? LEAD_WORKSPACE_RESET(ws.path) : "")
     : LEAD_PREAMBLE(taskId, cfg.worker) + objective + (text ? `\n\n【新消息】${text}` : "");
 
   const turnStart = now();
