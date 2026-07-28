@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Note, ProjectView } from "@harness/shared";
-import { ArrowSquareOut, NotePencil, Trash } from "@phosphor-icons/react";
+import { ArrowSquareOut, NotePencil, Plus, Trash } from "@phosphor-icons/react";
 import { api } from "./api";
 import { Markdown } from "./Markdown";
 import { ConfirmModal, Modal, primaryCls } from "./Modal";
@@ -95,6 +95,10 @@ export function NewNoteModal({ project, onClose }: { project: ProjectView; onClo
 type NoteDraft = { id: string; body: string; attachments: string[] };
 type SaveState = "saved" | "pending" | "saving" | "error";
 
+// 列表内新建:先插入一条占位草稿,写出内容后 flushDraft 首存(createNote)
+// 时原位替换成真条目;一直空着就随离开/关闭静默丢弃,不落库。
+const NEW_NOTE_ID = "__new__";
+
 const uniquePaths = (paths: string[]) => [...new Set(paths)];
 const sameDraft = (left: NoteDraft | null, right: NoteDraft | null) =>
   left?.id === right?.id
@@ -151,16 +155,28 @@ export function NotesModal({
       }
       const snapshot = draftRef.current;
       if (!snapshot || sameDraft(snapshot, savedDraftRef.current)) return true;
+      const isNew = snapshot.id === NEW_NOTE_ID;
       if (!snapshot.body.trim()) {
+        if (isNew) return true;
         setSaveState("error");
         toast("随手记内容不能为空");
         return false;
       }
       setSaveState("saving");
       let request: Promise<boolean>;
-      request = api.patchNote(snapshot.id, { body: snapshot.body, attachments: snapshot.attachments }).then(
+      const persist = isNew
+        ? api.createNote({ projectId: project.id, body: snapshot.body, attachments: snapshot.attachments })
+        : api.patchNote(snapshot.id, { body: snapshot.body, attachments: snapshot.attachments });
+      request = persist.then(
         (updated) => {
-          updateRows((current) => current.map((note) => note.id === updated.id ? updated : note));
+          updateRows((current) => current.map((note) => note.id === snapshot.id ? updated : note));
+          if (isNew) {
+            if (draftRef.current?.id === NEW_NOTE_ID) {
+              draftRef.current = { ...draftRef.current, id: updated.id };
+              setDraft(draftRef.current);
+            }
+            setActiveId((prev) => prev === NEW_NOTE_ID ? updated.id : prev);
+          }
           savedDraftRef.current = { id: updated.id, body: updated.body, attachments: updated.attachments };
           setSaveState(sameDraft(draftRef.current, savedDraftRef.current) ? "saved" : "pending");
           return true;
@@ -176,7 +192,7 @@ export function NotesModal({
       saveInFlightRef.current = request;
       if (!await request) return false;
     }
-  }, [updateRows]);
+  }, [updateRows, project.id]);
 
   useEffect(() => {
     let alive = true;
@@ -234,8 +250,33 @@ export function NotesModal({
     });
   };
 
+  const discardNewDraft = useCallback(() => {
+    updateRows((current) => current.filter((note) => note.id !== NEW_NOTE_ID));
+  }, [updateRows]);
+
+  const startNewNote = async () => {
+    if (activeId === NEW_NOTE_ID) {
+      setBodyFocused(true);
+      return;
+    }
+    if (!await flushDraft()) return;
+    const now = Date.now();
+    const temp: Note = { id: NEW_NOTE_ID, projectId: project.id, body: "", attachments: [], taskId: null, createdAt: now, updatedAt: now };
+    updateRows((current) => [temp, ...current.filter((note) => note.id !== NEW_NOTE_ID)]);
+    const next = { id: NEW_NOTE_ID, body: "", attachments: [] };
+    savedDraftRef.current = next;
+    draftRef.current = next;
+    setDraft(next);
+    setActiveId(NEW_NOTE_ID);
+    setSaveState("saved");
+    setBodyFocused(true);
+    uploaded.clear();
+  };
+
   const selectNote = async (noteId: string) => {
     if (noteId === activeId || !await flushDraft()) return;
+    // flush 之后草稿 id 还是占位符 = 内容为空没落库,离开时直接丢弃
+    if (draftRef.current?.id === NEW_NOTE_ID) discardNewDraft();
     const note = rowsRef.current.find((item) => item.id === noteId);
     if (!note) return;
     const next = { id: note.id, body: note.body, attachments: note.attachments };
@@ -305,6 +346,12 @@ export function NotesModal({
       >
         <div className="grid h-[58vh] min-h-[360px] grid-cols-[minmax(170px,250px)_minmax(0,1fr)]">
           <aside className="min-w-0 overflow-y-auto border-r border-line bg-canvas/70 py-1">
+            <button
+              onClick={() => { void startNewNote(); }}
+              className="flex w-full items-center gap-1.5 border-b border-line px-3 py-2 text-[12px] font-medium text-muted transition-colors hover:bg-panel/70 hover:text-ink"
+            >
+              <Plus size={14} /> 新建随手记
+            </button>
             {loading && <p className="px-3 py-6 text-center text-[12px] text-faint">加载中…</p>}
             {!loading && !rows.length && (
               <div className="px-5 py-12 text-center">
@@ -319,13 +366,17 @@ export function NotesModal({
                   note.id === activeId ? "bg-panel" : "hover:bg-panel/70"
                 } ${note.taskId ? "opacity-60" : ""}`}
               >
-                <input
-                  type="checkbox"
-                  checked={picked.has(note.id)}
-                  onChange={() => toggle(note.id)}
-                  className="mt-0.5 accent-accent"
-                  aria-label={`选择 ${noteTitle(note.body)}`}
-                />
+                {note.id === NEW_NOTE_ID ? (
+                  <span className="mt-0.5 w-[13px] shrink-0" />
+                ) : (
+                  <input
+                    type="checkbox"
+                    checked={picked.has(note.id)}
+                    onChange={() => toggle(note.id)}
+                    className="mt-0.5 accent-accent"
+                    aria-label={`选择 ${noteTitle(note.body)}`}
+                  />
+                )}
                 <button onClick={() => { void selectNote(note.id); }} className="min-w-0 flex-1 text-left">
                   <span className="block truncate text-[13px] font-medium text-ink">
                     {noteTitle(note.id === draft?.id ? draft.body : note.body)}
@@ -348,11 +399,32 @@ export function NotesModal({
                   <div className="min-w-0">
                     <h3 className="truncate text-[15px] font-semibold text-ink">{noteTitle(draft.body)}</h3>
                     <p className="text-[11px] text-faint">
-                      更新于 {noteTime(active.updatedAt)} · {saveState === "saving" ? "正在保存…" : saveState === "pending" ? "等待自动保存" : saveState === "error" ? "保存失败" : "已自动保存"}
+                      更新于 {noteTime(active.updatedAt)} · {active.id === NEW_NOTE_ID && !draft.body.trim() ? "输入后自动保存" : saveState === "saving" ? "正在保存…" : saveState === "pending" ? "等待自动保存" : saveState === "error" ? "保存失败" : "已自动保存"}
                     </p>
                   </div>
                   <button
-                    onClick={() => { void flushDraft().then((saved) => { if (saved) setDeleting(active); }); }}
+                    onClick={() => {
+                      void flushDraft().then((saved) => {
+                        if (!saved) return;
+                        if (draftRef.current?.id === NEW_NOTE_ID) {
+                          // 空的新建草稿没落过库,丢弃即等于删除,不必确认
+                          discardNewDraft();
+                          const first = rowsRef.current.find((note) => note.id !== NEW_NOTE_ID) ?? null;
+                          const next = first ? { id: first.id, body: first.body, attachments: first.attachments } : null;
+                          setActiveId(first?.id ?? null);
+                          savedDraftRef.current = next;
+                          draftRef.current = next;
+                          setDraft(next);
+                          setSaveState("saved");
+                          setBodyFocused(false);
+                          uploaded.clear();
+                          return;
+                        }
+                        // flush 可能刚把新草稿落成真条目,闭包里的 active 未必是最新 id
+                        const target = rowsRef.current.find((note) => note.id === draftRef.current?.id) ?? active;
+                        setDeleting(target);
+                      });
+                    }}
                     className="ml-auto grid h-8 w-8 place-items-center rounded-md text-muted hover:bg-red-50 hover:text-red-600"
                     title="删除"
                   >
@@ -374,7 +446,8 @@ export function NotesModal({
                   onChange={(event) => updateDraft({ ...draftRef.current!, body: event.target.value })}
                   onPaste={uploaded.onPaste}
                   onBlur={() => setBodyFocused(false)}
-                  className="min-h-[220px] flex-1 resize-none bg-transparent text-[14px] leading-relaxed text-ink outline-none"
+                  placeholder="记下临时想法…"
+                  className="min-h-[220px] flex-1 resize-none bg-transparent text-[14px] leading-relaxed text-ink outline-none placeholder:text-faint"
                 />
                 ) : (
                   <div
