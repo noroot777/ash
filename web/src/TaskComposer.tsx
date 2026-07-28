@@ -292,6 +292,13 @@ export function TaskComposer({
   const prioLabel = priority === "none" ? "优先级" : PRIORITIES.find((p) => p.key === priority)!.label;
 
   const active = LAUNCH_MODES.find((m) => m.key === launchMode)!;
+  // 留空时各模式的自动起名策略，直接排进名称输入框的占位层。
+  const autoTitleHint = debateOn
+    ? { icon: <Scales size={12} className="text-violet-600" />, text: "留空时由辩论议题生成名称" }
+    : teamOn
+      ? { icon: <UsersThree size={12} weight="fill" className="text-accent/70" />, text: "留空时使用目标首行作为名称" }
+      : { icon: <Sparkle size={12} weight="fill" className="text-accent/70" />, text: "留空时由首个执行的 agent 自动生成名称" };
+  const runLocation = <RunLocation project={project} />;
   // The exact derived branch (`harness/<id8>`) is only known after the server
   // mints the task id — show a generic preview so the user knows the format.
   const taskIdPreview = "harness/<id8>";
@@ -352,30 +359,41 @@ export function TaskComposer({
               </button>
             ))}
           </div>
-          <input
-            value={title}
-            onChange={(event) => setTitle(event.target.value)}
-            placeholder="任务名称（可选）"
-            className="mt-3 w-full rounded-md border border-line bg-canvas px-3 py-1.5 text-[13px] text-ink outline-none placeholder:text-faint focus:border-accent"
-          />
-          <div className="mt-1 flex items-center gap-1 text-[11px] text-faint">
+          {/* 名称：自动起名的说明直接长在输入框里（13px「任务名称」+ 11px 括号小字），
+              省掉下面那行独立提示——它说的本来就是「这个框留空会怎样」。 */}
+          <div className="relative mt-3">
+            <input
+              value={title}
+              onChange={(event) => setTitle(event.target.value)}
+              // 占位是自绘覆盖层（原生 placeholder 混不了两种字号），所以标签走 aria。
+              aria-label="任务名称"
+              // 右侧常驻留白：给「不再自动改名」那枚内嵌小字占好位置，免得它出现/消失时文字跳动。
+              className="w-full rounded-md border border-line bg-canvas py-1.5 pl-3 pr-[76px] text-[13px] text-ink outline-none focus:border-accent"
+            />
             {title.trim() ? (
-              <>将使用这个名称，不再自动改名</>
-            ) : debateOn ? (
-              <><Scales size={12} className="text-violet-600" />留空时由辩论议题生成名称</>
-            ) : teamOn ? (
-              <><UsersThree size={12} weight="fill" className="text-accent/70" />留空时使用目标首行作为名称</>
+              <span
+                className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-[10px] text-faint"
+                title="将使用这个名称，不再自动改名"
+              >
+                不再自动改名
+              </span>
             ) : (
-              <><Sparkle size={12} weight="fill" className="text-accent/70" />留空时由首个执行的 agent 自动生成名称</>
+              <span className="pointer-events-none absolute inset-y-0 left-3 right-3 flex items-center gap-1 whitespace-nowrap text-faint">
+                <span className="shrink-0 text-[13px]">任务名称</span>
+                <span className="flex min-w-0 items-center text-[11px]">
+                  <span className="shrink-0">（</span>
+                  <span className="shrink-0">{autoTitleHint.icon}</span>
+                  <span className="ml-1 truncate">{autoTitleHint.text}</span>
+                  <span className="shrink-0">）</span>
+                </span>
+              </span>
             )}
           </div>
 
-          {/* Run location — agents run in this dir (or a temp dir if it's missing) */}
-          <div className="mt-2.5">
-            <RunLocation project={project} />
-          </div>
-          {!debateOn && project.health.isRepo && (
-            <div className="mt-1">
+          {/* 运行位置 + worktree：同一行给出「这次跑在哪」。开着 worktree 时行尾是
+              base → 新分支，关着时是项目目录（RunLocation，含目录异常的 amber 警告）。 */}
+          {!debateOn && project.health.isRepo ? (
+            <div className="mt-2.5">
               <WorktreeField
                 taskIdPreview={taskIdPreview}
                 team={teamOn}
@@ -384,11 +402,15 @@ export function TaskComposer({
                 branches={branches}
                 isGlobalDefault={useWorktree === worktreeDefault}
                 savingDefault={savingWorktreeDefault}
+                trailing={runLocation}
                 onToggle={toggleWorktree}
                 onSetDefault={() => void saveWorktreeDefault()}
                 onBase={setBase}
               />
             </div>
+          ) : (
+            // 辩论模式和非 git 项目没有 worktree 开关，运行位置照旧独占一行。
+            <div className="mt-2.5">{runLocation}</div>
           )}
           {teamOn && (
             <TeamPresetBar
@@ -403,6 +425,7 @@ export function TaskComposer({
           {debateOn ? (
             <div className="mt-3 min-h-0 flex-1">
               <DebateComposerFields
+                fill
                 value={debate}
                 onChange={setDebate}
                 profiles={profiles}

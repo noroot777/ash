@@ -1,9 +1,11 @@
+import type { ReactNode } from "react";
 import { GitBranch, TreeStructure } from "@phosphor-icons/react";
 import { Pill } from "../Menu";
 
-// 「在新 worktree 里跑」开关 + base 分支选择。和 RunLocation 同一视觉层，让用户
-// 一眼看清「这次任务跑在哪、用哪个分支」。关闭时只占一行；开启时展开一个紧凑的
-// base 选择面板（沿用 Pill / Menu 风格，和正文 Pill 一致）。
+// 「在新 worktree 里跑」开关 + 它决定的那个「跑在哪」结论，永远同一行：开启时行尾
+// 是 base 分支选择 + 派生分支名，关闭时行尾由调用方塞进来的 `trailing`（实际是
+// RunLocation：「将在 … 运行 · 分支 …」）。两者互斥——开了 worktree 就不跑在项目
+// 目录里，再显示项目目录只会误导。
 export function WorktreeField({
   on,
   base,
@@ -12,6 +14,7 @@ export function WorktreeField({
   team,
   isGlobalDefault,
   savingDefault,
+  trailing,
   onToggle,
   onSetDefault,
   onBase,
@@ -23,13 +26,15 @@ export function WorktreeField({
   team: boolean;
   isGlobalDefault: boolean;
   savingDefault: boolean;
+  // 关闭 worktree 时接在开关后面的内容（运行位置）。开启时不显示。
+  trailing?: ReactNode;
   onToggle: () => void;
   onSetDefault: () => void;
   onBase: (b: string) => void;
 }) {
   const baseLabel = base || "当前分支";
   return (
-    <div>
+    <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1">
       <button
         type="button"
         onClick={onToggle}
@@ -50,14 +55,14 @@ export function WorktreeField({
           type="button"
           disabled={savingDefault}
           onClick={onSetDefault}
-          className="ml-1 rounded px-1.5 py-0.5 text-[10px] text-faint hover:bg-raised hover:text-ink disabled:opacity-50"
+          className="rounded px-1.5 py-0.5 text-[10px] text-faint hover:bg-raised hover:text-ink disabled:opacity-50"
           title="把当前 worktree 选择保存为以后新建任务的默认值"
         >
           {savingDefault ? "保存中…" : "设为默认"}
         </button>
       )}
-      {on && (
-        <div className="ml-1 mt-1 flex flex-wrap items-center gap-1.5 text-[11px] text-muted">
+      {on ? (
+        <span className="inline-flex flex-wrap items-center gap-1.5 text-[11px] text-muted">
           <span className="text-faint">base</span>
           <Pill
             icon={<GitBranch size={11} />}
@@ -71,7 +76,9 @@ export function WorktreeField({
             menuWidth={220}
           />
           <span className="text-faint">→ 新分支 {taskIdPreview}</span>
-        </div>
+        </span>
+      ) : (
+        trailing
       )}
     </div>
   );

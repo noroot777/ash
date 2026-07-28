@@ -12,18 +12,22 @@ export function createDebateConfig(): DebateConfig {
 
 // The debate-specific fields live inside TaskComposer. Keeping them controlled lets
 // the parent own the common title, mode switch, submission, and keyboard shortcut.
+// `fill` 让整块跟着外层高度伸缩、议题框吃掉全部剩余空间（内嵌新建面板用）；派生
+// 弹层那种「一小块表单」的调用点保持原来的固定 5 行 + 可手动拉伸。
 export function DebateComposerFields({
   value,
   onChange,
   profiles,
   providers,
   onOpenAgents,
+  fill = false,
 }: {
   value: DebateConfig;
   onChange: (value: DebateConfig) => void;
   profiles: AgentExecutorProfile[];
   providers: LlmProvider[];
   onOpenAgents?: () => void;
+  fill?: boolean;
 }) {
   const [defaults, setDefaults] = useState(loadDefaults);
   const set = <K extends keyof DebateConfig>(key: K, next: DebateConfig[K]) => {
@@ -62,14 +66,18 @@ export function DebateComposerFields({
   };
 
   return (
-    <div className="flex flex-col gap-3">
+    <div className={`flex flex-col gap-3 ${fill ? "h-full min-h-0" : ""}`}>
       <textarea
         autoFocus
         value={value.topic}
         onChange={(event) => set("topic", event.target.value)}
-        rows={5}
+        rows={fill ? undefined : 5}
         placeholder="议题（必填）：让两个 AI 就什么展开对抗…"
-        className="w-full resize-y rounded-md border border-line bg-canvas px-3 py-2 text-[14px] leading-relaxed text-ink outline-none placeholder:text-faint focus:border-accent"
+        className={`w-full rounded-md border border-line bg-canvas px-3 py-2 text-[14px] leading-relaxed text-ink outline-none placeholder:text-faint focus:border-accent ${
+          // 撑满模式下和普通/团队模式的正文框同一套尺寸策略：吃掉剩余空间、不手动拉伸，
+          // 但保留同样的 180px 下限，免得三个 tab 来回切时输入区高度忽大忽小。
+          fill ? "min-h-[180px] flex-1 resize-none" : "resize-y"
+        }`}
       />
       <div className="flex flex-wrap items-center gap-1.5">
         <ExecutorPicker
