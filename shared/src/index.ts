@@ -234,6 +234,7 @@ export interface Task {
   mode: TaskMode;
   status: TaskStatus;
   stage?: TaskStage | null;
+  pinnedAt?: number | null; // null=未置顶；整数毫秒时间戳用于置顶区排序
   reviewOf?: string | null;
   reviewRound?: number | null;
   reviewRequested?: boolean;
@@ -241,79 +242,50 @@ export interface Task {
   labels: string[];
   dependsOn: string[]; // [废弃,保留为 []] 旧的指针依赖,被 queue 模型取代,见 DESIGN-scheduling.md
   resumeDependsOn: string[]; // [废弃,保留为 []] 同上
-  // 队列归属(DESIGN-scheduling.md §1):任务在某个 queue 里的位置。null = 不在任何队列。
-  // 推进规则:前一个位置 done/canceled 时,这个位置才开始;前一个 failed 时链停。
+  // 队列归属与位置（null = 不在队列），推进规则见 DESIGN-scheduling.md §1。
   queueId?: string | null;
   queuePosition?: number | null;
   autoTitle?: boolean; // title is AI-generated on first run until the user edits it
   // single mode:
   agentType?: AgentType;
-  // Concrete executor profile. If set and still exists, server runs that profile;
-  // if null/stale, it falls back to the current default executor for agentType.
+  // Concrete profile; null/stale falls back to the default for agentType.
   executorId?: string | null;
   // Per-task CLI overrides. null/omitted follows the resolved executor profile.
   model?: string | null;
   reasoningEffort?: string | null;
-  // Read-only display label for the profile that will run this task:
-  // selected agents.name, else the current default profile name for agentType.
+  // Read-only label for the selected/default executor profile.
   executorLabel?: string | null;
   // debate mode config (§7):
   debate?: DebateConfig;
   // team mode config (§Team)：调度者 + 默认执行者类型。只有 mode:"team" 的任务有。
   team?: TeamConfig;
-  // 执行者旗标（§Team）：这个执行者做完(done)要不要汇报给调度者。派活时逐个指定；
-  // false = 静默完成（UI 自己会更新，不花一轮模型调用去叫醒调度者）。
+  // §Team：执行者 done 后是否额外唤醒调度者汇报。
   reportBack?: boolean;
   scheduleId?: string | null;
   createdAt: string;
   updatedAt: string;
-  // Run timing. startedAt = first time the task entered `running` (kept across
-  // re-runs); endedAt = the last terminal time, cleared while running. These
-  // bracket the task's whole LIFESPAN, so `endedAt − startedAt` is a wall-clock
-  // SPAN, not execution time: a single session the user replies to over hours
-  // includes the idle waits between turns. Use `activeMs` for execution time.
+  // Lifecycle span; use activeMs for execution time excluding idle waits.
   startedAt?: string | null;
   endedAt?: string | null;
-  // Execution time (server-computed): the sum of every run-turn's active span
-  // [prompt sent → turn finished], so the idle between turns (waiting for a reply
-  // / a gate) is excluded. null = the task has turns from before per-turn timing
-  // was recorded (historical) and can't be reconstructed — surfaces then fall
-  // back to showing the lifespan, labeled as a span rather than execution time.
+  // Server-computed active turn time; null = historical data cannot be reconstructed.
   activeMs?: number | null;
-  // While a turn is live, the ISO start of that turn so a client can tick
-  // `activeMs + (now − liveSince)`; null when idle/terminal.
+  // Live turn start used to tick activeMs; null when idle/terminal.
   liveSince?: string | null;
   archived?: boolean;
   archivedAt?: string | null;
-  // Per-task git worktree opt-in (§4). When `useWorktree` is true and the project
-  // is a real git repo, runTask materializes `<repoPath>/.worktrees/<taskId>` on a
-  // fresh branch `harness/<taskId 前 8 位>` BRANCHED OFF `worktreeBase` (the user-
-  // chosen base; null = current HEAD), and the agent runs there instead of the
-  // repoPath. Existing worktree → reused, not re-created (idempotent re-run).
-  // harness never removes worktrees on its own — the UI offers a one-click cleanup.
+  // §4 per-task worktree opt-in; worktreeBase null means current HEAD.
+  // Existing worktrees are reused; cleanup is an explicit user action.
   useWorktree?: boolean;
   worktreeBase?: string | null;
-  // Backlink to the task this task was derived from. Debate → team handoffs and
-  // team → debate iteration loops use this to form a traceable task chain.
+  // Backlink used by debate ↔ team derivation chains.
   originTaskId?: string | null;
-  // 检查点续跑（§Pause）：agent 在执行中调 pause_task 时写下的「下次继续时该
-  // 喂给我什么」prompt。任务结算时若此字段非空，则状态进入 `paused` 而不是
-  // `done`；scheduler 在依赖满足后把它当 continueTask 的 userText 喂回 CLI
-  // session，并清空此字段。null = 无待续跑指令。
+  // §Pause 检查点续跑指令；非空时结算 paused，恢复后清空。
   resumePrompt?: string | null;
-  // 提问（§Team）：agent 在执行中调 ask_question 留下的问题。结算时此字段非空 →
-  // 状态落 paused 且**队列不推进也不自动续跑**（区别于 resumePrompt 检查点），
-  // 同时通知它的调度者；answer_question 清空它并带着答复 resume 会话。
-  // 团队任务自己也能用它 —— 那就是「调度者在问用户」。null = 没有待答复的问题。
+  // §Team 待答问题；非空时 paused 且队列不推进，answer_question 后恢复并清空。
   question?: string | null;
-  // 提问的候选答案：agent 调 ask_question 时可选地附上的几个候选，网页把它们渲染
-  // 成可点按钮 —— 点一下等价于把该选项**原文**填进答复框发出去，所以答复链路
-  // （/answer → resume 会话）跟自由作答完全一样，选项只是省掉打字。
-  // null/[] = 没给候选，只能自由作答。
+  // ask_question 的可编辑候选快捷填充；null/[] = 纯自由作答。
   questionOptions?: string[] | null;
-  // 一次询问多个相关决策：question 此时作为引言/背景，每个 item 才是一个需要
-  // 独立答复的问题；options 仍只是可编辑答复的快捷填充。null/[] = 沿用上面的
-  // 单问题 question + questionOptions 结构，老调用无需改动。
+  // 多问题列表；null/[] 沿用单问题 question + questionOptions。
   questionItems?: QuestionItem[] | null;
 }
 
@@ -484,7 +456,7 @@ export interface BatchCreateTasksBody {
 export type HitlGate = "off" | "on";
 export type DebateConsensusBy = "both" | "A" | "B";
 
-// /pair is discussion-only: two debaters challenge each other and produce a
+// /debate is discussion-only: two debaters challenge each other and produce a
 // conclusion. Code execution belongs to /team.
 export type DebateStyle = "debate";
 
@@ -510,7 +482,7 @@ export const DEBATE_DEFAULTS: DebateConfig = {
   gateG1: "on",
 };
 
-// Database rows and localStorage may contain fields from retired /pair modes.
+// Database rows and localStorage may contain fields from retired debate variants.
 // Normalize at every boundary so old tasks remain readable while all new runs
 // use the single supported debate shape.
 export function normalizeDebateConfig(value: unknown): DebateConfig {
@@ -625,7 +597,7 @@ export type ServerEvent =
       durationMs?: number;
     }
   | { type: "debate.gate"; taskId: string; gate: GateName; open: boolean; consensus?: boolean; consensusBy?: DebateConsensusBy; conclusionA?: string | null; conclusionB?: string | null }
-  // A human intervention in a /pair timeline (gate inject/ask). Carries the time
+  // A human intervention in a /debate timeline (gate inject/ask). Carries the time
   // so the timeline can show when the user spoke. Persisted in the transcript too.
   // target: when a 提问 was directed at one debater, which side — so the timeline
   // can show 「你 → 辩手A」 (undefined = addressed to both).

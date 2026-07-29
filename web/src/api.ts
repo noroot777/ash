@@ -9,6 +9,25 @@ export type DeleteTaskResult = {
   cleanup: TaskWorkspaceDiscardResult | null;
 };
 
+// 已知 CLI 目录里的一项(服务端 detect.ts 的 DetectedCli)。
+// `type` 有值 = harness 能拿它派任务的执行器;无值 = 只做「装没装 + 怎么装」展示。
+export type DetectedCli = {
+  key: string;
+  name: string;
+  description: string;
+  bins: string[];
+  docsUrl: string;
+  /** 官方安装命令原文，只给用户复制，服务端不会执行。 */
+  installCommand: string;
+  type?: AgentType;
+  /** 实际探到的命令名（bins 里命中的那个）；没探到则是 bins[0]。 */
+  bin: string;
+  available: boolean;
+  path: string | null;
+  version: string | null;
+  resident: boolean;
+};
+
 export type CuaProcess = {
   pid: number;
   ppid: number;
@@ -371,6 +390,12 @@ export const api = {
   detectAgents: (): Promise<
     { type: AgentType; bin: string; available: boolean; path: string | null; version: string | null; resident: boolean }[]
   > => fetch("/api/agents/detect").then(j),
+  /**
+   * 已知 CLI 目录：上面那几个可执行器 + 一批只做「装没装」展示的。
+   * `type` 有值才是 harness 能派任务的执行器；没有 type 的只能看和装，
+   * 别拿它去填任何「选谁干活」的下拉。
+   */
+  detectClis: (): Promise<DetectedCli[]> => fetch("/api/agents/catalog").then(j),
   createAgent: (a: Partial<AgentExecutorProfile>): Promise<AgentExecutorProfile> =>
     fetch("/api/agents", {
       method: "POST",

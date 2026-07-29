@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Task, Session, GateAction, AgentType, DebateSpeaker } from "@harness/shared";
 import { taskDisplayStatus, TEAM_DEFAULTS } from "@harness/shared";
-import { Stop } from "@phosphor-icons/react";
+import { ChatCircle, ChatTeardrop, Stop } from "@phosphor-icons/react";
 import { rebuildDebateState, type DebateState, type DebateTurn, type DebateGate } from "./debateState";
 import { ResumeButtons, ToolCall, CollapsibleText } from "./ui";
 import { Markdown } from "./Markdown";
@@ -24,6 +24,7 @@ import {
   type TeamHandoffChoice,
 } from "./DebateTeamHandoff";
 import { DebateGateBar } from "./DebateGateBar";
+import { TaskPinMenu } from "./TaskPinMenu";
 
 // Animated "thinking" indicator — three dots flashing in sequence.
 function TypingDots() {
@@ -65,6 +66,7 @@ export function DebateView({
   onDelete,
   onArchive,
   onUnarchive,
+  onPatch,
   onOpenTask,
   onTeamCreated,
 }: {
@@ -79,6 +81,7 @@ export function DebateView({
   onDelete: () => void;
   onArchive: () => void;
   onUnarchive: () => void;
+  onPatch: (patch: Partial<Task>) => void | Promise<void>;
   onOpenTask: (taskId: string) => void;
   onTeamCreated: (task: Task, doRun?: boolean, select?: boolean) => void;
 }) {
@@ -290,6 +293,7 @@ export function DebateView({
               <button onClick={onDelete} className="shrink-0 rounded-md border border-line px-2 py-1.5 text-sm text-muted hover:text-red-600">
             删除
           </button>
+          <TaskPinMenu task={task} onPatch={onPatch} />
         </div>
         {/* 议题/任务全文 —— 放在标题下的独立文本框（默认折叠成两行，点展开看全文）。 */}
         {topic.body ? (
@@ -303,8 +307,16 @@ export function DebateView({
         <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1.5">
           {cfg && (
             <p className="text-xs text-muted">
-              辩手A <b className="text-ink">{debaterName("A")}</b>
-              {" ↔ 辩手B "}
+              <span className="inline-flex items-center gap-1 text-sky-700">
+                <ChatCircle size={12} weight="fill" aria-hidden />
+                辩手A
+              </span>{" "}
+              <b className="text-ink">{debaterName("A")}</b>
+              {" ↔ "}
+              <span className="inline-flex items-center gap-1 text-emerald-700">
+                <ChatTeardrop size={12} weight="fill" aria-hidden />
+                辩手B
+              </span>{" "}
               <b className="text-ink">{debaterName("B")}</b>
               {" · 轮数 "}{cfg.maxRounds ?? "不设限"}
               {" · 收敛门 "}{cfg.gateG1 === "on" ? "开" : "关"}
@@ -339,8 +351,22 @@ export function DebateView({
             return (
               <div className="mb-3 rounded-lg border border-emerald-500/30 bg-emerald-500/[0.06] px-3 py-2 text-[13px]">
                 <div className="mb-1 text-[11px] font-medium text-emerald-700">讨论结论</div>
-                {ca && <div className="text-ink"><b className="text-sky-700">辩手A</b> · {ca}</div>}
-                {cb && <div className="text-ink"><b className="text-emerald-700">辩手B</b> · {cb}</div>}
+                {ca && (
+                  <div className="text-ink">
+                    <b className="inline-flex items-center gap-1 text-sky-700">
+                      <ChatCircle size={12} weight="fill" aria-hidden />
+                      辩手A
+                    </b>{" · "}{ca}
+                  </div>
+                )}
+                {cb && (
+                  <div className="text-ink">
+                    <b className="inline-flex items-center gap-1 text-emerald-700">
+                      <ChatTeardrop size={12} weight="fill" aria-hidden />
+                      辩手B
+                    </b>{" · "}{cb}
+                  </div>
+                )}
               </div>
             );
           })()}

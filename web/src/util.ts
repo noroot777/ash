@@ -23,10 +23,10 @@ export function pairBadge(t: {
   mode: string;
   agentType?: string | null;
   executorLabel?: string | null;
-}): { label: string; cls: string } {
+}): { label: string; cls: string; icon?: "scales" } {
   if (t.mode === "team") return { label: "团队", cls: "bg-accent/10 text-accent" };
   if (t.mode !== "debate") return { label: executorLabel({ executorLabel: t.executorLabel, agentType: t.agentType }), cls: "text-faint" };
-  return { label: "debate", cls: "bg-violet-500/15 text-violet-700" };
+  return { label: "辩论", cls: "bg-violet-500/15 text-violet-700", icon: "scales" };
 }
 
 // 团队任务在列表里折叠成一行时，这一行的图标该画哪个状态 —— 取「最该你管的那个」：

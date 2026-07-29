@@ -35,7 +35,7 @@ async function setStatus(taskId: string, status: TaskStatus) {
 }
 
 // Persist + broadcast a human intervention (gate inject/ask) as a `user` turn so
-// the /pair timeline shows when the user spoke. Best-effort transcript append;
+// the /debate timeline shows when the user spoke. Best-effort transcript append;
 // the live event drives the open page. `target` marks a 提问 directed at one
 // debater (so the timeline can show 「你 → 辩手A」).
 function recordUserTurn(taskId: string, round: number, text: string, target?: "A" | "B") {
@@ -276,7 +276,7 @@ async function loadBase(taskId: string) {
   return { task, cfg, exA, exB, cwd, cap };
 }
 
-// Full /pair pipeline: blind opening (parallel) → serial rebuttal rounds
+// Full /debate pipeline: blind opening (parallel) → serial rebuttal rounds
 // (A-first) → optional consensus gate G1 → conclusion.
 export async function runDebate(taskId: string): Promise<void> {
   if (running.has(taskId)) return;
@@ -353,7 +353,7 @@ export async function resumeDebate(taskId: string): Promise<void> {
 
     if (failedTurn.speaker !== "A" && failedTurn.speaker !== "B") {
       // A retired code-writing turn failed. The discussion itself is already a
-      // valid /pair result, so retrying the historical task now settles it there.
+      // valid /debate result, so retrying the historical task now settles it there.
       await setStatus(taskId, "done");
       return;
     }
@@ -518,7 +518,7 @@ async function reDebate(ctx: Ctx, kind: "inject" | "ask", text: string, target?:
   }
 }
 
-// /pair is discussion-only: after convergence, the conclusions are the output.
+// /debate is discussion-only: after convergence, the conclusions are the output.
 // 收敛门(G1)开 → 让人读结论后放行(=结束)/打回(=取消)/注入·提问(=再辩)；关 → 直接 done。
 async function finishDiscussion(ctx: Ctx): Promise<void> {
   const { taskId, cfg } = ctx;

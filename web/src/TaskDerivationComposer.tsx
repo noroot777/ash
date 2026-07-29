@@ -9,7 +9,7 @@ import { TeamExecutorFields } from "./composer/ExecutorFields";
 import { teamExecutorDefaults, type DetectedAgent } from "./teamExecutorDefaults";
 import {
   buildTaskDerivationBody,
-  defaultPairTopic,
+  defaultDebateTopic,
   derivedWorktreeDefaults,
   type TaskDerivationCommand,
 } from "./taskDerivation";
@@ -44,7 +44,7 @@ export function TaskDerivationComposer({
   const [note, setNote] = useState(command.note);
   const [debate, setDebate] = useState<DebateConfig>(() => ({
     ...createDebateConfig(),
-    topic: defaultPairTopic(task, command.note),
+    topic: defaultDebateTopic(task, command.note),
   }));
   const [leadPick, setLeadPick] = useState<ExecutorSelection | null>(null);
   const [workerPick, setWorkerPick] = useState<ExecutorSelection | null>(null);
@@ -67,7 +67,7 @@ export function TaskDerivationComposer({
     if (!live) return;
     if (teamMode && !noteTouched.current) setNote(command.note);
     if (!teamMode && !topicTouched.current) {
-      setDebate((cur) => ({ ...cur, topic: defaultPairTopic(task, command.note) }));
+      setDebate((cur) => ({ ...cur, topic: defaultDebateTopic(task, command.note) }));
     }
   }, [live, teamMode, command.note, task]);
 

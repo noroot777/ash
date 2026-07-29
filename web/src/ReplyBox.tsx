@@ -34,6 +34,7 @@ export function ReplyBox({
   command,
   placeholder = `回复并继续（${submitShortcutLabel()} 发送，可粘贴图片或文件，@ 召唤其它智能体）…`,
   disabledPlaceholder = "进行中…",
+  initialHeight = 72,
 }: {
   taskId: string;
   onReply: (text: string, opts?: { attachments?: string[]; agent?: AgentType }) => void;
@@ -56,6 +57,7 @@ export function ReplyBox({
   };
   placeholder?: string;
   disabledPlaceholder?: string;
+  initialHeight?: number;
 }) {
   const [v, setV] = useState("");
   const [target, setTarget] = useState<AgentType | null>(null);
@@ -217,6 +219,17 @@ export function ReplyBox({
           </div>
         </div>
       )}
+      {/* The task header can leave almost no normal-flow height for a live
+          derivation card. Float it above the reply bar (like the slash menu)
+          and cap it to the viewport so both the card and resize handle stay
+          usable instead of forcing either one to zero/off-screen. While the
+          slash menu is open it temporarily wins this space; the committed
+          card state stays intact and returns as soon as the menu closes. */}
+      {inlinePanel && !commandMenuOpen && (
+        <div className="absolute inset-x-6 bottom-full z-10 mb-2 max-h-[40vh] overflow-y-auto overscroll-contain rounded-lg shadow-xl">
+          {inlinePanel}
+        </div>
+      )}
       {pending.length > 0 && (
         <div className="flex flex-col gap-1">
           {pending.map((m) => (
@@ -233,7 +246,6 @@ export function ReplyBox({
         </div>
       )}
       {toolbar}
-      {inlinePanel}
       <AttachmentChips attachments={attachments} onRemove={remove} error={error} />
       {target && (
         <div className="flex items-center text-[12px]">
@@ -272,7 +284,7 @@ export function ReplyBox({
           }}
           disabled={inputDisabled}
           placeholder={disabled ? disabledPlaceholder : placeholder}
-          initialHeight={72}
+          initialHeight={initialHeight}
           minHeight={60}
           maxHeight={360}
           className="rounded-lg border border-line bg-panel py-2 pl-2.5 pr-[140px] text-[13px] leading-relaxed text-ink outline-none placeholder:text-faint focus:border-accent disabled:opacity-50"
