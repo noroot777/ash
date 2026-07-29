@@ -4,6 +4,7 @@
 
 - 随时留意需求是否已经变动到「现有代码结构不再合适」的程度。一旦判断需求变动足够大、值得重构，就大胆重构，不要为了迁就旧结构而打补丁。
 - 前端禁用浏览器原生弹窗：确认对话框用 `ConfirmModal`、其它弹层用 `Modal`（均在 `web/src/Modal.tsx`），报错/提示用 `toast`（`web/src/toast.tsx`）。不要用 `window.confirm / prompt / alert`——它们样式不一致、阻塞且无法做成应用风格。
+- 悬浮提示同理不用原生 `title`，用 `Tip`（`web/src/Tip.tsx`，portal + fixed 定位）。理由：任务列表这类每秒重渲染的界面会不断打断原生 tooltip 的悬停计时器，气泡永远弹不出来（2026-07-28 实测,加 `pointer-events-none` 也救不回）；且原生延迟长、样式不可控、会被 `overflow-hidden` 无关但位置随缘。已有的 `title` 属性改到它时顺手迁移即可，不必专门做一轮。
 - **下拉菜单（`web/src/Menu.tsx`）的开关一律在 `pointerdown` 定，`click` 只服务「没有 pointerdown 的激活」（键盘 Enter/Space、辅助技术）**；聚焦自动展开只认 `el.matches(":focus-visible")`，且刚 `close()` 过 250ms 内不自动重开（Esc 会把焦点还给 trigger）。刚展开 250ms 内的按下不当作收起。理由：从别的窗口切回来时浏览器会给**原本就聚焦的**元素重新派发 `focus`，它排在 `pointerdown` 之前，任何「刚按过鼠标」的自维护标志那时都已过期——于是 focus 先展开、紧跟着的 click 又当成 toggle 关掉，用户看到的是「点一下闪一下就没了，再点一次才弹出」。同一条也顺带修掉 Esc 关闭后立刻自动重开。
 - **`Markdown`（`web/src/Markdown.tsx`）把单个换行当硬换行**（内置 `remarkSoftBreaks`，等价 remark-breaks，不引依赖）：这里渲染的随手记 / agent 输出 / 辩论发言都是「聊天体」文本，敲的回车就是想换行，展示必须和编辑时看到的一致。标准 markdown 的软换行折叠语义在这些场景是 bug 不是特性。
 - 做出关键性决定或确立新约定时（技术选型、目录/数据结构、跨模块的统一规则、刻意的取舍等），自行判断是否值得写进本文件；值得就主动补一条。理由：本文件在仓库根目录，会被自己、后来的人、以及在本仓库 cwd 下运行的 CLI 派生 agent 自动读到——写进来约定才真正生效，只存在于代码习惯里就会被漏掉。
