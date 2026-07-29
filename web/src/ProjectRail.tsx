@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import type { ProjectView } from "@harness/shared";
 import { CaretDown, GearSix, ListChecks, MagnifyingGlass, Plus, Robot, SidebarSimple } from "@phosphor-icons/react";
 import { Menu } from "./Menu";
+import { Tip } from "./Tip";
 import { HealthDot, ProjectAvatar } from "./ui";
 import { shortPath } from "./util";
 
@@ -71,13 +72,14 @@ export function ProjectRail({
                   <span className="truncate text-[13px] font-semibold text-ink">{project.name}</span>
                   <span className="truncate text-[11px] text-faint">{shortPath(project.repoPath) || "未设置工作目录"}</span>
                 </span>
-                <button
-                  onClick={() => { close(); onSettings(); }}
-                  title="项目设置"
-                  className="grid h-7 w-7 shrink-0 place-items-center rounded-md text-muted hover:bg-raised hover:text-ink"
-                >
-                  <GearSix size={15} />
-                </button>
+                <Tip label="项目设置" className="flex shrink-0">
+                  <button
+                    onClick={() => { close(); onSettings(); }}
+                    className="grid h-7 w-7 shrink-0 place-items-center rounded-md text-muted hover:bg-raised hover:text-ink"
+                  >
+                    <GearSix size={15} />
+                  </button>
+                </Tip>
               </div>
             )}
             {projects.length > 6 && (
