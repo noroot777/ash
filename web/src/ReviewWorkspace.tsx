@@ -142,6 +142,19 @@ export function AcceptanceFailureReport({ failure }: { failure: AcceptTaskFailur
         <div className="min-w-0 flex-1">
           <p className="font-semibold text-red-700">验收未完成</p>
           <p className="mt-0.5 whitespace-pre-wrap text-ink">{failure.error}</p>
+          {/* 冲突不是死路:后端已经把这一轮交回给 agent。说清楚「谁在处理、我该做什么」,
+              否则用户只看到一堆冲突文件,不知道是该自己去解还是等谁。 */}
+          {failure.conflictHandoff && (
+            <p
+              className={`mt-2 rounded-md px-2 py-1.5 text-[12px] ${
+                failure.conflictHandoff.notified
+                  ? "bg-accent/10 text-accent"
+                  : "bg-overlay text-muted"
+              }`}
+            >
+              {failure.conflictHandoff.message}
+            </p>
+          )}
           {details.length > 0 && (
             <dl className="mt-2 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 font-mono text-[11px]">
               {details.map(([label, value]) => (

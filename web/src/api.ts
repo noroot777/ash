@@ -83,6 +83,8 @@ export type AcceptTaskFailure = {
   phase?: "initial" | "before_accept" | "before_merge" | "before_cleanup";
   inFlightTasks?: { id: string; title: string; status: string; role: "task" | "shared_worker" }[];
   warnings?: AcceptTaskWarning[];
+  /** 冲突已交给来源任务的 agent 去解(只在 merge_conflict 时出现) */
+  conflictHandoff?: { notified: boolean; message: string };
 };
 
 export type AcceptTaskResult = AcceptTaskSuccess | AcceptTaskFailure;

@@ -2,6 +2,7 @@ import { eq, or } from "drizzle-orm";
 import type { Hono } from "hono";
 import { db } from "./db/index.js";
 import { projects, tasks } from "./db/schema.js";
+import { handOffConflict, type ConflictHandoff } from "./accept-conflict.js";
 import { cleanupAcceptedTask, mergeTaskBranch, resolveTaskMergeTarget } from "./git.js";
 import { taskBranchDiff } from "./git-diff.js";
 import { publishTaskUpdated } from "./task-store.js";
@@ -50,6 +51,8 @@ type AcceptFailure = {
   dirtyFiles?: string[];
   targetPath?: string;
   worktreePath?: string;
+  /** 冲突已交给来源任务的 agent 去解(只在 merge_conflict 时出现) */
+  conflictHandoff?: ConflictHandoff;
   phase?: "initial" | "before_accept" | "before_merge" | "before_cleanup";
   inFlightTasks?: InFlightTask[];
   warnings?: AcceptWarning[];
@@ -287,6 +290,7 @@ async function acceptTaskUnlocked(taskId: string): Promise<AcceptTaskResult> {
         ? `；脏文件：${merge.dirtyFiles.join("、")}`
         : "";
     await appendTaskTimeline(taskId, `验收未完成：${merge.message}${detail}。未强制合并，任务 status 保持 ${task.status}。`);
+    const conflictHandoff = await handOffConflict(task, merge);
     return {
       accepted: false,
       httpStatus: 409,
@@ -299,6 +303,7 @@ async function acceptTaskUnlocked(taskId: string): Promise<AcceptTaskResult> {
       conflictFiles: merge.conflictFiles,
       dirtyFiles: merge.dirtyFiles,
       targetPath: merge.targetPath,
+      ...(conflictHandoff ? { conflictHandoff } : {}),
     };
   }
 

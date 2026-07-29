@@ -1,8 +1,8 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { join, resolve } from "node:path";
+import { join, resolve, isAbsolute, dirname } from "node:path";
 import { homedir, tmpdir } from "node:os";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, existsSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import type { ProjectHealth } from "@harness/shared";
 import { DATA_DIR } from "./paths.js";
 
@@ -209,6 +209,30 @@ export async function taskCommits(
 // throw — the caller (runTask) lets the task settle as failed so the user sees it
 // rather than silently falling back to repoPath. `base` is the user-picked ref;
 // empty string / null defers to git's default (current HEAD of repoPath).
+// harness 把任务 worktree 建在 `<repo>/.worktrees/` —— 那是**用户仓库里的一个目录**，
+// 不登记忽略的话 `git status --porcelain` 就永远不空，于是验收的原地合并一律被
+// `target_dirty` 挡掉：这个项目从此再也验收不成功。写进 `.git/info/exclude` 而不是
+// `.gitignore`：忽略是 harness 自己的实现细节，不该往用户仓库里塞一个待提交的改动。
+// 幂等（已有同样一行就不再写），失败只警告——它不该拦住任务开工。
+async function ensureWorktreesIgnored(repo: string): Promise<void> {
+  const entry = ".worktrees/";
+  try {
+    // worktree 里的 .git 是文件而不是目录，exclude 只存在于 common dir。
+    const commonDir = (await exec("git", ["-C", repo, "rev-parse", "--git-common-dir"])).stdout.trim();
+    const gitDir = isAbsolute(commonDir) ? commonDir : join(repo, commonDir);
+    const excludePath = join(gitDir, "info", "exclude");
+    const current = existsSync(excludePath) ? readFileSync(excludePath, "utf8") : "";
+    if (current.split("\n").some((line) => line.trim() === entry)) return;
+    mkdirSync(dirname(excludePath), { recursive: true });
+    writeFileSync(
+      excludePath,
+      `${current}${current && !current.endsWith("\n") ? "\n" : ""}# harness 任务 worktree（本地忽略，不入库）\n${entry}\n`,
+    );
+  } catch (err) {
+    console.warn("[harness] 无法把 .worktrees/ 写进 .git/info/exclude：", err instanceof Error ? err.message : err);
+  }
+}
+
 export async function prepareWorktree(
   repoPath: string,
   taskId: string,
@@ -231,6 +255,7 @@ export async function prepareWorktree(
   await exec("git", ["-C", repo, "worktree", "prune"]).catch(() => {});
   // Ensure parent `<repo>/.worktrees/` exists; git itself won't auto-create it.
   mkdirSync(join(repo, ".worktrees"), { recursive: true });
+  await ensureWorktreesIgnored(repo);
   const restore = await branchExists(repo, branch);
   const args = ["-C", repo, "worktree", "add"];
   if (restore) {
