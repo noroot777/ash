@@ -158,7 +158,7 @@ api.post("/tasks", async (c) => {
   return c.json(created!, 201);
 });
 
-// Partial update: title/body/status/priority/labels/groupId/agentType/executorId/model/reasoningEffort/mode/debate.
+// Partial update: title/body/status/pinnedAt/priority/labels/groupId/agentType/executorId/model/reasoningEffort/mode/debate.
 api.patch("/tasks/:id", async (c) => {
   const tid = c.req.param("id");
   const existing = (await db.select().from(tasks).where(eq(tasks.id, tid))).at(0);
@@ -182,10 +182,18 @@ api.patch("/tasks/:id", async (c) => {
       409,
     );
   }
+  if (
+    b.pinnedAt !== undefined &&
+    b.pinnedAt !== null &&
+    (!Number.isSafeInteger(b.pinnedAt) || b.pinnedAt < 0)
+  ) {
+    return c.json({ error: "pinnedAt 必须是非负整数时间戳或 null" }, 400);
+  }
   const patch: Record<string, unknown> = { updatedAt: now() };
   if (b.title !== undefined) patch.title = b.title;
   if (b.body !== undefined) patch.body = b.body;
   if (b.autoTitle !== undefined) patch.autoTitle = b.autoTitle;
+  if (b.pinnedAt !== undefined) patch.pinnedAt = b.pinnedAt;
   if (b.priority !== undefined) patch.priority = b.priority;
   if (b.labels !== undefined) patch.labels = JSON.stringify(b.labels);
   if (b.groupId !== undefined) patch.groupId = b.groupId;

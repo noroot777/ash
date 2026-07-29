@@ -40,6 +40,7 @@ import {
   AcceptanceFailureReport,
   TaskDiffWorkspace,
 } from "./ReviewWorkspace";
+import { TaskPinMenu } from "./TaskPinMenu";
 export type { LogLine } from "./Conversation";
 
 export function TaskDetail({
@@ -288,6 +289,7 @@ export function TaskDetail({
                 </button>
               </>
             )}
+            {!dispatchedWorker && <TaskPinMenu task={task} onPatch={onPatch} />}
             {!dispatchedWorker && (
               <button
                 onClick={onDelete}

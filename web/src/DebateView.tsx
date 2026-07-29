@@ -24,6 +24,7 @@ import {
   type TeamHandoffChoice,
 } from "./DebateTeamHandoff";
 import { DebateGateBar } from "./DebateGateBar";
+import { TaskPinMenu } from "./TaskPinMenu";
 
 // Animated "thinking" indicator — three dots flashing in sequence.
 function TypingDots() {
@@ -65,6 +66,7 @@ export function DebateView({
   onDelete,
   onArchive,
   onUnarchive,
+  onPatch,
   onOpenTask,
   onTeamCreated,
 }: {
@@ -79,6 +81,7 @@ export function DebateView({
   onDelete: () => void;
   onArchive: () => void;
   onUnarchive: () => void;
+  onPatch: (patch: Partial<Task>) => void | Promise<void>;
   onOpenTask: (taskId: string) => void;
   onTeamCreated: (task: Task, doRun?: boolean, select?: boolean) => void;
 }) {
@@ -290,6 +293,7 @@ export function DebateView({
               <button onClick={onDelete} className="shrink-0 rounded-md border border-line px-2 py-1.5 text-sm text-muted hover:text-red-600">
             删除
           </button>
+          <TaskPinMenu task={task} onPatch={onPatch} />
         </div>
         {/* 议题/任务全文 —— 放在标题下的独立文本框（默认折叠成两行，点展开看全文）。 */}
         {topic.body ? (

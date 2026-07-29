@@ -69,7 +69,7 @@ export function TasksWorkspace({
   onStop: (id: string) => void;
   onRetry: (id: string) => void;
   onReply: (id: string, text: string, opts?: { attachments?: string[]; agent?: AgentType }) => void;
-  onPatch: (id: string, p: Partial<Task>) => void;
+  onPatch: (id: string, p: Partial<Task>) => void | Promise<void>;
   onCreateGroup: () => void;
   onDelete: (id: string) => void;
   onArchive: (id: string) => void;
@@ -125,7 +125,7 @@ export function TasksWorkspace({
 
       <div className="flex min-h-0 flex-1">
         <aside style={{ width: sidebarW }} className="relative flex shrink-0 flex-col border-r border-line">
-          <TaskList tasks={visible} allTasks={allTasks} groups={groups} selected={selected} onSelect={onSelect} onOpenTask={onOpenTask} />
+          <TaskList tasks={visible} allTasks={allTasks} groups={groups} selected={selected} onSelect={onSelect} onOpenTask={onOpenTask} onPatch={onPatch} />
           <ResizeHandle width={sidebarW} onChange={setSidebarW} />
         </aside>
         <div className="flex min-w-0 flex-1 flex-col">
@@ -148,6 +148,7 @@ export function TasksWorkspace({
                   onDelete={() => onDelete(current.id)}
                   onArchive={() => onArchive(current.id)}
                   onUnarchive={() => onUnarchive(current.id)}
+                  onPatch={(patch) => onPatch(current.id, patch)}
                   onOpenTask={onOpenTask}
                   onTeamCreated={onTaskCreated}
                 />

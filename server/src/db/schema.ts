@@ -51,6 +51,7 @@ export const tasks = sqliteTable("tasks", {
   mode: text("mode").notNull().default("single"), // single | debate | team
   status: text("status").notNull().default("backlog"),
   stage: text("stage"), // 正交验收阶段；不参与 status 调度/结算语义
+  pinnedAt: integer("pinned_at"), // null=未置顶；多个置顶任务按时间戳排序
   reviewOf: text("review_of"), // 审查任务 → 被审任务 id；普通任务为 null
   reviewRound: integer("review_round"), // 审查任务针对该目标的轮次（从 1 开始）
   reviewRequested: integer("review_requested", { mode: "boolean" }).notNull().default(false),

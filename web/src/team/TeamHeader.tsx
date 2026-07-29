@@ -32,6 +32,7 @@ import { TeamTimeline } from "./TeamTimeline";
 import type { LeadTurn } from "./teamData";
 import { teamLeadExecutorLabel, teamReviewerExecutorLabel, teamWorkerExecutorLabel } from "../executorLabel";
 import { AttachmentDisplay, parseAttachmentText } from "../messageAttachments";
+import { TaskPinMenu } from "../TaskPinMenu";
 
 export function TeamHeader({
   task,
@@ -232,6 +233,7 @@ export function TeamHeader({
               </button>
             </>
           )}
+          <TaskPinMenu task={task} onPatch={onPatch} />
           <button
             onClick={onDelete}
             className="grid h-[30px] w-[30px] place-items-center rounded-md text-muted transition-colors hover:bg-raised hover:text-red-600"

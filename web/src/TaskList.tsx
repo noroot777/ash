@@ -8,7 +8,7 @@ import {
   type TaskStatus,
 } from "@harness/shared";
 import { statusCounts, workersOf } from "@harness/shared/team";
-import { CaretRight, Scales, UsersThree } from "@phosphor-icons/react";
+import { CaretRight, PushPin, Scales, UsersThree } from "@phosphor-icons/react";
 import { STATUSES, STATUS_META, PRIORITY_ORDER } from "./constants";
 import { PriorityIcon, PauseHint, useCollapsedGroups } from "./ui";
 import { StatusIcon } from "./StatusIcon";
@@ -18,6 +18,7 @@ import { executorLabel } from "./executorLabel";
 import { isDispatchedWorker } from "./taskPolicy";
 import { OriginTaskChip } from "./taskOrigin";
 import { TaskWorktreeChip } from "./TaskWorktreeChip";
+import { TaskPinMenu } from "./TaskPinMenu";
 import { useUnreadTeamTasks } from "./useUnreadTasks";
 
 // 一个 section 内部的分组。两个 section 的分法**刻意不同**:普通任务按 status 分,
@@ -27,7 +28,15 @@ type TaskGroup = {
   key: string;
   label: string;
   matches: (task: Task) => boolean;
-  icon: { status: TaskStatus; stage?: TaskStage };
+  icon?: { status: TaskStatus; stage?: TaskStage };
+  pinned?: boolean;
+};
+
+const PINNED_GROUP: TaskGroup = {
+  key: "pinned",
+  label: "Pinned",
+  matches: (task) => task.pinnedAt != null,
+  pinned: true,
 };
 
 // 协作任务(团队/辩论)不按 status 分组:调度台常驻,它的 status 只说明「这一刻忙不忙」,
@@ -60,9 +69,9 @@ const TASK_SECTIONS = [
     key: "collab",
     label: "协作任务",
     matches: (task: Task) => task.mode === "debate" || task.mode === "team",
-    groups: COLLAB_GROUPS,
+    groups: [PINNED_GROUP, ...COLLAB_GROUPS],
   },
-  { key: "single", label: "普通任务", matches: (task: Task) => task.mode === "single", groups: STATUS_GROUPS },
+  { key: "single", label: "普通任务", matches: (task: Task) => task.mode === "single", groups: [PINNED_GROUP, ...STATUS_GROUPS] },
 ] as const;
 
 type TaskSection = (typeof TASK_SECTIONS)[number];
@@ -81,9 +90,10 @@ function groupedStatus(task: Task) {
 
 function tasksInGroup(tasks: Task[], section: TaskSection, group: TaskGroup): Task[] {
   return tasks
-    .filter((task) => section.matches(task) && group.matches(task))
+    .filter((task) => section.matches(task) && group.matches(task) && (group.pinned || task.pinnedAt == null))
     .sort(
       (a, b) =>
+        (group.pinned ? (b.pinnedAt ?? 0) - (a.pinnedAt ?? 0) : 0) ||
         PRIORITY_ORDER.indexOf(a.priority) - PRIORITY_ORDER.indexOf(b.priority) ||
         b.createdAt.localeCompare(a.createdAt),
     );
@@ -110,6 +120,7 @@ export function TaskList({
   selected,
   onSelect,
   onOpenTask,
+  onPatch,
 }: {
   tasks: Task[];
   allTasks: Task[];
@@ -117,6 +128,7 @@ export function TaskList({
   selected: string | null;
   onSelect: (id: string) => void;
   onOpenTask: (id: string) => void;
+  onPatch: (id: string, patch: Partial<Task>) => void | Promise<void>;
 }) {
   const groupName = (id: string | null) => groups.find((g) => g.id === id)?.name;
   const topTasks = topLevel(tasks);
@@ -155,7 +167,11 @@ export function TaskList({
                     className="sticky top-10 z-10 flex w-full items-center gap-2 bg-canvas/85 px-4 py-2 text-left backdrop-blur transition-colors hover:bg-raised/50"
                     title={isCollapsed ? "展开这一组" : "折叠这一组"}
                   >
-                    <StatusIcon status={group.icon.status} stage={group.icon.stage} size={13} title={group.label} />
+                    {group.pinned ? (
+                      <PushPin size={13} weight="fill" className="text-accent" aria-hidden />
+                    ) : (
+                      <StatusIcon status={group.icon!.status} stage={group.icon!.stage} size={13} title={group.label} />
+                    )}
                     <span className="text-[12px] font-semibold text-ink">{group.label}</span>
                     <span className="font-mono text-[11px] text-faint">{inGroup.length}</span>
                     <CaretRight
@@ -178,9 +194,10 @@ export function TaskList({
                           onToggle={() => toggleTeam(t.id)}
                           onSelect={onSelect}
                           onOpenTask={onOpenTask}
+                          onPatch={(patch) => onPatch(t.id, patch)}
                         />
                       ) : (
-                        <TaskRow key={t.id} t={t} allTasks={allTasks} selected={selected} onSelect={onSelect} onOpenTask={onOpenTask} groupName={groupName} />
+                        <TaskRow key={t.id} t={t} allTasks={allTasks} selected={selected} onSelect={onSelect} onOpenTask={onOpenTask} onPatch={(patch) => onPatch(t.id, patch)} groupName={groupName} />
                       ),
                     )}
                 </div>
@@ -200,6 +217,7 @@ function TaskRow({
   selected,
   onSelect,
   onOpenTask,
+  onPatch,
   groupName,
 }: {
   t: Task;
@@ -207,6 +225,7 @@ function TaskRow({
   selected: string | null;
   onSelect: (id: string) => void;
   onOpenTask: (id: string) => void;
+  onPatch: (patch: Partial<Task>) => void | Promise<void>;
   groupName: (id: string | null) => string | undefined;
 }) {
   const badge = pairBadge(t);
@@ -221,6 +240,7 @@ function TaskRow({
       <div className="flex w-full items-center gap-2.5">
         <StatusIcon status={t.status} stage={t.stage} awaitingAnswer={!!t.question} />
         <PriorityIcon p={t.priority} />
+        {t.pinnedAt != null && <PushPin size={12} weight="fill" className="shrink-0 text-accent" aria-label="已置顶" />}
         <span className="min-w-[80px] flex-1 truncate text-[13px] text-ink">{t.title}</span>
         <div className="ml-auto flex min-w-0 items-center gap-1.5 overflow-hidden">
           {t.useWorktree && <TaskWorktreeChip cleaned={t.stage === "accepted"} />}
@@ -258,6 +278,7 @@ function TaskRow({
             </span>
           </Tip>
         </div>
+        <TaskPinMenu task={t} onPatch={onPatch} stopPropagation />
       </div>
       <PauseHint task={t} allTasks={allTasks} onOpen={onSelect} />
     </div>
@@ -280,6 +301,7 @@ function TeamRow({
   onToggle,
   onSelect,
   onOpenTask,
+  onPatch,
 }: {
   lead: Task;
   workers: Task[];
@@ -290,6 +312,7 @@ function TeamRow({
   onToggle: () => void;
   onSelect: (id: string) => void;
   onOpenTask: (id: string) => void;
+  onPatch: (patch: Partial<Task>) => void | Promise<void>;
 }) {
   const fold = foldTeamStatus(lead, workers);
   const unreadTitle = `有新动态 · ${taskDisplayStatus(fold.status, undefined, fold.awaitingAnswer).label}`;
@@ -310,6 +333,7 @@ function TeamRow({
             title={unreadTitle}
           />
         )}
+        {lead.pinnedAt != null && <PushPin size={12} weight="fill" className="shrink-0 text-accent" aria-label="已置顶" />}
         <span className="min-w-[80px] flex-1 truncate text-[13px] text-ink">{lead.title}</span>
         <div className="ml-auto flex min-w-0 items-center gap-1.5 overflow-hidden">
           {lead.useWorktree && <TaskWorktreeChip cleaned={lead.stage === "accepted"} />}
@@ -338,6 +362,7 @@ function TeamRow({
             <CaretRight size={10} weight="bold" className={`transition-transform ${expanded ? "rotate-90" : ""}`} />
           </button>
         </div>
+        <TaskPinMenu task={lead} onPatch={onPatch} stopPropagation />
       </div>
       {expanded &&
         workers.map((w) => (
