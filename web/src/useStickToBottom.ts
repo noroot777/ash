@@ -14,6 +14,18 @@ const distanceFromBottom = (el: HTMLElement) => el.scrollHeight - el.scrollTop -
 
 const isNearBottom = (el: HTMLElement, threshold: number) => distanceFromBottom(el) <= threshold;
 
+const cancelFrameRef = (ref: { current: number }) => {
+  if (!ref.current) return;
+  cancelAnimationFrame(ref.current);
+  ref.current = 0;
+};
+
+const clearTimeoutRef = (ref: { current: number }) => {
+  if (!ref.current) return;
+  window.clearTimeout(ref.current);
+  ref.current = 0;
+};
+
 const isScrollbarPointerDown = (event: PointerEvent, el: HTMLElement) => {
   const rect = el.getBoundingClientRect();
   const canScrollVertically = el.scrollHeight > el.clientHeight;
@@ -44,7 +56,7 @@ export function useStickToBottom(
   const clearProgrammaticFrameRef = useRef(0);
 
   const markProgrammaticScrollSettled = useCallback(() => {
-    if (clearProgrammaticFrameRef.current) cancelAnimationFrame(clearProgrammaticFrameRef.current);
+    cancelFrameRef(clearProgrammaticFrameRef);
     let frames = 0;
     const tick = () => {
       frames += 1;
@@ -77,10 +89,7 @@ export function useStickToBottom(
   const clearUserIntent = useCallback(() => {
     userScrollIntentRef.current = false;
     detachingUserIntentRef.current = false;
-    if (userIntentTimeoutRef.current) {
-      window.clearTimeout(userIntentTimeoutRef.current);
-      userIntentTimeoutRef.current = 0;
-    }
+    clearTimeoutRef(userIntentTimeoutRef);
   }, []);
 
   const noteUserScrollIntent = useCallback((detachFromBottom = true) => {
@@ -88,7 +97,7 @@ export function useStickToBottom(
     detachingUserIntentRef.current = detachFromBottom;
     if (detachFromBottom) stuckRef.current = false;
     programmaticScrollRef.current = false;
-    if (userIntentTimeoutRef.current) window.clearTimeout(userIntentTimeoutRef.current);
+    clearTimeoutRef(userIntentTimeoutRef);
     userIntentTimeoutRef.current = window.setTimeout(() => {
       if (!scrollbarDragRef.current) {
         userScrollIntentRef.current = false;
@@ -96,10 +105,7 @@ export function useStickToBottom(
       }
       userIntentTimeoutRef.current = 0;
     }, 800);
-    if (clearProgrammaticFrameRef.current) {
-      cancelAnimationFrame(clearProgrammaticFrameRef.current);
-      clearProgrammaticFrameRef.current = 0;
-    }
+    cancelFrameRef(clearProgrammaticFrameRef);
   }, []);
 
   const resumeStickToBottom = useCallback(() => {
@@ -213,9 +219,14 @@ export function useStickToBottom(
   }, [clearUserIntent, noteUserScrollIntent, onScroll, resetKey, resumeStickToBottom, scheduleStick, scrollRef, threshold]);
 
   useEffect(() => () => {
-    if (userIntentTimeoutRef.current) window.clearTimeout(userIntentTimeoutRef.current);
-    if (frameRef.current) cancelAnimationFrame(frameRef.current);
-    if (clearProgrammaticFrameRef.current) cancelAnimationFrame(clearProgrammaticFrameRef.current);
+    // StrictMode can cancel pending work during its test unmount; clear ids too so guards do not stay latched.
+    clearTimeoutRef(userIntentTimeoutRef);
+    cancelFrameRef(frameRef);
+    cancelFrameRef(clearProgrammaticFrameRef);
+    programmaticScrollRef.current = false;
+    userScrollIntentRef.current = false;
+    detachingUserIntentRef.current = false;
+    scrollbarDragRef.current = false;
   }, []);
 
   return {
