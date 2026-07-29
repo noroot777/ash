@@ -17,6 +17,7 @@ import { id, now } from "../util.js";
 import { runGroup } from "../scheduler.js";
 import { TEAM_WORKER_PREAMBLE } from "./prompts.js";
 import { createTasks } from "../task-store.js";
+import { reopenAcceptedStage } from "../task-stage.js";
 
 export interface DispatchSpec {
   body: string;
@@ -136,6 +137,10 @@ export async function dispatchWorkers(
         );
       }
     : undefined);
+
+  // 调度者又派活了 = 这支队伍重新开工:已验收的团队 stage 清回「进行中」。
+  // 执行者唤醒调度者后它自己派活,这条路不经过用户消息,所以要单独钩一下。
+  await reopenAcceptedStage(leadTaskId);
 
   if (opts.run !== false) void runGroup(groupId);
   return { groupId, mode, tasks: created };
