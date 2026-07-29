@@ -23,7 +23,7 @@ import { ExecutorPicker, type ExecutorSelection, useExecutorProfiles } from "./E
 import { executorLabel } from "./executorLabel";
 import { TaskModelControls } from "./TaskModelControls";
 import { QuestionCard } from "./QuestionCard";
-import { isDispatchedWorker, isSharedTeamWorker } from "./taskPolicy";
+import { canDeriveTask, isDispatchedWorker, isSharedTeamWorker } from "./taskPolicy";
 import { AttachmentDisplay, parseAttachmentText } from "./messageAttachments";
 import { toast } from "./toast";
 import { TaskWorktreeChip } from "./TaskWorktreeChip";
@@ -85,12 +85,17 @@ export function TaskDetail({
   const scrollRef = useRef<HTMLDivElement>(null);
   const { profiles, providers } = useExecutorProfiles();
   const dispatchedWorker = isDispatchedWorker(task);
+  const derivationAllowed = canDeriveTask(task);
   const parentTask = task.parentId ? allTasks.find((candidate) => candidate.id === task.parentId) : null;
   const sharedTeamWorker = isSharedTeamWorker(task, parentTask);
   const objective = parseAttachmentText(task.body);
   const [derivation, setDerivation] = useState<{ command: TaskDerivationCommand; committed: boolean } | null>(null);
   const [reviewOpen, setReviewOpen] = useState(false);
   const [acceptFailure, setAcceptFailure] = useState<AcceptTaskFailure | null>(null);
+
+  // TaskDetail is reused while navigating. Never carry a source task's open
+  // derivation card into another task, especially a worker/reviewer detail.
+  useEffect(() => setDerivation(null), [task.id, derivationAllowed]);
 
   // 拉会话 + 快照历史输出 + 拼条目流,都在 useConversation 里(/team 调度台共用同
   // 一份装配,免得两个界面的「刷新后 vs 实时」各自漂移)。
@@ -465,14 +470,20 @@ export function TaskDetail({
               onReply={onReply}
               disabled={!hasConversation || task.status === "running" || task.status === "queued" || !!task.archived}
               disabledPlaceholder={
-                task.archived
+                !derivationAllowed
+                  ? task.archived
+                    ? "已归档"
+                    : task.status === "running" || task.status === "queued"
+                      ? "当前任务进行中…"
+                      : "任务尚未开始…"
+                  : task.archived
                   ? "已归档；仍可输入 /team 或 /debate 创建派生任务…"
                   : task.status === "running" || task.status === "queued"
                     ? "当前任务进行中；可输入 /team 或 /debate 创建派生任务…"
                     : "可输入 /team 以本任务为背景开启**多模型协作**\nOR\n可输入 /debate 以本任务为背景开启**辩论**"
               }
               richPlaceholder={
-                !task.archived && task.status !== "running" && task.status !== "queued" ? (
+                derivationAllowed && !task.archived && task.status !== "running" && task.status !== "queued" ? (
                   <span className="flex flex-col">
                     <span>可输入 /team 以本任务为背景开启<strong className="font-semibold text-muted">多模型协作</strong></span>
                     <span>OR</span>
@@ -482,7 +493,7 @@ export function TaskDetail({
               }
               initialHeight={84}
               toolbar={hasConversation ? runConfigControls : undefined}
-              command={{
+              command={derivationAllowed ? {
                 matches: isTaskDerivationCommand,
                 items: TASK_DERIVATION_COMMANDS,
                 // 回车 = 定稿：输入框清空，卡片接管焦点继续补充。
@@ -499,8 +510,8 @@ export function TaskDetail({
                     return parsed ? { command: parsed, committed: false } : null;
                   });
                 },
-              }}
-              inlinePanel={derivation ? (
+              } : undefined}
+              inlinePanel={derivationAllowed && derivation ? (
                 <TaskDerivationComposer
                   key={derivation.command.kind}
                   task={task}

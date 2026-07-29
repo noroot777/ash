@@ -41,6 +41,27 @@ api.post("/tasks", async (c) => {
     attachments?: string[];
     appendToQueue?: string; // 可选:把新任务追加到指定 queue 的尾部
   }>();
+  const derivationMode = b.mode === "team" || b.mode === "debate";
+  if (derivationMode && b.parentId !== undefined && b.parentId !== null) {
+    return c.json(
+      { error: "派生执行者或审查任务不能再创建团队/辩论任务", parentId: b.parentId },
+      409,
+    );
+  }
+  if (derivationMode && b.originTaskId) {
+    const source = (
+      await db
+        .select({ parentId: tasks.parentId, reviewOf: tasks.reviewOf })
+        .from(tasks)
+        .where(eq(tasks.id, b.originTaskId))
+    ).at(0);
+    if (source && (source.parentId !== null || source.reviewOf !== null)) {
+      return c.json(
+        { error: "派生执行者或审查任务不能再创建团队/辩论任务", originTaskId: b.originTaskId },
+        409,
+      );
+    }
+  }
   const ts = now();
   const taskId = id();
   const executorType = await agentTypeForExecutor(b.executorId);

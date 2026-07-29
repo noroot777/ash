@@ -18,6 +18,7 @@
     "test:workspace-cleanup": "tsx scripts/test-workspace-cleanup.ts",
     "test:executor-resolution": "tsx scripts/test-executor-resolution.ts",
     "test:executor-overrides": "tsx scripts/test-executor-overrides.ts",
+    "test:task-derivation": "tsx scripts/test-task-derivation-policy.ts",
     "test:review": "tsx scripts/test-review-flow.ts"
   },
   "dependencies": {

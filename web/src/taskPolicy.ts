@@ -6,6 +6,14 @@ export function isDispatchedWorker(task: Pick<Task, "parentId">): boolean {
   return task.parentId !== null;
 }
 
+// Workers and reviewers are both system-derived tasks. A reviewer for an
+// ordinary task may not have a parentId, so reviewOf is part of the policy too.
+export function canDeriveTask(
+  task: Pick<Task, "parentId" | "reviewOf">,
+): boolean {
+  return task.parentId === null && !task.reviewOf;
+}
+
 export function isSharedTeamWorker(
   task: Pick<Task, "parentId" | "useWorktree">,
   parent: Pick<Task, "id" | "mode"> | null | undefined,
