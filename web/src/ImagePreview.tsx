@@ -3,7 +3,6 @@ import {
   useCallback,
   useContext,
   useEffect,
-  useId,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -36,47 +35,53 @@ export type PreviewImage = {
 };
 
 type ImageGroupContextValue = {
-  register: (id: string, image: PreviewImage) => void;
-  unregister: (id: string) => void;
-  open: (id: string) => void;
+  register: (id: symbol, image: PreviewImage) => void;
+  unregister: (id: symbol) => void;
+  open: (id: symbol) => void;
+};
+
+type ActivePreview = {
+  images: PreviewImage[];
+  index: number;
 };
 
 const ImageGroupContext = createContext<ImageGroupContextValue | null>(null);
 
 function ImageGroupProvider({ children }: { children: ReactNode }) {
-  const imagesRef = useRef(new Map<string, PreviewImage>());
-  const [revision, setRevision] = useState(0);
-  const [activeId, setActiveId] = useState<string | null>(null);
+  const imagesRef = useRef(new Map<symbol, PreviewImage>());
+  const [active, setActive] = useState<ActivePreview | null>(null);
 
-  const register = useCallback((id: string, image: PreviewImage) => {
-    const current = imagesRef.current.get(id);
-    if (current?.src === image.src && current.alt === image.alt && current.label === image.label) return;
+  // Registration is intentionally ref-only. Markdown recreates renderer
+  // functions during parent renders; feeding every registration back into
+  // Provider state can remount those images and invalidate the clicked id before
+  // the lightbox reads it. Freeze an ordered snapshot only when the user opens
+  // an image, when a Provider render is both necessary and safe.
+  const register = useCallback((id: symbol, image: PreviewImage) => {
     imagesRef.current.set(id, image);
-    setRevision((value) => value + 1);
   }, []);
 
-  const unregister = useCallback((id: string) => {
-    if (!imagesRef.current.delete(id)) return;
-    setRevision((value) => value + 1);
+  const unregister = useCallback((id: symbol) => {
+    imagesRef.current.delete(id);
   }, []);
 
-  const value = useMemo(() => ({ register, unregister, open: setActiveId }), [register, unregister]);
-  const entries = useMemo(() => [...imagesRef.current.entries()], [revision]);
-  const activeIndex = activeId === null ? -1 : entries.findIndex(([id]) => id === activeId);
+  const open = useCallback((id: symbol) => {
+    const entries = [...imagesRef.current.entries()];
+    const index = entries.findIndex(([candidate]) => candidate === id);
+    if (index < 0) return;
+    setActive({ images: entries.map(([, image]) => image), index });
+  }, []);
 
-  useEffect(() => {
-    if (activeId !== null && activeIndex < 0) setActiveId(null);
-  }, [activeId, activeIndex]);
+  const value = useMemo(() => ({ register, unregister, open }), [open, register, unregister]);
 
   return (
     <ImageGroupContext.Provider value={value}>
       {children}
-      {activeIndex >= 0 && (
+      {active && (
         <ImageLightbox
-          images={entries.map(([, image]) => image)}
-          index={activeIndex}
-          onIndexChange={(index) => setActiveId(entries[index]?.[0] ?? null)}
-          onClose={() => setActiveId(null)}
+          images={active.images}
+          index={active.index}
+          onIndexChange={(index) => setActive((current) => current ? { ...current, index } : null)}
+          onClose={() => setActive(null)}
         />
       )}
     </ImageGroupContext.Provider>
@@ -389,7 +394,7 @@ function GroupedPreviewableImage({
   title: _title,
   ...props
 }: ImageProps) {
-  const id = useId();
+  const id = useRef(Symbol("image-preview")).current;
   const group = useContext(ImageGroupContext)!;
   const label = alt || "图片";
 
