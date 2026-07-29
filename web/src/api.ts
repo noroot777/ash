@@ -61,6 +61,17 @@ export type TeamCuaKillResult = {
 
 export type TaskCommit = { sha: string; subject: string; at: string };
 
+export type GitOverview = {
+  branches: string[];
+  current: string | null;
+  worktrees: {
+    path: string;
+    branch: string | null;
+    head: string | null;
+    detached: boolean;
+  }[];
+};
+
 export type TaskDiffResult = {
   available: boolean;
   sourceBranch: string;
@@ -170,6 +181,8 @@ export const api = {
   // initialized; the picker falls back to a text input.
   projectBranches: (id: string): Promise<{ branches: string[]; current: string | null }> =>
     fetch(`/api/projects/${id}/branches`).then(j),
+  projectGitOverview: (id: string): Promise<GitOverview> =>
+    fetch(`/api/projects/${id}/git-overview`).then(j),
   // 清理某个任务留下的 worktree 目录 / 分支。任务行这时通常已经删掉了(删除时没勾
   // 选、或勾了但 git 拒绝),所以入口挂在 project 上、按 taskId 推导路径与分支名。
   // git 拒绝不抛错,逐项结果里带 worktreeError / branchError 给 UI 展示。
@@ -290,8 +303,12 @@ export const api = {
   deleteNote: (id: string): Promise<{ deleted: true }> =>
     fetch(`/api/notes/${id}`, { method: "DELETE" }).then(j),
   // Global search (⌘K): tasks + session transcripts, ranked server-side.
-  search: (q: string): Promise<SearchHit[]> =>
-    fetch(`/api/search?q=${encodeURIComponent(q)}`).then(j),
+  search: (q: string, scope?: { projectId?: string; type?: "tasks" | "notes" }): Promise<SearchHit[]> => {
+    const params = new URLSearchParams({ q });
+    if (scope?.projectId) params.set("projectId", scope.projectId);
+    if (scope?.type) params.set("type", scope.type);
+    return fetch(`/api/search?${params}`).then(j);
+  },
   // Persist a pasted image/file; returns its absolute path (for the agent), a url
   // (preview) and the kind (image vs file → which chip the composer shows).
   uploadFile: (dataUrl: string, name: string): Promise<{ id: string; path: string; url: string; name: string; kind: AttachmentKind }> =>

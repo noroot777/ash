@@ -24,6 +24,7 @@ import { mountQueueRoutes } from "./queues.js";
 import { detectKnownClis, detectLocalAgents } from "./detect.js";
 import { searchAll } from "./search.js";
 import { projectHealthLight, projectHealthFull, tidyRepoPath, repoKey, listBranches } from "./git.js";
+import { getGitOverview } from "./git-overview.js";
 import { discardTaskWorkspace } from "./workspace-cleanup.js";
 import { mountDebateIterationRoutes } from "./debate/iteration.js";
 import { mountNoteRoutes } from "./notes.js";
@@ -57,7 +58,13 @@ api.patch("/settings", async (c) => {
 api.get("/search", async (c) => {
   const q = (c.req.query("q") ?? "").trim();
   if (q.length < 2) return c.json([]);
-  return c.json(await searchAll(q));
+  const projectId = (c.req.query("projectId") ?? "").trim() || undefined;
+  const type = (c.req.query("type") ?? "").trim();
+  if (type && type !== "tasks" && type !== "notes") {
+    return c.json({ error: "type must be tasks or notes" }, 400);
+  }
+  const searchType = type === "tasks" || type === "notes" ? type : undefined;
+  return c.json(await searchAll(q, { projectId, type: searchType }));
 });
 
 const LOCAL_OPEN_ROOTS = (process.env.HARNESS_LOCAL_OPEN_ROOTS ??
@@ -355,6 +362,15 @@ api.get("/projects/:id/branches", async (c) => {
   const p = (await db.select().from(projects).where(eq(projects.id, c.req.param("id")))).at(0);
   if (!p) return c.json({ error: "not found" }, 404);
   return c.json(await listBranches(p.repoPath));
+});
+
+// Read-only command-palette view: local branches plus every registered worktree.
+// It deliberately bypasses repo-lock because neither git command mutates refs,
+// indexes, or the worktree registry.
+api.get("/projects/:id/git-overview", async (c) => {
+  const p = (await db.select().from(projects).where(eq(projects.id, c.req.param("id")))).at(0);
+  if (!p) return c.json({ error: "not found" }, 404);
+  return c.json(await getGitOverview(p.repoPath));
 });
 
 // 清理某个任务留下的 worktree 目录 / 分支。任务行这时通常已经被删掉了(删除时

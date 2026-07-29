@@ -551,6 +551,7 @@ export function App() {
         commands={commands}
         runningTasks={runningTasks}
         projects={projects}
+        currentProjectId={projectId}
         onOpenHit={openHit}
         onOpenTask={(taskId) => { void openTask(taskId); }}
         onClose={() => setPaletteOpen(false)}
