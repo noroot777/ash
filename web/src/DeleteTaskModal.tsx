@@ -93,12 +93,17 @@ export function DeleteTaskModal({
     }
   };
 
-  // 第二幕:任务已经删了,worktree/分支没删掉。
+  // 第二幕:任务已经删了,但 worktree/分支没(全)删掉。标题和正文只说**实际剩下的
+  // 那一样** —— 分支未合并、worktree 却删干净了是最常见的一种,这时说「worktree/
+  // 分支没删掉」就是在瞎报,用户会以为磁盘上还有个目录。
   if (rest) {
     const stillFailing = !!(cleanup?.worktreeError || cleanup?.branchError);
+    const restLabel = rest.path && rest.branch ? "worktree 和分支" : rest.path ? "worktree" : "分支";
+    // 目录删了、分支留着:提交并没有丢,说清楚,免得用户以为工作没了而去强制删。
+    const worktreeGone = !rest.path && !!cleanup?.worktreeRemoved;
     return (
       <Modal
-        title="任务已删除,但 worktree/分支没删掉"
+        title={`任务已删除，${restLabel}没删掉`}
         onClose={onClose}
         width={520}
         footer={(close) => (
@@ -120,6 +125,11 @@ export function DeleteTaskModal({
         )}
       >
         <div className="space-y-2.5 text-[13px] text-ink">
+          {worktreeGone && (
+            <p className="text-[12px] text-muted">
+              worktree 目录已删除；分支还留着,<strong>里面的提交没丢</strong>。
+            </p>
+          )}
           <WorkspaceBox path={rest.path} branch={rest.branch} />
           {cleanup?.worktreeError && <GitStderr text={cleanup.worktreeError} />}
           {cleanup?.branchError && <GitStderr text={cleanup.branchError} />}
