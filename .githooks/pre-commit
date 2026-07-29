@@ -1,0 +1,57 @@
+#!/bin/sh
+# 根级 agent 约定文件的体积闸。挂 pre-commit 是因为「每一次膨胀都必然经过一次 commit」——
+# 这是唯一和污染动作 1:1 对应的通道；挂 build 前置只覆盖得到碰前端的那部分提交（实测 46%），
+# 而历史上单笔最大的三次膨胀全部落在不碰 web 的 server 侧改动里。
+#
+# 棘轮式：只拦「这次提交把文件改大了且超预算」，不拦存量。所以瘦身完成前的过渡期里，
+# 解冲突的 merge、瘦身本身的分批提交都不会被自己的闸挡死。
+#
+# 换机器/新克隆后需要一次性执行：git config core.hooksPath .githooks
+# （config 不随 clone 传播，所以这个 hook 每次都会 echo 一行，静默失效时你能立刻发现。）
+
+BUDGET=8192
+FILES="CLAUDE.md AGENTS.md"
+
+echo "[pre-commit] 根约定文件体积闸（预算 ${BUDGET} 字节，棘轮模式）"
+
+staged=$(git diff --cached --name-only --diff-filter=ACM)
+failed=0
+
+for f in $FILES; do
+  echo "$staged" | grep -qx "$f" || continue
+
+  new=$(git cat-file -s ":$f" 2>/dev/null) || continue
+  old=$(git cat-file -s "HEAD:$f" 2>/dev/null) || old=0
+
+  if [ "$new" -le "$old" ]; then
+    [ "$new" -lt "$old" ] && echo "  $f: $old → $new 字节（净减 $((old - new))，谢谢）"
+    continue
+  fi
+
+  if [ "$new" -le "$BUDGET" ]; then
+    echo "  $f: $old → $new 字节（预算内）"
+    continue
+  fi
+
+  failed=1
+  cat >&2 <<EOF
+
+  ✗ $f 被改大了：$old → $new 字节，超出预算 ${BUDGET}。
+
+    先问一句：这条约定能不能不写在这里？按升级顺序往下找，走到最后一步才回到根文件——
+
+      1. 让它编译不过（类型 / API 形状）
+      2. 让检查脚本拦住（scripts/check-conventions.mjs）
+      3. 用回归测试钉住（server/scripts/test-*.ts）
+      4. 写成就近的代码注释（改这块代码的人一定会看到）
+      5. 写进目录级 CLAUDE.md（server/ web/ mobile/）
+      6. 都不行，才写根文件——那就先搬走一条同等长度的
+
+    根文件只留「claude 和 codex 都必须遵守、且系统当前做不进去」的东西。
+    事故叙事请搬 docs/incidents.md，只在根文件留规则本体 + 一个指针。
+
+EOF
+done
+
+[ "$failed" -eq 0 ] || exit 1
+exit 0
