@@ -263,7 +263,9 @@ export async function reviewProtocolFor(
     `其它改动也必须运行与风险相称的测试或产物。\n\n` +
     `证据强制落盘：\n` +
     `- 必写报告：${join(evidenceDir, "report.md")}（包含结论、依据、发现的问题）\n` +
-    `- 截图：放在 ${evidenceDir} 目录内\n\n` +
+    `- 截图：放在 ${evidenceDir} 目录内\n` +
+    `- 证据**只落盘，绝不 git add / commit 进仓库**（data/ 本就在 .gitignore 里，不要 -f 强加）：` +
+    `验收界面直接从磁盘读证据，塞进 git 只会拿二进制文件污染被审分支的验收 diff\n\n` +
     `审查结束时，调用 report_stage(taskId="${target.id}", stage="verified"|"verify_failed") 给被审任务下结论；` +
     `最后调用 complete_task(taskId="${review.id}") 确认你自己的审查任务完成。` +
     `不要给审查任务自身上报 stage。\n\n`;
@@ -273,7 +275,7 @@ export function reviewReminderFor(review: Pick<TaskRow, "id" | "reviewOf" | "rev
   if (!review.reviewOf || !review.reviewRound) return "";
   const dir = reviewRoundDir(review.reviewOf, review.reviewRound);
   return `审查提醒:这是第 ${review.reviewRound} 轮审查；必须真实运行验证并把报告写到 ${join(dir, "report.md")}，` +
-    `截图放同目录；结束前对被审任务 ${review.reviewOf} 调 report_stage(verified|verify_failed)，` +
+    `截图放同目录（只落盘，绝不 commit 进仓库）；结束前对被审任务 ${review.reviewOf} 调 report_stage(verified|verify_failed)，` +
     `再对审查任务自身 ${review.id} 调 complete_task。`;
 }
 
