@@ -569,7 +569,7 @@ export type ServerEvent =
   | { type: "task.created"; task: Task }
   | { type: "task.updated"; task: Task }
   | { type: "task.status"; taskId: string; status: TaskStatus; startedAt?: string | null; endedAt?: string | null; activeMs?: number | null; liveSince?: string | null }
-  | { type: "task.stage"; taskId: string; stage: TaskStage }
+  | { type: "task.stage"; taskId: string; stage: TaskStage | null }
   | { type: "task.title"; taskId: string; title: string }
   // 提问态变化（§Team）：agent 调 ask_question 提问、或答复把它清空。task.status
   // 只带状态字段，question 不跟着走 —— 少了这条事件，卡片要等下次全量拉取才出现/

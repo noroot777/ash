@@ -16,6 +16,7 @@ import { writeTurn as writeTurnLine, writeTurnEnd, writeRunError, runTracePaths 
 import { startTeam, deliverToLead } from "./team/session.js";
 import { workerPreambleFor } from "./team/dispatch.js";
 import { notifyTeamLead } from "./team/inbox.js";
+import { reopenAcceptedStage } from "./task-stage.js";
 
 const running = new Set<string>(); // taskIds currently executing (single-flight)
 
@@ -446,6 +447,10 @@ export async function continueTask(
   userText: string,
   opts: { agent?: AgentType; attachments?: string[]; system?: ResumeReason } = {},
 ): Promise<void> {
+  // 已验收的协作任务收到真人消息 = 它又开工了,stage 清回「进行中」(见 reopenAcceptedStage)。
+  // 只认真人消息:带 opts.system 的 retry / 手点运行 / 队列推进 / 上游唤醒不算,跟下面
+  // followUpFrom 用的是同一条口径。放在最前面,team(下面就分流走了)和 debate 一起覆盖。
+  if (!opts.system) await reopenAcceptedStage(taskId);
   // 团队任务(§Team):插话直接写进常驻调度台的 stdin —— 即时、同一会话、用户侧
   // 感觉不断线。不占这里的单飞锁(那把锁是给「一次运行 = 一个回合」的单任务用的,
   // 调度台的一次运行是整段常驻)。于是 /reply、/answer、@提及全都自动生效。
