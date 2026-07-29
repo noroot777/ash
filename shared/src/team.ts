@@ -1,4 +1,50 @@
-import type { Group, Task, TaskStatus } from "./index";
+import type { AgentType, Group, Task, TaskStatus } from "./index";
+
+// Team execution configuration. Reviewer fields intentionally mirror the
+// lead/worker naming scheme: a stale reviewerExecutorId is resolved by the
+// server through the same executor-profile fallback as the other two roles.
+export interface TeamConfig {
+  lead: AgentType;
+  worker: AgentType;
+  leadExecutorId?: string | null;
+  workerExecutorId?: string | null;
+  leadModel?: string | null;
+  leadReasoningEffort?: string | null;
+  workerModel?: string | null;
+  workerReasoningEffort?: string | null;
+  // Missing means enabled, preserving automatic review for older team rows.
+  review?: boolean;
+  reviewerAgentType?: AgentType;
+  reviewerExecutorId?: string | null;
+  reviewerModel?: string | null;
+  reviewerReasoningEffort?: string | null;
+  leadExecutorLabel?: string | null;
+  workerExecutorLabel?: string | null;
+  reviewerExecutorLabel?: string | null;
+}
+
+export type ReviewConclusion = "verified" | "verify_failed" | null;
+
+export interface TaskReviewRound {
+  round: number;
+  reviewTaskId: string;
+  reviewTaskStatus: TaskStatus;
+  conclusion: ReviewConclusion;
+  reportMarkdown: string;
+  screenshots: string[];
+}
+
+export interface TaskReviewInfo {
+  reviewRequested: boolean;
+  rounds: TaskReviewRound[];
+}
+
+export interface ReviewDispatchInput {
+  agentType?: AgentType;
+  executorId?: string | null;
+  model?: string | null;
+  reasoningEffort?: string | null;
+}
 
 // Pure team-view derivations shared by web and mobile. They deliberately know
 // nothing about either client's conversation model or rendering layer.

@@ -2,7 +2,15 @@
 // Mirrors the decisions in DESIGN.md (§3 data model, §5 agents, §7 debate,
 // §8 statuses, §12 debate mechanism, §13 sessions).
 import type { SessionRole } from "./session.js";
+import type { TeamConfig } from "./team.js";
 export type { Session, SessionRole } from "./session.js";
+export type {
+  ReviewConclusion,
+  ReviewDispatchInput,
+  TaskReviewInfo,
+  TaskReviewRound,
+  TeamConfig,
+} from "./team.js";
 // 执行器覆盖的继承规则住在 ./executor-overrides.ts,走 "@harness/shared/executors"
 // 子路径导出(跟 "@harness/shared/team" 同一套):index.ts 只做类型再导出,不能在这里
 // 转发运行时函数 —— 服务端直接跑 .ts 源码,而 Node 的类型擦除不会把 "./x.js" 映射
@@ -207,6 +215,9 @@ export interface Task {
   mode: TaskMode;
   status: TaskStatus;
   stage?: TaskStage | null;
+  reviewOf?: string | null;
+  reviewRound?: number | null;
+  reviewRequested?: boolean;
   priority: Priority;
   labels: string[];
   dependsOn: string[]; // [废弃,保留为 []] 旧的指针依赖,被 queue 模型取代,见 DESIGN-scheduling.md
@@ -305,20 +316,7 @@ export const MAX_QUESTION_ITEMS = 4;
 // 一个 mode:"team" 的任务 = 一个常驻的「调度台」：进程不退、会话不断，你随时插话；
 // 它用 MCP 的 dispatch 派出真任务当执行者（执行者挂在 parentId 上，成批地放进自动建的
 // 内部组里，串行批次还配 queue）。调度者没有「完成」这个状态，只有忙/闲。
-export interface TeamConfig {
-  lead: AgentType; // 调度者的 CLI 类型 —— 必须支持常驻会话（见 executors 的 openResident）
-  worker: AgentType; // 派活时的默认执行者类型（dispatch 可逐个覆盖）
-  leadExecutorId?: string | null; // 调度者具体执行器；缺省/悬空 → lead 类型默认执行器
-  workerExecutorId?: string | null; // 执行者任务的默认执行器；缺省/悬空 → worker 类型默认执行器
-  leadModel?: string | null; // 调度台模型覆盖；缺省/null → 跟随 lead 执行器 profile
-  leadReasoningEffort?: string | null; // 调度台思考强度覆盖；缺省/null → 跟随 lead profile
-  workerModel?: string | null; // 新执行者任务的默认模型覆盖；缺省/null → 跟随 worker profile
-  workerReasoningEffort?: string | null; // 新执行者任务的默认思考强度覆盖
-  leadExecutorLabel?: string | null; // server 只读展示字段
-  workerExecutorLabel?: string | null; // server 只读展示字段
-}
-
-// Global named shortcuts for filling a new TeamConfig. The two label fields are
+// Global named shortcuts for filling a new TeamConfig. Display-label fields are
 // read-only API enrichments; only the executor/model/effort choices are stored.
 export type TeamPresetConfig = Pick<
   TeamConfig,
@@ -330,8 +328,14 @@ export type TeamPresetConfig = Pick<
   | "leadReasoningEffort"
   | "workerModel"
   | "workerReasoningEffort"
+  | "review"
+  | "reviewerAgentType"
+  | "reviewerExecutorId"
+  | "reviewerModel"
+  | "reviewerReasoningEffort"
   | "leadExecutorLabel"
   | "workerExecutorLabel"
+  | "reviewerExecutorLabel"
 >;
 
 export interface TeamPreset {
@@ -341,7 +345,7 @@ export interface TeamPreset {
   createdAt: string;
 }
 
-export const TEAM_DEFAULTS: TeamConfig = { lead: "claude", worker: "claude" };
+export const TEAM_DEFAULTS: TeamConfig = { lead: "claude", worker: "claude", review: true };
 
 // ── 供应商 (relay, system-level) ─────────────────────────────────────────────
 // 一个可挂到执行器上的模型来源:官方 API 端点,或第三方代理/聚合服务。挂上后启动 CLI 时注入
@@ -570,6 +574,7 @@ export type ServerEvent =
   | { type: "task.updated"; task: Task }
   | { type: "task.status"; taskId: string; status: TaskStatus; startedAt?: string | null; endedAt?: string | null; activeMs?: number | null; liveSince?: string | null }
   | { type: "task.stage"; taskId: string; stage: TaskStage | null }
+  | { type: "task.review"; taskId: string }
   | { type: "task.title"; taskId: string; title: string }
   // 提问态变化（§Team）：agent 调 ask_question 提问、或答复把它清空。task.status
   // 只带状态字段，question 不跟着走 —— 少了这条事件，卡片要等下次全量拉取才出现/

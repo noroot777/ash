@@ -33,6 +33,11 @@ const enrichTeamExecutorLabels = (
     ...team,
     leadExecutorLabel: executorLabelFor(profiles, team.leadExecutorId, team.lead),
     workerExecutorLabel: executorLabelFor(profiles, team.workerExecutorId, team.worker),
+    reviewerExecutorLabel: executorLabelFor(
+      profiles,
+      team.reviewerExecutorId,
+      team.reviewerAgentType ?? team.worker,
+    ),
   };
 };
 
@@ -46,6 +51,9 @@ const toTask = (r: TaskRow, profiles: AgentLabelRow[] = []): Task => ({
   mode: r.mode as Task["mode"],
   status: r.status as TaskStatus,
   stage: (r.stage as TaskStage | null) ?? null,
+  reviewOf: r.reviewOf ?? null,
+  reviewRound: r.reviewRound ?? null,
+  reviewRequested: r.reviewRequested,
   priority: r.priority as Task["priority"],
   labels: JSON.parse(r.labels),
   dependsOn: JSON.parse(r.dependsOn),

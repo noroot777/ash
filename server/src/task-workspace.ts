@@ -5,7 +5,7 @@ import { prepareWorktree, resolveWorkspace, type Workspace } from "./git.js";
 
 type WorkspaceTask = Pick<
   typeof tasks.$inferSelect,
-  "id" | "projectId" | "parentId" | "useWorktree" | "worktreeBase"
+  "id" | "projectId" | "parentId" | "useWorktree" | "worktreeBase" | "reviewOf"
 >;
 
 async function directWorkspace(task: WorkspaceTask, repoPath: string): Promise<Workspace> {
@@ -22,6 +22,15 @@ async function directWorkspace(task: WorkspaceTask, repoPath: string): Promise<W
 // `.worktrees/<workerId>` path (so detection/cleanup keeps working), but branches
 // from the team's shared branch by default.
 export async function taskWorkspace(task: WorkspaceTask, repoPath: string): Promise<Workspace> {
+  // Reviewers operate on the exact files under review. Re-resolving the target
+  // through this same function covers isolated worker worktrees and team-shared
+  // workspaces without copying or creating a reviewer-owned worktree.
+  if (task.reviewOf) {
+    const target = (await db.select().from(tasks).where(eq(tasks.id, task.reviewOf))).at(0);
+    if (target && target.projectId === task.projectId && !target.reviewOf) {
+      return taskWorkspace(target, repoPath);
+    }
+  }
   if (!task.parentId) return directWorkspace(task, repoPath);
 
   const parent = (await db.select().from(tasks).where(eq(tasks.id, task.parentId))).at(0);

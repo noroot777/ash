@@ -28,6 +28,7 @@ export interface DispatchSpec {
   reasoningEffort?: string | null;
   reportBack?: boolean;
   useWorktree?: boolean;
+  review?: boolean;
 }
 
 export interface DispatchResult {
@@ -107,6 +108,10 @@ export async function dispatchWorkers(
       body: s.body,
       mode: "single",
       status: "backlog",
+      reviewOf: null as string | null,
+      reviewRound: null as number | null,
+      // Old TeamConfig rows omit review; omission deliberately means enabled.
+      reviewRequested: typeof s.review === "boolean" ? s.review : cfg.review !== false,
       priority: lead.priority,
       labels: "[]",
       dependsOn: "[]",
@@ -148,7 +153,8 @@ export async function dispatchWorkers(
 
 // 执行者的前言:只在 fresh run 时拼到 body 前面(不写进 tasks.body —— body 是调度者
 // 给的需求正文,用户在界面上看到的就该是那份)。非团队执行者返回空串。
-export async function workerPreambleFor(task: { id: string; parentId: string | null }): Promise<string> {
+export async function workerPreambleFor(task: { id: string; parentId: string | null; reviewOf?: string | null }): Promise<string> {
+  if (task.reviewOf) return "";
   if (!task.parentId) return "";
   const lead = (await db.select({ mode: tasks.mode }).from(tasks).where(eq(tasks.id, task.parentId))).at(0);
   return lead?.mode === "team" ? TEAM_WORKER_PREAMBLE(task.id) : "";

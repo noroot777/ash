@@ -68,6 +68,26 @@ try {
       useWorktree: true,
       worktreeBase: null,
     },
+    {
+      ...common,
+      id: "review-shared-1",
+      parentId: "lead-task-1234",
+      mode: "single",
+      reviewOf: "shared-worker-1",
+      reviewRound: 1,
+      useWorktree: false,
+      worktreeBase: null,
+    },
+    {
+      ...common,
+      id: "review-isolated-1",
+      parentId: "lead-task-1234",
+      mode: "single",
+      reviewOf: "isolated-worker-1",
+      reviewRound: 1,
+      useWorktree: false,
+      worktreeBase: null,
+    },
   ]);
 
   const load = async (id: string) =>
@@ -94,8 +114,17 @@ try {
   assert.equal(git(isolatedWorkspace.path, "rev-parse", "HEAD"), git(leadWorkspace.path, "rev-parse", "HEAD"));
   assert.notEqual(git(repo, "rev-parse", "HEAD"), git(leadWorkspace.path, "rev-parse", "HEAD"));
 
+  const sharedReviewWorkspace = await taskWorkspace(await load("review-shared-1"), repo);
+  assert.equal(sharedReviewWorkspace.path, sharedWorkspace.path);
+  assert.equal(sharedReviewWorkspace.branch, sharedWorkspace.branch);
+
+  const isolatedReviewWorkspace = await taskWorkspace(await load("review-isolated-1"), repo);
+  assert.equal(isolatedReviewWorkspace.path, isolatedWorkspace.path);
+  assert.equal(isolatedReviewWorkspace.branch, isolatedWorkspace.branch);
+
   console.log("✓ team lead and default worker share one worktree");
   console.log("✓ explicitly isolated worker branches from the shared team branch");
+  console.log("✓ reviewers reuse the exact shared or isolated workspace under review");
 } finally {
   rmSync(root, { recursive: true, force: true });
 }

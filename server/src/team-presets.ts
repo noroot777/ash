@@ -16,6 +16,9 @@ const CONFIG_STRING_FIELDS = [
   "leadReasoningEffort",
   "workerModel",
   "workerReasoningEffort",
+  "reviewerExecutorId",
+  "reviewerModel",
+  "reviewerReasoningEffort",
 ] as const;
 
 function isAgentType(value: unknown): value is AgentType {
@@ -35,6 +38,12 @@ function normalizeConfig(value: unknown): { config?: TeamPresetConfig; error?: s
   const raw = value as Record<string, unknown>;
   if (!isAgentType(raw.lead) || !isAgentType(raw.worker)) {
     return { error: "config.lead / config.worker 必须是有效的 agent 类型" };
+  }
+  if (raw.reviewerAgentType !== undefined && !isAgentType(raw.reviewerAgentType)) {
+    return { error: "config.reviewerAgentType 必须是有效的 agent 类型" };
+  }
+  if (raw.review !== undefined && typeof raw.review !== "boolean") {
+    return { error: "config.review 必须是 boolean" };
   }
   for (const field of CONFIG_STRING_FIELDS) {
     const item = raw[field];
@@ -56,6 +65,11 @@ function normalizeConfig(value: unknown): { config?: TeamPresetConfig; error?: s
       leadReasoningEffort: nullable("leadReasoningEffort"),
       workerModel: nullable("workerModel"),
       workerReasoningEffort: nullable("workerReasoningEffort"),
+      review: raw.review !== false,
+      reviewerAgentType: isAgentType(raw.reviewerAgentType) ? raw.reviewerAgentType : undefined,
+      reviewerExecutorId: nullable("reviewerExecutorId"),
+      reviewerModel: nullable("reviewerModel"),
+      reviewerReasoningEffort: nullable("reviewerReasoningEffort"),
     },
   };
 }
@@ -90,6 +104,11 @@ function toPreset(row: PresetRow, profiles: AgentLabelRow[]): TeamPreset {
         profiles,
         parsed.config.workerExecutorId,
         parsed.config.worker,
+      ),
+      reviewerExecutorLabel: executorLabelFor(
+        profiles,
+        parsed.config.reviewerExecutorId,
+        parsed.config.reviewerAgentType ?? parsed.config.worker,
       ),
     },
     createdAt: row.createdAt,

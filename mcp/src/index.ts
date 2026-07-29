@@ -294,11 +294,11 @@ server.registerTool(
 server.registerTool(
   "report_stage",
   {
-    title: "上报实现/验证/验收阶段",
+    title: "审查者上报验证结论",
     description:
-      "上报与 TaskStatus 正交的协作阶段，不会改变队列或任务结算。实现完成立即报 implemented；开始真实运行验证报 verifying；验证通过报 verified；验证未通过报 verify_failed，并在回复中说明失败原因；准备交给人工验收前报 awaiting_acceptance；后续合并到目标分支报 merged；目标分支验证并验收完成报 accepted。这里的验证必须实际运行产物：web 项目要启动服务并用浏览器/截图确认行为，只读代码或只过编译不算验证。团队调度台(mode=team)不适用，应由具体执行者上报。",
+      "审查任务给被审任务上报与 TaskStatus 正交的验证结论，不会改变队列或任务结算。审查开始时后端自动置 verifying；审查者真实运行验证后报 verified 或 verify_failed。web 改动必须启动服务、用浏览器确认并截图，只读代码或只过编译不算验证。implemented/awaiting_acceptance/merged/accepted 保留给兼容与验收链路；团队调度台(mode=team)仍不适用。普通执行者不再自我上报验证阶段。",
     inputSchema: {
-      taskId: z.string().describe("当前任务 id（任务 prompt 前言里有）"),
+      taskId: z.string().describe("被审任务 id（不是审查任务自己的 id）"),
       stage: TASK_STAGE.describe(`阶段：${STAGE_ORDER.join(" | ")}`),
     },
   },
@@ -433,7 +433,7 @@ server.registerTool(
   {
     title: "派活给执行者(团队调度者专用)",
     description:
-      "团队调度者(mode=team 的任务)用这个派活:一次建 N 个执行者任务,绑到自己名下,默认立刻起跑。每个执行者是一个完整的 CLI agent(自己还能开子代理),默认与调度台在同一个工作目录里干活;团队开启 worktree 时也共享它。\n\n• mode=\"serial\"(多个任务时的默认)会把这批串成 A→B→C,前一个 done 后下一个自动起跑;mode=\"parallel\" 才是真并行(限流 4 个),确认互不干扰再用。\n• 每个 body 要自带完整上下文 —— 执行者之间彼此不知情,也看不到你和用户的对话。**要划清文件/模块边界就自己写进每个执行者的 body**,否则并行的执行者会互相踩。\n• reportBack:true = 它做完要叫醒你(你打算接着安排下一步时用);false(默认)= 静默完成,你随时能用 list_tasks 查。\n• 你会被唤醒的时机只有三种:执行者提问、执行者失败、reportBack 的执行者完成。\n\n返回执行者的 id + 标题,后续用 get_task / run_task / answer_question 引用它们。",
+      "团队调度者(mode=team 的任务)用这个派活:一次建 N 个执行者任务,绑到自己名下,默认立刻起跑。每个执行者是一个完整的 CLI agent(自己还能开子代理),默认与调度台在同一个工作目录里干活;团队开启 worktree 时也共享它。\n\n• mode=\"serial\"(多个任务时的默认)会把这批串成 A→B→C,前一个 done 后下一个自动起跑;mode=\"parallel\" 才是真并行(限流 4 个),确认互不干扰再用。\n• 每个 body 要自带完整上下文 —— 执行者之间彼此不知情,也看不到你和用户的对话。**要划清文件/模块边界就自己写进每个执行者的 body**,否则并行的执行者会互相踩。\n• review 缺省跟随团队配置（默认开启）；单项传 false 可跳过该执行者的自动审查。\n• reportBack:true = 它做完要叫醒你(你打算接着安排下一步时用);false(默认)= 静默完成,你随时能用 list_tasks 查。\n• 你会被唤醒的时机只有三种:执行者提问、执行者失败、reportBack 的执行者完成。\n\n返回执行者的 id + 标题,后续用 get_task / run_task / answer_question 引用它们。",
     inputSchema: {
       leadTaskId: z.string().describe("你自己的 taskId(团队任务,prompt 前言里有)"),
       tasks: z
@@ -447,6 +447,7 @@ server.registerTool(
             reasoningEffort: z.string().nullable().optional().describe("覆盖执行器 profile 的思考强度；缺省=跟随团队默认，null=跟随执行器"),
             reportBack: z.boolean().optional().describe("true=它完成时叫醒你;默认 false 静默完成"),
             useWorktree: z.boolean().optional().describe("true=这个执行者在团队共享目录之上再单独开 worktree 隔离(默认 false,继承调度台目录)"),
+            review: z.boolean().optional().describe("是否在执行者确认完成后自动派审；缺省跟随团队配置（默认开启）"),
           }),
         )
         .min(1)

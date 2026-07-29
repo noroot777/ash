@@ -110,7 +110,7 @@ const { startScheduler, api } = await initializeServer().catch((e) =>
 );
 
 async function initializeServer() {
-  const [{ ensureSchema }, { migrateQueues }, { reconcileInterrupted }, schedulesModule, routesModule, stageModule, acceptanceModule] =
+  const [{ ensureSchema }, { migrateQueues }, { reconcileInterrupted }, schedulesModule, routesModule, stageModule, acceptanceModule, reviewModule] =
     await Promise.all([
       import("./db/index.js"),
       import("./db/migrateQueues.js"),
@@ -119,6 +119,7 @@ async function initializeServer() {
       import("./routes.js"),
       import("./task-stage.js"),
       import("./task-accept.js"),
+      import("./review.js"),
     ]);
 
   await ensureSchema();
@@ -126,6 +127,7 @@ async function initializeServer() {
   await reconcileInterrupted(); // recover tasks left "running"/"queued" by a previous crash/restart
   stageModule.mountTaskStageRoutes(routesModule.api);
   acceptanceModule.mountTaskAcceptanceRoutes(routesModule.api);
+  reviewModule.mountReviewRoutes(routesModule.api);
   return { startScheduler: schedulesModule.startScheduler, api: routesModule.api };
 }
 

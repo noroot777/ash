@@ -15,7 +15,8 @@
     "test:accept-merge": "tsx scripts/test-accept-merge.ts",
     "test:worktree-recovery": "tsx scripts/test-worktree-recovery.ts",
     "test:executor-resolution": "tsx scripts/test-executor-resolution.ts",
-    "test:executor-overrides": "tsx scripts/test-executor-overrides.ts"
+    "test:executor-overrides": "tsx scripts/test-executor-overrides.ts",
+    "test:review": "tsx scripts/test-review-flow.ts"
   },
   "dependencies": {
     "@harness/shared": "*",

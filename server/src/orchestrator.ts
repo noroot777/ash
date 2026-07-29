@@ -17,6 +17,7 @@ import { startTeam, deliverToLead } from "./team/session.js";
 import { workerPreambleFor } from "./team/dispatch.js";
 import { notifyTeamLead } from "./team/inbox.js";
 import { reopenAcceptedStage } from "./task-stage.js";
+import { handleTaskSettlement, reviewProtocolFor, reviewReminderFor } from "./review.js";
 
 const running = new Set<string>(); // taskIds currently executing (single-flight)
 
@@ -51,26 +52,23 @@ function writeTurn(out: NodeJS.WritableStream, turn: { t: "user" | "system"; age
 // 完成协议前言(严格 done):告诉 agent 它的 taskId 和「必须亲口确认完成」的
 // 规则。fresh run 用长版(第一回合,完整交代);reply/resume 回合用短版追加在
 // 消息尾部(每回合都提醒,上下文再长 agent 也不至于忘)。
-const STAGE_PROTOCOL = (taskId: string, sharedTeamWorker: boolean) => sharedTeamWorker
-  ? `【阶段自报】实现完成后立即调用 report_stage(taskId="${taskId}", stage="implemented")。开始真实运行验证时报 verifying；验证通过报 verified；未通过报 verify_failed 并说明原因。验证完报 verified/verify_failed 即止，不上报 awaiting_acceptance/merged/accepted；合并与验收由团队级处理。这里的「验证」必须实际运行产物：web 项目要启动服务并用浏览器/截图确认行为，只读代码或只过编译不算验证。\n\n`
-  : `【阶段自报】实现完成后立即调用 report_stage(taskId="${taskId}", stage="implemented")。开始真实运行验证时报 verifying；验证通过报 verified；未通过报 verify_failed 并说明原因；准备交给人工验收前报 awaiting_acceptance。后续完成合并/最终验收时分别报 merged/accepted。这里的「验证」必须实际运行产物：web 项目要启动服务并用浏览器/截图确认行为，只读代码或只过编译不算验证。\n\n`;
-const STAGE_REMINDER = (taskId: string, sharedTeamWorker: boolean) => sharedTeamWorker
-  ? `阶段自报:taskId=${taskId}；实现完成报 implemented，真实运行验证开始/通过/失败报 verifying/verified/verify_failed（失败要说明），验证完即止，不报 awaiting_acceptance/merged/accepted；合并与验收由团队级处理；web 验证需起服务并用浏览器/截图确认。`
-  : `阶段自报:taskId=${taskId}；实现完成报 implemented，真实运行验证开始/通过/失败报 verifying/verified/verify_failed（失败要说明），交人工前报 awaiting_acceptance，后续合并/验收完成报 merged/accepted；web 验证需起服务并用浏览器/截图确认。`;
-const ACCEPTANCE_REMINDER = (taskId: string, sharedTeamWorker: boolean) => sharedTeamWorker
-  ? "验收辅路:本共享执行者不适用 accept_task；合并与验收由团队级处理。"
-  : `验收辅路:只有用户明确表示「验收通过/可以合并」时，调用 accept_task(taskId="${taskId}")，不要自行运行 git merge、worktree remove 或 branch -d。`;
-const COMPLETION_PROTOCOL = (taskId: string, sharedTeamWorker: boolean) =>
-  `【完成协议】本任务在 harness 的 taskId 是 ${taskId}。当且仅当你确定任务目标已经达成时,在结束前调用 harness MCP 的 complete_task(taskId="${taskId}")确认完成;未确认就结束,本回合会按未完成记为 failed。跑到需要等待外部条件的检查点时,改用 pause_task 写下续跑指令。\n\n${STAGE_PROTOCOL(taskId, sharedTeamWorker)}${ACCEPTANCE_REMINDER(taskId, sharedTeamWorker)}\n\n`;
-const COMPLETION_REMINDER = (taskId: string, sharedTeamWorker: boolean) =>
-  `\n\n(harness 完成协议:taskId=${taskId}。若本回合结束时任务目标已达成,先调用 complete_task 确认再结束,否则按未完成记 failed;到等待检查点则用 pause_task。${STAGE_REMINDER(taskId, sharedTeamWorker)}${ACCEPTANCE_REMINDER(taskId, sharedTeamWorker)})`;
+const ACCEPTANCE_REMINDER = (taskId: string, sharedTeamWorker: boolean, reviewTask: boolean) => reviewTask
+  ? "验收辅路:审查任务不适用 accept_task；它只负责给被审任务下验证结论并留证。"
+  : sharedTeamWorker
+    ? "验收辅路:本共享执行者不适用 accept_task；合并与验收由团队级处理。"
+    : `验收辅路:准备交给人工验收前可调用 report_stage(taskId="${taskId}", stage="awaiting_acceptance")；` +
+      `只有用户明确表示「验收通过/可以合并」时，调用 accept_task(taskId="${taskId}")，不要自行运行 git merge、worktree remove 或 branch -d。`;
+const COMPLETION_PROTOCOL = (taskId: string, sharedTeamWorker: boolean, reviewTask: boolean) =>
+  `【完成协议】本任务在 harness 的 taskId 是 ${taskId}。当且仅当你确定任务目标已经达成时,在结束前调用 harness MCP 的 complete_task(taskId="${taskId}")确认完成;未确认就结束,本回合会按未完成记为 failed。跑到需要等待外部条件的检查点时,改用 pause_task 写下续跑指令。\n\n${ACCEPTANCE_REMINDER(taskId, sharedTeamWorker, reviewTask)}\n\n`;
+const COMPLETION_REMINDER = (taskId: string, sharedTeamWorker: boolean, reviewTask: boolean) =>
+  `\n\n(harness 完成协议:taskId=${taskId}。若本回合结束时任务目标已达成,先调用 complete_task 确认再结束,否则按未完成记 failed;到等待检查点则用 pause_task。${ACCEPTANCE_REMINDER(taskId, sharedTeamWorker, reviewTask)})`;
 
 // 续聊(follow-up)回合的尾巴:任务早就到终态了,这一轮是「完成之后的对话」,
 // 不该拿严格完成协议吓唬 agent(不确认就 failed)—— 这一轮不确认,任务状态原样
 // 不动。只有它真把任务推进到新的完成时才需要确认。
 const FOLLOW_UP_LABEL: Record<string, string> = { done: "已完成", failed: "失败", canceled: "已取消" };
-const FOLLOW_UP_REMINDER = (taskId: string, from: string, sharedTeamWorker: boolean) =>
-  `\n\n(harness:这是任务在「${FOLLOW_UP_LABEL[from] ?? from}」之后的续聊,taskId=${taskId}。任务状态不会因为本回合而改变,本回合不需要 complete_task;只有当你在这一轮把任务推进到了新的完成状态时,才调用 complete_task(taskId="${taskId}")确认。${STAGE_REMINDER(taskId, sharedTeamWorker)}${ACCEPTANCE_REMINDER(taskId, sharedTeamWorker)})`;
+const FOLLOW_UP_REMINDER = (taskId: string, from: string, sharedTeamWorker: boolean, reviewTask: boolean) =>
+  `\n\n(harness:这是任务在「${FOLLOW_UP_LABEL[from] ?? from}」之后的续聊,taskId=${taskId}。任务状态不会因为本回合而改变,本回合不需要 complete_task;只有当你在这一轮把任务推进到了新的完成状态时,才调用 complete_task(taskId="${taskId}")确认。${ACCEPTANCE_REMINDER(taskId, sharedTeamWorker, reviewTask)})`;
 
 // The task's worktree was gone AND its branch with it, so we rebuilt an empty one.
 // The CLI conversation lives outside the worktree (~/.claude/projects/<escaped
@@ -96,6 +94,16 @@ async function setStatus(taskId: string, status: Parameters<typeof setTaskStatus
   await setTaskStatus(taskId, status);
 }
 
+async function afterSettlement(taskId: string, status: "canceled" | "paused" | "done" | "failed", confirmedDone: boolean) {
+  try {
+    await handleTaskSettlement(taskId, status, confirmedDone);
+  } catch (error) {
+    // Review orchestration is a post-settlement side effect. A failure here must
+    // never rewrite an already-settled worker/reviewer status.
+    console.error(`[harness] review settlement hook failed for ${taskId}:`, error);
+  }
+}
+
 // 任务跑完一回合时的状态落位：续聊回合(followUpFrom 非空) → 除非确认完成,否则
 // 回到续聊前的终态；手停 → canceled；分组暂停停 → paused（恢复分组时
 // 队列 head 还是它，从原 CLI 会话续跑，而不是被当 canceled 跳过去启动下一个）；
@@ -118,7 +126,11 @@ async function settleTaskStatus(
   taskId: string,
   exitStatus: number,
   stopped: StopSettle | null,
-): Promise<{ status: "canceled" | "paused" | "done" | "failed"; note?: string }> {
+): Promise<{
+  status: "canceled" | "paused" | "done" | "failed";
+  note?: string;
+  confirmedDone: boolean;
+}> {
   const memConfirmed = takeConfirmed(taskId); // 无条件消费,别让标记漏到下一回合
   const t = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   // 完成确认有两条道:同进程的内存标记,和落库的时间戳(complete_confirmed_at)。
@@ -149,7 +161,7 @@ async function settleTaskStatus(
     if (confirmed) {
       await setStatus(taskId, "done");
       notify("done");
-      return { status: "done" };
+      return { status: "done", confirmedDone: true };
     }
     await setStatus(taskId, back);
     const label = FOLLOW_UP_LABEL[back] ?? back;
@@ -157,20 +169,20 @@ async function settleTaskStatus(
       // 提问照常通知/展示(问题卡片不看状态),但不把终态改成 paused —— 那会让它
       // 重新占住队列位置。答复走 /answer,又是一个续聊回合。
       notify("question", t.question);
-      return { status: back, note: `续聊回合以提问结束,等待答复:「${t.question}」(任务状态仍为「${label}」)` };
+      return { status: back, note: `续聊回合以提问结束,等待答复:「${t.question}」(任务状态仍为「${label}」)`, confirmedDone: false };
     }
     if (stopped) {
       const why = stopped === "paused" ? "分组被暂停" : "被手动停止";
-      return { status: back, note: `续聊回合${why},任务状态保持「${label}」不变。` };
+      return { status: back, note: `续聊回合${why},任务状态保持「${label}」不变。`, confirmedDone: false };
     }
     if (exitStatus !== 0) {
-      return { status: back, note: `续聊回合异常结束(退出码 ${exitStatus}),任务状态保持「${label}」不变。` };
+      return { status: back, note: `续聊回合异常结束(退出码 ${exitStatus}),任务状态保持「${label}」不变。`, confirmedDone: false };
     }
-    return { status: back };
+    return { status: back, confirmedDone: false };
   }
   if (stopped === "canceled") {
     await setStatus(taskId, "canceled");
-    return { status: "canceled" };
+    return { status: "canceled", confirmedDone: false };
   }
   if (stopped === "paused") {
     // 组暂停打断:落 paused 占住队列位置(组是 paused 的,推进钩子不会动)。
@@ -181,34 +193,34 @@ async function settleTaskStatus(
     await setStatus(taskId, "paused");
     if (t?.question) {
       notify("question", t.question);
-      return { status: "paused", note: `本回合以提问暂停,等待答复:「${t.question}」` };
+      return { status: "paused", note: `本回合以提问暂停,等待答复:「${t.question}」`, confirmedDone: false };
     }
-    return { status: "paused", note: GROUP_PAUSED_NOTE };
+    return { status: "paused", note: GROUP_PAUSED_NOTE, confirmedDone: false };
   }
   // 提问优先于检查点:question 非空 → paused,但队列不推进、不自动续跑
   // (pickNextLaunchable 会挡住),等 answer_question 带答复唤醒。
   if (t?.question) {
     await setStatus(taskId, "paused");
     notify("question", t.question);
-    return { status: "paused", note: `本回合以提问暂停,等待答复:「${t.question}」` };
+    return { status: "paused", note: `本回合以提问暂停,等待答复:「${t.question}」`, confirmedDone: false };
   }
   if (t?.resumePrompt) {
     await setStatus(taskId, "paused");
-    return { status: "paused" };
+    return { status: "paused", confirmedDone: false };
   }
   if (exitStatus !== 0) {
     await setStatus(taskId, "failed");
     notify("failed");
-    return { status: "failed" };
+    return { status: "failed", confirmedDone: false };
   }
   if (confirmed || !STRICT_DONE) {
     await setStatus(taskId, "done");
     notify("done");
-    return { status: "done" };
+    return { status: "done", confirmedDone: confirmed };
   }
   await setStatus(taskId, "failed");
   notify("failed_unconfirmed");
-  return { status: "failed", note: UNCONFIRMED_NOTE };
+  return { status: "failed", note: UNCONFIRMED_NOTE, confirmedDone: false };
 }
 
 // On (re)start nothing is actually running, so any task still in an in-flight
@@ -291,8 +303,11 @@ export async function runTask(taskId: string): Promise<void> {
     // 只拼进 prompt,不写进 tasks.body —— body 是调度者给的需求正文,界面展示那份。
     const teamPreamble = await workerPreambleFor(task);
     const sharedTeamWorker = !task.useWorktree && teamPreamble.length > 0;
+    const reviewTask = !!task.reviewOf;
+    const reviewProtocol = reviewTask ? await reviewProtocolFor(task, ws, project.repoPath) : "";
     const prompt =
-      AUTONOMY + COMPLETION_PROTOCOL(taskId, sharedTeamWorker) + teamPreamble + (autoTitle ? TITLE_HINT + objective : objective);
+      AUTONOMY + COMPLETION_PROTOCOL(taskId, sharedTeamWorker, reviewTask) + teamPreamble + reviewProtocol +
+      (autoTitle ? TITLE_HINT + objective : objective);
     const turnStart = now();
     const sessId = id();
     const runDir = join(RUNS_DIR, taskId);
@@ -384,6 +399,7 @@ export async function runTask(taskId: string): Promise<void> {
       .set({ exitStatus, endedAt: endIso, activeMs: sql`COALESCE(${sessions.activeMs}, 0) + ${Math.max(0, Date.parse(endIso) - Date.parse(turnStart))}` })
       .where(eq(sessions.id, sessId));
     const settled = await settleTaskStatus(taskId, exitStatus, stopped);
+    await afterSettlement(taskId, settled.status, settled.confirmedDone);
     if (settled.note) {
       // 未确认降级为 failed:写进 .md(reload 可见)+ 广播(live 可见)
       out.write(`\n> ${settled.note}\n`);
@@ -399,7 +415,9 @@ export async function runTask(taskId: string): Promise<void> {
       role: "single",
       event: { kind: "error", message: String(err instanceof Error ? err.message : err) },
     });
-    await setStatus(taskId, takeStopped(taskId) ?? "failed");
+    const status = takeStopped(taskId) ?? "failed";
+    await setStatus(taskId, status);
+    await afterSettlement(taskId, status, false);
   } finally {
     if (handle) untrackRun(taskId, handle);
     running.delete(taskId);
@@ -523,13 +541,16 @@ export async function continueTask(
     const invited = !prev; // first time this agent is pulled into the task
     const userTurnText = userText + attachmentsPrompt(opts.attachments);
     const sharedTeamWorker = !task.useWorktree && (await workerPreambleFor(task)).length > 0;
+    const reviewTask = !!task.reviewOf;
+    const reviewReminder = reviewTask ? reviewReminderFor(task) : "";
     const prompt =
       (invited ? COLLAB_INVITE : "") +
       userTurnText +
       (workspaceReset ? WORKSPACE_RESET(cwd) : "") +
       (followUpFrom
-        ? FOLLOW_UP_REMINDER(taskId, followUpFrom, sharedTeamWorker)
-        : COMPLETION_REMINDER(taskId, sharedTeamWorker));
+        ? FOLLOW_UP_REMINDER(taskId, followUpFrom, sharedTeamWorker, reviewTask)
+        : COMPLETION_REMINDER(taskId, sharedTeamWorker, reviewTask)) +
+      (reviewReminder ? `\n${reviewReminder}` : "");
     const turnStart = now();
     const sessId = resuming ? prev!.id : id();
     const runDir = join(RUNS_DIR, taskId);
@@ -626,6 +647,7 @@ export async function continueTask(
       .set({ exitStatus, endedAt: endIso, activeMs: sql`COALESCE(${sessions.activeMs}, 0) + ${Math.max(0, Date.parse(endIso) - Date.parse(turnStart))}` })
       .where(eq(sessions.id, sessId));
     const settled = await settleTaskStatus(taskId, exitStatus, stopped);
+    await afterSettlement(taskId, settled.status, settled.confirmedDone);
     if (settled.note) {
       out.write(`\n> ${settled.note}\n`);
       bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: "single", agentType: agent, event: { kind: "error", message: settled.note } });
@@ -642,7 +664,9 @@ export async function continueTask(
     const row = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
     const back = row?.followUpFrom as "done" | "failed" | "canceled" | null | undefined;
     if (back) await db.update(tasks).set({ followUpFrom: null, updatedAt: now() }).where(eq(tasks.id, taskId));
-    await setStatus(taskId, takeStopped(taskId) ?? back ?? "failed");
+    const status = takeStopped(taskId) ?? back ?? "failed";
+    await setStatus(taskId, status);
+    await afterSettlement(taskId, status, false);
   } finally {
     if (handle) untrackRun(taskId, handle);
     running.delete(taskId);
