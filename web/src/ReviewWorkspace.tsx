@@ -18,6 +18,8 @@ import {
 } from "./api";
 import { ConfirmModal } from "./Modal";
 import { StatusIcon } from "./StatusIcon";
+import { TaskReviewEvidence } from "./TaskReviewPanel";
+import { Tip } from "./Tip";
 import { toast } from "./toast";
 import { parseAttachmentText } from "./messageAttachments";
 import { isSharedTeamWorker } from "./taskPolicy";
@@ -274,6 +276,10 @@ export function TeamReviewWorkspace({
 
 function SharedWorkerSummary({ workers }: { workers: Task[] }) {
   const failed = workers.filter((worker) => worker.stage === "verify_failed").length;
+  const [selectedWorkerId, setSelectedWorkerId] = useState<string | null>(
+    workers.find((worker) => worker.stage === "verify_failed")?.id ?? workers[0]?.id ?? null,
+  );
+  const selectedWorker = workers.find((worker) => worker.id === selectedWorkerId) ?? null;
 
   return (
     <section
@@ -297,11 +303,16 @@ function SharedWorkerSummary({ workers }: { workers: Task[] }) {
           const stageLabel = displayStage ? STAGE_LABELS[displayStage] : worker.status;
           const verifyFailed = displayStage === "verify_failed";
           return (
-            <div
+            <button
               key={worker.id}
-              className={`flex min-w-0 items-center gap-2.5 rounded-md border px-3 py-2.5 ${verifyFailed
+              type="button"
+              onClick={() => setSelectedWorkerId((current) => current === worker.id ? null : worker.id)}
+              aria-expanded={selectedWorkerId === worker.id}
+              className={`flex min-w-0 items-center gap-2.5 rounded-md border px-3 py-2.5 text-left transition-colors ${verifyFailed
                 ? "border-red-500/40 bg-red-500/[0.06]"
-                : "border-line bg-canvas/45"}`}
+                : selectedWorkerId === worker.id
+                  ? "border-violet-500/30 bg-violet-500/[0.05]"
+                  : "border-line bg-canvas/45 hover:bg-raised/60"}`}
             >
               <StatusIcon
                 status={worker.status}
@@ -310,19 +321,26 @@ function SharedWorkerSummary({ workers }: { workers: Task[] }) {
                 title={stageLabel}
                 size={8}
               />
-              <span className={`min-w-0 flex-1 truncate text-[12.5px] font-medium ${verifyFailed ? "text-red-700" : "text-ink"}`} title={worker.title}>
-                {worker.title}
-              </span>
+              <Tip label={worker.title} className="min-w-0 flex-1">
+                <span className={`block truncate text-[12.5px] font-medium ${verifyFailed ? "text-red-700" : "text-ink"}`}>{worker.title}</span>
+              </Tip>
               <span className={`shrink-0 rounded px-1.5 py-0.5 text-[10.5px] font-medium ${verifyFailed
                 ? "bg-red-500/10 text-red-700"
                 : "bg-overlay text-muted"}`}
               >
                 {stageLabel}
               </span>
-            </div>
+              <CaretDown size={12} weight="bold" className={`shrink-0 text-faint transition-transform ${selectedWorkerId === worker.id ? "" : "-rotate-90"}`} />
+            </button>
           );
         })}
       </div>
+      {selectedWorker && (
+        <div className="border-t border-line bg-canvas/45 p-3">
+          <p className="mb-2 truncate text-[11.5px] font-medium text-muted">{selectedWorker.title}</p>
+          <TaskReviewEvidence taskId={selectedWorker.id} />
+        </div>
+      )}
     </section>
   );
 }
@@ -421,19 +439,22 @@ function ReviewSection({
       {failure && <div className="border-t border-line px-4 pb-3"><AcceptanceFailureReport failure={failure} /></div>}
       {open && (
         <div className="border-t border-line bg-canvas/45 px-4 py-4">
-          {loadError ? (
-            <p className="rounded-md border border-red-500/30 bg-red-500/[0.05] px-3 py-2 text-[12px] text-red-700">证据加载失败：{loadError}</p>
-          ) : !evidence ? (
-            <div className="flex items-center gap-2 py-8 text-[12px] text-faint"><SpinnerGap size={15} className="animate-spin" /> 正在汇总提交、diff 和会话…</div>
-          ) : (
-            <div className="grid gap-4 xl:grid-cols-[300px_minmax(0,1fr)]">
-              <div className="space-y-4">
-                <CommitList branch={evidence.branch} commits={evidence.commits} />
-                {!hideMessages && <UserMessages messages={evidence.messages} />}
+          <div className="space-y-4">
+            <TaskReviewEvidence taskId={task.id} />
+            {loadError ? (
+              <p className="rounded-md border border-red-500/30 bg-red-500/[0.05] px-3 py-2 text-[12px] text-red-700">提交、diff 和会话加载失败：{loadError}</p>
+            ) : !evidence ? (
+              <div className="flex items-center gap-2 py-8 text-[12px] text-faint"><SpinnerGap size={15} className="animate-spin" /> 正在汇总提交、diff 和会话…</div>
+            ) : (
+              <div className="grid gap-4 xl:grid-cols-[300px_minmax(0,1fr)]">
+                <div className="space-y-4">
+                  <CommitList branch={evidence.branch} commits={evidence.commits} />
+                  {!hideMessages && <UserMessages messages={evidence.messages} />}
+                </div>
+                <DiffViewer result={evidence.diff} />
               </div>
-              <DiffViewer result={evidence.diff} />
-            </div>
-          )}
+            )}
+          </div>
         </div>
       )}
     </article>
