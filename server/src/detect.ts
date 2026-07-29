@@ -115,7 +115,9 @@ const KNOWN_CLIS: KnownCli[] = [
     // 不是 `trae`(那是拉起 IDE 的),也不是 `trae-cli`(那是开源的 bytedance/trae-agent)。
     bins: ["traecli"],
     docsUrl: "https://docs.trae.cn/cli_get-started-with-trae-cli",
-    installCommand: 'sh -c "$(curl -L https://trae.cn/trae-cli/install.sh)"',
+    // 照录官方快速开始的整条命令:安装脚本跑在 `sh -c` 子进程里,它写进 shell
+    // profile 的 PATH 传不回用户当前 shell,少了后半段就得重开终端才敲得动 traecli。
+    installCommand: 'sh -c "$(curl -L https://trae.cn/trae-cli/install.sh)" && export PATH=~/.local/bin:$PATH',
   },
   {
     key: "grok",
@@ -168,15 +170,6 @@ const KNOWN_CLIS: KnownCli[] = [
     bins: ["copilot"],
     docsUrl: "https://github.com/github/copilot-cli",
     installCommand: "npm install -g @github/copilot",
-  },
-  {
-    key: "pi",
-    name: "Pi Coding Agent",
-    description: "开源极简编码 CLI",
-    // 与 Inflection 的聊天产品 Pi 无关(那个只有网页/App,没有 CLI)。
-    bins: ["pi"],
-    docsUrl: "https://github.com/earendil-works/pi",
-    installCommand: "curl -fsSL https://pi.dev/install.sh | sh",
   },
   {
     key: "kiro",

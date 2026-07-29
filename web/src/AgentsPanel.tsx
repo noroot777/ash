@@ -118,7 +118,7 @@ export function AgentsPanel({ onClose }: { onClose: () => void }) {
                   ；带「可派任务」的才能在 harness 里执行任务
                 </span>
               </div>
-              <div className="grid grid-cols-2 gap-2">
+              <div className="grid gap-2 sm:grid-cols-2">
                 {detected.map((d) => (
                   <CliCard
                     key={d.key}
