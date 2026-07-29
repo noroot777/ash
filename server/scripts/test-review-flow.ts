@@ -3,7 +3,7 @@
 // two-round repair cap, round numbering, and evidence path boundary.
 // Run: npm -w server run test:review
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -151,8 +151,23 @@ const traversal = await api.request(
   `/tasks/${taskId}/review/file?round=1&name=${encodeURIComponent("../secret.md")}`,
 );
 assert.equal(traversal.status, 400, "review/file 路由必须拒绝路径穿越");
+
+const outside = join(root, "outside");
+mkdirSync(join(outside, "round-1"), { recursive: true });
+writeFileSync(join(outside, "round-1", "report.md"), "outside secret\n");
+const reviewParent = join(base, "..");
+rmSync(reviewParent, { recursive: true, force: true });
+mkdirSync(join(reviewParent, ".."), { recursive: true });
+symlinkSync(outside, reviewParent);
+const symlinkTraversal = await api.request(
+  `/tasks/${taskId}/review/file?round=1&name=report.md`,
+);
+assert.equal(symlinkTraversal.status, 404, "review/file 必须拒绝证据目录祖先 symlink");
+rmSync(reviewParent, { force: true });
+
 const info = await api.request(`/tasks/${taskId}/review`);
 assert.deepEqual(await info.json(), { reviewRequested: true, rounds: [] });
 
+rmSync(resolve(base, "../.."), { recursive: true, force: true });
 rmSync(root, { recursive: true, force: true });
 console.log("review flow tests passed");

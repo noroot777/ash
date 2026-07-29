@@ -1,5 +1,6 @@
-import { lstat, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
-import { basename, extname, join, resolve, sep } from "node:path";
+import { constants as fsConstants } from "node:fs";
+import { lstat, mkdir, open, readFile, readdir } from "node:fs/promises";
+import { basename, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type {
   AgentType,
   ReviewConclusion,
@@ -81,10 +82,49 @@ export function nextReviewRound(existingRounds: number): number {
 // Resolve only one file inside a single round directory. Both the route and its
 // regression test use this helper so path traversal cannot drift from policy.
 export function safeReviewFilePath(taskId: string, round: number, name: string): string | null {
-  if (!Number.isInteger(round) || round < 1 || !name || basename(name) !== name) return null;
+  if (
+    !Number.isInteger(round) ||
+    round < 1 ||
+    !taskId ||
+    basename(taskId) !== taskId ||
+    !name ||
+    basename(name) !== name
+  ) return null;
   const base = resolve(reviewRoundDir(taskId, round));
   const file = resolve(base, name);
   return file.startsWith(base + sep) ? file : null;
+}
+
+// Lexical containment is not enough: a reviewer can replace `review` or
+// `round-N` with a symlink and make an otherwise harmless `report.md` resolve
+// outside RUNS_DIR. Walk every directory component with lstat so both reads and
+// server-owned conclusion writes reject symlink ancestors.
+async function safeReviewDirectory(dir: string, create = false): Promise<boolean> {
+  const root = resolve(RUNS_DIR);
+  const target = resolve(dir);
+  const rel = relative(root, target);
+  if (!rel || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) return false;
+  if (create) await mkdir(root, { recursive: true });
+  try {
+    const rootStat = await lstat(root);
+    if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) return false;
+  } catch {
+    return false;
+  }
+  let current = root;
+  for (const part of rel.split(sep)) {
+    current = join(current, part);
+    if (create) await mkdir(current).catch((error: NodeJS.ErrnoException) => {
+      if (error.code !== "EEXIST") throw error;
+    });
+    try {
+      const stat = await lstat(current);
+      if (!stat.isDirectory() || stat.isSymbolicLink()) return false;
+    } catch {
+      return false;
+    }
+  }
+  return true;
 }
 
 function reviewerConfig(lead: TaskRow | null): TeamConfig {
@@ -244,7 +284,7 @@ async function readReport(taskId: string, round: number): Promise<string> {
 async function screenshots(taskId: string, round: number): Promise<string[]> {
   try {
     const dir = reviewRoundDir(taskId, round);
-    if (!(await lstat(dir)).isDirectory()) return [];
+    if (!(await safeReviewDirectory(dir))) return [];
     return (await readdir(dir, { withFileTypes: true }))
       .filter((entry) => entry.isFile() && [".png", ".jpg", ".jpeg"].includes(extname(entry.name).toLowerCase()))
       .map((entry) => entry.name)
@@ -258,7 +298,7 @@ async function readReviewFile(taskId: string, round: number, name: string): Prom
   const file = safeReviewFilePath(taskId, round, name);
   if (!file) return null;
   try {
-    if (!(await lstat(reviewRoundDir(taskId, round))).isDirectory()) return null;
+    if (!(await safeReviewDirectory(reviewRoundDir(taskId, round)))) return null;
     // lstat (not stat) rejects symlinks, including a reviewer-created link to a
     // file outside the evidence directory with an otherwise harmless .md name.
     if (!(await lstat(file)).isFile()) return null;
@@ -271,18 +311,26 @@ async function readReviewFile(taskId: string, round: number, name: string): Prom
 async function writeConclusion(targetId: string, round: number, reviewTaskId: string, conclusion: ReviewConclusion) {
   if (!conclusion) return;
   const dir = reviewRoundDir(targetId, round);
-  await mkdir(dir, { recursive: true });
-  if (!(await lstat(dir)).isDirectory()) return;
+  if (!(await safeReviewDirectory(dir, true))) return;
   const file = join(dir, "conclusion.json");
   try {
-    if (!(await lstat(file)).isFile()) return;
-  } catch {
-    // Missing is the normal first-write case.
+    const handle = await open(
+      file,
+      fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_NOFOLLOW,
+      0o600,
+    );
+    try {
+      await handle.writeFile(
+        JSON.stringify({ conclusion, reviewTaskId, recordedAt: now() }, null, 2) + "\n",
+      );
+    } finally {
+      await handle.close();
+    }
+  } catch (error) {
+    // A conclusion is immutable once recorded. EEXIST also covers a malicious
+    // final symlink without following or overwriting its target.
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
   }
-  await writeFile(
-    file,
-    JSON.stringify({ conclusion, reviewTaskId, recordedAt: now() }, null, 2) + "\n",
-  );
 }
 
 async function readConclusion(targetId: string, round: number): Promise<ReviewConclusion> {
