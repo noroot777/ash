@@ -4,7 +4,7 @@
 // - 调度者回合 / 用户插话 / 系统提示 → 会话条目(ConvItem),跟单任务同一套渲染。
 // - 入站气泡(执行者提问/失败/汇报)→ 其实就是 system 条目,认出模板前缀后换个长相画。
 // - 派活卡 → 会话里没有留痕(dispatch 是个 MCP 工具调用),由执行者反推出来按时刻插进流里。
-import { useEffect, useRef } from "react";
+import { useRef } from "react";
 import type { Task } from "@harness/shared";
 import type { Batch } from "@harness/shared/team";
 import { ArrowElbowDownRight, ArrowRight } from "@phosphor-icons/react";
@@ -15,34 +15,28 @@ import { formatInstant } from "../time";
 import { WorkerStatusText } from "./WorkerRail";
 import { parseInbound, type FeedRow, type Inbound } from "./teamData";
 import { executorLabel } from "../executorLabel";
+import { useStickToBottom } from "../useStickToBottom";
 
 export function TeamFeed({
+  taskId,
   rows,
   workers,
   empty,
   onOpenWorker,
 }: {
+  taskId: string;
   rows: FeedRow[];
   workers: Task[];
   empty: boolean;
   onOpenWorker: (id: string) => void;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
-  // 跟单任务/辩论一样:进来默认贴底;用户滚上去读历史时,新内容不再往下拽(同 DebateView)。
-  const atBottomRef = useRef(true);
-  const onScroll = () => {
-    const el = scrollRef.current;
-    if (el) atBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
-  };
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (el && atBottomRef.current) el.scrollTo({ top: el.scrollHeight });
-  }, [rows]);
+  const stickToBottom = useStickToBottom(scrollRef, taskId);
   const byId = new Map(workers.map((w) => [w.id, w]));
   const indexOf = (id?: string) => (id ? workers.findIndex((w) => w.id === id) + 1 : 0);
   return (
     <div className="relative min-h-0 min-w-0 border-r border-line">
-      <div ref={scrollRef} onScroll={onScroll} className="h-full overflow-y-auto break-words px-4 py-4">
+      <div ref={scrollRef} className="h-full overflow-y-auto break-words px-4 py-4">
         {empty && (
           <p className="text-[13px] text-faint">
             点「运行」让调度者开工:它会先读需求、拆活,再用 <span className="font-mono">dispatch</span> 把活派给执行者。
@@ -71,7 +65,13 @@ export function TeamFeed({
           return <ConvBubble key={row.key} item={it} />;
         })}
       </div>
-      <ConversationScrollButtons scrollRef={scrollRef} />
+      <ConversationScrollButtons
+        scrollRef={scrollRef}
+        onManualScroll={(target) => {
+          if (target === "bottom") stickToBottom.resumeStickToBottom();
+          else stickToBottom.noteUserScrollIntent();
+        }}
+      />
     </div>
   );
 }

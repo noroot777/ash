@@ -17,6 +17,7 @@ import { TaskTimeChip } from "./time";
 // 会话渲染与插话框已拆成独立模块(/team 也复用它们)。
 import { Conversation, ConversationScrollButtons, conversationToText, downloadConversation, type LogLine } from "./Conversation";
 import { useConversation } from "./useConversation";
+import { useStickToBottom } from "./useStickToBottom";
 import { ReplyBox } from "./ReplyBox";
 import { ExecutorPicker, type ExecutorSelection, useExecutorProfiles } from "./ExecutorPicker";
 import { executorLabel } from "./executorLabel";
@@ -101,9 +102,7 @@ export function TaskDetail({
   });
   const hasConversation = sessions.length > 0 || snapshot.length > 0 || logs.length > 0;
 
-  useEffect(() => {
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
-  }, [logs.length, snapshot.length]);
+  const stickToBottom = useStickToBottom(scrollRef, task.id);
 
   // 任务在哪条 queue 第几位?——allTasks 过滤了 archived,但归档任务仍占队列位置,
   // 所以直接调 API 拿队列总长度,免得 N/M 里的 M 偏少。
@@ -450,7 +449,13 @@ export function TaskDetail({
                 <p className="font-sans text-faint">点击「运行」开始，输出会实时流式显示在这里。</p>
               )}
             </div>
-            <ConversationScrollButtons scrollRef={scrollRef} />
+            <ConversationScrollButtons
+              scrollRef={scrollRef}
+              onManualScroll={(target) => {
+                if (target === "bottom") stickToBottom.resumeStickToBottom();
+                else stickToBottom.noteUserScrollIntent();
+              }}
+            />
           </div>
 
           <DerivedTaskLinks sourceTaskId={task.id} allTasks={allTasks} onOpen={onOpenTask} />
