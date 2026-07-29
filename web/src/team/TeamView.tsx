@@ -64,7 +64,7 @@ export function TeamView({
   onReply: (id: string, text: string, opts?: { attachments?: string[]; agent?: AgentType }) => void;
   onPatch: (id: string, patch: Partial<Task>) => void | Promise<void>;
   onCreateGroup: () => void;
-  onDelete: (id: string, title: string) => void;
+  onDelete: (id: string) => void;
   onArchive: (id: string) => void;
   onUnarchive: (id: string) => void;
   /** 执行者失败/取消后重新排队(位置由服务端定:被越过就到队尾)。 */
@@ -205,7 +205,7 @@ export function TeamView({
           setGroupPaused((m) => ({ ...m, ...Object.fromEntries(teamGroups.map((g) => [g.id, false])) }));
           setCuaStatus(null);
         }}
-        onDelete={() => onDelete(task.id, task.title)}
+        onDelete={() => onDelete(task.id)}
         onArchive={() => onArchive(task.id)}
         onUnarchive={() => onUnarchive(task.id)}
         onOpenWorker={setOpenId}
@@ -274,7 +274,7 @@ export function TeamView({
           onPatch={(p) => onPatch(open.id, p)}
           onCreateGroup={onCreateGroup}
           onDelete={() => {
-            onDelete(open.id, open.title);
+            onDelete(open.id);
             setOpenId(null);
           }}
           onArchive={() => onArchive(open.id)}

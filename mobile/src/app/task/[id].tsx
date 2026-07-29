@@ -191,63 +191,71 @@ export default function TaskDetail() {
       })
       .catch((e) => Alert.alert("取消归档失败", e instanceof Error ? e.message : String(e)));
 
-  const confirmDelete = () =>
-    Alert.alert("删除任务", `确定删除「${task.title}」？此操作不可撤销。`, [
-      { text: "取消", style: "cancel" },
-      {
-        text: "删除",
-        style: "destructive",
-        onPress: async () => {
-          // Capture projectId before removing the task from store; the worktree
-          // cleanup prompt needs it to address the right project's git.
-          const projectId = task.projectId;
-          const res = await api.deleteTask(id).catch((e) => {
-            Alert.alert("删除失败", e instanceof Error ? e.message : String(e));
-            return null;
-          });
-          removeTask(id);
-          if (res?.worktreeHint) {
-            const { path, branch } = res.worktreeHint;
-            Alert.alert(
-              "任务已删除",
-              `这个任务用过 worktree，目录还在：\n${path}\n分支 ${branch}\n\n清理只移除 worktree 目录，不删分支。`,
-              [
-                { text: "保留", style: "cancel", onPress: () => navigateBack() },
-                {
-                  text: "清理",
-                  style: "destructive",
-                  onPress: async () => {
-                    try {
-                      await api.removeWorktree(projectId, path, false);
-                    } catch (e) {
-                      // typical case: worktree dirty → offer --force
-                      const msg = e instanceof Error ? e.message : String(e);
-                      Alert.alert("清理失败", msg, [
-                        { text: "放弃", style: "cancel", onPress: () => navigateBack() },
-                        {
-                          text: "强制清理",
-                          style: "destructive",
-                          onPress: async () => {
-                            try { await api.removeWorktree(projectId, path, true); } catch (e2) {
-                              Alert.alert("强制清理失败", e2 instanceof Error ? e2.message : String(e2));
-                            }
-                            navigateBack();
-                          },
-                        },
-                      ]);
-                      return;
-                    }
-                    navigateBack();
-                  },
-                },
-              ],
-            );
-          } else {
+  // 删除任务:worktree 目录和 harness/<id8> 分支不会跟着任务行一起没,所以先问
+  // 一次服务端还留着什么 —— 留着就多给一个「连它们一起删」的选项。任务一删,这两
+  // 样在界面上就再没有入口了,这一问是唯一的机会。
+  const confirmDelete = async () => {
+    const leftover = await api.taskWorkspace(id).catch(() => null);
+    const hasLeftover = !!(leftover?.path || leftover?.branch);
+    const detail = hasLeftover
+      ? `\n\n它还留着：${leftover!.path ? `\nworktree ${leftover!.path}` : ""}${leftover!.branch ? `\n分支 ${leftover!.branch}` : ""}`
+      : "";
+    const doDelete = async (discard: boolean) => {
+      const projectId = task.projectId;
+      const res = await api
+        .deleteTask(id, discard ? { worktree: !!leftover?.path, branch: !!leftover?.branch } : undefined)
+        .catch((e) => {
+          Alert.alert("删除失败", e instanceof Error ? e.message : String(e));
+          return null;
+        });
+      removeTask(id);
+      const rest = res?.leftover?.path || res?.leftover?.branch ? res!.leftover! : null;
+      const failed = !!(res?.cleanup?.worktreeError || res?.cleanup?.branchError);
+      if (!failed || !rest) {
+        navigateBack();
+        return;
+      }
+      // git 拒绝了(有未提交改动 / 未合并提交)。原话摆出来,强制删除由用户再点一次。
+      const why = [res?.cleanup?.worktreeError, res?.cleanup?.branchError].filter(Boolean).join("\n\n");
+      Alert.alert("任务已删除，但 worktree/分支没删掉", `${why}\n\n强制删除会把里面的改动直接丢掉。`, [
+        { text: "先留着", style: "cancel", onPress: () => navigateBack() },
+        {
+          text: "强制删除",
+          style: "destructive",
+          onPress: async () => {
+            const forced = await api
+              .discardTaskWorkspace(projectId, {
+                taskId: id,
+                worktree: !!rest.path,
+                branch: !!rest.branch,
+                force: true,
+              })
+              .catch((e) => {
+                Alert.alert("强制删除失败", e instanceof Error ? e.message : String(e));
+                return null;
+              });
+            const stillFailed = forced?.worktreeError || forced?.branchError;
+            if (stillFailed) Alert.alert("强制删除失败", stillFailed);
             navigateBack();
-          }
+          },
         },
-      },
-    ]);
+      ]);
+    };
+    Alert.alert(
+      "删除任务",
+      `确定删除「${task.title}」？此操作不可撤销。${detail}`,
+      hasLeftover
+        ? [
+            { text: "取消", style: "cancel" },
+            { text: "只删任务", onPress: () => void doDelete(false) },
+            { text: "连 worktree 和分支一起删", style: "destructive", onPress: () => void doDelete(true) },
+          ]
+        : [
+            { text: "取消", style: "cancel" },
+            { text: "删除", style: "destructive", onPress: () => void doDelete(false) },
+          ],
+    );
+  };
   const navigateBack = () => {
     if (router.canGoBack()) router.back();
     else router.replace("/");

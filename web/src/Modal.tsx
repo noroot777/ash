@@ -1,9 +1,8 @@
 import { useCallback, useRef, useState, type ReactNode } from "react";
-import { X, TreeStructure, GitBranch } from "@phosphor-icons/react";
+import { X } from "@phosphor-icons/react";
 import { useEscape } from "./useEscape";
 import { useReveal } from "./useReveal";
 import { Kbd, PathHealth, submitShortcutTitle } from "./ui";
-import { api } from "./api";
 
 // Shared modal shell: dimmed overlay, centered card, Esc-close, click-outside,
 // width prop. One consistent style for every dialog in the app. The card rises +
@@ -126,96 +125,6 @@ export function ConfirmModal({
       )}
     >
       <p className="text-[13px] leading-relaxed text-ink">{message}</p>
-    </Modal>
-  );
-}
-
-// Shown after deleting a task that had `useWorktree`: surfaces the leftover
-// worktree path + branch and offers a one-click cleanup. First click runs
-// `git worktree remove`; if that fails (typically because the worktree is dirty
-// or has unmerged commits), we show the raw git stderr and enable a 「强制清理」
-// retry that adds `--force`. harness never touches the branch — that's still a
-// user-driven `git branch -D` if they want it gone.
-export function WorktreeCleanupModal({
-  projectId,
-  path,
-  branch,
-  onClose,
-}: {
-  projectId: string;
-  path: string;
-  branch: string;
-  onClose: () => void;
-}) {
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [done, setDone] = useState(false);
-  // Once a non-forced attempt fails we surface a second button that retries with
-  // --force; if the first attempt succeeded `done` flips and we just show OK.
-  const [forceArmed, setForceArmed] = useState(false);
-  const clean = async (force: boolean) => {
-    setBusy(true);
-    setError(null);
-    try {
-      await api.removeWorktree(projectId, path, force);
-      setDone(true);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-      setForceArmed(true);
-    } finally {
-      setBusy(false);
-    }
-  };
-  return (
-    <Modal
-      title="任务已删除"
-      onClose={onClose}
-      width={480}
-      footer={(close) => (
-        <>
-          <button onClick={close} className="px-3 py-1.5 text-[13px] text-muted">
-            {done ? "关闭" : "保留 worktree"}
-          </button>
-          {!done && (
-            <button
-              autoFocus
-              disabled={busy}
-              onClick={() => clean(forceArmed)}
-              className="rounded-md bg-red-600 px-3.5 py-1.5 text-[13px] font-medium text-white hover:bg-red-700 disabled:opacity-40"
-            >
-              {busy ? "清理中…" : forceArmed ? "强制清理（--force）" : "清理 worktree"}
-            </button>
-          )}
-        </>
-      )}
-    >
-      <div className="space-y-2.5 text-[13px] text-ink">
-        {done ? (
-          <p className="text-emerald-600">worktree 已删除。分支 <code className="rounded bg-raised px-1 py-px text-[12px] text-muted">{branch}</code> 仍在，需要时自行 <code className="rounded bg-raised px-1 py-px text-[12px] text-muted">git branch -D {branch}</code>。</p>
-        ) : (
-          <>
-            <p className="text-muted">这个任务用过 worktree，目录还在磁盘上：</p>
-            <div className="rounded-md border border-line bg-raised px-2.5 py-2 font-mono text-[12px]">
-              <div className="flex items-center gap-1.5 text-ink">
-                <TreeStructure size={12} className="text-faint" />
-                {path}
-              </div>
-              <div className="mt-1 flex items-center gap-1.5 text-muted">
-                <GitBranch size={11} className="text-faint" />
-                {branch}
-              </div>
-            </div>
-            {error && (
-              <pre className="whitespace-pre-wrap rounded-md border border-red-300 bg-red-50 px-2.5 py-1.5 text-[12px] leading-snug text-red-700">
-                {error}
-              </pre>
-            )}
-            <p className="text-[12px] text-faint">
-              清理只移除 worktree 目录，<strong>不删分支</strong>。
-            </p>
-          </>
-        )}
-      </div>
     </Modal>
   );
 }

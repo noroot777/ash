@@ -17,6 +17,7 @@ import type {
   LlmProvider,
   LlmProtocol,
   QuestionItem,
+  TaskWorkspaceDiscardResult,
 } from "@harness/shared";
 import { canSingleRun, canArchive, isUserSettableStatus, AGENT_TYPES, maxBytesFor, attachmentKind, MAX_QUESTION_OPTIONS, MAX_QUESTION_OPTION_LEN, MAX_QUESTION_ITEMS } from "@harness/shared";
 import { inheritExecutorOverrides, pickExecutor, sameExecutor } from "@harness/shared/executors";
@@ -36,7 +37,8 @@ import { runDebate, resumeDebate, resumeAtGate } from "./debate/index.js";
 import { resolveGate } from "./debate/gates.js";
 import { detectLocalAgents } from "./detect.js";
 import { searchAll } from "./search.js";
-import { projectHealthLight, projectHealthFull, tidyRepoPath, repoKey, listBranches, detectTaskWorktree, removeWorktree, taskCommits } from "./git.js";
+import { projectHealthLight, projectHealthFull, tidyRepoPath, repoKey, listBranches, taskCommits } from "./git.js";
+import { detectTaskWorkspace, discardTaskWorkspace } from "./workspace-cleanup.js";
 import { resumeCommandFor } from "./executors/spawn.js";
 import { forceKillCuaService, lastCuaResidualStatus, refreshCuaResidualStatus } from "./cua.js";
 import { createTasks, enrichTasks, publishTaskUpdated } from "./task-store.js";
@@ -398,21 +400,22 @@ api.get("/projects/:id/branches", async (c) => {
   return c.json(await listBranches(p.repoPath));
 });
 
-// One-click worktree cleanup — invoked from the delete-task confirmation when a
-// harness-managed worktree was detected. Wraps `git worktree remove [--force]
-// <path>`; failure (e.g. uncommitted changes) returns the raw git stderr so the
-// UI can offer a "强制清理" retry. harness still does NOT touch branches.
-api.post("/projects/:id/worktrees/remove", async (c) => {
+// 清理某个任务留下的 worktree 目录 / 分支。任务行这时通常已经被删掉了(删除时
+// 没勾选、或勾了但 git 拒绝),所以入口挂在 project 上、只按 taskId 推导路径与
+// 分支名 —— 不查任务表,删掉的任务照样能收拾干净。逐项结果原样回给 UI:git 拒绝
+// (脏 worktree / 未合并分支)是要展示给用户的信息,不是 500。
+api.post("/projects/:id/workspaces/discard", async (c) => {
   const p = (await db.select().from(projects).where(eq(projects.id, c.req.param("id")))).at(0);
   if (!p) return c.json({ error: "not found" }, 404);
-  const b = await c.req.json<{ path: string; force?: boolean }>();
-  if (!b?.path) return c.json({ error: "path required" }, 400);
-  try {
-    await removeWorktree(p.repoPath, b.path, !!b.force);
-    return c.json({ removed: true });
-  } catch (err) {
-    return c.json({ error: err instanceof Error ? err.message : String(err) }, 409);
-  }
+  const b = await c.req.json<{ taskId: string; worktree?: boolean; branch?: boolean; force?: boolean }>();
+  if (!b?.taskId) return c.json({ error: "taskId required" }, 400);
+  return c.json(
+    await discardTaskWorkspace(p.repoPath, b.taskId, {
+      worktree: b.worktree !== false,
+      branch: b.branch !== false,
+      force: !!b.force,
+    }),
+  );
 });
 
 // ── groups ───────────────────────────────────────────────────────────────
@@ -704,19 +707,43 @@ api.patch("/tasks/:id", async (c) => {
   return c.json(updated!);
 });
 
+// 这个任务在磁盘/仓库里还留着什么(worktree 目录、harness/<id8> 分支)。删除
+// 确认框在打开时先问一次:有残留才提示「要不要连它们一起删」,没有就是一句普通
+// 的确认。任务不在 worktree 模式下跑过也照查 —— useWorktree 后来被关掉、目录和
+// 分支却还在,是最容易被漏掉的那种残留。
+api.get("/tasks/:id/workspace", async (c) => {
+  const tid = c.req.param("id");
+  const t = (await db.select().from(tasks).where(eq(tasks.id, tid))).at(0);
+  if (!t) return c.json({ error: "not found" }, 404);
+  const project = (await db.select().from(projects).where(eq(projects.id, t.projectId))).at(0);
+  return c.json(await detectTaskWorkspace(project?.repoPath, tid));
+});
+
+// 删除任务。`worktree=1` / `branch=1` 表示用户在确认框里勾了「连 worktree 和分支
+// 一起删」,`force=1` 是看过第一次失败之后的再来一次(--force / -D)。
+//
+// 顺序刻意是「先删任务行,再清 git」:删任务是用户的主要意图,git 那边失败(worktree
+// 脏、分支未合并)不该把它一起挡回去 —— 结果原样回给 UI,由用户决定强制删还是留着。
 api.delete("/tasks/:id", async (c) => {
   const tid = c.req.param("id");
   const existing = (await db.select().from(tasks).where(eq(tasks.id, tid))).at(0);
-  // Before dropping the row, snapshot any worktree harness created for this
-  // task — the client uses this to surface a "清理 worktree" confirmation (path
-  // + branch) plus a one-click cleanup button. harness never auto-removes.
-  let worktreeHint: { path: string; branch: string } | null = null;
-  if (existing?.useWorktree) {
-    const project = (await db.select().from(projects).where(eq(projects.id, existing.projectId))).at(0);
-    if (project) worktreeHint = detectTaskWorktree(project.repoPath, tid);
-  }
+  const project = existing
+    ? (await db.select().from(projects).where(eq(projects.id, existing.projectId))).at(0)
+    : undefined;
+  const wantWorktree = c.req.query("worktree") === "1";
+  const wantBranch = c.req.query("branch") === "1";
   await db.delete(tasks).where(eq(tasks.id, tid));
-  return c.json({ deleted: true, worktreeHint });
+  let cleanup: TaskWorkspaceDiscardResult | null = null;
+  if (project && (wantWorktree || wantBranch)) {
+    cleanup = await discardTaskWorkspace(project.repoPath, tid, {
+      worktree: wantWorktree,
+      branch: wantBranch,
+      force: c.req.query("force") === "1",
+    });
+  }
+  // 清理之后仍然剩下的东西:没勾选、或勾了但 git 拒绝。UI 据此决定要不要继续追问。
+  const leftover = project ? await detectTaskWorkspace(project.repoPath, tid) : null;
+  return c.json({ deleted: true, leftover, cleanup });
 });
 
 // ── groups (transient batch containers, §3) ─────────────────────────────────

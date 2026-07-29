@@ -97,6 +97,25 @@ export interface ProjectView extends Project {
   health: ProjectHealth;
 }
 
+// ── 任务留在磁盘上的工作区(worktree 目录 + harness/<id8> 分支) ──────────────
+// 删除任务前先问一次服务端「这两样还在不在」,在的话删除对话框才提示要不要连它们
+// 一起删。两个字段各自独立:目录被手删过、分支还留着是常见状态。
+export interface TaskWorkspaceLeftover {
+  path: string | null; // worktree 目录,不存在为 null
+  branch: string | null; // 任务分支 harness/<id8>,本地不存在为 null
+}
+
+// 一次清理的逐项结果。git 拒绝(worktree 有未提交改动 / 分支未合并)不是异常,
+// 是要如实回给用户、由他决定要不要再来一次 --force / -D 的信息。
+export interface TaskWorkspaceDiscardResult {
+  path: string | null; // 本次尝试删除的 worktree 目录(没尝试则 null)
+  branch: string | null; // 本次尝试删除的分支(没尝试则 null)
+  worktreeRemoved: boolean;
+  branchDeleted: boolean;
+  worktreeError: string | null; // git 原样 stderr
+  branchError: string | null;
+}
+
 // Quick notes are project-scoped scraps that keep the user's original text.
 // `taskId` is a backlink set after one or more notes are merged into a task;
 // the note itself remains available for reference.

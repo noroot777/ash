@@ -1,5 +1,13 @@
-import type { AppSettings, Project, ProjectView, ProjectHealth, Task, Note, Session, Group, GateAction, Schedule, ScheduledMessage, AgentExecutorProfile, BatchCreateTasksBody, AgentType, AttachmentKind, LlmProvider, LlmProtocol, SearchHit, TeamPreset, TeamPresetConfig } from "@harness/shared";
+import type { AppSettings, Project, ProjectView, ProjectHealth, Task, Note, Session, Group, GateAction, Schedule, ScheduledMessage, AgentExecutorProfile, BatchCreateTasksBody, AgentType, AttachmentKind, LlmProvider, LlmProtocol, SearchHit, TeamPreset, TeamPresetConfig, TaskWorkspaceLeftover, TaskWorkspaceDiscardResult } from "@harness/shared";
 import type { PersistedDebateEntry } from "./debateState";
+
+// 删除任务的返回:`leftover` 是清理之后**仍然剩下**的 worktree/分支(没勾选、或
+// 勾了但 git 拒绝),`cleanup` 是本次清理的逐项结果(没勾选时为 null)。
+export type DeleteTaskResult = {
+  deleted: true;
+  leftover: TaskWorkspaceLeftover | null;
+  cleanup: TaskWorkspaceDiscardResult | null;
+};
 
 export type CuaProcess = {
   pid: number;
@@ -143,13 +151,17 @@ export const api = {
   // initialized; the picker falls back to a text input.
   projectBranches: (id: string): Promise<{ branches: string[]; current: string | null }> =>
     fetch(`/api/projects/${id}/branches`).then(j),
-  // One-click "清理 worktree" — wraps `git worktree remove [--force] <path>`.
-  // Called from the delete-task confirmation; throws on dirty unless force=true.
-  removeWorktree: (projectId: string, path: string, force = false): Promise<{ removed: true }> =>
-    fetch(`/api/projects/${projectId}/worktrees/remove`, {
+  // 清理某个任务留下的 worktree 目录 / 分支。任务行这时通常已经删掉了(删除时没勾
+  // 选、或勾了但 git 拒绝),所以入口挂在 project 上、按 taskId 推导路径与分支名。
+  // git 拒绝不抛错,逐项结果里带 worktreeError / branchError 给 UI 展示。
+  discardTaskWorkspace: (
+    projectId: string,
+    body: { taskId: string; worktree?: boolean; branch?: boolean; force?: boolean },
+  ): Promise<TaskWorkspaceDiscardResult> =>
+    fetch(`/api/projects/${projectId}/workspaces/discard`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ path, force }),
+      body: JSON.stringify(body),
     }).then(j),
   checkPath: (repoPath: string): Promise<ProjectHealth> =>
     fetch("/api/projects/check", {
@@ -271,8 +283,20 @@ export const api = {
       headers: { "content-type": "application/json" },
       body: JSON.stringify(patch),
     }).then(j),
-  deleteTask: (id: string): Promise<{ deleted: true; worktreeHint?: { path: string; branch: string } | null }> =>
-    fetch(`/api/tasks/${id}`, { method: "DELETE" }).then(j),
+  deleteTask: (
+    id: string,
+    cleanup?: { worktree?: boolean; branch?: boolean; force?: boolean },
+  ): Promise<DeleteTaskResult> => {
+    const q = new URLSearchParams();
+    if (cleanup?.worktree) q.set("worktree", "1");
+    if (cleanup?.branch) q.set("branch", "1");
+    if (cleanup?.force) q.set("force", "1");
+    const qs = q.toString();
+    return fetch(`/api/tasks/${id}${qs ? `?${qs}` : ""}`, { method: "DELETE" }).then(j);
+  },
+  // 删除前先问「这个任务还留着 worktree/分支吗」,有才在确认框里提示一起删。
+  taskWorkspace: (id: string): Promise<TaskWorkspaceLeftover> =>
+    fetch(`/api/tasks/${id}/workspace`).then(j),
   runTask: (id: string): Promise<unknown> =>
     fetch(`/api/tasks/${id}/run`, { method: "POST" }).then(j),
   stopTask: (id: string): Promise<unknown> =>

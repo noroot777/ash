@@ -152,17 +152,8 @@ export function worktreePathFor(repoPath: string, taskId: string): string {
   return join(expandHome(repoPath), ".worktrees", taskId);
 }
 
-// If a worktree we previously created for this task still exists on disk, return
-// its path + branch so callers can surface it (DELETE /tasks/:id hint, "已存在"
-// reuse on re-run). Cheap sync check — no git spawn.
-export function detectTaskWorktree(repoPath: string, taskId: string): { path: string; branch: string } | null {
-  const path = worktreePathFor(repoPath, taskId);
-  if (!isDir(path)) return null;
-  // A linked worktree's .git is a file pointing back to the main repo. We don't
-  // verify the link target — if the dir is gone, `git worktree remove` from the
-  // main repo is what fixes it anyway.
-  return { path, branch: worktreeBranchName(taskId) };
-}
+// 「这个任务留下的 worktree/分支还在不在」搬到了 ./workspace-cleanup.ts
+// (detectTaskWorkspace):删除任务时要连分支一起问,光看目录在不在已经不够。
 
 // List the commits a worktree task produced. The agent's
 // commits live on the task's branch since it forked from `base`, so `base..HEAD`
@@ -365,11 +356,11 @@ export type TaskCleanupResult =
       worktreePath: string;
     };
 
-function gitError(error: unknown): string {
+export function gitError(error: unknown): string {
   return ((error as { stderr?: string }).stderr || (error as Error).message || String(error)).trim();
 }
 
-async function localBranchExists(repo: string, branch: string): Promise<boolean> {
+export async function localBranchExists(repo: string, branch: string): Promise<boolean> {
   try {
     await exec("git", ["-C", repo, "show-ref", "--verify", "--quiet", `refs/heads/${branch}`]);
     return true;

@@ -16,8 +16,18 @@ import type {
   GateName,
   LlmProvider,
   LlmProtocol,
+  TaskWorkspaceLeftover,
+  TaskWorkspaceDiscardResult,
 } from "@harness/shared";
 import { getBaseURL } from "./config";
+
+// 删除任务的返回:`leftover` 是清理之后**仍然剩下**的 worktree/分支(没勾选、或勾
+// 了但 git 拒绝),`cleanup` 是本次清理的逐项结果(没勾选时为 null)。
+export type DeleteTaskResult = {
+  deleted: true;
+  leftover: TaskWorkspaceLeftover | null;
+  cleanup: TaskWorkspaceDiscardResult | null;
+};
 
 export type DetectedAgent = {
   type: AgentType;
@@ -121,14 +131,30 @@ export const api = {
     req("/tasks", { method: "POST", body: JSON.stringify(t) }).then(j),
   patchTask: (id: string, patch: Partial<Task>): Promise<Task> =>
     req(`/tasks/${id}`, { method: "PATCH", body: JSON.stringify(patch) }).then(j),
-  deleteTask: (id: string): Promise<{ deleted: true; worktreeHint?: { path: string; branch: string } | null }> =>
-    req(`/tasks/${id}`, { method: "DELETE" }).then(j),
+  // 删除任务。cleanup 里勾了什么就一起删什么(worktree 目录 / 分支);force 是看过
+  // 第一次失败之后的再来一次(--force / -D)。
+  deleteTask: (
+    id: string,
+    cleanup?: { worktree?: boolean; branch?: boolean; force?: boolean },
+  ): Promise<DeleteTaskResult> => {
+    const q = new URLSearchParams();
+    if (cleanup?.worktree) q.set("worktree", "1");
+    if (cleanup?.branch) q.set("branch", "1");
+    if (cleanup?.force) q.set("force", "1");
+    const qs = q.toString();
+    return req(`/tasks/${id}${qs ? `?${qs}` : ""}`, { method: "DELETE" }).then(j);
+  },
+  // 删除前先问「这个任务还留着 worktree/分支吗」,有才提示要不要一起删。
+  taskWorkspace: (id: string): Promise<TaskWorkspaceLeftover> => req(`/tasks/${id}/workspace`).then(j),
   // Local branches + current HEAD for the new-task form's base picker.
   projectBranches: (id: string): Promise<{ branches: string[]; current: string | null }> =>
     req(`/projects/${id}/branches`).then(j),
-  // One-click cleanup for a harness-managed worktree (post-delete).
-  removeWorktree: (projectId: string, path: string, force = false): Promise<{ removed: true }> =>
-    req(`/projects/${projectId}/worktrees/remove`, { method: "POST", body: JSON.stringify({ path, force }) }).then(j),
+  // 清理某个任务残留的 worktree 目录 / 分支(任务行这时通常已经删了,所以挂在 project 上)。
+  discardTaskWorkspace: (
+    projectId: string,
+    body: { taskId: string; worktree?: boolean; branch?: boolean; force?: boolean },
+  ): Promise<TaskWorkspaceDiscardResult> =>
+    req(`/projects/${projectId}/workspaces/discard`, { method: "POST", body: JSON.stringify(body) }).then(j),
   // 归档/取消归档:server 仅允许归档 done/failed/canceled(canArchive),归档态只读(拒编辑/运行/回复)。
   archiveTask: (id: string): Promise<Task> => req(`/tasks/${id}/archive`, { method: "POST" }).then(j),
   unarchiveTask: (id: string): Promise<Task> => req(`/tasks/${id}/unarchive`, { method: "POST" }).then(j),
