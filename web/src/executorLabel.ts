@@ -35,3 +35,13 @@ export function teamLeadExecutorLabel(task: Pick<Task, "team" | "executorLabel" 
 export function teamWorkerExecutorLabel(task: Pick<Task, "team">): string {
   return text(task.team?.workerExecutorLabel) ?? text(task.team?.worker) ?? "—";
 }
+
+export function teamReviewerExecutorLabel(task: Pick<Task, "team">): string {
+  return (
+    text(task.team?.reviewerExecutorLabel) ??
+    text(task.team?.reviewerAgentType) ??
+    text(task.team?.workerExecutorLabel) ??
+    text(task.team?.worker) ??
+    "—"
+  );
+}

@@ -26,7 +26,7 @@ import { isDispatchedWorker, isSharedTeamWorker } from "./taskPolicy";
 import { AttachmentDisplay, parseAttachmentText } from "./messageAttachments";
 import { toast } from "./toast";
 import { TaskWorktreeChip } from "./TaskWorktreeChip";
-import { StageProgress } from "./StageProgress";
+import { ReviewTaskContextBar, TaskReviewPanel } from "./TaskReviewPanel";
 import { TaskDerivationComposer } from "./TaskDerivationComposer";
 import { DerivedTaskLinks } from "./DerivedTaskLinks";
 import {
@@ -166,6 +166,7 @@ export function TaskDetail({
 
   return (
     <main className="flex h-full min-h-0 flex-col">
+      <ReviewTaskContextBar task={task} allTasks={allTasks} onOpenTask={onOpenTask} />
       <header className="border-b border-line px-6 pb-3 pt-5">
         <div className="flex flex-wrap items-start gap-x-3 gap-y-2">
           {dispatchedWorker ? (
@@ -309,7 +310,14 @@ export function TaskDetail({
           <AttachmentDisplay paths={objective.paths} className="mt-2" />
         )}
 
-        <StageProgress task={task} sharedWorker={sharedTeamWorker} />
+        {!task.reviewOf && (
+          <TaskReviewPanel
+            task={task}
+            allTasks={allTasks}
+            onOpenTask={onOpenTask}
+            onReviewTaskCreated={(created) => onTaskCreated(created, false, false)}
+          />
+        )}
         {acceptFailure && <AcceptanceFailureReport failure={acceptFailure} />}
 
         {/* agent 提问:调 ask_question 后停在这等答案(队列陪等,不会自动续跑)。

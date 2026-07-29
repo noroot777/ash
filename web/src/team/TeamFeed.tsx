@@ -15,7 +15,6 @@ import { formatInstant } from "../time";
 import { WorkerStatusText } from "./WorkerRail";
 import { parseInbound, type FeedRow, type Inbound } from "./teamData";
 import { executorLabel } from "../executorLabel";
-import { sharedWorkerDisplayStage } from "../taskPolicy";
 
 export function TeamFeed({
   rows,
@@ -133,7 +132,7 @@ function BatchWorkerRow({
       onClick={onOpen}
       className="flex w-full items-center gap-2 border-t border-line px-2.5 py-2 text-left transition-colors hover:bg-canvas"
     >
-      <StatusIcon status={w.status} stage={w.useWorktree ? w.stage : sharedWorkerDisplayStage(w.stage)} awaitingAnswer={!!w.question} />
+      <StatusIcon status={w.status} stage={w.stage} awaitingAnswer={!!w.question} />
       <span className="w-3.5 shrink-0 font-mono text-[10.5px] text-faint">{n}</span>
       <span className="min-w-0 flex-1 truncate text-[12.5px] text-ink">{w.title}</span>
       <span
@@ -143,7 +142,7 @@ function BatchWorkerRow({
         {label}
       </span>
       <span className="shrink-0 text-[11px] text-faint">
-        <WorkerStatusText w={w} groupPaused={groupPaused} sharedWorker={!w.useWorktree} />
+        <WorkerStatusText w={w} groupPaused={groupPaused} />
       </span>
     </button>
   );

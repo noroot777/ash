@@ -7,7 +7,6 @@ import { useState } from "react";
 import type { Group, Task } from "@harness/shared";
 import { isTeamSettled, timeMs } from "@harness/shared/team";
 import { CaretDown } from "@phosphor-icons/react";
-import { TeamStageSummary } from "../StageProgress";
 import { statusColor } from "../StatusIcon";
 import { formatDuration, formatInstant, useTick } from "../time";
 import { teamLeadExecutorLabel } from "../executorLabel";
@@ -107,7 +106,6 @@ export function TeamTimeline({
           <CaretDown size={11} weight="bold" className={`transition-transform ${open ? "" : "-rotate-90"}`} />
           时间轴（谁跟谁在并行）
         </button>
-        <TeamStageSummary workers={workers} />
       </div>
       {open && (
         <div className="mt-1.5 grid items-center gap-x-2.5 gap-y-1" style={{ gridTemplateColumns: "132px 1fr" }}>

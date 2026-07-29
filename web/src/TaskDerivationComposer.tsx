@@ -52,6 +52,10 @@ export function TaskDerivationComposer({
   const [leadEffort, setLeadEffort] = useState("");
   const [workerModel, setWorkerModel] = useState("");
   const [workerEffort, setWorkerEffort] = useState("");
+  const [reviewEnabled, setReviewEnabled] = useState(true);
+  const [reviewerPick, setReviewerPick] = useState<ExecutorSelection | null>(null);
+  const [reviewerModel, setReviewerModel] = useState("");
+  const [reviewerEffort, setReviewerEffort] = useState("");
   const [detected, setDetected] = useState<DetectedAgent[] | null>(null);
   const [worktreeContext, setWorktreeContext] = useState<WorktreeContext | null>(null);
   // 用户一旦亲手改过附言/辩题，就停止从回复框同步，免得把手改的内容冲掉。
@@ -101,6 +105,9 @@ export function TaskDerivationComposer({
     () => teamExecutorDefaults(detected, leadPick, workerPick),
     [detected, leadPick, workerPick],
   );
+  const reviewerSelection = reviewerPick && workerTypes.includes(reviewerPick.agentType)
+    ? reviewerPick
+    : { agentType: workerSelection.agentType, executorId: null };
   const worktree = derivedWorktreeDefaults(
     task,
     worktreeContext?.branches ?? [],
@@ -127,6 +134,11 @@ export function TaskDerivationComposer({
           leadReasoningEffort: leadEffort || null,
           workerModel: workerModel || null,
           workerReasoningEffort: workerEffort || null,
+          review: reviewEnabled,
+          reviewerAgentType: reviewerSelection.agentType,
+          reviewerExecutorId: reviewerSelection.executorId,
+          reviewerModel: reviewerModel || null,
+          reviewerReasoningEffort: reviewerEffort || null,
         };
         created = await api.createTask({
           projectId: task.projectId,
@@ -226,6 +238,17 @@ export function TaskDerivationComposer({
                   onModel: setWorkerModel,
                   onReasoningEffort: setWorkerEffort,
                 }}
+                reviewer={{
+                  selection: reviewerSelection,
+                  types: workerTypes,
+                  model: reviewerModel,
+                  reasoningEffort: reviewerEffort,
+                  onSelect: setReviewerPick,
+                  onModel: setReviewerModel,
+                  onReasoningEffort: setReviewerEffort,
+                }}
+                reviewEnabled={reviewEnabled}
+                onReviewEnabled={setReviewEnabled}
                 profiles={profiles}
                 providers={providers}
               />

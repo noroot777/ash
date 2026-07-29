@@ -20,7 +20,7 @@ import { ConfirmModal } from "./Modal";
 import { StatusIcon } from "./StatusIcon";
 import { toast } from "./toast";
 import { parseAttachmentText } from "./messageAttachments";
-import { isSharedTeamWorker, sharedWorkerDisplayStage, sharedWorkerStageLabel } from "./taskPolicy";
+import { isSharedTeamWorker } from "./taskPolicy";
 
 type UserMessage = { text: string; at?: string };
 type Evidence = {
@@ -273,7 +273,7 @@ export function TeamReviewWorkspace({
 }
 
 function SharedWorkerSummary({ workers }: { workers: Task[] }) {
-  const failed = workers.filter((worker) => sharedWorkerDisplayStage(worker.stage) === "verify_failed").length;
+  const failed = workers.filter((worker) => worker.stage === "verify_failed").length;
 
   return (
     <section
@@ -293,8 +293,8 @@ function SharedWorkerSummary({ workers }: { workers: Task[] }) {
       </div>
       <div className="grid gap-2 p-3 sm:grid-cols-2 xl:grid-cols-3">
         {workers.map((worker) => {
-          const displayStage = sharedWorkerDisplayStage(worker.stage);
-          const stageLabel = sharedWorkerStageLabel(worker.stage) ?? worker.status;
+          const displayStage = worker.stage;
+          const stageLabel = displayStage ? STAGE_LABELS[displayStage] : worker.status;
           const verifyFailed = displayStage === "verify_failed";
           return (
             <div
@@ -358,7 +358,6 @@ export function TaskDiffWorkspace({
             defaultOpen
             hideMessages
             showAcceptance={!sharedWorker}
-            sharedWorker={sharedWorker}
           />
         </div>
       </div>
@@ -373,7 +372,6 @@ function ReviewSection({
   defaultOpen = false,
   hideMessages = false,
   showAcceptance = true,
-  sharedWorker = false,
 }: {
   task: Task;
   role: string;
@@ -381,17 +379,14 @@ function ReviewSection({
   defaultOpen?: boolean;
   hideMessages?: boolean;
   showAcceptance?: boolean;
-  sharedWorker?: boolean;
 }) {
   const [open, setOpen] = useState(defaultOpen);
   const [evidence, setEvidence] = useState<Evidence | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [failure, setFailure] = useState<AcceptTaskFailure | null>(null);
   const objective = parseAttachmentText(task.body).body.trim();
-  const displayStage = sharedWorker ? sharedWorkerDisplayStage(task.stage) : task.stage;
-  const stageLabel = sharedWorker
-    ? sharedWorkerStageLabel(task.stage)
-    : displayStage ? STAGE_LABELS[displayStage] : task.status;
+  const displayStage = task.stage;
+  const stageLabel = displayStage ? STAGE_LABELS[displayStage] : task.status;
 
   useEffect(() => {
     let alive = true;

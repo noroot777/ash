@@ -1,4 +1,4 @@
-import type { AppSettings, Project, ProjectView, ProjectHealth, Task, Note, Session, Group, GateAction, Schedule, ScheduledMessage, AgentExecutorProfile, BatchCreateTasksBody, AgentType, AttachmentKind, LlmProvider, LlmProtocol, SearchHit, TeamPreset, TeamPresetConfig } from "@harness/shared";
+import type { AppSettings, Project, ProjectView, ProjectHealth, Task, Note, Session, Group, GateAction, Schedule, ScheduledMessage, AgentExecutorProfile, BatchCreateTasksBody, AgentType, AttachmentKind, LlmProvider, LlmProtocol, SearchHit, TeamPreset, TeamPresetConfig, TaskReviewInfo, ReviewDispatchInput } from "@harness/shared";
 import type { PersistedDebateEntry } from "./debateState";
 
 export type CuaProcess = {
@@ -232,6 +232,16 @@ export const api = {
 
   tasks: (): Promise<Task[]> => fetch("/api/tasks").then(j),
   task: (id: string): Promise<Task> => fetch(`/api/tasks/${id}`).then(j),
+  taskReview: (id: string): Promise<TaskReviewInfo> =>
+    fetch(`/api/tasks/${id}/review`).then(j),
+  dispatchTaskReview: (id: string, input: ReviewDispatchInput): Promise<{ reviewTask: Task }> =>
+    fetch(`/api/tasks/${id}/review/dispatch`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(input),
+    }).then(j),
+  taskReviewFileUrl: (id: string, round: number, name: string): string =>
+    `/api/tasks/${id}/review/file?round=${encodeURIComponent(round)}&name=${encodeURIComponent(name)}`,
   notes: (projectId?: string): Promise<Note[]> =>
     fetch(`/api/notes${projectId ? `?projectId=${encodeURIComponent(projectId)}` : ""}`).then(j),
   createNote: (note: { projectId: string; body: string; attachments?: string[] }): Promise<Note> =>

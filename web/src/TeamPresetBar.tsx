@@ -2,8 +2,10 @@ import { useEffect, useState } from "react";
 import type { AgentExecutorProfile, TeamPreset, TeamPresetConfig } from "@harness/shared";
 import {
   ArrowRight,
+  ArrowsClockwise,
   Crown,
   FloppyDisk,
+  MagnifyingGlass,
   PencilSimple,
   Robot,
   Trash,
@@ -11,6 +13,7 @@ import {
 import { api } from "./api";
 import { ConfirmModal, fieldCls, Modal, primaryCls } from "./Modal";
 import { toast } from "./toast";
+import { Tip } from "./Tip";
 
 type NameDialog =
   | { kind: "create"; config: TeamPresetConfig }
@@ -18,12 +21,16 @@ type NameDialog =
 
 function presetActorLabel(
   preset: TeamPreset,
-  role: "lead" | "worker",
+  role: "lead" | "worker" | "reviewer",
 ): string {
-  const type = preset.config[role];
+  const type = role === "reviewer"
+    ? preset.config.reviewerAgentType ?? preset.config.worker
+    : preset.config[role];
   const label = role === "lead"
     ? preset.config.leadExecutorLabel
-    : preset.config.workerExecutorLabel;
+    : role === "worker"
+      ? preset.config.workerExecutorLabel
+      : preset.config.reviewerExecutorLabel;
   return label ?? `默认 ${type}`;
 }
 
@@ -100,6 +107,7 @@ export function TeamPresetBar({
   const [loadError, setLoadError] = useState(false);
   const [dialog, setDialog] = useState<NameDialog | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<TeamPreset | null>(null);
+  const [updatingId, setUpdatingId] = useState<string | null>(null);
 
   const load = () => {
     setLoading(true);
@@ -148,11 +156,25 @@ export function TeamPresetBar({
     }
   };
 
+  const updatePresetConfig = async (preset: TeamPreset) => {
+    setUpdatingId(preset.id);
+    try {
+      const updated = await api.patchTeamPreset(preset.id, { config: currentConfig });
+      setPresets((items) => items.map((item) => item.id === updated.id ? updated : item));
+      toast(`已用当前组合更新「${preset.name}」`, "info");
+    } catch (error) {
+      toast(error instanceof Error ? error.message : String(error));
+    } finally {
+      setUpdatingId(null);
+    }
+  };
+
   const normalizeForApply = (config: TeamPresetConfig): TeamPresetConfig => {
     const executorId = (candidate: string | null | undefined, type: string) => {
       const profile = candidate ? profiles.find((item) => item.id === candidate) : null;
       return profile?.type === type ? candidate : null;
     };
+    const reviewerType = config.reviewerAgentType ?? config.worker;
     return {
       lead: config.lead,
       worker: config.worker,
@@ -162,6 +184,11 @@ export function TeamPresetBar({
       leadReasoningEffort: config.leadReasoningEffort ?? null,
       workerModel: config.workerModel ?? null,
       workerReasoningEffort: config.workerReasoningEffort ?? null,
+      review: config.review !== false,
+      reviewerAgentType: reviewerType,
+      reviewerExecutorId: executorId(config.reviewerExecutorId, reviewerType),
+      reviewerModel: config.reviewerModel ?? null,
+      reviewerReasoningEffort: config.reviewerReasoningEffort ?? null,
     };
   };
 
@@ -187,37 +214,59 @@ export function TeamPresetBar({
                   key={preset.id}
                   className="group flex max-w-full items-stretch overflow-hidden rounded-lg border border-line bg-panel shadow-sm transition-colors hover:border-line2 hover:bg-canvas"
                 >
-                  <button
-                    onClick={() => onApply(normalizeForApply(preset.config))}
-                    className="min-w-0 px-2.5 py-1.5 text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-                    title={`套用「${preset.name}」`}
-                  >
-                    <span className="block truncate text-[12px] font-medium text-ink">{preset.name}</span>
-                    <span className="mt-0.5 flex min-w-0 items-center gap-1 text-[10px] text-faint">
-                      <Crown size={10} className="shrink-0" />
-                      <span className="max-w-[90px] truncate">{presetActorLabel(preset, "lead")}</span>
-                      <ArrowRight size={9} className="shrink-0" />
-                      <Robot size={10} className="shrink-0" />
-                      <span className="max-w-[90px] truncate">{presetActorLabel(preset, "worker")}</span>
-                    </span>
-                  </button>
+                  <Tip label={`套用「${preset.name}」`} className="flex min-w-0">
+                    <button
+                      onClick={() => onApply(normalizeForApply(preset.config))}
+                      className="min-w-0 px-2.5 py-1.5 text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+                    >
+                      <span className="block truncate text-[12px] font-medium text-ink">{preset.name}</span>
+                      <span className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-1 gap-y-0.5 text-[10px] text-faint">
+                        <span className="inline-flex min-w-0 items-center gap-1">
+                          <Crown size={10} className="shrink-0" />
+                          <span className="max-w-[90px] truncate">{presetActorLabel(preset, "lead")}</span>
+                          <ArrowRight size={9} className="shrink-0" />
+                          <Robot size={10} className="shrink-0" />
+                          <span className="max-w-[90px] truncate">{presetActorLabel(preset, "worker")}</span>
+                        </span>
+                        <span className="text-line2">·</span>
+                        <span className={`inline-flex min-w-0 items-center gap-1 ${preset.config.review === false ? "text-faint" : "text-violet-600"}`}>
+                          <MagnifyingGlass size={10} className="shrink-0" />
+                          {preset.config.review === false
+                            ? "审查关闭"
+                            : <span className="max-w-[90px] truncate">{presetActorLabel(preset, "reviewer")}</span>}
+                        </span>
+                      </span>
+                    </button>
+                  </Tip>
                   <div className="flex border-l border-line">
-                    <button
-                      onClick={() => openDialog({ kind: "rename", preset })}
-                      className="grid w-7 place-items-center text-faint hover:bg-raised hover:text-ink"
-                      title={`重命名「${preset.name}」`}
-                      aria-label={`重命名「${preset.name}」`}
-                    >
-                      <PencilSimple size={12} />
-                    </button>
-                    <button
-                      onClick={() => openDelete(preset)}
-                      className="grid w-7 place-items-center text-faint hover:bg-red-50 hover:text-red-600"
-                      title={`删除「${preset.name}」`}
-                      aria-label={`删除「${preset.name}」`}
-                    >
-                      <Trash size={12} />
-                    </button>
+                    <Tip label="用当前组合更新此预设" className="flex">
+                      <button
+                        onClick={() => void updatePresetConfig(preset)}
+                        disabled={updatingId === preset.id}
+                        className="grid w-7 place-items-center text-faint hover:bg-raised hover:text-ink disabled:opacity-40"
+                        aria-label={`用当前组合更新「${preset.name}」`}
+                      >
+                        <ArrowsClockwise size={12} className={updatingId === preset.id ? "animate-spin" : ""} />
+                      </button>
+                    </Tip>
+                    <Tip label={`重命名「${preset.name}」`} className="flex">
+                      <button
+                        onClick={() => openDialog({ kind: "rename", preset })}
+                        className="grid w-7 place-items-center text-faint hover:bg-raised hover:text-ink"
+                        aria-label={`重命名「${preset.name}」`}
+                      >
+                        <PencilSimple size={12} />
+                      </button>
+                    </Tip>
+                    <Tip label={`删除「${preset.name}」`} className="flex">
+                      <button
+                        onClick={() => openDelete(preset)}
+                        className="grid w-7 place-items-center text-faint hover:bg-red-50 hover:text-red-600"
+                        aria-label={`删除「${preset.name}」`}
+                      >
+                        <Trash size={12} />
+                      </button>
+                    </Tip>
                   </div>
                 </div>
               ))}

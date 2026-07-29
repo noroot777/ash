@@ -9,17 +9,14 @@ import { StatusIcon } from "../StatusIcon";
 import { Duration } from "../time";
 import type { LogLine } from "../Conversation";
 import { executorLabel } from "../executorLabel";
-import { isSharedTeamWorker, sharedWorkerDisplayStage, sharedWorkerStageLabel } from "../taskPolicy";
 
 export function WorkerRail({
-  lead,
   workers,
   groups,
   logs,
   selected,
   onSelect,
 }: {
-  lead: Task;
   workers: Task[];
   groups: Group[];
   logs: Record<string, LogLine[]>;
@@ -65,7 +62,6 @@ export function WorkerRail({
           live={lastLine(logs[w.id])}
           selected={selected === w.id}
           onSelect={() => onSelect(w.id)}
-          sharedWorker={isSharedTeamWorker(w, lead)}
         />
       ))}
       {workers.length > 0 && (
@@ -84,7 +80,6 @@ function WorkerCard({
   live,
   selected,
   onSelect,
-  sharedWorker,
 }: {
   w: Task;
   n: number;
@@ -92,11 +87,9 @@ function WorkerCard({
   live: string | null;
   selected: boolean;
   onSelect: () => void;
-  sharedWorker: boolean;
 }) {
   const asking = !!w.question;
   const label = executorLabel({ task: w });
-  const displayStage = sharedWorker ? sharedWorkerDisplayStage(w.stage) : w.stage;
   return (
     <button
       onClick={onSelect}
@@ -110,7 +103,7 @@ function WorkerCard({
       }`}
     >
       <div className="flex items-center gap-1.5">
-        <StatusIcon status={w.status} stage={displayStage} awaitingAnswer={asking} />
+        <StatusIcon status={w.status} stage={w.stage} awaitingAnswer={asking} />
         <span className="min-w-0 flex-1 truncate text-[12.5px] font-medium text-ink">{w.title}</span>
         <span
           className="max-w-[92px] shrink truncate rounded border border-line px-1 font-mono text-[10px] text-muted"
@@ -121,7 +114,7 @@ function WorkerCard({
         <span className="w-3 shrink-0 text-center font-mono text-[10px] text-faint">{n <= 9 ? n : ""}</span>
       </div>
       <div className="mt-1 flex items-center gap-1.5 text-[11px] text-faint">
-        <WorkerStatusText w={w} groupPaused={groupPaused} sharedWorker={sharedWorker} />
+        <WorkerStatusText w={w} groupPaused={groupPaused} />
       </div>
       {live && <div className="mt-1 truncate text-[11px] text-muted">{live}</div>}
     </button>
@@ -132,11 +125,9 @@ function WorkerCard({
 export function WorkerStatusText({
   w,
   groupPaused = false,
-  sharedWorker = false,
 }: {
   w: Task;
   groupPaused?: boolean;
-  sharedWorker?: boolean;
 }) {
   if (w.question)
     return (
@@ -144,13 +135,11 @@ export function WorkerStatusText({
         等答复 <Duration from={w.endedAt ?? w.startedAt} />
       </span>
     );
-  const displayStage = sharedWorker ? sharedWorkerDisplayStage(w.stage) : w.stage;
-  const display = taskDisplayStatus(w.status, displayStage, false);
-  const displayLabel = sharedWorker ? sharedWorkerStageLabel(w.stage) ?? display.label : display.label;
-  if (displayStage && w.status !== "failed" && w.status !== "canceled") {
+  const display = taskDisplayStatus(w.status, w.stage, false);
+  if (w.stage && w.status !== "failed" && w.status !== "canceled") {
     return (
-      <span className={displayStage === "verify_failed" ? "text-red-600" : undefined}>
-        {displayLabel}
+      <span className={w.stage === "verify_failed" ? "text-red-600" : undefined}>
+        {display.label}
         {w.status === "running" && <> · <Duration from={w.startedAt} /></>}
         {groupPaused && " · 所属组已停止"}
       </span>

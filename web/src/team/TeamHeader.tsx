@@ -30,7 +30,7 @@ import { Duration, TaskTimeChip } from "../time";
 import { shortPath } from "../util";
 import { TeamTimeline } from "./TeamTimeline";
 import type { LeadTurn } from "./teamData";
-import { teamLeadExecutorLabel, teamWorkerExecutorLabel } from "../executorLabel";
+import { teamLeadExecutorLabel, teamReviewerExecutorLabel, teamWorkerExecutorLabel } from "../executorLabel";
 import { AttachmentDisplay, parseAttachmentText } from "../messageAttachments";
 
 export function TeamHeader({
@@ -88,6 +88,8 @@ export function TeamHeader({
   const last = sessions[sessions.length - 1];
   const leadLabel = teamLeadExecutorLabel(task);
   const workerLabel = teamWorkerExecutorLabel(task);
+  const reviewerLabel = teamReviewerExecutorLabel(task);
+  const reviewEnabled = task.team?.review !== false;
   const objective = parseAttachmentText(task.body);
   const awaitingAcceptance = workers.filter(
     (worker) => worker.useWorktree && worker.stage === "awaiting_acceptance",
@@ -262,6 +264,10 @@ export function TeamHeader({
           执行者 <b className="text-muted">{workers.length}</b>
           {workers.length > 0 && `（${agentMix(workers)}）`}
           {workers.length === 0 && `（默认派 ${workerLabel}）`}
+        </span>
+        <span className={reviewEnabled ? "text-violet-700" : undefined}>
+          审查 <b className={reviewEnabled ? "text-violet-700" : "text-muted"}>{reviewEnabled ? reviewerLabel : "已关闭"}</b>
+          {reviewEnabled && ` · ${task.team?.reviewerModel || "模型跟随"} · ${task.team?.reviewerReasoningEffort || "强度跟随"}`}
         </span>
         {last?.branch && (
           <span>

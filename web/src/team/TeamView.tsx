@@ -31,7 +31,6 @@ import { WorkerRail, WorkerStatusText } from "./WorkerRail";
 import { activeTeamHaltMarker, leadTurns as turnsOf, teamFeedOptions } from "./teamData";
 import { submitShortcutLabel } from "../ui";
 import { TeamReviewWorkspace } from "../ReviewWorkspace";
-import { sharedWorkerDisplayStage } from "../taskPolicy";
 
 export function TeamView({
   task,
@@ -234,7 +233,7 @@ export function TeamView({
 
           <div className="grid min-h-0 flex-1 grid-cols-[1fr_268px]">
             <TeamFeed rows={rows} workers={workers} empty={items.length === 0} onOpenWorker={setOpenId} />
-            <WorkerRail lead={task} workers={workers} groups={teamGroups} logs={logs} selected={openId} onSelect={setOpenId} />
+            <WorkerRail workers={workers} groups={teamGroups} logs={logs} selected={openId} onSelect={setOpenId} />
           </div>
 
           {/* 插话:发出去就进同一个常驻会话(调度者正在说话时会被 interrupt 接住),所以
@@ -391,12 +390,12 @@ function WorkerDrawer({
         <div className="flex shrink-0 items-center gap-2 border-b border-line bg-raised px-3 py-1.5 text-[12px]">
           <StatusIcon
             status={worker.status}
-            stage={worker.useWorktree ? worker.stage : sharedWorkerDisplayStage(worker.stage)}
+            stage={worker.stage}
             awaitingAnswer={!!worker.question}
           />
           <span className="min-w-0 flex-1 truncate font-medium text-ink">{worker.title}</span>
           <span className="shrink-0 text-faint">
-            <WorkerStatusText w={worker} groupPaused={groupPaused} sharedWorker={!worker.useWorktree} />
+            <WorkerStatusText w={worker} groupPaused={groupPaused} />
           </span>
           <button
             onClick={onOpenFull}

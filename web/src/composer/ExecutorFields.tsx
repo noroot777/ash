@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import type { AgentExecutorProfile, AgentType, LlmProvider } from "@harness/shared";
 import { sameExecutor } from "@harness/shared/executors";
-import { Crown, Robot } from "@phosphor-icons/react";
+import { Crown, MagnifyingGlass, Robot } from "@phosphor-icons/react";
 import { ExecutorPicker, type ExecutorSelection } from "../ExecutorPicker";
 import { TaskModelControls } from "../TaskModelControls";
 
@@ -89,12 +89,18 @@ const roleClass = "flex flex-wrap items-center gap-1.5 rounded-xl bg-raised/50 p
 export function TeamExecutorFields({
   lead,
   worker,
+  reviewer,
+  reviewEnabled = true,
+  onReviewEnabled,
   profiles,
   providers,
   onOpenAgents,
 }: {
   lead: RoleExecutorState;
   worker: RoleExecutorState;
+  reviewer?: RoleExecutorState;
+  reviewEnabled?: boolean;
+  onReviewEnabled?: (enabled: boolean) => void;
   profiles: AgentExecutorProfile[];
   providers: LlmProvider[];
   onOpenAgents?: () => void;
@@ -121,6 +127,33 @@ export function TeamExecutorFields({
         onOpenAgents={onOpenAgents}
         className={roleClass}
       />
+      {reviewer && (
+        <div className={`${roleClass} gap-2`}>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={reviewEnabled}
+            onClick={() => onReviewEnabled?.(!reviewEnabled)}
+            className={`relative h-5 w-9 shrink-0 rounded-full transition-colors ${reviewEnabled ? "bg-violet-600" : "bg-line2"}`}
+          >
+            <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white shadow-sm transition-transform ${reviewEnabled ? "translate-x-[18px]" : "translate-x-0.5"}`} />
+          </button>
+          <span className={`shrink-0 text-[11.5px] font-medium ${reviewEnabled ? "text-violet-700" : "text-muted"}`}>
+            自动审查
+          </span>
+          {reviewEnabled && (
+            <ExecutorField
+              {...reviewer}
+              icon={<MagnifyingGlass size={14} />}
+              label={`审查者 ${name(reviewer.selection)}`}
+              profiles={profiles}
+              providers={providers}
+              onOpenAgents={onOpenAgents}
+              className="flex flex-wrap items-center gap-1.5"
+            />
+          )}
+        </div>
+      )}
     </>
   );
 }

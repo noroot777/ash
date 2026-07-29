@@ -85,6 +85,10 @@ export function TaskComposer({
   const [leadReasoningEffort, setLeadReasoningEffort] = useState("");
   const [workerModel, setWorkerModel] = useState("");
   const [workerReasoningEffort, setWorkerReasoningEffort] = useState("");
+  const [reviewEnabled, setReviewEnabled] = useState(true);
+  const [reviewerPick, setReviewerPick] = useState<ExecutorSelection | null>(null);
+  const [reviewerModel, setReviewerModel] = useState("");
+  const [reviewerReasoningEffort, setReviewerReasoningEffort] = useState("");
   const [detected, setDetected] = useState<{ type: AgentType; available: boolean; resident: boolean }[] | null>(null);
   const { profiles, providers } = useExecutorProfiles();
 
@@ -159,6 +163,9 @@ export function TaskComposer({
   );
   const lead = leadSelection.agentType;
   const worker = workerSelection.agentType;
+  const reviewerSelection = reviewerPick && workerTypes.includes(reviewerPick.agentType)
+    ? reviewerPick
+    : { agentType: workerSelection.agentType, executorId: null };
   const currentTeamPresetConfig: TeamPresetConfig = {
     lead,
     worker,
@@ -168,6 +175,11 @@ export function TaskComposer({
     leadReasoningEffort: leadReasoningEffort || null,
     workerModel: workerModel || null,
     workerReasoningEffort: workerReasoningEffort || null,
+    review: reviewEnabled,
+    reviewerAgentType: reviewerSelection.agentType,
+    reviewerExecutorId: reviewerSelection.executorId,
+    reviewerModel: reviewerModel || null,
+    reviewerReasoningEffort: reviewerReasoningEffort || null,
   };
   const applyTeamPreset = (config: TeamPresetConfig) => {
     const leadType = detected === null || leadTypes.includes(config.lead)
@@ -178,6 +190,11 @@ export function TaskComposer({
       : workerSelection.agentType;
     const leadCompatible = leadType === config.lead;
     const workerCompatible = workerType === config.worker;
+    const requestedReviewerType = config.reviewerAgentType ?? config.worker;
+    const reviewerType = detected === null || workerTypes.includes(requestedReviewerType)
+      ? requestedReviewerType
+      : workerSelection.agentType;
+    const reviewerCompatible = reviewerType === requestedReviewerType;
     setLeadPick({
       agentType: leadType,
       executorId: leadCompatible ? config.leadExecutorId ?? null : null,
@@ -190,6 +207,13 @@ export function TaskComposer({
     setLeadReasoningEffort(leadCompatible ? config.leadReasoningEffort ?? "" : "");
     setWorkerModel(workerCompatible ? config.workerModel ?? "" : "");
     setWorkerReasoningEffort(workerCompatible ? config.workerReasoningEffort ?? "" : "");
+    setReviewEnabled(config.review !== false);
+    setReviewerPick({
+      agentType: reviewerType,
+      executorId: reviewerCompatible ? config.reviewerExecutorId ?? null : null,
+    });
+    setReviewerModel(reviewerCompatible ? config.reviewerModel ?? "" : "");
+    setReviewerReasoningEffort(reviewerCompatible ? config.reviewerReasoningEffort ?? "" : "");
   };
 
   // Agent detection can finish after a preset was clicked. If that reveals the
@@ -207,7 +231,12 @@ export function TaskComposer({
       setWorkerModel("");
       setWorkerReasoningEffort("");
     }
-  }, [detected, leadPick, workerPick, leadTypes, workerTypes, leadSelection, workerSelection]);
+    if (reviewerPick && !workerTypes.includes(reviewerPick.agentType)) {
+      setReviewerPick({ agentType: workerSelection.agentType, executorId: null });
+      setReviewerModel("");
+      setReviewerReasoningEffort("");
+    }
+  }, [detected, leadPick, workerPick, reviewerPick, leadTypes, workerTypes, leadSelection, workerSelection]);
 
   const submit = async () => {
     const obj = body.trim();
@@ -230,6 +259,11 @@ export function TaskComposer({
         leadReasoningEffort: leadReasoningEffort || null,
         workerModel: workerModel || null,
         workerReasoningEffort: workerReasoningEffort || null,
+        review: reviewEnabled,
+        reviewerAgentType: reviewerSelection.agentType,
+        reviewerExecutorId: reviewerSelection.executorId,
+        reviewerModel: reviewerModel || null,
+        reviewerReasoningEffort: reviewerReasoningEffort || null,
       };
       const t = debateOn
         ? await api.createTask({
@@ -484,6 +518,17 @@ export function TaskComposer({
                     onModel: setWorkerModel,
                     onReasoningEffort: setWorkerReasoningEffort,
                   }}
+                  reviewer={{
+                    selection: reviewerSelection,
+                    types: workerTypes,
+                    model: reviewerModel,
+                    reasoningEffort: reviewerReasoningEffort,
+                    onSelect: setReviewerPick,
+                    onModel: setReviewerModel,
+                    onReasoningEffort: setReviewerReasoningEffort,
+                  }}
+                  reviewEnabled={reviewEnabled}
+                  onReviewEnabled={setReviewEnabled}
                   profiles={profiles}
                   providers={providers}
                   onOpenAgents={onOpenAgents}

@@ -60,7 +60,7 @@ export function useAppEvents({
           setSessionsBump((value) => value + 1);
         }
       } else if (event.type === "task.stage") {
-        // stage 与 status 正交：独立更新，列表色点和详情进度条会在同一帧一起变化。
+        // stage 与 status 正交：独立更新，列表色点和审查结论会在同一帧一起变化。
         setTasks((tasks) => tasks.map((task) => task.id === event.taskId ? { ...task, stage: event.stage } : task));
         setRunningTasks((tasks) => tasks.map((task) => task.id === event.taskId ? { ...task, stage: event.stage } : task));
       } else if (event.type === "task.title") {
