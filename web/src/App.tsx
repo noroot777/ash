@@ -8,7 +8,8 @@ import { TaskComposer } from "./TaskComposer";
 import { useComposer } from "./useComposer";
 import { emptyDebate, type DebateState } from "./debateState";
 import { AgentsPanel } from "./AgentsPanel";
-import { NewProjectModal, NewGroupModal, ConfirmModal, WorktreeCleanupModal } from "./Modal";
+import { NewProjectModal, NewGroupModal } from "./Modal";
+import { DeleteTaskModal } from "./DeleteTaskModal";
 import { toast, Toaster } from "./toast";
 import { GroupsPanel } from "./GroupsPanel";
 import { ProjectSettings } from "./ProjectSettings";
@@ -60,11 +61,7 @@ export function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [newGroupOpen, setNewGroupOpen] = useState(false);
   const [groupsOpen, setGroupsOpen] = useState(false);
-  const [confirmDel, setConfirmDel] = useState<{ id: string; title: string } | null>(null);
-  // After deleting a task that used a worktree, prompt to clean it up (or keep).
-  const [worktreePrompt, setWorktreePrompt] = useState<
-    { projectId: string; path: string; branch: string } | null
-  >(null);
+  const [confirmDel, setConfirmDel] = useState<Task | null>(null);
   const [view, setView] = useState<TaskView>("list");
   // Sidebar width is user-draggable; persist so it survives reloads. Clamp on read
   // in case of a stale/garbage value.
@@ -270,21 +267,16 @@ export function App() {
     } else void openTask(h.id);
   }, [openTask]);
 
-  const del = useCallback((id: string, title: string) => {
-    if (rejectDispatchedWorkerMutation(tasksRef.current.find((t) => t.id === id))) return;
-    setConfirmDel({ id, title });
-  }, []);
-  const doDelete = useCallback(async (id: string) => {
-    // The task row carries projectId — capture it BEFORE setTasks removes the row,
-    // so the cleanup prompt knows which project's git to act against.
+  const del = useCallback((id: string) => {
     const victim = tasksRef.current.find((t) => t.id === id);
-    if (rejectDispatchedWorkerMutation(victim)) return;
-    const res = await api.deleteTask(id);
+    if (!victim || rejectDispatchedWorkerMutation(victim)) return;
+    setConfirmDel(victim);
+  }, []);
+  // 真正的删除在 DeleteTaskModal 里发(它还要决定 worktree/分支跟不跟着走),这里
+  // 只负责把行从列表里摘掉、并让选中不再指着一个已经没有的任务。
+  const onTaskDeleted = useCallback((id: string) => {
     setTasks((ts) => ts.filter((t) => t.id !== id));
     setSelected((cur) => (cur === id ? null : cur));
-    if (res.worktreeHint && victim) {
-      setWorktreePrompt({ projectId: victim.projectId, ...res.worktreeHint });
-    }
   }, []);
 
   const onTaskCreated = useCallback((t: Task, doRun = false, select = true) => {
@@ -404,7 +396,7 @@ export function App() {
   }, []);
   // composer 不在其中：它是内嵌面板不是弹层，j/k/c 这些全局键在它开着时照样管用
   // （光标落在正文里时由下面的 INPUT/TEXTAREA 判断挡住）。
-  const anyModal = !!notesMode || agentsOpen || newProjectOpen || settingsOpen || newGroupOpen || groupsOpen || !!confirmDel || !!worktreePrompt;
+  const anyModal = !!notesMode || agentsOpen || newProjectOpen || settingsOpen || newGroupOpen || groupsOpen || !!confirmDel;
 
   // ── keyboard navigation ────────────────────────────────────────────────
   useEffect(() => {
@@ -457,7 +449,7 @@ export function App() {
       if (!dispatchedWorker) {
         if (current.archived) cmds.push({ id: "unarchive", group: g, label: "取消归档", run: () => unarchive(current.id) });
         else if (canArchive(current.status)) cmds.push({ id: "archive", group: g, label: "归档任务", run: () => archive(current.id) });
-        cmds.push({ id: "del", group: g, label: "删除任务", run: () => del(current.id, current.title) });
+        cmds.push({ id: "del", group: g, label: "删除任务", run: () => del(current.id) });
       }
     }
     // Global: create / manage.
@@ -581,21 +573,10 @@ export function App() {
         />
       )}
       {confirmDel && (
-        <ConfirmModal
-          title="删除任务"
-          message={`确定删除任务「${confirmDel.title}」？此操作不可撤销。`}
-          confirmLabel="删除"
-          danger
-          onConfirm={() => doDelete(confirmDel.id)}
+        <DeleteTaskModal
+          task={confirmDel}
+          onDeleted={onTaskDeleted}
           onClose={() => setConfirmDel(null)}
-        />
-      )}
-      {worktreePrompt && (
-        <WorktreeCleanupModal
-          projectId={worktreePrompt.projectId}
-          path={worktreePrompt.path}
-          branch={worktreePrompt.branch}
-          onClose={() => setWorktreePrompt(null)}
         />
       )}
       {notesMode === "new" && project && <NewNoteModal project={project} onClose={() => setNotesMode(null)} />}

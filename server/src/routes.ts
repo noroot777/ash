@@ -23,7 +23,8 @@ import { listModels } from "./llm.js";
 import { mountQueueRoutes } from "./queues.js";
 import { detectLocalAgents } from "./detect.js";
 import { searchAll } from "./search.js";
-import { projectHealthLight, projectHealthFull, tidyRepoPath, repoKey, listBranches, removeWorktree } from "./git.js";
+import { projectHealthLight, projectHealthFull, tidyRepoPath, repoKey, listBranches } from "./git.js";
+import { discardTaskWorkspace } from "./workspace-cleanup.js";
 import { mountDebateIterationRoutes } from "./debate/iteration.js";
 import { mountNoteRoutes } from "./notes.js";
 import { mountTeamPresetRoutes } from "./team-presets.js";
@@ -354,21 +355,22 @@ api.get("/projects/:id/branches", async (c) => {
   return c.json(await listBranches(p.repoPath));
 });
 
-// One-click worktree cleanup — invoked from the delete-task confirmation when a
-// harness-managed worktree was detected. Wraps `git worktree remove [--force]
-// <path>`; failure (e.g. uncommitted changes) returns the raw git stderr so the
-// UI can offer a "强制清理" retry. harness still does NOT touch branches.
-api.post("/projects/:id/worktrees/remove", async (c) => {
+// 清理某个任务留下的 worktree 目录 / 分支。任务行这时通常已经被删掉了(删除时
+// 没勾选、或勾了但 git 拒绝),所以入口挂在 project 上、只按 taskId 推导路径与
+// 分支名 —— 不查任务表,删掉的任务照样能收拾干净。逐项结果原样回给 UI:git 拒绝
+// (脏 worktree / 未合并分支)是要展示给用户的信息,不是 500。
+api.post("/projects/:id/workspaces/discard", async (c) => {
   const p = (await db.select().from(projects).where(eq(projects.id, c.req.param("id")))).at(0);
   if (!p) return c.json({ error: "not found" }, 404);
-  const b = await c.req.json<{ path: string; force?: boolean }>();
-  if (!b?.path) return c.json({ error: "path required" }, 400);
-  try {
-    await removeWorktree(p.repoPath, b.path, !!b.force);
-    return c.json({ removed: true });
-  } catch (err) {
-    return c.json({ error: err instanceof Error ? err.message : String(err) }, 409);
-  }
+  const b = await c.req.json<{ taskId: string; worktree?: boolean; branch?: boolean; force?: boolean }>();
+  if (!b?.taskId) return c.json({ error: "taskId required" }, 400);
+  return c.json(
+    await discardTaskWorkspace(p.repoPath, b.taskId, {
+      worktree: b.worktree !== false,
+      branch: b.branch !== false,
+      force: !!b.force,
+    }),
+  );
 });
 
 // ── groups ───────────────────────────────────────────────────────────────

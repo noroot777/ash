@@ -71,7 +71,7 @@ export function TasksWorkspace({
   onReply: (id: string, text: string, opts?: { attachments?: string[]; agent?: AgentType }) => void;
   onPatch: (id: string, p: Partial<Task>) => void;
   onCreateGroup: () => void;
-  onDelete: (id: string, title: string) => void;
+  onDelete: (id: string) => void;
   onArchive: (id: string) => void;
   onUnarchive: (id: string) => void;
   onRequeue: (id: string) => void;
@@ -145,7 +145,7 @@ export function TasksWorkspace({
                   onStop={() => onStop(current.id)}
                   onRetry={() => onRetry(current.id)}
                   onGate={(a) => onGate(current.id, a)}
-                  onDelete={() => onDelete(current.id, current.title)}
+                  onDelete={() => onDelete(current.id)}
                   onArchive={() => onArchive(current.id)}
                   onUnarchive={() => onUnarchive(current.id)}
                   onOpenTask={onOpenTask}
@@ -188,7 +188,7 @@ export function TasksWorkspace({
                   onReply={(text, opts) => onReply(current.id, text, opts)}
                   onPatch={(p) => onPatch(current.id, p)}
                   onCreateGroup={onCreateGroup}
-                  onDelete={() => onDelete(current.id, current.title)}
+                  onDelete={() => onDelete(current.id)}
                   onArchive={() => onArchive(current.id)}
                   onUnarchive={() => onUnarchive(current.id)}
                   onRequeue={() => onRequeue(current.id)}
