@@ -136,7 +136,7 @@ export function TeamExecutorFields({
             onClick={() => onReviewEnabled?.(!reviewEnabled)}
             className={`relative h-5 w-9 shrink-0 rounded-full transition-colors ${reviewEnabled ? "bg-violet-600" : "bg-line2"}`}
           >
-            <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white shadow-sm transition-transform ${reviewEnabled ? "translate-x-[18px]" : "translate-x-0.5"}`} />
+            <span className={`absolute left-0 top-0.5 h-4 w-4 rounded-full bg-white shadow-sm transition-transform ${reviewEnabled ? "translate-x-[18px]" : "translate-x-0.5"}`} />
           </button>
           <span className={`shrink-0 text-[11.5px] font-medium ${reviewEnabled ? "text-violet-700" : "text-muted"}`}>
             自动审查
