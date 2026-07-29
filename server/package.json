@@ -13,6 +13,7 @@
     "test:queue": "tsx scripts/test-queue-order.ts",
     "test:task-workspace": "tsx scripts/test-task-workspace.ts",
     "test:accept-merge": "tsx scripts/test-accept-merge.ts",
+    "test:repo-lock": "tsx scripts/test-repo-lock.ts",
     "test:worktree-recovery": "tsx scripts/test-worktree-recovery.ts",
     "test:executor-resolution": "tsx scripts/test-executor-resolution.ts",
     "test:executor-overrides": "tsx scripts/test-executor-overrides.ts"

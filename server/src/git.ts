@@ -5,6 +5,7 @@ import { homedir, tmpdir } from "node:os";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import type { ProjectHealth } from "@harness/shared";
 import { DATA_DIR } from "./paths.js";
+import { withRepoLock } from "./repo-lock.js";
 
 const exec = promisify(execFile);
 
@@ -233,7 +234,17 @@ async function ensureWorktreesIgnored(repo: string): Promise<void> {
   }
 }
 
+// 仓库级串行(见 repo-lock.ts):prune/add 改的是全仓共用的 worktree 注册表,
+// 两个任务同时起跑就会互相看见对方半成品的注册状态。
 export async function prepareWorktree(
+  repoPath: string,
+  taskId: string,
+  base: string | null | undefined,
+): Promise<Workspace> {
+  return withRepoLock(repoPath, () => prepareWorktreeLocked(repoPath, taskId, base));
+}
+
+async function prepareWorktreeLocked(
   repoPath: string,
   taskId: string,
   base: string | null | undefined,
@@ -278,16 +289,18 @@ export async function prepareWorktree(
 // in the delete-task confirmation. Returns nothing on success; throws with the
 // raw git stderr so the UI can surface "dirty, use --force" etc.
 export async function removeWorktree(repoPath: string, path: string, force: boolean): Promise<void> {
-  const repo = expandHome(repoPath);
-  const args = ["-C", repo, "worktree", "remove"];
-  if (force) args.push("--force");
-  args.push(path);
-  try {
-    await exec("git", args);
-  } catch (err) {
-    const stderr = (err as { stderr?: string }).stderr?.trim() || (err as Error).message;
-    throw new Error(stderr);
-  }
+  return withRepoLock(repoPath, async () => {
+    const repo = expandHome(repoPath);
+    const args = ["-C", repo, "worktree", "remove"];
+    if (force) args.push("--force");
+    args.push(path);
+    try {
+      await exec("git", args);
+    } catch (err) {
+      const stderr = (err as { stderr?: string }).stderr?.trim() || (err as Error).message;
+      throw new Error(stderr);
+    }
+  });
 }
 
 // ── Deterministic acceptance merge / cleanup ───────────────────────────────
@@ -508,6 +521,14 @@ export async function mergeTaskBranch(
   taskId: string,
   requestedTarget: string | null | undefined,
 ): Promise<TaskMergeResult> {
+  return withRepoLock(repoPath, () => mergeTaskBranchLocked(repoPath, taskId, requestedTarget));
+}
+
+async function mergeTaskBranchLocked(
+  repoPath: string,
+  taskId: string,
+  requestedTarget: string | null | undefined,
+): Promise<TaskMergeResult> {
   const repo = expandHome(repoPath);
   const sourceBranch = worktreeBranchName(taskId);
   if (!(await isGitRepo(repo))) {
@@ -597,6 +618,14 @@ export async function mergeTaskBranch(
 }
 
 export async function cleanupAcceptedTask(
+  repoPath: string,
+  taskId: string,
+  targetBranch: string,
+): Promise<TaskCleanupResult> {
+  return withRepoLock(repoPath, () => cleanupAcceptedTaskLocked(repoPath, taskId, targetBranch));
+}
+
+async function cleanupAcceptedTaskLocked(
   repoPath: string,
   taskId: string,
   targetBranch: string,

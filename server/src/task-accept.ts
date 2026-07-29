@@ -6,6 +6,7 @@ import { handOffConflict, type ConflictHandoff } from "./accept-conflict.js";
 import { cleanupAcceptedTask, mergeTaskBranch, resolveTaskMergeTarget } from "./git.js";
 import { taskBranchDiff } from "./git-diff.js";
 import { publishTaskUpdated } from "./task-store.js";
+import { withRepoLock } from "./repo-lock.js";
 import { setTaskStage } from "./task-stage.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 
@@ -373,6 +374,19 @@ async function acceptTaskUnlocked(taskId: string): Promise<AcceptTaskResult> {
   };
 }
 
+// 验收要动的是仓库级共享状态(目标分支的 ref、项目工作区、worktree 注册表),
+// 所以整段验收都在仓库锁里跑:并行点下的多个验收**排队依次合并**,而不是一起
+// 冲进同一个 `.git`(见 repo-lock.ts 的三类事故)。整段而非只锁 merge 的原因是
+// 守卫判断不能过期 —— acceptTaskUnlocked 拿到锁后才重新读任务与项目,所以排在
+// 后面的验收看到的是前一个合并完成后的世界(目标分支已前进、stage 已更新)。
+async function acceptanceRepoPath(taskId: string): Promise<string | null> {
+  const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
+  // 没有独立 worktree 的任务只改 stage,不碰 git,不必占用仓库锁。
+  if (!task?.useWorktree) return null;
+  const project = (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0);
+  return project?.repoPath ?? null;
+}
+
 export async function acceptTask(taskId: string): Promise<AcceptTaskResult> {
   if (acceptingTaskIds.has(taskId)) {
     return {
@@ -385,7 +399,17 @@ export async function acceptTask(taskId: string): Promise<AcceptTaskResult> {
   }
   acceptingTaskIds.add(taskId);
   try {
-    return await acceptTaskUnlocked(taskId);
+    const repoPath = await acceptanceRepoPath(taskId);
+    return await withRepoLock(repoPath, async (wait) => {
+      if (wait.queued) {
+        // 排队是刷新后仍看得见的事实,不只是"点了没反应"。
+        await appendTaskTimeline(
+          taskId,
+          `验收排队：同一仓库有其它验收/worktree 操作正在执行，已等待 ${(wait.waitedMs / 1000).toFixed(1)}s 后开始本次验收。`,
+        );
+      }
+      return acceptTaskUnlocked(taskId);
+    });
   } finally {
     acceptingTaskIds.delete(taskId);
   }
