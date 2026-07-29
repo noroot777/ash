@@ -18,7 +18,6 @@ import { executorLabel } from "./executorLabel";
 import { isDispatchedWorker } from "./taskPolicy";
 import { OriginTaskChip } from "./taskOrigin";
 import { TaskWorktreeChip } from "./TaskWorktreeChip";
-import { TaskPinMenu } from "./TaskPinMenu";
 import { useUnreadTeamTasks } from "./useUnreadTasks";
 
 // 一个 section 内部的分组。两个 section 的分法**刻意不同**:普通任务按 status 分,
@@ -120,7 +119,6 @@ export function TaskList({
   selected,
   onSelect,
   onOpenTask,
-  onPatch,
 }: {
   tasks: Task[];
   allTasks: Task[];
@@ -128,7 +126,6 @@ export function TaskList({
   selected: string | null;
   onSelect: (id: string) => void;
   onOpenTask: (id: string) => void;
-  onPatch: (id: string, patch: Partial<Task>) => void | Promise<void>;
 }) {
   const groupName = (id: string | null) => groups.find((g) => g.id === id)?.name;
   const topTasks = topLevel(tasks);
@@ -194,10 +191,9 @@ export function TaskList({
                           onToggle={() => toggleTeam(t.id)}
                           onSelect={onSelect}
                           onOpenTask={onOpenTask}
-                          onPatch={(patch) => onPatch(t.id, patch)}
                         />
                       ) : (
-                        <TaskRow key={t.id} t={t} allTasks={allTasks} selected={selected} onSelect={onSelect} onOpenTask={onOpenTask} onPatch={(patch) => onPatch(t.id, patch)} groupName={groupName} />
+                        <TaskRow key={t.id} t={t} allTasks={allTasks} selected={selected} onSelect={onSelect} onOpenTask={onOpenTask} groupName={groupName} />
                       ),
                     )}
                 </div>
@@ -217,7 +213,6 @@ function TaskRow({
   selected,
   onSelect,
   onOpenTask,
-  onPatch,
   groupName,
 }: {
   t: Task;
@@ -225,7 +220,6 @@ function TaskRow({
   selected: string | null;
   onSelect: (id: string) => void;
   onOpenTask: (id: string) => void;
-  onPatch: (patch: Partial<Task>) => void | Promise<void>;
   groupName: (id: string | null) => string | undefined;
 }) {
   const badge = pairBadge(t);
@@ -278,7 +272,6 @@ function TaskRow({
             </span>
           </Tip>
         </div>
-        <TaskPinMenu task={t} onPatch={onPatch} stopPropagation />
       </div>
       <PauseHint task={t} allTasks={allTasks} onOpen={onSelect} />
     </div>
@@ -301,7 +294,6 @@ function TeamRow({
   onToggle,
   onSelect,
   onOpenTask,
-  onPatch,
 }: {
   lead: Task;
   workers: Task[];
@@ -312,7 +304,6 @@ function TeamRow({
   onToggle: () => void;
   onSelect: (id: string) => void;
   onOpenTask: (id: string) => void;
-  onPatch: (patch: Partial<Task>) => void | Promise<void>;
 }) {
   const fold = foldTeamStatus(lead, workers);
   const unreadTitle = `有新动态 · ${taskDisplayStatus(fold.status, undefined, fold.awaitingAnswer).label}`;
@@ -362,7 +353,6 @@ function TeamRow({
             <CaretRight size={10} weight="bold" className={`transition-transform ${expanded ? "rotate-90" : ""}`} />
           </button>
         </div>
-        <TaskPinMenu task={lead} onPatch={onPatch} stopPropagation />
       </div>
       {expanded &&
         workers.map((w) => (

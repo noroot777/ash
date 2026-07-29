@@ -33,6 +33,7 @@ export function ReplyBox({
   inlinePanel,
   command,
   placeholder = `回复并继续（${submitShortcutLabel()} 发送，可粘贴图片或文件，@ 召唤其它智能体）…`,
+  richPlaceholder,
   disabledPlaceholder = "进行中…",
   initialHeight = 72,
 }: {
@@ -56,6 +57,8 @@ export function ReplyBox({
     items?: { command: string; label: string; hint?: string }[];
   };
   placeholder?: string;
+  /** 可选的富文本占位层；仅在输入值严格为空时显示，原生 placeholder 同时停用。 */
+  richPlaceholder?: ReactNode;
   disabledPlaceholder?: string;
   initialHeight?: number;
 }) {
@@ -283,12 +286,20 @@ export function ReplyBox({
             }
           }}
           disabled={inputDisabled}
-          placeholder={disabled ? disabledPlaceholder : placeholder}
+          placeholder={richPlaceholder ? "" : disabled ? disabledPlaceholder : placeholder}
           initialHeight={initialHeight}
           minHeight={60}
           maxHeight={360}
           className="rounded-lg border border-line bg-panel py-2 pl-2.5 pr-[140px] text-[13px] leading-relaxed text-ink outline-none placeholder:text-faint focus:border-accent disabled:opacity-50"
         />
+        {richPlaceholder && v.length === 0 && (
+          <div
+            aria-hidden
+            className="pointer-events-none absolute inset-x-0 top-0 px-2.5 py-2 pr-[140px] text-[13px] leading-relaxed text-faint"
+          >
+            {richPlaceholder}
+          </div>
+        )}
         <div className="absolute bottom-2 right-2 flex h-8 items-stretch overflow-hidden rounded-md border border-line bg-canvas/95 shadow-sm">
           <button
             onClick={() => { if (!at) setAt(toLocalInput(new Date(Date.now() + 3600_000))); setSchedOpen((o) => !o); }}

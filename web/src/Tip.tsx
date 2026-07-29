@@ -33,6 +33,7 @@ export function Tip({
         if (r) setPos({ x: r.left + r.width / 2, y: r.bottom });
       }}
       onMouseLeave={() => setPos(null)}
+      onPointerDown={() => setPos(null)}
     >
       {labelled}
       {pos &&

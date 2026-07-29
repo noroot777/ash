@@ -40,3 +40,29 @@ export function TaskPinMenu({
   );
   return stopPropagation ? <span onClick={(event) => event.stopPropagation()}>{menu}</span> : menu;
 }
+
+export function TaskPinButton({
+  task,
+  onPatch,
+}: {
+  task: Task;
+  onPatch: (patch: Partial<Task>) => void | Promise<void>;
+}) {
+  if (task.archived) return null;
+  const pinned = task.pinnedAt != null;
+  const label = pinned ? "取消置顶" : "置顶";
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        void Promise.resolve(onPatch({ pinnedAt: pinned ? null : Date.now() })).catch((error) => {
+          toast(error instanceof Error ? error.message : String(error));
+        });
+      }}
+      className="inline-flex h-[30px] items-center gap-1.5 rounded-md px-2.5 text-[13px] font-medium text-muted transition-colors hover:bg-raised hover:text-ink"
+    >
+      <PushPin size={14} weight={pinned ? "fill" : "regular"} className={pinned ? "text-accent" : undefined} />
+      {label}
+    </button>
+  );
+}

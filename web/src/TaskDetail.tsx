@@ -41,7 +41,7 @@ import {
   AcceptanceFailureReport,
   TaskDiffWorkspace,
 } from "./ReviewWorkspace";
-import { TaskPinMenu } from "./TaskPinMenu";
+import { TaskPinButton } from "./TaskPinMenu";
 export type { LogLine } from "./Conversation";
 
 export function TaskDetail({
@@ -288,7 +288,7 @@ export function TaskDetail({
                 </button>
               </>
             )}
-            {!dispatchedWorker && <TaskPinMenu task={task} onPatch={onPatch} />}
+            {!dispatchedWorker && <TaskPinButton task={task} onPatch={onPatch} />}
             {!dispatchedWorker && (
               <button
                 onClick={onDelete}
@@ -470,6 +470,15 @@ export function TaskDetail({
                   : task.status === "running" || task.status === "queued"
                     ? "当前任务进行中；可输入 /team 或 /debate 创建派生任务…"
                     : "可输入 /team 以本任务为背景开启**多模型协作**\nOR\n可输入 /debate 以本任务为背景开启**辩论**"
+              }
+              richPlaceholder={
+                !task.archived && task.status !== "running" && task.status !== "queued" ? (
+                  <span className="flex flex-col">
+                    <span>可输入 /team 以本任务为背景开启<strong className="font-semibold text-muted">多模型协作</strong></span>
+                    <span>OR</span>
+                    <span>可输入 /debate 以本任务为背景开启<strong className="font-semibold text-muted">辩论</strong></span>
+                  </span>
+                ) : undefined
               }
               initialHeight={84}
               toolbar={hasConversation ? runConfigControls : undefined}

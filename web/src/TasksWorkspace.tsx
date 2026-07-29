@@ -125,7 +125,7 @@ export function TasksWorkspace({
 
       <div className="flex min-h-0 flex-1">
         <aside style={{ width: sidebarW }} className="relative flex shrink-0 flex-col border-r border-line">
-          <TaskList tasks={visible} allTasks={allTasks} groups={groups} selected={selected} onSelect={onSelect} onOpenTask={onOpenTask} onPatch={onPatch} />
+          <TaskList tasks={visible} allTasks={allTasks} groups={groups} selected={selected} onSelect={onSelect} onOpenTask={onOpenTask} />
           <ResizeHandle width={sidebarW} onChange={setSidebarW} />
         </aside>
         <div className="flex min-w-0 flex-1 flex-col">
