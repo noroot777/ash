@@ -362,4 +362,4 @@ for each task t with group_id IS NULL:
 
 1. **fractional indexing vs 整数 position**：UI 频繁插入时，整数 position 要 reindex；fractional 不用，但调试不直观。实施时择一。
 2. **Queue 跨 session 持久性**：本设计假定 queue 数据全在 db 里。重启服务、queue 状态完全恢复，无需快照。
-3. **未来需求兜底**：如果哪天真的需要 DAG（多父多子），本设计需要扩展。当前明确不支持——产品定位上"想要 DAG 自己写代码"，参见 [CLAUDE.md](CLAUDE.md) 工作约定第 1 条（重构而非补丁）。
+3. **未来需求兜底**：如果哪天真的需要 DAG（多父多子），本设计需要扩展。当前明确不支持——产品定位上"想要 DAG 自己写代码"，参见 [AGENTS.md](AGENTS.md)「重构授权」（重构而非补丁）。

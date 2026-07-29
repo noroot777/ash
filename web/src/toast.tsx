@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 
 // 轻量全局 toast —— 替代浏览器原生 alert(报错/提示):非阻塞、几秒后自动消失、可点掉。
 // 模块级订阅 store,无需 Context Provider 包裹;<Toaster/> 挂在 App 根渲染一次即可,
-// 任意位置 import { toast } 直接调用。约定见 CLAUDE.md:前端禁用原生弹窗。
+// 任意位置 import { toast } 直接调用。约定见 web/CLAUDE.md:前端禁用原生弹窗。
 type Kind = "error" | "info";
 type Item = { id: number; message: string; kind: Kind };
 

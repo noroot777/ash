@@ -18,7 +18,7 @@ export type ExecutorRef = {
 // 两个选择是不是「同一个执行器」。粒度：解析后的 executorId 相同；两边都没有具体
 // profile 时才退回比 agentType（都为空 = 都跟随该类型的当前默认执行器，算同一个）。
 // 注意粒度不能放宽成「只比 agentType」：claude@官方 换成 claude@公司自建 是同类型
-// 不同供应商，模型 id 那套是各认各的（见 CLAUDE.md 的供应商推论三）。
+// 不同供应商，模型 id 那套是各认各的（见 server/CLAUDE.md 的供应商推论三）。
 export function sameExecutor(a: ExecutorRef, b: ExecutorRef): boolean {
   const ea = a.executorId ?? null;
   const eb = b.executorId ?? null;

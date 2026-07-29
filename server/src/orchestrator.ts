@@ -617,7 +617,7 @@ export async function continueTask(
     }
     if (workspaceReset) {
       // 让用户也看见:agent 这一轮是在一个空目录上重新开始的。只发 toast 不算数,
-      // 刷新后仍要能看出来(见 CLAUDE.md 关于持久可见状态的约定)。
+      // 刷新后仍要能看出来(见 AGENTS.md 关于持久可见状态的约定)。
       writeTurn(out, { t: "system", agent, text: WORKSPACE_RESET_MARKER });
       bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: "single", agentType: agent, event: { kind: "system", text: WORKSPACE_RESET_MARKER } });
     }
