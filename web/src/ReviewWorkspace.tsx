@@ -381,7 +381,7 @@ function SharedWorkerSummary({ workers }: { workers: Task[] }) {
       {selectedWorker && (
         <div className="border-t border-line bg-canvas/45 p-3">
           <p className="mb-2 truncate text-[11.5px] font-medium text-muted">{selectedWorker.title}</p>
-          <TaskReviewEvidence taskId={selectedWorker.id} />
+          <TaskReviewEvidence taskId={selectedWorker.id} defaultExpanded />
         </div>
       )}
     </section>
@@ -483,7 +483,7 @@ function ReviewSection({
       {open && (
         <div className="border-t border-line bg-canvas/45 px-4 py-4">
           <div className="space-y-4">
-            <TaskReviewEvidence taskId={task.id} />
+            <TaskReviewEvidence taskId={task.id} defaultExpanded />
             {loadError ? (
               <p className="rounded-md border border-red-500/30 bg-red-500/[0.05] px-3 py-2 text-[12px] text-red-700">提交、diff 和会话加载失败：{loadError}</p>
             ) : !evidence ? (

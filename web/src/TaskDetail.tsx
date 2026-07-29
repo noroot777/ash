@@ -316,6 +316,7 @@ export function TaskDetail({
             allTasks={allTasks}
             onOpenTask={onOpenTask}
             onReviewTaskCreated={(created) => onTaskCreated(created, false, false)}
+            defaultExpanded={false}
           />
         )}
         {acceptFailure && <AcceptanceFailureReport failure={acceptFailure} />}

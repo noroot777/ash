@@ -9,6 +9,7 @@ import {
 } from "@harness/shared";
 import {
   ArrowSquareOut,
+  CaretDown,
   CheckCircle,
   ImageSquare,
   MagnifyingGlass,
@@ -115,11 +116,13 @@ export function TaskReviewPanel({
   allTasks,
   onOpenTask,
   onReviewTaskCreated,
+  defaultExpanded = false,
 }: {
   task: Task;
   allTasks: Task[];
   onOpenTask: (taskId: string) => void;
   onReviewTaskCreated: (task: Task) => void;
+  defaultExpanded?: boolean;
 }) {
   const parent = task.parentId ? allTasks.find((candidate) => candidate.id === task.parentId) ?? null : null;
   const defaults = useMemo(
@@ -255,6 +258,7 @@ export function TaskReviewPanel({
         onRetry={load}
         onOpenTask={onOpenTask}
         onPreview={setPreview}
+        defaultExpanded={defaultExpanded}
       />
       {preview && (
         <ImageLightbox
@@ -268,7 +272,13 @@ export function TaskReviewPanel({
   );
 }
 
-export function TaskReviewEvidence({ taskId }: { taskId: string }) {
+export function TaskReviewEvidence({
+  taskId,
+  defaultExpanded = true,
+}: {
+  taskId: string;
+  defaultExpanded?: boolean;
+}) {
   const { info, loading, loadError, load } = useTaskReviewInfo(taskId);
   const [preview, setPreview] = useState<Preview | null>(null);
   const rounds = info?.rounds ?? [];
@@ -294,6 +304,7 @@ export function TaskReviewEvidence({ taskId }: { taskId: string }) {
         emptyMessage="尚无独立审查记录。"
         onRetry={load}
         onPreview={setPreview}
+        defaultExpanded={defaultExpanded}
       />
       {preview && (
         <ImageLightbox
@@ -316,6 +327,7 @@ function ReviewRecords({
   onRetry,
   onOpenTask,
   onPreview,
+  defaultExpanded,
 }: {
   taskId: string;
   rounds: TaskReviewRound[];
@@ -325,6 +337,7 @@ function ReviewRecords({
   onRetry: () => void | Promise<void>;
   onOpenTask?: (taskId: string) => void;
   onPreview: (preview: Preview) => void;
+  defaultExpanded: boolean;
 }) {
   return (
     <div className="max-h-[min(46vh,520px)] space-y-3 overflow-y-auto p-3">
@@ -350,6 +363,7 @@ function ReviewRecords({
           round={round}
           onOpenTask={onOpenTask}
           onPreview={onPreview}
+          defaultExpanded={defaultExpanded}
         />
       ))}
     </div>
@@ -361,29 +375,43 @@ function ReviewRoundCard({
   round,
   onOpenTask,
   onPreview,
+  defaultExpanded,
 }: {
   taskId: string;
   round: TaskReviewRound;
   onOpenTask?: (taskId: string) => void;
   onPreview: (preview: Preview) => void;
+  defaultExpanded: boolean;
 }) {
+  const [expanded, setExpanded] = useState(defaultExpanded);
   const verdict = verdictMeta(round.conclusion);
   return (
     <article className={`overflow-hidden rounded-lg border bg-panel ${verdict.border}`}>
-      <div className="flex flex-wrap items-center gap-2 border-b border-line px-3 py-2.5">
-        <span className={`grid h-6 w-6 place-items-center rounded-full text-[10.5px] font-bold ${verdict.badge}`}>
-          {round.round}
-        </span>
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <h3 className="text-[12px] font-semibold text-ink">第 {round.round} 轮</h3>
+      <div className={`flex flex-wrap items-center gap-2 px-3 py-2.5 ${expanded ? "border-b border-line" : ""}`}>
+        <button
+          type="button"
+          aria-expanded={expanded}
+          title={expanded ? "收起审查证据" : "展开审查证据"}
+          onClick={() => setExpanded((current) => !current)}
+          className="flex min-w-0 flex-1 flex-wrap items-center gap-2 rounded-md text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40"
+        >
+          <span className={`grid h-6 w-6 shrink-0 place-items-center rounded-full text-[10.5px] font-bold ${verdict.badge}`}>
+            {round.round}
+          </span>
+          <span className="text-[12px] font-semibold text-ink">第 {round.round} 轮</span>
+          <span className="flex flex-wrap items-center gap-2">
             <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10.5px] font-semibold ${verdict.pill}`}>
               {round.conclusion === "verified" ? <CheckCircle size={11} weight="fill" /> : round.conclusion === "verify_failed" ? <WarningCircle size={11} weight="fill" /> : <SpinnerGap size={11} className="animate-spin" />}
               {verdict.label}
             </span>
             <span className="text-[10.5px] text-faint">审查任务：{TASK_STATUS_LABELS[round.reviewTaskStatus]}</span>
-          </div>
-        </div>
+          </span>
+          <CaretDown
+            size={13}
+            weight="bold"
+            className={`ml-auto shrink-0 text-faint transition-transform ${expanded ? "rotate-180" : ""}`}
+          />
+        </button>
         {onOpenTask && (
           <button
             type="button"
@@ -395,36 +423,38 @@ function ReviewRoundCard({
         )}
       </div>
 
-      <div className="px-3 py-3">
-        {round.reportMarkdown ? (
-          <Markdown text={round.reportMarkdown} />
-        ) : (
-          <p className="text-[11.5px] text-faint">审查报告尚未写入。</p>
-        )}
-        {round.screenshots.length > 0 && (
-          <div className="mt-3 border-t border-line pt-3">
-            <div className="mb-2 flex items-center gap-1.5 text-[10.5px] font-semibold uppercase tracking-[0.08em] text-faint">
-              <ImageSquare size={12} /> 截图 · {round.screenshots.length}
+      {expanded && (
+        <div className="px-3 py-3">
+          {round.reportMarkdown ? (
+            <Markdown text={round.reportMarkdown} />
+          ) : (
+            <p className="text-[11.5px] text-faint">审查报告尚未写入。</p>
+          )}
+          {round.screenshots.length > 0 && (
+            <div className="mt-3 border-t border-line pt-3">
+              <div className="mb-2 flex items-center gap-1.5 text-[10.5px] font-semibold uppercase tracking-[0.08em] text-faint">
+                <ImageSquare size={12} /> 截图 · {round.screenshots.length}
+              </div>
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
+                {round.screenshots.map((name) => {
+                  const src = api.taskReviewFileUrl(taskId, round.round, name);
+                  return (
+                    <button
+                      key={name}
+                      type="button"
+                      onClick={() => onPreview({ round: round.round, name, src })}
+                      className="group overflow-hidden rounded-lg border border-line bg-canvas text-left transition-colors hover:border-violet-500/35"
+                    >
+                      <img src={src} alt={name} loading="lazy" className="aspect-video w-full bg-raised object-cover transition-transform duration-200 group-hover:scale-[1.02]" />
+                      <span className="block truncate px-2 py-1.5 text-[10px] text-muted">{name}</span>
+                    </button>
+                  );
+                })}
+              </div>
             </div>
-            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
-              {round.screenshots.map((name) => {
-                const src = api.taskReviewFileUrl(taskId, round.round, name);
-                return (
-                  <button
-                    key={name}
-                    type="button"
-                    onClick={() => onPreview({ round: round.round, name, src })}
-                    className="group overflow-hidden rounded-lg border border-line bg-canvas text-left transition-colors hover:border-violet-500/35"
-                  >
-                    <img src={src} alt={name} loading="lazy" className="aspect-video w-full bg-raised object-cover transition-transform duration-200 group-hover:scale-[1.02]" />
-                    <span className="block truncate px-2 py-1.5 text-[10px] text-muted">{name}</span>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        )}
-      </div>
+          )}
+        </div>
+      )}
     </article>
   );
 }

@@ -1,7 +1,35 @@
+import { useEffect, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { api } from "./api";
 import { PreviewableMarkdownImage } from "./ImagePreview";
+import { Modal } from "./Modal";
 import { toast } from "./toast";
+
+const REVIEW_FILE_PATH = /\/data\/runs\/([\w-]+)\/review\/round-(\d+)\/([^/]+)$/;
+
+type ReviewFileTarget = {
+  name: string;
+  url: string;
+};
+
+function reviewFileTarget(path?: string): ReviewFileTarget | null {
+  if (!path) return null;
+  const match = path.match(REVIEW_FILE_PATH);
+  if (!match) return null;
+  const [, taskId, round, encodedName] = match;
+  let name = encodedName;
+  try {
+    // react-markdown URL-encodes non-ASCII characters and spaces before handing
+    // destinations to renderers. Decode once so taskReviewFileUrl can encode the
+    // actual filename exactly once for the review-file endpoint.
+    name = decodeURIComponent(encodedName);
+  } catch {
+    // Keep malformed percent escapes unchanged; the server remains the final
+    // authority for allowed filenames and path safety.
+  }
+  return { name, url: api.taskReviewFileUrl(taskId, Number(round), name) };
+}
 
 // open-local 链接只认 pathname——agent 写链接时可能带 localhost / tailnet 任一 host,
 // 统一改写到当前 origin 请求,避免「在 tailnet 页面点到 localhost 链接」这类跨 host 失效。
@@ -45,9 +73,58 @@ function hardenSoftBreaks(node: MdNode) {
 
 const remarkSoftBreaks = () => hardenSoftBreaks;
 
+function ReviewReportModal({
+  name,
+  url,
+  onClose,
+}: ReviewFileTarget & { onClose: () => void }) {
+  const [text, setText] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    setText(null);
+    setError(null);
+    void fetch(url, { signal: controller.signal })
+      .then(async (response) => {
+        if (!response.ok) {
+          const detail = await response.text();
+          throw new Error(detail || `HTTP ${response.status}`);
+        }
+        return response.text();
+      })
+      .then(setText)
+      .catch((reason: unknown) => {
+        if (controller.signal.aborted) return;
+        const message = reason instanceof Error ? reason.message : String(reason);
+        setError(message);
+        toast(`审查报告加载失败：${message}`);
+      });
+    return () => controller.abort();
+  }, [url]);
+
+  return (
+    <Modal
+      title={`审查报告 · ${name}`}
+      onClose={onClose}
+      width={880}
+      contentClassName="overflow-y-auto p-4"
+    >
+      {text !== null ? (
+        <Markdown text={text} />
+      ) : error ? (
+        <p className="text-[13px] text-red-700">审查报告加载失败：{error}</p>
+      ) : (
+        <p className="text-[13px] text-faint">正在加载审查报告…</p>
+      )}
+    </Modal>
+  );
+}
+
 // Render agent/debate output as GitHub-flavored markdown, styled with the app's
 // design tokens (no typography plugin). Used inside chat bubbles (§12).
 export function Markdown({ text }: { text: string }) {
+  const [reviewReport, setReviewReport] = useState<ReviewFileTarget | null>(null);
   return (
     <div className="text-[13px] leading-relaxed text-ink">
       <ReactMarkdown
@@ -63,20 +140,30 @@ export function Markdown({ text }: { text: string }) {
           li: (p) => <li className="my-0.5 wrap-anywhere" {...p} />,
           strong: (p) => <strong className="font-semibold text-ink" {...p} />,
           em: (p) => <em className="italic" {...p} />,
-          img: PreviewableMarkdownImage,
+          img: ({ src, ...p }) => {
+            const reviewFile = reviewFileTarget(src);
+            return <PreviewableMarkdownImage src={reviewFile?.url ?? src} {...p} />;
+          },
           a: ({ node: _n, href, onClick, ...p }) => {
+            const reviewFile = reviewFileTarget(href);
+            const reviewMarkdown = reviewFile !== null && /\.md$/i.test(reviewFile.name);
             const localOpen = isLocalOpenHref(href);
             return (
               <a
                 className="break-all text-accent underline underline-offset-2 hover:text-accent-hover"
-                href={href}
-                target={localOpen ? undefined : "_blank"}
-                rel={localOpen ? undefined : "noreferrer"}
+                href={reviewFile?.url ?? href}
+                target={localOpen || reviewMarkdown ? undefined : "_blank"}
+                rel={localOpen || reviewMarkdown ? undefined : "noreferrer"}
                 onClick={(e) => {
                   onClick?.(e);
-                  if (!localOpen || e.defaultPrevented) return;
-                  e.preventDefault();
-                  void openLocalPath(href).catch((err) => toast(err instanceof Error ? err.message : String(err)));
+                  if (e.defaultPrevented) return;
+                  if (reviewMarkdown) {
+                    e.preventDefault();
+                    setReviewReport(reviewFile);
+                  } else if (localOpen) {
+                    e.preventDefault();
+                    void openLocalPath(href).catch((err) => toast(err instanceof Error ? err.message : String(err)));
+                  }
                 }}
                 {...p}
               />
@@ -113,6 +200,7 @@ export function Markdown({ text }: { text: string }) {
       >
         {text}
       </ReactMarkdown>
+      {reviewReport && <ReviewReportModal {...reviewReport} onClose={() => setReviewReport(null)} />}
     </div>
   );
 }
