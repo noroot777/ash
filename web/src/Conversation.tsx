@@ -234,9 +234,11 @@ export function Conversation({ items }: { items: ConvItem[] }) {
 // streaming content grows without requiring each caller to thread a content key.
 export function ConversationScrollButtons({
   scrollRef,
+  onManualScroll,
   threshold = 80,
 }: {
   scrollRef: RefObject<HTMLElement | null>;
+  onManualScroll?: (target: "top" | "bottom") => void;
   threshold?: number;
 }) {
   const [edges, setEdges] = useState({ atTop: true, atBottom: true });
@@ -279,6 +281,10 @@ export function ConversationScrollButtons({
     const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     scrollRef.current?.scrollTo({ top, behavior: reducedMotion ? "auto" : "smooth" });
   };
+  const scrollToEdge = (target: "top" | "bottom") => {
+    onManualScroll?.(target);
+    scrollTo(target === "top" ? 0 : scrollRef.current?.scrollHeight ?? 0);
+  };
   const buttonClass =
     "absolute left-1/2 z-10 grid h-8 w-8 -translate-x-1/2 place-items-center rounded-full border border-line bg-panel/70 text-muted shadow-sm backdrop-blur-sm transition-[opacity,transform,background-color,color] duration-200 hover:bg-panel/95 hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 motion-reduce:transition-none";
 
@@ -286,7 +292,7 @@ export function ConversationScrollButtons({
     <>
       <button
         type="button"
-        onClick={() => scrollTo(0)}
+        onClick={() => scrollToEdge("top")}
         tabIndex={edges.atTop ? -1 : 0}
         aria-hidden={edges.atTop}
         aria-label="滚动到会话顶部"
@@ -297,7 +303,7 @@ export function ConversationScrollButtons({
       </button>
       <button
         type="button"
-        onClick={() => scrollTo(scrollRef.current?.scrollHeight ?? 0)}
+        onClick={() => scrollToEdge("bottom")}
         tabIndex={edges.atBottom ? -1 : 0}
         aria-hidden={edges.atBottom}
         aria-label="滚动到会话底部"
