@@ -161,7 +161,7 @@ export function ReplyBox({
   };
 
   return (
-    <div className="relative flex flex-col gap-2 border-t border-line px-6 py-3">
+    <div className="relative flex min-h-0 flex-col gap-2 border-t border-line px-6 py-3">
       {commandMenuOpen && (
         <div className="absolute bottom-full left-6 z-10 mb-1 w-80 overflow-hidden rounded-lg border border-line2 bg-panel p-1 shadow-xl">
           <div className="px-2 py-1 text-[10px] text-faint">派生命令 · ↑↓ 选，回车确定</div>
@@ -233,7 +233,10 @@ export function ReplyBox({
         </div>
       )}
       {toolbar}
-      {inlinePanel}
+      {/* Live derivation cards can be taller than the space left below the task
+          header. Let just the card shrink and scroll so it cannot push the
+          textarea (and its top resize handle) below the viewport. */}
+      {inlinePanel && <div className="min-h-0 overflow-y-auto">{inlinePanel}</div>}
       <AttachmentChips attachments={attachments} onRemove={remove} error={error} />
       {target && (
         <div className="flex items-center text-[12px]">
@@ -245,7 +248,7 @@ export function ReplyBox({
           </span>
         </div>
       )}
-      <div className="relative">
+      <div className="relative shrink-0">
         <TopResizableTextarea
           value={v}
           onChange={(e) => {
