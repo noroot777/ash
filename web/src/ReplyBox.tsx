@@ -222,8 +222,10 @@ export function ReplyBox({
       {/* The task header can leave almost no normal-flow height for a live
           derivation card. Float it above the reply bar (like the slash menu)
           and cap it to the viewport so both the card and resize handle stay
-          usable instead of forcing either one to zero/off-screen. */}
-      {inlinePanel && (
+          usable instead of forcing either one to zero/off-screen. While the
+          slash menu is open it temporarily wins this space; the committed
+          card state stays intact and returns as soon as the menu closes. */}
+      {inlinePanel && !commandMenuOpen && (
         <div className="absolute inset-x-6 bottom-full z-10 mb-2 max-h-[40vh] overflow-y-auto overscroll-contain rounded-lg shadow-xl">
           {inlinePanel}
         </div>
