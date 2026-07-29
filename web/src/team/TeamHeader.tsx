@@ -33,6 +33,8 @@ import type { LeadTurn } from "./teamData";
 import { teamLeadExecutorLabel, teamReviewerExecutorLabel, teamWorkerExecutorLabel } from "../executorLabel";
 import { AttachmentDisplay, parseAttachmentText } from "../messageAttachments";
 import { TaskPinMenu } from "../TaskPinMenu";
+import { TaskModeIcon } from "../taskOrigin";
+import { Tip } from "../Tip";
 
 export function TeamHeader({
   task,
@@ -100,12 +102,12 @@ export function TeamHeader({
   return (
     <header className="shrink-0 border-b border-line px-6 pb-3 pt-5">
       <div className="flex items-start gap-3">
-        <span
-          className="mt-0.5 shrink-0 rounded bg-accent/10 px-1.5 py-0.5 text-[11px] font-semibold text-accent"
-          title="团队模式:一个常驻调度者 + 它派出去的执行者"
+        <Tip
+          label="团队任务：一个常驻调度者和它派出的执行者"
+          className="mt-0.5 inline-flex h-5 w-5 shrink-0 items-center justify-center text-muted"
         >
-          团队
-        </span>
+          <TaskModeIcon mode="team" size={16} />
+        </Tip>
         <EditableTitle title={task.title} onSave={(t) => onPatch({ title: t, autoTitle: false })} />
         <div className="flex shrink-0 items-center gap-2">
           <BusyPill task={task} />

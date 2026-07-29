@@ -26,6 +26,8 @@ import {
 } from "./DebateTeamHandoff";
 import { DebateGateBar } from "./DebateGateBar";
 import { TaskPinMenu } from "./TaskPinMenu";
+import { TaskModeIcon } from "./taskOrigin";
+import { Tip } from "./Tip";
 
 // Animated "thinking" indicator — three dots flashing in sequence.
 function TypingDots() {
@@ -244,7 +246,9 @@ export function DebateView({
     <main className="flex h-full min-h-0 flex-col">
       <header className="border-b border-line px-6 py-4">
         <div className="flex items-center gap-3">
-          <span className="shrink-0 rounded bg-violet-500/20 px-1.5 py-0.5 text-[10px] font-medium text-violet-700">debate</span>
+          <Tip label="辩论任务" className="inline-flex h-5 w-5 shrink-0 items-center justify-center text-muted">
+            <TaskModeIcon mode="debate" size={16} />
+          </Tip>
           <h1 className="min-w-0 flex-1 truncate text-lg font-medium tracking-tight">{task.title}</h1>
           <StatusPill task={task} />
           <TaskTimeChip task={task} />

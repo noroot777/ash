@@ -8,7 +8,7 @@ import {
   type TaskStatus,
 } from "@harness/shared";
 import { statusCounts, workersOf } from "@harness/shared/team";
-import { CaretRight, PushPin, Scales, UsersThree } from "@phosphor-icons/react";
+import { CaretRight, PushPin } from "@phosphor-icons/react";
 import { STATUSES, STATUS_META, PRIORITY_ORDER } from "./constants";
 import { PriorityIcon, PauseHint, useCollapsedGroups } from "./ui";
 import { StatusIcon } from "./StatusIcon";
@@ -16,7 +16,7 @@ import { Tip } from "./Tip";
 import { foldTeamStatus, pairBadge } from "./util";
 import { executorLabel } from "./executorLabel";
 import { isDispatchedWorker } from "./taskPolicy";
-import { OriginTaskChip } from "./taskOrigin";
+import { OriginTaskChip, TaskModeIcon } from "./taskOrigin";
 import { TaskWorktreeChip } from "./TaskWorktreeChip";
 import { useUnreadTeamTasks } from "./useUnreadTasks";
 
@@ -260,17 +260,19 @@ function TaskRow({
               {l}
             </span>
           ))}
-          <Tip label={badge.label} className="min-w-0 shrink-0">
-            <span
-              className={`inline-flex max-w-[136px] items-center justify-center rounded px-1.5 py-0.5 font-mono text-[10px] ${badge.cls}`}
-            >
-              {badge.icon === "scales" ? (
-                <Scales size={13} weight="bold" aria-hidden />
-              ) : (
+          {t.mode === "debate" ? (
+            <Tip label="辩论任务" className="inline-flex h-4 w-4 shrink-0 items-center justify-center text-muted">
+              <TaskModeIcon mode="debate" size={13} />
+            </Tip>
+          ) : (
+            <Tip label={badge.label} className="min-w-0 shrink-0">
+              <span
+                className={`inline-flex max-w-[136px] items-center justify-center rounded px-1.5 py-0.5 font-mono text-[10px] ${badge.cls}`}
+              >
                 <span className="truncate">{badge.label}</span>
-              )}
-            </span>
-          </Tip>
+              </span>
+            </Tip>
+          )}
         </div>
       </div>
       <PauseHint task={t} allTasks={allTasks} onOpen={onSelect} />
@@ -337,9 +339,9 @@ function TeamRow({
           )}
           <Tip
             label="团队任务"
-            className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded text-muted"
+            className="inline-flex h-4 w-4 shrink-0 items-center justify-center text-muted"
           >
-            <UsersThree size={13} weight="fill" aria-hidden />
+            <TaskModeIcon mode="team" size={13} />
           </Tip>
           <button
             onClick={(e) => {
