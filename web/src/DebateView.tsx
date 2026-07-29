@@ -17,6 +17,7 @@ import { buildDebateHandoffBody, isTeamCommand, latestDebateGate } from "./debat
 import { AttachmentDisplay, parseAttachmentText } from "./messageAttachments";
 import { useExecutorProfiles } from "./ExecutorPicker";
 import { ConversationScrollButtons } from "./Conversation";
+import { useStickToBottom } from "./useStickToBottom";
 import {
   defaultTeamConfig,
   FinishedTeamHandoffBar,
@@ -92,17 +93,7 @@ export function DebateView({
   const [iterateBusy, setIterateBusy] = useState(false);
   const { profiles } = useExecutorProfiles();
   const scrollRef = useRef<HTMLDivElement>(null);
-  // Stick to the bottom only when the user is already near it. If they scrolled
-  // up to read, incoming tokens must not yank them back down.
-  const atBottomRef = useRef(true);
-  const onScroll = () => {
-    const el = scrollRef.current;
-    if (el) atBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
-  };
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (el && atBottomRef.current) el.scrollTo({ top: el.scrollHeight });
-  }, [state.turns, history]);
+  const stickToBottom = useStickToBottom(scrollRef, task.id);
   useEffect(() => {
     api.sessions(task.id).then(setSessions);
   }, [task.id, sessionsBump, state.turns.length]);
@@ -317,7 +308,7 @@ export function DebateView({
       </header>
 
       <div className="relative min-h-0 flex-1">
-        <div ref={scrollRef} onScroll={onScroll} className="h-full overflow-y-auto px-6 py-4">
+        <div ref={scrollRef} className="h-full overflow-y-auto px-6 py-4">
           {turns.length === 0 && (
             <p className="text-sm text-faint">点击「运行」开始对抗。双方逐回合的发言会实时显示在这里。</p>
           )}
@@ -358,7 +349,13 @@ export function DebateView({
             <div className="mb-3 text-center text-[12px] text-faint">— 已取消 —</div>
           )}
         </div>
-        <ConversationScrollButtons scrollRef={scrollRef} />
+        <ConversationScrollButtons
+          scrollRef={scrollRef}
+          onManualScroll={(target) => {
+            if (target === "bottom") stickToBottom.resumeStickToBottom();
+            else stickToBottom.noteUserScrollIntent();
+          }}
+        />
       </div>
 
       {gate?.open && task.status === "awaiting_review" && (
