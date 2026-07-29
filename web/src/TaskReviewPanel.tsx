@@ -18,8 +18,8 @@ import {
 import { api } from "./api";
 import { type ExecutorSelection, useExecutorProfiles } from "./ExecutorPicker";
 import { ExecutorField } from "./composer/ExecutorFields";
+import { ImageLightbox } from "./ImagePreview";
 import { Markdown } from "./Markdown";
-import { Modal } from "./Modal";
 import { toast } from "./toast";
 import { useServerEvents } from "./useEvents";
 
@@ -256,7 +256,14 @@ export function TaskReviewPanel({
         onOpenTask={onOpenTask}
         onPreview={setPreview}
       />
-      <ReviewPreview preview={preview} onClose={() => setPreview(null)} />
+      {preview && (
+        <ImageLightbox
+          src={preview.src}
+          alt={`第 ${preview.round} 轮审查截图 ${preview.name}`}
+          label={`第 ${preview.round} 轮 · ${preview.name}`}
+          onClose={() => setPreview(null)}
+        />
+      )}
     </section>
   );
 }
@@ -288,7 +295,14 @@ export function TaskReviewEvidence({ taskId }: { taskId: string }) {
         onRetry={load}
         onPreview={setPreview}
       />
-      <ReviewPreview preview={preview} onClose={() => setPreview(null)} />
+      {preview && (
+        <ImageLightbox
+          src={preview.src}
+          alt={`第 ${preview.round} 轮审查截图 ${preview.name}`}
+          label={`第 ${preview.round} 轮 · ${preview.name}`}
+          onClose={() => setPreview(null)}
+        />
+      )}
     </section>
   );
 }
@@ -339,20 +353,6 @@ function ReviewRecords({
         />
       ))}
     </div>
-  );
-}
-
-function ReviewPreview({ preview, onClose }: { preview: Preview | null; onClose: () => void }) {
-  if (!preview) return null;
-  return (
-    <Modal
-      title={`第 ${preview.round} 轮 · ${preview.name}`}
-      onClose={onClose}
-      width={1120}
-      contentClassName="min-h-0 overflow-auto bg-canvas p-3"
-    >
-      <img src={preview.src} alt={`第 ${preview.round} 轮审查截图 ${preview.name}`} className="mx-auto max-h-[70vh] max-w-full rounded-lg border border-line bg-panel object-contain shadow-sm" />
-    </Modal>
   );
 }
 
