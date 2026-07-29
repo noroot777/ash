@@ -21,7 +21,7 @@ import { bus } from "./bus.js";
 import { id, now } from "./util.js";
 import { listModels } from "./llm.js";
 import { mountQueueRoutes } from "./queues.js";
-import { detectLocalAgents } from "./detect.js";
+import { detectKnownClis, detectLocalAgents } from "./detect.js";
 import { searchAll } from "./search.js";
 import { projectHealthLight, projectHealthFull, tidyRepoPath, repoKey, listBranches } from "./git.js";
 import { discardTaskWorkspace } from "./workspace-cleanup.js";
@@ -190,6 +190,8 @@ api.get("/agents", async (c) => c.json((await db.select().from(agents)).map(toAg
 
 // Detect which agent CLIs are installed on the local machine (§5).
 api.get("/agents/detect", async (c) => c.json(await detectLocalAgents()));
+// 已知 CLI 目录:含上面那几个可执行器(带 type),外加一批只做「装没装」展示的。
+api.get("/agents/catalog", async (c) => c.json(await detectKnownClis()));
 
 api.post("/agents", async (c) => {
   const b = await c.req.json<any>();

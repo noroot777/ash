@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
 import type { AgentExecutorProfile, AgentType, ExecTarget, LlmProtocol, LlmProvider } from "@harness/shared";
-import { MagnifyingGlass, Check, X, Plus, Trash, CircleNotch } from "@phosphor-icons/react";
-import { api } from "./api";
+import { MagnifyingGlass, Check, Plus, Trash, CircleNotch, ArrowSquareOut, DownloadSimple } from "@phosphor-icons/react";
+import { api, type DetectedCli } from "./api";
 import { Menu, type MenuOption } from "./Menu";
 import { RelaySection } from "./Relays";
 import { useEscape } from "./useEscape";
+import { toast } from "./toast";
 import {
   clearProviderModelCache,
   ModelConfigPicker,
@@ -28,7 +29,7 @@ const SPEED_OPTIONS: MenuOption[] = [
   { value: "fast", label: "1.5x", detail: "加速档（用量消耗更快）" },
 ];
 
-type Detected = { type: string; bin: string; available: boolean; path: string | null; version: string | null };
+type Detected = DetectedCli;
 
 // Agent registry management (DESIGN.md §5): executor profiles under each type,
 // per-type default, local/ssh target, plus local-CLI detection.
@@ -47,8 +48,9 @@ export function AgentsPanel({ onClose }: { onClose: () => void }) {
     return Promise.all([api.llmProviders().then(setRelays), reload()]).catch(() => {});
   };
   const probe = () =>
-    api.detectAgents().then((d) => {
-      setAvail(new Set(d.filter((x) => x.available).map((x) => x.type)));
+    api.detectClis().then((d) => {
+      // 只有带 type 的才是能派任务的执行器 —— 目录里其余的装了也只是装了。
+      setAvail(new Set(d.filter((x) => x.type && x.available).map((x) => x.type as string)));
       return d;
     });
   useEscape(onClose);
@@ -72,9 +74,10 @@ export function AgentsPanel({ onClose }: { onClose: () => void }) {
   const shownTypes = TYPES.filter((t) => list.some((a) => a.type === t) || avail?.has(t));
 
   const registerDetected = async (d: Detected) => {
+    if (!d.type) return;
     const hasAny = list.some((a) => a.type === d.type);
     await api.createAgent({
-      type: d.type as AgentType,
+      type: d.type,
       name: `${d.type}@local`,
       target: { kind: "local" },
       isDefault: !hasAny,
@@ -108,41 +111,22 @@ export function AgentsPanel({ onClose }: { onClose: () => void }) {
         <div className="flex-1 overflow-y-auto p-5">
           {detected && (
             <div className="mb-5 rounded-lg border border-line bg-raised/50 p-3">
-              <div className="mb-2 text-[11px] font-medium uppercase tracking-wide text-muted">本地检测结果</div>
-              <div className="grid gap-1.5">
-                {detected.map((d) => {
-                  const registered = list.some((a) => a.type === d.type && a.target.kind === "local");
-                  return (
-                    <div key={d.type} className="flex items-center gap-2 text-[12px]">
-                      {d.available ? (
-                        <Check size={14} weight="bold" className="text-emerald-600" />
-                      ) : (
-                        <X size={14} weight="bold" className="text-faint" />
-                      )}
-                      <span className="w-24 font-medium text-ink">{d.type}</span>
-                      {d.available ? (
-                        <>
-                          <span className="truncate font-mono text-[11px] text-muted">{d.path}</span>
-                          {d.version && <span className="shrink-0 font-mono text-[11px] text-faint">{d.version}</span>}
-                          <span className="ml-auto shrink-0">
-                            {registered ? (
-                              <span className="text-[11px] text-faint">已注册</span>
-                            ) : (
-                              <button
-                                onClick={() => registerDetected(d)}
-                                className="inline-flex items-center gap-1 rounded-md bg-accent px-2 py-0.5 text-[11px] font-medium text-accent-fg hover:bg-accent-hover"
-                              >
-                                <Plus size={11} weight="bold" /> 注册为执行器
-                              </button>
-                            )}
-                          </span>
-                        </>
-                      ) : (
-                        <span className="text-faint">未安装</span>
-                      )}
-                    </div>
-                  );
-                })}
+              <div className="mb-2 flex items-baseline gap-2">
+                <span className="text-[11px] font-medium uppercase tracking-wide text-muted">已知 CLI 检测结果</span>
+                <span className="text-[11px] text-faint">
+                  已装 {detected.filter((d) => d.available).length} / {detected.length}
+                  ；带「可派任务」的才能在 harness 里执行任务
+                </span>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                {detected.map((d) => (
+                  <CliCard
+                    key={d.key}
+                    d={d}
+                    registered={!!d.type && list.some((a) => a.type === d.type && a.target.kind === "local")}
+                    onRegister={() => registerDetected(d)}
+                  />
+                ))}
               </div>
             </div>
           )}
@@ -175,6 +159,83 @@ export function AgentsPanel({ onClose }: { onClose: () => void }) {
           <div className="mt-5 border-t border-line pt-4">
             <RelaySection list={relays} onChange={reloadRelays} />
           </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// 已知 CLI 目录的一张卡。没有现成 logo 素材,图标位一律用名称首字母方块占位
+// (与其扒各家 logo 惹一堆授权和体积问题,不如整齐的占位块)。
+//
+// 「安装」按钮**只把官方命令复制到剪贴板**,绝不让服务端去执行 —— 这些命令来自
+// 各家官网(好几条是 curl | bash),harness 没有立场替用户在他机器上跑它们。
+function CliCard({ d, registered, onRegister }: { d: Detected; registered: boolean; onRegister: () => void }) {
+  const copyInstall = async () => {
+    try {
+      await navigator.clipboard.writeText(d.installCommand);
+      toast(`已复制安装命令：${d.installCommand}`, "info");
+    } catch {
+      // 剪贴板被拒(非安全上下文/无权限)时至少把命令摆出来让用户自己选中。
+      toast(`复制失败，请手动执行：${d.installCommand}`);
+    }
+  };
+
+  return (
+    <div className="flex gap-2.5 rounded-lg border border-line bg-panel p-2.5">
+      <div
+        className={`grid h-8 w-8 shrink-0 place-items-center rounded-md text-[13px] font-semibold ${
+          d.available ? "bg-accent/15 text-accent" : "bg-overlay text-faint"
+        }`}
+      >
+        {d.name.slice(0, 1).toUpperCase()}
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-1.5">
+          <span className="truncate text-[12px] font-medium text-ink">{d.name}</span>
+          {d.available && <Check size={12} weight="bold" className="shrink-0 text-emerald-600" />}
+          {d.type && (
+            <span className="shrink-0 rounded bg-emerald-500/15 px-1 py-px text-[10px] text-emerald-700">可派任务</span>
+          )}
+        </div>
+        <div className="mt-0.5 truncate text-[11px] text-muted">{d.description}</div>
+        {d.available ? (
+          <div className="mt-1 space-y-0.5">
+            {d.version && <div className="truncate font-mono text-[10px] text-muted">{d.version}</div>}
+            <div className="truncate font-mono text-[10px] text-faint">{d.path}</div>
+          </div>
+        ) : (
+          <div className="mt-1 font-mono text-[10px] text-faint">未安装 · {d.bins.join(" / ")}</div>
+        )}
+        <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+          <a
+            href={d.docsUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center gap-1 rounded border border-line px-1.5 py-0.5 text-[11px] text-muted hover:text-ink"
+          >
+            文档 <ArrowSquareOut size={10} />
+          </a>
+          {!d.available && (
+            <button
+              onClick={copyInstall}
+              className="inline-flex items-center gap-1 rounded border border-line px-1.5 py-0.5 text-[11px] text-muted hover:text-ink"
+            >
+              <DownloadSimple size={11} /> 安装
+            </button>
+          )}
+          {d.type &&
+            d.available &&
+            (registered ? (
+              <span className="text-[11px] text-faint">已注册</span>
+            ) : (
+              <button
+                onClick={onRegister}
+                className="inline-flex items-center gap-1 rounded-md bg-accent px-2 py-0.5 text-[11px] font-medium text-accent-fg hover:bg-accent-hover"
+              >
+                <Plus size={11} weight="bold" /> 注册为执行器
+              </button>
+            ))}
         </div>
       </div>
     </div>
