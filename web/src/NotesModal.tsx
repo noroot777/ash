@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Note, ProjectView } from "@harness/shared";
-import { ArrowSquareOut, NotePencil, Plus, Trash } from "@phosphor-icons/react";
+import { ArrowSquareOut, MagnifyingGlass, NotePencil, Plus, Trash, X } from "@phosphor-icons/react";
 import { api } from "./api";
 import { Markdown } from "./Markdown";
 import { ConfirmModal, Modal, primaryCls } from "./Modal";
 import { AttachmentDisplay } from "./messageAttachments";
 import { AttachButton, AttachmentChips, usePasteAttachments } from "./pasteAttachments";
 import { toast } from "./toast";
-import { Kbd, submitShortcutTitle } from "./ui";
+import { ModalFullscreenButton, useMovableModal } from "./useMovableModal";
 
 export type NoteTaskDraft = {
   noteIds: string[];
@@ -27,70 +27,6 @@ const noteTime = (value: number) =>
   });
 
 const newestFirst = (rows: Note[]) => [...rows].sort((a, b) => b.updatedAt - a.updatedAt);
-
-export function NewNoteModal({ project, onClose }: { project: ProjectView; onClose: () => void }) {
-  const [body, setBody] = useState("");
-  const [busy, setBusy] = useState(false);
-  const closeRef = useRef(onClose);
-  const { attachments, onPaste, addFiles, remove, error } = usePasteAttachments();
-
-  const save = async (close: () => void) => {
-    if (!body.trim() || busy) return;
-    setBusy(true);
-    try {
-      await api.createNote({ projectId: project.id, body, attachments: attachments.map((item) => item.path) });
-      toast("随手记已保存");
-      close();
-    } catch (err) {
-      toast(err instanceof Error ? err.message : String(err));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <Modal
-      title={`新建随手记 · ${project.name}`}
-      onClose={onClose}
-      width={620}
-      overlayClassName="z-[70]"
-      footer={(close) => {
-        closeRef.current = close;
-        return <>
-          <AttachButton
-            addFiles={addFiles}
-            className="mr-auto grid h-8 w-8 place-items-center rounded-md text-muted hover:bg-raised hover:text-ink"
-            title="添加图片或文件"
-          />
-          <button onClick={close} className="px-3 py-1.5 text-[13px] text-muted">取消</button>
-          <button
-            disabled={!body.trim() || busy}
-            onClick={() => void save(close)}
-            title={submitShortcutTitle("保存随手记")}
-            className={`${primaryCls} inline-flex items-center gap-1.5`}
-          >
-            {busy ? "保存中…" : "保存"} <Kbd />
-          </button>
-        </>;
-      }}
-    >
-      <textarea
-        autoFocus
-        value={body}
-        onChange={(event) => setBody(event.target.value)}
-        onPaste={onPaste}
-        onKeyDown={(event) => {
-          if (event.key !== "Enter" || (!event.metaKey && !event.ctrlKey) || event.nativeEvent.isComposing) return;
-          event.preventDefault();
-          void save(closeRef.current);
-        }}
-        placeholder="记下临时想法…"
-        className="min-h-[220px] w-full resize-y bg-transparent text-[14px] leading-relaxed text-ink outline-none placeholder:text-faint"
-      />
-      <AttachmentChips attachments={attachments} onRemove={remove} error={error} />
-    </Modal>
-  );
-}
 
 type NoteDraft = { id: string; body: string; attachments: string[] };
 type SaveState = "saved" | "pending" | "saving" | "error";
@@ -128,6 +64,8 @@ export function NotesModal({
   const [saveState, setSaveState] = useState<SaveState>("saved");
   const [deleting, setDeleting] = useState<Note | null>(null);
   const [handoff, setHandoff] = useState(false);
+  const [query, setQuery] = useState("");
+  const movable = useMovableModal();
   const uploaded = usePasteAttachments();
   const rowsRef = useRef<Note[]>([]);
   const draftRef = useRef<NoteDraft | null>(null);
@@ -225,6 +163,14 @@ export function NotesModal({
   }, [project.id, initialNoteId, flushDraft, uploaded.clear]);
 
   const active = rows.find((note) => note.id === activeId) ?? null;
+  const filteredRows = useMemo(() => {
+    const keyword = query.trim().toLocaleLowerCase();
+    if (!keyword) return rows;
+    return rows.filter((note) => {
+      const body = note.id === draft?.id ? draft.body : note.body;
+      return body.toLocaleLowerCase().includes(keyword);
+    });
+  }, [draft, query, rows]);
   useEffect(() => {
     if (!draft || sameDraft(draft, savedDraftRef.current)) return;
     const timer = window.setTimeout(() => { void flushDraft(); }, 800);
@@ -255,6 +201,7 @@ export function NotesModal({
   }, [updateRows]);
 
   const startNewNote = async () => {
+    setQuery("");
     if (activeId === NEW_NOTE_ID) {
       setBodyFocused(true);
       return;
@@ -337,6 +284,12 @@ export function NotesModal({
         width={940}
         overlayClassName="z-[70]"
         cardClassName={handoff ? "note-handoff-out" : ""}
+        cardRef={movable.cardRef}
+        cardStyle={movable.cardStyle}
+        headerProps={movable.headerProps}
+        headerActions={(
+          <ModalFullscreenButton isFullscreen={movable.isFullscreen} onToggle={movable.toggleFullscreen} />
+        )}
         contentClassName="min-h-0 overflow-hidden p-0"
         footer={selectedNotes.length ? (
           <button disabled={handoff} onClick={() => { void createTask(); }} className={`${primaryCls} inline-flex items-center gap-1.5`}>
@@ -344,50 +297,80 @@ export function NotesModal({
           </button>
         ) : undefined}
       >
-        <div className="grid h-[58vh] min-h-[360px] grid-cols-[minmax(170px,250px)_minmax(0,1fr)]">
-          <aside className="min-w-0 overflow-y-auto border-r border-line bg-canvas/70 py-1">
+        <div className={`grid min-h-[360px] grid-cols-[minmax(190px,260px)_minmax(0,1fr)] ${movable.isFullscreen ? "h-full" : "h-[58vh]"}`}>
+          <aside className="flex min-w-0 flex-col overflow-hidden border-r border-line bg-canvas/70">
+            <div className="relative mx-2 mt-2">
+              <MagnifyingGlass size={13} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-faint" />
+              <input
+                type="text"
+                role="searchbox"
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder="搜索正文…"
+                aria-label="搜索随手记"
+                className="w-full rounded-md border border-line bg-panel py-1.5 pl-8 pr-8 text-[12px] text-ink outline-none placeholder:text-faint focus:border-accent"
+              />
+              {query && (
+                <button
+                  type="button"
+                  aria-label="清空搜索"
+                  onClick={() => setQuery("")}
+                  className="absolute right-1.5 top-1/2 grid h-6 w-6 -translate-y-1/2 place-items-center rounded text-faint hover:bg-raised hover:text-ink"
+                >
+                  <X size={12} />
+                </button>
+              )}
+            </div>
             <button
               onClick={() => { void startNewNote(); }}
-              className="flex w-full items-center gap-1.5 border-b border-line px-3 py-2 text-[12px] font-medium text-muted transition-colors hover:bg-panel/70 hover:text-ink"
+              className="mt-1 flex w-full shrink-0 items-center gap-1.5 border-b border-line px-3 py-2 text-[12px] font-medium text-muted transition-colors hover:bg-panel/70 hover:text-ink"
             >
               <Plus size={14} /> 新建随手记
             </button>
-            {loading && <p className="px-3 py-6 text-center text-[12px] text-faint">加载中…</p>}
-            {!loading && !rows.length && (
-              <div className="px-5 py-12 text-center">
-                <NotePencil size={24} className="mx-auto mb-2 text-faint" />
-                <p className="text-[12px] text-muted">这个项目还没有随手记</p>
-              </div>
-            )}
-            {rows.map((note) => (
-              <div
-                key={note.id}
-                className={`flex w-full items-start gap-2 border-b border-line px-3 py-2.5 text-left transition-colors ${
-                  note.id === activeId ? "bg-panel" : "hover:bg-panel/70"
-                } ${note.taskId ? "opacity-60" : ""}`}
-              >
-                {note.id === NEW_NOTE_ID ? (
-                  <span className="mt-0.5 w-[13px] shrink-0" />
-                ) : (
-                  <input
-                    type="checkbox"
-                    checked={picked.has(note.id)}
-                    onChange={() => toggle(note.id)}
-                    className="mt-0.5 accent-accent"
-                    aria-label={`选择 ${noteTitle(note.body)}`}
-                  />
-                )}
-                <button onClick={() => { void selectNote(note.id); }} className="min-w-0 flex-1 text-left">
-                  <span className="block truncate text-[13px] font-medium text-ink">
-                    {noteTitle(note.id === draft?.id ? draft.body : note.body)}
-                  </span>
-                  <span className="mt-0.5 flex items-center gap-1.5 text-[10px] text-faint">
-                    {noteTime(note.updatedAt)}
-                    {note.taskId && <span className="rounded bg-overlay px-1 py-0.5">已转任务</span>}
-                  </span>
-                </button>
-              </div>
-            ))}
+            <div className="min-h-0 flex-1 overflow-y-auto py-1">
+              {loading && <p className="px-3 py-6 text-center text-[12px] text-faint">加载中…</p>}
+              {!loading && !rows.length && (
+                <div className="px-5 py-12 text-center">
+                  <NotePencil size={24} className="mx-auto mb-2 text-faint" />
+                  <p className="text-[12px] text-muted">这个项目还没有随手记</p>
+                </div>
+              )}
+              {!loading && rows.length > 0 && !filteredRows.length && (
+                <div className="px-5 py-12 text-center">
+                  <MagnifyingGlass size={22} className="mx-auto mb-2 text-faint" />
+                  <p className="text-[12px] text-muted">没有匹配“{query.trim()}”的随手记</p>
+                </div>
+              )}
+              {filteredRows.map((note) => (
+                <div
+                  key={note.id}
+                  className={`flex w-full items-start gap-2 border-b border-line px-3 py-2.5 text-left transition-colors ${
+                    note.id === activeId ? "bg-panel" : "hover:bg-panel/70"
+                  } ${note.taskId ? "opacity-60" : ""}`}
+                >
+                  {note.id === NEW_NOTE_ID ? (
+                    <span className="mt-0.5 w-[13px] shrink-0" />
+                  ) : (
+                    <input
+                      type="checkbox"
+                      checked={picked.has(note.id)}
+                      onChange={() => toggle(note.id)}
+                      className="mt-0.5 accent-accent"
+                      aria-label={`选择 ${noteTitle(note.body)}`}
+                    />
+                  )}
+                  <button onClick={() => { void selectNote(note.id); }} className="min-w-0 flex-1 text-left">
+                    <span className="block truncate text-[13px] font-medium text-ink">
+                      {noteTitle(note.id === draft?.id ? draft.body : note.body)}
+                    </span>
+                    <span className="mt-0.5 flex items-center gap-1.5 text-[10px] text-faint">
+                      {noteTime(note.updatedAt)}
+                      {note.taskId && <span className="rounded bg-overlay px-1 py-0.5">已转任务</span>}
+                    </span>
+                  </button>
+                </div>
+              ))}
+            </div>
           </aside>
 
           <section className="min-w-0 overflow-y-auto bg-panel p-5">

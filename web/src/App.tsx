@@ -19,7 +19,8 @@ import { canArchive } from "@harness/shared";
 import { TasksWorkspace, type TaskView } from "./TasksWorkspace";
 import { ProjectRail } from "./ProjectRail";
 import { isDispatchedWorker } from "./taskPolicy";
-import { NewNoteModal, NotesModal } from "./NotesModal";
+import { NewNoteModal } from "./NewNoteModal";
+import { NotesModal } from "./NotesModal";
 import { runningOnly, upsertTask, useAppEvents } from "./useAppEvents";
 
 function rejectDispatchedWorkerMutation(task: Task | undefined): boolean {

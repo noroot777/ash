@@ -1,4 +1,12 @@
-import { useCallback, useRef, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useRef,
+  useState,
+  type CSSProperties,
+  type HTMLAttributes,
+  type ReactNode,
+  type Ref,
+} from "react";
 import { X } from "@phosphor-icons/react";
 import { useEscape } from "./useEscape";
 import { useReveal } from "./useReveal";
@@ -17,7 +25,11 @@ export function Modal({
   footer,
   width = 560,
   cardClassName = "",
+  cardRef,
+  cardStyle,
   contentClassName = "overflow-y-auto p-4",
+  headerActions,
+  headerProps,
   overlayClassName = "z-50",
   beforeClose,
 }: {
@@ -27,7 +39,11 @@ export function Modal({
   footer?: ReactNode | ((close: () => void) => ReactNode);
   width?: number;
   cardClassName?: string;
+  cardRef?: Ref<HTMLDivElement>;
+  cardStyle?: CSSProperties;
   contentClassName?: string;
+  headerActions?: ReactNode;
+  headerProps?: HTMLAttributes<HTMLDivElement>;
   overlayClassName?: string;
   beforeClose?: () => boolean | Promise<boolean>;
 }) {
@@ -54,19 +70,26 @@ export function Modal({
       onClick={requestClose}
     >
       <div
+        ref={cardRef}
         className={`t-modal ${closing ? "is-closing" : ""} flex max-h-[80vh] w-full flex-col overflow-hidden rounded-xl border border-line2 bg-panel shadow-2xl ${cardClassName}`}
-        style={{ width, maxWidth: "94vw" }}
+        style={{ width, maxWidth: "94vw", ...cardStyle }}
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center justify-between border-b border-line px-4 py-3">
-          <h2 className="text-[14px] font-semibold text-ink">{title}</h2>
-          <button onClick={requestClose} className="grid h-7 w-7 place-items-center rounded-md text-muted hover:bg-raised hover:text-ink">
-            <X size={16} />
-          </button>
+        <div
+          {...headerProps}
+          className={`flex shrink-0 items-center justify-between border-b border-line px-4 py-3 ${headerProps?.className ?? ""}`}
+        >
+          <h2 className="min-w-0 truncate text-[14px] font-semibold text-ink">{title}</h2>
+          <div className="ml-3 flex shrink-0 items-center gap-1">
+            {headerActions}
+            <button onClick={requestClose} className="grid h-7 w-7 place-items-center rounded-md text-muted hover:bg-raised hover:text-ink">
+              <X size={16} />
+            </button>
+          </div>
         </div>
         <div className={`flex-1 ${contentClassName}`}>{children}</div>
         {footer && (
-          <div className="flex items-center justify-end gap-2 border-t border-line px-4 py-3">
+          <div className="flex shrink-0 items-center justify-end gap-2 border-t border-line px-4 py-3">
             {typeof footer === "function" ? footer(requestClose) : footer}
           </div>
         )}
