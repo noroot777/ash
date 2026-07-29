@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { parseSessionOutput, STAGE_LABELS, type Session, type Task } from "@harness/shared";
 import {
+  ArrowsClockwise,
   CaretDown,
   CheckCircle,
   GitCommit,
@@ -68,6 +69,13 @@ export function AcceptanceAction({
       const result = await api.acceptTask(task.id);
       if (!result.accepted) {
         onFailure?.(result);
+        if (result.reason === "merge_conflict" && result.conflictHandoff?.notified) {
+          toast("发生合并冲突，已唤醒任务处理；完成后重新验收即可", "info");
+        } else if (result.reason === "merge_conflict") {
+          toast("发生合并冲突，未能自动唤醒任务；请手动处理后重新验收");
+        } else {
+          toast(`验收未完成：${result.error}`);
+        }
         return;
       }
       const refreshed = await api.task(task.id);
@@ -77,12 +85,14 @@ export function AcceptanceAction({
         : result.kind === "already_accepted" ? "该任务此前已验收完成" : "验收通过，阶段已刷新";
       toast(message, "info");
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
       onFailure?.({
         accepted: false,
         taskId: task.id,
         reason: "request_failed",
-        error: error instanceof Error ? error.message : String(error),
+        error: message,
       });
+      toast(`验收请求失败：${message}`);
     } finally {
       setBusy(false);
     }
@@ -99,20 +109,24 @@ export function AcceptanceAction({
 
   return (
     <>
-      <button
-        type="button"
-        disabled={busy || inFlight}
-        onClick={() => setConfirmOpen(true)}
-        className={compact
-          ? "inline-flex items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-[13px] font-medium text-accent-fg transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-45"
-          : "inline-flex items-center gap-1.5 rounded-md bg-accent px-3.5 py-2 text-[12.5px] font-medium text-accent-fg transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-45"}
-        title={inFlight
+      <Tip
+        label={inFlight
           ? "任务仍在运行，结束后才能验收"
           : task.mode === "team" ? "确认团队整体并联动共享执行者" : "确认任务验收通过"}
+        className="inline-flex"
       >
-        {busy ? <SpinnerGap size={14} className="animate-spin" /> : <CheckCircle size={14} weight="fill" />}
-        {busy ? "验收中" : inFlight ? "执行中" : "验收通过"}
-      </button>
+        <button
+          type="button"
+          disabled={busy || inFlight}
+          onClick={() => setConfirmOpen(true)}
+          className={compact
+            ? "inline-flex items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-[13px] font-medium text-accent-fg transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-45"
+            : "inline-flex items-center gap-1.5 rounded-md bg-accent px-3.5 py-2 text-[12.5px] font-medium text-accent-fg transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-45"}
+        >
+          {busy ? <SpinnerGap size={14} className="animate-spin" /> : <CheckCircle size={14} weight="fill" />}
+          {busy ? "验收中" : inFlight ? "执行中" : "验收通过"}
+        </button>
+      </Tip>
       {confirmOpen && (
         <ConfirmModal
           title="确认验收通过？"
@@ -128,6 +142,8 @@ export function AcceptanceAction({
 }
 
 export function AcceptanceFailureReport({ failure }: { failure: AcceptTaskFailure }) {
+  const handedOff = failure.reason === "merge_conflict" && failure.conflictHandoff?.notified === true;
+  const manualConflict = failure.reason === "merge_conflict" && !handedOff;
   const details = [
     ["reason", failure.reason],
     ["检查点", failure.phase],
@@ -138,27 +154,54 @@ export function AcceptanceFailureReport({ failure }: { failure: AcceptTaskFailur
     ["worktree", failure.worktreePath],
   ].filter((row): row is [string, string] => typeof row[1] === "string" && row[1].length > 0);
   return (
-    <div role="alert" className="mt-3 rounded-lg border border-red-500/35 bg-red-500/[0.06] p-3 text-[12px]">
-      <div className="flex items-start gap-2">
-        <WarningCircle size={15} weight="fill" className="mt-0.5 shrink-0 text-red-600" />
+    <div
+      role={handedOff ? "status" : "alert"}
+      className={`mt-3 rounded-lg border p-3 text-[12px] ${handedOff
+        ? "border-amber-500/40 bg-amber-500/[0.08]"
+        : "border-red-500/35 bg-red-500/[0.06]"}`}
+    >
+      <div className="flex items-start gap-2.5">
+        <span className={`mt-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-full ${handedOff
+          ? "bg-amber-500/15 text-amber-700"
+          : "bg-red-500/10 text-red-600"}`}
+        >
+          {handedOff
+            ? <ArrowsClockwise size={15} weight="bold" />
+            : <WarningCircle size={15} weight="fill" />}
+        </span>
         <div className="min-w-0 flex-1">
-          <p className="font-semibold text-red-700">验收未完成</p>
-          <p className="mt-0.5 whitespace-pre-wrap text-ink">{failure.error}</p>
-          {/* 冲突不是死路:后端已经把这一轮交回给 agent。说清楚「谁在处理、我该做什么」,
-              否则用户只看到一堆冲突文件,不知道是该自己去解还是等谁。 */}
-          {failure.conflictHandoff && (
-            <p
-              className={`mt-2 rounded-md px-2 py-1.5 text-[12px] ${
-                failure.conflictHandoff.notified
-                  ? "bg-accent/10 text-accent"
-                  : "bg-overlay text-muted"
-              }`}
-            >
-              {failure.conflictHandoff.message}
-            </p>
+          <p className={`text-[14px] font-semibold ${handedOff ? "text-amber-900" : "text-red-700"}`}>
+            {handedOff
+              ? "合并冲突已交给任务处理"
+              : manualConflict ? "合并冲突，未能自动交接" : "验收未完成"}
+          </p>
+          {handedOff ? (
+            <>
+              <p className="mt-1 whitespace-pre-wrap text-[13px] font-medium leading-relaxed text-amber-950">
+                {failure.conflictHandoff?.message}
+              </p>
+              <p className="mt-1.5 text-[11.5px] leading-relaxed text-amber-800">
+                本次验收已安全停止，目标分支未被修改；等待任务处理完成后，再点一次「验收通过」。
+              </p>
+            </>
+          ) : (
+            <>
+              {manualConflict && (
+                <p className="mt-1 text-[13px] font-medium leading-relaxed text-red-800">
+                  未能唤醒任务，请手动解决冲突并提交，然后重新验收。
+                </p>
+              )}
+              {failure.conflictHandoff?.message && (
+                <p className="mt-1 whitespace-pre-wrap text-red-700">{failure.conflictHandoff.message}</p>
+              )}
+              <p className="mt-1 whitespace-pre-wrap text-ink">{failure.error}</p>
+            </>
           )}
           {details.length > 0 && (
-            <dl className="mt-2 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 font-mono text-[11px]">
+            <dl className={`mt-3 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 border-t pt-2.5 font-mono text-[11px] ${handedOff
+              ? "border-amber-500/25"
+              : "border-red-500/15"}`}
+            >
               {details.map(([label, value]) => (
                 <div key={label} className="contents">
                   <dt className="text-faint">{label}</dt>
@@ -167,8 +210,8 @@ export function AcceptanceFailureReport({ failure }: { failure: AcceptTaskFailur
               ))}
             </dl>
           )}
-          <FileList title="冲突文件" files={failure.conflictFiles} />
-          <FileList title="未提交文件" files={failure.dirtyFiles} />
+          <FileList title="冲突文件" files={failure.conflictFiles} quiet={handedOff} />
+          <FileList title="未提交文件" files={failure.dirtyFiles} quiet={handedOff} />
           {!!failure.inFlightTasks?.length && (
             <div className="mt-2">
               <p className="font-medium text-red-700">正在使用相关 worktree 的任务（{failure.inFlightTasks.length}）</p>
@@ -190,11 +233,11 @@ export function AcceptanceFailureReport({ failure }: { failure: AcceptTaskFailur
   );
 }
 
-function FileList({ title, files }: { title: string; files?: string[] }) {
+function FileList({ title, files, quiet = false }: { title: string; files?: string[]; quiet?: boolean }) {
   if (!files?.length) return null;
   return (
     <div className="mt-2">
-      <p className="font-medium text-red-700">{title}（{files.length}）</p>
+      <p className={`font-medium ${quiet ? "text-amber-800" : "text-red-700"}`}>{title}（{files.length}）</p>
       <ul className="mt-1 space-y-0.5 font-mono text-[11px] text-ink">
         {files.map((file) => <li key={file} className="break-all">{file}</li>)}
       </ul>
