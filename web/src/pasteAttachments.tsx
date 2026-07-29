@@ -2,7 +2,7 @@ import { useState, useCallback, useRef, type ClipboardEvent } from "react";
 import { X, File as FileIcon, Paperclip } from "@phosphor-icons/react";
 import { maxBytesFor, type AttachmentKind } from "@harness/shared";
 import { api } from "./api";
-import { PreviewableImage } from "./ImagePreview";
+import { ImagePreviewGroup, PreviewableImage } from "./ImagePreview";
 
 // One pasted attachment: `url` previews an image thumbnail (image kind only),
 // `path` is the absolute file path handed to the agent (it reads it with its Read
@@ -145,34 +145,36 @@ export function AttachmentChips({
   return (
     <div className="pt-2">
       {attachments.length > 0 && (
-        <div className="flex flex-wrap gap-2">
-          {attachments.map((a) =>
-            a.kind === "image" ? (
-              <div key={a.path} className="group relative h-14 w-14 overflow-hidden rounded-md border border-line2">
-                <PreviewableImage
-                  src={a.url}
-                  alt={a.name}
-                  className="h-full w-full object-cover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent"
-                />
-                <RemoveBtn onClick={() => onRemove(a.path)} />
-              </div>
-            ) : (
-              <div
-                key={a.path}
-                className="group relative flex h-14 max-w-[180px] items-center gap-2 rounded-md border border-line2 bg-raised/50 py-1 pl-2 pr-6"
-              >
-                <FileIcon size={20} className="shrink-0 text-muted" />
-                <span className="flex min-w-0 flex-col">
-                  <span className="truncate text-[12px] text-ink" title={a.name}>
-                    {a.name}
+        <ImagePreviewGroup>
+          <div className="flex flex-wrap gap-2">
+            {attachments.map((a) =>
+              a.kind === "image" ? (
+                <div key={a.path} className="group relative h-14 w-14 overflow-hidden rounded-md border border-line2">
+                  <PreviewableImage
+                    src={a.url}
+                    alt={a.name}
+                    className="h-full w-full object-cover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent"
+                  />
+                  <RemoveBtn onClick={() => onRemove(a.path)} />
+                </div>
+              ) : (
+                <div
+                  key={a.path}
+                  className="group relative flex h-14 max-w-[180px] items-center gap-2 rounded-md border border-line2 bg-raised/50 py-1 pl-2 pr-6"
+                >
+                  <FileIcon size={20} className="shrink-0 text-muted" />
+                  <span className="flex min-w-0 flex-col">
+                    <span className="truncate text-[12px] text-ink" title={a.name}>
+                      {a.name}
+                    </span>
+                    <span className="text-[10px] text-faint">{human(a.size)}</span>
                   </span>
-                  <span className="text-[10px] text-faint">{human(a.size)}</span>
-                </span>
-                <RemoveBtn onClick={() => onRemove(a.path)} />
-              </div>
-            ),
-          )}
-        </div>
+                  <RemoveBtn onClick={() => onRemove(a.path)} />
+                </div>
+              ),
+            )}
+          </div>
+        </ImagePreviewGroup>
       )}
       {error && <div className="pt-1.5 text-[11px] text-red-600">{error}</div>}
     </div>

@@ -1,5 +1,5 @@
 import { File as FileIcon, X } from "@phosphor-icons/react";
-import { PreviewableImage } from "./ImagePreview";
+import { ImagePreviewGroup, PreviewableImage } from "./ImagePreview";
 
 export type ParsedAttachmentText = {
   body: string;
@@ -97,46 +97,48 @@ export function AttachmentDisplay({
   if (!uniquePaths.length) return null;
 
   return (
-    <div className={`flex flex-wrap gap-2 ${className}`}>
-      {uniquePaths.map((path) => {
-        const file = uploadFile(path);
-        const name = displayName(path);
-        const url = file ? `/api/uploads/${encodeURIComponent(file)}` : null;
-        const image = !!url && IMAGE_EXT.test(file ?? "");
-        return (
-          <div key={path} className="group relative">
-            {image ? (
-              <div className="h-14 w-14 overflow-hidden rounded-md border border-line2 bg-raised transition-colors group-hover:border-accent">
-                <PreviewableImage
-                  src={url}
-                  alt={name}
-                  className="h-full w-full object-cover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent"
-                />
-              </div>
-            ) : url ? (
-              <a
-                href={url}
-                target="_blank"
-                rel="noreferrer"
-                className="flex h-14 max-w-[220px] items-center gap-2 rounded-md border border-line2 bg-raised/50 py-1 pl-2 pr-3 transition-colors hover:border-accent focus-visible:border-accent focus-visible:outline-none"
-                title={name}
-              >
-                <FileIcon size={20} className="shrink-0 text-muted" />
-                <span className="truncate text-[12px] text-ink">{name}</span>
-              </a>
-            ) : (
-              <div
-                className="flex h-14 max-w-[220px] items-center gap-2 rounded-md border border-line2 bg-raised/50 py-1 pl-2 pr-3"
-                title={name}
-              >
-                <FileIcon size={20} className="shrink-0 text-muted" />
-                <span className="truncate text-[12px] text-ink">{name}</span>
-              </div>
-            )}
-            {onRemove && <RemoveButton onClick={() => onRemove(path)} />}
-          </div>
-        );
-      })}
-    </div>
+    <ImagePreviewGroup>
+      <div className={`flex flex-wrap gap-2 ${className}`}>
+        {uniquePaths.map((path) => {
+          const file = uploadFile(path);
+          const name = displayName(path);
+          const url = file ? `/api/uploads/${encodeURIComponent(file)}` : null;
+          const image = !!url && IMAGE_EXT.test(file ?? "");
+          return (
+            <div key={path} className="group relative">
+              {image ? (
+                <div className="h-14 w-14 overflow-hidden rounded-md border border-line2 bg-raised transition-colors group-hover:border-accent">
+                  <PreviewableImage
+                    src={url}
+                    alt={name}
+                    className="h-full w-full object-cover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent"
+                  />
+                </div>
+              ) : url ? (
+                <a
+                  href={url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="flex h-14 max-w-[220px] items-center gap-2 rounded-md border border-line2 bg-raised/50 py-1 pl-2 pr-3 transition-colors hover:border-accent focus-visible:border-accent focus-visible:outline-none"
+                  title={name}
+                >
+                  <FileIcon size={20} className="shrink-0 text-muted" />
+                  <span className="truncate text-[12px] text-ink">{name}</span>
+                </a>
+              ) : (
+                <div
+                  className="flex h-14 max-w-[220px] items-center gap-2 rounded-md border border-line2 bg-raised/50 py-1 pl-2 pr-3"
+                  title={name}
+                >
+                  <FileIcon size={20} className="shrink-0 text-muted" />
+                  <span className="truncate text-[12px] text-ink">{name}</span>
+                </div>
+              )}
+              {onRemove && <RemoveButton onClick={() => onRemove(path)} />}
+            </div>
+          );
+        })}
+      </div>
+    </ImagePreviewGroup>
   );
 }

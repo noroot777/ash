@@ -10,6 +10,7 @@ import { useEscape } from "./useEscape";
 import { Pill } from "./Menu";
 import { usePasteAttachments, AttachmentChips } from "./pasteAttachments";
 import { AttachmentDisplay } from "./messageAttachments";
+import { ImagePreviewGroup } from "./ImagePreview";
 import { toLocalInput } from "./ScheduleFields";
 import { type ExecutorSelection, useExecutorProfiles } from "./ExecutorPicker";
 import { teamExecutorDefaults } from "./teamExecutorDefaults";
@@ -486,12 +487,14 @@ export function TaskComposer({
                   调度者常驻不断线：随时插话改方向
                 </div>
               )}
-              <AttachmentChips attachments={attachments} onRemove={remove} error={error} />
-              <AttachmentDisplay
-                paths={seedAttachments}
-                className="pt-2"
-                onRemove={(path) => setSeedAttachments((paths) => paths.filter((item) => item !== path))}
-              />
+              <ImagePreviewGroup>
+                <AttachmentChips attachments={attachments} onRemove={remove} error={error} />
+                <AttachmentDisplay
+                  paths={seedAttachments}
+                  className="pt-2"
+                  onRemove={(path) => setSeedAttachments((paths) => paths.filter((item) => item !== path))}
+                />
+              </ImagePreviewGroup>
             </div>
           )}
 

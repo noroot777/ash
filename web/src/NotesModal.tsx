@@ -5,6 +5,7 @@ import { api } from "./api";
 import { Markdown } from "./Markdown";
 import { ConfirmModal, Modal, primaryCls } from "./Modal";
 import { AttachmentDisplay } from "./messageAttachments";
+import { ImagePreviewGroup } from "./ImagePreview";
 import { AttachButton, AttachmentChips, usePasteAttachments } from "./pasteAttachments";
 import { toast } from "./toast";
 import { ModalFullscreenButton, useMovableModal } from "./useMovableModal";
@@ -422,46 +423,48 @@ export function NotesModal({
                     已转为任务 <ArrowSquareOut size={13} />
                   </button>
                 )}
-                {bodyFocused ? (
-                <textarea
-                  autoFocus
-                  value={draft.body}
-                  onChange={(event) => updateDraft({ ...draftRef.current!, body: event.target.value })}
-                  onPaste={uploaded.onPaste}
-                  onBlur={() => setBodyFocused(false)}
-                  placeholder="记下临时想法…"
-                  className="min-h-[220px] flex-1 resize-none bg-transparent text-[14px] leading-relaxed text-ink outline-none placeholder:text-faint"
-                />
-                ) : (
-                  <div
-                    role="textbox"
-                    tabIndex={0}
-                    aria-label="随手记正文，点击编辑"
-                    onClick={(event) => {
-                      if ((event.target as Element).closest("a, button")) return;
-                      setBodyFocused(true);
+                <ImagePreviewGroup>
+                  {bodyFocused ? (
+                    <textarea
+                      autoFocus
+                      value={draft.body}
+                      onChange={(event) => updateDraft({ ...draftRef.current!, body: event.target.value })}
+                      onPaste={uploaded.onPaste}
+                      onBlur={() => setBodyFocused(false)}
+                      placeholder="记下临时想法…"
+                      className="min-h-[220px] flex-1 resize-none bg-transparent text-[14px] leading-relaxed text-ink outline-none placeholder:text-faint"
+                    />
+                  ) : (
+                    <div
+                      role="textbox"
+                      tabIndex={0}
+                      aria-label="随手记正文，点击编辑"
+                      onClick={(event) => {
+                        if ((event.target as Element).closest("a, button")) return;
+                        setBodyFocused(true);
+                      }}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") { event.preventDefault(); setBodyFocused(true); }
+                      }}
+                      className="min-h-[220px] flex-1 cursor-text rounded-md outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+                    >
+                      <Markdown text={draft.body} />
+                    </div>
+                  )}
+                  <AttachmentDisplay
+                    paths={draft.attachments.filter((path) => !uploaded.attachments.some((item) => item.path === path))}
+                    className="mt-3"
+                    onRemove={(path) => updateDraft({ ...draftRef.current!, attachments: draftRef.current!.attachments.filter((item) => item !== path) })}
+                  />
+                  <AttachmentChips
+                    attachments={uploaded.attachments}
+                    onRemove={(path) => {
+                      uploaded.remove(path);
+                      updateDraft({ ...draftRef.current!, attachments: draftRef.current!.attachments.filter((item) => item !== path) });
                     }}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter") { event.preventDefault(); setBodyFocused(true); }
-                    }}
-                    className="min-h-[220px] flex-1 cursor-text rounded-md outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-                  >
-                    <Markdown text={draft.body} />
-                  </div>
-                )}
-                <AttachmentDisplay
-                  paths={draft.attachments.filter((path) => !uploaded.attachments.some((item) => item.path === path))}
-                  className="mt-3"
-                  onRemove={(path) => updateDraft({ ...draftRef.current!, attachments: draftRef.current!.attachments.filter((item) => item !== path) })}
-                />
-                <AttachmentChips
-                  attachments={uploaded.attachments}
-                  onRemove={(path) => {
-                    uploaded.remove(path);
-                    updateDraft({ ...draftRef.current!, attachments: draftRef.current!.attachments.filter((item) => item !== path) });
-                  }}
-                  error={uploaded.error}
-                />
+                    error={uploaded.error}
+                  />
+                </ImagePreviewGroup>
                 <div className="mt-4 flex items-center border-t border-line pt-3">
                   <AttachButton
                     addFiles={uploaded.addFiles}

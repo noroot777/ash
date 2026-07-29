@@ -1,14 +1,20 @@
 import {
+  createContext,
   useCallback,
+  useContext,
   useEffect,
+  useId,
+  useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type ComponentPropsWithoutRef,
   type MouseEvent,
   type PointerEvent,
+  type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
-import { X } from "@phosphor-icons/react";
+import { CaretLeft, CaretRight, X } from "@phosphor-icons/react";
 import { useEscape } from "./useEscape";
 import { useReveal } from "./useReveal";
 
@@ -23,17 +29,84 @@ type DragState = {
   moved: boolean;
 };
 
-export function ImageLightbox({
-  src,
-  alt,
-  label,
-  onClose,
-}: {
+export type PreviewImage = {
   src: string;
   alt: string;
   label?: string;
+};
+
+type ImageGroupContextValue = {
+  register: (id: string, image: PreviewImage) => void;
+  unregister: (id: string) => void;
+  open: (id: string) => void;
+};
+
+const ImageGroupContext = createContext<ImageGroupContextValue | null>(null);
+
+function ImageGroupProvider({ children }: { children: ReactNode }) {
+  const imagesRef = useRef(new Map<string, PreviewImage>());
+  const [revision, setRevision] = useState(0);
+  const [activeId, setActiveId] = useState<string | null>(null);
+
+  const register = useCallback((id: string, image: PreviewImage) => {
+    const current = imagesRef.current.get(id);
+    if (current?.src === image.src && current.alt === image.alt && current.label === image.label) return;
+    imagesRef.current.set(id, image);
+    setRevision((value) => value + 1);
+  }, []);
+
+  const unregister = useCallback((id: string) => {
+    if (!imagesRef.current.delete(id)) return;
+    setRevision((value) => value + 1);
+  }, []);
+
+  const value = useMemo(() => ({ register, unregister, open: setActiveId }), [register, unregister]);
+  const entries = useMemo(() => [...imagesRef.current.entries()], [revision]);
+  const activeIndex = activeId === null ? -1 : entries.findIndex(([id]) => id === activeId);
+
+  useEffect(() => {
+    if (activeId !== null && activeIndex < 0) setActiveId(null);
+  }, [activeId, activeIndex]);
+
+  return (
+    <ImageGroupContext.Provider value={value}>
+      {children}
+      {activeIndex >= 0 && (
+        <ImageLightbox
+          images={entries.map(([, image]) => image)}
+          index={activeIndex}
+          onIndexChange={(index) => setActiveId(entries[index]?.[0] ?? null)}
+          onClose={() => setActiveId(null)}
+        />
+      )}
+    </ImageGroupContext.Provider>
+  );
+}
+
+// Nested boundaries deliberately reuse the nearest group. This lets leaf
+// renderers be safe by default while a message/note can merge several image
+// sources into one natural navigation context with one outer boundary.
+export function ImagePreviewGroup({ children, isolated = false }: { children: ReactNode; isolated?: boolean }) {
+  const parent = useContext(ImageGroupContext);
+  return parent && !isolated ? <>{children}</> : <ImageGroupProvider>{children}</ImageGroupProvider>;
+}
+
+export function ImageLightbox({
+  images,
+  index,
+  onIndexChange,
+  onClose,
+}: {
+  images: PreviewImage[];
+  index: number;
+  onIndexChange: (index: number) => void;
   onClose: () => void;
 }) {
+  const current = images[index] ?? images[0];
+  const src = current?.src ?? "";
+  const alt = current?.alt ?? "图片";
+  const label = current?.label;
+  const grouped = images.length > 1;
   const viewportRef = useRef<HTMLDivElement>(null);
   const imageRef = useRef<HTMLImageElement>(null);
   const dragRef = useRef<DragState | null>(null);
@@ -44,6 +117,16 @@ export function ImageLightbox({
   const [dragging, setDragging] = useState(false);
   const { closing, requestClose } = useReveal(onClose, "--modal-close-dur");
   useEscape(requestClose);
+
+  const resetView = useCallback(() => {
+    dragRef.current = null;
+    suppressClickRef.current = false;
+    pendingZoomPointRef.current = null;
+    setCanZoom(false);
+    setZoomed(false);
+    setDragging(false);
+    viewportRef.current?.scrollTo({ left: 0, top: 0 });
+  }, []);
 
   const updateZoomAvailability = useCallback(() => {
     const image = imageRef.current;
@@ -59,6 +142,10 @@ export function ImageLightbox({
     window.addEventListener("resize", updateZoomAvailability);
     return () => window.removeEventListener("resize", updateZoomAvailability);
   }, [updateZoomAvailability]);
+
+  useEffect(() => {
+    resetView();
+  }, [resetView, src]);
 
   useEffect(() => {
     const viewport = viewportRef.current;
@@ -113,19 +200,36 @@ export function ImageLightbox({
     setDragging(false);
   };
 
+  const step = useCallback((delta: number) => {
+    if (!grouped) return;
+    resetView();
+    onIndexChange((index + delta + images.length) % images.length);
+  }, [grouped, images.length, index, onIndexChange, resetView]);
+
   // Lightboxes often sit above another Esc-aware modal or panel. Intercept in
-  // capture phase so one Esc closes only the image,
-  // rather than also reaching the already-mounted parent overlay listener.
+  // capture phase so one Esc closes only the image, and reserve horizontal
+  // arrows for group navigation instead of scrolling a zoomed viewport.
   useEffect(() => {
-    const interceptEscape = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      event.preventDefault();
-      event.stopImmediatePropagation();
-      requestClose();
+    const interceptKeys = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        requestClose();
+      } else if (event.key === "ArrowLeft" && grouped) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        step(-1);
+      } else if (event.key === "ArrowRight" && grouped) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        step(1);
+      }
     };
-    document.addEventListener("keydown", interceptEscape, true);
-    return () => document.removeEventListener("keydown", interceptEscape, true);
-  }, [requestClose]);
+    document.addEventListener("keydown", interceptKeys, true);
+    return () => document.removeEventListener("keydown", interceptKeys, true);
+  }, [grouped, requestClose, step]);
+
+  if (!current) return null;
 
   return createPortal(
     <div
@@ -153,12 +257,42 @@ export function ImageLightbox({
       >
         <X size={20} weight="bold" />
       </button>
+      {grouped && (
+        <>
+          <button
+            type="button"
+            aria-label="上一张图片"
+            onClick={(event) => {
+              event.stopPropagation();
+              step(-1);
+            }}
+            className="fixed left-3 top-1/2 z-10 grid h-11 w-11 -translate-y-1/2 place-items-center rounded-full bg-black/55 text-white shadow-lg backdrop-blur-sm transition-colors hover:bg-black/75 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/80 sm:left-5"
+          >
+            <CaretLeft size={24} weight="bold" />
+          </button>
+          <button
+            type="button"
+            aria-label="下一张图片"
+            onClick={(event) => {
+              event.stopPropagation();
+              step(1);
+            }}
+            className="fixed right-3 top-1/2 z-10 grid h-11 w-11 -translate-y-1/2 place-items-center rounded-full bg-black/55 text-white shadow-lg backdrop-blur-sm transition-colors hover:bg-black/75 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/80 sm:right-5"
+          >
+            <CaretRight size={24} weight="bold" />
+          </button>
+          <div className="pointer-events-none fixed left-1/2 top-4 z-10 -translate-x-1/2 rounded-full bg-black/60 px-3 py-1.5 text-[11px] font-semibold tabular-nums text-white/90 shadow-lg backdrop-blur-sm">
+            {index + 1}/{images.length}
+          </div>
+        </>
+      )}
       {label && (
         <div className="pointer-events-none fixed bottom-4 left-4 z-10 max-w-[min(80vw,720px)] truncate rounded-full bg-black/60 px-3 py-1.5 text-[11px] font-medium text-white/90 shadow-lg backdrop-blur-sm">
           {label}
         </div>
       )}
       <img
+        key={src}
         ref={imageRef}
         src={src}
         alt={alt}
@@ -232,37 +366,68 @@ export function PreviewableImage({
   title: _title,
   ...props
 }: ImageProps) {
-  const [open, setOpen] = useState(false);
+  return (
+    <ImagePreviewGroup>
+      <GroupedPreviewableImage
+        {...props}
+        src={src}
+        alt={alt}
+        className={className}
+        onClick={onClick}
+        onKeyDown={onKeyDown}
+      />
+    </ImagePreviewGroup>
+  );
+}
+
+function GroupedPreviewableImage({
+  src,
+  alt,
+  className = "",
+  onClick,
+  onKeyDown,
+  title: _title,
+  ...props
+}: ImageProps) {
+  const id = useId();
+  const group = useContext(ImageGroupContext)!;
   const label = alt || "图片";
+
+  useLayoutEffect(() => {
+    if (src) group.register(id, { src, alt: label, label });
+    else group.unregister(id);
+  }, [group, id, label, src]);
+
+  useLayoutEffect(() => {
+    return () => group.unregister(id);
+  }, [group, id]);
+
   const openPreview = (event: MouseEvent<HTMLImageElement>) => {
     onClick?.(event);
     if (event.defaultPrevented || !src) return;
     event.preventDefault();
     event.stopPropagation();
-    setOpen(true);
+    group.open(id);
   };
 
   return (
-    <>
-      <img
-        {...props}
-        src={src}
-        alt={alt}
-        role="button"
-        tabIndex={0}
-        aria-haspopup="dialog"
-        className={`cursor-zoom-in ${className}`}
-        onClick={openPreview}
-        onKeyDown={(event) => {
-          onKeyDown?.(event);
-          if (event.defaultPrevented || !src || (event.key !== "Enter" && event.key !== " ")) return;
-          event.preventDefault();
-          event.stopPropagation();
-          setOpen(true);
-        }}
-      />
-      {open && src && <ImageLightbox src={src} alt={label} onClose={() => setOpen(false)} />}
-    </>
+    <img
+      {...props}
+      src={src}
+      alt={alt}
+      role="button"
+      tabIndex={0}
+      aria-haspopup="dialog"
+      className={`cursor-zoom-in ${className}`}
+      onClick={openPreview}
+      onKeyDown={(event) => {
+        onKeyDown?.(event);
+        if (event.defaultPrevented || !src || (event.key !== "Enter" && event.key !== " ")) return;
+        event.preventDefault();
+        event.stopPropagation();
+        group.open(id);
+      }}
+    />
   );
 }
 

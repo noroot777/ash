@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { api } from "./api";
-import { PreviewableMarkdownImage } from "./ImagePreview";
+import { ImagePreviewGroup, PreviewableMarkdownImage } from "./ImagePreview";
 import { Modal } from "./Modal";
 import { toast } from "./toast";
 
@@ -111,7 +111,9 @@ function ReviewReportModal({
       contentClassName="overflow-y-auto p-4"
     >
       {text !== null ? (
-        <Markdown text={text} />
+        <ImagePreviewGroup isolated>
+          <Markdown text={text} />
+        </ImagePreviewGroup>
       ) : error ? (
         <p className="text-[13px] text-red-700">审查报告加载失败：{error}</p>
       ) : (
@@ -127,9 +129,10 @@ export function Markdown({ text }: { text: string }) {
   const [reviewReport, setReviewReport] = useState<ReviewFileTarget | null>(null);
   return (
     <div className="text-[13px] leading-relaxed text-ink">
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm, remarkSoftBreaks]}
-        components={{
+      <ImagePreviewGroup>
+        <ReactMarkdown
+          remarkPlugins={[remarkGfm, remarkSoftBreaks]}
+          components={{
           h1: (p) => <h1 className="mb-1 mt-2 text-[15px] font-semibold first:mt-0" {...p} />,
           h2: (p) => <h2 className="mb-1 mt-2 text-[14px] font-semibold first:mt-0" {...p} />,
           h3: (p) => <h3 className="mb-1 mt-2 text-[13px] font-semibold first:mt-0" {...p} />,
@@ -196,10 +199,11 @@ export function Markdown({ text }: { text: string }) {
           ),
           th: (p) => <th className="border border-line px-2 py-1 text-left font-medium" {...p} />,
           td: (p) => <td className="border border-line px-2 py-1 align-top wrap-anywhere" {...p} />,
-        }}
-      >
-        {text}
-      </ReactMarkdown>
+          }}
+        >
+          {text}
+        </ReactMarkdown>
+      </ImagePreviewGroup>
       {reviewReport && <ReviewReportModal {...reviewReport} onClose={() => setReviewReport(null)} />}
     </div>
   );

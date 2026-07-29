@@ -19,7 +19,7 @@ import {
 import { api } from "./api";
 import { type ExecutorSelection, useExecutorProfiles } from "./ExecutorPicker";
 import { ExecutorField } from "./composer/ExecutorFields";
-import { ImageLightbox } from "./ImagePreview";
+import { ImageLightbox, type PreviewImage } from "./ImagePreview";
 import { Markdown } from "./Markdown";
 import { toast } from "./toast";
 import { useServerEvents } from "./useEvents";
@@ -27,7 +27,22 @@ import { useServerEvents } from "./useEvents";
 const AUTO_REVIEW_LIMIT = 2;
 const REVIEW_IN_FLIGHT = new Set(["backlog", "queued", "running", "paused"]);
 
-type Preview = { round: number; name: string; src: string };
+type Preview = PreviewImage & { round: number; name: string };
+
+function reviewPreview(taskId: string, round: number, name: string): Preview {
+  return {
+    round,
+    name,
+    src: api.taskReviewFileUrl(taskId, round, name),
+    alt: `第 ${round} 轮审查截图 ${name}`,
+    label: `第 ${round} 轮 · ${name}`,
+  };
+}
+
+function previewsForRound(taskId: string, rounds: TaskReviewRound[], roundNumber: number): Preview[] {
+  const round = rounds.find((candidate) => candidate.round === roundNumber);
+  return round?.screenshots.map((name) => reviewPreview(taskId, round.round, name)) ?? [];
+}
 
 function useTaskReviewInfo(taskId: string) {
   const [info, setInfo] = useState<TaskReviewInfo | null>(null);
@@ -152,6 +167,8 @@ export function TaskReviewPanel({
   }, [profiles, selection]);
 
   const rounds = info?.rounds ?? [];
+  const previewImages = preview ? previewsForRound(task.id, rounds, preview.round) : [];
+  const previewIndex = previewImages.findIndex((image) => image.name === preview?.name);
   const activeRound = rounds.find((round) => REVIEW_IN_FLIGHT.has(round.reviewTaskStatus));
   const canDispatch = !task.archived && task.status !== "running" && task.status !== "queued";
   const autoLimitReached = !!info?.reviewRequested
@@ -260,11 +277,11 @@ export function TaskReviewPanel({
         onPreview={setPreview}
         defaultExpanded={defaultExpanded}
       />
-      {preview && (
+      {previewIndex >= 0 && (
         <ImageLightbox
-          src={preview.src}
-          alt={`第 ${preview.round} 轮审查截图 ${preview.name}`}
-          label={`第 ${preview.round} 轮 · ${preview.name}`}
+          images={previewImages}
+          index={previewIndex}
+          onIndexChange={(index) => setPreview(previewImages[index] ?? null)}
           onClose={() => setPreview(null)}
         />
       )}
@@ -282,6 +299,8 @@ export function TaskReviewEvidence({
   const { info, loading, loadError, load } = useTaskReviewInfo(taskId);
   const [preview, setPreview] = useState<Preview | null>(null);
   const rounds = info?.rounds ?? [];
+  const previewImages = preview ? previewsForRound(taskId, rounds, preview.round) : [];
+  const previewIndex = previewImages.findIndex((image) => image.name === preview?.name);
 
   return (
     <section className="overflow-hidden rounded-xl border border-violet-500/25 bg-violet-500/[0.035]" aria-label="独立审查证据">
@@ -306,11 +325,11 @@ export function TaskReviewEvidence({
         onPreview={setPreview}
         defaultExpanded={defaultExpanded}
       />
-      {preview && (
+      {previewIndex >= 0 && (
         <ImageLightbox
-          src={preview.src}
-          alt={`第 ${preview.round} 轮审查截图 ${preview.name}`}
-          label={`第 ${preview.round} 轮 · ${preview.name}`}
+          images={previewImages}
+          index={previewIndex}
+          onIndexChange={(index) => setPreview(previewImages[index] ?? null)}
           onClose={() => setPreview(null)}
         />
       )}
@@ -437,15 +456,15 @@ function ReviewRoundCard({
               </div>
               <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
                 {round.screenshots.map((name) => {
-                  const src = api.taskReviewFileUrl(taskId, round.round, name);
+                  const preview = reviewPreview(taskId, round.round, name);
                   return (
                     <button
                       key={name}
                       type="button"
-                      onClick={() => onPreview({ round: round.round, name, src })}
+                      onClick={() => onPreview(preview)}
                       className="group overflow-hidden rounded-lg border border-line bg-canvas text-left transition-colors hover:border-violet-500/35"
                     >
-                      <img src={src} alt={name} loading="lazy" className="aspect-video w-full bg-raised object-cover transition-transform duration-200 group-hover:scale-[1.02]" />
+                      <img src={preview.src} alt={name} loading="lazy" className="aspect-video w-full bg-raised object-cover transition-transform duration-200 group-hover:scale-[1.02]" />
                       <span className="block truncate px-2 py-1.5 text-[10px] text-muted">{name}</span>
                     </button>
                   );

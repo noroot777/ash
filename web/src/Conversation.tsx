@@ -13,6 +13,7 @@ import { formatInstant, Duration } from "./time";
 import { executorLabel } from "./executorLabel";
 import { AttachmentDisplay, parseAttachmentText } from "./messageAttachments";
 import { liveLogsAfterSnapshot } from "./conversationDedup";
+import { ImagePreviewGroup } from "./ImagePreview";
 
 export type LogLine = {
   kind: "text" | "thinking" | "tool" | "error" | "done" | "user" | "system";
@@ -407,7 +408,7 @@ export function AgentBubble({
             />
           )}
         </div>
-        {children}
+        <ImagePreviewGroup>{children}</ImagePreviewGroup>
         {showResume && session && (session.resumeCommand || session.cliSessionId) && (
           <div className="mt-1.5 flex items-center gap-1.5 text-[10px]">
             <ResumeCopyButtons s={session} />
