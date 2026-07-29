@@ -484,7 +484,7 @@ export interface BatchCreateTasksBody {
 export type HitlGate = "off" | "on";
 export type DebateConsensusBy = "both" | "A" | "B";
 
-// /pair is discussion-only: two debaters challenge each other and produce a
+// /debate is discussion-only: two debaters challenge each other and produce a
 // conclusion. Code execution belongs to /team.
 export type DebateStyle = "debate";
 
@@ -510,7 +510,7 @@ export const DEBATE_DEFAULTS: DebateConfig = {
   gateG1: "on",
 };
 
-// Database rows and localStorage may contain fields from retired /pair modes.
+// Database rows and localStorage may contain fields from retired debate variants.
 // Normalize at every boundary so old tasks remain readable while all new runs
 // use the single supported debate shape.
 export function normalizeDebateConfig(value: unknown): DebateConfig {
@@ -625,7 +625,7 @@ export type ServerEvent =
       durationMs?: number;
     }
   | { type: "debate.gate"; taskId: string; gate: GateName; open: boolean; consensus?: boolean; consensusBy?: DebateConsensusBy; conclusionA?: string | null; conclusionB?: string | null }
-  // A human intervention in a /pair timeline (gate inject/ask). Carries the time
+  // A human intervention in a /debate timeline (gate inject/ask). Carries the time
   // so the timeline can show when the user spoke. Persisted in the transcript too.
   // target: when a 提问 was directed at one debater, which side — so the timeline
   // can show 「你 → 辩手A」 (undefined = addressed to both).

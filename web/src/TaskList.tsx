@@ -8,7 +8,7 @@ import {
   type TaskStatus,
 } from "@harness/shared";
 import { statusCounts, workersOf } from "@harness/shared/team";
-import { CaretRight, UsersThree } from "@phosphor-icons/react";
+import { CaretRight, Scales, UsersThree } from "@phosphor-icons/react";
 import { STATUSES, STATUS_META, PRIORITY_ORDER } from "./constants";
 import { PriorityIcon, PauseHint, useCollapsedGroups } from "./ui";
 import { StatusIcon } from "./StatusIcon";
@@ -209,6 +209,7 @@ function TaskRow({
   onOpenTask: (id: string) => void;
   groupName: (id: string | null) => string | undefined;
 }) {
+  const badge = pairBadge(t);
   return (
     <div
       data-task-id={t.id}
@@ -245,12 +246,17 @@ function TaskRow({
               {l}
             </span>
           ))}
-          <span
-            className={`max-w-[136px] shrink truncate rounded px-1.5 py-0.5 font-mono text-[10px] ${pairBadge(t).cls}`}
-            title={pairBadge(t).label}
-          >
-            {pairBadge(t).label}
-          </span>
+          <Tip label={badge.label} className="min-w-0 shrink-0">
+            <span
+              className={`inline-flex max-w-[136px] items-center justify-center rounded px-1.5 py-0.5 font-mono text-[10px] ${badge.cls}`}
+            >
+              {badge.icon === "scales" ? (
+                <Scales size={13} weight="bold" aria-hidden />
+              ) : (
+                <span className="truncate">{badge.label}</span>
+              )}
+            </span>
+          </Tip>
         </div>
       </div>
       <PauseHint task={t} allTasks={allTasks} onOpen={onSelect} />

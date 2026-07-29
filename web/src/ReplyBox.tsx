@@ -34,6 +34,7 @@ export function ReplyBox({
   command,
   placeholder = `回复并继续（${submitShortcutLabel()} 发送，可粘贴图片或文件，@ 召唤其它智能体）…`,
   disabledPlaceholder = "进行中…",
+  initialHeight = 72,
 }: {
   taskId: string;
   onReply: (text: string, opts?: { attachments?: string[]; agent?: AgentType }) => void;
@@ -56,6 +57,7 @@ export function ReplyBox({
   };
   placeholder?: string;
   disabledPlaceholder?: string;
+  initialHeight?: number;
 }) {
   const [v, setV] = useState("");
   const [target, setTarget] = useState<AgentType | null>(null);
@@ -275,7 +277,7 @@ export function ReplyBox({
           }}
           disabled={inputDisabled}
           placeholder={disabled ? disabledPlaceholder : placeholder}
-          initialHeight={72}
+          initialHeight={initialHeight}
           minHeight={60}
           maxHeight={360}
           className="rounded-lg border border-line bg-panel py-2 pl-2.5 pr-[140px] text-[13px] leading-relaxed text-ink outline-none placeholder:text-faint focus:border-accent disabled:opacity-50"

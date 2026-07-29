@@ -1,19 +1,19 @@
 import type { Session, Task } from "@harness/shared";
 import { STATUS_META } from "./constants";
 
-export type TaskDerivationKind = "team" | "pair";
+export type TaskDerivationKind = "team" | "debate";
 
 export type TaskDerivationCommand = {
   kind: TaskDerivationKind;
   note: string;
 };
 
-const DERIVATION_COMMAND = /^\/(team|pair)\b/i;
+const DERIVATION_COMMAND = /^\/(team|debate)\b/i;
 
 // 回复框斜杠菜单的候选（`/` 起手即弹，回车选中后直达配置卡）。
 export const TASK_DERIVATION_COMMANDS = [
   { command: "/team", label: "组队开干", hint: "以当前任务为背景创建团队" },
-  { command: "/pair", label: "发起辩论", hint: "以当前任务为背景发起辩论" },
+  { command: "/debate", label: "发起辩论", hint: "以当前任务为背景发起辩论" },
 ];
 
 export function parseTaskDerivationCommand(text: string): TaskDerivationCommand | null {
@@ -30,7 +30,7 @@ export function isTaskDerivationCommand(text: string): boolean {
   return parseTaskDerivationCommand(text) !== null;
 }
 
-export function defaultPairTopic(task: Task, supplement: string): string {
+export function defaultDebateTopic(task: Task, supplement: string): string {
   const title = task.title.trim() || "当前任务";
   const base = `围绕任务「${title}」的目标与当前进展，比较可行方案、关键风险和下一步，并形成可验证的结论。`;
   return supplement.trim() ? `${base}\n\n补充关注：${supplement.trim()}` : base;
@@ -98,7 +98,7 @@ export function buildTaskDerivationBody(
 
   const note = userNote.trim();
   if (note) {
-    lines.push("", kind === "pair" ? "## 用户附言（本次辩题）" : "## 用户附言", note);
+    lines.push("", kind === "debate" ? "## 用户附言（本次辩题）" : "## 用户附言", note);
   }
 
   lines.push("", `来源任务 ID（仅供溯源）：${task.id}`);

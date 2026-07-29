@@ -1,7 +1,7 @@
 # Ash — Harness 的 iPhone 客户端
 
 用 Expo / React Native 写的 harness 手机端：随时查看 / 新建 / 运行普通任务，看 agent
-实时输出并回复会话；也支持团队任务，以及只读查看 `/pair`（debate）的完整辩论记录与状态。
+实时输出并回复会话；也支持团队任务，以及只读查看 `/debate` 的完整辩论记录与状态。
 
 后端不动——这是 harness 的第二个前端，经 REST + 一条全局 SSE（`server/`）通信。
 
