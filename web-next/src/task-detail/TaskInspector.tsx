@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { AgentExecutorProfile, AgentType, Group, Schedule, Session, Task, TaskReviewInfo, TaskStatus } from "@harness/shared";
-import { AGENT_TYPES, CLI_MODEL_PRESETS, isUserSettableStatus, REASONING_EFFORT_VALUES, TASK_STATUS_LABELS } from "@harness/shared";
+import { AGENT_TYPES, isUserSettableStatus, TASK_STATUS_LABELS } from "@harness/shared";
+import { CLI_MODEL_PRESETS, REASONING_EFFORT_VALUES } from "@harness/shared/cli-presets";
 import { sameExecutor } from "@harness/shared/executors";
 import { CaretRight, ListNumbers, Plus, X } from "@phosphor-icons/react";
 import { api } from "../lib/api.ts";

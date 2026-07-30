@@ -1,11 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { AgentExecutorProfile, AgentType, AppSettings } from "@harness/shared";
-import {
-  AGENT_TYPES,
-  CLI_MODEL_PRESETS,
-  DEFAULT_APP_SETTINGS,
-  REASONING_EFFORT_VALUES,
-} from "@harness/shared";
+import { AGENT_TYPES, DEFAULT_APP_SETTINGS } from "@harness/shared";
+import { CLI_MODEL_PRESETS, REASONING_EFFORT_VALUES } from "@harness/shared/cli-presets";
 import { Check, MagnifyingGlass, Plus, Trash } from "@phosphor-icons/react";
 import { Button, Toggle } from "../components/ui.tsx";
 import { api, type DetectedCli } from "../lib/api.ts";

@@ -2,11 +2,10 @@ import { useEffect, useMemo, useState } from "react";
 import type { AgentExecutorProfile, AgentType, Group, Priority, ProjectView, Task, TaskMode } from "@harness/shared";
 import {
   AGENT_TYPES,
-  CLI_MODEL_PRESETS,
   DEFAULT_APP_SETTINGS,
   DEBATE_DEFAULTS,
-  REASONING_EFFORT_VALUES,
 } from "@harness/shared";
+import { CLI_MODEL_PRESETS, REASONING_EFFORT_VALUES } from "@harness/shared/cli-presets";
 import { Paperclip, Play, Robot, Scales, UsersThree, X } from "@phosphor-icons/react";
 import { Button, Toggle } from "../components/ui.tsx";
 import { api } from "../lib/api.ts";
