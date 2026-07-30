@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ProjectView, Task } from "@harness/shared";
-import { taskDisplayStatus } from "@harness/shared";
 import { api } from "../lib/api.ts";
 import { useTasks } from "../lib/useTasks.ts";
+import { TaskDetail } from "../task-detail/TaskDetail.tsx";
 import { TaskPlaceholder } from "./TaskPlaceholder.tsx";
 import { WorkspaceSidebar } from "./WorkspaceSidebar.tsx";
 
@@ -22,7 +22,7 @@ export function WorkspaceShell() {
     () => window.localStorage.getItem("harness-next:sidebar-collapsed") === "1",
   );
   const [toast, setToast] = useState<string | null>(null);
-  const { tasks, loading: tasksLoading, error: tasksError, connected } = useTasks();
+  const { tasks, setTasks, loading: tasksLoading, error: tasksError, connected } = useTasks();
 
   const notify = useCallback((message: string) => {
     setToast(message);
@@ -95,9 +95,6 @@ export function WorkspaceShell() {
 
   const currentProject = projects.find((project) => project.id === projectId) ?? null;
   const selectedTask = tasks.find((task) => task.id === taskId && task.projectId === projectId) ?? null;
-  const display = selectedTask
-    ? taskDisplayStatus(selectedTask.status, selectedTask.stage, !!selectedTask.question)
-    : null;
   const loadError = projectsError ?? tasksError;
   const activeTaskCount = useMemo(
     () => tasks.filter((task) => task.projectId === projectId && task.parentId === null && !task.archived).length,
@@ -130,31 +127,36 @@ export function WorkspaceShell() {
       />
 
       <main className="workspace-main">
-        <header className="workspace-app-bar">
-          <span className="workspace-kind-chip">{selectedTask?.mode === "team" ? "团队" : selectedTask?.mode === "debate" ? "辩论" : "任务"}</span>
-          <span className="workspace-app-title">{selectedTask?.title ?? currentProject?.name ?? "Harness"}</span>
-          {display && (
-            <span className="workspace-app-status">
-              <i aria-hidden="true" />
-              {display.label}
-            </span>
-          )}
-          {!selectedTask && currentProject && <span className="workspace-app-count">{activeTaskCount} 项任务</span>}
-        </header>
-
         {loadError && <div className="workspace-load-error">{loadError.message}</div>}
-        <div className="workspace-columns">
-          <section className="workspace-primary" aria-label="主工作区">
-            <TaskPlaceholder project={currentProject} task={selectedTask} />
-          </section>
-          <aside className="workspace-inspector-slot" aria-label="Inspector 占位">
-            <div>
-              <span>Inspector</span>
-              <small>任务详情</small>
+        {selectedTask ? (
+          <TaskDetail
+            task={selectedTask}
+            allTasks={tasks}
+            onTaskUpdate={(updated) => setTasks((current) => current.map((task) => task.id === updated.id ? updated : task))}
+            onDeleted={(deletedId) => {
+              setTasks((current) => current.filter((task) => task.id !== deletedId));
+              setTaskId(null);
+            }}
+            notify={notify}
+          />
+        ) : (
+          <>
+            <header className="workspace-app-bar">
+              <span className="workspace-kind-chip">项目</span>
+              <span className="workspace-app-title">{currentProject?.name ?? "Harness"}</span>
+              {currentProject && <span className="workspace-app-count">{activeTaskCount} 项任务</span>}
+            </header>
+            <div className="workspace-columns">
+              <section className="workspace-primary" aria-label="主工作区">
+                <TaskPlaceholder project={currentProject} task={null} />
+              </section>
+              <aside className="workspace-inspector-slot" aria-label="Inspector 占位">
+                <div><span>Inspector</span><small>项目概览</small></div>
+                <p>选择任务后，这里会显示可操作属性、执行信息与队列。</p>
+              </aside>
             </div>
-            <p>属性、执行信息与审查记录将在后续实施链接入。</p>
-          </aside>
-        </div>
+          </>
+        )}
       </main>
 
       <div className={`workspace-toast${toast ? " is-visible" : ""}`} role="status" aria-live="polite">

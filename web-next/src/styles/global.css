@@ -3,6 +3,7 @@
 @import "./dev-components.css";
 @import "./task-tree.css";
 @import "./workspace.css";
+@import "./task-detail.css";
 
 @theme {
   --font-sans: "Inter Variable", "Inter", "SF Pro Display", -apple-system,

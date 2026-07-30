@@ -1,25 +1,30 @@
-import { useCallback, useEffect, useState } from "react";
-import type { ServerEvent, Session } from "@harness/shared";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { Session } from "@harness/shared";
 import { api } from "./api.ts";
 import { useServerEvents } from "./events.ts";
-
-export type PersistedConversation = {
-  session: Session;
-  output: string;
-};
-
-export type LiveAgentEvent = Extract<ServerEvent, { type: "agent.event" }>;
+import {
+  buildConversationItems,
+  type PersistedConversation,
+  type TimelineEntry,
+} from "../task-detail/conversationModel.ts";
 
 const settledStatuses = new Set(["done", "failed", "canceled", "idle"]);
 
 export function useConversation(taskId: string, revision = 0) {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [persisted, setPersisted] = useState<PersistedConversation[]>([]);
-  const [liveEvents, setLiveEvents] = useState<LiveAgentEvent[]>([]);
+  const [timeline, setTimeline] = useState<TimelineEntry[]>([]);
+  const timelineRef = useRef<TimelineEntry[]>([]);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<Error | null>(null);
 
-  const refetch = useCallback(async () => {
+  const replaceTimeline = useCallback((next: TimelineEntry[]) => {
+    timelineRef.current = next;
+    setTimeline(next);
+  }, []);
+
+  const load = useCallback(async (preserveArrivals: boolean) => {
+    const cutoff = timelineRef.current.length;
     setRefreshing(true);
     setError(null);
     try {
@@ -32,6 +37,13 @@ export function useConversation(taskId: string, revision = 0) {
       );
       setSessions(nextSessions);
       setPersisted(outputs.filter((entry) => entry.output.trim()));
+      if (preserveArrivals) {
+        setTimeline((current) => {
+          const next = current.slice(Math.min(cutoff, current.length));
+          timelineRef.current = next;
+          return next;
+        });
+      }
     } catch (reason) {
       setError(reason instanceof Error ? reason : new Error("会话读取失败"));
     } finally {
@@ -39,25 +51,54 @@ export function useConversation(taskId: string, revision = 0) {
     }
   }, [taskId]);
 
+  const refetch = useCallback(() => load(true), [load]);
+
   useEffect(() => {
-    setLiveEvents([]);
-    void refetch();
-  }, [refetch, revision]);
+    replaceTimeline([]);
+    void load(false);
+  }, [load, replaceTimeline, revision]);
 
   const connected = useServerEvents(
     useCallback((event) => {
       if (event.type === "agent.event" && event.taskId === taskId) {
-        setLiveEvents((current) => [...current, event]);
+        setTimeline((current) => {
+          const next = [...current, { kind: "server", id: crypto.randomUUID(), event } as const];
+          timelineRef.current = next;
+          return next;
+        });
+        if (event.event.kind === "session") {
+          void api.sessions(taskId).then(setSessions).catch(() => undefined);
+        }
       }
       if (
         event.type === "task.status" &&
         event.taskId === taskId &&
         settledStatuses.has(event.status)
       ) {
-        void refetch();
+        void load(true);
       }
-    }, [refetch, taskId]),
+    }, [load, taskId]),
   );
 
-  return { sessions, persisted, liveEvents, connected, refreshing, error, refetch };
+  const addUser = useCallback((text: string, attachments: string[] = []) => {
+    const entry: TimelineEntry = {
+      kind: "user",
+      id: crypto.randomUUID(),
+      text,
+      attachments,
+      at: new Date().toISOString(),
+    };
+    setTimeline((current) => {
+      const next = [...current, entry];
+      timelineRef.current = next;
+      return next;
+    });
+  }, []);
+
+  const items = useMemo(
+    () => buildConversationItems(persisted, sessions, timeline),
+    [persisted, sessions, timeline],
+  );
+
+  return { sessions, persisted, items, connected, refreshing, error, refetch, addUser };
 }
