@@ -4,12 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="icon" href="data:,">
-<title>单任务详情 — Harness UI 讨论稿 v2</title>
+<title>单任务详情 · 队列抽屉 — Harness UI 讨论稿 v2</title>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
   <div class="shell">
-    <div data-include="rail"></div>
+    <div data-include="sidebar" data-active="tasks"></div>
     <div data-include="tasklist" data-selected="run1"></div>
     <main class="main" data-surface>
       <header class="app-bar">
@@ -40,11 +40,11 @@
             </div>
             <div class="message">
               <div class="speaker">执行者 · claude@ccb·claude-fable-5</div>
-              <div class="bubble">先读了 useEvents 的现状:EventSource 断开后只 console.warn,没有任何重试。我的方案分三步——<br>1. 断开后按 1s/2s/4s/8s 指数退避重建连接,上限 30s;<br>2. 重连成功先打一次 GET /snapshot 对齐状态,再继续消费增量;<br>3. 把连接状态提到全局,项目栏底部那个绿点跟着变。</div>
+              <div class="bubble">先读了 useEvents 的现状:EventSource 断开后只 console.warn,没有任何重试。我的方案分三步——<br>1. 断开后按 1s/2s/4s/8s 指数退避重建连接,上限 30s;<br>2. 重连成功先打一次 GET /snapshot 对齐状态,再继续消费增量;<br>3. 把连接状态提到全局,侧边栏底部那个绿点跟着变。</div>
             </div>
             <div class="message">
               <div class="speaker">执行者 · claude@ccb·claude-fable-5</div>
-              <div class="bubble">第 1、2 步已完成,正在把连接状态接到项目栏。中途发现 snapshot 接口没带 ETag,顺手加了协商缓存,重连风暴时能省掉重复全量。</div>
+              <div class="bubble">第 1、2 步已完成,正在把连接状态接到侧边栏。中途发现 snapshot 接口没带 ETag,顺手加了协商缓存,重连风暴时能省掉重复全量。</div>
             </div>
             <div class="event-line">正在编辑 web/src/useEvents.ts · 刚刚</div>
           </div>
@@ -78,6 +78,7 @@
             <section class="inspect-group">
               <div class="inspect-label">队列</div>
               <dl class="kv"><dt>所在队列</dt><dd>第 1 / 3 位 · 前端体验</dd><dt>下一个</dt><dd>清理 worktree 兜底逻辑</dd></dl>
+              <button class="inspect-action" data-action="qdrawer" style="margin-top:9px"><span>查看队列 · 3 个任务</span><span>›</span></button>
             </section>
             <section class="inspect-group">
               <button class="inspect-action"><span>复制 resume 命令</span><span>复制</span></button>
@@ -95,6 +96,36 @@
       </div>
     </main>
   </div>
+
+  <div class="drawer-scrim qd" data-action="qdrawer-close"></div>
+  <aside class="drawer narrow qd" aria-label="队列抽屉">
+    <header class="app-bar">
+      <span class="kind-chip plain">队列</span>
+      <span class="app-title">前端体验 · serial</span>
+      <div class="app-actions">
+        <button class="ui-btn">重新排队失败项</button>
+        <button class="ui-btn icon-btn" data-action="qdrawer-close" aria-label="关闭抽屉">×</button>
+      </div>
+    </header>
+    <div style="flex:1;overflow:auto;padding:6px 0">
+      <div class="agent-row selectable selected">
+        <span class="wc-ava">1</span>
+        <span class="at"><b>接入 SSE 断线重连</b><small>运行中 · claude@ccb</small></span>
+        <span class="wc-state run">干活中</span>
+      </div>
+      <div class="agent-row selectable">
+        <span class="wc-ava">2</span>
+        <span class="at"><b>清理 worktree 兜底逻辑</b><small>提问中,答复后续跑</small></span>
+        <span class="wc-state ask">提问</span>
+      </div>
+      <div class="agent-row selectable">
+        <span class="wc-ava">3</span>
+        <span class="at"><b>回复框失焦缩一行</b><small>backlog · 等前一个 done</small></span>
+        <span class="wc-state queue">排队</span>
+      </div>
+    </div>
+    <div class="drawer-hint">原 QueueModal 改为右侧抽屉:从 Inspector 的「查看队列」进入,不打断正文。拖拽排序;running / queued 的位置不可动。Esc 或点遮罩关闭。</div>
+  </aside>
   <script src="app.js"></script>
 </body>
 </html>

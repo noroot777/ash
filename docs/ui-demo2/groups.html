@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
+<title>分组(全页面) — Harness UI 讨论稿 v2</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="shell">
+    <div data-include="sidebar" data-active="groups"></div>
+    <main class="main" data-surface>
+      <header class="app-bar">
+        <span class="kind-chip plain">分组</span>
+        <span class="app-title">分组管理</span>
+        <span class="status-pill gray"><i class="dot"></i>3 个分组</span>
+        <div class="app-actions">
+          <button class="ui-btn primary">新建分组</button>
+        </div>
+      </header>
+      <div class="page-scroll">
+        <div class="page-inner">
+          <h3 class="sect-title">全部分组<small>原 GroupsPanel Modal → 全页面;行内直接运行整组</small></h3>
+          <div class="sect-card">
+            <div style="padding:6px 0">
+              <div class="group-row selectable selected">
+                <span class="gt"><b>前端体验</b><small>3 个任务 · 1 运行中 · 队列推进中</small></span>
+                <span class="mode-tag">serial</span>
+                <button class="ui-btn" style="height:24px;font-size:10px">运行</button>
+              </div>
+              <div class="group-row selectable">
+                <span class="gt"><b>每日流水线</b><small>4 个任务 · 全部完成 · 昨天 23:40</small></span>
+                <span class="mode-tag">serial</span>
+                <button class="ui-btn" style="height:24px;font-size:10px">运行</button>
+              </div>
+              <div class="group-row selectable">
+                <span class="gt"><b>方案评审</b><small>2 个任务 · 并行</small></span>
+                <span class="mode-tag">parallel</span>
+                <button class="ui-btn" style="height:24px;font-size:10px">运行</button>
+              </div>
+            </div>
+            <div class="sc-foot"><span class="hint">serial 分组配队列自动串行;parallel 并发拉起。点行进入该分组的任务筛选视图</span></div>
+          </div>
+
+          <h3 class="sect-title">新建分组</h3>
+          <div class="sect-card">
+            <div class="form-block"><label>分组名</label>
+              <input class="form-input" placeholder="如「移动端收尾」…">
+            </div>
+            <div class="form-block"><label>模式</label>
+              <div class="fake-select">serial · 按队列顺序自动串行<span class="fs-caret">▾</span></div>
+            </div>
+            <div class="sc-foot"><span class="hint">分组页可从侧边栏直达,不再绕任务列表头的图标按钮</span><button class="ui-btn primary">新建</button></div>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>

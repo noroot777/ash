@@ -1,41 +1,56 @@
-/* ui-demo2 共享脚本:注入导航条 / 方案切换器 / 项目栏 / 任务列表模板,并绑定交互。
+/* ui-demo2 共享脚本:注入导航条 / 方案切换器 / 单一侧边栏 / 任务列表模板,并绑定交互。
    方案选择存 localStorage(ud2-sel / ud2-gray),跨页面保持。零外部依赖。 */
 (function () {
   "use strict";
 
   var PAGES = [
     ["index.html", "总览"],
-    ["shell.html", "主视图·项目切换"],
-    ["task.html", "单任务详情"],
+    ["shell.html", "主视图"],
+    ["task.html", "单任务·队列抽屉"],
     ["team.html", "团队调度台"],
-    ["debate.html", "辩论视图"],
+    ["debate.html", "辩论"],
     ["review.html", "验收 Diff"],
     ["composer.html", "新建任务"],
+    ["agents.html", "智能体"],
+    ["settings.html", "项目设置"],
+    ["groups.html", "分组"],
+    ["archive.html", "已归档"],
     ["notes.html", "随手记"],
-    ["palette.html", "命令面板 ⌘K"],
-    ["panels.html", "设置类 Modal"],
+    ["palette.html", "⌘K"],
   ];
 
-  /* ── 模板:ProjectRail(第 1 栏,含项目下拉) ── */
-  function railHTML() {
+  /* ── 模板:单一侧边栏(Linear 式,含项目下拉)。active = 当前导航项 ── */
+  function navItem(href, key, active, icon, label, extra) {
     return (
-      '<aside class="rail">' +
+      '<a class="side-item' + (active === key ? " selectable selected" : "") + '" href="' + href + '"' +
+      (active === key ? ' aria-current="page"' : "") + ">" +
+      '<i class="si">' + icon + "</i>" + label + (extra || "") + "</a>"
+    );
+  }
+  function sidebarHTML(active) {
+    return (
+      '<aside class="sidebar">' +
       '<button class="proj-trigger" data-action="project" aria-expanded="false" aria-label="切换项目">' +
       '<span class="proj-avatar">H</span><span class="proj-name">harness</span><span class="proj-caret">▾</span></button>' +
-      '<div class="rail-sec">执行</div>' +
-      '<div class="rail-item active"><i class="ri">☰</i>任务<span class="count">12</span></div>' +
-      '<div class="rail-flex"></div>' +
-      '<div class="rail-bottom">' +
-      '<button class="rail-item"><i class="ri">◎</i>智能体</button>' +
-      '<button class="rail-item"><i class="ri">⌕</i>搜索<kbd>⌘K</kbd></button>' +
-      '<div class="rail-conn"><i></i>实时已连接</div>' +
-      '<button class="rail-item"><i class="ri">⇤</i>收起侧栏</button>' +
+      '<nav class="side-nav" aria-label="项目内导航">' +
+      navItem("shell.html", "tasks", active, "☰", "任务", '<span class="count">12</span>') +
+      navItem("agents.html", "agents", active, "◎", "智能体") +
+      navItem("groups.html", "groups", active, "⊞", "分组") +
+      navItem("archive.html", "archive", active, "▣", "已归档") +
+      navItem("settings.html", "settings", active, "⚙", "项目设置") +
+      navItem("notes.html", "notes", active, "✐", "随手记") +
+      "</nav>" +
+      '<div class="side-flex"></div>' +
+      '<div class="side-bottom">' +
+      '<a class="side-item" href="palette.html"><i class="si">⌕</i>搜索<kbd>⌘K</kbd></a>' +
+      '<div class="side-conn"><i></i>实时已连接</div>' +
+      '<button class="side-item"><i class="si">⇤</i>收起侧栏</button>' +
       "</div>" +
       '<div class="proj-scrim" data-action="project-close"></div>' +
       '<div class="proj-pop" role="menu" aria-label="项目切换">' +
       '<div class="pp-current"><span class="proj-avatar lg">H</span>' +
       "<div><b>harness</b><small>~/code/harness</small></div>" +
-      '<button class="pp-gear" aria-label="项目设置">⚙</button></div>' +
+      '<a class="pp-gear" href="settings.html" aria-label="项目设置">⚙</a></div>' +
       '<input class="pp-search" placeholder="搜索项目…" aria-label="搜索项目">' +
       '<div class="pp-label">切换到</div>' +
       '<div class="pp-row selectable selected"><span class="proj-avatar">H</span>harness<span class="pp-tag">当前</span></div>' +
@@ -47,7 +62,7 @@
     );
   }
 
-  /* ── 模板:任务列表(第 2 栏)。sel = 选中行 id ── */
+  /* ── 模板:任务列表(任务页第 2 栏)。sel = 选中行 id ── */
   function trow(id, sel, chev, title, meta, dot) {
     return (
       '<div class="trow selectable' + (sel === id ? " selected" : "") + '" data-id="' + id + '">' +
@@ -60,10 +75,7 @@
     return (
       '<section class="list-col"><div class="list-head">' +
       '<span class="branch-chip"><b>harness/pSHdnpMo</b><span class="wt">·wt</span></span>' +
-      '<button class="lh-btn" aria-label="新建任务">✎</button><span class="lh-spacer"></span>' +
-      '<button class="lh-btn" aria-label="随手记">✐</button>' +
-      '<button class="lh-btn" aria-label="分组">⊞</button>' +
-      '<button class="lh-btn" aria-label="列表 / 已归档">▣</button>' +
+      '<span class="lh-spacer"></span><button class="lh-btn" aria-label="新建任务">✎</button>' +
       "</div>" +
       '<div class="list-scroll">' +
       '<div class="lsec">协作任务</div>' +
@@ -92,7 +104,7 @@
   /* ── 注入 data-include 占位 ── */
   document.querySelectorAll("[data-include]").forEach(function (node) {
     var kind = node.getAttribute("data-include");
-    if (kind === "rail") node.outerHTML = railHTML();
+    if (kind === "sidebar") node.outerHTML = sidebarHTML(node.getAttribute("data-active") || "tasks");
     else if (kind === "tasklist") node.outerHTML = listHTML(node.getAttribute("data-selected") || "");
   });
 
@@ -187,6 +199,10 @@
       document.body.classList.add("drawer-open");
     } else if (action === "drawer-close") {
       document.body.classList.remove("drawer-open");
+    } else if (action === "qdrawer") {
+      document.body.classList.add("qdrawer-open");
+    } else if (action === "qdrawer-close") {
+      document.body.classList.remove("qdrawer-open");
     } else if (action === "rtab" && host) {
       var pane = control.getAttribute("data-pane");
       host.querySelectorAll('[data-action="rtab"]').forEach(function (b) {
@@ -206,7 +222,7 @@
 
   document.addEventListener("keydown", function (event) {
     if (event.key !== "Escape") return;
-    document.body.classList.remove("project-open", "drawer-open");
+    document.body.classList.remove("project-open", "drawer-open", "qdrawer-open");
     closeMenus(null);
   });
 })();

@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
+<title>项目设置(全页面) — Harness UI 讨论稿 v2</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="shell">
+    <div data-include="sidebar" data-active="settings"></div>
+    <main class="main" data-surface>
+      <header class="app-bar">
+        <span class="kind-chip plain">设置</span>
+        <span class="app-title">项目设置</span>
+        <span class="branch-chip"><b>harness</b><span class="wt">~/code/harness</span></span>
+      </header>
+      <div class="page-scroll">
+        <div class="page-inner">
+          <h3 class="sect-title">基本信息<small>原 ProjectSettings Modal → 全页面;项目下拉的齿轮也跳到这里</small></h3>
+          <div class="sect-card">
+            <div class="form-block"><label>项目名称</label>
+              <input class="form-input" value="harness">
+            </div>
+            <div class="form-block"><label>仓库路径</label>
+              <input class="form-input mono" value="~/code/harness">
+            </div>
+          </div>
+
+          <h3 class="sect-title">运行默认</h3>
+          <div class="sect-card">
+            <div class="form-block"><label>worktree 默认</label>
+              <div class="toggle-line">新任务默认在独立 worktree 中运行<small>全局默认:开</small><span class="tgl"></span></div>
+            </div>
+            <div class="form-block"><label>默认执行器</label>
+              <div class="fake-select"><span class="wc-ava">C</span>claude@ccb·claude-fable-5<span class="fs-caret">▾</span></div>
+            </div>
+            <div class="sc-foot"><span class="hint">执行器 profile 本身在「智能体」页维护,这里只挑默认</span><a class="ui-btn" href="agents.html">去智能体页</a></div>
+          </div>
+
+          <h3 class="sect-title">危险区</h3>
+          <div class="sect-card">
+            <div class="danger-zone" style="margin:12px 16px">
+              <b>移除项目</b>
+              <p>只从 harness 移除,不动磁盘上的仓库与分支。</p>
+              <button class="ui-btn danger">移除项目…</button>
+            </div>
+          </div>
+          <p class="page-note" style="margin:14px 0 0;padding:0">分组管理独立成页(侧边栏「分组」),不再挤在设置里——两者受众不同:设置偶尔改一次,分组是日常运行入口。</p>
+        </div>
+      </div>
+    </main>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>

@@ -55,11 +55,11 @@ body.switch-min .scheme-switch .ss-row{display:none}
 body.switch-min .scheme-switch{width:auto}
 body.switch-min .scheme-switch .ss-head{padding-bottom:8px}
 
-/* ── 全局外壳:四栏 ────────────────────────────── */
+/* ── 全局外壳:单一侧边栏 + 页面 ─────────────────── */
 .shell{display:flex;height:calc(100vh - 40px);min-height:520px;background:var(--canvas);overflow:hidden}
 
-/* 第 1 栏:ProjectRail */
-.rail{position:relative;display:flex;width:228px;flex:0 0 228px;flex-direction:column;padding:8px;border-right:1px solid var(--line);background:var(--panel)}
+/* 单一侧边栏(Linear 式):项目切换器 + 导航 + 底部工具 */
+.sidebar{position:relative;display:flex;width:240px;flex:0 0 240px;flex-direction:column;padding:8px;border-right:1px solid var(--line);background:var(--panel)}
 .proj-trigger{display:flex;align-items:center;gap:8px;width:100%;padding:6px;border-radius:8px;text-align:left}
 .proj-trigger:hover,body.project-open .proj-trigger{background:var(--raised)}
 .proj-avatar{display:grid;place-items:center;width:24px;height:24px;flex:0 0 24px;border-radius:7px;background:var(--accent);color:#fff;font-size:11px;font-weight:750}
@@ -67,18 +67,18 @@ body.switch-min .scheme-switch .ss-head{padding-bottom:8px}
 .proj-avatar.lg{width:30px;height:30px;flex-basis:30px;border-radius:8px;font-size:13px}
 .proj-name{min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;font-weight:700}
 .proj-caret{color:var(--faint);font-size:10px}
-.rail-sec{padding:12px 8px 4px;color:var(--faint);font-size:10px;font-weight:750;letter-spacing:.07em}
-.rail-item{display:flex;align-items:center;gap:10px;width:100%;padding:6px 8px;border-radius:7px;color:var(--muted);font-size:13px;text-align:left}
-.rail-item:hover{background:var(--raised);color:var(--ink)}
-.rail-item.active{background:var(--raised);color:var(--ink);font-weight:650}
-.rail-item .ri{display:grid;place-items:center;width:16px;color:var(--faint);font-size:13px;font-style:normal}
-.rail-item.active .ri{color:var(--accent)}
-.rail-item .count{margin-left:auto;border-radius:999px;background:var(--overlay);padding:0 7px;color:var(--faint);font-size:11px}
-.rail-item kbd{margin-left:auto;border:1px solid var(--line2);border-radius:4px;background:var(--canvas);padding:0 4px;color:var(--faint);font-size:9.5px;font-family:inherit}
-.rail-flex{flex:1}
-.rail-bottom{display:flex;flex-direction:column;gap:1px;border-top:1px solid var(--line);padding-top:6px}
-.rail-conn{display:flex;align-items:center;gap:10px;padding:6px 8px;color:var(--faint);font-size:12px}
-.rail-conn i{width:6px;height:6px;flex:0 0 6px;margin:0 5px;border-radius:50%;background:#22a06b;font-style:normal}
+.side-nav{display:flex;flex-direction:column;gap:1px;margin-top:10px}
+.side-item{display:flex;align-items:center;gap:10px;width:100%;padding:6px 8px;border-radius:7px;color:var(--muted);font-size:13px;text-align:left}
+.side-item:not(.selected):hover{background:var(--raised);color:var(--ink)}
+.side-item.selected{color:var(--ink);font-weight:650}
+.side-item .si{display:grid;place-items:center;width:16px;color:var(--faint);font-size:13px;font-style:normal}
+.side-item.selected .si{color:var(--accent)}
+.side-item .count{margin-left:auto;border-radius:999px;background:var(--overlay);padding:0 7px;color:var(--faint);font-size:11px}
+.side-item kbd{margin-left:auto;border:1px solid var(--line2);border-radius:4px;background:var(--canvas);padding:0 4px;color:var(--faint);font-size:9.5px;font-family:inherit}
+.side-flex{flex:1}
+.side-bottom{display:flex;flex-direction:column;gap:1px;border-top:1px solid var(--line);padding-top:6px}
+.side-conn{display:flex;align-items:center;gap:10px;padding:6px 8px;color:var(--faint);font-size:12px}
+.side-conn i{width:6px;height:6px;flex:0 0 6px;margin:0 5px;border-radius:50%;background:#22a06b;font-style:normal}
 
 /* 项目切换下拉 */
 .proj-scrim{position:fixed;inset:40px 0 0 0;z-index:60;display:none;background:rgba(40,42,48,.06)}
@@ -99,7 +99,7 @@ body.project-open .proj-scrim,body.project-open .proj-pop{display:block}
 .pp-foot:hover{color:var(--ink)}
 .pp-foot i{display:grid;place-items:center;width:22px;height:22px;border:1px dashed var(--line2);border-radius:6px;color:var(--faint);font-style:normal;font-size:13px}
 
-/* 第 2 栏:任务列表 */
+/* 任务页第 2 栏:任务列表 */
 .list-col{display:flex;width:264px;flex:0 0 264px;flex-direction:column;border-right:1px solid var(--line);background:var(--canvas)}
 .list-head{display:flex;align-items:center;gap:3px;height:44px;flex:0 0 44px;padding:0 8px;border-bottom:1px solid var(--line)}
 .branch-chip{display:flex;align-items:center;gap:5px;min-width:0;max-width:150px;border:1px solid var(--line2);border-radius:6px;background:var(--panel);padding:3px 7px;color:var(--muted);font-size:10.5px}
@@ -126,7 +126,7 @@ body.project-open .proj-scrim,body.project-open .proj-pop{display:block}
 .wsub .trow .tmain b{font-size:11px;font-weight:500;color:var(--muted)}
 .wsub .trow.selected .tmain b{color:var(--ink)}
 
-/* 第 3 栏:主工作区 */
+/* 任务页第 3 栏:主工作区 */
 .main{position:relative;display:flex;min-width:0;flex:1;flex-direction:column;background:var(--canvas)}
 .app-bar{position:relative;z-index:10;display:flex;align-items:center;gap:8px;height:44px;flex:0 0 44px;padding:0 10px 0 14px;border-bottom:1px solid var(--line);background:var(--panel)}
 .kind-chip{border-radius:5px;background:rgba(94,106,210,.11);padding:2px 7px;color:var(--accent);font-size:10px;font-weight:750}
@@ -182,7 +182,7 @@ body.project-open .proj-scrim,body.project-open .proj-pop{display:block}
 .track .bar.green{background:#24a47e}.track .bar.amber{background:#e7aa0b}
 .track .bar.hatch{background:repeating-linear-gradient(135deg,var(--line2) 0 5px,var(--raised) 5px 10px)}
 
-/* 第 4 栏:Inspector */
+/* 任务页第 4 栏:Inspector */
 .inspector{display:flex;width:306px;flex:0 0 306px;flex-direction:column;overflow:hidden;border-left:1px solid var(--line);background:var(--panel);transition:width .18s ease,flex-basis .18s ease}
 .inspector-off .inspector{width:0;flex-basis:0;border-left-width:0}
 .inspect-scroll{flex:1;overflow:auto;min-width:306px}
@@ -241,13 +241,15 @@ body.project-open .proj-scrim,body.project-open .proj-pop{display:block}
 .feed-tag.ask{background:#dff3f7;color:#0b7f96}
 .feed-tag.doneT{background:var(--green-bg);color:#14785e}
 
-/* 执行者抽屉 */
+/* 执行者抽屉(右侧滑出;.narrow 供队列抽屉复用) */
 .drawer-scrim{position:fixed;inset:40px 0 0 0;z-index:80;display:none;background:rgba(40,42,48,.28)}
 .drawer{position:fixed;top:40px;right:0;bottom:0;z-index:85;display:none;width:min(600px,94vw);flex-direction:column;border-left:1px solid var(--line2);background:var(--canvas);box-shadow:-24px 0 60px rgba(40,42,48,.18)}
-body.drawer-open .drawer-scrim{display:block}
-body.drawer-open .drawer{display:flex}
+.drawer.narrow{width:min(430px,92vw);background:var(--panel)}
+body.drawer-open .drawer-scrim:not(.qd),body.qdrawer-open .drawer-scrim.qd{display:block}
+body.drawer-open .drawer:not(.qd),body.qdrawer-open .drawer.qd{display:flex}
 .drawer .app-bar{border-radius:0}
 .drawer .messages{padding:16px 22px}
+.drawer-hint{border-top:1px solid var(--line);padding:10px 16px;color:var(--faint);font-size:10.5px}
 
 /* 辩论 */
 .debate-config{max-width:760px;margin:0 0 18px;border:1px solid var(--line);border-radius:12px;background:var(--panel);padding:13px 16px}
@@ -346,10 +348,24 @@ body.drawer-open .drawer{display:flex}
 .pal-row kbd{border:1px solid var(--line2);border-radius:4px;background:var(--canvas);padding:1px 5px;color:var(--faint);font-size:9.5px;font-family:inherit}
 .pal-foot{display:flex;gap:14px;border-top:1px solid var(--line);padding:8px 14px;color:var(--faint);font-size:10px}
 
-/* 设置类面板页(panels.html):平铺三个 Modal 示意 */
-.panels-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(360px,1fr));gap:20px;max-width:1360px;margin:0 auto;padding:24px}
-.panel-mock{display:flex;flex-direction:column;border:1px solid var(--line2);border-radius:14px;background:var(--panel);box-shadow:0 10px 34px rgba(40,42,48,.08);overflow:hidden}
-.panel-mock .caption{border-top:1px solid var(--line);background:var(--canvas);padding:8px 14px;color:var(--faint);font-size:10.5px}
+/* 全页面(智能体 / 项目设置 / 分组 / 已归档):侧边栏右侧整块滚动区 */
+.page-scroll{flex:1;overflow:auto}
+.page-inner{max-width:720px;margin:0 auto;padding:26px 24px 90px}
+.page-cols{display:flex;gap:34px;max-width:940px;margin:0 auto;padding:26px 24px 90px}
+.page-toc{width:150px;flex:0 0 150px}
+.page-toc .pt-label{padding:2px 8px 6px;color:var(--faint);font-size:10px;font-weight:750;letter-spacing:.07em}
+.page-toc a{display:block;margin:1px 0;border-radius:6px;padding:5px 8px;color:var(--muted);font-size:12px}
+.page-toc a:hover{background:var(--raised);color:var(--ink)}
+.page-toc a.on{background:var(--accent-soft);color:var(--accent);font-weight:650}
+.page-main{min-width:0;flex:1}
+.sect-title{margin:26px 0 10px;font-size:14px;font-weight:750}
+.sect-title:first-child{margin-top:0}
+.sect-title small{margin-left:8px;color:var(--faint);font-weight:500;font-size:11px}
+.sect-card{margin-bottom:16px;border:1px solid var(--line2);border-radius:12px;background:var(--panel);overflow:hidden}
+.sect-card .sc-foot{display:flex;align-items:center;gap:8px;border-top:1px solid var(--line);padding:10px 16px}
+.sect-card .sc-foot .hint{margin-right:auto;color:var(--faint);font-size:10.5px}
+
+/* 全页面里的行组件(执行器 / 分组 / 归档行)与表单 */
 .agent-row{display:flex;align-items:center;gap:9px;margin:1px 7px;border-radius:8px;padding:8px 9px 8px 11px;cursor:pointer}
 .agent-row .wc-ava{width:24px;height:24px;font-size:10px}
 .agent-row .at{min-width:0;flex:1}
