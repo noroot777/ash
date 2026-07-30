@@ -26,6 +26,7 @@ export function TasksWorkspace({
   debates,
   sessionsBump,
   curHealth,
+  nextHref,
   sidebarW,
   setSidebarW,
   archivedCount,
@@ -45,6 +46,8 @@ export function TasksWorkspace({
   onGate,
   onOpenTask,
   onTaskCreated,
+  reviewTaskId,
+  onReviewOpenChange,
   composer,
 }: {
   view: TaskView;
@@ -59,6 +62,7 @@ export function TasksWorkspace({
   debates: Record<string, DebateState>;
   sessionsBump: number;
   curHealth: ProjectHealth | null;
+  nextHref: string;
   sidebarW: number;
   setSidebarW: (w: number) => void;
   archivedCount: number;
@@ -78,6 +82,8 @@ export function TasksWorkspace({
   onGate: (id: string, action: GateAction) => void;
   onOpenTask: (taskId: string) => void;
   onTaskCreated: (task: Task, doRun?: boolean, select?: boolean) => void;
+  reviewTaskId: string | null;
+  onReviewOpenChange: (taskId: string | null) => void;
   // 内嵌的新建面板。非空时它顶掉详情区（此时上层已清空选中，列表不高亮任何一行）。
   composer?: ReactNode;
 }) {
@@ -95,6 +101,13 @@ export function TasksWorkspace({
       {/* slim sub-header (replaces the old h-12 top bar for this plane) */}
       <div className="flex h-11 shrink-0 items-center gap-2 border-b border-line bg-panel px-3.5">
         <BranchChip health={curHealth} />
+        <a
+          href={nextHref}
+          aria-label="用新版打开此页"
+          className="rounded-md px-1.5 py-0.5 text-[10px] text-faint transition-colors hover:bg-raised hover:text-accent"
+        >
+          新版
+        </a>
         <button
           onClick={onNewTask}
           className="grid h-7 w-7 place-items-center rounded-md text-muted transition-colors hover:bg-raised hover:text-ink"
@@ -174,6 +187,8 @@ export function TasksWorkspace({
                   onRequeue={onRequeue}
                   onSelect={onSelect}
                   onTaskCreated={onTaskCreated}
+                  initialReviewOpen={reviewTaskId === current.id}
+                  onReviewOpenChange={(open) => onReviewOpenChange(open ? current.id : null)}
                 />
               ) : (
                 <TaskDetail
@@ -195,6 +210,8 @@ export function TasksWorkspace({
                   onRequeue={() => onRequeue(current.id)}
                   onOpenTask={onOpenTask}
                   onTaskCreated={onTaskCreated}
+                  initialReviewOpen={reviewTaskId === current.id}
+                  onReviewOpenChange={(open) => onReviewOpenChange(open ? current.id : null)}
                 />
               )
             ) : (

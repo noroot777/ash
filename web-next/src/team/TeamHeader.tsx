@@ -1,0 +1,167 @@
+import { useEffect, useRef, useState } from "react";
+import type { Group, Task } from "@harness/shared";
+import { canArchive, taskDisplayStatus } from "@harness/shared";
+import { isTeamSettled, teamNeverStarted } from "@harness/shared/team";
+import {
+  Archive,
+  ArrowCounterClockwise,
+  CheckCircle,
+  Copy,
+  DotsThree,
+  DownloadSimple,
+  Play,
+  Stop,
+} from "@phosphor-icons/react";
+import { LegacyLink } from "../components/LegacyLink.tsx";
+import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
+import { safeDownloadName, STATUS_TONES, taskDuration } from "../task-detail/utils.ts";
+
+export function TeamHeader({
+  task,
+  workers,
+  groups,
+  haltedByHistory,
+  conversationMarkdown,
+  busy,
+  reviewOpen,
+  onTitle,
+  onReview,
+  onRun,
+  onHalt,
+  onResume,
+  onArchive,
+  notify,
+}: {
+  task: Task;
+  workers: Task[];
+  groups: Group[];
+  haltedByHistory: boolean;
+  conversationMarkdown: string;
+  busy: boolean;
+  reviewOpen: boolean;
+  onTitle: (title: string) => Promise<void>;
+  onReview: () => void;
+  onRun: () => void;
+  onHalt: () => void;
+  onResume: () => void;
+  onArchive: () => void;
+  notify: (message: string) => void;
+}) {
+  const [menu, setMenu] = useState(false);
+  const [haltOpen, setHaltOpen] = useState(false);
+  const [title, setTitle] = useState(task.title);
+  const [editing, setEditing] = useState(false);
+  const [now, setNow] = useState(() => Date.now());
+  const menuRoot = useRef<HTMLDivElement>(null);
+  const pausedGroups = groups.filter((group) => group.paused);
+  const stopped = pausedGroups.length > 0 || haltedByHistory;
+  const settled = isTeamSettled(task.status === "running", workers);
+  const display = taskDisplayStatus(task.status, task.stage, !!task.question);
+  const duration = taskDuration(task, now);
+
+  useEffect(() => { if (!editing) setTitle(task.title); }, [editing, task.title]);
+  useEffect(() => {
+    if (task.status !== "running") return;
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [task.status]);
+  useEffect(() => {
+    if (!menu) return;
+    const close = (event: PointerEvent) => {
+      if (!menuRoot.current?.contains(event.target as Node)) setMenu(false);
+    };
+    window.addEventListener("pointerdown", close);
+    return () => window.removeEventListener("pointerdown", close);
+  }, [menu]);
+
+  const commitTitle = async () => {
+    setEditing(false);
+    const next = title.trim();
+    if (!next || next === task.title) return setTitle(task.title);
+    try {
+      await onTitle(next);
+    } catch (error) {
+      setTitle(task.title);
+      notify(error instanceof Error ? error.message : String(error));
+    }
+  };
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(conversationMarkdown);
+      notify("已复制调度者的全部对话");
+    } catch {
+      notify("复制失败，请用旧版打开后重试");
+    }
+    setMenu(false);
+  };
+  const download = () => {
+    const blob = new Blob([conversationMarkdown], { type: "text/markdown;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${safeDownloadName(task)}.md`;
+    link.click();
+    URL.revokeObjectURL(url);
+    setMenu(false);
+  };
+
+  return (
+    <>
+      <header className="team-header">
+        <span className="team-kind">团队</span>
+        <input
+          value={title}
+          aria-label="团队标题"
+          onFocus={() => setEditing(true)}
+          onChange={(event) => setTitle(event.target.value)}
+          onBlur={() => void commitTitle()}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") event.currentTarget.blur();
+            if (event.key === "Escape") { setTitle(task.title); event.currentTarget.blur(); }
+          }}
+        />
+        <span className={`team-busy-pill team-busy-pill--${STATUS_TONES[task.question ? "awaiting_answer" : task.status]}`}><i />{display.label}</span>
+        <time>{duration ? `用时 ${duration}` : "尚未运行"}</time>
+        <div className="team-header-actions">
+          <button type="button" className={reviewOpen ? "is-primary" : ""} onClick={onReview}>
+            <CheckCircle size={14} weight="fill" />{reviewOpen ? "返回协作" : "验收"}
+          </button>
+          {!task.archived && !settled && !stopped && !teamNeverStarted(task.status) && (
+            <button type="button" className="is-danger" disabled={busy} onClick={() => setHaltOpen(true)}><Stop size={13} weight="fill" />停止全组</button>
+          )}
+          {!task.archived && stopped && (
+            <button type="button" className="is-primary" disabled={busy} onClick={onResume}><Play size={13} weight="fill" />恢复全组</button>
+          )}
+          {!task.archived && teamNeverStarted(task.status) && (
+            <button type="button" className="is-primary" disabled={busy} onClick={onRun}><Play size={13} weight="fill" />运行</button>
+          )}
+          <div className="team-header-menu" ref={menuRoot}>
+            <button type="button" aria-label="更多团队操作" aria-expanded={menu} onClick={() => setMenu((value) => !value)}><DotsThree size={18} weight="bold" /></button>
+            {menu && (
+              <div role="menu">
+                <button type="button" role="menuitem" disabled={!conversationMarkdown.trim()} onClick={() => void copy()}><Copy size={14} />复制全部对话</button>
+                <button type="button" role="menuitem" disabled={!conversationMarkdown.trim()} onClick={download}><DownloadSimple size={14} />下载 Markdown</button>
+                <LegacyLink projectId={task.projectId} taskId={task.id} />
+                <span role="separator" />
+                <button type="button" role="menuitem" disabled={!task.archived && !canArchive(task.status)} onClick={() => { setMenu(false); onArchive(); }}>
+                  {task.archived ? <ArrowCounterClockwise size={14} /> : <Archive size={14} />}{task.archived ? "取消归档" : "归档团队"}
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      </header>
+      {haltOpen && (
+        <ConfirmDialog
+          title="停止全组？"
+          message="调度台进程会停止，正在运行的执行者会落为可恢复的暂停状态；会话和已完成结果都会保留。"
+          confirmLabel="停止全组"
+          danger
+          busy={busy}
+          onConfirm={() => { setHaltOpen(false); onHalt(); }}
+          onClose={() => setHaltOpen(false)}
+        />
+      )}
+    </>
+  );
+}

@@ -63,6 +63,8 @@ export function TaskDetail({
   onRequeue,
   onOpenTask,
   onTaskCreated,
+  initialReviewOpen = false,
+  onReviewOpenChange,
 }: {
   task: Task;
   groups: Group[];
@@ -82,6 +84,8 @@ export function TaskDetail({
   onRequeue: () => void;
   onOpenTask: (taskId: string) => void;
   onTaskCreated: (task: Task, doRun?: boolean, select?: boolean) => void;
+  initialReviewOpen?: boolean;
+  onReviewOpenChange?: (open: boolean) => void;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const { profiles, providers } = useExecutorProfiles();
@@ -92,8 +96,12 @@ export function TaskDetail({
   const sharedTeamWorker = isSharedTeamWorker(task, parentTask);
   const objective = parseAttachmentText(task.body);
   const [derivation, setDerivation] = useState<{ command: TaskDerivationCommand; committed: boolean } | null>(null);
-  const [reviewOpen, setReviewOpen] = useState(false);
+  const [reviewOpen, setReviewOpen] = useState(initialReviewOpen);
   const [acceptFailure, setAcceptFailure] = useState<AcceptTaskFailure | null>(null);
+  const changeReviewOpen = (open: boolean) => {
+    setReviewOpen(open);
+    onReviewOpenChange?.(open);
+  };
 
   // TaskDetail is reused while navigating. Never carry a source task's open
   // derivation card into another task, especially a worker/reviewer detail.
@@ -186,7 +194,7 @@ export function TaskDetail({
             <TaskTimeChip task={task} />
             <button
               type="button"
-              onClick={() => setReviewOpen((value) => !value)}
+              onClick={() => changeReviewOpen(!reviewOpen)}
               className={`inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-[13px] font-medium transition-colors ${reviewOpen ? "border-accent bg-accent/10 text-accent" : "border-line text-muted hover:bg-raised hover:text-ink"}`}
               title="按文件查看任务分支相对基线的 diff"
             >
@@ -438,7 +446,7 @@ export function TaskDetail({
         <TaskDiffWorkspace
           task={task}
           sharedWorker={sharedTeamWorker}
-          onClose={() => setReviewOpen(false)}
+          onClose={() => changeReviewOpen(false)}
           onTaskUpdated={(updated) => onTaskCreated(updated, false, false)}
         />
       ) : (

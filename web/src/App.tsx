@@ -33,6 +33,9 @@ export function App() {
   // Deep-link state via the URL (?project=…&task=…): a refresh stays on the same
   // project/task, and the link is shareable. Seeded here, kept in sync below.
   const urlParams = new URLSearchParams(window.location.search);
+  const initialContext = urlParams.get("view");
+  const initialSettings = urlParams.get("settings");
+  const initialComposerMode = urlParams.get("mode") === "team" || urlParams.get("mode") === "debate" ? urlParams.get("mode")! : "single";
   const [projects, setProjects] = useState<ProjectView[]>([]);
   const [projectId, setProjectId] = useState<string | null>(urlParams.get("project"));
   const projectIdRef = useRef<string | null>(projectId);
@@ -52,18 +55,20 @@ export function App() {
   const [debates, setDebates] = useState<Record<string, DebateState>>({});
   const [sessionsBump, setSessionsBump] = useState(0);
   const [curHealth, setCurHealth] = useState<ProjectHealth | null>(null);
-  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(initialContext === "palette");
   // 新建任务不是弹层：它把右侧详情区整个换成一张内嵌单子（见 TaskComposer）。
   const { composer, openComposer, setComposerMode, closeComposer, clearComposerDraft } = useComposer();
-  const [notesMode, setNotesMode] = useState<"new" | "list" | null>(null);
-  const [noteTarget, setNoteTarget] = useState<string | null>(null);
-  const [agentsOpen, setAgentsOpen] = useState(false);
+  const initialComposerOpened = useRef(false);
+  const [notesMode, setNotesMode] = useState<"new" | "list" | null>(initialContext === "notes" ? "list" : null);
+  const [noteTarget, setNoteTarget] = useState<string | null>(urlParams.get("note"));
+  const [agentsOpen, setAgentsOpen] = useState(initialContext === "settings" && initialSettings === "agents");
   const [newProjectOpen, setNewProjectOpen] = useState(false);
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(initialContext === "settings" && initialSettings === "project");
   const [newGroupOpen, setNewGroupOpen] = useState(false);
-  const [groupsOpen, setGroupsOpen] = useState(false);
+  const [groupsOpen, setGroupsOpen] = useState(initialContext === "settings" && initialSettings === "groups");
   const [confirmDel, setConfirmDel] = useState<Task | null>(null);
-  const [view, setView] = useState<TaskView>("list");
+  const [view, setView] = useState<TaskView>(initialContext === "settings" && initialSettings === "archive" ? "archived" : "list");
+  const [reviewTaskId, setReviewTaskId] = useState<string | null>(initialContext === "review" ? urlParams.get("task") : null);
   // Sidebar width is user-draggable; persist so it survives reloads. Clamp on read
   // in case of a stale/garbage value.
   const [sidebarW, setSidebarW] = useState(() => {
@@ -106,9 +111,16 @@ export function App() {
     const p = new URLSearchParams();
     if (projectId) p.set("project", projectId);
     if (selected) p.set("task", selected);
+    if (notesMode) { p.set("view", "notes"); if (noteTarget) p.set("note", noteTarget); }
+    else if (composer) { p.set("view", "create"); p.set("mode", composer.mode); }
+    else if (paletteOpen) p.set("view", "palette");
+    else if (agentsOpen || settingsOpen || groupsOpen || view === "archived") {
+      p.set("view", "settings");
+      p.set("settings", agentsOpen ? "agents" : settingsOpen ? "project" : groupsOpen ? "groups" : "archive");
+    } else if (reviewTaskId && reviewTaskId === selected) p.set("view", "review");
     const qs = p.toString();
     window.history.replaceState(null, "", qs ? `?${qs}` : window.location.pathname);
-  }, [projectId, selected]);
+  }, [agentsOpen, composer, groupsOpen, noteTarget, notesMode, paletteOpen, projectId, reviewTaskId, selected, settingsOpen, view]);
 
   useEffect(() => {
     if (!projectId) return;
@@ -148,6 +160,21 @@ export function App() {
   const ordered = useMemo(() => orderedTasks(visible), [visible]);
   const current = tasks.find((t) => t.id === selected) ?? null;
   const project = projects.find((p) => p.id === projectId) ?? null;
+  const nextHref = useMemo(() => {
+    const params = new URLSearchParams();
+    if (projectId) params.set("project", projectId);
+    if (selected) params.set("task", selected);
+    if (notesMode) { params.set("view", "notes"); if (noteTarget) params.set("note", noteTarget); }
+    else if (composer) { params.set("view", "create"); params.set("mode", composer.mode); }
+    else if (paletteOpen) params.set("view", "palette");
+    else if (agentsOpen || settingsOpen || groupsOpen || view === "archived") {
+      params.set("view", "settings");
+      params.set("settings", agentsOpen ? "agents" : settingsOpen ? "project" : groupsOpen ? "groups" : "archive");
+    } else if (reviewTaskId && reviewTaskId === selected) params.set("view", "review");
+    const query = params.toString();
+    return query ? `/?${query}` : "/";
+  }, [agentsOpen, composer, groupsOpen, noteTarget, notesMode, paletteOpen, projectId, reviewTaskId, selected, settingsOpen, view]);
+  const floatingEscape = !!composer || !!notesMode || paletteOpen || agentsOpen || settingsOpen || groupsOpen;
 
   const patch = useCallback(async (id: string, p: Partial<Task>) => {
     if (rejectDispatchedWorkerMutation(tasksRef.current.find((t) => t.id === id))) return;
@@ -300,6 +327,11 @@ export function App() {
   );
   const openCreate = useCallback(() => openComposerAt("single"), [openComposerAt]);
   const openDebateCreate = useCallback(() => openComposerAt("debate"), [openComposerAt]);
+  useEffect(() => {
+    if (initialComposerOpened.current || initialContext !== "create" || !projectId) return;
+    initialComposerOpened.current = true;
+    openComposerAt(initialComposerMode as "single" | "team" | "debate");
+  }, [initialComposerMode, initialContext, openComposerAt, projectId]);
   // 选中任务 = 离开新建面板（草稿丢弃，和原来点遮罩关闭是一个语义）。
   const selectTask = useCallback(
     (id: string | null) => {
@@ -508,6 +540,7 @@ export function App() {
           debates={debates}
           sessionsBump={sessionsBump}
           curHealth={curHealth}
+          nextHref={nextHref}
           sidebarW={sidebarW}
           setSidebarW={setSidebarW}
           archivedCount={archivedTasks.length}
@@ -527,6 +560,8 @@ export function App() {
           onGate={gate}
           onOpenTask={openTask}
           onTaskCreated={onTaskCreated}
+          reviewTaskId={reviewTaskId}
+          onReviewOpenChange={setReviewTaskId}
           composer={composer && project ? (
             <TaskComposer
               key={composer.seq}
@@ -596,6 +631,11 @@ export function App() {
             setSelected(null);
           }}
         />
+      )}
+      {floatingEscape && (
+        <a href={nextHref} aria-label="用新版打开此页" className="fixed bottom-3 right-3 z-[200] rounded-lg border border-line bg-panel px-3 py-2 text-[11px] text-accent shadow-lg hover:bg-raised">
+          新版打开此页 ↗
+        </a>
       )}
       <Toaster />
     </div>

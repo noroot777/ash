@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
+<title>总览 — Harness UI 讨论稿 v2</title>
+<link rel="stylesheet" href="style.css">
+<style>
+  /* index 专属的文档版式,组件样式仍来自共享 style.css */
+  .doc{max-width:1160px;margin:0 auto;padding:44px 28px 110px}
+  .doc .eyebrow{margin:0 0 10px;color:var(--accent);font-size:12px;font-weight:750;letter-spacing:.14em;text-transform:uppercase}
+  .doc h1{margin:0 0 14px;font-size:clamp(30px,4vw,54px);line-height:1.05;letter-spacing:-.05em}
+  .doc .lede{max-width:760px;margin:0 0 40px;color:var(--muted);font-size:15px}
+  .doc .lede b{color:var(--ink)}
+  .doc h2{margin:52px 0 6px;font-size:24px;letter-spacing:-.03em}
+  .doc .sub{margin:0 0 18px;color:var(--muted);font-size:13px;max-width:760px}
+  .card-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:12px}
+  .nav-card{display:block;border:1px solid var(--line2);border-radius:12px;background:var(--panel);padding:14px 15px;transition:border-color .12s}
+  .nav-card:hover{border-color:var(--accent)}
+  .nav-card .no{color:var(--accent);font:700 11px ui-monospace,monospace}
+  .nav-card b{display:block;margin:5px 0 3px;font-size:14px}
+  .nav-card small{color:var(--muted);font-size:11px;line-height:1.5;display:block}
+  .cols-diagram{display:grid;grid-template-columns:244fr 640fr 320fr;gap:6px;border:1px solid var(--line2);border-radius:12px;background:var(--canvas);padding:10px;min-height:190px}
+  .cols-diagram>div{display:flex;flex-direction:column;justify-content:flex-end;border:1px solid var(--line2);border-radius:8px;background:var(--panel);padding:10px}
+  .cols-diagram>div.global{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent-soft)}
+  .cols-diagram b{font-size:12px}
+  .cols-diagram small{color:var(--muted);font-size:10.5px;line-height:1.5}
+  .cols-diagram .w{margin-bottom:auto;color:var(--faint);font:650 10px ui-monospace,monospace}
+  .evo{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-top:14px}
+  .evo>div{border:1px solid var(--line2);border-radius:12px;background:var(--panel);padding:12px 14px}
+  .evo b{display:block;font-size:12.5px;margin-bottom:3px}
+  .evo small{color:var(--muted);font-size:11px;line-height:1.55;display:block}
+  .evo .tag{display:inline-block;margin-bottom:7px;border-radius:5px;background:var(--raised);padding:2px 8px;color:var(--muted);font-size:10px;font-weight:750}
+  .evo .tag.now{background:var(--accent-soft);color:var(--accent)}
+  .two-col{display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:start}
+  .answer{border:1px solid var(--line2);border-radius:12px;background:var(--panel);padding:16px 18px}
+  .answer h3{margin:0 0 6px;font-size:15px}
+  .answer p{margin:0 0 8px;color:var(--muted);font-size:12.5px}
+  .answer p:last-child{margin:0}
+  .answer .q{display:inline-block;margin-bottom:8px;border-radius:5px;background:var(--accent-soft);padding:2px 8px;color:var(--accent);font-size:10.5px;font-weight:750}
+  .token-table{overflow:hidden;border:1px solid var(--line2);border-radius:12px;background:var(--panel)}
+  .token-row{display:grid;grid-template-columns:120px 1fr 1fr;border-bottom:1px solid var(--line);font:11.5px ui-monospace,monospace}
+  .token-row:last-child{border-bottom:0}
+  .token-row>*{display:flex;align-items:center;gap:8px;padding:8px 12px;color:var(--muted)}
+  .token-row>*+*{border-left:1px solid var(--line)}
+  .token-row b{color:var(--ink)}
+  .cdot{width:13px;height:13px;flex:0 0 13px;border:1px solid rgba(40,42,48,.14);border-radius:4px}
+  .map-table{overflow:hidden;border:1px solid var(--line2);border-radius:12px;background:var(--panel)}
+  .map-row{display:grid;grid-template-columns:180px 150px 1fr;border-bottom:1px solid var(--line);font-size:12px}
+  .map-row:last-child{border-bottom:0}
+  .map-row>*{display:flex;align-items:center;gap:8px;padding:9px 14px;color:var(--muted)}
+  .map-row>*+*{border-left:1px solid var(--line)}
+  .map-row b{color:var(--ink);font-weight:650}
+  .map-tag{border-radius:5px;padding:2px 8px;font-size:10px;font-weight:750}
+  .map-tag.page{background:var(--accent-soft);color:var(--accent)}
+  .map-tag.drawer{background:#dff3f7;color:#0b7f96}
+  .map-tag.keep{background:var(--raised);color:var(--muted)}
+  .sel-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px}
+  .sel-card{border:1px solid var(--line2);border-radius:12px;background:var(--panel);overflow:hidden}
+  .sel-card .sc-head{display:flex;align-items:baseline;gap:8px;border-bottom:1px solid var(--line);padding:10px 14px}
+  .sel-card .sc-head b{font-size:13px}
+  .sel-card .sc-head small{color:var(--faint);font-size:10.5px}
+  .sel-card .sc-demo{padding:10px}
+  .sel-card .sc-vals{border-top:1px solid var(--line);padding:8px 14px;color:var(--muted);font:10.5px ui-monospace,monospace}
+  .swatch{display:inline-block;width:10px;height:10px;margin-right:4px;border:1px solid rgba(40,42,48,.14);border-radius:3px;vertical-align:-1px}
+  .demo-row{display:flex;align-items:center;gap:8px;border-radius:7px;padding:8px 10px;font-size:12px}
+  .demo-row small{margin-left:auto;color:var(--faint);font-size:10px}
+  .callout{display:flex;gap:10px;align-items:flex-start;margin-top:14px;color:var(--muted);font-size:12px;max-width:760px}
+  .callout::before{content:"要点";flex:0 0 auto;border-radius:4px;background:var(--ink);padding:2px 6px;color:#fff;font-size:9.5px;font-weight:750;margin-top:2px}
+  .language-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:0;border:1px solid var(--line2);border-radius:12px;background:var(--panel);overflow:hidden}
+  .principle{min-height:126px;padding:15px 16px;border-right:1px solid var(--line);border-bottom:1px solid var(--line)}
+  .principle:nth-child(3n){border-right:0}.principle:nth-last-child(-n+3){border-bottom:0}
+  .principle .mark{display:block;margin-bottom:7px;color:var(--faint);font:650 10px ui-monospace,monospace}
+  .principle b{display:block;margin-bottom:5px;font-size:13px;font-weight:600}.principle p{margin:0;color:var(--muted);font-size:11.5px;line-height:1.6}
+  @media (max-width:900px){.two-col{grid-template-columns:1fr}.cols-diagram{grid-template-columns:1fr 1fr;min-height:0}.cols-diagram>div{min-height:110px}.map-row{grid-template-columns:130px 110px 1fr}}
+</style>
+</head>
+<body class="doc-page">
+  <main class="doc">
+    <p class="eyebrow">Harness Web · 讨论稿 v2 · 第七轮 · 现行产品结构校准</p>
+    <h1>不止复刻控件，开始用同一种语言设计。</h1>
+    <p class="lede"><b>本轮把验收与验证信息结构拉回现行产品：</b>团队验收恢复为“调度台共享分支卡 → 共享执行者验证 → 独立 worktree 执行者”的纵向层级；用户消息回到提交下方的左列，调度流中的用户发言回到原时序与右对齐气泡。Linear 只负责表面、间距、控件和导航壳。</p>
+    <p class="callout"><b>信息结构原则：</b>信息结构以现行产品为准,重构只换视觉与导航壳。</p>
+
+    <h2>演示页目录</h2>
+    <p class="sub">顶部导航条在每一页都有,可随时横跳;侧边栏任务树的行、顶部三图标、项目下拉里的「设置」都是真链接,可以直接当产品点。</p>
+    <div class="card-grid">
+      <a class="nav-card" href="shell.html"><span class="no">01</span><b>主视图 · 项目切换</b><small>三栏结构 + 侧栏任务树,项目下拉默认打开(含「设置」项)</small></a>
+      <a class="nav-card" href="task.html"><span class="no">02</span><b>单任务 · 队列抽屉</b><small>会话 + Inspector;点「查看队列」右侧滑出抽屉</small></a>
+      <a class="nav-card" href="team.html"><span class="no">03</span><b>团队调度台</b><small>调度流 + 右栏 tab + 时间轴一行收起 + 执行者抽屉</small></a>
+      <a class="nav-card" href="debate.html"><span class="no">04</span><b>辩论视图</b><small>配置卡 + 双方发言流 + 底部控制条</small></a>
+      <a class="nav-card" href="review.html"><span class="no">05</span><b>单任务验收</b><small>提交、文件统计、行级 diff、分支目标、审查报告与截图</small></a>
+      <a class="nav-card" href="review-team.html"><span class="no">06</span><b>团队验收台</b><small>共享分支汇总 → 共享执行者验证 → 审查报告与截图缩略图</small></a>
+      <a class="nav-card" href="composer.html"><span class="no">07</span><b>新建任务面板</b><small>内嵌非弹层;single/team/debate 模式切换;侧栏 ✎ 直达</small></a>
+      <a class="nav-card" href="settings-agents.html"><span class="no">08</span><b>设置 · 智能体</b><small>640px 内容宽，左说明 + 右控件的 65px 设置行</small></a>
+      <a class="nav-card" href="settings-project.html"><span class="no">09</span><b>设置 · 项目</b><small>基本信息 / 运行默认 / 危险区</small></a>
+      <a class="nav-card" href="settings-groups.html"><span class="no">10</span><b>设置 · 分组</b><small>全部分组行内运行 + 新建</small></a>
+      <a class="nav-card" href="settings-archive.html"><span class="no">11</span><b>设置 · 已归档</b><small>归档列表与还原</small></a>
+      <a class="nav-card" href="notes.html"><span class="no">12</span><b>随手记</b><small>侧栏顶部便签图标打开弹层</small></a>
+      <a class="nav-card" href="palette.html"><span class="no">13</span><b>命令面板 ⌘K</b><small>720×450、46px 命令项、12px 圆角与实测阴影</small></a>
+      <a class="nav-card" href="components.html"><span class="no">14</span><b>控件全状态对照</b><small>按钮、输入、下拉、复选框、开关、提示浮层、状态标记与四类滚动区</small></a>
+    </div>
+
+    <h2>Linear 设计语言摘要</h2>
+    <p class="sub">这不是形容词清单，而是本轮重画 harness 特有组件时实际执行的约束。每一条都能直接落到 CSS 或版式判断。</p>
+    <div class="language-grid">
+      <div class="principle"><span class="mark">01 / 表面</span><b>无彩表面，亮度差代替粗边框</b><p>侧栏固定在 RGB 239/239/240，主内容固定在 249/249/250，白色只给输入、菜单和局部浮层。大块区域不使用抬升层或覆盖层。</p></div>
+      <div class="principle"><span class="mark">02 / 节奏</span><b>4/8px 节奏，28/32/44px 控件带</b><p>行高与间距从 4px 倍数取值；侧栏行 28px、菜单项 32px、任务行 44px。信息密度靠节奏，不靠把字号压小。</p></div>
+      <div class="principle"><span class="mark">03 / 字体</span><b>字重和亮度承担层级</b><p>正文 13px/400–500；标题只升到 500–600。一级信息接近黑，说明用 L39，时间和快捷键用 L64，不用额外色块分组。</p></div>
+      <div class="principle"><span class="mark">04 / 状态</span><b>状态色只落在微点与细图标</b><p>绿色、琥珀、青色、红色只用于 6–8px 状态点、勾叉或短文字；不再给整张执行者卡、审查报告或会话气泡铺色。</p></div>
+      <div class="principle"><span class="mark">05 / 深度</span><b>阴影分三档，边框只做校准线</b><p>控件用 1px 淡内环 + 两层微阴影；菜单用三层短阴影；命令面板才使用长阴影。普通内容区不加“卡片感”。</p></div>
+      <div class="principle"><span class="mark">06 / 动效</span><b>150ms，短促且可逆</b><p>悬停、聚焦、开关统一 150ms，常用缓出；按下只回落背景或阴影，不缩放跳动。详情栏的结构动画保持 180ms。</p></div>
+    </div>
+    <p class="callout">施工映射：任务树学习侧栏团队展开；调度流学习活动记录；执行者栏学习任务列表；甘特学习时间线；验收与审查学习清单和活动；会话和辩论学习任务评论流。</p>
+
+    <h2>实测 Linear 设计变量对照表</h2>
+    <p class="sub">采样视口为 1455 × 806 CSS px，系统浅色主题。截图像素复核：侧栏 RGB 239/239/240，主内容 RGB 249/249/250；本稿固定采用这组最终值。</p>
+    <div class="token-table">
+      <div class="token-row"><b>项目</b><b>Linear 实测</b><b>本稿采用</b></div>
+      <div class="token-row"><b>侧栏</b><span>244px；项高 28px</span><span>244px；项高 28px</span></div>
+      <div class="token-row"><b>侧栏文字</b><span>13px / 500；图标 14px</span><span>13px / 500；状态点 8px</span></div>
+      <div class="token-row"><b>主表面</b><span><i class="cdot" style="background:lch(97.94% .5 282)"></i>lch(97.94% .5 282)</span><span>--canvas 同值</span></div>
+      <div class="token-row"><b>侧栏表面</b><span><i class="cdot" style="background:lch(94.44% .5 282)"></i>lch(94.44% .5 282)</span><span>--chrome 同值</span></div>
+      <div class="token-row"><b>边框</b><span><i class="cdot" style="background:lch(90.55% 0 282)"></i>90.55 / 控件 86.5</span><span>外壳细线 / 输入与菜单内环分档</span></div>
+      <div class="token-row"><b>正文三级</b><span>9.794% / 19.588% / 39.176%</span><span>ink / 次级内容 / muted</span></div>
+      <div class="token-row"><b>悬停 / 选中</b><span>控件 95.886；侧栏 91.64；选中 89.54</span><span>按组件语义分开，不再用一个抬升层到处铺</span></div>
+      <div class="token-row"><b>胶囊 tabs</b><span>28px；12px / 500；9999px</span><span>28px；12px / 500；9999px</span></div>
+      <div class="token-row"><b>设置页</b><span>导航 244px；内容 640px；行 65px</span><span>244px / 640px / 65px</span></div>
+      <div class="token-row"><b>命令面板</b><span>720×450；项 46px；圆角 12px</span><span>720×450；项 46px；圆角 12px</span></div>
+      <div class="token-row"><b>Issue 详情</b><span>标题 24px / 600；属性栏约 380px</span><span>标题尺度沿用；Inspector 320px 适配既定三栏</span></div>
+    </div>
+
+    <h2>决定一:任务列表并进侧边栏,四栏变三栏</h2>
+    <p class="sub">对照 Linear 侧栏的「Your teams」区:当前项目在侧边栏里直接展开成任务树,其他项目折叠成一行可点开。独立的任务列表栏取消,主区域只剩会话正文 + Inspector。</p>
+    <div class="cols-diagram">
+      <div class="global"><span class="w">244px · Linear 实测</span><b>侧边栏(含任务树)</b><small>顶:项目切换器 + 三图标(⌕ 搜索 / ▤ 随手记 / ✎ 新建);中:当前项目任务树——协作任务(进行中 / 已验收,团队行展开执行者子行带状态微点)、普通任务(运行中 / 提问中 / 已完成);再往下「其他项目」折叠行;底:连接状态 / 收起</small></div>
+      <div><span class="w">自适应</span><b>① 会话正文</b><small>44px 头栏(类型 chip · 标题 · 状态 pill · 高频动作),下面按任务类型切换:会话 / 调度流 / 辩论 / diff / 新建面板</small></div>
+      <div><span class="w">320px</span><b>② Inspector</b><small>属性行采用 Linear 详情页的 label + value 版式；保留队列、审查轮次、prompt 原文与一键收起。</small></div>
+    </div>
+    <div class="evo">
+      <div><span class="tag">v1 · 第一轮</span><b>四栏:项目窄栏独立</b><small>专职项目窄栏 + 任务列表 + 正文 + Inspector,最左一栏信息密度太低。</small></div>
+      <div><span class="tag">v2 · 第二轮</span><b>四栏:单一侧边栏</b><small>项目切换器和导航收进一条 240px 侧栏,但任务列表仍是独立第二栏。</small></div>
+      <div><span class="tag">v3 · 信息架构定稿</span><b>三栏:任务树入侧栏</b><small>任务列表并进侧栏，设置改为单开页。</small></div>
+      <div><span class="tag">v4 · 上轮</span><b>实测视觉 + 真实验收</b><small>统一基础 token，并补齐单任务/团队验收功能面。</small></div>
+      <div><span class="tag">v5 · 上轮</span><b>控件全状态 + 设计语言</b><small>校准默认亮度，并用 Linear 的组合规则重画 harness 特有组件。</small></div>
+      <div><span class="tag">v6 · 上轮</span><b>团队验收尝试 + 单层焦点 ring</b><small>视觉校准完成，但验收台误造了执行者队列与底部调度流。</small></div>
+      <div><span class="tag now">v7 · 本轮</span><b>信息结构完全服从现行产品</b><small>共享执行者验证、证据缩略图与用户消息全部归回真实层级。</small></div>
+    </div>
+    <p class="callout">任务树的选中行吃的就是全局选中态方案——切 S1/S2/S3,任务树、下拉、⌘K、设置页列表一起变。</p>
+
+    <h2>决定二:管理页合并成 Linear 式「单开设置页」</h2>
+    <p class="sub">仿 Linear Settings:独立于主应用的整页,左侧设置专用窄栏(顶部「← 返回应用」+ 搜索框,下面按组分导航),右侧内容区。入口只有一个——项目下拉里的「设置」项(齿轮同跳)。</p>
+    <div class="map-table">
+      <div class="map-row"><b>功能</b><b>上一轮形态</b><b>本轮去向</b></div>
+      <div class="map-row"><b>智能体 AgentsPanel</b><span>独立页 + 侧栏入口</span><span><i class="map-tag page">设置页</i><a href="settings-agents.html" style="color:var(--accent)">settings-agents.html</a> · 「智能体」组:Profile / 默认规则 / claude / codex</span></div>
+      <div class="map-row"><b>项目设置</b><span>独立页 + 侧栏入口</span><span><i class="map-tag page">设置页</i><a href="settings-project.html" style="color:var(--accent)">settings-project.html</a> · 「项目」组</span></div>
+      <div class="map-row"><b>分组管理 GroupsPanel</b><span>独立页 + 侧栏入口</span><span><i class="map-tag page">设置页</i><a href="settings-groups.html" style="color:var(--accent)">settings-groups.html</a> · 「项目」组</span></div>
+      <div class="map-row"><b>已归档</b><span>独立页 + 侧栏入口</span><span><i class="map-tag page">设置页</i><a href="settings-archive.html" style="color:var(--accent)">settings-archive.html</a> · 「项目」组</span></div>
+      <div class="map-row"><b>队列 QueueModal</b><span>右侧抽屉</span><span><i class="map-tag drawer">右侧抽屉</i>保留,从 Inspector「查看队列」滑出,见 <a href="task.html" style="color:var(--accent)">02</a></span></div>
+      <div class="map-row"><b>执行者详情</b><span>右侧抽屉</span><span><i class="map-tag drawer">右侧抽屉</i>保留,见 <a href="team.html" style="color:var(--accent)">03</a></span></div>
+      <div class="map-row"><b>新建任务</b><span>内嵌面板</span><span><i class="map-tag keep">保留</i>侧栏顶部 ✎ 直达,见 <a href="composer.html" style="color:var(--accent)">06</a></span></div>
+      <div class="map-row"><b>随手记</b><span>弹层 + 侧栏导航项</span><span><i class="map-tag keep">保留弹层</i>入口改为侧栏顶部 ▤ 图标,见决定三</span></div>
+      <div class="map-row"><b>命令面板 ⌘K</b><span>全屏 overlay</span><span><i class="map-tag keep">保留弹层</i>侧栏顶部 ⌕ 图标 / 快捷键</span></div>
+    </div>
+
+    <h2>决定三:侧栏顶部三图标</h2>
+    <div class="two-col">
+      <div class="answer">
+        <span class="q">⌕ ▤ ✎</span>
+        <h3>搜索、随手记、新建,一排住在项目切换器右侧。</h3>
+        <p>对应 Linear 顶部搜索 + 铅笔钮的位置:⌕ 打开 ⌘K,▤ 打开随手记弹层(用户指定放这里),✎ 打开新建任务面板。旧侧栏的五个导航项(智能体 / 分组 / 已归档 / 项目设置 / 随手记)全部撤出,侧栏主体让给任务树。</p>
+      </div>
+      <div class="answer">
+        <span class="q">项目下拉</span>
+        <h3>下拉保留,新增「设置」入口项。</h3>
+        <p>「头像 + 项目名 + ▾」点开:当前项目(仓库路径 + 齿轮)、<b>设置</b>项(单开设置页唯一入口)、搜索框、「切换到」列表、新建项目。⌘K 里保留「切换项目」命令作为键盘快路。去 <a href="shell.html" style="color:var(--accent)">01 主视图</a>(默认开着下拉)看效果。</p>
+      </div>
+    </div>
+
+    <h2>列表选中态 · 三案色值</h2>
+    <p class="sub">下面三行是活的——用右下角切换器切换,三张卡里只有对应方案的那张与当前全局一致;所有演示页的任务树、下拉、命令面板同步变。</p>
+    <div class="sel-cards">
+      <div class="sel-card">
+        <div class="sc-head"><b>S1 淡染 + 指示条</b><small>定位最快,推荐</small></div>
+        <div class="sc-demo"><div class="demo-row" style="background:lch(89.54% .5 282);position:relative;box-shadow:inset 2px 0 0 #5e6ad2">自动验证相关 - 依旧大改<small>选中</small></div></div>
+        <div class="sc-vals">lch(89.54% .5 282) + #5e6ad2 · 2px 左条</div>
+      </div>
+      <div class="sel-card">
+        <div class="sc-head"><b>S2 只有淡染</b><small>更安静</small></div>
+        <div class="sc-demo"><div class="demo-row" style="background:lch(89.54% .5 282)">自动验证相关 - 依旧大改<small>选中</small></div></div>
+        <div class="sc-vals">Linear 实测选中底色 · 无指示条</div>
+      </div>
+      <div class="sel-card">
+        <div class="sc-head"><b>S3 纯灰加深</b><small>不引入主题色</small></div>
+        <div class="sc-demo"><div class="demo-row" style="background:lch(87.5% .5 282)">自动验证相关 - 依旧大改<small>选中</small></div></div>
+        <div class="sc-vals">lch(87.5% .5 282) · 无主题色</div>
+      </div>
+    </div>
+    <p class="callout">hover 采用 Linear 实测 lch(91.64% .5 282)，选中采用 lch(89.54% .5 282)；三案只改变选中行表现，不再改变全局灰阶。</p>
+
+    <h2>最终采用灰阶 · 固定值</h2>
+    <p class="sub">灰阶不再提供第二套切换。下面只列 Linear 实测值与本稿的最终变量映射。</p>
+    <div class="token-table">
+      <div class="token-row"><b>Token</b><b>Linear 实测</b><b>本稿变量</b></div>
+      <div class="token-row"><b>chrome</b><span>lch(94.44% .5 282)</span><span>--chrome</span></div>
+      <div class="token-row"><b>canvas</b><span>lch(97.94% .5 282)</span><span>--canvas</span></div>
+      <div class="token-row"><b>raised</b><span>lch(96.914% 0 282)</span><span>--raised</span></div>
+      <div class="token-row"><b>line</b><span>lch(90.55% 0 282)</span><span>--line</span></div>
+      <div class="token-row"><b>muted</b><span>lch(39.176% 1.25 282)</span><span>--muted</span></div>
+      <div class="token-row"><b>accent</b><span>#5e6ad2</span><span>--accent</span></div>
+    </div>
+    <p class="callout">整套演示零外部依赖，file:// 直接打开；仅 S1/S2/S3 选中态存入 localStorage 并跨页面同步。这是讨论稿，不含任何产品代码改动。</p>
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>

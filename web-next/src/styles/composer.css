@@ -1,0 +1,297 @@
+.task-composer-panel {
+  display: grid;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  grid-template-rows: 48px minmax(0, 1fr) 58px;
+  background: var(--panel);
+}
+
+.composer-header {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  border-bottom: 1px solid var(--line);
+  padding: 0 16px;
+}
+
+.composer-header > b {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.composer-header > span:not(.workspace-kind-chip) {
+  color: var(--faint);
+  font-size: 10px;
+}
+
+.composer-header .ui-button {
+  margin-left: auto;
+}
+
+.composer-scroll {
+  min-height: 0;
+  overflow-y: auto;
+  background: var(--canvas);
+}
+
+.composer-inner {
+  width: min(820px, calc(100% - 40px));
+  margin: 0 auto;
+  padding: 30px 0 54px;
+}
+
+.composer-tabs {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 12px;
+}
+
+.composer-tabs button {
+  display: inline-flex;
+  height: 30px;
+  align-items: center;
+  gap: 6px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  padding: 0 12px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.composer-tabs button:hover {
+  background: var(--raised);
+  color: var(--ink);
+}
+
+.composer-tabs button[aria-selected="true"] {
+  background: var(--sel-bg);
+  color: var(--ink);
+  font-weight: 550;
+}
+
+.composer-tabs > span {
+  margin-left: auto;
+  color: var(--faint);
+  font-size: 9px;
+}
+
+.composer-title {
+  width: 100%;
+  height: 36px;
+  margin-top: 18px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--panel);
+  padding: 0 12px;
+  outline: 0;
+  font-size: 13px;
+}
+
+.composer-title:focus,
+.composer-objective textarea:focus,
+.composer-field input:focus,
+.composer-field select:focus {
+  border-color: var(--accent);
+}
+
+.composer-objective {
+  position: relative;
+  margin-top: 10px;
+}
+
+.composer-objective textarea {
+  display: block;
+  width: 100%;
+  min-height: 240px;
+  resize: vertical;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel);
+  padding: 14px;
+  outline: 0;
+  font-size: 14px;
+  line-height: 1.75;
+}
+
+.composer-slash-menu {
+  position: absolute;
+  z-index: 3;
+  top: 48px;
+  left: 12px;
+  width: 310px;
+  overflow: hidden;
+  border: 1px solid var(--line2);
+  border-radius: 10px;
+  background: var(--panel);
+  padding: 5px;
+  box-shadow: var(--menu-shadow);
+}
+
+.composer-slash-menu > small {
+  display: block;
+  padding: 4px 7px;
+  color: var(--faint);
+  font-size: 9px;
+}
+
+.composer-slash-menu button {
+  display: flex;
+  width: 100%;
+  height: 34px;
+  align-items: center;
+  gap: 9px;
+  border: 0;
+  background: transparent;
+  padding: 0 8px;
+  text-align: left;
+}
+
+.composer-slash-menu b {
+  color: var(--accent);
+  font: 600 11px var(--font-mono);
+}
+
+.composer-slash-menu span {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.composer-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 13px 16px;
+  margin-top: 22px;
+  border-top: 1px solid var(--line);
+  padding-top: 20px;
+}
+
+.composer-field,
+.composer-toggle-field {
+  display: grid;
+  gap: 6px;
+}
+
+.composer-field > span,
+.composer-toggle-field > span {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 550;
+}
+
+.composer-field input,
+.composer-field select {
+  width: 100%;
+  height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  padding: 0 10px;
+  outline: 0;
+  font-size: 12px;
+}
+
+.composer-toggle-field .ui-choice {
+  display: flex;
+  height: 34px;
+  align-items: center;
+  gap: 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  padding: 0 10px;
+  font-size: 11px;
+}
+
+.composer-seed-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.composer-seed-attachments > span {
+  display: inline-flex;
+  max-width: 240px;
+  height: 27px;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--panel);
+  padding: 0 6px 0 8px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.composer-seed-attachments button {
+  display: grid;
+  width: 16px;
+  height: 16px;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: var(--raised);
+  color: var(--faint);
+}
+
+.composer-warning {
+  margin: 9px 0 0;
+  border-radius: 8px;
+  background: rgb(181 123 0 / 8%);
+  padding: 8px 10px;
+  color: var(--amber);
+  font-size: 10px;
+}
+
+.composer-footer {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  border-top: 1px solid var(--line);
+  background: var(--panel);
+  padding: 0 16px;
+}
+
+.composer-footer > div {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  gap: 7px;
+}
+
+.composer-footer > div > span {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 5px;
+  color: var(--faint);
+  font-size: 9px;
+}
+
+.composer-footer .task-reply-icon {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+}
+
+.composer-footer .task-reply-icon:hover {
+  background: var(--raised);
+  color: var(--ink);
+}
+
+@media (max-width: 720px) {
+  .composer-inner { width: calc(100% - 26px); }
+  .composer-fields { grid-template-columns: 1fr; }
+  .composer-tabs > span { display: none; }
+  .composer-footer > div > span { display: none; }
+}
