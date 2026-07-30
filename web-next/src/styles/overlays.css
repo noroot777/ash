@@ -338,21 +338,30 @@
 }
 
 .note-row {
-  display: flex;
+  position: relative;
+  display: grid;
   width: 100%;
   min-height: 47px;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 7px;
   border: 0;
   background: transparent;
   padding: 6px 9px;
   text-align: left;
 }
 
-.note-row > span {
+.note-row-main {
   display: grid;
   min-width: 0;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  color: inherit;
+  text-align: left;
 }
 
-.note-row b {
+.note-row-main b {
   overflow: hidden;
   font-size: 11px;
   font-weight: 550;
@@ -360,9 +369,63 @@
   white-space: nowrap;
 }
 
-.note-row small {
+.note-row-main small {
   color: var(--faint);
   font-size: 9px;
+}
+
+.note-pick,
+.note-pick-placeholder {
+  display: grid;
+  width: 18px;
+  height: 24px;
+  place-items: center;
+  border: 0;
+  background: transparent;
+  padding: 0;
+}
+
+.note-pick:hover .ui-checkbox {
+  border-color: var(--accent);
+}
+
+.note-pick:focus-visible .ui-checkbox {
+  outline: 2px solid color-mix(in lch, var(--accent) 45%, transparent);
+  outline-offset: 2px;
+}
+
+.note-task-badge {
+  display: inline-flex;
+  height: 25px;
+  align-items: center;
+  gap: 3px;
+  border: 1px solid color-mix(in lch, var(--green) 42%, var(--line));
+  border-radius: 999px;
+  background: var(--green-bg);
+  padding: 0 7px;
+  color: var(--green);
+  font-size: 9px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.note-task-badge:hover {
+  border-color: var(--green);
+  box-shadow: 0 1px 4px color-mix(in lch, var(--green) 20%, transparent);
+}
+
+.note-row.is-converted {
+  background: color-mix(in lch, var(--green-bg) 42%, var(--panel));
+  box-shadow: inset 3px 0 var(--green);
+}
+
+.note-row.is-converted .note-row-main {
+  opacity: 0.56;
+}
+
+.note-row.is-converted .note-row-main b {
+  text-decoration: line-through;
+  text-decoration-color: color-mix(in lch, var(--muted) 65%, transparent);
 }
 
 .note-editor {
