@@ -12,68 +12,38 @@
     <div data-include="settings-side" data-active="profiles"></div>
     <main class="set-main">
       <div class="set-inner">
-        <h1 class="set-title">智能体</h1>
-        <p class="set-sub">执行器 Profile 是全局资产,不属于某个项目;从项目下拉的「设置」进入这张单开页维护。</p>
+        <h1 class="set-title">执行器 Profile</h1>
+        <p class="set-sub">统一管理可派给任务、团队调度者和审查者的执行器身份。</p>
 
-        <h3 class="sect-title">执行器 Profile<small>原 AgentsPanel Modal → 设置页;选中行吃右下角切换器方案</small></h3>
+        <h3 class="sect-title">执行器</h3>
         <div class="sect-card">
-          <div style="padding:6px 0">
-            <div class="agent-row selectable selected">
-              <span class="wc-ava">C</span>
-              <span class="at"><b>claude@ccb</b><small>claude-fable-5 · effort high</small></span>
-              <span class="default-tag">claude 默认</span>
-            </div>
-            <div class="agent-row selectable">
-              <span class="wc-ava">X</span>
-              <span class="at"><b>codex@cpa</b><small>gpt-5.6-sol · xhigh · 1.5x priority</small></span>
-              <span class="default-tag">codex 默认</span>
-            </div>
-            <div class="agent-row selectable">
-              <span class="wc-ava">X</span>
-              <span class="at"><b>codex@cpx</b><small>gpt-5.5 · high</small></span>
-            </div>
-          </div>
-          <div class="sc-foot"><span class="hint">每个 profile = 一种「品牌 @ 账号」组合;任务可逐个覆盖模型 / 思考强度</span><button class="ui-btn primary">新增执行器</button></div>
+          <div class="agent-row selectable selected"><span class="mini-avatar">C</span><span class="at"><b>claude@ccb</b><small>claude-fable-5 · high</small></span><span class="default-tag">claude 默认</span><button class="ui-btn">编辑</button></div>
+          <div class="agent-row selectable"><span class="mini-avatar">X</span><span class="at"><b>codex@cpa</b><small>gpt-5.6-sol · xhigh · priority 1.5x</small></span><span class="default-tag">codex 默认</span><button class="ui-btn">编辑</button></div>
+          <div class="agent-row selectable"><span class="mini-avatar">X</span><span class="at"><b>codex@cpx</b><small>gpt-5.5 · high</small></span><button class="ui-btn">编辑</button></div>
+          <div class="sc-foot"><span class="hint">任务仍可逐个覆盖模型和思考强度</span><button class="ui-btn primary">新增执行器</button></div>
         </div>
 
-        <h3 class="sect-title" id="rules">默认规则</h3>
+        <h3 class="sect-title" id="rules">默认分配</h3>
         <div class="sect-card">
-          <div class="form-block"><label>新任务默认执行器</label>
-            <div class="fake-select"><span class="wc-ava">C</span>claude@ccb·claude-fable-5<span class="fs-caret">▾</span></div>
-          </div>
-          <div class="form-block"><label>团队执行者默认</label>
-            <div class="fake-select"><span class="wc-ava">X</span>codex@cpa·gpt-5.6-sol<span class="fs-caret">▾</span></div>
-          </div>
+          <div class="setting-row"><div class="setting-copy"><b>新任务默认执行器</b><small>创建普通任务时预选，可在任务头部修改</small></div><div class="setting-control"><div class="fake-select"><span class="mini-avatar">C</span>claude@ccb<span class="fs-caret">▾</span></div></div></div>
+          <div class="setting-row"><div class="setting-copy"><b>团队执行者默认</b><small>调度者派活未显式指定执行器时使用</small></div><div class="setting-control"><div class="fake-select"><span class="mini-avatar">X</span>codex@cpa<span class="fs-caret">▾</span></div></div></div>
+          <div class="setting-row"><div class="setting-copy"><b>团队审查者默认</b><small>执行者完成后自动派审时使用</small></div><div class="setting-control"><div class="fake-select"><span class="mini-avatar">X</span>codex@cpa<span class="fs-caret">▾</span></div></div></div>
         </div>
 
-        <h3 class="sect-title" id="claude">claude@ccb 配置<small>左侧导航「claude / codex」直达各家配置区</small></h3>
+        <h3 class="sect-title" id="claude">claude@ccb</h3>
         <div class="sect-card">
-          <div class="form-block"><label>模型</label>
-            <div class="fake-select">claude-fable-5<span class="fs-caret">▾</span></div>
-          </div>
-          <div class="form-block"><label>思考强度</label>
-            <div class="fake-select">high<span class="fs-caret">▾</span></div>
-          </div>
-          <div class="form-block"><label>默认身份</label>
-            <div class="toggle-line">作为 claude 类型的默认执行器<small>agentType 未指定 executorId 时降级到它</small><span class="tgl"></span></div>
-          </div>
-          <div class="sc-foot"><span class="hint">换执行器时,任务上的模型 / 思考强度选择器重置为「跟随执行器」</span><button class="ui-btn">保存</button></div>
+          <div class="setting-row"><div class="setting-copy"><b>模型</b><small>该 Profile 的默认模型</small></div><div class="setting-control"><div class="fake-select">claude-fable-5<span class="fs-caret">▾</span></div></div></div>
+          <div class="setting-row"><div class="setting-copy"><b>思考强度</b><small>任务未覆盖时使用</small></div><div class="setting-control"><div class="fake-select">high<span class="fs-caret">▾</span></div></div></div>
+          <div class="setting-row"><div class="setting-copy"><b>作为类型默认</b><small>未指定 executorId 的 claude 任务降级到这里</small></div><div class="setting-control"><span class="tgl"></span></div></div>
         </div>
 
-        <h3 class="sect-title" id="codex">codex@cpa 配置</h3>
+        <h3 class="sect-title" id="codex">codex@cpa</h3>
         <div class="sect-card">
-          <div class="form-block"><label>模型</label>
-            <div class="fake-select">gpt-5.6-sol<span class="fs-caret">▾</span></div>
-          </div>
-          <div class="form-block"><label>思考强度</label>
-            <div class="fake-select">xhigh<small>gpt-5.5 最高 xhigh,ultra→max 会被拒</small><span class="fs-caret">▾</span></div>
-          </div>
-          <div class="form-block"><label>速度档位</label>
-            <div class="fake-select">1.5x · service_tier priority<span class="fs-caret">▾</span></div>
-          </div>
-          <div class="sc-foot"><span class="hint">codex 系列的档位约束由服务端校验,超档会在派单时被拒并提示</span><button class="ui-btn">保存</button></div>
+          <div class="setting-row"><div class="setting-copy"><b>模型</b><small>该 Profile 的默认模型</small></div><div class="setting-control"><div class="fake-select">gpt-5.6-sol<span class="fs-caret">▾</span></div></div></div>
+          <div class="setting-row"><div class="setting-copy"><b>思考强度</b><small>服务端会校验模型支持的最高档位</small></div><div class="setting-control"><div class="fake-select">xhigh<span class="fs-caret">▾</span></div></div></div>
+          <div class="setting-row"><div class="setting-copy"><b>速度档位</b><small>使用 service_tier priority</small></div><div class="setting-control"><div class="fake-select">1.5x<span class="fs-caret">▾</span></div></div></div>
         </div>
-        <p class="page-note" style="margin:14px 0 0;padding:0">形态仿 Linear Settings:独立于主应用的单开页,左侧「← 返回应用」+ 设置专用导航。主应用侧边栏里不再有「智能体」入口。</p>
+        <p class="settings-note">Linear 实测采用 640px 内容宽、65px 设置行、13px 标题与 12px 副说明；本页按同一版式重排。</p>
       </div>
     </main>
   </div>

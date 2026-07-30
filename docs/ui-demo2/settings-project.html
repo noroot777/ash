@@ -13,38 +13,26 @@
     <main class="set-main">
       <div class="set-inner">
         <h1 class="set-title">项目设置</h1>
-        <p class="set-sub">harness · <span class="mono">~/code/harness</span> · 项目下拉「设置」项与齿轮都跳到这里。</p>
+        <p class="set-sub">harness · <span class="mono">~/code/harness</span></p>
 
-        <h3 class="sect-title">基本信息<small>原 ProjectSettings Modal → 设置页</small></h3>
+        <h3 class="sect-title">基本信息</h3>
         <div class="sect-card">
-          <div class="form-block"><label>项目名称</label>
-            <input class="form-input" value="harness">
-          </div>
-          <div class="form-block"><label>仓库路径</label>
-            <input class="form-input mono" value="~/code/harness">
-          </div>
+          <div class="setting-row"><div class="setting-copy"><b>项目名称</b><small>显示在项目切换器与任务树顶部</small></div><div class="setting-control"><input class="form-input" value="harness"></div></div>
+          <div class="setting-row"><div class="setting-copy"><b>仓库路径</b><small>任务、分组与 worktree 的项目根目录</small></div><div class="setting-control"><input class="form-input mono" value="~/code/harness"></div></div>
         </div>
 
         <h3 class="sect-title">运行默认</h3>
         <div class="sect-card">
-          <div class="form-block"><label>worktree 默认</label>
-            <div class="toggle-line">新任务默认在独立 worktree 中运行<small>全局默认:开</small><span class="tgl"></span></div>
-          </div>
-          <div class="form-block"><label>默认执行器</label>
-            <div class="fake-select"><span class="wc-ava">C</span>claude@ccb·claude-fable-5<span class="fs-caret">▾</span></div>
-          </div>
-          <div class="sc-foot"><span class="hint">执行器 profile 本身在「智能体」组维护,这里只挑默认</span><a class="ui-btn" href="settings-agents.html">去智能体</a></div>
+          <div class="setting-row"><div class="setting-copy"><b>独立 worktree</b><small>新任务默认在项目外的隔离工作树中运行</small></div><div class="setting-control"><span class="tgl"></span></div></div>
+          <div class="setting-row"><div class="setting-copy"><b>默认基线</b><small>未显式指定 worktreeBase 时使用</small></div><div class="setting-control"><div class="fake-select mono">项目当前分支<span class="fs-caret">▾</span></div></div></div>
+          <div class="setting-row"><div class="setting-copy"><b>默认执行器</b><small>仅选择 Profile，模型与强度跟随它</small></div><div class="setting-control"><div class="fake-select"><span class="mini-avatar">C</span>claude@ccb<span class="fs-caret">▾</span></div></div></div>
         </div>
 
         <h3 class="sect-title">危险区</h3>
         <div class="sect-card">
-          <div class="danger-zone" style="margin:12px 16px">
-            <b>移除项目</b>
-            <p>只从 harness 移除,不动磁盘上的仓库与分支。</p>
-            <button class="ui-btn danger">移除项目…</button>
-          </div>
+          <div class="setting-row"><div class="setting-copy"><b style="color:var(--red)">移除项目</b><small>只从 harness 移除，不改磁盘上的仓库、分支或 worktree</small></div><div class="setting-control"><button class="ui-btn danger">移除项目…</button></div></div>
         </div>
-        <p class="page-note" style="margin:14px 0 0;padding:0">设置页左栏按受众分两组:「智能体」是全局资产,「项目」组(项目设置 / 分组 / 已归档)跟随当前项目。</p>
+        <p class="settings-note">控件固定靠右，左侧只负责标题与解释；分节之间靠留白区分，不叠加多余装饰。</p>
       </div>
     </main>
   </div>

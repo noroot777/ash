@@ -21,7 +21,7 @@
   .nav-card .no{color:var(--accent);font:700 11px ui-monospace,monospace}
   .nav-card b{display:block;margin:5px 0 3px;font-size:14px}
   .nav-card small{color:var(--muted);font-size:11px;line-height:1.5;display:block}
-  .cols-diagram{display:grid;grid-template-columns:260fr 640fr 306fr;gap:6px;border:1px solid var(--line2);border-radius:12px;background:var(--canvas);padding:10px;min-height:190px}
+  .cols-diagram{display:grid;grid-template-columns:244fr 640fr 320fr;gap:6px;border:1px solid var(--line2);border-radius:12px;background:var(--canvas);padding:10px;min-height:190px}
   .cols-diagram>div{display:flex;flex-direction:column;justify-content:flex-end;border:1px solid var(--line2);border-radius:8px;background:var(--panel);padding:10px}
   .cols-diagram>div.global{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent-soft)}
   .cols-diagram b{font-size:12px}
@@ -73,9 +73,9 @@
 </head>
 <body>
   <main class="doc">
-    <p class="eyebrow">Harness Web · 讨论稿 v2 · 第三轮 · 复刻 Linear 信息架构</p>
-    <h1>任务树入侧栏,设置单开页。</h1>
-    <p class="lede"><b>本轮对照 Linear 截图定了三件事:</b>其一,任务列表并进侧边栏——当前项目在侧栏里直接展开为<b>任务树</b>,全局从四栏收成<b>三栏</b>;其二,智能体 / 项目设置 / 分组 / 已归档合并成 Linear 式<b>单开设置页</b>(带「← 返回应用」的独立整页),入口在项目下拉的「设置」项;其三,随手记入口变成侧栏顶部的<b>便签图标</b>,与搜索、新建任务并排,弹层本体和 ⌘K 都不变。全部页面共用右下角<b>方案切换器</b>(列表选中态三选一 × 灰阶两版,选择跨页面记住)。</p>
+    <p class="eyebrow">Harness Web · 讨论稿 v2 · 第四轮 · Linear 实站测量</p>
+    <h1>视觉按实测收紧，验收按源码重画。</h1>
+    <p class="lede"><b>信息架构不动，本轮只做两件事：</b>在已登录 Linear workspace 中逐页读取 computed style，把 244px 侧栏、28px 行高、13px/500 文字、浅灰表面、胶囊 tabs、设置行与命令面板尺寸统一落进共享样式；再按 <b>ReviewWorkspace / TaskReviewPanel / TeamReviewWorkspace</b> 的真实能力重做单任务和团队验收。右下角仍保留 S1/S2/S3 × 灰阶两版，并用 localStorage 跨页记住。</p>
 
     <h2>演示页目录</h2>
     <p class="sub">顶部导航条在每一页都有,可随时横跳;侧边栏任务树的行、顶部三图标、项目下拉里的「设置」都是真链接,可以直接当产品点。</p>
@@ -84,27 +84,46 @@
       <a class="nav-card" href="task.html"><span class="no">02</span><b>单任务 · 队列抽屉</b><small>会话 + Inspector;点「查看队列」右侧滑出抽屉</small></a>
       <a class="nav-card" href="team.html"><span class="no">03</span><b>团队调度台</b><small>调度流 + 右栏 tab + 时间轴一行收起 + 执行者抽屉</small></a>
       <a class="nav-card" href="debate.html"><span class="no">04</span><b>辩论视图</b><small>配置卡 + 双方发言流 + 底部控制条</small></a>
-      <a class="nav-card" href="review.html"><span class="no">05</span><b>验收 Diff 工作区</b><small>文件树 + diff + 验收按钮组 + 合并目标</small></a>
-      <a class="nav-card" href="composer.html"><span class="no">06</span><b>新建任务面板</b><small>内嵌非弹层;single/team/debate 模式切换;侧栏 ✎ 直达</small></a>
-      <a class="nav-card" href="settings-agents.html"><span class="no">07</span><b>设置 · 智能体</b><small>单开页:执行器 Profile / 默认规则 / claude / codex</small></a>
-      <a class="nav-card" href="settings-project.html"><span class="no">08</span><b>设置 · 项目</b><small>单开页:基本信息 / 运行默认 / 危险区</small></a>
-      <a class="nav-card" href="settings-groups.html"><span class="no">09</span><b>设置 · 分组</b><small>单开页:全部分组行内运行 + 新建</small></a>
-      <a class="nav-card" href="settings-archive.html"><span class="no">10</span><b>设置 · 已归档</b><small>单开页:归档列表,可还原</small></a>
-      <a class="nav-card" href="notes.html"><span class="no">11</span><b>随手记(保留弹层)</b><small>入口改为侧栏顶部便签图标,弹层本体不变</small></a>
-      <a class="nav-card" href="palette.html"><span class="no">12</span><b>命令面板 ⌘K(保留)</b><small>全屏 overlay:切项目 / 任务 / 命令;侧栏 ⌕ 直达</small></a>
+      <a class="nav-card" href="review.html"><span class="no">05</span><b>单任务验收</b><small>提交、文件统计、行级 diff、分支目标、审查报告与截图</small></a>
+      <a class="nav-card" href="review-team.html"><span class="no">06</span><b>团队验收台</b><small>共享分支、执行者验证摘要、独立 worktree 待验收队列</small></a>
+      <a class="nav-card" href="composer.html"><span class="no">07</span><b>新建任务面板</b><small>内嵌非弹层;single/team/debate 模式切换;侧栏 ✎ 直达</small></a>
+      <a class="nav-card" href="settings-agents.html"><span class="no">08</span><b>设置 · 智能体</b><small>640px 内容宽，左说明 + 右控件的 65px 设置行</small></a>
+      <a class="nav-card" href="settings-project.html"><span class="no">09</span><b>设置 · 项目</b><small>基本信息 / 运行默认 / 危险区</small></a>
+      <a class="nav-card" href="settings-groups.html"><span class="no">10</span><b>设置 · 分组</b><small>全部分组行内运行 + 新建</small></a>
+      <a class="nav-card" href="settings-archive.html"><span class="no">11</span><b>设置 · 已归档</b><small>归档列表与还原</small></a>
+      <a class="nav-card" href="notes.html"><span class="no">12</span><b>随手记</b><small>侧栏顶部便签图标打开弹层</small></a>
+      <a class="nav-card" href="palette.html"><span class="no">13</span><b>命令面板 ⌘K</b><small>720×450、46px 命令项、12px 圆角与实测阴影</small></a>
+    </div>
+
+    <h2>实测 Linear token 对照表</h2>
+    <p class="sub">采样视口为 1455 × 806 CSS px，系统浅色主题。Linear 返回大量 LCH 变量；现状版直接采用实测值，加深版只按相对明度下移。</p>
+    <div class="token-table">
+      <div class="token-row"><b>项目</b><b>Linear 实测</b><b>本稿采用</b></div>
+      <div class="token-row"><b>侧栏</b><span>244px；项高 28px</span><span>244px；项高 28px</span></div>
+      <div class="token-row"><b>侧栏文字</b><span>13px / 500；图标 14px</span><span>13px / 500；状态点 8px</span></div>
+      <div class="token-row"><b>主表面</b><span><i class="cdot" style="background:lch(97.94% .5 282)"></i>lch(97.94% .5 282)</span><span>--canvas 同值</span></div>
+      <div class="token-row"><b>侧栏表面</b><span><i class="cdot" style="background:lch(94.44% .5 282)"></i>lch(94.44% .5 282)</span><span>--chrome 同值</span></div>
+      <div class="token-row"><b>边框</b><span><i class="cdot" style="background:lch(88.49% 0 282)"></i>lch(88.49% 0 282)</span><span>0.5px / --line 同值</span></div>
+      <div class="token-row"><b>正文三级</b><span>9.794% / 19.588% / 39.176%</span><span>ink / 次级内容 / muted</span></div>
+      <div class="token-row"><b>hover / 选中</b><span>lch(91.64%) / lch(89.54%)</span><span>两值原样；S1/S2/S3 只改指示方式</span></div>
+      <div class="token-row"><b>胶囊 tabs</b><span>28px；12px / 500；9999px</span><span>28px；12px / 500；9999px</span></div>
+      <div class="token-row"><b>设置页</b><span>导航 244px；内容 640px；行 65px</span><span>244px / 640px / 65px</span></div>
+      <div class="token-row"><b>命令面板</b><span>720×450；项 46px；圆角 12px</span><span>720×450；项 46px；圆角 12px</span></div>
+      <div class="token-row"><b>Issue 详情</b><span>标题 24px / 600；属性栏约 380px</span><span>标题尺度沿用；Inspector 320px 适配既定三栏</span></div>
     </div>
 
     <h2>决定一:任务列表并进侧边栏,四栏变三栏</h2>
     <p class="sub">对照 Linear 侧栏的「Your teams」区:当前项目在侧边栏里直接展开成任务树,其他项目折叠成一行可点开。独立的任务列表栏取消,主区域只剩会话正文 + Inspector。</p>
     <div class="cols-diagram">
-      <div class="global"><span class="w">~260px · 全局常驻</span><b>侧边栏(含任务树)</b><small>顶:项目切换器 + 三图标(⌕ 搜索 / ▤ 随手记 / ✎ 新建);中:当前项目任务树——协作任务(进行中 / 已验收,团队行展开执行者子行带状态微点)、普通任务(运行中 / 提问中 / 已完成);再往下「其他项目」折叠行;底:连接状态 / 收起</small></div>
+      <div class="global"><span class="w">244px · Linear 实测</span><b>侧边栏(含任务树)</b><small>顶:项目切换器 + 三图标(⌕ 搜索 / ▤ 随手记 / ✎ 新建);中:当前项目任务树——协作任务(进行中 / 已验收,团队行展开执行者子行带状态微点)、普通任务(运行中 / 提问中 / 已完成);再往下「其他项目」折叠行;底:连接状态 / 收起</small></div>
       <div><span class="w">自适应</span><b>① 会话正文</b><small>44px 头栏(类型 chip · 标题 · 状态 pill · 高频动作),下面按任务类型切换:会话 / 调度流 / 辩论 / diff / 新建面板</small></div>
-      <div><span class="w">306px</span><b>② Inspector</b><small>属性、执行信息、队列(点开右侧抽屉)、审查轮次、prompt 原文;团队页与执行者栏合并为带 tab 的右栏;▥ 一键收起</small></div>
+      <div><span class="w">320px</span><b>② Inspector</b><small>属性行采用 Linear 详情页的 label + value 版式；保留队列、审查轮次、prompt 原文与一键收起。</small></div>
     </div>
     <div class="evo">
       <div><span class="tag">v1 · 第一轮</span><b>四栏:项目窄栏独立</b><small>专职项目窄栏 + 任务列表 + 正文 + Inspector,最左一栏信息密度太低。</small></div>
       <div><span class="tag">v2 · 第二轮</span><b>四栏:单一侧边栏</b><small>项目切换器和导航收进一条 240px 侧栏,但任务列表仍是独立第二栏。</small></div>
-      <div><span class="tag now">v3 · 本轮</span><b>三栏:任务树入侧栏</b><small>任务列表并进侧栏成为任务树,导航项(智能体 / 分组 / 已归档 / 项目设置 / 随手记)全部撤出——去向见决定二、三。</small></div>
+      <div><span class="tag">v3 · 信息架构定稿</span><b>三栏:任务树入侧栏</b><small>任务列表并进侧栏，设置改为单开页。</small></div>
+      <div><span class="tag now">v4 · 本轮</span><b>实测视觉 + 真实验收</b><small>不再改信息架构，只统一细节 token，并补齐单任务/团队验收功能面。</small></div>
     </div>
     <p class="callout">任务树的选中行吃的就是全局选中态方案——切 S1/S2/S3,任务树、下拉、⌘K、设置页列表一起变。</p>
 
@@ -142,36 +161,32 @@
     <div class="sel-cards">
       <div class="sel-card">
         <div class="sc-head"><b>S1 淡染 + 指示条</b><small>定位最快,推荐</small></div>
-        <div class="sc-demo"><div class="demo-row" style="background:#eceefa;position:relative;box-shadow:inset 3px 0 0 #5e6ad2">自动验证相关 - 依旧大改<small>选中</small></div></div>
-        <div class="sc-vals"><span class="swatch" style="background:#eceefa"></span>#eceefa + <span class="swatch" style="background:#5e6ad2"></span>#5e6ad2 · 3px 左条</div>
+        <div class="sc-demo"><div class="demo-row" style="background:lch(89.54% .5 282);position:relative;box-shadow:inset 2px 0 0 #5e6ad2">自动验证相关 - 依旧大改<small>选中</small></div></div>
+        <div class="sc-vals">lch(89.54% .5 282) + #5e6ad2 · 2px 左条</div>
       </div>
       <div class="sel-card">
         <div class="sc-head"><b>S2 只有淡染</b><small>更安静</small></div>
-        <div class="sc-demo"><div class="demo-row" style="background:#eceefa">自动验证相关 - 依旧大改<small>选中</small></div></div>
-        <div class="sc-vals"><span class="swatch" style="background:#eceefa"></span>#eceefa · 无指示条</div>
+        <div class="sc-demo"><div class="demo-row" style="background:lch(89.54% .5 282)">自动验证相关 - 依旧大改<small>选中</small></div></div>
+        <div class="sc-vals">Linear 实测选中底色 · 无指示条</div>
       </div>
       <div class="sel-card">
         <div class="sc-head"><b>S3 纯灰加深</b><small>不引入主题色</small></div>
-        <div class="sc-demo"><div class="demo-row" style="background:#e4e4e9">自动验证相关 - 依旧大改<small>选中</small></div></div>
-        <div class="sc-vals"><span class="swatch" style="background:#e4e4e9"></span>#e4e4e9 · 无主题色</div>
+        <div class="sc-demo"><div class="demo-row" style="background:lch(87.5% .5 282)">自动验证相关 - 依旧大改<small>选中</small></div></div>
+        <div class="sc-vals">lch(87.5% .5 282) · 无主题色</div>
       </div>
     </div>
-    <p class="callout">hover 一律用 raised(现状 #f1f1f4 / 加深 #ebebef),与选中态分属两个变量,三案下 hover 和选中都分得开。</p>
+    <p class="callout">hover 采用 Linear 实测 lch(91.64% .5 282)，选中采用 lch(89.54% .5 282)；加深版维持同样的明度差。</p>
 
-    <h2>灰阶 token · 新旧值对照</h2>
-    <p class="sub">加深版取值即任务书给定值,本稿未再微调——以下就是最终值。panel / ink / accent 三个锚点不动,只把表面、边框、辅助文字的间距拉开。</p>
+    <h2>灰阶双版 · 相对关系</h2>
+    <p class="sub">现状版以 Linear 实测 token 为锚；加深版不改变层级，只把灰阶整体下移，panel / ink / accent 保持稳定。</p>
     <div class="token-table">
       <div class="token-row"><b>Token</b><b>现状版</b><b>加深版</b></div>
-      <div class="token-row"><b>canvas</b><span><i class="cdot" style="background:#f9f9fb"></i>#f9f9fb</span><span><i class="cdot" style="background:#f7f7f9"></i>#f7f7f9</span></div>
-      <div class="token-row"><b>panel</b><span><i class="cdot" style="background:#ffffff"></i>#ffffff</span><span><i class="cdot" style="background:#ffffff"></i>#ffffff(不变)</span></div>
-      <div class="token-row"><b>raised</b><span><i class="cdot" style="background:#f1f1f4"></i>#f1f1f4</span><span><i class="cdot" style="background:#ebebef"></i>#ebebef</span></div>
-      <div class="token-row"><b>overlay</b><span><i class="cdot" style="background:#e9e9ee"></i>#e9e9ee</span><span><i class="cdot" style="background:#e2e2e8"></i>#e2e2e8</span></div>
-      <div class="token-row"><b>line</b><span><i class="cdot" style="background:#e7e7ea"></i>#e7e7ea</span><span><i class="cdot" style="background:#dcdce2"></i>#dcdce2</span></div>
-      <div class="token-row"><b>line2</b><span><i class="cdot" style="background:#d8d8de"></i>#d8d8de</span><span><i class="cdot" style="background:#c9c9d1"></i>#c9c9d1</span></div>
-      <div class="token-row"><b>ink</b><span><i class="cdot" style="background:#282a30"></i>#282a30</span><span><i class="cdot" style="background:#282a30"></i>#282a30(不变)</span></div>
-      <div class="token-row"><b>muted</b><span><i class="cdot" style="background:#6b6f76"></i>#6b6f76</span><span><i class="cdot" style="background:#5c6067"></i>#5c6067</span></div>
-      <div class="token-row"><b>faint</b><span><i class="cdot" style="background:#9ca1a9"></i>#9ca1a9</span><span><i class="cdot" style="background:#8a8f98"></i>#8a8f98(限装饰)</span></div>
-      <div class="token-row"><b>accent</b><span><i class="cdot" style="background:#5e6ad2"></i>#5e6ad2</span><span><i class="cdot" style="background:#5e6ad2"></i>#5e6ad2(不变)</span></div>
+      <div class="token-row"><b>chrome</b><span>lch(94.44% .5 282)</span><span>lch(92.2% .5 282)</span></div>
+      <div class="token-row"><b>canvas</b><span>lch(97.94% .5 282)</span><span>lch(96.5% .5 282)</span></div>
+      <div class="token-row"><b>raised</b><span>lch(92.44% .5 282)</span><span>lch(89.8% .5 282)</span></div>
+      <div class="token-row"><b>line</b><span>lch(88.49% 0 282)</span><span>lch(82.5% 0 282)</span></div>
+      <div class="token-row"><b>muted</b><span>lch(39.176% 1.25 282)</span><span>lch(32% 1.25 282)</span></div>
+      <div class="token-row"><b>accent</b><span>#5e6ad2</span><span>#5e6ad2（不变）</span></div>
     </div>
     <p class="callout">整套演示零外部依赖,file:// 直接打开;方案选择存 localStorage,全部页面同步。这是讨论稿,不含任何产品代码改动。</p>
   </main>

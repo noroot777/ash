@@ -9,7 +9,8 @@
     ["task.html", "单任务·队列抽屉"],
     ["team.html", "团队调度台"],
     ["debate.html", "辩论"],
-    ["review.html", "验收 Diff"],
+    ["review.html", "单任务验收"],
+    ["review-team.html", "团队验收"],
     ["composer.html", "新建任务"],
     ["notes.html", "随手记"],
     ["palette.html", "⌘K"],
@@ -53,13 +54,14 @@
       "</div>" +
       trow("debate.html", "debate1", sel, "▸", "评审:回复框交互方案", "辩论 · 第 2 轮进行中", "indigo") +
       '<div class="lgroup">已验收<em>1</em></div>' +
-      trow("review.html", "accepted1", sel, "▸", "移动端会话贴底重构", "团队 · 已合并 · 07/28", "gray") +
+      trow("review-team.html", "accepted1", sel, "▸", "移动端会话贴底重构", "团队 · 已合并 · 07/28", "gray") +
       '<div class="lsec">普通任务</div>' +
       '<div class="lgroup">运行中<em>1</em></div>' +
       trow("task.html", "run1", sel, "", "接入 SSE 断线重连", "claude@ccb · 12m", "green") +
       '<div class="lgroup">提问中<em>1</em></div>' +
       trow("task.html", "ask1", sel, "", "清理 worktree 兜底逻辑", "等你拍板 · 2 个问题", "cyan") +
-      '<div class="lgroup">已完成<em>2</em></div>' +
+      '<div class="lgroup">已完成<em>3</em></div>' +
+      trow("review.html", "reviewSingle", sel, "", "按源码重做验收工作区", "verified · 待验收", "green") +
       trow("shell.html", "done1", sel, "", "修复回复框顶边拖高失效", "verified · 42m 17s", "gray") +
       trow("shell.html", "done2", sel, "", "接回调度者含义说明", "已验收 · 7m 40s", "gray") +
       '<div class="lsec">其他项目</div>' +
@@ -133,7 +135,7 @@
   /* ── 注入顶部演示导航条 ── */
   var here = (location.pathname.split("/").pop() || "index.html");
   var bar =
-    '<nav class="demo-bar" aria-label="演示页导航"><span class="db-brand"><i>H</i>UI 讨论稿 v2</span>' +
+    '<nav class="demo-bar" aria-label="演示页导航"><span class="db-brand"><i>H</i>UI 讨论稿 · R4</span>' +
     PAGES.map(function (p) {
       return '<a href="' + p[0] + '"' + (p[0] === here ? ' class="current"' : "") + ">" + p[1] + "</a>";
     }).join("") +
