@@ -294,28 +294,13 @@ export function forceFinishOnExit(
 }
 
 // The per-agent *interactive* resume command (what a human pastes to see the
-// session and continue) — single source of truth, used both when storing a
-// session and when recomputing the display command on read. (The harness's own
-// headless resume is built separately inside each executor's run().)
+// session and continue) — 模板本体现在登记在目录里各 spec 的
+// `exec.session.interactive`,这里只留三个自带专用执行器的引用,供 claude.ts /
+// codex.ts / catalog 复用同一份字符串。展示用的那条命令由
+// `executors/resume.ts` 的 resumeCommandFor 按目录重算。
+// (The harness's own headless resume is built separately inside each executor's run().)
 export const resumeInner: Record<string, (id: string) => string> = {
   claude: (id) => `claude --resume ${id}`,
   codex: (id) => `codex resume ${id}`,
   antigravity: (id) => `antigravity --resume ${id}`,
 };
-
-// Build the display resume command from persisted session fields, so it always
-// reflects the current format (no stale stored strings when the format changes).
-// relayEnv 是本次运行挂的供应商前缀(已脱敏),旧行为 null 就跟以前完全一样。
-export function resumeCommandFor(
-  agentType: string,
-  targetStr: string | null | undefined,
-  cwd: string,
-  cliSessionId: string,
-  relayEnv?: string | null,
-): string {
-  const inner = (resumeInner[agentType] ?? resumeInner.claude)(cliSessionId);
-  const target: ExecTarget = targetStr?.startsWith("ssh:")
-    ? { kind: "ssh", host: targetStr.slice(4) }
-    : { kind: "local" };
-  return resumeFor(target, cwd, inner, relayEnv ?? "");
-}

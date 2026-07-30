@@ -32,23 +32,70 @@ export const DEFAULT_APP_SETTINGS: Readonly<AppSettings> = Object.freeze({
 // Abstraction layer: the *type* is what you @ / pick as a debater.
 // Single source of truth: the runtime list drives both the union type and any
 // server-side validation (e.g. the batch API), so they can never drift.
-export const AGENT_TYPES = ["claude", "codex", "antigravity"] as const;
+//
+// 顺序 = 展示顺序,与 server/src/executors/catalog 的登记顺序一致。**加/删一个
+// 智能体只有两步**:这个数组加/删一个字符串,catalog 目录加/删一个 spec 文件
+// (catalog/index.ts 的 `satisfies Record<AgentType, CliSpec>` 会在编译期逼你两边对齐)。
+export const AGENT_TYPES = [
+  "claude",
+  "codex",
+  "antigravity",
+  "gemini",
+  "opencode",
+  "trae",
+  "grok",
+  "kimi",
+  "cursor",
+  "qwen",
+  "qoder",
+  "copilot",
+  "kiro",
+  "kilo",
+  "pi",
+] as const;
 export type AgentType = (typeof AGENT_TYPES)[number];
 
 // CLI-native model aliases used when an executor is on its official account.
 // Provider-backed executors replace these with that provider's /v1/models list.
+// 全键 Record 是刻意的:新类型不填就编译不过,免得漏登记后下拉框静默空着。
+// 空数组 = 该 CLI 的模型别名还没实测(用户仍可在 profile 里手填任意模型名)。
 export const CLI_MODEL_PRESETS: Record<AgentType, readonly string[]> = {
   claude: ["opus", "sonnet", "haiku", "fable"],
   codex: ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4"],
   antigravity: [],
+  gemini: [],
+  opencode: [],
+  trae: [],
+  grok: [],
+  kimi: [],
+  cursor: [],
+  qwen: [],
+  qoder: [],
+  copilot: [],
+  kiro: [],
+  kilo: [],
+  pi: [],
 };
 
 // CLI-specific reasoning levels. Unsupported model/effort combinations are
 // rejected by the CLI/API at run time (for example gpt-5.5 tops out at xhigh).
+// 同样是全键 Record;空数组 = 该 CLI 没有(或还没实测出)思考强度档位。
 export const REASONING_EFFORT_VALUES: Record<AgentType, readonly string[]> = {
   claude: ["low", "medium", "high", "xhigh", "max"],
   codex: ["low", "medium", "high", "xhigh", "ultra", "max"],
   antigravity: [],
+  gemini: [],
+  opencode: [],
+  trae: [],
+  grok: [],
+  kimi: [],
+  cursor: [],
+  qwen: [],
+  qoder: [],
+  copilot: [],
+  kiro: [],
+  kilo: [],
+  pi: [],
 };
 
 export const REASONING_EFFORT_DETAIL: Record<string, string> = {

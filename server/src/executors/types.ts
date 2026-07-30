@@ -1,4 +1,4 @@
-import type { AgentEvent, AgentType } from "@harness/shared";
+import type { AgentEvent, AgentType, ExecTarget } from "@harness/shared";
 import type { RunTracePaths } from "./diagnostics.js";
 
 export interface RunOpts {
@@ -42,6 +42,22 @@ export interface ResidentHandle {
   interrupt(): void;
   close(): void; // 优雅收尾:关 stdin,等它自己退出
   kill(): void; // 硬杀,走 killChild 三层击杀
+}
+
+// 从执行器 profile(agents 表一行)解析出来的构造参数 —— 单点在
+// executors/index.ts 的 build(),专用类(claude/codex)与 GenericCliExecutor
+// 都吃同一个形状,所以目录里的 factory 可以直接挂进来。
+export interface ExecutorBuildOpts {
+  /** profile 名,直接当 label(缺省时各执行器自己拼 `type@where·model`)。 */
+  name?: string;
+  model?: string;
+  extraArgs?: string[];
+  reasoningEffort?: string;
+  speed?: "fast";
+  /** 覆盖默认命令名(缺省用 spec.bins[0])。 */
+  bin?: string;
+  target?: ExecTarget;
+  relay?: RelayConfig;
 }
 
 // Hand-rolled adapter (DESIGN.md §7/§10: no Vercel AI SDK). Each CLI type gets

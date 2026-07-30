@@ -2,9 +2,9 @@ import { eq } from "drizzle-orm";
 import type { AgentType, ExecTarget } from "@harness/shared";
 import { db } from "../db/index.js";
 import { agents, llmProviders } from "../db/schema.js";
-import type { AgentExecutor, RelayConfig } from "./types.js";
-import { ClaudeExecutor } from "./claude.js";
-import { CodexExecutor } from "./codex.js";
+import type { AgentExecutor, ExecutorBuildOpts, RelayConfig } from "./types.js";
+import { cliSpec } from "./catalog/index.js";
+import { GenericCliExecutor } from "./generic.js";
 
 type AgentRow = typeof agents.$inferSelect;
 type ExecutorOverrides = { model?: string | null; reasoningEffort?: string | null };
@@ -53,7 +53,7 @@ async function build(
   type: AgentType,
   overrides: ExecutorOverrides = {},
 ): Promise<AgentExecutor> {
-  const opts = profile
+  const opts: ExecutorBuildOpts = profile
     ? {
         name: profile.name,
         model: overrides.model || profile.model || undefined,
@@ -69,14 +69,11 @@ async function build(
         reasoningEffort: overrides.reasoningEffort || undefined,
       };
 
-  switch (type) {
-    case "claude":
-      return new ClaudeExecutor(opts);
-    case "codex":
-      return new CodexExecutor(opts);
-    default:
-      throw new Error(`"${type}" 没有可用的执行器：请在「智能体」里为它配置一个执行器（暂无内置 ${type} 解析器）`);
-  }
+  // 目录是唯一的分派表:有 factory 的走专用类(claude 的常驻会话、codex 的诊断
+  // 链路),其余全部由 GenericCliExecutor 按 spec.exec 装配命令行。所以「新增一个
+  // 可派任务的 CLI」不需要碰这里 —— 加一个 spec 文件就行。
+  const spec = cliSpec(type);
+  return spec.factory ? spec.factory(opts) : new GenericCliExecutor(spec, opts);
 }
 
 // 挂载的供应商 → 启动 CLI 时要注入的配置。供应商被删掉(悬空 providerId)或没配

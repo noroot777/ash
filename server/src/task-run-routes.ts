@@ -36,7 +36,7 @@ import { dispatchWorkers, type DispatchSpec } from "./team/dispatch.js";
 import { haltTeam } from "./team/session.js";
 import { enrichTasks } from "./task-store.js";
 import { sessionTranscriptPath } from "./transcript.js";
-import { resumeCommandFor } from "./executors/spawn.js";
+import { resumeCommandFor } from "./executors/resume.js";
 import { id, now } from "./util.js";
 
 export function mountTaskRunRoutes(api: Hono): void {

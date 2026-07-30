@@ -121,9 +121,12 @@ const userLine = (text: string) =>
 
 // resident 非空 = 常驻模式:`result` 行只代表「一个回合说完了」(→ turnEnd),
 // 流要一直开着;只有进程真的没了才 done。
-async function* parseClaudeStream(
+// bin 只影响 spawn 报错文案 —— 导出是为了让目录里「输出格式跟 claude 一致」的
+// CLI(stream-json 的 --output-format)直接复用这一份解析,不必各写一遍。
+export async function* parseClaudeStream(
   child: ReturnType<typeof spawnAgent>,
   resident?: { interruptPending: boolean },
+  bin = "claude",
 ): AsyncIterable<AgentEvent> {
   const queue: AgentEvent[] = [];
   let resolve: (() => void) | null = null;
@@ -195,7 +198,7 @@ async function* parseClaudeStream(
   child.stderr?.on("data", (d) => (stderr += d.toString()));
   child.on("error", (err: NodeJS.ErrnoException) => {
     if (finished) return;
-    push({ kind: "error", message: spawnErrorMessage("claude", err) });
+    push({ kind: "error", message: spawnErrorMessage(bin, err) });
     push({ kind: "done", exitStatus: 1 });
     finished = true;
     resolve?.();

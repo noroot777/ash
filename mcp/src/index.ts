@@ -7,7 +7,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { MAX_QUESTION_ITEMS, MAX_QUESTION_OPTIONS, MAX_QUESTION_OPTION_LEN, STAGE_ORDER } from "@harness/shared";
+import { AGENT_TYPES, MAX_QUESTION_ITEMS, MAX_QUESTION_OPTIONS, MAX_QUESTION_OPTION_LEN, STAGE_ORDER } from "@harness/shared";
 
 const BASE = (process.env.HARNESS_URL ?? "http://localhost:4317").replace(/\/+$/, "");
 
@@ -37,7 +37,9 @@ const fail = (e: unknown) => ({
   content: [{ type: "text" as const, text: e instanceof Error ? e.message : String(e) }],
 });
 
-const AGENT_TYPE = z.enum(["claude", "codex", "antigravity"]);
+// 从 shared 派生,别在这里另抄一张名单:AGENT_TYPES 加一个 CLI,MCP 工具的
+// 取值范围就跟着变(以前写死三个,新增执行器后 MCP 侧会莫名 400)。
+const AGENT_TYPE = z.enum(AGENT_TYPES);
 const PRIORITY = z.enum(["none", "low", "medium", "high", "urgent"]);
 const MODE = z.enum(["parallel", "serial"]);
 const TASK_STATUS = z.enum(["backlog", "done", "failed", "canceled"]);
