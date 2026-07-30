@@ -1,12 +1,12 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import type { Task } from "@harness/shared";
 import { TEAM_DEFAULTS } from "@harness/shared";
 import { Crown, Robot, UsersThree } from "@phosphor-icons/react";
 import { isTeamSettled, workersOf } from "@harness/shared/team";
 import { ExecutorPicker, type ExecutorSelection, useExecutorProfiles } from "./ExecutorPicker";
 import { Modal } from "./Modal";
-import { api } from "./api";
-import { teamExecutorDefaults, type DetectedAgent } from "./teamExecutorDefaults";
+import { teamExecutorDefaults } from "./teamExecutorDefaults";
+import { useDetectedAgents } from "./useDetectedAgents";
 import { foldTeamStatus } from "./util";
 import { STATUS_META } from "./constants";
 import { StatusIcon } from "./StatusIcon";
@@ -31,21 +31,12 @@ export function TeamHandoffModal({
   const [note, setNote] = useState("");
   const [leadPick, setLeadPick] = useState<ExecutorSelection | null>(null);
   const [workerPick, setWorkerPick] = useState<ExecutorSelection | null>(null);
-  const [detected, setDetected] = useState<DetectedAgent[] | null>(null);
+  const detected = useDetectedAgents();
   const { profiles, providers } = useExecutorProfiles();
 
-  useEffect(() => {
-    let alive = true;
-    api.detectAgents().then(
-      (items) => alive && setDetected(items),
-      () => alive && setDetected([]),
-    );
-    return () => { alive = false; };
-  }, []);
-
-  const { leadTypes, workerTypes, leadSelection, workerSelection } = useMemo(
-    () => teamExecutorDefaults(detected, leadPick, workerPick),
-    [detected, leadPick, workerPick],
+  const { leadTypes, leadProfiles, workerTypes, leadSelection, workerSelection } = useMemo(
+    () => teamExecutorDefaults(detected, leadPick, workerPick, profiles),
+    [detected, leadPick, workerPick, profiles],
   );
   const label = (role: "调度者" | "执行者", selection: ExecutorSelection) => {
     const profile = selection.executorId ? profiles.find((item) => item.id === selection.executorId) : null;
@@ -84,7 +75,7 @@ export function TeamHandoffModal({
             icon={<Crown size={14} />}
             selection={leadSelection}
             onSelect={setLeadPick}
-            profiles={profiles}
+            profiles={leadProfiles}
             providers={providers}
             types={leadTypes}
             label={label("调度者", leadSelection)}

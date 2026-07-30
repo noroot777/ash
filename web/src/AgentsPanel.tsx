@@ -1,25 +1,41 @@
 import { useEffect, useState } from "react";
 import type { AgentExecutorProfile, AgentType, ExecTarget, LlmProtocol, LlmProvider } from "@harness/shared";
-import { MagnifyingGlass, Check, Plus, Trash, CircleNotch, ArrowSquareOut, DownloadSimple } from "@phosphor-icons/react";
+import { AGENT_TYPES } from "@harness/shared";
+import { MagnifyingGlass, Check, Plus, Trash, CircleNotch, ArrowSquareOut } from "@phosphor-icons/react";
 import { api, type DetectedCli } from "./api";
 import { Menu, type MenuOption } from "./Menu";
 import { RelaySection } from "./Relays";
+import { Tip } from "./Tip";
 import { useEscape } from "./useEscape";
-import { toast } from "./toast";
+import { refreshDetectedAgents } from "./useDetectedAgents";
 import {
   clearProviderModelCache,
   ModelConfigPicker,
   ReasoningEffortPicker,
 } from "./ModelConfigPicker";
 
-const TYPES: AgentType[] = ["claude", "codex", "antigravity"];
-
-// 哪种协议的供应商能挂给哪个 CLI:claude 认 Anthropic 端点,codex 认 OpenAI 端点。
-// null = 该类型不支持挂供应商(antigravity 无执行器实现)。
+// 哪种协议的供应商能挂给哪个 CLI:claude 认 Anthropic 端点,codex / qwen 认 OpenAI 端点。
+// null = 该 CLI 还没有挂供应商的通道(只能用它自己登录的账号)。
+//
+// 这是 catalog spec 里 `exec.relay` 的**镜像**:真相在 server/src/executors/catalog/<key>.ts,
+// 但 `GET /api/agents/catalog` 目前不吐这个字段,所以前端只能照抄一份。给某个 spec 新加
+// relay 通道时记得同步这里(更好的做法是让目录接口把协议一并返回,这份镜像就能删掉)。
 const RELAY_PROTOCOL: Record<AgentType, LlmProtocol | null> = {
   claude: "anthropic",
   codex: "openai",
+  qwen: "openai",
   antigravity: null,
+  gemini: null,
+  opencode: null,
+  trae: null,
+  grok: null,
+  kimi: null,
+  cursor: null,
+  qoder: null,
+  copilot: null,
+  kiro: null,
+  kilo: null,
+  pi: null,
 };
 
 // 速度档:标准=不传参;1.5x=加速档(codex: -c service_tier="priority";
@@ -49,8 +65,8 @@ export function AgentsPanel({ onClose }: { onClose: () => void }) {
   };
   const probe = () =>
     api.detectClis().then((d) => {
-      // 只有带 type 的才是能派任务的执行器 —— 目录里其余的装了也只是装了。
-      setAvail(new Set(d.filter((x) => x.type && x.available).map((x) => x.type as string)));
+      // 目录里每一项都能派任务了,所以「本机装了的」就是可选执行器类型的全集。
+      setAvail(new Set(d.filter((x) => x.available).map((x) => x.type as string)));
       return d;
     });
   useEscape(onClose);
@@ -64,6 +80,9 @@ export function AgentsPanel({ onClose }: { onClose: () => void }) {
     setDetecting(true);
     try {
       setDetected(await probe());
+      // 刚装完一个 CLI 就点检测的场景:让所有「选谁干活」的下拉也跟着重新探一次,
+      // 否则新装的那个要等下次刷新页面才出现在候选里。
+      refreshDetectedAgents();
     } finally {
       setDetecting(false);
     }
@@ -71,7 +90,7 @@ export function AgentsPanel({ onClose }: { onClose: () => void }) {
 
   // 只列「本机装了的」和「已经注册过执行器的」类型 —— 没装的 CLI 摆在这儿只是灰噪声,
   // 想用得先装。已注册的恒显示(可能是 ssh 远端执行器,本机自然探不到)。
-  const shownTypes = TYPES.filter((t) => list.some((a) => a.type === t) || avail?.has(t));
+  const shownTypes = AGENT_TYPES.filter((t) => list.some((a) => a.type === t) || avail?.has(t));
 
   const registerDetected = async (d: Detected) => {
     if (!d.type) return;
@@ -84,6 +103,10 @@ export function AgentsPanel({ onClose }: { onClose: () => void }) {
     });
     reload();
   };
+
+  // 「检测到什么就展示什么」:没装的整卡不出现,连安装命令入口一起去掉 —— 用户要的是
+  // 「这台机器上现在能派给谁」,一屏灰掉的未安装卡片只会把这个答案埋掉。
+  const installed = (detected ?? []).filter((d) => d.available);
 
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/40 pt-[8vh]" onClick={onClose}>
@@ -112,22 +135,28 @@ export function AgentsPanel({ onClose }: { onClose: () => void }) {
           {detected && (
             <div className="mb-5 rounded-lg border border-line bg-raised/50 p-3">
               <div className="mb-2 flex items-baseline gap-2">
-                <span className="text-[11px] font-medium uppercase tracking-wide text-muted">已知 CLI 检测结果</span>
+                <span className="text-[11px] font-medium uppercase tracking-wide text-muted">本机检测到的智能体</span>
                 <span className="text-[11px] text-faint">
-                  已装 {detected.filter((d) => d.available).length} / {detected.length}
-                  ；带「可派任务」的才能在 harness 里执行任务
+                  {installed.length} 个已安装（目录共 {detected.length} 项）
+                  ；没装的不列出来，装好后再点一次检测
                 </span>
               </div>
-              <div className="grid gap-2 sm:grid-cols-2">
-                {detected.map((d) => (
-                  <CliCard
-                    key={d.key}
-                    d={d}
-                    registered={!!d.type && list.some((a) => a.type === d.type && a.target.kind === "local")}
-                    onRegister={() => registerDetected(d)}
-                  />
-                ))}
-              </div>
+              {installed.length === 0 ? (
+                <p className="text-[12px] text-faint">
+                  一个都没探到。装好任意一个智能体 CLI（如 claude / codex）后再点「检测本地智能体」。
+                </p>
+              ) : (
+                <div className="grid gap-2 sm:grid-cols-2">
+                  {installed.map((d) => (
+                    <CliCard
+                      key={d.key}
+                      d={d}
+                      registered={list.some((a) => a.type === d.type && a.target.kind === "local")}
+                      onRegister={() => registerDetected(d)}
+                    />
+                  ))}
+                </div>
+              )}
             </div>
           )}
 
@@ -138,21 +167,21 @@ export function AgentsPanel({ onClose }: { onClose: () => void }) {
                 <div key={type}>
                   <div className="mb-1.5 text-[11px] font-medium uppercase tracking-wide text-muted">{type}</div>
                   {profiles.length === 0 && (
-                    <p className="mb-1 text-[12px] text-faint">
-                      {type === "antigravity" ? "无内置解析器；待该 CLI 可用后支持" : "未配置 · 将用内置本地默认执行器"}
-                    </p>
+                    <p className="mb-1 text-[12px] text-faint">未配置 · 将用内置本地默认执行器</p>
                   )}
                   {profiles.map((a) => (
                     <Row key={a.id} a={a} relays={relays} onChange={reload} />
                   ))}
-                  {type !== "antigravity" && <AddRow type={type} relays={relays} onAdded={reload} />}
+                  <AddRow type={type} relays={relays} onAdded={reload} />
                 </div>
               );
             })}
           </div>
           {shownTypes.length === 0 && (
             <p className="text-[12px] text-faint">
-              {avail === null ? "检测本地智能体中…" : "本机没找到已安装的智能体 CLI（claude / codex）。装好后点右上角「检测本地智能体」。"}
+              {avail === null
+                ? "检测本地智能体中…"
+                : "本机没找到已安装的智能体 CLI。装好任意一个（如 claude / codex）后点右上角「检测本地智能体」。"}
             </p>
           )}
 
@@ -165,48 +194,38 @@ export function AgentsPanel({ onClose }: { onClose: () => void }) {
   );
 }
 
-// 已知 CLI 目录的一张卡。没有现成 logo 素材,图标位一律用名称首字母方块占位
-// (与其扒各家 logo 惹一堆授权和体积问题,不如整齐的占位块)。
-//
-// 「安装」按钮**只把官方命令复制到剪贴板**,绝不让服务端去执行 —— 这些命令来自
-// 各家官网(好几条是 curl | bash),harness 没有立场替用户在他机器上跑它们。
+// 一张「本机装了的智能体」卡。只在 available 时渲染,所以不再有未安装分支、也没有
+// 安装命令入口 —— 装没装是用户在终端里的事,这个面板回答的是「装了的这些怎么用」。
+// 没有现成 logo 素材,图标位一律用名称首字母方块占位(与其扒各家 logo 惹一堆授权和
+// 体积问题,不如整齐的占位块)。
 function CliCard({ d, registered, onRegister }: { d: Detected; registered: boolean; onRegister: () => void }) {
-  const copyInstall = async () => {
-    try {
-      await navigator.clipboard.writeText(d.installCommand);
-      toast(`已复制安装命令：${d.installCommand}`, "info");
-    } catch {
-      // 剪贴板被拒(非安全上下文/无权限)时至少把命令摆出来让用户自己选中。
-      toast(`复制失败，请手动执行：${d.installCommand}`);
-    }
-  };
-
   return (
     <div className="flex gap-2.5 rounded-lg border border-line bg-panel p-2.5">
-      <div
-        className={`grid h-8 w-8 shrink-0 place-items-center rounded-md text-[13px] font-semibold ${
-          d.available ? "bg-accent/15 text-accent" : "bg-overlay text-faint"
-        }`}
-      >
+      <div className="grid h-8 w-8 shrink-0 place-items-center rounded-md bg-accent/15 text-[13px] font-semibold text-accent">
         {d.name.slice(0, 1).toUpperCase()}
       </div>
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-1.5">
           <span className="truncate text-[12px] font-medium text-ink">{d.name}</span>
-          {d.available && <Check size={12} weight="bold" className="shrink-0 text-emerald-600" />}
-          {d.type && (
-            <span className="shrink-0 rounded bg-emerald-500/15 px-1 py-px text-[10px] text-emerald-700">可派任务</span>
+          <Check size={12} weight="bold" className="shrink-0 text-emerald-600" />
+          {d.untested && (
+            <Tip
+              label={
+                d.notes
+                  ? `执行参数按官方文档起草、本机未实测。${d.notes}`
+                  : "执行参数按官方文档起草、本机未实测：能派任务，但首轮可能卡在交互确认或解析不出输出。"
+              }
+              className="shrink-0"
+            >
+              <span className="rounded bg-amber-500/15 px-1 py-px text-[10px] text-amber-700">未实测</span>
+            </Tip>
           )}
         </div>
         <div className="mt-0.5 truncate text-[11px] text-muted">{d.description}</div>
-        {d.available ? (
-          <div className="mt-1 space-y-0.5">
-            {d.version && <div className="truncate font-mono text-[10px] text-muted">{d.version}</div>}
-            <div className="truncate font-mono text-[10px] text-faint">{d.path}</div>
-          </div>
-        ) : (
-          <div className="mt-1 font-mono text-[10px] text-faint">未安装 · {d.bins.join(" / ")}</div>
-        )}
+        <div className="mt-1 space-y-0.5">
+          {d.version && <div className="truncate font-mono text-[10px] text-muted">{d.version}</div>}
+          <div className="truncate font-mono text-[10px] text-faint">{d.path}</div>
+        </div>
         <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
           <a
             href={d.docsUrl}
@@ -216,26 +235,16 @@ function CliCard({ d, registered, onRegister }: { d: Detected; registered: boole
           >
             文档 <ArrowSquareOut size={10} />
           </a>
-          {!d.available && (
+          {registered ? (
+            <span className="text-[11px] text-faint">已注册</span>
+          ) : (
             <button
-              onClick={copyInstall}
-              className="inline-flex items-center gap-1 rounded border border-line px-1.5 py-0.5 text-[11px] text-muted hover:text-ink"
+              onClick={onRegister}
+              className="inline-flex items-center gap-1 rounded-md bg-accent px-2 py-0.5 text-[11px] font-medium text-accent-fg hover:bg-accent-hover"
             >
-              <DownloadSimple size={11} /> 安装
+              <Plus size={11} weight="bold" /> 注册为执行器
             </button>
           )}
-          {d.type &&
-            d.available &&
-            (registered ? (
-              <span className="text-[11px] text-faint">已注册</span>
-            ) : (
-              <button
-                onClick={onRegister}
-                className="inline-flex items-center gap-1 rounded-md bg-accent px-2 py-0.5 text-[11px] font-medium text-accent-fg hover:bg-accent-hover"
-              >
-                <Plus size={11} weight="bold" /> 注册为执行器
-              </button>
-            ))}
         </div>
       </div>
     </div>

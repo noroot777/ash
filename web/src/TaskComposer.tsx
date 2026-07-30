@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { Task, Group, AgentType, Priority, ProjectView, TeamConfig, TeamPresetConfig } from "@harness/shared";
-import { AGENT_TYPES, DEFAULT_APP_SETTINGS } from "@harness/shared";
-import { X, Robot, Stack, Sparkle, Scales, UsersThree } from "@phosphor-icons/react";
+import type { AgentType, Task, Group, Priority, ProjectView, TeamConfig, TeamPresetConfig } from "@harness/shared";
+import { DEFAULT_APP_SETTINGS } from "@harness/shared";
+import { X, Robot, Stack, Sparkle, Scales, UsersThree, Warning } from "@phosphor-icons/react";
 import { api } from "./api";
 import { PRIORITIES } from "./constants";
 import { PriorityIcon, LabelAdder, RunLocation } from "./ui";
@@ -14,6 +14,7 @@ import { ImagePreviewGroup } from "./ImagePreview";
 import { toLocalInput } from "./ScheduleFields";
 import { type ExecutorSelection, useExecutorProfiles } from "./ExecutorPicker";
 import { teamExecutorDefaults } from "./teamExecutorDefaults";
+import { availableTypes, fallbackExecutor, isExecutorPickable, nothingRunnable, useDetection } from "./useDetectedAgents";
 import { createDebateConfig, DebateComposerFields } from "./DebateComposer";
 import { TeamPresetBar } from "./TeamPresetBar";
 import { toast } from "./toast";
@@ -90,7 +91,7 @@ export function TaskComposer({
   const [reviewerPick, setReviewerPick] = useState<ExecutorSelection | null>(null);
   const [reviewerModel, setReviewerModel] = useState("");
   const [reviewerReasoningEffort, setReviewerReasoningEffort] = useState("");
-  const [detected, setDetected] = useState<{ type: AgentType; available: boolean; resident: boolean }[] | null>(null);
+  const { detected, failed: detectFailed } = useDetection();
   const { profiles, providers } = useExecutorProfiles();
 
   // Start at the factory default immediately, then hydrate from the server-side
@@ -147,26 +148,58 @@ export function TaskComposer({
   const objRef = useRef<HTMLTextAreaElement>(null);
   const { attachments, onPaste, remove, clear, error } = usePasteAttachments();
 
-  // 只有切到团队模式才探测本机装了哪些 CLI(几个 which + --version,不值得每次开单子都跑)。
+  // 本机装了哪些 CLI：普通模式的执行器候选也要靠它过滤（目录里 15 个，没装的选出来
+  // 只会跑失败），所以不再只在团队模式下探。检测结果由 useDetectedAgents 整页缓存，
+  // 一次页面加载只 shell 出去探一轮。候选只装 available；已注册的 profile 由
+  // ExecutorPicker 单独列出，不进这份类型候选。
+  const singleTypes = availableTypes(detected);
+  const singlePickable = isExecutorPickable(executorPick, singleTypes, profiles);
+  // 默认执行器写死 claude，这台机器上没装 claude 时它就是一单必然失败的任务。检测结果
+  // 回来后如果当前选择在这台机器上不成立，顺移到第一个 available 类型，没有 available
+  // 就退到任一已注册 profile（可能是 ssh 远端）。两者都没有时保留原值 —— 后续由
+  // noExecutor 决定是拦提交还是只提示（见下面那段）。顺移连带清掉模型/思考强度，理由同
+  // ExecutorField：那套覆盖在新执行器上多半不存在。
   useEffect(() => {
-    if (!teamOn || detected) return;
-    let alive = true;
-    api.detectAgents().then(
-      (d) => alive && setDetected(d),
-      () => alive && setDetected([]),
-    );
-    return () => { alive = false; };
-  }, [teamOn, detected]);
+    if (detected === null || singlePickable) return;
+    const next = fallbackExecutor(singleTypes, profiles);
+    if (!next) return;
+    setExecutorPick(next);
+    setModel("");
+    setReasoningEffort("");
+  }, [detected, singlePickable, singleTypes, profiles]);
 
-  const { leadTypes, workerTypes, leadSelection, workerSelection } = useMemo(
-    () => teamExecutorDefaults(detected, leadPick, workerPick),
-    [detected, leadPick, workerPick],
+  const { leadTypes, leadProfiles, workerTypes, leadSelection, workerSelection } = useMemo(
+    () => teamExecutorDefaults(detected, leadPick, workerPick, profiles),
+    [detected, leadPick, workerPick, profiles],
   );
   const lead = leadSelection.agentType;
   const worker = workerSelection.agentType;
-  const reviewerSelection = reviewerPick && workerTypes.includes(reviewerPick.agentType)
+  const reviewerSelection = reviewerPick && isExecutorPickable(reviewerPick, workerTypes, profiles)
     ? reviewerPick
     : { agentType: workerSelection.agentType, executorId: null };
+  // 顺移无处可去时分两种情况说话，也分两种处理：
+  // - **真的一个都没有**（探测成功、零 available、零已注册 profile）：这单建出来必然起不来，
+  //   拦住提交并把话说明白。
+  // - **探测失败**：前端分不清「没装」和「探不出来」，所以只提示不拦 —— 拦住会把一次接口
+  //   抖动变成「新建任务坏了」。
+  const noExecutor = nothingRunnable(detected, detectFailed, profiles);
+  const unavailableRole = (() => {
+    if (detected === null) return null;
+    if (!teamOn) return singlePickable ? null : { role: "执行器", type: executorPick.agentType };
+    if (!isExecutorPickable(leadSelection, leadTypes, profiles)) return { role: "调度者", type: lead };
+    if (!isExecutorPickable(workerSelection, workerTypes, profiles)) return { role: "执行者", type: worker };
+    if (reviewEnabled && !isExecutorPickable(reviewerSelection, workerTypes, profiles)) {
+      return { role: "审查者", type: reviewerSelection.agentType };
+    }
+    return null;
+  })();
+  const executorWarning = noExecutor
+    ? "本机没检测到任何可用的智能体 CLI，也没有已注册的执行器 —— 建出来的任务起不来，所以先拦住了。装一个 CLI 后到「管理执行器」点检测，或注册一个（ssh 远端也算）。"
+    : unavailableRole
+      ? `本机没检测到 ${unavailableRole.role}「${unavailableRole.type}」这个 CLI，这单很可能起不来。${
+          detectFailed ? "（这次检测请求本身失败了，也可能只是探不出来。）" : "装好后到「管理执行器」点检测，或注册一个（ssh 远端也算）。"
+        }`
+      : null;
   const currentTeamPresetConfig: TeamPresetConfig = {
     lead,
     worker,
@@ -183,16 +216,16 @@ export function TaskComposer({
     reviewerReasoningEffort: reviewerReasoningEffort || null,
   };
   const applyTeamPreset = (config: TeamPresetConfig) => {
-    const leadType = detected === null || leadTypes.includes(config.lead)
-      ? config.lead
-      : leadSelection.agentType;
-    const workerType = detected === null || workerTypes.includes(config.worker)
-      ? config.worker
-      : workerSelection.agentType;
+    // 预设可能是在另一台机器（或装着别的 CLI 时）存下的。判定用 isExecutorPickable：
+    // 预设指名了某个 profile 就看那个 profile 还在不在，否则看类型探到没探到。
+    const pickable = (agentType: AgentType, executorId?: string | null, types = workerTypes) =>
+      detected === null || isExecutorPickable({ agentType, executorId: executorId ?? null }, types, profiles);
+    const leadType = pickable(config.lead, config.leadExecutorId, leadTypes) ? config.lead : leadSelection.agentType;
+    const workerType = pickable(config.worker, config.workerExecutorId) ? config.worker : workerSelection.agentType;
     const leadCompatible = leadType === config.lead;
     const workerCompatible = workerType === config.worker;
     const requestedReviewerType = config.reviewerAgentType ?? config.worker;
-    const reviewerType = detected === null || workerTypes.includes(requestedReviewerType)
+    const reviewerType = pickable(requestedReviewerType, config.reviewerExecutorId)
       ? requestedReviewerType
       : workerSelection.agentType;
     const reviewerCompatible = reviewerType === requestedReviewerType;
@@ -222,22 +255,22 @@ export function TaskComposer({
   // config together instead of leaving a model/effort from an incompatible CLI.
   useEffect(() => {
     if (detected === null) return;
-    if (leadPick && !leadTypes.includes(leadPick.agentType)) {
+    if (leadPick && !isExecutorPickable(leadPick, leadTypes, profiles)) {
       setLeadPick({ agentType: leadSelection.agentType, executorId: null });
       setLeadModel("");
       setLeadReasoningEffort("");
     }
-    if (workerPick && !workerTypes.includes(workerPick.agentType)) {
+    if (workerPick && !isExecutorPickable(workerPick, workerTypes, profiles)) {
       setWorkerPick({ agentType: workerSelection.agentType, executorId: null });
       setWorkerModel("");
       setWorkerReasoningEffort("");
     }
-    if (reviewerPick && !workerTypes.includes(reviewerPick.agentType)) {
+    if (reviewerPick && !isExecutorPickable(reviewerPick, workerTypes, profiles)) {
       setReviewerPick({ agentType: workerSelection.agentType, executorId: null });
       setReviewerModel("");
       setReviewerReasoningEffort("");
     }
-  }, [detected, leadPick, workerPick, reviewerPick, leadTypes, workerTypes, leadSelection, workerSelection]);
+  }, [detected, leadPick, workerPick, reviewerPick, leadTypes, workerTypes, leadSelection, workerSelection, profiles]);
 
   const submit = async () => {
     const obj = body.trim();
@@ -341,7 +374,7 @@ export function TaskComposer({
   const schedInvalid = !debateOn && ((launchMode === "once" && !at) || (launchMode === "cron" && !cron.trim()));
   const canSubmit = (debateOn
     ? !!debate.topic.trim()
-    : !!body.trim() || seedAttachments.length > 0 || attachments.length > 0) && !busy && !schedInvalid;
+    : !!body.trim() || seedAttachments.length > 0 || attachments.length > 0) && !busy && !schedInvalid && !noExecutor;
   const pickMode = (m: LaunchMode) => {
     if (m === "once" && !at) setAt(toLocalInput(new Date(Date.now() + 3600_000).toISOString())); // 默认 +1h
     setLaunchMode(m);
@@ -466,6 +499,8 @@ export function TaskComposer({
                 profiles={profiles}
                 providers={providers}
                 onOpenAgents={onOpenAgents}
+                // 新建:默认辩手不可用时按检测结果顺移(见 DebateComposerFields 的注释)
+                correctUnavailable
               />
             </div>
           ) : (
@@ -506,6 +541,7 @@ export function TaskComposer({
                   lead={{
                     selection: leadSelection,
                     types: leadTypes,
+                    profiles: leadProfiles,
                     model: leadModel,
                     reasoningEffort: leadReasoningEffort,
                     onSelect: setLeadPick,
@@ -540,7 +576,7 @@ export function TaskComposer({
                 <ExecutorField
                   icon={<Robot size={14} />}
                   selection={executorPick}
-                  types={[...AGENT_TYPES]}
+                  types={singleTypes}
                   profiles={profiles}
                   providers={providers}
                   model={model}
@@ -550,6 +586,12 @@ export function TaskComposer({
                   onReasoningEffort={setReasoningEffort}
                   onOpenAgents={onOpenAgents}
                 />
+              )}
+              {executorWarning && (
+                <p className="flex basis-full items-center gap-1 text-[11.5px] text-amber-700">
+                  <Warning size={13} className="shrink-0" />
+                  {executorWarning}
+                </p>
               )}
 
               <Pill icon={<Stack size={14} />} label={groupTrigger} value={groupId} onChange={(v) => (v === "__new" ? onCreateGroup() : setGroupId(v))} options={[{ value: "", label: "无分组" }, ...groups.map((g) => ({ value: g.id, label: groupLabel(g) })), { value: "__new", label: "+ 新建分组" }]} />

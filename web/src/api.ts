@@ -26,6 +26,10 @@ export type DetectedCli = {
   path: string | null;
   version: string | null;
   resident: boolean;
+  /** 执行参数按官方文档起草、本机没实测过；界面必须如实标出来。 */
+  untested?: boolean;
+  /** 未定的点 / 踩过的坑（`untested` 时必有），当作 untested 标识的说明文案。 */
+  notes?: string;
 };
 
 export type CuaProcess = {
@@ -408,9 +412,8 @@ export const api = {
     { type: AgentType; bin: string; available: boolean; path: string | null; version: string | null; resident: boolean }[]
   > => fetch("/api/agents/detect").then(j),
   /**
-   * 已知 CLI 目录：上面那几个可执行器 + 一批只做「装没装」展示的。
-   * `type` 有值才是 harness 能派任务的执行器；没有 type 的只能看和装，
-   * 别拿它去填任何「选谁干活」的下拉。
+   * 已知 CLI 目录：登记在册的每一项现在都能派任务（`type` 恒有值），
+   * 差别只在执行参数实测没实测（`untested`）。界面只展示 `available` 的那些。
    */
   detectClis: (): Promise<DetectedCli[]> => fetch("/api/agents/catalog").then(j),
   createAgent: (a: Partial<AgentExecutorProfile>): Promise<AgentExecutorProfile> =>

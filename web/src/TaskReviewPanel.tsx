@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  AGENT_TYPES,
   TASK_STATUS_LABELS,
   type ReviewConclusion,
   type Task,
@@ -22,6 +21,7 @@ import { ExecutorField } from "./composer/ExecutorFields";
 import { ImageLightbox, type PreviewImage } from "./ImagePreview";
 import { Markdown } from "./Markdown";
 import { toast } from "./toast";
+import { useAvailableTypes } from "./useDetectedAgents";
 import { useServerEvents } from "./useEvents";
 
 const AUTO_REVIEW_LIMIT = 2;
@@ -145,6 +145,7 @@ export function TaskReviewPanel({
     [task.id, task.agentType, task.executorId, task.model, task.reasoningEffort, parent?.team],
   );
   const { profiles, providers } = useExecutorProfiles();
+  const { types: executorTypes } = useAvailableTypes();
   const { info, loading, loadError, load } = useTaskReviewInfo(task.id);
   const [dispatchOpen, setDispatchOpen] = useState(false);
   const [dispatching, setDispatching] = useState(false);
@@ -237,7 +238,7 @@ export function TaskReviewPanel({
             <ExecutorField
               icon={<MagnifyingGlass size={14} />}
               selection={selection}
-              types={[...AGENT_TYPES]}
+              types={executorTypes}
               profiles={profiles}
               providers={providers}
               model={model}

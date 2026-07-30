@@ -1,10 +1,10 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { AgentExecutorProfile, DebateConfig, LlmProvider } from "@harness/shared";
-import { AGENT_TYPES } from "@harness/shared";
 import { ArrowsClockwise, Robot, ShieldCheck } from "@phosphor-icons/react";
 import { loadDefaults, saveDefault, saveDefaults } from "./debateDefaults";
 import { ExecutorPicker, type ExecutorSelection } from "./ExecutorPicker";
 import { Pill } from "./Menu";
+import { fallbackExecutor, isExecutorPickable, useAvailableTypes } from "./useDetectedAgents";
 
 export function createDebateConfig(): DebateConfig {
   return { ...loadDefaults(), topic: "", style: "debate" };
@@ -21,6 +21,7 @@ export function DebateComposerFields({
   providers,
   onOpenAgents,
   fill = false,
+  correctUnavailable = false,
 }: {
   value: DebateConfig;
   onChange: (value: DebateConfig) => void;
@@ -28,8 +29,17 @@ export function DebateComposerFields({
   providers: LlmProvider[];
   onOpenAgents?: () => void;
   fill?: boolean;
+  /**
+   * true = 这是一份**新建**的配置（种子来自 `createDebateConfig()`：localStorage 里 pin 过的
+   * 默认，或工厂默认 claude vs codex）。检测结果回来后，把本机跑不起来的默认辩手顺移到能跑
+   * 的那个。**编辑既有配置的调用点不要开**：那份配置是既成事实（可能是别的机器上建的辩论），
+   * 悄悄改写用户存量数据比留着一个显式标注「本机未检测到」的值更糟。
+   */
+  correctUnavailable?: boolean;
 }) {
   const [defaults, setDefaults] = useState(loadDefaults);
+  // 辩手候选同其它「选谁干活」的表面：只列本机探到的 available + 已注册 profile。
+  const { detected, types: debaterTypes } = useAvailableTypes();
   const set = <K extends keyof DebateConfig>(key: K, next: DebateConfig[K]) => {
     onChange({ ...value, [key]: next });
   };
@@ -65,6 +75,32 @@ export function DebateComposerFields({
     return `${who(speaker)} ${profile?.name ?? `默认 ${selection.agentType}`}`;
   };
 
+  // 检测结果回来后校正新建默认:辩手默认是 claude vs codex(或用户 pin 的那对),这台机器上
+  // 装的未必是它们 —— 不校正的话辩论能带着一个「本机未检测到」的类型默认项直接开跑
+  // (2026-07-30 第二轮审查抓到)。指名 profile 的选择不动(ssh 远端探不到也照样能跑),
+  // 只顺移「按类型默认」那种不成立的;B 尽量避开 A 的类型,保住「两个视角」的本意。
+  // 两个辩手要在同一个 onChange 里一起修:分两次调会用同一份闭包 value,后一次盖掉前一次。
+  useEffect(() => {
+    if (!correctUnavailable || detected === null) return;
+    const patch: Partial<DebateConfig> = {};
+    const fixA = isExecutorPickable(selectionFor("A", value), debaterTypes, profiles)
+      ? null
+      : fallbackExecutor(debaterTypes, profiles, value.debaterB);
+    if (fixA) {
+      patch.debaterA = fixA.agentType;
+      patch.debaterAExecutorId = fixA.executorId;
+    }
+    const avoidForB = patch.debaterA ?? value.debaterA;
+    const fixB = isExecutorPickable(selectionFor("B", value), debaterTypes, profiles)
+      ? null
+      : fallbackExecutor(debaterTypes, profiles, avoidForB);
+    if (fixB) {
+      patch.debaterB = fixB.agentType;
+      patch.debaterBExecutorId = fixB.executorId;
+    }
+    if (Object.keys(patch).length > 0) onChange({ ...value, ...patch });
+  }, [correctUnavailable, detected, debaterTypes, profiles, value, onChange]);
+
   return (
     <div className={`flex flex-col gap-3 ${fill ? "h-full min-h-0" : ""}`}>
       <textarea
@@ -86,7 +122,7 @@ export function DebateComposerFields({
           onSelect={(selection) => setDebater("A", selection)}
           profiles={profiles}
           providers={providers}
-          types={[...AGENT_TYPES]}
+          types={debaterTypes}
           includeTypeDefaults
           includeManage={!!onOpenAgents}
           onOpenAgents={onOpenAgents}
@@ -101,7 +137,7 @@ export function DebateComposerFields({
           onSelect={(selection) => setDebater("B", selection)}
           profiles={profiles}
           providers={providers}
-          types={[...AGENT_TYPES]}
+          types={debaterTypes}
           includeTypeDefaults
           includeManage={!!onOpenAgents}
           onOpenAgents={onOpenAgents}

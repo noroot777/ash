@@ -5,11 +5,11 @@
 // 从 TaskDetail.tsx 拆出来的：/team 的插话框也是这一套(见 web/src/team/TeamView.tsx)。
 import { useEffect, useState, type ReactNode } from "react";
 import type { AgentType, ScheduledMessage } from "@harness/shared";
-import { AGENT_TYPES } from "@harness/shared";
 import { Robot, X, Clock } from "@phosphor-icons/react";
 import { api } from "./api";
 import { formatInstant } from "./time";
 import { usePasteAttachments, AttachmentChips } from "./pasteAttachments";
+import { useAvailableTypes } from "./useDetectedAgents";
 import { Kbd, submitShortcutLabel, submitShortcutTitle, TopResizableTextarea } from "./ui";
 
 // Date → "YYYY-MM-DDTHH:mm"(本地时间)，给 <input type="datetime-local"> 当默认值
@@ -62,6 +62,7 @@ export function ReplyBox({
   disabledPlaceholder?: string;
   initialHeight?: number;
 }) {
+  const { types: mentionTypes } = useAvailableTypes();
   const [v, setV] = useState("");
   const [target, setTarget] = useState<AgentType | null>(null);
   const [mIdx, setMIdx] = useState(0);
@@ -80,8 +81,10 @@ export function ReplyBox({
 
   // @-mention: when an "@word" token sits at the end of the text, offer the agent
   // list. Choosing one assigns the reply to that agent and strips the token.
+  // 候选只给本机探到的 CLI —— 召唤一个没装的进来只会让这一回合直接失败。这里按
+  // 类型召唤（服务端用该类型的默认执行器），所以不需要 profile 列表。
   const mMatch = mention ? /(?:^|\s)@(\w*)$/.exec(v) : null;
-  const cands = mMatch ? AGENT_TYPES.filter((a) => a.startsWith((mMatch[1] ?? "").toLowerCase())) : [];
+  const cands = mMatch ? mentionTypes.filter((a) => a.startsWith((mMatch[1] ?? "").toLowerCase())) : [];
   // 斜杠命令菜单：整段输入还只是「/」加一个没结束的词（尾部没空格）时给候选；
   // 一旦打了空格就交还给命令本体 + 尾巴文本的 live 预览。
   const commandCandidates = (text: string) => {

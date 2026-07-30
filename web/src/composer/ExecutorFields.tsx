@@ -76,6 +76,8 @@ export function ExecutorField({
 export type RoleExecutorState = {
   selection: ExecutorSelection;
   types: AgentType[];
+  /** 这一栏能挑的 profile；缺省用共用的全量（调度者那栏会按 resident 收窄）。 */
+  profiles?: AgentExecutorProfile[];
   model: string;
   reasoningEffort: string;
   onSelect: (sel: ExecutorSelection) => void;
@@ -113,7 +115,7 @@ export function TeamExecutorFields({
         {...lead}
         icon={<Crown size={14} />}
         label={`调度者 ${name(lead.selection)}`}
-        profiles={profiles}
+        profiles={lead.profiles ?? profiles}
         providers={providers}
         onOpenAgents={onOpenAgents}
         className={roleClass}
@@ -122,7 +124,7 @@ export function TeamExecutorFields({
         {...worker}
         icon={<Robot size={14} />}
         label={`执行者 ${name(worker.selection)}`}
-        profiles={profiles}
+        profiles={worker.profiles ?? profiles}
         providers={providers}
         onOpenAgents={onOpenAgents}
         className={roleClass}
@@ -146,7 +148,7 @@ export function TeamExecutorFields({
               {...reviewer}
               icon={<MagnifyingGlass size={14} />}
               label={`审查者 ${name(reviewer.selection)}`}
-              profiles={profiles}
+              profiles={reviewer.profiles ?? profiles}
               providers={providers}
               onOpenAgents={onOpenAgents}
               className="flex flex-wrap items-center gap-1.5"

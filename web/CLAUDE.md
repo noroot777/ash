@@ -26,3 +26,7 @@
 
 - **换执行器时，模型/思考强度选择器一律重置为「跟随执行器」**，清空动作放在**组件层**而不是各调用点——web 在 `ExecutorField`（`web/src/composer/ExecutorFields.tsx`，单任务与团队 lead/worker 共用）和 `TaskDetail` 的运行设置里。判定调 shared 的 `sameExecutor`，不要自己写 `next.agentType !== cur.agentType`。规则全貌（创建路径、编辑路径、为什么覆盖不能脱离执行器流动）见 `server/CLAUDE.md`。
 - 新增任何「选谁干活」的表面，都必须同时用前端 `ExecutorPicker`、持久化 `executorId` 字段、后端 `resolveExecutorFor`——三样缺一不可，辩论链路曾因此漏过一次。
+- **类型候选一律来自本机检测，不要写死 `AGENT_TYPES`**：单点是 `web/src/useDetectedAgents.ts` 的 `availableTypes`（**只有**探到的 available，允许为空，检测结果整页缓存一次）。目录里登记了 15 个 CLI，一台机器上装三四个是常态，把没装的摆进下拉等于让用户选出一个必然跑失败的执行器。
+- **「列出已注册 profile」和「按类型新选」是两条独立的来源，别合并**：`executorOptions`（`web/src/ExecutorPicker.tsx`）里「按 X 类型默认」只从 available 类型生成；已注册 profile 恒列出（可能是 ssh 远端，本机探不到）但**不因此让它的类型多出一个类型默认项**；当前生效但已不可用的选择只补一条标注状态的条目。把「有 profile」当成「类型可选」曾在 2026-07-30 的审查里被拦下。判断「上次的选择还成不成立」用 `isExecutorPickable`，不要 `types.includes(...)`——否则挑了 ssh profile 会被每次重渲染打回默认。
+- **团队调度者那一栏，「能常驻」和「本机装了」是两个独立条件，也别合并**（同一次审查的第二轮又被拦下一次）：`leadTypes = residentTypes ∩ availableTypes`（按类型新选要两个都满足），但 `leadProfiles` **只按 `residentTypes` 筛**——一个 ssh 的 claude 调度者不该因为本机没装 claude 而消失，否则这类用户根本建不了团队。`residentTypes`（`web/src/useDetectedAgents.ts`）在 detect 结果之外并了一份已知能力名单兜底，因为 detect 只在 CLI 装了的时候才问执行器有没有 `openResident`。
+- **每个「新建」表面都要在检测回来后校正默认选择**（`fallbackExecutor`）：默认值来自写死的 claude 或 localStorage 里 pin 过的配置，未必在这台机器上装着。单任务、团队三角色、**辩论两个辩手**都要做——辩论那处漏过一次。编辑既有配置的表面相反：不要悄悄改写用户存量数据（`DebateComposerFields` 用 `correctUnavailable` 区分这两种调用点）。

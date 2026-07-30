@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { Task, Group, TaskStatus, Priority, AgentType } from "@harness/shared";
-import { AGENT_TYPES, isUserSettableStatus, canArchive } from "@harness/shared";
+import { isUserSettableStatus, canArchive } from "@harness/shared";
 import { sameExecutor } from "@harness/shared/executors";
 import { CaretDown, Play, Stop, Trash, ArrowsClockwise, DownloadSimple, GitDiff, ListNumbers } from "@phosphor-icons/react";
 import { api, type AcceptTaskFailure } from "./api";
@@ -20,6 +20,7 @@ import { useConversation } from "./useConversation";
 import { useStickToBottom } from "./useStickToBottom";
 import { ReplyBox } from "./ReplyBox";
 import { ExecutorPicker, type ExecutorSelection, useExecutorProfiles } from "./ExecutorPicker";
+import { useAvailableTypes } from "./useDetectedAgents";
 import { executorLabel } from "./executorLabel";
 import { TaskModelControls } from "./TaskModelControls";
 import { QuestionCard } from "./QuestionCard";
@@ -84,6 +85,7 @@ export function TaskDetail({
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const { profiles, providers } = useExecutorProfiles();
+  const { types: executorTypes } = useAvailableTypes();
   const dispatchedWorker = isDispatchedWorker(task);
   const derivationAllowed = canDeriveTask(task);
   const parentTask = task.parentId ? allTasks.find((candidate) => candidate.id === task.parentId) : null;
@@ -150,7 +152,7 @@ export function TaskDetail({
         })}
         profiles={profiles}
         providers={providers}
-        types={[...AGENT_TYPES]}
+        types={executorTypes}
         label={task.executorId ? executorLabel({ task }) : `默认 ${executorLabel({ task })}`}
         menuWidth={320}
       />

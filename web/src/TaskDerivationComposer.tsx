@@ -6,7 +6,8 @@ import { api } from "./api";
 import { createDebateConfig, DebateComposerFields } from "./DebateComposer";
 import { type ExecutorSelection, useExecutorProfiles } from "./ExecutorPicker";
 import { TeamExecutorFields } from "./composer/ExecutorFields";
-import { teamExecutorDefaults, type DetectedAgent } from "./teamExecutorDefaults";
+import { teamExecutorDefaults } from "./teamExecutorDefaults";
+import { isExecutorPickable, useDetectedAgents } from "./useDetectedAgents";
 import {
   buildTaskDerivationBody,
   defaultDebateTopic,
@@ -56,7 +57,7 @@ export function TaskDerivationComposer({
   const [reviewerPick, setReviewerPick] = useState<ExecutorSelection | null>(null);
   const [reviewerModel, setReviewerModel] = useState("");
   const [reviewerEffort, setReviewerEffort] = useState("");
-  const [detected, setDetected] = useState<DetectedAgent[] | null>(null);
+  const detected = useDetectedAgents();
   const [worktreeContext, setWorktreeContext] = useState<WorktreeContext | null>(null);
   // 用户一旦亲手改过附言/辩题，就停止从回复框同步，免得把手改的内容冲掉。
   const noteTouched = useRef(false);
@@ -91,21 +92,11 @@ export function TaskDerivationComposer({
     return () => { alive = false; };
   }, [task.projectId]);
 
-  useEffect(() => {
-    if (!teamMode) return;
-    let alive = true;
-    api.detectAgents().then(
-      (items) => alive && setDetected(items),
-      () => alive && setDetected([]),
-    );
-    return () => { alive = false; };
-  }, [teamMode]);
-
-  const { leadTypes, workerTypes, leadSelection, workerSelection } = useMemo(
-    () => teamExecutorDefaults(detected, leadPick, workerPick),
-    [detected, leadPick, workerPick],
+  const { leadTypes, leadProfiles, workerTypes, leadSelection, workerSelection } = useMemo(
+    () => teamExecutorDefaults(detected, leadPick, workerPick, profiles),
+    [detected, leadPick, workerPick, profiles],
   );
-  const reviewerSelection = reviewerPick && workerTypes.includes(reviewerPick.agentType)
+  const reviewerSelection = reviewerPick && isExecutorPickable(reviewerPick, workerTypes, profiles)
     ? reviewerPick
     : { agentType: workerSelection.agentType, executorId: null };
   const worktree = derivedWorktreeDefaults(
@@ -223,6 +214,7 @@ export function TaskDerivationComposer({
                 lead={{
                   selection: leadSelection,
                   types: leadTypes,
+                  profiles: leadProfiles,
                   model: leadModel,
                   reasoningEffort: leadEffort,
                   onSelect: setLeadPick,
@@ -277,6 +269,8 @@ export function TaskDerivationComposer({
             }}
             profiles={profiles}
             providers={providers}
+            // 派生同样是新建:默认辩手不可用时按检测结果顺移
+            correctUnavailable
           />
         )}
       </div>

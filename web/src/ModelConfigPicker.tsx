@@ -190,9 +190,15 @@ export function ReasoningEffortPicker({
   label?: string;
   icon?: ReactNode;
 }) {
+  const values = REASONING_EFFORT_VALUES[type];
+  // 大多数 CLI 没有（或还没实测出）思考强度档位，`values` 是空数组。这时下拉里只剩一条
+  // 「跟随执行器」，点开一个单选项没有任何意义——整个 chip 不渲染。已经设过值的仍要渲染
+  // （换类型后留下的旧覆盖得有地方清掉，也得看得见现在挂着什么）。
+  if (values.length === 0 && !value) return null;
+
   return (
     <Menu
-      options={defaultOptions(REASONING_EFFORT_VALUES[type], defaultLabel, defaultDetail)}
+      options={defaultOptions(values, defaultLabel, defaultDetail)}
       value={value ?? ""}
       onChange={onChange}
       menuWidth={270}
