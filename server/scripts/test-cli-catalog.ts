@@ -12,12 +12,15 @@
 //   ⑥ 预检失败(bin 不在 PATH)必须由事件流报错并以 done 收尾 —— 少一个 done 就是任务卡死;
 //   ⑦ 备用命令名:检测命中 bins[1] 时执行也要用它(死认 bins[0] = 目录说可用、派任务 ENOENT)。
 import assert from "node:assert/strict";
+import { rmSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import type { AgentEvent } from "@harness/shared";
 import { AGENT_TYPES } from "@harness/shared";
 import { CLI_MODEL_PRESETS, REASONING_EFFORT_VALUES } from "@harness/shared/cli-presets";
 import { CLI_SPECS, CLI_SPEC_BY_KEY } from "../src/executors/catalog/index.js";
 import { GenericCliExecutor, hasTrustedSessionId, interactiveResumeInner } from "../src/executors/generic.js";
-import { execBinFor } from "../src/executors/bin-probe.js";
+import { execBinFor, probeBins } from "../src/executors/bin-probe.js";
 import { resumeCommandFor } from "../src/executors/resume.js";
 import type { CliSpec } from "../src/executors/catalog/types.js";
 
@@ -218,6 +221,41 @@ const collect = async (events: AsyncIterable<AgentEvent>): Promise<AgentEvent[]>
     "fallback-works",
   );
   assert.deepEqual(events.at(-1), { kind: "done", exitStatus: 0 });
+}
+
+// ⑤quater 版本自证必须跑「已解析出的绝对路径」,不是裸命令名。
+// resolveBin 除 PATH 外还扫 EXTRA_PATHS(/opt/homebrew/bin、~/.local/bin、~/.bun/bin…),
+// 那是给「从 GUI/预览启动 server、PATH 缺 Homebrew 目录」准备的。自证若用裸名,就会
+// 「找得到文件、却证不了身份」—— cursor 的官方备用名 agent 在 GUI 环境下被误判不可用。
+// 造场景:把 fixture 放进 ~/.local/bin(EXTRA_PATHS 之一)、再把 PATH 清成不含它,
+// 于是只有走绝对路径才拿得到版本号。该目录不可写就跳过(别让测试依赖环境)。
+{
+  const dir = join(homedir(), ".local", "bin");
+  const name = `harness-probe-fixture-${process.pid}`;
+  const file = join(dir, name);
+  let usable = false;
+  try {
+    writeFileSync(file, "#!/bin/sh\necho 'fixture-cli 1.2.3'\n", { mode: 0o755 });
+    usable = true;
+  } catch {
+    console.log(`(跳过绝对路径自证用例:${dir} 不可写)`);
+  }
+  if (usable) {
+    const originalPath = process.env.PATH;
+    process.env.PATH = "/nonexistent-for-harness-test";
+    try {
+      const probe = await probeBins([name]);
+      assert.ok(probe, "EXTRA_PATHS 里的命令必须能被探到(PATH 缺它也算装了)");
+      assert.equal(probe!.path, file);
+      assert.equal(probe!.version, "fixture-cli 1.2.3", "自证要跑绝对路径,裸命令名在这个 PATH 下必然拿不到版本");
+      // 备用名的自证同理:PATH 缺目录时也得能证明身份,否则整项被判不可用
+      const alt = await probeBins(["harness-missing-primary-bin", name], "fixture-cli");
+      assert.equal(alt?.bin, name, "备用名在 PATH 缺目录时仍应自证通过");
+    } finally {
+      process.env.PATH = originalPath;
+      rmSync(file, { force: true });
+    }
+  }
 }
 
 // ⑥ 预检失败:bin 不在 PATH。必须由事件流报出来并以 done 收尾 ——

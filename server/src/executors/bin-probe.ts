@@ -29,16 +29,21 @@ export async function probeBins(bins: string[], fallbackVersionMatch?: string): 
   for (const [i, candidate] of bins.entries()) {
     const found = resolveBin(candidate);
     if (!found) continue;
-    const ver = await versionOf(candidate);
+    const ver = await versionOf(found);
     if (i > 0 && want && !(ver ?? "").toLowerCase().includes(want)) continue;
     return { bin: candidate, path: found, version: ver };
   }
   return null;
 }
 
-async function versionOf(bin: string): Promise<string | null> {
+// 版本自证跑的是 resolveBin **已经解析出来的绝对路径**,不是裸命令名。
+// 裸命令名只走子进程继承的 process.env.PATH,而 resolveBin 额外扫了 EXTRA_PATHS
+// (/opt/homebrew/bin、~/.local/bin、~/.bun/bin…)—— 从 GUI/预览启动 server 时
+// PATH 常常缺这些目录,于是「找得到文件、却证不了身份」,cursor 的官方备用名 agent
+// 会被误判为不可用。用绝对路径执行,检测与 spawnAgent 就是同一条解析口径。
+async function versionOf(absPath: string): Promise<string | null> {
   try {
-    const { stdout } = await exec(bin, ["--version"], { timeout: 4000 });
+    const { stdout } = await exec(absPath, ["--version"], { timeout: 4000 });
     return (stdout.split("\n")[0] || "").trim() || null;
   } catch {
     return null;
@@ -52,8 +57,11 @@ async function versionOf(bin: string): Promise<string | null> {
  * 情况,那条路只走一次同步的 accessSync 扫目录,不 exec 任何东西。
  *
  * ssh 目标一律返回 undefined:候选探测查的是**本机** PATH,拿本机结果去决定远端命令名
- * 只会更错。远端只装了备用名时,得由执行器 profile 显式指定(ExecutorBuildOpts.bin
- * 这个口子留着就是为它),而不是在这里猜。
+ * 只会更错。远端只装了备用名时,正解是让用户显式指定命令名 —— `ExecutorBuildOpts.bin`
+ * 这个口子留着就是为它,但**执行器 profile 目前还没有这个字段**(`agents` 表无 bin 列,
+ * `build()` 恒传 undefined)。这是已知缺口而不是回归(重构前 ssh 同样只用 bins[0]);
+ * 补齐要动 DB schema + shared 的 AgentExecutorProfile + web/mobile 的执行器表单,
+ * 属于「智能体面板」那条线的产品改动,不该由这里偷偷猜一个远端命令名来糊。
  */
 export async function execBinFor(spec: CliSpec, target?: ExecTarget): Promise<string | undefined> {
   if (spec.bins.length < 2) return undefined;

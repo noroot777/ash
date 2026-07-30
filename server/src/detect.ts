@@ -40,6 +40,13 @@ export interface KnownCli {
   type: AgentType;
   /** true = 执行参数按官方文档写、本机未实测(前端据此打标)。 */
   untested?: boolean;
+  /**
+   * 该 CLI 的限制说明与待核实的点(spec 里那段 notes 原文)。
+   * 前端把它连着 `untested` 一起展示 —— 光有一个「未实测」标记等于只说了「别太当真」,
+   * 用户真正需要知道的是**哪里**没验、踩了什么坑(「仅企业版旗舰套餐」「未接供应商」
+   * 「没有权限确认这一环」这类信息只在 notes 里)。
+   */
+  notes?: string;
 }
 
 export interface DetectedCli extends KnownCli {
@@ -64,6 +71,7 @@ const KNOWN_CLIS: KnownCli[] = CLI_SPECS.map((s) => ({
   docsUrl: s.docsUrl,
   installCommand: s.installCommand,
   untested: s.untested,
+  notes: s.notes,
 }));
 
 // 探测走 bin-probe 的 probeBins —— **检测与执行必须是同一套判定**(候选顺序、
