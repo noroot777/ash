@@ -136,7 +136,7 @@
   /* ── 注入顶部演示导航条 ── */
   var here = (location.pathname.split("/").pop() || "index.html");
   var bar =
-    '<nav class="demo-bar" aria-label="演示页导航"><span class="db-brand"><i>H</i>UI 讨论稿 · R6</span>' +
+    '<nav class="demo-bar" aria-label="演示页导航"><span class="db-brand"><i>H</i>UI 讨论稿 · R7</span>' +
     PAGES.map(function (p) {
       return '<a href="' + p[0] + '"' + (p[0] === here ? ' class="current"' : "") + ">" + p[1] + "</a>";
     }).join("") +

@@ -78,9 +78,10 @@
 </head>
 <body class="doc-page">
   <main class="doc">
-    <p class="eyebrow">Harness Web · 讨论稿 v2 · 第六轮 · Linear 实测校准</p>
+    <p class="eyebrow">Harness Web · 讨论稿 v2 · 第七轮 · 现行产品结构校准</p>
     <h1>不止复刻控件，开始用同一种语言设计。</h1>
-    <p class="lede"><b>本轮把团队验收与焦点态拉回真实实现：</b>团队验收左列改为 TeamView 实际提供的执行者子任务，每行带分支/worktree、改动统计与审查/验收状态；团队调度流补齐用户与调度者发言。输入框焦点按 Linear 实测改为与边框重合的单层 1px ring；灰阶固定为最终校准值，右下角只保留 S1/S2/S3 选中态方案。</p>
+    <p class="lede"><b>本轮把验收与验证信息结构拉回现行产品：</b>团队验收恢复为“调度台共享分支卡 → 共享执行者验证 → 独立 worktree 执行者”的纵向层级；用户消息回到提交下方的左列，调度流中的用户发言回到原时序与右对齐气泡。Linear 只负责表面、间距、控件和导航壳。</p>
+    <p class="callout"><b>信息结构原则：</b>信息结构以现行产品为准,重构只换视觉与导航壳。</p>
 
     <h2>演示页目录</h2>
     <p class="sub">顶部导航条在每一页都有,可随时横跳;侧边栏任务树的行、顶部三图标、项目下拉里的「设置」都是真链接,可以直接当产品点。</p>
@@ -90,7 +91,7 @@
       <a class="nav-card" href="team.html"><span class="no">03</span><b>团队调度台</b><small>调度流 + 右栏 tab + 时间轴一行收起 + 执行者抽屉</small></a>
       <a class="nav-card" href="debate.html"><span class="no">04</span><b>辩论视图</b><small>配置卡 + 双方发言流 + 底部控制条</small></a>
       <a class="nav-card" href="review.html"><span class="no">05</span><b>单任务验收</b><small>提交、文件统计、行级 diff、分支目标、审查报告与截图</small></a>
-      <a class="nav-card" href="review-team.html"><span class="no">06</span><b>团队验收台</b><small>按执行者列出分支/worktree、改动统计、审查状态与相关调度流</small></a>
+      <a class="nav-card" href="review-team.html"><span class="no">06</span><b>团队验收台</b><small>共享分支汇总 → 共享执行者验证 → 审查报告与截图缩略图</small></a>
       <a class="nav-card" href="composer.html"><span class="no">07</span><b>新建任务面板</b><small>内嵌非弹层;single/team/debate 模式切换;侧栏 ✎ 直达</small></a>
       <a class="nav-card" href="settings-agents.html"><span class="no">08</span><b>设置 · 智能体</b><small>640px 内容宽，左说明 + 右控件的 65px 设置行</small></a>
       <a class="nav-card" href="settings-project.html"><span class="no">09</span><b>设置 · 项目</b><small>基本信息 / 运行默认 / 危险区</small></a>
@@ -143,7 +144,8 @@
       <div><span class="tag">v3 · 信息架构定稿</span><b>三栏:任务树入侧栏</b><small>任务列表并进侧栏，设置改为单开页。</small></div>
       <div><span class="tag">v4 · 上轮</span><b>实测视觉 + 真实验收</b><small>统一基础 token，并补齐单任务/团队验收功能面。</small></div>
       <div><span class="tag">v5 · 上轮</span><b>控件全状态 + 设计语言</b><small>校准默认亮度，并用 Linear 的组合规则重画 harness 特有组件。</small></div>
-      <div><span class="tag now">v6 · 本轮</span><b>真实团队验收 + 单层焦点 ring</b><small>验收条目回到执行者粒度，灰阶收敛为单一实测版本。</small></div>
+      <div><span class="tag">v6 · 上轮</span><b>团队验收尝试 + 单层焦点 ring</b><small>视觉校准完成，但验收台误造了执行者队列与底部调度流。</small></div>
+      <div><span class="tag now">v7 · 本轮</span><b>信息结构完全服从现行产品</b><small>共享执行者验证、证据缩略图与用户消息全部归回真实层级。</small></div>
     </div>
     <p class="callout">任务树的选中行吃的就是全局选中态方案——切 S1/S2/S3,任务树、下拉、⌘K、设置页列表一起变。</p>
 

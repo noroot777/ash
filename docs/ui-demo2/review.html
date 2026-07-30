@@ -14,94 +14,89 @@
       <header class="app-bar">
         <span class="kind-chip plain">任务</span>
         <span class="app-title">按源码重做单任务验收工作区</span>
-        <span class="branch-chip"><b>harness/pSHdnpMo → main</b></span>
+        <span class="status-pill gray"><i class="dot"></i>待验收</span>
         <div class="app-actions">
-          <button class="ui-btn primary">✓ 验收通过</button>
-          <button class="ui-btn">返回对话</button>
-          <button class="ui-btn icon-btn" data-action="inspector" aria-label="开关 Inspector" aria-expanded="true">▥</button>
+          <a class="ui-btn primary" href="task.html">返回对话</a>
+          <button class="ui-btn icon-btn" data-action="menu" aria-label="更多操作" aria-expanded="false">…</button>
         </div>
       </header>
+
       <div class="review-subbar">
-        <div class="copy"><b>改动与提交</b><small>按文件查看任务分支相对基线的 diff；验收通过后确定性合并并清理 worktree</small></div>
-        <a class="review-link" href="review-team.html">切到团队验收 →</a>
+        <div class="copy"><b>改动与提交</b><small>按文件折叠查看任务分支相对基线的 diff</small></div>
+        <div class="actions"><a class="ui-btn" href="task.html">× 返回对话</a></div>
       </div>
-      <nav class="review-tabs" aria-label="验收场景"><a class="active" href="review.html">单任务</a><a href="review-team.html">团队验收台</a></nav>
-      <div class="work-body">
-        <div class="review-wrap">
-          <aside class="file-tree" aria-label="改动文件">
-            <div class="ft-label">文件改动 · 5 · +286 −74</div>
-            <div class="ft-row selectable selected"><span class="fname">web/src/ReviewWorkspace.tsx</span><span class="plus">+118</span><span class="minus">−31</span></div>
-            <div class="ft-row selectable"><span class="fname">web/src/TaskReviewPanel.tsx</span><span class="plus">+64</span><span class="minus">−18</span></div>
-            <div class="ft-row selectable"><span class="fname">server/src/review.ts</span><span class="plus">+51</span><span class="minus">−16</span></div>
-            <div class="ft-row selectable"><span class="fname">server/scripts/test-review-flow.ts</span><span class="plus">+41</span><span class="minus">−9</span></div>
-            <div class="ft-row selectable"><span class="fname">shared/src/index.ts</span><span class="plus">+12</span><span class="minus">−0</span></div>
-            <div class="commit-stack">
-              <h4>提交 · 3</h4>
-              <div class="commit-row"><code>9d421a2e</code><span>重做验收工作区信息架构</span><small>11:32</small></div>
-              <div class="commit-row"><code>40b85cd1</code><span>接入审查报告与截图证据</span><small>11:07</small></div>
-              <div class="commit-row"><code>105f00ca</code><span>补齐自动打回回归</span><small>10:46</small></div>
-            </div>
-          </aside>
-          <section class="diff-pane">
-            <div class="review-stats">
-              <div class="review-stat"><small>分支</small><b class="mono">harness/pSHdnpMo</b></div>
-              <div class="review-stat"><small>合入目标</small><b class="mono">main</b></div>
-              <div class="review-stat"><small>变更</small><b><span class="good">+286</span> / <span class="bad">−74</span></b></div>
-              <div class="review-stat"><small>审查结论</small><b class="good">verified · 第 2 轮</b></div>
-            </div>
-            <div class="diff-file">
-              <div class="diff-head"><code>web/src/ReviewWorkspace.tsx</code><span class="stats">M · +118 −31</span></div>
-              <div class="diff-body">
-                <div class="dl hunk"><span class="ln">…</span><span class="lc">@@ -429,18 +445,31 @@ function ReviewSection</span></div>
-                <div class="dl"><span class="ln">445</span><span class="lc">  const [evidence, setEvidence] = useState&lt;Evidence | null&gt;(null);</span></div>
-                <div class="dl del"><span class="ln">446</span><span class="lc">- const summary = await api.taskDiff(task.id);</span></div>
-                <div class="dl add"><span class="ln">446</span><span class="lc">+ const [commits, diff, sessions] = await Promise.all([</span></div>
-                <div class="dl add"><span class="ln">447</span><span class="lc">+   api.taskCommits(task.id), api.taskDiff(task.id), api.sessions(task.id),</span></div>
-                <div class="dl add"><span class="ln">448</span><span class="lc">+ ]);</span></div>
-                <div class="dl add"><span class="ln">449</span><span class="lc">+ setEvidence({ branch: commits.branch, commits: commits.commits, diff, messages });</span></div>
-                <div class="dl"><span class="ln">450</span><span class="lc">  return () =&gt; { alive = false; };</span></div>
-                <div class="dl hunk"><span class="ln">…</span><span class="lc">@@ -591,7 +618,15 @@ function DiffFile</span></div>
-                <div class="dl del"><span class="ln">618</span><span class="lc">- &lt;pre&gt;{section.body}&lt;/pre&gt;</span></div>
-                <div class="dl add"><span class="ln">618</span><span class="lc">+ &lt;DiffCode text={section.body} /&gt;</span></div>
-                <div class="dl add"><span class="ln">619</span><span class="lc">+ // + / − / @@ 分别映射新增、删除与 hunk 高亮</span></div>
+
+      <div class="review-workspace">
+        <div class="review-stack single-review-stack">
+          <article class="review-record-card">
+            <header class="review-record-head">
+              <span class="record-caret">⌄</span>
+              <i class="mdot green"></i>
+              <div class="record-copy">
+                <div class="record-title"><b>按源码重做单任务验收工作区</b><span>单任务</span><small>verified</small></div>
+                <p>按真实实现汇总审查证据、提交和 diff；不再把文件树、Inspector 或场景切换 tab 拼进验收工作区。</p>
               </div>
-            </div>
-            <div class="diff-file">
-              <div class="diff-head"><code>server/src/review.ts</code><span class="stats">M · +51 −16</span></div>
-              <div class="diff-body">
-                <div class="dl hunk"><span class="ln">…</span><span class="lc">@@ -392,8 +408,13 @@ async function settleReview</span></div>
-                <div class="dl"><span class="ln">408</span><span class="lc">  if (conclusion === "verify_failed") {</span></div>
-                <div class="dl add"><span class="ln">409</span><span class="lc">+   await resumeTask(targetTask.id, reportMarkdown);</span></div>
-                <div class="dl add"><span class="ln">410</span><span class="lc">+   // 审查失败自动打回原任务修复；人工验收区不再造第二套“打回”按钮。</span></div>
-                <div class="dl"><span class="ln">411</span><span class="lc">    return { conclusion, handedBack: true };</span></div>
-                <div class="dl"><span class="ln">412</span><span class="lc">  }</span></div>
-              </div>
-            </div>
-          </section>
-        </div>
-        <aside class="inspector" aria-label="验收 Inspector">
-          <div class="inspect-scroll">
-            <div class="inspect-head">Inspector<span>验收证据</span><button class="inspect-close" data-action="inspector" aria-label="关闭 Inspector">×</button></div>
-            <section class="inspect-group">
-              <div class="inspect-label">合并信息</div>
-              <dl class="kv"><dt>当前阶段</dt><dd>awaiting_acceptance</dd><dt>源分支</dt><dd class="mono">harness/pSHdnpMo</dd><dt>目标分支</dt><dd class="mono">main</dd><dt>worktree</dt><dd class="mono">…/.worktrees/pSHdnpMovEKU</dd><dt>验收行为</dt><dd>合并、清理、标记 accepted</dd></dl>
-            </section>
-            <section class="evidence-block">
-              <h4>独立审查证据 · 2 轮</h4>
-              <div class="review-round-card">
-                <div class="round-head"><span class="round-no fail">1</span><b>第 1 轮</b><span class="verdict fail">verify_failed</span><small>审查任务：done</small></div>
-                <div class="round-report"><b>报告：</b>团队验收场景缺少共享执行者摘要，且 file:// 下截图卡片溢出。</div>
-              </div>
-              <div class="auto-return"><span>↩</span><span><b>已自动打回原任务修复</b><br>真实流程由审查结论触发续跑，不提供人工“打回”按钮。</span></div>
-              <div class="review-round-card" style="margin-top:8px">
-                <div class="round-head"><span class="round-no ok">2</span><b>第 2 轮</b><span class="verdict ok">verified</span><small>审查任务：done</small></div>
-                <div class="round-report"><b>报告：</b>构建、file:// 浏览器巡检和交互截图均通过；验收功能面与源码一致。
-                  <div class="shot-grid"><div class="evidence-shot"><div class="shot"></div><span>review-single.png</span></div><div class="evidence-shot"><div class="shot"></div><span>review-team.png</span></div></div>
+              <button class="ui-btn primary">✓ 验收通过</button>
+            </header>
+            <div class="review-record-body">
+              <section class="evidence-panel" aria-label="单任务独立审查证据">
+                <div class="evidence-panel-head">
+                  <span class="evidence-icon">⌕</span>
+                  <div><b>独立审查证据</b><small>已记录 2 轮真实运行验证</small></div>
                 </div>
+                <article class="review-round-card">
+                  <div class="round-head"><span class="round-no fail">1</span><b>第 1 轮</b><span class="verdict fail">verify_failed</span><small>审查任务：完成</small></div>
+                  <div class="round-report"><b>审查报告：</b>团队验收场景缺少共享执行者摘要，file:// 下的截图卡片也没有明确的可点击形态。<div class="auto-return"><span>↩</span><span>已自动打回原任务修复，人工验收区不另造“打回”按钮。</span></div></div>
+                </article>
+                <article class="review-round-card">
+                  <div class="round-head"><span class="round-no ok">2</span><b>第 2 轮</b><span class="verdict ok">verified</span><small>审查任务：完成</small></div>
+                  <div class="round-report">
+                    <b>审查报告：</b>构建、file:// 浏览器巡检、控制台与交互截图均通过；证据缩略图点击后可进入大图查看。
+                    <div class="shot-label">截图 · 2</div>
+                    <div class="shot-grid">
+                      <button class="evidence-shot" title="点击查看大图"><span class="shot"></span><span>review-single.png</span><i>放大</i></button>
+                      <button class="evidence-shot" title="点击查看大图"><span class="shot code"></span><span>console-clean.png</span><i>放大</i></button>
+                    </div>
+                  </div>
+                </article>
+              </section>
+
+              <div class="review-content-grid">
+                <div class="review-side-stack">
+                  <section class="commit-stack">
+                    <h4>提交 · 3</h4>
+                    <p class="branch-line mono">harness/pSHdnpMo</p>
+                    <div class="commit-row"><code>9d421a2e</code><span>重做验收工作区信息架构</span><small>11:32</small></div>
+                    <div class="commit-row"><code>40b85cd1</code><span>接入审查报告与截图证据</span><small>11:07</small></div>
+                    <div class="commit-row"><code>105f00ca</code><span>补齐自动打回回归</span><small>10:46</small></div>
+                  </section>
+                </div>
+
+                <section class="diff-stack" aria-label="任务分支文件改动">
+                  <div class="diff-summary"><b>文件改动</b><span class="good">+286</span><span class="bad">−74</span><small>5 个文件</small><code>harness/pSHdnpMo → main</code></div>
+                  <div class="diff-file">
+                    <div class="diff-head"><code>web/src/ReviewWorkspace.tsx</code><span class="stats">+118 −31</span></div>
+                    <div class="diff-body">
+                      <div class="dl hunk"><span class="ln">…</span><span class="lc">@@ function ReviewSection</span></div>
+                      <div class="dl del"><span class="ln">446</span><span class="lc">- const summary = await api.taskDiff(task.id);</span></div>
+                      <div class="dl add"><span class="ln">446</span><span class="lc">+ const [commits, diff, sessions] = await Promise.all([</span></div>
+                      <div class="dl add"><span class="ln">447</span><span class="lc">+   api.taskCommits(task.id), api.taskDiff(task.id), api.sessions(task.id),</span></div>
+                      <div class="dl add"><span class="ln">448</span><span class="lc">+ ]);</span></div>
+                    </div>
+                  </div>
+                  <div class="diff-file">
+                    <div class="diff-head"><code>server/src/review.ts</code><span class="stats">+51 −16</span></div>
+                    <div class="diff-body">
+                      <div class="dl hunk"><span class="ln">…</span><span class="lc">@@ async function settleReview</span></div>
+                      <div class="dl add"><span class="ln">409</span><span class="lc">+ await resumeTask(targetTask.id, reportMarkdown);</span></div>
+                      <div class="dl add"><span class="ln">410</span><span class="lc">+ // 审查失败自动打回原任务修复。</span></div>
+                    </div>
+                  </div>
+                </section>
               </div>
-            </section>
-          </div>
-        </aside>
+            </div>
+          </article>
+        </div>
       </div>
     </main>
   </div>

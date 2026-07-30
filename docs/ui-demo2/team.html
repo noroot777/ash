@@ -16,22 +16,23 @@
         <span class="app-title">自动验证相关 - 依旧大改</span>
         <span class="status-pill"><i class="dot"></i>运行中</span>
         <div class="app-actions">
-          <button class="ui-btn primary">验收</button>
+          <a class="ui-btn" href="review-team.html">▣ 验收</a>
           <button class="ui-btn danger">停止全组</button>
           <button class="ui-btn icon-btn" data-action="menu" aria-label="更多操作" aria-expanded="false">…</button>
-          <button class="ui-btn icon-btn" data-action="inspector" aria-label="开关右栏" aria-expanded="true">▥</button>
         </div>
         <div class="overflow-menu">
-          <button>复制全部对话</button>
-          <button>下载为 Markdown</button>
+          <button>复制调度者的全部对话</button>
+          <button>导出对话为 Markdown</button>
           <button>复制任务链接</button>
           <hr>
           <button>归档团队</button>
           <button class="delete">删除团队</button>
         </div>
       </header>
+
       <button class="timeline-line" data-action="timeline">
-        <b>时间轴</b>4 泳道 · 09:57 – 现在 · 共享层已完成,web 接入验证中
+        <b>时间轴（谁跟谁在并行）</b>
+        <span class="delivery-summary"><i class="done"></i>验证 · 已验证 <i></i>待验收 <i></i>完成</span>
         <span class="tl-caret">展开 ▾</span>
       </button>
       <div class="timeline-drawer">
@@ -42,84 +43,78 @@
           <span>3 审查:全链路真实运行</span><i class="track"><i class="bar hatch" style="left:86%;width:14%"></i></i>
         </div>
       </div>
-      <div class="work-body">
+
+      <div class="team-flow-grid">
         <section class="conversation">
-          <div class="messages">
-            <div class="comment-stream">
-              <article class="comment-item user-comment"><span class="comment-avatar">你</span><div><div class="comment-head"><b>你</b><time>09:57</time></div><p><b>自动验证相关 - 依旧大改</b><br>审查机制需要真实跑通，保留完整执行记录。web 那条线改完要有人真的开浏览器点一遍。</p></div></article>
-              <article class="comment-item lead-comment"><span class="comment-avatar">调</span><div><div class="comment-head"><b>调度者</b><span class="comment-kind">汇报</span><time>10:04</time></div><p>我把任务拆成三条串行工作流：shared 层机制、web 接入、全链路真实运行验证。前一个执行者完成后，下一个自动起跑。</p></div></article>
-              <div class="feed-card"><span class="feed-tag dispatch">派活</span><b>3 个 codex 执行者</b> · 串行 · 审查开启</div>
-              <article class="comment-item worker-comment"><span class="comment-avatar">C1</span><div><div class="comment-head"><b>执行者 1 · 审查者机制:shared 层</b><span class="comment-kind done">完成</span><time>10:29</time></div><p>isTeamSettled 已单点落在 shared/src/team.ts，web/mobile 共用；3 条回归测试全绿。</p></div></article>
-              <article class="comment-item worker-comment"><span class="comment-avatar">C2</span><div><div class="comment-head"><b>执行者 2 · 审查者机制:web 接入</b><span class="comment-kind ask">提问</span><time>10:41</time></div><p>时间轴右端收口后，「停止全组」按钮在已收工团队上是隐藏还是置灰？判据写在哪一层？</p></div></article>
-              <article class="comment-item lead-comment"><span class="comment-avatar">调</span><div><div class="comment-head"><b>调度者</b><span class="comment-kind">答复</span><time>10:43</time></div><p>隐藏——没东西可停就不该出现；判据用 shared 的 isTeamSettled，不在组件里重新拼。已经答复执行者 2 继续。</p></div></article>
-              <div class="event-line">执行者 3 在队列等待 · 前一个 done 后自动启动</div>
-            </div>
-          </div>
-          <div class="reply-box">给调度者留话(⌘↵ 发送)…
-            <div class="reply-row">
-              <span class="reply-tag">claude-fable-5</span><span class="reply-tag">调度台</span>
-              <button class="send-btn" aria-label="发送">↑</button>
-            </div>
+          <div class="messages team-feed">
+            <article class="flow-user">
+              <div class="flow-user-bubble">
+                <div class="flow-meta"><b>你</b><span>·</span><time>09:57</time></div>
+                <p><b>自动验证相关 - 依旧大改</b><br>审查机制需要真实跑通，保留完整执行记录。web 那条线改完要有人真的开浏览器点一遍。</p>
+              </div>
+            </article>
+
+            <article class="flow-agent">
+              <div class="flow-meta"><b>claude@ccb·claude-fable-5</b><span>·</span><time>10:04</time><span>·</span><small>用时 1m 12s</small></div>
+              <p>我把任务拆成三条串行工作流：shared 层机制、web 接入、全链路真实运行验证。前一个执行者完成后，下一个自动起跑。</p>
+            </article>
+
+            <div class="feed-card"><span class="feed-tag dispatch">派活 · 3 个执行者</span><b>串行</b> · 审查开启 · 点任一行可查看执行者完整会话</div>
+
+            <article class="flow-inbound done">
+              <div class="flow-meta"><span class="worker-index">1</span><b>审查者机制:shared 层</b><em>· 汇报完成</em><span>→ 调度者</span><time>10:29</time></div>
+              <p>isTeamSettled 已单点落在 shared/src/team.ts，web/mobile 共用；3 条回归测试全绿。</p>
+            </article>
+
+            <article class="flow-user">
+              <div class="flow-user-bubble">
+                <div class="flow-meta"><b>你</b><span>·</span><time>10:31</time></div>
+                <p>web 那条线改完要有人真的开浏览器点一遍；收工团队不能再显示一个点了没反应的停止按钮。</p>
+              </div>
+            </article>
+
+            <article class="flow-agent">
+              <div class="flow-meta"><b>claude@ccb·claude-fable-5</b><span>·</span><time>10:34</time></div>
+              <p>已把 web 接入与真实浏览器验证拆开。执行者 2 负责接入 shared 判据，执行者 3 在它完成后跑全链路。</p>
+            </article>
+
+            <article class="flow-inbound question">
+              <div class="flow-meta"><span class="worker-index">2</span><b>审查者机制:web 接入</b><em>· 提问，卡住了</em><span>→ 调度者</span><time>10:41</time></div>
+              <p>时间轴右端收口后，「停止全组」按钮在已收工团队上是隐藏还是置灰？判据写在哪一层？</p>
+            </article>
+
+            <article class="flow-agent">
+              <div class="flow-meta"><b>claude@ccb·claude-fable-5</b><span>·</span><time>10:43</time></div>
+              <p>隐藏——没东西可停就不该出现；判据用 shared 的 isTeamSettled，不在组件里重新拼。已经答复执行者 2 继续。</p>
+            </article>
+            <div class="event-line">执行者 3 在队列等待 · 前一个 done 后自动启动</div>
           </div>
         </section>
-        <aside class="inspector" aria-label="团队右栏">
-          <div class="inspect-scroll">
-            <div class="inspect-head">团队<span>右栏合并方案</span>
-              <button class="inspect-close" data-action="inspector" aria-label="关闭右栏">×</button>
-            </div>
-            <div class="rtabs">
-              <button data-action="rtab" data-pane="workers" aria-selected="true">执行者 · 3</button>
-              <button data-action="rtab" data-pane="detail" aria-selected="false">详情</button>
-            </div>
-            <div data-rpane="workers" class="rpane-on">
-              <button class="worker-card" data-action="drawer">
-                <div class="wc-top"><span class="wc-ava">C1</span><b>审查者机制:shared 层</b><span class="wc-state done">完成</span></div>
-                <small>isTeamSettled 单点 + 回归测试 · 26m</small>
-                <div class="wc-exec">codex@cpa·gpt-5.6-sol · xhigh</div>
-              </button>
-              <button class="worker-card" data-action="drawer">
-                <div class="wc-top"><span class="wc-ava">C2</span><b>审查者机制:web 接入</b><span class="wc-state run">干活中</span></div>
-                <small>提问已答复,继续收口时间轴 · 18m</small>
-                <div class="wc-exec">codex@cpa·gpt-5.6-sol · xhigh</div>
-              </button>
-              <button class="worker-card" data-action="drawer">
-                <div class="wc-top"><span class="wc-ava">C3</span><b>审查:全链路真实运行</b><span class="wc-state queue">排队</span></div>
-                <small>等执行者 2 done 后自动启动</small>
-                <div class="wc-exec">codex@cpa·gpt-5.6-sol · xhigh</div>
-              </button>
-            </div>
-            <div data-rpane="detail">
-              <section class="inspect-group">
-                <div class="inspect-label">属性</div>
-                <dl class="kv"><dt>状态</dt><dd>运行中</dd><dt>优先级</dt><dd>无</dd><dt>分组</dt><dd>无分组</dd><dt>标签</dt><dd>＋ 添加标签</dd></dl>
-              </section>
-              <section class="inspect-group">
-                <div class="inspect-label">团队信息</div>
-                <dl class="kv">
-                  <dt>调度者</dt><dd>claude@ccb·claude-fable-5</dd>
-                  <dt>执行者</dt><dd>codex@cpa·gpt-5.6-sol ×3</dd>
-                  <dt>分支</dt><dd class="mono">harness/Mh8DxPRf</dd>
-                  <dt>worktree</dt><dd class="mono">…/.worktrees/Mh8DxPRfgPVn</dd>
-                </dl>
-              </section>
-              <section class="inspect-group">
-                <div class="stat-row"><div class="stat"><b>1</b>干活</div><div class="stat"><b>1</b>排队</div><div class="stat"><b>1</b>完成</div></div>
-              </section>
-              <section class="inspect-group">
-                <details><summary>审查 · 3 轮 · verified</summary>
-                  <div class="review-list">
-                    <div class="review-round fail"><i></i>第 1 轮 · verify_failed</div>
-                    <div class="review-round fail"><i></i>第 2 轮 · verify_failed</div>
-                    <div class="review-round"><i></i>第 3 轮 · verified</div>
-                  </div>
-                </details>
-                <details><summary>Prompt 原文</summary>
-                  <p class="prompt-copy">自动验证相关 - 依旧大改。审查机制需要真实跑通,保留完整执行记录。</p>
-                </details>
-              </section>
-            </div>
-          </div>
+
+        <aside class="worker-rail" aria-label="执行者列表">
+          <div class="worker-rail-head"><span>执行者（3）</span><small>按 1–9</small></div>
+          <button class="worker-card" data-action="drawer">
+            <div class="wc-top"><i class="mdot green"></i><b>审查者机制:shared 层</b><span class="wc-exec">codex@cpa</span><kbd>1</kbd></div>
+            <small>verified · 完成 26m</small>
+          </button>
+          <button class="worker-card selected" data-action="drawer">
+            <div class="wc-top"><i class="mdot amber"></i><b>审查者机制:web 接入</b><span class="wc-exec">codex@cpa</span><kbd>2</kbd></div>
+            <small>verifying · 18m</small>
+            <div class="worker-live">正在补「自然收工后隐藏停止动作」的回归…</div>
+          </button>
+          <button class="worker-card" data-action="drawer">
+            <div class="wc-top"><i class="mdot gray"></i><b>审查:全链路真实运行</b><span class="wc-exec">codex@cpa</span><kbd>3</kbd></div>
+            <small>排队 · 第 1 位</small>
+          </button>
+          <p class="worker-rail-note">执行者能单独重跑、答复和查看完整会话；元信息仍由调度者统一管理。</p>
         </aside>
+      </div>
+
+      <div class="reply-box team-reply">插一句话（改方向、加要求、直接替它拍板）…
+        <div class="reply-row">
+          <span class="reply-tag">claude-fable-5</span><span class="reply-tag">调度台</span>
+          <button class="send-btn" aria-label="发送">↑</button>
+        </div>
       </div>
     </main>
   </div>
@@ -129,9 +124,8 @@
     <header class="app-bar">
       <span class="kind-chip plain">执行者 2</span>
       <span class="app-title">审查者机制:web 接入</span>
-      <span class="status-pill"><i class="dot"></i>干活中</span>
+      <span class="status-pill amber"><i class="dot"></i>verifying</span>
       <div class="app-actions">
-        <button class="ui-btn">回队列</button>
         <button class="ui-btn icon-btn" data-action="drawer-close" aria-label="关闭抽屉">×</button>
       </div>
     </header>
@@ -139,23 +133,20 @@
       <div class="messages">
         <div class="message user">
           <div class="speaker">调度者派单 · 10:04</div>
-          <div class="bubble"><b>审查者机制:web 接入</b><br>把 shared 层的 isTeamSettled 接进团队视图:时间轴右端收到最后一次活动、useTick 停掉按秒重算、收工团队隐藏「停止全组」。边界:只动 web/src/Team*,shared 层已由执行者 1 定稿。</div>
+          <div class="bubble"><b>审查者机制:web 接入</b><br>把 shared 层的 isTeamSettled 接进团队视图：时间轴右端收到最后一次活动、useTick 停掉按秒重算、收工团队隐藏「停止全组」。</div>
         </div>
         <div class="message">
           <div class="speaker">codex@cpa·gpt-5.6-sol</div>
-          <div class="bubble">时间轴右端已收口。一个要拍板的点已通过提问送出:收工团队上「停止全组」隐藏还是置灰。</div>
+          <div class="bubble">时间轴右端已收口。一个要拍板的点已通过提问送出：收工团队上「停止全组」隐藏还是置灰。</div>
         </div>
-        <div class="event-line">调度者答复:隐藏,判据用 shared 的 isTeamSettled · 10:41</div>
+        <div class="event-line">调度者答复：隐藏，判据用 shared 的 isTeamSettled · 10:41</div>
         <div class="message">
           <div class="speaker">codex@cpa·gpt-5.6-sol</div>
-          <div class="bubble">收到,按隐藏处理。「被停止 ≠ 收工」两个判据各算各的,恢复全组按钮只看内部组是否 paused。正在补这条的回归。</div>
+          <div class="bubble">收到，按隐藏处理。正在补真实浏览器复审和证据截图。</div>
         </div>
       </div>
-      <div class="reply-box">直接指挥这个执行者(会绕过调度者,慎用)…
-        <div class="reply-row">
-          <span class="reply-tag">gpt-5.6-sol</span><span class="reply-tag">xhigh</span>
-          <button class="send-btn" aria-label="发送">↑</button>
-        </div>
+      <div class="reply-box">直接指挥这个执行者（会绕过调度者，慎用）…
+        <div class="reply-row"><span class="reply-tag">gpt-5.6-sol</span><span class="reply-tag">xhigh</span><button class="send-btn" aria-label="发送">↑</button></div>
       </div>
     </section>
   </aside>
