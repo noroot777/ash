@@ -3,6 +3,7 @@ import type { ProjectView, Task } from "@harness/shared";
 import { api } from "../lib/api.ts";
 import { useTasks } from "../lib/useTasks.ts";
 import { TaskDetail } from "../task-detail/TaskDetail.tsx";
+import { TeamView } from "../team/TeamView.tsx";
 import { TaskPlaceholder } from "./TaskPlaceholder.tsx";
 import { WorkspaceSidebar } from "./WorkspaceSidebar.tsx";
 
@@ -128,7 +129,19 @@ export function WorkspaceShell() {
 
       <main className="workspace-main">
         {loadError && <div className="workspace-load-error">{loadError.message}</div>}
-        {selectedTask ? (
+        {selectedTask?.mode === "team" ? (
+          <TeamView
+            task={selectedTask}
+            allTasks={tasks}
+            onTaskUpdate={(updated) => setTasks((current) => current.map((task) => task.id === updated.id ? updated : task))}
+            onTaskDeleted={(deletedId) => {
+              setTasks((current) => current.filter((task) => task.id !== deletedId));
+              if (taskId === deletedId) setTaskId(null);
+            }}
+            onSelectTask={selectTask}
+            notify={notify}
+          />
+        ) : selectedTask ? (
           <TaskDetail
             task={selectedTask}
             allTasks={tasks}
