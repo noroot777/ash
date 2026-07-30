@@ -164,12 +164,17 @@ const collect = async (events: AsyncIterable<AgentEvent>): Promise<AgentEvent[]>
   assert.match(note, /^# /, "应退化成一句说明(以 # 开头,粘到终端也不会误执行)");
   assert.ok(!note.includes("fake --resume"), "说明里不能夹带那条命令");
   assert.match(note, /不能用来 --resume/, "要讲清为什么不能恢复");
-  // 展示侧(会话详情的 resumeCommand)走同一个判定,不能各写一套。antigravity 是
-  // 真实例子:它有交互式 `--resume` 写法,但 harness 拿不到它认得的 id。
-  const shown = resumeCommandFor("antigravity", null, "/tmp/x", "made-up");
-  assert.match(shown, /^# .*无法恢复会话/);
-  assert.ok(!shown.includes("--resume made-up"), "展示侧同样不许拼出引用不存在会话的命令");
-  assert.equal(hasTrustedSessionId(CLI_SPEC_BY_KEY.antigravity), false);
+  // 展示侧(会话详情的 resumeCommand)走同一个判定,不能各写一套。目录里真实存在
+  // 这一档 —— 典型是 kiro:它有 `--resume-id` 无头通道,但首轮 id 由 CLI 产生、纯文本
+  // 输出不回报,harness 捕获不到,所以刻意不声明 session。这里**动态挑**一个这样的
+  // spec,不写死某个 key:B 阶段谁把自己那家的 id 通道查通了(antigravity 就是这么
+  // 从这一档毕业的),这条断言都不该跟着炸。
+  const untrusted = CLI_SPECS.find((s) => !hasTrustedSessionId(s));
+  if (untrusted) {
+    const shown = resumeCommandFor(untrusted.key, null, "/tmp/x", "made-up");
+    assert.match(shown, /^# .*无法恢复会话/, `${untrusted.key}: 展示侧应退化成诚实说明`);
+    assert.ok(!shown.includes("--resume made-up"), "展示侧同样不许拼出引用不存在会话的命令");
+  }
 }
 {
   // 可信的两档照常给命令(claude 有 newIdFlag、codex 有 resumeArgs)
