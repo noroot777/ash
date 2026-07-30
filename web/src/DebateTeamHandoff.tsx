@@ -6,7 +6,7 @@ import { isTeamSettled, workersOf } from "@harness/shared/team";
 import { ExecutorPicker, type ExecutorSelection, useExecutorProfiles } from "./ExecutorPicker";
 import { Modal } from "./Modal";
 import { teamExecutorDefaults } from "./teamExecutorDefaults";
-import { useDetectedAgents } from "./useDetectedAgents";
+import { nothingRunnable, useDetection } from "./useDetectedAgents";
 import { foldTeamStatus } from "./util";
 import { STATUS_META } from "./constants";
 import { StatusIcon } from "./StatusIcon";
@@ -31,7 +31,7 @@ export function TeamHandoffModal({
   const [note, setNote] = useState("");
   const [leadPick, setLeadPick] = useState<ExecutorSelection | null>(null);
   const [workerPick, setWorkerPick] = useState<ExecutorSelection | null>(null);
-  const detected = useDetectedAgents();
+  const { detected, failed: detectFailed } = useDetection();
   const { profiles, providers } = useExecutorProfiles();
 
   const { leadTypes, leadProfiles, workerTypes, leadSelection, workerSelection } = useMemo(
@@ -42,8 +42,12 @@ export function TeamHandoffModal({
     const profile = selection.executorId ? profiles.find((item) => item.id === selection.executorId) : null;
     return `${role} ${profile?.name ?? `默认 ${selection.agentType}`}`;
   };
+  // 一个判据管两条路(按钮 + ⌘↵):一个能干活的执行器都没有时别让它建出一支必然起不来的
+  // 团队。挡板放在 submit 里,新增调用点自动继承(第三轮审查在 TaskComposer 抓到过绕过)。
+  const noExecutor = nothingRunnable(detected, detectFailed, profiles);
+  const canSubmit = !busy && !noExecutor;
   const submit = async () => {
-    if (busy) return;
+    if (!canSubmit) return;
     if (await onConfirm({ note, lead: leadSelection, worker: workerSelection })) onClose();
   };
 
@@ -57,7 +61,7 @@ export function TeamHandoffModal({
           <button onClick={onClose} disabled={busy} className="px-3 py-1.5 text-[13px] text-muted disabled:opacity-40">取消</button>
           <button
             onClick={() => void submit()}
-            disabled={busy}
+            disabled={!canSubmit}
             title={submitShortcutTitle("创建并开干")}
             className="inline-flex items-center gap-1.5 rounded-md bg-cyan-600 px-3.5 py-1.5 text-[13px] font-semibold text-white transition-colors hover:bg-cyan-500 disabled:opacity-40"
           >
@@ -70,6 +74,11 @@ export function TeamHandoffModal({
         <p className="text-[12.5px] leading-relaxed text-muted">
           辩题、结论与完整转写路径会自动带过去。选择谁负责调度，以及执行者默认使用哪个执行器。
         </p>
+        {noExecutor && (
+          <p className="text-[12px] leading-relaxed text-amber-700">
+            本机没检测到任何可用的智能体 CLI，也没有已注册的执行器 —— 建出来的团队起不来，所以先拦住了。
+          </p>
+        )}
         <div className="flex flex-wrap gap-2">
           <ExecutorPicker
             icon={<Crown size={14} />}

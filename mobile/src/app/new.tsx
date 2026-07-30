@@ -262,6 +262,13 @@ export default function NewTask() {
   };
 
   const submit = async () => {
+    // 挡板放在提交函数里,不只挂在按钮的 disabled 上 —— web 那边就是因为只挂了按钮,⌘↵
+    // 绕过去建出一单必然失败的任务(第三轮审查抓到)。mobile 现在没有第二条提交路径,但
+    // 判据留在这里,以后加手势/快捷键自动继承。
+    if (noExecutor) {
+      setError("本机没检测到任何可用的智能体 CLI，也没有已注册的执行器；先装一个或注册一个再建任务");
+      return;
+    }
     if (!projectId) {
       setError("请选择项目");
       return;

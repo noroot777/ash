@@ -272,13 +272,19 @@ export function TaskComposer({
     }
   }, [detected, leadPick, workerPick, reviewerPick, leadTypes, workerTypes, leadSelection, workerSelection, profiles]);
 
+  const schedInvalid = !debateOn && ((launchMode === "once" && !at) || (launchMode === "cron" && !cron.trim()));
+  const canSubmit = (debateOn
+    ? !!debate.topic.trim()
+    : !!body.trim() || seedAttachments.length > 0 || attachments.length > 0) && !busy && !schedInvalid && !noExecutor;
+
+  // 能不能提交只有**一个**判据 canSubmit(上面那几行),`submit()` 自己也照它把门 ——
+  // 光把它接到按钮的 disabled 上不够:⌘↵ 这条路绕过按钮,「界面说拦住了、快捷键照样建出
+  // 一单必然失败的任务」(2026-07-30 第三轮审查抓到)。判据放在提交函数里,新增调用点
+  // 自动继承,不用每处记得再抄一遍。
   const submit = async () => {
+    if (!canSubmit) return;
     const obj = body.trim();
     const topic = debate.topic.trim();
-    const hasTaskContent = !!obj || seedAttachments.length > 0 || attachments.length > 0;
-    if ((debateOn ? !topic : !hasTaskContent) || busy) return;
-    // A timed mode needs its time/expr (guards the Cmd/Ctrl+Enter path, which skips the button).
-    if (!debateOn && ((launchMode === "once" && !at) || (launchMode === "cron" && !cron.trim()))) return;
     setBusy(true);
     try {
       const explicitTitle = title.trim();
@@ -371,10 +377,6 @@ export function TaskComposer({
   // mints the task id — show a generic preview so the user knows the format.
   const taskIdPreview = "harness/<id8>";
   // A scheduled mode needs a valid time/expr before it can submit.
-  const schedInvalid = !debateOn && ((launchMode === "once" && !at) || (launchMode === "cron" && !cron.trim()));
-  const canSubmit = (debateOn
-    ? !!debate.topic.trim()
-    : !!body.trim() || seedAttachments.length > 0 || attachments.length > 0) && !busy && !schedInvalid && !noExecutor;
   const pickMode = (m: LaunchMode) => {
     if (m === "once" && !at) setAt(toLocalInput(new Date(Date.now() + 3600_000).toISOString())); // 默认 +1h
     setLaunchMode(m);

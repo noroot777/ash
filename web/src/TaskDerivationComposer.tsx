@@ -1,13 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { DebateConfig, Task, TeamConfig } from "@harness/shared";
 import { DEFAULT_APP_SETTINGS } from "@harness/shared";
-import { GitBranch, Scales, TreeStructure, UsersThree, X } from "@phosphor-icons/react";
+import { GitBranch, Scales, TreeStructure, UsersThree, Warning, X } from "@phosphor-icons/react";
 import { api } from "./api";
 import { createDebateConfig, DebateComposerFields } from "./DebateComposer";
 import { type ExecutorSelection, useExecutorProfiles } from "./ExecutorPicker";
 import { TeamExecutorFields } from "./composer/ExecutorFields";
 import { teamExecutorDefaults } from "./teamExecutorDefaults";
-import { isExecutorPickable, useDetectedAgents } from "./useDetectedAgents";
+import { isExecutorPickable, nothingRunnable, useDetection } from "./useDetectedAgents";
 import {
   buildTaskDerivationBody,
   defaultDebateTopic,
@@ -57,7 +57,7 @@ export function TaskDerivationComposer({
   const [reviewerPick, setReviewerPick] = useState<ExecutorSelection | null>(null);
   const [reviewerModel, setReviewerModel] = useState("");
   const [reviewerEffort, setReviewerEffort] = useState("");
-  const detected = useDetectedAgents();
+  const { detected, failed: detectFailed } = useDetection();
   const [worktreeContext, setWorktreeContext] = useState<WorktreeContext | null>(null);
   // 用户一旦亲手改过附言/辩题，就停止从回复框同步，免得把手改的内容冲掉。
   const noteTouched = useRef(false);
@@ -106,9 +106,15 @@ export function TaskDerivationComposer({
     worktreeContext?.worktreeDefault ?? DEFAULT_APP_SETTINGS.worktreeDefault,
   );
 
+  // 能不能提交只有**一个**判据,按钮的 disabled 和 `submit()` 共用它 —— 光挂在按钮上不够:
+  // ⌘↵ 那条路绕过按钮(TaskComposer 就这么漏过一次,第三轮审查抓到)。一个能干活的执行器
+  // 都没有时(探测成功、零 available、零已注册 profile)也算不能提交:建出来必然起不来。
+  const noExecutor = nothingRunnable(detected, detectFailed, profiles);
+  const canSubmit = !busy && !!worktreeContext && (teamMode || !!debate.topic.trim()) && !noExecutor;
+
   const submit = async () => {
+    if (!canSubmit) return;
     const topic = debate.topic.trim();
-    if (busy || !worktreeContext || (!teamMode && !topic)) return;
     setBusy(true);
     let created: Task;
     try {
@@ -276,11 +282,17 @@ export function TaskDerivationComposer({
       </div>
 
       <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-line/70 pt-2.5">
+        {noExecutor && (
+          <p className="flex basis-full items-center gap-1 text-[11.5px] text-amber-700">
+            <Warning size={13} className="shrink-0" />
+            本机没检测到任何可用的智能体 CLI，也没有已注册的执行器 —— 建出来的任务起不来，所以先拦住了。
+          </p>
+        )}
         <WorktreeHint context={worktreeContext} worktree={worktree} />
         <button
           type="button"
           onClick={() => void submit()}
-          disabled={busy || !worktreeContext || (!teamMode && !debate.topic.trim())}
+          disabled={!canSubmit}
           title={submitShortcutTitle(teamMode ? "创建并开干" : "创建并开辩")}
           className={`ml-auto inline-flex items-center gap-1.5 rounded-md px-3.5 py-1.5 text-[12.5px] font-semibold text-white transition-colors disabled:opacity-40 ${accent === "cyan" ? "bg-cyan-600 hover:bg-cyan-500" : "bg-violet-600 hover:bg-violet-500"}`}
         >
