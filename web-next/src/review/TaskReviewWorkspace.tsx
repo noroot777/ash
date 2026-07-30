@@ -16,6 +16,7 @@ import { api, type TaskCommit, type TaskDiffResult } from "../lib/api.ts";
 import { AcceptanceControls } from "../team/TeamReviewWorkspace.tsx";
 import { ReviewEvidence } from "../team/ReviewEvidence.tsx";
 import { formatInstant, parseAttachmentText } from "../task-detail/utils.ts";
+import { sharedTeamParent } from "./reviewModel.ts";
 
 type ReviewData = {
   branch: string | null;
@@ -113,6 +114,23 @@ function BranchFacts({ task, data }: { task: Task; data: ReviewData | null }) {
       <div><dt>合入目标</dt><dd>{target}</dd></div>
       <div><dt>比较基点</dt><dd>{data?.diff.mergeBase?.slice(0, 12) || "由服务端解析"}</dd></div>
     </dl>
+  );
+}
+
+function SharedWorkerFacts({ parent, branch }: { parent: Task; branch: string | null }) {
+  const params = new URLSearchParams({ project: parent.projectId, task: parent.id });
+  return (
+    <>
+      <dl className="single-review-facts">
+        <div><dt>执行归属</dt><dd>{parent.title}</dd></div>
+        <div><dt>共享分支</dt><dd><GitBranch size={12} />{branch || "由父团队统一管理"}</dd></div>
+        <div><dt>验收方式</dt><dd>随父团队整体验收</dd></div>
+      </dl>
+      <div className="single-review-shared-note">
+        <div><b>该执行者不单独合入</b><p>代码与同组执行者共同位于父团队共享分支，无法可靠按单个执行者切分 diff。请结合下方审查证据，在团队验收台核对共享改动并统一验收。</p></div>
+        <a href={`/?${params.toString()}`}>打开父团队</a>
+      </div>
+    </>
   );
 }
 
@@ -224,38 +242,48 @@ function DiffViewer({ result }: { result: TaskDiffResult }) {
 
 export function TaskReviewWorkspace({
   task,
+  allTasks,
   onClose,
   onTaskUpdated,
   notify,
 }: {
   task: Task;
+  allTasks: Task[];
   onClose: () => void;
   onTaskUpdated: (task: Task) => void;
   notify: (message: string) => void;
 }) {
   const [data, setData] = useState<ReviewData | null>(null);
+  const [sharedBranch, setSharedBranch] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const objective = parseAttachmentText(task.body).body.trim();
   const display = taskDisplayStatus(task.status, task.stage, !!task.question);
+  const sharedParent = sharedTeamParent(task, allTasks);
 
   useEffect(() => {
     let alive = true;
     setLoading(true);
     setError(null);
-    Promise.all([api.taskCommits(task.id), api.taskDiff(task.id)]).then(
+    setData(null);
+    setSharedBranch(null);
+    const request = sharedParent
+      ? api.taskCommits(sharedParent.id).then((commits) => { if (alive) setSharedBranch(commits.branch); })
+      : Promise.all([api.taskCommits(task.id), api.taskDiff(task.id)]).then(
       ([commits, diff]) => {
         if (alive) setData({ branch: commits.branch, commits: commits.commits, diff });
-      },
+      });
+    request.then(
+      () => undefined,
       (reason) => { if (alive) setError(reason instanceof Error ? reason.message : String(reason)); },
     ).finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
-  }, [task.id, task.updatedAt]);
+  }, [sharedParent?.id, task.id, task.updatedAt]);
 
   return (
     <section className="single-review-workspace">
       <header className="single-review-subbar">
-        <div><b>改动与提交</b><small>核对真实审查证据与任务分支相对基线的 diff</small></div>
+        <div><b>{sharedParent ? "共享执行者审查" : "改动与提交"}</b><small>{sharedParent ? "该执行者随父团队共享分支统一验收" : "核对真实审查证据与任务分支相对基线的 diff"}</small></div>
         <LegacyLink projectId={task.projectId} taskId={task.id} />
         <button type="button" onClick={onClose}><X size={13} />返回对话</button>
       </header>
@@ -265,17 +293,17 @@ export function TaskReviewWorkspace({
             <CaretDown size={13} weight="bold" />
             <i className="single-review-stage-dot" />
             <div>
-              <span><b>{task.title}</b><em>单任务</em><small>{display.label}</small></span>
+              <span><b>{task.title}</b><em>{sharedParent ? "共享执行者" : "单任务"}</em><small>{display.label}</small></span>
               <p>{objective || "未填写任务目标"}</p>
             </div>
-            <AcceptanceControls task={task} onTaskUpdated={onTaskUpdated} notify={notify} />
+            {sharedParent ? <span className="single-review-shared-badge">随团队验收</span> : <AcceptanceControls task={task} onTaskUpdated={onTaskUpdated} notify={notify} />}
           </header>
           <div className="single-review-card-body">
-            <BranchFacts task={task} data={data} />
+            {sharedParent ? <SharedWorkerFacts parent={sharedParent} branch={sharedBranch} /> : <BranchFacts task={task} data={data} />}
             <ReviewEvidence taskId={task.id} />
-            {loading && <p className="single-review-loading"><SpinnerGap size={14} className="is-spinning" />正在汇总提交与 diff…</p>}
-            {!loading && error && <p className="single-review-error">提交与 diff 加载失败：{error}</p>}
-            {!loading && data && (
+            {loading && <p className="single-review-loading"><SpinnerGap size={14} className="is-spinning" />{sharedParent ? "正在读取共享分支归属…" : "正在汇总提交与 diff…"}</p>}
+            {!loading && error && <p className="single-review-error">{sharedParent ? "共享分支归属读取失败" : "提交与 diff 加载失败"}：{error}</p>}
+            {!sharedParent && !loading && data && (
               <div className="single-review-content">
                 <CommitList branch={data.branch} commits={data.commits} />
                 <DiffViewer result={data.diff} />

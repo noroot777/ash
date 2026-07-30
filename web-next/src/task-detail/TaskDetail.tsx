@@ -108,7 +108,7 @@ export function TaskDetail({
         notify={notify}
       />
       {reviewOpen ? (
-        <TaskReviewWorkspace task={task} onClose={() => setReviewOpen(false)} onTaskUpdated={onTaskUpdate} notify={notify} />
+        <TaskReviewWorkspace task={task} allTasks={allTasks} onClose={() => setReviewOpen(false)} onTaskUpdated={onTaskUpdate} notify={notify} />
       ) : <div className="task-detail-body">
         <section className="task-detail-main" aria-label="任务会话">
           <ConversationFeed

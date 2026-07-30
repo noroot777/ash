@@ -25,6 +25,7 @@ import { formatInstant, parseAttachmentText, STATUS_TONES, taskDuration } from "
 import { DebateGateControls, DebateProgressBar } from "./DebateControls.tsx";
 import { DebateHandoffBar, DebateHandoffModal, type HandoffChoice } from "./DebateHandoff.tsx";
 import { buildDebateHandoffBody, latestDebateGate } from "./debateHandoff.ts";
+import { isOpenDebateGate, runCreatedHandoffFollowUps } from "./handoffPolicy.ts";
 import type { DebateTurn } from "./debateState.ts";
 import { useDebate } from "./useDebate.ts";
 
@@ -148,6 +149,7 @@ export function DebateView({
   const turns = debate.state.turns;
   const currentRound = turns.reduce((max, turn) => Math.max(max, turn.round), 0);
   const gate = debate.state.gate ?? latestDebateGate(turns, task.status === "awaiting_review");
+  const gateOpen = isOpenDebateGate(gate, task.status);
   const linkedTeam = useMemo(() => allTasks
     .filter((item) => item.mode === "team" && item.originTaskId === task.id)
     .sort((a, b) => timeMs(b.createdAt) - timeMs(a.createdAt))[0], [allTasks, task.id]);
@@ -197,10 +199,11 @@ export function DebateView({
   const handoff = async (choice: HandoffChoice): Promise<boolean> => {
     if (teamBusy) return false;
     setTeamBusy(true);
+    let created: Task;
     try {
       const freshSessions = await api.sessions(task.id);
       setSessions(freshSessions);
-      const created = await api.createTask({
+      created = await api.createTask({
         projectId: task.projectId,
         title: `落实辩论结论：${task.title}`.slice(0, 60),
         body: buildDebateHandoffBody(task, gate, turns, freshSessions, choice.note),
@@ -216,17 +219,21 @@ export function DebateView({
         },
         autoTitle: false,
       });
-      onTaskCreated(created);
-      if (gate?.open && gate.consensus) await api.gate(task.id, { kind: "approve" });
-      await api.runTask(created.id);
-      notify("已创建团队，辩论结论已接力执行");
-      return true;
     } catch (reason) {
       notify(reason instanceof Error ? reason.message : String(reason));
-      return false;
-    } finally {
       setTeamBusy(false);
+      return false;
     }
+    onTaskCreated(created);
+    setTeamModal(false);
+    const followUpFailures = await runCreatedHandoffFollowUps({
+      closeGate: gateOpen ? () => api.gate(task.id, { kind: "approve" }) : null,
+      startTeam: () => api.runTask(created.id),
+    });
+    setTeamBusy(false);
+    if (!followUpFailures.length) notify("已创建团队，辩论结论已接力执行");
+    else notify(`团队已创建，但${followUpFailures.map(({ phase, reason }) => `${phase === "gate" ? "辩论自动收尾" : "启动"}失败（${reason instanceof Error ? reason.message : String(reason)}）`).join("、")}`);
+    return true;
   };
 
   return (

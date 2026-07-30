@@ -17,11 +17,15 @@
 .single-review-card-head > div em,.single-review-card-head > div small { border-radius:4px; background:var(--raised); padding:1px 5px; color:var(--muted); font-size:9.5px; font-style:normal; }
 .single-review-card-head > div small { background:color-mix(in lch,var(--accent) 8%,var(--raised)); color:var(--accent); }
 .single-review-card-head > div p { display:-webkit-box; overflow:hidden; margin:5px 0 0; color:var(--faint); font-size:10.5px; line-height:1.45; -webkit-box-orient:vertical; -webkit-line-clamp:2; }
+.single-review-shared-badge { display:inline-flex; height:27px; align-items:center; border:1px solid color-mix(in lch,var(--cyan) 28%,var(--line)); border-radius:7px; background:color-mix(in lch,var(--cyan) 6%,var(--panel)); padding:0 8px; color:var(--cyan); font-size:10px; font-weight:650; }
 .single-review-card-body { display:grid; gap:12px; border-top:.5px solid var(--line); background:color-mix(in lch,var(--canvas) 72%,var(--panel)); padding:12px; }
 .single-review-facts { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:8px; margin:0; }
 .single-review-facts > div { min-width:0; border:1px solid var(--line); border-radius:7px; background:var(--panel); padding:7px 8px; }
 .single-review-facts dt { color:var(--faint); font-size:9px; font-weight:700; letter-spacing:.05em; text-transform:uppercase; }
 .single-review-facts dd { display:flex; min-width:0; align-items:center; gap:4px; overflow:hidden; margin:3px 0 0; color:var(--muted); font-family:var(--font-mono); font-size:9.5px; text-overflow:ellipsis; white-space:nowrap; }
+.single-review-shared-note { display:flex; align-items:center; gap:12px; border:1px solid color-mix(in lch,var(--cyan) 24%,var(--line)); border-radius:8px; background:color-mix(in lch,var(--cyan) 5%,var(--panel)); padding:9px 10px; }
+.single-review-shared-note > div { min-width:0; flex:1; }.single-review-shared-note b { color:var(--ink); font-size:10.5px; }.single-review-shared-note p { margin:2px 0 0; color:var(--muted); font-size:9.5px; line-height:1.5; }
+.single-review-shared-note > a { display:inline-flex; height:27px; flex:0 0 auto; align-items:center; border:1px solid var(--line2); border-radius:7px; background:var(--panel); padding:0 8px; color:var(--accent); font-size:9.5px; font-weight:600; }
 .single-review-loading,.single-review-error { display:flex; align-items:center; gap:6px; margin:0; border:1px dashed var(--line2); border-radius:8px; padding:18px; color:var(--faint); font-size:10.5px; }
 .single-review-error { color:var(--red); }
 .single-review-content { display:grid; min-width:0; grid-template-columns:230px minmax(0,1fr); gap:10px; }

@@ -3,6 +3,8 @@ import { ApiError, api } from "../src/lib/api.ts";
 import { applyTaskStatusEvent } from "../src/lib/useTasks.ts";
 import { buildConversationItems, conversationToMarkdown } from "../src/task-detail/conversationModel.ts";
 import { stickStateAfterScroll } from "../src/lib/useStickToBottom.ts";
+import { sharedTeamParent } from "../src/review/reviewModel.ts";
+import { gateAllowsRevision, isOpenDebateGate, runCreatedHandoffFollowUps } from "../src/debate/handoffPolicy.ts";
 
 const originalFetch = globalThis.fetch;
 
@@ -104,6 +106,25 @@ try {
     userDriven: false,
     detaching: false,
   }), false);
+
+  const team = { id: "team-1", mode: "team", projectId: "project-1", title: "父团队" };
+  const sharedWorker = { id: "worker-1", parentId: "team-1", useWorktree: false };
+  assert.equal(sharedTeamParent(sharedWorker, [team])?.id, "team-1");
+  assert.equal(sharedTeamParent({ ...sharedWorker, useWorktree: true }, [team]), null);
+
+  const gate = { gate: "G1", open: true };
+  assert.equal(isOpenDebateGate(gate, "awaiting_review"), true);
+  assert.equal(isOpenDebateGate({ ...gate, consensus: false }, "awaiting_review"), true);
+  assert.equal(isOpenDebateGate(gate, "done"), false);
+  assert.equal(gateAllowsRevision(), true);
+  assert.equal(gateAllowsRevision({ id: "team-1" }), false);
+  const followUps = [];
+  const failures = await runCreatedHandoffFollowUps({
+    closeGate: async () => { followUps.push("gate"); throw new Error("gate failed"); },
+    startTeam: async () => { followUps.push("start"); throw new Error("start failed"); },
+  });
+  assert.deepEqual(followUps, ["gate", "start"]);
+  assert.deepEqual(failures.map(({ phase }) => phase), ["gate", "start"]);
   console.log("数据层回归验证通过");
 } finally {
   globalThis.fetch = originalFetch;

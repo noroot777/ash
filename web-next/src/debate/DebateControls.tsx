@@ -3,6 +3,7 @@ import type { GateAction, Task } from "@harness/shared";
 import { CheckCircle, Question, SpinnerGap, WarningCircle } from "@phosphor-icons/react";
 import type { DebateGate } from "./debateState.ts";
 import { DebateHandoffBar } from "./DebateHandoff.tsx";
+import { gateAllowsRevision } from "./handoffPolicy.ts";
 
 export function DebateGateControls({
   gate,
@@ -38,10 +39,11 @@ export function DebateGateControls({
   };
   const consensus = !!gate.consensus;
   const consensusBy = gate.consensusBy ?? (consensus ? "both" : undefined);
+  const handedOff = !gateAllowsRevision(linkedTeam);
   return (
     <section className="debate-control-shell">
       <div className="debate-control-summary">
-        <span className={consensus ? "is-consensus" : "is-split"}>{consensus ? <CheckCircle size={13} weight="fill" /> : <WarningCircle size={13} weight="fill" />}{consensus ? (consensusBy === "both" ? "双方已收敛" : `辩手 ${consensusBy} 声明一致`) : "双方仍有分歧"}</span>
+        <span className={consensus ? "is-consensus" : "is-split"}>{consensus ? <CheckCircle size={13} weight="fill" /> : <WarningCircle size={13} weight="fill" />}{handedOff ? "结论已交给团队，辩论只剩收尾" : consensus ? (consensusBy === "both" ? "双方已收敛" : `辩手 ${consensusBy} 声明一致`) : "双方仍有分歧"}</span>
         <small>第 {round}{maxRounds ? ` / ${maxRounds}` : ""} 轮 · {gate.gate} 收敛门</small>
       </div>
       {(gate.conclusionA || gate.conclusionB) && (
@@ -52,12 +54,14 @@ export function DebateGateControls({
       )}
       <div className="debate-control-actions">
         <DebateHandoffBar linkedTeam={linkedTeam} busy={busy} onOpenTeam={onOpenTeam} onOpenTask={onOpenTask} />
-        <button type="button" className="is-approve" disabled={busy} onClick={() => void onGate({ kind: "approve" })}>放行结束</button>
-        <button type="button" disabled={busy} onClick={() => void onGate({ kind: "reject" })}>打回终止</button>
-        <button type="button" className={mode === "inject" ? "is-active" : ""} disabled={busy} onClick={() => setMode((current) => current === "inject" ? null : "inject")}>注入意见</button>
-        <button type="button" className={mode === "ask" ? "is-active" : ""} disabled={busy} onClick={() => setMode((current) => current === "ask" ? null : "ask")}><Question size={12} />提问继续</button>
+        <button type="button" className="is-approve" disabled={busy} onClick={() => void onGate({ kind: "approve" })}>{handedOff ? "结束辩论" : "放行结束"}</button>
+        {!handedOff && <>
+          <button type="button" disabled={busy} onClick={() => void onGate({ kind: "reject" })}>打回终止</button>
+          <button type="button" className={mode === "inject" ? "is-active" : ""} disabled={busy} onClick={() => setMode((current) => current === "inject" ? null : "inject")}>注入意见</button>
+          <button type="button" className={mode === "ask" ? "is-active" : ""} disabled={busy} onClick={() => setMode((current) => current === "ask" ? null : "ask")}><Question size={12} />提问继续</button>
+        </>}
       </div>
-      {mode && (
+      {mode && !handedOff && (
         <div className="debate-gate-composer">
           {mode === "ask" && <div className="debate-targets"><span>提问对象</span>{(["both", "A", "B"] as const).map((value) => <button type="button" className={target === value ? "is-selected" : ""} key={value} onClick={() => setTarget(value)}>{value === "both" ? "双方" : `辩手 ${value}`}</button>)}</div>}
           <textarea autoFocus rows={3} value={text} placeholder={mode === "inject" ? "补充意见，双方据此回炉再辩…" : "写下要澄清的问题…"} onChange={(event) => setText(event.target.value)} onKeyDown={(event) => { if ((event.metaKey || event.ctrlKey) && event.key === "Enter") { event.preventDefault(); void submit(); } }} />
