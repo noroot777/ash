@@ -14,7 +14,10 @@ type TaskSection = {
   groups: readonly TaskGroup[];
 };
 
-export type TaskTreeGroup = TaskGroup & { tasks: Task[] };
+export type TaskTreeGroup = TaskGroup & {
+  collapseKey: string;
+  tasks: Task[];
+};
 export type TaskTreeSection = Omit<TaskSection, "groups"> & {
   count: number;
   groups: TaskTreeGroup[];
@@ -95,6 +98,7 @@ export function buildTaskTree(tasks: Task[]): TaskTreeSection[] {
     const groups = section.groups
       .map((group) => ({
         ...group,
+        collapseKey: `${section.key}:${group.key}`,
         tasks: sortTasks(
           sectionTasks.filter(
             (task) => group.matches(task) && (group.pinned || task.pinnedAt == null),

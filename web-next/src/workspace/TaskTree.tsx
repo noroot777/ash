@@ -6,6 +6,8 @@ import { CaretRight, PushPin, Scales, UsersThree } from "@phosphor-icons/react";
 import { ProjectAvatar } from "./ProjectAvatar.tsx";
 import { buildTaskTree, orderedTopLevelTasks } from "./taskTreeModel.ts";
 
+const COLLAPSED_GROUPS_STORAGE_KEY = "harness:taskList:collapsedStatuses";
+
 type TaskTreeProps = {
   projects: ProjectView[];
   currentProjectId: string | null;
@@ -13,6 +15,34 @@ type TaskTreeProps = {
   selectedTaskId: string | null;
   onTask: (task: Task) => void;
 };
+
+function readCollapsedGroups(): Set<string> {
+  try {
+    const raw = window.localStorage.getItem(COLLAPSED_GROUPS_STORAGE_KEY);
+    const parsed: unknown = raw ? JSON.parse(raw) : [];
+    return new Set(Array.isArray(parsed) ? parsed.filter((key): key is string => typeof key === "string") : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function useCollapsedGroups() {
+  const [collapsed, setCollapsed] = useState(readCollapsedGroups);
+  const toggle = (key: string) => {
+    setCollapsed((current) => {
+      const next = new Set(current);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      try {
+        window.localStorage.setItem(COLLAPSED_GROUPS_STORAGE_KEY, JSON.stringify([...next]));
+      } catch {
+        // localStorage can be unavailable; collapsing should still work for this session.
+      }
+      return next;
+    });
+  };
+  return { collapsed, toggle };
+}
 
 function statusTone(task: Task): string {
   if (task.question) return "cyan";
@@ -169,6 +199,7 @@ function CurrentProjectTree({
   onTask: (task: Task) => void;
 }) {
   const sections = useMemo(() => buildTaskTree(tasks), [tasks]);
+  const { collapsed, toggle } = useCollapsedGroups();
   if (!sections.length) return <p className="workspace-task-empty">还没有任务</p>;
   return (
     <>
@@ -178,27 +209,37 @@ function CurrentProjectTree({
             <span>{section.label}</span>
             <em>{section.count}</em>
           </header>
-          {section.groups.map((group) => (
-            <div className="workspace-task-group" key={group.key}>
-              <div className="workspace-task-group-title">
-                <span>{group.label}</span>
-                <em>{group.tasks.length}</em>
+          {section.groups.map((group) => {
+            const isCollapsed = collapsed.has(group.collapseKey);
+            return (
+              <div className="workspace-task-group" key={group.key}>
+                <button
+                  className="workspace-task-group-title"
+                  type="button"
+                  aria-expanded={!isCollapsed}
+                  onClick={() => toggle(group.collapseKey)}
+                  title={isCollapsed ? "展开这一组" : "折叠这一组"}
+                >
+                  <span>{group.label}</span>
+                  <em>{group.tasks.length}</em>
+                  <CaretRight size={9} weight="bold" className={isCollapsed ? "" : "is-open"} aria-hidden="true" />
+                </button>
+                {!isCollapsed && group.tasks.map((task) =>
+                  task.mode === "team" ? (
+                    <TeamRow
+                      key={task.id}
+                      task={task}
+                      allTasks={tasks}
+                      selectedTaskId={selectedTaskId}
+                      onTask={onTask}
+                    />
+                  ) : (
+                    <TaskRow key={task.id} task={task} selectedTaskId={selectedTaskId} onTask={onTask} />
+                  ),
+                )}
               </div>
-              {group.tasks.map((task) =>
-                task.mode === "team" ? (
-                  <TeamRow
-                    key={task.id}
-                    task={task}
-                    allTasks={tasks}
-                    selectedTaskId={selectedTaskId}
-                    onTask={onTask}
-                  />
-                ) : (
-                  <TaskRow key={task.id} task={task} selectedTaskId={selectedTaskId} onTask={onTask} />
-                ),
-              )}
-            </div>
-          ))}
+            );
+          })}
         </section>
       ))}
     </>
