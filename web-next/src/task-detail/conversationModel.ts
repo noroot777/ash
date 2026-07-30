@@ -22,6 +22,8 @@ export type ConversationItem =
       label: string;
       at?: string | null;
       endedAt?: string | null;
+      markerEndedAt?: string | null;
+      showSessionMeta?: boolean;
       session?: Session;
       markdown: string;
       events: AgentAuxEvent[];
@@ -50,7 +52,8 @@ function appendAgent(
     sessionId: event.sessionId,
     label: agentLabel(session, event),
     at: session?.startedAt,
-    endedAt: session?.endedAt,
+    endedAt: null,
+    markerEndedAt: null,
     session,
     markdown: "",
     events: [],
@@ -93,7 +96,8 @@ export function buildConversationItems(
           sessionId: session.id,
           label: agentLabel(session),
           at: session.startedAt,
-          endedAt: segment.endedAt ?? session.endedAt,
+          endedAt: null,
+          markerEndedAt: segment.endedAt ?? null,
           session,
           markdown: segment.text,
           events: [],
@@ -140,6 +144,45 @@ export function buildConversationItems(
     if (event.kind === "tool") agent.events.push({ kind: "tool", label: event.name, detail: event.detail });
     if (event.kind === "thinking") agent.events.push({ kind: "thinking", label: "思考过程", detail: event.text });
     if (event.kind === "error") agent.events.push({ kind: "error", label: event.message });
+  }
+
+  const orderedSessions = [...sessions].sort((left, right) => left.startedAt.localeCompare(right.startedAt));
+  const runEnds = new Map<string, string | null>();
+  orderedSessions.forEach((session, index) => {
+    runEnds.set(session.id, session.endedAt ?? orderedSessions[index + 1]?.startedAt ?? null);
+  });
+
+  let previousInterjectionAt: string | null = null;
+  const seenSessions = new Set<string>();
+  for (const item of items) {
+    if (item.kind === "user" || item.kind === "event") previousInterjectionAt = item.at ?? previousInterjectionAt;
+    if (item.kind !== "agent") continue;
+    const firstTurn = !seenSessions.has(item.sessionId);
+    seenSessions.add(item.sessionId);
+    item.at = firstTurn
+      ? item.session?.startedAt ?? item.at
+      : previousInterjectionAt ?? item.session?.startedAt ?? item.at;
+  }
+
+  let nextInterjectionAt: string | null = null;
+  let rightSessionId: string | undefined;
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    const item = items[index]!;
+    if (item.kind === "user" || item.kind === "event") nextInterjectionAt = item.at ?? nextInterjectionAt;
+    if (item.kind !== "agent") continue;
+    if (item.sessionId !== rightSessionId) {
+      nextInterjectionAt = null;
+      rightSessionId = item.sessionId;
+    }
+    item.endedAt = item.markerEndedAt ?? nextInterjectionAt ?? runEnds.get(item.sessionId) ?? null;
+  }
+
+  const sessionMetaSeen = new Set<string>();
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    const item = items[index]!;
+    if (item.kind !== "agent") continue;
+    item.showSessionMeta = !sessionMetaSeen.has(item.sessionId);
+    sessionMetaSeen.add(item.sessionId);
   }
   return items;
 }

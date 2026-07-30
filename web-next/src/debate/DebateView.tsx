@@ -15,13 +15,13 @@ import {
   Stop,
   Trash,
 } from "@phosphor-icons/react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
 import { LegacyLink } from "../components/LegacyLink.tsx";
+import { MarkdownBody } from "../components/MarkdownBody.tsx";
 import { api } from "../lib/api.ts";
 import { useStickToBottom } from "../lib/useStickToBottom.ts";
 import { DeleteTaskDialog } from "../task-detail/DeleteTaskDialog.tsx";
-import { formatInstant, parseAttachmentText, STATUS_TONES, taskDuration } from "../task-detail/utils.ts";
+import { TaskTimeMeta } from "../task-detail/TaskTimeMeta.tsx";
+import { formatDuration, formatInstant, parseAttachmentText, STATUS_TONES } from "../task-detail/utils.ts";
 import { DebateGateControls, DebateProgressBar } from "./DebateControls.tsx";
 import { DebateHandoffBar, DebateHandoffModal, type HandoffChoice } from "./DebateHandoff.tsx";
 import { buildDebateHandoffBody, latestDebateGate } from "./debateHandoff.ts";
@@ -32,13 +32,6 @@ import { useDebate } from "./useDebate.ts";
 function timeMs(value?: string | null): number {
   const parsed = value ? Date.parse(value) : NaN;
   return Number.isFinite(parsed) ? parsed : 0;
-}
-
-function duration(value?: number): string | null {
-  if (typeof value !== "number") return null;
-  if (value < 1000) return `${value}ms`;
-  const seconds = Math.round(value / 1000);
-  return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
 }
 
 function latestByRole(sessions: Session[]): Partial<Record<Session["role"], Session>> {
@@ -88,7 +81,7 @@ function TurnBubble({
           <span>{side === "B" ? <ChatTeardrop size={12} weight="fill" /> : <ChatCircle size={12} weight="fill" />}{role}</span>
           <b>{session?.executor || fallback}</b>
           {shownAt && <time>{formatInstant(shownAt)}</time>}
-          {typeof turn.durationMs === "number" && <small>⏱ {duration(turn.durationMs)}</small>}
+          {typeof turn.durationMs === "number" && <small>· ⏱ {formatDuration(turn.durationMs)} 用时</small>}
           {turn.raised && <em>✋ 可收敛</em>}
           {!turn.done && <TypingDots />}
         </header>
@@ -96,7 +89,7 @@ function TurnBubble({
           <details className="debate-tool" key={`${tool.name}-${index}`}><summary>{tool.name}</summary>{tool.detail && <pre>{tool.detail}</pre>}</details>
         ))}
         {!turn.done && !turn.text && !turn.tools.length && <p className="debate-thinking">正在组织本轮观点…</p>}
-        {turn.text && <div className="task-markdown"><ReactMarkdown remarkPlugins={[remarkGfm]}>{turn.text}</ReactMarkdown></div>}
+        {turn.text && <MarkdownBody text={turn.text} />}
         {turn.error && <p className="debate-turn-error">{turn.error}</p>}
       </article>
     </div>
@@ -155,7 +148,6 @@ export function DebateView({
     .sort((a, b) => timeMs(b.createdAt) - timeMs(a.createdAt))[0], [allTasks, task.id]);
   const display = taskDisplayStatus(task.status, task.stage, !!task.question);
   const action = actionFor(task);
-  const elapsed = taskDuration(task, Date.now());
 
   const refreshTask = async () => onTaskUpdated(await api.task(task.id));
   const perform = async (kind: Exclude<ReturnType<typeof actionFor>["kind"], null>) => {
@@ -242,7 +234,7 @@ export function DebateView({
         <span className="debate-kind">辩论</span>
         <input value={title} aria-label="辩论标题" onChange={(event) => setTitle(event.target.value)} onBlur={() => void commitTitle()} onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); if (event.key === "Escape") { setTitle(task.title); event.currentTarget.blur(); } }} />
         <span className={`debate-status debate-status--${STATUS_TONES[task.status]}`}><i />{display.label}</span>
-        <time>{elapsed ? `用时 ${elapsed}` : `创建 ${formatInstant(task.createdAt)}`}</time>
+        <TaskTimeMeta task={task} />
         <LegacyLink projectId={task.projectId} taskId={task.id} compact />
         <button type="button" className={action.kind === "stop" ? "is-stop" : "is-primary"} disabled={busy || !action.kind || task.archived} onClick={() => action.kind && void perform(action.kind)}>{busy ? <SpinnerGap size={13} className="is-spinning" /> : action.kind === "stop" ? <Stop size={12} weight="fill" /> : <Play size={12} weight="fill" />}{action.label}</button>
         {!task.archived && canArchive(task.status) && <button type="button" title="归档辩论" onClick={() => void archive()}><Archive size={13} /></button>}

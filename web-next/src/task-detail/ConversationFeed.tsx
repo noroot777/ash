@@ -1,45 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import { ArrowDown, Copy, File, Wrench, X } from "@phosphor-icons/react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
 import type { ConversationItem } from "./conversationModel.ts";
 import { useStickToBottom } from "../lib/useStickToBottom.ts";
+import { MarkdownBody } from "../components/MarkdownBody.tsx";
+import { SessionMeta } from "../components/SessionMeta.tsx";
 import { MessageAttachments } from "./Attachments.tsx";
-import { formatInstant, parseAttachmentText } from "./utils.ts";
+import { durationBetween, formatInstant, parseAttachmentText } from "./utils.ts";
 
 function copyText(text: string) {
   void navigator.clipboard.writeText(text);
-}
-
-function MarkdownBody({
-  text,
-  onPreview,
-}: {
-  text: string;
-  onPreview: (url: string, name: string) => void;
-}) {
-  return (
-    <div className="task-markdown">
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        components={{
-          a: ({ children, ...props }) => <a {...props} target="_blank" rel="noreferrer">{children}</a>,
-          img: ({ src, alt }) => {
-            const url = typeof src === "string" ? src : "";
-            return (
-              <button className="task-markdown-image" type="button" onClick={() => onPreview(url, alt ?? "图片")}>
-                <img src={url} alt={alt ?? ""} />
-              </button>
-            );
-          },
-          pre: ({ children }) => <pre className="task-code-block">{children}</pre>,
-          code: ({ children, className }) => <code className={className}>{children}</code>,
-        }}
-      >
-        {text}
-      </ReactMarkdown>
-    </div>
-  );
 }
 
 function AgentMessage({
@@ -49,6 +18,7 @@ function AgentMessage({
   item: Extract<ConversationItem, { kind: "agent" }>;
   onPreview: (url: string, name: string) => void;
 }) {
+  const duration = durationBetween(item.at, item.endedAt);
   return (
     <article className="task-message task-message--agent">
       <span className="task-message-avatar" aria-hidden="true">{item.label.slice(0, 1).toUpperCase()}</span>
@@ -56,6 +26,11 @@ function AgentMessage({
         <header>
           <b>{item.label}</b>
           {item.at && <time>{formatInstant(item.at)}</time>}
+          {duration && (
+            <small className="task-turn-duration" title={`开始 ${formatInstant(item.at)} · 结束 ${formatInstant(item.endedAt)}`}>
+              · ⏱ {duration} 用时
+            </small>
+          )}
           <button type="button" onClick={() => copyText(item.markdown)} aria-label="复制这条回复">
             <Copy size={13} aria-hidden="true" />
           </button>
@@ -70,6 +45,7 @@ function AgentMessage({
             {event.detail && <pre>{event.detail}</pre>}
           </details>
         ))}
+        {item.showSessionMeta && item.session && <SessionMeta session={item.session} />}
       </div>
     </article>
   );

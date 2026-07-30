@@ -43,16 +43,38 @@ export function formatDuration(milliseconds: number): string {
   return `${seconds}s`;
 }
 
-export function taskDuration(task: Task, now = Date.now()): string | null {
-  if (typeof task.activeMs === "number") {
-    const live = task.liveSince && !task.endedAt ? Math.max(0, now - Date.parse(task.liveSince)) : 0;
-    return formatDuration(task.activeMs + live);
-  }
+export function durationBetween(from?: string | null, to?: string | null): string | null {
+  if (!from || !to) return null;
+  const start = Date.parse(from);
+  const end = Date.parse(to);
+  return Number.isFinite(start) && Number.isFinite(end) ? formatDuration(end - start) : null;
+}
+
+export type TaskDurationInfo = {
+  label: "用时" | "跨度";
+  text: string;
+  title?: string;
+};
+
+export function taskDurationInfo(task: Task, now = Date.now()): TaskDurationInfo | null {
   if (!task.startedAt) return null;
+  const endTitle = task.endedAt ? `结束 ${formatInstant(task.endedAt)}` : undefined;
+  if (typeof task.activeMs === "number") {
+    const liveStart = task.liveSince && !task.endedAt ? Date.parse(task.liveSince) : NaN;
+    const live = Number.isFinite(liveStart) ? Math.max(0, now - liveStart) : 0;
+    return { label: "用时", text: formatDuration(task.activeMs + live), title: endTitle };
+  }
   const start = Date.parse(task.startedAt);
   const end = task.endedAt ? Date.parse(task.endedAt) : now;
   if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
-  return formatDuration(end - start);
+  if (task.activeMs === undefined) {
+    return { label: "用时", text: formatDuration(end - start), title: endTitle };
+  }
+  return {
+    label: "跨度",
+    text: formatDuration(end - start),
+    title: `${endTitle ? `${endTitle} · ` : ""}跨度含等待回复的空闲，非纯执行时长`,
+  };
 }
 
 const ATTACHMENT_HEADER = /^\s*\[用户附带的文件[^\]]*\]\s*$/;

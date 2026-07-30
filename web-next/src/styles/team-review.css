@@ -77,7 +77,7 @@
 .team-review-round > div { border-top: .5px solid var(--line); padding: 9px 10px; color: var(--muted); font-size: 10.5px; line-height: 1.6; }
 .team-review-round > div > :first-child { margin-top: 0; }
 .team-review-round > div > :last-child { margin-bottom: 0; }
-.team-review-round > div code { border-radius: 3px; background: var(--raised); padding: 1px 3px; color: var(--ink); }
+.team-review-round .task-markdown { font-size: 10.5px; line-height: 1.6; }
 .team-review-shots { margin-top: 9px; border-top: .5px solid var(--line); padding-top: 8px; }
 .team-review-shots h5 { display: flex; align-items: center; gap: 5px; margin: 0 0 6px; color: var(--faint); font-size: 9.5px; text-transform: uppercase; }
 .team-review-shots > div { display: grid; grid-template-columns: repeat(auto-fill,minmax(130px,1fr)); gap: 7px; }

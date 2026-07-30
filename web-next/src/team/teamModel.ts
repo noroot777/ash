@@ -1,4 +1,4 @@
-import type { Group, Task, TaskStatus } from "@harness/shared";
+import type { Group, Session, Task, TaskStatus } from "@harness/shared";
 import { taskDisplayStatus } from "@harness/shared";
 import { timeMs, type Batch, type FeedRow as SharedFeedRow } from "@harness/shared/team";
 import type { ConversationItem } from "../task-detail/conversationModel.ts";
@@ -107,12 +107,20 @@ export function statusTone(task: Task): string {
   return tones[task.status];
 }
 
-export function teamLeadLabel(task: Task): string {
-  return task.team?.leadExecutorLabel?.trim() || task.team?.lead || task.executorLabel || "调度者";
+export function teamLeadLabel(task: Task, session?: Session): string {
+  return session?.executor?.trim() || task.team?.leadExecutorLabel?.trim() || task.team?.lead || task.executorLabel || "调度者";
 }
 
 export function teamWorkerLabel(task: Task): string {
   return task.team?.workerExecutorLabel?.trim() || task.team?.worker || "执行者";
+}
+
+export function teamReviewerLabel(task: Task): string {
+  return task.team?.reviewerExecutorLabel?.trim()
+    || task.team?.reviewerAgentType
+    || task.team?.workerExecutorLabel?.trim()
+    || task.team?.worker
+    || "执行者";
 }
 
 export function pausedTeamGroups(groups: Group[]): Group[] {

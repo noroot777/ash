@@ -244,6 +244,7 @@ export function TeamView({
         task={task}
         workers={workers}
         groups={teamGroups}
+        sessions={conversation.sessions}
         haltedByHistory={teamGroups.length === 0 && (historyHalt || localHalted)}
         conversationMarkdown={markdown}
         busy={busy}
