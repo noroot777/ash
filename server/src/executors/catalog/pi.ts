@@ -14,9 +14,7 @@ import type { CliParser, CliParserContext, CliSpec } from "./types.js";
 // 所以 bins:["pi"] 这个占位其实**猜对了命令名、猜错了产品**。保留 key="pi"、把 name /
 // description / 三个检测字段一起校准到真正拥有这个 bin 的产品,是唯一能让本条目自洽的
 // 写法:否则界面会把一个编码智能体标成「Inflection 对话 CLI」,还会按聊天 CLI 的假设去
-// 拼命令行。若调度者本意就是 Inflection 的那个 Pi,那结论是**这一项该删**(两步:shared
-// 的 AGENT_TYPES 去掉 "pi" + 删本文件与 catalog/index.ts 那行 import)—— 那两处都在本
-// 轮的改动边界之外,故未动。
+// 拼命令行。用户已确认(2026-07-30):要的就是 pi.dev 的这个 Pi。
 export const piSpec: CliSpec = {
   key: "pi",
   name: "Pi",
@@ -37,8 +35,7 @@ export const piSpec: CliSpec = {
   notes:
     "⚠️ 身份已校准:原 stub 写的 Inflection Pi **没有官方 CLI**(pi.ai 只有网页/手机端 + 纯聊天 API," +
     "第三方 inflection-pi-api 停更于 2023 且模型无工具调用);`pi` 这个命令名的实际主人是 Earendil 的 " +
-    "Pi Coding Agent(pi.dev / GitHub earendil-works/pi,MIT)。本条目已整体改指后者 —— 它是真编码智能体," +
-    "能派任务。若本意是 Inflection 的 Pi,请删掉整项(AGENT_TYPES + 本文件 + catalog/index.ts 的 import)。" +
+    "Pi Coding Agent(pi.dev / GitHub earendil-works/pi,MIT)。本条目已整体改指后者(用户 2026-07-30 确认)。" +
     "执行参数依据 2026-07-30 阅读的 v0.83.0 源码(packages/coding-agent/src/cli/args.ts 的 parseArgs+printHelp、" +
     "modes/print-mode.ts、main.ts 的 resolveAppMode/readPipedStdin/session 解析、core/session-manager.ts)与 docs/json.md," +
     "**本机未装、未实测,故 untested 保留**。要点:" +
