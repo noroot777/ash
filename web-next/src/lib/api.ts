@@ -58,13 +58,17 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(apiPath(path), init);
   const body = await parseBody(response);
   if (!response.ok) {
-    const message =
-      typeof body === "object" && body !== null && "error" in body && typeof body.error === "string"
-        ? body.error
-        : `${response.status} 请求失败`;
-    throw new ApiError(response.status, message, body);
+    throw apiError(response, body);
   }
   return body as T;
+}
+
+function apiError(response: Response, body: unknown): ApiError {
+  const message =
+    typeof body === "object" && body !== null && "error" in body && typeof body.error === "string"
+      ? body.error
+      : `${response.status} 请求失败`;
+  return new ApiError(response.status, message, body);
 }
 
 function json(method: string, body?: unknown): RequestInit {
@@ -97,23 +101,57 @@ export type TaskDiffResult = {
   reason?: string;
 };
 
-export type AcceptTaskResult =
-  | {
-      accepted: true;
-      taskId: string;
-      status: string;
-      stage: "accepted";
-      kind: "already_accepted" | "in_place" | "isolated_worktree";
-      warnings?: { reason: string; message: string; worktreePath?: string }[];
-    }
-  | {
-      accepted: false;
-      taskId: string;
-      reason: string;
-      error: string;
-      conflictFiles?: string[];
-      dirtyFiles?: string[];
-    };
+export type AcceptTaskWarning = {
+  reason: "temporary_cleanup_failed";
+  message: string;
+  worktreePath: string;
+};
+
+export type AcceptTaskSuccess = {
+  accepted: true;
+  taskId: string;
+  status: string;
+  stage: "accepted";
+  kind: "already_accepted" | "in_place" | "isolated_worktree";
+  sharedWorkersAccepted?: number;
+  targetBranch?: string;
+  merge?: string;
+  worktreePath?: string;
+  worktreeRemoved?: boolean;
+  branch?: string;
+  branchDeleted?: boolean;
+  warnings?: AcceptTaskWarning[];
+};
+
+export type AcceptTaskFailure = {
+  accepted: false;
+  taskId: string;
+  reason: string;
+  error: string;
+  status?: string;
+  sourceBranch?: string;
+  targetBranch?: string | null;
+  conflictFiles?: string[];
+  dirtyFiles?: string[];
+  targetPath?: string;
+  worktreePath?: string;
+  phase?: "initial" | "before_accept" | "before_merge" | "before_cleanup";
+  inFlightTasks?: {
+    id: string;
+    title: string;
+    status: string;
+    role: "task" | "shared_worker";
+  }[];
+  warnings?: AcceptTaskWarning[];
+  conflictHandoff?: { notified: boolean; message: string };
+};
+
+export type AcceptTaskResult = AcceptTaskSuccess | AcceptTaskFailure;
+
+function isAcceptTaskResult(body: unknown): body is AcceptTaskResult {
+  return typeof body === "object" && body !== null && "accepted" in body &&
+    typeof body.accepted === "boolean";
+}
 
 export type DetectedCli = {
   key: string;
@@ -254,8 +292,12 @@ export const api = {
     request(`/tasks/${id(taskId)}/review/dispatch`, json("POST", input)),
   taskReviewFileUrl: (taskId: string, round: number, name: string): string =>
     apiPath(`/tasks/${id(taskId)}/review/file?round=${id(String(round))}&name=${id(name)}`),
-  acceptTask: (taskId: string): Promise<AcceptTaskResult> =>
-    request(`/tasks/${id(taskId)}/accept`, { method: "POST" }),
+  acceptTask: async (taskId: string): Promise<AcceptTaskResult> => {
+    const response = await fetch(apiPath(`/tasks/${id(taskId)}/accept`), { method: "POST" });
+    const body = await parseBody(response);
+    if (isAcceptTaskResult(body)) return body;
+    throw apiError(response, body);
+  },
   taskDiff: (taskId: string): Promise<TaskDiffResult> =>
     request(`/tasks/${id(taskId)}/diff`),
   taskCommits: (taskId: string): Promise<{ branch: string | null; commits: TaskCommit[] }> =>

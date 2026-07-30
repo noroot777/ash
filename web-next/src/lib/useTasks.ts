@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import type { Task } from "@harness/shared";
+import type { ServerEvent, Task } from "@harness/shared";
 import { api } from "./api.ts";
 import { useServerEvents } from "./events.ts";
 
@@ -10,6 +10,20 @@ function upsert(tasks: Task[], task: Task, projectId?: string): Task[] {
   return tasks.some((item) => item.id === task.id)
     ? tasks.map((item) => (item.id === task.id ? task : item))
     : [task, ...tasks];
+}
+
+type TaskStatusEvent = Extract<ServerEvent, { type: "task.status" }>;
+
+export function applyTaskStatusEvent(task: Task, event: TaskStatusEvent): Task {
+  if (task.id !== event.taskId) return task;
+  return {
+    ...task,
+    status: event.status,
+    startedAt: event.startedAt !== undefined ? event.startedAt : task.startedAt,
+    endedAt: event.endedAt !== undefined ? event.endedAt : task.endedAt,
+    activeMs: event.activeMs !== undefined ? event.activeMs : task.activeMs,
+    liveSince: event.liveSince !== undefined ? event.liveSince : task.liveSince,
+  };
 }
 
 export function useTasks(projectId?: string) {
@@ -41,16 +55,7 @@ export function useTasks(projectId?: string) {
         return;
       }
       if (event.type === "task.status") {
-        setTasks((current) => current.map((task) => task.id === event.taskId
-          ? {
-              ...task,
-              status: event.status,
-              startedAt: event.startedAt ?? task.startedAt,
-              endedAt: event.endedAt ?? task.endedAt,
-              activeMs: event.activeMs ?? task.activeMs,
-              liveSince: event.liveSince ?? task.liveSince,
-            }
-          : task));
+        setTasks((current) => current.map((task) => applyTaskStatusEvent(task, event)));
         return;
       }
       if (event.type === "task.stage") {

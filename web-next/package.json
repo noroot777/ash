@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "node ../scripts/check-conventions.mjs && tsc -b && vite build",
+    "test:data-layer": "node --experimental-strip-types scripts/test-data-layer.mjs",
     "typecheck": "tsc -p tsconfig.json",
     "preview": "vite preview"
   },
