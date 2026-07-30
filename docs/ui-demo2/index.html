@@ -21,12 +21,18 @@
   .nav-card .no{color:var(--accent);font:700 11px ui-monospace,monospace}
   .nav-card b{display:block;margin:5px 0 3px;font-size:14px}
   .nav-card small{color:var(--muted);font-size:11px;line-height:1.5;display:block}
-  .cols-diagram{display:grid;grid-template-columns:240fr 264fr 640fr 306fr;gap:6px;border:1px solid var(--line2);border-radius:12px;background:var(--canvas);padding:10px;min-height:170px}
+  .cols-diagram{display:grid;grid-template-columns:260fr 640fr 306fr;gap:6px;border:1px solid var(--line2);border-radius:12px;background:var(--canvas);padding:10px;min-height:190px}
   .cols-diagram>div{display:flex;flex-direction:column;justify-content:flex-end;border:1px solid var(--line2);border-radius:8px;background:var(--panel);padding:10px}
   .cols-diagram>div.global{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent-soft)}
   .cols-diagram b{font-size:12px}
   .cols-diagram small{color:var(--muted);font-size:10.5px;line-height:1.5}
   .cols-diagram .w{margin-bottom:auto;color:var(--faint);font:650 10px ui-monospace,monospace}
+  .evo{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-top:14px}
+  .evo>div{border:1px solid var(--line2);border-radius:12px;background:var(--panel);padding:12px 14px}
+  .evo b{display:block;font-size:12.5px;margin-bottom:3px}
+  .evo small{color:var(--muted);font-size:11px;line-height:1.55;display:block}
+  .evo .tag{display:inline-block;margin-bottom:7px;border-radius:5px;background:var(--raised);padding:2px 8px;color:var(--muted);font-size:10px;font-weight:750}
+  .evo .tag.now{background:var(--accent-soft);color:var(--accent)}
   .two-col{display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:start}
   .answer{border:1px solid var(--line2);border-radius:12px;background:var(--panel);padding:16px 18px}
   .answer h3{margin:0 0 6px;font-size:15px}
@@ -67,69 +73,72 @@
 </head>
 <body>
   <main class="doc">
-    <p class="eyebrow">Harness Web · 讨论稿 v2 · 信息架构改版</p>
-    <h1>一条侧边栏,页面优先。</h1>
-    <p class="lede"><b>本轮定了两件事:</b>其一,去掉专职项目窄栏,换成 Linear 式<b>单一侧边栏</b>——项目切换器、任务/智能体/分组/已归档/项目设置/随手记全部住进这 240px;其二,除 ⌘K 和随手记外<b>不再有任何中心弹窗</b>:设置类 Modal 全部改成页面,队列改成右侧抽屉。全部页面共用右下角<b>方案切换器</b>(列表选中态三选一 × 灰阶两版,选择跨页面记住)。</p>
+    <p class="eyebrow">Harness Web · 讨论稿 v2 · 第三轮 · 复刻 Linear 信息架构</p>
+    <h1>任务树入侧栏,设置单开页。</h1>
+    <p class="lede"><b>本轮对照 Linear 截图定了三件事:</b>其一,任务列表并进侧边栏——当前项目在侧栏里直接展开为<b>任务树</b>,全局从四栏收成<b>三栏</b>;其二,智能体 / 项目设置 / 分组 / 已归档合并成 Linear 式<b>单开设置页</b>(带「← 返回应用」的独立整页),入口在项目下拉的「设置」项;其三,随手记入口变成侧栏顶部的<b>便签图标</b>,与搜索、新建任务并排,弹层本体和 ⌘K 都不变。全部页面共用右下角<b>方案切换器</b>(列表选中态三选一 × 灰阶两版,选择跨页面记住)。</p>
 
     <h2>演示页目录</h2>
-    <p class="sub">顶部导航条在每一页都有,可随时横跳;侧边栏里的导航项也是真链接,可以直接当产品点。</p>
+    <p class="sub">顶部导航条在每一页都有,可随时横跳;侧边栏任务树的行、顶部三图标、项目下拉里的「设置」都是真链接,可以直接当产品点。</p>
     <div class="card-grid">
-      <a class="nav-card" href="shell.html"><span class="no">01</span><b>主视图 · 项目切换</b><small>单一侧边栏 + 任务页三栏,项目下拉默认打开</small></a>
+      <a class="nav-card" href="shell.html"><span class="no">01</span><b>主视图 · 项目切换</b><small>三栏结构 + 侧栏任务树,项目下拉默认打开(含「设置」项)</small></a>
       <a class="nav-card" href="task.html"><span class="no">02</span><b>单任务 · 队列抽屉</b><small>会话 + Inspector;点「查看队列」右侧滑出抽屉</small></a>
       <a class="nav-card" href="team.html"><span class="no">03</span><b>团队调度台</b><small>调度流 + 右栏 tab + 时间轴一行收起 + 执行者抽屉</small></a>
       <a class="nav-card" href="debate.html"><span class="no">04</span><b>辩论视图</b><small>配置卡 + 双方发言流 + 底部控制条</small></a>
       <a class="nav-card" href="review.html"><span class="no">05</span><b>验收 Diff 工作区</b><small>文件树 + diff + 验收按钮组 + 合并目标</small></a>
-      <a class="nav-card" href="composer.html"><span class="no">06</span><b>新建任务面板</b><small>内嵌非弹层;single/team/debate 模式切换</small></a>
-      <a class="nav-card" href="agents.html"><span class="no">07</span><b>智能体(页面)</b><small>原 Modal → 全页面,Linear 设置页式左目录 + 分节卡片</small></a>
-      <a class="nav-card" href="settings.html"><span class="no">08</span><b>项目设置(页面)</b><small>原 Modal → 全页面:基本信息 / 运行默认 / 危险区</small></a>
-      <a class="nav-card" href="groups.html"><span class="no">09</span><b>分组(页面)</b><small>原 Modal → 全页面,行内直接运行整组</small></a>
-      <a class="nav-card" href="archive.html"><span class="no">10</span><b>已归档(页面)</b><small>原列表头图标切换 → 独立页面,可还原</small></a>
-      <a class="nav-card" href="notes.html"><span class="no">11</span><b>随手记(保留弹层)</b><small>左列表右编辑 Modal,用户点名保留</small></a>
-      <a class="nav-card" href="palette.html"><span class="no">12</span><b>命令面板 ⌘K(保留)</b><small>全屏 overlay:切项目 / 任务 / 命令</small></a>
+      <a class="nav-card" href="composer.html"><span class="no">06</span><b>新建任务面板</b><small>内嵌非弹层;single/team/debate 模式切换;侧栏 ✎ 直达</small></a>
+      <a class="nav-card" href="settings-agents.html"><span class="no">07</span><b>设置 · 智能体</b><small>单开页:执行器 Profile / 默认规则 / claude / codex</small></a>
+      <a class="nav-card" href="settings-project.html"><span class="no">08</span><b>设置 · 项目</b><small>单开页:基本信息 / 运行默认 / 危险区</small></a>
+      <a class="nav-card" href="settings-groups.html"><span class="no">09</span><b>设置 · 分组</b><small>单开页:全部分组行内运行 + 新建</small></a>
+      <a class="nav-card" href="settings-archive.html"><span class="no">10</span><b>设置 · 已归档</b><small>单开页:归档列表,可还原</small></a>
+      <a class="nav-card" href="notes.html"><span class="no">11</span><b>随手记(保留弹层)</b><small>入口改为侧栏顶部便签图标,弹层本体不变</small></a>
+      <a class="nav-card" href="palette.html"><span class="no">12</span><b>命令面板 ⌘K(保留)</b><small>全屏 overlay:切项目 / 任务 / 命令;侧栏 ⌕ 直达</small></a>
     </div>
 
-    <h2>决定一:单一侧边栏,四栏变三栏</h2>
-    <p class="sub">旧稿最左边是个专职项目窄栏(一个导航项 + 大片空白),信息密度太低。现在项目切换器和全部导航收进一条 240px 侧边栏;它是<b>全局壳</b>,右边整块随导航项换页:选「任务」= 任务列表 + 会话正文 + Inspector 三栏,选其它 = 对应全页面。</p>
+    <h2>决定一:任务列表并进侧边栏,四栏变三栏</h2>
+    <p class="sub">对照 Linear 侧栏的「Your teams」区:当前项目在侧边栏里直接展开成任务树,其他项目折叠成一行可点开。独立的任务列表栏取消,主区域只剩会话正文 + Inspector。</p>
     <div class="cols-diagram">
-      <div class="global"><span class="w">240px · 全局常驻</span><b>单一侧边栏</b><small>顶:项目切换器(头像+名+▾,下拉带搜索/齿轮/新建);中:任务(计数)/智能体/分组/已归档/项目设置/随手记;底:搜索 ⌘K / 连接状态 / 收起</small></div>
-      <div><span class="w">264px · 任务页</span><b>① 任务列表</b><small>头:分支 chip + 新建;身:协作任务与普通任务按状态分段,团队行可展开执行者。分组/归档/随手记入口移去侧边栏,头部不再挤图标</small></div>
-      <div><span class="w">自适应 · 任务页</span><b>② 主工作区</b><small>44px 头栏(类型 chip · 标题 · 状态 pill · 高频动作),下面按任务类型切换:会话 / 调度流 / 辩论 / diff / 新建面板</small></div>
-      <div><span class="w">306px · 任务页</span><b>③ Inspector</b><small>属性、执行信息、队列(点开右侧抽屉)、审查轮次、prompt 原文;团队页与执行者栏合并为带 tab 的右栏;▥ 一键收起</small></div>
+      <div class="global"><span class="w">~260px · 全局常驻</span><b>侧边栏(含任务树)</b><small>顶:项目切换器 + 三图标(⌕ 搜索 / ▤ 随手记 / ✎ 新建);中:当前项目任务树——协作任务(进行中 / 已验收,团队行展开执行者子行带状态微点)、普通任务(运行中 / 提问中 / 已完成);再往下「其他项目」折叠行;底:连接状态 / 收起</small></div>
+      <div><span class="w">自适应</span><b>① 会话正文</b><small>44px 头栏(类型 chip · 标题 · 状态 pill · 高频动作),下面按任务类型切换:会话 / 调度流 / 辩论 / diff / 新建面板</small></div>
+      <div><span class="w">306px</span><b>② Inspector</b><small>属性、执行信息、队列(点开右侧抽屉)、审查轮次、prompt 原文;团队页与执行者栏合并为带 tab 的右栏;▥ 一键收起</small></div>
     </div>
-    <p class="callout">侧边栏「任务」项的选中态吃的就是全局方案——切 S1/S2/S3,侧边栏、任务列表、下拉、⌘K 一起变。</p>
+    <div class="evo">
+      <div><span class="tag">v1 · 第一轮</span><b>四栏:项目窄栏独立</b><small>专职项目窄栏 + 任务列表 + 正文 + Inspector,最左一栏信息密度太低。</small></div>
+      <div><span class="tag">v2 · 第二轮</span><b>四栏:单一侧边栏</b><small>项目切换器和导航收进一条 240px 侧栏,但任务列表仍是独立第二栏。</small></div>
+      <div><span class="tag now">v3 · 本轮</span><b>三栏:任务树入侧栏</b><small>任务列表并进侧栏成为任务树,导航项(智能体 / 分组 / 已归档 / 项目设置 / 随手记)全部撤出——去向见决定二、三。</small></div>
+    </div>
+    <p class="callout">任务树的选中行吃的就是全局选中态方案——切 S1/S2/S3,任务树、下拉、⌘K、设置页列表一起变。</p>
 
-    <h2>决定二:弹窗 → 页面 / 抽屉,对照清单</h2>
-    <p class="sub">判据:要「沉浸编辑或浏览一批东西」的去页面;要「就着当前上下文看一眼」的用侧滑抽屉;只有「快速一击」(⌘K)和「随时随地记一笔」(随手记)保留弹层。删除确认这类小 confirm 不在本次演示范围。</p>
+    <h2>决定二:管理页合并成 Linear 式「单开设置页」</h2>
+    <p class="sub">仿 Linear Settings:独立于主应用的整页,左侧设置专用窄栏(顶部「← 返回应用」+ 搜索框,下面按组分导航),右侧内容区。入口只有一个——项目下拉里的「设置」项(齿轮同跳)。</p>
     <div class="map-table">
-      <div class="map-row"><b>功能</b><b>原形态</b><b>新形态</b></div>
-      <div class="map-row"><b>智能体 AgentsPanel</b><span>居中 Modal</span><span><i class="map-tag page">页面</i><a href="agents.html" style="color:var(--accent)">agents.html</a> · 侧边栏直达</span></div>
-      <div class="map-row"><b>项目设置</b><span>居中 Modal</span><span><i class="map-tag page">页面</i><a href="settings.html" style="color:var(--accent)">settings.html</a> · 侧边栏 / 项目下拉齿轮</span></div>
-      <div class="map-row"><b>分组管理 GroupsPanel</b><span>居中 Modal</span><span><i class="map-tag page">页面</i><a href="groups.html" style="color:var(--accent)">groups.html</a> · 独立成页,不并进设置</span></div>
-      <div class="map-row"><b>已归档</b><span>列表头图标切换</span><span><i class="map-tag page">页面</i><a href="archive.html" style="color:var(--accent)">archive.html</a></span></div>
-      <div class="map-row"><b>队列 QueueModal</b><span>居中 Modal</span><span><i class="map-tag drawer">右侧抽屉</i>从 Inspector「查看队列」滑出,见 <a href="task.html" style="color:var(--accent)">02</a></span></div>
+      <div class="map-row"><b>功能</b><b>上一轮形态</b><b>本轮去向</b></div>
+      <div class="map-row"><b>智能体 AgentsPanel</b><span>独立页 + 侧栏入口</span><span><i class="map-tag page">设置页</i><a href="settings-agents.html" style="color:var(--accent)">settings-agents.html</a> · 「智能体」组:Profile / 默认规则 / claude / codex</span></div>
+      <div class="map-row"><b>项目设置</b><span>独立页 + 侧栏入口</span><span><i class="map-tag page">设置页</i><a href="settings-project.html" style="color:var(--accent)">settings-project.html</a> · 「项目」组</span></div>
+      <div class="map-row"><b>分组管理 GroupsPanel</b><span>独立页 + 侧栏入口</span><span><i class="map-tag page">设置页</i><a href="settings-groups.html" style="color:var(--accent)">settings-groups.html</a> · 「项目」组</span></div>
+      <div class="map-row"><b>已归档</b><span>独立页 + 侧栏入口</span><span><i class="map-tag page">设置页</i><a href="settings-archive.html" style="color:var(--accent)">settings-archive.html</a> · 「项目」组</span></div>
+      <div class="map-row"><b>队列 QueueModal</b><span>右侧抽屉</span><span><i class="map-tag drawer">右侧抽屉</i>保留,从 Inspector「查看队列」滑出,见 <a href="task.html" style="color:var(--accent)">02</a></span></div>
       <div class="map-row"><b>执行者详情</b><span>右侧抽屉</span><span><i class="map-tag drawer">右侧抽屉</i>保留,见 <a href="team.html" style="color:var(--accent)">03</a></span></div>
-      <div class="map-row"><b>新建任务</b><span>居中 Modal</span><span><i class="map-tag page">内嵌面板</i>上一轮已定,见 <a href="composer.html" style="color:var(--accent)">06</a></span></div>
-      <div class="map-row"><b>随手记</b><span>居中 Modal</span><span><i class="map-tag keep">保留弹层</i>用户点名保留,任何页面一键呼出</span></div>
-      <div class="map-row"><b>命令面板 ⌘K</b><span>全屏 overlay</span><span><i class="map-tag keep">保留弹层</i>快路语义,天然是弹层</span></div>
+      <div class="map-row"><b>新建任务</b><span>内嵌面板</span><span><i class="map-tag keep">保留</i>侧栏顶部 ✎ 直达,见 <a href="composer.html" style="color:var(--accent)">06</a></span></div>
+      <div class="map-row"><b>随手记</b><span>弹层 + 侧栏导航项</span><span><i class="map-tag keep">保留弹层</i>入口改为侧栏顶部 ▤ 图标,见决定三</span></div>
+      <div class="map-row"><b>命令面板 ⌘K</b><span>全屏 overlay</span><span><i class="map-tag keep">保留弹层</i>侧栏顶部 ⌕ 图标 / 快捷键</span></div>
     </div>
 
-    <h2>项目切换:还是左上角那一个控件</h2>
+    <h2>决定三:侧栏顶部三图标</h2>
     <div class="two-col">
       <div class="answer">
-        <span class="q">入口不变,壳变了</span>
-        <h3>项目住在侧边栏顶部。</h3>
-        <p>「头像 + 项目名 + ▾」点开即下拉:当前项目(带仓库路径和设置齿轮,齿轮现在跳设置页)、搜索框、「切换到」列表、底部新建项目。⌘K 里保留「切换项目」命令作为键盘快路。</p>
-        <p>下拉里的当前项高亮吃选中态方案——去 <a href="shell.html" style="color:var(--accent)">01 主视图</a>(默认开着下拉)切 S1/S2/S3 看效果。</p>
+        <span class="q">⌕ ▤ ✎</span>
+        <h3>搜索、随手记、新建,一排住在项目切换器右侧。</h3>
+        <p>对应 Linear 顶部搜索 + 铅笔钮的位置:⌕ 打开 ⌘K,▤ 打开随手记弹层(用户指定放这里),✎ 打开新建任务面板。旧侧栏的五个导航项(智能体 / 分组 / 已归档 / 项目设置 / 随手记)全部撤出,侧栏主体让给任务树。</p>
       </div>
       <div class="answer">
-        <span class="q">头部压缩(前两轮已定)</span>
-        <h3>44px 一条头栏,九种内容一套语法。</h3>
-        <p>标题、状态、高频动作常驻;元信息、统计、审查、prompt 全部进 Inspector 按需读取。团队页右侧 WorkerRail 与 Inspector 合并为带 tab 的右栏,时间轴收成一行摘要点开展开。</p>
+        <span class="q">项目下拉</span>
+        <h3>下拉保留,新增「设置」入口项。</h3>
+        <p>「头像 + 项目名 + ▾」点开:当前项目(仓库路径 + 齿轮)、<b>设置</b>项(单开设置页唯一入口)、搜索框、「切换到」列表、新建项目。⌘K 里保留「切换项目」命令作为键盘快路。去 <a href="shell.html" style="color:var(--accent)">01 主视图</a>(默认开着下拉)看效果。</p>
       </div>
     </div>
 
     <h2>列表选中态 · 三案色值</h2>
-    <p class="sub">下面三行是活的——用右下角切换器切换,三张卡里只有对应方案的那张与当前全局一致;所有演示页的列表、侧边栏、下拉、命令面板同步变。</p>
+    <p class="sub">下面三行是活的——用右下角切换器切换,三张卡里只有对应方案的那张与当前全局一致;所有演示页的任务树、下拉、命令面板同步变。</p>
     <div class="sel-cards">
       <div class="sel-card">
         <div class="sc-head"><b>S1 淡染 + 指示条</b><small>定位最快,推荐</small></div>
@@ -164,7 +173,7 @@
       <div class="token-row"><b>faint</b><span><i class="cdot" style="background:#9ca1a9"></i>#9ca1a9</span><span><i class="cdot" style="background:#8a8f98"></i>#8a8f98(限装饰)</span></div>
       <div class="token-row"><b>accent</b><span><i class="cdot" style="background:#5e6ad2"></i>#5e6ad2</span><span><i class="cdot" style="background:#5e6ad2"></i>#5e6ad2(不变)</span></div>
     </div>
-    <p class="callout">整套演示零外部依赖,file:// 直接打开;方案选择存 localStorage,十二个页面同步。这是讨论稿,不含任何产品代码改动。</p>
+    <p class="callout">整套演示零外部依赖,file:// 直接打开;方案选择存 localStorage,全部页面同步。这是讨论稿,不含任何产品代码改动。</p>
   </main>
   <script src="app.js"></script>
 </body>

@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
+<title>设置 · 已归档 — Harness UI 讨论稿 v2</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="settings-shell">
+    <div data-include="settings-side" data-active="archive"></div>
+    <main class="set-main">
+      <div class="set-inner">
+        <h1 class="set-title">已归档</h1>
+        <p class="set-sub">harness · 5 个任务。归档只影响任务树可见性,会话与分支原样保留。</p>
+
+        <h3 class="sect-title">已归档任务<small>原任务列表头的「列表 / 已归档」切换 → 设置页;可还原</small></h3>
+        <div class="sect-card">
+          <div style="padding:6px 0">
+            <div class="agent-row selectable selected">
+              <span class="wc-ava">T</span>
+              <span class="at"><b>移动端会话贴底重构</b><small>团队 · 已验收合并 · 归档于 07/28</small></span>
+              <button class="ui-btn" style="height:24px;font-size:10px">还原</button>
+            </div>
+            <div class="agent-row selectable">
+              <span class="wc-ava">任</span>
+              <span class="at"><b>Tip aria-label 可访问名称回补</b><small>已验收 · 归档于 07/27</small></span>
+              <button class="ui-btn" style="height:24px;font-size:10px">还原</button>
+            </div>
+            <div class="agent-row selectable">
+              <span class="wc-ava">任</span>
+              <span class="at"><b>对称计账做进 pre-commit 闸</b><small>已验收 · 归档于 07/26</small></span>
+              <button class="ui-btn" style="height:24px;font-size:10px">还原</button>
+            </div>
+            <div class="agent-row selectable">
+              <span class="wc-ava">辩</span>
+              <span class="at"><b>评审:Inspector 折叠策略</b><small>辩论 · 已裁决 · 归档于 07/25</small></span>
+              <button class="ui-btn" style="height:24px;font-size:10px">还原</button>
+            </div>
+            <div class="agent-row selectable">
+              <span class="wc-ava">任</span>
+              <span class="at"><b>SSE 事件去重实验(证伪)</b><small>failed · 归档于 07/24</small></span>
+              <button class="ui-btn" style="height:24px;font-size:10px">还原</button>
+            </div>
+          </div>
+          <div class="sc-foot"><span class="hint">还原后回到任务树原状态段</span></div>
+        </div>
+      </div>
+    </main>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>

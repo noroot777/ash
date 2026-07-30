@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
+<title>设置 · 项目 — Harness UI 讨论稿 v2</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="settings-shell">
+    <div data-include="settings-side" data-active="project"></div>
+    <main class="set-main">
+      <div class="set-inner">
+        <h1 class="set-title">项目设置</h1>
+        <p class="set-sub">harness · <span class="mono">~/code/harness</span> · 项目下拉「设置」项与齿轮都跳到这里。</p>
+
+        <h3 class="sect-title">基本信息<small>原 ProjectSettings Modal → 设置页</small></h3>
+        <div class="sect-card">
+          <div class="form-block"><label>项目名称</label>
+            <input class="form-input" value="harness">
+          </div>
+          <div class="form-block"><label>仓库路径</label>
+            <input class="form-input mono" value="~/code/harness">
+          </div>
+        </div>
+
+        <h3 class="sect-title">运行默认</h3>
+        <div class="sect-card">
+          <div class="form-block"><label>worktree 默认</label>
+            <div class="toggle-line">新任务默认在独立 worktree 中运行<small>全局默认:开</small><span class="tgl"></span></div>
+          </div>
+          <div class="form-block"><label>默认执行器</label>
+            <div class="fake-select"><span class="wc-ava">C</span>claude@ccb·claude-fable-5<span class="fs-caret">▾</span></div>
+          </div>
+          <div class="sc-foot"><span class="hint">执行器 profile 本身在「智能体」组维护,这里只挑默认</span><a class="ui-btn" href="settings-agents.html">去智能体</a></div>
+        </div>
+
+        <h3 class="sect-title">危险区</h3>
+        <div class="sect-card">
+          <div class="danger-zone" style="margin:12px 16px">
+            <b>移除项目</b>
+            <p>只从 harness 移除,不动磁盘上的仓库与分支。</p>
+            <button class="ui-btn danger">移除项目…</button>
+          </div>
+        </div>
+        <p class="page-note" style="margin:14px 0 0;padding:0">设置页左栏按受众分两组:「智能体」是全局资产,「项目」组(项目设置 / 分组 / 已归档)跟随当前项目。</p>
+      </div>
+    </main>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>

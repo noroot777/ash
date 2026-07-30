@@ -1,4 +1,4 @@
-/* ui-demo2 共享脚本:注入导航条 / 方案切换器 / 单一侧边栏 / 任务列表模板,并绑定交互。
+/* ui-demo2 共享脚本:注入导航条 / 方案切换器 / 侧边栏(含任务树) / 设置页专用窄栏,并绑定交互。
    方案选择存 localStorage(ud2-sel / ud2-gray),跨页面保持。零外部依赖。 */
 (function () {
   "use strict";
@@ -11,46 +11,81 @@
     ["debate.html", "辩论"],
     ["review.html", "验收 Diff"],
     ["composer.html", "新建任务"],
-    ["agents.html", "智能体"],
-    ["settings.html", "项目设置"],
-    ["groups.html", "分组"],
-    ["archive.html", "已归档"],
     ["notes.html", "随手记"],
     ["palette.html", "⌘K"],
+    ["settings-agents.html", "设置·智能体"],
+    ["settings-project.html", "设置·项目"],
+    ["settings-groups.html", "设置·分组"],
+    ["settings-archive.html", "设置·归档"],
   ];
 
-  /* ── 模板:单一侧边栏(Linear 式,含项目下拉)。active = 当前导航项 ── */
-  function navItem(href, key, active, icon, label, extra) {
+  /* ── 模板:侧边栏任务树行。sel = 选中行 id;行是真链接,可直接当产品点 ── */
+  function trow(href, id, sel, chev, title, meta, dot) {
     return (
-      '<a class="side-item' + (active === key ? " selectable selected" : "") + '" href="' + href + '"' +
-      (active === key ? ' aria-current="page"' : "") + ">" +
-      '<i class="si">' + icon + "</i>" + label + (extra || "") + "</a>"
+      '<a class="trow selectable' + (sel === id ? " selected" : "") + '" href="' + href + '"' +
+      (sel === id ? ' aria-current="page"' : "") + ">" +
+      '<span class="chev">' + (chev || "") + "</span>" +
+      '<div class="tmain"><b>' + title + "</b><small>" + meta + "</small></div>" +
+      '<i class="mdot ' + dot + '"></i></a>'
     );
   }
-  function sidebarHTML(active) {
+
+  /* ── 模板:单一侧边栏(Linear 式)。顶部项目切换器 + 三图标,主体 = 当前项目任务树,
+        再往下「其他项目」折叠行,底部连接状态。 ── */
+  function sidebarHTML(sel) {
     return (
       '<aside class="sidebar">' +
+      '<div class="side-top">' +
       '<button class="proj-trigger" data-action="project" aria-expanded="false" aria-label="切换项目">' +
       '<span class="proj-avatar">H</span><span class="proj-name">harness</span><span class="proj-caret">▾</span></button>' +
-      '<nav class="side-nav" aria-label="项目内导航">' +
-      navItem("shell.html", "tasks", active, "☰", "任务", '<span class="count">12</span>') +
-      navItem("agents.html", "agents", active, "◎", "智能体") +
-      navItem("groups.html", "groups", active, "⊞", "分组") +
-      navItem("archive.html", "archive", active, "▣", "已归档") +
-      navItem("settings.html", "settings", active, "⚙", "项目设置") +
-      navItem("notes.html", "notes", active, "✐", "随手记") +
+      '<a class="tool-btn" href="palette.html" title="搜索 ⌘K" aria-label="搜索 ⌘K">⌕</a>' +
+      '<a class="tool-btn" href="notes.html" title="随手记" aria-label="随手记">▤</a>' +
+      '<a class="tool-btn" href="composer.html" title="新建任务" aria-label="新建任务">✎</a>' +
+      "</div>" +
+      '<nav class="side-scroll" aria-label="任务树">' +
+      '<div class="lsec">协作任务</div>' +
+      '<div class="lgroup">进行中<em>2</em></div>' +
+      trow("team.html", "team1", sel, "▾", "自动验证相关 - 依旧大改", "团队 · 1 干活 · 1 排队 · 1 完成", "green") +
+      '<div class="wsub">' +
+      trow("team.html", "w1", sel, "", "审查者机制:shared 层", "codex@cpa · 完成", "gray") +
+      trow("team.html", "w2", sel, "", "审查者机制:web 接入", "codex@cpa · 干活中", "green") +
+      trow("team.html", "w3", sel, "", "审查:全链路真实运行", "codex@cpa · 排队", "amber") +
+      "</div>" +
+      trow("debate.html", "debate1", sel, "▸", "评审:回复框交互方案", "辩论 · 第 2 轮进行中", "indigo") +
+      '<div class="lgroup">已验收<em>1</em></div>' +
+      trow("review.html", "accepted1", sel, "▸", "移动端会话贴底重构", "团队 · 已合并 · 07/28", "gray") +
+      '<div class="lsec">普通任务</div>' +
+      '<div class="lgroup">运行中<em>1</em></div>' +
+      trow("task.html", "run1", sel, "", "接入 SSE 断线重连", "claude@ccb · 12m", "green") +
+      '<div class="lgroup">提问中<em>1</em></div>' +
+      trow("task.html", "ask1", sel, "", "清理 worktree 兜底逻辑", "等你拍板 · 2 个问题", "cyan") +
+      '<div class="lgroup">已完成<em>2</em></div>' +
+      trow("shell.html", "done1", sel, "", "修复回复框顶边拖高失效", "verified · 42m 17s", "gray") +
+      trow("shell.html", "done2", sel, "", "接回调度者含义说明", "已验收 · 7m 40s", "gray") +
+      '<div class="lsec">其他项目</div>' +
+      '<div class="oproj open">' +
+      '<button class="oproj-head" data-action="oproj" aria-expanded="true">' +
+      '<span class="chev">▾</span><span class="proj-avatar sm g2">D</span>dr-pipeline<span class="count">3</span></button>' +
+      trow("palette.html", "dr1", sel, "", "daily-report:视频条目化流水线", "运行中 · 23m", "green") +
+      trow("palette.html", "dr2", sel, "", "dr 日报模板改版", "已完成 · 昨天", "gray") +
+      "</div>" +
+      '<div class="oproj">' +
+      '<button class="oproj-head" data-action="oproj" aria-expanded="false">' +
+      '<span class="chev">▸</span><span class="proj-avatar sm g3">M</span>mobile-app<span class="count">2</span></button>' +
+      trow("palette.html", "mb1", sel, "", "审查徽标接到移动端", "backlog", "gray") +
+      trow("palette.html", "mb2", sel, "", "会话页下拉刷新手感", "已完成 · 07/27", "gray") +
+      "</div>" +
       "</nav>" +
-      '<div class="side-flex"></div>' +
       '<div class="side-bottom">' +
-      '<a class="side-item" href="palette.html"><i class="si">⌕</i>搜索<kbd>⌘K</kbd></a>' +
       '<div class="side-conn"><i></i>实时已连接</div>' +
-      '<button class="side-item"><i class="si">⇤</i>收起侧栏</button>' +
+      '<button class="side-fold">⇤ 收起</button>' +
       "</div>" +
       '<div class="proj-scrim" data-action="project-close"></div>' +
       '<div class="proj-pop" role="menu" aria-label="项目切换">' +
       '<div class="pp-current"><span class="proj-avatar lg">H</span>' +
       "<div><b>harness</b><small>~/code/harness</small></div>" +
-      '<a class="pp-gear" href="settings.html" aria-label="项目设置">⚙</a></div>' +
+      '<a class="pp-gear" href="settings-project.html" aria-label="设置">⚙</a></div>' +
+      '<a class="pp-row pp-settings" href="settings-project.html"><span class="pp-ico">⚙</span>设置<small>智能体 · 项目 · 分组 · 归档</small></a>' +
       '<input class="pp-search" placeholder="搜索项目…" aria-label="搜索项目">' +
       '<div class="pp-label">切换到</div>' +
       '<div class="pp-row selectable selected"><span class="proj-avatar">H</span>harness<span class="pp-tag">当前</span></div>' +
@@ -62,50 +97,37 @@
     );
   }
 
-  /* ── 模板:任务列表(任务页第 2 栏)。sel = 选中行 id ── */
-  function trow(id, sel, chev, title, meta, dot) {
+  /* ── 模板:设置页专用窄栏(单开页外壳,独立于主应用侧边栏) ── */
+  function setItem(href, key, active, label) {
     return (
-      '<div class="trow selectable' + (sel === id ? " selected" : "") + '" data-id="' + id + '">' +
-      '<span class="chev">' + (chev || "") + "</span>" +
-      '<div class="tmain"><b>' + title + "</b><small>" + meta + "</small></div>" +
-      '<i class="mdot ' + dot + '"></i></div>'
+      '<a class="set-item' + (active === key ? " selectable selected" : "") + '" href="' + href + '"' +
+      (active === key ? ' aria-current="page"' : "") + ">" + label + "</a>"
     );
   }
-  function listHTML(sel) {
+  function settingsSideHTML(active) {
     return (
-      '<section class="list-col"><div class="list-head">' +
-      '<span class="branch-chip"><b>harness/pSHdnpMo</b><span class="wt">·wt</span></span>' +
-      '<span class="lh-spacer"></span><button class="lh-btn" aria-label="新建任务">✎</button>' +
-      "</div>" +
-      '<div class="list-scroll">' +
-      '<div class="lsec">协作任务</div>' +
-      '<div class="lgroup">进行中<em>2</em></div>' +
-      trow("team1", sel, "▾", "自动验证相关 - 依旧大改", "团队 · 1 干活 · 1 排队 · 1 完成", "green") +
-      '<div class="wsub">' +
-      trow("w1", sel, "", "审查者机制:shared 层", "codex@cpa · 完成", "gray") +
-      trow("w2", sel, "", "审查者机制:web 接入", "codex@cpa · 干活中", "green") +
-      trow("w3", sel, "", "审查:全链路真实运行", "codex@cpa · 排队", "amber") +
-      "</div>" +
-      trow("debate1", sel, "▸", "评审:回复框交互方案", "辩论 · 第 2 轮进行中", "indigo") +
-      '<div class="lgroup">已验收<em>1</em></div>' +
-      trow("accepted1", sel, "▸", "移动端会话贴底重构", "团队 · 已合并 · 07/28", "gray") +
-      '<div class="lsec">普通任务</div>' +
-      '<div class="lgroup">运行中<em>1</em></div>' +
-      trow("run1", sel, "", "接入 SSE 断线重连", "claude@ccb · 12m", "green") +
-      '<div class="lgroup">提问中<em>1</em></div>' +
-      trow("ask1", sel, "", "清理 worktree 兜底逻辑", "等你拍板 · 2 个问题", "cyan") +
-      '<div class="lgroup">已完成<em>2</em></div>' +
-      trow("done1", sel, "", "修复回复框顶边拖高失效", "verified · 42m 17s", "gray") +
-      trow("done2", sel, "", "接回调度者含义说明", "已验收 · 7m 40s", "gray") +
-      "</div></section>"
+      '<aside class="set-side">' +
+      '<a class="set-back" href="shell.html"><span>←</span>返回应用</a>' +
+      '<input class="set-search" placeholder="搜索设置…" aria-label="搜索设置">' +
+      '<nav aria-label="设置导航">' +
+      '<div class="set-group">智能体</div>' +
+      setItem("settings-agents.html", "profiles", active, "执行器 Profile") +
+      setItem("settings-agents.html#rules", "rules", active, "默认规则") +
+      setItem("settings-agents.html#claude", "claude", active, "claude") +
+      setItem("settings-agents.html#codex", "codex", active, "codex") +
+      '<div class="set-group">项目</div>' +
+      setItem("settings-project.html", "project", active, "项目设置") +
+      setItem("settings-groups.html", "groups", active, "分组") +
+      setItem("settings-archive.html", "archive", active, "已归档") +
+      "</nav></aside>"
     );
   }
 
   /* ── 注入 data-include 占位 ── */
   document.querySelectorAll("[data-include]").forEach(function (node) {
     var kind = node.getAttribute("data-include");
-    if (kind === "sidebar") node.outerHTML = sidebarHTML(node.getAttribute("data-active") || "tasks");
-    else if (kind === "tasklist") node.outerHTML = listHTML(node.getAttribute("data-selected") || "");
+    if (kind === "sidebar") node.outerHTML = sidebarHTML(node.getAttribute("data-selected") || "");
+    else if (kind === "settings-side") node.outerHTML = settingsSideHTML(node.getAttribute("data-active") || "");
   });
 
   /* ── 注入顶部演示导航条 ── */
@@ -182,6 +204,12 @@
       control.setAttribute("aria-expanded", String(document.body.classList.contains("project-open")));
     } else if (action === "project-close") {
       document.body.classList.remove("project-open");
+    } else if (action === "oproj") {
+      var op = control.closest(".oproj");
+      op.classList.toggle("open");
+      var opOn = op.classList.contains("open");
+      control.setAttribute("aria-expanded", String(opOn));
+      control.querySelector(".chev").textContent = opOn ? "▾" : "▸";
     } else if (action === "menu" && host) {
       host.classList.toggle("menu-open");
       control.setAttribute("aria-expanded", String(host.classList.contains("menu-open")));

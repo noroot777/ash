@@ -58,27 +58,32 @@ body.switch-min .scheme-switch .ss-head{padding-bottom:8px}
 /* ── 全局外壳:单一侧边栏 + 页面 ─────────────────── */
 .shell{display:flex;height:calc(100vh - 40px);min-height:520px;background:var(--canvas);overflow:hidden}
 
-/* 单一侧边栏(Linear 式):项目切换器 + 导航 + 底部工具 */
-.sidebar{position:relative;display:flex;width:240px;flex:0 0 240px;flex-direction:column;padding:8px;border-right:1px solid var(--line);background:var(--panel)}
-.proj-trigger{display:flex;align-items:center;gap:8px;width:100%;padding:6px;border-radius:8px;text-align:left}
+/* 单一侧边栏(Linear 式):顶部项目切换器 + 三图标,主体任务树,底部状态 */
+.sidebar{position:relative;display:flex;width:260px;flex:0 0 260px;flex-direction:column;padding:8px;border-right:1px solid var(--line);background:var(--panel)}
+.side-top{display:flex;align-items:center;gap:2px}
+.proj-trigger{display:flex;align-items:center;gap:7px;min-width:0;flex:1;padding:5px 6px;border-radius:8px;text-align:left}
 .proj-trigger:hover,body.project-open .proj-trigger{background:var(--raised)}
 .proj-avatar{display:grid;place-items:center;width:24px;height:24px;flex:0 0 24px;border-radius:7px;background:var(--accent);color:#fff;font-size:11px;font-weight:750}
 .proj-avatar.g2{background:#1f9d76}.proj-avatar.g3{background:#c07a2c}.proj-avatar.g4{background:#8250b6}
 .proj-avatar.lg{width:30px;height:30px;flex-basis:30px;border-radius:8px;font-size:13px}
+.proj-avatar.sm{width:18px;height:18px;flex-basis:18px;border-radius:5px;font-size:9px}
 .proj-name{min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;font-weight:700}
 .proj-caret{color:var(--faint);font-size:10px}
-.side-nav{display:flex;flex-direction:column;gap:1px;margin-top:10px}
-.side-item{display:flex;align-items:center;gap:10px;width:100%;padding:6px 8px;border-radius:7px;color:var(--muted);font-size:13px;text-align:left}
-.side-item:not(.selected):hover{background:var(--raised);color:var(--ink)}
-.side-item.selected{color:var(--ink);font-weight:650}
-.side-item .si{display:grid;place-items:center;width:16px;color:var(--faint);font-size:13px;font-style:normal}
-.side-item.selected .si{color:var(--accent)}
-.side-item .count{margin-left:auto;border-radius:999px;background:var(--overlay);padding:0 7px;color:var(--faint);font-size:11px}
-.side-item kbd{margin-left:auto;border:1px solid var(--line2);border-radius:4px;background:var(--canvas);padding:0 4px;color:var(--faint);font-size:9.5px;font-family:inherit}
-.side-flex{flex:1}
-.side-bottom{display:flex;flex-direction:column;gap:1px;border-top:1px solid var(--line);padding-top:6px}
-.side-conn{display:flex;align-items:center;gap:10px;padding:6px 8px;color:var(--faint);font-size:12px}
-.side-conn i{width:6px;height:6px;flex:0 0 6px;margin:0 5px;border-radius:50%;background:#22a06b;font-style:normal}
+.tool-btn{display:grid;place-items:center;width:27px;height:27px;flex:0 0 27px;border-radius:7px;color:var(--muted);font-size:13px}
+.tool-btn:hover{background:var(--raised);color:var(--ink)}
+.side-scroll{flex:1;overflow:auto;margin-top:4px;padding-bottom:14px}
+.side-bottom{display:flex;align-items:center;border-top:1px solid var(--line);padding-top:6px}
+.side-conn{display:flex;align-items:center;gap:6px;padding:4px 6px;color:var(--faint);font-size:11px}
+.side-conn i{width:6px;height:6px;flex:0 0 6px;border-radius:50%;background:#22a06b;font-style:normal}
+.side-fold{margin-left:auto;border-radius:6px;padding:4px 8px;color:var(--faint);font-size:11px}
+.side-fold:hover{background:var(--raised);color:var(--ink)}
+/* 「其他项目」折叠行 */
+.oproj-head{display:flex;align-items:center;gap:7px;width:100%;margin:1px 0;border-radius:7px;padding:6px 8px 6px 10px;color:var(--muted);font-size:12px;font-weight:600;text-align:left}
+.oproj-head:hover{background:var(--raised);color:var(--ink)}
+.oproj-head .chev{width:10px;flex:0 0 10px;color:var(--faint);font-size:9px}
+.oproj-head .count{margin-left:auto;border-radius:999px;background:var(--overlay);padding:0 7px;color:var(--faint);font-size:10.5px}
+.oproj>.trow{display:none}
+.oproj.open>.trow{display:flex;padding-left:27px}
 
 /* 项目切换下拉 */
 .proj-scrim{position:fixed;inset:40px 0 0 0;z-index:60;display:none;background:rgba(40,42,48,.06)}
@@ -95,22 +100,19 @@ body.project-open .proj-scrim,body.project-open .proj-pop{display:block}
 .pp-row{display:flex;align-items:center;gap:9px;padding:6px 7px;border-radius:7px;font-size:12.5px;cursor:pointer}
 .pp-row small{margin-left:auto;color:var(--faint);font-size:10.5px}
 .pp-row .pp-tag{margin-left:auto;border-radius:4px;background:var(--overlay);padding:1px 5px;color:var(--muted);font-size:9.5px;font-weight:700}
+.pp-row.pp-settings{margin:0 0 2px}
+.pp-row.pp-settings:hover{background:var(--raised)}
+.pp-row .pp-ico{display:grid;place-items:center;width:24px;flex:0 0 24px;color:var(--muted);font-size:13px}
 .pp-foot{display:flex;align-items:center;gap:9px;width:100%;margin-top:6px;border-top:1px solid var(--line);padding:8px 7px 3px;border-radius:0;color:var(--muted);font-size:12.5px;text-align:left}
 .pp-foot:hover{color:var(--ink)}
 .pp-foot i{display:grid;place-items:center;width:22px;height:22px;border:1px dashed var(--line2);border-radius:6px;color:var(--faint);font-style:normal;font-size:13px}
 
-/* 任务页第 2 栏:任务列表 */
-.list-col{display:flex;width:264px;flex:0 0 264px;flex-direction:column;border-right:1px solid var(--line);background:var(--canvas)}
-.list-head{display:flex;align-items:center;gap:3px;height:44px;flex:0 0 44px;padding:0 8px;border-bottom:1px solid var(--line)}
-.branch-chip{display:flex;align-items:center;gap:5px;min-width:0;max-width:150px;border:1px solid var(--line2);border-radius:6px;background:var(--panel);padding:3px 7px;color:var(--muted);font-size:10.5px}
+/* 任务树(住在侧边栏里)+ 分支 chip(头栏 / 设置页复用) */
+.branch-chip{display:flex;align-items:center;gap:5px;min-width:0;max-width:220px;border:1px solid var(--line2);border-radius:6px;background:var(--panel);padding:3px 7px;color:var(--muted);font-size:10.5px}
 .branch-chip b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:650;font-family:ui-monospace,monospace}
 .branch-chip .wt{color:var(--faint)}
-.lh-btn{display:grid;place-items:center;width:26px;height:26px;border-radius:6px;color:var(--muted);font-size:13px}
-.lh-btn:hover{background:var(--raised);color:var(--ink)}
-.lh-spacer{flex:1}
-.list-scroll{flex:1;overflow:auto;padding:6px 7px 20px}
-.lsec{padding:12px 7px 3px;color:var(--ink);font-size:11px;font-weight:750}
-.lsec:first-child{padding-top:6px}
+.lsec{padding:14px 7px 3px;color:var(--ink);font-size:11px;font-weight:750}
+.lsec:first-child{padding-top:10px}
 .lgroup{display:flex;align-items:center;gap:6px;padding:8px 7px 3px;color:var(--faint);font-size:10px;font-weight:700}
 .lgroup em{margin-left:auto;font-style:normal;font-weight:500}
 .trow{display:flex;align-items:center;gap:8px;margin:1px 0;border-radius:7px;padding:7px 8px 7px 10px;cursor:pointer}
@@ -126,7 +128,7 @@ body.project-open .proj-scrim,body.project-open .proj-pop{display:block}
 .wsub .trow .tmain b{font-size:11px;font-weight:500;color:var(--muted)}
 .wsub .trow.selected .tmain b{color:var(--ink)}
 
-/* 任务页第 3 栏:主工作区 */
+/* 三栏之二:主工作区 */
 .main{position:relative;display:flex;min-width:0;flex:1;flex-direction:column;background:var(--canvas)}
 .app-bar{position:relative;z-index:10;display:flex;align-items:center;gap:8px;height:44px;flex:0 0 44px;padding:0 10px 0 14px;border-bottom:1px solid var(--line);background:var(--panel)}
 .kind-chip{border-radius:5px;background:rgba(94,106,210,.11);padding:2px 7px;color:var(--accent);font-size:10px;font-weight:750}
@@ -182,7 +184,7 @@ body.project-open .proj-scrim,body.project-open .proj-pop{display:block}
 .track .bar.green{background:#24a47e}.track .bar.amber{background:#e7aa0b}
 .track .bar.hatch{background:repeating-linear-gradient(135deg,var(--line2) 0 5px,var(--raised) 5px 10px)}
 
-/* 任务页第 4 栏:Inspector */
+/* 三栏之三:Inspector */
 .inspector{display:flex;width:306px;flex:0 0 306px;flex-direction:column;overflow:hidden;border-left:1px solid var(--line);background:var(--panel);transition:width .18s ease,flex-basis .18s ease}
 .inspector-off .inspector{width:0;flex-basis:0;border-left-width:0}
 .inspect-scroll{flex:1;overflow:auto;min-width:306px}
@@ -348,16 +350,24 @@ body.drawer-open .drawer:not(.qd),body.qdrawer-open .drawer.qd{display:flex}
 .pal-row kbd{border:1px solid var(--line2);border-radius:4px;background:var(--canvas);padding:1px 5px;color:var(--faint);font-size:9.5px;font-family:inherit}
 .pal-foot{display:flex;gap:14px;border-top:1px solid var(--line);padding:8px 14px;color:var(--faint);font-size:10px}
 
-/* 全页面(智能体 / 项目设置 / 分组 / 已归档):侧边栏右侧整块滚动区 */
-.page-scroll{flex:1;overflow:auto}
-.page-inner{max-width:720px;margin:0 auto;padding:26px 24px 90px}
-.page-cols{display:flex;gap:34px;max-width:940px;margin:0 auto;padding:26px 24px 90px}
-.page-toc{width:150px;flex:0 0 150px}
-.page-toc .pt-label{padding:2px 8px 6px;color:var(--faint);font-size:10px;font-weight:750;letter-spacing:.07em}
-.page-toc a{display:block;margin:1px 0;border-radius:6px;padding:5px 8px;color:var(--muted);font-size:12px}
-.page-toc a:hover{background:var(--raised);color:var(--ink)}
-.page-toc a.on{background:var(--accent-soft);color:var(--accent);font-weight:650}
-.page-main{min-width:0;flex:1}
+/* 设置单开页(Linear Settings 式):左窄栏 + 右内容,独立于主应用外壳 */
+.settings-shell{display:flex;height:calc(100vh - 40px);min-height:520px;background:var(--canvas);overflow:hidden}
+.set-side{display:flex;width:224px;flex:0 0 224px;flex-direction:column;overflow:auto;border-right:1px solid var(--line);background:var(--panel);padding:12px 10px 20px}
+.set-back{display:flex;align-items:center;gap:8px;margin-bottom:10px;border-radius:7px;padding:6px 8px;color:var(--muted);font-size:12.5px;font-weight:650}
+.set-back:hover{background:var(--raised);color:var(--ink)}
+.set-back span{color:var(--faint)}
+.set-search{margin-bottom:10px;border:1px solid var(--line);border-radius:7px;background:var(--canvas);padding:6px 9px;font-size:12px;outline:none}
+.set-search:focus{border-color:var(--accent)}
+.set-group{padding:12px 8px 4px;color:var(--faint);font-size:10px;font-weight:750;letter-spacing:.07em}
+.set-item{display:block;margin:1px 0;border-radius:7px;padding:6px 9px;color:var(--muted);font-size:12.5px}
+.set-item:not(.selected):hover{background:var(--raised);color:var(--ink)}
+.set-item.selected{color:var(--ink);font-weight:650}
+.set-main{min-width:0;flex:1;overflow:auto}
+.set-inner{max-width:660px;margin:0 auto;padding:34px 26px 100px}
+.set-title{margin:0 0 4px;font-size:20px;font-weight:750;letter-spacing:-.02em}
+.set-sub{margin:0 0 22px;color:var(--muted);font-size:12.5px}
+
+/* 设置页分节卡片 */
 .sect-title{margin:26px 0 10px;font-size:14px;font-weight:750}
 .sect-title:first-child{margin-top:0}
 .sect-title small{margin-left:8px;color:var(--faint);font-weight:500;font-size:11px}
@@ -365,7 +375,7 @@ body.drawer-open .drawer:not(.qd),body.qdrawer-open .drawer.qd{display:flex}
 .sect-card .sc-foot{display:flex;align-items:center;gap:8px;border-top:1px solid var(--line);padding:10px 16px}
 .sect-card .sc-foot .hint{margin-right:auto;color:var(--faint);font-size:10.5px}
 
-/* 全页面里的行组件(执行器 / 分组 / 归档行)与表单 */
+/* 设置页里的行组件(执行器 / 分组 / 归档行)与表单 */
 .agent-row{display:flex;align-items:center;gap:9px;margin:1px 7px;border-radius:8px;padding:8px 9px 8px 11px;cursor:pointer}
 .agent-row .wc-ava{width:24px;height:24px;font-size:10px}
 .agent-row .at{min-width:0;flex:1}

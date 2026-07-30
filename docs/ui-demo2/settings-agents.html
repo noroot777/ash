@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
+<title>设置 · 智能体 — Harness UI 讨论稿 v2</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="settings-shell">
+    <div data-include="settings-side" data-active="profiles"></div>
+    <main class="set-main">
+      <div class="set-inner">
+        <h1 class="set-title">智能体</h1>
+        <p class="set-sub">执行器 Profile 是全局资产,不属于某个项目;从项目下拉的「设置」进入这张单开页维护。</p>
+
+        <h3 class="sect-title">执行器 Profile<small>原 AgentsPanel Modal → 设置页;选中行吃右下角切换器方案</small></h3>
+        <div class="sect-card">
+          <div style="padding:6px 0">
+            <div class="agent-row selectable selected">
+              <span class="wc-ava">C</span>
+              <span class="at"><b>claude@ccb</b><small>claude-fable-5 · effort high</small></span>
+              <span class="default-tag">claude 默认</span>
+            </div>
+            <div class="agent-row selectable">
+              <span class="wc-ava">X</span>
+              <span class="at"><b>codex@cpa</b><small>gpt-5.6-sol · xhigh · 1.5x priority</small></span>
+              <span class="default-tag">codex 默认</span>
+            </div>
+            <div class="agent-row selectable">
+              <span class="wc-ava">X</span>
+              <span class="at"><b>codex@cpx</b><small>gpt-5.5 · high</small></span>
+            </div>
+          </div>
+          <div class="sc-foot"><span class="hint">每个 profile = 一种「品牌 @ 账号」组合;任务可逐个覆盖模型 / 思考强度</span><button class="ui-btn primary">新增执行器</button></div>
+        </div>
+
+        <h3 class="sect-title" id="rules">默认规则</h3>
+        <div class="sect-card">
+          <div class="form-block"><label>新任务默认执行器</label>
+            <div class="fake-select"><span class="wc-ava">C</span>claude@ccb·claude-fable-5<span class="fs-caret">▾</span></div>
+          </div>
+          <div class="form-block"><label>团队执行者默认</label>
+            <div class="fake-select"><span class="wc-ava">X</span>codex@cpa·gpt-5.6-sol<span class="fs-caret">▾</span></div>
+          </div>
+        </div>
+
+        <h3 class="sect-title" id="claude">claude@ccb 配置<small>左侧导航「claude / codex」直达各家配置区</small></h3>
+        <div class="sect-card">
+          <div class="form-block"><label>模型</label>
+            <div class="fake-select">claude-fable-5<span class="fs-caret">▾</span></div>
+          </div>
+          <div class="form-block"><label>思考强度</label>
+            <div class="fake-select">high<span class="fs-caret">▾</span></div>
+          </div>
+          <div class="form-block"><label>默认身份</label>
+            <div class="toggle-line">作为 claude 类型的默认执行器<small>agentType 未指定 executorId 时降级到它</small><span class="tgl"></span></div>
+          </div>
+          <div class="sc-foot"><span class="hint">换执行器时,任务上的模型 / 思考强度选择器重置为「跟随执行器」</span><button class="ui-btn">保存</button></div>
+        </div>
+
+        <h3 class="sect-title" id="codex">codex@cpa 配置</h3>
+        <div class="sect-card">
+          <div class="form-block"><label>模型</label>
+            <div class="fake-select">gpt-5.6-sol<span class="fs-caret">▾</span></div>
+          </div>
+          <div class="form-block"><label>思考强度</label>
+            <div class="fake-select">xhigh<small>gpt-5.5 最高 xhigh,ultra→max 会被拒</small><span class="fs-caret">▾</span></div>
+          </div>
+          <div class="form-block"><label>速度档位</label>
+            <div class="fake-select">1.5x · service_tier priority<span class="fs-caret">▾</span></div>
+          </div>
+          <div class="sc-foot"><span class="hint">codex 系列的档位约束由服务端校验,超档会在派单时被拒并提示</span><button class="ui-btn">保存</button></div>
+        </div>
+        <p class="page-note" style="margin:14px 0 0;padding:0">形态仿 Linear Settings:独立于主应用的单开页,左侧「← 返回应用」+ 设置专用导航。主应用侧边栏里不再有「智能体」入口。</p>
+      </div>
+    </main>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>
