@@ -78,9 +78,9 @@
 </head>
 <body class="doc-page">
   <main class="doc">
-    <p class="eyebrow">Harness Web · 讨论稿 v2 · 第五轮 · Linear 设计语言</p>
+    <p class="eyebrow">Harness Web · 讨论稿 v2 · 第六轮 · Linear 实测校准</p>
     <h1>不止复刻控件，开始用同一种语言设计。</h1>
-    <p class="lede"><b>本轮把实测从设计变量扩展到状态与组合规则：</b>按钮、输入、下拉、开关、提示浮层、状态标记与覆盖式滚动条都按真实 Linear 的尺寸、阴影和 150ms 动效重做；任务树、调度流、执行者栏、时间轴、验收队列、审查轮次、辩论与会话则按同一套分层原则重新组织。右下角仍保留 S1/S2/S3 × 灰阶两版，首次加载强制进入亮度校准版。</p>
+    <p class="lede"><b>本轮把团队验收与焦点态拉回真实实现：</b>团队验收左列改为 TeamView 实际提供的执行者子任务，每行带分支/worktree、改动统计与审查/验收状态；团队调度流补齐用户与调度者发言。输入框焦点按 Linear 实测改为与边框重合的单层 1px ring；灰阶固定为最终校准值，右下角只保留 S1/S2/S3 选中态方案。</p>
 
     <h2>演示页目录</h2>
     <p class="sub">顶部导航条在每一页都有,可随时横跳;侧边栏任务树的行、顶部三图标、项目下拉里的「设置」都是真链接,可以直接当产品点。</p>
@@ -90,7 +90,7 @@
       <a class="nav-card" href="team.html"><span class="no">03</span><b>团队调度台</b><small>调度流 + 右栏 tab + 时间轴一行收起 + 执行者抽屉</small></a>
       <a class="nav-card" href="debate.html"><span class="no">04</span><b>辩论视图</b><small>配置卡 + 双方发言流 + 底部控制条</small></a>
       <a class="nav-card" href="review.html"><span class="no">05</span><b>单任务验收</b><small>提交、文件统计、行级 diff、分支目标、审查报告与截图</small></a>
-      <a class="nav-card" href="review-team.html"><span class="no">06</span><b>团队验收台</b><small>共享分支、执行者验证摘要、独立 worktree 待验收队列</small></a>
+      <a class="nav-card" href="review-team.html"><span class="no">06</span><b>团队验收台</b><small>按执行者列出分支/worktree、改动统计、审查状态与相关调度流</small></a>
       <a class="nav-card" href="composer.html"><span class="no">07</span><b>新建任务面板</b><small>内嵌非弹层;single/team/debate 模式切换;侧栏 ✎ 直达</small></a>
       <a class="nav-card" href="settings-agents.html"><span class="no">08</span><b>设置 · 智能体</b><small>640px 内容宽，左说明 + 右控件的 65px 设置行</small></a>
       <a class="nav-card" href="settings-project.html"><span class="no">09</span><b>设置 · 项目</b><small>基本信息 / 运行默认 / 危险区</small></a>
@@ -114,7 +114,7 @@
     <p class="callout">施工映射：任务树学习侧栏团队展开；调度流学习活动记录；执行者栏学习任务列表；甘特学习时间线；验收与审查学习清单和活动；会话和辩论学习任务评论流。</p>
 
     <h2>实测 Linear 设计变量对照表</h2>
-    <p class="sub">采样视口为 1455 × 806 CSS px，系统浅色主题。截图像素复核：侧栏 RGB 239/239/240，主内容 RGB 249/249/250；校准版两处均为 0 差值。</p>
+    <p class="sub">采样视口为 1455 × 806 CSS px，系统浅色主题。截图像素复核：侧栏 RGB 239/239/240，主内容 RGB 249/249/250；本稿固定采用这组最终值。</p>
     <div class="token-table">
       <div class="token-row"><b>项目</b><b>Linear 实测</b><b>本稿采用</b></div>
       <div class="token-row"><b>侧栏</b><span>244px；项高 28px</span><span>244px；项高 28px</span></div>
@@ -142,7 +142,8 @@
       <div><span class="tag">v2 · 第二轮</span><b>四栏:单一侧边栏</b><small>项目切换器和导航收进一条 240px 侧栏,但任务列表仍是独立第二栏。</small></div>
       <div><span class="tag">v3 · 信息架构定稿</span><b>三栏:任务树入侧栏</b><small>任务列表并进侧栏，设置改为单开页。</small></div>
       <div><span class="tag">v4 · 上轮</span><b>实测视觉 + 真实验收</b><small>统一基础 token，并补齐单任务/团队验收功能面。</small></div>
-      <div><span class="tag now">v5 · 本轮</span><b>控件全状态 + 设计语言</b><small>校准默认亮度，并用 Linear 的组合规则重画 harness 特有组件。</small></div>
+      <div><span class="tag">v5 · 上轮</span><b>控件全状态 + 设计语言</b><small>校准默认亮度，并用 Linear 的组合规则重画 harness 特有组件。</small></div>
+      <div><span class="tag now">v6 · 本轮</span><b>真实团队验收 + 单层焦点 ring</b><small>验收条目回到执行者粒度，灰阶收敛为单一实测版本。</small></div>
     </div>
     <p class="callout">任务树的选中行吃的就是全局选中态方案——切 S1/S2/S3,任务树、下拉、⌘K、设置页列表一起变。</p>
 
@@ -194,20 +195,20 @@
         <div class="sc-vals">lch(87.5% .5 282) · 无主题色</div>
       </div>
     </div>
-    <p class="callout">hover 采用 Linear 实测 lch(91.64% .5 282)，选中采用 lch(89.54% .5 282)；加深版维持同样的明度差。</p>
+    <p class="callout">hover 采用 Linear 实测 lch(91.64% .5 282)，选中采用 lch(89.54% .5 282)；三案只改变选中行表现，不再改变全局灰阶。</p>
 
-    <h2>灰阶双版 · 相对关系</h2>
-    <p class="sub">校准版以 Linear 实测 token 为锚；加深版不改变层级，只把灰阶整体下移，panel / ink / accent 保持稳定。</p>
+    <h2>最终采用灰阶 · 固定值</h2>
+    <p class="sub">灰阶不再提供第二套切换。下面只列 Linear 实测值与本稿的最终变量映射。</p>
     <div class="token-table">
-      <div class="token-row"><b>Token</b><b>校准版</b><b>加深版</b></div>
-      <div class="token-row"><b>chrome</b><span>lch(94.44% .5 282)</span><span>lch(92.2% .5 282)</span></div>
-      <div class="token-row"><b>canvas</b><span>lch(97.94% .5 282)</span><span>lch(96.5% .5 282)</span></div>
-      <div class="token-row"><b>raised</b><span>lch(96.914% 0 282)</span><span>lch(94.2% .5 282)</span></div>
-      <div class="token-row"><b>line</b><span>lch(90.55% 0 282)</span><span>lch(86% 0 282)</span></div>
-      <div class="token-row"><b>muted</b><span>lch(39.176% 1.25 282)</span><span>lch(32% 1.25 282)</span></div>
-      <div class="token-row"><b>accent</b><span>#5e6ad2</span><span>#5e6ad2（不变）</span></div>
+      <div class="token-row"><b>Token</b><b>Linear 实测</b><b>本稿变量</b></div>
+      <div class="token-row"><b>chrome</b><span>lch(94.44% .5 282)</span><span>--chrome</span></div>
+      <div class="token-row"><b>canvas</b><span>lch(97.94% .5 282)</span><span>--canvas</span></div>
+      <div class="token-row"><b>raised</b><span>lch(96.914% 0 282)</span><span>--raised</span></div>
+      <div class="token-row"><b>line</b><span>lch(90.55% 0 282)</span><span>--line</span></div>
+      <div class="token-row"><b>muted</b><span>lch(39.176% 1.25 282)</span><span>--muted</span></div>
+      <div class="token-row"><b>accent</b><span>#5e6ad2</span><span>--accent</span></div>
     </div>
-    <p class="callout">整套演示零外部依赖,file:// 直接打开;方案选择存 localStorage,全部页面同步。这是讨论稿,不含任何产品代码改动。</p>
+    <p class="callout">整套演示零外部依赖，file:// 直接打开；仅 S1/S2/S3 选中态存入 localStorage 并跨页面同步。这是讨论稿，不含任何产品代码改动。</p>
   </main>
   <script src="app.js"></script>
 </body>

@@ -45,15 +45,15 @@
       <div class="work-body">
         <section class="conversation">
           <div class="messages">
-            <div class="message user">
-              <div class="speaker">你 · 09:57</div>
-              <div class="bubble"><b>自动验证相关 - 依旧大改</b><br>审查机制需要真实跑通,保留完整执行记录。web 那条线改完要有人真的开浏览器点一遍。</div>
+            <div class="comment-stream">
+              <article class="comment-item user-comment"><span class="comment-avatar">你</span><div><div class="comment-head"><b>你</b><time>09:57</time></div><p><b>自动验证相关 - 依旧大改</b><br>审查机制需要真实跑通，保留完整执行记录。web 那条线改完要有人真的开浏览器点一遍。</p></div></article>
+              <article class="comment-item lead-comment"><span class="comment-avatar">调</span><div><div class="comment-head"><b>调度者</b><span class="comment-kind">汇报</span><time>10:04</time></div><p>我把任务拆成三条串行工作流：shared 层机制、web 接入、全链路真实运行验证。前一个执行者完成后，下一个自动起跑。</p></div></article>
+              <div class="feed-card"><span class="feed-tag dispatch">派活</span><b>3 个 codex 执行者</b> · 串行 · 审查开启</div>
+              <article class="comment-item worker-comment"><span class="comment-avatar">C1</span><div><div class="comment-head"><b>执行者 1 · 审查者机制:shared 层</b><span class="comment-kind done">完成</span><time>10:29</time></div><p>isTeamSettled 已单点落在 shared/src/team.ts，web/mobile 共用；3 条回归测试全绿。</p></div></article>
+              <article class="comment-item worker-comment"><span class="comment-avatar">C2</span><div><div class="comment-head"><b>执行者 2 · 审查者机制:web 接入</b><span class="comment-kind ask">提问</span><time>10:41</time></div><p>时间轴右端收口后，「停止全组」按钮在已收工团队上是隐藏还是置灰？判据写在哪一层？</p></div></article>
+              <article class="comment-item lead-comment"><span class="comment-avatar">调</span><div><div class="comment-head"><b>调度者</b><span class="comment-kind">答复</span><time>10:43</time></div><p>隐藏——没东西可停就不该出现；判据用 shared 的 isTeamSettled，不在组件里重新拼。已经答复执行者 2 继续。</p></div></article>
+              <div class="event-line">执行者 3 在队列等待 · 前一个 done 后自动启动</div>
             </div>
-            <div class="feed-card"><span class="feed-tag dispatch">派活</span><b>调度者</b> 拆成三条独立工作流:shared 层机制、web 接入、全链路真实运行验证。串行派出,前者 done 后者自动起跑。</div>
-            <div class="feed-card"><span class="feed-tag doneT">完成</span><b>执行者 1 · 审查者机制:shared 层</b> 已确认完成:isTeamSettled 单点落在 shared/src/team.ts,web/mobile 共用,回归测试 3 条全绿。</div>
-            <div class="feed-card"><span class="feed-tag ask">提问</span><b>执行者 2 · 审查者机制:web 接入</b> 时间轴右端收口后,「停止全组」按钮在已收工团队上是隐藏还是置灰?判据写在哪一层?</div>
-            <div class="feed-card"><span class="feed-tag dispatch">答复</span><b>调度者</b> 隐藏——没东西可停就不该出现;判据用 shared 的 isTeamSettled,别在组件里重新拼。已回给执行者 2 继续。</div>
-            <div class="event-line">执行者 3 在队列等待 · 前一个 done 后自动启动</div>
           </div>
           <div class="reply-box">给调度者留话(⌘↵ 发送)…
             <div class="reply-row">

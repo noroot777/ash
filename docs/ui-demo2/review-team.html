@@ -17,91 +17,108 @@
         <span class="status-pill gray"><i class="dot"></i>已收工 · 待验收</span>
         <div class="app-actions">
           <button class="ui-btn primary">✓ 验收通过</button>
-          <button class="ui-btn">返回团队流</button>
+          <a class="ui-btn" href="team.html">返回团队流</a>
           <button class="ui-btn icon-btn" data-action="inspector" aria-label="开关 Inspector" aria-expanded="true">▥</button>
         </div>
       </header>
       <div class="review-subbar">
-        <div class="copy"><b>团队验收台</b><small>团队级验收合并并清理共享分支，同时联动标记全部共享执行者；2 个独立 worktree 执行者仍需在任务详情验收</small></div>
+        <div class="copy"><b>团队验收台</b><small>团队级验收合并并清理共享分支，并联动标记 3 个共享执行者；左列直接来自 TeamView 的子任务列表</small></div>
         <a class="review-link" href="review.html">查看单任务场景 →</a>
       </div>
       <nav class="review-tabs" aria-label="验收场景"><a href="review.html">单任务</a><a class="active" href="review-team.html">团队验收台</a></nav>
       <div class="work-body">
         <div class="team-review-layout">
-          <aside class="worker-queue" aria-label="执行者验收队列">
-            <h3>验收范围 · 6</h3>
-            <p>共享执行者只看验证证据；独立 worktree 执行者保留自己的分支验收。</p>
-            <button class="worker-review-row selectable selected"><span class="wr-top"><i class="mdot indigo"></i><b>调度台 / 共享 worktree</b><span class="stage">待验收</span></span><small>harness/team/0AAkjI · 6 文件</small></button>
-            <button class="worker-review-row selectable"><span class="wr-top"><i class="mdot green"></i><b>侧栏与全局 token</b><span class="stage">verified</span></span><small>共享执行者 · 改动已含在共享 diff</small></button>
-            <button class="worker-review-row selectable"><span class="wr-top"><i class="mdot green"></i><b>设置四页重排</b><span class="stage">verified</span></span><small>共享执行者 · 2 轮审查</small></button>
-            <button class="worker-review-row selectable"><span class="wr-top"><i class="mdot red"></i><b>file:// 浏览器巡检</b><span class="stage fail">verify_failed</span></span><small>共享执行者 · 等待修复后复审</small></button>
-            <button class="worker-review-row selectable"><span class="wr-top"><i class="mdot amber"></i><b>移动端验收入口</b><span class="stage">待单独验收</span></span><small>独立 worktree · task/4Qm8…</small></button>
-            <button class="worker-review-row selectable"><span class="wr-top"><i class="mdot gray"></i><b>Review API 回归</b><span class="stage">accepted</span></span><small>独立 worktree · 已在任务详情完成</small></button>
+          <aside class="worker-queue" aria-label="执行者验收列表">
+            <h3>执行者 · 3</h3>
+            <p>每一行都是一个真实子任务：标题、执行目录、改动统计与审查/验收状态一起显示。</p>
+            <button class="worker-review-row selectable">
+              <span class="wr-top"><span class="wc-ava">C1</span><b>审查者机制:shared 层</b><span class="stage">verified</span></span>
+              <span class="wr-meta"><code>harness/team/Mh8DxPRf</code><em>共享 worktree</em></span>
+              <span class="wr-stats"><span>4 文件</span><i>+148</i><i class="minus">−32</i><strong>随团队验收</strong></span>
+            </button>
+            <button class="worker-review-row selectable selected">
+              <span class="wr-top"><span class="wc-ava">C2</span><b>审查者机制:web 接入</b><span class="stage">verified</span></span>
+              <span class="wr-meta"><code>harness/team/Mh8DxPRf</code><em>共享 worktree</em></span>
+              <span class="wr-stats"><span>7 文件</span><i>+214</i><i class="minus">−71</i><strong>审查 2/2</strong></span>
+            </button>
+            <button class="worker-review-row selectable">
+              <span class="wr-top"><span class="wc-ava">C3</span><b>审查:全链路真实运行</b><span class="stage fail">verify_failed</span></span>
+              <span class="wr-meta"><code>harness/team/Mh8DxPRf</code><em>共享 worktree</em></span>
+              <span class="wr-stats"><span>3 文件</span><i>+61</i><i class="minus">−8</i><strong class="bad">待修复复审</strong></span>
+            </button>
           </aside>
+
           <section class="team-review-main">
             <article class="team-review-card">
-              <div class="team-review-head"><span class="round-no ok">✓</span><div><b>共享分支汇总</b><small>调度台目标、提交、用户消息与全体共享执行者改动</small></div><span class="role">调度台 / 共享 worktree</span></div>
+              <div class="team-review-head">
+                <span class="wc-ava">C2</span>
+                <div><b>审查者机制:web 接入</b><small>codex@cpa·gpt-5.6-sol · xhigh</small></div>
+                <span class="role">共享执行者 · verified</span>
+              </div>
+              <div class="review-worker-summary">
+                <div class="review-stat"><small>分支</small><b class="mono">harness/team/Mh8DxPRf</b></div>
+                <div class="review-stat"><small>worktree</small><b class="mono">…/.worktrees/Mh8DxPRf</b></div>
+                <div class="review-stat"><small>改动</small><b><span class="good">+214</span> <span class="bad">−71</span> · 7 文件</b></div>
+                <div class="review-stat"><small>审查 / 验收</small><b>第 2 轮 verified · 随团队</b></div>
+              </div>
               <div class="team-review-body">
                 <div>
-                  <div class="review-stat"><small>共享分支</small><b class="mono">harness/team/0AAkjIKP</b></div>
-                  <div class="review-stat" style="margin-top:8px"><small>合入目标</small><b class="mono">main</b></div>
-                  <div class="commit-stack" style="padding:12px 0 0;border:0">
-                    <h4>提交 · 4</h4>
-                    <div class="commit-row"><code>ef84251a</code><span>按 Linear 实测翻新视觉</span><small>12:14</small></div>
-                    <div class="commit-row"><code>05e2b1a9</code><span>重做团队验收台</span><small>11:58</small></div>
-                    <div class="commit-row"><code>bc34ff10</code><span>设置页改为双列设置行</span><small>11:39</small></div>
+                  <div class="commit-stack" style="padding:0;border:0">
+                    <h4>提交 · 2</h4>
+                    <div class="commit-row"><code>05e2b1a9</code><span>接入团队收工判据与时间轴</span><small>11:58</small></div>
+                    <div class="commit-row"><code>bc34ff10</code><span>隐藏已收工团队的停止动作</span><small>11:39</small></div>
                   </div>
-                  <div class="evidence-block" style="padding:12px 0 0;border:0"><h4>用户消息 · 2</h4><div class="round-report" style="border:.5px solid var(--line);border-radius:8px;background:var(--canvas)">“验收页太粗，按真实实现完整画出来。”<br><span style="color:var(--faint)">问答卡答复已按源码口径排除。</span></div></div>
+                  <div class="evidence-block" style="padding:14px 0 0;border:0">
+                    <h4>审查证据</h4>
+                    <div class="review-round-card">
+                      <div class="round-head"><span class="round-no fail">1</span><b>第 1 轮</b><span class="verdict fail">verify_failed</span><small>自动打回</small></div>
+                      <div class="round-report"><b>报告：</b>收工团队仍显示「停止全组」，与 shared 判据不一致。</div>
+                    </div>
+                    <div class="review-round-card">
+                      <div class="round-head"><span class="round-no ok">2</span><b>第 2 轮</b><span class="verdict ok">verified</span><small>浏览器已验证</small></div>
+                      <div class="round-report"><b>报告：</b>时间轴右端、按钮显隐与回归测试均通过。</div>
+                    </div>
+                  </div>
                 </div>
                 <div>
                   <div class="diff-file">
-                    <div class="diff-head"><code>docs/ui-demo2/style.css</code><span class="stats">+231 −96</span></div>
+                    <div class="diff-head"><code>web/src/team/TeamHeader.tsx</code><span class="stats">+54 −21</span></div>
                     <div class="diff-body">
-                      <div class="dl hunk"><span class="ln">…</span><span class="lc">@@ -1,12 +1,28 @@ Linear measured tokens</span></div>
-                      <div class="dl del"><span class="ln">4</span><span class="lc">- --canvas:#f9f9fb; --sidebar:260px;</span></div>
-                      <div class="dl add"><span class="ln">4</span><span class="lc">+ --canvas:lch(97.94% .5 282); --chrome:lch(94.44% .5 282);</span></div>
-                      <div class="dl add"><span class="ln">5</span><span class="lc">+ --hover-bg:lch(91.64% .5 282); --sel-bg:lch(89.54% .5 282);</span></div>
-                      <div class="dl add"><span class="ln">6</span><span class="lc">+ .sidebar { width:244px; } .trow { height:28px; }</span></div>
+                      <div class="dl hunk"><span class="ln">…</span><span class="lc">@@ 团队收工后的头部动作</span></div>
+                      <div class="dl del"><span class="ln">95</span><span class="lc">- const stopped = workers.every(done);</span></div>
+                      <div class="dl add"><span class="ln">95</span><span class="lc">+ const settled = isTeamSettled(leadLive, workers);</span></div>
+                      <div class="dl add"><span class="ln">96</span><span class="lc">+ const showHalt = live &amp;&amp; !settled;</span></div>
                     </div>
                   </div>
                   <div class="diff-file">
-                    <div class="diff-head"><code>docs/ui-demo2/review-team.html</code><span class="stats">A · +182 −0</span></div>
+                    <div class="diff-head"><code>web/src/team/TeamTimeline.tsx</code><span class="stats">+73 −18</span></div>
                     <div class="diff-body">
-                      <div class="dl add"><span class="ln">1</span><span class="lc">+ &lt;aside class="worker-queue"&gt;共享验证 + 独立 worktree 队列&lt;/aside&gt;</span></div>
-                      <div class="dl add"><span class="ln">2</span><span class="lc">+ &lt;TaskReviewEvidence rounds="报告 + 截图" /&gt;</span></div>
-                      <div class="dl add"><span class="ln">3</span><span class="lc">+ &lt;AcceptanceAction scope="team" /&gt;</span></div>
+                      <div class="dl add"><span class="ln">61</span><span class="lc">+ const settled = isTeamSettled(leadLive, workers);</span></div>
+                      <div class="dl add"><span class="ln">62</span><span class="lc">+ const to = settled ? lastActivityAt : Date.now();</span></div>
                     </div>
                   </div>
                 </div>
               </div>
-            </article>
 
-            <article class="team-review-card">
-              <div class="team-review-head"><span class="round-no fail">!</span><div><b>共享执行者验证</b><small>代码改动已包含在共享分支 diff；这里按执行者检查独立审查证据</small></div><span class="role">3 个共享执行者</span></div>
-              <div class="team-review-body">
-                <div>
-                  <button class="worker-review-row selectable selected"><span class="wr-top"><i class="mdot red"></i><b>file:// 浏览器巡检</b><span class="stage fail">verify_failed</span></span><small>第 1 轮 · 控制台仍有 1 条资源错误</small></button>
-                  <button class="worker-review-row selectable"><span class="wr-top"><i class="mdot green"></i><b>设置四页重排</b><span class="stage">verified</span></span><small>第 2 轮 · 640px 内容宽通过</small></button>
+              <section class="review-discussion" aria-label="相关调度流">
+                <h4>相关调度流 · 用户、调度者与执行者</h4>
+                <div class="comment-stream compact">
+                  <article class="comment-item user-comment"><span class="comment-avatar">你</span><div><div class="comment-head"><b>你</b><time>10:31</time></div><p>web 那条线改完要有人真的开浏览器点一遍；收工团队不能再显示一个点了没反应的停止按钮。</p></div></article>
+                  <article class="comment-item lead-comment"><span class="comment-avatar">调</span><div><div class="comment-head"><b>调度者</b><time>10:34</time></div><p>已把 web 接入与真实浏览器验证拆开。执行者 2 负责接入 shared 判据，执行者 3 在它完成后跑全链路。</p></div></article>
+                  <article class="comment-item worker-comment"><span class="comment-avatar">C2</span><div><div class="comment-head"><b>执行者 2 · 审查者机制:web 接入</b><span class="comment-kind ask">提问</span><time>10:41</time></div><p>「停止全组」在已收工团队上是隐藏还是置灰？判据是否统一使用 shared 的 isTeamSettled？</p></div></article>
+                  <article class="comment-item lead-comment"><span class="comment-avatar">调</span><div><div class="comment-head"><b>调度者</b><span class="comment-kind">答复</span><time>10:43</time></div><p>隐藏。没有可停止的执行者就不显示动作；判据只用 isTeamSettled，不在组件里重复拼状态。</p></div></article>
                 </div>
-                <div>
-                  <div class="review-round-card">
-                    <div class="round-head"><span class="round-no fail">1</span><b>第 1 轮</b><span class="verdict fail">verify_failed</span><small>审查任务：done</small></div>
-                    <div class="round-report"><b>报告：</b>palette.html 的 data URL favicon 不应计入外部请求；真正问题是 review-team 页遗漏在顶部导航。
-                      <div class="auto-return"><span>↩</span><span>已自动打回原任务，修复后最多自动复审一次。</span></div>
-                    </div>
-                  </div>
-                  <div class="shot-grid"><div class="evidence-shot"><div class="shot"></div><span>console-error.png</span></div><div class="evidence-shot"><div class="shot"></div><span>review-team-before.png</span></div></div>
-                </div>
-              </div>
+              </section>
             </article>
           </section>
         </div>
+
         <aside class="inspector" aria-label="团队验收 Inspector">
           <div class="inspect-scroll">
             <div class="inspect-head">Inspector<span>团队验收</span><button class="inspect-close" data-action="inspector" aria-label="关闭 Inspector">×</button></div>
-            <section class="inspect-group"><div class="inspect-label">团队级确定性验收</div><dl class="kv"><dt>共享执行者</dt><dd>3 个，随团队联动 accepted</dd><dt>独立 worktree</dt><dd>2 个，各自在任务详情验收</dd><dt>共享源分支</dt><dd class="mono">harness/team/0AAkjIKP</dd><dt>目标分支</dt><dd class="mono">main</dd><dt>清理</dt><dd>团队 worktree + 分支</dd></dl></section>
-            <section class="inspect-group"><div class="inspect-label">状态汇总</div><div class="stat-row"><div class="stat"><b>3</b>verified</div><div class="stat"><b>1</b>失败</div><div class="stat"><b>2</b>独立验收</div></div></section>
-            <section class="evidence-block"><h4>验收口径</h4><div class="round-report">验收按钮只对团队调度台生效。共享执行者不重复合并；独立 worktree 执行者不被团队按钮吞掉。</div></section>
+            <section class="inspect-group"><div class="inspect-label">团队级确定性验收</div><dl class="kv"><dt>共享执行者</dt><dd>3 个，随团队联动 accepted</dd><dt>独立 worktree</dt><dd>0 个</dd><dt>共享源分支</dt><dd class="mono">harness/team/Mh8DxPRf</dd><dt>目标分支</dt><dd class="mono">main</dd><dt>清理</dt><dd>团队 worktree + 分支</dd></dl></section>
+            <section class="inspect-group"><div class="inspect-label">状态汇总</div><div class="stat-row"><div class="stat"><b>2</b>verified</div><div class="stat"><b>1</b>失败</div><div class="stat"><b>3</b>执行者</div></div></section>
+            <section class="evidence-block"><h4>数据口径</h4><div class="round-report">TeamView 按 parentId 组装执行者；每个子任务分别加载 commits、diff、sessions 与审查证据。团队验收按钮只作用于调度台，并联动共享执行者。</div></section>
           </div>
         </aside>
       </div>

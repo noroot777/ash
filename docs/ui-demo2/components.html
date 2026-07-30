@@ -21,8 +21,9 @@
   .c-btn.ghost{background:transparent;box-shadow:none}.c-btn.icon{width:28px;border-radius:9999px;padding:0;background:transparent;box-shadow:none;font-size:15px}
   .c-btn.is-hover,.c-btn.secondary:hover{background:var(--overlay);color:var(--ink);box-shadow:var(--control-hover-shadow)}.c-btn.primary.is-hover{background:#5560c4;color:#fff}.c-btn.ghost.is-hover,.c-btn.icon.is-hover{background:var(--raised);color:var(--ink);box-shadow:none}
   .c-btn.is-active{background:var(--panel);box-shadow:var(--control-shadow)}.c-btn.primary.is-active{background:#4d57b5;box-shadow:inset 0 1px 2px rgba(20,24,80,.24)}.c-btn.ghost.is-active,.c-btn.icon.is-active{background:var(--overlay);box-shadow:none}
-  .is-focus{outline:1px solid #6d78d5!important;outline-offset:1px}.is-disabled{cursor:default!important;opacity:.42!important}
-  .c-input{width:180px;height:32px;border:1px solid var(--line2);border-radius:8px;background:var(--panel);padding:0 12px;outline:0;font-size:13px;transition:border-color .15s,opacity .15s}.c-input.is-hover{border-color:lch(76% 0 282)}.c-input.is-focus{border-color:#6d78d5}
+  .is-focus{outline:1px solid #6d78d5!important;outline-offset:0}.is-disabled{cursor:default!important;opacity:.42!important}
+  .c-input{width:180px;height:32px;border:.5px solid lch(86.5% 0 282);border-radius:8px;background:var(--panel);padding:0 12px;outline:0;font-size:13px;transition:border-color .15s,opacity .15s}.c-input.is-hover{border-color:lch(78.5% 0 282)}.c-input.is-focus{border-color:lch(78.5% 0 282);outline-offset:-1px!important}
+  .input-state-grid{display:grid;grid-template-columns:repeat(4,minmax(180px,1fr));gap:1px;margin-bottom:12px;border:1px solid var(--line);border-radius:10px;background:var(--line);overflow:hidden}.input-state{background:var(--panel);padding:12px}.input-state label{display:block;margin-bottom:8px;color:var(--faint);font-size:10px;font-weight:650}.input-state .c-input{width:100%}
   .c-select{display:flex;width:180px;height:30px;align-items:center;border:1px solid transparent;border-radius:8px;background:var(--panel);padding:0 10px;color:lch(20% 1 282);font-size:13px;box-shadow:var(--control-shadow);transition:background-color .15s,border .15s,color .15s,box-shadow .15s}.c-select span{margin-left:auto;color:var(--faint)}
   .c-select.is-hover{background:var(--overlay);box-shadow:var(--control-hover-shadow)}.c-select.is-active{background:var(--panel);box-shadow:var(--control-shadow)}
   .menu-demo{width:250px;border:1px solid var(--line2);border-radius:12px;background:var(--panel);box-shadow:var(--menu-shadow);padding:4px 0;overflow:hidden}
@@ -34,7 +35,7 @@
   .scroll-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}.scroll-demo{height:190px;overflow:auto;border:1px solid var(--line2);border-radius:10px;background:var(--panel)}.scroll-demo h3{position:sticky;top:0;margin:0;border-bottom:1px solid var(--line);background:var(--panel);padding:8px 10px;font-size:11px;z-index:1}.scroll-demo .row{height:32px;margin:1px 5px;border-radius:7px;padding:7px 8px;color:var(--muted);font-size:11px}.scroll-demo .row:nth-child(4){background:var(--raised);color:var(--ink)}
   .scroll-demo.mainish .row{height:44px;border-bottom:1px solid var(--line);border-radius:0}.scroll-demo.inspectish .row{height:55px}.scroll-demo.menuish{height:154px;padding:4px}.scroll-demo.menuish .row{height:32px;margin:0;border-radius:6px}
   .scroll-demo.show-scrollbar::-webkit-scrollbar{width:10px}.scroll-demo.show-scrollbar::-webkit-scrollbar-thumb{background:rgba(55,57,63,.28);background-clip:content-box}
-  @media(max-width:900px){.measure-note,.scroll-grid{grid-template-columns:1fr 1fr}.state-grid{grid-template-columns:90px repeat(5,130px);overflow-x:auto}.component-doc{padding-left:16px;padding-right:16px}}
+  @media(max-width:900px){.measure-note,.scroll-grid,.input-state-grid{grid-template-columns:1fr 1fr}.state-grid{grid-template-columns:90px repeat(5,130px);overflow-x:auto}.component-doc{padding-left:16px;padding-right:16px}}
 </style>
 </head>
 <body class="doc-page">
@@ -43,7 +44,7 @@
     <p class="lead">每列是固定状态样本，不依赖鼠标停留，便于逐项验收；真实控件仍保留悬停与聚焦。数据来自 Linear 浅色主题的浏览器计算样式，统一使用 150ms 过渡。</p>
     <div class="measure-note">
       <div><b>按钮</b><small>28/32px · 8px / 胶囊圆角 · 500</small></div>
-      <div><b>输入 / 选择器</b><small>32/30px · 8px · 1px 内环</small></div>
+      <div><b>输入 / 选择器</b><small>32/30px · 8px · 0.5px 边框</small></div>
       <div><b>菜单</b><small>12px 圆角 · 32px 行 · 三层短阴影</small></div>
       <div><b>动效</b><small>150ms · 缓出 · 按下不缩放</small></div>
     </div>
@@ -62,10 +63,15 @@
 
     <section class="control-section">
       <h2>输入框与选择器</h2>
-      <p>资料页输入框是 1px L86.5 实边；选择器靠 10.3% 内环与两层微阴影成形，悬停背景升到 L95.886。</p>
+      <p>Linear 实测输入框为 0.5px L86.5 边框；hover 变 L78.5，focus 用 1px 主色 outline 且 offset −1px，与边框重合成单层细 ring。</p>
+      <div class="input-state-grid" aria-label="输入框四态">
+        <div class="input-state"><label>静态</label><input class="c-input" value="范小舟" aria-label="静态输入框"></div>
+        <div class="input-state"><label>悬停</label><input class="c-input is-hover" value="范小舟" aria-label="悬停输入框"></div>
+        <div class="input-state"><label>聚焦</label><input class="c-input is-focus" value="范小舟" aria-label="聚焦输入框"></div>
+        <div class="input-state"><label>禁用</label><input class="c-input is-disabled" value="范小舟" aria-label="禁用输入框" disabled></div>
+      </div>
       <div class="spec state-grid">
         <div class="state-head">控件</div><div class="state-head">静态</div><div class="state-head">悬停</div><div class="state-head">按下 / 展开</div><div class="state-head">聚焦</div><div class="state-head">禁用</div>
-        <div class="state-name">输入框</div><div class="state-cell"><input class="c-input" value="范小舟"></div><div class="state-cell"><input class="c-input is-hover" value="范小舟"></div><div class="state-cell"><input class="c-input" value="范小舟"></div><div class="state-cell"><input class="c-input is-focus" value="范小舟"></div><div class="state-cell"><input class="c-input is-disabled" value="范小舟" disabled></div>
         <div class="state-name">选择器</div><div class="state-cell"><div class="c-select">智能体（默认）<span>⌄</span></div></div><div class="state-cell"><div class="c-select is-hover">智能体（默认）<span>⌄</span></div></div><div class="state-cell"><div class="c-select is-active">智能体（默认）<span>⌃</span></div></div><div class="state-cell"><div class="c-select is-focus">智能体（默认）<span>⌄</span></div></div><div class="state-cell"><div class="c-select is-disabled">智能体（默认）<span>⌄</span></div></div>
       </div>
       <div style="display:flex;gap:18px;align-items:flex-start;margin-top:12px">
