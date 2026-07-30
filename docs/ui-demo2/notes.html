@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
+<title>随手记 Modal — Harness UI 讨论稿 v2</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="shell">
+    <div data-include="rail"></div>
+    <div data-include="tasklist" data-selected="done1"></div>
+    <main class="main" data-surface>
+      <header class="app-bar">
+        <span class="kind-chip plain">任务</span>
+        <span class="app-title">修复回复框顶边拖高失效</span>
+        <span class="status-pill gray"><i class="dot"></i>已完成</span>
+        <div class="app-actions">
+          <button class="ui-btn icon-btn" aria-label="更多操作">…</button>
+          <button class="ui-btn icon-btn" aria-label="开关 Inspector">▥</button>
+        </div>
+      </header>
+      <div class="work-body">
+        <section class="conversation">
+          <div class="messages">
+            <div class="message user"><div class="speaker">你 · 09:57</div><div class="bubble">修复回复框顶边拖高失效…(背景内容,Modal 之下)</div></div>
+          </div>
+        </section>
+      </div>
+    </main>
+  </div>
+
+  <div class="scrim"></div>
+  <div class="modal" style="width:min(880px,94vw);height:min(580px,84vh)" role="dialog" aria-label="随手记">
+    <div class="modal-head">随手记<span>harness · 6 条</span>
+      <button class="mh-close" aria-label="关闭">×</button>
+    </div>
+    <div class="notes-body">
+      <aside class="notes-list">
+        <input class="notes-search" placeholder="搜索随手记…" aria-label="搜索随手记">
+        <div class="notes-scroll">
+          <div class="note-row selectable"><b>回归验证清单</b><small>今天 09:12</small></div>
+          <div class="note-row selectable"><b>Agent 协作想法:审查者轮换</b><small>今天 08:40</small></div>
+          <div class="note-row selectable selected"><b>接回调度者含义说明</b><small>昨天 18:22 · <span class="linked">已建任务 ↗</span></small></div>
+          <div class="note-row selectable"><b>移动端贴底的坑</b><small>昨天 15:03</small></div>
+          <div class="note-row selectable"><b>worktree 清理时机</b><small>07/27</small></div>
+          <div class="note-row selectable"><b>命令面板序列快捷键</b><small>07/26</small></div>
+        </div>
+      </aside>
+      <section class="note-editor">
+        <div class="note-meta">创建于昨天 18:22 · 按创建时项目归属
+          <span class="chip">关联任务:接回调度者含义说明</span>
+        </div>
+        <textarea class="note-text" aria-label="随手记正文">「接回调度者」这个词在 UI 上出现了三次,但含义各不相同:
+
+1. 执行者提问后答复送回——这是 answer_question,不叫接回;
+2. 团队被停后恢复——这是恢复全组;
+3. 用户直接指挥执行者后把控制权还给调度者——只有这个才该叫接回。
+
+建议:UI 文案只保留第 3 种用法,前两种分别改成「答复」和「恢复全组」。合并建任务时把这段原样带进正文。</textarea>
+      </section>
+    </div>
+    <div class="modal-foot">
+      <span class="hint">合并建任务后不删除,用回链指向所建任务</span>
+      <button class="ui-btn danger">删除</button>
+      <button class="ui-btn">合并到新任务</button>
+      <button class="ui-btn primary">保存</button>
+    </div>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>
