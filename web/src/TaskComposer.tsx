@@ -168,25 +168,33 @@ export function TaskComposer({
     setReasoningEffort("");
   }, [detected, singlePickable, singleTypes, profiles]);
 
-  const { leadTypes, leadProfiles, workerTypes, leadSelection, workerSelection } = useMemo(
-    () => teamExecutorDefaults(detected, leadPick, workerPick, profiles),
-    [detected, leadPick, workerPick, profiles],
+  const { leadTypes, leadProfiles, workerTypes, leadSelection, workerSelection, reviewerSelection } = useMemo(
+    () => teamExecutorDefaults(detected, leadPick, workerPick, profiles, reviewerPick),
+    [detected, leadPick, workerPick, reviewerPick, profiles],
   );
   const lead = leadSelection.agentType;
   const worker = workerSelection.agentType;
-  const reviewerSelection = reviewerPick && isExecutorPickable(reviewerPick, workerTypes, profiles)
-    ? reviewerPick
-    : { agentType: workerSelection.agentType, executorId: null };
   // 顺移无处可去时分两种情况说话，也分两种处理：
   // - **真的一个都没有**（探测成功、零 available、零已注册 profile）：这单建出来必然起不来，
   //   拦住提交并把话说明白。
   // - **探测失败**：前端分不清「没装」和「探不出来」，所以只提示不拦 —— 拦住会把一次接口
   //   抖动变成「新建任务坏了」。
   const noExecutor = nothingRunnable(detected, detectFailed, profiles);
+  // 这张单子当前**真正会用到**的每个角色都要过一遍可用性 —— 三种模式各有各的角色,别只查
+  // 一个:普通任务查 executorPick,团队查调度者/执行者/(开着的)审查者,辩论查两个辩手。
+  // 调度者那栏用 leadProfiles(已按 resident 收窄),不是全量 profiles。
   const unavailableRole = (() => {
     if (detected === null) return null;
+    if (debateOn) {
+      const debaters = [
+        { role: "辩手A", sel: { agentType: debate.debaterA, executorId: debate.debaterAExecutorId ?? null } },
+        { role: "辩手B", sel: { agentType: debate.debaterB, executorId: debate.debaterBExecutorId ?? null } },
+      ];
+      const bad = debaters.find((item) => !isExecutorPickable(item.sel, singleTypes, profiles));
+      return bad ? { role: bad.role, type: bad.sel.agentType } : null;
+    }
     if (!teamOn) return singlePickable ? null : { role: "执行器", type: executorPick.agentType };
-    if (!isExecutorPickable(leadSelection, leadTypes, profiles)) return { role: "调度者", type: lead };
+    if (!isExecutorPickable(leadSelection, leadTypes, leadProfiles)) return { role: "调度者", type: lead };
     if (!isExecutorPickable(workerSelection, workerTypes, profiles)) return { role: "执行者", type: worker };
     if (reviewEnabled && !isExecutorPickable(reviewerSelection, workerTypes, profiles)) {
       return { role: "审查者", type: reviewerSelection.agentType };
@@ -253,29 +261,36 @@ export function TaskComposer({
   // Agent detection can finish after a preset was clicked. If that reveals the
   // chosen type cannot fill its role on this machine, degrade the whole role
   // config together instead of leaving a model/effort from an incompatible CLI.
+  // 降级到 teamExecutorDefaults 算出来的那份选择,**连 executorId 一起**:算出来的可能是
+  // 一个 ssh 远端 profile,只抄 agentType 会把它退化成一个本机跑不起来的类型默认。
   useEffect(() => {
     if (detected === null) return;
-    if (leadPick && !isExecutorPickable(leadPick, leadTypes, profiles)) {
-      setLeadPick({ agentType: leadSelection.agentType, executorId: null });
+    if (leadPick && !isExecutorPickable(leadPick, leadTypes, leadProfiles)) {
+      setLeadPick(leadSelection);
       setLeadModel("");
       setLeadReasoningEffort("");
     }
     if (workerPick && !isExecutorPickable(workerPick, workerTypes, profiles)) {
-      setWorkerPick({ agentType: workerSelection.agentType, executorId: null });
+      setWorkerPick(workerSelection);
       setWorkerModel("");
       setWorkerReasoningEffort("");
     }
     if (reviewerPick && !isExecutorPickable(reviewerPick, workerTypes, profiles)) {
-      setReviewerPick({ agentType: workerSelection.agentType, executorId: null });
+      setReviewerPick(reviewerSelection);
       setReviewerModel("");
       setReviewerReasoningEffort("");
     }
-  }, [detected, leadPick, workerPick, reviewerPick, leadTypes, workerTypes, leadSelection, workerSelection, profiles]);
+  }, [detected, leadPick, workerPick, reviewerPick, leadTypes, leadProfiles, workerTypes, leadSelection, workerSelection, reviewerSelection, profiles]);
 
   const schedInvalid = !debateOn && ((launchMode === "once" && !at) || (launchMode === "cron" && !cron.trim()));
+  // 有角色在这台机器上跑不起来就别让它出门 —— 不是只看「一个执行器都没有」:注册过一个
+  // ssh profile 时 noExecutor=false,但审查者仍可能是个跑不起来的类型默认(第四轮审查抓到)。
+  // 探测失败时不拦:那时「没装」和「探不出来」长得一样,拦住会把一次接口抖动变成功能坏掉。
+  const roleBlocked = !detectFailed && !!unavailableRole;
   const canSubmit = (debateOn
     ? !!debate.topic.trim()
-    : !!body.trim() || seedAttachments.length > 0 || attachments.length > 0) && !busy && !schedInvalid && !noExecutor;
+    : !!body.trim() || seedAttachments.length > 0 || attachments.length > 0)
+    && !busy && !schedInvalid && !noExecutor && !roleBlocked;
 
   // 能不能提交只有**一个**判据 canSubmit(上面那几行),`submit()` 自己也照它把门 ——
   // 光把它接到按钮的 disabled 上不够:⌘↵ 这条路绕过按钮,「界面说拦住了、快捷键照样建出

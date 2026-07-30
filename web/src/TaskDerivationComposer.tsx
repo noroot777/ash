@@ -92,13 +92,10 @@ export function TaskDerivationComposer({
     return () => { alive = false; };
   }, [task.projectId]);
 
-  const { leadTypes, leadProfiles, workerTypes, leadSelection, workerSelection } = useMemo(
-    () => teamExecutorDefaults(detected, leadPick, workerPick, profiles),
-    [detected, leadPick, workerPick, profiles],
+  const { leadTypes, leadProfiles, workerTypes, leadSelection, workerSelection, reviewerSelection } = useMemo(
+    () => teamExecutorDefaults(detected, leadPick, workerPick, profiles, reviewerPick),
+    [detected, leadPick, workerPick, reviewerPick, profiles],
   );
-  const reviewerSelection = reviewerPick && isExecutorPickable(reviewerPick, workerTypes, profiles)
-    ? reviewerPick
-    : { agentType: workerSelection.agentType, executorId: null };
   const worktree = derivedWorktreeDefaults(
     task,
     worktreeContext?.branches ?? [],
@@ -110,7 +107,26 @@ export function TaskDerivationComposer({
   // ⌘↵ 那条路绕过按钮(TaskComposer 就这么漏过一次,第三轮审查抓到)。一个能干活的执行器
   // 都没有时(探测成功、零 available、零已注册 profile)也算不能提交:建出来必然起不来。
   const noExecutor = nothingRunnable(detected, detectFailed, profiles);
-  const canSubmit = !busy && !!worktreeContext && (teamMode || !!debate.topic.trim()) && !noExecutor;
+  // 这次派生真正会用到的角色都得跑得起来:团队查调度者/执行者/(开着的)审查者,辩论查两个
+  // 辩手。只查「一个执行器都没有」不够 —— 注册过一个 ssh profile 时那个判据是 false,审查者
+  // 却可能还是个跑不起来的类型默认(第四轮审查抓到)。探测失败时不拦(分不清没装和探不出来)。
+  const unavailableRole = (() => {
+    if (detected === null || detectFailed) return null;
+    if (!teamMode) {
+      const debaters = [
+        { role: "辩手A", sel: { agentType: debate.debaterA, executorId: debate.debaterAExecutorId ?? null } },
+        { role: "辩手B", sel: { agentType: debate.debaterB, executorId: debate.debaterBExecutorId ?? null } },
+      ];
+      const bad = debaters.find((item) => !isExecutorPickable(item.sel, workerTypes, profiles));
+      return bad ? bad.role : null;
+    }
+    if (!isExecutorPickable(leadSelection, leadTypes, leadProfiles)) return "调度者";
+    if (!isExecutorPickable(workerSelection, workerTypes, profiles)) return "执行者";
+    if (reviewEnabled && !isExecutorPickable(reviewerSelection, workerTypes, profiles)) return "审查者";
+    return null;
+  })();
+  const canSubmit = !busy && !!worktreeContext && (teamMode || !!debate.topic.trim())
+    && !noExecutor && !unavailableRole;
 
   const submit = async () => {
     if (!canSubmit) return;
@@ -282,10 +298,12 @@ export function TaskDerivationComposer({
       </div>
 
       <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-line/70 pt-2.5">
-        {noExecutor && (
+        {(noExecutor || unavailableRole) && (
           <p className="flex basis-full items-center gap-1 text-[11.5px] text-amber-700">
             <Warning size={13} className="shrink-0" />
-            本机没检测到任何可用的智能体 CLI，也没有已注册的执行器 —— 建出来的任务起不来，所以先拦住了。
+            {noExecutor
+              ? "本机没检测到任何可用的智能体 CLI，也没有已注册的执行器 —— 建出来的任务起不来，所以先拦住了。"
+              : `${unavailableRole}用的 CLI 本机没检测到，跑不起来 —— 换一个能跑的再提交。`}
           </p>
         )}
         <WorktreeHint context={worktreeContext} worktree={worktree} />

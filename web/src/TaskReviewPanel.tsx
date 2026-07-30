@@ -21,7 +21,7 @@ import { ExecutorField } from "./composer/ExecutorFields";
 import { ImageLightbox, type PreviewImage } from "./ImagePreview";
 import { Markdown } from "./Markdown";
 import { toast } from "./toast";
-import { useAvailableTypes } from "./useDetectedAgents";
+import { fallbackExecutor, isExecutorPickable, useAvailableTypes } from "./useDetectedAgents";
 import { useServerEvents } from "./useEvents";
 
 const AUTO_REVIEW_LIMIT = 2;
@@ -145,7 +145,7 @@ export function TaskReviewPanel({
     [task.id, task.agentType, task.executorId, task.model, task.reasoningEffort, parent?.team],
   );
   const { profiles, providers } = useExecutorProfiles();
-  const { types: executorTypes } = useAvailableTypes();
+  const { detected, failed: detectFailed, types: executorTypes } = useAvailableTypes();
   const { info, loading, loadError, load } = useTaskReviewInfo(task.id);
   const [dispatchOpen, setDispatchOpen] = useState(false);
   const [dispatching, setDispatching] = useState(false);
@@ -167,11 +167,27 @@ export function TaskReviewPanel({
     setSelection((current) => ({ ...current, executorId: null }));
   }, [profiles, selection]);
 
+  // 手动派审查 = **一次新建执行配置**,所以和新建面板同一套处理:默认值抄的是来源任务的
+  // 执行器(可能是很久以前建的、那个 CLI 现在已经不在本机了),检测回来后不成立就顺移到
+  // available 类型或已注册 profile(第四轮审查抓到:界面标了「本机未检测到」却照样能派)。
+  const dispatchPickable = isExecutorPickable(selection, executorTypes, profiles);
+  useEffect(() => {
+    if (detected === null || dispatchPickable) return;
+    const next = fallbackExecutor(executorTypes, profiles);
+    if (!next) return;
+    setSelection(next);
+    setModel("");
+    setReasoningEffort("");
+  }, [detected, dispatchPickable, executorTypes, profiles]);
+
   const rounds = info?.rounds ?? [];
   const previewImages = preview ? previewsForRound(task.id, rounds, preview.round) : [];
   const previewIndex = previewImages.findIndex((image) => image.name === preview?.name);
   const activeRound = rounds.find((round) => REVIEW_IN_FLIGHT.has(round.reviewTaskStatus));
   const canDispatch = !task.archived && task.status !== "running" && task.status !== "queued";
+  // 一个判据同时喂按钮和 dispatch(),别只挂按钮 —— 那样以后加快捷键就又漏一条路。
+  // 探测失败时不拦(分不清「没装」和「探不出来」)。
+  const canSend = !dispatching && !activeRound && (detectFailed || dispatchPickable);
   const autoLimitReached = !!info?.reviewRequested
     && task.stage === "verify_failed"
     && rounds.some((round) => round.round >= AUTO_REVIEW_LIMIT && round.conclusion === "verify_failed");
@@ -184,7 +200,7 @@ export function TaskReviewPanel({
   };
 
   const dispatch = async () => {
-    if (dispatching || activeRound) return;
+    if (!canSend) return;
     setDispatching(true);
     try {
       const { reviewTask } = await api.dispatchTaskReview(task.id, {
@@ -234,6 +250,11 @@ export function TaskReviewPanel({
           <div className="mb-2 text-[11px] leading-relaxed text-muted">
             这轮审查会立即启动；模型与思考强度留空时跟随所选执行器。
           </div>
+          {!detectFailed && !dispatchPickable && (
+            <div className="mb-2 text-[11px] leading-relaxed text-amber-700">
+              「{selection.agentType}」这个 CLI 本机没检测到，审查跑不起来 —— 换一个能跑的执行器再派。
+            </div>
+          )}
           <div className="flex flex-wrap items-center gap-2">
             <ExecutorField
               icon={<MagnifyingGlass size={14} />}
@@ -249,7 +270,7 @@ export function TaskReviewPanel({
             />
             <button
               type="button"
-              disabled={dispatching}
+              disabled={!canSend}
               onClick={() => void dispatch()}
               className="ml-auto inline-flex items-center gap-1.5 rounded-md bg-violet-600 px-3 py-1.5 text-[11.5px] font-semibold text-white transition-colors hover:bg-violet-500 disabled:opacity-45"
             >

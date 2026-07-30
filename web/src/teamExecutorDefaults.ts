@@ -25,6 +25,7 @@ export function teamExecutorDefaults(
   leadPick: ExecutorSelection | null,
   workerPick: ExecutorSelection | null,
   profiles: AgentExecutorProfile[] = [],
+  reviewerPick: ExecutorSelection | null = null,
 ) {
   const resident = residentTypes(detected);
   const available = availableTypes(detected);
@@ -45,5 +46,12 @@ export function teamExecutorDefaults(
     ? workerPick
     : fallbackExecutor(workerTypes, profiles, leadSelection.agentType)
       ?? { agentType: leadSelection.agentType, executorId: leadSelection.executorId };
-  return { leadTypes, leadProfiles, workerTypes, leadSelection, workerSelection };
+  // 缺省审查者跟执行者**同款** —— 连 executorId 一起跟,不能只抄 agentType:执行者可能是
+  // 一个 ssh 远端 profile(本机没装那个 CLI),只抄类型就把审查者退化成一个跑不起来的类型
+  // 默认(2026-07-30 第四轮审查抓到,而且当时这段逻辑在两个调用点各抄了一份、一起错)。
+  // 所以它和 lead/worker 一样放在这个单点里算。
+  const reviewerSelection = reviewerPick && isExecutorPickable(reviewerPick, workerTypes, profiles)
+    ? reviewerPick
+    : workerSelection;
+  return { leadTypes, leadProfiles, workerTypes, leadSelection, workerSelection, reviewerSelection };
 }
