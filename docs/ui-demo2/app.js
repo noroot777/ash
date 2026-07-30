@@ -1,5 +1,5 @@
 /* ui-demo2 共享脚本:注入导航条 / 方案切换器 / 侧边栏(含任务树) / 设置页专用窄栏,并绑定交互。
-   方案选择存 localStorage(ud2-sel / ud2-gray),跨页面保持。零外部依赖。 */
+   方案选择存 localStorage(ud2-sel / ud2-gray-r5),跨页面保持。零外部依赖。 */
 (function () {
   "use strict";
 
@@ -14,6 +14,7 @@
     ["composer.html", "新建任务"],
     ["notes.html", "随手记"],
     ["palette.html", "⌘K"],
+    ["components.html", "控件对照"],
     ["settings-agents.html", "设置·智能体"],
     ["settings-project.html", "设置·项目"],
     ["settings-groups.html", "设置·分组"],
@@ -135,7 +136,7 @@
   /* ── 注入顶部演示导航条 ── */
   var here = (location.pathname.split("/").pop() || "index.html");
   var bar =
-    '<nav class="demo-bar" aria-label="演示页导航"><span class="db-brand"><i>H</i>UI 讨论稿 · R4</span>' +
+    '<nav class="demo-bar" aria-label="演示页导航"><span class="db-brand"><i>H</i>UI 讨论稿 · R5</span>' +
     PAGES.map(function (p) {
       return '<a href="' + p[0] + '"' + (p[0] === here ? ' class="current"' : "") + ">" + p[1] + "</a>";
     }).join("") +
@@ -148,7 +149,8 @@
   function load(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
   var SEL = ["s1", "s2", "s3"], GRAY = ["base", "deep"];
   var curSel = SEL.indexOf(load("ud2-sel")) >= 0 ? load("ud2-sel") : "s1";
-  var curGray = GRAY.indexOf(load("ud2-gray")) >= 0 ? load("ud2-gray") : "base";
+  /* R5 使用新 key：旧稿可能记住 deep，导致校准版首次打开仍比 Linear 暗。 */
+  var curGray = GRAY.indexOf(load("ud2-gray-r5")) >= 0 ? load("ud2-gray-r5") : "base";
 
   function applyScheme() {
     SEL.forEach(function (s) { document.body.classList.toggle("sel-" + s, s === curSel); });
@@ -168,7 +170,7 @@
     '<div class="ss-row"><div class="ss-label">列表选中态</div><div class="ss-seg">' +
     '<button data-sel="s1">S1 染+条</button><button data-sel="s2">S2 淡染</button><button data-sel="s3">S3 灰</button></div></div>' +
     '<div class="ss-row"><div class="ss-label">灰阶</div><div class="ss-seg">' +
-    '<button data-gray="base">现状版</button><button data-gray="deep">加深版</button></div></div>' +
+    '<button data-gray="base">校准版</button><button data-gray="deep">加深版</button></div></div>' +
     "</aside>"
   );
   applyScheme();
@@ -188,7 +190,7 @@
     var swBtn = event.target.closest(".scheme-switch [data-sel],.scheme-switch [data-gray]");
     if (swBtn) {
       if (swBtn.hasAttribute("data-sel")) { curSel = swBtn.getAttribute("data-sel"); store("ud2-sel", curSel); }
-      else { curGray = swBtn.getAttribute("data-gray"); store("ud2-gray", curGray); }
+      else { curGray = swBtn.getAttribute("data-gray"); store("ud2-gray-r5", curGray); }
       applyScheme();
       return;
     }

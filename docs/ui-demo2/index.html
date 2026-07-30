@@ -68,14 +68,19 @@
   .demo-row small{margin-left:auto;color:var(--faint);font-size:10px}
   .callout{display:flex;gap:10px;align-items:flex-start;margin-top:14px;color:var(--muted);font-size:12px;max-width:760px}
   .callout::before{content:"要点";flex:0 0 auto;border-radius:4px;background:var(--ink);padding:2px 6px;color:#fff;font-size:9.5px;font-weight:750;margin-top:2px}
+  .language-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:0;border:1px solid var(--line2);border-radius:12px;background:var(--panel);overflow:hidden}
+  .principle{min-height:126px;padding:15px 16px;border-right:1px solid var(--line);border-bottom:1px solid var(--line)}
+  .principle:nth-child(3n){border-right:0}.principle:nth-last-child(-n+3){border-bottom:0}
+  .principle .mark{display:block;margin-bottom:7px;color:var(--faint);font:650 10px ui-monospace,monospace}
+  .principle b{display:block;margin-bottom:5px;font-size:13px;font-weight:600}.principle p{margin:0;color:var(--muted);font-size:11.5px;line-height:1.6}
   @media (max-width:900px){.two-col{grid-template-columns:1fr}.cols-diagram{grid-template-columns:1fr 1fr;min-height:0}.cols-diagram>div{min-height:110px}.map-row{grid-template-columns:130px 110px 1fr}}
 </style>
 </head>
-<body>
+<body class="doc-page">
   <main class="doc">
-    <p class="eyebrow">Harness Web · 讨论稿 v2 · 第四轮 · Linear 实站测量</p>
-    <h1>视觉按实测收紧，验收按源码重画。</h1>
-    <p class="lede"><b>信息架构不动，本轮只做两件事：</b>在已登录 Linear workspace 中逐页读取 computed style，把 244px 侧栏、28px 行高、13px/500 文字、浅灰表面、胶囊 tabs、设置行与命令面板尺寸统一落进共享样式；再按 <b>ReviewWorkspace / TaskReviewPanel / TeamReviewWorkspace</b> 的真实能力重做单任务和团队验收。右下角仍保留 S1/S2/S3 × 灰阶两版，并用 localStorage 跨页记住。</p>
+    <p class="eyebrow">Harness Web · 讨论稿 v2 · 第五轮 · Linear 设计语言</p>
+    <h1>不止复刻控件，开始用同一种语言设计。</h1>
+    <p class="lede"><b>本轮把实测从设计变量扩展到状态与组合规则：</b>按钮、输入、下拉、开关、提示浮层、状态标记与覆盖式滚动条都按真实 Linear 的尺寸、阴影和 150ms 动效重做；任务树、调度流、执行者栏、时间轴、验收队列、审查轮次、辩论与会话则按同一套分层原则重新组织。右下角仍保留 S1/S2/S3 × 灰阶两版，首次加载强制进入亮度校准版。</p>
 
     <h2>演示页目录</h2>
     <p class="sub">顶部导航条在每一页都有,可随时横跳;侧边栏任务树的行、顶部三图标、项目下拉里的「设置」都是真链接,可以直接当产品点。</p>
@@ -93,19 +98,32 @@
       <a class="nav-card" href="settings-archive.html"><span class="no">11</span><b>设置 · 已归档</b><small>归档列表与还原</small></a>
       <a class="nav-card" href="notes.html"><span class="no">12</span><b>随手记</b><small>侧栏顶部便签图标打开弹层</small></a>
       <a class="nav-card" href="palette.html"><span class="no">13</span><b>命令面板 ⌘K</b><small>720×450、46px 命令项、12px 圆角与实测阴影</small></a>
+      <a class="nav-card" href="components.html"><span class="no">14</span><b>控件全状态对照</b><small>按钮、输入、下拉、复选框、开关、提示浮层、状态标记与四类滚动区</small></a>
     </div>
 
-    <h2>实测 Linear token 对照表</h2>
-    <p class="sub">采样视口为 1455 × 806 CSS px，系统浅色主题。Linear 返回大量 LCH 变量；现状版直接采用实测值，加深版只按相对明度下移。</p>
+    <h2>Linear 设计语言摘要</h2>
+    <p class="sub">这不是形容词清单，而是本轮重画 harness 特有组件时实际执行的约束。每一条都能直接落到 CSS 或版式判断。</p>
+    <div class="language-grid">
+      <div class="principle"><span class="mark">01 / 表面</span><b>无彩表面，亮度差代替粗边框</b><p>侧栏固定在 RGB 239/239/240，主内容固定在 249/249/250，白色只给输入、菜单和局部浮层。大块区域不使用抬升层或覆盖层。</p></div>
+      <div class="principle"><span class="mark">02 / 节奏</span><b>4/8px 节奏，28/32/44px 控件带</b><p>行高与间距从 4px 倍数取值；侧栏行 28px、菜单项 32px、任务行 44px。信息密度靠节奏，不靠把字号压小。</p></div>
+      <div class="principle"><span class="mark">03 / 字体</span><b>字重和亮度承担层级</b><p>正文 13px/400–500；标题只升到 500–600。一级信息接近黑，说明用 L39，时间和快捷键用 L64，不用额外色块分组。</p></div>
+      <div class="principle"><span class="mark">04 / 状态</span><b>状态色只落在微点与细图标</b><p>绿色、琥珀、青色、红色只用于 6–8px 状态点、勾叉或短文字；不再给整张执行者卡、审查报告或会话气泡铺色。</p></div>
+      <div class="principle"><span class="mark">05 / 深度</span><b>阴影分三档，边框只做校准线</b><p>控件用 1px 淡内环 + 两层微阴影；菜单用三层短阴影；命令面板才使用长阴影。普通内容区不加“卡片感”。</p></div>
+      <div class="principle"><span class="mark">06 / 动效</span><b>150ms，短促且可逆</b><p>悬停、聚焦、开关统一 150ms，常用缓出；按下只回落背景或阴影，不缩放跳动。详情栏的结构动画保持 180ms。</p></div>
+    </div>
+    <p class="callout">施工映射：任务树学习侧栏团队展开；调度流学习活动记录；执行者栏学习任务列表；甘特学习时间线；验收与审查学习清单和活动；会话和辩论学习任务评论流。</p>
+
+    <h2>实测 Linear 设计变量对照表</h2>
+    <p class="sub">采样视口为 1455 × 806 CSS px，系统浅色主题。截图像素复核：侧栏 RGB 239/239/240，主内容 RGB 249/249/250；校准版两处均为 0 差值。</p>
     <div class="token-table">
       <div class="token-row"><b>项目</b><b>Linear 实测</b><b>本稿采用</b></div>
       <div class="token-row"><b>侧栏</b><span>244px；项高 28px</span><span>244px；项高 28px</span></div>
       <div class="token-row"><b>侧栏文字</b><span>13px / 500；图标 14px</span><span>13px / 500；状态点 8px</span></div>
       <div class="token-row"><b>主表面</b><span><i class="cdot" style="background:lch(97.94% .5 282)"></i>lch(97.94% .5 282)</span><span>--canvas 同值</span></div>
       <div class="token-row"><b>侧栏表面</b><span><i class="cdot" style="background:lch(94.44% .5 282)"></i>lch(94.44% .5 282)</span><span>--chrome 同值</span></div>
-      <div class="token-row"><b>边框</b><span><i class="cdot" style="background:lch(88.49% 0 282)"></i>lch(88.49% 0 282)</span><span>0.5px / --line 同值</span></div>
+      <div class="token-row"><b>边框</b><span><i class="cdot" style="background:lch(90.55% 0 282)"></i>90.55 / 控件 86.5</span><span>外壳细线 / 输入与菜单内环分档</span></div>
       <div class="token-row"><b>正文三级</b><span>9.794% / 19.588% / 39.176%</span><span>ink / 次级内容 / muted</span></div>
-      <div class="token-row"><b>hover / 选中</b><span>lch(91.64%) / lch(89.54%)</span><span>两值原样；S1/S2/S3 只改指示方式</span></div>
+      <div class="token-row"><b>悬停 / 选中</b><span>控件 95.886；侧栏 91.64；选中 89.54</span><span>按组件语义分开，不再用一个抬升层到处铺</span></div>
       <div class="token-row"><b>胶囊 tabs</b><span>28px；12px / 500；9999px</span><span>28px；12px / 500；9999px</span></div>
       <div class="token-row"><b>设置页</b><span>导航 244px；内容 640px；行 65px</span><span>244px / 640px / 65px</span></div>
       <div class="token-row"><b>命令面板</b><span>720×450；项 46px；圆角 12px</span><span>720×450；项 46px；圆角 12px</span></div>
@@ -123,7 +141,8 @@
       <div><span class="tag">v1 · 第一轮</span><b>四栏:项目窄栏独立</b><small>专职项目窄栏 + 任务列表 + 正文 + Inspector,最左一栏信息密度太低。</small></div>
       <div><span class="tag">v2 · 第二轮</span><b>四栏:单一侧边栏</b><small>项目切换器和导航收进一条 240px 侧栏,但任务列表仍是独立第二栏。</small></div>
       <div><span class="tag">v3 · 信息架构定稿</span><b>三栏:任务树入侧栏</b><small>任务列表并进侧栏，设置改为单开页。</small></div>
-      <div><span class="tag now">v4 · 本轮</span><b>实测视觉 + 真实验收</b><small>不再改信息架构，只统一细节 token，并补齐单任务/团队验收功能面。</small></div>
+      <div><span class="tag">v4 · 上轮</span><b>实测视觉 + 真实验收</b><small>统一基础 token，并补齐单任务/团队验收功能面。</small></div>
+      <div><span class="tag now">v5 · 本轮</span><b>控件全状态 + 设计语言</b><small>校准默认亮度，并用 Linear 的组合规则重画 harness 特有组件。</small></div>
     </div>
     <p class="callout">任务树的选中行吃的就是全局选中态方案——切 S1/S2/S3,任务树、下拉、⌘K、设置页列表一起变。</p>
 
@@ -178,13 +197,13 @@
     <p class="callout">hover 采用 Linear 实测 lch(91.64% .5 282)，选中采用 lch(89.54% .5 282)；加深版维持同样的明度差。</p>
 
     <h2>灰阶双版 · 相对关系</h2>
-    <p class="sub">现状版以 Linear 实测 token 为锚；加深版不改变层级，只把灰阶整体下移，panel / ink / accent 保持稳定。</p>
+    <p class="sub">校准版以 Linear 实测 token 为锚；加深版不改变层级，只把灰阶整体下移，panel / ink / accent 保持稳定。</p>
     <div class="token-table">
-      <div class="token-row"><b>Token</b><b>现状版</b><b>加深版</b></div>
+      <div class="token-row"><b>Token</b><b>校准版</b><b>加深版</b></div>
       <div class="token-row"><b>chrome</b><span>lch(94.44% .5 282)</span><span>lch(92.2% .5 282)</span></div>
       <div class="token-row"><b>canvas</b><span>lch(97.94% .5 282)</span><span>lch(96.5% .5 282)</span></div>
-      <div class="token-row"><b>raised</b><span>lch(92.44% .5 282)</span><span>lch(89.8% .5 282)</span></div>
-      <div class="token-row"><b>line</b><span>lch(88.49% 0 282)</span><span>lch(82.5% 0 282)</span></div>
+      <div class="token-row"><b>raised</b><span>lch(96.914% 0 282)</span><span>lch(94.2% .5 282)</span></div>
+      <div class="token-row"><b>line</b><span>lch(90.55% 0 282)</span><span>lch(86% 0 282)</span></div>
       <div class="token-row"><b>muted</b><span>lch(39.176% 1.25 282)</span><span>lch(32% 1.25 282)</span></div>
       <div class="token-row"><b>accent</b><span>#5e6ad2</span><span>#5e6ad2（不变）</span></div>
     </div>
