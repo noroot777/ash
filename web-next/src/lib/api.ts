@@ -89,6 +89,17 @@ export type DeleteTaskResult = {
 
 export type TaskCommit = { sha: string; subject: string; at: string };
 
+export type GitOverview = {
+  branches: string[];
+  current: string | null;
+  worktrees: {
+    path: string;
+    branch: string | null;
+    head: string | null;
+    detached: boolean;
+  }[];
+};
+
 export type TaskDiffResult = {
   available: boolean;
   sourceBranch: string;
@@ -201,6 +212,8 @@ export const api = {
     request(`/projects/${id(projectId)}/health`),
   projectBranches: (projectId: string): Promise<{ branches: string[]; current: string | null }> =>
     request(`/projects/${id(projectId)}/branches`),
+  projectGitOverview: (projectId: string): Promise<GitOverview> =>
+    request(`/projects/${id(projectId)}/git-overview`),
   checkPath: (repoPath: string): Promise<ProjectHealth> =>
     request("/projects/check", json("POST", { repoPath })),
   discardTaskWorkspace: (
@@ -314,7 +327,15 @@ export const api = {
   deleteNote: (noteId: string): Promise<{ deleted: true }> =>
     request(`/notes/${id(noteId)}`, { method: "DELETE" }),
 
-  search: (query: string): Promise<SearchHit[]> => request(`/search?q=${id(query)}`),
+  search: (
+    query: string,
+    scope?: { projectId?: string; type?: "tasks" | "notes" },
+  ): Promise<SearchHit[]> => {
+    const params = new URLSearchParams({ q: query });
+    if (scope?.projectId) params.set("projectId", scope.projectId);
+    if (scope?.type) params.set("type", scope.type);
+    return request(`/search?${params}`);
+  },
   uploadFile: (
     dataUrl: string,
     name: string,

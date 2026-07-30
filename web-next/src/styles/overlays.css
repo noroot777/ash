@@ -173,40 +173,6 @@
   background: color-mix(in lch, var(--canvas) 72%, var(--panel));
 }
 
-.palette-preview > div {
-  display: grid;
-  gap: 4px;
-  border-bottom: 1px solid var(--line);
-  padding: 18px;
-}
-
-.palette-preview > div span {
-  color: var(--faint);
-  font-size: 9px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.palette-preview > div b {
-  font-size: 14px;
-  font-weight: 600;
-}
-
-.palette-preview > div small {
-  color: var(--faint);
-  font-size: 10px;
-}
-
-.palette-preview p {
-  margin: 0;
-  padding: 18px;
-  color: var(--muted);
-  font-size: 12px;
-  line-height: 1.8;
-  white-space: pre-wrap;
-}
-
 .palette-empty {
   margin: 0;
   padding: 44px 18px;
