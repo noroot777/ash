@@ -10,6 +10,7 @@ import {
   DownloadSimple,
   GitDiff,
   Play,
+  PushPin,
   SpinnerGap,
   Stop,
   Trash,
@@ -40,6 +41,7 @@ export function TaskHeader({
   busy,
   refreshing,
   onTitle,
+  onTogglePin,
   onPrimary,
   onArchive,
   onRefresh,
@@ -52,6 +54,7 @@ export function TaskHeader({
   busy: boolean;
   refreshing: boolean;
   onTitle: (title: string) => Promise<void>;
+  onTogglePin: () => Promise<void>;
   onPrimary: (action: Exclude<PrimaryAction, null>) => void;
   onArchive: () => void;
   onRefresh: () => void;
@@ -194,6 +197,25 @@ export function TaskHeader({
               <Copy size={14} />复制任务链接
             </button>
             <span role="separator" />
+            {!task.archived && (
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setMenu(false);
+                  void onTogglePin().catch((reason) => {
+                    notify(reason instanceof Error ? reason.message : String(reason));
+                  });
+                }}
+              >
+                <PushPin
+                  size={14}
+                  weight={task.pinnedAt != null ? "fill" : "regular"}
+                  className={task.pinnedAt != null ? "text-accent" : undefined}
+                />
+                {task.pinnedAt != null ? "取消置顶" : "置顶"}
+              </button>
+            )}
             {task.parentId === null && (
               <button type="button" role="menuitem" onClick={() => { setMenu(false); onArchive(); }} disabled={!task.archived && !canArchive(task.status)}>
                 <Archive size={14} />{task.archived ? "取消归档" : "归档任务"}

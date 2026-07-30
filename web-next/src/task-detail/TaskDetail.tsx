@@ -109,6 +109,7 @@ export function TaskDetail({
         busy={busy}
         refreshing={conversation.refreshing}
         onTitle={(title) => patch({ title, autoTitle: false })}
+        onTogglePin={() => patch({ pinnedAt: task.pinnedAt != null ? null : Date.now() })}
         onPrimary={(action) => void perform(action)}
         onArchive={() => void archive()}
         onRefresh={() => void refresh()}
