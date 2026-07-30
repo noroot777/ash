@@ -12,6 +12,12 @@ import { Button, Toggle } from "../components/ui.tsx";
 import { api } from "../lib/api.ts";
 import { AttachmentPicker, UploadAttachmentList, useAttachments } from "../task-detail/Attachments.tsx";
 import { attachmentView } from "../task-detail/utils.ts";
+import {
+  emptyComposerExecutorConfigs,
+  patchComposerExecutor,
+  setComposerExecutorProfile,
+  type ComposerExecutorRole,
+} from "./executorOverrides.ts";
 
 export type ComposerDraft = { body: string; attachments: string[]; noteIds?: string[] };
 
@@ -51,7 +57,8 @@ export function TaskComposerPanel({
   project,
   groups,
   initialDraft,
-  initialMode = "single",
+  mode,
+  onModeChange,
   onCancel,
   onCreated,
   notify,
@@ -59,30 +66,19 @@ export function TaskComposerPanel({
   project: ProjectView;
   groups: Group[];
   initialDraft?: ComposerDraft | null;
-  initialMode?: TaskMode;
+  mode: TaskMode;
+  onModeChange: (mode: TaskMode) => void;
   onCancel: () => void;
   onCreated: (task: Task, draft?: ComposerDraft | null) => void;
   notify: (message: string) => void;
 }) {
-  const [mode, setMode] = useState<TaskMode>(initialMode);
   const [title, setTitle] = useState("");
   const [body, setBody] = useState(initialDraft?.body ?? "");
   const [seedAttachments, setSeedAttachments] = useState(initialDraft?.attachments ?? []);
   const [profiles, setProfiles] = useState<AgentExecutorProfile[]>([]);
-  const [singleProfile, setSingleProfile] = useState("");
-  const [leadProfile, setLeadProfile] = useState("");
-  const [workerProfile, setWorkerProfile] = useState("");
-  const [reviewerProfile, setReviewerProfile] = useState("");
+  const [executors, setExecutors] = useState(emptyComposerExecutorConfigs);
   const [debaterAProfile, setDebaterAProfile] = useState("");
   const [debaterBProfile, setDebaterBProfile] = useState("");
-  const [model, setModel] = useState("");
-  const [effort, setEffort] = useState("");
-  const [leadModel, setLeadModel] = useState("");
-  const [workerModel, setWorkerModel] = useState("");
-  const [leadEffort, setLeadEffort] = useState("");
-  const [workerEffort, setWorkerEffort] = useState("");
-  const [reviewerModel, setReviewerModel] = useState("");
-  const [reviewerEffort, setReviewerEffort] = useState("");
   const [review, setReview] = useState(true);
   const [rounds, setRounds] = useState("3");
   const [gate, setGate] = useState(true);
@@ -99,10 +95,13 @@ export function TaskComposerPanel({
       setProfiles(agents);
       const claude = defaultProfile(agents, "claude") ?? agents[0];
       const codex = defaultProfile(agents, "codex") ?? agents.find((profile) => profile.id !== claude?.id) ?? claude;
-      setSingleProfile(claude?.id ?? "__type:claude");
-      setLeadProfile(claude?.id ?? "__type:claude");
-      setWorkerProfile(codex?.id ?? "__type:codex");
-      setReviewerProfile(codex?.id ?? "__type:codex");
+      setExecutors((current) => ({
+        ...current,
+        single: { ...current.single, profile: claude?.id ?? "__type:claude" },
+        lead: { ...current.lead, profile: claude?.id ?? "__type:claude" },
+        worker: { ...current.worker, profile: codex?.id ?? "__type:codex" },
+        reviewer: { ...current.reviewer, profile: codex?.id ?? "__type:codex" },
+      }));
       setDebaterAProfile(claude?.id ?? "__type:claude");
       setDebaterBProfile(codex?.id ?? "__type:codex");
       setUseWorktree(project.health.isRepo && settings.worktreeDefault);
@@ -122,16 +121,18 @@ export function TaskComposerPanel({
     const match = /^\s*(\/\S*)$/.exec(body);
     return match ? SLASHES.filter((item) => item.command.startsWith(match[1]!.toLowerCase())) : [];
   }, [body]);
-  const applySlash = (nextMode: TaskMode, rest = "") => { setMode(nextMode); setBody(rest); };
+  const applySlash = (nextMode: TaskMode, rest = "") => { onModeChange(nextMode); setBody(rest); };
   const changeBody = (value: string) => {
     const parsed = /^\s*\/(single|team|debate)\s+([\s\S]*)$/i.exec(value);
     if (parsed) applySlash(parsed[1]!.toLowerCase() as TaskMode, parsed[2] ?? "");
     else setBody(value);
   };
-  const selectedSingleType = profileType(profiles, singleProfile, "claude");
-  const selectedLeadType = profileType(profiles, leadProfile, "claude");
-  const selectedWorkerType = profileType(profiles, workerProfile, "codex");
-  const selectedReviewerType = profileType(profiles, reviewerProfile, selectedWorkerType);
+  const changeExecutor = (role: ComposerExecutorRole, profile: string) => setExecutors((current) => setComposerExecutorProfile(current, role, profile));
+  const changeOverride = (role: ComposerExecutorRole, patch: { model?: string; effort?: string }) => setExecutors((current) => patchComposerExecutor(current, role, patch));
+  const selectedSingleType = profileType(profiles, executors.single.profile, "claude");
+  const selectedLeadType = profileType(profiles, executors.lead.profile, "claude");
+  const selectedWorkerType = profileType(profiles, executors.worker.profile, "codex");
+  const selectedReviewerType = profileType(profiles, executors.reviewer.profile, selectedWorkerType);
   const canSubmit = (mode === "debate" ? !!body.trim() : !!body.trim() || allAttachments.length > 0) && !busy;
 
   const submit = async (run: boolean) => {
@@ -157,20 +158,20 @@ export function TaskComposerPanel({
         task = await api.createTask({ ...common, body: body.trim(), attachments: allAttachments, mode, agentType: selectedLeadType, useWorktree: project.health.isRepo && useWorktree, worktreeBase: useWorktree && base ? base : null, team: {
           lead: selectedLeadType,
           worker: selectedWorkerType,
-          leadExecutorId: executorId(leadProfile),
-          workerExecutorId: executorId(workerProfile),
-          leadModel: leadModel || null,
-          workerModel: workerModel || null,
-          leadReasoningEffort: leadEffort || null,
-          workerReasoningEffort: workerEffort || null,
+          leadExecutorId: executorId(executors.lead.profile),
+          workerExecutorId: executorId(executors.worker.profile),
+          leadModel: executors.lead.model || null,
+          workerModel: executors.worker.model || null,
+          leadReasoningEffort: executors.lead.effort || null,
+          workerReasoningEffort: executors.worker.effort || null,
           review,
           reviewerAgentType: selectedReviewerType,
-          reviewerExecutorId: executorId(reviewerProfile),
-          reviewerModel: reviewerModel || null,
-          reviewerReasoningEffort: reviewerEffort || null,
+          reviewerExecutorId: executorId(executors.reviewer.profile),
+          reviewerModel: executors.reviewer.model || null,
+          reviewerReasoningEffort: executors.reviewer.effort || null,
         } });
       } else {
-        task = await api.createTask({ ...common, body: body.trim(), attachments: allAttachments, mode, agentType: selectedSingleType, executorId: executorId(singleProfile), model: model || null, reasoningEffort: effort || null, useWorktree: project.health.isRepo && useWorktree, worktreeBase: useWorktree && base ? base : null });
+        task = await api.createTask({ ...common, body: body.trim(), attachments: allAttachments, mode, agentType: selectedSingleType, executorId: executorId(executors.single.profile), model: executors.single.model || null, reasoningEffort: executors.single.effort || null, useWorktree: project.health.isRepo && useWorktree, worktreeBase: useWorktree && base ? base : null });
       }
     } catch (error) {
       notify(error instanceof Error ? error.message : "任务创建失败");
@@ -197,7 +198,7 @@ export function TaskComposerPanel({
     <main className="task-composer-panel">
       <header className="composer-header"><span className="workspace-kind-chip">新建</span><b>新建任务</b><span>{project.name}</span><Button variant="ghost" onClick={onCancel}>取消 Esc</Button></header>
       <div className="composer-scroll"><div className="composer-inner">
-        <div className="composer-tabs" role="tablist" aria-label="任务模式">{MODES.map((item) => { const Icon = item.icon; return <button type="button" role="tab" aria-selected={mode === item.value} key={item.value} onClick={() => setMode(item.value)}><Icon size={15} />{item.label}</button>; })}<span>切换模式不清空正文</span></div>
+        <div className="composer-tabs" role="tablist" aria-label="任务模式">{MODES.map((item) => { const Icon = item.icon; return <button type="button" role="tab" aria-selected={mode === item.value} key={item.value} onClick={() => onModeChange(item.value)}><Icon size={15} />{item.label}</button>; })}<span>切换模式不清空正文</span></div>
         <input className="composer-title" value={title} onChange={(event) => setTitle(event.target.value)} placeholder="任务名称（可选；留空自动命名）" />
         <div className="composer-objective">
           <textarea autoFocus value={body} onChange={(event) => changeBody(event.target.value)} onPaste={uploads.onPaste} placeholder={mode === "team" ? "给调度者的目标…（可输入 /single 或 /debate 切换）" : mode === "debate" ? "要讨论并形成结论的议题…" : "描述要做什么…（可输入 /team 或 /debate）"} onKeyDown={(event) => {
@@ -209,8 +210,8 @@ export function TaskComposerPanel({
         {mode !== "debate" && <><UploadAttachmentList attachments={uploads.attachments} error={uploads.error} onRemove={uploads.remove} />{!!seedAttachments.length && <div className="composer-seed-attachments">{seedAttachments.map((path) => { const view = attachmentView(path); return <span key={path}><Paperclip size={12} />{view.name}<button type="button" onClick={() => setSeedAttachments((current) => current.filter((item) => item !== path))}><X size={10} /></button></span>; })}</div>}</>}
         {mode === "debate" && allAttachments.length > 0 && <p className="composer-warning">辩论配置不接收附件；附件仍保留，切回单任务或团队后会随任务提交。</p>}
         <div className="composer-fields">
-          {mode === "single" && <><ExecutorSelect label="执行器" value={singleProfile} profiles={profiles} onChange={setSingleProfile} />{modelField("模型", model, setModel, selectedSingleType)}{effortField("思考强度", effort, setEffort, selectedSingleType)}</>}
-          {mode === "team" && <><ExecutorSelect label="调度者执行器" value={leadProfile} profiles={profiles} onChange={setLeadProfile} /><ExecutorSelect label="执行者执行器" value={workerProfile} profiles={profiles} onChange={setWorkerProfile} />{modelField("调度者模型", leadModel, setLeadModel, selectedLeadType)}{modelField("执行者模型", workerModel, setWorkerModel, selectedWorkerType)}{effortField("调度者思考强度", leadEffort, setLeadEffort, selectedLeadType)}{effortField("执行者思考强度", workerEffort, setWorkerEffort, selectedWorkerType)}<ExecutorSelect label="审查者执行器" value={reviewerProfile} profiles={profiles} onChange={setReviewerProfile} />{modelField("审查者模型", reviewerModel, setReviewerModel, selectedReviewerType)}{effortField("审查者思考强度", reviewerEffort, setReviewerEffort, selectedReviewerType)}<label className="composer-toggle-field"><span>自动审查</span><Toggle checked={review} onChange={setReview} label={review ? "已开启" : "已关闭"} /></label></>}
+          {mode === "single" && <><ExecutorSelect label="执行器" value={executors.single.profile} profiles={profiles} onChange={(value) => changeExecutor("single", value)} />{modelField("模型", executors.single.model, (model) => changeOverride("single", { model }), selectedSingleType)}{effortField("思考强度", executors.single.effort, (effort) => changeOverride("single", { effort }), selectedSingleType)}</>}
+          {mode === "team" && <><ExecutorSelect label="调度者执行器" value={executors.lead.profile} profiles={profiles} onChange={(value) => changeExecutor("lead", value)} /><ExecutorSelect label="执行者执行器" value={executors.worker.profile} profiles={profiles} onChange={(value) => changeExecutor("worker", value)} />{modelField("调度者模型", executors.lead.model, (model) => changeOverride("lead", { model }), selectedLeadType)}{modelField("执行者模型", executors.worker.model, (model) => changeOverride("worker", { model }), selectedWorkerType)}{effortField("调度者思考强度", executors.lead.effort, (effort) => changeOverride("lead", { effort }), selectedLeadType)}{effortField("执行者思考强度", executors.worker.effort, (effort) => changeOverride("worker", { effort }), selectedWorkerType)}<ExecutorSelect label="审查者执行器" value={executors.reviewer.profile} profiles={profiles} onChange={(value) => changeExecutor("reviewer", value)} />{modelField("审查者模型", executors.reviewer.model, (model) => changeOverride("reviewer", { model }), selectedReviewerType)}{effortField("审查者思考强度", executors.reviewer.effort, (effort) => changeOverride("reviewer", { effort }), selectedReviewerType)}<label className="composer-toggle-field"><span>自动审查</span><Toggle checked={review} onChange={setReview} label={review ? "已开启" : "已关闭"} /></label></>}
           {mode === "debate" && <><ExecutorSelect label="正方执行器" value={debaterAProfile} profiles={profiles} onChange={setDebaterAProfile} /><ExecutorSelect label="反方执行器" value={debaterBProfile} profiles={profiles} onChange={setDebaterBProfile} /><label className="composer-field"><span>最多轮数</span><select value={rounds} onChange={(event) => setRounds(event.target.value)}><option value="">不限</option>{[1, 2, 3, 5, 8].map((value) => <option value={value} key={value}>{value} 轮</option>)}</select></label><label className="composer-toggle-field"><span>共识闸门</span><Toggle checked={gate} onChange={setGate} label={gate ? "需要确认" : "自动结束"} /></label></>}
           {mode !== "debate" && project.health.isRepo && <><label className="composer-toggle-field"><span>worktree</span><Toggle checked={useWorktree} onChange={setUseWorktree} label={useWorktree ? "独立 worktree" : "直接使用项目目录"} /></label><label className="composer-field"><span>base 分支</span><select value={base} disabled={!useWorktree} onChange={(event) => setBase(event.target.value)}><option value="">当前 HEAD</option>{branches.map((branch) => <option value={branch} key={branch}>{branch}</option>)}</select></label></>}
           {mode !== "debate" && <label className="composer-field"><span>分组</span><select value={groupId} onChange={(event) => setGroupId(event.target.value)}><option value="">无分组</option>{groups.filter((group) => !group.ownerTaskId).map((group) => <option value={group.id} key={group.id}>{group.name} · {group.mode === "parallel" ? "并行" : "串行"}</option>)}</select></label>}

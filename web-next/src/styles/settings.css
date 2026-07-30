@@ -447,20 +447,64 @@
 }
 
 .settings-group-row {
-  display: grid;
+  display: flex;
   min-height: 56px;
-  grid-template-columns: minmax(120px, 1fr) 86px 72px auto auto auto 28px;
-  align-items: center;
-  gap: 8px;
+  flex-direction: column;
+  gap: 7px;
   border-bottom: 1px solid var(--line);
   padding: 9px 12px;
 }
 
-.settings-group-row > span {
+.settings-group-main {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) 86px 72px auto auto auto 28px;
+  align-items: center;
+  gap: 8px;
+}
+
+.settings-group-main > span {
   color: var(--faint);
   font-size: 11px;
   white-space: nowrap;
 }
+
+.settings-resume-queue {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 0 2px 1px;
+  color: var(--faint);
+  font-size: 10px;
+}
+
+.settings-resume-queue > span,
+.settings-resume-queue > strong {
+  flex: none;
+  line-height: 14px;
+  white-space: nowrap;
+}
+
+.settings-resume-queue > strong {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-weight: 500;
+}
+
+.settings-resume-dots {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-wrap: wrap;
+  gap: 1px 3px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 9px;
+  line-height: 12px;
+}
+
+.settings-resume-dots .is-done { color: var(--green); }
+.settings-resume-dots .is-running,
+.settings-resume-dots .is-queued { color: var(--amber); }
+.settings-resume-dots .is-failed { color: var(--red); }
+.settings-resume-dots .is-paused { color: var(--muted); }
 
 .settings-group-create {
   display: grid;
@@ -546,7 +590,7 @@
   .settings-agent-row label:nth-of-type(3) { display: none; }
   .settings-add-agent { grid-template-columns: 100px 1fr 1fr; }
   .settings-add-agent .ui-button { justify-self: start; }
-  .settings-group-row { grid-template-columns: minmax(100px, 1fr) 82px 64px auto auto 28px; }
+  .settings-group-main { grid-template-columns: minmax(100px, 1fr) 82px 64px auto auto 28px; }
   .settings-group-row .ui-button:not(.ui-button--primary) { display: none; }
 }
 
@@ -559,6 +603,6 @@
   .settings-default-tag, .settings-text-action { display: none; }
   .settings-cli-grid { grid-template-columns: 1fr; }
   .settings-cli-grid article { border-right: 0; }
-  .settings-group-row { grid-template-columns: 1fr 78px auto 28px; }
-  .settings-group-row > span, .settings-group-row .settings-paused { display: none; }
+  .settings-group-main { grid-template-columns: 1fr 78px auto 28px; }
+  .settings-group-main > span, .settings-group-main .settings-paused { display: none; }
 }

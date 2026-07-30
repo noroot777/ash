@@ -39,7 +39,7 @@ export function WorkspaceShell() {
   const [groups, setGroups] = useState<Group[]>([]);
   const [paletteOpen, setPaletteOpen] = useState(initial.view === "palette");
   const [notes, setNotes] = useState<{ projectId: string; noteId: string | null } | null>(initial.view === "notes" && initial.projectId ? { projectId: initial.projectId, noteId: initial.noteId } : null);
-  const [composer, setComposer] = useState<{ draft?: ComposerDraft | null; mode?: TaskMode } | null>(initial.view === "create" ? { mode: initial.mode } : null);
+  const [composer, setComposer] = useState<{ draft?: ComposerDraft | null; mode: TaskMode } | null>(initial.view === "create" ? { mode: initial.mode } : null);
   const [reviewTaskId, setReviewTaskId] = useState<string | null>(initial.view === "review" ? initial.taskId : null);
   const [deleteTarget, setDeleteTarget] = useState<Task | null>(null);
   const [createDialog, setCreateDialog] = useState<"group" | "project" | null>(null);
@@ -84,7 +84,7 @@ export function WorkspaceShell() {
     if (taskId && !settingsSection) params.set("task", taskId);
     if (settingsSection) { params.set("view", "settings"); params.set("settings", settingsSection); }
     else if (notes) { params.set("view", "notes"); if (notes.noteId) params.set("note", notes.noteId); }
-    else if (composer) { params.set("view", "create"); params.set("mode", composer.mode ?? "single"); }
+    else if (composer) { params.set("view", "create"); params.set("mode", composer.mode); }
     else if (paletteOpen) params.set("view", "palette");
     else if (reviewTaskId && reviewTaskId === taskId) params.set("view", "review");
     const query = params.toString();
@@ -165,7 +165,7 @@ export function WorkspaceShell() {
       <WorkspaceSidebar projects={projects} currentProject={currentProject} tasks={tasks} selectedTaskId={taskId} connected={connected} collapsed={collapsed} onProject={selectProject} onTask={selectTask} onToggleCollapsed={() => setCollapsed((value) => !value)} onSearch={() => setPaletteOpen(true)} onNotes={() => openNotes()} onCreate={() => openComposer("single")} onSettings={() => openSettings("agents")} />
       <main className="workspace-main">
         {loadError && <div className="workspace-load-error">{loadError.message}</div>}
-        {composer && currentProject ? <TaskComposerPanel project={currentProject} groups={groups} initialDraft={composer.draft} initialMode={composer.mode} onCancel={() => setComposer(null)} onCreated={createTask} notify={notify} /> : selectedTask?.mode === "team" ? (
+        {composer && currentProject ? <TaskComposerPanel project={currentProject} groups={groups} initialDraft={composer.draft} mode={composer.mode} onModeChange={(mode) => setComposer((current) => current ? { ...current, mode } : null)} onCancel={() => setComposer(null)} onCreated={createTask} notify={notify} /> : selectedTask?.mode === "team" ? (
           <TeamView task={selectedTask} allTasks={tasks} onTaskUpdate={updateTask} onTaskDeleted={deleteTask} onSelectTask={selectTask} initialReviewOpen={reviewTaskId === selectedTask.id} onReviewOpenChange={(open) => setReviewTaskId(open ? selectedTask.id : null)} notify={notify} />
         ) : selectedTask?.mode === "debate" ? (
           <DebateView task={selectedTask} allTasks={tasks} onTaskUpdated={updateTask} onTaskCreated={(created) => setTasks((current) => current.some((task) => task.id === created.id) ? current.map((task) => task.id === created.id ? created : task) : [created, ...current])} onTaskDeleted={deleteTask} onSelectTask={selectTask} notify={notify} />

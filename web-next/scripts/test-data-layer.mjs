@@ -5,6 +5,8 @@ import { buildConversationItems, conversationToMarkdown } from "../src/task-deta
 import { stickStateAfterScroll } from "../src/lib/useStickToBottom.ts";
 import { sharedTeamParent } from "../src/review/reviewModel.ts";
 import { gateAllowsRevision, isOpenDebateGate, runCreatedHandoffFollowUps } from "../src/debate/handoffPolicy.ts";
+import { emptyComposerExecutorConfigs, patchComposerExecutor, setComposerExecutorProfile } from "../src/composer/executorOverrides.ts";
+import { activeGroupTasks, resumeQueueModel } from "../src/settings/groupQueueModel.ts";
 
 const originalFetch = globalThis.fetch;
 
@@ -125,6 +127,26 @@ try {
   });
   assert.deepEqual(followUps, ["gate", "start"]);
   assert.deepEqual(failures.map(({ phase }) => phase), ["gate", "start"]);
+
+  const roles = ["single", "lead", "worker", "reviewer"];
+  for (const role of roles) {
+    let executors = emptyComposerExecutorConfigs();
+    executors = setComposerExecutorProfile(executors, role, "codex@local");
+    executors = patchComposerExecutor(executors, role, { model: "gpt-5.6-sol", effort: "ultra" });
+    executors = setComposerExecutorProfile(executors, role, "claude@ccb");
+    assert.deepEqual(executors[role], { profile: "claude@ccb", model: "", effort: "" });
+  }
+
+  const groupTasks = [
+    { id: "done", groupId: "group-1", archived: false, status: "done", createdAt: "2026-07-30T01:00:00.000Z", resumeDependsOn: [] },
+    { id: "paused", groupId: "group-1", archived: false, status: "paused", createdAt: "2026-07-30T02:00:00.000Z", resumeDependsOn: ["done"] },
+    { id: "archived", groupId: "group-1", archived: true, status: "done", createdAt: "2026-07-30T00:00:00.000Z", resumeDependsOn: [] },
+  ];
+  const active = activeGroupTasks(groupTasks, "group-1");
+  assert.deepEqual(active.map(({ id }) => id), ["done", "paused"]);
+  const queue = resumeQueueModel(active);
+  assert.deepEqual(queue?.ordered.map(({ id }) => id), ["done", "paused"]);
+  assert.equal(queue?.doneCount, 1);
   console.log("数据层回归验证通过");
 } finally {
   globalThis.fetch = originalFetch;
