@@ -31,6 +31,8 @@ export type ConversationItem =
 
 export type PersistedConversation = { session: Session; output: string };
 
+type ConversationEventItem = Extract<ConversationItem, { kind: "event" }>;
+
 function agentLabel(session: Session | undefined, event?: LiveAgentEvent): string {
   if (session?.executor) return session.executor;
   return event?.agentType ?? session?.agentType ?? "执行者";
@@ -59,12 +61,24 @@ function appendAgent(
   return item;
 }
 
+function appendEvent(items: ConversationItem[], item: ConversationEventItem): void {
+  const last = items[items.length - 1];
+  if (
+    last?.kind === "event"
+    && last.text === item.text
+    && last.at === item.at
+    && last.tone === item.tone
+  ) return;
+  items.push(item);
+}
+
 export function buildConversationItems(
   persisted: PersistedConversation[],
   sessions: Session[],
   timeline: TimelineEntry[],
 ): ConversationItem[] {
   const items: ConversationItem[] = [];
+  const cliSessionIds = new Map<string, string>();
   const ordered = [...persisted].sort((left, right) =>
     left.session.startedAt.localeCompare(right.session.startedAt));
 
@@ -115,11 +129,11 @@ export function buildConversationItems(
     }
     const event = entry.event.event;
     if (event.kind === "system") {
-      items.push({ kind: "event", id: entry.id, text: event.text });
+      appendEvent(items, { kind: "event", id: entry.id, text: event.text });
       continue;
     }
     if (event.kind === "done") {
-      items.push({
+      appendEvent(items, {
         kind: "event",
         id: entry.id,
         text: event.exitStatus === 0 ? "本轮执行结束" : `执行异常结束 · exit ${event.exitStatus}`,
@@ -128,10 +142,12 @@ export function buildConversationItems(
       continue;
     }
     if (event.kind === "turnEnd") {
-      items.push({ kind: "event", id: entry.id, text: "本回合结束，等待下一条消息" });
+      appendEvent(items, { kind: "event", id: entry.id, text: "本回合结束，等待下一条消息" });
       continue;
     }
     if (event.kind === "session") {
+      if (cliSessionIds.get(entry.event.sessionId) === event.cliSessionId) continue;
+      cliSessionIds.set(entry.event.sessionId, event.cliSessionId);
       items.push({ kind: "event", id: entry.id, text: `会话已连接 · ${event.cliSessionId}` });
       continue;
     }
