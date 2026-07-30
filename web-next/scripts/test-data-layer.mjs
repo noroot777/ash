@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { ApiError, api } from "../src/lib/api.ts";
 import { applyTaskStatusEvent } from "../src/lib/useTasks.ts";
 import { buildConversationItems, conversationToMarkdown } from "../src/task-detail/conversationModel.ts";
+import { stickStateAfterScroll } from "../src/lib/useStickToBottom.ts";
 
 const originalFetch = globalThis.fetch;
 
@@ -85,6 +86,24 @@ try {
   assert.deepEqual(conversation.map((item) => item.kind), ["agent", "user", "agent"]);
   assert.equal(conversation[2].kind === "agent" ? conversation[2].markdown : "", "正在处理。 已完成。");
   assert.match(conversationToMarkdown(conversation, { ...task, title: "测试会话", body: "目标" }), /## 你 ·/);
+
+  // 用户从底部按住滚动条向上拖时，pointerdown 会建立 detaching user intent。
+  // 随后的 scroll 必须解除贴底；内容 resize/mutation 只能在 stuck=true 时补滚，
+  // 因而此状态会保持在历史位置，不被下一段流式输出抢回底部。
+  assert.equal(stickStateAfterScroll({
+    stuck: true,
+    nearBottom: false,
+    programmatic: false,
+    userDriven: true,
+    detaching: true,
+  }), false);
+  assert.equal(stickStateAfterScroll({
+    stuck: false,
+    nearBottom: false,
+    programmatic: false,
+    userDriven: false,
+    detaching: false,
+  }), false);
   console.log("数据层回归验证通过");
 } finally {
   globalThis.fetch = originalFetch;
