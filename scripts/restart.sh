@@ -19,7 +19,7 @@ cd "$REPO"
 PORT="${PORT:-4317}"
 LOG="${HARNESS_LOG:-/tmp/harness-$PORT.log}"
 
-echo "▶ 1/3 构建 (shared → web → server → mcp)…"
+echo "▶ 1/3 构建 (shared → web → web-next → server → mcp)…"
 npm run build || { echo "✕ 构建失败,已中止——服务端未重启,跑的还是旧代码。"; exit 1; }
 
 echo "▶ 2/3 重启 :$PORT 服务端…"

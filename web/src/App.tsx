@@ -147,6 +147,13 @@ export function App() {
   const ordered = useMemo(() => orderedTasks(visible), [visible]);
   const current = tasks.find((t) => t.id === selected) ?? null;
   const project = projects.find((p) => p.id === projectId) ?? null;
+  const nextHref = useMemo(() => {
+    const params = new URLSearchParams();
+    if (projectId) params.set("project", projectId);
+    if (selected) params.set("task", selected);
+    const query = params.toString();
+    return query ? `/?${query}` : "/";
+  }, [projectId, selected]);
 
   const patch = useCallback(async (id: string, p: Partial<Task>) => {
     if (rejectDispatchedWorkerMutation(tasksRef.current.find((t) => t.id === id))) return;
@@ -507,6 +514,7 @@ export function App() {
           debates={debates}
           sessionsBump={sessionsBump}
           curHealth={curHealth}
+          nextHref={nextHref}
           sidebarW={sidebarW}
           setSidebarW={setSidebarW}
           archivedCount={archivedTasks.length}

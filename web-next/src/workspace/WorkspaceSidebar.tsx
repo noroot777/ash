@@ -8,6 +8,7 @@ import {
 import { ProjectAvatar } from "./ProjectAvatar.tsx";
 import { ProjectSwitcher } from "./ProjectSwitcher.tsx";
 import { TaskTree } from "./TaskTree.tsx";
+import { LegacyLink } from "../components/LegacyLink.tsx";
 
 export function WorkspaceSidebar({
   projects,
@@ -37,6 +38,7 @@ export function WorkspaceSidebar({
       <aside className="workspace-sidebar workspace-sidebar--collapsed" aria-label="已收起的侧边栏">
         {currentProject && <ProjectAvatar project={currentProject} size="large" />}
         <span className={`workspace-connection-light${connected ? " is-connected" : ""}`} title={connected ? "实时已连接" : "实时连接中断"} />
+        <LegacyLink projectId={currentProject?.id ?? null} taskId={selectedTaskId} compact />
         <button className="workspace-side-icon" type="button" onClick={onToggleCollapsed} aria-label="展开侧边栏">
           <SidebarSimple size={17} weight="bold" aria-hidden="true" />
         </button>
@@ -77,6 +79,7 @@ export function WorkspaceSidebar({
           <i aria-hidden="true" />
           {connected ? "实时已连接" : "实时连接中断"}
         </span>
+        <LegacyLink projectId={currentProject?.id ?? null} taskId={selectedTaskId} />
         <button type="button" onClick={onToggleCollapsed} aria-label="收起侧边栏">
           <SidebarSimple size={14} weight="bold" aria-hidden="true" />
           收起

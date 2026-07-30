@@ -6,6 +6,7 @@ import { readFile } from "node:fs/promises";
 import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { join, extname, normalize } from "node:path";
+import type { Context } from "hono";
 import {
   acquireDbSingletonLock,
   SingletonConflictError,
@@ -201,10 +202,14 @@ app.get("/review/*", async (c) => {
   });
 });
 
-// Serve the built SPA (web/dist) in production. Path is resolved relative to this
-// module (works regardless of cwd). In dev, Vite serves on :5173 and proxies /api.
-const DIST = fileURLToPath(new URL("../../web/dist", import.meta.url));
-const hasBuild = existsSync(join(DIST, "index.html"));
+// Serve both built SPAs in production. Paths are resolved relative to this module
+// (works regardless of cwd). The legacy Vite build uses base=/legacy/, while the
+// new UI owns /. API/review/mobile routes above remain higher-priority than the
+// final new-UI catch-all below.
+const LEGACY_DIST = fileURLToPath(new URL("../../web/dist", import.meta.url));
+const NEXT_DIST = fileURLToPath(new URL("../../web-next/dist", import.meta.url));
+const hasLegacyBuild = existsSync(join(LEGACY_DIST, "index.html"));
+const hasNextBuild = existsSync(join(NEXT_DIST, "index.html"));
 
 const MIME: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
@@ -283,6 +288,21 @@ const cacheHeader = (file: string): string =>
       ? "public, max-age=31536000, immutable"
       : "no-cache";
 
+async function serveSpa(c: Context, dist: string, rel: string) {
+  const candidate = normalize(join(dist, rel));
+  const file =
+    (candidate === dist || candidate.startsWith(dist + "/")) &&
+    existsSync(candidate) &&
+    statSync(candidate).isFile()
+      ? candidate
+      : join(dist, "index.html");
+  const body = await readFile(file);
+  return c.body(body, 200, {
+    "content-type": MIME[extname(file)] ?? "application/octet-stream",
+    "cache-control": cacheHeader(file),
+  });
+}
+
 app.get("/mobile/app", (c) => c.redirect("/mobile/app/"));
 app.get("/mobile/app/*", async (c) => {
   if (!hasMobile) return c.text(mobileMiss, 503);
@@ -298,26 +318,22 @@ app.get("/mobile/app/*", async (c) => {
   });
 });
 
-if (hasBuild) {
-  app.get("/*", async (c) => {
-    const urlPath = decodeURIComponent(new URL(c.req.url).pathname);
-    // Resolve within DIST; fall back to index.html for SPA routes.
-    const candidate = normalize(join(DIST, urlPath));
-    const file =
-      candidate.startsWith(DIST) && existsSync(candidate) && statSync(candidate).isFile()
-        ? candidate
-        : join(DIST, "index.html");
-    const body = await readFile(file);
-    return c.body(body, 200, {
-      "content-type": MIME[extname(file)] ?? "application/octet-stream",
-      "cache-control": cacheHeader(file),
-    });
-  });
-} else {
-  app.get("/", (c) =>
-    c.text("Harness server running. Web build not found — run `npm run dev` (Vite :5173) or `npm run build`."),
-  );
-}
+const legacyMiss = "Legacy web build not found — run `npm -w web run build`.";
+app.get("/legacy", (c) =>
+  hasLegacyBuild ? serveSpa(c, LEGACY_DIST, "") : c.text(legacyMiss, 503),
+);
+app.get("/legacy/*", (c) => {
+  if (!hasLegacyBuild) return c.text(legacyMiss, 503);
+  const rel = decodeURIComponent(new URL(c.req.url).pathname).replace(/^\/legacy\/?/, "");
+  return serveSpa(c, LEGACY_DIST, rel);
+});
+
+const nextMiss = "Harness Next build not found — run `npm -w web-next run build`.";
+app.get("/*", (c) => {
+  if (!hasNextBuild) return c.text(nextMiss, 503);
+  const rel = decodeURIComponent(new URL(c.req.url).pathname).replace(/^\/+/, "");
+  return serveSpa(c, NEXT_DIST, rel);
+});
 
 // Bind the port before starting the scheduler. A process that cannot accept
 // HTTP callbacks must never be allowed to poll schedules or launch agents.
