@@ -51,6 +51,7 @@ export function TaskComposerPanel({
   project,
   groups,
   initialDraft,
+  initialMode = "single",
   onCancel,
   onCreated,
   notify,
@@ -58,11 +59,12 @@ export function TaskComposerPanel({
   project: ProjectView;
   groups: Group[];
   initialDraft?: ComposerDraft | null;
+  initialMode?: TaskMode;
   onCancel: () => void;
   onCreated: (task: Task, draft?: ComposerDraft | null) => void;
   notify: (message: string) => void;
 }) {
-  const [mode, setMode] = useState<TaskMode>("single");
+  const [mode, setMode] = useState<TaskMode>(initialMode);
   const [title, setTitle] = useState("");
   const [body, setBody] = useState(initialDraft?.body ?? "");
   const [seedAttachments, setSeedAttachments] = useState(initialDraft?.attachments ?? []);
@@ -79,6 +81,8 @@ export function TaskComposerPanel({
   const [workerModel, setWorkerModel] = useState("");
   const [leadEffort, setLeadEffort] = useState("");
   const [workerEffort, setWorkerEffort] = useState("");
+  const [reviewerModel, setReviewerModel] = useState("");
+  const [reviewerEffort, setReviewerEffort] = useState("");
   const [review, setReview] = useState(true);
   const [rounds, setRounds] = useState("3");
   const [gate, setGate] = useState(true);
@@ -127,7 +131,8 @@ export function TaskComposerPanel({
   const selectedSingleType = profileType(profiles, singleProfile, "claude");
   const selectedLeadType = profileType(profiles, leadProfile, "claude");
   const selectedWorkerType = profileType(profiles, workerProfile, "codex");
-  const canSubmit = !!body.trim() && !busy;
+  const selectedReviewerType = profileType(profiles, reviewerProfile, selectedWorkerType);
+  const canSubmit = (mode === "debate" ? !!body.trim() : !!body.trim() || allAttachments.length > 0) && !busy;
 
   const submit = async (run: boolean) => {
     if (!canSubmit) return;
@@ -159,8 +164,10 @@ export function TaskComposerPanel({
           leadReasoningEffort: leadEffort || null,
           workerReasoningEffort: workerEffort || null,
           review,
-          reviewerAgentType: profileType(profiles, reviewerProfile, selectedWorkerType),
+          reviewerAgentType: selectedReviewerType,
           reviewerExecutorId: executorId(reviewerProfile),
+          reviewerModel: reviewerModel || null,
+          reviewerReasoningEffort: reviewerEffort || null,
         } });
       } else {
         task = await api.createTask({ ...common, body: body.trim(), attachments: allAttachments, mode, agentType: selectedSingleType, executorId: executorId(singleProfile), model: model || null, reasoningEffort: effort || null, useWorktree: project.health.isRepo && useWorktree, worktreeBase: useWorktree && base ? base : null });
@@ -203,7 +210,7 @@ export function TaskComposerPanel({
         {mode === "debate" && allAttachments.length > 0 && <p className="composer-warning">辩论配置不接收附件；附件仍保留，切回单任务或团队后会随任务提交。</p>}
         <div className="composer-fields">
           {mode === "single" && <><ExecutorSelect label="执行器" value={singleProfile} profiles={profiles} onChange={setSingleProfile} />{modelField("模型", model, setModel, selectedSingleType)}{effortField("思考强度", effort, setEffort, selectedSingleType)}</>}
-          {mode === "team" && <><ExecutorSelect label="调度者执行器" value={leadProfile} profiles={profiles} onChange={setLeadProfile} /><ExecutorSelect label="执行者执行器" value={workerProfile} profiles={profiles} onChange={setWorkerProfile} />{modelField("调度者模型", leadModel, setLeadModel, selectedLeadType)}{modelField("执行者模型", workerModel, setWorkerModel, selectedWorkerType)}{effortField("调度者思考强度", leadEffort, setLeadEffort, selectedLeadType)}{effortField("执行者思考强度", workerEffort, setWorkerEffort, selectedWorkerType)}<ExecutorSelect label="审查者执行器" value={reviewerProfile} profiles={profiles} onChange={setReviewerProfile} /><label className="composer-toggle-field"><span>自动审查</span><Toggle checked={review} onChange={setReview} label={review ? "已开启" : "已关闭"} /></label></>}
+          {mode === "team" && <><ExecutorSelect label="调度者执行器" value={leadProfile} profiles={profiles} onChange={setLeadProfile} /><ExecutorSelect label="执行者执行器" value={workerProfile} profiles={profiles} onChange={setWorkerProfile} />{modelField("调度者模型", leadModel, setLeadModel, selectedLeadType)}{modelField("执行者模型", workerModel, setWorkerModel, selectedWorkerType)}{effortField("调度者思考强度", leadEffort, setLeadEffort, selectedLeadType)}{effortField("执行者思考强度", workerEffort, setWorkerEffort, selectedWorkerType)}<ExecutorSelect label="审查者执行器" value={reviewerProfile} profiles={profiles} onChange={setReviewerProfile} />{modelField("审查者模型", reviewerModel, setReviewerModel, selectedReviewerType)}{effortField("审查者思考强度", reviewerEffort, setReviewerEffort, selectedReviewerType)}<label className="composer-toggle-field"><span>自动审查</span><Toggle checked={review} onChange={setReview} label={review ? "已开启" : "已关闭"} /></label></>}
           {mode === "debate" && <><ExecutorSelect label="正方执行器" value={debaterAProfile} profiles={profiles} onChange={setDebaterAProfile} /><ExecutorSelect label="反方执行器" value={debaterBProfile} profiles={profiles} onChange={setDebaterBProfile} /><label className="composer-field"><span>最多轮数</span><select value={rounds} onChange={(event) => setRounds(event.target.value)}><option value="">不限</option>{[1, 2, 3, 5, 8].map((value) => <option value={value} key={value}>{value} 轮</option>)}</select></label><label className="composer-toggle-field"><span>共识闸门</span><Toggle checked={gate} onChange={setGate} label={gate ? "需要确认" : "自动结束"} /></label></>}
           {mode !== "debate" && project.health.isRepo && <><label className="composer-toggle-field"><span>worktree</span><Toggle checked={useWorktree} onChange={setUseWorktree} label={useWorktree ? "独立 worktree" : "直接使用项目目录"} /></label><label className="composer-field"><span>base 分支</span><select value={base} disabled={!useWorktree} onChange={(event) => setBase(event.target.value)}><option value="">当前 HEAD</option>{branches.map((branch) => <option value={branch} key={branch}>{branch}</option>)}</select></label></>}
           {mode !== "debate" && <label className="composer-field"><span>分组</span><select value={groupId} onChange={(event) => setGroupId(event.target.value)}><option value="">无分组</option>{groups.filter((group) => !group.ownerTaskId).map((group) => <option value={group.id} key={group.id}>{group.name} · {group.mode === "parallel" ? "并行" : "串行"}</option>)}</select></label>}

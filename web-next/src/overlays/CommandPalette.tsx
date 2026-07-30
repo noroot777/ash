@@ -3,13 +3,18 @@ import type { Group, ProjectView, SearchHit, Task } from "@harness/shared";
 import { canArchive, canSingleRun, TASK_STATUS_LABELS } from "@harness/shared";
 import {
   Archive,
+  ArrowCounterClockwise,
+  FolderPlus,
   FolderSimple,
   GearSix,
   MagnifyingGlass,
   NotePencil,
   Play,
   Plus,
+  Scales,
   Stack,
+  Stop,
+  Trash,
 } from "@phosphor-icons/react";
 import { api } from "../lib/api.ts";
 
@@ -45,6 +50,9 @@ export function CommandPalette({
   onTaskUpdated,
   onNote,
   onComposer,
+  onNewGroup,
+  onNewProject,
+  onDeleteTask,
   onSettings,
   notify,
 }: {
@@ -59,7 +67,10 @@ export function CommandPalette({
   onTask: (task: Task) => void;
   onTaskUpdated: (task: Task) => void;
   onNote: (projectId: string, noteId: string | null) => void;
-  onComposer: () => void;
+  onComposer: (mode?: "single" | "team" | "debate") => void;
+  onNewGroup: () => void;
+  onNewProject: () => void;
+  onDeleteTask: (task: Task) => void;
   onSettings: (section?: "agents" | "project" | "groups" | "archive") => void;
   notify: (message: string) => void;
 }) {
@@ -110,14 +121,39 @@ export function CommandPalette({
       }));
     }
     if (selectedTask) {
-      if (canSingleRun(selectedTask.status) && selectedTask.mode !== "team") result.push({ key: "task:run", group: `当前任务 · ${selectedTask.title}`, label: "运行任务", detail: "R", icon: <Play size={14} weight="fill" />, run: closeRun(async () => { await api.runTask(selectedTask.id); notify("任务已启动"); }) });
-      if (!selectedTask.archived && canArchive(selectedTask.status)) result.push({ key: "task:archive", group: `当前任务 · ${selectedTask.title}`, label: "归档任务", icon: <Archive size={14} />, run: closeRun(async () => { onTaskUpdated(await api.archiveTask(selectedTask.id)); notify("任务已归档"); }) });
+      const taskGroup = `当前任务 · ${selectedTask.title}`;
+      const dispatchedWorker = selectedTask.parentId !== null;
+      if (!selectedTask.archived && canSingleRun(selectedTask.status)) {
+        const retry = selectedTask.status === "failed";
+        const label = retry ? "重试任务" : selectedTask.status === "paused" ? "继续任务" : "运行任务";
+        result.push({ key: "task:run", group: taskGroup, label, detail: "R", icon: <Play size={14} weight="fill" />, run: closeRun(async () => {
+          if (retry) await api.retryTask(selectedTask.id);
+          else await api.runTask(selectedTask.id);
+          onTaskUpdated(await api.task(selectedTask.id));
+          notify(retry ? "任务已重试" : selectedTask.status === "paused" ? "任务已继续" : "任务已启动");
+        }) });
+      }
+      if (!selectedTask.archived && selectedTask.status === "running") result.push({ key: "task:stop", group: taskGroup, label: selectedTask.mode === "team" ? "停止全组" : "停止运行", icon: <Stop size={14} weight="fill" />, run: closeRun(async () => {
+        if (selectedTask.mode === "team") await api.teamHalt(selectedTask.id);
+        else await api.stopTask(selectedTask.id);
+        onTaskUpdated(await api.task(selectedTask.id));
+        notify(selectedTask.mode === "team" ? "已停止全组" : "任务已停止");
+      }) });
+      if (!dispatchedWorker) {
+        if (selectedTask.archived) result.push({ key: "task:unarchive", group: taskGroup, label: "取消归档", icon: <ArrowCounterClockwise size={14} />, run: closeRun(async () => { onTaskUpdated(await api.unarchiveTask(selectedTask.id)); notify("任务已取回"); }) });
+        else if (canArchive(selectedTask.status)) result.push({ key: "task:archive", group: taskGroup, label: "归档任务", icon: <Archive size={14} />, run: closeRun(async () => { onTaskUpdated(await api.archiveTask(selectedTask.id)); notify("任务已归档"); }) });
+        result.push({ key: "task:delete", group: taskGroup, label: "删除任务", icon: <Trash size={14} />, run: closeRun(() => onDeleteTask(selectedTask)) });
+      }
     }
     result.push(
-      { key: "new:task", group: "新建", label: "新建任务", keys: "C", icon: <Plus size={15} />, run: closeRun(onComposer) },
+      { key: "new:task", group: "新建", label: "新建任务", keys: "C", icon: <Plus size={15} />, run: closeRun(() => onComposer("single")) },
+      { key: "new:debate", group: "新建", label: "新建辩论 · 给你答案", icon: <Scales size={15} />, run: closeRun(() => onComposer("debate")) },
       { key: "new:note", group: "新建", label: "新建随手记", keys: "NI", icon: <NotePencil size={15} />, run: closeRun(() => { if (currentProject) onNote(currentProject.id, "__new__"); }) },
+      { key: "new:group", group: "新建", label: "新建分组", icon: <Stack size={15} />, run: closeRun(onNewGroup) },
+      { key: "new:project", group: "新建", label: "新建项目", icon: <FolderPlus size={15} />, run: closeRun(onNewProject) },
       { key: "manage:notes", group: "管理", label: "随手记列表", keys: "NL", icon: <NotePencil size={15} />, run: closeRun(() => { if (currentProject) onNote(currentProject.id, null); }) },
-      { key: "manage:settings", group: "管理", label: "设置", icon: <GearSix size={15} />, run: closeRun(() => onSettings("project")) },
+      { key: "manage:agents", group: "管理", label: "管理智能体执行器", icon: <GearSix size={15} />, run: closeRun(() => onSettings("agents")) },
+      { key: "manage:settings", group: "管理", label: "项目设置", icon: <GearSix size={15} />, run: closeRun(() => onSettings("project")) },
       { key: "manage:groups", group: "管理", label: "分组管理", icon: <Stack size={15} />, run: closeRun(() => onSettings("groups")) },
     );
     projects.forEach((project) => result.push({ key: `project:${project.id}`, group: "切换项目", label: project.name, detail: project.repoPath, icon: <FolderSimple size={15} />, run: closeRun(() => onProject(project.id)) }));
@@ -131,23 +167,27 @@ export function CommandPalette({
       detail: `${hit.projectName ?? "未知项目"}${hit.snippet ? ` · ${hit.snippet}` : ""}`,
       icon: hitIcon(hit),
       hit,
-      run: closeRun(() => {
+      run: closeRun(async () => {
         if (hit.kind === "note") onNote(hit.projectId, hit.id);
-        else if (hit.archived) { onProject(hit.projectId); onSettings("archive"); }
+        else if (hit.archived) {
+          const open = tasks.find((row) => row.id === hit.id) ?? await api.task(hit.id);
+          onTask(open);
+          onSettings("archive");
+        }
         else {
           const task = tasks.find((row) => row.id === hit.id);
           if (task) onTask(task);
-          else api.task(hit.id).then(onTask).catch(() => notify("任务读取失败"));
+          else onTask(await api.task(hit.id));
         }
       }),
     }));
     return filtered;
-  }, [currentProject, groups, hits, onClose, onComposer, onNote, onProject, onSettings, onTask, onTaskUpdated, projects, query, selectedTask, tasks, notify]);
+  }, [currentProject, groups, hits, onClose, onComposer, onDeleteTask, onNewGroup, onNewProject, onNote, onProject, onSettings, onTask, onTaskUpdated, projects, query, selectedTask, tasks, notify]);
 
   useEffect(() => { if (active >= items.length) setActive(Math.max(0, items.length - 1)); }, [active, items.length]);
   useEffect(() => {
     if (!open) return;
-    const close = (event: KeyboardEvent) => { if (event.key === "Escape") { event.preventDefault(); onClose(); } };
+    const close = (event: KeyboardEvent) => { if (event.key === "Escape") { event.preventDefault(); event.stopImmediatePropagation(); onClose(); } };
     window.addEventListener("keydown", close, true);
     return () => window.removeEventListener("keydown", close, true);
   }, [open, onClose]);

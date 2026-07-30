@@ -80,7 +80,7 @@ function ProfileRow({
       </label>
       <label>
         <span>速度</span>
-        <select disabled={busy || profile.type !== "codex"} value={profile.speed ?? "standard"} onChange={(event) => void patch({ speed: event.target.value as "standard" | "fast" })}>
+        <select disabled={busy || profile.type === "antigravity"} value={profile.speed ?? "standard"} onChange={(event) => void patch({ speed: event.target.value as "standard" | "fast" })}>
           <option value="standard">标准</option>
           <option value="fast">1.5x</option>
         </select>
