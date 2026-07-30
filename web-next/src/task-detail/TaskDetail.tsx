@@ -16,17 +16,21 @@ export function TaskDetail({
   allTasks,
   onTaskUpdate,
   onDeleted,
+  initialReviewOpen = false,
+  onReviewOpenChange,
   notify,
 }: {
   task: Task;
   allTasks: Task[];
   onTaskUpdate: (task: Task) => void;
   onDeleted: (taskId: string) => void;
+  initialReviewOpen?: boolean;
+  onReviewOpenChange?: (open: boolean) => void;
   notify: (message: string) => void;
 }) {
   const [groups, setGroups] = useState<Group[]>([]);
   const [busy, setBusy] = useState(false);
-  const [reviewOpen, setReviewOpen] = useState(false);
+  const [reviewOpen, setReviewOpen] = useState(initialReviewOpen);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const conversation = useConversation(task.id);
   const markdown = useMemo(
@@ -41,9 +45,14 @@ export function TaskDetail({
     return () => { alive = false; };
   }, [task.projectId]);
   useEffect(() => {
-    setReviewOpen(false);
+    setReviewOpen(initialReviewOpen);
     setDeleteOpen(false);
-  }, [task.id]);
+  }, [initialReviewOpen, task.id]);
+
+  const changeReviewOpen = (open: boolean) => {
+    setReviewOpen(open);
+    onReviewOpenChange?.(open);
+  };
 
   const refreshTask = async () => {
     const updated = await api.task(task.id);
@@ -57,7 +66,7 @@ export function TaskDetail({
   };
 
   const perform = async (action: Exclude<PrimaryAction, null>) => {
-    if (action === "accept") return setReviewOpen(true);
+    if (action === "accept") return changeReviewOpen(true);
     setBusy(true);
     try {
       if (action === "run") await api.runTask(task.id);
@@ -103,12 +112,12 @@ export function TaskDetail({
         onPrimary={(action) => void perform(action)}
         onArchive={() => void archive()}
         onRefresh={() => void refresh()}
-        onReview={() => setReviewOpen((open) => !open)}
+        onReview={() => changeReviewOpen(!reviewOpen)}
         onDelete={() => setDeleteOpen(true)}
         notify={notify}
       />
       {reviewOpen ? (
-        <TaskReviewWorkspace task={task} allTasks={allTasks} onClose={() => setReviewOpen(false)} onTaskUpdated={onTaskUpdate} notify={notify} />
+        <TaskReviewWorkspace task={task} allTasks={allTasks} onClose={() => changeReviewOpen(false)} onTaskUpdated={onTaskUpdate} notify={notify} />
       ) : <div className="task-detail-body">
         <section className="task-detail-main" aria-label="任务会话">
           <ConversationFeed

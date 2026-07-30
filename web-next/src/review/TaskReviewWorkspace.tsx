@@ -284,7 +284,7 @@ export function TaskReviewWorkspace({
     <section className="single-review-workspace">
       <header className="single-review-subbar">
         <div><b>{sharedParent ? "共享执行者审查" : "改动与提交"}</b><small>{sharedParent ? "该执行者随父团队共享分支统一验收" : "核对真实审查证据与任务分支相对基线的 diff"}</small></div>
-        <LegacyLink projectId={task.projectId} taskId={task.id} />
+        <LegacyLink projectId={task.projectId} taskId={task.id} view="review" />
         <button type="button" onClick={onClose}><X size={13} />返回对话</button>
       </header>
       <div className="single-review-scroll">

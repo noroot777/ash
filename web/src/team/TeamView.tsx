@@ -50,6 +50,8 @@ export function TeamView({
   onRequeue,
   onSelect,
   onTaskCreated,
+  initialReviewOpen = false,
+  onReviewOpenChange,
 }: {
   task: Task;
   groups: Group[];
@@ -71,6 +73,8 @@ export function TeamView({
   /** 整页打开某个执行者(离开调度台)。 */
   onSelect: (id: string) => void;
   onTaskCreated: (task: Task, doRun?: boolean, select?: boolean) => void;
+  initialReviewOpen?: boolean;
+  onReviewOpenChange?: (open: boolean) => void;
 }) {
   const [openId, setOpenId] = useState<string | null>(null);
   const [localHalted, setLocalHalted] = useState(false);
@@ -78,7 +82,7 @@ export function TeamView({
   const [internalGroups, setInternalGroups] = useState<Group[]>([]);
   const [cuaStatus, setCuaStatus] = useState<TeamCuaStatus | null>(null);
   const [iterateBusy, setIterateBusy] = useState(false);
-  const [reviewOpen, setReviewOpen] = useState(false);
+  const [reviewOpen, setReviewOpen] = useState(initialReviewOpen);
 
   const workers = useMemo(() => workersOf(allTasks, task.id), [allTasks, task.id]);
   const rawGroups = useMemo(() => {
@@ -147,9 +151,14 @@ export function TeamView({
     setGroupPaused({});
     setInternalGroups([]);
     setCuaStatus(null);
-    setReviewOpen(false);
+    setReviewOpen(initialReviewOpen);
     void refreshInternalGroups();
   }, [task.id]);
+
+  const changeReviewOpen = (open: boolean) => {
+    setReviewOpen(open);
+    onReviewOpenChange?.(open);
+  };
 
   useEffect(() => {
     if (stopped) void refreshCuaStatus();
@@ -211,7 +220,7 @@ export function TeamView({
         reviewOpen={reviewOpen}
         onToggleReview={() => {
           setOpenId(null);
-          setReviewOpen((value) => !value);
+          changeReviewOpen(!reviewOpen);
         }}
         canIterateDebate={canIterateDebate}
         iterateBusy={iterateBusy}
@@ -222,7 +231,7 @@ export function TeamView({
         <TeamReviewWorkspace
           lead={task}
           workers={workers}
-          onClose={() => setReviewOpen(false)}
+          onClose={() => changeReviewOpen(false)}
           onTaskUpdated={(updated) => onTaskCreated(updated, false, false)}
         />
       ) : (

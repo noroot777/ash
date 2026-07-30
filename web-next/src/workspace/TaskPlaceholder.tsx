@@ -20,7 +20,7 @@ export function TaskPlaceholder({
       <section className="workspace-empty-state">
         <CirclesThreePlus size={26} weight="bold" aria-hidden="true" />
         <h1>还没有可用项目</h1>
-        <p>项目创建能力将在后续实施链接入。</p>
+        <p>用 ⌘K 新建项目，或从项目切换器选择现有工作区。</p>
       </section>
     );
   }
@@ -30,7 +30,7 @@ export function TaskPlaceholder({
       <section className="workspace-empty-state">
         <span className="workspace-empty-project">{project.name}</span>
         <h1>从任务树选择一项</h1>
-        <p>这里会先显示任务摘要；完整会话与详情将在后续实施链接入。</p>
+        <p>选择任务查看完整会话与 Inspector，或按 C 新建任务。</p>
       </section>
     );
   }

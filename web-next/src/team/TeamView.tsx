@@ -157,6 +157,8 @@ export function TeamView({
   onTaskUpdate,
   onTaskDeleted,
   onSelectTask,
+  initialReviewOpen = false,
+  onReviewOpenChange,
   notify,
 }: {
   task: Task;
@@ -164,11 +166,13 @@ export function TeamView({
   onTaskUpdate: (task: Task) => void;
   onTaskDeleted: (taskId: string) => void;
   onSelectTask: (task: Task) => void;
+  initialReviewOpen?: boolean;
+  onReviewOpenChange?: (open: boolean) => void;
   notify: (message: string) => void;
 }) {
   const [groups, setGroups] = useState<Group[]>([]);
   const [selectedWorkerId, setSelectedWorkerId] = useState<string | null>(null);
-  const [reviewOpen, setReviewOpen] = useState(false);
+  const [reviewOpen, setReviewOpen] = useState(initialReviewOpen);
   const [busy, setBusy] = useState(false);
   const [localHalted, setLocalHalted] = useState(false);
   const [cuaStatus, setCuaStatus] = useState<TeamCuaStatus | null>(null);
@@ -194,11 +198,16 @@ export function TeamView({
   const refreshTask = useCallback(async () => onTaskUpdate(await api.task(task.id)), [onTaskUpdate, task.id]);
   useEffect(() => {
     setSelectedWorkerId(null);
-    setReviewOpen(false);
+    setReviewOpen(initialReviewOpen);
     setLocalHalted(false);
     setCuaStatus(null);
     void refreshGroups();
   }, [refreshGroups, task.id]);
+
+  const changeReviewOpen = (open: boolean) => {
+    setReviewOpen(open);
+    onReviewOpenChange?.(open);
+  };
   useEffect(() => {
     if (!stopped) return;
     void api.teamCuaStatus(task.id).then(setCuaStatus).catch(() => undefined);
@@ -240,7 +249,7 @@ export function TeamView({
         busy={busy}
         reviewOpen={reviewOpen}
         onTitle={async (title) => onTaskUpdate(await api.patchTask(task.id, { title, autoTitle: false }))}
-        onReview={() => { setSelectedWorkerId(null); setReviewOpen((value) => !value); }}
+        onReview={() => { setSelectedWorkerId(null); changeReviewOpen(!reviewOpen); }}
         onRun={() => void perform("run")}
         onHalt={() => void perform("halt")}
         onResume={() => void perform("resume")}
@@ -248,7 +257,7 @@ export function TeamView({
         notify={notify}
       />
       {reviewOpen ? (
-        <TeamReviewWorkspace lead={task} workers={workers} onClose={() => setReviewOpen(false)} onTaskUpdated={onTaskUpdate} notify={notify} />
+        <TeamReviewWorkspace lead={task} workers={workers} onClose={() => changeReviewOpen(false)} onTaskUpdated={onTaskUpdate} notify={notify} />
       ) : (
         <>
           {(objective.body || objective.paths.length > 0) && (

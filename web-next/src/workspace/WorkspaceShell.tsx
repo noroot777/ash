@@ -11,14 +11,21 @@ import { SettingsPage, type SettingsSection } from "../settings/SettingsPage.tsx
 import { CommandPalette } from "../overlays/CommandPalette.tsx";
 import { NotesPanel } from "../overlays/NotesPanel.tsx";
 import { TaskComposerPanel, type ComposerDraft } from "../composer/TaskComposerPanel.tsx";
+import { LegacyLink } from "../components/LegacyLink.tsx";
 import { DeleteTaskDialog } from "../task-detail/DeleteTaskDialog.tsx";
 import { CreateGroupDialog, CreateProjectDialog } from "../overlays/CreateEntityDialog.tsx";
+
+type ContextView = "review" | "settings" | "palette" | "notes" | "create";
 
 function readUrlSelection() {
   const params = new URLSearchParams(window.location.search);
   const raw = params.get("settings");
   const settings: SettingsSection | null = raw === "agents" || raw === "project" || raw === "groups" || raw === "archive" ? raw : null;
-  return { projectId: params.get("project"), taskId: params.get("task"), settings };
+  const rawView = params.get("view");
+  const view: ContextView | null = rawView === "review" || rawView === "settings" || rawView === "palette" || rawView === "notes" || rawView === "create" ? rawView : null;
+  const rawMode = params.get("mode");
+  const mode: TaskMode = rawMode === "team" || rawMode === "debate" ? rawMode : "single";
+  return { projectId: params.get("project"), taskId: params.get("task"), settings, view, noteId: params.get("note"), mode };
 }
 
 export function WorkspaceShell() {
@@ -30,9 +37,10 @@ export function WorkspaceShell() {
   const [taskId, setTaskId] = useState<string | null>(initial.taskId);
   const [settingsSection, setSettingsSection] = useState<SettingsSection | null>(initial.settings);
   const [groups, setGroups] = useState<Group[]>([]);
-  const [paletteOpen, setPaletteOpen] = useState(false);
-  const [notes, setNotes] = useState<{ projectId: string; noteId: string | null } | null>(null);
-  const [composer, setComposer] = useState<{ draft?: ComposerDraft | null; mode?: TaskMode } | null>(null);
+  const [paletteOpen, setPaletteOpen] = useState(initial.view === "palette");
+  const [notes, setNotes] = useState<{ projectId: string; noteId: string | null } | null>(initial.view === "notes" && initial.projectId ? { projectId: initial.projectId, noteId: initial.noteId } : null);
+  const [composer, setComposer] = useState<{ draft?: ComposerDraft | null; mode?: TaskMode } | null>(initial.view === "create" ? { mode: initial.mode } : null);
+  const [reviewTaskId, setReviewTaskId] = useState<string | null>(initial.view === "review" ? initial.taskId : null);
   const [deleteTarget, setDeleteTarget] = useState<Task | null>(null);
   const [createDialog, setCreateDialog] = useState<"group" | "project" | null>(null);
   const [collapsed, setCollapsed] = useState(() => window.localStorage.getItem("harness-next:sidebar-collapsed") === "1");
@@ -74,10 +82,14 @@ export function WorkspaceShell() {
     const params = new URLSearchParams();
     if (projectId) params.set("project", projectId);
     if (taskId && !settingsSection) params.set("task", taskId);
-    if (settingsSection) params.set("settings", settingsSection);
+    if (settingsSection) { params.set("view", "settings"); params.set("settings", settingsSection); }
+    else if (notes) { params.set("view", "notes"); if (notes.noteId) params.set("note", notes.noteId); }
+    else if (composer) { params.set("view", "create"); params.set("mode", composer.mode ?? "single"); }
+    else if (paletteOpen) params.set("view", "palette");
+    else if (reviewTaskId && reviewTaskId === taskId) params.set("view", "review");
     const query = params.toString();
     window.history.replaceState(null, "", query ? `${window.location.pathname}?${query}` : window.location.pathname);
-  }, [projectId, projectsReady, settingsSection, taskId]);
+  }, [composer, notes, paletteOpen, projectId, projectsReady, reviewTaskId, settingsSection, taskId]);
 
   useEffect(() => {
     const onPopState = () => {
@@ -85,6 +97,10 @@ export function WorkspaceShell() {
       setProjectId(next.projectId);
       setTaskId(next.taskId);
       setSettingsSection(next.settings);
+      setPaletteOpen(next.view === "palette");
+      setNotes(next.view === "notes" && next.projectId ? { projectId: next.projectId, noteId: next.noteId } : null);
+      setComposer(next.view === "create" ? { mode: next.mode } : null);
+      setReviewTaskId(next.view === "review" ? next.taskId : null);
     };
     window.addEventListener("popstate", onPopState);
     return () => window.removeEventListener("popstate", onPopState);
@@ -108,10 +124,10 @@ export function WorkspaceShell() {
     setTasks((current) => current.filter((task) => task.id !== deletedId));
     setTaskId((current) => current === deletedId ? null : current);
   }, [setTasks]);
-  const selectProject = (nextProjectId: string) => { setProjectId(nextProjectId); setTaskId(null); setComposer(null); setSettingsSection(null); };
-  const selectTask = (task: Task) => { setProjectId(task.projectId); setTaskId(task.id); setComposer(null); setSettingsSection(null); };
-  const openNotes = (nextProjectId = projectId, noteId: string | null = null) => { if (nextProjectId) { setProjectId(nextProjectId); setNotes({ projectId: nextProjectId, noteId }); } };
-  const openSettings = (section: SettingsSection = "agents") => { setSettingsSection(section); setComposer(null); setPaletteOpen(false); };
+  const selectProject = (nextProjectId: string) => { setProjectId(nextProjectId); setTaskId(null); setComposer(null); setNotes(null); setReviewTaskId(null); setSettingsSection(null); };
+  const selectTask = (task: Task) => { setProjectId(task.projectId); setTaskId(task.id); setComposer(null); setNotes(null); setReviewTaskId(null); setSettingsSection(null); };
+  const openNotes = (nextProjectId = projectId, noteId: string | null = null) => { if (nextProjectId) { setProjectId(nextProjectId); setSettingsSection(null); setComposer(null); setNotes({ projectId: nextProjectId, noteId }); } };
+  const openSettings = (section: SettingsSection = "agents") => { setSettingsSection(section); setComposer(null); setNotes(null); setPaletteOpen(false); };
   const openComposer = (mode: TaskMode = "single") => { if (!currentProject) return; setSettingsSection(null); setNotes(null); setComposer({ mode }); };
   const createTask = (task: Task, draft?: ComposerDraft | null) => {
     setTasks((current) => current.some((row) => row.id === task.id) ? current.map((row) => row.id === task.id ? task : row) : [task, ...current]);
@@ -127,6 +143,7 @@ export function WorkspaceShell() {
     {deleteTarget && <DeleteTaskDialog task={deleteTarget} onClose={() => setDeleteTarget(null)} onDeleted={() => { deleteTask(deleteTarget.id); setDeleteTarget(null); }} notify={notify} />}
     {createDialog === "project" && <CreateProjectDialog onClose={() => setCreateDialog(null)} onCreate={async (name, repoPath) => { try { const created = await api.createProject(name, repoPath); setProjects((current) => [...current, created]); setProjectId(created.id); setTaskId(null); setSettingsSection(null); setCreateDialog(null); notify("项目已创建"); } catch (error) { notify(error instanceof Error ? error.message : "项目创建失败"); } }} />}
     {createDialog === "group" && currentProject && <CreateGroupDialog onClose={() => setCreateDialog(null)} onCreate={async (name, mode) => { try { const created = await api.createGroup({ projectId: currentProject.id, name, mode }); setGroups((current) => [...current, created]); setCreateDialog(null); notify("分组已创建"); } catch (error) { notify(error instanceof Error ? error.message : "分组创建失败"); } }} />}
+    {(notes || composer || paletteOpen) && <div className="workspace-floating-escape"><LegacyLink projectId={projectId} taskId={taskId} view={notes ? "notes" : composer ? "create" : "palette"} noteId={notes?.noteId} mode={composer?.mode} /></div>}
     <div className={`workspace-toast${toast ? " is-visible" : ""}`} role="status" aria-live="polite">{toast}</div>
   </>;
   if (settingsSection) return <><SettingsPage
@@ -149,11 +166,11 @@ export function WorkspaceShell() {
       <main className="workspace-main">
         {loadError && <div className="workspace-load-error">{loadError.message}</div>}
         {composer && currentProject ? <TaskComposerPanel project={currentProject} groups={groups} initialDraft={composer.draft} initialMode={composer.mode} onCancel={() => setComposer(null)} onCreated={createTask} notify={notify} /> : selectedTask?.mode === "team" ? (
-          <TeamView task={selectedTask} allTasks={tasks} onTaskUpdate={updateTask} onTaskDeleted={deleteTask} onSelectTask={selectTask} notify={notify} />
+          <TeamView task={selectedTask} allTasks={tasks} onTaskUpdate={updateTask} onTaskDeleted={deleteTask} onSelectTask={selectTask} initialReviewOpen={reviewTaskId === selectedTask.id} onReviewOpenChange={(open) => setReviewTaskId(open ? selectedTask.id : null)} notify={notify} />
         ) : selectedTask?.mode === "debate" ? (
           <DebateView task={selectedTask} allTasks={tasks} onTaskUpdated={updateTask} onTaskCreated={(created) => setTasks((current) => current.some((task) => task.id === created.id) ? current.map((task) => task.id === created.id ? created : task) : [created, ...current])} onTaskDeleted={deleteTask} onSelectTask={selectTask} notify={notify} />
         ) : selectedTask ? (
-          <TaskDetail task={selectedTask} allTasks={tasks} onTaskUpdate={updateTask} onDeleted={deleteTask} notify={notify} />
+          <TaskDetail task={selectedTask} allTasks={tasks} onTaskUpdate={updateTask} onDeleted={deleteTask} initialReviewOpen={reviewTaskId === selectedTask.id} onReviewOpenChange={(open) => setReviewTaskId(open ? selectedTask.id : null)} notify={notify} />
         ) : <><header className="workspace-app-bar"><span className="workspace-kind-chip">项目</span><span className="workspace-app-title">{currentProject?.name ?? "Harness"}</span>{currentProject && <span className="workspace-app-count">{activeTaskCount} 项任务</span>}</header><div className="workspace-columns"><section className="workspace-primary" aria-label="主工作区"><TaskPlaceholder project={currentProject} task={null} /></section><aside className="workspace-inspector-slot" aria-label="Inspector 占位"><div><span>Inspector</span><small>项目概览</small></div><p>选择任务后，这里会显示可操作属性、执行信息与队列。</p></aside></div></>}
       </main>
     </div>{overlays}</>

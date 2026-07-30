@@ -330,6 +330,17 @@
   padding: 0;
 }
 
+.workspace-floating-escape {
+  position: fixed;
+  z-index: 200;
+  right: 14px;
+  bottom: 14px;
+  border: 1px solid var(--line2);
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: var(--menu-shadow);
+}
+
 .workspace-sidebar-bottom > button {
   display: flex;
   align-items: center;

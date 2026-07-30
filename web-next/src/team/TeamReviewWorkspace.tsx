@@ -242,7 +242,7 @@ export function TeamReviewWorkspace({
     <section className="team-review-workspace">
       <header className="team-review-subbar">
         <div><b>团队验收台</b><small>先核对共享分支与独立执行者证据，再分别验收或打回。</small></div>
-        <LegacyLink projectId={lead.projectId} taskId={lead.id} />
+        <LegacyLink projectId={lead.projectId} taskId={lead.id} view="review" />
         <button type="button" onClick={onClose}><X size={13} />返回团队流</button>
       </header>
       <div className="team-review-scroll">

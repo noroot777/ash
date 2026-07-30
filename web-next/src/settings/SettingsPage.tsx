@@ -80,7 +80,7 @@ export function SettingsPage({
           })}
         </nav>
         <div className="settings-sidebar-foot">
-          <LegacyLink projectId={project?.id ?? null} taskId={null} />
+          <LegacyLink projectId={project?.id ?? null} taskId={null} view="settings" settings={section} />
         </div>
       </aside>
 
