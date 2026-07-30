@@ -47,8 +47,11 @@ export class GenericCliExecutor implements AgentExecutor {
 
   run(opts: RunOpts): RunHandle {
     const { args, sessionId, stdin } = this.plan(opts);
+    // 展示用的命令行:prompt 走 argv 时把正文压掉。它会存进 sessions.command_line
+    // 并在 UI 展示,任务正文动辄上千字,原样带上等于把 body 抄一遍进会话表。
+    const shown = args.map((a) => (a === opts.prompt ? shortPrompt(a) : a));
     const commandLine = redactSecrets(
-      `${this.bin} ${args.join(" ")}${stdin ? " <prompt via stdin>" : ""}`,
+      `${this.bin} ${shown.join(" ")}${stdin ? " <prompt via stdin>" : ""}`,
     );
     const child = spawnAgent(this.target, opts.cwd, this.bin, args, stdin ? opts.prompt : "", this.env());
     const lifecycle = { stopRequested: false };
@@ -117,3 +120,6 @@ export class GenericCliExecutor implements AgentExecutor {
 export function unknownResumeNote(spec: { name: string }, sessionId: string): string {
   return `# ${spec.name} 暂无已知的会话恢复命令（sessionId ${sessionId || "未记录"} 仅供追溯；重跑任务会开新会话）`;
 }
+
+// 长 prompt 在展示用命令行里只留个头(短的原样保留,方便看清到底传了什么)。
+const shortPrompt = (s: string) => (s.length <= 300 ? s : `${s.slice(0, 200)}…<prompt 共 ${s.length} 字>`);

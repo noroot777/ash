@@ -100,6 +100,16 @@ const fake = (over: Partial<CliSpec["exec"]> = {}): CliSpec => ({
   h.kill();
 }
 
+// 长 prompt 走 argv 时,展示用命令行只留个头 —— 它会存进 sessions.command_line
+// 并在 UI 展示,原样带上等于把任务正文抄一遍进会话表。
+{
+  const long = "x".repeat(400);
+  const h = new GenericCliExecutor(fake({ prompt: { via: "arg" } }), {}).run({ prompt: long, cwd: process.cwd() });
+  assert.ok(!h.commandLine.includes(long), "长 prompt 不该原样进 commandLine");
+  assert.ok(h.commandLine.includes("<prompt 共 400 字>"), "应标出被压掉的正文长度");
+  h.kill();
+}
+
 // ⑤ resume 三档
 {
   // (a) 未声明 session:忽略传进来的 sessionId、发一个新的,恢复命令给诚实说明
