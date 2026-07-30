@@ -8,6 +8,7 @@ import {
   Copy,
   DotsThree,
   DownloadSimple,
+  GitDiff,
   Play,
   SpinnerGap,
   Stop,
@@ -42,6 +43,7 @@ export function TaskHeader({
   onPrimary,
   onArchive,
   onRefresh,
+  onReview,
   onDelete,
   notify,
 }: {
@@ -53,6 +55,7 @@ export function TaskHeader({
   onPrimary: (action: Exclude<PrimaryAction, null>) => void;
   onArchive: () => void;
   onRefresh: () => void;
+  onReview: () => void;
   onDelete: () => void;
   notify: (message: string) => void;
 }) {
@@ -177,6 +180,9 @@ export function TaskHeader({
           <div className="task-overflow-menu" role="menu">
             <button type="button" role="menuitem" onClick={() => { setMenu(false); onRefresh(); }} disabled={refreshing}>
               <ArrowCounterClockwise size={14} className={refreshing ? "is-spinning" : ""} />刷新
+            </button>
+            <button type="button" role="menuitem" onClick={() => { setMenu(false); onReview(); }}>
+              <GitDiff size={14} />查看改动与审查
             </button>
             <button type="button" role="menuitem" onClick={() => void copy(conversationMarkdown, "已复制全部对话")} disabled={!conversationMarkdown.trim()}>
               <Copy size={14} />复制全部对话

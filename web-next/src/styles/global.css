@@ -6,6 +6,8 @@
 @import "./task-detail.css";
 @import "./team.css";
 @import "./team-review.css";
+@import "./review.css";
+@import "./debate.css";
 
 @theme {
   --font-sans: "Inter Variable", "Inter", "SF Pro Display", -apple-system,

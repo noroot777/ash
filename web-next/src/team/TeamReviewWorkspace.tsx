@@ -27,7 +27,7 @@ function acceptanceMessage(task: Task): string {
     : "这会确认当前项目工作区中的结果并标记为验收完成。";
 }
 
-function AcceptanceControls({
+export function AcceptanceControls({
   task,
   onTaskUpdated,
   notify,

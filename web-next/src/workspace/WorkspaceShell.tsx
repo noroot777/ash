@@ -4,6 +4,7 @@ import { api } from "../lib/api.ts";
 import { useTasks } from "../lib/useTasks.ts";
 import { TaskDetail } from "../task-detail/TaskDetail.tsx";
 import { TeamView } from "../team/TeamView.tsx";
+import { DebateView } from "../debate/DebateView.tsx";
 import { TaskPlaceholder } from "./TaskPlaceholder.tsx";
 import { WorkspaceSidebar } from "./WorkspaceSidebar.tsx";
 
@@ -134,6 +135,19 @@ export function WorkspaceShell() {
             task={selectedTask}
             allTasks={tasks}
             onTaskUpdate={(updated) => setTasks((current) => current.map((task) => task.id === updated.id ? updated : task))}
+            onTaskDeleted={(deletedId) => {
+              setTasks((current) => current.filter((task) => task.id !== deletedId));
+              if (taskId === deletedId) setTaskId(null);
+            }}
+            onSelectTask={selectTask}
+            notify={notify}
+          />
+        ) : selectedTask?.mode === "debate" ? (
+          <DebateView
+            task={selectedTask}
+            allTasks={tasks}
+            onTaskUpdated={(updated) => setTasks((current) => current.map((task) => task.id === updated.id ? updated : task))}
+            onTaskCreated={(created) => setTasks((current) => current.some((task) => task.id === created.id) ? current.map((task) => task.id === created.id ? created : task) : [created, ...current])}
             onTaskDeleted={(deletedId) => {
               setTasks((current) => current.filter((task) => task.id !== deletedId));
               if (taskId === deletedId) setTaskId(null);
