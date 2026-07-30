@@ -20,7 +20,10 @@ export function WorkspaceSidebar({
   onProject,
   onTask,
   onToggleCollapsed,
-  onPlaceholder,
+  onSearch,
+  onNotes,
+  onCreate,
+  onSettings,
 }: {
   projects: ProjectView[];
   currentProject: ProjectView | null;
@@ -31,7 +34,10 @@ export function WorkspaceSidebar({
   onProject: (projectId: string) => void;
   onTask: (task: Task) => void;
   onToggleCollapsed: () => void;
-  onPlaceholder: (message: string) => void;
+  onSearch: () => void;
+  onNotes: () => void;
+  onCreate: () => void;
+  onSettings: () => void;
 }) {
   if (collapsed) {
     return (
@@ -53,15 +59,15 @@ export function WorkspaceSidebar({
           projects={projects}
           current={currentProject}
           onProject={onProject}
-          onSettings={() => onPlaceholder("设置将在后续实施链接入")}
+          onSettings={onSettings}
         />
-        <button className="workspace-side-icon" type="button" title="搜索 ⌘K" aria-label="搜索 ⌘K" onClick={() => onPlaceholder("搜索将在后续实施链接入")}>
+        <button className="workspace-side-icon" type="button" title="搜索 ⌘K" aria-label="搜索 ⌘K" onClick={onSearch}>
           <MagnifyingGlass size={15} aria-hidden="true" />
         </button>
-        <button className="workspace-side-icon" type="button" title="随手记" aria-label="随手记" onClick={() => onPlaceholder("随手记将在后续实施链接入")}>
+        <button className="workspace-side-icon" type="button" title="随手记" aria-label="随手记" onClick={onNotes}>
           <NotePencil size={15} aria-hidden="true" />
         </button>
-        <button className="workspace-side-icon" type="button" title="新建任务" aria-label="新建任务" onClick={() => onPlaceholder("新建任务将在后续实施链接入")}>
+        <button className="workspace-side-icon" type="button" title="新建任务" aria-label="新建任务" onClick={onCreate}>
           <Plus size={16} weight="bold" aria-hidden="true" />
         </button>
       </div>

@@ -8,6 +8,9 @@
 @import "./team-review.css";
 @import "./review.css";
 @import "./debate.css";
+@import "./settings.css";
+@import "./overlays.css";
+@import "./composer.css";
 
 @theme {
   --font-sans: "Inter Variable", "Inter", "SF Pro Display", -apple-system,
