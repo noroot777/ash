@@ -1,6 +1,8 @@
 @import "tailwindcss";
 @import "./controls.css";
 @import "./dev-components.css";
+@import "./task-tree.css";
+@import "./workspace.css";
 
 @theme {
   --font-sans: "Inter Variable", "Inter", "SF Pro Display", -apple-system,
@@ -66,7 +68,8 @@
 html,
 body,
 #root {
-  min-height: 100%;
+  width: 100%;
+  height: 100%;
 }
 
 body {
@@ -190,52 +193,4 @@ select:focus-visible,
 .ui-selectable[aria-selected="true"] {
   background: var(--sel-bg);
   color: var(--ink);
-}
-
-.next-home {
-  display: grid;
-  min-height: 100vh;
-  place-items: center;
-  padding: 32px;
-}
-
-.next-home-card {
-  width: min(540px, 100%);
-  border: 0.5px solid var(--line);
-  border-radius: 12px;
-  background: var(--canvas);
-  padding: 36px;
-  box-shadow: var(--surface-shadow);
-}
-
-.next-home-mark {
-  display: grid;
-  width: 34px;
-  height: 34px;
-  place-items: center;
-  border-radius: 9px;
-  background: var(--accent);
-  color: white;
-  font-size: 18px;
-}
-
-.next-home-eyebrow {
-  margin: 24px 0 6px;
-  color: var(--accent);
-  font-size: 10px;
-  font-weight: 750;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-}
-
-.next-home h1 {
-  margin: 0;
-  font-size: 28px;
-  font-weight: 600;
-  letter-spacing: -0.035em;
-}
-
-.next-home p:not(.next-home-eyebrow) {
-  margin: 10px 0 24px;
-  color: var(--muted);
 }
