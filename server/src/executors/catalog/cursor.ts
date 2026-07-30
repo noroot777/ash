@@ -36,7 +36,10 @@ export const cursorSpec: CliSpec = {
     model: { flag: "--model" },
     session: {
       resumeArgs: (id) => ["--resume", id],
-      interactive: (id) => `agent --resume ${id}`,
+      // 展示给用户复制的命令固定用兼容别名 `cursor-agent`:官方主名 `agent` 太通用,
+      // 本机实测 `which agent` 命中的是 grok,照抄主名会让用户把 Cursor 会话喂给别家 CLI。
+      // (派任务侧不受影响 —— 那边走 execBinFor 探到的真实 bin。)
+      interactive: (id) => `cursor-agent --resume ${id}`,
     },
     parser: (ctx) => cursorStreamJsonParser(ctx),
   },
