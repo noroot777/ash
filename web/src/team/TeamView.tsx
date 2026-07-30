@@ -14,6 +14,7 @@ import {
   batchesOf,
   mergeFeed,
   teamGroupsOf,
+  teamNeverStarted,
   waitingWorkers,
   workersOf,
 } from "@harness/shared/team";
@@ -104,7 +105,10 @@ export function TeamView({
   const leadTurns = useMemo(() => turnsOf(items), [items]);
   const haltedByHistory = activeTeamHaltMarker(items);
   const stopped = teamGroups.some((g) => g.paused) || (teamGroups.length === 0 && (haltedByHistory || localHalted));
-  const canIterateDebate = allTasks.some((item) => item.id === task.originTaskId && item.mode === "debate")
+  // 与 LinkedTeamCard 的 canIterate 同一套判据：来源是辩论、还没派生过下一轮，且这支
+  // 团队真的开过台（复盘辩论必须读调度台执行记录，没开过台的后端只能 409）。
+  const canIterateDebate = !teamNeverStarted(task.status)
+    && allTasks.some((item) => item.id === task.originTaskId && item.mode === "debate")
     && !allTasks.some((item) => item.mode === "debate" && item.originTaskId === task.id);
 
   const iterateDebate = async () => {

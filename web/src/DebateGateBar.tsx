@@ -36,11 +36,19 @@ export function DebateGateBar({
   const isG1 = gate.gate === "G1";
   const consensus = !!gate.consensus;
   const consensusBy = gate.consensusBy ?? (consensus ? "both" : undefined);
+  // 结论已经交给一支团队按它开干了。这时「打回终止 / 注入意见→回炉 / 提问→继续」都会
+  // 让辩论和正在执行的团队各说一套（团队拿走的是交接那一刻的结论快照），所以只留把辩论
+  // 本身收尾这一个动作，并把「只剩收尾」写进常驻文案而不是 hover 才看见的气泡。正常路径
+  // 下 handoffToTeam 已经自动放行、这个分支根本不会出现；它兜的是自动放行失败、以及此
+  // 改动之前留下的历史任务。
+  const handedOff = isG1 && !!linkedTeam;
   const label = !isG1
     ? "历史代码门 · 等待你裁决"
-    : consensus
-      ? `收敛门 · ${consensusBy === "both" ? "双方已达成共识" : "单方声明一致，待你确认"}`
-      : "收敛门 · 双方仍有分歧（结论如下，供你定夺）";
+    : handedOff
+      ? "收敛门 · 结论已交给团队，辩论只剩收尾"
+      : consensus
+        ? `收敛门 · ${consensusBy === "both" ? "双方已达成共识" : "单方声明一致，待你确认"}`
+        : "收敛门 · 双方仍有分歧（结论如下，供你定夺）";
   const nameA = "辩手A";
   const nameB = "辩手B";
 
@@ -114,21 +122,29 @@ export function DebateGateBar({
               <TeamHandoffButton busy={teamBusy} onClick={onOpenTeam} />
             )
           )}
-          <button onClick={() => onGate({ kind: "approve" })} className="rounded-md bg-emerald-500 px-3 py-1 text-xs font-medium text-white">
-            {isG1 ? "放行→结束" : "放行"}
-          </button>
-          <button onClick={() => onGate({ kind: "reject" })} className="rounded-md border border-line2 px-3 py-1 text-xs text-ink">
-            打回终止
-          </button>
-          <button onClick={() => switchMode("inject")} className="rounded-md border border-line2 px-3 py-1 text-xs text-ink">
-            注入意见→回炉
-          </button>
-          <button onClick={() => switchMode("ask")} className="rounded-md border border-line2 px-3 py-1 text-xs text-ink">
-            提问→继续
-          </button>
+          {handedOff ? (
+            <button onClick={() => onGate({ kind: "approve" })} className="rounded-md bg-emerald-500 px-3 py-1 text-xs font-medium text-white">
+              结束辩论
+            </button>
+          ) : (
+            <>
+              <button onClick={() => onGate({ kind: "approve" })} className="rounded-md bg-emerald-500 px-3 py-1 text-xs font-medium text-white">
+                {isG1 ? "放行→结束" : "放行"}
+              </button>
+              <button onClick={() => onGate({ kind: "reject" })} className="rounded-md border border-line2 px-3 py-1 text-xs text-ink">
+                打回终止
+              </button>
+              <button onClick={() => switchMode("inject")} className="rounded-md border border-line2 px-3 py-1 text-xs text-ink">
+                注入意见→回炉
+              </button>
+              <button onClick={() => switchMode("ask")} className="rounded-md border border-line2 px-3 py-1 text-xs text-ink">
+                提问→继续
+              </button>
+            </>
+          )}
         </div>
       </div>
-      {mode && (
+      {mode && !handedOff && (
         <div className="relative mt-2">
           {mentionOpen && (
             <div className="absolute bottom-full left-0 z-10 mb-1 w-56 overflow-hidden rounded-lg border border-line2 bg-panel p-1 shadow-xl">

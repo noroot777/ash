@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { Task } from "@harness/shared";
 import { TEAM_DEFAULTS } from "@harness/shared";
 import { Crown, Robot, UsersThree } from "@phosphor-icons/react";
-import { isTeamSettled, workersOf } from "@harness/shared/team";
+import { isTeamSettled, teamNeverStarted, workersOf } from "@harness/shared/team";
 import { ExecutorPicker, type ExecutorSelection, useExecutorProfiles } from "./ExecutorPicker";
 import { Modal } from "./Modal";
 import { api } from "./api";
@@ -144,7 +144,9 @@ export function LinkedTeamCard({
   const settled = isTeamSettled(team.status === "running", workers);
   const origin = allTasks.find((item) => item.id === team.originTaskId);
   const hasIteration = allTasks.some((item) => item.mode === "debate" && item.originTaskId === team.id);
-  const canIterate = settled && origin?.mode === "debate" && !hasIteration && !!onDebateAgain;
+  // 复盘辩论要先读调度台的执行记录，所以从没开过台的团队（创建成功但启动失败，仍停在
+  // backlog）没有记录可读——后端只能 409，按钮就是个死路，直接不给。
+  const canIterate = settled && !teamNeverStarted(team.status) && origin?.mode === "debate" && !hasIteration && !!onDebateAgain;
   return (
     <div className={`flex min-w-0 items-stretch rounded-lg border border-cyan-500/30 bg-cyan-500/[0.07] ${compact ? "max-w-[430px]" : "w-full"}`}>
       <button

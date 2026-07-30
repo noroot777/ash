@@ -140,6 +140,11 @@ export function DebateView({
     return latestDebateGate(turns, task.status === "awaiting_review");
   }, [state.gate, persistedGate, task.status, turns]);
 
+  // 「辩论此刻正停在门上等裁决」的单点判据：门禁栏的显示、以及交给团队之后的自动收尾
+  // 都读它。两处用同一个判据，才不会出现「团队已经按结论开干了、门却还开着」的自相
+  // 矛盾状态。
+  const gateOpen = !!gate?.open && task.status === "awaiting_review";
+
   const linkedTeam = useMemo(
     () => allTasks
       .filter((item) => item.mode === "team" && item.originTaskId === task.id)
@@ -175,11 +180,16 @@ export function DebateView({
     // Upsert without navigating: the gate/footer changes into the live linked
     // team card in place. The card is the explicit navigation affordance.
     onTeamCreated(created, false, false);
-    if (gate?.gate === "G1" && gate.consensus) {
+    // 「交给团队开干」本身就是用户对结论做出的裁决，比「放行」更强的一步，所以**无论
+    // 双方有没有达成共识**都要把门关掉：辩论落 done、界面收敛成「已交给团队」这一个
+    // 终态。原来只在 consensus 时自动放行，于是「双方仍有分歧 → 交给团队」这条最常
+    // 走的路留下一个门还开着的辩论，界面同时给出「打回终止 / 回炉 / 继续提问」和
+    // 「团队正在按这份结论开干」两套互相拆台的操作。
+    if (gateOpen) {
       try {
         await onGate({ kind: "approve" });
       } catch (error) {
-        toast(`团队任务已创建，但辩论自动放行失败：${error instanceof Error ? error.message : String(error)}`);
+        toast(`团队任务已创建，但辩论自动收尾失败：${error instanceof Error ? error.message : String(error)}`);
       }
     }
     try {
@@ -388,7 +398,7 @@ export function DebateView({
         />
       </div>
 
-      {gate?.open && task.status === "awaiting_review" && (
+      {gateOpen && gate && (
         <DebateGateBar
           gate={gate}
           onGate={onGate}
