@@ -51,7 +51,7 @@ export const CLI_MODEL_PRESETS: Record<AgentType, readonly string[]> = {
   // 也没公布内置模型 id 清单 —— 可选项 = 内置模型 + 企业管理员在控制台加的自定义模型,每家租户不一样。
   // 唯一有出处的取值是全局设置页的示例 `traecli -c model.name=kimi-k2`;手填照样接受。
   trae: [],
-  grok: ["grok-4.5"],
+  grok: ["grok-4.5"], // 2026-07-30 登录态 `grok models` 的唯一可用模型(v0.2.114)
   kimi: ["kimi-code/k3", "kimi-code/kimi-for-coding", "kimi-code/kimi-for-coding-highspeed"],
   cursor: ["auto", "grok-4.5", "composer-2.5", "claude-sonnet-5", "claude-opus-5", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gemini-3.1-pro", "gemini-3.6-flash"],
   // qwen-code 的 Coding Plan 可选模型(2026-07-30 官方 auth 文档);同一菜单里还有
