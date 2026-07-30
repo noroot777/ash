@@ -75,7 +75,8 @@
 .team-gantt-axis { display: flex; justify-content: space-between; margin-left: 163px; color: var(--faint); font-family: var(--font-mono); font-size: 9px; }
 
 .team-flow-grid { display: grid; min-height: 0; flex: 1; grid-template-columns: minmax(0, 1fr) 268px; }
-.team-feed { min-width: 0; overflow-y: auto; border-right: .5px solid var(--line); padding: 18px clamp(18px, 3vw, 42px) 28px; }
+.team-flow-main { display: flex; min-width: 0; min-height: 0; flex-direction: column; }
+.team-feed { min-width: 0; min-height: 0; flex: 1; overflow-y: auto; padding: 18px clamp(18px, 3vw, 42px) 28px; }
 .team-feed-empty { margin: 0; color: var(--faint); font-size: 11.5px; }
 .team-feed-agent { max-width: 800px; margin: 0 0 21px; color: var(--muted); font-size: 12.5px; line-height: 1.7; }
 .team-feed-agent > header { display: flex; gap: 7px; margin-bottom: 3px; color: var(--faint); font-size: 10.5px; }
@@ -126,7 +127,7 @@
 .team-status-dot--amber { background: var(--amber); }
 .team-status-dot--cyan { background: var(--cyan); }
 .team-status-dot--gray { background: var(--faint); }
-.team-worker-rail { min-height: 0; overflow-y: auto; background: color-mix(in lch,var(--canvas) 96%,var(--chrome)); padding: 12px; }
+.team-worker-rail { min-height: 0; overflow-y: auto; border-left: .5px solid var(--line); background: color-mix(in lch,var(--canvas) 96%,var(--chrome)); padding: 12px; }
 .team-worker-rail > header { display: flex; justify-content: space-between; margin-bottom: 7px; color: var(--faint); font-size: 9.5px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; }
 .team-worker-rail > header small { font-weight: 450; letter-spacing: 0; text-transform: none; }
 .team-worker-rail > p, .team-worker-rail > footer { margin: 9px 2px; color: var(--faint); font-size: 10.5px; line-height: 1.55; }
@@ -165,8 +166,9 @@
 }
 @media (max-width: 720px) {
   .team-flow-grid { display: block; overflow-y: auto; }
-  .team-feed { overflow: visible; border-right: 0; }
-  .team-worker-rail { max-height: 260px; border-top: .5px solid var(--line); }
+  .team-flow-main { display: block; }
+  .team-feed { overflow: visible; }
+  .team-worker-rail { max-height: 260px; border-top: .5px solid var(--line); border-left: 0; }
   .team-header-actions > button:not(.is-primary), .team-busy-pill { display: none; }
   .team-meta { gap: 4px 10px; }
   .team-meta > :nth-child(n+4) { display: none; }

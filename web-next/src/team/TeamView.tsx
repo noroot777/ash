@@ -282,14 +282,16 @@ export function TeamView({
           {stopped && <CuaResidualNotice taskId={task.id} status={cuaStatus} onStatus={setCuaStatus} notify={notify} />}
           <TeamTimeline lead={task} leadTurns={turns} workers={workers} groups={teamGroups} onOpenWorker={setSelectedWorkerId} />
           <div className="team-flow-grid">
-            <TeamFeed taskId={task.id} rows={rows} workers={workers} onOpenWorker={setSelectedWorkerId} />
+            <section className="team-flow-main" aria-label="团队会话">
+              <TeamFeed taskId={task.id} rows={rows} workers={workers} onOpenWorker={setSelectedWorkerId} />
+              <TeamReplyBox task={task} onSend={async (text, attachments) => {
+                await api.replyTask(task.id, text, { attachments });
+                conversation.addUser(text, attachments);
+                notify("已发送给调度者");
+              }} />
+            </section>
             <WorkerRail workers={workers} groups={teamGroups} selectedId={selectedWorkerId} onSelect={setSelectedWorkerId} />
           </div>
-          <TeamReplyBox task={task} onSend={async (text, attachments) => {
-            await api.replyTask(task.id, text, { attachments });
-            conversation.addUser(text, attachments);
-            notify("已发送给调度者");
-          }} />
         </>
       )}
       {!reviewOpen && selectedWorker && (
