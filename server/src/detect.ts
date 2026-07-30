@@ -1,10 +1,7 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import type { AgentType } from "@harness/shared";
+import { probeBins } from "./executors/bin-probe.js";
 import { CLI_SPECS } from "./executors/catalog/index.js";
 import { resolveExecutorFor } from "./executors/index.js";
-
-const exec = promisify(execFile);
 
 export interface DetectedAgent {
   type: AgentType;
@@ -69,50 +66,21 @@ const KNOWN_CLIS: KnownCli[] = CLI_SPECS.map((s) => ({
   untested: s.untested,
 }));
 
-async function which(bin: string): Promise<string | null> {
-  try {
-    const { stdout } = await exec("which", [bin]);
-    return stdout.trim() || null;
-  } catch {
-    return null;
-  }
-}
-
-async function version(bin: string): Promise<string | null> {
-  try {
-    const { stdout } = await exec(bin, ["--version"], { timeout: 4000 });
-    return (stdout.split("\n")[0] || "").trim() || null;
-  } catch {
-    return null;
-  }
-}
-
+// 探测走 bin-probe 的 probeBins —— **检测与执行必须是同一套判定**(候选顺序、
+// 备用名自证、PATH 查找口径全部共用)。以前这里自己 `which` 一遍、执行器另认
+// bins[0],于是「目录显示可用、派任务 ENOENT」(第 1 轮审查抓到的问题)。
 async function detectOne(cli: KnownCli): Promise<DetectedCli> {
-  const want = cli.fallbackVersionMatch?.toLowerCase();
-  let bin = cli.bins[0];
-  let path: string | null = null;
-  let ver: string | null = null;
-  for (const [i, candidate] of cli.bins.entries()) {
-    const found = await which(candidate);
-    if (!found) continue;
-    const v = await version(candidate);
-    // 备用名要自证身份,证不了就当没探到,继续往下试。
-    if (i > 0 && want && !(v ?? "").toLowerCase().includes(want)) continue;
-    bin = candidate;
-    path = found;
-    ver = v;
-    break;
-  }
+  const probe = await probeBins(cli.bins, cli.fallbackVersionMatch);
   return {
     ...cli,
-    bin,
-    available: !!path,
-    path,
-    version: ver,
+    bin: probe?.bin ?? cli.bins[0],
+    available: !!probe,
+    path: probe?.path ?? null,
+    version: probe?.version ?? null,
     // 没装的 CLI 不去解析执行器,直接算它不支持常驻 —— 反正启动器只在 available
     // 的里面挑。装了的才问执行器本人有没有 openResident(目前只有 claude 有;
     // GenericCliExecutor 一律不实现,「谁能当团队调度者」的过滤就靠这个)。
-    resident: path
+    resident: probe
       ? !!(await resolveExecutorFor({ type: cli.type }).then((e) => e.openResident, () => null))
       : false,
   };

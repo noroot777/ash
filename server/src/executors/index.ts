@@ -4,6 +4,7 @@ import { db } from "../db/index.js";
 import { agents, llmProviders } from "../db/schema.js";
 import type { AgentExecutor, ExecutorBuildOpts, RelayConfig } from "./types.js";
 import { cliSpec } from "./catalog/index.js";
+import { execBinFor } from "./bin-probe.js";
 import { GenericCliExecutor } from "./generic.js";
 
 type AgentRow = typeof agents.$inferSelect;
@@ -73,7 +74,11 @@ async function build(
   // 链路),其余全部由 GenericCliExecutor 按 spec.exec 装配命令行。所以「新增一个
   // 可派任务的 CLI」不需要碰这里 —— 加一个 spec 文件就行。
   const spec = cliSpec(type);
-  return spec.factory ? spec.factory(opts) : new GenericCliExecutor(spec, opts);
+  if (spec.factory) return spec.factory(opts);
+  // 检测能命中备用命令名(cursor 的 agent、antigravity 的 agy),执行就必须用同一个
+  // —— 死认 bins[0] 会让「目录显示可用」的环境派任务稳定 ENOENT(第 1 轮审查)。
+  opts.bin ??= await execBinFor(spec, opts.target);
+  return new GenericCliExecutor(spec, opts);
 }
 
 // 挂载的供应商 → 启动 CLI 时要注入的配置。供应商被删掉(悬空 providerId)或没配

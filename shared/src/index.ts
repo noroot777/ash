@@ -1,7 +1,6 @@
 // Core domain types shared between server and web.
 // Mirrors the decisions in DESIGN.md (§3 data model, §5 agents, §7 debate,
 // §8 statuses, §12 debate mechanism, §13 sessions).
-import type { SessionRole } from "./session.js";
 import type { TeamConfig } from "./team.js";
 export type { Session, SessionRole } from "./session.js";
 export type {
@@ -63,15 +62,29 @@ export const CLI_MODEL_PRESETS: Record<AgentType, readonly string[]> = {
   claude: ["opus", "sonnet", "haiku", "fable"],
   codex: ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4"],
   antigravity: [],
-  gemini: [],
-  opencode: [],
+  // gemini 的 --model 别名(v0.53.0 docs/cli/cli-reference.md「Model aliases」):
+  // 具体 id(gemini-3-pro-preview 之类)随版本换,别名才是稳定那层;手填照样接受。
+  gemini: ["auto", "pro", "flash", "flash-lite"],
+  // opencode 的模型是 `provider/model`(id 来自 models.dev),能不能用取决于你在
+  // opencode 里认证了哪些 provider;`opencode models` 列本机可用的全集。
+  opencode: [
+    "anthropic/claude-opus-4-8",
+    "anthropic/claude-sonnet-4-6",
+    "openai/gpt-5.6",
+    "openai/gpt-5.3-codex",
+    "google/gemini-3.1-pro-preview",
+    "opencode/claude-sonnet-4-6",
+    "opencode/gpt-5.3-codex",
+  ],
   trae: [],
-  grok: [],
-  kimi: [],
-  cursor: [],
-  qwen: [],
+  grok: ["grok-4.5"],
+  kimi: ["kimi-code/k3", "kimi-code/kimi-for-coding", "kimi-code/kimi-for-coding-highspeed"],
+  cursor: ["auto", "grok-4.5", "composer-2.5", "claude-sonnet-5", "claude-opus-5", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gemini-3.1-pro", "gemini-3.6-flash"],
+  // qwen-code 的 Coding Plan 可选模型(2026-07-30 官方 auth 文档);同一菜单里还有
+  // glm-5 / kimi-k2.5 / MiniMax-M2.5 等第三方 id,要用直接手填。
+  qwen: ["qwen3-coder-plus", "qwen3-coder-next", "qwen3.7-plus", "qwen3-max-2026-01-23"],
   qoder: [],
-  copilot: [],
+  copilot: ["auto", "claude-sonnet-4.6", "gpt-5.4", "claude-haiku-4.5", "gpt-5.3-codex", "gemini-3.1-pro-preview", "gemini-3.5-flash", "gemini-3.6-flash", "mai-code-1-flash"],
   kiro: [],
   kilo: [],
   pi: [],
@@ -84,15 +97,17 @@ export const REASONING_EFFORT_VALUES: Record<AgentType, readonly string[]> = {
   claude: ["low", "medium", "high", "xhigh", "max"],
   codex: ["low", "medium", "high", "xhigh", "ultra", "max"],
   antigravity: [],
-  gemini: [],
-  opencode: [],
+  gemini: [], // 2026-07-30 核对 v0.53.0 的 yargs 定义:没有 effort 类 flag,思考预算只能写 settings.json 的 thinkingConfig
+  // opencode 叫 variant(--variant),档位由 provider 决定:anthropic 只有 high/max、
+  // google 只有 low/high、openai 大致 minimal→xhigh。这里是并集,不合法组合由上游拒。
+  opencode: ["minimal", "low", "medium", "high", "xhigh", "max"],
   trae: [],
-  grok: [],
-  kimi: [],
-  cursor: [],
-  qwen: [],
+  grok: ["low", "medium", "high"],
+  kimi: [], // 2026-07-30:config/API 有 effort,但 Kimi Code CLI 没有对应命令行参数
+  cursor: [], // 2026-07-30 核对 Cursor CLI 参数页:没有独立 reasoning-effort flag;effort/Fast 看起来通过模型变体或账号计划控制
+  qwen: [], // 2026-07-30 核对 main 的 yargs 定义:qwen-code 没有 reasoning/thinking effort 参数
   qoder: [],
-  copilot: [],
+  copilot: ["low", "medium", "high", "xhigh", "max"],
   kiro: [],
   kilo: [],
   pi: [],
@@ -401,43 +416,8 @@ export interface LlmProvider {
 }
 
 // ── Global search (⌘K) ───────────────────────────────────────────────────────
-// One hit per task or note. Task fields rank title > body > conversation, and
-// task hits are returned before note hits. `conversation` means the match was
-// found inside the task's session transcripts (data/runs/<taskId>/*.md|jsonl),
-// which is where run artifacts like output directory names live.
-export type SearchField = "title" | "body" | "conversation";
-export interface TaskSearchHit {
-  kind: "task";
-  id: string;
-  title: string;
-  status: TaskStatus;
-  projectId: string;
-  projectName: string | null;
-  archived: boolean;
-  field: SearchField;
-  // Context around the first match, whitespace-collapsed to one line.
-  // Empty for title hits (the title is already shown).
-  snippet: string;
-  // Task body prefix for the command-palette preview.
-  preview?: string;
-  updatedAt: string;
-}
-
-export interface NoteSearchHit {
-  kind: "note";
-  id: string;
-  title: string;
-  projectId: string;
-  projectName: string | null;
-  field: "body";
-  snippet: string;
-  // Note body for the command-palette preview.
-  preview?: string;
-  updatedAt: string;
-  taskId: string | null;
-}
-
-export type SearchHit = TaskSearchHit | NoteSearchHit;
+// 形状住在 ./search.ts(纯类型,这里只再导出)。
+export type { NoteSearchHit, SearchField, SearchHit, TaskSearchHit } from "./search.js";
 
 // ── Attachments (pasted into the composer / reply box) ───────────────────────
 // Pasted images OR files. We don't feed them to a vision API — each is persisted
@@ -583,72 +563,9 @@ export interface ScheduledMessage {
   sentAt: string | null;
 }
 
-// ── HITL gates (§7) ──────────────────────────────────────────────────────────
-export type GateName = "G1" | "G2"; // G2 is legacy, retained for historical events
-export type GateAction =
-  | { kind: "approve"; text?: string; side?: "A" | "B" } // side is retained for older clients
-  | { kind: "reject" } // 打回终止
-  | { kind: "inject"; text: string } // 注入意见 → 回炉再辩（始终双方一起回炉）
-  | { kind: "ask"; text: string; target?: "A" | "B" }; // 提问 → 答完继续；target 缺省=问双方，指定=只问那一位辩手
-
-// ── Executor streaming events (§12) ──────────────────────────────────────────
-export type AgentEvent =
-  | { kind: "thinking"; text: string }
-  | { kind: "text"; text: string }
-  | { kind: "tool"; name: string; detail?: string }
-  | { kind: "session"; cliSessionId: string }
-  | { kind: "system"; text: string } // a backend-initiated 〔系统〕 trace (e.g. 继续) — its own bubble, not agent text
-  | { kind: "error"; message: string }
-  // 常驻会话（team 调度台）专用：一个回合说完了，但进程还活着等下一条消息。
-  // 一次性 run() 永远不发这个 —— 它的回合结束就是进程结束(done)。
-  | { kind: "turnEnd" }
-  | { kind: "done"; exitStatus: number };
-
-export type DebateSpeaker = "A" | "B" | "impl" | "review" | "user"; // impl/review are legacy transcript speakers
-
-// SSE envelope pushed to the web client.
-export type ServerEvent =
-  | { type: "task.created"; task: Task }
-  | { type: "task.updated"; task: Task }
-  | { type: "task.status"; taskId: string; status: TaskStatus; startedAt?: string | null; endedAt?: string | null; activeMs?: number | null; liveSince?: string | null }
-  | { type: "task.stage"; taskId: string; stage: TaskStage | null }
-  | { type: "task.review"; taskId: string }
-  | { type: "task.title"; taskId: string; title: string }
-  // 提问态变化（§Team）：agent 调 ask_question 提问、或答复把它清空。task.status
-  // 只带状态字段，question 不跟着走 —— 少了这条事件，卡片要等下次全量拉取才出现/
-  // 消失（答复完卡片还杵在那，像是没答上）。question=null 即「已答复，撤掉卡片」。
-  | {
-      type: "task.question";
-      taskId: string;
-      question: string | null;
-      questionOptions: string[] | null;
-      questionItems: QuestionItem[] | null;
-    }
-  | {
-      type: "agent.event";
-      taskId: string;
-      sessionId: string;
-      role: SessionRole;
-      agentType?: AgentType; // which agent produced it (single tasks can host several via @-mention)
-      event: AgentEvent;
-    }
-  | {
-      type: "debate.progress";
-      taskId: string;
-      round: number;
-      speaker: DebateSpeaker;
-      phase: "start" | "end";
-      raisedHand?: boolean;
-      at?: string;
-      startedAt?: string;
-      durationMs?: number;
-    }
-  | { type: "debate.gate"; taskId: string; gate: GateName; open: boolean; consensus?: boolean; consensusBy?: DebateConsensusBy; conclusionA?: string | null; conclusionB?: string | null }
-  // A human intervention in a /debate timeline (gate inject/ask). Carries the time
-  // so the timeline can show when the user spoke. Persisted in the transcript too.
-  // target: when a 提问 was directed at one debater, which side — so the timeline
-  // can show 「你 → 辩手A」 (undefined = addressed to both).
-  | { type: "debate.user"; taskId: string; round: number; text: string; at: string; target?: "A" | "B" };
+// ── HITL gates (§7) / Executor streaming events (§12) ───────────────────────
+// 形状住在 ./events.ts(纯类型,这里只再导出);拆分理由见那个文件的头部注释。
+export type { AgentEvent, DebateSpeaker, GateAction, GateName, ServerEvent } from "./events.js";
 
 // ── Session-snapshot parsing ──────────────────────────────────────────────
 // A persisted session .md is mostly agent Markdown, but backend continues and

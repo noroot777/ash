@@ -68,9 +68,9 @@ export class GenericCliExecutor implements AgentExecutor {
   }
 
   resumeCommand(cwd: string, sessionId: string): string {
-    const inner = this.spec.exec.session?.interactive?.(sessionId);
-    // 诚实优先:没有已知恢复命令时给一句说明,而不是拼一条跑不通(或跑到别家
-    // CLI 上)的命令 —— 那种命令会被用户当真复制去执行。
+    const inner = interactiveResumeInner(this.spec, sessionId);
+    // 诚实优先:拼不出可信的恢复命令时给一句说明,而不是一条跑不通(或跑到别家
+    // CLI 上、或引用一个不存在的会话)的命令 —— 那种命令会被用户当真复制去执行。
     if (!inner) return unknownResumeNote(this.spec, sessionId);
     return resumeFor(this.target, cwd, inner, this.relayEnvHint ?? "");
   }
@@ -117,8 +117,34 @@ export class GenericCliExecutor implements AgentExecutor {
   }
 }
 
-export function unknownResumeNote(spec: { name: string }, sessionId: string): string {
-  return `# ${spec.name} 暂无已知的会话恢复命令（sessionId ${sessionId || "未记录"} 仅供追溯；重跑任务会开新会话）`;
+/**
+ * 这个 CLI 的 sessionId **是不是 CLI 真实认得的 id**。判定与上面 `session()` 的三档
+ * 一一对应:`newIdFlag` = harness 自己发的 id 已经告诉了 CLI;`resumeArgs` = id 只可能
+ * 来自 parser 回报的 `{kind:"session"}`。两者都没有时,`session()` 发的是个**纯 harness
+ * 侧运行记录**的 UUID,CLI 压根没听说过它 —— 拿它拼 `--resume` 就是给用户一条引用
+ * 不存在会话的命令(第 1 轮审查抓到的 antigravity 就是这种)。
+ */
+export function hasTrustedSessionId(spec: CliSpec): boolean {
+  const s = spec.exec.session;
+  return !!(s?.newIdFlag || s?.resumeArgs);
+}
+
+/** 可信才给交互式恢复命令(不带 cd 前缀);否则 null,由调用方换成诚实说明。 */
+export function interactiveResumeInner(spec: CliSpec, sessionId: string): string | null {
+  if (!sessionId || !hasTrustedSessionId(spec)) return null;
+  return spec.exec.session?.interactive?.(sessionId) ?? null;
+}
+
+export function unknownResumeNote(spec: CliSpec | { name: string }, sessionId: string): string {
+  const s = "exec" in spec ? spec.exec.session : undefined;
+  // 三种原因分开说,否则用户看不出「这个 CLI 不支持」和「这条会话没接通」的区别。
+  const why =
+    s?.interactive && !("exec" in spec && hasTrustedSessionId(spec))
+      ? "harness 没把会话 id 交给它、它也没回报,所以这个 id 只是运行记录,不能用来 --resume"
+      : !sessionId
+        ? "本次运行没有拿到 CLI 的会话 id"
+        : "暂无已知的会话恢复命令";
+  return `# ${spec.name} 无法恢复会话：${why}（sessionId ${sessionId || "未记录"} 仅供追溯；重跑任务会开新会话）`;
 }
 
 // 长 prompt 在展示用命令行里只留个头(短的原样保留,方便看清到底传了什么)。

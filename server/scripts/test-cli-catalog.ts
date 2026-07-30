@@ -7,13 +7,17 @@
 //   ② 每个 spec 的必填字段齐、prompt 声明自洽;
 //   ③ 只有 claude 支持常驻会话 —— 「谁能当团队调度者」全靠 openResident 过滤;
 //   ④ GenericCliExecutor 按 spec 装配出的命令行符合预期(含 model/effort/加速档/自带参数);
-//   ⑤ resume 三档语义:未声明 → 忽略 sessionId 起新会话 + 诚实占位说明;
-//   ⑥ 预检失败(bin 不在 PATH)必须由事件流报错并以 done 收尾 —— 少一个 done 就是任务卡死。
+//   ⑤ resume 三档语义:未声明 → 忽略 sessionId 起新会话 + 诚实占位说明;只写
+//      interactive(拿不到 CLI 真实 id)一律不展示可执行的恢复命令;
+//   ⑥ 预检失败(bin 不在 PATH)必须由事件流报错并以 done 收尾 —— 少一个 done 就是任务卡死;
+//   ⑦ 备用命令名:检测命中 bins[1] 时执行也要用它(死认 bins[0] = 目录说可用、派任务 ENOENT)。
 import assert from "node:assert/strict";
 import type { AgentEvent } from "@harness/shared";
 import { AGENT_TYPES, CLI_MODEL_PRESETS, REASONING_EFFORT_VALUES } from "@harness/shared";
 import { CLI_SPECS, CLI_SPEC_BY_KEY } from "../src/executors/catalog/index.js";
-import { GenericCliExecutor } from "../src/executors/generic.js";
+import { GenericCliExecutor, hasTrustedSessionId, interactiveResumeInner } from "../src/executors/generic.js";
+import { execBinFor } from "../src/executors/bin-probe.js";
+import { resumeCommandFor } from "../src/executors/resume.js";
 import type { CliSpec } from "../src/executors/catalog/types.js";
 
 const MISSING_BIN = "harness-definitely-not-installed-cli";
@@ -59,15 +63,23 @@ for (const s of CLI_SPECS) {
 
 // ④ GenericCliExecutor 的命令行装配。用一个不存在的 bin:既拿到完整 commandLine,
 // 又顺带验证预检失败路径(见 ⑥)。
-const fake = (over: Partial<CliSpec["exec"]> = {}): CliSpec => ({
+const fake = (over: Partial<CliSpec["exec"]> = {}, entry: Partial<CliSpec> = {}): CliSpec => ({
   key: "gemini", // 借一个已登记的 key,内容全部由下面的 exec 决定
   name: "Fake CLI",
   description: "测试用",
   bins: [MISSING_BIN],
   docsUrl: "https://example.com",
   installCommand: "echo noop",
+  ...entry,
   exec: { prompt: { via: "stdin" }, ...over },
 });
+
+// 收事件流直到 done。放在这里(而不是靠后)是因为下面的备用 bin 端到端用例要用。
+const collect = async (events: AsyncIterable<AgentEvent>): Promise<AgentEvent[]> => {
+  const out: AgentEvent[] = [];
+  for await (const e of events) out.push(e);
+  return out;
+};
 
 {
   const ex = new GenericCliExecutor(
@@ -118,7 +130,7 @@ const fake = (over: Partial<CliSpec["exec"]> = {}): CliSpec => ({
   assert.notEqual(h.sessionId, "old-session", "没有 resume 通道时不许假装接上旧会话");
   assert.match(h.sessionId, /^[0-9a-f-]{36}$/, "应生成一个新 sessionId 供追溯");
   assert.ok(!h.commandLine.includes("old-session"), "命令行里不该出现旧 sessionId");
-  assert.match(ex.resumeCommand("/tmp", h.sessionId), /^# .*暂无已知的会话恢复命令/);
+  assert.match(ex.resumeCommand("/tmp", h.sessionId), /^# .*无法恢复会话/);
   h.kill();
 }
 {
@@ -140,17 +152,67 @@ const fake = (over: Partial<CliSpec["exec"]> = {}): CliSpec => ({
   h.kill();
 }
 
-// 交互式恢复命令:声明了就带 cd 前缀,没声明就给说明(claude/codex/antigravity 保持原样)
-assert.equal(
-  new GenericCliExecutor(CLI_SPEC_BY_KEY.antigravity, {}).resumeCommand("/tmp/x", "sid"),
-  "cd /tmp/x && antigravity --resume sid",
-);
+// ⑤bis 恢复命令的**诚实性**:只有「CLI 真认得这个 id」时才给可执行命令。
+// 只写 interactive、却既没有 newIdFlag(我们把 id 告诉 CLI)也没有 resumeArgs
+// (id 由 parser 回报)的 spec,拿到的 id 是纯 harness 侧记录,拼出来的
+// `--resume <uuid>` 引用的是一个不存在的会话 —— 用户会当真复制去执行。
+{
+  const only = fake({ session: { interactive: (id) => `fake --resume ${id}` } });
+  assert.equal(hasTrustedSessionId(only), false);
+  assert.equal(interactiveResumeInner(only, "made-up"), null, "不可信的 id 不许拼成命令");
+  const note = new GenericCliExecutor(only, {}).resumeCommand("/tmp/x", "made-up");
+  assert.match(note, /^# /, "应退化成一句说明(以 # 开头,粘到终端也不会误执行)");
+  assert.ok(!note.includes("fake --resume"), "说明里不能夹带那条命令");
+  assert.match(note, /不能用来 --resume/, "要讲清为什么不能恢复");
+  // 展示侧(会话详情的 resumeCommand)走同一个判定,不能各写一套。antigravity 是
+  // 真实例子:它有交互式 `--resume` 写法,但 harness 拿不到它认得的 id。
+  const shown = resumeCommandFor("antigravity", null, "/tmp/x", "made-up");
+  assert.match(shown, /^# .*无法恢复会话/);
+  assert.ok(!shown.includes("--resume made-up"), "展示侧同样不许拼出引用不存在会话的命令");
+  assert.equal(hasTrustedSessionId(CLI_SPEC_BY_KEY.antigravity), false);
+}
+{
+  // 可信的两档照常给命令(claude 有 newIdFlag、codex 有 resumeArgs)
+  assert.equal(resumeCommandFor("claude", null, "/tmp/x", "sid"), "cd /tmp/x && claude --resume sid");
+  assert.equal(resumeCommandFor("codex", null, "/tmp/x", "sid"), "cd /tmp/x && codex resume sid");
+  // 未知类型不再回落到 claude 的模板(那会给一条跑到别家 CLI 上的命令)
+  assert.match(resumeCommandFor("no-such-cli", null, "/tmp/x", "sid"), /^# 未知的执行器类型/);
+  // id 还没拿到时也不给命令
+  assert.match(resumeCommandFor("codex", null, "/tmp/x", ""), /^# /);
+}
 
-const collect = async (events: AsyncIterable<AgentEvent>): Promise<AgentEvent[]> => {
-  const out: AgentEvent[] = [];
-  for await (const e of events) out.push(e);
-  return out;
-};
+// ⑤ter 备用命令名:检测能命中 bins[1],执行就必须用同一个 —— 死认 bins[0] 会让
+// 「目录显示可用」的环境派任务稳定 ENOENT(cursor 的 agent、antigravity 的 agy)。
+// 用真实存在的 `echo` 当备用名,断言不依赖本机装了哪些 CLI:
+//   `echo --version` 会把参数原样打出来 → 版本自证含 "version" 通过、含 "cursor" 失败。
+{
+  const bins = ["harness-missing-primary-bin", "echo"];
+  assert.equal(await execBinFor(fake({}, { bins })), "echo", "主 bin 缺失时应改用可用的备用名");
+  assert.equal(
+    await execBinFor(fake({}, { bins, fallbackVersionMatch: "version" })),
+    "echo",
+    "备用名 --version 自证通过就认",
+  );
+  assert.equal(
+    await execBinFor(fake({}, { bins, fallbackVersionMatch: "definitely-not-in-version-output" })),
+    undefined,
+    "自证不过就当没探到(别把别家的命令认成自己)",
+  );
+  assert.equal(await execBinFor(fake({}, { bins }), { kind: "ssh", host: "h" }), undefined, "ssh 目标不拿本机结果去猜");
+  assert.equal(await execBinFor(CLI_SPEC_BY_KEY.claude), undefined, "单候选的 spec 不做任何探测");
+
+  // 端到端:主 bin 不在本机、备用名可用 → 照样跑得通(第 1 轮审查的复现场景)
+  const spec = fake({ prompt: { via: "arg" } }, { bins });
+  const ex = new GenericCliExecutor(spec, { bin: await execBinFor(spec) });
+  const h = ex.run({ prompt: "fallback-works", cwd: process.cwd() });
+  const events = await collect(h.events);
+  assert.ok(!events.some((e) => e.kind === "error"), "备用 bin 可用时不该报找不到命令");
+  assert.equal(
+    events.filter((e) => e.kind === "text").map((e) => (e as { text: string }).text).join("").trim(),
+    "fallback-works",
+  );
+  assert.deepEqual(events.at(-1), { kind: "done", exitStatus: 0 });
+}
 
 // ⑥ 预检失败:bin 不在 PATH。必须由事件流报出来并以 done 收尾 ——
 // 抢在有监听者之前 emit 'error' 会变成 uncaughtException,任务永远卡 running。

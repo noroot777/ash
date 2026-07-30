@@ -32,7 +32,9 @@ function augmentedEnv() {
 // EXTRA_PATHS. Returns null if it can't be found anywhere. Spawning the absolute
 // path removes all dependence on the child's inherited PATH — so a remaining
 // ENOENT can only mean a bad cwd, never a missing binary.
-function resolveBin(bin: string): string | null {
+// 导出是为了让「候选 bin 探测」(bin-probe.ts,检测与执行共用的单点)跟真正
+// spawn 时的查找口径**完全一致** —— 检测说可用、执行却 ENOENT,根因就是两套查找。
+export function resolveBin(bin: string): string | null {
   if (bin.includes("/")) {
     try { accessSync(bin, constants.X_OK); return bin; } catch { return null; }
   }
@@ -295,12 +297,12 @@ export function forceFinishOnExit(
 
 // The per-agent *interactive* resume command (what a human pastes to see the
 // session and continue) — 模板本体现在登记在目录里各 spec 的
-// `exec.session.interactive`,这里只留三个自带专用执行器的引用,供 claude.ts /
-// codex.ts / catalog 复用同一份字符串。展示用的那条命令由
-// `executors/resume.ts` 的 resumeCommandFor 按目录重算。
+// `exec.session.interactive`,这里只留 claude/codex 两个自带专用执行器的引用,
+// 供 claude.ts / codex.ts / catalog 复用同一份字符串。展示用的那条命令由
+// `executors/resume.ts` 的 resumeCommandFor 按目录重算(还要过一道「sessionId
+// 是不是 CLI 真认得的 id」的判定,见 generic.ts 的 hasTrustedSessionId)。
 // (The harness's own headless resume is built separately inside each executor's run().)
 export const resumeInner: Record<string, (id: string) => string> = {
   claude: (id) => `claude --resume ${id}`,
   codex: (id) => `codex resume ${id}`,
-  antigravity: (id) => `antigravity --resume ${id}`,
 };

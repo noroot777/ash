@@ -71,6 +71,8 @@ export const fooSpec: CliSpec = {
 
 `fallbackVersionMatch` 存在的原因:`agent` 这种通用名在本机实测里命中的其实是 grok —— 备用名不自证身份就会把别家的命令连版本号一起认成自己。
 
+**候选顺序对执行也生效**:检测和执行共用 `probeBins`/`execBinFor`(`server/src/executors/bin-probe.ts`)—— 主 bin 不在本机、备用名可用时,派任务会自动用那个备用名(以前执行侧死认 `bins[0]`,于是「目录显示可用、派任务 ENOENT」)。例外是 ssh 目标:候选探测查的是本机 PATH,拿本机结果决定远端命令名只会更错,所以 ssh 一律用 `bins[0]`。
+
 ### 执行(`exec`)
 
 ```ts
@@ -128,6 +130,8 @@ session: {
 //     否则 harness 拿不到 id,永远起新会话
 session: { resumeArgs: (id) => ["resume", id], interactive: (id) => `foo resume ${id}` }
 ```
+
+**只写 `interactive` 是无效的**(第 1 轮审查抓到过):没有 `newIdFlag` 也没有 `resumeArgs` 时,harness 手里那个 id 是它自己发的运行记录,CLI 压根没听说过 —— 拿它拼 `--resume <id>` 就是给用户一条引用不存在会话的命令。所以 `interactiveResumeInner`(`executors/generic.ts`)会判定它不可信、退化成诚实说明,`interactive` 等于白写。知道该 CLI 有 `--resume` 但还没查清 id 从哪来时,就走 (a) 档、把线索写进 `notes`。
 
 **供应商注入(`relay`)** —— **密钥绝不能进 argv**(`commandLine` 会存进 `sessions.command_line` 并在 UI 展示):
 
