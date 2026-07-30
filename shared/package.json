@@ -17,6 +17,10 @@
     "./executors": {
       "types": "./src/executor-overrides.ts",
       "default": "./src/executor-overrides.ts"
+    },
+    "./cli-presets": {
+      "types": "./src/cli-presets.ts",
+      "default": "./src/cli-presets.ts"
     }
   },
   "scripts": {

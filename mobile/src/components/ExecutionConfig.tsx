@@ -5,7 +5,7 @@ import {
   CLI_MODEL_PRESETS,
   REASONING_EFFORT_DETAIL,
   REASONING_EFFORT_VALUES,
-} from "@harness/shared";
+} from "@harness/shared/cli-presets";
 import { sameExecutor } from "@harness/shared/executors";
 import { Ionicons } from "@expo/vector-icons";
 import { api } from "@/lib/api";

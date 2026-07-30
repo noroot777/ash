@@ -4,7 +4,7 @@ import {
   CLI_MODEL_PRESETS,
   REASONING_EFFORT_DETAIL,
   REASONING_EFFORT_VALUES,
-} from "@harness/shared";
+} from "@harness/shared/cli-presets";
 import { api } from "./api";
 import { Menu, type MenuOption } from "./Menu";
 import type { ExecutorSelection } from "./ExecutorPicker";

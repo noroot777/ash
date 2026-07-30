@@ -22,7 +22,7 @@ harness 能派任务的 CLI 全部登记在这个目录里,**一个 CLI 一个 s
 **每人只许改两处**,其余一律别碰 —— 15 个执行者在并行,碰共享文件就是必然冲突:
 
 1. 自己那一个 spec 文件:`server/src/executors/catalog/<你的 key>.ts`(含内联的自定义 parser);
-2. `shared/src/index.ts` 里**属于自己 type 的那两行**:`CLI_MODEL_PRESETS[<key>]` 和 `REASONING_EFFORT_VALUES[<key>]`。
+2. `shared/src/cli-presets.ts` 里**属于自己 type 的那两行**:`CLI_MODEL_PRESETS[<key>]` 和 `REASONING_EFFORT_VALUES[<key>]`。
 
 明确**不要**动:`catalog/index.ts`(15 个 import 已一次写全)、`catalog/types.ts`、`catalog/parsers.ts`、`generic.ts`、`detect.ts`、`AGENT_TYPES` 数组、web / mobile 前端。
 
@@ -218,7 +218,7 @@ factory: (opts) => new FooExecutor(opts),
 
 - [ ] `npx tsc -p server/tsconfig.json --noEmit` 干净
 - [ ] `npm -w server run test:cli-catalog` 通过
-- [ ] 只改了自己的 spec 文件 + `shared/src/index.ts` 里自己 type 的两行(`git status` 确认)
+- [ ] 只改了自己的 spec 文件 + `shared/src/cli-presets.ts` 里自己 type 的两行(`git status` 确认)
 - [ ] 实测通过才去掉 `untested`;没通过就把结论写进 `notes`(包括「这个 CLI 不支持非交互,当不了执行器」这种结论 —— 如实说比留个跑不动的配置有用)
 - [ ] `notes` 写了版本号和实测日期
 - [ ] 命令行里没有任何密钥(key 只走 `relay.env`)

@@ -13,7 +13,8 @@
 //   ⑦ 备用命令名:检测命中 bins[1] 时执行也要用它(死认 bins[0] = 目录说可用、派任务 ENOENT)。
 import assert from "node:assert/strict";
 import type { AgentEvent } from "@harness/shared";
-import { AGENT_TYPES, CLI_MODEL_PRESETS, REASONING_EFFORT_VALUES } from "@harness/shared";
+import { AGENT_TYPES } from "@harness/shared";
+import { CLI_MODEL_PRESETS, REASONING_EFFORT_VALUES } from "@harness/shared/cli-presets";
 import { CLI_SPECS, CLI_SPEC_BY_KEY } from "../src/executors/catalog/index.js";
 import { GenericCliExecutor, hasTrustedSessionId, interactiveResumeInner } from "../src/executors/generic.js";
 import { execBinFor } from "../src/executors/bin-probe.js";
