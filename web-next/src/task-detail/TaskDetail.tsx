@@ -115,6 +115,19 @@ export function TaskDetail({
     }
   };
 
+  const requeue = async () => {
+    setBusy(true);
+    try {
+      const result = await api.requeueTask(task.id);
+      onTaskUpdate(result.task);
+      notify(result.movedToEnd ? "已重新排队并移到队尾" : "已重新排队");
+    } catch (reason) {
+      notify(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const refresh = async () => {
     try {
       await Promise.all([conversation.refetch(), refreshTask()]);
@@ -135,6 +148,7 @@ export function TaskDetail({
         onTitle={(title) => patch({ title, autoTitle: false })}
         onTogglePin={() => patch({ pinnedAt: task.pinnedAt != null ? null : Date.now() })}
         onPrimary={(action) => void perform(action)}
+        onRequeue={() => void requeue()}
         onArchive={() => void archive()}
         onRefresh={() => void refresh()}
         onReview={() => changeReviewOpen(!reviewOpen)}

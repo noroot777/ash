@@ -25,6 +25,83 @@ function scheduleLabel(schedule: Schedule | null): string {
   return `Cron · ${schedule.cron ?? "未配置"}`;
 }
 
+function ResumePromptEditor({
+  value,
+  editable,
+  onSave,
+}: {
+  value: string;
+  editable: boolean;
+  onSave: (value: string) => Promise<boolean>;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (!editing) setDraft(value);
+  }, [editing, value]);
+
+  const commit = async (nextValue = draft) => {
+    const normalized = nextValue.trim();
+    if (normalized === value.trim()) {
+      setEditing(false);
+      return;
+    }
+    setSaving(true);
+    try {
+      if (await onSave(normalized)) {
+        setDraft(normalized);
+        setEditing(false);
+      }
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (editing && editable) {
+    return (
+      <div className="task-resume-editor is-editing">
+        <textarea
+          autoFocus
+          rows={5}
+          value={draft}
+          aria-label="续跑指令"
+          placeholder="续跑时发送给执行器的消息，例如：继续完成 TTS 阶段"
+          onChange={(event) => setDraft(event.target.value)}
+          onKeyDown={(event) => {
+            if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+              event.preventDefault();
+              void commit();
+            }
+            if (event.key === "Escape") {
+              event.preventDefault();
+              setDraft(value);
+              setEditing(false);
+            }
+          }}
+        />
+        <footer>
+          <span>⌘/Ctrl + Enter 保存</span>
+          <button type="button" disabled={saving} onClick={() => { setDraft(value); setEditing(false); }}>取消</button>
+          <button className="is-primary" type="button" disabled={saving} onClick={() => void commit()}>{saving ? "保存中…" : "保存"}</button>
+        </footer>
+      </div>
+    );
+  }
+
+  return (
+    <div className="task-resume-editor">
+      <div className="task-resume-editor-head">
+        <span>{value.trim() ? "下次唤醒时发送" : "未设置，续跑时使用标准“继续”指令"}</span>
+        {editable && <button type="button" onClick={() => setEditing(true)}>{value.trim() ? "编辑" : "添加"}</button>}
+        {editable && value.trim() && <button type="button" disabled={saving} onClick={() => void commit("")}>清空</button>}
+      </div>
+      {value.trim() && <pre>{value}</pre>}
+    </div>
+  );
+}
+
 export function TaskInspector({
   task,
   groups,
@@ -75,6 +152,17 @@ export function TaskInspector({
       notify(message);
     } catch (reason) {
       notify(reason instanceof Error ? reason.message : String(reason));
+    }
+  };
+
+  const saveResumePrompt = async (value: string) => {
+    try {
+      await onPatch({ resumePrompt: value || null });
+      notify(value ? "续跑指令已保存" : "续跑指令已清空");
+      return true;
+    } catch (reason) {
+      notify(reason instanceof Error ? reason.message : String(reason));
+      return false;
     }
   };
 
@@ -219,10 +307,11 @@ export function TaskInspector({
         <section>
           <h2>调度与续跑</h2>
           <InspectorRow label="调度"><span>{scheduleLabel(schedule)}</span></InspectorRow>
-          <details>
-            <summary>续跑指令</summary>
-            <pre>{task.resumePrompt?.trim() || "未设置；续跑时使用标准“继续”指令。"}</pre>
-          </details>
+          <ResumePromptEditor
+            value={task.resumePrompt ?? ""}
+            editable={task.parentId === null && task.status === "paused" && !task.question}
+            onSave={saveResumePrompt}
+          />
           <LegacyLink projectId={task.projectId} taskId={task.id} />
         </section>
 

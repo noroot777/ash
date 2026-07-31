@@ -4,7 +4,9 @@
 
 审计基线：`c3d37d3`（`web/src` 对 `web-next/src`）
 
-结论：当前没有已知 P0，但仍有 **25 个旧版能力缺失或退化点**：P1 10 个、P2 11 个、P3 4 个。普通任务回复框的 `/team`、`/debate` 派生命令在审计期间由另一执行者修复并提交，本报告将它记入“已确认对齐”，不重复实施。
+修复进度：P1-5、P1-6 已于 2026-07-31 修复；下方保留审计时的缺口描述，并在对应条目标记结果。
+
+结论（审计基线）：没有发现 P0，共识别 **25 个旧版能力缺失或退化点**：P1 10 个、P2 11 个、P3 4 个。普通任务回复框的 `/team`、`/debate` 派生命令在审计期间由另一执行者修复并提交，本报告将它记入“已确认对齐”，不重复实施；后续修复进度见上方说明和条目标记。
 
 ## 口径与方法
 
@@ -16,7 +18,7 @@
 
 严重度口径：P0 阻断基本使用；P1 影响主要工作流或正确性；P2 有替代路径但能力不完整；P3 低频效率或可发现性退化。
 
-## P1：主要工作流或正确性缺口（10）
+## P1：主要工作流或正确性缺口（审计识别 10，已修 2）
 
 ### 1. 执行器候选缺少“已安装/已注册/可常驻”能力校验
 
@@ -46,19 +48,21 @@
 - 历史判断：旧版 `c9f1e55 feat(web): add independent task review UI`；web-next 从未迁入。
 - 修复入手点：在单任务详情和 `TaskReviewWorkspace` 的空态/失败态加入审查派发器，复用 composer 的 Profile、模型、思考强度选择，并禁止重复在途轮次。
 
-### 5. 队列中的 failed/canceled 任务不能“重新排队”
+### 5. 队列中的 failed/canceled 任务不能“重新排队” ✅ 已修
 
 - 旧版位置：`web/src/TaskDetail.tsx:253-268` 提供专用“重新排队”按钮，调用 `requeueTask`，保证被队列越过后移动到队尾。
 - 新版现状：**缺失且有语义风险**。`web-next/src/task-detail/TaskHeader.tsx:31-34` 把 failed 映射为立即 retry、canceled 映射为 run；没有回队列等待的动作。API wrapper 已有 `requeueTask`（`web-next/src/lib/api.ts:270-271`），但无 UI 调用。
 - 历史判断：旧版 `9ecd78e` 专门修过“串行队列同一时刻至多一个成员在跑”；直接 retry/run 不能替代 requeue。
 - 修复入手点：在任务 header/Inspector 和命令面板加入“重新排队”，只对顶层、未归档、在队列中的 failed/canceled 任务显示；成功后使用响应中的最新位置刷新任务。
+- 修复结果：任务 Header 与命令面板已增加独立“重新排队”入口，保留原有立即 retry/run；两处均直接使用 `requeueTask` 响应刷新任务。
 
-### 6. paused 任务的续跑指令只能看，不能编辑或清空
+### 6. paused 任务的续跑指令只能看，不能编辑或清空 ✅ 已修
 
 - 旧版位置：`web/src/TaskDetail.tsx:344-352` 在 paused 且非提问状态显示 `ResumePromptEditor`，允许修正或清空下次唤醒指令。
 - 新版现状：**半残**。`web-next/src/task-detail/TaskInspector.tsx:219-225` 只把 `resumePrompt` 放进只读 `<pre>`。
 - 历史判断：web-next `f363b93` 读取了字段，但没迁编辑；旧版检查点功能由 `541478f`/`749db47` 建立。
 - 修复入手点：在 Inspector 的“调度与续跑”节加入编辑/保存/清空，调用 `patchTask({ resumePrompt })`；团队执行者继续只读。
+- 修复结果：Inspector 已支持添加、编辑、保存和清空续跑指令；仅 paused 且非提问的顶层任务可写，团队执行者保持只读。
 
 ### 7. 团队验收台没有完整文件列表和逐行 diff
 

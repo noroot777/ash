@@ -9,6 +9,7 @@ import {
   DotsThree,
   DownloadSimple,
   GitDiff,
+  ListNumbers,
   Play,
   SpinnerGap,
   Stop,
@@ -44,6 +45,7 @@ export function TaskHeader({
   onTitle,
   onTogglePin,
   onPrimary,
+  onRequeue,
   onArchive,
   onRefresh,
   onReview,
@@ -57,6 +59,7 @@ export function TaskHeader({
   onTitle: (title: string) => Promise<void>;
   onTogglePin: () => Promise<void>;
   onPrimary: (action: Exclude<PrimaryAction, null>) => void;
+  onRequeue: () => void;
   onArchive: () => void;
   onRefresh: () => void;
   onReview: () => void;
@@ -69,6 +72,10 @@ export function TaskHeader({
   const menuRoot = useRef<HTMLDivElement>(null);
   const pointerToggle = useRef(false);
   const action = primaryAction(task);
+  const canRequeue = task.parentId === null
+    && !task.archived
+    && !!task.queueId
+    && (task.status === "failed" || task.status === "canceled");
   const display = taskDisplayStatus(task.status, task.stage, !!task.question);
 
   useEffect(() => { if (!editing) setTitle(task.title); }, [editing, task.title]);
@@ -153,6 +160,18 @@ export function TaskHeader({
                 : <Play size={13} weight="fill" />}
         {action.label}
       </button>
+      {canRequeue && (
+        <button
+          className="task-requeue-action"
+          type="button"
+          disabled={busy}
+          title="回到队列等待；若队列已经越过此任务，则移到队尾"
+          onClick={onRequeue}
+        >
+          <ListNumbers size={13} />
+          <span>重新排队</span>
+        </button>
+      )}
       <div className="task-overflow" ref={menuRoot}>
         <button
           className="task-overflow-trigger"

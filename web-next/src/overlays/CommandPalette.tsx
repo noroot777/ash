@@ -7,6 +7,7 @@ import {
   FolderPlus,
   FolderSimple,
   GearSix,
+  ListNumbers,
   MagnifyingGlass,
   NotePencil,
   Play,
@@ -201,6 +202,25 @@ export function CommandPalette({
             else await api.runTask(selectedTask.id);
             onTaskUpdated(await api.task(selectedTask.id));
             notify(retry ? "任务已重试" : selectedTask.status === "paused" ? "任务已继续" : "任务已启动");
+          }),
+        });
+      }
+      if (
+        !dispatchedWorker
+        && !selectedTask.archived
+        && !!selectedTask.queueId
+        && (selectedTask.status === "failed" || selectedTask.status === "canceled")
+      ) {
+        result.push({
+          key: "task:requeue",
+          group: taskGroup,
+          label: "重新排队",
+          detail: "回到队列等待",
+          icon: <ListNumbers size={14} />,
+          run: closeRun(async () => {
+            const response = await api.requeueTask(selectedTask.id);
+            onTaskUpdated(response.task);
+            notify(response.movedToEnd ? "已重新排队并移到队尾" : "已重新排队");
           }),
         });
       }
