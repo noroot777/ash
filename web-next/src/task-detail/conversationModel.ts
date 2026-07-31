@@ -33,6 +33,8 @@ export type ConversationItem =
 
 export type PersistedConversation = { session: Session; output: string };
 
+type ConversationEventItem = Extract<ConversationItem, { kind: "event" }>;
+
 function agentLabel(session: Session | undefined, event?: LiveAgentEvent): string {
   if (session?.executor) return session.executor;
   return event?.agentType ?? session?.agentType ?? "执行者";
@@ -60,6 +62,17 @@ function appendAgent(
   };
   items.push(item);
   return item;
+}
+
+function appendEvent(items: ConversationItem[], item: ConversationEventItem): void {
+  const last = items[items.length - 1];
+  if (
+    last?.kind === "event"
+    && last.text === item.text
+    && last.at === item.at
+    && last.tone === item.tone
+  ) return;
+  items.push(item);
 }
 
 export function buildConversationItems(
@@ -119,11 +132,11 @@ export function buildConversationItems(
     }
     const event = entry.event.event;
     if (event.kind === "system") {
-      items.push({ kind: "event", id: entry.id, text: event.text });
+      appendEvent(items, { kind: "event", id: entry.id, text: event.text });
       continue;
     }
     if (event.kind === "done") {
-      items.push({
+      appendEvent(items, {
         kind: "event",
         id: entry.id,
         text: event.exitStatus === 0 ? "本轮执行结束" : `执行异常结束 · exit ${event.exitStatus}`,
@@ -132,13 +145,12 @@ export function buildConversationItems(
       continue;
     }
     if (event.kind === "turnEnd") {
-      items.push({ kind: "event", id: entry.id, text: "本回合结束，等待下一条消息" });
+      appendEvent(items, { kind: "event", id: entry.id, text: "本回合结束，等待下一条消息" });
       continue;
     }
-    if (event.kind === "session") {
-      items.push({ kind: "event", id: entry.id, text: `会话已连接 · ${event.cliSessionId}` });
-      continue;
-    }
+    // session 是执行器的内部簿记事件(心跳/回合结束都会重发),旧 UI 就不渲染;
+    // cliSessionId 已经在会话详情/恢复按钮那里可查,会话流里不展示。
+    if (event.kind === "session") continue;
     const agent = appendAgent(items, entry.event, sessions);
     if (event.kind === "text") agent.markdown += event.text;
     if (event.kind === "tool") agent.events.push({ kind: "tool", label: event.name, detail: event.detail });
