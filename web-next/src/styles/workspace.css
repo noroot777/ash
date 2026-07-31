@@ -636,8 +636,8 @@
 
 @media (max-width: 1020px) {
   .workspace-sidebar {
-    width: 232px;
-    min-width: 232px;
+    width: var(--workspace-sidebar-width, 260px);
+    min-width: var(--workspace-sidebar-width, 260px);
     padding-right: 9px;
     padding-left: 9px;
   }
