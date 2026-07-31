@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import type { AgentExecutorProfile, AgentType, Group, Schedule, Session, Task, TaskReviewInfo, TaskStatus } from "@harness/shared";
+import type { AgentExecutorProfile, AgentType, Group, Schedule, Session, Task, TaskStatus } from "@harness/shared";
 import { AGENT_TYPES, isUserSettableStatus, TASK_STATUS_LABELS } from "@harness/shared";
 import { CLI_MODEL_PRESETS, REASONING_EFFORT_VALUES } from "@harness/shared/cli-presets";
 import { sameExecutor } from "@harness/shared/executors";
@@ -8,6 +8,7 @@ import { api } from "../lib/api.ts";
 import { LegacyLink } from "../components/LegacyLink.tsx";
 import { taskParentLink } from "../components/TaskOrigin.tsx";
 import { QueueDrawer } from "./QueueDrawer.tsx";
+import { TaskChangeSummary } from "./TaskChangeSummary.tsx";
 import { formatInstant, PRIORITY_LABELS, taskDurationInfo } from "./utils.ts";
 
 const STATUS_ORDER: TaskStatus[] = [
@@ -31,6 +32,7 @@ export function TaskInspector({
   sessions,
   allTasks,
   onOpenTask,
+  onOpenReview,
   onPatch,
   onQueueChanged,
   notify,
@@ -40,6 +42,7 @@ export function TaskInspector({
   sessions: Session[];
   allTasks: Task[];
   onOpenTask: (taskId: string) => void;
+  onOpenReview: () => void;
   onPatch: (patch: Partial<Task>) => Promise<void>;
   onQueueChanged: () => void;
   notify: (message: string) => void;
@@ -47,7 +50,6 @@ export function TaskInspector({
   const [labelDraft, setLabelDraft] = useState("");
   const [queueItems, setQueueItems] = useState<{ taskId: string; title: string }[]>([]);
   const [queueOpen, setQueueOpen] = useState(false);
-  const [review, setReview] = useState<TaskReviewInfo | null>(null);
   const [schedule, setSchedule] = useState<Schedule | null>(null);
   const [profiles, setProfiles] = useState<AgentExecutorProfile[]>([]);
   const readOnly = task.parentId !== null || !!task.archived;
@@ -55,7 +57,6 @@ export function TaskInspector({
     () => [...sessions].sort((left, right) => right.startedAt.localeCompare(left.startedAt))[0],
     [sessions],
   );
-  const latestReview = review?.rounds.at(-1);
   const queuePosition = queueItems.findIndex((item) => item.taskId === task.id);
   const nextQueueItem = queuePosition >= 0 ? queueItems[queuePosition + 1] : undefined;
 
@@ -63,7 +64,6 @@ export function TaskInspector({
     let alive = true;
     if (!task.queueId) setQueueItems([]);
     else api.queue(task.queueId).then((queue) => { if (alive) setQueueItems(queue.items); }).catch(() => undefined);
-    api.taskReview(task.id).then((value) => { if (alive) setReview(value); }).catch(() => { if (alive) setReview(null); });
     api.schedule(task.id).then((value) => { if (alive) setSchedule(value); }).catch(() => { if (alive) setSchedule(null); });
     api.agents().then((value) => { if (alive) setProfiles(value); }).catch(() => { if (alive) setProfiles([]); });
     return () => { alive = false; };
@@ -202,6 +202,8 @@ export function TaskInspector({
           )}
         </section>
 
+        <TaskChangeSummary task={task} allTasks={allTasks} onOpenReview={onOpenReview} />
+
         <section>
           <h2>队列</h2>
           {task.queueId ? (
@@ -223,16 +225,6 @@ export function TaskInspector({
             <pre>{task.resumePrompt?.trim() || "未设置；续跑时使用标准“继续”指令。"}</pre>
           </details>
           <LegacyLink projectId={task.projectId} taskId={task.id} />
-        </section>
-
-        <section>
-          <h2>审查摘要</h2>
-          {latestReview ? (
-            <details>
-              <summary>第 {latestReview.round} 轮 · {latestReview.conclusion === "verified" ? "已通过" : latestReview.conclusion === "verify_failed" ? "未通过" : latestReview.reviewTaskStatus}</summary>
-              <pre>{latestReview.reportMarkdown || "尚无审查报告。"}</pre>
-            </details>
-          ) : <p className="task-inspector-note">{review?.reviewRequested ? "审查已请求，等待结果。" : "尚未开始审查。"}</p>}
         </section>
 
         <section>

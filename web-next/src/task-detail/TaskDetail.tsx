@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import type { Group, Session, Task } from "@harness/shared";
-import { Info } from "@phosphor-icons/react";
+import { Info, MagnifyingGlass } from "@phosphor-icons/react";
 import { InspectorHost, type InspectorDescriptor } from "../inspector/index.ts";
 import { api } from "../lib/api.ts";
 import { useConversation } from "../lib/useConversation.ts";
@@ -12,6 +12,7 @@ import { QuestionCard } from "./QuestionCard.tsx";
 import { ReplyBox } from "./ReplyBox.tsx";
 import { TaskHeader, type PrimaryAction } from "./TaskHeader.tsx";
 import { TaskInspector } from "./TaskInspector.tsx";
+import { TaskReviewInspector } from "./TaskReviewInspector.tsx";
 import { TaskReviewWorkspace } from "../review/TaskReviewWorkspace.tsx";
 import { OriginTaskBar } from "../components/TaskOrigin.tsx";
 
@@ -21,6 +22,7 @@ interface TaskInspectorContext {
   sessions: Session[];
   allTasks: Task[];
   onOpenTask: (taskId: string) => void;
+  onOpenReview: () => void;
   onPatch: (patch: Partial<Task>) => Promise<void>;
   onQueueChanged: () => void;
   notify: (message: string) => void;
@@ -33,6 +35,12 @@ const TASK_INSPECTORS: readonly InspectorDescriptor<TaskInspectorContext>[] = [
     icon: <Info size={14} />,
     defaultOpen: true,
     render: (context) => <TaskInspector {...context} />,
+  },
+  {
+    id: "review",
+    title: "审查",
+    icon: <MagnifyingGlass size={14} />,
+    render: (context) => <TaskReviewInspector {...context} />,
   },
 ];
 
@@ -143,6 +151,7 @@ export function TaskDetail({
         sessions: conversation.sessions,
         allTasks,
         onOpenTask,
+        onOpenReview: () => changeReviewOpen(true),
         onPatch: patch,
         onQueueChanged: () => void refreshTask(),
         notify,
