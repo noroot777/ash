@@ -72,6 +72,7 @@
   position: relative;
   display: flex;
   min-width: 0;
+  flex-direction: column;
 }
 
 .workspace-task-row {
@@ -97,7 +98,7 @@
 
 .workspace-task-row-wrap > .task-origin-chip {
   position: absolute;
-  top: 50%;
+  top: 14.5px;
   right: 7px;
   transform: translateY(-50%);
 }
@@ -116,6 +117,84 @@
 .workspace-task-kind {
   flex: 0 0 auto;
   color: var(--faint);
+}
+
+.workspace-task-queue {
+  flex: 0 0 auto;
+  border-radius: 4px;
+  background: var(--overlay);
+  padding: 1px 4px;
+  color: var(--faint);
+  font-family: var(--font-mono);
+  font-size: 8.5px;
+  line-height: 1.3;
+}
+
+.workspace-pause-hint {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 3px;
+  margin: -1px 7px 4px 22px;
+  color: var(--faint);
+  font-size: 9.5px;
+  line-height: 1.35;
+}
+
+.workspace-pause-hint svg,
+.workspace-pause-hint span,
+.workspace-pause-hint em {
+  flex: 0 0 auto;
+}
+
+.workspace-pause-hint em {
+  font-style: normal;
+}
+
+.workspace-pause-hint button {
+  min-width: 0;
+  overflow: hidden;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  padding: 0 2px;
+  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-pause-hint button:hover,
+.workspace-pause-hint button:focus-visible {
+  background: var(--overlay);
+  color: var(--ink);
+}
+
+.workspace-task-metadata {
+  position: absolute;
+  z-index: 35;
+  top: calc(100% + 2px);
+  left: 20px;
+  right: 4px;
+  display: none;
+  gap: 4px;
+  border: 1px solid var(--line2);
+  border-radius: 8px;
+  background: var(--panel);
+  padding: 7px 8px;
+  box-shadow: var(--menu-shadow);
+  color: var(--muted);
+  pointer-events: none;
+  font-size: 9.5px;
+  line-height: 1.35;
+}
+
+.workspace-task-row-wrap:hover > .workspace-task-metadata,
+.workspace-task-row-wrap:focus-within > .workspace-task-metadata {
+  display: grid;
+}
+
+.workspace-task-metadata span {
+  overflow-wrap: anywhere;
 }
 
 .workspace-task-pin {
@@ -167,7 +246,7 @@
 
 .workspace-team-row {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
 }
 
 .workspace-team-row > .workspace-task-row-wrap {

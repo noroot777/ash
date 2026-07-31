@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ProjectView } from "@harness/shared";
-import { CaretDown, Check, GearSix, MagnifyingGlass } from "@phosphor-icons/react";
+import { CaretDown, Check, FolderPlus, GearSix, MagnifyingGlass } from "@phosphor-icons/react";
 import { ProjectAvatar } from "./ProjectAvatar.tsx";
 
 function shortPath(path: string): string {
@@ -14,11 +14,13 @@ export function ProjectSwitcher({
   projects,
   current,
   onProject,
+  onCreate,
   onSettings,
 }: {
   projects: ProjectView[];
   current: ProjectView | null;
   onProject: (projectId: string) => void;
+  onCreate: () => void;
   onSettings: () => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -131,6 +133,19 @@ export function ProjectSwitcher({
             })}
             {!results.length && <p className="workspace-project-empty">没有匹配的项目</p>}
           </div>
+          <button
+            className="workspace-project-create"
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              setSearch("");
+              setOpen(false);
+              onCreate();
+            }}
+          >
+            <FolderPlus size={15} aria-hidden="true" />
+            <span>新建项目</span>
+          </button>
         </div>
       )}
     </div>

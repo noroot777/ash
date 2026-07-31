@@ -265,6 +265,27 @@
   text-align: left;
 }
 
+.workspace-project-create {
+  display: flex;
+  width: 100%;
+  height: 34px;
+  align-items: center;
+  gap: 9px;
+  margin-top: 7px;
+  border: 0;
+  border-top: 1px solid var(--line);
+  background: transparent;
+  padding: 8px 7px 0;
+  color: var(--accent);
+  text-align: left;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.workspace-project-create:hover {
+  color: color-mix(in lch, var(--accent) 78%, var(--ink));
+}
+
 .workspace-project-option > svg {
   color: var(--accent);
 }

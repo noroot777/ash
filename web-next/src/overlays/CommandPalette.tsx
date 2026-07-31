@@ -30,6 +30,7 @@ import {
   type SearchScopeType,
 } from "./CommandPaletteScope.tsx";
 import { filterSlashCommands, type SlashCommand, type SlashCommandId } from "./commandPaletteCommands.ts";
+import { workspaceModifierLabel } from "../workspace/useWorkspaceShortcuts.ts";
 
 type PaletteStep = "search" | "scope-project" | "scope-type" | "git-project" | "git-overview";
 
@@ -86,6 +87,7 @@ export function CommandPalette({
   onSettings,
   notify,
 }: CommandPaletteProps) {
+  const modifier = workspaceModifierLabel();
   const [query, setQuery] = useState("");
   const [step, setStep] = useState<PaletteStep>("search");
   const [active, setActive] = useState(0);
@@ -437,7 +439,7 @@ export function CommandPalette({
               }
             }}
           />
-          {step === "search" && <kbd>⌘K</kbd>}
+          {step === "search" && <kbd>{modifier} K</kbd>}
         </div>
 
         {step === "scope-project" && (

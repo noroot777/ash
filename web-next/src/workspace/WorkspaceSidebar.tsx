@@ -1,4 +1,4 @@
-import type { ProjectView, Task } from "@harness/shared";
+import type { Group, ProjectView, Task } from "@harness/shared";
 import {
   MagnifyingGlass,
   NotePencil,
@@ -8,11 +8,13 @@ import {
 import { ProjectAvatar } from "./ProjectAvatar.tsx";
 import { ProjectSwitcher } from "./ProjectSwitcher.tsx";
 import { TaskTree } from "./TaskTree.tsx";
+import { workspaceModifierLabel } from "./useWorkspaceShortcuts.ts";
 import { LegacyLink } from "../components/LegacyLink.tsx";
 
 export function WorkspaceSidebar({
   projects,
   currentProject,
+  groups,
   tasks,
   selectedTaskId,
   connected,
@@ -23,10 +25,12 @@ export function WorkspaceSidebar({
   onSearch,
   onNotes,
   onCreate,
+  onNewProject,
   onSettings,
 }: {
   projects: ProjectView[];
   currentProject: ProjectView | null;
+  groups: Group[];
   tasks: Task[];
   selectedTaskId: string | null;
   connected: boolean;
@@ -37,8 +41,10 @@ export function WorkspaceSidebar({
   onSearch: () => void;
   onNotes: () => void;
   onCreate: () => void;
+  onNewProject: () => void;
   onSettings: () => void;
 }) {
+  const modifier = workspaceModifierLabel();
   if (collapsed) {
     return (
       <aside className="workspace-sidebar workspace-sidebar--collapsed" aria-label="已收起的侧边栏">
@@ -59,9 +65,10 @@ export function WorkspaceSidebar({
           projects={projects}
           current={currentProject}
           onProject={onProject}
+          onCreate={onNewProject}
           onSettings={onSettings}
         />
-        <button className="workspace-side-icon" type="button" title="搜索 ⌘K" aria-label="搜索 ⌘K" onClick={onSearch}>
+        <button className="workspace-side-icon" type="button" title={`搜索 ${modifier} K`} aria-label={`搜索 ${modifier} K`} onClick={onSearch}>
           <MagnifyingGlass size={15} aria-hidden="true" />
         </button>
         <button className="workspace-side-icon" type="button" title="随手记" aria-label="随手记" onClick={onNotes}>
@@ -75,6 +82,7 @@ export function WorkspaceSidebar({
       <TaskTree
         projects={projects}
         currentProjectId={currentProject?.id ?? null}
+        groups={groups}
         tasks={tasks}
         selectedTaskId={selectedTaskId}
         onTask={onTask}

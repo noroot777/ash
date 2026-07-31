@@ -157,10 +157,10 @@ export function TeamHeader({
             <button type="button" className="is-danger" disabled={busy} onClick={() => setHaltOpen(true)}><Stop size={13} weight="fill" />停止全组</button>
           )}
           {!task.archived && stopped && (
-            <button type="button" className="is-primary" disabled={busy} onClick={onResume}><Play size={13} weight="fill" />恢复全组</button>
+            <button type="button" className="is-primary" data-workspace-run-action="resume" disabled={busy} onClick={onResume}><Play size={13} weight="fill" />恢复全组</button>
           )}
           {!task.archived && teamNeverStarted(task.status) && (
-            <button type="button" className="is-primary" disabled={busy} onClick={onRun}><Play size={13} weight="fill" />运行</button>
+            <button type="button" className="is-primary" data-workspace-run-action="run" disabled={busy} onClick={onRun}><Play size={13} weight="fill" />运行</button>
           )}
           <div className="team-header-menu" ref={menuRoot}>
             <button type="button" aria-label="更多团队操作" aria-expanded={menu} onClick={() => setMenu((value) => !value)}><DotsThree size={18} weight="bold" /></button>

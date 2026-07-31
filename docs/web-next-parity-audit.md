@@ -4,7 +4,7 @@
 
 审计基线：`c3d37d3`（`web/src` 对 `web-next/src`）
 
-修复进度：P1-1、P1-2、P1-3、P1-5、P1-6、P1-7、P1-10、P2-11、P2-12、P2-13、P2-14、P2-15、P2-16、P2-17、P2-20 已于 2026-07-31 修复；下方保留审计时的缺口描述，并在对应条目标记结果。
+修复进度：P1-1、P1-2、P1-3、P1-5、P1-6、P1-7、P1-10、P2-11、P2-12、P2-13、P2-14、P2-15、P2-16、P2-17、P2-18、P2-19、P2-20、P2-21 已于 2026-07-31 修复；下方保留审计时的缺口描述，并在对应条目标记结果。
 
 结论（审计基线）：没有发现 P0，共识别 **25 个旧版能力缺失或退化点**：P1 10 个、P2 11 个、P3 4 个。普通任务回复框的 `/team`、`/debate` 派生命令在审计期间由另一执行者修复并提交，本报告将它记入“已确认对齐”，不重复实施；后续修复进度见上方说明和条目标记。
 
@@ -153,17 +153,19 @@
 - 修复入手点：把 review-file target、open-local current-origin rewrite 和 soft-break plugin 抽成共享 Markdown policy，供会话、辩论、审查报告、随手记统一使用。
 - 修复结果：新增共享 Markdown policy，统一识别审查产物并改写到 review-file API、把任意 host 的 `/api/open-local` 请求固定到当前页面 origin，并用 remark 插件保留聊天文本的单换行。`MarkdownBody` 现以内嵌弹层打开审查 Markdown，审查图片也走安全文件端点；会话、辩论、审查报告和随手记阅读态全部复用同一策略。
 
-### 18. 全局 `j/k/↑/↓` 导航、`c` 新建、`r` 运行快捷键缺失
+### 18. 全局 `j/k/↑/↓` 导航、`c` 新建、`r` 运行快捷键缺失（已修）
 
 - 旧版位置：`web/src/App.tsx:434-464` 在非输入控件/非弹层状态处理任务导航、新建和主动作；命令面板仍由 Cmd/Ctrl+K 独立处理。
 - 新版现状：**缺失**。`web-next/src/workspace/WorkspaceShell.tsx:109-115` 只有 Cmd/Ctrl+K；界面仍在空态提示“按 C 新建”的旧习惯，但实际没有全局 C 监听。
 - 修复入手点：基于 `orderedTopLevelTasks`/当前可见树建立统一快捷键 hook，尊重输入控件、弹层和 composer；`r` 必须复用页面主动作判据，不能绕过状态限制。快捷键提示按平台显示 Cmd 或 Ctrl。
+- 修复结果：新增工作区统一快捷键 hook，按当前项目可见顶层任务顺序处理 `j/k/↑/↓`，`c` 打开或保留现有 composer 草稿，输入控件、设置页和所有弹层均不会误触；`r` 只点击当前页面已渲染且可用的运行/继续/重试主按钮，复用其状态与 busy 门禁。命令面板、侧栏和空态提示会按平台显示 Cmd 或 Ctrl。
 
-### 19. 项目切换器缺少直接“新建项目”，快速创建也没有路径健康检查
+### 19. 项目切换器缺少直接“新建项目”，快速创建也没有路径健康检查（已修）
 
 - 旧版位置：`web/src/ProjectRail.tsx:99-109` 在切换器 footer 直接新建；`web/src/Modal.tsx:155-187` 输入目录时实时显示 `PathHealth`。
 - 新版现状：**入口退化**。`web-next/src/workspace/ProjectSwitcher.tsx:67-134` 只有设置、搜索和切换；必须走命令面板。`web-next/src/overlays/CreateEntityDialog.tsx:18-22` 只收 name/path，不调用 `checkPath`。
 - 修复入手点：给 ProjectSwitcher 增加 footer action；CreateProjectDialog 复用 `ProjectSettingsPanel` 的 debounced `api.checkPath`，把不存在/非 Git/脏工作区状态在提交前显示清楚。
+- 修复结果：项目切换器 footer 现可直接打开新建项目；快速创建与项目设置共用 debounced 路径健康检查，提交前明确展示目录不存在、非 Git、当前分支、脏工作区及检查失败状态。检查期间禁用提交，但保持旧版允许登记非 Git 或暂不存在目录的语义。
 
 ### 20. 执行器 Profile 不能设置额外 CLI 参数（已修）
 
@@ -172,11 +174,12 @@
 - 修复入手点：加入 shell-like 参数编辑器；至少保证空格分隔行为与旧版一致，更稳妥可提供逐项 token 输入，避免引号被错误拆分。
 - 修复结果：新增和编辑 Profile 都提供逐项 token 编辑器，直接读写 `extraArgs: string[]`；每项内部的空格与引号保持原样，不再经过空白二次切分，空项在保存时清除。
 
-### 21. 任务树缺少暂停阻塞原因和多项任务元数据
+### 21. 任务树缺少暂停阻塞原因和多项任务元数据（已修）
 
 - 旧版位置：`web/src/TaskList.tsx:235-278` 行内显示 priority、worktree、queue position、group、labels、来源；`web/src/ui.tsx:554-613` 对 paused 任务显示“在等谁”，可跳到首个阻塞任务。
 - 新版现状：**信息退化**。`web-next/src/workspace/TaskTree.tsx:114-139` 顶层行主要只有状态、置顶、模式和标题；没有暂停依赖、优先级、标签、分组、worktree、队列位置。选中任务后 Inspector 能看一部分，但无法横向扫列表。
 - 修复入手点：先恢复高价值且低噪声的 paused blocker 和 queue position；其余元数据做 hover/次行或可配置密度，避免把新版窄树挤爆。
+- 修复结果：paused 行恢复“等待首个阻塞任务”次行，可点击跳转并显示额外阻塞数；在队任务显示紧凑队列位置。优先级、分组、标签和独立 worktree 汇总到行悬浮元数据卡，不长期占用窄侧栏宽度。
 
 ## P3：低频效率与可发现性退化（4）
 

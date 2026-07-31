@@ -1,6 +1,7 @@
 import type { ProjectView, Task } from "@harness/shared";
 import { taskDisplayStatus } from "@harness/shared";
 import { CirclesThreePlus } from "@phosphor-icons/react";
+import { workspaceModifierLabel } from "./useWorkspaceShortcuts.ts";
 
 function taskKind(task: Task): string {
   if (task.mode === "team") return "团队";
@@ -15,12 +16,13 @@ export function TaskPlaceholder({
   project: ProjectView | null;
   task: Task | null;
 }) {
+  const modifier = workspaceModifierLabel();
   if (!project) {
     return (
       <section className="workspace-empty-state">
         <CirclesThreePlus size={26} weight="bold" aria-hidden="true" />
         <h1>还没有可用项目</h1>
-        <p>用 ⌘K 新建项目，或从项目切换器选择现有工作区。</p>
+        <p>用 {modifier} K 新建项目，或从项目切换器选择现有工作区。</p>
       </section>
     );
   }

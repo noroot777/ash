@@ -237,6 +237,10 @@
   color: var(--green);
 }
 
+.settings-health.is-error {
+  color: var(--red);
+}
+
 .settings-card-foot {
   display: flex;
   min-height: 50px;

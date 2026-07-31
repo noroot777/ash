@@ -1,15 +1,9 @@
 import { useEffect, useState } from "react";
-import type { ProjectHealth, ProjectView } from "@harness/shared";
+import type { ProjectView } from "@harness/shared";
 import { Button } from "../components/ui.tsx";
 import { api } from "../lib/api.ts";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
-
-function healthText(health: ProjectHealth | null) {
-  if (!health) return "正在检查目录…";
-  if (!health.exists) return "目录不存在";
-  if (!health.isRepo) return "目录存在，但不是 Git 仓库";
-  return `Git 仓库${health.branch ? ` · ${health.branch}` : ""}${health.dirty ? " · 有未提交修改" : " · 工作区干净"}`;
-}
+import { PathHealthStatus, useDebouncedPathHealth } from "./PathHealthStatus.tsx";
 
 export function ProjectSettingsPanel({ project, onUpdated, onDeleted, notify }: {
   project: ProjectView;
@@ -19,16 +13,10 @@ export function ProjectSettingsPanel({ project, onUpdated, onDeleted, notify }: 
 }) {
   const [name, setName] = useState(project.name);
   const [repoPath, setRepoPath] = useState(project.repoPath);
-  const [health, setHealth] = useState<ProjectHealth | null>(project.health);
   const [busy, setBusy] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
-  useEffect(() => { setName(project.name); setRepoPath(project.repoPath); setHealth(project.health); }, [project]);
-  useEffect(() => {
-    const path = repoPath.trim();
-    if (!path) { setHealth(null); return; }
-    const timer = window.setTimeout(() => api.checkPath(path).then(setHealth).catch(() => setHealth({ exists: false, isRepo: false })), 350);
-    return () => window.clearTimeout(timer);
-  }, [repoPath]);
+  const pathHealth = useDebouncedPathHealth(repoPath);
+  useEffect(() => { setName(project.name); setRepoPath(project.repoPath); }, [project]);
   const dirty = name.trim() !== project.name || repoPath.trim() !== project.repoPath;
   const save = async () => {
     if (!name.trim() || !repoPath.trim() || !dirty) return;
@@ -48,7 +36,7 @@ export function ProjectSettingsPanel({ project, onUpdated, onDeleted, notify }: 
       <section className="settings-section"><h2>基本信息</h2><div className="settings-card">
         <label className="settings-field"><span>项目名称</span><input value={name} onChange={(event) => setName(event.target.value)} /></label>
         <label className="settings-field"><span>工作目录</span><input className="mono" value={repoPath} onChange={(event) => setRepoPath(event.target.value)} /></label>
-        <div className={`settings-health${health?.exists && health.isRepo ? " is-good" : ""}`}><i />{healthText(health)}</div>
+        <PathHealthStatus path={repoPath} state={pathHealth} />
         <div className="settings-card-foot"><span>修改目录不会移动磁盘文件，只会改变后续任务的 cwd。</span><Button variant="primary" disabled={!dirty || !name.trim() || !repoPath.trim() || busy} onClick={() => void save()}>{busy ? "保存中…" : "保存更改"}</Button></div>
       </div></section>
       <section className="settings-section"><h2>危险操作</h2><div className="settings-card settings-danger-row"><div><b>删除项目</b><small>删除项目记录，以及它下面的任务、分组和运行记录；不会删除仓库目录。</small></div><Button variant="danger" disabled={busy} onClick={() => setConfirmDelete(true)}>删除项目</Button></div></section>

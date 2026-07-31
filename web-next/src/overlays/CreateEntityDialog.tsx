@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { GroupMode } from "@harness/shared";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
+import { PathHealthStatus, useDebouncedPathHealth } from "../settings/PathHealthStatus.tsx";
 
 export function CreateProjectDialog({ onClose, onCreate }: {
   onClose: () => void;
@@ -9,16 +10,18 @@ export function CreateProjectDialog({ onClose, onCreate }: {
   const [name, setName] = useState("");
   const [repoPath, setRepoPath] = useState("");
   const [busy, setBusy] = useState(false);
+  const pathHealth = useDebouncedPathHealth(repoPath);
   const create = async () => {
-    if (!name.trim() || !repoPath.trim()) return;
+    if (!name.trim() || !repoPath.trim() || busy || pathHealth.checking) return;
     setBusy(true);
     try { await onCreate(name.trim(), repoPath.trim()); }
     finally { setBusy(false); }
   };
-  return <ConfirmDialog title="新建项目" message="项目目录会成为任务的默认运行位置。" confirmLabel="创建项目" busy={busy} onClose={onClose} onConfirm={() => void create()}>
+  return <ConfirmDialog title="新建项目" message="项目目录会成为任务的默认运行位置。" confirmLabel="创建项目" busy={busy} confirmDisabled={!name.trim() || !repoPath.trim() || pathHealth.checking} onClose={onClose} onConfirm={() => void create()}>
     <div className="quick-create-fields">
       <label><span>项目名称</span><input autoFocus value={name} onChange={(event) => setName(event.target.value)} placeholder="如 harness" /></label>
       <label><span>工作目录</span><input className="mono" value={repoPath} onChange={(event) => setRepoPath(event.target.value)} placeholder="/Users/you/code/project" /></label>
+      <PathHealthStatus path={repoPath} state={pathHealth} className="create-project-health" />
     </div>
   </ConfirmDialog>;
 }

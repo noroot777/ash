@@ -14,6 +14,8 @@ import { TaskComposerPanel, type ComposerDraft } from "../composer/TaskComposerP
 import { LegacyLink } from "../components/LegacyLink.tsx";
 import { DeleteTaskDialog } from "../task-detail/DeleteTaskDialog.tsx";
 import { CreateGroupDialog, CreateProjectDialog } from "../overlays/CreateEntityDialog.tsx";
+import { orderedTopLevelTasks } from "./taskTreeModel.ts";
+import { useWorkspaceShortcuts } from "./useWorkspaceShortcuts.ts";
 
 type ContextView = "review" | "settings" | "palette" | "notes" | "create";
 
@@ -106,19 +108,16 @@ export function WorkspaceShell() {
     return () => window.removeEventListener("popstate", onPopState);
   }, []);
 
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") { event.preventDefault(); setPaletteOpen((value) => !value); }
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, []);
   useEffect(() => { window.localStorage.setItem("harness-next:sidebar-collapsed", collapsed ? "1" : "0"); }, [collapsed]);
 
   const currentProject = projects.find((project) => project.id === projectId) ?? null;
   const selectedTask = tasks.find((task) => task.id === taskId && task.projectId === projectId) ?? null;
   const loadError = projectsError ?? tasksError;
   const activeTaskCount = useMemo(() => tasks.filter((task) => task.projectId === projectId && task.parentId === null && !task.archived).length, [projectId, tasks]);
+  const orderedTasks = useMemo(
+    () => orderedTopLevelTasks(tasks.filter((task) => task.projectId === projectId && !task.archived)),
+    [projectId, tasks],
+  );
   const updateTask = useCallback((updated: Task) => setTasks((current) => current.some((task) => task.id === updated.id)
     ? current.map((task) => task.id === updated.id ? updated : task)
     : [updated, ...current]), [setTasks]);
@@ -135,13 +134,29 @@ export function WorkspaceShell() {
   };
   const openNotes = (nextProjectId = projectId, noteId: string | null = null) => { if (nextProjectId) { setProjectId(nextProjectId); setSettingsSection(null); setComposer(null); setNotes({ projectId: nextProjectId, noteId }); } };
   const openSettings = (section: SettingsSection = "agents") => { setSettingsSection(section); setComposer(null); setNotes(null); setPaletteOpen(false); };
-  const openComposer = (mode: TaskMode = "single") => { if (!currentProject) return; setSettingsSection(null); setNotes(null); setComposer({ mode }); };
+  const openComposer = (mode: TaskMode = "single") => {
+    if (!currentProject) return;
+    setSettingsSection(null);
+    setNotes(null);
+    setComposer((current) => current ? { ...current, mode } : { mode });
+  };
   const createTask = (task: Task, draft?: ComposerDraft | null) => {
     setTasks((current) => current.some((row) => row.id === task.id) ? current.map((row) => row.id === task.id ? task : row) : [task, ...current]);
     setTaskId(task.id);
     setComposer(null);
     for (const noteId of draft?.noteIds ?? []) api.patchNote(noteId, { taskId: task.id }).catch(() => notify("任务已创建，但随手记回链写入失败"));
   };
+
+  useWorkspaceShortcuts({
+    enabled: !settingsSection,
+    paletteOpen,
+    composerOpen: composer !== null,
+    orderedTasks,
+    selectedTaskId: taskId,
+    onTogglePalette: () => setPaletteOpen((value) => !value),
+    onCreate: () => openComposer("single"),
+    onTask: selectTask,
+  });
 
   const notesProject = notes ? projects.find((project) => project.id === notes.projectId) ?? null : null;
   const overlays = <>
@@ -169,7 +184,7 @@ export function WorkspaceShell() {
 
   return (
     <><div className="workspace-shell">
-      <WorkspaceSidebar projects={projects} currentProject={currentProject} tasks={tasks} selectedTaskId={taskId} connected={connected} collapsed={collapsed} onProject={selectProject} onTask={selectTask} onToggleCollapsed={() => setCollapsed((value) => !value)} onSearch={() => setPaletteOpen(true)} onNotes={() => openNotes()} onCreate={() => openComposer("single")} onSettings={() => openSettings("agents")} />
+      <WorkspaceSidebar projects={projects} currentProject={currentProject} groups={groups} tasks={tasks} selectedTaskId={taskId} connected={connected} collapsed={collapsed} onProject={selectProject} onTask={selectTask} onToggleCollapsed={() => setCollapsed((value) => !value)} onSearch={() => setPaletteOpen(true)} onNotes={() => openNotes()} onCreate={() => openComposer("single")} onNewProject={() => setCreateDialog("project")} onSettings={() => openSettings("agents")} />
       <main className="workspace-main">
         {loadError && <div className="workspace-load-error">{loadError.message}</div>}
         {composer && currentProject ? <TaskComposerPanel project={currentProject} groups={groups} initialDraft={composer.draft} mode={composer.mode} onModeChange={(mode) => setComposer((current) => current ? { ...current, mode } : null)} onCancel={() => setComposer(null)} onCreated={createTask} notify={notify} /> : selectedTask?.mode === "team" ? (

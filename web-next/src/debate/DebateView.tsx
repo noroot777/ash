@@ -286,7 +286,7 @@ export function DebateView({
         <span className={`debate-status debate-status--${STATUS_TONES[task.status]}`}><i />{display.label}</span>
         <TaskTimeMeta task={task} />
         <LegacyLink projectId={task.projectId} taskId={task.id} compact />
-        <button type="button" className={action.kind === "stop" ? "is-stop" : "is-primary"} disabled={busy || !action.kind || task.archived} onClick={() => action.kind && void perform(action.kind)}>{busy ? <SpinnerGap size={13} className="is-spinning" /> : action.kind === "stop" ? <Stop size={12} weight="fill" /> : <Play size={12} weight="fill" />}{action.label}</button>
+        <button type="button" className={action.kind === "stop" ? "is-stop" : "is-primary"} data-workspace-run-action={action.kind === "run" || action.kind === "retry" ? action.kind : undefined} disabled={busy || !action.kind || task.archived} onClick={() => action.kind && void perform(action.kind)}>{busy ? <SpinnerGap size={13} className="is-spinning" /> : action.kind === "stop" ? <Stop size={12} weight="fill" /> : <Play size={12} weight="fill" />}{action.label}</button>
         {!task.archived && canArchive(task.status) && <button type="button" title="归档辩论" onClick={() => void archive()}><Archive size={13} /></button>}
         {task.archived && <button type="button" onClick={() => void archive()}>取消归档</button>}
         <button type="button" title="删除辩论" onClick={() => setDeleteOpen(true)}><Trash size={13} /></button>

@@ -150,6 +150,7 @@ export function TaskHeader({
       <button
         className={`task-primary-action${action.danger ? " is-danger" : ""}`}
         type="button"
+        data-workspace-run-action={action.kind === "run" || action.kind === "retry" ? action.kind : undefined}
         disabled={busy || action.disabled || !action.kind}
         onClick={() => action.kind && onPrimary(action.kind)}
       >
