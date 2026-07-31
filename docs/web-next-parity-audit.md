@@ -4,7 +4,7 @@
 
 审计基线：`c3d37d3`（`web/src` 对 `web-next/src`）
 
-修复进度：P1-1、P1-2、P1-3、P1-5、P1-6、P1-7 已于 2026-07-31 修复；下方保留审计时的缺口描述，并在对应条目标记结果。
+修复进度：P1-1、P1-2、P1-3、P1-5、P1-6、P1-7、P1-10、P2-20 已于 2026-07-31 修复；下方保留审计时的缺口描述，并在对应条目标记结果。
 
 结论（审计基线）：没有发现 P0，共识别 **25 个旧版能力缺失或退化点**：P1 10 个、P2 11 个、P3 4 个。普通任务回复框的 `/team`、`/debate` 派生命令在审计期间由另一执行者修复并提交，本报告将它记入“已确认对齐”，不重复实施；后续修复进度见上方说明和条目标记。
 
@@ -92,12 +92,13 @@
 - 修复入手点：在 `TeamView` 恢复 waiting 聚合和固定提醒条；新增转交按钮，向 lead 会话发送带 worker taskId 和问题原文的系统化插话。
 - 修复结果：团队流上方固定聚合全部待答问题，显示数量与实时等待时长；提醒条和流内问题均可选择“我来答”或通过 `replyTask` “让调度者答”。
 
-### 10. LLM 供应商/API Key/协议/base URL/模型探测与 Profile 绑定完全依赖旧版
+### 10. LLM 供应商/API Key/协议/base URL/模型探测与 Profile 绑定完全依赖旧版（已修）
 
 - 旧版位置：`web/src/Relays.tsx:10-22,64-139,142-223` 管理供应商增删改、Key、协议、地址和模型探测；`web/src/AgentsPanel.tsx:355-365` 把供应商绑定到执行器 Profile。
 - 新版现状：**缺失**。`web-next/src/settings/AgentsSettings.tsx:18-90` 只编辑静态模型/强度/速度；`web-next/src/settings/AgentsSettings.tsx:192` 明文声明供应商和 API Key 由旧版承接。相关 API wrapper 在 `web-next/src/lib/api.ts:391-410` 已齐全但无 UI 调用。
 - 历史判断：这是明确的“尚未迁移存量”，不是有意砍掉。
 - 修复入手点：在 Settings 增加 Providers 分节或 Agents 子节，迁移 Relay CRUD、模型探测和 Profile 的 providerId；模型选择器应按 provider 返回全名模型，而不是只用静态 preset。
+- 修复结果：新版“执行器与供应商”设置已支持 Provider 增删改、协议/Base URL/API Key、保存前手动模型探测，以及兼容协议下的 Profile 绑定；绑定 Provider 后模型输入会自动拉取并列出完整模型名，未绑定时继续使用 CLI preset。供应商删除后会同步刷新 Profile，展示服务端执行的官方账号降级结果。
 
 ## P2：有替代路径，但能力明显不完整（11）
 
@@ -157,11 +158,12 @@
 - 新版现状：**入口退化**。`web-next/src/workspace/ProjectSwitcher.tsx:67-134` 只有设置、搜索和切换；必须走命令面板。`web-next/src/overlays/CreateEntityDialog.tsx:18-22` 只收 name/path，不调用 `checkPath`。
 - 修复入手点：给 ProjectSwitcher 增加 footer action；CreateProjectDialog 复用 `ProjectSettingsPanel` 的 debounced `api.checkPath`，把不存在/非 Git/脏工作区状态在提交前显示清楚。
 
-### 20. 执行器 Profile 不能设置额外 CLI 参数
+### 20. 执行器 Profile 不能设置额外 CLI 参数（已修）
 
 - 旧版位置：`web/src/AgentsPanel.tsx:383-411` 编辑已有 `extraArgs`；`web/src/AgentsPanel.tsx:418-500` 新增 Profile 时同时设置参数。
 - 新版现状：**缺失**。`web-next/src/settings/AgentsSettings.tsx:18-90,94-133` 只支持名称、target、model、reasoning、speed；无法读写 `extraArgs`。
 - 修复入手点：加入 shell-like 参数编辑器；至少保证空格分隔行为与旧版一致，更稳妥可提供逐项 token 输入，避免引号被错误拆分。
+- 修复结果：新增和编辑 Profile 都提供逐项 token 编辑器，直接读写 `extraArgs: string[]`；每项内部的空格与引号保持原样，不再经过空白二次切分，空项在保存时清除。
 
 ### 21. 任务树缺少暂停阻塞原因和多项任务元数据
 
@@ -210,11 +212,11 @@
 - **随手记批量转任务**：`60ab85c` 已补回复选多条、按列表顺序合并正文、合并附件和逐条回链。
 - **任务来源返回**：`c488a83` 已补回来源普通任务/辩论和所属团队的显式跳转；缺的是反向派生清单。
 - **任务置顶、分组折叠、未读/状态指示、会话上下滚动按钮、会话元数据**：均有对应补回提交，不再列缺口。
-- **项目/分组/归档/Profile 基础设置**：项目改名/目录/删除，分组增删改/并串行/运行暂停，Profile 增删/默认/model/reasoning/speed/SSH target 均已对齐；高级 provider 与 extraArgs 见 P1-10、P2-20。
+- **项目/分组/归档/Profile 设置**：项目改名/目录/删除，分组增删改/并串行/运行暂停，Profile 增删/默认/model/reasoning/speed/SSH target/provider/extraArgs，以及 Provider CRUD、Key 和模型探测均已对齐。
 
 ## 历史分类与取舍
 
-- **尚未迁移的存量**：定时回复、@召唤、手动审查、辩论迭代、Providers、extraArgs、全局快捷键、侧栏 resize。
+- **尚未迁移的存量**：定时回复、@召唤、手动审查、辩论迭代、全局快捷键、侧栏 resize。
 - **迁移了但半残**：Markdown（`e71e35a`）、辩论接力（`6b33716`）、随手记（`60ab85c`）。
 - **审计期间修复完成**：普通任务 `/team`、`/debate` 派生命令由并行执行者提交为 `c3d37d3`；本报告没有修改其代码。
 - **有意变化但不算缺口**：新版三栏布局、团队时间轴默认折叠、执行者放右 rail；`0eef687` 有意回退的是“新版新增的置顶执行者分区”，旧版本身没有独立的置顶执行者分区，因此不计 parity 缺口。
@@ -224,5 +226,5 @@
 
 1. 先收口正确性：执行器能力校验、重新排队、resumePrompt 编辑、完整团队 diff。
 2. 接着补主流程：完成正在修的派生命令、调度管理/创建时调度、手动审查、辩论闭环、执行者问题转交。
-3. 再迁设置与回复增强：Providers、extraArgs、定时回复、@召唤。
+3. 再迁回复增强：定时回复、@召唤。
 4. 最后补效率与可见性：快捷键、任务树元数据、项目入口/Git context、连续创建和 resize。
