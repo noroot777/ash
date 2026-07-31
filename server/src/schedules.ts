@@ -4,6 +4,7 @@ import { db } from "./db/index.js";
 import { schedules, scheduledMessages, tasks, groups } from "./db/schema.js";
 import { runTask, continueTask } from "./orchestrator.js";
 import { runDebate } from "./debate/index.js";
+import { appendTaskTimeline } from "./task-timeline.js";
 
 // ── Minimal 5-field cron matcher (minute hour dom month dow), local time ──────
 // Supports *, n, a-b, */n, and comma lists. No seconds, no names.
@@ -73,7 +74,20 @@ async function fire(taskId: string) {
   else void runTask(taskId); // 全新一轮(新 session),不接续上次会话
 }
 
-async function tick() {
+type ScheduledMessageRow = typeof scheduledMessages.$inferSelect;
+
+async function cancelScheduledMessage(message: ScheduledMessageRow, reason: string): Promise<void> {
+  await db
+    .update(scheduledMessages)
+    .set({ status: "canceled", sentAt: null })
+    .where(eq(scheduledMessages.id, message.id));
+  const note = `〔系统〕定时消息未发送，已取消（原定 ${message.sendAt}）：${reason}`;
+  if (!await appendTaskTimeline(message.taskId, note)) {
+    console.warn(`[harness] ${note} task=${message.taskId} message=${message.id}`);
+  }
+}
+
+export async function tick() {
   const now = new Date();
   const rows = await db.select().from(schedules).where(eq(schedules.enabled, true));
   for (const s of rows) {
@@ -96,9 +110,9 @@ async function tick() {
 
   // ── Due scheduled messages (定时发消息；独立于 schedules 表) ─────────────────
   // The once/cron loop above re-RUNS a task FRESH (new session); these DELIVER a
-  // queued reply via continueTask (resume the existing session). Fire only when the task is idle — continueTask silently drops a
-  // reply to a busy task — and mark sent before firing so an overlapping tick
-  // won't re-pick it (continueTask's own running.has single-flight is the final guard).
+  // queued reply via continueTask (resume the existing session). Single tasks wait
+  // until idle; resident team leads accept the message whether idle or running.
+  // Mark sent before firing so an overlapping tick won't re-pick it.
   const due = (await db.select().from(scheduledMessages).where(eq(scheduledMessages.status, "pending")))
     .filter((m) => new Date(m.sendAt) <= now);
   const firedTasks = new Set<string>(); // at most one delivery per task per tick
@@ -106,15 +120,35 @@ async function tick() {
     try {
       if (firedTasks.has(m.taskId)) continue;
       const t = (await db.select().from(tasks).where(eq(tasks.id, m.taskId))).at(0);
-      if (!t || t.archived || t.mode !== "single") {
-        // Can never be delivered → void it instead of retrying forever.
-        await db.update(scheduledMessages).set({ status: "canceled" }).where(eq(scheduledMessages.id, m.id));
+      if (!t) {
+        await cancelScheduledMessage(m, "任务不存在");
         continue;
       }
-      if (t.status === "running" || t.status === "queued") continue; // busy → retry next tick
+      if (t.archived) {
+        await cancelScheduledMessage(m, "任务已归档");
+        continue;
+      }
+      if (t.mode !== "single" && t.mode !== "team") {
+        await cancelScheduledMessage(m, `任务类型 ${t.mode} 不支持回复`);
+        continue;
+      }
+      if (t.mode === "single" && (t.status === "running" || t.status === "queued")) continue;
       firedTasks.add(m.taskId);
       await db.update(scheduledMessages).set({ status: "sent", sentAt: now.toISOString() }).where(eq(scheduledMessages.id, m.id));
-      void continueTask(m.taskId, m.text, { attachments: JSON.parse(m.attachments), agent: (m.agent as AgentType) ?? undefined });
+      const options = {
+        attachments: JSON.parse(m.attachments) as string[],
+        agent: (m.agent as AgentType) ?? undefined,
+      };
+      if (t.mode === "team") {
+        try {
+          await continueTask(m.taskId, m.text, { ...options, throwOnTeamUnavailable: true });
+        } catch (reason) {
+          const detail = reason instanceof Error ? reason.message : String(reason);
+          await cancelScheduledMessage(m, `调度台不可用：${detail}`);
+        }
+      } else {
+        void continueTask(m.taskId, m.text, options);
+      }
     } catch {
       /* keep ticking */
     }

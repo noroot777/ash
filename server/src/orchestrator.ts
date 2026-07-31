@@ -318,7 +318,12 @@ export async function resumeOrRunTask(
 export async function continueTask(
   taskId: string,
   userText: string,
-  opts: { agent?: AgentType; attachments?: string[]; system?: ResumeReason } = {},
+  opts: {
+    agent?: AgentType;
+    attachments?: string[];
+    system?: ResumeReason;
+    throwOnTeamUnavailable?: boolean;
+  } = {},
 ): Promise<void> {
   // 已验收的协作任务收到真人消息 = 它又开工了,stage 清回「进行中」(见 reopenAcceptedStage)。
   // 只认真人消息:带 opts.system 的 retry / 手点运行 / 队列推进 / 上游唤醒不算,跟下面
@@ -328,7 +333,12 @@ export async function continueTask(
   // 感觉不断线。不占这里的单飞锁(那把锁是给「一次运行 = 一个回合」的单任务用的,
   // 调度台的一次运行是整段常驻)。于是 /reply、/answer、@提及全都自动生效。
   const teamMode = (await db.select({ mode: tasks.mode }).from(tasks).where(eq(tasks.id, taskId))).at(0)?.mode;
-  if (teamMode === "team") return deliverToLead(taskId, userText, { attachments: opts.attachments });
+  if (teamMode === "team") {
+    return deliverToLead(taskId, userText, {
+      attachments: opts.attachments,
+      throwOnOpenFailure: opts.throwOnTeamUnavailable,
+    });
+  }
   if (running.has(taskId)) return;
   running.add(taskId);
   const agentType = opts.agent ?? "claude"; // re-derived below once the task loads; kept for the catch handler

@@ -84,9 +84,9 @@ export function teamIsLive(taskId: string): boolean {
 export async function deliverToLead(
   taskId: string,
   text: string,
-  opts: { attachments?: string[] } = {},
+  opts: { attachments?: string[]; throwOnOpenFailure?: boolean } = {},
 ): Promise<void> {
-  await deliver(taskId, text + attachmentsPrompt(opts.attachments), "user");
+  await deliver(taskId, text + attachmentsPrompt(opts.attachments), "user", opts.throwOnOpenFailure);
 }
 
 // 执行者汇报/提问,以及 harness 自己的唤醒语(inbox.ts 用)。
@@ -116,7 +116,12 @@ export async function haltTeam(taskId: string): Promise<void> {
 }
 
 // ── 投递 ────────────────────────────────────────────────────────────────────
-async function deliver(taskId: string, text: string, kind: Kind): Promise<void> {
+async function deliver(
+  taskId: string,
+  text: string,
+  kind: Kind,
+  throwOnOpenFailure = false,
+): Promise<void> {
   let lead = leads.get(taskId);
   // 进程还活着,但它脚下的目录已经没了 —— 典型情形:调度者按用户吩咐删掉了自己
   // 所在的那个 worktree(它嘴上说"我已回落到主检出",实际 cwd 还钉在被删的路径
@@ -139,10 +144,22 @@ async function deliver(taskId: string, text: string, kind: Kind): Promise<void> 
     if (!inflight) {
       // 开台失败(典型:worktree 建不出来)不能静默 —— 路由是 void 调用的,抛出去
       // 只会变成被兜底吞掉的 unhandledRejection,用户什么都看不到。
-      await open(taskId, text, kind).catch((err) => reportOpenFailure(taskId, err));
+      try {
+        await open(taskId, text, kind);
+      } catch (err) {
+        await reportOpenFailure(taskId, err);
+        if (throwOnOpenFailure) throw err;
+      }
       return;
     }
-    lead = await inflight; // 别开第二个进程:等它开完,这条按普通消息送
+    try {
+      lead = await inflight; // 别开第二个进程:等它开完,这条按普通消息送
+    } catch (err) {
+      // 发起 open 的那条消息负责记录失败；定时消息还要把失败传回 scheduler，
+      // 让 pending 明确落 canceled，而不是到点后静默消失。
+      if (throwOnOpenFailure) throw err;
+      return;
+    }
   }
   push(lead, text, kind);
 }
