@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { Group, Task } from "@harness/shared";
+import { ClipboardText } from "@phosphor-icons/react";
+import { InspectorHost, type InspectorDescriptor } from "../inspector/index.ts";
 import { api } from "../lib/api.ts";
 import { useConversation } from "../lib/useConversation.ts";
 import { useTaskReadState } from "../lib/useTaskReadState.ts";
@@ -13,6 +15,22 @@ import { TaskInspector } from "./TaskInspector.tsx";
 import { TaskReviewWorkspace } from "../review/TaskReviewWorkspace.tsx";
 import { OriginTaskBar } from "../components/TaskOrigin.tsx";
 
+const TASK_INSPECTORS: readonly InspectorDescriptor<Task>[] = [
+  {
+    id: "task-placeholder",
+    title: "任务面板",
+    icon: <ClipboardText size={14} />,
+    defaultOpen: true,
+    render: (task) => (
+      <div className="inspector-placeholder">
+        <span className="inspector-placeholder__mark" aria-hidden="true"><ClipboardText size={16} /></span>
+        <strong title={task.title}>{task.title || "未命名任务"}</strong>
+        <p>Inspector 框架已接入。任务属性、文件树等业务面板将在后续通过 descriptor 注册到这里。</p>
+      </div>
+    ),
+  },
+];
+
 export function TaskDetail({
   task,
   allTasks,
@@ -21,6 +39,7 @@ export function TaskDetail({
   onOpenTask,
   initialReviewOpen = false,
   onReviewOpenChange,
+  inspectorMode = "page",
   notify,
 }: {
   task: Task;
@@ -30,6 +49,7 @@ export function TaskDetail({
   onOpenTask: (taskId: string) => void;
   initialReviewOpen?: boolean;
   onReviewOpenChange?: (open: boolean) => void;
+  inspectorMode?: "page" | "drawer";
   notify: (message: string) => void;
 }) {
   const [groups, setGroups] = useState<Group[]>([]);
@@ -106,8 +126,16 @@ export function TaskDetail({
     }
   };
 
+  const inspectorContextKey = inspectorMode === "drawer" ? `task-drawer:${task.id}` : `task:${task.id}`;
+
   return (
-    <div className="task-detail">
+    <InspectorHost
+      contextKey={inspectorContextKey}
+      descriptors={TASK_INSPECTORS}
+      context={task}
+      defaultVisible={inspectorMode === "page"}
+    >
+      {({ toggleButton }) => <div className="task-detail">
       <OriginTaskBar task={task} allTasks={allTasks} onOpen={onOpenTask} />
       <TaskHeader
         task={task}
@@ -122,6 +150,7 @@ export function TaskDetail({
         onReview={() => changeReviewOpen(!reviewOpen)}
         onDelete={() => setDeleteOpen(true)}
         indicatorForTask={indicatorForTask}
+        inspectorToggle={toggleButton}
         notify={notify}
       />
       {reviewOpen ? (
@@ -174,6 +203,7 @@ export function TaskDetail({
           onClose={() => setDeleteOpen(false)}
         />
       )}
-    </div>
+      </div>}
+    </InspectorHost>
   );
 }

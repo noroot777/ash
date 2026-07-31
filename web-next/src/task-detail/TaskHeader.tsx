@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { Task } from "@harness/shared";
 import { canArchive, taskDisplayStatus } from "@harness/shared";
 import {
@@ -51,6 +51,7 @@ export function TaskHeader({
   onReview,
   onDelete,
   indicatorForTask,
+  inspectorToggle,
   notify,
 }: {
   task: Task;
@@ -65,6 +66,7 @@ export function TaskHeader({
   onReview: () => void;
   onDelete: () => void;
   indicatorForTask: IndicatorForTask;
+  inspectorToggle?: ReactNode;
   notify: (message: string) => void;
 }) {
   const [title, setTitle] = useState(task.title);
@@ -208,6 +210,7 @@ export function TaskHeader({
           </div>
         )}
       </div>
+      {inspectorToggle}
     </header>
   );
 }

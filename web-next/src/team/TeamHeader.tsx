@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { Group, Session, Task } from "@harness/shared";
 import { canArchive, taskDisplayStatus } from "@harness/shared";
 import { agentMix, isTeamSettled, teamNeverStarted } from "@harness/shared/team";
@@ -38,6 +38,7 @@ export function TeamHeader({
   onResume,
   onArchive,
   indicatorForTask,
+  inspectorToggle,
   notify,
 }: {
   task: Task;
@@ -56,6 +57,7 @@ export function TeamHeader({
   onResume: () => void;
   onArchive: () => void;
   indicatorForTask: IndicatorForTask;
+  inspectorToggle?: ReactNode;
   notify: (message: string) => void;
 }) {
   const [menu, setMenu] = useState(false);
@@ -160,6 +162,7 @@ export function TeamHeader({
               </div>
             )}
           </div>
+          {inspectorToggle}
         </div>
       </header>
       <div className="team-meta" aria-label="团队执行配置">

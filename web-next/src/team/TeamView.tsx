@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { Group, Task } from "@harness/shared";
 import { batchesOf, mergeFeed, teamGroupsOf, workerHaltStats, workersOf } from "@harness/shared/team";
-import { ArrowSquareOut, Broom, PaperPlaneTilt, SpinnerGap, WarningCircle, X } from "@phosphor-icons/react";
+import { ArrowSquareOut, Broom, PaperPlaneTilt, SpinnerGap, UsersThree, WarningCircle, X } from "@phosphor-icons/react";
 import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
+import { InspectorHost, type InspectorDescriptor } from "../inspector/index.ts";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
 import { api, type TeamCuaStatus } from "../lib/api.ts";
 import { OriginTaskBar } from "../components/TaskOrigin.tsx";
@@ -20,6 +21,22 @@ import { TeamReviewWorkspace } from "./TeamReviewWorkspace.tsx";
 import { TeamTimeline } from "./TeamTimeline.tsx";
 import { WorkerRail } from "./WorkerRail.tsx";
 import { activeTeamHaltMarker, leadTurns, teamFeedOptions } from "./teamModel.ts";
+
+const TEAM_INSPECTORS: readonly InspectorDescriptor<Task>[] = [
+  {
+    id: "team-placeholder",
+    title: "团队面板",
+    icon: <UsersThree size={14} />,
+    defaultOpen: true,
+    render: (task) => (
+      <div className="inspector-placeholder">
+        <span className="inspector-placeholder__mark" aria-hidden="true"><UsersThree size={16} /></span>
+        <strong title={task.title}>{task.title || "未命名团队"}</strong>
+        <p>Inspector 框架已接入。团队上下文面板可在后续以独立 descriptor 追加，无需修改宿主。</p>
+      </div>
+    ),
+  },
+];
 
 function TeamReplyBox({
   task,
@@ -151,7 +168,7 @@ function WorkerDrawer({
           <button type="button" onClick={onOpenFull}><ArrowSquareOut size={13} />整页打开</button>
           <button type="button" aria-label="关闭执行者抽屉" onClick={onClose}><X size={14} weight="bold" /></button>
         </header>
-        <TaskDetail key={worker.id} task={worker} allTasks={allTasks} onTaskUpdate={onTaskUpdate} onDeleted={onDeleted} onOpenTask={onOpenTask} notify={notify} />
+        <TaskDetail key={worker.id} task={worker} allTasks={allTasks} onTaskUpdate={onTaskUpdate} onDeleted={onDeleted} onOpenTask={onOpenTask} inspectorMode="drawer" notify={notify} />
       </aside>
     </>
   );
@@ -260,7 +277,8 @@ export function TeamView({
   };
 
   return (
-    <div className="team-view">
+    <InspectorHost contextKey={`team:${task.id}`} descriptors={TEAM_INSPECTORS} context={task}>
+      {({ toggleButton }) => <div className="team-view">
       <OriginTaskBar task={task} allTasks={allTasks} onOpen={openTaskById} />
       <TeamHeader
         task={task}
@@ -279,6 +297,7 @@ export function TeamView({
         onResume={() => void perform("resume")}
         onArchive={() => void perform("archive")}
         indicatorForTask={indicatorForTask}
+        inspectorToggle={toggleButton}
         notify={notify}
       />
       {reviewOpen ? (
@@ -332,6 +351,7 @@ export function TeamView({
           notify={notify}
         />
       )}
-    </div>
+      </div>}
+    </InspectorHost>
   );
 }

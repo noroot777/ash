@@ -65,16 +65,19 @@ export function MenuItem({
   shortcut,
   danger = false,
   selected = false,
-}: {
-  children: ReactNode;
+  className = "",
+  type = "button",
+  ...props
+}: ButtonHTMLAttributes<HTMLButtonElement> & {
   shortcut?: string;
   danger?: boolean;
   selected?: boolean;
 }) {
   return (
     <button
-      type="button"
-      className={`ui-menu-item${danger ? " is-danger" : ""}${selected ? " is-selected" : ""}`}
+      {...props}
+      type={type}
+      className={`ui-menu-item${danger ? " is-danger" : ""}${selected ? " is-selected" : ""} ${className}`.trim()}
       role="menuitem"
     >
       <span>{children}</span>
