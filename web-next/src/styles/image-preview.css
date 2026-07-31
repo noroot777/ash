@@ -14,8 +14,11 @@
 
 .image-preview-lightbox > img {
   display: block;
-  max-width: 100%;
-  max-height: 100%;
+  width: auto;
+  height: auto;
+  max-width: calc(100vw - 152px);
+  max-height: calc(100vh - 112px);
+  max-height: calc(100dvh - 112px);
   border-radius: 8px;
   box-shadow: 0 24px 90px rgb(0 0 0 / 46%);
   object-fit: contain;
@@ -62,6 +65,11 @@
 
 @media (max-width: 640px) {
   .image-preview-lightbox { padding: 56px 48px 48px; }
+  .image-preview-lightbox > img {
+    max-width: calc(100vw - 96px);
+    max-height: calc(100vh - 104px);
+    max-height: calc(100dvh - 104px);
+  }
   .image-preview-lightbox__prev { left: 7px; }
   .image-preview-lightbox__next { right: 7px; }
   .image-preview-lightbox__prev,

@@ -24,9 +24,14 @@ export type PreviewImage = {
 };
 
 type ImageGroupContextValue = {
-  register: (id: symbol, image: PreviewImage) => void;
+  register: (id: symbol, image: PreviewImage, element: HTMLImageElement) => void;
   unregister: (id: symbol) => void;
   open: (id: symbol) => void;
+};
+
+type RegisteredImage = {
+  image: PreviewImage;
+  element: HTMLImageElement;
 };
 
 type ActivePreview = {
@@ -118,20 +123,31 @@ function ImageLightbox({
 }
 
 function ImageGroupProvider({ children }: { children: ReactNode }) {
-  const images = useRef(new Map<symbol, PreviewImage>());
+  const images = useRef(new Map<symbol, RegisteredImage>());
   const [active, setActive] = useState<ActivePreview | null>(null);
 
-  const register = useCallback((id: symbol, image: PreviewImage) => {
-    images.current.set(id, image);
+  const register = useCallback((id: symbol, image: PreviewImage, element: HTMLImageElement) => {
+    images.current.set(id, { image, element });
   }, []);
   const unregister = useCallback((id: symbol) => {
     images.current.delete(id);
   }, []);
   const open = useCallback((id: symbol) => {
-    const entries = [...images.current.entries()];
+    // React effect order can differ from DOM order when a group spans sibling
+    // components. Sort the live thumbnail nodes when opening so the counter and
+    // arrow direction always match the order visible on the page.
+    const entries = [...images.current.entries()]
+      .filter(([, entry]) => entry.element.isConnected)
+      .sort(([, left], [, right]) => {
+        if (left.element === right.element) return 0;
+        const position = left.element.compareDocumentPosition(right.element);
+        if (position & Node.DOCUMENT_POSITION_FOLLOWING) return -1;
+        if (position & Node.DOCUMENT_POSITION_PRECEDING) return 1;
+        return 0;
+      });
     const index = entries.findIndex(([candidate]) => candidate === id);
     if (index < 0) return;
-    setActive({ images: entries.map(([, image]) => image), index });
+    setActive({ images: entries.map(([, entry]) => entry.image), index });
   }, []);
   const value = useMemo(() => ({ register, unregister, open }), [open, register, unregister]);
 
@@ -189,11 +205,12 @@ function GroupedPreviewableImage({
   ...props
 }: ImageProps) {
   const id = useRef(Symbol("image-preview")).current;
+  const element = useRef<HTMLImageElement>(null);
   const group = useContext(ImageGroupContext)!;
   const imageAlt = alt || "图片";
 
   useLayoutEffect(() => {
-    if (src) group.register(id, { src, alt: imageAlt, label: label || imageAlt });
+    if (src && element.current) group.register(id, { src, alt: imageAlt, label: label || imageAlt }, element.current);
     else group.unregister(id);
   }, [group, id, imageAlt, label, src]);
 
@@ -217,6 +234,7 @@ function GroupedPreviewableImage({
   return (
     <img
       {...props}
+      ref={element}
       src={src}
       alt={imageAlt}
       role={src ? "button" : undefined}
