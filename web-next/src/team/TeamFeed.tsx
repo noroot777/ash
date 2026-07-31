@@ -2,25 +2,31 @@ import { useRef } from "react";
 import type { Task } from "@harness/shared";
 import type { Batch } from "@harness/shared/team";
 import { ArrowElbowDownRight, ArrowRight, Wrench } from "@phosphor-icons/react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { MarkdownBody } from "../components/MarkdownBody.tsx";
+import { SessionMeta } from "../components/SessionMeta.tsx";
 import { useStickToBottom } from "../lib/useStickToBottom.ts";
 import { MessageAttachments } from "../task-detail/Attachments.tsx";
-import { formatInstant, parseAttachmentText } from "../task-detail/utils.ts";
+import { durationBetween, formatInstant, parseAttachmentText } from "../task-detail/utils.ts";
 import { executorLabel, parseInbound, statusTone, workerStatusText, type InboundMessage, type TeamFeedRow } from "./teamModel.ts";
 
 function AgentRow({ row }: { row: Extract<TeamFeedRow, { kind: "conv" }>["item"] }) {
   if (row.kind !== "agent") return null;
+  const duration = durationBetween(row.at, row.endedAt);
   return (
     <article className="team-feed-agent">
-      <header><b>{row.label}</b>{row.at && <time>{formatInstant(row.at)}</time>}</header>
-      {row.markdown && <ReactMarkdown remarkPlugins={[remarkGfm]}>{row.markdown}</ReactMarkdown>}
+      <header>
+        <b>{row.label}</b>
+        {row.at && <time>{formatInstant(row.at)}</time>}
+        {duration && <small className="task-turn-duration" title={`开始 ${formatInstant(row.at)} · 结束 ${formatInstant(row.endedAt)}`}>· ⏱ {duration} 用时</small>}
+      </header>
+      {row.markdown && <MarkdownBody text={row.markdown} />}
       {row.events.map((event, index) => (
         <details key={`${event.kind}-${index}`} className={`team-feed-tool is-${event.kind}`}>
           <summary><Wrench size={11} />{event.label}</summary>
           {event.detail && <pre>{event.detail}</pre>}
         </details>
       ))}
+      {row.showSessionMeta && row.session && <SessionMeta session={row.session} />}
     </article>
   );
 }

@@ -7,7 +7,7 @@ import { CaretRight, ListNumbers, Plus, X } from "@phosphor-icons/react";
 import { api } from "../lib/api.ts";
 import { LegacyLink } from "../components/LegacyLink.tsx";
 import { QueueDrawer } from "./QueueDrawer.tsx";
-import { formatInstant, PRIORITY_LABELS } from "./utils.ts";
+import { formatInstant, PRIORITY_LABELS, taskDurationInfo } from "./utils.ts";
 
 const STATUS_ORDER: TaskStatus[] = [
   "running", "idle", "paused", "awaiting_review", "queued", "backlog", "done", "failed", "canceled",
@@ -87,6 +87,7 @@ export function TaskInspector({
   const executorValue = task.executorId ? `profile:${task.executorId}` : `default:${agentType}`;
   const modelOptions = [...new Set([task.model, ...CLI_MODEL_PRESETS[agentType]].filter((value): value is string => !!value))];
   const effortOptions = [...new Set([task.reasoningEffort, ...REASONING_EFFORT_VALUES[agentType]].filter((value): value is string => !!value))];
+  const duration = taskDurationInfo(task);
 
   return (
     <aside className="task-inspector" aria-label="任务 Inspector">
@@ -173,6 +174,10 @@ export function TaskInspector({
               {effortOptions.map((effort) => <option value={effort} key={effort}>{effort}</option>)}
             </select>
           </InspectorRow>
+          <InspectorRow label="创建时间"><span>{formatInstant(task.createdAt)}</span></InspectorRow>
+          {task.startedAt && <InspectorRow label="开始时间"><span>{formatInstant(task.startedAt)}</span></InspectorRow>}
+          {task.endedAt && <InspectorRow label="结束时间"><span>{formatInstant(task.endedAt)}</span></InspectorRow>}
+          {duration && <InspectorRow label={duration.label}><span title={duration.title}>{duration.text}</span></InspectorRow>}
           {latestSession?.branch && <InspectorRow label="分支"><code>{latestSession.branch}</code></InspectorRow>}
           {latestSession?.worktreePath && <InspectorRow label="worktree"><code>{latestSession.worktreePath}</code></InspectorRow>}
           {latestSession?.resumeCommand && (

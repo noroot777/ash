@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import type { Group, Task } from "@harness/shared";
+import type { Group, Session, Task } from "@harness/shared";
 import { canArchive, taskDisplayStatus } from "@harness/shared";
-import { isTeamSettled, teamNeverStarted } from "@harness/shared/team";
+import { agentMix, isTeamSettled, teamNeverStarted } from "@harness/shared/team";
 import {
   Archive,
   ArrowCounterClockwise,
@@ -14,12 +14,15 @@ import {
 } from "@phosphor-icons/react";
 import { LegacyLink } from "../components/LegacyLink.tsx";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
-import { safeDownloadName, STATUS_TONES, taskDuration } from "../task-detail/utils.ts";
+import { TaskTimeMeta } from "../task-detail/TaskTimeMeta.tsx";
+import { safeDownloadName, STATUS_TONES } from "../task-detail/utils.ts";
+import { teamLeadLabel, teamReviewerLabel, teamWorkerLabel } from "./teamModel.ts";
 
 export function TeamHeader({
   task,
   workers,
   groups,
+  sessions,
   haltedByHistory,
   conversationMarkdown,
   busy,
@@ -35,6 +38,7 @@ export function TeamHeader({
   task: Task;
   workers: Task[];
   groups: Group[];
+  sessions: Session[];
   haltedByHistory: boolean;
   conversationMarkdown: string;
   busy: boolean;
@@ -51,20 +55,15 @@ export function TeamHeader({
   const [haltOpen, setHaltOpen] = useState(false);
   const [title, setTitle] = useState(task.title);
   const [editing, setEditing] = useState(false);
-  const [now, setNow] = useState(() => Date.now());
   const menuRoot = useRef<HTMLDivElement>(null);
   const pausedGroups = groups.filter((group) => group.paused);
   const stopped = pausedGroups.length > 0 || haltedByHistory;
   const settled = isTeamSettled(task.status === "running", workers);
   const display = taskDisplayStatus(task.status, task.stage, !!task.question);
-  const duration = taskDuration(task, now);
+  const latestSession = [...sessions].sort((left, right) => right.startedAt.localeCompare(left.startedAt))[0];
+  const reviewEnabled = task.team?.review !== false;
 
   useEffect(() => { if (!editing) setTitle(task.title); }, [editing, task.title]);
-  useEffect(() => {
-    if (task.status !== "running") return;
-    const timer = window.setInterval(() => setNow(Date.now()), 1000);
-    return () => window.clearInterval(timer);
-  }, [task.status]);
   useEffect(() => {
     if (!menu) return;
     const close = (event: PointerEvent) => {
@@ -121,7 +120,7 @@ export function TeamHeader({
           }}
         />
         <span className={`team-busy-pill team-busy-pill--${STATUS_TONES[task.question ? "awaiting_answer" : task.status]}`}><i />{display.label}</span>
-        <time>{duration ? `用时 ${duration}` : "尚未运行"}</time>
+        <TaskTimeMeta task={task} />
         <div className="team-header-actions">
           <button type="button" className={reviewOpen ? "is-primary" : ""} onClick={onReview}>
             <CheckCircle size={14} weight="fill" />{reviewOpen ? "返回协作" : "验收"}
@@ -151,6 +150,19 @@ export function TeamHeader({
           </div>
         </div>
       </header>
+      <div className="team-meta" aria-label="团队执行配置">
+        <span>调度者 <b>{teamLeadLabel(task, latestSession)}</b></span>
+        <span>
+          执行者 <b>{workers.length}</b>
+          {workers.length ? `（${agentMix(workers)}）` : `（默认派 ${teamWorkerLabel(task)}）`}
+        </span>
+        <span className={reviewEnabled ? "is-review" : ""}>
+          审查 <b>{reviewEnabled ? teamReviewerLabel(task) : "已关闭"}</b>
+          {reviewEnabled && ` · ${task.team?.reviewerModel || "模型跟随"} · ${task.team?.reviewerReasoningEffort || "强度跟随"}`}
+        </span>
+        {latestSession?.branch && <span>分支 <code title={latestSession.branch}>{latestSession.branch}</code></span>}
+        {latestSession?.worktreePath && <code title={latestSession.worktreePath}>…/{latestSession.worktreePath.split("/").filter(Boolean).at(-1)}</code>}
+      </div>
       {haltOpen && (
         <ConfirmDialog
           title="停止全组？"

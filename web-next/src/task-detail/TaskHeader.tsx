@@ -15,7 +15,8 @@ import {
   Stop,
   Trash,
 } from "@phosphor-icons/react";
-import { formatInstant, safeDownloadName, STATUS_TONES, taskDuration } from "./utils.ts";
+import { TaskTimeMeta } from "./TaskTimeMeta.tsx";
+import { safeDownloadName, STATUS_TONES } from "./utils.ts";
 
 export type PrimaryAction = "run" | "retry" | "stop" | "accept" | "unarchive" | null;
 
@@ -67,17 +68,10 @@ export function TaskHeader({
   const [menu, setMenu] = useState(false);
   const menuRoot = useRef<HTMLDivElement>(null);
   const pointerToggle = useRef(false);
-  const live = task.status === "running" && !!task.liveSince;
-  const [now, setNow] = useState(() => Date.now());
   const action = primaryAction(task);
   const display = taskDisplayStatus(task.status, task.stage, !!task.question);
 
   useEffect(() => { if (!editing) setTitle(task.title); }, [editing, task.title]);
-  useEffect(() => {
-    if (!live) return;
-    const timer = window.setInterval(() => setNow(Date.now()), 1000);
-    return () => window.clearInterval(timer);
-  }, [live]);
   useEffect(() => {
     if (!menu) return;
     const close = (event: PointerEvent) => {
@@ -87,7 +81,6 @@ export function TaskHeader({
     return () => window.removeEventListener("pointerdown", close);
   }, [menu]);
 
-  const duration = taskDuration(task, now);
   const download = () => {
     const blob = new Blob([conversationMarkdown], { type: "text/markdown;charset=utf-8" });
     const url = URL.createObjectURL(blob);
@@ -161,9 +154,7 @@ export function TaskHeader({
       <span className={`task-detail-status task-detail-status--${STATUS_TONES[task.question ? "awaiting_answer" : task.status]}`}>
         <i aria-hidden="true" />{display.label}
       </span>
-      <span className="task-detail-time">
-        {duration ? `用时 ${duration}` : `创建 ${formatInstant(task.createdAt)}`}
-      </span>
+      <TaskTimeMeta task={task} />
       <button
         className={`task-primary-action${action.danger ? " is-danger" : ""}`}
         type="button"

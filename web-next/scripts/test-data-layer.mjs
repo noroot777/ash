@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { ApiError, api } from "../src/lib/api.ts";
 import { applyTaskStatusEvent } from "../src/lib/useTasks.ts";
 import { buildConversationItems, conversationToMarkdown } from "../src/task-detail/conversationModel.ts";
+import { taskDurationInfo } from "../src/task-detail/utils.ts";
 import { stickStateAfterScroll } from "../src/lib/useStickToBottom.ts";
 import { sharedTeamParent } from "../src/review/reviewModel.ts";
 import { gateAllowsRevision, isOpenDebateGate, runCreatedHandoffFollowUps } from "../src/debate/handoffPolicy.ts";
@@ -89,7 +90,27 @@ try {
   );
   assert.deepEqual(conversation.map((item) => item.kind), ["agent", "user", "agent"]);
   assert.equal(conversation[2].kind === "agent" ? conversation[2].markdown : "", "正在处理。 已完成。");
+  assert.equal(conversation[0].kind === "agent" ? conversation[0].at : null, "2026-07-30T01:00:00.000Z");
+  assert.equal(conversation[0].kind === "agent" ? conversation[0].endedAt : null, "2026-07-30T01:01:00.000Z");
+  assert.equal(conversation[2].kind === "agent" ? conversation[2].at : null, "2026-07-30T01:01:00.000Z");
+  assert.equal(conversation[0].kind === "agent" ? conversation[0].showSessionMeta : null, false);
+  assert.equal(conversation[2].kind === "agent" ? conversation[2].showSessionMeta : null, true);
   assert.match(conversationToMarkdown(conversation, { ...task, title: "测试会话", body: "目标" }), /## 你 ·/);
+
+  const timedConversation = buildConversationItems(
+    [{ session, output: "第一回合。\n\u001e{\"t\":\"agentEnd\",\"at\":\"2026-07-30T01:00:30.000Z\"}\n\u001e{\"t\":\"user\",\"text\":\"继续\",\"at\":\"2026-07-30T01:01:00.000Z\"}\n第二回合。\n\u001e{\"t\":\"agentEnd\",\"at\":\"2026-07-30T01:03:00.000Z\"}" }],
+    [session],
+    [],
+  );
+  assert.equal(timedConversation[0].kind === "agent" ? timedConversation[0].endedAt : null, "2026-07-30T01:00:30.000Z");
+  assert.equal(timedConversation[2].kind === "agent" ? timedConversation[2].at : null, "2026-07-30T01:01:00.000Z");
+  assert.equal(timedConversation[2].kind === "agent" ? timedConversation[2].endedAt : null, "2026-07-30T01:03:00.000Z");
+
+  const durationInfo = taskDurationInfo(task, Date.parse("2026-07-30T01:10:00.000Z"));
+  assert.equal(durationInfo?.label, "用时");
+  assert.equal(durationInfo?.text, "10m 0s");
+  assert.match(durationInfo?.title ?? "", /^结束 /);
+  assert.equal(taskDurationInfo({ ...task, activeMs: null })?.label, "跨度");
 
   // 用户从底部按住滚动条向上拖时，pointerdown 会建立 detaching user intent。
   // 随后的 scroll 必须解除贴底；内容 resize/mutation 只能在 stuck=true 时补滚，

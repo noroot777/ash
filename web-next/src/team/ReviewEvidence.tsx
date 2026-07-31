@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { TASK_STATUS_LABELS, type TaskReviewInfo, type TaskReviewRound } from "@harness/shared";
 import { CaretDown, CaretLeft, CaretRight, CheckCircle, ImageSquare, SpinnerGap, WarningCircle, X } from "@phosphor-icons/react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { MarkdownBody } from "../components/MarkdownBody.tsx";
 import { api } from "../lib/api.ts";
 import { useServerEvents } from "../lib/events.ts";
 
@@ -51,7 +50,7 @@ function ReviewRound({ taskId, round, images, onPreview }: { taskId: string; rou
       </button>
       {open && (
         <div>
-          {round.reportMarkdown ? <ReactMarkdown remarkPlugins={[remarkGfm]}>{round.reportMarkdown}</ReactMarkdown> : <p>审查报告尚未写入。</p>}
+          {round.reportMarkdown ? <MarkdownBody text={round.reportMarkdown} /> : <p>审查报告尚未写入。</p>}
           {round.screenshots.length > 0 && (
             <section className="team-review-shots">
               <h5><ImageSquare size={12} />截图 · {round.screenshots.length}</h5>

@@ -22,6 +22,8 @@ export type ConversationItem =
       label: string;
       at?: string | null;
       endedAt?: string | null;
+      markerEndedAt?: string | null;
+      showSessionMeta?: boolean;
       session?: Session;
       markdown: string;
       events: AgentAuxEvent[];
@@ -30,6 +32,8 @@ export type ConversationItem =
   | { kind: "event"; id: string; text: string; at?: string; tone?: "neutral" | "error" };
 
 export type PersistedConversation = { session: Session; output: string };
+
+type ConversationEventItem = Extract<ConversationItem, { kind: "event" }>;
 
 function agentLabel(session: Session | undefined, event?: LiveAgentEvent): string {
   if (session?.executor) return session.executor;
@@ -50,13 +54,25 @@ function appendAgent(
     sessionId: event.sessionId,
     label: agentLabel(session, event),
     at: session?.startedAt,
-    endedAt: session?.endedAt,
+    endedAt: null,
+    markerEndedAt: null,
     session,
     markdown: "",
     events: [],
   };
   items.push(item);
   return item;
+}
+
+function appendEvent(items: ConversationItem[], item: ConversationEventItem): void {
+  const last = items[items.length - 1];
+  if (
+    last?.kind === "event"
+    && last.text === item.text
+    && last.at === item.at
+    && last.tone === item.tone
+  ) return;
+  items.push(item);
 }
 
 export function buildConversationItems(
@@ -93,7 +109,8 @@ export function buildConversationItems(
           sessionId: session.id,
           label: agentLabel(session),
           at: session.startedAt,
-          endedAt: segment.endedAt ?? session.endedAt,
+          endedAt: null,
+          markerEndedAt: segment.endedAt ?? null,
           session,
           markdown: segment.text,
           events: [],
@@ -115,11 +132,11 @@ export function buildConversationItems(
     }
     const event = entry.event.event;
     if (event.kind === "system") {
-      items.push({ kind: "event", id: entry.id, text: event.text });
+      appendEvent(items, { kind: "event", id: entry.id, text: event.text });
       continue;
     }
     if (event.kind === "done") {
-      items.push({
+      appendEvent(items, {
         kind: "event",
         id: entry.id,
         text: event.exitStatus === 0 ? "本轮执行结束" : `执行异常结束 · exit ${event.exitStatus}`,
@@ -128,18 +145,56 @@ export function buildConversationItems(
       continue;
     }
     if (event.kind === "turnEnd") {
-      items.push({ kind: "event", id: entry.id, text: "本回合结束，等待下一条消息" });
+      appendEvent(items, { kind: "event", id: entry.id, text: "本回合结束，等待下一条消息" });
       continue;
     }
-    if (event.kind === "session") {
-      items.push({ kind: "event", id: entry.id, text: `会话已连接 · ${event.cliSessionId}` });
-      continue;
-    }
+    // session 是执行器的内部簿记事件(心跳/回合结束都会重发),旧 UI 就不渲染;
+    // cliSessionId 已经在会话详情/恢复按钮那里可查,会话流里不展示。
+    if (event.kind === "session") continue;
     const agent = appendAgent(items, entry.event, sessions);
     if (event.kind === "text") agent.markdown += event.text;
     if (event.kind === "tool") agent.events.push({ kind: "tool", label: event.name, detail: event.detail });
     if (event.kind === "thinking") agent.events.push({ kind: "thinking", label: "思考过程", detail: event.text });
     if (event.kind === "error") agent.events.push({ kind: "error", label: event.message });
+  }
+
+  const orderedSessions = [...sessions].sort((left, right) => left.startedAt.localeCompare(right.startedAt));
+  const runEnds = new Map<string, string | null>();
+  orderedSessions.forEach((session, index) => {
+    runEnds.set(session.id, session.endedAt ?? orderedSessions[index + 1]?.startedAt ?? null);
+  });
+
+  let previousInterjectionAt: string | null = null;
+  const seenSessions = new Set<string>();
+  for (const item of items) {
+    if (item.kind === "user" || item.kind === "event") previousInterjectionAt = item.at ?? previousInterjectionAt;
+    if (item.kind !== "agent") continue;
+    const firstTurn = !seenSessions.has(item.sessionId);
+    seenSessions.add(item.sessionId);
+    item.at = firstTurn
+      ? item.session?.startedAt ?? item.at
+      : previousInterjectionAt ?? item.session?.startedAt ?? item.at;
+  }
+
+  let nextInterjectionAt: string | null = null;
+  let rightSessionId: string | undefined;
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    const item = items[index]!;
+    if (item.kind === "user" || item.kind === "event") nextInterjectionAt = item.at ?? nextInterjectionAt;
+    if (item.kind !== "agent") continue;
+    if (item.sessionId !== rightSessionId) {
+      nextInterjectionAt = null;
+      rightSessionId = item.sessionId;
+    }
+    item.endedAt = item.markerEndedAt ?? nextInterjectionAt ?? runEnds.get(item.sessionId) ?? null;
+  }
+
+  const sessionMetaSeen = new Set<string>();
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    const item = items[index]!;
+    if (item.kind !== "agent") continue;
+    item.showSessionMeta = !sessionMetaSeen.has(item.sessionId);
+    sessionMetaSeen.add(item.sessionId);
   }
   return items;
 }

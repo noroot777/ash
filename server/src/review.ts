@@ -261,6 +261,8 @@ export async function reviewProtocolFor(
     `先看 git status / git diff / 相关提交，再决定验证范围。\n\n` +
     `必须真实运行验证：只读代码或只过编译不算。web 改动必须启动服务，用浏览器确认行为并截图；` +
     `其它改动也必须运行与风险相称的测试或产物。\n\n` +
+    `验证收尾必须清场：审查结束前把你为验证启动的所有服务/进程全部停掉（dev server、mock server、throwaway 实例等），` +
+    `确认监听端口已释放，不许留孤儿进程在后台。\n\n` +
     `证据强制落盘：\n` +
     `- 必写报告：${join(evidenceDir, "report.md")}（包含结论、依据、发现的问题）\n` +
     `- 截图：放在 ${evidenceDir} 目录内\n` +
@@ -275,7 +277,8 @@ export function reviewReminderFor(review: Pick<TaskRow, "id" | "reviewOf" | "rev
   if (!review.reviewOf || !review.reviewRound) return "";
   const dir = reviewRoundDir(review.reviewOf, review.reviewRound);
   return `审查提醒:这是第 ${review.reviewRound} 轮审查；必须真实运行验证并把报告写到 ${join(dir, "report.md")}，` +
-    `截图放同目录（只落盘，绝不 commit 进仓库）；结束前对被审任务 ${review.reviewOf} 调 report_stage(verified|verify_failed)，` +
+    `截图放同目录（只落盘，绝不 commit 进仓库）；验证完停掉自己启动的所有服务/进程；` +
+    `结束前对被审任务 ${review.reviewOf} 调 report_stage(verified|verify_failed)，` +
     `再对审查任务自身 ${review.id} 调 complete_task。`;
 }
 
