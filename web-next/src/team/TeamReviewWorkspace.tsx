@@ -171,6 +171,7 @@ function ChangeSummary({ data, loading, error }: { data: ReviewData | null; load
 
 function ReviewRecord({
   task,
+  parentTask = null,
   role,
   actions = false,
   defaultOpen = false,
@@ -178,6 +179,7 @@ function ReviewRecord({
   notify,
 }: {
   task: Task;
+  parentTask?: Task | null;
   role: string;
   actions?: boolean;
   defaultOpen?: boolean;
@@ -217,7 +219,7 @@ function ReviewRecord({
       {open && (
         <div className="team-review-record-body">
           <WorkspaceFacts task={task} data={data} />
-          <ReviewEvidence taskId={task.id} />
+          <ReviewEvidence task={task} parentTask={parentTask} notify={notify} />
           <ChangeSummary data={data} loading={loading} error={error} />
         </div>
       )}
@@ -225,7 +227,15 @@ function ReviewRecord({
   );
 }
 
-function SharedWorkerVerification({ workers }: { workers: Task[] }) {
+function SharedWorkerVerification({
+  lead,
+  workers,
+  notify,
+}: {
+  lead: Task;
+  workers: Task[];
+  notify: (message: string) => void;
+}) {
   const [selectedId, setSelectedId] = useState<string | null>(workers.find((worker) => worker.stage === "verify_failed")?.id ?? workers[0]?.id ?? null);
   const selected = workers.find((worker) => worker.id === selectedId) ?? null;
   const failed = workers.filter((worker) => worker.stage === "verify_failed").length;
@@ -241,7 +251,7 @@ function SharedWorkerVerification({ workers }: { workers: Task[] }) {
           </button>
         ))}
       </div>
-      {selected && <div className="team-shared-evidence"><b>{selected.title}</b><ReviewEvidence taskId={selected.id} /></div>}
+      {selected && <div className="team-shared-evidence"><b>{selected.title}</b><ReviewEvidence task={selected} parentTask={lead} notify={notify} /></div>}
     </section>
   );
 }
@@ -271,11 +281,11 @@ export function TeamReviewWorkspace({
       <div className="team-review-scroll">
         <div className="team-review-stack">
           <ReviewRecord task={lead} role={lead.useWorktree ? "调度台 / 共享 worktree" : "调度台 / 项目工作区"} actions defaultOpen onTaskUpdated={onTaskUpdated} notify={notify} />
-          {sharedWorkers.length > 0 && <SharedWorkerVerification workers={sharedWorkers} />}
+          {sharedWorkers.length > 0 && <SharedWorkerVerification lead={lead} workers={sharedWorkers} notify={notify} />}
           <section className="team-acceptance-queue">
             <header><div><b>独立执行者待验收队列</b><small>每个显式 worktree 都有独立分支与合入动作，按执行者分别处理。</small></div><span>{independentWorkers.length} 项</span></header>
             {independentWorkers.length ? (
-              <div>{independentWorkers.map((worker, index) => <ReviewRecord key={worker.id} task={worker} role={`执行者 ${index + 1}`} actions defaultOpen={worker.stage === "awaiting_acceptance" || worker.stage === "verify_failed"} onTaskUpdated={onTaskUpdated} notify={notify} />)}</div>
+              <div>{independentWorkers.map((worker, index) => <ReviewRecord key={worker.id} task={worker} parentTask={lead} role={`执行者 ${index + 1}`} actions defaultOpen={worker.stage === "awaiting_acceptance" || worker.stage === "verify_failed"} onTaskUpdated={onTaskUpdated} notify={notify} />)}</div>
             ) : <p>没有独立 worktree 执行者；共享执行者随团队整体验收。</p>}
           </section>
         </div>

@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useState } from "react";
-import { TASK_STATUS_LABELS, type TaskReviewInfo, type TaskReviewRound } from "@harness/shared";
+import { useState } from "react";
+import { TASK_STATUS_LABELS, type Task, type TaskReviewRound } from "@harness/shared";
 import { CaretDown, CheckCircle, ImageSquare, SpinnerGap, WarningCircle } from "@phosphor-icons/react";
 import { ImagePreviewGroup, PreviewableImage } from "../components/ImagePreview.tsx";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
 import { api } from "../lib/api.ts";
-import { useServerEvents } from "../lib/events.ts";
+import { ReviewDispatchControl } from "../review/ReviewDispatchControl.tsx";
+import { useTaskReviewInfo } from "../review/useTaskReviewInfo.ts";
 
 function conclusionLabel(round: TaskReviewRound): string {
   if (round.conclusion === "verified") return "verified";
@@ -48,29 +49,25 @@ function ReviewRound({ taskId, round }: { taskId: string; round: TaskReviewRound
   );
 }
 
-export function ReviewEvidence({ taskId }: { taskId: string }) {
-  const [info, setInfo] = useState<TaskReviewInfo | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const load = useCallback(async () => {
-    try {
-      setInfo(await api.taskReview(taskId));
-      setError(null);
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason));
-    } finally {
-      setLoading(false);
-    }
-  }, [taskId]);
-  useEffect(() => {
-    setInfo(null);
-    setLoading(true);
-    void load();
-  }, [load]);
-  useServerEvents(useCallback((event) => {
-    if ((event.type === "task.review" || event.type === "task.stage") && event.taskId === taskId) void load();
-  }, [load, taskId]));
+export function ReviewEvidence({
+  task,
+  parentTask = null,
+  notify,
+}: {
+  task: Task;
+  parentTask?: Task | null;
+  notify: (message: string) => void;
+}) {
+  const { info, loading, error, load } = useTaskReviewInfo(task.id);
   const rounds = info?.rounds ?? [];
+  const latestRound = rounds.at(-1);
+  const dispatchProminent = !!error || rounds.length === 0 || latestRound?.conclusion === "verify_failed";
+  const dispatchSupported = task.mode === "single" && !task.reviewOf && !task.archived;
+  const emptyMessage = dispatchSupported
+    ? task.status === "running" || task.status === "queued"
+      ? "尚无独立审查记录；目标结束后可派出真实运行验证。"
+      : "尚无独立审查记录，可立即派出一轮真实运行验证。"
+    : "尚无独立审查记录。";
 
   return (
     <ImagePreviewGroup isolated>
@@ -78,8 +75,18 @@ export function ReviewEvidence({ taskId }: { taskId: string }) {
         <header><div><b>独立审查证据</b><small>{rounds.length ? `已记录 ${rounds.length} 轮真实运行验证` : "验收前请结合结论、报告与截图判断"}</small></div></header>
         {loading && <p><SpinnerGap size={13} className="is-spinning" />正在读取审查记录…</p>}
         {!loading && error && <p className="is-error">审查记录加载失败：{error} <button type="button" onClick={() => void load()}>重试</button></p>}
-        {!loading && !error && !rounds.length && <p>尚无独立审查记录。</p>}
-        {rounds.map((round) => <ReviewRound key={`${round.round}-${round.reviewTaskId}`} taskId={taskId} round={round} />)}
+        {!loading && !error && !rounds.length && <p>{emptyMessage}</p>}
+        {!loading && (
+          <ReviewDispatchControl
+            task={task}
+            parentTask={parentTask}
+            rounds={rounds}
+            prominent={dispatchProminent}
+            notify={notify}
+            onRefresh={() => load(true)}
+          />
+        )}
+        {rounds.map((round) => <ReviewRound key={`${round.round}-${round.reviewTaskId}`} taskId={task.id} round={round} />)}
       </section>
     </ImagePreviewGroup>
   );

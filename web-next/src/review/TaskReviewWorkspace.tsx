@@ -88,6 +88,7 @@ export function TaskReviewWorkspace({
   const objective = parseAttachmentText(task.body);
   const display = taskDisplayStatus(task.status, task.stage, !!task.question);
   const sharedParent = sharedTeamParent(task, allTasks);
+  const parentTask = task.parentId ? allTasks.find((candidate) => candidate.id === task.parentId) ?? null : null;
 
   useEffect(() => {
     let alive = true;
@@ -129,7 +130,7 @@ export function TaskReviewWorkspace({
           <div className="single-review-card-body">
             <MessageAttachments paths={objective.paths} />
             {sharedParent ? <SharedWorkerFacts parent={sharedParent} branch={sharedBranch} /> : <BranchFacts task={task} data={data} />}
-            <ReviewEvidence taskId={task.id} />
+            <ReviewEvidence task={task} parentTask={parentTask} notify={notify} />
             {loading && <p className="single-review-loading"><SpinnerGap size={14} className="is-spinning" />{sharedParent ? "正在读取共享分支归属…" : "正在汇总提交与 diff…"}</p>}
             {!loading && error && <p className="single-review-error">{sharedParent ? "共享分支归属读取失败" : "提交与 diff 加载失败"}：{error}</p>}
             {!sharedParent && !loading && data && (

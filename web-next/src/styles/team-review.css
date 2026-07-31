@@ -74,6 +74,30 @@
 .team-review-evidence > p { display: flex; align-items: center; gap: 6px; margin: 0; padding: 10px; color: var(--faint); font-size: 10.5px; }
 .team-review-evidence > p.is-error { color: var(--red); }
 .team-review-evidence > p button { border: 0; background: transparent; color: inherit; text-decoration: underline; }
+.review-dispatch-control { margin: 9px; overflow: hidden; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+.review-dispatch-control.is-prominent { border-color: color-mix(in lch,var(--accent) 28%,var(--line)); background: color-mix(in lch,var(--accent) 4%,var(--panel)); }
+.review-dispatch-heading { display: flex; min-height: 46px; align-items: center; gap: 8px; padding: 7px 8px; }
+.review-dispatch-heading > span { display: grid; width: 25px; height: 25px; flex: 0 0 25px; place-items: center; border-radius: 7px; background: color-mix(in lch,var(--accent) 10%,var(--raised)); color: var(--accent); }
+.review-dispatch-heading > div { min-width: 0; flex: 1; }
+.review-dispatch-heading b, .review-dispatch-heading small { display: block; }
+.review-dispatch-heading b { color: var(--ink); font-size: 10.5px; }
+.review-dispatch-heading small { margin-top: 1px; color: var(--faint); font-size: 9.5px; line-height: 1.4; }
+.review-dispatch-heading > button { display: inline-flex; height: 27px; flex: 0 0 auto; align-items: center; gap: 5px; border: 1px solid color-mix(in lch,var(--accent) 28%,var(--line)); border-radius: 7px; background: var(--panel); padding: 0 8px; color: var(--accent); font-size: 9.5px; font-weight: 650; }
+.review-dispatch-heading > button:hover:not(:disabled) { background: color-mix(in lch,var(--accent) 7%,var(--panel)); }
+.review-dispatch-heading > button:disabled { cursor: not-allowed; opacity: .55; }
+.review-dispatch-control > form { border-top: .5px solid color-mix(in lch,var(--accent) 16%,var(--line)); }
+.review-dispatch-control fieldset { min-width: 0; margin: 0; border: 0; padding: 9px; }
+.review-dispatch-fields { display: grid; grid-template-columns: minmax(180px,1.35fr) repeat(2,minmax(130px,1fr)); gap: 8px; }
+.review-dispatch-fields .composer-field { gap: 4px; }
+.review-dispatch-fields .composer-field > span { font-size: 9px; }
+.review-dispatch-fields .composer-field input, .review-dispatch-fields .composer-field select { height: 30px; border-radius: 7px; font-size: 10.5px; }
+.review-dispatch-availability { display: flex; align-items: center; gap: 5px; margin: 7px 0 0; color: var(--faint); font-size: 9.5px; line-height: 1.45; }
+.review-dispatch-availability.is-error { color: var(--red); }
+.review-dispatch-control form footer { display: flex; align-items: center; gap: 8px; margin-top: 9px; }
+.review-dispatch-control form footer > span { min-width: 0; flex: 1; color: var(--faint); font-size: 9px; }
+.review-dispatch-control form footer > button { display: inline-flex; height: 28px; align-items: center; gap: 5px; border: 0; border-radius: 7px; background: var(--accent); padding: 0 9px; color: white; font-size: 9.5px; font-weight: 650; }
+.review-dispatch-control form footer > button:hover:not(:disabled) { background: #5560c4; }
+.review-dispatch-control form footer > button:disabled { cursor: not-allowed; opacity: .5; }
 .team-review-round { margin: 9px; overflow: hidden; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
 .team-review-round.is-verified { border-color: color-mix(in lch,var(--green) 25%,var(--line)); }
 .team-review-round.is-verify_failed { border-color: color-mix(in lch,var(--red) 30%,var(--line)); }
@@ -131,6 +155,7 @@
   .team-review-facts, .team-review-change-grid { grid-template-columns: 1fr; }
   .team-review-record > header { flex-wrap: wrap; }
   .team-accept-actions { width: 100%; justify-content: flex-end; }
+  .review-dispatch-fields { grid-template-columns: 1fr; }
 }
 @media (prefers-reduced-motion: reduce) {
   .team-review-record svg, .team-review-round svg, .team-shared-worker-grid svg { transition: none; }

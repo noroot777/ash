@@ -471,6 +471,14 @@
 .task-label-editor > label { display: inline-flex; min-height: 22px; align-items: center; gap: 3px; border: 0; border-radius: 999px; background: var(--raised); padding: 2px 7px; color: var(--muted); font-size: 9.5px; }
 .task-label-editor input { width: 44px; border: 0; background: transparent; padding: 0; outline: 0; font-size: 9.5px; }
 .task-inspector-note { margin: 5px 0 0; color: var(--faint); font-size: 10px; line-height: 1.5; }
+.task-inspector-note.is-error { color: var(--red); }
+.task-inspector .review-dispatch-control { margin: 8px 0 0; }
+.task-inspector .review-dispatch-heading { flex-wrap: wrap; }
+.task-inspector .review-dispatch-heading > div { min-width: calc(100% - 33px); }
+.task-inspector .review-dispatch-heading > button { width: 100%; justify-content: center; }
+.task-inspector .review-dispatch-fields { grid-template-columns: 1fr; }
+.task-inspector .review-dispatch-control form footer { align-items: stretch; flex-direction: column; }
+.task-inspector .review-dispatch-control form footer > button { justify-content: center; }
 .task-inspector-action { display: flex; width: 100%; min-height: 31px; align-items: center; border: 0; border-radius: 7px; background: transparent; padding: 5px 7px; color: var(--muted); font-size: 10.5px; text-align: left; }
 .task-inspector-action:hover { background: var(--raised); color: var(--ink); }
 .task-inspector-action span { display: inline-flex; align-items: center; gap: 5px; }

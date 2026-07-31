@@ -25,7 +25,7 @@ const PRIORITIES: { value: Priority; label: string }[] = [
   { value: "urgent", label: "紧急" },
 ];
 
-function ExecutorSelect({
+export function ExecutorSelect({
   label,
   value,
   types,
@@ -62,7 +62,7 @@ function ExecutorSelect({
   );
 }
 
-function ModelField({
+export function ModelField({
   role,
   label,
   value,
@@ -92,7 +92,7 @@ function ModelField({
   );
 }
 
-function EffortField({
+export function EffortField({
   label,
   value,
   type,

@@ -44,12 +44,13 @@
 - 修复入手点：在 composer footer 引入 launch mode；创建成功后按 `run / once / cron / create` 分流，定时模式不得先调用 `runTask`。
 - 修复结果：Composer footer 新增“创建并运行 / 仅创建 / 一次性定时 / 循环 Cron”四档启动方式和对应字段，Cmd/Ctrl+Enter 服从当前选择；创建完成后严格分流，`once`/`cron` 只调用 `setSchedule`，不会先启动任务。
 
-### 4. 手动派独立审查/补派下一轮审查没有 UI
+### 4. 手动派独立审查/补派下一轮审查没有 UI（已修）
 
 - 旧版位置：`web/src/TaskReviewPanel.tsx:183-216` 检查在途轮次、可用审查执行器，并调用 `api.dispatchTaskReview`。
 - 新版现状：**入口未接线**。`web-next/src/team/ReviewEvidence.tsx:75-83` 只能查看已有记录或空态；`web-next/src/task-detail/TaskInspector.tsx:229-236` 也只读摘要。API 已有 `dispatchTaskReview`（`web-next/src/lib/api.ts:301-305`），全树无 UI 调用。
 - 历史判断：旧版 `c9f1e55 feat(web): add independent task review UI`；web-next 从未迁入。
 - 修复入手点：在单任务详情和 `TaskReviewWorkspace` 的空态/失败态加入审查派发器，复用 composer 的 Profile、模型、思考强度选择，并禁止重复在途轮次。
+- 修复结果：单任务 Inspector、单任务验收台和团队执行者审查证据均可派首轮或补派下一轮；执行器候选服从统一可用性门禁，并在 UI 提交前和服务端两层拦截重复在途轮次。
 
 ### 5. 队列中的 failed/canceled 任务不能“重新排队” ✅ 已修
 

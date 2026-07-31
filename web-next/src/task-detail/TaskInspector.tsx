@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import type { AgentExecutorProfile, Group, Session, Task, TaskReviewInfo, TaskStatus } from "@harness/shared";
+import type { AgentExecutorProfile, Group, Session, Task, TaskStatus } from "@harness/shared";
 import { isUserSettableStatus, TASK_STATUS_LABELS } from "@harness/shared";
 import { CLI_MODEL_PRESETS, REASONING_EFFORT_VALUES } from "@harness/shared/cli-presets";
 import { sameExecutor } from "@harness/shared/executors";
@@ -19,6 +19,8 @@ import {
 } from "../lib/agentAvailability.ts";
 import { QueueDrawer } from "./QueueDrawer.tsx";
 import { formatInstant, PRIORITY_LABELS, taskDurationInfo } from "./utils.ts";
+import { ReviewDispatchControl } from "../review/ReviewDispatchControl.tsx";
+import { useTaskReviewInfo } from "../review/useTaskReviewInfo.ts";
 
 const STATUS_ORDER: TaskStatus[] = [
   "running", "idle", "paused", "awaiting_review", "queued", "backlog", "done", "failed", "canceled",
@@ -128,10 +130,10 @@ export function TaskInspector({
   const [queueItems, setQueueItems] = useState<{ taskId: string; title: string }[]>([]);
   const [queueOpen, setQueueOpen] = useState(false);
   const [requeueing, setRequeueing] = useState(false);
-  const [review, setReview] = useState<TaskReviewInfo | null>(null);
   const [profiles, setProfiles] = useState<AgentExecutorProfile[]>([]);
   const [profilesReady, setProfilesReady] = useState(false);
   const detection = useAgentAvailability();
+  const { info: review, loading: reviewLoading, error: reviewError, load: loadReview } = useTaskReviewInfo(task.id);
   const readOnly = task.parentId !== null || !!task.archived;
   const latestSession = useMemo(
     () => [...sessions].sort((left, right) => right.startedAt.localeCompare(left.startedAt))[0],
@@ -145,7 +147,6 @@ export function TaskInspector({
     let alive = true;
     if (!task.queueId) setQueueItems([]);
     else api.queue(task.queueId).then((queue) => { if (alive) setQueueItems(queue.items); }).catch(() => undefined);
-    api.taskReview(task.id).then((value) => { if (alive) setReview(value); }).catch(() => { if (alive) setReview(null); });
     setProfilesReady(false);
     api.agents().then((value) => { if (alive) setProfiles(value); })
       .catch(() => { if (alive) setProfiles([]); })
@@ -215,6 +216,7 @@ export function TaskInspector({
   const effortOptions = [...new Set([task.reasoningEffort, ...REASONING_EFFORT_VALUES[agentType]].filter((value): value is string => !!value))];
   const duration = taskDurationInfo(task);
   const parent = taskParentLink(task, allTasks);
+  const parentTask = task.parentId ? allTasks.find((candidate) => candidate.id === task.parentId) ?? null : null;
   const canRequeue = task.parentId === null
     && !task.archived
     && !!task.queueId
@@ -382,12 +384,22 @@ export function TaskInspector({
 
         <section>
           <h2>审查摘要</h2>
-          {latestReview ? (
+          {reviewLoading ? <p className="task-inspector-note">正在读取审查记录…</p> : latestReview ? (
             <details>
               <summary>第 {latestReview.round} 轮 · {latestReview.conclusion === "verified" ? "已通过" : latestReview.conclusion === "verify_failed" ? "未通过" : latestReview.reviewTaskStatus}</summary>
               <pre>{latestReview.reportMarkdown || "尚无审查报告。"}</pre>
             </details>
-          ) : <p className="task-inspector-note">{review?.reviewRequested ? "审查已请求，等待结果。" : "尚未开始审查。"}</p>}
+          ) : <p className={`task-inspector-note${reviewError ? " is-error" : ""}`}>{reviewError ? `审查记录加载失败：${reviewError}` : review?.reviewRequested ? "审查已请求，等待结果。" : "尚未开始审查。"}</p>}
+          {!reviewLoading && (
+            <ReviewDispatchControl
+              task={task}
+              parentTask={parentTask}
+              rounds={review?.rounds ?? []}
+              prominent={!!reviewError || !latestReview || latestReview.conclusion === "verify_failed"}
+              notify={notify}
+              onRefresh={() => loadReview(true)}
+            />
+          )}
         </section>
 
         <section>
