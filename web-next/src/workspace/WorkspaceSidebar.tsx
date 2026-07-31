@@ -9,6 +9,7 @@ import { ProjectAvatar } from "./ProjectAvatar.tsx";
 import { ProjectSwitcher } from "./ProjectSwitcher.tsx";
 import { TaskTree } from "./TaskTree.tsx";
 import { workspaceModifierLabel } from "./useWorkspaceShortcuts.ts";
+import { WorkspaceResizeHandle } from "./WorkspaceResizeHandle.tsx";
 import { LegacyLink } from "../components/LegacyLink.tsx";
 
 export function WorkspaceSidebar({
@@ -19,6 +20,8 @@ export function WorkspaceSidebar({
   selectedTaskId,
   connected,
   collapsed,
+  width,
+  onWidthChange,
   onProject,
   onTask,
   onToggleCollapsed,
@@ -35,6 +38,8 @@ export function WorkspaceSidebar({
   selectedTaskId: string | null;
   connected: boolean;
   collapsed: boolean;
+  width: number;
+  onWidthChange: (width: number) => void;
   onProject: (projectId: string) => void;
   onTask: (task: Task) => void;
   onToggleCollapsed: () => void;
@@ -99,6 +104,7 @@ export function WorkspaceSidebar({
           收起
         </button>
       </div>
+      <WorkspaceResizeHandle width={width} onChange={onWidthChange} />
     </aside>
   );
 }

@@ -30,6 +30,7 @@ export function useTasks(projectId?: string) {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
+  const [settlementVersion, setSettlementVersion] = useState(0);
 
   const refetch = useCallback(async () => {
     setLoading(true);
@@ -56,6 +57,9 @@ export function useTasks(projectId?: string) {
       }
       if (event.type === "task.status") {
         setTasks((current) => current.map((task) => applyTaskStatusEvent(task, event)));
+        if (["done", "failed", "canceled", "idle"].includes(event.status)) {
+          setSettlementVersion((value) => value + 1);
+        }
         return;
       }
       if (event.type === "task.stage") {
@@ -81,5 +85,5 @@ export function useTasks(projectId?: string) {
     }, [projectId]),
   );
 
-  return { tasks, setTasks, loading, error, connected, refetch };
+  return { tasks, setTasks, loading, error, connected, settlementVersion, refetch };
 }

@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import type { Group, ProjectView, Task, TaskMode } from "@harness/shared";
+import { useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
+import type { Group, GroupMode, ProjectView, Task, TaskMode } from "@harness/shared";
 import { api } from "../lib/api.ts";
 import { useTasks } from "../lib/useTasks.ts";
 import { TaskDetail } from "../task-detail/TaskDetail.tsx";
@@ -16,6 +16,10 @@ import { DeleteTaskDialog } from "../task-detail/DeleteTaskDialog.tsx";
 import { CreateGroupDialog, CreateProjectDialog } from "../overlays/CreateEntityDialog.tsx";
 import { orderedTopLevelTasks } from "./taskTreeModel.ts";
 import { useWorkspaceShortcuts } from "./useWorkspaceShortcuts.ts";
+import {
+  readWorkspaceSidebarWidth,
+  WORKSPACE_SIDEBAR_STORAGE_KEY,
+} from "./WorkspaceResizeHandle.tsx";
 
 type ContextView = "review" | "settings" | "palette" | "notes" | "create";
 
@@ -46,8 +50,9 @@ export function WorkspaceShell() {
   const [deleteTarget, setDeleteTarget] = useState<Task | null>(null);
   const [createDialog, setCreateDialog] = useState<"group" | "project" | null>(null);
   const [collapsed, setCollapsed] = useState(() => window.localStorage.getItem("harness-next:sidebar-collapsed") === "1");
+  const [sidebarWidth, setSidebarWidth] = useState(readWorkspaceSidebarWidth);
   const [toast, setToast] = useState<string | null>(null);
-  const { tasks, setTasks, loading: tasksLoading, error: tasksError, connected } = useTasks();
+  const { tasks, setTasks, loading: tasksLoading, error: tasksError, connected, settlementVersion } = useTasks();
 
   const notify = useCallback((message: string) => {
     setToast(message);
@@ -109,8 +114,19 @@ export function WorkspaceShell() {
   }, []);
 
   useEffect(() => { window.localStorage.setItem("harness-next:sidebar-collapsed", collapsed ? "1" : "0"); }, [collapsed]);
+  useEffect(() => { window.localStorage.setItem(WORKSPACE_SIDEBAR_STORAGE_KEY, String(sidebarWidth)); }, [sidebarWidth]);
 
   const currentProject = projects.find((project) => project.id === projectId) ?? null;
+  useEffect(() => {
+    if (!projectId || !currentProject) return;
+    let alive = true;
+    api.projectHealth(projectId).then((health) => {
+      if (!alive) return;
+      setProjects((current) => current.map((project) => project.id === projectId ? { ...project, health } : project));
+    }).catch(() => {});
+    return () => { alive = false; };
+  }, [currentProject?.repoPath, projectId, settlementVersion]);
+
   const selectedTask = tasks.find((task) => task.id === taskId && task.projectId === projectId) ?? null;
   const loadError = projectsError ?? tasksError;
   const activeTaskCount = useMemo(() => tasks.filter((task) => task.projectId === projectId && task.parentId === null && !task.archived).length, [projectId, tasks]);
@@ -140,11 +156,22 @@ export function WorkspaceShell() {
     setNotes(null);
     setComposer((current) => current ? { ...current, mode } : { mode });
   };
-  const createTask = (task: Task, draft?: ComposerDraft | null) => {
+  const createTask = (task: Task, draft: ComposerDraft | null | undefined, keepOpen: boolean) => {
     setTasks((current) => current.some((row) => row.id === task.id) ? current.map((row) => row.id === task.id ? task : row) : [task, ...current]);
-    setTaskId(task.id);
-    setComposer(null);
+    if (keepOpen) setComposer((current) => current ? { ...current, draft: null } : current);
+    else { setTaskId(task.id); setComposer(null); }
     for (const noteId of draft?.noteIds ?? []) api.patchNote(noteId, { taskId: task.id }).catch(() => notify("任务已创建，但随手记回链写入失败"));
+  };
+  const createComposerGroup = async (name: string, mode: GroupMode): Promise<Group> => {
+    if (!currentProject) throw new Error("先选择一个项目");
+    const created = await api.createGroup({ projectId: currentProject.id, name, mode });
+    try {
+      setGroups(await api.groups(currentProject.id));
+    } catch {
+      setGroups((current) => current.some((group) => group.id === created.id) ? current : [...current, created]);
+      notify("分组已创建，但分组列表刷新失败");
+    }
+    return created;
   };
 
   useWorkspaceShortcuts({
@@ -183,11 +210,11 @@ export function WorkspaceShell() {
   />{overlays}</>;
 
   return (
-    <><div className="workspace-shell">
-      <WorkspaceSidebar projects={projects} currentProject={currentProject} groups={groups} tasks={tasks} selectedTaskId={taskId} connected={connected} collapsed={collapsed} onProject={selectProject} onTask={selectTask} onToggleCollapsed={() => setCollapsed((value) => !value)} onSearch={() => setPaletteOpen(true)} onNotes={() => openNotes()} onCreate={() => openComposer("single")} onNewProject={() => setCreateDialog("project")} onSettings={() => openSettings("agents")} />
+    <><div className="workspace-shell" style={{ "--workspace-sidebar-width": `${sidebarWidth}px` } as CSSProperties}>
+      <WorkspaceSidebar projects={projects} currentProject={currentProject} groups={groups} tasks={tasks} selectedTaskId={taskId} connected={connected} collapsed={collapsed} width={sidebarWidth} onWidthChange={setSidebarWidth} onProject={selectProject} onTask={selectTask} onToggleCollapsed={() => setCollapsed((value) => !value)} onSearch={() => setPaletteOpen(true)} onNotes={() => openNotes()} onCreate={() => openComposer("single")} onNewProject={() => setCreateDialog("project")} onSettings={() => openSettings("agents")} />
       <main className="workspace-main">
         {loadError && <div className="workspace-load-error">{loadError.message}</div>}
-        {composer && currentProject ? <TaskComposerPanel project={currentProject} groups={groups} initialDraft={composer.draft} mode={composer.mode} onModeChange={(mode) => setComposer((current) => current ? { ...current, mode } : null)} onCancel={() => setComposer(null)} onCreated={createTask} notify={notify} /> : selectedTask?.mode === "team" ? (
+        {composer && currentProject ? <TaskComposerPanel project={currentProject} groups={groups} initialDraft={composer.draft} mode={composer.mode} onModeChange={(mode) => setComposer((current) => current ? { ...current, mode } : null)} onCancel={() => setComposer(null)} onCreated={createTask} onCreateGroup={createComposerGroup} notify={notify} /> : selectedTask?.mode === "team" ? (
           <TeamView task={selectedTask} allTasks={tasks} onTaskUpdate={updateTask} onTaskDeleted={deleteTask} onSelectTask={selectTask} initialReviewOpen={reviewTaskId === selectedTask.id} onReviewOpenChange={(open) => setReviewTaskId(open ? selectedTask.id : null)} notify={notify} />
         ) : selectedTask?.mode === "debate" ? (
           <DebateView task={selectedTask} allTasks={tasks} onTaskUpdated={updateTask} onTaskCreated={(created) => setTasks((current) => current.some((task) => task.id === created.id) ? current.map((task) => task.id === created.id ? created : task) : [created, ...current])} onTaskDeleted={deleteTask} onSelectTask={selectTask} notify={notify} />

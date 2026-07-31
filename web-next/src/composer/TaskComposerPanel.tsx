@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type {
   AgentExecutorProfile,
   AgentType,
   Group,
+  GroupMode,
   Priority,
   ProjectView,
   Task,
@@ -33,6 +34,7 @@ import { AttachmentPicker, UploadAttachmentList, useAttachments } from "../task-
 import { attachmentView } from "../task-detail/utils.ts";
 import { ComposerFields } from "./ComposerFields.tsx";
 import { ComposerLaunchControl, type LaunchMode } from "./ComposerLaunchControl.tsx";
+import { CreateGroupDialog } from "../overlays/CreateEntityDialog.tsx";
 import {
   emptyComposerExecutorConfigs,
   patchComposerExecutor,
@@ -84,6 +86,7 @@ export function TaskComposerPanel({
   onModeChange,
   onCancel,
   onCreated,
+  onCreateGroup,
   notify,
 }: {
   project: ProjectView;
@@ -92,7 +95,8 @@ export function TaskComposerPanel({
   mode: TaskMode;
   onModeChange: (mode: TaskMode) => void;
   onCancel: () => void;
-  onCreated: (task: Task, draft?: ComposerDraft | null) => void;
+  onCreated: (task: Task, draft: ComposerDraft | null | undefined, keepOpen: boolean) => void;
+  onCreateGroup: (name: string, mode: GroupMode) => Promise<Group>;
   notify: (message: string) => void;
 }) {
   const [title, setTitle] = useState("");
@@ -116,6 +120,9 @@ export function TaskComposerPanel({
   const [launchMode, setLaunchMode] = useState<LaunchMode>("run");
   const [scheduleAt, setScheduleAt] = useState("");
   const [scheduleCron, setScheduleCron] = useState(DEFAULT_CRON);
+  const [keepOpen, setKeepOpen] = useState(false);
+  const [groupDialogOpen, setGroupDialogOpen] = useState(false);
+  const objectiveRef = useRef<HTMLTextAreaElement>(null);
   const uploads = useAttachments();
   const detection = useAgentAvailability();
   const { workerTypes, leadTypes, leadProfiles } = useMemo(
@@ -450,7 +457,15 @@ export function TaskComposerPanel({
     }
     const finishCreation = () => {
       setLabels([]);
-      onCreated(task, initialDraft);
+      onCreated(task, initialDraft, keepOpen);
+      if (!keepOpen) return;
+      setTitle("");
+      setBody("");
+      setSeedAttachments([]);
+      uploads.clear();
+      if (launchMode === "once") setScheduleAt(defaultOnceTime());
+      setBusy(false);
+      window.requestAnimationFrame(() => objectiveRef.current?.focus());
     };
     if (launchMode === "create") {
       finishCreation();
@@ -515,6 +530,7 @@ export function TaskComposerPanel({
           />
           <div className="composer-objective">
             <textarea
+              ref={objectiveRef}
               autoFocus
               value={body}
               onChange={(event) => changeBody(event.target.value)}
@@ -596,6 +612,7 @@ export function TaskComposerPanel({
             onPriorityChange={setPriority}
             labels={labels}
             onLabelsChange={setLabels}
+            onCreateGroup={() => setGroupDialogOpen(true)}
           />
         </div>
       </div>
@@ -613,13 +630,28 @@ export function TaskComposerPanel({
           cron={scheduleCron}
           busy={busy}
           canSubmit={canSubmit}
+          keepOpen={keepOpen}
           error={scheduleError}
           onModeChange={changeLaunchMode}
           onAtChange={setScheduleAt}
           onCronChange={setScheduleCron}
+          onKeepOpenChange={setKeepOpen}
           onSubmit={() => void submit()}
         />
       </footer>
+      {groupDialogOpen && <CreateGroupDialog
+        onClose={() => setGroupDialogOpen(false)}
+        onCreate={async (name, groupMode) => {
+          try {
+            const created = await onCreateGroup(name, groupMode);
+            setGroupId(created.id);
+            setGroupDialogOpen(false);
+            notify("分组已创建并选中");
+          } catch (error) {
+            notify(error instanceof Error ? error.message : "分组创建失败");
+          }
+        }}
+      />}
     </main>
   );
 }

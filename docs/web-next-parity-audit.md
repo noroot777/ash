@@ -2,11 +2,13 @@
 
 审计日期：2026-07-31
 
+总体进度：**25 / 25（100%）已修复**。
+
 审计基线：`c3d37d3`（`web/src` 对 `web-next/src`）
 
-修复进度：P1-1、P1-2、P1-3、P1-5、P1-6、P1-7、P1-10、P2-11、P2-12、P2-13、P2-14、P2-15、P2-16、P2-17、P2-18、P2-19、P2-20、P2-21 已于 2026-07-31 修复；下方保留审计时的缺口描述，并在对应条目标记结果。
+修复进度：P1 10/10、P2 11/11、P3 4/4 均已于 2026-07-31 修复；下方保留审计时的缺口描述，并在对应条目标记结果。
 
-结论（审计基线）：没有发现 P0，共识别 **25 个旧版能力缺失或退化点**：P1 10 个、P2 11 个、P3 4 个。普通任务回复框的 `/team`、`/debate` 派生命令在审计期间由另一执行者修复并提交，本报告将它记入“已确认对齐”，不重复实施；后续修复进度见上方说明和条目标记。
+结论（审计基线）：没有发现 P0，共识别 **25 个旧版能力缺失或退化点**：P1 10 个、P2 11 个、P3 4 个。普通任务回复框的 `/team`、`/debate` 派生命令在审计期间由另一执行者修复并提交，本报告将它记入“已确认对齐”，不重复实施；截至当前，25 个审计项均已完成修复。
 
 ## 口径与方法
 
@@ -18,7 +20,7 @@
 
 严重度口径：P0 阻断基本使用；P1 影响主要工作流或正确性；P2 有替代路径但能力不完整；P3 低频效率或可发现性退化。
 
-## P1：主要工作流或正确性缺口（审计识别 10，已修 6）
+## P1：主要工作流或正确性缺口（审计识别 10，已修 10）
 
 ### 1. 执行器候选缺少“已安装/已注册/可常驻”能力校验（已修）
 
@@ -52,7 +54,7 @@
 - 修复入手点：在单任务详情和 `TaskReviewWorkspace` 的空态/失败态加入审查派发器，复用 composer 的 Profile、模型、思考强度选择，并禁止重复在途轮次。
 - 修复结果：单任务 Inspector、单任务验收台和团队执行者审查证据均可派首轮或补派下一轮；执行器候选服从统一可用性门禁，并在 UI 提交前和服务端两层拦截重复在途轮次。
 
-### 5. 队列中的 failed/canceled 任务不能“重新排队” ✅ 已修
+### 5. 队列中的 failed/canceled 任务不能“重新排队”（已修）
 
 - 旧版位置：`web/src/TaskDetail.tsx:253-268` 提供专用“重新排队”按钮，调用 `requeueTask`，保证被队列越过后移动到队尾。
 - 新版现状：**缺失且有语义风险**。`web-next/src/task-detail/TaskHeader.tsx:31-34` 把 failed 映射为立即 retry、canceled 映射为 run；没有回队列等待的动作。API wrapper 已有 `requeueTask`（`web-next/src/lib/api.ts:270-271`），但无 UI 调用。
@@ -60,7 +62,7 @@
 - 修复入手点：在任务 header/Inspector 和命令面板加入“重新排队”，只对顶层、未归档、在队列中的 failed/canceled 任务显示；成功后使用响应中的最新位置刷新任务。
 - 修复结果：任务 Header 与命令面板已增加独立“重新排队”入口，保留原有立即 retry/run；两处均直接使用 `requeueTask` 响应刷新任务。
 
-### 6. paused 任务的续跑指令只能看，不能编辑或清空 ✅ 已修
+### 6. paused 任务的续跑指令只能看，不能编辑或清空（已修）
 
 - 旧版位置：`web/src/TaskDetail.tsx:344-352` 在 paused 且非提问状态显示 `ResumePromptEditor`，允许修正或清空下次唤醒指令。
 - 新版现状：**半残**。`web-next/src/task-detail/TaskInspector.tsx:219-225` 只把 `resumePrompt` 放进只读 `<pre>`。
@@ -68,7 +70,7 @@
 - 修复入手点：在 Inspector 的“调度与续跑”节加入编辑/保存/清空，调用 `patchTask({ resumePrompt })`；团队执行者继续只读。
 - 修复结果：Inspector 已支持添加、编辑、保存和清空续跑指令；仅 paused 且非提问的顶层任务可写，团队执行者保持只读。
 
-### 7. 团队验收台没有完整文件列表和逐行 diff ✅ 已修
+### 7. 团队验收台没有完整文件列表和逐行 diff（已修）
 
 - 旧版位置：`web/src/ReviewWorkspace.tsx:582-650` 展示全部文件、截断提示和逐文件文本 diff。
 - 新版现状：**半残**。`web-next/src/team/TeamReviewWorkspace.tsx:153-175` 只列前 6 个提交和前 8 个文件，明确提示回旧版；没有逐行 diff。单任务 `TaskReviewWorkspace` 已有完整 diff 组件，说明不是数据层限制。
@@ -76,7 +78,7 @@
 - 修复入手点：复用/抽取 `web-next/src/review/TaskReviewWorkspace.tsx:29-238` 的文件 rail、分段解析和渐进加载，在团队每个 `ReviewRecord` 中展示完整 diff。
 - 修复结果：文件 rail、逐行 diff、截断提示与渐进加载已抽为共享组件；团队每条验收记录现在展示全部提交和完整文件清单，可逐文件查看带行号的文本 diff，不再要求回旧版。
 
-### 8. 辩论 → 团队 → 再辩论闭环退化，且不能从同一辩论再开一组 ✅ 已修
+### 8. 辩论 → 团队 → 再辩论闭环退化，且不能从同一辩论再开一组（已修）
 
 - 旧版位置：`web/src/DebateTeamHandoff.tsx:141-177` 在团队收工后提供“再辩一轮”；`web/src/DebateTeamHandoff.tsx:209-243` 允许已有团队后“再开一组”；`web/src/team/TeamHeader.tsx:130-140` 也从团队页暴露“再辩一轮”。
 - 新版现状：**半残**。`web-next/src/debate/DebateHandoff.tsx:95-108` 一旦找到一个关联团队就只显示该团队卡片，不再允许创建第二组；`web-next/src/team/TeamHeader.tsx:128-151` 没有再辩入口。API wrapper 已有 `iterateTeamDebate`（`web-next/src/lib/api.ts:294-295`）但全树无调用。
@@ -84,7 +86,7 @@
 - 修复入手点：DebateHandoffBar 支持“关联团队列表 + 再开一组”；TeamHeader 和关联团队卡按 settled/origin/iteration 条件调用 `iterateTeamDebate`，防重复创建并跳转到已有迭代任务。
 - 修复结果：辩论页展示全部关联团队并可继续“再开一组”；已收工且来源为辩论的团队可从团队页或关联卡创建/打开下一轮，前端先复用已有迭代，服务端幂等兜底，创建后自动启动并跳转。
 
-### 9. 执行者提问缺少置顶提醒和“让调度者答”
+### 9. 执行者提问缺少置顶提醒和“让调度者答”（已修）
 
 - 旧版位置：`web/src/team/TeamHeader.tsx:389-431` 把等待答复固定在流上方、显示等待时长/数量，并提供“我来答 / 让调度者答”；`web/src/team/TeamView.tsx:183-190` 把问题转交调度台调查后调用 `answer_question`。
 - 新版现状：**半残**。`web-next/src/team/TeamFeed.tsx:63-77` 和 `web-next/src/team/WorkerRail.tsx:47-61` 能看到问题并“我来答”，但没有固定 AttentionBar，也没有转交调度者动作。长团队流中提醒可滚走，且用户必须亲自回答本可由调度者调查的问题。
@@ -100,7 +102,7 @@
 - 修复入手点：在 Settings 增加 Providers 分节或 Agents 子节，迁移 Relay CRUD、模型探测和 Profile 的 providerId；模型选择器应按 provider 返回全名模型，而不是只用静态 preset。
 - 修复结果：新版“执行器与供应商”设置已支持 Provider 增删改、协议/Base URL/API Key、保存前手动模型探测，以及兼容协议下的 Profile 绑定；绑定 Provider 后模型输入会自动拉取并列出完整模型名，未绑定时继续使用 CLI preset。供应商删除后会同步刷新 Profile，展示服务端执行的官方账号降级结果。
 
-## P2：有替代路径，但能力明显不完整（11）
+## P2：有替代路径，但能力明显不完整（审计识别 11，已修 11）
 
 ### 11. 回复不能定时发送，也不能查看/取消待发消息（已修）
 
@@ -181,27 +183,30 @@
 - 修复入手点：先恢复高价值且低噪声的 paused blocker 和 queue position；其余元数据做 hover/次行或可配置密度，避免把新版窄树挤爆。
 - 修复结果：paused 行恢复“等待首个阻塞任务”次行，可点击跳转并显示额外阻塞数；在队任务显示紧凑队列位置。优先级、分组、标签和独立 worktree 汇总到行悬浮元数据卡，不长期占用窄侧栏宽度。
 
-## P3：低频效率与可发现性退化（4）
+## P3：低频效率与可发现性退化（审计识别 4，已修 4）
 
-### 22. Composer 不能“再建一个”，分组选择器也不能就地新建
+### 22. Composer 不能“再建一个”，分组选择器也不能就地新建（已修）
 
 - 旧版位置：`web/src/composer/ComposerFooter.tsx:50-61` 提供“再建一个”；`web/src/TaskComposer.tsx:363-370` 创建后清空并继续；`web/src/TaskComposer.tsx:614` 的分组下拉含“+ 新建分组”。
 - 新版现状：**缺失**。`web-next/src/composer/ComposerFields.tsx:305-314` 只列现有分组；`web-next/src/composer/TaskComposerPanel.tsx:289-300,414-425` 创建后总是离开 composer。
 - 修复入手点：footer 加 keep-open toggle；group select 增加 sentinel 或旁边的 plus，创建成功后刷新 groups 并选中新组。
+- 修复结果：Composer footer 新增“再建一个”开关；创建和启动/定时完成后保留执行器、分组、优先级与启动方式，清空标题、正文、附件和 labels 并继续聚焦输入。分组下拉新增“新建分组”入口，创建成功后重新读取项目 groups 并自动选中新组。
 
-### 23. 当前项目的 branch/dirty/worktree 上下文不再常显
+### 23. 当前项目的 branch/dirty/worktree 上下文不再常显（已修）
 
 - 旧版位置：`web/src/ui.tsx:291-310` 的 `BranchChip` 显示分支、dirty 点和 linked-worktree 标签；`web/src/TasksWorkspace.tsx:102-104` 常驻顶部。
 - 新版现状：**入口退化**。主工作区没有等价组件；只有进入 `web-next/src/settings/ProjectSettingsPanel.tsx:47-52` 才能看到健康状态。
 - 修复入手点：在 workspace app bar 或项目切换器 trigger 增加紧凑 Git context，复用项目 health，并在任务运行结算后刷新。
+- 修复结果：项目切换器 trigger 常显紧凑 Git context，展示当前分支、dirty 点和 linked-worktree 标签；完整检查结果直接写回当前 `ProjectView.health`，并在项目切换及任务 done/failed/canceled/idle 结算后刷新。
 
-### 24. 任务树宽度不能拖动并持久化
+### 24. 任务树宽度不能拖动并持久化（已修）
 
 - 旧版位置：`web/src/App.tsx:72-80` 持久化 220–560px 宽度；`web/src/ui.tsx:620-668` 支持拖动与双击重置。
 - 新版现状：**缺失**。`web-next/src/styles/workspace.css:11-24` 把侧栏固定为 260px/54px，仅支持整体折叠。
 - 修复入手点：给 WorkspaceSidebar 右缘加 separator handle，CSS 变量驱动宽度并写 localStorage；保留现有折叠动画。
+- 修复结果：WorkspaceSidebar 右缘新增可聚焦 separator，支持鼠标拖动、方向键微调和双击重置；展开宽度由 CSS 变量驱动，在 220–560px 内持久化到 localStorage，折叠态仍为 54px，原有折叠动画保持不变。
 
-### 25. 团队页缺少直接删除入口 ✅ 已修
+### 25. 团队页缺少直接删除入口（已修）
 
 - 旧版位置：`web/src/team/TeamHeader.tsx:238-245` 团队 header 直接提供删除。
 - 新版现状：**入口半残**。`web-next/src/team/TeamHeader.tsx:141-152` 的更多菜单只有复制、下载、旧版和归档；删除只能从 Cmd+K 当前任务命令进入。
@@ -212,27 +217,27 @@
 
 - **Command Palette 命令清单**：两版 `/scope`、`/git` 注册表一致；新版覆盖当前任务动作、新建任务/辩论/随手记/分组/项目、设置、项目切换、分组运行、跨项目搜索，并额外展示进行中任务和父任务跳转。对应 `web/src/App.tsx:470-511`、`web-next/src/overlays/CommandPalette.tsx:157-261`。
 - **普通任务 `/team`、`/debate` 派生**：审计开始时仍在修；`c3d37d3` 已把命令菜单、实时/定稿配置卡、来源会话上下文、worktree 继承和创建跳转接进 `web-next/src/task-detail/ReplyBox.tsx:57-190`、`web-next/src/task-detail/TaskDetail.tsx:165-203`。
-- **队列抽屉拖拽排序/移出队列**：旧版 `QueueModal` 与新版 `QueueDrawer` 都锁定 running/queued 和调度者管理队列，调用 reorder/remove；缺的只有上文“重新排队”。
+- **队列抽屉拖拽排序/移出队列**：旧版 `QueueModal` 与新版 `QueueDrawer` 都锁定 running/queued 和调度者管理队列，调用 reorder/remove；“重新排队”也已随 P1-5 补齐。
 - **附件**：普通任务、团队插话、composer、随手记都支持文件选择、粘贴上传、预览和移除；新版近期提交 `e700cd2`/`d08ca5d` 还统一了图片预览顺序。
 - **团队停止/恢复与 CUA 残留**：新版已持久显示停止状态，恢复内部组和 lead，并只在用户显式确认后强制清理 computer-use；符合根 AGENTS 约束。
 - **归档/取回**：任务、团队、辩论和设置中的归档列表均可用；新版 ArchiveSettings 只列顶层任务与旧版 `TaskList.topLevel` 语义一致。
-- **辩论核心闸门**：A/B 轮次、G1 放行/打回、注入意见、定向提问、首次接力成团、来源返回和调度均已接通；缺的是上文“多团队/再辩一轮”。
+- **辩论核心闸门**：A/B 轮次、G1 放行/打回、注入意见、定向提问、首次接力成团、来源返回和调度均已接通；“多团队/再辩一轮”也已随 P1-8 补齐。
 - **多问题答复**：单问题、多问题、建议答案追加、部分答复和 Cmd/Ctrl+Enter 提交语义已对齐。
-- **团队预设**：新版本已在 `7b16ba2` 补回团队执行模式 preset 的新建、套用、更新、改名和删除；执行器可用性仍受 P1-1 影响。
+- **团队预设**：新版本已在 `7b16ba2` 补回团队执行模式 preset 的新建、套用、更新、改名和删除；执行器可用性门禁也已随 P1-1 补齐。
 - **随手记批量转任务**：`60ab85c` 已补回复选多条、按列表顺序合并正文、合并附件和逐条回链。
-- **任务来源返回**：`c488a83` 已补回来源普通任务/辩论和所属团队的显式跳转；缺的是反向派生清单。
+- **任务来源返回**：`c488a83` 已补回来源普通任务/辩论和所属团队的显式跳转；反向派生清单也已随 P2-14 补齐。
 - **任务置顶、分组折叠、未读/状态指示、会话上下滚动按钮、会话元数据**：均有对应补回提交，不再列缺口。
 - **项目/分组/归档/Profile 设置**：项目改名/目录/删除，分组增删改/并串行/运行暂停，Profile 增删/默认/model/reasoning/speed/SSH target/provider/extraArgs，以及 Provider CRUD、Key 和模型探测均已对齐。
 
-## 历史分类与取舍
+## 历史分类与取舍（审计时状态）
 
-- **尚未迁移的存量**：定时回复、@召唤、手动审查、辩论迭代、全局快捷键、侧栏 resize。
-- **迁移了但半残**：Markdown（`e71e35a`）、辩论接力（`6b33716`）、随手记（`60ab85c`）。
+- **审计时尚未迁移的存量**：定时回复、@召唤、手动审查、辩论迭代、全局快捷键、侧栏 resize；当前均已补齐。
+- **审计时迁移了但半残**：Markdown（`e71e35a`）、辩论接力（`6b33716`）、随手记（`60ab85c`）；当前均已补齐。
 - **审计期间修复完成**：普通任务 `/team`、`/debate` 派生命令由并行执行者提交为 `c3d37d3`；本报告没有修改其代码。
 - **有意变化但不算缺口**：新版三栏布局、团队时间轴默认折叠、执行者放右 rail；`0eef687` 有意回退的是“新版新增的置顶执行者分区”，旧版本身没有独立的置顶执行者分区，因此不计 parity 缺口。
 - 没有找到证据表明本报告 25 项中的任何一项是产品决定永久砍掉；新版设置页对 provider/API Key 的文案反而明确说明是旧版暂时承接。
 
-## 建议修复顺序
+## 审计时建议修复顺序（现已全部完成）
 
 1. 先收口正确性：执行器能力校验、重新排队、resumePrompt 编辑、完整团队 diff。
 2. 接着补主流程：完成正在修的派生命令、调度管理/创建时调度、手动审查、辩论闭环、执行者问题转交。

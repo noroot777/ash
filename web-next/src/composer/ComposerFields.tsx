@@ -177,6 +177,7 @@ export function ComposerFields({
   onPriorityChange,
   labels,
   onLabelsChange,
+  onCreateGroup,
 }: {
   mode: TaskMode;
   profiles: AgentExecutorProfile[];
@@ -215,6 +216,7 @@ export function ComposerFields({
   onPriorityChange: (value: Priority) => void;
   labels: string[];
   onLabelsChange: (labels: string[]) => void;
+  onCreateGroup: () => void;
 }) {
   const overrideRoles: ComposerExecutorRole[] = mode === "team" ? ["lead", "worker", "reviewer"] : ["single"];
   const overrideCount = overrideRoles.reduce(
@@ -323,11 +325,15 @@ export function ComposerFields({
           {mode !== "debate" && (
             <label className="composer-field">
               <span>分组</span>
-              <select value={groupId} onChange={(event) => onGroupChange(event.target.value)}>
+              <select value={groupId} onChange={(event) => {
+                if (event.target.value === "__new") onCreateGroup();
+                else onGroupChange(event.target.value);
+              }}>
                 <option value="">无分组</option>
                 {groups.filter((group) => !group.ownerTaskId).map((group) => (
                   <option value={group.id} key={group.id}>{group.name} · {group.mode === "parallel" ? "并行" : "串行"}</option>
                 ))}
+                <option value="__new">＋ 新建分组…</option>
               </select>
             </label>
           )}

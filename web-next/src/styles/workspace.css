@@ -11,8 +11,8 @@
 .workspace-sidebar {
   position: relative;
   display: flex;
-  width: 260px;
-  min-width: 260px;
+  width: var(--workspace-sidebar-width, 260px);
+  min-width: var(--workspace-sidebar-width, 260px);
   flex-direction: column;
   overflow: visible;
   padding: 8px 12px 0;

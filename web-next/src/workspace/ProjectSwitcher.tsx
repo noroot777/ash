@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { ProjectView } from "@harness/shared";
 import { CaretDown, Check, FolderPlus, GearSix, MagnifyingGlass } from "@phosphor-icons/react";
 import { ProjectAvatar } from "./ProjectAvatar.tsx";
+import { ProjectGitContext } from "./ProjectGitContext.tsx";
 
 function shortPath(path: string): string {
   const home = "/Users/";
@@ -62,7 +63,10 @@ export function ProjectSwitcher({
         onClick={() => setOpen((value) => !value)}
       >
         {current ? <ProjectAvatar project={current} /> : <span className="workspace-project-avatar" />}
-        <span className="workspace-project-trigger-name">{current?.name ?? "选择项目"}</span>
+        <span className="workspace-project-trigger-copy">
+          <span className="workspace-project-trigger-name">{current?.name ?? "选择项目"}</span>
+          {current && <ProjectGitContext health={current.health} />}
+        </span>
         <CaretDown size={11} weight="bold" aria-hidden="true" />
       </button>
 
