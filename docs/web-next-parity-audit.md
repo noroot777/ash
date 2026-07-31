@@ -76,12 +76,13 @@
 - 修复入手点：复用/抽取 `web-next/src/review/TaskReviewWorkspace.tsx:29-238` 的文件 rail、分段解析和渐进加载，在团队每个 `ReviewRecord` 中展示完整 diff。
 - 修复结果：文件 rail、逐行 diff、截断提示与渐进加载已抽为共享组件；团队每条验收记录现在展示全部提交和完整文件清单，可逐文件查看带行号的文本 diff，不再要求回旧版。
 
-### 8. 辩论 → 团队 → 再辩论闭环退化，且不能从同一辩论再开一组
+### 8. 辩论 → 团队 → 再辩论闭环退化，且不能从同一辩论再开一组 ✅ 已修
 
 - 旧版位置：`web/src/DebateTeamHandoff.tsx:141-177` 在团队收工后提供“再辩一轮”；`web/src/DebateTeamHandoff.tsx:209-243` 允许已有团队后“再开一组”；`web/src/team/TeamHeader.tsx:130-140` 也从团队页暴露“再辩一轮”。
 - 新版现状：**半残**。`web-next/src/debate/DebateHandoff.tsx:95-108` 一旦找到一个关联团队就只显示该团队卡片，不再允许创建第二组；`web-next/src/team/TeamHeader.tsx:128-151` 没有再辩入口。API wrapper 已有 `iterateTeamDebate`（`web-next/src/lib/api.ts:294-295`）但全树无调用。
 - 历史判断：旧版 `3bcdb21 feat: close debate team iteration loop`；web-next 从未迁入。
 - 修复入手点：DebateHandoffBar 支持“关联团队列表 + 再开一组”；TeamHeader 和关联团队卡按 settled/origin/iteration 条件调用 `iterateTeamDebate`，防重复创建并跳转到已有迭代任务。
+- 修复结果：辩论页展示全部关联团队并可继续“再开一组”；已收工且来源为辩论的团队可从团队页或关联卡创建/打开下一轮，前端先复用已有迭代，服务端幂等兜底，创建后自动启动并跳转。
 
 ### 9. 执行者提问缺少置顶提醒和“让调度者答”
 
@@ -187,11 +188,12 @@
 - 新版现状：**缺失**。`web-next/src/styles/workspace.css:11-24` 把侧栏固定为 260px/54px，仅支持整体折叠。
 - 修复入手点：给 WorkspaceSidebar 右缘加 separator handle，CSS 变量驱动宽度并写 localStorage；保留现有折叠动画。
 
-### 25. 团队页缺少直接删除入口
+### 25. 团队页缺少直接删除入口 ✅ 已修
 
 - 旧版位置：`web/src/team/TeamHeader.tsx:238-245` 团队 header 直接提供删除。
 - 新版现状：**入口半残**。`web-next/src/team/TeamHeader.tsx:141-152` 的更多菜单只有复制、下载、旧版和归档；删除只能从 Cmd+K 当前任务命令进入。
 - 修复入手点：TeamHeader 增加危险菜单项，TeamView 复用 `DeleteTaskDialog`，删除成功后走 `onTaskDeleted`。
+- 修复结果：团队更多菜单已补“删除团队”，复用统一删除确认与 worktree/分支清理选项，成功后立即从工作区移除该团队。
 
 ## 已确认对齐，不列为缺口
 

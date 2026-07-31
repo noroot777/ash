@@ -14,12 +14,14 @@
 .team-header-actions > button, .team-header-menu > button { display: inline-flex; height: 28px; align-items: center; justify-content: center; gap: 5px; border: 1px solid var(--line2); border-radius: 8px; background: var(--panel); padding: 0 9px; color: var(--muted); font-size: 11px; font-weight: 600; box-shadow: var(--surface-shadow); }
 .team-header-actions > button:hover, .team-header-menu > button:hover { background: var(--overlay); color: var(--ink); }
 .team-header-actions > button.is-primary { border-color: var(--accent); background: var(--accent); color: white; }
+.team-header-actions > button.is-iterate { border-color: color-mix(in lch, #7657b7 38%, var(--line)); background: color-mix(in lch, #7657b7 7%, var(--panel)); color: #7657b7; }
 .team-header-actions > button.is-danger { border-color: color-mix(in lch, var(--red) 38%, var(--line)); color: var(--red); }
 .team-header-menu { position: relative; }
 .team-header-menu > button { width: 28px; padding: 0; }
 .team-header-menu > div { position: absolute; z-index: 80; top: 34px; right: 0; width: 218px; border: 1px solid var(--line2); border-radius: 10px; background: var(--panel); padding: 5px; box-shadow: var(--menu-shadow); }
 .team-header-menu > div > button, .team-header-menu > div > a { display: flex; width: 100%; min-height: 30px; align-items: center; gap: 8px; border: 0; border-radius: 6px; background: transparent; padding: 0 8px; color: var(--muted); text-align: left; font-size: 11.5px; }
 .team-header-menu > div > button:hover, .team-header-menu > div > a:hover { background: var(--raised); color: var(--ink); }
+.team-header-menu > div > button.is-danger { color: var(--red); }
 .team-header-menu > div > span { display: block; height: 1px; margin: 4px 2px; background: var(--line); }
 .team-header-menu .workspace-legacy-link { margin: 0; }
 .team-meta { display: flex; min-height: 30px; flex: 0 0 auto; flex-wrap: wrap; align-items: center; gap: 5px 14px; border-bottom: .5px solid var(--line); background: var(--panel); padding: 5px 16px; color: var(--faint); font-size: 10px; }

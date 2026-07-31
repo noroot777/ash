@@ -10,23 +10,28 @@ import {
   DotsThree,
   DownloadSimple,
   Play,
+  Scales,
   Stop,
+  Trash,
 } from "@phosphor-icons/react";
 import { LegacyLink } from "../components/LegacyLink.tsx";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import { TaskPinButton } from "../task-detail/TaskPinButton.tsx";
 import { TaskTimeMeta } from "../task-detail/TaskTimeMeta.tsx";
 import { safeDownloadName, STATUS_TONES } from "../task-detail/utils.ts";
+import { teamDebateIterationState } from "../debate/handoffPolicy.ts";
 import { teamLeadLabel, teamReviewerLabel, teamWorkerLabel } from "./teamModel.ts";
 
 export function TeamHeader({
   task,
+  allTasks,
   workers,
   groups,
   sessions,
   haltedByHistory,
   conversationMarkdown,
   busy,
+  iterateBusy,
   reviewOpen,
   onTitle,
   onTogglePin,
@@ -34,16 +39,20 @@ export function TeamHeader({
   onRun,
   onHalt,
   onResume,
+  onIterateDebate,
   onArchive,
+  onDelete,
   notify,
 }: {
   task: Task;
+  allTasks: Task[];
   workers: Task[];
   groups: Group[];
   sessions: Session[];
   haltedByHistory: boolean;
   conversationMarkdown: string;
   busy: boolean;
+  iterateBusy: boolean;
   reviewOpen: boolean;
   onTitle: (title: string) => Promise<void>;
   onTogglePin: () => Promise<void>;
@@ -51,7 +60,9 @@ export function TeamHeader({
   onRun: () => void;
   onHalt: () => void;
   onResume: () => void;
+  onIterateDebate: () => void;
   onArchive: () => void;
+  onDelete: () => void;
   notify: (message: string) => void;
 }) {
   const [menu, setMenu] = useState(false);
@@ -62,6 +73,7 @@ export function TeamHeader({
   const pausedGroups = groups.filter((group) => group.paused);
   const stopped = pausedGroups.length > 0 || haltedByHistory;
   const settled = isTeamSettled(task.status === "running", workers);
+  const iteration = teamDebateIterationState(task, allTasks);
   const display = taskDisplayStatus(task.status, task.stage, !!task.question);
   const latestSession = [...sessions].sort((left, right) => right.startedAt.localeCompare(left.startedAt))[0];
   const reviewEnabled = task.team?.review !== false;
@@ -129,6 +141,18 @@ export function TeamHeader({
           <button type="button" className={reviewOpen ? "is-primary" : ""} onClick={onReview}>
             <CheckCircle size={14} weight="fill" />{reviewOpen ? "返回协作" : "验收"}
           </button>
+          {iteration.eligible && (
+            <button
+              type="button"
+              className="is-iterate"
+              disabled={busy || iterateBusy}
+              onClick={onIterateDebate}
+              title={iteration.existing ? "打开这个团队已经创建的下一轮辩论" : "读取团队执行记录，沿用来源辩论配置创建下一轮"}
+            >
+              <Scales size={13} weight="fill" />
+              {iterateBusy ? "创建中…" : iteration.existing ? "打开下一轮" : "再辩一轮"}
+            </button>
+          )}
           {!task.archived && !settled && !stopped && !teamNeverStarted(task.status) && (
             <button type="button" className="is-danger" disabled={busy} onClick={() => setHaltOpen(true)}><Stop size={13} weight="fill" />停止全组</button>
           )}
@@ -148,6 +172,9 @@ export function TeamHeader({
                 <span role="separator" />
                 <button type="button" role="menuitem" disabled={!task.archived && !canArchive(task.status)} onClick={() => { setMenu(false); onArchive(); }}>
                   {task.archived ? <ArrowCounterClockwise size={14} /> : <Archive size={14} />}{task.archived ? "取消归档" : "归档团队"}
+                </button>
+                <button type="button" role="menuitem" className="is-danger" onClick={() => { setMenu(false); onDelete(); }}>
+                  <Trash size={14} />删除团队
                 </button>
               </div>
             )}

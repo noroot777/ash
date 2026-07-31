@@ -5,7 +5,7 @@ import { buildConversationItems, conversationToMarkdown } from "../src/task-deta
 import { taskDurationInfo } from "../src/task-detail/utils.ts";
 import { stickStateAfterScroll } from "../src/lib/useStickToBottom.ts";
 import { sharedTeamParent } from "../src/review/reviewModel.ts";
-import { gateAllowsRevision, isOpenDebateGate, runCreatedHandoffFollowUps } from "../src/debate/handoffPolicy.ts";
+import { gateAllowsRevision, isOpenDebateGate, runCreatedHandoffFollowUps, teamDebateIterationState } from "../src/debate/handoffPolicy.ts";
 import { emptyComposerExecutorConfigs, patchComposerExecutor, setComposerExecutorProfile } from "../src/composer/executorOverrides.ts";
 import { activeGroupTasks, resumeQueueModel } from "../src/settings/groupQueueModel.ts";
 
@@ -141,6 +141,22 @@ try {
   assert.equal(isOpenDebateGate(gate, "done"), false);
   assert.equal(gateAllowsRevision(), true);
   assert.equal(gateAllowsRevision({ id: "team-1" }), false);
+  const iterationOrigin = { id: "debate-1", mode: "debate" };
+  const iterationTeam = { id: "team-2", mode: "team", originTaskId: "debate-1", status: "idle" };
+  const settledWorker = { id: "worker-2", parentId: "team-2", status: "done", createdAt: "2026-07-30T01:00:00.000Z" };
+  assert.deepEqual(teamDebateIterationState(iterationTeam, [iterationOrigin, iterationTeam, settledWorker]), {
+    eligible: true,
+    existing: undefined,
+  });
+  const existingIteration = { id: "debate-2", mode: "debate", originTaskId: "team-2" };
+  assert.equal(
+    teamDebateIterationState(iterationTeam, [iterationOrigin, iterationTeam, settledWorker, existingIteration]).existing?.id,
+    "debate-2",
+  );
+  assert.equal(
+    teamDebateIterationState(iterationTeam, [iterationOrigin, iterationTeam, { ...settledWorker, status: "paused" }]).eligible,
+    false,
+  );
   const followUps = [];
   const failures = await runCreatedHandoffFollowUps({
     closeGate: async () => { followUps.push("gate"); throw new Error("gate failed"); },

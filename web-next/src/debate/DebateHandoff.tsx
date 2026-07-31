@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { TEAM_DEFAULTS, type AgentExecutorProfile, type AgentType, type Task } from "@harness/shared";
-import { ArrowRight, Crown, Robot, UsersThree, Warning } from "@phosphor-icons/react";
+import { TEAM_DEFAULTS, taskDisplayStatus, type AgentExecutorProfile, type AgentType, type Task } from "@harness/shared";
+import { ArrowRight, Crown, Robot, Scales, UsersThree, Warning } from "@phosphor-icons/react";
 import {
   executorOptions,
   executorValue,
@@ -12,6 +12,7 @@ import {
   useAgentAvailability,
 } from "../lib/agentAvailability.ts";
 import { api } from "../lib/api.ts";
+import { teamDebateIterationState } from "./handoffPolicy.ts";
 
 export type HandoffChoice = {
   note: string;
@@ -148,23 +149,57 @@ export function DebateHandoffModal({
 }
 
 export function DebateHandoffBar({
-  linkedTeam,
+  linkedTeams,
+  allTasks,
   busy,
+  iterationBusyId,
   onOpenTeam,
   onOpenTask,
+  onIterateTeam,
 }: {
-  linkedTeam?: Task;
+  linkedTeams: Task[];
+  allTasks: Task[];
   busy: boolean;
+  iterationBusyId?: string | null;
   onOpenTeam: () => void;
   onOpenTask: (task: Task) => void;
+  onIterateTeam: (team: Task) => void;
 }) {
-  if (linkedTeam) {
+  if (linkedTeams.length > 0) {
     return (
-      <button type="button" className="debate-linked-team" onClick={() => onOpenTask(linkedTeam)}>
-        <span><UsersThree size={15} weight="fill" /></span>
-        <div><small>已接力成团</small><b>{linkedTeam.title}</b></div>
-        <em>{linkedTeam.archived ? "已归档" : linkedTeam.status}</em><ArrowRight size={13} />
-      </button>
+      <div className="debate-handoff-stack">
+        <div className="debate-linked-team-list" aria-label="关联团队">
+          {linkedTeams.map((team) => {
+            const iteration = teamDebateIterationState(team, allTasks);
+            const status = taskDisplayStatus(team.status, team.stage, !!team.question).label;
+            const iterationBusy = iterationBusyId === team.id;
+            return (
+              <div className="debate-linked-team" key={team.id}>
+                <button type="button" className="debate-linked-team-main" onClick={() => onOpenTask(team)}>
+                  <span><UsersThree size={15} weight="fill" /></span>
+                  <div><small>已接力成团</small><b>{team.title}</b></div>
+                  <em>{team.archived ? "已归档" : status}</em><ArrowRight size={13} />
+                </button>
+                {iteration.eligible && (
+                  <button
+                    type="button"
+                    className="debate-iterate-team"
+                    disabled={busy}
+                    onClick={() => onIterateTeam(team)}
+                    title={iteration.existing ? "打开这个团队已经创建的下一轮辩论" : "读取团队执行记录，沿用来源辩论配置创建下一轮"}
+                  >
+                    <Scales size={12} weight="fill" />
+                    {iterationBusy ? "创建中…" : iteration.existing ? "打开下一轮" : "再辩一轮"}
+                  </button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+        <button type="button" className="debate-new-team" disabled={busy} onClick={onOpenTeam}>
+          <UsersThree size={13} weight="fill" />{busy ? "创建中…" : "再开一组"}
+        </button>
+      </div>
     );
   }
   return (

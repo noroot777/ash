@@ -10,6 +10,7 @@ import { useConversation } from "../lib/useConversation.ts";
 import { AttachmentPicker, MessageAttachments, UploadAttachmentList, useAttachments } from "../task-detail/Attachments.tsx";
 import { QuestionCard } from "../task-detail/QuestionCard.tsx";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
+import { DeleteTaskDialog } from "../task-detail/DeleteTaskDialog.tsx";
 import { TaskDetail } from "../task-detail/TaskDetail.tsx";
 import { conversationToMarkdown } from "../task-detail/conversationModel.ts";
 import { parseAttachmentText } from "../task-detail/utils.ts";
@@ -18,6 +19,7 @@ import { TeamHeader } from "./TeamHeader.tsx";
 import { TeamReviewWorkspace } from "./TeamReviewWorkspace.tsx";
 import { TeamTimeline } from "./TeamTimeline.tsx";
 import { WorkerRail } from "./WorkerRail.tsx";
+import { teamDebateIterationState } from "../debate/handoffPolicy.ts";
 import { activeTeamHaltMarker, leadTurns, teamFeedOptions } from "./teamModel.ts";
 
 function TeamReplyBox({
@@ -179,6 +181,8 @@ export function TeamView({
   const [selectedWorkerId, setSelectedWorkerId] = useState<string | null>(null);
   const [reviewOpen, setReviewOpen] = useState(initialReviewOpen);
   const [busy, setBusy] = useState(false);
+  const [iterateBusy, setIterateBusy] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
   const [localHalted, setLocalHalted] = useState(false);
   const [cuaStatus, setCuaStatus] = useState<TeamCuaStatus | null>(null);
   const conversation = useConversation(task.id);
@@ -210,6 +214,8 @@ export function TeamView({
   useEffect(() => {
     setSelectedWorkerId(null);
     setReviewOpen(initialReviewOpen);
+    setIterateBusy(false);
+    setDeleteOpen(false);
     setLocalHalted(false);
     setCuaStatus(null);
     void refreshGroups();
@@ -248,18 +254,53 @@ export function TeamView({
       setBusy(false);
     }
   };
+  const iterateDebate = async () => {
+    const iteration = teamDebateIterationState(task, allTasks);
+    if (!iteration.eligible) return;
+    if (iteration.existing) {
+      onSelectTask(iteration.existing);
+      return;
+    }
+    if (iterateBusy) return;
+    setIterateBusy(true);
+    try {
+      let target = await api.iterateTeamDebate(task.id);
+      onTaskUpdate(target);
+      if (target.status === "backlog") {
+        try {
+          await api.runTask(target.id);
+          notify("已创建新一轮辩论并开跑");
+          try {
+            target = await api.task(target.id);
+            onTaskUpdate(target);
+          } catch { /* task.status 事件仍会刷新列表 */ }
+        } catch (reason) {
+          notify(`新一轮辩论已创建，但启动失败：${reason instanceof Error ? reason.message : String(reason)}`);
+        }
+      } else {
+        notify("已打开这个团队现有的下一轮辩论");
+      }
+      onSelectTask(target);
+    } catch (reason) {
+      notify(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setIterateBusy(false);
+    }
+  };
 
   return (
     <div className="team-view">
       <OriginTaskBar task={task} allTasks={allTasks} onOpen={openTaskById} />
       <TeamHeader
         task={task}
+        allTasks={allTasks}
         workers={workers}
         groups={teamGroups}
         sessions={conversation.sessions}
         haltedByHistory={teamGroups.length === 0 && (historyHalt || localHalted)}
         conversationMarkdown={markdown}
         busy={busy}
+        iterateBusy={iterateBusy}
         reviewOpen={reviewOpen}
         onTitle={async (title) => onTaskUpdate(await api.patchTask(task.id, { title, autoTitle: false }))}
         onTogglePin={async () => onTaskUpdate(await api.patchTask(task.id, { pinnedAt: task.pinnedAt != null ? null : Date.now() }))}
@@ -267,7 +308,9 @@ export function TeamView({
         onRun={() => void perform("run")}
         onHalt={() => void perform("halt")}
         onResume={() => void perform("resume")}
+        onIterateDebate={() => void iterateDebate()}
         onArchive={() => void perform("archive")}
+        onDelete={() => setDeleteOpen(true)}
         notify={notify}
       />
       {reviewOpen ? (
@@ -319,6 +362,14 @@ export function TeamView({
           onTaskUpdate={onTaskUpdate}
           onDeleted={onTaskDeleted}
           notify={notify}
+        />
+      )}
+      {deleteOpen && (
+        <DeleteTaskDialog
+          task={task}
+          notify={notify}
+          onDeleted={() => onTaskDeleted(task.id)}
+          onClose={() => setDeleteOpen(false)}
         />
       )}
     </div>

@@ -10,19 +10,25 @@ export function DebateGateControls({
   round,
   maxRounds,
   busy,
-  linkedTeam,
+  linkedTeams,
+  allTasks,
+  iterationBusyId,
   onGate,
   onOpenTeam,
   onOpenTask,
+  onIterateTeam,
 }: {
   gate: DebateGate;
   round: number;
   maxRounds: number | null;
   busy: boolean;
-  linkedTeam?: Task;
+  linkedTeams: Task[];
+  allTasks: Task[];
+  iterationBusyId?: string | null;
   onGate: (action: GateAction) => Promise<void>;
   onOpenTeam: () => void;
   onOpenTask: (task: Task) => void;
+  onIterateTeam: (team: Task) => void;
 }) {
   const [mode, setMode] = useState<"inject" | "ask" | null>(null);
   const [text, setText] = useState("");
@@ -39,7 +45,7 @@ export function DebateGateControls({
   };
   const consensus = !!gate.consensus;
   const consensusBy = gate.consensusBy ?? (consensus ? "both" : undefined);
-  const handedOff = !gateAllowsRevision(linkedTeam);
+  const handedOff = !gateAllowsRevision(linkedTeams[0]);
   return (
     <section className="debate-control-shell">
       <div className="debate-control-summary">
@@ -53,7 +59,15 @@ export function DebateGateControls({
         </div>
       )}
       <div className="debate-control-actions">
-        <DebateHandoffBar linkedTeam={linkedTeam} busy={busy} onOpenTeam={onOpenTeam} onOpenTask={onOpenTask} />
+        <DebateHandoffBar
+          linkedTeams={linkedTeams}
+          allTasks={allTasks}
+          busy={busy}
+          iterationBusyId={iterationBusyId}
+          onOpenTeam={onOpenTeam}
+          onOpenTask={onOpenTask}
+          onIterateTeam={onIterateTeam}
+        />
         <button type="button" className="is-approve" disabled={busy} onClick={() => void onGate({ kind: "approve" })}>{handedOff ? "结束辩论" : "放行结束"}</button>
         {!handedOff && <>
           <button type="button" disabled={busy} onClick={() => void onGate({ kind: "reject" })}>打回终止</button>

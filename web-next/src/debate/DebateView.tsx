@@ -30,7 +30,7 @@ import { formatDuration, formatInstant, parseAttachmentText, STATUS_TONES } from
 import { DebateGateControls, DebateProgressBar } from "./DebateControls.tsx";
 import { DebateHandoffBar, DebateHandoffModal, type HandoffChoice } from "./DebateHandoff.tsx";
 import { buildDebateHandoffBody, latestDebateGate } from "./debateHandoff.ts";
-import { isOpenDebateGate, runCreatedHandoffFollowUps } from "./handoffPolicy.ts";
+import { isOpenDebateGate, runCreatedHandoffFollowUps, teamDebateIterationState } from "./handoffPolicy.ts";
 import type { DebateTurn } from "./debateState.ts";
 import { useDebate } from "./useDebate.ts";
 
@@ -131,6 +131,7 @@ export function DebateView({
   const [sessions, setSessions] = useState<Session[]>([]);
   const [busy, setBusy] = useState(false);
   const [teamBusy, setTeamBusy] = useState(false);
+  const [iterationBusyId, setIterationBusyId] = useState<string | null>(null);
   const [teamModal, setTeamModal] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [title, setTitle] = useState(task.title);
@@ -141,6 +142,7 @@ export function DebateView({
   useEffect(() => {
     setTeamModal(false);
     setDeleteOpen(false);
+    setIterationBusyId(null);
   }, [task.id]);
   useEffect(() => { void api.sessions(task.id).then(setSessions).catch(() => setSessions([])); }, [task.id, task.status]);
   const sessionsByRole = useMemo(() => latestByRole(sessions), [sessions]);
@@ -148,9 +150,9 @@ export function DebateView({
   const currentRound = turns.reduce((max, turn) => Math.max(max, turn.round), 0);
   const gate = debate.state.gate ?? latestDebateGate(turns, task.status === "awaiting_review");
   const gateOpen = isOpenDebateGate(gate, task.status);
-  const linkedTeam = useMemo(() => allTasks
+  const linkedTeams = useMemo(() => allTasks
     .filter((item) => item.mode === "team" && item.originTaskId === task.id)
-    .sort((a, b) => timeMs(b.createdAt) - timeMs(a.createdAt))[0], [allTasks, task.id]);
+    .sort((a, b) => timeMs(b.createdAt) - timeMs(a.createdAt)), [allTasks, task.id]);
   const display = taskDisplayStatus(task.status, task.stage, !!task.question);
   const action = actionFor(task);
 
@@ -232,6 +234,39 @@ export function DebateView({
     else notify(`团队已创建，但${followUpFailures.map(({ phase, reason }) => `${phase === "gate" ? "辩论自动收尾" : "启动"}失败（${reason instanceof Error ? reason.message : String(reason)}）`).join("、")}`);
     return true;
   };
+  const iterateTeam = async (team: Task) => {
+    const iteration = teamDebateIterationState(team, allTasks);
+    if (!iteration.eligible) return;
+    if (iteration.existing) {
+      onSelectTask(iteration.existing);
+      return;
+    }
+    if (iterationBusyId) return;
+    setIterationBusyId(team.id);
+    try {
+      let target = await api.iterateTeamDebate(team.id);
+      onTaskCreated(target);
+      if (target.status === "backlog") {
+        try {
+          await api.runTask(target.id);
+          notify("已创建新一轮辩论并开跑");
+          try {
+            target = await api.task(target.id);
+            onTaskCreated(target);
+          } catch { /* task.status 事件仍会刷新列表 */ }
+        } catch (reason) {
+          notify(`新一轮辩论已创建，但启动失败：${reason instanceof Error ? reason.message : String(reason)}`);
+        }
+      } else {
+        notify("已打开这个团队现有的下一轮辩论");
+      }
+      onSelectTask(target);
+    } catch (reason) {
+      notify(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setIterationBusyId(null);
+    }
+  };
 
   return (
     <div className="debate-view">
@@ -298,9 +333,31 @@ export function DebateView({
       </ImagePreviewGroup>
 
       {gate?.open && task.status === "awaiting_review" ? (
-        <DebateGateControls gate={gate} round={currentRound} maxRounds={config.maxRounds} busy={busy || teamBusy} linkedTeam={linkedTeam} onGate={gateAction} onOpenTeam={() => setTeamModal(true)} onOpenTask={onSelectTask} />
+        <DebateGateControls
+          gate={gate}
+          round={currentRound}
+          maxRounds={config.maxRounds}
+          busy={busy || teamBusy || !!iterationBusyId}
+          linkedTeams={linkedTeams}
+          allTasks={allTasks}
+          iterationBusyId={iterationBusyId}
+          onGate={gateAction}
+          onOpenTeam={() => setTeamModal(true)}
+          onOpenTask={onSelectTask}
+          onIterateTeam={(team) => void iterateTeam(team)}
+        />
       ) : ["done", "failed", "canceled"].includes(task.status) ? (
-        <div className="debate-terminal-handoff"><DebateHandoffBar linkedTeam={linkedTeam} busy={teamBusy} onOpenTeam={() => setTeamModal(true)} onOpenTask={onSelectTask} /></div>
+        <div className="debate-terminal-handoff">
+          <DebateHandoffBar
+            linkedTeams={linkedTeams}
+            allTasks={allTasks}
+            busy={teamBusy || !!iterationBusyId}
+            iterationBusyId={iterationBusyId}
+            onOpenTeam={() => setTeamModal(true)}
+            onOpenTask={onSelectTask}
+            onIterateTeam={(team) => void iterateTeam(team)}
+          />
+        </div>
       ) : (
         <DebateProgressBar round={currentRound} maxRounds={config.maxRounds} gateEnabled={config.gateG1 === "on"} />
       )}
