@@ -126,7 +126,6 @@
 
 .task-detail-body { display: flex; min-height: 0; flex: 1; }
 .task-detail-main { display: flex; min-width: 0; flex: 1; flex-direction: column; background: var(--canvas); }
-.task-conversation-wrap { position: relative; min-height: 0; flex: 1; }
 .task-conversation { height: 100%; overflow-y: auto; padding: 18px clamp(18px, 4vw, 48px) 28px; }
 
 .task-objective {

@@ -15,13 +15,13 @@ import {
   Stop,
   Trash,
 } from "@phosphor-icons/react";
+import { ConversationScrollControls } from "../components/ConversationScrollControls.tsx";
 import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
 import { LegacyLink } from "../components/LegacyLink.tsx";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
 import { OriginTaskBar } from "../components/TaskOrigin.tsx";
 import { TaskStatusDot } from "../components/TaskStatusDot.tsx";
 import { api } from "../lib/api.ts";
-import { useStickToBottom } from "../lib/useStickToBottom.ts";
 import { useTaskReadState } from "../lib/useTaskReadState.ts";
 import { DeleteTaskDialog } from "../task-detail/DeleteTaskDialog.tsx";
 import { MessageAttachments } from "../task-detail/Attachments.tsx";
@@ -137,7 +137,6 @@ export function DebateView({
   const [title, setTitle] = useState(task.title);
   const scrollRef = useRef<HTMLDivElement>(null);
   const { indicatorForTask } = useTaskReadState(allTasks, task.id);
-  useStickToBottom(scrollRef, `${task.id}:${debate.state.turns.length}`);
 
   useEffect(() => setTitle(task.title), [task.id, task.title]);
   useEffect(() => {
@@ -276,22 +275,25 @@ export function DebateView({
       </ImagePreviewGroup>
 
       <ImagePreviewGroup isolated>
-        <div className="debate-stream" ref={scrollRef}>
-          {debate.loading && !turns.length && <p className="debate-empty"><SpinnerGap size={14} className="is-spinning" />正在读取辩论记录…</p>}
-          {!debate.loading && debate.error && !turns.length && <p className="debate-empty is-error">辩论记录读取失败：{debate.error}</p>}
-          {!debate.loading && !debate.error && !turns.length && <p className="debate-empty">点击“运行”开始辩论。双方逐轮发言会实时出现在这里。</p>}
-          {turns.map((turn, index) => (
-            <TurnBubble
-              key={`${turn.round}-${turn.speaker}-${index}`}
-              turn={turn}
-              previousRound={turns[index - 1]?.round}
-              session={turn.speaker === "A" ? sessionsByRole.debaterA : turn.speaker === "B" ? sessionsByRole.debaterB : undefined}
-              fallback={turn.speaker === "B" ? config.debaterB : config.debaterA}
-            />
-          ))}
-          {task.status === "running" && turns.length > 0 && turns.at(-1)?.done && <p className="debate-between"><TypingDots />正在准备下一次发言…</p>}
-          {task.status === "failed" && <p className="debate-terminal is-error">本次辩论失败并停止</p>}
-          {task.status === "canceled" && <p className="debate-terminal">辩论已取消</p>}
+        <div className="conversation-scroll-region">
+          <div className="debate-stream" ref={scrollRef}>
+            {debate.loading && !turns.length && <p className="debate-empty"><SpinnerGap size={14} className="is-spinning" />正在读取辩论记录…</p>}
+            {!debate.loading && debate.error && !turns.length && <p className="debate-empty is-error">辩论记录读取失败：{debate.error}</p>}
+            {!debate.loading && !debate.error && !turns.length && <p className="debate-empty">点击“运行”开始辩论。双方逐轮发言会实时出现在这里。</p>}
+            {turns.map((turn, index) => (
+              <TurnBubble
+                key={`${turn.round}-${turn.speaker}-${index}`}
+                turn={turn}
+                previousRound={turns[index - 1]?.round}
+                session={turn.speaker === "A" ? sessionsByRole.debaterA : turn.speaker === "B" ? sessionsByRole.debaterB : undefined}
+                fallback={turn.speaker === "B" ? config.debaterB : config.debaterA}
+              />
+            ))}
+            {task.status === "running" && turns.length > 0 && turns.at(-1)?.done && <p className="debate-between"><TypingDots />正在准备下一次发言…</p>}
+            {task.status === "failed" && <p className="debate-terminal is-error">本次辩论失败并停止</p>}
+            {task.status === "canceled" && <p className="debate-terminal">辩论已取消</p>}
+          </div>
+          <ConversationScrollControls scrollRef={scrollRef} resetKey={`${task.id}:${turns.length}`} />
         </div>
       </ImagePreviewGroup>
 
