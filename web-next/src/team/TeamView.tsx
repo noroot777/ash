@@ -1,10 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Group, Task } from "@harness/shared";
 import { batchesOf, mergeFeed, teamGroupsOf, waitingWorkers, workerHaltStats, workersOf } from "@harness/shared/team";
-import { ArrowSquareOut, Broom, PaperPlaneTilt, SpinnerGap, WarningCircle, X } from "@phosphor-icons/react";
+import { ArrowSquareOut, Broom, Clock, PaperPlaneTilt, SpinnerGap, WarningCircle, X } from "@phosphor-icons/react";
 import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
-import { api, type TeamCuaStatus } from "../lib/api.ts";
+import {
+  ScheduledMessageTray,
+  ScheduledSendPanel,
+  useScheduledMessages,
+} from "../components/ScheduledMessages.tsx";
+import { defaultOnceTime } from "../components/ScheduleControl.tsx";
+import { api, type ReplyTaskResult, type TeamCuaStatus } from "../lib/api.ts";
 import { OriginTaskBar } from "../components/TaskOrigin.tsx";
 import { useConversation } from "../lib/useConversation.ts";
 import { AttachmentPicker, MessageAttachments, UploadAttachmentList, useAttachments } from "../task-detail/Attachments.tsx";
@@ -28,29 +34,67 @@ function TeamReplyBox({
   onSend,
 }: {
   task: Task;
-  onSend: (text: string, attachments: string[]) => Promise<void>;
+  onSend: (text: string, attachments: string[], options: { sendAt?: string }) => Promise<ReplyTaskResult>;
 }) {
   const [value, setValue] = useState("");
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [scheduleOpen, setScheduleOpen] = useState(false);
+  const [sendAt, setSendAt] = useState("");
+  const scheduled = useScheduledMessages(task.id);
   const uploads = useAttachments();
   const disabled = !!task.archived;
-  const send = async () => {
+  useEffect(() => {
+    setValue("");
+    setError(null);
+    setScheduleOpen(false);
+    setSendAt("");
+    uploads.clear();
+  }, [task.id, uploads.clear]);
+  const send = async (scheduledAt?: string) => {
     if (disabled || sending || uploads.uploading || (!value.trim() && !uploads.attachments.length)) return;
     setSending(true);
     setError(null);
     try {
-      await onSend(value.trim(), uploads.attachments.map((attachment) => attachment.path));
+      const result = await onSend(
+        value.trim(),
+        uploads.attachments.map((attachment) => attachment.path),
+        { sendAt: scheduledAt },
+      );
+      if ("scheduled" in result) scheduled.add(result.message);
       setValue("");
       uploads.clear();
+      setScheduleOpen(false);
+      setSendAt("");
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
       setSending(false);
     }
   };
+  const scheduledTime = new Date(sendAt).getTime();
+  const canSchedule = Number.isFinite(scheduledTime)
+    && scheduledTime > Date.now()
+    && (!!value.trim() || uploads.attachments.length > 0);
   return (
     <div className="team-reply-shell">
+      {scheduleOpen && (
+        <ScheduledSendPanel
+          value={sendAt}
+          busy={sending}
+          canSubmit={canSchedule}
+          onChange={setSendAt}
+          onCancel={() => setScheduleOpen(false)}
+          onSubmit={() => void send(new Date(sendAt).toISOString())}
+        />
+      )}
+      <ScheduledMessageTray
+        messages={scheduled.messages}
+        loading={scheduled.loading}
+        error={scheduled.error}
+        cancelingIds={scheduled.cancelingIds}
+        onCancel={(messageId) => void scheduled.cancel(messageId)}
+      />
       <UploadAttachmentList attachments={uploads.attachments} error={uploads.error} onRemove={uploads.remove} />
       {error && <p>{error}</p>}
       <div className="team-reply-box">
@@ -59,7 +103,7 @@ function TeamReplyBox({
           value={value}
           disabled={disabled}
           placeholder={disabled ? "团队已归档（只读）" : task.status === "idle" ? "调度者待命中，说句话就接回同一会话…" : "插一句话（改方向、加要求、直接替它拍板）…"}
-          onChange={(event) => setValue(event.target.value)}
+          onChange={(event) => { setValue(event.target.value); setScheduleOpen(false); }}
           onPaste={uploads.onPaste}
           onKeyDown={(event) => {
             if ((event.metaKey || event.ctrlKey) && event.key === "Enter") { event.preventDefault(); void send(); }
@@ -67,6 +111,19 @@ function TeamReplyBox({
         />
         <footer>
           <AttachmentPicker addFiles={uploads.addFiles} disabled={disabled || sending} />
+          <button
+            className="reply-schedule-button"
+            type="button"
+            disabled={disabled || sending || uploads.uploading}
+            title="定时发送"
+            aria-label="选择定时发送时间"
+            onClick={() => {
+              if (!sendAt) setSendAt(defaultOnceTime());
+              setScheduleOpen((open) => !open);
+            }}
+          >
+            <Clock size={14} />
+          </button>
           <span>调度台 · ⌘↵ 发送</span>
           <button type="button" disabled={disabled || sending || uploads.uploading || (!value.trim() && !uploads.attachments.length)} onClick={() => void send()} aria-label="发送给调度者">
             {sending ? <SpinnerGap size={14} className="is-spinning" /> : <PaperPlaneTilt size={14} weight="fill" />}
@@ -383,10 +440,15 @@ export function TeamView({
                 onAskLead={askLead}
                 delegatingIds={delegatingIds}
               />
-              <TeamReplyBox task={task} onSend={async (text, attachments) => {
-                await api.replyTask(task.id, text, { attachments });
+              <TeamReplyBox task={task} onSend={async (text, attachments, options) => {
+                const result = await api.replyTask(task.id, text, { attachments, ...options });
+                if (options.sendAt) {
+                  notify(`已安排 ${new Date(options.sendAt).toLocaleString()} 发送给调度者`);
+                  return result;
+                }
                 conversation.addUser(text, attachments);
                 notify("已发送给调度者");
+                return result;
               }} />
             </section>
             <WorkerRail workers={workers} groups={teamGroups} selectedId={selectedWorkerId} onSelect={setSelectedWorkerId} />

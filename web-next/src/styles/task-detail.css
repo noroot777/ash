@@ -301,6 +301,7 @@
 .task-reply-error { width: 100%; margin: 0; color: var(--red); font-size: 10.5px; }
 .task-reply-error { margin-bottom: 5px; }
 .task-reply-command-menu,
+.task-reply-mention-menu,
 .task-reply-inline-panel {
   position: absolute;
   z-index: 24;
@@ -308,7 +309,8 @@
   left: clamp(14px, 3vw, 34px);
   margin-bottom: 7px;
 }
-.task-reply-command-menu {
+.task-reply-command-menu,
+.task-reply-mention-menu {
   width: min(390px, calc(100% - 28px));
   overflow: hidden;
   border: 1px solid var(--line2);
@@ -317,8 +319,10 @@
   padding: 5px;
   box-shadow: var(--menu-shadow);
 }
-.task-reply-command-menu > small { display: block; padding: 4px 7px 5px; color: var(--faint); font-size: 9.5px; }
-.task-reply-command-menu > button {
+.task-reply-command-menu > small,
+.task-reply-mention-menu > small { display: block; padding: 4px 7px 5px; color: var(--faint); font-size: 9.5px; }
+.task-reply-command-menu > button,
+.task-reply-mention-menu > button {
   display: flex;
   width: 100%;
   min-height: 35px;
@@ -331,10 +335,17 @@
   text-align: left;
 }
 .task-reply-command-menu > button:hover,
-.task-reply-command-menu > button[aria-selected="true"] { background: var(--sel-bg); }
+.task-reply-command-menu > button[aria-selected="true"],
+.task-reply-mention-menu > button:hover,
+.task-reply-mention-menu > button[aria-selected="true"] { background: var(--sel-bg); }
 .task-reply-command-menu b { flex: 0 0 auto; color: var(--accent); font-family: var(--font-mono); font-size: 11.5px; }
 .task-reply-command-menu span { flex: 0 0 auto; font-size: 11.5px; font-weight: 600; }
 .task-reply-command-menu em { min-width: 0; overflow: hidden; color: var(--faint); font-size: 10px; font-style: normal; text-overflow: ellipsis; white-space: nowrap; }
+.task-reply-mention-menu { width: min(270px, calc(100% - 28px)); }
+.task-reply-mention-menu > p { margin: 4px 7px 7px; color: var(--faint); font-size: 10.5px; }
+.task-reply-mention-menu > button { align-items: center; }
+.task-reply-mention-menu > button > svg { color: var(--muted); }
+.task-reply-mention-menu b { color: var(--ink); font-family: var(--font-mono); font-size: 11.5px; }
 .task-reply-inline-panel {
   right: clamp(14px, 3vw, 34px);
   max-height: min(64vh, 610px);

@@ -179,10 +179,15 @@ export function TaskDetail({
           <ReplyBox
             task={task}
             hasConversation={hasConversation}
-            onSend={async (text, attachments) => {
-              await api.replyTask(task.id, text, { attachments });
+            onSend={async (text, attachments, options) => {
+              const result = await api.replyTask(task.id, text, { attachments, ...options });
+              if (options.sendAt) {
+                notify(`已安排 ${new Date(options.sendAt).toLocaleString()} 发送`);
+                return result;
+              }
               conversation.addUser(text, attachments);
-              notify("回复已发送");
+              notify(options.agent ? `已召唤 @${options.agent} 继续任务` : "回复已发送");
+              return result;
             }}
             command={derivationAllowed ? {
               matches: isTaskDerivationCommand,

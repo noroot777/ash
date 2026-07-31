@@ -1,6 +1,14 @@
 import { useEffect, useState, type ReactNode } from "react";
-import type { Task } from "@harness/shared";
-import { ArrowUp, SpinnerGap } from "@phosphor-icons/react";
+import type { AgentType, Task } from "@harness/shared";
+import { ArrowUp, Clock, Robot, SpinnerGap, X } from "@phosphor-icons/react";
+import {
+  ScheduledMessageTray,
+  ScheduledSendPanel,
+  useScheduledMessages,
+} from "../components/ScheduledMessages.tsx";
+import { defaultOnceTime } from "../components/ScheduleControl.tsx";
+import { availableAgentTypes, useAgentAvailability } from "../lib/agentAvailability.ts";
+import type { ReplyTaskResult } from "../lib/api.ts";
 import { AttachmentPicker, UploadAttachmentList, useAttachments } from "./Attachments.tsx";
 
 export function ReplyBox({
@@ -12,7 +20,11 @@ export function ReplyBox({
 }: {
   task: Task;
   hasConversation: boolean;
-  onSend: (text: string, attachments: string[]) => Promise<void>;
+  onSend: (
+    text: string,
+    attachments: string[],
+    options: { agent?: AgentType; sendAt?: string },
+  ) => Promise<ReplyTaskResult>;
   command?: {
     matches: (text: string) => boolean;
     onSubmit: (text: string) => void;
@@ -28,6 +40,13 @@ export function ReplyBox({
   const [sendError, setSendError] = useState<string | null>(null);
   const [commandIndex, setCommandIndex] = useState(0);
   const [menuDismissed, setMenuDismissed] = useState(false);
+  const [mentionIndex, setMentionIndex] = useState(0);
+  const [mentionDismissed, setMentionDismissed] = useState(false);
+  const [target, setTarget] = useState<AgentType | null>(null);
+  const [scheduleOpen, setScheduleOpen] = useState(false);
+  const [sendAt, setSendAt] = useState("");
+  const detection = useAgentAvailability();
+  const scheduled = useScheduledMessages(task.id);
   const uploads = useAttachments();
   const disabled = task.mode !== "single" || task.archived || task.status === "running" || task.status === "queued" || !hasConversation;
   const inputDisabled = disabled && !command;
@@ -46,12 +65,23 @@ export function ReplyBox({
     setSendError(null);
     setCommandIndex(0);
     setMenuDismissed(false);
-  }, [task.id]);
+    setMentionIndex(0);
+    setMentionDismissed(false);
+    setTarget(null);
+    setScheduleOpen(false);
+    setSendAt("");
+    uploads.clear();
+  }, [task.id, uploads.clear]);
 
   useEffect(() => {
     setValue("");
     setCommandIndex(0);
     setMenuDismissed(false);
+    setMentionIndex(0);
+    setMentionDismissed(false);
+    setTarget(null);
+    setScheduleOpen(false);
+    setSendAt("");
   }, [command?.resetKey]);
 
   const commandCandidates = (text: string) => {
@@ -63,12 +93,21 @@ export function ReplyBox({
   const selectedIndex = Math.min(commandIndex, Math.max(0, candidates.length - 1));
   const commandMatch = !!command && command.matches(value);
   const commandActive = commandMatch || menuOpen;
+  const mentionMatch = /(?:^|\s)@([a-z0-9_-]*)$/i.exec(value);
+  const detectedTypes = detection.status === "ready" ? availableAgentTypes(detection.agents) : [];
+  const mentionCandidates = mentionMatch
+    ? detectedTypes.filter((type) => type.startsWith((mentionMatch[1] ?? "").toLowerCase()))
+    : [];
+  const mentionOpen = !disabled && !commandActive && !mentionDismissed && !!mentionMatch;
+  const selectedMentionIndex = Math.min(mentionIndex, Math.max(0, mentionCandidates.length - 1));
 
   const pickCommand = (text: string) => {
     command?.onSubmit(text);
     setValue("");
     setCommandIndex(0);
     setMenuDismissed(false);
+    setTarget(null);
+    setScheduleOpen(false);
   };
 
   const cancelCommand = () => {
@@ -79,7 +118,14 @@ export function ReplyBox({
     command?.onCancel?.();
   };
 
-  const send = async () => {
+  const pickMention = (agent: AgentType) => {
+    setTarget(agent);
+    setValue((current) => current.replace(/@[a-z0-9_-]*$/i, ""));
+    setMentionIndex(0);
+    setMentionDismissed(false);
+  };
+
+  const send = async (scheduledAt?: string) => {
     if (menuOpen) {
       pickCommand(candidates[selectedIndex]!.command);
       return;
@@ -92,15 +138,28 @@ export function ReplyBox({
     setSending(true);
     setSendError(null);
     try {
-      await onSend(value.trim(), uploads.attachments.map((attachment) => attachment.path));
+      const result = await onSend(
+        value.trim(),
+        uploads.attachments.map((attachment) => attachment.path),
+        { agent: target ?? undefined, sendAt: scheduledAt },
+      );
+      if ("scheduled" in result) scheduled.add(result.message);
       setValue("");
       uploads.clear();
+      setTarget(null);
+      setScheduleOpen(false);
+      setSendAt("");
     } catch (error) {
       setSendError(error instanceof Error ? error.message : String(error));
     } finally {
       setSending(false);
     }
   };
+
+  const scheduledTime = new Date(sendAt).getTime();
+  const canSchedule = Number.isFinite(scheduledTime)
+    && scheduledTime > Date.now()
+    && (!!value.trim() || uploads.attachments.length > 0);
 
   return (
     <div className="task-reply-shell">
@@ -123,8 +182,54 @@ export function ReplyBox({
           ))}
         </div>
       )}
-      {inlinePanel && !menuOpen && <div className="task-reply-inline-panel">{inlinePanel}</div>}
+      {mentionOpen && !menuOpen && (
+        <div className="task-reply-mention-menu" role="listbox" aria-label="召唤智能体">
+          <small>召唤智能体加入 · ↑↓ 选择，回车确认，Esc 取消</small>
+          {detection.status === "loading" && <p>正在检测本机可用 CLI…</p>}
+          {detection.status === "failed" && <p>无法确认本机可用 CLI，暂不提供候选</p>}
+          {detection.status === "ready" && mentionCandidates.length === 0 && <p>没有匹配的可用智能体</p>}
+          {mentionCandidates.map((agent, index) => (
+            <button
+              type="button"
+              role="option"
+              aria-selected={index === selectedMentionIndex}
+              key={agent}
+              onMouseEnter={() => setMentionIndex(index)}
+              onClick={() => pickMention(agent)}
+            >
+              <Robot size={14} aria-hidden="true" />
+              <b>@{agent}</b>
+            </button>
+          ))}
+        </div>
+      )}
+      {scheduleOpen && !menuOpen && !mentionOpen && (
+        <ScheduledSendPanel
+          value={sendAt}
+          busy={sending}
+          canSubmit={canSchedule}
+          onChange={setSendAt}
+          onCancel={() => setScheduleOpen(false)}
+          onSubmit={() => void send(new Date(sendAt).toISOString())}
+        />
+      )}
+      {inlinePanel && !menuOpen && !mentionOpen && !scheduleOpen && <div className="task-reply-inline-panel">{inlinePanel}</div>}
+      <ScheduledMessageTray
+        messages={scheduled.messages}
+        loading={scheduled.loading}
+        error={scheduled.error}
+        cancelingIds={scheduled.cancelingIds}
+        onCancel={(messageId) => void scheduled.cancel(messageId)}
+      />
       <UploadAttachmentList attachments={uploads.attachments} error={uploads.error} onRemove={uploads.remove} />
+      {target && (
+        <div className="task-reply-target">
+          <span><Robot size={12} aria-hidden="true" />由 @{target} 回复</span>
+          <button type="button" title="取消召唤" aria-label={`取消召唤 ${target}`} onClick={() => setTarget(null)}>
+            <X size={11} weight="bold" />
+          </button>
+        </div>
+      )}
       {sendError && <p className="task-reply-error">{sendError}</p>}
       <div className="task-reply-box">
         <textarea
@@ -137,7 +242,10 @@ export function ReplyBox({
             const next = event.target.value;
             setValue(next);
             setMenuDismissed(false);
+            setMentionDismissed(false);
             setCommandIndex(0);
+            setMentionIndex(0);
+            setScheduleOpen(false);
             command?.onChange?.(commandCandidates(next).length > 0 ? "" : next);
           }}
           onPaste={uploads.onPaste}
@@ -169,6 +277,28 @@ export function ReplyBox({
               cancelCommand();
               return;
             }
+            if (mentionOpen) {
+              if (event.key === "ArrowDown" && mentionCandidates.length) {
+                event.preventDefault();
+                setMentionIndex((selectedMentionIndex + 1) % mentionCandidates.length);
+                return;
+              }
+              if (event.key === "ArrowUp" && mentionCandidates.length) {
+                event.preventDefault();
+                setMentionIndex((selectedMentionIndex - 1 + mentionCandidates.length) % mentionCandidates.length);
+                return;
+              }
+              if (event.key === "Enter" && !event.metaKey && !event.ctrlKey && mentionCandidates.length) {
+                event.preventDefault();
+                pickMention(mentionCandidates[selectedMentionIndex]!);
+                return;
+              }
+              if (event.key === "Escape") {
+                event.preventDefault();
+                setMentionDismissed(true);
+                return;
+              }
+            }
             if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
               event.preventDefault();
               void send();
@@ -177,7 +307,20 @@ export function ReplyBox({
         />
         <div className="task-reply-actions">
           <AttachmentPicker addFiles={uploads.addFiles} disabled={disabled || sending || commandActive} />
-          <span>{uploads.uploading ? "上传中…" : commandActive ? "回车配置" : "⌘↵ 发送"}</span>
+          <button
+            className="reply-schedule-button"
+            type="button"
+            disabled={disabled || sending || uploads.uploading || commandActive || mentionOpen}
+            title="定时发送"
+            aria-label="选择定时发送时间"
+            onClick={() => {
+              if (!sendAt) setSendAt(defaultOnceTime());
+              setScheduleOpen((open) => !open);
+            }}
+          >
+            <Clock size={14} />
+          </button>
+          <span>{uploads.uploading ? "上传中…" : commandActive ? "回车配置" : target ? `将由 @${target} 回复` : "⌘↵ 发送"}</span>
           <button
             className="task-send-button"
             type="button"

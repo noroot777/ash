@@ -192,6 +192,10 @@ export type TeamCuaStatus = {
   };
 };
 
+export type ReplyTaskResult =
+  | { started: true }
+  | { scheduled: true; message: ScheduledMessage };
+
 export const api = {
   settings: (): Promise<AppSettings> => request("/settings"),
   patchSettings: (patch: Partial<AppSettings>): Promise<AppSettings> =>
@@ -281,7 +285,7 @@ export const api = {
     taskId: string,
     text: string,
     options?: { attachments?: string[]; agent?: AgentType; sendAt?: string },
-  ): Promise<unknown> =>
+  ): Promise<ReplyTaskResult> =>
     request(`/tasks/${id(taskId)}/reply`, json("POST", { text, ...options })),
   gate: (taskId: string, action: GateAction): Promise<unknown> =>
     request(`/tasks/${id(taskId)}/gate`, json("POST", action)),
