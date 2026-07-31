@@ -13,14 +13,20 @@ import { DEFAULT_APP_SETTINGS, DEBATE_DEFAULTS } from "@harness/shared";
 import { Paperclip, Play, Robot, Scales, UsersThree, X } from "@phosphor-icons/react";
 import { ImagePreviewGroup, PreviewableImage } from "../components/ImagePreview.tsx";
 import { Button } from "../components/ui.tsx";
+import {
+  executorValue,
+  isExecutorPickable,
+  nothingRunnable,
+  parseExecutorValue,
+  preferredExecutor,
+  teamExecutorCandidates,
+  useAgentAvailability,
+  type ExecutorSelection,
+} from "../lib/agentAvailability.ts";
 import { api } from "../lib/api.ts";
 import { AttachmentPicker, UploadAttachmentList, useAttachments } from "../task-detail/Attachments.tsx";
 import { attachmentView } from "../task-detail/utils.ts";
-import {
-  ComposerFields,
-  profileType,
-  selectedExecutorId,
-} from "./ComposerFields.tsx";
+import { ComposerFields } from "./ComposerFields.tsx";
 import {
   emptyComposerExecutorConfigs,
   patchComposerExecutor,
@@ -87,6 +93,7 @@ export function TaskComposerPanel({
   const [body, setBody] = useState(initialDraft?.body ?? "");
   const [seedAttachments, setSeedAttachments] = useState(initialDraft?.attachments ?? []);
   const [profiles, setProfiles] = useState<AgentExecutorProfile[]>([]);
+  const [profilesReady, setProfilesReady] = useState(false);
   const [executors, setExecutors] = useState(emptyComposerExecutorConfigs);
   const [debaterAProfile, setDebaterAProfile] = useState("");
   const [debaterBProfile, setDebaterBProfile] = useState("");
@@ -100,33 +107,56 @@ export function TaskComposerPanel({
   const [base, setBase] = useState("");
   const [busy, setBusy] = useState(false);
   const uploads = useAttachments();
+  const detection = useAgentAvailability();
+  const { workerTypes, leadTypes, leadProfiles } = useMemo(
+    () => teamExecutorCandidates(detection, profiles),
+    [detection, profiles],
+  );
 
   useEffect(() => {
-    Promise.all([
-      api.agents(),
-      api.settings(),
-      project.health.isRepo
-        ? api.projectBranches(project.id)
-        : Promise.resolve({ branches: [], current: null }),
-    ]).then(([agents, settings, refs]) => {
+    let alive = true;
+    setProfilesReady(false);
+    api.agents().then((agents) => {
+      if (!alive) return;
       setProfiles(agents);
       const claude = defaultProfile(agents, "claude") ?? agents[0];
       const codex = defaultProfile(agents, "codex")
         ?? agents.find((profile) => profile.id !== claude?.id)
         ?? claude;
+      const claudeValue = executorValue(claude
+        ? { agentType: claude.type, executorId: claude.id }
+        : { agentType: "claude", executorId: null });
+      const codexValue = executorValue(codex
+        ? { agentType: codex.type, executorId: codex.id }
+        : { agentType: "codex", executorId: null });
       setExecutors((current) => ({
         ...current,
-        single: { ...current.single, profile: claude?.id ?? "__type:claude" },
-        lead: { ...current.lead, profile: claude?.id ?? "__type:claude" },
-        worker: { ...current.worker, profile: codex?.id ?? "__type:codex" },
-        reviewer: { ...current.reviewer, profile: codex?.id ?? "__type:codex" },
+        single: { ...current.single, profile: claudeValue },
+        lead: { ...current.lead, profile: claudeValue },
+        worker: { ...current.worker, profile: codexValue },
+        reviewer: { ...current.reviewer, profile: codexValue },
       }));
-      setDebaterAProfile(claude?.id ?? "__type:claude");
-      setDebaterBProfile(codex?.id ?? "__type:codex");
+      setDebaterAProfile(claudeValue);
+      setDebaterBProfile(codexValue);
+    }).catch((error) => {
+      if (alive) notify(error instanceof Error ? error.message : "执行器配置读取失败");
+    }).finally(() => {
+      if (alive) setProfilesReady(true);
+    });
+    Promise.all([
+      api.settings(),
+      project.health.isRepo
+        ? api.projectBranches(project.id)
+        : Promise.resolve({ branches: [], current: null }),
+    ]).then(([settings, refs]) => {
+      if (!alive) return;
       setUseWorktree(project.health.isRepo && settings.worktreeDefault);
       setBranches(refs.branches);
       setBase(refs.current ?? "");
-    }).catch((error) => notify(error instanceof Error ? error.message : "新建任务配置读取失败"));
+    }).catch((error) => {
+      if (alive) notify(error instanceof Error ? error.message : "新建任务配置读取失败");
+    });
+    return () => { alive = false; };
   }, [notify, project.health.isRepo, project.id]);
 
   useEffect(() => {
@@ -163,35 +193,122 @@ export function TaskComposerPanel({
     setExecutors((current) => patchComposerExecutor(current, role, patch));
   };
 
+  const singleExecutor = parseExecutorValue(
+    executors.single.profile,
+    profiles,
+    { agentType: "claude", executorId: null },
+  );
+  const leadExecutor = parseExecutorValue(
+    executors.lead.profile,
+    profiles,
+    { agentType: "claude", executorId: null },
+  );
+  const workerExecutor = parseExecutorValue(
+    executors.worker.profile,
+    profiles,
+    { agentType: "codex", executorId: null },
+  );
+  const reviewerExecutor = parseExecutorValue(
+    executors.reviewer.profile,
+    profiles,
+    { agentType: workerExecutor.agentType, executorId: null },
+  );
+  const debaterAExecutor = parseExecutorValue(
+    debaterAProfile,
+    profiles,
+    { agentType: "claude", executorId: null },
+  );
+  const debaterBExecutor = parseExecutorValue(
+    debaterBProfile,
+    profiles,
+    { agentType: "codex", executorId: null },
+  );
   const executorTypes = {
-    single: profileType(profiles, executors.single.profile, "claude"),
-    lead: profileType(profiles, executors.lead.profile, "claude"),
-    worker: profileType(profiles, executors.worker.profile, "codex"),
-    reviewer: profileType(
-      profiles,
-      executors.reviewer.profile,
-      profileType(profiles, executors.worker.profile, "codex"),
-    ),
+    single: singleExecutor.agentType,
+    lead: leadExecutor.agentType,
+    worker: workerExecutor.agentType,
+    reviewer: reviewerExecutor.agentType,
   };
+
+  useEffect(() => {
+    if (!profilesReady || detection.status === "loading") return;
+    const reconcile = (
+      value: string,
+      types: AgentType[],
+      candidates: AgentExecutorProfile[],
+      preferred: AgentType,
+      avoid?: AgentType,
+    ): ExecutorSelection | null => {
+      const current = parseExecutorValue(value, profiles, { agentType: preferred, executorId: null });
+      return value && isExecutorPickable(current, types, candidates)
+        ? current
+        : preferredExecutor(types, candidates, preferred, avoid);
+    };
+    setExecutors((current) => {
+      const single = reconcile(current.single.profile, workerTypes, profiles, "claude");
+      const lead = reconcile(current.lead.profile, leadTypes, leadProfiles, "claude");
+      const worker = reconcile(current.worker.profile, workerTypes, profiles, "codex", lead?.agentType);
+      const reviewer = reconcile(
+        current.reviewer.profile,
+        workerTypes,
+        profiles,
+        worker?.agentType ?? "codex",
+      ) ?? worker;
+      let changed = false;
+      const next = { ...current };
+      for (const [role, selection] of Object.entries({ single, lead, worker, reviewer }) as [ComposerExecutorRole, ExecutorSelection | null][]) {
+        if (!selection || current[role].profile === executorValue(selection)) continue;
+        next[role] = { profile: executorValue(selection), model: "", effort: "" };
+        changed = true;
+      }
+      return changed ? next : current;
+    });
+    const nextDebaterA = reconcile(debaterAProfile, workerTypes, profiles, "claude");
+    const nextDebaterB = reconcile(
+      debaterBProfile,
+      workerTypes,
+      profiles,
+      "codex",
+      nextDebaterA?.agentType,
+    );
+    if (nextDebaterA && debaterAProfile !== executorValue(nextDebaterA)) {
+      setDebaterAProfile(executorValue(nextDebaterA));
+    }
+    if (nextDebaterB && debaterBProfile !== executorValue(nextDebaterB)) {
+      setDebaterBProfile(executorValue(nextDebaterB));
+    }
+  }, [
+    debaterAProfile,
+    debaterBProfile,
+    detection.status,
+    leadProfiles,
+    leadTypes,
+    profiles,
+    profilesReady,
+    workerTypes,
+  ]);
+
   const currentTeamConfig: TeamPresetConfig = {
     lead: executorTypes.lead,
     worker: executorTypes.worker,
-    leadExecutorId: selectedExecutorId(executors.lead.profile),
-    workerExecutorId: selectedExecutorId(executors.worker.profile),
+    leadExecutorId: leadExecutor.executorId,
+    workerExecutorId: workerExecutor.executorId,
     leadModel: executors.lead.model || null,
     leadReasoningEffort: executors.lead.effort || null,
     workerModel: executors.worker.model || null,
     workerReasoningEffort: executors.worker.effort || null,
     review,
     reviewerAgentType: executorTypes.reviewer,
-    reviewerExecutorId: selectedExecutorId(executors.reviewer.profile),
+    reviewerExecutorId: reviewerExecutor.executorId,
     reviewerModel: executors.reviewer.model || null,
     reviewerReasoningEffort: executors.reviewer.effort || null,
   };
   const applyTeamPreset = (config: TeamPresetConfig) => {
     const profileValue = (candidate: string | null | undefined, type: AgentType) => {
       const candidateProfile = candidate ? profiles.find((profile) => profile.id === candidate) : null;
-      return candidateProfile?.type === type ? candidate! : `__type:${type}`;
+      return executorValue(candidateProfile?.type === type
+        ? { agentType: type, executorId: candidate! }
+        : { agentType: type, executorId: null });
     };
     const reviewerType = config.reviewerAgentType ?? config.worker;
     setExecutors((current) => ({
@@ -214,7 +331,33 @@ export function TaskComposerPanel({
     }));
     setReview(config.review !== false);
   };
-  const canSubmit = (mode === "debate" ? !!body.trim() : !!body.trim() || allAttachments.length > 0) && !busy;
+  const noExecutor = profilesReady && nothingRunnable(detection, profiles);
+  const unavailableRole = mode === "single"
+    ? !isExecutorPickable(singleExecutor, workerTypes, profiles) ? "执行器" : null
+    : mode === "debate"
+      ? !isExecutorPickable(debaterAExecutor, workerTypes, profiles) ? "辩手 A"
+        : !isExecutorPickable(debaterBExecutor, workerTypes, profiles) ? "辩手 B" : null
+      : !isExecutorPickable(leadExecutor, leadTypes, leadProfiles) ? "调度者"
+        : !isExecutorPickable(workerExecutor, workerTypes, profiles) ? "执行者"
+          : review && !isExecutorPickable(reviewerExecutor, workerTypes, profiles) ? "审查者" : null;
+  const roleBlocked = !!unavailableRole
+    && (detection.status === "ready" || unavailableRole === "调度者");
+  const availabilityMessage = detection.status === "loading"
+    ? "正在检测本机智能体；检测完成前暂按全量类型显示。"
+    : detection.status === "failed" && roleBlocked
+      ? "检测失败时仍不能选择不支持常驻会话的团队调度者，请改选 resident 执行器。"
+      : detection.status === "failed"
+      ? "本地智能体检测失败；本次不拦截提交，请确认所选 CLI 已安装或使用已注册 Profile。"
+      : noExecutor
+        ? "没有检测到可用的智能体 CLI，也没有已注册执行器，暂不能创建任务。"
+        : unavailableRole
+          ? `${unavailableRole}当前不可运行，请改选已安装的类型或已注册 Profile。`
+          : null;
+  const availabilityTone = detection.status === "loading" ? "loading" as const
+    : noExecutor ? "empty" as const
+      : availabilityMessage ? "warning" as const : null;
+  const canSubmit = (mode === "debate" ? !!body.trim() : !!body.trim() || allAttachments.length > 0)
+    && !busy && !noExecutor && !roleBlocked;
 
   const submit = async (run: boolean) => {
     if (!canSubmit) return;
@@ -235,10 +378,10 @@ export function TaskComposerPanel({
         task = await api.createTask({ ...common, mode, debate: {
           ...DEBATE_DEFAULTS,
           topic: body.trim(),
-          debaterA: profileType(profiles, debaterAProfile, "claude"),
-          debaterB: profileType(profiles, debaterBProfile, "codex"),
-          debaterAExecutorId: selectedExecutorId(debaterAProfile),
-          debaterBExecutorId: selectedExecutorId(debaterBProfile),
+          debaterA: debaterAExecutor.agentType,
+          debaterB: debaterBExecutor.agentType,
+          debaterAExecutorId: debaterAExecutor.executorId,
+          debaterBExecutorId: debaterBExecutor.executorId,
           maxRounds: rounds ? Math.max(1, Number(rounds) || 3) : null,
           gateG1: gate ? "on" : "off",
         } });
@@ -254,15 +397,15 @@ export function TaskComposerPanel({
           team: {
             lead: executorTypes.lead,
             worker: executorTypes.worker,
-            leadExecutorId: selectedExecutorId(executors.lead.profile),
-            workerExecutorId: selectedExecutorId(executors.worker.profile),
+            leadExecutorId: leadExecutor.executorId,
+            workerExecutorId: workerExecutor.executorId,
             leadModel: executors.lead.model || null,
             workerModel: executors.worker.model || null,
             leadReasoningEffort: executors.lead.effort || null,
             workerReasoningEffort: executors.worker.effort || null,
             review,
             reviewerAgentType: executorTypes.reviewer,
-            reviewerExecutorId: selectedExecutorId(executors.reviewer.profile),
+            reviewerExecutorId: reviewerExecutor.executorId,
             reviewerModel: executors.reviewer.model || null,
             reviewerReasoningEffort: executors.reviewer.effort || null,
           },
@@ -274,7 +417,7 @@ export function TaskComposerPanel({
           attachments: allAttachments,
           mode,
           agentType: executorTypes.single,
-          executorId: selectedExecutorId(executors.single.profile),
+          executorId: singleExecutor.executorId,
           model: executors.single.model || null,
           reasoningEffort: executors.single.effort || null,
           useWorktree: project.health.isRepo && useWorktree,
@@ -380,8 +523,13 @@ export function TaskComposerPanel({
           <ComposerFields
             mode={mode}
             profiles={profiles}
+            workerTypes={workerTypes}
+            leadTypes={leadTypes}
+            leadProfiles={leadProfiles}
             executors={executors}
             executorTypes={executorTypes}
+            availabilityMessage={availabilityMessage}
+            availabilityTone={availabilityTone}
             onExecutorChange={changeExecutor}
             onOverrideChange={changeOverride}
             currentTeamConfig={currentTeamConfig}

@@ -4,6 +4,7 @@ import { AGENT_TYPES, DEFAULT_APP_SETTINGS } from "@harness/shared";
 import { CLI_MODEL_PRESETS, REASONING_EFFORT_VALUES } from "@harness/shared/cli-presets";
 import { Check, MagnifyingGlass, Plus, Trash } from "@phosphor-icons/react";
 import { Button, Toggle } from "../components/ui.tsx";
+import { refreshAgentAvailability } from "../lib/agentAvailability.ts";
 import { api, type DetectedCli } from "../lib/api.ts";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 
@@ -122,6 +123,7 @@ function AddProfile({ onAdded, notify }: { onAdded: (profile: AgentExecutorProfi
   if (!open) return <Button variant="primary" onClick={() => setOpen(true)}><Plus size={13} weight="bold" />新增执行器</Button>;
   return (
     <div className="settings-add-agent">
+      {/* This is a registration form, not a runnable-executor picker: SSH profiles may target a CLI absent locally. */}
       <select value={type} onChange={(event) => setType(event.target.value as AgentType)}>
         {AGENT_TYPES.map((value) => <option value={value} key={value}>{value}</option>)}
       </select>
@@ -150,7 +152,10 @@ export function AgentsSettings({ notify }: { notify: (message: string) => void }
   const change = (id: string, updated: AgentExecutorProfile | null) => setProfiles((current) => updated ? updateById(current, updated) : current.filter((row) => row.id !== id));
   const detect = async () => {
     setDetecting(true);
-    try { setDetected(await api.detectClis()); }
+    try {
+      setDetected(await api.detectClis());
+      refreshAgentAvailability();
+    }
     catch (error) { notify(error instanceof Error ? error.message : "本地 CLI 检测失败"); }
     finally { setDetecting(false); }
   };

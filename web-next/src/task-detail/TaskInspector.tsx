@@ -1,12 +1,21 @@
 import { useEffect, useMemo, useState } from "react";
-import type { AgentExecutorProfile, AgentType, Group, Schedule, Session, Task, TaskReviewInfo, TaskStatus } from "@harness/shared";
-import { AGENT_TYPES, isUserSettableStatus, TASK_STATUS_LABELS } from "@harness/shared";
+import type { AgentExecutorProfile, Group, Schedule, Session, Task, TaskReviewInfo, TaskStatus } from "@harness/shared";
+import { isUserSettableStatus, TASK_STATUS_LABELS } from "@harness/shared";
 import { CLI_MODEL_PRESETS, REASONING_EFFORT_VALUES } from "@harness/shared/cli-presets";
 import { sameExecutor } from "@harness/shared/executors";
 import { ArrowSquareOut, CaretRight, ListNumbers, Plus, X } from "@phosphor-icons/react";
 import { api } from "../lib/api.ts";
 import { LegacyLink } from "../components/LegacyLink.tsx";
 import { taskParentLink } from "../components/TaskOrigin.tsx";
+import {
+  executorOptions,
+  executorValue,
+  isExecutorPickable,
+  nothingRunnable,
+  parseExecutorValue,
+  teamExecutorCandidates,
+  useAgentAvailability,
+} from "../lib/agentAvailability.ts";
 import { QueueDrawer } from "./QueueDrawer.tsx";
 import { formatInstant, PRIORITY_LABELS, taskDurationInfo } from "./utils.ts";
 
@@ -127,6 +136,8 @@ export function TaskInspector({
   const [review, setReview] = useState<TaskReviewInfo | null>(null);
   const [schedule, setSchedule] = useState<Schedule | null>(null);
   const [profiles, setProfiles] = useState<AgentExecutorProfile[]>([]);
+  const [profilesReady, setProfilesReady] = useState(false);
+  const detection = useAgentAvailability();
   const readOnly = task.parentId !== null || !!task.archived;
   const latestSession = useMemo(
     () => [...sessions].sort((left, right) => right.startedAt.localeCompare(left.startedAt))[0],
@@ -142,7 +153,10 @@ export function TaskInspector({
     else api.queue(task.queueId).then((queue) => { if (alive) setQueueItems(queue.items); }).catch(() => undefined);
     api.taskReview(task.id).then((value) => { if (alive) setReview(value); }).catch(() => { if (alive) setReview(null); });
     api.schedule(task.id).then((value) => { if (alive) setSchedule(value); }).catch(() => { if (alive) setSchedule(null); });
-    api.agents().then((value) => { if (alive) setProfiles(value); }).catch(() => { if (alive) setProfiles([]); });
+    setProfilesReady(false);
+    api.agents().then((value) => { if (alive) setProfiles(value); })
+      .catch(() => { if (alive) setProfiles([]); })
+      .finally(() => { if (alive) setProfilesReady(true); });
     return () => { alive = false; };
   }, [task.id, task.queueId, queueOpen]);
 
@@ -175,7 +189,35 @@ export function TaskInspector({
 
   const statusOptions = STATUS_ORDER.filter((status) => isUserSettableStatus(status) || status === task.status);
   const agentType = task.agentType ?? "claude";
-  const executorValue = task.executorId ? `profile:${task.executorId}` : `default:${agentType}`;
+  const { workerTypes, leadTypes, leadProfiles } = useMemo(
+    () => teamExecutorCandidates(detection, profiles),
+    [detection, profiles],
+  );
+  const executorTypes = task.mode === "team" ? leadTypes : workerTypes;
+  const executorProfiles = task.mode === "team" ? leadProfiles : profiles;
+  const executorSelection = { agentType, executorId: task.executorId ?? null };
+  const executorSelectValue = executorValue(executorSelection);
+  const options = executorOptions({
+    types: executorTypes,
+    profiles: executorProfiles,
+    selection: executorSelection,
+    knownProfiles: profiles,
+  });
+  const pickableCount = executorTypes.length + executorProfiles.length;
+  const noExecutor = profilesReady && nothingRunnable(detection, profiles);
+  const currentUnavailable = detection.status === "ready"
+    && !isExecutorPickable(executorSelection, executorTypes, executorProfiles);
+  const availabilityMessage = detection.status === "loading"
+    ? "正在检测本机智能体，完成后会收窄候选。"
+    : detection.status === "failed"
+      ? "本地智能体检测失败，本次不限制类型候选；请确认 CLI 已安装。"
+      : noExecutor
+        ? "本机没有可用的智能体 CLI，也没有已注册执行器。"
+        : currentUnavailable
+          ? task.mode === "team"
+            ? "当前团队调度者不可用或不支持常驻会话，请改选 resident 执行器。"
+            : "当前执行器已不可用，请改选已安装的类型或已注册 Profile。"
+          : null;
   const modelOptions = [...new Set([task.model, ...CLI_MODEL_PRESETS[agentType]].filter((value): value is string => !!value))];
   const effortOptions = [...new Set([task.reasoningEffort, ...REASONING_EFFORT_VALUES[agentType]].filter((value): value is string => !!value))];
   const duration = taskDurationInfo(task);
@@ -243,15 +285,14 @@ export function TaskInspector({
           <h2>执行信息</h2>
           <InspectorRow label="执行器">
             <select
-              value={executorValue}
-              disabled={readOnly}
+              value={pickableCount || options.length ? executorSelectValue : ""}
+              disabled={readOnly || pickableCount === 0}
               onChange={(event) => {
-                const profileId = event.target.value.startsWith("profile:") ? event.target.value.slice(8) : null;
-                const profile = profiles.find((candidate) => candidate.id === profileId);
-                const next = {
-                  agentType: profile?.type ?? event.target.value.slice(8) as AgentType,
-                  executorId: profile?.id ?? null,
-                };
+                const next = parseExecutorValue(event.target.value, profiles, executorSelection);
+                if (!isExecutorPickable(next, executorTypes, executorProfiles)) {
+                  notify("该执行器当前不可用，请改选已安装的类型或已注册 Profile");
+                  return;
+                }
                 const current = { agentType, executorId: task.executorId ?? null };
                 void patch({
                   ...next,
@@ -259,9 +300,12 @@ export function TaskInspector({
                 }, "执行器已更新，将从下一回合生效");
               }}
             >
-              {AGENT_TYPES.map((type) => <option value={`default:${type}`} key={`default:${type}`}>默认 {type}</option>)}
-              {profiles.map((profile) => <option value={`profile:${profile.id}`} key={profile.id}>{profile.name}</option>)}
+              {options.length === 0 && <option value="">暂无可用执行器</option>}
+              {options.map((option) => (
+                <option value={option.value} disabled={option.disabled} key={option.value}>{option.label}</option>
+              ))}
             </select>
+            {availabilityMessage && <p className="task-inspector-note">{availabilityMessage}</p>}
           </InspectorRow>
           <InspectorRow label="模型">
             <select value={task.model ?? ""} disabled={readOnly} onChange={(event) => void patch({ model: event.target.value || null }, "模型设置已更新，将从下一回合生效")}>

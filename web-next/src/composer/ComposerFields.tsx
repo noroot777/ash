@@ -6,10 +6,14 @@ import type {
   TaskMode,
   TeamPresetConfig,
 } from "@harness/shared";
-import { AGENT_TYPES } from "@harness/shared";
 import { CLI_MODEL_PRESETS, REASONING_EFFORT_VALUES } from "@harness/shared/cli-presets";
 import { CaretDown, GearSix, SlidersHorizontal } from "@phosphor-icons/react";
 import { Toggle } from "../components/ui.tsx";
+import {
+  executorOptions,
+  executorValue,
+  parseExecutorValue,
+} from "../lib/agentAvailability.ts";
 import type { ComposerExecutorConfigs, ComposerExecutorRole } from "./executorOverrides.ts";
 import { PresetBar } from "./PresetBar.tsx";
 
@@ -21,41 +25,37 @@ const PRIORITIES: { value: Priority; label: string }[] = [
   { value: "urgent", label: "紧急" },
 ];
 
-export function profileType(profiles: AgentExecutorProfile[], id: string, fallback: AgentType): AgentType {
-  if (id.startsWith("__type:")) return id.slice(7) as AgentType;
-  return profiles.find((profile) => profile.id === id)?.type ?? fallback;
-}
-
-export function selectedExecutorId(value: string) {
-  return value && !value.startsWith("__type:") ? value : null;
-}
-
-function profileLabel(profile: AgentExecutorProfile) {
-  return `${profile.name}${profile.model ? ` · ${profile.model}` : ""}${profile.reasoningEffort ? ` · ${profile.reasoningEffort}` : ""}`;
-}
-
 function ExecutorSelect({
   label,
   value,
+  types,
   profiles,
+  knownProfiles,
+  fallbackType,
   onChange,
 }: {
   label: string;
   value: string;
+  types: AgentType[];
   profiles: AgentExecutorProfile[];
+  knownProfiles: AgentExecutorProfile[];
+  fallbackType: AgentType;
   onChange: (value: string) => void;
 }) {
+  const selection = parseExecutorValue(value, knownProfiles, { agentType: fallbackType, executorId: null });
+  const options = executorOptions({ types, profiles, knownProfiles, selection });
+  const pickableCount = types.length + profiles.length;
   return (
     <label className="composer-field">
       <span>{label}</span>
-      <select value={value} onChange={(event) => onChange(event.target.value)}>
-        {AGENT_TYPES.map((type) => (
-          <option value={`__type:${type}`} key={`type:${type}`}>{type} · 类型默认</option>
-        ))}
-        {profiles.map((profile) => (
-          <option value={profile.id} key={profile.id}>
-            {profileLabel(profile)}{profile.isDefault ? "（默认）" : ""}
-          </option>
+      <select
+        value={pickableCount || options.length ? executorValue(selection) : ""}
+        disabled={pickableCount === 0}
+        onChange={(event) => onChange(event.target.value)}
+      >
+        {options.length === 0 && <option value="">暂无可用执行器</option>}
+        {options.map((option) => (
+          <option value={option.value} disabled={option.disabled} key={option.value}>{option.label}</option>
         ))}
       </select>
     </label>
@@ -141,8 +141,13 @@ function OverrideGroup({
 export function ComposerFields({
   mode,
   profiles,
+  workerTypes,
+  leadTypes,
+  leadProfiles,
   executors,
   executorTypes,
+  availabilityMessage,
+  availabilityTone,
   onExecutorChange,
   onOverrideChange,
   currentTeamConfig,
@@ -172,8 +177,13 @@ export function ComposerFields({
 }: {
   mode: TaskMode;
   profiles: AgentExecutorProfile[];
+  workerTypes: AgentType[];
+  leadTypes: AgentType[];
+  leadProfiles: AgentExecutorProfile[];
   executors: ComposerExecutorConfigs;
   executorTypes: Record<ComposerExecutorRole, AgentType>;
+  availabilityMessage: string | null;
+  availabilityTone: "loading" | "warning" | "empty" | null;
   onExecutorChange: (role: ComposerExecutorRole, value: string) => void;
   onOverrideChange: (role: ComposerExecutorRole, patch: { model?: string; effort?: string }) => void;
   currentTeamConfig: TeamPresetConfig;
@@ -219,22 +229,25 @@ export function ComposerFields({
         )}
         <div className={`composer-executor-grid is-${mode}`}>
           {mode === "single" && (
-            <ExecutorSelect label="执行器" value={executors.single.profile} profiles={profiles} onChange={(value) => onExecutorChange("single", value)} />
+            <ExecutorSelect label="执行器" value={executors.single.profile} types={workerTypes} profiles={profiles} knownProfiles={profiles} fallbackType="claude" onChange={(value) => onExecutorChange("single", value)} />
           )}
           {mode === "team" && (
             <>
-              <ExecutorSelect label="调度者执行器" value={executors.lead.profile} profiles={profiles} onChange={(value) => onExecutorChange("lead", value)} />
-              <ExecutorSelect label="执行者执行器" value={executors.worker.profile} profiles={profiles} onChange={(value) => onExecutorChange("worker", value)} />
-              <ExecutorSelect label="审查者执行器" value={executors.reviewer.profile} profiles={profiles} onChange={(value) => onExecutorChange("reviewer", value)} />
+              <ExecutorSelect label="调度者执行器" value={executors.lead.profile} types={leadTypes} profiles={leadProfiles} knownProfiles={profiles} fallbackType="claude" onChange={(value) => onExecutorChange("lead", value)} />
+              <ExecutorSelect label="执行者执行器" value={executors.worker.profile} types={workerTypes} profiles={profiles} knownProfiles={profiles} fallbackType="codex" onChange={(value) => onExecutorChange("worker", value)} />
+              <ExecutorSelect label="审查者执行器" value={executors.reviewer.profile} types={workerTypes} profiles={profiles} knownProfiles={profiles} fallbackType={executorTypes.worker} onChange={(value) => onExecutorChange("reviewer", value)} />
             </>
           )}
           {mode === "debate" && (
             <>
-              <ExecutorSelect label="正方执行器" value={debaterAProfile} profiles={profiles} onChange={onDebaterAChange} />
-              <ExecutorSelect label="反方执行器" value={debaterBProfile} profiles={profiles} onChange={onDebaterBChange} />
+              <ExecutorSelect label="正方执行器" value={debaterAProfile} types={workerTypes} profiles={profiles} knownProfiles={profiles} fallbackType="claude" onChange={onDebaterAChange} />
+              <ExecutorSelect label="反方执行器" value={debaterBProfile} types={workerTypes} profiles={profiles} knownProfiles={profiles} fallbackType="codex" onChange={onDebaterBChange} />
             </>
           )}
         </div>
+        {availabilityMessage && (
+          <p className={`composer-agent-availability is-${availabilityTone ?? "warning"}`}>{availabilityMessage}</p>
+        )}
       </section>
 
       {mode !== "debate" && (

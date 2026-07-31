@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { AgentExecutorProfile, AgentType, DebateConfig, Task, TeamConfig } from "@harness/shared";
 import {
-  AGENT_TYPES,
   DEBATE_DEFAULTS,
   DEFAULT_APP_SETTINGS,
   TEAM_DEFAULTS,
@@ -17,6 +16,16 @@ import {
   X,
 } from "@phosphor-icons/react";
 import { Button, Toggle } from "../components/ui.tsx";
+import {
+  executorOptions,
+  executorValue,
+  isExecutorPickable,
+  nothingRunnable,
+  parseExecutorValue,
+  preferredExecutor,
+  teamExecutorCandidates,
+  useAgentAvailability,
+} from "../lib/agentAvailability.ts";
 import { api } from "../lib/api.ts";
 import {
   buildTaskDerivationBody,
@@ -38,18 +47,7 @@ type WorktreeContext = {
   worktreeDefault: boolean;
 };
 
-type DetectedAgent = Awaited<ReturnType<typeof api.detectAgents>>[number];
-
 const emptyChoice = (): ExecutorChoice => ({ profile: "", model: "", effort: "" });
-
-function selectionType(profiles: AgentExecutorProfile[], value: string, fallback: AgentType): AgentType {
-  if (value.startsWith("__type:")) return value.slice(7) as AgentType;
-  return profiles.find((profile) => profile.id === value)?.type ?? fallback;
-}
-
-function selectionExecutorId(value: string): string | null {
-  return value && !value.startsWith("__type:") ? value : null;
-}
 
 function preferredSelection(
   types: AgentType[],
@@ -57,25 +55,8 @@ function preferredSelection(
   preferred: AgentType,
   avoid?: AgentType,
 ): string {
-  const type = types.find((candidate) => candidate === preferred && candidate !== avoid)
-    ?? types.find((candidate) => candidate !== avoid)
-    ?? types[0];
-  if (type) return `__type:${type}`;
-  const profile = profiles.find((candidate) => candidate.type === preferred && candidate.type !== avoid && candidate.isDefault)
-    ?? profiles.find((candidate) => candidate.type !== avoid && candidate.isDefault)
-    ?? profiles.find((candidate) => candidate.type !== avoid)
-    ?? profiles.find((candidate) => candidate.isDefault)
-    ?? profiles[0];
-  return profile?.id ?? `__type:${preferred}`;
-}
-
-function selectionAvailable(
-  value: string,
-  types: AgentType[],
-  profiles: AgentExecutorProfile[],
-): boolean {
-  if (value.startsWith("__type:")) return types.includes(value.slice(7) as AgentType);
-  return profiles.some((profile) => profile.id === value);
+  return executorValue(preferredExecutor(types, profiles, preferred, avoid)
+    ?? { agentType: preferred, executorId: null });
 }
 
 function ExecutorSelect({
@@ -83,23 +64,32 @@ function ExecutorSelect({
   value,
   types,
   profiles,
+  knownProfiles = profiles,
+  fallbackType,
   onChange,
 }: {
   label: string;
   value: string;
   types: AgentType[];
   profiles: AgentExecutorProfile[];
+  knownProfiles?: AgentExecutorProfile[];
+  fallbackType: AgentType;
   onChange: (value: string) => void;
 }) {
+  const selection = parseExecutorValue(value, knownProfiles, { agentType: fallbackType, executorId: null });
+  const options = executorOptions({ types, profiles, knownProfiles, selection });
+  const pickableCount = types.length + profiles.length;
   return (
     <label className="composer-field">
       <span>{label}</span>
-      <select value={value} onChange={(event) => onChange(event.target.value)}>
-        {types.map((type) => <option value={`__type:${type}`} key={`type:${type}`}>{type} · 类型默认</option>)}
-        {profiles.map((profile) => (
-          <option value={profile.id} key={profile.id}>
-            {profile.name}{profile.model ? ` · ${profile.model}` : ""}{profile.isDefault ? "（默认）" : ""}
-          </option>
+      <select
+        value={pickableCount || options.length ? executorValue(selection) : ""}
+        disabled={pickableCount === 0}
+        onChange={(event) => onChange(event.target.value)}
+      >
+        {options.length === 0 && <option value="">暂无可用执行器</option>}
+        {options.map((option) => (
+          <option value={option.value} disabled={option.disabled} key={option.value}>{option.label}</option>
         ))}
       </select>
     </label>
@@ -112,6 +102,8 @@ function TeamExecutorField({
   choice,
   types,
   profiles,
+  knownProfiles,
+  fallbackType,
   onChange,
 }: {
   role: string;
@@ -119,9 +111,15 @@ function TeamExecutorField({
   choice: ExecutorChoice;
   types: AgentType[];
   profiles: AgentExecutorProfile[];
+  knownProfiles: AgentExecutorProfile[];
+  fallbackType: AgentType;
   onChange: (choice: ExecutorChoice) => void;
 }) {
-  const type = selectionType(profiles, choice.profile, TEAM_DEFAULTS.worker);
+  const type = parseExecutorValue(
+    choice.profile,
+    knownProfiles,
+    { agentType: fallbackType, executorId: null },
+  ).agentType;
   const modelsId = `task-derivation-models-${role}-${type}`;
   return (
     <div className="task-derivation-role">
@@ -130,6 +128,8 @@ function TeamExecutorField({
         value={choice.profile}
         types={types}
         profiles={profiles}
+        knownProfiles={knownProfiles}
+        fallbackType={fallbackType}
         onChange={(profile) => onChange({ profile, model: "", effort: "" })}
       />
       <div className="task-derivation-overrides">
@@ -178,8 +178,7 @@ export function TaskDerivationComposer({
   const teamMode = command.kind === "team";
   const [busy, setBusy] = useState(false);
   const [profiles, setProfiles] = useState<AgentExecutorProfile[]>([]);
-  const [detected, setDetected] = useState<DetectedAgent[] | null>(null);
-  const [detectionFailed, setDetectionFailed] = useState(false);
+  const [profilesReady, setProfilesReady] = useState(false);
   const [executorsReady, setExecutorsReady] = useState(false);
   const [lead, setLead] = useState<ExecutorChoice>(emptyChoice);
   const [worker, setWorker] = useState<ExecutorChoice>(emptyChoice);
@@ -196,43 +195,88 @@ export function TaskDerivationComposer({
   const topicTouched = useRef(false);
   const noteRef = useRef<HTMLTextAreaElement>(null);
   const topicRef = useRef<HTMLTextAreaElement>(null);
+  const detection = useAgentAvailability();
+  const {
+    workerTypes: availableTypes,
+    leadTypes,
+    leadProfiles,
+  } = useMemo(() => teamExecutorCandidates(detection, profiles), [detection, profiles]);
 
   useEffect(() => {
     let alive = true;
-    const profilesRequest = api.agents().catch((error) => {
-      notify(error instanceof Error ? error.message : "执行器配置读取失败");
-      return [] as AgentExecutorProfile[];
+    setProfilesReady(false);
+    api.agents().then((nextProfiles) => {
+      if (alive) setProfiles(nextProfiles);
+    }).catch((error) => {
+      if (alive) notify(error instanceof Error ? error.message : "执行器配置读取失败");
+    }).finally(() => {
+      if (alive) setProfilesReady(true);
     });
-    const detectionRequest = api.detectAgents().then(
-      (list) => ({ list, failed: false }),
-      () => ({ list: [] as DetectedAgent[], failed: true }),
-    );
-    Promise.all([profilesRequest, detectionRequest]).then(([nextProfiles, detection]) => {
-      if (!alive) return;
-      const availableTypes = detection.failed
-        ? [...AGENT_TYPES]
-        : AGENT_TYPES.filter((type) => detection.list.some((item) => item.type === type && item.available));
-      const residentTypes = AGENT_TYPES.filter((type) => type === "claude"
-        || detection.list.some((item) => item.type === type && item.resident));
-      const leadTypes = availableTypes.filter((type) => residentTypes.includes(type));
-      const leadProfiles = nextProfiles.filter((profile) => residentTypes.includes(profile.type));
+    return () => { alive = false; };
+  }, [notify]);
+
+  useEffect(() => {
+    if (!profilesReady || detection.status === "loading") return;
+    if (!executorsReady) {
       const leadProfile = preferredSelection(leadTypes, leadProfiles, TEAM_DEFAULTS.lead);
-      const leadType = selectionType(leadProfiles, leadProfile, TEAM_DEFAULTS.lead);
-      const workerProfile = preferredSelection(availableTypes, nextProfiles, "codex", leadType);
-      const debateAProfile = preferredSelection(availableTypes, nextProfiles, DEBATE_DEFAULTS.debaterA);
-      const debateAType = selectionType(nextProfiles, debateAProfile, DEBATE_DEFAULTS.debaterA);
-      setProfiles(nextProfiles);
-      setDetected(detection.list);
-      setDetectionFailed(detection.failed);
+      const leadType = parseExecutorValue(
+        leadProfile,
+        profiles,
+        { agentType: TEAM_DEFAULTS.lead, executorId: null },
+      ).agentType;
+      const workerProfile = preferredSelection(availableTypes, profiles, "codex", leadType);
+      const debateAProfile = preferredSelection(availableTypes, profiles, DEBATE_DEFAULTS.debaterA);
+      const debateAType = parseExecutorValue(
+        debateAProfile,
+        profiles,
+        { agentType: DEBATE_DEFAULTS.debaterA, executorId: null },
+      ).agentType;
       setLead({ profile: leadProfile, model: "", effort: "" });
       setWorker({ profile: workerProfile, model: "", effort: "" });
       setReviewer({ profile: workerProfile, model: "", effort: "" });
       setDebaterA(debateAProfile);
-      setDebaterB(preferredSelection(availableTypes, nextProfiles, DEBATE_DEFAULTS.debaterB, debateAType));
+      setDebaterB(preferredSelection(availableTypes, profiles, DEBATE_DEFAULTS.debaterB, debateAType));
       setExecutorsReady(true);
-    });
-    return () => { alive = false; };
-  }, [notify]);
+      return;
+    }
+    const reconcileChoice = (
+      current: ExecutorChoice,
+      types: AgentType[],
+      candidates: AgentExecutorProfile[],
+      preferred: AgentType,
+      avoid?: AgentType,
+    ) => {
+      const selection = parseExecutorValue(current.profile, profiles, { agentType: preferred, executorId: null });
+      if (current.profile === executorValue(selection) && isExecutorPickable(selection, types, candidates)) {
+        return current;
+      }
+      const fallback = preferredExecutor(types, candidates, preferred, avoid);
+      return fallback ? { profile: executorValue(fallback), model: "", effort: "" } : current;
+    };
+    setLead((current) => reconcileChoice(current, leadTypes, leadProfiles, TEAM_DEFAULTS.lead));
+    setWorker((current) => reconcileChoice(current, availableTypes, profiles, TEAM_DEFAULTS.worker));
+    setReviewer((current) => reconcileChoice(current, availableTypes, profiles, TEAM_DEFAULTS.worker));
+    setDebaterA((current) => reconcileChoice(
+      { profile: current, model: "", effort: "" },
+      availableTypes,
+      profiles,
+      DEBATE_DEFAULTS.debaterA,
+    ).profile);
+    setDebaterB((current) => reconcileChoice(
+      { profile: current, model: "", effort: "" },
+      availableTypes,
+      profiles,
+      DEBATE_DEFAULTS.debaterB,
+    ).profile);
+  }, [
+    availableTypes,
+    detection.status,
+    executorsReady,
+    leadProfiles,
+    leadTypes,
+    profiles,
+    profilesReady,
+  ]);
 
   useEffect(() => {
     let alive = true;
@@ -265,36 +309,61 @@ export function TaskDerivationComposer({
     (teamMode ? noteRef : topicRef).current?.focus();
   }, [live, teamMode]);
 
-  const availableTypes = useMemo(() => detectionFailed
-    ? [...AGENT_TYPES]
-    : AGENT_TYPES.filter((type) => detected?.some((item) => item.type === type && item.available)),
-  [detected, detectionFailed]);
-  const residentTypes = useMemo(() => AGENT_TYPES.filter((type) => type === "claude"
-    || detected?.some((item) => item.type === type && item.resident)), [detected]);
-  const leadTypes = availableTypes.filter((type) => residentTypes.includes(type));
-  const leadProfiles = profiles.filter((profile) => residentTypes.includes(profile.type));
   const worktree = derivedWorktreeDefaults(
     task,
     worktreeContext?.branches ?? [],
     !!worktreeContext?.isRepo,
     worktreeContext?.worktreeDefault ?? DEFAULT_APP_SETTINGS.worktreeDefault,
   );
-  const noExecutor = executorsReady && !detectionFailed && availableTypes.length === 0 && profiles.length === 0;
+  const noExecutor = executorsReady && nothingRunnable(detection, profiles);
   const unavailableRole = !executorsReady ? null : teamMode
-    ? !selectionAvailable(lead.profile, leadTypes, leadProfiles)
+    ? !isExecutorPickable(
+      parseExecutorValue(lead.profile, profiles, { agentType: TEAM_DEFAULTS.lead, executorId: null }),
+      leadTypes,
+      leadProfiles,
+    )
       ? "调度者"
-      : !selectionAvailable(worker.profile, availableTypes, profiles)
+      : !isExecutorPickable(
+        parseExecutorValue(worker.profile, profiles, { agentType: TEAM_DEFAULTS.worker, executorId: null }),
+        availableTypes,
+        profiles,
+      )
         ? "执行者"
-        : reviewEnabled && !selectionAvailable(reviewer.profile, availableTypes, profiles)
+        : reviewEnabled && !isExecutorPickable(
+          parseExecutorValue(reviewer.profile, profiles, { agentType: TEAM_DEFAULTS.worker, executorId: null }),
+          availableTypes,
+          profiles,
+        )
           ? "审查者"
           : null
-    : !selectionAvailable(debaterA, availableTypes, profiles)
+    : !isExecutorPickable(
+      parseExecutorValue(debaterA, profiles, { agentType: DEBATE_DEFAULTS.debaterA, executorId: null }),
+      availableTypes,
+      profiles,
+    )
       ? "辩手 A"
-      : !selectionAvailable(debaterB, availableTypes, profiles)
+      : !isExecutorPickable(
+        parseExecutorValue(debaterB, profiles, { agentType: DEBATE_DEFAULTS.debaterB, executorId: null }),
+        availableTypes,
+        profiles,
+      )
         ? "辩手 B"
         : null;
-  const canSubmit = !busy && executorsReady && !!worktreeContext && !noExecutor && !unavailableRole
+  const roleBlocked = !!unavailableRole
+    && (detection.status === "ready" || unavailableRole === "调度者");
+  const canSubmit = !busy && executorsReady && !!worktreeContext && !noExecutor && !roleBlocked
     && (teamMode || !!topic.trim());
+  const availabilityMessage = detection.status === "loading"
+    ? "正在检测本机智能体…"
+    : detection.status === "failed" && roleBlocked
+      ? "检测失败时仍不能选择不支持常驻会话的团队调度者，请更换执行器。"
+      : detection.status === "failed"
+      ? "本地智能体检测失败；本次不拦截提交，请确认所选 CLI 已安装或使用已注册 Profile。"
+      : noExecutor
+        ? "没有检测到可用的智能体 CLI，也没有已注册执行器，暂不能创建。"
+        : unavailableRole
+          ? `${unavailableRole}当前不可用，请更换执行器。`
+          : null;
 
   const submit = async () => {
     if (!canSubmit) return;
@@ -304,18 +373,33 @@ export function TaskDerivationComposer({
       const sessions = await api.sessions(task.id);
       const body = buildTaskDerivationBody(task, sessions, command.kind, teamMode ? note : topic);
       if (teamMode) {
+        const leadSelection = parseExecutorValue(
+          lead.profile,
+          profiles,
+          { agentType: TEAM_DEFAULTS.lead, executorId: null },
+        );
+        const workerSelection = parseExecutorValue(
+          worker.profile,
+          profiles,
+          { agentType: TEAM_DEFAULTS.worker, executorId: null },
+        );
+        const reviewerSelection = parseExecutorValue(
+          reviewer.profile,
+          profiles,
+          { agentType: TEAM_DEFAULTS.worker, executorId: null },
+        );
         const team: TeamConfig = {
-          lead: selectionType(profiles, lead.profile, TEAM_DEFAULTS.lead),
-          worker: selectionType(profiles, worker.profile, TEAM_DEFAULTS.worker),
-          leadExecutorId: selectionExecutorId(lead.profile),
-          workerExecutorId: selectionExecutorId(worker.profile),
+          lead: leadSelection.agentType,
+          worker: workerSelection.agentType,
+          leadExecutorId: leadSelection.executorId,
+          workerExecutorId: workerSelection.executorId,
           leadModel: lead.model || null,
           leadReasoningEffort: lead.effort || null,
           workerModel: worker.model || null,
           workerReasoningEffort: worker.effort || null,
           review: reviewEnabled,
-          reviewerAgentType: selectionType(profiles, reviewer.profile, TEAM_DEFAULTS.worker),
-          reviewerExecutorId: selectionExecutorId(reviewer.profile),
+          reviewerAgentType: reviewerSelection.agentType,
+          reviewerExecutorId: reviewerSelection.executorId,
           reviewerModel: reviewer.model || null,
           reviewerReasoningEffort: reviewer.effort || null,
         };
@@ -331,13 +415,23 @@ export function TaskDerivationComposer({
           worktreeBase: worktree.worktreeBase,
         });
       } else {
+        const debaterASelection = parseExecutorValue(
+          debaterA,
+          profiles,
+          { agentType: DEBATE_DEFAULTS.debaterA, executorId: null },
+        );
+        const debaterBSelection = parseExecutorValue(
+          debaterB,
+          profiles,
+          { agentType: DEBATE_DEFAULTS.debaterB, executorId: null },
+        );
         const debate: DebateConfig = {
           ...DEBATE_DEFAULTS,
           topic: topic.trim(),
-          debaterA: selectionType(profiles, debaterA, DEBATE_DEFAULTS.debaterA),
-          debaterB: selectionType(profiles, debaterB, DEBATE_DEFAULTS.debaterB),
-          debaterAExecutorId: selectionExecutorId(debaterA),
-          debaterBExecutorId: selectionExecutorId(debaterB),
+          debaterA: debaterASelection.agentType,
+          debaterB: debaterBSelection.agentType,
+          debaterAExecutorId: debaterASelection.executorId,
+          debaterBExecutorId: debaterBSelection.executorId,
           maxRounds: rounds === "" ? null : Math.max(1, Number(rounds) || 3),
           gateG1: gate ? "on" : "off",
         };
@@ -396,9 +490,9 @@ export function TaskDerivationComposer({
         {teamMode ? (
           <>
             <div className="task-derivation-role-grid">
-              <TeamExecutorField role="lead" label="调度者执行器" choice={lead} types={leadTypes} profiles={leadProfiles} onChange={setLead} />
-              <TeamExecutorField role="worker" label="执行者执行器" choice={worker} types={availableTypes} profiles={profiles} onChange={setWorker} />
-              {reviewEnabled && <TeamExecutorField role="reviewer" label="审查者执行器" choice={reviewer} types={availableTypes} profiles={profiles} onChange={setReviewer} />}
+              <TeamExecutorField role="lead" label="调度者执行器" choice={lead} types={leadTypes} profiles={leadProfiles} knownProfiles={profiles} fallbackType={TEAM_DEFAULTS.lead} onChange={setLead} />
+              <TeamExecutorField role="worker" label="执行者执行器" choice={worker} types={availableTypes} profiles={profiles} knownProfiles={profiles} fallbackType={TEAM_DEFAULTS.worker} onChange={setWorker} />
+              {reviewEnabled && <TeamExecutorField role="reviewer" label="审查者执行器" choice={reviewer} types={availableTypes} profiles={profiles} knownProfiles={profiles} fallbackType={TEAM_DEFAULTS.worker} onChange={setReviewer} />}
             </div>
             <div className="task-derivation-review">
               <span>自动审查</span>
@@ -434,8 +528,8 @@ export function TaskDerivationComposer({
               />
             </label>
             <div className="task-derivation-debate-grid">
-              <ExecutorSelect label="辩手 A" value={debaterA} types={availableTypes} profiles={profiles} onChange={setDebaterA} />
-              <ExecutorSelect label="辩手 B" value={debaterB} types={availableTypes} profiles={profiles} onChange={setDebaterB} />
+              <ExecutorSelect label="辩手 A" value={debaterA} types={availableTypes} profiles={profiles} fallbackType={DEBATE_DEFAULTS.debaterA} onChange={setDebaterA} />
+              <ExecutorSelect label="辩手 B" value={debaterB} types={availableTypes} profiles={profiles} fallbackType={DEBATE_DEFAULTS.debaterB} onChange={setDebaterB} />
               <label className="composer-field">
                 <span>最多轮数</span>
                 <select value={rounds} onChange={(event) => setRounds(event.target.value)}>
@@ -454,12 +548,10 @@ export function TaskDerivationComposer({
       </div>
 
       <footer className="task-derivation-footer">
-        {(noExecutor || unavailableRole) && (
+        {availabilityMessage && (
           <p className="task-derivation-warning">
             <Warning size={13} />
-            {noExecutor
-              ? "没有检测到可用的智能体 CLI，也没有已注册执行器，暂不能创建。"
-              : `${unavailableRole}当前不可用，请更换执行器。`}
+            {availabilityMessage}
           </p>
         )}
         <WorktreeHint context={worktreeContext} worktree={worktree} />

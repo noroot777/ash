@@ -1,6 +1,16 @@
 import { useEffect, useMemo, useState } from "react";
-import { AGENT_TYPES, TEAM_DEFAULTS, type AgentExecutorProfile, type AgentType, type Task } from "@harness/shared";
-import { ArrowRight, Crown, Robot, UsersThree } from "@phosphor-icons/react";
+import { TEAM_DEFAULTS, type AgentExecutorProfile, type AgentType, type Task } from "@harness/shared";
+import { ArrowRight, Crown, Robot, UsersThree, Warning } from "@phosphor-icons/react";
+import {
+  executorOptions,
+  executorValue,
+  isExecutorPickable,
+  nothingRunnable,
+  parseExecutorValue,
+  preferredExecutor,
+  teamExecutorCandidates,
+  useAgentAvailability,
+} from "../lib/agentAvailability.ts";
 import { api } from "../lib/api.ts";
 
 export type HandoffChoice = {
@@ -9,38 +19,40 @@ export type HandoffChoice = {
   worker: { agentType: AgentType; executorId: string | null };
 };
 
-function optionValue(type: AgentType, executorId: string | null): string {
-  return executorId ? `profile:${executorId}` : `type:${type}`;
-}
-
-function resolveChoice(value: string, profiles: AgentExecutorProfile[]): HandoffChoice["lead"] {
-  if (value.startsWith("profile:")) {
-    const profile = profiles.find((item) => item.id === value.slice(8));
-    if (profile) return { agentType: profile.type, executorId: profile.id };
-  }
-  const type = value.slice(5) as AgentType;
-  return { agentType: AGENT_TYPES.includes(type) ? type : "claude", executorId: null };
-}
-
 function ExecutorSelect({
   icon,
   label,
   value,
+  types,
   profiles,
+  knownProfiles,
+  fallbackType,
   onChange,
 }: {
   icon: React.ReactNode;
   label: string;
   value: string;
+  types: AgentType[];
   profiles: AgentExecutorProfile[];
+  knownProfiles: AgentExecutorProfile[];
+  fallbackType: AgentType;
   onChange: (value: string) => void;
 }) {
+  const selection = parseExecutorValue(value, knownProfiles, { agentType: fallbackType, executorId: null });
+  const options = executorOptions({ types, profiles, knownProfiles, selection });
+  const pickableCount = types.length + profiles.length;
   return (
     <label className="debate-handoff-field">
       <span>{icon}{label}</span>
-      <select value={value} onChange={(event) => onChange(event.target.value)}>
-        {AGENT_TYPES.map((type) => <option key={type} value={optionValue(type, null)}>默认 {type}</option>)}
-        {profiles.map((profile) => <option key={profile.id} value={optionValue(profile.type, profile.id)}>{profile.name}</option>)}
+      <select
+        value={pickableCount || options.length ? executorValue(selection) : ""}
+        disabled={pickableCount === 0}
+        onChange={(event) => onChange(event.target.value)}
+      >
+        {options.length === 0 && <option value="">暂无可用执行器</option>}
+        {options.map((option) => (
+          <option key={option.value} value={option.value} disabled={option.disabled}>{option.label}</option>
+        ))}
       </select>
     </label>
   );
@@ -56,26 +68,80 @@ export function DebateHandoffModal({
   onConfirm: (choice: HandoffChoice) => Promise<boolean>;
 }) {
   const [profiles, setProfiles] = useState<AgentExecutorProfile[]>([]);
-  const [lead, setLead] = useState(optionValue(TEAM_DEFAULTS.lead, null));
-  const [worker, setWorker] = useState(optionValue(TEAM_DEFAULTS.worker, null));
+  const [profilesReady, setProfilesReady] = useState(false);
+  const [lead, setLead] = useState(executorValue({ agentType: TEAM_DEFAULTS.lead, executorId: null }));
+  const [worker, setWorker] = useState(executorValue({ agentType: TEAM_DEFAULTS.worker, executorId: null }));
   const [note, setNote] = useState("");
-  useEffect(() => { void api.agents().then(setProfiles).catch(() => setProfiles([])); }, []);
+  const detection = useAgentAvailability();
+  const { workerTypes, leadTypes, leadProfiles } = useMemo(
+    () => teamExecutorCandidates(detection, profiles),
+    [detection, profiles],
+  );
+  useEffect(() => {
+    let alive = true;
+    api.agents().then((nextProfiles) => { if (alive) setProfiles(nextProfiles); })
+      .catch(() => { if (alive) setProfiles([]); })
+      .finally(() => { if (alive) setProfilesReady(true); });
+    return () => { alive = false; };
+  }, []);
+  useEffect(() => {
+    if (!profilesReady || detection.status === "loading") return;
+    const reconcile = (
+      value: string,
+      types: AgentType[],
+      candidates: AgentExecutorProfile[],
+      preferred: AgentType,
+      avoid?: AgentType,
+    ) => {
+      const current = parseExecutorValue(value, profiles, { agentType: preferred, executorId: null });
+      if (value === executorValue(current) && isExecutorPickable(current, types, candidates)) return value;
+      const fallback = preferredExecutor(types, candidates, preferred, avoid);
+      return fallback ? executorValue(fallback) : value;
+    };
+    const nextLead = reconcile(lead, leadTypes, leadProfiles, TEAM_DEFAULTS.lead);
+    const leadType = parseExecutorValue(
+      nextLead,
+      profiles,
+      { agentType: TEAM_DEFAULTS.lead, executorId: null },
+    ).agentType;
+    const nextWorker = reconcile(worker, workerTypes, profiles, TEAM_DEFAULTS.worker, leadType);
+    if (nextLead !== lead) setLead(nextLead);
+    if (nextWorker !== worker) setWorker(nextWorker);
+  }, [detection.status, lead, leadProfiles, leadTypes, profiles, profilesReady, worker, workerTypes]);
   const choice = useMemo(() => ({
     note,
-    lead: resolveChoice(lead, profiles),
-    worker: resolveChoice(worker, profiles),
+    lead: parseExecutorValue(lead, profiles, { agentType: TEAM_DEFAULTS.lead, executorId: null }),
+    worker: parseExecutorValue(worker, profiles, { agentType: TEAM_DEFAULTS.worker, executorId: null }),
   }), [lead, note, profiles, worker]);
-  const confirm = async () => { if (!busy && await onConfirm(choice)) onClose(); };
+  const noExecutor = profilesReady && nothingRunnable(detection, profiles);
+  const unavailableRole = !isExecutorPickable(choice.lead, leadTypes, leadProfiles) ? "调度者"
+    : !isExecutorPickable(choice.worker, workerTypes, profiles) ? "执行者" : null;
+  const roleBlocked = !!unavailableRole
+    && (detection.status === "ready" || unavailableRole === "调度者");
+  const availabilityMessage = detection.status === "loading"
+    ? "正在检测本机智能体；检测完成前暂按已知能力显示。"
+    : detection.status === "failed" && roleBlocked
+      ? "检测失败时仍不能选择不支持常驻会话的团队调度者，请更换执行器。"
+      : detection.status === "failed"
+      ? "本地智能体检测失败；本次不拦截创建，请确认所选 CLI 已安装或使用已注册 Profile。"
+      : noExecutor
+        ? "没有检测到可用的智能体 CLI，也没有已注册执行器，暂不能创建团队。"
+        : unavailableRole
+          ? `${unavailableRole}当前不可用，请更换执行器。`
+          : null;
+  const canConfirm = !busy && !noExecutor && !roleBlocked;
+  const confirm = async () => { if (canConfirm && await onConfirm(choice)) onClose(); };
   return (
     <div className="debate-handoff-scrim" onMouseDown={(event) => event.target === event.currentTarget && !busy && onClose()}>
       <section className="debate-handoff-modal" role="dialog" aria-modal="true" aria-labelledby="debate-handoff-title">
         <header><span><UsersThree size={17} weight="fill" /></span><div><h2 id="debate-handoff-title">接力成团</h2><p>辩题、结论和完整转写路径会一并交给新团队。</p></div></header>
         <div className="debate-handoff-grid">
-          <ExecutorSelect icon={<Crown size={13} />} label="调度者" value={lead} profiles={profiles} onChange={setLead} />
-          <ExecutorSelect icon={<Robot size={13} />} label="默认执行者" value={worker} profiles={profiles} onChange={setWorker} />
+          <ExecutorSelect icon={<Crown size={13} />} label="调度者" value={lead} types={leadTypes} profiles={leadProfiles} knownProfiles={profiles} fallbackType={TEAM_DEFAULTS.lead} onChange={setLead} />
+          <ExecutorSelect icon={<Robot size={13} />} label="默认执行者" value={worker} types={workerTypes} profiles={profiles} knownProfiles={profiles} fallbackType={TEAM_DEFAULTS.worker} onChange={setWorker} />
         </div>
+        {availabilityMessage && <p className="debate-handoff-warning"><Warning size={13} />{availabilityMessage}</p>}
         <label className="debate-handoff-note"><span>可选附言</span><textarea rows={4} value={note} placeholder="补充执行重点、边界或验收要求…" onChange={(event) => setNote(event.target.value)} /></label>
-        <footer><button type="button" disabled={busy} onClick={onClose}>取消</button><button type="button" className="is-primary" disabled={busy} onClick={() => void confirm()}>{busy ? "创建中…" : "创建并开干"}</button></footer>
+        <footer><button type="button" disabled={busy} onClick={onClose}>取消</button><button type="button" className="is-primary" disabled={!canConfirm} onClick={() => void confirm()}>{busy ? "创建中…" : "创建并开干"}</button></footer>
       </section>
     </div>
   );

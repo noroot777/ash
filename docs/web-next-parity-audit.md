@@ -4,7 +4,7 @@
 
 审计基线：`c3d37d3`（`web/src` 对 `web-next/src`）
 
-修复进度：P1-5、P1-6 已于 2026-07-31 修复；下方保留审计时的缺口描述，并在对应条目标记结果。
+修复进度：P1-1、P1-5、P1-6 已于 2026-07-31 修复；下方保留审计时的缺口描述，并在对应条目标记结果。
 
 结论（审计基线）：没有发现 P0，共识别 **25 个旧版能力缺失或退化点**：P1 10 个、P2 11 个、P3 4 个。普通任务回复框的 `/team`、`/debate` 派生命令在审计期间由另一执行者修复并提交，本报告将它记入“已确认对齐”，不重复实施；后续修复进度见上方说明和条目标记。
 
@@ -18,14 +18,15 @@
 
 严重度口径：P0 阻断基本使用；P1 影响主要工作流或正确性；P2 有替代路径但能力不完整；P3 低频效率或可发现性退化。
 
-## P1：主要工作流或正确性缺口（审计识别 10，已修 2）
+## P1：主要工作流或正确性缺口（审计识别 10，已修 3）
 
-### 1. 执行器候选缺少“已安装/已注册/可常驻”能力校验
+### 1. 执行器候选缺少“已安装/已注册/可常驻”能力校验（已修）
 
 - 旧版位置：`web/src/useDetectedAgents.ts:13-22,71-99` 只允许本机可用类型或显式注册 Profile；`web/src/teamExecutorDefaults.ts:14-56` 进一步限制团队调度者必须支持 resident session；`web/src/TaskComposer.tsx:285-300` 在真正提交函数里统一拦截不可运行角色。
-- 新版现状：**半残**。`web-next/src/composer/ComposerFields.tsx:52-59`、`web-next/src/task-detail/TaskInspector.tsx:174-175` 和 `web-next/src/debate/DebateHandoff.tsx:41-43` 都直接列出全部 `AGENT_TYPES`；`web-next/src/composer/TaskComposerPanel.tsx:217-220` 的 `canSubmit` 只检查正文和 busy。用户可创建本机必然跑失败的任务，或把不支持常驻会话的类型选成团队调度者。
+- 审计时新版现状：**半残**。`web-next/src/composer/ComposerFields.tsx:52-59`、`web-next/src/task-detail/TaskInspector.tsx:174-175` 和 `web-next/src/debate/DebateHandoff.tsx:41-43` 都直接列出全部 `AGENT_TYPES`；`web-next/src/composer/TaskComposerPanel.tsx:217-220` 的 `canSubmit` 只检查正文和 busy。用户可创建本机必然跑失败的任务，或把不支持常驻会话的类型选成团队调度者。
 - 历史判断：旧版注释记录这套约束曾被多轮审查抓出真实故障；web-next 的数据层已有 `detectAgents()` 和 `resident` 字段（`web-next/src/lib/api.ts:345-348`），但主 composer、Inspector、辩论接力没有消费。
 - 修复入手点：把旧版 detection/pickable/resident 逻辑抽到 shared 或 web-next lib；所有执行器选择器共用同一候选生成和提交门禁，探测失败与“确实一个都没装”必须区分。
+- 修复结果：新增 `web-next/src/lib/agentAvailability.ts` 统一缓存探测、生成本机可用类型/显式 Profile/resident 调度者候选，并接入主 Composer、任务 Inspector、派生任务 Composer 和辩论接力。探测中显示进度，探测失败降级为提示但不按“未安装”拦截，确认零 CLI 且零 Profile 时显示空态并统一拦截按钮与提交函数。
 
 ### 2. 已有任务/辩论不能新增、修改、清除调度，也不能手动触发 Cron
 
