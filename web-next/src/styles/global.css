@@ -13,6 +13,7 @@
 @import "./settings.css";
 @import "./overlays.css";
 @import "./composer.css";
+@import "./schedule.css";
 
 @theme {
   --font-sans: "Inter Variable", "Inter", "SF Pro Display", -apple-system,

@@ -10,8 +10,13 @@ import type {
   TeamPresetConfig,
 } from "@harness/shared";
 import { DEFAULT_APP_SETTINGS, DEBATE_DEFAULTS } from "@harness/shared";
-import { Paperclip, Play, Robot, Scales, UsersThree, X } from "@phosphor-icons/react";
+import { Paperclip, Robot, Scales, UsersThree, X } from "@phosphor-icons/react";
 import { ImagePreviewGroup, PreviewableImage } from "../components/ImagePreview.tsx";
+import {
+  DEFAULT_CRON,
+  defaultOnceTime,
+  scheduleValidationError,
+} from "../components/ScheduleControl.tsx";
 import { Button } from "../components/ui.tsx";
 import {
   executorValue,
@@ -27,6 +32,7 @@ import { api } from "../lib/api.ts";
 import { AttachmentPicker, UploadAttachmentList, useAttachments } from "../task-detail/Attachments.tsx";
 import { attachmentView } from "../task-detail/utils.ts";
 import { ComposerFields } from "./ComposerFields.tsx";
+import { ComposerLaunchControl, type LaunchMode } from "./ComposerLaunchControl.tsx";
 import {
   emptyComposerExecutorConfigs,
   patchComposerExecutor,
@@ -106,6 +112,9 @@ export function TaskComposerPanel({
   const [branches, setBranches] = useState<string[]>([]);
   const [base, setBase] = useState("");
   const [busy, setBusy] = useState(false);
+  const [launchMode, setLaunchMode] = useState<LaunchMode>("run");
+  const [scheduleAt, setScheduleAt] = useState("");
+  const [scheduleCron, setScheduleCron] = useState(DEFAULT_CRON);
   const uploads = useAttachments();
   const detection = useAgentAvailability();
   const { workerTypes, leadTypes, leadProfiles } = useMemo(
@@ -356,10 +365,18 @@ export function TaskComposerPanel({
   const availabilityTone = detection.status === "loading" ? "loading" as const
     : noExecutor ? "empty" as const
       : availabilityMessage ? "warning" as const : null;
+  const scheduleError = launchMode === "once" || launchMode === "cron"
+    ? scheduleValidationError(launchMode, scheduleAt, scheduleCron)
+    : null;
   const canSubmit = (mode === "debate" ? !!body.trim() : !!body.trim() || allAttachments.length > 0)
-    && !busy && !noExecutor && !roleBlocked;
+    && !busy && !noExecutor && !roleBlocked && !scheduleError;
 
-  const submit = async (run: boolean) => {
+  const changeLaunchMode = (next: LaunchMode) => {
+    setLaunchMode(next);
+    if (next === "once" && !scheduleAt) setScheduleAt(defaultOnceTime());
+  };
+
+  const submit = async () => {
     if (!canSubmit) return;
     setBusy(true);
     let task: Task;
@@ -429,17 +446,32 @@ export function TaskComposerPanel({
       setBusy(false);
       return;
     }
-    onCreated(task, initialDraft);
-    if (!run) {
+    if (launchMode === "create") {
+      onCreated(task, initialDraft);
       notify("任务已创建");
       return;
     }
+    let launchError: unknown = null;
     try {
-      await api.runTask(task.id);
-      notify("任务已创建并启动");
+      if (launchMode === "run") await api.runTask(task.id);
+      else if (launchMode === "once") {
+        await api.setSchedule(task.id, { kind: "once", at: new Date(scheduleAt).toISOString(), cron: null });
+      } else {
+        await api.setSchedule(task.id, { kind: "cron", at: null, cron: scheduleCron.trim() });
+      }
     } catch (error) {
-      notify(`任务已创建，但启动失败：${error instanceof Error ? error.message : "未知错误"}`);
+      launchError = error;
     }
+    onCreated(task, initialDraft);
+    if (launchError) {
+      notify(`任务已创建，但${launchMode === "run" ? "启动" : "定时设置"}失败：${launchError instanceof Error ? launchError.message : "未知错误"}`);
+      return;
+    }
+    notify(launchMode === "run"
+      ? "任务已创建并启动"
+      : launchMode === "once"
+        ? "任务已创建，已设置一次性定时"
+        : "任务已创建，已设置 Cron 定时");
   };
 
   return (
@@ -493,7 +525,7 @@ export function TaskComposerPanel({
                 }
                 if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
                   event.preventDefault();
-                  void submit(true);
+                  void submit();
                 }
               }}
             />
@@ -564,13 +596,21 @@ export function TaskComposerPanel({
           {mode !== "debate" && <AttachmentPicker addFiles={uploads.addFiles} disabled={busy} />}
           <span>
             <Paperclip size={13} />
-            {mode === "debate" ? "辩论沿用执行器 Profile 的模型" : `${allAttachments.length} 个附件`} · ⌘↵ 创建并运行
+            {mode === "debate" ? "辩论沿用执行器 Profile 的模型" : `${allAttachments.length} 个附件`} · ⌘↵ 按当前启动方式创建
           </span>
         </div>
-        <Button disabled={!canSubmit} onClick={() => void submit(false)}>仅创建</Button>
-        <Button variant="primary" disabled={!canSubmit} onClick={() => void submit(true)}>
-          <Play size={12} weight="fill" />{busy ? "创建中…" : "创建并运行"}
-        </Button>
+        <ComposerLaunchControl
+          mode={launchMode}
+          at={scheduleAt}
+          cron={scheduleCron}
+          busy={busy}
+          canSubmit={canSubmit}
+          error={scheduleError}
+          onModeChange={changeLaunchMode}
+          onAtChange={setScheduleAt}
+          onCronChange={setScheduleCron}
+          onSubmit={() => void submit()}
+        />
       </footer>
     </main>
   );

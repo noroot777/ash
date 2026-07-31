@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
-import type { AgentExecutorProfile, Group, Schedule, Session, Task, TaskReviewInfo, TaskStatus } from "@harness/shared";
+import type { AgentExecutorProfile, Group, Session, Task, TaskReviewInfo, TaskStatus } from "@harness/shared";
 import { isUserSettableStatus, TASK_STATUS_LABELS } from "@harness/shared";
 import { CLI_MODEL_PRESETS, REASONING_EFFORT_VALUES } from "@harness/shared/cli-presets";
 import { sameExecutor } from "@harness/shared/executors";
 import { ArrowSquareOut, CaretRight, ListNumbers, Plus, X } from "@phosphor-icons/react";
 import { api } from "../lib/api.ts";
 import { LegacyLink } from "../components/LegacyLink.tsx";
+import { ScheduleControl } from "../components/ScheduleControl.tsx";
 import { taskParentLink } from "../components/TaskOrigin.tsx";
 import {
   executorOptions,
@@ -25,13 +26,6 @@ const STATUS_ORDER: TaskStatus[] = [
 
 function InspectorRow({ label, children }: { label: string; children: React.ReactNode }) {
   return <div className="task-inspector-row"><span>{label}</span><div>{children}</div></div>;
-}
-
-function scheduleLabel(schedule: Schedule | null): string {
-  if (!schedule) return "未设置";
-  if (!schedule.enabled) return "已停用";
-  if (schedule.kind === "once") return schedule.at ? `单次 · ${formatInstant(schedule.at)}` : "单次";
-  return `Cron · ${schedule.cron ?? "未配置"}`;
 }
 
 function ResumePromptEditor({
@@ -135,7 +129,6 @@ export function TaskInspector({
   const [queueOpen, setQueueOpen] = useState(false);
   const [requeueing, setRequeueing] = useState(false);
   const [review, setReview] = useState<TaskReviewInfo | null>(null);
-  const [schedule, setSchedule] = useState<Schedule | null>(null);
   const [profiles, setProfiles] = useState<AgentExecutorProfile[]>([]);
   const [profilesReady, setProfilesReady] = useState(false);
   const detection = useAgentAvailability();
@@ -153,7 +146,6 @@ export function TaskInspector({
     if (!task.queueId) setQueueItems([]);
     else api.queue(task.queueId).then((queue) => { if (alive) setQueueItems(queue.items); }).catch(() => undefined);
     api.taskReview(task.id).then((value) => { if (alive) setReview(value); }).catch(() => { if (alive) setReview(null); });
-    api.schedule(task.id).then((value) => { if (alive) setSchedule(value); }).catch(() => { if (alive) setSchedule(null); });
     setProfilesReady(false);
     api.agents().then((value) => { if (alive) setProfiles(value); })
       .catch(() => { if (alive) setProfiles([]); })
@@ -375,7 +367,11 @@ export function TaskInspector({
 
         <section>
           <h2>调度与续跑</h2>
-          <InspectorRow label="调度"><span>{scheduleLabel(schedule)}</span></InspectorRow>
+          <ScheduleControl
+            taskId={task.id}
+            notify={notify}
+            disabled={task.parentId !== null || !!task.archived}
+          />
           <ResumePromptEditor
             value={task.resumePrompt ?? ""}
             editable={task.parentId === null && task.status === "paused" && !task.question}

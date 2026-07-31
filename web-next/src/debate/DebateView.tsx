@@ -18,6 +18,7 @@ import {
 import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
 import { LegacyLink } from "../components/LegacyLink.tsx";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
+import { ScheduleControl } from "../components/ScheduleControl.tsx";
 import { OriginTaskBar } from "../components/TaskOrigin.tsx";
 import { api } from "../lib/api.ts";
 import { useStickToBottom } from "../lib/useStickToBottom.ts";
@@ -258,7 +259,15 @@ export function DebateView({
 
       <ImagePreviewGroup isolated>
         <section className="debate-config-card">
-          <div><small>辩题</small><h2>{topic.body || config.topic || task.title}</h2><MessageAttachments paths={topic.paths} /></div>
+          <div>
+            <small>辩题</small><h2>{topic.body || config.topic || task.title}</h2><MessageAttachments paths={topic.paths} />
+            <ScheduleControl
+              taskId={task.id}
+              notify={notify}
+              disabled={!!task.archived}
+              className="debate-schedule-control"
+            />
+          </div>
           <dl>
             <div><dt><ChatCircle size={12} weight="fill" />辩手 A</dt><dd>{sessionsByRole.debaterA?.executor || config.debaterA}</dd></div>
             <div><dt><ChatTeardrop size={12} weight="fill" />辩手 B</dt><dd>{sessionsByRole.debaterB?.executor || config.debaterB}</dd></div>

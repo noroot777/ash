@@ -4,7 +4,7 @@
 
 审计基线：`c3d37d3`（`web/src` 对 `web-next/src`）
 
-修复进度：P1-1、P1-5、P1-6 已于 2026-07-31 修复；下方保留审计时的缺口描述，并在对应条目标记结果。
+修复进度：P1-1、P1-2、P1-3、P1-5、P1-6、P1-7 已于 2026-07-31 修复；下方保留审计时的缺口描述，并在对应条目标记结果。
 
 结论（审计基线）：没有发现 P0，共识别 **25 个旧版能力缺失或退化点**：P1 10 个、P2 11 个、P3 4 个。普通任务回复框的 `/team`、`/debate` 派生命令在审计期间由另一执行者修复并提交，本报告将它记入“已确认对齐”，不重复实施；后续修复进度见上方说明和条目标记。
 
@@ -18,7 +18,7 @@
 
 严重度口径：P0 阻断基本使用；P1 影响主要工作流或正确性；P2 有替代路径但能力不完整；P3 低频效率或可发现性退化。
 
-## P1：主要工作流或正确性缺口（审计识别 10，已修 3）
+## P1：主要工作流或正确性缺口（审计识别 10，已修 6）
 
 ### 1. 执行器候选缺少“已安装/已注册/可常驻”能力校验（已修）
 
@@ -28,19 +28,21 @@
 - 修复入手点：把旧版 detection/pickable/resident 逻辑抽到 shared 或 web-next lib；所有执行器选择器共用同一候选生成和提交门禁，探测失败与“确实一个都没装”必须区分。
 - 修复结果：新增 `web-next/src/lib/agentAvailability.ts` 统一缓存探测、生成本机可用类型/显式 Profile/resident 调度者候选，并接入主 Composer、任务 Inspector、派生任务 Composer 和辩论接力。探测中显示进度，探测失败降级为提示但不按“未安装”拦截，确认零 CLI 且零 Profile 时显示空态并统一拦截按钮与提交函数。
 
-### 2. 已有任务/辩论不能新增、修改、清除调度，也不能手动触发 Cron
+### 2. 已有任务/辩论不能新增、修改、清除调度，也不能手动触发 Cron（已修）
 
 - 旧版位置：`web/src/ScheduleControl.tsx:30-93` 支持无定时、单次、Cron、清除和“立即触发”；`web/src/TaskDetail.tsx:429` 与 `web/src/DebateView.tsx:321` 都接入。
 - 新版现状：**半残**。`web-next/src/task-detail/TaskInspector.tsx:219-226` 只读展示调度并跳旧版，辩论页完全没有入口。API wrapper 已存在 `schedule/setSchedule/clearSchedule`（`web-next/src/lib/api.ts:378-385`）和 `fireTask`（`web-next/src/lib/api.ts:272-273`），但 UI 无调用。
 - 历史判断：`f363b93 feat(web-next): 单任务详情页` 只迁入读取；没有后续编辑提交。
 - 修复入手点：迁移 `ScheduleControl` 为 web-next 组件，在普通任务 Inspector 和辩论配置卡复用；Cron 保留“全新一轮、非续跑”的 `fireTask` 语义。
+- 修复结果：新增共享 `web-next/src/components/ScheduleControl.tsx`，支持读取、设置一次性/Cron、清除、重新启用已执行的一次性定时，并接入普通任务 Inspector 与辩论配置卡；Cron 的“立即触发”直接调用 `fireTask`，提示其为不接续旧会话的全新一轮。
 
-### 3. 新建任务时不能选择“一次性/Cron 定时启动”
+### 3. 新建任务时不能选择“一次性/Cron 定时启动”（已修）
 
 - 旧版位置：`web/src/composer/modes.tsx:14-21` 定义四种启动方式；`web/src/composer/ComposerFooter.tsx:38-82` 展示时间/Cron 字段；`web/src/TaskComposer.tsx:358-362` 创建后写入 schedule。
 - 新版现状：**缺失**。`web-next/src/composer/TaskComposerPanel.tsx:414-425` 只有“仅创建 / 创建并运行”。
 - 历史判断：旧版 `f8b22ac` 已实现；`4feb578` 的 web-next composer 没有迁入，`docs/web-next-gaps.md` 也曾明确列为存量。
 - 修复入手点：在 composer footer 引入 launch mode；创建成功后按 `run / once / cron / create` 分流，定时模式不得先调用 `runTask`。
+- 修复结果：Composer footer 新增“创建并运行 / 仅创建 / 一次性定时 / 循环 Cron”四档启动方式和对应字段，Cmd/Ctrl+Enter 服从当前选择；创建完成后严格分流，`once`/`cron` 只调用 `setSchedule`，不会先启动任务。
 
 ### 4. 手动派独立审查/补派下一轮审查没有 UI
 
@@ -198,7 +200,7 @@
 - **附件**：普通任务、团队插话、composer、随手记都支持文件选择、粘贴上传、预览和移除；新版近期提交 `e700cd2`/`d08ca5d` 还统一了图片预览顺序。
 - **团队停止/恢复与 CUA 残留**：新版已持久显示停止状态，恢复内部组和 lead，并只在用户显式确认后强制清理 computer-use；符合根 AGENTS 约束。
 - **归档/取回**：任务、团队、辩论和设置中的归档列表均可用；新版 ArchiveSettings 只列顶层任务与旧版 `TaskList.topLevel` 语义一致。
-- **辩论核心闸门**：A/B 轮次、G1 放行/打回、注入意见、定向提问、首次接力成团、来源返回均已接通；缺的是上文“多团队/再辩一轮”和调度。
+- **辩论核心闸门**：A/B 轮次、G1 放行/打回、注入意见、定向提问、首次接力成团、来源返回和调度均已接通；缺的是上文“多团队/再辩一轮”。
 - **多问题答复**：单问题、多问题、建议答案追加、部分答复和 Cmd/Ctrl+Enter 提交语义已对齐。
 - **团队预设**：新版本已在 `7b16ba2` 补回团队执行模式 preset 的新建、套用、更新、改名和删除；执行器可用性仍受 P1-1 影响。
 - **随手记批量转任务**：`60ab85c` 已补回复选多条、按列表顺序合并正文、合并附件和逐条回链。
@@ -208,8 +210,8 @@
 
 ## 历史分类与取舍
 
-- **尚未迁移的存量**：调度写操作、创建时调度、定时回复、@召唤、手动审查、重新排队、辩论迭代、Providers、extraArgs、全局快捷键、侧栏 resize。
-- **迁移了但半残**：Markdown（`e71e35a`）、团队验收（`988390b`）、任务 Inspector 的 schedule/resume prompt（`f363b93`）、辩论接力（`6b33716`）、随手记（`60ab85c`）。
+- **尚未迁移的存量**：定时回复、@召唤、手动审查、辩论迭代、Providers、extraArgs、全局快捷键、侧栏 resize。
+- **迁移了但半残**：Markdown（`e71e35a`）、辩论接力（`6b33716`）、随手记（`60ab85c`）。
 - **审计期间修复完成**：普通任务 `/team`、`/debate` 派生命令由并行执行者提交为 `c3d37d3`；本报告没有修改其代码。
 - **有意变化但不算缺口**：新版三栏布局、团队时间轴默认折叠、执行者放右 rail；`0eef687` 有意回退的是“新版新增的置顶执行者分区”，旧版本身没有独立的置顶执行者分区，因此不计 parity 缺口。
 - 没有找到证据表明本报告 25 项中的任何一项是产品决定永久砍掉；新版设置页对 provider/API Key 的文案反而明确说明是旧版暂时承接。

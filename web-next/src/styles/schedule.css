@@ -1,0 +1,184 @@
+.schedule-control {
+  display: grid;
+  gap: 7px;
+  width: 100%;
+  margin-top: 7px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--raised);
+  padding: 8px;
+}
+
+.schedule-control-fields,
+.schedule-control-footer,
+.schedule-kind-field,
+.schedule-field,
+.composer-launch-control,
+.composer-launch-mode {
+  display: flex;
+  align-items: center;
+}
+
+.schedule-control-fields {
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.schedule-kind-field,
+.composer-launch-mode {
+  gap: 6px;
+}
+
+.schedule-kind-field > span,
+.composer-launch-mode > span {
+  color: var(--faint);
+  font-size: 9.5px;
+  white-space: nowrap;
+}
+
+.schedule-kind-field select,
+.composer-launch-mode select,
+.schedule-field input {
+  height: 28px;
+  border: 1px solid var(--line2);
+  border-radius: 7px;
+  background: var(--panel);
+  padding: 0 8px;
+  color: var(--ink);
+  font-size: 10.5px;
+  outline: 0;
+}
+
+.schedule-kind-field select:focus,
+.composer-launch-mode select:focus,
+.schedule-field input:focus {
+  border-color: var(--accent);
+}
+
+.schedule-field {
+  min-width: 0;
+  flex: 1;
+  gap: 5px;
+  color: var(--faint);
+}
+
+.schedule-field input {
+  min-width: 0;
+  flex: 1;
+}
+
+.schedule-field--cron input {
+  font-family: var(--font-mono);
+}
+
+.schedule-control-footer {
+  min-height: 28px;
+  gap: 5px;
+}
+
+.schedule-control-footer > small {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  gap: 4px;
+  color: var(--faint);
+  font-size: 9px;
+  line-height: 1.4;
+}
+
+.schedule-control-footer > small.is-error,
+.schedule-control-disabled {
+  color: var(--red);
+}
+
+.schedule-control-footer .ui-button {
+  height: 26px;
+  flex: 0 0 auto;
+  padding: 0 8px;
+  font-size: 9.5px;
+}
+
+.schedule-control-disabled {
+  margin: -2px 0 0;
+  font-size: 9px;
+}
+
+.debate-schedule-control {
+  margin-top: 9px;
+}
+
+.debate-config-card .schedule-control small {
+  font-weight: 450;
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+.task-composer-panel {
+  grid-template-rows: 48px minmax(0, 1fr) auto;
+}
+
+.composer-footer {
+  min-height: 58px;
+  flex-wrap: wrap;
+  padding-top: 9px;
+  padding-bottom: 9px;
+}
+
+.composer-footer > .composer-launch-control {
+  min-width: 0;
+  flex: 0 1 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 7px;
+}
+
+.composer-launch-mode select {
+  width: 118px;
+}
+
+.composer-launch-control .schedule-field {
+  flex: 0 1 170px;
+}
+
+.composer-launch-control .schedule-field--cron {
+  flex-basis: 145px;
+}
+
+.composer-launch-error {
+  color: var(--red);
+  font-size: 9px;
+  white-space: nowrap;
+}
+
+.composer-launch-control > .ui-button {
+  flex: 0 0 auto;
+}
+
+@media (max-width: 760px) {
+  .composer-footer > div:first-child > span,
+  .composer-launch-mode > span {
+    display: none;
+  }
+
+  .composer-footer > div:first-child {
+    flex: 0 0 auto;
+  }
+}
+
+@media (max-width: 560px) {
+  .composer-footer {
+    align-items: stretch;
+  }
+
+  .composer-footer > .composer-launch-control {
+    flex: 1 1 100%;
+  }
+
+  .composer-launch-mode,
+  .composer-launch-mode select,
+  .composer-launch-control .schedule-field {
+    flex: 1 1 120px;
+    width: auto;
+  }
+}
