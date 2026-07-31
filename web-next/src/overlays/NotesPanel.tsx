@@ -1,6 +1,14 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
 import type { Note, ProjectView } from "@harness/shared";
-import { ArrowsInSimple, ArrowsOutSimple, ArrowSquareOut, CheckCircle, File, MagnifyingGlass, NotePencil, Plus, Trash, UploadSimple, X } from "@phosphor-icons/react";
+import { ArrowSquareOut, CheckCircle, CornersIn, CornersOut, File, MagnifyingGlass, NotePencil, Plus, Trash, X } from "@phosphor-icons/react";
 import { ImagePreviewGroup, PreviewableImage } from "../components/ImagePreview.tsx";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
 import { Button } from "../components/ui.tsx";
@@ -16,6 +24,137 @@ const noteTime = (value: number) => new Date(value).toLocaleString("zh-CN", { mo
 
 type NoteDraft = { id: string | null; body: string; attachments: string[] };
 type SaveState = "saved" | "pending" | "saving" | "error";
+type Position = { left: number; top: number };
+type DragState = {
+  pointerId: number;
+  offsetX: number;
+  offsetY: number;
+  width: number;
+  height: number;
+  captureTarget: HTMLElement;
+};
+
+const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max);
+const clampPosition = (position: Position, width: number, height: number): Position => ({
+  left: clamp(position.left, 0, Math.max(0, window.innerWidth - width)),
+  top: clamp(position.top, 0, Math.max(0, window.innerHeight - height)),
+});
+
+function useMovableNotesPanel() {
+  const panelRef = useRef<HTMLElement>(null);
+  const dragRef = useRef<DragState | null>(null);
+  const positionRef = useRef<Position | null>(null);
+  const [position, setPositionState] = useState<Position | null>(null);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+
+  const setPosition = useCallback((next: Position | null) => {
+    positionRef.current = next;
+    setPositionState(next);
+  }, []);
+
+  const isPositioned = position !== null;
+  useEffect(() => {
+    if (isFullscreen || !isPositioned || !panelRef.current) return;
+    const panel = panelRef.current;
+    const keepInViewport = () => {
+      if (!positionRef.current) return;
+      const next = clampPosition(positionRef.current, panel.offsetWidth, panel.offsetHeight);
+      if (next.left !== positionRef.current.left || next.top !== positionRef.current.top) setPosition(next);
+    };
+    keepInViewport();
+    const resizeObserver = new ResizeObserver(keepInViewport);
+    resizeObserver.observe(panel);
+    window.addEventListener("resize", keepInViewport);
+    return () => {
+      resizeObserver.disconnect();
+      window.removeEventListener("resize", keepInViewport);
+    };
+  }, [isFullscreen, isPositioned, setPosition]);
+
+  const clearDrag = useCallback((pointerId?: number) => {
+    const drag = dragRef.current;
+    if (!drag || (pointerId !== undefined && drag.pointerId !== pointerId)) return;
+    dragRef.current = null;
+    try {
+      if (drag.captureTarget.hasPointerCapture(drag.pointerId)) {
+        drag.captureTarget.releasePointerCapture(drag.pointerId);
+      }
+    } catch {
+      // The element may have been detached or the browser may already have
+      // released capture. Either way, the drag state is safely cleared.
+    }
+  }, []);
+
+  useEffect(() => {
+    const onPointerMove = (event: PointerEvent) => {
+      const drag = dragRef.current;
+      if (!drag || drag.pointerId !== event.pointerId) return;
+      setPosition(clampPosition(
+        { left: event.clientX - drag.offsetX, top: event.clientY - drag.offsetY },
+        drag.width,
+        drag.height,
+      ));
+      event.preventDefault();
+    };
+    const finishDrag = (event: PointerEvent) => clearDrag(event.pointerId);
+    const cancelDrag = () => clearDrag();
+
+    window.addEventListener("pointermove", onPointerMove, { passive: false });
+    window.addEventListener("pointerup", finishDrag);
+    window.addEventListener("pointercancel", finishDrag);
+    window.addEventListener("blur", cancelDrag);
+    return () => {
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", finishDrag);
+      window.removeEventListener("pointercancel", finishDrag);
+      window.removeEventListener("blur", cancelDrag);
+      clearDrag();
+    };
+  }, [clearDrag, setPosition]);
+
+  const onPointerDown = useCallback((event: ReactPointerEvent<HTMLElement>) => {
+    if (isFullscreen || event.button !== 0) return;
+    if ((event.target as Element).closest("button, input, textarea, select, a, [role='button']")) return;
+    const panel = panelRef.current;
+    if (!panel) return;
+    const rect = panel.getBoundingClientRect();
+    dragRef.current = {
+      pointerId: event.pointerId,
+      offsetX: event.clientX - rect.left,
+      offsetY: event.clientY - rect.top,
+      width: rect.width,
+      height: rect.height,
+      captureTarget: event.currentTarget,
+    };
+    try {
+      event.currentTarget.setPointerCapture(event.pointerId);
+    } catch {
+      // Window-level listeners keep dragging working if capture is unavailable.
+    }
+    setPosition({ left: rect.left, top: rect.top });
+    event.preventDefault();
+  }, [isFullscreen, setPosition]);
+
+  const toggleFullscreen = useCallback(() => {
+    clearDrag();
+    setIsFullscreen((current) => !current);
+  }, [clearDrag]);
+
+  const panelStyle: CSSProperties | undefined = isFullscreen
+    ? {
+        position: "fixed",
+        inset: 0,
+        width: "100vw",
+        height: "100vh",
+        maxWidth: "none",
+        borderRadius: 0,
+      }
+    : position
+      ? { position: "fixed", left: position.left, top: position.top }
+      : undefined;
+
+  return { panelRef, panelStyle, isFullscreen, toggleFullscreen, onPointerDown };
+}
 
 const sameDraft = (left: NoteDraft, right: NoteDraft) => left.id === right.id
   && left.body === right.body
@@ -48,8 +187,7 @@ export function NotesPanel({ project, initialNoteId, onClose, onTask, onConvert,
   const [saveState, setSaveState] = useState<SaveState>("saved");
   const [deleting, setDeleting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const [maximized, setMaximized] = useState(false);
-  const [draggingFiles, setDraggingFiles] = useState(false);
+  const movable = useMovableNotesPanel();
   const uploads = useAttachments();
   const rowsRef = useRef<Note[]>([]);
   const draftRef = useRef<NoteDraft>(initialDraft);
@@ -267,49 +405,22 @@ export function NotesPanel({ project, initialNoteId, onClose, onTask, onConvert,
       noteIds: notes.map((note) => note.id),
     });
   };
-  const hasDraggedFiles = (event: DragEvent<HTMLElement>) => Array.from(event.dataTransfer.types).includes("Files");
-  const dragEnter = (event: DragEvent<HTMLElement>) => {
-    if (!hasDraggedFiles(event)) return;
-    event.preventDefault();
-    setDraggingFiles(true);
-  };
-  const dragOver = (event: DragEvent<HTMLElement>) => {
-    if (!hasDraggedFiles(event)) return;
-    event.preventDefault();
-    event.dataTransfer.dropEffect = "copy";
-  };
-  const dragLeave = (event: DragEvent<HTMLElement>) => {
-    if (event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget)) return;
-    setDraggingFiles(false);
-  };
-  const dropFiles = (event: DragEvent<HTMLElement>) => {
-    if (!hasDraggedFiles(event)) return;
-    event.preventDefault();
-    setDraggingFiles(false);
-    if (deleting) return;
-    const files = Array.from(event.dataTransfer.files);
-    if (files.length) void uploads.addFiles(files);
-  };
-
   return (
-    <div className="overlay-scrim" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) void close(); }}>
+    <div className="overlay-scrim notes-scrim" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) void close(); }}>
       <section
-        className={`notes-panel${maximized ? " is-maximized" : ""}${draggingFiles ? " is-file-dragging" : ""}`}
+        ref={movable.panelRef}
+        className={`notes-panel${movable.isFullscreen ? " is-fullscreen" : ""}`}
+        style={movable.panelStyle}
         role="dialog"
         aria-modal="true"
         aria-label="随手记"
         onMouseDown={(event) => event.stopPropagation()}
-        onDragEnter={dragEnter}
-        onDragOver={dragOver}
-        onDragLeave={dragLeave}
-        onDrop={dropFiles}
       >
-        {draggingFiles && <div className="notes-drop-target" aria-hidden="true"><UploadSimple size={26} /><b>松开即可添加附件</b><span>支持文件与图片</span></div>}
-        <header>
+        <header className={movable.isFullscreen ? "is-fullscreen" : "is-draggable"} onPointerDown={movable.onPointerDown}>
           <div><NotePencil size={17} /><b>随手记</b><span>{project.name} · {rows.length} 条</span></div>
           <div className="notes-header-actions">
-            <button type="button" onClick={() => setMaximized((value) => !value)} aria-label={maximized ? "还原随手记面板" : "放大随手记面板"} title={maximized ? "还原" : "放大"}>
-              {maximized ? <ArrowsInSimple size={17} /> : <ArrowsOutSimple size={17} />}
+            <button type="button" aria-pressed={movable.isFullscreen} onClick={movable.toggleFullscreen} aria-label={movable.isFullscreen ? "还原窗口" : "全屏显示"} title={movable.isFullscreen ? "还原窗口" : "全屏显示"}>
+              {movable.isFullscreen ? <CornersIn size={17} /> : <CornersOut size={17} />}
             </button>
             <button type="button" onClick={() => void close()} aria-label="关闭"><X size={17} /></button>
           </div>

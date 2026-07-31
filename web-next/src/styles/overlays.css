@@ -205,35 +205,12 @@
   box-shadow: var(--shadow);
 }
 
-.notes-panel.is-maximized {
-  width: calc(100vw - 24px);
-  height: calc(100vh - 24px);
-  border-radius: 10px;
+.notes-scrim {
+  z-index: 210;
 }
 
-.notes-drop-target {
-  position: absolute;
-  z-index: 20;
-  inset: 10px;
-  display: grid;
-  place-content: center;
-  justify-items: center;
-  gap: 5px;
-  border: 2px dashed color-mix(in lch, var(--accent) 55%, var(--line));
-  border-radius: 10px;
-  background: color-mix(in lch, var(--accent) 9%, var(--panel));
-  color: var(--accent);
-  pointer-events: none;
-}
-
-.notes-drop-target b {
-  font-size: 13px;
-  font-weight: 650;
-}
-
-.notes-drop-target span {
-  color: var(--muted);
-  font-size: 10px;
+.notes-scrim + .task-modal-scrim {
+  z-index: 220;
 }
 
 .notes-panel > header {
@@ -242,6 +219,20 @@
   justify-content: space-between;
   border-bottom: 1px solid var(--line);
   padding: 0 14px 0 16px;
+}
+
+.notes-panel > header.is-draggable {
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.notes-panel > header.is-draggable:active {
+  cursor: grabbing;
+}
+
+.notes-panel > header.is-fullscreen {
+  user-select: none;
 }
 
 .notes-panel > header > div {
@@ -534,7 +525,8 @@
 }
 
 .notes-panel > footer {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 8px;
   border-top: 1px solid var(--line);
@@ -543,17 +535,25 @@
 
 .notes-panel > footer > span {
   min-width: 0;
+  overflow: hidden;
   color: var(--faint);
   font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .notes-footer-actions {
   display: flex;
-  flex: 0 0 auto;
   align-items: center;
   justify-content: flex-end;
+  justify-self: end;
   gap: 8px;
-  margin-left: auto;
+}
+
+/* floating-escape.css is loaded later and reserves 104px on overlay footers.
+   Notes sits above that global escape, so its controls can use the real edge. */
+.notes-scrim .notes-panel > footer {
+  padding-right: 12px;
 }
 
 .notes-panel > footer .task-reply-icon {
