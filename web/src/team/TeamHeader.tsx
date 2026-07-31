@@ -1,25 +1,38 @@
-// /team 主视图的精简顶部：标题、状态/用时、运行控制、归档与查看改动。
-// 原始需求、角色配置、工作区与时间轴都由右侧 Inspector 承载；需要用户立即行动的
-// 提问和「停止全组」持久提示仍留在这里。
+// /team 主视图的顶部:标题行(忙/闲、用时、停止全组、归档)、原始需求、meta 行、
+// 时间轴,再加下面那条「有人在等你答复」的提醒条。
 //
 // 跟单任务 header 的差别在于**调度者没有「完成」**:它只有忙(running)/闲(idle),
 // 结束靠归档。所以这里没有状态下拉、没有「重新排队」、没有严格完成协议那套东西。
 import { useState, type ReactNode } from "react";
-import type { Group, Task } from "@harness/shared";
+import type {
+  Group,
+  Session,
+  Task,
+} from "@harness/shared";
 import {
+  agentMix,
   isTeamSettled,
+  statusCounts,
   teamNeverStarted,
   workerHaltStats,
   type Waiting,
 } from "@harness/shared/team";
-import { ArrowsClockwise, ClipboardText, Stop, Play } from "@phosphor-icons/react";
+import { ArrowsClockwise, ClipboardText, DownloadSimple, Stop, Trash, Play, Scales } from "@phosphor-icons/react";
 import { api } from "../api";
 import { toast } from "../toast";
 import { ConfirmModal } from "../Modal";
+import { CollapsibleText, CopyButton } from "../ui";
 import { StatusIcon } from "../StatusIcon";
 import { EditableTitle } from "../TaskDetail";
 import { QuestionCard } from "../QuestionCard";
+import { conversationToText, downloadConversation, type ConvItem } from "../Conversation";
 import { Duration, TaskTimeChip } from "../time";
+import { shortPath } from "../util";
+import { TeamTimeline } from "./TeamTimeline";
+import type { LeadTurn } from "./teamData";
+import { teamLeadExecutorLabel, teamReviewerExecutorLabel, teamWorkerExecutorLabel } from "../executorLabel";
+import { AttachmentDisplay, parseAttachmentText } from "../messageAttachments";
+import { TaskPinMenu } from "../TaskPinMenu";
 import { TaskModeIcon } from "../taskOrigin";
 import { Tip } from "../Tip";
 
@@ -28,43 +41,68 @@ export function TeamHeader({
   workers,
   teamGroups,
   haltedByHistory,
+  sessions,
+  items,
+  leadTurns,
   onPatch,
   onRun,
   onTeamHalted,
   onTeamResumed,
+  onDelete,
   onArchive,
   onUnarchive,
+  onOpenWorker,
   reviewOpen,
   onToggleReview,
+  canIterateDebate,
+  iterateBusy,
+  onIterateDebate,
   inspectorToggle,
 }: {
   task: Task;
   workers: Task[];
   teamGroups: Group[];
   haltedByHistory: boolean;
+  sessions: Session[];
+  items: ConvItem[];
+  leadTurns: LeadTurn[];
   onPatch: (patch: Partial<Task>) => void | Promise<void>;
   onRun: () => void | Promise<void>;
   onTeamHalted: () => void | Promise<void>;
   onTeamResumed: () => void;
+  onDelete: () => void;
   onArchive: () => void;
   onUnarchive: () => void;
+  onOpenWorker: (id: string) => void;
   reviewOpen: boolean;
   onToggleReview: () => void;
+  canIterateDebate: boolean;
+  iterateBusy: boolean;
+  onIterateDebate: () => void;
   inspectorToggle?: ReactNode;
 }) {
   const [haltOpen, setHaltOpen] = useState(false);
   const [resuming, setResuming] = useState(false);
+  const counts = statusCounts(workers);
   const leadLive = task.status === "running";
   const settled = isTeamSettled(leadLive, workers);
   const pausedGroups = teamGroups.filter((g) => g.paused);
   const stopped = pausedGroups.length > 0 || haltedByHistory;
+  // 分支/工作目录挂在 session 上(不是 task),取最近那次。默认不开 worktree,所以
+  // 多数时候这里就是仓库当前分支 —— 仍然值得显示:它是「活干在哪」的唯一凭据。
+  const last = sessions[sessions.length - 1];
+  const leadLabel = teamLeadExecutorLabel(task);
+  const workerLabel = teamWorkerExecutorLabel(task);
+  const reviewerLabel = teamReviewerExecutorLabel(task);
+  const reviewEnabled = task.team?.review !== false;
+  const objective = parseAttachmentText(task.body);
   const awaitingAcceptance = workers.filter(
     (worker) => worker.useWorktree && worker.stage === "awaiting_acceptance",
   ).length;
   const reviewEmphasis = settled || awaitingAcceptance > 0;
 
   return (
-    <header className="shrink-0 border-b border-line px-5 py-3">
+    <header className="shrink-0 border-b border-line px-6 pb-3 pt-5">
       <div className="flex flex-wrap items-start gap-3">
         <Tip
           label="团队任务：一个常驻调度者和它派出的执行者"
@@ -76,25 +114,36 @@ export function TeamHeader({
         <div className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-2">
           <BusyPill task={task} />
           <TaskTimeChip task={task} />
-          <Tip label={reviewOpen ? "返回团队协作流" : "汇总执行者目标、提交、diff 和用户消息"}>
+          <button
+            type="button"
+            onClick={onToggleReview}
+            className={`inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-[13px] font-medium transition-colors ${
+              reviewOpen
+                ? "border-accent bg-accent text-accent-fg"
+                : reviewEmphasis
+                  ? "border-violet-500/40 bg-violet-500/[0.09] text-violet-700 hover:bg-violet-500/[0.15]"
+                  : "border-line text-muted hover:bg-raised hover:text-ink"
+            }`}
+            title={reviewOpen ? "返回团队协作流" : "汇总执行者目标、提交、diff 和用户消息"}
+          >
+            <ClipboardText size={14} weight={reviewEmphasis ? "fill" : "regular"} />
+            {reviewOpen ? "返回协作" : `验收${awaitingAcceptance ? ` ${awaitingAcceptance}` : ""}`}
+          </button>
+          {settled && canIterateDebate && (
             <button
               type="button"
-              onClick={onToggleReview}
-              className={`inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-[13px] font-medium transition-colors ${
-                reviewOpen
-                  ? "border-accent bg-accent text-accent-fg"
-                  : reviewEmphasis
-                    ? "border-violet-500/40 bg-violet-500/[0.09] text-violet-700 hover:bg-violet-500/[0.15]"
-                    : "border-line text-muted hover:bg-raised hover:text-ink"
-              }`}
+              disabled={iterateBusy}
+              onClick={onIterateDebate}
+              className="inline-flex items-center gap-1.5 rounded-md border border-violet-500/35 bg-violet-500/[0.07] px-3 py-1.5 text-[13px] font-medium text-violet-700 transition-colors hover:bg-violet-500/[0.12] disabled:opacity-40"
+              title="读取这次团队执行记录，沿用原辩论配置创建新一轮"
             >
-              <ClipboardText size={14} weight={reviewEmphasis ? "fill" : "regular"} />
-              {reviewOpen ? "返回协作" : `查看改动${awaitingAcceptance ? ` ${awaitingAcceptance}` : ""}`}
+              <Scales size={13} weight="fill" />
+              {iterateBusy ? "创建中…" : "再辩一轮"}
             </button>
-          </Tip>
+          )}
           {task.archived ? (
             <>
-              <span className="inline-flex items-center gap-1.5 rounded-md bg-overlay px-3 py-1.5 text-[13px] font-medium text-muted">
+              <span className="inline-flex items-center gap-1.5 rounded-md bg-overlay px-3 py-1.5 text-[13px] font-medium text-muted" title="任务已归档（只读）">
                 已归档
               </span>
               <button
@@ -112,6 +161,7 @@ export function TeamHeader({
                 <button
                   onClick={() => setHaltOpen(true)}
                   className="inline-flex items-center gap-1.5 rounded-md border border-red-500/40 px-3 py-1.5 text-[13px] font-medium text-red-600 transition-colors hover:bg-red-500/10"
+                  title="停调度台 + 暂停所有执行者（执行者落暂停，可恢复）"
                 >
                   <Stop size={13} weight="fill" />
                   停止全组
@@ -134,6 +184,7 @@ export function TeamHeader({
                     }
                   }}
                   className="inline-flex items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-[13px] font-medium text-accent-fg transition-colors hover:bg-accent-hover disabled:opacity-50"
+                  title={`恢复 ${pausedGroups.length} 个已暂停的内部组，并接回调度者`}
                 >
                   <Play size={13} weight="fill" />
                   {resuming ? "恢复中" : "恢复全组"}
@@ -142,6 +193,7 @@ export function TeamHeader({
               {stopped && pausedGroups.length === 0 && (
                 <span
                   className="inline-flex items-center gap-1.5 rounded-md border border-line bg-raised px-3 py-1.5 text-[13px] font-medium text-muted"
+                  title="已从会话记录检测到停止全组；当前分组接口未下发内部组 paused 详情"
                 >
                   <Stop size={13} weight="fill" />
                   已停止
@@ -153,6 +205,7 @@ export function TeamHeader({
                 <button
                   onClick={onRun}
                   className="inline-flex items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-[13px] font-medium text-accent-fg transition-colors hover:bg-accent-hover"
+                  title="让调度者开工"
                 >
                   <Play size={13} weight="fill" />
                   运行
@@ -161,19 +214,87 @@ export function TeamHeader({
               <button
                 onClick={onArchive}
                 className="inline-flex items-center rounded-md px-2.5 py-1.5 text-[13px] font-medium text-muted transition-colors hover:bg-raised hover:text-ink"
+                title="归档：团队解散（执行者一并归档）"
               >
                 归档
               </button>
             </>
           )}
+          {items.length > 0 && (
+            <>
+              <CopyButton
+                text={conversationToText(items, task)}
+                title="复制调度者的全部对话"
+                size={15}
+                className="h-[30px] w-[30px] hover:bg-raised"
+              />
+              <button
+                onClick={() => downloadConversation(items, task)}
+                className="grid h-[30px] w-[30px] place-items-center rounded-md text-muted transition-colors hover:bg-raised hover:text-ink"
+                title="导出对话为 .md 文件"
+              >
+                <DownloadSimple size={15} />
+              </button>
+            </>
+          )}
+          <TaskPinMenu task={task} onPatch={onPatch} />
+          <button
+            onClick={onDelete}
+            className="grid h-[30px] w-[30px] place-items-center rounded-md text-muted transition-colors hover:bg-raised hover:text-red-600"
+            title="删除任务"
+          >
+            <Trash size={15} />
+          </button>
           {inspectorToggle}
         </div>
       </div>
+
+      {/* 原始需求 —— 用户交给调度者的那段话,默认折两行。 */}
+      {objective.body ? (
+        <CollapsibleText text={objective.body}>
+          {objective.paths.length > 0 ? <AttachmentDisplay paths={objective.paths} className="px-3 pb-2" /> : null}
+        </CollapsibleText>
+      ) : (
+        <AttachmentDisplay paths={objective.paths} className="mt-2" />
+      )}
 
       {/* 调度者反过来问用户(它调 ask_question)。答复作为插话喂回同一个常驻会话。 */}
       {task.question && <QuestionCard task={task} />}
 
       {stopped && <TeamHaltNotice workers={workers} pausedGroups={pausedGroups} hasGroupData={teamGroups.length > 0} />}
+
+      <div className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[12px] text-faint">
+        <span>
+          调度者 <b className="text-muted">{leadLabel}</b>
+        </span>
+        <span>
+          执行者 <b className="text-muted">{workers.length}</b>
+          {workers.length > 0 && `（${agentMix(workers)}）`}
+          {workers.length === 0 && `（默认派 ${workerLabel}）`}
+        </span>
+        <span className={reviewEnabled ? "text-violet-700" : undefined}>
+          审查 <b className={reviewEnabled ? "text-violet-700" : "text-muted"}>{reviewEnabled ? reviewerLabel : "已关闭"}</b>
+          {reviewEnabled && ` · ${task.team?.reviewerModel || "模型跟随"} · ${task.team?.reviewerReasoningEffort || "强度跟随"}`}
+        </span>
+        {last?.branch && (
+          <span>
+            分支 <span className="font-mono text-muted">{last.branch}</span>
+          </span>
+        )}
+        {last?.worktreePath && <span className="font-mono">{shortPath(last.worktreePath)}</span>}
+        {counts.length > 0 && (
+          <span className="ml-auto flex flex-wrap items-center gap-x-2.5 gap-y-1">
+            {counts.map((c) => (
+              <span key={`${c.label}`} className="inline-flex items-center gap-1">
+                <StatusIcon status={c.status} size={11} awaitingAnswer={c.awaitingAnswer} />
+                {c.n} {c.label}
+              </span>
+            ))}
+          </span>
+        )}
+      </div>
+
+      {!reviewOpen && <TeamTimeline lead={task} leadTurns={leadTurns} workers={workers} groups={teamGroups} onOpen={onOpenWorker} />}
 
       {haltOpen && (
         <ConfirmModal

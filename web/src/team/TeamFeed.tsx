@@ -35,7 +35,7 @@ export function TeamFeed({
   const byId = new Map(workers.map((w) => [w.id, w]));
   const indexOf = (id?: string) => (id ? workers.findIndex((w) => w.id === id) + 1 : 0);
   return (
-    <div className="relative min-h-0 min-w-0 flex-1">
+    <div className="relative min-h-0 min-w-0 flex-1 border-r border-line">
       <div ref={scrollRef} className="h-full overflow-y-auto break-words px-4 py-4">
         {empty && (
           <p className="text-[13px] text-faint">
@@ -76,7 +76,7 @@ export function TeamFeed({
   );
 }
 
-// 一次 dispatch 一张卡。点任一行 → 左侧滑出那个执行者的完整会话。
+// 一次 dispatch 一张卡。点任一行 → 右侧滑出那个执行者的完整会话。
 function BatchCard({
   batch,
   workers,
@@ -109,7 +109,7 @@ function BatchCard({
         />
       ))}
       <div className="border-t border-line bg-panel px-2.5 py-1.5 text-[11px] text-faint">
-        {batch.group?.paused ? batchSummary(batch.workers) : "点任一行 → 左侧滑出它的完整会话；也能单独重跑 / 答复"}
+        {batch.group?.paused ? batchSummary(batch.workers) : "点任一行 → 右侧滑出它的完整会话；也能单独重跑 / 答复"}
       </div>
     </div>
   );

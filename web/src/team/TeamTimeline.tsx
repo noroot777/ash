@@ -3,8 +3,10 @@
 // 谁把谁堵住了」——这是编排视图里唯一看不出来又必须看出来的信息。
 //
 // 调度者那条 track 没有独立的数据源,由客户端从已解析的会话推出来(每个回合一段)。
+import { useState } from "react";
 import type { Group, Task } from "@harness/shared";
 import { isTeamSettled, timeMs } from "@harness/shared/team";
+import { CaretDown } from "@phosphor-icons/react";
 import { statusColor } from "../StatusIcon";
 import { formatDuration, formatInstant, useTick } from "../time";
 import { teamLeadExecutorLabel } from "../executorLabel";
@@ -27,12 +29,13 @@ export function TeamTimeline({
   groups: Group[];
   onOpen: (id: string) => void;
 }) {
+  const [open, setOpen] = useState(true);
   const groupById = new Map(groups.map((g) => [g.id, g]));
   const leadLive = lead.status === "running";
   const settled = isTeamSettled(leadLive, workers);
   // 只有真的还在跑/排队时才按秒重算；paused/settled 都不会自发变化。
   const live = leadLive || workers.some((w) => w.status === "running" || w.status === "queued");
-  const nowMs = useTick(live);
+  const nowMs = useTick(open && live);
   const fallbackEnd = timeMs(lead.endedAt) ?? timeMs(lead.updatedAt) ?? nowMs;
   const openEnd = settled ? fallbackEnd : nowMs;
   const rows: Row[] = [
@@ -95,25 +98,30 @@ export function TeamTimeline({
   const rightLabel = settled ? `收工 ${formatInstant(new Date(t1).toISOString())}` : "现在";
 
   return (
-    <div className="min-h-full bg-canvas px-4 py-4">
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-line pb-3">
-        <span className="text-[11.5px] text-faint">谁跟谁在并行</span>
+    <div className="mt-2.5 border-t border-dashed border-line pt-2">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+        <button
+          onClick={() => setOpen((o) => !o)}
+          className="flex items-center gap-1 text-[11.5px] text-faint transition-colors hover:text-muted"
+        >
+          <CaretDown size={11} weight="bold" className={`transition-transform ${open ? "" : "-rotate-90"}`} />
+          时间轴（谁跟谁在并行）
+        </button>
         <TeamStageSummary workers={workers} />
       </div>
-      <div
-        className="mt-3 grid items-center gap-x-2.5 gap-y-1.5"
-        style={{ gridTemplateColumns: "minmax(88px,36%) minmax(0,1fr)" }}
-      >
-        {rows.map((r, i) => (
-          <Track key={r.id ?? `lead${i}`} row={r} pct={pct} onOpen={onOpen} />
-        ))}
-        <div className="col-start-2 flex justify-between text-[10px] text-faint">
-          {[0, 0.25, 0.5, 0.75].map((f) => (
-            <span key={f}>{formatDuration(span * f)}</span>
+      {open && (
+        <div className="mt-1.5 grid items-center gap-x-2.5 gap-y-1" style={{ gridTemplateColumns: "132px 1fr" }}>
+          {rows.map((r, i) => (
+            <Track key={r.id ?? `lead${i}`} row={r} pct={pct} onOpen={onOpen} />
           ))}
-          <span>{rightLabel}</span>
+          <div className="col-start-2 flex justify-between text-[10px] text-faint">
+            {[0, 0.25, 0.5, 0.75].map((f) => (
+              <span key={f}>{formatDuration(span * f)}</span>
+            ))}
+            <span>{rightLabel}</span>
+          </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }

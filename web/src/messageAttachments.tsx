@@ -44,17 +44,6 @@ export function parseAttachmentText(text: string): ParsedAttachmentText {
   return { body: body.join("\n").trim(), paths };
 }
 
-// 编辑用户写下的需求时，只替换正文，保留服务端附加的本地文件清单。附件块本来
-// 就是 append 到 prompt 尾部的 agent-facing 提示；统一重建能避免把那段内部说明
-// 暴露进编辑框，也不会因为用户改正文而丢失附件。
-export function replaceAttachmentTextBody(text: string, nextBody: string): string {
-  const { paths } = parseAttachmentText(text);
-  const attachmentBlock = paths.length
-    ? `[用户附带的文件，请用 Read 工具查看以下本地文件]\n${paths.map((path) => `- ${path}`).join("\n")}`
-    : "";
-  return [nextBody.trim(), attachmentBlock].filter(Boolean).join("\n\n");
-}
-
 function uploadFile(path: string): string | null {
   const normalized = path.trim().replaceAll("\\", "/");
   const match = /(?:^|\/)data\/uploads\/([^/]+)$/.exec(normalized);

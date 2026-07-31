@@ -1,5 +1,5 @@
-// /team 主视图。中间是调度者的流,右边是通用 Inspector；点执行者从左侧滑出它自己
-// 的完整会话(就是 TaskDetail 那套),不跳页、不丢调度者上下文。
+// /team 主视图。左边(其实是中间)是调度者的流,右边一条常驻执行者栏;点执行者从右侧滑
+// 出它自己的完整会话(就是 TaskDetail 那套),不跳页、不丢调度者上下文。
 //
 // 数据装配全在 ./teamData 里(纯函数),这里只管把它们摆在版面上、把动作接到 api。
 // 执行者是**真任务**,所以抽屉里复用真正的 TaskDetail；TaskDetail 会统一收起由
@@ -12,7 +12,6 @@ import type {
 } from "@harness/shared";
 import {
   batchesOf,
-  isTeamSettled,
   mergeFeed,
   teamGroupsOf,
   waitingWorkers,
@@ -28,7 +27,7 @@ import { useConversation } from "../useConversation";
 import { ConfirmModal } from "../Modal";
 import { TeamHeader, AttentionBar } from "./TeamHeader";
 import { TeamFeed } from "./TeamFeed";
-import { useWorkerShortcuts, WorkerStatusText } from "./WorkerRail";
+import { WorkerRail, WorkerStatusText } from "./WorkerRail";
 import { activeTeamHaltMarker, leadTurns as turnsOf, teamFeedOptions } from "./teamData";
 import { submitShortcutLabel } from "../ui";
 import { TeamReviewWorkspace } from "../ReviewWorkspace";
@@ -92,7 +91,6 @@ export function TeamView({
   const [reviewOpen, setReviewOpen] = useState(initialReviewOpen);
 
   const workers = useMemo(() => workersOf(allTasks, task.id), [allTasks, task.id]);
-  useWorkerShortcuts(workers, setOpenId);
   const rawGroups = useMemo(() => {
     const byId = new Map(groups.map((g) => [g.id, g]));
     for (const g of internalGroups) byId.set(g.id, g);
@@ -202,23 +200,7 @@ export function TeamView({
     <InspectorProvider
       contextKey="team"
       descriptors={teamInspectorDescriptors}
-      defaultOpenIds={["workers", "info"]}
-      context={{
-        task,
-        workers,
-        groups: teamGroups,
-        logs,
-        selectedWorkerId: openId,
-        onSelectWorker: setOpenId,
-        sessions,
-        items,
-        leadTurns,
-        onPatch: (patch) => onPatch(task.id, patch),
-        onDelete: () => onDelete(task.id),
-        canIterateDebate: isTeamSettled(task.status === "running", workers) && canIterateDebate,
-        iterateBusy,
-        onIterateDebate: () => void iterateDebate(),
-      }}
+      context={{ task, workers }}
     >
       <div className="flex h-full min-h-0">
         <main className="relative flex h-full min-w-0 flex-1 flex-col">
@@ -227,6 +209,9 @@ export function TeamView({
             workers={workers}
             teamGroups={teamGroups}
             haltedByHistory={teamGroups.length === 0 && (haltedByHistory || localHalted)}
+            sessions={sessions}
+            items={items}
+            leadTurns={leadTurns}
             onPatch={(p) => onPatch(task.id, p)}
             onRun={() => onRun(task.id)}
             onTeamHalted={async () => {
@@ -240,13 +225,18 @@ export function TeamView({
               setGroupPaused((m) => ({ ...m, ...Object.fromEntries(teamGroups.map((g) => [g.id, false])) }));
               setCuaStatus(null);
             }}
+            onDelete={() => onDelete(task.id)}
             onArchive={() => onArchive(task.id)}
             onUnarchive={() => onUnarchive(task.id)}
+            onOpenWorker={setOpenId}
             reviewOpen={reviewOpen}
             onToggleReview={() => {
               setOpenId(null);
               changeReviewOpen(!reviewOpen);
             }}
+            canIterateDebate={canIterateDebate}
+            iterateBusy={iterateBusy}
+            onIterateDebate={() => void iterateDebate()}
             inspectorToggle={<InspectorToggleButton />}
           />
 
@@ -263,7 +253,10 @@ export function TeamView({
 
               <AttentionBar waiting={waiting} workers={workers} onOpenWorker={setOpenId} onAskLead={askLead} />
 
-              <TeamFeed taskId={task.id} rows={rows} workers={workers} empty={items.length === 0} onOpenWorker={setOpenId} />
+              <div className="flex min-h-0 flex-1">
+                <TeamFeed taskId={task.id} rows={rows} workers={workers} empty={items.length === 0} onOpenWorker={setOpenId} />
+                <WorkerRail workers={workers} groups={teamGroups} logs={logs} selected={openId} onSelect={setOpenId} />
+              </div>
 
               {/* 插话:发出去就进同一个常驻会话(调度者正在说话时会被 interrupt 接住),所以
                   除了归档之外不禁用 —— 这是 /team 跟单任务最大的手感差别。 */}
@@ -282,7 +275,7 @@ export function TeamView({
             </>
           )}
 
-          {open && (
+          {!reviewOpen && open && (
             <WorkerDrawer
               worker={open}
               groups={groups}
@@ -418,7 +411,7 @@ function WorkerDrawer({
         className="t-modal-overlay absolute inset-0 z-20 bg-black/25"
         title="点空白处关闭（Esc）"
       />
-      <aside className="t-drawer absolute inset-y-0 left-0 z-30 flex w-[min(620px,74%)] flex-col overflow-hidden rounded-r-xl border-r border-line2 bg-panel shadow-[8px_0_28px_rgba(0,0,0,.13)]">
+      <aside className="t-drawer absolute inset-y-0 right-0 z-30 flex w-[min(620px,74%)] flex-col border-l border-line2 bg-panel shadow-[-8px_0_28px_rgba(0,0,0,.13)]">
         <div className="flex shrink-0 items-center gap-2 border-b border-line bg-raised px-3 py-1.5 text-[12px]">
           <StatusIcon
             status={worker.status}
