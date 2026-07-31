@@ -7,8 +7,16 @@ import { ConversationFeed } from "./ConversationFeed.tsx";
 import { DeleteTaskDialog } from "./DeleteTaskDialog.tsx";
 import { QuestionCard } from "./QuestionCard.tsx";
 import { ReplyBox } from "./ReplyBox.tsx";
+import { TaskDerivationComposer } from "./TaskDerivationComposer.tsx";
 import { TaskHeader, type PrimaryAction } from "./TaskHeader.tsx";
 import { TaskInspector } from "./TaskInspector.tsx";
+import {
+  canDeriveTask,
+  isTaskDerivationCommand,
+  parseTaskDerivationCommand,
+  TASK_DERIVATION_COMMANDS,
+  type TaskDerivationCommand,
+} from "./taskDerivation.ts";
 import { TaskReviewWorkspace } from "../review/TaskReviewWorkspace.tsx";
 import { OriginTaskBar } from "../components/TaskOrigin.tsx";
 
@@ -35,12 +43,18 @@ export function TaskDetail({
   const [busy, setBusy] = useState(false);
   const [reviewOpen, setReviewOpen] = useState(initialReviewOpen);
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const [derivation, setDerivation] = useState<{
+    command: TaskDerivationCommand;
+    committed: boolean;
+  } | null>(null);
+  const [derivationResetKey, setDerivationResetKey] = useState(0);
   const conversation = useConversation(task.id);
   const markdown = useMemo(
     () => conversationToMarkdown(conversation.items, task),
     [conversation.items, task],
   );
   const hasConversation = conversation.sessions.length > 0 || conversation.items.length > 0;
+  const derivationAllowed = canDeriveTask(task);
 
   useEffect(() => {
     let alive = true;
@@ -50,11 +64,17 @@ export function TaskDetail({
   useEffect(() => {
     setReviewOpen(initialReviewOpen);
     setDeleteOpen(false);
+    setDerivation(null);
   }, [initialReviewOpen, task.id]);
 
   const changeReviewOpen = (open: boolean) => {
     setReviewOpen(open);
     onReviewOpenChange?.(open);
+  };
+
+  const closeDerivation = () => {
+    setDerivation(null);
+    setDerivationResetKey((current) => current + 1);
   };
 
   const refreshTask = async () => {
@@ -150,6 +170,37 @@ export function TaskDetail({
               conversation.addUser(text, attachments);
               notify("回复已发送");
             }}
+            command={derivationAllowed ? {
+              matches: isTaskDerivationCommand,
+              items: TASK_DERIVATION_COMMANDS,
+              resetKey: derivationResetKey,
+              onSubmit: (text) => {
+                const parsed = parseTaskDerivationCommand(text);
+                if (parsed) setDerivation({ command: parsed, committed: true });
+              },
+              onChange: (text) => {
+                setDerivation((current) => {
+                  if (current?.committed) return current;
+                  const parsed = parseTaskDerivationCommand(text);
+                  return parsed ? { command: parsed, committed: false } : null;
+                });
+              },
+              onCancel: closeDerivation,
+            } : undefined}
+            inlinePanel={derivationAllowed && derivation ? (
+              <TaskDerivationComposer
+                key={derivation.command.kind}
+                task={task}
+                command={derivation.command}
+                live={!derivation.committed}
+                onClose={closeDerivation}
+                onCreated={(created) => {
+                  onTaskUpdate(created);
+                  onOpenTask(created.id);
+                }}
+                notify={notify}
+              />
+            ) : undefined}
           />
         </section>
         <TaskInspector
