@@ -278,6 +278,7 @@ export function TeamView({
         onHalt={() => void perform("halt")}
         onResume={() => void perform("resume")}
         onArchive={() => void perform("archive")}
+        indicatorForTask={indicatorForTask}
         notify={notify}
       />
       {reviewOpen ? (
