@@ -57,14 +57,16 @@ export function TeamTimeline({
   workers,
   groups,
   onOpenWorker,
+  defaultOpen = false,
 }: {
   lead: Task;
   leadTurns: LeadTurn[];
   workers: Task[];
   groups: Group[];
   onOpenWorker: (taskId: string) => void;
+  defaultOpen?: boolean;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(defaultOpen);
   const settled = isTeamSettled(lead.status === "running", workers);
   const live = lead.status === "running" || workers.some((worker) => worker.status === "running" || worker.status === "queued");
   const now = useClock(open && live);

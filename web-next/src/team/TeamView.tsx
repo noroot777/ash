@@ -1,42 +1,22 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Group, Task } from "@harness/shared";
 import { batchesOf, mergeFeed, teamGroupsOf, workerHaltStats, workersOf } from "@harness/shared/team";
-import { ArrowSquareOut, Broom, PaperPlaneTilt, SpinnerGap, UsersThree, WarningCircle, X } from "@phosphor-icons/react";
-import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
-import { InspectorHost, type InspectorDescriptor } from "../inspector/index.ts";
-import { MarkdownBody } from "../components/MarkdownBody.tsx";
+import { ArrowSquareOut, Broom, PaperPlaneTilt, SpinnerGap, WarningCircle, X } from "@phosphor-icons/react";
+import { InspectorHost } from "../inspector/index.ts";
 import { api, type TeamCuaStatus } from "../lib/api.ts";
 import { OriginTaskBar } from "../components/TaskOrigin.tsx";
 import { useConversation } from "../lib/useConversation.ts";
 import { useTaskReadState } from "../lib/useTaskReadState.ts";
-import { AttachmentPicker, MessageAttachments, UploadAttachmentList, useAttachments } from "../task-detail/Attachments.tsx";
+import { AttachmentPicker, UploadAttachmentList, useAttachments } from "../task-detail/Attachments.tsx";
 import { QuestionCard } from "../task-detail/QuestionCard.tsx";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import { TaskDetail } from "../task-detail/TaskDetail.tsx";
 import { conversationToMarkdown } from "../task-detail/conversationModel.ts";
-import { parseAttachmentText } from "../task-detail/utils.ts";
 import { TeamFeed } from "./TeamFeed.tsx";
 import { TeamHeader } from "./TeamHeader.tsx";
+import { TEAM_INSPECTORS, type TeamInspectorContext } from "./TeamInspector.tsx";
 import { TeamReviewWorkspace } from "./TeamReviewWorkspace.tsx";
-import { TeamTimeline } from "./TeamTimeline.tsx";
-import { WorkerRail } from "./WorkerRail.tsx";
 import { activeTeamHaltMarker, leadTurns, teamFeedOptions } from "./teamModel.ts";
-
-const TEAM_INSPECTORS: readonly InspectorDescriptor<Task>[] = [
-  {
-    id: "team-placeholder",
-    title: "团队面板",
-    icon: <UsersThree size={14} />,
-    defaultOpen: true,
-    render: (task) => (
-      <div className="inspector-placeholder">
-        <span className="inspector-placeholder__mark" aria-hidden="true"><UsersThree size={16} /></span>
-        <strong title={task.title}>{task.title || "未命名团队"}</strong>
-        <p>Inspector 框架已接入。团队上下文面板可在后续以独立 descriptor 追加，无需修改宿主。</p>
-      </div>
-    ),
-  },
-];
 
 function TeamReplyBox({
   task,
@@ -154,19 +134,38 @@ function WorkerDrawer({
   onDeleted: (taskId: string) => void;
   notify: (message: string) => void;
 }) {
+  const [closing, setClosing] = useState(false);
+  const closingRef = useRef(false);
+  const closeTimer = useRef<number | null>(null);
+  const requestClose = useCallback(() => {
+    if (closingRef.current) return;
+    closingRef.current = true;
+    setClosing(true);
+    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (reducedMotion) closeTimer.current = window.setTimeout(onClose, 0);
+  }, [onClose]);
   useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
+    const onKeyDown = (event: KeyboardEvent) => { if (event.key === "Escape") requestClose(); };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [onClose]);
+  }, [requestClose]);
+  useEffect(() => () => {
+    if (closeTimer.current !== null) window.clearTimeout(closeTimer.current);
+  }, []);
   return (
     <>
-      <div className="team-worker-scrim" onClick={onClose} />
-      <aside className="team-worker-drawer" aria-label={`执行者详情：${worker.title}`}>
+      <div className={`team-worker-scrim${closing ? " is-closing" : ""}`} onClick={requestClose} />
+      <aside
+        className={`team-worker-drawer${closing ? " is-closing" : ""}`}
+        aria-label={`执行者详情：${worker.title}`}
+        onAnimationEnd={(event) => {
+          if (closing && event.animationName === "team-worker-drawer-out") onClose();
+        }}
+      >
         <header>
           <span>执行者</span><b>{worker.title}</b>
           <button type="button" onClick={onOpenFull}><ArrowSquareOut size={13} />整页打开</button>
-          <button type="button" aria-label="关闭执行者抽屉" onClick={onClose}><X size={14} weight="bold" /></button>
+          <button type="button" aria-label="关闭执行者抽屉" onClick={requestClose}><X size={14} weight="bold" /></button>
         </header>
         <TaskDetail key={worker.id} task={worker} allTasks={allTasks} onTaskUpdate={onTaskUpdate} onDeleted={onDeleted} onOpenTask={onOpenTask} inspectorMode="drawer" notify={notify} />
       </aside>
@@ -210,12 +209,24 @@ export function TeamView({
   const stopped = teamGroups.some((group) => group.paused) || (teamGroups.length === 0 && (historyHalt || localHalted));
   const selectedWorker = selectedWorkerId ? workers.find((worker) => worker.id === selectedWorkerId) ?? null : null;
   const markdown = useMemo(() => conversationToMarkdown(conversation.items, task), [conversation.items, task]);
-  const objective = parseAttachmentText(task.body);
   const selectWorker = useCallback((taskId: string) => {
     const worker = workers.find((item) => item.id === taskId);
     if (worker) markTaskRead(worker);
     setSelectedWorkerId(taskId);
   }, [markTaskRead, workers]);
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.metaKey || event.ctrlKey || event.altKey) return;
+      const target = event.target as HTMLElement | null;
+      if (target && (["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName) || target.isContentEditable)) return;
+      const index = Number(event.key) - 1;
+      if (!Number.isInteger(index) || index < 0 || index > 8 || !workers[index]) return;
+      event.preventDefault();
+      selectWorker(workers[index].id);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [selectWorker, workers]);
   const openTaskById = (taskId: string) => {
     const target = allTasks.find((item) => item.id === taskId);
     if (!target) return notify("关联任务不存在或尚未加载");
@@ -277,14 +288,26 @@ export function TeamView({
   };
 
   return (
-    <InspectorHost contextKey={`team:${task.id}`} descriptors={TEAM_INSPECTORS} context={task}>
+    <InspectorHost
+      contextKey={`team:${task.id}`}
+      descriptors={TEAM_INSPECTORS}
+      context={{
+        task,
+        workers,
+        groups: teamGroups,
+        sessions: conversation.sessions,
+        leadTurns: turns,
+        selectedWorkerId,
+        onSelectWorker: selectWorker,
+        indicatorForTask,
+      } satisfies TeamInspectorContext}
+    >
       {({ toggleButton }) => <div className="team-view">
       <OriginTaskBar task={task} allTasks={allTasks} onOpen={openTaskById} />
       <TeamHeader
         task={task}
         workers={workers}
         groups={teamGroups}
-        sessions={conversation.sessions}
         haltedByHistory={teamGroups.length === 0 && (historyHalt || localHalted)}
         conversationMarkdown={markdown}
         busy={busy}
@@ -304,15 +327,6 @@ export function TeamView({
         <TeamReviewWorkspace lead={task} workers={workers} onClose={() => changeReviewOpen(false)} onTaskUpdated={onTaskUpdate} indicatorForTask={indicatorForTask} onReadTask={markTaskRead} notify={notify} />
       ) : (
         <>
-          {(objective.body || objective.paths.length > 0) && (
-            <ImagePreviewGroup isolated>
-              <details className="team-objective">
-                <summary>原始需求</summary>
-                {objective.body && <MarkdownBody text={objective.body} />}
-                <MessageAttachments paths={objective.paths} />
-              </details>
-            </ImagePreviewGroup>
-          )}
           {task.question && (
             <div className="team-lead-question">
               <QuestionCard task={task} onAnswer={async (answer) => {
@@ -325,18 +339,14 @@ export function TeamView({
           )}
           {stopped && <HaltNotice workers={workers} groupCount={teamGroups.length} historyOnly={teamGroups.length === 0} />}
           {stopped && <CuaResidualNotice taskId={task.id} status={cuaStatus} onStatus={setCuaStatus} notify={notify} />}
-          <TeamTimeline lead={task} leadTurns={turns} workers={workers} groups={teamGroups} onOpenWorker={selectWorker} />
-          <div className="team-flow-grid">
-            <section className="team-flow-main" aria-label="团队会话">
-              <TeamFeed taskId={task.id} rows={rows} workers={workers} onOpenWorker={selectWorker} indicatorForTask={indicatorForTask} />
-              <TeamReplyBox task={task} onSend={async (text, attachments) => {
-                await api.replyTask(task.id, text, { attachments });
-                conversation.addUser(text, attachments);
-                notify("已发送给调度者");
-              }} />
-            </section>
-            <WorkerRail workers={workers} groups={teamGroups} selectedId={selectedWorkerId} onSelect={selectWorker} indicatorForTask={indicatorForTask} />
-          </div>
+          <section className="team-flow-main" aria-label="团队会话">
+            <TeamFeed taskId={task.id} rows={rows} workers={workers} onOpenWorker={selectWorker} indicatorForTask={indicatorForTask} />
+            <TeamReplyBox task={task} onSend={async (text, attachments) => {
+              await api.replyTask(task.id, text, { attachments });
+              conversation.addUser(text, attachments);
+              notify("已发送给调度者");
+            }} />
+          </section>
         </>
       )}
       {!reviewOpen && selectedWorker && (

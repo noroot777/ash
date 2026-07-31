@@ -304,6 +304,182 @@
   line-height: 1.65;
 }
 
+.team-info-panel {
+  min-height: 100%;
+  background: color-mix(in lch, var(--canvas) 96%, var(--chrome));
+}
+
+.team-info-panel__section {
+  border-bottom: 0.5px solid var(--line);
+  padding: 14px;
+}
+
+.team-info-panel__section > h2 {
+  margin: 0 0 9px;
+  color: var(--faint);
+  font-size: 9.5px;
+  font-weight: 750;
+  letter-spacing: 0.055em;
+  text-transform: uppercase;
+}
+
+.team-info-panel__roles {
+  display: grid;
+  gap: 7px;
+}
+
+.team-info-panel__role {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--panel);
+  box-shadow: var(--surface-shadow);
+}
+
+.team-info-panel__role > header {
+  display: flex;
+  min-height: 34px;
+  align-items: center;
+  gap: 8px;
+  border-bottom: 0.5px solid var(--line);
+  padding: 6px 9px;
+}
+
+.team-info-panel__role > header span {
+  flex: 0 0 auto;
+  color: var(--faint);
+  font-size: 9.5px;
+  font-weight: 650;
+}
+
+.team-info-panel__role > header b {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 10.5px;
+  font-weight: 600;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.team-info-panel__role > dl,
+.team-info-panel__workspace {
+  margin: 0;
+}
+
+.team-info-panel__role > p {
+  margin: 0;
+  padding: 0 9px 8px;
+  color: var(--faint);
+  font-size: 9.5px;
+}
+
+.team-info-panel__role.is-disabled {
+  background: transparent;
+  box-shadow: none;
+}
+
+.team-info-panel__role.is-disabled > header {
+  border-bottom: 0;
+}
+
+.team-info-panel__config-value {
+  display: grid;
+  min-height: 27px;
+  grid-template-columns: 72px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  padding: 4px 9px;
+}
+
+.team-info-panel__config-value + .team-info-panel__config-value {
+  border-top: 0.5px solid var(--line);
+}
+
+.team-info-panel__config-value dt {
+  color: var(--faint);
+  font-size: 9.5px;
+}
+
+.team-info-panel__config-value dd {
+  min-width: 0;
+  overflow: hidden;
+  margin: 0;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.team-info-panel__workspace {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.team-info-panel__section > .task-session-meta {
+  margin-top: 8px;
+}
+
+.team-info-panel__objective .task-markdown {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11.5px;
+  line-height: 1.65;
+}
+
+.team-info-panel__objective .task-markdown p {
+  white-space: pre-wrap;
+}
+
+.team-info-panel__objective .task-message-attachments {
+  margin-top: 9px;
+}
+
+.team-info-panel__empty {
+  margin: 0;
+  color: var(--faint);
+  font-size: 10.5px;
+  line-height: 1.6;
+}
+
+.inspector-host__content > .team-timeline {
+  min-height: 100%;
+  border-bottom: 0;
+}
+
+.inspector-host__content > .team-timeline .team-timeline-summary {
+  display: grid;
+  min-height: 58px;
+  height: auto;
+  grid-template-columns: 12px minmax(0, 1fr) auto;
+  gap: 5px 7px;
+  padding: 8px 12px;
+}
+
+.inspector-host__content > .team-timeline .team-timeline-delivery {
+  grid-column: 1 / -1;
+  padding-left: 19px;
+}
+
+.inspector-host__content > .team-timeline .team-gantt {
+  padding: 11px 12px 13px;
+}
+
+.inspector-host__content > .team-timeline .team-gantt-row {
+  grid-template-columns: 94px minmax(0, 1fr);
+  gap: 7px;
+}
+
+.inspector-host__content > .team-timeline .team-gantt-axis {
+  margin-left: 101px;
+}
+
 .team-worker-drawer > .inspector-layout {
   min-height: 0;
   flex: 1;

@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from "react";
+import { useMemo } from "react";
 import type { Group, Task } from "@harness/shared";
 import { TaskStatusDot } from "../components/TaskStatusDot.tsx";
 import type { IndicatorForTask } from "../lib/useTaskReadState.ts";
@@ -26,20 +26,6 @@ export function WorkerRail({
   indicatorForTask: IndicatorForTask;
 }) {
   const groupById = useMemo(() => new Map(groups.map((group) => [group.id, group])), [groups]);
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.metaKey || event.ctrlKey || event.altKey) return;
-      const target = event.target as HTMLElement | null;
-      if (target && ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName)) return;
-      const index = Number(event.key) - 1;
-      if (!Number.isInteger(index) || index < 0 || index > 8 || !workers[index]) return;
-      event.preventDefault();
-      onSelect(workers[index].id);
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [onSelect, workers]);
-
   return (
     <aside className="team-worker-rail" aria-label="执行者列表">
       <header><span>执行者（{workers.length}）</span>{workers.length > 0 && <small>按 1–9</small>}</header>
