@@ -18,7 +18,7 @@ type TaskIndex = {
   workersByLead: Map<string, Task[]>;
 };
 
-export type TaskStatusIndicator = "active" | "attention" | "success" | "error";
+export type TaskStatusIndicator = "pending" | "active" | "attention" | "success" | "error";
 export type IndicatorForTask = (task: Task) => TaskStatusIndicator | null;
 
 function terminalEvent(task: Task): string | null {
@@ -64,6 +64,9 @@ export function deriveTaskStatusIndicator(
     if (leadLive || workers.some((worker) => worker.status === "running" || worker.status === "queued")) {
       return "active";
     }
+    if (task.status === "backlog" && workers.every((worker) => worker.status === "backlog")) {
+      return "pending";
+    }
     if (!unread || !isTeamSettled(leadLive, workers)) return null;
     const failed = task.status === "failed"
       || task.status === "canceled"
@@ -73,6 +76,7 @@ export function deriveTaskStatusIndicator(
 
   if (task.question || task.status === "paused") return "attention";
   if (task.status === "running" || task.status === "queued") return "active";
+  if (task.status === "backlog") return "pending";
   if (!unread) return null;
   if (task.status === "done") return "success";
   if (task.status === "failed" || task.status === "canceled") return "error";

@@ -116,7 +116,8 @@
 .team-dispatch-index { width: 14px; color: var(--faint); font-family: var(--font-mono); font-size: 9.5px; }
 .team-dispatch-card > footer { border-top: 1px solid var(--line); padding: 5px 9px; color: var(--faint); font-size: 10px; }
 
-.team-status-dot { display: inline-block; width: 7px; height: 7px; flex: 0 0 7px; border-radius: 50%; font-style: normal; }
+.team-status-dot { display: inline-block; box-sizing: border-box; width: 7px; height: 7px; flex: 0 0 7px; border-radius: 50%; font-style: normal; }
+.team-status-dot--pending { border: 1px dashed var(--muted); background: transparent; }
 .team-status-dot--active { background: var(--muted); animation: task-status-dot-pulse 1.35s ease-in-out infinite; will-change: opacity, transform; }
 .team-status-dot--attention { background: var(--amber); }
 .team-status-dot--success { background: var(--green); }
