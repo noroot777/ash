@@ -3,6 +3,7 @@
 // two-round repair cap, round numbering, and evidence path boundary.
 // Run: npm -w server run test:review
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -14,10 +15,16 @@ const {
   nextReviewRound,
   mountReviewRoutes,
   reviewOutcomeAction,
+  REVIEW_OVERWRITE_CHECK,
   reviewRoundDir,
   safeReviewFilePath,
   shouldAutoDispatchReview,
 } = await import("../src/review.js");
+const {
+  detectReviewCoverage,
+  formatReviewCoverageFacts,
+  repairCoverageGuard,
+} = await import("../src/review-coverage.js");
 
 const baseTrigger = {
   confirmedDone: true,
@@ -75,12 +82,83 @@ assert.equal(
 assert.equal(nextReviewRound(0), 1);
 assert.equal(nextReviewRound(1), 2);
 assert.equal(nextReviewRound(2), 3, "手动派审不受两轮自动上限限制");
+assert.match(REVIEW_OVERWRITE_CHECK, /ask_question/, "审查 prompt 必须要求覆盖场景先等人工拍板");
 
 assert.equal(
   reviewOutcomeAction({ reviewStatus: "done", conclusion: "verify_failed", reviewRequested: true, round: 1 }),
   "repair",
   "第一轮 verify_failed 应把报告打回原任务修复",
 );
+
+const coverageRepo = join(root, "coverage-repo");
+const git = (...args: string[]) => execFileSync("git", ["-C", coverageRepo, ...args], {
+  encoding: "utf8",
+}).trim();
+const commit = (message: string, at: string) => {
+  execFileSync("git", ["-C", coverageRepo, "commit", "-m", message], {
+    env: { ...process.env, GIT_AUTHOR_DATE: at, GIT_COMMITTER_DATE: at },
+  });
+  return git("rev-parse", "HEAD");
+};
+execFileSync("git", ["init", "-b", "main", coverageRepo]);
+git("config", "user.name", "Harness Review Test");
+git("config", "user.email", "harness@example.test");
+writeFileSync(join(coverageRepo, "shared.ts"), "seed\n");
+writeFileSync(join(coverageRepo, "other.ts"), "seed\n");
+git("add", "-A");
+commit("seed", "2026-01-01T00:00:00Z");
+writeFileSync(join(coverageRepo, "shared.ts"), "task output\n");
+git("add", "shared.ts");
+const artifactSha = commit("任务产物", "2026-01-01T00:01:00Z");
+writeFileSync(join(coverageRepo, "other.ts"), "unrelated\n");
+git("add", "other.ts");
+commit("无关后续", "2026-01-01T00:02:00Z");
+writeFileSync(join(coverageRepo, "shared.ts"), "replacement\n");
+git("add", "shared.ts");
+const coveringSha = commit("反转需求", "2026-01-01T00:03:00Z");
+
+const coverage = await detectReviewCoverage({
+  repoPath: coverageRepo,
+  ref: "main",
+  turnStartedAt: "2026-01-01T00:00:30Z",
+  endedAt: "2026-01-01T00:01:30Z",
+});
+assert.equal(coverage?.basis, "artifact_files");
+assert.deepEqual(coverage?.artifactCommits.map((item) => item.sha), [artifactSha]);
+assert.deepEqual(coverage?.laterCommits.map((item) => item.sha), [coveringSha], "只报告触及同批文件的后续提交");
+assert.deepEqual(coverage?.laterCommits[0]?.files, ["shared.ts"]);
+assert.match(formatReviewCoverageFacts(coverage!), /反转需求/);
+assert.match(formatReviewCoverageFacts(coverage!), new RegExp(coveringSha));
+assert.match(formatReviewCoverageFacts(coverage!), /shared\.ts/);
+assert.match(repairCoverageGuard(coverage!), /不要直接恢复/);
+assert.match(repairCoverageGuard(coverage!), /ask_question/);
+assert.equal(repairCoverageGuard(null), "", "未检测到覆盖时修复 prompt 不增加噪声");
+
+const disjointOnly = await detectReviewCoverage({
+  repoPath: coverageRepo,
+  ref: `${coveringSha}^`,
+  turnStartedAt: "2026-01-01T00:00:30Z",
+  endedAt: "2026-01-01T00:01:30Z",
+});
+assert.equal(disjointOnly, null, "后续提交只改其它文件时不得给修复 prompt 增加噪声");
+
+const fallback = await detectReviewCoverage({
+  repoPath: coverageRepo,
+  ref: "main",
+  turnStartedAt: "2026-01-01T00:10:00Z",
+  endedAt: "2026-01-01T00:01:30Z",
+});
+assert.equal(fallback?.basis, "ended_at_fallback", "拿不到产物提交时按 endedAt 后的新提交退化检测");
+assert.deepEqual(fallback?.laterCommits.map((item) => item.sha), [
+  git("rev-parse", `${coveringSha}^`),
+  coveringSha,
+]);
+const missingBranchFallback = await detectReviewCoverage({
+  repoPath: coverageRepo,
+  ref: "deleted-task-branch",
+  endedAt: "2026-01-01T00:01:30Z",
+});
+assert.equal(missingBranchFallback?.basis, "ended_at_fallback", "任务分支丢失时仍应退化检查当前 HEAD");
 assert.equal(
   reviewOutcomeAction({ reviewStatus: "done", conclusion: "verify_failed", reviewRequested: true, round: 2 }),
   "stop",
