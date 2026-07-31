@@ -9,6 +9,7 @@ import {
 } from "react";
 import { Plus, Sidebar, SidebarSimple, X } from "@phosphor-icons/react";
 import { Menu, MenuItem } from "../components/ui.tsx";
+import { useDismissable } from "../lib/useDismissable.ts";
 import type { InspectorDescriptor, InspectorHostControls, InspectorTabPolicy } from "./types.ts";
 
 export const INSPECTOR_MIN_WIDTH = 280;
@@ -188,6 +189,13 @@ function InspectorHostState<Context>({
   const instanceId = useId();
   const panelId = `${safeDomId(instanceId)}-inspector`;
 
+  useDismissable({
+    enabled: menuOpen,
+    containerRef: menuRoot,
+    onClose: () => setMenuOpen(false),
+    restoreFocusRef: menuButton,
+  });
+
   useEffect(() => {
     setState((current) => {
       const openTabs = current.openTabs.filter((id) => descriptorById.has(id));
@@ -220,30 +228,6 @@ function InspectorHostState<Context>({
       // localStorage can be unavailable in privacy-restricted contexts.
     }
   }, [state, storageKey]);
-
-  useEffect(() => {
-    if (!menuOpen) return;
-    const close = (event: Event) => {
-      if (!menuRoot.current?.contains(event.target as Node)) setMenuOpen(false);
-    };
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      event.preventDefault();
-      event.stopPropagation();
-      setMenuOpen(false);
-      menuButton.current?.focus();
-    };
-    // Pointer events close before the destination acts. Click is the fallback for
-    // keyboard/assistive activation paths that never emit pointerdown.
-    document.addEventListener("pointerdown", close, true);
-    document.addEventListener("click", close, true);
-    document.addEventListener("keydown", closeOnEscape, true);
-    return () => {
-      document.removeEventListener("pointerdown", close, true);
-      document.removeEventListener("click", close, true);
-      document.removeEventListener("keydown", closeOnEscape, true);
-    };
-  }, [menuOpen]);
 
   useEffect(() => {
     const stopResizing = () => {

@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import type { ProjectView } from "@harness/shared";
 import { CaretDown, Check, GearSix, MagnifyingGlass } from "@phosphor-icons/react";
+import { useDismissable } from "../lib/useDismissable.ts";
 import { ProjectAvatar } from "./ProjectAvatar.tsx";
 
 function shortPath(path: string): string {
@@ -24,6 +25,7 @@ export function ProjectSwitcher({
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
   const root = useRef<HTMLDivElement>(null);
+  const trigger = useRef<HTMLButtonElement>(null);
   const results = useMemo(() => {
     const query = search.trim().toLocaleLowerCase();
     if (!query) return projects;
@@ -34,25 +36,17 @@ export function ProjectSwitcher({
     );
   }, [projects, search]);
 
-  useEffect(() => {
-    if (!open) return;
-    const onPointerDown = (event: PointerEvent) => {
-      if (!root.current?.contains(event.target as Node)) setOpen(false);
-    };
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setOpen(false);
-    };
-    document.addEventListener("pointerdown", onPointerDown);
-    document.addEventListener("keydown", onKeyDown);
-    return () => {
-      document.removeEventListener("pointerdown", onPointerDown);
-      document.removeEventListener("keydown", onKeyDown);
-    };
-  }, [open]);
+  useDismissable({
+    enabled: open,
+    containerRef: root,
+    onClose: () => setOpen(false),
+    restoreFocusRef: trigger,
+  });
 
   return (
     <div className="workspace-project-switcher" ref={root}>
       <button
+        ref={trigger}
         className="workspace-project-trigger"
         type="button"
         aria-expanded={open}

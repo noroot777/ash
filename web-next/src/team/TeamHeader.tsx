@@ -13,6 +13,7 @@ import {
   Stop,
 } from "@phosphor-icons/react";
 import { LegacyLink } from "../components/LegacyLink.tsx";
+import { useDismissable } from "../lib/useDismissable.ts";
 import { TaskPinButton } from "../task-detail/TaskPinButton.tsx";
 import { TaskStatusDot } from "../components/TaskStatusDot.tsx";
 import type { IndicatorForTask } from "../lib/useTaskReadState.ts";
@@ -61,6 +62,7 @@ export function TeamHeader({
   const [title, setTitle] = useState(task.title);
   const [editing, setEditing] = useState(false);
   const menuRoot = useRef<HTMLDivElement>(null);
+  const menuButton = useRef<HTMLButtonElement>(null);
   const pausedGroups = groups.filter((group) => group.paused);
   const stopped = pausedGroups.length > 0 || haltedByHistory;
   const settled = isTeamSettled(task.status === "running", workers);
@@ -68,14 +70,12 @@ export function TeamHeader({
   const indicator = indicatorForTask(task);
 
   useEffect(() => { if (!editing) setTitle(task.title); }, [editing, task.title]);
-  useEffect(() => {
-    if (!menu) return;
-    const close = (event: PointerEvent) => {
-      if (!menuRoot.current?.contains(event.target as Node)) setMenu(false);
-    };
-    window.addEventListener("pointerdown", close);
-    return () => window.removeEventListener("pointerdown", close);
-  }, [menu]);
+  useDismissable({
+    enabled: menu,
+    containerRef: menuRoot,
+    onClose: () => setMenu(false),
+    restoreFocusRef: menuButton,
+  });
 
   const commitTitle = async () => {
     setEditing(false);
@@ -142,7 +142,7 @@ export function TeamHeader({
             <button type="button" className="is-primary" disabled={busy} onClick={onRun}><Play size={13} weight="fill" />运行</button>
           )}
           <div className="team-header-menu" ref={menuRoot}>
-            <button type="button" aria-label="更多团队操作" aria-expanded={menu} onClick={() => setMenu((value) => !value)}><DotsThree size={18} weight="bold" /></button>
+            <button ref={menuButton} type="button" aria-label="更多团队操作" aria-expanded={menu} onClick={() => setMenu((value) => !value)}><DotsThree size={18} weight="bold" /></button>
             {menu && (
               <div role="menu">
                 <button type="button" role="menuitem" disabled={!conversationMarkdown.trim()} onClick={() => void copy()}><Copy size={14} />复制全部对话</button>

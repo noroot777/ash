@@ -15,6 +15,7 @@ import {
   Trash,
 } from "@phosphor-icons/react";
 import { TaskStatusDot } from "../components/TaskStatusDot.tsx";
+import { useDismissable } from "../lib/useDismissable.ts";
 import type { IndicatorForTask } from "../lib/useTaskReadState.ts";
 import { TaskPinButton } from "./TaskPinButton.tsx";
 import { TaskTimeMeta } from "./TaskTimeMeta.tsx";
@@ -73,20 +74,19 @@ export function TaskHeader({
   const [editing, setEditing] = useState(false);
   const [menu, setMenu] = useState(false);
   const menuRoot = useRef<HTMLDivElement>(null);
+  const menuButton = useRef<HTMLButtonElement>(null);
   const pointerToggle = useRef(false);
   const action = primaryAction(task);
   const display = taskDisplayStatus(task.status, task.stage, !!task.question);
   const indicator = indicatorForTask(task);
 
   useEffect(() => { if (!editing) setTitle(task.title); }, [editing, task.title]);
-  useEffect(() => {
-    if (!menu) return;
-    const close = (event: PointerEvent) => {
-      if (!menuRoot.current?.contains(event.target as Node)) setMenu(false);
-    };
-    window.addEventListener("pointerdown", close);
-    return () => window.removeEventListener("pointerdown", close);
-  }, [menu]);
+  useDismissable({
+    enabled: menu,
+    containerRef: menuRoot,
+    onClose: () => setMenu(false),
+    restoreFocusRef: menuButton,
+  });
 
   const download = () => {
     const blob = new Blob([conversationMarkdown], { type: "text/markdown;charset=utf-8" });
@@ -163,6 +163,7 @@ export function TaskHeader({
       </button>
       <div className="task-overflow" ref={menuRoot}>
         <button
+          ref={menuButton}
           className="task-overflow-trigger"
           type="button"
           aria-label="更多任务操作"
