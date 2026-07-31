@@ -1,5 +1,5 @@
-// /team 右侧常驻执行者栏:永远知道谁在干、谁卡住了。点一张卡 → 右侧滑出它自己的
-// 会话抽屉(TeamView 里的 WorkerDrawer),不跳页、不丢调度者上下文。
+// /team Inspector 里的执行者列表:永远知道谁在干、谁卡住了。点一张卡 → 左侧滑出
+// 它自己的会话抽屉(TeamView 里的 WorkerDrawer),不跳页、不丢调度者上下文。
 //
 // 卡片上的「实时最后一行」只有在本次会话里收到过 SSE 的执行者才有(刷新后 logs 是空
 // 的),所以它是锦上添花,不承载必要信息 —— 必要信息在状态行里。
@@ -9,6 +9,26 @@ import { StatusIcon } from "../StatusIcon";
 import { Duration } from "../time";
 import type { LogLine } from "../Conversation";
 import { executorLabel } from "../executorLabel";
+
+export function useWorkerShortcuts(workers: Task[], onSelect: (id: string) => void) {
+  // Inspector 只挂载当前 tab，快捷键不能跟着 Workers 面板卸载，所以监听留在
+  // TeamView 的常驻层。1–9 用裸数字：浏览器会占用 ⌘1–9 切标签。
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const el = e.target as HTMLElement | null;
+      if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT")) return;
+      const n = Number(e.key);
+      if (!Number.isInteger(n) || n < 1 || n > 9) return;
+      const worker = workers[n - 1];
+      if (!worker) return;
+      e.preventDefault();
+      onSelect(worker.id);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [workers, onSelect]);
+}
 
 export function WorkerRail({
   workers,
@@ -24,26 +44,9 @@ export function WorkerRail({
   onSelect: (id: string) => void;
 }) {
   const groupById = new Map(groups.map((g) => [g.id, g]));
-  // 1–9 直接点开第 N 个执行者。用裸数字而不是 ⌘1–9:浏览器把 ⌘+数字占去切标签了,
-  // 承诺一个按不出来的快捷键不如给个真能用的。App 的全局键位没有数字键,不冲突。
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.metaKey || e.ctrlKey || e.altKey) return;
-      const el = e.target as HTMLElement | null;
-      if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT")) return;
-      const n = Number(e.key);
-      if (!Number.isInteger(n) || n < 1 || n > 9) return;
-      const w = workers[n - 1];
-      if (!w) return;
-      e.preventDefault();
-      onSelect(w.id);
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [workers, onSelect]);
 
   return (
-    <aside className="min-h-0 w-[268px] shrink-0 overflow-y-auto bg-canvas px-3 py-3.5">
+    <div className="min-h-full bg-canvas px-3 py-3.5">
       <div className="mb-2 flex items-center justify-between text-[11px] uppercase tracking-[0.06em] text-faint">
         <span>执行者（{workers.length}）</span>
         {workers.length > 0 && <span className="normal-case tracking-normal">按 1–9</span>}
@@ -69,7 +72,7 @@ export function WorkerRail({
           执行者能单独重跑、答复和查看完整会话；元信息仍由调度者统一管理。
         </p>
       )}
-    </aside>
+    </div>
   );
 }
 

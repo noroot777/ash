@@ -225,10 +225,10 @@ select option {
   animation: t-dropdown-out var(--dropdown-close-dur) var(--dropdown-ease) both;
 }
 
-/* 右侧滑出的抽屉（/team 的执行者会话）。跟 modal 共用时长/曲线变量，只是从右边进来
+/* 左侧滑出的抽屉（/team 的执行者会话）。跟 modal 共用时长/曲线变量，只是从左边进来
    而不是居中放大 —— 它是「在当前上下文里侧开一页」，不是打断你的弹窗。 */
 @keyframes t-drawer-in {
-  from { opacity: 0; transform: translateX(22px); }
+  from { opacity: 0; transform: translateX(-22px); }
   to { opacity: 1; transform: translateX(0); }
 }
 .t-drawer {

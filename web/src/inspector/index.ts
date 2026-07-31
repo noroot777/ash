@@ -3,8 +3,7 @@ export { InspectorHost } from "./InspectorHost";
 export { InspectorToggleButton } from "./InspectorToggleButton";
 export {
   taskInspectorDescriptors,
-  teamInspectorDescriptors,
   type TaskInspectorContext,
-  type TeamInspectorContext,
 } from "./placeholders";
+export { teamInspectorDescriptors, type TeamInspectorContext } from "./teamDescriptors";
 export type { InspectorDescriptor, InspectorPersistedState } from "./types";

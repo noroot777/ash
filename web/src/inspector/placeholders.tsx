@@ -7,11 +7,6 @@ export interface TaskInspectorContext {
   allTasks: Task[];
 }
 
-export interface TeamInspectorContext {
-  task: Task;
-  workers: Task[];
-}
-
 export const taskInspectorDescriptors: InspectorDescriptor<TaskInspectorContext>[] = [
   {
     id: "info",
@@ -23,22 +18,6 @@ export const taskInspectorDescriptors: InspectorDescriptor<TaskInspectorContext>
         eyebrow="单飞任务"
         title={task.title}
         copy="任务信息面板待迁移。Inspector 框架已可承载后续的文件树、详情与审查工具。"
-      />
-    ),
-  },
-];
-
-export const teamInspectorDescriptors: InspectorDescriptor<TeamInspectorContext>[] = [
-  {
-    id: "info",
-    title: "信息",
-    icon: <Info size={14} />,
-    description: "团队任务的 Inspector 挂载点",
-    render: ({ task }) => (
-      <InspectorPlaceholder
-        eyebrow="团队任务"
-        title={task.title}
-        copy="团队信息面板待迁移。WorkerRail 与执行者抽屉暂时保留在现有位置。"
       />
     ),
   },
