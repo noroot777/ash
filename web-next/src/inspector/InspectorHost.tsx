@@ -223,7 +223,7 @@ function InspectorHostState<Context>({
 
   useEffect(() => {
     if (!menuOpen) return;
-    const close = (event: PointerEvent) => {
+    const close = (event: Event) => {
       if (!menuRoot.current?.contains(event.target as Node)) setMenuOpen(false);
     };
     const closeOnEscape = (event: KeyboardEvent) => {
@@ -233,11 +233,14 @@ function InspectorHostState<Context>({
       setMenuOpen(false);
       menuButton.current?.focus();
     };
-    // Capture keeps dismissal reliable even when the clicked page region stops bubbling.
+    // Pointer events close before the destination acts. Click is the fallback for
+    // keyboard/assistive activation paths that never emit pointerdown.
     document.addEventListener("pointerdown", close, true);
+    document.addEventListener("click", close, true);
     document.addEventListener("keydown", closeOnEscape, true);
     return () => {
       document.removeEventListener("pointerdown", close, true);
+      document.removeEventListener("click", close, true);
       document.removeEventListener("keydown", closeOnEscape, true);
     };
   }, [menuOpen]);
