@@ -17,6 +17,7 @@ import {
   Trash,
 } from "@phosphor-icons/react";
 import { api, type GitOverview } from "../lib/api.ts";
+import { TaskModeIcon, taskModeLabel, taskParentLink, taskParentMode } from "../components/TaskOrigin.tsx";
 import { GitOverviewPanel, GitProjectStep } from "./CommandPaletteGit.tsx";
 import { SearchHitList, SearchPreview } from "./CommandPaletteSearch.tsx";
 import {
@@ -176,6 +177,16 @@ export function CommandPalette({
     if (selectedTask) {
       const taskGroup = `当前任务 · ${selectedTask.title}`;
       const dispatchedWorker = selectedTask.parentId !== null;
+      const parent = taskParentLink(selectedTask, tasks);
+      if (parent?.task) {
+        result.push({
+          key: "task:parent",
+          group: taskGroup,
+          label: `${parent.kind === "team" ? "打开所属团队" : `打开来源${taskModeLabel(taskParentMode(parent))}`} · ${parent.task.title}`,
+          icon: <TaskModeIcon mode={taskParentMode(parent)} />,
+          run: closeRun(() => onTask(parent.task!)),
+        });
+      }
       if (!selectedTask.archived && canSingleRun(selectedTask.status)) {
         const retry = selectedTask.status === "failed";
         const label = retry ? "重试任务" : selectedTask.status === "paused" ? "继续任务" : "运行任务";

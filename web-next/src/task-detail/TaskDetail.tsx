@@ -10,12 +10,14 @@ import { ReplyBox } from "./ReplyBox.tsx";
 import { TaskHeader, type PrimaryAction } from "./TaskHeader.tsx";
 import { TaskInspector } from "./TaskInspector.tsx";
 import { TaskReviewWorkspace } from "../review/TaskReviewWorkspace.tsx";
+import { OriginTaskBar } from "../components/TaskOrigin.tsx";
 
 export function TaskDetail({
   task,
   allTasks,
   onTaskUpdate,
   onDeleted,
+  onOpenTask,
   initialReviewOpen = false,
   onReviewOpenChange,
   notify,
@@ -24,6 +26,7 @@ export function TaskDetail({
   allTasks: Task[];
   onTaskUpdate: (task: Task) => void;
   onDeleted: (taskId: string) => void;
+  onOpenTask: (taskId: string) => void;
   initialReviewOpen?: boolean;
   onReviewOpenChange?: (open: boolean) => void;
   notify: (message: string) => void;
@@ -103,6 +106,7 @@ export function TaskDetail({
 
   return (
     <div className="task-detail">
+      <OriginTaskBar task={task} allTasks={allTasks} onOpen={onOpenTask} />
       <TaskHeader
         task={task}
         conversationMarkdown={markdown}
@@ -153,6 +157,7 @@ export function TaskDetail({
           groups={groups}
           sessions={conversation.sessions}
           allTasks={allTasks}
+          onOpenTask={onOpenTask}
           onPatch={patch}
           onQueueChanged={() => void refreshTask()}
           notify={notify}

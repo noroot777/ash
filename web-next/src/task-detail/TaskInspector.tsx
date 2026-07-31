@@ -3,9 +3,10 @@ import type { AgentExecutorProfile, AgentType, Group, Schedule, Session, Task, T
 import { AGENT_TYPES, isUserSettableStatus, TASK_STATUS_LABELS } from "@harness/shared";
 import { CLI_MODEL_PRESETS, REASONING_EFFORT_VALUES } from "@harness/shared/cli-presets";
 import { sameExecutor } from "@harness/shared/executors";
-import { CaretRight, ListNumbers, Plus, X } from "@phosphor-icons/react";
+import { ArrowSquareOut, CaretRight, ListNumbers, Plus, X } from "@phosphor-icons/react";
 import { api } from "../lib/api.ts";
 import { LegacyLink } from "../components/LegacyLink.tsx";
+import { taskParentLink } from "../components/TaskOrigin.tsx";
 import { QueueDrawer } from "./QueueDrawer.tsx";
 import { formatInstant, PRIORITY_LABELS, taskDurationInfo } from "./utils.ts";
 
@@ -29,6 +30,7 @@ export function TaskInspector({
   groups,
   sessions,
   allTasks,
+  onOpenTask,
   onPatch,
   onQueueChanged,
   notify,
@@ -37,6 +39,7 @@ export function TaskInspector({
   groups: Group[];
   sessions: Session[];
   allTasks: Task[];
+  onOpenTask: (taskId: string) => void;
   onPatch: (patch: Partial<Task>) => Promise<void>;
   onQueueChanged: () => void;
   notify: (message: string) => void;
@@ -88,6 +91,7 @@ export function TaskInspector({
   const modelOptions = [...new Set([task.model, ...CLI_MODEL_PRESETS[agentType]].filter((value): value is string => !!value))];
   const effortOptions = [...new Set([task.reasoningEffort, ...REASONING_EFFORT_VALUES[agentType]].filter((value): value is string => !!value))];
   const duration = taskDurationInfo(task);
+  const parent = taskParentLink(task, allTasks);
 
   return (
     <aside className="task-inspector" aria-label="任务 Inspector">
@@ -135,7 +139,16 @@ export function TaskInspector({
               )}
             </div>
           </InspectorRow>
-          {task.parentId !== null && <p className="task-inspector-note">这是调度者派出的执行者，属性由团队任务统一管理。</p>}
+          {task.parentId !== null && (
+            <>
+              <p className="task-inspector-note">这是调度者派出的执行者，属性由团队任务统一管理。</p>
+              {parent && (
+                <button className="task-inspector-action" type="button" onClick={() => onOpenTask(parent.taskId)}>
+                  <span>打开所属团队{parent.task ? ` · ${parent.task.title}` : ""}</span><ArrowSquareOut size={13} />
+                </button>
+              )}
+            </>
+          )}
         </section>
 
         <section>

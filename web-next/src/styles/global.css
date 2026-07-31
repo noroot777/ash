@@ -1,6 +1,7 @@
 @import "tailwindcss";
 @import "./controls.css";
 @import "./dev-components.css";
+@import "./task-origin.css";
 @import "./task-tree.css";
 @import "./workspace.css";
 @import "./task-detail.css";

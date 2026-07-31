@@ -119,13 +119,20 @@ export function WorkspaceShell() {
   const selectedTask = tasks.find((task) => task.id === taskId && task.projectId === projectId) ?? null;
   const loadError = projectsError ?? tasksError;
   const activeTaskCount = useMemo(() => tasks.filter((task) => task.projectId === projectId && task.parentId === null && !task.archived).length, [projectId, tasks]);
-  const updateTask = useCallback((updated: Task) => setTasks((current) => current.map((task) => task.id === updated.id ? updated : task)), [setTasks]);
+  const updateTask = useCallback((updated: Task) => setTasks((current) => current.some((task) => task.id === updated.id)
+    ? current.map((task) => task.id === updated.id ? updated : task)
+    : [updated, ...current]), [setTasks]);
   const deleteTask = useCallback((deletedId: string) => {
     setTasks((current) => current.filter((task) => task.id !== deletedId));
     setTaskId((current) => current === deletedId ? null : current);
   }, [setTasks]);
   const selectProject = (nextProjectId: string) => { setProjectId(nextProjectId); setTaskId(null); setComposer(null); setNotes(null); setReviewTaskId(null); setSettingsSection(null); };
   const selectTask = (task: Task) => { setProjectId(task.projectId); setTaskId(task.id); setComposer(null); setNotes(null); setReviewTaskId(null); setSettingsSection(null); };
+  const selectTaskById = (nextTaskId: string) => {
+    const target = tasks.find((task) => task.id === nextTaskId);
+    if (target) selectTask(target);
+    else api.task(nextTaskId).then((task) => { updateTask(task); selectTask(task); }).catch(() => notify("关联任务不存在或读取失败"));
+  };
   const openNotes = (nextProjectId = projectId, noteId: string | null = null) => { if (nextProjectId) { setProjectId(nextProjectId); setSettingsSection(null); setComposer(null); setNotes({ projectId: nextProjectId, noteId }); } };
   const openSettings = (section: SettingsSection = "agents") => { setSettingsSection(section); setComposer(null); setNotes(null); setPaletteOpen(false); };
   const openComposer = (mode: TaskMode = "single") => { if (!currentProject) return; setSettingsSection(null); setNotes(null); setComposer({ mode }); };
@@ -170,7 +177,7 @@ export function WorkspaceShell() {
         ) : selectedTask?.mode === "debate" ? (
           <DebateView task={selectedTask} allTasks={tasks} onTaskUpdated={updateTask} onTaskCreated={(created) => setTasks((current) => current.some((task) => task.id === created.id) ? current.map((task) => task.id === created.id ? created : task) : [created, ...current])} onTaskDeleted={deleteTask} onSelectTask={selectTask} notify={notify} />
         ) : selectedTask ? (
-          <TaskDetail task={selectedTask} allTasks={tasks} onTaskUpdate={updateTask} onDeleted={deleteTask} initialReviewOpen={reviewTaskId === selectedTask.id} onReviewOpenChange={(open) => setReviewTaskId(open ? selectedTask.id : null)} notify={notify} />
+          <TaskDetail task={selectedTask} allTasks={tasks} onTaskUpdate={updateTask} onDeleted={deleteTask} onOpenTask={selectTaskById} initialReviewOpen={reviewTaskId === selectedTask.id} onReviewOpenChange={(open) => setReviewTaskId(open ? selectedTask.id : null)} notify={notify} />
         ) : <><header className="workspace-app-bar"><span className="workspace-kind-chip">项目</span><span className="workspace-app-title">{currentProject?.name ?? "Harness"}</span>{currentProject && <span className="workspace-app-count">{activeTaskCount} 项任务</span>}</header><div className="workspace-columns"><section className="workspace-primary" aria-label="主工作区"><TaskPlaceholder project={currentProject} task={null} /></section><aside className="workspace-inspector-slot" aria-label="Inspector 占位"><div><span>Inspector</span><small>项目概览</small></div><p>选择任务后，这里会显示可操作属性、执行信息与队列。</p></aside></div></>}
       </main>
     </div>{overlays}</>
