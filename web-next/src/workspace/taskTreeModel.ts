@@ -92,25 +92,16 @@ function sortTasks(tasks: Task[], pinned: boolean): Task[] {
 }
 
 export function buildTaskTree(tasks: Task[]): TaskTreeSection[] {
-  const active = tasks.filter((task) => !task.archived);
-  const tasksById = new Map(tasks.map((task) => [task.id, task]));
+  const topLevel = tasks.filter((task) => task.parentId === null && !task.archived);
   return TASK_SECTIONS.map((section) => {
-    const sectionTasks = active.filter(
-      (task) => {
-        if (task.parentId !== null && task.pinnedAt != null) {
-          return section.matches(tasksById.get(task.parentId) ?? task);
-        }
-        return section.matches(task) && task.parentId === null;
-      },
-    );
+    const sectionTasks = topLevel.filter(section.matches);
     const groups = section.groups
       .map((group) => ({
         ...group,
         collapseKey: `${section.key}:${group.key}`,
         tasks: sortTasks(
           sectionTasks.filter(
-            (task) => group.matches(task)
-              && (group.pinned || (task.parentId === null && task.pinnedAt == null)),
+            (task) => group.matches(task) && (group.pinned || task.pinnedAt == null),
           ),
           !!group.pinned,
         ),
@@ -120,7 +111,6 @@ export function buildTaskTree(tasks: Task[]): TaskTreeSection[] {
   }).filter((section) => section.count > 0);
 }
 
-// 名字沿用现有调用方；树中可见的置顶执行者也必须进入相同的顺序。
 export function orderedTopLevelTasks(tasks: Task[]): Task[] {
   return buildTaskTree(tasks).flatMap((section) => section.groups.flatMap((group) => group.tasks));
 }
