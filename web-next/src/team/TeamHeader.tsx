@@ -14,6 +14,7 @@ import {
 } from "@phosphor-icons/react";
 import { LegacyLink } from "../components/LegacyLink.tsx";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
+import { TaskPinButton } from "../task-detail/TaskPinButton.tsx";
 import { TaskTimeMeta } from "../task-detail/TaskTimeMeta.tsx";
 import { safeDownloadName, STATUS_TONES } from "../task-detail/utils.ts";
 import { teamLeadLabel, teamReviewerLabel, teamWorkerLabel } from "./teamModel.ts";
@@ -28,6 +29,7 @@ export function TeamHeader({
   busy,
   reviewOpen,
   onTitle,
+  onTogglePin,
   onReview,
   onRun,
   onHalt,
@@ -44,6 +46,7 @@ export function TeamHeader({
   busy: boolean;
   reviewOpen: boolean;
   onTitle: (title: string) => Promise<void>;
+  onTogglePin: () => Promise<void>;
   onReview: () => void;
   onRun: () => void;
   onHalt: () => void;
@@ -108,6 +111,7 @@ export function TeamHeader({
     <>
       <header className="team-header">
         <span className="team-kind">团队</span>
+        <TaskPinButton task={task} onTogglePin={onTogglePin} notify={notify} />
         <input
           value={title}
           aria-label="团队标题"

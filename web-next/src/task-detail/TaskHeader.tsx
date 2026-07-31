@@ -10,11 +10,11 @@ import {
   DownloadSimple,
   GitDiff,
   Play,
-  PushPinSimple,
   SpinnerGap,
   Stop,
   Trash,
 } from "@phosphor-icons/react";
+import { TaskPinButton } from "./TaskPinButton.tsx";
 import { TaskTimeMeta } from "./TaskTimeMeta.tsx";
 import { safeDownloadName, STATUS_TONES } from "./utils.ts";
 
@@ -119,22 +119,7 @@ export function TaskHeader({
   return (
     <header className="task-detail-header">
       <span className="task-detail-kind">{task.mode === "single" ? "任务" : task.mode === "team" ? "团队" : "辩论"}</span>
-      {!task.archived && (
-        <button
-          className={`task-detail-pin${task.pinnedAt != null ? " is-pinned" : ""}`}
-          type="button"
-          aria-label={task.pinnedAt != null ? "取消置顶" : "置顶"}
-          aria-pressed={task.pinnedAt != null}
-          title={task.pinnedAt != null ? "取消置顶" : "置顶"}
-          onClick={() => {
-            void onTogglePin().catch((reason) => {
-              notify(reason instanceof Error ? reason.message : String(reason));
-            });
-          }}
-        >
-          <PushPinSimple size={14} weight={task.pinnedAt != null ? "fill" : "regular"} aria-hidden="true" />
-        </button>
-      )}
+      <TaskPinButton task={task} onTogglePin={onTogglePin} notify={notify} />
       {task.parentId !== null ? (
         <span className="task-detail-title is-readonly">{task.title || "未命名任务"}</span>
       ) : (
