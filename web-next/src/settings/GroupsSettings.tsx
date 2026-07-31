@@ -9,7 +9,7 @@ import { activeGroupTasks, resumeQueueModel } from "./groupQueueModel.ts";
 function ResumeQueue({ tasks }: { tasks: Task[] }) {
   const queue = resumeQueueModel(tasks);
   if (!queue) return null;
-  const marker = (task: Task) => task.status === "done" ? "✓" : task.status === "running" ? "●" : task.status === "failed" ? "×" : "○";
+  const marker = (task: Task) => task.status === "done" ? "✓" : task.status === "running" || task.status === "queued" ? "●" : task.status === "failed" ? "×" : "○";
   return <div className="settings-resume-queue"><span>续跑队列</span><div className="settings-resume-dots">{queue.ordered.map((task) => <span className={`is-${task.status}`} title={`${task.title} · ${task.status}`} key={task.id}>{marker(task)}</span>)}</div><strong>{queue.doneCount}/{tasks.length}</strong></div>;
 }
 

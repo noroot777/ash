@@ -7,6 +7,7 @@ import { MarkdownBody } from "../components/MarkdownBody.tsx";
 import { api, type TeamCuaStatus } from "../lib/api.ts";
 import { OriginTaskBar } from "../components/TaskOrigin.tsx";
 import { useConversation } from "../lib/useConversation.ts";
+import { useTaskReadState } from "../lib/useTaskReadState.ts";
 import { AttachmentPicker, MessageAttachments, UploadAttachmentList, useAttachments } from "../task-detail/Attachments.tsx";
 import { QuestionCard } from "../task-detail/QuestionCard.tsx";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
@@ -181,6 +182,7 @@ export function TeamView({
   const [busy, setBusy] = useState(false);
   const [localHalted, setLocalHalted] = useState(false);
   const [cuaStatus, setCuaStatus] = useState<TeamCuaStatus | null>(null);
+  const { indicatorForTask, markTaskRead } = useTaskReadState(allTasks, task.id);
   const conversation = useConversation(task.id);
   const workers = useMemo(() => workersOf(allTasks, task.id), [allTasks, task.id]);
   const teamGroups = useMemo(() => teamGroupsOf(groups, task.id, workers), [groups, task.id, workers]);
@@ -192,6 +194,11 @@ export function TeamView({
   const selectedWorker = selectedWorkerId ? workers.find((worker) => worker.id === selectedWorkerId) ?? null : null;
   const markdown = useMemo(() => conversationToMarkdown(conversation.items, task), [conversation.items, task]);
   const objective = parseAttachmentText(task.body);
+  const selectWorker = useCallback((taskId: string) => {
+    const worker = workers.find((item) => item.id === taskId);
+    if (worker) markTaskRead(worker);
+    setSelectedWorkerId(taskId);
+  }, [markTaskRead, workers]);
   const openTaskById = (taskId: string) => {
     const target = allTasks.find((item) => item.id === taskId);
     if (!target) return notify("关联任务不存在或尚未加载");
@@ -226,6 +233,9 @@ export function TeamView({
   useEffect(() => {
     if (selectedWorkerId && !selectedWorker) setSelectedWorkerId(null);
   }, [selectedWorker, selectedWorkerId]);
+  useEffect(() => {
+    if (selectedWorker) markTaskRead(selectedWorker);
+  }, [markTaskRead, selectedWorker]);
 
   const perform = async (action: "run" | "halt" | "resume" | "archive") => {
     setBusy(true);
@@ -271,7 +281,7 @@ export function TeamView({
         notify={notify}
       />
       {reviewOpen ? (
-        <TeamReviewWorkspace lead={task} workers={workers} onClose={() => changeReviewOpen(false)} onTaskUpdated={onTaskUpdate} notify={notify} />
+        <TeamReviewWorkspace lead={task} workers={workers} onClose={() => changeReviewOpen(false)} onTaskUpdated={onTaskUpdate} indicatorForTask={indicatorForTask} onReadTask={markTaskRead} notify={notify} />
       ) : (
         <>
           {(objective.body || objective.paths.length > 0) && (
@@ -295,17 +305,17 @@ export function TeamView({
           )}
           {stopped && <HaltNotice workers={workers} groupCount={teamGroups.length} historyOnly={teamGroups.length === 0} />}
           {stopped && <CuaResidualNotice taskId={task.id} status={cuaStatus} onStatus={setCuaStatus} notify={notify} />}
-          <TeamTimeline lead={task} leadTurns={turns} workers={workers} groups={teamGroups} onOpenWorker={setSelectedWorkerId} />
+          <TeamTimeline lead={task} leadTurns={turns} workers={workers} groups={teamGroups} onOpenWorker={selectWorker} />
           <div className="team-flow-grid">
             <section className="team-flow-main" aria-label="团队会话">
-              <TeamFeed taskId={task.id} rows={rows} workers={workers} onOpenWorker={setSelectedWorkerId} />
+              <TeamFeed taskId={task.id} rows={rows} workers={workers} onOpenWorker={selectWorker} indicatorForTask={indicatorForTask} />
               <TeamReplyBox task={task} onSend={async (text, attachments) => {
                 await api.replyTask(task.id, text, { attachments });
                 conversation.addUser(text, attachments);
                 notify("已发送给调度者");
               }} />
             </section>
-            <WorkerRail workers={workers} groups={teamGroups} selectedId={selectedWorkerId} onSelect={setSelectedWorkerId} />
+            <WorkerRail workers={workers} groups={teamGroups} selectedId={selectedWorkerId} onSelect={selectWorker} indicatorForTask={indicatorForTask} />
           </div>
         </>
       )}

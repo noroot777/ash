@@ -122,12 +122,11 @@
 .team-dispatch-index { width: 14px; color: var(--faint); font-family: var(--font-mono); font-size: 9.5px; }
 .team-dispatch-card > footer { border-top: 1px solid var(--line); padding: 5px 9px; color: var(--faint); font-size: 10px; }
 
-.team-status-dot { display: inline-block; width: 7px; height: 7px; flex: 0 0 7px; border-radius: 50%; background: var(--faint); }
-.team-status-dot--green { background: var(--green); }
-.team-status-dot--red { background: var(--red); }
-.team-status-dot--amber { background: var(--amber); }
-.team-status-dot--cyan { background: var(--cyan); }
-.team-status-dot--gray { background: var(--faint); }
+.team-status-dot { display: inline-block; width: 7px; height: 7px; flex: 0 0 7px; border-radius: 50%; font-style: normal; }
+.team-status-dot--active { background: var(--muted); animation: task-status-dot-pulse 1.35s ease-in-out infinite; will-change: opacity, transform; }
+.team-status-dot--attention { background: var(--amber); }
+.team-status-dot--success { background: var(--green); }
+.team-status-dot--error { background: var(--red); }
 .team-worker-rail { min-height: 0; overflow-y: auto; border-left: .5px solid var(--line); background: color-mix(in lch,var(--canvas) 96%,var(--chrome)); padding: 12px; }
 .team-worker-rail > header { display: flex; justify-content: space-between; margin-bottom: 7px; color: var(--faint); font-size: 9.5px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; }
 .team-worker-rail > header small { font-weight: 450; letter-spacing: 0; text-transform: none; }
@@ -179,4 +178,5 @@
 }
 @media (prefers-reduced-motion: reduce) {
   .team-timeline-summary > svg { transition: none; }
+  .team-status-dot--active { animation: none; opacity: 1; transform: none; }
 }

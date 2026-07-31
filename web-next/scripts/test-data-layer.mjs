@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { ApiError, api } from "../src/lib/api.ts";
+import { deriveTaskStatusIndicator, readEventForTask } from "../src/lib/useTaskReadState.ts";
 import { applyTaskStatusEvent } from "../src/lib/useTasks.ts";
 import { buildConversationItems, conversationToMarkdown } from "../src/task-detail/conversationModel.ts";
 import { taskDurationInfo } from "../src/task-detail/utils.ts";
@@ -134,6 +135,42 @@ try {
   const sharedWorker = { id: "worker-1", parentId: "team-1", useWorktree: false };
   assert.equal(sharedTeamParent(sharedWorker, [team])?.id, "team-1");
   assert.equal(sharedTeamParent({ ...sharedWorker, useWorktree: true }, [team]), null);
+
+  const statusTask = (overrides = {}) => ({
+    id: "status-task",
+    mode: "single",
+    status: "backlog",
+    updatedAt: "2026-07-30T01:00:00.000Z",
+    ...overrides,
+  });
+  assert.equal(deriveTaskStatusIndicator(statusTask({ status: "running" })), "active");
+  assert.equal(deriveTaskStatusIndicator(statusTask({ status: "paused" })), "attention");
+  assert.equal(deriveTaskStatusIndicator(statusTask({ status: "done" }), [], true), "success");
+  assert.equal(deriveTaskStatusIndicator(statusTask({ status: "failed" }), [], true), "error");
+  assert.equal(deriveTaskStatusIndicator(statusTask({ status: "done" }), [], false), null);
+
+  const teamLead = statusTask({ id: "team-status", mode: "team", status: "idle" });
+  const runningWorker = statusTask({
+    id: "worker-status",
+    parentId: teamLead.id,
+    status: "running",
+    updatedAt: "2026-07-30T01:01:00.000Z",
+  });
+  assert.equal(deriveTaskStatusIndicator(teamLead, [runningWorker], true), "active");
+  assert.equal(deriveTaskStatusIndicator(teamLead, [{ ...runningWorker, status: "paused" }], true), "attention");
+  assert.equal(deriveTaskStatusIndicator(teamLead, [{ ...runningWorker, status: "done" }], true), "success");
+  assert.equal(deriveTaskStatusIndicator(teamLead, [{ ...runningWorker, status: "failed" }], true), "error");
+  assert.equal(deriveTaskStatusIndicator(teamLead, [{ ...runningWorker, status: "canceled" }], true), "error");
+  assert.equal(deriveTaskStatusIndicator({ ...teamLead, status: "failed" }, [], true), "error");
+  assert.equal(deriveTaskStatusIndicator(teamLead, [{ ...runningWorker, status: "done" }], false), null);
+  const runningTeamEvent = readEventForTask(teamLead, [runningWorker]);
+  const settledTeamEvent = readEventForTask(teamLead, [{
+    ...runningWorker,
+    status: "done",
+    updatedAt: "2026-07-30T01:02:00.000Z",
+  }]);
+  assert.notEqual(runningTeamEvent, settledTeamEvent);
+  assert.equal(readEventForTask(statusTask({ mode: "team", status: "backlog" })), null);
 
   const gate = { gate: "G1", open: true };
   assert.equal(isOpenDebateGate(gate, "awaiting_review"), true);
