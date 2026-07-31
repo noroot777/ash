@@ -93,9 +93,15 @@ function sortTasks(tasks: Task[], pinned: boolean): Task[] {
 
 export function buildTaskTree(tasks: Task[]): TaskTreeSection[] {
   const active = tasks.filter((task) => !task.archived);
+  const tasksById = new Map(tasks.map((task) => [task.id, task]));
   return TASK_SECTIONS.map((section) => {
     const sectionTasks = active.filter(
-      (task) => section.matches(task) && (task.parentId === null || task.pinnedAt != null),
+      (task) => {
+        if (task.parentId !== null && task.pinnedAt != null) {
+          return section.matches(tasksById.get(task.parentId) ?? task);
+        }
+        return section.matches(task) && task.parentId === null;
+      },
     );
     const groups = section.groups
       .map((group) => ({
