@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState } from "react";
-import type { Group, Session, Task } from "@harness/shared";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import type { Group, Task } from "@harness/shared";
 import { canArchive, taskDisplayStatus } from "@harness/shared";
-import { agentMix, isTeamSettled, teamNeverStarted } from "@harness/shared/team";
+import { isTeamSettled, teamNeverStarted } from "@harness/shared/team";
 import {
   Archive,
   ArrowCounterClockwise,
@@ -15,19 +15,19 @@ import {
   Trash,
 } from "@phosphor-icons/react";
 import { LegacyLink } from "../components/LegacyLink.tsx";
-import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
+import { useDismissable } from "../lib/useDismissable.ts";
 import { TaskPinButton } from "../task-detail/TaskPinButton.tsx";
-import { TaskTimeMeta } from "../task-detail/TaskTimeMeta.tsx";
-import { safeDownloadName, STATUS_TONES } from "../task-detail/utils.ts";
+import { TaskStatusDot } from "../components/TaskStatusDot.tsx";
+import type { IndicatorForTask } from "../lib/useTaskReadState.ts";
+import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
+import { safeDownloadName } from "../task-detail/utils.ts";
 import { teamDebateIterationState } from "../debate/handoffPolicy.ts";
-import { teamLeadLabel, teamReviewerLabel, teamWorkerLabel } from "./teamModel.ts";
 
 export function TeamHeader({
   task,
   allTasks,
   workers,
   groups,
-  sessions,
   haltedByHistory,
   conversationMarkdown,
   busy,
@@ -42,13 +42,14 @@ export function TeamHeader({
   onIterateDebate,
   onArchive,
   onDelete,
+  indicatorForTask,
+  inspectorToggle,
   notify,
 }: {
   task: Task;
   allTasks: Task[];
   workers: Task[];
   groups: Group[];
-  sessions: Session[];
   haltedByHistory: boolean;
   conversationMarkdown: string;
   busy: boolean;
@@ -63,6 +64,8 @@ export function TeamHeader({
   onIterateDebate: () => void;
   onArchive: () => void;
   onDelete: () => void;
+  indicatorForTask: IndicatorForTask;
+  inspectorToggle?: ReactNode;
   notify: (message: string) => void;
 }) {
   const [menu, setMenu] = useState(false);
@@ -70,23 +73,21 @@ export function TeamHeader({
   const [title, setTitle] = useState(task.title);
   const [editing, setEditing] = useState(false);
   const menuRoot = useRef<HTMLDivElement>(null);
+  const menuButton = useRef<HTMLButtonElement>(null);
   const pausedGroups = groups.filter((group) => group.paused);
   const stopped = pausedGroups.length > 0 || haltedByHistory;
   const settled = isTeamSettled(task.status === "running", workers);
   const iteration = teamDebateIterationState(task, allTasks);
   const display = taskDisplayStatus(task.status, task.stage, !!task.question);
-  const latestSession = [...sessions].sort((left, right) => right.startedAt.localeCompare(left.startedAt))[0];
-  const reviewEnabled = task.team?.review !== false;
+  const indicator = indicatorForTask(task);
 
   useEffect(() => { if (!editing) setTitle(task.title); }, [editing, task.title]);
-  useEffect(() => {
-    if (!menu) return;
-    const close = (event: PointerEvent) => {
-      if (!menuRoot.current?.contains(event.target as Node)) setMenu(false);
-    };
-    window.addEventListener("pointerdown", close);
-    return () => window.removeEventListener("pointerdown", close);
-  }, [menu]);
+  useDismissable({
+    enabled: menu,
+    containerRef: menuRoot,
+    onClose: () => setMenu(false),
+    restoreFocusRef: menuButton,
+  });
 
   const commitTitle = async () => {
     setEditing(false);
@@ -135,8 +136,10 @@ export function TeamHeader({
             if (event.key === "Escape") { setTitle(task.title); event.currentTarget.blur(); }
           }}
         />
-        <span className={`team-busy-pill team-busy-pill--${STATUS_TONES[task.question ? "awaiting_answer" : task.status]}`}><i />{display.label}</span>
-        <TaskTimeMeta task={task} />
+        <span className="team-busy-pill">
+          {indicator && <TaskStatusDot indicator={indicator} surface="team" />}
+          {display.label}
+        </span>
         <div className="team-header-actions">
           <button type="button" className={reviewOpen ? "is-primary" : ""} onClick={onReview}>
             <CheckCircle size={14} weight="fill" />{reviewOpen ? "返回协作" : "验收"}
@@ -163,7 +166,7 @@ export function TeamHeader({
             <button type="button" className="is-primary" data-workspace-run-action="run" disabled={busy} onClick={onRun}><Play size={13} weight="fill" />运行</button>
           )}
           <div className="team-header-menu" ref={menuRoot}>
-            <button type="button" aria-label="更多团队操作" aria-expanded={menu} onClick={() => setMenu((value) => !value)}><DotsThree size={18} weight="bold" /></button>
+            <button ref={menuButton} type="button" aria-label="更多团队操作" aria-expanded={menu} onClick={() => setMenu((value) => !value)}><DotsThree size={18} weight="bold" /></button>
             {menu && (
               <div role="menu">
                 <button type="button" role="menuitem" disabled={!conversationMarkdown.trim()} onClick={() => void copy()}><Copy size={14} />复制全部对话</button>
@@ -179,21 +182,9 @@ export function TeamHeader({
               </div>
             )}
           </div>
+          {inspectorToggle}
         </div>
       </header>
-      <div className="team-meta" aria-label="团队执行配置">
-        <span>调度者 <b>{teamLeadLabel(task, latestSession)}</b></span>
-        <span>
-          执行者 <b>{workers.length}</b>
-          {workers.length ? `（${agentMix(workers)}）` : `（默认派 ${teamWorkerLabel(task)}）`}
-        </span>
-        <span className={reviewEnabled ? "is-review" : ""}>
-          审查 <b>{reviewEnabled ? teamReviewerLabel(task) : "已关闭"}</b>
-          {reviewEnabled && ` · ${task.team?.reviewerModel || "模型跟随"} · ${task.team?.reviewerReasoningEffort || "强度跟随"}`}
-        </span>
-        {latestSession?.branch && <span>分支 <code title={latestSession.branch}>{latestSession.branch}</code></span>}
-        {latestSession?.worktreePath && <code title={latestSession.worktreePath}>…/{latestSession.worktreePath.split("/").filter(Boolean).at(-1)}</code>}
-      </div>
       {haltOpen && (
         <ConfirmDialog
           title="停止全组？"

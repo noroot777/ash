@@ -1,33 +1,68 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { Group, Task } from "@harness/shared";
+import type { AgentEvent, Group, Task } from "@harness/shared";
 import { batchesOf, mergeFeed, teamGroupsOf, waitingWorkers, workerHaltStats, workersOf } from "@harness/shared/team";
 import { ArrowSquareOut, Broom, Clock, PaperPlaneTilt, SpinnerGap, WarningCircle, X } from "@phosphor-icons/react";
-import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
-import { MarkdownBody } from "../components/MarkdownBody.tsx";
 import {
   ScheduledMessageTray,
   ScheduledSendPanel,
   useScheduledMessages,
 } from "../components/ScheduledMessages.tsx";
 import { defaultOnceTime } from "../components/ScheduleControl.tsx";
+import { InspectorHost } from "../inspector/index.ts";
 import { api, type ReplyTaskResult, type TeamCuaStatus } from "../lib/api.ts";
 import { OriginTaskBar } from "../components/TaskOrigin.tsx";
 import { useConversation } from "../lib/useConversation.ts";
-import { AttachmentPicker, MessageAttachments, UploadAttachmentList, useAttachments } from "../task-detail/Attachments.tsx";
+import { useServerEvents } from "../lib/events.ts";
+import { useTaskReadState } from "../lib/useTaskReadState.ts";
+import { AttachmentPicker, UploadAttachmentList, useAttachments } from "../task-detail/Attachments.tsx";
 import { QuestionCard } from "../task-detail/QuestionCard.tsx";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import { DeleteTaskDialog } from "../task-detail/DeleteTaskDialog.tsx";
 import { TaskDetail } from "../task-detail/TaskDetail.tsx";
 import { conversationToMarkdown } from "../task-detail/conversationModel.ts";
-import { parseAttachmentText } from "../task-detail/utils.ts";
 import { TeamFeed } from "./TeamFeed.tsx";
 import { TeamAttentionBar } from "./TeamAttentionBar.tsx";
 import { TeamHeader } from "./TeamHeader.tsx";
+import { TEAM_INSPECTORS, type TeamInspectorContext } from "./TeamInspector.tsx";
 import { TeamReviewWorkspace } from "./TeamReviewWorkspace.tsx";
-import { TeamTimeline } from "./TeamTimeline.tsx";
-import { WorkerRail } from "./WorkerRail.tsx";
 import { teamDebateIterationState } from "../debate/handoffPolicy.ts";
 import { activeTeamHaltMarker, leadTurns, teamFeedOptions } from "./teamModel.ts";
+
+function liveLineForEvent(event: AgentEvent, textBuffer: string): string | null {
+  if (event.kind === "text") {
+    return textBuffer.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).at(-1) ?? null;
+  }
+  if (event.kind === "tool") return `⚙ ${event.name || "tool"}`;
+  if (event.kind === "error") return `✕ ${event.message}`;
+  return null;
+}
+
+function useWorkerLiveLines(teamId: string, workers: Task[]) {
+  const [lines, setLines] = useState<Record<string, string>>({});
+  const textBuffers = useRef<Record<string, string>>({});
+  const workerIds = useMemo(() => new Set(workers.map((worker) => worker.id)), [workers]);
+
+  useEffect(() => {
+    textBuffers.current = {};
+    setLines({});
+  }, [teamId]);
+
+  useServerEvents(useCallback((event) => {
+    if (event.type !== "agent.event" || !workerIds.has(event.taskId)) return;
+    let textBuffer = textBuffers.current[event.taskId] ?? "";
+    if (event.event.kind === "text") {
+      textBuffer = `${textBuffer}${event.event.text}`.slice(-4000);
+      textBuffers.current[event.taskId] = textBuffer;
+    }
+    const line = liveLineForEvent(event.event, textBuffer);
+    if (!line) return;
+    setLines((current) => current[event.taskId] === line
+      ? current
+      : { ...current, [event.taskId]: line });
+  }, [workerIds]));
+
+  return lines;
+}
 
 function TeamReplyBox({
   task,
@@ -196,21 +231,42 @@ function WorkerDrawer({
   onDeleted: (taskId: string) => void;
   notify: (message: string) => void;
 }) {
+  const [closing, setClosing] = useState(false);
+  const [inspectorToggleTarget, setInspectorToggleTarget] = useState<HTMLSpanElement | null>(null);
+  const closingRef = useRef(false);
+  const closeTimer = useRef<number | null>(null);
+  const requestClose = useCallback(() => {
+    if (closingRef.current) return;
+    closingRef.current = true;
+    setClosing(true);
+    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (reducedMotion) closeTimer.current = window.setTimeout(onClose, 0);
+  }, [onClose]);
   useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
+    const onKeyDown = (event: KeyboardEvent) => { if (event.key === "Escape") requestClose(); };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [onClose]);
+  }, [requestClose]);
+  useEffect(() => () => {
+    if (closeTimer.current !== null) window.clearTimeout(closeTimer.current);
+  }, []);
   return (
     <>
-      <div className="team-worker-scrim" onClick={onClose} />
-      <aside className="team-worker-drawer" aria-label={`执行者详情：${worker.title}`}>
+      <div className={`team-worker-scrim${closing ? " is-closing" : ""}`} onClick={requestClose} />
+      <aside
+        className={`team-worker-drawer${closing ? " is-closing" : ""}`}
+        aria-label={`执行者详情：${worker.title}`}
+        onAnimationEnd={(event) => {
+          if (closing && event.animationName === "team-worker-drawer-out") onClose();
+        }}
+      >
         <header>
-          <span>执行者</span><b>{worker.title}</b>
+          <span className="team-worker-drawer__kind">执行者</span><b>{worker.title}</b>
           <button type="button" onClick={onOpenFull}><ArrowSquareOut size={13} />整页打开</button>
-          <button type="button" aria-label="关闭执行者抽屉" onClick={onClose}><X size={14} weight="bold" /></button>
+          <span className="team-worker-drawer__inspector-toggle" ref={setInspectorToggleTarget} />
+          <button type="button" aria-label="关闭执行者抽屉" onClick={requestClose}><X size={14} weight="bold" /></button>
         </header>
-        <TaskDetail key={worker.id} task={worker} allTasks={allTasks} onTaskUpdate={onTaskUpdate} onDeleted={onDeleted} onOpenTask={onOpenTask} notify={notify} />
+        <TaskDetail key={worker.id} task={worker} allTasks={allTasks} onTaskUpdate={onTaskUpdate} onDeleted={onDeleted} onOpenTask={onOpenTask} inspectorMode="drawer" inspectorToggleTarget={inspectorToggleTarget} notify={notify} />
       </aside>
     </>
   );
@@ -245,9 +301,11 @@ export function TeamView({
   const [cuaStatus, setCuaStatus] = useState<TeamCuaStatus | null>(null);
   const [delegatingIds, setDelegatingIds] = useState<ReadonlySet<string>>(() => new Set());
   const delegatingRef = useRef(new Set<string>());
+  const { indicatorForTask, markTaskRead } = useTaskReadState(allTasks, task.id);
   const conversation = useConversation(task.id);
   const workers = useMemo(() => workersOf(allTasks, task.id), [allTasks, task.id]);
   const waiting = useMemo(() => waitingWorkers(workers), [workers]);
+  const workerLiveLines = useWorkerLiveLines(task.id, workers);
   const teamGroups = useMemo(() => teamGroupsOf(groups, task.id, workers), [groups, task.id, workers]);
   const batches = useMemo(() => batchesOf(workers, teamGroups), [teamGroups, workers]);
   const rows = useMemo(() => mergeFeed(conversation.items, batches, teamFeedOptions()), [batches, conversation.items]);
@@ -256,12 +314,45 @@ export function TeamView({
   const stopped = teamGroups.some((group) => group.paused) || (teamGroups.length === 0 && (historyHalt || localHalted));
   const selectedWorker = selectedWorkerId ? workers.find((worker) => worker.id === selectedWorkerId) ?? null : null;
   const markdown = useMemo(() => conversationToMarkdown(conversation.items, task), [conversation.items, task]);
-  const objective = parseAttachmentText(task.body);
+  const allWorkersComplete = task.status !== "running"
+    && workers.length > 0
+    && workers.every((worker) => worker.status === "done");
+  const inspectorPolicy = useMemo(() => ({
+    stateKey: `team:${allWorkersComplete ? "complete" : "active"}`,
+    requiredTabId: "info",
+    defaultOpenTabIds: allWorkersComplete ? ["info", "review"] : ["info", "workers"],
+    defaultActiveTabId: allWorkersComplete ? "review" : "workers",
+  }), [allWorkersComplete]);
+  const selectWorker = useCallback((taskId: string) => {
+    const worker = workers.find((item) => item.id === taskId);
+    if (worker) markTaskRead(worker);
+    setSelectedWorkerId(taskId);
+  }, [markTaskRead, workers]);
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.metaKey || event.ctrlKey || event.altKey) return;
+      const target = event.target as HTMLElement | null;
+      if (target && (["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName) || target.isContentEditable)) return;
+      const index = Number(event.key) - 1;
+      if (!Number.isInteger(index) || index < 0 || index > 8 || !workers[index]) return;
+      event.preventDefault();
+      selectWorker(workers[index].id);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [selectWorker, workers]);
   const openTaskById = (taskId: string) => {
     const target = allTasks.find((item) => item.id === taskId);
-    if (!target) return notify("关联任务不存在或尚未加载");
-    setSelectedWorkerId(null);
-    onSelectTask(target);
+    if (target) {
+      setSelectedWorkerId(null);
+      onSelectTask(target);
+      return;
+    }
+    void api.task(taskId).then((loaded) => {
+      onTaskUpdate(loaded);
+      setSelectedWorkerId(null);
+      onSelectTask(loaded);
+    }).catch(() => notify("关联任务不存在或读取失败"));
   };
 
   const refreshGroups = useCallback(async () => {
@@ -295,6 +386,9 @@ export function TeamView({
   useEffect(() => {
     if (selectedWorkerId && !selectedWorker) setSelectedWorkerId(null);
   }, [selectedWorker, selectedWorkerId]);
+  useEffect(() => {
+    if (selectedWorker) markTaskRead(selectedWorker);
+  }, [markTaskRead, selectedWorker]);
 
   const perform = async (action: "run" | "halt" | "resume" | "archive") => {
     setBusy(true);
@@ -373,14 +467,31 @@ export function TeamView({
   };
 
   return (
-    <div className="team-view">
+    <InspectorHost
+      contextKey={`team:${task.id}`}
+      descriptors={TEAM_INSPECTORS}
+      context={{
+        task,
+        workers,
+        groups: teamGroups,
+        sessions: conversation.sessions,
+        leadTurns: turns,
+        selectedWorkerId,
+        onSelectWorker: selectWorker,
+        onOpenReview: () => changeReviewOpen(true),
+        onOpenTask: openTaskById,
+        indicatorForTask,
+        workerLiveLines,
+      } satisfies TeamInspectorContext}
+      tabPolicy={inspectorPolicy}
+    >
+      {({ toggleButton }) => <div className="team-view">
       <OriginTaskBar task={task} allTasks={allTasks} onOpen={openTaskById} />
       <TeamHeader
         task={task}
         allTasks={allTasks}
         workers={workers}
         groups={teamGroups}
-        sessions={conversation.sessions}
         haltedByHistory={teamGroups.length === 0 && (historyHalt || localHalted)}
         conversationMarkdown={markdown}
         busy={busy}
@@ -395,21 +506,14 @@ export function TeamView({
         onIterateDebate={() => void iterateDebate()}
         onArchive={() => void perform("archive")}
         onDelete={() => setDeleteOpen(true)}
+        indicatorForTask={indicatorForTask}
+        inspectorToggle={toggleButton}
         notify={notify}
       />
       {reviewOpen ? (
-        <TeamReviewWorkspace lead={task} workers={workers} onClose={() => changeReviewOpen(false)} onTaskUpdated={onTaskUpdate} notify={notify} />
+        <TeamReviewWorkspace lead={task} workers={workers} onClose={() => changeReviewOpen(false)} onTaskUpdated={onTaskUpdate} indicatorForTask={indicatorForTask} onReadTask={markTaskRead} notify={notify} />
       ) : (
         <>
-          {(objective.body || objective.paths.length > 0) && (
-            <ImagePreviewGroup isolated>
-              <details className="team-objective">
-                <summary>原始需求</summary>
-                {objective.body && <MarkdownBody text={objective.body} />}
-                <MessageAttachments paths={objective.paths} />
-              </details>
-            </ImagePreviewGroup>
-          )}
           {task.question && (
             <div className="team-lead-question">
               <QuestionCard task={task} onAnswer={async (answer) => {
@@ -426,33 +530,30 @@ export function TeamView({
             waiting={waiting}
             workers={workers}
             delegatingIds={delegatingIds}
-            onOpenWorker={setSelectedWorkerId}
+            onOpenWorker={selectWorker}
             onAskLead={askLead}
           />
-          <TeamTimeline lead={task} leadTurns={turns} workers={workers} groups={teamGroups} onOpenWorker={setSelectedWorkerId} />
-          <div className="team-flow-grid">
-            <section className="team-flow-main" aria-label="团队会话">
-              <TeamFeed
-                taskId={task.id}
-                rows={rows}
-                workers={workers}
-                onOpenWorker={setSelectedWorkerId}
-                onAskLead={askLead}
-                delegatingIds={delegatingIds}
-              />
-              <TeamReplyBox task={task} onSend={async (text, attachments, options) => {
-                const result = await api.replyTask(task.id, text, { attachments, ...options });
-                if (options.sendAt) {
-                  notify(`已安排 ${new Date(options.sendAt).toLocaleString()} 发送给调度者`);
-                  return result;
-                }
-                conversation.addUser(text, attachments);
-                notify("已发送给调度者");
+          <section className="team-flow-main" aria-label="团队会话">
+            <TeamFeed
+              taskId={task.id}
+              rows={rows}
+              workers={workers}
+              onOpenWorker={selectWorker}
+              onAskLead={askLead}
+              delegatingIds={delegatingIds}
+              indicatorForTask={indicatorForTask}
+            />
+            <TeamReplyBox task={task} onSend={async (text, attachments, options) => {
+              const result = await api.replyTask(task.id, text, { attachments, ...options });
+              if (options.sendAt) {
+                notify(`已安排 ${new Date(options.sendAt).toLocaleString()} 发送给调度者`);
                 return result;
-              }} />
-            </section>
-            <WorkerRail workers={workers} groups={teamGroups} selectedId={selectedWorkerId} onSelect={setSelectedWorkerId} />
-          </div>
+              }
+              conversation.addUser(text, attachments);
+              notify("已发送给调度者");
+              return result;
+            }} />
+          </section>
         </>
       )}
       {!reviewOpen && selectedWorker && (
@@ -475,6 +576,7 @@ export function TeamView({
           onClose={() => setDeleteOpen(false)}
         />
       )}
-    </div>
+      </div>}
+    </InspectorHost>
   );
 }

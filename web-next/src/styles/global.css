@@ -1,5 +1,6 @@
 @import "tailwindcss";
 @import "./controls.css";
+@import "./conversation-scroll.css";
 @import "./image-preview.css";
 @import "./dev-components.css";
 @import "./task-origin.css";
@@ -8,6 +9,7 @@
 @import "./workspace-enhancements.css";
 @import "./task-detail.css";
 @import "./team.css";
+@import "./inspector.css";
 @import "./team-review.css";
 @import "./review.css";
 @import "./debate.css";

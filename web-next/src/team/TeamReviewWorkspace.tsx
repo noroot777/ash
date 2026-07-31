@@ -3,11 +3,13 @@ import type { Session, Task } from "@harness/shared";
 import { STAGE_LABELS, taskDisplayStatus } from "@harness/shared";
 import { ArrowsClockwise, CaretDown, CheckCircle, GitBranch, GitCommit, SpinnerGap, WarningCircle, X } from "@phosphor-icons/react";
 import { LegacyLink } from "../components/LegacyLink.tsx";
+import { TaskStatusDot } from "../components/TaskStatusDot.tsx";
 import { api, type AcceptTaskFailure, type TaskCommit, type TaskDiffResult } from "../lib/api.ts";
+import type { IndicatorForTask } from "../lib/useTaskReadState.ts";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import { formatInstant, parseAttachmentText } from "../task-detail/utils.ts";
 import { ReviewDiffViewer } from "../review/ReviewDiffViewer.tsx";
-import { ReviewEvidence } from "./ReviewEvidence.tsx";
+import { DispatchReviewEvidence } from "./ReviewEvidence.tsx";
 import { statusTone } from "./teamModel.ts";
 
 type ReviewData = {
@@ -176,6 +178,8 @@ function ReviewRecord({
   actions = false,
   defaultOpen = false,
   onTaskUpdated,
+  indicatorForTask,
+  onReadTask,
   notify,
 }: {
   task: Task;
@@ -184,6 +188,8 @@ function ReviewRecord({
   actions?: boolean;
   defaultOpen?: boolean;
   onTaskUpdated: (task: Task) => void;
+  indicatorForTask: IndicatorForTask;
+  onReadTask: (task: Task) => void;
   notify: (message: string) => void;
 }) {
   const [open, setOpen] = useState(defaultOpen);
@@ -192,6 +198,11 @@ function ReviewRecord({
   const [error, setError] = useState<string | null>(null);
   const objective = parseAttachmentText(task.body).body;
   const display = taskDisplayStatus(task.status, task.stage, !!task.question);
+  const indicator = indicatorForTask(task);
+  const visibleIndicator = open && (indicator === "success" || indicator === "error") ? null : indicator;
+  useEffect(() => {
+    if (open) onReadTask(task);
+  }, [onReadTask, open, task]);
   useEffect(() => {
     let alive = true;
     setLoading(true);
@@ -209,7 +220,7 @@ function ReviewRecord({
     <article className="team-review-record">
       <header>
         <button type="button" onClick={() => setOpen((value) => !value)} aria-expanded={open}><CaretDown size={13} weight="bold" /></button>
-        <i className={`team-status-dot team-status-dot--${statusTone(task)}`} />
+        {visibleIndicator && <TaskStatusDot indicator={visibleIndicator} surface="team" />}
         <button type="button" className="team-review-record-title" onClick={() => setOpen((value) => !value)}>
           <span><b>{task.title}</b><em>{role}</em><small>{display.label}</small></span>
           {objective && <p>{objective}</p>}
@@ -219,7 +230,7 @@ function ReviewRecord({
       {open && (
         <div className="team-review-record-body">
           <WorkspaceFacts task={task} data={data} />
-          <ReviewEvidence task={task} parentTask={parentTask} notify={notify} />
+          <DispatchReviewEvidence task={task} parentTask={parentTask} notify={notify} />
           <ChangeSummary data={data} loading={loading} error={error} />
         </div>
       )}
@@ -251,7 +262,7 @@ function SharedWorkerVerification({
           </button>
         ))}
       </div>
-      {selected && <div className="team-shared-evidence"><b>{selected.title}</b><ReviewEvidence task={selected} parentTask={lead} notify={notify} /></div>}
+      {selected && <div className="team-shared-evidence"><b>{selected.title}</b><DispatchReviewEvidence task={selected} parentTask={lead} notify={notify} /></div>}
     </section>
   );
 }
@@ -261,12 +272,16 @@ export function TeamReviewWorkspace({
   workers,
   onClose,
   onTaskUpdated,
+  indicatorForTask,
+  onReadTask,
   notify,
 }: {
   lead: Task;
   workers: Task[];
   onClose: () => void;
   onTaskUpdated: (task: Task) => void;
+  indicatorForTask: IndicatorForTask;
+  onReadTask: (task: Task) => void;
   notify: (message: string) => void;
 }) {
   const sharedWorkers = useMemo(() => workers.filter((worker) => !worker.useWorktree), [workers]);
@@ -274,18 +289,18 @@ export function TeamReviewWorkspace({
   return (
     <section className="team-review-workspace">
       <header className="team-review-subbar">
-        <div><b>团队验收台</b><small>先核对共享分支与独立执行者证据，再分别验收或打回。</small></div>
+        <div><b>团队验收台</b><small>配合右侧审查记录，核对共享分支与独立 worktree 后分别验收或打回。</small></div>
         <LegacyLink projectId={lead.projectId} taskId={lead.id} view="review" />
         <button type="button" onClick={onClose}><X size={13} />返回团队流</button>
       </header>
       <div className="team-review-scroll">
         <div className="team-review-stack">
-          <ReviewRecord task={lead} role={lead.useWorktree ? "调度台 / 共享 worktree" : "调度台 / 项目工作区"} actions defaultOpen onTaskUpdated={onTaskUpdated} notify={notify} />
+          <ReviewRecord task={lead} role={lead.useWorktree ? "调度台 / 共享 worktree" : "调度台 / 项目工作区"} actions defaultOpen onTaskUpdated={onTaskUpdated} indicatorForTask={indicatorForTask} onReadTask={onReadTask} notify={notify} />
           {sharedWorkers.length > 0 && <SharedWorkerVerification lead={lead} workers={sharedWorkers} notify={notify} />}
           <section className="team-acceptance-queue">
             <header><div><b>独立执行者待验收队列</b><small>每个显式 worktree 都有独立分支与合入动作，按执行者分别处理。</small></div><span>{independentWorkers.length} 项</span></header>
             {independentWorkers.length ? (
-              <div>{independentWorkers.map((worker, index) => <ReviewRecord key={worker.id} task={worker} parentTask={lead} role={`执行者 ${index + 1}`} actions defaultOpen={worker.stage === "awaiting_acceptance" || worker.stage === "verify_failed"} onTaskUpdated={onTaskUpdated} notify={notify} />)}</div>
+              <div>{independentWorkers.map((worker, index) => <ReviewRecord key={worker.id} task={worker} parentTask={lead} role={`执行者 ${index + 1}`} actions defaultOpen={worker.stage === "awaiting_acceptance" || worker.stage === "verify_failed"} onTaskUpdated={onTaskUpdated} indicatorForTask={indicatorForTask} onReadTask={onReadTask} notify={notify} />)}</div>
             ) : <p>没有独立 worktree 执行者；共享执行者随团队整体验收。</p>}
           </section>
         </div>

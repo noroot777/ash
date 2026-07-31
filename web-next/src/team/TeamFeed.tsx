@@ -2,13 +2,15 @@ import { useRef } from "react";
 import type { Task } from "@harness/shared";
 import type { Batch } from "@harness/shared/team";
 import { ArrowElbowDownRight, ArrowRight, SpinnerGap, Wrench } from "@phosphor-icons/react";
+import { ConversationScrollControls } from "../components/ConversationScrollControls.tsx";
 import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
 import { SessionMeta } from "../components/SessionMeta.tsx";
-import { useStickToBottom } from "../lib/useStickToBottom.ts";
+import { TaskStatusDot } from "../components/TaskStatusDot.tsx";
+import type { IndicatorForTask } from "../lib/useTaskReadState.ts";
 import { MessageAttachments } from "../task-detail/Attachments.tsx";
 import { durationBetween, formatInstant, parseAttachmentText } from "../task-detail/utils.ts";
-import { executorLabel, parseInbound, statusTone, workerStatusText, type InboundMessage, type TeamFeedRow } from "./teamModel.ts";
+import { executorLabel, parseInbound, workerStatusText, type InboundMessage, type TeamFeedRow } from "./teamModel.ts";
 
 function AgentRow({ row }: { row: Extract<TeamFeedRow, { kind: "conv" }>["item"] }) {
   if (row.kind !== "agent") return null;
@@ -95,7 +97,17 @@ function InboundRow({
   );
 }
 
-function BatchCard({ batch, allWorkers, onOpenWorker }: { batch: Batch; allWorkers: Task[]; onOpenWorker: (taskId: string) => void }) {
+function BatchCard({
+  batch,
+  allWorkers,
+  onOpenWorker,
+  indicatorForTask,
+}: {
+  batch: Batch;
+  allWorkers: Task[];
+  onOpenWorker: (taskId: string) => void;
+  indicatorForTask: IndicatorForTask;
+}) {
   return (
     <article className="team-dispatch-card">
       <header>
@@ -105,15 +117,18 @@ function BatchCard({ batch, allWorkers, onOpenWorker }: { batch: Batch; allWorke
         {batch.group?.paused && <span>组已停止</span>}
         <time>{formatInstant(batch.at)}</time>
       </header>
-      {batch.workers.map((worker) => (
-        <button type="button" key={worker.id} onClick={() => onOpenWorker(worker.id)}>
-          <i className={`team-status-dot team-status-dot--${statusTone(worker)}`} />
-          <span className="team-dispatch-index">{allWorkers.findIndex((item) => item.id === worker.id) + 1}</span>
-          <b>{worker.title}</b>
-          <code title={executorLabel(worker)}>{executorLabel(worker)}</code>
-          <small>{workerStatusText(worker, !!batch.group?.paused)}</small>
-        </button>
-      ))}
+      {batch.workers.map((worker) => {
+        const indicator = indicatorForTask(worker);
+        return (
+          <button type="button" key={worker.id} onClick={() => onOpenWorker(worker.id)}>
+            {indicator && <TaskStatusDot indicator={indicator} surface="team" />}
+            <span className="team-dispatch-index">{allWorkers.findIndex((item) => item.id === worker.id) + 1}</span>
+            <b>{worker.title}</b>
+            <code title={executorLabel(worker)}>{executorLabel(worker)}</code>
+            <small>{workerStatusText(worker, !!batch.group?.paused)}</small>
+          </button>
+        );
+      })}
       <footer>{batch.group?.paused ? "本批执行已停止，已完成结果仍保留" : "点任一行查看完整会话与运行状态"}</footer>
     </article>
   );
@@ -126,6 +141,7 @@ export function TeamFeed({
   onOpenWorker,
   onAskLead,
   delegatingIds,
+  indicatorForTask,
 }: {
   taskId: string;
   rows: TeamFeedRow[];
@@ -133,44 +149,47 @@ export function TeamFeed({
   onOpenWorker: (taskId: string) => void;
   onAskLead: (worker: Task) => void | Promise<void>;
   delegatingIds: ReadonlySet<string>;
+  indicatorForTask: IndicatorForTask;
 }) {
   const scroll = useRef<HTMLDivElement>(null);
-  useStickToBottom(scroll, taskId);
   const byId = new Map(workers.map((worker) => [worker.id, worker]));
   return (
     <ImagePreviewGroup isolated>
-      <section className="team-feed" aria-label="团队调度流" ref={scroll}>
-        {!rows.length && <p className="team-feed-empty">运行后，调度者的拆解、派活、执行者提问与汇报会按发生顺序出现在这里。</p>}
-        {rows.map((row) => {
-          if (row.kind === "batch") return <BatchCard key={row.key} batch={row.batch} allWorkers={workers} onOpenWorker={onOpenWorker} />;
-          const item = row.item;
-          if (item.kind === "agent") return <AgentRow key={row.key} row={item} />;
-          if (item.kind === "user") return <UserRow key={row.key} row={item} />;
-          const inbound = parseInbound(item.text);
-          if (inbound) {
-            return (
-              <div key={row.key}>
-                {inbound.map((message, index) => {
-                  const worker = message.taskId ? byId.get(message.taskId) : undefined;
-                  return (
-                    <InboundRow
-                      key={index}
-                      message={message}
-                      worker={worker}
-                      number={worker ? workers.indexOf(worker) + 1 : 0}
-                      at={item.at}
-                      onOpenWorker={onOpenWorker}
-                      onAskLead={onAskLead}
-                      delegating={!!worker && delegatingIds.has(worker.id)}
-                    />
-                  );
-                })}
-              </div>
-            );
-          }
-          return <div className={`team-feed-event${item.tone === "error" ? " is-error" : ""}`} key={row.key}><span />{item.text}<span /></div>;
-        })}
-      </section>
+      <div className="conversation-scroll-region">
+        <section className="team-feed" aria-label="团队调度流" ref={scroll}>
+          {!rows.length && <p className="team-feed-empty">运行后，调度者的拆解、派活、执行者提问与汇报会按发生顺序出现在这里。</p>}
+          {rows.map((row) => {
+            if (row.kind === "batch") return <BatchCard key={row.key} batch={row.batch} allWorkers={workers} onOpenWorker={onOpenWorker} indicatorForTask={indicatorForTask} />;
+            const item = row.item;
+            if (item.kind === "agent") return <AgentRow key={row.key} row={item} />;
+            if (item.kind === "user") return <UserRow key={row.key} row={item} />;
+            const inbound = parseInbound(item.text);
+            if (inbound) {
+              return (
+                <div key={row.key}>
+                  {inbound.map((message, index) => {
+                    const worker = message.taskId ? byId.get(message.taskId) : undefined;
+                    return (
+                      <InboundRow
+                        key={index}
+                        message={message}
+                        worker={worker}
+                        number={worker ? workers.indexOf(worker) + 1 : 0}
+                        at={item.at}
+                        onOpenWorker={onOpenWorker}
+                        onAskLead={onAskLead}
+                        delegating={!!worker && delegatingIds.has(worker.id)}
+                      />
+                    );
+                  })}
+                </div>
+              );
+            }
+            return <div className={`team-feed-event${item.tone === "error" ? " is-error" : ""}`} key={row.key}><span />{item.text}<span /></div>;
+          })}
+        </section>
+        <ConversationScrollControls scrollRef={scroll} resetKey={taskId} />
+      </div>
     </ImagePreviewGroup>
   );
 }

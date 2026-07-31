@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { Task } from "@harness/shared";
 import { canArchive, taskDisplayStatus } from "@harness/shared";
 import {
@@ -15,9 +15,12 @@ import {
   Stop,
   Trash,
 } from "@phosphor-icons/react";
+import { TaskStatusDot } from "../components/TaskStatusDot.tsx";
+import { useDismissable } from "../lib/useDismissable.ts";
+import type { IndicatorForTask } from "../lib/useTaskReadState.ts";
 import { TaskPinButton } from "./TaskPinButton.tsx";
 import { TaskTimeMeta } from "./TaskTimeMeta.tsx";
-import { safeDownloadName, STATUS_TONES } from "./utils.ts";
+import { safeDownloadName } from "./utils.ts";
 
 export type PrimaryAction = "run" | "retry" | "stop" | "accept" | "unarchive" | null;
 
@@ -50,6 +53,8 @@ export function TaskHeader({
   onRefresh,
   onReview,
   onDelete,
+  indicatorForTask,
+  inspectorToggle,
   notify,
 }: {
   task: Task;
@@ -64,12 +69,15 @@ export function TaskHeader({
   onRefresh: () => void;
   onReview: () => void;
   onDelete: () => void;
+  indicatorForTask: IndicatorForTask;
+  inspectorToggle?: ReactNode;
   notify: (message: string) => void;
 }) {
   const [title, setTitle] = useState(task.title);
   const [editing, setEditing] = useState(false);
   const [menu, setMenu] = useState(false);
   const menuRoot = useRef<HTMLDivElement>(null);
+  const menuButton = useRef<HTMLButtonElement>(null);
   const pointerToggle = useRef(false);
   const action = primaryAction(task);
   const canRequeue = task.parentId === null
@@ -77,16 +85,15 @@ export function TaskHeader({
     && !!task.queueId
     && (task.status === "failed" || task.status === "canceled");
   const display = taskDisplayStatus(task.status, task.stage, !!task.question);
+  const indicator = indicatorForTask(task);
 
   useEffect(() => { if (!editing) setTitle(task.title); }, [editing, task.title]);
-  useEffect(() => {
-    if (!menu) return;
-    const close = (event: PointerEvent) => {
-      if (!menuRoot.current?.contains(event.target as Node)) setMenu(false);
-    };
-    window.addEventListener("pointerdown", close);
-    return () => window.removeEventListener("pointerdown", close);
-  }, [menu]);
+  useDismissable({
+    enabled: menu,
+    containerRef: menuRoot,
+    onClose: () => setMenu(false),
+    restoreFocusRef: menuButton,
+  });
 
   const download = () => {
     const blob = new Blob([conversationMarkdown], { type: "text/markdown;charset=utf-8" });
@@ -143,8 +150,9 @@ export function TaskHeader({
           }}
         />
       )}
-      <span className={`task-detail-status task-detail-status--${STATUS_TONES[task.question ? "awaiting_answer" : task.status]}`}>
-        <i aria-hidden="true" />{display.label}
+      <span className="task-detail-status">
+        {indicator && <TaskStatusDot indicator={indicator} surface="team" />}
+        {display.label}
       </span>
       <TaskTimeMeta task={task} />
       <button
@@ -175,6 +183,7 @@ export function TaskHeader({
       )}
       <div className="task-overflow" ref={menuRoot}>
         <button
+          ref={menuButton}
           className="task-overflow-trigger"
           type="button"
           aria-label="更多任务操作"
@@ -222,6 +231,7 @@ export function TaskHeader({
           </div>
         )}
       </div>
+      {inspectorToggle}
     </header>
   );
 }

@@ -19,9 +19,8 @@ import {
   useAgentAvailability,
 } from "../lib/agentAvailability.ts";
 import { QueueDrawer } from "./QueueDrawer.tsx";
+import { TaskChangeSummary } from "./TaskChangeSummary.tsx";
 import { formatInstant, PRIORITY_LABELS, taskDurationInfo } from "./utils.ts";
-import { ReviewDispatchControl } from "../review/ReviewDispatchControl.tsx";
-import { useTaskReviewInfo } from "../review/useTaskReviewInfo.ts";
 
 const STATUS_ORDER: TaskStatus[] = [
   "running", "idle", "paused", "awaiting_review", "queued", "backlog", "done", "failed", "canceled",
@@ -114,6 +113,7 @@ export function TaskInspector({
   sessions,
   allTasks,
   onOpenTask,
+  onOpenReview,
   onPatch,
   onQueueChanged,
   notify,
@@ -123,6 +123,7 @@ export function TaskInspector({
   sessions: Session[];
   allTasks: Task[];
   onOpenTask: (taskId: string) => void;
+  onOpenReview: () => void;
   onPatch: (patch: Partial<Task>) => Promise<void>;
   onQueueChanged: (updatedTask?: Task) => void;
   notify: (message: string) => void;
@@ -133,13 +134,11 @@ export function TaskInspector({
   const [profiles, setProfiles] = useState<AgentExecutorProfile[]>([]);
   const [profilesReady, setProfilesReady] = useState(false);
   const detection = useAgentAvailability();
-  const { info: review, loading: reviewLoading, error: reviewError, load: loadReview } = useTaskReviewInfo(task.id);
   const readOnly = task.parentId !== null || !!task.archived;
   const latestSession = useMemo(
     () => [...sessions].sort((left, right) => right.startedAt.localeCompare(left.startedAt))[0],
     [sessions],
   );
-  const latestReview = review?.rounds.at(-1);
   const queuePosition = queueItems.findIndex((item) => item.taskId === task.id);
   const nextQueueItem = queuePosition >= 0 ? queueItems[queuePosition + 1] : undefined;
 
@@ -209,7 +208,6 @@ export function TaskInspector({
   const effortOptions = [...new Set([task.reasoningEffort, ...REASONING_EFFORT_VALUES[agentType]].filter((value): value is string => !!value))];
   const duration = taskDurationInfo(task);
   const parent = taskParentLink(task, allTasks);
-  const parentTask = task.parentId ? allTasks.find((candidate) => candidate.id === task.parentId) ?? null : null;
   const canRequeue = task.parentId === null
     && !task.archived
     && !!task.queueId
@@ -231,9 +229,15 @@ export function TaskInspector({
   };
 
   return (
-    <aside className="task-inspector" aria-label="任务 Inspector">
-      <div className="task-inspector-head"><b>Inspector</b><span>任务详情</span></div>
+    <div className="task-inspector" aria-label="任务信息">
       <div className="task-inspector-scroll">
+        <section>
+          <details>
+            <summary>原始需求</summary>
+            <pre>{task.body.trim() || "这个任务没有正文说明。"}</pre>
+          </details>
+        </section>
+
         <section>
           <h2>属性</h2>
           <InspectorRow label="状态">
@@ -329,6 +333,8 @@ export function TaskInspector({
           )}
         </section>
 
+        <TaskChangeSummary task={task} allTasks={allTasks} onOpenReview={onOpenReview} />
+
         <section>
           <h2>队列</h2>
           {task.queueId ? (
@@ -361,33 +367,6 @@ export function TaskInspector({
           />
           <LegacyLink projectId={task.projectId} taskId={task.id} />
         </section>
-
-        <section>
-          <h2>审查摘要</h2>
-          {reviewLoading ? <p className="task-inspector-note">正在读取审查记录…</p> : latestReview ? (
-            <details>
-              <summary>第 {latestReview.round} 轮 · {latestReview.conclusion === "verified" ? "已通过" : latestReview.conclusion === "verify_failed" ? "未通过" : latestReview.reviewTaskStatus}</summary>
-              <pre>{latestReview.reportMarkdown || "尚无审查报告。"}</pre>
-            </details>
-          ) : <p className={`task-inspector-note${reviewError ? " is-error" : ""}`}>{reviewError ? `审查记录加载失败：${reviewError}` : review?.reviewRequested ? "审查已请求，等待结果。" : "尚未开始审查。"}</p>}
-          {!reviewLoading && (
-            <ReviewDispatchControl
-              task={task}
-              parentTask={parentTask}
-              rounds={review?.rounds ?? []}
-              prominent={!!reviewError || !latestReview || latestReview.conclusion === "verify_failed"}
-              notify={notify}
-              onRefresh={() => loadReview(true)}
-            />
-          )}
-        </section>
-
-        <section>
-          <details>
-            <summary>Prompt 原文</summary>
-            <pre>{task.body.trim() || "这个任务没有正文说明。"}</pre>
-          </details>
-        </section>
       </div>
       {queueOpen && task.queueId && (
         <QueueDrawer
@@ -398,6 +377,6 @@ export function TaskInspector({
           onChanged={() => { onQueueChanged(); void api.queue(task.queueId!).then((queue) => setQueueItems(queue.items)); }}
         />
       )}
-    </aside>
+    </div>
   );
 }

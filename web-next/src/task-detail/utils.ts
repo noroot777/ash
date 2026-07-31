@@ -1,17 +1,4 @@
-import type { Task, TaskStatus } from "@harness/shared";
-
-export const STATUS_TONES: Record<TaskStatus | "awaiting_answer", string> = {
-  awaiting_answer: "cyan",
-  backlog: "muted",
-  queued: "amber",
-  running: "green",
-  idle: "muted",
-  awaiting_review: "amber",
-  paused: "cyan",
-  done: "green",
-  failed: "red",
-  canceled: "muted",
-};
+import type { Task } from "@harness/shared";
 
 export const PRIORITY_LABELS: Record<Task["priority"], string> = {
   none: "无",

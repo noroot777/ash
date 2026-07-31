@@ -506,7 +506,7 @@
 
 .settings-resume-dots .is-done { color: var(--green); }
 .settings-resume-dots .is-running,
-.settings-resume-dots .is-queued { color: var(--amber); }
+.settings-resume-dots .is-queued { display: inline-block; color: var(--muted); animation: task-status-dot-pulse 1.35s ease-in-out infinite; will-change: opacity, transform; }
 .settings-resume-dots .is-failed { color: var(--red); }
 .settings-resume-dots .is-paused { color: var(--muted); }
 
@@ -609,4 +609,9 @@
   .settings-cli-grid article { border-right: 0; }
   .settings-group-main { grid-template-columns: 1fr 78px auto 28px; }
   .settings-group-main > span, .settings-group-main .settings-paused { display: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .settings-resume-dots .is-running,
+  .settings-resume-dots .is-queued { animation: none; opacity: 1; transform: none; }
 }

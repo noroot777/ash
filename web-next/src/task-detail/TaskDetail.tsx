@@ -1,7 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
-import type { Group, Task } from "@harness/shared";
+import { createPortal } from "react-dom";
+import type { Group, Session, Task } from "@harness/shared";
+import { Info, MagnifyingGlass } from "@phosphor-icons/react";
+import { InspectorHost, type InspectorDescriptor } from "../inspector/index.ts";
 import { api } from "../lib/api.ts";
 import { useConversation } from "../lib/useConversation.ts";
+import { useTaskReadState } from "../lib/useTaskReadState.ts";
 import { conversationToMarkdown } from "./conversationModel.ts";
 import { ConversationFeed } from "./ConversationFeed.tsx";
 import { DeleteTaskDialog } from "./DeleteTaskDialog.tsx";
@@ -17,9 +21,40 @@ import {
   TASK_DERIVATION_COMMANDS,
   type TaskDerivationCommand,
 } from "./taskDerivation.ts";
+import { TaskReviewInspector } from "./TaskReviewInspector.tsx";
 import { TaskReviewWorkspace } from "../review/TaskReviewWorkspace.tsx";
 import { OriginTaskBar } from "../components/TaskOrigin.tsx";
 import { DerivedTaskLinks } from "../components/DerivedTaskLinks.tsx";
+
+interface TaskInspectorContext {
+  task: Task;
+  groups: Group[];
+  sessions: Session[];
+  allTasks: Task[];
+  onOpenTask: (taskId: string) => void;
+  onOpenReview: () => void;
+  onPatch: (patch: Partial<Task>) => Promise<void>;
+  onQueueChanged: (updatedTask?: Task) => void;
+  notify: (message: string) => void;
+}
+
+const TASK_INSPECTORS: readonly InspectorDescriptor<TaskInspectorContext>[] = [
+  {
+    id: "info",
+    title: "信息",
+    icon: <Info size={14} />,
+    defaultOpen: true,
+    render: (context) => <TaskInspector {...context} />,
+  },
+  {
+    id: "review",
+    title: "审查",
+    icon: <MagnifyingGlass size={14} />,
+    render: (context) => <TaskReviewInspector {...context} />,
+  },
+];
+
+const REVIEW_FOCUS_STAGES = new Set(["verifying", "verified", "verify_failed", "awaiting_acceptance"]);
 
 export function TaskDetail({
   task,
@@ -29,6 +64,8 @@ export function TaskDetail({
   onOpenTask,
   initialReviewOpen = false,
   onReviewOpenChange,
+  inspectorMode = "page",
+  inspectorToggleTarget = null,
   notify,
 }: {
   task: Task;
@@ -38,6 +75,8 @@ export function TaskDetail({
   onOpenTask: (taskId: string) => void;
   initialReviewOpen?: boolean;
   onReviewOpenChange?: (open: boolean) => void;
+  inspectorMode?: "page" | "drawer";
+  inspectorToggleTarget?: HTMLElement | null;
   notify: (message: string) => void;
 }) {
   const [groups, setGroups] = useState<Group[]>([]);
@@ -49,6 +88,7 @@ export function TaskDetail({
     committed: boolean;
   } | null>(null);
   const [derivationResetKey, setDerivationResetKey] = useState(0);
+  const { indicatorForTask } = useTaskReadState(allTasks, task.id);
   const conversation = useConversation(task.id);
   const markdown = useMemo(
     () => conversationToMarkdown(conversation.items, task),
@@ -56,6 +96,14 @@ export function TaskDetail({
   );
   const hasConversation = conversation.sessions.length > 0 || conversation.items.length > 0;
   const derivationAllowed = canDeriveTask(task);
+  const reviewFocused = REVIEW_FOCUS_STAGES.has(task.stage ?? "")
+    || allTasks.some((candidate) => candidate.reviewOf === task.id);
+  const inspectorPolicy = useMemo(() => ({
+    stateKey: `single:${task.status}:${reviewFocused ? "review" : "info"}`,
+    requiredTabId: "info",
+    defaultOpenTabIds: reviewFocused ? ["info", "review"] : ["info"],
+    defaultActiveTabId: reviewFocused ? "review" : "info",
+  }), [reviewFocused, task.status]);
 
   useEffect(() => {
     let alive = true;
@@ -138,114 +186,135 @@ export function TaskDetail({
     }
   };
 
+  const inspectorContextKey = inspectorMode === "drawer" ? `task-drawer:${task.id}` : `task:${task.id}`;
+
   return (
-    <div className="task-detail">
-      <OriginTaskBar task={task} allTasks={allTasks} onOpen={onOpenTask} />
-      <TaskHeader
-        task={task}
-        conversationMarkdown={markdown}
-        busy={busy}
-        refreshing={conversation.refreshing}
-        onTitle={(title) => patch({ title, autoTitle: false })}
-        onTogglePin={() => patch({ pinnedAt: task.pinnedAt != null ? null : Date.now() })}
-        onPrimary={(action) => void perform(action)}
-        onRequeue={() => void requeue()}
-        onArchive={() => void archive()}
-        onRefresh={() => void refresh()}
-        onReview={() => changeReviewOpen(!reviewOpen)}
-        onDelete={() => setDeleteOpen(true)}
-        notify={notify}
-      />
-      {reviewOpen ? (
-        <TaskReviewWorkspace task={task} allTasks={allTasks} onClose={() => changeReviewOpen(false)} onTaskUpdated={onTaskUpdate} notify={notify} />
-      ) : <div className="task-detail-body">
-        <section className="task-detail-main" aria-label="任务会话">
-          <ConversationFeed
-            taskId={task.id}
-            taskBody={task.body}
-            items={conversation.items}
-            loading={conversation.refreshing}
-            error={conversation.error}
-            footer={task.question ? (
-              <QuestionCard
+    <InspectorHost
+      contextKey={inspectorContextKey}
+      descriptors={TASK_INSPECTORS}
+      context={{
+        task,
+        groups,
+        sessions: conversation.sessions,
+        allTasks,
+        onOpenTask,
+        onOpenReview: () => changeReviewOpen(true),
+        onPatch: patch,
+        onQueueChanged: (updatedTask) => {
+          if (updatedTask) onTaskUpdate(updatedTask);
+          else void refreshTask();
+        },
+        notify,
+      }}
+      defaultVisible={inspectorMode === "page"}
+      tabPolicy={inspectorPolicy}
+    >
+      {({ toggleButton }) => (
+        <>
+          <div className="task-detail">
+            <OriginTaskBar task={task} allTasks={allTasks} onOpen={onOpenTask} />
+            <TaskHeader
+              task={task}
+              conversationMarkdown={markdown}
+              busy={busy}
+              refreshing={conversation.refreshing}
+              onTitle={(title) => patch({ title, autoTitle: false })}
+              onTogglePin={() => patch({ pinnedAt: task.pinnedAt != null ? null : Date.now() })}
+              onPrimary={(action) => void perform(action)}
+              onRequeue={() => void requeue()}
+              onArchive={() => void archive()}
+              onRefresh={() => void refresh()}
+              onReview={() => changeReviewOpen(!reviewOpen)}
+              onDelete={() => setDeleteOpen(true)}
+              indicatorForTask={indicatorForTask}
+              inspectorToggle={inspectorMode === "drawer" && inspectorToggleTarget ? undefined : toggleButton}
+              notify={notify}
+            />
+            {reviewOpen ? (
+              <TaskReviewWorkspace task={task} allTasks={allTasks} onClose={() => changeReviewOpen(false)} onTaskUpdated={onTaskUpdate} notify={notify} />
+            ) : (
+              <div className="task-detail-body">
+                <section className="task-detail-main" aria-label="任务会话">
+                  <ConversationFeed
+                    taskId={task.id}
+                    taskBody={task.body}
+                    items={conversation.items}
+                    loading={conversation.refreshing}
+                    error={conversation.error}
+                    footer={task.question ? (
+                      <QuestionCard
+                        task={task}
+                        onAnswer={async (answer) => {
+                          await api.answerTask(task.id, answer);
+                          conversation.addUser(answer);
+                          notify("已发送答复，任务正在续跑");
+                        }}
+                      />
+                    ) : undefined}
+                  />
+                  <DerivedTaskLinks sourceTaskId={task.id} allTasks={allTasks} onOpen={onOpenTask} />
+                  <ReplyBox
+                    task={task}
+                    hasConversation={hasConversation}
+                    onSend={async (text, attachments, options) => {
+                      const result = await api.replyTask(task.id, text, { attachments, ...options });
+                      if (options.sendAt) {
+                        notify(`已安排 ${new Date(options.sendAt).toLocaleString()} 发送`);
+                        return result;
+                      }
+                      conversation.addUser(text, attachments);
+                      notify(options.agent ? `已召唤 @${options.agent} 继续任务` : "回复已发送");
+                      return result;
+                    }}
+                    command={derivationAllowed ? {
+                      matches: isTaskDerivationCommand,
+                      items: TASK_DERIVATION_COMMANDS,
+                      resetKey: derivationResetKey,
+                      onSubmit: (text) => {
+                        const parsed = parseTaskDerivationCommand(text);
+                        if (parsed) setDerivation({ command: parsed, committed: true });
+                      },
+                      onChange: (text) => {
+                        setDerivation((current) => {
+                          if (current?.committed) return current;
+                          const parsed = parseTaskDerivationCommand(text);
+                          return parsed ? { command: parsed, committed: false } : null;
+                        });
+                      },
+                      onCancel: closeDerivation,
+                    } : undefined}
+                    inlinePanel={derivationAllowed && derivation ? (
+                      <TaskDerivationComposer
+                        key={derivation.command.kind}
+                        task={task}
+                        command={derivation.command}
+                        live={!derivation.committed}
+                        onClose={closeDerivation}
+                        onCreated={(created) => {
+                          onTaskUpdate(created);
+                          onOpenTask(created.id);
+                        }}
+                        notify={notify}
+                      />
+                    ) : undefined}
+                  />
+                </section>
+              </div>
+            )}
+            {deleteOpen && (
+              <DeleteTaskDialog
                 task={task}
-                onAnswer={async (answer) => {
-                  await api.answerTask(task.id, answer);
-                  conversation.addUser(answer);
-                  notify("已发送答复，任务正在续跑");
-                }}
-              />
-            ) : undefined}
-          />
-          <DerivedTaskLinks sourceTaskId={task.id} allTasks={allTasks} onOpen={onOpenTask} />
-          <ReplyBox
-            task={task}
-            hasConversation={hasConversation}
-            onSend={async (text, attachments, options) => {
-              const result = await api.replyTask(task.id, text, { attachments, ...options });
-              if (options.sendAt) {
-                notify(`已安排 ${new Date(options.sendAt).toLocaleString()} 发送`);
-                return result;
-              }
-              conversation.addUser(text, attachments);
-              notify(options.agent ? `已召唤 @${options.agent} 继续任务` : "回复已发送");
-              return result;
-            }}
-            command={derivationAllowed ? {
-              matches: isTaskDerivationCommand,
-              items: TASK_DERIVATION_COMMANDS,
-              resetKey: derivationResetKey,
-              onSubmit: (text) => {
-                const parsed = parseTaskDerivationCommand(text);
-                if (parsed) setDerivation({ command: parsed, committed: true });
-              },
-              onChange: (text) => {
-                setDerivation((current) => {
-                  if (current?.committed) return current;
-                  const parsed = parseTaskDerivationCommand(text);
-                  return parsed ? { command: parsed, committed: false } : null;
-                });
-              },
-              onCancel: closeDerivation,
-            } : undefined}
-            inlinePanel={derivationAllowed && derivation ? (
-              <TaskDerivationComposer
-                key={derivation.command.kind}
-                task={task}
-                command={derivation.command}
-                live={!derivation.committed}
-                onClose={closeDerivation}
-                onCreated={(created) => {
-                  onTaskUpdate(created);
-                  onOpenTask(created.id);
-                }}
                 notify={notify}
+                onDeleted={() => onDeleted(task.id)}
+                onClose={() => setDeleteOpen(false)}
               />
-            ) : undefined}
-          />
-        </section>
-        <TaskInspector
-          task={task}
-          groups={groups}
-          sessions={conversation.sessions}
-          allTasks={allTasks}
-          onOpenTask={onOpenTask}
-          onPatch={patch}
-          onQueueChanged={(updatedTask) => {
-            if (updatedTask) onTaskUpdate(updatedTask);
-            else void refreshTask();
-          }}
-          notify={notify}
-        />
-      </div>}
-      {deleteOpen && (
-        <DeleteTaskDialog
-          task={task}
-          notify={notify}
-          onDeleted={() => onDeleted(task.id)}
-          onClose={() => setDeleteOpen(false)}
-        />
+            )}
+          </div>
+          {inspectorMode === "drawer" && inspectorToggleTarget
+            ? createPortal(toggleButton, inspectorToggleTarget)
+            : null}
+        </>
       )}
-    </div>
+    </InspectorHost>
   );
 }

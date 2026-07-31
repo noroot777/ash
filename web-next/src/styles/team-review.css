@@ -158,5 +158,5 @@
   .review-dispatch-fields { grid-template-columns: 1fr; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .team-review-record svg, .team-review-round svg, .team-shared-worker-grid svg { transition: none; }
+  .team-review-record svg { transition: none; }
 }

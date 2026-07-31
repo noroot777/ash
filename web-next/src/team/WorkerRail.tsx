@@ -1,7 +1,9 @@
-import { useEffect, useMemo } from "react";
+import { useMemo } from "react";
 import type { Group, Task } from "@harness/shared";
+import { TaskStatusDot } from "../components/TaskStatusDot.tsx";
+import type { IndicatorForTask } from "../lib/useTaskReadState.ts";
 import { formatDuration } from "../task-detail/utils.ts";
-import { executorLabel, statusTone, workerStatusText } from "./teamModel.ts";
+import { executorLabel, workerStatusText } from "./teamModel.ts";
 
 function elapsed(task: Task): string | null {
   if (!task.startedAt) return null;
@@ -15,27 +17,17 @@ export function WorkerRail({
   groups,
   selectedId,
   onSelect,
+  indicatorForTask,
+  liveLines,
 }: {
   workers: Task[];
   groups: Group[];
   selectedId: string | null;
   onSelect: (taskId: string) => void;
+  indicatorForTask: IndicatorForTask;
+  liveLines: Record<string, string>;
 }) {
   const groupById = useMemo(() => new Map(groups.map((group) => [group.id, group])), [groups]);
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.metaKey || event.ctrlKey || event.altKey) return;
-      const target = event.target as HTMLElement | null;
-      if (target && ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName)) return;
-      const index = Number(event.key) - 1;
-      if (!Number.isInteger(index) || index < 0 || index > 8 || !workers[index]) return;
-      event.preventDefault();
-      onSelect(workers[index].id);
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [onSelect, workers]);
-
   return (
     <aside className="team-worker-rail" aria-label="执行者列表">
       <header><span>执行者（{workers.length}）</span>{workers.length > 0 && <small>按 1–9</small>}</header>
@@ -43,6 +35,8 @@ export function WorkerRail({
       {workers.map((worker, index) => {
         const paused = !!(worker.groupId && groupById.get(worker.groupId)?.paused);
         const duration = elapsed(worker);
+        const indicator = indicatorForTask(worker);
+        const liveLine = liveLines[worker.id];
         return (
           <button
             type="button"
@@ -51,13 +45,14 @@ export function WorkerRail({
             onClick={() => onSelect(worker.id)}
           >
             <div>
-              <i className={`team-status-dot team-status-dot--${statusTone(worker)}`} />
+              <span className="team-worker-rail__index">{index + 1}</span>
+              {indicator && <TaskStatusDot indicator={indicator} surface="team" />}
               <b>{worker.title}</b>
               <code title={executorLabel(worker)}>{executorLabel(worker)}</code>
-              <kbd>{index < 9 ? index + 1 : ""}</kbd>
             </div>
             <small>{workerStatusText(worker, paused)}{duration ? ` · ${duration}` : ""}</small>
-            {worker.question && <p>{worker.question}</p>}
+            {worker.question && <p className="team-worker-rail__question">{worker.question}</p>}
+            {liveLine && <p className="team-worker-rail__live" title={liveLine}>{liveLine}</p>}
           </button>
         );
       })}

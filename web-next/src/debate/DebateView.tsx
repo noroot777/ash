@@ -15,18 +15,20 @@ import {
   Stop,
   Trash,
 } from "@phosphor-icons/react";
+import { ConversationScrollControls } from "../components/ConversationScrollControls.tsx";
 import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
 import { LegacyLink } from "../components/LegacyLink.tsx";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
 import { ScheduleControl } from "../components/ScheduleControl.tsx";
 import { OriginTaskBar } from "../components/TaskOrigin.tsx";
+import { TaskStatusDot } from "../components/TaskStatusDot.tsx";
 import { api } from "../lib/api.ts";
-import { useStickToBottom } from "../lib/useStickToBottom.ts";
+import { useTaskReadState } from "../lib/useTaskReadState.ts";
 import { DeleteTaskDialog } from "../task-detail/DeleteTaskDialog.tsx";
 import { MessageAttachments } from "../task-detail/Attachments.tsx";
 import { TaskPinButton } from "../task-detail/TaskPinButton.tsx";
 import { TaskTimeMeta } from "../task-detail/TaskTimeMeta.tsx";
-import { formatDuration, formatInstant, parseAttachmentText, STATUS_TONES } from "../task-detail/utils.ts";
+import { formatDuration, formatInstant, parseAttachmentText } from "../task-detail/utils.ts";
 import { DebateGateControls, DebateProgressBar } from "./DebateControls.tsx";
 import { DebateHandoffBar, DebateHandoffModal, type HandoffChoice } from "./DebateHandoff.tsx";
 import { buildDebateHandoffBody, latestDebateGate } from "./debateHandoff.ts";
@@ -136,7 +138,7 @@ export function DebateView({
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [title, setTitle] = useState(task.title);
   const scrollRef = useRef<HTMLDivElement>(null);
-  useStickToBottom(scrollRef, `${task.id}:${debate.state.turns.length}`);
+  const { indicatorForTask } = useTaskReadState(allTasks, task.id);
 
   useEffect(() => setTitle(task.title), [task.id, task.title]);
   useEffect(() => {
@@ -154,6 +156,7 @@ export function DebateView({
     .filter((item) => item.mode === "team" && item.originTaskId === task.id)
     .sort((a, b) => timeMs(b.createdAt) - timeMs(a.createdAt)), [allTasks, task.id]);
   const display = taskDisplayStatus(task.status, task.stage, !!task.question);
+  const indicator = indicatorForTask(task);
   const action = actionFor(task);
 
   const refreshTask = async () => onTaskUpdated(await api.task(task.id));
@@ -283,7 +286,10 @@ export function DebateView({
           notify={notify}
         />
         <input value={title} aria-label="辩论标题" onChange={(event) => setTitle(event.target.value)} onBlur={() => void commitTitle()} onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); if (event.key === "Escape") { setTitle(task.title); event.currentTarget.blur(); } }} />
-        <span className={`debate-status debate-status--${STATUS_TONES[task.status]}`}><i />{display.label}</span>
+        <span className="debate-status">
+          {indicator && <TaskStatusDot indicator={indicator} surface="team" />}
+          {display.label}
+        </span>
         <TaskTimeMeta task={task} />
         <LegacyLink projectId={task.projectId} taskId={task.id} compact />
         <button type="button" className={action.kind === "stop" ? "is-stop" : "is-primary"} data-workspace-run-action={action.kind === "run" || action.kind === "retry" ? action.kind : undefined} disabled={busy || !action.kind || task.archived} onClick={() => action.kind && void perform(action.kind)}>{busy ? <SpinnerGap size={13} className="is-spinning" /> : action.kind === "stop" ? <Stop size={12} weight="fill" /> : <Play size={12} weight="fill" />}{action.label}</button>
@@ -313,22 +319,25 @@ export function DebateView({
       </ImagePreviewGroup>
 
       <ImagePreviewGroup isolated>
-        <div className="debate-stream" ref={scrollRef}>
-          {debate.loading && !turns.length && <p className="debate-empty"><SpinnerGap size={14} className="is-spinning" />正在读取辩论记录…</p>}
-          {!debate.loading && debate.error && !turns.length && <p className="debate-empty is-error">辩论记录读取失败：{debate.error}</p>}
-          {!debate.loading && !debate.error && !turns.length && <p className="debate-empty">点击“运行”开始辩论。双方逐轮发言会实时出现在这里。</p>}
-          {turns.map((turn, index) => (
-            <TurnBubble
-              key={`${turn.round}-${turn.speaker}-${index}`}
-              turn={turn}
-              previousRound={turns[index - 1]?.round}
-              session={turn.speaker === "A" ? sessionsByRole.debaterA : turn.speaker === "B" ? sessionsByRole.debaterB : undefined}
-              fallback={turn.speaker === "B" ? config.debaterB : config.debaterA}
-            />
-          ))}
-          {task.status === "running" && turns.length > 0 && turns.at(-1)?.done && <p className="debate-between"><TypingDots />正在准备下一次发言…</p>}
-          {task.status === "failed" && <p className="debate-terminal is-error">本次辩论失败并停止</p>}
-          {task.status === "canceled" && <p className="debate-terminal">辩论已取消</p>}
+        <div className="conversation-scroll-region">
+          <div className="debate-stream" ref={scrollRef}>
+            {debate.loading && !turns.length && <p className="debate-empty"><SpinnerGap size={14} className="is-spinning" />正在读取辩论记录…</p>}
+            {!debate.loading && debate.error && !turns.length && <p className="debate-empty is-error">辩论记录读取失败：{debate.error}</p>}
+            {!debate.loading && !debate.error && !turns.length && <p className="debate-empty">点击“运行”开始辩论。双方逐轮发言会实时出现在这里。</p>}
+            {turns.map((turn, index) => (
+              <TurnBubble
+                key={`${turn.round}-${turn.speaker}-${index}`}
+                turn={turn}
+                previousRound={turns[index - 1]?.round}
+                session={turn.speaker === "A" ? sessionsByRole.debaterA : turn.speaker === "B" ? sessionsByRole.debaterB : undefined}
+                fallback={turn.speaker === "B" ? config.debaterB : config.debaterA}
+              />
+            ))}
+            {task.status === "running" && turns.length > 0 && turns.at(-1)?.done && <p className="debate-between"><TypingDots />正在准备下一次发言…</p>}
+            {task.status === "failed" && <p className="debate-terminal is-error">本次辩论失败并停止</p>}
+            {task.status === "canceled" && <p className="debate-terminal">辩论已取消</p>}
+          </div>
+          <ConversationScrollControls scrollRef={scrollRef} resetKey={`${task.id}:${turns.length}`} />
         </div>
       </ImagePreviewGroup>
 

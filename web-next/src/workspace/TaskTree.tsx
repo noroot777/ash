@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 import type { Group, ProjectView, Task } from "@harness/shared";
-import { canArchive, taskDisplayStatus } from "@harness/shared";
+import { canArchive } from "@harness/shared";
 import { statusCounts, workersOf } from "@harness/shared/team";
 import { ArrowBendDownRight, CaretRight, PushPin, Scales, UsersThree } from "@phosphor-icons/react";
 import { OriginTaskChip, taskParentLink } from "../components/TaskOrigin.tsx";
-import { useTaskReadState, type TaskStatusIndicator } from "../lib/useTaskReadState.ts";
+import { TaskStatusDot } from "../components/TaskStatusDot.tsx";
+import { useTaskReadState, type IndicatorForTask } from "../lib/useTaskReadState.ts";
 import { ProjectAvatar } from "./ProjectAvatar.tsx";
 import { buildTaskTree, orderedTopLevelTasks } from "./taskTreeModel.ts";
 
@@ -47,8 +48,6 @@ function useCollapsedGroups() {
   return { collapsed, toggle };
 }
 
-type IndicatorForTask = (task: Task) => TaskStatusIndicator | null;
-
 const PRIORITY_LABELS: Record<Task["priority"], string> = {
   none: "",
   low: "低优先级",
@@ -77,17 +76,6 @@ function metadataFor(task: Task, groupName?: string): string[] {
   return metadata;
 }
 
-function StatusDot({ task, indicator, small = false }: { task: Task; indicator: TaskStatusIndicator; small?: boolean }) {
-  const display = taskDisplayStatus(task.status, task.stage, !!task.question);
-  return (
-    <i
-      className={`workspace-status-dot workspace-status-dot--${indicator}${small ? " workspace-status-dot--small" : ""}`}
-      title={display.label}
-      aria-label={display.label}
-    />
-  );
-}
-
 function WorkerSummary({ workers, indicatorForTask }: { workers: Task[]; indicatorForTask: IndicatorForTask }) {
   if (!workers.length) return null;
   const buckets = statusCounts(workers);
@@ -107,7 +95,7 @@ function WorkerSummary({ workers, indicatorForTask }: { workers: Task[]; indicat
           );
           const indicator = sample ? indicatorForTask(sample) : null;
           return sample && indicator
-            ? <StatusDot key={bucket.label} task={sample} indicator={indicator} small />
+            ? <TaskStatusDot key={bucket.label} indicator={indicator} surface="workspace" small />
             : null;
         })}
       </span>
@@ -170,7 +158,7 @@ function TaskRow({
         onClick={() => onTask(task)}
         title={task.title}
       >
-        {indicator && <StatusDot task={task} indicator={indicator} />}
+        {indicator && <TaskStatusDot indicator={indicator} surface="workspace" />}
         {showPin && task.pinnedAt != null && <PushPin size={11} weight="fill" className="workspace-task-pin" aria-label="已置顶" />}
         {task.mode === "debate" && <Scales size={12} weight="bold" className="workspace-task-kind" aria-label="辩论" />}
         <span className="workspace-task-title">{task.title || "未命名任务"}</span>
@@ -379,7 +367,7 @@ function OtherProject({
 }
 
 export function TaskTree({ projects, currentProjectId, groups, tasks, selectedTaskId, onTask }: TaskTreeProps) {
-  const indicatorForTask = useTaskReadState(tasks, selectedTaskId);
+  const { indicatorForTask } = useTaskReadState(tasks, selectedTaskId);
   const groupNames = useMemo(() => new Map(groups.map((group) => [group.id, group.name])), [groups]);
   const activeTasks = useMemo(() => tasks.filter((task) => !task.archived), [tasks]);
   const currentTasks = useMemo(
