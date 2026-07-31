@@ -422,16 +422,40 @@
   font-size: 10px;
 }
 
-.note-editor > textarea {
+.note-editor > textarea,
+.note-editor-preview {
   width: 100%;
   min-height: 0;
-  resize: none;
   border: 0;
   background: transparent;
   padding: 18px 20px;
   outline: 0;
   font-size: 13px;
   line-height: 1.8;
+}
+
+.note-editor > textarea {
+  resize: none;
+}
+
+.note-editor-preview {
+  overflow-y: auto;
+  cursor: text;
+}
+
+.note-editor-preview:focus-visible {
+  box-shadow: inset 0 0 0 2px color-mix(in lch, var(--accent) 32%, transparent);
+}
+
+.note-editor-preview .task-markdown {
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.8;
+}
+
+.note-editor-placeholder {
+  margin: 0;
+  color: var(--faint);
 }
 
 .note-attachments {

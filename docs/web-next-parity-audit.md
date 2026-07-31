@@ -4,7 +4,7 @@
 
 审计基线：`c3d37d3`（`web/src` 对 `web-next/src`）
 
-修复进度：P1-1、P1-2、P1-3、P1-5、P1-6、P1-7、P1-10、P2-11、P2-12、P2-13、P2-14、P2-15、P2-20 已于 2026-07-31 修复；下方保留审计时的缺口描述，并在对应条目标记结果。
+修复进度：P1-1、P1-2、P1-3、P1-5、P1-6、P1-7、P1-10、P2-11、P2-12、P2-13、P2-14、P2-15、P2-16、P2-17、P2-20 已于 2026-07-31 修复；下方保留审计时的缺口描述，并在对应条目标记结果。
 
 结论（审计基线）：没有发现 P0，共识别 **25 个旧版能力缺失或退化点**：P1 10 个、P2 11 个、P3 4 个。普通任务回复框的 `/team`、`/debate` 派生命令在审计期间由另一执行者修复并提交，本报告将它记入“已确认对齐”，不重复实施；后续修复进度见上方说明和条目标记。
 
@@ -137,19 +137,21 @@
 - 修复入手点：在 composer 的任务选项加入与 Inspector 共用的标签编辑器，payload 写 `labels`，连续创建时清空。
 - 修复结果：Composer 与 Inspector 现共用同一标签编辑器；单任务、团队和辩论创建 payload 均写入 `labels`，成功创建后清空标签状态，避免连续创建继承上一项标签。
 
-### 16. 随手记失去 800ms 自动保存和失焦 Markdown 预览
+### 16. 随手记失去 800ms 自动保存和失焦 Markdown 预览（已修）
 
 - 旧版位置：`web/src/NotesModal.tsx:175-188` 变更后 800ms 自动保存并在卸载前 flush；`web/src/NotesModal.tsx:430-475` 失焦后用 Markdown 阅读态展示。
 - 新版现状：**行为退化**。`web-next/src/overlays/NotesPanel.tsx:64-95` 只在显式保存、切换或关闭时保存；`web-next/src/overlays/NotesPanel.tsx:170-178` 始终是 textarea。崩溃/刷新前的编辑更容易丢，长笔记阅读性下降。
 - 历史判断：`60ab85c` 只补回批量转任务；没有恢复自动保存和预览。
 - 修复入手点：迁移串行 flush/save-in-flight 逻辑，避免竞态；保留显式保存按钮作状态反馈，正文失焦时切到 `MarkdownBody`，点击再编辑。
+- 修复结果：随手记草稿变更后 800ms 自动保存，切换、关闭、转任务和卸载均复用同一串行 flush；保存过程中继续输入会在当前请求完成后补一次最新快照，避免旧响应覆盖新内容。显式保存按钮展示等待、保存中、失败和已保存状态；正文失焦后进入共享 `MarkdownBody` 阅读态，点击正文再恢复编辑。
 
-### 17. Markdown 的本地打开、审查报告链接和软换行只迁了一部分
+### 17. Markdown 的本地打开、审查报告链接和软换行只迁了一部分（已修）
 
 - 旧版位置：`web/src/Markdown.tsx:9-49` 识别审查文件和 `/api/open-local`；`web/src/Markdown.tsx:51-74` 把聊天文本单换行保留下来；`web/src/Markdown.tsx:76-123,146-169` 在站内弹层打开审查 Markdown，并把 open-local 请求重写到当前 origin。
 - 新版现状：**半残回归**。`web-next/src/components/MarkdownBody.tsx:9-26` 只有 GFM、图片预览和一律 `target=_blank` 的链接；tailnet 页面上的 localhost open-local 链接、审查 Markdown 弹层和软换行语义均丢失。
 - 历史判断：`e71e35a fix(web-next): restore markdown and conversation metadata` 名义上“恢复 Markdown”，但实现没有迁入上述处理器；旧版 open-local 还经过 `d259672` 的 tailnet 修复。
 - 修复入手点：把 review-file target、open-local current-origin rewrite 和 soft-break plugin 抽成共享 Markdown policy，供会话、辩论、审查报告、随手记统一使用。
+- 修复结果：新增共享 Markdown policy，统一识别审查产物并改写到 review-file API、把任意 host 的 `/api/open-local` 请求固定到当前页面 origin，并用 remark 插件保留聊天文本的单换行。`MarkdownBody` 现以内嵌弹层打开审查 Markdown，审查图片也走安全文件端点；会话、辩论、审查报告和随手记阅读态全部复用同一策略。
 
 ### 18. 全局 `j/k/↑/↓` 导航、`c` 新建、`r` 运行快捷键缺失
 
