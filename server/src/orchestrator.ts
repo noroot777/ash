@@ -1,6 +1,6 @@
 import { mkdirSync, createWriteStream, existsSync } from "node:fs";
 import { join } from "node:path";
-import { eq, inArray, sql } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import type { AgentType } from "@harness/shared";
 import { db } from "./db/index.js";
 import { tasks, projects, sessions } from "./db/schema.js";
@@ -8,7 +8,7 @@ import { bus } from "./bus.js";
 import { id, now, attachmentsPrompt } from "./util.js";
 import { setTaskStatus } from "./status.js";
 import { trackRun, untrackRun, isRunning, takeStopped } from "./runs.js";
-import { consumeSingleRun, settleTaskStatus, afterSettlement } from "./single-run.js";
+import { consumeSingleRun, afterSettlement } from "./single-run.js";
 import { FOLLOW_UP_LABEL } from "./labels.js";
 import { taskWorkspace } from "./task-workspace.js";
 import { resolveExecutorFor } from "./executors/index.js";
@@ -16,7 +16,7 @@ import type { RunHandle } from "./executors/types.js";
 import { detachedPathsFor } from "./executors/detached.js";
 import { inspectProcess } from "./proc.js";
 import { RUNS_DIR } from "./paths.js";
-import { writeTurn as writeTurnLine, writeTurnEnd, writeRunError, runTracePaths } from "./transcript.js";
+import { writeTurn as writeTurnLine, runTracePaths } from "./transcript.js";
 import { startTeam, deliverToLead } from "./team/session.js";
 import { workerPreambleFor } from "./team/dispatch.js";
 import { reopenAcceptedStage } from "./task-stage.js";
@@ -410,11 +410,16 @@ export async function continueTask(
     const sessId = resuming ? prev!.id : id();
     const runDir = join(RUNS_DIR, taskId);
     mkdirSync(runDir, { recursive: true });
+    // 续聊/重试/队列推进/唤醒这一路也要解绑 —— 漏掉它等于只保护「全新起跑」的
+    // 回合，而任务被 resume 的次数远多于第一次起跑（实测:重启时在跑的任务里
+    // 一半是 resume 回合，全都还挂在匿名管道上）。
+    const detach = detachedPathsFor(runDir, sessId, turnStart);
     handle = ex.run({
       prompt,
       cwd,
       sessionId: resuming ? prev!.cliSessionId! : undefined,
       trace: runTracePaths(runDir, sessId, turnStart),
+      detach,
     });
     trackRun(taskId, handle);
 
@@ -434,6 +439,14 @@ export async function continueTask(
           commandLine: handle.commandLine,
           executor: ex.label,
           relayEnv: ex.relayEnvHint ?? null,
+          // 这一轮的解绑线索。**必须整组刷新**:沿用上一轮的 pid/offset 会让重启
+          // 去接一个早就没了的进程,或者从上一轮的字节位置读这一轮的新文件。
+          agentPid: handle.detached?.pid ?? null,
+          agentStartedAt: handle.detached ? inspectProcess(handle.detached.pid)?.startedAt ?? null : null,
+          agentOutPath: handle.detached ? detach.out : null,
+          agentErrPath: handle.detached ? detach.err : null,
+          agentRcPath: handle.detached ? detach.rc : null,
+          agentOffset: 0,
         })
         .where(eq(sessions.id, sessId));
     } else {
@@ -456,6 +469,12 @@ export async function continueTask(
         turnStartedAt: turnStart,
         activeMs: 0,
         exitStatus: null,
+        agentPid: handle.detached?.pid ?? null,
+        agentStartedAt: handle.detached ? inspectProcess(handle.detached.pid)?.startedAt ?? null : null,
+        agentOutPath: handle.detached ? detach.out : null,
+        agentErrPath: handle.detached ? detach.err : null,
+        agentRcPath: handle.detached ? detach.rc : null,
+        agentOffset: 0,
       });
     }
 
@@ -477,38 +496,13 @@ export async function continueTask(
       bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: "single", agentType: agent, event: { kind: "system", text: WORKSPACE_RESET_MARKER } });
     }
 
-    let exitStatus = 0;
-    for await (const event of handle.events) {
-      if (event.kind === "session") {
-        if (event.cliSessionId !== cliSessionId) {
-          cliSessionId = event.cliSessionId;
-          await db
-            .update(sessions)
-            .set({ cliSessionId, resumeCommand: ex.resumeCommand(cwd, cliSessionId) })
-            .where(eq(sessions.id, sessId));
-        }
-        bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: "single", agentType: agent, event });
-        continue;
-      }
-      if (event.kind === "text" || event.kind === "thinking") out.write(event.text);
-      else if (event.kind === "error") writeRunError(out, event.message);
-      if (event.kind === "done") exitStatus = event.exitStatus;
-      bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: "single", agentType: agent, event });
-    }
-    const stopped = takeStopped(taskId);
-    const endIso = now();
-    await db
-      .update(sessions)
-      .set({ exitStatus, endedAt: endIso, activeMs: sql`COALESCE(${sessions.activeMs}, 0) + ${Math.max(0, Date.parse(endIso) - Date.parse(turnStart))}` })
-      .where(eq(sessions.id, sessId));
-    const settled = await settleTaskStatus(taskId, exitStatus, stopped);
-    await afterSettlement(taskId, settled.status, settled.confirmedDone);
-    if (settled.note) {
-      out.write(`\n> ${settled.note}\n`);
-      bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: "single", agentType: agent, event: { kind: "error", message: settled.note } });
-    }
-    writeTurnEnd(out, endIso); // fence this turn's real end before closing the .md
-    out.end();
+    // 跟 fresh run 共用同一份消费+结算(autoTitle=false:标题在第一轮就定了)。
+    // 原来这里是一份几乎一样的内联拷贝,两份会漂 —— 而且那份没有 offset 持久化,
+    // 于是 resume 回合被重启接管时会从字节 0 重放整轮输出。
+    await consumeSingleRun({
+      taskId, sessId, agentType: agent, ex, cwd,
+      handle, out, turnStart, cliSessionId, autoTitle: false,
+    });
   } catch (err) {
     bus.publish({
       type: "agent.event", taskId, sessionId: "", role: "single", agentType,
