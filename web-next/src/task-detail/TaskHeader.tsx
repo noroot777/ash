@@ -14,9 +14,11 @@ import {
   Stop,
   Trash,
 } from "@phosphor-icons/react";
+import { TaskStatusDot } from "../components/TaskStatusDot.tsx";
+import type { IndicatorForTask } from "../lib/useTaskReadState.ts";
 import { TaskPinButton } from "./TaskPinButton.tsx";
 import { TaskTimeMeta } from "./TaskTimeMeta.tsx";
-import { safeDownloadName, STATUS_TONES } from "./utils.ts";
+import { safeDownloadName } from "./utils.ts";
 
 export type PrimaryAction = "run" | "retry" | "stop" | "accept" | "unarchive" | null;
 
@@ -48,6 +50,7 @@ export function TaskHeader({
   onRefresh,
   onReview,
   onDelete,
+  indicatorForTask,
   notify,
 }: {
   task: Task;
@@ -61,6 +64,7 @@ export function TaskHeader({
   onRefresh: () => void;
   onReview: () => void;
   onDelete: () => void;
+  indicatorForTask: IndicatorForTask;
   notify: (message: string) => void;
 }) {
   const [title, setTitle] = useState(task.title);
@@ -70,6 +74,7 @@ export function TaskHeader({
   const pointerToggle = useRef(false);
   const action = primaryAction(task);
   const display = taskDisplayStatus(task.status, task.stage, !!task.question);
+  const indicator = indicatorForTask(task);
 
   useEffect(() => { if (!editing) setTitle(task.title); }, [editing, task.title]);
   useEffect(() => {
@@ -136,8 +141,9 @@ export function TaskHeader({
           }}
         />
       )}
-      <span className={`task-detail-status task-detail-status--${STATUS_TONES[task.question ? "awaiting_answer" : task.status]}`}>
-        <i aria-hidden="true" />{display.label}
+      <span className="task-detail-status">
+        {indicator && <TaskStatusDot indicator={indicator} surface="team" />}
+        {display.label}
       </span>
       <TaskTimeMeta task={task} />
       <button

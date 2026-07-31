@@ -4,8 +4,6 @@
 .debate-header > input { min-width:90px; flex:1; overflow:hidden; border:0; border-radius:5px; background:transparent; padding:3px 5px; font-size:12.5px; font-weight:600; outline:0; text-overflow:ellipsis; }
 .debate-header > input:hover,.debate-header > input:focus { background:var(--raised); }
 .debate-status { display:inline-flex; align-items:center; gap:5px; border-radius:999px; padding:3px 5px; color:var(--faint); font-size:10px; font-weight:650; }
-.debate-status i { width:7px; height:7px; border-radius:50%; background:currentColor; }
-.debate-status--green { color:var(--green); }.debate-status--red { color:var(--red); }.debate-status--amber { color:var(--amber); }.debate-status--cyan { color:var(--cyan); }.debate-status--muted { color:var(--faint); }
 .debate-header > button:not(.task-pin) { display:inline-flex; height:28px; align-items:center; justify-content:center; gap:5px; border:1px solid var(--line2); border-radius:7px; background:var(--panel); padding:0 9px; color:var(--muted); font-size:10.5px; }
 .debate-header > button:not(.task-pin):hover:not(:disabled) { background:var(--raised); color:var(--ink); }
 .debate-header > button.is-primary { border-color:var(--accent); background:var(--accent); color:white; }

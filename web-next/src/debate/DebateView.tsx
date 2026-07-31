@@ -19,13 +19,15 @@ import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
 import { LegacyLink } from "../components/LegacyLink.tsx";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
 import { OriginTaskBar } from "../components/TaskOrigin.tsx";
+import { TaskStatusDot } from "../components/TaskStatusDot.tsx";
 import { api } from "../lib/api.ts";
 import { useStickToBottom } from "../lib/useStickToBottom.ts";
+import { useTaskReadState } from "../lib/useTaskReadState.ts";
 import { DeleteTaskDialog } from "../task-detail/DeleteTaskDialog.tsx";
 import { MessageAttachments } from "../task-detail/Attachments.tsx";
 import { TaskPinButton } from "../task-detail/TaskPinButton.tsx";
 import { TaskTimeMeta } from "../task-detail/TaskTimeMeta.tsx";
-import { formatDuration, formatInstant, parseAttachmentText, STATUS_TONES } from "../task-detail/utils.ts";
+import { formatDuration, formatInstant, parseAttachmentText } from "../task-detail/utils.ts";
 import { DebateGateControls, DebateProgressBar } from "./DebateControls.tsx";
 import { DebateHandoffBar, DebateHandoffModal, type HandoffChoice } from "./DebateHandoff.tsx";
 import { buildDebateHandoffBody, latestDebateGate } from "./debateHandoff.ts";
@@ -134,6 +136,7 @@ export function DebateView({
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [title, setTitle] = useState(task.title);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const { indicatorForTask } = useTaskReadState(allTasks, task.id);
   useStickToBottom(scrollRef, `${task.id}:${debate.state.turns.length}`);
 
   useEffect(() => setTitle(task.title), [task.id, task.title]);
@@ -151,6 +154,7 @@ export function DebateView({
     .filter((item) => item.mode === "team" && item.originTaskId === task.id)
     .sort((a, b) => timeMs(b.createdAt) - timeMs(a.createdAt))[0], [allTasks, task.id]);
   const display = taskDisplayStatus(task.status, task.stage, !!task.question);
+  const indicator = indicatorForTask(task);
   const action = actionFor(task);
 
   const refreshTask = async () => onTaskUpdated(await api.task(task.id));
@@ -247,7 +251,10 @@ export function DebateView({
           notify={notify}
         />
         <input value={title} aria-label="辩论标题" onChange={(event) => setTitle(event.target.value)} onBlur={() => void commitTitle()} onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); if (event.key === "Escape") { setTitle(task.title); event.currentTarget.blur(); } }} />
-        <span className={`debate-status debate-status--${STATUS_TONES[task.status]}`}><i />{display.label}</span>
+        <span className="debate-status">
+          {indicator && <TaskStatusDot indicator={indicator} surface="team" />}
+          {display.label}
+        </span>
         <TaskTimeMeta task={task} />
         <LegacyLink projectId={task.projectId} taskId={task.id} compact />
         <button type="button" className={action.kind === "stop" ? "is-stop" : "is-primary"} disabled={busy || !action.kind || task.archived} onClick={() => action.kind && void perform(action.kind)}>{busy ? <SpinnerGap size={13} className="is-spinning" /> : action.kind === "stop" ? <Stop size={12} weight="fill" /> : <Play size={12} weight="fill" />}{action.label}</button>
