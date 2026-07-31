@@ -1,5 +1,7 @@
+import type { ChildProcess } from "node:child_process";
 import type { AgentEvent, AgentType, ExecTarget } from "@harness/shared";
 import type { RunTracePaths } from "./diagnostics.js";
+import type { DetachedPaths } from "./detached.js";
 
 export interface RunOpts {
   prompt: string;
@@ -8,6 +10,10 @@ export interface RunOpts {
   model?: string;
   extraArgs?: string[];
   trace?: RunTracePaths;
+  // 非空 = 用「活得过 server 重启」的跑法：stdout/stderr 落到这几个文件而不是
+  // 匿名管道（见 executors/detached.ts）。只有一次性 run() 该传；常驻会话
+  // （openResident）必须保留可写的 stdin，不适用。ssh 目标会自动退回管道。
+  detach?: DetachedPaths;
 }
 
 // A planned invocation: the resolved session id + exact command, plus a live
@@ -19,6 +25,9 @@ export interface RunHandle {
   commandLine: string;
   events: AsyncIterable<AgentEvent>;
   kill(): void;
+  // 只有走了 detach 的这一轮才有：agent 的 pid + 已消费到的字节位置。
+  // 调用方把它们存进 sessions，重启后据此找回并接管这个还活着的进程。
+  detached?: { pid: number; committed: () => number };
 }
 
 // 挂在执行器上的供应商(§5)。非空时启动 CLI 前注入 base_url + key,顶掉 CLI
@@ -69,6 +78,12 @@ export interface AgentExecutor {
   // 存进 sessions.relay_env —— 否则复制出来的命令会走 CLI 自己的官方账号。
   readonly relayEnvHint?: string;
   run(opts: RunOpts): RunHandle;
+  // 重启后接管一个**还活着**的 agent 进程：把它的输出流接回本执行器自己的
+  // parser。child 是 detached.ts 造的合成 ChildProcess（按 pid+offset 接回来的）。
+  // 不实现 = 该执行器不支持接管，重启对它仍是「这一轮被打断」。
+  // 放在接口上而不是让调用方按 agentType 去 switch parser —— 那等于在第三个
+  // 地方再抄一张 CLI 名单（见 server/CLAUDE.md「执行器与模型」）。
+  attach?(child: ChildProcess, opts: { sessionId: string; commandLine: string }): RunHandle;
   // 常驻会话。只有支持中途注入的 CLI 实现它(v1 = claude);codex exec 没有注入
   // 通道,留 undefined —— 团队模式的「调度者」下拉据此过滤(§Team)。
   openResident?(opts: RunOpts): ResidentHandle;

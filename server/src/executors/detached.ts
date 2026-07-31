@@ -22,7 +22,7 @@ import { closeSync, openSync, readFileSync, readSync, existsSync } from "node:fs
 import { join } from "node:path";
 import type { ExecTarget } from "@harness/shared";
 import { isSameProcess } from "../proc.js";
-import { shq, resolveBin, augmentedEnv, failedChild, openTrackFd, registerTrackFd, killChild, killByPid } from "./spawn.js";
+import { shq, resolveBin, augmentedEnv, failedChild, openTrackFd, registerTrackFd, killChild, killByPid, spawnAgent } from "./spawn.js";
 
 // 一次运行的三个落盘文件。rc 是退出码 —— 管道模式下退出码是 close 事件白送的,
 // 换成文件后没人告诉我们了,只能让 shell 跑完自己写一个数字进去。
@@ -256,6 +256,33 @@ export function spawnDetachedAgent(
     },
   });
   return child;
+}
+
+// 各 executor 的 run() 统一走这个入口:给了落盘路径就用「活得过重启」的那条,
+// 没给(或 ssh 目标)就退回原来的匿名管道。放在这里而不是 spawn.ts,是因为
+// detached.ts 已经依赖 spawn.ts,反过来会成环。
+// **常驻会话不要用它** —— openResident 必须保留可写的 stdin。
+export function spawnForRun(
+  target: ExecTarget,
+  cwd: string,
+  bin: string,
+  args: string[],
+  prompt: string,
+  extraEnv?: Record<string, string>,
+  detach?: DetachedPaths,
+): ChildProcess {
+  if (detach && target.kind === "local") {
+    return spawnDetachedAgent(target, cwd, bin, args, prompt, detach, extraEnv);
+  }
+  return spawnAgent(target, cwd, bin, args, prompt, extraEnv);
+}
+
+// 把「这个 child 是不是 detached 的」这一判断收在一处,executor 里不必各写一遍
+// instanceof/鸭子类型试探。
+export function detachedInfo(child: ChildProcess): { pid: number; committed: () => number } | undefined {
+  const c = child as Partial<DetachedChild>;
+  if (typeof c.harnessCommitted !== "function" || !c.pid) return undefined;
+  return { pid: c.pid, committed: c.harnessCommitted };
 }
 
 // 重启后接管一个还活着的 agent。

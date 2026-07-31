@@ -1,7 +1,9 @@
+import type { ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import type { AgentType, ExecTarget } from "@harness/shared";
 import type { AgentExecutor, ExecutorBuildOpts, RelayConfig, RunHandle, RunOpts } from "./types.js";
-import { killChild, redactSecrets, resumeFor, spawnAgent } from "./spawn.js";
+import { spawnForRun, detachedInfo } from "./detached.js";
+import { killChild, redactSecrets, resumeFor } from "./spawn.js";
 import { textParser } from "./catalog/parsers.js";
 import { valueArgs, type CliSpec } from "./catalog/types.js";
 
@@ -53,7 +55,7 @@ export class GenericCliExecutor implements AgentExecutor {
     const commandLine = redactSecrets(
       `${this.bin} ${shown.join(" ")}${stdin ? " <prompt via stdin>" : ""}`,
     );
-    const child = spawnAgent(this.target, opts.cwd, this.bin, args, stdin ? opts.prompt : "", this.env());
+    const child = spawnForRun(this.target, opts.cwd, this.bin, args, stdin ? opts.prompt : "", this.env(), opts.detach);
     const lifecycle = { stopRequested: false };
     const parser = this.spec.exec.parser ?? textParser;
     return {
@@ -64,6 +66,22 @@ export class GenericCliExecutor implements AgentExecutor {
         lifecycle.stopRequested = true;
         killChild(child);
       },
+      detached: detachedInfo(child),
+    };
+  }
+
+  attach(child: ChildProcess, opts: { sessionId: string; commandLine: string }): RunHandle {
+    const lifecycle = { stopRequested: false };
+    const parser = this.spec.exec.parser ?? textParser;
+    return {
+      sessionId: opts.sessionId,
+      commandLine: opts.commandLine,
+      events: parser({ child, bin: this.bin, label: this.label, lifecycle }),
+      kill: () => {
+        lifecycle.stopRequested = true;
+        child.kill();
+      },
+      detached: detachedInfo(child),
     };
   }
 

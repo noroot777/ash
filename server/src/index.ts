@@ -111,11 +111,13 @@ const { startScheduler, api } = await initializeServer().catch((e) =>
 );
 
 async function initializeServer() {
-  const [{ ensureSchema }, { migrateQueues }, { reconcileInterrupted }, schedulesModule, routesModule, stageModule, acceptanceModule, reviewModule] =
+  const [{ ensureSchema }, { migrateQueues }, { reconcileInterrupted }, { reattachRunningTasks }, { sweepRunLogs }, schedulesModule, routesModule, stageModule, acceptanceModule, reviewModule] =
     await Promise.all([
       import("./db/index.js"),
       import("./db/migrateQueues.js"),
       import("./orchestrator.js"),
+      import("./reattach.js"),
+      import("./run-logs-gc.js"),
       import("./schedules.js"),
       import("./routes.js"),
       import("./task-stage.js"),
@@ -125,7 +127,19 @@ async function initializeServer() {
 
   await ensureSchema();
   await migrateQueues(); // 一次性把 legacy depends_on / resume_depends_on 迁到 queue_items（幂等）
+  // **顺序不能反**：先把还活着的 agent 接管回来（它们的输出走文件，压根没随上
+  // 一个 server 进程一起死），再 reconcile 剩下那些真被打断的。反过来的话，一个
+  // 正在干活的 agent 会先被判 failed，用户一点重试就有第二个 agent 进同一个
+  // worktree —— 那是数据损坏，不是显示问题。
+  await reattachRunningTasks();
   await reconcileInterrupted(); // recover tasks left "running"/"queued" by a previous crash/restart
+  // 回收上一轮遗留的原始输出文件（纯传输介质，正文早已进 .md）。放在接管之后：
+  // 它靠 sessions 判断哪些文件仍在用，接管完那份名单才是准的。best-effort。
+  void sweepRunLogs()
+    .then(({ removed, bytes }) => {
+      if (removed) console.log(`[harness] 回收 ${removed} 个已结束运行的原始输出文件（${(bytes / 1048576).toFixed(1)} MB）`);
+    })
+    .catch((err) => console.error("[harness] 原始输出文件回收失败（不影响运行）:", err));
   stageModule.mountTaskStageRoutes(routesModule.api);
   acceptanceModule.mountTaskAcceptanceRoutes(routesModule.api);
   reviewModule.mountReviewRoutes(routesModule.api);
