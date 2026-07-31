@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>置顶与已转任务标识 · 静态方案对照</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --font-sans: "Inter Variable", "Inter", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      --font-mono: ui-monospace, "SFMono-Regular", Consolas, monospace;
+      --chrome: lch(94.44% .5 282);
+      --canvas: lch(97.94% .5 282);
+      --panel: lch(100% 0 282);
+      --raised: lch(96.914% 0 282);
+      --overlay: lch(95.886% 0 282);
+      --line: lch(90.55% 0 282);
+      --line2: lch(86.5% 0 282);
+      --ink: lch(9.794% 0 282);
+      --muted: lch(39.176% 1.25 282);
+      --faint: lch(64.64% 1.25 282);
+      --accent: #5e6ad2;
+      --accent-soft: lch(92.5% 12 286);
+      --green: #168466;
+      --green-bg: #e3f4ed;
+      --hover-bg: lch(91.64% .5 282);
+      --sel-bg: lch(89.54% .5 282);
+      --surface-shadow: lch(0 0 0 / .02) 0 3px 6px -2px, lch(0 0 0 / .04) 0 1px 1px;
+      --control-shadow: lch(0 0 0 / .103) 0 0 0 1px, var(--surface-shadow);
+      --menu-shadow: lch(0 0 0 / .02) 0 6px 18px, lch(0 0 0 / .04) 0 3px 9px, lch(0 0 0 / .04) 0 1px 1px;
+    }
+
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--chrome); color: var(--ink); font-family: var(--font-sans); font-size: 13px; font-weight: 450; line-height: 1.5; -webkit-font-smoothing: antialiased; font-feature-settings: "cv11", "ss01"; }
+    button { font: inherit; color: inherit; cursor: pointer; }
+    svg { display: block; }
+    .icon { width: 1em; height: 1em; flex: 0 0 auto; }
+    .page { width: min(1380px, calc(100% - 40px)); margin: 0 auto; padding: 38px 0 64px; }
+    .page-head { display: flex; align-items: end; justify-content: space-between; gap: 24px; margin-bottom: 28px; }
+    .eyebrow { margin: 0 0 4px; color: var(--faint); font-family: var(--font-mono); font-size: 9.5px; font-weight: 650; letter-spacing: .08em; text-transform: uppercase; }
+    h1 { margin: 0; font-size: 22px; font-weight: 650; letter-spacing: -.025em; }
+    .page-head > p { max-width: 540px; margin: 0; color: var(--muted); font-size: 11.5px; text-align: right; }
+    .token-note { display: inline-flex; align-items: center; gap: 6px; margin-top: 9px; color: var(--faint); font-size: 10px; }
+    .token-note i { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+    .section { margin-top: 34px; }
+    .section-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 11px; }
+    .section-head h2 { margin: 0; font-size: 14px; font-weight: 650; }
+    .section-head span { color: var(--faint); font-size: 10.5px; }
+    .variant-stack { display: grid; gap: 12px; }
+    .variant { overflow: hidden; border: 1px solid var(--line2); border-radius: 11px; background: var(--panel); box-shadow: 0 1px 2px rgb(30 32 38 / 4%); }
+    .variant > header { display: flex; align-items: baseline; gap: 8px; border-bottom: .5px solid var(--line); padding: 9px 12px; }
+    .variant > header b { font-size: 11.5px; font-weight: 650; }
+    .variant > header span { color: var(--faint); font-size: 10px; }
+    .recommend { margin-left: auto; border-radius: 4px; background: color-mix(in lch, var(--accent) 9%, var(--raised)); padding: 1px 6px; color: var(--accent) !important; font-size: 9px !important; font-weight: 650; }
+    .compare { display: grid; grid-template-columns: minmax(330px, .78fr) minmax(500px, 1.22fr); }
+    .compare-cell { min-width: 0; padding: 12px; }
+    .compare-cell + .compare-cell { border-left: .5px solid var(--line); background: color-mix(in lch, var(--canvas) 72%, var(--panel)); }
+    .cell-label { display: flex; align-items: center; justify-content: space-between; margin: 0 0 7px; color: var(--faint); font-size: 9px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; }
+    .cell-label small { font-weight: 450; letter-spacing: 0; text-transform: none; }
+
+    /* 随手记列表仿真：尺寸直接来自 overlays.css。 */
+    .notes-surface { overflow: hidden; border: 1px solid var(--line); border-radius: 9px; background: color-mix(in lch, var(--chrome) 76%, var(--panel)); }
+    .notes-toolbar { display: flex; height: 40px; align-items: center; gap: 6px; border-bottom: 1px solid var(--line); padding: 6px 8px; }
+    .search-shell { display: flex; height: 28px; flex: 1; align-items: center; gap: 6px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); padding: 0 8px; color: var(--faint); font-size: 10px; }
+    .notes-list { padding: 5px; }
+    .note-row { position: relative; display: grid; width: 100%; min-height: 47px; grid-template-columns: 18px minmax(0, 1fr) auto; align-items: center; gap: 7px; border-radius: 8px; padding: 6px 9px; transition: background-color 150ms ease-out; }
+    .note-row + .note-row { margin-top: 2px; }
+    .note-check { display: grid; width: 14px; height: 14px; place-items: center; border: 1px solid var(--line2); border-radius: 4px; background: var(--panel); }
+    .note-copy { display: grid; min-width: 0; }
+    .note-copy b { overflow: hidden; font-size: 11px; font-weight: 550; text-overflow: ellipsis; white-space: nowrap; }
+    .note-copy small { color: var(--faint); font-size: 9px; }
+    .note-row.muted-row { background: transparent; }
+    .note-row.muted-row:hover { background: var(--hover-bg); }
+    .note-row.muted-row + .note-row .note-copy { opacity: .76; }
+    .current-converted { background: color-mix(in lch, var(--green-bg) 42%, var(--panel)); box-shadow: inset 3px 0 var(--green); }
+    .current-converted .note-copy { opacity: .56; }
+    .current-converted .note-copy b { text-decoration: line-through; text-decoration-color: color-mix(in lch, var(--muted) 65%, transparent); }
+    .current-badge { display: inline-flex; height: 25px; align-items: center; gap: 3px; border: 1px solid color-mix(in lch, var(--green) 42%, var(--line)); border-radius: 999px; background: var(--green-bg); padding: 0 7px; color: var(--green); font-size: 9px; font-weight: 700; white-space: nowrap; }
+
+    .note-proposal .note-copy { opacity: .72; }
+    .note-mark { display: inline-flex; height: 22px; align-items: center; gap: 4px; border: 0; background: transparent; padding: 0 2px; color: var(--faint); font-size: 9px; font-weight: 550; white-space: nowrap; }
+    .note-mark .out { width: 0; opacity: 0; transform: translateX(-3px); transition: width 150ms ease, opacity 150ms ease, transform 150ms ease; }
+    .note-proposal:hover .note-mark { color: var(--accent); }
+    .note-proposal:hover .note-mark .out { width: 10px; opacity: 1; transform: none; }
+    .note-meta-mark { gap: 3px; }
+    .note-meta-mark .note-copy { opacity: 1; }
+    .note-meta-mark .meta-line { display: flex; align-items: center; gap: 5px; color: var(--faint); font-size: 9px; }
+    .note-meta-mark .task-link { display: inline-flex; align-items: center; gap: 3px; border: 0; background: transparent; padding: 0; color: var(--faint); font-size: 9px; }
+    .note-meta-mark:hover .task-link { color: var(--accent); }
+    .quiet-pill { display: inline-flex; height: 21px; align-items: center; gap: 4px; border: 1px solid var(--line); border-radius: 999px; background: var(--panel); padding: 0 6px; color: var(--faint); font-size: 9px; font-weight: 550; white-space: nowrap; transition: border-color 150ms ease, color 150ms ease, background 150ms ease; }
+    .note-proposal:hover .quiet-pill { border-color: color-mix(in lch, var(--accent) 28%, var(--line)); background: color-mix(in lch, var(--accent) 4%, var(--panel)); color: var(--accent); }
+
+    /* 任务头仿真：44px 高、8px 间距、徽章与标题字号/字重来自 task-detail.css。 */
+    .pin-compare { grid-template-columns: minmax(320px, .68fr) minmax(650px, 1.32fr); }
+    .task-frame { position: relative; min-width: 0; padding-bottom: 2px; }
+    .task-header { display: flex; height: 44px; align-items: center; gap: 8px; border: .5px solid var(--line); border-radius: 8px; background: var(--canvas); padding: 0 10px 0 14px; }
+    .task-kind { flex: 0 0 auto; border-radius: 5px; background: var(--raised); padding: 2px 7px; color: var(--muted); font-size: 9.5px; font-weight: 750; }
+    .task-title { min-width: 90px; flex: 1; overflow: hidden; border-radius: 5px; padding: 3px 5px; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; font-weight: 600; }
+    .task-status { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 5px; border-radius: 999px; padding: 3px 5px; color: var(--green); font-size: 10px; font-weight: 650; }
+    .task-status i { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+    .task-time { flex: 0 0 auto; color: var(--faint); font-family: var(--font-mono); font-size: 9.5px; }
+    .primary, .dots { display: inline-flex; height: 28px; align-items: center; justify-content: center; border: 1px solid transparent; border-radius: 8px; }
+    .primary { gap: 5px; background: var(--accent); padding: 0 10px; color: #fff; font-size: 11.5px; font-weight: 600; box-shadow: 0 1px 2px rgb(40 42 48 / 12%); }
+    .dots { width: 28px; background: var(--panel); padding: 0; color: var(--muted); box-shadow: var(--control-shadow); }
+    .overflow-menu { width: 190px; margin: 5px 0 0 auto; border: 1px solid var(--line2); border-radius: 10px; background: var(--panel); padding: 5px; box-shadow: var(--menu-shadow); }
+    .overflow-menu p { display: flex; height: 30px; align-items: center; gap: 9px; margin: 0; border-radius: 6px; padding: 0 8px; color: var(--muted); font-size: 11.5px; }
+    .overflow-menu p:first-child { background: var(--raised); color: var(--ink); }
+    .states { display: grid; grid-template-columns: repeat(3, minmax(205px, 1fr)); gap: 8px; }
+    .state > span { display: block; margin-bottom: 5px; color: var(--faint); font-size: 9px; }
+    .state .task-header { gap: 6px; padding-left: 10px; }
+    .state .task-status, .state .task-time, .state .primary { display: none; }
+    .pin-button { display: grid; flex: 0 0 auto; place-items: center; border: 0; background: transparent; padding: 0; color: color-mix(in lch, var(--faint) 74%, transparent); transition: color 150ms ease, background-color 150ms ease, box-shadow 150ms ease, transform 150ms ease; }
+    .pin-button:hover, .pin-button.is-hover { color: var(--muted); }
+    .pin-button.is-pinned { color: color-mix(in lch, var(--accent) 86%, var(--muted)); }
+    .pin-a { width: 22px; height: 22px; border-radius: 6px; font-size: 14px; }
+    .pin-a:hover, .pin-a.is-hover { background: var(--raised); }
+    .pin-b { width: 24px; height: 24px; border-radius: 50%; font-size: 13px; }
+    .pin-b:hover, .pin-b.is-hover { background: var(--overlay); color: var(--ink); box-shadow: inset 0 0 0 1px var(--line); }
+    .pin-b.is-pinned { background: color-mix(in lch, var(--accent) 9%, var(--panel)); box-shadow: inset 0 0 0 1px color-mix(in lch, var(--accent) 18%, var(--line)); }
+    .pin-c { position: relative; width: 19px; height: 28px; border-radius: 4px; font-size: 12px; }
+    .pin-c:hover, .pin-c.is-hover { color: var(--ink); transform: translateY(-1px); }
+    .pin-c.is-pinned { color: color-mix(in lch, var(--accent) 78%, var(--muted)); }
+    .pin-c::after { content: ""; position: absolute; width: 0; height: 2px; margin-top: 20px; border-radius: 999px; background: currentColor; opacity: 0; transition: width 150ms ease, opacity 150ms ease; }
+    .pin-c.is-hover::after, .pin-c:hover::after, .pin-c.is-pinned::after { width: 10px; opacity: .55; }
+    .pin-svg { width: 1em; height: 1em; }
+    .pin-button .fill-shape { display: none; }
+    .pin-button.is-pinned .outline-shape { display: none; }
+    .pin-button.is-pinned .fill-shape { display: block; }
+    .mini-tip { margin: 8px 0 0; color: var(--faint); font-size: 9.5px; }
+
+    @media (max-width: 980px) {
+      .page { width: min(100% - 24px, 760px); padding-top: 24px; }
+      .page-head { align-items: flex-start; flex-direction: column; }
+      .page-head > p { text-align: left; }
+      .compare, .pin-compare { grid-template-columns: 1fr; }
+      .compare-cell + .compare-cell { border-top: .5px solid var(--line); border-left: 0; }
+      .states { overflow-x: auto; padding-bottom: 3px; }
+    }
+    @media (max-width: 560px) {
+      .page { width: calc(100% - 16px); }
+      .variant > header { align-items: flex-start; flex-wrap: wrap; }
+      .recommend { margin-left: 0; }
+      .compare-cell { padding: 9px; }
+      .note-row { grid-template-columns: 18px minmax(0, 1fr); }
+      .current-badge, .note-mark, .quiet-pill { grid-column: 2; justify-self: start; }
+    }
+    @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition-duration: .01ms !important; } }
+  </style>
+</head>
+<body>
+  <svg width="0" height="0" aria-hidden="true" style="position:absolute">
+    <defs>
+      <symbol id="search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="m16 16 4 4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></symbol>
+      <symbol id="check-circle" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="currentColor" opacity=".14"/><circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="m8.2 12.2 2.5 2.5 5.3-5.4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+      <symbol id="arrow-out" viewBox="0 0 24 24"><path d="M14 5h5v5M19 5l-8 8" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/><path d="M18 13v5a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></symbol>
+      <symbol id="dots" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.6" fill="currentColor"/><circle cx="12" cy="12" r="1.6" fill="currentColor"/><circle cx="19" cy="12" r="1.6" fill="currentColor"/></symbol>
+      <symbol id="play" viewBox="0 0 24 24"><path d="m8 5 11 7-11 7Z" fill="currentColor"/></symbol>
+      <symbol id="pin-outline" viewBox="0 0 24 24"><g transform="rotate(45 12 12)" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3h6l-1 6 3 3v2H7v-2l3-3-1-6Z"/><path d="M12 14v7"/></g></symbol>
+      <symbol id="pin-fill" viewBox="0 0 24 24"><g transform="rotate(45 12 12)"><path d="M9 3h6l-1 6 3 3v2H7v-2l3-3-1-6Z" fill="currentColor"/><path d="M12 13v8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></g></symbol>
+    </defs>
+  </svg>
+
+  <main class="page">
+    <header class="page-head">
+      <div><p class="eyebrow">web-next · visual review</p><h1>置顶控件与「已转任务」标识</h1><span class="token-note"><i></i>完全沿用现有页面 token、字体与控件尺度</span></div>
+      <p>目标是减少状态色面积，让信息层级回到内容本身。所有方案都保留明确的任务回链与键盘可聚焦区域；悬停下面的方案可查看真实反馈。</p>
+    </header>
+
+    <section class="section">
+      <div class="section-head"><h2>01 · 随手记列表</h2><span>每个方案左侧均为当前样式，右侧为减法后的提案。</span></div>
+      <div class="variant-stack">
+        <article class="variant">
+          <header><b>A · 灰阶附注</b><span>去掉底色、侧条和删除线，只轻度降灰；回链在 hover 时显系统强调色。</span><span class="recommend">推荐</span></header>
+          <div class="compare">
+            <div class="compare-cell"><p class="cell-label">现状 <small>多重绿色信号叠加</small></p><div class="notes-surface"><div class="notes-toolbar"><span class="search-shell"><svg class="icon"><use href="#search"/></svg>搜索随手记…</span></div><div class="notes-list"><div class="note-row current-converted"><span class="note-check"></span><span class="note-copy"><b>确认停止全组后的状态反馈</b><small>7月31日 14:26</small></span><span class="current-badge"><svg class="icon" style="font-size:12px"><use href="#check-circle"/></svg>已转任务<svg class="icon" style="font-size:11px"><use href="#arrow-out"/></svg></span></div><div class="note-row muted-row"><span class="note-check"></span><span class="note-copy"><b>补充置顶任务的入口说明</b><small>7月31日 13:48</small></span></div></div></div></div>
+            <div class="compare-cell"><p class="cell-label">方案 A <small>悬停第一行查看回链反馈</small></p><div class="notes-surface"><div class="notes-toolbar"><span class="search-shell"><svg class="icon"><use href="#search"/></svg>搜索随手记…</span></div><div class="notes-list"><div class="note-row note-proposal"><span class="note-check"></span><span class="note-copy"><b>确认停止全组后的状态反馈</b><small>7月31日 14:26</small></span><button class="note-mark"><svg class="icon" style="font-size:12px"><use href="#check-circle"/></svg>已转任务<svg class="icon out"><use href="#arrow-out"/></svg></button></div><div class="note-row muted-row"><span class="note-check"></span><span class="note-copy"><b>补充置顶任务的入口说明</b><small>7月31日 13:48</small></span></div></div></div></div>
+          </div>
+        </article>
+
+        <article class="variant">
+          <header><b>B · 元信息回链</b><span>标题保持原强度，把状态并入时间行；最安静，但“已转”扫读速度略慢。</span></header>
+          <div class="compare">
+            <div class="compare-cell"><p class="cell-label">现状 <small>行背景与徽章抢占注意力</small></p><div class="notes-surface"><div class="notes-toolbar"><span class="search-shell"><svg class="icon"><use href="#search"/></svg>搜索随手记…</span></div><div class="notes-list"><div class="note-row current-converted"><span class="note-check"></span><span class="note-copy"><b>确认停止全组后的状态反馈</b><small>7月31日 14:26</small></span><span class="current-badge"><svg class="icon" style="font-size:12px"><use href="#check-circle"/></svg>已转任务<svg class="icon" style="font-size:11px"><use href="#arrow-out"/></svg></span></div><div class="note-row muted-row"><span class="note-check"></span><span class="note-copy"><b>补充置顶任务的入口说明</b><small>7月31日 13:48</small></span></div></div></div></div>
+            <div class="compare-cell"><p class="cell-label">方案 B <small>状态成为标题的次级注释</small></p><div class="notes-surface"><div class="notes-toolbar"><span class="search-shell"><svg class="icon"><use href="#search"/></svg>搜索随手记…</span></div><div class="notes-list"><div class="note-row note-meta-mark"><span class="note-check"></span><span class="note-copy"><b>确认停止全组后的状态反馈</b><small class="meta-line">7月31日 14:26 · <button class="task-link"><svg class="icon" style="font-size:10px"><use href="#check-circle"/></svg>已转任务 <svg class="icon"><use href="#arrow-out"/></svg></button></small></span></div><div class="note-row muted-row"><span class="note-check"></span><span class="note-copy"><b>补充置顶任务的入口说明</b><small>7月31日 13:48</small></span></div></div></div></div>
+          </div>
+        </article>
+
+        <article class="variant">
+          <header><b>C · 细线胶囊</b><span>保留熟悉的徽章轮廓，但改为中性灰和透明底；迁移成本最低。</span></header>
+          <div class="compare">
+            <div class="compare-cell"><p class="cell-label">现状 <small>强调色面积偏大</small></p><div class="notes-surface"><div class="notes-toolbar"><span class="search-shell"><svg class="icon"><use href="#search"/></svg>搜索随手记…</span></div><div class="notes-list"><div class="note-row current-converted"><span class="note-check"></span><span class="note-copy"><b>确认停止全组后的状态反馈</b><small>7月31日 14:26</small></span><span class="current-badge"><svg class="icon" style="font-size:12px"><use href="#check-circle"/></svg>已转任务<svg class="icon" style="font-size:11px"><use href="#arrow-out"/></svg></span></div><div class="note-row muted-row"><span class="note-check"></span><span class="note-copy"><b>补充置顶任务的入口说明</b><small>7月31日 13:48</small></span></div></div></div></div>
+            <div class="compare-cell"><p class="cell-label">方案 C <small>悬停才出现淡紫回链色</small></p><div class="notes-surface"><div class="notes-toolbar"><span class="search-shell"><svg class="icon"><use href="#search"/></svg>搜索随手记…</span></div><div class="notes-list"><div class="note-row note-proposal"><span class="note-check"></span><span class="note-copy"><b>确认停止全组后的状态反馈</b><small>7月31日 14:26</small></span><button class="quiet-pill"><svg class="icon" style="font-size:11px"><use href="#check-circle"/></svg>已转任务 <svg class="icon"><use href="#arrow-out"/></svg></button></div><div class="note-row muted-row"><span class="note-check"></span><span class="note-copy"><b>补充置顶任务的入口说明</b><small>7月31日 13:48</small></span></div></div></div></div>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="section-head"><h2>02 · 任务详情头部置顶</h2><span>图钉固定插在类型徽章与标题之间；每组展示未置顶、hover、已置顶。</span></div>
+      <div class="variant-stack">
+        <article class="variant">
+          <header><b>A · 22px 裸图钉</b><span>命中区足够但无常驻底色；已置顶仅用低饱和强调色填充。</span><span class="recommend">推荐</span></header>
+          <div class="compare pin-compare">
+            <div class="compare-cell"><p class="cell-label">现状 <small>置顶藏在三点菜单</small></p><div class="task-frame"><div class="task-header"><span class="task-kind">团队</span><span class="task-title">修正暂停后的持久状态反馈</span><span class="task-status"><i></i>运行中</span><button class="dots"><svg class="icon" style="font-size:18px"><use href="#dots"/></svg></button></div><div class="overflow-menu"><p><svg class="icon" style="font-size:14px"><use href="#pin-outline"/></svg>置顶</p><p>归档任务</p></div></div></div>
+            <div class="compare-cell"><p class="cell-label">方案 A <small>最接近现有头部的自然增量</small></p><div class="states"><div class="state"><span>未置顶</span><div class="task-header"><span class="task-kind">团队</span><button class="pin-button pin-a"><svg class="pin-svg outline-shape"><use href="#pin-outline"/></svg><svg class="pin-svg fill-shape"><use href="#pin-fill"/></svg></button><span class="task-title">修正暂停后的持久状态反馈</span><button class="dots"><svg class="icon" style="font-size:18px"><use href="#dots"/></svg></button></div></div><div class="state"><span>Hover</span><div class="task-header"><span class="task-kind">团队</span><button class="pin-button pin-a is-hover"><svg class="pin-svg outline-shape"><use href="#pin-outline"/></svg><svg class="pin-svg fill-shape"><use href="#pin-fill"/></svg></button><span class="task-title">修正暂停后的持久状态反馈</span><button class="dots"><svg class="icon" style="font-size:18px"><use href="#dots"/></svg></button></div></div><div class="state"><span>已置顶</span><div class="task-header"><span class="task-kind">团队</span><button class="pin-button pin-a is-pinned"><svg class="pin-svg outline-shape"><use href="#pin-outline"/></svg><svg class="pin-svg fill-shape"><use href="#pin-fill"/></svg></button><span class="task-title">修正暂停后的持久状态反馈</span><button class="dots"><svg class="icon" style="font-size:18px"><use href="#dots"/></svg></button></div></div></div><p class="mini-tip">建议实现：默认约 45% faint；hover 使用 raised 底；pinned 为 accent 与 muted 混合后的 fill。</p></div>
+          </div>
+        </article>
+
+        <article class="variant">
+          <header><b>B · 24px 微圆片</b><span>hover 与已置顶都有很淡的圆形承托，状态更明确，但会略增加控件感。</span></header>
+          <div class="compare pin-compare">
+            <div class="compare-cell"><p class="cell-label">现状 <small>发现成本高，状态不可见</small></p><div class="task-frame"><div class="task-header"><span class="task-kind">团队</span><span class="task-title">修正暂停后的持久状态反馈</span><span class="task-status"><i></i>运行中</span><button class="dots"><svg class="icon" style="font-size:18px"><use href="#dots"/></svg></button></div><div class="overflow-menu"><p><svg class="icon" style="font-size:14px"><use href="#pin-outline"/></svg>置顶</p><p>归档任务</p></div></div></div>
+            <div class="compare-cell"><p class="cell-label">方案 B <small>更像独立开关，识别最清楚</small></p><div class="states"><div class="state"><span>未置顶</span><div class="task-header"><span class="task-kind">团队</span><button class="pin-button pin-b"><svg class="pin-svg outline-shape"><use href="#pin-outline"/></svg><svg class="pin-svg fill-shape"><use href="#pin-fill"/></svg></button><span class="task-title">修正暂停后的持久状态反馈</span><button class="dots"><svg class="icon" style="font-size:18px"><use href="#dots"/></svg></button></div></div><div class="state"><span>Hover</span><div class="task-header"><span class="task-kind">团队</span><button class="pin-button pin-b is-hover"><svg class="pin-svg outline-shape"><use href="#pin-outline"/></svg><svg class="pin-svg fill-shape"><use href="#pin-fill"/></svg></button><span class="task-title">修正暂停后的持久状态反馈</span><button class="dots"><svg class="icon" style="font-size:18px"><use href="#dots"/></svg></button></div></div><div class="state"><span>已置顶</span><div class="task-header"><span class="task-kind">团队</span><button class="pin-button pin-b is-pinned"><svg class="pin-svg outline-shape"><use href="#pin-outline"/></svg><svg class="pin-svg fill-shape"><use href="#pin-fill"/></svg></button><span class="task-title">修正暂停后的持久状态反馈</span><button class="dots"><svg class="icon" style="font-size:18px"><use href="#dots"/></svg></button></div></div></div><p class="mini-tip">圆片只在交互与已置顶时出现；未置顶保持透明，避免头部常驻一排按钮。</p></div>
+          </div>
+        </article>
+
+        <article class="variant">
+          <header><b>C · 19px 极简图钉</b><span>最省横向空间，用一条 2px 短线辅助 hover/置顶反馈；细腻但命中区最紧。</span></header>
+          <div class="compare pin-compare">
+            <div class="compare-cell"><p class="cell-label">现状 <small>标题旁没有置顶状态线索</small></p><div class="task-frame"><div class="task-header"><span class="task-kind">团队</span><span class="task-title">修正暂停后的持久状态反馈</span><span class="task-status"><i></i>运行中</span><button class="dots"><svg class="icon" style="font-size:18px"><use href="#dots"/></svg></button></div><div class="overflow-menu"><p><svg class="icon" style="font-size:14px"><use href="#pin-outline"/></svg>置顶</p><p>归档任务</p></div></div></div>
+            <div class="compare-cell"><p class="cell-label">方案 C <small>最轻，但不建议缩得更小</small></p><div class="states"><div class="state"><span>未置顶</span><div class="task-header"><span class="task-kind">团队</span><button class="pin-button pin-c"><svg class="pin-svg outline-shape"><use href="#pin-outline"/></svg><svg class="pin-svg fill-shape"><use href="#pin-fill"/></svg></button><span class="task-title">修正暂停后的持久状态反馈</span><button class="dots"><svg class="icon" style="font-size:18px"><use href="#dots"/></svg></button></div></div><div class="state"><span>Hover</span><div class="task-header"><span class="task-kind">团队</span><button class="pin-button pin-c is-hover"><svg class="pin-svg outline-shape"><use href="#pin-outline"/></svg><svg class="pin-svg fill-shape"><use href="#pin-fill"/></svg></button><span class="task-title">修正暂停后的持久状态反馈</span><button class="dots"><svg class="icon" style="font-size:18px"><use href="#dots"/></svg></button></div></div><div class="state"><span>已置顶</span><div class="task-header"><span class="task-kind">团队</span><button class="pin-button pin-c is-pinned"><svg class="pin-svg outline-shape"><use href="#pin-outline"/></svg><svg class="pin-svg fill-shape"><use href="#pin-fill"/></svg></button><span class="task-title">修正暂停后的持久状态反馈</span><button class="dots"><svg class="icon" style="font-size:18px"><use href="#dots"/></svg></button></div></div></div><p class="mini-tip">视觉最克制，但真实实现仍建议保留至少 22px 可点击区域，把 19px 仅作为视觉占位宽度。</p></div>
+          </div>
+        </article>
+      </div>
+    </section>
+  </main>
+</body>
+</html>
