@@ -7,6 +7,7 @@ import { SessionMeta } from "../components/SessionMeta.tsx";
 import type { InspectorDescriptor } from "../inspector/index.ts";
 import type { IndicatorForTask } from "../lib/useTaskReadState.ts";
 import { MessageAttachments } from "../task-detail/Attachments.tsx";
+import { TaskTimeMeta } from "../task-detail/TaskTimeMeta.tsx";
 import { parseAttachmentText } from "../task-detail/utils.ts";
 import { TeamTimeline } from "./TeamTimeline.tsx";
 import { WorkerRail } from "./WorkerRail.tsx";
@@ -26,6 +27,7 @@ export interface TeamInspectorContext {
   selectedWorkerId: string | null;
   onSelectWorker: (taskId: string) => void;
   indicatorForTask: IndicatorForTask;
+  workerLiveLines: Record<string, string>;
 }
 
 function ConfigValue({ label, value }: { label: string; value: string }) {
@@ -112,18 +114,21 @@ function TeamInfoPanel({ task, workers, sessions }: Pick<TeamInspectorContext, "
           {task.worktreeBase && <ConfigValue label="合入目标" value={task.worktreeBase} />}
         </dl>
         {latestSession && <SessionMeta session={latestSession} />}
+        <TaskTimeMeta task={task} />
       </section>
 
       <ImagePreviewGroup isolated>
-        <section className="team-info-panel__section team-info-panel__objective">
-          <h2>原始需求</h2>
-          {objective.body || objective.paths.length > 0 ? (
-            <>
-              {objective.body && <MarkdownBody text={objective.body} />}
-              <MessageAttachments paths={objective.paths} />
-            </>
-          ) : <p className="team-info-panel__empty">未记录原始需求。</p>}
-        </section>
+        <details className="team-info-panel__section team-info-panel__objective">
+          <summary>原始需求</summary>
+          <div className="team-info-panel__objective-body">
+            {objective.body || objective.paths.length > 0 ? (
+              <>
+                {objective.body && <MarkdownBody text={objective.body} />}
+                <MessageAttachments paths={objective.paths} />
+              </>
+            ) : <p className="team-info-panel__empty">未记录原始需求。</p>}
+          </div>
+        </details>
       </ImagePreviewGroup>
     </div>
   );
@@ -142,6 +147,7 @@ export const TEAM_INSPECTORS: readonly InspectorDescriptor<TeamInspectorContext>
         selectedId={context.selectedWorkerId}
         onSelect={context.onSelectWorker}
         indicatorForTask={context.indicatorForTask}
+        liveLines={context.workerLiveLines}
       />
     ),
   },

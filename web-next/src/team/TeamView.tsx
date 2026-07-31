@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { Group, Task } from "@harness/shared";
+import type { AgentEvent, Group, Task } from "@harness/shared";
 import { batchesOf, mergeFeed, teamGroupsOf, workerHaltStats, workersOf } from "@harness/shared/team";
 import { ArrowSquareOut, Broom, PaperPlaneTilt, SpinnerGap, WarningCircle, X } from "@phosphor-icons/react";
 import { InspectorHost } from "../inspector/index.ts";
 import { api, type TeamCuaStatus } from "../lib/api.ts";
 import { OriginTaskBar } from "../components/TaskOrigin.tsx";
 import { useConversation } from "../lib/useConversation.ts";
+import { useServerEvents } from "../lib/events.ts";
 import { useTaskReadState } from "../lib/useTaskReadState.ts";
 import { AttachmentPicker, UploadAttachmentList, useAttachments } from "../task-detail/Attachments.tsx";
 import { QuestionCard } from "../task-detail/QuestionCard.tsx";
@@ -17,6 +18,42 @@ import { TeamHeader } from "./TeamHeader.tsx";
 import { TEAM_INSPECTORS, type TeamInspectorContext } from "./TeamInspector.tsx";
 import { TeamReviewWorkspace } from "./TeamReviewWorkspace.tsx";
 import { activeTeamHaltMarker, leadTurns, teamFeedOptions } from "./teamModel.ts";
+
+function liveLineForEvent(event: AgentEvent, textBuffer: string): string | null {
+  if (event.kind === "text") {
+    return textBuffer.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).at(-1) ?? null;
+  }
+  if (event.kind === "tool") return `⚙ ${event.name || "tool"}`;
+  if (event.kind === "error") return `✕ ${event.message}`;
+  return null;
+}
+
+function useWorkerLiveLines(teamId: string, workers: Task[]) {
+  const [lines, setLines] = useState<Record<string, string>>({});
+  const textBuffers = useRef<Record<string, string>>({});
+  const workerIds = useMemo(() => new Set(workers.map((worker) => worker.id)), [workers]);
+
+  useEffect(() => {
+    textBuffers.current = {};
+    setLines({});
+  }, [teamId]);
+
+  useServerEvents(useCallback((event) => {
+    if (event.type !== "agent.event" || !workerIds.has(event.taskId)) return;
+    let textBuffer = textBuffers.current[event.taskId] ?? "";
+    if (event.event.kind === "text") {
+      textBuffer = `${textBuffer}${event.event.text}`.slice(-4000);
+      textBuffers.current[event.taskId] = textBuffer;
+    }
+    const line = liveLineForEvent(event.event, textBuffer);
+    if (!line) return;
+    setLines((current) => current[event.taskId] === line
+      ? current
+      : { ...current, [event.taskId]: line });
+  }, [workerIds]));
+
+  return lines;
+}
 
 function TeamReplyBox({
   task,
@@ -201,6 +238,7 @@ export function TeamView({
   const { indicatorForTask, markTaskRead } = useTaskReadState(allTasks, task.id);
   const conversation = useConversation(task.id);
   const workers = useMemo(() => workersOf(allTasks, task.id), [allTasks, task.id]);
+  const workerLiveLines = useWorkerLiveLines(task.id, workers);
   const teamGroups = useMemo(() => teamGroupsOf(groups, task.id, workers), [groups, task.id, workers]);
   const batches = useMemo(() => batchesOf(workers, teamGroups), [teamGroups, workers]);
   const rows = useMemo(() => mergeFeed(conversation.items, batches, teamFeedOptions()), [batches, conversation.items]);
@@ -300,6 +338,7 @@ export function TeamView({
         selectedWorkerId,
         onSelectWorker: selectWorker,
         indicatorForTask,
+        workerLiveLines,
       } satisfies TeamInspectorContext}
     >
       {({ toggleButton }) => <div className="team-view">

@@ -18,12 +18,14 @@ export function WorkerRail({
   selectedId,
   onSelect,
   indicatorForTask,
+  liveLines,
 }: {
   workers: Task[];
   groups: Group[];
   selectedId: string | null;
   onSelect: (taskId: string) => void;
   indicatorForTask: IndicatorForTask;
+  liveLines: Record<string, string>;
 }) {
   const groupById = useMemo(() => new Map(groups.map((group) => [group.id, group])), [groups]);
   return (
@@ -34,6 +36,7 @@ export function WorkerRail({
         const paused = !!(worker.groupId && groupById.get(worker.groupId)?.paused);
         const duration = elapsed(worker);
         const indicator = indicatorForTask(worker);
+        const liveLine = liveLines[worker.id];
         return (
           <button
             type="button"
@@ -48,7 +51,8 @@ export function WorkerRail({
               <kbd>{index < 9 ? index + 1 : ""}</kbd>
             </div>
             <small>{workerStatusText(worker, paused)}{duration ? ` · ${duration}` : ""}</small>
-            {worker.question && <p>{worker.question}</p>}
+            {worker.question && <p className="team-worker-rail__question">{worker.question}</p>}
+            {liveLine && <p className="team-worker-rail__live" title={liveLine}>{liveLine}</p>}
           </button>
         );
       })}

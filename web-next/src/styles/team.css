@@ -120,7 +120,8 @@
 .team-worker-rail > button code { max-width: 84px; overflow: hidden; border: 1px solid var(--line); border-radius: 4px; padding: 0 3px; color: var(--muted); font-size: 8.5px; text-overflow: ellipsis; white-space: nowrap; }
 .team-worker-rail > button kbd { width: 12px; color: var(--faint); font-family: var(--font-mono); font-size: 9px; text-align: center; }
 .team-worker-rail > button > small { display: block; margin-top: 4px; color: var(--faint); font-size: 10px; }
-.team-worker-rail > button > p { display: -webkit-box; overflow: hidden; margin: 4px 0 0; color: var(--cyan); font-size: 10px; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.team-worker-rail__question { display: -webkit-box; overflow: hidden; margin: 4px 0 0; color: var(--cyan); font-size: 10px; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.team-worker-rail__live { overflow: hidden; margin: 4px 0 0; color: var(--muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 
 .team-reply-shell { flex: 0 0 auto; border-top: .5px solid var(--line); padding: 9px clamp(14px,3vw,34px) 12px; background: var(--canvas); }
 .team-reply-shell > p { margin: 0 0 5px; color: var(--red); font-size: 10.5px; }
