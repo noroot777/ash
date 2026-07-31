@@ -127,12 +127,13 @@ export function TaskInspector({
   allTasks: Task[];
   onOpenTask: (taskId: string) => void;
   onPatch: (patch: Partial<Task>) => Promise<void>;
-  onQueueChanged: () => void;
+  onQueueChanged: (updatedTask?: Task) => void;
   notify: (message: string) => void;
 }) {
   const [labelDraft, setLabelDraft] = useState("");
   const [queueItems, setQueueItems] = useState<{ taskId: string; title: string }[]>([]);
   const [queueOpen, setQueueOpen] = useState(false);
+  const [requeueing, setRequeueing] = useState(false);
   const [review, setReview] = useState<TaskReviewInfo | null>(null);
   const [schedule, setSchedule] = useState<Schedule | null>(null);
   const [profiles, setProfiles] = useState<AgentExecutorProfile[]>([]);
@@ -158,7 +159,7 @@ export function TaskInspector({
       .catch(() => { if (alive) setProfiles([]); })
       .finally(() => { if (alive) setProfilesReady(true); });
     return () => { alive = false; };
-  }, [task.id, task.queueId, queueOpen]);
+  }, [task.id, task.queueId, task.queuePosition, queueOpen]);
 
   const patch = async (value: Partial<Task>, message = "任务属性已更新") => {
     try {
@@ -222,6 +223,25 @@ export function TaskInspector({
   const effortOptions = [...new Set([task.reasoningEffort, ...REASONING_EFFORT_VALUES[agentType]].filter((value): value is string => !!value))];
   const duration = taskDurationInfo(task);
   const parent = taskParentLink(task, allTasks);
+  const canRequeue = task.parentId === null
+    && !task.archived
+    && !!task.queueId
+    && (task.status === "failed" || task.status === "canceled");
+
+  const requeue = async () => {
+    if (!task.queueId) return;
+    setRequeueing(true);
+    try {
+      const response = await api.requeueTask(task.id);
+      onQueueChanged(response.task);
+      void api.queue(task.queueId).then((queue) => setQueueItems(queue.items)).catch(() => undefined);
+      notify(response.movedToEnd ? "已重新排队并移到队尾" : "已重新排队");
+    } catch (reason) {
+      notify(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setRequeueing(false);
+    }
+  };
 
   return (
     <aside className="task-inspector" aria-label="任务 Inspector">
@@ -341,6 +361,11 @@ export function TaskInspector({
             <>
               <InspectorRow label="所在位置"><span>第 {queuePosition >= 0 ? queuePosition + 1 : (task.queuePosition ?? 0) + 1} / {queueItems.length || "?"} 位</span></InspectorRow>
               <InspectorRow label="下一个"><span>{nextQueueItem?.title ?? "队尾"}</span></InspectorRow>
+              {canRequeue && (
+                <button className="task-inspector-action" type="button" disabled={requeueing} onClick={() => void requeue()}>
+                  <span><ListNumbers size={13} />重新排队</span><span>{requeueing ? "处理中…" : "回到队列"}</span>
+                </button>
+              )}
               <button className="task-inspector-action" type="button" onClick={() => setQueueOpen(true)}>
                 <span><ListNumbers size={13} />查看队列 · {queueItems.length || "…"} 个任务</span><CaretRight size={13} />
               </button>

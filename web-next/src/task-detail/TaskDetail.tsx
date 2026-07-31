@@ -224,7 +224,10 @@ export function TaskDetail({
           allTasks={allTasks}
           onOpenTask={onOpenTask}
           onPatch={patch}
-          onQueueChanged={() => void refreshTask()}
+          onQueueChanged={(updatedTask) => {
+            if (updatedTask) onTaskUpdate(updatedTask);
+            else void refreshTask();
+          }}
           notify={notify}
         />
       </div>}
