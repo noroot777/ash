@@ -143,11 +143,19 @@ try {
     updatedAt: "2026-07-30T01:00:00.000Z",
     ...overrides,
   });
+  assert.equal(deriveTaskStatusIndicator(statusTask()), "pending");
+  assert.equal(deriveTaskStatusIndicator(statusTask({ parentId: "team-status" })), "pending");
   assert.equal(deriveTaskStatusIndicator(statusTask({ status: "running" })), "active");
   assert.equal(deriveTaskStatusIndicator(statusTask({ status: "paused" })), "attention");
   assert.equal(deriveTaskStatusIndicator(statusTask({ status: "done" }), [], true), "success");
   assert.equal(deriveTaskStatusIndicator(statusTask({ status: "failed" }), [], true), "error");
   assert.equal(deriveTaskStatusIndicator(statusTask({ status: "done" }), [], false), null);
+
+  const pendingTeamLead = statusTask({ id: "pending-team-status", mode: "team" });
+  const pendingWorker = statusTask({ id: "pending-worker-status", parentId: pendingTeamLead.id });
+  assert.equal(deriveTaskStatusIndicator(pendingTeamLead), "pending");
+  assert.equal(deriveTaskStatusIndicator(pendingTeamLead, [pendingWorker], true), "pending");
+  assert.equal(deriveTaskStatusIndicator(pendingTeamLead, [{ ...pendingWorker, status: "done" }], false), null);
 
   const teamLead = statusTask({ id: "team-status", mode: "team", status: "idle" });
   const runningWorker = statusTask({

@@ -123,6 +123,7 @@
 }
 
 .workspace-status-dot {
+  box-sizing: border-box;
   width: 7px;
   height: 7px;
   flex: 0 0 7px;
@@ -134,6 +135,11 @@
   width: 5px;
   height: 5px;
   flex-basis: 5px;
+}
+
+.workspace-status-dot--pending {
+  border: 1px dashed var(--muted);
+  background: transparent;
 }
 
 .workspace-status-dot--active {
