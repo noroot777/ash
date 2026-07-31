@@ -20,6 +20,7 @@ import { MarkdownBody } from "../components/MarkdownBody.tsx";
 import { api } from "../lib/api.ts";
 import { useStickToBottom } from "../lib/useStickToBottom.ts";
 import { DeleteTaskDialog } from "../task-detail/DeleteTaskDialog.tsx";
+import { TaskPinButton } from "../task-detail/TaskPinButton.tsx";
 import { TaskTimeMeta } from "../task-detail/TaskTimeMeta.tsx";
 import { formatDuration, formatInstant, parseAttachmentText, STATUS_TONES } from "../task-detail/utils.ts";
 import { DebateGateControls, DebateProgressBar } from "./DebateControls.tsx";
@@ -232,6 +233,11 @@ export function DebateView({
     <div className="debate-view">
       <header className="debate-header">
         <span className="debate-kind">辩论</span>
+        <TaskPinButton
+          task={task}
+          onTogglePin={async () => onTaskUpdated(await api.patchTask(task.id, { pinnedAt: task.pinnedAt != null ? null : Date.now() }))}
+          notify={notify}
+        />
         <input value={title} aria-label="辩论标题" onChange={(event) => setTitle(event.target.value)} onBlur={() => void commitTitle()} onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); if (event.key === "Escape") { setTitle(task.title); event.currentTarget.blur(); } }} />
         <span className={`debate-status debate-status--${STATUS_TONES[task.status]}`}><i />{display.label}</span>
         <TaskTimeMeta task={task} />

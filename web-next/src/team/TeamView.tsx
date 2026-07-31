@@ -250,6 +250,7 @@ export function TeamView({
         busy={busy}
         reviewOpen={reviewOpen}
         onTitle={async (title) => onTaskUpdate(await api.patchTask(task.id, { title, autoTitle: false }))}
+        onTogglePin={async () => onTaskUpdate(await api.patchTask(task.id, { pinnedAt: task.pinnedAt != null ? null : Date.now() }))}
         onReview={() => { setSelectedWorkerId(null); changeReviewOpen(!reviewOpen); }}
         onRun={() => void perform("run")}
         onHalt={() => void perform("halt")}

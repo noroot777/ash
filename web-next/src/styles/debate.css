@@ -1,5 +1,5 @@
 .debate-view { display:flex; min-height:0; flex:1; flex-direction:column; overflow:hidden; background:var(--canvas); }
-.debate-header { display:flex; height:44px; flex:0 0 44px; align-items:center; gap:7px; border-bottom:.5px solid var(--line); padding:0 10px 0 14px; background:var(--canvas); }
+.debate-header { --task-header-gap:7px; display:flex; height:44px; flex:0 0 44px; align-items:center; gap:var(--task-header-gap); border-bottom:.5px solid var(--line); padding:0 10px 0 14px; background:var(--canvas); }
 .debate-kind { border-radius:5px; background:color-mix(in lch,#7657b7 12%,var(--raised)); padding:2px 7px; color:#7657b7; font-size:9.5px; font-weight:750; }
 .debate-header > input { min-width:90px; flex:1; overflow:hidden; border:0; border-radius:5px; background:transparent; padding:3px 5px; font-size:12.5px; font-weight:600; outline:0; text-overflow:ellipsis; }
 .debate-header > input:hover,.debate-header > input:focus { background:var(--raised); }
