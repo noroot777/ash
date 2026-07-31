@@ -43,7 +43,7 @@ export function WorkerRail({
   }, [workers, onSelect]);
 
   return (
-    <aside className="min-h-0 w-[268px] shrink-0 overflow-y-auto bg-canvas px-3 py-3.5">
+    <aside className="min-h-0 overflow-y-auto bg-canvas px-3 py-3.5">
       <div className="mb-2 flex items-center justify-between text-[11px] uppercase tracking-[0.06em] text-faint">
         <span>执行者（{workers.length}）</span>
         {workers.length > 0 && <span className="normal-case tracking-normal">按 1–9</span>}

@@ -31,12 +31,6 @@ import { WorkerRail, WorkerStatusText } from "./WorkerRail";
 import { activeTeamHaltMarker, leadTurns as turnsOf, teamFeedOptions } from "./teamData";
 import { submitShortcutLabel } from "../ui";
 import { TeamReviewWorkspace } from "../ReviewWorkspace";
-import {
-  InspectorHost,
-  InspectorProvider,
-  InspectorToggleButton,
-  teamInspectorDescriptors,
-} from "../inspector";
 
 export function TeamView({
   task,
@@ -197,121 +191,111 @@ export function TeamView({
   };
 
   return (
-    <InspectorProvider
-      contextKey="team"
-      descriptors={teamInspectorDescriptors}
-      context={{ task, workers }}
-    >
-      <div className="flex h-full min-h-0">
-        <main className="relative flex h-full min-w-0 flex-1 flex-col">
-          <TeamHeader
-            task={task}
-            workers={workers}
-            teamGroups={teamGroups}
-            haltedByHistory={teamGroups.length === 0 && (haltedByHistory || localHalted)}
-            sessions={sessions}
-            items={items}
-            leadTurns={leadTurns}
-            onPatch={(p) => onPatch(task.id, p)}
-            onRun={() => onRun(task.id)}
-            onTeamHalted={async () => {
-              setLocalHalted(true);
-              setGroupPaused(Object.fromEntries(teamGroups.map((g) => [g.id, true])));
-              await refreshInternalGroups();
-              await refreshCuaStatus();
-            }}
-            onTeamResumed={() => {
-              setLocalHalted(false);
-              setGroupPaused((m) => ({ ...m, ...Object.fromEntries(teamGroups.map((g) => [g.id, false])) }));
-              setCuaStatus(null);
-            }}
-            onDelete={() => onDelete(task.id)}
-            onArchive={() => onArchive(task.id)}
-            onUnarchive={() => onUnarchive(task.id)}
-            onOpenWorker={setOpenId}
-            reviewOpen={reviewOpen}
-            onToggleReview={() => {
-              setOpenId(null);
-              changeReviewOpen(!reviewOpen);
-            }}
-            canIterateDebate={canIterateDebate}
-            iterateBusy={iterateBusy}
-            onIterateDebate={() => void iterateDebate()}
-            inspectorToggle={<InspectorToggleButton />}
+    <main className="relative flex h-full min-h-0 flex-col">
+      <TeamHeader
+        task={task}
+        workers={workers}
+        teamGroups={teamGroups}
+        haltedByHistory={teamGroups.length === 0 && (haltedByHistory || localHalted)}
+        sessions={sessions}
+        items={items}
+        leadTurns={leadTurns}
+        onPatch={(p) => onPatch(task.id, p)}
+        onRun={() => onRun(task.id)}
+        onTeamHalted={async () => {
+          setLocalHalted(true);
+          setGroupPaused(Object.fromEntries(teamGroups.map((g) => [g.id, true])));
+          await refreshInternalGroups();
+          await refreshCuaStatus();
+        }}
+        onTeamResumed={() => {
+          setLocalHalted(false);
+          setGroupPaused((m) => ({ ...m, ...Object.fromEntries(teamGroups.map((g) => [g.id, false])) }));
+          setCuaStatus(null);
+        }}
+        onDelete={() => onDelete(task.id)}
+        onArchive={() => onArchive(task.id)}
+        onUnarchive={() => onUnarchive(task.id)}
+        onOpenWorker={setOpenId}
+        reviewOpen={reviewOpen}
+        onToggleReview={() => {
+          setOpenId(null);
+          changeReviewOpen(!reviewOpen);
+        }}
+        canIterateDebate={canIterateDebate}
+        iterateBusy={iterateBusy}
+        onIterateDebate={() => void iterateDebate()}
+      />
+
+      {reviewOpen ? (
+        <TeamReviewWorkspace
+          lead={task}
+          workers={workers}
+          onClose={() => changeReviewOpen(false)}
+          onTaskUpdated={(updated) => onTaskCreated(updated, false, false)}
+        />
+      ) : (
+        <>
+          {stopped && <CuaResidualNotice taskId={task.id} status={cuaStatus} onStatus={setCuaStatus} />}
+
+          <AttentionBar waiting={waiting} workers={workers} onOpenWorker={setOpenId} onAskLead={askLead} />
+
+          <div className="grid min-h-0 flex-1 grid-cols-[1fr_268px]">
+            <TeamFeed taskId={task.id} rows={rows} workers={workers} empty={items.length === 0} onOpenWorker={setOpenId} />
+            <WorkerRail workers={workers} groups={teamGroups} logs={logs} selected={openId} onSelect={setOpenId} />
+          </div>
+
+          {/* 插话:发出去就进同一个常驻会话(调度者正在说话时会被 interrupt 接住),所以
+              除了归档之外不禁用 —— 这是 /team 跟单任务最大的手感差别。 */}
+          <ReplyBox
+            taskId={task.id}
+            onReply={(text, opts) => onReply(task.id, text, opts)}
+            disabled={!!task.archived}
+            mention={false}
+            placeholder={
+              task.status === "idle"
+                ? `调度者待命中，说句话就接回同一会话… ${submitShortcutLabel()} 发送`
+                : `插一句话（改方向、加要求、直接替它拍板）… ${submitShortcutLabel()} 发送`
+            }
+            disabledPlaceholder="已归档（只读）"
           />
+        </>
+      )}
 
-          {reviewOpen ? (
-            <TeamReviewWorkspace
-              lead={task}
-              workers={workers}
-              onClose={() => changeReviewOpen(false)}
-              onTaskUpdated={(updated) => onTaskCreated(updated, false, false)}
-            />
-          ) : (
-            <>
-              {stopped && <CuaResidualNotice taskId={task.id} status={cuaStatus} onStatus={setCuaStatus} />}
-
-              <AttentionBar waiting={waiting} workers={workers} onOpenWorker={setOpenId} onAskLead={askLead} />
-
-              <div className="flex min-h-0 flex-1">
-                <TeamFeed taskId={task.id} rows={rows} workers={workers} empty={items.length === 0} onOpenWorker={setOpenId} />
-                <WorkerRail workers={workers} groups={teamGroups} logs={logs} selected={openId} onSelect={setOpenId} />
-              </div>
-
-              {/* 插话:发出去就进同一个常驻会话(调度者正在说话时会被 interrupt 接住),所以
-                  除了归档之外不禁用 —— 这是 /team 跟单任务最大的手感差别。 */}
-              <ReplyBox
-                taskId={task.id}
-                onReply={(text, opts) => onReply(task.id, text, opts)}
-                disabled={!!task.archived}
-                mention={false}
-                placeholder={
-                  task.status === "idle"
-                    ? `调度者待命中，说句话就接回同一会话… ${submitShortcutLabel()} 发送`
-                    : `插一句话（改方向、加要求、直接替它拍板）… ${submitShortcutLabel()} 发送`
-                }
-                disabledPlaceholder="已归档（只读）"
-              />
-            </>
-          )}
-
-          {!reviewOpen && open && (
-            <WorkerDrawer
-              worker={open}
-              groups={groups}
-              groupPaused={!!teamGroups.find((g) => g.id === open.groupId)?.paused}
-              allTasks={allTasks}
-              logs={logs[open.id] ?? []}
-              sessionsBump={sessionsBump}
-              onClose={() => setOpenId(null)}
-              onOpenFull={() => {
-                setOpenId(null);
-                onSelect(open.id);
-              }}
-              onRun={() => onRun(open.id)}
-              onStop={() => onStop(open.id)}
-              onRetry={() => onRetry(open.id)}
-              onReply={(text, opts) => onReply(open.id, text, opts)}
-              onPatch={(p) => onPatch(open.id, p)}
-              onCreateGroup={onCreateGroup}
-              onDelete={() => {
-                onDelete(open.id);
-                setOpenId(null);
-              }}
-              onArchive={() => onArchive(open.id)}
-              onUnarchive={() => onUnarchive(open.id)}
-              onRequeue={() => onRequeue(open.id)}
-              onOpenTask={(taskId) => {
-                setOpenId(null);
-                onSelect(taskId);
-              }}
-              onTaskCreated={onTaskCreated}
-            />
-          )}
-        </main>
-        <InspectorHost />
-      </div>
-    </InspectorProvider>
+      {!reviewOpen && open && (
+        <WorkerDrawer
+          worker={open}
+          groups={groups}
+          groupPaused={!!teamGroups.find((g) => g.id === open.groupId)?.paused}
+          allTasks={allTasks}
+          logs={logs[open.id] ?? []}
+          sessionsBump={sessionsBump}
+          onClose={() => setOpenId(null)}
+          onOpenFull={() => {
+            setOpenId(null);
+            onSelect(open.id);
+          }}
+          onRun={() => onRun(open.id)}
+          onStop={() => onStop(open.id)}
+          onRetry={() => onRetry(open.id)}
+          onReply={(text, opts) => onReply(open.id, text, opts)}
+          onPatch={(p) => onPatch(open.id, p)}
+          onCreateGroup={onCreateGroup}
+          onDelete={() => {
+            onDelete(open.id);
+            setOpenId(null);
+          }}
+          onArchive={() => onArchive(open.id)}
+          onUnarchive={() => onUnarchive(open.id)}
+          onRequeue={() => onRequeue(open.id)}
+          onOpenTask={(taskId) => {
+            setOpenId(null);
+            onSelect(taskId);
+          }}
+          onTaskCreated={onTaskCreated}
+        />
+      )}
+    </main>
   );
 }
 
@@ -440,7 +424,7 @@ function WorkerDrawer({
         </div>
         <div className="min-h-0 flex-1">
           {/* key=worker.id:换执行者时重置内部状态(滚动位置、快照、草稿)。 */}
-          <TaskDetail key={worker.id} task={worker} inspectorEnabled={false} {...rest} />
+          <TaskDetail key={worker.id} task={worker} {...rest} />
         </div>
       </aside>
     </>

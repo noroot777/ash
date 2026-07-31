@@ -5,7 +5,7 @@ import { sameExecutor } from "@harness/shared/executors";
 import { CaretDown, Play, Stop, Trash, ArrowsClockwise, DownloadSimple, GitDiff, ListNumbers } from "@phosphor-icons/react";
 import { api, type AcceptTaskFailure } from "./api";
 import { STATUS_META, PRIORITIES } from "./constants";
-import { CollapsibleText, CopyButton } from "./ui";
+import { CollapsibleText, CopyButton, Kbd, submitShortcutTitle } from "./ui";
 import { StatusIcon } from "./StatusIcon";
 import { PriorityIcon, LabelAdder } from "./ui";
 import { ScheduleControl } from "./ScheduleControl";
@@ -43,13 +43,6 @@ import {
   TaskDiffWorkspace,
 } from "./ReviewWorkspace";
 import { TaskPinButton } from "./TaskPinMenu";
-import { TaskResumePromptEditor } from "./TaskResumePromptEditor";
-import {
-  InspectorHost,
-  InspectorProvider,
-  InspectorToggleButton,
-  taskInspectorDescriptors,
-} from "./inspector";
 export type { LogLine } from "./Conversation";
 
 export function TaskDetail({
@@ -72,7 +65,6 @@ export function TaskDetail({
   onTaskCreated,
   initialReviewOpen = false,
   onReviewOpenChange,
-  inspectorEnabled = true,
 }: {
   task: Task;
   groups: Group[];
@@ -94,7 +86,6 @@ export function TaskDetail({
   onTaskCreated: (task: Task, doRun?: boolean, select?: boolean) => void;
   initialReviewOpen?: boolean;
   onReviewOpenChange?: (open: boolean) => void;
-  inspectorEnabled?: boolean;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const { profiles, providers } = useExecutorProfiles();
@@ -188,8 +179,8 @@ export function TaskDetail({
     </div>
   );
 
-  const content = (
-    <main className={`flex h-full min-h-0 flex-col ${inspectorEnabled ? "min-w-0 flex-1" : ""}`}>
+  return (
+    <main className="flex h-full min-h-0 flex-col">
       <ReviewTaskContextBar task={task} allTasks={allTasks} onOpenTask={onOpenTask} />
       <header className="border-b border-line px-6 pb-3 pt-5">
         <div className="flex flex-wrap items-start gap-x-3 gap-y-2">
@@ -322,7 +313,6 @@ export function TaskDetail({
                 <Trash size={15} />
               </button>
             )}
-            {inspectorEnabled && <InspectorToggleButton />}
           </div>
         </div>
 
@@ -355,7 +345,7 @@ export function TaskDetail({
             让用户知道一旦依赖满足、scheduler 唤醒它会发什么 user 消息。可编辑
             （改写不好的指令）或清空（清空 = 续跑时不携指令，用标准"继续"nudge）。 */}
         {task.status === "paused" && !task.question && (
-          <TaskResumePromptEditor
+          <ResumePromptEditor
             value={task.resumePrompt ?? ""}
             onSave={(rp) => onPatch({ resumePrompt: rp || null })}
             readOnly={dispatchedWorker}
@@ -555,19 +545,6 @@ export function TaskDetail({
       )}
     </main>
   );
-  if (!inspectorEnabled) return content;
-  return (
-    <InspectorProvider
-      contextKey="task"
-      descriptors={taskInspectorDescriptors}
-      context={{ task, allTasks }}
-    >
-      <div className="flex h-full min-h-0">
-        {content}
-        <InspectorHost />
-      </div>
-    </InspectorProvider>
-  );
 }
 
 
@@ -630,5 +607,93 @@ export function EditableTitle({ title, onSave }: { title: string; onSave: (t: st
       className="-mx-1 min-w-48 flex-1 rounded px-1 text-[15px] font-semibold leading-snug text-ink outline-none hover:bg-raised/40 focus:bg-raised/60"
       title="点击编辑标题"
     />
+  );
+}
+
+// paused 任务的「续跑指令」面板。普通任务可编辑/清空；调度者派出的执行者只读。
+function ResumePromptEditor({
+  value,
+  onSave,
+  readOnly = false,
+}: {
+  value: string;
+  onSave: (rp: string) => void;
+  readOnly?: boolean;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value);
+  useEffect(() => {
+    if (!editing) setDraft(value);
+  }, [value, editing]);
+  const commit = () => {
+    const t = draft.trim();
+    onSave(t);
+    setEditing(false);
+  };
+  if (editing && !readOnly) {
+    return (
+      <div className="mt-2 overflow-hidden rounded-md border border-slate-500/40 bg-slate-500/[0.06]">
+        <div className="flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-medium text-slate-600">
+          <StatusIcon status="paused" size={11} />
+          <span>编辑续跑指令</span>
+        </div>
+        <textarea
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if ((e.metaKey || e.ctrlKey) && e.key === "Enter") { e.preventDefault(); commit(); }
+            if (e.key === "Escape") { e.preventDefault(); setEditing(false); setDraft(value); }
+          }}
+          rows={4}
+          autoFocus
+          placeholder="续跑时发送给 agent 的 user 消息，比如：「继续做 tts 这一段」"
+          className="block w-full resize-y bg-transparent px-2.5 py-1.5 text-[12px] leading-snug text-ink outline-none placeholder:text-faint"
+        />
+        <div className="flex items-center justify-end gap-1.5 border-t border-slate-500/20 px-2 py-1.5">
+          <button
+            onClick={() => { setEditing(false); setDraft(value); }}
+            className="rounded-md px-2 py-1 text-[11px] text-muted hover:text-ink"
+          >
+            取消
+          </button>
+          <button
+            onClick={commit}
+            title={submitShortcutTitle("保存续跑指令")}
+            className="inline-flex items-center gap-1.5 rounded-md bg-slate-600 px-2.5 py-1 text-[11px] font-medium text-white hover:bg-slate-500"
+          >
+            保存 <Kbd className="border-white/20 bg-white/10" />
+          </button>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="group/rp mt-2 overflow-hidden rounded-md border border-slate-500/40 bg-slate-500/[0.06]">
+      <div className="flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-medium text-slate-600">
+        <StatusIcon status="paused" size={11} />
+        <span>{value ? "已到检查点 · 续跑时将发送：" : "已到检查点 · 无续跑指令（续跑用标准「继续」nudge）"}</span>
+        {!readOnly && (
+          <button
+            onClick={() => setEditing(true)}
+            className="ml-auto rounded px-1.5 py-0.5 text-[10px] text-slate-600 opacity-0 hover:bg-slate-500/15 group-hover/rp:opacity-100"
+            title={value ? "编辑续跑指令" : "添加续跑指令"}
+          >
+            {value ? "编辑" : "+ 添加"}
+          </button>
+        )}
+        {!readOnly && value && (
+          <button
+            onClick={() => onSave("")}
+            className="rounded px-1.5 py-0.5 text-[10px] text-slate-600/80 opacity-0 hover:bg-slate-500/15 hover:text-slate-600 group-hover/rp:opacity-100"
+            title="清空：续跑时改用标准「继续」nudge"
+          >
+            清空
+          </button>
+        )}
+      </div>
+      {value && (
+        <pre className="max-h-40 overflow-y-auto whitespace-pre-wrap break-words px-2.5 pb-2 text-[12px] leading-snug text-ink">{value}</pre>
+      )}
+    </div>
   );
 }
