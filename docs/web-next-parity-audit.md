@@ -65,12 +65,13 @@
 - 修复入手点：在 Inspector 的“调度与续跑”节加入编辑/保存/清空，调用 `patchTask({ resumePrompt })`；团队执行者继续只读。
 - 修复结果：Inspector 已支持添加、编辑、保存和清空续跑指令；仅 paused 且非提问的顶层任务可写，团队执行者保持只读。
 
-### 7. 团队验收台没有完整文件列表和逐行 diff
+### 7. 团队验收台没有完整文件列表和逐行 diff ✅ 已修
 
 - 旧版位置：`web/src/ReviewWorkspace.tsx:582-650` 展示全部文件、截断提示和逐文件文本 diff。
 - 新版现状：**半残**。`web-next/src/team/TeamReviewWorkspace.tsx:153-175` 只列前 6 个提交和前 8 个文件，明确提示回旧版；没有逐行 diff。单任务 `TaskReviewWorkspace` 已有完整 diff 组件，说明不是数据层限制。
 - 历史判断：`988390b` 迁入团队验收时只做摘要，之后未补齐；旧的 `docs/web-next-gaps.md` 也已记录。
 - 修复入手点：复用/抽取 `web-next/src/review/TaskReviewWorkspace.tsx:29-238` 的文件 rail、分段解析和渐进加载，在团队每个 `ReviewRecord` 中展示完整 diff。
+- 修复结果：文件 rail、逐行 diff、截断提示与渐进加载已抽为共享组件；团队每条验收记录现在展示全部提交和完整文件清单，可逐文件查看带行号的文本 diff，不再要求回旧版。
 
 ### 8. 辩论 → 团队 → 再辩论闭环退化，且不能从同一辩论再开一组
 

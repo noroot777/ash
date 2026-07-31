@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import type { Session, Task } from "@harness/shared";
 import { STAGE_LABELS, taskDisplayStatus } from "@harness/shared";
-import { ArrowsClockwise, CaretDown, CheckCircle, GitBranch, GitCommit, GitDiff, SpinnerGap, WarningCircle, X } from "@phosphor-icons/react";
+import { ArrowsClockwise, CaretDown, CheckCircle, GitBranch, GitCommit, SpinnerGap, WarningCircle, X } from "@phosphor-icons/react";
 import { LegacyLink } from "../components/LegacyLink.tsx";
 import { api, type AcceptTaskFailure, type TaskCommit, type TaskDiffResult } from "../lib/api.ts";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import { formatInstant, parseAttachmentText } from "../task-detail/utils.ts";
+import { ReviewDiffViewer } from "../review/ReviewDiffViewer.tsx";
 import { ReviewEvidence } from "./ReviewEvidence.tsx";
 import { statusTone } from "./teamModel.ts";
 
@@ -154,25 +155,16 @@ function ChangeSummary({ data, loading, error }: { data: ReviewData | null; load
   if (loading) return <p className="team-review-loading"><SpinnerGap size={13} className="is-spinning" />正在读取分支与提交…</p>;
   if (error) return <p className="team-review-loading is-error">改动信息读取失败：{error}</p>;
   if (!data) return null;
-  const additions = data.diff.files.reduce((sum, file) => sum + (file.additions ?? 0), 0);
-  const deletions = data.diff.files.reduce((sum, file) => sum + (file.deletions ?? 0), 0);
   return (
     <div className="team-review-change-grid">
       <section>
         <h4><GitCommit size={13} />提交 · {data.commits.length}</h4>
         {!data.commits.length && <p>没有可展示的提交。</p>}
-        {data.commits.slice(0, 6).map((commit) => (
+        {data.commits.map((commit) => (
           <div className="team-review-commit" key={commit.sha}><code>{commit.sha.slice(0, 8)}</code><span>{commit.subject}</span><time>{formatInstant(commit.at)}</time></div>
         ))}
       </section>
-      <section>
-        <h4><GitDiff size={13} />文件改动 · {data.diff.files.length}<em>+{additions} −{deletions}</em></h4>
-        {!data.diff.available && <p>diff 暂不可用：{data.diff.reason || "无法解析分支差异"}</p>}
-        {data.diff.files.slice(0, 8).map((file) => (
-          <div className="team-review-file" key={file.path}><code>{file.path}</code><span>+{file.additions ?? "?"} −{file.deletions ?? "?"}</span></div>
-        ))}
-        {data.diff.files.length > 8 && <p>另有 {data.diff.files.length - 8} 个文件，请用旧版查看完整 diff。</p>}
-      </section>
+      <ReviewDiffViewer result={data.diff} />
     </div>
   );
 }
