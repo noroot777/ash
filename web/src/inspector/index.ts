@@ -4,6 +4,6 @@ export { InspectorToggleButton } from "./InspectorToggleButton";
 export {
   taskInspectorDescriptors,
   type TaskInspectorContext,
-} from "./taskDescriptors";
+} from "./placeholders";
 export { teamInspectorDescriptors, type TeamInspectorContext } from "./teamDescriptors";
 export type { InspectorDescriptor, InspectorPersistedState } from "./types";

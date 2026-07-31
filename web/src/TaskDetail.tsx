@@ -1,14 +1,18 @@
-import { useEffect, useRef, useState } from "react";
-import type { Task, Group, AgentType } from "@harness/shared";
-import { canArchive, STAGE_LABELS } from "@harness/shared";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import type { Task, Group, TaskStatus, Priority, AgentType } from "@harness/shared";
+import { isUserSettableStatus, canArchive } from "@harness/shared";
 import { sameExecutor } from "@harness/shared/executors";
-import { Play, Stop, Trash, ArrowsClockwise, DownloadSimple, GitDiff, ListNumbers } from "@phosphor-icons/react";
+import { CaretDown, Play, Stop, Trash, ArrowsClockwise, DownloadSimple, GitDiff, ListNumbers } from "@phosphor-icons/react";
 import { api, type AcceptTaskFailure } from "./api";
-import { STATUS_META } from "./constants";
+import { STATUS_META, PRIORITIES } from "./constants";
 import { CollapsibleText, CopyButton } from "./ui";
 import { StatusIcon } from "./StatusIcon";
+import { PriorityIcon, LabelAdder } from "./ui";
+import { ScheduleControl } from "./ScheduleControl";
+import { Menu } from "./Menu";
 import { QueueModal } from "./QueueModal";
 import { runAction, canStopTask } from "./taskActions";
+import { groupLabel } from "./util";
 import { TaskTimeChip } from "./time";
 // 会话渲染与插话框已拆成独立模块(/team 也复用它们)。
 import { Conversation, ConversationScrollButtons, conversationToText, downloadConversation, type LogLine } from "./Conversation";
@@ -183,34 +187,20 @@ export function TaskDetail({
       </span>
     </div>
   );
-  const statusLabel = task.stage ? STAGE_LABELS[task.stage] : STATUS_META[task.status].label;
-  const refreshConversation = () => {
-    void refetch().catch((error) => toast(error instanceof Error ? error.message : String(error)));
-  };
-  const hasImmediateAction = !!acceptFailure
-    || !!task.question
-    || (task.status === "paused" && !task.question);
-  const hasHeaderDetails = !inspectorEnabled || hasImmediateAction;
 
   const content = (
     <main className={`flex h-full min-h-0 flex-col ${inspectorEnabled ? "min-w-0 flex-1" : ""}`}>
       <ReviewTaskContextBar task={task} allTasks={allTasks} onOpenTask={onOpenTask} />
-      <header className={`${hasHeaderDetails ? "" : "border-b border-line"} px-6 py-3.5`}>
+      <header className="border-b border-line px-6 pb-3 pt-5">
         <div className="flex flex-wrap items-start gap-x-3 gap-y-2">
-          <div className="flex min-w-48 flex-1 items-center gap-2">
-            {dispatchedWorker ? (
-              <h1 className="min-w-0 flex-1 px-1 text-[15px] font-semibold leading-snug text-ink">{task.title}</h1>
-            ) : (
-              <EditableTitle title={task.title} onSave={(title) => onPatch({ title, autoTitle: false })} />
-            )}
-            <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-overlay px-2 py-1 text-[11px] font-medium text-muted">
-              <StatusIcon status={task.status} stage={task.stage} awaitingAnswer={!!task.question} size={7} />
-              {statusLabel}
-            </span>
-          </div>
+          {dispatchedWorker ? (
+            <h1 className="min-w-48 flex-1 px-1 text-[15px] font-semibold leading-snug text-ink">{task.title}</h1>
+          ) : (
+            <EditableTitle title={task.title} onSave={(t) => onPatch({ title: t, autoTitle: false })} />
+          )}
           <div className="ml-auto flex min-w-0 max-w-full flex-wrap items-center justify-end gap-2">
-            {!inspectorEnabled && task.useWorktree && <TaskWorktreeChip cleaned={task.stage === "accepted"} />}
-            {!inspectorEnabled && <TaskTimeChip task={task} />}
+            {task.useWorktree && <TaskWorktreeChip cleaned={task.stage === "accepted"} />}
+            <TaskTimeChip task={task} />
             <button
               type="button"
               onClick={() => changeReviewOpen(!reviewOpen)}
@@ -295,97 +285,86 @@ export function TaskDetail({
                 归档
               </button>
             )}
-            {!inspectorEnabled && (
+            <button
+              type="button"
+              onClick={() => void refetch().catch((error) => toast(error instanceof Error ? error.message : String(error)))}
+              disabled={refreshing}
+              className="inline-flex h-[30px] items-center gap-1.5 rounded-md px-2.5 text-[13px] font-medium text-muted transition-colors hover:bg-raised hover:text-ink disabled:cursor-wait disabled:opacity-60"
+              title="重新拉取会话内容"
+            >
+              <ArrowsClockwise size={14} className={refreshing ? "animate-spin" : ""} />
+              刷新
+            </button>
+            {items.length > 0 && (
               <>
+                <CopyButton
+                  text={conversationToText(items, task)}
+                  title="复制全部对话"
+                  size={15}
+                  className="h-[30px] w-[30px] hover:bg-raised"
+                />
                 <button
-                  type="button"
-                  onClick={refreshConversation}
-                  disabled={refreshing}
-                  className="inline-flex h-[30px] items-center gap-1.5 rounded-md px-2.5 text-[13px] font-medium text-muted transition-colors hover:bg-raised hover:text-ink disabled:cursor-wait disabled:opacity-60"
-                  title="重新拉取会话内容"
+                  onClick={() => downloadConversation(items, task)}
+                  className="grid h-[30px] w-[30px] place-items-center rounded-md text-muted transition-colors hover:bg-raised hover:text-ink"
+                  title="导出对话为 .md 文件"
                 >
-                  <ArrowsClockwise size={14} className={refreshing ? "animate-spin" : ""} />
-                  刷新
+                  <DownloadSimple size={15} />
                 </button>
-                {items.length > 0 && (
-                  <>
-                    <CopyButton
-                      text={conversationToText(items, task)}
-                      title="复制全部对话"
-                      size={15}
-                      className="h-[30px] w-[30px] hover:bg-raised"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => downloadConversation(items, task)}
-                      className="grid h-[30px] w-[30px] place-items-center rounded-md text-muted transition-colors hover:bg-raised hover:text-ink"
-                      title="导出对话为 .md 文件"
-                    >
-                      <DownloadSimple size={15} />
-                    </button>
-                  </>
-                )}
-                {!dispatchedWorker && <TaskPinButton task={task} onPatch={onPatch} />}
-                {!dispatchedWorker && (
-                  <button
-                    type="button"
-                    onClick={onDelete}
-                    className="grid h-[30px] w-[30px] place-items-center rounded-md text-muted transition-colors hover:bg-raised hover:text-red-600"
-                    title="删除任务"
-                  >
-                    <Trash size={15} />
-                  </button>
-                )}
               </>
+            )}
+            {!dispatchedWorker && <TaskPinButton task={task} onPatch={onPatch} />}
+            {!dispatchedWorker && (
+              <button
+                onClick={onDelete}
+                className="grid h-[30px] w-[30px] place-items-center rounded-md text-muted transition-colors hover:bg-raised hover:text-red-600"
+                title="删除任务"
+              >
+                <Trash size={15} />
+              </button>
             )}
             {inspectorEnabled && <InspectorToggleButton />}
           </div>
         </div>
-      </header>
 
-      {hasHeaderDetails && (
-        <div className="shrink-0 border-b border-line px-6 pb-3">
-          {/* Inspector 被禁用时，TaskDetail 正嵌在团队执行者抽屉里；继续保留
-              原始需求、审查入口和调度者管理的队列位置。 */}
-          {!inspectorEnabled && (
-            <>
-              {objective.body ? (
-                <CollapsibleText text={objective.body}>
-                  {objective.paths.length > 0 ? <AttachmentDisplay paths={objective.paths} className="px-3 pb-2" /> : null}
-                </CollapsibleText>
-              ) : (
-                <AttachmentDisplay paths={objective.paths} className="mt-2" />
-              )}
-              {!task.reviewOf && (
-                <TaskReviewPanel
-                  task={task}
-                  allTasks={allTasks}
-                  onOpenTask={onOpenTask}
-                  onReviewTaskCreated={(created) => onTaskCreated(created, false, false)}
-                  defaultExpanded={false}
-                  compact
-                />
-              )}
-            </>
-          )}
-          {acceptFailure && <AcceptanceFailureReport failure={acceptFailure} />}
+        {/* Task objective — shown right under the title (collapsed to 2 lines;
+            click 展开 for the full text). */}
+        {objective.body ? (
+          <CollapsibleText text={objective.body}>
+            {objective.paths.length > 0 ? <AttachmentDisplay paths={objective.paths} className="px-3 pb-2" /> : null}
+          </CollapsibleText>
+        ) : (
+          <AttachmentDisplay paths={objective.paths} className="mt-2" />
+        )}
 
-          {/* agent 提问:调 ask_question 后停在这等答案(队列陪等,不会自动续跑)。
-              团队模式下调度者通常会自动来答;用户也可以直接在这里答复唤醒。 */}
-          {task.question && <QuestionCard task={task} />}
+        {!task.reviewOf && (
+          <TaskReviewPanel
+            task={task}
+            allTasks={allTasks}
+            onOpenTask={onOpenTask}
+            onReviewTaskCreated={(created) => onTaskCreated(created, false, false)}
+            defaultExpanded={false}
+          />
+        )}
+        {acceptFailure && <AcceptanceFailureReport failure={acceptFailure} />}
 
-          {/* 检查点续跑：paused 时露出 resumePrompt（agent 留下的「下次喂我什么」），
-              让用户知道一旦依赖满足、scheduler 唤醒它会发什么 user 消息。可编辑
-              （改写不好的指令）或清空（清空 = 续跑时不携指令，用标准"继续"nudge）。 */}
-          {task.status === "paused" && !task.question && (
-            <TaskResumePromptEditor
-              value={task.resumePrompt ?? ""}
-              onSave={(resumePrompt) => onPatch({ resumePrompt: resumePrompt || null })}
-              readOnly={dispatchedWorker}
-            />
-          )}
+        {/* agent 提问:调 ask_question 后停在这等答案(队列陪等,不会自动续跑)。
+            团队模式下调度者通常会自动来答;用户也可以直接在这里答复唤醒。 */}
+        {task.question && <QuestionCard task={task} />}
 
-          {!inspectorEnabled && dispatchedWorker && task.queueId && (
+        {/* 检查点续跑：paused 时露出 resumePrompt（agent 留下的「下次喂我什么」），
+            让用户知道一旦依赖满足、scheduler 唤醒它会发什么 user 消息。可编辑
+            （改写不好的指令）或清空（清空 = 续跑时不携指令，用标准"继续"nudge）。 */}
+        {task.status === "paused" && !task.question && (
+          <TaskResumePromptEditor
+            value={task.resumePrompt ?? ""}
+            onSave={(rp) => onPatch({ resumePrompt: rp || null })}
+            readOnly={dispatchedWorker}
+          />
+        )}
+
+        {/* All controls on one wrapping row: attributes | labels | deps·schedule | session */}
+        {dispatchedWorker ? (
+          task.queueId && (
             <div className="mt-3 flex items-center gap-1.5 text-[12px]">
               <ListNumbers size={13} className="text-faint" />
               <span className="text-muted">队列</span>
@@ -393,9 +372,85 @@ export function TaskDetail({
                 第 {(task.queuePosition ?? 0) + 1}{queueSize != null ? ` / ${queueSize}` : ""} 位
               </span>
             </div>
-          )}
-        </div>
-      )}
+          )
+        ) : (
+          <div className="mt-3 flex flex-wrap items-center gap-x-2.5 gap-y-2 text-[12px]">
+            <div className={`flex flex-wrap items-center gap-1.5 ${task.archived ? "pointer-events-none opacity-60" : ""}`}>
+              <Prop
+                value={task.status}
+                onChange={(v) => onPatch({ status: v as TaskStatus })}
+                options={Object.values(STATUS_META)
+                  .filter((s) => isUserSettableStatus(s.key) || s.key === task.status)
+                  .map((s) => ({ value: s.key, label: s.label }))}
+                leading={(v) => <StatusIcon status={v as TaskStatus} size={13} />}
+              />
+              <Prop
+                value={task.priority}
+                onChange={(v) => onPatch({ priority: v as Priority })}
+                options={PRIORITIES.map((p) => ({ value: p.key, label: p.label }))}
+                leading={(v) => <PriorityIcon p={v as Priority} />}
+              />
+              <Prop
+                value={task.groupId ?? ""}
+                onChange={(v) => (v === "__new" ? onCreateGroup() : onPatch({ groupId: v || null }))}
+                options={[
+                  { value: "", label: "无分组" },
+                  ...groups.map((g) => ({ value: g.id, label: groupLabel(g) })),
+                  { value: "__new", label: "+ 新建分组" },
+                ]}
+              />
+            </div>
+
+            <span className="h-4 w-px bg-line" />
+            <div className="flex flex-wrap items-center gap-1.5">
+              {task.labels.map((l) => (
+                <button
+                  key={l}
+                  onClick={() => onPatch({ labels: task.labels.filter((x) => x !== l) })}
+                  className="rounded-full bg-overlay px-2 py-0.5 text-[11px] text-ink transition hover:bg-line2"
+                  title="点击移除"
+                >
+                  {l}
+                </button>
+              ))}
+              <LabelAdder onAdd={(l) => !task.labels.includes(l) && onPatch({ labels: [...task.labels, l] })} />
+            </div>
+
+            <span className="h-4 w-px bg-line" />
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+              {/* 队列归属(DESIGN-scheduling.md §1):任务在某条 queue 里第几位。
+                  点开看完整队列、改顺序、把任务移出队列。废弃的 depOptions /
+                  resumeDepOptions 在新模型下永远空,挪开免得占视觉位。 */}
+              <div className="flex items-center gap-1.5">
+                <ListNumbers size={13} className="text-faint" />
+                <span className="text-muted">队列</span>
+                {task.queueId ? (
+                  <button
+                    onClick={() => setQueueModalOpen(true)}
+                    className="rounded bg-overlay px-1.5 py-0.5 text-ink transition hover:bg-line2"
+                    title="点开看完整队列"
+                  >
+                    第 {(task.queuePosition ?? 0) + 1}{queueSize != null ? ` / ${queueSize}` : ""} 位
+                  </button>
+                ) : (
+                  <span className="text-faint">不在任何队列(独立任务)</span>
+                )}
+              </div>
+              <ScheduleControl taskId={task.id} />
+            </div>
+
+            {/* Who will run this — shown only until the first run exists. The live
+                run credentials (resume / id / time) now live per-bubble in the
+                conversation below, not crammed into this header row. */}
+            {sessions.length === 0 && (
+              <>
+                <span className="h-4 w-px bg-line" />
+                {runConfigControls}
+              </>
+            )}
+          </div>
+        )}
+      </header>
 
       {reviewOpen ? (
         <TaskDiffWorkspace
@@ -503,34 +558,44 @@ export function TaskDetail({
   if (!inspectorEnabled) return content;
   return (
     <InspectorProvider
-      contextKey="task-detail"
+      contextKey="task"
       descriptors={taskInspectorDescriptors}
-      defaultOpenIds={["info", "review"]}
-      context={{
-        task,
-        managedWorker: dispatchedWorker,
-        groups,
-        allTasks,
-        sessions,
-        items,
-        queueSize,
-        refreshing,
-        runConfigControls,
-        onPatch,
-        onCreateGroup,
-        onOpenQueue: () => setQueueModalOpen(true),
-        onOpenDiff: () => changeReviewOpen(true),
-        onRefresh: refreshConversation,
-        onDelete,
-        onOpenTask,
-        onReviewTaskCreated: (created) => onTaskCreated(created, false, false),
-      }}
+      context={{ task, allTasks }}
     >
       <div className="flex h-full min-h-0">
         {content}
         <InspectorHost />
       </div>
     </InspectorProvider>
+  );
+}
+
+
+
+// Linear-style property control built on the custom Menu (no native select).
+function Prop({
+  value,
+  onChange,
+  options,
+  leading,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  options: { value: string; label: string }[];
+  leading?: (v: string) => ReactNode;
+}) {
+  const cur = options.find((o) => o.value === value);
+  return (
+    <Menu
+      value={value}
+      onChange={onChange}
+      options={options.map((o) => ({ value: o.value, label: o.label, icon: leading?.(o.value) }))}
+      triggerClassName="inline-flex items-center gap-1.5 rounded-md border border-line bg-panel px-2 py-1 text-[12px] text-ink transition-colors hover:bg-raised"
+    >
+      {leading?.(value)}
+      <span className="whitespace-nowrap">{cur?.label ?? ""}</span>
+      <CaretDown size={11} weight="bold" className="text-faint" />
+    </Menu>
   );
 }
 
