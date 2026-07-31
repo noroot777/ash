@@ -3,6 +3,7 @@ import type { ProjectView, Task } from "@harness/shared";
 import { taskDisplayStatus } from "@harness/shared";
 import { statusCounts, workersOf } from "@harness/shared/team";
 import { CaretRight, PushPin, Scales, UsersThree } from "@phosphor-icons/react";
+import { OriginTaskChip, taskParentLink } from "../components/TaskOrigin.tsx";
 import { useTaskReadState, type TaskStatusIndicator } from "../lib/useTaskReadState.ts";
 import { ProjectAvatar } from "./ProjectAvatar.tsx";
 import { buildTaskTree, orderedTopLevelTasks } from "./taskTreeModel.ts";
@@ -87,53 +88,74 @@ function WorkerSummary({ workers, indicatorForTask }: { workers: Task[]; indicat
 
 function TaskRow({
   task,
-  selectedTaskId,
-  onTask,
-  indicatorForTask,
-  child = false,
-  trailing,
-}: {
-  task: Task;
-  selectedTaskId: string | null;
-  onTask: (task: Task) => void;
-  indicatorForTask: IndicatorForTask;
-  child?: boolean;
-  trailing?: React.ReactNode;
-}) {
-  const selected = selectedTaskId === task.id;
-  const indicator = indicatorForTask(task);
-  return (
-    <button
-      className={`workspace-task-row ui-selectable${child ? " workspace-task-row--child" : ""}${selected ? " is-selected" : ""}`}
-      type="button"
-      aria-selected={selected}
-      data-task-id={task.id}
-      onClick={() => onTask(task)}
-      title={task.title}
-    >
-      {indicator && <StatusDot task={task} indicator={indicator} />}
-      {task.pinnedAt != null && <PushPin size={11} weight="fill" className="workspace-task-pin" aria-label="已置顶" />}
-      {task.mode === "debate" && <Scales size={12} weight="bold" className="workspace-task-kind" aria-label="辩论" />}
-      <span className="workspace-task-title">{task.title || "未命名任务"}</span>
-      {trailing}
-    </button>
-  );
-}
-
-function TeamRow({
-  task,
   allTasks,
   selectedTaskId,
   onTask,
   indicatorForTask,
+  child = false,
+  showOrigin = true,
+  showPin = false,
+  trailing,
 }: {
   task: Task;
   allTasks: Task[];
   selectedTaskId: string | null;
   onTask: (task: Task) => void;
   indicatorForTask: IndicatorForTask;
+  child?: boolean;
+  showOrigin?: boolean;
+  showPin?: boolean;
+  trailing?: React.ReactNode;
 }) {
-  const workers = workersOf(allTasks, task.id);
+  const selected = selectedTaskId === task.id;
+  const indicator = indicatorForTask(task);
+  const hasOrigin = showOrigin && taskParentLink(task, allTasks) !== null;
+  return (
+    <div className="workspace-task-row-wrap">
+      <button
+        className={`workspace-task-row ui-selectable${child ? " workspace-task-row--child" : ""}${hasOrigin ? " workspace-task-row--has-origin" : ""}${selected ? " is-selected" : ""}`}
+        type="button"
+        aria-selected={selected}
+        data-task-id={task.id}
+        onClick={() => onTask(task)}
+        title={task.title}
+      >
+        {indicator && <StatusDot task={task} indicator={indicator} />}
+        {showPin && task.pinnedAt != null && <PushPin size={11} weight="fill" className="workspace-task-pin" aria-label="已置顶" />}
+        {task.mode === "debate" && <Scales size={12} weight="bold" className="workspace-task-kind" aria-label="辩论" />}
+        <span className="workspace-task-title">{task.title || "未命名任务"}</span>
+        {trailing}
+      </button>
+      {hasOrigin && (
+        <OriginTaskChip
+          task={task}
+          allTasks={allTasks}
+          onOpen={(taskId) => {
+            const linked = allTasks.find((item) => item.id === taskId);
+            if (linked) onTask(linked);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function TeamRow({
+  task,
+  tasks,
+  allTasks,
+  selectedTaskId,
+  onTask,
+  indicatorForTask,
+}: {
+  task: Task;
+  tasks: Task[];
+  allTasks: Task[];
+  selectedTaskId: string | null;
+  onTask: (task: Task) => void;
+  indicatorForTask: IndicatorForTask;
+}) {
+  const workers = workersOf(tasks, task.id);
   const selectedWorker = workers.some((worker) => worker.id === selectedTaskId);
   const [expanded, setExpanded] = useState(selectedWorker);
   useEffect(() => {
@@ -154,6 +176,7 @@ function TeamRow({
         </button>
         <TaskRow
           task={task}
+          allTasks={allTasks}
           selectedTaskId={selectedTaskId}
           onTask={onTask}
           indicatorForTask={indicatorForTask}
@@ -171,7 +194,9 @@ function TeamRow({
             <TaskRow
               key={worker.id}
               task={worker}
+              allTasks={allTasks}
               child
+              showOrigin={false}
               selectedTaskId={selectedTaskId}
               onTask={onTask}
               indicatorForTask={indicatorForTask}
@@ -186,11 +211,13 @@ function TeamRow({
 
 function CurrentProjectTree({
   tasks,
+  allTasks,
   selectedTaskId,
   onTask,
   indicatorForTask,
 }: {
   tasks: Task[];
+  allTasks: Task[];
   selectedTaskId: string | null;
   onTask: (task: Task) => void;
   indicatorForTask: IndicatorForTask;
@@ -226,13 +253,14 @@ function CurrentProjectTree({
                     <TeamRow
                       key={task.id}
                       task={task}
-                      allTasks={tasks}
+                      tasks={tasks}
+                      allTasks={allTasks}
                       selectedTaskId={selectedTaskId}
                       onTask={onTask}
                       indicatorForTask={indicatorForTask}
                     />
                   ) : (
-                    <TaskRow key={task.id} task={task} selectedTaskId={selectedTaskId} onTask={onTask} indicatorForTask={indicatorForTask} />
+                    <TaskRow key={task.id} task={task} allTasks={allTasks} selectedTaskId={selectedTaskId} onTask={onTask} indicatorForTask={indicatorForTask} />
                   ),
                 )}
               </div>
@@ -247,12 +275,14 @@ function CurrentProjectTree({
 function OtherProject({
   project,
   tasks,
+  allTasks,
   selectedTaskId,
   onTask,
   indicatorForTask,
 }: {
   project: ProjectView;
   tasks: Task[];
+  allTasks: Task[];
   selectedTaskId: string | null;
   onTask: (task: Task) => void;
   indicatorForTask: IndicatorForTask;
@@ -275,7 +305,7 @@ function OtherProject({
       {expanded && (
         <div className="workspace-other-project-tasks">
           {ordered.map((task) => (
-            <TaskRow key={task.id} task={task} selectedTaskId={selectedTaskId} onTask={onTask} indicatorForTask={indicatorForTask} />
+            <TaskRow key={task.id} task={task} allTasks={allTasks} showPin selectedTaskId={selectedTaskId} onTask={onTask} indicatorForTask={indicatorForTask} />
           ))}
           {!ordered.length && <p>没有任务</p>}
         </div>
@@ -294,7 +324,7 @@ export function TaskTree({ projects, currentProjectId, tasks, selectedTaskId, on
   const otherProjects = projects.filter((project) => project.id !== currentProjectId);
   return (
     <nav className="workspace-task-tree" aria-label="任务树">
-      <CurrentProjectTree tasks={currentTasks} selectedTaskId={selectedTaskId} onTask={onTask} indicatorForTask={indicatorForTask} />
+      <CurrentProjectTree tasks={currentTasks} allTasks={tasks} selectedTaskId={selectedTaskId} onTask={onTask} indicatorForTask={indicatorForTask} />
       {otherProjects.length > 0 && (
         <section className="workspace-other-projects">
           <header className="workspace-task-section-title">其他项目</header>
@@ -303,6 +333,7 @@ export function TaskTree({ projects, currentProjectId, tasks, selectedTaskId, on
               key={project.id}
               project={project}
               tasks={activeTasks.filter((task) => task.projectId === project.id)}
+              allTasks={tasks}
               selectedTaskId={selectedTaskId}
               onTask={onTask}
               indicatorForTask={indicatorForTask}

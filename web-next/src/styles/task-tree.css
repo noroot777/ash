@@ -68,6 +68,12 @@
   transform: rotate(90deg);
 }
 
+.workspace-task-row-wrap {
+  position: relative;
+  display: flex;
+  min-width: 0;
+}
+
 .workspace-task-row {
   display: flex;
   width: 100%;
@@ -78,6 +84,22 @@
   background: transparent;
   padding: 0 8px;
   text-align: left;
+}
+
+.workspace-task-row-wrap > .workspace-task-row {
+  min-width: 0;
+  flex: 1;
+}
+
+.workspace-task-row--has-origin {
+  padding-right: 33px;
+}
+
+.workspace-task-row-wrap > .task-origin-chip {
+  position: absolute;
+  top: 50%;
+  right: 7px;
+  transform: translateY(-50%);
 }
 
 .workspace-task-title {
@@ -148,9 +170,12 @@
   align-items: center;
 }
 
-.workspace-team-row > .workspace-task-row {
+.workspace-team-row > .workspace-task-row-wrap {
   min-width: 0;
   flex: 1;
+}
+
+.workspace-team-row > .workspace-task-row-wrap .workspace-task-row {
   padding-left: 1px;
 }
 

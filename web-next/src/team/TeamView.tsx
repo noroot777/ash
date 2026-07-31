@@ -5,6 +5,7 @@ import { ArrowSquareOut, Broom, PaperPlaneTilt, SpinnerGap, WarningCircle, X } f
 import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
 import { api, type TeamCuaStatus } from "../lib/api.ts";
+import { OriginTaskBar } from "../components/TaskOrigin.tsx";
 import { useConversation } from "../lib/useConversation.ts";
 import { AttachmentPicker, MessageAttachments, UploadAttachmentList, useAttachments } from "../task-detail/Attachments.tsx";
 import { QuestionCard } from "../task-detail/QuestionCard.tsx";
@@ -121,6 +122,7 @@ function WorkerDrawer({
   allTasks,
   onClose,
   onOpenFull,
+  onOpenTask,
   onTaskUpdate,
   onDeleted,
   notify,
@@ -129,6 +131,7 @@ function WorkerDrawer({
   allTasks: Task[];
   onClose: () => void;
   onOpenFull: () => void;
+  onOpenTask: (taskId: string) => void;
   onTaskUpdate: (task: Task) => void;
   onDeleted: (taskId: string) => void;
   notify: (message: string) => void;
@@ -147,7 +150,7 @@ function WorkerDrawer({
           <button type="button" onClick={onOpenFull}><ArrowSquareOut size={13} />整页打开</button>
           <button type="button" aria-label="关闭执行者抽屉" onClick={onClose}><X size={14} weight="bold" /></button>
         </header>
-        <TaskDetail key={worker.id} task={worker} allTasks={allTasks} onTaskUpdate={onTaskUpdate} onDeleted={onDeleted} notify={notify} />
+        <TaskDetail key={worker.id} task={worker} allTasks={allTasks} onTaskUpdate={onTaskUpdate} onDeleted={onDeleted} onOpenTask={onOpenTask} notify={notify} />
       </aside>
     </>
   );
@@ -189,6 +192,12 @@ export function TeamView({
   const selectedWorker = selectedWorkerId ? workers.find((worker) => worker.id === selectedWorkerId) ?? null : null;
   const markdown = useMemo(() => conversationToMarkdown(conversation.items, task), [conversation.items, task]);
   const objective = parseAttachmentText(task.body);
+  const openTaskById = (taskId: string) => {
+    const target = allTasks.find((item) => item.id === taskId);
+    if (!target) return notify("关联任务不存在或尚未加载");
+    setSelectedWorkerId(null);
+    onSelectTask(target);
+  };
 
   const refreshGroups = useCallback(async () => {
     try {
@@ -242,6 +251,7 @@ export function TeamView({
 
   return (
     <div className="team-view">
+      <OriginTaskBar task={task} allTasks={allTasks} onOpen={openTaskById} />
       <TeamHeader
         task={task}
         workers={workers}
@@ -305,6 +315,7 @@ export function TeamView({
           allTasks={allTasks}
           onClose={() => setSelectedWorkerId(null)}
           onOpenFull={() => onSelectTask(selectedWorker)}
+          onOpenTask={openTaskById}
           onTaskUpdate={onTaskUpdate}
           onDeleted={onTaskDeleted}
           notify={notify}

@@ -18,6 +18,7 @@ import {
 import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
 import { LegacyLink } from "../components/LegacyLink.tsx";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
+import { OriginTaskBar } from "../components/TaskOrigin.tsx";
 import { api } from "../lib/api.ts";
 import { useStickToBottom } from "../lib/useStickToBottom.ts";
 import { DeleteTaskDialog } from "../task-detail/DeleteTaskDialog.tsx";
@@ -233,6 +234,11 @@ export function DebateView({
 
   return (
     <div className="debate-view">
+      <OriginTaskBar task={task} allTasks={allTasks} onOpen={(taskId) => {
+        const target = allTasks.find((item) => item.id === taskId);
+        if (target) onSelectTask(target);
+        else notify("关联任务不存在或尚未加载");
+      }} />
       <header className="debate-header">
         <span className="debate-kind">辩论</span>
         <TaskPinButton

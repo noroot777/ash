@@ -17,8 +17,13 @@ import { asc, eq } from "drizzle-orm";
 import type { Hono } from "hono";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
-import { agents, tasks } from "./db/schema.js";
+import { agents, projects, sessions, tasks } from "./db/schema.js";
 import { RUNS_DIR } from "./paths.js";
+import {
+  detectReviewCoverage,
+  repairCoverageGuard,
+  type ReviewCoverageFinding,
+} from "./review-coverage.js";
 import { setTaskStage } from "./task-stage.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { createTasks } from "./task-store.js";
@@ -35,6 +40,11 @@ const REVIEW_MIME: Record<string, string> = {
 
 type TaskRow = typeof tasks.$inferSelect;
 type Settlement = "canceled" | "paused" | "done" | "failed";
+
+export const REVIEW_OVERWRITE_CHECK =
+  "若声称行为在仓库里不存在或已被改掉，先查被审产物提交之后是否有后续提交触及同批文件；" +
+  "若有，在报告写明“疑似被后续提交有意覆盖，建议人工确认而非自动打回”及提交 hash、说明和文件，" +
+  "并先调用 ask_question 等人工确认，不要仅因此上报 verify_failed。";
 
 export function shouldAutoDispatchReview(input: {
   confirmedDone: boolean;
@@ -259,6 +269,7 @@ export async function reviewProtocolFor(
     `先检查真实改动：项目仓库 ${repoPath}；被审工作目录 ${workspace.path}；` +
     `被审分支 ${workspace.branch ?? "(无 Git 分支)"}；比较基线 ${baseline}。` +
     `先看 git status / git diff / 相关提交，再决定验证范围。\n\n` +
+    `${REVIEW_OVERWRITE_CHECK}\n\n` +
     `必须真实运行验证：只读代码或只过编译不算。web 改动必须启动服务，用浏览器确认行为并截图；` +
     `其它改动也必须运行与风险相称的测试或产物。\n\n` +
     `验证收尾必须清场：审查结束前把你为验证启动的所有服务/进程全部停掉（dev server、mock server、throwaway 实例等），` +
@@ -353,18 +364,43 @@ async function readConclusion(targetId: string, round: number): Promise<ReviewCo
   }
 }
 
-function repairPrompt(target: TaskRow, review: TaskRow, report: string, images: string[]): string {
+function repairPrompt(
+  target: TaskRow,
+  review: TaskRow,
+  report: string,
+  images: string[],
+  coverage: ReviewCoverageFinding | null,
+): string {
   const dir = reviewRoundDir(target.id, review.reviewRound ?? 1);
   const autoNext = target.reviewRequested && (review.reviewRound ?? 1) < MAX_AUTO_REVIEW_ROUNDS;
   const evidence = images.length
     ? images.map((name) => `- ${join(dir, name)}`).join("\n")
     : "- (本轮没有截图文件)";
+  const coverageGuard = repairCoverageGuard(coverage);
   return `【自动审查未通过 · 第 ${review.reviewRound} 轮】\n` +
     `审查任务 ${review.id} 已给出 verify_failed。请按报告修复，不要扩大原任务边界。\n\n` +
+    (coverageGuard ? `${coverageGuard}\n\n` : "") +
     `审查报告：\n${report || "(审查者未写 report.md；请结合会话与现有产物排查)"}\n\n` +
     `证据目录：${dir}\n${evidence}\n\n` +
     `修完必须调用 complete_task(taskId="${target.id}") 确认完成；` +
     (autoNext ? "确认后 harness 会自动派发下一轮复审。" : "本轮不自动续派，确认后可由用户手动再次派审。");
+}
+
+async function reviewCoverageFor(target: TaskRow): Promise<ReviewCoverageFinding | null> {
+  const [project, taskSessions] = await Promise.all([
+    db.select().from(projects).where(eq(projects.id, target.projectId)).then((rows) => rows.at(0)),
+    db.select().from(sessions).where(eq(sessions.taskId, target.id)),
+  ]);
+  if (!project) return null;
+  const completed = taskSessions
+    .filter((session) => session.endedAt)
+    .sort((a, b) => b.endedAt!.localeCompare(a.endedAt!))[0];
+  return detectReviewCoverage({
+    repoPath: project.repoPath,
+    ref: completed?.branch,
+    turnStartedAt: completed?.turnStartedAt ?? completed?.startedAt ?? target.startedAt,
+    endedAt: completed?.endedAt ?? target.endedAt,
+  });
 }
 
 async function finishReview(review: TaskRow, status: Settlement): Promise<void> {
@@ -402,10 +438,14 @@ async function finishReview(review: TaskRow, status: Settlement): Promise<void> 
     return;
   }
 
-  const [report, images] = await Promise.all([readReport(target.id, round), screenshots(target.id, round)]);
+  const [report, images, coverage] = await Promise.all([
+    readReport(target.id, round),
+    screenshots(target.id, round),
+    reviewCoverageFor(target),
+  ]);
   await appendTaskTimeline(target.id, `第 ${round} 轮审查未通过，已把审查报告和证据路径交回原任务续跑修复。`);
   void import("./orchestrator.js")
-    .then(({ continueTask }) => continueTask(target.id, repairPrompt(target, review, report, images)))
+    .then(({ continueTask }) => continueTask(target.id, repairPrompt(target, review, report, images, coverage)))
     .catch((error) => appendTaskTimeline(
       target.id,
       `审查打回失败：唤醒原任务时出错（${error instanceof Error ? error.message : String(error)}），请手动续跑。`,
