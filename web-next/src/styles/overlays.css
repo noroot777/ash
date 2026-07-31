@@ -362,36 +362,40 @@
 
 .note-task-badge {
   display: inline-flex;
-  height: 25px;
+  height: 22px;
   align-items: center;
-  gap: 3px;
-  border: 1px solid color-mix(in lch, var(--green) 42%, var(--line));
-  border-radius: 999px;
-  background: var(--green-bg);
-  padding: 0 7px;
-  color: var(--green);
+  gap: 4px;
+  border: 0;
+  background: transparent;
+  padding: 0 2px;
+  color: var(--faint);
   font-size: 9px;
-  font-weight: 700;
+  font-weight: 550;
   white-space: nowrap;
+  transition: color 150ms ease;
 }
 
-.note-task-badge:hover {
-  border-color: var(--green);
-  box-shadow: 0 1px 4px color-mix(in lch, var(--green) 20%, transparent);
+.note-task-arrow {
+  width: 0;
+  opacity: 0;
+  transform: translateX(-3px);
+  transition: width 150ms ease, opacity 150ms ease, transform 150ms ease;
 }
 
-.note-row.is-converted {
-  background: color-mix(in lch, var(--green-bg) 42%, var(--panel));
-  box-shadow: inset 3px 0 var(--green);
+.note-row.is-converted:hover .note-task-badge,
+.note-task-badge:focus-visible {
+  color: var(--accent);
+}
+
+.note-row.is-converted:hover .note-task-arrow,
+.note-task-badge:focus-visible .note-task-arrow {
+  width: 11px;
+  opacity: 1;
+  transform: none;
 }
 
 .note-row.is-converted .note-row-main {
-  opacity: 0.56;
-}
-
-.note-row.is-converted .note-row-main b {
-  text-decoration: line-through;
-  text-decoration-color: color-mix(in lch, var(--muted) 65%, transparent);
+  opacity: 0.72;
 }
 
 .note-editor {
@@ -584,4 +588,9 @@
   .palette-preview { display: none; }
   .notes-body { grid-template-columns: 210px minmax(0, 1fr); }
   .notes-panel > footer > span { display: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .note-task-badge,
+  .note-task-arrow { transition: none; }
 }

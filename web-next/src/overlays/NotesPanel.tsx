@@ -185,7 +185,7 @@ export function NotesPanel({ project, initialNoteId, onClose, onTask, onConvert,
             {filtered.map((note) => <div className={`note-row ui-selectable${note.taskId ? " is-converted" : ""}${!newDraft && note.id === activeId ? " is-selected" : ""}`} key={note.id} role="listitem">
               <button className="note-pick" type="button" role="checkbox" aria-checked={picked.has(note.id)} aria-label={`选择 ${titleOf(note.body)}`} onClick={() => togglePicked(note.id)}><span className={`ui-checkbox${picked.has(note.id) ? " is-checked" : ""}`} aria-hidden="true" /></button>
               <button className="note-row-main" type="button" onClick={() => void select(note)}><b>{titleOf(note.body)}</b><small>{noteTime(note.updatedAt)}</small></button>
-              {note.taskId && <button className="note-task-badge" type="button" title="打开关联任务" onClick={async () => { if (!dirty || await save()) onTask(note.taskId!); }}><CheckCircle size={12} weight="fill" /><span>已转任务</span><ArrowSquareOut size={11} /></button>}
+              {note.taskId && <button className="note-task-badge" type="button" title="打开关联任务" onClick={async () => { if (!dirty || await save()) onTask(note.taskId!); }}><CheckCircle size={12} weight="duotone" aria-hidden="true" /><span>已转任务</span><ArrowSquareOut className="note-task-arrow" size={11} aria-hidden="true" /></button>}
             </div>)}
             {loading && <p>读取中…</p>}{!loading && !filtered.length && !newDraft && <p>没有匹配的随手记</p>}
           </div></aside>

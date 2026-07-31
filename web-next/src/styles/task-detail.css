@@ -13,7 +13,7 @@
   height: 44px;
   flex: 0 0 44px;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   border-bottom: 0.5px solid var(--line);
   padding: 0 10px 0 14px;
   background: var(--canvas);
@@ -28,6 +28,26 @@
   font-size: 9.5px;
   font-weight: 750;
 }
+
+.task-detail-pin {
+  display: grid;
+  width: 22px;
+  height: 22px;
+  flex: 0 0 22px;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  padding: 0;
+  color: color-mix(in lch, var(--faint) 45%, transparent);
+  transition: color 150ms ease, background-color 150ms ease;
+}
+
+.task-detail-kind + .task-detail-pin { margin-left: -2px; }
+.task-detail-pin + .task-detail-title { margin-left: -4px; }
+.task-detail-pin:hover,
+.task-detail-pin:focus-visible { background: var(--raised); color: var(--muted); }
+.task-detail-pin.is-pinned { color: color-mix(in lch, var(--accent) 86%, var(--muted)); }
 
 .task-detail-title {
   width: 120px;
@@ -384,4 +404,5 @@
 
 @media (prefers-reduced-motion: reduce) {
   .is-spinning { animation: none; }
+  .task-detail-pin { transition: none; }
 }
