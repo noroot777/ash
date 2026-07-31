@@ -27,6 +27,39 @@
   padding: 8px 8px 6px;
 }
 
+.workspace-sidebar--resizing {
+  transition: none;
+}
+
+.workspace-sidebar-resize-handle {
+  position: absolute;
+  z-index: 10;
+  top: 0;
+  right: -3px;
+  width: 6px;
+  height: 100%;
+  cursor: col-resize;
+}
+
+.workspace-sidebar-resize-handle::after {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 1px;
+  transform: translateX(-50%);
+  background: var(--accent);
+  content: "";
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+
+.workspace-sidebar-resize-handle:hover::after,
+.workspace-sidebar--resizing .workspace-sidebar-resize-handle::after {
+  opacity: 0.7;
+}
+
 .workspace-sidebar--collapsed .workspace-project-avatar {
   margin-top: 1px;
 }

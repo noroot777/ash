@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from "react";
 import type { ProjectView, Task } from "@harness/shared";
 import {
   MagnifyingGlass,
@@ -10,6 +11,10 @@ import { ProjectSwitcher } from "./ProjectSwitcher.tsx";
 import { TaskTree } from "./TaskTree.tsx";
 import { LegacyLink } from "../components/LegacyLink.tsx";
 
+export const WORKSPACE_SIDEBAR_MIN_WIDTH = 220;
+export const WORKSPACE_SIDEBAR_MAX_WIDTH = 480;
+export const WORKSPACE_SIDEBAR_DEFAULT_WIDTH = 260;
+
 export function WorkspaceSidebar({
   projects,
   currentProject,
@@ -17,6 +22,8 @@ export function WorkspaceSidebar({
   selectedTaskId,
   connected,
   collapsed,
+  width,
+  onWidthChange,
   onProject,
   onTask,
   onToggleCollapsed,
@@ -31,6 +38,8 @@ export function WorkspaceSidebar({
   selectedTaskId: string | null;
   connected: boolean;
   collapsed: boolean;
+  width: number;
+  onWidthChange: (width: number) => void;
   onProject: (projectId: string) => void;
   onTask: (task: Task) => void;
   onToggleCollapsed: () => void;
@@ -39,6 +48,33 @@ export function WorkspaceSidebar({
   onCreate: () => void;
   onSettings: () => void;
 }) {
+  const dragStart = useRef<{ x: number; width: number } | null>(null);
+  const previousBodyStyle = useRef<{ cursor: string; userSelect: string } | null>(null);
+  const [resizing, setResizing] = useState(false);
+
+  useEffect(() => {
+    const stopResizing = () => {
+      if (!dragStart.current) return;
+      dragStart.current = null;
+      setResizing(false);
+      document.body.style.cursor = previousBodyStyle.current?.cursor ?? "";
+      document.body.style.userSelect = previousBodyStyle.current?.userSelect ?? "";
+      previousBodyStyle.current = null;
+    };
+    const resize = (event: MouseEvent) => {
+      if (!dragStart.current) return;
+      const nextWidth = dragStart.current.width + event.clientX - dragStart.current.x;
+      onWidthChange(Math.min(WORKSPACE_SIDEBAR_MAX_WIDTH, Math.max(WORKSPACE_SIDEBAR_MIN_WIDTH, nextWidth)));
+    };
+    window.addEventListener("mousemove", resize);
+    window.addEventListener("mouseup", stopResizing);
+    return () => {
+      window.removeEventListener("mousemove", resize);
+      window.removeEventListener("mouseup", stopResizing);
+      stopResizing();
+    };
+  }, [onWidthChange]);
+
   if (collapsed) {
     return (
       <aside className="workspace-sidebar workspace-sidebar--collapsed" aria-label="已收起的侧边栏">
@@ -53,7 +89,7 @@ export function WorkspaceSidebar({
   }
 
   return (
-    <aside className="workspace-sidebar" aria-label="项目和任务导航">
+    <aside className={`workspace-sidebar${resizing ? " workspace-sidebar--resizing" : ""}`} style={{ width, minWidth: width }} aria-label="项目和任务导航">
       <div className="workspace-sidebar-top">
         <ProjectSwitcher
           projects={projects}
@@ -91,6 +127,24 @@ export function WorkspaceSidebar({
           收起
         </button>
       </div>
+      <div
+        className="workspace-sidebar-resize-handle"
+        role="separator"
+        aria-label="调整侧边栏宽度，双击恢复默认宽度"
+        aria-orientation="vertical"
+        aria-valuemin={WORKSPACE_SIDEBAR_MIN_WIDTH}
+        aria-valuemax={WORKSPACE_SIDEBAR_MAX_WIDTH}
+        aria-valuenow={width}
+        onMouseDown={(event) => {
+          event.preventDefault();
+          dragStart.current = { x: event.clientX, width };
+          previousBodyStyle.current = { cursor: document.body.style.cursor, userSelect: document.body.style.userSelect };
+          document.body.style.cursor = "col-resize";
+          document.body.style.userSelect = "none";
+          setResizing(true);
+        }}
+        onDoubleClick={() => onWidthChange(WORKSPACE_SIDEBAR_DEFAULT_WIDTH)}
+      />
     </aside>
   );
 }
