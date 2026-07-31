@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import type { AgentExecutorProfile, AppSettings, LlmProvider } from "@harness/shared";
-import { AGENT_TYPES, DEFAULT_APP_SETTINGS } from "@harness/shared";
+import { DEFAULT_APP_SETTINGS } from "@harness/shared";
 import { Check, MagnifyingGlass } from "@phosphor-icons/react";
 import { Button, Toggle } from "../components/ui.tsx";
 import {
@@ -39,14 +39,6 @@ export function AgentsSettings({ notify }: { notify: (message: string) => void }
       .catch((error) => notify(error instanceof Error ? error.message : "执行器设置读取失败"))
       .finally(() => setLoading(false));
   }, [notify]);
-
-  const defaults = useMemo(
-    () => AGENT_TYPES.map((type) => ({
-      type,
-      profile: profiles.find((row) => row.type === type && row.isDefault),
-    })),
-    [profiles],
-  );
 
   const changeProfile = (id: string, updated: AgentExecutorProfile | null) => {
     setProfiles((current) => updated
@@ -148,15 +140,6 @@ export function AgentsSettings({ notify }: { notify: (message: string) => void }
       <section className="settings-section">
         <h2>默认规则</h2>
         <div className="settings-card">
-          {defaults.map(({ type, profile }) => (
-            <div className="settings-row" key={type}>
-              <div>
-                <b>{type} 类型默认</b>
-                <small>任务未指定 executorId 时降级到此 Profile</small>
-              </div>
-              <span>{profile?.name ?? `内置 ${type}@local`}</span>
-            </div>
-          ))}
           <div className="settings-row">
             <div>
               <b>新任务默认使用 worktree</b>

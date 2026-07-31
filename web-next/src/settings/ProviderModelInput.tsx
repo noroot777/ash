@@ -58,6 +58,7 @@ export function ProviderModelInput({
   provider,
   value,
   disabled,
+  compact = false,
   onChange,
   onCommit,
 }: {
@@ -66,6 +67,7 @@ export function ProviderModelInput({
   provider?: LlmProvider;
   value: string;
   disabled?: boolean;
+  compact?: boolean;
   onChange: (value: string) => void;
   onCommit?: (value: string) => void;
 }) {
@@ -125,6 +127,9 @@ export function ProviderModelInput({
         list={datalistId}
         value={value}
         disabled={disabled}
+        title={provider && compact
+          ? `${provider.name} · ${status === "loading" ? "正在探测模型" : status === "failed" ? `探测失败：${error}` : `${models.length} 个模型`}`
+          : undefined}
         placeholder={provider ? provider.model || "跟随供应商默认" : "跟随 CLI"}
         onChange={(event) => onChange(event.target.value)}
         onBlur={(event) => onCommit?.(event.target.value.trim())}
@@ -132,7 +137,7 @@ export function ProviderModelInput({
       <datalist id={datalistId}>
         {options.map((model) => <option value={model} key={model} />)}
       </datalist>
-      {provider && (
+      {provider && !compact && (
         <small className={status === "failed" ? "is-error" : ""}>
           {status === "loading" && `正在从「${provider.name}」探测模型…`}
           {status === "ready" && `${provider.name} · ${models.length} 个完整模型名`}

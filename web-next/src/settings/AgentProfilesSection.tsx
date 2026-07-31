@@ -18,9 +18,9 @@ import { ExtraArgsEditor } from "./ExtraArgsEditor.tsx";
 import {
   providerProtocolForAgent,
   providersForAgent,
-  protocolLabel,
 } from "./agentProviderRules.ts";
 import { ProviderModelInput } from "./ProviderModelInput.tsx";
+import { ProfileArgsControl } from "./ProfileArgsControl.tsx";
 
 function profileAvatar(type: AgentType) {
   if (type === "claude") return "C";
@@ -42,15 +42,9 @@ function ProfileRow({
 }) {
   const [busy, setBusy] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const [args, setArgs] = useState(profile.extraArgs ?? []);
-  const [argsDirty, setArgsDirty] = useState(false);
   const providerOptions = providersForAgent(profile.type, providers);
   const provider = providers.find((candidate) => candidate.id === profile.providerId);
   const protocol = providerProtocolForAgent(profile.type);
-
-  useEffect(() => {
-    if (!argsDirty) setArgs(profile.extraArgs ?? []);
-  }, [argsDirty, profile.extraArgs]);
 
   const patch = async (value: Partial<AgentExecutorProfile>) => {
     setBusy(true);
@@ -76,28 +70,88 @@ function ProfileRow({
     }
   };
 
-  const saveArgs = async () => {
-    const normalized = args.map((token) => token.trim()).filter(Boolean);
-    if (await patch({ extraArgs: normalized })) {
-      setArgs(normalized);
-      setArgsDirty(false);
-      notify(`${profile.name} 的 CLI 参数已保存`);
-    }
-  };
-
   return (
     <>
-      <article className="agent-profile-row">
+      <article className="agent-profile-row" role="row">
         <div className="agent-profile-identity">
-          <span className={`settings-agent-avatar is-${profile.type}`}>
-            {profileAvatar(profile.type)}
-          </span>
-          <div className="settings-agent-copy">
-            <b>{profile.name}</b>
-            <small>{profile.target.kind === "ssh" ? `ssh ${profile.target.host}` : "本地"}</small>
-          </div>
+          <b title={profile.name}>{profile.name}</b>
+          <small title={profile.target.kind === "ssh" ? `ssh ${profile.target.host}` : "本地执行"}>
+            {profile.target.kind === "ssh" ? `ssh ${profile.target.host}` : "本地"}
+          </small>
+        </div>
+        <div className="agent-profile-cell">
+          <select
+            aria-label={`${profile.name} 的供应商`}
+            title={protocol ? "切换供应商会清除旧模型覆盖" : "该 CLI 暂不支持供应商"}
+            disabled={busy || !protocol}
+            value={profile.providerId ?? ""}
+            onChange={(event) => void patch({
+              providerId: event.target.value || null,
+              model: "",
+            })}
+          >
+            <option value="">{protocol ? "CLI 官方账号" : "暂不支持"}</option>
+            {provider && !providerOptions.some((candidate) => candidate.id === provider.id) && (
+              <option value={provider.id}>{provider.name}（协议不匹配）</option>
+            )}
+            {providerOptions.map((candidate) => (
+              <option value={candidate.id} key={candidate.id}>
+                {candidate.name}{candidate.hasKey ? "" : " · 缺 Key"}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="agent-profile-cell">
+          <ProviderModelInput
+            inputId={`profile-${profile.id}-model`}
+            type={profile.type}
+            provider={provider}
+            value={profile.model ?? ""}
+            disabled={busy}
+            compact
+            onChange={(model) => onChange({ ...profile, model: model || undefined })}
+            onCommit={(model) => void patch({ model })}
+          />
+        </div>
+        <div className="agent-profile-cell">
+          <select
+            aria-label={`${profile.name} 的思考强度`}
+            disabled={busy}
+            value={profile.reasoningEffort ?? ""}
+            onChange={(event) => void patch({ reasoningEffort: event.target.value })}
+          >
+            <option value="">跟随 CLI</option>
+            {REASONING_EFFORT_VALUES[profile.type].map((effort) => (
+              <option value={effort} key={effort}>{effort}</option>
+            ))}
+          </select>
+        </div>
+        <div className="agent-profile-cell">
+          <select
+            aria-label={`${profile.name} 的速度`}
+            disabled={busy || profile.type === "antigravity"}
+            value={profile.speed ?? "standard"}
+            onChange={(event) => void patch({
+              speed: event.target.value as "standard" | "fast",
+            })}
+          >
+            <option value="standard">标准</option>
+            <option value="fast">1.5x</option>
+          </select>
+        </div>
+        <ProfileArgsControl
+          profileName={profile.name}
+          value={profile.extraArgs ?? []}
+          disabled={busy}
+          onSave={async (extraArgs) => {
+            const saved = await patch({ extraArgs });
+            if (saved) notify(`${profile.name} 的 CLI 参数已保存`);
+            return saved;
+          }}
+        />
+        <div className="agent-profile-default">
           {profile.isDefault ? (
-            <span className="settings-default-tag">{profile.type} 默认</span>
+            <span className="settings-default-tag">默认</span>
           ) : (
             <button
               type="button"
@@ -105,97 +159,19 @@ function ProfileRow({
               disabled={busy}
               onClick={() => void patch({ isDefault: true })}
             >
-              设为默认
+              设默认
             </button>
           )}
-          <button
-            className="settings-icon-danger"
-            type="button"
-            disabled={busy}
-            onClick={() => setConfirmDelete(true)}
-            aria-label={`删除 ${profile.name}`}
-          >
-            <Trash size={14} aria-hidden="true" />
-          </button>
         </div>
-
-        <div className="agent-profile-fields">
-          <label>
-            <span>供应商</span>
-            <select
-              disabled={busy || !protocol}
-              value={profile.providerId ?? ""}
-              onChange={(event) => void patch({
-                providerId: event.target.value || null,
-                model: "",
-              })}
-            >
-              <option value="">{protocol ? "CLI 官方账号" : "该 CLI 暂不支持供应商"}</option>
-              {provider && !providerOptions.some((candidate) => candidate.id === provider.id) && (
-                <option value={provider.id}>{provider.name}（协议不匹配）</option>
-              )}
-              {providerOptions.map((candidate) => (
-                <option value={candidate.id} key={candidate.id}>
-                  {candidate.name}{candidate.hasKey ? "" : " · 缺 Key"}
-                </option>
-              ))}
-            </select>
-            {protocol && <small>{protocolLabel(protocol)}；切换时清除旧模型覆盖</small>}
-          </label>
-          <label>
-            <span>模型</span>
-            <ProviderModelInput
-              inputId={`profile-${profile.id}-model`}
-              type={profile.type}
-              provider={provider}
-              value={profile.model ?? ""}
-              disabled={busy}
-              onChange={(model) => onChange({ ...profile, model: model || undefined })}
-              onCommit={(model) => void patch({ model })}
-            />
-          </label>
-          <label>
-            <span>思考强度</span>
-            <select
-              disabled={busy}
-              value={profile.reasoningEffort ?? ""}
-              onChange={(event) => void patch({ reasoningEffort: event.target.value })}
-            >
-              <option value="">跟随 CLI</option>
-              {REASONING_EFFORT_VALUES[profile.type].map((effort) => (
-                <option value={effort} key={effort}>{effort}</option>
-              ))}
-            </select>
-          </label>
-          <label>
-            <span>速度</span>
-            <select
-              disabled={busy || profile.type === "antigravity"}
-              value={profile.speed ?? "standard"}
-              onChange={(event) => void patch({
-                speed: event.target.value as "standard" | "fast",
-              })}
-            >
-              <option value="standard">标准</option>
-              <option value="fast">1.5x</option>
-            </select>
-          </label>
-        </div>
-
-        <div className="agent-profile-args">
-          <ExtraArgsEditor
-            compact
-            value={args}
-            disabled={busy}
-            onChange={(next) => {
-              setArgs(next);
-              setArgsDirty(true);
-            }}
-          />
-          <Button disabled={busy || !argsDirty} onClick={() => void saveArgs()}>
-            {busy ? "保存中…" : "保存参数"}
-          </Button>
-        </div>
+        <button
+          className="settings-icon-danger agent-profile-delete"
+          type="button"
+          disabled={busy}
+          onClick={() => setConfirmDelete(true)}
+          aria-label={`删除 ${profile.name}`}
+        >
+          <Trash size={14} aria-hidden="true" />
+        </button>
       </article>
       {confirmDelete && (
         <ConfirmDialog
@@ -392,6 +368,11 @@ export function AgentProfilesSection({
   onProfileAdded: (profile: AgentExecutorProfile) => void;
   notify: (message: string) => void;
 }) {
+  const profileGroups = useMemo(() => AGENT_TYPES.map((type) => ({
+    type,
+    profiles: profiles.filter((profile) => profile.type === type),
+  })).filter((group) => group.profiles.length > 0), [profiles]);
+
   return (
     <section className="settings-section">
       <h2>执行器 Profile</h2>
@@ -400,15 +381,50 @@ export function AgentProfilesSection({
         {!loading && !profiles.length && (
           <p className="settings-muted">还没有 Profile；未指定时服务端仍会按类型使用内置本地默认。</p>
         )}
-        {profiles.map((profile) => (
-          <ProfileRow
-            key={profile.id}
-            profile={profile}
-            providers={providers}
-            onChange={(updated) => onProfileChanged(profile.id, updated)}
-            notify={notify}
-          />
-        ))}
+        {!!profileGroups.length && (
+          <div className="agent-profile-groups">
+            {profileGroups.map(({ type, profiles: typeProfiles }) => {
+              const defaultProfile = typeProfiles.find((profile) => profile.isDefault);
+              return (
+                <section className={`agent-profile-group is-${type}`} key={type}>
+                  <header className="agent-profile-group-head">
+                    <span className={`settings-agent-avatar is-${type}`}>
+                      {profileAvatar(type)}
+                    </span>
+                    <div>
+                      <b>{type}</b>
+                      <small>{typeProfiles.length} 个 Profile</small>
+                    </div>
+                    <span className="agent-profile-group-default" title={defaultProfile?.name}>
+                      默认 · {defaultProfile?.name ?? "内置本地执行器"}
+                    </span>
+                  </header>
+                  <div className="agent-profile-table" role="table" aria-label={`${type} 执行器`}>
+                    <div className="agent-profile-columns" role="row" aria-hidden="true">
+                      <span>Profile / 位置</span>
+                      <span>供应商</span>
+                      <span>模型</span>
+                      <span>思考</span>
+                      <span>速度</span>
+                      <span>额外参数</span>
+                      <span>默认</span>
+                      <span />
+                    </div>
+                    {typeProfiles.map((profile) => (
+                      <ProfileRow
+                        key={profile.id}
+                        profile={profile}
+                        providers={providers}
+                        onChange={(updated) => onProfileChanged(profile.id, updated)}
+                        notify={notify}
+                      />
+                    ))}
+                  </div>
+                </section>
+              );
+            })}
+          </div>
+        )}
         <div className="settings-card-foot agent-profile-foot">
           <span>供应商决定账号与模型目录；任务仍可逐个覆盖执行器、模型和思考强度。</span>
           <AddProfile
