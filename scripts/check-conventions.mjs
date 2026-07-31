@@ -3,6 +3,7 @@
 // 不 build 就不生效——build 是前端改动上线的唯一通道，等价于每次前端上线都跑一遍。
 // （根文件体积闸走的是另一个通道 .githooks/pre-commit：两条规则的触发时机不同，不捆一起。）
 import { readdirSync, statSync, readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { join, dirname, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -80,6 +81,36 @@ for (const file of files) {
 }
 
 let failed = false;
+
+// shell 脚本里 `$VAR` 紧跟非 ASCII 字符（典型：中文标点）会被 bash 吞掉一个字节
+// 当成变量名的一部分：macOS 的 bash 扫描标识符时不认多字节边界，于是
+// `echo ":$PORT。"` 里的变量名成了 `PORT\xe3`，在 `set -u` 下直接 unbound
+// variable 退出。实测复现：bash -c 'set -u; PORT=1; echo ":$PORT。"'
+// 症状很坑：脚本前面的输出都正常，到这一行才突然报错退出，看着像别处的问题
+// （2026-07-31 restart.sh 的安全闸就是这样断在最后一句提示上）。
+// 修法只有一个：加花括号 `${PORT}`。
+const shellHits = [];
+for (const rel of execFileSync("git", ["ls-files", "*.sh"], { cwd: ROOT, encoding: "utf8" }).split("\n")) {
+  if (!rel.trim()) continue;
+  let src;
+  try {
+    src = readFileSync(join(ROOT, rel), "utf8");
+  } catch {
+    continue; // 已删除但仍在索引里
+  }
+  src.split("\n").forEach((line, i) => {
+    if (/\$[A-Za-z_][A-Za-z0-9_]*[^\x00-\x7F]/.test(line)) {
+      shellHits.push(`${rel}:${i + 1}  ${line.trim().slice(0, 72)}`);
+    }
+  });
+}
+if (shellHits.length) {
+  failed = true;
+  console.error(`\n✗ shell 脚本里 $变量 紧跟着非 ASCII 字符（${shellHits.length} 处）：`);
+  for (const h of shellHits) console.error("   " + h);
+  console.error("   bash 会把那个字符的首字节吞进变量名，set -u 下当场 unbound variable 退出。");
+  console.error("   改成 ${VAR} 加花括号即可。\n");
+}
 
 if (dialogHits.length) {
   failed = true;

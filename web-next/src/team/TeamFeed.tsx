@@ -5,10 +5,12 @@ import { ArrowElbowDownRight, ArrowRight, Wrench } from "@phosphor-icons/react";
 import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
 import { SessionMeta } from "../components/SessionMeta.tsx";
+import { TaskStatusDot } from "../components/TaskStatusDot.tsx";
 import { useStickToBottom } from "../lib/useStickToBottom.ts";
+import type { IndicatorForTask } from "../lib/useTaskReadState.ts";
 import { MessageAttachments } from "../task-detail/Attachments.tsx";
 import { durationBetween, formatInstant, parseAttachmentText } from "../task-detail/utils.ts";
-import { executorLabel, parseInbound, statusTone, workerStatusText, type InboundMessage, type TeamFeedRow } from "./teamModel.ts";
+import { executorLabel, parseInbound, workerStatusText, type InboundMessage, type TeamFeedRow } from "./teamModel.ts";
 
 function AgentRow({ row }: { row: Extract<TeamFeedRow, { kind: "conv" }>["item"] }) {
   if (row.kind !== "agent") return null;
@@ -79,7 +81,17 @@ function InboundRow({
   );
 }
 
-function BatchCard({ batch, allWorkers, onOpenWorker }: { batch: Batch; allWorkers: Task[]; onOpenWorker: (taskId: string) => void }) {
+function BatchCard({
+  batch,
+  allWorkers,
+  onOpenWorker,
+  indicatorForTask,
+}: {
+  batch: Batch;
+  allWorkers: Task[];
+  onOpenWorker: (taskId: string) => void;
+  indicatorForTask: IndicatorForTask;
+}) {
   return (
     <article className="team-dispatch-card">
       <header>
@@ -89,15 +101,18 @@ function BatchCard({ batch, allWorkers, onOpenWorker }: { batch: Batch; allWorke
         {batch.group?.paused && <span>组已停止</span>}
         <time>{formatInstant(batch.at)}</time>
       </header>
-      {batch.workers.map((worker) => (
-        <button type="button" key={worker.id} onClick={() => onOpenWorker(worker.id)}>
-          <i className={`team-status-dot team-status-dot--${statusTone(worker)}`} />
-          <span className="team-dispatch-index">{allWorkers.findIndex((item) => item.id === worker.id) + 1}</span>
-          <b>{worker.title}</b>
-          <code title={executorLabel(worker)}>{executorLabel(worker)}</code>
-          <small>{workerStatusText(worker, !!batch.group?.paused)}</small>
-        </button>
-      ))}
+      {batch.workers.map((worker) => {
+        const indicator = indicatorForTask(worker);
+        return (
+          <button type="button" key={worker.id} onClick={() => onOpenWorker(worker.id)}>
+            {indicator && <TaskStatusDot indicator={indicator} surface="team" />}
+            <span className="team-dispatch-index">{allWorkers.findIndex((item) => item.id === worker.id) + 1}</span>
+            <b>{worker.title}</b>
+            <code title={executorLabel(worker)}>{executorLabel(worker)}</code>
+            <small>{workerStatusText(worker, !!batch.group?.paused)}</small>
+          </button>
+        );
+      })}
       <footer>{batch.group?.paused ? "本批执行已停止，已完成结果仍保留" : "点任一行查看完整会话与运行状态"}</footer>
     </article>
   );
@@ -108,11 +123,13 @@ export function TeamFeed({
   rows,
   workers,
   onOpenWorker,
+  indicatorForTask,
 }: {
   taskId: string;
   rows: TeamFeedRow[];
   workers: Task[];
   onOpenWorker: (taskId: string) => void;
+  indicatorForTask: IndicatorForTask;
 }) {
   const scroll = useRef<HTMLDivElement>(null);
   useStickToBottom(scroll, taskId);
@@ -122,7 +139,7 @@ export function TeamFeed({
       <section className="team-feed" aria-label="团队调度流" ref={scroll}>
         {!rows.length && <p className="team-feed-empty">运行后，调度者的拆解、派活、执行者提问与汇报会按发生顺序出现在这里。</p>}
         {rows.map((row) => {
-          if (row.kind === "batch") return <BatchCard key={row.key} batch={row.batch} allWorkers={workers} onOpenWorker={onOpenWorker} />;
+          if (row.kind === "batch") return <BatchCard key={row.key} batch={row.batch} allWorkers={workers} onOpenWorker={onOpenWorker} indicatorForTask={indicatorForTask} />;
           const item = row.item;
           if (item.kind === "agent") return <AgentRow key={row.key} row={item} />;
           if (item.kind === "user") return <UserRow key={row.key} row={item} />;

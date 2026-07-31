@@ -1,7 +1,9 @@
 import { useEffect, useMemo } from "react";
 import type { Group, Task } from "@harness/shared";
+import { TaskStatusDot } from "../components/TaskStatusDot.tsx";
+import type { IndicatorForTask } from "../lib/useTaskReadState.ts";
 import { formatDuration } from "../task-detail/utils.ts";
-import { executorLabel, statusTone, workerStatusText } from "./teamModel.ts";
+import { executorLabel, workerStatusText } from "./teamModel.ts";
 
 function elapsed(task: Task): string | null {
   if (!task.startedAt) return null;
@@ -15,11 +17,13 @@ export function WorkerRail({
   groups,
   selectedId,
   onSelect,
+  indicatorForTask,
 }: {
   workers: Task[];
   groups: Group[];
   selectedId: string | null;
   onSelect: (taskId: string) => void;
+  indicatorForTask: IndicatorForTask;
 }) {
   const groupById = useMemo(() => new Map(groups.map((group) => [group.id, group])), [groups]);
   useEffect(() => {
@@ -43,6 +47,7 @@ export function WorkerRail({
       {workers.map((worker, index) => {
         const paused = !!(worker.groupId && groupById.get(worker.groupId)?.paused);
         const duration = elapsed(worker);
+        const indicator = indicatorForTask(worker);
         return (
           <button
             type="button"
@@ -51,7 +56,7 @@ export function WorkerRail({
             onClick={() => onSelect(worker.id)}
           >
             <div>
-              <i className={`team-status-dot team-status-dot--${statusTone(worker)}`} />
+              {indicator && <TaskStatusDot indicator={indicator} surface="team" />}
               <b>{worker.title}</b>
               <code title={executorLabel(worker)}>{executorLabel(worker)}</code>
               <kbd>{index < 9 ? index + 1 : ""}</kbd>

@@ -14,6 +14,57 @@ import { resolveExecutorFor } from "./executors/index.js";
 import { reattachDetachedAgent } from "./executors/detached.js";
 import { RUNS_DIR } from "./paths.js";
 import { consumeSingleRun } from "./single-run.js";
+import { isSameProcess } from "./proc.js";
+
+// 「现在重启会打断谁」——给 scripts/restart.sh 的安全闸用。
+//
+// 闸原来只数 running/queued 的**个数**，这个判据现在过时了：agent 输出走文件
+// 之后大部分单飞任务重启根本不会断，闸却照样拦着不让重启，FORCE 的提示还在说
+// 「判为 failed」——一句现在是假的话。判据要从「有几个在跑」改成
+// 「**有几个是重启会真断的**」。
+//
+// 分三类，各自的依据都摆出来，别让调用方再猜：
+//  · survives    单飞 + 有活着的 detached 进程 → 重启后按 pid+offset 接管，无感
+//  · resumes     团队调度台 → 进程会断，但下次有人说话就 --resume 接回；
+//                丢的是当前这一轮，不是整个任务
+//  · interrupted 真会被判 failed 的：老代码起的（没 agent_pid）、queued 还没起
+//                进程的、ssh 目标的、进程已经不在的
+export type RestartImpact = {
+  survives: { id: string; title: string; pid: number }[];
+  resumes: { id: string; title: string }[];
+  interrupted: { id: string; title: string; reason: string }[];
+};
+
+export async function restartImpact(): Promise<RestartImpact> {
+  const out: RestartImpact = { survives: [], resumes: [], interrupted: [] };
+  for (const t of await db.select().from(tasks).where(inArray(tasks.status, ["running", "queued"]))) {
+    const label = { id: t.id, title: t.title || t.id };
+    if (t.mode === "team") {
+      out.resumes.push(label);
+      continue;
+    }
+    if (t.status === "queued") {
+      out.interrupted.push({ ...label, reason: "排队中，还没有进程可接管" });
+      continue;
+    }
+    const sess = (await db.select().from(sessions).where(eq(sessions.taskId, t.id)))
+      .filter((s) => s.role === "single" && !s.endedAt)
+      .sort((a, b) => b.startedAt.localeCompare(a.startedAt))
+      .at(0);
+    if (!sess?.agentPid) {
+      out.interrupted.push({ ...label, reason: "没有 agent_pid（旧代码起的，或走的不是 detached 跑法）" });
+      continue;
+    }
+    // 跟真正接管时用**同一条**判据（pid + ps 启动时间）。用两套的话，闸说能接、
+    // 接的时候又不认，用户放心重启完却发现任务挂了 —— 比不报还坏。
+    if (!isSameProcess(sess.agentPid, sess.agentStartedAt)) {
+      out.interrupted.push({ ...label, reason: `进程 ${sess.agentPid} 已不在` });
+      continue;
+    }
+    out.survives.push({ ...label, pid: sess.agentPid });
+  }
+  return out;
+}
 
 // 重启后接管那些**还活着**的 agent。必须在 reconcileInterrupted 之前跑：
 // 接管成功的任务不该被当成「被打断」判 failed。返回已接管的 taskId 集合。

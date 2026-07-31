@@ -63,19 +63,6 @@
   font-weight: 650;
 }
 
-.task-detail-status i {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: currentColor;
-}
-
-.task-detail-status--green { color: var(--green); }
-.task-detail-status--red { color: var(--red); }
-.task-detail-status--amber { color: var(--amber); }
-.task-detail-status--cyan { color: var(--cyan); }
-.task-detail-status--muted { color: var(--faint); }
-
 .task-time-meta { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 5px; color: var(--faint); font-family: var(--font-mono); font-size: 9.5px; white-space: nowrap; }
 .task-time-meta > svg { flex: 0 0 auto; }
 .task-time-meta > i { color: var(--line2); font-style: normal; }

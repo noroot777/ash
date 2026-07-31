@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { Group, Task } from "@harness/shared";
 import { api } from "../lib/api.ts";
 import { useConversation } from "../lib/useConversation.ts";
+import { useTaskReadState } from "../lib/useTaskReadState.ts";
 import { conversationToMarkdown } from "./conversationModel.ts";
 import { ConversationFeed } from "./ConversationFeed.tsx";
 import { DeleteTaskDialog } from "./DeleteTaskDialog.tsx";
@@ -35,6 +36,7 @@ export function TaskDetail({
   const [busy, setBusy] = useState(false);
   const [reviewOpen, setReviewOpen] = useState(initialReviewOpen);
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const { indicatorForTask } = useTaskReadState(allTasks, task.id);
   const conversation = useConversation(task.id);
   const markdown = useMemo(
     () => conversationToMarkdown(conversation.items, task),
@@ -119,6 +121,7 @@ export function TaskDetail({
         onRefresh={() => void refresh()}
         onReview={() => changeReviewOpen(!reviewOpen)}
         onDelete={() => setDeleteOpen(true)}
+        indicatorForTask={indicatorForTask}
         notify={notify}
       />
       {reviewOpen ? (

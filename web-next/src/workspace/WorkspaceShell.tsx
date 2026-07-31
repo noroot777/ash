@@ -6,7 +6,12 @@ import { TaskDetail } from "../task-detail/TaskDetail.tsx";
 import { TeamView } from "../team/TeamView.tsx";
 import { DebateView } from "../debate/DebateView.tsx";
 import { TaskPlaceholder } from "./TaskPlaceholder.tsx";
-import { WorkspaceSidebar } from "./WorkspaceSidebar.tsx";
+import {
+  WORKSPACE_SIDEBAR_DEFAULT_WIDTH,
+  WORKSPACE_SIDEBAR_MAX_WIDTH,
+  WORKSPACE_SIDEBAR_MIN_WIDTH,
+  WorkspaceSidebar,
+} from "./WorkspaceSidebar.tsx";
 import { SettingsPage, type SettingsSection } from "../settings/SettingsPage.tsx";
 import { CommandPalette } from "../overlays/CommandPalette.tsx";
 import { NotesPanel } from "../overlays/NotesPanel.tsx";
@@ -16,6 +21,14 @@ import { DeleteTaskDialog } from "../task-detail/DeleteTaskDialog.tsx";
 import { CreateGroupDialog, CreateProjectDialog } from "../overlays/CreateEntityDialog.tsx";
 
 type ContextView = "review" | "settings" | "palette" | "notes" | "create";
+
+function readSidebarWidth() {
+  const raw = window.localStorage.getItem("harness-next:sidebar-width");
+  if (raw === null) return WORKSPACE_SIDEBAR_DEFAULT_WIDTH;
+  const width = Number(raw);
+  if (!Number.isFinite(width)) return WORKSPACE_SIDEBAR_DEFAULT_WIDTH;
+  return Math.min(WORKSPACE_SIDEBAR_MAX_WIDTH, Math.max(WORKSPACE_SIDEBAR_MIN_WIDTH, width));
+}
 
 function readUrlSelection() {
   const params = new URLSearchParams(window.location.search);
@@ -44,6 +57,7 @@ export function WorkspaceShell() {
   const [deleteTarget, setDeleteTarget] = useState<Task | null>(null);
   const [createDialog, setCreateDialog] = useState<"group" | "project" | null>(null);
   const [collapsed, setCollapsed] = useState(() => window.localStorage.getItem("harness-next:sidebar-collapsed") === "1");
+  const [sidebarWidth, setSidebarWidth] = useState(readSidebarWidth);
   const [toast, setToast] = useState<string | null>(null);
   const { tasks, setTasks, loading: tasksLoading, error: tasksError, connected } = useTasks();
 
@@ -114,6 +128,7 @@ export function WorkspaceShell() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
   useEffect(() => { window.localStorage.setItem("harness-next:sidebar-collapsed", collapsed ? "1" : "0"); }, [collapsed]);
+  useEffect(() => { window.localStorage.setItem("harness-next:sidebar-width", String(sidebarWidth)); }, [sidebarWidth]);
 
   const currentProject = projects.find((project) => project.id === projectId) ?? null;
   const selectedTask = tasks.find((task) => task.id === taskId && task.projectId === projectId) ?? null;
@@ -169,7 +184,7 @@ export function WorkspaceShell() {
 
   return (
     <><div className="workspace-shell">
-      <WorkspaceSidebar projects={projects} currentProject={currentProject} tasks={tasks} selectedTaskId={taskId} connected={connected} collapsed={collapsed} onProject={selectProject} onTask={selectTask} onToggleCollapsed={() => setCollapsed((value) => !value)} onSearch={() => setPaletteOpen(true)} onNotes={() => openNotes()} onCreate={() => openComposer("single")} onSettings={() => openSettings("agents")} />
+      <WorkspaceSidebar projects={projects} currentProject={currentProject} tasks={tasks} selectedTaskId={taskId} connected={connected} collapsed={collapsed} width={sidebarWidth} onWidthChange={setSidebarWidth} onProject={selectProject} onTask={selectTask} onToggleCollapsed={() => setCollapsed((value) => !value)} onSearch={() => setPaletteOpen(true)} onNotes={() => openNotes()} onCreate={() => openComposer("single")} onSettings={() => openSettings("agents")} />
       <main className="workspace-main">
         {loadError && <div className="workspace-load-error">{loadError.message}</div>}
         {composer && currentProject ? <TaskComposerPanel project={currentProject} groups={groups} initialDraft={composer.draft} mode={composer.mode} onModeChange={(mode) => setComposer((current) => current ? { ...current, mode } : null)} onCancel={() => setComposer(null)} onCreated={createTask} notify={notify} /> : selectedTask?.mode === "team" ? (

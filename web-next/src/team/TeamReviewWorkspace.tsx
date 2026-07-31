@@ -3,11 +3,12 @@ import type { Session, Task } from "@harness/shared";
 import { STAGE_LABELS, taskDisplayStatus } from "@harness/shared";
 import { ArrowsClockwise, CaretDown, CheckCircle, GitBranch, GitCommit, GitDiff, SpinnerGap, WarningCircle, X } from "@phosphor-icons/react";
 import { LegacyLink } from "../components/LegacyLink.tsx";
+import { TaskStatusDot } from "../components/TaskStatusDot.tsx";
 import { api, type AcceptTaskFailure, type TaskCommit, type TaskDiffResult } from "../lib/api.ts";
+import type { IndicatorForTask } from "../lib/useTaskReadState.ts";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import { formatInstant, parseAttachmentText } from "../task-detail/utils.ts";
 import { ReviewEvidence } from "./ReviewEvidence.tsx";
-import { statusTone } from "./teamModel.ts";
 
 type ReviewData = {
   commits: TaskCommit[];
@@ -183,6 +184,8 @@ function ReviewRecord({
   actions = false,
   defaultOpen = false,
   onTaskUpdated,
+  indicatorForTask,
+  onReadTask,
   notify,
 }: {
   task: Task;
@@ -190,6 +193,8 @@ function ReviewRecord({
   actions?: boolean;
   defaultOpen?: boolean;
   onTaskUpdated: (task: Task) => void;
+  indicatorForTask: IndicatorForTask;
+  onReadTask: (task: Task) => void;
   notify: (message: string) => void;
 }) {
   const [open, setOpen] = useState(defaultOpen);
@@ -198,6 +203,11 @@ function ReviewRecord({
   const [error, setError] = useState<string | null>(null);
   const objective = parseAttachmentText(task.body).body;
   const display = taskDisplayStatus(task.status, task.stage, !!task.question);
+  const indicator = indicatorForTask(task);
+  const visibleIndicator = open && (indicator === "success" || indicator === "error") ? null : indicator;
+  useEffect(() => {
+    if (open) onReadTask(task);
+  }, [onReadTask, open, task]);
   useEffect(() => {
     let alive = true;
     setLoading(true);
@@ -215,7 +225,7 @@ function ReviewRecord({
     <article className="team-review-record">
       <header>
         <button type="button" onClick={() => setOpen((value) => !value)} aria-expanded={open}><CaretDown size={13} weight="bold" /></button>
-        <i className={`team-status-dot team-status-dot--${statusTone(task)}`} />
+        {visibleIndicator && <TaskStatusDot indicator={visibleIndicator} surface="team" />}
         <button type="button" className="team-review-record-title" onClick={() => setOpen((value) => !value)}>
           <span><b>{task.title}</b><em>{role}</em><small>{display.label}</small></span>
           {objective && <p>{objective}</p>}
@@ -233,21 +243,36 @@ function ReviewRecord({
   );
 }
 
-function SharedWorkerVerification({ workers }: { workers: Task[] }) {
+function SharedWorkerVerification({
+  workers,
+  indicatorForTask,
+  onReadTask,
+}: {
+  workers: Task[];
+  indicatorForTask: IndicatorForTask;
+  onReadTask: (task: Task) => void;
+}) {
   const [selectedId, setSelectedId] = useState<string | null>(workers.find((worker) => worker.stage === "verify_failed")?.id ?? workers[0]?.id ?? null);
   const selected = workers.find((worker) => worker.id === selectedId) ?? null;
   const failed = workers.filter((worker) => worker.stage === "verify_failed").length;
+  useEffect(() => {
+    if (selected) onReadTask(selected);
+  }, [onReadTask, selected]);
   return (
     <section className="team-shared-verification">
       <header><div><b>共享执行者验证</b><small>代码改动已包含在调度台共享分支中，团队级验收会联动标记这些执行者。</small></div><span className={failed ? "is-failed" : ""}>{failed ? `${failed} 个验证失败` : `${workers.length} 个共享执行者`}</span></header>
       <div className="team-shared-worker-grid">
-        {workers.map((worker) => (
-          <button type="button" key={worker.id} className={selectedId === worker.id ? "is-selected" : worker.stage === "verify_failed" ? "is-failed" : ""} onClick={() => setSelectedId((current) => current === worker.id ? null : worker.id)}>
-            <i className={`team-status-dot team-status-dot--${statusTone(worker)}`} />
-            <span><b>{worker.title}</b><small>{worker.stage ? STAGE_LABELS[worker.stage] : worker.status}</small></span>
-            <em>{worker.stage || "未上报"}</em><CaretDown size={12} />
-          </button>
-        ))}
+        {workers.map((worker) => {
+          const indicator = indicatorForTask(worker);
+          const visibleIndicator = selectedId === worker.id && (indicator === "success" || indicator === "error") ? null : indicator;
+          return (
+            <button type="button" key={worker.id} className={selectedId === worker.id ? "is-selected" : worker.stage === "verify_failed" ? "is-failed" : ""} onClick={() => setSelectedId((current) => current === worker.id ? null : worker.id)}>
+              {visibleIndicator && <TaskStatusDot indicator={visibleIndicator} surface="team" />}
+              <span><b>{worker.title}</b><small>{worker.stage ? STAGE_LABELS[worker.stage] : worker.status}</small></span>
+              <em>{worker.stage || "未上报"}</em><CaretDown size={12} />
+            </button>
+          );
+        })}
       </div>
       {selected && <div className="team-shared-evidence"><b>{selected.title}</b><ReviewEvidence taskId={selected.id} /></div>}
     </section>
@@ -259,12 +284,16 @@ export function TeamReviewWorkspace({
   workers,
   onClose,
   onTaskUpdated,
+  indicatorForTask,
+  onReadTask,
   notify,
 }: {
   lead: Task;
   workers: Task[];
   onClose: () => void;
   onTaskUpdated: (task: Task) => void;
+  indicatorForTask: IndicatorForTask;
+  onReadTask: (task: Task) => void;
   notify: (message: string) => void;
 }) {
   const sharedWorkers = useMemo(() => workers.filter((worker) => !worker.useWorktree), [workers]);
@@ -278,12 +307,12 @@ export function TeamReviewWorkspace({
       </header>
       <div className="team-review-scroll">
         <div className="team-review-stack">
-          <ReviewRecord task={lead} role={lead.useWorktree ? "调度台 / 共享 worktree" : "调度台 / 项目工作区"} actions defaultOpen onTaskUpdated={onTaskUpdated} notify={notify} />
-          {sharedWorkers.length > 0 && <SharedWorkerVerification workers={sharedWorkers} />}
+          <ReviewRecord task={lead} role={lead.useWorktree ? "调度台 / 共享 worktree" : "调度台 / 项目工作区"} actions defaultOpen onTaskUpdated={onTaskUpdated} indicatorForTask={indicatorForTask} onReadTask={onReadTask} notify={notify} />
+          {sharedWorkers.length > 0 && <SharedWorkerVerification workers={sharedWorkers} indicatorForTask={indicatorForTask} onReadTask={onReadTask} />}
           <section className="team-acceptance-queue">
             <header><div><b>独立执行者待验收队列</b><small>每个显式 worktree 都有独立分支与合入动作，按执行者分别处理。</small></div><span>{independentWorkers.length} 项</span></header>
             {independentWorkers.length ? (
-              <div>{independentWorkers.map((worker, index) => <ReviewRecord key={worker.id} task={worker} role={`执行者 ${index + 1}`} actions defaultOpen={worker.stage === "awaiting_acceptance" || worker.stage === "verify_failed"} onTaskUpdated={onTaskUpdated} notify={notify} />)}</div>
+              <div>{independentWorkers.map((worker, index) => <ReviewRecord key={worker.id} task={worker} role={`执行者 ${index + 1}`} actions defaultOpen={worker.stage === "awaiting_acceptance" || worker.stage === "verify_failed"} onTaskUpdated={onTaskUpdated} indicatorForTask={indicatorForTask} onReadTask={onReadTask} notify={notify} />)}</div>
             ) : <p>没有独立 worktree 执行者；共享执行者随团队整体验收。</p>}
           </section>
         </div>

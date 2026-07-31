@@ -123,6 +123,7 @@
 }
 
 .workspace-status-dot {
+  box-sizing: border-box;
   width: 7px;
   height: 7px;
   flex: 0 0 7px;
@@ -136,24 +137,29 @@
   flex-basis: 5px;
 }
 
+.workspace-status-dot--pending {
+  border: 1px dashed var(--muted);
+  background: transparent;
+}
+
 .workspace-status-dot--active {
-  background: var(--line2);
-  animation: workspace-status-dot-pulse 1.4s ease-in-out infinite;
+  background: var(--muted);
+  animation: task-status-dot-pulse 1.35s ease-in-out infinite;
   will-change: opacity, transform;
 }
 
-.workspace-status-dot--attention { background: #d79a00; }
-.workspace-status-dot--success { background: #24a47e; }
+.workspace-status-dot--attention { background: var(--amber); }
+.workspace-status-dot--success { background: var(--green); }
 .workspace-status-dot--error { background: var(--red); }
 
-@keyframes workspace-status-dot-pulse {
+@keyframes task-status-dot-pulse {
   0%, 100% {
-    opacity: 0.58;
-    transform: scale(0.82);
+    opacity: 0.68;
+    transform: scale(0.84);
   }
   50% {
     opacity: 1;
-    transform: scale(1.12);
+    transform: scale(1.18);
   }
 }
 

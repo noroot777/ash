@@ -13,10 +13,12 @@ import {
   Stop,
 } from "@phosphor-icons/react";
 import { LegacyLink } from "../components/LegacyLink.tsx";
+import { TaskStatusDot } from "../components/TaskStatusDot.tsx";
+import type { IndicatorForTask } from "../lib/useTaskReadState.ts";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import { TaskPinButton } from "../task-detail/TaskPinButton.tsx";
 import { TaskTimeMeta } from "../task-detail/TaskTimeMeta.tsx";
-import { safeDownloadName, STATUS_TONES } from "../task-detail/utils.ts";
+import { safeDownloadName } from "../task-detail/utils.ts";
 import { teamLeadLabel, teamReviewerLabel, teamWorkerLabel } from "./teamModel.ts";
 
 export function TeamHeader({
@@ -35,6 +37,7 @@ export function TeamHeader({
   onHalt,
   onResume,
   onArchive,
+  indicatorForTask,
   notify,
 }: {
   task: Task;
@@ -52,6 +55,7 @@ export function TeamHeader({
   onHalt: () => void;
   onResume: () => void;
   onArchive: () => void;
+  indicatorForTask: IndicatorForTask;
   notify: (message: string) => void;
 }) {
   const [menu, setMenu] = useState(false);
@@ -63,6 +67,7 @@ export function TeamHeader({
   const stopped = pausedGroups.length > 0 || haltedByHistory;
   const settled = isTeamSettled(task.status === "running", workers);
   const display = taskDisplayStatus(task.status, task.stage, !!task.question);
+  const indicator = indicatorForTask(task);
   const latestSession = [...sessions].sort((left, right) => right.startedAt.localeCompare(left.startedAt))[0];
   const reviewEnabled = task.team?.review !== false;
 
@@ -123,7 +128,10 @@ export function TeamHeader({
             if (event.key === "Escape") { setTitle(task.title); event.currentTarget.blur(); }
           }}
         />
-        <span className={`team-busy-pill team-busy-pill--${STATUS_TONES[task.question ? "awaiting_answer" : task.status]}`}><i />{display.label}</span>
+        <span className="team-busy-pill">
+          {indicator && <TaskStatusDot indicator={indicator} surface="team" />}
+          {display.label}
+        </span>
         <TaskTimeMeta task={task} />
         <div className="team-header-actions">
           <button type="button" className={reviewOpen ? "is-primary" : ""} onClick={onReview}>
