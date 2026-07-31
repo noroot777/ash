@@ -10,10 +10,10 @@ import {
   DotsThree,
   DownloadSimple,
   Play,
-  PushPinSimple,
   Stop,
 } from "@phosphor-icons/react";
 import { LegacyLink } from "../components/LegacyLink.tsx";
+import { TaskPinButton } from "../task-detail/TaskPinButton.tsx";
 import { TaskStatusDot } from "../components/TaskStatusDot.tsx";
 import type { IndicatorForTask } from "../lib/useTaskReadState.ts";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
@@ -111,6 +111,8 @@ export function TeamHeader({
   return (
     <>
       <header className="team-header">
+        <span className="team-kind">团队</span>
+        <TaskPinButton task={task} onTogglePin={onTogglePin} notify={notify} />
         <input
           value={title}
           aria-label="团队标题"
@@ -143,15 +145,6 @@ export function TeamHeader({
             <button type="button" aria-label="更多团队操作" aria-expanded={menu} onClick={() => setMenu((value) => !value)}><DotsThree size={18} weight="bold" /></button>
             {menu && (
               <div role="menu">
-                {!task.archived && (
-                  <button type="button" role="menuitem" onClick={() => {
-                    setMenu(false);
-                    void onTogglePin().catch((reason) => notify(reason instanceof Error ? reason.message : String(reason)));
-                  }}>
-                    <PushPinSimple size={14} weight={task.pinnedAt != null ? "fill" : "regular"} />
-                    {task.pinnedAt != null ? "取消置顶" : "置顶团队"}
-                  </button>
-                )}
                 <button type="button" role="menuitem" disabled={!conversationMarkdown.trim()} onClick={() => void copy()}><Copy size={14} />复制全部对话</button>
                 <button type="button" role="menuitem" disabled={!conversationMarkdown.trim()} onClick={download}><DownloadSimple size={14} />下载 Markdown</button>
                 <LegacyLink projectId={task.projectId} taskId={task.id} />
