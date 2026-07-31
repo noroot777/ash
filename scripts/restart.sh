@@ -76,7 +76,7 @@ if [ -n "$OLD" ]; then
     echo "  ✋ 当前有 $BUSY 个任务在 running/queued —— 已中止,未重启服务端。"
     echo "     让脚本替你等到排空:  WAIT=1 npm run restart"
     echo "     确定要打断:          FORCE=1 npm run restart"
-    echo "     (新代码已 build 进 dist,不会丢;只是暂不重启 :$PORT。MCP 也未动。)"
+    echo "     (新代码已 build 进 dist,不会丢;只是暂不重启 :${PORT}。MCP 也未动。)"
     exit 2
   fi
   [ "${BUSY:-0}" -gt 0 ] && echo "  ⚠ FORCE:打断 $BUSY 个在跑/排队任务(判为 failed,可重试)。"
