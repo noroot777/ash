@@ -16,7 +16,9 @@
 .inspector-host {
   position: relative;
   display: flex;
+  width: var(--inspector-width);
   min-height: 0;
+  min-width: var(--inspector-width);
   flex: 0 0 auto;
   flex-direction: column;
   border-left: 0.5px solid var(--line);
@@ -517,6 +519,11 @@
 .team-worker-drawer > .inspector-layout {
   min-height: 0;
   flex: 1;
+}
+
+.team-worker-drawer > .inspector-layout > .inspector-host {
+  width: min(var(--inspector-width), 100%);
+  min-width: min(var(--inspector-width), 100%);
 }
 
 .review-inspector { min-height: 100%; background: var(--canvas); }

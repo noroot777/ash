@@ -4,11 +4,12 @@ import {
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
   type ReactNode,
 } from "react";
 import { Plus, Sidebar, SidebarSimple, X } from "@phosphor-icons/react";
 import { Menu, MenuItem } from "../components/ui.tsx";
-import type { InspectorDescriptor, InspectorHostControls } from "./types.ts";
+import type { InspectorDescriptor, InspectorHostControls, InspectorTabPolicy } from "./types.ts";
 
 export const INSPECTOR_MIN_WIDTH = 280;
 export const INSPECTOR_MAX_WIDTH = 720;
@@ -19,6 +20,7 @@ interface InspectorState {
   activeTab: string | null;
   width: number;
   visible: boolean;
+  policyKey: string | null;
 }
 
 function clampWidth(value: number) {
@@ -36,6 +38,34 @@ function defaultState<Context>(
     activeTab: openTabs[0] ?? null,
     width: INSPECTOR_DEFAULT_WIDTH,
     visible: defaultVisible && openTabs.length > 0,
+    policyKey: null,
+  };
+}
+
+function uniqueValidTabs(ids: readonly string[], descriptorIds: ReadonlySet<string>) {
+  return [...new Set(ids.filter((id) => descriptorIds.has(id)))];
+}
+
+function applyTabPolicy(
+  state: InspectorState,
+  policy: InspectorTabPolicy,
+  descriptorIds: ReadonlySet<string>,
+): InspectorState {
+  const openTabs = uniqueValidTabs([
+    ...state.openTabs,
+    policy.requiredTabId,
+    ...policy.defaultOpenTabIds,
+    policy.defaultActiveTabId,
+  ], descriptorIds);
+  const activeTab = descriptorIds.has(policy.defaultActiveTabId)
+    ? policy.defaultActiveTabId
+    : openTabs[0] ?? null;
+  return {
+    ...state,
+    openTabs,
+    activeTab,
+    visible: state.visible && openTabs.length > 0,
+    policyKey: policy.stateKey,
   };
 }
 
@@ -43,13 +73,14 @@ function readState<Context>(
   storageKey: string,
   descriptors: readonly InspectorDescriptor<Context>[],
   defaultVisible: boolean,
+  tabPolicy?: InspectorTabPolicy,
 ) {
   const fallback = defaultState(descriptors, defaultVisible);
+  const descriptorIds = new Set(descriptors.map((descriptor) => descriptor.id));
   try {
     const raw = window.localStorage.getItem(storageKey);
-    if (!raw) return fallback;
+    if (!raw) return tabPolicy ? applyTabPolicy(fallback, tabPolicy, descriptorIds) : fallback;
     const parsed = JSON.parse(raw) as Partial<InspectorState>;
-    const descriptorIds = new Set(descriptors.map((descriptor) => descriptor.id));
     const storedTabs = Array.isArray(parsed.openTabs)
       ? parsed.openTabs.filter((id): id is string => typeof id === "string")
       : null;
@@ -67,9 +98,19 @@ function readState<Context>(
       : fallback.width;
     const visible = (typeof parsed.visible === "boolean" ? parsed.visible : fallback.visible)
       && openTabs.length > 0;
-    return { openTabs, activeTab, width, visible };
+    const policyKey = typeof parsed.policyKey === "string" ? parsed.policyKey : null;
+    let restored = { openTabs, activeTab, width, visible, policyKey };
+    if (tabPolicy && policyKey !== tabPolicy.stateKey) {
+      // A semantic task-state change deliberately wins over restored focus once.
+      return applyTabPolicy(restored, tabPolicy, descriptorIds);
+    }
+    if (tabPolicy && visible && descriptorIds.has(tabPolicy.requiredTabId)
+      && !restored.openTabs.includes(tabPolicy.requiredTabId)) {
+      restored = { ...restored, openTabs: [...restored.openTabs, tabPolicy.requiredTabId] };
+    }
+    return restored;
   } catch {
-    return fallback;
+    return tabPolicy ? applyTabPolicy(fallback, tabPolicy, descriptorIds) : fallback;
   }
 }
 
@@ -86,12 +127,14 @@ export function InspectorHost<Context>({
   descriptors,
   context,
   defaultVisible = true,
+  tabPolicy,
   children,
 }: {
   contextKey: string;
   descriptors: readonly InspectorDescriptor<Context>[];
   context: Context;
   defaultVisible?: boolean;
+  tabPolicy?: InspectorTabPolicy;
   children: (controls: InspectorHostControls) => ReactNode;
 }) {
   return (
@@ -101,6 +144,7 @@ export function InspectorHost<Context>({
       descriptors={descriptors}
       context={context}
       defaultVisible={defaultVisible}
+      tabPolicy={tabPolicy}
     >
       {children}
     </InspectorHostState>
@@ -112,16 +156,18 @@ function InspectorHostState<Context>({
   descriptors,
   context,
   defaultVisible,
+  tabPolicy,
   children,
 }: {
   contextKey: string;
   descriptors: readonly InspectorDescriptor<Context>[];
   context: Context;
   defaultVisible: boolean;
+  tabPolicy?: InspectorTabPolicy;
   children: (controls: InspectorHostControls) => ReactNode;
 }) {
   const storageKey = storageKeyFor(contextKey);
-  const [state, setState] = useState(() => readState(storageKey, descriptors, defaultVisible));
+  const [state, setState] = useState(() => readState(storageKey, descriptors, defaultVisible, tabPolicy));
   const [menuOpen, setMenuOpen] = useState(false);
   const [resizing, setResizing] = useState(false);
   const descriptorById = useMemo(
@@ -136,6 +182,7 @@ function InspectorHostState<Context>({
   const availableDescriptors = descriptors.filter((descriptor) => !openIds.has(descriptor.id));
   const panelVisible = state.visible && activeDescriptor !== null;
   const menuRoot = useRef<HTMLDivElement>(null);
+  const menuButton = useRef<HTMLButtonElement>(null);
   const dragStart = useRef<{ x: number; width: number } | null>(null);
   const previousBodyStyle = useRef<{ cursor: string; userSelect: string } | null>(null);
   const instanceId = useId();
@@ -159,6 +206,14 @@ function InspectorHostState<Context>({
   }, [descriptorById]);
 
   useEffect(() => {
+    if (!tabPolicy) return;
+    // localStorage wins while stateKey is unchanged; a new semantic state wins exactly once.
+    setState((current) => current.policyKey === tabPolicy.stateKey
+      ? current
+      : applyTabPolicy(current, tabPolicy, new Set(descriptorById.keys())));
+  }, [descriptorById, tabPolicy?.stateKey]);
+
+  useEffect(() => {
     try {
       window.localStorage.setItem(storageKey, JSON.stringify(state));
     } catch {
@@ -172,13 +227,18 @@ function InspectorHostState<Context>({
       if (!menuRoot.current?.contains(event.target as Node)) setMenuOpen(false);
     };
     const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setMenuOpen(false);
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      setMenuOpen(false);
+      menuButton.current?.focus();
     };
-    window.addEventListener("pointerdown", close);
-    window.addEventListener("keydown", closeOnEscape);
+    // Capture keeps dismissal reliable even when the clicked page region stops bubbling.
+    document.addEventListener("pointerdown", close, true);
+    document.addEventListener("keydown", closeOnEscape, true);
     return () => {
-      window.removeEventListener("pointerdown", close);
-      window.removeEventListener("keydown", closeOnEscape);
+      document.removeEventListener("pointerdown", close, true);
+      document.removeEventListener("keydown", closeOnEscape, true);
     };
   }, [menuOpen]);
 
@@ -210,9 +270,13 @@ function InspectorHostState<Context>({
     setState((current) => {
       if (current.visible && current.openTabs.length > 0) return { ...current, visible: false };
       const firstId = descriptors[0]?.id ?? null;
-      const openTabs = current.openTabs.length > 0
+      let openTabs = current.openTabs.length > 0
         ? current.openTabs
         : firstId ? [firstId] : [];
+      if (tabPolicy && descriptorById.has(tabPolicy.requiredTabId)
+        && !openTabs.includes(tabPolicy.requiredTabId)) {
+        openTabs = [...openTabs, tabPolicy.requiredTabId];
+      }
       return {
         ...current,
         openTabs,
@@ -268,7 +332,7 @@ function InspectorHostState<Context>({
         <aside
           id={panelId}
           className={`inspector-host${resizing ? " inspector-host--resizing" : ""}`}
-          style={{ width: state.width, minWidth: state.width }}
+          style={{ "--inspector-width": `${state.width}px` } as CSSProperties}
           aria-label="Inspector 侧边栏"
         >
           <div
@@ -330,9 +394,11 @@ function InspectorHostState<Context>({
             </div>
             <div className="inspector-host__add-root" ref={menuRoot}>
               <button
+                ref={menuButton}
                 type="button"
                 className="inspector-host__add"
                 aria-label="打开 Inspector 面板"
+                aria-haspopup="menu"
                 aria-expanded={menuOpen}
                 disabled={availableDescriptors.length === 0}
                 title={availableDescriptors.length > 0 ? "打开面板" : "所有面板均已打开"}

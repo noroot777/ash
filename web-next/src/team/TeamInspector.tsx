@@ -80,6 +80,20 @@ function TeamInfoPanel({ task, workers, sessions }: Pick<TeamInspectorContext, "
 
   return (
     <div className="team-info-panel" aria-label="团队信息">
+      <ImagePreviewGroup isolated>
+        <details className="team-info-panel__section team-info-panel__objective">
+          <summary>原始需求</summary>
+          <div className="team-info-panel__objective-body">
+            {objective.body || objective.paths.length > 0 ? (
+              <>
+                {objective.body && <MarkdownBody text={objective.body} />}
+                <MessageAttachments paths={objective.paths} />
+              </>
+            ) : <p className="team-info-panel__empty">未记录原始需求。</p>}
+          </div>
+        </details>
+      </ImagePreviewGroup>
+
       <section className="team-info-panel__section">
         <h2>执行配置</h2>
         <div className="team-info-panel__roles">
@@ -119,20 +133,6 @@ function TeamInfoPanel({ task, workers, sessions }: Pick<TeamInspectorContext, "
         {latestSession && <SessionMeta session={latestSession} />}
         <TaskTimeMeta task={task} />
       </section>
-
-      <ImagePreviewGroup isolated>
-        <details className="team-info-panel__section team-info-panel__objective">
-          <summary>原始需求</summary>
-          <div className="team-info-panel__objective-body">
-            {objective.body || objective.paths.length > 0 ? (
-              <>
-                {objective.body && <MarkdownBody text={objective.body} />}
-                <MessageAttachments paths={objective.paths} />
-              </>
-            ) : <p className="team-info-panel__empty">未记录原始需求。</p>}
-          </div>
-        </details>
-      </ImagePreviewGroup>
     </div>
   );
 }

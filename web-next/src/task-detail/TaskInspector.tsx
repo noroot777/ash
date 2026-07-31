@@ -97,6 +97,13 @@ export function TaskInspector({
     <div className="task-inspector" aria-label="任务信息">
       <div className="task-inspector-scroll">
         <section>
+          <details>
+            <summary>原始需求</summary>
+            <pre>{task.body.trim() || "这个任务没有正文说明。"}</pre>
+          </details>
+        </section>
+
+        <section>
           <h2>属性</h2>
           <InspectorRow label="状态">
             <select value={task.status} disabled={readOnly} onChange={(event) => void patch({ status: event.target.value as TaskStatus })}>
@@ -225,13 +232,6 @@ export function TaskInspector({
             <pre>{task.resumePrompt?.trim() || "未设置；续跑时使用标准“继续”指令。"}</pre>
           </details>
           <LegacyLink projectId={task.projectId} taskId={task.id} />
-        </section>
-
-        <section>
-          <details>
-            <summary>Prompt 原文</summary>
-            <pre>{task.body.trim() || "这个任务没有正文说明。"}</pre>
-          </details>
         </section>
       </div>
       {queueOpen && task.queueId && (

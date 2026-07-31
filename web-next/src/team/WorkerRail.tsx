@@ -45,10 +45,10 @@ export function WorkerRail({
             onClick={() => onSelect(worker.id)}
           >
             <div>
+              <span className="team-worker-rail__index">{index + 1}</span>
               {indicator && <TaskStatusDot indicator={indicator} surface="team" />}
               <b>{worker.title}</b>
               <code title={executorLabel(worker)}>{executorLabel(worker)}</code>
-              <kbd>{index < 9 ? index + 1 : ""}</kbd>
             </div>
             <small>{workerStatusText(worker, paused)}{duration ? ` · ${duration}` : ""}</small>
             {worker.question && <p className="team-worker-rail__question">{worker.question}</p>}

@@ -172,6 +172,7 @@ function WorkerDrawer({
   notify: (message: string) => void;
 }) {
   const [closing, setClosing] = useState(false);
+  const [inspectorToggleTarget, setInspectorToggleTarget] = useState<HTMLSpanElement | null>(null);
   const closingRef = useRef(false);
   const closeTimer = useRef<number | null>(null);
   const requestClose = useCallback(() => {
@@ -200,11 +201,12 @@ function WorkerDrawer({
         }}
       >
         <header>
-          <span>执行者</span><b>{worker.title}</b>
+          <span className="team-worker-drawer__kind">执行者</span><b>{worker.title}</b>
           <button type="button" onClick={onOpenFull}><ArrowSquareOut size={13} />整页打开</button>
+          <span className="team-worker-drawer__inspector-toggle" ref={setInspectorToggleTarget} />
           <button type="button" aria-label="关闭执行者抽屉" onClick={requestClose}><X size={14} weight="bold" /></button>
         </header>
-        <TaskDetail key={worker.id} task={worker} allTasks={allTasks} onTaskUpdate={onTaskUpdate} onDeleted={onDeleted} onOpenTask={onOpenTask} inspectorMode="drawer" notify={notify} />
+        <TaskDetail key={worker.id} task={worker} allTasks={allTasks} onTaskUpdate={onTaskUpdate} onDeleted={onDeleted} onOpenTask={onOpenTask} inspectorMode="drawer" inspectorToggleTarget={inspectorToggleTarget} notify={notify} />
       </aside>
     </>
   );
@@ -247,6 +249,15 @@ export function TeamView({
   const stopped = teamGroups.some((group) => group.paused) || (teamGroups.length === 0 && (historyHalt || localHalted));
   const selectedWorker = selectedWorkerId ? workers.find((worker) => worker.id === selectedWorkerId) ?? null : null;
   const markdown = useMemo(() => conversationToMarkdown(conversation.items, task), [conversation.items, task]);
+  const allWorkersComplete = task.status !== "running"
+    && workers.length > 0
+    && workers.every((worker) => worker.status === "done");
+  const inspectorPolicy = useMemo(() => ({
+    stateKey: `team:${allWorkersComplete ? "complete" : "active"}`,
+    requiredTabId: "info",
+    defaultOpenTabIds: allWorkersComplete ? ["info", "review"] : ["info", "workers"],
+    defaultActiveTabId: allWorkersComplete ? "review" : "workers",
+  }), [allWorkersComplete]);
   const selectWorker = useCallback((taskId: string) => {
     const worker = workers.find((item) => item.id === taskId);
     if (worker) markTaskRead(worker);
@@ -349,6 +360,7 @@ export function TeamView({
         indicatorForTask,
         workerLiveLines,
       } satisfies TeamInspectorContext}
+      tabPolicy={inspectorPolicy}
     >
       {({ toggleButton }) => <div className="team-view">
       <OriginTaskBar task={task} allTasks={allTasks} onOpen={openTaskById} />
