@@ -78,7 +78,6 @@ export function buildConversationItems(
   timeline: TimelineEntry[],
 ): ConversationItem[] {
   const items: ConversationItem[] = [];
-  const cliSessionIds = new Map<string, string>();
   const ordered = [...persisted].sort((left, right) =>
     left.session.startedAt.localeCompare(right.session.startedAt));
 
@@ -145,12 +144,9 @@ export function buildConversationItems(
       appendEvent(items, { kind: "event", id: entry.id, text: "本回合结束，等待下一条消息" });
       continue;
     }
-    if (event.kind === "session") {
-      if (cliSessionIds.get(entry.event.sessionId) === event.cliSessionId) continue;
-      cliSessionIds.set(entry.event.sessionId, event.cliSessionId);
-      items.push({ kind: "event", id: entry.id, text: `会话已连接 · ${event.cliSessionId}` });
-      continue;
-    }
+    // session 是执行器的内部簿记事件(心跳/回合结束都会重发),旧 UI 就不渲染;
+    // cliSessionId 已经在会话详情/恢复按钮那里可查,会话流里不展示。
+    if (event.kind === "session") continue;
     const agent = appendAgent(items, entry.event, sessions);
     if (event.kind === "text") agent.markdown += event.text;
     if (event.kind === "tool") agent.events.push({ kind: "tool", label: event.name, detail: event.detail });
