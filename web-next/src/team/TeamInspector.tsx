@@ -1,6 +1,6 @@
 import type { Group, Session, Task } from "@harness/shared";
 import { agentMix } from "@harness/shared/team";
-import { Clock, Info, UsersThree } from "@phosphor-icons/react";
+import { Clock, Info, MagnifyingGlass, UsersThree } from "@phosphor-icons/react";
 import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
 import { SessionMeta } from "../components/SessionMeta.tsx";
@@ -10,6 +10,7 @@ import { MessageAttachments } from "../task-detail/Attachments.tsx";
 import { TaskTimeMeta } from "../task-detail/TaskTimeMeta.tsx";
 import { parseAttachmentText } from "../task-detail/utils.ts";
 import { TeamTimeline } from "./TeamTimeline.tsx";
+import { TeamReviewInspector } from "./TeamReviewInspector.tsx";
 import { WorkerRail } from "./WorkerRail.tsx";
 import {
   teamLeadLabel,
@@ -26,6 +27,8 @@ export interface TeamInspectorContext {
   leadTurns: LeadTurn[];
   selectedWorkerId: string | null;
   onSelectWorker: (taskId: string) => void;
+  onOpenReview: () => void;
+  onOpenTask: (taskId: string) => void;
   indicatorForTask: IndicatorForTask;
   workerLiveLines: Record<string, string>;
 }
@@ -157,6 +160,19 @@ export const TEAM_INSPECTORS: readonly InspectorDescriptor<TeamInspectorContext>
     icon: <Info size={14} />,
     defaultOpen: true,
     render: (context) => <TeamInfoPanel {...context} />,
+  },
+  {
+    id: "review",
+    title: "审查",
+    icon: <MagnifyingGlass size={14} />,
+    render: (context) => (
+      <TeamReviewInspector
+        lead={context.task}
+        workers={context.workers}
+        onOpenReview={context.onOpenReview}
+        onOpenTask={context.onOpenTask}
+      />
+    ),
   },
   {
     id: "timeline",

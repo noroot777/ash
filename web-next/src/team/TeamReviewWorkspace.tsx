@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import type { Session, Task } from "@harness/shared";
-import { STAGE_LABELS, taskDisplayStatus } from "@harness/shared";
+import { taskDisplayStatus } from "@harness/shared";
 import { ArrowsClockwise, CaretDown, CheckCircle, GitBranch, GitCommit, GitDiff, SpinnerGap, WarningCircle, X } from "@phosphor-icons/react";
 import { LegacyLink } from "../components/LegacyLink.tsx";
 import { TaskStatusDot } from "../components/TaskStatusDot.tsx";
@@ -8,7 +8,6 @@ import { api, type AcceptTaskFailure, type TaskCommit, type TaskDiffResult } fro
 import type { IndicatorForTask } from "../lib/useTaskReadState.ts";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import { formatInstant, parseAttachmentText } from "../task-detail/utils.ts";
-import { ReviewEvidence } from "./ReviewEvidence.tsx";
 
 type ReviewData = {
   commits: TaskCommit[];
@@ -235,47 +234,10 @@ function ReviewRecord({
       {open && (
         <div className="team-review-record-body">
           <WorkspaceFacts task={task} data={data} />
-          <ReviewEvidence taskId={task.id} />
           <ChangeSummary data={data} loading={loading} error={error} />
         </div>
       )}
     </article>
-  );
-}
-
-function SharedWorkerVerification({
-  workers,
-  indicatorForTask,
-  onReadTask,
-}: {
-  workers: Task[];
-  indicatorForTask: IndicatorForTask;
-  onReadTask: (task: Task) => void;
-}) {
-  const [selectedId, setSelectedId] = useState<string | null>(workers.find((worker) => worker.stage === "verify_failed")?.id ?? workers[0]?.id ?? null);
-  const selected = workers.find((worker) => worker.id === selectedId) ?? null;
-  const failed = workers.filter((worker) => worker.stage === "verify_failed").length;
-  useEffect(() => {
-    if (selected) onReadTask(selected);
-  }, [onReadTask, selected]);
-  return (
-    <section className="team-shared-verification">
-      <header><div><b>共享执行者验证</b><small>代码改动已包含在调度台共享分支中，团队级验收会联动标记这些执行者。</small></div><span className={failed ? "is-failed" : ""}>{failed ? `${failed} 个验证失败` : `${workers.length} 个共享执行者`}</span></header>
-      <div className="team-shared-worker-grid">
-        {workers.map((worker) => {
-          const indicator = indicatorForTask(worker);
-          const visibleIndicator = selectedId === worker.id && (indicator === "success" || indicator === "error") ? null : indicator;
-          return (
-            <button type="button" key={worker.id} className={selectedId === worker.id ? "is-selected" : worker.stage === "verify_failed" ? "is-failed" : ""} onClick={() => setSelectedId((current) => current === worker.id ? null : worker.id)}>
-              {visibleIndicator && <TaskStatusDot indicator={visibleIndicator} surface="team" />}
-              <span><b>{worker.title}</b><small>{worker.stage ? STAGE_LABELS[worker.stage] : worker.status}</small></span>
-              <em>{worker.stage || "未上报"}</em><CaretDown size={12} />
-            </button>
-          );
-        })}
-      </div>
-      {selected && <div className="team-shared-evidence"><b>{selected.title}</b><ReviewEvidence taskId={selected.id} /></div>}
-    </section>
   );
 }
 
@@ -296,19 +258,17 @@ export function TeamReviewWorkspace({
   onReadTask: (task: Task) => void;
   notify: (message: string) => void;
 }) {
-  const sharedWorkers = useMemo(() => workers.filter((worker) => !worker.useWorktree), [workers]);
   const independentWorkers = useMemo(() => workers.filter((worker) => worker.useWorktree), [workers]);
   return (
     <section className="team-review-workspace">
       <header className="team-review-subbar">
-        <div><b>团队验收台</b><small>先核对共享分支与独立执行者证据，再分别验收或打回。</small></div>
+        <div><b>团队验收台</b><small>配合右侧审查记录，核对共享分支与独立 worktree 后分别验收或打回。</small></div>
         <LegacyLink projectId={lead.projectId} taskId={lead.id} view="review" />
         <button type="button" onClick={onClose}><X size={13} />返回团队流</button>
       </header>
       <div className="team-review-scroll">
         <div className="team-review-stack">
           <ReviewRecord task={lead} role={lead.useWorktree ? "调度台 / 共享 worktree" : "调度台 / 项目工作区"} actions defaultOpen onTaskUpdated={onTaskUpdated} indicatorForTask={indicatorForTask} onReadTask={onReadTask} notify={notify} />
-          {sharedWorkers.length > 0 && <SharedWorkerVerification workers={sharedWorkers} indicatorForTask={indicatorForTask} onReadTask={onReadTask} />}
           <section className="team-acceptance-queue">
             <header><div><b>独立执行者待验收队列</b><small>每个显式 worktree 都有独立分支与合入动作，按执行者分别处理。</small></div><span>{independentWorkers.length} 项</span></header>
             {independentWorkers.length ? (

@@ -267,9 +267,16 @@ export function TeamView({
   }, [selectWorker, workers]);
   const openTaskById = (taskId: string) => {
     const target = allTasks.find((item) => item.id === taskId);
-    if (!target) return notify("关联任务不存在或尚未加载");
-    setSelectedWorkerId(null);
-    onSelectTask(target);
+    if (target) {
+      setSelectedWorkerId(null);
+      onSelectTask(target);
+      return;
+    }
+    void api.task(taskId).then((loaded) => {
+      onTaskUpdate(loaded);
+      setSelectedWorkerId(null);
+      onSelectTask(loaded);
+    }).catch(() => notify("关联任务不存在或读取失败"));
   };
 
   const refreshGroups = useCallback(async () => {
@@ -337,6 +344,8 @@ export function TeamView({
         leadTurns: turns,
         selectedWorkerId,
         onSelectWorker: selectWorker,
+        onOpenReview: () => changeReviewOpen(true),
+        onOpenTask: openTaskById,
         indicatorForTask,
         workerLiveLines,
       } satisfies TeamInspectorContext}

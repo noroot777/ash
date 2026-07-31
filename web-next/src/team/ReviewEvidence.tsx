@@ -1,46 +1,119 @@
 import { useCallback, useEffect, useState } from "react";
-import { TASK_STATUS_LABELS, type TaskReviewInfo, type TaskReviewRound } from "@harness/shared";
-import { CaretDown, CheckCircle, ImageSquare, SpinnerGap, WarningCircle } from "@phosphor-icons/react";
+import {
+  TASK_STATUS_LABELS,
+  type TaskReviewInfo,
+  type TaskReviewRound,
+} from "@harness/shared";
+import {
+  ArrowSquareOut,
+  CaretDown,
+  CheckCircle,
+  ImageSquare,
+  SpinnerGap,
+  WarningCircle,
+} from "@phosphor-icons/react";
 import { ImagePreviewGroup, PreviewableImage } from "../components/ImagePreview.tsx";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
 import { api } from "../lib/api.ts";
 import { useServerEvents } from "../lib/events.ts";
 
-function conclusionLabel(round: TaskReviewRound): string {
-  if (round.conclusion === "verified") return "verified";
-  if (round.conclusion === "verify_failed") return "verify_failed";
-  return "verifying";
+const REVIEW_IN_FLIGHT = new Set(["backlog", "queued", "running", "paused"]);
+
+export interface TaskReviewState {
+  info: TaskReviewInfo | null;
+  loading: boolean;
+  error: string | null;
+  reload: (quiet?: boolean) => Promise<void>;
 }
 
-function ReviewRound({ taskId, round }: { taskId: string; round: TaskReviewRound }) {
+export function useTaskReviewInfo(taskId: string): TaskReviewState {
+  const [info, setInfo] = useState<TaskReviewInfo | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const reload = useCallback(async (quiet = false) => {
+    if (!quiet) setLoading(true);
+    try {
+      setInfo(await api.taskReview(taskId));
+      setError(null);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      if (!quiet) setLoading(false);
+    }
+  }, [taskId]);
+
+  useEffect(() => {
+    setInfo(null);
+    setError(null);
+    void reload();
+  }, [reload]);
+  useServerEvents(useCallback((event) => {
+    if ((event.type === "task.review" || event.type === "task.stage") && event.taskId === taskId) {
+      void reload(true);
+    }
+  }, [reload, taskId]));
+
+  return { info, loading, error, reload };
+}
+
+function roundState(round: TaskReviewRound) {
+  if (round.conclusion === "verified") {
+    return { className: "is-verified", label: "已通过", icon: <CheckCircle size={11} weight="fill" /> };
+  }
+  if (round.conclusion === "verify_failed") {
+    return { className: "is-verify-failed", label: "未通过", icon: <WarningCircle size={11} weight="fill" /> };
+  }
+  if (REVIEW_IN_FLIGHT.has(round.reviewTaskStatus)) {
+    return { className: "is-verifying", label: "进行中", icon: <SpinnerGap size={11} className="is-spinning" /> };
+  }
+  return { className: "is-inconclusive", label: "无结论", icon: <WarningCircle size={11} /> };
+}
+
+function ReviewRound({
+  taskId,
+  round,
+  onOpenTask,
+}: {
+  taskId: string;
+  round: TaskReviewRound;
+  onOpenTask?: (taskId: string) => void;
+}) {
   const [open, setOpen] = useState(true);
-  const label = conclusionLabel(round);
+  const state = roundState(round);
   return (
-    <article className={`team-review-round is-${label}`}>
+    <article className={`review-round ${state.className}`}>
       <button type="button" onClick={() => setOpen((value) => !value)} aria-expanded={open}>
         <span>{round.round}</span>
         <b>第 {round.round} 轮</b>
-        <em>{label === "verified" ? <CheckCircle size={11} weight="fill" /> : label === "verify_failed" ? <WarningCircle size={11} weight="fill" /> : <SpinnerGap size={11} className="is-spinning" />}{label}</em>
-        <small>审查任务：{TASK_STATUS_LABELS[round.reviewTaskStatus]}</small>
+        <em>{state.icon}{state.label}</em>
+        <small>{TASK_STATUS_LABELS[round.reviewTaskStatus]}</small>
         <CaretDown size={12} weight="bold" />
       </button>
       {open && (
         <div>
           {round.reportMarkdown ? <MarkdownBody text={round.reportMarkdown} /> : <p>审查报告尚未写入。</p>}
           {round.screenshots.length > 0 && (
-            <section className="team-review-shots">
-              <h5><ImageSquare size={12} />截图 · {round.screenshots.length}</h5>
+            <section className="review-shots">
+              <h5><ImageSquare size={12} />证据截图 · {round.screenshots.length}</h5>
               <div>
-                {round.screenshots.map((name) => {
-                  return (
-                    <div className="team-review-shot" key={name} title="点击查看大图">
-                      <PreviewableImage src={api.taskReviewFileUrl(taskId, round.round, name)} alt={name} label={`第 ${round.round} 轮 · ${name}`} loading="lazy" />
-                      <span>{name}</span>
-                    </div>
-                  );
-                })}
+                {round.screenshots.map((name) => (
+                  <div className="review-shot" key={name} title="点击查看大图">
+                    <PreviewableImage
+                      src={api.taskReviewFileUrl(taskId, round.round, name)}
+                      alt={name}
+                      label={`第 ${round.round} 轮 · ${name}`}
+                      loading="lazy"
+                    />
+                    <span>{name}</span>
+                  </div>
+                ))}
               </div>
             </section>
+          )}
+          {onOpenTask && (
+            <button className="review-round__open-task" type="button" onClick={() => onOpenTask(round.reviewTaskId)}>
+              打开审查任务<ArrowSquareOut size={12} />
+            </button>
           )}
         </div>
       )}
@@ -48,38 +121,42 @@ function ReviewRound({ taskId, round }: { taskId: string; round: TaskReviewRound
   );
 }
 
-export function ReviewEvidence({ taskId }: { taskId: string }) {
-  const [info, setInfo] = useState<TaskReviewInfo | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const load = useCallback(async () => {
-    try {
-      setInfo(await api.taskReview(taskId));
-      setError(null);
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason));
-    } finally {
-      setLoading(false);
-    }
-  }, [taskId]);
-  useEffect(() => {
-    setInfo(null);
-    setLoading(true);
-    void load();
-  }, [load]);
-  useServerEvents(useCallback((event) => {
-    if ((event.type === "task.review" || event.type === "task.stage") && event.taskId === taskId) void load();
-  }, [load, taskId]));
-  const rounds = info?.rounds ?? [];
-
+export function ReviewEvidence({
+  taskId,
+  state,
+  title = "审查记录",
+  emptyMessage = "尚无审查记录。",
+  onOpenTask,
+}: {
+  taskId: string;
+  state: TaskReviewState;
+  title?: string;
+  emptyMessage?: string;
+  onOpenTask?: (taskId: string) => void;
+}) {
+  const rounds = state.info?.rounds ?? [];
   return (
     <ImagePreviewGroup isolated>
-      <section className="team-review-evidence">
-        <header><div><b>独立审查证据</b><small>{rounds.length ? `已记录 ${rounds.length} 轮真实运行验证` : "验收前请结合结论、报告与截图判断"}</small></div></header>
-        {loading && <p><SpinnerGap size={13} className="is-spinning" />正在读取审查记录…</p>}
-        {!loading && error && <p className="is-error">审查记录加载失败：{error} <button type="button" onClick={() => void load()}>重试</button></p>}
-        {!loading && !error && !rounds.length && <p>尚无独立审查记录。</p>}
-        {rounds.map((round) => <ReviewRound key={`${round.round}-${round.reviewTaskId}`} taskId={taskId} round={round} />)}
+      <section className="review-evidence">
+        <header>
+          <div>
+            <b>{title}</b>
+            <small>{rounds.length ? `已记录 ${rounds.length} 轮真实运行验证` : "结论、报告与截图集中保存在这里"}</small>
+          </div>
+        </header>
+        {state.loading && <p><SpinnerGap size={13} className="is-spinning" />正在读取审查记录…</p>}
+        {!state.loading && state.error && (
+          <p className="is-error">审查记录加载失败：{state.error} <button type="button" onClick={() => void state.reload()}>重试</button></p>
+        )}
+        {!state.loading && !state.error && !rounds.length && <p>{emptyMessage}</p>}
+        {rounds.map((round) => (
+          <ReviewRound
+            key={`${round.round}-${round.reviewTaskId}`}
+            taskId={taskId}
+            round={round}
+            onOpenTask={onOpenTask}
+          />
+        ))}
       </section>
     </ImagePreviewGroup>
   );

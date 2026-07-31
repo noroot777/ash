@@ -15,7 +15,6 @@ import { LegacyLink } from "../components/LegacyLink.tsx";
 import { api, type TaskCommit, type TaskDiffResult } from "../lib/api.ts";
 import { MessageAttachments } from "../task-detail/Attachments.tsx";
 import { AcceptanceControls } from "../team/TeamReviewWorkspace.tsx";
-import { ReviewEvidence } from "../team/ReviewEvidence.tsx";
 import { formatInstant, parseAttachmentText } from "../task-detail/utils.ts";
 import { sharedTeamParent } from "./reviewModel.ts";
 
@@ -284,7 +283,7 @@ export function TaskReviewWorkspace({
   return (
     <section className="single-review-workspace">
       <header className="single-review-subbar">
-        <div><b>{sharedParent ? "共享执行者审查" : "改动与提交"}</b><small>{sharedParent ? "该执行者随父团队共享分支统一验收" : "核对真实审查证据与任务分支相对基线的 diff"}</small></div>
+        <div><b>{sharedParent ? "共享执行者审查" : "改动与提交"}</b><small>{sharedParent ? "该执行者随父团队共享分支统一验收" : "配合右侧审查记录，核对任务分支相对基线的提交与 diff"}</small></div>
         <LegacyLink projectId={task.projectId} taskId={task.id} view="review" />
         <button type="button" onClick={onClose}><X size={13} />返回对话</button>
       </header>
@@ -302,7 +301,6 @@ export function TaskReviewWorkspace({
           <div className="single-review-card-body">
             <MessageAttachments paths={objective.paths} />
             {sharedParent ? <SharedWorkerFacts parent={sharedParent} branch={sharedBranch} /> : <BranchFacts task={task} data={data} />}
-            <ReviewEvidence taskId={task.id} />
             {loading && <p className="single-review-loading"><SpinnerGap size={14} className="is-spinning" />{sharedParent ? "正在读取共享分支归属…" : "正在汇总提交与 diff…"}</p>}
             {!loading && error && <p className="single-review-error">{sharedParent ? "共享分支归属读取失败" : "提交与 diff 加载失败"}：{error}</p>}
             {!sharedParent && !loading && data && (
