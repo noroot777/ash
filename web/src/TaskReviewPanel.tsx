@@ -132,12 +132,14 @@ export function TaskReviewPanel({
   onOpenTask,
   onReviewTaskCreated,
   defaultExpanded = false,
+  compact = false,
 }: {
   task: Task;
   allTasks: Task[];
   onOpenTask: (taskId: string) => void;
   onReviewTaskCreated: (task: Task) => void;
   defaultExpanded?: boolean;
+  compact?: boolean;
 }) {
   const parent = task.parentId ? allTasks.find((candidate) => candidate.id === task.parentId) ?? null : null;
   const defaults = useMemo(
@@ -298,6 +300,7 @@ export function TaskReviewPanel({
         onOpenTask={onOpenTask}
         onPreview={setPreview}
         defaultExpanded={defaultExpanded}
+        compact={compact}
       />
       {previewIndex >= 0 && (
         <ImageLightbox
@@ -346,6 +349,7 @@ export function TaskReviewEvidence({
         onRetry={load}
         onPreview={setPreview}
         defaultExpanded={defaultExpanded}
+        compact={false}
       />
       {previewIndex >= 0 && (
         <ImageLightbox
@@ -369,6 +373,7 @@ function ReviewRecords({
   onOpenTask,
   onPreview,
   defaultExpanded,
+  compact,
 }: {
   taskId: string;
   rounds: TaskReviewRound[];
@@ -379,6 +384,7 @@ function ReviewRecords({
   onOpenTask?: (taskId: string) => void;
   onPreview: (preview: Preview) => void;
   defaultExpanded: boolean;
+  compact: boolean;
 }) {
   return (
     <div className="max-h-[min(46vh,520px)] space-y-3 overflow-y-auto p-3">
@@ -405,6 +411,7 @@ function ReviewRecords({
           onOpenTask={onOpenTask}
           onPreview={onPreview}
           defaultExpanded={defaultExpanded}
+          compact={compact}
         />
       ))}
     </div>
@@ -417,12 +424,14 @@ function ReviewRoundCard({
   onOpenTask,
   onPreview,
   defaultExpanded,
+  compact,
 }: {
   taskId: string;
   round: TaskReviewRound;
   onOpenTask?: (taskId: string) => void;
   onPreview: (preview: Preview) => void;
   defaultExpanded: boolean;
+  compact: boolean;
 }) {
   const [expanded, setExpanded] = useState(defaultExpanded);
   const verdict = verdictMeta(round.conclusion);
@@ -476,7 +485,7 @@ function ReviewRoundCard({
               <div className="mb-2 flex items-center gap-1.5 text-[10.5px] font-semibold uppercase tracking-[0.08em] text-faint">
                 <ImageSquare size={12} /> 截图 · {round.screenshots.length}
               </div>
-              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
+              <div className={`grid grid-cols-2 gap-2 ${compact ? "" : "sm:grid-cols-3 lg:grid-cols-4"}`}>
                 {round.screenshots.map((name) => {
                   const preview = reviewPreview(taskId, round.round, name);
                   return (
