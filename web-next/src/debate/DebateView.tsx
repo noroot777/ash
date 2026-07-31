@@ -15,11 +15,13 @@ import {
   Stop,
   Trash,
 } from "@phosphor-icons/react";
+import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
 import { LegacyLink } from "../components/LegacyLink.tsx";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
 import { api } from "../lib/api.ts";
 import { useStickToBottom } from "../lib/useStickToBottom.ts";
 import { DeleteTaskDialog } from "../task-detail/DeleteTaskDialog.tsx";
+import { MessageAttachments } from "../task-detail/Attachments.tsx";
 import { TaskTimeMeta } from "../task-detail/TaskTimeMeta.tsx";
 import { formatDuration, formatInstant, parseAttachmentText, STATUS_TONES } from "../task-detail/utils.ts";
 import { DebateGateControls, DebateProgressBar } from "./DebateControls.tsx";
@@ -242,33 +244,37 @@ export function DebateView({
         <button type="button" title="删除辩论" onClick={() => setDeleteOpen(true)}><Trash size={13} /></button>
       </header>
 
-      <section className="debate-config-card">
-        <div><small>辩题</small><h2>{topic.body || config.topic || task.title}</h2></div>
-        <dl>
-          <div><dt><ChatCircle size={12} weight="fill" />辩手 A</dt><dd>{sessionsByRole.debaterA?.executor || config.debaterA}</dd></div>
-          <div><dt><ChatTeardrop size={12} weight="fill" />辩手 B</dt><dd>{sessionsByRole.debaterB?.executor || config.debaterB}</dd></div>
-          <div><dt>轮数</dt><dd>{config.maxRounds ?? "不设限"}</dd></div>
-          <div><dt>收敛门</dt><dd>{config.gateG1 === "on" ? "G1 开启" : "关闭"}</dd></div>
-        </dl>
-      </section>
+      <ImagePreviewGroup isolated>
+        <section className="debate-config-card">
+          <div><small>辩题</small><h2>{topic.body || config.topic || task.title}</h2><MessageAttachments paths={topic.paths} /></div>
+          <dl>
+            <div><dt><ChatCircle size={12} weight="fill" />辩手 A</dt><dd>{sessionsByRole.debaterA?.executor || config.debaterA}</dd></div>
+            <div><dt><ChatTeardrop size={12} weight="fill" />辩手 B</dt><dd>{sessionsByRole.debaterB?.executor || config.debaterB}</dd></div>
+            <div><dt>轮数</dt><dd>{config.maxRounds ?? "不设限"}</dd></div>
+            <div><dt>收敛门</dt><dd>{config.gateG1 === "on" ? "G1 开启" : "关闭"}</dd></div>
+          </dl>
+        </section>
+      </ImagePreviewGroup>
 
-      <div className="debate-stream" ref={scrollRef}>
-        {debate.loading && !turns.length && <p className="debate-empty"><SpinnerGap size={14} className="is-spinning" />正在读取辩论记录…</p>}
-        {!debate.loading && debate.error && !turns.length && <p className="debate-empty is-error">辩论记录读取失败：{debate.error}</p>}
-        {!debate.loading && !debate.error && !turns.length && <p className="debate-empty">点击“运行”开始辩论。双方逐轮发言会实时出现在这里。</p>}
-        {turns.map((turn, index) => (
-          <TurnBubble
-            key={`${turn.round}-${turn.speaker}-${index}`}
-            turn={turn}
-            previousRound={turns[index - 1]?.round}
-            session={turn.speaker === "A" ? sessionsByRole.debaterA : turn.speaker === "B" ? sessionsByRole.debaterB : undefined}
-            fallback={turn.speaker === "B" ? config.debaterB : config.debaterA}
-          />
-        ))}
-        {task.status === "running" && turns.length > 0 && turns.at(-1)?.done && <p className="debate-between"><TypingDots />正在准备下一次发言…</p>}
-        {task.status === "failed" && <p className="debate-terminal is-error">本次辩论失败并停止</p>}
-        {task.status === "canceled" && <p className="debate-terminal">辩论已取消</p>}
-      </div>
+      <ImagePreviewGroup isolated>
+        <div className="debate-stream" ref={scrollRef}>
+          {debate.loading && !turns.length && <p className="debate-empty"><SpinnerGap size={14} className="is-spinning" />正在读取辩论记录…</p>}
+          {!debate.loading && debate.error && !turns.length && <p className="debate-empty is-error">辩论记录读取失败：{debate.error}</p>}
+          {!debate.loading && !debate.error && !turns.length && <p className="debate-empty">点击“运行”开始辩论。双方逐轮发言会实时出现在这里。</p>}
+          {turns.map((turn, index) => (
+            <TurnBubble
+              key={`${turn.round}-${turn.speaker}-${index}`}
+              turn={turn}
+              previousRound={turns[index - 1]?.round}
+              session={turn.speaker === "A" ? sessionsByRole.debaterA : turn.speaker === "B" ? sessionsByRole.debaterB : undefined}
+              fallback={turn.speaker === "B" ? config.debaterB : config.debaterA}
+            />
+          ))}
+          {task.status === "running" && turns.length > 0 && turns.at(-1)?.done && <p className="debate-between"><TypingDots />正在准备下一次发言…</p>}
+          {task.status === "failed" && <p className="debate-terminal is-error">本次辩论失败并停止</p>}
+          {task.status === "canceled" && <p className="debate-terminal">辩论已取消</p>}
+        </div>
+      </ImagePreviewGroup>
 
       {gate?.open && task.status === "awaiting_review" ? (
         <DebateGateControls gate={gate} round={currentRound} maxRounds={config.maxRounds} busy={busy || teamBusy} linkedTeam={linkedTeam} onGate={gateAction} onOpenTeam={() => setTeamModal(true)} onOpenTask={onSelectTask} />

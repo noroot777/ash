@@ -1,8 +1,9 @@
-import { useRef, useState } from "react";
+import { useRef } from "react";
 import { ArrowDown, ArrowUp, Copy, File, Wrench, X } from "@phosphor-icons/react";
 import type { ConversationItem } from "./conversationModel.ts";
 import { useScrollEdges } from "../lib/useScrollEdges.ts";
 import { useStickToBottom } from "../lib/useStickToBottom.ts";
+import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
 import { SessionMeta } from "../components/SessionMeta.tsx";
 import { MessageAttachments } from "./Attachments.tsx";
@@ -14,10 +15,8 @@ function copyText(text: string) {
 
 function AgentMessage({
   item,
-  onPreview,
 }: {
   item: Extract<ConversationItem, { kind: "agent" }>;
-  onPreview: (url: string, name: string) => void;
 }) {
   const duration = durationBetween(item.at, item.endedAt);
   return (
@@ -36,7 +35,7 @@ function AgentMessage({
             <Copy size={13} aria-hidden="true" />
           </button>
         </header>
-        {item.markdown && <MarkdownBody text={item.markdown} onPreview={onPreview} />}
+        {item.markdown && <MarkdownBody text={item.markdown} />}
         {item.events.map((event, index) => (
           <details className={`task-tool-line task-tool-line--${event.kind}`} key={`${event.kind}:${index}`}>
             <summary>
@@ -54,10 +53,8 @@ function AgentMessage({
 
 function UserMessage({
   item,
-  onPreview,
 }: {
   item: Extract<ConversationItem, { kind: "user" }>;
-  onPreview: (url: string, name: string) => void;
 }) {
   const parsed = parseAttachmentText(item.text);
   const paths = [...parsed.paths, ...item.attachments];
@@ -74,7 +71,7 @@ function UserMessage({
           )}
         </header>
         {parsed.body && <p>{parsed.body}</p>}
-        <MessageAttachments paths={paths} onPreview={onPreview} />
+        <MessageAttachments paths={paths} />
       </div>
     </article>
   );
@@ -98,7 +95,7 @@ export function ConversationFeed({
   const scroll = useRef<HTMLDivElement>(null);
   const { noteUserScrollIntent, resume } = useStickToBottom(scroll, taskId);
   const { atTop, atBottom } = useScrollEdges(scroll, taskId);
-  const [preview, setPreview] = useState<{ url: string; name: string } | null>(null);
+  const objective = parseAttachmentText(taskBody);
 
   const scrollToEdge = (target: "top" | "bottom") => {
     const element = scroll.current;
@@ -116,62 +113,58 @@ export function ConversationFeed({
     "absolute left-1/2 z-[8] grid size-[30px] -translate-x-1/2 place-items-center rounded-full border border-[var(--line2)] bg-[var(--panel)]/90 text-[var(--muted)] shadow-[var(--menu-shadow)] backdrop-blur-sm transition-[opacity,transform,color] duration-200 hover:text-[var(--ink)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] motion-reduce:transition-none";
 
   return (
-    <div className="task-conversation-wrap">
-      <div className="task-conversation" ref={scroll}>
-        {taskBody.trim() && (
-          <details className="task-objective" open={items.length === 0}>
-            <summary>任务目标</summary>
-            <MarkdownBody text={parseAttachmentText(taskBody).body} onPreview={(url, name) => setPreview({ url, name })} />
-            <MessageAttachments paths={parseAttachmentText(taskBody).paths} onPreview={(url, name) => setPreview({ url, name })} />
-          </details>
-        )}
-        {items.map((item) => {
-          if (item.kind === "agent") return <AgentMessage key={item.id} item={item} onPreview={(url, name) => setPreview({ url, name })} />;
-          if (item.kind === "user") return <UserMessage key={item.id} item={item} onPreview={(url, name) => setPreview({ url, name })} />;
-          return (
-            <div className={`task-event-line${item.tone === "error" ? " is-error" : ""}`} key={item.id}>
-              <span />
-              <p>{item.text}{item.at ? ` · ${formatInstant(item.at)}` : ""}</p>
-              <span />
+    <ImagePreviewGroup isolated>
+      <div className="task-conversation-wrap">
+        <div className="task-conversation" ref={scroll}>
+          {taskBody.trim() && (
+            <details className="task-objective" open={items.length === 0}>
+              <summary>任务目标</summary>
+              <MarkdownBody text={objective.body} />
+              <MessageAttachments paths={objective.paths} />
+            </details>
+          )}
+          {items.map((item) => {
+            if (item.kind === "agent") return <AgentMessage key={item.id} item={item} />;
+            if (item.kind === "user") return <UserMessage key={item.id} item={item} />;
+            return (
+              <div className={`task-event-line${item.tone === "error" ? " is-error" : ""}`} key={item.id}>
+                <span />
+                <p>{item.text}{item.at ? ` · ${formatInstant(item.at)}` : ""}</p>
+                <span />
+              </div>
+            );
+          })}
+          {!items.length && !loading && !error && (
+            <div className="task-conversation-empty">
+              <File size={20} aria-hidden="true" />
+              <p>点击「运行」开始，执行输出会实时显示在这里。</p>
             </div>
-          );
-        })}
-        {!items.length && !loading && !error && (
-          <div className="task-conversation-empty">
-            <File size={20} aria-hidden="true" />
-            <p>点击「运行」开始，执行输出会实时显示在这里。</p>
-          </div>
-        )}
-        {loading && !items.length && <p className="task-conversation-note">正在读取会话…</p>}
-        {error && <p className="task-conversation-error">{error.message}</p>}
-        {footer}
-      </div>
-      <button
-        className={`${scrollButtonClass} top-3 ${atTop ? "pointer-events-none -translate-y-1 opacity-0" : "opacity-80 hover:opacity-100"}`}
-        type="button"
-        onClick={() => scrollToEdge("top")}
-        tabIndex={atTop ? -1 : 0}
-        aria-hidden={atTop}
-        aria-label="滚动到会话顶部"
-      >
-        <ArrowUp size={15} weight="bold" aria-hidden="true" />
-      </button>
-      <button
-        className={`${scrollButtonClass} bottom-3 ${atBottom ? "pointer-events-none translate-y-1 opacity-0" : "opacity-80 hover:opacity-100"}`}
-        type="button"
-        onClick={() => scrollToEdge("bottom")}
-        tabIndex={atBottom ? -1 : 0}
-        aria-hidden={atBottom}
-        aria-label="滚动到会话底部"
-      >
-        <ArrowDown size={15} weight="bold" aria-hidden="true" />
-      </button>
-      {preview && (
-        <div className="task-image-lightbox" role="dialog" aria-modal="true" aria-label={preview.name} onClick={() => setPreview(null)}>
-          <button type="button" onClick={() => setPreview(null)} aria-label="关闭图片预览"><X size={18} /></button>
-          <img src={preview.url} alt={preview.name} onClick={(event) => event.stopPropagation()} />
+          )}
+          {loading && !items.length && <p className="task-conversation-note">正在读取会话…</p>}
+          {error && <p className="task-conversation-error">{error.message}</p>}
+          {footer}
         </div>
-      )}
-    </div>
+        <button
+          className={`${scrollButtonClass} top-3 ${atTop ? "pointer-events-none -translate-y-1 opacity-0" : "opacity-80 hover:opacity-100"}`}
+          type="button"
+          onClick={() => scrollToEdge("top")}
+          tabIndex={atTop ? -1 : 0}
+          aria-hidden={atTop}
+          aria-label="滚动到会话顶部"
+        >
+          <ArrowUp size={15} weight="bold" aria-hidden="true" />
+        </button>
+        <button
+          className={`${scrollButtonClass} bottom-3 ${atBottom ? "pointer-events-none translate-y-1 opacity-0" : "opacity-80 hover:opacity-100"}`}
+          type="button"
+          onClick={() => scrollToEdge("bottom")}
+          tabIndex={atBottom ? -1 : 0}
+          aria-hidden={atBottom}
+          aria-label="滚动到会话底部"
+        >
+          <ArrowDown size={15} weight="bold" aria-hidden="true" />
+        </button>
+      </div>
+    </ImagePreviewGroup>
   );
 }

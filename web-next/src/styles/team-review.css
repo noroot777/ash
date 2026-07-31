@@ -95,19 +95,10 @@
 .team-review-shots { margin-top: 9px; border-top: .5px solid var(--line); padding-top: 8px; }
 .team-review-shots h5 { display: flex; align-items: center; gap: 5px; margin: 0 0 6px; color: var(--faint); font-size: 9.5px; text-transform: uppercase; }
 .team-review-shots > div { display: grid; grid-template-columns: repeat(auto-fill,minmax(130px,1fr)); gap: 7px; }
-.team-review-shots button { min-width: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 7px; background: var(--canvas); padding: 0; text-align: left; }
-.team-review-shots button:hover { border-color: color-mix(in lch,var(--accent) 42%,var(--line)); }
+.team-review-shot { min-width: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 7px; background: var(--canvas); text-align: left; }
+.team-review-shot:hover { border-color: color-mix(in lch,var(--accent) 42%,var(--line)); }
 .team-review-shots img { display: block; width: 100%; aspect-ratio: 16/9; background: var(--raised); object-fit: cover; }
 .team-review-shots span { display: block; overflow: hidden; padding: 5px 6px; color: var(--muted); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
-
-.team-evidence-lightbox { position: fixed; z-index: 170; inset: 0; display: grid; place-items: center; background: rgb(20 22 28 / 82%); padding: 52px 76px; }
-.team-evidence-lightbox > header { position: absolute; top: 17px; left: 22px; right: 70px; display: flex; justify-content: space-between; color: white; font-size: 11px; }
-.team-evidence-lightbox > img { max-width: 100%; max-height: 100%; border-radius: 7px; box-shadow: 0 24px 90px rgb(0 0 0 / 42%); }
-.team-evidence-lightbox > button { position: absolute; display: grid; place-items: center; border: 1px solid rgb(255 255 255 / 22%); border-radius: 50%; background: rgb(0 0 0 / 28%); color: white; }
-.team-lightbox-close { top: 14px; right: 18px; width: 34px; height: 34px; }
-.team-lightbox-prev, .team-lightbox-next { top: 50%; width: 40px; height: 40px; transform: translateY(-50%); }
-.team-lightbox-prev { left: 20px; }
-.team-lightbox-next { right: 20px; }
 
 .team-shared-verification, .team-acceptance-queue { overflow: hidden; border: 1px solid var(--line2); border-radius: 10px; background: var(--panel); }
 .team-shared-verification > header, .team-acceptance-queue > header { display: flex; align-items: flex-start; gap: 8px; border-bottom: .5px solid var(--line); padding: 10px 12px; }
@@ -140,7 +131,6 @@
   .team-review-facts, .team-review-change-grid { grid-template-columns: 1fr; }
   .team-review-record > header { flex-wrap: wrap; }
   .team-accept-actions { width: 100%; justify-content: flex-end; }
-  .team-evidence-lightbox { padding: 54px 48px; }
 }
 @media (prefers-reduced-motion: reduce) {
   .team-review-record svg, .team-review-round svg, .team-shared-worker-grid svg { transition: none; }

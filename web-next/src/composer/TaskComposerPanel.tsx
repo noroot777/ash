@@ -7,6 +7,7 @@ import {
 } from "@harness/shared";
 import { CLI_MODEL_PRESETS, REASONING_EFFORT_VALUES } from "@harness/shared/cli-presets";
 import { Paperclip, Play, Robot, Scales, UsersThree, X } from "@phosphor-icons/react";
+import { ImagePreviewGroup, PreviewableImage } from "../components/ImagePreview.tsx";
 import { Button, Toggle } from "../components/ui.tsx";
 import { api } from "../lib/api.ts";
 import { AttachmentPicker, UploadAttachmentList, useAttachments } from "../task-detail/Attachments.tsx";
@@ -46,6 +47,24 @@ function defaultProfile(profiles: AgentExecutorProfile[], type: AgentType) {
 }
 function profileLabel(profile: AgentExecutorProfile) {
   return `${profile.name}${profile.model ? ` · ${profile.model}` : ""}${profile.reasoningEffort ? ` · ${profile.reasoningEffort}` : ""}`;
+}
+
+function SeedAttachmentList({ paths, onRemove }: { paths: string[]; onRemove: (path: string) => void }) {
+  if (!paths.length) return null;
+  return (
+    <div className="composer-seed-attachments">
+      {paths.map((path) => {
+        const view = attachmentView(path);
+        return (
+          <div className="composer-seed-attachment" key={path}>
+            {view.image && view.url ? <PreviewableImage src={view.url} alt={view.name} /> : <Paperclip size={14} aria-hidden="true" />}
+            <span>{view.name}</span>
+            <button type="button" onClick={() => onRemove(path)} aria-label={`移除 ${view.name}`}><X size={10} aria-hidden="true" /></button>
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
 function ExecutorSelect({ label, value, profiles, onChange }: { label: string; value: string; profiles: AgentExecutorProfile[]; onChange: (value: string) => void }) {
@@ -206,7 +225,7 @@ export function TaskComposerPanel({
           }} />
           {!!slashCandidates.length && <div className="composer-slash-menu"><small>斜杠命令</small>{slashCandidates.map((item) => <button type="button" className="ui-selectable" key={item.command} onClick={() => applySlash(item.mode)}><b>{item.command}</b><span>{item.label}</span></button>)}</div>}
         </div>
-        {mode !== "debate" && <><UploadAttachmentList attachments={uploads.attachments} error={uploads.error} onRemove={uploads.remove} />{!!seedAttachments.length && <div className="composer-seed-attachments">{seedAttachments.map((path) => { const view = attachmentView(path); return <span key={path}><Paperclip size={12} />{view.name}<button type="button" onClick={() => setSeedAttachments((current) => current.filter((item) => item !== path))}><X size={10} /></button></span>; })}</div>}</>}
+        {mode !== "debate" && <ImagePreviewGroup isolated><UploadAttachmentList attachments={uploads.attachments} error={uploads.error} onRemove={uploads.remove} /><SeedAttachmentList paths={seedAttachments} onRemove={(path) => setSeedAttachments((current) => current.filter((item) => item !== path))} /></ImagePreviewGroup>}
         {mode === "debate" && allAttachments.length > 0 && <p className="composer-warning">辩论配置不接收附件；附件仍保留，切回单任务或团队后会随任务提交。</p>}
         <div className="composer-fields">
           {mode === "single" && <><ExecutorSelect label="执行器" value={executors.single.profile} profiles={profiles} onChange={(value) => changeExecutor("single", value)} />{modelField("模型", executors.single.model, (model) => changeOverride("single", { model }), selectedSingleType)}{effortField("思考强度", executors.single.effort, (effort) => changeOverride("single", { effort }), selectedSingleType)}</>}

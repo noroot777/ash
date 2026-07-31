@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type { Group, Task } from "@harness/shared";
 import { batchesOf, mergeFeed, teamGroupsOf, workerHaltStats, workersOf } from "@harness/shared/team";
 import { ArrowSquareOut, Broom, PaperPlaneTilt, SpinnerGap, WarningCircle, X } from "@phosphor-icons/react";
+import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
+import { MarkdownBody } from "../components/MarkdownBody.tsx";
 import { api, type TeamCuaStatus } from "../lib/api.ts";
 import { useConversation } from "../lib/useConversation.ts";
 import { AttachmentPicker, MessageAttachments, UploadAttachmentList, useAttachments } from "../task-detail/Attachments.tsx";
@@ -262,11 +264,13 @@ export function TeamView({
       ) : (
         <>
           {(objective.body || objective.paths.length > 0) && (
-            <details className="team-objective">
-              <summary>原始需求</summary>
-              {objective.body && <p>{objective.body}</p>}
-              <MessageAttachments paths={objective.paths} onPreview={() => undefined} />
-            </details>
+            <ImagePreviewGroup isolated>
+              <details className="team-objective">
+                <summary>原始需求</summary>
+                {objective.body && <MarkdownBody text={objective.body} />}
+                <MessageAttachments paths={objective.paths} />
+              </details>
+            </ImagePreviewGroup>
           )}
           {task.question && (
             <div className="team-lead-question">

@@ -2,6 +2,7 @@ import { useRef } from "react";
 import type { Task } from "@harness/shared";
 import type { Batch } from "@harness/shared/team";
 import { ArrowElbowDownRight, ArrowRight, Wrench } from "@phosphor-icons/react";
+import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
 import { SessionMeta } from "../components/SessionMeta.tsx";
 import { useStickToBottom } from "../lib/useStickToBottom.ts";
@@ -40,7 +41,7 @@ function UserRow({ row }: { row: Extract<TeamFeedRow, { kind: "conv" }>["item"] 
       <div>
         <header><b>你</b>{row.at && <time>{formatInstant(row.at)}</time>}</header>
         {parsed.body && <p>{parsed.body}</p>}
-        <MessageAttachments paths={paths} onPreview={() => undefined} />
+        <MessageAttachments paths={paths} />
       </div>
     </article>
   );
@@ -117,26 +118,28 @@ export function TeamFeed({
   useStickToBottom(scroll, taskId);
   const byId = new Map(workers.map((worker) => [worker.id, worker]));
   return (
-    <section className="team-feed" aria-label="团队调度流" ref={scroll}>
-      {!rows.length && <p className="team-feed-empty">运行后，调度者的拆解、派活、执行者提问与汇报会按发生顺序出现在这里。</p>}
-      {rows.map((row) => {
-        if (row.kind === "batch") return <BatchCard key={row.key} batch={row.batch} allWorkers={workers} onOpenWorker={onOpenWorker} />;
-        const item = row.item;
-        if (item.kind === "agent") return <AgentRow key={row.key} row={item} />;
-        if (item.kind === "user") return <UserRow key={row.key} row={item} />;
-        const inbound = parseInbound(item.text);
-        if (inbound) {
-          return (
-            <div key={row.key}>
-              {inbound.map((message, index) => {
-                const worker = message.taskId ? byId.get(message.taskId) : undefined;
-                return <InboundRow key={index} message={message} worker={worker} number={worker ? workers.indexOf(worker) + 1 : 0} at={item.at} onOpenWorker={onOpenWorker} />;
-              })}
-            </div>
-          );
-        }
-        return <div className={`team-feed-event${item.tone === "error" ? " is-error" : ""}`} key={row.key}><span />{item.text}<span /></div>;
-      })}
-    </section>
+    <ImagePreviewGroup isolated>
+      <section className="team-feed" aria-label="团队调度流" ref={scroll}>
+        {!rows.length && <p className="team-feed-empty">运行后，调度者的拆解、派活、执行者提问与汇报会按发生顺序出现在这里。</p>}
+        {rows.map((row) => {
+          if (row.kind === "batch") return <BatchCard key={row.key} batch={row.batch} allWorkers={workers} onOpenWorker={onOpenWorker} />;
+          const item = row.item;
+          if (item.kind === "agent") return <AgentRow key={row.key} row={item} />;
+          if (item.kind === "user") return <UserRow key={row.key} row={item} />;
+          const inbound = parseInbound(item.text);
+          if (inbound) {
+            return (
+              <div key={row.key}>
+                {inbound.map((message, index) => {
+                  const worker = message.taskId ? byId.get(message.taskId) : undefined;
+                  return <InboundRow key={index} message={message} worker={worker} number={worker ? workers.indexOf(worker) + 1 : 0} at={item.at} onOpenWorker={onOpenWorker} />;
+                })}
+              </div>
+            );
+          }
+          return <div className={`team-feed-event${item.tone === "error" ? " is-error" : ""}`} key={row.key}><span />{item.text}<span /></div>;
+        })}
+      </section>
+    </ImagePreviewGroup>
   );
 }

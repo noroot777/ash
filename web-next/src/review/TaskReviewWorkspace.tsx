@@ -13,6 +13,7 @@ import {
 } from "@phosphor-icons/react";
 import { LegacyLink } from "../components/LegacyLink.tsx";
 import { api, type TaskCommit, type TaskDiffResult } from "../lib/api.ts";
+import { MessageAttachments } from "../task-detail/Attachments.tsx";
 import { AcceptanceControls } from "../team/TeamReviewWorkspace.tsx";
 import { ReviewEvidence } from "../team/ReviewEvidence.tsx";
 import { formatInstant, parseAttachmentText } from "../task-detail/utils.ts";
@@ -257,7 +258,7 @@ export function TaskReviewWorkspace({
   const [sharedBranch, setSharedBranch] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const objective = parseAttachmentText(task.body).body.trim();
+  const objective = parseAttachmentText(task.body);
   const display = taskDisplayStatus(task.status, task.stage, !!task.question);
   const sharedParent = sharedTeamParent(task, allTasks);
 
@@ -294,11 +295,12 @@ export function TaskReviewWorkspace({
             <i className="single-review-stage-dot" />
             <div>
               <span><b>{task.title}</b><em>{sharedParent ? "共享执行者" : "单任务"}</em><small>{display.label}</small></span>
-              <p>{objective || "未填写任务目标"}</p>
+              <p>{objective.body.trim() || "未填写任务目标"}</p>
             </div>
             {sharedParent ? <span className="single-review-shared-badge">随团队验收</span> : <AcceptanceControls task={task} onTaskUpdated={onTaskUpdated} notify={notify} />}
           </header>
           <div className="single-review-card-body">
+            <MessageAttachments paths={objective.paths} />
             {sharedParent ? <SharedWorkerFacts parent={sharedParent} branch={sharedBranch} /> : <BranchFacts task={task} data={data} />}
             <ReviewEvidence taskId={task.id} />
             {loading && <p className="single-review-loading"><SpinnerGap size={14} className="is-spinning" />{sharedParent ? "正在读取共享分支归属…" : "正在汇总提交与 diff…"}</p>}

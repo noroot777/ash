@@ -213,21 +213,36 @@
   margin-top: 8px;
 }
 
-.composer-seed-attachments > span {
-  display: inline-flex;
+.composer-seed-attachment {
+  position: relative;
+  display: flex;
   max-width: 240px;
-  height: 27px;
+  height: 48px;
   align-items: center;
-  gap: 5px;
+  gap: 7px;
+  overflow: hidden;
   border: 1px solid var(--line);
   border-radius: 7px;
   background: var(--panel);
-  padding: 0 6px 0 8px;
+  padding: 4px 24px 4px 6px;
   color: var(--muted);
   font-size: 10px;
 }
 
-.composer-seed-attachments button {
+.composer-seed-attachment > img {
+  width: 38px;
+  height: 38px;
+  flex: 0 0 38px;
+  border-radius: 5px;
+  object-fit: cover;
+}
+
+.composer-seed-attachment > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.composer-seed-attachment > button {
+  position: absolute;
+  top: 3px;
+  right: 3px;
   display: grid;
   width: 16px;
   height: 16px;

@@ -32,7 +32,8 @@
 .team-objective summary::-webkit-details-marker { display: none; }
 .team-objective summary::after { content: "＋"; float: right; }
 .team-objective[open] summary::after { content: "－"; }
-.team-objective > p { max-height: 84px; overflow-y: auto; margin: 7px 0 0; color: var(--muted); font-size: 11.5px; line-height: 1.55; white-space: pre-wrap; }
+.team-objective .task-markdown { max-height: 84px; overflow-y: auto; margin-top: 7px; color: var(--muted); font-size: 11.5px; line-height: 1.55; }
+.team-objective .task-markdown p { white-space: pre-wrap; }
 .team-objective .task-message-attachments { margin-top: 7px; }
 .team-lead-question { flex: 0 0 auto; max-height: 280px; overflow-y: auto; border-bottom: .5px solid var(--line); padding: 0 16px 8px; }
 .team-lead-question .task-question-card { max-width: none; margin: 10px 0 0; }

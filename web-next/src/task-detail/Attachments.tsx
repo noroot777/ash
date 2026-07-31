@@ -1,6 +1,7 @@
 import { useCallback, useRef, useState, type ClipboardEvent } from "react";
 import { File as FileIcon, Paperclip, X } from "@phosphor-icons/react";
 import { maxBytesFor, type AttachmentKind } from "@harness/shared";
+import { ImagePreviewGroup, PreviewableImage } from "../components/ImagePreview.tsx";
 import { api } from "../lib/api.ts";
 import { attachmentView } from "./utils.ts";
 
@@ -129,63 +130,61 @@ export function UploadAttachmentList({
 }) {
   if (!attachments.length && !error) return null;
   return (
-    <div className="task-upload-list">
-      {attachments.map((attachment) => (
-        <div className="task-upload-chip" key={attachment.path}>
-          {attachment.kind === "image" ? (
-            <img src={attachment.url} alt={attachment.name} />
-          ) : (
-            <FileIcon size={18} aria-hidden="true" />
-          )}
-          <span>
-            <b>{attachment.name}</b>
-            <small>{humanSize(attachment.size)}</small>
-          </span>
-          <button type="button" onClick={() => onRemove(attachment.path)} aria-label={`移除 ${attachment.name}`}>
-            <X size={11} weight="bold" aria-hidden="true" />
-          </button>
-        </div>
-      ))}
-      {error && <p className="task-upload-error">{error}</p>}
-    </div>
+    <ImagePreviewGroup>
+      <div className="task-upload-list">
+        {attachments.map((attachment) => (
+          <div className="task-upload-chip" key={attachment.path}>
+            {attachment.kind === "image" ? (
+              <PreviewableImage src={attachment.url} alt={attachment.name} />
+            ) : (
+              <FileIcon size={18} aria-hidden="true" />
+            )}
+            <span>
+              <b>{attachment.name}</b>
+              <small>{humanSize(attachment.size)}</small>
+            </span>
+            <button type="button" onClick={() => onRemove(attachment.path)} aria-label={`移除 ${attachment.name}`}>
+              <X size={11} weight="bold" aria-hidden="true" />
+            </button>
+          </div>
+        ))}
+        {error && <p className="task-upload-error">{error}</p>}
+      </div>
+    </ImagePreviewGroup>
   );
 }
 
-export function MessageAttachments({
-  paths,
-  onPreview,
-}: {
-  paths: string[];
-  onPreview: (url: string, name: string) => void;
-}) {
+export function MessageAttachments({ paths }: { paths: string[] }) {
   const unique = [...new Set(paths.map((path) => path.trim()).filter(Boolean))];
   if (!unique.length) return null;
   return (
-    <div className="task-message-attachments">
-      {unique.map((path) => {
-        const view = attachmentView(path);
-        if (view.image && view.url) {
+    <ImagePreviewGroup>
+      <div className="task-message-attachments">
+        {unique.map((path) => {
+          const view = attachmentView(path);
+          if (view.image && view.url) {
+            return (
+              <div className="task-message-image" key={path}>
+                <PreviewableImage src={view.url} alt={view.name} />
+              </div>
+            );
+          }
+          if (view.url) {
+            return (
+              <a key={path} href={view.url} target="_blank" rel="noreferrer">
+                <FileIcon size={18} aria-hidden="true" />
+                <span>{view.name}</span>
+              </a>
+            );
+          }
           return (
-            <button type="button" key={path} onClick={() => onPreview(view.url!, view.name)}>
-              <img src={view.url} alt={view.name} />
-            </button>
-          );
-        }
-        if (view.url) {
-          return (
-            <a key={path} href={view.url} target="_blank" rel="noreferrer">
+            <span className="task-message-file" key={path}>
               <FileIcon size={18} aria-hidden="true" />
               <span>{view.name}</span>
-            </a>
+            </span>
           );
-        }
-        return (
-          <span className="task-message-file" key={path}>
-            <FileIcon size={18} aria-hidden="true" />
-            <span>{view.name}</span>
-          </span>
-        );
-      })}
-    </div>
+        })}
+      </div>
+    </ImagePreviewGroup>
   );
 }
