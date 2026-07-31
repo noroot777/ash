@@ -220,6 +220,15 @@
   overflow: auto;
 }
 
+.inspector-tab__trigger:focus-visible,
+.inspector-tab__close:focus-visible,
+.inspector-host__add:focus-visible,
+.inspector-toggle:focus-visible,
+.inspector-host__menu .ui-menu-item:focus-visible {
+  outline: 2px solid color-mix(in lch, var(--accent) 72%, white);
+  outline-offset: -2px;
+}
+
 .inspector-toggle {
   display: grid;
   width: 28px;

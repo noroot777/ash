@@ -247,10 +247,10 @@ function InspectorHostState<Context>({
     <button
       type="button"
       className={`inspector-toggle${panelVisible ? " is-active" : ""}`}
-      aria-label={panelVisible ? "隐藏侧边栏" : "显示侧边栏"}
+      aria-label={panelVisible ? "隐藏 Inspector" : "显示 Inspector"}
       aria-controls={panelId}
       aria-expanded={panelVisible}
-      title={panelVisible ? "隐藏侧边栏" : "显示侧边栏"}
+      title={panelVisible ? "隐藏 Inspector" : "显示 Inspector"}
       onClick={toggle}
     >
       {panelVisible

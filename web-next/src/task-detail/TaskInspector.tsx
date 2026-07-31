@@ -94,8 +94,7 @@ export function TaskInspector({
   const parent = taskParentLink(task, allTasks);
 
   return (
-    <aside className="task-inspector" aria-label="任务 Inspector">
-      <div className="task-inspector-head"><b>Inspector</b><span>任务详情</span></div>
+    <div className="task-inspector" aria-label="任务信息">
       <div className="task-inspector-scroll">
         <section>
           <h2>属性</h2>
@@ -252,6 +251,6 @@ export function TaskInspector({
           onChanged={() => { onQueueChanged(); void api.queue(task.queueId!).then((queue) => setQueueItems(queue.items)); }}
         />
       )}
-    </aside>
+    </div>
   );
 }

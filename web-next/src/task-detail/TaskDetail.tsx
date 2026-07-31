@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import type { Group, Task } from "@harness/shared";
-import { ClipboardText } from "@phosphor-icons/react";
+import type { Group, Session, Task } from "@harness/shared";
+import { Info } from "@phosphor-icons/react";
 import { InspectorHost, type InspectorDescriptor } from "../inspector/index.ts";
 import { api } from "../lib/api.ts";
 import { useConversation } from "../lib/useConversation.ts";
@@ -15,19 +15,24 @@ import { TaskInspector } from "./TaskInspector.tsx";
 import { TaskReviewWorkspace } from "../review/TaskReviewWorkspace.tsx";
 import { OriginTaskBar } from "../components/TaskOrigin.tsx";
 
-const TASK_INSPECTORS: readonly InspectorDescriptor<Task>[] = [
+interface TaskInspectorContext {
+  task: Task;
+  groups: Group[];
+  sessions: Session[];
+  allTasks: Task[];
+  onOpenTask: (taskId: string) => void;
+  onPatch: (patch: Partial<Task>) => Promise<void>;
+  onQueueChanged: () => void;
+  notify: (message: string) => void;
+}
+
+const TASK_INSPECTORS: readonly InspectorDescriptor<TaskInspectorContext>[] = [
   {
-    id: "task-placeholder",
-    title: "任务面板",
-    icon: <ClipboardText size={14} />,
+    id: "info",
+    title: "信息",
+    icon: <Info size={14} />,
     defaultOpen: true,
-    render: (task) => (
-      <div className="inspector-placeholder">
-        <span className="inspector-placeholder__mark" aria-hidden="true"><ClipboardText size={16} /></span>
-        <strong title={task.title}>{task.title || "未命名任务"}</strong>
-        <p>Inspector 框架已接入。任务属性、文件树等业务面板将在后续通过 descriptor 注册到这里。</p>
-      </div>
-    ),
+    render: (context) => <TaskInspector {...context} />,
   },
 ];
 
@@ -132,78 +137,81 @@ export function TaskDetail({
     <InspectorHost
       contextKey={inspectorContextKey}
       descriptors={TASK_INSPECTORS}
-      context={task}
+      context={{
+        task,
+        groups,
+        sessions: conversation.sessions,
+        allTasks,
+        onOpenTask,
+        onPatch: patch,
+        onQueueChanged: () => void refreshTask(),
+        notify,
+      }}
       defaultVisible={inspectorMode === "page"}
     >
-      {({ toggleButton }) => <div className="task-detail">
-      <OriginTaskBar task={task} allTasks={allTasks} onOpen={onOpenTask} />
-      <TaskHeader
-        task={task}
-        conversationMarkdown={markdown}
-        busy={busy}
-        refreshing={conversation.refreshing}
-        onTitle={(title) => patch({ title, autoTitle: false })}
-        onTogglePin={() => patch({ pinnedAt: task.pinnedAt != null ? null : Date.now() })}
-        onPrimary={(action) => void perform(action)}
-        onArchive={() => void archive()}
-        onRefresh={() => void refresh()}
-        onReview={() => changeReviewOpen(!reviewOpen)}
-        onDelete={() => setDeleteOpen(true)}
-        indicatorForTask={indicatorForTask}
-        inspectorToggle={toggleButton}
-        notify={notify}
-      />
-      {reviewOpen ? (
-        <TaskReviewWorkspace task={task} allTasks={allTasks} onClose={() => changeReviewOpen(false)} onTaskUpdated={onTaskUpdate} notify={notify} />
-      ) : <div className="task-detail-body">
-        <section className="task-detail-main" aria-label="任务会话">
-          <ConversationFeed
-            taskId={task.id}
-            taskBody={task.body}
-            items={conversation.items}
-            loading={conversation.refreshing}
-            error={conversation.error}
-            footer={task.question ? (
-              <QuestionCard
-                task={task}
-                onAnswer={async (answer) => {
-                  await api.answerTask(task.id, answer);
-                  conversation.addUser(answer);
-                  notify("已发送答复，任务正在续跑");
-                }}
-              />
-            ) : undefined}
-          />
-          <ReplyBox
+      {({ toggleButton }) => (
+        <div className="task-detail">
+          <OriginTaskBar task={task} allTasks={allTasks} onOpen={onOpenTask} />
+          <TaskHeader
             task={task}
-            hasConversation={hasConversation}
-            onSend={async (text, attachments) => {
-              await api.replyTask(task.id, text, { attachments });
-              conversation.addUser(text, attachments);
-              notify("回复已发送");
-            }}
+            conversationMarkdown={markdown}
+            busy={busy}
+            refreshing={conversation.refreshing}
+            onTitle={(title) => patch({ title, autoTitle: false })}
+            onTogglePin={() => patch({ pinnedAt: task.pinnedAt != null ? null : Date.now() })}
+            onPrimary={(action) => void perform(action)}
+            onArchive={() => void archive()}
+            onRefresh={() => void refresh()}
+            onReview={() => changeReviewOpen(!reviewOpen)}
+            onDelete={() => setDeleteOpen(true)}
+            indicatorForTask={indicatorForTask}
+            inspectorToggle={toggleButton}
+            notify={notify}
           />
-        </section>
-        <TaskInspector
-          task={task}
-          groups={groups}
-          sessions={conversation.sessions}
-          allTasks={allTasks}
-          onOpenTask={onOpenTask}
-          onPatch={patch}
-          onQueueChanged={() => void refreshTask()}
-          notify={notify}
-        />
-      </div>}
-      {deleteOpen && (
-        <DeleteTaskDialog
-          task={task}
-          notify={notify}
-          onDeleted={() => onDeleted(task.id)}
-          onClose={() => setDeleteOpen(false)}
-        />
+          {reviewOpen ? (
+            <TaskReviewWorkspace task={task} allTasks={allTasks} onClose={() => changeReviewOpen(false)} onTaskUpdated={onTaskUpdate} notify={notify} />
+          ) : (
+            <div className="task-detail-body">
+              <section className="task-detail-main" aria-label="任务会话">
+                <ConversationFeed
+                  taskId={task.id}
+                  taskBody={task.body}
+                  items={conversation.items}
+                  loading={conversation.refreshing}
+                  error={conversation.error}
+                  footer={task.question ? (
+                    <QuestionCard
+                      task={task}
+                      onAnswer={async (answer) => {
+                        await api.answerTask(task.id, answer);
+                        conversation.addUser(answer);
+                        notify("已发送答复，任务正在续跑");
+                      }}
+                    />
+                  ) : undefined}
+                />
+                <ReplyBox
+                  task={task}
+                  hasConversation={hasConversation}
+                  onSend={async (text, attachments) => {
+                    await api.replyTask(task.id, text, { attachments });
+                    conversation.addUser(text, attachments);
+                    notify("回复已发送");
+                  }}
+                />
+              </section>
+            </div>
+          )}
+          {deleteOpen && (
+            <DeleteTaskDialog
+              task={task}
+              notify={notify}
+              onDeleted={() => onDeleted(task.id)}
+              onClose={() => setDeleteOpen(false)}
+            />
+          )}
+        </div>
       )}
-      </div>}
     </InspectorHost>
   );
 }
