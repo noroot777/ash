@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Group, Task } from "@harness/shared";
-import { batchesOf, mergeFeed, teamGroupsOf, workerHaltStats, workersOf } from "@harness/shared/team";
+import { batchesOf, mergeFeed, teamGroupsOf, waitingWorkers, workerHaltStats, workersOf } from "@harness/shared/team";
 import { ArrowSquareOut, Broom, PaperPlaneTilt, SpinnerGap, WarningCircle, X } from "@phosphor-icons/react";
 import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
@@ -15,6 +15,7 @@ import { TaskDetail } from "../task-detail/TaskDetail.tsx";
 import { conversationToMarkdown } from "../task-detail/conversationModel.ts";
 import { parseAttachmentText } from "../task-detail/utils.ts";
 import { TeamFeed } from "./TeamFeed.tsx";
+import { TeamAttentionBar } from "./TeamAttentionBar.tsx";
 import { TeamHeader } from "./TeamHeader.tsx";
 import { TeamReviewWorkspace } from "./TeamReviewWorkspace.tsx";
 import { TeamTimeline } from "./TeamTimeline.tsx";
@@ -185,8 +186,11 @@ export function TeamView({
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [localHalted, setLocalHalted] = useState(false);
   const [cuaStatus, setCuaStatus] = useState<TeamCuaStatus | null>(null);
+  const [delegatingIds, setDelegatingIds] = useState<ReadonlySet<string>>(() => new Set());
+  const delegatingRef = useRef(new Set<string>());
   const conversation = useConversation(task.id);
   const workers = useMemo(() => workersOf(allTasks, task.id), [allTasks, task.id]);
+  const waiting = useMemo(() => waitingWorkers(workers), [workers]);
   const teamGroups = useMemo(() => teamGroupsOf(groups, task.id, workers), [groups, task.id, workers]);
   const batches = useMemo(() => batchesOf(workers, teamGroups), [teamGroups, workers]);
   const rows = useMemo(() => mergeFeed(conversation.items, batches, teamFeedOptions()), [batches, conversation.items]);
@@ -218,6 +222,8 @@ export function TeamView({
     setDeleteOpen(false);
     setLocalHalted(false);
     setCuaStatus(null);
+    delegatingRef.current.clear();
+    setDelegatingIds(new Set());
     void refreshGroups();
   }, [refreshGroups, task.id]);
 
@@ -287,6 +293,27 @@ export function TeamView({
       setIterateBusy(false);
     }
   };
+  const askLead = async (worker: Task) => {
+    const question = worker.question?.trim();
+    if (!question || delegatingRef.current.has(worker.id)) return;
+    delegatingRef.current.add(worker.id);
+    setDelegatingIds((current) => new Set(current).add(worker.id));
+    const message = `【转交】执行者「${worker.title}」(taskId=${worker.id})在等答复,问题:\n${question}\n\n你去调查并 answer_question 答复它。`;
+    try {
+      await api.replyTask(task.id, message);
+      conversation.addUser(message);
+      notify("已转交调度者：它会调查后答复这个执行者");
+    } catch (reason) {
+      notify(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      delegatingRef.current.delete(worker.id);
+      setDelegatingIds((current) => {
+        const next = new Set(current);
+        next.delete(worker.id);
+        return next;
+      });
+    }
+  };
 
   return (
     <div className="team-view">
@@ -338,10 +365,24 @@ export function TeamView({
           )}
           {stopped && <HaltNotice workers={workers} groupCount={teamGroups.length} historyOnly={teamGroups.length === 0} />}
           {stopped && <CuaResidualNotice taskId={task.id} status={cuaStatus} onStatus={setCuaStatus} notify={notify} />}
+          <TeamAttentionBar
+            waiting={waiting}
+            workers={workers}
+            delegatingIds={delegatingIds}
+            onOpenWorker={setSelectedWorkerId}
+            onAskLead={askLead}
+          />
           <TeamTimeline lead={task} leadTurns={turns} workers={workers} groups={teamGroups} onOpenWorker={setSelectedWorkerId} />
           <div className="team-flow-grid">
             <section className="team-flow-main" aria-label="团队会话">
-              <TeamFeed taskId={task.id} rows={rows} workers={workers} onOpenWorker={setSelectedWorkerId} />
+              <TeamFeed
+                taskId={task.id}
+                rows={rows}
+                workers={workers}
+                onOpenWorker={setSelectedWorkerId}
+                onAskLead={askLead}
+                delegatingIds={delegatingIds}
+              />
               <TeamReplyBox task={task} onSend={async (text, attachments) => {
                 await api.replyTask(task.id, text, { attachments });
                 conversation.addUser(text, attachments);

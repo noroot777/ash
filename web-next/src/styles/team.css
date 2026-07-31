@@ -48,6 +48,26 @@
 .team-cua-notice code { color: var(--faint); font-size: 9.5px; }
 .team-cua-notice button { display: inline-flex; height: 25px; align-items: center; gap: 4px; margin-left: auto; border: 1px solid color-mix(in lch,var(--amber) 36%,var(--line)); border-radius: 6px; background: var(--panel); padding: 0 7px; color: color-mix(in lch,var(--amber) 76%,var(--ink)); font-size: 10px; }
 
+.team-attention { flex: 0 0 auto; border-bottom: 1px solid color-mix(in lch,var(--cyan) 28%,var(--line)); background: color-mix(in lch,var(--cyan) 6%,var(--panel)); }
+.team-attention > header { display: flex; min-height: 32px; align-items: center; gap: 7px; padding: 5px 14px; color: var(--muted); font-size: 10.5px; }
+.team-attention > header > svg { flex: 0 0 auto; color: var(--cyan); }
+.team-attention > header b { color: var(--ink); font-size: 11.5px; }
+.team-attention > header span { color: var(--faint); }
+.team-attention-list { max-height: 190px; overflow-y: auto; border-top: 1px solid color-mix(in lch,var(--cyan) 18%,var(--line)); }
+.team-attention-list > article { display: flex; min-height: 43px; align-items: center; gap: 12px; padding: 6px 14px; }
+.team-attention-list > article + article { border-top: 1px solid color-mix(in lch,var(--cyan) 13%,var(--line)); }
+.team-attention-question { min-width: 0; flex: 1; }
+.team-attention-question > button { max-width: min(360px,45vw); overflow: hidden; border: 0; background: transparent; padding: 0; color: var(--ink); text-overflow: ellipsis; white-space: nowrap; font-size: 11px; font-weight: 650; vertical-align: middle; }
+.team-attention-question > button:hover { color: var(--accent); }
+.team-attention-question > small { margin-left: 7px; color: var(--cyan); font-size: 9.5px; vertical-align: middle; }
+.team-attention-question > p { overflow: hidden; margin: 2px 0 0; color: var(--muted); font-size: 10.5px; text-overflow: ellipsis; white-space: nowrap; }
+.team-question-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 6px; margin-top: 7px; }
+.team-attention-list .team-question-actions { margin-top: 0; }
+.team-question-actions > button { display: inline-flex; min-height: 25px; align-items: center; justify-content: center; gap: 4px; border-radius: 6px; padding: 4px 9px; font-size: 10.5px; font-weight: 600; }
+.team-question-delegate { border: 1px solid var(--line2); background: var(--panel); color: var(--muted); }
+.team-question-delegate:hover:not(:disabled) { background: var(--raised); color: var(--ink); }
+.team-question-delegate:disabled { cursor: wait; opacity: .65; }
+
 .team-timeline { flex: 0 0 auto; border-bottom: .5px solid var(--line); background: var(--panel); }
 .team-timeline-summary { display: flex; width: 100%; height: 34px; align-items: center; gap: 7px; border: 0; background: transparent; padding: 0 14px; color: var(--faint); text-align: left; font-size: 10.5px; }
 .team-timeline-summary:hover { background: var(--raised); color: var(--muted); }
@@ -109,7 +129,7 @@
 .team-feed-inbound.is-failed header em { color: var(--red); }
 .team-feed-inbound header time { margin-left: auto; }
 .team-feed-inbound > p { margin: 5px 0 0; color: var(--muted); font-size: 12px; line-height: 1.55; white-space: pre-wrap; }
-.team-feed-answer { margin-top: 7px; border: 0; border-radius: 6px; background: var(--cyan); padding: 4px 9px; color: white; font-size: 10.5px; font-weight: 600; }
+.team-feed-answer { border: 0; background: var(--cyan); color: white; }
 
 .team-dispatch-card { max-width: 800px; overflow: hidden; margin: 0 0 20px; border: 1px solid var(--line); border-radius: 9px; background: var(--panel); }
 .team-dispatch-card > header { display: flex; align-items: center; gap: 7px; background: var(--raised); padding: 6px 9px; color: var(--muted); font-size: 10.5px; }
@@ -178,6 +198,8 @@
   .team-timeline-delivery b { display: none; }
   .team-gantt-row { grid-template-columns: 104px minmax(0,1fr); }
   .team-gantt-axis { margin-left: 113px; }
+  .team-attention-list > article { align-items: flex-start; flex-direction: column; gap: 6px; }
+  .team-attention-list .team-question-actions { align-self: flex-end; }
 }
 @media (prefers-reduced-motion: reduce) {
   .team-timeline-summary > svg { transition: none; }

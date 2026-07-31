@@ -90,6 +90,7 @@
 - 新版现状：**半残**。`web-next/src/team/TeamFeed.tsx:63-77` 和 `web-next/src/team/WorkerRail.tsx:47-61` 能看到问题并“我来答”，但没有固定 AttentionBar，也没有转交调度者动作。长团队流中提醒可滚走，且用户必须亲自回答本可由调度者调查的问题。
 - 历史判断：不是服务端限制；旧版转交只复用 `replyTask`。
 - 修复入手点：在 `TeamView` 恢复 waiting 聚合和固定提醒条；新增转交按钮，向 lead 会话发送带 worker taskId 和问题原文的系统化插话。
+- 修复结果：团队流上方固定聚合全部待答问题，显示数量与实时等待时长；提醒条和流内问题均可选择“我来答”或通过 `replyTask` “让调度者答”。
 
 ### 10. LLM 供应商/API Key/协议/base URL/模型探测与 Profile 绑定完全依赖旧版
 

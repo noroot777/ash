@@ -1,7 +1,7 @@
 import { useRef } from "react";
 import type { Task } from "@harness/shared";
 import type { Batch } from "@harness/shared/team";
-import { ArrowElbowDownRight, ArrowRight, Wrench } from "@phosphor-icons/react";
+import { ArrowElbowDownRight, ArrowRight, SpinnerGap, Wrench } from "@phosphor-icons/react";
 import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
 import { SessionMeta } from "../components/SessionMeta.tsx";
@@ -53,12 +53,16 @@ function InboundRow({
   number,
   at,
   onOpenWorker,
+  onAskLead,
+  delegating,
 }: {
   message: InboundMessage;
   worker?: Task;
   number: number;
   at?: string;
   onOpenWorker: (taskId: string) => void;
+  onAskLead: (worker: Task) => void | Promise<void>;
+  delegating: boolean;
 }) {
   const body = message.kind === "question" && worker?.question ? worker.question : message.body;
   return (
@@ -73,7 +77,19 @@ function InboundRow({
       </header>
       <p>{body}</p>
       {message.kind === "question" && worker?.question && (
-        <button className="team-feed-answer" type="button" onClick={() => onOpenWorker(worker.id)}>我来答</button>
+        <div className="team-question-actions">
+          <button
+            className="team-question-delegate"
+            type="button"
+            disabled={delegating}
+            title="把问题转给调度者，让它调查后答复"
+            onClick={() => void onAskLead(worker)}
+          >
+            {delegating && <SpinnerGap size={11} className="is-spinning" />}
+            {delegating ? "转交中…" : "让调度者答"}
+          </button>
+          <button className="team-feed-answer" type="button" onClick={() => onOpenWorker(worker.id)}>我来答</button>
+        </div>
       )}
     </article>
   );
@@ -108,11 +124,15 @@ export function TeamFeed({
   rows,
   workers,
   onOpenWorker,
+  onAskLead,
+  delegatingIds,
 }: {
   taskId: string;
   rows: TeamFeedRow[];
   workers: Task[];
   onOpenWorker: (taskId: string) => void;
+  onAskLead: (worker: Task) => void | Promise<void>;
+  delegatingIds: ReadonlySet<string>;
 }) {
   const scroll = useRef<HTMLDivElement>(null);
   useStickToBottom(scroll, taskId);
@@ -132,7 +152,18 @@ export function TeamFeed({
               <div key={row.key}>
                 {inbound.map((message, index) => {
                   const worker = message.taskId ? byId.get(message.taskId) : undefined;
-                  return <InboundRow key={index} message={message} worker={worker} number={worker ? workers.indexOf(worker) + 1 : 0} at={item.at} onOpenWorker={onOpenWorker} />;
+                  return (
+                    <InboundRow
+                      key={index}
+                      message={message}
+                      worker={worker}
+                      number={worker ? workers.indexOf(worker) + 1 : 0}
+                      at={item.at}
+                      onOpenWorker={onOpenWorker}
+                      onAskLead={onAskLead}
+                      delegating={!!worker && delegatingIds.has(worker.id)}
+                    />
+                  );
                 })}
               </div>
             );
