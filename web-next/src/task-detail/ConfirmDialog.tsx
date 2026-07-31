@@ -5,6 +5,7 @@ export function ConfirmDialog({
   title,
   message,
   confirmLabel,
+  cancelLabel = "取消",
   busy = false,
   danger = false,
   children,
@@ -14,6 +15,7 @@ export function ConfirmDialog({
   title: string;
   message: string;
   confirmLabel: string;
+  cancelLabel?: string;
   busy?: boolean;
   danger?: boolean;
   children?: React.ReactNode;
@@ -40,7 +42,7 @@ export function ConfirmDialog({
         <p>{message}</p>
         {children}
         <footer>
-          <button type="button" disabled={busy} onClick={onClose}>取消</button>
+          <button type="button" disabled={busy} onClick={onClose}>{cancelLabel}</button>
           <button className={danger ? "is-danger" : "is-primary"} type="button" disabled={busy} onClick={onConfirm}>
             {busy ? "处理中…" : confirmLabel}
           </button>

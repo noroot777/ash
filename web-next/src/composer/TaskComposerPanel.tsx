@@ -108,6 +108,7 @@ export function TaskComposerPanel({
   const [gate, setGate] = useState(true);
   const [priority, setPriority] = useState<Priority>("none");
   const [groupId, setGroupId] = useState("");
+  const [labels, setLabels] = useState<string[]>([]);
   const [useWorktree, setUseWorktree] = useState(DEFAULT_APP_SETTINGS.worktreeDefault);
   const [branches, setBranches] = useState<string[]>([]);
   const [base, setBase] = useState("");
@@ -390,6 +391,7 @@ export function TaskComposerPanel({
         autoTitle: !explicitTitle && mode === "single",
         priority,
         groupId: groupId || null,
+        labels,
       };
       if (mode === "debate") {
         task = await api.createTask({ ...common, mode, debate: {
@@ -446,8 +448,12 @@ export function TaskComposerPanel({
       setBusy(false);
       return;
     }
-    if (launchMode === "create") {
+    const finishCreation = () => {
+      setLabels([]);
       onCreated(task, initialDraft);
+    };
+    if (launchMode === "create") {
+      finishCreation();
       notify("任务已创建");
       return;
     }
@@ -462,7 +468,7 @@ export function TaskComposerPanel({
     } catch (error) {
       launchError = error;
     }
-    onCreated(task, initialDraft);
+    finishCreation();
     if (launchError) {
       notify(`任务已创建，但${launchMode === "run" ? "启动" : "定时设置"}失败：${launchError instanceof Error ? launchError.message : "未知错误"}`);
       return;
@@ -588,6 +594,8 @@ export function TaskComposerPanel({
             onGroupChange={setGroupId}
             priority={priority}
             onPriorityChange={setPriority}
+            labels={labels}
+            onLabelsChange={setLabels}
           />
         </div>
       </div>

@@ -9,6 +9,7 @@ import type {
 import { CLI_MODEL_PRESETS, REASONING_EFFORT_VALUES } from "@harness/shared/cli-presets";
 import { CaretDown, GearSix, SlidersHorizontal } from "@phosphor-icons/react";
 import { Toggle } from "../components/ui.tsx";
+import { TaskLabelsEditor } from "../components/TaskLabelsEditor.tsx";
 import {
   executorOptions,
   executorValue,
@@ -174,6 +175,8 @@ export function ComposerFields({
   onGroupChange,
   priority,
   onPriorityChange,
+  labels,
+  onLabelsChange,
 }: {
   mode: TaskMode;
   profiles: AgentExecutorProfile[];
@@ -210,6 +213,8 @@ export function ComposerFields({
   onGroupChange: (value: string) => void;
   priority: Priority;
   onPriorityChange: (value: Priority) => void;
+  labels: string[];
+  onLabelsChange: (labels: string[]) => void;
 }) {
   const overrideRoles: ComposerExecutorRole[] = mode === "team" ? ["lead", "worker", "reviewer"] : ["single"];
   const overrideCount = overrideRoles.reduce(
@@ -332,6 +337,10 @@ export function ComposerFields({
               {PRIORITIES.map((item) => <option value={item.value} key={item.value}>{item.label}</option>)}
             </select>
           </label>
+          <div className="composer-label-field">
+            <span>标签</span>
+            <TaskLabelsEditor labels={labels} onChange={onLabelsChange} />
+          </div>
         </div>
       </section>
     </div>

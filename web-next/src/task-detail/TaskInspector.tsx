@@ -3,10 +3,11 @@ import type { AgentExecutorProfile, Group, Session, Task, TaskStatus } from "@ha
 import { isUserSettableStatus, TASK_STATUS_LABELS } from "@harness/shared";
 import { CLI_MODEL_PRESETS, REASONING_EFFORT_VALUES } from "@harness/shared/cli-presets";
 import { sameExecutor } from "@harness/shared/executors";
-import { ArrowSquareOut, CaretRight, ListNumbers, Plus, X } from "@phosphor-icons/react";
+import { ArrowSquareOut, CaretRight, ListNumbers } from "@phosphor-icons/react";
 import { api } from "../lib/api.ts";
 import { LegacyLink } from "../components/LegacyLink.tsx";
 import { ScheduleControl } from "../components/ScheduleControl.tsx";
+import { TaskLabelsEditor } from "../components/TaskLabelsEditor.tsx";
 import { taskParentLink } from "../components/TaskOrigin.tsx";
 import {
   executorOptions,
@@ -126,7 +127,6 @@ export function TaskInspector({
   onQueueChanged: (updatedTask?: Task) => void;
   notify: (message: string) => void;
 }) {
-  const [labelDraft, setLabelDraft] = useState("");
   const [queueItems, setQueueItems] = useState<{ taskId: string; title: string }[]>([]);
   const [queueOpen, setQueueOpen] = useState(false);
   const [requeueing, setRequeueing] = useState(false);
@@ -172,13 +172,6 @@ export function TaskInspector({
       notify(reason instanceof Error ? reason.message : String(reason));
       return false;
     }
-  };
-
-  const addLabel = () => {
-    const label = labelDraft.trim().replace(/^#/, "");
-    if (!label || task.labels.includes(label)) return setLabelDraft("");
-    setLabelDraft("");
-    void patch({ labels: [...task.labels, label] }, "标签已添加");
   };
 
   const statusOptions = STATUS_ORDER.filter((status) => isUserSettableStatus(status) || status === task.status);
@@ -260,28 +253,15 @@ export function TaskInspector({
             </select>
           </InspectorRow>
           <InspectorRow label="标签">
-            <div className="task-label-editor">
-              {task.labels.map((label) => (
-                <button type="button" key={label} disabled={readOnly} onClick={() => void patch({ labels: task.labels.filter((item) => item !== label) }, "标签已移除")}>
-                  {label}<X size={10} />
-                </button>
-              ))}
-              {!readOnly && (
-                <label>
-                  <Plus size={11} />
-                  <input
-                    value={labelDraft}
-                    placeholder="添加"
-                    aria-label="添加标签"
-                    onChange={(event) => setLabelDraft(event.target.value)}
-                    onBlur={addLabel}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter" || event.key === ",") { event.preventDefault(); addLabel(); }
-                    }}
-                  />
-                </label>
+            <TaskLabelsEditor
+              key={task.id}
+              labels={task.labels}
+              disabled={readOnly}
+              onChange={(labels, change) => void patch(
+                { labels },
+                change.kind === "add" ? "标签已添加" : "标签已移除",
               )}
-            </div>
+            />
           </InspectorRow>
           {task.parentId !== null && (
             <>

@@ -19,6 +19,7 @@ import {
 } from "./taskDerivation.ts";
 import { TaskReviewWorkspace } from "../review/TaskReviewWorkspace.tsx";
 import { OriginTaskBar } from "../components/TaskOrigin.tsx";
+import { DerivedTaskLinks } from "../components/DerivedTaskLinks.tsx";
 
 export function TaskDetail({
   task,
@@ -176,6 +177,7 @@ export function TaskDetail({
               />
             ) : undefined}
           />
+          <DerivedTaskLinks sourceTaskId={task.id} allTasks={allTasks} onOpen={onOpenTask} />
           <ReplyBox
             task={task}
             hasConversation={hasConversation}

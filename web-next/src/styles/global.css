@@ -16,6 +16,7 @@
 @import "./schedule.css";
 @import "./reply.css";
 @import "./floating-escape.css";
+@import "./parity.css";
 
 @theme {
   --font-sans: "Inter Variable", "Inter", "SF Pro Display", -apple-system,
