@@ -1,8 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
-import type { Group, ProjectView, Task } from "@harness/shared";
-import { canArchive } from "@harness/shared";
+import type { ProjectView, Task } from "@harness/shared";
 import { statusCounts, workersOf } from "@harness/shared/team";
-import { ArrowBendDownRight, CaretRight, PushPin, Scales, UsersThree } from "@phosphor-icons/react";
+import { CaretRight, PushPin, Scales, UsersThree } from "@phosphor-icons/react";
 import { OriginTaskChip, taskParentLink } from "../components/TaskOrigin.tsx";
 import { TaskStatusDot } from "../components/TaskStatusDot.tsx";
 import { useTaskReadState, type IndicatorForTask } from "../lib/useTaskReadState.ts";
@@ -14,7 +13,6 @@ const COLLAPSED_GROUPS_STORAGE_KEY = "harness:taskList:collapsedStatuses";
 type TaskTreeProps = {
   projects: ProjectView[];
   currentProjectId: string | null;
-  groups: Group[];
   tasks: Task[];
   selectedTaskId: string | null;
   onTask: (task: Task) => void;
@@ -48,34 +46,6 @@ function useCollapsedGroups() {
   return { collapsed, toggle };
 }
 
-const PRIORITY_LABELS: Record<Task["priority"], string> = {
-  none: "",
-  low: "低优先级",
-  medium: "中优先级",
-  high: "高优先级",
-  urgent: "紧急",
-};
-
-function pauseBlockers(task: Task, allTasks: Task[]): Task[] {
-  if (task.status !== "paused" || !task.queueId) return [];
-  const queue = allTasks
-    .filter((item) => item.queueId === task.queueId)
-    .sort((left, right) => (left.queuePosition ?? 0) - (right.queuePosition ?? 0));
-  const index = queue.findIndex((item) => item.id === task.id);
-  return (index < 0 ? [] : queue.slice(0, index)).filter(
-    (item) => item.status !== "done" && item.status !== "canceled",
-  );
-}
-
-function metadataFor(task: Task, groupName?: string): string[] {
-  const metadata: string[] = [];
-  if (task.priority !== "none") metadata.push(PRIORITY_LABELS[task.priority]);
-  if (groupName) metadata.push(`分组 · ${groupName}`);
-  if (task.labels.length) metadata.push(`标签 · ${task.labels.join("、")}`);
-  if (task.useWorktree) metadata.push(`独立 worktree${task.worktreeBase ? ` · ${task.worktreeBase}` : ""}`);
-  return metadata;
-}
-
 function WorkerSummary({ workers, indicatorForTask }: { workers: Task[]; indicatorForTask: IndicatorForTask }) {
   if (!workers.length) return null;
   const buckets = statusCounts(workers);
@@ -103,24 +73,6 @@ function WorkerSummary({ workers, indicatorForTask }: { workers: Task[]; indicat
   );
 }
 
-function PauseHint({ task, allTasks, onTask }: { task: Task; allTasks: Task[]; onTask: (task: Task) => void }) {
-  if (task.status !== "paused") return null;
-  const blockers = pauseBlockers(task, allTasks);
-  const first = blockers[0];
-  return (
-    <div className="workspace-pause-hint">
-      <ArrowBendDownRight size={10} aria-hidden="true" />
-      {first ? (
-        <>
-          <span>等</span>
-          <button type="button" onClick={() => onTask(first)}>「{first.title || "未命名任务"}」{first.status === "paused" ? "（也在等）" : ""}</button>
-          {blockers.length > 1 && <em>+{blockers.length - 1}</em>}
-        </>
-      ) : <span>等待续跑</span>}
-    </div>
-  );
-}
-
 function TaskRow({
   task,
   allTasks,
@@ -130,7 +82,6 @@ function TaskRow({
   child = false,
   showOrigin = true,
   showPin = false,
-  groupName,
   trailing,
 }: {
   task: Task;
@@ -141,13 +92,11 @@ function TaskRow({
   child?: boolean;
   showOrigin?: boolean;
   showPin?: boolean;
-  groupName?: string;
   trailing?: React.ReactNode;
 }) {
   const selected = selectedTaskId === task.id;
   const indicator = indicatorForTask(task);
   const hasOrigin = showOrigin && taskParentLink(task, allTasks) !== null;
-  const metadata = metadataFor(task, groupName);
   return (
     <div className="workspace-task-row-wrap">
       <button
@@ -162,9 +111,6 @@ function TaskRow({
         {showPin && task.pinnedAt != null && <PushPin size={11} weight="fill" className="workspace-task-pin" aria-label="已置顶" />}
         {task.mode === "debate" && <Scales size={12} weight="bold" className="workspace-task-kind" aria-label="辩论" />}
         <span className="workspace-task-title">{task.title || "未命名任务"}</span>
-        {task.queueId != null && !canArchive(task.status) && (
-          <span className="workspace-task-queue" aria-label={`队列第 ${(task.queuePosition ?? 0) + 1} 位`}>↳ #{(task.queuePosition ?? 0) + 1}</span>
-        )}
         {trailing}
       </button>
       {hasOrigin && (
@@ -177,8 +123,6 @@ function TaskRow({
           }}
         />
       )}
-      {metadata.length > 0 && <div className="workspace-task-metadata" role="tooltip">{metadata.map((item) => <span key={item}>{item}</span>)}</div>}
-      <PauseHint task={task} allTasks={allTasks} onTask={onTask} />
     </div>
   );
 }
@@ -190,7 +134,6 @@ function TeamRow({
   selectedTaskId,
   onTask,
   indicatorForTask,
-  groupNames,
 }: {
   task: Task;
   tasks: Task[];
@@ -198,7 +141,6 @@ function TeamRow({
   selectedTaskId: string | null;
   onTask: (task: Task) => void;
   indicatorForTask: IndicatorForTask;
-  groupNames: ReadonlyMap<string, string>;
 }) {
   const workers = workersOf(tasks, task.id);
   const selectedWorker = workers.some((worker) => worker.id === selectedTaskId);
@@ -225,7 +167,6 @@ function TeamRow({
           selectedTaskId={selectedTaskId}
           onTask={onTask}
           indicatorForTask={indicatorForTask}
-          groupName={task.groupId ? groupNames.get(task.groupId) : undefined}
           trailing={
             <>
               <WorkerSummary workers={workers} indicatorForTask={indicatorForTask} />
@@ -246,7 +187,6 @@ function TeamRow({
               selectedTaskId={selectedTaskId}
               onTask={onTask}
               indicatorForTask={indicatorForTask}
-              groupName={worker.groupId ? groupNames.get(worker.groupId) : undefined}
               trailing={<span className="workspace-worker-executor">{worker.executorLabel || worker.agentType || "执行者"}</span>}
             />
           ))}
@@ -262,14 +202,12 @@ function CurrentProjectTree({
   selectedTaskId,
   onTask,
   indicatorForTask,
-  groupNames,
 }: {
   tasks: Task[];
   allTasks: Task[];
   selectedTaskId: string | null;
   onTask: (task: Task) => void;
   indicatorForTask: IndicatorForTask;
-  groupNames: ReadonlyMap<string, string>;
 }) {
   const sections = useMemo(() => buildTaskTree(tasks), [tasks]);
   const { collapsed, toggle } = useCollapsedGroups();
@@ -307,10 +245,9 @@ function CurrentProjectTree({
                       selectedTaskId={selectedTaskId}
                       onTask={onTask}
                       indicatorForTask={indicatorForTask}
-                      groupNames={groupNames}
                     />
                   ) : (
-                    <TaskRow key={task.id} task={task} allTasks={allTasks} selectedTaskId={selectedTaskId} onTask={onTask} indicatorForTask={indicatorForTask} groupName={task.groupId ? groupNames.get(task.groupId) : undefined} />
+                    <TaskRow key={task.id} task={task} allTasks={allTasks} selectedTaskId={selectedTaskId} onTask={onTask} indicatorForTask={indicatorForTask} />
                   ),
                 )}
               </div>
@@ -329,7 +266,6 @@ function OtherProject({
   selectedTaskId,
   onTask,
   indicatorForTask,
-  groupNames,
 }: {
   project: ProjectView;
   tasks: Task[];
@@ -337,7 +273,6 @@ function OtherProject({
   selectedTaskId: string | null;
   onTask: (task: Task) => void;
   indicatorForTask: IndicatorForTask;
-  groupNames: ReadonlyMap<string, string>;
 }) {
   const [expanded, setExpanded] = useState(false);
   const ordered = useMemo(() => orderedTopLevelTasks(tasks), [tasks]);
@@ -357,7 +292,7 @@ function OtherProject({
       {expanded && (
         <div className="workspace-other-project-tasks">
           {ordered.map((task) => (
-            <TaskRow key={task.id} task={task} allTasks={allTasks} showPin selectedTaskId={selectedTaskId} onTask={onTask} indicatorForTask={indicatorForTask} groupName={task.groupId ? groupNames.get(task.groupId) : undefined} />
+            <TaskRow key={task.id} task={task} allTasks={allTasks} showPin selectedTaskId={selectedTaskId} onTask={onTask} indicatorForTask={indicatorForTask} />
           ))}
           {!ordered.length && <p>没有任务</p>}
         </div>
@@ -366,9 +301,8 @@ function OtherProject({
   );
 }
 
-export function TaskTree({ projects, currentProjectId, groups, tasks, selectedTaskId, onTask }: TaskTreeProps) {
+export function TaskTree({ projects, currentProjectId, tasks, selectedTaskId, onTask }: TaskTreeProps) {
   const { indicatorForTask } = useTaskReadState(tasks, selectedTaskId);
-  const groupNames = useMemo(() => new Map(groups.map((group) => [group.id, group.name])), [groups]);
   const activeTasks = useMemo(() => tasks.filter((task) => !task.archived), [tasks]);
   const currentTasks = useMemo(
     () => activeTasks.filter((task) => task.projectId === currentProjectId),
@@ -377,7 +311,7 @@ export function TaskTree({ projects, currentProjectId, groups, tasks, selectedTa
   const otherProjects = projects.filter((project) => project.id !== currentProjectId);
   return (
     <nav className="workspace-task-tree" aria-label="任务树">
-      <CurrentProjectTree tasks={currentTasks} allTasks={tasks} selectedTaskId={selectedTaskId} onTask={onTask} indicatorForTask={indicatorForTask} groupNames={groupNames} />
+      <CurrentProjectTree tasks={currentTasks} allTasks={tasks} selectedTaskId={selectedTaskId} onTask={onTask} indicatorForTask={indicatorForTask} />
       {otherProjects.length > 0 && (
         <section className="workspace-other-projects">
           <header className="workspace-task-section-title">其他项目</header>
@@ -390,7 +324,6 @@ export function TaskTree({ projects, currentProjectId, groups, tasks, selectedTa
               selectedTaskId={selectedTaskId}
               onTask={onTask}
               indicatorForTask={indicatorForTask}
-              groupNames={groupNames}
             />
           ))}
         </section>

@@ -151,32 +151,6 @@
   white-space: nowrap;
 }
 
-.composer-keep-open {
-  flex: 0 0 auto;
-}
-
-.composer-keep-open .ui-choice {
-  gap: 6px;
-  padding: 2px;
-  font-size: 10px;
-  white-space: nowrap;
-}
-
-.composer-keep-open .ui-toggle {
-  width: 26px;
-  height: 18px;
-  flex-basis: 26px;
-}
-
-.composer-keep-open .ui-toggle::after {
-  width: 14px;
-  height: 14px;
-}
-
-.composer-keep-open .ui-toggle.is-on::after {
-  transform: translateX(8px);
-}
-
 .composer-launch-control > .ui-button {
   flex: 0 0 auto;
 }

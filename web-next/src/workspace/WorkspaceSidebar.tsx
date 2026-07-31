@@ -1,4 +1,4 @@
-import type { Group, ProjectView, Task } from "@harness/shared";
+import type { ProjectView, Task } from "@harness/shared";
 import {
   MagnifyingGlass,
   NotePencil,
@@ -15,7 +15,6 @@ import { LegacyLink } from "../components/LegacyLink.tsx";
 export function WorkspaceSidebar({
   projects,
   currentProject,
-  groups,
   tasks,
   selectedTaskId,
   connected,
@@ -33,7 +32,6 @@ export function WorkspaceSidebar({
 }: {
   projects: ProjectView[];
   currentProject: ProjectView | null;
-  groups: Group[];
   tasks: Task[];
   selectedTaskId: string | null;
   connected: boolean;
@@ -87,7 +85,6 @@ export function WorkspaceSidebar({
       <TaskTree
         projects={projects}
         currentProjectId={currentProject?.id ?? null}
-        groups={groups}
         tasks={tasks}
         selectedTaskId={selectedTaskId}
         onTask={onTask}

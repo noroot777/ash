@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import type { Note, ProjectView } from "@harness/shared";
-import { ArrowSquareOut, CheckCircle, File, MagnifyingGlass, NotePencil, Plus, Trash, X } from "@phosphor-icons/react";
+import { ArrowsInSimple, ArrowsOutSimple, ArrowSquareOut, CheckCircle, File, MagnifyingGlass, NotePencil, Plus, Trash, UploadSimple, X } from "@phosphor-icons/react";
 import { ImagePreviewGroup, PreviewableImage } from "../components/ImagePreview.tsx";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
 import { Button } from "../components/ui.tsx";
@@ -48,6 +48,8 @@ export function NotesPanel({ project, initialNoteId, onClose, onTask, onConvert,
   const [saveState, setSaveState] = useState<SaveState>("saved");
   const [deleting, setDeleting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [maximized, setMaximized] = useState(false);
+  const [draggingFiles, setDraggingFiles] = useState(false);
   const uploads = useAttachments();
   const rowsRef = useRef<Note[]>([]);
   const draftRef = useRef<NoteDraft>(initialDraft);
@@ -265,11 +267,53 @@ export function NotesPanel({ project, initialNoteId, onClose, onTask, onConvert,
       noteIds: notes.map((note) => note.id),
     });
   };
+  const hasDraggedFiles = (event: DragEvent<HTMLElement>) => Array.from(event.dataTransfer.types).includes("Files");
+  const dragEnter = (event: DragEvent<HTMLElement>) => {
+    if (!hasDraggedFiles(event)) return;
+    event.preventDefault();
+    setDraggingFiles(true);
+  };
+  const dragOver = (event: DragEvent<HTMLElement>) => {
+    if (!hasDraggedFiles(event)) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+  };
+  const dragLeave = (event: DragEvent<HTMLElement>) => {
+    if (event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget)) return;
+    setDraggingFiles(false);
+  };
+  const dropFiles = (event: DragEvent<HTMLElement>) => {
+    if (!hasDraggedFiles(event)) return;
+    event.preventDefault();
+    setDraggingFiles(false);
+    if (deleting) return;
+    const files = Array.from(event.dataTransfer.files);
+    if (files.length) void uploads.addFiles(files);
+  };
 
   return (
     <div className="overlay-scrim" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) void close(); }}>
-      <section className="notes-panel" role="dialog" aria-modal="true" aria-label="随手记" onMouseDown={(event) => event.stopPropagation()}>
-        <header><div><NotePencil size={17} /><b>随手记</b><span>{project.name} · {rows.length} 条</span></div><button type="button" onClick={() => void close()} aria-label="关闭"><X size={17} /></button></header>
+      <section
+        className={`notes-panel${maximized ? " is-maximized" : ""}${draggingFiles ? " is-file-dragging" : ""}`}
+        role="dialog"
+        aria-modal="true"
+        aria-label="随手记"
+        onMouseDown={(event) => event.stopPropagation()}
+        onDragEnter={dragEnter}
+        onDragOver={dragOver}
+        onDragLeave={dragLeave}
+        onDrop={dropFiles}
+      >
+        {draggingFiles && <div className="notes-drop-target" aria-hidden="true"><UploadSimple size={26} /><b>松开即可添加附件</b><span>支持文件与图片</span></div>}
+        <header>
+          <div><NotePencil size={17} /><b>随手记</b><span>{project.name} · {rows.length} 条</span></div>
+          <div className="notes-header-actions">
+            <button type="button" onClick={() => setMaximized((value) => !value)} aria-label={maximized ? "还原随手记面板" : "放大随手记面板"} title={maximized ? "还原" : "放大"}>
+              {maximized ? <ArrowsInSimple size={17} /> : <ArrowsOutSimple size={17} />}
+            </button>
+            <button type="button" onClick={() => void close()} aria-label="关闭"><X size={17} /></button>
+          </div>
+        </header>
         <div className="notes-body">
           <aside className="notes-list"><div className="notes-list-tools"><label><MagnifyingGlass size={14} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索随手记…" /></label><button type="button" onClick={() => void create()} aria-label="新建随手记"><Plus size={15} /></button></div><div className="notes-scroll" role="list" aria-label="随手记列表">
             {!loading && newDraft && <div className="note-row ui-selectable is-selected" role="listitem"><span className="note-pick-placeholder" /><button className="note-row-main" type="button" onClick={() => setEditing(true)}><b>{titleOf(draft.body)}</b><small>{draft.body.trim() ? saveStatus : "尚未保存"}</small></button></div>}
@@ -311,7 +355,15 @@ export function NotesPanel({ project, initialNoteId, onClose, onTask, onConvert,
             </ImagePreviewGroup>
           </main>
         </div>
-        <footer><span>{picked.size ? `已选择 ${picked.size} 条 · 将按列表顺序合并` : `${saveStatus} · 正文失焦后显示 Markdown`}</span><AttachmentPicker addFiles={uploads.addFiles} disabled={deleting} />{active && <Button variant="danger" disabled={deleting} onClick={async () => { if (await flushDraft()) setConfirmDelete(true); }}><Trash size={13} />删除</Button>}<Button variant={picked.size ? "primary" : "secondary"} disabled={deleting || (!picked.size && !draft.body.trim())} onClick={() => void convert()}><NotePencil size={13} />{picked.size ? `创建任务（${picked.size}）` : "转为新任务"}</Button><Button variant={picked.size ? "secondary" : "primary"} disabled={!dirty || !draft.body.trim() || deleting || saveState === "saving"} onClick={() => { void flushDraft().then((saved) => { if (saved) notify("随手记已保存"); }); }}>{saveButtonLabel}</Button></footer>
+        <footer>
+          <span>{picked.size ? `已选择 ${picked.size} 条 · 将按列表顺序合并` : `${saveStatus} · 正文失焦后显示 Markdown`}</span>
+          <div className="notes-footer-actions">
+            <AttachmentPicker addFiles={uploads.addFiles} disabled={deleting} />
+            {active && <Button variant="danger" disabled={deleting} onClick={async () => { if (await flushDraft()) setConfirmDelete(true); }}><Trash size={13} />删除</Button>}
+            <Button variant={picked.size ? "primary" : "secondary"} disabled={deleting || (!picked.size && !draft.body.trim())} onClick={() => void convert()}><NotePencil size={13} />{picked.size ? `创建任务（${picked.size}）` : "转为新任务"}</Button>
+            <Button variant={picked.size ? "secondary" : "primary"} disabled={!dirty || !draft.body.trim() || deleting || saveState === "saving"} onClick={() => { void flushDraft().then((saved) => { if (saved) notify("随手记已保存"); }); }}>{saveButtonLabel}</Button>
+          </div>
+        </footer>
       </section>
       {confirmDelete && active && <ConfirmDialog title="删除随手记" message={`确定删除“${titleOf(active.body)}”？此操作不可撤销。`} confirmLabel="删除" danger busy={deleting} onClose={() => setConfirmDelete(false)} onConfirm={() => { setConfirmDelete(false); void remove(); }} />}
     </div>

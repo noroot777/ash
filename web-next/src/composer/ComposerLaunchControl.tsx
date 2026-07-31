@@ -3,7 +3,7 @@ import {
   ScheduleFields,
   type ScheduleKind,
 } from "../components/ScheduleControl.tsx";
-import { Button, Toggle } from "../components/ui.tsx";
+import { Button } from "../components/ui.tsx";
 
 export type LaunchMode = "create" | "run" | ScheduleKind;
 
@@ -33,12 +33,10 @@ export function ComposerLaunchControl({
   cron,
   busy,
   canSubmit,
-  keepOpen,
   error,
   onModeChange,
   onAtChange,
   onCronChange,
-  onKeepOpenChange,
   onSubmit,
 }: {
   mode: LaunchMode;
@@ -46,12 +44,10 @@ export function ComposerLaunchControl({
   cron: string;
   busy: boolean;
   canSubmit: boolean;
-  keepOpen: boolean;
   error?: string | null;
   onModeChange: (mode: LaunchMode) => void;
   onAtChange: (value: string) => void;
   onCronChange: (value: string) => void;
-  onKeepOpenChange: (value: boolean) => void;
   onSubmit: () => void;
 }) {
   return (
@@ -73,9 +69,6 @@ export function ComposerLaunchControl({
         />
       )}
       {error && <small className="composer-launch-error">{error}</small>}
-      <span className="composer-keep-open">
-        <Toggle checked={keepOpen} disabled={busy} onChange={onKeepOpenChange} label="再建一个" />
-      </span>
       <Button variant="primary" disabled={!canSubmit} onClick={onSubmit}>
         <SubmitIcon mode={mode} />{busy ? "创建中…" : submitLabel(mode)}
       </Button>

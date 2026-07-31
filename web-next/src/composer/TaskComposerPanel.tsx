@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type {
   AgentExecutorProfile,
   AgentType,
@@ -95,7 +95,7 @@ export function TaskComposerPanel({
   mode: TaskMode;
   onModeChange: (mode: TaskMode) => void;
   onCancel: () => void;
-  onCreated: (task: Task, draft: ComposerDraft | null | undefined, keepOpen: boolean) => void;
+  onCreated: (task: Task, draft?: ComposerDraft | null) => void;
   onCreateGroup: (name: string, mode: GroupMode) => Promise<Group>;
   notify: (message: string) => void;
 }) {
@@ -120,9 +120,7 @@ export function TaskComposerPanel({
   const [launchMode, setLaunchMode] = useState<LaunchMode>("run");
   const [scheduleAt, setScheduleAt] = useState("");
   const [scheduleCron, setScheduleCron] = useState(DEFAULT_CRON);
-  const [keepOpen, setKeepOpen] = useState(false);
   const [groupDialogOpen, setGroupDialogOpen] = useState(false);
-  const objectiveRef = useRef<HTMLTextAreaElement>(null);
   const uploads = useAttachments();
   const detection = useAgentAvailability();
   const { workerTypes, leadTypes, leadProfiles } = useMemo(
@@ -457,15 +455,7 @@ export function TaskComposerPanel({
     }
     const finishCreation = () => {
       setLabels([]);
-      onCreated(task, initialDraft, keepOpen);
-      if (!keepOpen) return;
-      setTitle("");
-      setBody("");
-      setSeedAttachments([]);
-      uploads.clear();
-      if (launchMode === "once") setScheduleAt(defaultOnceTime());
-      setBusy(false);
-      window.requestAnimationFrame(() => objectiveRef.current?.focus());
+      onCreated(task, initialDraft);
     };
     if (launchMode === "create") {
       finishCreation();
@@ -530,7 +520,6 @@ export function TaskComposerPanel({
           />
           <div className="composer-objective">
             <textarea
-              ref={objectiveRef}
               autoFocus
               value={body}
               onChange={(event) => changeBody(event.target.value)}
@@ -630,12 +619,10 @@ export function TaskComposerPanel({
           cron={scheduleCron}
           busy={busy}
           canSubmit={canSubmit}
-          keepOpen={keepOpen}
           error={scheduleError}
           onModeChange={changeLaunchMode}
           onAtChange={setScheduleAt}
           onCronChange={setScheduleCron}
-          onKeepOpenChange={setKeepOpen}
           onSubmit={() => void submit()}
         />
       </footer>

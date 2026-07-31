@@ -102,6 +102,12 @@ export function AgentsSettings({ notify }: { notify: (message: string) => void }
         </Button>
       </header>
 
+      <ProvidersSection
+        providers={providers}
+        onChanged={reloadProvidersAndProfiles}
+        notify={notify}
+      />
+
       <AgentProfilesSection
         profiles={profiles}
         providers={providers}
@@ -138,12 +144,6 @@ export function AgentsSettings({ notify }: { notify: (message: string) => void }
           </div>
         </section>
       )}
-
-      <ProvidersSection
-        providers={providers}
-        onChanged={reloadProvidersAndProfiles}
-        notify={notify}
-      />
 
       <section className="settings-section">
         <h2>默认规则</h2>

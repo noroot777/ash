@@ -193,6 +193,7 @@
 }
 
 .notes-panel {
+  position: relative;
   display: grid;
   width: min(920px, calc(100vw - 36px));
   height: min(620px, calc(100vh - 54px));
@@ -202,6 +203,37 @@
   border-radius: 14px;
   background: var(--panel);
   box-shadow: var(--shadow);
+}
+
+.notes-panel.is-maximized {
+  width: calc(100vw - 24px);
+  height: calc(100vh - 24px);
+  border-radius: 10px;
+}
+
+.notes-drop-target {
+  position: absolute;
+  z-index: 20;
+  inset: 10px;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 5px;
+  border: 2px dashed color-mix(in lch, var(--accent) 55%, var(--line));
+  border-radius: 10px;
+  background: color-mix(in lch, var(--accent) 9%, var(--panel));
+  color: var(--accent);
+  pointer-events: none;
+}
+
+.notes-drop-target b {
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.notes-drop-target span {
+  color: var(--muted);
+  font-size: 10px;
 }
 
 .notes-panel > header {
@@ -510,9 +542,18 @@
 }
 
 .notes-panel > footer > span {
-  margin-right: auto;
+  min-width: 0;
   color: var(--faint);
   font-size: 9px;
+}
+
+.notes-footer-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-left: auto;
 }
 
 .notes-panel > footer .task-reply-icon {

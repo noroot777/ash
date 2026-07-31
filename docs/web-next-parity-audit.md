@@ -176,21 +176,21 @@
 - 修复入手点：加入 shell-like 参数编辑器；至少保证空格分隔行为与旧版一致，更稳妥可提供逐项 token 输入，避免引号被错误拆分。
 - 修复结果：新增和编辑 Profile 都提供逐项 token 编辑器，直接读写 `extraArgs: string[]`；每项内部的空格与引号保持原样，不再经过空白二次切分，空项在保存时清除。
 
-### 21. 任务树缺少暂停阻塞原因和多项任务元数据（已修）
+### 21. 任务树缺少暂停阻塞原因和多项任务元数据（按用户要求撤销）
 
 - 旧版位置：`web/src/TaskList.tsx:235-278` 行内显示 priority、worktree、queue position、group、labels、来源；`web/src/ui.tsx:554-613` 对 paused 任务显示“在等谁”，可跳到首个阻塞任务。
 - 新版现状：**信息退化**。`web-next/src/workspace/TaskTree.tsx:114-139` 顶层行主要只有状态、置顶、模式和标题；没有暂停依赖、优先级、标签、分组、worktree、队列位置。选中任务后 Inspector 能看一部分，但无法横向扫列表。
 - 修复入手点：先恢复高价值且低噪声的 paused blocker 和 queue position；其余元数据做 hover/次行或可配置密度，避免把新版窄树挤爆。
-- 修复结果：paused 行恢复“等待首个阻塞任务”次行，可点击跳转并显示额外阻塞数；在队任务显示紧凑队列位置。优先级、分组、标签和独立 worktree 汇总到行悬浮元数据卡，不长期占用窄侧栏宽度。
+- 当前状态：列表元数据按用户要求撤销，任务行恢复 `feat/issue-center` 原版密度并移除 hover 弹窗；暂停阻塞、队列位置、优先级、分组、标签和 worktree 信息统一在 Inspector 内查看。
 
 ## P3：低频效率与可发现性退化（审计识别 4，已修 4）
 
-### 22. Composer 不能“再建一个”，分组选择器也不能就地新建（已修）
+### 22. Composer 不能“再建一个”，分组选择器也不能就地新建（按用户要求移除）
 
 - 旧版位置：`web/src/composer/ComposerFooter.tsx:50-61` 提供“再建一个”；`web/src/TaskComposer.tsx:363-370` 创建后清空并继续；`web/src/TaskComposer.tsx:614` 的分组下拉含“+ 新建分组”。
 - 新版现状：**缺失**。`web-next/src/composer/ComposerFields.tsx:305-314` 只列现有分组；`web-next/src/composer/TaskComposerPanel.tsx:289-300,414-425` 创建后总是离开 composer。
 - 修复入手点：footer 加 keep-open toggle；group select 增加 sentinel 或旁边的 plus，创建成功后刷新 groups 并选中新组。
-- 修复结果：Composer footer 新增“再建一个”开关；创建和启动/定时完成后保留执行器、分组、优先级与启动方式，清空标题、正文、附件和 labels 并继续聚焦输入。分组下拉新增“新建分组”入口，创建成功后重新读取项目 groups 并自动选中新组。
+- 当前状态：“再建一个”及其 keep-open 状态、UI 和创建后重置逻辑已按用户要求移除，创建成功后恢复为打开新任务；分组下拉的就地新建继续保留，创建成功后刷新项目 groups 并自动选中新组。
 
 ### 23. 当前项目的 branch/dirty/worktree 上下文不再常显（已修）
 
