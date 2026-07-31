@@ -21,7 +21,7 @@ const EXTRA_PATHS = [
   `${homedir()}/.bun/bin`,
   `${homedir()}/.deno/bin`,
 ];
-function augmentedEnv() {
+export function augmentedEnv() {
   const cur = process.env.PATH ?? "";
   const have = new Set(cur.split(":"));
   const extra = EXTRA_PATHS.filter((p) => !have.has(p));
@@ -62,7 +62,7 @@ const isDir = (p: string) => {
 // then waits forever for a `done` that never comes — the task is stuck 'running',
 // unstoppable, until a restart (2026-07-28: reproduced by replying to a task whose
 // worktree had been deleted). So we hold the error until someone subscribes.
-function failedChild(message: string): ChildProcess {
+export function failedChild(message: string): ChildProcess {
   const child: any = new EventEmitter();
   child.stdout = Readable.from([]);
   child.stderr = Readable.from([]);
@@ -188,39 +188,46 @@ export function spawnAgent(
   if (!isDir(cwd)) return failedChild(`工作目录不存在：${cwd}`);
   const abs = resolveBin(bin);
   if (!abs) return failedChild(`找不到 ${bin} 命令(不在 PATH，也不在常见目录)`);
-  // 追踪 fd(见 killEscapees):打开一个本次运行专属文件,把 fd 作为 stdio[3]
-  // 传给子进程 —— 后代无论怎么换组/被收养都带着它,stop 时可按文件反查。
-  // best-effort:开不出来就照旧 spawn,只是丢掉逃逸追踪能力。
-  let trackFd: number | null = null;
-  let trackPath: string | null = null;
-  try {
-    trackPath = join(tmpdir(), `harness-track-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
-    trackFd = openSync(trackPath, "w");
-  } catch {
-    trackPath = null;
-  }
-  const stdio: Array<"pipe" | number> = trackFd === null ? ["pipe", "pipe", "pipe"] : ["pipe", "pipe", "pipe", trackFd];
+  const track = openTrackFd();
+  const stdio: Array<"pipe" | number> = track.fd === null ? ["pipe", "pipe", "pipe"] : ["pipe", "pipe", "pipe", track.fd];
   const child = spawn(abs, args, { cwd, stdio, env: { ...augmentedEnv(), ...extraEnv }, detached: true });
-  if (trackFd !== null && trackPath) {
-    closeSync(trackFd); // 子进程已持有副本,父进程这份立即关掉
-    trackFiles.set(child, trackPath);
-    const cleanupPath = trackPath;
-    child.on("close", () => {
-      // 延迟删除:killChild 的补刀清扫(SIGTERM 后 2s)要靠文件名 lsof;
-      // unlink 早了就查不到了。60s 后基本尘埃落定。
-      const t = setTimeout(() => {
-        try {
-          unlinkSync(cleanupPath);
-        } catch {
-          /* already gone */
-        }
-      }, 60_000);
-      (t as { unref?: () => void }).unref?.();
-    });
-  }
+  registerTrackFd(child, track);
   child.stdin?.write(prompt);
   if (!opts?.keepStdin) child.stdin?.end();
   return child;
+}
+
+// 追踪 fd(见 killEscapees):打开一个本次运行专属文件,把 fd 作为 stdio[3] 传给
+// 子进程 —— 后代无论怎么换组/被收养都带着它,stop 时可按文件名 lsof 反查。
+// best-effort:开不出来就照旧 spawn,只是丢掉逃逸追踪能力。
+// 抽成一对函数是为了让 detached.ts 那条路(输出走文件)复用同一套逃逸追踪,
+// 而不是各写一份 —— 少一份就意味着那条路上的孤儿没人管。
+export function openTrackFd(): { fd: number | null; path: string | null } {
+  try {
+    const path = join(tmpdir(), `harness-track-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+    return { fd: openSync(path, "w"), path };
+  } catch {
+    return { fd: null, path: null };
+  }
+}
+
+export function registerTrackFd(child: ChildProcess, track: { fd: number | null; path: string | null }): void {
+  if (track.fd === null || !track.path) return;
+  closeSync(track.fd); // 子进程已持有副本,父进程这份立即关掉
+  trackFiles.set(child, track.path);
+  const cleanupPath = track.path;
+  child.on("close", () => {
+    // 延迟删除:killChild 的补刀清扫(SIGTERM 后 2s)要靠文件名 lsof;
+    // unlink 早了就查不到了。60s 后基本尘埃落定。
+    const t = setTimeout(() => {
+      try {
+        unlinkSync(cleanupPath);
+      } catch {
+        /* already gone */
+      }
+    }, 60_000);
+    (t as { unref?: () => void }).unref?.();
+  });
 }
 
 // Wrap a resume command for the target so it is copy-paste runnable (§13).
@@ -273,6 +280,37 @@ export function killChild(child: ChildProcess): void {
     void killEscapees(child, "SIGKILL").catch(() => {});
   }, 2000);
   // Don't keep the event loop alive just for the fallback timer.
+  (t as { unref?: () => void }).unref?.();
+}
+
+// 只有 pid 时的击杀(重启后接管的 agent 走这条 —— ChildProcess 句柄随上一个
+// server 进程一起没了,追踪 fd 的 WeakMap 也没了)。
+// 只剩三层里的第①③层:进程组信号 + 2s 后补 SIGKILL。第②层(继承 fd 反查逃逸者)
+// 做不到,因为那份映射是内存态的。代价:重启前就已经逃出进程组的孤儿杀不到 ——
+// 如实记在这里,别让以后的人以为这条路和 killChild 等价。
+export function killByPid(pid: number): void {
+  if (!Number.isInteger(pid) || pid <= 1) return;
+  const signal = (sig: NodeJS.Signals) => {
+    try {
+      process.kill(-pid, sig); // 组杀:spawn 时 detached,agent 就是组长
+    } catch {
+      try {
+        process.kill(pid, sig);
+      } catch {
+        /* already gone */
+      }
+    }
+  };
+  signal("SIGTERM");
+  const t = setTimeout(() => {
+    let alive = true;
+    try {
+      process.kill(pid, 0);
+    } catch {
+      alive = false;
+    }
+    if (alive) signal("SIGKILL");
+  }, 2000);
   (t as { unref?: () => void }).unref?.();
 }
 
