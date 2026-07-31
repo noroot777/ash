@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { Session, Task } from "@harness/shared";
 import { STAGE_LABELS, taskDisplayStatus } from "@harness/shared";
-import { CaretDown, CheckCircle, GitBranch, GitCommit, GitDiff, SpinnerGap, WarningCircle, X } from "@phosphor-icons/react";
+import { ArrowsClockwise, CaretDown, CheckCircle, GitBranch, GitCommit, GitDiff, SpinnerGap, WarningCircle, X } from "@phosphor-icons/react";
 import { LegacyLink } from "../components/LegacyLink.tsx";
 import { api, type AcceptTaskFailure, type TaskCommit, type TaskDiffResult } from "../lib/api.ts";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
@@ -27,6 +27,39 @@ function acceptanceMessage(task: Task): string {
     : "这会确认当前项目工作区中的结果并标记为验收完成。";
 }
 
+function AcceptanceFailureNotice({ failure }: { failure: AcceptTaskFailure }) {
+  const handedOff = failure.reason === "merge_conflict" && failure.conflictHandoff?.notified === true;
+  const manualConflict = failure.reason === "merge_conflict" && !handedOff;
+  return (
+    <div className={`team-accept-failure${handedOff ? " is-handed-off" : ""}`} role={handedOff ? "status" : "alert"}>
+      <div className="team-accept-failure-heading">
+        <span>{handedOff ? <ArrowsClockwise size={14} weight="bold" /> : <WarningCircle size={14} weight="fill" />}</span>
+        <div>
+          <b>{handedOff ? "合并冲突已交给任务处理" : manualConflict ? "合并冲突，未能自动交接" : "验收未完成"}</b>
+          {handedOff ? (
+            <>
+              {failure.conflictHandoff?.message && <p className="team-accept-handoff-message">{failure.conflictHandoff.message}</p>}
+              <p className="team-accept-failure-guidance">本次验收已安全停止，目标分支未被修改；等待任务处理完成后，再点一次「验收通过」。</p>
+            </>
+          ) : (
+            <>
+              {manualConflict && <p className="team-accept-failure-guidance">未能唤醒任务，请手动解决冲突并提交，然后重新验收。</p>}
+              {failure.conflictHandoff?.message && <p>{failure.conflictHandoff.message}</p>}
+              <p>{failure.error}</p>
+            </>
+          )}
+        </div>
+      </div>
+      {failure.conflictFiles?.length ? (
+        <div className="team-accept-conflict-files">
+          <span>冲突文件（{failure.conflictFiles.length}）</span>
+          <ul>{failure.conflictFiles.map((file) => <li key={file}><code>{file}</code></li>)}</ul>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 export function AcceptanceControls({
   task,
   onTaskUpdated,
@@ -49,7 +82,10 @@ export function AcceptanceControls({
       const result = await api.acceptTask(task.id);
       if (!result.accepted) {
         setFailure(result);
-        notify(`验收未完成：${result.error}`);
+        const handedOff = result.reason === "merge_conflict" && result.conflictHandoff?.notified === true;
+        notify(handedOff
+          ? "合并冲突已交给任务处理"
+          : result.reason === "merge_conflict" ? "合并冲突，未能自动交接" : `验收未完成：${result.error}`);
         return;
       }
       onTaskUpdated(await api.task(task.id));
@@ -90,12 +126,7 @@ export function AcceptanceControls({
           </>
         )}
       </div>
-      {failure && (
-        <div className="team-accept-failure" role="alert">
-          <b>验收未完成</b><p>{failure.error}</p>
-          {failure.conflictFiles?.length ? <code>冲突文件：{failure.conflictFiles.join("、")}</code> : null}
-        </div>
-      )}
+      {failure && <AcceptanceFailureNotice failure={failure} />}
       {action === "accept" && (
         <ConfirmDialog title="确认验收通过？" message={`${acceptanceMessage(task)} 已执行的合并和删除不可逆。`} confirmLabel="验收通过" danger={!!task.useWorktree} busy={busy} onConfirm={() => void accept()} onClose={() => setAction(null)} />
       )}

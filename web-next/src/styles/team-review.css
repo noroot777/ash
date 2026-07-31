@@ -33,9 +33,23 @@
 .team-accept-actions > button:hover { background: var(--raised); color: var(--ink); }
 .team-accept-actions > button.is-primary { border-color: var(--accent); background: var(--accent); color: white; }
 .team-accept-actions > span { border-color: color-mix(in lch,var(--green) 24%,var(--line)); background: var(--green-bg); color: var(--green); }
-.team-accept-failure { margin: 0 12px 11px 51px; border: 1px solid color-mix(in lch,var(--red) 30%,var(--line)); border-radius: 8px; background: color-mix(in lch,var(--red) 5%,var(--panel)); padding: 8px 10px; color: var(--red); font-size: 10.5px; }
-.team-accept-failure p { margin: 3px 0; color: var(--muted); }
-.team-accept-failure code { color: var(--red); font-size: 9.5px; }
+.team-accept-failure { margin: 0 12px 11px 51px; border: 1px solid color-mix(in lch,var(--red) 30%,var(--line)); border-radius: 8px; background: color-mix(in lch,var(--red) 5%,var(--panel)); padding: 9px 10px; color: var(--red); font-size: 10.5px; }
+.team-accept-failure.is-handed-off { border-color: color-mix(in lch,var(--amber) 34%,var(--line)); background: color-mix(in lch,var(--amber) 7%,var(--panel)); color: var(--amber); }
+.team-accept-failure-heading { display: flex; align-items: flex-start; gap: 8px; }
+.team-accept-failure-heading > span { display: grid; width: 24px; height: 24px; flex: 0 0 24px; place-items: center; border-radius: 7px; background: color-mix(in lch,var(--red) 10%,var(--panel)); }
+.team-accept-failure.is-handed-off .team-accept-failure-heading > span { background: color-mix(in lch,var(--amber) 13%,var(--panel)); }
+.team-accept-failure-heading > div { min-width: 0; flex: 1; }
+.team-accept-failure-heading b { display: block; color: color-mix(in lch,var(--red) 76%,var(--ink)); font-size: 11px; }
+.team-accept-failure.is-handed-off .team-accept-failure-heading b { color: color-mix(in lch,var(--amber) 76%,var(--ink)); }
+.team-accept-failure p { margin: 3px 0 0; color: var(--muted); line-height: 1.5; white-space: pre-wrap; }
+.team-accept-failure .team-accept-handoff-message { color: color-mix(in lch,var(--amber) 62%,var(--ink)); font-weight: 600; }
+.team-accept-failure .team-accept-failure-guidance { color: color-mix(in lch,var(--red) 60%,var(--muted)); }
+.team-accept-failure.is-handed-off .team-accept-failure-guidance { color: color-mix(in lch,var(--amber) 66%,var(--muted)); }
+.team-accept-conflict-files { margin: 8px 0 0 32px; border-top: .5px solid color-mix(in lch,var(--red) 18%,var(--line)); padding-top: 7px; }
+.team-accept-failure.is-handed-off .team-accept-conflict-files { border-top-color: color-mix(in lch,var(--amber) 20%,var(--line)); color: var(--faint); }
+.team-accept-conflict-files > span { display: block; color: currentColor; font-size: 9.5px; font-weight: 650; }
+.team-accept-conflict-files ul { display: grid; gap: 2px; margin: 4px 0 0; padding: 0; list-style: none; }
+.team-accept-conflict-files code { display: block; overflow-wrap: anywhere; color: currentColor; font-size: 9.5px; }
 .team-return-feedback { display: block; width: 100%; resize: vertical; border: 1px solid var(--line2); border-radius: 8px; background: var(--canvas); padding: 8px 9px; color: var(--ink); font-size: 11.5px; line-height: 1.5; outline: 0; }
 .team-return-feedback:focus { border-color: color-mix(in lch,var(--accent) 55%,var(--line2)); }
 
