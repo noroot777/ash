@@ -1,7 +1,9 @@
 import { randomUUID } from "node:crypto";
+import type { ChildProcess } from "node:child_process";
 import { createInterface } from "node:readline";
 import type { AgentEvent, ExecTarget } from "@harness/shared";
 import type { AgentExecutor, RelayConfig, ResidentHandle, RunHandle, RunOpts } from "./types.js";
+import { spawnForRun, detachedInfo } from "./detached.js";
 import { spawnAgent, resumeFor, resumeInner, spawnErrorMessage, killChild, forceFinishOnExit, redactSecrets } from "./spawn.js";
 import { relayRoot } from "../llm.js";
 
@@ -50,8 +52,18 @@ export class ClaudeExecutor implements AgentExecutor {
     const sessionId = opts.sessionId ?? randomUUID();
     const args = this.buildArgs(opts, sessionId, false);
     const commandLine = redactSecrets(`${this.bin} ${args.join(" ")} <prompt via stdin>`);
-    const child = spawnAgent(this.target, opts.cwd, this.bin, args, opts.prompt, this.env());
-    return { sessionId, commandLine, events: parseClaudeStream(child), kill: () => killChild(child) };
+    const child = spawnForRun(this.target, opts.cwd, this.bin, args, opts.prompt, this.env(), opts.detach);
+    return { sessionId, commandLine, events: parseClaudeStream(child), kill: () => killChild(child), detached: detachedInfo(child) };
+  }
+
+  attach(child: ChildProcess, opts: { sessionId: string; commandLine: string }): RunHandle {
+    return {
+      sessionId: opts.sessionId,
+      commandLine: opts.commandLine,
+      events: parseClaudeStream(child),
+      kill: () => child.kill(),
+      detached: detachedInfo(child),
+    };
   }
 
   // 常驻会话(§Team 的调度台):一个进程吃多个回合,session_id 全程不变。跟 run()

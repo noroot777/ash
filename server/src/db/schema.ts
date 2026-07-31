@@ -154,6 +154,20 @@ export const sessions = sqliteTable("sessions", {
   // lifespan instead of a (wrong) execution time.
   activeMs: integer("active_ms"),
   turnStartedAt: text("turn_started_at"),
+  // ── 解绑重启（executors/detached.ts）────────────────────────────────────
+  // 单飞任务的 agent 输出走文件而不是匿名管道，所以它活得过 server 重启。
+  // 下面这组是重启后接管它所需的全部线索；常驻会话（团队调度台）不走这条路，
+  // 这几列对它恒为 null——它靠 cli_session_id 的 --resume 自动接回。
+  agentPid: integer("agent_pid"),
+  // ps 的 lstart 原文。**必须跟 pid 一起比**：pid 会被复用，光 kill(pid,0)
+  // 只能证明「有个进程叫这个号」，不能证明还是当初那个 agent。
+  agentStartedAt: text("agent_started_at"),
+  agentOutPath: text("agent_out_path"),
+  agentErrPath: text("agent_err_path"),
+  agentRcPath: text("agent_rc_path"),
+  // 已安全消费到的 stdout 字节位置，永远落在换行边界（见 detached.ts 的
+  // tailFile）。重启后从这里接着读 → 不丢行也不重行。
+  agentOffset: integer("agent_offset"),
 });
 
 export const schedules = sqliteTable("schedules", {

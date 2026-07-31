@@ -143,6 +143,16 @@ export async function ensureSchema() {
     "ALTER TABLE tasks ADD COLUMN review_of TEXT",
     "ALTER TABLE tasks ADD COLUMN review_round INTEGER",
     "ALTER TABLE tasks ADD COLUMN review_requested INTEGER NOT NULL DEFAULT 0",
+    // 解绑重启（executors/detached.ts）：agent 输出走文件而不是匿名管道，于是它
+    // 活得过 server 重启。这几列是重启后「找回并接管」所需的全部线索——pid 认
+    // 进程、started_at 防 pid 复用、out_path 是原始输出、offset 是已消费到哪个
+    // 字节（永远落在换行边界），从那里接着读就不丢不重。
+    "ALTER TABLE sessions ADD COLUMN agent_pid INTEGER",
+    "ALTER TABLE sessions ADD COLUMN agent_started_at TEXT",
+    "ALTER TABLE sessions ADD COLUMN agent_out_path TEXT",
+    "ALTER TABLE sessions ADD COLUMN agent_err_path TEXT",
+    "ALTER TABLE sessions ADD COLUMN agent_rc_path TEXT",
+    "ALTER TABLE sessions ADD COLUMN agent_offset INTEGER",
   ]) {
     try {
       await client.execute(sql);

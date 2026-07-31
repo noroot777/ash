@@ -1,6 +1,8 @@
+import type { ChildProcess } from "node:child_process";
 import { createInterface } from "node:readline";
 import type { AgentEvent, ExecTarget } from "@harness/shared";
 import type { AgentExecutor, RelayConfig, RunHandle, RunOpts } from "./types.js";
+import { spawnForRun, detachedInfo } from "./detached.js";
 import { spawnAgent, resumeFor, resumeInner, spawnErrorMessage, killChild, forceFinishOnExit, redactSecrets } from "./spawn.js";
 import { relayApi } from "../llm.js";
 import { formatFailureForTimeline, RunTraceRecorder, type RunTracePaths } from "./diagnostics.js";
@@ -87,7 +89,7 @@ export class CodexExecutor implements AgentExecutor {
       : ["exec", ...common, "-"];
 
     const commandLine = redactSecrets(`${this.bin} ${args.join(" ")} <prompt via stdin>`);
-    const child = spawnAgent(this.target, opts.cwd, this.bin, args, opts.prompt, this.env());
+    const child = spawnForRun(this.target, opts.cwd, this.bin, args, opts.prompt, this.env(), opts.detach);
     const lifecycle = { stopRequested: false };
     return {
       sessionId: opts.sessionId ?? "",
@@ -97,6 +99,22 @@ export class CodexExecutor implements AgentExecutor {
         lifecycle.stopRequested = true;
         killChild(child);
       },
+      detached: detachedInfo(child),
+    };
+  }
+
+  attach(child: ChildProcess, opts: { sessionId: string; commandLine: string }): RunHandle {
+    const lifecycle = { stopRequested: false };
+    return {
+      sessionId: opts.sessionId,
+      commandLine: opts.commandLine,
+      // 接管的是上一轮留下的进程，trace 那份诊断在它自己那一轮已经写过了。
+      events: parseCodexStream(child, undefined, lifecycle),
+      kill: () => {
+        lifecycle.stopRequested = true;
+        child.kill();
+      },
+      detached: detachedInfo(child),
     };
   }
 }

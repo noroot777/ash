@@ -7,17 +7,20 @@ import { tasks, projects, sessions } from "./db/schema.js";
 import { bus } from "./bus.js";
 import { id, now, attachmentsPrompt } from "./util.js";
 import { setTaskStatus } from "./status.js";
-import { trackRun, untrackRun, takeStopped, takeConfirmed, type StopSettle } from "./runs.js";
+import { trackRun, untrackRun, isRunning, takeStopped } from "./runs.js";
+import { consumeSingleRun, settleTaskStatus, afterSettlement } from "./single-run.js";
+import { FOLLOW_UP_LABEL } from "./labels.js";
 import { taskWorkspace } from "./task-workspace.js";
 import { resolveExecutorFor } from "./executors/index.js";
 import type { RunHandle } from "./executors/types.js";
+import { detachedPathsFor } from "./executors/detached.js";
+import { inspectProcess } from "./proc.js";
 import { RUNS_DIR } from "./paths.js";
 import { writeTurn as writeTurnLine, writeTurnEnd, writeRunError, runTracePaths } from "./transcript.js";
 import { startTeam, deliverToLead } from "./team/session.js";
 import { workerPreambleFor } from "./team/dispatch.js";
-import { notifyTeamLead } from "./team/inbox.js";
 import { reopenAcceptedStage } from "./task-stage.js";
-import { handleTaskSettlement, reviewProtocolFor, reviewReminderFor } from "./review.js";
+import { reviewProtocolFor, reviewReminderFor } from "./review.js";
 
 const running = new Set<string>(); // taskIds currently executing (single-flight)
 
@@ -66,7 +69,6 @@ const COMPLETION_REMINDER = (taskId: string, sharedTeamWorker: boolean, reviewTa
 // 续聊(follow-up)回合的尾巴:任务早就到终态了,这一轮是「完成之后的对话」,
 // 不该拿严格完成协议吓唬 agent(不确认就 failed)—— 这一轮不确认,任务状态原样
 // 不动。只有它真把任务推进到新的完成时才需要确认。
-const FOLLOW_UP_LABEL: Record<string, string> = { done: "已完成", failed: "失败", canceled: "已取消" };
 const FOLLOW_UP_REMINDER = (taskId: string, from: string, sharedTeamWorker: boolean, reviewTask: boolean) =>
   `\n\n(harness:这是任务在「${FOLLOW_UP_LABEL[from] ?? from}」之后的续聊,taskId=${taskId}。任务状态不会因为本回合而改变,本回合不需要 complete_task;只有当你在这一轮把任务推进到了新的完成状态时,才调用 complete_task(taskId="${taskId}")确认。${ACCEPTANCE_REMINDER(taskId, sharedTeamWorker, reviewTask)})`;
 
@@ -94,134 +96,6 @@ async function setStatus(taskId: string, status: Parameters<typeof setTaskStatus
   await setTaskStatus(taskId, status);
 }
 
-async function afterSettlement(taskId: string, status: "canceled" | "paused" | "done" | "failed", confirmedDone: boolean) {
-  try {
-    await handleTaskSettlement(taskId, status, confirmedDone);
-  } catch (error) {
-    // Review orchestration is a post-settlement side effect. A failure here must
-    // never rewrite an already-settled worker/reviewer status.
-    console.error(`[harness] review settlement hook failed for ${taskId}:`, error);
-  }
-}
-
-// 任务跑完一回合时的状态落位：续聊回合(followUpFrom 非空) → 除非确认完成,否则
-// 回到续聊前的终态；手停 → canceled；分组暂停停 → paused（恢复分组时
-// 队列 head 还是它，从原 CLI 会话续跑，而不是被当 canceled 跳过去启动下一个）；
-// agent 在本回合内调过 ask_question（留下 question） → paused 且队列挂起等答复；
-// 调过 pause_task（写下 resumePrompt） → paused，等依赖满足或用户手动 resume；
-// 退出码非 0 → failed。exit 0 走严格 done
-// 协议：agent 必须在回合内调过 complete_task 确认
-// 「目标真的达成了」才落 done —— exit 0 只证明 CLI 进程正常退出,agent 报错后
-// 退出照样 exit 0,假 done 会误推进队列、错误唤醒下游。未确认 → failed(重试
-// 会 resume 续跑,代价低)。逃生口:HARNESS_LAX_DONE=1 退回「exit 0 即 done」
-// (接没配 harness MCP 的 agent 时用)。一处算清楚,run / continue 共用。
-// 队列推进：done / canceled / failed / paused 进 setTaskStatus 后会触发同 queue 推进。
-// 返回落位状态 + note(未确认降级的说明,调用方写进时间线让用户知道为什么)。
-const STRICT_DONE = !process.env.HARNESS_LAX_DONE;
-const UNCONFIRMED_NOTE =
-  "回合正常结束,但本回合内没有收到 complete_task 的完成确认 —— 按严格完成协议记为 failed。可能是 agent 没调用;也可能它调了但被拒(409,如任务状态在运行中被外部改动)。若任务其实已完成,可手动把状态改成已完成;重试则会从中断处续跑。";
-const GROUP_PAUSED_NOTE =
-  "分组被暂停,本回合被中止 —— 任务落为已暂停;点「运行/继续」恢复分组时会从当前会话接着跑。";
-async function settleTaskStatus(
-  taskId: string,
-  exitStatus: number,
-  stopped: StopSettle | null,
-): Promise<{
-  status: "canceled" | "paused" | "done" | "failed";
-  note?: string;
-  confirmedDone: boolean;
-}> {
-  const memConfirmed = takeConfirmed(taskId); // 无条件消费,别让标记漏到下一回合
-  const t = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
-  // 完成确认有两条道:同进程的内存标记,和落库的时间戳(complete_confirmed_at)。
-  // 任一命中即算确认 —— 确认与结算未必在同一个进程里(历史事故:僵尸实例在跑这
-  // 个回合,agent 的 complete_task 走 HTTP 打到了监听进程,内存标记落在别人家,
-  // 结算这边什么都没看见,于是 agent 明明确认了却记 failed)。DB 那份无条件清掉。
-  const confirmed = memConfirmed || !!t?.completeConfirmedAt;
-  if (t?.completeConfirmedAt) {
-    await db.update(tasks).set({ completeConfirmedAt: null, updatedAt: now() }).where(eq(tasks.id, taskId));
-  }
-  // 执行者结算 → 按需唤醒团队调度者(§Team)。只有提问、失败、以及 reportBack 的
-  // done 会投递;普通 done 静默(UI 自己会更新,不花一轮模型调用)。非团队任务
-  // (parentId 空)里 notifyTeamLead 直接返回。
-  const notify = (kind: Parameters<typeof notifyTeamLead>[1], q?: string) => {
-    if (!t) return;
-    void notifyTeamLead(t, kind, q).catch((err) =>
-      console.error(`[harness] notifyTeamLead(${taskId}) failed:`, err),
-    );
-  };
-  // 续聊(follow-up)回合:任务早就是终态,这一轮是终态之后的对话,不是任务的执行。
-  // 规则一句话:**续聊只能把任务变成 done(本回合亲口确认),不会让它变差** ——
-  // 其余情况(没确认、异常退出、手停、组暂停)一律回到续聊前的那个终态。理由:
-  // 用户给一个已完成的任务发条消息(「再发布一下」),不该因为 agent 这一轮没调
-  // complete_task 就把 done 打成 failed;手停一轮闲聊也不该把它抹成 canceled。
-  if (t?.followUpFrom) {
-    const back = t.followUpFrom as "done" | "failed" | "canceled";
-    await db.update(tasks).set({ followUpFrom: null, updatedAt: now() }).where(eq(tasks.id, taskId));
-    if (confirmed) {
-      await setStatus(taskId, "done");
-      notify("done");
-      return { status: "done", confirmedDone: true };
-    }
-    await setStatus(taskId, back);
-    const label = FOLLOW_UP_LABEL[back] ?? back;
-    if (t.question) {
-      // 提问照常通知/展示(问题卡片不看状态),但不把终态改成 paused —— 那会让它
-      // 重新占住队列位置。答复走 /answer,又是一个续聊回合。
-      notify("question", t.question);
-      return { status: back, note: `续聊回合以提问结束,等待答复:「${t.question}」(任务状态仍为「${label}」)`, confirmedDone: false };
-    }
-    if (stopped) {
-      const why = stopped === "paused" ? "分组被暂停" : "被手动停止";
-      return { status: back, note: `续聊回合${why},任务状态保持「${label}」不变。`, confirmedDone: false };
-    }
-    if (exitStatus !== 0) {
-      return { status: back, note: `续聊回合异常结束(退出码 ${exitStatus}),任务状态保持「${label}」不变。`, confirmedDone: false };
-    }
-    return { status: back, confirmedDone: false };
-  }
-  if (stopped === "canceled") {
-    await setStatus(taskId, "canceled");
-    return { status: "canceled", confirmedDone: false };
-  }
-  if (stopped === "paused") {
-    // 组暂停打断:落 paused 占住队列位置(组是 paused 的,推进钩子不会动)。
-    // 恢复分组 → advanceQueue 选中它 → resumeOrRunTask 无 resumePrompt 走
-    // RESUME_PROMPT 续原会话。若它被杀前调过 ask_question,question 仍在,
-    // pickNextLaunchable 会继续挡住等答复——提问通知照发(团队调度者那边该
-    // 知道它在等什么),不因组暂停而丢。
-    await setStatus(taskId, "paused");
-    if (t?.question) {
-      notify("question", t.question);
-      return { status: "paused", note: `本回合以提问暂停,等待答复:「${t.question}」`, confirmedDone: false };
-    }
-    return { status: "paused", note: GROUP_PAUSED_NOTE, confirmedDone: false };
-  }
-  // 提问优先于检查点:question 非空 → paused,但队列不推进、不自动续跑
-  // (pickNextLaunchable 会挡住),等 answer_question 带答复唤醒。
-  if (t?.question) {
-    await setStatus(taskId, "paused");
-    notify("question", t.question);
-    return { status: "paused", note: `本回合以提问暂停,等待答复:「${t.question}」`, confirmedDone: false };
-  }
-  if (t?.resumePrompt) {
-    await setStatus(taskId, "paused");
-    return { status: "paused", confirmedDone: false };
-  }
-  if (exitStatus !== 0) {
-    await setStatus(taskId, "failed");
-    notify("failed");
-    return { status: "failed", confirmedDone: false };
-  }
-  if (confirmed || !STRICT_DONE) {
-    await setStatus(taskId, "done");
-    notify("done");
-    return { status: "done", confirmedDone: confirmed };
-  }
-  await setStatus(taskId, "failed");
-  notify("failed_unconfirmed");
-  return { status: "failed", note: UNCONFIRMED_NOTE, confirmedDone: false };
-}
 
 // On (re)start nothing is actually running, so any task still in an in-flight
 // status was interrupted (e.g. the server restarted mid-run). Mark those failed
@@ -236,7 +110,13 @@ async function settleTaskStatus(
 // 打成 failed 之后没有任何人去推,整条串行队列就一直停在那等(实测:重启后
 // 后面的任务再也不会自动开始,得手点一次「运行分组」)。
 export async function reconcileInterrupted(): Promise<void> {
-  const orphaned = await db.select().from(tasks).where(inArray(tasks.status, ["running", "queued"]));
+  // **必须在 reattachRunningTasks 之后调用**（index.ts 保证顺序）。被成功接管的
+  // 任务此刻有活的 handle，isRunning 为真 —— 它们绝不能再被当成「被打断」判
+  // failed：那会让一个正在干活的 agent 在界面上显示失败，用户一点重试就会有
+  // 第二个 agent 进同一个 worktree。
+  // 用 isRunning（runs.ts，中立模块）而不是回头 import reattach，依赖保持单向。
+  const orphaned = (await db.select().from(tasks).where(inArray(tasks.status, ["running", "queued"])))
+    .filter((t) => !isRunning(t.id));
   if (!orphaned.length) return;
   const teamIds = orphaned.filter((t) => t.mode === "team").map((t) => t.id);
   const others = orphaned.filter((t) => t.mode !== "team");
@@ -257,6 +137,33 @@ export async function reconcileInterrupted(): Promise<void> {
       (followUps ? `, ${followUps} follow-up turn(s) → 原终态` : "") +
       (teamIds.length ? `, ${teamIds.length} team task(s) → idle` : ""),
   );
+  wakeInterruptedLeads(teamIds);
+}
+
+// 被打断在「正在思考/派活」当口的团队调度台，重启后必须主动叫醒一次。
+//
+// 平时调度台是被执行者事件唤醒的（提问 / 失败 / reportBack 完成，见
+// team/inbox.ts）。但如果它被打断时手头那批执行者**已经全部跑完**，就再也没有
+// 人会来敲它的门了 —— 它会一直 idle 躺着，只能等用户自己去戳一下。这是重启在
+// 团队链路上唯一真正会「卡住」的地方。
+//
+// 只叫醒 teamIds（重启时正好是 running/queued 的那些，即确实被打断在半途）。
+// 本来就 idle 的不动：它没有未竟的一轮，叫它等于白烧一次模型调用。
+// startTeam 走的是 deliver → 内存里没有 lead → openLead 的 --resume 接回，
+// 调度者会收到「你被中断过」的提示，自己 list_tasks 看现状。
+function wakeInterruptedLeads(teamIds: string[]): void {
+  if (!teamIds.length) return;
+  // 稍等一下再叫：让 server 先把启动流程走完（含上面的接管），调度者一睁眼
+  // 看到的执行者状态才是最终的，不会基于半截快照做决策。
+  const t = setTimeout(() => {
+    for (const teamId of teamIds) {
+      void startTeam(teamId).catch((err) =>
+        console.error(`[harness] 唤醒被打断的团队调度台 ${teamId} 失败:`, err),
+      );
+    }
+    console.log(`[harness] 已叫醒 ${teamIds.length} 个被打断的团队调度台`);
+  }, 3000);
+  (t as { unref?: () => void }).unref?.();
 }
 
 // M1: execute a single-agent task in the project's working dir, stream output over
@@ -312,7 +219,10 @@ export async function runTask(taskId: string): Promise<void> {
     const sessId = id();
     const runDir = join(RUNS_DIR, taskId);
     mkdirSync(runDir, { recursive: true });
-    handle = ex.run({ prompt, cwd: ws.path, trace: runTracePaths(runDir, sessId, turnStart) });
+    // 解绑重启：输出落盘而不是走匿名管道，于是这个 agent 活得过 server 重启
+    // （见 executors/detached.ts）。ssh 目标会在 spawnForRun 里自动退回管道。
+    const detach = detachedPathsFor(runDir, sessId, turnStart);
+    handle = ex.run({ prompt, cwd: ws.path, trace: runTracePaths(runDir, sessId, turnStart), detach });
     trackRun(taskId, handle);
 
     let cliSessionId = handle.sessionId;
@@ -334,79 +244,22 @@ export async function runTask(taskId: string): Promise<void> {
       turnStartedAt: turnStart,
       activeMs: 0,
       exitStatus: null as number | null,
+      // 重启后靠这几个字段找回并接管它。pid 为空 = 这一轮没走 detached
+      //（ssh 目标 / 预检失败），那就是老语义：重启即中断。
+      agentPid: handle.detached?.pid ?? null,
+      agentStartedAt: handle.detached ? inspectProcess(handle.detached.pid)?.startedAt ?? null : null,
+      agentOutPath: handle.detached ? detach.out : null,
+      agentErrPath: handle.detached ? detach.err : null,
+      agentRcPath: handle.detached ? detach.rc : null,
+      agentOffset: 0,
     };
     await db.insert(sessions).values(sessRow);
 
     const out = createWriteStream(join(runDir, `${sessId}.md`), { flags: "a" });
-
-    let exitStatus = 0;
-    let titleDone = !autoTitle; // when autoTitle, swallow text until the title line is parsed
-    let head = "";
-    const emitText = (text: string) => {
-      if (!text) return;
-      out.write(text);
-      bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: "single", agentType, event: { kind: "text", text } });
-    };
-
-    for await (const event of handle.events) {
-      if (event.kind === "session") {
-        if (event.cliSessionId !== cliSessionId) {
-          cliSessionId = event.cliSessionId;
-          await db
-            .update(sessions)
-            .set({ cliSessionId, resumeCommand: ex.resumeCommand(ws.path, cliSessionId) })
-            .where(eq(sessions.id, sessId));
-        }
-        bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: "single", agentType, event });
-        continue;
-      }
-      if (event.kind === "text" && !titleDone) {
-        head += event.text;
-        const nl = head.indexOf("\n");
-        if (nl < 0) continue; // still buffering the first line
-        const firstLine = head.slice(0, nl);
-        const rest = head.slice(nl + 1);
-        const m = firstLine.match(/标题[:：]\s*(.+)/);
-        if (m) {
-          const newTitle = m[1].trim().replace(/[`*"]/g, "").slice(0, 30);
-          if (newTitle) {
-            await db.update(tasks).set({ title: newTitle, autoTitle: false, updatedAt: now() }).where(eq(tasks.id, taskId));
-            bus.publish({ type: "task.title", taskId, title: newTitle });
-          }
-        }
-        titleDone = true;
-        emitText(m ? rest : head); // matched: drop the title line; else flush buffer
-        continue;
-      }
-      if (event.kind === "text" || event.kind === "thinking") {
-        out.write(event.text);
-        bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: "single", agentType, event });
-      } else {
-        if (event.kind === "error") writeRunError(out, event.message);
-        bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: "single", agentType, event });
-        if (event.kind === "done") exitStatus = event.exitStatus;
-      }
-    }
-    if (!titleDone && head) emitText(head); // agent never produced a newline
-
-    // A stop kills the subprocess → the stream ends like a normal exit; settle
-    // by the stop kind (manual → canceled, group pause → paused) so it can be
-    // re-run / continued.
-    const stopped = takeStopped(taskId);
-    const endIso = now();
-    await db
-      .update(sessions)
-      .set({ exitStatus, endedAt: endIso, activeMs: sql`COALESCE(${sessions.activeMs}, 0) + ${Math.max(0, Date.parse(endIso) - Date.parse(turnStart))}` })
-      .where(eq(sessions.id, sessId));
-    const settled = await settleTaskStatus(taskId, exitStatus, stopped);
-    await afterSettlement(taskId, settled.status, settled.confirmedDone);
-    if (settled.note) {
-      // 未确认降级为 failed:写进 .md(reload 可见)+ 广播(live 可见)
-      out.write(`\n> ${settled.note}\n`);
-      bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: "single", agentType, event: { kind: "error", message: settled.note } });
-    }
-    writeTurnEnd(out, endIso); // fence this turn's real end before closing the .md
-    out.end();
+    await consumeSingleRun({
+      taskId, sessId, agentType, ex, cwd: ws.path,
+      handle, out, turnStart, cliSessionId, autoTitle,
+    });
   } catch (err) {
     bus.publish({
       type: "agent.event",
@@ -423,6 +276,8 @@ export async function runTask(taskId: string): Promise<void> {
     running.delete(taskId);
   }
 }
+
+
 
 // Decide between a fresh run and a resume when (re)starting a single task. A task
 // that was interrupted keeps a session row with a cliSessionId (server restart
