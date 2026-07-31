@@ -3,7 +3,7 @@
 //
 // 跟单任务 header 的差别在于**调度者没有「完成」**:它只有忙(running)/闲(idle),
 // 结束靠归档。所以这里没有状态下拉、没有「重新排队」、没有严格完成协议那套东西。
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import type {
   Group,
   Session,
@@ -57,6 +57,7 @@ export function TeamHeader({
   canIterateDebate,
   iterateBusy,
   onIterateDebate,
+  inspectorToggle,
 }: {
   task: Task;
   workers: Task[];
@@ -78,6 +79,7 @@ export function TeamHeader({
   canIterateDebate: boolean;
   iterateBusy: boolean;
   onIterateDebate: () => void;
+  inspectorToggle?: ReactNode;
 }) {
   const [haltOpen, setHaltOpen] = useState(false);
   const [resuming, setResuming] = useState(false);
@@ -101,7 +103,7 @@ export function TeamHeader({
 
   return (
     <header className="shrink-0 border-b border-line px-6 pb-3 pt-5">
-      <div className="flex items-start gap-3">
+      <div className="flex flex-wrap items-start gap-3">
         <Tip
           label="团队任务：一个常驻调度者和它派出的执行者"
           className="mt-0.5 inline-flex h-5 w-5 shrink-0 items-center justify-center text-muted"
@@ -109,7 +111,7 @@ export function TeamHeader({
           <TaskModeIcon mode="team" size={16} />
         </Tip>
         <EditableTitle title={task.title} onSave={(t) => onPatch({ title: t, autoTitle: false })} />
-        <div className="flex shrink-0 items-center gap-2">
+        <div className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-2">
           <BusyPill task={task} />
           <TaskTimeChip task={task} />
           <button
@@ -243,6 +245,7 @@ export function TeamHeader({
           >
             <Trash size={15} />
           </button>
+          {inspectorToggle}
         </div>
       </div>
 
