@@ -444,18 +444,18 @@ export function CommandPalette({
         </div>
 
         {step === "scope-project" && (
-          <div className="max-h-[min(58vh,520px)] overflow-y-auto"><ScopeProjectStep projects={projects} active={active} selectedProjectId={pendingProjectId} onChoose={chooseScopeProject} onHover={hover} /></div>
+          <div className="min-h-0 max-h-[min(58vh,520px)] flex-1 overflow-y-auto"><ScopeProjectStep projects={projects} active={active} selectedProjectId={pendingProjectId} onChoose={chooseScopeProject} onHover={hover} /></div>
         )}
         {step === "scope-type" && (
-          <div className="max-h-[min(58vh,520px)] overflow-y-auto"><ScopeTypeStep active={active} selectedType={scope?.type ?? null} onChoose={chooseScopeType} onHover={hover} /></div>
+          <div className="min-h-0 max-h-[min(58vh,520px)] flex-1 overflow-y-auto"><ScopeTypeStep active={active} selectedType={scope?.type ?? null} onChoose={chooseScopeType} onHover={hover} /></div>
         )}
         {step === "git-project" && (
-          <div className="max-h-[min(58vh,520px)] overflow-y-auto"><GitProjectStep projects={projects} active={active} onChoose={loadGitOverview} onHover={hover} /></div>
+          <div className="min-h-0 max-h-[min(58vh,520px)] flex-1 overflow-y-auto"><GitProjectStep projects={projects} active={active} onChoose={loadGitOverview} onHover={hover} /></div>
         )}
         {step === "git-overview" && <GitOverviewPanel project={gitProject} overview={gitOverview} loading={gitLoading} error={gitError} />}
 
         {step === "search" && slashMode && (
-          <div className="max-h-[min(58vh,520px)] overflow-y-auto p-1">
+          <div className="min-h-0 max-h-[min(58vh,520px)] flex-1 overflow-y-auto p-1">
             <div className="palette-label">命令</div>
             {slashCommands.map((command, index) => (
               <button
