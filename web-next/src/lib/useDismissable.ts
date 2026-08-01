@@ -22,7 +22,11 @@ export function useDismissable<
 
     const closeOnOutside = (event: Event) => {
       const target = event.target;
-      if (!(target instanceof Node) || containerRef.current?.contains(target)) return;
+      if (
+        !(target instanceof Node)
+        || containerRef.current?.contains(target)
+        || restoreFocusRef?.current?.contains(target)
+      ) return;
       onCloseRef.current();
     };
     const closeOnEscape = (event: KeyboardEvent) => {
