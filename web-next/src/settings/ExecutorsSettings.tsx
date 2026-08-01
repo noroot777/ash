@@ -1,16 +1,13 @@
 import { useEffect, useState } from "react";
-import type { AgentExecutorProfile, AppSettings, LlmProvider } from "@harness/shared";
-import { DEFAULT_APP_SETTINGS } from "@harness/shared";
+import type { AgentExecutorProfile, LlmProvider } from "@harness/shared";
 import { Check, MagnifyingGlass } from "@phosphor-icons/react";
-import { Button, Toggle } from "../components/ui.tsx";
+import { Button } from "../components/ui.tsx";
 import {
   refreshAgentAvailability,
   useAgentAvailability,
 } from "../lib/agentAvailability.ts";
 import { api, type DetectedCli } from "../lib/api.ts";
 import { AgentProfilesSection } from "./AgentProfilesSection.tsx";
-import { ProvidersSection } from "./ProvidersSection.tsx";
-import "./agents-settings.css";
 
 function updateById(rows: AgentExecutorProfile[], updated: AgentExecutorProfile) {
   return rows.map((row) => {
@@ -20,21 +17,19 @@ function updateById(rows: AgentExecutorProfile[], updated: AgentExecutorProfile)
   });
 }
 
-export function AgentsSettings({ notify }: { notify: (message: string) => void }) {
+export function ExecutorsSettings({ notify }: { notify: (message: string) => void }) {
   const [profiles, setProfiles] = useState<AgentExecutorProfile[]>([]);
   const [providers, setProviders] = useState<LlmProvider[]>([]);
-  const [settings, setSettings] = useState<AppSettings>(DEFAULT_APP_SETTINGS);
   const [loading, setLoading] = useState(true);
   const [detecting, setDetecting] = useState(false);
   const [detected, setDetected] = useState<DetectedCli[] | null>(null);
   const availability = useAgentAvailability();
 
   useEffect(() => {
-    Promise.all([api.agents(), api.llmProviders(), api.settings()])
-      .then(([agents, nextProviders, nextSettings]) => {
+    Promise.all([api.agents(), api.llmProviders()])
+      .then(([agents, nextProviders]) => {
         setProfiles(agents);
         setProviders(nextProviders);
-        setSettings(nextSettings);
       })
       .catch((error) => notify(error instanceof Error ? error.message : "执行器设置读取失败"))
       .finally(() => setLoading(false));
@@ -44,12 +39,6 @@ export function AgentsSettings({ notify }: { notify: (message: string) => void }
     setProfiles((current) => updated
       ? updateById(current, updated)
       : current.filter((row) => row.id !== id));
-  };
-
-  const reloadProvidersAndProfiles = async () => {
-    const [nextProfiles, nextProviders] = await Promise.all([api.agents(), api.llmProviders()]);
-    setProfiles(nextProfiles);
-    setProviders(nextProviders);
   };
 
   const detect = async () => {
@@ -85,20 +74,14 @@ export function AgentsSettings({ notify }: { notify: (message: string) => void }
     <>
       <header className="settings-heading">
         <div>
-          <h1>执行器与供应商</h1>
-          <p>配置实际调用的 CLI 身份，并为指定 Profile 绑定兼容的模型供应商。</p>
+          <h1>执行器</h1>
+          <p>配置实际调用的 CLI 身份、运行位置、模型供应商与默认覆盖。</p>
         </div>
         <Button disabled={detecting} onClick={() => void detect()}>
           <MagnifyingGlass size={13} />
           {detecting ? "检测中…" : "检测本地智能体"}
         </Button>
       </header>
-
-      <ProvidersSection
-        providers={providers}
-        onChanged={reloadProvidersAndProfiles}
-        notify={notify}
-      />
 
       <AgentProfilesSection
         profiles={profiles}
@@ -136,29 +119,6 @@ export function AgentsSettings({ notify }: { notify: (message: string) => void }
           </div>
         </section>
       )}
-
-      <section className="settings-section">
-        <h2>默认规则</h2>
-        <div className="settings-card">
-          <div className="settings-row">
-            <div>
-              <b>新任务默认使用 worktree</b>
-              <small>仅 Git 项目生效；每张新任务仍可单独覆盖</small>
-            </div>
-            <Toggle
-              label={settings.worktreeDefault ? "已开启" : "已关闭"}
-              checked={settings.worktreeDefault}
-              onChange={async (checked) => {
-                try {
-                  setSettings(await api.patchSettings({ worktreeDefault: checked }));
-                } catch (error) {
-                  notify(error instanceof Error ? error.message : "默认规则保存失败");
-                }
-              }}
-            />
-          </div>
-        </div>
-      </section>
     </>
   );
 }

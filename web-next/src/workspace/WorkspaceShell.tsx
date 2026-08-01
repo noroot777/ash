@@ -7,7 +7,11 @@ import { TeamView } from "../team/TeamView.tsx";
 import { DebateView } from "../debate/DebateView.tsx";
 import { TaskPlaceholder } from "./TaskPlaceholder.tsx";
 import { WorkspaceSidebar } from "./WorkspaceSidebar.tsx";
-import { SettingsPage, type SettingsSection } from "../settings/SettingsPage.tsx";
+import {
+  parseSettingsSection,
+  SettingsPage,
+  type SettingsSection,
+} from "../settings/SettingsPage.tsx";
 import { CommandPalette } from "../overlays/CommandPalette.tsx";
 import { NotesPanel } from "../overlays/NotesPanel.tsx";
 import { TaskComposerPanel, type ComposerDraft } from "../composer/TaskComposerPanel.tsx";
@@ -25,8 +29,7 @@ type ContextView = "review" | "settings" | "palette" | "notes" | "create";
 
 function readUrlSelection() {
   const params = new URLSearchParams(window.location.search);
-  const raw = params.get("settings");
-  const settings: SettingsSection | null = raw === "agents" || raw === "project" || raw === "groups" || raw === "archive" ? raw : null;
+  const settings = parseSettingsSection(params.get("settings"));
   const rawView = params.get("view");
   const view: ContextView | null = rawView === "review" || rawView === "settings" || rawView === "palette" || rawView === "notes" || rawView === "create" ? rawView : null;
   const rawMode = params.get("mode");
@@ -149,7 +152,7 @@ export function WorkspaceShell() {
     else api.task(nextTaskId).then((task) => { updateTask(task); selectTask(task); }).catch(() => notify("关联任务不存在或读取失败"));
   };
   const openNotes = (nextProjectId = projectId, noteId: string | null = null) => { if (nextProjectId) { setProjectId(nextProjectId); setSettingsSection(null); setComposer(null); setNotes({ projectId: nextProjectId, noteId }); } };
-  const openSettings = (section: SettingsSection = "agents") => { setSettingsSection(section); setComposer(null); setNotes(null); setPaletteOpen(false); };
+  const openSettings = (section: SettingsSection = "executors") => { setSettingsSection(section); setComposer(null); setNotes(null); setPaletteOpen(false); };
   const openComposer = (mode: TaskMode = "single") => {
     if (!currentProject) return;
     setSettingsSection(null);
@@ -211,7 +214,7 @@ export function WorkspaceShell() {
 
   return (
     <><div className="workspace-shell" style={{ "--workspace-sidebar-width": `${sidebarWidth}px` } as CSSProperties}>
-      <WorkspaceSidebar projects={projects} currentProject={currentProject} tasks={tasks} selectedTaskId={taskId} connected={connected} collapsed={collapsed} width={sidebarWidth} onWidthChange={setSidebarWidth} onProject={selectProject} onTask={selectTask} onToggleCollapsed={() => setCollapsed((value) => !value)} onSearch={() => setPaletteOpen(true)} onNotes={() => openNotes()} onCreate={() => openComposer("single")} onNewProject={() => setCreateDialog("project")} onSettings={() => openSettings("agents")} />
+      <WorkspaceSidebar projects={projects} currentProject={currentProject} tasks={tasks} selectedTaskId={taskId} connected={connected} collapsed={collapsed} width={sidebarWidth} onWidthChange={setSidebarWidth} onProject={selectProject} onTask={selectTask} onToggleCollapsed={() => setCollapsed((value) => !value)} onSearch={() => setPaletteOpen(true)} onNotes={() => openNotes()} onCreate={() => openComposer("single")} onNewProject={() => setCreateDialog("project")} onSettings={() => openSettings("executors")} />
       <main className="workspace-main">
         {loadError && <div className="workspace-load-error">{loadError.message}</div>}
         {composer && currentProject ? <TaskComposerPanel project={currentProject} groups={groups} initialDraft={composer.draft} mode={composer.mode} onModeChange={(mode) => setComposer((current) => current ? { ...current, mode } : null)} onCancel={() => setComposer(null)} onCreated={createTask} onCreateGroup={createComposerGroup} notify={notify} /> : selectedTask?.mode === "team" ? (

@@ -96,7 +96,7 @@
 本轮已补齐页面上下文参数，不再只携带项目/任务：
 
 - `view=review`：单任务或团队验收台；
-- `view=settings&settings=agents|project|groups|archive`：设置分节；
+- `view=settings&settings=project|groups|archive|providers|executors|modes|defaults`：设置分节；旧值 `agents` 兼容跳到 `executors`；
 - `view=palette`：⌘K；
 - `view=notes[&note=…]`：随手记及当前条目；
 - `view=create&mode=single|team|debate`：新建页和模式。

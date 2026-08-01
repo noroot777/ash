@@ -61,16 +61,25 @@
 
 .settings-sidebar nav {
   display: grid;
+  gap: 20px;
+}
+
+.settings-nav-group {
+  display: grid;
+  min-width: 0;
   gap: 2px;
 }
 
 .settings-nav-label {
+  overflow: hidden;
   margin: 0 9px 5px;
   color: var(--faint);
   font-size: 10px;
   font-weight: 650;
   letter-spacing: 0.08em;
+  text-overflow: ellipsis;
   text-transform: uppercase;
+  white-space: nowrap;
 }
 
 .settings-sidebar nav button {

@@ -1,0 +1,316 @@
+.team-presets-settings-card {
+  overflow: visible;
+}
+
+.team-presets-loading {
+  display: flex;
+  min-height: 180px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--faint);
+  font-size: 11px;
+}
+
+.team-presets-loading.is-error {
+  color: var(--red);
+}
+
+.team-presets-settings-layout {
+  display: grid;
+  min-height: 560px;
+  grid-template-columns: 220px minmax(0, 1fr);
+}
+
+.team-presets-list {
+  overflow: hidden;
+  border-right: 1px solid var(--line);
+  border-radius: 11px 0 0 11px;
+  background: color-mix(in lch, var(--raised) 42%, var(--panel));
+}
+
+.team-presets-list > header {
+  display: flex;
+  min-height: 42px;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--line);
+  padding: 0 12px;
+}
+
+.team-presets-list > header b {
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.team-presets-list > header span {
+  display: grid;
+  min-width: 20px;
+  height: 20px;
+  place-items: center;
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--faint);
+  font-size: 9px;
+}
+
+.team-presets-list-empty {
+  display: grid;
+  min-height: 150px;
+  place-content: center;
+  justify-items: center;
+  gap: 8px;
+  color: var(--faint);
+  font-size: 10px;
+}
+
+.team-presets-list-item {
+  display: grid;
+  width: 100%;
+  min-width: 0;
+  gap: 5px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  background: transparent;
+  padding: 11px 12px;
+  color: var(--muted);
+  text-align: left;
+}
+
+.team-presets-list-item:hover {
+  background: var(--hover-bg);
+}
+
+.team-presets-list-item[aria-selected="true"] {
+  background: var(--panel);
+  box-shadow: inset 3px 0 var(--accent);
+  color: var(--ink);
+}
+
+.team-presets-list-item b,
+.team-presets-list-item span,
+.team-presets-list-item small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.team-presets-list-item b {
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.team-presets-list-item span,
+.team-presets-list-item small {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--faint);
+  font-size: 9px;
+}
+
+.team-presets-list-item small.is-off {
+  opacity: 0.65;
+}
+
+.team-preset-editor {
+  min-width: 0;
+}
+
+.team-preset-editor-head {
+  display: flex;
+  min-height: 58px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border-bottom: 1px solid var(--line);
+  padding: 10px 14px;
+}
+
+.team-preset-editor-head > div:first-child {
+  display: grid;
+  gap: 3px;
+}
+
+.team-preset-editor-head b {
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.team-preset-editor-head small {
+  color: var(--faint);
+  font-size: 9px;
+}
+
+.team-preset-editor-head > div:last-child {
+  display: flex;
+  gap: 7px;
+}
+
+.team-preset-editor-fields {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+}
+
+.team-preset-name-field,
+.team-preset-role-fields label {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.team-preset-name-field > span,
+.team-preset-role-fields label > span {
+  color: var(--faint);
+  font-size: 9px;
+  font-weight: 650;
+  letter-spacing: 0.045em;
+  text-transform: uppercase;
+}
+
+.team-preset-name-field input,
+.team-preset-role-fields input,
+.team-preset-role-fields select {
+  width: 100%;
+  min-width: 0;
+  height: 31px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--canvas);
+  padding: 0 8px;
+  color: var(--ink);
+  outline: 0;
+  font-size: 11px;
+}
+
+.team-preset-name-field input:focus,
+.team-preset-role-fields input:focus,
+.team-preset-role-fields select:focus {
+  border-color: var(--accent);
+}
+
+.team-preset-review-row {
+  display: flex;
+  min-height: 52px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: color-mix(in lch, var(--raised) 45%, var(--panel));
+  padding: 8px 11px;
+}
+
+.team-preset-review-row > div {
+  display: grid;
+  gap: 2px;
+}
+
+.team-preset-review-row b {
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.team-preset-review-row small {
+  color: var(--faint);
+  font-size: 9px;
+}
+
+.team-preset-role {
+  --role-color: #665493;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel);
+}
+
+.team-preset-role.is-worker { --role-color: #287567; }
+.team-preset-role.is-reviewer { --role-color: #a76338; }
+
+.team-preset-role > header {
+  display: flex;
+  min-height: 43px;
+  align-items: center;
+  gap: 9px;
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in lch, var(--role-color) 5%, var(--panel));
+  padding: 7px 10px;
+}
+
+.team-preset-role > header > span {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  flex: none;
+  place-items: center;
+  border-radius: 8px;
+  background: color-mix(in lch, var(--role-color) 14%, var(--panel));
+  color: var(--role-color);
+}
+
+.team-preset-role > header > div {
+  display: grid;
+  gap: 1px;
+}
+
+.team-preset-role > header b {
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.team-preset-role > header small {
+  color: var(--faint);
+  font-size: 9px;
+}
+
+.team-preset-role-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 9px;
+  padding: 10px;
+}
+
+.team-preset-role-fields .agent-model-control {
+  gap: 0;
+}
+
+@media (max-width: 900px) {
+  .team-presets-settings-layout {
+    grid-template-columns: 180px minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 680px) {
+  .team-presets-settings-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .team-presets-list {
+    display: flex;
+    overflow-x: auto;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+    border-radius: 11px 11px 0 0;
+  }
+
+  .team-presets-list > header,
+  .team-presets-list-empty {
+    display: none;
+  }
+
+  .team-presets-list-item {
+    width: 180px;
+    flex: 0 0 180px;
+    border-right: 1px solid var(--line);
+  }
+
+  .team-preset-editor-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .team-preset-role-fields {
+    grid-template-columns: 1fr;
+  }
+}

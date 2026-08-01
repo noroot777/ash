@@ -18,6 +18,7 @@ import {
   Trash,
 } from "@phosphor-icons/react";
 import { api, type GitOverview } from "../lib/api.ts";
+import type { SettingsSection } from "../settings/SettingsPage.tsx";
 import { TaskModeIcon, taskModeLabel, taskParentLink, taskParentMode } from "../components/TaskOrigin.tsx";
 import { GitOverviewPanel, GitProjectStep } from "./CommandPaletteGit.tsx";
 import { SearchHitList, SearchPreview } from "./CommandPaletteSearch.tsx";
@@ -60,7 +61,7 @@ type CommandPaletteProps = {
   onNewGroup: () => void;
   onNewProject: () => void;
   onDeleteTask: (task: Task) => void;
-  onSettings: (section?: "agents" | "project" | "groups" | "archive") => void;
+  onSettings: (section?: SettingsSection) => void;
   notify: (message: string) => void;
 };
 
@@ -256,7 +257,7 @@ export function CommandPalette({
       { key: "new:group", group: "新建", label: "新建分组", icon: <Stack size={15} />, run: closeRun(onNewGroup) },
       { key: "new:project", group: "新建", label: "新建项目", icon: <FolderPlus size={15} />, run: closeRun(onNewProject) },
       { key: "manage:notes", group: "管理", label: "随手记列表", keys: "NL", icon: <NotePencil size={15} />, run: closeRun(() => { if (currentProject) onNote(currentProject.id, null); }) },
-      { key: "manage:agents", group: "管理", label: "管理智能体执行器", icon: <GearSix size={15} />, run: closeRun(() => onSettings("agents")) },
+      { key: "manage:agents", group: "管理", label: "管理智能体执行器", icon: <GearSix size={15} />, run: closeRun(() => onSettings("executors")) },
       { key: "manage:settings", group: "管理", label: "项目设置", icon: <GearSix size={15} />, run: closeRun(() => onSettings("project")) },
       { key: "manage:groups", group: "管理", label: "分组管理", icon: <Stack size={15} />, run: closeRun(() => onSettings("groups")) },
     );
