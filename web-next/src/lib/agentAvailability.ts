@@ -22,7 +22,9 @@ export type ExecutorOption = {
 };
 
 const TYPE_PREFIX = "__type:";
-const RESIDENT_CAPABLE: readonly AgentType[] = ["claude"];
+// 检测拿不到结果时的保守兜底:这两个类型的执行器实现了 openResident
+// (claude 进程级常驻、codex 会话级常驻),权威判断仍来自 detect 的 `resident`。
+const RESIDENT_CAPABLE: readonly AgentType[] = ["claude", "codex"];
 const LOADING: AgentDetection = { status: "loading", agents: [] };
 
 let cachedDetection: Promise<AgentDetection> | null = null;

@@ -228,7 +228,7 @@ export function TeamPresetEditor({
   busy: boolean;
   onChange: (draft: TeamPresetDraft) => void;
 }) {
-  // 检测未完成/失败时 residentAgentTypes 回落到内置名单(claude),口径与 composer
+  // 检测未完成/失败时 residentAgentTypes 回落到内置名单,口径与 composer
   // 一致:「不能证明它装了」不等于「可以放它去当调度者」。
   const detection = useAgentAvailability();
   const residentTypes = residentAgentTypes(detection.agents);

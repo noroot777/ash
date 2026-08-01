@@ -1,8 +1,12 @@
 // ── 常驻调度台(§Team)────────────────────────────────────────────────────────
-// 一个 mode:"team" 的任务 = 一个不退的 CLI 进程(claude,stream-json 双向)。
-// 三种入站消息汇到同一根管子(进程 stdin):用户插话、执行者汇报、执行者提问。
-// 于是旧编排组的三个毛病一起消失:30s tick 延迟、continueTask 单飞锁丢消息、
-// 「协调者顶着一次性任务状态机反复 done→running」。
+// 一个 mode:"team" 的任务 = 一个不断的 CLI **会话**。三种入站消息汇到同一根管子:
+// 用户插话、执行者汇报、执行者提问。于是旧编排组的三个毛病一起消失:30s tick
+// 延迟、continueTask 单飞锁丢消息、「协调者顶着一次性任务状态机反复 done→running」。
+//
+// 「会话不断」有两种实现,本文件不关心是哪种(都藏在 ResidentHandle 后面):
+//   • claude = 进程级常驻,一个进程吃多个回合(stream-json 双向)
+//   • codex  = 会话级常驻,每回合一个 `exec resume <thread_id>` 进程
+//     (它没有 stdin 注入通道;实测与取舍见 executors/codex-resident.ts)
 //
 // ── Step 0 实测结论(claude 2.1.185,别再试一遍)─────────────────────────────
 // ①常驻可行:一个进程连吃多条 stream-json user 消息,session_id 全程同一个,

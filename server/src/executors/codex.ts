@@ -1,7 +1,8 @@
 import type { ChildProcess } from "node:child_process";
 import { createInterface } from "node:readline";
 import type { AgentEvent, ExecTarget } from "@harness/shared";
-import type { AgentExecutor, RelayConfig, RunHandle, RunOpts } from "./types.js";
+import type { AgentExecutor, RelayConfig, ResidentHandle, RunHandle, RunOpts } from "./types.js";
+import { openCodexResident } from "./codex-resident.js";
 import { spawnForRun, detachedInfo } from "./detached.js";
 import { spawnAgent, resumeFor, resumeInner, spawnErrorMessage, killChild, forceFinishOnExit, redactSecrets } from "./spawn.js";
 import { relayApi } from "../llm.js";
@@ -69,7 +70,11 @@ export class CodexExecutor implements AgentExecutor {
     return this.relay ? { [RELAY_ENV_KEY]: this.relay.apiKey } : undefined;
   }
 
-  run(opts: RunOpts): RunHandle {
+  // 一次性 run 与常驻回合共用的参数装配。`-C`/`--json`/`-m`/sandbox 是
+  // `codex exec` 的选项;`resume` 是子命令,只吃自己的 flag + [SESSION_ID]
+  // [PROMPT] —— 所以 exec 选项必须排在 `resume` **前面**(否则 "unexpected
+  // argument '-C'")。
+  private execArgs(opts: { cwd: string; model?: string; extraArgs?: string[] }, sessionId: string): string[] {
     const model = opts.model ?? this.model;
     const common = ["--json", "--skip-git-repo-check", "-C", opts.cwd, "--dangerously-bypass-approvals-and-sandbox"];
     if (model) common.push("-m", model);
@@ -81,13 +86,11 @@ export class CodexExecutor implements AgentExecutor {
     // 注册表配置的固定参数在前,单次调用的 opts.extraArgs 在后(后者可覆盖前者)。
     if (this.extraArgs.length) common.push(...this.extraArgs);
     if (opts.extraArgs?.length) common.push(...opts.extraArgs);
-    // `-C`/`--json`/`-m`/sandbox are `codex exec` options; `resume` is a
-    // subcommand that takes only its own flags + [SESSION_ID] [PROMPT]. So the
-    // exec options must precede `resume`, not follow it (else: "unexpected argument '-C'").
-    const args = opts.sessionId
-      ? ["exec", ...common, "resume", opts.sessionId, "-"]
-      : ["exec", ...common, "-"];
+    return sessionId ? ["exec", ...common, "resume", sessionId, "-"] : ["exec", ...common, "-"];
+  }
 
+  run(opts: RunOpts): RunHandle {
+    const args = this.execArgs(opts, opts.sessionId ?? "");
     const commandLine = redactSecrets(`${this.bin} ${args.join(" ")} <prompt via stdin>`);
     const child = spawnForRun(this.target, opts.cwd, this.bin, args, opts.prompt, this.env(), opts.detach);
     const lifecycle = { stopRequested: false };
@@ -116,6 +119,31 @@ export class CodexExecutor implements AgentExecutor {
       },
       detached: detachedInfo(child),
     };
+  }
+
+  // 常驻会话(§Team 的调度台)。codex 没有 claude 那种 stdin 注入通道,所以这里
+  // 是**会话级常驻**:每个回合起一个 `codex exec resume <thread_id>` 进程,会话
+  // 在 codex 自己的 thread 里连着。取舍、实测结论与两处可见差异写在
+  // executors/codex-resident.ts 头部。
+  openResident(opts: RunOpts): ResidentHandle {
+    return openCodexResident({
+      initialSessionId: opts.sessionId ?? "",
+      initialPrompt: opts.prompt,
+      startTurn: (prompt, sessionId) => {
+        const args = this.execArgs(opts, sessionId);
+        const lifecycle = { stopRequested: false };
+        // 常驻的每一轮都是**新进程**,所以 stdin 照旧读完即关(keepStdin 是
+        // claude 那种「一个进程吃多个回合」才需要的)。
+        const child = spawnAgent(this.target, opts.cwd, this.bin, args, prompt, this.env());
+        return {
+          child,
+          commandLine: redactSecrets(`${this.bin} ${args.join(" ")} <prompt via stdin>`),
+          lifecycle,
+          events: parseCodexStream(child, undefined, lifecycle),
+        };
+      },
+      killTurn: (child) => killChild(child),
+    });
   }
 }
 

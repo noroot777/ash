@@ -52,12 +52,14 @@ for (const s of CLI_SPECS) {
   if (s.untested) assert.ok((s.notes ?? "").length > 20, `${s.key}: 标了 untested 就得在 notes 里写清待核实的点`);
 }
 
-// ③ 常驻会话只有 claude —— 团队调度者的过滤就靠这一条,破了它下拉里会冒出跑不了的 CLI
+// ③ 常驻会话只有专用类实现 —— 团队调度者的过滤就靠这一条,破了它下拉里会冒出跑不了的 CLI。
+// claude:进程级常驻(stdin 双向注入);codex:会话级常驻(每回合一个 `exec resume` 进程,
+// 见 executors/codex-resident.ts)。GenericCliExecutor 一律不实现。
 const residentKeys = CLI_SPECS.filter((s) => {
   const ex = s.factory ? s.factory({}) : new GenericCliExecutor(s, {});
   return !!ex.openResident;
 }).map((s) => s.key);
-assert.deepEqual(residentKeys, ["claude"], "只有 claude 支持常驻会话(GenericCliExecutor 一律不实现)");
+assert.deepEqual(residentKeys, ["claude", "codex"], "只有 claude/codex 支持常驻会话(GenericCliExecutor 一律不实现)");
 
 // 每个执行器的 type 必须等于自己的 key(展示、筛选、降级都按它认人)
 for (const s of CLI_SPECS) {
