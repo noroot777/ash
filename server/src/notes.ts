@@ -1,8 +1,8 @@
-import type { Note } from "@harness/shared";
-import { desc, eq } from "drizzle-orm";
+import type { Note, NoteTaskLink, TaskStatus } from "@harness/shared";
+import { desc, eq, inArray } from "drizzle-orm";
 import type { Hono } from "hono";
 import { db } from "./db/index.js";
-import { notes, projects, tasks } from "./db/schema.js";
+import { notes, noteTasks, projects, tasks } from "./db/schema.js";
 import { id } from "./util.js";
 
 type NoteBody = {
@@ -18,7 +18,7 @@ function attachments(value: unknown): string[] | null {
   return [...new Set(value.map((item) => item.trim()).filter(Boolean))];
 }
 
-function toNote(row: typeof notes.$inferSelect): Note {
+function toNote(row: typeof notes.$inferSelect, taskLinks: NoteTaskLink[] = []): Note {
   let parsed: string[] = [];
   try {
     const value = row.attachments ? JSON.parse(row.attachments) : [];
@@ -26,7 +26,31 @@ function toNote(row: typeof notes.$inferSelect): Note {
   } catch {
     /* malformed legacy value: expose an empty list instead of breaking the modal */
   }
-  return { ...row, attachments: parsed };
+  return { ...row, attachments: parsed, taskLinks };
+}
+
+async function withTaskLinks(rows: (typeof notes.$inferSelect)[]): Promise<Note[]> {
+  if (!rows.length) return [];
+  const links = await db
+    .select({
+      noteId: noteTasks.noteId,
+      taskId: tasks.id,
+      title: tasks.title,
+      status: tasks.status,
+      archived: tasks.archived,
+      linkedAt: noteTasks.createdAt,
+    })
+    .from(noteTasks)
+    .innerJoin(tasks, eq(noteTasks.taskId, tasks.id))
+    .where(inArray(noteTasks.noteId, rows.map((row) => row.id)))
+    .orderBy(desc(noteTasks.createdAt));
+  const byNote = new Map<string, NoteTaskLink[]>();
+  for (const link of links) {
+    const current = byNote.get(link.noteId) ?? [];
+    current.push({ ...link, status: link.status as TaskStatus });
+    byNote.set(link.noteId, current);
+  }
+  return rows.map((row) => toNote(row, byNote.get(row.id) ?? []));
 }
 
 export function mountNoteRoutes(api: Hono) {
@@ -35,7 +59,7 @@ export function mountNoteRoutes(api: Hono) {
     const rows = projectId
       ? await db.select().from(notes).where(eq(notes.projectId, projectId)).orderBy(desc(notes.updatedAt))
       : await db.select().from(notes).orderBy(desc(notes.updatedAt));
-    return c.json(rows.map(toNote));
+    return c.json(await withTaskLinks(rows));
   });
 
   api.post("/notes", async (c) => {
@@ -58,7 +82,6 @@ export function mountNoteRoutes(api: Hono) {
       projectId: project.id,
       body: body.body,
       attachments: files?.length ? JSON.stringify(files) : null,
-      taskId: null,
       createdAt: timestamp,
       updatedAt: timestamp,
     };
@@ -81,6 +104,7 @@ export function mountNoteRoutes(api: Hono) {
       if (files === null) return c.json({ error: "attachments must be a string array" }, 400);
       patch.attachments = files.length ? JSON.stringify(files) : null;
     }
+    let linksChanged = false;
     if (body.taskId !== undefined) {
       if (body.taskId !== null && typeof body.taskId !== "string") {
         return c.json({ error: "taskId must be a string or null" }, 400);
@@ -89,21 +113,25 @@ export function mountNoteRoutes(api: Hono) {
         const task = (await db.select().from(tasks).where(eq(tasks.id, body.taskId))).at(0);
         if (!task) return c.json({ error: "task not found" }, 404);
         if (task.projectId !== existing.projectId) return c.json({ error: "task belongs to another project" }, 400);
+        await db.insert(noteTasks).values({ noteId, taskId: task.id, createdAt: Date.now() }).onConflictDoNothing();
+      } else {
+        await db.delete(noteTasks).where(eq(noteTasks.noteId, noteId));
       }
-      patch.taskId = body.taskId;
+      linksChanged = true;
     }
-    if (Object.keys(patch).length) {
+    if (Object.keys(patch).length || linksChanged) {
       patch.updatedAt = Date.now();
       await db.update(notes).set(patch).where(eq(notes.id, noteId));
     }
     const updated = (await db.select().from(notes).where(eq(notes.id, noteId))).at(0)!;
-    return c.json(toNote(updated));
+    return c.json((await withTaskLinks([updated]))[0]);
   });
 
   api.delete("/notes/:id", async (c) => {
     const noteId = c.req.param("id");
     const existing = (await db.select({ id: notes.id }).from(notes).where(eq(notes.id, noteId))).at(0);
     if (!existing) return c.json({ error: "not found" }, 404);
+    await db.delete(noteTasks).where(eq(noteTasks.noteId, noteId));
     await db.delete(notes).where(eq(notes.id, noteId));
     return c.json({ deleted: true });
   });

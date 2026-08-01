@@ -428,15 +428,30 @@ export function NotesPanel({ project, initialNoteId, onClose, onTask, onConvert,
         <div className="notes-body">
           <aside className="notes-list"><div className="notes-list-tools"><label><MagnifyingGlass size={14} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索随手记…" /></label><button type="button" onClick={() => void create()} aria-label="新建随手记"><Plus size={15} /></button></div><div className="notes-scroll" role="list" aria-label="随手记列表">
             {!loading && newDraft && <div className="note-row ui-selectable is-selected" role="listitem"><span className="note-pick-placeholder" /><button className="note-row-main" type="button" onClick={() => setEditing(true)}><b>{titleOf(draft.body)}</b><small>{draft.body.trim() ? saveStatus : "尚未保存"}</small></button></div>}
-            {filtered.map((note) => <div className={`note-row ui-selectable${note.taskId ? " is-converted" : ""}${note.id === draft.id ? " is-selected" : ""}`} key={note.id} role="listitem">
+            {filtered.map((note) => <div className={`note-row ui-selectable${note.taskLinks.length ? " is-converted" : ""}${note.id === draft.id ? " is-selected" : ""}`} key={note.id} role="listitem">
               <button className="note-pick" type="button" role="checkbox" aria-checked={picked.has(note.id)} aria-label={`选择 ${titleOf(note.body)}`} onClick={() => togglePicked(note.id)}><span className={`ui-checkbox${picked.has(note.id) ? " is-checked" : ""}`} aria-hidden="true" /></button>
               <button className="note-row-main" type="button" onClick={() => void select(note)}><b>{titleOf(note.id === draft.id ? draft.body : note.body)}</b><small>{noteTime(note.updatedAt)}</small></button>
-              {note.taskId && <button className="note-task-badge" type="button" title="打开关联任务" onClick={async () => { if (await flushDraft()) onTask(note.taskId!); }}><CheckCircle size={12} weight="duotone" aria-hidden="true" /><span>已转任务</span><ArrowSquareOut className="note-task-arrow" size={11} aria-hidden="true" /></button>}
+              {note.taskLinks.length > 0 && <button className="note-task-badge" type="button" title="打开最近关联任务" onClick={async () => { if (await flushDraft()) onTask(note.taskLinks[0].taskId); }}><CheckCircle size={12} weight="duotone" aria-hidden="true" /><span>已转 {note.taskLinks.length} 个</span><ArrowSquareOut className="note-task-arrow" size={11} aria-hidden="true" /></button>}
             </div>)}
             {loading && <p>读取中…</p>}{!loading && !filtered.length && !newDraft && <p>没有匹配的随手记</p>}
           </div></aside>
-          <main className="note-editor">
-            <div className="note-meta"><span>{newDraft ? "新随手记" : active ? `创建于 ${new Date(active.createdAt).toLocaleString("zh-CN")} · ${saveStatus}` : "新随手记"}</span>{active?.taskId && <button type="button" onClick={async () => { if (await flushDraft()) onTask(active.taskId!); }}>关联任务 ↗</button>}</div>
+          <main className={`note-editor${active?.taskLinks.length ? " has-task-links" : ""}`}>
+            <div className="note-meta"><span>{newDraft ? "新随手记" : active ? `创建于 ${new Date(active.createdAt).toLocaleString("zh-CN")} · ${saveStatus}` : "新随手记"}</span></div>
+            {active?.taskLinks.length ? (
+              <section className="note-task-links" aria-label={`已转任务，共 ${active.taskLinks.length} 个`}>
+                <b>已转任务（{active.taskLinks.length}）</b>
+                <div>
+                  {active.taskLinks.map((link) => (
+                    <button type="button" key={link.taskId} onClick={async () => { if (await flushDraft()) onTask(link.taskId); }}>
+                      <CheckCircle size={12} weight="duotone" aria-hidden="true" />
+                      <span>{link.title}</span>
+                      {link.archived && <small>已归档</small>}
+                      <ArrowSquareOut size={11} aria-hidden="true" />
+                    </button>
+                  ))}
+                </div>
+              </section>
+            ) : null}
             {editing ? (
               <textarea autoFocus value={draft.body} onChange={(event) => updateDraft({ ...draftRef.current, body: event.target.value })} onPaste={uploads.onPaste} onBlur={() => setEditing(false)} placeholder="记下临时想法、路径、验证清单…" />
             ) : (

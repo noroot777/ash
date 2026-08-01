@@ -7,6 +7,7 @@ import { ConfirmModal, Modal, primaryCls } from "./Modal";
 import { AttachmentDisplay } from "./messageAttachments";
 import { ImagePreviewGroup } from "./ImagePreview";
 import { AttachButton, AttachmentChips, usePasteAttachments } from "./pasteAttachments";
+import { StatusIcon } from "./StatusIcon";
 import { toast } from "./toast";
 import { ModalFullscreenButton, useMovableModal } from "./useMovableModal";
 
@@ -209,7 +210,7 @@ export function NotesModal({
     }
     if (!await flushDraft()) return;
     const now = Date.now();
-    const temp: Note = { id: NEW_NOTE_ID, projectId: project.id, body: "", attachments: [], taskId: null, createdAt: now, updatedAt: now };
+    const temp: Note = { id: NEW_NOTE_ID, projectId: project.id, body: "", attachments: [], taskLinks: [], createdAt: now, updatedAt: now };
     updateRows((current) => [temp, ...current.filter((note) => note.id !== NEW_NOTE_ID)]);
     const next = { id: NEW_NOTE_ID, body: "", attachments: [] };
     savedDraftRef.current = next;
@@ -347,7 +348,7 @@ export function NotesModal({
                   key={note.id}
                   className={`flex w-full items-start gap-2 border-b border-line px-3 py-2.5 text-left transition-colors ${
                     note.id === activeId ? "bg-panel" : "hover:bg-panel/70"
-                  } ${note.taskId ? "opacity-60" : ""}`}
+                  } ${note.taskLinks.length ? "opacity-60" : ""}`}
                 >
                   {note.id === NEW_NOTE_ID ? (
                     <span className="mt-0.5 w-[13px] shrink-0" />
@@ -366,7 +367,9 @@ export function NotesModal({
                     </span>
                     <span className="mt-0.5 flex items-center gap-1.5 text-[10px] text-faint">
                       {noteTime(note.updatedAt)}
-                      {note.taskId && <span className="rounded bg-overlay px-1 py-0.5">已转任务</span>}
+                      {note.taskLinks.length > 0 && (
+                        <span className="rounded bg-overlay px-1 py-0.5">已转 {note.taskLinks.length} 个任务</span>
+                      )}
                     </span>
                   </button>
                 </div>
@@ -415,13 +418,24 @@ export function NotesModal({
                     <Trash size={15} />
                   </button>
                 </div>
-                {active.taskId && (
-                  <button
-                    onClick={() => { void flushDraft().then((saved) => { if (saved) onOpenTask(active.taskId!); }); }}
-                    className="mb-4 inline-flex w-fit items-center gap-1.5 rounded-md bg-raised px-2.5 py-1.5 text-[12px] text-muted hover:text-accent"
-                  >
-                    已转为任务 <ArrowSquareOut size={13} />
-                  </button>
+                {active.taskLinks.length > 0 && (
+                  <div className="mb-4 rounded-lg border border-line bg-raised/60 p-2.5">
+                    <p className="mb-1.5 text-[11px] font-medium text-faint">已转任务（{active.taskLinks.length}）</p>
+                    <div className="space-y-1">
+                      {active.taskLinks.map((link) => (
+                        <button
+                          key={link.taskId}
+                          onClick={() => { void flushDraft().then((saved) => { if (saved) onOpenTask(link.taskId); }); }}
+                          className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[12px] text-muted hover:bg-overlay hover:text-accent"
+                        >
+                          <StatusIcon status={link.status} />
+                          <span className="min-w-0 flex-1 truncate">{link.title}</span>
+                          {link.archived && <span className="shrink-0 rounded bg-overlay px-1 text-[10px] text-faint">已归档</span>}
+                          <ArrowSquareOut size={13} className="shrink-0" />
+                        </button>
+                      ))}
+                    </div>
+                  </div>
                 )}
                 <ImagePreviewGroup>
                   {bodyFocused ? (

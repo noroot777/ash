@@ -336,7 +336,7 @@ export const api = {
     request("/notes", json("POST", note)),
   patchNote: (
     noteId: string,
-    patch: Partial<Pick<Note, "body" | "attachments" | "taskId">>,
+    patch: Partial<Pick<Note, "body" | "attachments">> & { taskId?: string | null },
   ): Promise<Note> => request(`/notes/${id(noteId)}`, json("PATCH", patch)),
   deleteNote: (noteId: string): Promise<{ deleted: true }> =>
     request(`/notes/${id(noteId)}`, { method: "DELETE" }),

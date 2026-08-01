@@ -13,7 +13,7 @@
 ## 主工作区
 
 - **新建任务是内嵌面板不是弹层**：点新建后右侧详情区整个换成 `TaskComposer`（`web/src/TaskComposer.tsx` + `web/src/composer/*`），开关状态单点在 `useComposer`（`web/src/useComposer.ts`）。因此它**不进 `anyModal`**——j/k/c 这些全局键在它开着时照常生效。任何新增的「打开新建」入口都必须走 `openComposerAt`：记下当前选中塞进 `returnTo`、再把选中清空（列表不高亮任何一行），取消时切回去；反过来，任何会切走选中的动作（点列表、j/k、`openTask`）都要先 `closeComposer()`，否则右侧还挂着单子、左侧却高亮了别的任务。已经开着时再调 `openComposer` 只换模式、**绝不冲掉用户填的内容**，除非带来一份新的种子正文（随手记合并建任务），那才 `seq+1` 重新播种。Esc 仍复用 `useEscape` 的栈，所以 preset 对话框、新建分组等真弹层照旧优先关闭。理由：这张单子是主工作区的一个状态，不是打断你的对话框——用弹窗时正文被挤在 640px 里、还得靠「展开/收起」找地方写，而它恰恰是整张单子里最该大的那一块。
-- **随手记按创建时的当前项目归属**（`notes.project_id`），正文原样保存、不做 AI 解析也没有独立标题；合并创建任务后不删除，只用 `task_id` 回链所建任务。命令面板的序列快捷键统一声明在 `Command.keys`、匹配单点在 `web/src/CommandPalette.tsx`，不要为 NI/NL 另写特判。
+- **随手记按创建时的当前项目归属**（`notes.project_id`），正文原样保存、不做 AI 解析也没有独立标题；合并创建任务后不删除，每次通过 `note_tasks` 追加回链，保留全部转任务历史并按同一任务去重。命令面板的序列快捷键统一声明在 `Command.keys`、匹配单点在 `web/src/CommandPalette.tsx`，不要为 NI/NL 另写特判。
 - 普通任务（`mode:"single"`）回复框里的 `/team` / `/debate` 是**派生命令**：大小写不敏感且按词边界识别，**命中即在回复框上方弹出配置卡**（live 预览：不抢焦点，命令后的尾巴文本实时同步进附言/辩题；回车定稿——输入框清空、焦点移进卡片，此后输入不再影响卡片，用卡上的 X 关闭），命令文本绝不进入当前 agent 会话；新任务统一写 `originTaskId=<来源 taskId>`，正文带来源标题/目标/状态、可用时的最新完整会话路径和用户补充。配置卡字段与新建面板同款（`TeamExecutorFields` / `DebateComposerFields`，含任务级模型/思考强度覆盖），不另造第二套选择器。派生任务的 worktree **不显式传 `useWorktree`**，跟随 `createTasks` 单点的全局 `worktreeDefault`；来源任务的 `harness/<id8>` 分支仍存在时以它为 base（默认关闭时 base 由服务端清空，卡片提示会明说不含来源分支改动），确保来源任务的代码改动进入团队执行或辩论上下文。
 
 - **会话贴底统一走 `web/src/useStickToBottom.ts`**：单任务、辩论、团队调度台这类长会话滚动容器必须复用同一个 hook。hook 要观察内容尺寸变化（图片异步解码后也能继续补滚到底），并区分程序滚动与用户 wheel / touch / 键盘 / 滚动条拖动意图；用户滚上去读历史后不能被新消息强行拽回，切换任务时必须重置贴底态。

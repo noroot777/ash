@@ -4,7 +4,7 @@ import { inheritExecutorOverrides, pickExecutor, sameExecutor } from "@harness/s
 import { asc, eq } from "drizzle-orm";
 import type { Hono } from "hono";
 import { db } from "./db/index.js";
-import { agents, groups, projects, queueItems, tasks } from "./db/schema.js";
+import { agents, groups, noteTasks, projects, queueItems, tasks } from "./db/schema.js";
 import { repoKey } from "./git.js";
 import { detectTaskWorkspace, discardTaskWorkspace } from "./workspace-cleanup.js";
 import { advanceQueue, pauseGroup, runGroup } from "./scheduler.js";
@@ -296,6 +296,7 @@ api.delete("/tasks/:id", async (c) => {
     : undefined;
   const wantWorktree = c.req.query("worktree") === "1";
   const wantBranch = c.req.query("branch") === "1";
+  await db.delete(noteTasks).where(eq(noteTasks.taskId, tid));
   await db.delete(tasks).where(eq(tasks.id, tid));
   let cleanup: TaskWorkspaceDiscardResult | null = null;
   if (project && (wantWorktree || wantBranch)) {

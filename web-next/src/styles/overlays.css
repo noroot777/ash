@@ -440,6 +440,10 @@
   background: var(--panel);
 }
 
+.note-editor.has-task-links {
+  grid-template-rows: 40px auto minmax(0, 1fr) auto auto;
+}
+
 .note-meta {
   display: flex;
   align-items: center;
@@ -455,6 +459,56 @@
   background: transparent;
   color: var(--accent);
   font-size: 10px;
+}
+
+.note-task-links {
+  border-bottom: 1px solid var(--line);
+  padding: 9px 16px;
+}
+
+.note-task-links > b {
+  display: block;
+  margin-bottom: 5px;
+  color: var(--faint);
+  font-size: 9px;
+  font-weight: 600;
+}
+
+.note-task-links > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.note-task-links button {
+  display: inline-flex;
+  min-width: 0;
+  max-width: 260px;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--raised);
+  padding: 4px 7px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.note-task-links button:hover {
+  border-color: color-mix(in lch, var(--accent) 38%, var(--line));
+  color: var(--accent);
+}
+
+.note-task-links button span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.note-task-links button small {
+  flex: none;
+  color: var(--faint);
+  font-size: 8px;
 }
 
 .note-editor > textarea,
