@@ -175,14 +175,24 @@ export async function consumeSingleRun(a: {
   let exitStatus = 0;
   let titleDone = !a.autoTitle; // when autoTitle, swallow text until the title line is parsed
   let head = "";
+  let pendingTraceText = "";
+  const flushTraceText = () => {
+    if (!pendingTraceText) return;
+    appendSessionTrace(taskId, sessId, a.turnStart, { kind: "text", text: pendingTraceText });
+    pendingTraceText = "";
+  };
   const emitText = (text: string) => {
     if (!text) return;
     out.write(text);
+    pendingTraceText += text;
     bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: "single", agentType, event: { kind: "text", text } });
   };
   const persistTrace = (event: AgentEvent, at?: string) => {
     if (event.kind === "thinking" || event.kind === "tool" || event.kind === "error") {
+      flushTraceText();
       appendSessionTrace(taskId, sessId, a.turnStart, event, at);
+    } else if (event.kind === "done" || event.kind === "turnEnd") {
+      flushTraceText();
     }
   };
 
@@ -233,8 +243,7 @@ export async function consumeSingleRun(a: {
         continue;
       }
       if (event.kind === "text") {
-        out.write(event.text);
-        bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: "single", agentType, event });
+        emitText(event.text);
       } else {
         persistTrace(event);
         if (event.kind === "error") writeRunError(out, event.message);
@@ -246,6 +255,7 @@ export async function consumeSingleRun(a: {
     if (offsetTimer) clearInterval(offsetTimer);
   }
   if (!titleDone && head) emitText(head); // agent never produced a newline
+  flushTraceText();
 
   // A stop kills the subprocess → the stream ends like a normal exit; settle
   // by the stop kind (manual → canceled, group pause → paused) so it can be

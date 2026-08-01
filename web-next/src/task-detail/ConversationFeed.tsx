@@ -1,4 +1,4 @@
-import { useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { CaretRight, Copy, File, Wrench, X } from "@phosphor-icons/react";
 import type { AgentAuxEvent, ConversationItem } from "./conversationModel.ts";
 import { ConversationScrollControls } from "../components/ConversationScrollControls.tsx";
@@ -12,24 +12,94 @@ function copyText(text: string) {
   void navigator.clipboard.writeText(text);
 }
 
-function ExecutionDetails({ events, running }: { events: AgentAuxEvent[]; running: boolean }) {
+function compact(text: string, limit = 52): string {
+  const clean = text.replace(/\s+/g, " ").trim();
+  return clean.length > limit ? `${clean.slice(0, limit - 1)}…` : clean;
+}
+
+function eventPreview(event: AgentAuxEvent): string {
+  if (event.kind === "error") return compact(`异常 · ${event.label}`);
+  if (event.kind === "thinking") return compact(`分析 · ${event.detail || event.label}`);
+  return compact(`${event.label}${event.detail ? ` · ${event.detail}` : ""}`);
+}
+
+function textSwapDuration(): number {
+  if (typeof document === "undefined") return 150;
+  return parseFloat(
+    getComputedStyle(document.documentElement).getPropertyValue("--text-swap-dur"),
+  ) || 150;
+}
+
+function TransientExecutionLabel({
+  baseLabel,
+  events,
+  running,
+}: {
+  baseLabel: string;
+  events: AgentAuxEvent[];
+  running: boolean;
+}) {
+  const label = useRef<HTMLSpanElement>(null);
+  const previousCount = useRef(running ? 0 : events.length);
+  const [display, setDisplay] = useState(baseLabel);
+  const [phase, setPhase] = useState("");
+  const latestPreview = events.length ? eventPreview(events.at(-1)!) : "";
+
+  useEffect(() => {
+    if (!running) {
+      previousCount.current = events.length;
+      setDisplay(baseLabel);
+      setPhase("");
+      return;
+    }
+    if (events.length <= previousCount.current) return;
+    previousCount.current = events.length;
+    if (!latestPreview) return;
+
+    const timers: number[] = [];
+    const frames: number[] = [];
+    const swapText = (next: string, settled?: () => void) => {
+      setPhase("is-exit");
+      timers.push(window.setTimeout(() => {
+        setDisplay(next);
+        setPhase("is-enter-start");
+        frames.push(window.requestAnimationFrame(() => {
+          if (label.current) void label.current.offsetHeight;
+          setPhase("");
+          settled?.();
+        }));
+      }, textSwapDuration()));
+    };
+    swapText(latestPreview, () => {
+      timers.push(window.setTimeout(() => swapText(baseLabel), 3_600));
+    });
+    return () => {
+      timers.forEach(window.clearTimeout);
+      frames.forEach(window.cancelAnimationFrame);
+    };
+  }, [baseLabel, events.length, latestPreview, running]);
+
+  return <span className={`task-execution-label t-text-swap ${phase}`} ref={label}>{display}</span>;
+}
+
+export function ExecutionDetails({ events, running }: { events: AgentAuxEvent[]; running: boolean }) {
   if (!events.length) return null;
   const thinking = events.filter((event) => event.kind === "thinking").length;
   const tools = events.filter((event) => event.kind === "tool").length;
   const errors = events.filter((event) => event.kind === "error").length;
   const counts = [
-    thinking ? `${thinking} 次分析` : "",
-    tools ? `${tools} 次工具` : "",
-    errors ? `${errors} 个异常` : "",
+    thinking ? `${thinking} 分析` : "",
+    tools ? `${tools} 工具` : "",
+    errors ? `${errors} 异常` : "",
   ].filter(Boolean).join(" · ");
+  const baseLabel = `执行过程${counts ? ` · ${counts}` : ""}`;
 
   return (
     <details className={`task-execution-block${errors ? " has-error" : ""}`}>
       <summary>
         <CaretRight className="task-execution-caret" size={11} weight="bold" aria-hidden="true" />
         {running && <span className="task-execution-pulse" aria-hidden="true" />}
-        <span className="task-execution-title">执行过程</span>
-        <small>{counts || `${events.length} 个步骤`}</small>
+        <TransientExecutionLabel baseLabel={baseLabel} events={events} running={running} />
       </summary>
       <div className="task-execution-events">
         {events.map((event, index) => (
@@ -68,8 +138,12 @@ function AgentMessage({
             <Copy size={13} aria-hidden="true" />
           </button>
         </header>
-        {item.markdown && <MarkdownBody text={item.markdown} />}
-        <ExecutionDetails events={item.events} running={!item.endedAt} />
+        {item.segments.map((segment, index) => (
+          <section className="task-agent-segment" key={segment.id}>
+            <ExecutionDetails events={segment.events} running={!item.endedAt && index === item.segments.length - 1} />
+            {segment.markdown && <MarkdownBody text={segment.markdown} />}
+          </section>
+        ))}
         {item.showSessionMeta && item.session && <SessionMeta session={item.session} />}
       </div>
     </article>

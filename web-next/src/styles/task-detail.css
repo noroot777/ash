@@ -250,21 +250,51 @@
 .markdown-report-error { margin: 0; color: var(--faint); font-size: 12px; }
 .markdown-report-error { color: var(--red); }
 
-.task-execution-block { max-width: 680px; margin-top: 8px; border: 0; color: var(--faint); font-size: 10.5px; }
-.task-execution-block > summary { display: inline-flex; max-width: 100%; cursor: pointer; align-items: center; gap: 6px; border-radius: 6px; padding: 4px 7px; list-style: none; }
-.task-execution-block > summary:hover { background: var(--raised); color: var(--muted); }
+:root {
+  --text-swap-dur: 150ms;
+  --text-swap-translate-y: 4px;
+  --text-swap-blur: 2px;
+  --text-swap-ease: ease-in-out;
+}
+
+.t-text-swap {
+  display: inline-block;
+  transform: translateY(0);
+  filter: blur(0);
+  opacity: 1;
+  transition:
+    transform var(--text-swap-dur) var(--text-swap-ease),
+    filter    var(--text-swap-dur) var(--text-swap-ease),
+    opacity   var(--text-swap-dur) var(--text-swap-ease);
+  will-change: transform, filter, opacity;
+}
+.t-text-swap.is-exit {
+  transform: translateY(calc(var(--text-swap-translate-y) * -1));
+  filter: blur(var(--text-swap-blur));
+  opacity: 0;
+}
+.t-text-swap.is-enter-start {
+  transform: translateY(var(--text-swap-translate-y));
+  filter: blur(var(--text-swap-blur));
+  opacity: 0;
+  transition: none;
+}
+
+.task-agent-segment + .task-agent-segment { margin-top: 7px; }
+.task-execution-block { max-width: 680px; margin: 2px 0 1px; border: 0; color: color-mix(in srgb, var(--faint) 76%, transparent); font-size: 9.5px; }
+.task-execution-block > summary { display: inline-flex; max-width: 100%; cursor: pointer; align-items: center; gap: 4px; border-radius: 5px; padding: 2px 3px; list-style: none; opacity: .72; transition: color 150ms ease, opacity 150ms ease; }
+.task-execution-block > summary:hover { color: var(--faint); opacity: 1; }
 .task-execution-block > summary::-webkit-details-marker { display: none; }
 .task-execution-block > summary:focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 38%, transparent); outline-offset: 1px; }
-.task-execution-caret { flex: none; transition: transform 140ms ease; }
+.task-execution-caret { flex: none; opacity: .52; transition: transform 140ms ease; }
 .task-execution-block[open] > summary .task-execution-caret { transform: rotate(90deg); }
-.task-execution-title { color: var(--muted); font-weight: 620; }
-.task-execution-block > summary small { overflow: hidden; color: var(--faint); font-size: 9.5px; font-weight: 450; text-overflow: ellipsis; white-space: nowrap; }
-.task-execution-block.has-error > summary small { color: var(--red); }
-.task-execution-pulse { width: 5px; height: 5px; flex: none; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent); }
-.task-execution-events { margin: 2px 0 0 12px; border-left: 1px solid var(--line); padding: 1px 0 3px 8px; }
-.task-tool-line { margin-top: 3px; border: 0; color: var(--faint); font-size: 10.5px; }
+.task-execution-label { max-width: min(58vw, 520px); overflow: hidden; font-weight: 450; text-overflow: ellipsis; white-space: nowrap; }
+.task-execution-block.has-error > summary { color: color-mix(in srgb, var(--red) 68%, var(--faint)); }
+.task-execution-pulse { width: 3px; height: 3px; flex: none; border-radius: 50%; background: currentColor; opacity: .72; }
+.task-execution-events { margin: 1px 0 1px 7px; border-left: 1px solid color-mix(in srgb, var(--line) 72%, transparent); padding: 1px 0 2px 6px; }
+.task-tool-line { margin-top: 2px; border: 0; color: color-mix(in srgb, var(--faint) 82%, transparent); font-size: 9.5px; }
 .task-tool-line summary { display: inline-flex; max-width: 100%; cursor: pointer; align-items: center; gap: 6px; border-radius: 6px; padding: 3px 6px; list-style: none; }
-.task-tool-line summary:hover { background: var(--raised); color: var(--muted); }
+.task-tool-line summary:hover { color: var(--muted); }
 .task-tool-line summary::-webkit-details-marker { display: none; }
 .task-tool-line summary span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .task-tool-line pre { max-height: 220px; overflow: auto; margin: 4px 0 2px 6px; border-left: 2px solid var(--line); padding: 4px 8px; white-space: pre-wrap; }
@@ -604,6 +634,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .t-text-swap { transition: none !important; }
   .is-spinning { animation: none; }
   .task-execution-caret { transition: none; }
 }

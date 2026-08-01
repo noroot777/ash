@@ -19,16 +19,21 @@ try {
     text: "检查现有实现",
   }, "2026-08-01T01:00:01.000Z");
   appendSessionTrace(taskId, sessionId, turnStartedAt, {
+    kind: "text",
+    text: "先说明第一段。",
+  }, "2026-08-01T01:00:01.500Z");
+  appendSessionTrace(taskId, sessionId, turnStartedAt, {
     kind: "tool",
     name: "exec",
     detail: "rg -n trace",
   }, "2026-08-01T01:00:02.000Z");
 
   const parsed = parseSessionTrace(`${readFileSync(path, "utf8")}not-json\n`);
-  assert.equal(parsed.length, 2);
+  assert.equal(parsed.length, 3);
   assert.equal(parsed[0]?.event.kind, "thinking");
-  assert.equal(parsed[1]?.event.kind, "tool");
-  assert.equal(parsed[1]?.turnStartedAt, turnStartedAt);
+  assert.equal(parsed[1]?.event.kind, "text");
+  assert.equal(parsed[2]?.event.kind, "tool");
+  assert.equal(parsed[2]?.turnStartedAt, turnStartedAt);
   console.log("会话执行轨迹持久化验证通过");
 } finally {
   rmSync(dirname(path), { recursive: true, force: true });

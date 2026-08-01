@@ -93,6 +93,7 @@ export type SessionTraceEntry = {
   at: string;
   turnStartedAt: string;
   event:
+    | { kind: "text"; text: string }
     | { kind: "thinking"; text: string }
     | { kind: "tool"; name: string; detail?: string }
     | { kind: "error"; message: string };

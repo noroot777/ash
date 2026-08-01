@@ -15,6 +15,12 @@ export type AgentAuxEvent = {
   detail?: string;
 };
 
+export type AgentContentSegment = {
+  id: string;
+  markdown: string;
+  events: AgentAuxEvent[];
+};
+
 export type ConversationItem =
   | {
       kind: "agent";
@@ -27,7 +33,7 @@ export type ConversationItem =
       showSessionMeta?: boolean;
       session?: Session;
       markdown: string;
-      events: AgentAuxEvent[];
+      segments: AgentContentSegment[];
     }
   | { kind: "user"; id: string; text: string; attachments: string[]; at?: string; isAnswer?: boolean }
   | { kind: "event"; id: string; text: string; at?: string; tone?: "neutral" | "error" };
@@ -43,21 +49,21 @@ function auxEvent(event: AgentTraceEvent): AgentAuxEvent {
   return { kind: "error", label: event.message };
 }
 
-function groupedTrace(trace: SessionTraceEntry[]): Map<string, AgentAuxEvent[]> {
-  const groups = new Map<string, AgentAuxEvent[]>();
+function groupedTrace(trace: SessionTraceEntry[]): Map<string, SessionTraceEntry[]> {
+  const groups = new Map<string, SessionTraceEntry[]>();
   for (const entry of trace) {
     const current = groups.get(entry.turnStartedAt) ?? [];
-    current.push(auxEvent(entry.event));
+    current.push(entry);
     groups.set(entry.turnStartedAt, current);
   }
   return groups;
 }
 
 function takeTraceGroup(
-  groups: Map<string, AgentAuxEvent[]>,
+  groups: Map<string, SessionTraceEntry[]>,
   consumed: Set<string>,
   turnStartedAt: string,
-): AgentAuxEvent[] {
+): SessionTraceEntry[] {
   if (groups.has(turnStartedAt) && !consumed.has(turnStartedAt)) {
     consumed.add(turnStartedAt);
     return groups.get(turnStartedAt) ?? [];
@@ -75,6 +81,71 @@ function takeTraceGroup(
   if (!nearest) return [];
   consumed.add(nearest);
   return groups.get(nearest) ?? [];
+}
+
+function contentSegments(
+  entries: SessionTraceEntry[],
+  fallbackMarkdown: string,
+  idPrefix: string,
+): AgentContentSegment[] {
+  const auxEntries = entries.filter((entry) => entry.event.kind !== "text");
+  if (!entries.some((entry) => entry.event.kind === "text")) {
+    return [{
+      id: `${idPrefix}:0`,
+      markdown: fallbackMarkdown,
+      events: auxEntries.map((entry) => auxEvent(entry.event as AgentTraceEvent)),
+    }];
+  }
+
+  const segments: AgentContentSegment[] = [];
+  let current: AgentContentSegment = { id: `${idPrefix}:0`, markdown: "", events: [] };
+  const pushCurrent = () => {
+    if (!current.markdown && !current.events.length) return;
+    segments.push(current);
+    current = { id: `${idPrefix}:${segments.length}`, markdown: "", events: [] };
+  };
+  for (const entry of entries) {
+    if (entry.event.kind === "text") {
+      current.markdown += entry.event.text;
+      continue;
+    }
+    if (current.markdown) pushCurrent();
+    current.events.push(auxEvent(entry.event));
+  }
+  pushCurrent();
+
+  const structuredMarkdown = segments.map((segment) => segment.markdown).join("");
+  if (structuredMarkdown.trim() === fallbackMarkdown.trim()) return segments;
+  // Partially written/legacy trace is still useful, but it cannot safely split
+  // the body. Keep one process block with the intact Markdown rather than drop or
+  // duplicate text.
+  return [{
+    id: `${idPrefix}:fallback`,
+    markdown: fallbackMarkdown || structuredMarkdown,
+    events: auxEntries.map((entry) => auxEvent(entry.event as AgentTraceEvent)),
+  }];
+}
+
+function currentSegment(agent: Extract<ConversationItem, { kind: "agent" }>): AgentContentSegment {
+  const existing = agent.segments.at(-1);
+  if (existing) return existing;
+  const created = { id: `${agent.id}:segment:0`, markdown: "", events: [] };
+  agent.segments.push(created);
+  return created;
+}
+
+function appendAgentText(agent: Extract<ConversationItem, { kind: "agent" }>, text: string): void {
+  agent.markdown += text;
+  currentSegment(agent).markdown += text;
+}
+
+function appendAgentAux(agent: Extract<ConversationItem, { kind: "agent" }>, event: AgentTraceEvent): void {
+  let segment = currentSegment(agent);
+  if (segment.markdown) {
+    segment = { id: `${agent.id}:segment:${agent.segments.length}`, markdown: "", events: [] };
+    agent.segments.push(segment);
+  }
+  segment.events.push(auxEvent(event));
 }
 
 function agentLabel(session: Session | undefined, event?: LiveAgentEvent): string {
@@ -100,7 +171,7 @@ function appendAgent(
     markerEndedAt: null,
     session,
     markdown: "",
-    events: [],
+    segments: [],
   };
   items.push(item);
   return item;
@@ -151,6 +222,7 @@ export function buildConversationItems(
         });
         turnStartedAt = segment.at ?? turnStartedAt;
       } else {
+        const traceEntries = takeTraceGroup(traceGroups, consumedTrace, turnStartedAt);
         items.push({
           kind: "agent",
           id: `persisted:agent:${session.id}:${index}`,
@@ -161,14 +233,15 @@ export function buildConversationItems(
           markerEndedAt: segment.endedAt ?? null,
           session,
           markdown: segment.text,
-          events: takeTraceGroup(traceGroups, consumedTrace, turnStartedAt),
+          segments: contentSegments(traceEntries, segment.text, `persisted:segment:${session.id}:${index}`),
         });
       }
     });
     // A failed turn can contain only tools/errors and no assistant prose. Keep
     // its execution block visible instead of dropping the persisted trace.
-    for (const [traceTurn, events] of traceGroups) {
+    for (const [traceTurn, entries] of traceGroups) {
       if (consumedTrace.has(traceTurn)) continue;
+      const segments = contentSegments(entries, "", `persisted:trace-segment:${session.id}:${traceTurn}`);
       items.push({
         kind: "agent",
         id: `persisted:trace:${session.id}:${traceTurn}`,
@@ -178,8 +251,8 @@ export function buildConversationItems(
         endedAt: null,
         markerEndedAt: null,
         session,
-        markdown: "",
-        events,
+        markdown: segments.map((segment) => segment.markdown).join(""),
+        segments,
       });
     }
   }
@@ -218,9 +291,9 @@ export function buildConversationItems(
     // cliSessionId 已经在会话详情/恢复按钮那里可查,会话流里不展示。
     if (event.kind === "session") continue;
     const agent = appendAgent(items, entry.event, sessions);
-    if (event.kind === "text") agent.markdown += event.text;
+    if (event.kind === "text") appendAgentText(agent, event.text);
     if (event.kind === "tool" || event.kind === "thinking" || event.kind === "error") {
-      agent.events.push(auxEvent(event));
+      appendAgentAux(agent, event);
     }
   }
 

@@ -1,7 +1,7 @@
 import { useRef } from "react";
 import type { Task } from "@harness/shared";
 import type { Batch } from "@harness/shared/team";
-import { ArrowElbowDownRight, ArrowRight, SpinnerGap, Wrench } from "@phosphor-icons/react";
+import { ArrowElbowDownRight, ArrowRight, SpinnerGap } from "@phosphor-icons/react";
 import { ConversationScrollControls } from "../components/ConversationScrollControls.tsx";
 import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
@@ -9,6 +9,7 @@ import { SessionMeta } from "../components/SessionMeta.tsx";
 import { TaskStatusDot } from "../components/TaskStatusDot.tsx";
 import type { IndicatorForTask } from "../lib/useTaskReadState.ts";
 import { MessageAttachments } from "../task-detail/Attachments.tsx";
+import { ExecutionDetails } from "../task-detail/ConversationFeed.tsx";
 import { durationBetween, formatInstant, parseAttachmentText } from "../task-detail/utils.ts";
 import { executorLabel, parseInbound, workerStatusText, type InboundMessage, type TeamFeedRow } from "./teamModel.ts";
 
@@ -22,12 +23,11 @@ function AgentRow({ row }: { row: Extract<TeamFeedRow, { kind: "conv" }>["item"]
         {row.at && <time>{formatInstant(row.at)}</time>}
         {duration && <small className="task-turn-duration" title={`开始 ${formatInstant(row.at)} · 结束 ${formatInstant(row.endedAt)}`}>· ⏱ {duration} 用时</small>}
       </header>
-      {row.markdown && <MarkdownBody text={row.markdown} />}
-      {row.events.map((event, index) => (
-        <details key={`${event.kind}-${index}`} className={`team-feed-tool is-${event.kind}`}>
-          <summary><Wrench size={11} />{event.label}</summary>
-          {event.detail && <pre>{event.detail}</pre>}
-        </details>
+      {row.segments.map((segment, index) => (
+        <section className="task-agent-segment" key={segment.id}>
+          <ExecutionDetails events={segment.events} running={!row.endedAt && index === row.segments.length - 1} />
+          {segment.markdown && <MarkdownBody text={segment.markdown} />}
+        </section>
       ))}
       {row.showSessionMeta && row.session && <SessionMeta session={row.session} />}
     </article>

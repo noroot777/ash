@@ -1,16 +1,19 @@
-// 会话落盘格式的单点：assistant 正文写 <sessId>.md，thinking/tool/error 写
-// <sessId>.trace.jsonl。一次性 run 与常驻调度台都走这里，因此刷新能恢复完整
-// 执行过程，同时非正文事件绝不会混进 assistant Markdown。
+// 会话落盘格式的单点：assistant 正文写 <sessId>.md；结构化事件顺序写
+// <sessId>.trace.jsonl，其中相邻 text delta 会先合并成正文片段再落盘。一次性 run
+// 与常驻调度台都走这里，因此刷新能把每组 thinking/tool 放回它所启动的正文片段，
+// 同时非正文事件绝不会混进 assistant Markdown。
 import { appendFileSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { AgentEvent, AgentType } from "@harness/shared";
 import { RUNS_DIR } from "./paths.js";
 
 type AgentTraceEvent = Extract<AgentEvent, { kind: "thinking" | "tool" | "error" }>;
+type TraceTextEvent = { kind: "text"; text: string };
+export type SessionTraceEvent = AgentTraceEvent | TraceTextEvent;
 export type SessionTraceEntry = {
   at: string;
   turnStartedAt: string;
-  event: AgentTraceEvent;
+  event: SessionTraceEvent;
 };
 
 // Canonical persisted Markdown path for one session. Keep API serialization and
@@ -27,7 +30,7 @@ export function appendSessionTrace(
   taskId: string,
   sessionId: string,
   turnStartedAt: string,
-  event: AgentTraceEvent,
+  event: SessionTraceEvent,
   at = new Date().toISOString(),
 ): void {
   const path = sessionTracePath(taskId, sessionId);
@@ -52,7 +55,8 @@ export function parseSessionTrace(raw: string): SessionTraceEntry[] {
         typeof entry.at !== "string"
         || typeof entry.turnStartedAt !== "string"
         || !event
-        || !["thinking", "tool", "error"].includes(event.kind)
+        || !["text", "thinking", "tool", "error"].includes(event.kind)
+        || (event.kind === "text" && typeof event.text !== "string")
       ) continue;
       entries.push(entry as SessionTraceEntry);
     } catch {
