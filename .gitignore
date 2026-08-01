@@ -17,3 +17,8 @@ data/
 
 # 本地 worktree 目录(由 EnterWorktree 创建,不入库)
 .claude/worktrees/
+
+# playwright CLI 落在工作区的临时产物(审查用完即弃;残留会弄脏工作区挡验收合并)
+.playwright-cli/
+playwright-report/
+test-results/
