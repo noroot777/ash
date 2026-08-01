@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { getConnInfo } from "@hono/node-server/conninfo";
 import { streamSSE } from "hono/streaming";
-import { eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import { readFile } from "node:fs/promises";
 import { existsSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
 import { spawn } from "node:child_process";
@@ -16,7 +16,7 @@ import type {
 } from "@harness/shared";
 import { maxBytesFor, attachmentKind } from "@harness/shared";
 import { db } from "./db/index.js";
-import { projects, groups, tasks, sessions, schedules, agents, llmProviders, notes } from "./db/schema.js";
+import { projects, groups, tasks, sessions, schedules, agents, llmProviders, notes, noteTasks } from "./db/schema.js";
 import { bus } from "./bus.js";
 import { id, now } from "./util.js";
 import { listModels } from "./llm.js";
@@ -346,8 +346,11 @@ api.delete("/projects/:id", async (c) => {
     rmSync(join(RUNS_DIR, t.id), { recursive: true, force: true });
     rmSync(join(DATA_DIR, "scratch", t.id), { recursive: true, force: true });
   }
+  if (ptasks.length) await db.delete(noteTasks).where(inArray(noteTasks.taskId, ptasks.map((task) => task.id)));
   await db.delete(tasks).where(eq(tasks.projectId, pid));
   await db.delete(groups).where(eq(groups.projectId, pid));
+  const projectNotes = await db.select({ id: notes.id }).from(notes).where(eq(notes.projectId, pid));
+  if (projectNotes.length) await db.delete(noteTasks).where(inArray(noteTasks.noteId, projectNotes.map((note) => note.id)));
   await db.delete(notes).where(eq(notes.projectId, pid));
   await db.delete(projects).where(eq(projects.id, pid));
   return c.json({ deleted: true });

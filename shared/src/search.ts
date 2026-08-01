@@ -36,7 +36,7 @@ export interface NoteSearchHit {
   // Note body for the command-palette preview.
   preview?: string;
   updatedAt: string;
-  taskId: string | null;
+  taskCount: number;
 }
 
 export type SearchHit = TaskSearchHit | NoteSearchHit;

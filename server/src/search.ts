@@ -5,8 +5,9 @@
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { SearchHit, SearchField, TaskStatus } from "@harness/shared";
+import { eq } from "drizzle-orm";
 import { db } from "./db/index.js";
-import { notes, projects, tasks } from "./db/schema.js";
+import { notes, noteTasks, projects, tasks } from "./db/schema.js";
 import { RUNS_DIR } from "./paths.js";
 
 const FIELD_RANK: Record<SearchField, number> = { title: 0, body: 1, conversation: 2 };
@@ -168,15 +169,18 @@ export async function searchAll(query: string, options: SearchOptions = {}): Pro
   const parsed = parseSearchQuery(query);
   if (!parsed.groups.length && !parsed.excluded.length) return [];
 
-  const [projRows, allTaskRows, allNoteRows] = await Promise.all([
+  const [projRows, allTaskRows, allNoteRows, allNoteTaskRows] = await Promise.all([
     db.select().from(projects),
     db.select().from(tasks),
     db.select().from(notes),
+    db.select({ noteId: noteTasks.noteId }).from(noteTasks).innerJoin(tasks, eq(noteTasks.taskId, tasks.id)),
   ]);
   const projectMatches = (projectId: string) => !options.projectId || projectId === options.projectId;
   const taskRows = options.type === "notes" ? [] : allTaskRows.filter((task) => projectMatches(task.projectId));
   const noteRows = options.type === "tasks" ? [] : allNoteRows.filter((note) => projectMatches(note.projectId));
   const projName = new Map(projRows.map((project) => [project.id, project.name] as const));
+  const noteTaskCounts = new Map<string, number>();
+  for (const link of allNoteTaskRows) noteTaskCounts.set(link.noteId, (noteTaskCounts.get(link.noteId) ?? 0) + 1);
   const taskHits: Extract<SearchHit, { kind: "task" }>[] = [];
 
   await Promise.all(
@@ -230,7 +234,7 @@ export async function searchAll(query: string, options: SearchOptions = {}): Pro
       snippet: findSnippet(note.body, matchingTerms(note.body, parsed)) ?? "",
       preview: note.body.slice(0, NOTE_PREVIEW_LIMIT),
       updatedAt: new Date(note.updatedAt).toISOString(),
-      taskId: note.taskId,
+      taskCount: noteTaskCounts.get(note.id) ?? 0,
     }))
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 

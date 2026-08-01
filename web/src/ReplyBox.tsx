@@ -3,7 +3,7 @@
 // 排到未来某个时刻发(scheduled_messages)，待发的列在输入框上方、发之前能撤。
 //
 // 从 TaskDetail.tsx 拆出来的：/team 的插话框也是这一套(见 web/src/team/TeamView.tsx)。
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { AgentType, ScheduledMessage } from "@harness/shared";
 import { Robot, X, Clock } from "@phosphor-icons/react";
 import { api } from "./api";
@@ -71,6 +71,23 @@ export function ReplyBox({
   const [schedOpen, setSchedOpen] = useState(false);
   const [at, setAt] = useState("");
   const [pending, setPending] = useState<ScheduledMessage[]>([]);
+  const scheduleTriggerRef = useRef<HTMLButtonElement>(null);
+  const schedulePopoverRef = useRef<HTMLDivElement>(null);
+
+  // The scheduling card is a popover, so clicking anywhere except the card or
+  // its trigger dismisses it. Keep the trigger exempt so its own click handler
+  // can still toggle the card without the document listener racing it.
+  useEffect(() => {
+    if (!schedOpen) return;
+    const dismissOnOutsideMouseDown = (e: MouseEvent) => {
+      const target = e.target;
+      if (!(target instanceof Node)) return;
+      if (scheduleTriggerRef.current?.contains(target) || schedulePopoverRef.current?.contains(target)) return;
+      setSchedOpen(false);
+    };
+    document.addEventListener("mousedown", dismissOnOutsideMouseDown);
+    return () => document.removeEventListener("mousedown", dismissOnOutsideMouseDown);
+  }, [schedOpen]);
 
   // Load this task's pending scheduled messages (re-fetch when switching tasks).
   useEffect(() => {
@@ -203,7 +220,10 @@ export function ReplyBox({
         </div>
       )}
       {schedOpen && (
-        <div className="absolute bottom-full right-6 z-10 mb-1 w-72 rounded-lg border border-line2 bg-panel p-3 shadow-xl">
+        <div
+          ref={schedulePopoverRef}
+          className="absolute bottom-full right-6 z-10 mb-1 w-72 rounded-lg border border-line2 bg-panel p-3 shadow-xl"
+        >
           <div className="mb-2 text-[12px] font-medium text-ink">定时发送</div>
           <input
             type="datetime-local"
@@ -305,6 +325,7 @@ export function ReplyBox({
         )}
         <div className="absolute bottom-2 right-2 flex h-8 items-stretch overflow-hidden rounded-md border border-line bg-canvas/95 shadow-sm">
           <button
+            ref={scheduleTriggerRef}
             onClick={() => { if (!at) setAt(toLocalInput(new Date(Date.now() + 3600_000))); setSchedOpen((o) => !o); }}
             disabled={disabled || commandActive}
             title="定时发送"

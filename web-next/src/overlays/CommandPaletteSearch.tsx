@@ -155,7 +155,7 @@ export function SearchHitList({
             </span>
             <span className="min-w-0 truncate font-semibold text-ink"><Highlight text={hit.title} query={query} /></span>
             {hit.kind === "task" && hit.archived && <span className="shrink-0 rounded bg-overlay px-1 text-[9px] text-faint">已归档</span>}
-            {hit.kind === "note" && hit.taskId && <span className="shrink-0 rounded bg-overlay px-1 text-[9px] text-faint">已转任务</span>}
+            {hit.kind === "note" && hit.taskCount > 0 && <span className="shrink-0 rounded bg-overlay px-1 text-[9px] text-faint">已转 {hit.taskCount} 个任务</span>}
             {hit.projectName && <span className="ml-auto shrink-0 text-[10px] text-faint">{hit.projectName}</span>}
           </span>
           {hit.snippet && (

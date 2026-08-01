@@ -148,7 +148,9 @@ export function SearchHitList({
             <span className="shrink-0">{hit.kind === "task" ? <StatusIcon status={hit.status} /> : <NotePencil size={15} className="text-muted" />}</span>
             <span className="min-w-0 truncate text-ink"><Highlight text={hit.title} query={query} /></span>
             {hit.kind === "task" && hit.archived && <span className="shrink-0 rounded bg-overlay px-1 text-[10px] text-faint">已归档</span>}
-            {hit.kind === "note" && hit.taskId && <span className="shrink-0 rounded bg-overlay px-1 text-[10px] text-faint">已转任务</span>}
+            {hit.kind === "note" && hit.taskCount > 0 && (
+              <span className="shrink-0 rounded bg-overlay px-1 text-[10px] text-faint">已转 {hit.taskCount} 个任务</span>
+            )}
             {hit.projectName && <span className="ml-auto shrink-0 text-xs text-faint">{hit.projectName}</span>}
           </span>
           {hit.snippet && (

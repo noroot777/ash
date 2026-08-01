@@ -36,10 +36,21 @@
 }
 
 .workspace-sidebar-top {
+  position: relative;
+  z-index: 2;
+  display: grid;
+  height: 68px;
+  flex: 0 0 68px;
+  grid-template-rows: 36px 30px;
+  gap: 2px;
+}
+
+.workspace-sidebar-tools {
   display: flex;
-  height: 28px;
   align-items: center;
+  justify-content: flex-end;
   gap: 3px;
+  padding-right: 1px;
 }
 
 .workspace-project-switcher {
