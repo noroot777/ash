@@ -5,7 +5,7 @@ import { formatInstant, parseAttachmentText } from "./utils.ts";
 export type LiveAgentEvent = Extract<ServerEvent, { type: "agent.event" }>;
 
 export type TimelineEntry =
-  | { kind: "user"; id: string; text: string; attachments: string[]; at: string }
+  | { kind: "user"; id: string; text: string; attachments: string[]; at: string; isAnswer?: boolean }
   | { kind: "server"; id: string; event: LiveAgentEvent };
 
 export type AgentAuxEvent = {
@@ -28,7 +28,7 @@ export type ConversationItem =
       markdown: string;
       events: AgentAuxEvent[];
     }
-  | { kind: "user"; id: string; text: string; attachments: string[]; at?: string }
+  | { kind: "user"; id: string; text: string; attachments: string[]; at?: string; isAnswer?: boolean }
   | { kind: "event"; id: string; text: string; at?: string; tone?: "neutral" | "error" };
 
 export type PersistedConversation = { session: Session; output: string };
@@ -94,6 +94,7 @@ export function buildConversationItems(
           text: segment.text,
           attachments: [],
           at: segment.at,
+          isAnswer: segment.text.startsWith("【答复】"),
         });
       } else if (segment.kind === "system") {
         items.push({
@@ -127,6 +128,7 @@ export function buildConversationItems(
         text: entry.text,
         attachments: entry.attachments,
         at: entry.at,
+        isAnswer: entry.isAnswer,
       });
       continue;
     }

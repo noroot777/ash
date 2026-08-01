@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { LlmProtocol, LlmProvider } from "@harness/shared";
 import {
   ArrowsClockwise,
@@ -23,6 +23,150 @@ type ProviderDraft = {
   protocolConversionEnabled: boolean;
 };
 
+function ProviderModelField({
+  providerId,
+  protocol,
+  baseUrl,
+  apiKey,
+  model,
+  protocolConversionEnabled,
+  onModelChange,
+}: {
+  providerId?: string;
+  protocol: LlmProtocol;
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+  protocolConversionEnabled: boolean;
+  onModelChange: (model: string) => void;
+}) {
+  const [models, setModels] = useState<string[]>([]);
+  const [probing, setProbing] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [probeError, setProbeError] = useState("");
+  const [testResult, setTestResult] = useState("");
+  const [testError, setTestError] = useState("");
+  const probeRequest = useRef(0);
+  const testRequest = useRef(0);
+  const fieldId = `provider-${providerId ?? "new"}-model`;
+  const datalistId = `provider-${providerId ?? "new"}-models`;
+
+  useEffect(() => {
+    probeRequest.current += 1;
+    setModels([]);
+    setProbing(false);
+    setProbeError("");
+  }, [apiKey, baseUrl, protocol, providerId]);
+
+  useEffect(() => {
+    testRequest.current += 1;
+    setTesting(false);
+    setTestResult("");
+    setTestError("");
+  }, [apiKey, baseUrl, model, protocol, protocolConversionEnabled, providerId]);
+
+  const probe = async () => {
+    if (!baseUrl.trim()) {
+      setProbeError("先填写 base URL");
+      return;
+    }
+    const request = ++probeRequest.current;
+    setProbing(true);
+    setProbeError("");
+    try {
+      const result = await api.probeModels({
+        protocol,
+        baseUrl: baseUrl.trim(),
+        apiKey: apiKey.trim() || undefined,
+        id: providerId,
+      });
+      if (probeRequest.current !== request) return;
+      setModels(result.models);
+      if (!result.models.length) setProbeError("供应商未返回模型");
+      else if (!model) onModelChange(result.models[0]);
+    } catch (error) {
+      if (probeRequest.current === request) {
+        setProbeError(error instanceof Error ? error.message : "模型探测失败");
+      }
+    } finally {
+      if (probeRequest.current === request) setProbing(false);
+    }
+  };
+
+  const testModel = async () => {
+    if (!baseUrl.trim()) {
+      setTestError("先填写 Base URL");
+      return;
+    }
+    if (!model.trim()) {
+      setTestError("先填写要测试的模型");
+      return;
+    }
+    const request = ++testRequest.current;
+    setTesting(true);
+    setTestResult("");
+    setTestError("");
+    try {
+      const result = await api.testLlmProvider({
+        id: providerId,
+        protocol,
+        baseUrl: baseUrl.trim(),
+        apiKey: apiKey.trim() || undefined,
+        model: model.trim(),
+        protocolConversionEnabled: protocol === "openai" && protocolConversionEnabled,
+      });
+      if (testRequest.current === request) {
+        setTestResult(`${result.endpoint} · ${result.elapsedMs} ms · ${result.reply}`);
+      }
+    } catch (error) {
+      if (testRequest.current === request) {
+        setTestError(error instanceof Error ? error.message : "模型测试失败");
+      }
+    } finally {
+      if (testRequest.current === request) setTesting(false);
+    }
+  };
+
+  return (
+    <div className="is-wide provider-model-field">
+      <label htmlFor={fieldId}>默认模型</label>
+      <div>
+        <input
+          id={fieldId}
+          list={datalistId}
+          value={model}
+          onChange={(event) => onModelChange(event.target.value)}
+          placeholder="可选；Profile 的模型覆盖优先"
+        />
+        <Button disabled={probing} onClick={() => void probe()}>
+          <ArrowsClockwise size={12} className={probing ? "provider-spin" : ""} />
+          {probing ? "探测中…" : "探测模型"}
+        </Button>
+        <Button disabled={testing} onClick={() => void testModel()}>
+          <Play size={12} weight="fill" />
+          {testing ? "测试中…" : "测试模型"}
+        </Button>
+      </div>
+      <datalist id={datalistId}>
+        {models.map((candidate) => <option value={candidate} key={candidate} />)}
+      </datalist>
+      {(models.length > 0 || probeError) && (
+        <small className={probeError ? "is-error" : ""}>
+          {probeError || `已返回 ${models.length} 个完整模型名`}
+        </small>
+      )}
+      {(testResult || testError) && (
+        <small
+          className={`provider-test-result${testError ? " is-error" : ""}`}
+          role="status"
+        >
+          {testError || testResult}
+        </small>
+      )}
+    </div>
+  );
+}
+
 function ProviderForm({
   provider,
   onCancel,
@@ -42,13 +186,7 @@ function ProviderForm({
     model: provider?.model ?? "",
     protocolConversionEnabled: provider?.protocolConversionEnabled ?? false,
   });
-  const [models, setModels] = useState<string[]>([]);
-  const [probing, setProbing] = useState(false);
-  const [testing, setTesting] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [probeError, setProbeError] = useState("");
-  const [testResult, setTestResult] = useState("");
-  const [testError, setTestError] = useState("");
 
   const set = <K extends keyof ProviderDraft>(key: K, value: ProviderDraft[K]) => {
     setDraft((current) => ({
@@ -56,73 +194,6 @@ function ProviderForm({
       [key]: value,
       ...(key === "protocol" && value === "anthropic" ? { protocolConversionEnabled: false } : {}),
     }));
-    if (key === "protocol" || key === "baseUrl" || key === "apiKey") {
-      setModels([]);
-      setProbeError("");
-    }
-    if (
-      key === "protocol"
-      || key === "baseUrl"
-      || key === "apiKey"
-      || key === "model"
-      || key === "protocolConversionEnabled"
-    ) {
-      setTestResult("");
-      setTestError("");
-    }
-  };
-
-  const probe = async () => {
-    if (!draft.baseUrl.trim()) {
-      setProbeError("先填写 base URL");
-      return;
-    }
-    setProbing(true);
-    setProbeError("");
-    try {
-      const result = await api.probeModels({
-        protocol: draft.protocol,
-        baseUrl: draft.baseUrl.trim(),
-        apiKey: draft.apiKey.trim() || undefined,
-        id: provider?.id,
-      });
-      setModels(result.models);
-      if (!result.models.length) setProbeError("供应商未返回模型");
-      else if (!draft.model) set("model", result.models[0]);
-    } catch (error) {
-      setProbeError(error instanceof Error ? error.message : "模型探测失败");
-    } finally {
-      setProbing(false);
-    }
-  };
-
-  const testModel = async () => {
-    if (!draft.baseUrl.trim()) {
-      setTestError("先填写 Base URL");
-      return;
-    }
-    if (!draft.model.trim()) {
-      setTestError("先填写要测试的模型");
-      return;
-    }
-    setTesting(true);
-    setTestResult("");
-    setTestError("");
-    try {
-      const result = await api.testLlmProvider({
-        id: provider?.id,
-        protocol: draft.protocol,
-        baseUrl: draft.baseUrl.trim(),
-        apiKey: draft.apiKey.trim() || undefined,
-        model: draft.model.trim(),
-        protocolConversionEnabled: draft.protocol === "openai" && draft.protocolConversionEnabled,
-      });
-      setTestResult(`${result.endpoint} · ${result.elapsedMs} ms · ${result.reply}`);
-    } catch (error) {
-      setTestError(error instanceof Error ? error.message : "模型测试失败");
-    } finally {
-      setTesting(false);
-    }
   };
 
   const save = async () => {
@@ -202,38 +273,15 @@ function ProviderForm({
             />
           </div>
         )}
-        <label className="is-wide provider-model-field">
-          <span>默认模型</span>
-          <div>
-            <input
-              list={`provider-${provider?.id ?? "new"}-models`}
-              value={draft.model}
-              onChange={(event) => set("model", event.target.value)}
-              placeholder="可选；Profile 的模型覆盖优先"
-            />
-            <Button disabled={probing} onClick={() => void probe()}>
-              <ArrowsClockwise size={12} className={probing ? "provider-spin" : ""} />
-              {probing ? "探测中…" : "探测模型"}
-            </Button>
-            <Button disabled={testing} onClick={() => void testModel()}>
-              <Play size={12} weight="fill" />
-              {testing ? "测试中…" : "测试模型"}
-            </Button>
-          </div>
-          <datalist id={`provider-${provider?.id ?? "new"}-models`}>
-            {models.map((model) => <option value={model} key={model} />)}
-          </datalist>
-          {(models.length > 0 || probeError) && (
-            <small className={probeError ? "is-error" : ""}>
-              {probeError || `已返回 ${models.length} 个完整模型名`}
-            </small>
-          )}
-          {(testResult || testError) && (
-            <small className={`provider-test-result${testError ? " is-error" : ""}`}>
-              {testError || testResult}
-            </small>
-          )}
-        </label>
+        <ProviderModelField
+          providerId={provider?.id}
+          protocol={draft.protocol}
+          baseUrl={draft.baseUrl}
+          apiKey={draft.apiKey}
+          model={draft.model}
+          protocolConversionEnabled={draft.protocolConversionEnabled}
+          onModelChange={(model) => set("model", model)}
+        />
       </div>
       <div className="provider-form-actions">
         <Button variant="ghost" disabled={saving} onClick={onCancel}>取消</Button>

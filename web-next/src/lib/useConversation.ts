@@ -80,13 +80,18 @@ export function useConversation(taskId: string, revision = 0) {
     }, [load, taskId]),
   );
 
-  const addUser = useCallback((text: string, attachments: string[] = []) => {
+  const addUser = useCallback((
+    text: string,
+    attachments: string[] = [],
+    options: { answer?: boolean } = {},
+  ) => {
     const entry: TimelineEntry = {
       kind: "user",
       id: crypto.randomUUID(),
       text,
       attachments,
       at: new Date().toISOString(),
+      isAnswer: options.answer,
     };
     setTimeline((current) => {
       const next = [...current, entry];

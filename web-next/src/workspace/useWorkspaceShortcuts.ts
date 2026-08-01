@@ -46,7 +46,8 @@ export function useWorkspaceShortcuts({
     const onKeyDown = (event: KeyboardEvent) => {
       const commandPalette = (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k";
       if (commandPalette) {
-        if (!paletteOpen && (!enabled || hasBlockingLayer())) return;
+        // The palette is global; enabled only gates the workspace navigation keys below.
+        if (!paletteOpen && hasBlockingLayer()) return;
         event.preventDefault();
         onTogglePalette();
         return;

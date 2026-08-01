@@ -112,6 +112,7 @@ export function TaskInspector({
   groups,
   sessions,
   allTasks,
+  followUps = [],
   onOpenTask,
   onOpenReview,
   onPatch,
@@ -122,6 +123,7 @@ export function TaskInspector({
   groups: Group[];
   sessions: Session[];
   allTasks: Task[];
+  followUps?: { text: string; at?: string }[];
   onOpenTask: (taskId: string) => void;
   onOpenReview: () => void;
   onPatch: (patch: Partial<Task>) => Promise<void>;
@@ -232,9 +234,22 @@ export function TaskInspector({
     <div className="task-inspector" aria-label="任务信息">
       <div className="task-inspector-scroll">
         <section>
-          <details>
+          <details open>
             <summary>原始需求</summary>
             <pre>{task.body.trim() || "这个任务没有正文说明。"}</pre>
+          </details>
+          <details className="task-inspector-follow-ups">
+            <summary>后续追问</summary>
+            {followUps.length ? (
+              <ol>
+                {followUps.map((followUp, index) => (
+                  <li key={`${followUp.at ?? "pending"}:${index}`}>
+                    {followUp.at && <time dateTime={followUp.at}>{formatInstant(followUp.at)}</time>}
+                    <pre>{followUp.text.trim() || "（空消息）"}</pre>
+                  </li>
+                ))}
+              </ol>
+            ) : <p className="task-inspector-note">暂无后续追问。</p>}
           </details>
         </section>
 
