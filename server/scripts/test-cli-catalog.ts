@@ -10,10 +10,12 @@
 //   ⑤ resume 三档语义:未声明 → 忽略 sessionId 起新会话 + 诚实占位说明;只写
 //      interactive(拿不到 CLI 真实 id)一律不展示可执行的恢复命令;
 //   ⑥ 预检失败(bin 不在 PATH)必须由事件流报错并以 done 收尾 —— 少一个 done 就是任务卡死;
-//   ⑦ 备用命令名:检测命中 bins[1] 时执行也要用它(死认 bins[0] = 目录说可用、派任务 ENOENT)。
+//   ⑦ 备用命令名:检测命中 bins[1] 时执行也要用它(死认 bins[0] = 目录说可用、派任务 ENOENT);
+//   ⑧ Grok 的 token 级 thought 必须按连续段聚合,不能在 UI 生成几百个「思考过程」。
 import assert from "node:assert/strict";
-import { rmSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { spawn } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentEvent } from "@harness/shared";
 import { AGENT_TYPES } from "@harness/shared";
@@ -317,6 +319,48 @@ const collect = async (events: AsyncIterable<AgentEvent>): Promise<AgentEvent[]>
   const events = await collect(h.events);
   assert.ok(!events.some((e) => e.kind === "error"), "手停不该报错");
   assert.equal(events.at(-1)?.kind, "done");
+}
+
+// ⑧ Grok 原始流一个 thought token 一行。连续 token 合成一段，正文和 end
+// 都会收口；否则 377 个 token 就会在新版前端变成 377 个折叠块。
+{
+  const dir = mkdtempSync(join(tmpdir(), "harness-grok-stream-"));
+  const script = join(dir, "stub.mjs");
+  const lines = [
+    { type: "thought", data: "first" },
+    { type: "thought", data: " thought" },
+    { type: "text", data: "answer" },
+    { type: "thought", data: "second" },
+    { type: "thought", data: " thought" },
+    { type: "end", sessionId: "grok-session-1" },
+  ];
+  writeFileSync(
+    script,
+    lines.map((line) => `process.stdout.write(${JSON.stringify(JSON.stringify(line) + "\n")});`).join("\n"),
+  );
+  try {
+    const child = spawn(process.execPath, [script], { stdio: ["ignore", "pipe", "pipe"] });
+    const parser = CLI_SPEC_BY_KEY.grok.exec.parser!;
+    const events = await collect(parser({
+      child,
+      bin: "grok",
+      label: "grok@test",
+      lifecycle: { stopRequested: false },
+    }));
+    assert.deepEqual(
+      events.filter((event) => event.kind === "thinking"),
+      [
+        { kind: "thinking", text: "first thought" },
+        { kind: "thinking", text: "second thought" },
+      ],
+      "每个连续 thought 段只应生成一个思考事件",
+    );
+    assert.deepEqual(events.filter((event) => event.kind === "text"), [{ kind: "text", text: "answer" }]);
+    assert.ok(events.some((event) => event.kind === "session" && event.cliSessionId === "grok-session-1"));
+    assert.deepEqual(events.at(-1), { kind: "done", exitStatus: 0 });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 console.log("cli catalog tests passed");

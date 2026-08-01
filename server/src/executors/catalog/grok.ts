@@ -34,6 +34,16 @@ const grokStreamingJsonParser: CliParser = async function* (ctx) {
   let structuredError = "";
   let strayTail = "";
   let stderrTail = "";
+  let thoughtBuffer = "";
+
+  // Grok 的 streaming-json 把 thought 按 token（一两个词）逐行吐出。直接逐条
+  // 发布会让前端把一次思考画成几百个折叠块；这里只合并物理上连续的 thought，
+  // 遇到正文/元事件/end 就收口，因此不同模型回合仍然是不同的「思考过程」。
+  const flushThought = () => {
+    if (!thoughtBuffer) return;
+    push({ kind: "thinking", text: thoughtBuffer });
+    thoughtBuffer = "";
+  };
 
   const sendSession = (id: unknown) => {
     if (sessionSent || typeof id !== "string" || !id) return;
@@ -58,11 +68,13 @@ const grokStreamingJsonParser: CliParser = async function* (ctx) {
     }
     jsonLines += 1;
 
+    if (event.type === "thought") {
+      if (typeof event.data === "string" && event.data) thoughtBuffer += event.data;
+      return;
+    }
+    flushThought();
+
     switch (event.type) {
-      case "thought":
-        if (typeof event.data === "string" && event.data)
-          push({ kind: "thinking", text: event.data });
-        break;
       case "text":
         if (typeof event.data === "string" && event.data) push({ kind: "text", text: event.data });
         break;
@@ -90,6 +102,7 @@ const grokStreamingJsonParser: CliParser = async function* (ctx) {
     if (finished) return;
     finished = true;
     trace.close();
+    flushThought();
     const tail = stripAnsi(stderrTail).trim() || stripAnsi(strayTail).trim();
     if (opts.spawnError) push({ kind: "error", message: opts.spawnError });
     else if (opts.flushTimeout)
