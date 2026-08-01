@@ -7,7 +7,7 @@ export type LiveAgentEvent = Extract<ServerEvent, { type: "agent.event" }>;
 
 export type TimelineEntry =
   | { kind: "user"; id: string; text: string; attachments: string[]; at: string; isAnswer?: boolean }
-  | { kind: "server"; id: string; event: LiveAgentEvent };
+  | { kind: "server"; id: string; event: LiveAgentEvent; receivedAt?: string };
 
 export type AgentAuxEvent = {
   kind: "tool" | "thinking" | "error";
@@ -42,6 +42,56 @@ export type PersistedConversation = { session: Session; output: string; trace?: 
 
 type ConversationEventItem = Extract<ConversationItem, { kind: "event" }>;
 type AgentTraceEvent = Extract<AgentEvent, { kind: "thinking" | "tool" | "error" }>;
+type PersistedTurnTimes = Map<string, number[]>;
+
+const SNAPSHOT_DUPLICATE_WINDOW_MS = 30_000;
+const compactTurnText = (text: string) => text.replace(/\s+/g, "");
+
+function turnKey(kind: "user" | "system", text: string, sessionId?: string): string {
+  return `${kind}\0${sessionId ?? ""}\0${compactTurnText(text)}`;
+}
+
+function recordPersistedTurn(
+  turns: PersistedTurnTimes,
+  kind: "user" | "system",
+  text: string,
+  at: string | undefined,
+  sessionId?: string,
+): void {
+  const time = at ? Date.parse(at) : Number.NaN;
+  if (!Number.isFinite(time)) return;
+  const key = turnKey(kind, text, sessionId);
+  turns.set(key, [...(turns.get(key) ?? []), time]);
+}
+
+// A settled-status refresh can finish just after the same system/user turn was
+// received over SSE. Keep the persisted copy and discard only the live copy
+// whose arrival time is close to that exact persisted sentinel. The timestamp
+// guard matters because idle-recycle notices legitimately repeat every 30 min.
+function timelineAfterPersistedTurns(
+  timeline: TimelineEntry[],
+  persistedTurns: PersistedTurnTimes,
+): TimelineEntry[] {
+  const remaining = new Map([...persistedTurns].map(([key, times]) => [key, [...times]]));
+  return timeline.filter((entry) => {
+    const marker = entry.kind === "user"
+      ? { key: turnKey("user", entry.text), at: entry.at }
+      : entry.event.event.kind === "system" && entry.receivedAt
+        ? { key: turnKey("system", entry.event.event.text, entry.event.sessionId), at: entry.receivedAt }
+        : null;
+    if (!marker) return true;
+    const liveTime = Date.parse(marker.at);
+    const candidates = remaining.get(marker.key);
+    if (!Number.isFinite(liveTime) || !candidates?.length) return true;
+    let nearest = 0;
+    for (let index = 1; index < candidates.length; index += 1) {
+      if (Math.abs(candidates[index]! - liveTime) < Math.abs(candidates[nearest]! - liveTime)) nearest = index;
+    }
+    if (Math.abs(candidates[nearest]! - liveTime) > SNAPSHOT_DUPLICATE_WINDOW_MS) return true;
+    candidates.splice(nearest, 1);
+    return false;
+  });
+}
 
 function auxEvent(event: AgentTraceEvent): AgentAuxEvent {
   if (event.kind === "tool") return { kind: "tool", label: event.name, detail: event.detail };
@@ -194,6 +244,7 @@ export function buildConversationItems(
   timeline: TimelineEntry[],
 ): ConversationItem[] {
   const items: ConversationItem[] = [];
+  const persistedTurns: PersistedTurnTimes = new Map();
   const ordered = [...persisted].sort((left, right) =>
     left.session.startedAt.localeCompare(right.session.startedAt));
 
@@ -204,6 +255,7 @@ export function buildConversationItems(
     let turnStartedAt = session.startedAt;
     segments.forEach((segment, index) => {
       if (segment.kind === "user") {
+        recordPersistedTurn(persistedTurns, "user", segment.text, segment.at);
         items.push({
           kind: "user",
           id: `persisted:user:${session.id}:${index}`,
@@ -214,6 +266,7 @@ export function buildConversationItems(
         });
         turnStartedAt = segment.at ?? turnStartedAt;
       } else if (segment.kind === "system") {
+        recordPersistedTurn(persistedTurns, "system", segment.text, segment.at, session.id);
         items.push({
           kind: "event",
           id: `persisted:system:${session.id}:${index}`,
@@ -257,7 +310,7 @@ export function buildConversationItems(
     }
   }
 
-  for (const entry of timeline) {
+  for (const entry of timelineAfterPersistedTurns(timeline, persistedTurns)) {
     if (entry.kind === "user") {
       items.push({
         kind: "user",

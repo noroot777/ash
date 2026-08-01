@@ -498,9 +498,23 @@
   padding: 8px 12px;
 }
 
+.inspector-host__content > .team-timeline .team-timeline-summary > b {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .inspector-host__content > .team-timeline .team-timeline-delivery {
-  grid-column: 1 / -1;
-  padding-left: 19px;
+  grid-column: 2 / -1;
+}
+
+.inspector-host__content > .team-timeline .team-timeline-summary > span:last-child {
+  grid-column: 3;
+  grid-row: 1;
+  justify-self: end;
+  margin-left: 0;
+  white-space: nowrap;
 }
 
 .inspector-host__content > .team-timeline .team-gantt {
