@@ -298,7 +298,7 @@ export const api = {
       headers: { "content-type": "application/json" },
       body: JSON.stringify(note),
     }).then(j),
-  patchNote: (id: string, patch: Partial<Pick<Note, "body" | "attachments" | "taskId">>): Promise<Note> =>
+  patchNote: (id: string, patch: Partial<Pick<Note, "body" | "attachments">> & { taskId?: string | null }): Promise<Note> =>
     fetch(`/api/notes/${id}`, {
       method: "PATCH",
       headers: { "content-type": "application/json" },

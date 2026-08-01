@@ -1,4 +1,4 @@
-import { sqliteTable, text, integer, uniqueIndex } from "drizzle-orm/sqlite-core";
+import { index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 // JSON columns are stored as text and parsed in the repository layer.
 // Schema mirrors shared/src/index.ts.
@@ -24,10 +24,24 @@ export const notes = sqliteTable("notes", {
   projectId: text("project_id").notNull(),
   body: text("body").notNull(),
   attachments: text("attachments"), // json string[]
-  taskId: text("task_id"),
   createdAt: integer("created_at").notNull(),
   updatedAt: integer("updated_at").notNull(),
 });
+
+// 一条随手记可以反复转成多个任务。独立关联表既保留完整历史，也让同一任务幂等去重；
+// created_at 是转换发生时间，详情页按它倒序展示。
+export const noteTasks = sqliteTable(
+  "note_tasks",
+  {
+    noteId: text("note_id").notNull(),
+    taskId: text("task_id").notNull(),
+    createdAt: integer("created_at").notNull(),
+  },
+  (t) => ({
+    noteTaskIdx: uniqueIndex("note_tasks_note_task_idx").on(t.noteId, t.taskId),
+    taskIdx: index("note_tasks_task_idx").on(t.taskId),
+  }),
+);
 
 export const groups = sqliteTable("groups", {
   id: text("id").primaryKey(),

@@ -23,8 +23,14 @@ export async function ensureSchema() {
     );
     CREATE TABLE IF NOT EXISTS notes (
       id TEXT PRIMARY KEY, project_id TEXT NOT NULL, body TEXT NOT NULL,
-      attachments TEXT, task_id TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+      attachments TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS note_tasks (
+      note_id TEXT NOT NULL, task_id TEXT NOT NULL, created_at INTEGER NOT NULL
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS note_tasks_note_task_idx
+      ON note_tasks (note_id, task_id);
+    CREATE INDEX IF NOT EXISTS note_tasks_task_idx ON note_tasks (task_id);
     CREATE TABLE IF NOT EXISTS groups (
       id TEXT PRIMARY KEY, project_id TEXT NOT NULL, name TEXT NOT NULL,
       mode TEXT NOT NULL DEFAULT 'parallel',
@@ -163,8 +169,22 @@ export async function ensureSchema() {
       /* column already exists */
     }
   }
+  await migrateLegacyNoteTaskLinks();
   await dropRetiredColumns();
   await dropRetiredTables();
+}
+
+// notes.task_id 曾经只能记住最后一次转换。先把老值搬进多对多关联表，再由下面的
+// retired-column 清理删掉旧列；顺序不能反，否则用户现存的回链会丢。
+async function migrateLegacyNoteTaskLinks(): Promise<void> {
+  const info = await client.execute("PRAGMA table_info(notes)");
+  if (!info.rows.some((r) => r.name === "task_id")) return;
+  await client.execute(`
+    INSERT OR IGNORE INTO note_tasks (note_id, task_id, created_at)
+    SELECT id, task_id, updated_at
+    FROM notes
+    WHERE task_id IS NOT NULL AND TRIM(task_id) <> ''
+  `);
 }
 
 // 退役列:功能改掉后没人再读、但老库里还留着的列。放这里一次性清掉,而不是让
@@ -174,6 +194,8 @@ export async function ensureSchema() {
 // 新建库压根不会有这些列(上面的 CREATE TABLE 里没有),所以只对老库生效。
 // 加一条的前提:全仓 grep 确认没有任何读写,且列里的值已无恢复价值。
 const RETIRED_COLUMNS: { table: string; column: string; why: string }[] = [
+  // 随手记现在通过 note_tasks 保留每一次转任务记录；迁移函数已先回填老值
+  { table: "notes", column: "task_id", why: "随手记改为多任务历史关联" },
   // worktree 从「按分组配」改成「按任务 opt-in」(tasks.use_worktree)后废弃
   { table: "groups", column: "use_worktree", why: "worktree 改为按任务 opt-in" },
   // 「编排组/协调者」被 /team 团队模式取代(groups.owner_task_id + tasks.parent_id)

@@ -126,15 +126,22 @@ export interface TaskWorkspaceDiscardResult {
   branchError: string | null;
 }
 
+export interface NoteTaskLink {
+  taskId: string;
+  title: string;
+  status: TaskStatus;
+  archived: boolean;
+  linkedAt: number;
+}
+
 // Quick notes are project-scoped scraps that keep the user's original text.
-// `taskId` is a backlink set after one or more notes are merged into a task;
-// the note itself remains available for reference.
+// Every conversion appends a task backlink; the note itself remains available.
 export interface Note {
   id: string;
   projectId: string;
   body: string;
   attachments: string[];
-  taskId: string | null;
+  taskLinks: NoteTaskLink[];
   createdAt: number;
   updatedAt: number;
 }
