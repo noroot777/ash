@@ -126,9 +126,9 @@ function TeamRoleFields({
 
   return (
     <section className={`team-preset-role is-${role}`}>
-      <header>
-        <span><Icon size={15} weight={role === "worker" ? "fill" : "regular"} /></span>
-        <div><b>{meta.label}</b><small>{meta.hint}</small></div>
+      <header title={meta.hint}>
+        <span><Icon size={15} weight={role === "worker" ? "fill" : "regular"} aria-hidden="true" /></span>
+        <b>{meta.label}</b>
       </header>
       <div className="team-preset-role-fields">
         <label>

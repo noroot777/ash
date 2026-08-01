@@ -260,10 +260,14 @@
 
 .team-preset-role {
   --role-color: #665493;
-  overflow: hidden;
+  display: grid;
+  grid-template-columns: 104px minmax(0, 1fr);
+  align-items: end;
+  gap: 10px;
   border: 1px solid var(--line);
   border-radius: 10px;
-  background: var(--panel);
+  background: color-mix(in lch, var(--role-color) 2%, var(--panel));
+  padding: 9px 10px;
 }
 
 .team-preset-role.is-worker { --role-color: #287567; }
@@ -271,45 +275,36 @@
 
 .team-preset-role > header {
   display: flex;
-  min-height: 43px;
+  min-width: 0;
+  min-height: 31px;
   align-items: center;
-  gap: 9px;
-  border-bottom: 1px solid var(--line);
-  background: color-mix(in lch, var(--role-color) 5%, var(--panel));
-  padding: 7px 10px;
+  gap: 7px;
 }
 
 .team-preset-role > header > span {
   display: grid;
-  width: 28px;
-  height: 28px;
+  width: 25px;
+  height: 25px;
   flex: none;
   place-items: center;
-  border-radius: 8px;
+  border-radius: 7px;
   background: color-mix(in lch, var(--role-color) 14%, var(--panel));
   color: var(--role-color);
 }
 
-.team-preset-role > header > div {
-  display: grid;
-  gap: 1px;
-}
-
 .team-preset-role > header b {
+  overflow: hidden;
   font-size: 11px;
   font-weight: 650;
-}
-
-.team-preset-role > header small {
-  color: var(--faint);
-  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .team-preset-role-fields {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 9px;
-  padding: 10px;
+  min-width: 0;
+  grid-template-columns: minmax(90px, 0.8fr) minmax(118px, 1.15fr) minmax(118px, 1.2fr) minmax(105px, 1fr);
+  gap: 8px;
 }
 
 .team-preset-role-fields .agent-model-control {
@@ -319,6 +314,16 @@
 @media (max-width: 900px) {
   .team-presets-settings-layout {
     grid-template-columns: 180px minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 820px) {
+  .team-preset-role {
+    grid-template-columns: 96px minmax(0, 1fr);
+  }
+
+  .team-preset-role-fields {
+    grid-template-columns: repeat(2, minmax(118px, 1fr));
   }
 }
 
@@ -354,6 +359,14 @@
   .team-preset-editor-head {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+}
+
+@media (max-width: 460px) {
+  .team-preset-role {
+    grid-template-columns: 1fr;
+    align-items: stretch;
   }
 
   .team-preset-role-fields {
