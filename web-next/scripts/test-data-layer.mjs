@@ -74,7 +74,15 @@ try {
     exitStatus: null,
   };
   const conversation = buildConversationItems(
-    [{ session, output: "先检查现状。\n\u001e{\"t\":\"user\",\"text\":\"继续\",\"at\":\"2026-07-30T01:01:00.000Z\"}\n正在处理。" }],
+    [{
+      session,
+      output: "先检查现状。\n\u001e{\"t\":\"user\",\"text\":\"继续\",\"at\":\"2026-07-30T01:01:00.000Z\"}\n正在处理。",
+      trace: [{
+        at: "2026-07-30T01:01:02.000Z",
+        turnStartedAt: "2026-07-30T01:01:00.000Z",
+        event: { kind: "tool", name: "exec", detail: "rg -n trace" },
+      }],
+    }],
     [session],
     [{
       kind: "server",
@@ -91,12 +99,31 @@ try {
   );
   assert.deepEqual(conversation.map((item) => item.kind), ["agent", "user", "agent"]);
   assert.equal(conversation[2].kind === "agent" ? conversation[2].markdown : "", "正在处理。 已完成。");
+  assert.equal(conversation[2].kind === "agent" ? conversation[2].events.length : 0, 1);
   assert.equal(conversation[0].kind === "agent" ? conversation[0].at : null, "2026-07-30T01:00:00.000Z");
   assert.equal(conversation[0].kind === "agent" ? conversation[0].endedAt : null, "2026-07-30T01:01:00.000Z");
   assert.equal(conversation[2].kind === "agent" ? conversation[2].at : null, "2026-07-30T01:01:00.000Z");
   assert.equal(conversation[0].kind === "agent" ? conversation[0].showSessionMeta : null, false);
   assert.equal(conversation[2].kind === "agent" ? conversation[2].showSessionMeta : null, true);
-  assert.match(conversationToMarkdown(conversation, { ...task, title: "测试会话", body: "目标" }), /## 你 ·/);
+  const exported = conversationToMarkdown(conversation, { ...task, title: "测试会话", body: "目标" });
+  assert.match(exported, /## 你 ·/);
+  assert.doesNotMatch(exported, /rg -n trace/);
+
+  const traceOnlyConversation = buildConversationItems(
+    [{
+      session: { ...session, endedAt: "2026-07-30T01:00:10.000Z" },
+      output: "",
+      trace: [{
+        at: "2026-07-30T01:00:02.000Z",
+        turnStartedAt: "2026-07-30T01:00:00.000Z",
+        event: { kind: "error", message: "执行器启动失败" },
+      }],
+    }],
+    [{ ...session, endedAt: "2026-07-30T01:00:10.000Z" }],
+    [],
+  );
+  assert.equal(traceOnlyConversation[0]?.kind, "agent");
+  assert.equal(traceOnlyConversation[0]?.kind === "agent" ? traceOnlyConversation[0].events[0]?.kind : null, "error");
 
   const timedConversation = buildConversationItems(
     [{ session, output: "第一回合。\n\u001e{\"t\":\"agentEnd\",\"at\":\"2026-07-30T01:00:30.000Z\"}\n\u001e{\"t\":\"user\",\"text\":\"继续\",\"at\":\"2026-07-30T01:01:00.000Z\"}\n第二回合。\n\u001e{\"t\":\"agentEnd\",\"at\":\"2026-07-30T01:03:00.000Z\"}" }],

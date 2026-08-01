@@ -41,7 +41,7 @@ import { taskWorkspace } from "../task-workspace.js";
 import { resolveExecutorFor } from "../executors/index.js";
 import type { ResidentHandle } from "../executors/types.js";
 import { RUNS_DIR } from "../paths.js";
-import { writeTurn, writeTurnEnd, writeRunError } from "../transcript.js";
+import { appendSessionTrace, writeTurn, writeTurnEnd, writeRunError } from "../transcript.js";
 import { LEAD_PREAMBLE, LEAD_NUDGE, LEAD_RESUMED, LEAD_WORKSPACE_RESET } from "./prompts.js";
 
 // 空闲多久回收进程(0/负数 = 永不回收)。测试用 HARNESS_TEAM_IDLE_MS=5000。
@@ -180,6 +180,7 @@ async function reportOpenFailure(taskId: string, err: unknown): Promise<void> {
     const out = createWriteStream(join(RUNS_DIR, taskId, `${last.id}.md`), { flags: "a" });
     writeRunError(out, message);
     out.end();
+    appendSessionTrace(taskId, last.id, last.turnStartedAt ?? last.startedAt, { kind: "error", message });
   }
   bus.publish({
     type: "agent.event",
@@ -208,18 +209,20 @@ function push(lead: Lead, text: string, kind: Kind): void {
       recordSystemTurn(lead, INTERRUPT_NOTE);
     }
     // 你→ 的插话只写 .md(实时由客户端乐观显示),跟单任务 reply 一致。
-    writeTurn(lead.out, { t: "user", agent: lead.agentType, text }, now());
+    const at = now();
+    writeTurn(lead.out, { t: "user", agent: lead.agentType, text }, at);
     lead.handle.send(text);
-    void beginTurn(lead);
+    void beginTurn(lead, at);
     return;
   }
   if (lead.busy) {
     lead.pending.push(text); // 回合结束再合并成一条,省一轮模型调用
     return;
   }
-  recordSystemTurn(lead, text);
+  const at = now();
+  recordSystemTurn(lead, text, at);
   lead.handle.send(text);
-  void beginTurn(lead);
+  void beginTurn(lead, at);
 }
 
 // ── 开台 / 接回 ─────────────────────────────────────────────────────────────
@@ -347,8 +350,13 @@ async function consume(lead: Lead): Promise<void> {
       publish(lead, event);
       continue;
     }
-    if (event.kind === "text" || event.kind === "thinking") lead.out.write(event.text);
-    else if (event.kind === "error") writeRunError(lead.out, event.message);
+    if (event.kind === "text") lead.out.write(event.text);
+    else {
+      if (event.kind === "thinking" || event.kind === "tool" || event.kind === "error") {
+        appendSessionTrace(lead.taskId, lead.sessId, lead.turnStart ?? now(), event);
+      }
+      if (event.kind === "error") writeRunError(lead.out, event.message);
+    }
     if (event.kind === "done") exitStatus = event.exitStatus;
     publish(lead, event);
   }
@@ -395,9 +403,10 @@ async function endTurn(lead: Lead): Promise<void> {
   if (lead.pending.length) {
     const merged = lead.pending.join("\n\n---\n\n");
     lead.pending = [];
-    recordSystemTurn(lead, merged);
+    const at = now();
+    recordSystemTurn(lead, merged, at);
     lead.handle.send(merged);
-    await beginTurn(lead);
+    await beginTurn(lead, at);
     return;
   }
   await setTaskStatus(lead.taskId, "idle");
@@ -424,6 +433,7 @@ async function closeLead(lead: Lead, exitStatus: number): Promise<void> {
     // 既不是回收也不是手停 —— 进程自己没了。会话还在,说句话就能接回。
     const msg = `调度台进程意外退出(exit ${exitStatus})。CLI 会话还在,再说一句话会自动接回;需要的话也可以点「继续」。`;
     writeRunError(lead.out, msg);
+    appendSessionTrace(lead.taskId, lead.sessId, lead.turnStart ?? endIso, { kind: "error", message: msg }, endIso);
     publish(lead, { kind: "error", message: msg });
   }
   writeTurnEnd(lead.out, endIso);

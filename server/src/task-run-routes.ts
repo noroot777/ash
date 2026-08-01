@@ -35,7 +35,7 @@ import { setTaskStatus } from "./status.js";
 import { dispatchWorkers, type DispatchSpec } from "./team/dispatch.js";
 import { haltTeam } from "./team/session.js";
 import { enrichTasks } from "./task-store.js";
-import { sessionTranscriptPath } from "./transcript.js";
+import { parseSessionTrace, sessionTracePath, sessionTranscriptPath } from "./transcript.js";
 import { resumeCommandFor } from "./executors/resume.js";
 import { id, now } from "./util.js";
 
@@ -72,6 +72,20 @@ api.get("/sessions/:id/output", async (c) => {
     return c.text(text);
   } catch {
     return c.text("");
+  }
+});
+
+// Persisted non-body execution trace. It deliberately lives outside the
+// Markdown transcript so reasoning/tool events never become assistant prose.
+api.get("/sessions/:id/trace", async (c) => {
+  const sid = c.req.param("id");
+  const row = (await db.select().from(sessions).where(eq(sessions.id, sid))).at(0);
+  if (!row) return c.json({ error: "not found" }, 404);
+  try {
+    const raw = await readFile(sessionTracePath(row.taskId, sid), "utf8");
+    return c.json(parseSessionTrace(raw));
+  } catch {
+    return c.json([]);
   }
 });
 
