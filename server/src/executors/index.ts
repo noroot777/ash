@@ -88,5 +88,11 @@ async function loadRelay(providerId: string | null): Promise<RelayConfig | undef
   if (!providerId) return undefined;
   const [p] = await db.select().from(llmProviders).where(eq(llmProviders.id, providerId));
   if (!p || !p.apiKey) return undefined;
-  return { name: p.name, baseUrl: p.baseUrl.replace(/\/+$/, ""), apiKey: p.apiKey };
+  return {
+    providerId: p.id,
+    name: p.name,
+    baseUrl: p.baseUrl.replace(/\/+$/, ""),
+    apiKey: p.apiKey,
+    protocolConversionEnabled: p.protocol === "openai" && p.protocolConversionEnabled,
+  };
 }

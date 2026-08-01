@@ -405,10 +405,18 @@ export const api = {
     baseUrl: string;
     apiKey: string;
     model: string;
+    protocolConversionEnabled: boolean;
   }): Promise<LlmProvider> => request("/llm-providers", json("POST", provider)),
   patchLlmProvider: (
     providerId: string,
-    patch: Partial<{ name: string; protocol: LlmProtocol; baseUrl: string; apiKey: string; model: string }>,
+    patch: Partial<{
+      name: string;
+      protocol: LlmProtocol;
+      baseUrl: string;
+      apiKey: string;
+      model: string;
+      protocolConversionEnabled: boolean;
+    }>,
   ): Promise<LlmProvider> => request(`/llm-providers/${id(providerId)}`, json("PATCH", patch)),
   deleteLlmProvider: (providerId: string): Promise<{ deleted: true }> =>
     request(`/llm-providers/${id(providerId)}`, { method: "DELETE" }),

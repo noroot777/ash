@@ -1,6 +1,7 @@
 import { CodexExecutor } from "../codex.js";
 import { resumeInner } from "../spawn.js";
 import { relayApi } from "../../llm.js";
+import { protocolConverterBaseUrl } from "../../openai-converter/common.js";
 import type { CliSpec } from "./types.js";
 
 // codex 的 key 走 env_key 间接引用(TOML 里只出现变量名),真 key 只活在进程环境里 ——
@@ -41,7 +42,7 @@ export const codexSpec: CliSpec = {
       args: [
         "-c", `model_provider="${RELAY_PROVIDER_ID}"`,
         "-c", `model_providers.${RELAY_PROVIDER_ID}.name="${r.name.replace(/"/g, "")}"`,
-        "-c", `model_providers.${RELAY_PROVIDER_ID}.base_url="${relayApi(r.baseUrl)}"`,
+        "-c", `model_providers.${RELAY_PROVIDER_ID}.base_url="${relayApi(r.protocolConversionEnabled ? protocolConverterBaseUrl(r.providerId) : r.baseUrl)}"`,
         "-c", `model_providers.${RELAY_PROVIDER_ID}.wire_api="responses"`,
         "-c", `model_providers.${RELAY_PROVIDER_ID}.env_key="${RELAY_ENV_KEY}"`,
       ],

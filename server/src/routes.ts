@@ -32,6 +32,7 @@ import { mountTeamPresetRoutes } from "./team-presets.js";
 import { getAppSettings, parseAppSettingsPatch, patchAppSettings } from "./app-settings.js";
 import { mountTaskRoutes } from "./task-routes.js";
 import { mountTaskRunRoutes } from "./task-run-routes.js";
+import { mountOpenAiConverterRoutes } from "./openai-converter/routes.js";
 
 export const api = new Hono();
 mountNoteRoutes(api);
@@ -491,6 +492,7 @@ const toProvider = (r: typeof llmProviders.$inferSelect): LlmProvider => ({
   protocol: r.protocol as LlmProtocol,
   baseUrl: r.baseUrl,
   model: r.model,
+  protocolConversionEnabled: r.protocolConversionEnabled,
   hasKey: !!r.apiKey, // never return the key itself
   createdAt: r.createdAt,
 });
@@ -527,13 +529,15 @@ api.post("/llm-providers/models", async (c) => {
 api.post("/llm-providers", async (c) => {
   const b = await c.req.json<Partial<LlmProvider> & { apiKey?: string }>();
   if (!b.name?.trim() || !b.baseUrl?.trim()) return c.json({ error: "名称和网址(baseUrl)必填" }, 400);
+  const protocol = b.protocol === "anthropic" ? "anthropic" : "openai";
   const row = {
     id: id(),
     name: b.name.trim(),
-    protocol: b.protocol === "anthropic" ? "anthropic" : "openai",
+    protocol,
     baseUrl: b.baseUrl.trim(),
     apiKey: (b.apiKey ?? "").trim(),
     model: (b.model ?? "").trim(),
+    protocolConversionEnabled: protocol === "openai" && b.protocolConversionEnabled === true,
     createdAt: now(),
   };
   await db.insert(llmProviders).values(row);
@@ -550,6 +554,9 @@ api.patch("/llm-providers/:id", async (c) => {
   if (b.protocol !== undefined) patch.protocol = b.protocol === "anthropic" ? "anthropic" : "openai";
   if (b.baseUrl !== undefined) patch.baseUrl = b.baseUrl;
   if (b.model !== undefined) patch.model = b.model;
+  const nextProtocol = b.protocol === undefined ? existing.protocol : b.protocol === "anthropic" ? "anthropic" : "openai";
+  if (nextProtocol === "anthropic") patch.protocolConversionEnabled = false;
+  else if (b.protocolConversionEnabled !== undefined) patch.protocolConversionEnabled = b.protocolConversionEnabled === true;
   if (b.apiKey) patch.apiKey = b.apiKey; // 只在传了非空 key 时更新(留空=不动)
   await db.update(llmProviders).set(patch).where(eq(llmProviders.id, pid));
   const updated = (await db.select().from(llmProviders).where(eq(llmProviders.id, pid))).at(0)!;
@@ -563,6 +570,8 @@ api.delete("/llm-providers/:id", async (c) => {
   await db.update(agents).set({ providerId: null }).where(eq(agents.providerId, pid));
   return c.json({ deleted: true });
 });
+
+mountOpenAiConverterRoutes(api);
 
 // ── queues (顺序依赖原语,DESIGN-scheduling.md §1) ─────────────────────────────
 // 端点实现与 helper 都在 ./queues.ts(routes.ts 已经很长,队列语义集中一处更好改)。

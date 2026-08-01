@@ -228,5 +228,6 @@ export const llmProviders = sqliteTable("llm_providers", {
   baseUrl: text("base_url").notNull(), // 根地址,不含 /v1(各处按需自行补)
   apiKey: text("api_key").notNull().default(""), // 本机存储,GET 不回传明文
   model: text("model").notNull().default(""),
+  protocolConversionEnabled: integer("protocol_conversion_enabled", { mode: "boolean" }).notNull().default(false),
   createdAt: text("created_at").notNull(),
 });

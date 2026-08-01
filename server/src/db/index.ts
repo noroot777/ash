@@ -74,6 +74,7 @@ export async function ensureSchema() {
       id TEXT PRIMARY KEY, name TEXT NOT NULL,
       protocol TEXT NOT NULL DEFAULT 'openai', base_url TEXT NOT NULL,
       api_key TEXT NOT NULL DEFAULT '', model TEXT NOT NULL DEFAULT '',
+      protocol_conversion_enabled INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL
     );
     CREATE TABLE IF NOT EXISTS queue_items (
@@ -153,6 +154,8 @@ export async function ensureSchema() {
     "ALTER TABLE sessions ADD COLUMN agent_err_path TEXT",
     "ALTER TABLE sessions ADD COLUMN agent_rc_path TEXT",
     "ALTER TABLE sessions ADD COLUMN agent_offset INTEGER",
+    // OpenAI 兼容供应商：把 Codex 的 Responses API 适配到仅有 Chat Completions 的上游。
+    "ALTER TABLE llm_providers ADD COLUMN protocol_conversion_enabled INTEGER NOT NULL DEFAULT 0",
   ]) {
     try {
       await client.execute(sql);

@@ -33,9 +33,11 @@ export interface RunHandle {
 // 挂在执行器上的供应商(§5)。非空时启动 CLI 前注入 base_url + key,顶掉 CLI
 // 自己的官方登录账号。baseUrl 恒为根地址(不含 /v1),各 executor 按需自行补路径。
 export interface RelayConfig {
+  providerId: string;
   name: string;
   baseUrl: string;
   apiKey: string;
+  protocolConversionEnabled: boolean;
 }
 
 // 常驻会话(§Team 的调度台):一个**会话**吃多个回合,会话全程同一个。

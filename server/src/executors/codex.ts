@@ -6,6 +6,7 @@ import { openCodexResident } from "./codex-resident.js";
 import { spawnForRun, detachedInfo } from "./detached.js";
 import { spawnAgent, resumeFor, resumeInner, spawnErrorMessage, killChild, forceFinishOnExit, redactSecrets } from "./spawn.js";
 import { relayApi } from "../llm.js";
+import { protocolConverterBaseUrl } from "../openai-converter/common.js";
 import { formatFailureForTimeline, RunTraceRecorder, type RunTracePaths } from "./diagnostics.js";
 
 // 供应商的 key 走环境变量,不进命令行 —— `-c` 参数会原样进 commandLine,而后者存进
@@ -55,12 +56,16 @@ export class CodexExecutor implements AgentExecutor {
   private relayArgs(): string[] {
     if (!this.relay) return [];
     const p = `model_providers.${RELAY_PROVIDER_ID}`;
+    const baseUrl = this.relay.protocolConversionEnabled
+      ? relayApi(protocolConverterBaseUrl(this.relay.providerId))
+      : relayApi(this.relay.baseUrl);
     return [
       "-c", `model_provider="${RELAY_PROVIDER_ID}"`,
       "-c", `${p}.name="${this.relay.name.replace(/"/g, "")}"`,
-      "-c", `${p}.base_url="${relayApi(this.relay.baseUrl)}"`,
+      "-c", `${p}.base_url="${baseUrl}"`,
       // codex 0.14x 起废弃了 wire_api="chat"(启动直接报错退出),只认 Responses API。
-      // 所以给 codex 用的供应商必须支持 /v1/responses,光有 /v1/chat/completions 不行。
+      // 供应商只有 /chat/completions 时，protocolConversionEnabled 会把 base_url 指到
+      // harness 内置转换端点，再由它转换请求、流式事件与最终响应。
       "-c", `${p}.wire_api="responses"`,
       "-c", `${p}.env_key="${RELAY_ENV_KEY}"`,
     ];

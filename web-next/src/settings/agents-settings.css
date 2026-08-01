@@ -452,6 +452,38 @@
   grid-column: 1 / -1;
 }
 
+.provider-conversion-field {
+  display: flex;
+  min-height: 58px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  border: 1px solid color-mix(in lch, var(--accent) 24%, var(--line));
+  border-radius: 9px;
+  background: color-mix(in lch, var(--accent-soft) 34%, transparent);
+  padding: 10px 12px;
+}
+
+.provider-conversion-field > div {
+  display: grid;
+  gap: 3px;
+}
+
+.provider-conversion-field b {
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.provider-conversion-field small {
+  color: var(--faint);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.provider-conversion-field .ui-choice {
+  flex: none;
+}
+
 .provider-mono-input,
 .provider-model-field input {
   font-family: var(--font-mono);
@@ -541,5 +573,10 @@
 
   .provider-form-grid .is-wide {
     grid-column: auto;
+  }
+
+  .provider-conversion-field {
+    align-items: flex-start;
+    flex-direction: column;
   }
 }

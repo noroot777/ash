@@ -351,6 +351,9 @@ export interface LlmProvider {
   protocol: LlmProtocol; // anthropic-compatible (挂 claude) | openai-compatible (挂 codex)
   baseUrl: string; // 根地址,不含 /v1 —— e.g. https://your-relay.com
   model: string;
+  // OpenAI 兼容供应商若只实现 Chat Completions，开启后由 harness 把 Codex 的
+  // Responses API 请求/流式响应转换成 Chat Completions 再转回来。
+  protocolConversionEnabled: boolean;
   hasKey: boolean; // the key itself is never sent to the client; only whether one is set
   createdAt: string;
 }

@@ -25,7 +25,8 @@
     "test:scheduled-messages": "tsx scripts/test-scheduled-messages.ts",
     "test:review": "tsx scripts/test-review-flow.ts",
     "test:claude-stream": "tsx scripts/test-claude-stream-errors.ts",
-    "test:codex-resident": "tsx scripts/test-codex-resident.ts"
+    "test:codex-resident": "tsx scripts/test-codex-resident.ts",
+    "test:openai-converter": "tsx scripts/test-openai-converter.ts"
   },
   "dependencies": {
     "@harness/shared": "*",

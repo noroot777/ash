@@ -7,7 +7,7 @@ import {
   Plus,
   Trash,
 } from "@phosphor-icons/react";
-import { Button } from "../components/ui.tsx";
+import { Button, Toggle } from "../components/ui.tsx";
 import { api } from "../lib/api.ts";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import { protocolLabel } from "./agentProviderRules.ts";
@@ -19,6 +19,7 @@ type ProviderDraft = {
   baseUrl: string;
   apiKey: string;
   model: string;
+  protocolConversionEnabled: boolean;
 };
 
 function ProviderForm({
@@ -38,6 +39,7 @@ function ProviderForm({
     baseUrl: provider?.baseUrl ?? "",
     apiKey: "",
     model: provider?.model ?? "",
+    protocolConversionEnabled: provider?.protocolConversionEnabled ?? false,
   });
   const [models, setModels] = useState<string[]>([]);
   const [probing, setProbing] = useState(false);
@@ -45,7 +47,11 @@ function ProviderForm({
   const [probeError, setProbeError] = useState("");
 
   const set = <K extends keyof ProviderDraft>(key: K, value: ProviderDraft[K]) => {
-    setDraft((current) => ({ ...current, [key]: value }));
+    setDraft((current) => ({
+      ...current,
+      [key]: value,
+      ...(key === "protocol" && value === "anthropic" ? { protocolConversionEnabled: false } : {}),
+    }));
     if (key === "protocol" || key === "baseUrl" || key === "apiKey") {
       setModels([]);
       setProbeError("");
@@ -86,6 +92,7 @@ function ProviderForm({
           protocol: draft.protocol,
           baseUrl: draft.baseUrl.trim(),
           model: draft.model.trim(),
+          protocolConversionEnabled: draft.protocol === "openai" && draft.protocolConversionEnabled,
           ...(draft.apiKey.trim() ? { apiKey: draft.apiKey.trim() } : {}),
         });
         clearProviderModelCache(provider.id);
@@ -96,6 +103,7 @@ function ProviderForm({
           baseUrl: draft.baseUrl.trim(),
           apiKey: draft.apiKey.trim(),
           model: draft.model.trim(),
+          protocolConversionEnabled: draft.protocol === "openai" && draft.protocolConversionEnabled,
         });
       }
       await onSaved();
@@ -138,6 +146,19 @@ function ProviderForm({
             placeholder={provider?.hasKey ? "留空保持现有 Key" : "API Key"}
           />
         </label>
+        {draft.protocol === "openai" && (
+          <div className="is-wide provider-conversion-field">
+            <div>
+              <b>Responses → Chat Completions</b>
+              <small>供应商只支持 /chat/completions 时开启；Codex 的 /responses 请求与流式响应会自动转换。</small>
+            </div>
+            <Toggle
+              checked={draft.protocolConversionEnabled}
+              onChange={(checked) => set("protocolConversionEnabled", checked)}
+              label={draft.protocolConversionEnabled ? "协议转换已开启" : "协议转换已关闭"}
+            />
+          </div>
+        )}
         <label className="is-wide provider-model-field">
           <span>默认模型</span>
           <div>
@@ -225,7 +246,10 @@ function ProviderRow({
         </span>
         <div className="provider-copy">
           <b>{provider.name}</b>
-          <small>{protocolLabel(provider.protocol)} · {provider.baseUrl}</small>
+          <small>
+            {protocolLabel(provider.protocol)} · {provider.baseUrl}
+            {provider.protocolConversionEnabled ? " · Responses→Chat 已开启" : ""}
+          </small>
         </div>
         <span className={`provider-key-state${provider.hasKey ? " is-ready" : ""}`}>
           {provider.hasKey && <CheckCircle size={12} weight="fill" />}
