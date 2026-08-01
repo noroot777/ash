@@ -313,7 +313,8 @@
 }
 
 .agent-profile-create-grid label,
-.provider-form-grid label {
+.provider-form-grid label,
+.provider-model-field {
   display: grid;
   min-width: 0;
   gap: 4px;
@@ -321,6 +322,7 @@
 
 .agent-profile-create-grid label > span,
 .provider-form-grid label > span,
+.provider-model-field > label,
 .agent-args-head > span {
   color: var(--faint);
   font-size: 9px;
