@@ -23,6 +23,13 @@ export function useConversation(taskId: string, revision = 0) {
     setTimeline(next);
   }, []);
 
+  // EventSource callbacks can deliver agent.event + task.status in one React
+  // batch. Advance the cursor synchronously so the status-triggered snapshot
+  // refresh never captures a stale length and keeps an already persisted event.
+  const appendTimeline = useCallback((entry: TimelineEntry) => {
+    replaceTimeline([...timelineRef.current, entry]);
+  }, [replaceTimeline]);
+
   const load = useCallback(async (preserveArrivals: boolean) => {
     const cutoff = timelineRef.current.length;
     setRefreshing(true);
@@ -41,18 +48,15 @@ export function useConversation(taskId: string, revision = 0) {
       setSessions(nextSessions);
       setPersisted(outputs.filter((entry) => entry.output.trim() || entry.trace.length));
       if (preserveArrivals) {
-        setTimeline((current) => {
-          const next = current.slice(Math.min(cutoff, current.length));
-          timelineRef.current = next;
-          return next;
-        });
+        const current = timelineRef.current;
+        replaceTimeline(current.slice(Math.min(cutoff, current.length)));
       }
     } catch (reason) {
       setError(reason instanceof Error ? reason : new Error("会话读取失败"));
     } finally {
       setRefreshing(false);
     }
-  }, [taskId]);
+  }, [replaceTimeline, taskId]);
 
   const refetch = useCallback(() => load(true), [load]);
 
@@ -64,10 +68,11 @@ export function useConversation(taskId: string, revision = 0) {
   const connected = useServerEvents(
     useCallback((event) => {
       if (event.type === "agent.event" && event.taskId === taskId) {
-        setTimeline((current) => {
-          const next = [...current, { kind: "server", id: crypto.randomUUID(), event } as const];
-          timelineRef.current = next;
-          return next;
+        appendTimeline({
+          kind: "server",
+          id: crypto.randomUUID(),
+          event,
+          receivedAt: new Date().toISOString(),
         });
         if (event.event.kind === "session") {
           void api.sessions(taskId).then(setSessions).catch(() => undefined);
@@ -80,7 +85,7 @@ export function useConversation(taskId: string, revision = 0) {
       ) {
         void load(true);
       }
-    }, [load, taskId]),
+    }, [appendTimeline, load, taskId]),
   );
 
   const addUser = useCallback((
@@ -96,12 +101,8 @@ export function useConversation(taskId: string, revision = 0) {
       at: new Date().toISOString(),
       isAnswer: options.answer,
     };
-    setTimeline((current) => {
-      const next = [...current, entry];
-      timelineRef.current = next;
-      return next;
-    });
-  }, []);
+    appendTimeline(entry);
+  }, [appendTimeline]);
 
   const items = useMemo(
     () => buildConversationItems(persisted, sessions, timeline),

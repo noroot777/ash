@@ -171,6 +171,66 @@ try {
   assert.equal(timedConversation[2].kind === "agent" ? timedConversation[2].at : null, "2026-07-30T01:01:00.000Z");
   assert.equal(timedConversation[2].kind === "agent" ? timedConversation[2].endedAt : null, "2026-07-30T01:03:00.000Z");
 
+  const recycleNote = "〔系统〕调度台空闲超过 30 分钟,进程已回收(待命)。";
+  const recycleAt = "2026-07-30T01:30:00.000Z";
+  const dedupedRefresh = buildConversationItems(
+    [{
+      session,
+      output: `\u001e${JSON.stringify({ t: "system", text: recycleNote, at: recycleAt })}`,
+    }],
+    [session],
+    [
+      {
+        kind: "server",
+        id: "done-before-refresh",
+        event: {
+          type: "agent.event",
+          taskId: task.id,
+          sessionId: session.id,
+          role: "lead",
+          event: { kind: "done", exitStatus: 0 },
+        },
+      },
+      {
+        kind: "server",
+        id: "same-recycle-from-sse",
+        receivedAt: "2026-07-30T01:30:00.020Z",
+        event: {
+          type: "agent.event",
+          taskId: task.id,
+          sessionId: session.id,
+          role: "lead",
+          event: { kind: "system", text: recycleNote },
+        },
+      },
+    ],
+  );
+  assert.deepEqual(
+    dedupedRefresh.filter((item) => item.kind === "event").map((item) => item.text),
+    [recycleNote, "本轮执行结束"],
+  );
+
+  const laterRecycle = buildConversationItems(
+    [{
+      session,
+      output: `\u001e${JSON.stringify({ t: "system", text: recycleNote, at: recycleAt })}`,
+    }],
+    [session],
+    [{
+      kind: "server",
+      id: "later-recycle",
+      receivedAt: "2026-07-30T02:00:00.000Z",
+      event: {
+        type: "agent.event",
+        taskId: task.id,
+        sessionId: session.id,
+        role: "lead",
+        event: { kind: "system", text: recycleNote },
+      },
+    }],
+  );
+  assert.equal(laterRecycle.filter((item) => item.kind === "event" && item.text === recycleNote).length, 2);
+
   const durationInfo = taskDurationInfo(task, Date.parse("2026-07-30T01:10:00.000Z"));
   assert.equal(durationInfo?.label, "用时");
   assert.equal(durationInfo?.text, "10m 0s");
