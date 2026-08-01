@@ -329,9 +329,9 @@ export async function continueTask(
     throwOnTeamUnavailable?: boolean;
   } = {},
 ): Promise<void> {
-  // 已验收的协作任务收到真人消息 = 它又开工了,stage 清回「进行中」(见 reopenAcceptedStage)。
+  // 已验收的任务收到真人消息 = 旧验收不再覆盖新增改动,stage 清回「进行中」。
   // 只认真人消息:带 opts.system 的 retry / 手点运行 / 队列推进 / 上游唤醒不算,跟下面
-  // followUpFrom 用的是同一条口径。放在最前面,team(下面就分流走了)和 debate 一起覆盖。
+  // followUpFrom 用的是同一条口径。放在最前面,确保 single/team/debate 走同一规则。
   if (!opts.system) await reopenAcceptedStage(taskId);
   // 团队任务(§Team):插话直接写进常驻调度台的 stdin —— 即时、同一会话、用户侧
   // 感觉不断线。不占这里的单飞锁(那把锁是给「一次运行 = 一个回合」的单任务用的,
