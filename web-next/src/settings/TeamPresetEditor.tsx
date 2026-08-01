@@ -8,6 +8,7 @@ import { AGENT_TYPES } from "@harness/shared";
 import { REASONING_EFFORT_VALUES } from "@harness/shared/cli-presets";
 import { CrownSimple, MagnifyingGlass, Robot } from "@phosphor-icons/react";
 import { Toggle } from "../components/ui.tsx";
+import { residentAgentTypes, useAgentAvailability } from "../lib/agentAvailability.ts";
 import { ProviderModelInput } from "./ProviderModelInput.tsx";
 
 type PresetRole = "lead" | "worker" | "reviewer";
@@ -103,6 +104,7 @@ function TeamRoleFields({
   value,
   profiles,
   providers,
+  residentTypes,
   disabled,
   onChange,
 }: {
@@ -110,11 +112,19 @@ function TeamRoleFields({
   value: RoleDraft;
   profiles: AgentExecutorProfile[];
   providers: LlmProvider[];
+  /** 能开常驻会话的类型——只有它们当得了调度者(来源见 detect.ts 的 resident 字段)。 */
+  residentTypes: AgentType[];
   disabled: boolean;
   onChange: (value: RoleDraft) => void;
 }) {
   const meta = ROLE_META[role];
   const Icon = meta.icon;
+  // 调度者要维持一个常驻会话来分派工作,只有实现了 openResident 的执行器扛得住。
+  // 别的类型存得进预设、套用时却会被 composer 判成「调度者当前不可运行」而挡住提交
+  // ——那时用户已经配完了,所以这一步就把不合格的类型拿掉。
+  const leadOnly = role === "lead";
+  const typeOptions = AGENT_TYPES.filter((type) => !leadOnly || residentTypes.includes(type));
+  const staleType = leadOnly && !residentTypes.includes(value.agentType);
   const matchingProfiles = profiles.filter((profile) => profile.type === value.agentType);
   const selectedProfile = value.executorId
     ? matchingProfiles.find((profile) => profile.id === value.executorId)
@@ -143,7 +153,10 @@ function TeamRoleFields({
               reasoningEffort: "",
             })}
           >
-            {AGENT_TYPES.map((type) => <option value={type} key={type}>{type}</option>)}
+            {staleType && (
+              <option value={value.agentType} disabled>{value.agentType}（不支持常驻会话）</option>
+            )}
+            {typeOptions.map((type) => <option value={type} key={type}>{type}</option>)}
           </select>
         </label>
         <label>
@@ -193,6 +206,11 @@ function TeamRoleFields({
           </select>
         </label>
       </div>
+      {staleType && (
+        <p className="team-preset-role-warning">
+          {value.agentType} 不支持常驻会话，当不了调度者；用这个预设建团队时会被拦下。请改选类型下拉里列出的其它类型。
+        </p>
+      )}
     </section>
   );
 }
@@ -210,6 +228,10 @@ export function TeamPresetEditor({
   busy: boolean;
   onChange: (draft: TeamPresetDraft) => void;
 }) {
+  // 检测未完成/失败时 residentAgentTypes 回落到内置名单(claude),口径与 composer
+  // 一致:「不能证明它装了」不等于「可以放它去当调度者」。
+  const detection = useAgentAvailability();
+  const residentTypes = residentAgentTypes(detection.agents);
   const changeRole = (role: PresetRole, value: RoleDraft) => {
     onChange({ ...draft, roles: { ...draft.roles, [role]: value } });
   };
@@ -243,6 +265,7 @@ export function TeamPresetEditor({
           value={draft.roles[role]}
           profiles={profiles}
           providers={providers}
+          residentTypes={residentTypes}
           disabled={busy}
           onChange={(value) => changeRole(role, value)}
         />

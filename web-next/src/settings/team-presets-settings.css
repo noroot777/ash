@@ -300,6 +300,18 @@
   white-space: nowrap;
 }
 
+/* 调度者选了不支持常驻会话的类型时的说明,单独占一行横跨 header + fields 两列。 */
+.team-preset-role-warning {
+  margin: 0;
+  grid-column: 1 / -1;
+  border-radius: 7px;
+  background: rgb(181 123 0 / 8%);
+  padding: 6px 8px;
+  color: var(--amber);
+  font-size: 10px;
+  line-height: 1.6;
+}
+
 .team-preset-role-fields {
   display: grid;
   min-width: 0;

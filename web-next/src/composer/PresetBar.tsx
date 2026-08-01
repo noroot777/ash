@@ -19,7 +19,18 @@ type NameDialog =
   | { kind: "create"; config: TeamPresetConfig }
   | { kind: "rename"; preset: TeamPreset };
 
-function presetActorLabel(preset: TeamPreset, role: "lead" | "worker" | "reviewer") {
+/**
+ * 卡片上那一行「谁干这个角色」。
+ *
+ * 只写 Profile 名会骗人:名字是用户起的(`codex@cpa·gpt-5.6-sol`),而预设里的
+ * `*Model` 覆盖可以让它实际跑另一个模型。所以覆盖存在且与 Profile 自带模型不同
+ * 时,把生效模型追加上去。
+ */
+function presetActorLabel(
+  preset: TeamPreset,
+  profiles: AgentExecutorProfile[],
+  role: "lead" | "worker" | "reviewer",
+) {
   const type = role === "reviewer"
     ? preset.config.reviewerAgentType ?? preset.config.worker
     : preset.config[role];
@@ -28,7 +39,21 @@ function presetActorLabel(preset: TeamPreset, role: "lead" | "worker" | "reviewe
     : role === "worker"
       ? preset.config.workerExecutorLabel
       : preset.config.reviewerExecutorLabel;
-  return label ?? `默认 ${type}`;
+  const executorId = role === "lead"
+    ? preset.config.leadExecutorId
+    : role === "worker"
+      ? preset.config.workerExecutorId
+      : preset.config.reviewerExecutorId;
+  const overrideModel = (role === "lead"
+    ? preset.config.leadModel
+    : role === "worker"
+      ? preset.config.workerModel
+      : preset.config.reviewerModel)?.trim() || null;
+  const profileModel = executorId
+    ? profiles.find((profile) => profile.id === executorId)?.model ?? null
+    : null;
+  const base = label ?? `默认 ${type}`;
+  return overrideModel && overrideModel !== profileModel ? `${base} · ${overrideModel}` : base;
 }
 
 function configKey(config: TeamPresetConfig) {
@@ -257,14 +282,14 @@ export function PresetBar({
             >
               <b>{preset.name}</b>
               <span>
-                <span>{presetActorLabel(preset, "lead")}</span>
+                <span>{presetActorLabel(preset, profiles, "lead")}</span>
                 <ArrowRight size={10} />
                 <Robot size={11} />
-                <span>{presetActorLabel(preset, "worker")}</span>
+                <span>{presetActorLabel(preset, profiles, "worker")}</span>
               </span>
               <small className={preset.config.review === false ? "is-off" : ""}>
                 <MagnifyingGlass size={10} />
-                {preset.config.review === false ? "自动审查关闭" : presetActorLabel(preset, "reviewer")}
+                {preset.config.review === false ? "自动审查关闭" : presetActorLabel(preset, profiles, "reviewer")}
               </small>
             </button>
           ))}

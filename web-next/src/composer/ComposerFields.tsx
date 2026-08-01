@@ -12,6 +12,7 @@ import { Toggle } from "../components/ui.tsx";
 import { TaskLabelsEditor } from "../components/TaskLabelsEditor.tsx";
 import {
   executorOptions,
+  executorRunSummary,
   executorValue,
   parseExecutorValue,
 } from "../lib/agentAvailability.ts";
@@ -33,6 +34,7 @@ export function ExecutorSelect({
   profiles,
   knownProfiles,
   fallbackType,
+  override,
   onChange,
 }: {
   label: string;
@@ -41,11 +43,15 @@ export function ExecutorSelect({
   profiles: AgentExecutorProfile[];
   knownProfiles: AgentExecutorProfile[];
   fallbackType: AgentType;
+  /** 该角色的模型/思考强度覆盖——决定这一栏底下写什么，见 executorRunSummary。 */
+  override?: { model?: string | null; effort?: string | null };
   onChange: (value: string) => void;
 }) {
   const selection = parseExecutorValue(value, knownProfiles, { agentType: fallbackType, executorId: null });
   const options = executorOptions({ types, profiles, knownProfiles, selection });
   const pickableCount = types.length + profiles.length;
+  // 选项文本里的模型是 Profile 自带的那个;覆盖存在时它就不是实际会跑的模型了。
+  const run = executorRunSummary(selection, knownProfiles, override);
   return (
     <label className="composer-field">
       <span>{label}</span>
@@ -59,6 +65,12 @@ export function ExecutorSelect({
           <option value={option.value} disabled={option.disabled} key={option.value}>{option.label}</option>
         ))}
       </select>
+      {run.overridden && (
+        <small className="composer-field-run">
+          实际运行：{run.model ?? "跟随执行器"}{run.effort ? ` · ${run.effort}` : ""}
+          <em>覆盖</em>
+        </small>
+      )}
     </label>
   );
 }
@@ -236,13 +248,13 @@ export function ComposerFields({
         )}
         <div className={`composer-executor-grid is-${mode}`}>
           {mode === "single" && (
-            <ExecutorSelect label="执行器" value={executors.single.profile} types={workerTypes} profiles={profiles} knownProfiles={profiles} fallbackType="claude" onChange={(value) => onExecutorChange("single", value)} />
+            <ExecutorSelect label="执行器" value={executors.single.profile} types={workerTypes} profiles={profiles} knownProfiles={profiles} fallbackType="claude" override={executors.single} onChange={(value) => onExecutorChange("single", value)} />
           )}
           {mode === "team" && (
             <>
-              <ExecutorSelect label="调度者执行器" value={executors.lead.profile} types={leadTypes} profiles={leadProfiles} knownProfiles={profiles} fallbackType="claude" onChange={(value) => onExecutorChange("lead", value)} />
-              <ExecutorSelect label="执行者执行器" value={executors.worker.profile} types={workerTypes} profiles={profiles} knownProfiles={profiles} fallbackType="codex" onChange={(value) => onExecutorChange("worker", value)} />
-              <ExecutorSelect label="审查者执行器" value={executors.reviewer.profile} types={workerTypes} profiles={profiles} knownProfiles={profiles} fallbackType={executorTypes.worker} onChange={(value) => onExecutorChange("reviewer", value)} />
+              <ExecutorSelect label="调度者执行器" value={executors.lead.profile} types={leadTypes} profiles={leadProfiles} knownProfiles={profiles} fallbackType="claude" override={executors.lead} onChange={(value) => onExecutorChange("lead", value)} />
+              <ExecutorSelect label="执行者执行器" value={executors.worker.profile} types={workerTypes} profiles={profiles} knownProfiles={profiles} fallbackType="codex" override={executors.worker} onChange={(value) => onExecutorChange("worker", value)} />
+              <ExecutorSelect label="审查者执行器" value={executors.reviewer.profile} types={workerTypes} profiles={profiles} knownProfiles={profiles} fallbackType={executorTypes.worker} override={executors.reviewer} onChange={(value) => onExecutorChange("reviewer", value)} />
             </>
           )}
           {mode === "debate" && (

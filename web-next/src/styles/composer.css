@@ -266,6 +266,28 @@
   font-size: 12px;
 }
 
+/* 选择器只写得下 Profile 名 + Profile 自带模型;覆盖生效时实际跑的是别的模型,
+   所以生效值单独占一行,覆盖态再加个角标(见 executorRunSummary)。 */
+.composer-field-run {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.composer-field-run > em {
+  border-radius: 4px;
+  background: color-mix(in lch, var(--accent) 14%, transparent);
+  padding: 1px 4px;
+  color: var(--accent);
+  font-size: 9px;
+  font-style: normal;
+  font-weight: 600;
+}
+
 .composer-toggle-field .ui-choice {
   display: flex;
   height: 34px;

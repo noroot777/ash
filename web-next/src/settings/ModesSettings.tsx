@@ -19,6 +19,7 @@ import {
 } from "./TeamPresetEditor.tsx";
 import "./team-presets-settings.css";
 
+/** 与 composer 卡片同一口径:Profile 名之外还要写出被覆盖的生效模型。 */
 function presetActorLabel(
   preset: TeamPreset,
   profiles: AgentExecutorProfile[],
@@ -32,8 +33,16 @@ function presetActorLabel(
     : role === "worker"
       ? preset.config.workerExecutorId
       : preset.config.reviewerExecutorId;
-  return profiles.find((profile) => profile.id === executorId && profile.type === type)?.name
-    ?? `默认 ${type}`;
+  const overrideModel = (role === "lead"
+    ? preset.config.leadModel
+    : role === "worker"
+      ? preset.config.workerModel
+      : preset.config.reviewerModel)?.trim() || null;
+  const profile = profiles.find((candidate) => candidate.id === executorId && candidate.type === type);
+  const base = profile?.name ?? `默认 ${type}`;
+  return overrideModel && overrideModel !== (profile?.model ?? null)
+    ? `${base} · ${overrideModel}`
+    : base;
 }
 
 function draftKey(draft: TeamPresetDraft) {

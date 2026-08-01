@@ -136,6 +136,33 @@ export function preferredExecutor(
   return profile ? { agentType: profile.type, executorId: profile.id } : null;
 }
 
+/**
+ * 该选择**实际会跑**的模型与思考强度。
+ *
+ * Profile 名字里常常写着一个模型（`codex@cpa·gpt-5.6-sol`），但预设/任务级覆盖可以
+ * 把它换成别的（存进 `*Model` / `*ReasoningEffort`）。只显示 Profile 名 + Profile
+ * 自带模型，用户读到的就是被覆盖前的那个——所以生效值必须由这里统一算，界面照抄。
+ */
+export function executorRunSummary(
+  selection: ExecutorSelection,
+  profiles: AgentExecutorProfile[],
+  override?: { model?: string | null; effort?: string | null },
+): { model: string | null; effort: string | null; overridden: boolean } {
+  const profile = selection.executorId
+    ? profiles.find((candidate) => candidate.id === selection.executorId)
+    : undefined;
+  const overrideModel = override?.model?.trim() || null;
+  const overrideEffort = override?.effort?.trim() || null;
+  const model = overrideModel ?? profile?.model ?? null;
+  const effort = overrideEffort ?? profile?.reasoningEffort ?? null;
+  return {
+    model,
+    effort,
+    overridden: (!!overrideModel && overrideModel !== (profile?.model ?? null))
+      || (!!overrideEffort && overrideEffort !== (profile?.reasoningEffort ?? null)),
+  };
+}
+
 export function executorValue(selection: ExecutorSelection): string {
   return selection.executorId ?? `${TYPE_PREFIX}${selection.agentType}`;
 }
