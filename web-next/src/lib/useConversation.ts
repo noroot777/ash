@@ -30,13 +30,16 @@ export function useConversation(taskId: string, revision = 0) {
     try {
       const nextSessions = await api.sessions(taskId);
       const outputs = await Promise.all(
-        nextSessions.map(async (session) => ({
-          session,
-          output: await api.sessionOutput(session.id).catch(() => ""),
-        })),
+        nextSessions.map(async (session) => {
+          const [output, trace] = await Promise.all([
+            api.sessionOutput(session.id).catch(() => ""),
+            api.sessionTrace(session.id).catch(() => []),
+          ]);
+          return { session, output, trace };
+        }),
       );
       setSessions(nextSessions);
-      setPersisted(outputs.filter((entry) => entry.output.trim()));
+      setPersisted(outputs.filter((entry) => entry.output.trim() || entry.trace.length));
       if (preserveArrivals) {
         setTimeline((current) => {
           const next = current.slice(Math.min(cutoff, current.length));

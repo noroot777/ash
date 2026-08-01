@@ -5,7 +5,7 @@
 // 结算规则是全局单点，谁也不该另造一份。
 import type { WriteStream } from "node:fs";
 import { eq, sql } from "drizzle-orm";
-import type { AgentType } from "@harness/shared";
+import type { AgentEvent, AgentType } from "@harness/shared";
 import { db } from "./db/index.js";
 import { tasks, sessions } from "./db/schema.js";
 import { bus } from "./bus.js";
@@ -13,7 +13,7 @@ import { now } from "./util.js";
 import { setTaskStatus } from "./status.js";
 import { takeStopped, takeConfirmed, type StopSettle } from "./runs.js";
 import type { AgentExecutor, RunHandle } from "./executors/types.js";
-import { writeTurnEnd, writeRunError } from "./transcript.js";
+import { appendSessionTrace, writeTurnEnd, writeRunError } from "./transcript.js";
 import { notifyTeamLead } from "./team/inbox.js";
 import { handleTaskSettlement } from "./review.js";
 import { FOLLOW_UP_LABEL } from "./labels.js";
@@ -180,6 +180,11 @@ export async function consumeSingleRun(a: {
     out.write(text);
     bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: "single", agentType, event: { kind: "text", text } });
   };
+  const persistTrace = (event: AgentEvent, at?: string) => {
+    if (event.kind === "thinking" || event.kind === "tool" || event.kind === "error") {
+      appendSessionTrace(taskId, sessId, a.turnStart, event, at);
+    }
+  };
 
   // 定期把「已消费到哪个字节」写进库。真正重要的是**崩溃/被杀时**那一份——
   // 正常收尾会在下面再写一次终值。1s 一次：最坏情况重启后重放不到 1 秒的输出，
@@ -227,10 +232,11 @@ export async function consumeSingleRun(a: {
         emitText(m ? rest : head); // matched: drop the title line; else flush buffer
         continue;
       }
-      if (event.kind === "text" || event.kind === "thinking") {
+      if (event.kind === "text") {
         out.write(event.text);
         bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: "single", agentType, event });
       } else {
+        persistTrace(event);
         if (event.kind === "error") writeRunError(out, event.message);
         bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: "single", agentType, event });
         if (event.kind === "done") exitStatus = event.exitStatus;
@@ -261,8 +267,9 @@ export async function consumeSingleRun(a: {
   const settled = await settleTaskStatus(taskId, exitStatus, stopped);
   await afterSettlement(taskId, settled.status, settled.confirmedDone);
   if (settled.note) {
-    // 未确认降级为 failed:写进 .md(reload 可见)+ 广播(live 可见)
+    // 诊断正文留在 .md 原始产物里；trace 负责刷新后的折叠块，SSE 负责实时显示。
     out.write(`\n> ${settled.note}\n`);
+    persistTrace({ kind: "error", message: settled.note }, endIso);
     bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: "single", agentType, event: { kind: "error", message: settled.note } });
   }
   writeTurnEnd(out, endIso); // fence this turn's real end before closing the .md

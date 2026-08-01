@@ -89,6 +89,15 @@ export type DeleteTaskResult = {
 
 export type TaskCommit = { sha: string; subject: string; at: string };
 
+export type SessionTraceEntry = {
+  at: string;
+  turnStartedAt: string;
+  event:
+    | { kind: "thinking"; text: string }
+    | { kind: "tool"; name: string; detail?: string }
+    | { kind: "error"; message: string };
+};
+
 export type GitOverview = {
   branches: string[];
   current: string | null;
@@ -376,6 +385,8 @@ export const api = {
     if (!response.ok) throw new ApiError(response.status, `${response.status} 会话输出读取失败`, null);
     return response.text();
   },
+  sessionTrace: (sessionId: string): Promise<SessionTraceEntry[]> =>
+    request(`/sessions/${id(sessionId)}/trace`),
   debateTranscript: (taskId: string): Promise<unknown[]> =>
     request(`/tasks/${id(taskId)}/debate`),
 

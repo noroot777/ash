@@ -1,5 +1,6 @@
-import type { ServerEvent, Session, Task } from "@harness/shared";
+import type { AgentEvent, ServerEvent, Session, Task } from "@harness/shared";
 import { parseSessionOutput } from "@harness/shared";
+import type { SessionTraceEntry } from "../lib/api.ts";
 import { formatInstant, parseAttachmentText } from "./utils.ts";
 
 export type LiveAgentEvent = Extract<ServerEvent, { type: "agent.event" }>;
@@ -31,9 +32,50 @@ export type ConversationItem =
   | { kind: "user"; id: string; text: string; attachments: string[]; at?: string; isAnswer?: boolean }
   | { kind: "event"; id: string; text: string; at?: string; tone?: "neutral" | "error" };
 
-export type PersistedConversation = { session: Session; output: string };
+export type PersistedConversation = { session: Session; output: string; trace?: SessionTraceEntry[] };
 
 type ConversationEventItem = Extract<ConversationItem, { kind: "event" }>;
+type AgentTraceEvent = Extract<AgentEvent, { kind: "thinking" | "tool" | "error" }>;
+
+function auxEvent(event: AgentTraceEvent): AgentAuxEvent {
+  if (event.kind === "tool") return { kind: "tool", label: event.name, detail: event.detail };
+  if (event.kind === "thinking") return { kind: "thinking", label: "思考过程", detail: event.text };
+  return { kind: "error", label: event.message };
+}
+
+function groupedTrace(trace: SessionTraceEntry[]): Map<string, AgentAuxEvent[]> {
+  const groups = new Map<string, AgentAuxEvent[]>();
+  for (const entry of trace) {
+    const current = groups.get(entry.turnStartedAt) ?? [];
+    current.push(auxEvent(entry.event));
+    groups.set(entry.turnStartedAt, current);
+  }
+  return groups;
+}
+
+function takeTraceGroup(
+  groups: Map<string, AgentAuxEvent[]>,
+  consumed: Set<string>,
+  turnStartedAt: string,
+): AgentAuxEvent[] {
+  if (groups.has(turnStartedAt) && !consumed.has(turnStartedAt)) {
+    consumed.add(turnStartedAt);
+    return groups.get(turnStartedAt) ?? [];
+  }
+  // Older in-flight sessions may have written the user sentinel and run start a
+  // few milliseconds apart. A small nearest-time fallback keeps that trace on
+  // the correct turn without merging genuinely separate replies.
+  const target = Date.parse(turnStartedAt);
+  const nearest = [...groups.keys()]
+    .filter((key) => !consumed.has(key))
+    .map((key) => ({ key, distance: Math.abs(Date.parse(key) - target) }))
+    .filter(({ distance }) => Number.isFinite(distance) && distance <= 2_000)
+    .sort((left, right) => left.distance - right.distance)
+    .at(0)?.key;
+  if (!nearest) return [];
+  consumed.add(nearest);
+  return groups.get(nearest) ?? [];
+}
 
 function agentLabel(session: Session | undefined, event?: LiveAgentEvent): string {
   if (session?.executor) return session.executor;
@@ -84,8 +126,11 @@ export function buildConversationItems(
   const ordered = [...persisted].sort((left, right) =>
     left.session.startedAt.localeCompare(right.session.startedAt));
 
-  for (const { session, output } of ordered) {
+  for (const { session, output, trace = [] } of ordered) {
     const segments = parseSessionOutput(output);
+    const traceGroups = groupedTrace(trace);
+    const consumedTrace = new Set<string>();
+    let turnStartedAt = session.startedAt;
     segments.forEach((segment, index) => {
       if (segment.kind === "user") {
         items.push({
@@ -96,6 +141,7 @@ export function buildConversationItems(
           at: segment.at,
           isAnswer: segment.text.startsWith("【答复】"),
         });
+        turnStartedAt = segment.at ?? turnStartedAt;
       } else if (segment.kind === "system") {
         items.push({
           kind: "event",
@@ -103,21 +149,39 @@ export function buildConversationItems(
           text: segment.text,
           at: segment.at,
         });
+        turnStartedAt = segment.at ?? turnStartedAt;
       } else {
         items.push({
           kind: "agent",
           id: `persisted:agent:${session.id}:${index}`,
           sessionId: session.id,
           label: agentLabel(session),
-          at: session.startedAt,
+          at: turnStartedAt,
           endedAt: null,
           markerEndedAt: segment.endedAt ?? null,
           session,
           markdown: segment.text,
-          events: [],
+          events: takeTraceGroup(traceGroups, consumedTrace, turnStartedAt),
         });
       }
     });
+    // A failed turn can contain only tools/errors and no assistant prose. Keep
+    // its execution block visible instead of dropping the persisted trace.
+    for (const [traceTurn, events] of traceGroups) {
+      if (consumedTrace.has(traceTurn)) continue;
+      items.push({
+        kind: "agent",
+        id: `persisted:trace:${session.id}:${traceTurn}`,
+        sessionId: session.id,
+        label: agentLabel(session),
+        at: traceTurn,
+        endedAt: null,
+        markerEndedAt: null,
+        session,
+        markdown: "",
+        events,
+      });
+    }
   }
 
   for (const entry of timeline) {
@@ -155,9 +219,9 @@ export function buildConversationItems(
     if (event.kind === "session") continue;
     const agent = appendAgent(items, entry.event, sessions);
     if (event.kind === "text") agent.markdown += event.text;
-    if (event.kind === "tool") agent.events.push({ kind: "tool", label: event.name, detail: event.detail });
-    if (event.kind === "thinking") agent.events.push({ kind: "thinking", label: "思考过程", detail: event.text });
-    if (event.kind === "error") agent.events.push({ kind: "error", label: event.message });
+    if (event.kind === "tool" || event.kind === "thinking" || event.kind === "error") {
+      agent.events.push(auxEvent(event));
+    }
   }
 
   const orderedSessions = [...sessions].sort((left, right) => left.startedAt.localeCompare(right.startedAt));

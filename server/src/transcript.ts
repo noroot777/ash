@@ -1,14 +1,65 @@
-// 会话落盘的写入格式(单点)。一次性 run(orchestrator.ts)和常驻调度台
-// (team/session.ts)都用这里的函数写 RUNS_DIR/<taskId>/<sessId>.md,于是
-// 「实时(SSE)看到的」和「刷新后(解析 .md)看到的」必然一致 —— 这是仓库既有约定。
-import { join } from "node:path";
-import type { AgentType } from "@harness/shared";
+// 会话落盘格式的单点：assistant 正文写 <sessId>.md，thinking/tool/error 写
+// <sessId>.trace.jsonl。一次性 run 与常驻调度台都走这里，因此刷新能恢复完整
+// 执行过程，同时非正文事件绝不会混进 assistant Markdown。
+import { appendFileSync, mkdirSync } from "node:fs";
+import { dirname, join } from "node:path";
+import type { AgentEvent, AgentType } from "@harness/shared";
 import { RUNS_DIR } from "./paths.js";
+
+type AgentTraceEvent = Extract<AgentEvent, { kind: "thinking" | "tool" | "error" }>;
+export type SessionTraceEntry = {
+  at: string;
+  turnStartedAt: string;
+  event: AgentTraceEvent;
+};
 
 // Canonical persisted Markdown path for one session. Keep API serialization and
 // cross-task handoffs on the same derivation as the writers in orchestrator/team.
 export function sessionTranscriptPath(taskId: string, sessionId: string): string {
   return join(RUNS_DIR, taskId, `${sessionId}.md`);
+}
+
+export function sessionTracePath(taskId: string, sessionId: string): string {
+  return join(RUNS_DIR, taskId, `${sessionId}.trace.jsonl`);
+}
+
+export function appendSessionTrace(
+  taskId: string,
+  sessionId: string,
+  turnStartedAt: string,
+  event: AgentTraceEvent,
+  at = new Date().toISOString(),
+): void {
+  const path = sessionTracePath(taskId, sessionId);
+  try {
+    mkdirSync(dirname(path), { recursive: true });
+    appendFileSync(path, `${JSON.stringify({ at, turnStartedAt, event } satisfies SessionTraceEntry)}\n`);
+  } catch (error) {
+    // Trace persistence is diagnostic UI state. A disk failure must not alter the
+    // executor's outcome, but it must remain visible to operators.
+    console.warn(`[harness] failed to persist session trace ${sessionId}:`, error);
+  }
+}
+
+export function parseSessionTrace(raw: string): SessionTraceEntry[] {
+  const entries: SessionTraceEntry[] = [];
+  for (const line of raw.split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      const entry = JSON.parse(line) as Partial<SessionTraceEntry>;
+      const event = entry.event;
+      if (
+        typeof entry.at !== "string"
+        || typeof entry.turnStartedAt !== "string"
+        || !event
+        || !["thinking", "tool", "error"].includes(event.kind)
+      ) continue;
+      entries.push(entry as SessionTraceEntry);
+    } catch {
+      // A partially written final JSONL line should not hide earlier valid trace.
+    }
+  }
+  return entries;
 }
 
 // A non-text interjection in the run timeline — a 你→@agent reply or a 〔系统〕

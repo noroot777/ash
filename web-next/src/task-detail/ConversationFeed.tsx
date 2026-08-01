@@ -1,6 +1,6 @@
 import { useRef } from "react";
-import { Copy, File, Wrench, X } from "@phosphor-icons/react";
-import type { ConversationItem } from "./conversationModel.ts";
+import { CaretRight, Copy, File, Wrench, X } from "@phosphor-icons/react";
+import type { AgentAuxEvent, ConversationItem } from "./conversationModel.ts";
 import { ConversationScrollControls } from "../components/ConversationScrollControls.tsx";
 import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
@@ -10,6 +10,40 @@ import { durationBetween, formatInstant, parseAttachmentText } from "./utils.ts"
 
 function copyText(text: string) {
   void navigator.clipboard.writeText(text);
+}
+
+function ExecutionDetails({ events, running }: { events: AgentAuxEvent[]; running: boolean }) {
+  if (!events.length) return null;
+  const thinking = events.filter((event) => event.kind === "thinking").length;
+  const tools = events.filter((event) => event.kind === "tool").length;
+  const errors = events.filter((event) => event.kind === "error").length;
+  const counts = [
+    thinking ? `${thinking} 次分析` : "",
+    tools ? `${tools} 次工具` : "",
+    errors ? `${errors} 个异常` : "",
+  ].filter(Boolean).join(" · ");
+
+  return (
+    <details className={`task-execution-block${errors ? " has-error" : ""}`}>
+      <summary>
+        <CaretRight className="task-execution-caret" size={11} weight="bold" aria-hidden="true" />
+        {running && <span className="task-execution-pulse" aria-hidden="true" />}
+        <span className="task-execution-title">执行过程</span>
+        <small>{counts || `${events.length} 个步骤`}</small>
+      </summary>
+      <div className="task-execution-events">
+        {events.map((event, index) => (
+          <details className={`task-tool-line task-tool-line--${event.kind}`} key={`${event.kind}:${index}`}>
+            <summary>
+              {event.kind === "tool" ? <Wrench size={12} /> : event.kind === "error" ? <X size={12} /> : <span>◌</span>}
+              <span>{event.label}</span>
+            </summary>
+            {event.detail && <pre>{event.detail}</pre>}
+          </details>
+        ))}
+      </div>
+    </details>
+  );
 }
 
 function AgentMessage({
@@ -35,15 +69,7 @@ function AgentMessage({
           </button>
         </header>
         {item.markdown && <MarkdownBody text={item.markdown} />}
-        {item.events.map((event, index) => (
-          <details className={`task-tool-line task-tool-line--${event.kind}`} key={`${event.kind}:${index}`}>
-            <summary>
-              {event.kind === "tool" ? <Wrench size={12} /> : event.kind === "error" ? <X size={12} /> : <span>◌</span>}
-              <span>{event.label}</span>
-            </summary>
-            {event.detail && <pre>{event.detail}</pre>}
-          </details>
-        ))}
+        <ExecutionDetails events={item.events} running={!item.endedAt} />
         {item.showSessionMeta && item.session && <SessionMeta session={item.session} />}
       </div>
     </article>

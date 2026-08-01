@@ -48,8 +48,12 @@ const SYS_MARKER = "〔系统〕继续（从中断处）";
 
 // A non-text interjection in the run timeline is persisted as one sentinel line
 // (see transcript.ts) so live and reloaded views read identically.
-function writeTurn(out: NodeJS.WritableStream, turn: { t: "user" | "system"; agent: AgentType; text: string }): void {
-  writeTurnLine(out, turn, now());
+function writeTurn(
+  out: NodeJS.WritableStream,
+  turn: { t: "user" | "system"; agent: AgentType; text: string },
+  at = now(),
+): void {
+  writeTurnLine(out, turn, at);
 }
 
 // 完成协议前言(严格 done):告诉 agent 它的 taskId 和「必须亲口确认完成」的
@@ -492,17 +496,17 @@ export async function continueTask(
     if (opts.system) {
       // Backend-initiated 继续: a 〔系统〕 trace (its own bubble), NOT a 你→ reply.
       // Persist as a structured turn (reload) and emit a matching system event (live).
-      writeTurn(out, { t: "system", agent, text: SYS_MARKER });
+      writeTurn(out, { t: "system", agent, text: SYS_MARKER }, turnStart);
       bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: "single", agentType: agent, event: { kind: "system", text: SYS_MARKER } });
     } else {
       // 你→@agent reply, persisted as a structured turn so a reloaded thread shows
       // the human turn as its own bubble (live, the client already shows it).
-      writeTurn(out, { t: "user", agent, text: userTurnText });
+      writeTurn(out, { t: "user", agent, text: userTurnText }, turnStart);
     }
     if (workspaceReset) {
       // 让用户也看见:agent 这一轮是在一个空目录上重新开始的。只发 toast 不算数,
       // 刷新后仍要能看出来(见 AGENTS.md 关于持久可见状态的约定)。
-      writeTurn(out, { t: "system", agent, text: WORKSPACE_RESET_MARKER });
+      writeTurn(out, { t: "system", agent, text: WORKSPACE_RESET_MARKER }, turnStart);
       bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: "single", agentType: agent, event: { kind: "system", text: WORKSPACE_RESET_MARKER } });
     }
 
