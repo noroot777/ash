@@ -243,5 +243,6 @@ select option {
   .t-dropdown,
   .note-handoff-out,
   .note-task-enter,
-  .t-composer-enter { animation: none !important; }
+  .t-composer-enter,
+  .typing-dot { animation: none !important; }
 }
