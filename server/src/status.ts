@@ -18,15 +18,16 @@ const TERMINAL: TaskStatus[] = ["done", "failed", "canceled"];
 //   • otherwise  : leave the timestamps untouched.
 export async function setTaskStatus(taskId: string, status: TaskStatus): Promise<void> {
   const cur = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
+  const updatedAt = now();
   let startedAt = cur?.startedAt ?? null;
   let endedAt = cur?.endedAt ?? null;
-  const patch: Record<string, unknown> = { status, updatedAt: now() };
+  const patch: Record<string, unknown> = { status, updatedAt };
 
   if (status === "running") {
-    if (!startedAt) patch.startedAt = startedAt = now();
+    if (!startedAt) patch.startedAt = startedAt = updatedAt;
     patch.endedAt = endedAt = null;
   } else if (TERMINAL.includes(status)) {
-    patch.endedAt = endedAt = now();
+    patch.endedAt = endedAt = updatedAt;
   }
 
   await db.update(tasks).set(patch).where(eq(tasks.id, taskId));
@@ -40,7 +41,7 @@ export async function setTaskStatus(taskId: string, status: TaskStatus): Promise
     .from(sessions)
     .where(eq(sessions.taskId, taskId));
   const timing = runs.length ? runsTiming(runs) : {};
-  bus.publish({ type: "task.status", taskId, status, startedAt, endedAt, ...timing });
+  bus.publish({ type: "task.status", taskId, status, updatedAt, startedAt, endedAt, ...timing });
 
   // 队列推进钩子(DESIGN §3):任务进 done / canceled / failed / paused 时,
   // 如果它在某个 queue 里,触发那个 queue 的下一位推进。

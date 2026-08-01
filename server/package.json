@@ -23,6 +23,7 @@
     "test:executor-overrides": "tsx scripts/test-executor-overrides.ts",
     "test:cli-catalog": "tsx scripts/test-cli-catalog.ts",
     "test:task-derivation": "tsx scripts/test-task-derivation-policy.ts",
+    "test:task-event-timestamps": "tsx scripts/test-task-event-timestamps.ts",
     "test:scheduled-messages": "tsx scripts/test-scheduled-messages.ts",
     "test:review": "tsx scripts/test-review-flow.ts",
     "test:claude-stream": "tsx scripts/test-claude-stream-errors.ts",

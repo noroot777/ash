@@ -40,12 +40,14 @@ try {
     });
 
     assert.equal(await reopenAcceptedStage(id), true, `${mode} 续聊应撤销旧验收结论`);
-    const row = (await db.select({ stage: tasks.stage }).from(tasks).where(eq(tasks.id, id))).at(0);
+    const row = (await db.select({ stage: tasks.stage, updatedAt: tasks.updatedAt }).from(tasks).where(eq(tasks.id, id))).at(0);
     assert.equal(row?.stage, null);
+    const stageEvent = events.find((event) => event.type === "task.stage" && event.taskId === id && event.stage === null);
     assert.ok(
-      events.some((event) => event.type === "task.stage" && event.taskId === id && event.stage === null),
+      stageEvent,
       `${mode} 应广播 stage=null`,
     );
+    assert.equal(stageEvent.updatedAt, row?.updatedAt, `${mode} 的 SSE 与数据库 updatedAt 应一致`);
   }
 
   await db.insert(tasks).values({

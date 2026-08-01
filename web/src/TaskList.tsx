@@ -18,7 +18,7 @@ import { executorLabel } from "./executorLabel";
 import { isDispatchedWorker } from "./taskPolicy";
 import { OriginTaskChip, TaskModeIcon } from "./taskOrigin";
 import { TaskWorktreeChip } from "./TaskWorktreeChip";
-import { useUnreadTeamTasks } from "./useUnreadTasks";
+import { useUnreadTasks, useUnreadTeamTasks } from "./useUnreadTasks";
 
 // 一个 section 内部的分组。两个 section 的分法**刻意不同**:普通任务按 status 分,
 // 协作任务按验收与否两分(见 COLLAB_GROUPS)。icon 只声明喂给 StatusIcon 的
@@ -129,9 +129,23 @@ export function TaskList({
 }) {
   const groupName = (id: string | null) => groups.find((g) => g.id === id)?.name;
   const topTasks = topLevel(tasks);
+  const selectedTask = tasks.find((task) => task.id === selected);
+  const selectedTeam = selectedTask?.mode === "team" ? selectedTask.id : selectedTask?.parentId ?? null;
+  const workers = tasks.filter(isDispatchedWorker);
   // Fold long status groups (e.g. 完成 93) away; remembered per browser.
   const { collapsed, toggle } = useCollapsedGroups("harness:taskList:collapsedStatuses");
-  const unreadTeams = useUnreadTeamTasks(tasks, selected);
+  const { unread: unreadTeams, markRead: markTeamsRead } = useUnreadTeamTasks(tasks, selectedTeam);
+  const { unread: unreadWorkers, markRead: markWorkersRead } = useUnreadTasks(
+    workers,
+    selectedTask && isDispatchedWorker(selectedTask) ? selectedTask.id : null,
+  );
+  const selectTask = (id: string) => {
+    const task = tasks.find((candidate) => candidate.id === id);
+    if (task && isDispatchedWorker(task)) markWorkersRead([id]);
+    const teamId = task?.mode === "team" ? task.id : task?.parentId;
+    if (teamId) markTeamsRead([teamId]);
+    onSelect(id);
+  };
   // 展开了执行者行的团队任务。默认全折叠 —— 团队行本身已经带了状态摘要。
   const [openTeams, setOpenTeams] = useState<Set<string>>(new Set());
   const toggleTeam = (id: string) =>
@@ -186,14 +200,15 @@ export function TaskList({
                           workers={workersOf(tasks, t.id)}
                           allTasks={allTasks}
                           selected={selected}
-                          unread={unreadTeams.has(t.id)}
+                          unread={selected !== t.id && unreadTeams.has(t.id)}
+                          unreadWorkers={unreadWorkers}
                           expanded={openTeams.has(t.id)}
                           onToggle={() => toggleTeam(t.id)}
-                          onSelect={onSelect}
+                          onSelect={selectTask}
                           onOpenTask={onOpenTask}
                         />
                       ) : (
-                        <TaskRow key={t.id} t={t} allTasks={allTasks} selected={selected} onSelect={onSelect} onOpenTask={onOpenTask} groupName={groupName} />
+                        <TaskRow key={t.id} t={t} allTasks={allTasks} selected={selected} onSelect={selectTask} onOpenTask={onOpenTask} groupName={groupName} />
                       ),
                     )}
                 </div>
@@ -280,8 +295,9 @@ function TaskRow({
   );
 }
 
-// 团队行。默认折叠成一行:只有出现未读动态时，才用 foldTeamStatus 算出来的「最该
-// 你管的那个」色点提醒；右边只留执行者总数 + 状态微点，避免状态摘要互相争抢。
+// 团队行。默认折叠成一行:只有调度台或某个执行者出现未读动态时，才用
+// foldTeamStatus 算出来的「最该你管的那个」色点提醒；进入团队只读调度台，执行者要
+// 点开后各自消掉水位。右边只留执行者总数 + 状态微点，避免状态摘要互相争抢。
 //
 // 这个色点可能跟本行所在的分组不一致 —— 团队还没验收(归入「进行中」组),但某个执行者
 // 正卡在提问上,于是行首是青色点。这是故意的:分组只回答「这支团队翻篇了没有」,而色点
@@ -292,6 +308,7 @@ function TeamRow({
   allTasks,
   selected,
   unread,
+  unreadWorkers,
   expanded,
   onToggle,
   onSelect,
@@ -302,6 +319,7 @@ function TeamRow({
   allTasks: Task[];
   selected: string | null;
   unread: boolean;
+  unreadWorkers: ReadonlySet<string>;
   expanded: boolean;
   onToggle: () => void;
   onSelect: (id: string) => void;
@@ -366,7 +384,9 @@ function TeamRow({
               selected === w.id ? "bg-raised" : "hover:bg-raised/60"
             }`}
           >
-            <StatusIcon status={w.status} stage={w.stage} awaitingAnswer={!!w.question} />
+            {unreadWorkers.has(w.id) && (
+              <StatusIcon status={w.status} stage={w.stage} awaitingAnswer={!!w.question} />
+            )}
             <span className="min-w-0 flex-1 truncate text-[12.5px] text-muted">{w.title}</span>
             {w.useWorktree && <TaskWorktreeChip cleaned={w.stage === "accepted"} />}
             {w.queueId != null && !canArchive(w.status) && (

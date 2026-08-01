@@ -1,8 +1,8 @@
 // /team 右侧常驻执行者栏:永远知道谁在干、谁卡住了。点一张卡 → 右侧滑出它自己的
 // 会话抽屉(TeamView 里的 WorkerDrawer),不跳页、不丢调度者上下文。
 //
-// 卡片上的「实时最后一行」只有在本次会话里收到过 SSE 的执行者才有(刷新后 logs 是空
-// 的),所以它是锦上添花,不承载必要信息 —— 必要信息在状态行里。
+// 卡片上的圆点只表示「这个执行者有未读动态」；具体状态始终写在下一行。实时最后一行
+// 只有在本次会话里收到过 SSE 的执行者才有(刷新后 logs 是空的),所以它是锦上添花。
 import { useEffect } from "react";
 import { taskDisplayStatus, type Group, type Task } from "@harness/shared";
 import { StatusIcon } from "../StatusIcon";
@@ -15,12 +15,14 @@ export function WorkerRail({
   groups,
   logs,
   selected,
+  unreadWorkers,
   onSelect,
 }: {
   workers: Task[];
   groups: Group[];
   logs: Record<string, LogLine[]>;
   selected: string | null;
+  unreadWorkers: ReadonlySet<string>;
   onSelect: (id: string) => void;
 }) {
   const groupById = new Map(groups.map((g) => [g.id, g]));
@@ -61,6 +63,7 @@ export function WorkerRail({
           groupPaused={!!(w.groupId && groupById.get(w.groupId)?.paused)}
           live={lastLine(logs[w.id])}
           selected={selected === w.id}
+          unread={unreadWorkers.has(w.id)}
           onSelect={() => onSelect(w.id)}
         />
       ))}
@@ -79,6 +82,7 @@ function WorkerCard({
   groupPaused,
   live,
   selected,
+  unread,
   onSelect,
 }: {
   w: Task;
@@ -86,6 +90,7 @@ function WorkerCard({
   groupPaused: boolean;
   live: string | null;
   selected: boolean;
+  unread: boolean;
   onSelect: () => void;
 }) {
   const asking = !!w.question;
@@ -103,7 +108,7 @@ function WorkerCard({
       }`}
     >
       <div className="flex items-center gap-1.5">
-        <StatusIcon status={w.status} stage={w.stage} awaitingAnswer={asking} />
+        {unread && <StatusIcon status={w.status} stage={w.stage} awaitingAnswer={asking} />}
         <span className="min-w-0 flex-1 truncate text-[12.5px] font-medium text-ink">{w.title}</span>
         <span
           className="max-w-[92px] shrink truncate rounded border border-line px-1 font-mono text-[10px] text-muted"

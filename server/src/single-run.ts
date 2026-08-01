@@ -234,8 +234,9 @@ export async function consumeSingleRun(a: {
         if (m) {
           const newTitle = m[1].trim().replace(/[`*"]/g, "").slice(0, 30);
           if (newTitle) {
-            await db.update(tasks).set({ title: newTitle, autoTitle: false, updatedAt: now() }).where(eq(tasks.id, taskId));
-            bus.publish({ type: "task.title", taskId, title: newTitle });
+            const updatedAt = now();
+            await db.update(tasks).set({ title: newTitle, autoTitle: false, updatedAt }).where(eq(tasks.id, taskId));
+            bus.publish({ type: "task.title", taskId, title: newTitle, updatedAt });
           }
         }
         titleDone = true;

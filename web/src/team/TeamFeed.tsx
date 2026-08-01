@@ -21,12 +21,14 @@ export function TeamFeed({
   taskId,
   rows,
   workers,
+  unreadWorkers,
   empty,
   onOpenWorker,
 }: {
   taskId: string;
   rows: FeedRow[];
   workers: Task[];
+  unreadWorkers: ReadonlySet<string>;
   empty: boolean;
   onOpenWorker: (id: string) => void;
 }) {
@@ -44,7 +46,7 @@ export function TeamFeed({
         )}
         {rows.map((row) => {
           if (row.kind === "batch")
-            return <BatchCard key={row.key} batch={row.batch} workers={workers} onOpenWorker={onOpenWorker} />;
+            return <BatchCard key={row.key} batch={row.batch} workers={workers} unreadWorkers={unreadWorkers} onOpenWorker={onOpenWorker} />;
           const it = row.item;
           const inbound = it.kind === "system" ? parseInbound(it.text) : null;
           if (inbound)
@@ -80,10 +82,12 @@ export function TeamFeed({
 function BatchCard({
   batch,
   workers,
+  unreadWorkers,
   onOpenWorker,
 }: {
   batch: Batch;
   workers: Task[];
+  unreadWorkers: ReadonlySet<string>;
   onOpenWorker: (id: string) => void;
 }) {
   return (
@@ -105,6 +109,7 @@ function BatchCard({
           w={w}
           n={workers.findIndex((x) => x.id === w.id) + 1}
           groupPaused={!!batch.group?.paused}
+          unread={unreadWorkers.has(w.id)}
           onOpen={() => onOpenWorker(w.id)}
         />
       ))}
@@ -119,11 +124,13 @@ function BatchWorkerRow({
   w,
   n,
   groupPaused,
+  unread,
   onOpen,
 }: {
   w: Task;
   n: number;
   groupPaused: boolean;
+  unread: boolean;
   onOpen: () => void;
 }) {
   const label = executorLabel({ task: w });
@@ -132,7 +139,7 @@ function BatchWorkerRow({
       onClick={onOpen}
       className="flex w-full items-center gap-2 border-t border-line px-2.5 py-2 text-left transition-colors hover:bg-canvas"
     >
-      <StatusIcon status={w.status} stage={w.stage} awaitingAnswer={!!w.question} />
+      {unread && <StatusIcon status={w.status} stage={w.stage} awaitingAnswer={!!w.question} />}
       <span className="w-3.5 shrink-0 font-mono text-[10.5px] text-faint">{n}</span>
       <span className="min-w-0 flex-1 truncate text-[12.5px] text-ink">{w.title}</span>
       <span

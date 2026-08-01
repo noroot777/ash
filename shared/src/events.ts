@@ -36,16 +36,17 @@ export type DebateSpeaker = "A" | "B" | "impl" | "review" | "user"; // impl/revi
 export type ServerEvent =
   | { type: "task.created"; task: Task }
   | { type: "task.updated"; task: Task }
-  | { type: "task.status"; taskId: string; status: TaskStatus; startedAt?: string | null; endedAt?: string | null; activeMs?: number | null; liveSince?: string | null }
-  | { type: "task.stage"; taskId: string; stage: TaskStage | null }
+  | { type: "task.status"; taskId: string; status: TaskStatus; updatedAt: string; startedAt?: string | null; endedAt?: string | null; activeMs?: number | null; liveSince?: string | null }
+  | { type: "task.stage"; taskId: string; stage: TaskStage | null; updatedAt: string }
   | { type: "task.review"; taskId: string }
-  | { type: "task.title"; taskId: string; title: string }
+  | { type: "task.title"; taskId: string; title: string; updatedAt: string }
   // 提问态变化（§Team）：agent 调 ask_question 提问、或答复把它清空。task.status
   // 只带状态字段，question 不跟着走 —— 少了这条事件，卡片要等下次全量拉取才出现/
   // 消失（答复完卡片还杵在那，像是没答上）。question=null 即「已答复，撤掉卡片」。
   | {
       type: "task.question";
       taskId: string;
+      updatedAt: string;
       question: string | null;
       questionOptions: string[] | null;
       questionItems: QuestionItem[] | null;

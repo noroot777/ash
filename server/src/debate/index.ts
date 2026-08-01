@@ -421,8 +421,9 @@ async function genDebateTitle(taskId: string, topic: string, ex: AgentExecutor, 
     // Don't clobber a title the user edited in the meantime.
     const cur = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
     if (!cur?.autoTitle) return;
-    await db.update(tasks).set({ title: newTitle, autoTitle: false, updatedAt: now() }).where(eq(tasks.id, taskId));
-    bus.publish({ type: "task.title", taskId, title: newTitle });
+    const updatedAt = now();
+    await db.update(tasks).set({ title: newTitle, autoTitle: false, updatedAt }).where(eq(tasks.id, taskId));
+    bus.publish({ type: "task.title", taskId, title: newTitle, updatedAt });
   } catch {
     /* best effort */
   }

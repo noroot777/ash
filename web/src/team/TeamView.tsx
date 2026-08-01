@@ -4,7 +4,7 @@
 // 数据装配全在 ./teamData 里(纯函数),这里只管把它们摆在版面上、把动作接到 api。
 // 执行者是**真任务**,所以抽屉里复用真正的 TaskDetail；TaskDetail 会统一收起由
 // 调度者拥有的元信息编辑，只保留会话、运行/停止/重试和答复。
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type {
   AgentType,
   Group,
@@ -31,6 +31,7 @@ import { WorkerRail, WorkerStatusText } from "./WorkerRail";
 import { activeTeamHaltMarker, leadTurns as turnsOf, teamFeedOptions } from "./teamData";
 import { submitShortcutLabel } from "../ui";
 import { TeamReviewWorkspace } from "../ReviewWorkspace";
+import { useUnreadTasks } from "../useUnreadTasks";
 
 export function TeamView({
   task,
@@ -85,6 +86,11 @@ export function TeamView({
   const [reviewOpen, setReviewOpen] = useState(initialReviewOpen);
 
   const workers = useMemo(() => workersOf(allTasks, task.id), [allTasks, task.id]);
+  const { unread: unreadWorkers, markRead: markWorkersRead } = useUnreadTasks(workers, openId);
+  const openWorker = useCallback((workerId: string) => {
+    markWorkersRead([workerId]);
+    setOpenId(workerId);
+  }, [markWorkersRead]);
   const rawGroups = useMemo(() => {
     const byId = new Map(groups.map((g) => [g.id, g]));
     for (const g of internalGroups) byId.set(g.id, g);
@@ -216,7 +222,7 @@ export function TeamView({
         onDelete={() => onDelete(task.id)}
         onArchive={() => onArchive(task.id)}
         onUnarchive={() => onUnarchive(task.id)}
-        onOpenWorker={setOpenId}
+        onOpenWorker={openWorker}
         reviewOpen={reviewOpen}
         onToggleReview={() => {
           setOpenId(null);
@@ -238,11 +244,11 @@ export function TeamView({
         <>
           {stopped && <CuaResidualNotice taskId={task.id} status={cuaStatus} onStatus={setCuaStatus} />}
 
-          <AttentionBar waiting={waiting} workers={workers} onOpenWorker={setOpenId} onAskLead={askLead} />
+          <AttentionBar waiting={waiting} workers={workers} onOpenWorker={openWorker} onAskLead={askLead} />
 
           <div className="grid min-h-0 flex-1 grid-cols-[1fr_268px]">
-            <TeamFeed taskId={task.id} rows={rows} workers={workers} empty={items.length === 0} onOpenWorker={setOpenId} />
-            <WorkerRail workers={workers} groups={teamGroups} logs={logs} selected={openId} onSelect={setOpenId} />
+            <TeamFeed taskId={task.id} rows={rows} workers={workers} unreadWorkers={unreadWorkers} empty={items.length === 0} onOpenWorker={openWorker} />
+            <WorkerRail workers={workers} groups={teamGroups} logs={logs} selected={openId} unreadWorkers={unreadWorkers} onSelect={openWorker} />
           </div>
 
           {/* 插话:发出去就进同一个常驻会话(调度者正在说话时会被 interrupt 接住),所以

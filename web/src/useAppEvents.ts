@@ -47,6 +47,7 @@ export function useAppEvents({
           ? {
               ...task,
               status: event.status,
+              updatedAt: event.updatedAt,
               startedAt: event.startedAt !== undefined ? event.startedAt : task.startedAt,
               endedAt: event.endedAt !== undefined ? event.endedAt : task.endedAt,
               activeMs: event.activeMs !== undefined ? event.activeMs : task.activeMs,
@@ -61,14 +62,15 @@ export function useAppEvents({
         }
       } else if (event.type === "task.stage") {
         // stage 与 status 正交：独立更新，列表色点和审查结论会在同一帧一起变化。
-        setTasks((tasks) => tasks.map((task) => task.id === event.taskId ? { ...task, stage: event.stage } : task));
-        setRunningTasks((tasks) => tasks.map((task) => task.id === event.taskId ? { ...task, stage: event.stage } : task));
+        setTasks((tasks) => tasks.map((task) => task.id === event.taskId ? { ...task, stage: event.stage, updatedAt: event.updatedAt } : task));
+        setRunningTasks((tasks) => tasks.map((task) => task.id === event.taskId ? { ...task, stage: event.stage, updatedAt: event.updatedAt } : task));
       } else if (event.type === "task.title") {
-        setTasks((tasks) => tasks.map((task) => task.id === event.taskId ? { ...task, title: event.title } : task));
+        setTasks((tasks) => tasks.map((task) => task.id === event.taskId ? { ...task, title: event.title, updatedAt: event.updatedAt } : task));
       } else if (event.type === "task.question") {
         const patch = (task: Task) => task.id === event.taskId
           ? {
               ...task,
+              updatedAt: event.updatedAt,
               question: event.question,
               questionOptions: event.questionOptions,
               questionItems: event.questionItems,

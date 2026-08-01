@@ -1,13 +1,22 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
 import type { Task } from "@harness/shared";
+import {
+  advanceReadWatermarks,
+  taskActivity,
+  teamActivity,
+  unreadTaskIds,
+  type TaskActivity,
+  type ReadWatermarks,
+} from "./unreadTaskState";
 
-const STORAGE_KEY = "harness:taskList:readWatermarks";
+const TEAM_STORAGE_KEY = "harness:taskList:readWatermarks";
+const TASK_STORAGE_KEY = "harness:taskList:taskReadWatermarks";
+const EMPTY_WATERMARKS: ReadWatermarks = {};
 
-type ReadWatermarks = Record<string, number>;
-
-function loadReadWatermarks(): ReadWatermarks {
+function loadReadWatermarks(storageKey: string): ReadWatermarks {
+  if (typeof localStorage === "undefined") return {};
   try {
-    const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "{}") as Record<string, unknown>;
+    const parsed = JSON.parse(localStorage.getItem(storageKey) ?? "{}") as Record<string, unknown>;
     return Object.fromEntries(
       Object.entries(parsed).filter((entry): entry is [string, number] =>
         typeof entry[1] === "number" && Number.isFinite(entry[1]),
@@ -18,59 +27,71 @@ function loadReadWatermarks(): ReadWatermarks {
   }
 }
 
-function saveReadWatermarks(watermarks: ReadWatermarks) {
+function saveReadWatermarks(storageKey: string, watermarks: ReadWatermarks) {
+  if (typeof localStorage === "undefined") return;
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(watermarks));
+    localStorage.setItem(storageKey, JSON.stringify(watermarks));
   } catch {
     /* private mode / quota — unread state just won't persist */
   }
 }
 
-function updatedAtMs(task: Task): number {
-  const timestamp = Date.parse(task.updatedAt);
-  return Number.isFinite(timestamp) ? timestamp : 0;
+type ReadStore = {
+  read: () => ReadWatermarks;
+  publish: (next: ReadWatermarks) => void;
+  subscribe: (listener: () => void) => () => void;
+};
+
+function createReadStore(storageKey: string): ReadStore {
+  const listeners = new Set<() => void>();
+  let snapshot: ReadWatermarks | null = null;
+  const read = () => (snapshot ??= loadReadWatermarks(storageKey));
+
+  return {
+    read,
+    publish(next) {
+      if (next === read()) return;
+      snapshot = next;
+      saveReadWatermarks(storageKey, next);
+      for (const listener of listeners) listener();
+    },
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+  };
 }
 
-function latestTeamActivity(tasks: Task[]): Map<string, number> {
-  const teamIds = new Set(
-    tasks.filter((task) => task.mode === "team" && !task.parentId).map((task) => task.id),
-  );
-  const latest = new Map<string, number>();
+const teamStore = createReadStore(TEAM_STORAGE_KEY);
+const taskStore = createReadStore(TASK_STORAGE_KEY);
 
-  for (const task of tasks) {
-    const teamId = teamIds.has(task.id) ? task.id : task.parentId;
-    if (!teamId || !teamIds.has(teamId)) continue;
-    latest.set(teamId, Math.max(latest.get(teamId) ?? 0, updatedAtMs(task)));
-  }
-
-  return latest;
-}
-
-export function useUnreadTeamTasks(tasks: Task[], selected: string | null): Set<string> {
-  const [readWatermarks, setReadWatermarks] = useState<ReadWatermarks>(loadReadWatermarks);
-  const latestByTeam = useMemo(() => latestTeamActivity(tasks), [tasks]);
+function useUnreadActivity(activity: TaskActivity, selected: string | null, store: ReadStore) {
+  const readWatermarks = useSyncExternalStore(store.subscribe, store.read, () => EMPTY_WATERMARKS);
 
   useEffect(() => {
-    setReadWatermarks((current) => {
-      let next = current;
+    store.publish(advanceReadWatermarks(store.read(), activity, selected ? [selected] : []));
+  }, [activity, selected, store]);
 
-      for (const [taskId, latest] of latestByTeam) {
-        if (current[taskId] == null || (selected === taskId && latest > current[taskId])) {
-          if (next === current) next = { ...current };
-          next[taskId] = latest;
-        }
-      }
-
-      if (next !== current) saveReadWatermarks(next);
-      return next;
-    });
-  }, [latestByTeam, selected]);
-
-  return new Set(
-    [...latestByTeam].flatMap(([taskId, latest]) =>
-      selected !== taskId && readWatermarks[taskId] != null && latest > readWatermarks[taskId]
-        ? [taskId]
-        : [],
-    ),
+  const markRead = useCallback(
+    (taskIds: Iterable<string>) => {
+      store.publish(advanceReadWatermarks(store.read(), activity, taskIds));
+    },
+    [activity, store],
   );
+
+  return {
+    unread: useMemo(
+      () => unreadTaskIds(activity, readWatermarks, selected ? [selected] : []),
+      [activity, readWatermarks, selected],
+    ),
+    markRead,
+  };
+}
+
+export function useUnreadTasks(tasks: Task[], selected: string | null) {
+  return useUnreadActivity(useMemo(() => taskActivity(tasks), [tasks]), selected, taskStore);
+}
+
+export function useUnreadTeamTasks(tasks: Task[], selectedTeam: string | null) {
+  return useUnreadActivity(useMemo(() => teamActivity(tasks), [tasks]), selectedTeam, teamStore);
 }
