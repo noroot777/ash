@@ -328,8 +328,18 @@ async function openLead(taskId: string, rawText: string, kind: Kind): Promise<Le
 // ── 事件消费 ────────────────────────────────────────────────────────────────
 async function consume(lead: Lead): Promise<void> {
   let exitStatus = 0;
+  let pendingTraceText = "";
+  const flushTraceText = () => {
+    if (!pendingTraceText) return;
+    appendSessionTrace(lead.taskId, lead.sessId, lead.turnStart ?? now(), {
+      kind: "text",
+      text: pendingTraceText,
+    });
+    pendingTraceText = "";
+  };
   for await (const event of lead.handle.events) {
     if (event.kind === "turnEnd") {
+      flushTraceText();
       await endTurn(lead);
       continue;
     }
@@ -350,8 +360,12 @@ async function consume(lead: Lead): Promise<void> {
       publish(lead, event);
       continue;
     }
-    if (event.kind === "text") lead.out.write(event.text);
+    if (event.kind === "text") {
+      lead.out.write(event.text);
+      pendingTraceText += event.text;
+    }
     else {
+      flushTraceText();
       if (event.kind === "thinking" || event.kind === "tool" || event.kind === "error") {
         appendSessionTrace(lead.taskId, lead.sessId, lead.turnStart ?? now(), event);
       }
@@ -360,6 +374,7 @@ async function consume(lead: Lead): Promise<void> {
     if (event.kind === "done") exitStatus = event.exitStatus;
     publish(lead, event);
   }
+  flushTraceText();
   await closeLead(lead, exitStatus);
 }
 

@@ -104,7 +104,7 @@ try {
   );
   assert.deepEqual(conversation.map((item) => item.kind), ["agent", "user", "agent"]);
   assert.equal(conversation[2].kind === "agent" ? conversation[2].markdown : "", "正在处理。 已完成。");
-  assert.equal(conversation[2].kind === "agent" ? conversation[2].events.length : 0, 1);
+  assert.equal(conversation[2].kind === "agent" ? conversation[2].segments[0]?.events.length : 0, 1);
   assert.equal(conversation[0].kind === "agent" ? conversation[0].at : null, "2026-07-30T01:00:00.000Z");
   assert.equal(conversation[0].kind === "agent" ? conversation[0].endedAt : null, "2026-07-30T01:01:00.000Z");
   assert.equal(conversation[2].kind === "agent" ? conversation[2].at : null, "2026-07-30T01:01:00.000Z");
@@ -113,6 +113,38 @@ try {
   const exported = conversationToMarkdown(conversation, { ...task, title: "测试会话", body: "目标" });
   assert.match(exported, /## 你 ·/);
   assert.doesNotMatch(exported, /rg -n trace/);
+
+  const interleavedTrace = buildConversationItems(
+    [{
+      session: { ...session, endedAt: "2026-07-30T01:02:00.000Z" },
+      output: "第一段正文。第二段正文。",
+      trace: [
+        { at: "2026-07-30T01:00:01.000Z", turnStartedAt: session.startedAt, event: { kind: "thinking", text: "先分析第一段" } },
+        { at: "2026-07-30T01:00:02.000Z", turnStartedAt: session.startedAt, event: { kind: "text", text: "第一段正文。" } },
+        { at: "2026-07-30T01:00:03.000Z", turnStartedAt: session.startedAt, event: { kind: "tool", name: "exec", detail: "检查第二段" } },
+        { at: "2026-07-30T01:00:04.000Z", turnStartedAt: session.startedAt, event: { kind: "text", text: "第二段正文。" } },
+      ],
+    }],
+    [{ ...session, endedAt: "2026-07-30T01:02:00.000Z" }],
+    [],
+  );
+  assert.equal(interleavedTrace[0]?.kind === "agent" ? interleavedTrace[0].segments.length : 0, 2);
+  assert.equal(interleavedTrace[0]?.kind === "agent" ? interleavedTrace[0].segments[0]?.markdown : "", "第一段正文。");
+  assert.equal(interleavedTrace[0]?.kind === "agent" ? interleavedTrace[0].segments[0]?.events[0]?.kind : null, "thinking");
+  assert.equal(interleavedTrace[0]?.kind === "agent" ? interleavedTrace[0].segments[1]?.markdown : "", "第二段正文。");
+  assert.equal(interleavedTrace[0]?.kind === "agent" ? interleavedTrace[0].segments[1]?.events[0]?.kind : null, "tool");
+
+  const liveInterleaved = buildConversationItems([], [session], [
+    { kind: "server", id: "think-1", event: { type: "agent.event", taskId: "task-1", sessionId: session.id, role: "single", event: { kind: "thinking", text: "分析一" } } },
+    { kind: "server", id: "text-1", event: { type: "agent.event", taskId: "task-1", sessionId: session.id, role: "single", event: { kind: "text", text: "正文一" } } },
+    { kind: "server", id: "tool-1", event: { type: "agent.event", taskId: "task-1", sessionId: session.id, role: "single", event: { kind: "tool", name: "exec", detail: "命令二" } } },
+    { kind: "server", id: "text-2", event: { type: "agent.event", taskId: "task-1", sessionId: session.id, role: "single", event: { kind: "text", text: "正文二" } } },
+  ]);
+  assert.equal(liveInterleaved[0]?.kind === "agent" ? liveInterleaved[0].segments.length : 0, 2);
+  assert.deepEqual(
+    liveInterleaved[0]?.kind === "agent" ? liveInterleaved[0].segments.map(({ markdown, events }) => [markdown, events[0]?.kind]) : [],
+    [["正文一", "thinking"], ["正文二", "tool"]],
+  );
 
   const traceOnlyConversation = buildConversationItems(
     [{
@@ -128,7 +160,7 @@ try {
     [],
   );
   assert.equal(traceOnlyConversation[0]?.kind, "agent");
-  assert.equal(traceOnlyConversation[0]?.kind === "agent" ? traceOnlyConversation[0].events[0]?.kind : null, "error");
+  assert.equal(traceOnlyConversation[0]?.kind === "agent" ? traceOnlyConversation[0].segments[0]?.events[0]?.kind : null, "error");
 
   const timedConversation = buildConversationItems(
     [{ session, output: "第一回合。\n\u001e{\"t\":\"agentEnd\",\"at\":\"2026-07-30T01:00:30.000Z\"}\n\u001e{\"t\":\"user\",\"text\":\"继续\",\"at\":\"2026-07-30T01:01:00.000Z\"}\n第二回合。\n\u001e{\"t\":\"agentEnd\",\"at\":\"2026-07-30T01:03:00.000Z\"}" }],
