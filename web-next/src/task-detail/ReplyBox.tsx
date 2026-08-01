@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
-import type { AgentType, Task } from "@harness/shared";
+import type { AgentExecutorProfile, AgentType, Task } from "@harness/shared";
 import { ArrowUp, Clock, Robot, SpinnerGap, X } from "@phosphor-icons/react";
 import {
   ScheduledMessageTray,
@@ -7,8 +7,8 @@ import {
   useScheduledMessages,
 } from "../components/ScheduledMessages.tsx";
 import { defaultOnceTime } from "../components/ScheduleControl.tsx";
-import { availableAgentTypes, useAgentAvailability } from "../lib/agentAvailability.ts";
-import type { ReplyTaskResult } from "../lib/api.ts";
+import { registeredAgentTypes } from "../lib/agentAvailability.ts";
+import { api, type ReplyTaskResult } from "../lib/api.ts";
 import { AttachmentPicker, UploadAttachmentList, useAttachments } from "./Attachments.tsx";
 
 export function ReplyBox({
@@ -45,7 +45,9 @@ export function ReplyBox({
   const [target, setTarget] = useState<AgentType | null>(null);
   const [scheduleOpen, setScheduleOpen] = useState(false);
   const [sendAt, setSendAt] = useState("");
-  const detection = useAgentAvailability();
+  const [profiles, setProfiles] = useState<AgentExecutorProfile[]>([]);
+  const [profilesReady, setProfilesReady] = useState(false);
+  const [profilesFailed, setProfilesFailed] = useState(false);
   const scheduled = useScheduledMessages(task.id);
   const uploads = useAttachments();
   const disabled = task.mode !== "single" || task.archived || task.status === "running" || task.status === "queued" || !hasConversation;
@@ -84,6 +86,21 @@ export function ReplyBox({
     setSendAt("");
   }, [command?.resetKey]);
 
+  useEffect(() => {
+    let alive = true;
+    setProfilesReady(false);
+    setProfilesFailed(false);
+    api.agents().then(
+      (nextProfiles) => { if (alive) setProfiles(nextProfiles); },
+      () => {
+        if (!alive) return;
+        setProfiles([]);
+        setProfilesFailed(true);
+      },
+    ).finally(() => { if (alive) setProfilesReady(true); });
+    return () => { alive = false; };
+  }, []);
+
   const commandCandidates = (text: string) => {
     const token = /^\s*(\/\S*)$/.exec(text)?.[1]?.toLowerCase();
     return token ? command?.items.filter((item) => item.command.startsWith(token)) ?? [] : [];
@@ -94,9 +111,9 @@ export function ReplyBox({
   const commandMatch = !!command && command.matches(value);
   const commandActive = commandMatch || menuOpen;
   const mentionMatch = /(?:^|\s)@([a-z0-9_-]*)$/i.exec(value);
-  const detectedTypes = detection.status === "ready" ? availableAgentTypes(detection.agents) : [];
+  const registeredTypes = registeredAgentTypes(profiles);
   const mentionCandidates = mentionMatch
-    ? detectedTypes.filter((type) => type.startsWith((mentionMatch[1] ?? "").toLowerCase()))
+    ? registeredTypes.filter((type) => type.startsWith((mentionMatch[1] ?? "").toLowerCase()))
     : [];
   const mentionOpen = !disabled && !commandActive && !mentionDismissed && !!mentionMatch;
   const selectedMentionIndex = Math.min(mentionIndex, Math.max(0, mentionCandidates.length - 1));
@@ -185,9 +202,9 @@ export function ReplyBox({
       {mentionOpen && !menuOpen && (
         <div className="task-reply-mention-menu" role="listbox" aria-label="召唤智能体">
           <small>召唤智能体加入 · ↑↓ 选择，回车确认，Esc 取消</small>
-          {detection.status === "loading" && <p>正在检测本机可用 CLI…</p>}
-          {detection.status === "failed" && <p>无法确认本机可用 CLI，暂不提供候选</p>}
-          {detection.status === "ready" && mentionCandidates.length === 0 && <p>没有匹配的可用智能体</p>}
+          {!profilesReady && <p>正在读取已注册智能体…</p>}
+          {profilesFailed && <p>执行器列表读取失败，暂不提供候选</p>}
+          {profilesReady && !profilesFailed && mentionCandidates.length === 0 && <p>没有匹配的已注册智能体</p>}
           {mentionCandidates.map((agent, index) => (
             <button
               type="button"

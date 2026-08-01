@@ -7,6 +7,11 @@ import {
   WarningCircle,
 } from "@phosphor-icons/react";
 import { Button } from "../components/ui.tsx";
+import {
+  registeredAgentTypes,
+  residentAgentTypes,
+  useAgentAvailability,
+} from "../lib/agentAvailability.ts";
 import { api } from "../lib/api.ts";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import {
@@ -63,6 +68,7 @@ export function ModesSettings({ notify }: { notify: (message: string) => void })
   const [loadFailed, setLoadFailed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<TeamPreset | null>(null);
+  const detection = useAgentAvailability();
 
   const selectPreset = (preset: TeamPreset) => {
     const nextDraft = teamPresetDraftFromConfig(preset.name, preset.config);
@@ -71,9 +77,9 @@ export function ModesSettings({ notify }: { notify: (message: string) => void })
     setSavedKey(draftKey(nextDraft));
   };
 
-  const startNew = () => {
+  const startNew = (availableProfiles = profiles) => {
     setEditingId(null);
-    setDraft(createTeamPresetDraft());
+    setDraft(createTeamPresetDraft(availableProfiles));
     setSavedKey("");
   };
 
@@ -86,7 +92,7 @@ export function ModesSettings({ notify }: { notify: (message: string) => void })
         setProfiles(nextProfiles);
         setProviders(nextProviders);
         if (nextPresets[0]) selectPreset(nextPresets[0]);
-        else startNew();
+        else startNew(nextProfiles);
       })
       .catch((error) => {
         setLoadFailed(true);
@@ -102,6 +108,12 @@ export function ModesSettings({ notify }: { notify: (message: string) => void })
     [editingId, presets],
   );
   const dirty = editingId === null ? !!draft.name.trim() : draftKey(draft) !== savedKey;
+  const registeredTypes = registeredAgentTypes(profiles);
+  const residentTypes = residentAgentTypes(detection.agents);
+  const draftTypesValid = registeredTypes.includes(draft.roles.worker.agentType)
+    && registeredTypes.includes(draft.roles.reviewer.agentType)
+    && registeredTypes.includes(draft.roles.lead.agentType)
+    && residentTypes.includes(draft.roles.lead.agentType);
 
   const save = async () => {
     const name = draft.name.trim();
@@ -133,7 +145,7 @@ export function ModesSettings({ notify }: { notify: (message: string) => void })
       setPresets(remaining);
       setDeleteTarget(null);
       if (remaining[0]) selectPreset(remaining[0]);
-      else startNew();
+      else startNew(profiles);
       notify(`已删除执行模式「${deleteTarget.name}」`);
     } catch (error) {
       notify(error instanceof Error ? error.message : "执行模式删除失败");
@@ -173,7 +185,7 @@ export function ModesSettings({ notify }: { notify: (message: string) => void })
                     className="team-presets-list-add"
                     disabled={busy}
                     aria-pressed={editingId === null}
-                    onClick={startNew}
+                    onClick={() => startNew()}
                   >
                     <Plus size={11} weight="bold" aria-hidden="true" />新建
                   </button>
@@ -241,7 +253,7 @@ export function ModesSettings({ notify }: { notify: (message: string) => void })
                     )}
                     <Button
                       variant="primary"
-                      disabled={busy || !draft.name.trim() || !dirty}
+                      disabled={busy || !draft.name.trim() || !dirty || !draftTypesValid}
                       onClick={() => void save()}
                     >
                       {busy ? "保存中…" : editingId ? "保存更改" : "创建模式"}
@@ -253,6 +265,7 @@ export function ModesSettings({ notify }: { notify: (message: string) => void })
                   profiles={profiles}
                   providers={providers}
                   busy={busy}
+                  preserveStaleTypes={editingId !== null}
                   onChange={setDraft}
                 />
               </div>

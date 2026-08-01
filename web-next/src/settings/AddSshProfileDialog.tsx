@@ -62,6 +62,7 @@ export function AddSshProfileDialog({
         <label>
           <span>类型</span>
           <select value={type} disabled={busy} onChange={(event) => setType(event.target.value as AgentType)}>
+            {/* SSH 是唯一需要先选“尚未注册类型”再创建 Profile 的入口，因此保留完整目录。 */}
             {AGENT_TYPES.map((candidate) => (
               <option value={candidate} key={candidate}>{candidate}</option>
             ))}

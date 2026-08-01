@@ -72,12 +72,14 @@ export function availableAgentTypes(agents: DetectedAgent[]): AgentType[] {
 }
 
 /**
- * Candidate types for a picker. Loading and failed detection cannot prove a CLI
- * is absent, so they degrade to the full catalog. A successful detection is the
- * only state allowed to narrow the list.
+ * 普通选择器只展示已经进入 agents 注册表的类型。类型默认项最终也会解析到该类型的
+ * 默认 Profile，所以“本机装了但尚未注册”不应偷偷多出一个候选；要先去执行器设置注册。
+ *
+ * SSH 新增弹窗是刻意的例外：它需要从完整 AGENT_TYPES 目录里挑一个尚未注册的类型。
  */
-export function selectableAgentTypes(detection: AgentDetection): AgentType[] {
-  return detection.status === "ready" ? availableAgentTypes(detection.agents) : [...AGENT_TYPES];
+export function registeredAgentTypes(profiles: AgentExecutorProfile[]): AgentType[] {
+  const registered = new Set(profiles.map((profile) => profile.type));
+  return AGENT_TYPES.filter((type) => registered.has(type));
 }
 
 /** Types whose executor implementation can own a resident team session. */
@@ -92,7 +94,7 @@ export function teamExecutorCandidates(
   detection: AgentDetection,
   profiles: AgentExecutorProfile[],
 ) {
-  const workerTypes = selectableAgentTypes(detection);
+  const workerTypes = registeredAgentTypes(profiles);
   const residentTypes = residentAgentTypes(detection.agents);
   return {
     workerTypes,
@@ -107,17 +109,13 @@ export function isExecutorPickable(
   profiles: AgentExecutorProfile[],
 ): boolean {
   return selection.executorId
-    ? profiles.some((profile) => profile.id === selection.executorId)
+    ? profiles.some((profile) => profile.id === selection.executorId && profile.type === selection.agentType)
     : types.includes(selection.agentType);
 }
 
-export function nothingRunnable(
-  detection: AgentDetection,
-  profiles: AgentExecutorProfile[],
-): boolean {
-  return detection.status === "ready"
-    && availableAgentTypes(detection.agents).length === 0
-    && profiles.length === 0;
+/** 普通执行表面没有注册 Profile 就没有任何可选执行器。 */
+export function nothingRunnable(profiles: AgentExecutorProfile[]): boolean {
+  return profiles.length === 0;
 }
 
 export function preferredExecutor(
@@ -183,9 +181,9 @@ export function parseExecutorValue(
 }
 
 /**
- * Generate native-select options in one place. Explicit profiles stay visible
- * even when their type is not locally installed. An unavailable current value is
- * retained as a disabled diagnostic option, not as a pickable candidate.
+ * Generate native-select options in one place. `types` 已经由 registeredAgentTypes
+ * 收窄；显式 Profile 与类型默认项都只来自注册表。失效的当前值仅作为禁用诊断项保留，
+ * 不会重新变成可选候选。
  */
 export function executorOptions({
   types,
@@ -216,7 +214,7 @@ export function executorOptions({
       value: executorValue(selection),
       label: profile
         ? `${profile.name}（当前设置 · 不可用）`
-        : `${selection.agentType} · 类型默认（当前设置 · 本机未检测到）`,
+        : `${selection.agentType} · 类型默认（当前设置 · 未注册）`,
       disabled: true,
     });
   }

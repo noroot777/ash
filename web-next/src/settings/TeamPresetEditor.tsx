@@ -4,11 +4,14 @@ import type {
   LlmProvider,
   TeamPresetConfig,
 } from "@harness/shared";
-import { AGENT_TYPES } from "@harness/shared";
 import { REASONING_EFFORT_VALUES } from "@harness/shared/cli-presets";
 import { CrownSimple, MagnifyingGlass, Robot } from "@phosphor-icons/react";
 import { Toggle } from "../components/ui.tsx";
-import { residentAgentTypes, useAgentAvailability } from "../lib/agentAvailability.ts";
+import {
+  registeredAgentTypes,
+  residentAgentTypes,
+  useAgentAvailability,
+} from "../lib/agentAvailability.ts";
 import { ProviderModelInput } from "./ProviderModelInput.tsx";
 
 type PresetRole = "lead" | "worker" | "reviewer";
@@ -26,20 +29,29 @@ export type TeamPresetDraft = {
   roles: Record<PresetRole, RoleDraft>;
 };
 
-export function createTeamPresetDraft(): TeamPresetDraft {
+export function createTeamPresetDraft(profiles: AgentExecutorProfile[] = []): TeamPresetDraft {
   const role = (agentType: AgentType): RoleDraft => ({
     agentType,
     executorId: null,
     model: "",
     reasoningEffort: "",
   });
+  const registeredTypes = registeredAgentTypes(profiles);
+  const residentTypes = residentAgentTypes([]);
+  const leadType = registeredTypes.find((type) => residentTypes.includes(type))
+    ?? registeredTypes[0]
+    ?? "claude";
+  const workerType = registeredTypes.find((type) => type === "codex" && type !== leadType)
+    ?? registeredTypes.find((type) => type !== leadType)
+    ?? registeredTypes[0]
+    ?? "codex";
   return {
     name: "",
     review: true,
     roles: {
-      lead: role("claude"),
-      worker: role("codex"),
-      reviewer: role("codex"),
+      lead: role(leadType),
+      worker: role(workerType),
+      reviewer: role(workerType),
     },
   };
 }
@@ -105,6 +117,7 @@ function TeamRoleFields({
   profiles,
   providers,
   residentTypes,
+  preserveStaleType,
   disabled,
   onChange,
 }: {
@@ -114,6 +127,8 @@ function TeamRoleFields({
   providers: LlmProvider[];
   /** 能开常驻会话的类型——只有它们当得了调度者(来源见 detect.ts 的 resident 字段)。 */
   residentTypes: AgentType[];
+  /** 编辑存量预设时保留失效当前值作诊断；新建时只展示真正可选的注册类型。 */
+  preserveStaleType: boolean;
   disabled: boolean;
   onChange: (value: RoleDraft) => void;
 }) {
@@ -123,8 +138,14 @@ function TeamRoleFields({
   // 别的类型存得进预设、套用时却会被 composer 判成「调度者当前不可运行」而挡住提交
   // ——那时用户已经配完了,所以这一步就把不合格的类型拿掉。
   const leadOnly = role === "lead";
-  const typeOptions = AGENT_TYPES.filter((type) => !leadOnly || residentTypes.includes(type));
-  const staleType = leadOnly && !residentTypes.includes(value.agentType);
+  const registeredTypes = registeredAgentTypes(profiles);
+  const typeOptions = registeredTypes.filter((type) => !leadOnly || residentTypes.includes(type));
+  const staleType = !typeOptions.includes(value.agentType);
+  const staleReason = !registeredTypes.includes(value.agentType)
+    ? "未注册"
+    : "不支持常驻会话";
+  const showStaleType = staleType && preserveStaleType;
+  const selectValue = staleType && !preserveStaleType ? "" : value.agentType;
   const matchingProfiles = profiles.filter((profile) => profile.type === value.agentType);
   const selectedProfile = value.executorId
     ? matchingProfiles.find((profile) => profile.id === value.executorId)
@@ -144,8 +165,8 @@ function TeamRoleFields({
         <label>
           <span>智能体类型</span>
           <select
-            value={value.agentType}
-            disabled={disabled}
+            value={selectValue}
+            disabled={disabled || typeOptions.length === 0}
             onChange={(event) => onChange({
               agentType: event.target.value as AgentType,
               executorId: null,
@@ -153,8 +174,13 @@ function TeamRoleFields({
               reasoningEffort: "",
             })}
           >
-            {staleType && (
-              <option value={value.agentType} disabled>{value.agentType}（不支持常驻会话）</option>
+            {showStaleType && (
+              <option value={value.agentType} disabled>{value.agentType}（{staleReason}）</option>
+            )}
+            {staleType && !preserveStaleType && (
+              <option value="" disabled>
+                {typeOptions.length ? "请选择已注册类型" : leadOnly ? "暂无已注册的常驻类型" : "暂无已注册类型"}
+              </option>
             )}
             {typeOptions.map((type) => <option value={type} key={type}>{type}</option>)}
           </select>
@@ -163,7 +189,7 @@ function TeamRoleFields({
           <span>执行器 Profile</span>
           <select
             value={value.executorId ?? ""}
-            disabled={disabled}
+            disabled={disabled || (staleType && !preserveStaleType)}
             onChange={(event) => onChange({
               ...value,
               executorId: event.target.value || null,
@@ -187,7 +213,7 @@ function TeamRoleFields({
             type={value.agentType}
             provider={provider}
             value={value.model}
-            disabled={disabled}
+            disabled={disabled || (staleType && !preserveStaleType)}
             compact
             onChange={(model) => onChange({ ...value, model })}
           />
@@ -196,7 +222,7 @@ function TeamRoleFields({
           <span>思考强度</span>
           <select
             value={value.reasoningEffort}
-            disabled={disabled}
+            disabled={disabled || (staleType && !preserveStaleType)}
             onChange={(event) => onChange({ ...value, reasoningEffort: event.target.value })}
           >
             <option value="">跟随执行器</option>
@@ -208,7 +234,15 @@ function TeamRoleFields({
       </div>
       {staleType && (
         <p className="team-preset-role-warning">
-          {value.agentType} 不支持常驻会话，当不了调度者；用这个预设建团队时会被拦下。请改选类型下拉里列出的其它类型。
+          {!preserveStaleType
+            ? typeOptions.length
+              ? "请选择类型下拉中已注册的智能体类型。"
+              : leadOnly
+                ? "还没有已注册且支持常驻会话的调度者类型。"
+                : "还没有已注册的智能体类型。"
+            : staleReason === "未注册"
+              ? `${value.agentType} 当前没有已注册执行器；请先注册，或改选类型下拉里的其它类型。`
+              : `${value.agentType} 不支持常驻会话，当不了调度者；用这个预设建团队时会被拦下。请改选类型下拉里的其它类型。`}
         </p>
       )}
     </section>
@@ -220,12 +254,15 @@ export function TeamPresetEditor({
   profiles,
   providers,
   busy,
+  preserveStaleTypes = false,
   onChange,
 }: {
   draft: TeamPresetDraft;
   profiles: AgentExecutorProfile[];
   providers: LlmProvider[];
   busy: boolean;
+  /** 编辑已有模式时保留失效值供修复；新建模式不把未注册值混进下拉。 */
+  preserveStaleTypes?: boolean;
   onChange: (draft: TeamPresetDraft) => void;
 }) {
   // 检测未完成/失败时 residentAgentTypes 回落到内置名单,口径与 composer
@@ -266,6 +303,7 @@ export function TeamPresetEditor({
           profiles={profiles}
           providers={providers}
           residentTypes={residentTypes}
+          preserveStaleType={preserveStaleTypes}
           disabled={busy}
           onChange={(value) => changeRole(role, value)}
         />

@@ -9,6 +9,11 @@ import { sharedTeamParent } from "../src/review/reviewModel.ts";
 import { gateAllowsRevision, isOpenDebateGate, runCreatedHandoffFollowUps, teamDebateIterationState } from "../src/debate/handoffPolicy.ts";
 import { emptyComposerExecutorConfigs, patchComposerExecutor, setComposerExecutorProfile } from "../src/composer/executorOverrides.ts";
 import { activeGroupTasks, resumeQueueModel } from "../src/settings/groupQueueModel.ts";
+import {
+  executorOptions,
+  registeredAgentTypes,
+  teamExecutorCandidates,
+} from "../src/lib/agentAvailability.ts";
 
 const originalFetch = globalThis.fetch;
 
@@ -218,6 +223,40 @@ try {
     executors = setComposerExecutorProfile(executors, role, "claude@ccb");
     assert.deepEqual(executors[role], { profile: "claude@ccb", model: "", effort: "" });
   }
+
+  const registeredProfiles = [
+    { id: "codex-local", name: "codex@local", type: "codex", model: null, isDefault: true },
+    { id: "qwen-ssh", name: "qwen@remote", type: "qwen", model: "qwen3", isDefault: true },
+  ];
+  assert.deepEqual(registeredAgentTypes(registeredProfiles), ["codex", "qwen"]);
+  const candidates = teamExecutorCandidates({
+    status: "ready",
+    agents: [
+      { type: "claude", available: true, resident: true },
+      { type: "codex", available: true, resident: true },
+      { type: "qwen", available: true, resident: false },
+    ],
+  }, registeredProfiles);
+  assert.deepEqual(candidates.workerTypes, ["codex", "qwen"]);
+  assert.deepEqual(candidates.leadTypes, ["codex"]);
+  assert.deepEqual(candidates.leadProfiles.map(({ id }) => id), ["codex-local"]);
+  const executorLabels = executorOptions({
+    types: candidates.workerTypes,
+    profiles: registeredProfiles,
+  }).map(({ label }) => label);
+  assert.equal(executorLabels.some((label) => label.startsWith("claude ·")), false);
+  assert.equal(executorLabels.some((label) => label.startsWith("codex ·")), true);
+  assert.equal(executorLabels.some((label) => label.startsWith("qwen ·")), true);
+  const staleType = executorOptions({
+    types: candidates.workerTypes,
+    profiles: registeredProfiles,
+    selection: { agentType: "claude", executorId: null },
+  }).find(({ value }) => value === "__type:claude");
+  assert.deepEqual(staleType, {
+    value: "__type:claude",
+    label: "claude · 类型默认（当前设置 · 未注册）",
+    disabled: true,
+  });
 
   const groupTasks = [
     { id: "done", groupId: "group-1", archived: false, status: "done", createdAt: "2026-07-30T01:00:00.000Z", resumeDependsOn: [] },

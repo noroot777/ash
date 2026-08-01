@@ -114,21 +114,18 @@ export function DebateHandoffModal({
     lead: parseExecutorValue(lead, profiles, { agentType: TEAM_DEFAULTS.lead, executorId: null }),
     worker: parseExecutorValue(worker, profiles, { agentType: TEAM_DEFAULTS.worker, executorId: null }),
   }), [lead, note, profiles, worker]);
-  const noExecutor = profilesReady && nothingRunnable(detection, profiles);
+  const noExecutor = profilesReady && nothingRunnable(profiles);
   const unavailableRole = !isExecutorPickable(choice.lead, leadTypes, leadProfiles) ? "调度者"
     : !isExecutorPickable(choice.worker, workerTypes, profiles) ? "执行者" : null;
-  const roleBlocked = !!unavailableRole
-    && (detection.status === "ready" || unavailableRole === "调度者");
-  const availabilityMessage = detection.status === "loading"
-    ? "正在检测本机智能体；检测完成前暂按已知能力显示。"
-    : detection.status === "failed" && roleBlocked
-      ? "检测失败时仍不能选择不支持常驻会话的团队调度者，请更换执行器。"
-      : detection.status === "failed"
-      ? "本地智能体检测失败；本次不拦截创建，请确认所选 CLI 已安装或使用已注册 Profile。"
-      : noExecutor
-        ? "没有检测到可用的智能体 CLI，也没有已注册执行器，暂不能创建团队。"
-        : unavailableRole
-          ? `${unavailableRole}当前不可用，请更换执行器。`
+  const roleBlocked = !!unavailableRole;
+  const availabilityMessage = noExecutor
+    ? "还没有已注册执行器，暂不能创建团队。"
+    : unavailableRole
+      ? `${unavailableRole}当前未注册或不支持该角色，请更换执行器。`
+      : detection.status === "loading"
+        ? "正在确认已注册调度者的常驻会话能力…"
+        : detection.status === "failed"
+          ? "常驻能力检测失败；调度者候选仅保留系统已知支持的已注册类型。"
           : null;
   const canConfirm = !busy && !noExecutor && !roleBlocked;
   const confirm = async () => { if (canConfirm && await onConfirm(choice)) onClose(); };

@@ -1,6 +1,5 @@
 import { useEffect, useId, useMemo, useState } from "react";
 import {
-  AGENT_TYPES,
   TASK_STATUS_LABELS,
   type AgentExecutorProfile,
   type AgentType,
@@ -14,6 +13,7 @@ import {
   SpinnerGap,
   WarningCircle,
 } from "@phosphor-icons/react";
+import { registeredAgentTypes } from "../lib/agentAvailability.ts";
 import { api } from "../lib/api.ts";
 import { ReviewEvidence, useTaskReviewInfo } from "../team/ReviewEvidence.tsx";
 
@@ -70,12 +70,10 @@ function dispatchBlockedReason(task: Task, active: boolean): string | null {
 
 function firstRunnableSelection(
   profiles: AgentExecutorProfile[],
-  availableTypes: Set<AgentType>,
 ): Pick<ReviewSelection, "agentType" | "executorId"> | null {
-  const profile = profiles[0];
+  const profile = profiles.find((candidate) => candidate.isDefault) ?? profiles[0];
   if (profile) return { agentType: profile.type, executorId: profile.id };
-  const type = AGENT_TYPES.find((candidate) => availableTypes.has(candidate));
-  return type ? { agentType: type, executorId: null } : null;
+  return null;
 }
 
 export function TaskReviewInspector({
@@ -111,8 +109,8 @@ export function TaskReviewInspector({
   const [dispatching, setDispatching] = useState(false);
   const [selection, setSelection] = useState(defaults);
   const [profiles, setProfiles] = useState<AgentExecutorProfile[]>([]);
-  const [availableTypes, setAvailableTypes] = useState<Set<AgentType> | null>(null);
-  const [detectionFailed, setDetectionFailed] = useState(false);
+  const [profilesReady, setProfilesReady] = useState(false);
+  const [profilesFailed, setProfilesFailed] = useState(false);
   const modelListId = `${useId().replace(/:/g, "")}-review-models`;
 
   useEffect(() => {
@@ -122,18 +120,16 @@ export function TaskReviewInspector({
 
   useEffect(() => {
     let alive = true;
-    Promise.all([
-      api.agents().catch(() => [] as AgentExecutorProfile[]),
-      api.detectAgents().then(
-        (rows) => ({ rows, failed: false }),
-        () => ({ rows: [], failed: true }),
-      ),
-    ]).then(([nextProfiles, detection]) => {
-      if (!alive) return;
-      setProfiles(nextProfiles);
-      setDetectionFailed(detection.failed);
-      setAvailableTypes(new Set(detection.rows.filter((row) => row.available).map((row) => row.type)));
-    });
+    setProfilesReady(false);
+    setProfilesFailed(false);
+    api.agents().then(
+      (nextProfiles) => { if (alive) setProfiles(nextProfiles); },
+      () => {
+        if (!alive) return;
+        setProfiles([]);
+        setProfilesFailed(true);
+      },
+    ).finally(() => { if (alive) setProfilesReady(true); });
     return () => { alive = false; };
   }, []);
 
@@ -141,24 +137,25 @@ export function TaskReviewInspector({
   const latest = latestRound(review);
   const activeRound = rounds.find((round) => REVIEW_IN_FLIGHT.has(round.reviewTaskStatus));
   const blockedReason = dispatchBlockedReason(task, !!activeRound);
+  const registeredTypes = useMemo(() => registeredAgentTypes(profiles), [profiles]);
   const selectedProfileExists = !!selection.executorId
     && profiles.some((profile) => profile.id === selection.executorId && profile.type === selection.agentType);
   const executorRunnable = selection.executorId
     ? selectedProfileExists
-    : detectionFailed || availableTypes === null || availableTypes.has(selection.agentType);
+    : registeredTypes.includes(selection.agentType);
   const autoLimitReached = !!review.info?.reviewRequested
     && task.stage === "verify_failed"
     && rounds.some((round) => round.round >= AUTO_REVIEW_LIMIT && round.conclusion === "verify_failed");
 
   useEffect(() => {
-    if (availableTypes === null || executorRunnable) return;
-    const fallback = firstRunnableSelection(profiles, availableTypes);
+    if (!profilesReady || executorRunnable) return;
+    const fallback = firstRunnableSelection(profiles);
     if (!fallback) return;
     setSelection((current) => ({ ...current, ...fallback, model: "", reasoningEffort: "" }));
-  }, [availableTypes, executorRunnable, profiles]);
+  }, [executorRunnable, profiles, profilesReady]);
 
   const dispatch = async () => {
-    if (blockedReason || dispatching || !executorRunnable) return;
+    if (blockedReason || dispatching || !profilesReady || !executorRunnable) return;
     setDispatching(true);
     try {
       const { reviewTask } = await api.dispatchTaskReview(task.id, {
@@ -225,7 +222,12 @@ export function TaskReviewInspector({
                   }));
                 }}
               >
-                {AGENT_TYPES.map((type) => <option value={`default:${type}`} key={`default:${type}`}>默认 {type}</option>)}
+                {!executorRunnable && (
+                  <option value={selectionValue(selection)} disabled>
+                    {selection.agentType}（当前设置 · 未注册）
+                  </option>
+                )}
+                {registeredTypes.map((type) => <option value={`default:${type}`} key={`default:${type}`}>默认 {type}</option>)}
                 {profiles.map((profile) => <option value={`profile:${profile.id}`} key={profile.id}>{profile.name}</option>)}
               </select>
             </label>
@@ -252,8 +254,11 @@ export function TaskReviewInspector({
               </select>
             </label>
           </div>
-          {!executorRunnable && <p className="review-inspector__notice is-warning">当前执行器在本机不可用，请换一个已注册或已检测到的执行器。</p>}
-          <button type="button" disabled={dispatching || !executorRunnable} onClick={() => void dispatch()}>
+          {!profilesReady && <p className="review-inspector__notice">正在读取已注册执行器…</p>}
+          {profilesFailed && <p className="review-inspector__notice is-warning">执行器列表读取失败，暂不能派审。</p>}
+          {profilesReady && !profilesFailed && !profiles.length && <p className="review-inspector__notice is-warning">还没有已注册执行器。</p>}
+          {profilesReady && !executorRunnable && !!profiles.length && <p className="review-inspector__notice is-warning">当前执行器未注册，请换一个已注册执行器。</p>}
+          <button type="button" disabled={dispatching || !profilesReady || !executorRunnable} onClick={() => void dispatch()}>
             {dispatching && <SpinnerGap size={13} className="is-spinning" />}{dispatching ? "派发中" : "确认派审查"}
           </button>
         </section>

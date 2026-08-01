@@ -8,9 +8,8 @@ import {
   nothingRunnable,
   parseExecutorValue,
   preferredExecutor,
-  teamExecutorCandidates,
+  registeredAgentTypes,
   type ExecutorSelection,
-  useAgentAvailability,
 } from "../lib/agentAvailability.ts";
 import { api } from "../lib/api.ts";
 
@@ -69,11 +68,7 @@ export function ReviewDispatchControl({
   const [open, setOpen] = useState(prominent);
   const [dispatching, setDispatching] = useState(false);
   const [dispatchedReviewId, setDispatchedReviewId] = useState<string | null>(null);
-  const detection = useAgentAvailability();
-  const { workerTypes } = useMemo(
-    () => teamExecutorCandidates(detection, profiles),
-    [detection, profiles],
-  );
+  const workerTypes = useMemo(() => registeredAgentTypes(profiles), [profiles]);
 
   useEffect(() => {
     let alive = true;
@@ -99,14 +94,14 @@ export function ReviewDispatchControl({
   }, [defaults, prominent, task.id]);
 
   useEffect(() => {
-    if (!profilesReady || detection.status === "loading") return;
+    if (!profilesReady) return;
     if (isExecutorPickable(selection, workerTypes, profiles)) return;
     const fallback = preferredExecutor(workerTypes, profiles, defaults.selection.agentType);
     if (!fallback) return;
     setSelection(fallback);
     setModel("");
     setEffort("");
-  }, [defaults.selection.agentType, detection.status, profiles, profilesReady, selection, workerTypes]);
+  }, [defaults.selection.agentType, profiles, profilesReady, selection, workerTypes]);
 
   useEffect(() => {
     if (dispatchedReviewId && rounds.some((round) => round.reviewTaskId === dispatchedReviewId)) {
@@ -118,30 +113,28 @@ export function ReviewDispatchControl({
 
   const activeRound = rounds.find((round) => REVIEW_IN_FLIGHT.has(round.reviewTaskStatus));
   const targetBusy = task.status === "running" || task.status === "queued";
-  const availabilityPending = !profilesReady || detection.status === "loading";
-  const noExecutor = profilesReady && nothingRunnable(detection, profiles);
+  const availabilityPending = !profilesReady;
+  const noExecutor = profilesReady && nothingRunnable(profiles);
   const selectionPickable = isExecutorPickable(selection, workerTypes, profiles);
-  const locallyUnavailable = detection.status === "ready" && !selectionPickable;
+  const locallyUnavailable = profilesReady && !selectionPickable;
   const dispatchLocked = !!activeRound || !!dispatchedReviewId;
   const canSend = !targetBusy
     && !dispatchLocked
     && !dispatching
     && !availabilityPending
     && !noExecutor
-    && (detection.status === "failed" || selectionPickable);
+    && selectionPickable;
   const nextRound = rounds.reduce((highest, round) => Math.max(highest, round.round), 0) + 1;
   const actionLabel = rounds.length ? "补派下一轮" : "派出独立审查";
   const availabilityMessage = availabilityPending
-    ? "正在读取执行器并检测本机可用性…"
-    : detection.status === "failed"
-      ? "本地智能体检测失败，本次不限制类型候选；请确认所选 CLI 已安装。"
+    ? "正在读取已注册执行器…"
+    : profilesFailed
+      ? "Profile 列表读取失败，暂不能派发审查。"
       : noExecutor
-        ? "本机没有可用的智能体 CLI，也没有已注册 Profile。"
+        ? "还没有已注册 Profile。"
         : locallyUnavailable
-          ? "当前执行器不可用，请改选已安装的类型或已注册 Profile。"
-          : profilesFailed
-            ? "Profile 列表读取失败；当前只能按已检测到的本机类型派发。"
-            : null;
+          ? "当前执行器未注册，请改选已注册 Profile 或其类型默认。"
+          : null;
 
   const dispatch = async () => {
     // UI 状态与真实提交共享同一组拦截条件；服务端仍会处理跨窗口竞争。

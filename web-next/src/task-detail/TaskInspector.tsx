@@ -192,19 +192,19 @@ export function TaskInspector({
     knownProfiles: profiles,
   });
   const pickableCount = executorTypes.length + executorProfiles.length;
-  const noExecutor = profilesReady && nothingRunnable(detection, profiles);
-  const currentUnavailable = detection.status === "ready"
+  const noExecutor = profilesReady && nothingRunnable(profiles);
+  const currentUnavailable = profilesReady
     && !isExecutorPickable(executorSelection, executorTypes, executorProfiles);
-  const availabilityMessage = detection.status === "loading"
-    ? "正在检测本机智能体，完成后会收窄候选。"
-    : detection.status === "failed"
-      ? "本地智能体检测失败，本次不限制类型候选；请确认 CLI 已安装。"
-      : noExecutor
-        ? "本机没有可用的智能体 CLI，也没有已注册执行器。"
-        : currentUnavailable
-          ? task.mode === "team"
-            ? "当前团队调度者不可用或不支持常驻会话，请改选 resident 执行器。"
-            : "当前执行器已不可用，请改选已安装的类型或已注册 Profile。"
+  const availabilityMessage = noExecutor
+    ? "还没有已注册执行器。"
+    : currentUnavailable
+      ? task.mode === "team"
+        ? "当前团队调度者未注册或不支持常驻会话，请改选可用执行器。"
+        : "当前执行器未注册，请改选已注册 Profile 或其类型默认。"
+      : task.mode === "team" && detection.status === "loading"
+        ? "正在确认已注册调度者的常驻会话能力…"
+        : task.mode === "team" && detection.status === "failed"
+          ? "常驻能力检测失败；调度者候选仅保留系统已知支持的已注册类型。"
           : null;
   const modelOptions = [...new Set([task.model, ...CLI_MODEL_PRESETS[agentType]].filter((value): value is string => !!value))];
   const effortOptions = [...new Set([task.reasoningEffort, ...REASONING_EFFORT_VALUES[agentType]].filter((value): value is string => !!value))];
@@ -303,7 +303,7 @@ export function TaskInspector({
               onChange={(event) => {
                 const next = parseExecutorValue(event.target.value, profiles, executorSelection);
                 if (!isExecutorPickable(next, executorTypes, executorProfiles)) {
-                  notify("该执行器当前不可用，请改选已安装的类型或已注册 Profile");
+                  notify("该执行器当前不可用，请改选已注册 Profile 或其类型默认");
                   return;
                 }
                 const current = { agentType, executorId: task.executorId ?? null };

@@ -346,7 +346,7 @@ export function TaskComposerPanel({
     }));
     setReview(config.review !== false);
   };
-  const noExecutor = profilesReady && nothingRunnable(detection, profiles);
+  const noExecutor = profilesReady && nothingRunnable(profiles);
   const unavailableRole = mode === "single"
     ? !isExecutorPickable(singleExecutor, workerTypes, profiles) ? "执行器" : null
     : mode === "debate"
@@ -355,20 +355,17 @@ export function TaskComposerPanel({
       : !isExecutorPickable(leadExecutor, leadTypes, leadProfiles) ? "调度者"
         : !isExecutorPickable(workerExecutor, workerTypes, profiles) ? "执行者"
           : review && !isExecutorPickable(reviewerExecutor, workerTypes, profiles) ? "审查者" : null;
-  const roleBlocked = !!unavailableRole
-    && (detection.status === "ready" || unavailableRole === "调度者");
-  const availabilityMessage = detection.status === "loading"
-    ? "正在检测本机智能体；检测完成前暂按全量类型显示。"
-    : detection.status === "failed" && roleBlocked
-      ? "检测失败时仍不能选择不支持常驻会话的团队调度者，请改选 resident 执行器。"
-      : detection.status === "failed"
-      ? "本地智能体检测失败；本次不拦截提交，请确认所选 CLI 已安装或使用已注册 Profile。"
-      : noExecutor
-        ? "没有检测到可用的智能体 CLI，也没有已注册执行器，暂不能创建任务。"
-        : unavailableRole
-          ? `${unavailableRole}当前不可运行，请改选已安装的类型或已注册 Profile。`
+  const roleBlocked = !!unavailableRole;
+  const availabilityMessage = noExecutor
+    ? "还没有已注册执行器，暂不能创建任务；请先到执行器设置注册本地 CLI 或新增 SSH 执行器。"
+    : unavailableRole
+      ? `${unavailableRole}当前未注册或不支持该角色，请更换执行器。`
+      : mode === "team" && detection.status === "loading"
+        ? "正在确认已注册调度者的常驻会话能力…"
+        : mode === "team" && detection.status === "failed"
+          ? "常驻能力检测失败；调度者候选仅保留系统已知支持的已注册类型。"
           : null;
-  const availabilityTone = detection.status === "loading" ? "loading" as const
+  const availabilityTone = mode === "team" && detection.status === "loading" ? "loading" as const
     : noExecutor ? "empty" as const
       : availabilityMessage ? "warning" as const : null;
   const scheduleError = launchMode === "once" || launchMode === "cron"

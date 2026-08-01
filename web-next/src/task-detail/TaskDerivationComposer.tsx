@@ -315,7 +315,7 @@ export function TaskDerivationComposer({
     !!worktreeContext?.isRepo,
     worktreeContext?.worktreeDefault ?? DEFAULT_APP_SETTINGS.worktreeDefault,
   );
-  const noExecutor = executorsReady && nothingRunnable(detection, profiles);
+  const noExecutor = executorsReady && nothingRunnable(profiles);
   const unavailableRole = !executorsReady ? null : teamMode
     ? !isExecutorPickable(
       parseExecutorValue(lead.profile, profiles, { agentType: TEAM_DEFAULTS.lead, executorId: null }),
@@ -349,20 +349,17 @@ export function TaskDerivationComposer({
       )
         ? "辩手 B"
         : null;
-  const roleBlocked = !!unavailableRole
-    && (detection.status === "ready" || unavailableRole === "调度者");
+  const roleBlocked = !!unavailableRole;
   const canSubmit = !busy && executorsReady && !!worktreeContext && !noExecutor && !roleBlocked
     && (teamMode || !!topic.trim());
-  const availabilityMessage = detection.status === "loading"
-    ? "正在检测本机智能体…"
-    : detection.status === "failed" && roleBlocked
-      ? "检测失败时仍不能选择不支持常驻会话的团队调度者，请更换执行器。"
-      : detection.status === "failed"
-      ? "本地智能体检测失败；本次不拦截提交，请确认所选 CLI 已安装或使用已注册 Profile。"
-      : noExecutor
-        ? "没有检测到可用的智能体 CLI，也没有已注册执行器，暂不能创建。"
-        : unavailableRole
-          ? `${unavailableRole}当前不可用，请更换执行器。`
+  const availabilityMessage = noExecutor
+    ? "还没有已注册执行器，暂不能创建。"
+    : unavailableRole
+      ? `${unavailableRole}当前未注册或不支持该角色，请更换执行器。`
+      : teamMode && detection.status === "loading"
+        ? "正在确认已注册调度者的常驻会话能力…"
+        : teamMode && detection.status === "failed"
+          ? "常驻能力检测失败；调度者候选仅保留系统已知支持的已注册类型。"
           : null;
 
   const submit = async () => {
