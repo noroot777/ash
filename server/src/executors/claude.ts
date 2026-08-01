@@ -186,10 +186,17 @@ export async function* parseClaudeStream(
       push({ kind: "session", cliSessionId: ev.session_id });
     } else if (ev.type === "assistant" && ev.message?.content) {
       flushText(); // settle this message's text-delta tail before its tools
+      // CLI 本地合成的消息(model `<synthetic>`:模型不存在 / 鉴权失败 / 限流等)
+      // **不经过 delta 流** —— 它是 CLI 自己拼出来的,不是模型吐的。所以这一类的
+      // text 必须照收,跳过就等于把唯一一句错误说明扔了(见 docs/incidents.md
+      // 「空白回合」:404 model_not_found 整个被吞,用户只看到任务停着不动)。
+      const synthetic = ev.message.model === "<synthetic>";
       let hadText = false;
       for (const block of ev.message.content) {
-        if (block.type === "text") hadText = true; // already streamed via deltas — don't re-push
-        else if (block.type === "tool_use") push({ kind: "tool", name: block.name, detail: shortJson(block.input) });
+        if (block.type === "text") {
+          hadText = true; // 真模型的 text 已经由 deltas 流过 —— 不要再 push 一遍
+          if (synthetic && block.text) push({ kind: "text", text: block.text });
+        } else if (block.type === "tool_use") push({ kind: "tool", name: block.name, detail: shortJson(block.input) });
       }
       if (hadText) push({ kind: "text", text: "\n\n" }); // paragraph break, identical live & on reload
     } else if (ev.type === "result") {
@@ -200,7 +207,19 @@ export async function* parseClaudeStream(
       // result(标志立即清掉),所以最坏情况也只影响一个回合的错误上报。
       const ownInterrupt = resident?.interruptPending === true;
       if (resident) resident.interruptPending = false;
-      if (ev.subtype && ev.subtype !== "success" && !ownInterrupt) push({ kind: "error", message: `result: ${ev.subtype}` });
+      // claude CLI 把 **API 层**的失败(404 模型不存在、401、限流…)报成
+      // `subtype:"success"` + `is_error:true` + `api_error_status` —— 只看 subtype
+      // 会把它整条判成正常结束。两路判据都要算上,否则回合「成功」但一个字没说。
+      const apiError = ev.is_error === true || typeof ev.api_error_status === "number";
+      if (((ev.subtype && ev.subtype !== "success") || apiError) && !ownInterrupt) {
+        const detail = typeof ev.result === "string" && ev.result.trim()
+          ? ev.result.trim()
+          : `result: ${ev.subtype}`;
+        push({
+          kind: "error",
+          message: ev.api_error_status ? `HTTP ${ev.api_error_status}: ${detail}` : detail,
+        });
+      }
       // 常驻:回合说完了,进程还活着等下一条消息 —— 流不结束。
       if (resident) push({ kind: "turnEnd" });
     }

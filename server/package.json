@@ -23,7 +23,8 @@
     "test:cli-catalog": "tsx scripts/test-cli-catalog.ts",
     "test:task-derivation": "tsx scripts/test-task-derivation-policy.ts",
     "test:scheduled-messages": "tsx scripts/test-scheduled-messages.ts",
-    "test:review": "tsx scripts/test-review-flow.ts"
+    "test:review": "tsx scripts/test-review-flow.ts",
+    "test:claude-stream": "tsx scripts/test-claude-stream-errors.ts"
   },
   "dependencies": {
     "@harness/shared": "*",
