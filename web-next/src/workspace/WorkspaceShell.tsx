@@ -14,6 +14,7 @@ import {
 } from "../settings/SettingsPage.tsx";
 import { CommandPalette } from "../overlays/CommandPalette.tsx";
 import { NotesPanel } from "../overlays/NotesPanel.tsx";
+import { GroupsPanel } from "../overlays/GroupsPanel.tsx";
 import { TaskComposerPanel, type ComposerDraft } from "../composer/TaskComposerPanel.tsx";
 import { LegacyLink } from "../components/LegacyLink.tsx";
 import { DeleteTaskDialog } from "../task-detail/DeleteTaskDialog.tsx";
@@ -48,6 +49,7 @@ export function WorkspaceShell() {
   const [groups, setGroups] = useState<Group[]>([]);
   const [paletteOpen, setPaletteOpen] = useState(initial.view === "palette");
   const [notes, setNotes] = useState<{ projectId: string; noteId: string | null } | null>(initial.view === "notes" && initial.projectId ? { projectId: initial.projectId, noteId: initial.noteId } : null);
+  const [groupsPanelOpen, setGroupsPanelOpen] = useState(false);
   const [composer, setComposer] = useState<{ draft?: ComposerDraft | null; mode: TaskMode } | null>(initial.view === "create" ? { mode: initial.mode } : null);
   const [reviewTaskId, setReviewTaskId] = useState<string | null>(initial.view === "review" ? initial.taskId : null);
   const [deleteTarget, setDeleteTarget] = useState<Task | null>(null);
@@ -178,7 +180,7 @@ export function WorkspaceShell() {
   };
 
   useWorkspaceShortcuts({
-    enabled: !settingsSection,
+    enabled: !settingsSection && !groupsPanelOpen,
     paletteOpen,
     composerOpen: composer !== null,
     orderedTasks,
@@ -192,6 +194,7 @@ export function WorkspaceShell() {
   const overlays = <>
     <CommandPalette open={paletteOpen} projects={projects} currentProject={currentProject} tasks={tasks} selectedTask={selectedTask} groups={groups} onClose={() => setPaletteOpen(false)} onProject={selectProject} onTask={selectTask} onTaskUpdated={updateTask} onNote={openNotes} onComposer={openComposer} onNewGroup={() => currentProject ? setCreateDialog("group") : notify("先选择一个项目")} onNewProject={() => setCreateDialog("project")} onDeleteTask={setDeleteTarget} onSettings={openSettings} notify={notify} />
     {notes && notesProject && <NotesPanel key={`${notes.projectId}:${notes.noteId ?? "list"}`} project={notesProject} initialNoteId={notes.noteId} onClose={() => setNotes(null)} onTask={(nextTaskId) => { const task = tasks.find((row) => row.id === nextTaskId); if (task) selectTask(task); else api.task(nextTaskId).then(selectTask).catch(() => notify("关联任务读取失败")); setNotes(null); }} onConvert={(draft) => { setNotes(null); setSettingsSection(null); setComposer({ mode: "single", draft }); }} notify={notify} />}
+    {groupsPanelOpen && currentProject && <GroupsPanel project={currentProject} groups={groups} tasks={tasks} onClose={() => setGroupsPanelOpen(false)} onChanged={refreshGroups} notify={notify} />}
     {deleteTarget && <DeleteTaskDialog task={deleteTarget} onClose={() => setDeleteTarget(null)} onDeleted={() => { deleteTask(deleteTarget.id); setDeleteTarget(null); }} notify={notify} />}
     {createDialog === "project" && <CreateProjectDialog onClose={() => setCreateDialog(null)} onCreate={async (name, repoPath) => { try { const created = await api.createProject(name, repoPath); setProjects((current) => [...current, created]); setProjectId(created.id); setTaskId(null); setSettingsSection(null); setCreateDialog(null); notify("项目已创建"); } catch (error) { notify(error instanceof Error ? error.message : "项目创建失败"); } }} />}
     {createDialog === "group" && currentProject && <CreateGroupDialog onClose={() => setCreateDialog(null)} onCreate={async (name, mode) => { try { const created = await api.createGroup({ projectId: currentProject.id, name, mode }); setGroups((current) => [...current, created]); setCreateDialog(null); notify("分组已创建"); } catch (error) { notify(error instanceof Error ? error.message : "分组创建失败"); } }} />}
@@ -214,7 +217,7 @@ export function WorkspaceShell() {
 
   return (
     <><div className="workspace-shell" style={{ "--workspace-sidebar-width": `${sidebarWidth}px` } as CSSProperties}>
-      <WorkspaceSidebar projects={projects} currentProject={currentProject} tasks={tasks} selectedTaskId={taskId} connected={connected} collapsed={collapsed} width={sidebarWidth} onWidthChange={setSidebarWidth} onProject={selectProject} onTask={selectTask} onToggleCollapsed={() => setCollapsed((value) => !value)} onSearch={() => setPaletteOpen(true)} onNotes={() => openNotes()} onCreate={() => openComposer("single")} onNewProject={() => setCreateDialog("project")} onSettings={() => openSettings("executors")} />
+      <WorkspaceSidebar projects={projects} currentProject={currentProject} tasks={tasks} selectedTaskId={taskId} connected={connected} collapsed={collapsed} width={sidebarWidth} onWidthChange={setSidebarWidth} onProject={selectProject} onTask={selectTask} onToggleCollapsed={() => setCollapsed((value) => !value)} onSearch={() => setPaletteOpen(true)} onNotes={() => openNotes()} onGroups={() => setGroupsPanelOpen(true)} onCreate={() => openComposer("single")} onNewProject={() => setCreateDialog("project")} onSettings={() => openSettings("executors")} />
       <main className="workspace-main">
         {loadError && <div className="workspace-load-error">{loadError.message}</div>}
         {composer && currentProject ? <TaskComposerPanel project={currentProject} groups={groups} initialDraft={composer.draft} mode={composer.mode} onModeChange={(mode) => setComposer((current) => current ? { ...current, mode } : null)} onCancel={() => setComposer(null)} onCreated={createTask} onCreateGroup={createComposerGroup} notify={notify} /> : selectedTask?.mode === "team" ? (

@@ -1,0 +1,90 @@
+.groups-panel-scrim {
+  z-index: 205;
+}
+
+.groups-panel {
+  display: grid;
+  width: min(780px, calc(100vw - 32px));
+  max-height: min(680px, calc(100vh - 40px));
+  grid-template-rows: 48px minmax(0, 1fr);
+  overflow: hidden;
+  border: 1px solid var(--line2);
+  border-radius: 14px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+}
+
+.groups-panel > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--line);
+  padding: 0 13px 0 16px;
+}
+
+.groups-panel > header > div {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 9px;
+}
+
+.groups-panel-icon {
+  display: grid;
+  width: 27px;
+  height: 27px;
+  flex: 0 0 27px;
+  place-items: center;
+  border-radius: 8px;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.groups-panel-heading {
+  display: grid;
+  min-width: 0;
+}
+
+.groups-panel-heading b {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.groups-panel-heading small {
+  overflow: hidden;
+  color: var(--faint);
+  font-size: 9.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.groups-panel > header > button {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+}
+
+.groups-panel > header > button:hover {
+  background: var(--raised);
+  color: var(--ink);
+}
+
+.groups-panel-body {
+  min-height: 0;
+  overflow-y: auto;
+  background: color-mix(in lch, var(--canvas) 72%, var(--panel));
+  padding: 18px;
+}
+
+.groups-panel-body .settings-card {
+  box-shadow: none;
+}
+
+.groups-panel-body .settings-note {
+  margin: 12px 0 0;
+}
