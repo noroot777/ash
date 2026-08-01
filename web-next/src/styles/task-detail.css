@@ -494,6 +494,10 @@
 .task-inspector-action > svg:last-child { margin-left: auto; }
 .task-inspector details { margin-top: 5px; border-top: 0.5px solid var(--line); padding-top: 7px; }
 .task-inspector details pre { max-height: 240px; overflow: auto; margin: 7px 0 0; white-space: pre-wrap; word-break: break-word; color: var(--muted); font-family: var(--font-sans); font-size: 10.5px; line-height: 1.55; }
+.task-inspector-follow-ups ol { display: grid; gap: 8px; margin: 7px 0 0; padding: 0; list-style: none; }
+.task-inspector-follow-ups li + li { border-top: 0.5px solid var(--line); padding-top: 8px; }
+.task-inspector-follow-ups time { display: block; color: var(--faint); font-size: 9px; }
+.task-inspector-follow-ups li pre { margin-top: 3px; }
 .task-resume-editor { margin-top: 7px; overflow: hidden; border: 1px solid var(--line); border-radius: 8px; background: var(--raised); }
 .task-resume-editor-head { display: flex; min-height: 30px; align-items: center; gap: 4px; padding: 5px 7px; }
 .task-resume-editor-head > span { min-width: 0; flex: 1; color: var(--faint); font-size: 9.5px; line-height: 1.4; }

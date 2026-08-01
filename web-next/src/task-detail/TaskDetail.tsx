@@ -31,6 +31,7 @@ interface TaskInspectorContext {
   groups: Group[];
   sessions: Session[];
   allTasks: Task[];
+  followUps: { text: string; at?: string }[];
   onOpenTask: (taskId: string) => void;
   onOpenReview: () => void;
   onPatch: (patch: Partial<Task>) => Promise<void>;
@@ -90,6 +91,14 @@ export function TaskDetail({
   const [derivationResetKey, setDerivationResetKey] = useState(0);
   const { indicatorForTask } = useTaskReadState(allTasks, task.id);
   const conversation = useConversation(task.id);
+  const followUps = useMemo(
+    () => conversation.items.flatMap((item) => (
+      item.kind === "user" && !item.isAnswer
+        ? [{ text: item.text, ...(item.at ? { at: item.at } : {}) }]
+        : []
+    )),
+    [conversation.items],
+  );
   const markdown = useMemo(
     () => conversationToMarkdown(conversation.items, task),
     [conversation.items, task],
@@ -197,6 +206,7 @@ export function TaskDetail({
         groups,
         sessions: conversation.sessions,
         allTasks,
+        followUps,
         onOpenTask,
         onOpenReview: () => changeReviewOpen(true),
         onPatch: patch,
@@ -246,7 +256,7 @@ export function TaskDetail({
                         task={task}
                         onAnswer={async (answer) => {
                           await api.answerTask(task.id, answer);
-                          conversation.addUser(answer);
+                          conversation.addUser(answer, [], { answer: true });
                           notify("已发送答复，任务正在续跑");
                         }}
                       />
