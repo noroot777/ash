@@ -255,6 +255,11 @@
   --text-swap-translate-y: 4px;
   --text-swap-blur: 2px;
   --text-swap-ease: ease-in-out;
+  --shimmer-dur: 3600ms;
+  --shimmer-base: color-mix(in srgb, var(--faint) 82%, transparent);
+  --shimmer-highlight: color-mix(in srgb, var(--muted) 72%, transparent);
+  --shimmer-band: 520%;
+  --shimmer-ease: linear;
 }
 
 .t-text-swap {
@@ -280,6 +285,44 @@
   transition: none;
 }
 
+/* Two-layer construction:
+   1. The base text renders normally in --shimmer-base.
+   2. ::before duplicates it via content: attr(data-text),
+      paints a transparent → highlight → transparent gradient
+      onto it, and clips that gradient to the glyphs via
+      background-clip: text. Animating background-position
+      sweeps the band across the text. */
+.t-shimmer {
+  position: relative;
+  display: inline-block;
+  color: var(--shimmer-base);
+}
+.t-shimmer::before {
+  content: attr(data-text);
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image: linear-gradient(
+    90deg,
+    transparent          0%,
+    transparent         40%,
+    var(--shimmer-highlight) 50%,
+    transparent         60%,
+    transparent        100%
+  );
+  background-size: var(--shimmer-band) 100%;
+  background-repeat: no-repeat;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  animation: t-shimmer var(--shimmer-dur) var(--shimmer-ease) infinite;
+}
+@keyframes t-shimmer {
+  0%   { background-position: 100% 0; }
+  100% { background-position: 0% 0; }
+}
+
 .task-agent-segment + .task-agent-segment { margin-top: 7px; }
 .task-execution-block { max-width: 680px; margin: 2px 0 1px; border: 0; color: color-mix(in srgb, var(--faint) 76%, transparent); font-size: 9.5px; }
 .task-execution-block > summary { display: inline-flex; max-width: 100%; cursor: pointer; align-items: center; gap: 4px; border-radius: 5px; padding: 2px 3px; list-style: none; opacity: .72; transition: color 150ms ease, opacity 150ms ease; }
@@ -290,6 +333,7 @@
 .task-execution-block[open] > summary .task-execution-caret { transform: rotate(90deg); }
 .task-execution-label { max-width: min(58vw, 520px); overflow: hidden; font-weight: 450; text-overflow: ellipsis; white-space: nowrap; }
 .task-execution-block.has-error > summary { color: color-mix(in srgb, var(--red) 68%, var(--faint)); }
+.task-execution-block.has-error .t-shimmer { --shimmer-base: color-mix(in srgb, var(--red) 52%, transparent); --shimmer-highlight: color-mix(in srgb, var(--red) 72%, transparent); }
 .task-execution-pulse { width: 3px; height: 3px; flex: none; border-radius: 50%; background: currentColor; opacity: .72; }
 .task-execution-events { margin: 1px 0 1px 7px; border-left: 1px solid color-mix(in srgb, var(--line) 72%, transparent); padding: 1px 0 2px 6px; }
 .task-tool-line { margin-top: 2px; border: 0; color: color-mix(in srgb, var(--faint) 82%, transparent); font-size: 9.5px; }
@@ -634,6 +678,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .t-shimmer::before { animation: none !important; }
   .t-text-swap { transition: none !important; }
   .is-spinning { animation: none; }
   .task-execution-caret { transition: none; }

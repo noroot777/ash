@@ -79,7 +79,16 @@ function TransientExecutionLabel({
     };
   }, [baseLabel, events.length, latestPreview, running]);
 
-  return <span className={`task-execution-label t-text-swap ${phase}`} ref={label}>{display}</span>;
+  return (
+    <span
+      className={`task-execution-label t-text-swap ${phase}${running ? " t-shimmer" : ""}`}
+      data-text={running ? display : undefined}
+      aria-label={running ? display : undefined}
+      ref={label}
+    >
+      {display}
+    </span>
+  );
 }
 
 export function ExecutionDetails({ events, running }: { events: AgentAuxEvent[]; running: boolean }) {
