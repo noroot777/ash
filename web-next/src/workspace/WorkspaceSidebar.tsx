@@ -4,6 +4,7 @@ import {
   NotePencil,
   Plus,
   SidebarSimple,
+  Stack,
 } from "@phosphor-icons/react";
 import { ProjectAvatar } from "./ProjectAvatar.tsx";
 import { ProjectSwitcher } from "./ProjectSwitcher.tsx";
@@ -26,6 +27,7 @@ export function WorkspaceSidebar({
   onToggleCollapsed,
   onSearch,
   onNotes,
+  onGroups,
   onCreate,
   onNewProject,
   onSettings,
@@ -43,6 +45,7 @@ export function WorkspaceSidebar({
   onToggleCollapsed: () => void;
   onSearch: () => void;
   onNotes: () => void;
+  onGroups: () => void;
   onCreate: () => void;
   onNewProject: () => void;
   onSettings: () => void;
@@ -71,15 +74,20 @@ export function WorkspaceSidebar({
           onCreate={onNewProject}
           onSettings={onSettings}
         />
-        <button className="workspace-side-icon" type="button" title={`搜索 ${modifier} K`} aria-label={`搜索 ${modifier} K`} onClick={onSearch}>
-          <MagnifyingGlass size={15} aria-hidden="true" />
-        </button>
-        <button className="workspace-side-icon" type="button" title="随手记" aria-label="随手记" onClick={onNotes}>
-          <NotePencil size={15} aria-hidden="true" />
-        </button>
-        <button className="workspace-side-icon" type="button" title="新建任务" aria-label="新建任务" onClick={onCreate}>
-          <Plus size={16} weight="bold" aria-hidden="true" />
-        </button>
+        <div className="workspace-sidebar-tools" role="toolbar" aria-label="任务工具">
+          <button className="workspace-side-icon" type="button" title={`搜索 ${modifier} K`} aria-label={`搜索 ${modifier} K`} onClick={onSearch}>
+            <MagnifyingGlass size={15} aria-hidden="true" />
+          </button>
+          <button className="workspace-side-icon" type="button" title="随手记" aria-label="随手记" onClick={onNotes}>
+            <NotePencil size={15} aria-hidden="true" />
+          </button>
+          <button className="workspace-side-icon" type="button" title="分组管理" aria-label="分组管理" onClick={onGroups}>
+            <Stack size={15} aria-hidden="true" />
+          </button>
+          <button className="workspace-side-icon" type="button" title="新建任务" aria-label="新建任务" onClick={onCreate}>
+            <Plus size={16} weight="bold" aria-hidden="true" />
+          </button>
+        </div>
       </div>
 
       <TaskTree

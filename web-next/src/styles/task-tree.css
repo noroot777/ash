@@ -2,7 +2,7 @@
   min-height: 0;
   flex: 1;
   overflow: auto;
-  margin-top: 8px;
+  margin-top: 5px;
   padding-bottom: 14px;
 }
 
@@ -108,7 +108,17 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  color: color-mix(in lch, var(--ink) 52%, var(--muted));
   font-size: 12.5px;
+  font-weight: 450;
+}
+
+.workspace-task-row:hover .workspace-task-title,
+.workspace-task-row.is-selected .workspace-task-title {
+  color: var(--ink);
+}
+
+.workspace-task-row.is-selected .workspace-task-title {
   font-weight: 500;
 }
 
