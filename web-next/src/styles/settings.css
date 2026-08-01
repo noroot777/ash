@@ -34,34 +34,10 @@
   color: var(--ink);
 }
 
-.settings-project-mark {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin: 18px 8px 22px;
-}
-
-.settings-project-mark > span:last-child {
-  display: grid;
-  min-width: 0;
-}
-
-.settings-project-mark b {
-  overflow: hidden;
-  font-size: 13px;
-  font-weight: 600;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.settings-project-mark small {
-  color: var(--faint);
-  font-size: 11px;
-}
-
 .settings-sidebar nav {
   display: grid;
   gap: 20px;
+  margin-top: 18px;
 }
 
 .settings-nav-group {
