@@ -1,11 +1,6 @@
 import { useEffect, useState } from "react";
 import type { AgentExecutorProfile, LlmProvider } from "@harness/shared";
-import { Check, MagnifyingGlass } from "@phosphor-icons/react";
-import { Button } from "../components/ui.tsx";
-import {
-  refreshAgentAvailability,
-  useAgentAvailability,
-} from "../lib/agentAvailability.ts";
+import { refreshAgentAvailability } from "../lib/agentAvailability.ts";
 import { api, type DetectedCli } from "../lib/api.ts";
 import { AgentProfilesSection } from "./AgentProfilesSection.tsx";
 
@@ -23,7 +18,7 @@ export function ExecutorsSettings({ notify }: { notify: (message: string) => voi
   const [loading, setLoading] = useState(true);
   const [detecting, setDetecting] = useState(false);
   const [detected, setDetected] = useState<DetectedCli[] | null>(null);
-  const availability = useAgentAvailability();
+  const [registeringKey, setRegisteringKey] = useState<string | null>(null);
 
   useEffect(() => {
     Promise.all([api.agents(), api.llmProviders()])
@@ -55,6 +50,7 @@ export function ExecutorsSettings({ notify }: { notify: (message: string) => voi
 
   const register = async (cli: DetectedCli) => {
     if (!cli.type) return;
+    setRegisteringKey(cli.key);
     try {
       const created = await api.createAgent({
         type: cli.type,
@@ -67,6 +63,8 @@ export function ExecutorsSettings({ notify }: { notify: (message: string) => voi
       notify(`${cli.name} 已注册为执行器`);
     } catch (error) {
       notify(error instanceof Error ? error.message : "注册失败");
+    } finally {
+      setRegisteringKey(null);
     }
   };
 
@@ -77,48 +75,25 @@ export function ExecutorsSettings({ notify }: { notify: (message: string) => voi
           <h1>执行器</h1>
           <p>配置实际调用的 CLI 身份、运行位置、模型供应商与默认覆盖。</p>
         </div>
-        <Button disabled={detecting} onClick={() => void detect()}>
-          <MagnifyingGlass size={13} />
-          {detecting ? "检测中…" : "检测本地智能体"}
-        </Button>
       </header>
 
       <AgentProfilesSection
         profiles={profiles}
         providers={providers}
         loading={loading}
-        availability={availability}
+        detecting={detecting}
+        detected={detected}
+        registeringKey={registeringKey}
+        onDetect={() => void detect()}
+        onRegister={(cli) => void register(cli)}
         onProfileChanged={changeProfile}
         onProfileAdded={(profile) => setProfiles((current) => [...current, profile])}
+        onProfilesDeleted={(ids) => {
+          const deleted = new Set(ids);
+          setProfiles((current) => current.filter((profile) => !deleted.has(profile.id)));
+        }}
         notify={notify}
       />
-
-      {detected && (
-        <section className="settings-section">
-          <h2>检测结果</h2>
-          <div className="settings-card settings-cli-grid">
-            {detected.map((cli) => {
-              const registered = !!cli.type && profiles.some(
-                (profile) => profile.type === cli.type && profile.target.kind === "local",
-              );
-              return (
-                <article key={cli.key}>
-                  <span className={`settings-cli-state${cli.available ? " is-ready" : ""}`}>
-                    {cli.available ? <Check size={12} /> : "—"}
-                  </span>
-                  <div>
-                    <b>{cli.name}</b>
-                    <small>{cli.available ? cli.version || cli.path : "未安装"}</small>
-                  </div>
-                  {cli.available && cli.type && !registered && (
-                    <button type="button" onClick={() => void register(cli)}>注册</button>
-                  )}
-                </article>
-              );
-            })}
-          </div>
-        </section>
-      )}
     </>
   );
 }

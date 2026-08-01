@@ -20,6 +20,7 @@ import { ModesSettings } from "./ModesSettings.tsx";
 import { ProjectSettingsPanel } from "./ProjectSettingsPanel.tsx";
 import { ProvidersSettings } from "./ProvidersSettings.tsx";
 import "./agents-settings.css";
+import "./executors-settings.css";
 
 export type SettingsSection =
   | "project"
