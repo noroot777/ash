@@ -11,7 +11,6 @@ import {
   Stack,
 } from "@phosphor-icons/react";
 import { LegacyLink } from "../components/LegacyLink.tsx";
-import { ProjectAvatar } from "../workspace/ProjectAvatar.tsx";
 import { ArchiveSettings } from "./ArchiveSettings.tsx";
 import { DefaultsSettings } from "./DefaultsSettings.tsx";
 import { ExecutorsSettings } from "./ExecutorsSettings.tsx";
@@ -121,13 +120,6 @@ export function SettingsPage({
           <ArrowLeft size={14} weight="bold" aria-hidden="true" />
           返回应用
         </button>
-        <div className="settings-project-mark">
-          {project ? <ProjectAvatar project={project} size="large" /> : <span className="workspace-project-avatar" />}
-          <span>
-            <b>{project?.name ?? "Harness"}</b>
-            <small>设置</small>
-          </span>
-        </div>
         <nav aria-label="设置导航">
           <div className="settings-nav-group">
             <span className="settings-nav-label" title={project?.name}>{project?.name ?? "当前项目"}</span>
