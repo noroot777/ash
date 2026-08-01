@@ -6,6 +6,7 @@ import type { AgentExecutor, ExecutorBuildOpts, RelayConfig } from "./types.js";
 import { cliSpec } from "./catalog/index.js";
 import { execBinFor } from "./bin-probe.js";
 import { GenericCliExecutor } from "./generic.js";
+import { normalizeProfileExtraArgs } from "./args.js";
 
 type AgentRow = typeof agents.$inferSelect;
 type ExecutorOverrides = { model?: string | null; reasoningEffort?: string | null };
@@ -54,14 +55,15 @@ async function build(
   type: AgentType,
   overrides: ExecutorOverrides = {},
 ): Promise<AgentExecutor> {
+  const target = profile ? JSON.parse(profile.target) as ExecTarget : undefined;
   const opts: ExecutorBuildOpts = profile
     ? {
         name: profile.name,
         model: overrides.model || profile.model || undefined,
-        extraArgs: JSON.parse(profile.extraArgs) as string[],
+        extraArgs: normalizeProfileExtraArgs(JSON.parse(profile.extraArgs), target!),
         reasoningEffort: overrides.reasoningEffort || profile.reasoningEffort || undefined,
         speed: profile.speed === "fast" ? ("fast" as const) : undefined,
-        target: JSON.parse(profile.target) as ExecTarget,
+        target,
         bin: undefined as string | undefined,
         relay: await loadRelay(profile.providerId),
       }

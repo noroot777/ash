@@ -399,6 +399,15 @@ export const api = {
     apiKey?: string;
     id?: string;
   }): Promise<{ models: string[] }> => request("/llm-providers/models", json("POST", body)),
+  testLlmProvider: (body: {
+    id?: string;
+    protocol?: LlmProtocol;
+    baseUrl?: string;
+    apiKey?: string;
+    model?: string;
+    protocolConversionEnabled?: boolean;
+  }): Promise<{ ok: true; model: string; reply: string; elapsedMs: number; endpoint: string }> =>
+    request("/llm-providers/test", json("POST", body)),
   createLlmProvider: (provider: {
     name: string;
     protocol: LlmProtocol;

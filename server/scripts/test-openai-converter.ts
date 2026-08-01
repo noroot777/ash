@@ -41,6 +41,12 @@ assert.deepEqual((convertedRequest.messages as any[])[2].tool_calls[0].function,
 assert.equal((convertedRequest.messages as any[])[3].role, "tool");
 assert.deepEqual(convertedRequest.stream_options, { include_usage: true });
 
+const developerRequest = responsesToChatRequest({
+  model: "demo-model",
+  input: [{ role: "developer", content: "Follow project rules." }, { role: "user", content: "hello" }],
+});
+assert.deepEqual((developerRequest.messages as any[])[0], { role: "system", content: "Follow project rules." });
+
 const reverseRequest = chatToResponsesRequest({
   model: "demo-model",
   messages: [
@@ -119,6 +125,24 @@ const upstream = createServer(async (req, res) => {
     res.end('{"data":[{"id":"demo-model"}]}');
     return;
   }
+  if (req.url === "/v1/messages") {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end('{"content":[{"type":"text","text":"OK"}]}');
+    return;
+  }
+  if (req.url === "/v1/responses") {
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    res.write('event: response.output_text.delta\ndata: {"type":"response.output_text.delta","delta":"OK"}\n\n');
+    res.end('event: response.completed\ndata: {"type":"response.completed","response":{"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"OK"}]}]}}\n\n');
+    return;
+  }
+  if (req.url === "/v1/chat/completions" && lastBody?.stream === true) {
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    res.write('data: {"id":"chatcmpl-live","object":"chat.completion.chunk","created":456,"model":"demo-model","choices":[{"index":0,"delta":{"role":"assistant","content":"OK"},"finish_reason":null}]}\n\n');
+    res.write('data: {"id":"chatcmpl-live","object":"chat.completion.chunk","created":456,"model":"demo-model","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}\n\n');
+    res.end("data: [DONE]\n\n");
+    return;
+  }
   res.writeHead(200, { "content-type": "application/json" });
   res.end(JSON.stringify({
     id: "chatcmpl-upstream",
@@ -176,6 +200,37 @@ const models = await app.request("/llm-providers/provider-1/convert/v1/models", 
 assert.equal(models.status, 200);
 assert.equal(lastPath, "/v1/models");
 assert.deepEqual(await models.json(), { data: [{ id: "demo-model" }] });
+
+const { testProviderModel } = await import("../src/provider-test.js");
+const anthropicTest = await testProviderModel({
+  protocol: "anthropic",
+  baseUrl: `http://127.0.0.1:${address.port}`,
+  apiKey: "secret-key",
+  model: "demo-model",
+  protocolConversionEnabled: false,
+});
+assert.equal(anthropicTest.reply, "OK");
+assert.equal(anthropicTest.endpoint, "Anthropic Messages API");
+
+const responsesTest = await testProviderModel({
+  protocol: "openai",
+  baseUrl: `http://127.0.0.1:${address.port}`,
+  apiKey: "secret-key",
+  model: "demo-model",
+  protocolConversionEnabled: false,
+});
+assert.equal(responsesTest.reply, "OK");
+assert.equal(responsesTest.endpoint, "OpenAI Responses API");
+
+const convertedModelTest = await testProviderModel({
+  protocol: "openai",
+  baseUrl: `http://127.0.0.1:${address.port}`,
+  apiKey: "secret-key",
+  model: "demo-model",
+  protocolConversionEnabled: true,
+});
+assert.equal(convertedModelTest.reply, "OK");
+assert.equal(convertedModelTest.endpoint, "Responses → Chat Completions");
 
 assert.equal(protocolConverterBaseUrl("provider/1"), "http://127.0.0.1:54321/api/llm-providers/provider%2F1/convert");
 

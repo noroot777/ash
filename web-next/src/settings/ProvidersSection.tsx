@@ -4,6 +4,7 @@ import {
   ArrowsClockwise,
   CheckCircle,
   PencilSimple,
+  Play,
   Plus,
   Trash,
 } from "@phosphor-icons/react";
@@ -43,8 +44,11 @@ function ProviderForm({
   });
   const [models, setModels] = useState<string[]>([]);
   const [probing, setProbing] = useState(false);
+  const [testing, setTesting] = useState(false);
   const [saving, setSaving] = useState(false);
   const [probeError, setProbeError] = useState("");
+  const [testResult, setTestResult] = useState("");
+  const [testError, setTestError] = useState("");
 
   const set = <K extends keyof ProviderDraft>(key: K, value: ProviderDraft[K]) => {
     setDraft((current) => ({
@@ -55,6 +59,16 @@ function ProviderForm({
     if (key === "protocol" || key === "baseUrl" || key === "apiKey") {
       setModels([]);
       setProbeError("");
+    }
+    if (
+      key === "protocol"
+      || key === "baseUrl"
+      || key === "apiKey"
+      || key === "model"
+      || key === "protocolConversionEnabled"
+    ) {
+      setTestResult("");
+      setTestError("");
     }
   };
 
@@ -79,6 +93,35 @@ function ProviderForm({
       setProbeError(error instanceof Error ? error.message : "模型探测失败");
     } finally {
       setProbing(false);
+    }
+  };
+
+  const testModel = async () => {
+    if (!draft.baseUrl.trim()) {
+      setTestError("先填写 Base URL");
+      return;
+    }
+    if (!draft.model.trim()) {
+      setTestError("先填写要测试的模型");
+      return;
+    }
+    setTesting(true);
+    setTestResult("");
+    setTestError("");
+    try {
+      const result = await api.testLlmProvider({
+        id: provider?.id,
+        protocol: draft.protocol,
+        baseUrl: draft.baseUrl.trim(),
+        apiKey: draft.apiKey.trim() || undefined,
+        model: draft.model.trim(),
+        protocolConversionEnabled: draft.protocol === "openai" && draft.protocolConversionEnabled,
+      });
+      setTestResult(`${result.endpoint} · ${result.elapsedMs} ms · ${result.reply}`);
+    } catch (error) {
+      setTestError(error instanceof Error ? error.message : "模型测试失败");
+    } finally {
+      setTesting(false);
     }
   };
 
@@ -172,6 +215,10 @@ function ProviderForm({
               <ArrowsClockwise size={12} className={probing ? "provider-spin" : ""} />
               {probing ? "探测中…" : "探测模型"}
             </Button>
+            <Button disabled={testing} onClick={() => void testModel()}>
+              <Play size={12} weight="fill" />
+              {testing ? "测试中…" : "测试模型"}
+            </Button>
           </div>
           <datalist id={`provider-${provider?.id ?? "new"}-models`}>
             {models.map((model) => <option value={model} key={model} />)}
@@ -179,6 +226,11 @@ function ProviderForm({
           {(models.length > 0 || probeError) && (
             <small className={probeError ? "is-error" : ""}>
               {probeError || `已返回 ${models.length} 个完整模型名`}
+            </small>
+          )}
+          {(testResult || testError) && (
+            <small className={`provider-test-result${testError ? " is-error" : ""}`}>
+              {testError || testResult}
             </small>
           )}
         </label>
@@ -208,6 +260,7 @@ function ProviderRow({
 }) {
   const [editing, setEditing] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [testing, setTesting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
 
   if (editing) {
@@ -238,6 +291,22 @@ function ProviderRow({
     }
   };
 
+  const testModel = async () => {
+    if (!provider.model) {
+      notify(`供应商「${provider.name}」还没有设置测试模型`);
+      return;
+    }
+    setTesting(true);
+    try {
+      const result = await api.testLlmProvider({ id: provider.id, model: provider.model });
+      notify(`「${provider.name}」测试通过 · ${result.elapsedMs} ms · ${result.reply}`);
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "模型测试失败");
+    } finally {
+      setTesting(false);
+    }
+  };
+
   return (
     <>
       <article className="provider-row">
@@ -256,6 +325,15 @@ function ProviderRow({
           {provider.hasKey ? "Key 已保存" : "缺少 Key"}
         </span>
         <span className="provider-default-model">{provider.model || "未设默认模型"}</span>
+        <button
+          type="button"
+          className="provider-test-action"
+          disabled={testing}
+          onClick={() => void testModel()}
+          aria-label={`测试 ${provider.name} 的模型`}
+        >
+          <Play size={11} weight="fill" /> {testing ? "测试中" : "测试"}
+        </button>
         <button type="button" className="provider-icon-action" onClick={() => setEditing(true)} aria-label={`编辑 ${provider.name}`}>
           <PencilSimple size={14} />
         </button>

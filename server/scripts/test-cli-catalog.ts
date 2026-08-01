@@ -22,9 +22,26 @@ import { CLI_SPECS, CLI_SPEC_BY_KEY } from "../src/executors/catalog/index.js";
 import { GenericCliExecutor, hasTrustedSessionId, interactiveResumeInner } from "../src/executors/generic.js";
 import { execBinFor, probeBins } from "../src/executors/bin-probe.js";
 import { resumeCommandFor } from "../src/executors/resume.js";
+import { normalizeProfileExtraArgs } from "../src/executors/args.js";
 import type { CliSpec } from "../src/executors/catalog/types.js";
 
 const MISSING_BIN = "harness-definitely-not-installed-cli";
+
+assert.deepEqual(
+  normalizeProfileExtraArgs(["--settings ~/test/claude-settings.json"], { kind: "local" }),
+  ["--settings", join(homedir(), "test/claude-settings.json")],
+  "整段粘贴的 flag + 路径应拆成两个 argv，并展开本地 home",
+);
+assert.deepEqual(
+  normalizeProfileExtraArgs([`--settings '{"fastMode": true}'`], { kind: "local" }),
+  ["--settings", '{"fastMode": true}'],
+  "带空格的引号值仍应保持为单个 argv",
+);
+assert.deepEqual(
+  normalizeProfileExtraArgs(["--define=hello world"], { kind: "local" }),
+  ["--define=hello world"],
+  "带等号的单 token 不应被启发式拆分",
+);
 
 // ① 目录 ↔ AGENT_TYPES ↔ 两张登记表
 assert.deepEqual(

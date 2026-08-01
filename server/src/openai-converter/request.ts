@@ -52,7 +52,10 @@ function appendResponseInput(messages: JsonObject[], input: unknown) {
       continue;
     }
     if (item.type === "reasoning") continue;
-    const role = asString(item.role) || (item.type === "message" ? "user" : "user");
+    // Responses API 支持 developer；不少 OpenAI-compatible Chat 端点（百炼等）
+    // 只认 system/user/assistant/tool。developer 语义最接近 system，必须在这里降级。
+    const sourceRole = asString(item.role) || "user";
+    const role = sourceRole === "developer" ? "system" : sourceRole;
     messages.push({ role, content: responseContentToChat(item.content) });
   }
 }
