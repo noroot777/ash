@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { AgentExecutorProfile, LlmProvider } from "@harness/shared";
 import { REASONING_EFFORT_VALUES } from "@harness/shared/cli-presets";
-import { Trash } from "@phosphor-icons/react";
+import { Star, Trash } from "@phosphor-icons/react";
 import { api } from "../lib/api.ts";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import {
@@ -177,39 +177,47 @@ export function AgentProfileRow({
             <option value="fast">1.5x</option>
           </select>
         </div>
-        <ProfileArgsControl
-          profileName={profile.name}
-          value={profile.extraArgs ?? []}
-          disabled={busy}
-          onSave={async (extraArgs) => {
-            const saved = await patch({ extraArgs });
-            if (saved) notify(`${profile.name} 的 CLI 参数已保存`);
-            return saved;
-          }}
-        />
-        <div className="agent-profile-default">
-          {profile.isDefault ? (
-            <span className="settings-default-tag">默认</span>
-          ) : (
-            <button
-              type="button"
-              className="settings-text-action"
+        <div className="agent-profile-actions">
+          <div className="agent-profile-hover-action">
+            <ProfileArgsControl
+              profileName={profile.name}
+              value={profile.extraArgs ?? []}
               disabled={busy}
-              onClick={() => void patch({ isDefault: true })}
-            >
-              设默认
-            </button>
-          )}
+              onSave={async (extraArgs) => {
+                const saved = await patch({ extraArgs });
+                if (saved) notify(`${profile.name} 的 CLI 参数已保存`);
+                return saved;
+              }}
+            />
+          </div>
+          <div className={`agent-profile-default${profile.isDefault ? " is-current" : ""}`}>
+            {profile.isDefault ? (
+              <span className="settings-default-tag">
+                <Star size={10} weight="fill" aria-hidden="true" />默认
+              </span>
+            ) : (
+              <button
+                type="button"
+                className="agent-profile-default-action"
+                disabled={busy}
+                title="设为默认执行器"
+                aria-label={`将 ${profile.name} 设为默认执行器`}
+                onClick={() => void patch({ isDefault: true })}
+              >
+                <Star size={13} aria-hidden="true" />
+              </button>
+            )}
+          </div>
+          <button
+            className="settings-icon-danger agent-profile-delete agent-profile-hover-action"
+            type="button"
+            disabled={busy}
+            onClick={() => setConfirmDelete(true)}
+            aria-label={`删除 ${profile.name}`}
+          >
+            <Trash size={13} aria-hidden="true" />
+          </button>
         </div>
-        <button
-          className="settings-icon-danger agent-profile-delete"
-          type="button"
-          disabled={busy}
-          onClick={() => setConfirmDelete(true)}
-          aria-label={`删除 ${profile.name}`}
-        >
-          <Trash size={14} aria-hidden="true" />
-        </button>
       </article>
       {confirmDelete && (
         <ConfirmDialog

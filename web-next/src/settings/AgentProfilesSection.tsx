@@ -127,9 +127,7 @@ function AgentProfileGroup({
           <span>模型</span>
           <span>思考</span>
           <span>速度</span>
-          <span>额外参数</span>
-          <span>默认</span>
-          <span />
+          <span className="agent-profile-actions-heading">操作</span>
         </div>
         {profiles.map((profile) => (
           <AgentProfileRow

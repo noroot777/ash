@@ -92,7 +92,7 @@ export function teamPresetConfigFromDraft(draft: TeamPresetDraft): TeamPresetCon
   };
 }
 
-const ROLE_META = {
+export const ROLE_META = {
   lead: { label: "调度者", hint: "维持团队会话并分派工作", icon: CrownSimple },
   worker: { label: "执行者", hint: "接收调度并完成具体任务", icon: Robot },
   reviewer: { label: "审查者", hint: "在执行完成后独立验收", icon: MagnifyingGlass },

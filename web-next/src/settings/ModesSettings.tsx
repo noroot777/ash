@@ -1,11 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import type { AgentExecutorProfile, LlmProvider, TeamPreset } from "@harness/shared";
 import {
-  ArrowRight,
   CirclesThreePlus,
-  MagnifyingGlass,
   Plus,
-  Robot,
   Trash,
   WarningCircle,
 } from "@phosphor-icons/react";
@@ -14,6 +11,7 @@ import { api } from "../lib/api.ts";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import {
   createTeamPresetDraft,
+  ROLE_META,
   TeamPresetEditor,
   teamPresetConfigFromDraft,
   teamPresetDraftFromConfig,
@@ -142,9 +140,6 @@ export function ModesSettings({ notify }: { notify: (message: string) => void })
           <h1>执行模式</h1>
           <p>保存团队的调度、执行和审查分工，创建团队任务时可一键套用。</p>
         </div>
-        <Button variant="primary" disabled={loading || busy} onClick={startNew}>
-          <Plus size={13} weight="bold" />新建模式
-        </Button>
       </header>
 
       <section className="settings-section">
@@ -160,37 +155,63 @@ export function ModesSettings({ notify }: { notify: (message: string) => void })
           {!loading && !loadFailed && (
             <div className="team-presets-settings-layout">
               <aside className="team-presets-list" aria-label="执行模式列表">
-                <header><b>已保存</b><span>{presets.length}</span></header>
-                {!presets.length && (
-                  <div className="team-presets-list-empty">
-                    <CirclesThreePlus size={20} />
-                    <span>还没有执行模式</span>
+                <header>
+                  <div className="team-presets-list-meta">
+                    <b>已保存</b><span>{presets.length}</span>
                   </div>
-                )}
-                {presets.map((preset) => (
                   <button
                     type="button"
-                    className="team-presets-list-item"
-                    aria-selected={preset.id === editingId}
+                    className="team-presets-list-add"
                     disabled={busy}
-                    onClick={() => selectPreset(preset)}
-                    key={preset.id}
+                    aria-pressed={editingId === null}
+                    onClick={startNew}
                   >
-                    <b>{preset.name}</b>
-                    <span>
-                      {presetActorLabel(preset, profiles, "lead")}
-                      <ArrowRight size={9} />
-                      <Robot size={10} />
-                      {presetActorLabel(preset, profiles, "worker")}
-                    </span>
-                    <small className={preset.config.review === false ? "is-off" : ""}>
-                      <MagnifyingGlass size={10} />
-                      {preset.config.review === false
-                        ? "自动审查关闭"
-                        : presetActorLabel(preset, profiles, "reviewer")}
-                    </small>
+                    <Plus size={11} weight="bold" aria-hidden="true" />新建
                   </button>
-                ))}
+                </header>
+                <div className="team-presets-list-items">
+                  {!presets.length && (
+                    <div className="team-presets-list-empty">
+                      <CirclesThreePlus size={20} />
+                      <span>还没有执行模式</span>
+                    </div>
+                  )}
+                  {presets.map((preset) => (
+                    <button
+                      type="button"
+                      className="team-presets-list-item"
+                      aria-selected={preset.id === editingId}
+                      disabled={busy}
+                      onClick={() => selectPreset(preset)}
+                      key={preset.id}
+                    >
+                      <b>{preset.name}</b>
+                      {(["lead", "worker", "reviewer"] as const).map((role) => {
+                        const meta = ROLE_META[role];
+                        const Icon = meta.icon;
+                        const isOff = role === "reviewer" && preset.config.review === false;
+                        const actorLabel = isOff
+                          ? "自动审查关闭"
+                          : presetActorLabel(preset, profiles, role);
+                        return (
+                          <span
+                            className={`team-presets-list-role is-${role}${isOff ? " is-off" : ""}`}
+                            role="group"
+                            aria-label={`${meta.label}：${actorLabel}`}
+                            key={role}
+                          >
+                            <Icon
+                              size={11}
+                              weight={role === "worker" ? "fill" : "regular"}
+                              aria-hidden="true"
+                            />
+                            <span>{actorLabel}</span>
+                          </span>
+                        );
+                      })}
+                    </button>
+                  ))}
+                </div>
               </aside>
 
               <div className="team-preset-editor">
