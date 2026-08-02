@@ -14,6 +14,10 @@
       "types": "./src/team.ts",
       "default": "./src/team.ts"
     },
+    "./run-activity": {
+      "types": "./src/run-activity.ts",
+      "default": "./src/run-activity.ts"
+    },
     "./executors": {
       "types": "./src/executor-overrides.ts",
       "default": "./src/executor-overrides.ts"

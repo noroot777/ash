@@ -9,6 +9,7 @@ assert.deepEqual(running("single", "codex@local"), {
 });
 assert.match(running("team", "claude@ssh").title, /正在启动调度台/);
 assert.match(running("debate").detail, /第一位辩手开始发言后/);
+assert.match(runActivityCopy({ status: "running", mode: "single", phase: "replying", executor: "codex@local" }).title, /已收到你的消息/);
 assert.deepEqual(
   runActivityCopy({ status: "queued", mode: "single", queuePosition: 1, queueSize: 4 }),
   { title: "已进入队列 · 第 2 / 4 位", detail: "前面的任务结束后会自动启动，无需重复点击。" },

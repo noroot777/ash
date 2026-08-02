@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { GateAction, Session, Task } from "@harness/shared";
+import { runActivityPhase } from "@harness/shared/run-activity";
 import {
   TEAM_DEFAULTS,
   canArchive,
@@ -19,6 +20,7 @@ import { ConversationScrollControls } from "../components/ConversationScrollCont
 import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
 import { LegacyLink } from "../components/LegacyLink.tsx";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
+import { RunActivity } from "../components/RunActivity.tsx";
 import { ScheduleControl } from "../components/ScheduleControl.tsx";
 import { OriginTaskBar } from "../components/TaskOrigin.tsx";
 import { TaskStatusDot } from "../components/TaskStatusDot.tsx";
@@ -158,6 +160,11 @@ export function DebateView({
   const display = taskDisplayStatus(task.status, task.stage, !!task.question);
   const indicator = indicatorForTask(task);
   const action = actionFor(task);
+  const lastTurn = turns.at(-1);
+  const activityPhase = runActivityPhase(
+    task.status,
+    !lastTurn ? "empty" : lastTurn.speaker === "user" ? "user" : lastTurn.done ? "agent-ended" : "agent-active",
+  );
 
   const refreshTask = async () => onTaskUpdated(await api.task(task.id));
   const perform = async (kind: Exclude<ReturnType<typeof actionFor>["kind"], null>) => {
@@ -323,7 +330,9 @@ export function DebateView({
           <div className="debate-stream" ref={scrollRef}>
             {debate.loading && !turns.length && <p className="debate-empty"><SpinnerGap size={14} className="is-spinning" />正在读取辩论记录…</p>}
             {!debate.loading && debate.error && !turns.length && <p className="debate-empty is-error">辩论记录读取失败：{debate.error}</p>}
-            {!debate.loading && !debate.error && !turns.length && <p className="debate-empty">点击“运行”开始辩论。双方逐轮发言会实时出现在这里。</p>}
+            {!debate.loading && !debate.error && !turns.length && (activityPhase
+              ? <RunActivity status={task.status} mode={task.mode} phase={activityPhase} queuePosition={task.queuePosition} />
+              : <p className="debate-empty">点击“运行”开始辩论。双方逐轮发言会实时出现在这里。</p>)}
             {turns.map((turn, index) => (
               <TurnBubble
                 key={`${turn.round}-${turn.speaker}-${index}`}
@@ -333,7 +342,8 @@ export function DebateView({
                 fallback={turn.speaker === "B" ? config.debaterB : config.debaterA}
               />
             ))}
-            {task.status === "running" && turns.length > 0 && turns.at(-1)?.done && <p className="debate-between"><TypingDots />正在准备下一次发言…</p>}
+            {activityPhase === "replying" && turns.length > 0 && <RunActivity status={task.status} mode={task.mode} phase={activityPhase} queuePosition={task.queuePosition} />}
+            {task.status === "running" && turns.length > 0 && turns.at(-1)?.done && activityPhase !== "replying" && <p className="debate-between"><TypingDots />正在准备下一次发言…</p>}
             {task.status === "failed" && <p className="debate-terminal is-error">本次辩论失败并停止</p>}
             {task.status === "canceled" && <p className="debate-terminal">辩论已取消</p>}
           </div>

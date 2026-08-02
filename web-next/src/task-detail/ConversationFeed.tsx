@@ -1,9 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { CaretRight, Copy, File, Wrench, X } from "@phosphor-icons/react";
+import type { Task } from "@harness/shared";
+import { runActivityPhase, type RunActivityTail } from "@harness/shared/run-activity";
 import type { AgentAuxEvent, ConversationItem } from "./conversationModel.ts";
 import { ConversationScrollControls } from "../components/ConversationScrollControls.tsx";
 import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
+import { RunActivity } from "../components/RunActivity.tsx";
 import { SessionMeta } from "../components/SessionMeta.tsx";
 import { MessageAttachments } from "./Attachments.tsx";
 import { durationBetween, formatInstant, parseAttachmentText } from "./utils.ts";
@@ -186,28 +189,35 @@ function UserMessage({
 }
 
 export function ConversationFeed({
-  taskId,
-  taskBody,
+  task,
   items,
   loading,
   error,
   footer,
 }: {
-  taskId: string;
-  taskBody: string;
+  task: Task;
   items: ConversationItem[];
   loading: boolean;
   error: Error | null;
   footer?: React.ReactNode;
 }) {
   const scroll = useRef<HTMLDivElement>(null);
-  const objective = parseAttachmentText(taskBody);
+  const objective = parseAttachmentText(task.body);
+  const last = items.at(-1);
+  const tail: RunActivityTail = !last
+    ? "empty"
+    : last.kind === "user"
+      ? "user"
+      : last.kind === "agent"
+        ? last.endedAt ? "agent-ended" : "agent-active"
+        : "other";
+  const activityPhase = runActivityPhase(task.status, tail);
 
   return (
     <ImagePreviewGroup isolated>
       <div className="conversation-scroll-region task-conversation-wrap">
         <div className="task-conversation" ref={scroll}>
-          {taskBody.trim() && (
+          {task.body.trim() && (
             <details className="task-objective" open={items.length === 0}>
               <summary>任务目标</summary>
               <MarkdownBody text={objective.body} />
@@ -225,7 +235,16 @@ export function ConversationFeed({
               </div>
             );
           })}
-          {!items.length && !loading && !error && (
+          {activityPhase && !loading && !error && (
+            <RunActivity
+              status={task.status}
+              mode={task.mode}
+              phase={activityPhase}
+              executor={task.executorLabel?.trim() || task.agentType}
+              queuePosition={task.queuePosition}
+            />
+          )}
+          {!items.length && !loading && !error && !activityPhase && (
             <div className="task-conversation-empty">
               <File size={20} aria-hidden="true" />
               <p>点击「运行」开始，执行输出会实时显示在这里。</p>
@@ -235,7 +254,7 @@ export function ConversationFeed({
           {error && <p className="task-conversation-error">{error.message}</p>}
           {footer}
         </div>
-        <ConversationScrollControls scrollRef={scroll} resetKey={taskId} />
+        <ConversationScrollControls scrollRef={scroll} resetKey={task.id} />
       </div>
     </ImagePreviewGroup>
   );

@@ -120,6 +120,7 @@ export function DebateView({
     const head = history.filter((h) => !liveKeys.has(`${h.round}:${h.speaker}`));
     return [...head, ...state.turns];
   }, [state.turns, history]);
+  const replyPending = busy && turns.at(-1)?.speaker === "user";
 
   // The gate comes live via SSE, but on reload (state empty) we rebuild it from
   // the persisted timeline so the bar — and the consensus/disagreement verdict —
@@ -354,7 +355,8 @@ export function DebateView({
             );
           })()}
           {/* Between-turn liveness: busy but no open bubble → still working. */}
-          {busy && turns.length > 0 && turns[turns.length - 1].done && (
+          {replyPending && <RunActivity status={task.status} mode={task.mode} phase="replying" queuePosition={task.queuePosition} />}
+          {busy && turns.length > 0 && turns[turns.length - 1].done && !replyPending && (
             <div className="mb-3 flex items-center gap-2 text-[12px] text-muted">
               <ActivityDots /> 运行中…
             </div>
