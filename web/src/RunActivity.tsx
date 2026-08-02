@@ -36,14 +36,15 @@ export function RunActivity({
     <div
       role="status"
       aria-live="polite"
-      className="mb-3 flex w-full items-start gap-3 rounded-lg border border-accent/20 bg-accent/[0.045] px-3 py-2.5"
+      className="mb-3 flex items-center gap-2 text-[11px]"
     >
-      <span className="mt-0.5 grid h-7 w-9 shrink-0 place-items-center rounded-md border border-accent/15 bg-panel">
-        <ActivityDots />
+      <span className="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-overlay">
+        <ActivityDots className="scale-75 text-accent/55" />
       </span>
-      <span className="min-w-0">
-        <span className="block text-[13px] font-medium text-ink">{copy.title}</span>
-        <span className="mt-0.5 block text-[12px] leading-relaxed text-muted">{copy.detail}</span>
+      <span className="flex min-w-0 flex-wrap items-baseline gap-x-1.5">
+        <span className="font-medium text-muted">{copy.title}</span>
+        <span className="text-line2">·</span>
+        <span className="text-faint">{copy.detail}</span>
       </span>
     </div>
   );
