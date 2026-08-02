@@ -18,6 +18,36 @@ type TaskTreeProps = {
 };
 
 const TASK_PREVIEW_LIMIT = 12;
+const COLLAPSED_SECTIONS_STORAGE_KEY = "harness-next2:task-tree:collapsed-sections";
+
+function readCollapsedSections(): Set<string> {
+  try {
+    const raw = window.localStorage.getItem(COLLAPSED_SECTIONS_STORAGE_KEY);
+    const parsed: unknown = raw ? JSON.parse(raw) : [];
+    return new Set(Array.isArray(parsed) ? parsed.filter((key): key is string => typeof key === "string") : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function useCollapsedSections(enabled: boolean) {
+  const [collapsed, setCollapsed] = useState(readCollapsedSections);
+  useEffect(() => {
+    if (!enabled) return;
+    try {
+      window.localStorage.setItem(COLLAPSED_SECTIONS_STORAGE_KEY, JSON.stringify([...collapsed]));
+    } catch {
+      // Section folding remains usable for the current session if storage is unavailable.
+    }
+  }, [collapsed, enabled]);
+  const toggle = (sectionKey: string) => setCollapsed((current) => {
+    const next = new Set(current);
+    if (next.has(sectionKey)) next.delete(sectionKey);
+    else next.add(sectionKey);
+    return next;
+  });
+  return { collapsed, toggle };
+}
 
 function StatusMarker({ indicator }: { indicator: ReturnType<IndicatorForTask> }) {
   return indicator
@@ -214,8 +244,9 @@ function CurrentProjectTree({
   unifiedPinned: boolean;
 }) {
   const sections = useMemo(() => buildTaskTree(tasks, { unifiedPinned }), [tasks, unifiedPinned]);
-  const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set());
-  const toggleSection = (sectionKey: string) => setExpandedSections((current) => {
+  const { collapsed, toggle: toggleCollapsed } = useCollapsedSections(unifiedPinned);
+  const [previewExpandedSections, setPreviewExpandedSections] = useState<Set<string>>(new Set());
+  const togglePreview = (sectionKey: string) => setPreviewExpandedSections((current) => {
     const next = new Set(current);
     if (next.has(sectionKey)) next.delete(sectionKey);
     else next.add(sectionKey);
@@ -225,34 +256,52 @@ function CurrentProjectTree({
   return (
     <>
       {sections.map((section) => {
+        const sectionCollapsed = unifiedPinned && collapsed.has(section.key);
         const selectedIndex = section.tasks.findIndex((task) => task.id === selectedTaskId);
-        const expanded = expandedSections.has(section.key) || selectedIndex >= TASK_PREVIEW_LIMIT;
-        const visibleTasks = expanded ? section.tasks : section.tasks.slice(0, TASK_PREVIEW_LIMIT);
+        const previewExpanded = previewExpandedSections.has(section.key) || selectedIndex >= TASK_PREVIEW_LIMIT;
+        const visibleTasks = previewExpanded ? section.tasks : section.tasks.slice(0, TASK_PREVIEW_LIMIT);
         const hiddenCount = section.tasks.length - TASK_PREVIEW_LIMIT;
         return (
-          <section className="workspace-task-section" key={section.key}>
-            <header className="workspace-task-section-title">
-              <span>{section.label}</span>
-            </header>
-            {visibleTasks.map((task) =>
-              task.mode === "team" ? (
-                <TeamRow
-                  key={task.id}
-                  task={task}
-                  tasks={tasks}
-                  allTasks={allTasks}
-                  selectedTaskId={selectedTaskId}
-                  onTask={onTask}
-                  indicatorForTask={indicatorForTask}
-                />
-              ) : (
-                <TaskRow key={task.id} task={task} allTasks={allTasks} selectedTaskId={selectedTaskId} onTask={onTask} indicatorForTask={indicatorForTask} />
-              ),
-            )}
-            {section.tasks.length > TASK_PREVIEW_LIMIT && (
-              <button className="workspace-task-more" type="button" onClick={() => toggleSection(section.key)}>
-                {expanded ? "收起" : `显示另外 ${hiddenCount} 条`}
+          <section className={`workspace-task-section${sectionCollapsed ? " is-collapsed" : ""}`} data-task-section={section.key} key={section.key}>
+            {unifiedPinned ? (
+              <button
+                className="workspace-task-section-title workspace-task-section-toggle"
+                type="button"
+                aria-expanded={!sectionCollapsed}
+                aria-label={`${sectionCollapsed ? "展开" : "折叠"}${section.label}`}
+                onClick={() => toggleCollapsed(section.key)}
+              >
+                <span>{section.label}</span>
+                <CaretRight size={10} weight="bold" aria-hidden="true" />
               </button>
+            ) : (
+              <header className="workspace-task-section-title">
+                <span>{section.label}</span>
+              </header>
+            )}
+            {!sectionCollapsed && (
+              <>
+                {visibleTasks.map((task) =>
+                  task.mode === "team" ? (
+                    <TeamRow
+                      key={task.id}
+                      task={task}
+                      tasks={tasks}
+                      allTasks={allTasks}
+                      selectedTaskId={selectedTaskId}
+                      onTask={onTask}
+                      indicatorForTask={indicatorForTask}
+                    />
+                  ) : (
+                    <TaskRow key={task.id} task={task} allTasks={allTasks} selectedTaskId={selectedTaskId} onTask={onTask} indicatorForTask={indicatorForTask} />
+                  ),
+                )}
+                {section.tasks.length > TASK_PREVIEW_LIMIT && (
+                  <button className="workspace-task-more" type="button" onClick={() => togglePreview(section.key)}>
+                    {previewExpanded ? "收起" : `显示另外 ${hiddenCount} 条`}
+                  </button>
+                )}
+              </>
             )}
           </section>
         );

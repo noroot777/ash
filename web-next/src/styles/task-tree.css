@@ -27,6 +27,34 @@
   padding-top: 5px;
 }
 
+.workspace-task-section-toggle {
+  width: 100%;
+  gap: 5px;
+  border: 0;
+  background: transparent;
+  text-align: left;
+}
+
+.workspace-task-section-toggle span {
+  min-width: 0;
+}
+
+.workspace-task-section-toggle svg {
+  flex: 0 0 auto;
+  opacity: 0;
+  transition: opacity 130ms ease-out, transform 150ms ease-out;
+}
+
+.workspace-task-section-toggle[aria-expanded="true"] svg {
+  transform: rotate(90deg);
+}
+
+.workspace-task-section-toggle[aria-expanded="true"]:hover svg,
+.workspace-task-section-toggle[aria-expanded="true"]:focus-visible svg,
+.workspace-task-section-toggle[aria-expanded="false"] svg {
+  opacity: 1;
+}
+
 .workspace-task-row-wrap {
   position: relative;
   display: grid;
