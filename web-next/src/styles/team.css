@@ -129,14 +129,14 @@
 .team-status-dot--attention { background: var(--amber); }
 .team-status-dot--success { background: var(--green); }
 .team-status-dot--error { background: var(--red); }
-.workspace-shell--next2 .team-status-dot--pending.task-status-dot--has-icon {
+.team-status-dot--pending.task-status-dot--has-icon {
   width: 10px;
   height: 10px;
   flex-basis: 10px;
   border: 0;
   color: var(--muted);
 }
-.workspace-shell--next2 .team-status-dot--pending .task-status-dot-icon {
+.team-status-dot--pending .task-status-dot-icon {
   display: block;
   width: 100%;
   height: 100%;

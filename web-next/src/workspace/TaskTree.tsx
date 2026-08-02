@@ -13,12 +13,11 @@ type TaskTreeProps = {
   currentProjectId: string | null;
   tasks: Task[];
   selectedTaskId: string | null;
-  unifiedPinned?: boolean;
   onTask: (task: Task) => void;
 };
 
 const TASK_PREVIEW_LIMIT = 12;
-const COLLAPSED_SECTIONS_STORAGE_KEY = "harness-next2:task-tree:collapsed-sections";
+const COLLAPSED_SECTIONS_STORAGE_KEY = "harness-next:task-tree:collapsed-sections";
 
 function readCollapsedSections(): Set<string> {
   try {
@@ -30,16 +29,15 @@ function readCollapsedSections(): Set<string> {
   }
 }
 
-function useCollapsedSections(enabled: boolean) {
+function useCollapsedSections() {
   const [collapsed, setCollapsed] = useState(readCollapsedSections);
   useEffect(() => {
-    if (!enabled) return;
     try {
       window.localStorage.setItem(COLLAPSED_SECTIONS_STORAGE_KEY, JSON.stringify([...collapsed]));
     } catch {
       // Section folding remains usable for the current session if storage is unavailable.
     }
-  }, [collapsed, enabled]);
+  }, [collapsed]);
   const toggle = (sectionKey: string) => setCollapsed((current) => {
     const next = new Set(current);
     if (next.has(sectionKey)) next.delete(sectionKey);
@@ -234,17 +232,15 @@ function CurrentProjectTree({
   selectedTaskId,
   onTask,
   indicatorForTask,
-  unifiedPinned,
 }: {
   tasks: Task[];
   allTasks: Task[];
   selectedTaskId: string | null;
   onTask: (task: Task) => void;
   indicatorForTask: IndicatorForTask;
-  unifiedPinned: boolean;
 }) {
-  const sections = useMemo(() => buildTaskTree(tasks, { unifiedPinned }), [tasks, unifiedPinned]);
-  const { collapsed, toggle: toggleCollapsed } = useCollapsedSections(unifiedPinned);
+  const sections = useMemo(() => buildTaskTree(tasks, { unifiedPinned: true }), [tasks]);
+  const { collapsed, toggle: toggleCollapsed } = useCollapsedSections();
   const [previewExpandedSections, setPreviewExpandedSections] = useState<Set<string>>(new Set());
   const togglePreview = (sectionKey: string) => setPreviewExpandedSections((current) => {
     const next = new Set(current);
@@ -256,29 +252,23 @@ function CurrentProjectTree({
   return (
     <>
       {sections.map((section) => {
-        const sectionCollapsed = unifiedPinned && collapsed.has(section.key);
+        const sectionCollapsed = collapsed.has(section.key);
         const selectedIndex = section.tasks.findIndex((task) => task.id === selectedTaskId);
         const previewExpanded = previewExpandedSections.has(section.key) || selectedIndex >= TASK_PREVIEW_LIMIT;
         const visibleTasks = previewExpanded ? section.tasks : section.tasks.slice(0, TASK_PREVIEW_LIMIT);
         const hiddenCount = section.tasks.length - TASK_PREVIEW_LIMIT;
         return (
           <section className={`workspace-task-section${sectionCollapsed ? " is-collapsed" : ""}`} data-task-section={section.key} key={section.key}>
-            {unifiedPinned ? (
-              <button
-                className="workspace-task-section-title workspace-task-section-toggle"
-                type="button"
-                aria-expanded={!sectionCollapsed}
-                aria-label={`${sectionCollapsed ? "展开" : "折叠"}${section.label}`}
-                onClick={() => toggleCollapsed(section.key)}
-              >
-                <span>{section.label}</span>
-                <CaretRight size={10} weight="bold" aria-hidden="true" />
-              </button>
-            ) : (
-              <header className="workspace-task-section-title">
-                <span>{section.label}</span>
-              </header>
-            )}
+            <button
+              className="workspace-task-section-title workspace-task-section-toggle"
+              type="button"
+              aria-expanded={!sectionCollapsed}
+              aria-label={`${sectionCollapsed ? "展开" : "折叠"}${section.label}`}
+              onClick={() => toggleCollapsed(section.key)}
+            >
+              <span>{section.label}</span>
+              <CaretRight size={10} weight="bold" aria-hidden="true" />
+            </button>
             {!sectionCollapsed && (
               <>
                 {visibleTasks.map((task) =>
@@ -358,7 +348,7 @@ function OtherProject({
   );
 }
 
-export function TaskTree({ projects, currentProjectId, tasks, selectedTaskId, unifiedPinned = false, onTask }: TaskTreeProps) {
+export function TaskTree({ projects, currentProjectId, tasks, selectedTaskId, onTask }: TaskTreeProps) {
   const { indicatorForTask } = useTaskReadState(tasks, selectedTaskId);
   const activeTasks = useMemo(() => tasks.filter((task) => !task.archived), [tasks]);
   const currentTasks = useMemo(
@@ -368,7 +358,7 @@ export function TaskTree({ projects, currentProjectId, tasks, selectedTaskId, un
   const otherProjects = projects.filter((project) => project.id !== currentProjectId);
   return (
     <nav className="workspace-task-tree" aria-label="任务树">
-      <CurrentProjectTree tasks={currentTasks} allTasks={tasks} selectedTaskId={selectedTaskId} onTask={onTask} indicatorForTask={indicatorForTask} unifiedPinned={unifiedPinned} />
+      <CurrentProjectTree tasks={currentTasks} allTasks={tasks} selectedTaskId={selectedTaskId} onTask={onTask} indicatorForTask={indicatorForTask} />
       {otherProjects.length > 0 && (
         <section className="workspace-other-projects">
           <header className="workspace-task-section-title">其他项目</header>

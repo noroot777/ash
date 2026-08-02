@@ -190,61 +190,43 @@
   background: transparent;
 }
 
-.workspace-status-dot--pending {
-  border: 1px dashed var(--muted);
-  background: transparent;
-}
-
 .task-status-dot-icon {
   display: none;
 }
 
-.workspace-status-dot--active {
-  background: var(--green);
-}
-
-.workspace-status-dot--attention { background: var(--amber); }
-.workspace-status-dot--success {
-  border: 1px solid color-mix(in lch, var(--green) 62%, var(--faint));
-  background: transparent;
-}
-.workspace-status-dot--error { background: var(--red); }
-
-/*
- * Next2 is an isolated comparison surface reached only by its URL. Keep the
- * simplified task tree, but restore the familiar legacy signals requested for
- * live work and unread completions without changing the main Next UI.
- */
-.workspace-shell--next2 .workspace-status-dot--active {
-  background: var(--muted);
-  animation: task-status-dot-pulse 1.35s ease-in-out infinite;
-  will-change: opacity, transform;
-}
-
-.workspace-shell--next2 .workspace-status-dot--pending.task-status-dot--has-icon {
+.workspace-status-dot--pending {
   width: 10px;
   height: 10px;
   flex-basis: 10px;
   border: 0;
+  background: transparent;
   color: var(--muted);
 }
 
-.workspace-shell--next2 .workspace-status-dot--pending.workspace-status-dot--small.task-status-dot--has-icon {
+.workspace-status-dot--pending.workspace-status-dot--small {
   width: 7px;
   height: 7px;
   flex-basis: 7px;
 }
 
-.workspace-shell--next2 .workspace-status-dot--pending .task-status-dot-icon {
+.workspace-status-dot--pending .task-status-dot-icon {
   display: block;
   width: 100%;
   height: 100%;
 }
 
-.workspace-shell--next2 .workspace-status-dot--success {
+.workspace-status-dot--active {
+  background: var(--muted);
+  animation: task-status-dot-pulse 1.35s ease-in-out infinite;
+  will-change: opacity, transform;
+}
+
+.workspace-status-dot--attention { background: var(--amber); }
+.workspace-status-dot--success {
   border: 0;
   background: var(--green);
 }
+.workspace-status-dot--error { background: var(--red); }
 
 @keyframes task-status-dot-pulse {
   0%, 100% {
@@ -258,7 +240,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .workspace-shell--next2 .workspace-status-dot--active {
+  .workspace-status-dot--active {
     animation: none;
     opacity: 1;
     transform: none;
