@@ -28,17 +28,7 @@ import { DebateGateBar } from "./DebateGateBar";
 import { TaskPinMenu } from "./TaskPinMenu";
 import { TaskModeIcon } from "./taskOrigin";
 import { Tip } from "./Tip";
-
-// Animated "thinking" indicator — three dots flashing in sequence.
-function TypingDots() {
-  return (
-    <span className="inline-flex items-center gap-1 text-sky-600">
-      <span className="typing-dot" style={{ animationDelay: "0ms" }} />
-      <span className="typing-dot" style={{ animationDelay: "150ms" }} />
-      <span className="typing-dot" style={{ animationDelay: "300ms" }} />
-    </span>
-  );
-}
+import { ActivityDots, RunActivity } from "./RunActivity";
 
 // Always-visible run-state pill so the debate's status (esp. failed/running) is
 // unambiguous and survives reload — task.status is persisted.
@@ -325,9 +315,7 @@ export function DebateView({
 
       <div className="relative min-h-0 flex-1">
         <div ref={scrollRef} className="h-full overflow-y-auto px-6 py-4">
-          {turns.length === 0 && (
-            <p className="text-sm text-faint">点击「运行」开始对抗。双方逐回合的发言会实时显示在这里。</p>
-          )}
+          {turns.length === 0 && <RunActivity status={task.status} mode={task.mode} queuePosition={task.queuePosition} idleText="点击「运行」开始对抗。双方逐回合的发言会实时显示在这里。" />}
           {turns.map((t, i) => (
             <Bubble
               key={i}
@@ -368,7 +356,7 @@ export function DebateView({
           {/* Between-turn liveness: busy but no open bubble → still working. */}
           {busy && turns.length > 0 && turns[turns.length - 1].done && (
             <div className="mb-3 flex items-center gap-2 text-[12px] text-muted">
-              <TypingDots /> 运行中…
+              <ActivityDots /> 运行中…
             </div>
           )}
           {/* Terminal markers so a stopped debate reads as stopped, not stuck. */}
@@ -521,7 +509,7 @@ function Bubble({
               </>
             )}
             {turn.raised && <span className="text-amber-700">✋ 可收敛</span>}
-            {!turn.done && <TypingDots />}
+            {!turn.done && <ActivityDots className={side === "A" ? "text-sky-600" : "text-emerald-600"} />}
           </div>
           {turn.tools.map((t, i) => (
             <ToolCall key={i} name={t.name} detail={t.detail} />

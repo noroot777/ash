@@ -76,6 +76,7 @@ function TeamReplyBox({
   const [error, setError] = useState<string | null>(null);
   const [scheduleOpen, setScheduleOpen] = useState(false);
   const [sendAt, setSendAt] = useState("");
+  const scheduleTriggerRef = useRef<HTMLButtonElement>(null);
   const scheduled = useScheduledMessages(task.id);
   const uploads = useAttachments();
   const disabled = !!task.archived;
@@ -118,6 +119,7 @@ function TeamReplyBox({
           value={sendAt}
           busy={sending}
           canSubmit={canSchedule}
+          triggerRef={scheduleTriggerRef}
           onChange={setSendAt}
           onCancel={() => setScheduleOpen(false)}
           onSubmit={() => void send(new Date(sendAt).toISOString())}
@@ -147,6 +149,7 @@ function TeamReplyBox({
         <footer>
           <AttachmentPicker addFiles={uploads.addFiles} disabled={disabled || sending} />
           <button
+            ref={scheduleTriggerRef}
             className="reply-schedule-button"
             type="button"
             disabled={disabled || sending || uploads.uploading}

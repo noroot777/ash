@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
 import type { ScheduledMessage } from "@harness/shared";
 import { Clock, SpinnerGap, X } from "@phosphor-icons/react";
 import { api } from "../lib/api.ts";
+import { useDismissable } from "../lib/useDismissable.ts";
 import { toLocalDateTime } from "./ScheduleControl.tsx";
 import { formatInstant } from "../task-detail/utils.ts";
 
@@ -120,6 +121,7 @@ export function ScheduledSendPanel({
   value,
   busy,
   canSubmit,
+  triggerRef,
   onChange,
   onCancel,
   onSubmit,
@@ -127,12 +129,21 @@ export function ScheduledSendPanel({
   value: string;
   busy: boolean;
   canSubmit: boolean;
+  triggerRef: RefObject<HTMLButtonElement | null>;
   onChange: (value: string) => void;
   onCancel: () => void;
   onSubmit: () => void;
 }) {
+  const panelRef = useRef<HTMLDivElement>(null);
+  useDismissable({
+    enabled: true,
+    containerRef: panelRef,
+    onClose: onCancel,
+    restoreFocusRef: triggerRef,
+  });
+
   return (
-    <div className="scheduled-send-panel" role="dialog" aria-label="定时发送回复">
+    <div ref={panelRef} className="scheduled-send-panel" role="dialog" aria-label="定时发送回复">
       <b>定时发送</b>
       <label>
         <span>发送时间</span>

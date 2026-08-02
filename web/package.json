@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "test:image-preview": "node scripts/test-image-preview.mjs",
+    "test:run-activity": "node --experimental-strip-types scripts/test-run-activity.mjs",
     "test:team-feed": "node --experimental-strip-types scripts/test-team-feed.mjs",
     "test:unread": "node --experimental-strip-types scripts/test-unread-tasks.mjs",
     "build": "node ../scripts/check-conventions.mjs && tsc -b && vite build",

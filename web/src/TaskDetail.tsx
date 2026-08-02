@@ -43,6 +43,7 @@ import {
   TaskDiffWorkspace,
 } from "./ReviewWorkspace";
 import { TaskPinButton } from "./TaskPinMenu";
+import { RunActivity } from "./RunActivity";
 export type { LogLine } from "./Conversation";
 
 export function TaskDetail({
@@ -460,9 +461,7 @@ export function TaskDetail({
                   load) and the live stream merge into one bubble per run, so a running
                   task you reload doesn't split into a stale + live pair. */}
               <Conversation items={items} />
-              {items.length === 0 && (
-                <p className="font-sans text-faint">点击「运行」开始，输出会实时流式显示在这里。</p>
-              )}
+              {items.length === 0 && <RunActivity status={task.status} mode={task.mode} executor={executorLabel({ task })} queuePosition={task.queuePosition} queueSize={queueSize} idleText="点击「运行」开始，输出会实时流式显示在这里。" />}
             </div>
             <ConversationScrollButtons
               scrollRef={scrollRef}

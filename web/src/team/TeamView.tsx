@@ -247,7 +247,7 @@ export function TeamView({
           <AttentionBar waiting={waiting} workers={workers} onOpenWorker={openWorker} onAskLead={askLead} />
 
           <div className="grid min-h-0 flex-1 grid-cols-[1fr_268px]">
-            <TeamFeed taskId={task.id} rows={rows} workers={workers} unreadWorkers={unreadWorkers} empty={items.length === 0} onOpenWorker={openWorker} />
+            <TeamFeed task={task} rows={rows} workers={workers} unreadWorkers={unreadWorkers} onOpenWorker={openWorker} />
             <WorkerRail workers={workers} groups={teamGroups} logs={logs} selected={openId} unreadWorkers={unreadWorkers} onSelect={openWorker} />
           </div>
 
