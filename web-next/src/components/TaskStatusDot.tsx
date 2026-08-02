@@ -1,3 +1,4 @@
+import { CircleDashed } from "@phosphor-icons/react";
 import type { TaskStatusIndicator } from "../lib/useTaskReadState.ts";
 
 const INDICATOR_LABELS: Record<TaskStatusIndicator, string> = {
@@ -24,6 +25,10 @@ export function TaskStatusDot({
       className={`${base} ${base}--${indicator}${small ? ` ${base}--small` : ""}`}
       title={label}
       aria-label={label}
-    />
+    >
+      {surface === "workspace" && indicator === "pending" && (
+        <CircleDashed className="workspace-status-dot-icon" weight="regular" aria-hidden="true" />
+      )}
+    </i>
   );
 }
