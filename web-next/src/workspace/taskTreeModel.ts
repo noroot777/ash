@@ -4,7 +4,6 @@ type TaskGroup = {
   key: string;
   label: string;
   matches: (task: Task) => boolean;
-  pinned?: boolean;
 };
 
 type TaskSection = {
@@ -14,19 +13,19 @@ type TaskSection = {
   groups: readonly TaskGroup[];
 };
 
-export type TaskTreeSection = Omit<TaskSection, "groups"> & {
+export type TaskTreeSection = {
+  key: "pinned" | TaskSection["key"];
+  label: string;
+  matches: (task: Task) => boolean;
   count: number;
   tasks: Task[];
 };
 
-const PRIORITY_ORDER: Task["priority"][] = ["urgent", "high", "medium", "low", "none"];
-
-const PINNED_GROUP: TaskGroup = {
-  key: "pinned",
-  label: "置顶",
-  matches: (task) => task.pinnedAt != null,
-  pinned: true,
+export type TaskTreeOptions = {
+  unifiedPinned?: boolean;
 };
+
+const PRIORITY_ORDER: Task["priority"][] = ["urgent", "high", "medium", "low", "none"];
 
 const COLLAB_GROUPS: TaskGroup[] = [
   {
@@ -57,14 +56,13 @@ const TASK_SECTIONS: readonly TaskSection[] = [
     key: "collab",
     label: "协作任务",
     matches: (task) => task.mode === "team" || task.mode === "debate",
-    groups: [PINNED_GROUP, ...COLLAB_GROUPS],
+    groups: COLLAB_GROUPS,
   },
   {
     key: "single",
     label: "普通任务",
     matches: (task) => task.mode === "single",
     groups: [
-      PINNED_GROUP,
       ...STATUS_GROUPS.map((status) => ({
         key: status.key,
         label: status.label,
@@ -87,20 +85,32 @@ function sortTasks(tasks: Task[], pinned: boolean): Task[] {
   );
 }
 
-export function buildTaskTree(tasks: Task[]): TaskTreeSection[] {
+export function buildTaskTree(tasks: Task[], options: TaskTreeOptions = {}): TaskTreeSection[] {
   const topLevel = tasks.filter((task) => task.parentId === null && !task.archived);
-  return TASK_SECTIONS.map((section) => {
-    const sectionTasks = topLevel.filter(section.matches);
-    const ordered = section.groups.flatMap((group) => sortTasks(
-      sectionTasks.filter(
-        (task) => group.matches(task) && (group.pinned || task.pinnedAt == null),
-      ),
-      !!group.pinned,
-    ));
+  const pinnedTasks = sortTasks(topLevel.filter((task) => task.pinnedAt != null), true);
+  const sections: TaskTreeSection[] = TASK_SECTIONS.map((section) => {
+    const sectionTasks = topLevel.filter(
+      (task) => section.matches(task) && (!options.unifiedPinned || task.pinnedAt == null),
+    );
+    const ordered = [
+      ...(options.unifiedPinned ? [] : sortTasks(sectionTasks.filter((task) => task.pinnedAt != null), true)),
+      ...section.groups.flatMap((group) => sortTasks(
+        sectionTasks.filter((task) => task.pinnedAt == null && group.matches(task)),
+        false,
+      )),
+    ];
     return { key: section.key, label: section.label, matches: section.matches, count: sectionTasks.length, tasks: ordered };
   }).filter((section) => section.count > 0);
+  if (!options.unifiedPinned || pinnedTasks.length === 0) return sections;
+  return [{
+    key: "pinned",
+    label: "置顶",
+    matches: (task) => task.pinnedAt != null,
+    count: pinnedTasks.length,
+    tasks: pinnedTasks,
+  }, ...sections];
 }
 
-export function orderedTopLevelTasks(tasks: Task[]): Task[] {
-  return buildTaskTree(tasks).flatMap((section) => section.tasks);
+export function orderedTopLevelTasks(tasks: Task[], options: TaskTreeOptions = {}): Task[] {
+  return buildTaskTree(tasks, options).flatMap((section) => section.tasks);
 }

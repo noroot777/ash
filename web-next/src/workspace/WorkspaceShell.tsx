@@ -136,8 +136,11 @@ export function WorkspaceShell({ variant = "next" }: { variant?: WorkspaceVarian
   const loadError = projectsError ?? tasksError;
   const activeTaskCount = useMemo(() => tasks.filter((task) => task.projectId === projectId && task.parentId === null && !task.archived).length, [projectId, tasks]);
   const orderedTasks = useMemo(
-    () => orderedTopLevelTasks(tasks.filter((task) => task.projectId === projectId && !task.archived)),
-    [projectId, tasks],
+    () => orderedTopLevelTasks(
+      tasks.filter((task) => task.projectId === projectId && !task.archived),
+      { unifiedPinned: variant === "next2" },
+    ),
+    [projectId, tasks, variant],
   );
   const updateTask = useCallback((updated: Task) => setTasks((current) => current.some((task) => task.id === updated.id)
     ? current.map((task) => task.id === updated.id ? updated : task)
@@ -216,7 +219,7 @@ export function WorkspaceShell({ variant = "next" }: { variant?: WorkspaceVarian
 
   return (
     <><div className={`workspace-shell workspace-shell--${variant}`} data-ui-variant={variant} style={{ "--workspace-sidebar-width": `${sidebarWidth}px` } as CSSProperties}>
-      <WorkspaceSidebar projects={projects} currentProject={currentProject} tasks={tasks} selectedTaskId={taskId} connected={connected} collapsed={collapsed} width={sidebarWidth} onWidthChange={setSidebarWidth} onProject={selectProject} onTask={selectTask} onToggleCollapsed={() => setCollapsed((value) => !value)} onSearch={() => setPaletteOpen(true)} onNotes={() => openNotes()} onGroups={() => setGroupsPanelOpen(true)} onCreate={() => openComposer("single")} onNewProject={() => setCreateDialog("project")} onSettings={() => openSettings("executors")} />
+      <WorkspaceSidebar projects={projects} currentProject={currentProject} tasks={tasks} selectedTaskId={taskId} unifiedPinned={variant === "next2"} connected={connected} collapsed={collapsed} width={sidebarWidth} onWidthChange={setSidebarWidth} onProject={selectProject} onTask={selectTask} onToggleCollapsed={() => setCollapsed((value) => !value)} onSearch={() => setPaletteOpen(true)} onNotes={() => openNotes()} onGroups={() => setGroupsPanelOpen(true)} onCreate={() => openComposer("single")} onNewProject={() => setCreateDialog("project")} onSettings={() => openSettings("executors")} />
       <main className="workspace-main">
         {loadError && <div className="workspace-load-error">{loadError.message}</div>}
         {composer && currentProject ? <TaskComposerPanel project={currentProject} groups={groups} initialDraft={composer.draft} mode={composer.mode} onModeChange={(mode) => setComposer((current) => current ? { ...current, mode } : null)} onCancel={() => setComposer(null)} onCreated={createTask} onCreateGroup={createComposerGroup} notify={notify} /> : selectedTask?.mode === "team" ? (

@@ -9,6 +9,7 @@
     "test:image-preview": "node scripts/test-image-preview.mjs",
     "test:data-layer": "node --experimental-strip-types scripts/test-data-layer.mjs",
     "test:run-activity": "node --experimental-strip-types scripts/test-run-activity.mjs",
+    "test:task-tree": "node --experimental-strip-types scripts/test-task-tree.mjs",
     "typecheck": "tsc -p tsconfig.json",
     "preview": "vite preview"
   },

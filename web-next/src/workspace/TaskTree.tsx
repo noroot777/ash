@@ -13,6 +13,7 @@ type TaskTreeProps = {
   currentProjectId: string | null;
   tasks: Task[];
   selectedTaskId: string | null;
+  unifiedPinned?: boolean;
   onTask: (task: Task) => void;
 };
 
@@ -203,14 +204,16 @@ function CurrentProjectTree({
   selectedTaskId,
   onTask,
   indicatorForTask,
+  unifiedPinned,
 }: {
   tasks: Task[];
   allTasks: Task[];
   selectedTaskId: string | null;
   onTask: (task: Task) => void;
   indicatorForTask: IndicatorForTask;
+  unifiedPinned: boolean;
 }) {
-  const sections = useMemo(() => buildTaskTree(tasks), [tasks]);
+  const sections = useMemo(() => buildTaskTree(tasks, { unifiedPinned }), [tasks, unifiedPinned]);
   const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set());
   const toggleSection = (sectionKey: string) => setExpandedSections((current) => {
     const next = new Set(current);
@@ -306,7 +309,7 @@ function OtherProject({
   );
 }
 
-export function TaskTree({ projects, currentProjectId, tasks, selectedTaskId, onTask }: TaskTreeProps) {
+export function TaskTree({ projects, currentProjectId, tasks, selectedTaskId, unifiedPinned = false, onTask }: TaskTreeProps) {
   const { indicatorForTask } = useTaskReadState(tasks, selectedTaskId);
   const activeTasks = useMemo(() => tasks.filter((task) => !task.archived), [tasks]);
   const currentTasks = useMemo(
@@ -316,7 +319,7 @@ export function TaskTree({ projects, currentProjectId, tasks, selectedTaskId, on
   const otherProjects = projects.filter((project) => project.id !== currentProjectId);
   return (
     <nav className="workspace-task-tree" aria-label="任务树">
-      <CurrentProjectTree tasks={currentTasks} allTasks={tasks} selectedTaskId={selectedTaskId} onTask={onTask} indicatorForTask={indicatorForTask} />
+      <CurrentProjectTree tasks={currentTasks} allTasks={tasks} selectedTaskId={selectedTaskId} onTask={onTask} indicatorForTask={indicatorForTask} unifiedPinned={unifiedPinned} />
       {otherProjects.length > 0 && (
         <section className="workspace-other-projects">
           <header className="workspace-task-section-title">其他项目</header>

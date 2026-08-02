@@ -17,6 +17,7 @@ export function WorkspaceSidebar({
   currentProject,
   tasks,
   selectedTaskId,
+  unifiedPinned,
   connected,
   collapsed,
   width,
@@ -35,6 +36,7 @@ export function WorkspaceSidebar({
   currentProject: ProjectView | null;
   tasks: Task[];
   selectedTaskId: string | null;
+  unifiedPinned: boolean;
   connected: boolean;
   collapsed: boolean;
   width: number;
@@ -93,6 +95,7 @@ export function WorkspaceSidebar({
         currentProjectId={currentProject?.id ?? null}
         tasks={tasks}
         selectedTaskId={selectedTaskId}
+        unifiedPinned={unifiedPinned}
         onTask={onTask}
       />
 
