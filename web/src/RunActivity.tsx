@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import type { TaskMode, TaskStatus } from "@harness/shared";
-import { runActivityCopy } from "./runActivityCopy";
+import { runActivityCopy, type RunActivityPhase } from "./runActivityCopy";
 
 export function ActivityDots({ className = "" }: { className?: string }) {
   return (
@@ -15,6 +15,7 @@ export function ActivityDots({ className = "" }: { className?: string }) {
 export function RunActivity({
   status,
   mode,
+  phase = "starting",
   executor,
   queuePosition,
   queueSize,
@@ -22,12 +23,13 @@ export function RunActivity({
 }: {
   status: TaskStatus;
   mode: TaskMode;
+  phase?: RunActivityPhase;
   executor?: string | null;
   queuePosition?: number | null;
   queueSize?: number | null;
   idleText?: ReactNode;
 }) {
-  const copy = runActivityCopy({ status, mode, executor, queuePosition, queueSize });
+  const copy = runActivityCopy({ status, mode, phase, executor, queuePosition, queueSize });
   if (!copy) return idleText ? <p className="font-sans text-faint">{idleText}</p> : null;
 
   return (

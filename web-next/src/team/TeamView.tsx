@@ -538,7 +538,7 @@ export function TeamView({
           />
           <section className="team-flow-main" aria-label="团队会话">
             <TeamFeed
-              taskId={task.id}
+              task={task}
               rows={rows}
               workers={workers}
               onOpenWorker={selectWorker}

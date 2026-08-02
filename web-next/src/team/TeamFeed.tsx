@@ -1,17 +1,19 @@
 import { useRef } from "react";
 import type { Task } from "@harness/shared";
+import { runActivityPhase, type RunActivityTail } from "@harness/shared/run-activity";
 import type { Batch } from "@harness/shared/team";
 import { ArrowElbowDownRight, ArrowRight, SpinnerGap } from "@phosphor-icons/react";
 import { ConversationScrollControls } from "../components/ConversationScrollControls.tsx";
 import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
+import { RunActivity } from "../components/RunActivity.tsx";
 import { SessionMeta } from "../components/SessionMeta.tsx";
 import { TaskStatusDot } from "../components/TaskStatusDot.tsx";
 import type { IndicatorForTask } from "../lib/useTaskReadState.ts";
 import { MessageAttachments } from "../task-detail/Attachments.tsx";
 import { ExecutionDetails } from "../task-detail/ConversationFeed.tsx";
 import { durationBetween, formatInstant, parseAttachmentText } from "../task-detail/utils.ts";
-import { executorLabel, parseInbound, workerStatusText, type InboundMessage, type TeamFeedRow } from "./teamModel.ts";
+import { executorLabel, parseInbound, teamLeadLabel, workerStatusText, type InboundMessage, type TeamFeedRow } from "./teamModel.ts";
 
 function AgentRow({ row }: { row: Extract<TeamFeedRow, { kind: "conv" }>["item"] }) {
   if (row.kind !== "agent") return null;
@@ -135,7 +137,7 @@ function BatchCard({
 }
 
 export function TeamFeed({
-  taskId,
+  task,
   rows,
   workers,
   onOpenWorker,
@@ -143,7 +145,7 @@ export function TeamFeed({
   delegatingIds,
   indicatorForTask,
 }: {
-  taskId: string;
+  task: Task;
   rows: TeamFeedRow[];
   workers: Task[];
   onOpenWorker: (taskId: string) => void;
@@ -153,11 +155,22 @@ export function TeamFeed({
 }) {
   const scroll = useRef<HTMLDivElement>(null);
   const byId = new Map(workers.map((worker) => [worker.id, worker]));
+  const last = rows.at(-1);
+  const tail: RunActivityTail = !last
+    ? "empty"
+    : last.kind !== "conv"
+      ? "other"
+      : last.item.kind === "user"
+        ? "user"
+        : last.item.kind === "agent"
+          ? last.item.endedAt ? "agent-ended" : "agent-active"
+          : "other";
+  const activityPhase = runActivityPhase(task.status, tail);
   return (
     <ImagePreviewGroup isolated>
       <div className="conversation-scroll-region">
         <section className="team-feed" aria-label="团队调度流" ref={scroll}>
-          {!rows.length && <p className="team-feed-empty">运行后，调度者的拆解、派活、执行者提问与汇报会按发生顺序出现在这里。</p>}
+          {!rows.length && !activityPhase && <p className="team-feed-empty">运行后，调度者的拆解、派活、执行者提问与汇报会按发生顺序出现在这里。</p>}
           {rows.map((row) => {
             if (row.kind === "batch") return <BatchCard key={row.key} batch={row.batch} allWorkers={workers} onOpenWorker={onOpenWorker} indicatorForTask={indicatorForTask} />;
             const item = row.item;
@@ -187,8 +200,9 @@ export function TeamFeed({
             }
             return <div className={`team-feed-event${item.tone === "error" ? " is-error" : ""}`} key={row.key}><span />{item.text}<span /></div>;
           })}
+          {activityPhase && <RunActivity status={task.status} mode={task.mode} phase={activityPhase} executor={teamLeadLabel(task)} queuePosition={task.queuePosition} />}
         </section>
-        <ConversationScrollControls scrollRef={scroll} resetKey={taskId} />
+        <ConversationScrollControls scrollRef={scroll} resetKey={task.id} />
       </div>
     </ImagePreviewGroup>
   );

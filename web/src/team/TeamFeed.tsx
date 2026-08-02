@@ -16,6 +16,7 @@ import { WorkerStatusText } from "./WorkerRail";
 import { parseInbound, type FeedRow, type Inbound } from "./teamData";
 import { executorLabel, teamLeadExecutorLabel } from "../executorLabel";
 import { RunActivity } from "../RunActivity";
+import { runActivityPhase, type RunActivityTail } from "../runActivityCopy";
 import { useStickToBottom } from "../useStickToBottom";
 
 export function TeamFeed({
@@ -33,10 +34,21 @@ export function TeamFeed({
   const stickToBottom = useStickToBottom(scrollRef, task.id);
   const byId = new Map(workers.map((w) => [w.id, w]));
   const indexOf = (id?: string) => (id ? workers.findIndex((w) => w.id === id) + 1 : 0);
+  const last = rows.at(-1);
+  const tail: RunActivityTail = !last
+    ? "empty"
+    : last.kind !== "conv"
+      ? "other"
+      : last.item.kind === "user"
+        ? "user"
+        : last.item.kind === "agent"
+          ? last.item.endedAt ? "agent-ended" : "agent-active"
+          : "other";
+  const activityPhase = runActivityPhase(task.status, tail);
   return (
     <div className="relative min-h-0 min-w-0 border-r border-line">
       <div ref={scrollRef} className="h-full overflow-y-auto break-words px-4 py-4">
-        {rows.length === 0 && <RunActivity status={task.status} mode={task.mode} executor={teamLeadExecutorLabel(task)} queuePosition={task.queuePosition} idleText={<>点「运行」让调度者开工：它会先读需求、拆活，再用 <span className="font-mono">dispatch</span> 把活派给执行者。</>} />}
+        {rows.length === 0 && !activityPhase && <p className="text-[13px] text-faint">点「运行」让调度者开工：它会先读需求、拆活，再用 <span className="font-mono">dispatch</span> 把活派给执行者。</p>}
         {rows.map((row) => {
           if (row.kind === "batch")
             return <BatchCard key={row.key} batch={row.batch} workers={workers} onOpenWorker={onOpenWorker} />;
@@ -59,6 +71,7 @@ export function TeamFeed({
             );
           return <ConvBubble key={row.key} item={it} />;
         })}
+        {activityPhase && <RunActivity status={task.status} mode={task.mode} phase={activityPhase} executor={teamLeadExecutorLabel(task)} queuePosition={task.queuePosition} />}
       </div>
       <ConversationScrollButtons
         scrollRef={scrollRef}
