@@ -581,7 +581,12 @@
 .task-inspector-action > svg:last-child { margin-left: auto; }
 .task-inspector details { margin-top: 5px; border-top: 0.5px solid var(--line); padding-top: 7px; }
 .task-inspector details pre { max-height: 240px; overflow: auto; margin: 7px 0 0; white-space: pre-wrap; word-break: break-word; color: var(--muted); font-family: var(--font-sans); font-size: 10.5px; line-height: 1.55; }
-.task-inspector .task-message-attachments > a { width: 100%; min-height: 30px; height: auto; max-width: 100%; padding: 5px 8px; }
+.task-inspector-attachment-links { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 7px; margin-top: 6px; font-size: 10.5px; }
+.task-inspector-attachment-links > span:first-child { color: var(--faint); }
+.task-inspector-attachment-link { color: var(--accent); text-decoration: underline; text-decoration-color: color-mix(in srgb, var(--accent) 42%, transparent); text-underline-offset: 2px; }
+.task-inspector-attachment-link:hover { color: color-mix(in srgb, var(--accent) 76%, var(--ink)); text-decoration-color: currentColor; }
+.task-inspector-attachment-link:focus-visible { border-radius: 2px; outline: 2px solid color-mix(in srgb, var(--accent) 36%, transparent); outline-offset: 2px; }
+.task-inspector-attachment-missing { color: var(--faint); }
 .task-inspector-follow-ups ol { display: grid; gap: 8px; margin: 7px 0 0; padding: 0; list-style: none; }
 .task-inspector-follow-ups li + li { border-top: 0.5px solid var(--line); padding-top: 8px; }
 .task-inspector-follow-ups time { display: block; color: var(--faint); font-size: 9px; }

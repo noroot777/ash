@@ -156,10 +156,8 @@ export function UploadAttachmentList({
 
 export function MessageAttachments({
   paths,
-  imagesAsLinks = false,
 }: {
   paths: string[];
-  imagesAsLinks?: boolean;
 }) {
   const unique = [...new Set(paths.map((path) => path.trim()).filter(Boolean))];
   if (!unique.length) return null;
@@ -168,7 +166,7 @@ export function MessageAttachments({
       <div className="task-message-attachments">
         {unique.map((path) => {
           const view = attachmentView(path);
-          if (view.image && view.url && !imagesAsLinks) {
+          if (view.image && view.url) {
             return (
               <div className="task-message-image" key={path}>
                 <PreviewableImage src={view.url} alt={view.name} />

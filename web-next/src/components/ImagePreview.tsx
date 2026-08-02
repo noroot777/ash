@@ -16,6 +16,11 @@ import { createPortal } from "react-dom";
 import { CaretLeft, CaretRight, X } from "@phosphor-icons/react";
 
 type ImageProps = ComponentPropsWithoutRef<"img"> & { label?: string };
+type ImageLinkProps = ComponentPropsWithoutRef<"a"> & {
+  src: string;
+  alt: string;
+  label?: string;
+};
 
 export type PreviewImage = {
   src: string;
@@ -24,14 +29,14 @@ export type PreviewImage = {
 };
 
 type ImageGroupContextValue = {
-  register: (id: symbol, image: PreviewImage, element: HTMLImageElement) => void;
+  register: (id: symbol, image: PreviewImage, element: HTMLElement) => void;
   unregister: (id: symbol) => void;
   open: (id: symbol) => void;
 };
 
 type RegisteredImage = {
   image: PreviewImage;
-  element: HTMLImageElement;
+  element: HTMLElement;
 };
 
 type ActivePreview = {
@@ -126,7 +131,7 @@ function ImageGroupProvider({ children }: { children: ReactNode }) {
   const images = useRef(new Map<symbol, RegisteredImage>());
   const [active, setActive] = useState<ActivePreview | null>(null);
 
-  const register = useCallback((id: symbol, image: PreviewImage, element: HTMLImageElement) => {
+  const register = useCallback((id: symbol, image: PreviewImage, element: HTMLElement) => {
     images.current.set(id, { image, element });
   }, []);
   const unregister = useCallback((id: symbol) => {
@@ -192,6 +197,79 @@ export function PreviewableImage({
         onKeyDown={onKeyDown}
       />
     </ImagePreviewGroup>
+  );
+}
+
+export function PreviewableImageLink({
+  src,
+  alt,
+  label,
+  className = "",
+  href,
+  onClick,
+  ...props
+}: ImageLinkProps) {
+  return (
+    <ImagePreviewGroup>
+      <GroupedPreviewableImageLink
+        {...props}
+        src={src}
+        alt={alt}
+        label={label}
+        href={href}
+        className={className}
+        onClick={onClick}
+      />
+    </ImagePreviewGroup>
+  );
+}
+
+function GroupedPreviewableImageLink({
+  src,
+  alt,
+  label,
+  className = "",
+  href,
+  onClick,
+  ...props
+}: ImageLinkProps) {
+  const id = useRef(Symbol("image-preview-link")).current;
+  const element = useRef<HTMLAnchorElement>(null);
+  const group = useContext(ImageGroupContext)!;
+  const imageAlt = alt || "图片";
+
+  useLayoutEffect(() => {
+    if (src && element.current) group.register(id, { src, alt: imageAlt, label: label || imageAlt }, element.current);
+    else group.unregister(id);
+  }, [group, id, imageAlt, label, src]);
+
+  useLayoutEffect(() => () => group.unregister(id), [group, id]);
+
+  const open = (event: MouseEvent<HTMLAnchorElement>) => {
+    onClick?.(event);
+    if (
+      event.defaultPrevented
+      || !src
+      || event.button !== 0
+      || event.metaKey
+      || event.ctrlKey
+      || event.shiftKey
+      || event.altKey
+    ) return;
+    event.preventDefault();
+    event.stopPropagation();
+    group.open(id);
+  };
+
+  return (
+    <a
+      {...props}
+      ref={element}
+      href={href || src}
+      aria-haspopup={src ? "dialog" : undefined}
+      className={`image-preview-trigger ${className}`.trim()}
+      onClick={open}
+    />
   );
 }
 

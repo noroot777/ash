@@ -5,6 +5,7 @@ import { CLI_MODEL_PRESETS, REASONING_EFFORT_VALUES } from "@harness/shared/cli-
 import { sameExecutor } from "@harness/shared/executors";
 import { ArrowSquareOut, CaretRight, ListNumbers } from "@phosphor-icons/react";
 import { api } from "../lib/api.ts";
+import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
 import { ScheduleControl } from "../components/ScheduleControl.tsx";
 import { TaskLabelsEditor } from "../components/TaskLabelsEditor.tsx";
 import { taskParentLink } from "../components/TaskOrigin.tsx";
@@ -233,29 +234,31 @@ export function TaskInspector({
   return (
     <div className="task-inspector" aria-label="任务信息">
       <div className="task-inspector-scroll">
-        <section>
-          <details open>
-            <summary>原始需求</summary>
-            <InspectorPromptContent text={task.body} emptyText="这个任务没有正文说明。" />
-          </details>
-          <details className="task-inspector-follow-ups">
-            <summary>后续追问</summary>
-            {followUps.length ? (
-              <ol>
-                {followUps.map((followUp, index) => (
-                  <li key={`${followUp.at ?? "pending"}:${index}`}>
-                    {followUp.at && <time dateTime={followUp.at}>{formatInstant(followUp.at)}</time>}
-                    <InspectorPromptContent
-                      text={followUp.text}
-                      attachments={followUp.attachments}
-                      emptyText="（空消息）"
-                    />
-                  </li>
-                ))}
-              </ol>
-            ) : <p className="task-inspector-note">暂无后续追问。</p>}
-          </details>
-        </section>
+        <ImagePreviewGroup isolated>
+          <section>
+            <details open>
+              <summary>原始需求</summary>
+              <InspectorPromptContent text={task.body} emptyText="这个任务没有正文说明。" />
+            </details>
+            <details className="task-inspector-follow-ups">
+              <summary>后续追问</summary>
+              {followUps.length ? (
+                <ol>
+                  {followUps.map((followUp, index) => (
+                    <li key={`${followUp.at ?? "pending"}:${index}`}>
+                      {followUp.at && <time dateTime={followUp.at}>{formatInstant(followUp.at)}</time>}
+                      <InspectorPromptContent
+                        text={followUp.text}
+                        attachments={followUp.attachments}
+                        emptyText="（空消息）"
+                      />
+                    </li>
+                  ))}
+                </ol>
+              ) : <p className="task-inspector-note">暂无后续追问。</p>}
+            </details>
+          </section>
+        </ImagePreviewGroup>
 
         <section>
           <h2>属性</h2>
