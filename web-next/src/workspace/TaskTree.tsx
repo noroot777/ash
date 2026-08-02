@@ -8,8 +8,6 @@ import { useTaskReadState, type IndicatorForTask } from "../lib/useTaskReadState
 import { ProjectAvatar } from "./ProjectAvatar.tsx";
 import { buildTaskTree, orderedTopLevelTasks } from "./taskTreeModel.ts";
 
-const COLLAPSED_GROUPS_STORAGE_KEY = "harness:taskList:collapsedStatuses";
-
 type TaskTreeProps = {
   projects: ProjectView[];
   currentProjectId: string | null;
@@ -18,32 +16,12 @@ type TaskTreeProps = {
   onTask: (task: Task) => void;
 };
 
-function readCollapsedGroups(): Set<string> {
-  try {
-    const raw = window.localStorage.getItem(COLLAPSED_GROUPS_STORAGE_KEY);
-    const parsed: unknown = raw ? JSON.parse(raw) : [];
-    return new Set(Array.isArray(parsed) ? parsed.filter((key): key is string => typeof key === "string") : []);
-  } catch {
-    return new Set();
-  }
-}
+const TASK_PREVIEW_LIMIT = 12;
 
-function useCollapsedGroups() {
-  const [collapsed, setCollapsed] = useState(readCollapsedGroups);
-  const toggle = (key: string) => {
-    setCollapsed((current) => {
-      const next = new Set(current);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      try {
-        window.localStorage.setItem(COLLAPSED_GROUPS_STORAGE_KEY, JSON.stringify([...next]));
-      } catch {
-        // localStorage can be unavailable; collapsing should still work for this session.
-      }
-      return next;
-    });
-  };
-  return { collapsed, toggle };
+function StatusMarker({ indicator }: { indicator: ReturnType<IndicatorForTask> }) {
+  return indicator
+    ? <TaskStatusDot indicator={indicator} surface="workspace" />
+    : <i className="workspace-status-dot workspace-status-dot--quiet" aria-hidden="true" />;
 }
 
 function WorkerSummary({ workers, indicatorForTask }: { workers: Task[]; indicatorForTask: IndicatorForTask }) {
@@ -81,7 +59,8 @@ function TaskRow({
   indicatorForTask,
   child = false,
   showOrigin = true,
-  showPin = false,
+  leading,
+  wrapperClassName = "",
   trailing,
 }: {
   task: Task;
@@ -91,27 +70,35 @@ function TaskRow({
   indicatorForTask: IndicatorForTask;
   child?: boolean;
   showOrigin?: boolean;
-  showPin?: boolean;
+  leading?: React.ReactNode;
+  wrapperClassName?: string;
   trailing?: React.ReactNode;
 }) {
   const selected = selectedTaskId === task.id;
   const indicator = indicatorForTask(task);
   const hasOrigin = showOrigin && taskParentLink(task, allTasks) !== null;
+  const hasMeta = task.pinnedAt != null || task.mode === "debate" || trailing != null;
   return (
-    <div className="workspace-task-row-wrap">
+    <div className={`workspace-task-row-wrap ui-selectable${selected ? " is-selected" : ""}${wrapperClassName ? ` ${wrapperClassName}` : ""}`}>
+      <span className="workspace-task-leading">
+        {leading ?? <StatusMarker indicator={indicator} />}
+      </span>
       <button
-        className={`workspace-task-row ui-selectable${child ? " workspace-task-row--child" : ""}${hasOrigin ? " workspace-task-row--has-origin" : ""}${selected ? " is-selected" : ""}`}
+        className={`workspace-task-row${child ? " workspace-task-row--child" : ""}${hasOrigin ? " workspace-task-row--has-origin" : ""}`}
         type="button"
         aria-selected={selected}
         data-task-id={task.id}
         onClick={() => onTask(task)}
         title={task.title}
       >
-        {indicator && <TaskStatusDot indicator={indicator} surface="workspace" />}
-        {showPin && task.pinnedAt != null && <PushPin size={11} weight="fill" className="workspace-task-pin" aria-label="已置顶" />}
-        {task.mode === "debate" && <Scales size={12} weight="bold" className="workspace-task-kind" aria-label="辩论" />}
         <span className="workspace-task-title">{task.title || "未命名任务"}</span>
-        {trailing}
+        {hasMeta && (
+          <span className="workspace-task-meta">
+            {task.pinnedAt != null && <PushPin size={11} weight="fill" className="workspace-task-pin" aria-label="已置顶" />}
+            {task.mode === "debate" && <Scales size={12} weight="bold" className="workspace-task-kind" aria-label="辩论" />}
+            {trailing}
+          </span>
+        )}
       </button>
       {hasOrigin && (
         <OriginTaskChip
@@ -143,41 +130,50 @@ function TeamRow({
   indicatorForTask: IndicatorForTask;
 }) {
   const workers = workersOf(tasks, task.id);
-  const selectedWorker = workers.some((worker) => worker.id === selectedTaskId);
+  const selectedWorkerIndex = workers.findIndex((worker) => worker.id === selectedTaskId);
+  const selectedWorker = selectedWorkerIndex >= 0;
   const [expanded, setExpanded] = useState(selectedWorker);
+  const [showAllWorkers, setShowAllWorkers] = useState(false);
+  const indicator = indicatorForTask(task);
+  const workersExpanded = showAllWorkers || selectedWorkerIndex >= TASK_PREVIEW_LIMIT;
+  const visibleWorkers = workersExpanded ? workers : workers.slice(0, TASK_PREVIEW_LIMIT);
   useEffect(() => {
     if (selectedWorker) setExpanded(true);
   }, [selectedWorker]);
   return (
     <>
-      <div className="workspace-team-row">
-        <button
-          className="workspace-team-caret"
-          type="button"
-          disabled={!workers.length}
-          aria-label={expanded ? "折叠执行者" : `展开 ${workers.length} 个执行者`}
-          aria-expanded={expanded}
-          onClick={() => setExpanded((value) => !value)}
-        >
-          <CaretRight size={10} weight="bold" className={expanded ? "is-open" : ""} aria-hidden="true" />
-        </button>
-        <TaskRow
-          task={task}
-          allTasks={allTasks}
-          selectedTaskId={selectedTaskId}
-          onTask={onTask}
-          indicatorForTask={indicatorForTask}
-          trailing={
-            <>
-              <WorkerSummary workers={workers} indicatorForTask={indicatorForTask} />
-              <UsersThree size={13} weight="fill" className="workspace-task-kind" aria-label="团队任务" />
-            </>
-          }
-        />
-      </div>
+      <TaskRow
+        task={task}
+        allTasks={allTasks}
+        selectedTaskId={selectedTaskId}
+        onTask={onTask}
+        indicatorForTask={indicatorForTask}
+        wrapperClassName={`workspace-team-row${expanded ? " is-expanded" : ""}`}
+        leading={
+          <span className="workspace-team-leading">
+            <StatusMarker indicator={indicator} />
+            <button
+              className="workspace-team-caret"
+              type="button"
+              disabled={!workers.length}
+              aria-label={expanded ? "折叠执行者" : `展开 ${workers.length} 个执行者`}
+              aria-expanded={expanded}
+              onClick={() => setExpanded((value) => !value)}
+            >
+              <CaretRight size={10} weight="bold" className={expanded ? "is-open" : ""} aria-hidden="true" />
+            </button>
+          </span>
+        }
+        trailing={
+          <>
+            <WorkerSummary workers={workers} indicatorForTask={indicatorForTask} />
+            <UsersThree size={13} weight="fill" className="workspace-task-kind" aria-label="团队任务" />
+          </>
+        }
+      />
       {expanded && workers.length > 0 && (
         <div className="workspace-worker-list">
-          {workers.map((worker) => (
+          {visibleWorkers.map((worker) => (
             <TaskRow
               key={worker.id}
               task={worker}
@@ -190,6 +186,11 @@ function TeamRow({
               trailing={<span className="workspace-worker-executor">{worker.executorLabel || worker.agentType || "执行者"}</span>}
             />
           ))}
+          {workers.length > TASK_PREVIEW_LIMIT && (
+            <button className="workspace-task-more" type="button" onClick={() => setShowAllWorkers((value) => !value)}>
+              {workersExpanded ? "收起" : `显示另外 ${workers.length - TASK_PREVIEW_LIMIT} 条`}
+            </button>
+          )}
         </div>
       )}
     </>
@@ -210,51 +211,49 @@ function CurrentProjectTree({
   indicatorForTask: IndicatorForTask;
 }) {
   const sections = useMemo(() => buildTaskTree(tasks), [tasks]);
-  const { collapsed, toggle } = useCollapsedGroups();
+  const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set());
+  const toggleSection = (sectionKey: string) => setExpandedSections((current) => {
+    const next = new Set(current);
+    if (next.has(sectionKey)) next.delete(sectionKey);
+    else next.add(sectionKey);
+    return next;
+  });
   if (!sections.length) return <p className="workspace-task-empty">还没有任务</p>;
   return (
     <>
-      {sections.map((section) => (
-        <section className="workspace-task-section" key={section.key}>
-          <header className="workspace-task-section-title">
-            <span>{section.label}</span>
-            <em>{section.count}</em>
-          </header>
-          {section.groups.map((group) => {
-            const isCollapsed = collapsed.has(group.collapseKey);
-            return (
-              <div className="workspace-task-group" key={group.key}>
-                <button
-                  className="workspace-task-group-title"
-                  type="button"
-                  aria-expanded={!isCollapsed}
-                  onClick={() => toggle(group.collapseKey)}
-                  title={isCollapsed ? "展开这一组" : "折叠这一组"}
-                >
-                  <span>{group.label}</span>
-                  <em>{group.tasks.length}</em>
-                  <CaretRight size={9} weight="bold" className={isCollapsed ? "" : "is-open"} aria-hidden="true" />
-                </button>
-                {!isCollapsed && group.tasks.map((task) =>
-                  task.mode === "team" ? (
-                    <TeamRow
-                      key={task.id}
-                      task={task}
-                      tasks={tasks}
-                      allTasks={allTasks}
-                      selectedTaskId={selectedTaskId}
-                      onTask={onTask}
-                      indicatorForTask={indicatorForTask}
-                    />
-                  ) : (
-                    <TaskRow key={task.id} task={task} allTasks={allTasks} selectedTaskId={selectedTaskId} onTask={onTask} indicatorForTask={indicatorForTask} />
-                  ),
-                )}
-              </div>
-            );
-          })}
-        </section>
-      ))}
+      {sections.map((section) => {
+        const selectedIndex = section.tasks.findIndex((task) => task.id === selectedTaskId);
+        const expanded = expandedSections.has(section.key) || selectedIndex >= TASK_PREVIEW_LIMIT;
+        const visibleTasks = expanded ? section.tasks : section.tasks.slice(0, TASK_PREVIEW_LIMIT);
+        const hiddenCount = section.tasks.length - TASK_PREVIEW_LIMIT;
+        return (
+          <section className="workspace-task-section" key={section.key}>
+            <header className="workspace-task-section-title">
+              <span>{section.label}</span>
+            </header>
+            {visibleTasks.map((task) =>
+              task.mode === "team" ? (
+                <TeamRow
+                  key={task.id}
+                  task={task}
+                  tasks={tasks}
+                  allTasks={allTasks}
+                  selectedTaskId={selectedTaskId}
+                  onTask={onTask}
+                  indicatorForTask={indicatorForTask}
+                />
+              ) : (
+                <TaskRow key={task.id} task={task} allTasks={allTasks} selectedTaskId={selectedTaskId} onTask={onTask} indicatorForTask={indicatorForTask} />
+              ),
+            )}
+            {section.tasks.length > TASK_PREVIEW_LIMIT && (
+              <button className="workspace-task-more" type="button" onClick={() => toggleSection(section.key)}>
+                {expanded ? "收起" : `显示另外 ${hiddenCount} 条`}
+              </button>
+            )}
+          </section>
+        );
+      })}
     </>
   );
 }
@@ -275,7 +274,9 @@ function OtherProject({
   indicatorForTask: IndicatorForTask;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const [showAll, setShowAll] = useState(false);
   const ordered = useMemo(() => orderedTopLevelTasks(tasks), [tasks]);
+  const visible = showAll ? ordered : ordered.slice(0, TASK_PREVIEW_LIMIT);
   return (
     <div className="workspace-other-project">
       <button
@@ -287,13 +288,17 @@ function OtherProject({
         <CaretRight size={10} weight="bold" className={expanded ? "is-open" : ""} aria-hidden="true" />
         <ProjectAvatar project={project} size="small" />
         <span>{project.name}</span>
-        <em>{ordered.length}</em>
       </button>
       {expanded && (
         <div className="workspace-other-project-tasks">
-          {ordered.map((task) => (
-            <TaskRow key={task.id} task={task} allTasks={allTasks} showPin selectedTaskId={selectedTaskId} onTask={onTask} indicatorForTask={indicatorForTask} />
+          {visible.map((task) => (
+            <TaskRow key={task.id} task={task} allTasks={allTasks} selectedTaskId={selectedTaskId} onTask={onTask} indicatorForTask={indicatorForTask} />
           ))}
+          {ordered.length > TASK_PREVIEW_LIMIT && (
+            <button className="workspace-task-more" type="button" onClick={() => setShowAll((value) => !value)}>
+              {showAll ? "收起" : `显示另外 ${ordered.length - TASK_PREVIEW_LIMIT} 条`}
+            </button>
+          )}
           {!ordered.length && <p>没有任务</p>}
         </div>
       )}
