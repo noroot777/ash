@@ -8,6 +8,7 @@
     "build": "node ../scripts/check-conventions.mjs && tsc -b && vite build",
     "test:image-preview": "node scripts/test-image-preview.mjs",
     "test:data-layer": "node --experimental-strip-types scripts/test-data-layer.mjs",
+    "test:run-activity": "node --experimental-strip-types scripts/test-run-activity.mjs",
     "typecheck": "tsc -p tsconfig.json",
     "preview": "vite preview"
   },

@@ -246,8 +246,7 @@ export function TaskDetail({
               <div className="task-detail-body">
                 <section className="task-detail-main" aria-label="任务会话">
                   <ConversationFeed
-                    taskId={task.id}
-                    taskBody={task.body}
+                    task={task}
                     items={conversation.items}
                     loading={conversation.refreshing}
                     error={conversation.error}

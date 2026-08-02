@@ -18,6 +18,7 @@ import {
 import { ConversationScrollControls } from "../components/ConversationScrollControls.tsx";
 import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
+import { RunActivity } from "../components/RunActivity.tsx";
 import { ScheduleControl } from "../components/ScheduleControl.tsx";
 import { OriginTaskBar } from "../components/TaskOrigin.tsx";
 import { TaskStatusDot } from "../components/TaskStatusDot.tsx";
@@ -321,7 +322,14 @@ export function DebateView({
           <div className="debate-stream" ref={scrollRef}>
             {debate.loading && !turns.length && <p className="debate-empty"><SpinnerGap size={14} className="is-spinning" />正在读取辩论记录…</p>}
             {!debate.loading && debate.error && !turns.length && <p className="debate-empty is-error">辩论记录读取失败：{debate.error}</p>}
-            {!debate.loading && !debate.error && !turns.length && <p className="debate-empty">点击“运行”开始辩论。双方逐轮发言会实时出现在这里。</p>}
+            {!debate.loading && !debate.error && !turns.length && (
+              <RunActivity
+                status={task.status}
+                mode={task.mode}
+                queuePosition={task.queuePosition}
+                idle={<p className="debate-empty">点击“运行”开始辩论。双方逐轮发言会实时出现在这里。</p>}
+              />
+            )}
             {turns.map((turn, index) => (
               <TurnBubble
                 key={`${turn.round}-${turn.speaker}-${index}`}
