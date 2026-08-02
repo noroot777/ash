@@ -18,6 +18,7 @@ import {
   useAgentAvailability,
 } from "../lib/agentAvailability.ts";
 import { QueueDrawer } from "./QueueDrawer.tsx";
+import { InspectorPromptContent } from "./InspectorPromptContent.tsx";
 import { TaskChangeSummary } from "./TaskChangeSummary.tsx";
 import { formatInstant, PRIORITY_LABELS, taskDurationInfo } from "./utils.ts";
 
@@ -122,7 +123,7 @@ export function TaskInspector({
   groups: Group[];
   sessions: Session[];
   allTasks: Task[];
-  followUps?: { text: string; at?: string }[];
+  followUps?: { text: string; attachments: string[]; at?: string }[];
   onOpenTask: (taskId: string) => void;
   onOpenReview: () => void;
   onPatch: (patch: Partial<Task>) => Promise<void>;
@@ -235,7 +236,7 @@ export function TaskInspector({
         <section>
           <details open>
             <summary>原始需求</summary>
-            <pre>{task.body.trim() || "这个任务没有正文说明。"}</pre>
+            <InspectorPromptContent text={task.body} emptyText="这个任务没有正文说明。" />
           </details>
           <details className="task-inspector-follow-ups">
             <summary>后续追问</summary>
@@ -244,7 +245,11 @@ export function TaskInspector({
                 {followUps.map((followUp, index) => (
                   <li key={`${followUp.at ?? "pending"}:${index}`}>
                     {followUp.at && <time dateTime={followUp.at}>{formatInstant(followUp.at)}</time>}
-                    <pre>{followUp.text.trim() || "（空消息）"}</pre>
+                    <InspectorPromptContent
+                      text={followUp.text}
+                      attachments={followUp.attachments}
+                      emptyText="（空消息）"
+                    />
                   </li>
                 ))}
               </ol>

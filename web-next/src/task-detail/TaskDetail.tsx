@@ -31,7 +31,7 @@ interface TaskInspectorContext {
   groups: Group[];
   sessions: Session[];
   allTasks: Task[];
-  followUps: { text: string; at?: string }[];
+  followUps: { text: string; attachments: string[]; at?: string }[];
   onOpenTask: (taskId: string) => void;
   onOpenReview: () => void;
   onPatch: (patch: Partial<Task>) => Promise<void>;
@@ -94,7 +94,7 @@ export function TaskDetail({
   const followUps = useMemo(
     () => conversation.items.flatMap((item) => (
       item.kind === "user" && !item.isAnswer
-        ? [{ text: item.text, ...(item.at ? { at: item.at } : {}) }]
+        ? [{ text: item.text, attachments: item.attachments, ...(item.at ? { at: item.at } : {}) }]
         : []
     )),
     [conversation.items],

@@ -154,7 +154,13 @@ export function UploadAttachmentList({
   );
 }
 
-export function MessageAttachments({ paths }: { paths: string[] }) {
+export function MessageAttachments({
+  paths,
+  imagesAsLinks = false,
+}: {
+  paths: string[];
+  imagesAsLinks?: boolean;
+}) {
   const unique = [...new Set(paths.map((path) => path.trim()).filter(Boolean))];
   if (!unique.length) return null;
   return (
@@ -162,7 +168,7 @@ export function MessageAttachments({ paths }: { paths: string[] }) {
       <div className="task-message-attachments">
         {unique.map((path) => {
           const view = attachmentView(path);
-          if (view.image && view.url) {
+          if (view.image && view.url && !imagesAsLinks) {
             return (
               <div className="task-message-image" key={path}>
                 <PreviewableImage src={view.url} alt={view.name} />
@@ -171,7 +177,7 @@ export function MessageAttachments({ paths }: { paths: string[] }) {
           }
           if (view.url) {
             return (
-              <a key={path} href={view.url} target="_blank" rel="noreferrer">
+              <a key={path} href={view.url} target="_blank" rel="noreferrer" aria-label={`打开附件 ${view.name}`}>
                 <FileIcon size={18} aria-hidden="true" />
                 <span>{view.name}</span>
               </a>
