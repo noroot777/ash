@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Note, NoteSearchHit } from "@harness/shared";
+import type { Note, NoteSearchHit, TaskSearchHit } from "@harness/shared";
 import { createClient } from "@libsql/client";
 import { eq } from "drizzle-orm";
 import { Hono } from "hono";
@@ -73,6 +73,11 @@ try {
 
   const hit = (await searchAll("legacy")).find((item): item is NoteSearchHit => item.kind === "note");
   assert.equal(hit?.taskCount, 2, "global search badge should show the complete conversion count");
+  assert.equal(hit?.createdAt, new Date(100).toISOString(), "global search should expose note creation time");
+  assert.ok(hit?.updatedAt, "global search should expose note update time");
+  const taskHit = (await searchAll("first task")).find((item): item is TaskSearchHit => item.kind === "task");
+  assert.equal(taskHit?.createdAt, at, "global search should expose task creation time");
+  assert.equal(taskHit?.updatedAt, at, "global search should expose task update time");
 
   response = await api.request("/tasks/task-one", { method: "DELETE" });
   assert.equal(response.status, 200);

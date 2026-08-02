@@ -99,6 +99,7 @@ export function SearchPreview({ hit, query }: { hit: SearchHit | undefined; quer
             <h2 className="text-sm font-semibold leading-5 text-ink"><Highlight text={hit.title} query={query} /></h2>
             <div className="mt-1 flex flex-wrap items-center gap-x-1.5 text-[10px] leading-4 text-faint">
               <span>{hit.projectName ?? "未知项目"}</span><span aria-hidden="true">·</span>
+              <span>创建于 {formatInstant(hit.createdAt)}</span><span aria-hidden="true">·</span>
               <span>更新于 {formatInstant(hit.updatedAt)}</span>
             </div>
           </div>
@@ -157,6 +158,11 @@ export function SearchHitList({
             {hit.kind === "task" && hit.archived && <span className="shrink-0 rounded bg-overlay px-1 text-[9px] text-faint">已归档</span>}
             {hit.kind === "note" && hit.taskCount > 0 && <span className="shrink-0 rounded bg-overlay px-1 text-[9px] text-faint">已转 {hit.taskCount} 个任务</span>}
             {hit.projectName && <span className="ml-auto shrink-0 text-[10px] text-faint">{hit.projectName}</span>}
+          </span>
+          <span className="flex w-full min-w-0 items-center gap-1.5 pl-[23px] text-[9px] leading-4 text-faint">
+            <span>创建于 {formatInstant(hit.createdAt)}</span>
+            <span aria-hidden="true">·</span>
+            <span>更新于 {formatInstant(hit.updatedAt)}</span>
           </span>
           {hit.snippet && (
             <span className="flex w-full min-w-0 items-center gap-1.5 pl-[23px]">

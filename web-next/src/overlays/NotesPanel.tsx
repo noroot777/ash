@@ -435,23 +435,25 @@ export function NotesPanel({ project, initialNoteId, onClose, onTask, onConvert,
             </div>)}
             {loading && <p>读取中…</p>}{!loading && !filtered.length && !newDraft && <p>没有匹配的随手记</p>}
           </div></aside>
-          <main className={`note-editor${active?.taskLinks.length ? " has-task-links" : ""}`}>
-            <div className="note-meta"><span>{newDraft ? "新随手记" : active ? `创建于 ${new Date(active.createdAt).toLocaleString("zh-CN")} · ${saveStatus}` : "新随手记"}</span></div>
-            {active?.taskLinks.length ? (
-              <section className="note-task-links" aria-label={`已转任务，共 ${active.taskLinks.length} 个`}>
-                <b>已转任务（{active.taskLinks.length}）</b>
-                <div>
-                  {active.taskLinks.map((link) => (
-                    <button type="button" key={link.taskId} onClick={async () => { if (await flushDraft()) onTask(link.taskId); }}>
-                      <CheckCircle size={12} weight="duotone" aria-hidden="true" />
-                      <span>{link.title}</span>
-                      {link.archived && <small>已归档</small>}
-                      <ArrowSquareOut size={11} aria-hidden="true" />
-                    </button>
-                  ))}
-                </div>
-              </section>
-            ) : null}
+          <main className="note-editor">
+            <div className="note-meta">
+              <span>{newDraft ? "新随手记" : active ? `创建于 ${new Date(active.createdAt).toLocaleString("zh-CN")} · ${saveStatus}` : "新随手记"}</span>
+              {active?.taskLinks.length ? (
+                <section className="note-task-links" aria-label={`已转任务，共 ${active.taskLinks.length} 个`}>
+                  <b>已转任务（{active.taskLinks.length}）</b>
+                  <div>
+                    {active.taskLinks.map((link) => (
+                      <button type="button" key={link.taskId} onClick={async () => { if (await flushDraft()) onTask(link.taskId); }}>
+                        <CheckCircle size={12} weight="duotone" aria-hidden="true" />
+                        <span>{link.title}</span>
+                        {link.archived && <small>已归档</small>}
+                        <ArrowSquareOut size={11} aria-hidden="true" />
+                      </button>
+                    ))}
+                  </div>
+                </section>
+              ) : null}
+            </div>
             {editing ? (
               <textarea autoFocus value={draft.body} onChange={(event) => updateDraft({ ...draftRef.current, body: event.target.value })} onPaste={uploads.onPaste} onBlur={() => setEditing(false)} placeholder="记下临时想法、路径、验证清单…" />
             ) : (
