@@ -178,6 +178,22 @@
 }
 .workspace-status-dot--error { background: var(--red); }
 
+/*
+ * Next2 is an isolated comparison surface reached only by its URL. Keep the
+ * simplified task tree, but restore the familiar legacy signals requested for
+ * live work and unread completions without changing the main Next UI.
+ */
+.workspace-shell--next2 .workspace-status-dot--active {
+  background: var(--muted);
+  animation: task-status-dot-pulse 1.35s ease-in-out infinite;
+  will-change: opacity, transform;
+}
+
+.workspace-shell--next2 .workspace-status-dot--success {
+  border: 0;
+  background: var(--green);
+}
+
 @keyframes task-status-dot-pulse {
   0%, 100% {
     opacity: 0.68;
@@ -186,6 +202,14 @@
   50% {
     opacity: 1;
     transform: scale(1.18);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .workspace-shell--next2 .workspace-status-dot--active {
+    animation: none;
+    opacity: 1;
+    transform: none;
   }
 }
 
