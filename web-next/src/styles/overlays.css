@@ -440,58 +440,68 @@
   background: var(--panel);
 }
 
-.note-editor.has-task-links {
-  grid-template-rows: 40px auto minmax(0, 1fr) auto auto;
-}
-
 .note-meta {
   display: flex;
+  min-width: 0;
   align-items: center;
   justify-content: space-between;
+  gap: 12px;
   border-bottom: 1px solid var(--line);
   padding: 0 16px;
   color: var(--faint);
   font-size: 9px;
 }
 
-.note-meta button {
-  border: 0;
-  background: transparent;
-  color: var(--accent);
-  font-size: 10px;
+.note-meta > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .note-task-links {
-  border-bottom: 1px solid var(--line);
-  padding: 9px 16px;
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 7px;
+  overflow: hidden;
 }
 
 .note-task-links > b {
-  display: block;
-  margin-bottom: 5px;
+  flex: none;
   color: var(--faint);
   font-size: 9px;
   font-weight: 600;
+  white-space: nowrap;
 }
 
 .note-task-links > div {
   display: flex;
-  flex-wrap: wrap;
+  min-width: 0;
   gap: 5px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.note-task-links > div::-webkit-scrollbar {
+  display: none;
 }
 
 .note-task-links button {
   display: inline-flex;
+  flex: none;
   min-width: 0;
-  max-width: 260px;
+  max-width: 220px;
   align-items: center;
   gap: 5px;
   border: 1px solid var(--line);
   border-radius: 7px;
   background: var(--raised);
-  padding: 4px 7px;
+  padding: 3px 7px;
   color: var(--muted);
-  font-size: 10px;
+  font-size: 9px;
 }
 
 .note-task-links button:hover {

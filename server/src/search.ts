@@ -214,6 +214,7 @@ export async function searchAll(query: string, options: SearchOptions = {}): Pro
         field,
         snippet,
         preview: task.body.slice(0, TASK_PREVIEW_LIMIT),
+        createdAt: task.createdAt,
         updatedAt: task.updatedAt,
       });
     }),
@@ -233,6 +234,7 @@ export async function searchAll(query: string, options: SearchOptions = {}): Pro
       field: "body",
       snippet: findSnippet(note.body, matchingTerms(note.body, parsed)) ?? "",
       preview: note.body.slice(0, NOTE_PREVIEW_LIMIT),
+      createdAt: new Date(note.createdAt).toISOString(),
       updatedAt: new Date(note.updatedAt).toISOString(),
       taskCount: noteTaskCounts.get(note.id) ?? 0,
     }))

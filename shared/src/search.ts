@@ -22,6 +22,7 @@ export interface TaskSearchHit {
   snippet: string;
   // Task body prefix for the command-palette preview.
   preview?: string;
+  createdAt: string;
   updatedAt: string;
 }
 
@@ -35,6 +36,7 @@ export interface NoteSearchHit {
   snippet: string;
   // Note body for the command-palette preview.
   preview?: string;
+  createdAt: string;
   updatedAt: string;
   taskCount: number;
 }

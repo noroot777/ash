@@ -382,7 +382,7 @@ export function CommandPalette({
   const hover = (index: number, event: ReactMouseEvent) => {
     const previous = mouse.current;
     mouse.current = { x: event.clientX, y: event.clientY };
-    if (!previous || (previous.x === event.clientX && previous.y === event.clientY)) return;
+    if (previous && previous.x === event.clientX && previous.y === event.clientY) return;
     setActive(index);
   };
 
