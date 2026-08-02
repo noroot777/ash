@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState } from "react";
 import type { Session, Task } from "@harness/shared";
 import { STAGE_LABELS, taskDisplayStatus } from "@harness/shared";
 import { ArrowsClockwise, CaretDown, CheckCircle, GitBranch, GitCommit, SpinnerGap, WarningCircle, X } from "@phosphor-icons/react";
-import { LegacyLink } from "../components/LegacyLink.tsx";
 import { TaskStatusDot } from "../components/TaskStatusDot.tsx";
 import { api, type AcceptTaskFailure, type TaskCommit, type TaskDiffResult } from "../lib/api.ts";
 import type { IndicatorForTask } from "../lib/useTaskReadState.ts";
@@ -290,7 +289,6 @@ export function TeamReviewWorkspace({
     <section className="team-review-workspace">
       <header className="team-review-subbar">
         <div><b>团队验收台</b><small>配合右侧审查记录，核对共享分支与独立 worktree 后分别验收或打回。</small></div>
-        <LegacyLink projectId={lead.projectId} taskId={lead.id} view="review" />
         <button type="button" onClick={onClose}><X size={13} />返回团队流</button>
       </header>
       <div className="team-review-scroll">

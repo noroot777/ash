@@ -596,8 +596,6 @@
 .task-resume-editor footer > span { margin-right: auto; color: var(--faint); font-size: 8.5px; }
 .task-resume-editor button.is-primary { background: var(--accent); color: white; }
 .task-resume-editor button.is-primary:hover:not(:disabled) { background: #5560c4; color: white; }
-.task-inspector .workspace-legacy-link { width: fit-content; margin-top: 7px; }
-
 .task-change-summary__state { display: flex; align-items: center; gap: 6px; margin: 3px 0 6px; color: var(--faint); font-size: 10px; }
 .task-change-summary__state.is-error { color: var(--red); }
 .task-change-summary__facts { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 5px; }

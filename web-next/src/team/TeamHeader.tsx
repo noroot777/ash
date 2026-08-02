@@ -14,7 +14,6 @@ import {
   Stop,
   Trash,
 } from "@phosphor-icons/react";
-import { LegacyLink } from "../components/LegacyLink.tsx";
 import { useDismissable } from "../lib/useDismissable.ts";
 import { TaskPinButton } from "../task-detail/TaskPinButton.tsx";
 import { TaskStatusDot } from "../components/TaskStatusDot.tsx";
@@ -105,7 +104,7 @@ export function TeamHeader({
       await navigator.clipboard.writeText(conversationMarkdown);
       notify("已复制调度者的全部对话");
     } catch {
-      notify("复制失败，请用旧版打开后重试");
+      notify("复制失败，请检查浏览器剪贴板权限后重试");
     }
     setMenu(false);
   };
@@ -171,7 +170,6 @@ export function TeamHeader({
               <div role="menu">
                 <button type="button" role="menuitem" disabled={!conversationMarkdown.trim()} onClick={() => void copy()}><Copy size={14} />复制全部对话</button>
                 <button type="button" role="menuitem" disabled={!conversationMarkdown.trim()} onClick={download}><DownloadSimple size={14} />下载 Markdown</button>
-                <LegacyLink projectId={task.projectId} taskId={task.id} />
                 <span role="separator" />
                 <button type="button" role="menuitem" disabled={!task.archived && !canArchive(task.status)} onClick={() => { setMenu(false); onArchive(); }}>
                   {task.archived ? <ArrowCounterClockwise size={14} /> : <Archive size={14} />}{task.archived ? "取消归档" : "归档团队"}

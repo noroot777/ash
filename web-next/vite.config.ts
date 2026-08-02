@@ -11,7 +11,7 @@ const interPackageRoot = dirname(require.resolve("@fontsource-variable/inter/pac
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   server: {
-    port: 5174,
+    port: 5173,
     strictPort: true,
     fs: {
       allow: [searchForWorkspaceRoot(process.cwd()), interPackageRoot],

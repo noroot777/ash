@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { mergeFeed, timeMs } from "@harness/shared/team";
 import { ApiError, api } from "../src/lib/api.ts";
 import { deriveTaskStatusIndicator, readEventForTask } from "../src/lib/useTaskReadState.ts";
 import { applyTaskStatusEvent } from "../src/lib/useTasks.ts";
@@ -9,6 +10,7 @@ import { sharedTeamParent } from "../src/review/reviewModel.ts";
 import { gateAllowsRevision, isOpenDebateGate, runCreatedHandoffFollowUps, teamDebateIterationState } from "../src/debate/handoffPolicy.ts";
 import { emptyComposerExecutorConfigs, patchComposerExecutor, setComposerExecutorProfile } from "../src/composer/executorOverrides.ts";
 import { activeGroupTasks, resumeQueueModel } from "../src/settings/groupQueueModel.ts";
+import { leadTurns, teamFeedOptions } from "../src/team/teamModel.ts";
 import {
   executorOptions,
   registeredAgentTypes,
@@ -387,6 +389,78 @@ try {
   const queue = resumeQueueModel(active);
   assert.deepEqual(queue?.ordered.map(({ id }) => id), ["done", "paused"]);
   assert.equal(queue?.doneCount, 1);
+
+  const batch = (key, at) => ({ key, at, workers: [], serial: false });
+  const rowKinds = (rows) => rows.map((row) => (row.kind === "batch" ? `batch:${row.batch.key}` : `conv:${row.item.kind}`));
+  const mixedFormatRows = mergeFeed([
+    {
+      kind: "agent",
+      id: "lead-mixed",
+      label: "lead",
+      markdown: "",
+      segments: [],
+      at: "2026-07-27 16:35:00+08:00",
+      endedAt: "2026-07-27 16:35:42+08:00",
+    },
+    { kind: "event", id: "worker-finished", text: "worker finished", at: "2026-07-27 16:41:29+08:00" },
+  ], [batch("mixed-format", "2026-07-27T08:35:30.352Z")], teamFeedOptions());
+  assert.deepEqual(rowKinds(mixedFormatRows), ["conv:agent", "batch:mixed-format", "conv:event"]);
+
+  const snapshotRows = mergeFeed([
+    { kind: "user", id: "latest-question", text: "latest question", paths: [], at: "2026-07-27T14:33:35.116Z" },
+    {
+      kind: "agent",
+      id: "lead-latest",
+      label: "lead",
+      markdown: "",
+      segments: [],
+      at: "2026-07-27T14:33:35.116Z",
+      endedAt: "2026-07-27T14:36:46.073Z",
+    },
+  ], [
+    batch("16:35", "2026-07-27T08:35:30.352Z"),
+    batch("17:00", "2026-07-27T09:00:20.000Z"),
+  ], teamFeedOptions());
+  assert.deepEqual(rowKinds(snapshotRows), ["batch:16:35", "batch:17:00", "conv:user", "conv:agent"]);
+
+  const invalidTimeRows = mergeFeed([
+    { kind: "event", id: "known", text: "known", at: "2026-07-27T10:00:00.000Z" },
+    { kind: "event", id: "bad", text: "bad", at: "not-a-time" },
+    { kind: "user", id: "untimed", text: "untimed", paths: [] },
+  ], [
+    batch("known", "2026-07-27T09:59:00.000Z"),
+    batch("invalid-a", "not-a-time"),
+    batch("invalid-b", ""),
+  ], teamFeedOptions());
+  assert.deepEqual(rowKinds(invalidTimeRows), [
+    "batch:known",
+    "conv:event",
+    "conv:event",
+    "conv:user",
+    "batch:invalid-a",
+    "batch:invalid-b",
+  ]);
+
+  assert.deepEqual(leadTurns([
+    {
+      kind: "agent",
+      id: "lead-valid",
+      label: "lead",
+      markdown: "",
+      segments: [],
+      at: "2026-07-27 16:35:00+08:00",
+      endedAt: "2026-07-27T08:35:42.000Z",
+    },
+    {
+      kind: "agent",
+      id: "lead-invalid",
+      label: "lead",
+      markdown: "",
+      segments: [],
+      at: "invalid",
+      endedAt: "2026-07-27T09:00:00.000Z",
+    },
+  ]), [{ from: timeMs("2026-07-27T08:35:00.000Z"), to: timeMs("2026-07-27T08:35:42.000Z") }]);
   console.log("数据层回归验证通过");
 } finally {
   globalThis.fetch = originalFetch;

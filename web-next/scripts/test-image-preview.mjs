@@ -36,32 +36,29 @@ try {
   const address = server.httpServer?.address();
   assert(address && typeof address === "object", "Vite test server did not expose a port");
 
-  browser = await chromium.launch({
-    executablePath: await executablePath(),
-    headless: true,
-  });
+  browser = await chromium.launch({ executablePath: await executablePath(), headless: true });
   const page = await browser.newPage();
   await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/image-preview.html`);
 
   const thumbnails = page.locator("main img[role=button]");
   await thumbnails.first().waitFor();
-  assert.equal(await thumbnails.count(), 2, "Markdown should render two previewable images");
+  assert.equal(await thumbnails.count(), 2, "ImagePreviewGroup should register two previewable images");
 
   await thumbnails.first().click();
   const dialog = page.getByRole("dialog", { name: /图片预览/ });
   await dialog.waitFor();
-  assert.equal(await page.getByText("1/2", { exact: true }).count(), 1, "opening the first image should show 1/2");
+  assert.equal(await page.getByText("1 / 2", { exact: true }).count(), 1, "opening the first image should show 1 / 2");
   assert.match(await dialog.locator("img").getAttribute("src"), /image-preview-one\.png$/);
 
   await page.getByRole("button", { name: "下一张图片" }).click();
-  assert.equal(await page.getByText("2/2", { exact: true }).count(), 1, "next button should show 2/2");
+  assert.equal(await page.getByText("2 / 2", { exact: true }).count(), 1, "next button should show 2 / 2");
   assert.match(await dialog.locator("img").getAttribute("src"), /image-preview-two\.png$/);
 
   await page.keyboard.press("ArrowLeft");
-  assert.equal(await page.getByText("1/2", { exact: true }).count(), 1, "ArrowLeft should return to 1/2");
+  assert.equal(await page.getByText("1 / 2", { exact: true }).count(), 1, "ArrowLeft should return to 1 / 2");
   assert.match(await dialog.locator("img").getAttribute("src"), /image-preview-one\.png$/);
 
-  console.log("markdown image preview group test passed");
+  console.log("image preview group test passed");
 } finally {
   await browser?.close();
   await server.close();

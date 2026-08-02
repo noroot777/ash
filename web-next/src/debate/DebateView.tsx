@@ -17,7 +17,6 @@ import {
 } from "@phosphor-icons/react";
 import { ConversationScrollControls } from "../components/ConversationScrollControls.tsx";
 import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
-import { LegacyLink } from "../components/LegacyLink.tsx";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
 import { ScheduleControl } from "../components/ScheduleControl.tsx";
 import { OriginTaskBar } from "../components/TaskOrigin.tsx";
@@ -291,7 +290,6 @@ export function DebateView({
           {display.label}
         </span>
         <TaskTimeMeta task={task} />
-        <LegacyLink projectId={task.projectId} taskId={task.id} compact />
         <button type="button" className={action.kind === "stop" ? "is-stop" : "is-primary"} data-workspace-run-action={action.kind === "run" || action.kind === "retry" ? action.kind : undefined} disabled={busy || !action.kind || task.archived} onClick={() => action.kind && void perform(action.kind)}>{busy ? <SpinnerGap size={13} className="is-spinning" /> : action.kind === "stop" ? <Stop size={12} weight="fill" /> : <Play size={12} weight="fill" />}{action.label}</button>
         {!task.archived && canArchive(task.status) && <button type="button" title="归档辩论" onClick={() => void archive()}><Archive size={13} /></button>}
         {task.archived && <button type="button" onClick={() => void archive()}>取消归档</button>}

@@ -9,7 +9,7 @@
 ```
 shared/   前后端共享类型
 server/   Hono 后端：API + SSE + 编排单例 + 托管前端
-web/      React + Vite + Tailwind 前端
+web-next/ React + Vite + Tailwind 前端
 ```
 
 ## 开发
@@ -24,7 +24,7 @@ npm run dev      # 后端 :4317 + Vite :5173（代理 /api 到后端）
 ## 构建 + 运行（生产 / 自托管常驻）
 
 ```bash
-npm run build    # 构建 shared + web + server
+npm run build    # 构建 shared + web-next + server + mcp
 npm start        # 后端在 :4317 同时托管前端 dist 与 API
 ```
 

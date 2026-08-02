@@ -128,7 +128,7 @@ export function DebateHandoffModal({
           ? "常驻能力检测失败；调度者候选仅保留系统已知支持的已注册类型。"
           : null;
   const canConfirm = !busy && !noExecutor && !roleBlocked;
-  const confirm = async () => { if (canConfirm && await onConfirm(choice)) onClose(); };
+  const submitHandoff = async () => { if (canConfirm && await onConfirm(choice)) onClose(); };
   return (
     <div className="debate-handoff-scrim" onMouseDown={(event) => event.target === event.currentTarget && !busy && onClose()}>
       <section className="debate-handoff-modal" role="dialog" aria-modal="true" aria-labelledby="debate-handoff-title">
@@ -139,7 +139,7 @@ export function DebateHandoffModal({
         </div>
         {availabilityMessage && <p className="debate-handoff-warning"><Warning size={13} />{availabilityMessage}</p>}
         <label className="debate-handoff-note"><span>可选附言</span><textarea rows={4} value={note} placeholder="补充执行重点、边界或验收要求…" onChange={(event) => setNote(event.target.value)} /></label>
-        <footer><button type="button" disabled={busy} onClick={onClose}>取消</button><button type="button" className="is-primary" disabled={!canConfirm} onClick={() => void confirm()}>{busy ? "创建中…" : "创建并开干"}</button></footer>
+        <footer><button type="button" disabled={busy} onClick={onClose}>取消</button><button type="button" className="is-primary" disabled={!canConfirm} onClick={() => void submitHandoff()}>{busy ? "创建中…" : "创建并开干"}</button></footer>
       </section>
     </div>
   );

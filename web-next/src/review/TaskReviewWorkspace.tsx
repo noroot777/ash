@@ -8,7 +8,6 @@ import {
   SpinnerGap,
   X,
 } from "@phosphor-icons/react";
-import { LegacyLink } from "../components/LegacyLink.tsx";
 import { api, type TaskCommit, type TaskDiffResult } from "../lib/api.ts";
 import { MessageAttachments } from "../task-detail/Attachments.tsx";
 import { AcceptanceControls } from "../team/TeamReviewWorkspace.tsx";
@@ -113,7 +112,6 @@ export function TaskReviewWorkspace({
     <section className="single-review-workspace">
       <header className="single-review-subbar">
         <div><b>{sharedParent ? "共享执行者审查" : "改动与提交"}</b><small>{sharedParent ? "该执行者随父团队共享分支统一验收" : "配合右侧审查记录，核对任务分支相对基线的提交与 diff"}</small></div>
-        <LegacyLink projectId={task.projectId} taskId={task.id} view="review" />
         <button type="button" onClick={onClose}><X size={13} />返回对话</button>
       </header>
       <div className="single-review-scroll">

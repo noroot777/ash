@@ -339,40 +339,6 @@
   background: #22a06b;
 }
 
-.workspace-legacy-link {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  border-radius: 6px;
-  padding: 4px 6px;
-  color: var(--faint);
-  font-size: 10.5px;
-}
-
-.workspace-legacy-link:hover {
-  background: var(--raised);
-  color: var(--ink);
-}
-
-.workspace-legacy-link--compact {
-  display: grid;
-  width: 28px;
-  height: 28px;
-  place-items: center;
-  padding: 0;
-}
-
-.workspace-floating-escape {
-  position: fixed;
-  z-index: 200;
-  right: 14px;
-  bottom: 14px;
-  border: 1px solid var(--line2);
-  border-radius: 8px;
-  background: var(--panel);
-  box-shadow: var(--menu-shadow);
-}
-
 .workspace-sidebar-bottom > button {
   display: flex;
   align-items: center;

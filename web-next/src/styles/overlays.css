@@ -616,12 +616,6 @@
   gap: 8px;
 }
 
-/* floating-escape.css is loaded later and reserves 104px on overlay footers.
-   Notes sits above that global escape, so its controls can use the real edge. */
-.notes-scrim .notes-panel > footer {
-  padding-right: 12px;
-}
-
 .notes-panel > footer .task-reply-icon {
   display: grid;
   width: 28px;

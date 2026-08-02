@@ -112,7 +112,7 @@ export function TaskHeader({
       await navigator.clipboard.writeText(text);
       notify(message);
     } catch {
-      notify("复制失败，请用旧版打开后重试");
+      notify("复制失败，请检查浏览器剪贴板权限后重试");
     }
     setMenu(false);
   };

@@ -54,7 +54,7 @@ export function ReplyBox({
   const disabled = task.mode !== "single" || task.archived || task.status === "running" || task.status === "queued" || !hasConversation;
   const inputDisabled = disabled && !command;
   const reason = task.mode !== "single"
-    ? "团队与辩论的复杂插话暂请用旧版处理"
+    ? "请在对应的团队或辩论页面继续操作"
     : task.archived
       ? command ? "任务已归档；仍可输入 /team 或 /debate 创建派生任务…" : "任务已归档，无法继续回复"
       : task.status === "running" || task.status === "queued"

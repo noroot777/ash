@@ -10,7 +10,6 @@ import {
   SlidersHorizontal,
   Stack,
 } from "@phosphor-icons/react";
-import { LegacyLink } from "../components/LegacyLink.tsx";
 import { ArchiveSettings } from "./ArchiveSettings.tsx";
 import { DefaultsSettings } from "./DefaultsSettings.tsx";
 import { ExecutorsSettings } from "./ExecutorsSettings.tsx";
@@ -54,12 +53,6 @@ export function parseSettingsSection(value: string | null): SettingsSection | nu
     || value === "defaults"
     ? value as SettingsSection
     : null;
-}
-
-function legacySettingsSection(section: SettingsSection) {
-  return PROJECT_SECTIONS.includes(section)
-    ? section as "project" | "groups" | "archive"
-    : "agents";
 }
 
 function SettingsNavItems({
@@ -130,14 +123,6 @@ export function SettingsPage({
             <SettingsNavItems items={SYSTEM_NAV} section={section} onSection={onSection} />
           </div>
         </nav>
-        <div className="settings-sidebar-foot">
-          <LegacyLink
-            projectId={project?.id ?? null}
-            taskId={null}
-            view="settings"
-            settings={legacySettingsSection(section)}
-          />
-        </div>
       </aside>
 
       <main className="settings-main">

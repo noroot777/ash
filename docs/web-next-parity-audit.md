@@ -1,5 +1,7 @@
 # web-next 新旧版功能对齐审计
 
+> 历史迁移审计：旧 SPA 已于 2026-08-02 退役，文中的 `web/src` 路径仅用于定位 Git 历史。
+
 审计日期：2026-07-31
 
 总体进度：**25 / 25（100%）已修复**。
@@ -42,7 +44,7 @@
 
 - 旧版位置：`web/src/composer/modes.tsx:14-21` 定义四种启动方式；`web/src/composer/ComposerFooter.tsx:38-82` 展示时间/Cron 字段；`web/src/TaskComposer.tsx:358-362` 创建后写入 schedule。
 - 新版现状：**缺失**。`web-next/src/composer/TaskComposerPanel.tsx:414-425` 只有“仅创建 / 创建并运行”。
-- 历史判断：旧版 `f8b22ac` 已实现；`4feb578` 的 web-next composer 没有迁入，`docs/web-next-gaps.md` 也曾明确列为存量。
+- 历史判断：旧版 `f8b22ac` 已实现；`4feb578` 的 web-next composer 没有迁入，Git 历史中的 `docs/web-next-gaps.md` 也曾明确列为存量。
 - 修复入手点：在 composer footer 引入 launch mode；创建成功后按 `run / once / cron / create` 分流，定时模式不得先调用 `runTask`。
 - 修复结果：Composer footer 新增“创建并运行 / 仅创建 / 一次性定时 / 循环 Cron”四档启动方式和对应字段，Cmd/Ctrl+Enter 服从当前选择；创建完成后严格分流，`once`/`cron` 只调用 `setSchedule`，不会先启动任务。
 
@@ -74,7 +76,7 @@
 
 - 旧版位置：`web/src/ReviewWorkspace.tsx:582-650` 展示全部文件、截断提示和逐文件文本 diff。
 - 新版现状：**半残**。`web-next/src/team/TeamReviewWorkspace.tsx:153-175` 只列前 6 个提交和前 8 个文件，明确提示回旧版；没有逐行 diff。单任务 `TaskReviewWorkspace` 已有完整 diff 组件，说明不是数据层限制。
-- 历史判断：`988390b` 迁入团队验收时只做摘要，之后未补齐；旧的 `docs/web-next-gaps.md` 也已记录。
+- 历史判断：`988390b` 迁入团队验收时只做摘要，之后未补齐；Git 历史中的 `docs/web-next-gaps.md` 也曾记录。
 - 修复入手点：复用/抽取 `web-next/src/review/TaskReviewWorkspace.tsx:29-238` 的文件 rail、分段解析和渐进加载，在团队每个 `ReviewRecord` 中展示完整 diff。
 - 修复结果：文件 rail、逐行 diff、截断提示与渐进加载已抽为共享组件；团队每条验收记录现在展示全部提交和完整文件清单，可逐文件查看带行号的文本 diff，不再要求回旧版。
 

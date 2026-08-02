@@ -5,7 +5,6 @@ import { CLI_MODEL_PRESETS, REASONING_EFFORT_VALUES } from "@harness/shared/cli-
 import { sameExecutor } from "@harness/shared/executors";
 import { ArrowSquareOut, CaretRight, ListNumbers } from "@phosphor-icons/react";
 import { api } from "../lib/api.ts";
-import { LegacyLink } from "../components/LegacyLink.tsx";
 import { ScheduleControl } from "../components/ScheduleControl.tsx";
 import { TaskLabelsEditor } from "../components/TaskLabelsEditor.tsx";
 import { taskParentLink } from "../components/TaskOrigin.tsx";
@@ -341,7 +340,7 @@ export function TaskInspector({
           {latestSession?.resumeCommand && (
             <button className="task-inspector-action" type="button" onClick={async () => {
               try { await navigator.clipboard.writeText(latestSession.resumeCommand!); notify("已复制 resume 命令"); }
-              catch { notify("复制失败，请用旧版打开"); }
+              catch { notify("复制失败，请检查浏览器剪贴板权限后重试"); }
             }}>
               <span>复制 resume 命令</span><span>复制</span>
             </button>
@@ -380,7 +379,6 @@ export function TaskInspector({
             editable={task.parentId === null && task.status === "paused" && !task.question}
             onSave={saveResumePrompt}
           />
-          <LegacyLink projectId={task.projectId} taskId={task.id} />
         </section>
       </div>
       {queueOpen && task.queueId && (

@@ -216,14 +216,11 @@ app.get("/review/*", async (c) => {
   });
 });
 
-// Serve both built SPAs in production. Paths are resolved relative to this module
-// (works regardless of cwd). The legacy Vite build uses base=/legacy/, while the
-// new UI owns /. API/review/mobile routes above remain higher-priority than the
-// final new-UI catch-all below.
-const LEGACY_DIST = fileURLToPath(new URL("../../web/dist", import.meta.url));
-const NEXT_DIST = fileURLToPath(new URL("../../web-next/dist", import.meta.url));
-const hasLegacyBuild = existsSync(join(LEGACY_DIST, "index.html"));
-const hasNextBuild = existsSync(join(NEXT_DIST, "index.html"));
+// Serve the built SPA in production. The path is resolved relative to this module
+// (works regardless of cwd). API/review/mobile routes above remain higher-priority
+// than the final web catch-all below.
+const WEB_DIST = fileURLToPath(new URL("../../web-next/dist", import.meta.url));
+const hasWebBuild = existsSync(join(WEB_DIST, "index.html"));
 
 const MIME: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
@@ -248,7 +245,7 @@ const MIME: Record<string, string> = {
 // 点着看手机 app,不用开真机。同源 → 预览里的 app 直接连本机 :4317 拿数据(mobile
 // config.ts 在 web 下默认用 location.origin)。app.json experiments.baseUrl="/mobile/app"
 // 让导出资源路径落在这个子前缀下。改了 mobile 代码要重新 build:mobile 再刷新。
-// 必须注册在下方 web/dist 的 "/*" catch-all 之前,否则被 SPA 兜底截走。
+// 必须注册在下方 web-next/dist 的 "/*" catch-all 之前,否则被 SPA 兜底截走。
 const MOBILE_DIST = fileURLToPath(new URL("../../mobile/dist", import.meta.url));
 const hasMobile = existsSync(join(MOBILE_DIST, "index.html"));
 const mobileMiss = "手机预览还没构建 —— 在仓库根跑 `npm run build:mobile` 生成 mobile/dist 后刷新。";
@@ -332,21 +329,11 @@ app.get("/mobile/app/*", async (c) => {
   });
 });
 
-const legacyMiss = "Legacy web build not found — run `npm -w web run build`.";
-app.get("/legacy", (c) =>
-  hasLegacyBuild ? serveSpa(c, LEGACY_DIST, "") : c.text(legacyMiss, 503),
-);
-app.get("/legacy/*", (c) => {
-  if (!hasLegacyBuild) return c.text(legacyMiss, 503);
-  const rel = decodeURIComponent(new URL(c.req.url).pathname).replace(/^\/legacy\/?/, "");
-  return serveSpa(c, LEGACY_DIST, rel);
-});
-
-const nextMiss = "Harness Next build not found — run `npm -w web-next run build`.";
+const webMiss = "Harness web build not found — run `npm -w web-next run build`.";
 app.get("/*", (c) => {
-  if (!hasNextBuild) return c.text(nextMiss, 503);
+  if (!hasWebBuild) return c.text(webMiss, 503);
   const rel = decodeURIComponent(new URL(c.req.url).pathname).replace(/^\/+/, "");
-  return serveSpa(c, NEXT_DIST, rel);
+  return serveSpa(c, WEB_DIST, rel);
 });
 
 // Bind the port before starting the scheduler. A process that cannot accept

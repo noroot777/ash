@@ -102,7 +102,7 @@ Project(边界 = 一个 git 仓库)
 
 ## 4. 技术栈
 
-单后端进程(Hono)托管前端 SPA + API + SSE + orchestrator/scheduler/子进程单例;SQLite(libsql)+ Drizzle(长文本产物存文件、表存路径);React/Vite/Tailwind;SSE 推流、POST 发指令。单仓 monorepo(`server/`+`web/`+`shared/`+`mobile/`+`mcp/`)。真·多端:web(SSE)+ mobile(Expo,轮询)+ 对外 MCP(自身可被别的 agent 驱动)。本地自托管常驻,不上 serverless。
+单后端进程(Hono)托管前端 SPA + API + SSE + orchestrator/scheduler/子进程单例;SQLite(libsql)+ Drizzle(长文本产物存文件、表存路径);React/Vite/Tailwind;SSE 推流、POST 发指令。单仓 monorepo(`server/`+`web-next/`+`shared/`+`mobile/`+`mcp/`)。真·多端:web(SSE)+ mobile(Expo,轮询)+ 对外 MCP(自身可被别的 agent 驱动)。本地自托管常驻,不上 serverless。
 
 ---
 

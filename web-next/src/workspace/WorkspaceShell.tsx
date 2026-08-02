@@ -16,7 +16,6 @@ import { CommandPalette } from "../overlays/CommandPalette.tsx";
 import { NotesPanel } from "../overlays/NotesPanel.tsx";
 import { GroupsPanel } from "../overlays/GroupsPanel.tsx";
 import { TaskComposerPanel, type ComposerDraft } from "../composer/TaskComposerPanel.tsx";
-import { LegacyLink } from "../components/LegacyLink.tsx";
 import { DeleteTaskDialog } from "../task-detail/DeleteTaskDialog.tsx";
 import { CreateGroupDialog, CreateProjectDialog } from "../overlays/CreateEntityDialog.tsx";
 import { orderedTopLevelTasks } from "./taskTreeModel.ts";
@@ -198,7 +197,6 @@ export function WorkspaceShell() {
     {deleteTarget && <DeleteTaskDialog task={deleteTarget} onClose={() => setDeleteTarget(null)} onDeleted={() => { deleteTask(deleteTarget.id); setDeleteTarget(null); }} notify={notify} />}
     {createDialog === "project" && <CreateProjectDialog onClose={() => setCreateDialog(null)} onCreate={async (name, repoPath) => { try { const created = await api.createProject(name, repoPath); setProjects((current) => [...current, created]); setProjectId(created.id); setTaskId(null); setSettingsSection(null); setCreateDialog(null); notify("项目已创建"); } catch (error) { notify(error instanceof Error ? error.message : "项目创建失败"); } }} />}
     {createDialog === "group" && currentProject && <CreateGroupDialog onClose={() => setCreateDialog(null)} onCreate={async (name, mode) => { try { const created = await api.createGroup({ projectId: currentProject.id, name, mode }); setGroups((current) => [...current, created]); setCreateDialog(null); notify("分组已创建"); } catch (error) { notify(error instanceof Error ? error.message : "分组创建失败"); } }} />}
-    {(notes || composer || paletteOpen) && <div className="workspace-floating-escape"><LegacyLink projectId={projectId} taskId={taskId} view={notes ? "notes" : composer ? "create" : "palette"} noteId={notes?.noteId} mode={composer?.mode} /></div>}
     <div className={`workspace-toast${toast ? " is-visible" : ""}`} role="status" aria-live="polite">{toast}</div>
   </>;
   if (settingsSection) return <><SettingsPage

@@ -1,5 +1,5 @@
-// 前端约定的 grep 闸，挂在 web build 前置（`npm -w web run build`）。
-// 挂这里而不是 pre-commit：这两条要在「前端代码上线前」拦住，而 server 从磁盘读 web/dist，
+// 前端约定的 grep 闸，挂在 web-next build 前置（`npm -w web-next run build`）。
+// 挂这里而不是 pre-commit：这两条要在「前端代码上线前」拦住，而 server 从磁盘读 web-next/dist，
 // 不 build 就不生效——build 是前端改动上线的唯一通道，等价于每次前端上线都跑一遍。
 // （根文件体积闸走的是另一个通道 .githooks/pre-commit：两条规则的触发时机不同，不捆一起。）
 import { readdirSync, statSync, readFileSync } from "node:fs";
@@ -8,11 +8,11 @@ import { join, dirname, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const SRC = join(ROOT, "web/src");
+const SRC = join(ROOT, "web-next/src");
 
 // 原生 title 的存量。CLAUDE.md 的约定是「改到它时顺手迁移，不必专门做一轮」，
 // 所以这条是棘轮：存量不拦、新增才拦。顺手迁移几个之后把这个数字调低即可。
-const NATIVE_TITLE_BASELINE = 125;
+const NATIVE_TITLE_BASELINE = 61;
 
 // 行尾写 `// allow-native` 可豁免该行（误报时用，别拿来绕规则）。
 const EXEMPT = /\/\/\s*allow-native/;
@@ -50,7 +50,7 @@ for (const file of files) {
   const lines = raw.split("\n");
   const lineAt = (idx) => src.slice(0, idx).split("\n").length;
 
-  // 规则一：禁原生弹窗。确认对话框用 ConfirmModal、其它弹层用 Modal、报错提示用 toast。
+  // 规则一：禁原生弹窗。确认动作和提示必须使用应用内组件。
   for (const re of [/\bwindow\.(confirm|alert|prompt)\s*\(/g, /(?<![\w.])(confirm|alert|prompt)\s*\(/g]) {
     let m;
     while ((m = re.exec(src))) {
@@ -60,7 +60,7 @@ for (const file of files) {
     }
   }
 
-  // 规则二：原生 title 属性（用 Tip 代替）。只数小写开头的 HTML 标签上的，
+  // 规则二：原生 title 属性（用可见文本或应用内提示代替）。只数小写开头的 HTML 标签上的，
   // `<Modal title=...>` 这类组件 prop 不算。
   const re = /\btitle=/g;
   let m;
@@ -116,13 +116,13 @@ if (dialogHits.length) {
   failed = true;
   console.error(`\n✗ 用了浏览器原生弹窗（${dialogHits.length} 处）：`);
   for (const h of dialogHits) console.error("   " + h);
-  console.error("   确认对话框用 ConfirmModal、其它弹层用 Modal（web/src/Modal.tsx），报错/提示用 toast（web/src/toast.tsx）。");
+  console.error("   确认对话框复用 web-next/src/task-detail/ConfirmDialog.tsx，其它弹层和提示沿用现有应用内组件。");
   console.error("   原生弹窗样式不一致、阻塞、且无法做成应用风格。\n");
 }
 
 if (nativeTitle > NATIVE_TITLE_BASELINE) {
   failed = true;
-  console.error(`\n✗ 原生 title 属性从 ${NATIVE_TITLE_BASELINE} 涨到了 ${nativeTitle} 处，新增的请改用 Tip（web/src/Tip.tsx）：`);
+  console.error(`\n✗ 原生 title 属性从 ${NATIVE_TITLE_BASELINE} 涨到了 ${nativeTitle} 处，新增的请改用可见文本或应用内提示组件：`);
   for (const h of titleHits.slice(-(nativeTitle - NATIVE_TITLE_BASELINE) * 3)) console.error("   " + h);
   console.error("   任务列表这类每秒重渲染的界面会不断打断原生 tooltip 的悬停计时器，气泡永远弹不出来。\n");
 } else if (nativeTitle < NATIVE_TITLE_BASELINE) {
