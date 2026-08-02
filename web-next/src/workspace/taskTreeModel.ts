@@ -14,13 +14,9 @@ type TaskSection = {
   groups: readonly TaskGroup[];
 };
 
-export type TaskTreeGroup = TaskGroup & {
-  collapseKey: string;
-  tasks: Task[];
-};
 export type TaskTreeSection = Omit<TaskSection, "groups"> & {
   count: number;
-  groups: TaskTreeGroup[];
+  tasks: Task[];
 };
 
 const PRIORITY_ORDER: Task["priority"][] = ["urgent", "high", "medium", "low", "none"];
@@ -95,22 +91,16 @@ export function buildTaskTree(tasks: Task[]): TaskTreeSection[] {
   const topLevel = tasks.filter((task) => task.parentId === null && !task.archived);
   return TASK_SECTIONS.map((section) => {
     const sectionTasks = topLevel.filter(section.matches);
-    const groups = section.groups
-      .map((group) => ({
-        ...group,
-        collapseKey: `${section.key}:${group.key}`,
-        tasks: sortTasks(
-          sectionTasks.filter(
-            (task) => group.matches(task) && (group.pinned || task.pinnedAt == null),
-          ),
-          !!group.pinned,
-        ),
-      }))
-      .filter((group) => group.tasks.length > 0);
-    return { ...section, count: sectionTasks.length, groups };
+    const ordered = section.groups.flatMap((group) => sortTasks(
+      sectionTasks.filter(
+        (task) => group.matches(task) && (group.pinned || task.pinnedAt == null),
+      ),
+      !!group.pinned,
+    ));
+    return { key: section.key, label: section.label, matches: section.matches, count: sectionTasks.length, tasks: ordered };
   }).filter((section) => section.count > 0);
 }
 
 export function orderedTopLevelTasks(tasks: Task[]): Task[] {
-  return buildTaskTree(tasks).flatMap((section) => section.groups.flatMap((group) => group.tasks));
+  return buildTaskTree(tasks).flatMap((section) => section.tasks);
 }
