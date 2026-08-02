@@ -167,6 +167,10 @@
   background: transparent;
 }
 
+.workspace-status-dot-icon {
+  display: none;
+}
+
 .workspace-status-dot--active {
   background: var(--green);
 }
@@ -187,6 +191,26 @@
   background: var(--muted);
   animation: task-status-dot-pulse 1.35s ease-in-out infinite;
   will-change: opacity, transform;
+}
+
+.workspace-shell--next2 .workspace-status-dot--pending {
+  width: 10px;
+  height: 10px;
+  flex-basis: 10px;
+  border: 0;
+  color: var(--muted);
+}
+
+.workspace-shell--next2 .workspace-status-dot--pending.workspace-status-dot--small {
+  width: 7px;
+  height: 7px;
+  flex-basis: 7px;
+}
+
+.workspace-shell--next2 .workspace-status-dot--pending .workspace-status-dot-icon {
+  display: block;
+  width: 100%;
+  height: 100%;
 }
 
 .workspace-shell--next2 .workspace-status-dot--success {
