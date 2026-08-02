@@ -26,6 +26,7 @@ import {
 } from "./WorkspaceResizeHandle.tsx";
 
 type ContextView = "review" | "settings" | "palette" | "notes" | "create";
+type WorkspaceVariant = "next" | "next2";
 
 function readUrlSelection() {
   const params = new URLSearchParams(window.location.search);
@@ -37,7 +38,7 @@ function readUrlSelection() {
   return { projectId: params.get("project"), taskId: params.get("task"), settings, view, noteId: params.get("note"), mode };
 }
 
-export function WorkspaceShell() {
+export function WorkspaceShell({ variant = "next" }: { variant?: WorkspaceVariant }) {
   const initial = readUrlSelection();
   const [projects, setProjects] = useState<ProjectView[]>([]);
   const [projectsReady, setProjectsReady] = useState(false);
@@ -214,7 +215,7 @@ export function WorkspaceShell() {
   />{overlays}</>;
 
   return (
-    <><div className="workspace-shell" style={{ "--workspace-sidebar-width": `${sidebarWidth}px` } as CSSProperties}>
+    <><div className={`workspace-shell workspace-shell--${variant}`} data-ui-variant={variant} style={{ "--workspace-sidebar-width": `${sidebarWidth}px` } as CSSProperties}>
       <WorkspaceSidebar projects={projects} currentProject={currentProject} tasks={tasks} selectedTaskId={taskId} connected={connected} collapsed={collapsed} width={sidebarWidth} onWidthChange={setSidebarWidth} onProject={selectProject} onTask={selectTask} onToggleCollapsed={() => setCollapsed((value) => !value)} onSearch={() => setPaletteOpen(true)} onNotes={() => openNotes()} onGroups={() => setGroupsPanelOpen(true)} onCreate={() => openComposer("single")} onNewProject={() => setCreateDialog("project")} onSettings={() => openSettings("executors")} />
       <main className="workspace-main">
         {loadError && <div className="workspace-load-error">{loadError.message}</div>}

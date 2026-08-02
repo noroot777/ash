@@ -638,7 +638,6 @@
 
 @media (prefers-reduced-motion: reduce) {
   .workspace-sidebar,
-  .workspace-task-group-title svg,
   .workspace-team-caret svg,
   .workspace-other-project-head svg,
   .workspace-toast {

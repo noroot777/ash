@@ -13,16 +13,37 @@ function upsert(tasks: Task[], task: Task, projectId?: string): Task[] {
 }
 
 type TaskStatusEvent = Extract<ServerEvent, { type: "task.status" }>;
+type TaskMetadataEvent = Extract<ServerEvent, {
+  type: "task.stage" | "task.title" | "task.question";
+}>;
 
 export function applyTaskStatusEvent(task: Task, event: TaskStatusEvent): Task {
   if (task.id !== event.taskId) return task;
   return {
     ...task,
     status: event.status,
+    updatedAt: event.updatedAt,
     startedAt: event.startedAt !== undefined ? event.startedAt : task.startedAt,
     endedAt: event.endedAt !== undefined ? event.endedAt : task.endedAt,
     activeMs: event.activeMs !== undefined ? event.activeMs : task.activeMs,
     liveSince: event.liveSince !== undefined ? event.liveSince : task.liveSince,
+  };
+}
+
+export function applyTaskMetadataEvent(task: Task, event: TaskMetadataEvent): Task {
+  if (task.id !== event.taskId) return task;
+  if (event.type === "task.stage") {
+    return { ...task, stage: event.stage, updatedAt: event.updatedAt };
+  }
+  if (event.type === "task.title") {
+    return { ...task, title: event.title, updatedAt: event.updatedAt };
+  }
+  return {
+    ...task,
+    updatedAt: event.updatedAt,
+    question: event.question,
+    questionOptions: event.questionOptions,
+    questionItems: event.questionItems,
   };
 }
 
@@ -62,25 +83,8 @@ export function useTasks(projectId?: string) {
         }
         return;
       }
-      if (event.type === "task.stage") {
-        setTasks((current) => current.map((task) =>
-          task.id === event.taskId ? { ...task, stage: event.stage } : task));
-        return;
-      }
-      if (event.type === "task.title") {
-        setTasks((current) => current.map((task) =>
-          task.id === event.taskId ? { ...task, title: event.title } : task));
-        return;
-      }
-      if (event.type === "task.question") {
-        setTasks((current) => current.map((task) => task.id === event.taskId
-          ? {
-              ...task,
-              question: event.question,
-              questionOptions: event.questionOptions,
-              questionItems: event.questionItems,
-            }
-          : task));
+      if (event.type === "task.stage" || event.type === "task.title" || event.type === "task.question") {
+        setTasks((current) => current.map((task) => applyTaskMetadataEvent(task, event)));
       }
     }, [projectId]),
   );

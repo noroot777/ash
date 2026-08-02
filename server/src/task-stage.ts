@@ -14,7 +14,7 @@ export async function setTaskStage(
 ): Promise<{ updatedAt: string; timelineRecorded: boolean }> {
   const updatedAt = now();
   await db.update(tasks).set({ stage, updatedAt }).where(eq(tasks.id, taskId));
-  bus.publish({ type: "task.stage", taskId, stage });
+  bus.publish({ type: "task.stage", taskId, stage, updatedAt });
   const timelineRecorded = await appendTaskTimeline(taskId, `验收阶段更新：${STAGE_LABELS[stage]}（${stage}）`);
   return { updatedAt, timelineRecorded };
 }
@@ -28,8 +28,9 @@ export async function setTaskStage(
 export async function reopenAcceptedStage(taskId: string): Promise<boolean> {
   const t = (await db.select({ stage: tasks.stage }).from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!t || t.stage !== "accepted") return false;
-  await db.update(tasks).set({ stage: null, updatedAt: now() }).where(eq(tasks.id, taskId));
-  bus.publish({ type: "task.stage", taskId, stage: null });
+  const updatedAt = now();
+  await db.update(tasks).set({ stage: null, updatedAt }).where(eq(tasks.id, taskId));
+  bus.publish({ type: "task.stage", taskId, stage: null, updatedAt });
   await appendTaskTimeline(taskId, "任务又被唤醒，验收阶段清回进行中（完成后重新验收即可再次翻篇）");
   return true;
 }

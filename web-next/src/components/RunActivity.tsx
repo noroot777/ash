@@ -1,22 +1,21 @@
-import type { ReactNode } from "react";
 import type { TaskMode, TaskStatus } from "@harness/shared";
-import { runActivityCopy } from "../lib/runActivity.ts";
+import { runActivityCopy, type RunActivityPhase } from "@harness/shared/run-activity";
 
 export function RunActivity({
   status,
   mode,
+  phase,
   executor,
   queuePosition,
-  idle,
 }: {
   status: TaskStatus;
   mode: TaskMode;
+  phase: RunActivityPhase;
   executor?: string | null;
   queuePosition?: number | null;
-  idle?: ReactNode;
 }) {
-  const copy = runActivityCopy({ status, mode, executor, queuePosition });
-  if (!copy) return idle ?? null;
+  const copy = runActivityCopy({ status, mode, phase, executor, queuePosition });
+  if (!copy) return null;
   return (
     <div className="run-activity" role="status" aria-live="polite">
       <span className="run-activity-signal" aria-hidden="true"><i /><i /><i /></span>

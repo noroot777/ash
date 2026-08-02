@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { mergeFeed, timeMs } from "@harness/shared/team";
 import { ApiError, api } from "../src/lib/api.ts";
-import { deriveTaskStatusIndicator, readEventForTask } from "../src/lib/useTaskReadState.ts";
-import { applyTaskStatusEvent } from "../src/lib/useTasks.ts";
+import { deriveTaskStatusIndicator, readEventForTask, readTaskIds } from "../src/lib/useTaskReadState.ts";
+import { applyTaskMetadataEvent, applyTaskStatusEvent } from "../src/lib/useTasks.ts";
 import { buildConversationItems, conversationToMarkdown } from "../src/task-detail/conversationModel.ts";
 import { taskDurationInfo } from "../src/task-detail/utils.ts";
 import { stickStateAfterScroll } from "../src/lib/useStickToBottom.ts";
@@ -48,11 +48,13 @@ try {
     endedAt: "2026-07-30T01:10:00.000Z",
     activeMs: 600000,
     liveSince: "2026-07-30T01:00:00.000Z",
+    updatedAt: "2026-07-30T01:10:00.000Z",
   };
   const updated = applyTaskStatusEvent(task, {
     type: "task.status",
     taskId: "task-1",
     status: "running",
+    updatedAt: "2026-07-30T01:11:00.000Z",
     endedAt: null,
     liveSince: null,
   });
@@ -61,6 +63,27 @@ try {
   assert.equal(updated.activeMs, task.activeMs);
   assert.equal(updated.endedAt, null);
   assert.equal(updated.liveSince, null);
+  assert.equal(updated.updatedAt, "2026-07-30T01:11:00.000Z");
+  assert.equal(applyTaskMetadataEvent(task, {
+    type: "task.stage",
+    taskId: task.id,
+    stage: "awaiting_acceptance",
+    updatedAt: "2026-07-30T01:12:00.000Z",
+  }).updatedAt, "2026-07-30T01:12:00.000Z");
+  assert.equal(applyTaskMetadataEvent(task, {
+    type: "task.title",
+    taskId: task.id,
+    title: "新标题",
+    updatedAt: "2026-07-30T01:13:00.000Z",
+  }).updatedAt, "2026-07-30T01:13:00.000Z");
+  assert.equal(applyTaskMetadataEvent(task, {
+    type: "task.question",
+    taskId: task.id,
+    question: "需要确认吗？",
+    questionOptions: ["确认"],
+    questionItems: null,
+    updatedAt: "2026-07-30T01:14:00.000Z",
+  }).updatedAt, "2026-07-30T01:14:00.000Z");
 
   const session = {
     id: "session-1",
@@ -276,6 +299,8 @@ try {
   assert.equal(deriveTaskStatusIndicator(statusTask({ status: "done" }), [], true), "success");
   assert.equal(deriveTaskStatusIndicator(statusTask({ status: "failed" }), [], true), "error");
   assert.equal(deriveTaskStatusIndicator(statusTask({ status: "done" }), [], false), null);
+  assert.deepEqual(readTaskIds({ id: "worker-status", parentId: "team-status" }), ["worker-status", "team-status"]);
+  assert.deepEqual(readTaskIds({ id: "team-status", parentId: null }), ["team-status"]);
 
   const pendingTeamLead = statusTask({ id: "pending-team-status", mode: "team" });
   const pendingWorker = statusTask({ id: "pending-worker-status", parentId: pendingTeamLead.id });

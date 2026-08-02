@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import type { Task } from "@harness/shared";
 import { CaretRight, Copy, File, Wrench, X } from "@phosphor-icons/react";
+import type { Task } from "@harness/shared";
+import { runActivityPhase, type RunActivityTail } from "@harness/shared/run-activity";
 import type { AgentAuxEvent, ConversationItem } from "./conversationModel.ts";
 import { ConversationScrollControls } from "../components/ConversationScrollControls.tsx";
 import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
@@ -202,6 +203,15 @@ export function ConversationFeed({
 }) {
   const scroll = useRef<HTMLDivElement>(null);
   const objective = parseAttachmentText(task.body);
+  const last = items.at(-1);
+  const tail: RunActivityTail = !last
+    ? "empty"
+    : last.kind === "user"
+      ? "user"
+      : last.kind === "agent"
+        ? last.endedAt ? "agent-ended" : "agent-active"
+        : "other";
+  const activityPhase = runActivityPhase(task.status, tail);
 
   return (
     <ImagePreviewGroup isolated>
@@ -225,19 +235,20 @@ export function ConversationFeed({
               </div>
             );
           })}
-          {!items.length && !loading && !error && (
+          {activityPhase && !loading && !error && (
             <RunActivity
               status={task.status}
               mode={task.mode}
+              phase={activityPhase}
               executor={task.executorLabel?.trim() || task.agentType}
               queuePosition={task.queuePosition}
-              idle={(
-                <div className="task-conversation-empty">
-                  <File size={20} aria-hidden="true" />
-                  <p>点击「运行」开始，执行输出会实时显示在这里。</p>
-                </div>
-              )}
             />
+          )}
+          {!items.length && !loading && !error && !activityPhase && (
+            <div className="task-conversation-empty">
+              <File size={20} aria-hidden="true" />
+              <p>点击「运行」开始，执行输出会实时显示在这里。</p>
+            </div>
           )}
           {loading && !items.length && <p className="task-conversation-note">正在读取会话…</p>}
           {error && <p className="task-conversation-error">{error.message}</p>}

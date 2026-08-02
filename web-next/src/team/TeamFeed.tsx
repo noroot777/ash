@@ -1,5 +1,6 @@
 import { useRef } from "react";
 import type { Task } from "@harness/shared";
+import { runActivityPhase, type RunActivityTail } from "@harness/shared/run-activity";
 import type { Batch } from "@harness/shared/team";
 import { ArrowElbowDownRight, ArrowRight, SpinnerGap } from "@phosphor-icons/react";
 import { ConversationScrollControls } from "../components/ConversationScrollControls.tsx";
@@ -154,19 +155,22 @@ export function TeamFeed({
 }) {
   const scroll = useRef<HTMLDivElement>(null);
   const byId = new Map(workers.map((worker) => [worker.id, worker]));
+  const last = rows.at(-1);
+  const tail: RunActivityTail = !last
+    ? "empty"
+    : last.kind !== "conv"
+      ? "other"
+      : last.item.kind === "user"
+        ? "user"
+        : last.item.kind === "agent"
+          ? last.item.endedAt ? "agent-ended" : "agent-active"
+          : "other";
+  const activityPhase = runActivityPhase(task.status, tail);
   return (
     <ImagePreviewGroup isolated>
       <div className="conversation-scroll-region">
         <section className="team-feed" aria-label="团队调度流" ref={scroll}>
-          {!rows.length && (
-            <RunActivity
-              status={task.status}
-              mode={task.mode}
-              executor={teamLeadLabel(task)}
-              queuePosition={task.queuePosition}
-              idle={<p className="team-feed-empty">运行后，调度者的拆解、派活、执行者提问与汇报会按发生顺序出现在这里。</p>}
-            />
-          )}
+          {!rows.length && !activityPhase && <p className="team-feed-empty">运行后，调度者的拆解、派活、执行者提问与汇报会按发生顺序出现在这里。</p>}
           {rows.map((row) => {
             if (row.kind === "batch") return <BatchCard key={row.key} batch={row.batch} allWorkers={workers} onOpenWorker={onOpenWorker} indicatorForTask={indicatorForTask} />;
             const item = row.item;
@@ -196,6 +200,7 @@ export function TeamFeed({
             }
             return <div className={`team-feed-event${item.tone === "error" ? " is-error" : ""}`} key={row.key}><span />{item.text}<span /></div>;
           })}
+          {activityPhase && <RunActivity status={task.status} mode={task.mode} phase={activityPhase} executor={teamLeadLabel(task)} queuePosition={task.queuePosition} />}
         </section>
         <ConversationScrollControls scrollRef={scroll} resetKey={task.id} />
       </div>

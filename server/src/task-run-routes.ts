@@ -283,18 +283,20 @@ api.post("/tasks/:id/ask", async (c) => {
   if (!r) return c.json({ error: "not found" }, 404);
   if (r.mode !== "team" && r.status !== "running")
     return c.json({ error: "只能在任务正在运行时提问", status: r.status }, 409);
+  const updatedAt = now();
   await db
     .update(tasks)
     .set({
       question: q,
       questionOptions: opts.length ? JSON.stringify(opts) : null,
       questionItems: questionItems ? JSON.stringify(questionItems) : null,
-      updatedAt: now(),
+      updatedAt,
     })
     .where(eq(tasks.id, taskId));
   bus.publish({
     type: "task.question",
     taskId,
+    updatedAt,
     question: q,
     questionOptions: opts.length ? opts : null,
     questionItems,
@@ -324,11 +326,12 @@ api.post("/tasks/:id/answer", async (c) => {
   if (r.mode !== "team" && (r.status === "running" || r.status === "queued")) {
     return c.json({ error: "提问回合还没结束,等任务落 paused 再答复", status: r.status }, 409);
   }
+  const updatedAt = now();
   await db
     .update(tasks)
-    .set({ question: null, questionOptions: null, questionItems: null, updatedAt: now() })
+    .set({ question: null, questionOptions: null, questionItems: null, updatedAt })
     .where(eq(tasks.id, taskId));
-  bus.publish({ type: "task.question", taskId, question: null, questionOptions: null, questionItems: null });
+  bus.publish({ type: "task.question", taskId, updatedAt, question: null, questionOptions: null, questionItems: null });
   // 调度台不说「完成任务」——它没有完成一说,只是拿到答案接着安排。
   const tail = r.mode === "team" ? "请据此接着安排。" : "请据此继续完成任务。";
   void continueTask(taskId, `【答复】你之前的提问:「${r.question}」\n\n${a}\n\n${tail}`);

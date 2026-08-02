@@ -47,6 +47,10 @@ function buildTaskIndex(tasks: Task[]): TaskIndex {
   return { byId, workersByLead };
 }
 
+export function readTaskIds(task: Pick<Task, "id" | "parentId">): string[] {
+  return task.parentId ? [task.id, task.parentId] : [task.id];
+}
+
 export function readEventForTask(task: Task, workers: Task[] = []): string | null {
   return task.mode === "team" && !task.parentId ? teamEvent(task, workers) : terminalEvent(task);
 }
@@ -139,11 +143,13 @@ function reconcileReadState(current: ReadState, tasks: Task[], selectedTaskId: s
   });
   const next = Object.fromEntries(entries);
   const selectedTask = selectedTaskId ? index.byId.get(selectedTaskId) : undefined;
-  const selectedEvent = selectedTask
-    ? readEventForTask(selectedTask, index.workersByLead.get(selectedTask.id) ?? [])
-    : null;
-  if (selectedTask && selectedEvent && next[selectedTask.id]?.event !== selectedEvent) {
-    next[selectedTask.id] = { event: selectedEvent, readAt: Date.now() };
+  for (const taskId of selectedTask ? readTaskIds(selectedTask) : []) {
+    const task = index.byId.get(taskId);
+    if (!task) continue;
+    const event = readEventForTask(task, index.workersByLead.get(task.id) ?? []);
+    if (event && next[task.id]?.event !== event) {
+      next[task.id] = { event, readAt: Date.now() };
+    }
   }
   return trimReadState(next);
 }
@@ -179,20 +185,32 @@ export function useTaskReadState(tasks: Task[], selectedTaskId: string | null) {
   }, [selectedTaskId, tasks]);
 
   const markTaskRead = useCallback((task: Task) => {
-    const event = readEventForTask(task, index.workersByLead.get(task.id) ?? []);
-    if (!event) return;
     updateReadState((current) => {
-      if (current[task.id]?.event === event) return current;
-      return trimReadState({ ...current, [task.id]: { event, readAt: Date.now() } });
+      let next = current;
+      const readAt = Date.now();
+      for (const taskId of readTaskIds(task)) {
+        const target = index.byId.get(taskId);
+        if (!target) continue;
+        const event = readEventForTask(target, index.workersByLead.get(target.id) ?? []);
+        if (!event || next[target.id]?.event === event) continue;
+        if (next === current) next = { ...current };
+        next[target.id] = { event, readAt };
+      }
+      return next === current ? current : trimReadState(next);
     });
   }, [index]);
+
+  const visibleTaskIds = useMemo(() => {
+    const selectedTask = selectedTaskId ? index.byId.get(selectedTaskId) : undefined;
+    return new Set(selectedTask ? readTaskIds(selectedTask) : []);
+  }, [index, selectedTaskId]);
 
   const indicatorForTask = useCallback<IndicatorForTask>((task) => {
     const workers = index.workersByLead.get(task.id) ?? [];
     const event = readEventForTask(task, workers);
-    const unread = !!event && task.id !== selectedTaskId && readState[task.id]?.event !== event;
+    const unread = !!event && !visibleTaskIds.has(task.id) && readState[task.id]?.event !== event;
     return deriveTaskStatusIndicator(task, workers, unread);
-  }, [index, readState, selectedTaskId]);
+  }, [index, readState, visibleTaskIds]);
 
   return { indicatorForTask, markTaskRead };
 }
