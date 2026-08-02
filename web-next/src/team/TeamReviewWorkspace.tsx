@@ -79,6 +79,9 @@ export function AcceptanceControls({
   const inFlight = task.status === "running" || task.status === "queued";
 
   const accept = async () => {
+    // The confirmation is single-use. Keep progress on the action button so a
+    // typed acceptance failure can render unobscured in the review record.
+    setAction(null);
     setBusy(true);
     setFailure(null);
     try {
@@ -124,7 +127,10 @@ export function AcceptanceControls({
           <span><CheckCircle size={13} weight="fill" />验收完成</span>
         ) : (
           <>
-            <button type="button" className="is-primary" disabled={inFlight || busy} onClick={() => setAction("accept")}><CheckCircle size={13} weight="fill" />{inFlight ? "执行中" : "验收通过"}</button>
+            <button type="button" className="is-primary" disabled={inFlight || busy} onClick={() => setAction("accept")}>
+              {busy ? <SpinnerGap size={13} className="is-spinning" /> : <CheckCircle size={13} weight="fill" />}
+              {busy ? "验收中" : inFlight ? "执行中" : "验收通过"}
+            </button>
             <button type="button" disabled={inFlight || busy} onClick={() => setAction("return")}><WarningCircle size={13} />打回修改</button>
           </>
         )}
