@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { AgentExecutorProfile, AgentType, Task } from "@harness/shared";
 import { ArrowUp, Clock, Robot, SpinnerGap, X } from "@phosphor-icons/react";
 import {
@@ -45,6 +45,7 @@ export function ReplyBox({
   const [target, setTarget] = useState<AgentType | null>(null);
   const [scheduleOpen, setScheduleOpen] = useState(false);
   const [sendAt, setSendAt] = useState("");
+  const scheduleTriggerRef = useRef<HTMLButtonElement>(null);
   const [profiles, setProfiles] = useState<AgentExecutorProfile[]>([]);
   const [profilesReady, setProfilesReady] = useState(false);
   const [profilesFailed, setProfilesFailed] = useState(false);
@@ -225,6 +226,7 @@ export function ReplyBox({
           value={sendAt}
           busy={sending}
           canSubmit={canSchedule}
+          triggerRef={scheduleTriggerRef}
           onChange={setSendAt}
           onCancel={() => setScheduleOpen(false)}
           onSubmit={() => void send(new Date(sendAt).toISOString())}
@@ -325,6 +327,7 @@ export function ReplyBox({
         <div className="task-reply-actions">
           <AttachmentPicker addFiles={uploads.addFiles} disabled={disabled || sending || commandActive} />
           <button
+            ref={scheduleTriggerRef}
             className="reply-schedule-button"
             type="button"
             disabled={disabled || sending || uploads.uploading || commandActive || mentionOpen}
