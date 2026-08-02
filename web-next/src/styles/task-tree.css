@@ -167,7 +167,7 @@
   background: transparent;
 }
 
-.workspace-status-dot-icon {
+.task-status-dot-icon {
   display: none;
 }
 
@@ -193,7 +193,7 @@
   will-change: opacity, transform;
 }
 
-.workspace-shell--next2 .workspace-status-dot--pending {
+.workspace-shell--next2 .workspace-status-dot--pending.task-status-dot--has-icon {
   width: 10px;
   height: 10px;
   flex-basis: 10px;
@@ -201,13 +201,13 @@
   color: var(--muted);
 }
 
-.workspace-shell--next2 .workspace-status-dot--pending.workspace-status-dot--small {
+.workspace-shell--next2 .workspace-status-dot--pending.workspace-status-dot--small.task-status-dot--has-icon {
   width: 7px;
   height: 7px;
   flex-basis: 7px;
 }
 
-.workspace-shell--next2 .workspace-status-dot--pending .workspace-status-dot-icon {
+.workspace-shell--next2 .workspace-status-dot--pending .task-status-dot-icon {
   display: block;
   width: 100%;
   height: 100%;

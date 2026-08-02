@@ -20,14 +20,15 @@ export function TaskStatusDot({
 }) {
   const base = surface === "workspace" ? "workspace-status-dot" : "team-status-dot";
   const label = INDICATOR_LABELS[indicator];
+  const hasIcon = indicator === "pending";
   return (
     <i
-      className={`${base} ${base}--${indicator}${small ? ` ${base}--small` : ""}`}
+      className={`${base} ${base}--${indicator}${small ? ` ${base}--small` : ""}${hasIcon ? " task-status-dot--has-icon" : ""}`}
       title={label}
       aria-label={label}
     >
-      {surface === "workspace" && indicator === "pending" && (
-        <CircleDashed className="workspace-status-dot-icon" weight="regular" aria-hidden="true" />
+      {hasIcon && (
+        <CircleDashed className="task-status-dot-icon" weight="regular" aria-hidden="true" />
       )}
     </i>
   );

@@ -4,12 +4,19 @@ import { STAGE_LABELS, taskDisplayStatus } from "@harness/shared";
 import { ArrowsClockwise, CaretDown, CheckCircle, GitBranch, GitCommit, SpinnerGap, WarningCircle, X } from "@phosphor-icons/react";
 import { TaskStatusDot } from "../components/TaskStatusDot.tsx";
 import { api, type AcceptTaskFailure, type TaskCommit, type TaskDiffResult } from "../lib/api.ts";
-import type { IndicatorForTask } from "../lib/useTaskReadState.ts";
+import type { IndicatorForTask, TaskStatusIndicator } from "../lib/useTaskReadState.ts";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import { formatInstant, parseAttachmentText } from "../task-detail/utils.ts";
 import { ReviewDiffViewer } from "../review/ReviewDiffViewer.tsx";
 import { DispatchReviewEvidence } from "./ReviewEvidence.tsx";
-import { statusTone } from "./teamModel.ts";
+
+function reviewStatusIndicator(task: Task): TaskStatusIndicator {
+  if (task.question || task.status === "paused" || task.status === "awaiting_review") return "attention";
+  if (task.status === "running" || task.status === "queued") return "active";
+  if (task.status === "backlog" || task.status === "idle") return "pending";
+  if (task.stage === "verify_failed" || task.status === "failed" || task.status === "canceled") return "error";
+  return "success";
+}
 
 type ReviewData = {
   commits: TaskCommit[];
@@ -261,7 +268,7 @@ function SharedWorkerVerification({
       <div className="team-shared-worker-grid">
         {workers.map((worker) => (
           <button type="button" key={worker.id} className={selectedId === worker.id ? "is-selected" : worker.stage === "verify_failed" ? "is-failed" : ""} onClick={() => setSelectedId((current) => current === worker.id ? null : worker.id)}>
-            <i className={`team-status-dot team-status-dot--${statusTone(worker)}`} />
+            <TaskStatusDot indicator={reviewStatusIndicator(worker)} surface="team" />
             <span><b>{worker.title}</b><small>{worker.stage ? STAGE_LABELS[worker.stage] : worker.status}</small></span>
             <em>{worker.stage || "未上报"}</em><CaretDown size={12} />
           </button>

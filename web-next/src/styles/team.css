@@ -129,6 +129,18 @@
 .team-status-dot--attention { background: var(--amber); }
 .team-status-dot--success { background: var(--green); }
 .team-status-dot--error { background: var(--red); }
+.workspace-shell--next2 .team-status-dot--pending.task-status-dot--has-icon {
+  width: 10px;
+  height: 10px;
+  flex-basis: 10px;
+  border: 0;
+  color: var(--muted);
+}
+.workspace-shell--next2 .team-status-dot--pending .task-status-dot-icon {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
 .team-worker-rail { min-height: 100%; overflow-y: auto; background: color-mix(in lch,var(--canvas) 96%,var(--chrome)); padding: 12px; }
 .team-worker-rail > header { display: flex; justify-content: space-between; margin-bottom: 7px; color: var(--faint); font-size: 9.5px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; }
 .team-worker-rail > header small { font-weight: 450; letter-spacing: 0; text-transform: none; }
