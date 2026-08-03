@@ -33,8 +33,9 @@
     "typescript": "~5.9.2"
   },
   "scripts": {
-    "start": "REACT_NATIVE_PACKAGER_HOSTNAME=$(/Applications/Tailscale.app/Contents/MacOS/Tailscale ip -4 | head -1) expo start",
-    "start:lan": "expo start",
+    "start": "REACT_NATIVE_PACKAGER_HOSTNAME=$(/Applications/Tailscale.app/Contents/MacOS/Tailscale ip -4 | head -1) expo start --clear",
+    "start:offline": "REACT_NATIVE_PACKAGER_HOSTNAME=$(/Applications/Tailscale.app/Contents/MacOS/Tailscale ip -4 | head -1) expo start --offline --clear",
+    "start:lan": "expo start --clear",
     "android": "expo start --android",
     "ios": "expo start --ios",
     "web": "expo start --web",

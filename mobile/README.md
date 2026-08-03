@@ -16,7 +16,10 @@ npm run dev          # 或 npm run build && npm start，监听 :4317（0.0.0.0�
 
 # 2) 起手机端
 cd mobile
-npx expo start       # 用 iPhone 的相机 / Expo Go 扫终端里的二维码
+npm run start        # 自动清 Metro 缓存；用 iPhone 的相机 / Expo Go 扫二维码
+
+# 无网络时使用（仍会自动清 Metro 缓存）
+npm run start:offline
 ```
 
 App 首次启动会进「设置」：填后端地址（如 `http://<你的-tailscale-主机或IP>:4317`）→ 测试并保存。
