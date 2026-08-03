@@ -15,6 +15,7 @@
     ["notes.html", "随手记"],
     ["palette.html", "⌘K"],
     ["components.html", "控件对照"],
+    ["workflow-codex.html", "工作流·Codex"],
     ["settings-agents.html", "设置·智能体"],
     ["settings-project.html", "设置·项目"],
     ["settings-groups.html", "设置·分组"],
@@ -118,6 +119,8 @@
       setItem("settings-agents.html#rules", "rules", active, "默认规则") +
       setItem("settings-agents.html#claude", "claude", active, "claude") +
       setItem("settings-agents.html#codex", "codex", active, "codex") +
+      '<div class="set-group">编排</div>' +
+      setItem("workflow-codex.html", "workflows", active, "工作流模板") +
       '<div class="set-group">项目</div>' +
       setItem("settings-project.html", "project", active, "项目设置") +
       setItem("settings-groups.html", "groups", active, "分组") +

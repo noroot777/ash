@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
+<title>工作流模板 · Codex 方案 — Harness UI Demo</title>
+<link rel="stylesheet" href="style.css">
+<style>
+  .wf-main{min-width:0;flex:1;overflow:hidden;border:.5px solid var(--line);border-radius:12px;background:var(--canvas);box-shadow:var(--surface-shadow)}
+  .wf-page{display:flex;height:100%;min-height:0;flex-direction:column}
+  .wf-toolbar{display:flex;height:50px;flex:0 0 50px;align-items:center;gap:10px;border-bottom:.5px solid var(--line);padding:0 14px;background:rgba(255,255,255,.82);backdrop-filter:blur(18px)}
+  .wf-title{min-width:0}.wf-title b{display:block;font-size:13px;font-weight:600}.wf-title small{display:block;color:var(--faint);font-size:10px}
+  .wf-view-switch{display:flex;gap:2px;margin-left:14px;border-radius:8px;background:var(--raised);padding:3px}
+  .wf-view-switch button{height:24px;border-radius:6px;padding:0 9px;color:var(--muted);font-size:11px}
+  .wf-view-switch button[aria-selected="true"]{background:var(--panel);color:var(--ink);box-shadow:0 1px 3px rgba(40,42,48,.12)}
+  .wf-toolbar-actions{display:flex;gap:6px;margin-left:auto}.wf-toolbar-actions .ui-btn{white-space:nowrap}
+  .wf-status{display:flex;align-items:center;gap:5px;color:var(--green);font-size:10.5px}.wf-status i{width:6px;height:6px;border-radius:50%;background:currentColor}
+  .wf-studio{display:grid;min-height:0;flex:1;grid-template-columns:220px minmax(420px,1fr) 286px}
+  .wf-library,.wf-inspector{min-height:0;overflow:auto;background:var(--canvas)}
+  .wf-library{border-right:.5px solid var(--line);padding:12px 10px}
+  .wf-inspector{border-left:.5px solid var(--line)}
+  .wf-pane-label{display:flex;align-items:center;height:26px;padding:0 7px;color:var(--faint);font-size:9.5px;font-weight:750;letter-spacing:.09em;text-transform:uppercase}
+  .wf-template{display:block;width:100%;margin:2px 0;border-radius:8px;padding:8px 9px;text-align:left}
+  .wf-template:hover{background:var(--raised)}.wf-template[aria-selected="true"]{background:var(--sel-bg);box-shadow:inset 2px 0 0 var(--accent)}
+  .wf-template b{display:flex;align-items:center;gap:6px;font-size:12px;font-weight:600}.wf-template b i{width:7px;height:7px;border-radius:50%;background:var(--faint)}
+  .wf-template[aria-selected="true"] b i{background:var(--accent)}
+  .wf-template small{display:block;margin-top:2px;color:var(--faint);font-size:9.5px;line-height:1.4}
+  .wf-add{display:flex;width:100%;height:30px;align-items:center;justify-content:center;margin:8px 0;border:1px dashed var(--line2);border-radius:8px;color:var(--muted);font-size:10.5px}.wf-add:hover{border-color:var(--accent);color:var(--accent)}
+  .wf-inherit{margin:16px 2px 0;border-top:.5px solid var(--line);padding:12px 7px;color:var(--muted);font-size:10px;line-height:1.55}
+  .wf-inherit b{display:block;margin-bottom:5px;color:var(--ink);font-size:10.5px}.wf-inherit code{color:var(--accent);font-size:9.5px}
+  .wf-canvas{min-height:0;overflow:auto;padding:18px 22px 80px;background:radial-gradient(circle at 50% 5%,rgba(94,106,210,.055),transparent 34%),var(--canvas)}
+  .wf-canvas-head{display:flex;align-items:flex-start;gap:12px;max-width:720px;margin:0 auto 14px}
+  .wf-canvas-head>div{min-width:0;flex:1}.wf-canvas-head h1{margin:0 0 3px;font-size:20px;font-weight:620;letter-spacing:-.03em}.wf-canvas-head p{margin:0;color:var(--muted);font-size:11.5px}
+  .wf-chips{display:flex;flex-wrap:wrap;gap:5px;justify-content:flex-end}.wf-chip{border-radius:999px;background:var(--raised);padding:3px 7px;color:var(--muted);font-size:9.5px;font-weight:650}.wf-chip.is-accent{background:var(--accent-soft);color:var(--accent)}
+  .workspace-band{display:flex;max-width:720px;align-items:center;gap:10px;margin:0 auto 14px;border:1px solid var(--line2);border-radius:10px;background:var(--panel);padding:10px 12px}
+  .workspace-icon{display:grid;width:30px;height:30px;place-items:center;border-radius:8px;background:#e6eef9;color:#34659b;font:700 12px ui-monospace,monospace}.workspace-copy{min-width:0;flex:1}.workspace-copy b{display:block;font-size:11.5px}.workspace-copy small{display:block;color:var(--faint);font-size:9.5px}.workspace-lock{color:var(--faint);font-size:9.5px}
+  .wf-rail{position:relative;max-width:720px;margin:0 auto;padding:2px 0}
+  .wf-rail::before{content:"";position:absolute;top:28px;bottom:28px;left:25px;width:1px;background:var(--line2)}
+  .wf-node{position:relative;display:grid;grid-template-columns:50px 1fr;min-height:84px}
+  .wf-dot{position:relative;z-index:1;display:grid;width:28px;height:28px;place-items:center;margin:14px 0 0 11px;border:1px solid var(--line2);border-radius:9px;background:var(--panel);color:var(--muted);font:700 10px ui-monospace,monospace;box-shadow:0 0 0 5px var(--canvas)}
+  .wf-node.is-selected .wf-dot{border-color:var(--accent);background:var(--accent);color:#fff}
+  .wf-node.is-disabled{opacity:.48}.wf-node.is-disabled .wf-card{border-style:dashed}.wf-node.is-disabled .wf-dot{background:var(--raised)}
+  .wf-card{position:relative;margin:4px 0 8px;border:1px solid var(--line2);border-radius:10px;background:var(--panel);padding:10px 12px;box-shadow:var(--surface-shadow);cursor:pointer}
+  .wf-card:hover{border-color:lch(78.5% 0 282)}.wf-node.is-selected .wf-card{border-color:rgba(94,106,210,.55);box-shadow:0 0 0 2px rgba(94,106,210,.08)}
+  .wf-card-head{display:flex;align-items:center;gap:8px}.wf-card-head b{font-size:12px;font-weight:620}.wf-card-head em{margin-left:auto;border-radius:4px;background:var(--raised);padding:1px 6px;color:var(--muted);font-size:8.5px;font-style:normal;font-weight:700}
+  .wf-node.is-selected .wf-card-head em{background:var(--accent-soft);color:var(--accent)}
+  .wf-card p{margin:4px 0 0;color:var(--muted);font-size:10px;line-height:1.5}.wf-card code{font-size:9.5px;color:var(--faint)}
+  .wf-outcomes{display:flex;gap:5px;margin-top:8px}.wf-outcome{border-radius:5px;background:var(--raised);padding:2px 6px;color:var(--muted);font-size:8.5px}.wf-outcome.ok{background:var(--green-bg);color:var(--green)}.wf-outcome.fail{background:#f9e8e9;color:var(--red)}
+  .release-marker{position:relative;display:none;height:28px;margin-left:50px;align-items:center}.release-marker.is-on{display:flex}.release-marker::before{content:"";position:absolute;left:0;right:0;height:1px;background:linear-gradient(90deg,var(--accent),rgba(94,106,210,.12))}.release-marker span{position:relative;margin-left:12px;border-radius:999px;background:var(--accent);padding:3px 8px;color:#fff;font-size:8.5px;font-weight:750;box-shadow:0 2px 6px rgba(94,106,210,.22)}
+  .wf-compiled{max-width:720px;margin:16px auto 0;border:1px solid var(--line2);border-radius:10px;background:var(--panel);overflow:hidden}
+  .wf-compiled header{display:flex;align-items:center;border-bottom:.5px solid var(--line);padding:8px 11px}.wf-compiled header b{font-size:10.5px}.wf-compiled header span{margin-left:auto;color:var(--green);font-size:9.5px}
+  .compiled-grid{display:grid;grid-template-columns:repeat(3,1fr)}.compiled-grid div{padding:9px 11px;border-right:.5px solid var(--line)}.compiled-grid div:last-child{border-right:0}.compiled-grid small{display:block;color:var(--faint);font-size:8.5px}.compiled-grid b{display:block;margin-top:2px;font:600 9.5px ui-monospace,monospace}
+  .wf-warning{display:none;align-items:flex-start;gap:7px;border-top:.5px solid #ecd7a4;background:#fffaf0;padding:8px 11px;color:#8a6511;font-size:9.5px}.wf-warning.is-on{display:flex}
+  .ins-head{position:sticky;top:0;z-index:2;display:flex;height:42px;align-items:center;border-bottom:.5px solid var(--line);padding:0 12px;background:rgba(250,250,251,.94);font-size:12px;font-weight:600;backdrop-filter:blur(12px)}
+  .ins-panel{display:none;padding:12px}.ins-panel.is-on{display:block}.ins-kicker{margin-bottom:10px;color:var(--faint);font-size:9px;font-weight:750;letter-spacing:.09em;text-transform:uppercase}
+  .ins-field{margin-bottom:12px}.ins-field>span{display:block;margin-bottom:5px;color:var(--muted);font-size:9.5px}.ins-select{display:flex;min-height:31px;align-items:center;border:1px solid var(--line2);border-radius:8px;background:var(--panel);padding:5px 8px;font-size:10.5px;box-shadow:var(--surface-shadow)}.ins-select i{margin-left:auto;color:var(--faint);font-style:normal}
+  .ins-seg{display:flex;gap:2px;border-radius:8px;background:var(--raised);padding:3px}.ins-seg button{flex:1;min-height:26px;border-radius:6px;color:var(--muted);font-size:9.5px}.ins-seg button[aria-pressed="true"]{background:var(--panel);color:var(--ink);box-shadow:0 1px 3px rgba(40,42,48,.12)}
+  .ins-toggle{display:flex;align-items:center;gap:8px}.mini-toggle{position:relative;width:29px;height:17px;border-radius:999px;background:var(--line2)}.mini-toggle::after{content:"";position:absolute;top:2px;left:2px;width:13px;height:13px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.16)}.mini-toggle.is-on{background:var(--accent)}.mini-toggle.is-on::after{left:14px}
+  .ins-note{margin:14px 0 0;border-left:2px solid var(--accent);padding:1px 0 1px 9px;color:var(--muted);font-size:9.5px;line-height:1.55}
+  .runtime{display:none;min-height:0;flex:1;overflow:auto;padding:22px}.runtime.is-on{display:block}.wf-studio.is-off{display:none}
+  .runtime-card{max-width:940px;margin:0 auto;border:1px solid var(--line2);border-radius:12px;background:var(--panel);overflow:hidden;box-shadow:var(--surface-shadow)}
+  .runtime-head{display:flex;align-items:center;gap:12px;padding:15px 17px;border-bottom:.5px solid var(--line)}.runtime-head>div{min-width:0;flex:1}.runtime-head h2{margin:0;font-size:16px}.runtime-head p{margin:3px 0 0;color:var(--muted);font-size:10.5px}.runtime-badge{border-radius:999px;background:#fff4d8;padding:4px 8px;color:#8a6511;font-size:9.5px;font-weight:750}
+  .runtime-route{display:grid;grid-template-columns:repeat(4,1fr);padding:16px 18px 8px}.run-step{position:relative;padding-top:20px;color:var(--faint);font-size:9.5px}.run-step::before{content:"";position:absolute;top:6px;left:0;right:0;height:2px;background:var(--line)}.run-step::after{content:"";position:absolute;top:2px;left:0;width:10px;height:10px;border:2px solid var(--panel);border-radius:50%;background:var(--line2)}.run-step.is-done::before,.run-step.is-live::before{background:var(--green)}.run-step.is-done::after{background:var(--green)}.run-step.is-live::before{background:linear-gradient(90deg,var(--green),var(--accent))}.run-step.is-live::after{background:var(--accent);box-shadow:0 0 0 4px var(--accent-soft)}.run-step b{display:block;color:var(--ink);font-size:10.5px}.run-step span{display:block;margin-top:2px}
+  .runtime-body{display:grid;grid-template-columns:1fr 290px;gap:14px;padding:14px 18px 18px}.runtime-focus,.runtime-side{border:1px solid var(--line2);border-radius:10px;padding:13px}.runtime-focus header{display:flex;align-items:center}.runtime-focus header b{font-size:12px}.runtime-focus header span{margin-left:auto;color:var(--faint);font:9px ui-monospace,monospace}.runtime-focus h3{margin:13px 0 4px;font-size:14px}.runtime-focus p,.runtime-side p{margin:0;color:var(--muted);font-size:10px;line-height:1.55}.evidence{display:flex;gap:7px;margin-top:12px}.evidence span{border-radius:6px;background:var(--raised);padding:5px 7px;color:var(--muted);font-size:9px}.runtime-side b{display:block;margin-bottom:5px;font-size:11px}.runtime-actions{display:flex;gap:6px;margin-top:12px}
+  .wf-toast{position:fixed;right:22px;bottom:22px;z-index:140;display:none;border:1px solid var(--line2);border-radius:9px;background:var(--ink);padding:8px 11px;color:#fff;font-size:10.5px;box-shadow:var(--shadow)}.wf-toast.is-on{display:block}
+  @media(max-width:1100px){.wf-studio{grid-template-columns:190px minmax(400px,1fr)}.wf-inspector{display:none}}
+  @media(max-width:780px){.set-side{display:none}.wf-studio{grid-template-columns:1fr}.wf-library{display:none}.wf-canvas{padding:16px 12px 70px}.runtime-body{grid-template-columns:1fr}.wf-toolbar{gap:5px;padding:0 7px}.wf-toolbar .wf-status,.wf-toolbar-actions .ui-btn:first-child{display:none}.wf-view-switch{margin-left:2px}.wf-toolbar-actions{gap:3px}}
+  @media(prefers-reduced-motion:no-preference){.release-marker span,.wf-node.is-selected .wf-dot{animation:pop .18s ease-out}@keyframes pop{from{transform:scale(.94);opacity:.5}to{transform:scale(1);opacity:1}}}
+</style>
+</head>
+<body>
+  <div class="settings-shell">
+    <div data-include="settings-side" data-active="workflows"></div>
+    <main class="wf-main">
+      <div class="wf-page">
+        <header class="wf-toolbar">
+          <div class="wf-title"><b>工作流模板</b><small>系统级 · 安全交付 v3</small></div>
+          <div class="wf-view-switch" role="tablist">
+            <button type="button" data-wf-view="editor" aria-selected="true">模板编辑</button>
+            <button type="button" data-wf-view="runtime" aria-selected="false">任务运行态</button>
+          </div>
+          <div class="wf-status"><i></i><span id="saveState">所有更改已保存</span></div>
+          <div class="wf-toolbar-actions"><button class="ui-btn" data-wf-action="simulate">试演</button><button class="ui-btn primary" data-wf-action="save">发布新版本</button></div>
+        </header>
+
+        <div class="wf-studio" id="studio">
+          <aside class="wf-library">
+            <div class="wf-pane-label">系统模板</div>
+            <button class="wf-template" data-template="fast" aria-selected="false"><b><i></i>极速原型</b><small>直接运行 · 无自动验证 · 实现后放行</small></button>
+            <button class="wf-template" data-template="standard" aria-selected="true"><b><i></i>标准交付</b><small>worktree · 自动修复 · 验证后放行</small></button>
+            <button class="wf-template" data-template="strict" aria-selected="false"><b><i></i>严格验收</b><small>验证通过 · 人工验收后才放行</small></button>
+            <button class="wf-add" data-wf-action="duplicate">＋ 从当前模板复制</button>
+            <div class="wf-pane-label">项目模板</div>
+            <button class="wf-template" data-template="frontend" aria-selected="false"><b><i></i>前端真实验收</b><small>浏览器截图 · 人工体验 · 自动修复 1 次</small></button>
+            <div class="wf-inherit"><b>生效层级</b><code>系统默认</code><br>↓ harness 项目覆盖<br>↓ 创建任务时冻结 snapshot<br>↓ 运行中只改尚未开始的关口</div>
+          </aside>
+
+          <section class="wf-canvas">
+            <header class="wf-canvas-head">
+              <div><h1 id="workflowName">标准交付</h1><p id="workflowDesc">实现完成后启动独立验证；验证失败自动修复，验证通过才释放队列。</p></div>
+              <div class="wf-chips"><span class="wf-chip is-accent" id="scopeChip">系统默认</span><span class="wf-chip">snapshot v3</span><span class="wf-chip" id="releaseChip">验证后放行</span></div>
+            </header>
+            <div class="workspace-band">
+              <span class="workspace-icon">WT</span><div class="workspace-copy"><b id="workspaceTitle">独立 worktree</b><small id="workspaceText">首个 Session 启动时冻结 · base 跟随项目当前分支</small></div><span class="workspace-lock">启动后锁定</span>
+            </div>
+
+            <div class="wf-rail" id="rail">
+              <article class="wf-node is-selected" data-node="execute"><span class="wf-dot">01</span><div class="wf-card" tabindex="0"><div class="wf-card-head"><b>实现</b><em>agent.run</em></div><p id="executeSummary">codex@cpa · gpt-5.6-sol · xhigh</p><div class="wf-outcomes"><span class="wf-outcome ok">完成 → 自动验证</span><span class="wf-outcome fail">失败 → 停下</span></div></div></article>
+              <div class="release-marker" data-release="execute"><span>队列在此放行</span></div>
+              <article class="wf-node" data-node="review"><span class="wf-dot">02</span><div class="wf-card" tabindex="0"><div class="wf-card-head"><b>自动验证</b><em>agent.verify</em></div><p id="reviewSummary">codex@review · 真实运行 + 报告 + 截图 · 最多 2 轮</p><div class="wf-outcomes"><span class="wf-outcome ok">通过 → 人工验收</span><span class="wf-outcome fail" id="repairOutcome">失败 → 自动修复</span></div></div></article>
+              <div class="release-marker is-on" data-release="review"><span>队列在此放行</span></div>
+              <article class="wf-node" data-node="human"><span class="wf-dot">03</span><div class="wf-card" tabindex="0"><div class="wf-card-head"><b>人工验收</b><em>human.gate</em></div><p id="humanSummary">可查看 diff 与验证证据；通过后执行确定性合并</p><div class="wf-outcomes"><span class="wf-outcome ok">通过 → 合并</span><span class="wf-outcome fail">打回 → 修复</span></div></div></article>
+              <div class="release-marker" data-release="human"><span>队列在此放行</span></div>
+              <article class="wf-node" data-node="finalize"><span class="wf-dot">04</span><div class="wf-card" tabindex="0"><div class="wf-card-head"><b>合并与清理</b><em>repo.accept</em></div><p>仓库锁内合并目标分支，成功后清理 worktree 与任务分支</p><div class="wf-outcomes"><span class="wf-outcome ok">成功 → 验收完成</span><span class="wf-outcome fail">冲突 → 人工处理</span></div></div></article>
+            </div>
+
+            <section class="wf-compiled">
+              <header><b>编译结果</b><span>✓ 定义有效</span></header>
+              <div class="compiled-grid"><div><small>队列释放点</small><b id="compiledRelease">auto_verify.verified</b></div><div><small>失败路径</small><b id="compiledFailure">repair × 2 → stop</b></div><div><small>工作区</small><b id="compiledWorkspace">isolated · locked</b></div></div>
+              <div class="wf-warning" id="workflowWarning"><b>!</b><span>旁路验证与共享工作区自动修复不能同时启用；已建议改成验证后放行。</span></div>
+            </section>
+          </section>
+
+          <aside class="wf-inspector">
+            <div class="ins-head">阶段参数</div>
+            <section class="ins-panel is-on" data-panel="execute"><div class="ins-kicker">01 · agent.run</div><div class="ins-field"><span>执行器</span><div class="ins-select">codex@cpa<i>⌄</i></div></div><div class="ins-field"><span>模型</span><div class="ins-select">gpt-5.6-sol<i>⌄</i></div></div><div class="ins-field"><span>思考强度</span><div class="ins-select">xhigh<i>⌄</i></div></div><p class="ins-note">complete_task 只确认当前执行阶段完成；是否释放队列由工作流释放点决定。</p></section>
+            <section class="ins-panel" data-panel="review"><div class="ins-kicker">02 · agent.verify</div><div class="ins-field"><span>自动验证</span><div class="ins-toggle"><button class="mini-toggle is-on" data-wf-toggle="review" aria-label="切换自动验证"></button><span id="reviewToggleLabel">已开启</span></div></div><div class="ins-field"><span>审查执行器</span><div class="ins-select">codex@review<i>⌄</i></div></div><div class="ins-field"><span>验证轮数</span><div class="ins-seg" data-control="rounds"><button data-value="1">1</button><button data-value="2" aria-pressed="true">2</button><button data-value="3">3</button></div></div><div class="ins-field"><span>失败处理</span><div class="ins-seg" data-control="failure"><button data-value="repair" aria-pressed="true">自动修复</button><button data-value="ask">询问</button><button data-value="stop">停下</button></div></div><p class="ins-note">“验证”固定要求真实运行、报告和必要截图；只读评议应使用不同节点语义。</p></section>
+            <section class="ins-panel" data-panel="human"><div class="ins-kicker">03 · human.gate</div><div class="ins-field"><span>人工验收</span><div class="ins-toggle"><button class="mini-toggle is-on" data-wf-toggle="human" aria-label="切换人工验收"></button><span id="humanToggleLabel">已开启</span></div></div><div class="ins-field"><span>通过条件</span><div class="ins-select">必须已有 verified 结论<i>⌄</i></div></div><div class="ins-field"><span>队列释放点</span><div class="ins-seg" data-control="release"><button data-value="execute">实现后</button><button data-value="review" aria-pressed="true">验证后</button><button data-value="human">人工后</button></div></div><p class="ins-note">验收通过仍由人明确触发；工作流不会自动执行不可逆的 git 合并。</p></section>
+            <section class="ins-panel" data-panel="finalize"><div class="ins-kicker">04 · repo.accept</div><div class="ins-field"><span>合并策略</span><div class="ins-select">沿用 Harness 安全合并<i>⌄</i></div></div><div class="ins-field"><span>清理</span><div class="ins-select">合并后删除 worktree 与分支<i>⌄</i></div></div><p class="ins-note">该节点复用仓库锁、冲突交还来源任务和现有验收清理逻辑。</p></section>
+          </aside>
+        </div>
+
+        <section class="runtime" id="runtime">
+          <article class="runtime-card">
+            <header class="runtime-head"><div><h2>接入工作流编排与项目级覆盖</h2><p>标准交付 · snapshot v3 · harness 项目默认 · 独立 worktree</p></div><span class="runtime-badge">自动验证中 · 1/2</span></header>
+            <div class="runtime-route"><div class="run-step is-done"><b>实现</b><span>17:42 完成</span></div><div class="run-step is-live"><b>自动验证</b><span>codex@review</span></div><div class="run-step"><b>人工验收</b><span>等待验证结论</span></div><div class="run-step"><b>合并</b><span>尚未开始</span></div></div>
+            <div class="runtime-body"><section class="runtime-focus"><header><b>第 1 轮真实验证</b><span>NODE review · ATTEMPT 1</span></header><h3>正在启动本地服务并检查交互</h3><p>验证者正在读取 diff、运行构建，并通过浏览器确认工作流模板在窄屏和桌面上的行为。当前任务保持 awaiting_review，队列后继尚未放行。</p><div class="evidence"><span>report.md · 写入中</span><span>截图 · 0</span><span>端口 · 5173</span></div></section><aside class="runtime-side"><b>本任务工作流</b><p>来源：harness 项目默认<br>版本：安全交付 v3<br>本地覆盖：无<br>释放点：验证通过</p><div class="runtime-actions"><button class="ui-btn">调整后续流程</button><button class="ui-btn">查看定义</button></div></aside></div>
+          </article>
+        </section>
+      </div>
+    </main>
+  </div>
+  <div class="wf-toast" id="toast">已发布“标准交付 v4”</div>
+  <script src="app.js"></script>
+  <script>
+  (function(){
+    "use strict";
+    var state={template:"standard",review:true,human:true,rounds:"2",failure:"repair",release:"review",workspace:"isolated"};
+    var templates={
+      fast:{name:"极速原型",desc:"直接在项目目录运行；不启动自动验证，实现完成后立即释放队列。",review:false,human:false,rounds:"1",failure:"stop",release:"execute",workspace:"shared",scope:"系统内置"},
+      standard:{name:"标准交付",desc:"实现完成后启动独立验证；验证失败自动修复，验证通过才释放队列。",review:true,human:true,rounds:"2",failure:"repair",release:"review",workspace:"isolated",scope:"系统默认"},
+      strict:{name:"严格验收",desc:"自动验证通过后仍保持屏障，必须由人查看证据并验收后才释放队列。",review:true,human:true,rounds:"3",failure:"ask",release:"human",workspace:"isolated",scope:"系统内置"},
+      frontend:{name:"前端真实验收",desc:"针对前端改动要求浏览器截图，失败自动修复一次，最后由人体验确认。",review:true,human:true,rounds:"1",failure:"repair",release:"human",workspace:"isolated",scope:"harness 项目"}
+    };
+    var $=function(s){return document.querySelector(s)};var $$=function(s){return Array.from(document.querySelectorAll(s))};
+    function text(id,value){var n=$(id);if(n)n.textContent=value}
+    function pressed(control,value){$$('[data-control="'+control+'"] button').forEach(function(b){b.setAttribute("aria-pressed",String(b.dataset.value===value))})}
+    function setView(view){var runtime=view==="runtime";$("#studio").classList.toggle("is-off",runtime);$("#runtime").classList.toggle("is-on",runtime);$$('[data-wf-view]').forEach(function(b){b.setAttribute("aria-selected",String(b.dataset.wfView===view))})}
+    function render(){
+      var t=templates[state.template];text("#workflowName",t.name);text("#workflowDesc",t.desc);text("#scopeChip",t.scope);text("#releaseChip",state.release==="execute"?"实现后放行":state.release==="review"?"验证后放行":"人工后放行");
+      text("#workspaceTitle",state.workspace==="isolated"?"独立 worktree":"团队共享工作区");text("#workspaceText",state.workspace==="isolated"?"首个 Session 启动时冻结 · base 跟随项目当前分支":"执行者继承调度台 cwd · 自动修复必须使用屏障");text("#compiledWorkspace",state.workspace==="isolated"?"isolated · locked":"shared · locked");
+      var review=$('[data-node="review"]'),human=$('[data-node="human"]');review.classList.toggle("is-disabled",!state.review);human.classList.toggle("is-disabled",!state.human);
+      text("#reviewToggleLabel",state.review?"已开启":"已关闭");text("#humanToggleLabel",state.human?"已开启":"已关闭");$('[data-wf-toggle="review"]').classList.toggle("is-on",state.review);$('[data-wf-toggle="human"]').classList.toggle("is-on",state.human);
+      text("#reviewSummary",state.review?"codex@review · 真实运行 + 报告 + 截图 · 最多 "+state.rounds+" 轮":"已跳过；实现完成后直接进入下一关");text("#repairOutcome",state.failure==="repair"?"失败 → 自动修复":state.failure==="ask"?"失败 → 询问人工":"失败 → 停下");text("#compiledFailure",state.review?(state.failure+" × "+state.rounds+" → stop"):"review skipped");text("#compiledRelease",state.release==="execute"?"execute.completed":state.release==="review"?"auto_verify.verified":"human_gate.approved");
+      $$('[data-release]').forEach(function(m){m.classList.toggle("is-on",m.dataset.release===state.release)});pressed("rounds",state.rounds);pressed("failure",state.failure);pressed("release",state.release);
+      $$('[data-template]').forEach(function(b){b.setAttribute("aria-selected",String(b.dataset.template===state.template))});
+      var unsafe=state.workspace==="shared"&&state.review&&state.failure==="repair"&&state.release==="execute";$("#workflowWarning").classList.toggle("is-on",unsafe);text("#saveState",unsafe?"有 1 项需要处理":"所有更改已保存");
+    }
+    function selectNode(id){$$('[data-node]').forEach(function(n){n.classList.toggle("is-selected",n.dataset.node===id)});$$('[data-panel]').forEach(function(n){n.classList.toggle("is-on",n.dataset.panel===id)})}
+    function dirty(){text("#saveState","有未发布更改")}
+    function toast(message){text("#toast",message);$("#toast").classList.add("is-on");setTimeout(function(){$("#toast").classList.remove("is-on")},1800)}
+    document.addEventListener("click",function(e){
+      var view=e.target.closest("[data-wf-view]");if(view){setView(view.dataset.wfView);return}
+      var tpl=e.target.closest("[data-template]");if(tpl){state.template=tpl.dataset.template;Object.assign(state,templates[state.template]);render();return}
+      var node=e.target.closest("[data-node]");if(node){selectNode(node.dataset.node);return}
+      var ctrl=e.target.closest("[data-control] button");if(ctrl){state[ctrl.closest("[data-control]").dataset.control]=ctrl.dataset.value;dirty();render();return}
+      var tog=e.target.closest("[data-wf-toggle]");if(tog){state[tog.dataset.wfToggle]=!state[tog.dataset.wfToggle];if(!state.review&&state.release==="review")state.release="execute";if(!state.human&&state.release==="human")state.release=state.review?"review":"execute";dirty();render();return}
+      var act=e.target.closest("[data-wf-action]");if(!act)return;var a=act.dataset.wfAction;if(a==="save"){text("#saveState","所有更改已保存");toast("已发布“"+templates[state.template].name+"”新版本")}else if(a==="simulate"){setView("runtime")}else if(a==="duplicate"){toast("已复制为项目模板草稿")}
+    });
+    render();
+  })();
+  </script>
+</body>
+</html>
