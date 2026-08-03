@@ -24,6 +24,7 @@ import {
   readWorkspaceSidebarWidth,
   WORKSPACE_SIDEBAR_STORAGE_KEY,
 } from "./WorkspaceResizeHandle.tsx";
+import { pushTaskHistoryEntry } from "./workspaceHistory.ts";
 
 type ContextView = "review" | "settings" | "palette" | "notes" | "create";
 
@@ -149,7 +150,15 @@ export function WorkspaceShell() {
     setTaskId((current) => current === deletedId ? null : current);
   }, [setTasks]);
   const selectProject = (nextProjectId: string) => { setProjectId(nextProjectId); setTaskId(null); setComposer(null); setNotes(null); setReviewTaskId(null); setSettingsSection(null); };
-  const selectTask = (task: Task) => { setProjectId(task.projectId); setTaskId(task.id); setComposer(null); setNotes(null); setReviewTaskId(null); setSettingsSection(null); };
+  const selectTask = (task: Task) => {
+    pushTaskHistoryEntry(task);
+    setProjectId(task.projectId);
+    setTaskId(task.id);
+    setComposer(null);
+    setNotes(null);
+    setReviewTaskId(null);
+    setSettingsSection(null);
+  };
   const selectTaskById = (nextTaskId: string) => {
     const target = tasks.find((task) => task.id === nextTaskId);
     if (target) selectTask(target);
@@ -165,6 +174,7 @@ export function WorkspaceShell() {
   };
   const createTask = (task: Task, draft?: ComposerDraft | null) => {
     setTasks((current) => current.some((row) => row.id === task.id) ? current.map((row) => row.id === task.id ? task : row) : [task, ...current]);
+    pushTaskHistoryEntry(task);
     setTaskId(task.id);
     setComposer(null);
     for (const noteId of draft?.noteIds ?? []) api.patchNote(noteId, { taskId: task.id }).catch(() => notify("任务已创建，但随手记回链写入失败"));
