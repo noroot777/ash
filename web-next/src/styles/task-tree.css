@@ -117,7 +117,7 @@
   white-space: nowrap;
   color: color-mix(in lch, var(--ink) 52%, var(--muted));
   font-size: 13px;
-  font-weight: 450;
+  font-weight: 400;
   -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 18px), transparent);
   mask-image: linear-gradient(90deg, #000 calc(100% - 18px), transparent);
 }
@@ -128,7 +128,7 @@
 }
 
 .workspace-task-row-wrap.is-selected .workspace-task-title {
-  font-weight: 480;
+  font-weight: 400;
 }
 
 .workspace-task-meta {
