@@ -59,6 +59,7 @@
   .ins-toggle{display:flex;align-items:center;gap:8px}.mini-toggle{position:relative;width:29px;height:17px;border-radius:999px;background:var(--line2)}.mini-toggle::after{content:"";position:absolute;top:2px;left:2px;width:13px;height:13px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.16)}.mini-toggle.is-on{background:var(--accent)}.mini-toggle.is-on::after{left:14px}
   .ins-note{margin:14px 0 0;border-left:2px solid var(--accent);padding:1px 0 1px 9px;color:var(--muted);font-size:9.5px;line-height:1.55}
   .runtime{display:none;min-height:0;flex:1;overflow:auto;padding:22px}.runtime.is-on{display:block}.wf-studio.is-off{display:none}.runtime-shell{display:grid;max-width:1200px;margin:0 auto;grid-template-columns:246px minmax(0,1fr);gap:12px;align-items:start}
+  .mapping{display:none;min-height:0;flex:1;overflow:auto;padding:24px}.mapping.is-on{display:block}.mapping-inner{max-width:960px;margin:0 auto}.mapping-inner h1{margin:0 0 4px;font-size:20px;letter-spacing:-.03em}.mapping-inner>p{margin:0 0 16px;color:var(--muted);font-size:11.5px}.mapping-card{overflow:hidden;border:1px solid var(--line2);border-radius:12px;background:var(--panel);box-shadow:var(--surface-shadow)}.mapping-table{width:100%;border-collapse:collapse;font-size:11px}.mapping-table th,.mapping-table td{padding:9px 11px;border-bottom:.5px solid var(--line);text-align:left;vertical-align:top}.mapping-table th{background:var(--raised);color:var(--faint);font-size:9.5px;font-weight:750}.mapping-table tr:last-child td{border-bottom:0}.mapping-table code{border-radius:4px;background:var(--raised);padding:1px 4px;font-size:9.5px}.bucket{display:inline-flex;border-radius:999px;padding:2px 7px;font-size:9px;font-weight:750}.bucket.need{background:#fff4d8;color:#8a6511}.bucket.live{background:var(--accent-soft);color:var(--accent)}.bucket.todo{background:var(--raised);color:var(--muted)}.bucket.done{background:var(--green-bg);color:var(--green)}.mapping-notes{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px}.mapping-note{border:1px solid var(--line2);border-radius:10px;background:var(--panel);padding:11px 12px;color:var(--muted);font-size:10.5px;line-height:1.55}.mapping-note b{display:block;margin-bottom:3px;color:var(--ink);font-size:11px}.mapping-note.is-diff{border-color:rgba(94,106,210,.3);background:rgba(94,106,210,.035)}
   .task-index{position:sticky;top:0;border:1px solid var(--line2);border-radius:12px;background:var(--panel);padding:10px;box-shadow:var(--surface-shadow)}.task-index-head{display:flex;align-items:center;gap:7px;height:30px;padding:0 4px}.task-index-head .proj-avatar{width:19px;height:19px;flex-basis:19px}.task-index-head b{font-size:12px}.task-index-head span:last-child{margin-left:auto;color:var(--faint);font-size:9px}
   .task-buckets{display:flex;gap:2px;margin:8px 0 10px;border-radius:8px;background:var(--raised);padding:3px}.task-buckets button{flex:1;min-width:0;border-radius:6px;padding:4px 1px;color:var(--muted);font-size:8.5px;white-space:nowrap}.task-buckets button[aria-pressed="true"]{background:var(--panel);color:var(--ink);box-shadow:0 1px 3px rgba(40,42,48,.12)}
   .task-section{display:flex;align-items:center;height:27px;padding:6px 5px 0;color:var(--faint);font-size:10px}.task-section button{margin-left:auto;border-radius:999px;background:#fff4d8;padding:1px 6px;color:#8a6511;font-size:8.5px}.task-section button:hover{background:#f8e6b7}
@@ -69,7 +70,7 @@
   .runtime-body{display:grid;grid-template-columns:1fr 290px;gap:14px;padding:14px 18px 18px}.runtime-focus,.runtime-side{border:1px solid var(--line2);border-radius:10px;padding:13px}.runtime-focus header{display:flex;align-items:center}.runtime-focus header b{font-size:12px}.runtime-focus header span{margin-left:auto;color:var(--faint);font:9px ui-monospace,monospace}.runtime-focus h3{margin:13px 0 4px;font-size:14px}.runtime-focus p,.runtime-side p{margin:0;color:var(--muted);font-size:10px;line-height:1.55}.evidence{display:flex;gap:7px;margin-top:12px}.evidence span{border-radius:6px;background:var(--raised);padding:5px 7px;color:var(--muted);font-size:9px}.runtime-side b{display:block;margin-bottom:5px;font-size:11px}.runtime-actions{display:flex;gap:6px;margin-top:12px}
   .wf-toast{position:fixed;right:22px;bottom:22px;z-index:140;display:none;border:1px solid var(--line2);border-radius:9px;background:var(--ink);padding:8px 11px;color:#fff;font-size:10.5px;box-shadow:var(--shadow)}.wf-toast.is-on{display:block}
   @media(max-width:1100px){.wf-studio{grid-template-columns:190px minmax(400px,1fr)}.wf-inspector{display:none}.runtime-shell{grid-template-columns:210px minmax(0,1fr)}.runtime-body{grid-template-columns:1fr}}
-  @media(max-width:780px){.set-side{display:none}.wf-studio{grid-template-columns:1fr}.wf-library{display:none}.wf-canvas{padding:16px 12px 70px}.runtime{padding:12px}.runtime-shell{grid-template-columns:1fr}.task-index{display:none}.runtime-body{grid-template-columns:1fr}.wf-toolbar{gap:5px;padding:0 7px}.wf-toolbar .wf-status,.wf-toolbar-actions .ui-btn:first-child{display:none}.wf-view-switch{margin-left:2px}.wf-toolbar-actions{gap:3px}}
+  @media(max-width:780px){.set-side{display:none}.wf-studio{grid-template-columns:1fr}.wf-library{display:none}.wf-canvas{padding:16px 12px 70px}.runtime,.mapping{padding:12px}.runtime-shell{grid-template-columns:1fr}.task-index{display:none}.runtime-body,.mapping-notes{grid-template-columns:1fr}.mapping-card{overflow:auto}.mapping-table{min-width:720px}.wf-toolbar{gap:5px;padding:0 7px}.wf-toolbar .wf-status,.wf-toolbar-actions .ui-btn:first-child{display:none}.wf-view-switch{margin-left:2px}.wf-toolbar-actions{gap:3px}}
   @media(prefers-reduced-motion:no-preference){.release-marker span,.wf-node.is-selected .wf-dot{animation:pop .18s ease-out}@keyframes pop{from{transform:scale(.94);opacity:.5}to{transform:scale(1);opacity:1}}}
 </style>
 </head>
@@ -83,6 +84,7 @@
           <div class="wf-view-switch" role="tablist">
             <button type="button" data-wf-view="editor" aria-selected="true">模板编辑</button>
             <button type="button" data-wf-view="runtime" aria-selected="false">任务运行态</button>
+            <button type="button" data-wf-view="mapping" aria-selected="false">状态映射</button>
           </div>
           <div class="wf-status"><i></i><span id="saveState">所有更改已保存</span></div>
           <div class="wf-toolbar-actions"><button class="ui-btn" data-wf-action="simulate">试演</button><button class="ui-btn primary" data-wf-action="save">发布新版本</button></div>
@@ -156,6 +158,30 @@
             <div class="runtime-body"><section class="runtime-focus"><header><b>第 1 轮真实验证</b><span>NODE review · ATTEMPT 1</span></header><h3>正在启动本地服务并检查交互</h3><p>验证者正在读取 diff、运行构建，并通过浏览器确认工作流模板在窄屏和桌面上的行为。当前任务保持 awaiting_review，队列后继尚未放行。</p><div class="evidence"><span>report.md · 写入中</span><span>截图 · 0</span><span>端口 · 5173</span></div></section><aside class="runtime-side"><b>本任务工作流</b><p>来源：harness 项目默认<br>版本：安全交付 v3<br>本地覆盖：无<br>释放点：验证通过</p><div class="runtime-actions"><button class="ui-btn">调整后续流程</button><button class="ui-btn">查看定义</button></div></aside></div>
           </article></div>
         </section>
+
+        <section class="mapping" id="mapping">
+          <div class="mapping-inner">
+            <h1>工作流状态 → 四桶映射</h1>
+            <p>内部状态保持精确；侧栏按“是否需要人介入、系统是否仍在工作”降维。冲突时优先级：需处理 ＞ 进行中 ＞ 待办 ＞ 已结束。</p>
+            <div class="mapping-card"><table class="mapping-table">
+              <thead><tr><th>工作流情形</th><th>TaskStatus</th><th>stage / WorkflowRun</th><th>侧栏桶</th><th>常驻行标签</th></tr></thead>
+              <tbody>
+                <tr><td>执行或排队中</td><td><code>running / queued</code></td><td>execute active</td><td><span class="bucket live">进行中</span></td><td>—</td></tr>
+                <tr><td>barrier · AI 自动验证</td><td><code>awaiting_review</code></td><td>verifying · review running</td><td><span class="bucket live">进行中</span></td><td>—；选中/hover 显示“自动验证中”</td></tr>
+                <tr><td>barrier · 等待人工验收</td><td><code>awaiting_review</code></td><td>awaiting_acceptance</td><td><span class="bucket need">需处理</span></td><td>待验收</td></tr>
+                <tr><td>验证失败并停住</td><td><code>awaiting_review / done</code></td><td>verify_failed</td><td><span class="bucket need">需处理</span></td><td>验证失败</td></tr>
+                <tr><td>sideband · 旁路验证中</td><td><code>done</code></td><td>verifying · WF active</td><td><span class="bucket live">进行中</span></td><td>—；选中/hover 显示“旁路验证中”</td></tr>
+                <tr><td>有提问、暂停或执行失败</td><td><code>paused / failed</code></td><td>question 或 blocking failure</td><td><span class="bucket need">需处理</span></td><td>等答复 / 失败</td></tr>
+                <tr><td>尚未启动</td><td><code>backlog / idle</code></td><td>WF pending</td><td><span class="bucket todo">待办</span></td><td>—</td></tr>
+                <tr><td>释放完成且无未处理关口</td><td><code>done / canceled</code></td><td>accepted，或 WF completed</td><td><span class="bucket done">已结束</span></td><td>—</td></tr>
+              </tbody>
+            </table></div>
+            <div class="mapping-notes">
+              <div class="mapping-note is-diff"><b>与另一份 demo 的差异 ①</b>AI 正在自动验证时，不需要人处理，因此归“进行中”，不归“需处理”。`awaiting_review` 只是一种调度屏障，不能单独决定注意力桶。</div>
+              <div class="mapping-note is-diff"><b>与另一份 demo 的差异 ②</b>sideband 已经释放队列，但验证者仍在真实运行，所以归“进行中”，而不是“已结束”；只有工作流不再活动且没有待办门，才归“已结束”。</div>
+            </div>
+          </div>
+        </section>
       </div>
     </main>
   </div>
@@ -174,7 +200,7 @@
     var $=function(s){return document.querySelector(s)};var $$=function(s){return Array.from(document.querySelectorAll(s))};
     function text(id,value){var n=$(id);if(n)n.textContent=value}
     function pressed(control,value){$$('[data-control="'+control+'"] button').forEach(function(b){b.setAttribute("aria-pressed",String(b.dataset.value===value))})}
-    function setView(view){var runtime=view==="runtime";$("#studio").classList.toggle("is-off",runtime);$("#runtime").classList.toggle("is-on",runtime);$$('[data-wf-view]').forEach(function(b){b.setAttribute("aria-selected",String(b.dataset.wfView===view))})}
+    function setView(view){var runtime=view==="runtime",mapping=view==="mapping";$("#studio").classList.toggle("is-off",runtime||mapping);$("#runtime").classList.toggle("is-on",runtime);$("#mapping").classList.toggle("is-on",mapping);$$('[data-wf-view]').forEach(function(b){b.setAttribute("aria-selected",String(b.dataset.wfView===view))})}
     function render(){
       var t=templates[state.template];text("#workflowName",t.name);text("#workflowDesc",t.desc);text("#scopeChip",t.scope);text("#releaseChip",state.release==="execute"?"实现后放行":state.release==="review"?"验证后放行":"人工后放行");
       text("#workspaceTitle",state.workspace==="isolated"?"独立 worktree":"团队共享工作区");text("#workspaceText",state.workspace==="isolated"?"首个 Session 启动时冻结 · base 跟随项目当前分支":"执行者继承调度台 cwd · 自动修复必须使用屏障");text("#compiledWorkspace",state.workspace==="isolated"?"isolated · locked":"shared · locked");
