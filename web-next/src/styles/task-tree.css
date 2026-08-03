@@ -104,6 +104,11 @@
   transition: opacity 130ms ease-out;
 }
 
+/* The origin chip is a sibling of the row button, so reserve its hit area from the title. */
+.workspace-task-row--has-origin {
+  padding-right: 33px;
+}
+
 .workspace-task-row-wrap:hover > .task-origin-chip,
 .workspace-task-row-wrap:focus-within > .task-origin-chip,
 .workspace-task-row-wrap.is-selected > .task-origin-chip {
@@ -160,14 +165,9 @@
   transform: none;
 }
 
-.workspace-task-pin,
 .workspace-task-kind {
   flex: 0 0 auto;
   color: var(--faint);
-}
-
-.workspace-task-pin {
-  color: var(--accent);
 }
 
 .workspace-status-dot {

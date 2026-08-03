@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { ProjectView, Task } from "@harness/shared";
 import { statusCounts, workersOf } from "@harness/shared/team";
-import { CaretRight, PushPin, Scales, UsersThree } from "@phosphor-icons/react";
+import { CaretRight, Scales, UsersThree } from "@phosphor-icons/react";
 import { OriginTaskChip, taskParentLink } from "../components/TaskOrigin.tsx";
 import { TaskStatusDot } from "../components/TaskStatusDot.tsx";
 import { useTaskReadState, type IndicatorForTask } from "../lib/useTaskReadState.ts";
@@ -106,7 +106,7 @@ function TaskRow({
   const selected = selectedTaskId === task.id;
   const indicator = indicatorForTask(task);
   const hasOrigin = showOrigin && taskParentLink(task, allTasks) !== null;
-  const hasMeta = task.pinnedAt != null || task.mode === "debate" || trailing != null;
+  const hasMeta = task.mode === "debate" || trailing != null;
   return (
     <div className={`workspace-task-row-wrap ui-selectable${selected ? " is-selected" : ""}${wrapperClassName ? ` ${wrapperClassName}` : ""}`}>
       <span className="workspace-task-leading">
@@ -123,7 +123,6 @@ function TaskRow({
         <span className="workspace-task-title">{task.title || "未命名任务"}</span>
         {hasMeta && (
           <span className="workspace-task-meta">
-            {task.pinnedAt != null && <PushPin size={11} weight="fill" className="workspace-task-pin" aria-label="已置顶" />}
             {task.mode === "debate" && <Scales size={12} weight="bold" className="workspace-task-kind" aria-label="辩论" />}
             {trailing}
           </span>
