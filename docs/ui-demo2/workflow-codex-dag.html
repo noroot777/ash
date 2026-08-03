@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
+<title>工作流 DAG · Codex 方案 — Harness UI Demo</title>
+<link rel="stylesheet" href="style.css">
+<style>
+  .dag-main{min-width:0;flex:1;overflow:hidden;border:.5px solid var(--line);border-radius:12px;background:var(--canvas);box-shadow:var(--surface-shadow)}
+  .dag-page{display:flex;height:100%;min-height:0;flex-direction:column}
+  .dag-toolbar{display:flex;height:52px;flex:0 0 52px;align-items:center;gap:10px;border-bottom:.5px solid var(--line);padding:0 14px;background:rgba(255,255,255,.86);backdrop-filter:blur(18px)}
+  .dag-title{min-width:0}.dag-title b{display:block;font-size:13px;font-weight:650}.dag-title small{display:block;color:var(--faint);font-size:9.5px}
+  .dag-views{display:flex;gap:2px;margin-left:12px;border-radius:8px;background:var(--raised);padding:3px}.dag-views a{height:25px;border-radius:6px;padding:5px 9px;color:var(--muted);font-size:10px;text-decoration:none}.dag-views a.is-on{background:var(--panel);color:var(--ink);box-shadow:0 1px 3px rgba(40,42,48,.12)}
+  .dag-valid{display:flex;align-items:center;gap:5px;margin-left:auto;color:var(--green);font-size:10px}.dag-valid i{width:6px;height:6px;border-radius:50%;background:currentColor}
+  .dag-actions{display:flex;gap:6px}.dag-studio{display:grid;min-height:0;flex:1;grid-template-columns:210px minmax(620px,1fr) 282px}
+  .dag-left,.dag-right{min-height:0;overflow:auto;background:var(--canvas)}.dag-left{border-right:.5px solid var(--line);padding:11px 9px}.dag-right{border-left:.5px solid var(--line)}
+  .pane-label{display:flex;align-items:center;height:25px;padding:0 7px;color:var(--faint);font-size:9px;font-weight:750;letter-spacing:.09em;text-transform:uppercase}
+  .tpl{display:block;width:100%;margin:2px 0;border-radius:8px;padding:8px 9px;text-align:left}.tpl:hover{background:var(--raised)}.tpl[aria-selected="true"]{background:var(--sel-bg);box-shadow:inset 2px 0 0 var(--accent)}
+  .tpl b{display:flex;align-items:center;gap:6px;font-size:11.5px;font-weight:620}.tpl b i{width:7px;height:7px;border-radius:50%;background:var(--faint)}.tpl[aria-selected="true"] b i{background:var(--accent)}.tpl small{display:block;margin-top:2px;color:var(--faint);font-size:9px;line-height:1.4}
+  .node-library{display:grid;grid-template-columns:1fr 1fr;gap:5px;padding:0 3px}.lib-node{display:flex;min-height:48px;flex-direction:column;justify-content:center;border:1px solid var(--line2);border-radius:8px;background:var(--panel);padding:6px 7px;text-align:left}.lib-node:hover{border-color:rgba(94,106,210,.5);background:var(--accent-soft)}.lib-node b{font-size:9.5px}.lib-node small{margin-top:2px;color:var(--faint);font:8px ui-monospace,monospace}
+  .dag-safety{margin:14px 3px 0;border-top:.5px solid var(--line);padding:11px 6px;color:var(--muted);font-size:9px;line-height:1.55}.dag-safety b{display:block;margin-bottom:3px;color:var(--ink);font-size:10px}.dag-safety code{color:var(--accent);font-size:8.5px}
+  .dag-center{position:relative;min-height:0;overflow:auto;background:radial-gradient(circle at 50% 0,rgba(94,106,210,.06),transparent 36%),var(--canvas)}
+  .canvas-head{position:sticky;top:0;z-index:8;display:flex;align-items:center;gap:10px;height:48px;border-bottom:.5px solid var(--line);padding:0 14px;background:rgba(250,250,251,.9);backdrop-filter:blur(14px)}.canvas-head>div{min-width:0;flex:1}.canvas-head b{display:block;font-size:12px}.canvas-head small{display:block;color:var(--faint);font-size:9px}.canvas-chip{border-radius:999px;background:var(--accent-soft);padding:3px 7px;color:var(--accent);font-size:8.5px;font-weight:700}
+  .dag-board-wrap{min-width:980px;padding:18px 20px 86px}.dag-board{position:relative;width:940px;height:590px;margin:0 auto;border:1px solid var(--line2);border-radius:13px;background-color:#fbfbfc;background-image:linear-gradient(rgba(85,88,98,.055) 1px,transparent 1px),linear-gradient(90deg,rgba(85,88,98,.055) 1px,transparent 1px);background-size:20px 20px;box-shadow:inset 0 1px 0 #fff,0 8px 24px rgba(37,39,45,.035)}
+  .dag-board svg{position:absolute;inset:0;width:100%;height:100%;overflow:visible}.edge{fill:none;stroke:#adb0b8;stroke-width:1.4;marker-end:url(#arrow)}.edge.good{stroke:#57a576}.edge.bad{stroke:#c87175}.edge.loop{stroke:#b78a35;stroke-dasharray:5 4}.edge.sideband{display:none;stroke:var(--accent);stroke-width:2;stroke-dasharray:6 4}.is-sideband .edge.sideband{display:block}.is-sideband .edge.barrier{opacity:.3}.is-fast .optional{opacity:.25;filter:grayscale(1)}
+  .edge-label{position:absolute;z-index:2;border:1px solid var(--line);border-radius:999px;background:rgba(251,251,252,.96);padding:2px 6px;color:var(--muted);font-size:8px;white-space:nowrap}.edge-label.good{color:var(--green)}.edge-label.bad{color:var(--red)}.edge-label.loop{color:#8a6511}.is-fast .optional-label{opacity:.25}
+  .dag-node{position:absolute;z-index:3;width:174px;border:1px solid var(--line2);border-radius:10px;background:var(--panel);box-shadow:0 4px 12px rgba(37,39,45,.06);cursor:pointer;transition:border-color .15s,box-shadow .15s,transform .15s}.dag-node:hover{transform:translateY(-1px);border-color:rgba(94,106,210,.45)}.dag-node.is-selected{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft),0 8px 18px rgba(37,39,45,.08)}
+  .node-head{display:flex;align-items:center;gap:7px;border-bottom:.5px solid var(--line);padding:7px 9px}.node-icon{display:grid;width:22px;height:22px;place-items:center;border-radius:6px;background:var(--raised);color:var(--muted);font-size:9px;font-weight:750}.dag-node[data-node="verify"] .node-icon{background:#eaf0ff;color:var(--accent)}.dag-node[data-node="human"] .node-icon{background:#fff4d8;color:#8a6511}.dag-node[data-node="repair"] .node-icon{background:#f9ede0;color:#a7662b}.dag-node[data-node="accept"] .node-icon{background:var(--green-bg);color:var(--green)}
+  .node-title{min-width:0;flex:1}.node-title b{display:block;font-size:10.5px}.node-title small{display:block;color:var(--faint);font:7.8px ui-monospace,monospace}.node-menu{color:var(--faint);font-size:13px}.node-body{padding:7px 9px 8px;color:var(--muted);font-size:8.7px;line-height:1.45}.node-meta{display:flex;gap:4px;margin-top:6px}.node-meta span{border-radius:4px;background:var(--raised);padding:2px 4px;color:var(--faint);font-size:7.5px}
+  .terminal{position:absolute;z-index:3;display:grid;width:44px;height:44px;place-items:center;border:1px solid var(--line2);border-radius:50%;background:var(--panel);color:var(--muted);font-size:8px;font-weight:700;box-shadow:0 3px 10px rgba(37,39,45,.07)}.terminal.end{border-color:#a9d0b5;background:var(--green-bg);color:var(--green)}.terminal.stop{border-color:#e3b7b9;background:#f9e8e9;color:var(--red)}
+  .release{position:absolute;z-index:5;display:flex;align-items:center;gap:6px;border-radius:999px;background:var(--accent);padding:4px 8px;color:#fff;font-size:8px;font-weight:750;box-shadow:0 3px 8px rgba(94,106,210,.23)}.release::before{content:"";width:6px;height:6px;border:2px solid rgba(255,255,255,.75);border-radius:50%}.release-standard{left:541px;top:111px}.release-human{display:none;left:753px;top:262px}.release-sideband{display:none;left:279px;top:252px}.is-strict .release-standard{display:none}.is-strict .release-human{display:flex}.is-sideband .release-standard{display:none}.is-sideband .release-sideband{display:flex}.is-fast .release-standard{display:none}.is-fast .release-sideband{display:flex}
+  .bucket-strip{position:absolute;right:14px;bottom:12px;left:14px;z-index:4;display:flex;align-items:center;gap:8px;border:1px solid var(--line2);border-radius:9px;background:rgba(255,255,255,.92);padding:8px 10px;box-shadow:var(--surface-shadow);backdrop-filter:blur(10px)}.bucket-strip b{font-size:9.5px}.bucket-strip p{min-width:0;flex:1;margin:0;color:var(--faint);font-size:8.5px}.bucket-pill{border-radius:999px;background:var(--accent-soft);padding:3px 7px;color:var(--accent);font-size:8.5px;font-weight:750}.bucket-pill.need{background:#fff4d8;color:#8a6511}
+  .ins-head{position:sticky;top:0;z-index:3;display:flex;height:42px;align-items:center;border-bottom:.5px solid var(--line);padding:0 12px;background:rgba(250,250,251,.94);font-size:11.5px;font-weight:620;backdrop-filter:blur(12px)}.ins-body{padding:12px}.ins-kicker{margin-bottom:4px;color:var(--accent);font:750 8.5px ui-monospace,monospace}.ins-body h2{margin:0 0 4px;font-size:15px}.ins-desc{margin:0 0 14px;color:var(--muted);font-size:9.5px;line-height:1.55}.ins-field{margin-bottom:12px}.ins-field>span{display:block;margin-bottom:5px;color:var(--muted);font-size:9px}.ins-control{display:flex;min-height:31px;align-items:center;border:1px solid var(--line2);border-radius:8px;background:var(--panel);padding:5px 8px;font-size:10px;box-shadow:var(--surface-shadow)}.ins-control i{margin-left:auto;color:var(--faint);font-style:normal}.ins-ports{border:1px solid var(--line2);border-radius:9px;overflow:hidden}.port{display:flex;align-items:center;gap:6px;padding:7px 8px;border-bottom:.5px solid var(--line);font-size:9px}.port:last-child{border-bottom:0}.port i{width:6px;height:6px;border-radius:50%;background:var(--green)}.port.bad i{background:var(--red)}.port span{margin-left:auto;color:var(--faint)}.ins-note{margin-top:13px;border-left:2px solid var(--accent);padding-left:8px;color:var(--muted);font-size:9px;line-height:1.55}.compile-card{margin-top:13px;border:1px solid var(--line2);border-radius:9px;background:var(--panel);padding:9px}.compile-card b{display:block;color:var(--green);font-size:9.5px}.compile-card p{margin:4px 0 0;color:var(--faint);font-size:8.5px;line-height:1.5}
+  .toast{position:fixed;right:22px;bottom:22px;z-index:200;display:none;border-radius:9px;background:var(--ink);padding:8px 11px;color:#fff;font-size:10px;box-shadow:var(--shadow)}.toast.is-on{display:block}
+  @media(max-width:1450px){.set-side{display:none}.dag-studio{grid-template-columns:180px minmax(0,1fr) 250px}.dag-board-wrap{min-width:0;height:520px}.dag-board{zoom:.84}.node-library{grid-template-columns:1fr 1fr}}
+  @media(max-width:1050px){.dag-studio{grid-template-columns:170px minmax(0,1fr)}.dag-right{display:none}.dag-board{zoom:.8}.node-library{grid-template-columns:1fr}}
+  @media(max-width:780px){.set-side,.dag-left{display:none}.dag-studio{grid-template-columns:1fr}.dag-toolbar{padding:0 8px}.dag-valid{display:none}.dag-views{margin-left:auto}.dag-actions .ui-btn:first-child{display:none}.dag-board-wrap{padding-left:10px}.canvas-head{position:relative}}
+</style>
+</head>
+<body>
+  <div class="settings-shell">
+    <div data-include="settings-side" data-active="workflows"></div>
+    <main class="dag-main">
+      <div class="dag-page">
+        <header class="dag-toolbar">
+          <div class="dag-title"><b>工作流编排</b><small>系统级 · 高级 DAG 视图</small></div>
+          <nav class="dag-views"><a href="workflow-codex.html">阶段轨</a><a class="is-on" href="workflow-codex-dag.html">DAG</a></nav>
+          <div class="dag-valid"><i></i><span id="validText">定义有效 · 1 个有界回路</span></div>
+          <div class="dag-actions"><button class="ui-btn" data-action="simulate">试演</button><button class="ui-btn primary" data-action="publish">发布新版本</button></div>
+        </header>
+        <div class="dag-studio">
+          <aside class="dag-left">
+            <div class="pane-label">模板</div>
+            <button class="tpl" data-template="sideband" aria-selected="false"><b><i></i>并行旁路</b><small>实现后放行，验证继续运行</small></button>
+            <button class="tpl" data-template="standard" aria-selected="true"><b><i></i>标准交付</b><small>验证通过后释放下游队列</small></button>
+            <button class="tpl" data-template="strict" aria-selected="false"><b><i></i>严格发布</b><small>人工通过并合并后才放行</small></button>
+            <button class="tpl" data-template="fast" aria-selected="false"><b><i></i>极速原型</b><small>跳过验证与人工关口</small></button>
+            <div class="pane-label" style="margin-top:10px">节点库</div>
+            <div class="node-library">
+              <button class="lib-node" data-add="verify"><b>＋ 自动验证</b><small>agent.verify</small></button>
+              <button class="lib-node" data-add="human"><b>＋ 人工关口</b><small>human.gate</small></button>
+              <button class="lib-node" data-add="repair"><b>＋ 自动修复</b><small>agent.repair</small></button>
+              <button class="lib-node" data-add="accept"><b>＋ 仓库验收</b><small>repo.accept</small></button>
+            </div>
+            <div class="dag-safety"><b>受控 DAG，不是任意脚本</b>节点来自系统类型库；发布前编译检查可达性、循环上限、工作区冻结与人工不可逆动作。<br><code>builtin → system → project → snapshot</code></div>
+          </aside>
+          <section class="dag-center">
+            <header class="canvas-head"><div><b id="flowName">标准交付</b><small id="flowDesc">实现完成 → 自动验证；失败最多回修 2 次，通过后人工验收。</small></div><span class="canvas-chip" id="releaseText">验证后放行</span></header>
+            <div class="dag-board-wrap">
+              <div class="dag-board" id="board">
+                <svg viewBox="0 0 940 590" aria-hidden="true">
+                  <defs><marker id="arrow" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0 0L7 3.5L0 7Z" fill="context-stroke"/></marker></defs>
+                  <path class="edge good" d="M72 267 H118"/>
+                  <path class="edge good barrier" d="M292 247 C330 247 323 162 366 162"/>
+                  <path class="edge bad" d="M205 291 C205 354 114 371 114 431"/>
+                  <path class="edge good optional" d="M540 143 H615"/>
+                  <path class="edge bad loop optional" d="M454 200 V383"/>
+                  <path class="edge loop optional" d="M367 430 C320 430 320 185 366 166"/>
+                  <path class="edge good optional" d="M703 200 V298"/>
+                  <path class="edge bad loop optional" d="M616 162 C558 162 560 430 540 430"/>
+                  <path class="edge good optional" d="M790 344 H865"/>
+                  <path class="edge bad loop optional" d="M703 389 C703 493 562 493 540 444"/>
+                  <path class="edge sideband" d="M292 270 H855"/>
+                </svg>
+                <span class="terminal" style="left:28px;top:245px">开始</span>
+                <article class="dag-node is-selected" data-node="execute" style="left:118px;top:202px"><div class="node-head"><span class="node-icon">RUN</span><div class="node-title"><b>实现任务</b><small>agent.run</small></div><span class="node-menu">···</span></div><div class="node-body">codex@cpa · gpt-5.6-sol<div class="node-meta"><span>worktree</span><span>完成/失败</span></div></div></article>
+                <article class="dag-node optional" data-node="verify" style="left:366px;top:105px"><div class="node-head"><span class="node-icon">VFY</span><div class="node-title"><b>自动验证</b><small>agent.verify</small></div><span class="node-menu">···</span></div><div class="node-body">真实运行 · 报告 · 截图<div class="node-meta"><span id="roundMeta">最多 2 轮</span><span>独立任务</span></div></div></article>
+                <article class="dag-node optional" data-node="human" style="left:615px;top:105px"><div class="node-head"><span class="node-icon">YOU</span><div class="node-title"><b>人工验收</b><small>human.gate</small></div><span class="node-menu">···</span></div><div class="node-body">查看 diff 与验证证据<div class="node-meta"><span>通过</span><span>打回</span></div></div></article>
+                <article class="dag-node optional" data-node="accept" style="left:615px;top:298px"><div class="node-head"><span class="node-icon">GIT</span><div class="node-title"><b>合并与清理</b><small>repo.accept</small></div><span class="node-menu">···</span></div><div class="node-body">仓库锁内执行确定性合并<div class="node-meta"><span>成功</span><span>冲突</span></div></div></article>
+                <article class="dag-node optional" data-node="repair" style="left:366px;top:383px"><div class="node-head"><span class="node-icon">FIX</span><div class="node-title"><b>自动修复</b><small>agent.repair</small></div><span class="node-menu">···</span></div><div class="node-body">回到原任务继续修复<div class="node-meta"><span>attempt +1</span><span>有界循环</span></div></div></article>
+                <span class="terminal stop" style="left:92px;top:431px">停下</span><span class="terminal end optional" style="left:865px;top:322px">完成</span>
+                <span class="edge-label good" style="left:307px;top:192px">完成</span><span class="edge-label bad" style="left:151px;top:344px">失败</span><span class="edge-label good optional-label" style="left:557px;top:130px">通过</span><span class="edge-label bad loop optional-label" style="left:463px;top:277px">失败</span><span class="edge-label loop optional-label" style="left:306px;top:302px">修复后重验</span><span class="edge-label bad loop optional-label" style="left:552px;top:378px">打回</span><span class="edge-label good optional-label" style="left:711px;top:244px">批准</span><span class="edge-label bad loop optional-label" style="left:643px;top:477px">合并冲突</span>
+                <span class="release release-standard">释放下游队列</span><span class="release release-human">释放下游队列</span><span class="release release-sideband">实现后即释放</span>
+                <div class="bucket-strip"><b>运行时投影</b><p id="bucketExplain">AI 自动验证仍在真实工作，无需人介入。</p><span class="bucket-pill" id="bucketPill">进行中</span></div>
+              </div>
+            </div>
+          </section>
+          <aside class="dag-right">
+            <div class="ins-head">节点参数</div>
+            <div class="ins-body">
+              <div class="ins-kicker" id="insType">AGENT.RUN</div><h2 id="insName">实现任务</h2><p class="ins-desc" id="insDesc">启动真实 CLI Session 执行当前任务；首个 Session 创建时冻结工作区策略。</p>
+              <div class="ins-field"><span id="fieldLabel">执行器 / 模型</span><div class="ins-control" id="fieldValue">codex@cpa · gpt-5.6-sol<i>⌄</i></div></div>
+              <div class="ins-field"><span>工作区</span><div class="ins-control" id="workspaceValue">独立 worktree · 启动后锁定<i>⌄</i></div></div>
+              <div class="ins-field"><span>结果端口</span><div class="ins-ports" id="ports"><div class="port"><i></i>completed<span>→ 自动验证</span></div><div class="port bad"><i></i>failed<span>→ 停下</span></div></div></div>
+              <p class="ins-note" id="insNote">TaskStatus 负责调度；WorkflowRun 保存节点游标、尝试次数和释放点，stage 只做展示投影。</p>
+              <div class="compile-card"><b>✓ 编译检查通过</b><p>循环上限 2 · 所有端口可达 · 人工批准后才允许 repo.accept · 工作区策略无冲突</p></div>
+            </div>
+          </aside>
+        </div>
+      </div>
+    </main>
+  </div>
+  <div class="toast" id="toast">已发布“标准交付 v4”</div>
+  <script src="app.js"></script>
+  <script>
+  (function(){
+    "use strict";
+    var flows={
+      sideband:{name:"并行旁路",desc:"实现完成立即放行；自动验证作为旁路继续运行，不阻塞无关后继。",release:"实现后放行",cls:"is-sideband",rounds:"2",bucket:"进行中",explain:"旁路验证仍在真实运行，所以不归“已结束”。"},
+      standard:{name:"标准交付",desc:"实现完成 → 自动验证；失败最多回修 2 次，通过后人工验收。",release:"验证后放行",cls:"",rounds:"2",bucket:"进行中",explain:"AI 自动验证仍在真实工作，无需人介入。"},
+      strict:{name:"严格发布",desc:"验证、人工验收与确定性合并全部通过后，才释放依赖任务。",release:"合并后放行",cls:"is-strict",rounds:"3",bucket:"需处理",explain:"运行到人工关口时需要你明确批准或打回。"},
+      fast:{name:"极速原型",desc:"实现完成直接结束；验证、人工验收与合并节点在此模板中跳过。",release:"实现后放行",cls:"is-fast",rounds:"0",bucket:"进行中",explain:"执行器仍在运行；实现完成后工作流立即结束。"}
+    };
+    var nodes={
+      execute:{type:"agent.run",name:"实现任务",desc:"启动真实 CLI Session 执行当前任务；首个 Session 创建时冻结工作区策略。",label:"执行器 / 模型",value:"codex@cpa · gpt-5.6-sol",ports:[["completed","→ 自动验证",0],["failed","→ 停下",1]],note:"TaskStatus 负责调度；WorkflowRun 保存节点游标、尝试次数和释放点，stage 只做展示投影。"},
+      verify:{type:"agent.verify",name:"自动验证",desc:"独立审查任务进行真实运行并沉淀报告与截图；只读评议不能产出 verified。",label:"验证执行器 / 模型",value:"codex@review · gpt-5.6-sol",ports:[["verified","→ 人工验收",0],["failed","→ 自动修复",1]],note:"验证任务是 NodeRun 的执行载体；节点只保存指针、证据和 outcome。"},
+      human:{type:"human.gate",name:"人工验收",desc:"向人展示 diff、验证证据与风险；批准是进入不可逆合并动作的必要条件。",label:"通过条件",value:"必须已有 verified 结论",ports:[["approved","→ 合并与清理",0],["rejected","→ 自动修复",1]],note:"暂停必须持久可见；刷新后仍应显示“待人工验收”，而不是只弹 toast。"},
+      accept:{type:"repo.accept",name:"合并与清理",desc:"复用现有仓库锁和确定性验收动作，成功后清理 worktree 与任务分支。",label:"合并策略",value:"Harness 安全合并",ports:[["success","→ 完成",0],["conflict","→ 自动修复",1]],note:"不可逆动作不允许自动跨过人工关口；冲突回到来源任务处理。"},
+      repair:{type:"agent.repair",name:"自动修复",desc:"回到原任务和原工作区继续修复，完成后只重跑受影响的验证节点。",label:"最大尝试次数",value:"2 次；超限后停下",ports:[["completed","→ 自动验证",0],["exhausted","→ 停下",1]],note:"回路必须有静态上限；重启后从持久化 NodeRun attempt 恢复，不能靠内存计数。"}
+    };
+    var board=document.querySelector("#board"),toast=document.querySelector("#toast");
+    function setText(sel,value){var n=document.querySelector(sel);if(n)n.textContent=value}
+    function renderFlow(key){var f=flows[key];board.className="dag-board "+f.cls;setText("#flowName",f.name);setText("#flowDesc",f.desc);setText("#releaseText",f.release);setText("#roundMeta",f.rounds==="0"?"已跳过":"最多 "+f.rounds+" 轮");setText("#bucketPill",f.bucket);setText("#bucketExplain",f.explain);document.querySelector("#bucketPill").classList.toggle("need",f.bucket==="需处理");document.querySelectorAll("[data-template]").forEach(function(b){b.setAttribute("aria-selected",String(b.dataset.template===key))})}
+    function renderNode(key){var n=nodes[key];document.querySelectorAll("[data-node]").forEach(function(el){el.classList.toggle("is-selected",el.dataset.node===key)});setText("#insType",n.type.toUpperCase());setText("#insName",n.name);setText("#insDesc",n.desc);setText("#fieldLabel",n.label);document.querySelector("#fieldValue").innerHTML=n.value+"<i>⌄</i>";setText("#insNote",n.note);document.querySelector("#ports").innerHTML=n.ports.map(function(p){return '<div class="port'+(p[2]?' bad':'')+'"><i></i>'+p[0]+'<span>'+p[1]+'</span></div>'}).join("")}
+    function showToast(message){toast.textContent=message;toast.classList.add("is-on");setTimeout(function(){toast.classList.remove("is-on")},1700)}
+    document.addEventListener("click",function(e){var tpl=e.target.closest("[data-template]");if(tpl){renderFlow(tpl.dataset.template);return}var node=e.target.closest("[data-node]");if(node){renderNode(node.dataset.node);return}var add=e.target.closest("[data-add]");if(add){showToast("已从节点库添加 "+nodes[add.dataset.add].name+"（演示）");return}var act=e.target.closest("[data-action]");if(!act)return;if(act.dataset.action==="publish")showToast("已发布当前 DAG 新版本");if(act.dataset.action==="simulate")showToast("试演通过：3 条成功路径，4 条失败路径")});
+    renderFlow("standard");renderNode("execute");
+  })();
+  </script>
+</body>
+</html>

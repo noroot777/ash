@@ -16,6 +16,7 @@
     ["palette.html", "⌘K"],
     ["components.html", "控件对照"],
     ["workflow-codex.html", "工作流·Codex"],
+    ["workflow-codex-dag.html", "工作流·DAG"],
     ["settings-agents.html", "设置·智能体"],
     ["settings-project.html", "设置·项目"],
     ["settings-groups.html", "设置·分组"],
