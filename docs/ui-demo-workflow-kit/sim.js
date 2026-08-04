@@ -93,11 +93,18 @@
 
   // 最坏情况：每一关都「一直不过」时会怎样 —— 用来回答「这条流程最多打扰我几次」
   function worst(steps) {
-    var a = {};
-    steps.forEach(function (s) { if (s.fail) a[s.id] = "always"; });
-    var r = run(steps, a);
+    var r = run(steps, pessimistic(steps, "always"));
     return { interrupts: r.stats.gates + r.stats.asks + (r.end.tone === "bad" ? 1 : 0), aiRuns: r.stats.aiRuns };
   }
 
-  global.WFSIM = { run: run, worst: worst, STATUS: STATUS, MODES: MODES };
+  // 「不顺利」的假设只加在检查性关口上：让 AI 干活那一步自己崩了是另一回事，
+  // 那种情况任务直接落 failed，看不出这条流程的形状。
+  var CHECKY = { verify: 1, human: 1, command: 1 };
+  function pessimistic(steps, how) {
+    var a = {};
+    steps.forEach(function (s) { if (s.fail && CHECKY[s.kind]) a[s.id] = how; });
+    return a;
+  }
+
+  global.WFSIM = { run: run, worst: worst, pessimistic: pessimistic, STATUS: STATUS, MODES: MODES };
 })(window);
