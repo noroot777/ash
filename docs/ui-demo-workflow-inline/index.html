@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>工作流编排 · 融进新建任务</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div class="stage">
+  <p class="cap">下面是 <b>harness 真实的新建任务面板</b>（web-next 的 composer，配色、字号、分节都照抄）。
+    「干完之后」那一节是新加的——收起来只有 <b>三行高</b>，和「任务选项」一个量级。</p>
+
+  <!-- ══ 新建任务面板 ══════════════════════════════════════════ -->
+  <div class="panel">
+    <div class="phd">
+      <b>新建任务</b>
+      <span class="kind">harness · /Users/fjh/code/harness</span>
+      <button class="x">✕</button>
+    </div>
+
+    <div class="pscroll">
+      <div class="pinner">
+
+        <div class="tabs">
+          <button aria-selected="true">单飞</button>
+          <button>团队</button>
+          <button>辩论</button>
+          <span>草稿会自动留着</span>
+        </div>
+
+        <label class="fld big">
+          <span>任务描述</span>
+          <div class="ta">把设置页的「工作流」入口做出来：进去能看到本项目当前这条线，能改，能存成项目默认。</div>
+        </label>
+
+        <section class="sec">
+          <header class="shd">
+            <span class="ico">◨</span>
+            <div><h2>执行模式</h2><p>决定由谁接手，以及团队内的角色分工。</p></div>
+          </header>
+          <div class="grid">
+            <label class="fld"><span>执行器</span>
+              <div class="sel">codex@cpa<em>▾</em></div>
+              <small>实际运行：gpt-5.6-sol · xhigh</small>
+            </label>
+          </div>
+        </section>
+
+        <!-- ── 新加的一节 ─────────────────────────────────── -->
+        <section class="sec is-wf">
+          <header class="shd">
+            <span class="ico">⇥</span>
+            <div><h2>干完之后</h2><p>谁来验、什么时候停下等你、过了要不要合并。</p></div>
+            <button class="src" id="src"></button>
+            <button class="grow" id="grow">展开编排</button>
+          </header>
+
+          <div class="rail" id="rail" data-open="false"></div>
+          <div class="cost" id="cost"></div>
+          <div class="fork" id="fork" hidden></div>
+        </section>
+
+        <section class="sec">
+          <header class="shd">
+            <span class="ico">⚙</span>
+            <div><h2>任务选项</h2><p>运行位置、组织方式与调度优先级。</p></div>
+          </header>
+          <div class="grid">
+            <label class="fld"><span>worktree</span>
+              <div class="tog" id="tog"><i></i><b></b></div>
+            </label>
+            <label class="fld"><span>base 分支</span><div class="sel">当前 HEAD<em>▾</em></div></label>
+            <label class="fld"><span>分组</span><div class="sel">无分组<em>▾</em></div></label>
+            <label class="fld"><span>优先级</span><div class="sel">中<em>▾</em></div></label>
+          </div>
+        </section>
+
+      </div>
+    </div>
+
+    <div class="pft">
+      <span class="lbl">启动方式</span>
+      <div class="sel sm">创建并运行<em>▾</em></div>
+      <span class="ftline" id="ftline"></span>
+      <button class="go">▶ 创建并运行</button>
+    </div>
+  </div>
+
+  <!-- ══ 说明 ═══════════════════════════════════════════════ -->
+  <div class="notes">
+    <div class="note">
+      <b>为什么它挤得进去</b>
+      <p>整条线收起来的时候<b>只剩站名</b>：一排小胶囊 + 中间常驻的虚线 ＋。
+        高度和「执行模式」那一节的一行下拉框一样。参数、任务显示什么状态、失败往哪拐，
+        全部挪到<b>点开哪一站才出现</b>——你不点，它就不占地方。</p>
+    </div>
+    <div class="note">
+      <b>要真编排的时候再长大</b>
+      <p>右上角「展开编排」把同一条线撑开成
+        <a href="../ui-demo-workflow-ride/index.html">线路图</a>那副样子：站台、参数、失败支线都在。
+        <b>同一份定义、同一套操作</b>，只是两个尺寸。设置页里放的就是展开态。</p>
+    </div>
+    <div class="note">
+      <b>三层作用域在这儿只是一句话</b>
+      <p>新建任务时它默认<b>跟着项目走</b>，标题旁边那颗小标签就是来源。
+        你在这儿动一下，它自动变成「这个任务自己定」，并给你一句
+        <b>「存成本项目以后的默认」</b>——继承关系不用先学，改了才需要知道。</p>
+    </div>
+  </div>
+</div>
+
+<div class="pop" id="pop" hidden></div>
+
+<script src="../ui-demo-workflow-kit/model.js"></script>
+<script src="../ui-demo-workflow-kit/sim.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

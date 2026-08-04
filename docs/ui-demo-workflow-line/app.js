@@ -51,7 +51,7 @@
     var b = next ? tone(K[next.kind].hue) : "transparent";
     return "<div></div>" +
       '<div class="segw" style="--flow:linear-gradient(90deg,' + a + "," + b + ')">' +
-        '<div class="seg"></div><button class="ins" data-ins="' + at + '">＋ 加一站</button>' +
+        '<div class="seg"></div><button class="ins" data-ins="' + at + '"><span>＋</span><i>加一站</i></button>' +
       "</div><div></div>";
   }
 
