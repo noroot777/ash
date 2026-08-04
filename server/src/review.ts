@@ -38,6 +38,7 @@ import {
   type Settlement,
 } from "./review-policy.js";
 import { taskWorkflowDef } from "./workflows.js";
+import { advanceAfterRun, advanceAfterVerify } from "./workflow-steps.js";
 import type { Workspace } from "./git.js";
 import { id, now } from "./util.js";
 
@@ -412,6 +413,10 @@ async function finishReview(review: TaskRow, status: Settlement): Promise<void> 
   if (status === "done") await writeConclusion(target.id, round, review.id, conclusion);
   bus.publish({ type: "task.review", taskId: target.id });
   if (action === "verified") {
+    // 验完之后线上还写着的那几站（跑一条命令、把预览打开）在这儿跑——人工关口之前
+    // 就得把预览起好，不然用户点进来只有一句「待验收」，没东西可看。跑砸了就停在
+    // 那儿，不再往人工关口推。
+    if (!(await advanceAfterVerify(target, workflow))) return;
     // 验过了，线上后面还写着「等我点头」：任务就停在这一站，列表里显示「待验收」。
     // 停的是**验收阶段**不是 status —— 动 status 会顺带停住它所在的队列，那是另一件事。
     if (policy?.humanGate) await enterHumanGate(target.id);
@@ -495,6 +500,9 @@ export async function handleTaskSettlement(
 
   const workflow = taskWorkflowDef(task.workflow);
   const isTeamWorker = await parentIsTeam(task);
+  // 干完之后线上紧跟着的那几站（跑一条命令、打开预览）先跑掉，再谈要不要派审：
+  // 一条连 lint 都没过的产物不值得占着一个审查任务的工时。跑砸了就停在那儿。
+  if (confirmedDone && status === "done" && !(await advanceAfterRun(task, workflow))) return;
   const rounds = await db.select({ id: tasks.id }).from(tasks).where(eq(tasks.reviewOf, task.id));
   if (shouldAutoDispatchReview({
     confirmedDone,

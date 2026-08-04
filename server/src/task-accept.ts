@@ -6,6 +6,7 @@ import { handOffConflict, type ConflictHandoff } from "./accept-conflict.js";
 import { cleanupAcceptedTask, mergeTaskBranch, resolveTaskMergeTarget } from "./git.js";
 import { taskBranchDiff } from "./git-diff.js";
 import { publishTaskUpdated } from "./task-store.js";
+import { stopPreviewAtGate } from "./preview.js";
 import { withRepoLock } from "./repo-lock.js";
 import { setTaskStage } from "./task-stage.js";
 import { appendTaskTimeline } from "./task-timeline.js";
@@ -99,6 +100,9 @@ async function finalizeAcceptance(
   message: string,
 ): Promise<SharedWorkerAcceptance | null> {
   await setTaskStage(task.id, "accepted");
+  // 人工关口到此结束：线上写着「下一个人工关口结束时回收」的预览在这儿收掉。选了
+  // 「任务结束时回收」的留着——验收完还想再点两下是常事。
+  await stopPreviewAtGate(task.id);
   const sharedWorkers = task.mode === "team" ? await acceptSharedTeamWorkers(task.id) : null;
   await appendTaskTimeline(
     task.id,

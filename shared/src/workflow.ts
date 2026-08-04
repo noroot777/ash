@@ -80,7 +80,11 @@ export const PREVIEW_READY_LABELS: Record<PreviewReady, string> = {
   port: "端口可连就算起来了", "port+log": "端口可连 + 日志 ready", http200: "HTTP 返回 200",
 };
 export const PREVIEW_LIFE_LABELS: Record<PreviewLife, string> = {
-  gate: "下一个人工关口结束时回收", task: "任务结束时回收", idle30: "闲置 30 分钟回收",
+  gate: "下一个人工关口结束时回收", task: "任务结束时回收",
+  // 口径按实现写：我们没法知道「有没有人在看」（预览进程的请求不经过 harness），
+  // 所以这一档是**起来满 30 分钟就回收**，不是「闲置 30 分钟」。宁可标签朴素，
+  // 也不能让线上写着一件我们做不到的事。
+  idle30: "起来满 30 分钟就回收",
 };
 export const HUMAN_SHOW_LABELS: Record<HumanShow, string> = {
   diff: "diff", report: "验证报告", shots: "截图",

@@ -32,6 +32,36 @@ export interface WorkflowPolicy {
   autoAccept: boolean;
 }
 
+// ── 段落切分 ───────────────────────────────────────────────────────────────
+// 一条线上的站分两类：**会停下来等**的（干活等 agent、自动验证等审查任务、等我点头
+// 等人）和**当场就能做完**的（跑一条命令、打开预览）。执行链只在前者那几个点上被
+// 唤醒，所以后者是**成段**跑的：干完之后跑一段、验完之后再跑一段、点头之后再一段。
+//
+// 这么切而不是记「走到第几站」，是因为不必新开一个「当前站」字段：段落由锚点算得，
+// 任务重启、重跑、手动补派审都不会让指针错位。
+export const ANCHOR_KINDS = ["run", "verify", "human"] as const;
+export type AnchorKind = (typeof ANCHOR_KINDS)[number];
+
+function isAnchor(step: WorkflowStep): boolean {
+  return (ANCHOR_KINDS as readonly string[]).includes(step.kind);
+}
+
+/** 紧跟在某个锚点之后、到下一个锚点之前的那几站（线上没有这个锚点就是空段）。 */
+export function stepsAfterAnchor(
+  def: WorkflowDef | null | undefined,
+  anchor: AnchorKind,
+): WorkflowStep[] {
+  if (!def) return [];
+  const at = def.steps.findIndex((step) => step.kind === anchor);
+  if (at < 0) return [];
+  const out: WorkflowStep[] = [];
+  for (const step of def.steps.slice(at + 1)) {
+    if (isAnchor(step)) break;
+    out.push(step);
+  }
+  return out;
+}
+
 export function workflowPolicy(def: WorkflowDef | null | undefined): WorkflowPolicy | null {
   if (!def) return null;
   const steps = def.steps;
