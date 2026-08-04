@@ -15,6 +15,7 @@ import { ArrowCounterClockwise, Copy, Plus, Prohibit, TrashSimple } from "@phosp
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import { api } from "../lib/api.ts";
 import { WorkflowRail } from "../workflow/WorkflowRail.tsx";
+import { forgetWorkflows } from "../workflow/WorkflowPicker.tsx";
 import { workflowSummary } from "../workflow/workflowModel.ts";
 
 // 「空白」不是真空白：一条线至少得有「干活」那一站（没有 run 站过不了闸），
@@ -74,6 +75,7 @@ export function WorkflowsSettings({ notify }: { notify: (message: string) => voi
     try {
       const saved = await api.patchWorkflow(next.id, patch);
       setItems((list) => list.map((item) => (item.id === saved.id ? saved : item)));
+      forgetWorkflows();
     } catch (error) {
       notify(error instanceof Error ? error.message : "起手式保存失败");
     }
@@ -98,6 +100,7 @@ export function WorkflowsSettings({ notify }: { notify: (message: string) => voi
         description: from?.description ?? "",
         def: from ? from.def : BLANK,
       });
+      forgetWorkflows();
       await load(created.id);
     } catch (error) {
       notify(error instanceof Error ? error.message : "新建起手式失败");
@@ -107,6 +110,7 @@ export function WorkflowsSettings({ notify }: { notify: (message: string) => voi
   const restore = async (item: WorkflowItem) => {
     try {
       const restored = await api.restoreWorkflow(item.id);
+      forgetWorkflows();
       setItems((list) => list.map((row) => (row.id === restored.id ? restored : row)));
       setDraft(restored);
       notify(`「${restored.name}」已恢复系统默认`);
@@ -118,6 +122,7 @@ export function WorkflowsSettings({ notify }: { notify: (message: string) => voi
   const remove = async (item: WorkflowItem) => {
     try {
       await api.deleteWorkflow(item.id);
+      forgetWorkflows();
       setConfirmDelete(null);
       setActiveId(null);
       await load();

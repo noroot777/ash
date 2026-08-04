@@ -433,3 +433,5 @@
 @media (max-width: 900px) {
   .wf-lib { grid-template-columns: minmax(0, 1fr); }
 }
+
+.wf-picker { max-width: 320px; }
