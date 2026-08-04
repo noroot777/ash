@@ -5,6 +5,7 @@ import type {
   GateAction,
   QuestionItem,
   ScheduledMessage,
+  ScheduledMessageMode,
   ScheduledMessageStatus,
   Session,
   TaskStatus,
@@ -53,6 +54,7 @@ export function mountTaskRunRoutes(api: Hono): void {
     ...r,
     attachments: JSON.parse(r.attachments),
     agent: (r.agent as AgentType) ?? null,
+    mode: r.mode as ScheduledMessageMode,
     status: r.status as ScheduledMessageStatus,
   });
 
@@ -396,8 +398,12 @@ api.post("/tasks/:id/team/kill-cua", async (c) => {
 
 // Reply to a single task: resume its CLI session with the user's message so an
 // agent that stopped to ask can be answered and keep going (same session).
-// With `sendAt` (a future ISO time), the reply is queued as a scheduled_message
-// and delivered later by the scheduler (schedules.ts) instead of fired now.
+// 两种情况会落成一条**待发送消息**(scheduled_messages)而不是立刻投递,返回 202
+// { scheduled:true, message } 让前端把它显示在输入框上方的托盘里:
+//   • 带 `sendAt`(将来的 ISO 时刻)= 定时发送(mode=timed)
+//   • 单任务正在跑 = 排队追问(mode=queued),等它这一轮跑完自动发出
+// 后者是刻意不再 409 的:运行中想补一句是常态,把话接住比把用户挡回去有用。真正
+// 的投递时机与判定单点在 pending-messages.ts。
 // 团队(§Team)的「插话」也走这个端点,但两道给一次性会话设的挡板对它不适用:
 // 调度台是常驻进程,正在说话(running)时也接得住(continueTask → deliverToLead 直接
 // 写进 stdin),这就是「发出去当前会话就接住、看着从没断线」的手感。
@@ -419,12 +425,16 @@ api.post("/tasks/:id/reply", async (c) => {
   if (r.archived) return c.json({ error: "任务已归档，先取消归档再回复", archived: true }, 409);
   const isTeam = r.mode === "team";
   if (!isTeam && r.mode !== "single") return c.json({ error: "仅单任务支持回复" }, 409);
-  // Scheduled send: persist and let the scheduler deliver it when due + idle.
-  // Allowed even while the task is running — it fires in the future, not now.
-  if (b.sendAt) {
-    const when = new Date(b.sendAt);
-    if (Number.isNaN(when.getTime()) || when.getTime() <= Date.now())
-      return c.json({ error: "定时时间必须是将来的有效时间" }, 400);
+  // 定时发送 / 排队追问:都只是"现在不发",落库交给 pending-messages 投递。
+  const queueWhileRunning = !isTeam && (r.status === "running" || r.status === "queued");
+  if (b.sendAt || queueWhileRunning) {
+    // 排队的 sendAt 不表示"到点才发",只用来排先后,所以取此刻;定时的必须是将来。
+    let when = new Date();
+    if (b.sendAt) {
+      when = new Date(b.sendAt);
+      if (Number.isNaN(when.getTime()) || when.getTime() <= Date.now())
+        return c.json({ error: "定时时间必须是将来的有效时间" }, 400);
+    }
     const row = {
       id: id(),
       taskId,
@@ -434,6 +444,7 @@ api.post("/tasks/:id/reply", async (c) => {
       executorId: b.executorId ?? null,
       model: b.model?.trim() || null,
       reasoningEffort: b.reasoningEffort?.trim() || null,
+      mode: (b.sendAt ? "timed" : "queued") satisfies ScheduledMessageMode,
       sendAt: when.toISOString(),
       status: "pending" as const,
       createdAt: now(),
@@ -442,7 +453,6 @@ api.post("/tasks/:id/reply", async (c) => {
     await db.insert(scheduledMessages).values(row);
     return c.json({ scheduled: true, message: toScheduledMessage(row) }, 202);
   }
-  if (!isTeam && (r.status === "running" || r.status === "queued")) return c.json({ error: "任务进行中" }, 409);
   void continueTask(taskId, (b.text ?? "").trim(), {
     attachments: b.attachments,
     agent: b.agent,

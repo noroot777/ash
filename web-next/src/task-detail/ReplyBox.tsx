@@ -65,14 +65,18 @@ export function ReplyBox({
   const providers = useProviders();
   const scheduled = useScheduledMessages(task.id);
   const uploads = useAttachments();
-  const disabled = task.mode !== "single" || task.archived || task.status === "running" || task.status === "queued" || !hasConversation;
+  // 任务正在跑不再是「不能说话」,而是「说了先排队」:发出去的消息落成一条待发送
+  // 消息(mode=queued),这一轮一结束由服务端自动送进同一个会话。所以 disabled 只留
+  // 真正没得说的情况——不是单任务、已归档、以及从没跑过因而没有会话可续。
+  const queueing = task.status === "running" || task.status === "queued";
+  const disabled = task.mode !== "single" || task.archived || (!hasConversation && !queueing);
   const inputDisabled = disabled && !command;
   const reason = task.mode !== "single"
     ? "请在对应的团队或辩论页面继续操作"
     : task.archived
       ? command ? "任务已归档；仍可输入 /team 或 /debate 创建派生任务…" : "任务已归档，无法继续回复"
-      : task.status === "running" || task.status === "queued"
-        ? command ? "当前任务进行中；可输入 /team 或 /debate 创建派生任务…" : "当前任务进行中，结束后可继续回复"
+      : queueing
+        ? command ? "任务进行中；发送即排队，也可输入 /team 或 /debate 派生任务…" : "任务进行中，发送即排队，这一轮结束自动发出（⌘↵）…"
         : !hasConversation
           ? command ? "可输入 /team 创建团队，或输入 /debate 发起辩论…" : "先运行任务，再继续回复"
           : command ? "回复并继续；输入 /team 或 /debate 可派生新任务…" : "回复并继续（⌘↵ 发送，可粘贴图片或文件）…";
@@ -96,6 +100,14 @@ export function ReplyBox({
   }, [task.id, uploads.clear]);
 
   useEffect(() => { resetComposer(); }, [command?.resetKey]);
+
+  // 任务从「在跑」变成别的状态 = 排着的那条这会儿已经被投递进会话了（服务端在结算
+  // 那一刻就发）。托盘得跟着少一行，否则它会一直挂在那儿像是没发出去。
+  const wasQueueing = useRef(queueing);
+  useEffect(() => {
+    if (wasQueueing.current && !queueing) void scheduled.reload({ quiet: true });
+    wasQueueing.current = queueing;
+  }, [queueing, scheduled.reload]);
 
   useEffect(() => {
     let alive = true;
@@ -412,13 +424,18 @@ export function ReplyBox({
               <X size={10} weight="bold" />
             </button>
           )}
-          <span>{uploads.uploading ? "上传中…" : commandActive ? "回车配置" : target ? "本回合按上面这套跑" : "⌘↵ 发送"}</span>
+          <span>
+            {uploads.uploading ? "上传中…"
+              : commandActive ? "回车配置"
+                : queueing ? (target ? "排队：跑完按上面这套发出" : "⌘↵ 排队，跑完自动发出")
+                  : target ? "本回合按上面这套跑" : "⌘↵ 发送"}
+          </span>
           <button
             className="task-send-button"
             type="button"
             disabled={sending || uploads.uploading || (!commandActive && (disabled || (!value.trim() && !uploads.attachments.length)))}
             onClick={() => void send()}
-            aria-label={commandActive ? "打开派生配置" : "发送回复"}
+            aria-label={commandActive ? "打开派生配置" : queueing ? "排队发送，任务跑完自动发出" : "发送回复"}
           >
             {sending ? <SpinnerGap size={15} className="is-spinning" /> : <ArrowUp size={15} weight="bold" />}
           </button>

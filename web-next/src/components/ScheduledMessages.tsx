@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
 import type { ScheduledMessage } from "@harness/shared";
-import { Clock, SpinnerGap, X } from "@phosphor-icons/react";
+import { Clock, Queue, SpinnerGap, X } from "@phosphor-icons/react";
 import { api } from "../lib/api.ts";
 import { useDismissable } from "../lib/useDismissable.ts";
 import { toLocalDateTime } from "./ScheduleControl.tsx";
@@ -16,8 +16,10 @@ export function useScheduledMessages(taskId: string) {
   const [error, setError] = useState<string | null>(null);
   const [cancelingIds, setCancelingIds] = useState<ReadonlySet<string>>(() => new Set());
 
-  const reload = useCallback(async () => {
-    setLoading(true);
+  // quiet=true:不闪 loading 态。任务状态一变就重拉一次(排队消息可能刚被投递
+  // 出去),托盘要么原样、要么少一行,不该在用户眼皮底下闪一下「正在加载」。
+  const reload = useCallback(async (options?: { quiet?: boolean }) => {
+    if (!options?.quiet) setLoading(true);
     try {
       setMessages(bySendTime(await api.scheduledMessages(taskId)));
       setError(null);
@@ -93,10 +95,15 @@ export function ScheduledMessageTray({
       {error && <p role="alert">待发送消息：{error}</p>}
       {messages.map((message) => {
         const canceling = cancelingIds.has(message.id);
+        // 排队消息没有「几点发」可言——它等的是任务空下来,所以那一格写它在等什么。
+        const queued = message.mode === "queued";
+        const when = queued ? "排队中" : formatInstant(message.sendAt);
         return (
           <div className="scheduled-message-row" key={message.id}>
-            <Clock size={12} aria-hidden="true" />
-            <time dateTime={message.sendAt}>{formatInstant(message.sendAt)}</time>
+            {queued ? <Queue size={12} aria-hidden="true" /> : <Clock size={12} aria-hidden="true" />}
+            {queued
+              ? <em>排队中 · 跑完自动发送</em>
+              : <time dateTime={message.sendAt}>{formatInstant(message.sendAt)}</time>}
             {message.agent && <span>@{message.agent}</span>}
             <b title={message.text || message.attachments.join("\n")}>
               {message.text || (message.attachments.length ? `[${message.attachments.length} 个附件]` : "[空消息]")}
@@ -104,8 +111,8 @@ export function ScheduledMessageTray({
             <button
               type="button"
               disabled={canceling}
-              title="取消定时发送"
-              aria-label={`取消 ${formatInstant(message.sendAt)} 的待发送消息`}
+              title={queued ? "取消这条排队消息" : "取消定时发送"}
+              aria-label={`取消${when}的待发送消息`}
               onClick={() => onCancel(message.id)}
             >
               {canceling ? <SpinnerGap size={12} className="is-spinning" /> : <X size={12} weight="bold" />}

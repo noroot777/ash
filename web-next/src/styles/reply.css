@@ -3,8 +3,10 @@
 .scheduled-message-tray > p { margin: 0; color: var(--red); font-size: 10.5px; }
 .scheduled-message-row { display: flex; min-height: 28px; align-items: center; gap: 7px; border: 1px solid var(--line); border-radius: 7px; background: var(--overlay); padding: 4px 6px 4px 8px; color: var(--faint); font-size: 10px; }
 .scheduled-message-row time,
+.scheduled-message-row > em,
 .scheduled-message-row > span { flex: 0 0 auto; }
 .scheduled-message-row > span { font-family: var(--font-mono); }
+.scheduled-message-row > em { font-style: normal; }
 .scheduled-message-row > b { min-width: 0; flex: 1; overflow: hidden; color: var(--ink); font-size: 10.5px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
 .scheduled-message-row > button { display: grid; width: 20px; height: 20px; flex: 0 0 auto; place-items: center; border: 0; border-radius: 5px; background: transparent; color: var(--faint); }
 .scheduled-message-row > button:hover:not(:disabled) { background: var(--raised); color: var(--ink); }

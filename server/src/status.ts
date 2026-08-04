@@ -62,4 +62,12 @@ export async function setTaskStatus(taskId: string, status: TaskStatus): Promise
       ),
     );
   }
+
+  // 待发送消息钩子:任务一不在跑了,就把排着队的那条送进去(排队追问的正常触发源)。
+  // 只靠 scheduler 的 30s tick 的话,用户会对着一条本该立刻发出的消息干等最多半分钟,
+  // 界面上看起来就像「排队坏了」。paused 也算空闲——提问中的任务照样接得住回复。
+  // awaiting_review 是明确的"等人"语义,不在此列;判定与投递单点仍在 pending-messages.ts。
+  if (status !== "running" && status !== "queued" && status !== "awaiting_review") {
+    void import("./pending-messages.js").then(({ flushPendingForTask }) => flushPendingForTask(taskId));
+  }
 }
