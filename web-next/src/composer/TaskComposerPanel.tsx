@@ -105,8 +105,6 @@ export function TaskComposerPanel({
   const [profiles, setProfiles] = useState<AgentExecutorProfile[]>([]);
   const [profilesReady, setProfilesReady] = useState(false);
   const [executors, setExecutors] = useState(emptyComposerExecutorConfigs);
-  const [debaterAProfile, setDebaterAProfile] = useState("");
-  const [debaterBProfile, setDebaterBProfile] = useState("");
   const [review, setReview] = useState(true);
   const [rounds, setRounds] = useState("3");
   const [gate, setGate] = useState(true);
@@ -150,9 +148,9 @@ export function TaskComposerPanel({
         lead: { ...current.lead, profile: claudeValue },
         worker: { ...current.worker, profile: codexValue },
         reviewer: { ...current.reviewer, profile: codexValue },
+        debaterA: { ...current.debaterA, profile: claudeValue },
+        debaterB: { ...current.debaterB, profile: codexValue },
       }));
-      setDebaterAProfile(claudeValue);
-      setDebaterBProfile(codexValue);
     }).catch((error) => {
       if (alive) notify(error instanceof Error ? error.message : "执行器配置读取失败");
     }).finally(() => {
@@ -229,20 +227,22 @@ export function TaskComposerPanel({
     { agentType: workerExecutor.agentType, executorId: null },
   );
   const debaterAExecutor = parseExecutorValue(
-    debaterAProfile,
+    executors.debaterA.profile,
     profiles,
     { agentType: "claude", executorId: null },
   );
   const debaterBExecutor = parseExecutorValue(
-    debaterBProfile,
+    executors.debaterB.profile,
     profiles,
     { agentType: "codex", executorId: null },
   );
-  const executorTypes = {
+  const executorTypes: Record<ComposerExecutorRole, AgentType> = {
     single: singleExecutor.agentType,
     lead: leadExecutor.agentType,
     worker: workerExecutor.agentType,
     reviewer: reviewerExecutor.agentType,
+    debaterA: debaterAExecutor.agentType,
+    debaterB: debaterBExecutor.agentType,
   };
 
   useEffect(() => {
@@ -269,32 +269,25 @@ export function TaskComposerPanel({
         profiles,
         worker?.agentType ?? "codex",
       ) ?? worker;
+      const debaterA = reconcile(current.debaterA.profile, workerTypes, profiles, "claude");
+      const debaterB = reconcile(
+        current.debaterB.profile,
+        workerTypes,
+        profiles,
+        "codex",
+        debaterA?.agentType,
+      );
       let changed = false;
       const next = { ...current };
-      for (const [role, selection] of Object.entries({ single, lead, worker, reviewer }) as [ComposerExecutorRole, ExecutorSelection | null][]) {
+      const resolved = { single, lead, worker, reviewer, debaterA, debaterB };
+      for (const [role, selection] of Object.entries(resolved) as [ComposerExecutorRole, ExecutorSelection | null][]) {
         if (!selection || current[role].profile === executorValue(selection)) continue;
         next[role] = { profile: executorValue(selection), model: "", effort: "" };
         changed = true;
       }
       return changed ? next : current;
     });
-    const nextDebaterA = reconcile(debaterAProfile, workerTypes, profiles, "claude");
-    const nextDebaterB = reconcile(
-      debaterBProfile,
-      workerTypes,
-      profiles,
-      "codex",
-      nextDebaterA?.agentType,
-    );
-    if (nextDebaterA && debaterAProfile !== executorValue(nextDebaterA)) {
-      setDebaterAProfile(executorValue(nextDebaterA));
-    }
-    if (nextDebaterB && debaterBProfile !== executorValue(nextDebaterB)) {
-      setDebaterBProfile(executorValue(nextDebaterB));
-    }
   }, [
-    debaterAProfile,
-    debaterBProfile,
     detection.status,
     leadProfiles,
     leadTypes,
@@ -403,6 +396,10 @@ export function TaskComposerPanel({
           debaterB: debaterBExecutor.agentType,
           debaterAExecutorId: debaterAExecutor.executorId,
           debaterBExecutorId: debaterBExecutor.executorId,
+          debaterAModel: executors.debaterA.model || null,
+          debaterAReasoningEffort: executors.debaterA.effort || null,
+          debaterBModel: executors.debaterB.model || null,
+          debaterBReasoningEffort: executors.debaterB.effort || null,
           maxRounds: rounds ? Math.max(1, Number(rounds) || 3) : null,
           gateG1: gate ? "on" : "off",
         } });
@@ -575,10 +572,6 @@ export function TaskComposerPanel({
             currentTeamConfig={currentTeamConfig}
             onApplyTeamPreset={applyTeamPreset}
             notify={notify}
-            debaterAProfile={debaterAProfile}
-            debaterBProfile={debaterBProfile}
-            onDebaterAChange={setDebaterAProfile}
-            onDebaterBChange={setDebaterBProfile}
             review={review}
             onReviewChange={setReview}
             rounds={rounds}
@@ -607,7 +600,7 @@ export function TaskComposerPanel({
           {mode !== "debate" && <AttachmentPicker addFiles={uploads.addFiles} disabled={busy} />}
           <span>
             <Paperclip size={13} />
-            {mode === "debate" ? "辩论沿用执行器 Profile 的模型" : `${allAttachments.length} 个附件`} · ⌘↵ 按当前启动方式创建
+            {mode === "debate" ? "辩论不收附件" : `${allAttachments.length} 个附件`} · ⌘↵ 按当前启动方式创建
           </span>
         </div>
         <ComposerLaunchControl

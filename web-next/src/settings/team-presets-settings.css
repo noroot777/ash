@@ -337,10 +337,10 @@
 }
 
 /* 三栏：类型 / 执行器 Profile / 模型（模型下拉里再分第二步选思考强度）。 */
+/* 三格(类型/Profile/模型)已合成 ExecutorPickerField 里的两颗胶囊,这里只剩一项。 */
 .team-preset-role-fields {
   display: grid;
   min-width: 0;
-  grid-template-columns: minmax(90px, 0.8fr) minmax(118px, 1.1fr) minmax(130px, 1.3fr);
   gap: 8px;
 }
 
@@ -359,9 +359,6 @@
     grid-template-columns: 96px minmax(0, 1fr);
   }
 
-  .team-preset-role-fields {
-    grid-template-columns: repeat(2, minmax(118px, 1fr));
-  }
 }
 
 @media (max-width: 680px) {
@@ -406,7 +403,4 @@
     align-items: stretch;
   }
 
-  .team-preset-role-fields {
-    grid-template-columns: 1fr;
-  }
 }

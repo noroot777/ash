@@ -230,6 +230,10 @@ export function DebateView({
           worker: choice.worker.agentType,
           leadExecutorId: choice.lead.executorId,
           workerExecutorId: choice.worker.executorId,
+          leadModel: choice.lead.model,
+          leadReasoningEffort: choice.lead.effort,
+          workerModel: choice.worker.model,
+          workerReasoningEffort: choice.worker.effort,
         },
         autoTitle: false,
       });

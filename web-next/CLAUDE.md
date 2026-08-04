@@ -21,4 +21,5 @@
 
 - 团队“收工”判据只用 shared 的 `isTeamSettled`；收工与被停止是两件事，分别决定时间轴收口和“恢复全组”入口。
 - 执行器候选与可运行判据统一来自 `src/lib/agentAvailability.ts`。已注册 profile、本机探测和 resident 能力是三类独立信息，不能互相代替。
-- 换执行器时模型与思考强度重置为“跟随执行器”。创建面走 `src/composer/executorOverrides.ts`，存量任务走 `src/task-detail/TaskInspector.tsx`，预设走 `src/settings/TeamPresetEditor.tsx`；一致性判断复用 shared 的 `sameExecutor`。
+- 换执行器时模型与思考强度重置为“跟随执行器”。创建面走 `src/composer/executorOverrides.ts`，存量任务走对话框底部的 `src/task-detail/ReplyBox.tsx`，预设走 `src/settings/TeamPresetEditor.tsx`；一致性判断复用 shared 的 `sameExecutor`。
+- 每一处“选谁干活”都是同一副形状：`composer/ExecutorPickerField.tsx` 的两颗胶囊——前面“执行器 · 模型”，后面“思考强度”（模型撑不起已选档位时由后者出提示，不静默改）。别再另起下拉，也别给同一份 model/effort 开第二个编辑入口；`TaskInspector` 的执行信息只读展示 `executorRunSummary` 算出的生效值。

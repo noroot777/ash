@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import type { AgentExecutorProfile, LlmProvider, TeamPreset } from "@harness/shared";
+import type { AgentExecutorProfile, TeamPreset } from "@harness/shared";
 import {
   CirclesThreePlus,
   Plus,
@@ -60,7 +60,6 @@ function draftKey(draft: TeamPresetDraft) {
 export function ModesSettings({ notify }: { notify: (message: string) => void }) {
   const [presets, setPresets] = useState<TeamPreset[]>([]);
   const [profiles, setProfiles] = useState<AgentExecutorProfile[]>([]);
-  const [providers, setProviders] = useState<LlmProvider[]>([]);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState<TeamPresetDraft>(createTeamPresetDraft);
   const [savedKey, setSavedKey] = useState("");
@@ -86,11 +85,10 @@ export function ModesSettings({ notify }: { notify: (message: string) => void })
   const load = () => {
     setLoading(true);
     setLoadFailed(false);
-    Promise.all([api.teamPresets(), api.agents(), api.llmProviders()])
-      .then(([nextPresets, nextProfiles, nextProviders]) => {
+    Promise.all([api.teamPresets(), api.agents()])
+      .then(([nextPresets, nextProfiles]) => {
         setPresets(nextPresets);
         setProfiles(nextProfiles);
-        setProviders(nextProviders);
         if (nextPresets[0]) selectPreset(nextPresets[0]);
         else startNew(nextProfiles);
       })
@@ -263,8 +261,7 @@ export function ModesSettings({ notify }: { notify: (message: string) => void })
                 <TeamPresetEditor
                   draft={draft}
                   profiles={profiles}
-                  providers={providers}
-                  busy={busy}
+                          busy={busy}
                   preserveStaleTypes={editingId !== null}
                   onChange={setDraft}
                 />

@@ -1,4 +1,4 @@
-export type ComposerExecutorRole = "single" | "lead" | "worker" | "reviewer";
+export type ComposerExecutorRole = "single" | "lead" | "worker" | "reviewer" | "debaterA" | "debaterB";
 
 export interface ComposerExecutorConfig {
   profile: string;
@@ -10,7 +10,14 @@ export type ComposerExecutorConfigs = Record<ComposerExecutorRole, ComposerExecu
 
 export function emptyComposerExecutorConfigs(): ComposerExecutorConfigs {
   const empty = (): ComposerExecutorConfig => ({ profile: "", model: "", effort: "" });
-  return { single: empty(), lead: empty(), worker: empty(), reviewer: empty() };
+  return {
+    single: empty(),
+    lead: empty(),
+    worker: empty(),
+    reviewer: empty(),
+    debaterA: empty(),
+    debaterB: empty(),
+  };
 }
 
 export function setComposerExecutorProfile(

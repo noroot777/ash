@@ -169,13 +169,6 @@
 }
 
 .composer-config-section,
-.composer-advanced {
-  overflow: hidden;
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  background: var(--panel);
-  box-shadow: var(--surface-shadow);
-}
 
 .composer-config-section {
   padding: 14px;
@@ -192,16 +185,6 @@
 }
 
 .composer-section-heading > span,
-.composer-advanced-icon {
-  display: grid;
-  width: 27px;
-  height: 27px;
-  flex: 0 0 27px;
-  place-items: center;
-  border-radius: 7px;
-  background: var(--raised);
-  color: var(--muted);
-}
 
 .is-execution .composer-section-heading > span {
   background: color-mix(in lch, var(--accent) 10%, var(--raised));
@@ -421,71 +404,16 @@
 }
 
 
-.composer-advanced > summary {
-  display: flex;
-  min-height: 54px;
-  align-items: center;
-  gap: 9px;
-  padding: 10px 14px;
-  cursor: pointer;
-  list-style: none;
-}
 
-.composer-advanced > summary::-webkit-details-marker {
-  display: none;
-}
 
-.composer-advanced > summary:hover {
-  background: var(--canvas);
-}
 
-.composer-advanced > summary > span:nth-child(2) {
-  display: grid;
-  min-width: 0;
-  flex: 1;
-}
 
-.composer-advanced > summary b {
-  font-size: 11px;
-  font-weight: 620;
-}
 
-.composer-advanced > summary small {
-  color: var(--faint);
-  font-size: 9px;
-}
 
-.composer-advanced > summary em {
-  border-radius: 999px;
-  background: color-mix(in lch, var(--accent) 9%, var(--raised));
-  padding: 2px 7px;
-  color: var(--accent);
-  font-size: 9px;
-  font-style: normal;
-  font-weight: 600;
-}
 
-.composer-advanced-caret {
-  color: var(--faint);
-  transition: transform 150ms ease-out;
-}
 
-.composer-advanced[open] .composer-advanced-caret {
-  transform: rotate(180deg);
-}
 
-.composer-advanced-body {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 9px;
-  border-top: 1px solid var(--line);
-  background: var(--canvas);
-  padding: 11px;
-}
 
-.composer-advanced-body > .composer-override-group:only-child {
-  max-width: 390px;
-}
 
 .composer-override-group {
   min-width: 0;
@@ -629,7 +557,6 @@
   .composer-executor-grid,
   .composer-executor-grid.is-team,
   .composer-option-grid,
-  .composer-advanced-body { grid-template-columns: 1fr; }
   .composer-tabs > span { display: none; }
   .composer-footer > div > span { display: none; }
 }

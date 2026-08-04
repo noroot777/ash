@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { TEAM_DEFAULTS, taskDisplayStatus, type AgentExecutorProfile, type AgentType, type Task } from "@harness/shared";
-import { ArrowRight, Crown, Robot, Scales, UsersThree, Warning } from "@phosphor-icons/react";
+import { ArrowRight, Scales, UsersThree, Warning } from "@phosphor-icons/react";
+import { ExecutorPickerField } from "../composer/ExecutorPickerField.tsx";
 import {
-  executorOptions,
   executorValue,
   isExecutorPickable,
   nothingRunnable,
@@ -16,48 +16,17 @@ import { teamDebateIterationState } from "./handoffPolicy.ts";
 
 export type HandoffChoice = {
   note: string;
-  lead: { agentType: AgentType; executorId: string | null };
-  worker: { agentType: AgentType; executorId: string | null };
+  lead: { agentType: AgentType; executorId: string | null; model: string | null; effort: string | null };
+  worker: { agentType: AgentType; executorId: string | null; model: string | null; effort: string | null };
 };
 
-function ExecutorSelect({
-  icon,
-  label,
-  value,
-  types,
-  profiles,
-  knownProfiles,
-  fallbackType,
-  onChange,
-}: {
-  icon: React.ReactNode;
-  label: string;
-  value: string;
-  types: AgentType[];
-  profiles: AgentExecutorProfile[];
-  knownProfiles: AgentExecutorProfile[];
-  fallbackType: AgentType;
-  onChange: (value: string) => void;
-}) {
-  const selection = parseExecutorValue(value, knownProfiles, { agentType: fallbackType, executorId: null });
-  const options = executorOptions({ types, profiles, knownProfiles, selection });
-  const pickableCount = types.length + profiles.length;
-  return (
-    <label className="debate-handoff-field">
-      <span>{icon}{label}</span>
-      <select
-        value={pickableCount || options.length ? executorValue(selection) : ""}
-        disabled={pickableCount === 0}
-        onChange={(event) => onChange(event.target.value)}
-      >
-        {options.length === 0 && <option value="">暂无可用执行器</option>}
-        {options.map((option) => (
-          <option key={option.value} value={option.value} disabled={option.disabled}>{option.label}</option>
-        ))}
-      </select>
-    </label>
-  );
-}
+type Choice = { profile: string; model: string; effort: string };
+
+const emptyChoice = (agentType: AgentType): Choice => ({
+  profile: executorValue({ agentType, executorId: null }),
+  model: "",
+  effort: "",
+});
 
 export function DebateHandoffModal({
   busy,
@@ -70,8 +39,8 @@ export function DebateHandoffModal({
 }) {
   const [profiles, setProfiles] = useState<AgentExecutorProfile[]>([]);
   const [profilesReady, setProfilesReady] = useState(false);
-  const [lead, setLead] = useState(executorValue({ agentType: TEAM_DEFAULTS.lead, executorId: null }));
-  const [worker, setWorker] = useState(executorValue({ agentType: TEAM_DEFAULTS.worker, executorId: null }));
+  const [lead, setLead] = useState<Choice>(() => emptyChoice(TEAM_DEFAULTS.lead));
+  const [worker, setWorker] = useState<Choice>(() => emptyChoice(TEAM_DEFAULTS.worker));
   const [note, setNote] = useState("");
   const detection = useAgentAvailability();
   const { workerTypes, leadTypes, leadProfiles } = useMemo(
@@ -99,21 +68,29 @@ export function DebateHandoffModal({
       const fallback = preferredExecutor(types, candidates, preferred, avoid);
       return fallback ? executorValue(fallback) : value;
     };
-    const nextLead = reconcile(lead, leadTypes, leadProfiles, TEAM_DEFAULTS.lead);
+    const nextLead = reconcile(lead.profile, leadTypes, leadProfiles, TEAM_DEFAULTS.lead);
     const leadType = parseExecutorValue(
       nextLead,
       profiles,
       { agentType: TEAM_DEFAULTS.lead, executorId: null },
     ).agentType;
-    const nextWorker = reconcile(worker, workerTypes, profiles, TEAM_DEFAULTS.worker, leadType);
-    if (nextLead !== lead) setLead(nextLead);
-    if (nextWorker !== worker) setWorker(nextWorker);
+    const nextWorker = reconcile(worker.profile, workerTypes, profiles, TEAM_DEFAULTS.worker, leadType);
+    // 换掉执行器就把模型/强度清成「跟随」：旧档位在新 CLI 上多半根本不存在。
+    if (nextLead !== lead.profile) setLead({ profile: nextLead, model: "", effort: "" });
+    if (nextWorker !== worker.profile) setWorker({ profile: nextWorker, model: "", effort: "" });
   }, [detection.status, lead, leadProfiles, leadTypes, profiles, profilesReady, worker, workerTypes]);
-  const choice = useMemo(() => ({
-    note,
-    lead: parseExecutorValue(lead, profiles, { agentType: TEAM_DEFAULTS.lead, executorId: null }),
-    worker: parseExecutorValue(worker, profiles, { agentType: TEAM_DEFAULTS.worker, executorId: null }),
-  }), [lead, note, profiles, worker]);
+  const choice = useMemo(() => {
+    const resolve = (role: Choice, fallback: AgentType) => ({
+      ...parseExecutorValue(role.profile, profiles, { agentType: fallback, executorId: null }),
+      model: role.model || null,
+      effort: role.effort || null,
+    });
+    return {
+      note,
+      lead: resolve(lead, TEAM_DEFAULTS.lead),
+      worker: resolve(worker, TEAM_DEFAULTS.worker),
+    };
+  }, [lead, note, profiles, worker]);
   const noExecutor = profilesReady && nothingRunnable(profiles);
   const unavailableRole = !isExecutorPickable(choice.lead, leadTypes, leadProfiles) ? "调度者"
     : !isExecutorPickable(choice.worker, workerTypes, profiles) ? "执行者" : null;
@@ -134,8 +111,8 @@ export function DebateHandoffModal({
       <section className="debate-handoff-modal" role="dialog" aria-modal="true" aria-labelledby="debate-handoff-title">
         <header><span><UsersThree size={17} weight="fill" /></span><div><h2 id="debate-handoff-title">接力成团</h2><p>辩题、结论和完整转写路径会一并交给新团队。</p></div></header>
         <div className="debate-handoff-grid">
-          <ExecutorSelect icon={<Crown size={13} />} label="调度者" value={lead} types={leadTypes} profiles={leadProfiles} knownProfiles={profiles} fallbackType={TEAM_DEFAULTS.lead} onChange={setLead} />
-          <ExecutorSelect icon={<Robot size={13} />} label="默认执行者" value={worker} types={workerTypes} profiles={profiles} knownProfiles={profiles} fallbackType={TEAM_DEFAULTS.worker} onChange={setWorker} />
+          <ExecutorPickerField label="调度者" value={lead.profile} types={leadTypes} profiles={leadProfiles} knownProfiles={profiles} fallbackType={TEAM_DEFAULTS.lead} override={lead} onChange={(profile) => setLead({ profile, model: "", effort: "" })} onOverrideChange={(patch) => setLead((current) => ({ ...current, ...patch }))} />
+          <ExecutorPickerField label="默认执行者" value={worker.profile} types={workerTypes} profiles={profiles} knownProfiles={profiles} fallbackType={TEAM_DEFAULTS.worker} override={worker} onChange={(profile) => setWorker({ profile, model: "", effort: "" })} onOverrideChange={(patch) => setWorker((current) => ({ ...current, ...patch }))} />
         </div>
         {availabilityMessage && <p className="debate-handoff-warning"><Warning size={13} />{availabilityMessage}</p>}
         <label className="debate-handoff-note"><span>可选附言</span><textarea rows={4} value={note} placeholder="补充执行重点、边界或验收要求…" onChange={(event) => setNote(event.target.value)} /></label>

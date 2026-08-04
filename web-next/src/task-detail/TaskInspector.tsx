@@ -1,17 +1,16 @@
 import { useEffect, useMemo, useState } from "react";
 import type { AgentExecutorProfile, Group, Session, Task, TaskStatus } from "@harness/shared";
 import { isUserSettableStatus, TASK_STATUS_LABELS } from "@harness/shared";
-import { sameExecutor } from "@harness/shared/executors";
+import { REASONING_EFFORT_DETAIL } from "@harness/shared/cli-presets";
 import { ArrowSquareOut, CaretRight, ListNumbers } from "@phosphor-icons/react";
 import { api } from "../lib/api.ts";
 import { Dropdown } from "../components/Dropdown.tsx";
-import { EffortPicker } from "../components/EffortPicker.tsx";
-import { ExecutorModelPicker } from "../components/ExecutorModelPicker.tsx";
 import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
 import { ScheduleControl } from "../components/ScheduleControl.tsx";
 import { TaskLabelsEditor } from "../components/TaskLabelsEditor.tsx";
 import { taskParentLink } from "../components/TaskOrigin.tsx";
 import {
+  executorRunSummary,
   isExecutorPickable,
   nothingRunnable,
   teamExecutorCandidates,
@@ -184,7 +183,12 @@ export function TaskInspector({
   const executorTypes = task.mode === "team" ? leadTypes : workerTypes;
   const executorProfiles = task.mode === "team" ? leadProfiles : profiles;
   const executorSelection = { agentType, executorId: task.executorId ?? null };
-  const pickableCount = executorTypes.length + executorProfiles.length;
+  // 这一节是只读的执行信息：真正生效的模型/强度可能来自 profile 也可能来自任务级
+  // 覆盖，一律由 executorRunSummary 算出来照抄。改执行器和模型走对话框底部那排胶囊。
+  const run = executorRunSummary(executorSelection, profiles, {
+    model: task.model,
+    effort: task.reasoningEffort,
+  });
   const noExecutor = profilesReady && nothingRunnable(profiles);
   const currentUnavailable = profilesReady
     && !isExecutorPickable(executorSelection, executorTypes, executorProfiles);
@@ -316,46 +320,16 @@ export function TaskInspector({
 
         <section>
           <h2>执行信息</h2>
-          <InspectorRow label="执行器与模型">
-            {/* 执行器和模型是一颗胶囊（换执行器就得重看有哪些模型），思考强度是并排
-                的另一颗——只想调档位时不必重走一遍选模型。 */}
-            <div className="model-effort-row">
-              <ExecutorModelPicker
-                label="执行器与模型"
-                types={executorTypes}
-                profiles={executorProfiles}
-                knownProfiles={profiles}
-                selection={executorSelection}
-                model={task.model ?? null}
-                disabled={readOnly || pickableCount === 0}
-                onCommit={(target) => {
-                  const next = { agentType: target.agent, executorId: target.executorId };
-                  if (!isExecutorPickable(next, executorTypes, executorProfiles)) {
-                    notify("该执行器当前不可用，请改选已注册 Profile 或其类型默认");
-                    return;
-                  }
-                  const same = sameExecutor(next, executorSelection);
-                  void patch({
-                    ...next,
-                    model: target.model,
-                    // 换了执行器才清强度：旧档位在新 CLI 上多半根本不存在。
-                    ...(same ? {} : { reasoningEffort: null }),
-                  }, same ? "模型已更新，将从下一回合生效" : "执行器已更新，将从下一回合生效");
-                }}
-              />
-              <EffortPicker
-                type={agentType}
-                model={task.model ?? null}
-                value={task.reasoningEffort ?? ""}
-                disabled={readOnly}
-                onChange={(effort) => void patch(
-                  { reasoningEffort: effort || null },
-                  "思考强度已更新，将从下一回合生效",
-                )}
-              />
-            </div>
-            {availabilityMessage && <p className="task-inspector-note">{availabilityMessage}</p>}
+          <InspectorRow label="执行器">
+            <span>{task.executorLabel ?? agentType}</span>
           </InspectorRow>
+          <InspectorRow label="模型">
+            <span>{run.model ?? "跟随执行器"}</span>
+          </InspectorRow>
+          <InspectorRow label="思考强度">
+            <span>{run.effort ? (REASONING_EFFORT_DETAIL[run.effort] ? `${run.effort}（${REASONING_EFFORT_DETAIL[run.effort]}）` : run.effort) : "跟随执行器"}</span>
+          </InspectorRow>
+          {availabilityMessage && <p className="task-inspector-note">{availabilityMessage}</p>}
           <InspectorRow label="创建时间"><span>{formatInstant(task.createdAt)}</span></InspectorRow>
           {task.startedAt && <InspectorRow label="开始时间"><span>{formatInstant(task.startedAt)}</span></InspectorRow>}
           {task.endedAt && <InspectorRow label="结束时间"><span>{formatInstant(task.endedAt)}</span></InspectorRow>}

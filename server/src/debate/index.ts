@@ -279,9 +279,19 @@ async function loadBase(taskId: string) {
   const cfg = derivedBody ? { ...storedCfg, topic: derivedBody } : storedCfg;
   const project = (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0);
   if (!project) throw new Error("project not found");
-  const taskOverrides = { model: task.model, reasoningEffort: task.reasoningEffort };
-  const exA = await resolveExecutorFor({ executorId: cfg.debaterAExecutorId, type: cfg.debaterA, ...taskOverrides });
-  const exB = await resolveExecutorFor({ executorId: cfg.debaterBExecutorId, type: cfg.debaterB, ...taskOverrides });
+  // 每个辩手各自的模型/强度；没设才退回任务级（派生辩论会带着来源任务的设置）。
+  const exA = await resolveExecutorFor({
+    executorId: cfg.debaterAExecutorId,
+    type: cfg.debaterA,
+    model: cfg.debaterAModel || task.model,
+    reasoningEffort: cfg.debaterAReasoningEffort || task.reasoningEffort,
+  });
+  const exB = await resolveExecutorFor({
+    executorId: cfg.debaterBExecutorId,
+    type: cfg.debaterB,
+    model: cfg.debaterBModel || task.model,
+    reasoningEffort: cfg.debaterBReasoningEffort || task.reasoningEffort,
+  });
   // Discussion only reads, but still honors the task's worktree/base so a
   // source-derived debate sees the source task's branch. Repo-less projects keep
   // the existing scratch fallback through taskWorkspace.

@@ -454,6 +454,13 @@ export interface DebateConfig {
   debaterB: AgentType;
   debaterAExecutorId?: string | null;
   debaterBExecutorId?: string | null;
+  // Per-debater model / effort overrides. null = follow that debater's executor
+  // profile. Debaters are picked independently, so their models are too — a
+  // single task-level model would silently apply to both sides.
+  debaterAModel?: string | null;
+  debaterAReasoningEffort?: string | null;
+  debaterBModel?: string | null;
+  debaterBReasoningEffort?: string | null;
   maxRounds: number | null; // null = unlimited
   gateG1: HitlGate; // consensus gate
 }
@@ -465,6 +472,10 @@ export const DEBATE_DEFAULTS: DebateConfig = {
   debaterB: "codex",
   debaterAExecutorId: null,
   debaterBExecutorId: null,
+  debaterAModel: null,
+  debaterAReasoningEffort: null,
+  debaterBModel: null,
+  debaterBReasoningEffort: null,
   maxRounds: null,
   gateG1: "on",
 };
@@ -476,6 +487,7 @@ export function normalizeDebateConfig(value: unknown): DebateConfig {
   const raw = value && typeof value === "object" ? value as Record<string, unknown> : {};
   const agent = (v: unknown, fallback: AgentType): AgentType =>
     typeof v === "string" && AGENT_TYPES.includes(v as AgentType) ? v as AgentType : fallback;
+  const text = (v: unknown): string | null => (typeof v === "string" && v.trim() ? v.trim() : null);
   const maxRounds = raw.maxRounds === null
     ? null
     : typeof raw.maxRounds === "number" && Number.isFinite(raw.maxRounds) && raw.maxRounds >= 1
@@ -488,6 +500,10 @@ export function normalizeDebateConfig(value: unknown): DebateConfig {
     debaterB: agent(raw.debaterB, DEBATE_DEFAULTS.debaterB),
     debaterAExecutorId: typeof raw.debaterAExecutorId === "string" ? raw.debaterAExecutorId : null,
     debaterBExecutorId: typeof raw.debaterBExecutorId === "string" ? raw.debaterBExecutorId : null,
+    debaterAModel: text(raw.debaterAModel),
+    debaterAReasoningEffort: text(raw.debaterAReasoningEffort),
+    debaterBModel: text(raw.debaterBModel),
+    debaterBReasoningEffort: text(raw.debaterBReasoningEffort),
     maxRounds,
     gateG1: raw.gateG1 === "off" ? "off" : "on",
   };

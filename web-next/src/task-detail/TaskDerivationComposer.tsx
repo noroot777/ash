@@ -18,7 +18,6 @@ import { Dropdown } from "../components/Dropdown.tsx";
 import { Button, Toggle } from "../components/ui.tsx";
 import { ExecutorPickerField } from "../composer/ExecutorPickerField.tsx";
 import {
-  executorOptions,
   executorValue,
   isExecutorPickable,
   nothingRunnable,
@@ -60,49 +59,7 @@ function preferredSelection(
     ?? { agentType: preferred, executorId: null });
 }
 
-function ExecutorSelect({
-  label,
-  value,
-  types,
-  profiles,
-  knownProfiles = profiles,
-  fallbackType,
-  onChange,
-}: {
-  label: string;
-  value: string;
-  types: AgentType[];
-  profiles: AgentExecutorProfile[];
-  knownProfiles?: AgentExecutorProfile[];
-  fallbackType: AgentType;
-  onChange: (value: string) => void;
-}) {
-  const selection = parseExecutorValue(value, knownProfiles, { agentType: fallbackType, executorId: null });
-  const options = executorOptions({ types, profiles, knownProfiles, selection });
-  const pickableCount = types.length + profiles.length;
-  return (
-    <div className="composer-field">
-      <span>{label}</span>
-      <Dropdown
-        label={label}
-        value={pickableCount || options.length ? executorValue(selection) : ""}
-        options={options.map((option) => ({
-          value: option.value,
-          label: option.label,
-          disabled: option.disabled,
-        }))}
-        disabled={pickableCount === 0}
-        filterable={options.length > 6}
-        filterPlaceholder="筛选执行器…"
-        placeholder="暂无可用执行器"
-        emptyText="没有匹配的执行器"
-        onChange={onChange}
-      />
-    </div>
-  );
-}
-
-function TeamExecutorField({
+function ExecutorField({
   label,
   choice,
   types,
@@ -160,8 +117,8 @@ export function TaskDerivationComposer({
   const [lead, setLead] = useState<ExecutorChoice>(emptyChoice);
   const [worker, setWorker] = useState<ExecutorChoice>(emptyChoice);
   const [reviewer, setReviewer] = useState<ExecutorChoice>(emptyChoice);
-  const [debaterA, setDebaterA] = useState("");
-  const [debaterB, setDebaterB] = useState("");
+  const [debaterA, setDebaterA] = useState<ExecutorChoice>(emptyChoice);
+  const [debaterB, setDebaterB] = useState<ExecutorChoice>(emptyChoice);
   const [reviewEnabled, setReviewEnabled] = useState(true);
   const [rounds, setRounds] = useState(DEBATE_DEFAULTS.maxRounds === null ? "" : String(DEBATE_DEFAULTS.maxRounds));
   const [gate, setGate] = useState(DEBATE_DEFAULTS.gateG1 === "on");
@@ -211,8 +168,12 @@ export function TaskDerivationComposer({
       setLead({ profile: leadProfile, model: "", effort: "" });
       setWorker({ profile: workerProfile, model: "", effort: "" });
       setReviewer({ profile: workerProfile, model: "", effort: "" });
-      setDebaterA(debateAProfile);
-      setDebaterB(preferredSelection(availableTypes, profiles, DEBATE_DEFAULTS.debaterB, debateAType));
+      setDebaterA({ profile: debateAProfile, model: "", effort: "" });
+      setDebaterB({
+        profile: preferredSelection(availableTypes, profiles, DEBATE_DEFAULTS.debaterB, debateAType),
+        model: "",
+        effort: "",
+      });
       setExecutorsReady(true);
       return;
     }
@@ -233,18 +194,8 @@ export function TaskDerivationComposer({
     setLead((current) => reconcileChoice(current, leadTypes, leadProfiles, TEAM_DEFAULTS.lead));
     setWorker((current) => reconcileChoice(current, availableTypes, profiles, TEAM_DEFAULTS.worker));
     setReviewer((current) => reconcileChoice(current, availableTypes, profiles, TEAM_DEFAULTS.worker));
-    setDebaterA((current) => reconcileChoice(
-      { profile: current, model: "", effort: "" },
-      availableTypes,
-      profiles,
-      DEBATE_DEFAULTS.debaterA,
-    ).profile);
-    setDebaterB((current) => reconcileChoice(
-      { profile: current, model: "", effort: "" },
-      availableTypes,
-      profiles,
-      DEBATE_DEFAULTS.debaterB,
-    ).profile);
+    setDebaterA((current) => reconcileChoice(current, availableTypes, profiles, DEBATE_DEFAULTS.debaterA));
+    setDebaterB((current) => reconcileChoice(current, availableTypes, profiles, DEBATE_DEFAULTS.debaterB));
   }, [
     availableTypes,
     detection.status,
@@ -314,13 +265,13 @@ export function TaskDerivationComposer({
           ? "审查者"
           : null
     : !isExecutorPickable(
-      parseExecutorValue(debaterA, profiles, { agentType: DEBATE_DEFAULTS.debaterA, executorId: null }),
+      parseExecutorValue(debaterA.profile, profiles, { agentType: DEBATE_DEFAULTS.debaterA, executorId: null }),
       availableTypes,
       profiles,
     )
       ? "辩手 A"
       : !isExecutorPickable(
-        parseExecutorValue(debaterB, profiles, { agentType: DEBATE_DEFAULTS.debaterB, executorId: null }),
+        parseExecutorValue(debaterB.profile, profiles, { agentType: DEBATE_DEFAULTS.debaterB, executorId: null }),
         availableTypes,
         profiles,
       )
@@ -390,12 +341,12 @@ export function TaskDerivationComposer({
         });
       } else {
         const debaterASelection = parseExecutorValue(
-          debaterA,
+          debaterA.profile,
           profiles,
           { agentType: DEBATE_DEFAULTS.debaterA, executorId: null },
         );
         const debaterBSelection = parseExecutorValue(
-          debaterB,
+          debaterB.profile,
           profiles,
           { agentType: DEBATE_DEFAULTS.debaterB, executorId: null },
         );
@@ -406,6 +357,10 @@ export function TaskDerivationComposer({
           debaterB: debaterBSelection.agentType,
           debaterAExecutorId: debaterASelection.executorId,
           debaterBExecutorId: debaterBSelection.executorId,
+          debaterAModel: debaterA.model || null,
+          debaterAReasoningEffort: debaterA.effort || null,
+          debaterBModel: debaterB.model || null,
+          debaterBReasoningEffort: debaterB.effort || null,
           maxRounds: rounds === "" ? null : Math.max(1, Number(rounds) || 3),
           gateG1: gate ? "on" : "off",
         };
@@ -464,9 +419,9 @@ export function TaskDerivationComposer({
         {teamMode ? (
           <>
             <div className="task-derivation-role-grid">
-              <TeamExecutorField label="调度者执行器" choice={lead} types={leadTypes} profiles={leadProfiles} knownProfiles={profiles} fallbackType={TEAM_DEFAULTS.lead} onChange={setLead} />
-              <TeamExecutorField label="执行者执行器" choice={worker} types={availableTypes} profiles={profiles} knownProfiles={profiles} fallbackType={TEAM_DEFAULTS.worker} onChange={setWorker} />
-              {reviewEnabled && <TeamExecutorField label="审查者执行器" choice={reviewer} types={availableTypes} profiles={profiles} knownProfiles={profiles} fallbackType={TEAM_DEFAULTS.worker} onChange={setReviewer} />}
+              <ExecutorField label="调度者执行器" choice={lead} types={leadTypes} profiles={leadProfiles} knownProfiles={profiles} fallbackType={TEAM_DEFAULTS.lead} onChange={setLead} />
+              <ExecutorField label="执行者执行器" choice={worker} types={availableTypes} profiles={profiles} knownProfiles={profiles} fallbackType={TEAM_DEFAULTS.worker} onChange={setWorker} />
+              {reviewEnabled && <ExecutorField label="审查者执行器" choice={reviewer} types={availableTypes} profiles={profiles} knownProfiles={profiles} fallbackType={TEAM_DEFAULTS.worker} onChange={setReviewer} />}
             </div>
             <div className="task-derivation-review">
               <span>自动审查</span>
@@ -502,8 +457,8 @@ export function TaskDerivationComposer({
               />
             </label>
             <div className="task-derivation-debate-grid">
-              <ExecutorSelect label="辩手 A" value={debaterA} types={availableTypes} profiles={profiles} fallbackType={DEBATE_DEFAULTS.debaterA} onChange={setDebaterA} />
-              <ExecutorSelect label="辩手 B" value={debaterB} types={availableTypes} profiles={profiles} fallbackType={DEBATE_DEFAULTS.debaterB} onChange={setDebaterB} />
+              <ExecutorField label="辩手 A" choice={debaterA} types={availableTypes} profiles={profiles} knownProfiles={profiles} fallbackType={DEBATE_DEFAULTS.debaterA} onChange={setDebaterA} />
+              <ExecutorField label="辩手 B" choice={debaterB} types={availableTypes} profiles={profiles} knownProfiles={profiles} fallbackType={DEBATE_DEFAULTS.debaterB} onChange={setDebaterB} />
               <div className="composer-field">
                 <span>最多轮数</span>
                 <Dropdown

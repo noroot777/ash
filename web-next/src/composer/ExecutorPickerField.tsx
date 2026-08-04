@@ -30,6 +30,7 @@ export function ExecutorPickerField({
   knownProfiles,
   fallbackType,
   override,
+  disabled = false,
   onChange,
   onOverrideChange,
 }: {
@@ -41,6 +42,7 @@ export function ExecutorPickerField({
   fallbackType: AgentType;
   /** 该角色的模型/思考强度覆盖——决定胶囊上写的「实际会跑什么」，见 executorRunSummary。 */
   override?: { model?: string | null; effort?: string | null };
+  disabled?: boolean;
   onChange: (value: string) => void;
   /** 不传就只落执行器（辩手那种服务端根本不收模型的表面）。 */
   onOverrideChange?: (patch: { model?: string; effort?: string }) => void;
@@ -64,6 +66,7 @@ export function ExecutorPickerField({
           knownProfiles={knownProfiles}
           selection={selection}
           model={run.model}
+          disabled={disabled}
           onCommit={(target) => {
             // 先落执行器：切换执行器会把模型/强度清成「跟随」（executorOverrides.ts），
             // 所以这一步必须在覆盖之前，否则刚选的模型当场被清掉。
@@ -83,7 +86,7 @@ export function ExecutorPickerField({
             type={selection.agentType}
             model={run.model}
             value={override?.effort ?? ""}
-            disabled={empty}
+            disabled={disabled || empty}
             onChange={(effort) => onOverrideChange({ effort })}
           />
         )}
