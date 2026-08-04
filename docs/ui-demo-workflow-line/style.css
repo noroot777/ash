@@ -1,0 +1,203 @@
+/* 线路图 —— 暖纸底 · 站点与支线（无依赖） */
+:root{
+  --paper:#faf6ef;
+  --paper-2:#f3ede2;
+  --card:#fffdf9;
+  --ink:#1f1c18;
+  --mid:#5d5850;
+  --faint:#948c80;
+  --hair:rgba(31,28,24,.11);
+  --hair-2:rgba(31,28,24,.06);
+  --red:#b4432f;
+  --amber:#9a6c12;
+  --green:#3f7a4e;
+  --ease:cubic-bezier(.32,.72,0,1);
+  --mono:"SF Mono","JetBrains Mono",ui-monospace,Menlo,monospace;
+  --sans:"PingFang SC","Hiragino Sans GB","Plus Jakarta Sans","Noto Sans SC",sans-serif;
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--paper);color:var(--ink)}
+body{
+  font-family:var(--sans);-webkit-font-smoothing:antialiased;
+  background-image:radial-gradient(900px 420px at 12% -6%,rgba(214,196,166,.45),transparent 70%),
+                   radial-gradient(700px 380px at 92% 4%,rgba(178,199,190,.32),transparent 72%);
+  background-repeat:no-repeat;
+}
+button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:pointer}
+select{font:inherit;color:inherit}
+.grain{
+  position:fixed;inset:0;z-index:60;pointer-events:none;opacity:.05;
+  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='140' height='140'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3'/></filter><rect width='140' height='140' filter='url(%23n)'/></svg>");
+}
+main{max-width:1180px;margin:0 auto;padding:74px 30px 110px}
+
+/* ── 抬头 ─────────────────────────────────────────── */
+.eyebrow{
+  display:inline-block;padding:5px 12px;border-radius:999px;
+  font:500 10px/1 var(--mono);letter-spacing:.22em;color:var(--mid);
+  background:rgba(31,28,24,.05);box-shadow:inset 0 0 0 1px var(--hair-2);
+}
+.hero h1{
+  margin:20px 0 0;font-size:48px;line-height:1.14;font-weight:640;letter-spacing:-.03em;
+}
+.hero h1 em{font-style:normal;color:var(--mid);font-weight:420}
+.lede{max-width:660px;margin:16px 0 0;font-size:14.5px;line-height:1.85;color:var(--mid)}
+.lede b{font-weight:560;color:var(--ink)}
+.lines{display:flex;flex-wrap:wrap;gap:7px;margin-top:26px}
+.lines button{
+  padding:7px 15px;border-radius:999px;font-size:12.5px;color:var(--mid);
+  box-shadow:inset 0 0 0 1px var(--hair);
+  transition:background .5s var(--ease),color .5s var(--ease),transform .5s var(--ease);
+}
+.lines button:hover{transform:translateY(-1px);background:rgba(31,28,24,.04)}
+.lines button[data-on="true"]{color:var(--paper);background:var(--ink);box-shadow:none}
+
+/* ── 图板（外壳 + 内芯）───────────────────────────── */
+.board{margin-top:34px;padding:7px;border-radius:26px;background:var(--paper-2);
+  box-shadow:inset 0 0 0 1px var(--hair-2),0 24px 60px -34px rgba(60,48,30,.4)}
+.board-in{border-radius:19px;background:var(--card);box-shadow:inset 0 0 0 1px var(--hair-2);overflow:hidden}
+.brd-hd{display:flex;align-items:center;gap:12px;padding:13px 18px;border-bottom:1px solid var(--hair-2)}
+.brd-hd .ttl{font-size:13px;font-weight:600;letter-spacing:.02em}
+.brd-hd .dg{font:400 11px/1 var(--mono);color:var(--faint);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ws{margin-left:auto;display:flex;gap:2px;padding:2px;border-radius:999px;background:rgba(31,28,24,.05);flex:none}
+.ws button{padding:5px 11px;border-radius:999px;font-size:11.5px;color:var(--mid);
+  transition:background .5s var(--ease),color .5s var(--ease)}
+.ws button[data-on="true"]{background:var(--card);color:var(--ink);box-shadow:0 1px 2px rgba(31,28,24,.12)}
+
+.scroll{overflow-x:auto;overflow-y:hidden;padding:6px 0 0}
+/* 列宽由 JS 生成（窄段 / 宽站交替），三行分别是名牌 / 线上的圆点 / 参数 */
+.rail{position:relative;display:grid;grid-auto-flow:column;grid-template-rows:auto 34px auto;
+  padding:26px 10px 22px;min-width:min-content}
+.rail svg.arcs{position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:none;overflow:visible}
+
+.plate{padding:0 10px 12px;text-align:center}
+.plate .code{
+  display:inline-block;padding:3px 8px;border-radius:7px;font:600 9.5px/1.5 var(--mono);letter-spacing:.13em;
+  color:var(--tone);background:color-mix(in srgb,var(--tone) 12%,transparent);
+  box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--tone) 26%,transparent);
+}
+.plate h2{margin:7px 0 0;font-size:14.5px;font-weight:580;letter-spacing:-.01em;line-height:1.35}
+.plate .tag{display:block;margin-top:3px;font:400 9.5px/1 var(--mono);color:var(--faint);letter-spacing:.05em}
+.plate .ops{display:flex;justify-content:center;gap:2px;margin-top:6px;opacity:.001;
+  transition:opacity .45s var(--ease)}
+.plate:hover .ops{opacity:1}
+.plate .ops button{width:23px;height:23px;border-radius:7px;font-size:12px;color:var(--faint);
+  transition:background .45s var(--ease),color .45s var(--ease)}
+.plate .ops button:hover{background:rgba(31,28,24,.07);color:var(--ink)}
+.plate .ops button[data-op="del"]:hover{color:var(--red)}
+
+/* 线上的站点圆 + 两侧线段 */
+.node{position:relative;display:flex;align-items:center;justify-content:center}
+.node::before,.node::after{
+  content:"";position:absolute;top:50%;height:3px;margin-top:-1.5px;
+  background:var(--tone);opacity:.85;
+}
+.node::before{left:0;right:50%;margin-right:9px}
+.node::after{left:50%;right:0;margin-left:9px}
+.node i{
+  position:relative;z-index:1;width:19px;height:19px;border-radius:50%;
+  background:var(--card);box-shadow:inset 0 0 0 3px var(--tone);
+  font:600 8.5px/19px var(--mono);color:var(--tone);text-align:center;font-style:normal;
+  transition:transform .5s var(--ease),box-shadow .5s var(--ease);
+}
+.node:hover i{transform:scale(1.16);box-shadow:inset 0 0 0 3px var(--tone),0 0 0 5px color-mix(in srgb,var(--tone) 16%,transparent)}
+
+/* 段：两站之间的线，颜色从上一站渐变到下一站；悬停时浮出插入点 */
+.segw{position:relative;display:flex;align-items:center}
+.segw .seg{width:100%;height:3px;background:var(--flow)}
+.segw .ins{
+  position:absolute;left:50%;top:50%;transform:translate(-50%,-50%) scale(.8);
+  height:24px;padding:0 10px;border-radius:999px;white-space:nowrap;
+  font:500 10.5px/1 var(--mono);letter-spacing:.08em;color:var(--mid);
+  background:var(--card);box-shadow:inset 0 0 0 1px var(--hair);
+  opacity:0;transition:opacity .45s var(--ease),transform .45s var(--ease);
+}
+.segw:hover .ins{opacity:1;transform:translate(-50%,-50%) scale(1)}
+.segw .ins:hover{color:var(--ink);box-shadow:inset 0 0 0 1px rgba(31,28,24,.3)}
+
+.body{padding:14px 9px 0;display:flex;flex-direction:column;gap:5px;align-items:center;min-width:0}
+.chip{
+  max-width:100%;padding:4px 10px;border-radius:9px;font-size:11.5px;color:var(--mid);
+  background:rgba(31,28,24,.035);box-shadow:inset 0 0 0 1px var(--hair-2);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  transition:background .45s var(--ease),color .45s var(--ease),transform .45s var(--ease);
+}
+.chip:hover{background:rgba(31,28,24,.075);color:var(--ink);transform:translateY(-1px)}
+.fail{margin-top:5px;font-size:11px;color:var(--faint);text-align:center}
+.fail .go{
+  display:inline-block;margin-top:3px;padding:3px 9px;border-radius:8px;font-size:11px;
+  color:var(--amber);background:rgba(154,108,18,.09);box-shadow:inset 0 0 0 1px rgba(154,108,18,.22);
+  transition:background .45s var(--ease),transform .45s var(--ease);
+}
+.fail .go:hover{background:rgba(154,108,18,.16);transform:translateY(-1px)}
+.empty{padding:40px 24px;text-align:center;color:var(--faint);font-size:13px}
+
+/* ── 检查 ─────────────────────────────────────────── */
+.check{margin-top:22px;padding:7px;border-radius:22px;background:var(--paper-2);
+  box-shadow:inset 0 0 0 1px var(--hair-2)}
+.check[data-bad="true"]{background:rgba(180,67,47,.09);box-shadow:inset 0 0 0 1px rgba(180,67,47,.22)}
+.check .in{border-radius:15px;background:var(--card);box-shadow:inset 0 0 0 1px var(--hair-2);padding:14px 18px}
+.chd{display:flex;align-items:center;gap:9px;padding-bottom:10px;border-bottom:1px solid var(--hair-2)}
+.chd .led{width:7px;height:7px;border-radius:50%;background:var(--green);box-shadow:0 0 0 3px rgba(63,122,78,.16)}
+.chd .led.bad{background:var(--red);box-shadow:0 0 0 3px rgba(180,67,47,.16)}
+.chd b{font-size:13px;font-weight:600}
+.chd span:last-of-type{margin-left:auto;font:400 11px/1 var(--mono);color:var(--faint)}
+.line{display:flex;gap:11px;align-items:baseline;padding:7px 0 0;font-size:12.5px;color:var(--mid)}
+.line em{flex:none;width:38px;font:600 9.5px/1.7 var(--mono);letter-spacing:.1em;font-style:normal;color:var(--faint)}
+.line.deny{color:var(--red)} .line.deny em{color:var(--red)}
+.line.warn{color:var(--amber)} .line.warn em{color:var(--amber)}
+
+/* ── 说明 ─────────────────────────────────────────── */
+.notes{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:40px}
+.note{padding:18px 19px;border-radius:18px;background:rgba(255,253,249,.7);
+  box-shadow:inset 0 0 0 1px var(--hair-2)}
+.note b{display:block;font-size:13px;margin-bottom:7px}
+.note p{margin:0;font-size:12.5px;line-height:1.85;color:var(--mid)}
+.note code{font:400 11.5px var(--mono);color:var(--faint)}
+.note a{color:var(--ink);text-decoration:none;box-shadow:inset 0 -1px 0 var(--hair);
+  transition:box-shadow .4s var(--ease)}
+.note a:hover{box-shadow:inset 0 -2px 0 rgba(31,28,24,.4)}
+
+/* ── 参数浮层 ─────────────────────────────────────── */
+.pop{position:fixed;z-index:70;width:302px;padding:6px;border-radius:22px;
+  background:rgba(243,237,226,.86);backdrop-filter:blur(20px) saturate(160%);
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.7),0 30px 70px -26px rgba(60,48,30,.55);
+  animation:pin .5s var(--ease) both}
+@keyframes pin{from{opacity:0;transform:translateY(-6px) scale(.98)}to{opacity:1;transform:none}}
+.pop .inner{border-radius:16px;background:var(--card);box-shadow:inset 0 0 0 1px var(--hair-2);
+  padding:12px;max-height:min(72vh,470px);overflow:auto}
+.pop h3{margin:0 0 11px;font-size:12px;font-weight:600;letter-spacing:.04em;color:var(--mid)}
+.pop .row{margin-bottom:12px}
+.pop .row.hot{margin:0 -7px 12px;padding:6px 7px;border-radius:10px;background:rgba(31,28,24,.045)}
+.pop .lab{font-size:11px;color:var(--faint);margin-bottom:6px}
+.pop select{width:100%;padding:7px 9px;border-radius:9px;font-size:12.5px;
+  background:rgba(31,28,24,.04);border:0;box-shadow:inset 0 0 0 1px var(--hair)}
+.seg{display:flex;gap:2px;padding:2px;border-radius:10px;background:rgba(31,28,24,.05)}
+.seg button{flex:1;padding:6px 4px;border-radius:8px;font-size:11.5px;color:var(--mid);
+  transition:background .45s var(--ease),color .45s var(--ease)}
+.seg button[data-on="true"]{background:var(--card);color:var(--ink);box-shadow:0 1px 2px rgba(31,28,24,.12)}
+.opt{display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:9px;font-size:12.5px;
+  color:var(--mid);cursor:pointer;transition:background .4s var(--ease)}
+.opt:hover{background:rgba(31,28,24,.05)}
+.opt i{width:15px;height:15px;border-radius:5px;font-style:normal;font-size:9px;line-height:15px;
+  text-align:center;color:transparent;box-shadow:inset 0 0 0 1px var(--hair)}
+.opt[data-on="true"]{color:var(--ink)}
+.opt[data-on="true"] i{background:var(--ink);color:var(--card);box-shadow:none}
+.kind{display:flex;align-items:center;gap:9px;width:100%;padding:8px 9px;border-radius:11px;
+  transition:background .4s var(--ease)}
+.kind:hover{background:color-mix(in srgb,var(--tone) 10%,transparent)}
+.kind .code{padding:3px 7px;border-radius:6px;font:600 9px/1.4 var(--mono);letter-spacing:.1em;
+  color:var(--tone);background:color-mix(in srgb,var(--tone) 13%,transparent)}
+.kind b{font-size:12.5px;font-weight:520}
+.kind span{margin-left:auto;font:400 9.5px/1 var(--mono);color:var(--faint)}
+.foot{display:flex;justify-content:space-between;margin-top:12px;padding-top:11px;border-top:1px solid var(--hair-2)}
+.foot button{font-size:11.5px;color:var(--faint);transition:color .4s var(--ease)}
+.foot button:hover{color:var(--red)}
+.foot .done{color:var(--ink)}
+
+@media (max-width:900px){
+  main{padding:40px 16px 80px}
+  .hero h1{font-size:32px}
+  .notes{grid-template-columns:1fr}
+}
