@@ -21,9 +21,11 @@ export function ExecutorModelPicker({
   profiles,
   knownProfiles,
   selection,
+  fallbackType,
   model,
   disabled = false,
   emptyText = "暂无可用执行器",
+  unsetText = "还没指定",
   onCommit,
 }: {
   /** 无可见标题时的可访问名称。 */
@@ -34,11 +36,15 @@ export function ExecutorModelPicker({
   profiles: AgentExecutorProfile[];
   /** 用于显示当前执行器名字：包含已不可用的那些，否则胶囊会显示成空。 */
   knownProfiles?: AgentExecutorProfile[];
-  selection: { agentType: AgentType; executorId: string | null };
+  /** null = 还没指定（工作流的站点可以「跟随任务的执行器」），胶囊上写 unsetText。 */
+  selection: { agentType: AgentType; executorId: string | null } | null;
+  /** 没指定时浮层从哪个 CLI 起步；不传就取第一个可派类型。 */
+  fallbackType?: AgentType;
   /** 当前模型覆盖（空 = 跟随执行器）。 */
   model: string | null;
   disabled?: boolean;
   emptyText?: string;
+  unsetText?: string;
   onCommit: (next: AgentModelSelection) => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -46,11 +52,12 @@ export function ExecutorModelPicker({
   const providers = useProviders();
 
   const pool = knownProfiles ?? profiles;
-  const profile = selection.executorId
+  const profile = selection?.executorId
     ? pool.find((candidate) => candidate.id === selection.executorId)
     : undefined;
   const empty = types.length + profiles.length === 0;
   const modelText = model?.trim() || "跟随执行器";
+  const openAt = selection?.agentType ?? fallbackType ?? types[0] ?? profiles[0]?.type ?? "claude";
 
   return (
     <div className="executor-model-picker">
@@ -61,11 +68,18 @@ export function ExecutorModelPicker({
         disabled={disabled || empty}
         aria-haspopup="dialog"
         aria-expanded={open}
-        aria-label={`${label}：${selection.agentType}${profile ? ` · ${profile.name}` : ""}，模型 ${modelText}；点击更改`}
+        aria-label={selection
+          ? `${label}：${selection.agentType}${profile ? ` · ${profile.name}` : ""}，模型 ${modelText}；点击更改`
+          : `${label}：${unsetText}；点击更改`}
         onClick={() => setOpen((current) => !current)}
       >
         {empty ? (
           <span className="is-placeholder">{emptyText}</span>
+        ) : !selection ? (
+          <>
+            <Robot size={12} aria-hidden="true" />
+            <span className="is-placeholder">{unsetText}</span>
+          </>
         ) : (
           <>
             <Robot size={12} aria-hidden="true" />
@@ -82,8 +96,8 @@ export function ExecutorModelPicker({
           profiles={profiles}
           providers={providers}
           initialStage="agent"
-          initialAgent={selection.agentType}
-          currentExecutorId={selection.executorId}
+          initialAgent={openAt}
+          currentExecutorId={selection?.executorId ?? null}
           triggerRef={triggerRef}
           anchorRef={triggerRef}
           onCommit={(next) => {

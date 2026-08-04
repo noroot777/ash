@@ -20,7 +20,9 @@ import { placementStyle, usePanelPlacement } from "../lib/usePanelPlacement.ts";
  * 会让人以为自己没点中，静默保留又会让任务在真跑起来时被上游拒。
  *
  * 候选来自 shared 的 `reasoningEffortsFor(type, model)`（完整允许集合，可以有洞、
- * 可以为空）。模型压根没有档位时胶囊只剩一句说明，不给点。
+ * 可以为空）。模型压根没有档位时胶囊只剩一句说明，不给点。`type` 为空 = 连哪个 CLI
+ * 都还没定（工作流的站点可以跟随任务的执行器），这时给通用四档、也不判谁不支持——
+ * 不知道 ≠ 不支持。
  */
 export function EffortPicker({
   type,
@@ -32,7 +34,8 @@ export function EffortPicker({
   followLabel = "跟随执行器",
   onChange,
 }: {
-  type: AgentType;
+  /** null = 还不知道会落到哪个 CLI，按通用档位给候选。 */
+  type: AgentType | null;
   /** 当前选中的模型；空 = 跟随执行器，此时按 CLI 并集给候选。 */
   model: string | null | undefined;
   value: string;
@@ -47,8 +50,13 @@ export function EffortPicker({
   const [open, setOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
-  const efforts = useMemo(() => reasoningEffortsFor(type, model), [model, type]);
-  const supported = isReasoningEffortSupported(type, model, value);
+  const efforts = useMemo(() => {
+    const base = reasoningEffortsFor(type, model);
+    // CLI 未定时已经选过的值不能凭空从候选里消失：那多半是别处设的，这里没有依据
+    // 判它不合法，至少得让用户看得见、点得回来。
+    return !type && value && !base.includes(value) ? [...base, value] : base;
+  }, [model, type, value]);
+  const supported = !type || isReasoningEffortSupported(type, model, value);
   const place = usePanelPlacement(triggerRef, panelRef, { minWidth: 200, minHeight: 120, fallbackHeight: 220 });
 
   useDismissable({

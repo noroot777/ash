@@ -238,14 +238,24 @@ export function resolveReasoningEfforts(type: AgentType, model?: string | null):
   return { efforts: winner.efforts, source: "model-rule", ruleId: winner.id };
 }
 
-/** 兼容选择器的简写：只取解析后的允许集合。 */
-export function reasoningEffortsFor(type: AgentType, model?: string | null): readonly string[] {
+/**
+ * 连**哪个 CLI** 都还不知道时给的档位：各家都有的那四档。
+ *
+ * 这不是并集（并集会把 `ultra`/`off`/`minimal` 这些单家特产也端出来，选中了多半跑
+ * 不起来），也不是断言——真正合法与否要等落到具体执行器时才裁得了。用在工作流的
+ * 站点上：它可以「跟随任务的执行器」，那时这一站压根不知道自己会被谁执行。
+ */
+export const GENERIC_REASONING_EFFORTS: readonly string[] = ["low", "medium", "high", "xhigh"];
+
+/** 兼容选择器的简写：只取解析后的允许集合；不知道 CLI 就退到通用四档。 */
+export function reasoningEffortsFor(type: AgentType | null | undefined, model?: string | null): readonly string[] {
+  if (!type) return GENERIC_REASONING_EFFORTS;
   return resolveReasoningEfforts(type, model).efforts;
 }
 
 /** 空值 = 跟随 CLI，永远合法；非空必须落在该模型解析出的允许集合里。 */
 export function isReasoningEffortSupported(
-  type: AgentType,
+  type: AgentType | null | undefined,
   model: string | null | undefined,
   effort: string | null | undefined,
 ): boolean {

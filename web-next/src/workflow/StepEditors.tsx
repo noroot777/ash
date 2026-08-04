@@ -4,18 +4,16 @@
 // 绝大多数改动应该是一次点击。所以每种字段的编辑器都做得尽量短，能一眼看完。
 //
 // 例外是执行器那一组（谁来干 / 什么模型 / 多大强度）：它们本来就是联动的一组，
-// 拆成三个弹层反而更烦，所以点其中任意一颗都开这一个编辑器。
-import { REASONING_EFFORT_VALUES } from "@harness/shared/cli-presets";
+// 拆成三个弹层反而更烦，所以点其中任意一颗都开这一个编辑器。这一组不自己画控件，
+// 直接用全站统一的那副形状（composer/ExecutorPickerField.tsx 的两颗胶囊）。
+import { useEffect, useRef } from "react";
 import type { FailPolicy, WorkflowDef, WorkflowStep } from "@harness/shared/workflow";
 import { FAIL_MODES, FAIL_MODE_LABELS, MAX_FAIL_ROUNDS } from "@harness/shared/workflow";
-import { ProviderModelInput } from "../settings/ProviderModelInput.tsx";
+import { ExecutorPickerField } from "../composer/ExecutorPickerField.tsx";
+import { executorValue, parseExecutorValue, registeredAgentTypes } from "../lib/agentAvailability.ts";
 import { backTargets } from "./workflowEdit.ts";
-import { executorProfile, providerOf, type ExecutorCatalog } from "./executorCatalog.ts";
+import { executorProfile, type ExecutorCatalog } from "./executorCatalog.ts";
 import type { FieldSpec } from "./stepFields.ts";
-
-// 没指定执行器时给不出「这个 CLI 支持哪些档位」，用通用档位兜着，真正的取舍由
-// 任务自己的执行器设置决定。
-const GENERIC_EFFORTS = ["low", "medium", "high", "xhigh"] as const;
 
 export function SelectEditor({
   spec, value, onPick,
@@ -98,69 +96,63 @@ export function ExecutorEditor({
 }) {
   const params = step.p as { executorId: string | null; model?: string | null; reasoningEffort?: string | null };
   const profile = executorProfile(catalog, params.executorId);
-  const provider = providerOf(catalog, profile);
-  const efforts = profile ? REASONING_EFFORT_VALUES[profile.type] : GENERIC_EFFORTS;
+  const types = registeredAgentTypes(catalog.profiles);
+  const missing = !!params.executorId && !profile;
+  // 选一次模型会连着触发 onChange + onOverrideChange，两次都在同一 tick 里落到还没
+  // 重渲的 def 上，后一次会把前一次盖掉（跟 TeamPresetEditor 里同一个坑）。所以把
+  // 这一轮的改动累起来一起交，渲染提交后再清空。
+  const pending = useRef<Record<string, string | null>>({});
+  useEffect(() => { pending.current = {}; });
+  const patch = (next: Record<string, string | null>) => {
+    pending.current = { ...pending.current, ...next };
+    onPatch(pending.current);
+  };
 
   return (
     <div className="wf-pop-form">
-      <label className="wf-pop-row">
-        <span>谁来干</span>
-        <select
-          value={params.executorId ?? ""}
-          onChange={(event) => onPatch({
-            executorId: event.target.value || null,
-            // 换执行器就把模型和强度打回「跟随执行器」——留着上一个执行器的模型名
-            // 多半跑不起来，这跟 composer 换执行器的规矩是同一条。
-            model: null,
-            reasoningEffort: null,
-          })}
-        >
-          <option value="">跟随任务的执行器</option>
-          {catalog.profiles.map((candidate) => (
-            <option key={candidate.id} value={candidate.id}>
-              {candidate.name}{candidate.isDefault ? "（默认）" : ""}
-            </option>
-          ))}
-          {params.executorId && !profile && (
-            <option value={params.executorId} disabled>这个执行器已经不在了</option>
-          )}
-        </select>
-      </label>
-
-      {"model" in params && (
-        <label className="wf-pop-row">
-          <span>模型</span>
-          {profile ? (
-            <ProviderModelInput
-              type={profile.type}
-              provider={provider}
-              value={params.model ?? ""}
-              compact
-              onChange={(model) => onPatch({ model: model.trim() || null })}
-            />
-          ) : (
-            <input
-              className="wf-pop-input"
-              value={params.model ?? ""}
-              placeholder="跟随执行器"
-              spellCheck={false}
-              onChange={(event) => onPatch({ model: event.target.value.trim() || null })}
-            />
-          )}
-        </label>
-      )}
-
-      {"reasoningEffort" in params && (
-        <label className="wf-pop-row">
-          <span>思考强度</span>
-          <select
-            value={params.reasoningEffort ?? ""}
-            onChange={(event) => onPatch({ reasoningEffort: event.target.value || null })}
+      {/* 跟新建面板、模式预设同一副形状的两颗胶囊，多一档「跟随任务的执行器」。 */}
+      <ExecutorPickerField
+        label="谁来干 · 用什么模型"
+        value={profile ? executorValue({ agentType: profile.type, executorId: profile.id }) : ""}
+        types={types}
+        profiles={catalog.profiles}
+        knownProfiles={catalog.profiles}
+        fallbackType={profile?.type ?? types[0] ?? "claude"}
+        override={{ model: params.model, effort: params.reasoningEffort }}
+        unsetText="跟随任务的执行器"
+        // 换执行器就把模型和强度打回「跟随执行器」由 ExecutorPickerField 负责；改回
+        // 跟随任务时三项一起清——这一站从此完全照任务的执行器跑，留着旧模型名多半
+        // 跑不起来。
+        onUnset={() => patch({ executorId: null, model: null, reasoningEffort: null })}
+        onChange={(next) => {
+          const picked = parseExecutorValue(next, catalog.profiles, {
+            agentType: profile?.type ?? types[0] ?? "claude",
+            executorId: null,
+          });
+          // 站点参数只存 executorId，null 在这儿的意思是「跟随任务的执行器」而不是
+          // 「类型默认」。所以选中的行没带 Profile（没挂 Profile 的供应商那一块）时，
+          // 落到该类型的默认 Profile 上，别写成 null 把语义偷换了。
+          const byType = catalog.profiles.find((p) => p.type === picked.agentType && p.isDefault)
+            ?? catalog.profiles.find((p) => p.type === picked.agentType);
+          patch({ executorId: picked.executorId ?? byType?.id ?? null });
+        }}
+        onOverrideChange={(next) => patch({
+          ...(next.model !== undefined ? { model: next.model.trim() || null } : {}),
+          ...(next.effort !== undefined ? { reasoningEffort: next.effort || null } : {}),
+        })}
+      />
+      {missing && (
+        // 失效的 id 还在参数里（胶囊上没法照实显示一个不存在的执行器），得给条清掉它的路。
+        <p className="wf-pop-hint">
+          原来指定的执行器已经不在了。
+          <button
+            type="button"
+            className="composer-field-unset"
+            onClick={() => patch({ executorId: null, model: null, reasoningEffort: null })}
           >
-            <option value="">跟随执行器</option>
-            {efforts.map((effort) => <option key={effort} value={effort}>{effort}</option>)}
-          </select>
-        </label>
+            清掉它，跟随任务的执行器
+          </button>
+        </p>
       )}
     </div>
   );

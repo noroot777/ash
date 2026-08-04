@@ -369,6 +369,19 @@
   color: var(--red);
 }
 
+/* 「改回跟随任务的执行器」这一档：选出去以后得有路回来，但它不是第三颗胶囊——
+   写成一行小字链接，别跟上面两颗抢注意力。 */
+.composer-field-unset {
+  justify-self: start;
+  padding: 0;
+  color: var(--muted);
+  font-size: 10.5px;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.composer-field-unset:hover:not(:disabled) { color: var(--accent); }
+.composer-field-unset:disabled { color: var(--faint); cursor: default; }
+
 /* 选择器只写得下 Profile 名 + Profile 自带模型;覆盖生效时实际跑的是别的模型,
    所以生效值单独占一行,覆盖态再加个角标(见 executorRunSummary)。 */
 .composer-field-run {

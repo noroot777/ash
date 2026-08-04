@@ -1,23 +1,25 @@
 // 线路图上的执行器候选。工作流定义里只存 executorId（agents.id），名字和模型候选
 // 都要现查——存进定义就会随改名腐烂（shared/workflow.ts 的注释讲了这条）。
 //
-// 页面上可能同时有好几张线路图（composer 一张、Inspector 一张），所以两个请求做成
+// 页面上可能同时有好几张线路图（composer 一张、Inspector 一张），所以请求做成
 // 模块级缓存共享，跟 agentAvailability 的 detection 一个路子。
+//
+// 这里**不管供应商**：选模型那颗胶囊自己从 lib/modelCatalog.ts 的全页共享缓存里读
+// （连带 /v1/models 探测），线路图再存一份只会多发一轮请求、还会跟它漂移。
 import { useEffect, useState } from "react";
-import type { AgentExecutorProfile, LlmProvider } from "@harness/shared";
+import type { AgentExecutorProfile } from "@harness/shared";
 import { api } from "../lib/api.ts";
 
 export interface ExecutorCatalog {
   profiles: AgentExecutorProfile[];
-  providers: LlmProvider[];
 }
 
-const EMPTY: ExecutorCatalog = { profiles: [], providers: [] };
+const EMPTY: ExecutorCatalog = { profiles: [] };
 let cached: Promise<ExecutorCatalog> | null = null;
 
 function load(): Promise<ExecutorCatalog> {
-  cached ??= Promise.all([api.agents(), api.llmProviders()]).then(
-    ([profiles, providers]) => ({ profiles, providers }),
+  cached ??= api.agents().then(
+    (profiles) => ({ profiles }),
     () => EMPTY,
   );
   return cached;
@@ -50,12 +52,4 @@ export function executorProfile(
 ): AgentExecutorProfile | null {
   if (!executorId) return null;
   return catalog.profiles.find((candidate) => candidate.id === executorId) ?? null;
-}
-
-export function providerOf(
-  catalog: ExecutorCatalog,
-  profile: AgentExecutorProfile | null,
-): LlmProvider | undefined {
-  if (!profile?.providerId) return undefined;
-  return catalog.providers.find((candidate) => candidate.id === profile.providerId);
 }
