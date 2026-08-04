@@ -74,9 +74,36 @@ export type AcceptStrategy = (typeof ACCEPT_STRATEGY)[number];
 export const ACCEPT_CLEAN = ["all", "worktree", "none"] as const;
 export type AcceptClean = (typeof ACCEPT_CLEAN)[number];
 
+// 枚举值的中文说法跟枚举本身放一起：编排界面上的选项、线路图上的小字、以后的通知
+// 文案都从这儿取，谁也别再自己写一份。
+export const PREVIEW_READY_LABELS: Record<PreviewReady, string> = {
+  port: "端口可连就算起来了", "port+log": "端口可连 + 日志 ready", http200: "HTTP 返回 200",
+};
+export const PREVIEW_LIFE_LABELS: Record<PreviewLife, string> = {
+  gate: "下一个人工关口结束时回收", task: "任务结束时回收", idle30: "闲置 30 分钟回收",
+};
+export const HUMAN_SHOW_LABELS: Record<HumanShow, string> = {
+  diff: "diff", report: "验证报告", shots: "截图",
+};
+export const HUMAN_NOTIFY_LABELS: Record<HumanNotify, string> = {
+  inbox: "落「需处理」", push: "推送通知", mail: "邮件",
+};
+export const COMMAND_WHERE_LABELS: Record<CommandWhere, string> = {
+  workspace: "任务工作区", repo: "项目根目录",
+};
+export const ACCEPT_STRATEGY_LABELS: Record<AcceptStrategy, string> = {
+  safe: "安全合并（仓库锁内）", squash: "squash 合并", tag: "只打标签不合并",
+};
+export const ACCEPT_CLEAN_LABELS: Record<AcceptClean, string> = {
+  all: "删 worktree 和任务分支", worktree: "只删 worktree", none: "都留着",
+};
+export const WORKSPACE_LABELS: Record<Workspace, string> = {
+  isolated: "单独开一份工作区", shared: "直接在项目目录里干活",
+};
+
 export interface StepParams {
   run: { instruction: string | null; executorId: string | null; model: string | null; reasoningEffort: string | null };
-  verify: { executorId: string | null; checks: VerifyCheck[] };
+  verify: { executorId: string | null; model: string | null; reasoningEffort: string | null; checks: VerifyCheck[] };
   preview: { cmd: string; ready: PreviewReady; life: PreviewLife };
   human: { show: HumanShow[]; notify: HumanNotify[] };
   command: { cmd: string; where: CommandWhere };
@@ -96,7 +123,7 @@ export interface WorkflowDef {
 
 export const DEFAULT_PARAMS: { [K in StepKind]: () => StepParams[K] } = {
   run: () => ({ instruction: null, executorId: null, model: null, reasoningEffort: null }),
-  verify: () => ({ executorId: null, checks: ["build"] }),
+  verify: () => ({ executorId: null, model: null, reasoningEffort: null, checks: ["build"] }),
   preview: () => ({ cmd: "npm run dev", ready: "port+log", life: "gate" }),
   human: () => ({ show: ["diff", "report"], notify: ["inbox", "push"] }),
   command: () => ({ cmd: "npm run lint", where: "workspace" }),
@@ -224,7 +251,12 @@ function normalizeParams(kind: StepKind, raw: unknown): StepParams[StepKind] {
     };
   }
   if (kind === "verify") {
-    return { executorId: pickNullableText(r.executorId, 80), checks: pickEnums(r.checks, VERIFY_CHECKS) };
+    return {
+      executorId: pickNullableText(r.executorId, 80),
+      model: pickNullableText(r.model, 80),
+      reasoningEffort: pickNullableText(r.reasoningEffort, 40),
+      checks: pickEnums(r.checks, VERIFY_CHECKS),
+    };
   }
   if (kind === "preview") {
     return {

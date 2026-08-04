@@ -13,6 +13,7 @@
     "test:task-tree": "node --experimental-strip-types scripts/test-task-tree.mjs",
     "test:workspace-history": "node --experimental-strip-types scripts/test-workspace-history.mjs",
     "test:workflow-rail": "node --experimental-strip-types scripts/test-workflow-rail.mjs",
+    "test:workflow-edit": "node --experimental-strip-types scripts/test-workflow-edit.mjs",
     "typecheck": "tsc -p tsconfig.json",
     "preview": "vite preview"
   },
