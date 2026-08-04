@@ -302,8 +302,61 @@
   display: grid;
   gap: 12px;
   border-bottom: 1px solid var(--line);
+  border-left: 3px solid var(--accent);
   background: color-mix(in lch, var(--accent-soft) 24%, var(--panel));
-  padding: 14px;
+  padding: 14px 14px 14px 11px;
+}
+
+/* 「我改的是哪个」：编辑表单顶部常驻的身份条，滚动时吸顶。 */
+.provider-form-head {
+  position: sticky;
+  z-index: 1;
+  top: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border-bottom: 1px solid var(--line);
+  margin: -14px -14px 0 -11px;
+  background: color-mix(in lch, var(--accent-soft) 55%, var(--panel));
+  padding: 9px 14px 9px 11px;
+}
+
+.provider-form-head > div {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.provider-form-head b {
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.provider-form-head small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 正在被编辑的那一行留在原位当锚点；收起后原地闪一下，找得回来。 */
+.provider-row.is-editing {
+  background: color-mix(in lch, var(--accent-soft) 40%, var(--panel));
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.provider-row.is-just-edited {
+  animation: provider-row-flash 2.6s ease-out;
+}
+
+@keyframes provider-row-flash {
+  0%, 45% { background: color-mix(in lch, var(--accent-soft) 62%, var(--panel)); }
+  100% { background: transparent; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .provider-row.is-just-edited { animation: none; background: color-mix(in lch, var(--accent-soft) 45%, var(--panel)); }
 }
 
 .agent-profile-create-grid {

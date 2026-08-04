@@ -320,9 +320,9 @@ export async function resumeOrRunTask(
 // into the SAME working directory (same-dir collaboration). Single-flight by
 // taskId keeps invitees from running concurrently with the main agent.
 //
-// opts.executorId / opts.model 是 @ 提及那一步选定的**具体执行器与模型**（对话框里
-// 那个「智能体 · 模型」框）。只作用于这一回合：任务自己的 executorId/model 是它的
-// 常设配置，被 @ 换成别的执行器时不该被这一次召唤改写。
+// opts.executorId / opts.model / opts.reasoningEffort 是 @ 提及那一步选定的**具体执行器、
+// 模型与思考强度**（对话框里那个「智能体 · 模型」框）。只作用于这一回合：任务自己的
+// executorId/model/reasoningEffort 是它的常设配置，被 @ 换成别的执行器时不该被这一次召唤改写。
 export async function continueTask(
   taskId: string,
   userText: string,
@@ -330,6 +330,7 @@ export async function continueTask(
     agent?: AgentType;
     executorId?: string | null;
     model?: string | null;
+    reasoningEffort?: string | null;
     attachments?: string[];
     system?: ResumeReason;
     throwOnTeamUnavailable?: boolean;
@@ -359,16 +360,15 @@ export async function continueTask(
     if (task.mode !== "single") throw new Error("reply is for single tasks");
 
     const agent = opts.agent ?? (task.agentType as AgentType) ?? "claude";
-    // 对话框里 @ 出来的那一步是**显式选择**（智能体 + 执行器 + 模型），这一回合就按它跑；
-    // 没 @ 就沿用任务自己的常设配置。跨类型召唤时任务自带的思考强度属于另一个 CLI 的档位表，
-    // 一并丢掉 —— 跟「换执行器时模型/强度重置为跟随执行器」同一条口径。
+    // 对话框里 @ 出来的那一步是**显式选择**（智能体 + 执行器 + 模型 + 思考强度），这一回合
+    // 整套按它跑；没 @ 就沿用任务自己的常设配置。三个字段必须同进同出：思考强度的档位表
+    // 是跟着 CLI 走的，只要换了智能体，任务自带的强度就属于另一张表，不能漏过来。
     const summoned = !!opts.agent;
-    const crossType = summoned && opts.agent !== task.agentType;
     const ex = await resolveExecutorFor({
       executorId: summoned ? opts.executorId ?? null : task.executorId,
       type: agent,
       model: summoned ? opts.model ?? null : task.model,
-      reasoningEffort: crossType ? null : task.reasoningEffort,
+      reasoningEffort: summoned ? opts.reasoningEffort ?? null : task.reasoningEffort,
     });
     const project = (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0);
 

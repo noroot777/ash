@@ -7,11 +7,12 @@ import type { ModelGroup } from "../lib/modelCatalog.ts";
  * 和浮层自带输入框的第二阶段能共用同一套候选与同一套上下键语义。
  */
 
-/** 一次 @ 选择的最终结果：这一回合派谁、用哪个执行器、跑哪个模型。 */
+/** 一次 @ 选择的最终结果：这一回合派谁、用哪个执行器、跑哪个模型、想多久。 */
 export type MentionTarget = {
   agent: AgentType;
   executorId: string | null; // null = 按该类型的默认执行器解析
   model: string | null; // null = 跟随执行器自己的模型
+  reasoningEffort: string | null; // null = 跟随执行器自己的思考强度
 };
 
 export type AgentRow = {

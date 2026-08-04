@@ -241,6 +241,20 @@ function ProviderForm({
 
   return (
     <div className="provider-form">
+      {/* 编辑态和列表态长得完全不一样，不写清楚「改的是哪个」用户就只能靠记忆。 */}
+      <header className="provider-form-head">
+        <span className={`provider-protocol is-${draft.protocol}`}>{draft.protocol === "anthropic" ? "A" : "O"}</span>
+        <div>
+          <b>{provider ? <>正在编辑「{provider.name}」</> : "添加供应商"}</b>
+          <small>
+            {provider
+              ? draft.name.trim() && draft.name.trim() !== provider.name
+                ? `保存后重命名为「${draft.name.trim()}」 · ${provider.baseUrl}`
+                : provider.baseUrl
+              : "填好名称与 Base URL 即可保存"}
+          </small>
+        </div>
+      </header>
       <div className="provider-form-grid">
         <label>
           <span>名称</span>
@@ -333,21 +347,15 @@ function ProviderRow({
   const [deleting, setDeleting] = useState(false);
   const [testing, setTesting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
-
-  if (editing) {
-    return (
-      <ProviderForm
-        provider={provider}
-        notify={notify}
-        onCancel={() => setEditing(false)}
-        onSaved={async () => {
-          await onChanged();
-          setEditing(false);
-          notify(`供应商「${provider.name}」已更新`);
-        }}
-      />
-    );
-  }
+  // 收起表单后原地闪一下:列表长了以后,光靠 toast 找不回刚才改的是哪一行。
+  const [justEdited, setJustEdited] = useState(false);
+  const flashTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  useEffect(() => () => clearTimeout(flashTimer.current), []);
+  const flash = () => {
+    setJustEdited(true);
+    clearTimeout(flashTimer.current);
+    flashTimer.current = setTimeout(() => setJustEdited(false), 2600);
+  };
 
   const remove = async () => {
     setDeleting(true);
@@ -381,7 +389,7 @@ function ProviderRow({
 
   return (
     <>
-      <article className="provider-row">
+      <article className={`provider-row${justEdited ? " is-just-edited" : ""}${editing ? " is-editing" : ""}`}>
         <span className={`provider-protocol is-${provider.protocol}`}>
           {provider.protocol === "anthropic" ? "A" : "O"}
         </span>
@@ -409,13 +417,32 @@ function ProviderRow({
         >
           <Play size={11} weight="fill" /> {testing ? "测试中" : "测试"}
         </button>
-        <button type="button" className="provider-icon-action" onClick={() => setEditing(true)} aria-label={`编辑 ${provider.name}`}>
+        <button
+          type="button"
+          className="provider-icon-action"
+          aria-pressed={editing}
+          onClick={() => setEditing((open) => !open)}
+          aria-label={editing ? `收起 ${provider.name} 的编辑表单` : `编辑 ${provider.name}`}
+        >
           <PencilSimple size={14} />
         </button>
         <button type="button" className="settings-icon-danger" onClick={() => setConfirmDelete(true)} aria-label={`删除 ${provider.name}`}>
           <Trash size={14} />
         </button>
       </article>
+      {editing && (
+        <ProviderForm
+          provider={provider}
+          notify={notify}
+          onCancel={() => { setEditing(false); flash(); }}
+          onSaved={async () => {
+            await onChanged();
+            setEditing(false);
+            flash();
+            notify(`供应商「${provider.name}」已更新`);
+          }}
+        />
+      )}
       {confirmDelete && (
         <ConfirmDialog
           title="删除供应商"

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import type { AgentExecutorProfile, AgentType, LlmProvider } from "@harness/shared";
 import { ArrowLeft, CaretRight, Robot, SpinnerGap, Warning } from "@phosphor-icons/react";
+import { REASONING_EFFORT_VALUES } from "@harness/shared/cli-presets";
 import { useAgentModelCatalog } from "../lib/modelCatalog.ts";
 import { useDismissable } from "../lib/useDismissable.ts";
 import {
@@ -19,6 +20,10 @@ import {
  *
  * 第二步按**供应商**分块：块标题是供应商名，块内是它的模型；候选从哪来由供应商
  * 设置里的「每次调用 API / 固定模型」决定（见 lib/modelCatalog.ts）。
+ *
+ * 思考强度跟模型是**同一次决定**的两半（「派谁、跑什么、想多久」），所以它常驻在
+ * 第二步底部而不是另开一个入口：先按一下强度，再点模型行一次落定。档位表跟着 CLI
+ * 走，换智能体就整条重置。
  */
 export function AgentModelPicker({
   types,
@@ -42,6 +47,7 @@ export function AgentModelPicker({
   const [stage, setStage] = useState(initialStage);
   const [agent, setAgent] = useState<AgentType>(initialAgent);
   const [query, setQuery] = useState("");
+  const [effort, setEffort] = useState("");
   const [index, setIndex] = useState(0);
   const containerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -59,12 +65,18 @@ export function AgentModelPicker({
   const rowCount = stage === "agent" ? agents.length : modelRows.length;
   const active = clampIndex(rowCount, index);
 
+  const efforts = REASONING_EFFORT_VALUES[agent] ?? [];
+
   const openModels = (next: AgentType) => {
     setAgent(next);
     setStage("model");
     setQuery("");
     setIndex(0);
+    setEffort(""); // 档位表按 CLI 走，换了智能体上一次挑的强度就不成立了
   };
+
+  const commitRow = (executorId: string | null, model: string) =>
+    onCommit({ agent, executorId, model, reasoningEffort: effort || null });
 
   const back = () => {
     setStage("agent");
@@ -79,7 +91,7 @@ export function AgentModelPicker({
       return;
     }
     const row = modelRows[active];
-    if (row) onCommit({ agent, executorId: row.executorId, model: row.model });
+    if (row) commitRow(row.executorId, row.model);
   };
 
   const onKeyDown = (event: React.KeyboardEvent) => {
@@ -168,7 +180,7 @@ export function AgentModelPicker({
                       aria-selected={flatIndex === active}
                       key={row.key}
                       onMouseEnter={() => setIndex(flatIndex)}
-                      onClick={() => onCommit({ agent, executorId: row.executorId, model: row.model })}
+                      onClick={() => commitRow(row.executorId, row.model)}
                     >
                       <b>{row.label}</b>
                       {row.detail && <span>{row.detail}</span>}
@@ -178,6 +190,25 @@ export function AgentModelPicker({
               </section>
             );
           })}
+        </div>
+      )}
+
+      {stage === "model" && efforts.length > 0 && (
+        <div className="agent-model-picker-effort">
+          <span>思考强度</span>
+          <div role="radiogroup" aria-label="思考强度">
+            {[{ value: "", label: "跟随" }, ...efforts.map((value) => ({ value, label: value }))].map((choice) => (
+              <button
+                type="button"
+                role="radio"
+                aria-checked={effort === choice.value}
+                key={choice.value || "follow"}
+                onClick={() => setEffort(choice.value)}
+              >
+                {choice.label}
+              </button>
+            ))}
+          </div>
         </div>
       )}
 

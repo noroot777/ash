@@ -26,7 +26,13 @@ export function ReplyBox({
   onSend: (
     text: string,
     attachments: string[],
-    options: { agent?: AgentType; executorId?: string | null; model?: string | null; sendAt?: string },
+    options: {
+      agent?: AgentType;
+      executorId?: string | null;
+      model?: string | null;
+      reasoningEffort?: string | null;
+      sendAt?: string;
+    },
   ) => Promise<ReplyTaskResult>;
   command?: {
     matches: (text: string) => boolean;
@@ -130,11 +136,16 @@ export function ReplyBox({
   const activeExecutorId = (target ? target.executorId : task.executorId)
     ?? profiles.find((profile) => profile.type === activeAgent && profile.isDefault)?.id
     ?? null;
-  const activeModel = executorRunSummary(
+  const summary = executorRunSummary(
     { agentType: activeAgent, executorId: activeExecutorId },
     profiles,
-    { model: target ? target.model : task.model },
-  ).model;
+    {
+      model: target ? target.model : task.model,
+      effort: target ? target.reasoningEffort : task.reasoningEffort,
+    },
+  );
+  const activeModel = summary.model;
+  const activeEffort = summary.effort;
 
   const pickCommand = (text: string) => {
     command?.onSubmit(text);
@@ -187,6 +198,7 @@ export function ReplyBox({
           agent: target?.agent,
           executorId: target?.executorId ?? null,
           model: target?.model ?? null,
+          reasoningEffort: target?.reasoningEffort ?? null,
           sendAt: scheduledAt,
         },
       );
@@ -381,12 +393,13 @@ export function ReplyBox({
             type="button"
             className={`task-reply-chip${target ? " is-summoned" : ""}`}
             disabled={disabled || sending || commandActive}
-            aria-label={`当前智能体 ${activeAgent}${activeModel ? `，模型 ${activeModel}` : ""}；点击更改`}
+            aria-label={`当前智能体 ${activeAgent}${activeModel ? `，模型 ${activeModel}` : ""}${activeEffort ? `，思考强度 ${activeEffort}` : ""}；点击更改`}
             onClick={() => setPicker((open) => (open ? null : { stage: "agent", agent: activeAgent }))}
           >
             <Robot size={12} aria-hidden="true" />
             <b>{activeAgent}</b>
             <span>{activeModel ?? "跟随执行器"}</span>
+            {activeEffort && <em>{activeEffort}</em>}
             <CaretDown size={9} weight="bold" aria-hidden="true" />
           </button>
           {target && (
