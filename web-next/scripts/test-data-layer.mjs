@@ -214,19 +214,38 @@ try {
   };
   const resumedAfterMention = buildConversationItems(
     [
-      { session: resumedPrimary, output: "旧 Claude 回合。" },
-      { session: mentionedAgent, output: "Codex 已完成。" },
+      {
+        session: resumedPrimary,
+        output: `旧 Claude 回合。\n\u001e${JSON.stringify({ t: "user", text: "继续处理", at: resumedPrimary.turnStartedAt })}\n当前 Claude 回合。`,
+      },
+      {
+        session: mentionedAgent,
+        output: `\u001e${JSON.stringify({ t: "user", text: "交给 Codex", at: mentionedAgent.startedAt })}\nCodex 已完成。\n\u001e${JSON.stringify({ t: "agentEnd", at: mentionedAgent.endedAt })}`,
+      },
     ],
     [resumedPrimary, mentionedAgent],
-    [
-      { kind: "user", id: "resume-primary", text: "继续处理", attachments: [], at: resumedPrimary.turnStartedAt },
-      { kind: "server", id: "primary-tool", event: { type: "agent.event", taskId: "task-1", sessionId: resumedPrimary.id, role: "single", agentType: "claude", event: { kind: "tool", name: "Read" } } },
-    ],
+    [],
   );
   const primaryTurns = resumedAfterMention.filter((item) => item.kind === "agent" && item.sessionId === resumedPrimary.id);
   assert.equal(primaryTurns[0]?.endedAt, mentionedAgent.startedAt);
   assert.equal(primaryTurns.at(-1)?.at, resumedPrimary.turnStartedAt);
   assert.equal(primaryTurns.at(-1)?.endedAt, null);
+  assert.deepEqual(
+    resumedAfterMention.filter((item) => item.kind === "agent").map((item) => item.sessionId),
+    [resumedPrimary.id, mentionedAgent.id, resumedPrimary.id],
+  );
+
+  const livePrimaryAfterReconnect = buildConversationItems(
+    [
+      { session: resumedPrimary, output: "旧 Claude 回合。" },
+      { session: mentionedAgent, output: "Codex 已完成。" },
+    ],
+    [resumedPrimary, mentionedAgent],
+    [{ kind: "server", id: "primary-tool", event: { type: "agent.event", taskId: "task-1", sessionId: resumedPrimary.id, role: "single", agentType: "claude", event: { kind: "tool", name: "Read" } } }],
+  );
+  const reconnectedTurn = livePrimaryAfterReconnect.at(-1);
+  assert.equal(reconnectedTurn?.kind === "agent" ? reconnectedTurn.at : null, resumedPrimary.turnStartedAt);
+  assert.equal(reconnectedTurn?.kind === "agent" ? reconnectedTurn.endedAt : "ended", null);
 
   const recycleNote = "〔系统〕调度台空闲超过 30 分钟,进程已回收(待命)。";
   const recycleAt = "2026-07-30T01:30:00.000Z";

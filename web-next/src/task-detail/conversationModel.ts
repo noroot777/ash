@@ -260,6 +260,11 @@ function latestTurnStart(session: Session): string | null {
   return typeof session.turnStartedAt === "string" ? session.turnStartedAt : null;
 }
 
+function conversationItemTime(item: ConversationItem): number {
+  const parsed = item.at ? Date.parse(item.at) : Number.NaN;
+  return Number.isFinite(parsed) ? parsed : Number.MAX_SAFE_INTEGER;
+}
+
 export function buildConversationItems(
   persisted: PersistedConversation[],
   sessions: Session[],
@@ -332,6 +337,12 @@ export function buildConversationItems(
     }
   }
 
+  // Sessions are reusable and can overlap: an older Claude session may resume
+  // after a newer @codex session has already finished. Grouping by session would
+  // pin that new Claude turn above Codex forever after refresh, so establish the
+  // persisted timeline by each turn's own timestamp before live arrivals append.
+  items.sort((left, right) => conversationItemTime(left) - conversationItemTime(right));
+
   for (const entry of timelineAfterPersistedTurns(timeline, persistedTurns)) {
     if (entry.kind === "user") {
       items.push({
@@ -389,9 +400,12 @@ export function buildConversationItems(
     if (item.kind !== "agent") continue;
     const firstTurn = !seenSessions.has(item.sessionId);
     seenSessions.add(item.sessionId);
+    const turnStartedAt = item.session ? latestTurnStart(item.session) : null;
     item.at = firstTurn
       ? item.session?.startedAt ?? item.at
-      : previousInterjectionAt ?? item.session?.startedAt ?? item.at;
+      : item.at === item.session?.startedAt && turnStartedAt
+        ? turnStartedAt
+        : previousInterjectionAt ?? item.session?.startedAt ?? item.at;
   }
 
   let nextInterjectionAt: string | null = null;
