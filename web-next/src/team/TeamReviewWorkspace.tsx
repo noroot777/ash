@@ -114,11 +114,14 @@ export function AcceptanceControls({
     if (!text) return;
     setBusy(true);
     try {
-      await api.replyTask(task.id, `【验收打回】请继续修改并完成后重新提交验收。\n\n${text}`);
+      const result = await api.replyTask(task.id, `【验收打回】请继续修改并完成后重新提交验收。\n\n${text}`);
       onTaskUpdated(await api.task(task.id));
       setAction(null);
       setFeedback("");
-      notify("已打回，意见已送入原任务会话");
+      // 任务这会儿还在跑的话,后端会把意见排队,等它这一轮结束再送进去——如实说清楚。
+      notify("scheduled" in result
+        ? "已打回；任务还在跑，意见已排队，跑完自动送入会话"
+        : "已打回，意见已送入原任务会话");
     } catch (reason) {
       notify(reason instanceof Error ? reason.message : String(reason));
     } finally {

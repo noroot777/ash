@@ -548,8 +548,10 @@ export function TeamView({
             />
             <TeamReplyBox task={task} onSend={async (text, attachments, options) => {
               const result = await api.replyTask(task.id, text, { attachments, ...options });
-              if (options.sendAt) {
-                notify(`已安排 ${new Date(options.sendAt).toLocaleString()} 发送给调度者`);
+              // 调度台是常驻会话,忙着也接得住,所以这里只可能是定时发送;仍按结果
+              // 分支(而不是按请求参数),口径与普通任务一致。
+              if ("scheduled" in result) {
+                notify(`已安排 ${new Date(result.message.sendAt).toLocaleString()} 发送给调度者`);
                 return result;
               }
               conversation.addUser(text, attachments);

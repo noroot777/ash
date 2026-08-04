@@ -195,10 +195,10 @@ export const schedules = sqliteTable("schedules", {
   createdAt: text("created_at").notNull(),
 });
 
-// Scheduled replies: a message to send to a task's agent at a future time
-// (continueTask at sendAt). Distinct from `schedules` (which re-runs a task):
-// a task may have several pending messages; the scheduler fires each when due
-// and the task is idle.
+// Scheduled replies: a message to send to a task's agent when it comes due
+// (continueTask). Distinct from `schedules` (which re-runs a task): a task may
+// have several pending messages; the scheduler fires each when due and the task
+// is idle. `mode` decides what "due" means — timed=到点，queued=任务一空闲就发。
 export const scheduledMessages = sqliteTable("scheduled_messages", {
   id: text("id").primaryKey(),
   taskId: text("task_id").notNull(),
@@ -209,7 +209,8 @@ export const scheduledMessages = sqliteTable("scheduled_messages", {
   executorId: text("executor_id"), // agents.id | null（null=按 agent 类型默认执行器）
   model: text("model"), // 模型覆盖 | null（跟随执行器）
   reasoningEffort: text("reasoning_effort"), // 思考强度覆盖 | null（跟随执行器）
-  sendAt: text("send_at").notNull(), // ISO 到期发送时间
+  mode: text("mode").notNull().default("timed"), // timed | queued
+  sendAt: text("send_at").notNull(), // timed=ISO 到期时间；queued=入队时刻（只用来排先后）
   status: text("status").notNull().default("pending"), // pending | sent | canceled
   createdAt: text("created_at").notNull(),
   sentAt: text("sent_at"),

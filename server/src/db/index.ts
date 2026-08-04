@@ -74,7 +74,7 @@ export async function ensureSchema() {
     CREATE TABLE IF NOT EXISTS scheduled_messages (
       id TEXT PRIMARY KEY, task_id TEXT NOT NULL, text TEXT NOT NULL DEFAULT '',
       attachments TEXT NOT NULL DEFAULT '[]', agent TEXT,
-      executor_id TEXT, model TEXT, send_at TEXT NOT NULL,
+      executor_id TEXT, model TEXT, mode TEXT NOT NULL DEFAULT 'timed', send_at TEXT NOT NULL,
       status TEXT NOT NULL DEFAULT 'pending', created_at TEXT NOT NULL, sent_at TEXT
     );
     CREATE TABLE IF NOT EXISTS llm_providers (
@@ -172,6 +172,8 @@ export async function ensureSchema() {
     "ALTER TABLE scheduled_messages ADD COLUMN executor_id TEXT",
     "ALTER TABLE scheduled_messages ADD COLUMN model TEXT",
     "ALTER TABLE scheduled_messages ADD COLUMN reasoning_effort TEXT",
+    // 排队追问：运行中发出的消息不看时间，任务一空闲就投递（timed 是老的定时发送）。
+    "ALTER TABLE scheduled_messages ADD COLUMN mode TEXT NOT NULL DEFAULT 'timed'",
   ]) {
     try {
       await client.execute(sql);

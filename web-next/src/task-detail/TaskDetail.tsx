@@ -267,8 +267,13 @@ export function TaskDetail({
                     hasConversation={hasConversation}
                     onSend={async (text, attachments, options) => {
                       const result = await api.replyTask(task.id, text, { attachments, ...options });
-                      if (options.sendAt) {
-                        notify(`已安排 ${new Date(options.sendAt).toLocaleString()} 发送`);
+                      // 按**结果**分支而不是按请求参数:任务正在跑时后端会把这条落成
+                      // 排队消息(前端没传 sendAt 也一样)。没真发出去就绝不能先贴进会话,
+                      // 否则用户看到自己的话已在时间线上、agent 却还没收到。
+                      if ("scheduled" in result) {
+                        notify(result.message.mode === "queued"
+                          ? "任务进行中，已排队；这一轮结束后自动发出"
+                          : `已安排 ${new Date(result.message.sendAt).toLocaleString()} 发送`);
                         return result;
                       }
                       conversation.addUser(text, attachments);
