@@ -75,7 +75,6 @@
 .agent-model-picker-rows button > b { min-width: 0; overflow: hidden; color: var(--ink); font-family: var(--font-mono); font-size: 11px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
 .agent-model-picker-rows button > span { min-width: 0; flex: 1; overflow: hidden; color: var(--faint); font-size: 9.5px; text-align: right; text-overflow: ellipsis; white-space: nowrap; }
 .agent-model-picker-rows button > svg { flex: 0 0 auto; color: var(--faint); }
-.agent-model-picker-rows button.is-follow > b { color: var(--accent); font-family: var(--font-sans); }
 .agent-model-picker > footer { border-top: 0.5px solid var(--line); padding: 5px 9px 6px; color: var(--faint); font-size: 9px; }
 .team-reply-shell { position: relative; }
 .team-reply-box footer > .reply-schedule-button { width: 27px; height: 27px; }

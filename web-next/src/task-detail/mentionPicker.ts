@@ -24,7 +24,7 @@ export type ModelRow = {
   key: string;
   groupKey: string;
   executorId: string | null;
-  model: string | null; // null = 跟随执行器
+  model: string;
   label: string;
   detail: string;
 };
@@ -53,28 +53,17 @@ export function agentRows(
 }
 
 /**
- * 模型候选按供应商分块。每块开头补一条「跟随执行器」——用户只想换智能体、不想
- * 挑模型时，@ 之后连按两次回车就完事，这是「丝滑」的关键一步。
+ * 模型候选按供应商分块，块里只列模型本身。
  *
- * 只有带代表 Profile 的块才有这条：没有 Profile 的供应商块选「跟随」会落回类型
- * 默认执行器（很可能是另一家供应商），那是骗人的，不如不给。
+ * 这里**不**再补「跟随执行器」那一行：它跟下面的模型是两种东西（一个是「不选」，
+ * 一个是「选哪个」），混排在同一列表里每块都顶着一条噪声，用户要挑的模型反而被
+ * 挤下去。不挑模型的人本来就不会打开这个选择器。
  */
 export function modelSections(groups: ModelGroup[], query: string): ModelSection[] {
   const keyword = query.trim().toLowerCase();
   const sections: ModelSection[] = [];
   for (const group of groups) {
     const rows: ModelRow[] = [];
-    const followLabel = "跟随执行器";
-    if (group.executorId && (!keyword || followLabel.includes(keyword) || "follow".startsWith(keyword))) {
-      rows.push({
-        key: `${group.key}:__follow`,
-        groupKey: group.key,
-        executorId: group.executorId,
-        model: null,
-        label: followLabel,
-        detail: group.profileModel ?? "由执行器自己决定",
-      });
-    }
     for (const model of group.models) {
       if (keyword && !model.toLowerCase().includes(keyword)) continue;
       rows.push({

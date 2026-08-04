@@ -111,11 +111,33 @@ export function ProviderPinnedModels({
     }
   };
 
-  const add = (model: string) => {
+  // 探测过就在目录里筛，没探过（或探失败）也能直接手打模型名回车加进去。
+  const matches = useMemo(() => {
+    const keyword = filter.trim().toLowerCase();
+    return catalog
+      .filter((model) => !pinned.includes(model))
+      .filter((model) => !keyword || model.toLowerCase().includes(keyword));
+  }, [catalog, filter, pinned]);
+  const suggestions = useMemo(() => matches.slice(0, 8), [matches]);
+
+  /**
+   * `keepFilter`：点候选是「在这批筛出来的里挑」，挑完往往还要接着挑下一个，所以
+   * 筛选词必须留着——加进去的那个会因为 suggestions 过滤掉已钉项而自己消失，剩下的
+   * 原地不动。手打模型名回车/点「添加」才清空，否则刚打完的那串会赖在输入框里。
+   */
+  const add = (model: string, keepFilter = false) => {
     const value = model.trim();
     if (!value || pinned.includes(value)) return;
     onPinnedChange([...pinned, value]);
-    setFilter("");
+    if (!keepFilter) setFilter("");
+  };
+
+  // 回车/「添加」：筛得出候选就取第一个（算作从候选里挑，留住筛选词继续挑），
+  // 筛不出来才把手打的这串当模型名。
+  const addFromInput = () => {
+    const hit = suggestions[0];
+    if (hit) add(hit, true);
+    else add(filter);
   };
 
   const remove = (model: string) => {
@@ -126,15 +148,6 @@ export function ProviderPinnedModels({
       return next;
     });
   };
-
-  // 探测过就在目录里筛，没探过（或探失败）也能直接手打模型名回车加进去。
-  const suggestions = useMemo(() => {
-    const keyword = filter.trim().toLowerCase();
-    return catalog
-      .filter((model) => !pinned.includes(model))
-      .filter((model) => !keyword || model.toLowerCase().includes(keyword))
-      .slice(0, 8);
-  }, [catalog, filter, pinned]);
 
   return (
     <div className="is-wide provider-pinned-field">
@@ -166,15 +179,14 @@ export function ProviderPinnedModels({
               onKeyDown={(event) => {
                 if (event.key !== "Enter") return;
                 event.preventDefault();
-                // 回车取「筛出来的第一个」，筛不出来就把手打的这串当模型名。
-                add(suggestions[0] ?? filter);
+                addFromInput();
               }}
             />
             <Button disabled={probing} onClick={() => void probe()}>
               <ArrowsClockwise size={12} className={probing ? "provider-spin" : ""} />
               {probing ? "探测中…" : "探测模型"}
             </Button>
-            <Button disabled={!filter.trim()} onClick={() => add(suggestions[0] ?? filter)}>
+            <Button disabled={!filter.trim() && !suggestions.length} onClick={addFromInput}>
               <Plus size={12} weight="bold" /> 添加
             </Button>
           </div>
@@ -184,12 +196,12 @@ export function ProviderPinnedModels({
           {!!suggestions.length && (
             <div className="provider-pinned-suggest">
               {suggestions.map((model) => (
-                <button type="button" key={model} onClick={() => add(model)}>
+                <button type="button" key={model} onClick={() => add(model, true)}>
                   <Plus size={10} weight="bold" /> {model}
                 </button>
               ))}
-              {catalog.length > suggestions.length + pinned.length && (
-                <small>还有更多，继续输入以筛选</small>
+              {matches.length > suggestions.length && (
+                <small>还有 {matches.length - suggestions.length} 个，继续输入以筛选</small>
               )}
             </div>
           )}

@@ -167,7 +167,6 @@ export function AgentModelPicker({
                       role="option"
                       aria-selected={flatIndex === active}
                       key={row.key}
-                      className={row.model === null ? "is-follow" : ""}
                       onMouseEnter={() => setIndex(flatIndex)}
                       onClick={() => onCommit({ agent, executorId: row.executorId, model: row.model })}
                     >
