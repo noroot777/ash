@@ -3,26 +3,27 @@
   "use strict";
 
   // ── 模板：固定主干 + 一组开关/参数。存储形状是「节点 + 出口」，UI 只暴露受限编辑。
+  //    刻意不含任何分组/队列字段：工作流只描述「一个任务干完要过哪几关」。
   var TEMPLATES = {
     fast: {
       name: "极速原型", scope: "内置 · 只读", desc: "直接在项目目录跑，不验证、不设关口；实现完成即结束。",
       cfg: { workspace: "shared", verify: false, verifiers: [], preview: false, human: false, accept: false,
-             release: "run", rounds: 0, onFail: "stop" },
+             rounds: 0, onFail: "stop" },
     },
     standard: {
       name: "标准交付", scope: "系统默认 · v3", desc: "实现完成 → 自动验证；验证失败最多回修 2 轮，通过后人工验收再合并。",
       cfg: { workspace: "isolated", verify: true, verifiers: ["构建 + 类型检查", "回归测试"], preview: false,
-             human: true, accept: true, release: "verify", rounds: 2, onFail: "repair" },
+             human: true, accept: true, rounds: 2, onFail: "repair" },
     },
     frontend: {
       name: "前端真实验收", scope: "项目 · harness · v2", desc: "验证通过后先把预览起起来，你点开看过真东西再验收；关口一结束预览自动回收。",
       cfg: { workspace: "isolated", verify: true, verifiers: ["构建 + 类型检查", "浏览器真实点检"], preview: true,
-             human: true, accept: true, release: "verify", rounds: 2, onFail: "repair" },
+             human: true, accept: true, rounds: 2, onFail: "repair" },
     },
     strict: {
-      name: "严格发布", scope: "内置 · 只读", desc: "验证、人工验收与确定性合并全部通过后，才释放同组的后继任务。",
+      name: "严格发布", scope: "内置 · 只读", desc: "三道验证全过、你亲自点头，才做确定性合并；中途失败先问你一句。",
       cfg: { workspace: "isolated", verify: true, verifiers: ["构建 + 类型检查", "回归测试", "浏览器真实点检"],
-             preview: true, human: true, accept: true, release: "human", rounds: 3, onFail: "ask" },
+             preview: true, human: true, accept: true, rounds: 3, onFail: "ask" },
     },
   };
 
@@ -44,7 +45,6 @@
       ports: [["success", "→ 完成", "ok"], ["conflict", "→ 退回本任务", "bad"]] },
   ];
 
-  var RELEASE_LABEL = { run: "实现后", verify: "验证后", human: "人工后" };
   var FAIL_LABEL = { stop: "停下等人", ask: "问一句再决定", repair: "自动修复" };
 
   var state = { tpl: "standard", sel: "run", cfg: null };
@@ -69,21 +69,20 @@
       rows.push(["deny", "repo.accept 前必须有 human.gate —— 不可逆动作不允许自动跨过人工关口。"]);
       denied = true;
     }
-    if (c.workspace === "shared" && c.release === "run" && c.onFail === "repair") {
-      rows.push(["deny", "共享目录 + 实现后让位 + 自动修复 = 后继任务和修复动作并发写同一个目录。改成独立 worktree，或把让位点挪到验证后。"]);
+    // 预览进程的生命周期锚在人工关口上；没有关口就没有「什么时候该回收」的答案。
+    if (c.preview && !c.human) {
+      rows.push(["deny", "preview.serve 的回收时机锚在 human.gate 上：没有人工关口，这个服务没有明确的关闭时刻，只会变成又一个没人记得停的端口。"]);
       denied = true;
     }
-    if (c.preview && !c.human) {
-      rows.push(["warn", "预览起了却没有人工关口消费它 —— 服务会立刻被回收。建议关掉预览，或打开人工验收。"]);
+    if (c.onFail === "repair" && !c.verify) {
+      rows.push(["deny", "自动修复的唯一触发源是验证给出的 failed。关掉验证，agent.repair 是一个永远进不去的节点。"]);
+      denied = true;
     }
-    if (!c.verify && c.onFail === "repair") {
-      rows.push(["warn", "没有自动验证就没有失败信号，自动修复永远不会被触发。"]);
+    if (c.workspace === "shared" && c.accept) {
+      rows.push(["warn", "在项目目录里直接干活，合并与清理这一关没有独立分支可合 —— 会退化成「只提交，不合并」。"]);
     }
-    if (c.release === "verify" && !c.verify) {
-      rows.push(["warn", "让位点设在「验证后」但验证已关闭，编译时降级为「实现后」。"]);
-    }
-    if (c.release === "human" && !c.human) {
-      rows.push(["warn", "让位点设在「人工后」但人工关口已关闭，编译时降级为上一个存在的关口。"]);
+    if (c.verify && c.verifiers.length === 0) {
+      rows.push(["warn", "验证关口开着但没有任何动作，等于一个必然直接通过的空关口。"]);
     }
     if (!denied) {
       rows.push(["ok", "所有出口可达；回路上限 " + (c.onFail === "repair" ? c.rounds + " 轮" : "不适用") + "；" +
@@ -92,16 +91,9 @@
     return { rows: rows, denied: denied };
   }
 
-  function effectiveRelease() {
-    var c = state.cfg;
-    if (c.release === "human" && !c.human) return c.verify ? "verify" : "run";
-    if (c.release === "verify" && !c.verify) return "run";
-    return c.release;
-  }
-
   // ── ① 纵向主干轨 ────────────────────────────────────────────────────
   function renderTrack() {
-    var c = state.cfg, rel = effectiveRelease(), html = "", index = 0;
+    var c = state.cfg, html = "", index = 0;
 
     SPINE.forEach(function (s) {
       var on = enabled(s.key);
@@ -140,10 +132,6 @@
         '<div class="stage-desc">' + s.desc + "</div>" +
         (on ? '<div class="ports">' + ports + "</div>" + extra : "") +
         "</button></div></div>";
-
-      if (on && s.key === rel) {
-        html += '<div class="release-line"><b>队列在此让位</b><small>同组后继从这一刻起就能开跑，本任务后面的关口继续走</small></div>';
-      }
     });
 
     $("#track").innerHTML = html;
@@ -152,14 +140,14 @@
     $("#tplDesc").textContent = TEMPLATES[state.tpl].desc;
     $("#scopeChip").textContent = TEMPLATES[state.tpl].scope;
     $("#tplMetas").innerHTML =
-      '<span class="chip on">让位点 · ' + RELEASE_LABEL[rel] + "</span>" +
       '<span class="chip">' + (c.workspace === "isolated" ? "独立 worktree" : "共享项目目录") + "</span>" +
       '<span class="chip">失败 · ' + FAIL_LABEL[c.onFail] + "</span>" +
+      (c.human ? '<span class="chip on">人工关口已开</span>' : '<span class="chip">全自动</span>') +
       (c.preview ? '<span class="chip warn">预览关口已开</span>' : "");
   }
 
   function renderCompile() {
-    var r = compile(), c = state.cfg, rel = effectiveRelease();
+    var r = compile(), c = state.cfg;
     $("#compileHead").innerHTML = r.denied
       ? '<span class="chip bad">✕ 编译被拒绝</span><span style="color:var(--red)">这份定义不能发布</span>'
       : '<span class="chip good">✓ 编译通过</span><span style="color:var(--muted);font-weight:450">可发布为新版本</span>';
@@ -167,10 +155,10 @@
       return '<div class="crow ' + row[0] + '"><i></i><span>' + row[1] + "</span></div>";
     }).join("");
     $("#compileFacts").innerHTML =
-      '<div class="fact"><small>队列让位点</small><b>' + RELEASE_LABEL[rel] + "</b></div>" +
+      '<div class="fact"><small>关口</small><b>' + ["run", "verify", "preview", "human", "accept"].filter(enabled).length + " 关</b></div>" +
       '<div class="fact"><small>失败路径</small><b>' + (c.onFail === "repair" ? "repair × " + c.rounds + " → 停下" : FAIL_LABEL[c.onFail]) + "</b></div>" +
       '<div class="fact"><small>工作区</small><b>' + (c.workspace === "isolated" ? "isolated · 首个 Session 时冻结" : "shared · 项目目录") + "</b></div>" +
-      '<div class="fact"><small>预览</small><b>' + (c.preview ? "关口结束即回收" : "未启用") + "</b></div>";
+      '<div class="fact"><small>对队列的影响</small><b>无新增语义</b></div>';
   }
 
   // ── ① 右栏参数 ──────────────────────────────────────────────────────
@@ -212,8 +200,8 @@
     } else if (state.sel === "human") {
       body = field("人工验收", toggle("human", c.human, "人工验收")) +
         field("通过条件", select(c.verify ? "必须已有 verified 结论" : "无前置条件")) +
-        field("队列让位点", seg("release", [["run", "实现后"], ["verify", "验证后"], ["human", "人工后"]], c.release)) +
-        '<p class="note">让位点是工作流对分组/队列唯一的输出。放「实现后」= 旁路：后继立刻开跑，验证在旁边继续；放「人工后」= 严格：你不点，同组谁也别想动。</p>';
+        field("提醒", select("落桶「需处理」+ 推送通知")) +
+        '<p class="note">开着这一关，任务会长时间停在 <code>awaiting_review</code>。串行分组里这意味着后继一直等你 —— 这是既有的队列规则，工作流没有改它，只是把这段等待变明显了。急的话把这个模板换掉，或者让那条链别用带人工关口的模板。</p>';
     } else if (state.sel === "accept") {
       body = field("合并与清理", toggle("accept", c.accept, "合并与清理")) +
         field("合并策略", select("Harness 安全合并（仓库锁内）")) +
@@ -227,54 +215,6 @@
   }
 
   function renderAll() { renderTrack(); renderCompile(); renderInspector(); }
-
-  // ── ③ 让位点 × 队列（甘特） ─────────────────────────────────────────
-  var PHASES = [
-    { key: "run", label: "实现", len: 26, cls: "run" },
-    { key: "verify", label: "验证", len: 20, cls: "verify" },
-    { key: "preview", label: "预览", len: 6, cls: "preview" },
-    { key: "human", label: "人工验收", len: 18, cls: "human" },
-    { key: "accept", label: "合并", len: 6, cls: "accept" },
-  ];
-  var RELEASE_OFFSET = { run: 26, verify: 52, human: 70 };
-  var TOTAL = 76;
-  var ganttRelease = "verify";
-
-  function renderGantt() {
-    var offset = RELEASE_OFFSET[ganttRelease];
-    var starts = [0, offset, offset * 2];
-    var span = starts[2] + TOTAL;
-    var pct = function (v) { return (v / span) * 100 + "%"; };
-    var names = ["视频 A", "视频 B", "视频 C"];
-
-    $("#ganttRows").innerHTML = names.map(function (name, i) {
-      var at = starts[i], bars = "";
-      if (i > 0) {
-        bars += '<div class="seg-bar wait" style="left:0;width:' + pct(at) + '">等前一个让位</div>';
-      }
-      var cursor = at;
-      PHASES.forEach(function (p) {
-        bars += '<div class="seg-bar ' + p.cls + '" style="left:' + pct(cursor) + ";width:" + pct(p.len) + '">' + p.label + "</div>";
-        cursor += p.len;
-      });
-      bars += '<div class="release-tick" style="left:' + pct(at + offset) + '"></div>';
-      return '<div class="grow"><b>' + name + '</b><div class="gbar">' + bars + "</div></div>";
-    }).join("");
-
-    var ticks = "";
-    for (var t = 0; t <= span; t += 30) {
-      ticks += '<span style="left:' + pct(t) + '">T+' + t + " 分</span>";
-    }
-    $("#ganttScale").innerHTML = ticks;
-
-    var texts = {
-      run: ["旁路（sideband）", "实现一完成就让位，后继立刻开跑；本任务的验证、预览、验收在旁边继续走。三条视频几乎压满并行，代价是「验证还没结论就已经放行」——所以共享目录 + 自动修复的组合会被编译期拒掉。"],
-      verify: ["阻塞式（barrier）· 默认", "验证给出 verified 才让位。后继拿到的是「已经被机器验过」的上游产物，同时人工验收和合并不再拖住别人 —— 这是默认值的原因：卡住下游的成本由机器承担，不由你的空闲时间承担。"],
-      human: ["严格发布", "你点过、合并过，同组后继才动。最慢，但上游产物对下游是完全确定的。适合改公共基建、改数据结构这类「后面的人一律建立在它之上」的活。"],
-    };
-    $("#rvTitle").textContent = texts[ganttRelease][0];
-    $("#rvBody").textContent = texts[ganttRelease][1];
-  }
 
   // ── 事件 ────────────────────────────────────────────────────────────
   function selectTemplate(key) {
@@ -337,15 +277,6 @@
       renderAll(); toast("已加一条并行验证动作（全通过才算 verified）"); return;
     }
 
-    var relBtn = e.target.closest("#releaseSeg [data-release]");
-    if (relBtn) {
-      ganttRelease = relBtn.dataset.release;
-      document.querySelectorAll("#releaseSeg button").forEach(function (b) {
-        b.setAttribute("aria-pressed", String(b === relBtn));
-      });
-      renderGantt(); return;
-    }
-
     var act = e.target.closest("[data-act]");
     if (!act) return;
     var messages = {
@@ -362,7 +293,6 @@
   });
 
   selectTemplate("standard");
-  renderGantt();
   // 每个视图可直接分享链接：index.html#runtime
   showView((location.hash || "").replace("#", "") || "orchestrate");
   window.addEventListener("hashchange", function () {

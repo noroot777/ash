@@ -68,7 +68,7 @@ h1,h2,h3,p{margin:0}
 .tpl[aria-selected="true"] b i{background:var(--accent)}
 .tpl small{display:block;margin-top:3px;color:var(--faint);font-size:9.5px;line-height:1.45}
 .layers{margin:12px 4px 0;border-top:.5px solid var(--line);padding-top:11px}
-.layers b{display:block;margin-bottom:6px;font-size:10px}
+.layers>b{display:block;margin-bottom:6px;font-size:10px}
 .layer{display:flex;align-items:baseline;gap:6px;padding:3px 0;color:var(--muted);font-size:9.5px}
 .layer i{width:14px;color:var(--faint);font-style:normal;font-size:8.5px}
 .layer.frozen{color:var(--accent);font-weight:600}
@@ -114,14 +114,6 @@ h1,h2,h3,p{margin:0}
 .pact i{width:5px;height:5px;border-radius:50%;background:var(--accent);font-style:normal}
 .pact.add{border-style:dashed;color:var(--faint)}
 .pact.add:hover{border-color:var(--accent-line);color:var(--accent)}
-
-/* 让位点：主干上的一条横线 */
-.release-line{position:relative;display:flex;align-items:center;gap:9px;margin:2px 0 10px 41px;
-  border-top:1.5px dashed var(--accent-line);padding-top:9px}
-.release-line b{display:inline-flex;align-items:center;gap:6px;border-radius:999px;
-  background:var(--accent);padding:3px 9px;color:#fff;font-size:9px;font-weight:700}
-.release-line b::before{content:"";width:5px;height:5px;border:1.5px solid rgba(255,255,255,.8);border-radius:50%}
-.release-line small{color:var(--muted);font-size:9.5px}
 
 .compile{position:sticky;bottom:0;margin-top:14px;max-width:660px;border:1px solid var(--line2);
   border-radius:10px;background:rgba(255,255,255,.96);padding:10px 12px;box-shadow:var(--shadow);backdrop-filter:blur(10px)}
@@ -191,28 +183,8 @@ h1,h2,h3,p{margin:0}
   border-bottom:.5px dashed var(--line);color:var(--muted);font-size:10px}
 .kv b{color:var(--ink);font-weight:600}
 
-/* ── ③ 让位点 × 队列 ──────────────────────────────────── */
-.release-view{min-height:0;flex:1;flex-direction:column;overflow:auto;padding:18px 24px 28px}
-.release-view>*,.graph-view>*{flex:none}
-.rv-inner{max-width:900px}
-.rv-controls{display:flex;align-items:center;gap:10px;margin:14px 0 16px}
-.gantt{border:1px solid var(--line2);border-radius:11px;background:var(--panel);padding:14px;box-shadow:var(--soft-shadow)}
-.gantt-scale{position:relative;height:16px;margin:0 0 6px 118px;border-bottom:.5px solid var(--line)}
-.gantt-scale span{position:absolute;top:0;color:var(--faint);font-size:8.5px;white-space:nowrap;transform:translateX(-50%)}
-.grow{display:flex;align-items:center;gap:10px;margin-bottom:12px}
-.grow>b{flex:0 0 108px;font-size:10.5px;text-align:right}
-.gbar{position:relative;height:24px;flex:1;border-radius:6px;background:var(--raised)}
-.seg-bar{position:absolute;top:3px;height:18px;border-radius:5px;display:flex;align-items:center;
-  padding:0 6px;color:#fff;font-size:8.5px;font-weight:650;white-space:nowrap;overflow:hidden;transition:left .25s,width .25s}
-.seg-bar.run{background:#6b74d8}.seg-bar.verify{background:#3f9163}.seg-bar.preview{background:#b98a2e}
-.seg-bar.human{background:#8b8f9c}.seg-bar.accept{background:#4a4d57}.seg-bar.wait{background:#dcdee4;color:var(--faint)}
-.release-tick{position:absolute;top:-6px;bottom:-6px;width:2px;background:var(--accent);transition:left .25s}
-/* 标签的包含块只有 2px 宽，不 nowrap 会被逐字折成竖排 */
-.release-tick::after{content:"让位";position:absolute;top:-15px;left:50%;transform:translateX(-50%);
-  white-space:nowrap;border-radius:4px;background:var(--accent);padding:1px 5px;color:#fff;font-size:8px;font-weight:700}
-.rv-explain{margin-top:14px;display:grid;gap:8px;grid-template-columns:1fr 1fr}
 
-/* ── ④ 状态投影 ───────────────────────────────────────── */
+/* ── ③ 状态投影 ───────────────────────────────────────── */
 .proj{display:grid;min-height:0;flex:1;grid-template-columns:288px minmax(0,1fr)}
 .proj-side{min-height:0;overflow:auto;border-right:.5px solid var(--line);background:var(--panel);padding:12px 10px}
 .bucket{margin-bottom:12px}
@@ -234,9 +206,10 @@ table.map td{border-bottom:.5px solid var(--line);padding:8px 9px;vertical-align
 table.map tr:hover td{background:var(--canvas)}
 .deleted{color:var(--faint);text-decoration:line-through}
 
-/* ── ⑤ 只读图 ─────────────────────────────────────────── */
+/* ── ④ 只读图 ─────────────────────────────────────────── */
 /* .view.is-on 是 display:flex，这里必须显式转竖排，否则标题/图/卡片会横着并排 */
 .graph-view{min-height:0;flex:1;flex-direction:column;overflow:auto;padding:18px 24px 28px}
+.graph-view>*{flex:none}
 .graph-frame{position:relative;max-width:960px;border:1px solid var(--line2);border-radius:12px;
   background-color:#fbfbfc;background-image:linear-gradient(rgba(85,88,98,.05) 1px,transparent 1px),
   linear-gradient(90deg,rgba(85,88,98,.05) 1px,transparent 1px);background-size:20px 20px;
@@ -265,5 +238,5 @@ table.map tr:hover td{background:var(--canvas)}
   .rail,.proj-side{display:none}
   .orchestrate{grid-template-columns:minmax(0,1fr) 268px}
   .proj{grid-template-columns:minmax(0,1fr)}
-  .rv-explain,.split2{grid-template-columns:1fr}
+  .split2{grid-template-columns:1fr}
 }

@@ -14,9 +14,8 @@
     <nav class="tabs" id="tabs">
       <button data-view="orchestrate" aria-selected="true">① 编排</button>
       <button data-view="runtime" aria-selected="false">② 运行态 · 预览关口</button>
-      <button data-view="release" aria-selected="false">③ 让位点 × 队列</button>
-      <button data-view="projection" aria-selected="false">④ 状态 → 列表分组</button>
-      <button data-view="graph" aria-selected="false">⑤ 只读流程图</button>
+      <button data-view="projection" aria-selected="false">③ 状态 → 列表怎么显示</button>
+      <button data-view="graph" aria-selected="false">④ 只读流程图</button>
     </nav>
     <div class="topbar-right">
       <span class="chip" id="scopeChip">系统默认 · v3</span>
@@ -29,10 +28,10 @@
   <section class="view orchestrate is-on" data-view="orchestrate">
     <aside class="rail">
       <div class="pane-label">模板</div>
-      <button class="tpl" data-tpl="fast" aria-selected="false"><b><i></i>极速原型</b><small>共享目录 · 不验证 · 实现后让位</small></button>
-      <button class="tpl" data-tpl="standard" aria-selected="true"><b><i></i>标准交付</b><small>独立 worktree · 自动验证 · 验证后让位</small></button>
+      <button class="tpl" data-tpl="fast" aria-selected="false"><b><i></i>极速原型</b><small>共享目录 · 不验证 · 实现完就结束</small></button>
+      <button class="tpl" data-tpl="standard" aria-selected="true"><b><i></i>标准交付</b><small>独立 worktree · 自动验证 · 人工验收</small></button>
       <button class="tpl" data-tpl="frontend" aria-selected="false"><b><i></i>前端真实验收</b><small>验证 + 预览就绪 + 人工点过</small></button>
-      <button class="tpl" data-tpl="strict" aria-selected="false"><b><i></i>严格发布</b><small>人工通过并合并后才让位</small></button>
+      <button class="tpl" data-tpl="strict" aria-selected="false"><b><i></i>严格发布</b><small>三道验证 · 失败先问你 · 确定性合并</small></button>
 
       <div class="layers">
         <b>生效层级</b>
@@ -42,6 +41,11 @@
         <div class="layer frozen"><i>4</i>建任务时冻结 snapshot</div>
         <div class="layer"><i>5</i>运行中只改「还没开始的关口」</div>
         <p class="note" style="margin-top:10px">已经跑过的关口不可改 —— 改了就等于伪造这一版产物的验收历史。</p>
+      </div>
+
+      <div class="layers">
+        <b>不在这里的东西</b>
+        <p class="note">工作流<b>不认识分组和队列</b>。「一个任务干完要过哪几关」和「任务之间谁先谁后」是两件事，各配各的：分组照旧在分组里排，队列推进规则一个字不改。</p>
       </div>
     </aside>
 
@@ -105,10 +109,6 @@
               </div>
             </div>
           </div>
-        </div>
-
-        <div class="release-line">
-          <b>队列在此让位</b><small>同组后继「迁移旧 TeamPreset」已于 17:58 启动</small>
         </div>
 
         <div class="stage live">
@@ -176,7 +176,7 @@
         <div class="kv"><span>模板</span><b>前端真实验收</b></div>
         <div class="kv"><span>快照</span><b>snapshot v2</b></div>
         <div class="kv"><span>来源</span><b>harness 项目覆盖</b></div>
-        <div class="kv"><span>让位点</span><b>验证后</b></div>
+        <div class="kv"><span>失败策略</span><b>自动修复 × 2 → 停下</b></div>
         <div class="kv"><span>本地覆盖</span><b>无</b></div>
         <button class="btn" style="width:100%;margin-top:10px" data-act="adjust">调整还没开始的关口</button>
       </div>
@@ -188,6 +188,7 @@
         <div class="kv"><span>侧栏桶</span><b>需处理</b></div>
         <div class="kv"><span>行内标签</span><b>预览已就绪</b></div>
         <p class="note" style="margin-top:10px">只有一处真相：引擎。<code>stage</code> 不再由 agent 手工上报，只是这里算出来的名字。</p>
+        <p class="note" style="margin-top:8px">同组后继照旧等本任务结束 —— 队列看的仍然只是 <code>TaskStatus</code>，它根本不知道工作流跑到哪一关。</p>
       </div>
 
       <div class="side-block">
@@ -197,39 +198,7 @@
     </aside>
   </section>
 
-  <!-- ③ 让位点 × 队列 ─────────────────────────────────── -->
-  <section class="view release-view" data-view="release">
-    <div class="rv-inner">
-      <h1 class="section-title">让位点是工作流和分组之间唯一的一根线</h1>
-      <p class="section-sub">分组和队列不进编排界面 —— 它们管的是「任务之间谁先谁后」，工作流管的是「一个任务干完还要过哪几关」。两者只在一个地方碰头：<b>工作流跑到让位点时，通知队列可以推进了</b>。今天这个点写死在最后（<code>done</code> 才让位），方案里把它变成主干上一个能挪的标记。</p>
-
-      <div class="rv-controls">
-        <span style="font-size:10.5px;color:var(--muted)">串行分组「dr-ytb 三条视频」，让位点：</span>
-        <div class="seg" id="releaseSeg" style="width:280px">
-          <button data-release="run" aria-pressed="false">实现后</button>
-          <button data-release="verify" aria-pressed="true">验证后</button>
-          <button data-release="human" aria-pressed="false">人工后</button>
-        </div>
-      </div>
-
-      <div class="gantt">
-        <div class="gantt-scale" id="ganttScale"></div>
-        <div id="ganttRows"></div>
-      </div>
-
-      <div class="rv-explain">
-        <div class="mini"><b id="rvTitle">阻塞式（barrier）</b><p id="rvBody"></p></div>
-        <div class="mini"><b>不变的老规则</b><p>队列推进那条唯一规则不动：<code>canceled</code> 透明跳过、<code>failed</code> 留在原地但不拖链、分组暂停打断落 <code>paused</code> 而不是 <code>canceled</code>。工作流只是换了「什么时候算让位」，没有换「让位之后怎么走」。</p></div>
-      </div>
-
-      <div class="split2">
-        <div class="mini"><b>为什么不把分组画进同一张图</b><p>一张画布上两种边会混：一根箭头到底是「本任务的下一步」还是「下一个任务」？而且分组是临时容器、工作流模板是要版本化的长期资产，塞一起会逼着分组也长出版本概念。</p></div>
-        <div class="mini"><b>那「分组」该被混进来的是什么</b><p>是<b>列表分组</b>——侧栏按什么把任务归堆。工作流一改，状态语义就变了，侧栏必须跟着重定义，否则功能上线当天列表就开始说胡话。见第 ④ 页。</p></div>
-      </div>
-    </div>
-  </section>
-
-  <!-- ④ 状态 → 列表分组 ───────────────────────────────── -->
+  <!-- ③ 状态 → 列表怎么显示 ───────────────────────────── -->
   <section class="view proj" data-view="projection">
     <aside class="proj-side">
       <div class="pane-label">侧栏 · 四桶</div>
@@ -256,37 +225,36 @@
 
       <div class="bucket">
         <div class="bucket-head"><b>已结束</b><em>2</em></div>
-        <div class="trow"><i class="done"></i><b>DAG 只读视图</b><em>旁路验证中</em></div>
-        <div class="trow"><i class="done"></i><b>让位点落库</b><em>验收完成</em></div>
+        <div class="trow"><i class="done"></i><b>DAG 只读视图</b><em>验收完成</em></div>
+        <div class="trow"><i class="bad"></i><b>清理端口泄漏脚本</b><em>已取消</em></div>
       </div>
     </aside>
 
     <div class="proj-main">
       <h1 class="section-title">桶只回答一句话：现在要不要我管</h1>
-      <p class="section-sub">今天侧栏「普通任务」摊开 8 个 <code>TaskStatus</code> 分组，加上工作流会变成十几个。方案是反过来：引擎内部可以很细，侧栏必须粗 —— 只有四个桶，精确态退到行内一个小标签，完整节点游标退到任务详情。<b>不给 verifying / 预览中 再加第 5 个桶。</b></p>
+      <p class="section-sub">这一页说的<b>不是分组（Group）那个容器</b>，是侧栏按什么把任务归堆。之所以必须一起定：工作流一上线，任务能处的状态就变多了，侧栏不重新定义就会当场说胡话。今天「普通任务」摊开 8 个 <code>TaskStatus</code> 分组，加上工作流会变成十几个。方案是反过来：引擎内部可以很细，侧栏必须粗 —— 只有四个桶，精确态退到行内一个小标签，完整节点游标退到任务详情。<b>不给 verifying / 预览中 再加第 5 个桶。</b></p>
 
       <div class="card" style="margin-top:16px;overflow:hidden">
         <table class="map">
           <thead><tr><th>工作流情形</th><th>TaskStatus</th><th>WorkflowRun</th><th>侧栏桶</th><th>行内标签</th></tr></thead>
           <tbody>
             <tr><td>还没跑过</td><td><code>backlog</code></td><td>—</td><td>待排期</td><td>待排期</td></tr>
-            <tr><td>在队列里等前一个让位</td><td><code>queued</code></td><td>—</td><td>待排期</td><td>排队中</td></tr>
+            <tr><td>在队列里等前一个结束</td><td><code>queued</code></td><td>—</td><td>待排期</td><td>排队中</td></tr>
             <tr><td>实现关口进行中</td><td><code>running</code></td><td>node=agent.run</td><td>进行中</td><td>实现中</td></tr>
-            <tr><td>自动验证进行中（阻塞式）</td><td><code>awaiting_review</code></td><td>node=agent.verify · 1/2</td><td>进行中</td><td>验证中 1/2</td></tr>
+            <tr><td>自动验证进行中</td><td><code>awaiting_review</code></td><td>node=agent.verify · 1/2</td><td>进行中</td><td>验证中 1/2</td></tr>
             <tr><td>验证失败，自动修复中</td><td><code>running</code></td><td>node=agent.repair · attempt 2</td><td>进行中</td><td>修复中 2/2</td></tr>
             <tr><td>修复轮数用尽，停下</td><td><code>failed</code></td><td>halted at agent.repair</td><td><b>需处理</b></td><td>修复用尽</td></tr>
             <tr><td><b>预览已起，等你看</b></td><td><code>awaiting_review</code></td><td>node=human.gate · preview live</td><td><b>需处理</b></td><td>预览已就绪</td></tr>
             <tr><td>人工关口（无预览）</td><td><code>awaiting_review</code></td><td>node=human.gate</td><td><b>需处理</b></td><td>待验收</td></tr>
             <tr><td>合并冲突退回</td><td><code>failed</code></td><td>node=repo.accept · conflict</td><td><b>需处理</b></td><td>合并冲突</td></tr>
-            <tr><td><b>旁路：已让位，验证还在跑</b></td><td><code>done</code></td><td>WF still active</td><td>已结束</td><td>旁路验证中</td></tr>
             <tr><td>全流程走完</td><td><code>done</code></td><td>completed</td><td>已结束</td><td>验收完成</td></tr>
           </tbody>
         </table>
       </div>
 
       <div class="split2">
-        <div class="mini"><b>三套状态收成「一套真相 + 一个名字」</b><p><code>TaskStatus</code> 管调度（引擎能不能启动下一个），<code>WorkflowRun</code> 管流程走到哪、试了几次、有没有让位。<span class="deleted">stage 由 agent / 审查任务手工上报</span> —— 降级成从 WorkflowRun 算出来的展示标签，<code>POST /tasks/:id/stage</code> 只留兼容。</p></div>
-        <div class="mini"><b>最容易做砸的一条</b><p>旁路让位后任务是 <code>done</code>，但验证还在真实运行。它必须归「已结束」而不是「进行中」—— 否则每条旁路任务都在侧栏里假装还要你管。真要看，行内标签和详情里都写着「旁路验证中」。</p></div>
+        <div class="mini"><b>三套状态收成「一套真相 + 一个名字」</b><p><code>TaskStatus</code> 管调度（引擎能不能启动下一个），<code>WorkflowRun</code> 管流程走到哪、试了几次。<span class="deleted">stage 由 agent / 审查任务手工上报</span> —— 降级成从 WorkflowRun 算出来的展示标签，<code>POST /tasks/:id/stage</code> 只留兼容。</p></div>
+        <div class="mini"><b>队列那一列压根不用改</b><p>四桶只影响侧栏怎么摆，不影响调度。队列仍然只看 <code>TaskStatus</code>：<code>canceled</code> 透明跳过、<code>failed</code> 留原地不拖链、<code>awaiting_review</code> 停住链等你。<b>工作流没有给队列新增任何一种输入</b> —— 它只是让 <code>awaiting_review</code> 这一段变长了，而这是你自己开人工关口换来的。</p></div>
       </div>
     </div>
   </section>
@@ -323,8 +291,7 @@
           <g font-size="8" text-anchor="middle">
             <text x="99" y="88">start</text>
             <text x="290" y="88">completed</text>
-            <!-- 这一段缝隙里还竖着让位标记线(x=466)，标签往上挪一行避开 -->
-            <text x="494" y="62">verified</text>
+            <text x="486" y="88">verified</text>
             <text x="682" y="88">ready</text>
           </g>
           <text x="790" y="166">approved</text>
@@ -372,10 +339,6 @@
 
         <circle cx="128" cy="212" r="22" fill="#fbecec" stroke="#e6bcbe"/>
         <text x="128" y="216" text-anchor="middle" font-size="9.5" fill="#c05b60">停下</text>
-
-        <rect x="466" y="40" width="2" height="304" fill="#5e6ad2" opacity=".55"/>
-        <rect x="410" y="26" width="118" height="18" rx="9" fill="#5e6ad2"/>
-        <text x="469" y="39" text-anchor="middle" font-size="9" font-weight="700" fill="#fff">队列在此让位</text>
 
         <g opacity=".9">
           <rect x="600" y="330" width="300" height="46" rx="9" fill="#fff" stroke="#e6bcbe"/>
