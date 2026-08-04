@@ -6,17 +6,18 @@
 //
 // 起手式是快照：这一次挑的、改的，只影响这一个任务；库里的那条不会跟着变，反过来
 // 之后改库也不会追着改这个任务。
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState, type CSSProperties } from "react";
 import type { ProjectView } from "@harness/shared";
 import type { WorkflowDef, WorkflowItem } from "@harness/shared/workflow";
 import { checkWorkflow, resolveWorkflowFromList, workflowDenied } from "@harness/shared/workflow";
 import { DEFAULT_WORKFLOW_KEY } from "@harness/shared/workflow-presets";
 import { CaretDown, FlowArrow } from "@phosphor-icons/react";
-import { useDismissable } from "../lib/useDismissable.ts";
 import { api } from "../lib/api.ts";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
+import { Popover } from "../workflow/Popover.tsx";
 import { WorkflowMiniRail } from "../workflow/WorkflowMiniRail.tsx";
 import { WorkflowRail } from "../workflow/WorkflowRail.tsx";
+import { STEP_HUE, workflowCost, workflowSummary } from "../workflow/workflowModel.ts";
 import { forgetWorkflows, useWorkflows } from "../workflow/WorkflowPicker.tsx";
 
 export interface WorkflowChoice {
@@ -95,6 +96,18 @@ function SaveAsPresetDialog({
   );
 }
 
+/** 一串站台颜色点：不读字也能看出这条线有几站、哪几类。 */
+function Dots({ def }: { def: WorkflowDef | null }) {
+  if (!def?.steps.length) return null;
+  return (
+    <span className="wf-dots" aria-hidden="true">
+      {def.steps.map((step) => (
+        <u key={step.id} style={{ background: STEP_HUE[step.kind] } as CSSProperties} />
+      ))}
+    </span>
+  );
+}
+
 export function ComposerWorkflow({
   choice, items, project, projectDefaultId, globalDefaultId, onChange, onProjectDefault, notify,
 }: {
@@ -110,8 +123,7 @@ export function ComposerWorkflow({
   const [open, setOpen] = useState(false);
   const [menu, setMenu] = useState(false);
   const [saving, setSaving] = useState(false);
-  const menuBox = useRef<HTMLDivElement>(null);
-  useDismissable({ enabled: menu, containerRef: menuBox, onClose: () => setMenu(false) });
+  const menuAnchor = useRef<HTMLButtonElement>(null);
 
   const { item, def } = resolveChoice(
     choice,
@@ -123,6 +135,7 @@ export function ComposerWorkflow({
 
   const denied = workflowDenied(def);
   const issues = checkWorkflow(def);
+  const cost = workflowCost(def);
   const source = choice.custom
     ? "这个任务自己定"
     : choice.pickedId
@@ -130,6 +143,14 @@ export function ComposerWorkflow({
       : projectDefaultId
         ? `跟随本项目 · ${project.name}`
         : "跟随系统默认";
+  // 下拉框上永远写「这条线现在是什么」：改过就明说是从哪个起手式改的，副标题退回成
+  // 这条线自己的走法，免得挂着一个已经不作数的模板描述。
+  const pickedName = choice.custom
+    ? `自定义（从「${item?.name ?? "默认"}」改的）`
+    : item?.name ?? "系统推荐";
+  const pickedDesc = choice.custom
+    ? `共 ${def.steps.length} 站 · ${workflowSummary(def)}`
+    : item?.description?.trim() || workflowSummary(def);
 
   const edit = (next: WorkflowDef) => onChange({ ...choice, custom: next });
 
@@ -139,7 +160,7 @@ export function ComposerWorkflow({
         <span><FlowArrow size={14} /></span>
         <div><h2>干完之后</h2><p>谁来验、什么时候停下等你、过了要不要合并。</p></div>
         <button type="button" className="composer-wf-grow" onClick={() => setOpen((value) => !value)}>
-          {open ? "收起编排" : "展开编排"}
+          {open ? "收起" : "展开编排"}
         </button>
       </header>
 
@@ -147,47 +168,65 @@ export function ComposerWorkflow({
         <span className="composer-wf-label">
           起手式<em data-own={choice.custom ? "yes" : "no"}>{source}</em>
         </span>
-        <div className="composer-wf-selwrap" ref={menuBox}>
-          <button
-            type="button"
-            className="composer-wf-sel"
-            aria-expanded={menu}
-            onClick={() => setMenu((value) => !value)}
+        <button
+          type="button"
+          ref={menuAnchor}
+          className="composer-wf-sel"
+          aria-expanded={menu}
+          onClick={() => setMenu((value) => !value)}
+        >
+          <b>{pickedName}</b>
+          <Dots def={def} />
+          <small>{pickedDesc}</small>
+          <CaretDown size={12} aria-hidden="true" />
+        </button>
+        {menu && (
+          <Popover
+            anchorRef={menuAnchor}
+            label="这条线用哪个起手式"
+            align="start"
+            matchWidth
+            onClose={() => setMenu(false)}
           >
-            {choice.custom ? `自定义（从「${item?.name ?? "默认"}」改的）` : item?.name ?? "系统推荐"}
-            <CaretDown size={12} aria-hidden="true" />
-          </button>
-          {menu && (
-            <div className="wf-pop composer-wf-menu" role="dialog" aria-label="这条线用哪个起手式">
-              <div className="wf-pop-title">这条线用哪个起手式</div>
-              <div className="wf-pop-options">
+            <div className="wf-pop-options">
+              <button
+                type="button"
+                className={`wf-pop-option wf-pop-tpl${!choice.pickedId && !choice.custom ? " is-on" : ""}`}
+                onClick={() => { onChange(emptyWorkflowChoice); setMenu(false); }}
+              >
+                {projectDefaultId ? `跟随本项目 · ${project.name}` : "跟随系统默认"}
+                <span className="wf-pop-sub">改了它，所有新任务一起变</span>
+              </button>
+              {items.filter((row) => !row.disabled).map((row) => (
                 <button
+                  key={row.id}
                   type="button"
-                  className={`wf-pop-option${!choice.pickedId && !choice.custom ? " is-on" : ""}`}
-                  onClick={() => { onChange(emptyWorkflowChoice); setMenu(false); }}
+                  className={`wf-pop-option wf-pop-tpl${choice.pickedId === row.id && !choice.custom ? " is-on" : ""}`}
+                  onClick={() => { onChange({ pickedId: row.id, custom: null }); setMenu(false); }}
                 >
-                  {projectDefaultId ? `跟随本项目 · ${project.name}` : "跟随系统默认"}
+                  {row.name}
+                  <Dots def={row.def} />
+                  <span className="wf-pop-sub">{row.description?.trim() || workflowSummary(row.def)}</span>
                 </button>
-                {items.filter((row) => !row.disabled).map((row) => (
-                  <button
-                    key={row.id}
-                    type="button"
-                    className={`wf-pop-option${choice.pickedId === row.id && !choice.custom ? " is-on" : ""}`}
-                    onClick={() => { onChange({ pickedId: row.id, custom: null }); setMenu(false); }}
-                  >
-                    {row.name}
-                  </button>
-                ))}
-              </div>
-              <p className="wf-pop-hint">挑一个只影响这一个任务；在下面改任何一处，它就变成「自定义」。</p>
+              ))}
             </div>
-          )}
-        </div>
+            <p className="wf-pop-hint">挑一个只影响这一个任务；在下面改任何一处，它就变成「自定义」。</p>
+          </Popover>
+        )}
       </div>
 
       {open
         ? <WorkflowRail def={def} issues={issues} onChange={edit} className="composer-wf-rail" />
         : <WorkflowMiniRail def={def} onChange={edit} />}
+
+      {/* 这条线要花掉什么 —— 三个数都从定义直接数得出来，不是预演出来的估计值 */}
+      <div className="composer-wf-cost">
+        <span>顺利走完 <b>{cost.steps}</b> 步</span>
+        <span aria-hidden="true">·</span>
+        <span>要你出面 <b>{cost.gates}</b> 次</span>
+        <span aria-hidden="true">·</span>
+        <span>不顺利最多起 <b>{cost.aiRuns}</b> 次 AI</span>
+      </div>
 
       {denied.length > 0 && (
         <div className="wf-deny">这条线现在建不出来：{denied.map((issue) => issue.text).join("；")}</div>
@@ -197,10 +236,10 @@ export function ComposerWorkflow({
         <div className="composer-wf-fork">
           <span><b>只影响这一个任务</b>本项目的默认没被动过</span>
           <span className="composer-wf-forkops">
-            <button type="button" onClick={() => onChange({ pickedId: choice.pickedId, custom: null })}>
-              改回原样
-            </button>
             <button type="button" onClick={() => setSaving(true)}>存成起手式…</button>
+            <button type="button" onClick={() => onChange({ pickedId: choice.pickedId, custom: null })}>
+              还原成{projectDefaultId ? "本项目的" : "原样"}
+            </button>
           </span>
         </div>
       )}

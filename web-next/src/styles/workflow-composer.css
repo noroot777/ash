@@ -1,0 +1,220 @@
+/* 收起态那条线，以及新建任务面板里的「干完之后」一节。
+   骨架（.wf-rail / .wf-pop / 起手式库）在 workflow.css，两边共用同一套 token。 */
+
+/* ── 收起态的线：一排带序号的站台，中间常驻虚线 ＋ ─────────────── */
+/* 它和展开态是**同一条线的两个尺寸**，不是「简化版」：序号、这一类站的颜色、带参数
+   的站名一个不少，所以这里的站台要长得像线上的站台，而不像一排标签。 */
+.wf-mini {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0;
+  padding: 9px 10px;
+  border-radius: 12px;
+  background: var(--raised);
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+.wf-mini.is-empty {
+  justify-content: center;
+  padding: 16px 12px;
+  font-size: 12.5px;
+  color: var(--faint);
+}
+
+.wf-mini-slot { display: inline-flex; }
+
+.wf-mini-stop {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 11px;
+  border-radius: 999px;
+  background: var(--panel);
+  box-shadow: inset 0 0 0 1px var(--line);
+  font-size: 12px;
+  color: var(--ink);
+  white-space: nowrap;
+  transition: box-shadow 0.16s ease, background 0.16s ease;
+}
+.wf-mini-stop:hover:not(:disabled),
+.wf-mini-stop[aria-expanded="true"] {
+  background: var(--panel);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tone) 55%, transparent),
+    0 0 0 3px color-mix(in srgb, var(--tone) 12%, transparent);
+}
+.wf-mini-stop:disabled { cursor: default; }
+
+/* 这一类站的记号：一颗颜色点，外面一圈同色的淡光晕 */
+.wf-mini-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--tone);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--tone) 16%, transparent);
+}
+
+.wf-mini-no {
+  font: 500 9.5px/1 var(--font-mono);
+  color: var(--faint);
+}
+
+/* 站与站之间那一小段线；能加站时线中间坐一个 ＋ */
+.wf-mini-gap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 20px;
+}
+.wf-mini-gap::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 1px;
+  background: var(--line2, var(--line));
+}
+.wf-mini-add {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 1px dashed var(--line2, var(--line));
+  border-radius: 50%;
+  background: var(--raised);
+  color: var(--faint);
+  cursor: pointer;
+  transition: color 0.16s ease, border-color 0.16s ease, background 0.16s ease;
+}
+.wf-mini-add:hover,
+.wf-mini-add[aria-expanded="true"] {
+  border-style: solid;
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+/* ── 新建任务面板里的「干完之后」 ─────────────────────────────── */
+.composer-config-section.is-workflow { display: flex; flex-direction: column; gap: 10px; }
+.composer-wf-grow {
+  margin-left: auto;
+  padding: 4px 10px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--raised);
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+.composer-wf-grow:hover { color: var(--accent); background: var(--accent-soft); }
+
+.composer-wf-pick { display: flex; flex-direction: column; gap: 5px; }
+/* 「起手式」压左、来源标签压右：一行就说清「这条线叫什么」和「它是从哪继承来的」。 */
+.composer-wf-label {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.composer-wf-label em {
+  font-style: normal;
+  font-size: 11px;
+  color: var(--faint);
+}
+.composer-wf-label em[data-own="yes"] { color: var(--accent); }
+
+/* 下拉框自己就是一张名片：粗体名字 + 一串站台颜色点 + 这条线怎么走。 */
+.composer-wf-sel {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 38px;
+  padding: 7px 11px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--raised);
+  box-shadow: inset 0 0 0 1px var(--line);
+  color: var(--text);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+.composer-wf-sel:hover,
+.composer-wf-sel[aria-expanded="true"] { box-shadow: inset 0 0 0 1px var(--accent); }
+.composer-wf-sel > b { font-weight: 560; color: var(--ink); white-space: nowrap; }
+.composer-wf-sel > small {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11.5px;
+  color: var(--faint);
+}
+.composer-wf-sel > svg { flex: none; color: var(--faint); }
+
+.wf-dots { display: inline-flex; gap: 3px; flex: none; }
+.wf-dots u { width: 6px; height: 6px; border-radius: 50%; }
+
+/* 这条线要花掉什么：三个数都是数出来的，不是预估的 */
+.composer-wf-cost {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  padding: 0 2px;
+  font-size: 10.5px;
+  color: var(--faint);
+}
+.composer-wf-cost b { font-weight: 600; color: var(--muted); }
+
+.composer-wf-fork {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  border-radius: 10px;
+  background: var(--accent-soft);
+  font-size: 12px;
+  color: var(--muted);
+}
+.composer-wf-fork b { margin-right: 6px; color: var(--accent); font-weight: 560; }
+.composer-wf-forkops { display: inline-flex; gap: 6px; margin-left: auto; }
+.composer-wf-forkops button {
+  padding: 3px 9px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+}
+.composer-wf-forkops button:hover { color: var(--accent); }
+
+.composer-wf-field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+.composer-wf-field input {
+  padding: 6px 9px;
+  border-radius: 9px;
+  border: 0;
+  background: var(--raised);
+  box-shadow: inset 0 0 0 1px var(--line);
+  color: var(--text);
+  font-size: 13px;
+}
+.composer-wf-check {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 9px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.composer-wf-rail { margin-top: 2px; }
