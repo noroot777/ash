@@ -5,7 +5,7 @@ import {
   DEFAULT_APP_SETTINGS,
   TEAM_DEFAULTS,
 } from "@harness/shared";
-import { CLI_MODEL_PRESETS, REASONING_EFFORT_VALUES } from "@harness/shared/cli-presets";
+import { REASONING_EFFORT_VALUES } from "@harness/shared/cli-presets";
 import {
   GitBranch,
   Scales,
@@ -15,6 +15,7 @@ import {
   Warning,
   X,
 } from "@phosphor-icons/react";
+import { ModelCatalogField } from "../components/ModelCatalogField.tsx";
 import { Button, Toggle } from "../components/ui.tsx";
 import {
   executorOptions,
@@ -120,7 +121,6 @@ function TeamExecutorField({
     knownProfiles,
     { agentType: fallbackType, executorId: null },
   ).agentType;
-  const modelsId = `task-derivation-models-${role}-${type}`;
   return (
     <div className="task-derivation-role">
       <ExecutorSelect
@@ -133,18 +133,14 @@ function TeamExecutorField({
         onChange={(profile) => onChange({ profile, model: "", effort: "" })}
       />
       <div className="task-derivation-overrides">
-        <label className="composer-field">
-          <span>模型</span>
-          <input
-            value={choice.model}
-            list={modelsId}
-            onChange={(event) => onChange({ ...choice, model: event.target.value })}
-            placeholder="跟随执行器"
-          />
-          <datalist id={modelsId}>
-            {CLI_MODEL_PRESETS[type].map((model) => <option value={model} key={model} />)}
-          </datalist>
-        </label>
+        <ModelCatalogField
+          listId={`task-derivation-models-${role}-${type}`}
+          label="模型"
+          value={choice.model}
+          type={type}
+          profiles={knownProfiles}
+          onChange={(model) => onChange({ ...choice, model })}
+        />
         <label className="composer-field">
           <span>思考强度</span>
           <select

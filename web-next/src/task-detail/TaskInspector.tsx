@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import type { AgentExecutorProfile, Group, Session, Task, TaskStatus } from "@harness/shared";
 import { isUserSettableStatus, TASK_STATUS_LABELS } from "@harness/shared";
-import { CLI_MODEL_PRESETS, REASONING_EFFORT_VALUES } from "@harness/shared/cli-presets";
+import { REASONING_EFFORT_VALUES } from "@harness/shared/cli-presets";
 import { sameExecutor } from "@harness/shared/executors";
 import { ArrowSquareOut, CaretRight, ListNumbers } from "@phosphor-icons/react";
 import { api } from "../lib/api.ts";
 import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
+import { ModelCatalogSelect } from "../components/ModelCatalogField.tsx";
 import { ScheduleControl } from "../components/ScheduleControl.tsx";
 import { TaskLabelsEditor } from "../components/TaskLabelsEditor.tsx";
 import { taskParentLink } from "../components/TaskOrigin.tsx";
@@ -207,7 +208,6 @@ export function TaskInspector({
         : task.mode === "team" && detection.status === "failed"
           ? "常驻能力检测失败；调度者候选仅保留系统已知支持的已注册类型。"
           : null;
-  const modelOptions = [...new Set([task.model, ...CLI_MODEL_PRESETS[agentType]].filter((value): value is string => !!value))];
   const effortOptions = [...new Set([task.reasoningEffort, ...REASONING_EFFORT_VALUES[agentType]].filter((value): value is string => !!value))];
   const duration = taskDurationInfo(task);
   const parent = taskParentLink(task, allTasks);
@@ -328,10 +328,13 @@ export function TaskInspector({
             {availabilityMessage && <p className="task-inspector-note">{availabilityMessage}</p>}
           </InspectorRow>
           <InspectorRow label="模型">
-            <select value={task.model ?? ""} disabled={readOnly} onChange={(event) => void patch({ model: event.target.value || null }, "模型设置已更新，将从下一回合生效")}>
-              <option value="">跟随执行器</option>
-              {modelOptions.map((model) => <option value={model} key={model}>{model}</option>)}
-            </select>
+            <ModelCatalogSelect
+              value={task.model ?? ""}
+              type={agentType}
+              profiles={profiles}
+              disabled={readOnly}
+              onChange={(model) => void patch({ model: model || null }, "模型设置已更新，将从下一回合生效")}
+            />
           </InspectorRow>
           <InspectorRow label="思考强度">
             <select value={task.reasoningEffort ?? ""} disabled={readOnly} onChange={(event) => void patch({ reasoningEffort: event.target.value || null }, "思考强度已更新，将从下一回合生效")}>

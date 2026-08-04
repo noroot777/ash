@@ -272,7 +272,9 @@ export function TaskDetail({
                         return result;
                       }
                       conversation.addUser(text, attachments);
-                      notify(options.agent ? `已召唤 @${options.agent} 继续任务` : "回复已发送");
+                      notify(options.agent
+                        ? `已召唤 @${options.agent}${options.model ? ` · ${options.model}` : ""} 继续任务`
+                        : "回复已发送");
                       return result;
                     }}
                     command={derivationAllowed ? {

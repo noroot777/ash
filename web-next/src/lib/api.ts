@@ -12,6 +12,7 @@ import type {
   Project,
   ProjectHealth,
   ProjectView,
+  ProviderModelListMode,
   ReviewDispatchInput,
   Schedule,
   ScheduledMessage,
@@ -294,7 +295,14 @@ export const api = {
   replyTask: (
     taskId: string,
     text: string,
-    options?: { attachments?: string[]; agent?: AgentType; sendAt?: string },
+    // executorId/model 只作用于这一回合：@ 出来的那一步是显式选择，别写回任务常设配置。
+    options?: {
+      attachments?: string[];
+      agent?: AgentType;
+      executorId?: string | null;
+      model?: string | null;
+      sendAt?: string;
+    },
   ): Promise<ReplyTaskResult> =>
     request(`/tasks/${id(taskId)}/reply`, json("POST", { text, ...options })),
   gate: (taskId: string, action: GateAction): Promise<unknown> =>
@@ -427,6 +435,8 @@ export const api = {
     apiKey: string;
     model: string;
     protocolConversionEnabled: boolean;
+    modelListMode?: ProviderModelListMode;
+    pinnedModels?: string[];
   }): Promise<LlmProvider> => request("/llm-providers", json("POST", provider)),
   patchLlmProvider: (
     providerId: string,
@@ -437,6 +447,8 @@ export const api = {
       apiKey: string;
       model: string;
       protocolConversionEnabled: boolean;
+      modelListMode: ProviderModelListMode;
+      pinnedModels: string[];
     }>,
   ): Promise<LlmProvider> => request(`/llm-providers/${id(providerId)}`, json("PATCH", patch)),
   deleteLlmProvider: (providerId: string): Promise<{ deleted: true }> =>

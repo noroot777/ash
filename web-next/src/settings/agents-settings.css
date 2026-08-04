@@ -532,6 +532,138 @@
   color: var(--green);
 }
 
+/* 「选择器里列什么模型」：模式开关 + 固定模型清单。 */
+.provider-pinned-field {
+  display: grid;
+  gap: 10px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--overlay);
+  padding: 10px 12px;
+}
+
+.provider-pinned-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.provider-pinned-head > div {
+  display: grid;
+  gap: 3px;
+}
+
+.provider-pinned-head b {
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.provider-pinned-head small {
+  color: var(--faint);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.provider-pinned-head .ui-tabs {
+  flex: none;
+}
+
+.provider-pinned-body {
+  display: grid;
+  gap: 8px;
+}
+
+.provider-pinned-add {
+  display: flex;
+  gap: 7px;
+}
+
+.provider-pinned-add input {
+  flex: 1;
+  font-family: var(--font-mono);
+}
+
+.provider-pinned-add .ui-button {
+  flex: none;
+}
+
+.provider-pinned-suggest {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+}
+
+.provider-pinned-suggest > button {
+  display: inline-flex;
+  height: 23px;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid var(--line2);
+  border-radius: 999px;
+  background: var(--panel);
+  padding: 0 9px 0 7px;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+.provider-pinned-suggest > button:hover {
+  border-color: color-mix(in lch, var(--accent) 42%, var(--line2));
+  color: var(--ink);
+}
+
+.provider-pinned-suggest > small {
+  color: var(--faint);
+  font-size: 9.5px;
+}
+
+.provider-pinned-list {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.provider-pinned-list > li {
+  display: flex;
+  min-height: 30px;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--panel);
+  padding: 3px 5px 3px 9px;
+}
+
+.provider-pinned-list code {
+  flex: none;
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+}
+
+.provider-pinned-list small {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  color: var(--green);
+  font-size: 9.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.provider-pinned-list small.is-error {
+  color: var(--red);
+}
+
+.provider-pinned-list small:not(.is-error) + .provider-test-action,
+.provider-pinned-list code + .provider-test-action {
+  margin-left: auto;
+}
+
 @keyframes provider-model-spin {
   to { transform: rotate(360deg); }
 }

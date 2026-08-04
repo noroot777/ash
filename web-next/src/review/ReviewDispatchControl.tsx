@@ -195,7 +195,7 @@ export function ReviewDispatchControl({
                   setEffort("");
                 }}
               />
-              <ModelField role={`review-${task.id}`} label="模型" value={model} type={selection.agentType} onChange={setModel} />
+              <ModelField role={`review-${task.id}`} label="模型" value={model} type={selection.agentType} profiles={profiles} onChange={setModel} />
               <EffortField label="思考强度" value={effort} type={selection.agentType} onChange={setEffort} />
             </div>
             {availabilityMessage && (

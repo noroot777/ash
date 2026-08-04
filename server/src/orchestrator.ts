@@ -319,11 +319,17 @@ export async function resumeOrRunTask(
 // that agent already has a session here, resume it; otherwise invite it fresh
 // into the SAME working directory (same-dir collaboration). Single-flight by
 // taskId keeps invitees from running concurrently with the main agent.
+//
+// opts.executorId / opts.model 是 @ 提及那一步选定的**具体执行器与模型**（对话框里
+// 那个「智能体 · 模型」框）。只作用于这一回合：任务自己的 executorId/model 是它的
+// 常设配置，被 @ 换成别的执行器时不该被这一次召唤改写。
 export async function continueTask(
   taskId: string,
   userText: string,
   opts: {
     agent?: AgentType;
+    executorId?: string | null;
+    model?: string | null;
     attachments?: string[];
     system?: ResumeReason;
     throwOnTeamUnavailable?: boolean;
@@ -353,11 +359,16 @@ export async function continueTask(
     if (task.mode !== "single") throw new Error("reply is for single tasks");
 
     const agent = opts.agent ?? (task.agentType as AgentType) ?? "claude";
+    // 对话框里 @ 出来的那一步是**显式选择**（智能体 + 执行器 + 模型），这一回合就按它跑；
+    // 没 @ 就沿用任务自己的常设配置。跨类型召唤时任务自带的思考强度属于另一个 CLI 的档位表，
+    // 一并丢掉 —— 跟「换执行器时模型/强度重置为跟随执行器」同一条口径。
+    const summoned = !!opts.agent;
+    const crossType = summoned && opts.agent !== task.agentType;
     const ex = await resolveExecutorFor({
-      executorId: opts.agent ? null : task.executorId,
+      executorId: summoned ? opts.executorId ?? null : task.executorId,
       type: agent,
-      model: task.model,
-      reasoningEffort: task.reasoningEffort,
+      model: summoned ? opts.model ?? null : task.model,
+      reasoningEffort: crossType ? null : task.reasoningEffort,
     });
     const project = (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0);
 

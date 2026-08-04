@@ -1,15 +1,18 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { AgentExecutorProfile, AgentType, Task } from "@harness/shared";
-import { ArrowUp, Clock, Robot, SpinnerGap, X } from "@phosphor-icons/react";
+import { ArrowUp, CaretDown, Clock, Robot, SpinnerGap, X } from "@phosphor-icons/react";
 import {
   ScheduledMessageTray,
   ScheduledSendPanel,
   useScheduledMessages,
 } from "../components/ScheduledMessages.tsx";
 import { defaultOnceTime } from "../components/ScheduleControl.tsx";
-import { registeredAgentTypes } from "../lib/agentAvailability.ts";
+import { executorRunSummary, registeredAgentTypes } from "../lib/agentAvailability.ts";
 import { api, type ReplyTaskResult } from "../lib/api.ts";
+import { useProviders } from "../lib/modelCatalog.ts";
+import { AgentModelPicker } from "./AgentModelPicker.tsx";
 import { AttachmentPicker, UploadAttachmentList, useAttachments } from "./Attachments.tsx";
+import type { MentionTarget } from "./mentionPicker.ts";
 
 export function ReplyBox({
   task,
@@ -23,7 +26,7 @@ export function ReplyBox({
   onSend: (
     text: string,
     attachments: string[],
-    options: { agent?: AgentType; sendAt?: string },
+    options: { agent?: AgentType; executorId?: string | null; model?: string | null; sendAt?: string },
   ) => Promise<ReplyTaskResult>;
   command?: {
     matches: (text: string) => boolean;
@@ -42,13 +45,18 @@ export function ReplyBox({
   const [menuDismissed, setMenuDismissed] = useState(false);
   const [mentionIndex, setMentionIndex] = useState(0);
   const [mentionDismissed, setMentionDismissed] = useState(false);
-  const [target, setTarget] = useState<AgentType | null>(null);
+  const [target, setTarget] = useState<MentionTarget | null>(null);
+  // 第二步（选模型）和「点胶囊改」共用同一个浮层，只是进入的阶段不同。
+  const [picker, setPicker] = useState<{ stage: "agent" | "model"; agent: AgentType } | null>(null);
   const [scheduleOpen, setScheduleOpen] = useState(false);
   const [sendAt, setSendAt] = useState("");
   const scheduleTriggerRef = useRef<HTMLButtonElement>(null);
+  const chipRef = useRef<HTMLButtonElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [profiles, setProfiles] = useState<AgentExecutorProfile[]>([]);
   const [profilesReady, setProfilesReady] = useState(false);
   const [profilesFailed, setProfilesFailed] = useState(false);
+  const providers = useProviders();
   const scheduled = useScheduledMessages(task.id);
   const uploads = useAttachments();
   const disabled = task.mode !== "single" || task.archived || task.status === "running" || task.status === "queued" || !hasConversation;
@@ -63,29 +71,25 @@ export function ReplyBox({
           ? command ? "可输入 /team 创建团队，或输入 /debate 发起辩论…" : "先运行任务，再继续回复"
           : command ? "回复并继续；输入 /team 或 /debate 可派生新任务…" : "回复并继续（⌘↵ 发送，可粘贴图片或文件）…";
 
-  useEffect(() => {
+  const resetComposer = () => {
     setValue("");
-    setSendError(null);
     setCommandIndex(0);
     setMenuDismissed(false);
     setMentionIndex(0);
     setMentionDismissed(false);
     setTarget(null);
+    setPicker(null);
     setScheduleOpen(false);
     setSendAt("");
+  };
+
+  useEffect(() => {
+    resetComposer();
+    setSendError(null);
     uploads.clear();
   }, [task.id, uploads.clear]);
 
-  useEffect(() => {
-    setValue("");
-    setCommandIndex(0);
-    setMenuDismissed(false);
-    setMentionIndex(0);
-    setMentionDismissed(false);
-    setTarget(null);
-    setScheduleOpen(false);
-    setSendAt("");
-  }, [command?.resetKey]);
+  useEffect(() => { resetComposer(); }, [command?.resetKey]);
 
   useEffect(() => {
     let alive = true;
@@ -116,8 +120,21 @@ export function ReplyBox({
   const mentionCandidates = mentionMatch
     ? registeredTypes.filter((type) => type.startsWith((mentionMatch[1] ?? "").toLowerCase()))
     : [];
-  const mentionOpen = !disabled && !commandActive && !mentionDismissed && !!mentionMatch;
+  const mentionOpen = !disabled && !commandActive && !picker && !mentionDismissed && !!mentionMatch;
   const selectedMentionIndex = Math.min(mentionIndex, Math.max(0, mentionCandidates.length - 1));
+
+  // 底部胶囊上显示的「这一回合会由谁、用什么模型跑」：@ 选过就是那一套，
+  // 没选就是任务自己的常设配置（executorId 为空时按类型默认执行器降级，与服务端
+  // resolveExecutorFor 同一条口径）。
+  const activeAgent = (target?.agent ?? task.agentType ?? "claude") as AgentType;
+  const activeExecutorId = (target ? target.executorId : task.executorId)
+    ?? profiles.find((profile) => profile.type === activeAgent && profile.isDefault)?.id
+    ?? null;
+  const activeModel = executorRunSummary(
+    { agentType: activeAgent, executorId: activeExecutorId },
+    profiles,
+    { model: target ? target.model : task.model },
+  ).model;
 
   const pickCommand = (text: string) => {
     command?.onSubmit(text);
@@ -136,11 +153,18 @@ export function ReplyBox({
     command?.onCancel?.();
   };
 
+  // 第一步选中智能体：把 @xxx 从正文里摘掉（它是指令不是内容），紧接着弹第二步选模型。
   const pickMention = (agent: AgentType) => {
-    setTarget(agent);
     setValue((current) => current.replace(/@[a-z0-9_-]*$/i, ""));
     setMentionIndex(0);
     setMentionDismissed(false);
+    setPicker({ stage: "model", agent });
+  };
+
+  const commitTarget = (next: MentionTarget) => {
+    setTarget(next);
+    setPicker(null);
+    textareaRef.current?.focus();
   };
 
   const send = async (scheduledAt?: string) => {
@@ -159,7 +183,12 @@ export function ReplyBox({
       const result = await onSend(
         value.trim(),
         uploads.attachments.map((attachment) => attachment.path),
-        { agent: target ?? undefined, sendAt: scheduledAt },
+        {
+          agent: target?.agent,
+          executorId: target?.executorId ?? null,
+          model: target?.model ?? null,
+          sendAt: scheduledAt,
+        },
       );
       if ("scheduled" in result) scheduled.add(result.message);
       setValue("");
@@ -202,7 +231,7 @@ export function ReplyBox({
       )}
       {mentionOpen && !menuOpen && (
         <div className="task-reply-mention-menu" role="listbox" aria-label="召唤智能体">
-          <small>召唤智能体加入 · ↑↓ 选择，回车确认，Esc 取消</small>
+          <small>召唤智能体加入 · ↑↓ 选择，回车后继续选模型</small>
           {!profilesReady && <p>正在读取已注册智能体…</p>}
           {profilesFailed && <p>执行器列表读取失败，暂不提供候选</p>}
           {profilesReady && !profilesFailed && mentionCandidates.length === 0 && <p>没有匹配的已注册智能体</p>}
@@ -221,7 +250,22 @@ export function ReplyBox({
           ))}
         </div>
       )}
-      {scheduleOpen && !menuOpen && !mentionOpen && (
+      {picker && (
+        <AgentModelPicker
+          types={registeredTypes.length ? registeredTypes : [activeAgent]}
+          profiles={profiles}
+          providers={providers}
+          initialStage={picker.stage}
+          initialAgent={picker.agent}
+          triggerRef={chipRef}
+          onCommit={commitTarget}
+          onCancel={() => {
+            setPicker(null);
+            textareaRef.current?.focus();
+          }}
+        />
+      )}
+      {scheduleOpen && !menuOpen && !mentionOpen && !picker && (
         <ScheduledSendPanel
           value={sendAt}
           busy={sending}
@@ -232,7 +276,7 @@ export function ReplyBox({
           onSubmit={() => void send(new Date(sendAt).toISOString())}
         />
       )}
-      {inlinePanel && !menuOpen && !mentionOpen && !scheduleOpen && <div className="task-reply-inline-panel">{inlinePanel}</div>}
+      {inlinePanel && !menuOpen && !mentionOpen && !picker && !scheduleOpen && <div className="task-reply-inline-panel">{inlinePanel}</div>}
       <ScheduledMessageTray
         messages={scheduled.messages}
         loading={scheduled.loading}
@@ -241,17 +285,10 @@ export function ReplyBox({
         onCancel={(messageId) => void scheduled.cancel(messageId)}
       />
       <UploadAttachmentList attachments={uploads.attachments} error={uploads.error} onRemove={uploads.remove} />
-      {target && (
-        <div className="task-reply-target">
-          <span><Robot size={12} aria-hidden="true" />由 @{target} 回复</span>
-          <button type="button" title="取消召唤" aria-label={`取消召唤 ${target}`} onClick={() => setTarget(null)}>
-            <X size={11} weight="bold" />
-          </button>
-        </div>
-      )}
       {sendError && <p className="task-reply-error">{sendError}</p>}
       <div className="task-reply-box">
         <textarea
+          ref={textareaRef}
           value={value}
           rows={3}
           disabled={inputDisabled}
@@ -331,7 +368,6 @@ export function ReplyBox({
             className="reply-schedule-button"
             type="button"
             disabled={disabled || sending || uploads.uploading || commandActive || mentionOpen}
-            title="定时发送"
             aria-label="选择定时发送时间"
             onClick={() => {
               if (!sendAt) setSendAt(defaultOnceTime());
@@ -340,7 +376,30 @@ export function ReplyBox({
           >
             <Clock size={14} />
           </button>
-          <span>{uploads.uploading ? "上传中…" : commandActive ? "回车配置" : target ? `将由 @${target} 回复` : "⌘↵ 发送"}</span>
+          <button
+            ref={chipRef}
+            type="button"
+            className={`task-reply-chip${target ? " is-summoned" : ""}`}
+            disabled={disabled || sending || commandActive}
+            aria-label={`当前智能体 ${activeAgent}${activeModel ? `，模型 ${activeModel}` : ""}；点击更改`}
+            onClick={() => setPicker((open) => (open ? null : { stage: "agent", agent: activeAgent }))}
+          >
+            <Robot size={12} aria-hidden="true" />
+            <b>{activeAgent}</b>
+            <span>{activeModel ?? "跟随执行器"}</span>
+            <CaretDown size={9} weight="bold" aria-hidden="true" />
+          </button>
+          {target && (
+            <button
+              type="button"
+              className="task-reply-chip-reset"
+              aria-label={`取消召唤 ${target.agent}，恢复任务默认`}
+              onClick={() => setTarget(null)}
+            >
+              <X size={10} weight="bold" />
+            </button>
+          )}
+          <span>{uploads.uploading ? "上传中…" : commandActive ? "回车配置" : target ? "本回合按上面这套跑" : "⌘↵ 发送"}</span>
           <button
             className="task-send-button"
             type="button"

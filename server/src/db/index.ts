@@ -73,7 +73,8 @@ export async function ensureSchema() {
     );
     CREATE TABLE IF NOT EXISTS scheduled_messages (
       id TEXT PRIMARY KEY, task_id TEXT NOT NULL, text TEXT NOT NULL DEFAULT '',
-      attachments TEXT NOT NULL DEFAULT '[]', agent TEXT, send_at TEXT NOT NULL,
+      attachments TEXT NOT NULL DEFAULT '[]', agent TEXT,
+      executor_id TEXT, model TEXT, send_at TEXT NOT NULL,
       status TEXT NOT NULL DEFAULT 'pending', created_at TEXT NOT NULL, sent_at TEXT
     );
     CREATE TABLE IF NOT EXISTS llm_providers (
@@ -81,6 +82,8 @@ export async function ensureSchema() {
       protocol TEXT NOT NULL DEFAULT 'openai', base_url TEXT NOT NULL,
       api_key TEXT NOT NULL DEFAULT '', model TEXT NOT NULL DEFAULT '',
       protocol_conversion_enabled INTEGER NOT NULL DEFAULT 0,
+      model_list_mode TEXT NOT NULL DEFAULT 'api',
+      pinned_models TEXT NOT NULL DEFAULT '[]',
       created_at TEXT NOT NULL
     );
     CREATE TABLE IF NOT EXISTS queue_items (
@@ -162,6 +165,12 @@ export async function ensureSchema() {
     "ALTER TABLE sessions ADD COLUMN agent_offset INTEGER",
     // OpenAI 兼容供应商：把 Codex 的 Responses API 适配到仅有 Chat Completions 的上游。
     "ALTER TABLE llm_providers ADD COLUMN protocol_conversion_enabled INTEGER NOT NULL DEFAULT 0",
+    // 选模型面板的候选来源：api=每次现调 /models；pinned=只用固定下来的这几个。
+    "ALTER TABLE llm_providers ADD COLUMN model_list_mode TEXT NOT NULL DEFAULT 'api'",
+    "ALTER TABLE llm_providers ADD COLUMN pinned_models TEXT NOT NULL DEFAULT '[]'",
+    // 定时发送的 @指派：连执行器与模型一起记住，到点还是跑用户当时选的那一个。
+    "ALTER TABLE scheduled_messages ADD COLUMN executor_id TEXT",
+    "ALTER TABLE scheduled_messages ADD COLUMN model TEXT",
   ]) {
     try {
       await client.execute(sql);

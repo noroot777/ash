@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { LlmProtocol, LlmProvider } from "@harness/shared";
+import type { LlmProtocol, LlmProvider, ProviderModelListMode } from "@harness/shared";
 import {
   ArrowsClockwise,
   CheckCircle,
@@ -12,7 +12,9 @@ import { Button, Toggle } from "../components/ui.tsx";
 import { api } from "../lib/api.ts";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import { protocolLabel } from "./agentProviderRules.ts";
+import { refreshProviders } from "../lib/modelCatalog.ts";
 import { clearProviderModelCache } from "./ProviderModelInput.tsx";
+import { ProviderPinnedModels } from "./ProviderPinnedModels.tsx";
 
 type ProviderDraft = {
   name: string;
@@ -21,6 +23,8 @@ type ProviderDraft = {
   apiKey: string;
   model: string;
   protocolConversionEnabled: boolean;
+  modelListMode: ProviderModelListMode;
+  pinnedModels: string[];
 };
 
 function ProviderModelField({
@@ -185,6 +189,8 @@ function ProviderForm({
     apiKey: "",
     model: provider?.model ?? "",
     protocolConversionEnabled: provider?.protocolConversionEnabled ?? false,
+    modelListMode: provider?.modelListMode ?? "api",
+    pinnedModels: provider?.pinnedModels ?? [],
   });
   const [saving, setSaving] = useState(false);
 
@@ -207,6 +213,8 @@ function ProviderForm({
           baseUrl: draft.baseUrl.trim(),
           model: draft.model.trim(),
           protocolConversionEnabled: draft.protocol === "openai" && draft.protocolConversionEnabled,
+          modelListMode: draft.modelListMode,
+          pinnedModels: draft.pinnedModels,
           ...(draft.apiKey.trim() ? { apiKey: draft.apiKey.trim() } : {}),
         });
         clearProviderModelCache(provider.id);
@@ -218,8 +226,12 @@ function ProviderForm({
           apiKey: draft.apiKey.trim(),
           model: draft.model.trim(),
           protocolConversionEnabled: draft.protocol === "openai" && draft.protocolConversionEnabled,
+          modelListMode: draft.modelListMode,
+          pinnedModels: draft.pinnedModels,
         });
       }
+      // 供应商是模型目录的来源:改完要让页面上其它选模型的地方当场跟着变。
+      refreshProviders();
       await onSaved();
     } catch (error) {
       notify(error instanceof Error ? error.message : "供应商保存失败");
@@ -282,6 +294,17 @@ function ProviderForm({
           protocolConversionEnabled={draft.protocolConversionEnabled}
           onModelChange={(model) => set("model", model)}
         />
+        <ProviderPinnedModels
+          providerId={provider?.id}
+          protocol={draft.protocol}
+          baseUrl={draft.baseUrl}
+          apiKey={draft.apiKey}
+          protocolConversionEnabled={draft.protocolConversionEnabled}
+          mode={draft.modelListMode}
+          pinned={draft.pinnedModels}
+          onModeChange={(mode) => set("modelListMode", mode)}
+          onPinnedChange={(models) => set("pinnedModels", models)}
+        />
       </div>
       <div className="provider-form-actions">
         <Button variant="ghost" disabled={saving} onClick={onCancel}>取消</Button>
@@ -331,6 +354,7 @@ function ProviderRow({
     try {
       await api.deleteLlmProvider(provider.id);
       clearProviderModelCache(provider.id);
+      refreshProviders();
       await onChanged();
       notify(`供应商「${provider.name}」已删除`);
     } catch (error) {
@@ -366,6 +390,9 @@ function ProviderRow({
           <small>
             {protocolLabel(provider.protocol)} · {provider.baseUrl}
             {provider.protocolConversionEnabled ? " · Responses→Chat 已开启" : ""}
+            {provider.modelListMode === "pinned"
+              ? ` · 固定 ${provider.pinnedModels.length} 个模型`
+              : " · 选择器实时拉取模型"}
           </small>
         </div>
         <span className={`provider-key-state${provider.hasKey ? " is-ready" : ""}`}>

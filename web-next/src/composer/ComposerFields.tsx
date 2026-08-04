@@ -6,8 +6,9 @@ import type {
   TaskMode,
   TeamPresetConfig,
 } from "@harness/shared";
-import { CLI_MODEL_PRESETS, REASONING_EFFORT_VALUES } from "@harness/shared/cli-presets";
+import { REASONING_EFFORT_VALUES } from "@harness/shared/cli-presets";
 import { CaretDown, GearSix, SlidersHorizontal } from "@phosphor-icons/react";
+import { ModelCatalogField } from "../components/ModelCatalogField.tsx";
 import { Toggle } from "../components/ui.tsx";
 import { TaskLabelsEditor } from "../components/TaskLabelsEditor.tsx";
 import {
@@ -75,33 +76,31 @@ export function ExecutorSelect({
   );
 }
 
+/** 候选来自统一的模型目录（供应商固定清单或实时 API），不再只有 CLI 别名。 */
 export function ModelField({
   role,
   label,
   value,
   type,
+  profiles,
   onChange,
 }: {
   role: string;
   label: string;
   value: string;
   type: AgentType;
+  profiles: AgentExecutorProfile[];
   onChange: (value: string) => void;
 }) {
-  const listId = `composer-models-${type}-${role}`;
   return (
-    <label className="composer-field">
-      <span>{label}</span>
-      <input
-        value={value}
-        list={listId}
-        onChange={(event) => onChange(event.target.value)}
-        placeholder="跟随执行器"
-      />
-      <datalist id={listId}>
-        {CLI_MODEL_PRESETS[type].map((item) => <option value={item} key={item} />)}
-      </datalist>
-    </label>
+    <ModelCatalogField
+      listId={`composer-models-${type}-${role}`}
+      label={label}
+      value={value}
+      type={type}
+      profiles={profiles}
+      onChange={onChange}
+    />
   );
 }
 
@@ -132,19 +131,21 @@ function OverrideGroup({
   label,
   config,
   type,
+  profiles,
   onChange,
 }: {
   role: ComposerExecutorRole;
   label: string;
   config: ComposerExecutorConfigs[ComposerExecutorRole];
   type: AgentType;
+  profiles: AgentExecutorProfile[];
   onChange: (role: ComposerExecutorRole, patch: { model?: string; effort?: string }) => void;
 }) {
   return (
     <div className="composer-override-group">
       <b>{label}</b>
       <div>
-        <ModelField role={role} label="模型" value={config.model} type={type} onChange={(model) => onChange(role, { model })} />
+        <ModelField role={role} label="模型" value={config.model} type={type} profiles={profiles} onChange={(model) => onChange(role, { model })} />
         <EffortField label="思考强度" value={config.effort} type={type} onChange={(effort) => onChange(role, { effort })} />
       </div>
     </div>
@@ -279,13 +280,13 @@ export function ComposerFields({
           </summary>
           <div className="composer-advanced-body">
             {mode === "single" && (
-              <OverrideGroup role="single" label="执行器覆盖" config={executors.single} type={executorTypes.single} onChange={onOverrideChange} />
+              <OverrideGroup role="single" label="执行器覆盖" config={executors.single} type={executorTypes.single} profiles={profiles} onChange={onOverrideChange} />
             )}
             {mode === "team" && (
               <>
-                <OverrideGroup role="lead" label="调度者覆盖" config={executors.lead} type={executorTypes.lead} onChange={onOverrideChange} />
-                <OverrideGroup role="worker" label="执行者覆盖" config={executors.worker} type={executorTypes.worker} onChange={onOverrideChange} />
-                <OverrideGroup role="reviewer" label="审查者覆盖" config={executors.reviewer} type={executorTypes.reviewer} onChange={onOverrideChange} />
+                <OverrideGroup role="lead" label="调度者覆盖" config={executors.lead} type={executorTypes.lead} profiles={profiles} onChange={onOverrideChange} />
+                <OverrideGroup role="worker" label="执行者覆盖" config={executors.worker} type={executorTypes.worker} profiles={profiles} onChange={onOverrideChange} />
+                <OverrideGroup role="reviewer" label="审查者覆盖" config={executors.reviewer} type={executorTypes.reviewer} profiles={profiles} onChange={onOverrideChange} />
               </>
             )}
           </div>

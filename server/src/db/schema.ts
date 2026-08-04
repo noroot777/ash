@@ -205,6 +205,9 @@ export const scheduledMessages = sqliteTable("scheduled_messages", {
   text: text("text").notNull().default(""),
   attachments: text("attachments").notNull().default("[]"), // json string[]
   agent: text("agent"), // AgentType | null（@指派目标）
+  // @指派时一并选定的执行器与模型：定时发送落地时要跑的还是用户当时选的那一个。
+  executorId: text("executor_id"), // agents.id | null（null=按 agent 类型默认执行器）
+  model: text("model"), // 模型覆盖 | null（跟随执行器）
   sendAt: text("send_at").notNull(), // ISO 到期发送时间
   status: text("status").notNull().default("pending"), // pending | sent | canceled
   createdAt: text("created_at").notNull(),
@@ -243,5 +246,8 @@ export const llmProviders = sqliteTable("llm_providers", {
   apiKey: text("api_key").notNull().default(""), // 本机存储,GET 不回传明文
   model: text("model").notNull().default(""),
   protocolConversionEnabled: integer("protocol_conversion_enabled", { mode: "boolean" }).notNull().default(false),
+  // 选模型面板的候选来源:'api'=每次现调 /models;'pinned'=只用 pinned_models(json string[])。
+  modelListMode: text("model_list_mode").notNull().default("api"),
+  pinnedModels: text("pinned_models").notNull().default("[]"),
   createdAt: text("created_at").notNull(),
 });

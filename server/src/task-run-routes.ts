@@ -403,7 +403,14 @@ api.post("/tasks/:id/team/kill-cua", async (c) => {
 // 写进 stdin),这就是「发出去当前会话就接住、看着从没断线」的手感。
 api.post("/tasks/:id/reply", async (c) => {
   const taskId = c.req.param("id");
-  const b = await c.req.json<{ text?: string; attachments?: string[]; agent?: AgentType; sendAt?: string }>();
+  const b = await c.req.json<{
+    text?: string;
+    attachments?: string[];
+    agent?: AgentType;
+    executorId?: string | null;
+    model?: string | null;
+    sendAt?: string;
+  }>();
   if (!b.text?.trim() && !b.attachments?.length) return c.json({ error: "empty" }, 400);
   if (b.agent && !AGENT_TYPES.includes(b.agent)) return c.json({ error: "未知的 agent", agent: b.agent }, 400);
   const r = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
@@ -423,6 +430,8 @@ api.post("/tasks/:id/reply", async (c) => {
       text: (b.text ?? "").trim(),
       attachments: JSON.stringify(b.attachments ?? []),
       agent: b.agent ?? null,
+      executorId: b.executorId ?? null,
+      model: b.model?.trim() || null,
       sendAt: when.toISOString(),
       status: "pending" as const,
       createdAt: now(),
@@ -432,7 +441,12 @@ api.post("/tasks/:id/reply", async (c) => {
     return c.json({ scheduled: true, message: toScheduledMessage(row) }, 202);
   }
   if (!isTeam && (r.status === "running" || r.status === "queued")) return c.json({ error: "任务进行中" }, 409);
-  void continueTask(taskId, (b.text ?? "").trim(), { attachments: b.attachments, agent: b.agent });
+  void continueTask(taskId, (b.text ?? "").trim(), {
+    attachments: b.attachments,
+    agent: b.agent,
+    executorId: b.executorId ?? null,
+    model: b.model?.trim() || null,
+  });
   return c.json({ started: true }, 202);
 });
 

@@ -497,9 +497,27 @@ const toProvider = (r: typeof llmProviders.$inferSelect): LlmProvider => ({
   baseUrl: r.baseUrl,
   model: r.model,
   protocolConversionEnabled: r.protocolConversionEnabled,
+  modelListMode: r.modelListMode === "pinned" ? "pinned" : "api",
+  pinnedModels: parsePinnedModels(r.pinnedModels),
   hasKey: !!r.apiKey, // never return the key itself
   createdAt: r.createdAt,
 });
+
+// 固定模型列表:去空白、去重、保序。存的是 json string[],但老行/脏数据都得能读回来。
+function parsePinnedModels(raw: unknown): string[] {
+  const list = typeof raw === "string" ? (() => { try { return JSON.parse(raw); } catch { return []; } })() : raw;
+  if (!Array.isArray(list)) return [];
+  return normalizePinnedModels(list);
+}
+
+function normalizePinnedModels(list: unknown[]): string[] {
+  const seen = new Set<string>();
+  for (const item of list) {
+    const model = typeof item === "string" ? item.trim() : "";
+    if (model) seen.add(model);
+  }
+  return [...seen];
+}
 
 api.get("/llm-providers", async (c) => c.json((await db.select().from(llmProviders)).map(toProvider)));
 
@@ -542,6 +560,8 @@ api.post("/llm-providers", async (c) => {
     apiKey: (b.apiKey ?? "").trim(),
     model: (b.model ?? "").trim(),
     protocolConversionEnabled: protocol === "openai" && b.protocolConversionEnabled === true,
+    modelListMode: b.modelListMode === "pinned" ? "pinned" : "api",
+    pinnedModels: JSON.stringify(normalizePinnedModels(b.pinnedModels ?? [])),
     createdAt: now(),
   };
   await db.insert(llmProviders).values(row);
@@ -558,6 +578,9 @@ api.patch("/llm-providers/:id", async (c) => {
   if (b.protocol !== undefined) patch.protocol = b.protocol === "anthropic" ? "anthropic" : "openai";
   if (b.baseUrl !== undefined) patch.baseUrl = b.baseUrl;
   if (b.model !== undefined) patch.model = b.model;
+  // 模式与固定列表各自独立更新:切模式不清空已固定的模型,切回来还在(需求「随便切换」)。
+  if (b.modelListMode !== undefined) patch.modelListMode = b.modelListMode === "pinned" ? "pinned" : "api";
+  if (b.pinnedModels !== undefined) patch.pinnedModels = JSON.stringify(normalizePinnedModels(b.pinnedModels ?? []));
   const nextProtocol = b.protocol === undefined ? existing.protocol : b.protocol === "anthropic" ? "anthropic" : "openai";
   if (nextProtocol === "anthropic") patch.protocolConversionEnabled = false;
   else if (b.protocolConversionEnabled !== undefined) patch.protocolConversionEnabled = b.protocolConversionEnabled === true;

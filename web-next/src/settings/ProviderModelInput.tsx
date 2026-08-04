@@ -1,56 +1,16 @@
 import { useEffect, useMemo, useState } from "react";
 import type { AgentType, LlmProvider } from "@harness/shared";
 import { CLI_MODEL_PRESETS } from "@harness/shared/cli-presets";
-import { api } from "../lib/api.ts";
+import {
+  cachedProviderModels,
+  loadProviderModels,
+  pinnedModelsOf,
+  providerCacheVersion,
+} from "../lib/modelCatalog.ts";
 
-const providerModelCache = new Map<string, string[]>();
-const providerModelRequests = new Map<string, Promise<string[]>>();
-const providerModelVersions = new Map<string, number>();
-
-function providerCacheKey(provider: LlmProvider) {
-  const version = providerModelVersions.get(provider.id) ?? 0;
-  return `${provider.id}\u0000${version}\u0000${provider.protocol}\u0000${provider.baseUrl}`;
-}
-
-export function clearProviderModelCache(providerId?: string) {
-  if (providerId) {
-    providerModelVersions.set(providerId, (providerModelVersions.get(providerId) ?? 0) + 1);
-    const prefix = `${providerId}\u0000`;
-    for (const key of providerModelCache.keys()) {
-      if (key.startsWith(prefix)) providerModelCache.delete(key);
-    }
-    for (const key of providerModelRequests.keys()) {
-      if (key.startsWith(prefix)) providerModelRequests.delete(key);
-    }
-    return;
-  }
-  providerModelCache.clear();
-  providerModelRequests.clear();
-  providerModelVersions.clear();
-}
-
-function loadProviderModels(provider: LlmProvider) {
-  const key = providerCacheKey(provider);
-  const cached = providerModelCache.get(key);
-  if (cached) return Promise.resolve(cached);
-  let request = providerModelRequests.get(key);
-  if (!request) {
-    request = api.probeModels({
-      protocol: provider.protocol,
-      baseUrl: provider.baseUrl,
-      id: provider.id,
-    }).then(({ models }) => {
-      providerModelCache.set(key, models);
-      providerModelRequests.delete(key);
-      return models;
-    }, (error) => {
-      providerModelRequests.delete(key);
-      throw error;
-    });
-    providerModelRequests.set(key, request);
-  }
-  return request;
-}
+// 缓存与探测都住在 lib/modelCatalog.ts（对话框的 @ 选择器共用同一份）；这里保留
+// 转发，是因为几个设置页早就 `import { clearProviderModelCache } from "./ProviderModelInput.tsx"`。
+export { clearProviderModelCache } from "../lib/modelCatalog.ts";
 
 export function ProviderModelInput({
   inputId,
@@ -71,14 +31,16 @@ export function ProviderModelInput({
   onChange: (value: string) => void;
   onCommit?: (value: string) => void;
 }) {
-  const cacheVersion = provider ? providerModelVersions.get(provider.id) ?? 0 : 0;
+  const cacheVersion = provider ? providerCacheVersion(provider.id) : 0;
   const [models, setModels] = useState<string[]>(() => (
-    provider ? providerModelCache.get(providerCacheKey(provider)) ?? [] : [...CLI_MODEL_PRESETS[type]]
+    provider ? cachedProviderModels(provider) ?? [] : [...CLI_MODEL_PRESETS[type]]
   ));
   const [status, setStatus] = useState<"idle" | "loading" | "ready" | "failed">(
-    provider ? (providerModelCache.has(providerCacheKey(provider)) ? "ready" : "loading") : "idle",
+    provider ? (cachedProviderModels(provider) ? "ready" : "loading") : "idle",
   );
   const [error, setError] = useState("");
+
+  const pinnedMode = provider?.modelListMode === "pinned";
 
   useEffect(() => {
     if (!provider) {
@@ -87,7 +49,14 @@ export function ProviderModelInput({
       setError("");
       return;
     }
-    const cached = providerModelCache.get(providerCacheKey(provider));
+    // 固定模式：候选就是用户在供应商页面钉下的那几个，一个探测请求都不发。
+    if (provider.modelListMode === "pinned") {
+      setModels(pinnedModelsOf(provider));
+      setStatus("ready");
+      setError("");
+      return;
+    }
+    const cached = cachedProviderModels(provider);
     if (cached) {
       setModels(cached);
       setStatus("ready");
@@ -111,7 +80,7 @@ export function ProviderModelInput({
       },
     );
     return () => { alive = false; };
-  }, [provider?.id, provider?.protocol, provider?.baseUrl, type, cacheVersion]);
+  }, [provider?.id, provider?.protocol, provider?.baseUrl, provider?.modelListMode, provider?.pinnedModels, type, cacheVersion]);
 
   const options = useMemo(() => Array.from(new Set([
     ...(provider?.model ? [provider.model] : []),
@@ -127,8 +96,8 @@ export function ProviderModelInput({
         list={datalistId}
         value={value}
         disabled={disabled}
-        title={provider && compact
-          ? `${provider.name} · ${status === "loading" ? "正在探测模型" : status === "failed" ? `探测失败：${error}` : `${models.length} 个模型`}`
+        aria-label={provider && compact
+          ? `模型 · ${provider.name} · ${status === "loading" ? "正在探测模型" : status === "failed" ? `探测失败：${error}` : `${models.length} 个模型`}`
           : undefined}
         placeholder={provider ? provider.model || "跟随供应商默认" : "跟随 CLI"}
         onChange={(event) => onChange(event.target.value)}
@@ -140,7 +109,9 @@ export function ProviderModelInput({
       {provider && !compact && (
         <small className={status === "failed" ? "is-error" : ""}>
           {status === "loading" && `正在从「${provider.name}」探测模型…`}
-          {status === "ready" && `${provider.name} · ${models.length} 个完整模型名`}
+          {status === "ready" && (pinnedMode
+            ? `${provider.name} · 固定 ${models.length} 个模型`
+            : `${provider.name} · ${models.length} 个完整模型名`)}
           {status === "failed" && `仍可手填模型：${error}`}
         </small>
       )}

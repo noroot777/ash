@@ -352,6 +352,14 @@ export const TEAM_DEFAULTS: TeamConfig = { lead: "claude", worker: "claude", rev
 // base_url + key,顶掉 CLI 自己的登录账号 —— 于是 claude@官方 和 claude@公司
 // 可以并存。全局(不分项目)。harness 自己不再直连它调模型。
 export type LlmProtocol = "anthropic" | "openai";
+
+// 选模型面板(对话框 @ 之后那一步、以及所有模型下拉)从哪里拿这家供应商的候选模型:
+// "api"    = 每次打开都调它的 /models 接口,拿到什么列什么(总是最新,但慢且可能失败)
+// "pinned" = 只列用户在供应商页面固定下来的那几个(离线、稳定、可控)
+// 两者随时可切换;切到 pinned 时 pinnedModels 为空只是「这家暂时没候选」,不是错误。
+export type ProviderModelListMode = "api" | "pinned";
+export const PROVIDER_MODEL_LIST_MODES: readonly ProviderModelListMode[] = ["api", "pinned"];
+
 export interface LlmProvider {
   id: string;
   name: string;
@@ -361,6 +369,8 @@ export interface LlmProvider {
   // OpenAI 兼容供应商若只实现 Chat Completions，开启后由 harness 把 Codex 的
   // Responses API 请求/流式响应转换成 Chat Completions 再转回来。
   protocolConversionEnabled: boolean;
+  modelListMode: ProviderModelListMode;
+  pinnedModels: string[]; // modelListMode === "pinned" 时的候选;另一模式下保留不动
   hasKey: boolean; // the key itself is never sent to the client; only whether one is set
   createdAt: string;
 }
@@ -507,6 +517,9 @@ export interface ScheduledMessage {
   text: string;
   attachments: string[];
   agent: AgentType | null;
+  // @指派时一并选定的执行器/模型；null = 按 agent 的默认执行器 / 跟随执行器。
+  executorId: string | null;
+  model: string | null;
   sendAt: string; // ISO 到期发送时间
   status: ScheduledMessageStatus;
   createdAt: string;

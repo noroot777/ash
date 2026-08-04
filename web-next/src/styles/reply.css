@@ -19,9 +19,63 @@
 .scheduled-send-panel button:disabled { opacity: .42; }
 .reply-schedule-button { display: grid; width: 29px; height: 29px; place-items: center; border: 0; border-radius: 7px; background: transparent; color: var(--muted); }
 .reply-schedule-button:hover:not(:disabled) { background: var(--raised); color: var(--ink); }
-.task-reply-target { display: flex; margin-bottom: 6px; align-items: center; }
-.task-reply-target > span { display: inline-flex; height: 24px; align-items: center; gap: 4px; border-radius: 999px; background: color-mix(in lch, var(--accent) 10%, transparent); padding: 0 4px 0 8px; color: var(--ink); font-size: 10.5px; }
-.task-reply-target button { display: grid; width: 18px; height: 18px; place-items: center; border: 0; border-radius: 50%; background: transparent; color: var(--faint); }
-.task-reply-target button:hover { background: var(--panel); color: var(--ink); }
+/* 对话框底部那颗「智能体 · 模型」胶囊：常态显示任务当前配置，@ 召唤后高亮成强调色。 */
+.task-reply-chip { display: inline-flex; height: 24px; max-width: 260px; align-items: center; gap: 5px; border: 1px solid var(--line2); border-radius: 999px; background: var(--overlay); padding: 0 7px 0 8px; color: var(--muted); font-size: 10px; }
+.task-reply-chip:hover:not(:disabled) { border-color: color-mix(in lch, var(--accent) 40%, var(--line2)); color: var(--ink); }
+.task-reply-chip:disabled { opacity: .5; }
+.task-reply-chip > b { color: var(--ink); font-family: var(--font-mono); font-size: 10.5px; font-weight: 550; }
+.task-reply-chip > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); }
+.task-reply-chip > svg:last-child { flex: 0 0 auto; color: var(--faint); }
+.task-reply-chip.is-summoned { border-color: color-mix(in lch, var(--accent) 45%, transparent); background: color-mix(in lch, var(--accent) 10%, transparent); }
+.task-reply-chip.is-summoned > b { color: var(--accent); }
+.task-reply-chip-reset { display: grid; width: 19px; height: 19px; place-items: center; border: 0; border-radius: 50%; background: transparent; color: var(--faint); }
+.task-reply-chip-reset:hover { background: var(--raised); color: var(--ink); }
+
+/* 两步选择器（先智能体、再按供应商分块的模型）。 */
+.agent-model-picker {
+  position: absolute;
+  z-index: 27;
+  bottom: 100%;
+  left: clamp(14px, 3vw, 34px);
+  width: min(340px, calc(100% - 28px));
+  margin-bottom: 7px;
+  overflow: hidden;
+  border: 1px solid var(--line2);
+  border-radius: 11px;
+  background: var(--panel);
+  box-shadow: var(--menu-shadow);
+}
+.agent-model-picker-head { display: flex; align-items: center; gap: 6px; border-bottom: 0.5px solid var(--line); padding: 7px 8px; }
+.agent-model-picker-back { display: grid; width: 20px; height: 20px; flex: 0 0 auto; place-items: center; border: 0; border-radius: 5px; background: transparent; color: var(--muted); }
+.agent-model-picker-back:hover { background: var(--raised); color: var(--ink); }
+.agent-model-picker-crumb { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 4px; color: var(--faint); font-size: 9.5px; }
+.agent-model-picker-crumb > svg { color: var(--muted); }
+.agent-model-picker-head input { min-width: 0; flex: 1; height: 25px; border: 1px solid var(--line2); border-radius: 6px; background: var(--canvas); padding: 0 7px; color: var(--ink); font: 11px var(--font-sans); outline: none; }
+.agent-model-picker-head input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in lch, var(--accent) 13%, transparent); }
+.agent-model-picker-rows { max-height: min(46vh, 330px); overflow-y: auto; overscroll-behavior: contain; padding: 5px; }
+.agent-model-picker-rows > p { margin: 6px 7px; color: var(--faint); font-size: 10.5px; }
+.agent-model-picker-rows header { display: flex; align-items: baseline; gap: 6px; padding: 7px 8px 4px; }
+.agent-model-picker-rows header > b { color: var(--muted); font-size: 9.5px; font-weight: 650; letter-spacing: .04em; text-transform: uppercase; }
+.agent-model-picker-rows header > small { display: inline-flex; min-width: 0; align-items: center; gap: 3px; overflow: hidden; color: var(--faint); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.agent-model-picker-rows header > small.is-error { color: var(--red); }
+.agent-model-picker-rows button {
+  display: flex;
+  width: 100%;
+  min-height: 30px;
+  align-items: center;
+  gap: 8px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  padding: 5px 8px;
+  text-align: left;
+}
+.agent-model-picker-rows button:hover,
+.agent-model-picker-rows button[aria-selected="true"] { background: var(--sel-bg); }
+.agent-model-picker-rows button > b { min-width: 0; overflow: hidden; color: var(--ink); font-family: var(--font-mono); font-size: 11px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+.agent-model-picker-rows button > span { min-width: 0; flex: 1; overflow: hidden; color: var(--faint); font-size: 9.5px; text-align: right; text-overflow: ellipsis; white-space: nowrap; }
+.agent-model-picker-rows button > svg { flex: 0 0 auto; color: var(--faint); }
+.agent-model-picker-rows button.is-follow > b { color: var(--accent); font-family: var(--font-sans); }
+.agent-model-picker > footer { border-top: 0.5px solid var(--line); padding: 5px 9px 6px; color: var(--faint); font-size: 9px; }
 .team-reply-shell { position: relative; }
 .team-reply-box footer > .reply-schedule-button { width: 27px; height: 27px; }
