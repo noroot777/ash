@@ -46,6 +46,12 @@ function readDef(raw: string): WorkflowDef | null {
   }
 }
 
+// 任务身上那份快照（tasks.workflow，json 文本）。执行链读它之前一律走这里：解析不了
+// 或过不了闸的，当成「这个任务没有线」，于是它走老路子——绝不能让一条坏快照把任务卡死。
+export function taskWorkflowDef(raw: string | null | undefined): WorkflowDef | null {
+  return raw ? readDef(raw) : null;
+}
+
 function rowItem(row: Row, builtinName?: string, builtinDesc?: string): WorkflowItem {
   const def = readDef(row.def);
   const factory = row.builtinKey ? builtinWorkflowDef(row.builtinKey) : null;

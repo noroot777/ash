@@ -14,12 +14,16 @@ process.env.HARNESS_DB = join(root, "harness.db");
 const {
   nextReviewRound,
   mountReviewRoutes,
-  reviewOutcomeAction,
   REVIEW_OVERWRITE_CHECK,
   reviewRoundDir,
   safeReviewFilePath,
-  shouldAutoDispatchReview,
 } = await import("../src/review.js");
+// 判定（该不该派、几轮、找谁验）住在 review-policy.ts，是纯函数，所以这一段全程不起
+// 数据库、不起 CLI。
+const {
+  reviewOutcomeAction,
+  shouldAutoDispatchReview,
+} = await import("../src/review-policy.js");
 const {
   detectReviewCoverage,
   formatReviewCoverageFacts,

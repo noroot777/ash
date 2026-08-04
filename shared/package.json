@@ -26,6 +26,10 @@
       "types": "./src/workflow.ts",
       "default": "./src/workflow.ts"
     },
+    "./workflow-policy": {
+      "types": "./src/workflow-policy.ts",
+      "default": "./src/workflow-policy.ts"
+    },
     "./workflow-presets": {
       "types": "./src/workflow-presets.ts",
       "default": "./src/workflow-presets.ts"

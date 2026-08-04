@@ -32,6 +32,7 @@
     "test:session-trace": "tsx scripts/test-session-trace.ts",
     "test:workflow": "tsx scripts/test-workflow-def.ts",
     "test:workflow-library": "tsx scripts/test-workflow-library.ts",
+    "test:workflow-run": "tsx scripts/test-workflow-run.ts",
     "test:openai-converter": "tsx scripts/test-openai-converter.ts"
   },
   "dependencies": {
