@@ -225,6 +225,30 @@
   font-size: 11px;
 }
 
+/* 统一下拉在这张卡里跟上面的输入框长一样：同高、同圆角、同底色。 */
+.team-preset-role-fields .ui-dropdown-trigger {
+  height: 31px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--canvas);
+  padding: 0 8px;
+  color: var(--ink);
+  font-size: 11px;
+  box-shadow: none;
+}
+
+.team-preset-role-fields .ui-dropdown-trigger.is-mono > span:first-child,
+.team-preset-role-fields .ui-dropdown-trigger > span.is-placeholder {
+  font-size: 11px;
+}
+
+.team-preset-role-fields .ui-dropdown-trigger:hover:not(:disabled),
+.team-preset-role-fields .ui-dropdown-trigger[aria-expanded="true"] {
+  border-color: var(--accent);
+  background: var(--canvas);
+  box-shadow: none;
+}
+
 .team-preset-name-field input:focus,
 .team-preset-role-fields input:focus,
 .team-preset-role-fields select:focus {

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { AgentType, LlmProvider } from "@harness/shared";
 import { CLI_MODEL_PRESETS } from "@harness/shared/cli-presets";
+import { Dropdown, type DropdownOption } from "../components/Dropdown.tsx";
 import {
   cachedProviderModels,
   loadProviderModels,
@@ -12,8 +13,14 @@ import {
 // 转发，是因为几个设置页早就 `import { clearProviderModelCache } from "./ProviderModelInput.tsx"`。
 export { clearProviderModelCache } from "../lib/modelCatalog.ts";
 
+/**
+ * 「这个执行器跑哪个模型」的选择器。
+ *
+ * 以前是 `input + datalist`：Chrome 会按输入框里已有的值过滤候选，于是设好模型后
+ * 再点下拉**只剩当前这一个**，看着就是坏的。现在走统一的 Dropdown —— 候选永远是
+ * 完整一份，筛选是浮层里另一个输入框的事，手填目录之外的模型名也仍然支持。
+ */
 export function ProviderModelInput({
-  inputId,
   type,
   provider,
   value,
@@ -22,7 +29,6 @@ export function ProviderModelInput({
   onChange,
   onCommit,
 }: {
-  inputId: string;
   type: AgentType;
   provider?: LlmProvider;
   value: string;
@@ -82,30 +88,54 @@ export function ProviderModelInput({
     return () => { alive = false; };
   }, [provider?.id, provider?.protocol, provider?.baseUrl, provider?.modelListMode, provider?.pinnedModels, type, cacheVersion]);
 
-  const options = useMemo(() => Array.from(new Set([
-    ...(provider?.model ? [provider.model] : []),
-    ...models,
-    ...(value ? [value] : []),
-  ])), [models, provider?.model, value]);
-  const datalistId = `${inputId}-models`;
+  const groupName = provider ? provider.name : `${type} 预设`;
+  const options = useMemo<DropdownOption[]>(() => {
+    const seen = new Set<string>();
+    const rows: DropdownOption[] = [{
+      value: "",
+      label: provider ? `跟随供应商默认${provider.model ? `（${provider.model}）` : ""}` : "跟随 CLI",
+    }];
+    for (const model of [...(provider?.model ? [provider.model] : []), ...models, ...(value ? [value] : [])]) {
+      if (!model || seen.has(model)) continue;
+      seen.add(model);
+      rows.push({
+        value: model,
+        label: model,
+        group: groupName,
+        mono: true,
+        detail: model === provider?.model ? "供应商默认" : "",
+      });
+    }
+    return rows;
+  }, [groupName, models, provider, value]);
+
+  const note = status === "loading"
+    ? `正在从「${provider?.name ?? type}」探测模型…`
+    : status === "failed"
+      ? `探测失败：${error}（仍可手填模型名）`
+      : "";
+
+  const commit = (next: string) => {
+    onChange(next);
+    onCommit?.(next);
+  };
 
   return (
     <div className="agent-model-control">
-      <input
-        id={inputId}
-        list={datalistId}
+      <Dropdown
+        label={provider ? `模型 · ${provider.name}` : "模型"}
         value={value}
+        options={options}
+        status={status}
+        note={note}
         disabled={disabled}
-        aria-label={provider && compact
-          ? `模型 · ${provider.name} · ${status === "loading" ? "正在探测模型" : status === "failed" ? `探测失败：${error}` : `${models.length} 个模型`}`
-          : undefined}
+        allowCustom
+        mono
+        filterPlaceholder="筛选或直接填写模型名"
+        emptyText="没有匹配的模型，输入完整模型名即可直接使用"
         placeholder={provider ? provider.model || "跟随供应商默认" : "跟随 CLI"}
-        onChange={(event) => onChange(event.target.value)}
-        onBlur={(event) => onCommit?.(event.target.value.trim())}
+        onChange={commit}
       />
-      <datalist id={datalistId}>
-        {options.map((model) => <option value={model} key={model} />)}
-      </datalist>
       {provider && !compact && (
         <small className={status === "failed" ? "is-error" : ""}>
           {status === "loading" && `正在从「${provider.name}」探测模型…`}

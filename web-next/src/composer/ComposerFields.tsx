@@ -6,8 +6,8 @@ import type {
   TaskMode,
   TeamPresetConfig,
 } from "@harness/shared";
-import { REASONING_EFFORT_VALUES } from "@harness/shared/cli-presets";
 import { CaretDown, GearSix, SlidersHorizontal } from "@phosphor-icons/react";
+import { Dropdown } from "../components/Dropdown.tsx";
 import { ModelCatalogField } from "../components/ModelCatalogField.tsx";
 import { Toggle } from "../components/ui.tsx";
 import { TaskLabelsEditor } from "../components/TaskLabelsEditor.tsx";
@@ -17,6 +17,7 @@ import {
   executorValue,
   parseExecutorValue,
 } from "../lib/agentAvailability.ts";
+import { effortOptions } from "../lib/executorChoices.ts";
 import type { ComposerExecutorConfigs, ComposerExecutorRole } from "./executorOverrides.ts";
 import { PresetBar } from "./PresetBar.tsx";
 
@@ -54,38 +55,41 @@ export function ExecutorSelect({
   // 选项文本里的模型是 Profile 自带的那个;覆盖存在时它就不是实际会跑的模型了。
   const run = executorRunSummary(selection, knownProfiles, override);
   return (
-    <label className="composer-field">
+    <div className="composer-field">
       <span>{label}</span>
-      <select
+      <Dropdown
+        label={label}
         value={pickableCount || options.length ? executorValue(selection) : ""}
+        options={options.map((option) => ({
+          value: option.value,
+          label: option.label,
+          disabled: option.disabled,
+        }))}
         disabled={pickableCount === 0}
-        onChange={(event) => onChange(event.target.value)}
-      >
-        {options.length === 0 && <option value="">暂无可用执行器</option>}
-        {options.map((option) => (
-          <option value={option.value} disabled={option.disabled} key={option.value}>{option.label}</option>
-        ))}
-      </select>
+        filterable={options.length > 6}
+        filterPlaceholder="筛选执行器…"
+        placeholder="暂无可用执行器"
+        emptyText="没有匹配的执行器"
+        onChange={onChange}
+      />
       {run.overridden && (
         <small className="composer-field-run">
           实际运行：{run.model ?? "跟随执行器"}{run.effort ? ` · ${run.effort}` : ""}
           <em>覆盖</em>
         </small>
       )}
-    </label>
+    </div>
   );
 }
 
 /** 候选来自统一的模型目录（供应商固定清单或实时 API），不再只有 CLI 别名。 */
 export function ModelField({
-  role,
   label,
   value,
   type,
   profiles,
   onChange,
 }: {
-  role: string;
   label: string;
   value: string;
   type: AgentType;
@@ -94,7 +98,6 @@ export function ModelField({
 }) {
   return (
     <ModelCatalogField
-      listId={`composer-models-${type}-${role}`}
       label={label}
       value={value}
       type={type}
@@ -116,13 +119,17 @@ export function EffortField({
   onChange: (value: string) => void;
 }) {
   return (
-    <label className="composer-field">
+    <div className="composer-field">
       <span>{label}</span>
-      <select value={value} onChange={(event) => onChange(event.target.value)}>
-        <option value="">跟随执行器</option>
-        {REASONING_EFFORT_VALUES[type].map((item) => <option value={item} key={item}>{item}</option>)}
-      </select>
-    </label>
+      <Dropdown
+        label={label}
+        value={value}
+        options={effortOptions(type)}
+        filterable={false}
+        placeholder="跟随执行器"
+        onChange={onChange}
+      />
+    </div>
   );
 }
 
@@ -145,7 +152,7 @@ function OverrideGroup({
     <div className="composer-override-group">
       <b>{label}</b>
       <div>
-        <ModelField role={role} label="模型" value={config.model} type={type} profiles={profiles} onChange={(model) => onChange(role, { model })} />
+        <ModelField label="模型" value={config.model} type={type} profiles={profiles} onChange={(model) => onChange(role, { model })} />
         <EffortField label="思考强度" value={config.effort} type={type} onChange={(effort) => onChange(role, { effort })} />
       </div>
     </div>
@@ -307,13 +314,20 @@ export function ComposerFields({
           )}
           {mode === "debate" && (
             <>
-              <label className="composer-field">
+              <div className="composer-field">
                 <span>最多轮数</span>
-                <select value={rounds} onChange={(event) => onRoundsChange(event.target.value)}>
-                  <option value="">不限</option>
-                  {[1, 2, 3, 5, 8].map((value) => <option value={value} key={value}>{value} 轮</option>)}
-                </select>
-              </label>
+                <Dropdown
+                  label="最多轮数"
+                  value={rounds}
+                  options={[
+                    { value: "", label: "不限" },
+                    ...[1, 2, 3, 5, 8].map((value) => ({ value: String(value), label: `${value} 轮` })),
+                  ]}
+                  filterable={false}
+                  placeholder="不限"
+                  onChange={onRoundsChange}
+                />
+              </div>
               <label className="composer-toggle-field">
                 <span>共识闸门</span>
                 <Toggle checked={gate} onChange={onGateChange} label={gate ? "需要确认" : "自动结束"} />
@@ -326,36 +340,59 @@ export function ComposerFields({
                 <span>worktree</span>
                 <Toggle checked={useWorktree} onChange={onUseWorktreeChange} label={useWorktree ? "独立 worktree" : "直接使用项目目录"} />
               </label>
-              <label className="composer-field">
+              <div className="composer-field">
                 <span>base 分支</span>
-                <select value={base} disabled={!useWorktree} onChange={(event) => onBaseChange(event.target.value)}>
-                  <option value="">当前 HEAD</option>
-                  {branches.map((branch) => <option value={branch} key={branch}>{branch}</option>)}
-                </select>
-              </label>
+                <Dropdown
+                  label="base 分支"
+                  value={base}
+                  options={[
+                    { value: "", label: "当前 HEAD" },
+                    ...branches.map((branch) => ({ value: branch, label: branch, mono: true })),
+                  ]}
+                  disabled={!useWorktree}
+                  filterable={branches.length > 6}
+                  filterPlaceholder="筛选分支…"
+                  placeholder="当前 HEAD"
+                  onChange={onBaseChange}
+                />
+              </div>
             </>
           )}
           {mode !== "debate" && (
-            <label className="composer-field">
+            <div className="composer-field">
               <span>分组</span>
-              <select value={groupId} onChange={(event) => {
-                if (event.target.value === "__new") onCreateGroup();
-                else onGroupChange(event.target.value);
-              }}>
-                <option value="">无分组</option>
-                {groups.filter((group) => !group.ownerTaskId).map((group) => (
-                  <option value={group.id} key={group.id}>{group.name} · {group.mode === "parallel" ? "并行" : "串行"}</option>
-                ))}
-                <option value="__new">＋ 新建分组…</option>
-              </select>
-            </label>
+              <Dropdown
+                label="分组"
+                value={groupId}
+                options={[
+                  { value: "", label: "无分组" },
+                  ...groups.filter((group) => !group.ownerTaskId).map((group) => ({
+                    value: group.id,
+                    label: group.name,
+                    detail: group.mode === "parallel" ? "并行" : "串行",
+                  })),
+                  { value: "__new", label: "＋ 新建分组…" },
+                ]}
+                filterable={groups.length > 6}
+                filterPlaceholder="筛选分组…"
+                placeholder="无分组"
+                onChange={(value) => {
+                  if (value === "__new") onCreateGroup();
+                  else onGroupChange(value);
+                }}
+              />
+            </div>
           )}
-          <label className="composer-field">
+          <div className="composer-field">
             <span>优先级</span>
-            <select value={priority} onChange={(event) => onPriorityChange(event.target.value as Priority)}>
-              {PRIORITIES.map((item) => <option value={item.value} key={item.value}>{item.label}</option>)}
-            </select>
-          </label>
+            <Dropdown
+              label="优先级"
+              value={priority}
+              options={PRIORITIES.map((item) => ({ value: item.value, label: item.label }))}
+              filterable={false}
+              onChange={(value) => onPriorityChange(value as Priority)}
+            />
+          </div>
           <div className="composer-label-field">
             <span>标签</span>
             <TaskLabelsEditor labels={labels} onChange={onLabelsChange} />

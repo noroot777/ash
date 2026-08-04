@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { AgentExecutorProfile, LlmProvider } from "@harness/shared";
 import { REASONING_EFFORT_VALUES } from "@harness/shared/cli-presets";
 import { Star, Trash } from "@phosphor-icons/react";
+import { Dropdown, type DropdownOption } from "../components/Dropdown.tsx";
 import { api } from "../lib/api.ts";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import {
@@ -10,6 +11,11 @@ import {
 } from "./agentProviderRules.ts";
 import { ProfileArgsControl } from "./ProfileArgsControl.tsx";
 import { ProviderModelInput } from "./ProviderModelInput.tsx";
+
+const SPEED_CHOICES: DropdownOption[] = [
+  { value: "standard", label: "标准" },
+  { value: "fast", label: "1.5x" },
+];
 
 export function AgentProfileRow({
   profile,
@@ -30,6 +36,32 @@ export function AgentProfileRow({
   const providerOptions = providersForAgent(profile.type, providers);
   const provider = providers.find((candidate) => candidate.id === profile.providerId);
   const protocol = providerProtocolForAgent(profile.type);
+
+  // 供应商候选：官方账号 + 本类型协议匹配的供应商；当前选的那家如果协议已经不匹配
+  // （改过供应商协议），仍要留在列表里，否则下拉显示空白，看着像「没设过」。
+  const providerChoices = useMemo<DropdownOption[]>(() => {
+    const rows: DropdownOption[] = [{
+      value: "",
+      label: protocol ? "CLI 官方账号" : "暂不支持",
+      detail: protocol ? "不接第三方供应商" : "",
+    }];
+    if (provider && !providerOptions.some((candidate) => candidate.id === provider.id)) {
+      rows.push({ value: provider.id, label: provider.name, detail: "协议不匹配" });
+    }
+    for (const candidate of providerOptions) {
+      rows.push({
+        value: candidate.id,
+        label: candidate.name,
+        detail: candidate.hasKey ? "" : "缺 Key",
+      });
+    }
+    return rows;
+  }, [protocol, provider, providerOptions]);
+
+  const effortChoices = useMemo<DropdownOption[]>(() => [
+    { value: "", label: "跟随 CLI" },
+    ...REASONING_EFFORT_VALUES[profile.type].map((effort) => ({ value: effort, label: effort })),
+  ], [profile.type]);
 
   useEffect(() => {
     if (!editingName) setNameDraft(profile.name);
@@ -118,30 +150,19 @@ export function AgentProfileRow({
           </small>
         </div>
         <div className="agent-profile-cell">
-          <select
-            aria-label={`${profile.name} 的供应商`}
-            title={protocol ? "切换供应商会清除旧模型覆盖" : "该 CLI 暂不支持供应商"}
-            disabled={busy || !protocol}
+          <Dropdown
+            label={`${profile.name} 的供应商`}
             value={profile.providerId ?? ""}
-            onChange={(event) => void patch({
-              providerId: event.target.value || null,
-              model: "",
-            })}
-          >
-            <option value="">{protocol ? "CLI 官方账号" : "暂不支持"}</option>
-            {provider && !providerOptions.some((candidate) => candidate.id === provider.id) && (
-              <option value={provider.id}>{provider.name}（协议不匹配）</option>
-            )}
-            {providerOptions.map((candidate) => (
-              <option value={candidate.id} key={candidate.id}>
-                {candidate.name}{candidate.hasKey ? "" : " · 缺 Key"}
-              </option>
-            ))}
-          </select>
+            options={providerChoices}
+            disabled={busy || !protocol}
+            filterable={providerOptions.length > 6}
+            filterPlaceholder="筛选供应商…"
+            placeholder={protocol ? "CLI 官方账号" : "暂不支持"}
+            onChange={(providerId) => void patch({ providerId: providerId || null, model: "" })}
+          />
         </div>
         <div className="agent-profile-cell">
           <ProviderModelInput
-            inputId={`profile-${profile.id}-model`}
             type={profile.type}
             provider={provider}
             value={profile.model ?? ""}
@@ -152,30 +173,25 @@ export function AgentProfileRow({
           />
         </div>
         <div className="agent-profile-cell">
-          <select
-            aria-label={`${profile.name} 的思考强度`}
-            disabled={busy}
+          <Dropdown
+            label={`${profile.name} 的思考强度`}
             value={profile.reasoningEffort ?? ""}
-            onChange={(event) => void patch({ reasoningEffort: event.target.value })}
-          >
-            <option value="">跟随 CLI</option>
-            {REASONING_EFFORT_VALUES[profile.type].map((effort) => (
-              <option value={effort} key={effort}>{effort}</option>
-            ))}
-          </select>
+            options={effortChoices}
+            disabled={busy}
+            filterable={false}
+            placeholder="跟随 CLI"
+            onChange={(reasoningEffort) => void patch({ reasoningEffort })}
+          />
         </div>
         <div className="agent-profile-cell">
-          <select
-            aria-label={`${profile.name} 的速度`}
-            disabled={busy || profile.type === "antigravity"}
+          <Dropdown
+            label={`${profile.name} 的速度`}
             value={profile.speed ?? "standard"}
-            onChange={(event) => void patch({
-              speed: event.target.value as "standard" | "fast",
-            })}
-          >
-            <option value="standard">标准</option>
-            <option value="fast">1.5x</option>
-          </select>
+            options={SPEED_CHOICES}
+            disabled={busy || profile.type === "antigravity"}
+            filterable={false}
+            onChange={(speed) => void patch({ speed: speed as "standard" | "fast" })}
+          />
         </div>
         <div className="agent-profile-actions">
           <div className="agent-profile-hover-action">

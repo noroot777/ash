@@ -1,16 +1,17 @@
 import { useMemo } from "react";
 import type { AgentExecutorProfile, AgentType } from "@harness/shared";
 import { useAgentModelCatalog, useProviders, type ModelGroup } from "../lib/modelCatalog.ts";
+import { Dropdown, type DropdownOption } from "./Dropdown.tsx";
 
 /**
  * 「选模型」的两个通用控件：把 lib/modelCatalog.ts 的分块目录接到表单里，于是
  * 供应商页面那个「每次调 API / 固定模型」开关能一次管住所有选模型的地方。
  *
- * - ModelCatalogField：输入框 + datalist，允许手填目录之外的模型（新建/派生面板）。
- * - ModelCatalogSelect：下拉框 + 按供应商分组的 optgroup（存量任务的信息面板）。
+ * - ModelCatalogField：带标题的表单项，允许手填目录之外的模型（新建/派生面板）。
+ * - ModelCatalogSelect：光秃秃一个下拉（存量任务的信息面板）。
  *
- * 两者都只改「模型」这一项，不动执行器 —— 需要「连执行器一起选」的两步交互见
- * task-detail/AgentModelPicker.tsx。
+ * 两者都用同一个 Dropdown（候选按供应商分块、可输入筛选），只在外层包装上不同；
+ * 需要「连执行器一起选」的两步交互见 task-detail/AgentModelPicker.tsx。
  */
 
 /** 目录还没就绪时给一句可见提示；就绪了就不占地方。 */
@@ -21,21 +22,31 @@ function catalogNote(groups: ModelGroup[]): string | null {
   return null;
 }
 
-/** 同名模型在多家供应商都有时合并成一行，副标题列出这几家。 */
-function labelledModels(groups: ModelGroup[]): { model: string; hint: string }[] {
-  const hints = new Map<string, string[]>();
+/** 候选按供应商分块；同名模型在多家都有时各留一行，块标题指明是哪家。 */
+function catalogOptions(groups: ModelGroup[], value: string): DropdownOption[] {
+  const rows: DropdownOption[] = [{ value: "", label: "跟随执行器" }];
+  const seen = new Set<string>();
   for (const group of groups) {
     for (const model of group.models) {
-      const names = hints.get(model);
-      if (!names) hints.set(model, [group.providerName]);
-      else if (!names.includes(group.providerName)) names.push(group.providerName);
+      rows.push({ value: model, label: model, group: group.providerName, mono: true });
+      seen.add(model);
     }
   }
-  return [...hints].map(([model, names]) => ({ model, hint: names.join(" · ") }));
+  // 当前模型可能不在任何一块里（供应商改过、或早先手填过）：单独列一块，否则下拉
+  // 显示成空白，看起来像「没设过模型」。
+  if (value && !seen.has(value)) {
+    rows.splice(1, 0, { value, label: value, group: "当前设置", mono: true });
+  }
+  return rows;
+}
+
+function statusOf(groups: ModelGroup[]): "loading" | "failed" | "ready" {
+  if (groups.some((group) => group.status === "loading")) return "loading";
+  if (groups.some((group) => group.status === "failed")) return "failed";
+  return "ready";
 }
 
 export function ModelCatalogField({
-  listId,
   label,
   value,
   type,
@@ -43,7 +54,6 @@ export function ModelCatalogField({
   disabled = false,
   onChange,
 }: {
-  listId: string;
   label: string;
   value: string;
   type: AgentType;
@@ -53,23 +63,27 @@ export function ModelCatalogField({
 }) {
   const providers = useProviders();
   const groups = useAgentModelCatalog(type, profiles, providers);
-  const options = useMemo(() => labelledModels(groups), [groups]);
+  const options = useMemo(() => catalogOptions(groups, value), [groups, value]);
   const note = catalogNote(groups);
   return (
-    <label className="composer-field">
+    <div className="composer-field">
       <span>{label}</span>
-      <input
+      <Dropdown
+        label={label}
         value={value}
-        list={listId}
+        options={options}
         disabled={disabled}
-        onChange={(event) => onChange(event.target.value)}
+        status={statusOf(groups)}
+        note={note ?? ""}
+        allowCustom
+        mono
         placeholder="跟随执行器"
+        filterPlaceholder="筛选或直接填写模型名"
+        emptyText="没有匹配的模型，输入完整模型名即可直接使用"
+        onChange={onChange}
       />
-      <datalist id={listId}>
-        {options.map((option) => <option value={option.model} label={option.hint} key={option.model} />)}
-      </datalist>
       {note && <small>{note}</small>}
-    </label>
+    </div>
   );
 }
 
@@ -88,23 +102,24 @@ export function ModelCatalogSelect({
 }) {
   const providers = useProviders();
   const groups = useAgentModelCatalog(type, profiles, providers);
+  const options = useMemo(() => catalogOptions(groups, value), [groups, value]);
   const note = catalogNote(groups);
-  // 当前设置的模型可能不在任何一块里（供应商改过、或是早先手填的）：单独列一块，
-  // 否则下拉会显示成空白,看起来像「没设过模型」。
-  const orphan = value && !groups.some((group) => group.models.includes(value)) ? value : null;
   return (
     <>
-      <select value={value} disabled={disabled} onChange={(event) => onChange(event.target.value)}>
-        <option value="">跟随执行器</option>
-        {orphan && <optgroup label="当前设置"><option value={orphan}>{orphan}</option></optgroup>}
-        {groups.map((group) => (
-          group.models.length ? (
-            <optgroup label={group.providerName} key={group.key}>
-              {group.models.map((model) => <option value={model} key={model}>{model}</option>)}
-            </optgroup>
-          ) : null
-        ))}
-      </select>
+      <Dropdown
+        label="模型"
+        value={value}
+        options={options}
+        disabled={disabled}
+        status={statusOf(groups)}
+        note={note ?? ""}
+        allowCustom
+        mono
+        placeholder="跟随执行器"
+        filterPlaceholder="筛选或直接填写模型名"
+        emptyText="没有匹配的模型，输入完整模型名即可直接使用"
+        onChange={onChange}
+      />
       {note && <p className="task-inspector-note">{note}</p>}
     </>
   );

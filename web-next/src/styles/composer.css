@@ -266,6 +266,30 @@
   font-size: 12px;
 }
 
+/* 统一下拉在新建面板里跟输入框同高同框，免得一行里两种控件对不齐。 */
+.composer-field .ui-dropdown-trigger {
+  height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  padding: 0 10px;
+  color: var(--ink);
+  font-size: 12px;
+  box-shadow: none;
+}
+
+.composer-field .ui-dropdown-trigger.is-mono > span:first-child,
+.composer-field .ui-dropdown-trigger > span.is-placeholder {
+  font-size: 12px;
+}
+
+.composer-field .ui-dropdown-trigger:hover:not(:disabled),
+.composer-field .ui-dropdown-trigger[aria-expanded="true"] {
+  border-color: var(--accent);
+  background: var(--panel);
+  box-shadow: none;
+}
+
 /* 选择器只写得下 Profile 名 + Profile 自带模型;覆盖生效时实际跑的是别的模型,
    所以生效值单独占一行,覆盖态再加个角标(见 executorRunSummary)。 */
 .composer-field-run {
