@@ -13,7 +13,7 @@
 import type { Hono } from "hono";
 import { and, desc, eq, isNull } from "drizzle-orm";
 import type { WorkflowDef, WorkflowItem } from "@harness/shared/workflow";
-import { normalizeWorkflowDef } from "@harness/shared/workflow";
+import { normalizeWorkflowDef, resolveWorkflowFromList } from "@harness/shared/workflow";
 import {
   BUILTIN_WORKFLOWS, DEFAULT_WORKFLOW_KEY, builtinWorkflowDef, isBuiltinKey,
 } from "@harness/shared/workflow-presets";
@@ -119,23 +119,28 @@ async function writeOverride(key: string, patch: Partial<Row>): Promise<void> {
 // ── 三级作用域 ────────────────────────────────────────────────────────────
 // 任务显式选的 → 项目默认 → 全局默认 → 出厂推荐。每一级都可能指向一条被删掉或停用
 // 的条目，**那就往下落一级而不是报错**：一条起手式没了不该让「新建任务」也点不动。
+export async function workflowChain(projectId?: string | null): Promise<string[]> {
+  const chain: string[] = [];
+  if (projectId) {
+    const project = (await db.select().from(projects).where(eq(projects.id, projectId))).at(0);
+    if (project?.workflowId) chain.push(project.workflowId);
+  }
+  const global = (await getAppSettings()).defaultWorkflowId;
+  if (global) chain.push(global);
+  return chain;
+}
+
 export async function resolveWorkflowDef(opts: {
   explicitId?: string | null;
   projectId?: string | null;
 }): Promise<{ id: string; def: WorkflowDef }> {
-  const chain: (string | null | undefined)[] = [opts.explicitId];
-  if (opts.projectId) {
-    const project = (await db.select().from(projects).where(eq(projects.id, opts.projectId))).at(0);
-    chain.push(project?.workflowId);
-  }
-  chain.push((await getAppSettings()).defaultWorkflowId);
-  for (const candidate of chain) {
-    if (!candidate) continue;
-    const item = await findWorkflow(candidate);
-    // 显式选的即便停用了也照用（用户此刻就是要它）；被继承来的默认值则跳过停用项。
-    if (item && (!item.disabled || candidate === opts.explicitId)) return { id: item.id, def: item.def };
-  }
-  const fallback = await findWorkflow(DEFAULT_WORKFLOW_KEY);
+  const items = await listWorkflows();
+  // 挑选规矩本身在 shared 里（resolveWorkflowFromList），前端的新建面板用的是同一份，
+  // 这样「面板上说会走哪条」和「真建出来走了哪条」不可能各说各话。
+  const chain = [opts.explicitId, ...(await workflowChain(opts.projectId))];
+  const hit = resolveWorkflowFromList(items, chain, opts.explicitId);
+  if (hit) return { id: hit.id, def: hit.def };
+  const fallback = items.find((item) => item.id === DEFAULT_WORKFLOW_KEY);
   return { id: DEFAULT_WORKFLOW_KEY, def: fallback?.def ?? builtinWorkflowDef(DEFAULT_WORKFLOW_KEY)! };
 }
 

@@ -435,3 +435,138 @@
 }
 
 .wf-picker { max-width: 320px; }
+
+/* ── 收起态的线：一排站名 + 常驻虚线 ＋ ─────────────────────────── */
+/* 高度对齐「执行模式」那一节的一行下拉框：不点开就不占地方。 */
+.wf-mini {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: 8px 10px;
+  border-radius: 12px;
+  background: var(--subtle-bg);
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+.wf-mini-stop {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--panel);
+  box-shadow: inset 0 0 0 1px var(--line);
+  font-size: 12px;
+  color: var(--text);
+  white-space: nowrap;
+}
+.wf-mini-del {
+  display: inline-flex;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--faint);
+  font-size: 10px;
+  line-height: 1;
+  cursor: pointer;
+}
+.wf-mini-del:hover { color: var(--red); }
+.wf-mini-slot { position: relative; display: inline-flex; }
+.wf-mini-gap { width: 16px; height: 0; border-top: 1px dashed var(--line-strong, var(--line)); }
+.wf-mini-add {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 1px dashed var(--line-strong, var(--line));
+  border-radius: 999px;
+  background: none;
+  color: var(--faint);
+  cursor: pointer;
+}
+.wf-mini-add:hover { border-style: solid; border-color: var(--accent); color: var(--accent); }
+/* 收起态贴着面板底部时，菜单往上开，免得被裁掉。 */
+.wf-pop-up { top: auto; bottom: calc(100% + 6px); }
+
+/* ── 新建任务面板里的「干完之后」 ─────────────────────────────── */
+.composer-config-section.is-workflow { display: flex; flex-direction: column; gap: 10px; }
+.composer-wf-grow {
+  margin-left: auto;
+  padding: 4px 10px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--subtle-bg);
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+.composer-wf-grow:hover { color: var(--accent); background: var(--accent-soft); }
+.composer-wf-pick { display: flex; align-items: center; gap: 12px; }
+.composer-wf-label {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.composer-wf-label em {
+  font-style: normal;
+  font-size: 11px;
+  color: var(--faint);
+}
+.composer-wf-label em[data-own="yes"] { color: var(--accent); }
+.composer-wf-selwrap { position: relative; flex: 1; min-width: 0; }
+.composer-wf-sel {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--subtle-bg);
+  box-shadow: inset 0 0 0 1px var(--line);
+  color: var(--text);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+.composer-wf-sel:hover { box-shadow: inset 0 0 0 1px var(--accent); }
+.composer-wf-menu { left: 0; transform: none; max-width: min(360px, 100%); }
+.composer-wf-fork {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  border-radius: 10px;
+  background: var(--accent-soft);
+  font-size: 12px;
+  color: var(--muted);
+}
+.composer-wf-fork b { margin-right: 6px; color: var(--accent); font-weight: 560; }
+.composer-wf-forkops { display: inline-flex; gap: 6px; margin-left: auto; }
+.composer-wf-forkops button {
+  padding: 3px 9px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+}
+.composer-wf-forkops button:hover { color: var(--accent); }
+.composer-wf-field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+.composer-wf-field input {
+  padding: 6px 9px;
+  border-radius: 9px;
+  border: 0;
+  background: var(--subtle-bg);
+  box-shadow: inset 0 0 0 1px var(--line);
+  color: var(--text);
+  font-size: 13px;
+}
+.composer-wf-check { display: flex; align-items: center; gap: 7px; margin-top: 9px; font-size: 12px; color: var(--muted); }
+.composer-wf-rail { margin-top: 2px; }

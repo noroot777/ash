@@ -335,3 +335,23 @@ export interface WorkflowItem {
   disabled: boolean;
   updatedAt: string | null;
 }
+
+// 三级作用域的挑选规矩：任务显式选的 → 项目默认 → 全局默认 → 出厂推荐。
+// 这一份是**唯一一份**：服务端建任务时用它，前端在新建面板上预览「这次会走哪条线」
+// 也用它。分两处写迟早会漂移成「面板上显示 A、建出来是 B」。
+//
+// 每一级都可能指向一条被删掉或停用的条目，那就往下落一级而不是报错；唯独**显式选的
+// 那条即使停用了也照用** —— 用户此刻就是要它。
+export function resolveWorkflowFromList(
+  items: WorkflowItem[],
+  chain: (string | null | undefined)[],
+  explicitId?: string | null,
+): WorkflowItem | null {
+  const byId = new Map(items.map((item) => [item.id, item] as const));
+  for (const candidate of chain) {
+    if (!candidate) continue;
+    const item = byId.get(candidate);
+    if (item && (!item.disabled || candidate === explicitId)) return item;
+  }
+  return null;
+}

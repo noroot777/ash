@@ -261,7 +261,13 @@ export const api = {
   tasks: (): Promise<Task[]> => request("/tasks"),
   task: (taskId: string): Promise<Task> => request(`/tasks/${id(taskId)}`),
   createTask: (
-    task: Partial<Task> & { projectId: string; title: string; attachments?: string[] },
+    task: Partial<Task> & {
+      projectId: string;
+      title: string;
+      attachments?: string[];
+      // 挑哪条起手式；task.workflow 非空时它已经是就地改过的快照，服务端直接落库
+      workflowId?: string | null;
+    },
   ): Promise<Task> => request("/tasks", json("POST", task)),
   patchTask: (taskId: string, patch: Partial<Task>): Promise<Task> =>
     request(`/tasks/${id(taskId)}`, json("PATCH", patch)),

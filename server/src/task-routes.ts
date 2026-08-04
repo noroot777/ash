@@ -1,6 +1,7 @@
 import type { AgentType, BatchCreateTasksBody, BatchTaskInput, Group, Task, TaskStatus, TaskWorkspaceDiscardResult } from "@harness/shared";
 import { AGENT_TYPES, isUserSettableStatus } from "@harness/shared";
 import { inheritExecutorOverrides, pickExecutor, sameExecutor } from "@harness/shared/executors";
+import { normalizeWorkflowDef } from "@harness/shared/workflow";
 import { asc, eq } from "drizzle-orm";
 import type { Hono } from "hono";
 import { db } from "./db/index.js";
@@ -42,6 +43,14 @@ api.post("/tasks", async (c) => {
     appendToQueue?: string; // 可选:把新任务追加到指定 queue 的尾部
     workflowId?: string | null; // 挑哪条起手式;省略则按项目→全局默认解析
   }>();
+  // 新建面板允许**就地改这条线**（挑一个起手式再动两下），改完的那份直接随任务提交，
+  // 不用先在库里存一条。收下来的仍然只是一份快照,跟 workflowId 那条路殊途同归。
+  let inlineWorkflow: string | null = null;
+  if (b.workflow !== undefined && b.workflow !== null) {
+    const parsed = normalizeWorkflowDef(b.workflow);
+    if ("error" in parsed) return c.json({ error: `workflow 不合法:${parsed.error}` }, 400);
+    inlineWorkflow = JSON.stringify(parsed.def);
+  }
   const derivationMode = b.mode === "team" || b.mode === "debate";
   if (derivationMode && b.parentId !== undefined && b.parentId !== null) {
     return c.json(
@@ -137,8 +146,10 @@ api.post("/tasks", async (c) => {
     useWorktree: b.useWorktree,
     worktreeBase: b.worktreeBase ?? null,
     originTaskId: b.originTaskId ?? null,
-    // createTasks 把它换成 tasks.workflow 里的快照（起手式是快照不是引用）
+    // createTasks 把它换成 tasks.workflow 里的快照（起手式是快照不是引用）。
+    // 就地改过的线已经是快照了,直接落 workflow,createTasks 不会再去库里查。
     workflowId: b.workflowId ?? null,
+    workflow: inlineWorkflow,
   };
   // 可选:追加到现有 queue 的尾部。要求:queue 已存在,且新 task 跟
   // queue 已有任务的 groupId 一致(违反就 400,不静默)。
