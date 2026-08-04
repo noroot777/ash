@@ -570,3 +570,58 @@
 }
 .composer-wf-check { display: flex; align-items: center; gap: 7px; margin-top: 9px; font-size: 12px; color: var(--muted); }
 .composer-wf-rail { margin-top: 2px; }
+
+/* ── Inspector 里的竖版线路 ───────────────────────────────────── */
+/* 340px 的窄栏里，竖着排比横着装得下更多：每一站有一整行的宽度。 */
+.wf-vrail { display: flex; flex-direction: column; margin: 0; padding: 0; list-style: none; }
+.wf-vst { position: relative; display: grid; grid-template-columns: 18px minmax(0, 1fr); gap: 8px; padding: 0 0 12px; }
+/* 站与站之间那根竖线：长在圆点下面，最后一站不画。 */
+.wf-vst::before {
+  content: "";
+  position: absolute;
+  top: 17px;
+  bottom: 0;
+  left: 8px;
+  width: 1px;
+  background: var(--line);
+}
+.wf-vst:last-child { padding-bottom: 0; }
+.wf-vst:last-child::before { display: none; }
+.wf-vst[data-state="done"]::before { background: color-mix(in srgb, var(--accent) 46%, transparent); }
+.wf-vpin {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 17px;
+  height: 17px;
+  border-radius: 999px;
+  background: var(--raised);
+  box-shadow: inset 0 0 0 1px var(--line);
+  color: var(--faint);
+  font-size: 9px;
+  line-height: 1;
+}
+.wf-vst[data-state="done"] .wf-vpin { background: var(--accent); box-shadow: none; color: var(--on-accent, #fff); }
+.wf-vst[data-state="current"] .wf-vpin { box-shadow: inset 0 0 0 1px var(--accent), 0 0 0 3px var(--accent-soft); color: var(--accent); }
+.wf-vst[data-state="blocked"] .wf-vpin { box-shadow: inset 0 0 0 1px var(--red); color: var(--red); }
+.wf-vbody { min-width: 0; padding-top: 1px; }
+.wf-vhead { display: flex; align-items: baseline; gap: 6px; }
+.wf-vhead b { color: var(--ink); font-size: 11.5px; font-weight: 600; }
+.wf-vword { margin-left: auto; color: var(--faint); font-size: 9.5px; white-space: nowrap; }
+.wf-vst[data-state="current"] .wf-vword { color: var(--accent); }
+.wf-vst[data-state="blocked"] .wf-vword { color: var(--red); }
+.wf-vst[data-state="pending"] .wf-vhead b { color: var(--muted); font-weight: 500; }
+.wf-vchips { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 4px; }
+.wf-vchips em {
+  border-radius: 999px;
+  background: var(--raised);
+  padding: 1px 6px;
+  color: var(--muted);
+  font-size: 9.5px;
+  font-style: normal;
+}
+.wf-vchips em[data-warn="true"] { background: color-mix(in srgb, var(--red) 12%, transparent); color: var(--red); }
+.wf-vfail { display: flex; align-items: center; gap: 3px; margin-top: 4px; color: var(--faint); font-size: 9.5px; }
+.wf-vnote { margin: 4px 0 0; color: var(--faint); font-size: 9.5px; line-height: 1.5; }
+.wf-vgate { margin-top: 7px; }
+.wf-vgate .team-accept-actions { flex-wrap: wrap; }
