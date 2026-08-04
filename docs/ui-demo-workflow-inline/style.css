@@ -79,14 +79,30 @@ a{color:var(--accent)}
 .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(178px,1fr));gap:12px 14px}
 
 /* ── 「干完之后」这一节 ───────────────────────────────── */
-.shd .src,.shd .grow{
+.shd .grow{
+  margin-left:auto;
   height:22px;padding:0 9px;border-radius:7px;font-size:10.5px;color:var(--muted);
   box-shadow:inset 0 0 0 1px var(--line);background:var(--panel);
   transition:box-shadow .3s var(--ease),color .3s var(--ease),background .3s var(--ease);
 }
-.shd .src{margin-left:auto}
-.shd .src:hover,.shd .grow:hover{color:var(--ink);background:var(--raised);box-shadow:inset 0 0 0 1px var(--line2)}
-.shd .src[data-own="true"]{color:var(--accent);background:var(--accent-soft);box-shadow:inset 0 0 0 1px transparent}
+.shd .grow:hover{color:var(--ink);background:var(--raised);box-shadow:inset 0 0 0 1px var(--line2)}
+
+/* 起手式：故意做成和「执行器」一模一样的大下拉 —— 挑起手式是这一节的正门，
+   藏成一颗角落里的小胶囊，用户根本不会去点。 */
+.fld.wf{margin-bottom:9px}
+.fld.wf>span{display:flex;align-items:center}
+.fld.wf .src{margin-left:auto;font-style:normal;font-weight:400;font-size:10px;color:var(--faint)}
+.fld.wf .src[data-own="true"]{color:var(--accent)}
+.sel.big{width:100%;height:38px;gap:9px;text-align:left;
+  transition:box-shadow .25s var(--ease),background .25s var(--ease)}
+.sel.big:hover{box-shadow:inset 0 0 0 1px var(--line2);background:var(--raised)}
+.sel.big[aria-expanded="true"]{box-shadow:inset 0 0 0 1.5px var(--accent)}
+.sel.big b{font-size:12.5px;font-weight:550;flex:none}
+.sel.big .dots{display:flex;gap:2.5px;flex:none}
+.sel.big .dots u{width:5.5px;height:5.5px;border-radius:50%;display:block}
+.sel.big small{color:var(--faint);font-size:10.5px;overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.sel.big em{font-size:10px}
 
 /* 收起态：一排站名胶囊，中间常驻虚线 ＋，总高 30px */
 .rail{
@@ -165,7 +181,7 @@ a{color:var(--accent)}
 .pft .go:active{transform:scale(.98)}
 
 /* ── 微菜单 ───────────────────────────────────────────── */
-.pop{position:fixed;z-index:60;min-width:206px;max-width:290px;border-radius:11px;
+.pop{position:fixed;z-index:60;min-width:206px;max-width:420px;border-radius:11px;
   background:var(--panel);box-shadow:0 0 0 1px var(--line),lch(0 0 0/.14) 0 10px 34px;
   padding:6px;animation:pin .22s var(--ease) both}
 @keyframes pin{from{opacity:0;transform:translateY(-5px) scale(.98)}to{opacity:1;transform:none}}
@@ -173,7 +189,7 @@ a{color:var(--accent)}
   letter-spacing:.06em;display:flex;align-items:center;gap:6px}
 .pop h3 .back{margin-right:2px;color:var(--accent);font-size:10px}
 .pop .opt{display:flex;align-items:center;gap:8px;width:100%;padding:6px 8px;border-radius:8px;
-  font-size:12px;text-align:left;transition:background .2s var(--ease)}
+  font-size:12px;text-align:left;white-space:nowrap;transition:background .2s var(--ease)}
 .pop .opt:hover{background:var(--hover)}
 .pop .opt>i{width:11px;font-style:normal;color:var(--accent);font-size:10px;opacity:0;flex:none}
 .pop .opt[data-on="true"]>i{opacity:1}
@@ -182,7 +198,7 @@ a{color:var(--accent)}
 /* 起手式那几条：名字后面跟一串站台颜色点，不读描述也能看出这条线有几站 */
 .pop .opt .dots{display:flex;gap:2px;margin-left:6px}
 .pop .opt .dots u{width:5px;height:5px;border-radius:50%;display:block}
-.pop .opt.tpl .sub{max-width:118px;overflow:hidden;text-overflow:ellipsis}
+.pop .opt.tpl .sub{min-width:0;overflow:hidden;text-overflow:ellipsis}
 .pop .cell{display:flex;align-items:center;gap:8px;width:100%;padding:6px 8px;border-radius:8px;
   font-size:11.5px;text-align:left;color:var(--muted);transition:background .2s var(--ease)}
 .pop .cell:hover{background:var(--hover)}
