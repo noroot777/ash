@@ -196,6 +196,38 @@ try {
   assert.equal(timedConversation[2].kind === "agent" ? timedConversation[2].at : null, "2026-07-30T01:01:00.000Z");
   assert.equal(timedConversation[2].kind === "agent" ? timedConversation[2].endedAt : null, "2026-07-30T01:03:00.000Z");
 
+  const resumedPrimary = {
+    ...session,
+    id: "primary-session",
+    executor: "claude@local",
+    startedAt: "2026-07-30T01:00:00.000Z",
+    turnStartedAt: "2026-07-30T01:10:00.000Z",
+    endedAt: null,
+  };
+  const mentionedAgent = {
+    ...session,
+    id: "mentioned-session",
+    executor: "codex@local",
+    startedAt: "2026-07-30T01:05:00.000Z",
+    turnStartedAt: "2026-07-30T01:05:00.000Z",
+    endedAt: "2026-07-30T01:09:00.000Z",
+  };
+  const resumedAfterMention = buildConversationItems(
+    [
+      { session: resumedPrimary, output: "旧 Claude 回合。" },
+      { session: mentionedAgent, output: "Codex 已完成。" },
+    ],
+    [resumedPrimary, mentionedAgent],
+    [
+      { kind: "user", id: "resume-primary", text: "继续处理", attachments: [], at: resumedPrimary.turnStartedAt },
+      { kind: "server", id: "primary-tool", event: { type: "agent.event", taskId: "task-1", sessionId: resumedPrimary.id, role: "single", agentType: "claude", event: { kind: "tool", name: "Read" } } },
+    ],
+  );
+  const primaryTurns = resumedAfterMention.filter((item) => item.kind === "agent" && item.sessionId === resumedPrimary.id);
+  assert.equal(primaryTurns[0]?.endedAt, mentionedAgent.startedAt);
+  assert.equal(primaryTurns.at(-1)?.at, resumedPrimary.turnStartedAt);
+  assert.equal(primaryTurns.at(-1)?.endedAt, null);
+
   const recycleNote = "〔系统〕调度台空闲超过 30 分钟,进程已回收(待命)。";
   const recycleAt = "2026-07-30T01:30:00.000Z";
   const dedupedRefresh = buildConversationItems(

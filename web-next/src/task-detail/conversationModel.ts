@@ -43,6 +43,11 @@ export type PersistedConversation = { session: Session; output: string; trace?: 
 type ConversationEventItem = Extract<ConversationItem, { kind: "event" }>;
 type AgentTraceEvent = Extract<AgentEvent, { kind: "thinking" | "tool" | "error" }>;
 type PersistedTurnTimes = Map<string, number[]>;
+type SessionRunBounds = {
+  endedAt: string | null;
+  nextStartedAt: string | null;
+  turnStartedAt: string | null;
+};
 
 const SNAPSHOT_DUPLICATE_WINDOW_MS = 30_000;
 const compactTurnText = (text: string) => text.replace(/\s+/g, "");
@@ -238,6 +243,23 @@ function appendEvent(items: ConversationItem[], item: ConversationEventItem): vo
   items.push(item);
 }
 
+function inferredRunEnd(itemAt: string | null | undefined, bounds?: SessionRunBounds): string | null {
+  if (!bounds) return null;
+  if (bounds.endedAt) return bounds.endedAt;
+  // A reusable session can resume after another @-mentioned agent opened a
+  // later session. Its current turn must stay live; the later session start is
+  // only a safe legacy end fallback for older turns on this session row.
+  const itemTime = itemAt ? Date.parse(itemAt) : Number.NaN;
+  const turnTime = bounds.turnStartedAt ? Date.parse(bounds.turnStartedAt) : Number.NaN;
+  if (Number.isFinite(itemTime) && Number.isFinite(turnTime) && itemTime >= turnTime) return null;
+  return bounds.nextStartedAt;
+}
+
+function latestTurnStart(session: Session): string | null {
+  if (!("turnStartedAt" in session)) return null;
+  return typeof session.turnStartedAt === "string" ? session.turnStartedAt : null;
+}
+
 export function buildConversationItems(
   persisted: PersistedConversation[],
   sessions: Session[],
@@ -351,9 +373,13 @@ export function buildConversationItems(
   }
 
   const orderedSessions = [...sessions].sort((left, right) => left.startedAt.localeCompare(right.startedAt));
-  const runEnds = new Map<string, string | null>();
+  const runBounds = new Map<string, SessionRunBounds>();
   orderedSessions.forEach((session, index) => {
-    runEnds.set(session.id, session.endedAt ?? orderedSessions[index + 1]?.startedAt ?? null);
+    runBounds.set(session.id, {
+      endedAt: session.endedAt,
+      nextStartedAt: orderedSessions[index + 1]?.startedAt ?? null,
+      turnStartedAt: latestTurnStart(session),
+    });
   });
 
   let previousInterjectionAt: string | null = null;
@@ -378,7 +404,9 @@ export function buildConversationItems(
       nextInterjectionAt = null;
       rightSessionId = item.sessionId;
     }
-    item.endedAt = item.markerEndedAt ?? nextInterjectionAt ?? runEnds.get(item.sessionId) ?? null;
+    item.endedAt = item.markerEndedAt
+      ?? nextInterjectionAt
+      ?? inferredRunEnd(item.at, runBounds.get(item.sessionId));
   }
 
   const sessionMetaSeen = new Set<string>();
