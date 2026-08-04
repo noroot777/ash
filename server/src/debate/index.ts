@@ -66,6 +66,20 @@ function recordGateEvent(event: Extract<ServerEvent, { type: "debate.gate" }>) {
   bus.publish(event);
 }
 
+// A turn can stay silent for a long time before its first text event. Persisting
+// the start signal lets a refreshed/reconnected page still show which debater is
+// actually running instead of guessing that the debate is between turns.
+function recordTurnStart(event: Extract<ServerEvent, { type: "debate.progress" }> & { phase: "start" }) {
+  try {
+    const runDir = join(RUNS_DIR, event.taskId);
+    mkdirSync(runDir, { recursive: true });
+    appendFileSync(join(runDir, "transcript.jsonl"), JSON.stringify(event) + "\n");
+  } catch {
+    /* best effort */
+  }
+  bus.publish(event);
+}
+
 interface Turn {
   rowId: string;
   cliId: string;
@@ -140,7 +154,7 @@ async function runTurn(args: {
       .where(eq(sessions.id, rowId));
   }
 
-  bus.publish({ type: "debate.progress", taskId, round, speaker, phase: "start", startedAt: turnStart });
+  recordTurnStart({ type: "debate.progress", taskId, round, speaker, phase: "start", startedAt: turnStart });
 
   const runDir = join(RUNS_DIR, taskId);
   mkdirSync(runDir, { recursive: true });
@@ -331,12 +345,14 @@ export async function resumeDebate(taskId: string): Promise<void> {
     const tpath = join(RUNS_DIR, taskId, "transcript.jsonl");
     let rows: any[] = [];
     try { rows = readFileSync(tpath, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)); } catch { /* none */ }
-    if (!rows.length) { running.delete(taskId); return void runDebate(taskId); } // nothing to resume → fresh
-    const failedTurn = rows[rows.length - 1];
-    rows = rows.slice(0, -1); // drop the failed turn; it will be re-run
+    const failedIndex = rows.findLastIndex((row) =>
+      !row.type && ["A", "B", "impl", "review"].includes(row.speaker));
+    if (failedIndex < 0) { running.delete(taskId); return void runDebate(taskId); } // no completed turn → fresh
+    const failedTurn = rows[failedIndex];
+    rows.splice(failedIndex, 1); // drop the failed turn; it will be re-run
     writeFileSync(tpath, rows.length ? rows.map((r) => JSON.stringify(r)).join("\n") + "\n" : "");
 
-    const lastOf = (sp: string) => [...rows].reverse().find((r) => r.speaker === sp);
+    const lastOf = (sp: string) => [...rows].reverse().find((r) => r.type !== "debate.progress" && r.speaker === sp);
     const ra = lastOf("A");
     const rb = lastOf("B");
     const ctx: Ctx = {
@@ -445,7 +461,7 @@ export async function resumeAtGate(taskId: string, action: GateAction): Promise<
 
     let rows: any[] = [];
     try { rows = readFileSync(join(RUNS_DIR, taskId, "transcript.jsonl"), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)); } catch { /* none */ }
-    const lastOf = (sp: string) => [...rows].reverse().find((r) => r.speaker === sp);
+    const lastOf = (sp: string) => [...rows].reverse().find((r) => r.type !== "debate.progress" && r.speaker === sp);
     const ra = lastOf("A");
     const rb = lastOf("B");
     const debateRounds = rows.filter((r) => r.speaker === "A" || r.speaker === "B").map((r) => r.round);

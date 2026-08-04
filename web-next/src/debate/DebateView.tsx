@@ -34,7 +34,7 @@ import { DebateGateControls, DebateProgressBar } from "./DebateControls.tsx";
 import { DebateHandoffBar, DebateHandoffModal, type HandoffChoice } from "./DebateHandoff.tsx";
 import { buildDebateHandoffBody, latestDebateGate } from "./debateHandoff.ts";
 import { isOpenDebateGate, runCreatedHandoffFollowUps, teamDebateIterationState } from "./handoffPolicy.ts";
-import type { DebateTurn } from "./debateState.ts";
+import { latestActiveDebateTurn, type DebateTurn } from "./debateState.ts";
 import { useDebate } from "./useDebate.ts";
 
 function timeMs(value?: string | null): number {
@@ -149,7 +149,12 @@ export function DebateView({
   }, [task.id]);
   useEffect(() => { void api.sessions(task.id).then(setSessions).catch(() => setSessions([])); }, [task.id, task.status]);
   const sessionsByRole = useMemo(() => latestByRole(sessions), [sessions]);
-  const turns = debate.state.turns;
+  // An unmatched persisted start means "active" only while the task itself is
+  // running. After a server interruption the task becomes failed; hiding that
+  // orphan prevents a stale thinking bubble from claiming the process survived.
+  const turns = task.status === "running"
+    ? debate.state.turns
+    : debate.state.turns.filter((turn) => turn.done);
   const currentRound = turns.reduce((max, turn) => Math.max(max, turn.round), 0);
   const gate = debate.state.gate ?? latestDebateGate(turns, task.status === "awaiting_review");
   const gateOpen = isOpenDebateGate(gate, task.status);
@@ -160,6 +165,7 @@ export function DebateView({
   const indicator = indicatorForTask(task);
   const action = actionFor(task);
   const lastTurn = turns.at(-1);
+  const activeTurn = latestActiveDebateTurn(turns);
   const activityPhase = runActivityPhase(
     task.status,
     !lastTurn ? "empty" : lastTurn.speaker === "user" ? "user" : lastTurn.done ? "agent-ended" : "agent-active",
@@ -341,7 +347,18 @@ export function DebateView({
               />
             ))}
             {activityPhase === "replying" && turns.length > 0 && <RunActivity status={task.status} mode={task.mode} phase={activityPhase} queuePosition={task.queuePosition} />}
-            {task.status === "running" && turns.length > 0 && turns.at(-1)?.done && activityPhase !== "replying" && <p className="debate-between"><TypingDots />正在准备下一次发言…</p>}
+            {task.status === "running" && turns.length > 0 && lastTurn?.done && activityPhase !== "replying" && (activeTurn
+              ? <RunActivity
+                  status={task.status}
+                  mode={task.mode}
+                  phase="continuing"
+                  queuePosition={task.queuePosition}
+                  copy={{
+                    title: `辩手 ${activeTurn.speaker} 正在发言`,
+                    detail: "该辩手已经开始本轮执行；新的输出或完成结果会自动显示在这里。",
+                  }}
+                />
+              : <p className="debate-between"><TypingDots />正在准备下一次发言…</p>)}
             {task.status === "failed" && <p className="debate-terminal is-error">本次辩论失败并停止</p>}
             {task.status === "canceled" && <p className="debate-terminal">辩论已取消</p>}
           </div>

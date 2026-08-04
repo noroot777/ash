@@ -27,12 +27,18 @@ export type DebateGate = {
 
 export type DebateState = { turns: DebateTurn[]; gate: DebateGate | null };
 export type PersistedDebateTurn = Omit<DebateTurn, "tools" | "done" | "raised"> & { raised?: boolean };
-export type PersistedDebateEntry = PersistedDebateTurn | Extract<ServerEvent, { type: "debate.gate" }>;
+export type PersistedDebateEntry =
+  | PersistedDebateTurn
+  | Extract<ServerEvent, { type: "debate.gate" | "debate.progress" }>;
 
 export const emptyDebate = (): DebateState => ({ turns: [], gate: null });
 
 function isPersistedGate(entry: PersistedDebateEntry): entry is Extract<ServerEvent, { type: "debate.gate" }> {
   return (entry as { type?: string }).type === "debate.gate";
+}
+
+function isPersistedProgress(entry: PersistedDebateEntry): entry is Extract<ServerEvent, { type: "debate.progress" }> {
+  return (entry as { type?: string }).type === "debate.progress";
 }
 
 function speakerOf(role: string): DebateSpeaker {
@@ -45,9 +51,16 @@ function speakerOf(role: string): DebateSpeaker {
 export function applyDebateEvent(state: DebateState, event: ServerEvent): DebateState {
   if (event.type === "debate.progress") {
     if (event.phase === "start") {
+      const turns = [...state.turns];
+      for (let index = turns.length - 1; index >= 0; index -= 1) {
+        const turn = turns[index]!;
+        if (turn.round !== event.round || turn.speaker !== event.speaker || turn.done) continue;
+        turns[index] = { ...turn, startedAt: event.startedAt ?? event.at ?? turn.startedAt };
+        return { ...state, turns };
+      }
       return {
         ...state,
-        turns: [...state.turns, {
+        turns: [...turns, {
           round: event.round,
           speaker: event.speaker,
           text: "",
@@ -120,11 +133,30 @@ export function applyDebateEvent(state: DebateState, event: ServerEvent): Debate
   return state;
 }
 
+export function latestActiveDebateTurn(turns: DebateTurn[]): DebateTurn | null {
+  return [...turns].reverse().find((turn) =>
+    !turn.done && (turn.speaker === "A" || turn.speaker === "B"),
+  ) ?? null;
+}
+
 export function rebuildDebateState(entries: PersistedDebateEntry[]): DebateState {
   let state = emptyDebate();
   for (const entry of entries) {
     if (isPersistedGate(entry)) state = applyDebateEvent(state, entry);
-    else state = { ...state, turns: [...state.turns, { ...entry, raised: !!entry.raised, tools: [], done: true }] };
+    else if (isPersistedProgress(entry)) state = applyDebateEvent(state, entry);
+    else {
+      const completed: DebateTurn = { ...entry, raised: !!entry.raised, tools: [], done: true };
+      const turns = [...state.turns];
+      let replaced = false;
+      for (let index = turns.length - 1; index >= 0; index -= 1) {
+        const turn = turns[index]!;
+        if (turn.round !== completed.round || turn.speaker !== completed.speaker || turn.done) continue;
+        turns[index] = completed;
+        replaced = true;
+        break;
+      }
+      state = { ...state, turns: replaced ? turns : [...turns, completed] };
+    }
   }
   return state;
 }
