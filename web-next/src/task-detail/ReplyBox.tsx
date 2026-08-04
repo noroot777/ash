@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { AgentExecutorProfile, AgentType, Task } from "@harness/shared";
+import { sameExecutor } from "@harness/shared/executors";
 import { ArrowUp, CaretDown, Clock, Robot, SpinnerGap, X } from "@phosphor-icons/react";
 import {
   ScheduledMessageTray,
@@ -7,12 +8,13 @@ import {
   useScheduledMessages,
 } from "../components/ScheduledMessages.tsx";
 import { defaultOnceTime } from "../components/ScheduleControl.tsx";
+import { EffortPicker } from "../components/EffortPicker.tsx";
 import { executorRunSummary, registeredAgentTypes } from "../lib/agentAvailability.ts";
 import { api, type ReplyTaskResult } from "../lib/api.ts";
 import { useProviders } from "../lib/modelCatalog.ts";
 import { AgentModelPicker } from "./AgentModelPicker.tsx";
 import { AttachmentPicker, UploadAttachmentList, useAttachments } from "./Attachments.tsx";
-import type { MentionTarget } from "./mentionPicker.ts";
+import type { AgentModelSelection, MentionTarget } from "./mentionPicker.ts";
 
 export function ReplyBox({
   task,
@@ -172,10 +174,35 @@ export function ReplyBox({
     setPicker({ stage: "model", agent });
   };
 
-  const commitTarget = (next: MentionTarget) => {
-    setTarget(next);
+  // 选完智能体和模型：执行器没换就把已选的思考强度留着（用户只是换了个模型），
+  // 换了执行器才清成「跟随」——旧档位在新 CLI 上多半根本不存在。
+  const commitTarget = (next: AgentModelSelection) => {
+    setTarget((current) => {
+      const previous = {
+        agentType: current?.agent ?? activeAgent,
+        executorId: current ? current.executorId : task.executorId ?? null,
+      };
+      const kept = current ? current.reasoningEffort : task.reasoningEffort ?? null;
+      return {
+        ...next,
+        reasoningEffort: sameExecutor({ agentType: next.agent, executorId: next.executorId }, previous)
+          ? kept
+          : null,
+      };
+    });
     setPicker(null);
     textareaRef.current?.focus();
+  };
+
+  // 只改思考强度也算「本回合这么跑」：没召唤过就以任务当前配置为底稿建一份覆盖，
+  // 免得用户点了档位却什么都没发生。
+  const commitEffort = (effort: string) => {
+    setTarget((current) => ({
+      agent: current?.agent ?? activeAgent,
+      executorId: current ? current.executorId : task.executorId ?? null,
+      model: current ? current.model : task.model ?? null,
+      reasoningEffort: effort || null,
+    }));
   };
 
   const send = async (scheduledAt?: string) => {
@@ -269,6 +296,7 @@ export function ReplyBox({
           providers={providers}
           initialStage={picker.stage}
           initialAgent={picker.agent}
+          currentExecutorId={activeExecutorId}
           triggerRef={chipRef}
           onCommit={commitTarget}
           onCancel={() => {
@@ -393,15 +421,23 @@ export function ReplyBox({
             type="button"
             className={`task-reply-chip${target ? " is-summoned" : ""}`}
             disabled={disabled || sending || commandActive}
-            aria-label={`当前智能体 ${activeAgent}${activeModel ? `，模型 ${activeModel}` : ""}${activeEffort ? `，思考强度 ${activeEffort}` : ""}；点击更改`}
+            aria-label={`当前智能体 ${activeAgent}${activeModel ? `，模型 ${activeModel}` : ""}；点击更改`}
             onClick={() => setPicker((open) => (open ? null : { stage: "agent", agent: activeAgent }))}
           >
             <Robot size={12} aria-hidden="true" />
             <b>{activeAgent}</b>
             <span>{activeModel ?? "跟随执行器"}</span>
-            {activeEffort && <em>{activeEffort}</em>}
             <CaretDown size={9} weight="bold" aria-hidden="true" />
           </button>
+          {/* 思考强度是并排的第二颗胶囊：只想调档位时不必重走一遍选模型。 */}
+          <EffortPicker
+            type={activeAgent}
+            model={activeModel}
+            value={activeEffort ?? ""}
+            variant="chip"
+            disabled={disabled || sending || commandActive}
+            onChange={commitEffort}
+          />
           {target && (
             <button
               type="button"

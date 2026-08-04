@@ -562,7 +562,7 @@
 .review-inspector__dispatch { border-bottom: 0.5px solid var(--line); background: color-mix(in lch,var(--panel) 80%,var(--canvas)); padding: 12px 14px; }
 .review-inspector__dispatch > p { margin: 0 0 9px; color: var(--faint); font-size: 9.5px; line-height: 1.5; }
 .review-inspector__fields { display: grid; gap: 8px; }
-.review-inspector__fields label { display: grid; gap: 4px; }
+.review-inspector__fields label { display: grid; min-width: 0; grid-template-columns: minmax(0, 1fr); gap: 4px; }
 .review-inspector__fields label > span { color: var(--faint); font-size: 9.5px; }
 .review-inspector__fields input, .review-inspector__fields select { width: 100%; height: 30px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); padding: 0 8px; color: var(--muted); font-size: 10.5px; outline: 0; }
 .review-inspector__fields input:focus, .review-inspector__fields select:focus { border-color: var(--accent); }

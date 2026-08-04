@@ -139,17 +139,25 @@ type GroupSeed = {
 /**
  * 分块骨架：不含任何异步结果，纯粹由「注册了哪些 Profile / 挂了哪些供应商」决定。
  * 抽出来是为了让 hook 的依赖是这份稳定的骨架，而不是每次渲染新建的数组。
+ *
+ * 排序上**当前生效的执行器所挂的供应商排第一块**（`currentExecutorId`，没传就退回
+ * 默认 Profile）：打开选模型时想换的九成是同一家的另一个模型，把它排在第一屏能省掉
+ * 一次翻找；排第二的仍是默认 Profile 那块。
  */
 function groupSeeds(
   type: AgentType,
   profiles: AgentExecutorProfile[],
   providers: LlmProvider[],
+  currentExecutorId: string | null,
 ): GroupSeed[] {
   const typeProfiles = profiles.filter((profile) => profile.type === type);
   const seeds: GroupSeed[] = [];
   const seen = new Set<string>();
-  // 默认 Profile 先排，于是它成为所在块的代表，也决定块的先后顺序。
-  const ordered = [...typeProfiles].sort((a, b) => Number(b.isDefault) - Number(a.isDefault));
+  // 当前执行器 > 默认 Profile > 其余：排在前面的 Profile 成为所在块的代表，
+  // 块的先后顺序也由此确定。
+  const rank = (profile: AgentExecutorProfile) =>
+    (profile.id === currentExecutorId ? 2 : 0) + (profile.isDefault ? 1 : 0);
+  const ordered = [...typeProfiles].sort((a, b) => rank(b) - rank(a));
   for (const profile of ordered) {
     const providerId = profile.providerId ?? null;
     const groupKey = providerId ?? "__cli";
@@ -205,10 +213,12 @@ export function useAgentModelCatalog(
   type: AgentType | null,
   profiles: AgentExecutorProfile[],
   providers: LlmProvider[],
+  /** 当前生效的执行器 id：它挂的供应商排第一块。 */
+  currentExecutorId: string | null = null,
 ): ModelGroup[] {
   const seeds = useMemo(
-    () => (type ? groupSeeds(type, profiles, providers) : []),
-    [type, profiles, providers],
+    () => (type ? groupSeeds(type, profiles, providers, currentExecutorId) : []),
+    [type, profiles, providers, currentExecutorId],
   );
   const [probes, setProbes] = useState<Record<string, { models?: string[]; error?: string }>>({});
 

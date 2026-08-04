@@ -5,17 +5,15 @@ import { sameExecutor } from "@harness/shared/executors";
 import { ArrowSquareOut, CaretRight, ListNumbers } from "@phosphor-icons/react";
 import { api } from "../lib/api.ts";
 import { Dropdown } from "../components/Dropdown.tsx";
+import { EffortPicker } from "../components/EffortPicker.tsx";
+import { ExecutorModelPicker } from "../components/ExecutorModelPicker.tsx";
 import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
-import { ModelCatalogSelect } from "../components/ModelCatalogField.tsx";
 import { ScheduleControl } from "../components/ScheduleControl.tsx";
 import { TaskLabelsEditor } from "../components/TaskLabelsEditor.tsx";
 import { taskParentLink } from "../components/TaskOrigin.tsx";
 import {
-  executorOptions,
-  executorValue,
   isExecutorPickable,
   nothingRunnable,
-  parseExecutorValue,
   teamExecutorCandidates,
   useAgentAvailability,
 } from "../lib/agentAvailability.ts";
@@ -186,13 +184,6 @@ export function TaskInspector({
   const executorTypes = task.mode === "team" ? leadTypes : workerTypes;
   const executorProfiles = task.mode === "team" ? leadProfiles : profiles;
   const executorSelection = { agentType, executorId: task.executorId ?? null };
-  const executorSelectValue = executorValue(executorSelection);
-  const options = executorOptions({
-    types: executorTypes,
-    profiles: executorProfiles,
-    selection: executorSelection,
-    knownProfiles: profiles,
-  });
   const pickableCount = executorTypes.length + executorProfiles.length;
   const noExecutor = profilesReady && nothingRunnable(profiles);
   const currentUnavailable = profilesReady
@@ -325,50 +316,45 @@ export function TaskInspector({
 
         <section>
           <h2>执行信息</h2>
-          <InspectorRow label="执行器">
-            <Dropdown
-              label="执行器"
-              value={pickableCount || options.length ? executorSelectValue : ""}
-              options={options.map((option) => ({
-                value: option.value,
-                label: option.label,
-                disabled: option.disabled,
-              }))}
-              disabled={readOnly || pickableCount === 0}
-              filterable={options.length > 6}
-              filterPlaceholder="筛选执行器…"
-              placeholder="暂无可用执行器"
-              emptyText="没有匹配的执行器"
-              onChange={(value) => {
-                const next = parseExecutorValue(value, profiles, executorSelection);
-                if (!isExecutorPickable(next, executorTypes, executorProfiles)) {
-                  notify("该执行器当前不可用，请改选已注册 Profile 或其类型默认");
-                  return;
-                }
-                const current = { agentType, executorId: task.executorId ?? null };
-                void patch({
-                  ...next,
-                  ...(sameExecutor(next, current) ? {} : { model: null, reasoningEffort: null }),
-                }, "执行器已更新，将从下一回合生效");
-              }}
-            />
-            {availabilityMessage && <p className="task-inspector-note">{availabilityMessage}</p>}
-          </InspectorRow>
-          <InspectorRow label="模型与思考强度">
-            <ModelCatalogSelect
-              value={task.model ?? ""}
-              type={agentType}
-              profiles={profiles}
-              disabled={readOnly}
-              effort={{
-                value: task.reasoningEffort ?? "",
-                onChange: (effort) => void patch(
+          <InspectorRow label="执行器与模型">
+            {/* 执行器和模型是一颗胶囊（换执行器就得重看有哪些模型），思考强度是并排
+                的另一颗——只想调档位时不必重走一遍选模型。 */}
+            <div className="model-effort-row">
+              <ExecutorModelPicker
+                label="执行器与模型"
+                types={executorTypes}
+                profiles={executorProfiles}
+                knownProfiles={profiles}
+                selection={executorSelection}
+                model={task.model ?? null}
+                disabled={readOnly || pickableCount === 0}
+                onCommit={(target) => {
+                  const next = { agentType: target.agent, executorId: target.executorId };
+                  if (!isExecutorPickable(next, executorTypes, executorProfiles)) {
+                    notify("该执行器当前不可用，请改选已注册 Profile 或其类型默认");
+                    return;
+                  }
+                  const same = sameExecutor(next, executorSelection);
+                  void patch({
+                    ...next,
+                    model: target.model,
+                    // 换了执行器才清强度：旧档位在新 CLI 上多半根本不存在。
+                    ...(same ? {} : { reasoningEffort: null }),
+                  }, same ? "模型已更新，将从下一回合生效" : "执行器已更新，将从下一回合生效");
+                }}
+              />
+              <EffortPicker
+                type={agentType}
+                model={task.model ?? null}
+                value={task.reasoningEffort ?? ""}
+                disabled={readOnly}
+                onChange={(effort) => void patch(
                   { reasoningEffort: effort || null },
                   "思考强度已更新，将从下一回合生效",
-                ),
-              }}
-              onChange={(model) => void patch({ model: model || null }, "模型设置已更新，将从下一回合生效")}
-            />
+                )}
+              />
+            </div>
+            {availabilityMessage && <p className="task-inspector-note">{availabilityMessage}</p>}
           </InspectorRow>
           <InspectorRow label="创建时间"><span>{formatInstant(task.createdAt)}</span></InspectorRow>
           {task.startedAt && <InspectorRow label="开始时间"><span>{formatInstant(task.startedAt)}</span></InspectorRow>}

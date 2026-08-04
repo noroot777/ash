@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { AgentExecutorProfile, LlmProvider } from "@harness/shared";
-import { normalizeReasoningEffort, reasoningEffortsFor } from "@harness/shared/cli-presets";
 import { Star, Trash } from "@phosphor-icons/react";
 import { Dropdown, type DropdownOption } from "../components/Dropdown.tsx";
+import { EffortPicker } from "../components/EffortPicker.tsx";
 import { api } from "../lib/api.ts";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import {
@@ -57,12 +57,6 @@ export function AgentProfileRow({
     }
     return rows;
   }, [protocol, provider, providerOptions]);
-
-  // 档位按这个 profile 配的模型收窄：同一个 CLI 下不同模型吃得下的档位不一样。
-  const effortChoices = useMemo<DropdownOption[]>(() => [
-    { value: "", label: "跟随 CLI" },
-    ...reasoningEffortsFor(profile.type, profile.model).map((effort) => ({ value: effort, label: effort })),
-  ], [profile.model, profile.type]);
 
   useEffect(() => {
     if (!editingName) setNameDraft(profile.name);
@@ -169,25 +163,20 @@ export function AgentProfileRow({
             value={profile.model ?? ""}
             disabled={busy}
             compact
-            onChange={(model) => onChange({
-              ...profile,
-              model: model || undefined,
-              reasoningEffort: normalizeReasoningEffort(profile.type, model, profile.reasoningEffort) ?? undefined,
-            })}
-            onCommit={(model) => void patch({
-              model,
-              reasoningEffort: normalizeReasoningEffort(profile.type, model, profile.reasoningEffort) ?? "",
-            })}
+            // 换模型不动档位：对不上时由旁边那颗强度胶囊出提示，让用户自己决定改哪边。
+            // 以前这里静默归一，结果是「我明明选了 ultra，回头一看变成空的」。
+            onChange={(model) => onChange({ ...profile, model: model || undefined })}
+            onCommit={(model) => void patch({ model })}
           />
         </div>
         <div className="agent-profile-cell">
-          <Dropdown
-            label={`${profile.name} 的思考强度`}
+          <EffortPicker
+            type={profile.type}
+            model={profile.model ?? null}
             value={profile.reasoningEffort ?? ""}
-            options={effortChoices}
             disabled={busy}
-            filterable={false}
-            placeholder="跟随 CLI"
+            label={`${profile.name} 的思考强度`}
+            followLabel="跟随 CLI"
             onChange={(reasoningEffort) => void patch({ reasoningEffort })}
           />
         </div>

@@ -12,7 +12,7 @@ const SRC = join(ROOT, "web-next/src");
 
 // 原生 title 的存量。CLAUDE.md 的约定是「改到它时顺手迁移，不必专门做一轮」，
 // 所以这条是棘轮：存量不拦、新增才拦。顺手迁移几个之后把这个数字调低即可。
-const NATIVE_TITLE_BASELINE = 57;
+const NATIVE_TITLE_BASELINE = 56;
 
 // 行尾写 `// allow-native` 可豁免该行（误报时用，别拿来绕规则）。
 const EXEMPT = /\/\/\s*allow-native/;

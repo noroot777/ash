@@ -2,16 +2,25 @@ import type { AgentExecutorProfile, AgentType } from "@harness/shared";
 import type { ModelGroup } from "../lib/modelCatalog.ts";
 
 /**
- * 对话框 @ 选择器的纯逻辑：智能体 / 模型 / 强度各阶段的候选行怎么算、箭头
- * 怎么走。组件只管画，键盘只管调这里的函数——所以 textarea 驱动的第一阶段
- * 和浮层里后面几步能共用同一套上下键语义。
+ * 对话框 @ 选择器的纯逻辑：智能体 / 模型两阶段的候选行怎么算、箭头怎么走。
+ * 组件只管画，键盘只管调这里的函数——所以 textarea 驱动的第一阶段和浮层里的
+ * 第二步能共用同一套上下键语义。
  */
 
-/** 一次 @ 选择的最终结果：这一回合派谁、用哪个执行器、跑哪个模型、想多久。 */
-export type MentionTarget = {
+/**
+ * 选择器负责的部分：派谁、用哪个执行器、跑哪个模型。
+ *
+ * **思考强度不在里面**——它是并排的另一颗胶囊（components/EffortPicker.tsx），
+ * 换模型不顺手改档位，改档位也不用重走一遍选模型。
+ */
+export type AgentModelSelection = {
   agent: AgentType;
   executorId: string | null; // null = 按该类型的默认执行器解析
   model: string | null; // null = 跟随执行器自己的模型
+};
+
+/** 一次 @ 选择的最终结果：上面那三项，加上单独选的思考强度。 */
+export type MentionTarget = AgentModelSelection & {
   reasoningEffort: string | null; // null = 跟随执行器自己的思考强度
 };
 

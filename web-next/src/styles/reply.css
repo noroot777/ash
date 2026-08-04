@@ -25,7 +25,6 @@
 .task-reply-chip:disabled { opacity: .5; }
 .task-reply-chip > b { color: var(--ink); font-family: var(--font-mono); font-size: 10.5px; font-weight: 550; }
 .task-reply-chip > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); }
-.task-reply-chip > em { flex: 0 0 auto; border-radius: 999px; background: var(--raised); padding: 1px 5px; color: var(--muted); font-size: 9px; font-style: normal; }
 .task-reply-chip > svg:last-child { flex: 0 0 auto; color: var(--faint); }
 .task-reply-chip.is-summoned { border-color: color-mix(in lch, var(--accent) 45%, transparent); background: color-mix(in lch, var(--accent) 10%, transparent); }
 .task-reply-chip.is-summoned > b { color: var(--accent); }

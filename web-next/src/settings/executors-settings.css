@@ -241,6 +241,54 @@
   gap: 0;
 }
 
+/* 强度那一格跟同排的下拉长一个样：这一列只有 78px，边框和 34px 高度会顶出格子。 */
+.agent-profile-cell .effort-picker {
+  min-width: 0;
+}
+
+.agent-profile-cell .effort-picker-trigger {
+  width: 100%;
+  height: 26px;
+  border-color: transparent;
+  border-radius: 6px;
+  background: transparent;
+  padding: 0 6px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.agent-profile-cell .effort-picker-trigger > em {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 11px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-profile-cell .effort-picker-trigger:hover:not(:disabled) {
+  border-color: transparent;
+  background: color-mix(in lch, var(--raised) 62%, transparent);
+  color: var(--ink);
+}
+
+.agent-profile-cell .effort-picker-trigger[aria-expanded="true"] {
+  border-color: transparent;
+  background: var(--canvas);
+  color: var(--ink);
+  box-shadow: inset 0 0 0 1px var(--line2);
+}
+
+.agent-profile-cell .effort-picker-trigger.is-error {
+  border-color: var(--red);
+  color: var(--red);
+}
+
+/* 这一格塞不下解释文字，红色警告态 + 浮层里的说明已经足够。 */
+.agent-profile-cell .effort-picker-warning {
+  display: none;
+}
+
 .agent-profile-actions {
   display: flex;
   min-width: 0;

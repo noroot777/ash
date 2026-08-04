@@ -84,8 +84,8 @@ export function ExecutorSelect({
 
 /**
  * 候选来自统一的模型目录（供应商固定清单或实时 API），不再只有 CLI 别名。
- * 传 `effort` 时思考强度是同一个下拉的第二步——先定模型再定档位，因为档位表
- * 是跟着模型走的。
+ * 传 `effort` 时思考强度是并排的**另一颗**胶囊——模型和档位是两件独立的事，
+ * 对不上时由那颗自己出提示，见 components/EffortPicker.tsx。
  */
 export function ModelField({
   label,

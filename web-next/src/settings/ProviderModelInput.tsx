@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import type { AgentType, LlmProvider } from "@harness/shared";
-import { CLI_MODEL_PRESETS, normalizeReasoningEffort } from "@harness/shared/cli-presets";
+import { CLI_MODEL_PRESETS } from "@harness/shared/cli-presets";
 import { Dropdown, type DropdownOption } from "../components/Dropdown.tsx";
-import { effortOptions } from "../lib/executorChoices.ts";
+import { EffortPicker } from "../components/EffortPicker.tsx";
 import {
   cachedProviderModels,
   loadProviderModels,
@@ -21,8 +21,9 @@ export { clearProviderModelCache } from "../lib/modelCatalog.ts";
  * 再点下拉**只剩当前这一个**，看着就是坏的。现在走统一的 Dropdown —— 候选永远是
  * 完整一份，筛选是浮层里另一个输入框的事，手填目录之外的模型名也仍然支持。
  *
- * 传了 `effort` 就把思考强度并成同一个下拉的第二步：档位跟着模型走，先定模型再
- * 定档位（接口只给得出模型 id，给不出「这个模型支持哪些档位」）。
+ * 传了 `effort` 就在旁边并排一颗独立的思考强度胶囊（EffortPicker）：模型和档位是
+ * 两件事，换模型不顺手把档位改掉；新模型不支持已选档位时由那颗胶囊出提示，让用户
+ * 自己决定改哪一边。
  */
 export function ProviderModelInput({
   type,
@@ -39,7 +40,7 @@ export function ProviderModelInput({
   value: string;
   disabled?: boolean;
   compact?: boolean;
-  /** 传了就在同一个下拉里接着选思考强度，不再另开一栏。 */
+  /** 传了就在模型旁边并排一颗思考强度胶囊。 */
   effort?: { value: string; onChange: (value: string) => void };
   onChange: (value: string) => void;
   onCommit?: (value: string) => void;
@@ -124,48 +125,44 @@ export function ProviderModelInput({
       ? `探测失败：${error}（仍可手填模型名）`
       : "";
 
+  // 换模型不动档位：新模型支不支持已选档位由旁边那颗胶囊如实提示，静默改掉会让
+  // 用户下次打开时看见一个自己没设过的值。
   const commit = (next: string) => {
     onChange(next);
-    if (effort) {
-      const normalized = normalizeReasoningEffort(type, next, effort.value) ?? "";
-      if (normalized !== effort.value.trim()) effort.onChange(normalized);
-    }
     onCommit?.(next);
   };
 
-  // 第二步必须按用户**刚点中的模型**同步生成，不能拿弹层打开前的旧 value 算。
-  const step2 = effort ? (model: string) => {
-    const efforts = effortOptions(type, "跟随执行器", model);
-    if (efforts.length < 2) return undefined;
-    return {
-      label: "思考强度",
-      options: efforts,
-      value: normalizeReasoningEffort(type, model, effort.value) ?? "",
-      onChange: effort.onChange,
-    };
-  } : undefined;
-  const clear = () => { commit(""); effort?.onChange(""); };
+  const clear = () => commit("");
 
   return (
     <div className="agent-model-control">
-      <Dropdown
-        label={provider ? `模型 · ${provider.name}` : "模型"}
-        value={value}
-        options={options}
-        status={status}
-        note={note}
-        disabled={disabled}
-        allowCustom
-        mono
-        filterPlaceholder="筛选或直接填写模型名"
-        emptyText="没有匹配的模型，输入完整模型名即可直接使用"
-        placeholder={provider ? provider.model || "跟随供应商默认" : "跟随 CLI"}
-        onChange={commit}
-        displaySuffix={effort?.value ?? ""}
-        step2={step2}
-        onClear={value || effort?.value ? clear : undefined}
-        clearLabel={followLabel}
-      />
+      <div className="model-effort-row">
+        <Dropdown
+          label={provider ? `模型 · ${provider.name}` : "模型"}
+          value={value}
+          options={options}
+          status={status}
+          note={note}
+          disabled={disabled}
+          allowCustom
+          mono
+          filterPlaceholder="筛选或直接填写模型名"
+          emptyText="没有匹配的模型，输入完整模型名即可直接使用"
+          placeholder={provider ? provider.model || "跟随供应商默认" : "跟随 CLI"}
+          onChange={commit}
+          onClear={value ? clear : undefined}
+          clearLabel={followLabel}
+        />
+        {effort && (
+          <EffortPicker
+            type={type}
+            model={value || provider?.model || null}
+            value={effort.value}
+            disabled={disabled}
+            onChange={effort.onChange}
+          />
+        )}
+      </div>
       {provider && !compact && (
         <small className={status === "failed" ? "is-error" : ""}>
           {status === "loading" && `正在从「${provider.name}」探测模型…`}

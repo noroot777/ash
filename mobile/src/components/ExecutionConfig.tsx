@@ -4,7 +4,7 @@ import type { AgentExecutorProfile, AgentType, LlmProvider } from "@harness/shar
 import {
   CLI_MODEL_PRESETS,
   REASONING_EFFORT_DETAIL,
-  normalizeReasoningEffort,
+  isReasoningEffortSupported,
   reasoningEffortsFor,
 } from "@harness/shared/cli-presets";
 import { sameExecutor } from "@harness/shared/executors";
@@ -72,14 +72,16 @@ export function ExecutionConfig({
   const effortValues = reasoningEffortsFor(selection.agentType, model);
   const effortPickable = effortValues.length > 0 || !!reasoningEffort;
   const effortOptions = followOptions(
-    effortValues,
+    // 已选档位不在允许集合里时它不在候选中，得补一条，否则想清掉都点不着。
+    reasoningEffort && !effortValues.includes(reasoningEffort)
+      ? [reasoningEffort, ...effortValues]
+      : effortValues,
     effortDetail(selection, profile),
   );
-  const commitModel = (next: string) => {
-    onModelChange(next);
-    const normalized = normalizeReasoningEffort(selection.agentType, next, reasoningEffort) ?? "";
-    if (normalized !== reasoningEffort.trim()) onReasoningEffortChange(normalized);
-  };
+  // 模型和强度是两件独立的事：换模型不静默改强度，对不上就在下面写清楚，让用户
+  // 自己决定改哪一边。静默清空会让人以为自己没点中。
+  const effortSupported = isReasoningEffortSupported(selection.agentType, model, reasoningEffort);
+  const commitModel = (next: string) => onModelChange(next);
   const executorItems = useMemo(
     () => executorOptions(types, profiles, selection),
     [types, profiles, selection],
@@ -146,10 +148,16 @@ export function ExecutionConfig({
           <ConfigTrigger
             label="思考强度"
             value={reasoningEffort || "跟随执行器"}
+            tone={effortSupported ? "normal" : "error"}
             onPress={() => setPicker("effort")}
           />
         ) : null}
       </View>
+      {effortSupported ? null : (
+        <Text style={{ color: theme.danger, fontSize: 10.5 }}>
+          {model || "当前模型"} 不支持 {reasoningEffort}，请改选档位或换一个模型
+        </Text>
+      )}
 
       {picker ? (
         <SelectSheet
@@ -213,8 +221,20 @@ export function ExecutionConfig({
   );
 }
 
-function ConfigTrigger({ label, value, onPress }: { label: string; value: string; onPress: () => void }) {
+function ConfigTrigger({
+  label,
+  value,
+  tone = "normal",
+  onPress,
+}: {
+  label: string;
+  value: string;
+  /** error = 当前选中的档位这个模型吃不下，红边提醒但仍可点开改。 */
+  tone?: "normal" | "error";
+  onPress: () => void;
+}) {
   const theme = useTheme();
+  const bad = tone === "error";
   return (
     <Pressable
       onPress={onPress}
@@ -224,12 +244,18 @@ function ConfigTrigger({ label, value, onPress }: { label: string; value: string
         paddingHorizontal: 11,
         paddingVertical: 9,
         borderRadius: radius.md,
+        borderWidth: bad ? 1 : 0,
+        borderColor: bad ? theme.danger : "transparent",
         backgroundColor: pressed ? theme.overlay : theme.panel,
       })}
     >
       <Text style={{ color: theme.faint, fontSize: 10, fontFamily: fonts.mono }}>{label}</Text>
       <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
-        <Text style={{ flex: 1, color: theme.ink, fontSize: 12, fontFamily: fonts.bodySemi }} numberOfLines={1}>
+        {bad ? <Ionicons name="warning" size={12} color={theme.danger} /> : null}
+        <Text
+          style={{ flex: 1, color: bad ? theme.danger : theme.ink, fontSize: 12, fontFamily: fonts.bodySemi }}
+          numberOfLines={1}
+        >
           {value}
         </Text>
         <Ionicons name="chevron-down" size={12} color={theme.faint} />

@@ -5,6 +5,7 @@ import {
   type AgentType,
   type Task,
 } from "@harness/shared";
+import { sameExecutor } from "@harness/shared/executors";
 import {
   CaretRight,
   CheckCircle,
@@ -12,8 +13,8 @@ import {
   SpinnerGap,
   WarningCircle,
 } from "@phosphor-icons/react";
-import { Dropdown } from "../components/Dropdown.tsx";
-import { ModelCatalogField } from "../components/ModelCatalogField.tsx";
+import { EffortPicker } from "../components/EffortPicker.tsx";
+import { ExecutorModelPicker } from "../components/ExecutorModelPicker.tsx";
 import { registeredAgentTypes } from "../lib/agentAvailability.ts";
 import { api } from "../lib/api.ts";
 import { ReviewEvidence, useTaskReviewInfo } from "../team/ReviewEvidence.tsx";
@@ -43,10 +44,6 @@ function reviewDefaults(task: Task, parent: Task | null): ReviewSelection {
     model: task.model ?? "",
     reasoningEffort: task.reasoningEffort ?? "",
   };
-}
-
-function selectionValue(selection: ReviewSelection) {
-  return selection.executorId ? `profile:${selection.executorId}` : `default:${selection.agentType}`;
 }
 
 function statusLabel(task: Task, latest: ReturnType<typeof latestRound>) {
@@ -207,47 +204,35 @@ export function TaskReviewInspector({
           <p>这轮审查会立即启动；留空时跟随所选执行器。</p>
           <div className="review-inspector__fields">
             <label>
-              <span>审查执行器</span>
-              <Dropdown
-                label="审查执行器"
-                value={selectionValue(selection)}
-                options={[
-                  ...(executorRunnable ? [] : [{
-                    value: selectionValue(selection),
-                    label: selection.agentType,
-                    detail: "当前设置 · 未注册",
-                    disabled: true,
-                  }]),
-                  ...registeredTypes.map((type) => ({ value: `default:${type}`, label: `默认 ${type}` })),
-                  ...profiles.map((profile) => ({ value: `profile:${profile.id}`, label: profile.name })),
-                ]}
-                filterable={registeredTypes.length + profiles.length > 6}
-                filterPlaceholder="筛选执行器…"
-                emptyText="没有匹配的执行器"
-                onChange={(value) => {
-                  const profileId = value.startsWith("profile:") ? value.slice(8) : null;
-                  const profile = profiles.find((candidate) => candidate.id === profileId);
-                  setSelection((current) => ({
-                    ...current,
-                    agentType: profile?.type ?? value.slice(8) as AgentType,
-                    executorId: profile?.id ?? null,
-                    model: "",
-                    reasoningEffort: "",
-                  }));
-                }}
-              />
+              <span>审查执行器与模型</span>
+              {/* 执行器 · 模型一颗胶囊，思考强度另一颗——跟其它选模型的地方同一形状。 */}
+              <div className="model-effort-row">
+                <ExecutorModelPicker
+                  label="审查执行器与模型"
+                  types={registeredTypes}
+                  profiles={profiles}
+                  selection={{ agentType: selection.agentType, executorId: selection.executorId }}
+                  model={selection.model || null}
+                  emptyText="暂无已注册执行器"
+                  onCommit={(target) => setSelection((current) => {
+                    const next = { agentType: target.agent, executorId: target.executorId };
+                    return {
+                      ...current,
+                      ...next,
+                      model: target.model ?? "",
+                      // 换了执行器才清强度：旧档位在新 CLI 上多半根本不存在。
+                      reasoningEffort: sameExecutor(next, current) ? current.reasoningEffort : "",
+                    };
+                  })}
+                />
+                <EffortPicker
+                  type={selection.agentType}
+                  model={selection.model}
+                  value={selection.reasoningEffort}
+                  onChange={(reasoningEffort) => setSelection((current) => ({ ...current, reasoningEffort }))}
+                />
+              </div>
             </label>
-            <ModelCatalogField
-              label="模型"
-              value={selection.model}
-              type={selection.agentType}
-              profiles={profiles}
-              effort={{
-                value: selection.reasoningEffort,
-                onChange: (reasoningEffort) => setSelection((current) => ({ ...current, reasoningEffort })),
-              }}
-              onChange={(model) => setSelection((current) => ({ ...current, model }))}
-            />
           </div>
           {!profilesReady && <p className="review-inspector__notice">正在读取已注册执行器…</p>}
           {profilesFailed && <p className="review-inspector__notice is-warning">执行器列表读取失败，暂不能派审。</p>}
