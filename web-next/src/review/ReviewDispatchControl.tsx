@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { AgentExecutorProfile, Task, TaskReviewRound } from "@harness/shared";
 import { MagnifyingGlass, SpinnerGap, WarningCircle } from "@phosphor-icons/react";
-import { EffortField, ExecutorSelect, ModelField } from "../composer/ComposerFields.tsx";
+import { ExecutorSelect, ModelField } from "../composer/ComposerFields.tsx";
 import {
   executorValue,
   isExecutorPickable,
@@ -195,8 +195,14 @@ export function ReviewDispatchControl({
                   setEffort("");
                 }}
               />
-              <ModelField label="模型" value={model} type={selection.agentType} profiles={profiles} onChange={setModel} />
-              <EffortField label="思考强度" value={effort} type={selection.agentType} onChange={setEffort} />
+              <ModelField
+                label="模型"
+                value={model}
+                type={selection.agentType}
+                profiles={profiles}
+                effort={{ value: effort, onChange: setEffort }}
+                onChange={setModel}
+              />
             </div>
             {availabilityMessage && (
               <p className={`review-dispatch-availability${locallyUnavailable || noExecutor ? " is-error" : ""}`}>

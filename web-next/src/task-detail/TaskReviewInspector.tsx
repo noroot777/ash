@@ -16,7 +16,6 @@ import { Dropdown } from "../components/Dropdown.tsx";
 import { ModelCatalogField } from "../components/ModelCatalogField.tsx";
 import { registeredAgentTypes } from "../lib/agentAvailability.ts";
 import { api } from "../lib/api.ts";
-import { effortOptions } from "../lib/executorChoices.ts";
 import { ReviewEvidence, useTaskReviewInfo } from "../team/ReviewEvidence.tsx";
 
 const REVIEW_IN_FLIGHT = new Set(["backlog", "queued", "running", "paused"]);
@@ -243,19 +242,12 @@ export function TaskReviewInspector({
               value={selection.model}
               type={selection.agentType}
               profiles={profiles}
+              effort={{
+                value: selection.reasoningEffort,
+                onChange: (reasoningEffort) => setSelection((current) => ({ ...current, reasoningEffort })),
+              }}
               onChange={(model) => setSelection((current) => ({ ...current, model }))}
             />
-            <label>
-              <span>思考强度</span>
-              <Dropdown
-                label="思考强度"
-                value={selection.reasoningEffort}
-                options={effortOptions(selection.agentType)}
-                filterable={false}
-                placeholder="跟随执行器"
-                onChange={(reasoningEffort) => setSelection((current) => ({ ...current, reasoningEffort }))}
-              />
-            </label>
           </div>
           {!profilesReady && <p className="review-inspector__notice">正在读取已注册执行器…</p>}
           {profilesFailed && <p className="review-inspector__notice is-warning">执行器列表读取失败，暂不能派审。</p>}

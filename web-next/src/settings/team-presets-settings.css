@@ -336,10 +336,11 @@
   line-height: 1.6;
 }
 
+/* 三栏：类型 / 执行器 Profile / 模型（模型下拉里再分第二步选思考强度）。 */
 .team-preset-role-fields {
   display: grid;
   min-width: 0;
-  grid-template-columns: minmax(90px, 0.8fr) minmax(118px, 1.15fr) minmax(118px, 1.2fr) minmax(105px, 1fr);
+  grid-template-columns: minmax(90px, 0.8fr) minmax(118px, 1.1fr) minmax(130px, 1.3fr);
   gap: 8px;
 }
 

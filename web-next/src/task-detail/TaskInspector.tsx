@@ -5,9 +5,9 @@ import { REASONING_EFFORT_VALUES } from "@harness/shared/cli-presets";
 import { sameExecutor } from "@harness/shared/executors";
 import { ArrowSquareOut, CaretRight, ListNumbers } from "@phosphor-icons/react";
 import { api } from "../lib/api.ts";
-import { effortOptions } from "../lib/executorChoices.ts";
 import { Dropdown } from "../components/Dropdown.tsx";
 import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
+import { effortOptions } from "../lib/executorChoices.ts";
 import { ModelCatalogSelect } from "../components/ModelCatalogField.tsx";
 import { ScheduleControl } from "../components/ScheduleControl.tsx";
 import { TaskLabelsEditor } from "../components/TaskLabelsEditor.tsx";
@@ -364,27 +364,21 @@ export function TaskInspector({
             />
             {availabilityMessage && <p className="task-inspector-note">{availabilityMessage}</p>}
           </InspectorRow>
-          <InspectorRow label="模型">
+          <InspectorRow label="模型与思考强度">
             <ModelCatalogSelect
               value={task.model ?? ""}
               type={agentType}
               profiles={profiles}
               disabled={readOnly}
+              effort={{
+                value: task.reasoningEffort ?? "",
+                options: effortChoices,
+                onChange: (effort) => void patch(
+                  { reasoningEffort: effort || null },
+                  "思考强度已更新，将从下一回合生效",
+                ),
+              }}
               onChange={(model) => void patch({ model: model || null }, "模型设置已更新，将从下一回合生效")}
-            />
-          </InspectorRow>
-          <InspectorRow label="思考强度">
-            <Dropdown
-              label="思考强度"
-              value={task.reasoningEffort ?? ""}
-              options={effortChoices}
-              disabled={readOnly}
-              filterable={false}
-              placeholder="跟随执行器"
-              onChange={(effort) => void patch(
-                { reasoningEffort: effort || null },
-                "思考强度已更新，将从下一回合生效",
-              )}
             />
           </InspectorRow>
           <InspectorRow label="创建时间"><span>{formatInstant(task.createdAt)}</span></InspectorRow>

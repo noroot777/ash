@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { CaretDown, Check, SpinnerGap, Warning } from "@phosphor-icons/react";
+import { ArrowLeft, CaretDown, Check, SpinnerGap, Warning } from "@phosphor-icons/react";
 import { useDismissable } from "../lib/useDismissable.ts";
 
 /**
@@ -17,6 +17,10 @@ import { useDismissable } from "../lib/useDismissable.ts";
  * 所以这里自己画：trigger 用 `.ui-select-trigger`，浮层用 `.ui-menu` 的观感，
  * 浮层 portal 到 body 且 fixed 定位（表格/卡片的 overflow 裁不到它），候选永远是
  * 完整的一份，筛选是**另一个**输入框的事。
+ *
+ * `step2` 让同一个浮层带出**第二步**（模型 → 思考强度）：档位是跟着模型走的，
+ * 「先定模型再定强度」比并排两个下拉更接近实情，也免得用户在模型还没定时先挑了
+ * 一个该模型根本不支持的档位。
  */
 
 export type DropdownOption = {
@@ -53,6 +57,10 @@ export function Dropdown({
   note = "",
   mono = false,
   className = "",
+  displaySuffix = "",
+  onClear,
+  clearLabel = "清空",
+  step2,
 }: {
   value: string;
   options: DropdownOption[];
@@ -70,8 +78,22 @@ export function Dropdown({
   note?: string;
   mono?: boolean;
   className?: string;
+  /** trigger 上跟在主值后面的小标（例：思考强度）。 */
+  displaySuffix?: string;
+  /** 给一个「回到不设置」的出口；候选列表里就不必再占一行「跟随…」。 */
+  onClear?: () => void;
+  clearLabel?: string;
+  /** 选完第一步后接着选的第二步（例：模型选完选思考强度）。 */
+  step2?: {
+    label: string;
+    options: DropdownOption[];
+    value: string;
+    onChange: (value: string) => void;
+    emptyText?: string;
+  };
 }) {
   const [open, setOpen] = useState(false);
+  const [stage, setStage] = useState<1 | 2>(1);
   const [query, setQuery] = useState("");
   const [index, setIndex] = useState(0);
   const [place, setPlace] = useState<Placement | null>(null);
@@ -79,27 +101,38 @@ export function Dropdown({
   const panelRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
+  const close = () => {
+    setOpen(false);
+    setStage(1);
+    setQuery("");
+  };
+
   useDismissable({
     enabled: open,
     containerRef: panelRef,
-    onClose: () => setOpen(false),
+    onClose: close,
     restoreFocusRef: triggerRef,
   });
+
+  const onStep2 = stage === 2 && !!step2;
+  const stepOptions = onStep2 ? step2.options : options;
+  const canFilter = filterable && !onStep2;
 
   const rows = useMemo<DropdownOption[]>(() => {
     const keyword = query.trim().toLowerCase();
     const hit = keyword
-      ? options.filter((option) => (
+      ? stepOptions.filter((option) => (
         option.label.toLowerCase().includes(keyword) || option.value.toLowerCase().includes(keyword)
       ))
-      : options;
+      : stepOptions;
     // 手打的内容没跟任何候选重名时，补一行「用它」，否则自由输入无处落地。
-    const custom = allowCustom && query.trim() && !hit.some((option) => option.value === query.trim())
+    const custom = allowCustom && !onStep2 && query.trim() && !hit.some((option) => option.value === query.trim())
       ? [{ value: query.trim(), label: query.trim(), detail: "直接使用", mono: true }]
       : [];
     return [...hit, ...custom];
-  }, [allowCustom, options, query]);
+  }, [allowCustom, onStep2, stepOptions, query]);
 
+  const stepValue = onStep2 ? step2.value : value;
   const active = Math.min(index, Math.max(0, rows.length - 1));
   const current = options.find((option) => option.value === value);
   const display = current?.label ?? (value || "");
@@ -123,8 +156,8 @@ export function Dropdown({
     if (!open) return;
     measure();
     inputRef.current?.focus();
-    if (!filterable) panelRef.current?.focus();
-  }, [filterable, open]);
+    if (!canFilter) panelRef.current?.focus();
+  }, [canFilter, open, stage]);
 
   // 页面滚动/尺寸变化时跟着走：浮层是 fixed 的，不重算就会飘到别处。
   useEffect(() => {
@@ -139,9 +172,19 @@ export function Dropdown({
   }, [open]);
 
   const commit = (next: string) => {
-    onChange(next);
-    setOpen(false);
-    setQuery("");
+    if (onStep2) {
+      step2.onChange(next);
+    } else if (step2) {
+      // 第一步落定后不关浮层：紧接着在同一个浮层里选第二步（强度）。
+      onChange(next);
+      setQuery("");
+      setIndex(Math.max(0, step2.options.findIndex((option) => option.value === step2.value)));
+      setStage(2);
+      return;
+    } else {
+      onChange(next);
+    }
+    close();
     triggerRef.current?.focus();
   };
 
@@ -174,11 +217,13 @@ export function Dropdown({
         disabled={disabled}
         onClick={() => {
           setQuery("");
+          setStage(1);
           setIndex(Math.max(0, options.findIndex((option) => option.value === value)));
           setOpen((current) => !current);
         }}
       >
         <span className={display ? "" : "is-placeholder"}>{display || placeholder}</span>
+        {displaySuffix && <em className="ui-dropdown-suffix">{displaySuffix}</em>}
         {status === "loading" && <SpinnerGap size={11} className="is-spinning" aria-hidden="true" />}
         {status === "failed" && <Warning size={11} className="ui-dropdown-warn" aria-hidden="true" />}
         <CaretDown size={11} weight="bold" className="ui-select-caret" aria-hidden="true" />
@@ -192,7 +237,16 @@ export function Dropdown({
           onKeyDown={onKeyDown}
           style={{ left: place.left, top: place.top, width: place.width }}
         >
-          {filterable && (
+          {onStep2 && (
+            <div className="ui-dropdown-step">
+              <button type="button" onClick={() => { setStage(1); setIndex(0); }} aria-label="返回上一步">
+                <ArrowLeft size={11} weight="bold" />
+              </button>
+              <b>{step2.label}</b>
+              <span>{display || placeholder}</span>
+            </div>
+          )}
+          {canFilter && (
             <div className="ui-dropdown-search">
               <input
                 ref={inputRef}
@@ -209,10 +263,10 @@ export function Dropdown({
           <div
             className="ui-dropdown-rows"
             role="listbox"
-            aria-label={label}
-            style={{ maxHeight: place.maxHeight - (filterable ? 42 : 0) }}
+            aria-label={onStep2 ? step2.label : label}
+            style={{ maxHeight: place.maxHeight - (canFilter ? 42 : 0) - (onStep2 ? 30 : 0) - (onClear ? 28 : 0) }}
           >
-            {!rows.length && <p className="ui-dropdown-empty">{emptyText}</p>}
+            {!rows.length && <p className="ui-dropdown-empty">{(onStep2 ? step2.emptyText : emptyText) ?? emptyText}</p>}
             {rows.map((row, rowIndex) => {
               const head = row.group && row.group !== lastGroup ? row.group : "";
               lastGroup = row.group;
@@ -224,18 +278,27 @@ export function Dropdown({
                     role="option"
                     aria-selected={rowIndex === active}
                     aria-disabled={row.disabled}
-                    className={`ui-dropdown-row${row.value === value ? " is-current" : ""}${row.mono ?? mono ? " is-mono" : ""}${row.disabled ? " is-disabled" : ""}`}
+                    className={`ui-dropdown-row${row.value === stepValue ? " is-current" : ""}${row.mono ?? mono ? " is-mono" : ""}${row.disabled ? " is-disabled" : ""}`}
                     onMouseEnter={() => setIndex(rowIndex)}
                     onClick={() => { if (!row.disabled) commit(row.value); }}
                   >
                     <b>{row.label}</b>
                     {row.detail && <span>{row.detail}</span>}
-                    {row.value === value && <Check size={11} weight="bold" aria-hidden="true" />}
+                    {row.value === stepValue && <Check size={11} weight="bold" aria-hidden="true" />}
                   </button>
                 </div>
               );
             })}
           </div>
+          {onClear && !onStep2 && (
+            <button
+              type="button"
+              className="ui-dropdown-clear"
+              onClick={() => { onClear(); close(); triggerRef.current?.focus(); }}
+            >
+              {clearLabel}
+            </button>
+          )}
         </div>,
         document.body,
       )}

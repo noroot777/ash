@@ -4,7 +4,6 @@ import type {
   LlmProvider,
   TeamPresetConfig,
 } from "@harness/shared";
-import { REASONING_EFFORT_VALUES } from "@harness/shared/cli-presets";
 import { CrownSimple, MagnifyingGlass, Robot } from "@phosphor-icons/react";
 import { Dropdown } from "../components/Dropdown.tsx";
 import { Toggle } from "../components/ui.tsx";
@@ -215,32 +214,18 @@ function TeamRoleFields({
           />
         </label>
         <label>
-          <span>模型</span>
+          <span>模型与思考强度</span>
           <ProviderModelInput
             type={value.agentType}
             provider={provider}
             value={value.model}
             disabled={disabled || (staleType && !preserveStaleType)}
             compact
+            effort={{
+              value: value.reasoningEffort,
+              onChange: (reasoningEffort) => onChange({ ...value, reasoningEffort }),
+            }}
             onChange={(model) => onChange({ ...value, model })}
-          />
-        </label>
-        <label>
-          <span>思考强度</span>
-          <Dropdown
-            label={`${meta.label} 的思考强度`}
-            value={value.reasoningEffort}
-            options={[
-              { value: "", label: "跟随执行器" },
-              ...REASONING_EFFORT_VALUES[value.agentType].map((effort) => ({
-                value: effort,
-                label: effort,
-              })),
-            ]}
-            disabled={disabled || (staleType && !preserveStaleType)}
-            filterable={false}
-            placeholder="跟随执行器"
-            onChange={(reasoningEffort) => onChange({ ...value, reasoningEffort })}
           />
         </label>
       </div>

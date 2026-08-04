@@ -55,8 +55,7 @@
 .agent-model-picker-head input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in lch, var(--accent) 13%, transparent); }
 .agent-model-picker-rows { max-height: min(46vh, 330px); overflow-y: auto; overscroll-behavior: contain; padding: 5px; }
 .agent-model-picker-rows > p { margin: 6px 7px; color: var(--faint); font-size: 10.5px; }
-/* 分块标题要一眼看出「这几行属于哪个供应商」：底色条 + 左侧强调竖线 + 滚动时吸顶。 */
-.agent-model-picker-rows > section + section { margin-top: 5px; }
+/* 分块标题跟统一下拉组件（.ui-dropdown-group）同一套：灰底条 + 大写小字，滚动时吸顶。 */
 .agent-model-picker-rows header {
   position: sticky;
   z-index: 1;
@@ -65,14 +64,13 @@
   align-items: center;
   justify-content: space-between;
   gap: 6px;
-  margin: 2px 0 3px;
-  border-radius: 6px;
+  margin: 5px 0 2px;
+  border-radius: 5px;
   background: var(--raised);
-  padding: 4px 8px 4px 7px;
-  box-shadow: inset 2px 0 0 var(--accent);
+  padding: 3px 6px;
 }
-.agent-model-picker-rows header > b { color: var(--ink); font-size: 9.5px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; }
-.agent-model-picker-rows header > small { display: inline-flex; min-width: 0; align-items: center; gap: 3px; overflow: hidden; color: var(--muted); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.agent-model-picker-rows header > b { color: var(--muted); font-size: 9.5px; font-weight: 650; letter-spacing: .04em; text-transform: uppercase; }
+.agent-model-picker-rows header > small { display: inline-flex; min-width: 0; align-items: center; gap: 3px; overflow: hidden; color: var(--faint); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
 .agent-model-picker-rows header > small.is-error { color: var(--red); }
 .agent-model-picker-rows button {
   display: flex;
@@ -91,20 +89,8 @@
 .agent-model-picker-rows button > b { min-width: 0; overflow: hidden; color: var(--ink); font-family: var(--font-mono); font-size: 11px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
 .agent-model-picker-rows button > span { min-width: 0; flex: 1; overflow: hidden; color: var(--faint); font-size: 9.5px; text-align: right; text-overflow: ellipsis; white-space: nowrap; }
 .agent-model-picker-rows button > svg { flex: 0 0 auto; color: var(--faint); }
-/* 思考强度：跟模型是同一次决定的两半，所以常驻在列表下方而不是另开入口。 */
-.agent-model-picker-effort { display: flex; align-items: center; gap: 7px; border-top: 0.5px solid var(--line); padding: 6px 8px; }
-.agent-model-picker-effort > span { flex: 0 0 auto; color: var(--faint); font-size: 9.5px; }
-.agent-model-picker-effort > div { display: flex; min-width: 0; flex: 1; flex-wrap: wrap; gap: 3px; }
-.agent-model-picker-effort button {
-  border: 1px solid transparent;
-  border-radius: 999px;
-  background: var(--raised);
-  padding: 2px 8px;
-  color: var(--muted);
-  font: 9.5px var(--font-sans);
-}
-.agent-model-picker-effort button:hover { color: var(--ink); }
-.agent-model-picker-effort button[aria-checked="true"] { border-color: var(--accent); background: color-mix(in lch, var(--accent) 15%, transparent); color: var(--ink); font-weight: 600; }
+/* 第三步（思考强度）的面包屑里回显上一步选定的模型。 */
+.agent-model-picker-crumb > code { font-family: var(--font-mono); font-size: 9.5px; }
 .agent-model-picker > footer { border-top: 0.5px solid var(--line); padding: 5px 9px 6px; color: var(--faint); font-size: 9px; }
 .team-reply-shell { position: relative; }
 .team-reply-box footer > .reply-schedule-button { width: 27px; height: 27px; }

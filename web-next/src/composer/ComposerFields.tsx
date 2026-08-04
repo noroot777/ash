@@ -8,7 +8,7 @@ import type {
 } from "@harness/shared";
 import { CaretDown, GearSix, SlidersHorizontal } from "@phosphor-icons/react";
 import { Dropdown } from "../components/Dropdown.tsx";
-import { ModelCatalogField } from "../components/ModelCatalogField.tsx";
+import { ModelCatalogField, type EffortStep } from "../components/ModelCatalogField.tsx";
 import { Toggle } from "../components/ui.tsx";
 import { TaskLabelsEditor } from "../components/TaskLabelsEditor.tsx";
 import {
@@ -17,7 +17,6 @@ import {
   executorValue,
   parseExecutorValue,
 } from "../lib/agentAvailability.ts";
-import { effortOptions } from "../lib/executorChoices.ts";
 import type { ComposerExecutorConfigs, ComposerExecutorRole } from "./executorOverrides.ts";
 import { PresetBar } from "./PresetBar.tsx";
 
@@ -82,18 +81,24 @@ export function ExecutorSelect({
   );
 }
 
-/** 候选来自统一的模型目录（供应商固定清单或实时 API），不再只有 CLI 别名。 */
+/**
+ * 候选来自统一的模型目录（供应商固定清单或实时 API），不再只有 CLI 别名。
+ * 传 `effort` 时思考强度是同一个下拉的第二步——先定模型再定档位，因为档位表
+ * 是跟着模型走的。
+ */
 export function ModelField({
   label,
   value,
   type,
   profiles,
+  effort,
   onChange,
 }: {
   label: string;
   value: string;
   type: AgentType;
   profiles: AgentExecutorProfile[];
+  effort?: EffortStep;
   onChange: (value: string) => void;
 }) {
   return (
@@ -102,34 +107,9 @@ export function ModelField({
       value={value}
       type={type}
       profiles={profiles}
+      effort={effort}
       onChange={onChange}
     />
-  );
-}
-
-export function EffortField({
-  label,
-  value,
-  type,
-  onChange,
-}: {
-  label: string;
-  value: string;
-  type: AgentType;
-  onChange: (value: string) => void;
-}) {
-  return (
-    <div className="composer-field">
-      <span>{label}</span>
-      <Dropdown
-        label={label}
-        value={value}
-        options={effortOptions(type)}
-        filterable={false}
-        placeholder="跟随执行器"
-        onChange={onChange}
-      />
-    </div>
   );
 }
 
@@ -152,8 +132,14 @@ function OverrideGroup({
     <div className="composer-override-group">
       <b>{label}</b>
       <div>
-        <ModelField label="模型" value={config.model} type={type} profiles={profiles} onChange={(model) => onChange(role, { model })} />
-        <EffortField label="思考强度" value={config.effort} type={type} onChange={(effort) => onChange(role, { effort })} />
+        <ModelField
+          label="模型"
+          value={config.model}
+          type={type}
+          profiles={profiles}
+          effort={{ value: config.effort, onChange: (effort) => onChange(role, { effort }) }}
+          onChange={(model) => onChange(role, { model })}
+        />
       </div>
     </div>
   );

@@ -241,20 +241,6 @@ function ProviderForm({
 
   return (
     <div className="provider-form">
-      {/* 编辑态和列表态长得完全不一样，不写清楚「改的是哪个」用户就只能靠记忆。 */}
-      <header className="provider-form-head">
-        <span className={`provider-protocol is-${draft.protocol}`}>{draft.protocol === "anthropic" ? "A" : "O"}</span>
-        <div>
-          <b>{provider ? <>正在编辑「{provider.name}」</> : "添加供应商"}</b>
-          <small>
-            {provider
-              ? draft.name.trim() && draft.name.trim() !== provider.name
-                ? `保存后重命名为「${draft.name.trim()}」 · ${provider.baseUrl}`
-                : provider.baseUrl
-              : "填好名称与 Base URL 即可保存"}
-          </small>
-        </div>
-      </header>
       <div className="provider-form-grid">
         <label>
           <span>名称</span>
@@ -345,7 +331,6 @@ function ProviderRow({
 }) {
   const [editing, setEditing] = useState(false);
   const [deleting, setDeleting] = useState(false);
-  const [testing, setTesting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   // 收起表单后原地闪一下:列表长了以后,光靠 toast 找不回刚才改的是哪一行。
   const [justEdited, setJustEdited] = useState(false);
@@ -371,22 +356,6 @@ function ProviderRow({
     }
   };
 
-  const testModel = async () => {
-    if (!provider.model) {
-      notify(`供应商「${provider.name}」还没有设置测试模型`);
-      return;
-    }
-    setTesting(true);
-    try {
-      const result = await api.testLlmProvider({ id: provider.id, model: provider.model });
-      notify(`「${provider.name}」测试通过 · ${result.elapsedMs} ms · ${result.reply}`);
-    } catch (error) {
-      notify(error instanceof Error ? error.message : "模型测试失败");
-    } finally {
-      setTesting(false);
-    }
-  };
-
   return (
     <>
       <article className={`provider-row${justEdited ? " is-just-edited" : ""}${editing ? " is-editing" : ""}`}>
@@ -408,15 +377,6 @@ function ProviderRow({
           {provider.hasKey ? "Key 已保存" : "缺少 Key"}
         </span>
         <span className="provider-default-model">{provider.model || "未设默认模型"}</span>
-        <button
-          type="button"
-          className="provider-test-action"
-          disabled={testing}
-          onClick={() => void testModel()}
-          aria-label={`测试 ${provider.name} 的模型`}
-        >
-          <Play size={11} weight="fill" /> {testing ? "测试中" : "测试"}
-        </button>
         <button
           type="button"
           className="provider-icon-action"

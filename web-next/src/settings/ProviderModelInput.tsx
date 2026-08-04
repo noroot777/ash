@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { AgentType, LlmProvider } from "@harness/shared";
 import { CLI_MODEL_PRESETS } from "@harness/shared/cli-presets";
 import { Dropdown, type DropdownOption } from "../components/Dropdown.tsx";
+import { effortOptions } from "../lib/executorChoices.ts";
 import {
   cachedProviderModels,
   loadProviderModels,
@@ -19,6 +20,9 @@ export { clearProviderModelCache } from "../lib/modelCatalog.ts";
  * 以前是 `input + datalist`：Chrome 会按输入框里已有的值过滤候选，于是设好模型后
  * 再点下拉**只剩当前这一个**，看着就是坏的。现在走统一的 Dropdown —— 候选永远是
  * 完整一份，筛选是浮层里另一个输入框的事，手填目录之外的模型名也仍然支持。
+ *
+ * 传了 `effort` 就把思考强度并成同一个下拉的第二步：档位跟着模型走，先定模型再
+ * 定档位（接口只给得出模型 id，给不出「这个模型支持哪些档位」）。
  */
 export function ProviderModelInput({
   type,
@@ -26,6 +30,7 @@ export function ProviderModelInput({
   value,
   disabled,
   compact = false,
+  effort,
   onChange,
   onCommit,
 }: {
@@ -34,6 +39,8 @@ export function ProviderModelInput({
   value: string;
   disabled?: boolean;
   compact?: boolean;
+  /** 传了就在同一个下拉里接着选思考强度，不再另开一栏。 */
+  effort?: { value: string; onChange: (value: string) => void };
   onChange: (value: string) => void;
   onCommit?: (value: string) => void;
 }) {
@@ -89,12 +96,14 @@ export function ProviderModelInput({
   }, [provider?.id, provider?.protocol, provider?.baseUrl, provider?.modelListMode, provider?.pinnedModels, type, cacheVersion]);
 
   const groupName = provider ? provider.name : `${type} 预设`;
+  const followLabel = provider
+    ? `跟随供应商默认${provider.model ? `（${provider.model}）` : ""}`
+    : "跟随 CLI";
+  // 「跟随」不占候选行：它不是一个模型，混在模型里既拉长列表又容易误点。回到不覆盖
+  // 走浮层底部那条「清空」。
   const options = useMemo<DropdownOption[]>(() => {
     const seen = new Set<string>();
-    const rows: DropdownOption[] = [{
-      value: "",
-      label: provider ? `跟随供应商默认${provider.model ? `（${provider.model}）` : ""}` : "跟随 CLI",
-    }];
+    const rows: DropdownOption[] = [];
     for (const model of [...(provider?.model ? [provider.model] : []), ...models, ...(value ? [value] : [])]) {
       if (!model || seen.has(model)) continue;
       seen.add(model);
@@ -120,6 +129,12 @@ export function ProviderModelInput({
     onCommit?.(next);
   };
 
+  const efforts = effortOptions(type);
+  const step2 = effort && efforts.length > 1
+    ? { label: "思考强度", options: efforts, value: effort.value, onChange: effort.onChange }
+    : undefined;
+  const clear = () => { commit(""); effort?.onChange(""); };
+
   return (
     <div className="agent-model-control">
       <Dropdown
@@ -135,6 +150,10 @@ export function ProviderModelInput({
         emptyText="没有匹配的模型，输入完整模型名即可直接使用"
         placeholder={provider ? provider.model || "跟随供应商默认" : "跟随 CLI"}
         onChange={commit}
+        displaySuffix={effort?.value ?? ""}
+        step2={step2}
+        onClear={value || effort?.value ? clear : undefined}
+        clearLabel={followLabel}
       />
       {provider && !compact && (
         <small className={status === "failed" ? "is-error" : ""}>

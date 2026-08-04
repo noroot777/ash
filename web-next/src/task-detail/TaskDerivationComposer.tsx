@@ -28,7 +28,6 @@ import {
   useAgentAvailability,
 } from "../lib/agentAvailability.ts";
 import { api } from "../lib/api.ts";
-import { effortOptions } from "../lib/executorChoices.ts";
 import {
   buildTaskDerivationBody,
   defaultDebateTopic,
@@ -142,19 +141,9 @@ function TeamExecutorField({
           value={choice.model}
           type={type}
           profiles={knownProfiles}
+          effort={{ value: choice.effort, onChange: (effort) => onChange({ ...choice, effort }) }}
           onChange={(model) => onChange({ ...choice, model })}
         />
-        <div className="composer-field">
-          <span>思考强度</span>
-          <Dropdown
-            label={`${label} 的思考强度`}
-            value={choice.effort}
-            options={effortOptions(type)}
-            filterable={false}
-            placeholder="跟随执行器"
-            onChange={(effort) => onChange({ ...choice, effort })}
-          />
-        </div>
       </div>
     </div>
   );

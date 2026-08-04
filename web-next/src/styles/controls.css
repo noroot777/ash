@@ -376,6 +376,16 @@
   white-space: nowrap;
 }
 .ui-dropdown-trigger.is-mono > span:first-child { font-family: var(--font-mono); font-size: 12px; }
+/* 主值后面那截小标（思考强度）：跟主值同一行，但明显是附属信息。 */
+.ui-dropdown-trigger > .ui-dropdown-suffix {
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: var(--raised);
+  padding: 1px 6px;
+  color: var(--muted);
+  font-size: 10px;
+  font-style: normal;
+}
 .ui-dropdown-trigger > span.is-placeholder { color: var(--faint); font-family: var(--font-sans); font-size: 12.5px; }
 .ui-dropdown-trigger > .ui-select-caret { margin-left: 0; }
 .ui-dropdown-trigger > .ui-dropdown-warn { color: var(--red); }
@@ -392,6 +402,55 @@
   box-shadow: var(--menu-shadow);
   outline: none;
 }
+/* 第二步的头：一个返回键 + 这一步选什么 + 上一步选了什么。 */
+.ui-dropdown-step {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border-bottom: 1px solid var(--line);
+  padding: 3px 8px 5px;
+}
+.ui-dropdown-step > button {
+  display: flex;
+  height: 20px;
+  width: 20px;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 6px;
+  background: var(--raised);
+  color: var(--muted);
+}
+.ui-dropdown-step > button:hover { color: var(--ink); }
+.ui-dropdown-step > b { color: var(--ink); font-size: 11.5px; font-weight: 600; }
+.ui-dropdown-step > span {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  color: var(--faint);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 「回到不设置」的出口：候选列表里就不必再占一行「跟随…」。 */
+.ui-dropdown-clear {
+  display: block;
+  width: calc(100% - 8px);
+  margin: 3px 4px 0;
+  border: 0;
+  border-top: 1px solid var(--line);
+  border-radius: 0 0 7px 7px;
+  background: transparent;
+  padding: 6px 8px;
+  color: var(--muted);
+  font-size: 11px;
+  text-align: left;
+}
+.ui-dropdown-clear:hover { background: var(--sel-bg); color: var(--ink); }
+
 .ui-dropdown-search { padding: 4px 6px 5px; }
 .ui-dropdown-search input {
   width: 100%;
