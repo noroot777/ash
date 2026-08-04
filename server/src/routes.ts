@@ -29,6 +29,7 @@ import { discardTaskWorkspace } from "./workspace-cleanup.js";
 import { mountDebateIterationRoutes } from "./debate/iteration.js";
 import { mountNoteRoutes } from "./notes.js";
 import { mountTeamPresetRoutes } from "./team-presets.js";
+import { findWorkflow, mountWorkflowRoutes } from "./workflows.js";
 import { getAppSettings, parseAppSettingsPatch, patchAppSettings } from "./app-settings.js";
 import { mountTaskRoutes } from "./task-routes.js";
 import { mountTaskRunRoutes } from "./task-run-routes.js";
@@ -275,7 +276,7 @@ api.get("/projects", async (c) =>
 api.post("/projects", async (c) => {
   const b = await c.req.json<{ name: string; repoPath: string }>();
   if (!b.name?.trim()) return c.json({ error: "name required" }, 400);
-  const row = { id: id(), name: b.name.trim(), repoPath: tidyRepoPath(b.repoPath), apiKeys: null, createdAt: now() };
+  const row = { id: id(), name: b.name.trim(), repoPath: tidyRepoPath(b.repoPath), apiKeys: null, workflowId: null, createdAt: now() };
   await db.insert(projects).values(row);
   return c.json(toProject(row), 201);
 });
@@ -312,7 +313,7 @@ api.post("/projects/resolve", async (c) => {
   }
 
   // 3) Genuinely new project.
-  const row = { id: id(), name, repoPath, apiKeys: null, createdAt: now() };
+  const row = { id: id(), name, repoPath, apiKeys: null, workflowId: null, createdAt: now() };
   await db.insert(projects).values(row);
   return c.json(toProject(row), 201);
 });
@@ -328,6 +329,15 @@ api.patch("/projects/:id", async (c) => {
     patch.name = b.name.trim();
   }
   if (b.repoPath !== undefined) patch.repoPath = tidyRepoPath(b.repoPath);
+  // 项目默认起手式：空串/null 都表示「跟随全局默认」，存成 null 保持一种写法
+  if (b.workflowId !== undefined) {
+    if (b.workflowId !== null && typeof b.workflowId !== "string") {
+      return c.json({ error: "workflowId 必须是字符串或 null" }, 400);
+    }
+    const wid = typeof b.workflowId === "string" ? b.workflowId.trim() : "";
+    if (wid && !(await findWorkflow(wid))) return c.json({ error: "起手式不存在" }, 400);
+    patch.workflowId = wid || null;
+  }
   if (Object.keys(patch).length) await db.update(projects).set(patch).where(eq(projects.id, pid));
   const updated = (await db.select().from(projects).where(eq(projects.id, pid))).at(0)!;
   return c.json(toProject(updated));
@@ -583,6 +593,7 @@ mountProviderTestRoutes(api);
 mountQueueRoutes(api);
 mountDebateIterationRoutes(api);
 mountTeamPresetRoutes(api);
+mountWorkflowRoutes(api);
 
 // ── SSE stream (§12) ───────────────────────────────────────────────────────
 api.get("/events", (c) =>

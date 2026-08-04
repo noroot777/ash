@@ -281,3 +281,19 @@ export function normalizeWorkflowDef(value: unknown): { def?: WorkflowDef; error
   if (denied.length) return { error: denied[0]!.text };
   return { def };
 }
+
+// ── 起手式库的对外形状 ────────────────────────────────────────────────────
+// 前端拿到的每一条都长这样，**分不出「系统自带」和「用户自建」的差别**除了这三个
+// 标记位：自带的删不掉（只能 disabled）、改过的能 restore 回出厂定义。
+export interface WorkflowItem {
+  // 自带条目恒等于内置 key（"standard"），有没有被覆写过都不变 —— 项目/任务引用它
+  // 才不会因为一次「恢复系统默认」就悬空。用户自建的是行 id。
+  id: string;
+  name: string;
+  description: string;
+  def: WorkflowDef;
+  builtin: boolean;
+  modified: boolean; // 自带 + 用户改过（于是「恢复系统默认」有东西可恢复）
+  disabled: boolean;
+  updatedAt: string | null;
+}
