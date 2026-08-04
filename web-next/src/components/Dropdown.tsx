@@ -1,10 +1,10 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { ArrowLeft, CaretDown, Check, SpinnerGap, Warning } from "@phosphor-icons/react";
+import { ArrowLeft, CaretDown, CaretRight, Check, SpinnerGap, Warning } from "@phosphor-icons/react";
 import { useDismissable } from "../lib/useDismissable.ts";
 
 /**
- * 全项目统一的下拉选择器 / 组合框。
+ * 全项目统一的下拉选择器 / 组合框，可以是**多步**的。
  *
  * 存在的理由有两条，都来自被 `<select>` 和 `input[list]+datalist` 坑过：
  *
@@ -18,9 +18,10 @@ import { useDismissable } from "../lib/useDismissable.ts";
  * 浮层 portal 到 body 且 fixed 定位（表格/卡片的 overflow 裁不到它），候选永远是
  * 完整的一份，筛选是**另一个**输入框的事。
  *
- * `step2` 让同一个浮层带出**第二步**（模型 → 思考强度）：档位是跟着模型走的，
- * 「先定模型再定强度」比并排两个下拉更接近实情，也免得用户在模型还没定时先挑了
- * 一个该模型根本不支持的档位。
+ * `steps` 让同一个浮层依次问几件事（执行器 → 模型 → 思考强度）：这几件是**一次**
+ * 决定的几半，而且后一步的候选由前一步决定（档位表跟着 CLI 走、模型目录跟着执行器
+ * 走），并排摆三个下拉只会让人先挑出一个根本不成立的组合。第 0 步由组件的顶层
+ * props 描述，`steps` 里每一步都可以有自己的候选、筛选和状态。
  */
 
 export type DropdownOption = {
@@ -36,6 +37,21 @@ export type DropdownOption = {
 };
 
 export type DropdownStatus = "idle" | "loading" | "ready" | "failed";
+
+/** 多步下拉里的一步；第 0 步由 Dropdown 的顶层 props 拼出来。 */
+export type DropdownStep = {
+  label: string;
+  options: DropdownOption[];
+  value: string;
+  onChange: (value: string) => void;
+  filterable?: boolean;
+  filterPlaceholder?: string;
+  allowCustom?: boolean;
+  mono?: boolean;
+  status?: DropdownStatus;
+  note?: string;
+  emptyText?: string;
+};
 
 type Placement = { left: number; top: number; width: number; maxHeight: number };
 
@@ -60,7 +76,7 @@ export function Dropdown({
   displaySuffix = "",
   onClear,
   clearLabel = "清空",
-  step2,
+  steps,
 }: {
   value: string;
   options: DropdownOption[];
@@ -78,22 +94,16 @@ export function Dropdown({
   note?: string;
   mono?: boolean;
   className?: string;
-  /** trigger 上跟在主值后面的小标（例：思考强度）。 */
+  /** trigger 上跟在主值后面的小标（例：模型 · 思考强度）。 */
   displaySuffix?: string;
   /** 给一个「回到不设置」的出口；候选列表里就不必再占一行「跟随…」。 */
   onClear?: () => void;
   clearLabel?: string;
-  /** 选完第一步后接着选的第二步（例：模型选完选思考强度）。 */
-  step2?: {
-    label: string;
-    options: DropdownOption[];
-    value: string;
-    onChange: (value: string) => void;
-    emptyText?: string;
-  };
+  /** 第 0 步选完后接着问的几步（例：执行器 → 模型 → 思考强度）。 */
+  steps?: DropdownStep[];
 }) {
   const [open, setOpen] = useState(false);
-  const [stage, setStage] = useState<1 | 2>(1);
+  const [stage, setStage] = useState(0);
   const [query, setQuery] = useState("");
   const [index, setIndex] = useState(0);
   const [place, setPlace] = useState<Placement | null>(null);
@@ -101,9 +111,16 @@ export function Dropdown({
   const panelRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
+  const levels: DropdownStep[] = [
+    { label, options, value, onChange, filterable, filterPlaceholder, allowCustom, mono, status, note, emptyText },
+    ...(steps ?? []),
+  ];
+  const level = levels[Math.min(stage, levels.length - 1)]!;
+  const canFilter = level.filterable ?? false;
+
   const close = () => {
     setOpen(false);
-    setStage(1);
+    setStage(0);
     setQuery("");
   };
 
@@ -114,25 +131,20 @@ export function Dropdown({
     restoreFocusRef: triggerRef,
   });
 
-  const onStep2 = stage === 2 && !!step2;
-  const stepOptions = onStep2 ? step2.options : options;
-  const canFilter = filterable && !onStep2;
-
   const rows = useMemo<DropdownOption[]>(() => {
     const keyword = query.trim().toLowerCase();
     const hit = keyword
-      ? stepOptions.filter((option) => (
+      ? level.options.filter((option) => (
         option.label.toLowerCase().includes(keyword) || option.value.toLowerCase().includes(keyword)
       ))
-      : stepOptions;
+      : level.options;
     // 手打的内容没跟任何候选重名时，补一行「用它」，否则自由输入无处落地。
-    const custom = allowCustom && !onStep2 && query.trim() && !hit.some((option) => option.value === query.trim())
+    const custom = level.allowCustom && query.trim() && !hit.some((option) => option.value === query.trim())
       ? [{ value: query.trim(), label: query.trim(), detail: "直接使用", mono: true }]
       : [];
     return [...hit, ...custom];
-  }, [allowCustom, onStep2, stepOptions, query]);
+  }, [level.allowCustom, level.options, query]);
 
-  const stepValue = onStep2 ? step2.value : value;
   const active = Math.min(index, Math.max(0, rows.length - 1));
   const current = options.find((option) => option.value === value);
   const display = current?.label ?? (value || "");
@@ -155,9 +167,16 @@ export function Dropdown({
   useLayoutEffect(() => {
     if (!open) return;
     measure();
-    inputRef.current?.focus();
-    if (!canFilter) panelRef.current?.focus();
+    if (canFilter) inputRef.current?.focus();
+    else panelRef.current?.focus();
   }, [canFilter, open, stage]);
+
+  // 进入某一步时把高亮落到这一步的当前值上。放在 effect 里是因为前一步的 onChange
+  // 刚刚才发生，父组件的新值要等这次渲染之后才拿得到。
+  useEffect(() => {
+    if (!open) return;
+    setIndex(Math.max(0, level.options.findIndex((option) => option.value === level.value)));
+  }, [open, stage]);
 
   // 页面滚动/尺寸变化时跟着走：浮层是 fixed 的，不重算就会飘到别处。
   useEffect(() => {
@@ -172,35 +191,53 @@ export function Dropdown({
   }, [open]);
 
   const commit = (next: string) => {
-    if (onStep2) {
-      step2.onChange(next);
-    } else if (step2) {
-      // 第一步落定后不关浮层：紧接着在同一个浮层里选第二步（强度）。
-      onChange(next);
+    level.onChange(next);
+    // 还有下一步：不关浮层，接着问。
+    if (stage < levels.length - 1) {
       setQuery("");
-      setIndex(Math.max(0, step2.options.findIndex((option) => option.value === step2.value)));
-      setStage(2);
+      setStage(stage + 1);
       return;
-    } else {
-      onChange(next);
     }
     close();
     triggerRef.current?.focus();
   };
 
-  const onKeyDown = (event: React.KeyboardEvent) => {
-    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-      event.preventDefault();
-      if (!rows.length) return;
-      const delta = event.key === "ArrowDown" ? 1 : -1;
-      setIndex((active + delta + rows.length) % rows.length);
-      return;
+  const handleKey = (key: string): boolean => {
+    if (key === "ArrowDown" || key === "ArrowUp") {
+      if (rows.length) setIndex((active + (key === "ArrowDown" ? 1 : -1) + rows.length) % rows.length);
+      return true;
     }
-    if (event.key === "Enter") {
-      event.preventDefault();
+    if (key === "Enter") {
       const row = rows[active];
       if (row && !row.disabled) commit(row.value);
+      return true;
     }
+    if (key === "Backspace" && stage > 0 && !query) {
+      setQuery("");
+      setStage(stage - 1);
+      return true;
+    }
+    return false;
+  };
+
+  // 没有筛选框的那几步（思考强度这类），焦点会落在刚被卸载的那一行上、被浏览器退回
+  // body，挂在浮层上的 React onKeyDown 就再也收不到冒泡——↑↓ 当场失灵而 Esc 还好用
+  // （它是 useDismissable 的 document 级监听）。所以这几步的键盘也挂到 document 上。
+  const keyRef = useRef(handleKey);
+  keyRef.current = handleKey;
+  useEffect(() => {
+    if (!open || canFilter) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (!keyRef.current(event.key)) return;
+      event.preventDefault();
+      event.stopPropagation();
+    };
+    document.addEventListener("keydown", onKey, true);
+    return () => document.removeEventListener("keydown", onKey, true);
+  }, [canFilter, open]);
+
+  const onKeyDown = (event: React.KeyboardEvent) => {
+    if (handleKey(event.key)) event.preventDefault();
   };
 
   let lastGroup: string | undefined;
@@ -217,7 +254,7 @@ export function Dropdown({
         disabled={disabled}
         onClick={() => {
           setQuery("");
-          setStage(1);
+          setStage(0);
           setIndex(Math.max(0, options.findIndex((option) => option.value === value)));
           setOpen((current) => !current);
         }}
@@ -237,13 +274,24 @@ export function Dropdown({
           onKeyDown={onKeyDown}
           style={{ left: place.left, top: place.top, width: place.width }}
         >
-          {onStep2 && (
+          {stage > 0 && (
             <div className="ui-dropdown-step">
-              <button type="button" onClick={() => { setStage(1); setIndex(0); }} aria-label="返回上一步">
+              <button
+                type="button"
+                onClick={() => { setQuery(""); setStage(stage - 1); }}
+                aria-label="返回上一步"
+              >
                 <ArrowLeft size={11} weight="bold" />
               </button>
-              <b>{step2.label}</b>
-              <span>{display || placeholder}</span>
+              <b>{level.label}</b>
+              <span>
+                {levels.slice(0, stage).map((done, order) => (
+                  <span key={done.label}>
+                    {order > 0 && <CaretRight size={8} weight="bold" aria-hidden="true" />}
+                    {done.options.find((option) => option.value === done.value)?.label || done.value || "跟随"}
+                  </span>
+                ))}
+              </span>
             </div>
           )}
           {canFilter && (
@@ -251,22 +299,24 @@ export function Dropdown({
               <input
                 ref={inputRef}
                 value={query}
-                placeholder={filterPlaceholder}
-                aria-label={`${label} · 筛选`}
+                placeholder={level.filterPlaceholder ?? "筛选…"}
+                aria-label={`${level.label} · 筛选`}
                 onChange={(event) => { setQuery(event.target.value); setIndex(0); }}
               />
             </div>
           )}
-          {note && (
-            <p className={`ui-dropdown-note${status === "failed" ? " is-error" : ""}`}>{note}</p>
+          {level.note && (
+            <p className={`ui-dropdown-note${level.status === "failed" ? " is-error" : ""}`}>{level.note}</p>
           )}
           <div
             className="ui-dropdown-rows"
             role="listbox"
-            aria-label={onStep2 ? step2.label : label}
-            style={{ maxHeight: place.maxHeight - (canFilter ? 42 : 0) - (onStep2 ? 30 : 0) - (onClear ? 28 : 0) }}
+            aria-label={level.label}
+            style={{
+              maxHeight: place.maxHeight - (canFilter ? 42 : 0) - (stage > 0 ? 30 : 0) - (onClear ? 28 : 0),
+            }}
           >
-            {!rows.length && <p className="ui-dropdown-empty">{(onStep2 ? step2.emptyText : emptyText) ?? emptyText}</p>}
+            {!rows.length && <p className="ui-dropdown-empty">{level.emptyText ?? "没有匹配项"}</p>}
             {rows.map((row, rowIndex) => {
               const head = row.group && row.group !== lastGroup ? row.group : "";
               lastGroup = row.group;
@@ -278,19 +328,19 @@ export function Dropdown({
                     role="option"
                     aria-selected={rowIndex === active}
                     aria-disabled={row.disabled}
-                    className={`ui-dropdown-row${row.value === stepValue ? " is-current" : ""}${row.mono ?? mono ? " is-mono" : ""}${row.disabled ? " is-disabled" : ""}`}
+                    className={`ui-dropdown-row${row.value === level.value ? " is-current" : ""}${row.mono ?? level.mono ? " is-mono" : ""}${row.disabled ? " is-disabled" : ""}`}
                     onMouseEnter={() => setIndex(rowIndex)}
                     onClick={() => { if (!row.disabled) commit(row.value); }}
                   >
                     <b>{row.label}</b>
                     {row.detail && <span>{row.detail}</span>}
-                    {row.value === stepValue && <Check size={11} weight="bold" aria-hidden="true" />}
+                    {row.value === level.value && <Check size={11} weight="bold" aria-hidden="true" />}
                   </button>
                 </div>
               );
             })}
           </div>
-          {onClear && !onStep2 && (
+          {onClear && stage === 0 && (
             <button
               type="button"
               className="ui-dropdown-clear"

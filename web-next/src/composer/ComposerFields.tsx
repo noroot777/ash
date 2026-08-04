@@ -6,17 +6,12 @@ import type {
   TaskMode,
   TeamPresetConfig,
 } from "@harness/shared";
-import { CaretDown, GearSix, SlidersHorizontal } from "@phosphor-icons/react";
+import { GearSix, SlidersHorizontal } from "@phosphor-icons/react";
 import { Dropdown } from "../components/Dropdown.tsx";
-import { ModelCatalogField, type EffortStep } from "../components/ModelCatalogField.tsx";
+import { ExecutorModelField } from "../components/ExecutorModelField.tsx";
 import { Toggle } from "../components/ui.tsx";
 import { TaskLabelsEditor } from "../components/TaskLabelsEditor.tsx";
-import {
-  executorOptions,
-  executorRunSummary,
-  executorValue,
-  parseExecutorValue,
-} from "../lib/agentAvailability.ts";
+import { executorRunSummary, parseExecutorValue } from "../lib/agentAvailability.ts";
 import type { ComposerExecutorConfigs, ComposerExecutorRole } from "./executorOverrides.ts";
 import { PresetBar } from "./PresetBar.tsx";
 
@@ -37,6 +32,7 @@ export function ExecutorSelect({
   fallbackType,
   override,
   onChange,
+  onOverrideChange,
 }: {
   label: string;
   value: string;
@@ -47,101 +43,32 @@ export function ExecutorSelect({
   /** 该角色的模型/思考强度覆盖——决定这一栏底下写什么，见 executorRunSummary。 */
   override?: { model?: string | null; effort?: string | null };
   onChange: (value: string) => void;
+  /** 传了就在同一个下拉里接着选模型与思考强度；不传就是纯执行器选择（辩论）。 */
+  onOverrideChange?: (patch: { model?: string; effort?: string }) => void;
 }) {
   const selection = parseExecutorValue(value, knownProfiles, { agentType: fallbackType, executorId: null });
-  const options = executorOptions({ types, profiles, knownProfiles, selection });
-  const pickableCount = types.length + profiles.length;
   // 选项文本里的模型是 Profile 自带的那个;覆盖存在时它就不是实际会跑的模型了。
   const run = executorRunSummary(selection, knownProfiles, override);
   return (
-    <div className="composer-field">
-      <span>{label}</span>
-      <Dropdown
-        label={label}
-        value={pickableCount || options.length ? executorValue(selection) : ""}
-        options={options.map((option) => ({
-          value: option.value,
-          label: option.label,
-          disabled: option.disabled,
-        }))}
-        disabled={pickableCount === 0}
-        filterable={options.length > 6}
-        filterPlaceholder="筛选执行器…"
-        placeholder="暂无可用执行器"
-        emptyText="没有匹配的执行器"
-        onChange={onChange}
-      />
-      {run.overridden && (
+    <ExecutorModelField
+      label={label}
+      value={value}
+      types={types}
+      profiles={profiles}
+      knownProfiles={knownProfiles}
+      fallbackType={fallbackType}
+      model={override?.model ?? ""}
+      effort={override?.effort ?? ""}
+      onChange={onChange}
+      onModelChange={onOverrideChange ? (model) => onOverrideChange({ model }) : undefined}
+      onEffortChange={onOverrideChange ? (effort) => onOverrideChange({ effort }) : undefined}
+      hint={run.overridden && (
         <small className="composer-field-run">
           实际运行：{run.model ?? "跟随执行器"}{run.effort ? ` · ${run.effort}` : ""}
           <em>覆盖</em>
         </small>
       )}
-    </div>
-  );
-}
-
-/**
- * 候选来自统一的模型目录（供应商固定清单或实时 API），不再只有 CLI 别名。
- * 传 `effort` 时思考强度是同一个下拉的第二步——先定模型再定档位，因为档位表
- * 是跟着模型走的。
- */
-export function ModelField({
-  label,
-  value,
-  type,
-  profiles,
-  effort,
-  onChange,
-}: {
-  label: string;
-  value: string;
-  type: AgentType;
-  profiles: AgentExecutorProfile[];
-  effort?: EffortStep;
-  onChange: (value: string) => void;
-}) {
-  return (
-    <ModelCatalogField
-      label={label}
-      value={value}
-      type={type}
-      profiles={profiles}
-      effort={effort}
-      onChange={onChange}
     />
-  );
-}
-
-function OverrideGroup({
-  role,
-  label,
-  config,
-  type,
-  profiles,
-  onChange,
-}: {
-  role: ComposerExecutorRole;
-  label: string;
-  config: ComposerExecutorConfigs[ComposerExecutorRole];
-  type: AgentType;
-  profiles: AgentExecutorProfile[];
-  onChange: (role: ComposerExecutorRole, patch: { model?: string; effort?: string }) => void;
-}) {
-  return (
-    <div className="composer-override-group">
-      <b>{label}</b>
-      <div>
-        <ModelField
-          label="模型"
-          value={config.model}
-          type={type}
-          profiles={profiles}
-          effort={{ value: config.effort, onChange: (effort) => onChange(role, { effort }) }}
-          onChange={(model) => onChange(role, { model })}
-        />
-      </div>
-    </div>
   );
 }
 
@@ -224,12 +151,6 @@ export function ComposerFields({
   onLabelsChange: (labels: string[]) => void;
   onCreateGroup: () => void;
 }) {
-  const overrideRoles: ComposerExecutorRole[] = mode === "team" ? ["lead", "worker", "reviewer"] : ["single"];
-  const overrideCount = overrideRoles.reduce(
-    (count, role) => count + Number(!!executors[role].model) + Number(!!executors[role].effort),
-    0,
-  );
-
   return (
     <div className="composer-config">
       <section className="composer-config-section is-execution">
@@ -242,13 +163,13 @@ export function ComposerFields({
         )}
         <div className={`composer-executor-grid is-${mode}`}>
           {mode === "single" && (
-            <ExecutorSelect label="执行器" value={executors.single.profile} types={workerTypes} profiles={profiles} knownProfiles={profiles} fallbackType="claude" override={executors.single} onChange={(value) => onExecutorChange("single", value)} />
+            <ExecutorSelect label="执行器" value={executors.single.profile} types={workerTypes} profiles={profiles} knownProfiles={profiles} fallbackType="claude" override={executors.single} onChange={(value) => onExecutorChange("single", value)} onOverrideChange={(patch) => onOverrideChange("single", patch)} />
           )}
           {mode === "team" && (
             <>
-              <ExecutorSelect label="调度者执行器" value={executors.lead.profile} types={leadTypes} profiles={leadProfiles} knownProfiles={profiles} fallbackType="claude" override={executors.lead} onChange={(value) => onExecutorChange("lead", value)} />
-              <ExecutorSelect label="执行者执行器" value={executors.worker.profile} types={workerTypes} profiles={profiles} knownProfiles={profiles} fallbackType="codex" override={executors.worker} onChange={(value) => onExecutorChange("worker", value)} />
-              <ExecutorSelect label="审查者执行器" value={executors.reviewer.profile} types={workerTypes} profiles={profiles} knownProfiles={profiles} fallbackType={executorTypes.worker} override={executors.reviewer} onChange={(value) => onExecutorChange("reviewer", value)} />
+              <ExecutorSelect label="调度者执行器" value={executors.lead.profile} types={leadTypes} profiles={leadProfiles} knownProfiles={profiles} fallbackType="claude" override={executors.lead} onChange={(value) => onExecutorChange("lead", value)} onOverrideChange={(patch) => onOverrideChange("lead", patch)} />
+              <ExecutorSelect label="执行者执行器" value={executors.worker.profile} types={workerTypes} profiles={profiles} knownProfiles={profiles} fallbackType="codex" override={executors.worker} onChange={(value) => onExecutorChange("worker", value)} onOverrideChange={(patch) => onOverrideChange("worker", patch)} />
+              <ExecutorSelect label="审查者执行器" value={executors.reviewer.profile} types={workerTypes} profiles={profiles} knownProfiles={profiles} fallbackType={executorTypes.worker} override={executors.reviewer} onChange={(value) => onExecutorChange("reviewer", value)} onOverrideChange={(patch) => onOverrideChange("reviewer", patch)} />
             </>
           )}
           {mode === "debate" && (
@@ -262,29 +183,6 @@ export function ComposerFields({
           <p className={`composer-agent-availability is-${availabilityTone ?? "warning"}`}>{availabilityMessage}</p>
         )}
       </section>
-
-      {mode !== "debate" && (
-        <details className="composer-advanced">
-          <summary>
-            <span className="composer-advanced-icon"><GearSix size={14} /></span>
-            <span><b>高级配置</b><small>模型与思考强度默认跟随执行器</small></span>
-            {overrideCount > 0 && <em>{overrideCount} 项覆盖</em>}
-            <CaretDown className="composer-advanced-caret" size={13} />
-          </summary>
-          <div className="composer-advanced-body">
-            {mode === "single" && (
-              <OverrideGroup role="single" label="执行器覆盖" config={executors.single} type={executorTypes.single} profiles={profiles} onChange={onOverrideChange} />
-            )}
-            {mode === "team" && (
-              <>
-                <OverrideGroup role="lead" label="调度者覆盖" config={executors.lead} type={executorTypes.lead} profiles={profiles} onChange={onOverrideChange} />
-                <OverrideGroup role="worker" label="执行者覆盖" config={executors.worker} type={executorTypes.worker} profiles={profiles} onChange={onOverrideChange} />
-                <OverrideGroup role="reviewer" label="审查者覆盖" config={executors.reviewer} type={executorTypes.reviewer} profiles={profiles} onChange={onOverrideChange} />
-              </>
-            )}
-          </div>
-        </details>
-      )}
 
       <section className="composer-config-section is-options">
         <header className="composer-section-heading">

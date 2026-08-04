@@ -151,7 +151,7 @@ export function ProviderModelInput({
         placeholder={provider ? provider.model || "跟随供应商默认" : "跟随 CLI"}
         onChange={commit}
         displaySuffix={effort?.value ?? ""}
-        step2={step2}
+        steps={step2 ? [step2] : undefined}
         onClear={value || effort?.value ? clear : undefined}
         clearLabel={followLabel}
       />

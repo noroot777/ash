@@ -88,7 +88,8 @@
 .review-dispatch-control > form { border-top: .5px solid color-mix(in lch,var(--accent) 16%,var(--line)); }
 .review-dispatch-control fieldset { min-width: 0; margin: 0; border: 0; padding: 9px; }
 /* 两栏：执行器 / 模型（模型下拉里再分第二步选思考强度）。 */
-.review-dispatch-fields { display: grid; grid-template-columns: minmax(180px,1.2fr) minmax(160px,1fr); gap: 8px; }
+/* 执行器·模型·强度合成一个下拉之后这里只剩一栏，别再撑成两列的半宽。 */
+.review-dispatch-fields { display: grid; gap: 8px; max-width: 420px; }
 .review-dispatch-fields .composer-field { gap: 4px; }
 .review-dispatch-fields .composer-field > span { font-size: 9px; }
 .review-dispatch-fields .composer-field input, .review-dispatch-fields .composer-field select { height: 30px; border-radius: 7px; font-size: 10.5px; }

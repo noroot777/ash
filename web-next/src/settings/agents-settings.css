@@ -658,6 +658,29 @@
   color: var(--red);
 }
 
+/* 固定模型列表里每行的「测试」按钮（供应商列表行上的那颗已经撤掉了，但这里还留着，
+   钉一个模型时能就地验一下它到底通不通）。 */
+.provider-test-action {
+  display: inline-flex;
+  min-width: 54px;
+  height: 28px;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--panel);
+  color: var(--muted);
+  font-size: 9px;
+}
+.provider-test-action:hover:not(:disabled) {
+  border-color: color-mix(in lch, var(--accent) 40%, var(--line));
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.provider-test-action:disabled {
+  opacity: 0.55;
+}
 .provider-pinned-list small:not(.is-error) + .provider-test-action,
 .provider-pinned-list code + .provider-test-action {
   margin-left: auto;

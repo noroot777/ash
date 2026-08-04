@@ -132,29 +132,48 @@ export function AgentModelPicker({
     if (row) openEffort(row.executorId, row.model);
   };
 
-  const onKeyDown = (event: React.KeyboardEvent) => {
-    if (event.key === "ArrowDown") {
-      event.preventDefault();
+  const handleKey = (key: string): boolean => {
+    if (key === "ArrowDown") {
       setIndex(stepIndex(rowCount, active, 1));
-      return;
+      return true;
     }
-    if (event.key === "ArrowUp") {
-      event.preventDefault();
+    if (key === "ArrowUp") {
       setIndex(stepIndex(rowCount, active, -1));
-      return;
+      return true;
     }
-    if (event.key === "Enter") {
-      event.preventDefault();
+    if (key === "Enter") {
       pick();
-      return;
+      return true;
     }
     // 筛选词已经空了还按退格 = 「上一步我选错了」，退一步而不是关掉。
-    if (event.key === "Backspace" && !query
+    if (key === "Backspace" && !query
       && (stage === "effort" || (stage === "model" && initialStage === "agent"))) {
-      event.preventDefault();
       back();
+      return true;
     }
+    return false;
   };
+
+  const onKeyDown = (event: React.KeyboardEvent) => {
+    if (handleKey(event.key)) event.preventDefault();
+  };
+
+  // 强度这步没有筛选框，焦点只能落在容器上——而用户是**点**上一步某一行进来的，
+  // 那颗按钮当场被卸载，浏览器把焦点退回 body，挂在容器上的 onKeyDown 从此收不到
+  // 冒泡：↑↓ 失灵而 Esc 还好用（Esc 归 useDismissable 的 document 级监听）。
+  // 所以这一步的键盘也挂到 document 上，不依赖焦点在哪。
+  const keyRef = useRef(handleKey);
+  keyRef.current = handleKey;
+  useEffect(() => {
+    if (stage !== "effort") return;
+    const onKey = (event: KeyboardEvent) => {
+      if (!keyRef.current(event.key)) return;
+      event.preventDefault();
+      event.stopPropagation();
+    };
+    document.addEventListener("keydown", onKey, true);
+    return () => document.removeEventListener("keydown", onKey, true);
+  }, [stage]);
 
   return (
     <div className="agent-model-picker" ref={containerRef} tabIndex={-1} onKeyDown={onKeyDown}>
