@@ -290,6 +290,77 @@
   box-shadow: none;
 }
 
+/* 选执行器那一栏：胶囊 + 四步浮层（智能体→供应商→模型→强度）。
+   浮层本体就是对话框那套 `.agent-model-picker`，这里只换落点：它挂到 body 上按
+   触发器的位置定位（`is-floating`），因为新建面板的卡片是 overflow: hidden 的，
+   贴着卡片内部弹会被裁掉半截。 */
+.composer-executor-picker {
+  position: relative;
+}
+
+.composer-field .composer-executor-trigger {
+  gap: 6px;
+  height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  padding: 0 10px;
+  box-shadow: none;
+}
+
+.composer-field .composer-executor-trigger:hover:not(:disabled),
+.composer-field .composer-executor-trigger[aria-expanded="true"] {
+  border-color: var(--accent);
+  box-shadow: none;
+}
+
+.composer-executor-trigger > svg:first-child {
+  flex: 0 0 auto;
+  color: var(--muted);
+}
+
+.composer-executor-trigger > b {
+  flex: 0 0 auto;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.composer-executor-trigger > span {
+  flex: 0 0 auto;
+  max-width: 40%;
+  overflow: hidden;
+  color: var(--faint);
+  font-size: 10.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-executor-trigger > code {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  color: var(--muted);
+  font: 10.5px var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-executor-trigger > em {
+  flex: 0 0 auto;
+  border-radius: 4px;
+  background: color-mix(in lch, var(--accent) 14%, transparent);
+  padding: 1px 4px;
+  color: var(--accent);
+  font-size: 9px;
+  font-style: normal;
+  font-weight: 600;
+}
+
+.composer-field-run.is-error {
+  color: var(--red);
+}
+
 /* 选择器只写得下 Profile 名 + Profile 自带模型;覆盖生效时实际跑的是别的模型,
    所以生效值单独占一行,覆盖态再加个角标(见 executorRunSummary)。 */
 .composer-field-run {

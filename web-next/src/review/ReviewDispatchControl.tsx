@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { AgentExecutorProfile, Task, TaskReviewRound } from "@harness/shared";
 import { MagnifyingGlass, SpinnerGap, WarningCircle } from "@phosphor-icons/react";
-import { ExecutorSelect, ModelField } from "../composer/ComposerFields.tsx";
+import { ExecutorPickerField } from "../composer/ExecutorPickerField.tsx";
 import {
   executorValue,
   isExecutorPickable,
@@ -181,27 +181,23 @@ export function ReviewDispatchControl({
         <form onSubmit={(event) => { event.preventDefault(); void dispatch(); }}>
           <fieldset disabled={dispatching}>
             <div className="review-dispatch-fields">
-              <ExecutorSelect
-                label="审查执行器 Profile"
+              <ExecutorPickerField
+                label="审查执行器"
                 value={executorValue(selection)}
                 types={workerTypes}
                 profiles={profiles}
                 knownProfiles={profiles}
                 fallbackType={defaults.selection.agentType}
+                override={{ model, effort }}
                 onChange={(value) => {
-                  const next = parseExecutorValue(value, profiles, selection);
-                  setSelection(next);
+                  setSelection(parseExecutorValue(value, profiles, selection));
                   setModel("");
                   setEffort("");
                 }}
-              />
-              <ModelField
-                label="模型"
-                value={model}
-                type={selection.agentType}
-                profiles={profiles}
-                effort={{ value: effort, onChange: setEffort }}
-                onChange={setModel}
+                onOverrideChange={(patch) => {
+                  if (patch.model !== undefined) setModel(patch.model);
+                  if (patch.effort !== undefined) setEffort(patch.effort);
+                }}
               />
             </div>
             {availabilityMessage && (

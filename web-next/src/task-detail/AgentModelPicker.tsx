@@ -1,4 +1,5 @@
 import { useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { createPortal } from "react-dom";
 import type { AgentExecutorProfile, AgentType, LlmProvider } from "@harness/shared";
 import { ArrowLeft, CaretRight, Robot, SpinnerGap, Warning } from "@phosphor-icons/react";
 import { REASONING_EFFORT_VALUES } from "@harness/shared/cli-presets";
@@ -28,7 +29,16 @@ import {
  * 组合要等 CLI 真跑起来才被上游拒绝。档位表来自 shared 的 REASONING_EFFORT_VALUES
  * （按 CLI 分档）——供应商的 /v1/models 只返回模型 id，接口里拿不到档位能力；
  * 该 CLI 没有档位时第四步自动跳过，选完模型直接落定。
+ *
+ * 两种落点：默认贴着调用方自己的定位上下文（对话框在页面底部，朝上弹）；传 `anchorRef`
+ * 就改成挂到 body 的 fixed 浮层并贴着那颗触发器算位置——新建任务面板的卡片是
+ * `overflow: hidden` 的，不这么做浮层会被卡片边界裁掉半截。
  */
+
+type Placement = { left: number; top: number; width: number };
+
+const PANEL_WIDTH = 320;
+const PANEL_HEIGHT = 320; // 够不够翻转到上方的判据，不是硬高度（内部列表自带 max-height）
 
 type Stage = "agent" | "provider" | "model" | "effort";
 export function AgentModelPicker({
@@ -38,6 +48,7 @@ export function AgentModelPicker({
   initialStage,
   initialAgent,
   triggerRef,
+  anchorRef,
   onCommit,
   onCancel,
 }: {
@@ -47,6 +58,8 @@ export function AgentModelPicker({
   initialStage: "agent" | "provider";
   initialAgent: AgentType;
   triggerRef?: RefObject<HTMLElement | null>;
+  /** 传了就挂到 body 上、贴着这个元素定位（躲开祖先的 overflow 裁切）。 */
+  anchorRef?: RefObject<HTMLElement | null>;
   onCommit: (target: MentionTarget) => void;
   onCancel: () => void;
 }) {
@@ -58,8 +71,34 @@ export function AgentModelPicker({
   const [index, setIndex] = useState(0);
   const containerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const [place, setPlace] = useState<Placement | null>(null);
 
   useDismissable({ enabled: true, containerRef, onClose: onCancel, restoreFocusRef: triggerRef });
+
+  // fixed 落点：贴着触发器算，下方装不下就翻到上方；页面滚动/改尺寸时跟着走。
+  useLayoutEffect(() => {
+    if (!anchorRef) return;
+    const measure = () => {
+      const rect = anchorRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      const below = window.innerHeight - rect.bottom - 12;
+      const above = rect.top - 12;
+      const flip = below < PANEL_HEIGHT && above > below;
+      const width = Math.max(rect.width, PANEL_WIDTH);
+      setPlace({
+        left: Math.max(8, Math.min(rect.left, window.innerWidth - width - 8)),
+        top: flip ? Math.max(8, rect.top - 6 - PANEL_HEIGHT) : rect.bottom + 6,
+        width,
+      });
+    };
+    measure();
+    window.addEventListener("scroll", measure, true);
+    window.addEventListener("resize", measure);
+    return () => {
+      window.removeEventListener("scroll", measure, true);
+      window.removeEventListener("resize", measure);
+    };
+  }, [anchorRef]);
 
   // 打开或切步骤就把焦点接回筛选框，避免上一行按钮被卸载后把焦点退回 body。
   // **每一步都必须有这个输入框**（强度那步也不例外）：workspace 的 j/k/↑↓ 快捷键
@@ -188,8 +227,14 @@ export function AgentModelPicker({
     }
   };
 
-  return (
-    <div className="agent-model-picker" ref={containerRef} tabIndex={-1} onKeyDown={onKeyDown}>
+  const panel = (
+    <div
+      className={`agent-model-picker${anchorRef ? " is-floating" : ""}`}
+      ref={containerRef}
+      tabIndex={-1}
+      onKeyDown={onKeyDown}
+      style={anchorRef && place ? { left: place.left, top: place.top, width: place.width } : undefined}
+    >
       <div className="agent-model-picker-head">
         {(stage === "effort" || stage === "model" || (stage === "provider" && initialStage === "agent")) && (
           <button type="button" className="agent-model-picker-back" onClick={back} aria-label="返回上一步">
@@ -317,4 +362,6 @@ export function AgentModelPicker({
       </footer>
     </div>
   );
+
+  return anchorRef ? createPortal(panel, document.body) : panel;
 }

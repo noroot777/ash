@@ -46,6 +46,13 @@
   background: var(--panel);
   box-shadow: var(--menu-shadow);
 }
+/* 挂到 body 上的那份（新建任务/派生/派审用）：位置由 JS 按触发器算，见 AgentModelPicker。 */
+.agent-model-picker.is-floating {
+  position: fixed;
+  z-index: 60;
+  bottom: auto;
+  margin-bottom: 0;
+}
 .agent-model-picker-head { display: flex; align-items: center; gap: 6px; border-bottom: 0.5px solid var(--line); padding: 7px 8px; }
 .agent-model-picker-back { display: grid; width: 20px; height: 20px; flex: 0 0 auto; place-items: center; border: 0; border-radius: 5px; background: transparent; color: var(--muted); }
 .agent-model-picker-back:hover { background: var(--raised); color: var(--ink); }

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import type { AgentExecutorProfile, AgentType, DebateConfig, Task, TeamConfig } from "@harness/shared";
 import {
   DEBATE_DEFAULTS,
@@ -15,8 +15,8 @@ import {
   X,
 } from "@phosphor-icons/react";
 import { Dropdown } from "../components/Dropdown.tsx";
-import { ModelCatalogField } from "../components/ModelCatalogField.tsx";
 import { Button, Toggle } from "../components/ui.tsx";
+import { ExecutorPickerField } from "../composer/ExecutorPickerField.tsx";
 import {
   executorOptions,
   executorValue,
@@ -117,34 +117,22 @@ function TeamExecutorField({
   profiles: AgentExecutorProfile[];
   knownProfiles: AgentExecutorProfile[];
   fallbackType: AgentType;
-  onChange: (choice: ExecutorChoice) => void;
+  /** 必须是 setState 本人：选执行器与写覆盖是同一轮里的两次更新，函数式更新才不会互相盖掉。 */
+  onChange: Dispatch<SetStateAction<ExecutorChoice>>;
 }) {
-  const type = parseExecutorValue(
-    choice.profile,
-    knownProfiles,
-    { agentType: fallbackType, executorId: null },
-  ).agentType;
   return (
     <div className="task-derivation-role">
-      <ExecutorSelect
+      <ExecutorPickerField
         label={label}
         value={choice.profile}
         types={types}
         profiles={profiles}
         knownProfiles={knownProfiles}
         fallbackType={fallbackType}
+        override={choice}
         onChange={(profile) => onChange({ profile, model: "", effort: "" })}
+        onOverrideChange={(patch) => onChange((current) => ({ ...current, ...patch }))}
       />
-      <div className="task-derivation-overrides">
-        <ModelCatalogField
-          label="模型"
-          value={choice.model}
-          type={type}
-          profiles={knownProfiles}
-          effort={{ value: choice.effort, onChange: (effort) => onChange({ ...choice, effort }) }}
-          onChange={(model) => onChange({ ...choice, model })}
-        />
-      </div>
     </div>
   );
 }

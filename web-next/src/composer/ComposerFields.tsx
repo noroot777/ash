@@ -18,6 +18,7 @@ import {
   parseExecutorValue,
 } from "../lib/agentAvailability.ts";
 import type { ComposerExecutorConfigs, ComposerExecutorRole } from "./executorOverrides.ts";
+import { ExecutorPickerField } from "./ExecutorPickerField.tsx";
 import { PresetBar } from "./PresetBar.tsx";
 
 const PRIORITIES: { value: Priority; label: string }[] = [
@@ -242,16 +243,18 @@ export function ComposerFields({
         )}
         <div className={`composer-executor-grid is-${mode}`}>
           {mode === "single" && (
-            <ExecutorSelect label="执行器" value={executors.single.profile} types={workerTypes} profiles={profiles} knownProfiles={profiles} fallbackType="claude" override={executors.single} onChange={(value) => onExecutorChange("single", value)} />
+            <ExecutorPickerField label="执行器" value={executors.single.profile} types={workerTypes} profiles={profiles} knownProfiles={profiles} fallbackType="claude" override={executors.single} onChange={(value) => onExecutorChange("single", value)} onOverrideChange={(patch) => onOverrideChange("single", patch)} />
           )}
           {mode === "team" && (
             <>
-              <ExecutorSelect label="调度者执行器" value={executors.lead.profile} types={leadTypes} profiles={leadProfiles} knownProfiles={profiles} fallbackType="claude" override={executors.lead} onChange={(value) => onExecutorChange("lead", value)} />
-              <ExecutorSelect label="执行者执行器" value={executors.worker.profile} types={workerTypes} profiles={profiles} knownProfiles={profiles} fallbackType="codex" override={executors.worker} onChange={(value) => onExecutorChange("worker", value)} />
-              <ExecutorSelect label="审查者执行器" value={executors.reviewer.profile} types={workerTypes} profiles={profiles} knownProfiles={profiles} fallbackType={executorTypes.worker} override={executors.reviewer} onChange={(value) => onExecutorChange("reviewer", value)} />
+              <ExecutorPickerField label="调度者执行器" value={executors.lead.profile} types={leadTypes} profiles={leadProfiles} knownProfiles={profiles} fallbackType="claude" override={executors.lead} onChange={(value) => onExecutorChange("lead", value)} onOverrideChange={(patch) => onOverrideChange("lead", patch)} />
+              <ExecutorPickerField label="执行者执行器" value={executors.worker.profile} types={workerTypes} profiles={profiles} knownProfiles={profiles} fallbackType="codex" override={executors.worker} onChange={(value) => onExecutorChange("worker", value)} onOverrideChange={(patch) => onOverrideChange("worker", patch)} />
+              <ExecutorPickerField label="审查者执行器" value={executors.reviewer.profile} types={workerTypes} profiles={profiles} knownProfiles={profiles} fallbackType={executorTypes.worker} override={executors.reviewer} onChange={(value) => onExecutorChange("reviewer", value)} onOverrideChange={(patch) => onOverrideChange("reviewer", patch)} />
             </>
           )}
           {mode === "debate" && (
+            // 辩手只选执行器：辩论配置里没有「每个辩手各自的模型」这个字段（见 shared 的
+            // DebateConfig），换成四步选择器会让人选完模型却无处存放。
             <>
               <ExecutorSelect label="正方执行器" value={debaterAProfile} types={workerTypes} profiles={profiles} knownProfiles={profiles} fallbackType="claude" onChange={onDebaterAChange} />
               <ExecutorSelect label="反方执行器" value={debaterBProfile} types={workerTypes} profiles={profiles} knownProfiles={profiles} fallbackType="codex" onChange={onDebaterBChange} />
