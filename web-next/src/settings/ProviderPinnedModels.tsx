@@ -139,7 +139,7 @@ export function ProviderPinnedModels({
   return (
     <div className="is-wide provider-pinned-field">
       <div className="provider-pinned-head">
-        <div>
+        <div className="provider-pinned-copy">
           <b>选择器里的模型列表</b>
           <small>
             {mode === "api"

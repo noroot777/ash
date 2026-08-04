@@ -549,8 +549,11 @@
   gap: 18px;
 }
 
-.provider-pinned-head > div {
+/* 只命中左边那段文案：写成 `> div` 会连 PillTabs 的 .ui-tabs 一起改成 grid，
+   两个模式按钮就竖着堆起来并溢出到卡片外。 */
+.provider-pinned-copy {
   display: grid;
+  min-width: 0;
   gap: 3px;
 }
 
