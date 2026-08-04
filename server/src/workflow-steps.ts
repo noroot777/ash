@@ -40,6 +40,14 @@ export interface SegmentResult {
   reason?: string;
 }
 
+export interface SegmentOptions {
+  /**
+   * 跳过「合并并清理」这一站。只有一种场合要用：**用户刚点完验收**，acceptTask 回过头来
+   * 跑「点头之后那一段」——那一站正是刚刚做完的事，不能再做一遍。
+   */
+  skipAccept?: boolean;
+}
+
 function shorten(text: string, max = 600): string {
   const trimmed = text.trim();
   return trimmed.length > max ? `…${trimmed.slice(-max)}` : trimmed;
@@ -93,21 +101,34 @@ async function runPreview(task: TaskRow, step: PreviewStep): Promise<SegmentResu
   return { ok: false, failed: step, reason: result.reason };
 }
 
+// 「合并并清理」这一站：**不在这里另写一套合并**，直接调用户点「验收通过」走的那条路
+// （acceptTask 带着仓库锁、冲突处理、「绝不 -D」的规矩）。区别只在谁按下的：线上没写
+// 「等我点头」时，走到这一站就是这条线自己按的。
+// 怎么合、清到什么程度全读这一站的参数——acceptTask 里的 acceptPlan() 读的就是它。
+async function runAccept(task: TaskRow, step: WorkflowStep): Promise<SegmentResult> {
+  await appendTaskTimeline(task.id, "这条线上没写「等我点头」，走到「合并并清理」就自己合了。");
+  const { acceptTask } = await import("./task-accept.js");
+  const result = await acceptTask(task.id);
+  if (result.accepted) return { ok: true };
+  return { ok: false, failed: step, reason: result.error };
+}
+
 // 把紧跟某个锚点之后的那一段跑完。任何一站砸了就地停下——后面的站多半依赖前面的产物
 // （典型：先跑 build 再起预览），继续往下跑只会把一个错误变成两个。
 export async function runSegment(
   task: TaskRow,
   def: WorkflowDef | null,
   anchor: AnchorKind,
+  opts: SegmentOptions = {},
 ): Promise<SegmentResult> {
   for (const step of stepsAfterAnchor(def, anchor)) {
     const result = step.kind === "command"
       ? await runCommand(task, step)
       : step.kind === "preview"
         ? await runPreview(task, step)
-        // accept 站不在这里跑：合并清理走 acceptTask 那条确定性路径（它带着仓库锁、
-        // 冲突处理和「绝不 -D」的规矩），这里不另开第二条合并路。
-        : { ok: true } as SegmentResult;
+        : step.kind === "accept" && !opts.skipAccept
+          ? await runAccept(task, step)
+          : { ok: true } as SegmentResult;
     if (!result.ok) {
       await appendTaskTimeline(
         task.id,

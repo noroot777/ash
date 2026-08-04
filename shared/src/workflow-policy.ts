@@ -8,7 +8,7 @@
 // 这一层**不碰队列、不碰分组**：一条线只描述「这一个任务干完之后怎么走」。人工关口
 // 停的是这个任务的验收阶段（stage=awaiting_acceptance），不动 status —— status 是调度
 // 用的，动它会顺带停住它所在的队列，那是另一件事。
-import type { WorkflowDef, WorkflowStep } from "./workflow.js";
+import type { AcceptClean, AcceptStrategy, WorkflowDef, WorkflowStep } from "./workflow.js";
 
 export type VerifyStep = Extract<WorkflowStep, { kind: "verify" }>;
 
@@ -77,4 +77,31 @@ export function workflowPolicy(def: WorkflowDef | null | undefined): WorkflowPol
     humanGate: steps.some((step, i) => step.kind === "human" && i > at),
     autoAccept: steps.some((step) => step.kind === "accept"),
   };
+}
+
+// ── 验收通过时到底做什么 ───────────────────────────────────────────────────
+// 「验收通过」这个动作的语义就是**执行线上那一站「合并并清理」**：怎么合（安全合并 /
+// squash / 只打标签）、清到什么程度（删 worktree 和分支 / 只删 worktree / 都留着），
+// 全读那一站的参数。
+//
+// 线上**没有**这一站时 merge = null，意思是「这条线不合并」——点验收就只是「我认可
+// 这份产物」，git 一动不动，分支和 worktree 都留着。这不是省事：线路图上画着什么，
+// 按下去就该发生什么；线上没画合并却偷偷合了，比不合更让人猝不及防（要合就在编排里
+// 加上这一站，或者自己合）。
+//
+// 老任务（身上根本没有线）走 null → 老规矩 safe + all，行为分毫不变。
+export interface AcceptPlan {
+  /** 怎么合；null = 这条线不合并，只标记验收 */
+  merge: AcceptStrategy | null;
+  /** 合完清到什么程度 */
+  clean: AcceptClean;
+}
+
+export const LEGACY_ACCEPT_PLAN: AcceptPlan = { merge: "safe", clean: "all" };
+
+export function acceptPlan(def: WorkflowDef | null | undefined): AcceptPlan {
+  if (!def) return LEGACY_ACCEPT_PLAN;
+  const step = def.steps.find((s) => s.kind === "accept");
+  if (!step || step.kind !== "accept") return { merge: null, clean: "none" };
+  return { merge: step.p.strategy, clean: step.p.clean };
 }

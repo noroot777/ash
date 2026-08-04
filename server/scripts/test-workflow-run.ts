@@ -184,6 +184,28 @@ assert.deepEqual(
 assert.deepEqual(stepsAfterAnchor(fast, "verify"), [], "线上没这个锚点就是空段");
 assert.deepEqual(stepsAfterAnchor(null, "run"), []);
 
+// ── 验收通过那一刻按线上写的做 ────────────────────────────────────────────
+const { acceptPlan } = await import("@harness/shared/workflow-policy");
+assert.deepEqual(
+  acceptPlan(null), { merge: "safe", clean: "all" },
+  "老任务身上没有线：验收还是老规矩(安全合并 + worktree 和分支都删)，行为分毫不变",
+);
+assert.deepEqual(
+  acceptPlan(standard), { merge: "safe", clean: "all" },
+  "标准交付那一站写的就是安全合并 + 全清",
+);
+assert.deepEqual(
+  acceptPlan(fast), { merge: null, clean: "none" },
+  "线上没有「合并并清理」这一站：点验收只是「我认可这份产物」，git 一动不动",
+);
+const squashLine = structuredClone(standard);
+const squashStep = squashLine.steps.find((s) => s.kind === "accept")!;
+if (squashStep.kind === "accept") squashStep.p = { strategy: "squash", clean: "worktree" };
+assert.deepEqual(
+  acceptPlan(squashLine), { merge: "squash", clean: "worktree" },
+  "改了那一站的参数，验收就按改后的做——线上画着什么，按下去就发生什么",
+);
+
 // ── 命令站真跑 ────────────────────────────────────────────────────────────
 const { execFileSync } = await import("node:child_process");
 const { mkdirSync, writeFileSync, rmSync } = await import("node:fs");
@@ -226,6 +248,28 @@ assert.match(bad.reason ?? "", /这条过不了/, "把命令自己的话原样�
 assert.ok(
   !existsSync(join(repo, "ran.txt")),
   "前一站砸了就不再往下跑：后面的站多半依赖前面的产物",
+);
+
+// ── 「合并并清理」这一站真按下去 ──────────────────────────────────────────
+// t1 没开独立 worktree，所以验收落在「就地认可」那一档：git 不动，stage 变 accepted。
+// 这里要钉住的是**谁按的**——线上没写「等我点头」，就该由这条线自己按。
+const acceptLine = { workspace: "shared" as const, steps: [makeStep("run", "r"), makeStep("accept", "ac")] };
+assert.deepEqual(
+  await runSegment(task, acceptLine, "run"), { ok: true },
+  "干完之后紧接着就是「合并并清理」：不等人，自己按",
+);
+const afterAccept = (await db.select().from(tasks)).find((row) => row.id === "t1")!;
+assert.equal(afterAccept.stage, "accepted", "按下去之后阶段真的走到 accepted");
+
+const { eq } = await import("drizzle-orm");
+await db.update(tasks).set({ stage: null }).where(eq(tasks.id, "t1")); // 擦掉上面那次的痕迹
+assert.deepEqual(
+  await runSegment(task, acceptLine, "run", { skipAccept: true }), { ok: true },
+  "用户刚点完验收时回头跑这一段，得跳过这一站——那正是刚做完的事",
+);
+assert.equal(
+  (await db.select().from(tasks)).find((row) => row.id === "t1")!.stage, null,
+  "跳过就是真没按：阶段一动不动，不会验收第二遍",
 );
 
 // ── 预览站真起真收 ────────────────────────────────────────────────────────
