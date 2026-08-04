@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>工作流编排 · 跑起来之后长什么样</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div class="stage">
+  <p class="cap"><b>编排时画的那条线，执行时原样亮起来。</b>
+    不另外发明一套「运行视图」——同一条横线，同一批站名，只是把「计划」换成「实况」。
+    列表里它压成一根 60px 的进度条，详情页里它就是编排那张图的只读态。</p>
+
+  <!-- ══ 控制条（只是 demo 的遥控器，产品里没有这一行） ══════════ -->
+  <div class="ctl">
+    <button class="play" id="play">▶ 放一遍</button>
+    <button class="ghost" id="rew">⟲ 回到开头</button>
+    <input type="range" id="scrub" min="0" value="0" step="1">
+    <span class="clock" id="clock"></span>
+    <label class="sw"><input type="checkbox" id="hard"><i></i><span>让「自动验证」头一次不过</span></label>
+  </div>
+
+  <!-- ══ 表面一：任务列表 ═══════════════════════════════════════ -->
+  <h3 class="sec">① 任务列表里 —— 不画图，只留一根进度条</h3>
+  <div class="list" id="list"></div>
+
+  <!-- ══ 表面二：任务详情 ═══════════════════════════════════════ -->
+  <h3 class="sec">② 任务详情页顶部 —— 就是编排那张线路图，只读</h3>
+  <div class="detail">
+    <div class="dhd">
+      <span class="badge" id="badge"></span>
+      <b>给设置页加「工作流」入口</b>
+      <span class="path">harness · harness/Sh2BRa8dmONn</span>
+      <span class="sp"></span>
+      <span class="from" id="from"></span>
+    </div>
+    <div class="rail" id="rail"></div>
+    <div class="tl" id="tl"></div>
+  </div>
+
+  <!-- ══ 说明 ═══════════════════════════════════════════════════ -->
+  <div class="notes">
+    <div class="note">
+      <b>为什么不给执行另做一套图</b>
+      <p>你编排的时候盯着这五个站看了半天，跑起来再换成甘特图 / 节点图，等于让你把同一件事学两遍。
+        这里<b>连坐标都不变</b>：第 3 站在编排里排第三，跑起来还在第三个位置亮。
+        出问题时你一眼知道卡在哪个自己配过的关口上。</p>
+    </div>
+    <div class="note">
+      <b>回拐的那一轮是画出来的</b>
+      <p>「验证没过 → 回第 1 站重做」这条支线，在编排图里是一条琥珀色的弧，
+        执行时<b>同一条弧亮起来</b>，并标上「第 2 轮 / 上限 2 轮」。
+        重来第几次、还剩几次，不用翻日志。</p>
+    </div>
+    <div class="note">
+      <b>列表里必须退化成一根条</b>
+      <p>列表一屏几十行，每行塞张图必死。所以那里只保留<b>五个色段 + 一个状态词</b>——
+        色段数 = 站数，亮到第几段就是走到第几站。鼠标停上去才浮出站名。
+        <a href="../ui-demo-workflow-inline/index.html">新建任务里的收起态</a>用的是同一套退化规则。</p>
+    </div>
+  </div>
+
+  <p class="also">同一份定义的其它表面：<a href="../ui-demo-workflow-ride/index.html">线路图 · 能跑一趟（编排）</a> ·
+    <a href="../ui-demo-workflow-inline/index.html">融进新建任务</a> ·
+    <a href="../ui-demo-workflow-line/index.html">纯线路图</a> ·
+    <a href="../ui-demo-workflow-console/index.html">深色调度台</a></p>
+</div>
+
+<script src="../ui-demo-workflow-kit/model.js"></script>
+<script src="../ui-demo-workflow-kit/sim.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

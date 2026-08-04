@@ -1,0 +1,143 @@
+/* 执行态：和 ui-demo-workflow-inline 同一套 web-next 令牌，
+   因为这两张页面在产品里是前后脚出现的（建完任务 → 看它跑）。 */
+*{margin:0;padding:0;box-sizing:border-box}
+[hidden]{display:none!important}
+:root{
+  --chrome:lch(94.44% .5 282);--canvas:lch(97.94% .5 282);--panel:#fff;
+  --raised:lch(96.914% 0 282);--line:lch(90.55% 0 282);--line2:lch(86.5% 0 282);
+  --ink:lch(9.794% 0 282);--muted:lch(39.176% 1.25 282);--faint:lch(64.64% 1.25 282);
+  --accent:#5e6ad2;--accent-soft:lch(92.5% 12 286);
+  --red:#d93d4c;--amber:#b57b00;--green:#2f9e6b;
+  --hover:lch(91.64% .5 282);--sel:lch(89.54% .5 282);
+  --ease:cubic-bezier(.32,.72,0,1);
+}
+body{background:var(--chrome);color:var(--ink);
+  font:13px/1.5 Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
+  -webkit-font-smoothing:antialiased;padding:34px 0 70px}
+button,input{font:inherit;color:inherit;border:0;background:none;cursor:pointer}
+a{color:var(--accent);text-decoration:none}
+a:hover{text-decoration:underline}
+.stage{width:min(1100px,100% - 44px);margin:0 auto}
+.cap{font-size:12.5px;color:var(--muted);line-height:1.85;margin-bottom:20px;max-width:760px}
+.cap b{color:var(--ink);font-weight:600}
+h3.sec{font-size:11px;font-weight:600;letter-spacing:.05em;color:var(--faint);margin:26px 0 9px}
+
+/* ── 遥控器 ───────────────────────────────────────────── */
+.ctl{display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:11px;
+  background:var(--panel);box-shadow:0 0 0 1px var(--line)}
+.play{height:28px;padding:0 13px;border-radius:8px;font-size:12px;font-weight:500;
+  color:#fff;background:var(--accent);transition:filter .2s var(--ease)}
+.play:hover{filter:brightness(1.08)}
+.ghost{height:28px;padding:0 11px;border-radius:8px;font-size:12px;color:var(--muted);
+  background:var(--raised);transition:background .2s var(--ease)}
+.ghost:hover{background:var(--hover);color:var(--ink)}
+#scrub{flex:1;min-width:120px;-webkit-appearance:none;height:4px;border-radius:2px;
+  background:var(--line2);cursor:pointer}
+#scrub::-webkit-slider-thumb{-webkit-appearance:none;width:13px;height:13px;border-radius:50%;
+  background:var(--accent);box-shadow:0 1px 3px lch(0 0 0/.3)}
+.clock{font:11px/1 "SF Mono",ui-monospace,monospace;color:var(--faint);min-width:74px;text-align:right}
+.sw{display:flex;align-items:center;gap:7px;font-size:11.5px;color:var(--muted);cursor:pointer;white-space:nowrap}
+.sw input{display:none}
+.sw i{width:28px;height:16px;border-radius:9px;background:var(--line2);position:relative;
+  transition:background .3s var(--ease)}
+.sw i::after{content:"";position:absolute;top:2px;left:2px;width:12px;height:12px;border-radius:50%;
+  background:#fff;box-shadow:0 1px 2px lch(0 0 0/.25);transition:left .3s var(--ease)}
+.sw input:checked+i{background:var(--amber)}
+.sw input:checked+i::after{left:14px}
+
+/* ── 表面一：任务列表 ─────────────────────────────────── */
+.list{border-radius:11px;background:var(--panel);box-shadow:0 0 0 1px var(--line);overflow:hidden}
+.row{display:flex;align-items:center;gap:12px;height:44px;padding:0 13px;
+  border-bottom:1px solid var(--line);transition:background .2s var(--ease)}
+.row:last-child{border-bottom:0}
+.row:hover{background:var(--raised)}
+.row[data-live="true"]{background:var(--accent-soft)}
+.row .tt{font-size:12.5px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.row .who{font-size:11px;color:var(--faint);white-space:nowrap}
+.row .stt{font-size:11px;min-width:96px;text-align:right;white-space:nowrap}
+.row .stt[data-tone="wait"]{color:var(--amber)}
+.row .stt[data-tone="good"]{color:var(--green)}
+.row .stt[data-tone="bad"]{color:var(--red)}
+.row .stt[data-tone="run"]{color:var(--muted)}
+/* 列表里的退化形态：站数 = 段数，亮到哪段就是走到哪站 */
+.bar{display:flex;gap:2px;width:64px;flex:none}
+.bar u{flex:1;height:4px;border-radius:2px;background:var(--line2);display:block;
+  transition:background .35s var(--ease)}
+.bar u[data-s="done"]{background:var(--green)}
+.bar u[data-s="now"]{background:var(--accent);animation:pulse 1.5s ease-in-out infinite}
+.bar u[data-s="bad"]{background:var(--red)}
+.bar u[data-s="wait"]{background:var(--amber)}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.32}}
+
+/* ── 表面二：任务详情 ─────────────────────────────────── */
+.detail{border-radius:11px;background:var(--panel);box-shadow:0 0 0 1px var(--line);overflow:hidden}
+.dhd{display:flex;align-items:center;gap:9px;height:46px;padding:0 14px;border-bottom:1px solid var(--line)}
+.dhd b{font-size:13px;font-weight:600}
+.dhd .path{font:10.5px/1 "SF Mono",ui-monospace,monospace;color:var(--faint)}
+.dhd .sp{flex:1}
+.dhd .from{font-size:11px;color:var(--faint)}
+.badge{height:21px;padding:0 9px;border-radius:6px;font-size:11px;display:flex;align-items:center;
+  background:var(--raised);color:var(--muted)}
+.badge[data-tone="wait"]{background:color-mix(in srgb,var(--amber) 13%,transparent);color:var(--amber)}
+.badge[data-tone="good"]{background:color-mix(in srgb,var(--green) 13%,transparent);color:var(--green)}
+.badge[data-tone="bad"]{background:color-mix(in srgb,var(--red) 12%,transparent);color:var(--red)}
+
+/* 线路图：一列一站，回拐支线用 grid-column 跨列，天然和站台对齐 */
+.rail{display:grid;gap:0 0;padding:20px 16px 12px;align-items:start}
+.col{grid-row:1;display:flex;flex-direction:column;align-items:center;gap:7px;position:relative;
+  padding:0 6px;min-width:0}
+/* 站与站之间的连线：走过的实、没走到的虚 */
+.col::before{content:"";position:absolute;top:8px;right:50%;left:-50%;height:1.5px;
+  background:var(--line2);z-index:0}
+.col:first-child::before{display:none}
+.col[data-lit="true"]::before{background:var(--green)}
+.node{position:relative;z-index:1;width:17px;height:17px;border-radius:50%;flex:none;
+  display:flex;align-items:center;justify-content:center;font-size:9px;color:#fff;
+  background:var(--panel);box-shadow:0 0 0 1.5px var(--line2);
+  transition:background .35s var(--ease),box-shadow .35s var(--ease)}
+.col[data-s="done"] .node{background:var(--green);box-shadow:0 0 0 1.5px var(--green)}
+.col[data-s="now"] .node{background:var(--accent);box-shadow:0 0 0 1.5px var(--accent),
+  0 0 0 5px color-mix(in srgb,var(--accent) 18%,transparent);animation:halo 1.6s ease-in-out infinite}
+.col[data-s="wait"] .node{background:var(--amber);box-shadow:0 0 0 1.5px var(--amber),
+  0 0 0 5px color-mix(in srgb,var(--amber) 20%,transparent)}
+.col[data-s="bad"] .node{background:var(--red);box-shadow:0 0 0 1.5px var(--red)}
+.col[data-s="pending"] .node{box-shadow:0 0 0 1.5px var(--line2);color:var(--faint);background:var(--panel)}
+.col[data-s="pending"] .node b{color:var(--faint);font-size:8.5px}
+@keyframes halo{0%,100%{box-shadow:0 0 0 1.5px var(--accent),0 0 0 4px color-mix(in srgb,var(--accent) 22%,transparent)}
+  50%{box-shadow:0 0 0 1.5px var(--accent),0 0 0 9px color-mix(in srgb,var(--accent) 0%,transparent)}}
+.col .nm{font-size:11.5px;text-align:center;color:var(--muted);line-height:1.35;
+  transition:color .3s var(--ease)}
+.col[data-s="pending"] .nm{color:var(--faint)}
+.col[data-s="now"] .nm,.col[data-s="wait"] .nm{color:var(--ink);font-weight:600}
+.col .sl{font:10px/1 "SF Mono",ui-monospace,monospace;color:var(--faint);white-space:nowrap}
+.col[data-s="now"] .sl{color:var(--accent)}
+.col[data-s="wait"] .sl{color:var(--amber)}
+.col[data-s="bad"] .sl{color:var(--red)}
+/* 支线：编排图里那条琥珀弧，执行时同一条亮起来 */
+.arc{grid-row:2;margin-top:9px;height:19px;border-radius:0 0 9px 9px;position:relative;
+  border:1px dashed color-mix(in srgb,var(--amber) 45%,transparent);border-top:0;
+  display:flex;align-items:flex-end;justify-content:center;animation:fade .4s var(--ease) both}
+.arc span{transform:translateY(9px);background:var(--panel);padding:0 7px;font-size:10px;color:var(--amber)}
+@keyframes fade{from{opacity:0}to{opacity:1}}
+
+/* 事件时间线 */
+.tl{border-top:1px solid var(--line);max-height:186px;overflow:auto;padding:6px 0}
+.ev{display:flex;align-items:baseline;gap:10px;padding:5px 16px;font-size:11.5px;color:var(--muted)}
+.ev .t{font:10px/1 "SF Mono",ui-monospace,monospace;color:var(--faint);min-width:38px}
+.ev .d{width:6px;height:6px;border-radius:50%;background:var(--line2);flex:none;align-self:center}
+.ev[data-tone="bad"] .d{background:var(--red)}
+.ev[data-tone="loop"] .d{background:var(--amber)}
+.ev[data-tone="wait"] .d{background:var(--amber)}
+.ev[data-tone="good"] .d{background:var(--green)}
+.ev b{color:var(--ink);font-weight:500}
+.ev .n{color:var(--faint);font-size:10.5px}
+.ev[data-cur="true"]{background:var(--accent-soft)}
+.ev.end{border-top:1px solid var(--line);margin-top:4px;padding-top:9px}
+
+/* ── 说明 ─────────────────────────────────────────────── */
+.notes{display:grid;grid-template-columns:repeat(auto-fit,minmax(268px,1fr));gap:14px;margin-top:26px}
+.note{padding:13px 15px;border-radius:11px;background:var(--panel);box-shadow:0 0 0 1px var(--line)}
+.note b{display:block;font-size:11.5px;margin-bottom:6px}
+.note p{font-size:11.5px;color:var(--muted);line-height:1.8}
+.note p b{display:inline;font-size:inherit}
+.also{margin-top:20px;font-size:11.5px;color:var(--faint)}

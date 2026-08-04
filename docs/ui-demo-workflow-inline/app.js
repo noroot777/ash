@@ -14,10 +14,11 @@
 
   var open = false;          // 展开编排
   var own = false;           // 这个任务是否已经分出自己的一份
+  var tpl = "frontend";      // 当前起手式；自己动过一处就置空
   var pop = null;            // 当前微菜单
   var active = null;         // 高亮哪一站
 
-  WF.loadTemplate("frontend");
+  WF.loadTemplate(tpl);
   var BASE = snapshot();     // 本项目的默认，用来「还原」和比对
 
   function snapshot() { return JSON.parse(JSON.stringify({ ws: S.workspace, steps: S.steps })); }
@@ -81,7 +82,9 @@
   }
 
   function renderSrc() {
-    el.src.textContent = own ? "这个任务自己定" : "跟随本项目 · harness";
+    el.src.textContent = !own ? "跟随本项目 · harness"
+      : tpl ? "起手式 · " + WF.TEMPLATES[tpl].name
+      : "这个任务自己定";
     el.src.setAttribute("data-own", String(own));
     if (!own) return el.fork.setAttribute("hidden", "");
     el.fork.removeAttribute("hidden");
@@ -104,7 +107,7 @@
     el.cost.innerHTML = h.join("");
   }
 
-  function edit(fn) { fn(); own = true; render(); }
+  function edit(fn) { fn(); own = true; tpl = null; render(); }
 
   // ── 微菜单 ──────────────────────────────────────────────────────────
   function closePop() { pop = null; active = null; el.pop.setAttribute("hidden", ""); el.pop.innerHTML = ""; render(); }
@@ -219,20 +222,32 @@
   var SRC = [
     ["sys", "跟随系统默认", "所有项目的兜底那份"],
     ["proj", "跟随本项目 · harness", "这个仓库现在的那份"],
-    ["own", "这个任务自己定", "只影响 这一个任务"],
   ];
+  // 起手式和「打哪来」是同一个问题的两个答案，所以合在一个菜单里问：
+  // 要么继承上一层，要么从某个现成的起手式开始改。
   function srcHtml() {
-    var cur = own ? "own" : "proj";
-    return head("这条线从哪来") + SRC.map(function (r) {
-      return '<button class="opt" data-src="' + r[0] + '" data-on="' + (r[0] === cur) + '"><i>✓</i>' +
-        esc(r[1]) + '<span class="sub">' + esc(r[2]) + "</span></button>";
-    }).join("") + '<div class="tip">动了任何一处，它都会自动变成「这个任务自己定」。</div>';
+    var h = [head("这条线打哪来")];
+    SRC.forEach(function (r) {
+      h.push('<button class="opt" data-src="' + r[0] + '" data-on="' + (!own && r[0] === "proj") + '"><i>✓</i>' +
+        esc(r[1]) + '<span class="sub">' + esc(r[2]) + "</span></button>");
+    });
+    h.push('<div class="rule"></div><div class="tip">或者挑个起手式，再在上面改 —— 只影响这一个任务。</div>');
+    Object.keys(WF.TEMPLATES).forEach(function (key) {
+      var t = WF.TEMPLATES[key];
+      var dots = t.build().map(function (row) {
+        return '<u style="background:' + K[row[0]].hue + '"></u>';
+      }).join("");
+      h.push('<button class="opt tpl" data-tpl="' + key + '" data-on="' + (own && tpl === key) + '"><i>✓</i>' +
+        esc(t.name) + '<span class="dots">' + dots + "</span>" +
+        '<span class="sub">' + esc(t.desc) + "</span></button>");
+    });
+    return h.join("");
   }
 
   // ── 事件 ────────────────────────────────────────────────────────────
   document.addEventListener("click", function (e) {
     var t = e.target.closest("[data-ins],[data-stn],[data-edit],[data-add],[data-op],[data-drill]," +
-      "[data-set],[data-check],[data-fail],[data-back],[data-src],[data-save],#grow,#src,#tog");
+      "[data-set],[data-check],[data-fail],[data-back],[data-src],[data-tpl],[data-save],#grow,#src,#tog");
     if (!t) { if (!el.pop.contains(e.target)) closePop(); return; }
     var d = t.dataset;
 
@@ -241,8 +256,12 @@
     if (t === el.src) { return openPop(t, { kind: "src" }); }
 
     if (d.src !== undefined) {
-      if (d.src === "own") own = true;
-      else { restore(BASE); own = false; }
+      restore(BASE); own = false; tpl = "frontend";
+      closePop(); return;
+    }
+    if (d.tpl !== undefined) {
+      edit(function () { WF.loadTemplate(d.tpl); });
+      tpl = d.tpl; renderSrc();
       closePop(); return;
     }
     if (d.save !== undefined) {
