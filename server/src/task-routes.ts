@@ -40,6 +40,7 @@ api.post("/tasks", async (c) => {
     title: string;
     attachments?: string[];
     appendToQueue?: string; // 可选:把新任务追加到指定 queue 的尾部
+    workflowId?: string | null; // 挑哪条起手式;省略则按项目→全局默认解析
   }>();
   const derivationMode = b.mode === "team" || b.mode === "debate";
   if (derivationMode && b.parentId !== undefined && b.parentId !== null) {
@@ -136,6 +137,8 @@ api.post("/tasks", async (c) => {
     useWorktree: b.useWorktree,
     worktreeBase: b.worktreeBase ?? null,
     originTaskId: b.originTaskId ?? null,
+    // createTasks 把它换成 tasks.workflow 里的快照（起手式是快照不是引用）
+    workflowId: b.workflowId ?? null,
   };
   // 可选:追加到现有 queue 的尾部。要求:queue 已存在,且新 task 跟
   // queue 已有任务的 groupId 一致(违反就 400,不静默)。
@@ -484,6 +487,7 @@ api.post("/groups/:groupId/tasks/batch", async (c) => {
       useWorktree: s.useWorktree !== undefined ? s.useWorktree : b.defaults?.useWorktree,
       worktreeBase:
         s.worktreeBase !== undefined ? s.worktreeBase : b.defaults?.worktreeBase ?? null,
+      workflowId: s.workflowId !== undefined ? s.workflowId : b.defaults?.workflowId ?? null,
     };
   });
 

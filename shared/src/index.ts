@@ -2,6 +2,7 @@
 // Mirrors the decisions in DESIGN.md (§3 data model, §5 agents, §7 debate,
 // §8 statuses, §12 debate mechanism, §13 sessions).
 import type { TeamConfig } from "./team.js";
+import type { WorkflowDef } from "./workflow.js";
 export type { Session, SessionRole } from "./session.js";
 export type {
   ReviewConclusion,
@@ -292,6 +293,9 @@ export interface Task {
   // Existing worktrees are reused; cleanup is an explicit user action.
   useWorktree?: boolean;
   worktreeBase?: string | null;
+  // §Workflow 这个任务当初挑的那条线，**创建时拷下来的快照**（改起手式库不会追着改
+  // 它）。老任务为 null —— 那时还没有这个概念，按写死的老流程走。
+  workflow?: WorkflowDef | null;
   // Backlink used by debate ↔ team derivation chains.
   originTaskId?: string | null;
   // §Pause 检查点续跑指令；非空时结算 paused，恢复后清空。
@@ -409,6 +413,7 @@ export interface BatchTaskInput {
   reasoningEffort?: string | null; // overrides defaults.reasoningEffort
   useWorktree?: boolean; // overrides defaults.useWorktree; omitted follows the global setting
   worktreeBase?: string | null; // base ref when this task uses a worktree
+  workflowId?: string | null; // 起手式 id；省略则按项目→全局默认解析，并拷成快照
   priority?: Priority;
   labels?: string[];
   // Each entry is resolved against sibling `key`s first; anything that doesn't
@@ -429,6 +434,7 @@ export interface BatchCreateTasksBody {
     model?: string | null;
     reasoningEffort?: string | null;
     useWorktree?: boolean; // omitted follows DEFAULT_APP_SETTINGS.worktreeDefault
+    workflowId?: string | null; // 这一批默认走哪条起手式
     worktreeBase?: string | null;
     priority?: Priority;
     labels?: string[];
