@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { AgentExecutorProfile, LlmProvider } from "@harness/shared";
-import { REASONING_EFFORT_VALUES } from "@harness/shared/cli-presets";
+import { reasoningEffortsFor } from "@harness/shared/cli-presets";
 import { Star, Trash } from "@phosphor-icons/react";
 import { Dropdown, type DropdownOption } from "../components/Dropdown.tsx";
 import { api } from "../lib/api.ts";
@@ -58,10 +58,11 @@ export function AgentProfileRow({
     return rows;
   }, [protocol, provider, providerOptions]);
 
+  // 档位按这个 profile 配的模型收窄：同一个 CLI 下不同模型吃得下的档位不一样。
   const effortChoices = useMemo<DropdownOption[]>(() => [
     { value: "", label: "跟随 CLI" },
-    ...REASONING_EFFORT_VALUES[profile.type].map((effort) => ({ value: effort, label: effort })),
-  ], [profile.type]);
+    ...reasoningEffortsFor(profile.type, profile.model).map((effort) => ({ value: effort, label: effort })),
+  ], [profile.model, profile.type]);
 
   useEffect(() => {
     if (!editingName) setNameDraft(profile.name);

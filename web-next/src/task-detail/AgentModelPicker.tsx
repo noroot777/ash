@@ -2,7 +2,7 @@ import { useLayoutEffect, useMemo, useRef, useState, type RefObject } from "reac
 import { createPortal } from "react-dom";
 import type { AgentExecutorProfile, AgentType, LlmProvider } from "@harness/shared";
 import { ArrowLeft, CaretRight, Robot, SpinnerGap, Warning } from "@phosphor-icons/react";
-import { REASONING_EFFORT_VALUES } from "@harness/shared/cli-presets";
+import { reasoningEffortsFor } from "@harness/shared/cli-presets";
 import { useAgentModelCatalog } from "../lib/modelCatalog.ts";
 import { useDismissable } from "../lib/useDismissable.ts";
 import {
@@ -25,19 +25,22 @@ import {
  *
  * 第三步是思考强度，**排在模型之后**：档位跟着模型走（gpt-5.5 顶到 xhigh、有的
  * 模型压根没有档位），模型还没定就先挑档位只会挑出一个该模型不支持的值，而非法
- * 组合要等 CLI 真跑起来才被上游拒绝。档位表来自 shared 的 REASONING_EFFORT_VALUES
- * （按 CLI 分档）——供应商的 /v1/models 只返回模型 id，接口里拿不到档位能力；
- * 该 CLI 没有档位时第三步自动跳过，选完模型直接落定。
+ * 组合要等 CLI 真跑起来才被上游拒绝。候选来自 shared 的 `reasoningEffortsFor(type,
+ * model)`：先按 CLI 取档位表，再按该模型的实测上限收窄——供应商的 /v1/models 只
+ * 返回模型 id，接口里拿不到档位能力，所以那份上限只能靠实测积累。这个模型没有档位
+ * 时第三步自动跳过，选完模型直接落定。
  *
  * 两种落点：默认贴着调用方自己的定位上下文（对话框在页面底部，朝上弹）；传 `anchorRef`
  * 就改成挂到 body 的 fixed 浮层并贴着那颗触发器算位置——新建任务面板的卡片是
  * `overflow: hidden` 的，不这么做浮层会被卡片边界裁掉半截。
  */
 
-type Placement = { left: number; top: number; width: number };
+type Placement = { left: number; top: number; width: number; maxHeight: number };
 
 const PANEL_WIDTH = 320;
-const PANEL_HEIGHT = 320; // 够不够翻转到上方的判据，不是硬高度（内部列表自带 max-height）
+const PANEL_GAP = 6; // 面板与触发器之间留的缝
+const PANEL_FALLBACK_HEIGHT = 320; // 只在首帧还没量到真实高度时顶一下
+const PANEL_MIN_HEIGHT = 180; // 再挤也得留出能看见几行的高度
 
 type Stage = "agent" | "model" | "effort";
 export function AgentModelPicker({
@@ -79,20 +82,29 @@ export function AgentModelPicker({
     const measure = () => {
       const rect = anchorRef.current?.getBoundingClientRect();
       if (!rect) return;
-      const below = window.innerHeight - rect.bottom - 12;
-      const above = rect.top - 12;
-      const flip = below < PANEL_HEIGHT && above > below;
+      // 翻转要用面板的**真实**高度，别拿常量猜：猜大了朝上弹会在触发器和面板之间
+      // 留一条与「猜多了多少」等宽的空白（看起来就是浮层飘到了半空），猜小了又会
+      // 顶出屏幕。行数每步都在变，所以下面还挂了 ResizeObserver 跟着重算。
+      const height = containerRef.current?.offsetHeight || PANEL_FALLBACK_HEIGHT;
+      const below = window.innerHeight - rect.bottom - PANEL_GAP;
+      const above = rect.top - PANEL_GAP;
+      const flip = below < height && above > below;
       const width = Math.max(rect.width, PANEL_WIDTH);
       setPlace({
         left: Math.max(8, Math.min(rect.left, window.innerWidth - width - 8)),
-        top: flip ? Math.max(8, rect.top - 6 - PANEL_HEIGHT) : rect.bottom + 6,
+        top: flip ? Math.max(8, rect.top - PANEL_GAP - height) : rect.bottom + PANEL_GAP,
         width,
+        // 那一侧就这么点地方：候选多时让面板自己缩、内部列表滚，别顶出视口。
+        maxHeight: Math.max(PANEL_MIN_HEIGHT, flip ? above : below),
       });
     };
     measure();
+    const observer = new ResizeObserver(measure);
+    if (containerRef.current) observer.observe(containerRef.current);
     window.addEventListener("scroll", measure, true);
     window.addEventListener("resize", measure);
     return () => {
+      observer.disconnect();
       window.removeEventListener("scroll", measure, true);
       window.removeEventListener("resize", measure);
     };
@@ -112,7 +124,9 @@ export function AgentModelPicker({
   const sections = useMemo(() => modelSections(groups, query), [groups, query]);
   const models = useMemo(() => flattenModelRows(sections), [sections]);
 
-  const efforts = REASONING_EFFORT_VALUES[agent] ?? [];
+  // 档位按**模型**算而不是按 CLI：codex 的 ultra/max 只有 gpt-5.6 系列吃得下，
+  // gpt-5.5 选了会被上游拒（见 shared 的 MODEL_EFFORT_CEILINGS）。
+  const efforts = useMemo(() => reasoningEffortsFor(agent, picked?.model), [agent, picked?.model]);
   const effortRows = useMemo(() => {
     const rows = [{ value: "", label: "跟随执行器" }, ...efforts.map((value) => ({ value, label: value }))];
     const keyword = query.trim().toLowerCase();
@@ -132,9 +146,9 @@ export function AgentModelPicker({
     setPicked(null); // 档位表按 CLI 走，换了智能体上一次挑的模型/强度都不成立了
   };
 
-  /** 选完模型：有档位就进第三步，没有就直接落定。 */
+  /** 选完模型：这个模型有档位就进第三步，没有就直接落定。 */
   const openEffort = (executorId: string | null, model: string) => {
-    if (!efforts.length) {
+    if (!reasoningEffortsFor(agent, model).length) {
       onCommit({ agent, executorId, model, reasoningEffort: null });
       return;
     }
@@ -205,7 +219,9 @@ export function AgentModelPicker({
       ref={containerRef}
       tabIndex={-1}
       onKeyDown={onKeyDown}
-      style={anchorRef && place ? { left: place.left, top: place.top, width: place.width } : undefined}
+      style={anchorRef && place
+        ? { left: place.left, top: place.top, width: place.width, maxHeight: place.maxHeight }
+        : undefined}
     >
       <div className="agent-model-picker-head">
         {(stage === "effort" || (stage === "model" && initialStage === "agent")) && (

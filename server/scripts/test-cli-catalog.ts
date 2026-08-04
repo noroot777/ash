@@ -19,7 +19,7 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentEvent } from "@harness/shared";
 import { AGENT_TYPES } from "@harness/shared";
-import { CLI_MODEL_PRESETS, REASONING_EFFORT_VALUES } from "@harness/shared/cli-presets";
+import { CLI_MODEL_PRESETS, REASONING_EFFORT_VALUES, reasoningEffortsFor } from "@harness/shared/cli-presets";
 import { CLI_SPECS, CLI_SPEC_BY_KEY } from "../src/executors/catalog/index.js";
 import { GenericCliExecutor, hasTrustedSessionId, interactiveResumeInner } from "../src/executors/generic.js";
 import { execBinFor, probeBins } from "../src/executors/bin-probe.js";
@@ -56,6 +56,28 @@ for (const type of AGENT_TYPES) {
   assert.ok(Array.isArray(CLI_MODEL_PRESETS[type]), `${type} 没登记 CLI_MODEL_PRESETS`);
   assert.ok(Array.isArray(REASONING_EFFORT_VALUES[type]), `${type} 没登记 REASONING_EFFORT_VALUES`);
 }
+
+// ①b 档位按模型收窄:界面上挑得到的档位必须是那个模型真吃得下的(gpt-5.5 给 ultra
+// 会被上游直接拒)。接口查不到这个能力,只能靠 MODEL_EFFORT_CEILINGS 实测积累。
+assert.deepEqual(
+  reasoningEffortsFor("codex", "gpt-5.5"),
+  ["low", "medium", "high", "xhigh"],
+  "gpt-5.5 顶到 xhigh:ultra/max 不能出现在候选里",
+);
+assert.deepEqual(
+  reasoningEffortsFor("codex", "openai/gpt-5.5-codex"),
+  ["low", "medium", "high", "xhigh"],
+  "带 provider 前缀/后缀名的同一模型也要收窄",
+);
+assert.ok(
+  reasoningEffortsFor("codex", "gpt-5.6-sol").includes("ultra"),
+  "没登记过顶的模型保持 CLI 并集 —— 少列一档比多列一档更难被发现",
+);
+assert.deepEqual(
+  reasoningEffortsFor("codex", null),
+  REASONING_EFFORT_VALUES.codex,
+  "不知道模型时退回该 CLI 的并集",
+);
 
 // ② 每个 spec 的必填字段与自洽性
 for (const s of CLI_SPECS) {

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { AgentExecutorProfile, Group, Session, Task, TaskStatus } from "@harness/shared";
 import { isUserSettableStatus, TASK_STATUS_LABELS } from "@harness/shared";
-import { REASONING_EFFORT_VALUES } from "@harness/shared/cli-presets";
+import { reasoningEffortsFor } from "@harness/shared/cli-presets";
 import { sameExecutor } from "@harness/shared/executors";
 import { ArrowSquareOut, CaretRight, ListNumbers } from "@phosphor-icons/react";
 import { api } from "../lib/api.ts";
@@ -210,11 +210,11 @@ export function TaskInspector({
         : task.mode === "team" && detection.status === "failed"
           ? "常驻能力检测失败；调度者候选仅保留系统已知支持的已注册类型。"
           : null;
-  // 任务上存着的档位可能已经不在该类型的档位表里（换过执行器类型）：仍要列出来，
-  // 否则下拉显示空白，看着像「没设过」。
+  // 任务上存着的档位可能已经不在该模型的档位表里（换过执行器类型或模型）：仍要列
+  // 出来，否则下拉显示空白，看着像「没设过」。
   const effortChoices = [
-    ...effortOptions(agentType),
-    ...(task.reasoningEffort && !REASONING_EFFORT_VALUES[agentType].includes(task.reasoningEffort)
+    ...effortOptions(agentType, "跟随执行器", task.model),
+    ...(task.reasoningEffort && !reasoningEffortsFor(agentType, task.model).includes(task.reasoningEffort)
       ? [{ value: task.reasoningEffort, label: task.reasoningEffort, detail: "当前设置" }]
       : []),
   ];

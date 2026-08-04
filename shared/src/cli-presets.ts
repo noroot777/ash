@@ -124,3 +124,60 @@ export const REASONING_EFFORT_DETAIL: Record<string, string> = {
   xhigh: "gpt-5.5 支持的最高档",
   ultra: "仅 gpt-5.6-sol/terra 等新模型支持",
 };
+
+/**
+ * 「这个**模型**顶到哪一档」——上面那张表是按 **CLI** 给的并集，同一个 CLI 下
+ * 不同模型能吃的档位并不一样（codex 的 ultra/max 是随 gpt-5.6 系列才加的，
+ * gpt-5.5 给 ultra 会被上游直接拒）。
+ *
+ * 为什么是写死的表而不是查接口：**没有任何接口给得出这个信息**。供应商的
+ * `/v1/models` 只返回 id / owned_by / created（Anthropic 那版多一个 display_name），
+ * 没有能力字段；各家 CLI 也没有「查某模型支持哪些 effort」的命令——非法组合要等
+ * 真跑起来才被上游拒。所以只能按实测逐条积累。
+ *
+ * `match` 按模型 id 前缀匹配（会先剥掉 `openai/` 这类 provider 前缀和 `:high`
+ * 这类档位后缀），多条命中取**最长**的那条。`ceiling` 是该模型能吃到的最高档，
+ * 按所属 CLI 的档位数组顺序截断。
+ *
+ * 补表的规矩：**只写实测过的**。宁可多列一档让上游去拒（用户看得到报错），也别
+ * 凭猜想少列一档——那会让人在界面上根本挑不到一个其实可用的档位，且无从察觉。
+ */
+export const MODEL_EFFORT_CEILINGS: readonly { readonly match: string; readonly ceiling: string }[] = [
+  // gpt-5.5 及更早的 codex 模型：ultra/max 都会被拒（gpt-5.5 实测；更早的同系列
+  // 按「ultra 仅 5.6 系列起支持」这条推的，若实测发现更严还要再补条目）。
+  { match: "gpt-5.5", ceiling: "xhigh" },
+  { match: "gpt-5.4", ceiling: "xhigh" },
+  { match: "gpt-5.3", ceiling: "xhigh" },
+  { match: "gpt-5.2", ceiling: "xhigh" },
+  { match: "gpt-5.1", ceiling: "xhigh" },
+  { match: "gpt-5-", ceiling: "xhigh" },
+  // gpt-5.6 系列（sol/terra/luna）的 ultra 已实测可用；max 还没实测，先不设顶。
+];
+
+/** 剥掉 `openai/` 这类 provider 前缀与 `:high` 这类档位后缀，只留模型 id 本身。 */
+function bareModelId(model: string): string {
+  const withoutSuffix = model.trim().toLowerCase().split(":")[0] ?? "";
+  const segments = withoutSuffix.split("/");
+  return segments[segments.length - 1] ?? "";
+}
+
+/**
+ * 某个 CLI 跑某个模型时，真正可挑的思考强度档位。
+ *
+ * 不传 model（或该模型没登记过顶）就退回 CLI 的并集——**没实测过就别假装知道**，
+ * 少列一档比多列一档更难被发现。
+ */
+export function reasoningEffortsFor(type: AgentType, model?: string | null): readonly string[] {
+  const values = REASONING_EFFORT_VALUES[type] ?? [];
+  if (!model) return values;
+  const id = bareModelId(model);
+  if (!id) return values;
+  let matched: { match: string; ceiling: string } | null = null;
+  for (const entry of MODEL_EFFORT_CEILINGS) {
+    if (!id.startsWith(entry.match)) continue;
+    if (!matched || entry.match.length > matched.match.length) matched = { ...entry };
+  }
+  if (!matched) return values;
+  const cut = values.indexOf(matched.ceiling);
+  return cut < 0 ? values : values.slice(0, cut + 1);
+}

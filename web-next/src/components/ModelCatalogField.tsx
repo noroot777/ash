@@ -17,7 +17,7 @@ import { Dropdown, type DropdownOption } from "./Dropdown.tsx";
  * 传了 `effort` 就把思考强度并进同一个下拉的**第二步**：档位是跟着模型走的
  * （gpt-5.5 顶到 xhigh、haiku 根本没有档位），模型还没定就先挑档位只会挑出一个
  * 该模型不支持的值，非法组合要等 CLI 跑起来才被上游拒绝。注意档位表来自
- * shared 的 `REASONING_EFFORT_VALUES`（按 CLI 分档），**供应商的 /v1/models
+ * shared 的 `reasoningEffortsFor(type, model)`（按 CLI 分档、再按模型收窄），**供应商的 /v1/models
  * 接口只返回模型 id，拿不到「这个模型支持哪些档位」**。
  */
 
@@ -62,10 +62,10 @@ function catalogOptions(groups: ModelGroup[], value: string): DropdownOption[] {
   return rows;
 }
 
-/** 档位只有一条「跟随」时说明这个 CLI 压根没有档位，就别多摆一步。 */
-function effortStepOf(type: AgentType, effort: EffortStep | undefined) {
+/** 档位只有一条「跟随」时说明这个模型压根没有档位，就别多摆一步。 */
+function effortStepOf(type: AgentType, effort: EffortStep | undefined, model: string) {
   if (!effort) return undefined;
-  const options = effort.options ?? effortOptions(type);
+  const options = effort.options ?? effortOptions(type, "跟随执行器", model);
   if (options.length < 2) return undefined;
   return {
     label: "思考强度",
@@ -104,7 +104,7 @@ export function ModelCatalogField({
   const groups = useAgentModelCatalog(type, profiles, providers);
   const options = useMemo(() => catalogOptions(groups, value), [groups, value]);
   const note = catalogNote(groups);
-  const step2 = effortStepOf(type, effort);
+  const step2 = effortStepOf(type, effort, value);
   const clear = () => { onChange(""); effort?.onChange(""); };
   return (
     <div className="composer-field">
@@ -151,7 +151,7 @@ export function ModelCatalogSelect({
   const groups = useAgentModelCatalog(type, profiles, providers);
   const options = useMemo(() => catalogOptions(groups, value), [groups, value]);
   const note = catalogNote(groups);
-  const step2 = effortStepOf(type, effort);
+  const step2 = effortStepOf(type, effort, value);
   const clear = () => { onChange(""); effort?.onChange(""); };
   return (
     <>

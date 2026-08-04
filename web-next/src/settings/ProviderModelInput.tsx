@@ -129,7 +129,8 @@ export function ProviderModelInput({
     onCommit?.(next);
   };
 
-  const efforts = effortOptions(type);
+  // 档位跟着**当前模型**收窄（gpt-5.5 吃不下 ultra/max），不是按 CLI 一把梭。
+  const efforts = effortOptions(type, "跟随执行器", value);
   const step2 = effort && efforts.length > 1
     ? { label: "思考强度", options: efforts, value: effort.value, onChange: effort.onChange }
     : undefined;

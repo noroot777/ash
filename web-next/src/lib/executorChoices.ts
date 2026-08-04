@@ -1,5 +1,5 @@
 import type { AgentType } from "@harness/shared";
-import { REASONING_EFFORT_VALUES } from "@harness/shared/cli-presets";
+import { reasoningEffortsFor } from "@harness/shared/cli-presets";
 import type { DropdownOption } from "../components/Dropdown.tsx";
 
 /**
@@ -7,10 +7,17 @@ import type { DropdownOption } from "../components/Dropdown.tsx";
  * 团队预设、对话框的 @ 选择器）都得列同一份，所以在这里生成一次。
  *
  * 第一项永远是「不覆盖」：档位是 CLI 自己的事，harness 只在用户明确挑了才传。
+ *
+ * 知道当前模型就把它传进来：档位是**模型**的属性而不是 CLI 的（codex 的 ultra/max
+ * 只有 gpt-5.6 系列吃得下），传了才能把该模型吃不下的档位从候选里去掉。
  */
-export function effortOptions(type: AgentType, followLabel = "跟随执行器"): DropdownOption[] {
+export function effortOptions(
+  type: AgentType,
+  followLabel = "跟随执行器",
+  model?: string | null,
+): DropdownOption[] {
   return [
     { value: "", label: followLabel },
-    ...REASONING_EFFORT_VALUES[type].map((effort) => ({ value: effort, label: effort })),
+    ...reasoningEffortsFor(type, model).map((effort) => ({ value: effort, label: effort })),
   ];
 }

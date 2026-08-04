@@ -46,13 +46,19 @@
   background: var(--panel);
   box-shadow: var(--menu-shadow);
 }
-/* 挂到 body 上的那份（新建任务/派生/派审用）：位置由 JS 按触发器算，见 AgentModelPicker。 */
+/* 挂到 body 上的那份（新建任务/派生/派审用）：位置与最大高度都由 JS 按触发器算，
+   见 AgentModelPicker。面板整体是竖向 flex，好让列表在被压扁时自己滚。 */
 .agent-model-picker.is-floating {
   position: fixed;
   z-index: 60;
   bottom: auto;
+  display: flex;
+  flex-direction: column;
   margin-bottom: 0;
 }
+.agent-model-picker.is-floating > .agent-model-picker-head,
+.agent-model-picker.is-floating > footer { flex: 0 0 auto; }
+.agent-model-picker.is-floating .agent-model-picker-rows { min-height: 0; max-height: none; flex: 1; }
 .agent-model-picker-head { display: flex; align-items: center; gap: 6px; border-bottom: 0.5px solid var(--line); padding: 7px 8px; }
 .agent-model-picker-back { display: grid; width: 20px; height: 20px; flex: 0 0 auto; place-items: center; border: 0; border-radius: 5px; background: transparent; color: var(--muted); }
 .agent-model-picker-back:hover { background: var(--raised); color: var(--ink); }

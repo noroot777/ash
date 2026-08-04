@@ -4,7 +4,7 @@ import type { AgentExecutorProfile, AgentType, LlmProvider } from "@harness/shar
 import {
   CLI_MODEL_PRESETS,
   REASONING_EFFORT_DETAIL,
-  REASONING_EFFORT_VALUES,
+  reasoningEffortsFor,
 } from "@harness/shared/cli-presets";
 import { sameExecutor } from "@harness/shared/executors";
 import { Ionicons } from "@expo/vector-icons";
@@ -64,10 +64,12 @@ export function ExecutionConfig({
     modelValues,
     modelDetail(selection, profile),
   );
+  // 档位跟着**当前模型**收窄（gpt-5.5 吃不下 codex 的 ultra/max，见 shared 的
+  // MODEL_EFFORT_CEILINGS）；模型没设时退回该 CLI 的并集。
   // 多数 CLI 没有（或还没实测出）思考强度档位，这时 sheet 里只剩一条「跟随执行器」，
   // 点开一个单选项没有意义 —— 整个 trigger 不渲染。已经设过值的仍要渲染：换类型后
   // 留下的旧覆盖得有地方看见和清掉。
-  const effortValues = REASONING_EFFORT_VALUES[selection.agentType];
+  const effortValues = reasoningEffortsFor(selection.agentType, model);
   const effortPickable = effortValues.length > 0 || !!reasoningEffort;
   const effortOptions = followOptions(
     effortValues,
