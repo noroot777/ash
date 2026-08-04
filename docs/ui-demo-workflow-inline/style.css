@@ -191,6 +191,8 @@ a{color:var(--accent)}
 .pop .opt{display:flex;align-items:center;gap:8px;width:100%;padding:6px 8px;border-radius:8px;
   font-size:12px;text-align:left;white-space:nowrap;transition:background .2s var(--ease)}
 .pop .opt:hover{background:var(--hover)}
+/* 菜单尾部那两条通往「起手式库」的入口是真链接，别让它长成蓝的 */
+.pop a.opt{color:var(--ink);text-decoration:none;padding-left:19px}
 .pop .opt>i{width:11px;font-style:normal;color:var(--accent);font-size:10px;opacity:0;flex:none}
 .pop .opt[data-on="true"]>i{opacity:1}
 .pop .opt .d{width:7px;height:7px;border-radius:50%;background:var(--tone);flex:none}

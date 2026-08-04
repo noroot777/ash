@@ -252,6 +252,12 @@
     h.push('<div class="rule"></div>');
     h.push('<button class="opt" data-src="proj" data-on="' + (!own) + '"><i>✓</i>' +
       '跟随本项目的默认<span class="sub">改了它，所有新任务一起变</span></button>');
+    // 起手式是用户自己的库：这一次改顺手了，就地存下来；库本身也从这儿进
+    h.push('<div class="rule"></div>');
+    h.push('<a class="opt" href="../ui-demo-workflow-tpl/index.html#menu=new">' +
+      "＋ 把当前这条线存成起手式" + (own ? "" : '<span class="sub">没改过，存下来就是复制一份</span>') + "</a>");
+    h.push('<a class="opt" href="../ui-demo-workflow-tpl/index.html">管理起手式…' +
+      '<span class="sub">改名、删除、连系统自带的也能改</span></a>');
     h.push('<div class="tip">挑一个起手式只影响这一个任务；在上面改任何一处，它会自动变成「自定义」。</div>');
     return h.join("");
   }
