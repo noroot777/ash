@@ -24,7 +24,7 @@ export interface WorkflowPolicy {
    * 所以从老行为切过来时轮数不会跳变。
    */
   verifyRounds: number;
-  /** 没过之后这条线怎么走（"ask" 目前按 "stop" 执行，只是措辞不同） */
+  /** 没过之后这条线怎么走：停下等人 / 把「怎么办」问到任务上 / 打回给 AI 重做 */
   onVerifyFail: "stop" | "ask" | "back";
   /** 验完停下等人（线上有「等我点头」，且排在验证之后） */
   humanGate: boolean;
@@ -39,6 +39,11 @@ export interface WorkflowPolicy {
 //
 // 这么切而不是记「走到第几站」，是因为不必新开一个「当前站」字段：段落由锚点算得，
 // 任务重启、重跑、手动补派审都不会让指针错位。
+//
+// 代价是**每类锚点在一条线上只能出现一次**：唤醒事件（这一轮结算完、这一轮审查完、
+// 用户点了头）只说得清「哪一类锚点过去了」，说不清是第几个，两个 verify 站就没法
+// 区分该跑哪一段。所以这不是这里将就一下的事——`checkWorkflow` 直接把重复锚点判成
+// 拦下级问题，编辑器的「加一站」里也不给再加第二个。下面按 findIndex 取头一个即可。
 export const ANCHOR_KINDS = ["run", "verify", "human"] as const;
 export type AnchorKind = (typeof ANCHOR_KINDS)[number];
 

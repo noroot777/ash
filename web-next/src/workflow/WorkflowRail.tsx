@@ -13,7 +13,7 @@ import { executorName, useExecutorCatalog, type ExecutorCatalog } from "./execut
 import { ExecutorEditor, FailEditor, MultiEditor, SelectEditor, TextEditor } from "./StepEditors.tsx";
 import { STEP_FIELDS, stepChips, type FieldSpec } from "./stepFields.ts";
 import { STEP_SHORT, railStops } from "./workflowModel.ts";
-import { canAddStep, failText, insertStep, moveStep, patchFail, patchParams, removeStep } from "./workflowEdit.ts";
+import { canAddKind, canAddStep, failText, insertStep, moveStep, patchFail, patchParams, removeStep } from "./workflowEdit.ts";
 
 /** 执行器、模型、强度是联动的一组，点哪颗都开同一个编辑器。 */
 const EXECUTOR_FIELDS = new Set(["executor", "model", "effort"]);
@@ -52,7 +52,7 @@ function StepBody({
 }) {
   const [open, setOpen] = useState<string | null>(null);
   const chips = stepChips(step, (id) => executorName(catalog, id));
-  const fail = failText(def, step);
+  const fail = failText(step);
   const editable = !!onChange;
   const close = () => setOpen(null);
 
@@ -121,7 +121,6 @@ function StepBody({
           {open === "fail" && (
             <Popover label="这一站失败了怎么办" onClose={close}>
               <FailEditor
-                def={def}
                 step={step}
                 onPatch={(patch) => onChange?.(patchFail(def, step.id, patch))}
               />
@@ -161,12 +160,18 @@ function AddStop({
                 key={kind}
                 type="button"
                 className="wf-pop-option"
+                disabled={!canAddKind(def, kind)}
                 onClick={() => { onChange(insertStep(def, at, kind)); setOpen(false); }}
               >
                 {STEP_LABELS[kind]}
               </button>
             ))}
           </div>
+          {/* 「会停下来等」的那几站每种只能有一个（执行链认的是事件不是序号），已经有了
+              的就在这儿灰掉并说明白，而不是让用户加完之后再被保存时的红字打回。 */}
+          {STEP_KINDS.some((kind) => !canAddKind(def, kind)) && (
+            <p className="wf-pop-hint">灰掉的那几站这条线上已经有了 —— 每种只能有一站。</p>
+          )}
         </Popover>
       )}
     </div>

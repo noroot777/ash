@@ -36,6 +36,7 @@ import { setTaskStatus } from "./status.js";
 import { dispatchWorkers, type DispatchSpec } from "./team/dispatch.js";
 import { haltTeam } from "./team/session.js";
 import { enrichTasks } from "./task-store.js";
+import { setTaskQuestion } from "./task-question.js";
 import { parseSessionTrace, sessionTracePath, sessionTranscriptPath } from "./transcript.js";
 import { resumeCommandFor } from "./executors/resume.js";
 import { id, now } from "./util.js";
@@ -285,24 +286,7 @@ api.post("/tasks/:id/ask", async (c) => {
   if (!r) return c.json({ error: "not found" }, 404);
   if (r.mode !== "team" && r.status !== "running")
     return c.json({ error: "只能在任务正在运行时提问", status: r.status }, 409);
-  const updatedAt = now();
-  await db
-    .update(tasks)
-    .set({
-      question: q,
-      questionOptions: opts.length ? JSON.stringify(opts) : null,
-      questionItems: questionItems ? JSON.stringify(questionItems) : null,
-      updatedAt,
-    })
-    .where(eq(tasks.id, taskId));
-  bus.publish({
-    type: "task.question",
-    taskId,
-    updatedAt,
-    question: q,
-    questionOptions: opts.length ? opts : null,
-    questionItems,
-  });
+  await setTaskQuestion({ taskId, question: q, options: opts, items: questionItems });
   return c.json({
     asked: true,
     options: opts,

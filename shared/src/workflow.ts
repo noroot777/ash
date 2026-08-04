@@ -15,6 +15,17 @@ export const STEP_LABELS: Record<StepKind, string> = {
   human: "等我点头", command: "跑一条命令", accept: "合并并清理",
 };
 
+// 每种「会停下来等的站」在一条线上至多一次 —— 执行链是**被事件唤醒**的（agent 干完、
+// 审查有了结论、用户点了头），它认的是「哪一类事件」而不是「走到第几站」。同一类出现
+// 两次，第二次没有任何东西能把它区分出来，只会被静默跳过（`run → 跑命令 → run → 跑命令`
+// 校验全绿，实际只跑得到第一条命令）。「合并并清理」同理，而且它还是不可逆的。
+// 编排器据此把已经有了的这几站从「加一站」菜单里去掉，checkWorkflow 再兜一道底。
+export const SINGLETON_KINDS = ["run", "verify", "human", "accept"] as const;
+export type SingletonKind = (typeof SINGLETON_KINDS)[number];
+export function isSingletonKind(kind: StepKind): kind is SingletonKind {
+  return (SINGLETON_KINDS as readonly string[]).includes(kind);
+}
+
 // 这一站跑起来时，任务在列表里长什么样。**刻意只存 (status, stage) 而不存文案**：
 // 线路图上每站底下那行「任务显示：待验收」必须跟任务列表里那一格**一个字都不差**，
 // 否则用户照着线路图预期的状态在列表里根本找不到。存文案就等于开了第二份真相，迟早
@@ -33,16 +44,25 @@ export const STEP_RUNTIME: Record<
 };
 
 // ── 失败策略 ───────────────────────────────────────────────────────────────
-// 只有 preview 没有失败分支（起不来就是这一站失败，没有「起不来但继续」的语义）。
+// 三档，每一档都对应一件执行链真的会做的事：
+//   stop —— 什么都不做，任务停在那儿等人（最不吵人的一档）
+//   ask  —— 把「这一站没过，你想怎么办」作为提问挂到任务上，答复照常送进它的会话
+//   back —— 不问，直接把报错交回给干活的 agent 让它修，最多 max 轮
+// 只有 preview 和 human 没有失败分支：预览起不来就是这一站失败，没有「起不来但继续」
+// 的语义；人工关口的「没过」是**人当场按的**（界面上就摆着「打回重做」和「验收通过」
+// 两个按钮），预先编排「人不点头怎么办」只会在线路图上多一份不生效的承诺。
 export const FAIL_MODES = ["stop", "ask", "back"] as const;
 export type FailMode = (typeof FAIL_MODES)[number];
 export const FAIL_MODE_LABELS: Record<FailMode, string> = {
-  stop: "停下等人", ask: "问我一句", back: "回到某一步重做",
+  stop: "停下等人", ask: "问我一句", back: "打回给 AI 重做",
 };
+// 刻意**没有** backTo：「回到第几站」这个旋钮曾经存在，但执行链里所有的 back 最终都
+// 只能做同一件事 —— 把报错交回给干活的 agent。夹在中间的 command/preview 是成段跑的，
+// 单独回到其中一站既没有触发它的事件，也没有「从这儿接着往下」的入口。留着一个只能
+// 摆着看的下拉，比少一个概念更糟。
 export interface FailPolicy {
   mode: FailMode;
-  backTo: string | null; // 只在 mode === "back" 时有意义，指向前面某一站的 id
-  max: number; // 最多重做几轮，1..5
+  max: number; // 最多打回几轮，1..5
 }
 export const MAX_FAIL_ROUNDS = 5;
 
@@ -135,12 +155,12 @@ export const DEFAULT_PARAMS: { [K in StepKind]: () => StepParams[K] } = {
 };
 
 export function hasFailBranch(kind: StepKind): boolean {
-  return kind !== "preview";
+  return kind !== "preview" && kind !== "human";
 }
 
 export function makeStep(kind: StepKind, id: string): WorkflowStep {
   const step = { id, kind, p: DEFAULT_PARAMS[kind](), fail: null } as WorkflowStep;
-  if (hasFailBranch(kind)) step.fail = { mode: "stop", backTo: null, max: 2 };
+  if (hasFailBranch(kind)) step.fail = { mode: "stop", max: 2 };
   return step;
 }
 
@@ -164,11 +184,15 @@ export function checkWorkflow(def: WorkflowDef): WorkflowIssue[] {
   if (!steps.some((s) => s.kind === "run")) {
     issues.push({ level: "deny", text: "没有「让 AI 干活」这一站，任务不会开工" });
   }
-  const accepts = steps.filter((s) => s.kind === "accept");
-  if (accepts.length > 1) {
-    issues.push({ level: "deny", text: "「合并并清理」只能有一站", stepId: accepts[1]!.id });
+  // 每种「会停下来等的站」至多一次；理由和取舍见 SINGLETON_KINDS 那儿的注释。
+  // 宁可在这儿拒绝，也不能让线路图上画着一站永远不会跑。
+  for (const kind of SINGLETON_KINDS) {
+    const hit = steps.filter((s) => s.kind === kind);
+    if (hit.length > 1) {
+      issues.push({ level: "deny", text: `「${STEP_LABELS[kind]}」只能有一站`, stepId: hit[1]!.id });
+    }
   }
-  const index = new Map(steps.map((s, i) => [s.id, i]));
+  const accepts = steps.filter((s) => s.kind === "accept");
   for (const [i, s] of steps.entries()) {
     // 合并是不可逆的，前面必须有人点过头 —— 这条闸是整套设计的底线
     if (s.kind === "accept" && !steps.slice(0, i).some((p) => p.kind === "human")) {
@@ -179,14 +203,7 @@ export function checkWorkflow(def: WorkflowDef): WorkflowIssue[] {
       issues.push({ level: "deny", text: "预览起来之后没有人工关口，没人会去看它", stepId: s.id });
     }
     const f = s.fail;
-    if (!f || f.mode !== "back") continue;
-    const target = f.backTo ? index.get(f.backTo) : undefined;
-    if (target === undefined) {
-      issues.push({ level: "deny", text: "「回到某一步重做」没指到有效的站", stepId: s.id });
-    } else if (target >= i) {
-      issues.push({ level: "deny", text: "只能回到前面的站，不能往后跳", stepId: s.id });
-    }
-    if (!Number.isInteger(f.max) || f.max < 1 || f.max > MAX_FAIL_ROUNDS) {
+    if (f && (!Number.isInteger(f.max) || f.max < 1 || f.max > MAX_FAIL_ROUNDS)) {
       issues.push({ level: "deny", text: `重做轮数只能是 1..${MAX_FAIL_ROUNDS}`, stepId: s.id });
     }
   }
@@ -286,7 +303,7 @@ function normalizeFail(kind: StepKind, raw: unknown): FailPolicy | null {
   const max = typeof r.max === "number" && Number.isInteger(r.max)
     ? Math.min(Math.max(r.max, 1), MAX_FAIL_ROUNDS)
     : 2;
-  return { mode, backTo: mode === "back" ? pickNullableText(r.backTo, 80) : null, max };
+  return { mode, max }; // 老数据里的 backTo 到这儿被丢掉，行为不变（它本来也没生效过）
 }
 
 export const MAX_WORKFLOW_STEPS = 24;
@@ -311,12 +328,6 @@ export function normalizeWorkflowDef(value: unknown): { def?: WorkflowDef; error
     if (ids.has(id)) return { error: `站的 id 重复：${id}` };
     ids.add(id);
     steps.push({ id, kind, p: normalizeParams(kind, s.p), fail: normalizeFail(kind, s.fail) } as WorkflowStep);
-  }
-  // backTo 指向不存在的站就地清成「停下等人」，让老数据/手写 JSON 不至于整条作废
-  for (const s of steps) {
-    if (s.fail?.mode === "back" && (!s.fail.backTo || !ids.has(s.fail.backTo))) {
-      s.fail = { mode: "stop", backTo: null, max: s.fail.max };
-    }
   }
   const def: WorkflowDef = { workspace: pickEnum(raw.workspace, ["isolated", "shared"] as const, "isolated"), steps };
   const denied = workflowDenied(def);

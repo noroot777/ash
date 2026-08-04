@@ -2,7 +2,7 @@
 // 真的管住派审。全是纯判定，所以这个文件不起 CLI、不建任务。
 // Run: npm -w server run test:workflow-run
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -42,7 +42,7 @@ assert.equal(gate.humanGate, true, "但它写着等我点头");
 // 没过就停下等人:轮数退化成 1,不存在第二轮
 const stopLine = structuredClone(standard);
 const stopVerify = stopLine.steps.find((s) => s.kind === "verify")!;
-stopVerify.fail = { mode: "stop", backTo: null, max: 3 };
+stopVerify.fail = { mode: "stop", max: 3 };
 const stopPolicy = workflowPolicy(stopLine)!;
 assert.equal(stopPolicy.onVerifyFail, "stop");
 assert.equal(stopPolicy.verifyRounds, 1, "不拐回去就只跑一轮,max 写多少都不算数");
@@ -299,5 +299,85 @@ if (started.ok) {
   );
 }
 
+// ── 一站没过之后,线上写的那一档真的做出来了 ────────────────────────────────
+// 这是 codex 审出来的那条:三档失败策略以前只画在线路图上,按下去什么都不发生。
+// 判据统一是「刷新后仍看得出来」——所以每一档都断言它留下的**持久痕迹**:时间线里
+// 那一行、或者挂在任务上的那条提问。
+const { applyFailPolicy, applyRunFailPolicy } = await import("../src/workflow-steps.js");
+const { RUNS_DIR } = await import("../src/paths.js");
+const { sessions } = await import("../src/db/schema.js");
+await db.insert(sessions).values({
+  id: "sess1", taskId: "t1", role: "single", agentType: "claude",
+  executor: "claude", target: "", startedAt: at,
+});
+const timeline = () => {
+  try {
+    return readFileSync(join(RUNS_DIR, "t1", "sess1.md"), "utf8");
+  } catch {
+    return "";
+  }
+};
+const questionOf = async () =>
+  (await db.select().from(tasks)).find((row) => row.id === "t1")!.question;
+const clearQuestion = () => db.update(tasks).set({ question: null, questionOptions: null }).where(eq(tasks.id, "t1"));
+
+const stopStep = makeStep("command", "f-stop");
+stopStep.fail = { mode: "stop", max: 2 };
+await applyFailPolicy(task, stopStep, "构建挂了", () => "不该被用到");
+assert.match(timeline(), /卡在「跑一条命令」这一站，停下等你处理/, "停下等人这一档:时间线上留得下痕迹");
+assert.equal(await questionOf(), null, "停下等人不挂提问——它就是「什么都别问,我自己来」");
+
+const askStep = makeStep("command", "f-ask");
+askStep.fail = { mode: "ask", max: 2 };
+await applyFailPolicy(task, askStep, "端口被占了", () => "不该被用到");
+const asked = (await db.select().from(tasks)).find((row) => row.id === "t1")!;
+assert.match(asked.question ?? "", /接下来怎么办/, "问我一句这一档:真的把问题挂到任务上");
+assert.match(asked.question ?? "", /端口被占了/, "——并且把报错原文带上,不然没法答");
+assert.equal(JSON.parse(asked.questionOptions ?? "[]").length, 3, "给三条能直接当答复读的建议");
+await clearQuestion();
+
+// 打回重做数着轮数:落盘的计数已经到上限时就停下,不无限打回
+const backStep = makeStep("verify", "f-back");
+backStep.fail = { mode: "back", max: 2 };
+mkdirSync(join(RUNS_DIR, "t1"), { recursive: true });
+writeFileSync(join(RUNS_DIR, "t1", "workflow-steps.json"), JSON.stringify({ "f-back": 2 }));
+await applyFailPolicy(task, backStep, "还是没过", () => "不该被用到");
+assert.match(timeline(), /已经打回重做 2 次仍没过/, "到了线上写的上限就停,不再叫醒 agent");
+assert.equal(await questionOf(), null, "到上限是停下等人,不是改成提问");
+
+// 「让 AI 干活」这一站自己没干成,读的是那一站自己的失败分支
+await applyRunFailPolicy(task, null);
+assert.equal(await questionOf(), null, "老任务身上没有线:一切照旧,不凭空冒出提问");
+const runStop = { workspace: "shared" as const, steps: [makeStep("run", "r")] };
+await applyRunFailPolicy(task, runStop);
+assert.equal(await questionOf(), null, "干活站写的是「停下等人」:什么都不做");
+const runAsk = structuredClone(runStop);
+runAsk.steps[0]!.fail = { mode: "ask", max: 2 };
+await applyRunFailPolicy(task, runAsk);
+assert.match((await questionOf()) ?? "", /让 AI 干活/, "干活站写的是「问我一句」:这一轮没干成就真的问");
+await clearQuestion();
+
+// ── 「任务结束时回收」得真有个结束点 ──────────────────────────────────────
+const taskLife = makeStep("preview", "pv2");
+if (taskLife.kind === "preview") {
+  taskLife.p = {
+    cmd: `node -e "require('http').createServer((q,s)=>s.end('ok')).listen(${port + 1},()=>console.log('ready on http://localhost:${port + 1}/'))"`,
+    ready: "http200",
+    life: "task",
+  };
+}
+const { stopPreviewAtAccept } = await import("../src/preview.js");
+const lifeStarted = await startPreview("t1", taskLife as never, repo);
+assert.equal(lifeStarted.ok, true, `「任务结束时回收」那一档也得起得来（${lifeStarted.ok ? "" : lifeStarted.reason}）`);
+await stopPreviewAtAccept("t1");
+assert.equal(readPreview("t1"), null, "验收走完就是这个任务的终点,选了「任务结束时回收」就真的在这儿收掉");
+await new Promise((r) => setTimeout(r, 300));
+assert.equal(
+  await fetch(`http://localhost:${port + 1}/`).then(() => true).catch(() => false),
+  false,
+  "端口真让出来了,不是只删了记录",
+);
+
+rmSync(join(RUNS_DIR, "t1"), { recursive: true, force: true });
 rmSync(root, { recursive: true, force: true });
 console.log("workflow step runner tests passed");

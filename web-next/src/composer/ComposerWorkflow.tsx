@@ -57,7 +57,9 @@ function SaveAsPresetDialog({
     setBusy(true);
     try {
       const created = await api.createWorkflow({ name: name.trim(), description: "", def });
-      forgetWorkflows();
+      // **先等库刷新**再把选中值切到新存的那条：不等的话那一刻 items 里还没有它，
+      // resolveChoice 会把这个 id 当悬空回落到项目/全局默认——用户刚编排好的线就没了。
+      await forgetWorkflows();
       if (asProjectDefault) await api.updateProject(project.id, { workflowId: created.id });
       notify(asProjectDefault ? `已存成起手式，并设为「${project.name}」的默认` : "已存成起手式");
       onClose(created.id, asProjectDefault);

@@ -6,10 +6,9 @@
 // 例外是执行器那一组（谁来干 / 什么模型 / 多大强度）：它们本来就是联动的一组，
 // 拆成三个弹层反而更烦，所以点其中任意一颗都开这一个编辑器。
 import { REASONING_EFFORT_VALUES } from "@harness/shared/cli-presets";
-import type { FailPolicy, WorkflowDef, WorkflowStep } from "@harness/shared/workflow";
+import type { FailPolicy, WorkflowStep } from "@harness/shared/workflow";
 import { FAIL_MODES, FAIL_MODE_LABELS, MAX_FAIL_ROUNDS } from "@harness/shared/workflow";
 import { ProviderModelInput } from "../settings/ProviderModelInput.tsx";
-import { backTargets } from "./workflowEdit.ts";
 import { executorProfile, providerOf, type ExecutorCatalog } from "./executorCatalog.ts";
 import type { FieldSpec } from "./stepFields.ts";
 
@@ -167,15 +166,13 @@ export function ExecutorEditor({
 }
 
 export function FailEditor({
-  def, step, onPatch,
+  step, onPatch,
 }: {
-  def: WorkflowDef;
   step: WorkflowStep;
   onPatch: (patch: Partial<FailPolicy>) => void;
 }) {
   const fail = step.fail;
   if (!fail) return null;
-  const targets = backTargets(def, step.id);
 
   return (
     <div className="wf-pop-form">
@@ -185,37 +182,24 @@ export function FailEditor({
             key={mode}
             type="button"
             className={`wf-pop-option${fail.mode === mode ? " is-on" : ""}`}
-            disabled={mode === "back" && !targets.length}
-            onClick={() => onPatch(
-              mode === "back" ? { mode, backTo: fail.backTo ?? targets[targets.length - 1]?.id ?? null } : { mode },
-            )}
+            onClick={() => onPatch({ mode })}
           >
             {FAIL_MODE_LABELS[mode]}
           </button>
         ))}
       </div>
-      {!targets.length && (
-        <p className="wf-pop-hint">这是第一站，前面没有可以回去的地方。</p>
-      )}
+      {/* 「打回给 AI 重做」就是把报错交回给干活的那个 agent 自己修 —— 没有「回到第几站」
+          这个旋钮：夹在锚点之间的命令/预览是成段跑的，单独回到其中一站既没有触发它的
+          事件，也没有从那儿接着往下的入口。所以只剩「最多来几轮」要选。 */}
       {fail.mode === "back" && (
-        <>
-          <label className="wf-pop-row">
-            <span>回到哪一站</span>
-            <select value={fail.backTo ?? ""} onChange={(event) => onPatch({ backTo: event.target.value })}>
-              {targets.map((target, i) => (
-                <option key={target.id} value={target.id}>第 {i + 1} 站</option>
-              ))}
-            </select>
-          </label>
-          <label className="wf-pop-row">
-            <span>最多重做</span>
-            <select value={fail.max} onChange={(event) => onPatch({ max: Number(event.target.value) })}>
-              {Array.from({ length: MAX_FAIL_ROUNDS }, (_, i) => i + 1).map((n) => (
-                <option key={n} value={n}>{n} 轮</option>
-              ))}
-            </select>
-          </label>
-        </>
+        <label className="wf-pop-row">
+          <span>最多重做</span>
+          <select value={fail.max} onChange={(event) => onPatch({ max: Number(event.target.value) })}>
+            {Array.from({ length: MAX_FAIL_ROUNDS }, (_, i) => i + 1).map((n) => (
+              <option key={n} value={n}>{n} 轮</option>
+            ))}
+          </select>
+        </label>
       )}
     </div>
   );

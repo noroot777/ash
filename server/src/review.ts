@@ -13,7 +13,7 @@ import type {
 } from "@harness/shared";
 import { AGENT_TYPES, TEAM_DEFAULTS } from "@harness/shared";
 import { inheritExecutorOverrides, pickExecutor } from "@harness/shared/executors";
-import { VERIFY_CHECK_LABELS } from "@harness/shared/workflow";
+import { VERIFY_CHECK_LABELS, STEP_LABELS } from "@harness/shared/workflow";
 import { workflowPolicy } from "@harness/shared/workflow-policy";
 import { asc, eq } from "drizzle-orm";
 import type { Hono } from "hono";
@@ -28,6 +28,7 @@ import {
 } from "./review-coverage.js";
 import { setTaskStage } from "./task-stage.js";
 import { appendTaskTimeline } from "./task-timeline.js";
+import { askAboutFailure } from "./task-question.js";
 import { createTasks } from "./task-store.js";
 import {
   MAX_AUTO_REVIEW_ROUNDS,
@@ -38,7 +39,7 @@ import {
   type Settlement,
 } from "./review-policy.js";
 import { taskWorkflowDef } from "./workflows.js";
-import { advanceAfterRun, advanceAfterVerify } from "./workflow-steps.js";
+import { advanceAfterRun, advanceAfterVerify, applyRunFailPolicy } from "./workflow-steps.js";
 import type { Workspace } from "./git.js";
 import { id, now } from "./util.js";
 
@@ -436,8 +437,18 @@ async function finishReview(review: TaskRow, status: Settlement): Promise<void> 
   if (action === "stop") {
     // 停在这儿的两种理由用不同的话说清楚：拐回重做跑满了轮数，跟这条线本来就写着
     // 「没过就停下等人」，对用户是两件事。
-    await appendTaskTimeline(target.id, policy?.verify && policy.onVerifyFail !== "back"
-      ? `第 ${round} 轮审查未通过；这条线写的是「没过就${policy.onVerifyFail === "ask" ? "问我一句" : "停下等人"}」，现停在 verify_failed 等人处理。`
+    const byPolicy = policy?.verify && policy.onVerifyFail !== "back";
+    if (byPolicy && policy.onVerifyFail === "ask") {
+      // 「问我一句」得真的问出来：把审查报告的开头附上，用户不用点进审查任务就能判断。
+      await askAboutFailure(target.id, STEP_LABELS.verify, await readReport(target.id, round));
+      await appendTaskTimeline(
+        target.id,
+        `第 ${round} 轮审查未通过；这条线写的是「没过就问我一句」，已经把问题挂给你了。`,
+      );
+      return;
+    }
+    await appendTaskTimeline(target.id, byPolicy
+      ? `第 ${round} 轮审查未通过；这条线写的是「没过就停下等人」，现停在 verify_failed 等人处理。`
       : `第 ${round} 轮审查仍未通过；自动复审上限为 ${policy?.verify ? policy.verifyRounds : MAX_AUTO_REVIEW_ROUNDS} 轮，现停在 verify_failed 等人处理。`);
     return;
   }
@@ -499,6 +510,13 @@ export async function handleTaskSettlement(
   }
 
   const workflow = taskWorkflowDef(task.workflow);
+  // 「让 AI 干活」这一站自己没干成：线上给它写了「问我一句」或「打回重做」就得真的做，
+  // 不能只有验证站的失败才算数。手停（canceled）不走这条 —— 那是用户自己按的，
+  // 再打回去或者再问一句都属于跟用户对着干。
+  if (status === "failed") {
+    await applyRunFailPolicy(task, workflow);
+    return;
+  }
   const isTeamWorker = await parentIsTeam(task);
   // 干完之后线上紧跟着的那几站（跑一条命令、打开预览）先跑掉，再谈要不要派审：
   // 一条连 lint 都没过的产物不值得占着一个审查任务的工时。跑砸了就停在那儿。

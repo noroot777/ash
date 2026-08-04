@@ -11,7 +11,6 @@ export interface BuiltinWorkflow {
   desc: string;
 }
 
-// 「回到某一步重做」一律指向第一站（那是唯一一定存在的 run 站）
 type Row = [StepKind, Partial<Record<string, unknown>>?];
 
 function build(rows: Row[], workspace: WorkflowDef["workspace"], backRounds?: Partial<Record<StepKind, number>>): WorkflowDef {
@@ -20,11 +19,12 @@ function build(rows: Row[], workspace: WorkflowDef["workspace"], backRounds?: Pa
     if (params) Object.assign(step.p as Record<string, unknown>, params);
     return step;
   });
-  const first = steps[0]!.id;
+  // 「没过就打回给 AI 重做」只写在验证站上：自带的这几条线里，它是唯一一个「机器
+  // 判定没过、交回去修还有意义」的站。
   for (const step of steps) {
     const rounds = backRounds?.[step.kind];
-    if (!rounds || !step.fail || step.id === first) continue;
-    step.fail = { mode: "back", backTo: first, max: rounds };
+    if (!rounds || !step.fail) continue;
+    step.fail = { mode: "back", max: rounds };
   }
   return { workspace, steps };
 }
@@ -35,7 +35,7 @@ const BUILDERS: Record<string, () => WorkflowDef> = {
   standard: () => build(
     [["run"], ["verify", { checks: ["build", "tests"] }], ["human"], ["accept"]],
     "isolated",
-    { verify: 2, human: 2 },
+    { verify: 2 },
   ),
   frontend: () => build(
     [
@@ -46,7 +46,7 @@ const BUILDERS: Record<string, () => WorkflowDef> = {
       ["accept"],
     ],
     "isolated",
-    { verify: 2, human: 2 },
+    { verify: 2 },
   ),
   release: () => build(
     [
@@ -57,7 +57,7 @@ const BUILDERS: Record<string, () => WorkflowDef> = {
       ["command", { cmd: "./scripts/release.sh", where: "repo" }],
     ],
     "isolated",
-    { verify: 2, human: 2 },
+    { verify: 2 },
   ),
 };
 
