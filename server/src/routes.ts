@@ -11,10 +11,12 @@ import type {
   Project,
   ProjectView,
   Group,
+  AgentType,
   LlmProvider,
   LlmProtocol,
 } from "@harness/shared";
 import { maxBytesFor, attachmentKind } from "@harness/shared";
+import { isReasoningEffortSupported, normalizeReasoningEffort, reasoningEffortsFor } from "@harness/shared/cli-presets";
 import { db } from "./db/index.js";
 import { projects, groups, tasks, sessions, schedules, agents, llmProviders, notes, noteTasks } from "./db/schema.js";
 import { bus } from "./bus.js";
@@ -212,14 +214,22 @@ api.get("/agents/catalog", async (c) => c.json(await detectKnownClis()));
 
 api.post("/agents", async (c) => {
   const b = await c.req.json<any>();
+  const type = b.type as AgentType;
+  const model = b.model?.trim() || null;
+  if (b.reasoningEffort && !isReasoningEffortSupported(type, model, b.reasoningEffort)) {
+    return c.json({
+      error: `${type} 模型 ${model ?? "（跟随 CLI）"} 不支持思考强度 ${b.reasoningEffort}`,
+      allowedReasoningEfforts: reasoningEffortsFor(type, model),
+    }, 400);
+  }
   const row = {
     id: id(),
     name: b.name,
-    type: b.type,
+    type,
     target: JSON.stringify(b.target ?? { kind: "local" }),
-    model: b.model ?? null,
+    model,
     extraArgs: JSON.stringify(b.extraArgs ?? []),
-    reasoningEffort: b.reasoningEffort || null,
+    reasoningEffort: normalizeReasoningEffort(type, model, b.reasoningEffort),
     // 只落 "fast";"standard"/空 归一成 null(标准=不传参,单一表示)
     speed: b.speed === "fast" ? "fast" : null,
     providerId: b.providerId || null,
@@ -238,10 +248,21 @@ api.patch("/agents/:id", async (c) => {
   const b = await c.req.json<any>();
   const patch: Record<string, unknown> = {};
   if (b.name !== undefined) patch.name = b.name;
-  if (b.model !== undefined) patch.model = b.model || null;
+  const type = existing.type as AgentType;
+  const nextModel = b.model !== undefined ? b.model?.trim() || null : existing.model;
+  const requestedEffort = b.reasoningEffort !== undefined ? b.reasoningEffort : existing.reasoningEffort;
+  if (b.reasoningEffort && !isReasoningEffortSupported(type, nextModel, b.reasoningEffort)) {
+    return c.json({
+      error: `${type} 模型 ${nextModel ?? "（跟随 CLI）"} 不支持思考强度 ${b.reasoningEffort}`,
+      allowedReasoningEfforts: reasoningEffortsFor(type, nextModel),
+    }, 400);
+  }
+  if (b.model !== undefined) patch.model = nextModel;
   if (b.target !== undefined) patch.target = JSON.stringify(b.target);
   if (b.extraArgs !== undefined) patch.extraArgs = JSON.stringify(b.extraArgs);
-  if (b.reasoningEffort !== undefined) patch.reasoningEffort = b.reasoningEffort || null;
+  if (b.reasoningEffort !== undefined || b.model !== undefined) {
+    patch.reasoningEffort = normalizeReasoningEffort(type, nextModel, requestedEffort);
+  }
   if (b.speed !== undefined) patch.speed = b.speed === "fast" ? "fast" : null;
   if (b.providerId !== undefined) patch.providerId = b.providerId || null;
   if (b.isDefault === true) {

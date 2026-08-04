@@ -19,7 +19,14 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentEvent } from "@harness/shared";
 import { AGENT_TYPES } from "@harness/shared";
-import { CLI_MODEL_PRESETS, REASONING_EFFORT_VALUES, reasoningEffortsFor } from "@harness/shared/cli-presets";
+import {
+  CLI_MODEL_PRESETS,
+  MODEL_EFFORT_RULES,
+  REASONING_EFFORT_VALUES,
+  normalizeReasoningEffort,
+  reasoningEffortsFor,
+  resolveReasoningEfforts,
+} from "@harness/shared/cli-presets";
 import { CLI_SPECS, CLI_SPEC_BY_KEY } from "../src/executors/catalog/index.js";
 import { GenericCliExecutor, hasTrustedSessionId, interactiveResumeInner } from "../src/executors/generic.js";
 import { execBinFor, probeBins } from "../src/executors/bin-probe.js";
@@ -57,8 +64,21 @@ for (const type of AGENT_TYPES) {
   assert.ok(Array.isArray(REASONING_EFFORT_VALUES[type]), `${type} 没登记 REASONING_EFFORT_VALUES`);
 }
 
-// ①b 档位按模型收窄:界面上挑得到的档位必须是那个模型真吃得下的(gpt-5.5 给 ultra
-// 会被上游直接拒)。接口查不到这个能力,只能靠 MODEL_EFFORT_CEILINGS 实测积累。
+// ①b 档位按模型能力解析：规则写完整允许集合，不是只写一个 ceiling。这样既能表达
+// codex 的连续档位，也能表达 anthropic 的 high/max、Haiku 的空集合等非连续/无档位情形。
+const ruleIds = new Set<string>();
+for (const rule of MODEL_EFFORT_RULES) {
+  assert.ok(!ruleIds.has(rule.id), `模型 effort 规则 id 重复: ${rule.id}`);
+  ruleIds.add(rule.id);
+  assert.ok(rule.types.length > 0, `${rule.id}: 至少挂一个 CLI type`);
+  assert.ok(rule.match.provider || rule.match.model, `${rule.id}: provider/model 至少写一个匹配条件`);
+  for (const type of rule.types) {
+    assert.ok(
+      rule.efforts.every((effort) => REASONING_EFFORT_VALUES[type].includes(effort)),
+      `${rule.id}: efforts 必须是 ${type} 档位并集的子集`,
+    );
+  }
+}
 assert.deepEqual(
   reasoningEffortsFor("codex", "gpt-5.5"),
   ["low", "medium", "high", "xhigh"],
@@ -69,14 +89,45 @@ assert.deepEqual(
   ["low", "medium", "high", "xhigh"],
   "带 provider 前缀/后缀名的同一模型也要收窄",
 );
-assert.ok(
-  reasoningEffortsFor("codex", "gpt-5.6-sol").includes("ultra"),
-  "没登记过顶的模型保持 CLI 并集 —— 少列一档比多列一档更难被发现",
+assert.deepEqual(
+  reasoningEffortsFor("codex", "gpt-5.6-sol"),
+  ["low", "medium", "high", "xhigh", "ultra"],
+  "gpt-5.6 系列恢复 ultra；未确认的 max 不应混进来",
+);
+assert.deepEqual(
+  reasoningEffortsFor("opencode", "anthropic/claude-opus-4-8"),
+  ["high", "max"],
+  "多 provider CLI 必须保留 provider 语义，并支持非连续档位集合",
+);
+assert.deepEqual(
+  reasoningEffortsFor("claude", "claude-haiku-4-5"),
+  [],
+  "无独立 effort 的模型应返回空集合，让 UI 跳过强度步骤",
+);
+assert.deepEqual(
+  reasoningEffortsFor("antigravity", "gemini-3.6-flash-medium"),
+  [],
+  "强度已编码进 model slug 时不能再叠一层 effort",
+);
+assert.deepEqual(
+  resolveReasoningEfforts("codex", "future-model").source,
+  "cli-fallback",
+  "未知模型要明确走 CLI 并集 fallback，不能伪装成已知能力",
 );
 assert.deepEqual(
   reasoningEffortsFor("codex", null),
   REASONING_EFFORT_VALUES.codex,
   "不知道模型时退回该 CLI 的并集",
+);
+assert.equal(
+  normalizeReasoningEffort("codex", "gpt-5.5", "ultra"),
+  null,
+  "换模型后旧档位已不支持时要自动清回跟随 CLI",
+);
+assert.equal(
+  normalizeReasoningEffort("codex", "gpt-5.6-sol", "ultra"),
+  "ultra",
+  "仍受新模型支持的档位必须保留",
 );
 
 // ② 每个 spec 的必填字段与自洽性

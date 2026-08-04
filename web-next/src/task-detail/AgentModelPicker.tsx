@@ -23,12 +23,10 @@ import {
  * 步里的两件事，看着「哪家的」直接点「哪一个」。候选从哪来由供应商设置里的「每次
  * 调用 API / 固定模型」决定（见 lib/modelCatalog.ts）。
  *
- * 第三步是思考强度，**排在模型之后**：档位跟着模型走（gpt-5.5 顶到 xhigh、有的
- * 模型压根没有档位），模型还没定就先挑档位只会挑出一个该模型不支持的值，而非法
- * 组合要等 CLI 真跑起来才被上游拒绝。候选来自 shared 的 `reasoningEffortsFor(type,
- * model)`：先按 CLI 取档位表，再按该模型的实测上限收窄——供应商的 /v1/models 只
- * 返回模型 id，接口里拿不到档位能力，所以那份上限只能靠实测积累。这个模型没有档位
- * 时第三步自动跳过，选完模型直接落定。
+ * 第三步是思考强度，**排在模型之后**：候选来自 shared 的模型能力解析器，可表达
+ * 完整允许集合（包括非连续档位和空集合），未知模型才退回 CLI 并集。供应商的
+ * /v1/models 拿不到该能力，所以内置规则按实测积累；这个模型没有档位时第三步自动
+ * 跳过，选完模型直接落定。
  *
  * 两种落点：默认贴着调用方自己的定位上下文（对话框在页面底部，朝上弹）；传 `anchorRef`
  * 就改成挂到 body 的 fixed 浮层并贴着那颗触发器算位置——新建任务面板的卡片是
@@ -124,8 +122,7 @@ export function AgentModelPicker({
   const sections = useMemo(() => modelSections(groups, query), [groups, query]);
   const models = useMemo(() => flattenModelRows(sections), [sections]);
 
-  // 档位按**模型**算而不是按 CLI：codex 的 ultra/max 只有 gpt-5.6 系列吃得下，
-  // gpt-5.5 选了会被上游拒（见 shared 的 MODEL_EFFORT_CEILINGS）。
+  // 档位按**模型能力规则**算而不是按 CLI 并集；允许集合可以非连续或为空。
   const efforts = useMemo(() => reasoningEffortsFor(agent, picked?.model), [agent, picked?.model]);
   const effortRows = useMemo(() => {
     const rows = [{ value: "", label: "跟随执行器" }, ...efforts.map((value) => ({ value, label: value }))];

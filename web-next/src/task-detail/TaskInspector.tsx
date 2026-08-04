@@ -1,13 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 import type { AgentExecutorProfile, Group, Session, Task, TaskStatus } from "@harness/shared";
 import { isUserSettableStatus, TASK_STATUS_LABELS } from "@harness/shared";
-import { reasoningEffortsFor } from "@harness/shared/cli-presets";
 import { sameExecutor } from "@harness/shared/executors";
 import { ArrowSquareOut, CaretRight, ListNumbers } from "@phosphor-icons/react";
 import { api } from "../lib/api.ts";
 import { Dropdown } from "../components/Dropdown.tsx";
 import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
-import { effortOptions } from "../lib/executorChoices.ts";
 import { ModelCatalogSelect } from "../components/ModelCatalogField.tsx";
 import { ScheduleControl } from "../components/ScheduleControl.tsx";
 import { TaskLabelsEditor } from "../components/TaskLabelsEditor.tsx";
@@ -210,14 +208,6 @@ export function TaskInspector({
         : task.mode === "team" && detection.status === "failed"
           ? "常驻能力检测失败；调度者候选仅保留系统已知支持的已注册类型。"
           : null;
-  // 任务上存着的档位可能已经不在该模型的档位表里（换过执行器类型或模型）：仍要列
-  // 出来，否则下拉显示空白，看着像「没设过」。
-  const effortChoices = [
-    ...effortOptions(agentType, "跟随执行器", task.model),
-    ...(task.reasoningEffort && !reasoningEffortsFor(agentType, task.model).includes(task.reasoningEffort)
-      ? [{ value: task.reasoningEffort, label: task.reasoningEffort, detail: "当前设置" }]
-      : []),
-  ];
   const duration = taskDurationInfo(task);
   const parent = taskParentLink(task, allTasks);
   const canRequeue = task.parentId === null
@@ -372,7 +362,6 @@ export function TaskInspector({
               disabled={readOnly}
               effort={{
                 value: task.reasoningEffort ?? "",
-                options: effortChoices,
                 onChange: (effort) => void patch(
                   { reasoningEffort: effort || null },
                   "思考强度已更新，将从下一回合生效",

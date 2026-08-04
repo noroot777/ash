@@ -121,63 +121,144 @@ export const REASONING_EFFORT_VALUES: Record<AgentType, readonly string[]> = {
 };
 
 export const REASONING_EFFORT_DETAIL: Record<string, string> = {
-  xhigh: "gpt-5.5 支持的最高档",
-  ultra: "仅 gpt-5.6-sol/terra 等新模型支持",
+  xhigh: "超高推理",
+  ultra: "仅部分模型支持",
 };
 
 /**
- * 「这个**模型**顶到哪一档」——上面那张表是按 **CLI** 给的并集，同一个 CLI 下
- * 不同模型能吃的档位并不一样（codex 的 ultra/max 是随 gpt-5.6 系列才加的，
- * gpt-5.5 给 ultra 会被上游直接拒）。
+ * 模型级思考强度能力。上面的 REASONING_EFFORT_VALUES 只是每个 CLI 的**并集**；
+ * 真正能选什么还取决于 provider / 模型家族，而且不一定是连续的「最高到哪档」：
+ * Anthropic 模型可能只有 high/max，Haiku 没有档位，Antigravity 的部分 model slug
+ * 已经把 low/medium/high 编进名字里。用 ceiling 截数组表达不了这些情况。
  *
- * 为什么是写死的表而不是查接口：**没有任何接口给得出这个信息**。供应商的
+ * 为什么仍需要规则表：**没有通用接口给得出这个信息**。供应商的
  * `/v1/models` 只返回 id / owned_by / created（Anthropic 那版多一个 display_name），
  * 没有能力字段；各家 CLI 也没有「查某模型支持哪些 effort」的命令——非法组合要等
- * 真跑起来才被上游拒。所以只能按实测逐条积累。
+ * 真跑起来才被上游拒。所以内置已知规则按实测逐条积累，未知模型明确退回 CLI 并集。
  *
- * `match` 按模型 id 前缀匹配（会先剥掉 `openai/` 这类 provider 前缀和 `:high`
- * 这类档位后缀），多条命中取**最长**的那条。`ceiling` 是该模型能吃到的最高档，
- * 按所属 CLI 的档位数组顺序截断。
+ * 匹配保留 `openai/xxx` 里的 provider（多 provider CLI 必须靠它区分），同时也提取
+ * 裸模型 id；`:high` 这类 Pi 档位后缀只在它确实是已知 effort 名时才剥掉。多条命中
+ * 按 exact > provider+pattern > 更长 pattern 的确定性规则选最具体的一条。
  *
- * 补表的规矩：**只写实测过的**。宁可多列一档让上游去拒（用户看得到报错），也别
- * 凭猜想少列一档——那会让人在界面上根本挑不到一个其实可用的档位，且无从察觉。
+ * 补规则的规矩：`efforts` 写**完整允许集合**，且只能是该 CLI 并集的子集；未知就不
+ * 写规则，退回并集并让上游诚实报错，不能猜一个较窄集合把可用档位藏掉。
  */
-export const MODEL_EFFORT_CEILINGS: readonly { readonly match: string; readonly ceiling: string }[] = [
-  // gpt-5.5 及更早的 codex 模型：ultra/max 都会被拒（gpt-5.5 实测；更早的同系列
-  // 按「ultra 仅 5.6 系列起支持」这条推的，若实测发现更严还要再补条目）。
-  { match: "gpt-5.5", ceiling: "xhigh" },
-  { match: "gpt-5.4", ceiling: "xhigh" },
-  { match: "gpt-5.3", ceiling: "xhigh" },
-  { match: "gpt-5.2", ceiling: "xhigh" },
-  { match: "gpt-5.1", ceiling: "xhigh" },
-  { match: "gpt-5-", ceiling: "xhigh" },
-  // gpt-5.6 系列（sol/terra/luna）的 ultra 已实测可用；max 还没实测，先不设顶。
+export type ModelEffortMatchMode = "exact" | "prefix" | "suffix";
+
+export interface ModelEffortRule {
+  readonly id: string;
+  readonly types: readonly AgentType[];
+  readonly match: {
+    readonly provider?: string;
+    readonly model?: string;
+    readonly mode?: ModelEffortMatchMode;
+  };
+  readonly efforts: readonly string[];
+}
+
+const CODEX_CLASSIC_EFFORTS = ["low", "medium", "high", "xhigh"] as const;
+const CODEX_56_EFFORTS = ["low", "medium", "high", "xhigh", "ultra"] as const;
+
+export const MODEL_EFFORT_RULES: readonly ModelEffortRule[] = [
+  // Codex：每个模型家族写完整集合；5.6 已确认 ultra，max 未确认所以不列。
+  { id: "codex:gpt-5.6", types: ["codex"], match: { model: "gpt-5.6", mode: "prefix" }, efforts: CODEX_56_EFFORTS },
+  { id: "codex:gpt-5.5", types: ["codex"], match: { model: "gpt-5.5", mode: "prefix" }, efforts: CODEX_CLASSIC_EFFORTS },
+  { id: "codex:gpt-5.4", types: ["codex"], match: { model: "gpt-5.4", mode: "prefix" }, efforts: CODEX_CLASSIC_EFFORTS },
+  { id: "codex:gpt-5.3", types: ["codex"], match: { model: "gpt-5.3", mode: "prefix" }, efforts: CODEX_CLASSIC_EFFORTS },
+  { id: "codex:gpt-5.2", types: ["codex"], match: { model: "gpt-5.2", mode: "prefix" }, efforts: CODEX_CLASSIC_EFFORTS },
+  { id: "codex:gpt-5.1", types: ["codex"], match: { model: "gpt-5.1", mode: "prefix" }, efforts: CODEX_CLASSIC_EFFORTS },
+  { id: "codex:gpt-5-codex", types: ["codex"], match: { model: "gpt-5-", mode: "prefix" }, efforts: CODEX_CLASSIC_EFFORTS },
+
+  // Claude：Haiku 没有独立 effort；别名和供应商常见完整 id 都覆盖。
+  { id: "claude:haiku-alias", types: ["claude"], match: { model: "haiku", mode: "prefix" }, efforts: [] },
+  { id: "claude:haiku-id", types: ["claude"], match: { model: "claude-haiku", mode: "prefix" }, efforts: [] },
+
+  // OpenCode/Kilo 的 variant 由模型 provider 决定，集合可能有洞，正是 ceiling 表达不了的情形。
+  { id: "multimodel:anthropic", types: ["opencode", "kilo"], match: { provider: "anthropic" }, efforts: ["high", "max"] },
+  { id: "multimodel:google", types: ["opencode", "kilo"], match: { provider: "google" }, efforts: ["low", "high"] },
+  { id: "multimodel:openai", types: ["opencode", "kilo"], match: { provider: "openai" }, efforts: ["minimal", "low", "medium", "high", "xhigh"] },
+
+  // Antigravity 这些 slug 已经把 effort 编进模型名，再叠 --effort 的行为未实测，故不再单列一步。
+  { id: "antigravity:slug-low", types: ["antigravity"], match: { model: "-low", mode: "suffix" }, efforts: [] },
+  { id: "antigravity:slug-medium", types: ["antigravity"], match: { model: "-medium", mode: "suffix" }, efforts: [] },
+  { id: "antigravity:slug-high", types: ["antigravity"], match: { model: "-high", mode: "suffix" }, efforts: [] },
 ];
 
-/** 剥掉 `openai/` 这类 provider 前缀与 `:high` 这类档位后缀，只留模型 id 本身。 */
-function bareModelId(model: string): string {
-  const withoutSuffix = model.trim().toLowerCase().split(":")[0] ?? "";
-  const segments = withoutSuffix.split("/");
-  return segments[segments.length - 1] ?? "";
+export interface ReasoningEffortResolution {
+  readonly efforts: readonly string[];
+  readonly source: "model-rule" | "cli-fallback";
+  readonly ruleId: string | null;
+}
+
+const KNOWN_EFFORTS = new Set(Object.values(REASONING_EFFORT_VALUES).flat());
+
+function modelRef(model: string): { provider: string | null; id: string } {
+  let normalized = model.trim().toLowerCase();
+  const colon = normalized.lastIndexOf(":");
+  if (colon > normalized.lastIndexOf("/") && KNOWN_EFFORTS.has(normalized.slice(colon + 1))) {
+    normalized = normalized.slice(0, colon);
+  }
+  const segments = normalized.split("/").filter(Boolean);
+  return {
+    provider: segments.length > 1 ? segments[0]! : null,
+    id: segments.at(-1) ?? "",
+  };
+}
+
+function matchesModel(value: string, pattern: string, mode: ModelEffortMatchMode): boolean {
+  if (mode === "exact") return value === pattern;
+  if (mode === "suffix") return value.endsWith(pattern);
+  return value.startsWith(pattern);
+}
+
+function ruleScore(rule: ModelEffortRule): number {
+  const mode = rule.match.mode ?? "exact";
+  const modeScore = mode === "exact" ? 3_000 : mode === "prefix" ? 2_000 : 1_000;
+  return (rule.match.provider ? 10_000 : 0) + (rule.match.model ? modeScore + rule.match.model.length : 0);
 }
 
 /**
- * 某个 CLI 跑某个模型时，真正可挑的思考强度档位。
+ * 解析某个 CLI + 模型的思考强度能力，并保留来源供 UI / 校验层判断是否命中已知规则。
  *
- * 不传 model（或该模型没登记过顶）就退回 CLI 的并集——**没实测过就别假装知道**，
- * 少列一档比多列一档更难被发现。
+ * 不传 model（或该模型没登记）就退回 CLI 并集：这是明确的 unknown fallback，不是
+ * 对该模型能力的断言。
  */
-export function reasoningEffortsFor(type: AgentType, model?: string | null): readonly string[] {
-  const values = REASONING_EFFORT_VALUES[type] ?? [];
-  if (!model) return values;
-  const id = bareModelId(model);
-  if (!id) return values;
-  let matched: { match: string; ceiling: string } | null = null;
-  for (const entry of MODEL_EFFORT_CEILINGS) {
-    if (!id.startsWith(entry.match)) continue;
-    if (!matched || entry.match.length > matched.match.length) matched = { ...entry };
+export function resolveReasoningEfforts(type: AgentType, model?: string | null): ReasoningEffortResolution {
+  const fallback = REASONING_EFFORT_VALUES[type] ?? [];
+  if (!model?.trim()) return { efforts: fallback, source: "cli-fallback", ruleId: null };
+  const ref = modelRef(model);
+  let winner: ModelEffortRule | null = null;
+  for (const rule of MODEL_EFFORT_RULES) {
+    if (!rule.types.includes(type)) continue;
+    if (rule.match.provider && rule.match.provider !== ref.provider) continue;
+    if (rule.match.model && !matchesModel(ref.id, rule.match.model, rule.match.mode ?? "exact")) continue;
+    if (!winner || ruleScore(rule) > ruleScore(winner)) winner = rule;
   }
-  if (!matched) return values;
-  const cut = values.indexOf(matched.ceiling);
-  return cut < 0 ? values : values.slice(0, cut + 1);
+  if (!winner) return { efforts: fallback, source: "cli-fallback", ruleId: null };
+  return { efforts: winner.efforts, source: "model-rule", ruleId: winner.id };
+}
+
+/** 兼容选择器的简写：只取解析后的允许集合。 */
+export function reasoningEffortsFor(type: AgentType, model?: string | null): readonly string[] {
+  return resolveReasoningEfforts(type, model).efforts;
+}
+
+/** 空值 = 跟随 CLI，永远合法；非空必须落在该模型解析出的允许集合里。 */
+export function isReasoningEffortSupported(
+  type: AgentType,
+  model: string | null | undefined,
+  effort: string | null | undefined,
+): boolean {
+  const value = effort?.trim();
+  return !value || reasoningEffortsFor(type, model).includes(value);
+}
+
+/** 模型改变时保留仍合法的档位，否则清回 null（跟随 CLI）。 */
+export function normalizeReasoningEffort(
+  type: AgentType,
+  model: string | null | undefined,
+  effort: string | null | undefined,
+): string | null {
+  const value = effort?.trim();
+  return value && isReasoningEffortSupported(type, model, value) ? value : null;
 }

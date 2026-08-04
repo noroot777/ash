@@ -1,5 +1,6 @@
 import { useMemo } from "react";
 import type { AgentExecutorProfile, AgentType } from "@harness/shared";
+import { normalizeReasoningEffort } from "@harness/shared/cli-presets";
 import { useAgentModelCatalog, useProviders, type ModelGroup } from "../lib/modelCatalog.ts";
 import { effortOptions } from "../lib/executorChoices.ts";
 import { Dropdown, type DropdownOption } from "./Dropdown.tsx";
@@ -14,11 +15,9 @@ import { Dropdown, type DropdownOption } from "./Dropdown.tsx";
  * 两者都用同一个 Dropdown（候选按供应商分块、可输入筛选），只在外层包装上不同；
  * 需要「连执行器一起选」的两步交互见 task-detail/AgentModelPicker.tsx。
  *
- * 传了 `effort` 就把思考强度并进同一个下拉的**第二步**：档位是跟着模型走的
- * （gpt-5.5 顶到 xhigh、haiku 根本没有档位），模型还没定就先挑档位只会挑出一个
- * 该模型不支持的值，非法组合要等 CLI 跑起来才被上游拒绝。注意档位表来自
- * shared 的 `reasoningEffortsFor(type, model)`（按 CLI 分档、再按模型收窄），**供应商的 /v1/models
- * 接口只返回模型 id，拿不到「这个模型支持哪些档位」**。
+ * 传了 `effort` 就把思考强度并进同一个下拉的**第二步**：第二步由刚选中的模型同步
+ * 生成，候选来自 shared 的完整能力集合解析器；未知模型才退回 CLI 并集。供应商的
+ * /v1/models 接口只返回模型 id，拿不到「这个模型支持哪些档位」。
  */
 
 /**
@@ -28,7 +27,6 @@ import { Dropdown, type DropdownOption } from "./Dropdown.tsx";
 export type EffortStep = {
   value: string;
   onChange: (value: string) => void;
-  options?: DropdownOption[];
 };
 
 /** 目录还没就绪时给一句可见提示；就绪了就不占地方。 */
@@ -65,12 +63,13 @@ function catalogOptions(groups: ModelGroup[], value: string): DropdownOption[] {
 /** 档位只有一条「跟随」时说明这个模型压根没有档位，就别多摆一步。 */
 function effortStepOf(type: AgentType, effort: EffortStep | undefined, model: string) {
   if (!effort) return undefined;
-  const options = effort.options ?? effortOptions(type, "跟随执行器", model);
+  const normalized = normalizeReasoningEffort(type, model, effort.value) ?? "";
+  const options = effortOptions(type, "跟随执行器", model);
   if (options.length < 2) return undefined;
   return {
     label: "思考强度",
     options,
-    value: effort.value,
+    value: normalized,
     onChange: effort.onChange,
     emptyText: "该执行器没有可选档位",
   };
@@ -104,7 +103,13 @@ export function ModelCatalogField({
   const groups = useAgentModelCatalog(type, profiles, providers);
   const options = useMemo(() => catalogOptions(groups, value), [groups, value]);
   const note = catalogNote(groups);
-  const step2 = effortStepOf(type, effort, value);
+  const step2 = effort ? (model: string) => effortStepOf(type, effort, model) : undefined;
+  const commitModel = (model: string) => {
+    onChange(model);
+    if (!effort) return;
+    const normalized = normalizeReasoningEffort(type, model, effort.value) ?? "";
+    if (normalized !== effort.value.trim()) effort.onChange(normalized);
+  };
   const clear = () => { onChange(""); effort?.onChange(""); };
   return (
     <div className="composer-field">
@@ -125,7 +130,7 @@ export function ModelCatalogField({
         step2={step2}
         onClear={value || effort?.value ? clear : undefined}
         clearLabel="清空（跟随执行器）"
-        onChange={onChange}
+        onChange={commitModel}
       />
       {note && <small>{note}</small>}
     </div>
@@ -151,7 +156,13 @@ export function ModelCatalogSelect({
   const groups = useAgentModelCatalog(type, profiles, providers);
   const options = useMemo(() => catalogOptions(groups, value), [groups, value]);
   const note = catalogNote(groups);
-  const step2 = effortStepOf(type, effort, value);
+  const step2 = effort ? (model: string) => effortStepOf(type, effort, model) : undefined;
+  const commitModel = (model: string) => {
+    onChange(model);
+    if (!effort) return;
+    const normalized = normalizeReasoningEffort(type, model, effort.value) ?? "";
+    if (normalized !== effort.value.trim()) effort.onChange(normalized);
+  };
   const clear = () => { onChange(""); effort?.onChange(""); };
   return (
     <>
@@ -171,7 +182,7 @@ export function ModelCatalogSelect({
         step2={step2}
         onClear={value || effort?.value ? clear : undefined}
         clearLabel="清空（跟随执行器）"
-        onChange={onChange}
+        onChange={commitModel}
       />
       {note && <p className="task-inspector-note">{note}</p>}
     </>

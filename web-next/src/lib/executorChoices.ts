@@ -8,8 +8,8 @@ import type { DropdownOption } from "../components/Dropdown.tsx";
  *
  * 第一项永远是「不覆盖」：档位是 CLI 自己的事，harness 只在用户明确挑了才传。
  *
- * 知道当前模型就把它传进来：档位是**模型**的属性而不是 CLI 的（codex 的 ultra/max
- * 只有 gpt-5.6 系列吃得下），传了才能把该模型吃不下的档位从候选里去掉。
+ * 知道当前模型就把它传进来：解析器会按 CLI / provider / 模型规则返回完整允许集合，
+ * 未登记模型才退回 CLI 并集。
  */
 export function effortOptions(
   type: AgentType,

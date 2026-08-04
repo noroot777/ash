@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import type { AgentType, LlmProvider } from "@harness/shared";
-import { CLI_MODEL_PRESETS } from "@harness/shared/cli-presets";
+import { CLI_MODEL_PRESETS, normalizeReasoningEffort } from "@harness/shared/cli-presets";
 import { Dropdown, type DropdownOption } from "../components/Dropdown.tsx";
 import { effortOptions } from "../lib/executorChoices.ts";
 import {
@@ -126,14 +126,24 @@ export function ProviderModelInput({
 
   const commit = (next: string) => {
     onChange(next);
+    if (effort) {
+      const normalized = normalizeReasoningEffort(type, next, effort.value) ?? "";
+      if (normalized !== effort.value.trim()) effort.onChange(normalized);
+    }
     onCommit?.(next);
   };
 
-  // 档位跟着**当前模型**收窄（gpt-5.5 吃不下 ultra/max），不是按 CLI 一把梭。
-  const efforts = effortOptions(type, "跟随执行器", value);
-  const step2 = effort && efforts.length > 1
-    ? { label: "思考强度", options: efforts, value: effort.value, onChange: effort.onChange }
-    : undefined;
+  // 第二步必须按用户**刚点中的模型**同步生成，不能拿弹层打开前的旧 value 算。
+  const step2 = effort ? (model: string) => {
+    const efforts = effortOptions(type, "跟随执行器", model);
+    if (efforts.length < 2) return undefined;
+    return {
+      label: "思考强度",
+      options: efforts,
+      value: normalizeReasoningEffort(type, model, effort.value) ?? "",
+      onChange: effort.onChange,
+    };
+  } : undefined;
   const clear = () => { commit(""); effort?.onChange(""); };
 
   return (

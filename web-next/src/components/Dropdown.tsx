@@ -37,6 +37,15 @@ export type DropdownOption = {
 
 export type DropdownStatus = "idle" | "loading" | "ready" | "failed";
 
+export type DropdownSecondStep = {
+  label: string;
+  options: DropdownOption[];
+  value: string;
+  onChange: (value: string) => void;
+  emptyText?: string;
+  filterPlaceholder?: string;
+};
+
 type Placement = { left: number; top: number; width: number; maxHeight: number };
 
 const GAP = 4;
@@ -83,17 +92,13 @@ export function Dropdown({
   /** 给一个「回到不设置」的出口；候选列表里就不必再占一行「跟随…」。 */
   onClear?: () => void;
   clearLabel?: string;
-  /** 选完第一步后接着选的第二步（例：模型选完选思考强度）。 */
-  step2?: {
-    label: string;
-    options: DropdownOption[];
-    value: string;
-    onChange: (value: string) => void;
-    emptyText?: string;
-  };
+  /** 可传静态第二步，或按第一步刚选中的值同步生成（模型 → 强度必须走后者）。 */
+  step2?: DropdownSecondStep | ((value: string) => DropdownSecondStep | undefined);
 }) {
   const [open, setOpen] = useState(false);
   const [stage, setStage] = useState<1 | 2>(1);
+  const [activeStep2, setActiveStep2] = useState<DropdownSecondStep | null>(null);
+  const [step1Value, setStep1Value] = useState("");
   const [query, setQuery] = useState("");
   const [index, setIndex] = useState(0);
   const [place, setPlace] = useState<Placement | null>(null);
@@ -104,6 +109,8 @@ export function Dropdown({
   const close = () => {
     setOpen(false);
     setStage(1);
+    setActiveStep2(null);
+    setStep1Value("");
     setQuery("");
   };
 
@@ -114,9 +121,11 @@ export function Dropdown({
     restoreFocusRef: triggerRef,
   });
 
-  const onStep2 = stage === 2 && !!step2;
-  const stepOptions = onStep2 ? step2.options : options;
-  const canFilter = filterable && !onStep2;
+  const onStep2 = stage === 2 && !!activeStep2;
+  const stepOptions = onStep2 ? activeStep2.options : options;
+  // 第二步始终保留真实输入框：workspace 的 ↑↓ 快捷键在 window capture 阶段，只有
+  // event.target 是文本输入时才让路；焦点放普通 div 上会先被它抢去切任务。
+  const canFilter = filterable || onStep2;
 
   const rows = useMemo<DropdownOption[]>(() => {
     const keyword = query.trim().toLowerCase();
@@ -132,7 +141,7 @@ export function Dropdown({
     return [...hit, ...custom];
   }, [allowCustom, onStep2, stepOptions, query]);
 
-  const stepValue = onStep2 ? step2.value : value;
+  const stepValue = onStep2 ? activeStep2.value : value;
   const active = Math.min(index, Math.max(0, rows.length - 1));
   const current = options.find((option) => option.value === value);
   const display = current?.label ?? (value || "");
@@ -173,12 +182,20 @@ export function Dropdown({
 
   const commit = (next: string) => {
     if (onStep2) {
-      step2.onChange(next);
+      activeStep2.onChange(next);
     } else if (step2) {
-      // 第一步落定后不关浮层：紧接着在同一个浮层里选第二步（强度）。
+      const resolved = typeof step2 === "function" ? step2(next) : step2;
       onChange(next);
+      if (!resolved) {
+        close();
+        triggerRef.current?.focus();
+        return;
+      }
+      // 第一步落定后不关浮层：紧接着在同一个浮层里选第二步（强度）。
+      setActiveStep2(resolved);
+      setStep1Value(next);
       setQuery("");
-      setIndex(Math.max(0, step2.options.findIndex((option) => option.value === step2.value)));
+      setIndex(Math.max(0, resolved.options.findIndex((option) => option.value === resolved.value)));
       setStage(2);
       return;
     } else {
@@ -218,6 +235,8 @@ export function Dropdown({
         onClick={() => {
           setQuery("");
           setStage(1);
+          setActiveStep2(null);
+          setStep1Value("");
           setIndex(Math.max(0, options.findIndex((option) => option.value === value)));
           setOpen((current) => !current);
         }}
@@ -239,11 +258,11 @@ export function Dropdown({
         >
           {onStep2 && (
             <div className="ui-dropdown-step">
-              <button type="button" onClick={() => { setStage(1); setIndex(0); }} aria-label="返回上一步">
+              <button type="button" onClick={() => { setStage(1); setActiveStep2(null); setIndex(0); }} aria-label="返回上一步">
                 <ArrowLeft size={11} weight="bold" />
               </button>
-              <b>{step2.label}</b>
-              <span>{display || placeholder}</span>
+              <b>{activeStep2.label}</b>
+              <span>{options.find((option) => option.value === step1Value)?.label || step1Value || display || placeholder}</span>
             </div>
           )}
           {canFilter && (
@@ -251,7 +270,7 @@ export function Dropdown({
               <input
                 ref={inputRef}
                 value={query}
-                placeholder={filterPlaceholder}
+                placeholder={onStep2 ? activeStep2.filterPlaceholder ?? `筛选${activeStep2.label}…` : filterPlaceholder}
                 aria-label={`${label} · 筛选`}
                 onChange={(event) => { setQuery(event.target.value); setIndex(0); }}
               />
@@ -263,10 +282,10 @@ export function Dropdown({
           <div
             className="ui-dropdown-rows"
             role="listbox"
-            aria-label={onStep2 ? step2.label : label}
+            aria-label={onStep2 ? activeStep2.label : label}
             style={{ maxHeight: place.maxHeight - (canFilter ? 42 : 0) - (onStep2 ? 30 : 0) - (onClear ? 28 : 0) }}
           >
-            {!rows.length && <p className="ui-dropdown-empty">{(onStep2 ? step2.emptyText : emptyText) ?? emptyText}</p>}
+            {!rows.length && <p className="ui-dropdown-empty">{(onStep2 ? activeStep2.emptyText : emptyText) ?? emptyText}</p>}
             {rows.map((row, rowIndex) => {
               const head = row.group && row.group !== lastGroup ? row.group : "";
               lastGroup = row.group;

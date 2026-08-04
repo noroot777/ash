@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { AgentExecutorProfile, LlmProvider } from "@harness/shared";
-import { reasoningEffortsFor } from "@harness/shared/cli-presets";
+import { normalizeReasoningEffort, reasoningEffortsFor } from "@harness/shared/cli-presets";
 import { Star, Trash } from "@phosphor-icons/react";
 import { Dropdown, type DropdownOption } from "../components/Dropdown.tsx";
 import { api } from "../lib/api.ts";
@@ -159,7 +159,7 @@ export function AgentProfileRow({
             filterable={providerOptions.length > 6}
             filterPlaceholder="筛选供应商…"
             placeholder={protocol ? "CLI 官方账号" : "暂不支持"}
-            onChange={(providerId) => void patch({ providerId: providerId || null, model: "" })}
+            onChange={(providerId) => void patch({ providerId: providerId || null, model: "", reasoningEffort: "" })}
           />
         </div>
         <div className="agent-profile-cell">
@@ -169,8 +169,15 @@ export function AgentProfileRow({
             value={profile.model ?? ""}
             disabled={busy}
             compact
-            onChange={(model) => onChange({ ...profile, model: model || undefined })}
-            onCommit={(model) => void patch({ model })}
+            onChange={(model) => onChange({
+              ...profile,
+              model: model || undefined,
+              reasoningEffort: normalizeReasoningEffort(profile.type, model, profile.reasoningEffort) ?? undefined,
+            })}
+            onCommit={(model) => void patch({
+              model,
+              reasoningEffort: normalizeReasoningEffort(profile.type, model, profile.reasoningEffort) ?? "",
+            })}
           />
         </div>
         <div className="agent-profile-cell">
