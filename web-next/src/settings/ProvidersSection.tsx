@@ -331,23 +331,16 @@ function ProviderRow({
 }) {
   const [editing, setEditing] = useState(false);
   const [deleting, setDeleting] = useState(false);
-  const [testing, setTesting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
-
-  if (editing) {
-    return (
-      <ProviderForm
-        provider={provider}
-        notify={notify}
-        onCancel={() => setEditing(false)}
-        onSaved={async () => {
-          await onChanged();
-          setEditing(false);
-          notify(`供应商「${provider.name}」已更新`);
-        }}
-      />
-    );
-  }
+  // 收起表单后原地闪一下:列表长了以后,光靠 toast 找不回刚才改的是哪一行。
+  const [justEdited, setJustEdited] = useState(false);
+  const flashTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  useEffect(() => () => clearTimeout(flashTimer.current), []);
+  const flash = () => {
+    setJustEdited(true);
+    clearTimeout(flashTimer.current);
+    flashTimer.current = setTimeout(() => setJustEdited(false), 2600);
+  };
 
   const remove = async () => {
     setDeleting(true);
@@ -363,25 +356,9 @@ function ProviderRow({
     }
   };
 
-  const testModel = async () => {
-    if (!provider.model) {
-      notify(`供应商「${provider.name}」还没有设置测试模型`);
-      return;
-    }
-    setTesting(true);
-    try {
-      const result = await api.testLlmProvider({ id: provider.id, model: provider.model });
-      notify(`「${provider.name}」测试通过 · ${result.elapsedMs} ms · ${result.reply}`);
-    } catch (error) {
-      notify(error instanceof Error ? error.message : "模型测试失败");
-    } finally {
-      setTesting(false);
-    }
-  };
-
   return (
     <>
-      <article className="provider-row">
+      <article className={`provider-row${justEdited ? " is-just-edited" : ""}${editing ? " is-editing" : ""}`}>
         <span className={`provider-protocol is-${provider.protocol}`}>
           {provider.protocol === "anthropic" ? "A" : "O"}
         </span>
@@ -402,20 +379,30 @@ function ProviderRow({
         <span className="provider-default-model">{provider.model || "未设默认模型"}</span>
         <button
           type="button"
-          className="provider-test-action"
-          disabled={testing}
-          onClick={() => void testModel()}
-          aria-label={`测试 ${provider.name} 的模型`}
+          className="provider-icon-action"
+          aria-pressed={editing}
+          onClick={() => setEditing((open) => !open)}
+          aria-label={editing ? `收起 ${provider.name} 的编辑表单` : `编辑 ${provider.name}`}
         >
-          <Play size={11} weight="fill" /> {testing ? "测试中" : "测试"}
-        </button>
-        <button type="button" className="provider-icon-action" onClick={() => setEditing(true)} aria-label={`编辑 ${provider.name}`}>
           <PencilSimple size={14} />
         </button>
         <button type="button" className="settings-icon-danger" onClick={() => setConfirmDelete(true)} aria-label={`删除 ${provider.name}`}>
           <Trash size={14} />
         </button>
       </article>
+      {editing && (
+        <ProviderForm
+          provider={provider}
+          notify={notify}
+          onCancel={() => { setEditing(false); flash(); }}
+          onSaved={async () => {
+            await onChanged();
+            setEditing(false);
+            flash();
+            notify(`供应商「${provider.name}」已更新`);
+          }}
+        />
+      )}
       {confirmDelete && (
         <ConfirmDialog
           title="删除供应商"

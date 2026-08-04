@@ -409,6 +409,7 @@ api.post("/tasks/:id/reply", async (c) => {
     agent?: AgentType;
     executorId?: string | null;
     model?: string | null;
+    reasoningEffort?: string | null;
     sendAt?: string;
   }>();
   if (!b.text?.trim() && !b.attachments?.length) return c.json({ error: "empty" }, 400);
@@ -432,6 +433,7 @@ api.post("/tasks/:id/reply", async (c) => {
       agent: b.agent ?? null,
       executorId: b.executorId ?? null,
       model: b.model?.trim() || null,
+      reasoningEffort: b.reasoningEffort?.trim() || null,
       sendAt: when.toISOString(),
       status: "pending" as const,
       createdAt: now(),
@@ -446,6 +448,7 @@ api.post("/tasks/:id/reply", async (c) => {
     agent: b.agent,
     executorId: b.executorId ?? null,
     model: b.model?.trim() || null,
+    reasoningEffort: b.reasoningEffort?.trim() || null,
   });
   return c.json({ started: true }, 202);
 });

@@ -25,13 +25,14 @@
 .task-reply-chip:disabled { opacity: .5; }
 .task-reply-chip > b { color: var(--ink); font-family: var(--font-mono); font-size: 10.5px; font-weight: 550; }
 .task-reply-chip > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); }
+.task-reply-chip > em { flex: 0 0 auto; border-radius: 999px; background: var(--raised); padding: 1px 5px; color: var(--muted); font-size: 9px; font-style: normal; }
 .task-reply-chip > svg:last-child { flex: 0 0 auto; color: var(--faint); }
 .task-reply-chip.is-summoned { border-color: color-mix(in lch, var(--accent) 45%, transparent); background: color-mix(in lch, var(--accent) 10%, transparent); }
 .task-reply-chip.is-summoned > b { color: var(--accent); }
 .task-reply-chip-reset { display: grid; width: 19px; height: 19px; place-items: center; border: 0; border-radius: 50%; background: transparent; color: var(--faint); }
 .task-reply-chip-reset:hover { background: var(--raised); color: var(--ink); }
 
-/* 两步选择器（先智能体、再按供应商分块的模型）。 */
+/* 三步选择器：智能体 → 模型（按供应商分块）→ 思考强度。 */
 .agent-model-picker {
   position: absolute;
   z-index: 27;
@@ -45,6 +46,19 @@
   background: var(--panel);
   box-shadow: var(--menu-shadow);
 }
+/* 挂到 body 上的那份（新建任务/派生/派审用）：位置与最大高度都由 JS 按触发器算，
+   见 AgentModelPicker。面板整体是竖向 flex，好让列表在被压扁时自己滚。 */
+.agent-model-picker.is-floating {
+  position: fixed;
+  z-index: 60;
+  bottom: auto;
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 0;
+}
+.agent-model-picker.is-floating > .agent-model-picker-head,
+.agent-model-picker.is-floating > footer { flex: 0 0 auto; }
+.agent-model-picker.is-floating .agent-model-picker-rows { min-height: 0; max-height: none; flex: 1; }
 .agent-model-picker-head { display: flex; align-items: center; gap: 6px; border-bottom: 0.5px solid var(--line); padding: 7px 8px; }
 .agent-model-picker-back { display: grid; width: 20px; height: 20px; flex: 0 0 auto; place-items: center; border: 0; border-radius: 5px; background: transparent; color: var(--muted); }
 .agent-model-picker-back:hover { background: var(--raised); color: var(--ink); }
@@ -54,7 +68,20 @@
 .agent-model-picker-head input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in lch, var(--accent) 13%, transparent); }
 .agent-model-picker-rows { max-height: min(46vh, 330px); overflow-y: auto; overscroll-behavior: contain; padding: 5px; }
 .agent-model-picker-rows > p { margin: 6px 7px; color: var(--faint); font-size: 10.5px; }
-.agent-model-picker-rows header { display: flex; align-items: baseline; gap: 6px; padding: 7px 8px 4px; }
+/* 分块标题跟统一下拉组件（.ui-dropdown-group）同一套：灰底条 + 大写小字，滚动时吸顶。 */
+.agent-model-picker-rows header {
+  position: sticky;
+  z-index: 1;
+  top: -5px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  margin: 5px 0 2px;
+  border-radius: 5px;
+  background: var(--raised);
+  padding: 3px 6px;
+}
 .agent-model-picker-rows header > b { color: var(--muted); font-size: 9.5px; font-weight: 650; letter-spacing: .04em; text-transform: uppercase; }
 .agent-model-picker-rows header > small { display: inline-flex; min-width: 0; align-items: center; gap: 3px; overflow: hidden; color: var(--faint); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
 .agent-model-picker-rows header > small.is-error { color: var(--red); }
@@ -75,6 +102,8 @@
 .agent-model-picker-rows button > b { min-width: 0; overflow: hidden; color: var(--ink); font-family: var(--font-mono); font-size: 11px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
 .agent-model-picker-rows button > span { min-width: 0; flex: 1; overflow: hidden; color: var(--faint); font-size: 9.5px; text-align: right; text-overflow: ellipsis; white-space: nowrap; }
 .agent-model-picker-rows button > svg { flex: 0 0 auto; color: var(--faint); }
+/* 第三步（思考强度）的面包屑里回显上一步选定的模型。 */
+.agent-model-picker-crumb > code { font-family: var(--font-mono); font-size: 9.5px; }
 .agent-model-picker > footer { border-top: 0.5px solid var(--line); padding: 5px 9px 6px; color: var(--faint); font-size: 9px; }
 .team-reply-shell { position: relative; }
 .team-reply-box footer > .reply-schedule-button { width: 27px; height: 27px; }

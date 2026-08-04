@@ -1,5 +1,6 @@
 import type { AgentType, BatchCreateTasksBody, BatchTaskInput, Group, Task, TaskStatus, TaskWorkspaceDiscardResult } from "@harness/shared";
 import { AGENT_TYPES, isUserSettableStatus } from "@harness/shared";
+import { isReasoningEffortSupported, normalizeReasoningEffort, reasoningEffortsFor } from "@harness/shared/cli-presets";
 import { inheritExecutorOverrides, pickExecutor, sameExecutor } from "@harness/shared/executors";
 import { asc, eq } from "drizzle-orm";
 import type { Hono } from "hono";
@@ -248,8 +249,24 @@ api.patch("/tasks/:id", async (c) => {
     defaultReasoningEffort: existing.reasoningEffort,
   });
   const executorChanged = !sameExecutor(beforeExecutor, afterExecutor);
+  const finalType = afterExecutor.agentType;
+  const normalizedEffort = finalType
+    ? normalizeReasoningEffort(finalType, patchedOverrides.model, patchedOverrides.reasoningEffort)
+    : patchedOverrides.reasoningEffort;
+  if (
+    finalType
+    && b.reasoningEffort !== undefined
+    && b.reasoningEffort
+    && !isReasoningEffortSupported(finalType, patchedOverrides.model, b.reasoningEffort)
+  ) {
+    const allowed = reasoningEffortsFor(finalType, patchedOverrides.model);
+    return c.json({
+      error: `${finalType} 模型 ${patchedOverrides.model ?? "（跟随执行器）"} 不支持思考强度 ${b.reasoningEffort}`,
+      allowedReasoningEfforts: allowed,
+    }, 400);
+  }
   if (b.model !== undefined || executorChanged) patch.model = patchedOverrides.model;
-  if (b.reasoningEffort !== undefined || executorChanged) patch.reasoningEffort = patchedOverrides.reasoningEffort;
+  if (b.reasoningEffort !== undefined || b.model !== undefined || executorChanged) patch.reasoningEffort = normalizedEffort;
   if (b.mode !== undefined) patch.mode = b.mode;
   if (b.debate !== undefined) patch.debate = b.debate ? JSON.stringify(b.debate) : null;
   // 注意:dependsOn / resumeDependsOn 不再可编辑(DESIGN-scheduling.md):

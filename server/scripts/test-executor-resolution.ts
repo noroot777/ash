@@ -5,6 +5,7 @@
 //
 // 跑法:
 //   HARNESS_DB=/tmp/test-executor-resolution-$RANDOM.db npx tsx server/scripts/test-executor-resolution.ts
+import assert from "node:assert/strict";
 import { eq } from "drizzle-orm";
 
 if (!process.env.HARNESS_DB) {
@@ -67,6 +68,14 @@ const omitted = await resolveExecutorFor({ type: "codex" });
 if (omitted.label !== "codex@default" || omitted.type !== "codex") {
   throw new Error(`executorId 缺省应使用 codex@default, got ${omitted.label}/${omitted.type}`);
 }
+
+await assert.rejects(
+  () => resolveExecutorFor({ type: "codex", model: "gpt-5.5", reasoningEffort: "ultra" }),
+  /gpt-5\.5 不支持思考强度 ultra.*low、medium、high、xhigh/,
+  "所有执行入口最终都要在 spawn 前拦住已知非法的模型/强度组合",
+);
+const validModelEffort = await resolveExecutorFor({ type: "codex", model: "gpt-5.6-sol", reasoningEffort: "ultra" });
+assert.equal(validModelEffort.type, "codex", "模型能力规则允许的组合应正常解析执行器");
 
 // build() 必须把「检测命中的备用命令名」一路传给 GenericCliExecutor。死认 bins[0]
 // 时,只装了备用名的机器会被 /agents/catalog 判为可用、派任务却稳定 ENOENT

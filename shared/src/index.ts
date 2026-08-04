@@ -517,9 +517,10 @@ export interface ScheduledMessage {
   text: string;
   attachments: string[];
   agent: AgentType | null;
-  // @指派时一并选定的执行器/模型；null = 按 agent 的默认执行器 / 跟随执行器。
+  // @指派时一并选定的执行器/模型/思考强度；null = 按 agent 的默认执行器 / 跟随执行器。
   executorId: string | null;
   model: string | null;
+  reasoningEffort: string | null;
   sendAt: string; // ISO 到期发送时间
   status: ScheduledMessageStatus;
   createdAt: string;

@@ -273,7 +273,7 @@ export function TaskDetail({
                       }
                       conversation.addUser(text, attachments);
                       notify(options.agent
-                        ? `已召唤 @${options.agent}${options.model ? ` · ${options.model}` : ""} 继续任务`
+                        ? `已召唤 @${options.agent}${options.model ? ` · ${options.model}` : ""}${options.reasoningEffort ? ` · ${options.reasoningEffort}` : ""} 继续任务`
                         : "回复已发送");
                       return result;
                     }}

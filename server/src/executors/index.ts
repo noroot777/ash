@@ -1,5 +1,6 @@
 import { eq } from "drizzle-orm";
 import type { AgentType, ExecTarget } from "@harness/shared";
+import { isReasoningEffortSupported, reasoningEffortsFor } from "@harness/shared/cli-presets";
 import { db } from "../db/index.js";
 import { agents, llmProviders } from "../db/schema.js";
 import type { AgentExecutor, ExecutorBuildOpts, RelayConfig } from "./types.js";
@@ -56,20 +57,29 @@ async function build(
   overrides: ExecutorOverrides = {},
 ): Promise<AgentExecutor> {
   const target = profile ? JSON.parse(profile.target) as ExecTarget : undefined;
+  const model = overrides.model || profile?.model || undefined;
+  const reasoningEffort = overrides.reasoningEffort || profile?.reasoningEffort || undefined;
+  if (!isReasoningEffortSupported(type, model, reasoningEffort)) {
+    const allowed = reasoningEffortsFor(type, model);
+    throw new Error(
+      `${type} 模型 ${model ?? "（跟随 CLI）"} 不支持思考强度 ${reasoningEffort}`
+      + (allowed.length ? `；可选：${allowed.join("、")}` : "；该模型没有独立思考强度档位"),
+    );
+  }
   const opts: ExecutorBuildOpts = profile
     ? {
         name: profile.name,
-        model: overrides.model || profile.model || undefined,
+        model,
         extraArgs: normalizeProfileExtraArgs(JSON.parse(profile.extraArgs), target!),
-        reasoningEffort: overrides.reasoningEffort || profile.reasoningEffort || undefined,
+        reasoningEffort,
         speed: profile.speed === "fast" ? ("fast" as const) : undefined,
         target,
         bin: undefined as string | undefined,
         relay: await loadRelay(profile.providerId),
       }
     : {
-        model: overrides.model || undefined,
-        reasoningEffort: overrides.reasoningEffort || undefined,
+        model,
+        reasoningEffort,
       };
 
   // 目录是唯一的分派表:有 factory 的走专用类(claude 的常驻会话、codex 的诊断

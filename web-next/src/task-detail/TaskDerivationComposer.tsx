@@ -1,11 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import type { AgentExecutorProfile, AgentType, DebateConfig, Task, TeamConfig } from "@harness/shared";
 import {
   DEBATE_DEFAULTS,
   DEFAULT_APP_SETTINGS,
   TEAM_DEFAULTS,
 } from "@harness/shared";
-import { REASONING_EFFORT_VALUES } from "@harness/shared/cli-presets";
 import {
   GitBranch,
   Scales,
@@ -15,8 +14,9 @@ import {
   Warning,
   X,
 } from "@phosphor-icons/react";
-import { ModelCatalogField } from "../components/ModelCatalogField.tsx";
+import { Dropdown } from "../components/Dropdown.tsx";
 import { Button, Toggle } from "../components/ui.tsx";
+import { ExecutorPickerField } from "../composer/ExecutorPickerField.tsx";
 import {
   executorOptions,
   executorValue,
@@ -81,24 +81,28 @@ function ExecutorSelect({
   const options = executorOptions({ types, profiles, knownProfiles, selection });
   const pickableCount = types.length + profiles.length;
   return (
-    <label className="composer-field">
+    <div className="composer-field">
       <span>{label}</span>
-      <select
+      <Dropdown
+        label={label}
         value={pickableCount || options.length ? executorValue(selection) : ""}
+        options={options.map((option) => ({
+          value: option.value,
+          label: option.label,
+          disabled: option.disabled,
+        }))}
         disabled={pickableCount === 0}
-        onChange={(event) => onChange(event.target.value)}
-      >
-        {options.length === 0 && <option value="">暂无可用执行器</option>}
-        {options.map((option) => (
-          <option value={option.value} disabled={option.disabled} key={option.value}>{option.label}</option>
-        ))}
-      </select>
-    </label>
+        filterable={options.length > 6}
+        filterPlaceholder="筛选执行器…"
+        placeholder="暂无可用执行器"
+        emptyText="没有匹配的执行器"
+        onChange={onChange}
+      />
+    </div>
   );
 }
 
 function TeamExecutorField({
-  role,
   label,
   choice,
   types,
@@ -107,51 +111,28 @@ function TeamExecutorField({
   fallbackType,
   onChange,
 }: {
-  role: string;
   label: string;
   choice: ExecutorChoice;
   types: AgentType[];
   profiles: AgentExecutorProfile[];
   knownProfiles: AgentExecutorProfile[];
   fallbackType: AgentType;
-  onChange: (choice: ExecutorChoice) => void;
+  /** 必须是 setState 本人：选执行器与写覆盖是同一轮里的两次更新，函数式更新才不会互相盖掉。 */
+  onChange: Dispatch<SetStateAction<ExecutorChoice>>;
 }) {
-  const type = parseExecutorValue(
-    choice.profile,
-    knownProfiles,
-    { agentType: fallbackType, executorId: null },
-  ).agentType;
   return (
     <div className="task-derivation-role">
-      <ExecutorSelect
+      <ExecutorPickerField
         label={label}
         value={choice.profile}
         types={types}
         profiles={profiles}
         knownProfiles={knownProfiles}
         fallbackType={fallbackType}
+        override={choice}
         onChange={(profile) => onChange({ profile, model: "", effort: "" })}
+        onOverrideChange={(patch) => onChange((current) => ({ ...current, ...patch }))}
       />
-      <div className="task-derivation-overrides">
-        <ModelCatalogField
-          listId={`task-derivation-models-${role}-${type}`}
-          label="模型"
-          value={choice.model}
-          type={type}
-          profiles={knownProfiles}
-          onChange={(model) => onChange({ ...choice, model })}
-        />
-        <label className="composer-field">
-          <span>思考强度</span>
-          <select
-            value={choice.effort}
-            onChange={(event) => onChange({ ...choice, effort: event.target.value })}
-          >
-            <option value="">跟随执行器</option>
-            {REASONING_EFFORT_VALUES[type].map((effort) => <option value={effort} key={effort}>{effort}</option>)}
-          </select>
-        </label>
-      </div>
     </div>
   );
 }
@@ -483,9 +464,9 @@ export function TaskDerivationComposer({
         {teamMode ? (
           <>
             <div className="task-derivation-role-grid">
-              <TeamExecutorField role="lead" label="调度者执行器" choice={lead} types={leadTypes} profiles={leadProfiles} knownProfiles={profiles} fallbackType={TEAM_DEFAULTS.lead} onChange={setLead} />
-              <TeamExecutorField role="worker" label="执行者执行器" choice={worker} types={availableTypes} profiles={profiles} knownProfiles={profiles} fallbackType={TEAM_DEFAULTS.worker} onChange={setWorker} />
-              {reviewEnabled && <TeamExecutorField role="reviewer" label="审查者执行器" choice={reviewer} types={availableTypes} profiles={profiles} knownProfiles={profiles} fallbackType={TEAM_DEFAULTS.worker} onChange={setReviewer} />}
+              <TeamExecutorField label="调度者执行器" choice={lead} types={leadTypes} profiles={leadProfiles} knownProfiles={profiles} fallbackType={TEAM_DEFAULTS.lead} onChange={setLead} />
+              <TeamExecutorField label="执行者执行器" choice={worker} types={availableTypes} profiles={profiles} knownProfiles={profiles} fallbackType={TEAM_DEFAULTS.worker} onChange={setWorker} />
+              {reviewEnabled && <TeamExecutorField label="审查者执行器" choice={reviewer} types={availableTypes} profiles={profiles} knownProfiles={profiles} fallbackType={TEAM_DEFAULTS.worker} onChange={setReviewer} />}
             </div>
             <div className="task-derivation-review">
               <span>自动审查</span>
@@ -523,13 +504,20 @@ export function TaskDerivationComposer({
             <div className="task-derivation-debate-grid">
               <ExecutorSelect label="辩手 A" value={debaterA} types={availableTypes} profiles={profiles} fallbackType={DEBATE_DEFAULTS.debaterA} onChange={setDebaterA} />
               <ExecutorSelect label="辩手 B" value={debaterB} types={availableTypes} profiles={profiles} fallbackType={DEBATE_DEFAULTS.debaterB} onChange={setDebaterB} />
-              <label className="composer-field">
+              <div className="composer-field">
                 <span>最多轮数</span>
-                <select value={rounds} onChange={(event) => setRounds(event.target.value)}>
-                  <option value="">不限</option>
-                  {[3, 5, 10].map((value) => <option value={value} key={value}>{value} 轮</option>)}
-                </select>
-              </label>
+                <Dropdown
+                  label="最多轮数"
+                  value={rounds}
+                  options={[
+                    { value: "", label: "不限" },
+                    ...[3, 5, 10].map((value) => ({ value: String(value), label: `${value} 轮` })),
+                  ]}
+                  filterable={false}
+                  placeholder="不限"
+                  onChange={setRounds}
+                />
+              </div>
               <label className="task-derivation-gate">
                 <span>共识闸门</span>
                 <Toggle checked={gate} onChange={setGate} label={gate ? "需要确认" : "自动结束"} />

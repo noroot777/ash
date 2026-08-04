@@ -208,6 +208,7 @@ export const scheduledMessages = sqliteTable("scheduled_messages", {
   // @指派时一并选定的执行器与模型：定时发送落地时要跑的还是用户当时选的那一个。
   executorId: text("executor_id"), // agents.id | null（null=按 agent 类型默认执行器）
   model: text("model"), // 模型覆盖 | null（跟随执行器）
+  reasoningEffort: text("reasoning_effort"), // 思考强度覆盖 | null（跟随执行器）
   sendAt: text("send_at").notNull(), // ISO 到期发送时间
   status: text("status").notNull().default("pending"), // pending | sent | canceled
   createdAt: text("created_at").notNull(),

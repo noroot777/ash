@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import type { AgentExecutorProfile, Group, Session, Task, TaskStatus } from "@harness/shared";
 import { isUserSettableStatus, TASK_STATUS_LABELS } from "@harness/shared";
-import { REASONING_EFFORT_VALUES } from "@harness/shared/cli-presets";
 import { sameExecutor } from "@harness/shared/executors";
 import { ArrowSquareOut, CaretRight, ListNumbers } from "@phosphor-icons/react";
 import { api } from "../lib/api.ts";
+import { Dropdown } from "../components/Dropdown.tsx";
 import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
 import { ModelCatalogSelect } from "../components/ModelCatalogField.tsx";
 import { ScheduleControl } from "../components/ScheduleControl.tsx";
@@ -208,7 +208,6 @@ export function TaskInspector({
         : task.mode === "team" && detection.status === "failed"
           ? "常驻能力检测失败；调度者候选仅保留系统已知支持的已注册类型。"
           : null;
-  const effortOptions = [...new Set([task.reasoningEffort, ...REASONING_EFFORT_VALUES[agentType]].filter((value): value is string => !!value))];
   const duration = taskDurationInfo(task);
   const parent = taskParentLink(task, allTasks);
   const canRequeue = task.parentId === null
@@ -263,20 +262,43 @@ export function TaskInspector({
         <section>
           <h2>属性</h2>
           <InspectorRow label="状态">
-            <select value={task.status} disabled={readOnly} onChange={(event) => void patch({ status: event.target.value as TaskStatus })}>
-              {statusOptions.map((status) => <option value={status} key={status}>{TASK_STATUS_LABELS[status]}</option>)}
-            </select>
+            <Dropdown
+              label="状态"
+              value={task.status}
+              options={statusOptions.map((status) => ({ value: status, label: TASK_STATUS_LABELS[status] }))}
+              disabled={readOnly}
+              filterable={false}
+              onChange={(status) => void patch({ status: status as TaskStatus })}
+            />
           </InspectorRow>
           <InspectorRow label="优先级">
-            <select value={task.priority} disabled={readOnly} onChange={(event) => void patch({ priority: event.target.value as Task["priority"] })}>
-              {Object.entries(PRIORITY_LABELS).map(([value, label]) => <option value={value} key={value}>{label}</option>)}
-            </select>
+            <Dropdown
+              label="优先级"
+              value={task.priority}
+              options={Object.entries(PRIORITY_LABELS).map(([value, label]) => ({ value, label }))}
+              disabled={readOnly}
+              filterable={false}
+              onChange={(priority) => void patch({ priority: priority as Task["priority"] })}
+            />
           </InspectorRow>
           <InspectorRow label="分组">
-            <select value={task.groupId ?? ""} disabled={readOnly} onChange={(event) => void patch({ groupId: event.target.value || null })}>
-              <option value="">无分组</option>
-              {groups.map((group) => <option value={group.id} key={group.id}>{group.name} · {group.mode}</option>)}
-            </select>
+            <Dropdown
+              label="分组"
+              value={task.groupId ?? ""}
+              options={[
+                { value: "", label: "无分组" },
+                ...groups.map((group) => ({
+                  value: group.id,
+                  label: group.name,
+                  detail: group.mode === "parallel" ? "并行" : "串行",
+                })),
+              ]}
+              disabled={readOnly}
+              filterable={groups.length > 6}
+              filterPlaceholder="筛选分组…"
+              placeholder="无分组"
+              onChange={(groupId) => void patch({ groupId: groupId || null })}
+            />
           </InspectorRow>
           <InspectorRow label="标签">
             <TaskLabelsEditor
@@ -304,11 +326,21 @@ export function TaskInspector({
         <section>
           <h2>执行信息</h2>
           <InspectorRow label="执行器">
-            <select
+            <Dropdown
+              label="执行器"
               value={pickableCount || options.length ? executorSelectValue : ""}
+              options={options.map((option) => ({
+                value: option.value,
+                label: option.label,
+                disabled: option.disabled,
+              }))}
               disabled={readOnly || pickableCount === 0}
-              onChange={(event) => {
-                const next = parseExecutorValue(event.target.value, profiles, executorSelection);
+              filterable={options.length > 6}
+              filterPlaceholder="筛选执行器…"
+              placeholder="暂无可用执行器"
+              emptyText="没有匹配的执行器"
+              onChange={(value) => {
+                const next = parseExecutorValue(value, profiles, executorSelection);
                 if (!isExecutorPickable(next, executorTypes, executorProfiles)) {
                   notify("该执行器当前不可用，请改选已注册 Profile 或其类型默认");
                   return;
@@ -319,28 +351,24 @@ export function TaskInspector({
                   ...(sameExecutor(next, current) ? {} : { model: null, reasoningEffort: null }),
                 }, "执行器已更新，将从下一回合生效");
               }}
-            >
-              {options.length === 0 && <option value="">暂无可用执行器</option>}
-              {options.map((option) => (
-                <option value={option.value} disabled={option.disabled} key={option.value}>{option.label}</option>
-              ))}
-            </select>
+            />
             {availabilityMessage && <p className="task-inspector-note">{availabilityMessage}</p>}
           </InspectorRow>
-          <InspectorRow label="模型">
+          <InspectorRow label="模型与思考强度">
             <ModelCatalogSelect
               value={task.model ?? ""}
               type={agentType}
               profiles={profiles}
               disabled={readOnly}
+              effort={{
+                value: task.reasoningEffort ?? "",
+                onChange: (effort) => void patch(
+                  { reasoningEffort: effort || null },
+                  "思考强度已更新，将从下一回合生效",
+                ),
+              }}
               onChange={(model) => void patch({ model: model || null }, "模型设置已更新，将从下一回合生效")}
             />
-          </InspectorRow>
-          <InspectorRow label="思考强度">
-            <select value={task.reasoningEffort ?? ""} disabled={readOnly} onChange={(event) => void patch({ reasoningEffort: event.target.value || null }, "思考强度已更新，将从下一回合生效")}>
-              <option value="">跟随执行器</option>
-              {effortOptions.map((effort) => <option value={effort} key={effort}>{effort}</option>)}
-            </select>
           </InspectorRow>
           <InspectorRow label="创建时间"><span>{formatInstant(task.createdAt)}</span></InspectorRow>
           {task.startedAt && <InspectorRow label="开始时间"><span>{formatInstant(task.startedAt)}</span></InspectorRow>}

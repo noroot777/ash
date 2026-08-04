@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { AgentExecutorProfile, Task, TaskReviewRound } from "@harness/shared";
 import { MagnifyingGlass, SpinnerGap, WarningCircle } from "@phosphor-icons/react";
-import { EffortField, ExecutorSelect, ModelField } from "../composer/ComposerFields.tsx";
+import { ExecutorPickerField } from "../composer/ExecutorPickerField.tsx";
 import {
   executorValue,
   isExecutorPickable,
@@ -181,22 +181,24 @@ export function ReviewDispatchControl({
         <form onSubmit={(event) => { event.preventDefault(); void dispatch(); }}>
           <fieldset disabled={dispatching}>
             <div className="review-dispatch-fields">
-              <ExecutorSelect
-                label="审查执行器 Profile"
+              <ExecutorPickerField
+                label="审查执行器"
                 value={executorValue(selection)}
                 types={workerTypes}
                 profiles={profiles}
                 knownProfiles={profiles}
                 fallbackType={defaults.selection.agentType}
+                override={{ model, effort }}
                 onChange={(value) => {
-                  const next = parseExecutorValue(value, profiles, selection);
-                  setSelection(next);
+                  setSelection(parseExecutorValue(value, profiles, selection));
                   setModel("");
                   setEffort("");
                 }}
+                onOverrideChange={(patch) => {
+                  if (patch.model !== undefined) setModel(patch.model);
+                  if (patch.effort !== undefined) setEffort(patch.effort);
+                }}
               />
-              <ModelField role={`review-${task.id}`} label="模型" value={model} type={selection.agentType} profiles={profiles} onChange={setModel} />
-              <EffortField label="思考强度" value={effort} type={selection.agentType} onChange={setEffort} />
             </div>
             {availabilityMessage && (
               <p className={`review-dispatch-availability${locallyUnavailable || noExecutor ? " is-error" : ""}`}>

@@ -4,8 +4,8 @@ import type {
   LlmProvider,
   TeamPresetConfig,
 } from "@harness/shared";
-import { REASONING_EFFORT_VALUES } from "@harness/shared/cli-presets";
 import { CrownSimple, MagnifyingGlass, Robot } from "@phosphor-icons/react";
+import { Dropdown } from "../components/Dropdown.tsx";
 import { Toggle } from "../components/ui.tsx";
 import {
   registeredAgentTypes,
@@ -164,72 +164,69 @@ function TeamRoleFields({
       <div className="team-preset-role-fields">
         <label>
           <span>智能体类型</span>
-          <select
+          <Dropdown
+            label={`${meta.label} 的智能体类型`}
             value={selectValue}
+            options={[
+              ...(showStaleType
+                ? [{ value: value.agentType, label: value.agentType, detail: staleReason }]
+                : []),
+              ...typeOptions.map((type) => ({ value: type, label: type })),
+            ]}
             disabled={disabled || typeOptions.length === 0}
-            onChange={(event) => onChange({
-              agentType: event.target.value as AgentType,
+            filterable={typeOptions.length > 6}
+            placeholder={typeOptions.length
+              ? "请选择已注册类型"
+              : leadOnly ? "暂无已注册的常驻类型" : "暂无已注册类型"}
+            onChange={(agentType) => onChange({
+              agentType: agentType as AgentType,
               executorId: null,
               model: "",
               reasoningEffort: "",
             })}
-          >
-            {showStaleType && (
-              <option value={value.agentType} disabled>{value.agentType}（{staleReason}）</option>
-            )}
-            {staleType && !preserveStaleType && (
-              <option value="" disabled>
-                {typeOptions.length ? "请选择已注册类型" : leadOnly ? "暂无已注册的常驻类型" : "暂无已注册类型"}
-              </option>
-            )}
-            {typeOptions.map((type) => <option value={type} key={type}>{type}</option>)}
-          </select>
+          />
         </label>
         <label>
           <span>执行器 Profile</span>
-          <select
+          <Dropdown
+            label={`${meta.label} 的执行器 Profile`}
             value={value.executorId ?? ""}
+            options={[
+              { value: "", label: "类型默认" },
+              ...(staleExecutor
+                ? [{ value: value.executorId ?? "", label: "当前执行器", detail: "已不可用" }]
+                : []),
+              ...matchingProfiles.map((profile) => ({
+                value: profile.id,
+                label: profile.name,
+                detail: profile.isDefault ? "默认" : "",
+              })),
+            ]}
             disabled={disabled || (staleType && !preserveStaleType)}
-            onChange={(event) => onChange({
+            filterable={matchingProfiles.length > 6}
+            placeholder="类型默认"
+            onChange={(executorId) => onChange({
               ...value,
-              executorId: event.target.value || null,
+              executorId: executorId || null,
               model: "",
               reasoningEffort: "",
             })}
-          >
-            <option value="">类型默认</option>
-            {staleExecutor && <option value={value.executorId ?? ""} disabled>当前执行器已不可用</option>}
-            {matchingProfiles.map((profile) => (
-              <option value={profile.id} key={profile.id}>
-                {profile.name}{profile.isDefault ? "（默认）" : ""}
-              </option>
-            ))}
-          </select>
+          />
         </label>
         <label>
-          <span>模型</span>
+          <span>模型与思考强度</span>
           <ProviderModelInput
-            inputId={`team-preset-${role}-model`}
             type={value.agentType}
             provider={provider}
             value={value.model}
             disabled={disabled || (staleType && !preserveStaleType)}
             compact
+            effort={{
+              value: value.reasoningEffort,
+              onChange: (reasoningEffort) => onChange({ ...value, reasoningEffort }),
+            }}
             onChange={(model) => onChange({ ...value, model })}
           />
-        </label>
-        <label>
-          <span>思考强度</span>
-          <select
-            value={value.reasoningEffort}
-            disabled={disabled || (staleType && !preserveStaleType)}
-            onChange={(event) => onChange({ ...value, reasoningEffort: event.target.value })}
-          >
-            <option value="">跟随执行器</option>
-            {REASONING_EFFORT_VALUES[value.agentType].map((effort) => (
-              <option value={effort} key={effort}>{effort}</option>
-            ))}
-          </select>
         </label>
       </div>
       {staleType && (

@@ -2,16 +2,17 @@ import type { AgentExecutorProfile, AgentType } from "@harness/shared";
 import type { ModelGroup } from "../lib/modelCatalog.ts";
 
 /**
- * 对话框 @ 选择器的纯逻辑：两阶段（先智能体、再模型）各自的候选行怎么算、
- * 箭头怎么走。组件只管画，键盘只管调这里的函数——所以 textarea 驱动的第一阶段
- * 和浮层自带输入框的第二阶段能共用同一套候选与同一套上下键语义。
+ * 对话框 @ 选择器的纯逻辑：智能体 / 模型 / 强度各阶段的候选行怎么算、箭头
+ * 怎么走。组件只管画，键盘只管调这里的函数——所以 textarea 驱动的第一阶段
+ * 和浮层里后面几步能共用同一套上下键语义。
  */
 
-/** 一次 @ 选择的最终结果：这一回合派谁、用哪个执行器、跑哪个模型。 */
+/** 一次 @ 选择的最终结果：这一回合派谁、用哪个执行器、跑哪个模型、想多久。 */
 export type MentionTarget = {
   agent: AgentType;
   executorId: string | null; // null = 按该类型的默认执行器解析
   model: string | null; // null = 跟随执行器自己的模型
+  reasoningEffort: string | null; // null = 跟随执行器自己的思考强度
 };
 
 export type AgentRow = {
@@ -53,7 +54,9 @@ export function agentRows(
 }
 
 /**
- * 模型候选按供应商分块，块里只列模型本身。
+ * 模型候选按供应商分块，块标题是供应商名、块里只列模型本身——供应商和模型是
+ * **同一步**里的两件事：看着「哪家的」直接点「哪一个」，不必先选一次供应商再进
+ * 下一屏（多一屏并没有多给出信息，同名模型靠块标题就分得清）。
  *
  * 这里**不**再补「跟随执行器」那一行：它跟下面的模型是两种东西（一个是「不选」，
  * 一个是「选哪个」），混排在同一列表里每块都顶着一条噪声，用户要挑的模型反而被
@@ -82,6 +85,7 @@ export function modelSections(groups: ModelGroup[], query: string): ModelSection
   return sections;
 }
 
+/** 上下键走的是拉平后的行序，块标题不占位置。 */
 export function flattenModelRows(sections: ModelSection[]): ModelRow[] {
   return sections.flatMap((section) => section.rows);
 }

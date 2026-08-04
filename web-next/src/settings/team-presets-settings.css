@@ -225,6 +225,30 @@
   font-size: 11px;
 }
 
+/* 统一下拉在这张卡里跟上面的输入框长一样：同高、同圆角、同底色。 */
+.team-preset-role-fields .ui-dropdown-trigger {
+  height: 31px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--canvas);
+  padding: 0 8px;
+  color: var(--ink);
+  font-size: 11px;
+  box-shadow: none;
+}
+
+.team-preset-role-fields .ui-dropdown-trigger.is-mono > span:first-child,
+.team-preset-role-fields .ui-dropdown-trigger > span.is-placeholder {
+  font-size: 11px;
+}
+
+.team-preset-role-fields .ui-dropdown-trigger:hover:not(:disabled),
+.team-preset-role-fields .ui-dropdown-trigger[aria-expanded="true"] {
+  border-color: var(--accent);
+  background: var(--canvas);
+  box-shadow: none;
+}
+
 .team-preset-name-field input:focus,
 .team-preset-role-fields input:focus,
 .team-preset-role-fields select:focus {
@@ -312,10 +336,11 @@
   line-height: 1.6;
 }
 
+/* 三栏：类型 / 执行器 Profile / 模型（模型下拉里再分第二步选思考强度）。 */
 .team-preset-role-fields {
   display: grid;
   min-width: 0;
-  grid-template-columns: minmax(90px, 0.8fr) minmax(118px, 1.15fr) minmax(118px, 1.2fr) minmax(105px, 1fr);
+  grid-template-columns: minmax(90px, 0.8fr) minmax(118px, 1.1fr) minmax(130px, 1.3fr);
   gap: 8px;
 }
 

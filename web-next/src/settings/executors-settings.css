@@ -205,37 +205,36 @@
   min-width: 0;
 }
 
-.agent-profile-cell input,
-.agent-profile-cell select {
-  width: 100%;
-  min-width: 0;
-  height: 25px;
-  border: 0;
-  border-bottom: 1px solid color-mix(in lch, var(--line) 78%, transparent);
-  border-radius: 3px 3px 0 0;
+/* 执行器表是紧凑行：统一下拉在这里缩一号（高 26 / 字号 11），但仍是同一套
+   .ui-select-trigger，四个格子彼此一致，也跟别处的下拉是同一种东西。 */
+.agent-profile-cell .ui-dropdown-trigger {
+  height: 26px;
+  border-radius: 6px;
   background: transparent;
-  padding: 0 5px;
+  padding: 0 6px;
   color: var(--muted);
-  outline: 0;
-  font-size: 10px;
+  font-size: 11px;
+  box-shadow: none;
 }
 
-.agent-profile-cell input:hover,
-.agent-profile-cell select:hover {
-  background: color-mix(in lch, var(--raised) 48%, transparent);
+.agent-profile-cell .ui-dropdown-trigger.is-mono > span:first-child {
+  font-size: 11px;
+}
+
+.agent-profile-cell .ui-dropdown-trigger > span.is-placeholder {
+  font-size: 11px;
+}
+
+.agent-profile-cell .ui-dropdown-trigger:hover:not(:disabled) {
+  background: color-mix(in lch, var(--raised) 62%, transparent);
   color: var(--ink);
+  box-shadow: none;
 }
 
-.agent-profile-cell input:focus,
-.agent-profile-cell select:focus {
-  border-bottom-color: var(--accent);
+.agent-profile-cell .ui-dropdown-trigger[aria-expanded="true"] {
   background: var(--canvas);
   color: var(--ink);
-}
-
-.agent-profile-cell input:disabled,
-.agent-profile-cell select:disabled {
-  opacity: 0.62;
+  box-shadow: inset 0 0 0 1px var(--line2);
 }
 
 .agent-profile-cell .agent-model-control {

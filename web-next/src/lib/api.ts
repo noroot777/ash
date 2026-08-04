@@ -301,6 +301,7 @@ export const api = {
       agent?: AgentType;
       executorId?: string | null;
       model?: string | null;
+      reasoningEffort?: string | null;
       sendAt?: string;
     },
   ): Promise<ReplyTaskResult> =>

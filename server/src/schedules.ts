@@ -138,9 +138,10 @@ export async function tick() {
       const options = {
         attachments: JSON.parse(m.attachments) as string[],
         agent: (m.agent as AgentType) ?? undefined,
-        // 定时发送要跑的还是用户排程时选的那一个执行器/模型（没选就是 null=按默认解析）。
+        // 定时发送要跑的还是用户排程时选的那一套执行器/模型/思考强度（没选就是 null=按默认解析）。
         executorId: m.executorId ?? null,
         model: m.model ?? null,
+        reasoningEffort: m.reasoningEffort ?? null,
       };
       if (t.mode === "team") {
         try {

@@ -1,11 +1,10 @@
-import { useEffect, useId, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   TASK_STATUS_LABELS,
   type AgentExecutorProfile,
   type AgentType,
   type Task,
 } from "@harness/shared";
-import { CLI_MODEL_PRESETS, REASONING_EFFORT_VALUES } from "@harness/shared/cli-presets";
 import {
   CaretRight,
   CheckCircle,
@@ -13,6 +12,8 @@ import {
   SpinnerGap,
   WarningCircle,
 } from "@phosphor-icons/react";
+import { Dropdown } from "../components/Dropdown.tsx";
+import { ModelCatalogField } from "../components/ModelCatalogField.tsx";
 import { registeredAgentTypes } from "../lib/agentAvailability.ts";
 import { api } from "../lib/api.ts";
 import { ReviewEvidence, useTaskReviewInfo } from "../team/ReviewEvidence.tsx";
@@ -111,7 +112,6 @@ export function TaskReviewInspector({
   const [profiles, setProfiles] = useState<AgentExecutorProfile[]>([]);
   const [profilesReady, setProfilesReady] = useState(false);
   const [profilesFailed, setProfilesFailed] = useState(false);
-  const modelListId = `${useId().replace(/:/g, "")}-review-models`;
 
   useEffect(() => {
     setDispatchOpen(false);
@@ -208,51 +208,46 @@ export function TaskReviewInspector({
           <div className="review-inspector__fields">
             <label>
               <span>审查执行器</span>
-              <select
+              <Dropdown
+                label="审查执行器"
                 value={selectionValue(selection)}
-                onChange={(event) => {
-                  const profileId = event.target.value.startsWith("profile:") ? event.target.value.slice(8) : null;
+                options={[
+                  ...(executorRunnable ? [] : [{
+                    value: selectionValue(selection),
+                    label: selection.agentType,
+                    detail: "当前设置 · 未注册",
+                    disabled: true,
+                  }]),
+                  ...registeredTypes.map((type) => ({ value: `default:${type}`, label: `默认 ${type}` })),
+                  ...profiles.map((profile) => ({ value: `profile:${profile.id}`, label: profile.name })),
+                ]}
+                filterable={registeredTypes.length + profiles.length > 6}
+                filterPlaceholder="筛选执行器…"
+                emptyText="没有匹配的执行器"
+                onChange={(value) => {
+                  const profileId = value.startsWith("profile:") ? value.slice(8) : null;
                   const profile = profiles.find((candidate) => candidate.id === profileId);
                   setSelection((current) => ({
                     ...current,
-                    agentType: profile?.type ?? event.target.value.slice(8) as AgentType,
+                    agentType: profile?.type ?? value.slice(8) as AgentType,
                     executorId: profile?.id ?? null,
                     model: "",
                     reasoningEffort: "",
                   }));
                 }}
-              >
-                {!executorRunnable && (
-                  <option value={selectionValue(selection)} disabled>
-                    {selection.agentType}（当前设置 · 未注册）
-                  </option>
-                )}
-                {registeredTypes.map((type) => <option value={`default:${type}`} key={`default:${type}`}>默认 {type}</option>)}
-                {profiles.map((profile) => <option value={`profile:${profile.id}`} key={profile.id}>{profile.name}</option>)}
-              </select>
-            </label>
-            <label>
-              <span>模型</span>
-              <input
-                value={selection.model}
-                list={modelListId}
-                placeholder="跟随执行器"
-                onChange={(event) => setSelection((current) => ({ ...current, model: event.target.value }))}
               />
-              <datalist id={modelListId}>
-                {CLI_MODEL_PRESETS[selection.agentType].map((model) => <option value={model} key={model} />)}
-              </datalist>
             </label>
-            <label>
-              <span>思考强度</span>
-              <select
-                value={selection.reasoningEffort}
-                onChange={(event) => setSelection((current) => ({ ...current, reasoningEffort: event.target.value }))}
-              >
-                <option value="">跟随执行器</option>
-                {REASONING_EFFORT_VALUES[selection.agentType].map((effort) => <option value={effort} key={effort}>{effort}</option>)}
-              </select>
-            </label>
+            <ModelCatalogField
+              label="模型"
+              value={selection.model}
+              type={selection.agentType}
+              profiles={profiles}
+              effort={{
+                value: selection.reasoningEffort,
+                onChange: (reasoningEffort) => setSelection((current) => ({ ...current, reasoningEffort })),
+              }}
+              onChange={(model) => setSelection((current) => ({ ...current, model }))}
+            />
           </div>
           {!profilesReady && <p className="review-inspector__notice">正在读取已注册执行器…</p>}
           {profilesFailed && <p className="review-inspector__notice is-warning">执行器列表读取失败，暂不能派审。</p>}
