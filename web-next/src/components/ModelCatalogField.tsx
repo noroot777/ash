@@ -2,7 +2,7 @@ import { useMemo } from "react";
 import type { AgentExecutorProfile, AgentType } from "@harness/shared";
 import { useAgentModelCatalog, useProviders, type ModelGroup } from "../lib/modelCatalog.ts";
 import { effortOptions } from "../lib/executorChoices.ts";
-import { Dropdown, type DropdownOption, type DropdownStep } from "./Dropdown.tsx";
+import { Dropdown, type DropdownOption } from "./Dropdown.tsx";
 
 /**
  * 「选模型」的两个通用控件：把 lib/modelCatalog.ts 的分块目录接到表单里，于是
@@ -63,7 +63,7 @@ function catalogOptions(groups: ModelGroup[], value: string): DropdownOption[] {
 }
 
 /** 档位只有一条「跟随」时说明这个 CLI 压根没有档位，就别多摆一步。 */
-export function effortStepOf(type: AgentType, effort: EffortStep | undefined): DropdownStep | undefined {
+function effortStepOf(type: AgentType, effort: EffortStep | undefined) {
   if (!effort) return undefined;
   const options = effort.options ?? effortOptions(type);
   if (options.length < 2) return undefined;
@@ -73,30 +73,6 @@ export function effortStepOf(type: AgentType, effort: EffortStep | undefined): D
     value: effort.value,
     onChange: effort.onChange,
     emptyText: "该执行器没有可选档位",
-  };
-}
-
-/**
- * 把模型目录包成多步下拉里的**一步**，给「执行器 → 模型 → 强度」那种把模型夹在
- * 中间的场景用；单独选模型的两个控件走下面的 ModelCatalogField / ModelCatalogSelect。
- */
-export function modelCatalogStep(
-  groups: ModelGroup[],
-  value: string,
-  onChange: (value: string) => void,
-): DropdownStep {
-  return {
-    label: "模型",
-    options: catalogOptions(groups, value),
-    value,
-    onChange,
-    filterable: true,
-    allowCustom: true,
-    mono: true,
-    status: statusOf(groups),
-    note: catalogNote(groups) ?? "",
-    filterPlaceholder: "筛选或直接填写模型名",
-    emptyText: "没有匹配的模型，输入完整模型名即可直接使用",
   };
 }
 
@@ -146,7 +122,7 @@ export function ModelCatalogField({
         filterPlaceholder="筛选或直接填写模型名"
         emptyText="没有匹配的模型，输入完整模型名即可直接使用"
         displaySuffix={effort?.value ?? ""}
-        steps={step2 ? [step2] : undefined}
+        step2={step2}
         onClear={value || effort?.value ? clear : undefined}
         clearLabel="清空（跟随执行器）"
         onChange={onChange}
@@ -192,7 +168,7 @@ export function ModelCatalogSelect({
         filterPlaceholder="筛选或直接填写模型名"
         emptyText="没有匹配的模型，输入完整模型名即可直接使用"
         displaySuffix={effort?.value ?? ""}
-        steps={step2 ? [step2] : undefined}
+        step2={step2}
         onClear={value || effort?.value ? clear : undefined}
         clearLabel="清空（跟随执行器）"
         onChange={onChange}

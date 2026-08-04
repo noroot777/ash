@@ -15,9 +15,10 @@ import {
   X,
 } from "@phosphor-icons/react";
 import { Dropdown } from "../components/Dropdown.tsx";
-import { ExecutorModelField } from "../components/ExecutorModelField.tsx";
+import { ModelCatalogField } from "../components/ModelCatalogField.tsx";
 import { Button, Toggle } from "../components/ui.tsx";
 import {
+  executorOptions,
   executorValue,
   isExecutorPickable,
   nothingRunnable,
@@ -59,6 +60,48 @@ function preferredSelection(
     ?? { agentType: preferred, executorId: null });
 }
 
+function ExecutorSelect({
+  label,
+  value,
+  types,
+  profiles,
+  knownProfiles = profiles,
+  fallbackType,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  types: AgentType[];
+  profiles: AgentExecutorProfile[];
+  knownProfiles?: AgentExecutorProfile[];
+  fallbackType: AgentType;
+  onChange: (value: string) => void;
+}) {
+  const selection = parseExecutorValue(value, knownProfiles, { agentType: fallbackType, executorId: null });
+  const options = executorOptions({ types, profiles, knownProfiles, selection });
+  const pickableCount = types.length + profiles.length;
+  return (
+    <div className="composer-field">
+      <span>{label}</span>
+      <Dropdown
+        label={label}
+        value={pickableCount || options.length ? executorValue(selection) : ""}
+        options={options.map((option) => ({
+          value: option.value,
+          label: option.label,
+          disabled: option.disabled,
+        }))}
+        disabled={pickableCount === 0}
+        filterable={options.length > 6}
+        filterPlaceholder="筛选执行器…"
+        placeholder="暂无可用执行器"
+        emptyText="没有匹配的执行器"
+        onChange={onChange}
+      />
+    </div>
+  );
+}
+
 function TeamExecutorField({
   label,
   choice,
@@ -76,22 +119,32 @@ function TeamExecutorField({
   fallbackType: AgentType;
   onChange: (choice: ExecutorChoice) => void;
 }) {
+  const type = parseExecutorValue(
+    choice.profile,
+    knownProfiles,
+    { agentType: fallbackType, executorId: null },
+  ).agentType;
   return (
     <div className="task-derivation-role">
-      <ExecutorModelField
+      <ExecutorSelect
         label={label}
         value={choice.profile}
         types={types}
         profiles={profiles}
         knownProfiles={knownProfiles}
         fallbackType={fallbackType}
-        model={choice.model}
-        effort={choice.effort}
-        // 换执行器 = 模型与档位的候选整套换了，旧覆盖不再成立。
         onChange={(profile) => onChange({ profile, model: "", effort: "" })}
-        onModelChange={(model) => onChange({ ...choice, model })}
-        onEffortChange={(effort) => onChange({ ...choice, effort })}
       />
+      <div className="task-derivation-overrides">
+        <ModelCatalogField
+          label="模型"
+          value={choice.model}
+          type={type}
+          profiles={knownProfiles}
+          effort={{ value: choice.effort, onChange: (effort) => onChange({ ...choice, effort }) }}
+          onChange={(model) => onChange({ ...choice, model })}
+        />
+      </div>
     </div>
   );
 }
@@ -461,8 +514,8 @@ export function TaskDerivationComposer({
               />
             </label>
             <div className="task-derivation-debate-grid">
-              <ExecutorModelField label="辩手 A" value={debaterA} types={availableTypes} profiles={profiles} fallbackType={DEBATE_DEFAULTS.debaterA} onChange={setDebaterA} />
-              <ExecutorModelField label="辩手 B" value={debaterB} types={availableTypes} profiles={profiles} fallbackType={DEBATE_DEFAULTS.debaterB} onChange={setDebaterB} />
+              <ExecutorSelect label="辩手 A" value={debaterA} types={availableTypes} profiles={profiles} fallbackType={DEBATE_DEFAULTS.debaterA} onChange={setDebaterA} />
+              <ExecutorSelect label="辩手 B" value={debaterB} types={availableTypes} profiles={profiles} fallbackType={DEBATE_DEFAULTS.debaterB} onChange={setDebaterB} />
               <div className="composer-field">
                 <span>最多轮数</span>
                 <Dropdown

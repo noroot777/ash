@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
 import type { AgentExecutorProfile, AgentType, LlmProvider } from "@harness/shared";
 import { ArrowLeft, CaretRight, Robot, SpinnerGap, Warning } from "@phosphor-icons/react";
 import { REASONING_EFFORT_VALUES } from "@harness/shared/cli-presets";
@@ -61,11 +61,13 @@ export function AgentModelPicker({
 
   useDismissable({ enabled: true, containerRef, onClose: onCancel, restoreFocusRef: triggerRef });
 
-  // 打开或切步骤就把焦点接过来，避免上一行按钮被卸载后把焦点退回 body。
-  // 强度这步没有筛选框，所以焦点直接落容器，↑↓ / 回车才有人接。
+  // 打开或切步骤就把焦点接回筛选框，避免上一行按钮被卸载后把焦点退回 body。
+  // **每一步都必须有这个输入框**（强度那步也不例外）：workspace 的 j/k/↑↓ 快捷键
+  // 挂在 window 的**捕获**阶段（useWorkspaceShortcuts.ts），浮层里怎么 stopPropagation
+  // 都拦不住它，它唯一的让路条件是 `isTextEntry(event.target)`——焦点在 input/textarea 里。
+  // 所以焦点一旦落到普通 div 上，↑↓ 就会被拿去切换任务列表。
   useLayoutEffect(() => {
-    if (stage === "effort") containerRef.current?.focus();
-    else inputRef.current?.focus();
+    inputRef.current?.focus();
   }, [stage]);
 
   const groups = useAgentModelCatalog(stage === "agent" ? null : agent, profiles, providers);
@@ -78,10 +80,11 @@ export function AgentModelPicker({
   const models = useMemo(() => modelRows(selectedGroup, query), [selectedGroup, query]);
 
   const efforts = REASONING_EFFORT_VALUES[agent] ?? [];
-  const effortRows = useMemo(
-    () => [{ value: "", label: "跟随执行器" }, ...efforts.map((value) => ({ value, label: value }))],
-    [efforts],
-  );
+  const effortRows = useMemo(() => {
+    const rows = [{ value: "", label: "跟随执行器" }, ...efforts.map((value) => ({ value, label: value }))];
+    const keyword = query.trim().toLowerCase();
+    return keyword ? rows.filter((row) => row.label.toLowerCase().includes(keyword)) : rows;
+  }, [efforts, query]);
 
   const rowCount = stage === "agent"
     ? agents.length
@@ -158,51 +161,32 @@ export function AgentModelPicker({
     if (row) openEffort(row.executorId, row.model);
   };
 
-  const handleKey = (key: string): boolean => {
-    if (key === "ArrowDown") {
+  const onKeyDown = (event: React.KeyboardEvent) => {
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
       setIndex(stepIndex(rowCount, active, 1));
-      return true;
+      return;
     }
-    if (key === "ArrowUp") {
+    if (event.key === "ArrowUp") {
+      event.preventDefault();
       setIndex(stepIndex(rowCount, active, -1));
-      return true;
+      return;
     }
-    if (key === "Enter") {
+    if (event.key === "Enter") {
+      event.preventDefault();
       pick();
-      return true;
+      return;
     }
     // 筛选词已经空了还按退格 = 「上一步我选错了」，退一步而不是关掉。
-    if (key === "Backspace" && !query && (
+    if (event.key === "Backspace" && !query && (
       stage === "effort"
       || stage === "model"
       || (stage === "provider" && initialStage === "agent")
     )) {
-      back();
-      return true;
-    }
-    return false;
-  };
-
-  const onKeyDown = (event: React.KeyboardEvent) => {
-    if (handleKey(event.key)) event.preventDefault();
-  };
-
-  // 强度这步没有筛选框，焦点只能落在容器上——而用户是**点**上一步某一行进来的，
-  // 那颗按钮当场被卸载，浏览器把焦点退回 body，挂在容器上的 onKeyDown 从此收不到
-  // 冒泡：↑↓ 失灵而 Esc 还好用（Esc 归 useDismissable 的 document 级监听）。
-  // 所以这一步的键盘也挂到 document 上，不依赖焦点在哪。
-  const keyRef = useRef(handleKey);
-  keyRef.current = handleKey;
-  useEffect(() => {
-    if (stage !== "effort") return;
-    const onKey = (event: KeyboardEvent) => {
-      if (!keyRef.current(event.key)) return;
       event.preventDefault();
-      event.stopPropagation();
-    };
-    document.addEventListener("keydown", onKey, true);
-    return () => document.removeEventListener("keydown", onKey, true);
-  }, [stage]);
+      back();
+    }
+  };
 
   return (
     <div className="agent-model-picker" ref={containerRef} tabIndex={-1} onKeyDown={onKeyDown}>
@@ -223,25 +207,30 @@ export function AgentModelPicker({
             <><code>{picked?.model}</code> <CaretRight size={9} weight="bold" aria-hidden="true" /> 思考强度</>
           )}
         </span>
-        {stage !== "effort" && (
-          <input
-            ref={inputRef}
-            value={query}
-            placeholder={
-              stage === "agent"
-                ? "筛选智能体…"
-                : stage === "provider"
-                  ? `筛选 ${agent} 可用的供应商…`
-                  : `筛选 ${selectedGroup?.providerName ?? agent} 的模型…`
-            }
-            aria-label={stage === "agent" ? "筛选智能体" : stage === "provider" ? "筛选供应商" : "筛选模型"}
-            onChange={(event) => { setQuery(event.target.value); setIndex(0); }}
-          />
-        )}
+        <input
+          ref={inputRef}
+          value={query}
+          placeholder={
+            stage === "agent"
+              ? "筛选智能体…"
+              : stage === "provider"
+                ? `筛选 ${agent} 可用的供应商…`
+                : stage === "model"
+                  ? `筛选 ${selectedGroup?.providerName ?? agent} 的模型…`
+                  : "筛选思考强度…"
+          }
+          aria-label={
+            stage === "agent"
+              ? "筛选智能体"
+              : stage === "provider" ? "筛选供应商" : stage === "model" ? "筛选模型" : "筛选思考强度"
+          }
+          onChange={(event) => { setQuery(event.target.value); setIndex(0); }}
+        />
       </div>
 
       {stage === "effort" ? (
         <div className="agent-model-picker-rows" role="listbox" aria-label="思考强度">
+          {!effortRows.length && <p>没有匹配的档位</p>}
           {effortRows.map((row, rowIndex) => (
             <button
               type="button"

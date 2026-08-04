@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { AgentExecutorProfile, Task, TaskReviewRound } from "@harness/shared";
 import { MagnifyingGlass, SpinnerGap, WarningCircle } from "@phosphor-icons/react";
-import { ExecutorSelect } from "../composer/ComposerFields.tsx";
+import { ExecutorSelect, ModelField } from "../composer/ComposerFields.tsx";
 import {
   executorValue,
   isExecutorPickable,
@@ -188,18 +188,20 @@ export function ReviewDispatchControl({
                 profiles={profiles}
                 knownProfiles={profiles}
                 fallbackType={defaults.selection.agentType}
-                override={{ model, effort }}
                 onChange={(value) => {
                   const next = parseExecutorValue(value, profiles, selection);
                   setSelection(next);
-                  // 换执行器 = 模型与档位的候选整套换了，旧覆盖不再成立。
                   setModel("");
                   setEffort("");
                 }}
-                onOverrideChange={(patch) => {
-                  if (patch.model !== undefined) setModel(patch.model);
-                  if (patch.effort !== undefined) setEffort(patch.effort);
-                }}
+              />
+              <ModelField
+                label="模型"
+                value={model}
+                type={selection.agentType}
+                profiles={profiles}
+                effort={{ value: effort, onChange: setEffort }}
+                onChange={setModel}
               />
             </div>
             {availabilityMessage && (

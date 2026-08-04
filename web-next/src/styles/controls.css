@@ -424,27 +424,15 @@
 .ui-dropdown-step > button:hover { color: var(--ink); }
 .ui-dropdown-step > b { color: var(--ink); font-size: 11.5px; font-weight: 600; }
 .ui-dropdown-step > span {
-  display: flex;
   min-width: 0;
   flex: 1;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 3px;
   overflow: hidden;
   color: var(--faint);
   font-family: var(--font-mono);
   font-size: 10.5px;
-  white-space: nowrap;
-}
-
-/* 面包屑里每一段（已经选过的那几步）都可以被挤掉，别让最后一段被顶出去。 */
-.ui-dropdown-step > span > span {
-  display: inline-flex;
-  min-width: 0;
-  align-items: center;
-  gap: 3px;
-  overflow: hidden;
+  text-align: right;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* 「回到不设置」的出口：候选列表里就不必再占一行「跟随…」。 */

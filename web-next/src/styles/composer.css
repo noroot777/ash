@@ -168,7 +168,8 @@
   padding-top: 18px;
 }
 
-.composer-config-section {
+.composer-config-section,
+.composer-advanced {
   overflow: hidden;
   border: 1px solid var(--line);
   border-radius: 12px;
@@ -190,7 +191,8 @@
   gap: 9px;
 }
 
-.composer-section-heading > span {
+.composer-section-heading > span,
+.composer-advanced-icon {
   display: grid;
   width: 27px;
   height: 27px;
@@ -498,6 +500,93 @@
   box-shadow: none;
 }
 
+.composer-advanced > summary {
+  display: flex;
+  min-height: 54px;
+  align-items: center;
+  gap: 9px;
+  padding: 10px 14px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.composer-advanced > summary::-webkit-details-marker {
+  display: none;
+}
+
+.composer-advanced > summary:hover {
+  background: var(--canvas);
+}
+
+.composer-advanced > summary > span:nth-child(2) {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+}
+
+.composer-advanced > summary b {
+  font-size: 11px;
+  font-weight: 620;
+}
+
+.composer-advanced > summary small {
+  color: var(--faint);
+  font-size: 9px;
+}
+
+.composer-advanced > summary em {
+  border-radius: 999px;
+  background: color-mix(in lch, var(--accent) 9%, var(--raised));
+  padding: 2px 7px;
+  color: var(--accent);
+  font-size: 9px;
+  font-style: normal;
+  font-weight: 600;
+}
+
+.composer-advanced-caret {
+  color: var(--faint);
+  transition: transform 150ms ease-out;
+}
+
+.composer-advanced[open] .composer-advanced-caret {
+  transform: rotate(180deg);
+}
+
+.composer-advanced-body {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 9px;
+  border-top: 1px solid var(--line);
+  background: var(--canvas);
+  padding: 11px;
+}
+
+.composer-advanced-body > .composer-override-group:only-child {
+  max-width: 390px;
+}
+
+.composer-override-group {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--panel);
+  padding: 9px;
+}
+
+.composer-override-group > b {
+  display: block;
+  margin-bottom: 8px;
+  color: var(--muted);
+  font-size: 9.5px;
+  font-weight: 650;
+}
+
+.composer-override-group > div {
+  display: grid;
+  gap: 8px;
+}
+
 .composer-preset-dialog {
   width: min(430px, 94vw);
   border: 1px solid var(--line2);
@@ -678,7 +767,8 @@
   .composer-inner { width: calc(100% - 26px); }
   .composer-executor-grid,
   .composer-executor-grid.is-team,
-  .composer-option-grid { grid-template-columns: 1fr; }
+  .composer-option-grid,
+  .composer-advanced-body { grid-template-columns: 1fr; }
   .composer-preset-heading > div > span { display: none; }
   .composer-preset-selection { align-items: flex-start; flex-direction: column; }
   .composer-preset-selection > div { width: 100%; flex-wrap: wrap; }
