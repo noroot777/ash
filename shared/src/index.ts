@@ -2,6 +2,7 @@
 // Mirrors the decisions in DESIGN.md (§3 data model, §5 agents, §7 debate,
 // §8 statuses, §12 debate mechanism, §13 sessions).
 import type { TeamConfig } from "./team.js";
+import type { WorkflowDef } from "./workflow.js";
 export type { Session, SessionRole } from "./session.js";
 export type {
   ReviewConclusion,
@@ -21,10 +22,14 @@ export type {
 // current factory defaults without requiring seed rows.
 export interface AppSettings {
   worktreeDefault: boolean;
+  // 新建任务默认用哪条起手式（workflows.id 或内置 key）。空串 = 没设过，服务端落到
+  // DEFAULT_WORKFLOW_KEY —— 那个 key 是运行时常量，这里不能 import（见上面的说明）。
+  defaultWorkflowId: string;
 }
 
 export const DEFAULT_APP_SETTINGS: Readonly<AppSettings> = Object.freeze({
   worktreeDefault: true,
+  defaultWorkflowId: "",
 });
 
 // ── Agents (§5) ────────────────────────────────────────────────────────────
@@ -87,6 +92,8 @@ export interface Project {
   id: string;
   name: string;
   repoPath: string; // git repo this project's tasks operate on
+  // 本项目新建任务默认走哪条起手式；null = 跟随全局默认（见 AppSettings）
+  workflowId: string | null;
   createdAt: string;
 }
 
@@ -286,6 +293,9 @@ export interface Task {
   // Existing worktrees are reused; cleanup is an explicit user action.
   useWorktree?: boolean;
   worktreeBase?: string | null;
+  // §Workflow 这个任务当初挑的那条线，**创建时拷下来的快照**（改起手式库不会追着改
+  // 它）。老任务为 null —— 那时还没有这个概念，按写死的老流程走。
+  workflow?: WorkflowDef | null;
   // Backlink used by debate ↔ team derivation chains.
   originTaskId?: string | null;
   // §Pause 检查点续跑指令；非空时结算 paused，恢复后清空。
@@ -413,6 +423,7 @@ export interface BatchTaskInput {
   reasoningEffort?: string | null; // overrides defaults.reasoningEffort
   useWorktree?: boolean; // overrides defaults.useWorktree; omitted follows the global setting
   worktreeBase?: string | null; // base ref when this task uses a worktree
+  workflowId?: string | null; // 起手式 id；省略则按项目→全局默认解析，并拷成快照
   priority?: Priority;
   labels?: string[];
   // Each entry is resolved against sibling `key`s first; anything that doesn't
@@ -433,6 +444,7 @@ export interface BatchCreateTasksBody {
     model?: string | null;
     reasoningEffort?: string | null;
     useWorktree?: boolean; // omitted follows DEFAULT_APP_SETTINGS.worktreeDefault
+    workflowId?: string | null; // 这一批默认走哪条起手式
     worktreeBase?: string | null;
     priority?: Priority;
     labels?: string[];

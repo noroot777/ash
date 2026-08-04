@@ -6,6 +6,7 @@ import {
   FolderSimple,
   GearSix,
   PlugsConnected,
+  FlowArrow,
   Robot,
   SlidersHorizontal,
   Stack,
@@ -17,6 +18,7 @@ import { GroupsSettings } from "./GroupsSettings.tsx";
 import { ModesSettings } from "./ModesSettings.tsx";
 import { ProjectSettingsPanel } from "./ProjectSettingsPanel.tsx";
 import { ProvidersSettings } from "./ProvidersSettings.tsx";
+import { WorkflowsSettings } from "./WorkflowsSettings.tsx";
 import "./agents-settings.css";
 import "./executors-settings.css";
 
@@ -27,6 +29,7 @@ export type SettingsSection =
   | "providers"
   | "executors"
   | "modes"
+  | "workflows"
   | "defaults";
 
 const PROJECT_NAV = [
@@ -39,20 +42,19 @@ const SYSTEM_NAV = [
   { id: "providers", label: "供应商", icon: PlugsConnected },
   { id: "executors", label: "执行器", icon: Robot },
   { id: "modes", label: "执行模式", icon: CirclesThreePlus },
+  { id: "workflows", label: "起手式", icon: FlowArrow },
   { id: "defaults", label: "默认规则", icon: SlidersHorizontal },
 ] as const;
 
 const PROJECT_SECTIONS: SettingsSection[] = ["project", "groups", "archive"];
+// 从 SYSTEM_NAV 推出来而不是再抄一遍字面量：新加一节只改一处，不会出现「导航里
+// 有、刷新一次就掉回默认」的半接通状态。
+const SYSTEM_SECTIONS: SettingsSection[] = SYSTEM_NAV.map((item) => item.id);
 
 export function parseSettingsSection(value: string | null): SettingsSection | null {
   if (value === "agents") return "executors";
-  return PROJECT_SECTIONS.includes(value as SettingsSection)
-    || value === "providers"
-    || value === "executors"
-    || value === "modes"
-    || value === "defaults"
-    ? value as SettingsSection
-    : null;
+  const section = value as SettingsSection;
+  return PROJECT_SECTIONS.includes(section) || SYSTEM_SECTIONS.includes(section) ? section : null;
 }
 
 function SettingsNavItems({
@@ -130,6 +132,7 @@ export function SettingsPage({
           {section === "providers" && <ProvidersSettings notify={notify} />}
           {section === "executors" && <ExecutorsSettings notify={notify} />}
           {section === "modes" && <ModesSettings notify={notify} />}
+          {section === "workflows" && <WorkflowsSettings notify={notify} />}
           {section === "defaults" && <DefaultsSettings notify={notify} />}
           {section === "project" && project && (
             <ProjectSettingsPanel

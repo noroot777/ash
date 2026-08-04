@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>工作流编排 · 线路图</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="grain" aria-hidden="true"></div>
+
+<main>
+  <header class="hero">
+    <span class="eyebrow">线路 · 单个任务</span>
+    <h1>一个任务，<em>从左到右</em>要停几站。</h1>
+    <p class="lede">
+      每一站是一道关口，站与站之间是一段线路。<b>在两站之间加一站</b>、<b>拆掉一站</b>、
+      <b>把某一站失败后的车拐回上游任意一站</b> —— 都直接在线上做。下面四条是常跑的线路，不是仅有的选择。
+    </p>
+    <div class="lines" id="tpls"></div>
+  </header>
+
+  <section class="board">
+    <div class="board-in">
+      <div class="brd-hd">
+        <span class="ttl">线路图</span>
+        <span class="dg" id="digest"></span>
+        <div class="ws" id="ws"></div>
+      </div>
+      <div class="scroll"><div class="rail" id="rail"></div></div>
+    </div>
+  </section>
+
+  <section class="check" id="check"></section>
+
+  <section class="notes">
+    <div class="note">
+      <b>为什么横着排</b>
+      <p>一个任务的关口链本来就是「一条线，偶尔往回拐」。横排把时间轴摆成线路，
+        谁在前谁在后一眼可见，往回拐的那几段是线下面的虚线支线 —— 不用连线、不用对齐、没有画布。</p>
+    </div>
+    <div class="note">
+      <b>放开编排就必须有闸</b>
+      <p>能自己排，就排得出坏线路：合并前没人看、预览起了没人关、失败往前跳成死循环。
+        底下那条检查不是装饰，<b>红的存不下去</b>，并且指名是哪一站、为什么。</p>
+    </div>
+    <div class="note">
+      <b>同一份定义，换个外观</b>
+      <p>这张线路图和 <a href="../ui-demo-workflow-console/index.html">深色调度台</a>、
+        <a href="../ui-demo-workflow-editors/index.html">句子 / 清单 / 规则表</a>、
+        <a href="../ui-demo-workflow-studio/index.html">可拖拽工作台（带预演）</a>、
+        <a href="../ui-demo-workflow-ride/index.html">线路图 · 能跑一趟</a>、
+        <a href="../ui-demo-workflow-dial/index.html">一个旋钮</a>、<a href="../ui-demo-workflow-recap/index.html">照着刚跑完的那次改</a>、<a href="../ui-demo-workflow-inline/index.html">融进新建任务</a> · <a href="../ui-demo-workflow-live/index.html">跑起来之后长什么样</a> 几副外观，
+        共用 <code>../ui-demo-workflow-kit/model.js</code> 一份定义：一串关口 + 每关的参数 + 每关失败的去向。</p>
+    </div>
+  </section>
+</main>
+
+<div class="pop" id="pop" hidden></div>
+
+<script src="../ui-demo-workflow-kit/model.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

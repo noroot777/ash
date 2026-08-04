@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>工作流编排 · 工作台</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="bar">
+  <div class="bar-l">
+    <span class="mark">WF</span>
+    <div class="ttl">
+      <b>一个任务干完要过哪几关</b>
+      <em id="dg">拖着排、键盘敲、预演一遍再存</em>
+    </div>
+  </div>
+  <div class="bar-r">
+    <div class="tpls" id="tpls"></div>
+    <span class="sep"></span>
+    <button class="ico" data-op="undo" title="撤销 ⌘Z">↺</button>
+    <button class="ico" data-op="redo" title="重做 ⇧⌘Z">↻</button>
+    <span class="sep"></span>
+    <button class="ws" id="ws" title="换工作区"></button>
+    <button class="simgo" data-op="sim">预演一遍 <kbd>R</kbd></button>
+    <button class="ico k" data-op="cmdk">⌘K</button>
+  </div>
+</header>
+
+<main class="cols">
+  <aside class="lib" id="lib"></aside>
+
+  <section class="track">
+    <div class="rail" id="rail"></div>
+  </section>
+
+  <aside class="insp" id="insp"></aside>
+</main>
+
+<section class="check" id="check"></section>
+
+<section class="sim" id="sim" hidden></section>
+
+<footer class="foot">
+  <p><b>这一版补的是「能不能上手摆」，不是配色。</b>
+    左边关口库<b>拖</b>进轨道、卡片之间<b>拖</b>着换顺序、从关口右侧小圆点<b>拉一条线</b>到上游任意一关就是「失败后回那里重做」；
+    全套还有键盘路径（<kbd>↑↓</kbd> 选、<kbd>⌘↑↓</kbd> 挪、<kbd>⌫</kbd> 删、<kbd>⌘K</kbd> 什么都能搜）；
+    存之前可以<b>预演</b>：假设哪几关不过，看这条流程会怎么走、每一刻任务显示什么状态、最多打扰你几次。</p>
+  <p class="ref">交互取自：Zapier 的常驻侧栏检查器（改参数时整条流程不被挡住）· Apple 快捷指令的拖拽排序与就地撤销 ·
+    GitLab pipeline editor 的 dry-run（只做 lint 会给人「已经验证过」的错觉）· Raycast/Linear 的 ⌘K 与「回车即主操作」·
+    n8n 的执行状态（含 waiting）与人工关口作为一等节点 · Azure Logic Apps 的「仍然保存」（提醒不等于拦死）。</p>
+  <p class="also">同一份定义的另外两副外观：<a href="../ui-demo-workflow-console/index.html">深色调度台</a> ·
+    <a href="../ui-demo-workflow-line/index.html">暖纸底线路图</a> ·
+    三种编辑范式：<a href="../ui-demo-workflow-editors/index.html">句子 / 清单 / 规则表</a> · <a href="../ui-demo-workflow-ride/index.html">线路图 · 能跑一趟</a> · <a href="../ui-demo-workflow-dial/index.html">一个旋钮</a> · <a href="../ui-demo-workflow-recap/index.html">照着刚跑完的那次改</a> · <a href="../ui-demo-workflow-inline/index.html">融进新建任务</a> · <a href="../ui-demo-workflow-live/index.html">跑起来之后长什么样</a></p>
+</footer>
+
+<div class="ghost" id="ghost" hidden></div>
+<svg class="wire" id="wire" hidden></svg>
+
+<div class="cmdk" id="cmdk" hidden>
+  <div class="cmdk-box">
+    <input id="cq" placeholder="加一关、换模板、跳到某一关…" autocomplete="off">
+    <div class="cmdk-list" id="clist"></div>
+    <div class="cmdk-ft"><span><kbd>↑</kbd><kbd>↓</kbd> 选</span><span><kbd>↵</kbd> 执行</span><span><kbd>esc</kbd> 关掉</span></div>
+  </div>
+</div>
+
+<script src="../ui-demo-workflow-kit/model.js"></script>
+<script src="../ui-demo-workflow-kit/sim.js"></script>
+<script src="drag.js"></script>
+<script src="view.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

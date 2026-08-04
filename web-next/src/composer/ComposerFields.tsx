@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import type {
   AgentExecutorProfile,
   AgentType,
@@ -185,6 +186,7 @@ export function ComposerFields({
   labels,
   onLabelsChange,
   onCreateGroup,
+  workflowSlot,
 }: {
   mode: TaskMode;
   profiles: AgentExecutorProfile[];
@@ -224,6 +226,8 @@ export function ComposerFields({
   labels: string[];
   onLabelsChange: (labels: string[]) => void;
   onCreateGroup: () => void;
+  /** 「干完之后」那一节。它只在单任务下出现，位置固定在执行模式与任务选项之间。 */
+  workflowSlot?: ReactNode;
 }) {
   const overrideRoles: ComposerExecutorRole[] = mode === "team" ? ["lead", "worker", "reviewer"] : ["single"];
   const overrideCount = overrideRoles.reduce(
@@ -265,6 +269,8 @@ export function ComposerFields({
           <p className={`composer-agent-availability is-${availabilityTone ?? "warning"}`}>{availabilityMessage}</p>
         )}
       </section>
+
+      {workflowSlot}
 
       {mode !== "debate" && (
         <details className="composer-advanced">

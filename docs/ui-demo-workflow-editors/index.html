@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>工作流编排 · 三种编辑范式</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="top">
+  <div class="top-in">
+    <h1>一个任务干完要过哪几关 —— 三种编辑方式，挑一个顺眼的</h1>
+    <p class="sub">
+      三个页签是<b>同一份工作流的三种壳子</b>：随便在哪一种里改，切过去另一种就是改完的样子。
+      都能加步骤、删步骤、换顺序、插自定义命令、把失败指到任意一步。模板只是起手式，不是选项。
+      <br><span style="color:#9198a3">上一版（固定主干 + 一排开关，只能改参数不能改结构）留在 <code>../ui-demo-workflow-claude/index.html</code> 可对比。
+      同样这套编排能力、视觉上另外两副外观：<a href="../ui-demo-workflow-console/index.html">深色调度台</a> ·
+      <a href="../ui-demo-workflow-line/index.html">暖纸底线路图</a> ·
+      <a href="../ui-demo-workflow-studio/index.html">可拖拽工作台（带预演）</a> · <a href="../ui-demo-workflow-ride/index.html">线路图 · 能跑一趟</a> · <a href="../ui-demo-workflow-dial/index.html">一个旋钮</a> · <a href="../ui-demo-workflow-recap/index.html">照着刚跑完的那次改</a> · <a href="../ui-demo-workflow-inline/index.html">融进新建任务</a> · <a href="../ui-demo-workflow-live/index.html">跑起来之后长什么样</a>。</span>
+    </p>
+    <nav class="tabs">
+      <button data-tab="sentence" aria-selected="true">写成一句话<em>读得懂就配得对</em></button>
+      <button data-tab="list" aria-selected="false">排成一列步骤<em>像快捷指令</em></button>
+      <button data-tab="rules" aria-selected="false">摊成一张表<em>密度最高</em></button>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <div class="bar" id="wsbar"></div>
+  <div class="stage" id="stage"></div>
+  <div class="compile" id="compile"></div>
+
+  <section class="notes">
+    <div class="note">
+      <b>为什么不是画布</b>
+      <p>一个任务的关卡链几乎总是一条线，偶尔往回拐一下。给一条线配一张可以随便摆位置的画布，
+        用户要先学会连线、对齐、找节点，才能表达一件本来一句话就说清的事。</p>
+      <p>真正需要图的是<b>任务之间</b>的先后 —— 那是分组和队列的地盘，工作流一个字都不碰。</p>
+    </div>
+    <div class="note">
+      <b>放开编排的前提是有闸</b>
+      <p>能自己排，就必然排得出坏流程：合并前没人看、预览起了没人关、失败往前跳成死循环。
+        所以底下那条编译结果不是装饰 —— <b>红的就存不下去</b>，并且告诉你是哪一步、为什么。</p>
+      <p>这些判断在保存时做一遍，任务开跑前再做一遍，改不动的旧任务用当时的快照。</p>
+    </div>
+    <div class="note">
+      <b>存的是同一份东西</b>
+      <p>三种壳子共用一份定义：一串步骤 + 每步的参数 + 每步失败的去向。
+        句子式适合配置和复核，清单式适合改结构，表格适合一眼扫完一条长流程。</p>
+      <p>页签是<b>视图偏好</b>，不是三套功能，也不需要用户先选对一个。</p>
+    </div>
+  </section>
+</main>
+
+<div class="pop" id="pop" style="display:none"></div>
+
+<script src="model.js"></script>
+<script src="views.js"></script>
+</body>
+</html>

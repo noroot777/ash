@@ -1,0 +1,105 @@
+// 每一站有哪些可改的参数 —— **一份规格，两处用**：站台底下那排 chip 的字从这儿
+// 派生，点开 chip 的弹层也照着这儿渲染。分成两份的话，迟早出现「chip 上写着 A、
+// 点开却没有 A 这个选项」。
+//
+// executor / model / effort 三种类型交给组件用现成控件渲染（复用 composer 那套
+// 执行器选择），其余都是纯枚举/文本，规格表自己就描述完了。
+import type { StepKind, WorkflowStep } from "@harness/shared/workflow";
+import {
+  ACCEPT_CLEAN, ACCEPT_CLEAN_LABELS, ACCEPT_STRATEGY, ACCEPT_STRATEGY_LABELS,
+  COMMAND_WHERE, COMMAND_WHERE_LABELS, HUMAN_NOTIFY, HUMAN_NOTIFY_LABELS,
+  HUMAN_SHOW, HUMAN_SHOW_LABELS, PREVIEW_LIFE, PREVIEW_LIFE_LABELS,
+  PREVIEW_READY, PREVIEW_READY_LABELS, VERIFY_CHECKS, VERIFY_CHECK_LABELS,
+} from "@harness/shared/workflow";
+
+export interface FieldOption { value: string; label: string }
+
+export type FieldSpec =
+  | { key: string; label: string; type: "select"; options: FieldOption[] }
+  | { key: string; label: string; type: "multi"; options: FieldOption[]; emptyText: string }
+  | { key: string; label: string; type: "text"; placeholder: string; emptyText: string }
+  | { key: string; label: string; type: "executor"; emptyText: string }
+  | { key: string; label: string; type: "model" }
+  | { key: string; label: string; type: "effort" };
+
+const opts = <T extends string>(values: readonly T[], labels: Record<T, string>): FieldOption[] =>
+  values.map((value) => ({ value, label: labels[value] }));
+
+export const STEP_FIELDS: Record<StepKind, FieldSpec[]> = {
+  run: [
+    { key: "instruction", label: "额外交代", type: "text", placeholder: "留空就照任务描述做", emptyText: "照任务描述做" },
+    { key: "executorId", label: "谁来干", type: "executor", emptyText: "跟随任务的执行器" },
+    { key: "model", label: "模型", type: "model" },
+    { key: "reasoningEffort", label: "思考强度", type: "effort" },
+  ],
+  verify: [
+    { key: "executorId", label: "谁来验", type: "executor", emptyText: "跟随任务的执行器" },
+    { key: "model", label: "用什么模型验", type: "model" },
+    { key: "reasoningEffort", label: "思考强度", type: "effort" },
+    { key: "checks", label: "验什么（全过才算过）", type: "multi", options: opts(VERIFY_CHECKS, VERIFY_CHECK_LABELS), emptyText: "还没选验什么" },
+  ],
+  preview: [
+    { key: "cmd", label: "启动命令", type: "text", placeholder: "npm run dev", emptyText: "还没填命令" },
+    { key: "ready", label: "怎么算起来了", type: "select", options: opts(PREVIEW_READY, PREVIEW_READY_LABELS) },
+    { key: "life", label: "什么时候关掉", type: "select", options: opts(PREVIEW_LIFE, PREVIEW_LIFE_LABELS) },
+  ],
+  human: [
+    { key: "show", label: "给我看什么", type: "multi", options: opts(HUMAN_SHOW, HUMAN_SHOW_LABELS), emptyText: "什么都不给看" },
+    { key: "notify", label: "怎么叫我", type: "multi", options: opts(HUMAN_NOTIFY, HUMAN_NOTIFY_LABELS), emptyText: "不通知" },
+  ],
+  command: [
+    { key: "cmd", label: "命令", type: "text", placeholder: "npm run lint", emptyText: "还没填命令" },
+    { key: "where", label: "在哪跑", type: "select", options: opts(COMMAND_WHERE, COMMAND_WHERE_LABELS) },
+  ],
+  accept: [
+    { key: "strategy", label: "怎么合", type: "select", options: opts(ACCEPT_STRATEGY, ACCEPT_STRATEGY_LABELS) },
+    { key: "clean", label: "合完清理", type: "select", options: opts(ACCEPT_CLEAN, ACCEPT_CLEAN_LABELS) },
+  ],
+};
+
+export interface FieldChip {
+  key: string;
+  text: string;
+  /** 这一项没填/没选，线路图上标出来（checkWorkflow 那边多半也会有话说） */
+  warn: boolean;
+}
+
+/** run/verify 站的 model 字段：没显式设就跟着执行器走，chip 上不占地方。 */
+export function fieldChip(
+  step: WorkflowStep,
+  spec: FieldSpec,
+  resolveExecutor: (id: string) => string | null,
+): FieldChip | null {
+  const value = (step.p as Record<string, unknown>)[spec.key];
+  if (spec.type === "multi") {
+    const list = Array.isArray(value) ? (value as string[]) : [];
+    const labels = list.map((v) => spec.options.find((o) => o.value === v)?.label ?? v);
+    return { key: spec.key, text: labels.length ? labels.join("、") : spec.emptyText, warn: !labels.length };
+  }
+  if (spec.type === "select") {
+    const found = spec.options.find((o) => o.value === value);
+    return { key: spec.key, text: found?.label ?? String(value ?? ""), warn: !found };
+  }
+  if (spec.type === "text") {
+    const text = typeof value === "string" ? value.trim() : "";
+    return { key: spec.key, text: text || spec.emptyText, warn: !text };
+  }
+  if (spec.type === "executor") {
+    const id = typeof value === "string" ? value : "";
+    if (!id) return { key: spec.key, text: spec.emptyText, warn: false };
+    const name = resolveExecutor(id);
+    return { key: spec.key, text: name ?? "执行器已不在了", warn: !name };
+  }
+  // model / effort：只有显式指定了才值得占一颗 chip
+  const text = typeof value === "string" ? value.trim() : "";
+  return text ? { key: spec.key, text, warn: false } : null;
+}
+
+export function stepChips(
+  step: WorkflowStep,
+  resolveExecutor: (id: string) => string | null,
+): FieldChip[] {
+  return STEP_FIELDS[step.kind]
+    .map((spec) => fieldChip(step, spec, resolveExecutor))
+    .filter((chip): chip is FieldChip => chip !== null);
+}
