@@ -1,4 +1,4 @@
-import type { AgentType } from "./index.js";
+import type { AgentType } from "./index.ts";
 
 // "lead" = 团队任务的常驻调度台会话（一个进程跑很多回合，见 server/src/team）；
 // 执行者自己的会话仍是 "single"。

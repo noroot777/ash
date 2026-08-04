@@ -1,0 +1,627 @@
+/* 工作流线路图。三行 grid、站与连接段交替成列；用 web-next 自己的 token，
+   不引第二套配色。执行态高亮（is-current / is-blocked / is-done）与编辑态共用
+   同一份骨架，因为它们本来就是同一条线的两种看法。 */
+
+.wf-rail-scroll {
+  overflow-x: auto;
+  overflow-y: visible;
+  padding: 2px 0;
+}
+
+.wf-rail {
+  display: grid;
+  grid-auto-flow: column;
+  grid-template-rows: auto 30px auto;
+  align-items: start;
+  padding: 22px 4px 10px;
+  min-width: min-content;
+}
+
+/* ── 名牌 ─────────────────────────────────────────────────────────── */
+.wf-plate {
+  position: relative;
+  grid-row: 1;
+  padding: 0 10px 10px;
+  min-width: 148px;
+  max-width: 210px;
+  text-align: center;
+}
+
+.wf-short {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 7px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  background: var(--raised);
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+
+.wf-plate h4 {
+  margin: 6px 0 0;
+  font-size: 13.5px;
+  font-weight: 560;
+  line-height: 1.35;
+  color: var(--ink);
+}
+
+.wf-ops {
+  position: absolute;
+  left: 50%;
+  top: -20px;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 9px;
+  background: var(--panel);
+  box-shadow: var(--control-shadow);
+  opacity: 0;
+  transition: opacity 0.16s ease;
+}
+
+.wf-plate:hover .wf-ops,
+.wf-ops:focus-within { opacity: 1; }
+
+.wf-ops button {
+  width: 21px;
+  height: 21px;
+  border-radius: 6px;
+  font-size: 11px;
+  color: var(--faint);
+}
+.wf-ops button:hover:not(:disabled) { background: var(--hover-bg); color: var(--ink); }
+.wf-ops button:disabled { opacity: 0.35; cursor: default; }
+.wf-ops .wf-op-del:hover { color: var(--red); }
+
+/* ── 线上的站点 ───────────────────────────────────────────────────── */
+.wf-node {
+  grid-row: 2;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.wf-node::before,
+.wf-node::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  height: 2px;
+  margin-top: -1px;
+  background: var(--line2);
+}
+.wf-node::before { left: 0; right: 50%; margin-right: 9px; }
+.wf-node::after { left: 50%; right: 0; margin-left: 9px; }
+
+.wf-node i {
+  position: relative;
+  z-index: 1;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--panel);
+  box-shadow: inset 0 0 0 2.5px var(--line2);
+  font: 600 8.5px/18px var(--font-mono);
+  font-style: normal;
+  color: var(--faint);
+  text-align: center;
+  transition: box-shadow 0.2s ease, transform 0.2s ease, color 0.2s ease;
+}
+
+/* ── 段与「＋ 加一站」 ────────────────────────────────────────────── */
+.wf-seg {
+  grid-row: 2;
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: 40px;
+}
+.wf-seg::before {
+  content: "";
+  position: absolute;
+  inset: 50% 0 auto;
+  height: 2px;
+  margin-top: -1px;
+  background: var(--line2);
+}
+
+/* 加号常驻：每段中间都摆一个，不用悬停就知道这儿能加站；悬停只把它从虚变实。 */
+.wf-add {
+  position: relative;
+  margin: 0 auto;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  color: var(--faint);
+  background: var(--panel);
+  border: 1px dashed var(--line2);
+  transition: color 0.16s ease, border-color 0.16s ease, background 0.16s ease;
+}
+.wf-add:hover { color: var(--ink); border-style: solid; border-color: var(--faint); background: var(--raised); }
+
+.wf-rail-empty {
+  padding: 26px 16px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--faint);
+}
+.wf-add-first {
+  margin-left: 8px;
+  padding: 5px 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  color: var(--ink);
+  background: var(--panel);
+  box-shadow: var(--control-shadow);
+}
+.wf-add-first:hover { background: var(--raised); }
+
+/* ── 站台底下：状态一行 + 参数 chips ──────────────────────────────── */
+.wf-body {
+  grid-row: 3;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 12px 8px 0;
+  min-width: 148px;
+  max-width: 210px;
+}
+
+.wf-status {
+  font-size: 11px;
+  color: var(--faint);
+  white-space: nowrap;
+}
+.wf-status b { font-weight: 560; color: var(--muted); }
+.wf-status em { font-style: normal; margin-left: 3px; }
+
+.wf-chip-slot { position: relative; max-width: 100%; }
+
+.wf-chip,
+.wf-failchip {
+  max-width: 100%;
+  padding: 3px 9px;
+  border-radius: 8px;
+  font-size: 11.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: background 0.16s ease, color 0.16s ease;
+}
+
+.wf-chip {
+  color: var(--muted);
+  background: var(--raised);
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+.wf-chip:hover:not(:disabled) { background: var(--hover-bg); color: var(--ink); }
+.wf-chip:disabled { cursor: default; }
+.wf-chip.is-warn {
+  color: var(--amber);
+  background: color-mix(in srgb, var(--amber) 9%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--amber) 24%, transparent);
+}
+
+.wf-failchip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--amber);
+  background: color-mix(in srgb, var(--amber) 8%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--amber) 20%, transparent);
+}
+.wf-failchip:hover:not(:disabled) { background: color-mix(in srgb, var(--amber) 15%, transparent); }
+.wf-failchip:disabled { cursor: default; }
+
+/* ── 执行态：走到哪一站 ───────────────────────────────────────────── */
+.wf-node.is-done i { box-shadow: inset 0 0 0 2.5px var(--green); color: var(--green); }
+.wf-node.is-current i {
+  transform: scale(1.15);
+  box-shadow: inset 0 0 0 2.5px var(--accent), 0 0 0 5px color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent);
+}
+.wf-node.is-blocked i {
+  transform: scale(1.15);
+  box-shadow: inset 0 0 0 2.5px var(--red), 0 0 0 5px color-mix(in srgb, var(--red) 16%, transparent);
+  color: var(--red);
+}
+.wf-plate.is-pending, .wf-body.is-pending { opacity: 0.62; }
+.wf-plate.is-current h4 { font-weight: 620; }
+.wf-body.is-current .wf-status { color: var(--muted); }
+.wf-body.is-current .wf-status b { color: var(--ink); }
+.wf-body.is-blocked .wf-status b { color: var(--red); }
+
+.wf-plate.has-issue h4 { color: var(--red); }
+.wf-plate.has-issue .wf-short {
+  color: var(--red);
+  background: color-mix(in srgb, var(--red) 8%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--red) 22%, transparent);
+}
+
+/* ── 就地改：点哪儿弹哪儿，只有这一个字段 ────────────────────────── */
+.wf-pop {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 30;
+  width: max-content;
+  min-width: 178px;
+  max-width: 292px;
+  padding: 8px;
+  border-radius: 12px;
+  background: var(--panel);
+  box-shadow: var(--menu-shadow), inset 0 0 0 1px var(--line);
+}
+
+.wf-pop-title {
+  padding: 2px 6px 6px;
+  font-size: 11px;
+  color: var(--faint);
+  white-space: nowrap;
+}
+
+.wf-pop-options { display: flex; flex-direction: column; gap: 1px; }
+
+.wf-pop-option {
+  padding: 6px 9px;
+  border-radius: 8px;
+  font-size: 12.5px;
+  color: var(--ink);
+  text-align: left;
+  white-space: nowrap;
+}
+.wf-pop-option:hover:not(:disabled) { background: var(--hover-bg); }
+.wf-pop-option:disabled { color: var(--faint); cursor: default; }
+.wf-pop-option.is-on { background: var(--accent-soft); color: var(--accent); font-weight: 540; }
+
+.wf-pop-form { display: flex; flex-direction: column; gap: 6px; }
+
+.wf-pop-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.wf-pop-row > span { flex: none; min-width: 62px; }
+.wf-pop-row select,
+.wf-pop-row input { flex: 1; min-width: 0; }
+
+.wf-pop-text {
+  width: 100%;
+  min-height: 34px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  font-size: 12.5px;
+  font-family: inherit;
+  color: var(--ink);
+  background: var(--raised);
+  box-shadow: inset 0 0 0 1px var(--line);
+  resize: vertical;
+}
+
+.wf-pop-hint { margin: 2px 6px 0; font-size: 11px; color: var(--faint); }
+
+/* ── 设置 › 起手式：左库右编辑 ────────────────────────────────────── */
+.wf-lib {
+  display: grid;
+  grid-template-columns: 232px minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.wf-lib-side { display: flex; flex-direction: column; gap: 6px; }
+.wf-lib-list { display: flex; flex-direction: column; gap: 1px; }
+
+.wf-lib-group {
+  padding: 12px 8px 4px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--faint);
+}
+.wf-lib-group:first-child { padding-top: 2px; }
+
+.wf-lib-row {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 7px 9px;
+  text-align: left;
+}
+.wf-lib-row small {
+  font-size: 11px;
+  color: var(--faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wf-lib-name {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12.5px;
+  font-weight: 520;
+  color: var(--ink);
+}
+
+.wf-tag {
+  padding: 0 5px;
+  border-radius: 5px;
+  font-size: 9.5px;
+  font-style: normal;
+  font-weight: 600;
+  line-height: 15px;
+  color: var(--faint);
+  background: var(--raised);
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+.wf-tag.is-edited {
+  color: var(--accent);
+  background: var(--accent-soft);
+  box-shadow: none;
+}
+
+.wf-lib-new {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 7px 9px;
+  border-radius: 8px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.wf-lib-new:hover { background: var(--hover-bg); color: var(--ink); }
+
+.wf-lib-main { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+
+.wf-lib-head { display: flex; flex-direction: column; gap: 4px; }
+
+.wf-lib-title,
+.wf-lib-desc {
+  width: 100%;
+  padding: 3px 6px;
+  margin-left: -6px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  outline-offset: -1px;
+}
+.wf-lib-title { font-size: 16px; font-weight: 600; color: var(--ink); }
+.wf-lib-desc { font-size: 12.5px; color: var(--muted); }
+.wf-lib-title:hover,
+.wf-lib-desc:hover { background: var(--raised); }
+
+.wf-lib-actions { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.wf-lib-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border-radius: 8px;
+  font-size: 12px;
+  color: var(--muted);
+  background: var(--panel);
+  box-shadow: var(--control-shadow);
+}
+.wf-lib-actions button:hover:not(:disabled) { background: var(--raised); color: var(--ink); }
+.wf-lib-actions .wf-danger:hover:not(:disabled) { color: var(--red); }
+
+/* 存不进去的时候顶着这条，而不是等用户点了保存才报错——本来就没有保存按钮。 */
+.wf-deny {
+  padding: 8px 12px;
+  border-radius: 10px;
+  font-size: 12px;
+  color: var(--red);
+  background: color-mix(in srgb, var(--red) 7%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--red) 20%, transparent);
+}
+
+.wf-lib-rail { padding: 0; overflow: hidden; }
+
+@media (max-width: 900px) {
+  .wf-lib { grid-template-columns: minmax(0, 1fr); }
+}
+
+.wf-picker { max-width: 320px; }
+
+/* ── 收起态的线：一排站名 + 常驻虚线 ＋ ─────────────────────────── */
+/* 高度对齐「执行模式」那一节的一行下拉框：不点开就不占地方。 */
+.wf-mini {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: 8px 10px;
+  border-radius: 12px;
+  background: var(--subtle-bg);
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+.wf-mini-stop {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--panel);
+  box-shadow: inset 0 0 0 1px var(--line);
+  font-size: 12px;
+  color: var(--text);
+  white-space: nowrap;
+}
+.wf-mini-del {
+  display: inline-flex;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--faint);
+  font-size: 10px;
+  line-height: 1;
+  cursor: pointer;
+}
+.wf-mini-del:hover { color: var(--red); }
+.wf-mini-slot { position: relative; display: inline-flex; }
+.wf-mini-gap { width: 16px; height: 0; border-top: 1px dashed var(--line-strong, var(--line)); }
+.wf-mini-add {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 1px dashed var(--line-strong, var(--line));
+  border-radius: 999px;
+  background: none;
+  color: var(--faint);
+  cursor: pointer;
+}
+.wf-mini-add:hover { border-style: solid; border-color: var(--accent); color: var(--accent); }
+/* 收起态贴着面板底部时，菜单往上开，免得被裁掉。 */
+.wf-pop-up { top: auto; bottom: calc(100% + 6px); }
+
+/* ── 新建任务面板里的「干完之后」 ─────────────────────────────── */
+.composer-config-section.is-workflow { display: flex; flex-direction: column; gap: 10px; }
+.composer-wf-grow {
+  margin-left: auto;
+  padding: 4px 10px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--subtle-bg);
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+.composer-wf-grow:hover { color: var(--accent); background: var(--accent-soft); }
+.composer-wf-pick { display: flex; align-items: center; gap: 12px; }
+.composer-wf-label {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.composer-wf-label em {
+  font-style: normal;
+  font-size: 11px;
+  color: var(--faint);
+}
+.composer-wf-label em[data-own="yes"] { color: var(--accent); }
+.composer-wf-selwrap { position: relative; flex: 1; min-width: 0; }
+.composer-wf-sel {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--subtle-bg);
+  box-shadow: inset 0 0 0 1px var(--line);
+  color: var(--text);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+.composer-wf-sel:hover { box-shadow: inset 0 0 0 1px var(--accent); }
+.composer-wf-menu { left: 0; transform: none; max-width: min(360px, 100%); }
+.composer-wf-fork {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  border-radius: 10px;
+  background: var(--accent-soft);
+  font-size: 12px;
+  color: var(--muted);
+}
+.composer-wf-fork b { margin-right: 6px; color: var(--accent); font-weight: 560; }
+.composer-wf-forkops { display: inline-flex; gap: 6px; margin-left: auto; }
+.composer-wf-forkops button {
+  padding: 3px 9px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+}
+.composer-wf-forkops button:hover { color: var(--accent); }
+.composer-wf-field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+.composer-wf-field input {
+  padding: 6px 9px;
+  border-radius: 9px;
+  border: 0;
+  background: var(--subtle-bg);
+  box-shadow: inset 0 0 0 1px var(--line);
+  color: var(--text);
+  font-size: 13px;
+}
+.composer-wf-check { display: flex; align-items: center; gap: 7px; margin-top: 9px; font-size: 12px; color: var(--muted); }
+.composer-wf-rail { margin-top: 2px; }
+
+/* ── Inspector 里的竖版线路 ───────────────────────────────────── */
+/* 340px 的窄栏里，竖着排比横着装得下更多：每一站有一整行的宽度。 */
+.wf-vrail { display: flex; flex-direction: column; margin: 0; padding: 0; list-style: none; }
+.wf-vst { position: relative; display: grid; grid-template-columns: 18px minmax(0, 1fr); gap: 8px; padding: 0 0 12px; }
+/* 站与站之间那根竖线：长在圆点下面，最后一站不画。 */
+.wf-vst::before {
+  content: "";
+  position: absolute;
+  top: 17px;
+  bottom: 0;
+  left: 8px;
+  width: 1px;
+  background: var(--line);
+}
+.wf-vst:last-child { padding-bottom: 0; }
+.wf-vst:last-child::before { display: none; }
+.wf-vst[data-state="done"]::before { background: color-mix(in srgb, var(--accent) 46%, transparent); }
+.wf-vpin {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 17px;
+  height: 17px;
+  border-radius: 999px;
+  background: var(--raised);
+  box-shadow: inset 0 0 0 1px var(--line);
+  color: var(--faint);
+  font-size: 9px;
+  line-height: 1;
+}
+.wf-vst[data-state="done"] .wf-vpin { background: var(--accent); box-shadow: none; color: var(--on-accent, #fff); }
+.wf-vst[data-state="current"] .wf-vpin { box-shadow: inset 0 0 0 1px var(--accent), 0 0 0 3px var(--accent-soft); color: var(--accent); }
+.wf-vst[data-state="blocked"] .wf-vpin { box-shadow: inset 0 0 0 1px var(--red); color: var(--red); }
+.wf-vbody { min-width: 0; padding-top: 1px; }
+.wf-vhead { display: flex; align-items: baseline; gap: 6px; }
+.wf-vhead b { color: var(--ink); font-size: 11.5px; font-weight: 600; }
+.wf-vword { margin-left: auto; color: var(--faint); font-size: 9.5px; white-space: nowrap; }
+.wf-vst[data-state="current"] .wf-vword { color: var(--accent); }
+.wf-vst[data-state="blocked"] .wf-vword { color: var(--red); }
+.wf-vst[data-state="pending"] .wf-vhead b { color: var(--muted); font-weight: 500; }
+.wf-vchips { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 4px; }
+.wf-vchips em {
+  border-radius: 999px;
+  background: var(--raised);
+  padding: 1px 6px;
+  color: var(--muted);
+  font-size: 9.5px;
+  font-style: normal;
+}
+.wf-vchips em[data-warn="true"] { background: color-mix(in srgb, var(--red) 12%, transparent); color: var(--red); }
+.wf-vfail { display: flex; align-items: center; gap: 3px; margin-top: 4px; color: var(--faint); font-size: 9.5px; }
+.wf-vnote { margin: 4px 0 0; color: var(--faint); font-size: 9.5px; line-height: 1.5; }
+.wf-vgate { margin-top: 7px; }
+.wf-vgate .team-accept-actions { flex-wrap: wrap; }

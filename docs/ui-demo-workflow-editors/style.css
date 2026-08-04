@@ -1,0 +1,208 @@
+/* 工作流编辑器 · 三种范式 —— 单栏、克制配色、点哪改哪 */
+:root{
+  --bg:#ffffff; --canvas:#f6f6f7; --ink:#191b1f; --mid:#585d66; --faint:#9198a3;
+  --line:#e6e7ea; --line2:#d6d8dd; --accent:#4f46e5; --accent-soft:#eeecfd;
+  --warn:#a1600b; --warn-soft:#fdf4e3; --deny:#b3261e; --deny-soft:#fdeceb; --ok:#146c43;
+  --radius:10px;
+  font-synthesis-weight:none;
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{
+  margin:0;background:var(--canvas);color:var(--ink);
+  font:13px/1.62 -apple-system,BlinkMacSystemFont,"SF Pro SC","PingFang SC","Segoe UI",sans-serif;
+  -webkit-font-smoothing:antialiased;
+}
+button{font:inherit;color:inherit;border:0;background:none;cursor:pointer;padding:0}
+h1,h2,h3,p{margin:0}
+
+/* ── 页头 ─────────────────────────────────────────── */
+.top{background:var(--bg);border-bottom:1px solid var(--line)}
+.top-in{max-width:900px;margin:0 auto;padding:20px 24px 0}
+.top h1{font-size:16px;font-weight:640;letter-spacing:.2px}
+.top .sub{margin-top:5px;color:var(--mid);font-size:12.5px}
+.tabs{display:flex;gap:26px;margin-top:16px}
+.tabs button{
+  padding:0 0 10px;font-size:13px;color:var(--faint);
+  border-bottom:2px solid transparent;margin-bottom:-1px;transition:color .12s;
+}
+.tabs button:hover{color:var(--mid)}
+.tabs button[aria-selected="true"]{color:var(--ink);font-weight:600;border-bottom-color:var(--accent)}
+.tabs em{display:block;font-style:normal;font-size:11px;font-weight:400;color:var(--faint);margin-top:1px}
+
+/* ── 主体 ─────────────────────────────────────────── */
+main{max-width:900px;margin:0 auto;padding:22px 24px 60px}
+.bar{
+  display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+  background:var(--bg);border:1px solid var(--line);border-radius:var(--radius);
+  padding:9px 12px;margin-bottom:16px;
+}
+.bar .k{color:var(--faint);font-size:11.5px}
+.bar .sep{flex:1}
+.pick{
+  border:1px solid var(--line2);border-radius:7px;padding:3px 9px;font-size:12px;
+  background:var(--bg);transition:border-color .12s,background .12s;
+}
+.pick:hover{border-color:var(--accent);background:var(--accent-soft)}
+.pick[data-on="true"]{background:var(--ink);color:#fff;border-color:var(--ink)}
+.seg{display:inline-flex;border:1px solid var(--line2);border-radius:7px;overflow:hidden}
+.seg button{padding:3px 10px;font-size:12px;color:var(--mid)}
+.seg button+button{border-left:1px solid var(--line2)}
+.seg button[data-on="true"]{background:var(--ink);color:#fff}
+
+.stage{background:var(--bg);border:1px solid var(--line);border-radius:var(--radius);padding:4px}
+.stage.pad{padding:26px 30px}
+
+/* ── ① 句子式 ─────────────────────────────────────── */
+.sent{font-size:15.5px;line-height:2.35;color:var(--ink);letter-spacing:.1px}
+/* 右侧留一条固定的操作沟：＋/× 绝对定位在这里，
+   否则长句子末尾会把这两个按钮挤到下一行，看起来像多出来一个空行 */
+/* lead 单独占一列，句子换行时续行自然对齐到「首先，」右边，不会顶格 */
+.sent-line{position:relative;display:flex;padding-right:50px}
+.sent .lead{flex:none;width:48px;color:var(--faint);font-size:13px}
+.sent .btxt{flex:1;min-width:0}
+.line-ops{position:absolute;right:0;top:0;white-space:nowrap}
+.slot{
+  font:inherit;padding:1px 5px;border-radius:5px;
+  background:#f2f2f4;color:var(--ink);
+  box-shadow:inset 0 -1px 0 var(--line2);
+  transition:background .12s,color .12s,box-shadow .12s;
+}
+.slot:hover{background:var(--accent-soft);color:#3b32c4;box-shadow:inset 0 -1px 0 rgba(79,70,229,.35)}
+.tail{color:var(--faint);font-size:13.5px}
+.ins{
+  display:inline-flex;align-items:center;justify-content:center;
+  width:18px;height:18px;border-radius:50%;vertical-align:middle;
+  color:transparent;background:transparent;font-size:12px;line-height:1;
+  transition:color .12s,background .12s;
+}
+.sent:hover .ins{color:var(--line2)}
+.ins:hover{background:var(--accent);color:#fff!important}
+.del{color:transparent;font-size:13px;margin-left:2px;transition:color .12s}
+.sent-line:hover .del{color:var(--faint)}
+.del:hover{color:var(--deny)!important}
+
+/* ── ② 步骤清单 ───────────────────────────────────── */
+.list{position:relative;padding:6px 8px 6px 46px}
+.card{
+  position:relative;display:flex;gap:12px;align-items:flex-start;
+  border:1px solid var(--line);border-radius:9px;padding:11px 12px 11px 13px;background:var(--bg);
+}
+.card:hover{border-color:var(--line2)}
+.card .no{
+  flex:none;width:20px;height:20px;border-radius:50%;background:#f1f2f4;color:var(--mid);
+  font-size:11px;display:flex;align-items:center;justify-content:center;margin-top:1px;
+}
+.card .body{flex:1;min-width:0}
+.card .t{font-size:13.5px;font-weight:580}
+.card .t small{font-weight:400;color:var(--faint);font-size:11px;margin-left:6px}
+.card .s{color:var(--mid);font-size:12px;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.card .f{margin-top:7px;font-size:11.5px;color:var(--faint);display:flex;align-items:center;gap:5px}
+.card .f b{font-weight:400;color:var(--warn)}
+.card .ops{flex:none;display:flex;gap:2px;opacity:0;transition:opacity .12s}
+.card:hover .ops{opacity:1}
+.card .ops button{width:24px;height:24px;border-radius:6px;color:var(--faint);font-size:12px}
+.card .ops button:hover{background:#f1f2f4;color:var(--ink)}
+.gap{position:relative;height:16px}
+.gap button{
+  position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
+  width:18px;height:18px;border-radius:50%;background:var(--bg);border:1px solid var(--line2);
+  color:var(--faint);font-size:12px;line-height:1;opacity:0;transition:opacity .12s;z-index:2;
+}
+.gap::before{content:"";position:absolute;left:26px;right:26px;top:50%;height:1px;background:var(--line);opacity:0}
+.gap:hover button,.gap:hover::before{opacity:1}
+.gap button:hover{background:var(--accent);border-color:var(--accent);color:#fff}
+.loopline{
+  position:absolute;left:20px;width:11px;pointer-events:none;
+  border:1px solid var(--warn);border-right:0;border-radius:7px 0 0 7px;opacity:.42;
+}
+.loopline::before{content:"▲";position:absolute;left:5px;top:-7px;font-size:6px;color:var(--warn);line-height:1}
+.loopline::after{
+  content:attr(data-n);position:absolute;left:-1px;top:50%;transform:translate(-100%,-50%);
+  font-size:9.5px;color:var(--warn);opacity:.9;white-space:nowrap;padding-right:2px;
+}
+
+/* ── ③ 规则表 ─────────────────────────────────────── */
+.rules{width:100%;border-collapse:collapse;font-size:12.5px}
+.rules th{
+  text-align:left;font-weight:500;color:var(--faint);font-size:11px;
+  padding:9px 10px;border-bottom:1px solid var(--line);white-space:nowrap;
+}
+.rules td{padding:7px 10px;border-bottom:1px solid var(--line);vertical-align:middle}
+.rules tr:last-child td{border-bottom:0}
+.rules tbody tr:hover{background:#fafafb}
+.rules .n{color:var(--faint);width:26px}
+.rules .what{font-weight:560}
+.rules .who{color:var(--mid)}
+.cell{
+  border:1px solid transparent;border-radius:6px;padding:2px 7px;font-size:12px;
+  color:var(--mid);white-space:nowrap;transition:border-color .12s,background .12s;
+}
+.cell:hover{border-color:var(--line2);background:#f7f7f8}
+.cell.j{color:var(--warn)}
+.rules .x{color:var(--faint);opacity:0;width:20px;height:20px;border-radius:5px}
+.rules .ops-td{white-space:nowrap;text-align:right;width:70px}
+tr:hover .x{opacity:1}
+.rules .x:hover{color:var(--ink);background:#f1f2f4}
+.rules .x[data-op="del"]:hover{color:var(--deny)}
+.addrow{padding:9px 10px}
+.addrow button{color:var(--accent);font-size:12.5px}
+
+/* ── 加步骤菜单 / 参数面板（共用弹层） ────────────── */
+.pop{
+  position:fixed;z-index:40;min-width:230px;max-width:330px;
+  background:var(--bg);border:1px solid var(--line2);border-radius:11px;
+  box-shadow:0 10px 34px rgba(20,22,28,.16),0 1px 3px rgba(20,22,28,.08);
+  padding:10px;max-height:min(72vh,480px);overflow:auto;
+}
+.pop h3{font-size:11px;font-weight:500;color:var(--faint);margin:2px 2px 8px}
+.pop .row{margin-bottom:11px}
+.pop .row:last-child{margin-bottom:2px}
+.pop .lab{font-size:11px;color:var(--faint);margin-bottom:4px}
+/* 从句子里点某个槽位进来，先把那一项标出来 */
+.pop .row.hot{margin:0 -6px 11px;padding:5px 6px;border-radius:8px;background:var(--accent-soft)}
+.pop .row.hot .lab{color:#3b32c4}
+.pop select{
+  width:100%;font:inherit;font-size:12.5px;padding:5px 7px;border:1px solid var(--line2);
+  border-radius:7px;background:var(--bg);color:var(--ink);
+}
+.pop .opt{
+  display:flex;align-items:center;gap:7px;padding:4px 6px;border-radius:6px;
+  font-size:12.5px;cursor:pointer;
+}
+.pop .opt:hover{background:#f4f4f6}
+.pop .opt i{
+  flex:none;width:13px;height:13px;border:1px solid var(--line2);border-radius:4px;
+  font-style:normal;font-size:9px;color:#fff;display:flex;align-items:center;justify-content:center;
+}
+.pop .opt[data-on="true"] i{background:var(--accent);border-color:var(--accent)}
+.pop .kind{display:flex;align-items:center;gap:8px;padding:6px 7px;border-radius:7px;width:100%;text-align:left}
+.pop .kind:hover{background:#f4f4f6}
+.pop .kind b{font-weight:560;font-size:12.5px}
+.pop .kind span{color:var(--faint);font-size:11px}
+.pop .foot{border-top:1px solid var(--line);margin-top:9px;padding-top:8px;display:flex;justify-content:space-between}
+.pop .foot button{font-size:12px;color:var(--faint)}
+.pop .foot button:hover{color:var(--deny)}
+.pop .foot .done{color:var(--accent)}
+
+/* ── 编译条 ───────────────────────────────────────── */
+.compile{margin-top:16px;border:1px solid var(--line);border-radius:var(--radius);background:var(--bg);overflow:hidden}
+.compile .hd{display:flex;align-items:center;gap:9px;padding:10px 13px;border-bottom:1px solid var(--line)}
+.compile .hd b{font-size:12.5px;font-weight:580}
+.compile .hd .digest{color:var(--faint);font-size:11.5px;margin-left:auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dot{width:7px;height:7px;border-radius:50%;flex:none;background:var(--ok)}
+.dot.bad{background:var(--deny)}
+.msg{display:flex;gap:8px;padding:9px 13px;font-size:12.5px;border-top:1px solid #f1f1f3}
+.msg:first-of-type{border-top:0}
+.msg em{font-style:normal;flex:none;font-size:10.5px;padding:1px 6px;border-radius:5px;margin-top:2px;height:fit-content}
+.msg.deny{background:var(--deny-soft)} .msg.deny em{background:#f7d6d3;color:var(--deny)}
+.msg.warn{background:var(--warn-soft)} .msg.warn em{background:#f6e4c2;color:var(--warn)}
+.msg.ok em{background:#e2f0e8;color:var(--ok)}
+.msg p{color:var(--mid)}
+
+/* ── 底部说明 ─────────────────────────────────────── */
+.notes{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:20px}
+.note{background:var(--bg);border:1px solid var(--line);border-radius:var(--radius);padding:12px 13px}
+.note>b{display:block;font-size:11.5px;font-weight:600;margin-bottom:5px}
+.note p{color:var(--mid);font-size:11.5px;line-height:1.72}
+.note p+p{margin-top:6px}

@@ -13,6 +13,13 @@
     "resolveJsonModule": true,
     "verbatimModuleSyntax": true,
     "isolatedModules": true,
-    "declaration": true
+    "declaration": true,
+    // shared/ 的 exports 指向 **源码** src/*.ts（三种消费方式:node 原生剥类型、
+    // tsx、vite/metro 打包)，所以它内部的相对导入必须写成运行时真实存在的
+    // `./x.ts` —— 写 `./x.js` 在 node 直跑源码时找不到文件。这两个开关让 tsc
+    // 接受 .ts 说明符，并在 emit 到 shared/dist 时重写回 .js。规则本体由
+    // scripts/check-conventions.mjs 拦住。
+    "allowImportingTsExtensions": true,
+    "rewriteRelativeImportExtensions": true
   }
 }

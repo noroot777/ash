@@ -94,6 +94,13 @@ export async function ensureSchema() {
     );
     CREATE UNIQUE INDEX IF NOT EXISTS queue_items_queue_pos_idx
       ON queue_items (queue_id, position);
+    CREATE TABLE IF NOT EXISTS workflows (
+      id TEXT PRIMARY KEY, builtin_key TEXT, name TEXT NOT NULL,
+      description TEXT NOT NULL DEFAULT '', def TEXT NOT NULL,
+      disabled INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS workflows_builtin_idx ON workflows (builtin_key);
   `);
   // Tolerant migration for DBs created before columns were added.
   try {
@@ -149,6 +156,9 @@ export async function ensureSchema() {
     "ALTER TABLE tasks ADD COLUMN stage TEXT",
     // 正交列表展示字段：null=未置顶，整数毫秒时间戳用于多个置顶任务排序
     "ALTER TABLE tasks ADD COLUMN pinned_at INTEGER",
+    // §工作流：项目默认起手式 + 任务创建时拷下的那条线（快照，不是引用）
+    "ALTER TABLE projects ADD COLUMN workflow_id TEXT",
+    "ALTER TABLE tasks ADD COLUMN workflow TEXT",
     // 独立审查任务与被审目标的关系；review_requested 只在团队 dispatch worker 上置位。
     "ALTER TABLE tasks ADD COLUMN review_of TEXT",
     "ALTER TABLE tasks ADD COLUMN review_round INTEGER",

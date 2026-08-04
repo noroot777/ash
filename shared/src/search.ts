@@ -1,6 +1,6 @@
 // 全局搜索(⌘K)的结果形状。纯类型文件,index.ts 只做再导出 —— 拆分理由与
 // 「只能搬类型、不能搬运行时值」的原因见 ./events.ts 头部注释。
-import type { TaskStatus } from "./index.js";
+import type { TaskStatus } from "./index.ts";
 
 // One hit per task or note. Task fields rank title > body > conversation, and
 // task hits are returned before note hits. `conversation` means the match was

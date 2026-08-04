@@ -7,7 +7,7 @@
 // 走子路径导出 `@harness/shared/cli-presets`,**不从 index 转发**:服务端直接跑
 // shared 的 .ts 源码,Node 的类型擦除不会把 "./x.js" 说明符映射回 "./x.ts",
 // index 里转发运行时值会让 server 进程起不来(同 `@harness/shared/executors`)。
-import type { AgentType } from "./index.js";
+import type { AgentType } from "./index.ts";
 
 // CLI-native model aliases used when an executor is on its official account.
 // Provider-backed executors replace these with that provider's /v1/models list.

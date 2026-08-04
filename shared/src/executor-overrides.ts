@@ -8,7 +8,7 @@
 //
 // 判定与取值统一走这里：server 的三条创建/编辑路径（team dispatch、批量建任务、
 // PATCH /tasks/:id）与 web/mobile 的执行器选择器共用同一份口径。
-import type { AgentType } from "./index";
+import type { AgentType } from "./index.ts";
 
 export type ExecutorRef = {
   executorId?: string | null;

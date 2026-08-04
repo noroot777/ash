@@ -8,6 +8,8 @@ export const projects = sqliteTable("projects", {
   name: text("name").notNull(),
   repoPath: text("repo_path").notNull(),
   apiKeys: text("api_keys"), // legacy project-level credentials, kept for compatibility
+  // 本项目新建任务默认用哪条起手式（workflows.id 或内置 key）。空 = 跟随全局默认。
+  workflowId: text("workflow_id"),
   createdAt: text("created_at").notNull(),
 });
 
@@ -93,6 +95,9 @@ export const tasks = sqliteTable("tasks", {
   // on branch `harness/<id8>` based off `worktreeBase` (null = current HEAD) before
   // running. False / missing repo → behaves like before (runs in repoPath).
   useWorktree: integer("use_worktree", { mode: "boolean" }).notNull().default(false),
+  // 这个任务当初挑的那条线，**创建时拷进来的快照**（json WorkflowDef）。之后改起手式
+  // 库不会追着改它 —— 「起手式」不是「模板引用」。空 = 老任务，走旧的写死流程。
+  workflow: text("workflow"),
   worktreeBase: text("worktree_base"),
   originTaskId: text("origin_task_id"), // 回链来源任务(null = 直接创建)
   // 检查点续跑：agent 调 pause_task 时填进来；下次 resume 时取出喂给 CLI 会话并清空。
@@ -140,6 +145,24 @@ export const teamPresets = sqliteTable("team_presets", {
   config: text("config").notNull(), // json TeamPresetConfig (without display labels)
   createdAt: text("created_at").notNull(),
 });
+
+// 起手式库。系统自带的那几条**没有种子行**：builtin_key 非空的行 = 用户对某条
+// 自带起手式的覆写，删掉这行就回到 shared/workflow-presets.ts 里的出厂定义。
+// 用户自建的行 builtin_key 为空。disabled 只对自带的有意义（自带的删不掉，只能停用）。
+export const workflows = sqliteTable(
+  "workflows",
+  {
+    id: text("id").primaryKey(),
+    builtinKey: text("builtin_key"), // 非空 = 覆写某条系统自带的
+    name: text("name").notNull(),
+    description: text("description").notNull().default(""),
+    def: text("def").notNull(), // json WorkflowDef
+    disabled: integer("disabled", { mode: "boolean" }).notNull().default(false),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (t) => ({ builtinIdx: uniqueIndex("workflows_builtin_idx").on(t.builtinKey) }),
+);
 
 export const sessions = sqliteTable("sessions", {
   id: text("id").primaryKey(),

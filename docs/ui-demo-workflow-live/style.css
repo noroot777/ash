@@ -1,0 +1,206 @@
+/* 执行态：和 ui-demo-workflow-inline 同一套 web-next 令牌，
+   因为这两张页面在产品里是前后脚出现的（建完任务 → 看它跑）。
+   Inspector 那一栏（.insp 起）的尺寸、字号、分节线全部照 web-next
+   的 inspector.css / task-detail.css 抄：38px tab bar、340px 宽、
+   section 13/14 内边距、h2 11.5px、行动按钮 31px。 */
+*{margin:0;padding:0;box-sizing:border-box}
+[hidden]{display:none!important}
+:root{
+  --chrome:lch(94.44% .5 282);--canvas:lch(97.94% .5 282);--panel:#fff;
+  --raised:lch(96.914% 0 282);--line:lch(90.55% 0 282);--line2:lch(86.5% 0 282);
+  --ink:lch(9.794% 0 282);--muted:lch(39.176% 1.25 282);--faint:lch(64.64% 1.25 282);
+  --accent:#5e6ad2;--accent-soft:lch(92.5% 12 286);
+  --red:#d93d4c;--amber:#b57b00;--green:#2f9e6b;
+  --hover:lch(91.64% .5 282);--sel:lch(89.54% .5 282);
+  --ease:cubic-bezier(.32,.72,0,1);
+}
+body{background:var(--chrome);color:var(--ink);
+  font:13px/1.5 Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
+  -webkit-font-smoothing:antialiased;padding:34px 0 70px}
+button,input{font:inherit;color:inherit;border:0;background:none;cursor:pointer}
+a{color:var(--accent);text-decoration:none}
+a:hover{text-decoration:underline}
+code{font:10.5px/1 "SF Mono",ui-monospace,monospace;background:var(--raised);padding:1px 4px;border-radius:4px}
+.stage{width:min(1100px,100% - 44px);margin:0 auto}
+.cap{font-size:12.5px;color:var(--muted);line-height:1.85;margin-bottom:20px;max-width:820px}
+.cap b{color:var(--ink);font-weight:600}
+h3.sec{font-size:11px;font-weight:600;letter-spacing:.05em;color:var(--faint);margin:26px 0 9px}
+
+/* ── 遥控器 ───────────────────────────────────────────── */
+.ctl{display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:11px;
+  background:var(--panel);box-shadow:0 0 0 1px var(--line)}
+.play{height:28px;padding:0 13px;border-radius:8px;font-size:12px;font-weight:500;
+  color:#fff;background:var(--accent);transition:filter .2s var(--ease)}
+.play:hover{filter:brightness(1.08)}
+.ghost{height:28px;padding:0 11px;border-radius:8px;font-size:12px;color:var(--muted);
+  background:var(--raised);transition:background .2s var(--ease)}
+.ghost:hover{background:var(--hover);color:var(--ink)}
+#scrub{flex:1;min-width:120px;-webkit-appearance:none;height:4px;border-radius:2px;
+  background:var(--line2);cursor:pointer}
+#scrub::-webkit-slider-thumb{-webkit-appearance:none;width:13px;height:13px;border-radius:50%;
+  background:var(--accent);box-shadow:0 1px 3px lch(0 0 0/.3)}
+.clock{font:11px/1 "SF Mono",ui-monospace,monospace;color:var(--faint);min-width:74px;text-align:right}
+.sw{display:flex;align-items:center;gap:7px;font-size:11.5px;color:var(--muted);cursor:pointer;white-space:nowrap}
+.sw input{display:none}
+.sw i{width:28px;height:16px;border-radius:9px;background:var(--line2);position:relative;
+  transition:background .3s var(--ease)}
+.sw i::after{content:"";position:absolute;top:2px;left:2px;width:12px;height:12px;border-radius:50%;
+  background:#fff;box-shadow:0 1px 2px lch(0 0 0/.25);transition:left .3s var(--ease)}
+.sw input:checked+i{background:var(--amber)}
+.sw input:checked+i::after{left:14px}
+
+/* ══ 详情页外壳 ═════════════════════════════════════════ */
+.win{display:flex;height:540px;border-radius:11px;overflow:hidden;
+  background:var(--panel);box-shadow:0 0 0 1px var(--line)}
+
+/* 左边的会话区只是示意：它才是详情页的主角，所以这条线不能压在它头上 */
+.main{flex:1;min-width:0;display:flex;flex-direction:column;background:var(--panel)}
+.mhd{display:flex;align-items:center;gap:9px;height:46px;padding:0 14px;
+  border-bottom:.5px solid var(--line);flex:none}
+.mhd b{font-size:13px;font-weight:600;white-space:nowrap}
+.mhd .path{font:10.5px/1 "SF Mono",ui-monospace,monospace;color:var(--faint);white-space:nowrap}
+.mhd .sp{flex:1}
+.mhd .mico{color:var(--faint);font-size:12px}
+.badge{height:21px;padding:0 9px;border-radius:6px;font-size:11px;display:flex;align-items:center;
+  flex:none;background:var(--raised);color:var(--muted);white-space:nowrap;
+  transition:background .3s var(--ease),color .3s var(--ease)}
+.badge[data-tone="wait"]{background:color-mix(in srgb,var(--amber) 13%,transparent);color:var(--amber)}
+.badge[data-tone="good"]{background:color-mix(in srgb,var(--green) 13%,transparent);color:var(--green)}
+.badge[data-tone="bad"]{background:color-mix(in srgb,var(--red) 12%,transparent);color:var(--red)}
+.mbody{flex:1;min-height:0;overflow:auto;padding:14px 16px;display:flex;flex-direction:column;gap:11px}
+.msg{max-width:86%;padding:8px 11px;border-radius:10px;font-size:11.5px;line-height:1.7;
+  color:var(--muted);background:var(--raised)}
+.msg[data-me="true"]{align-self:flex-end;background:var(--accent-soft);color:var(--ink)}
+.msg b{color:var(--ink);font-weight:600}
+.msg .mt{display:block;font:10px/1 "SF Mono",ui-monospace,monospace;color:var(--faint);margin-bottom:5px}
+.msg pre{font:10.5px/1.65 "SF Mono",ui-monospace,monospace;color:var(--faint);white-space:pre-wrap}
+.mft{flex:none;display:flex;align-items:center;height:44px;margin:0 14px 12px;padding:0 12px;
+  border-radius:9px;box-shadow:inset 0 0 0 1px var(--line);color:var(--faint);font-size:11.5px}
+.mft i{margin-left:auto;font-style:normal;font-size:11px}
+
+/* ══ Inspector ═════════════════════════════════════════ */
+.insp{width:340px;min-width:340px;flex:none;display:flex;flex-direction:column;
+  border-left:.5px solid var(--line);background:var(--canvas)}
+.itabs{display:flex;height:38px;flex:0 0 38px;align-items:stretch;
+  border-bottom:.5px solid var(--line);background:color-mix(in lch,var(--canvas) 86%,var(--panel))}
+.itab{position:relative;display:flex;align-items:center;gap:6px;flex:1 1 100px;min-width:86px;
+  padding:0 10px;border-right:.5px solid var(--line);color:var(--faint);
+  transition:color .2s var(--ease),background .2s var(--ease)}
+.itab i{font-style:normal;font-size:12px}
+.itab span{font-size:10.5px;font-weight:600}
+.itab:hover{color:var(--muted)}
+.itab.is-active{background:var(--canvas);color:var(--ink)}
+.itab.is-active::after{content:"";position:absolute;left:9px;right:9px;bottom:-.5px;height:2px;
+  border-radius:2px 2px 0 0;background:var(--accent);opacity:.8}
+.iadd{width:38px;flex:0 0 38px;display:grid;place-items:center;color:var(--faint);font-size:13px}
+
+.ic{flex:1;min-height:0;overflow:auto}
+.isec{border-bottom:.5px solid var(--line);padding:13px 14px}
+.isec h2{font-size:11.5px;font-weight:600;color:var(--muted);margin-bottom:9px}
+.iline{font-size:11px;color:var(--ink);line-height:1.7}
+.iline em{font-style:normal;color:var(--faint)}
+.iact{width:100%;min-height:31px;margin-top:9px;border-radius:7px;font-size:10.5px;color:var(--muted);
+  box-shadow:inset 0 0 0 1px var(--line);background:var(--panel);
+  transition:background .2s var(--ease),color .2s var(--ease)}
+.iact:hover{background:var(--raised);color:var(--ink)}
+
+/* ── 竖版线路：一行一站，左边一列走线，右边整行随便写 ─────────── */
+.vrail{list-style:none;position:relative;padding-left:15px}
+.vst{position:relative;display:grid;grid-template-columns:17px minmax(0,1fr);gap:0 10px;
+  padding-bottom:13px}
+.vst:last-child{padding-bottom:0}
+/* 站与站之间的竖线：走过的实、没走到的虚 */
+.vst:not(:last-child)::before{content:"";position:absolute;left:7.75px;top:19px;bottom:-1px;
+  width:1.5px;background:var(--line2);transition:background .35s var(--ease)}
+.vst[data-lit="true"]:not(:last-child)::before{background:var(--green)}
+.pin{grid-row:1;width:17px;height:17px;border-radius:50%;display:flex;align-items:center;
+  justify-content:center;font-size:9px;color:#fff;background:var(--canvas);position:relative;z-index:1;
+  box-shadow:0 0 0 1.5px var(--line2);
+  transition:background .35s var(--ease),box-shadow .35s var(--ease)}
+.vst[data-s="pending"] .pin{color:var(--faint);font-size:8.5px}
+.vst[data-s="done"] .pin{background:var(--green);box-shadow:0 0 0 1.5px var(--green)}
+.vst[data-s="now"] .pin{background:var(--accent);box-shadow:0 0 0 1.5px var(--accent);
+  animation:halo 1.6s ease-in-out infinite}
+.vst[data-s="wait"] .pin{background:var(--amber);box-shadow:0 0 0 1.5px var(--amber),
+  0 0 0 4px color-mix(in srgb,var(--amber) 20%,transparent)}
+.vst[data-s="bad"] .pin{background:var(--red);box-shadow:0 0 0 1.5px var(--red)}
+@keyframes halo{0%,100%{box-shadow:0 0 0 1.5px var(--accent),0 0 0 3px color-mix(in srgb,var(--accent) 24%,transparent)}
+  50%{box-shadow:0 0 0 1.5px var(--accent),0 0 0 8px color-mix(in srgb,var(--accent) 0%,transparent)}}
+
+.vb{min-width:0;padding-top:1px}
+.vn{display:flex;align-items:baseline;gap:7px}
+.vn b{font-size:11.5px;font-weight:500;color:var(--muted);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;transition:color .3s var(--ease)}
+.vst[data-s="pending"] .vn b{color:var(--faint)}
+.vst[data-s="now"] .vn b,.vst[data-s="wait"] .vn b{color:var(--ink);font-weight:600}
+.vn .st{margin-left:auto;font-size:10px;color:var(--faint);white-space:nowrap;flex:none}
+.vst[data-s="now"] .st{color:var(--accent)}
+.vst[data-s="wait"] .st{color:var(--amber)}
+.vst[data-s="bad"] .st{color:var(--red)}
+.vst[data-s="done"] .st{color:var(--green)}
+/* 一整行的宽度换来的就是这一行：参数不用再省成两个字 */
+.vp{font-size:10px;color:var(--faint);line-height:1.6;margin-top:2px;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.vp u{text-decoration:none;font:10px/1 "SF Mono",ui-monospace,monospace}
+
+/* 人工关口的两个按钮直接长在站台底下 */
+.vact{display:flex;gap:6px;margin-top:7px}
+.vact button{min-height:27px;padding:0 10px;border-radius:7px;font-size:10.5px;
+  transition:background .2s var(--ease),filter .2s var(--ease)}
+.vact .pass{color:#fff;background:var(--green)}
+.vact .pass:hover{filter:brightness(1.07)}
+.vact .rej{color:var(--muted);background:var(--panel);box-shadow:inset 0 0 0 1px var(--line)}
+.vact .rej:hover{background:var(--raised);color:var(--red)}
+.vhint{font-size:10px;color:var(--faint);margin-top:6px;line-height:1.6}
+
+/* 回拐：左侧一道琥珀括号，圈住要重来的那几站 */
+.loopbar{position:absolute;left:0;width:9px;border:1px dashed color-mix(in srgb,var(--amber) 55%,transparent);
+  border-right:0;border-radius:7px 0 0 7px;animation:fade .4s var(--ease) both}
+.looptag{font-size:10px;color:var(--amber);margin-top:6px;line-height:1.6}
+.looptag b{font-weight:600}
+@keyframes fade{from{opacity:0}to{opacity:1}}
+
+/* 实况：窄栏里只留时刻 + 一句话 */
+.tl{max-height:150px;overflow:auto;margin:-2px -2px 0}
+.ev{display:flex;align-items:baseline;gap:8px;padding:4px 2px;font-size:10.5px;color:var(--muted)}
+.ev .t{font:9.5px/1 "SF Mono",ui-monospace,monospace;color:var(--faint);min-width:32px;flex:none}
+.ev .d{width:5px;height:5px;border-radius:50%;background:var(--line2);flex:none;align-self:center}
+.ev[data-tone="bad"] .d{background:var(--red)}
+.ev[data-tone="loop"] .d,.ev[data-tone="wait"] .d{background:var(--amber)}
+.ev[data-tone="good"] .d{background:var(--green)}
+.ev b{color:var(--ink);font-weight:500}
+.ev span.x{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ev[data-cur="true"]{background:var(--accent-soft);border-radius:5px}
+.ev.end{margin-top:3px;padding-top:7px;border-top:.5px solid var(--line)}
+
+/* ── 表面二：任务列表 ─────────────────────────────────── */
+.list{border-radius:11px;background:var(--panel);box-shadow:0 0 0 1px var(--line);overflow:hidden}
+.row{display:flex;align-items:center;gap:12px;height:44px;padding:0 13px;
+  border-bottom:1px solid var(--line);transition:background .2s var(--ease)}
+.row:last-child{border-bottom:0}
+.row:hover{background:var(--raised)}
+.row[data-live="true"]{background:var(--accent-soft)}
+.row .tt{font-size:12.5px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.row .who{font-size:11px;color:var(--faint);white-space:nowrap}
+.row .stt{font-size:11px;min-width:96px;text-align:right;white-space:nowrap}
+.row .stt[data-tone="wait"]{color:var(--amber)}
+.row .stt[data-tone="good"]{color:var(--green)}
+.row .stt[data-tone="bad"]{color:var(--red)}
+.row .stt[data-tone="run"]{color:var(--muted)}
+/* 列表里的退化形态：站数 = 段数，亮到哪段就是走到哪站 */
+.bar{display:flex;gap:2px;width:64px;flex:none}
+.bar u{flex:1;height:4px;border-radius:2px;background:var(--line2);display:block;
+  transition:background .35s var(--ease)}
+.bar u[data-s="done"]{background:var(--green)}
+.bar u[data-s="now"]{background:var(--accent);animation:pulse 1.5s ease-in-out infinite}
+.bar u[data-s="bad"]{background:var(--red)}
+.bar u[data-s="wait"]{background:var(--amber)}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.32}}
+
+/* ── 说明 ─────────────────────────────────────────────── */
+.notes{display:grid;grid-template-columns:repeat(auto-fit,minmax(268px,1fr));gap:14px;margin-top:26px}
+.note{padding:13px 15px;border-radius:11px;background:var(--panel);box-shadow:0 0 0 1px var(--line)}
+.note b{display:block;font-size:11.5px;margin-bottom:6px}
+.note p{font-size:11.5px;color:var(--muted);line-height:1.8}
+.note p b{display:inline;font-size:inherit}
+.also{margin-top:20px;font-size:11.5px;color:var(--faint)}

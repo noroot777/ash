@@ -112,6 +112,37 @@ if (shellHits.length) {
   console.error("   改成 ${VAR} 加花括号即可。\n");
 }
 
+// shared/ 的 package.json exports 指向 **源码** src/*.ts，所以 shared/src 里的相对
+// 导入说明符是 node 直接拿去找文件的真实路径 —— 写 `./x.js` 时 src 目录下并没有那个
+// 文件，node 当场 ERR_MODULE_NOT_FOUND（2026-08-04 服务端起不来就是这样：
+// workflow-presets.ts 引入了 shared 里第一个跨文件**值**导入，在此之前全是
+// `import type`，被类型剥离一并删掉，所以坏写法潜伏了很久才爆）。
+// 正确写法是 `./x.ts`：node/tsx/vite/metro 都能解析，tsc 靠
+// rewriteRelativeImportExtensions 在 emit 到 shared/dist 时重写回 .js。
+// 这里连 `import type` 一起拦：今天是类型导入、明天改成值导入就是一颗定时炸弹。
+const sharedSpecHits = [];
+for (const file of walk(join(ROOT, "shared/src"))) {
+  const raw = readFileSync(file, "utf8");
+  const src = stripComments(raw);
+  const lines = raw.split("\n");
+  for (const re of [/\bfrom\s+"(\.[^"]*)"/g, /\bimport\s*\(\s*"(\.[^"]*)"/g]) {
+    let m;
+    while ((m = re.exec(src))) {
+      if (m[1].endsWith(".ts")) continue;
+      const line = src.slice(0, m.index).split("\n").length;
+      sharedSpecHits.push(`${relative(ROOT, file)}:${line}  ${lines[line - 1].trim().slice(0, 72)}`);
+    }
+  }
+}
+if (sharedSpecHits.length) {
+  failed = true;
+  console.error(`\n✗ shared/src 里的相对导入没写 .ts 后缀（${sharedSpecHits.length} 处）：`);
+  for (const h of sharedSpecHits) console.error("   " + h);
+  console.error("   shared 的 exports 指向源码，说明符就是 node 拿去找文件的真实路径：");
+  console.error("   `./x.js` 和无后缀的 `./x` 在运行时都不存在，一旦变成值导入就 ERR_MODULE_NOT_FOUND。");
+  console.error("   一律写 `./x.ts`（tsc emit 到 dist 时会自动重写回 .js）。\n");
+}
+
 if (dialogHits.length) {
   failed = true;
   console.error(`\n✗ 用了浏览器原生弹窗（${dialogHits.length} 处）：`);

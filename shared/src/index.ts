@@ -1,15 +1,16 @@
 // Core domain types shared between server and web.
 // Mirrors the decisions in DESIGN.md (§3 data model, §5 agents, §7 debate,
 // §8 statuses, §12 debate mechanism, §13 sessions).
-import type { TeamConfig } from "./team.js";
-export type { Session, SessionRole } from "./session.js";
+import type { TeamConfig } from "./team.ts";
+import type { WorkflowDef } from "./workflow.ts";
+export type { Session, SessionRole } from "./session.ts";
 export type {
   ReviewConclusion,
   ReviewDispatchInput,
   TaskReviewInfo,
   TaskReviewRound,
   TeamConfig,
-} from "./team.js";
+} from "./team.ts";
 // 执行器覆盖的继承规则住在 ./executor-overrides.ts,走 "@harness/shared/executors"
 // 子路径导出(跟 "@harness/shared/team" 同一套):index.ts 只做类型再导出,不能在这里
 // 转发运行时函数 —— 服务端直接跑 .ts 源码,而 Node 的类型擦除不会把 "./x.js" 映射
@@ -21,10 +22,14 @@ export type {
 // current factory defaults without requiring seed rows.
 export interface AppSettings {
   worktreeDefault: boolean;
+  // 新建任务默认用哪条起手式（workflows.id 或内置 key）。空串 = 没设过，服务端落到
+  // DEFAULT_WORKFLOW_KEY —— 那个 key 是运行时常量，这里不能 import（见上面的说明）。
+  defaultWorkflowId: string;
 }
 
 export const DEFAULT_APP_SETTINGS: Readonly<AppSettings> = Object.freeze({
   worktreeDefault: true,
+  defaultWorkflowId: "",
 });
 
 // ── Agents (§5) ────────────────────────────────────────────────────────────
@@ -87,6 +92,8 @@ export interface Project {
   id: string;
   name: string;
   repoPath: string; // git repo this project's tasks operate on
+  // 本项目新建任务默认走哪条起手式；null = 跟随全局默认（见 AppSettings）
+  workflowId: string | null;
   createdAt: string;
 }
 
@@ -286,6 +293,9 @@ export interface Task {
   // Existing worktrees are reused; cleanup is an explicit user action.
   useWorktree?: boolean;
   worktreeBase?: string | null;
+  // §Workflow 这个任务当初挑的那条线，**创建时拷下来的快照**（改起手式库不会追着改
+  // 它）。老任务为 null —— 那时还没有这个概念，按写死的老流程走。
+  workflow?: WorkflowDef | null;
   // Backlink used by debate ↔ team derivation chains.
   originTaskId?: string | null;
   // §Pause 检查点续跑指令；非空时结算 paused，恢复后清空。
@@ -377,7 +387,7 @@ export interface LlmProvider {
 
 // ── Global search (⌘K) ───────────────────────────────────────────────────────
 // 形状住在 ./search.ts(纯类型,这里只再导出)。
-export type { NoteSearchHit, SearchField, SearchHit, TaskSearchHit } from "./search.js";
+export type { NoteSearchHit, SearchField, SearchHit, TaskSearchHit } from "./search.ts";
 
 // ── Attachments (pasted into the composer / reply box) ───────────────────────
 // Pasted images OR files. We don't feed them to a vision API — each is persisted
@@ -413,6 +423,7 @@ export interface BatchTaskInput {
   reasoningEffort?: string | null; // overrides defaults.reasoningEffort
   useWorktree?: boolean; // overrides defaults.useWorktree; omitted follows the global setting
   worktreeBase?: string | null; // base ref when this task uses a worktree
+  workflowId?: string | null; // 起手式 id；省略则按项目→全局默认解析，并拷成快照
   priority?: Priority;
   labels?: string[];
   // Each entry is resolved against sibling `key`s first; anything that doesn't
@@ -433,6 +444,7 @@ export interface BatchCreateTasksBody {
     model?: string | null;
     reasoningEffort?: string | null;
     useWorktree?: boolean; // omitted follows DEFAULT_APP_SETTINGS.worktreeDefault
+    workflowId?: string | null; // 这一批默认走哪条起手式
     worktreeBase?: string | null;
     priority?: Priority;
     labels?: string[];
@@ -545,7 +557,7 @@ export interface ScheduledMessage {
 
 // ── HITL gates (§7) / Executor streaming events (§12) ───────────────────────
 // 形状住在 ./events.ts(纯类型,这里只再导出);拆分理由见那个文件的头部注释。
-export type { AgentEvent, DebateSpeaker, GateAction, GateName, ServerEvent } from "./events.js";
+export type { AgentEvent, DebateSpeaker, GateAction, GateName, ServerEvent } from "./events.ts";
 
 // ── Session-snapshot parsing ──────────────────────────────────────────────
 // A persisted session .md is mostly agent Markdown, but backend continues and

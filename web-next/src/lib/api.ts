@@ -25,6 +25,7 @@ import type {
   TeamPreset,
   TeamPresetConfig,
 } from "@harness/shared";
+import type { WorkflowDef, WorkflowItem } from "@harness/shared/workflow";
 
 const API_ROOT = "/api";
 
@@ -219,7 +220,7 @@ export const api = {
     request("/projects/resolve", json("POST", { repoPath, name })),
   updateProject: (
     projectId: string,
-    patch: Partial<Pick<Project, "name" | "repoPath">>,
+    patch: Partial<Pick<Project, "name" | "repoPath" | "workflowId">>,
   ): Promise<ProjectView> => request(`/projects/${id(projectId)}`, json("PATCH", patch)),
   deleteProject: (projectId: string): Promise<{ deleted: true }> =>
     request(`/projects/${id(projectId)}`, { method: "DELETE" }),
@@ -261,7 +262,13 @@ export const api = {
   tasks: (): Promise<Task[]> => request("/tasks"),
   task: (taskId: string): Promise<Task> => request(`/tasks/${id(taskId)}`),
   createTask: (
-    task: Partial<Task> & { projectId: string; title: string; attachments?: string[] },
+    task: Partial<Task> & {
+      projectId: string;
+      title: string;
+      attachments?: string[];
+      // 挑哪条起手式；task.workflow 非空时它已经是就地改过的快照，服务端直接落库
+      workflowId?: string | null;
+    },
   ): Promise<Task> => request("/tasks", json("POST", task)),
   patchTask: (taskId: string, patch: Partial<Task>): Promise<Task> =>
     request(`/tasks/${id(taskId)}`, json("PATCH", patch)),
@@ -379,8 +386,24 @@ export const api = {
   deleteAgent: (agentId: string): Promise<{ deleted: true }> =>
     request(`/agents/${id(agentId)}`, { method: "DELETE" }),
 
-  teamPresets: (): Promise<TeamPreset[]> => request("/team-presets"),
-  createTeamPreset: (name: string, config: TeamPresetConfig): Promise<TeamPreset> =>
+  // 起手式库。自带条目的 id 就是内置 key（"standard"），删不掉——DELETE 会 409，
+  // 「不想看见它」走 patchWorkflow({disabled:true})，「改坏了」走 restoreWorkflow。
+  workflows: (): Promise<WorkflowItem[]> => request("/workflows"),
+  createWorkflow: (body: {
+    name: string;
+    description?: string;
+    def: WorkflowDef;
+  }): Promise<WorkflowItem> => request("/workflows", json("POST", body)),
+  patchWorkflow: (
+    workflowId: string,
+    patch: { name?: string; description?: string; def?: WorkflowDef; disabled?: boolean },
+  ): Promise<WorkflowItem> => request(`/workflows/${id(workflowId)}`, json("PATCH", patch)),
+  deleteWorkflow: (workflowId: string): Promise<{ deleted: true }> =>
+    request(`/workflows/${id(workflowId)}`, { method: "DELETE" }),
+  restoreWorkflow: (workflowId: string): Promise<WorkflowItem> =>
+    request(`/workflows/${id(workflowId)}/restore`, { method: "POST" }),
+
+  teamPresets: (): Promise<TeamPreset[]> => request("/team-presets"),  createTeamPreset: (name: string, config: TeamPresetConfig): Promise<TeamPreset> =>
     request("/team-presets", json("POST", { name, config })),
   patchTeamPreset: (
     presetId: string,

@@ -1,0 +1,228 @@
+/* 融进 harness 新建任务面板 —— 配色/字号/分节照抄 web-next 的 composer。
+   token 取自 web-next/src/styles/global.css，只把用到的那些搬过来。 */
+:root{
+  --chrome:lch(94.44% .5 282);
+  --canvas:lch(97.94% .5 282);
+  --panel:#fff;
+  --raised:lch(96.914% 0 282);
+  --line:lch(90.55% 0 282);
+  --line2:lch(86.5% 0 282);
+  --ink:lch(9.794% 0 282);
+  --muted:lch(39.176% 1.25 282);
+  --faint:lch(64.64% 1.25 282);
+  --accent:#5e6ad2;
+  --accent-soft:lch(92.5% 12 286);
+  --green:#168466;
+  --red:#d93d4c;
+  --amber:#b57b00;
+  --hover:lch(91.64% .5 282);
+  --sel:lch(89.54% .5 282);
+  --ease:cubic-bezier(.32,.72,0,1);
+  --sans:"Inter Variable","Inter","SF Pro Display",-apple-system,"PingFang SC","Noto Sans SC",sans-serif;
+  --mono:ui-monospace,"SFMono-Regular",Consolas,monospace;
+}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+html,body{margin:0;background:var(--chrome);color:var(--ink);
+  font-family:var(--sans);-webkit-font-smoothing:antialiased}
+button{font:inherit;color:inherit;border:0;background:none;cursor:pointer;padding:0}
+a{color:var(--accent)}
+
+.stage{max-width:1060px;margin:0 auto;padding:38px 24px 72px}
+.cap{margin:0 0 18px;font-size:12.5px;line-height:1.75;color:var(--muted)}
+.cap b{color:var(--ink);font-weight:600}
+
+/* ── 面板外壳 ─────────────────────────────────────────── */
+.panel{
+  background:var(--panel);border-radius:14px;overflow:hidden;
+  box-shadow:0 0 0 1px var(--line),lch(0 0 0/.07) 0 12px 40px;
+}
+.phd{display:flex;align-items:center;gap:9px;height:48px;padding:0 16px;border-bottom:1px solid var(--line)}
+.phd>b{font-size:13px;font-weight:600}
+.phd .kind{color:var(--faint);font-size:10px}
+.phd .x{margin-left:auto;color:var(--faint);font-size:13px}
+.pscroll{background:var(--canvas)}
+.pinner{width:min(820px,calc(100% - 40px));margin:0 auto;padding:26px 0 34px}
+
+.tabs{display:flex;align-items:center;gap:3px;border-bottom:1px solid var(--line);padding-bottom:12px}
+.tabs button{height:30px;padding:0 12px;border-radius:8px;color:var(--muted);font-size:12px}
+.tabs button[aria-selected="true"]{background:var(--sel);color:var(--ink);font-weight:550}
+.tabs>span{margin-left:auto;color:var(--faint);font-size:9px}
+
+/* ── 表单件 ───────────────────────────────────────────── */
+.fld{display:flex;flex-direction:column;gap:5px}
+.fld>span{font-size:11px;color:var(--muted);font-weight:500}
+.fld.big{margin:20px 0 4px}
+.ta{min-height:66px;padding:10px 12px;border-radius:9px;background:var(--panel);
+  box-shadow:inset 0 0 0 1px var(--line);font-size:12.5px;line-height:1.65;color:var(--ink)}
+.sel{display:flex;align-items:center;height:30px;padding:0 10px;border-radius:8px;background:var(--panel);
+  box-shadow:inset 0 0 0 1px var(--line);font-size:12px}
+.sel em{margin-left:auto;font-style:normal;color:var(--faint);font-size:9px}
+.sel.sm{height:28px;width:112px;flex:none}
+.fld small{color:var(--faint);font-size:10px}
+.tog{display:flex;align-items:center;gap:8px;height:30px}
+.tog i{width:30px;height:17px;border-radius:999px;background:var(--accent);position:relative;
+  transition:background .35s var(--ease)}
+.tog i::after{content:"";position:absolute;top:2px;left:15px;width:13px;height:13px;border-radius:50%;
+  background:#fff;transition:left .35s var(--ease)}
+.tog[data-on="false"] i{background:var(--line2)}
+.tog[data-on="false"] i::after{left:2px}
+.tog b{font-size:11.5px;font-weight:450;color:var(--muted)}
+
+.sec{margin-top:22px}
+.shd{display:flex;align-items:center;gap:9px;margin-bottom:11px}
+.shd .ico{width:22px;height:22px;border-radius:7px;background:var(--raised);
+  display:flex;align-items:center;justify-content:center;font-size:11px;color:var(--muted);
+  box-shadow:inset 0 0 0 1px var(--line)}
+.shd h2{margin:0;font-size:12.5px;font-weight:600}
+.shd p{margin:1px 0 0;font-size:10.5px;color:var(--faint)}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(178px,1fr));gap:12px 14px}
+
+/* ── 「干完之后」这一节 ───────────────────────────────── */
+.shd .grow{
+  margin-left:auto;
+  height:22px;padding:0 9px;border-radius:7px;font-size:10.5px;color:var(--muted);
+  box-shadow:inset 0 0 0 1px var(--line);background:var(--panel);
+  transition:box-shadow .3s var(--ease),color .3s var(--ease),background .3s var(--ease);
+}
+.shd .grow:hover{color:var(--ink);background:var(--raised);box-shadow:inset 0 0 0 1px var(--line2)}
+
+/* 起手式：故意做成和「执行器」一模一样的大下拉 —— 挑起手式是这一节的正门，
+   藏成一颗角落里的小胶囊，用户根本不会去点。 */
+.fld.wf{margin-bottom:9px}
+.fld.wf>span{display:flex;align-items:center}
+.fld.wf .src{margin-left:auto;font-style:normal;font-weight:400;font-size:10px;color:var(--faint)}
+.fld.wf .src[data-own="true"]{color:var(--accent)}
+.sel.big{width:100%;height:38px;gap:9px;text-align:left;
+  transition:box-shadow .25s var(--ease),background .25s var(--ease)}
+.sel.big:hover{box-shadow:inset 0 0 0 1px var(--line2);background:var(--raised)}
+.sel.big[aria-expanded="true"]{box-shadow:inset 0 0 0 1.5px var(--accent)}
+.sel.big b{font-size:12.5px;font-weight:550;flex:none}
+.sel.big .dots{display:flex;gap:2.5px;flex:none}
+.sel.big .dots u{width:5.5px;height:5.5px;border-radius:50%;display:block}
+.sel.big small{color:var(--faint);font-size:10.5px;overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.sel.big em{font-size:10px}
+
+/* 收起态：一排站名胶囊，中间常驻虚线 ＋，总高 30px */
+.rail{
+  display:flex;align-items:center;padding:9px 10px;border-radius:10px;background:var(--panel);
+  box-shadow:inset 0 0 0 1px var(--line);overflow-x:auto;
+}
+.col{display:flex;flex-direction:column;align-items:center;gap:6px;min-width:0}
+.stn{
+  display:flex;align-items:center;gap:6px;height:28px;padding:0 11px 0 9px;border-radius:8px;
+  white-space:nowrap;font-size:12px;color:var(--ink);background:var(--raised);
+  box-shadow:inset 0 0 0 1px transparent;
+  transition:background .3s var(--ease),box-shadow .3s var(--ease),transform .3s var(--ease);
+}
+.stn .dot{width:7px;height:7px;border-radius:50%;background:var(--tone);flex:none;
+  box-shadow:0 0 0 3px color-mix(in srgb,var(--tone) 16%,transparent)}
+.stn .no{font:500 9.5px/1 var(--mono);color:var(--faint)}
+.stn:hover{background:var(--hover);box-shadow:inset 0 0 0 1px var(--line2)}
+.stn[data-on="true"]{background:var(--panel);box-shadow:inset 0 0 0 1px var(--tone),0 1px 3px color-mix(in srgb,var(--tone) 22%,transparent)}
+
+/* 每两站之间常驻的虚线加号 —— 不悬停也看得见，悬停只是从虚变实 */
+.gap{position:relative;flex:none;width:32px;height:28px;display:flex;align-items:center;justify-content:center}
+.gap::before{content:"";position:absolute;left:-1px;right:-1px;top:50%;height:1px;background:var(--line2)}
+.gap button{
+  position:relative;width:18px;height:18px;border-radius:50%;line-height:1;font-size:11px;
+  color:color-mix(in srgb,var(--faint) 88%,transparent);background:var(--panel);
+  border:1px dashed var(--line2);
+  transition:transform .3s var(--ease),color .3s var(--ease),
+    border-color .3s var(--ease),background .3s var(--ease);
+}
+.rail:hover .gap button{color:var(--muted);border-color:lch(78% 0 282)}
+.gap button:hover{transform:scale(1.22);color:var(--accent);border-style:solid;
+  border-color:var(--accent);background:var(--accent-soft)}
+
+.cost{display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin-top:7px;
+  font-size:10.5px;color:var(--faint);padding-left:2px}
+.cost b{font-weight:600;color:var(--muted);font-variant-numeric:tabular-nums}
+.cost .bad{color:var(--red)}
+.cost .warn{color:var(--amber)}
+
+.fork{display:flex;align-items:center;gap:10px;margin-top:8px;padding:7px 11px;border-radius:9px;
+  background:var(--accent-soft);font-size:11px;color:var(--muted)}
+.fork b{color:var(--ink);font-weight:600}
+.fork button{margin-left:0;color:var(--accent);font-size:11px;font-weight:550}
+.fork button:hover{text-decoration:underline}
+.fork .sp{margin-left:auto}
+
+/* 展开态：同一条线撑开，站台底下长出参数与状态 */
+.rail[data-open="true"]{align-items:flex-start;padding:14px 12px 12px}
+.rail[data-open="true"] .col{flex:1}
+.rail[data-open="true"] .gap{margin-top:5px}
+.meta{display:none}
+.rail[data-open="true"] .meta{
+  display:flex;flex-direction:column;align-items:center;gap:4px;width:100%;min-width:0;
+  animation:fade .45s var(--ease) both;
+}
+@keyframes fade{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:none}}
+.meta .st{font-size:10px;color:var(--faint);white-space:nowrap}
+.meta .st b{font-weight:600;color:var(--muted)}
+.meta .chip{
+  max-width:100%;padding:3px 8px;border-radius:7px;font-size:10.5px;color:var(--muted);
+  background:var(--raised);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  transition:background .3s var(--ease),color .3s var(--ease);
+}
+.meta .chip:hover{background:var(--hover);color:var(--ink)}
+.meta .chip.warn{color:var(--amber);background:color-mix(in srgb,var(--amber) 11%,transparent)}
+.meta .fx{padding:3px 8px;border-radius:7px;font-size:10.5px;color:var(--amber);
+  background:color-mix(in srgb,var(--amber) 10%,transparent);white-space:nowrap}
+.meta .fx:hover{background:color-mix(in srgb,var(--amber) 18%,transparent)}
+
+.pft{display:flex;align-items:center;gap:10px;height:58px;padding:0 16px;border-top:1px solid var(--line)}
+.pft .lbl{font-size:11px;color:var(--muted)}
+.pft .ftline{margin-left:auto;font-size:10.5px;color:var(--faint)}
+.pft .go{height:30px;padding:0 14px;border-radius:8px;background:var(--accent);color:#fff;
+  font-size:12px;font-weight:550;transition:transform .3s var(--ease),filter .3s var(--ease)}
+.pft .go:hover{filter:brightness(1.08)}
+.pft .go:active{transform:scale(.98)}
+
+/* ── 微菜单 ───────────────────────────────────────────── */
+.pop{position:fixed;z-index:60;min-width:206px;max-width:420px;border-radius:11px;
+  background:var(--panel);box-shadow:0 0 0 1px var(--line),lch(0 0 0/.14) 0 10px 34px;
+  padding:6px;animation:pin .22s var(--ease) both}
+@keyframes pin{from{opacity:0;transform:translateY(-5px) scale(.98)}to{opacity:1;transform:none}}
+.pop h3{margin:4px 8px 6px;font-size:10px;font-weight:600;color:var(--faint);
+  letter-spacing:.06em;display:flex;align-items:center;gap:6px}
+.pop h3 .back{margin-right:2px;color:var(--accent);font-size:10px}
+.pop .opt{display:flex;align-items:center;gap:8px;width:100%;padding:6px 8px;border-radius:8px;
+  font-size:12px;text-align:left;white-space:nowrap;transition:background .2s var(--ease)}
+.pop .opt:hover{background:var(--hover)}
+/* 菜单尾部那两条通往「起手式库」的入口是真链接，别让它长成蓝的 */
+.pop a.opt{color:var(--ink);text-decoration:none;padding-left:19px}
+.pop .opt>i{width:11px;font-style:normal;color:var(--accent);font-size:10px;opacity:0;flex:none}
+.pop .opt[data-on="true"]>i{opacity:1}
+.pop .opt .d{width:7px;height:7px;border-radius:50%;background:var(--tone);flex:none}
+.pop .opt .sub{margin-left:auto;color:var(--faint);font-size:10px;white-space:nowrap}
+/* 起手式那几条：名字后面跟一串站台颜色点，不读描述也能看出这条线有几站 */
+.pop .opt .dots{display:flex;gap:2px;margin-left:6px}
+.pop .opt .dots u{width:5px;height:5px;border-radius:50%;display:block}
+.pop .opt.tpl .sub{min-width:0;overflow:hidden;text-overflow:ellipsis}
+.pop .cell{display:flex;align-items:center;gap:8px;width:100%;padding:6px 8px;border-radius:8px;
+  font-size:11.5px;text-align:left;color:var(--muted);transition:background .2s var(--ease)}
+.pop .cell:hover{background:var(--hover)}
+.pop .cell b{margin-left:auto;color:var(--ink);font-weight:500;max-width:150px;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pop .rule{height:1px;margin:5px 8px;background:var(--line)}
+.pop .ops{display:flex;gap:4px;padding:2px 4px 2px}
+.pop .ops button{flex:1;height:26px;border-radius:7px;font-size:11px;color:var(--muted);
+  background:var(--raised);transition:background .2s var(--ease),color .2s var(--ease)}
+.pop .ops button:hover{background:var(--hover);color:var(--ink)}
+.pop .ops button.del:hover{background:color-mix(in srgb,var(--red) 12%,transparent);color:var(--red)}
+.pop .ops button[disabled]{opacity:.35;cursor:default}
+.pop .tip{margin:4px 8px 2px;font-size:10px;color:var(--faint);line-height:1.6}
+
+/* ── 说明 ─────────────────────────────────────────────── */
+.notes{display:grid;grid-template-columns:repeat(auto-fit,minmax(268px,1fr));gap:14px;margin-top:26px}
+.note{padding:15px 17px;border-radius:12px;background:var(--panel);box-shadow:0 0 0 1px var(--line)}
+.note b{display:block;margin-bottom:6px;font-size:11.5px;font-weight:600}
+.note p{margin:0;font-size:11.5px;line-height:1.75;color:var(--muted)}
+.note p b{display:inline;color:var(--ink)}
+
+@media(max-width:720px){
+  .pinner{width:calc(100% - 28px)}
+  .rail{overflow-x:auto}
+}

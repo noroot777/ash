@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import type { Group, Session, Task } from "@harness/shared";
-import { Info, MagnifyingGlass } from "@phosphor-icons/react";
+import { FlowArrow, Info, MagnifyingGlass } from "@phosphor-icons/react";
 import { InspectorHost, type InspectorDescriptor } from "../inspector/index.ts";
 import { api } from "../lib/api.ts";
 import { useConversation } from "../lib/useConversation.ts";
@@ -23,6 +23,7 @@ import {
 } from "./taskDerivation.ts";
 import { TaskReviewInspector } from "./TaskReviewInspector.tsx";
 import { TaskReviewWorkspace } from "../review/TaskReviewWorkspace.tsx";
+import { WorkflowInspector } from "../workflow/WorkflowInspector.tsx";
 import { OriginTaskBar } from "../components/TaskOrigin.tsx";
 import { DerivedTaskLinks } from "../components/DerivedTaskLinks.tsx";
 
@@ -34,6 +35,7 @@ interface TaskInspectorContext {
   followUps: { text: string; attachments: string[]; at?: string }[];
   onOpenTask: (taskId: string) => void;
   onOpenReview: () => void;
+  onTaskUpdated: (task: Task) => void;
   onPatch: (patch: Partial<Task>) => Promise<void>;
   onQueueChanged: (updatedTask?: Task) => void;
   notify: (message: string) => void;
@@ -52,6 +54,18 @@ const TASK_INSPECTORS: readonly InspectorDescriptor<TaskInspectorContext>[] = [
     title: "审查",
     icon: <MagnifyingGlass size={14} />,
     render: (context) => <TaskReviewInspector {...context} />,
+  },
+  {
+    id: "workflow",
+    title: "工作流",
+    icon: <FlowArrow size={14} />,
+    render: (context) => (
+      <WorkflowInspector
+        task={context.task}
+        onTaskUpdated={context.onTaskUpdated}
+        notify={context.notify}
+      />
+    ),
   },
 ];
 
@@ -107,12 +121,19 @@ export function TaskDetail({
   const derivationAllowed = canDeriveTask(task);
   const reviewFocused = REVIEW_FOCUS_STAGES.has(task.stage ?? "")
     || allTasks.some((candidate) => candidate.reviewOf === task.id);
+  // 有编排的任务才默认把「工作流」页签开出来：老任务身上没有这条线，开出来只有一句
+  // 「这个任务没有编排」，白占一个页签。
+  const hasWorkflow = !!task.workflow;
   const inspectorPolicy = useMemo(() => ({
-    stateKey: `single:${task.status}:${reviewFocused ? "review" : "info"}`,
+    stateKey: `single:${task.status}:${reviewFocused ? "review" : "info"}:${hasWorkflow ? "wf" : "-"}`,
     requiredTabId: "info",
-    defaultOpenTabIds: reviewFocused ? ["info", "review"] : ["info"],
+    defaultOpenTabIds: [
+      "info",
+      ...(reviewFocused ? ["review"] : []),
+      ...(hasWorkflow ? ["workflow"] : []),
+    ],
     defaultActiveTabId: reviewFocused ? "review" : "info",
-  }), [reviewFocused, task.status]);
+  }), [hasWorkflow, reviewFocused, task.status]);
 
   useEffect(() => {
     let alive = true;
@@ -209,6 +230,7 @@ export function TaskDetail({
         followUps,
         onOpenTask,
         onOpenReview: () => changeReviewOpen(true),
+        onTaskUpdated: onTaskUpdate,
         onPatch: patch,
         onQueueChanged: (updatedTask) => {
           if (updatedTask) onTaskUpdate(updatedTask);

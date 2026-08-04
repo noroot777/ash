@@ -33,6 +33,7 @@ import { api } from "../lib/api.ts";
 import { AttachmentPicker, UploadAttachmentList, useAttachments } from "../task-detail/Attachments.tsx";
 import { attachmentView } from "../task-detail/utils.ts";
 import { ComposerFields } from "./ComposerFields.tsx";
+import { useComposerWorkflow } from "./ComposerWorkflow.tsx";
 import { ComposerLaunchControl, type LaunchMode } from "./ComposerLaunchControl.tsx";
 import { CreateGroupDialog } from "../overlays/CreateEntityDialog.tsx";
 import {
@@ -119,6 +120,12 @@ export function TaskComposerPanel({
   const [scheduleAt, setScheduleAt] = useState("");
   const [scheduleCron, setScheduleCron] = useState(DEFAULT_CRON);
   const [groupDialogOpen, setGroupDialogOpen] = useState(false);
+  const workflow = useComposerWorkflow({
+    project,
+    isRepo: project.health.isRepo,
+    notify,
+    onWorkspace: setUseWorktree,
+  });
   const uploads = useAttachments();
   const detection = useAgentAvailability();
   const { workerTypes, leadTypes, leadProfiles } = useMemo(
@@ -164,6 +171,7 @@ export function TaskComposerPanel({
     ]).then(([settings, refs]) => {
       if (!alive) return;
       setUseWorktree(project.health.isRepo && settings.worktreeDefault);
+      workflow.setGlobalDefaultId(settings.defaultWorkflowId ?? "");
       setBranches(refs.branches);
       setBase(refs.current ?? "");
     }).catch((error) => {
@@ -440,6 +448,13 @@ export function TaskComposerPanel({
           reasoningEffort: executors.single.effort || null,
           useWorktree: project.health.isRepo && useWorktree,
           worktreeBase: useWorktree && base ? base : null,
+          workflowId: workflow.workflowId,
+          // 送的是**快照**而不是引用：面板上看到的那条线,原样落进这个任务。
+          // workspace 以「任务选项」里的 worktree 开关为准 —— 那是同一件事的唯一开关,
+          // 起手式里带的那个只负责在挑中它的时候把开关拨过去(见 pickWorkflow)。
+          workflow: workflow.def
+            ? { ...workflow.def, workspace: project.health.isRepo && useWorktree ? "isolated" : "shared" }
+            : null,
         });
       }
     } catch (error) {
@@ -592,6 +607,7 @@ export function TaskComposerPanel({
             labels={labels}
             onLabelsChange={setLabels}
             onCreateGroup={() => setGroupDialogOpen(true)}
+            workflowSlot={mode === "single" && workflow.slot}
           />
         </div>
       </div>

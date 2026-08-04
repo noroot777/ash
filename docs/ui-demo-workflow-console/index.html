@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>工作流编排 · 调度台</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="grain" aria-hidden="true"></div>
+<div class="aura" aria-hidden="true"></div>
+
+<nav class="island">
+  <span class="brand">HARNESS</span>
+  <span class="divider"></span>
+  <span class="crumb">工作流编排</span>
+  <span class="divider"></span>
+  <div class="tpls" id="tpls"></div>
+</nav>
+
+<main>
+  <header class="hero">
+    <span class="eyebrow">关卡链 · 单个任务</span>
+    <h1>这个任务干完，<br>要过哪几关。</h1>
+    <p class="lede">
+      每一关是一个模块，挂在同一条轨道上。<span>插一关</span>、<span>删一关</span>、<span>换个顺序</span>、
+      <span>让失败绕回上游任意一关</span> —— 都在这条轨道上直接做。模板只是起手式。
+    </p>
+  </header>
+
+  <section class="meter" id="meter"></section>
+
+  <section class="rack" id="rack"></section>
+
+  <section class="console" id="console"></section>
+
+  <footer class="also">
+    同一份定义（<code>../ui-demo-workflow-kit/model.js</code>）的另外几副外观：
+    <a href="../ui-demo-workflow-line/index.html">暖纸底线路图</a> ·
+    <a href="../ui-demo-workflow-editors/index.html">句子 / 清单 / 规则表</a> ·
+    <a href="../ui-demo-workflow-studio/index.html">可拖拽工作台（带预演）</a> · <a href="../ui-demo-workflow-ride/index.html">线路图 · 能跑一趟</a> · <a href="../ui-demo-workflow-dial/index.html">一个旋钮</a> · <a href="../ui-demo-workflow-recap/index.html">照着刚跑完的那次改</a> · <a href="../ui-demo-workflow-inline/index.html">融进新建任务</a> · <a href="../ui-demo-workflow-live/index.html">跑起来之后长什么样</a>
+  </footer>
+</main>
+
+<div class="pop" id="pop" hidden></div>
+
+<script src="../ui-demo-workflow-kit/model.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

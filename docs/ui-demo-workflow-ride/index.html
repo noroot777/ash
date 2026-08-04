@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>工作流编排 · 线路图（能跑一趟）</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="grain" aria-hidden="true"></div>
+
+<main>
+  <header class="hero">
+    <span class="eyebrow">线路 · 单个任务</span>
+    <h1>一条线，<em>按一下就能看它怎么跑。</em></h1>
+    <p class="lede">
+      每一站是一道关口。<b>改哪儿点哪儿</b>——点参数就地换、点段中间加一站、点失败标签改去向，
+      全程不用选中、不用去别处的面板找。摆完<b>先跑一趟</b>：车沿线走一遍，
+      每停一站就显示那一刻任务在列表里是什么状态，失败了就顺着支线倒回去重来。
+    </p>
+  </header>
+
+  <section class="scopebar">
+    <div class="scopes" id="scopes"></div>
+    <div class="inh" id="inh"></div>
+  </section>
+
+  <section class="board">
+    <div class="board-in">
+      <div class="hd">
+        <span class="ttl">线路图</span>
+        <div class="tpls" id="tpls"></div>
+        <div class="ws" id="ws"></div>
+      </div>
+
+      <div class="hd2">
+        <button class="go" data-ride="ok"><i>▶</i>顺着跑一趟</button>
+        <button class="go alt" data-ride="bad"><i>▶</i>按不顺利的情况跑</button>
+        <button class="go stop" data-ride="stop" hidden><i>■</i>停</button>
+        <span class="worst" id="worst"></span>
+      </div>
+
+      <div class="scroll"><div class="rail" id="rail"></div></div>
+
+      <div class="log" id="log" hidden></div>
+    </div>
+  </section>
+
+  <section class="check" id="check"></section>
+
+  <section class="notes">
+    <div class="note">
+      <b>改哪儿点哪儿</b>
+      <p>参数就写在站台底下，点一下弹出的只有<b>这一个字段</b>的几个选项，点完即关。
+        没有「先选中、再去右边面板、再找到那一行」这三步——一条几站的线，绝大多数改动是一次点击。</p>
+    </div>
+    <div class="note">
+      <b>状态不是跑起来才知道</b>
+      <p>每一站底下常驻一行「任务显示：<b>需你处理</b>」，这就是这条流程走到那一步时，
+        任务列表里那一格写的字。按<b>跑一趟</b>能看它按时间依次亮起来，失败时车会沿虚线支线倒回上游。</p>
+    </div>
+    <div class="note">
+      <b>系统 / 项目 / 任务三层</b>
+      <p>上面那排是作用域。项目和任务默认<b>继承</b>上一层，只有你真动了才分出自己的一份，
+        随时能<b>恢复继承</b>。同一份定义的其它外观：<a href="../ui-demo-workflow-line/index.html">纯线路图</a>、
+        <a href="../ui-demo-workflow-console/index.html">深色调度台</a>、
+        <a href="../ui-demo-workflow-editors/index.html">句子 / 清单 / 规则表</a>、
+        <a href="../ui-demo-workflow-dial/index.html">一个旋钮</a>、<a href="../ui-demo-workflow-recap/index.html">照着刚跑完的那次改</a>。<br>塞进真实面板后长什么样：<a href="../ui-demo-workflow-inline/index.html">融进新建任务</a> · <a href="../ui-demo-workflow-live/index.html">跑起来之后长什么样</a> · <a href="../ui-demo-workflow-tpl/index.html">起手式库（增删改查，系统自带的也能改）</a>。</p>
+    </div>
+  </section>
+</main>
+
+<div class="pop" id="pop" hidden></div>
+
+<script src="../ui-demo-workflow-kit/model.js"></script>
+<script src="../ui-demo-workflow-kit/sim.js"></script>
+<script src="scope.js"></script>
+<script src="map.js"></script>
+<script src="ride.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>工作流编排 · 起手式是你的，随便增删改</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div class="stage">
+  <p class="cap"><b>「起手式」不是系统写死的五个格子，是一个你自己维护的库。</b>
+    新建、复制、改名、删除都在这儿；<b>系统自带的那几个也照样能改</b>——改完它就带上「已改过」，
+    旁边永远留着一个「恢复系统默认」，所以改坏了不心疼。系统自带的删不掉，但可以<b>停用</b>：
+    从新建任务的菜单里消失，需要时再恢复。</p>
+
+  <!-- ══ 设置 › 工作流 › 起手式 ═══════════════════════════════ -->
+  <div class="wrap">
+    <div class="snav">
+      <div class="sg">设置</div>
+      <button>项目</button>
+      <button>执行器</button>
+      <button class="on">工作流</button>
+      <button>通知</button>
+      <button>外观</button>
+    </div>
+
+    <div class="body">
+      <!-- 左：起手式库 -->
+      <div class="lib">
+        <div class="libhd">
+          <b>起手式</b>
+          <span id="libn"></span>
+        </div>
+        <div class="liblist" id="liblist"></div>
+        <div class="libft">
+          <button class="new" id="new">＋ 新建起手式</button>
+        </div>
+      </div>
+
+      <!-- 右：选中那个的本体 -->
+      <div class="edit" id="edit"></div>
+    </div>
+  </div>
+
+  <!-- ══ 说明 ═══════════════════════════════════════════════ -->
+  <div class="notes">
+    <div class="note">
+      <b>系统自带的怎么改：覆写 + 永远能恢复</b>
+      <p>改系统自带的那几个，<b>不会偷偷给你复制出一份副本</b>——你改的就是它本身，名字还叫「标准交付」，
+        所有从它起手的新任务立刻用新的。代价只有一个标记：<b>「已改过」</b>，
+        以及一个随时可以按的<b>「恢复系统默认」</b>。删除对系统自带的降级成<b>停用</b>，
+        因为「删掉之后再也拿不回来」对一个内置物件来说是假承诺。</p>
+    </div>
+    <div class="note">
+      <b>改起手式，不会追着改已有任务</b>
+      <p>任务在创建那一刻就<b>把线拷了一份进自己兜里</b>，之后它跟起手式再无瓜葛。
+        所以你随便改起手式，正在跑的 12 个任务不会被你改成另一副样子——
+        这也是为什么它叫「起手式」而不是「模板引用」。
+        右下角那句「<b>14 个任务从它起手</b>」是历史统计，不是绑定关系。</p>
+    </div>
+    <div class="note">
+      <b>三个来源，都能变成一个起手式</b>
+      <p>新建时给三条路：<b>空白</b>从一站开始搭；<b>复制一份</b>拿现成的改；
+        最顺手的是第三条——<b>从某个任务当下的线存过来</b>：
+        你在<a href="../ui-demo-workflow-inline/index.html">新建任务</a>里为了这一次改出来的那条线，
+        改完发现好用，一键存成起手式，下次直接挑。</p>
+    </div>
+  </div>
+
+  <p class="also">同一份定义的其它表面：<a href="../ui-demo-workflow-ride/index.html">线路图 · 能跑一趟（编排）</a> ·
+    <a href="../ui-demo-workflow-inline/index.html">融进新建任务</a> ·
+    <a href="../ui-demo-workflow-live/index.html">执行态 · Inspector 竖版</a></p>
+</div>
+
+<div class="pop" id="pop" hidden></div>
+
+<script src="../ui-demo-workflow-kit/model.js"></script>
+<script src="../ui-demo-workflow-kit/sim.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

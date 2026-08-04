@@ -1,13 +1,13 @@
 // SSE / 执行器事件协议(§7 gates、§12 streaming)。
 //
-// 从 index.ts 拆出来的**纯类型**文件:index 只做 `export type { … } from "./events.js"`
+// 从 index.ts 拆出来的**纯类型**文件:index 只做 `export type { … } from "./events.ts"`
 // 再导出,消费者继续 `import type { AgentEvent } from "@harness/shared"`,零改动。
 // 之所以只能搬类型:服务端直接跑 shared 的 .ts 源码,Node 的类型擦除不会把
 // "./x.js" 说明符映射回 "./x.ts",index 里**转发运行时值**会让进程起不来
 // (见 server/CLAUDE.md「执行器与模型」最后一条)。`import type` / `export type`
 // 编译期就被抹掉,所以安全 —— 下面对 ./index.js 的反向 type import 同理。
-import type { AgentType, DebateConsensusBy, QuestionItem, Task, TaskStage, TaskStatus } from "./index.js";
-import type { SessionRole } from "./session.js";
+import type { AgentType, DebateConsensusBy, QuestionItem, Task, TaskStage, TaskStatus } from "./index.ts";
+import type { SessionRole } from "./session.ts";
 
 // ── HITL gates (§7) ──────────────────────────────────────────────────────────
 export type GateName = "G1" | "G2"; // G2 is legacy, retained for historical events

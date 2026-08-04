@@ -19,6 +19,7 @@
 @import "./composer-presets.css";
 @import "./schedule.css";
 @import "./reply.css";
+@import "./workflow.css";
 @import "./parity.css";
 
 @theme {
