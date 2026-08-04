@@ -2,7 +2,7 @@ import type { AgentExecutorProfile, AgentType } from "@harness/shared";
 import type { ModelGroup } from "../lib/modelCatalog.ts";
 
 /**
- * 对话框 @ 选择器的纯逻辑：智能体 / 供应商 / 模型各阶段的候选行怎么算、箭头
+ * 对话框 @ 选择器的纯逻辑：智能体 / 模型 / 强度各阶段的候选行怎么算、箭头
  * 怎么走。组件只管画，键盘只管调这里的函数——所以 textarea 驱动的第一阶段
  * 和浮层里后面几步能共用同一套上下键语义。
  */
@@ -21,20 +21,16 @@ export type AgentRow = {
   detail: string;
 };
 
-export type ProviderRow = {
-  key: string;
-  groupKey: string;
-  label: string;
-  detail: string;
-};
-
 export type ModelRow = {
   key: string;
+  groupKey: string;
   executorId: string | null;
   model: string;
   label: string;
   detail: string;
 };
+
+export type ModelSection = { group: ModelGroup; rows: ModelRow[] };
 
 export function agentRows(
   types: AgentType[],
@@ -58,43 +54,40 @@ export function agentRows(
 }
 
 /**
- * 第二步单列供应商：这一回合先决定账号/目录来源，再在下一步挑这家下面的模型。
- */
-export function providerRows(groups: ModelGroup[], query: string): ProviderRow[] {
-  const keyword = query.trim().toLowerCase();
-  return groups
-    .filter((group) => {
-      if (!keyword) return true;
-      return group.providerName.toLowerCase().includes(keyword)
-        || group.executorName?.toLowerCase().includes(keyword)
-        || group.note.toLowerCase().includes(keyword);
-    })
-    .map((group) => ({
-      key: group.key,
-      groupKey: group.key,
-      label: group.providerName,
-      detail: [group.executorName, group.note].filter(Boolean).join(" · "),
-    }));
-}
-
-/**
- * 第三步只看选中的那一家供应商，避免「先看见模型、再意识到它其实属于别家」。
+ * 模型候选按供应商分块，块标题是供应商名、块里只列模型本身——供应商和模型是
+ * **同一步**里的两件事：看着「哪家的」直接点「哪一个」，不必先选一次供应商再进
+ * 下一屏（多一屏并没有多给出信息，同名模型靠块标题就分得清）。
  *
  * 这里**不**再补「跟随执行器」那一行：它跟下面的模型是两种东西（一个是「不选」，
- * 一个是「选哪个」），混排在同一列表里会把真正要挑的模型往下挤。
+ * 一个是「选哪个」），混排在同一列表里每块都顶着一条噪声，用户要挑的模型反而被
+ * 挤下去。不挑模型的人本来就不会打开这个选择器。
  */
-export function modelRows(group: ModelGroup | null, query: string): ModelRow[] {
-  if (!group) return [];
+export function modelSections(groups: ModelGroup[], query: string): ModelSection[] {
   const keyword = query.trim().toLowerCase();
-  return group.models
-    .filter((model) => !keyword || model.toLowerCase().includes(keyword))
-    .map((model) => ({
-      key: `${group.key}:${model}`,
-      executorId: group.executorId,
-      model,
-      label: model,
-      detail: model === group.profileModel ? "执行器默认" : "",
-    }));
+  const sections: ModelSection[] = [];
+  for (const group of groups) {
+    const rows: ModelRow[] = [];
+    for (const model of group.models) {
+      if (keyword && !model.toLowerCase().includes(keyword)) continue;
+      rows.push({
+        key: `${group.key}:${model}`,
+        groupKey: group.key,
+        executorId: group.executorId,
+        model,
+        label: model,
+        detail: model === group.profileModel ? "执行器默认" : "",
+      });
+    }
+    // 有筛选词时空块直接不画；没筛选词时保留，好让「正在读取 / 读取失败」看得见。
+    if (!rows.length && keyword) continue;
+    sections.push({ group, rows });
+  }
+  return sections;
+}
+
+/** 上下键走的是拉平后的行序，块标题不占位置。 */
+export function flattenModelRows(sections: ModelSection[]): ModelRow[] {
+  return sections.flatMap((section) => section.rows);
 }
 
 /** 上下键：空列表返回 0，其余循环。 */

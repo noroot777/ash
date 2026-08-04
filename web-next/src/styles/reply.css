@@ -32,7 +32,7 @@
 .task-reply-chip-reset { display: grid; width: 19px; height: 19px; place-items: center; border: 0; border-radius: 50%; background: transparent; color: var(--faint); }
 .task-reply-chip-reset:hover { background: var(--raised); color: var(--ink); }
 
-/* 四步选择器：智能体 → 供应商 → 模型 → 思考强度。 */
+/* 三步选择器：智能体 → 模型（按供应商分块）→ 思考强度。 */
 .agent-model-picker {
   position: absolute;
   z-index: 27;
@@ -96,7 +96,7 @@
 .agent-model-picker-rows button > b { min-width: 0; overflow: hidden; color: var(--ink); font-family: var(--font-mono); font-size: 11px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
 .agent-model-picker-rows button > span { min-width: 0; flex: 1; overflow: hidden; color: var(--faint); font-size: 9.5px; text-align: right; text-overflow: ellipsis; white-space: nowrap; }
 .agent-model-picker-rows button > svg { flex: 0 0 auto; color: var(--faint); }
-/* 第四步（思考强度）的面包屑里回显上一步选定的模型。 */
+/* 第三步（思考强度）的面包屑里回显上一步选定的模型。 */
 .agent-model-picker-crumb > code { font-family: var(--font-mono); font-size: 9.5px; }
 .agent-model-picker > footer { border-top: 0.5px solid var(--line); padding: 5px 9px 6px; color: var(--faint); font-size: 9px; }
 .team-reply-shell { position: relative; }

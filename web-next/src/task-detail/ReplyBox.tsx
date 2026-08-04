@@ -53,7 +53,7 @@ export function ReplyBox({
   const [mentionDismissed, setMentionDismissed] = useState(false);
   const [target, setTarget] = useState<MentionTarget | null>(null);
   // 「@ 先选智能体」和「点胶囊从头改」共用同一个浮层，只是进入的阶段不同。
-  const [picker, setPicker] = useState<{ stage: "agent" | "provider"; agent: AgentType } | null>(null);
+  const [picker, setPicker] = useState<{ stage: "agent" | "model"; agent: AgentType } | null>(null);
   const [scheduleOpen, setScheduleOpen] = useState(false);
   const [sendAt, setSendAt] = useState("");
   const scheduleTriggerRef = useRef<HTMLButtonElement>(null);
@@ -164,12 +164,12 @@ export function ReplyBox({
     command?.onCancel?.();
   };
 
-  // 第一步选中智能体：把 @xxx 从正文里摘掉（它是指令不是内容），紧接着弹第二步选供应商。
+  // 第一步选中智能体：把 @xxx 从正文里摘掉（它是指令不是内容），紧接着弹第二步选模型。
   const pickMention = (agent: AgentType) => {
     setValue((current) => current.replace(/@[a-z0-9_-]*$/i, ""));
     setMentionIndex(0);
     setMentionDismissed(false);
-    setPicker({ stage: "provider", agent });
+    setPicker({ stage: "model", agent });
   };
 
   const commitTarget = (next: MentionTarget) => {
@@ -243,7 +243,7 @@ export function ReplyBox({
       )}
       {mentionOpen && !menuOpen && (
         <div className="task-reply-mention-menu" role="listbox" aria-label="召唤智能体">
-          <small>召唤智能体加入 · ↑↓ 选择，回车后继续选供应商</small>
+          <small>召唤智能体加入 · ↑↓ 选择，回车后继续选模型</small>
           {!profilesReady && <p>正在读取已注册智能体…</p>}
           {profilesFailed && <p>执行器列表读取失败，暂不提供候选</p>}
           {profilesReady && !profilesFailed && mentionCandidates.length === 0 && <p>没有匹配的已注册智能体</p>}
