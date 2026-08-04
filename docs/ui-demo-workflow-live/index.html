@@ -3,15 +3,16 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>工作流编排 · 跑起来之后长什么样</title>
+<title>工作流编排 · 跑起来之后长什么样（Inspector 竖版）</title>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
 
 <div class="stage">
-  <p class="cap"><b>编排时画的那条线，执行时原样亮起来。</b>
-    不另外发明一套「运行视图」——同一条横线，同一批站名，只是把「计划」换成「实况」。
-    列表里它压成一根 60px 的进度条，详情页里它就是编排那张图的只读态。</p>
+  <p class="cap"><b>编排时画的那条线，执行时原样亮起来——只是转了 90°，住进右边的 Inspector。</b>
+    详情页正中间是会话，本来就没地方横着摆一条线；Inspector 是个 340px 的窄条，
+    <b>竖着排反而比横着装得下更多</b>：每一站底下能写全「用了什么参数、跑了多久、为什么没过」，
+    当前那个人工关口的「通过 / 打回」两个按钮也能直接长在站台底下。</p>
 
   <!-- ══ 控制条（只是 demo 的遥控器，产品里没有这一行） ══════════ -->
   <div class="ctl">
@@ -22,42 +23,76 @@
     <label class="sw"><input type="checkbox" id="hard"><i></i><span>让「自动验证」头一次不过</span></label>
   </div>
 
-  <!-- ══ 表面一：任务列表 ═══════════════════════════════════════ -->
-  <h3 class="sec">① 任务列表里 —— 不画图，只留一根进度条</h3>
-  <div class="list" id="list"></div>
+  <!-- ══ 表面一：任务详情 + Inspector ═══════════════════════════ -->
+  <h3 class="sec">① 任务详情页 —— 线在右边的 Inspector 里，竖着走</h3>
+  <div class="win">
 
-  <!-- ══ 表面二：任务详情 ═══════════════════════════════════════ -->
-  <h3 class="sec">② 任务详情页顶部 —— 就是编排那张线路图，只读</h3>
-  <div class="detail">
-    <div class="dhd">
-      <span class="badge" id="badge"></span>
-      <b>给设置页加「工作流」入口</b>
-      <span class="path">harness · harness/Sh2BRa8dmONn</span>
-      <span class="sp"></span>
-      <span class="from" id="from"></span>
+    <!-- 左边：真实的任务详情主体（示意，浅浅带一下） -->
+    <div class="main">
+      <div class="mhd">
+        <span class="badge" id="badge"></span>
+        <b>给设置页加「工作流」入口</b>
+        <span class="path">harness · harness/Sh2BRa8dmONn</span>
+        <span class="sp"></span>
+        <span class="mico">⌄</span>
+      </div>
+      <div class="mbody" id="mbody"></div>
+      <div class="mft"><span>回复 codex@cpa…</span><i>⏎</i></div>
     </div>
-    <div class="rail" id="rail"></div>
-    <div class="tl" id="tl"></div>
+
+    <!-- 右边：Inspector（tab bar 与内容区照抄 web-next 的规格） -->
+    <div class="insp">
+      <div class="itabs">
+        <button class="itab"><i>ⓘ</i><span>信息</span></button>
+        <button class="itab"><i>⌕</i><span>审查</span></button>
+        <button class="itab is-active"><i>⇥</i><span>工作流</span></button>
+        <span class="iadd">＋</span>
+      </div>
+
+      <div class="ic">
+        <section class="isec ihead">
+          <h2>这条线</h2>
+          <div class="iline" id="ifrom"></div>
+          <button class="iact" id="iedit">在编排里打开这条线 →</button>
+        </section>
+
+        <section class="isec">
+          <h2 id="ivtitle">走到哪了</h2>
+          <ol class="vrail" id="rail"></ol>
+        </section>
+
+        <section class="isec">
+          <h2>实况</h2>
+          <div class="tl" id="tl"></div>
+        </section>
+      </div>
+    </div>
   </div>
+
+  <!-- ══ 表面二：任务列表 ═══════════════════════════════════════ -->
+  <h3 class="sec">② 任务列表里 —— 不画图，只留一根进度条</h3>
+  <div class="list" id="list"></div>
 
   <!-- ══ 说明 ═══════════════════════════════════════════════════ -->
   <div class="notes">
     <div class="note">
-      <b>为什么不给执行另做一套图</b>
-      <p>你编排的时候盯着这五个站看了半天，跑起来再换成甘特图 / 节点图，等于让你把同一件事学两遍。
-        这里<b>连坐标都不变</b>：第 3 站在编排里排第三，跑起来还在第三个位置亮。
-        出问题时你一眼知道卡在哪个自己配过的关口上。</p>
+      <b>为什么放 Inspector，而不是顶在详情页头上</b>
+      <p>详情页的正中间是<b>会话</b>——你大部分时间在那儿看输出、发指令，任何横条压在它头上都是在抢地方，
+        而且滚两屏就看不见了。Inspector 是常驻右栏，<b>整条线一直在眼角</b>，
+        又不占会话一行。它本来就是「关于这个任务的边栏信息」该待的地方，和「信息」「审查」两个页签并排。</p>
     </div>
     <div class="note">
-      <b>回拐的那一轮是画出来的</b>
-      <p>「验证没过 → 回第 1 站重做」这条支线，在编排图里是一条琥珀色的弧，
-        执行时<b>同一条弧亮起来</b>，并标上「第 2 轮 / 上限 2 轮」。
-        重来第几次、还剩几次，不用翻日志。</p>
+      <b>竖过来不是妥协，是升级</b>
+      <p>横着排，每一站头顶上只塞得下两三个字；竖过来<b>每一站有一整行的宽度</b>：
+        参数摘要（<code>gpt-5.6-sol · xhigh</code>）、这一关跑了多久、没过的话为什么没过，全能写全。
+        最要紧的是——轮到人工关口时，<b>「通过 / 打回」直接长在那一站底下</b>，
+        不用再翻到别处找按钮。往回拐的那一轮画成左侧一道琥珀色的括号，圈住要重来的几站。</p>
     </div>
     <div class="note">
       <b>列表里必须退化成一根条</b>
       <p>列表一屏几十行，每行塞张图必死。所以那里只保留<b>五个色段 + 一个状态词</b>——
-        色段数 = 站数，亮到第几段就是走到第几站。鼠标停上去才浮出站名。
+        色段数 = 站数，亮到第几段就是走到第几站，
+        <b>和 Inspector 里显示的是同一个词</b>（「需你处理」就是「需你处理」）。
         <a href="../ui-demo-workflow-inline/index.html">新建任务里的收起态</a>用的是同一套退化规则。</p>
     </div>
   </div>

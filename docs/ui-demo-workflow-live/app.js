@@ -1,6 +1,7 @@
 /* 执行态回放 —— 输入还是那份编排（../ui-demo-workflow-kit/model.js），
    推演还是那台预演引擎（sim.js）。这里只做一件事：把 sim 吐出的事件序列
-   摊回到编排图的同一批坐标上，让「计划」和「实况」共用一张图。 */
+   摊回到编排图的同一批站上，让「计划」和「实况」共用一条线。
+   区别只在方向：详情页中间是会话，线住进右边 340px 的 Inspector，所以竖着走。 */
 (function () {
   "use strict";
 
@@ -8,7 +9,8 @@
   var el = {
     rail: document.getElementById("rail"), tl: document.getElementById("tl"),
     list: document.getElementById("list"), badge: document.getElementById("badge"),
-    from: document.getElementById("from"), clock: document.getElementById("clock"),
+    ifrom: document.getElementById("ifrom"), vtitle: document.getElementById("ivtitle"),
+    mbody: document.getElementById("mbody"), clock: document.getElementById("clock"),
     scrub: document.getElementById("scrub"), play: document.getElementById("play"),
     rew: document.getElementById("rew"), hard: document.getElementById("hard"),
   };
@@ -16,6 +18,7 @@
   WF.loadTemplate("frontend");
   var steps = S.steps;
   var ev = [], end = null, t = 0, timer = null;
+  var manual = {};          // 你在人工关口上按下的那一下（通过 / 打回）
 
   // 每一关大概占多久（秒）—— 只为让时间轴上的钟走得像回事
   var SEC = { run: 214, verify: 96, preview: 11, human: 320, command: 37, accept: 4 };
@@ -25,6 +28,7 @@
     if (el.hard.checked) {
       steps.forEach(function (s) { if (s.kind === "verify") assume[s.id] = "once"; });
     }
+    Object.keys(manual).forEach(function (id) { assume[id] = manual[id]; });
     var r = WFSIM.run(steps, assume);
     ev = r.events; end = r.end;
     el.scrub.max = String(ev.length);
@@ -35,7 +39,7 @@
   // 每条事件发生的时刻，从 14:02:00 起累加
   function stamp() {
     var sec = 0;
-    ev.forEach(function (e, i) {
+    ev.forEach(function (e) {
       e.at = sec;
       sec += e.jump != null ? 2 : e.fail ? 1 : (SEC[e.kind] || 20);
     });
@@ -45,6 +49,10 @@
     var s = 14 * 3600 + 2 * 60 + sec;
     function p(n) { return (n < 10 ? "0" : "") + n; }
     return p(Math.floor(s / 3600) % 24) + ":" + p(Math.floor(s / 60) % 60) + ":" + p(s % 60);
+  }
+  function dur(sec) {
+    if (sec >= 60) return Math.floor(sec / 60) + " 分 " + (sec % 60) + " 秒";
+    return sec + " 秒";
   }
 
   // ── 把事件前缀折算成「每一站现在是什么样」 ─────────────────────────
@@ -59,8 +67,8 @@
         arcs.push({ from: e.idx, to: e.jump, round: e.round, max: steps[e.idx].fail.max });
         continue;
       }
-      if (e.fail) { map[e.id] = { s: "bad", round: e.round }; continue; }
-      map[e.id] = { s: "done", round: e.round };
+      if (e.fail) { map[e.id] = { s: "bad", round: e.round, ei: i }; continue; }
+      map[e.id] = { s: "done", round: e.round, ei: i };
     }
     var last = ev[upto] || null;
     if (t < ev.length && last && last.jump == null && !last.fail) {
@@ -71,29 +79,61 @@
     return { map: map, arcs: arcs, last: last, over: t >= ev.length };
   }
 
-  // ── 详情页的线路图 ─────────────────────────────────────────────────
-  var SLOT = { done: "", bad: "没过", wait: "等你点头", pending: "" };
+  // ── Inspector 里的竖版线路 ─────────────────────────────────────────
+  function slotOf(s, st) {
+    if (st.s === "now") return WFSIM.STATUS[s.kind].text;
+    if (st.s === "wait") return "等你点头";
+    if (st.s === "bad") return "没过";
+    if (st.s === "done") {
+      var e = ev[st.ei], next = ev[st.ei + 1];
+      var used = next ? next.at - e.at : (SEC[s.kind] || 20);
+      return (st.round > 1 ? "第 " + st.round + " 轮 · " : "") + dur(used);
+    }
+    return "";
+  }
+
   function railHtml(f) {
-    var h = [];
+    var h = [], loopAt = {};
+    f.arcs.forEach(function (a) { loopAt[a.to] = a; });
+
     steps.forEach(function (s, i) {
       var st = f.map[s.id], k = K[s.kind];
-      var lit = i > 0 && f.map[steps[i - 1].id].s === "done";
-      var slot = st.s === "now" ? WFSIM.STATUS[s.kind].text : SLOT[st.s];
-      if (st.s === "done" && st.round > 1) slot = "第 " + st.round + " 轮 ✓";
-      h.push('<div class="col" data-s="' + st.s + '" data-lit="' + lit + '">' +
-        '<div class="node"><b>' + (st.s === "done" ? "✓" : i + 1) + "</b></div>" +
-        '<div class="nm">' + esc(k.title(s.p)) + "</div>" +
-        '<div class="sl">' + esc(slot) + "</div></div>");
+      var body = ['<div class="vn"><b>' + esc(k.title(s.p)) + "</b>" +
+        '<span class="st">' + esc(slotOf(s, st)) + "</span></div>",
+        '<div class="vp">' + esc(k.summary(s.p)) + "</div>"];
+
+      // 竖过来最实在的好处：轮到你了，按钮就长在这一站底下
+      if (st.s === "wait") {
+        body.push('<div class="vact"><button class="pass" data-act="pass">通过，继续</button>' +
+          '<button class="rej" data-act="rej">打回重做</button></div>');
+        body.push('<div class="vhint">任务已落「需你处理」并推过通知；' +
+          "在这儿按，和在列表上按是同一件事。</div>");
+      }
+      if (st.s === "bad") {
+        body.push('<div class="vhint">' + esc(ev[st.ei].note) + "</div>");
+      }
+      var a = loopAt[i];
+      if (a && st.s !== "pending") {
+        body.push('<div class="looptag">↺ <b>第 ' + (a.round + 1) + " 轮</b>（上限 " + a.max +
+          "）· 上一轮在「" + esc(K[steps[a.from].kind].title(steps[a.from].p)) + "」没过</div>");
+      }
+
+      h.push('<li class="vst" data-s="' + st.s + '" data-lit="' + (st.s === "done") + '">' +
+        '<span class="pin"><b>' + (st.s === "done" ? "✓" : st.s === "bad" ? "!" : i + 1) + "</b></span>" +
+        '<div class="vb">' + body.join("") + "</div></li>");
     });
-    f.arcs.forEach(function (a) {
-      // 左右各内缩半列，让弧的两端正好落在节点圆心上
-      var inset = 50 / (a.from - a.to + 1);
-      h.push('<div class="arc" style="grid-column:' + (a.to + 1) + "/" + (a.from + 2) +
-        ";margin-left:" + inset + "%;margin-right:" + inset + '%">' +
-        "<span>没过 → 回第 " + (a.to + 1) + " 站 · 第 " + (a.round + 1) + " 轮 / 上限 " + a.max + "</span></div>");
-    });
-    el.rail.style.gridTemplateColumns = "repeat(" + steps.length + ",1fr)";
     el.rail.innerHTML = h.join("");
+
+    // 回拐的括号：量出两个站点圆心的位置再画，天生和站台对齐
+    var lis = el.rail.children;
+    f.arcs.forEach(function (a) {
+      var top = lis[a.to].offsetTop + 8, bot = lis[a.from].offsetTop + 8;
+      var d = document.createElement("div");
+      d.className = "loopbar";
+      d.style.top = top + "px";
+      d.style.height = Math.max(bot - top, 10) + "px";
+      el.rail.appendChild(d);
+    });
   }
 
   function tlHtml(f) {
@@ -102,16 +142,43 @@
       var e = ev[i];
       h.push('<div class="ev" data-tone="' + e.tone + '" data-cur="' + (i === upto && !f.over) + '">' +
         '<span class="t">' + hhmm(e.at).slice(0, 5) + '</span><span class="d"></span>' +
-        "<span><b>" + esc(e.label) + "</b> · " + esc(e.status) +
-        (e.round > 1 && e.jump == null ? " · 第 " + e.round + " 轮" : "") +
-        '<br><span class="n">' + esc(e.note) + "</span></span></div>");
+        '<span class="x"><b>' + esc(e.label) + "</b> · " + esc(e.status) + "</span></div>");
     }
     if (f.over) {
       h.push('<div class="ev end" data-tone="' + end.tone + '"><span class="t">' +
-        hhmm(ev.tot).slice(0, 5) + '</span><span class="d"></span><span><b>' + esc(end.text) + "</b></span></div>");
+        hhmm(ev.tot).slice(0, 5) + '</span><span class="d"></span><span class="x"><b>' +
+        esc(end.text) + "</b></span></div>");
     }
     el.tl.innerHTML = h.join("");
     el.tl.scrollTop = el.tl.scrollHeight;
+  }
+
+  // ── 左边会话区：只做示意，让人看清「线在边上、会话在中间」 ─────────
+  function mainHtml(f) {
+    var h = ['<div class="msg" data-me="true"><span class="mt">14:02</span>' +
+      "把设置页的「工作流」入口做出来：进去能看到本项目当前这条线，能改，能存成项目默认。</div>"];
+    var got = function (kind, st) {
+      return steps.some(function (s) { return s.kind === kind && f.map[s.id].s === st; });
+    };
+    if (got("run", "done") || got("verify", "done") || got("verify", "bad")) {
+      h.push('<div class="msg"><span class="mt">codex@cpa · 14:05</span>' +
+        "改完了，新增 <b>SettingsWorkflow.tsx</b>，接上 <b>useWorkflowDraft</b>。" +
+        "<pre>web-next/src/settings/SettingsWorkflow.tsx  +214\nweb-next/src/lib/workflow.ts               +86</pre></div>");
+    }
+    if (got("verify", "bad")) {
+      h.push('<div class="msg"><span class="mt">codex@review · 14:09</span>' +
+        "typecheck 没过：<b>workflow.ts:42</b> 少一个 <b>fail</b> 字段。已按这一关配的规矩打回第 1 站。</div>");
+    }
+    if (got("preview", "done")) {
+      h.push('<div class="msg"><span class="mt">系统 · 14:12</span>' +
+        "预览已起：<b>http://127.0.0.1:14003</b>（下一个人工关口结束时回收）</div>");
+    }
+    if (got("human", "wait")) {
+      h.push('<div class="msg"><span class="mt">系统 · 14:12</span>' +
+        "停在人工关口，等你点头。右边那一站底下就是「通过 / 打回」。</div>");
+    }
+    el.mbody.innerHTML = h.join("");
+    el.mbody.scrollTop = el.mbody.scrollHeight;
   }
 
   // ── 任务列表：同一条线退化成一根条 ────────────────────────────────
@@ -139,8 +206,7 @@
   function listHtml(f) {
     var live = steps.map(function (s) { return f.map[s.id].s; });
     var w = stateOf(f);
-    var h = ['<div class="row" data-live="true" title="' +
-      esc(steps.map(function (s) { return K[s.kind].title(s.p); }).join(" → ")) + '">' +
+    var h = ['<div class="row" data-live="true">' +
       '<span class="tt">给设置页加「工作流」入口</span>' +
       '<span class="who">codex@cpa</span>' + bar(live) +
       '<span class="stt" data-tone="' + w.tone + '">' + esc(w.text) + "</span></div>"];
@@ -157,11 +223,13 @@
 
   function render() {
     var f = frame();
-    railHtml(f); tlHtml(f); listHtml(f);
+    railHtml(f); tlHtml(f); listHtml(f); mainHtml(f);
     var w = stateOf(f);
     el.badge.setAttribute("data-tone", w.tone);
     el.badge.textContent = w.text;
-    el.from.textContent = "这条线 · 前端真实验收（跟随本项目）";
+    var doneN = steps.filter(function (s) { return f.map[s.id].s === "done"; }).length;
+    el.vtitle.textContent = "走到哪了 · " + doneN + "/" + steps.length;
+    el.ifrom.innerHTML = "前端真实验收 <em>· 跟随本项目 harness</em>";
     el.clock.textContent = hhmm(f.over ? ev.tot : (f.last ? f.last.at : 0));
     el.scrub.value = String(t);
     el.play.textContent = timer ? "❚❚ 停" : t >= ev.length ? "↻ 再放一遍" : "▶ 放一遍";
@@ -176,10 +244,26 @@
     timer = setInterval(tick, 950);
     tick();
   });
-  el.rew.addEventListener("click", function () { t = 0; stop(); });
+  el.rew.addEventListener("click", function () { t = 0; manual = {}; build(); stop(); });
   el.scrub.addEventListener("input", function () { t = Number(el.scrub.value); stop(); });
-  el.hard.addEventListener("change", function () { t = 0; build(); stop(); });
+  el.hard.addEventListener("change", function () { t = 0; manual = {}; build(); stop(); });
 
+  // 站台底下那两个按钮是真的：按下去等于给这一关一个结论，后面的推演随之改写
+  el.rail.addEventListener("click", function (e) {
+    var b = e.target.closest("[data-act]");
+    if (!b) return;
+    var f = frame(), l = f.last;
+    if (!l || f.map[l.id].s !== "wait") return;
+    if (b.dataset.act === "rej") manual[l.id] = "once"; else delete manual[l.id];
+    build();
+    t++;
+    stop();
+  });
+
+  // 想把 demo 定格在某一刻（截图、发给别人看）：地址栏加 #t=7，加 #hard 顺带打开那个开关
+  if (/(?:^|#|&)hard\b/.test(location.hash)) el.hard.checked = true;
   build();
+  var at = /(?:^|#|&)t=(\d+)/.exec(location.hash);
+  if (at) t = Math.min(Number(at[1]), ev.length);
   render();
 })();
