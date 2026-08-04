@@ -30,6 +30,7 @@
     "test:claude-stream": "tsx scripts/test-claude-stream-errors.ts",
     "test:codex-resident": "tsx scripts/test-codex-resident.ts",
     "test:session-trace": "tsx scripts/test-session-trace.ts",
+    "test:workflow": "tsx scripts/test-workflow-def.ts",
     "test:openai-converter": "tsx scripts/test-openai-converter.ts"
   },
   "dependencies": {

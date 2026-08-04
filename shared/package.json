@@ -22,6 +22,14 @@
       "types": "./src/executor-overrides.ts",
       "default": "./src/executor-overrides.ts"
     },
+    "./workflow": {
+      "types": "./src/workflow.ts",
+      "default": "./src/workflow.ts"
+    },
+    "./workflow-presets": {
+      "types": "./src/workflow-presets.ts",
+      "default": "./src/workflow-presets.ts"
+    },
     "./cli-presets": {
       "types": "./src/cli-presets.ts",
       "default": "./src/cli-presets.ts"
