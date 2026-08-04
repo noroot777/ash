@@ -5,7 +5,7 @@
 // `@harness/shared/workflow`——index.ts 只再导出类型，转发运行时值会让服务端起不来。
 //
 // 术语对齐产品口径：用户看到的是「起手式」（一条线的模板），代码里叫 workflow。
-import type { TaskStage } from "./index.js";
+import type { TaskStage, TaskStatus } from "./index.js";
 
 export const STEP_KINDS = ["run", "verify", "preview", "human", "command", "accept"] as const;
 export type StepKind = (typeof STEP_KINDS)[number];
@@ -15,15 +15,21 @@ export const STEP_LABELS: Record<StepKind, string> = {
   human: "等我点头", command: "跑一条命令", accept: "合并并清理",
 };
 
-// 这一站跑起来时，任务在列表里显示什么。stage 非空的站会真的写 tasks.stage，
-// 为空的站只影响展示文案（执行期的落库在第二期接进来）。
-export const STEP_STAGE: Record<StepKind, { stage: TaskStage | null; text: string }> = {
-  run: { stage: null, text: "运行中" },
-  verify: { stage: "verifying", text: "审查中" },
-  preview: { stage: null, text: "运行中 · 预览已起" },
-  human: { stage: "awaiting_acceptance", text: "需你处理" },
-  command: { stage: null, text: "运行中 · 跑命令" },
-  accept: { stage: "accepted", text: "已验收" },
+// 这一站跑起来时，任务在列表里长什么样。**刻意只存 (status, stage) 而不存文案**：
+// 线路图上每站底下那行「任务显示：待验收」必须跟任务列表里那一格**一个字都不差**，
+// 否则用户照着线路图预期的状态在列表里根本找不到。存文案就等于开了第二份真相，迟早
+// 漂移；存状态则由 taskDisplayStatus() 统一派生，结构上不可能对不上。
+// note 是附加说明（「预览已起」），它不是状态、不进那一格，只在线路图上作小字。
+export const STEP_RUNTIME: Record<
+  StepKind,
+  { status: TaskStatus; stage: TaskStage | null; note: string | null }
+> = {
+  run: { status: "running", stage: null, note: null },
+  verify: { status: "running", stage: "verifying", note: null },
+  preview: { status: "running", stage: null, note: "预览已起" },
+  human: { status: "awaiting_review", stage: "awaiting_acceptance", note: null },
+  command: { status: "running", stage: null, note: "跑命令" },
+  accept: { status: "done", stage: "accepted", note: null },
 };
 
 // ── 失败策略 ───────────────────────────────────────────────────────────────
