@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>工作流编排 · 一个旋钮</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="grain" aria-hidden="true"></div>
+
+<main>
+  <header class="hero">
+    <span class="eyebrow">旋钮 · 单个任务</span>
+    <h1>你想让它<em>多稳？</em></h1>
+    <p class="lede">
+      拖一下。左边是「干完就算完」，右边是「你点头它自己合并」——
+      流程会跟着长出来，你不用先学会「关口」「失败去向」这些词。
+      拖到顺眼为止，剩下的两个问题各是一个开关。
+    </p>
+  </header>
+
+  <section class="stage">
+    <div class="dial">
+      <div class="ends"><span>快</span><span>稳</span></div>
+      <input id="lv" type="range" min="1" max="5" step="1" value="4" aria-label="严格程度">
+      <div class="ticks" id="ticks"></div>
+    </div>
+
+    <div class="say" id="say"></div>
+
+    <div class="flow" id="flow"></div>
+
+    <div class="cost" id="cost"></div>
+
+    <div class="switches" id="sw"></div>
+  </section>
+
+  <section class="more">
+    <button class="opener" id="opener" aria-expanded="false">
+      <i>▸</i>再细一点<span>换执行器、改验哪几项、加一站、把失败指到别处</span>
+    </button>
+    <div class="deep" id="deep" hidden></div>
+  </section>
+
+  <section class="notes">
+    <div class="note">
+      <b>为什么先给一个旋钮</b>
+      <p>绝大多数人心里只有一句话：<b>「这活我要盯多紧」</b>。旋钮把这句话直接变成控件，
+        五档之间的差别是看得见的——线变长、多一个圆点、打扰次数那行数字跟着变。
+        没人需要在第一屏理解六种关口。</p>
+    </div>
+    <div class="note">
+      <b>要编排的人也没被挡住</b>
+      <p>「再细一点」是折起来的第二层：展开才有每一站的参数、加站、失败去向。
+        第一次用的人一眼看不到它们，用久了的人一次点击就到。<b>不是砍掉能力，是把能力叠起来。</b></p>
+    </div>
+    <div class="note">
+      <b>同一份定义的其它做法</b>
+      <p><a href="../ui-demo-workflow-recap/index.html">照着刚跑完的那次改</a>（编排藏在任务详情里）、
+        <a href="../ui-demo-workflow-line/index.html">线路图</a>、
+        <a href="../ui-demo-workflow-ride/index.html">线路图 · 能跑一趟</a>、
+        <a href="../ui-demo-workflow-editors/index.html">句子 / 清单 / 规则表</a>。</p>
+    </div>
+  </section>
+</main>
+
+<div class="pop" id="pop" hidden></div>
+
+<script src="../ui-demo-workflow-kit/model.js"></script>
+<script src="../ui-demo-workflow-kit/sim.js"></script>
+<script src="app.js"></script>
+<script src="deep.js"></script>
+</body>
+</html>

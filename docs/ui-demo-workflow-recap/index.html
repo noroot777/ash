@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>工作流编排 · 照着刚跑完的那次改</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="grain" aria-hidden="true"></div>
+
+<main>
+  <header class="hero">
+    <span class="eyebrow">任务详情 · 刚跑完</span>
+    <h1>不满意的是<em>刚才那一趟</em>，那就在那一趟上改。</h1>
+    <p class="lede">
+      这一页不是设置页，是任务详情。下面是 <b>#Sh2BRa8d 刚才真实跑过的样子</b>。
+      鼠标放到两步中间，说一句「以后这儿要先给我看一眼」——工作流就是这么攒出来的，
+      你不用先在脑子里凭空想一条流程，也不用认识「关口」「失败去向」这些词。
+    </p>
+  </header>
+
+  <section class="task">
+    <div class="task-in">
+      <div class="thd">
+        <span class="hash">#Sh2BRa8d</span>
+        <b>给设置页加上「工作流」入口</b>
+        <span class="badge">已验收</span>
+        <span class="who">codex@cpa · gpt-5.6-sol · 独立 worktree</span>
+      </div>
+
+      <div class="tl" id="tl"></div>
+
+      <div class="hint" id="hint">
+        鼠标放到两步<b>中间</b>试试；每一步右边的 <i>⋯</i> 还能说「以后这步别跑了」「没过就自己重来」。
+      </div>
+    </div>
+  </section>
+
+  <section class="save" id="save" hidden></section>
+
+  <section class="notes">
+    <div class="note">
+      <b>为什么入口在这儿</b>
+      <p>没人是先想清一条流程再去建任务的。真实的顺序永远是：跑了一次，
+        觉得<b>「这儿不该直接合并」「这儿我想先点开看看」</b>——不满意是具体的，
+        那就让他在具体的地方说，而不是丢给他一张空白的编辑器。</p>
+    </div>
+    <div class="note">
+      <b>三层作用域变成一个问题</b>
+      <p>改完只问一句<b>「这条规矩存到哪」</b>：只这个任务 / 本项目 / 所有项目。
+        不用先理解「系统默认 → 项目 → 任务」的继承关系，选了哪个就说清哪个的影响面。</p>
+    </div>
+    <div class="note">
+      <b>同一份定义的其它做法</b>
+      <p><a href="../ui-demo-workflow-dial/index.html">一个旋钮</a>（拖一下流程自己长出来）、
+        <a href="../ui-demo-workflow-line/index.html">线路图</a>、
+        <a href="../ui-demo-workflow-ride/index.html">线路图 · 能跑一趟</a>、
+        <a href="../ui-demo-workflow-editors/index.html">句子 / 清单 / 规则表</a>。</p>
+    </div>
+  </section>
+</main>
+
+<div class="pop" id="pop" hidden></div>
+
+<script src="../ui-demo-workflow-kit/model.js"></script>
+<script src="../ui-demo-workflow-kit/sim.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

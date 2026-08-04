@@ -82,8 +82,15 @@
     return { x: x, y: y };
   }
   function closePop() { pop = null; el.pop.setAttribute("hidden", ""); el.pop.innerHTML = ""; }
+  // 锚点存选择器：任何改动都会重渲染线路图，原来那个按钮已经不在文档里了
+  function selOf(x) {
+    var d = x.dataset;
+    if (d.ins !== undefined) return '[data-ins="' + d.ins + '"]';
+    if (d.edit !== undefined) return '[data-edit="' + d.edit + '"][data-field="' + d.field + '"]';
+    return null;
+  }
   function openPop(anchor, kind, data) {
-    pop = { kind: kind, anchor: anchor };
+    pop = { kind: kind, anchor: anchor, sel: selOf(anchor) };
     Object.keys(data || {}).forEach(function (k) { pop[k] = data[k]; });
     drawPop();
   }
@@ -93,7 +100,9 @@
     if (html == null) return closePop();
     el.pop.removeAttribute("hidden");
     el.pop.innerHTML = '<div class="inner">' + html + "</div>";
-    var p = place(pop.anchor, el.pop.offsetWidth, el.pop.offsetHeight);
+    var at = (pop.sel && document.querySelector(pop.sel)) || pop.anchor;
+    if (!at) return closePop();
+    var p = place(at, el.pop.offsetWidth, el.pop.offsetHeight);
     el.pop.style.left = p.x + "px";
     el.pop.style.top = p.y + "px";
   }
