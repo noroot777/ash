@@ -132,7 +132,6 @@ export function ExecutorEditor({
           <span>模型</span>
           {profile ? (
             <ProviderModelInput
-              inputId={`wf-model-${step.id}`}
               type={profile.type}
               provider={provider}
               value={params.model ?? ""}
