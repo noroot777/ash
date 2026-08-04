@@ -2,8 +2,8 @@
 // 用户可以就地改（覆写行存在 workflows 表里，key 相同），改坏了按「恢复系统默认」
 // 就是删掉那行、回落到这里的定义；删不掉但可以停用。所以这份常量是**兜底**，
 // 不是运行时唯一的真相 —— 真相由 server 的 workflows.ts 合并覆写后给出。
-import type { StepKind, WorkflowDef, WorkflowStep } from "./workflow.js";
-import { makeStep } from "./workflow.js";
+import type { StepKind, WorkflowDef, WorkflowStep } from "./workflow.ts";
+import { makeStep } from "./workflow.ts";
 
 export interface BuiltinWorkflow {
   key: string;

@@ -1,16 +1,16 @@
 // Core domain types shared between server and web.
 // Mirrors the decisions in DESIGN.md (§3 data model, §5 agents, §7 debate,
 // §8 statuses, §12 debate mechanism, §13 sessions).
-import type { TeamConfig } from "./team.js";
-import type { WorkflowDef } from "./workflow.js";
-export type { Session, SessionRole } from "./session.js";
+import type { TeamConfig } from "./team.ts";
+import type { WorkflowDef } from "./workflow.ts";
+export type { Session, SessionRole } from "./session.ts";
 export type {
   ReviewConclusion,
   ReviewDispatchInput,
   TaskReviewInfo,
   TaskReviewRound,
   TeamConfig,
-} from "./team.js";
+} from "./team.ts";
 // 执行器覆盖的继承规则住在 ./executor-overrides.ts,走 "@harness/shared/executors"
 // 子路径导出(跟 "@harness/shared/team" 同一套):index.ts 只做类型再导出,不能在这里
 // 转发运行时函数 —— 服务端直接跑 .ts 源码,而 Node 的类型擦除不会把 "./x.js" 映射
@@ -387,7 +387,7 @@ export interface LlmProvider {
 
 // ── Global search (⌘K) ───────────────────────────────────────────────────────
 // 形状住在 ./search.ts(纯类型,这里只再导出)。
-export type { NoteSearchHit, SearchField, SearchHit, TaskSearchHit } from "./search.js";
+export type { NoteSearchHit, SearchField, SearchHit, TaskSearchHit } from "./search.ts";
 
 // ── Attachments (pasted into the composer / reply box) ───────────────────────
 // Pasted images OR files. We don't feed them to a vision API — each is persisted
@@ -541,7 +541,7 @@ export interface ScheduledMessage {
 
 // ── HITL gates (§7) / Executor streaming events (§12) ───────────────────────
 // 形状住在 ./events.ts(纯类型,这里只再导出);拆分理由见那个文件的头部注释。
-export type { AgentEvent, DebateSpeaker, GateAction, GateName, ServerEvent } from "./events.js";
+export type { AgentEvent, DebateSpeaker, GateAction, GateName, ServerEvent } from "./events.ts";
 
 // ── Session-snapshot parsing ──────────────────────────────────────────────
 // A persisted session .md is mostly agent Markdown, but backend continues and

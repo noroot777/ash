@@ -1,4 +1,4 @@
-import type { TaskMode, TaskStatus } from "./index.js";
+import type { TaskMode, TaskStatus } from "./index.ts";
 
 export type RunActivityTail = "empty" | "user" | "agent-active" | "agent-ended" | "other";
 export type RunActivityPhase = "starting" | "replying" | "continuing";

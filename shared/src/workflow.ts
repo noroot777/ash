@@ -5,7 +5,7 @@
 // `@harness/shared/workflow`——index.ts 只再导出类型，转发运行时值会让服务端起不来。
 //
 // 术语对齐产品口径：用户看到的是「起手式」（一条线的模板），代码里叫 workflow。
-import type { TaskStage, TaskStatus } from "./index.js";
+import type { TaskStage, TaskStatus } from "./index.ts";
 
 export const STEP_KINDS = ["run", "verify", "preview", "human", "command", "accept"] as const;
 export type StepKind = (typeof STEP_KINDS)[number];

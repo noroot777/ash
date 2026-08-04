@@ -8,7 +8,7 @@
 // 这一层**不碰队列、不碰分组**：一条线只描述「这一个任务干完之后怎么走」。人工关口
 // 停的是这个任务的验收阶段（stage=awaiting_acceptance），不动 status —— status 是调度
 // 用的，动它会顺带停住它所在的队列，那是另一件事。
-import type { AcceptClean, AcceptStrategy, WorkflowDef, WorkflowStep } from "./workflow.js";
+import type { AcceptClean, AcceptStrategy, WorkflowDef, WorkflowStep } from "./workflow.ts";
 
 export type VerifyStep = Extract<WorkflowStep, { kind: "verify" }>;
 

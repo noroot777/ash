@@ -1,4 +1,4 @@
-import type { AgentType, Group, Task, TaskStatus } from "./index";
+import type { AgentType, Group, Task, TaskStatus } from "./index.ts";
 
 // Team execution configuration. Reviewer fields intentionally mirror the
 // lead/worker naming scheme: a stale reviewerExecutorId is resolved by the
