@@ -1,7 +1,8 @@
 /* 数据是编的，但字段和词表都照 harness 现有的来：
    status（backlog/queued/running/paused/awaiting_review/done/failed/canceled）
    与 stage（implemented/verifying/verified/verify_failed/awaiting_acceptance/
-   merged/accepted）正交 —— 侧边栏窄的时候只剩一个点，铺开后这两层才写得下。
+   merged/accepted）正交。行里现在只剩状态点这一层 —— chip/step 留在数据里，
+   是给「要不要把阶段徽标挪回标题左边」那个待定项备用的。
    bucket 只服务于顶上的筛选：todo=要你拍板，run=在跑，wait=排着/暂停，done=收尾。 */
 const TASKS = [
   {
@@ -115,6 +116,7 @@ const FILTERS = [
 const $ = (id) => document.getElementById(id);
 const win = $("win");
 const rowsEl = $("rows");
+const rulerBox = $("rulerbox");
 
 let spread = false;
 let filter = "all";
@@ -133,8 +135,7 @@ function rowHtml(t) {
     : `<p style="color:var(--line2)">还没有消息</p>`;
   return `<button class="row${t.bucket === "todo" ? " is-todo" : ""}${t.id === selected ? " is-sel" : ""}${hidden ? " is-hidden" : ""}" data-id="${t.id}">
     <span class="c c-dot"><i class="dot dot--${t.dot}"></i></span>
-    <span class="c c-title"><b>${esc(t.title)}</b><small>${esc(t.meta)}</small></span>
-    <span class="c c-stage x"><span class="chip${t.tone ? ` chip--${t.tone}` : ""}">${esc(t.chip)}</span><small>${esc(t.step)}</small></span>
+    <span class="c c-title"><b>${esc(t.title)}</b></span>
     <span class="c c-body x"><p>${esc(t.body)}</p></span>
     <span class="c c-last x">${last}</span>
     <span class="c c-time x">${esc(t.time)}</span>
@@ -143,14 +144,8 @@ function rowHtml(t) {
 
 function render() {
   const sections = [...new Set(TASKS.map((t) => t.sec))];
-  const head = `<div class="row row--head">
-    <span class="c"></span><span class="c"></span>
-    <span class="c c-stage x">走到哪一步</span>
-    <span class="c c-body x">原始需求</span>
-    <span class="c c-last x">最后一条消息</span>
-    <span class="c c-time x">更新</span>
-  </div>`;
-  rowsEl.innerHTML = (spread ? head : "") + sections.map((sec) => {
+  // 没有列名行：它一插进来，下面每一行就得下移 24px，纵向就不是原地不动了。
+  rowsEl.innerHTML = sections.map((sec) => {
     const list = TASKS.filter((t) => t.sec === sec);
     const visible = list.some((t) => filter === "all" || t.bucket === filter);
     return `<div class="sec${visible ? "" : " is-empty"}"><span>${sec}</span></div>` + list.map(rowHtml).join("");
@@ -160,6 +155,7 @@ function render() {
   $("footcount").textContent = `${shown} / ${TASKS.length}`;
   renderFilters();
   renderMain();
+  drawRuler();
 }
 
 function renderFilters() {
@@ -225,18 +221,20 @@ function move(step) {
   rowsEl.querySelector(`[data-id="${selected}"]`)?.scrollIntoView({ block: "nearest" });
 }
 
-/* ── 行高档位 ─────────────────────────────────────────
-   34 = 跟收起态、跟现在产品一模一样的行高（is-flat：每格压成一行）；
-   46 / 62 = 让需求和最后一条消息各占两行，看得清但一屏行数少一半。 */
-const ROW_HEIGHTS = [34, 46, 62];
-
-function setRowH(h) {
-  if (!ROW_HEIGHTS.includes(h)) return;
-  document.documentElement.style.setProperty("--rowh", `${h}px`);
-  win.classList.toggle("is-flat", h === 34);
-  for (const btn of $("rowh").querySelectorAll("[data-h]")) {
-    btn.classList.toggle("is-on", Number(btn.dataset.h) === h);
-  }
+/* ── 标尺 ─────────────────────────────────────────────
+   照当前每一行的上边缘钉一排红线。切换铺开 / 收起时不重画（setSpread 里
+   加 is-spread 之前就已经量完了），所以行只要上下漂一个像素，肉眼立刻看得见。 */
+function drawRuler() {
+  const on = $("ruler").checked;
+  rulerBox.hidden = !on;
+  if (!on) { rulerBox.innerHTML = ""; return; }
+  const base = win.getBoundingClientRect().top;
+  const clip = $("tree").getBoundingClientRect();
+  rulerBox.innerHTML = [...rowsEl.querySelectorAll(".row:not(.is-hidden)")]
+    .map((r) => r.getBoundingClientRect().top)
+    .filter((top) => top >= clip.top - 0.5 && top <= clip.bottom)
+    .map((top) => `<i style="top:${Math.round(top - base)}px"></i>`)
+    .join("");
 }
 
 /* ── 事件 ─────────────────────────────────────────────── */
@@ -258,10 +256,8 @@ $("filters").addEventListener("click", (e) => {
 
 $("toggle").addEventListener("click", () => setSpread(!spread));
 $("scrim").addEventListener("click", () => setSpread(false));
-$("rowh").addEventListener("click", (e) => {
-  const btn = e.target.closest("[data-h]");
-  if (btn) setRowH(Number(btn.dataset.h));
-});
+$("ruler").addEventListener("change", drawRuler);
+window.addEventListener("resize", drawRuler);
 
 window.addEventListener("keydown", (e) => {
   if (e.metaKey || e.ctrlKey || e.altKey) return;
@@ -270,16 +266,13 @@ window.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && spread) { e.preventDefault(); setSpread(false); return; }
   if (key === "j" || e.key === "ArrowDown") { e.preventDefault(); move(1); return; }
   if (key === "k" || e.key === "ArrowUp") { e.preventDefault(); move(-1); return; }
-  if (e.key >= "1" && e.key <= "3") { e.preventDefault(); setRowH(ROW_HEIGHTS[Number(e.key) - 1]); return; }
   if (e.key === "Enter" && spread) { e.preventDefault(); setSpread(false); }
 });
 
 render();
-// 方便截图 / 分享某个状态：#spread 直接以铺开态打开，#spread-todo 再叠上「需要你处理」
-// 筛选，#spread-flat 用 34px 等高档（跟现在的列表同一个行高，便于并排对比）。
+// 方便截图 / 分享某个状态：#spread 直接以铺开态打开，#spread-todo 再叠上「需要你处理」筛选。
 if (location.hash.startsWith("#spread")) {
   if (location.hash === "#spread-todo") filter = "todo";
-  if (location.hash === "#spread-flat") setRowH(34);
   requestAnimationFrame(() => setSpread(true));
 }
 

@@ -2,7 +2,9 @@
    22px 状态列、34px 行高、8px 圆角、淡染选中态、不画左侧指示条。
    铺开的实现要点：侧边栏本身 width 260px → 满宽，行的列模板在切换瞬间就换成
    最终形态，.rows 同时被钉在最终宽度上 —— 所以变宽过程中右边几列不会回流，
-   看上去是「拉窗帘露出来」，而不是「重新排版」。 */
+   看上去是「拉窗帘露出来」，而不是「重新排版」。
+   硬约束：铺开前后每一行的纵向位置必须逐像素相同。为此行高恒定 34px，
+   .side-top 恒定 68px，行上方不新增任何一行（没有筛选行、没有列名行）。 */
 *{margin:0;padding:0;box-sizing:border-box}
 :root{
   --chrome:lch(94.44% .5 282);--canvas:lch(97.94% .5 282);--panel:#fff;
@@ -14,7 +16,6 @@
   --hover:lch(91.64% .5 282);--sel:lch(89.54% .5 282);
   --shadow:lch(0 0 0/.08) 0 9px 48px,lch(0 0 0/.1) 0 6px 24px,lch(0 0 0/.04) 0 1px 1px;
   --ease:cubic-bezier(.32,.72,0,1);
-  --rowh:62px;
   /* 侧边栏 260 － 两侧 12 内边距 － 22 状态列 = 标题列 214。铺开后左边缘原样钉住，
      只把截断点右移到 300 —— 位置不动，标题却能多露出小半句。 */
   --title-w:214px;
@@ -41,11 +42,16 @@ kbd{font:10px/1 ui-monospace,"SF Mono",monospace;background:var(--panel);color:v
   color:#fff;background:var(--accent);transition:filter .2s var(--ease)}
 .play:hover{filter:brightness(1.08)}
 .keys{font-size:11.5px;color:var(--faint)}
-.seg{display:flex;gap:2px;padding:2px;border-radius:9px;background:var(--raised)}
-.seg button{height:24px;padding:0 10px;border-radius:7px;font-size:11.5px;color:var(--muted);
-  white-space:nowrap;transition:background .16s var(--ease),color .16s var(--ease)}
-.seg button:hover{color:var(--ink)}
-.seg button.is-on{background:var(--panel);color:var(--ink);font-weight:550;box-shadow:0 1px 2px lch(0 0 0/.07)}
+/* 标尺开关 */
+.sw{display:flex;align-items:center;gap:7px;font-size:11.5px;color:var(--muted);
+  cursor:pointer;white-space:nowrap;user-select:none}
+.sw input{position:absolute;opacity:0;pointer-events:none}
+.sw i{position:relative;width:30px;height:18px;flex:0 0 30px;border-radius:9999px;
+  background:var(--line2);transition:background .18s var(--ease)}
+.sw i::after{content:"";position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;
+  background:#fff;box-shadow:0 1px 2px lch(0 0 0/.22);transition:transform .18s var(--ease)}
+.sw input:checked+i{background:var(--red)}
+.sw input:checked+i::after{transform:translateX(12px)}
 
 /* ── 窗口 ───────────────────────────────────────────────── */
 .win{position:relative;height:700px;border-radius:13px;background:var(--chrome);
@@ -53,6 +59,10 @@ kbd{font:10px/1 ui-monospace,"SF Mono",monospace;background:var(--panel);color:v
 .scrim{position:absolute;inset:0;z-index:2;background:lch(0 0 0/.16);opacity:0;
   pointer-events:none;transition:opacity .3s var(--ease)}
 .win.is-spread .scrim{opacity:1;pointer-events:auto}
+/* 标尺：按收起态每一行的上边缘钉的红线，铺开后不重画 —— 行有没有上下漂一眼可验 */
+.ruler{position:absolute;inset:0;z-index:4;pointer-events:none}
+.ruler i{position:absolute;left:0;right:0;height:0;
+  border-top:1px dashed color-mix(in lch,var(--red) 58%,transparent)}
 
 /* ── 主区（示意） ───────────────────────────────────────── */
 .main{margin-left:260px;height:100%;display:flex;flex-direction:column;overflow:hidden;
@@ -81,28 +91,24 @@ kbd{font:10px/1 ui-monospace,"SF Mono",monospace;background:var(--panel);color:v
 .win.is-spread .side{width:calc(100% - 8px);border-radius:12px;background:var(--panel);
   box-shadow:var(--shadow);padding:0 12px}
 
-.side-top{display:grid;grid-template-rows:36px 30px;gap:2px;height:68px;flex:0 0 68px;padding-top:8px;
-  transition:height .3s var(--ease)}
-.win.is-spread .side-top,.win.is-closing .side-top{
-  grid-template-columns:minmax(0,1fr) auto;grid-template-rows:36px;height:46px;flex-basis:46px}
-.proj{display:flex;align-items:center;gap:7px;height:28px;padding:0 6px 0 5px;border-radius:9px}
+/* 顶部：铺开前后恒定 68px（8 内边距 + 32 + 28），行数、行高都不变。
+   筛选条和快捷键提示占的是收起时本来就空着的第二行，所以不多吃一个像素的高度，
+   下面 .tree 的起点在两态里完全一致 —— 这是「每一行纵向不动」的前提。 */
+.side-top{display:grid;grid-template-columns:minmax(0,1fr) auto;grid-template-rows:32px 28px;
+  align-items:center;height:68px;flex:0 0 68px;padding-top:8px}
+.proj{grid-area:1/1;display:flex;align-items:center;gap:7px;height:28px;padding:0 6px 0 5px;border-radius:9px}
 .proj:hover{background:var(--hover)}
 .avatar{display:grid;place-items:center;width:18px;height:18px;flex:0 0 18px;border-radius:6px;
   background:var(--accent);color:#fff;font-size:9px;font-weight:750}
 .proj-name{flex:1;font-size:13px;font-weight:550}
 .win.is-spread .proj-name,.win.is-closing .proj-name{flex:0 0 auto}
-.win.is-spread .proj,.win.is-closing .proj{justify-self:start}
 .caret{color:var(--faint);font-size:11px}
-.tools{display:flex;align-items:center;justify-content:flex-end;gap:3px}
+.tools{grid-area:1/2;display:flex;align-items:center;justify-content:flex-end;gap:3px}
 .ico{display:grid;place-items:center;width:28px;height:28px;border-radius:9999px;color:var(--muted);font-size:14px}
 .ico:hover{background:var(--hover);color:var(--ink)}
 
-/* 筛选条：只有铺开时占位 */
-.fbar{display:flex;align-items:center;gap:8px;height:0;opacity:0;overflow:hidden;
-  transition:height .28s var(--ease),opacity .2s var(--ease)}
-.win.is-spread .fbar,.win.is-closing .fbar{height:38px;opacity:1;transition-delay:.06s}
-.win.is-closing .fbar{opacity:0;transition-delay:0s}
-.filters{display:flex;gap:4px}
+/* 筛选条：位置固定在第二行，只是收起时不显形 */
+.filters{grid-area:2/1;display:flex;gap:4px;overflow:hidden}
 .fb{height:26px;padding:0 10px;border-radius:8px;font-size:11.5px;color:var(--muted);white-space:nowrap;
   transition:background .15s var(--ease),color .15s var(--ease)}
 .fb b{font-weight:600}
@@ -110,7 +116,9 @@ kbd{font:10px/1 ui-monospace,"SF Mono",monospace;background:var(--panel);color:v
 .fb:hover{background:var(--hover)}
 .fb.is-on{background:var(--sel);color:var(--ink)}
 .fb.is-todo b{color:var(--amber)}
-.hint{font-size:11px;color:var(--faint);white-space:nowrap}
+/* 提示文字比图标行还宽，留在网格里会把项目名挤扁，所以收起时整个撤出布局 */
+.hint{grid-area:2/2;justify-self:end;display:none;font-size:11px;color:var(--faint);white-space:nowrap}
+.win.is-spread .hint,.win.is-closing .hint{display:block}
 
 .tree{flex:1;min-height:0;overflow:hidden auto;margin-top:6px;padding-bottom:12px}
 .rows{width:100%}
@@ -127,74 +135,42 @@ kbd{font:10px/1 ui-monospace,"SF Mono",monospace;background:var(--panel);color:v
   color:var(--faint);font-size:11.5px;font-weight:500}
 .sec.is-empty{display:none}
 
-/* ── 行：铺开前后只有列模板和高度在变 ───────────────────── */
-.row{display:grid;grid-template-columns:22px minmax(0,var(--title-w)) 0 0 0 0;align-items:center;
+/* ── 行：铺开前后只有列模板在变 ─────────────────────────
+   高度恒定 34px（跟现在产品里一模一样），行上方也不新增任何一行，
+   所以每一行的纵向位置在两态里逐像素相同 —— 铺开是「右边露出来」，不是「重排」。 */
+.row{display:grid;grid-template-columns:22px minmax(0,var(--title-w)) 0 0 0;align-items:center;
   height:34px;border-radius:8px;text-align:left;width:100%;
-  transition:height .3s var(--ease),background-color .15s var(--ease)}
+  transition:background-color .15s var(--ease)}
 .row:hover{background:var(--hover)}
 .row.is-sel{background:var(--sel)}
 .win.is-spread .row,.win.is-closing .row{
-  grid-template-columns:22px var(--title-wide) 178px minmax(0,1.25fr) minmax(0,1.5fr) 76px;
-  height:var(--rowh);align-items:stretch}
+  grid-template-columns:22px var(--title-wide) minmax(0,1.3fr) minmax(0,1.5fr) 76px}
 .win.is-spread .row.is-todo:not(.is-sel){background:color-mix(in lch,var(--amber) 6%,transparent)}
 .win.is-spread .row.is-todo:hover:not(.is-sel){background:color-mix(in lch,var(--amber) 11%,transparent)}
 .row.is-hidden{display:none}
 
-.c{min-width:0;overflow:hidden;display:flex;flex-direction:column;justify-content:center;gap:3px}
-.c-dot{align-items:center;justify-content:center}
+.c{min-width:0;overflow:hidden;display:flex;align-items:center;gap:7px}
+.c-dot{justify-content:center}
 .c-title{padding-right:10px}
-/* 照抄 task-tree.css：标题不用省略号，用右端渐隐遮罩收尾 */
-.c-title b{font-size:13px;font-weight:400;color:color-mix(in lch,var(--ink) 52%,var(--muted));
-  white-space:nowrap;overflow:hidden;
+/* 照抄 task-tree.css：标题不用省略号，用右端渐隐遮罩收尾。
+   b 必须撑满列宽（flex:1），否则它会收缩到内容宽，遮罩就吃掉短标题的末字。 */
+.c-title b{flex:1;min-width:0;font-size:13px;font-weight:400;
+  color:color-mix(in lch,var(--ink) 52%,var(--muted));white-space:nowrap;overflow:hidden;
   -webkit-mask-image:linear-gradient(90deg,#000 calc(100% - 18px),transparent);
   mask-image:linear-gradient(90deg,#000 calc(100% - 18px),transparent)}
 .row:hover .c-title b,.row.is-sel .c-title b{color:var(--ink)}
-.c-title small,.c-stage small{font-size:10px;color:var(--faint);white-space:nowrap;
-  overflow:hidden;text-overflow:ellipsis}
-.c-title small{font-family:ui-monospace,"SF Mono",monospace;font-size:9.5px}
 .x{opacity:0;transition:opacity .16s var(--ease)}
 .win.is-spread .x{opacity:1;transition:opacity .26s var(--ease) .1s}
-.c-title small{display:none}
-.win.is-spread .c-title small,.win.is-closing .c-title small{display:block}
-.c-stage{padding-right:14px;align-items:flex-start}
 .c-body,.c-last{padding-right:16px}
-.c-body p,.c-last p{font-size:11.5px;line-height:1.5;color:var(--muted);
-  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+/* 一行到底：34px 装不下第二行，需求和最后一条消息各截一行 */
+.c-body p,.c-last p{flex:1;min-width:0;font-size:11.5px;color:var(--muted);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .c-body p{color:var(--faint)}
 .row.is-sel .c-body p,.row.is-sel .c-last p{color:var(--muted)}
-.who{font-style:normal;font-size:9.5px;font-weight:600;color:var(--faint);letter-spacing:.02em}
+.who{flex:0 0 auto;font-style:normal;font-size:9.5px;font-weight:600;color:var(--faint);letter-spacing:.02em}
 .who--ask{color:var(--amber)}
 .who--you{color:var(--accent)}
-.c-time{align-items:flex-end;padding-right:8px;
-  font:10px/1 ui-monospace,"SF Mono",monospace;color:var(--faint);justify-content:center}
-.win.is-spread .c-time,.win.is-closing .c-time{align-items:flex-start;justify-content:flex-start;padding-top:17px}
-
-/* ── 等高档(34px)：行高跟收起态、跟现在的产品完全一致 ─────
-   行不长高，只横向展开，所以每格压成一行：副标题藏起来，
-   chip 和后面的说明并排，需求 / 最后一条消息各截一行。 */
-.win.is-flat:is(.is-spread,.is-closing) .row{align-items:center}
-/* .c 基类的 justify-content:center 本来管纵向居中，改成 row 后会变成横向居中
-   （短标题会被推到列中间），所以这里必须显式复位成 flex-start。 */
-.win.is-flat:is(.is-spread,.is-closing) .c{
-  flex-direction:row;align-items:center;justify-content:flex-start;gap:7px}
-.win.is-flat:is(.is-spread,.is-closing) .c-dot{justify-content:center;gap:0}
-.win.is-flat:is(.is-spread,.is-closing) .c-title small{display:none}
-/* row 布局下 b 会收缩到内容宽，渐隐遮罩就会吃掉短标题的末字 —— 必须撑满列宽，
-   让遮罩只在真正溢出的地方起作用。 */
-.win.is-flat:is(.is-spread,.is-closing) .c-title b{flex:1;min-width:0}
-.win.is-flat:is(.is-spread,.is-closing) .c-stage small{flex:1;min-width:0}
-.win.is-flat:is(.is-spread,.is-closing) .c-last em{flex:0 0 auto}
-.win.is-flat:is(.is-spread,.is-closing) :is(.c-body,.c-last) p{
-  display:block;-webkit-line-clamp:none;white-space:nowrap;text-overflow:ellipsis;
-  flex:1;min-width:0}
-.win.is-flat:is(.is-spread,.is-closing) .c-time{align-items:center;padding-top:0}
-
-/* 列名行 */
-.row--head{height:24px;pointer-events:none}
-.win.is-spread .row--head,.win.is-closing .row--head{height:24px;align-items:center}
-.row--head .c{font-size:10px;color:var(--faint);letter-spacing:.04em;
-  flex-direction:row;align-items:center;justify-content:flex-start;white-space:nowrap;padding-top:0}
-.row--head:hover{background:none}
+.c-time{padding-right:8px;font:10px/1 ui-monospace,"SF Mono",monospace;color:var(--faint)}
 
 /* ── 状态点：照抄 task-tree.css ─────────────────────────── */
 .dot{width:7px;height:7px;flex:0 0 7px;border-radius:50%}
@@ -230,9 +206,9 @@ kbd{font:10px/1 ui-monospace,"SF Mono",monospace;background:var(--panel);color:v
 /* 窄屏：先丢时间列，再丢原始需求列 */
 @media (max-width:1120px){
   .win.is-spread .row,.win.is-closing .row{
-    grid-template-columns:22px var(--title-wide) 178px minmax(0,1.2fr) minmax(0,1.4fr) 0}
+    grid-template-columns:22px var(--title-wide) minmax(0,1.2fr) minmax(0,1.4fr) 0}
 }
 @media (max-width:900px){
   .win.is-spread .row,.win.is-closing .row{
-    grid-template-columns:22px var(--title-w) 160px 0 minmax(0,1fr) 0}
+    grid-template-columns:22px var(--title-w) 0 minmax(0,1fr) 0}
 }
