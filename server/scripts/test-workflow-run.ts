@@ -229,6 +229,24 @@ assert.equal(
 assert.equal(isFinalHumanGate(multi, "m8"), true, "最后一道关口才是「这份产物我认了,去合吧」");
 assert.equal(isFinalHumanGate(multi, null), true, "游标丢了当最后一道处理——那正是只有一道关口的老行为");
 assert.equal(isFinalHumanGate(multi, "m3"), true, "游标压根不在关口上(比如停在验证站)时不改变老语义");
+
+// **只有一道关口，但画在验证前面**——用户最常画的那种线（干活 → 预览 → 等我点头 →
+// 验证 → 合并）。旧判据只数「后面还有没有别的『等我点头』」，这条线一道都没有，于是
+// 它被判成最终关口:点验收直接合并 + 删 worktree + 删分支,用户亲手画在中间的「自动
+// 验证」被整站跳过(2026-08-05 事故第二段,见 docs/incidents.md)。判据必须是「后面还
+// 有没有**任何**会停下来的站」,新判据是旧判据的超集,上面 multi 那几条一字未改。
+const gateFirst = {
+  workspace: "isolated" as const,
+  steps: [
+    makeStep("run", "g1"), makeStep("preview", "g2"), makeStep("human", "g3"),
+    makeStep("verify", "g4"), makeStep("accept", "g5"),
+  ],
+};
+assert.equal(
+  isFinalHumanGate(gateFirst, "g3"), false,
+  "关口后面还画着「自动验证」,这一按就只能是放行——一道关口不等于最后一道关口",
+);
+assert.equal(nextAnchor(gateFirst, "g3")?.id, "g4", "放行之后该去的正是那一站验证");
 assert.equal(anchorAt(multi, "m7", "verify")?.id, "m7", "游标指着第二站,读的就是第二站的参数");
 assert.equal(anchorAt(multi, null, "verify")?.id, "m3", "游标为空回落到线上第一站,老任务行为不变");
 assert.equal(anchorAt(multi, "m5", "verify")?.id, "m3", "游标指的不是这一类锚点时同样回落");
@@ -330,6 +348,10 @@ assert.deepEqual(
 assert.deepEqual(
   acceptPlan(multi, "human"), { merge: "safe", clean: "all" },
   "不传游标就是老行为(只有一道关口),分毫不变",
+);
+assert.deepEqual(
+  acceptPlan(gateFirst, "human", "g3"), { merge: null, clean: "none" },
+  "关口画在验证前面:那一按是放行,git 一动都不许动(不然后面那站验证连工作区都没了)",
 );
 assert.equal(hasAcceptStation(fast), false, "快速通道线上确实没画这一站");
 assert.equal(hasAcceptStation(standard), true, "标准交付画了");

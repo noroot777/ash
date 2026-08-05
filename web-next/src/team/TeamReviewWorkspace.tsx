@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import type { Session, Task } from "@harness/shared";
 import { STAGE_LABELS, taskDisplayStatus } from "@harness/shared";
-import { acceptPlan, hasAcceptStation, isFinalHumanGate } from "@harness/shared/workflow-policy";
+import { acceptPlan, hasAcceptStation, isFinalHumanGate, nextAnchor } from "@harness/shared/workflow-policy";
+import { STEP_LABELS } from "@harness/shared/workflow";
 import { ArrowsClockwise, CaretDown, CheckCircle, GitBranch, GitCommit, SpinnerGap, WarningCircle, X } from "@phosphor-icons/react";
 import { TaskStatusDot } from "../components/TaskStatusDot.tsx";
 import { api, type AcceptTaskFailure, type TaskCommit, type TaskDiffResult } from "../lib/api.ts";
@@ -36,11 +37,14 @@ type ReviewData = {
 // 框就是那条规则的安全兜底，措辞含糊等于把兜底拆了。
 function acceptanceMessage(task: Task): string {
   const team = task.mode === "team";
-  // 中途的「等我点头」：这一按只是放行，不合并、不清理，线接着往下走。措辞必须跟着变——
-  // 拿「会合并会删分支」的话去描述一次放行，用户要么不敢按，要么按完发现什么都没合。
+  // 后面还有站要走的那道「等我点头」：这一按只是放行，不合并、不清理，线接着往下走。措辞
+  // 必须跟着变——拿「会合并会删分支」的话去描述一次放行，用户要么不敢按，要么按完发现什么
+  // 都没合。**下一站是什么要指名道姓**：这道关口最常见的写法就是画在「自动验证」前面，
+  // 用户按之前该看见「按完是去验证」，而不是笼统的「往下走」。
   if (!isFinalHumanGate(task.workflow, task.workflowAt)) {
-    return "这条线上后面还写着「等我点头」，所以这一按只是放行这一关：不合并、不清理，" +
-      "这条线会接着往下走到下一站。";
+    const next = nextAnchor(task.workflow, task.workflowAt);
+    const where = next ? `后面还写着「${STEP_LABELS[next.kind]}」` : "这条线上后面还写着别的站";
+    return `${where}，所以这一按只是放行这一关：不合并、不清理，这条线会接着往下走到那一站。`;
   }
   if (!task.useWorktree) {
     return team

@@ -1,6 +1,6 @@
 import { eq, or } from "drizzle-orm";
 import type { Hono } from "hono";
-import { acceptPlan, anchorAt, hasAcceptStation, isFinalHumanGate, segmentAfter } from "@harness/shared/workflow-policy";
+import { acceptPlan, anchorAt, hasAcceptStation, isFinalHumanGate, nextAnchor, segmentAfter } from "@harness/shared/workflow-policy";
 import type { AcceptBy } from "@harness/shared/workflow-policy";
 import { ACCEPT_CLEAN_LABELS, ACCEPT_STRATEGY_LABELS, STEP_LABELS } from "@harness/shared/workflow";
 import { db } from "./db/index.js";
@@ -252,17 +252,21 @@ async function acceptTaskUnlocked(taskId: string, by: AcceptBy): Promise<AcceptT
     };
   }
 
-  // 一条线上可以写不止一道「等我点头」。停在**中途**那几道时，这一按的意思是「这一关
-  // 我放行」，不是「这份产物我认了，去合吧」—— 后面还画着别的站呢，顺手把不可逆的合并
-  // 做掉是拿用户没表达过的意思替他做主。所以这一档不合、不清、也不落 accepted，只把
-  // 阶段清回进行中，让这条线接着往下走（往下走那一步在锁外跑，见 acceptTask）。
+  // 停在一道**后面还有站要走**的「等我点头」上时，这一按的意思是「这一关我放行」，不是
+  // 「这份产物我认了，去合吧」—— 后面还画着别的站呢（最常见的就是关口画在「自动验证」
+  // 前面），顺手把不可逆的合并做掉，等于拿用户没表达过的意思替他做主，还把他亲手画的
+  // 那一站整站跳过。所以这一档不合、不清、也不落 accepted，只把阶段清回进行中，让这条
+  // 线接着往下走（往下走那一步在锁外跑，见 acceptTask）。
   // 判定单点在 shared 的 isFinalHumanGate；前端确认框读同一个判定，措辞跟着变。
-  if (!isFinalHumanGate(taskWorkflowDef(task.workflow), task.workflowAt)) {
+  const gateDef = taskWorkflowDef(task.workflow);
+  if (!isFinalHumanGate(gateDef, task.workflowAt)) {
     const guard = await acceptanceGuard(taskId, "before_accept");
     if (guard.failure) return guard.failure;
+    const next = nextAnchor(gateDef, task.workflowAt);
+    const where = next ? `后面还写着「${STEP_LABELS[next.kind]}」` : "这条线上后面还写着别的站";
     await clearTaskStage(
       taskId,
-      "你在这一道「等我点头」放行了：这条线上后面还写着别的站，所以没有合并、也没有清理，接着往下走。",
+      `你在这一道「等我点头」放行了：${where}，所以没有合并、也没有清理，接着往下走。`,
     );
     await publishTaskUpdated(taskId);
     return { accepted: true, taskId, status: task.status, stage: null, kind: "gate_released" };

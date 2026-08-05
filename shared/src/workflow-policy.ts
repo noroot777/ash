@@ -115,11 +115,19 @@ export function stepsAfterAnchor(
 }
 
 /**
- * 这一道人工关口是不是**最后一道**（后面再没有「等我点头」了）。
+ * 这一道人工关口是不是这条线**最后一个会停下来的地方**（后面再没有任何锚点）。
  *
- * 「验收通过」这一按在最后一道关口上才等于「这份产物我认了，去合吧」；中途那几道是
- * 放行，点完只往下走一段，绝不能顺手把不可逆的合并做掉。游标丢了当最后一道处理——
- * 那正是只有一道关口的老行为。
+ * 「验收通过」这一按在最后一道关口上才等于「这份产物我认了，去合吧」；只要后面还有
+ * 会停下来的站，这一按就只是**放行**，点完往下走一段，绝不能顺手把不可逆的合并做掉。
+ *
+ * 判据是「后面还有没有**锚点**」而不是「后面还有没有别的**等我点头**」。后者曾经是
+ * 这里的写法，它假设了「关口一定画在验证后面」：用户把「等我点头」画在「自动验证」
+ * 前面（干活 → 预览 → 等我点头 → 验证 → 合并）时，那道唯一的关口被判成最终关口，
+ * 于是点验收直接合并清理，**中间那站自动验证被整站跳过**，线路图上却显示它已过
+ * （2026-08-05 事故，见 docs/incidents.md「关口画在验证前面就被跳过」）。新判据是旧
+ * 判据的超集：后面还有 human 站时它必然也是锚点，老线的行为分毫不变。
+ *
+ * 游标丢了当最后一道处理——那正是只有一道关口的老行为。
  */
 export function isFinalHumanGate(
   def: WorkflowDef | null | undefined,
@@ -128,7 +136,7 @@ export function isFinalHumanGate(
   if (!def || !at) return true;
   const idx = def.steps.findIndex((step) => step.id === at);
   if (idx < 0 || def.steps[idx]!.kind !== "human") return true;
-  return !def.steps.slice(idx + 1).some((step) => step.kind === "human");
+  return nextAnchor(def, at) === null;
 }
 
 /**
@@ -186,9 +194,10 @@ export function workflowPolicy(
 //
 // 老任务（身上根本没有线）走 null → 老规矩 safe + all，两条路都一样，行为分毫不变。
 //
-// **唯一一个「手按也不合」的例外是中途人工关口**（线上写了不止一道「等我点头」，而这
-// 一按发生在前面某一道上）：那时「验收通过」的意思是「这一关我放行」，后面还画着别的
-// 站呢，顺手把不可逆的合并做掉是拿用户没表达过的意思替他做主。判定在 isFinalHumanGate。
+// **唯一一个「手按也不合」的例外是中途人工关口**——这一按发生在一道**后面还有站要走**
+// 的「等我点头」上（线上又画了别的关口，或者更常见的：关口画在「自动验证」前面）。那时
+// 「验收通过」的意思是「这一关我放行」，后面还画着站呢，顺手把不可逆的合并做掉，等于
+// 拿用户没表达过的意思替他做主，还把他亲手画的验证站整站跳过。判定在 isFinalHumanGate。
 //
 // 推论：以后再加**自动**触发验收的路径，必须显式传 `"workflow"`；默认值是给人用的。
 export interface AcceptPlan {
@@ -212,7 +221,7 @@ export function acceptPlan(
   def: WorkflowDef | null | undefined,
   by: AcceptBy = "human",
   // 这一按发生在哪一道人工关口上（`tasks.workflow_at`）。中途关口不合并——理由见
-  // isFinalHumanGate。省略 = 老行为（只有一道关口）。
+  // isFinalHumanGate。省略 = 老行为（当成最后一道）。
   at?: string | null,
 ): AcceptPlan {
   if (!def) return LEGACY_ACCEPT_PLAN;

@@ -1,19 +1,21 @@
-// 推进器在**真数据库**上走一遍：一条把「等我点头」画在「自动验证」前面的线，
-// 干活结算之后必须**停在关口**，不许自己往下验、更不许自己合。
+// 一条把「等我点头」画在「自动验证」前面的线，在**真数据库 + 真 git 仓库**上走两条路：
+// ① 推进器（干活结算之后必须停在关口，不许自己往下验、更不许自己合）；
+// ② 用户真按下去那条路（acceptTask：这一按是放行，不是验收——不合并、不清理）。
+//
+// **两条路各有一套「这是不是最后一道关口」的判断，必须一起钉**。2026-08-05 那次事故就
+// 是分两段爆的：先是推进器按锚点类型硬排「验证 → 关口 → 合并」，关口被整个跳过；修完
+// 之后线老老实实停在了关口，可 acceptTask 的判据仍写着「后面还有没有别的**等我点头**」
+// ——这条线只有一道关口，于是那一按被当成最终验收，直接合并 + 删 worktree + 删分支，
+// 中间那站「自动验证」从没跑过，面板上却显示它已过（见 docs/incidents.md「关口画在
+// 验证前面就被跳过」）。同一个错误模型换个地方又活了一次，所以两条路都得有红灯。
 //
 // 为什么单独一个文件而不是并进 test-workflow-run.ts：那边全是纯函数（段落切分、
-// 轮数、验收计划），这边要真的建库、建任务、跑段落、看游标落在哪。两种测试的启动
-// 代价差一个量级，混在一起会让纯函数那批也跟着变慢。
-//
-// 钉住的是 2026-08-05 那次「关口被跳过」的根因（见 docs/incidents.md「关口画在验证
-// 前面就被跳过」）：早先推进器按**锚点类型**决定下一步，顺序写死成「验证 → 关口 →
-// 合并」，用户画的顺序根本没人读；`workflowPolicy.humanGate` 更是要求 human 排在
-// verify **之后**才算数，所以关口画在前面时整条线被判成「没写等我点头」，一路自动
-// 验证 + 自动合并到底。改成按站 id 走之后，这个文件负责让它别再退回去。
+// 轮数、验收计划），这边要真的建库、建仓库、建 worktree、看游标和 git ref 落在哪。
+// 两种测试的启动代价差一个量级，混在一起会让纯函数那批也跟着变慢。
 // Run: npm -w server run test:workflow-gate
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -105,9 +107,59 @@ await advanceWorkflowFrom(await row("t2"), taskWorkflowDef(JSON.stringify(classi
 assert.equal((await row("t2")).workflowAt, "c2", "老顺序不变：干完先去验证站");
 assert.notEqual((await row("t2")).stage, "awaiting_acceptance", "验证站还没验完，不该先跳到关口");
 
+// ── ④ 停在这道关口上点「验收通过」：是**放行**，不是合并 ──────────────────
+// ①②走的是推进器；这一段走的是**用户真按下去的那条路**（acceptTask）。两条路各有一
+// 个「这是不是最后一道关口」的判断，②过了不代表④过：2026-08-05 第二段事故就是推进器
+// 已经修好、老老实实停在了关口，而 acceptTask 的判据仍写着「后面还有没有别的**等我
+// 点头**」——这条线只有一道关口，于是那一按被当成最终验收，直接合并 + 删 worktree +
+// 删分支，用户亲手画在中间的「自动验证」被整站跳过（面板上还显示它已过）。
+const repo2 = join(root, "repo2");
+execFileSync("git", ["init", "-q", "-b", "main", repo2]);
+const git = (cwd: string, ...args: string[]) =>
+  execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" }).trim();
+git(repo2, "config", "user.name", "Harness Gate Test");
+git(repo2, "config", "user.email", "gate@example.test");
+writeFileSync(join(repo2, ".gitignore"), ".worktrees/\n");
+git(repo2, "add", "-A");
+git(repo2, "commit", "-q", "-m", "seed");
+const mainBefore = git(repo2, "rev-parse", "main");
+
+await db.insert(projects).values({
+  id: "p2", name: "gate-accept", repoPath: repo2, createdAt: at, updatedAt: at,
+});
+
+const { prepareWorktree, worktreeBranchName } = await import("../src/git.js");
+const { acceptTask } = await import("../src/task-accept.js");
+
+const gateTask = "gaterel00001";
+await makeTask(gateTask);
+await db.update(tasks)
+  .set({ projectId: "p2", useWorktree: true, workflowAt: "s3", stage: "awaiting_acceptance" })
+  .where(eq(tasks.id, gateTask));
+const ws = await prepareWorktree(repo2, gateTask, "main");
+writeFileSync(join(ws.path, "work.txt"), "产物\n");
+git(ws.path, "add", "-A");
+git(ws.path, "commit", "-q", "-m", "干完了");
+
+const released = await acceptTask(gateTask);
+assert.equal(released.accepted, true);
+assert.equal(released.kind, "gate_released", "关口后面还画着「自动验证」，这一按只能是放行");
+// 三条不可逆的事，一条都不许发生
+assert.equal(git(repo2, "rev-parse", "main"), mainBefore, "**没走完的线不许合并**：main 必须一动没动");
+assert.equal(existsSync(ws.path), true, "worktree 不许清掉——后面那站验证还要在里面跑");
+assert.doesNotThrow(
+  () => git(repo2, "show-ref", "--verify", "--quiet", `refs/heads/${worktreeBranchName(gateTask)}`),
+  "任务分支不许删",
+);
+// 放行之后线要真往下走：游标落到验证站，那一站才是「自动验证」真正开始的地方
+const after = await row(gateTask);
+assert.equal(after.workflowAt, "s4", "放行之后游标必须挪到「自动验证」");
+assert.notEqual(after.stage, "accepted", "放行不是验收完成");
+assert.notEqual(after.stage, "merged", "放行更不是已合并");
+
 console.log("workflow gate ok");
 rmSync(root, { recursive: true, force: true });
-// 断言都在游标上，验证站起不起得来无所谓；但 t2 走到验证站会**异步**排一轮起跑，
+// 断言都在游标上，验证站起不起得来无所谓；但 t2/④ 走到验证站会**异步**排一轮起跑，
 // 库刚被删掉，它落地时会喷一串 SQLITE_READONLY_DBMOVED。断言过了就直接退，别让
 // 这串跟测试无关的噪音盖住结论。
 process.exit(0);
