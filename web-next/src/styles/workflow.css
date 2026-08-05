@@ -517,13 +517,19 @@
 
 .wf-lib-main { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
 
-.wf-lib-head { display: flex; flex-direction: column; gap: 4px; }
+/* .settings-card 自己不带内边距（内边距一向由里面的 .settings-row 给），而这张卡片
+   直接装的是输入框和按钮，没有那种行容器 —— 所以内边距得自己补，否则标题连同下面
+   一排按钮全贴着卡片边框，跟下面两张卡片对不上一条线。 */
+.wf-lib-head { display: flex; flex-direction: column; gap: 4px; padding: 14px 16px; }
 
 .wf-lib-title,
 .wf-lib-desc {
-  width: 100%;
+  /* 负 margin 是为了让 hover 的高亮块比文字宽出一圈，文字本身仍落在内边距那条线上
+     （所以静止态跟下面按钮的左边缘是对齐的）。两边都要负，只负左边会让输入框整体
+     右溢出 6px —— 卡片 overflow:hidden，右边那截高亮块会被切掉。 */
+  align-self: stretch;
   padding: 3px 6px;
-  margin-left: -6px;
+  margin-inline: -6px;
   border: 0;
   border-radius: 7px;
   background: transparent;
@@ -531,10 +537,11 @@
 }
 .wf-lib-title { font-size: 16px; font-weight: 600; color: var(--ink); }
 .wf-lib-desc { font-size: 12.5px; color: var(--muted); }
+.wf-lib-desc::placeholder { color: var(--faint); }
 .wf-lib-title:hover,
 .wf-lib-desc:hover { background: var(--raised); }
 
-.wf-lib-actions { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.wf-lib-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
 .wf-lib-actions button {
   display: inline-flex;
   align-items: center;
@@ -548,6 +555,9 @@
 }
 .wf-lib-actions button:hover:not(:disabled) { background: var(--raised); color: var(--ink); }
 .wf-lib-actions .wf-danger:hover:not(:disabled) { color: var(--red); }
+/* 这句 hint 在弹层里靠 6px 左 margin 跟弹层的内容对齐；卡片里内边距已经由卡片给了，
+   再留 6px 就比标题和按钮都往右缩一截。 */
+.wf-lib-head .wf-pop-hint { margin: 8px 0 0; }
 
 /* 存不进去的时候顶着这条，而不是等用户点了保存才报错——本来就没有保存按钮。 */
 .wf-deny {
