@@ -598,10 +598,25 @@
 }
 
 /* 技能扫描：每个已注册执行器一行「扫到了什么」 */
+/* `.settings-row` 是 space-between 的 flex，左边说明文字会一直撑到没地方。中文可以
+   逐字断行，所以这一组操作若不自己护住，按钮会被算成「一个汉字宽」（第 1 轮验证实拍）。
+   规矩：按钮不参与收缩，挤压全部转嫁给旁边的下拉；这里刻意**不写 min-width:0**，
+   让容器的自动最小尺寸保住按钮那一档。文字不换行由全局 `.ui-button` 负责。 */
 .skill-scan-actions {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
+  justify-content: flex-end;
   gap: 8px;
+}
+
+.skill-scan-actions select {
+  min-width: 0;
+  max-width: 220px;
+}
+
+.skill-scan-actions button {
+  flex: none;
 }
 
 .skill-scan-row {
