@@ -11,14 +11,15 @@
 <div class="stage">
   <p class="cap"><b>任务一多，侧边栏那一列只剩标题，得挨个点进去才知道该处理谁。</b>
     这张 demo 把同一份列表<b>就地向右铺满</b>：每一行<b>横向、纵向都待在原处一格不动</b>——行不长高、不上下漂，
-    只是右边多露出<b>原始需求</b>和<b>最后一条消息</b>。看准了点一下就选中并收回原样，再按一次快捷键也收回。</p>
+    只是右边多露出<b>原始需求</b>和<b>最后一条消息</b>。看准了点一下就选中并收回原样，再按一次快捷键也收回。
+    这两列一行放不下的，<b>鼠标指上去</b>弹一张全文卡片；带图的格子右端标着 <code>▣ 2</code>，卡片里的图<b>点开就是大图</b>。</p>
   <p class="cap cap--hl">打开右上角的<b>标尺</b>：它会照着<b>收起时</b>每一行的上边缘钉一排红线，然后按 <kbd>F</kbd> 铺开——
     线不用重画，每一行仍然精确压在自己那条线上。为此让路的是两样东西：铺开时不再插入筛选条那一行（挪进了顶部本来就空着的地方），列名行去掉了。</p>
 
   <!-- ══ 遥控器（demo 专用，产品里没有这一行） ══════════════════ -->
   <div class="ctl">
     <button class="play" id="toggle">铺开 / 收起</button>
-    <span class="keys">页面里直接按 <kbd>F</kbd>（或 <kbd>\</kbd>）铺开 · <kbd>Esc</kbd> 收起 · <kbd>J</kbd><kbd>K</kbd> 上下选 · <kbd>Enter</kbd> 打开</span>
+    <span class="keys">页面里直接按 <kbd>F</kbd>（或 <kbd>\</kbd>）铺开 · <kbd>Esc</kbd> 收起 · <kbd>J</kbd><kbd>K</kbd> 上下选 · <kbd>Enter</kbd> 打开 · 指住右边两列看全文、点图放大</span>
     <span class="sp"></span>
     <label class="sw"><input type="checkbox" id="ruler"><i></i><span>标尺（看行有没有动）</span></label>
   </div>
@@ -73,14 +74,28 @@
     </main>
   </div>
 
+  <!-- 悬浮全文卡片 + 大图。都是 position:fixed，跟 .win 的布局完全无关，
+       所以弹出来不会挤动任何一行。 -->
+  <div class="pop" id="pop" hidden></div>
+  <div class="lb" id="lb" hidden>
+    <img id="lbimg" alt="">
+    <div class="lb-bar">
+      <button id="lbprev" data-step="-1" title="上一张">‹</button>
+      <span id="lbcap"></span>
+      <button id="lbnext" data-step="1" title="下一张">›</button>
+    </div>
+    <span class="lb-tip">点任意处关闭 · <kbd>←</kbd><kbd>→</kbd> 翻页 · <kbd>Esc</kbd> 关</span>
+  </div>
+
   <!-- ══ 说明 ═══════════════════════════════════════════════════ -->
   <div class="notes">
     <section>
-      <h3>三个刻意的取舍</h3>
+      <h3>四个刻意的取舍</h3>
       <ul>
         <li><b>每一行原地不动，横向和纵向都是。</b>状态点 22px、标题左边缘 22px 处起，铺开前后同一个横向位置（只把截断点从 214 放宽到 300，让标题多露出小半句）；行高恒定 34px，顶上也不新增任何一行，所以纵向位置也分毫不差。铺开因此是「露出右边」而不是「重排列表」，眼睛不用重新找任务。分区（置顶 / 协作任务 / 普通任务）和顺序原样保留，跟 <code>taskTreeModel.ts</code> 现在的分组一致。</li>
         <li><b>为了纵向不动，砍了两样东西。</b>筛选条不再单占一行，挪进顶部项目名右边和图标那一行的空白里；列名行（走到哪一步 / 原始需求 / …）整个去掉——它一插进来，下面每一行就得下移 24px。所以列的含义只能靠内容自身认：最后一条消息前面有<b>它说 / 它问你 / 正方</b>这样的说话人，原始需求是更淡的那一列。</li>
         <li><b>需要你拍板的行淡染成琥珀色</b>（等答复 / 待验收 / 失败），并在顶上给一个「需要你处理 N」的筛选。不画左侧指示条——全局约定里选中态只用淡染背景。</li>
+        <li><b>放不下的不硬塞，指上去再给。</b>34px 一行只够放一句被截断的话，所以剩下的都藏在悬浮里：指住<b>原始需求</b>或<b>最后一条消息</b>停 0.16 秒，弹一张全文卡片。卡片是 <code>position:fixed</code> 的，跟列表布局互不相干，弹出来<b>一行都不会动</b>；鼠标从格子移到卡片上也不会消失，所以卡片里的图点得到。带图的格子右端标 <code>▣ N</code>（一眼看出这条有截图，不用悬浮试探），点缩略图开大图，<kbd>←</kbd><kbd>→</kbd> 翻页，<kbd>Esc</kbd> 只关大图、不顺手把侧边栏也收了。</li>
       </ul>
     </section>
     <section>
@@ -90,6 +105,7 @@
         <li><b>快捷键定哪个。</b>demo 用了 <kbd>F</kbd>（铺开 / full）并兼听 <kbd>\</kbd>。现有裸键已占 <code>j k c r</code>，<kbd>F</kbd> 是空的；要是你更顺手 <kbd>Cmd</kbd>+<kbd>\</kbd> 或空格，改一行就行。</li>
         <li><b>「最后一条消息」取哪条。</b>demo 取的是会话里最新一条（不论谁说的），等答复时优先取那句提问。另一种取法是「永远只取最后一次追问 / 提问」，没提问就留空——更聚焦但空行会多。</li>
         <li><b>要不要记住铺开状态。</b>现在每次都从收起开始。也可以像折叠分区那样写 localStorage。</li>
+        <li><b>全文卡片是「指上去就弹」还是「按住 / 点一下钉住」。</b>现在是悬停 0.16 秒自动弹、移开 0.14 秒自动收——扫的时候最省事，但鼠标横穿列表会一路弹。要是嫌吵，可以改成只有按住某个键（或点 <code>▣ N</code>）才弹，代价是多一个动作。</li>
       </ul>
     </section>
     <section>
@@ -99,7 +115,7 @@
         <li><code>web-next/src/workspace/WorkspaceShell.tsx</code>：持有 <code>spread</code> 状态，传给侧边栏；点任务时顺手关掉。</li>
         <li><code>web-next/src/workspace/TaskTree.tsx</code>：<code>TaskRow</code> 多渲染三个格子（原始需求 / 最后一条消息 / 时间），窄态由 CSS 裁成 0 宽，行高和分组逻辑都不动。</li>
         <li><code>WorkspaceSidebar.tsx</code>：筛选条要放进 <code>workspace-sidebar-top</code> 里，不能新起一行，否则纵向就动了。</li>
-        <li>「最后一条消息」需要一个列表接口能带上的字段（现在的 <code>Task</code> 上没有），要么服务端在列表里补一个 <code>lastMessage</code> 摘要，要么前端按需拉。这块是唯一有后端改动的地方。</li>
+        <li>「最后一条消息」需要一个列表接口能带上的字段（现在的 <code>Task</code> 上没有），要么服务端在列表里补一个 <code>lastMessage</code> 摘要，要么前端按需拉。这块是唯一有后端改动的地方——顺带要带上<b>附件缩略图</b>（悬浮卡片里的 <code>▣ N</code> 和大图靠它），demo 里这些图是现画的 SVG 假图。</li>
       </ul>
     </section>
   </div>

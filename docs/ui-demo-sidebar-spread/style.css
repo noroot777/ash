@@ -6,6 +6,9 @@
    硬约束：铺开前后每一行的纵向位置必须逐像素相同。为此行高恒定 34px，
    .side-top 恒定 68px，行上方不新增任何一行（没有筛选行、没有列名行）。 */
 *{margin:0;padding:0;box-sizing:border-box}
+/* 浏览器自带的 [hidden]{display:none} 只是元素选择器，任何带 display 的类规则
+   （.lb / .lb-bar button）都能盖掉它 —— 于是 hidden 的大图照样画出来。钉死。 */
+[hidden]{display:none !important}
 :root{
   --chrome:lch(94.44% .5 282);--canvas:lch(97.94% .5 282);--panel:#fff;
   --raised:lch(96.914% 0 282);--overlay:lch(95.886% 0 282);
@@ -171,6 +174,48 @@ kbd{font:10px/1 ui-monospace,"SF Mono",monospace;background:var(--panel);color:v
 .who--ask{color:var(--amber)}
 .who--you{color:var(--accent)}
 .c-time{padding-right:8px;font:10px/1 ui-monospace,"SF Mono",monospace;color:var(--faint)}
+/* 有图的格子在右端留个记号，不然没人知道该往哪指 */
+.clip{flex:0 0 auto;display:inline-flex;align-items:center;gap:2px;height:15px;padding:0 5px;
+  border-radius:5px;background:var(--raised);color:var(--faint);
+  font:9.5px/1 ui-monospace,"SF Mono",monospace;font-style:normal}
+.row.is-sel .clip{background:var(--panel)}
+
+/* ── 悬浮全文卡片 ───────────────────────────────────────
+   position:fixed：它跟列表的布局互不相干，弹出来不会挤动任何一行。 */
+.pop{position:fixed;z-index:6;width:max-content;max-width:520px;padding:12px 14px 13px;
+  border-radius:12px;background:var(--panel);box-shadow:var(--shadow),0 0 0 1px var(--line);
+  animation:pop-in .13s var(--ease)}
+@keyframes pop-in{from{opacity:0;transform:translateY(-3px)}to{opacity:1;transform:none}}
+.pop-hd{display:flex;align-items:baseline;gap:8px;margin-bottom:7px;font-size:10.5px;color:var(--faint)}
+.pop-hd b{font-size:10.5px;font-weight:650;color:var(--muted)}
+.pop-hd span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pop p{font-size:12.5px;line-height:1.8;color:var(--ink)}
+.pop-tip{margin-top:9px;font-size:10px;color:var(--faint)}
+
+/* ── 缩略图：悬浮卡片和右边详情气泡共用 ─────────────────── */
+.shots{display:flex;flex-wrap:wrap;gap:8px;margin-top:11px}
+.thumb{width:112px;height:70px;border-radius:8px;overflow:hidden;background:var(--raised);
+  box-shadow:0 0 0 1px var(--line);cursor:zoom-in;
+  transition:box-shadow .15s var(--ease),transform .15s var(--ease)}
+.thumb img{display:block;width:100%;height:100%;object-fit:cover}
+.thumb:hover{box-shadow:0 0 0 2px var(--accent);transform:translateY(-1px)}
+.msg .shots{margin-top:8px}
+.msg--you .shots{justify-content:flex-end}
+
+/* ── 大图 ───────────────────────────────────────────────
+   点任意处关闭，翻页按钮自己吃掉点击。 */
+.lb{position:fixed;inset:0;z-index:9;display:flex;flex-direction:column;align-items:center;
+  justify-content:center;gap:14px;padding:40px;cursor:zoom-out;background:lch(0 0 0/.62);
+  animation:pop-in .16s var(--ease)}
+.lb img{max-width:min(1120px,92vw);max-height:74vh;border-radius:10px;background:#fff;
+  box-shadow:lch(0 0 0/.42) 0 18px 60px}
+.lb-bar{display:flex;align-items:center;gap:14px;color:#fff;font-size:12px}
+.lb-bar button{display:grid;place-items:center;width:30px;height:30px;border-radius:9999px;
+  background:lch(100% 0 0/.16);color:#fff;font-size:16px;line-height:1;cursor:pointer;
+  transition:background .15s var(--ease)}
+.lb-bar button:hover{background:lch(100% 0 0/.32)}
+.lb-tip{color:lch(100% 0 0/.6);font-size:10.5px}
+.lb-tip kbd{background:lch(100% 0 0/.14);color:#fff;box-shadow:none}
 
 /* ── 状态点：照抄 task-tree.css ─────────────────────────── */
 .dot{width:7px;height:7px;flex:0 0 7px;border-radius:50%}
