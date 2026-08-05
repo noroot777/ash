@@ -163,6 +163,10 @@ export async function ensureSchema() {
     "ALTER TABLE tasks ADD COLUMN review_of TEXT",
     "ALTER TABLE tasks ADD COLUMN review_round INTEGER",
     "ALTER TABLE tasks ADD COLUMN review_requested INTEGER NOT NULL DEFAULT 0",
+    // 一条线上可以写不止一站「自动验证」/「等我点头」：游标记住此刻停在哪一站，
+    // 审查任务记住自己验的是哪一站（轮数上限按站分开数）。
+    "ALTER TABLE tasks ADD COLUMN workflow_at TEXT",
+    "ALTER TABLE tasks ADD COLUMN review_step TEXT",
     // 解绑重启（executors/detached.ts）：agent 输出走文件而不是匿名管道，于是它
     // 活得过 server 重启。这几列是重启后「找回并接管」所需的全部线索——pid 认
     // 进程、started_at 防 pid 复用、out_path 是原始输出、offset 是已消费到哪个

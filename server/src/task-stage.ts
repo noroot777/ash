@@ -19,6 +19,21 @@ export async function setTaskStage(
   return { updatedAt, timelineRecorded };
 }
 
+/**
+ * 把验收阶段清回「进行中」并广播。
+ *
+ * 两个调用方：已验收任务被重新唤醒（下面那个），以及**中途人工关口放行**（一条线上写了
+ * 不止一道「等我点头」时，前面那几道点完只是放行，任务得从「待验收」回到进行中，不然
+ * 它会一直挂着一句「待验收」而线其实已经往下走了）。广播一步都不能省，否则列表分组
+ * 要等下次全量拉取才动。
+ */
+export async function clearTaskStage(taskId: string, note: string): Promise<void> {
+  const updatedAt = now();
+  await db.update(tasks).set({ stage: null, updatedAt }).where(eq(tasks.id, taskId));
+  bus.publish({ type: "task.stage", taskId, stage: null, updatedAt });
+  await appendTaskTimeline(taskId, note);
+}
+
 // 已验收的任务又被唤醒 —— 用户发来真人消息、或调度者接着派活 —— 就把 stage 清回
 // null,列表把它从「已验收」挪回「进行中」;干完再验收一次即可翻篇。accepted 只代表
 // 上一版产物已经验收,不能覆盖验收后的新增改动;这条规则对 single/team/debate 一致。
@@ -28,10 +43,7 @@ export async function setTaskStage(
 export async function reopenAcceptedStage(taskId: string): Promise<boolean> {
   const t = (await db.select({ stage: tasks.stage }).from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!t || t.stage !== "accepted") return false;
-  const updatedAt = now();
-  await db.update(tasks).set({ stage: null, updatedAt }).where(eq(tasks.id, taskId));
-  bus.publish({ type: "task.stage", taskId, stage: null, updatedAt });
-  await appendTaskTimeline(taskId, "任务又被唤醒，验收阶段清回进行中（完成后重新验收即可再次翻篇）");
+  await clearTaskStage(taskId, "任务又被唤醒，验收阶段清回进行中（完成后重新验收即可再次翻篇）");
   return true;
 }
 

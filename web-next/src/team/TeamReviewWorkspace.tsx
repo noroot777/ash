@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { Session, Task } from "@harness/shared";
 import { STAGE_LABELS, taskDisplayStatus } from "@harness/shared";
-import { acceptPlan, hasAcceptStation } from "@harness/shared/workflow-policy";
+import { acceptPlan, hasAcceptStation, isFinalHumanGate } from "@harness/shared/workflow-policy";
 import { ArrowsClockwise, CaretDown, CheckCircle, GitBranch, GitCommit, SpinnerGap, WarningCircle, X } from "@phosphor-icons/react";
 import { TaskStatusDot } from "../components/TaskStatusDot.tsx";
 import { api, type AcceptTaskFailure, type TaskCommit, type TaskDiffResult } from "../lib/api.ts";
@@ -36,12 +36,18 @@ type ReviewData = {
 // 框就是那条规则的安全兜底，措辞含糊等于把兜底拆了。
 function acceptanceMessage(task: Task): string {
   const team = task.mode === "team";
+  // 中途的「等我点头」：这一按只是放行，不合并、不清理，线接着往下走。措辞必须跟着变——
+  // 拿「会合并会删分支」的话去描述一次放行，用户要么不敢按，要么按完发现什么都没合。
+  if (!isFinalHumanGate(task.workflow, task.workflowAt)) {
+    return "这条线上后面还写着「等我点头」，所以这一按只是放行这一关：不合并、不清理，" +
+      "这条线会接着往下走到下一站。";
+  }
   if (!task.useWorktree) {
     return team
       ? "这会确认共享项目工作区中的团队结果，并联动把全部共享执行者标为验收完成。"
       : "这会确认当前项目工作区中的结果并标记为验收完成。";
   }
-  const plan = acceptPlan(task.workflow);
+  const plan = acceptPlan(task.workflow, "human", task.workflowAt);
   const branch = team ? "共享分支" : "任务分支";
   const worktree = team ? "团队 worktree" : "任务 worktree";
   const target = task.worktreeBase || "项目当前分支";
@@ -112,6 +118,9 @@ export function AcceptanceControls({
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<AcceptTaskFailure | null>(null);
   const inFlight = task.status === "running" || task.status === "queued";
+  // 停在中途那道关口时，这一按是「放行」不是「验收」：按钮、确认框、提示三处一起改口，
+  // 只改一处就会出现「按钮写着验收通过、确认框说只是放行」的自相矛盾。
+  const midGate = !isFinalHumanGate(task.workflow, task.workflowAt);
 
   const accept = async () => {
     // The confirmation is single-use. Keep progress on the action button so a
@@ -133,9 +142,11 @@ export function AcceptanceControls({
       setAction(null);
       // 合并成了、但「点头之后」那一段（发布脚本之类）挂了，是两件事，得分开说：
       // 只报一句「验收通过」，用户下次知道发布挂了就是在线上出事的时候。
-      notify(result.tail && !result.tail.ok
-        ? `已合并，但「${result.tail.step ?? "点头之后那一段"}」没跑过，详情见任务时间线`
-        : result.warnings?.length ? `验收通过，但有 ${result.warnings.length} 条清理警告` : "验收通过");
+      notify(result.kind === "gate_released"
+        ? "已放行，这条线继续往下走"
+        : result.tail && !result.tail.ok
+          ? `已合并，但「${result.tail.step ?? "点头之后那一段"}」没跑过，详情见任务时间线`
+          : result.warnings?.length ? `验收通过，但有 ${result.warnings.length} 条清理警告` : "验收通过");
     } catch (reason) {
       notify(reason instanceof Error ? reason.message : String(reason));
     } finally {
@@ -171,7 +182,7 @@ export function AcceptanceControls({
           <>
             <button type="button" className="is-primary" disabled={inFlight || busy} onClick={() => setAction("accept")}>
               {busy ? <SpinnerGap size={13} className="is-spinning" /> : <CheckCircle size={13} weight="fill" />}
-              {busy ? "验收中" : inFlight ? "执行中" : "验收通过"}
+              {busy ? (midGate ? "放行中" : "验收中") : inFlight ? "执行中" : midGate ? "放行，继续下一站" : "验收通过"}
             </button>
             <button type="button" disabled={inFlight || busy} onClick={() => setAction("return")}><WarningCircle size={13} />打回修改</button>
           </>
@@ -179,7 +190,15 @@ export function AcceptanceControls({
       </div>
       {failure && <AcceptanceFailureNotice failure={failure} />}
       {action === "accept" && (
-        <ConfirmDialog title="确认验收通过？" message={`${acceptanceMessage(task)} 已执行的合并和删除不可逆。`} confirmLabel="验收通过" danger={!!task.useWorktree} busy={busy} onConfirm={() => void accept()} onClose={() => setAction(null)} />
+        <ConfirmDialog
+          title={midGate ? "放行这一关？" : "确认验收通过？"}
+          message={midGate ? acceptanceMessage(task) : `${acceptanceMessage(task)} 已执行的合并和删除不可逆。`}
+          confirmLabel={midGate ? "放行" : "验收通过"}
+          danger={!midGate && !!task.useWorktree}
+          busy={busy}
+          onConfirm={() => void accept()}
+          onClose={() => setAction(null)}
+        />
       )}
       {action === "return" && (
         <ConfirmDialog title="打回继续修改？" message="这会把验收意见作为真人回复送入原任务会话，执行者会在原上下文继续处理。" confirmLabel="打回修改" busy={busy} onConfirm={() => void returnTask()} onClose={() => setAction(null)}>

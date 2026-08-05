@@ -134,8 +134,9 @@ export type AcceptTaskSuccess = {
   accepted: true;
   taskId: string;
   status: string;
-  stage: "accepted";
-  kind: "already_accepted" | "in_place" | "isolated_worktree";
+  /** 中途关口放行不是验收，stage 会被清回「进行中」 */
+  stage: "accepted" | null;
+  kind: "already_accepted" | "in_place" | "isolated_worktree" | "marked_only" | "gate_released";
   sharedWorkersAccepted?: number;
   targetBranch?: string;
   merge?: string;

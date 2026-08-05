@@ -37,27 +37,40 @@ export interface WorkflowPolicy {
 // 等人）和**当场就能做完**的（跑一条命令、打开预览）。执行链只在前者那几个点上被
 // 唤醒，所以后者是**成段**跑的：干完之后跑一段、验完之后再跑一段、点头之后再一段。
 //
-// 这么切而不是记「走到第几站」，是因为不必新开一个「当前站」字段：段落由锚点算得，
-// 任务重启、重跑、手动补派审都不会让指针错位。
+// 段落按**站的 id** 切，不按「哪一类锚点」——任务身上记着一个游标（`tasks.workflow_at`
+// = 这条线此刻停在哪一站），唤醒事件落回来时就知道是**第几个**验证站有了结论、用户
+// 在**哪一道**关口点了头。这正是「自动验证」「等我点头」能在一条线上出现多次的前提：
+// 早先按锚点类型切段时，第二个 verify 站没有任何东西能把它跟第一个区分开，只会被
+// 静默跳过（所以那时它们被列进 SINGLETON_KINDS）。
 //
-// 代价是**每类锚点在一条线上只能出现一次**：唤醒事件（这一轮结算完、这一轮审查完、
-// 用户点了头）只说得清「哪一类锚点过去了」，说不清是第几个，两个 verify 站就没法
-// 区分该跑哪一段。所以这不是这里将就一下的事——`checkWorkflow` 直接把重复锚点判成
-// 拦下级问题，编辑器的「加一站」里也不给再加第二个。下面按 findIndex 取头一个即可。
+// 游标丢了（老任务、手动补派审、快照被换过）也不会卡死：调用方一律用 firstAnchor()
+// 回落到线上第一个同类锚点，退化成原来的行为。
 export const ANCHOR_KINDS = ["run", "verify", "human"] as const;
 export type AnchorKind = (typeof ANCHOR_KINDS)[number];
 
-function isAnchor(step: WorkflowStep): boolean {
-  return (ANCHOR_KINDS as readonly string[]).includes(step.kind);
+export function isAnchorKind(kind: WorkflowStep["kind"]): kind is AnchorKind {
+  return (ANCHOR_KINDS as readonly string[]).includes(kind);
 }
 
-/** 紧跟在某个锚点之后、到下一个锚点之前的那几站（线上没有这个锚点就是空段）。 */
-export function stepsAfterAnchor(
+function isAnchor(step: WorkflowStep): boolean {
+  return isAnchorKind(step.kind);
+}
+
+/** 线上第一个某类锚点站；游标丢失时的回落点。 */
+export function firstAnchor(
   def: WorkflowDef | null | undefined,
-  anchor: AnchorKind,
+  kind: AnchorKind,
+): WorkflowStep | null {
+  return def?.steps.find((step) => step.kind === kind) ?? null;
+}
+
+/** 紧跟在**某一站**之后、到下一个锚点之前的那几站（找不到这一站就是空段）。 */
+export function segmentAfter(
+  def: WorkflowDef | null | undefined,
+  stepId: string | null | undefined,
 ): WorkflowStep[] {
-  if (!def) return [];
-  const at = def.steps.findIndex((step) => step.kind === anchor);
+  if (!def || !stepId) return [];
+  const at = def.steps.findIndex((step) => step.id === stepId);
   if (at < 0) return [];
   const out: WorkflowStep[] = [];
   for (const step of def.steps.slice(at + 1)) {
@@ -67,19 +80,89 @@ export function stepsAfterAnchor(
   return out;
 }
 
-export function workflowPolicy(def: WorkflowDef | null | undefined): WorkflowPolicy | null {
+/** 某一站之后的第一个锚点站；null = 这条线走到头了。 */
+export function nextAnchor(
+  def: WorkflowDef | null | undefined,
+  stepId: string | null | undefined,
+): WorkflowStep | null {
+  if (!def || !stepId) return null;
+  const at = def.steps.findIndex((step) => step.id === stepId);
+  if (at < 0) return null;
+  return def.steps.slice(at + 1).find(isAnchor) ?? null;
+}
+
+/**
+ * 某一站**之前**的最后一个锚点站；null = 它前面没有锚点了。
+ *
+ * 用在一个地方：某一站没过、打回给 AI 重做时，游标要退回到它前面那个锚点——这样
+ * 重做完再结算，紧跟在那个锚点后面的那一段（典型：先 build 再验）会照样重跑一遍，
+ * 然后**重新验这一站**，而不是把它当验过了往下走。
+ */
+export function prevAnchor(
+  def: WorkflowDef | null | undefined,
+  stepId: string | null | undefined,
+): WorkflowStep | null {
+  if (!def || !stepId) return null;
+  const at = def.steps.findIndex((step) => step.id === stepId);
+  if (at < 0) return null;
+  return def.steps.slice(0, at).filter(isAnchor).at(-1) ?? null;
+}
+
+/** 老口径：紧跟线上头一个某类锚点之后的那一段（run 仍然唯一，它照旧够用）。 */
+export function stepsAfterAnchor(
+  def: WorkflowDef | null | undefined,
+  anchor: AnchorKind,
+): WorkflowStep[] {
+  return segmentAfter(def, firstAnchor(def, anchor)?.id);
+}
+
+/**
+ * 这一道人工关口是不是**最后一道**（后面再没有「等我点头」了）。
+ *
+ * 「验收通过」这一按在最后一道关口上才等于「这份产物我认了，去合吧」；中途那几道是
+ * 放行，点完只往下走一段，绝不能顺手把不可逆的合并做掉。游标丢了当最后一道处理——
+ * 那正是只有一道关口的老行为。
+ */
+export function isFinalHumanGate(
+  def: WorkflowDef | null | undefined,
+  at: string | null | undefined,
+): boolean {
+  if (!def || !at) return true;
+  const idx = def.steps.findIndex((step) => step.id === at);
+  if (idx < 0 || def.steps[idx]!.kind !== "human") return true;
+  return !def.steps.slice(idx + 1).some((step) => step.kind === "human");
+}
+
+/**
+ * 这条线此刻停在哪一站。游标为空或指到不存在的站时回落到线上第一个该类锚点，
+ * 于是老任务、换过快照的任务、手动补派审都还是原来的行为。
+ */
+export function anchorAt(
+  def: WorkflowDef | null | undefined,
+  at: string | null | undefined,
+  kind: AnchorKind,
+): WorkflowStep | null {
+  const step = at ? def?.steps.find((s) => s.id === at) ?? null : null;
+  return step?.kind === kind ? step : firstAnchor(def, kind);
+}
+
+export function workflowPolicy(
+  def: WorkflowDef | null | undefined,
+  // 当前停在哪一站；多个「自动验证」时轮数与失败策略都读**这一站**的。
+  at?: string | null,
+): WorkflowPolicy | null {
   if (!def) return null;
   const steps = def.steps;
-  const at = steps.findIndex((step) => step.kind === "verify");
-  const verify = at < 0 ? null : (steps[at] as VerifyStep);
+  const verify = anchorAt(def, at, "verify") as VerifyStep | null;
+  const at_ = verify ? steps.indexOf(verify) : -1;
   const fail = verify?.fail ?? null;
   return {
     verify,
     verifyRounds: fail?.mode === "back" ? Math.max(1, fail.max) : 1,
     onVerifyFail: fail?.mode ?? "stop",
-    // 没有验证站时 at = -1，于是「排在验证之后」退化成「线上有这一站」，正是想要的：
+    // 没有验证站时 at_ = -1，于是「排在验证之后」退化成「线上有这一站」，正是想要的：
     // 一条 干活 → 等我点头 的线照样停下等人。
-    humanGate: steps.some((step, i) => step.kind === "human" && i > at),
+    humanGate: steps.some((step, i) => step.kind === "human" && i > at_),
     autoAccept: steps.some((step) => step.kind === "accept"),
   };
 }
@@ -103,6 +186,10 @@ export function workflowPolicy(def: WorkflowDef | null | undefined): WorkflowPol
 //
 // 老任务（身上根本没有线）走 null → 老规矩 safe + all，两条路都一样，行为分毫不变。
 //
+// **唯一一个「手按也不合」的例外是中途人工关口**（线上写了不止一道「等我点头」，而这
+// 一按发生在前面某一道上）：那时「验收通过」的意思是「这一关我放行」，后面还画着别的
+// 站呢，顺手把不可逆的合并做掉是拿用户没表达过的意思替他做主。判定在 isFinalHumanGate。
+//
 // 推论：以后再加**自动**触发验收的路径，必须显式传 `"workflow"`；默认值是给人用的。
 export interface AcceptPlan {
   /** 怎么合；null = 这条线不合并，只标记验收 */
@@ -124,8 +211,12 @@ export function hasAcceptStation(def: WorkflowDef | null | undefined): boolean {
 export function acceptPlan(
   def: WorkflowDef | null | undefined,
   by: AcceptBy = "human",
+  // 这一按发生在哪一道人工关口上（`tasks.workflow_at`）。中途关口不合并——理由见
+  // isFinalHumanGate。省略 = 老行为（只有一道关口）。
+  at?: string | null,
 ): AcceptPlan {
   if (!def) return LEGACY_ACCEPT_PLAN;
+  if (!isFinalHumanGate(def, at)) return { merge: null, clean: "none" };
   const step = def.steps.find((s) => s.kind === "accept");
   if (!step || step.kind !== "accept") {
     return by === "human" ? LEGACY_ACCEPT_PLAN : { merge: null, clean: "none" };
