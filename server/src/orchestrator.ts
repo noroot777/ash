@@ -21,6 +21,7 @@ import { startTeam, deliverToLead } from "./team/session.js";
 import { workerPreambleFor } from "./team/dispatch.js";
 import { reopenAcceptedStage } from "./task-stage.js";
 import { reviewProtocolFor, reviewReminderFor } from "./review.js";
+import { peerNoticeFor } from "./peer-context.js";
 
 const running = new Set<string>(); // taskIds currently executing (single-flight)
 
@@ -34,6 +35,14 @@ const AUTONOMY =
 // the SAME working directory, so it should read the current state before acting.
 const COLLAB_INVITE =
   "你被叫来加入这个任务的协作。当前工作目录里可能已经有其他 agent 的产出，请先了解现状再动手。\n\n";
+
+// 被召唤进来的智能体只收到用户 @ 它的那一句话 —— 任务本身是干什么的，它一无所知
+// （task.body 只进 fresh run 的 prompt，而它走的是 continueTask 这条路）。撞上
+// 「审一下上面的提交」这种自带上下文的召唤还能靠工作目录补齐，换成依赖任务描述的
+// 活就只能靠猜。所以首次入场时把原始描述一并给它，之后的回合不再重复（它自己的
+// 会话里已经有了）。
+const TASK_BRIEF = (body: string) =>
+  `【本任务的原始描述】（你是中途被叫进来的，这是任务最初的交代，供你了解背景）\n${body.trim()}\n\n`;
 
 // When a task that was interrupted (server restart → failed, manual stop →
 // canceled, group pause → paused, or a non-zero exit) is (re)started, we RESUME
@@ -216,8 +225,15 @@ export async function runTask(taskId: string): Promise<void> {
     const sharedTeamWorker = !task.useWorktree && teamPreamble.length > 0;
     const reviewTask = !!task.reviewOf;
     const reviewProtocol = reviewTask ? await reviewProtocolFor(task, ws, project.repoPath) : "";
+    // fresh run 通常是任务里的头一个智能体，但不总是：任务跑过 codex 之后用户把
+    // agentType 换成 claude 再点运行，就会从这里起跑一条全新会话 —— 前面那位的
+    // 对话记录还在盘上，同样该告知。prev 传 undefined（这个智能体自己没跑过），
+    // 于是在场的都算新面孔；任务里只有它自己时返回空串，fresh run 一如往常。
+    const priorSessions = await db.select().from(sessions).where(eq(sessions.taskId, taskId));
+    const peerNotice = peerNoticeFor({ taskId, self: agentType, all: priorSessions, prev: undefined });
     const prompt =
       AUTONOMY + COMPLETION_PROTOCOL(taskId, sharedTeamWorker, reviewTask) + teamPreamble + reviewProtocol +
+      peerNotice +
       (autoTitle ? TITLE_HINT + objective : objective);
     const turnStart = now();
     const sessId = id();
@@ -423,8 +439,16 @@ export async function continueTask(
     const sharedTeamWorker = !task.useWorktree && (await workerPreambleFor(task)).length > 0;
     const reviewTask = !!task.reviewOf;
     const reviewReminder = reviewTask ? reviewReminderFor(task) : "";
+    // 「本任务里还有别人」的告知。触发条件是**有新面孔**（上一轮跑完之后才进来的
+    // 同伴），不是 invited —— 挂在 invited 上恰好漏掉最需要它的那个：任务的原生
+    // agent 第一轮走 runTask 直接起跑、从没被「召唤」过，于是后来 @ 进来的同伴它
+    // 一次都不会知道（正是 2026-08-04 那个「claude 自己考古 codex 会话」的现场）。
+    // prev 必须是**更新 session 行之前**的快照：锚点取的 endedAt 会在 resume 时被清空。
+    const peerNotice = peerNoticeFor({ taskId, self: agent, all, prev });
     const prompt =
       (invited ? COLLAB_INVITE : "") +
+      (invited && task.body.trim() ? TASK_BRIEF(task.body) : "") +
+      peerNotice +
       userTurnText +
       (workspaceReset ? WORKSPACE_RESET(cwd) : "") +
       (followUpFrom
