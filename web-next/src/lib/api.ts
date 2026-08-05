@@ -144,6 +144,8 @@ export type AcceptTaskSuccess = {
   branch?: string;
   branchDeleted?: boolean;
   warnings?: AcceptTaskWarning[];
+  /** 「点头之后」那一段（发布脚本之类）跑得怎么样；线上没写这一段就没有这个字段 */
+  tail?: { ok: boolean; step?: string; reason?: string };
 };
 
 export type AcceptTaskFailure = {

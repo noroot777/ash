@@ -14,13 +14,60 @@
 import type { Task, TaskStage } from "@harness/shared";
 import { taskDisplayStatus } from "@harness/shared";
 import type { StepKind, WorkflowDef, WorkflowStep } from "@harness/shared/workflow";
-import { STEP_RUNTIME } from "@harness/shared/workflow";
+import { STEP_LABELS, STEP_RUNTIME } from "@harness/shared/workflow";
 
 // 线路图上的短名。STEP_LABELS 那套（「让 AI 干活」）是编排时选站用的完整说法，
 // 画在一排站台上太挤，这里另给一套两三个字的。
 export const STEP_SHORT: Record<StepKind, string> = {
   run: "干活", verify: "验证", preview: "预览", human: "等我点头", command: "命令", accept: "合并",
 };
+
+// 每类站一个色相。颜色**只是同一类站的记号**，不承载状态（状态另有 is-done/is-current
+// 那一套），所以这里可以是纯装饰的一份表 —— 一串小圆点就能让人不读字也数出这条线
+// 有几站、哪几类。
+export const STEP_HUE: Record<StepKind, string> = {
+  run: "#7c8cff", verify: "#3ddad7", preview: "#f0b429",
+  human: "#ff8fa3", command: "#9aa4b2", accept: "#5ee39b",
+};
+
+/**
+ * 站台上的名字：能带参数就带。
+ *
+ * 「让 codex@cpa 干活」「跑 ./scripts/deploy.sh」比通用的「让 AI 干活」「跑一条命令」
+ * 多一格信息，而收起态那一排胶囊本来就是给人扫一眼用的 —— 参数没填/没指定时才回落
+ * 到 STEP_LABELS。
+ */
+export function stepTitle(step: WorkflowStep, resolveExecutor: (id: string) => string | null): string {
+  if (step.kind === "run" && step.p.executorId) {
+    const who = resolveExecutor(step.p.executorId);
+    if (who) return `让 ${who} 干活`;
+  }
+  if (step.kind === "command") {
+    const cmd = step.p.cmd.trim();
+    if (cmd) return `跑 ${cmd}`;
+  }
+  return STEP_LABELS[step.kind];
+}
+
+/**
+ * 这条线要花掉什么 —— 三个数都从定义直接数得出来，不做任何预演。
+ *
+ * · steps    顺利时走几步（每站一次）
+ * · gates    顺利时要你出面几次（只有「等我点头」会停下来找人；失败才问的那几档不算）
+ * · aiRuns   不顺利时最多起几次 AI：干活一次，外加每个「打回给 AI 重做」的站各自的轮数
+ *            上限（打回就是把报错交回给干活的 agent，所以每一轮都真的多起一次）
+ */
+export interface WorkflowCost { steps: number; gates: number; aiRuns: number }
+
+export function workflowCost(def: WorkflowDef): WorkflowCost {
+  const runs = def.steps.filter((s) => s.kind === "run").length;
+  const redo = def.steps.reduce((sum, s) => sum + (s.fail?.mode === "back" ? s.fail.max : 0), 0);
+  return {
+    steps: def.steps.length,
+    gates: def.steps.filter((s) => s.kind === "human").length,
+    aiRuns: runs ? runs + redo : 0,
+  };
+}
 
 /** 这一站跑起来时，任务列表里那一格写什么。 */
 export function stepStatusLabel(kind: StepKind): string {

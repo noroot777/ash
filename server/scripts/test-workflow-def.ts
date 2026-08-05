@@ -8,7 +8,8 @@
 //
 // 跑法：npm -w server run test:workflow
 import {
-  MAX_WORKFLOW_STEPS, checkWorkflow, isWorkflowUsable, makeStep, normalizeWorkflowDef,
+  MAX_WORKFLOW_STEPS, SINGLETON_KINDS, STEP_LABELS,
+  checkWorkflow, isWorkflowUsable, makeStep, normalizeWorkflowDef,
 } from "@harness/shared/workflow";
 import type { StepKind, WorkflowDef, WorkflowStep } from "@harness/shared/workflow";
 import { BUILTIN_WORKFLOWS, builtinWorkflowDef } from "@harness/shared/workflow-presets";
@@ -50,20 +51,42 @@ check("空线", denials({ workspace: "isolated", steps: [] }), ["一条线至少
 check("合并前没人点头", denials(line(["run", "accept"])), ["合并之前必须有一站「等我点头」"]);
 check("点头在合并之后不算数", denials(line(["run", "accept", "human"])), ["合并之前必须有一站「等我点头」"]);
 check("点头在前就放行", denials(line(["run", "human", "accept"])), []);
-check("两站合并", denials(line(["run", "human", "accept", "accept"])), ["「合并并清理」只能有一站"]);
 check("预览之后没人看", denials(line(["run", "preview"])), ["预览起来之后没有人工关口，没人会去看它"]);
 check("预览之后有人看", denials(line(["run", "preview", "human"])), []);
 
-// 回拐：只能往前，且必须指到真实存在的站
+// 会停下来等的站每种只能有一个。这不是洁癖:执行链是被事件唤醒的,唤醒时只说得清
+// 「哪一类锚点过去了」,说不清是第几个,所以第二个同类锚点必然永远轮不到 ——
+// 线路图上画着一站永远不会跑,是比「不让存」严重得多的谎。
+for (const kind of SINGLETON_KINDS) {
+  const dup = line(["run", "human", kind, kind]);
+  check(`两站「${STEP_LABELS[kind]}」`, denials(dup).includes(`「${STEP_LABELS[kind]}」只能有一站`), true);
+}
+// 反过来:不会停下来等的站可以重复,自由编排靠的就是它们
+check("命令站可以来好几遍", denials(line(["run", "command", "verify", "command", "human", "command"])), []);
+check("预览起两次也行", denials(line(["run", "preview", "preview", "human"])), []);
+
+// 失败策略只剩「怎么办 + 几轮」两个旋钮,轮数有边界
 const back = line(["run", "verify"]);
-back.steps[1]!.fail = { mode: "back", backTo: "s1", max: 2 };
-check("回拐到前面", denials(back), []);
-back.steps[1]!.fail = { mode: "back", backTo: "s9", max: 2 };
-check("回拐指向不存在的站", denials(back), ["「回到某一步重做」没指到有效的站"]);
-back.steps[1]!.fail = { mode: "back", backTo: "s2", max: 2 };
-check("回拐指向自己", denials(back), ["只能回到前面的站，不能往后跳"]);
-back.steps[1]!.fail = { mode: "back", backTo: "s1", max: 9 };
+back.steps[1]!.fail = { mode: "back", max: 2 };
+check("打回重做", denials(back), []);
+back.steps[1]!.fail = { mode: "ask", max: 1 };
+check("问我一句", denials(back), []);
+back.steps[1]!.fail = { mode: "back", max: 9 };
 check("重做轮数越界", denials(back), ["重做轮数只能是 1..5"]);
+back.steps[1]!.fail = { mode: "back", max: 0 };
+check("重做轮数不能是 0", denials(back), ["重做轮数只能是 1..5"]);
+// 停不下来的站没有失败分支可谈:makeStep 就不给它挂
+check("人工关口没有失败分支", makeStep("human", "h").fail, null);
+check("预览站没有失败分支", makeStep("preview", "p").fail, null);
+check("干活站默认停下等人", makeStep("run", "r").fail, { mode: "stop", max: 2 });
+
+// ── 自由编排:不是模板里那几条也照样能跑 ─────────────────────────────────────
+// 起手式只是起手式,用户自己搭的线才是常态,所以这几条得明确放行。
+check("只有一站干活", denials(line(["run"])), []);
+check("干完先跑命令再验", denials(line(["run", "command", "verify"])), []);
+check("验完起预览让人看,看完不合并", denials(line(["run", "verify", "preview", "human"])), []);
+check("在项目目录里干、不合并", denials(line(["run", "command", "human"], "shared")), []);
+check("命令站在最后收尾", denials(line(["run", "human", "accept", "command"])), []);
 
 // ── warn：能跑，但多半不是你要的 ──────────────────────────────────────────
 const noChecks = line(["run", "verify"]);
@@ -105,11 +128,21 @@ check("preview 没有失败分支", normalizeWorkflowDef({
   steps: [{ kind: "run" }, { kind: "preview", fail: { mode: "stop", max: 2 } }, { kind: "human" }],
 }).def?.steps[1]!.fail, null);
 
-// 悬空的 backTo 就地降级成「停下等人」，而不是让整条线作废
-const dangling = normalizeWorkflowDef({
+// 老数据里的 backTo 到这儿被丢掉:那个旋钮从来没接通过执行链,留着就是骗人。丢掉之后
+// 「怎么办」和「几轮」原样保留,老任务的行为跟它实际发生过的行为一致(= 打回重做)。
+const legacy = normalizeWorkflowDef({
   steps: [{ id: "a", kind: "run" }, { id: "b", kind: "verify", fail: { mode: "back", backTo: "ghost", max: 3 } }],
 });
-check("悬空回拐降级", dangling.def?.steps[1]!.fail, { mode: "stop", backTo: null, max: 3 });
+check("老数据的 backTo 被丢掉", legacy.def?.steps[1]!.fail, { mode: "back", max: 3 });
+check("人工关口的失败分支一并丢掉", normalizeWorkflowDef({
+  steps: [{ kind: "run" }, { kind: "human", fail: { mode: "back", max: 2 } }],
+}).def?.steps[1]!.fail, null);
+check("轮数超上限就夹到上限", normalizeWorkflowDef({
+  steps: [{ kind: "run", fail: { mode: "back", max: 99 } }],
+}).def?.steps[0]!.fail, { mode: "back", max: 5 });
+check("不认识的失败档回落成停下等人", normalizeWorkflowDef({
+  steps: [{ kind: "run", fail: { mode: "teleport", max: 2 } }],
+}).def?.steps[0]!.fail, { mode: "stop", max: 2 });
 
 // 幂等：内置 → JSON → normalize 应当原样回来，否则存一次盘就漂一次
 for (const b of BUILTIN_WORKFLOWS) {

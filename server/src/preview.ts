@@ -176,10 +176,23 @@ export async function stopPreview(taskId: string, reason: string | null): Promis
   return true;
 }
 
-/** 人工关口结束时的回收：只收 life="gate" 那一档，选了「任务结束时回收」的留着继续看。 */
-export async function stopPreviewAtGate(taskId: string): Promise<void> {
+/**
+ * 验收通过时的回收：`gate`（下一个人工关口结束时回收）和 `task`（任务结束时回收）两档
+ * 一起收。
+ *
+ * 「任务结束时回收」得真有个结束点，否则那一档就是永不回收——一个 dev server 一直占着
+ * 端口，用户还以为选了「任务结束时回收」它自己会走。这条线的终点就是验收：走到这儿
+ * 这个任务不会再动了。（打回重做那条路上关口也结束了，但那时预览由「任务重新开跑」
+ * 那一下收掉，见 stopPreviewOnRerun。）
+ *
+ * 调用点在**「点头之后」那一段开跑之前**，所以那一段又起的预览（用户特意编排的「验收完
+ * 把线上环境开起来」）不受影响 —— 它是验收之后才有的东西。
+ */
+export async function stopPreviewAtAccept(taskId: string): Promise<void> {
   const record = readPreview(taskId);
-  if (record?.life === "gate") await stopPreview(taskId, "人工关口已结束");
+  if (!record) return;
+  if (record.life === "gate") await stopPreview(taskId, "人工关口已结束");
+  else if (record.life === "task") await stopPreview(taskId, "任务已验收完成，按线上写的「任务结束时回收」收掉");
 }
 
 /** 任务又开跑了：预览指向的是上一版代码，一律收掉，免得对着旧页面验新改动。 */
@@ -189,6 +202,10 @@ export async function stopPreviewOnRerun(taskId: string): Promise<void> {
 
 // 清扫：进程早死了的记录、以及 idle30 那一档到点的。启动时先扫一遍，之后每 5 分钟一次
 // —— 重启后内存 map 没了也不影响，判据全在盘上。
+//
+// 还兜一类：**任务本身已经没了或者被归档**。验收那条路径收得掉正常走完的，收不掉「任务
+// 直接被删/归档，预览还在那儿开着」的——那种情况下没有任何一个界面还会提到它，端口却
+// 一直占着。db 走动态 import：这个模块本来只碰进程和文件，不想为一条兜底把它绑到表上。
 export async function sweepPreviews(): Promise<void> {
   let dirs: string[];
   try {
@@ -210,7 +227,29 @@ export async function sweepPreviews(): Promise<void> {
     }
     if (record.life === "idle30" && Date.now() - Date.parse(record.startedAt) > IDLE_LIFE_MS) {
       await stopPreview(taskId, "起来满 30 分钟，按线上写的回收");
+      continue;
     }
+    const gone = await taskGone(taskId);
+    if (gone) await stopPreview(taskId, gone);
+  }
+}
+
+/** 任务已经不在了（删了/归档了）就给个理由，否则 null。查不动库时一律当「还在」。 */
+async function taskGone(taskId: string): Promise<string | null> {
+  try {
+    const [{ db }, { tasks }, { eq }] = await Promise.all([
+      import("./db/index.js"),
+      import("./db/schema.js"),
+      import("drizzle-orm"),
+    ]);
+    const row = (await db
+      .select({ archived: tasks.archived })
+      .from(tasks)
+      .where(eq(tasks.id, taskId))).at(0);
+    if (!row) return "任务已被删除";
+    return row.archived ? "任务已归档" : null;
+  } catch {
+    return null;
   }
 }
 

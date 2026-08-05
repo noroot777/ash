@@ -109,6 +109,16 @@ async function isAncestor(repo: string, ancestor: string, descendant: string): P
   }
 }
 
+/** 某个 ref 指向的 commit；ref 不存在返回 null。 */
+async function commitOf(repo: string, ref: string): Promise<string | null> {
+  try {
+    const { stdout } = await exec("git", ["-C", repo, "rev-parse", "--verify", "--quiet", `${ref}^{commit}`]);
+    return stdout.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
 async function checkedOutPath(repo: string, branch: string): Promise<string | null> {
   const { stdout } = await exec("git", ["-C", repo, "worktree", "list", "--porcelain"]);
   let path: string | null = null;
@@ -366,11 +376,30 @@ async function mergeTaskBranchLocked(
   }
 
   // 「只打标签不合并」：目标分支一动不动，只在任务分支的头上钉一个标签，日后要找回
-  // 这份产物有个稳定的名字。标签已存在（重复验收）当成功，不覆盖别人的标签。
+  // 这份产物有个稳定的名字。
+  //
+  // **不用 `git tag -f`**：标签名是从 taskId 前 8 位算出来的，理论上撞不着，但真撞上
+  // 时 -f 会把别人的标签指到别处去 —— 一个不可逆、而且用户完全看不见的覆盖。所以先
+  // 看它现在指着谁：指着同一个 commit 就是重复验收，当成功；指着别处就报错让人处理。
   if (strategy === "tag") {
     const tag = acceptTagName(taskId);
+    const [head, tagged] = await Promise.all([
+      commitOf(repo, sourceBranch),
+      commitOf(repo, `refs/tags/${tag}`),
+    ]);
+    if (tagged) {
+      if (tagged === head) return { ok: true, sourceBranch, targetBranch, method: "tagged", tag };
+      return {
+        ok: false,
+        reason: "merge_failed",
+        message: `标签 ${tag} 已经存在、而且指向别的提交（${tagged.slice(0, 8)}）；`
+          + "不覆盖它，请先确认那是什么再手动处理。",
+        sourceBranch,
+        targetBranch,
+      };
+    }
     try {
-      await exec("git", ["-C", repo, "tag", "-f", tag, sourceBranch]);
+      await exec("git", ["-C", repo, "tag", tag, sourceBranch]);
       return { ok: true, sourceBranch, targetBranch, method: "tagged", tag };
     } catch (error) {
       return {

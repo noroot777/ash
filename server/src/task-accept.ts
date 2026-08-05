@@ -1,7 +1,7 @@
 import { eq, or } from "drizzle-orm";
 import type { Hono } from "hono";
 import { acceptPlan, stepsAfterAnchor } from "@harness/shared/workflow-policy";
-import { ACCEPT_CLEAN_LABELS, ACCEPT_STRATEGY_LABELS } from "@harness/shared/workflow";
+import { ACCEPT_CLEAN_LABELS, ACCEPT_STRATEGY_LABELS, STEP_LABELS } from "@harness/shared/workflow";
 import { db } from "./db/index.js";
 import { projects, tasks } from "./db/schema.js";
 import { handOffConflict, type ConflictHandoff } from "./accept-conflict.js";
@@ -10,7 +10,7 @@ import { cleanupAcceptedTask, cleanupPlanFor, mergeTaskBranch } from "./git-acce
 import { taskWorkflowDef } from "./workflows.js";
 import { taskBranchDiff } from "./git-diff.js";
 import { publishTaskUpdated } from "./task-store.js";
-import { stopPreviewAtGate } from "./preview.js";
+import { stopPreviewAtAccept } from "./preview.js";
 import { withRepoLock } from "./repo-lock.js";
 import { setTaskStage } from "./task-stage.js";
 import { appendTaskTimeline } from "./task-timeline.js";
@@ -31,6 +31,21 @@ type AcceptSuccess = {
   branch?: string;
   branchDeleted?: boolean;
   warnings?: AcceptWarning[];
+  /**
+   * 「点头之后」那一段（发布脚本之类）跑得怎么样。线上没写这一段就没有这个字段。
+   *
+   * 它**不影响 accepted**：合并和清理已经真的做完了，改回 accepted:false 等于谎报另一头。
+   * 但也不能不说 —— 一个挂掉的发布脚本被吞成「验收成功」，用户下一次知道是在线上出事
+   * 的时候。所以合并的结论和尾段的结论分开报，各说各的。
+   */
+  tail?: AcceptTail;
+};
+
+type AcceptTail = {
+  ok: boolean;
+  /** 卡在哪一站（用中文站名，直接能显示） */
+  step?: string;
+  reason?: string;
 };
 
 type AcceptWarning = {
@@ -108,9 +123,10 @@ async function finalizeAcceptance(
   message: string,
 ): Promise<SharedWorkerAcceptance | null> {
   await setTaskStage(task.id, "accepted");
-  // 人工关口到此结束：线上写着「下一个人工关口结束时回收」的预览在这儿收掉。选了
-  // 「任务结束时回收」的留着——验收完还想再点两下是常事。
-  await stopPreviewAtGate(task.id);
+  // 人工关口到此结束，这条线也走到终点了：线上写着「下一个人工关口结束时回收」和
+  // 「任务结束时回收」的预览都在这儿收掉。「点头之后」那一段还没开跑，所以那一段
+  // 特意编排的预览不会被这一下误伤。
+  await stopPreviewAtAccept(task.id);
   const sharedWorkers = task.mode === "team" ? await acceptSharedTeamWorkers(task.id) : null;
   await appendTaskTimeline(
     task.id,
@@ -468,20 +484,53 @@ export async function acceptTask(taskId: string): Promise<AcceptTaskResult> {
   } finally {
     acceptingTaskIds.delete(taskId);
   }
-  if (result.accepted) await runAcceptedTail(taskId);
+  if (result.accepted) {
+    const tail = await runAcceptedTail(taskId);
+    if (tail) result = { ...result, tail };
+  }
   return result;
 }
 
 // 点头之后线上还写着的那几站（跑一条发布命令、把预览再开起来之类）。
 // 放在仓库锁**之外**跑：这些命令可能跑好几分钟，占着锁会让同仓库的其它验收干等。
 // skipAccept 是因为「合并并清理」正是刚做完的这件事,不能再做一遍。
-async function runAcceptedTail(taskId: string): Promise<void> {
+//
+// 跑砸了**不会把验收改成失败**（合并确实做完了），但要如实带回去，并按这一站写的失败
+// 策略收尾——线路图上给它挂了「问我一句」，就得真的问出来。
+async function runAcceptedTail(taskId: string): Promise<AcceptTail | null> {
   const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
-  if (!task) return;
+  if (!task) return null;
   const def = taskWorkflowDef(task.workflow);
-  if (!stepsAfterAnchor(def, "human").some((step) => step.kind !== "accept")) return;
+  if (!stepsAfterAnchor(def, "human").some((step) => step.kind !== "accept")) return null;
   const { runSegment } = await import("./workflow-steps.js");
-  await runSegment(task, def, "human", { skipAccept: true });
+  const result = await runSegment(task, def, "human", { skipAccept: true });
+  if (result.ok) return { ok: true };
+
+  const step = result.failed!;
+  const label = STEP_LABELS[step.kind];
+  await appendTaskTimeline(
+    taskId,
+    `合并已经做完了，卡住的是「点头之后」那一段：「${label}」没跑过。产物已经合进去，这一段要不要补跑由你定。`,
+  );
+  // 「打回给 AI 重做」在这一段有个真做不到的情况：清理那一档刚把 worktree 和分支收掉，
+  // 唤醒 agent 也没有地方可干活。这时不假装打回，改成把问题挂给用户并说明为什么。
+  const workspaceGone = task.useWorktree && acceptPlan(def).clean !== "none";
+  if (step.fail?.mode === "back" && workspaceGone) {
+    await appendTaskTimeline(taskId, `「${label}」写的是「打回给 AI 重做」，但工作区刚随验收清掉了，没法再打回；改成问你一句。`);
+    const { askAboutFailure } = await import("./task-question.js");
+    await askAboutFailure(taskId, label, result.reason);
+  } else {
+    const { applyFailPolicy } = await import("./workflow-steps.js");
+    await applyFailPolicy(
+      task,
+      step,
+      result.reason,
+      (round) => `验收之后的「${label}」这一站没跑过（第 ${round} 次）：\n\n`
+        + `${"```"}\n${result.reason ?? ""}\n${"```"}\n\n`
+        + "产物已经合并，请把这一段修到能跑过，然后照常确认完成。",
+    );
+  }
+  return { ok: false, step: label, reason: result.reason };
 }
 
 export function mountTaskAcceptanceRoutes(api: Hono): void {

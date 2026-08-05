@@ -248,15 +248,14 @@
 }
 
 /* ── 就地改：点哪儿弹哪儿，只有这一个字段 ────────────────────────── */
+/* 位置由 Popover.tsx 量出来后写在 style 上（挂在 body、认锚点的屏幕坐标），
+   这里只管长相 —— 定位一旦写回 absolute，弹层就又会被卡片的圆角裁掉。 */
 .wf-pop {
-  position: absolute;
-  top: calc(100% + 6px);
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 30;
+  position: fixed;
+  z-index: 60;
   width: max-content;
-  min-width: 178px;
-  max-width: 292px;
+  min-width: 190px;
+  max-width: 340px;
   padding: 8px;
   border-radius: 12px;
   background: var(--panel);
@@ -264,10 +263,21 @@
 }
 
 .wf-pop-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   padding: 2px 6px 6px;
   font-size: 11px;
   color: var(--faint);
   white-space: nowrap;
+}
+.wf-pop-back {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font-size: 11px;
+  cursor: pointer;
 }
 
 .wf-pop-options { display: flex; flex-direction: column; gap: 1px; }
@@ -283,6 +293,69 @@
 .wf-pop-option:hover:not(:disabled) { background: var(--hover-bg); }
 .wf-pop-option:disabled { color: var(--faint); cursor: default; }
 .wf-pop-option.is-on { background: var(--accent-soft); color: var(--accent); font-weight: 540; }
+
+/* 加站菜单里每一条前面点一颗这一类站的颜色，和线上的站台是同一套记号 */
+.wf-pop-kind { display: flex; align-items: center; gap: 7px; }
+.wf-pop-kind i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--tone);
+}
+.wf-pop-kind:disabled i { background: var(--line2); }
+
+/* 起手式那张下拉：名字一行、颜色点一行、描述一行 */
+.wf-pop-tpl { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; white-space: normal; }
+.wf-pop-sub { flex-basis: 100%; font-size: 11px; color: var(--faint); }
+.wf-pop-option.is-on .wf-pop-sub { color: color-mix(in srgb, var(--accent) 72%, transparent); }
+
+/* 站点菜单的目录页：左边字段名、右边它现在的值，点一行钻进去改 */
+.wf-pop-cell {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 9px;
+  border-radius: 8px;
+  font-size: 12.5px;
+  color: var(--muted);
+  text-align: left;
+}
+.wf-pop-cell:hover { background: var(--hover-bg); }
+.wf-pop-cell b {
+  max-width: 190px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+  color: var(--ink);
+}
+.wf-pop-cell b[data-warn="yes"] { color: var(--amber); }
+
+.wf-pop-lead { margin-bottom: 4px; }
+
+.wf-pop-ops {
+  display: flex;
+  gap: 4px;
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--line);
+}
+.wf-pop-ops button {
+  flex: 1;
+  padding: 5px 6px;
+  border-radius: 8px;
+  font-size: 11.5px;
+  color: var(--muted);
+  background: var(--raised);
+}
+.wf-pop-ops button:hover:not(:disabled) { background: var(--hover-bg); color: var(--ink); }
+.wf-pop-ops button:disabled { opacity: 0.4; cursor: default; }
+.wf-pop-ops .wf-pop-del { flex: 1.4; }
+.wf-pop-ops .wf-pop-del:hover:not(:disabled) {
+  color: var(--red);
+  background: color-mix(in srgb, var(--red) 10%, transparent);
+}
 
 .wf-pop-form { display: flex; flex-direction: column; gap: 6px; }
 
@@ -440,140 +513,7 @@
 
 .wf-picker { max-width: 320px; }
 
-/* ── 收起态的线：一排站名 + 常驻虚线 ＋ ─────────────────────────── */
-/* 高度对齐「执行模式」那一节的一行下拉框：不点开就不占地方。 */
-.wf-mini {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 2px;
-  padding: 8px 10px;
-  border-radius: 12px;
-  background: var(--subtle-bg);
-  box-shadow: inset 0 0 0 1px var(--line);
-}
-.wf-mini-stop {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 4px 10px;
-  border-radius: 999px;
-  background: var(--panel);
-  box-shadow: inset 0 0 0 1px var(--line);
-  font-size: 12px;
-  color: var(--text);
-  white-space: nowrap;
-}
-.wf-mini-del {
-  display: inline-flex;
-  padding: 0;
-  border: 0;
-  background: none;
-  color: var(--faint);
-  font-size: 10px;
-  line-height: 1;
-  cursor: pointer;
-}
-.wf-mini-del:hover { color: var(--red); }
-.wf-mini-slot { position: relative; display: inline-flex; }
-.wf-mini-gap { width: 16px; height: 0; border-top: 1px dashed var(--line-strong, var(--line)); }
-.wf-mini-add {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 16px;
-  height: 16px;
-  padding: 0;
-  border: 1px dashed var(--line-strong, var(--line));
-  border-radius: 999px;
-  background: none;
-  color: var(--faint);
-  cursor: pointer;
-}
-.wf-mini-add:hover { border-style: solid; border-color: var(--accent); color: var(--accent); }
-/* 收起态贴着面板底部时，菜单往上开，免得被裁掉。 */
-.wf-pop-up { top: auto; bottom: calc(100% + 6px); }
-
-/* ── 新建任务面板里的「干完之后」 ─────────────────────────────── */
-.composer-config-section.is-workflow { display: flex; flex-direction: column; gap: 10px; }
-.composer-wf-grow {
-  margin-left: auto;
-  padding: 4px 10px;
-  border: 0;
-  border-radius: 999px;
-  background: var(--subtle-bg);
-  color: var(--muted);
-  font-size: 12px;
-  cursor: pointer;
-}
-.composer-wf-grow:hover { color: var(--accent); background: var(--accent-soft); }
-.composer-wf-pick { display: flex; align-items: center; gap: 12px; }
-.composer-wf-label {
-  display: inline-flex;
-  align-items: baseline;
-  gap: 6px;
-  font-size: 12px;
-  color: var(--muted);
-}
-.composer-wf-label em {
-  font-style: normal;
-  font-size: 11px;
-  color: var(--faint);
-}
-.composer-wf-label em[data-own="yes"] { color: var(--accent); }
-.composer-wf-selwrap { position: relative; flex: 1; min-width: 0; }
-.composer-wf-sel {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  width: 100%;
-  padding: 6px 10px;
-  border: 0;
-  border-radius: 10px;
-  background: var(--subtle-bg);
-  box-shadow: inset 0 0 0 1px var(--line);
-  color: var(--text);
-  font-size: 13px;
-  text-align: left;
-  cursor: pointer;
-}
-.composer-wf-sel:hover { box-shadow: inset 0 0 0 1px var(--accent); }
-.composer-wf-menu { left: 0; transform: none; max-width: min(360px, 100%); }
-.composer-wf-fork {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 7px 10px;
-  border-radius: 10px;
-  background: var(--accent-soft);
-  font-size: 12px;
-  color: var(--muted);
-}
-.composer-wf-fork b { margin-right: 6px; color: var(--accent); font-weight: 560; }
-.composer-wf-forkops { display: inline-flex; gap: 6px; margin-left: auto; }
-.composer-wf-forkops button {
-  padding: 3px 9px;
-  border: 0;
-  border-radius: 999px;
-  background: var(--panel);
-  color: var(--text);
-  font-size: 12px;
-  cursor: pointer;
-}
-.composer-wf-forkops button:hover { color: var(--accent); }
-.composer-wf-field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
-.composer-wf-field input {
-  padding: 6px 9px;
-  border-radius: 9px;
-  border: 0;
-  background: var(--subtle-bg);
-  box-shadow: inset 0 0 0 1px var(--line);
-  color: var(--text);
-  font-size: 13px;
-}
-.composer-wf-check { display: flex; align-items: center; gap: 7px; margin-top: 9px; font-size: 12px; color: var(--muted); }
-.composer-wf-rail { margin-top: 2px; }
+/* 收起态那条线 + 新建面板里的「干完之后」在 workflow-composer.css */
 
 /* ── Inspector 里的竖版线路 ───────────────────────────────────── */
 /* 340px 的窄栏里，竖着排比横着装得下更多：每一站有一整行的宽度。 */

@@ -129,7 +129,8 @@ export default function TaskDetail() {
   }, [id, task?.mode, task?.status, loadConv]);
 
   // 待发送消息轮询：与任务是否 running 无关（idle 任务也可有待发消息），节奏比会话慢。
-  // 回前台立即补拉一次。
+  // 回前台立即补拉一次；状态一变也立刻补拉——排队消息正是在任务转空闲那一刻被投递出去的，
+  // 靠慢轮询会让它在列表里多挂十几秒。
   useEffect(() => {
     if (!task || task.mode === "debate") return;
     loadPending();
@@ -141,7 +142,7 @@ export default function TaskDetail() {
       clearInterval(timer);
       sub.remove();
     };
-  }, [loadPending, task?.mode]);
+  }, [loadPending, task?.mode, task?.status]);
 
   if (!task) {
     return (
@@ -155,9 +156,10 @@ export default function TaskDetail() {
   const dispatchedWorker = task.parentId !== null;
   const parentTeam = dispatchedWorker ? tasks.find((item) => item.id === task.parentId) : null;
   const action = runAction(status, { mode: task.mode, awaitingAnswer: !!task.question });
-  // Resident team consoles accept interrupt + send while running. The same
-  // running/queued guard remains correct for one-shot tasks.
-  const replyBlocked = task.mode !== "team" && (status === "running" || status === "queued");
+  // 团队调度台是常驻会话，运行中直接收消息。单飞任务是一次性运行，收不了实时输入，
+  // 所以运行中发出的回复由后端落成「排队消息」，这一轮跑完自动送进同一个会话
+  // （见 server/src/pending-messages.ts）——能发，只是晚一步，不再是拒收。
+  const queueing = task.mode !== "team" && (status === "running" || status === "queued");
 
   const onPrimary = () => {
     if (action.kind === "run") {
@@ -284,12 +286,22 @@ export default function TaskDetail() {
       return;
     }
     setInput("");
-    // Optimistic local bubble; the poll replaces it with the .md's own record of
-    // the same turn once the reply lands.
-    stickToBottomRef.current = true;
-    setLines((ls) => [...ls, { kind: "user", text, at: new Date().toISOString() }]);
+    // 任务在跑时后端会把这条落成排队消息，没真发出去就不能先贴进时间线。
+    if (!queueing) {
+      // Optimistic local bubble; the poll replaces it with the .md's own record of
+      // the same turn once the reply lands.
+      stickToBottomRef.current = true;
+      setLines((ls) => [...ls, { kind: "user", text, at: new Date().toISOString() }]);
+    }
     try {
-      await api.replyTask(id, text);
+      const r = await api.replyTask(id, text);
+      // 按结果分支:任务刚好在这一刻起跑时,前端判断会落后于后端。
+      if (r?.scheduled) {
+        if (r.message) setPending((ps) => [...ps, r.message!].sort((a, b) => a.sendAt.localeCompare(b.sendAt)));
+        else loadPending();
+        loadConv().catch(() => {}); // 抹掉抢跑时可能贴出的那个气泡
+        return;
+      }
       refreshAll().catch(() => {}); // pick up the running status → conversation poll kicks in
     } catch (e) {
       Alert.alert("回复失败", e instanceof Error ? e.message : String(e));
@@ -522,8 +534,11 @@ export default function TaskDetail() {
               paddingVertical: 6,
             }}
           >
-            <Ionicons name="time-outline" size={13} color={theme.faint} />
-            <Text style={{ color: theme.muted, fontSize: 12, fontFamily: fonts.mono }}>{formatInstant(m.sendAt)}</Text>
+            {/* 排队消息不看时间（跑完就发），所以那一列写「排队中」而不是一个骗人的时刻。 */}
+            <Ionicons name={m.mode === "queued" ? "layers-outline" : "time-outline"} size={13} color={theme.faint} />
+            <Text style={{ color: theme.muted, fontSize: 12, fontFamily: fonts.mono }}>
+              {m.mode === "queued" ? "排队中" : formatInstant(m.sendAt)}
+            </Text>
             <Text numberOfLines={1} style={{ flex: 1, color: theme.ink, fontSize: 13 }}>
               {m.text || "[附件]"}
             </Text>
@@ -537,8 +552,8 @@ export default function TaskDetail() {
           <TextInput
             value={input}
             onChangeText={setInput}
-            editable={!replyBlocked}
-            placeholder={replyBlocked ? "运行中，暂不能回复…" : "回复（续接会话）…"}
+            editable
+            placeholder={queueing ? "任务进行中，发送即排队，跑完自动发出…" : "回复（续接会话）…"}
             placeholderTextColor={theme.faint}
             multiline
             style={{
@@ -552,7 +567,6 @@ export default function TaskDetail() {
               paddingVertical: 9,
               fontSize: 15,
               maxHeight: 120,
-              opacity: replyBlocked ? 0.5 : 1,
             }}
           />
           {/* 🕐 定时发送：对 running 任务也允许排定时（后端允许），故只看是否有文字 */}
@@ -577,16 +591,18 @@ export default function TaskDetail() {
           </DateTimeButton>
           <Pressable
             onPress={() => send()}
-            disabled={replyBlocked || !input.trim()}
+            disabled={!input.trim()}
             style={{
               paddingHorizontal: 16,
               paddingVertical: 11,
               borderRadius: radius.lg,
               backgroundColor: theme.accent,
-              opacity: replyBlocked || !input.trim() ? 0.4 : 1,
+              opacity: !input.trim() ? 0.4 : 1,
             }}
           >
-            <Text style={{ color: theme.accentFg, fontSize: 14, fontWeight: "600" }}>发送</Text>
+            <Text style={{ color: theme.accentFg, fontSize: 14, fontWeight: "600" }}>
+              {queueing ? "排队" : "发送"}
+            </Text>
           </Pressable>
         </View>
       </View>

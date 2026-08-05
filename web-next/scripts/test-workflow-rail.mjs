@@ -14,7 +14,7 @@
 import assert from "node:assert/strict";
 import { STAGE_LABELS, TASK_STATUS_LABELS } from "@harness/shared";
 import { STEP_KINDS, STEP_RUNTIME, makeStep } from "@harness/shared/workflow";
-import { railStops, resolveCursor, stepStatusLabel, workflowSummary } from "../src/workflow/workflowModel.ts";
+import { railStops, resolveCursor, stepStatusLabel, stepTitle, workflowCost, workflowSummary } from "../src/workflow/workflowModel.ts";
 
 const line = (...kinds) => ({
   workspace: "isolated",
@@ -93,5 +93,25 @@ assert.deepEqual(resolveCursor([], { status: "running", stage: null, question: n
 const weird = [makeStep("human", "h"), makeStep("run", "r")];
 const cursor = resolveCursor(weird, { status: "awaiting_review", stage: "awaiting_acceptance", question: null });
 assert.equal(cursor.index, 0, "human 排在前面时游标就该在前面");
+
+// ── 摘要行那三个数 ────────────────────────────────────────────────────────
+// 「顺利走完 N 步 · 要你出面 N 次 · 不顺利最多起 N 次 AI」 —— 它写在新建面板上，用户
+// 会照着它判断这条线要花多少。所以三个数都必须从定义直接数出来，不许估。
+const costed = line("run", "verify", "human", "accept");
+costed.steps[1].fail = { mode: "back", max: 2 };
+assert.deepEqual(workflowCost(costed), { steps: 4, gates: 1, aiRuns: 3 },
+  "1 次干活 + 验证最多打回 2 轮 = 最多 3 次 AI");
+assert.deepEqual(workflowCost(line("human")), { steps: 1, gates: 1, aiRuns: 0 },
+  "线上没有干活站就一次 AI 都不起");
+assert.deepEqual(workflowCost({ workspace: "isolated", steps: [] }), { steps: 0, gates: 0, aiRuns: 0 });
+
+// ── 站台上的名字：能带参数就带 ────────────────────────────────────────────
+const named = line("run", "command");
+assert.equal(stepTitle(named.steps[0], () => null), "让 AI 干活", "查不到执行器就回落到通用说法");
+assert.equal(stepTitle({ ...named.steps[0], p: { ...named.steps[0].p, executorId: "e1" } },
+  (id) => (id === "e1" ? "codex@cpa" : null)), "让 codex@cpa 干活");
+assert.equal(stepTitle(named.steps[1], () => null), "跑 npm run lint");
+assert.equal(stepTitle({ ...named.steps[1], p: { ...named.steps[1].p, cmd: "  " } }, () => null),
+  "跑一条命令", "命令被清空了就别硬编成「跑 」");
 
 console.log("✓ 线路图的状态口径与游标推断全部符合预期");

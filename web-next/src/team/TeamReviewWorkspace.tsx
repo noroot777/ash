@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { Session, Task } from "@harness/shared";
 import { STAGE_LABELS, taskDisplayStatus } from "@harness/shared";
+import { acceptPlan } from "@harness/shared/workflow-policy";
 import { ArrowsClockwise, CaretDown, CheckCircle, GitBranch, GitCommit, SpinnerGap, WarningCircle, X } from "@phosphor-icons/react";
 import { TaskStatusDot } from "../components/TaskStatusDot.tsx";
 import { api, type AcceptTaskFailure, type TaskCommit, type TaskDiffResult } from "../lib/api.ts";
@@ -25,15 +26,37 @@ type ReviewData = {
   sessions: Session[];
 };
 
+// 验收确认框上那句话：**全部读线上写的那一站**，不再写死「合并并删 worktree 和分支」。
+// 这是不可逆动作的最后一道说明，它跟实际会发生的事哪怕差一点，用户按下去就会被闪。
+// 口径与服务端一致：squash 和「只打标签」之后 git 不认为分支已合并，所以那两档即便
+// 选了「删 worktree 和任务分支」，分支也会保留（绝不 -D），这里就照实说。
 function acceptanceMessage(task: Task): string {
-  if (task.mode === "team") {
-    return task.useWorktree
-      ? `共享分支将合并回 ${task.worktreeBase || "项目当前分支"}，随后清理团队 worktree 与分支，并联动验收共享执行者。`
-      : "这会确认共享项目工作区中的团队结果，并联动把全部共享执行者标为验收完成。";
+  const team = task.mode === "team";
+  if (!task.useWorktree) {
+    return team
+      ? "这会确认共享项目工作区中的团队结果，并联动把全部共享执行者标为验收完成。"
+      : "这会确认当前项目工作区中的结果并标记为验收完成。";
   }
-  return task.useWorktree
-    ? `任务分支将合并回 ${task.worktreeBase || "项目当前分支"}，随后清理任务 worktree 与分支。`
-    : "这会确认当前项目工作区中的结果并标记为验收完成。";
+  const plan = acceptPlan(task.workflow);
+  const branch = team ? "共享分支" : "任务分支";
+  const worktree = team ? "团队 worktree" : "任务 worktree";
+  const target = task.worktreeBase || "项目当前分支";
+  const tail = team ? "并联动验收共享执行者。" : "";
+  if (!plan.merge) {
+    return `这条线上没写「合并并清理」：点验收只是认可这份产物，git 一动不动，${branch}与 ${worktree} 都留着。${tail}`;
+  }
+  const merge = plan.merge === "tag"
+    ? `不合并，只在${branch}头上打一个 harness-accepted 标签（${target} 一动不动）`
+    : plan.merge === "squash"
+      ? `${branch}将 squash 成一个提交合并回 ${target}`
+      : `${branch}将合并回 ${target}`;
+  const keepsBranch = plan.merge !== "safe";
+  const clean = plan.clean === "none"
+    ? `，${worktree}与分支都保留`
+    : plan.clean === "worktree" || keepsBranch
+      ? `，随后清理 ${worktree}，分支保留${keepsBranch && plan.clean === "all" ? "（这一档 git 不认为它已合并，不强删）" : ""}`
+      : `，随后清理 ${worktree} 与分支`;
+  return `${merge}${clean}。${tail}`;
 }
 
 function AcceptanceFailureNotice({ failure }: { failure: AcceptTaskFailure }) {
@@ -102,7 +125,11 @@ export function AcceptanceControls({
       }
       onTaskUpdated(await api.task(task.id));
       setAction(null);
-      notify(result.warnings?.length ? `验收通过，但有 ${result.warnings.length} 条清理警告` : "验收通过");
+      // 合并成了、但「点头之后」那一段（发布脚本之类）挂了，是两件事，得分开说：
+      // 只报一句「验收通过」，用户下次知道发布挂了就是在线上出事的时候。
+      notify(result.tail && !result.tail.ok
+        ? `已合并，但「${result.tail.step ?? "点头之后那一段"}」没跑过，详情见任务时间线`
+        : result.warnings?.length ? `验收通过，但有 ${result.warnings.length} 条清理警告` : "验收通过");
     } catch (reason) {
       notify(reason instanceof Error ? reason.message : String(reason));
     } finally {
@@ -114,11 +141,14 @@ export function AcceptanceControls({
     if (!text) return;
     setBusy(true);
     try {
-      await api.replyTask(task.id, `【验收打回】请继续修改并完成后重新提交验收。\n\n${text}`);
+      const result = await api.replyTask(task.id, `【验收打回】请继续修改并完成后重新提交验收。\n\n${text}`);
       onTaskUpdated(await api.task(task.id));
       setAction(null);
       setFeedback("");
-      notify("已打回，意见已送入原任务会话");
+      // 任务这会儿还在跑的话,后端会把意见排队,等它这一轮结束再送进去——如实说清楚。
+      notify("scheduled" in result
+        ? "已打回；任务还在跑，意见已排队，跑完自动送入会话"
+        : "已打回，意见已送入原任务会话");
     } catch (reason) {
       notify(reason instanceof Error ? reason.message : String(reason));
     } finally {

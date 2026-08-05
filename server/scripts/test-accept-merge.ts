@@ -337,6 +337,28 @@ try {
       git(repo, "rev-parse", worktreeBranchName(taskId)),
       "标签打在任务分支的头上",
     );
+
+    // 再验一次是幂等的（同一个提交上重复打标签不算错）
+    const again = await mergeTaskBranch(repo, taskId, "main", "tag");
+    assert.equal(again.ok, true, "标签已经指向这个提交了，再点一次验收不该报错");
+
+    // 但标签若已经指向**别的**提交，就绝不覆盖：那多半是别人的东西，
+    // 覆盖掉之后原来指的提交可能再也找不回来。宁可停下来说清楚，让人自己处置。
+    const tagged = git(repo, "rev-parse", `${acceptTagName(taskId)}^{commit}`);
+    writeFileSync(join(ws.path, "more.txt"), "more\n");
+    git(ws.path, "add", "-A");
+    git(ws.path, "commit", "-m", "task moved on");
+    const clash = await mergeTaskBranch(repo, taskId, "main", "tag");
+    assert.equal(clash.ok, false, "标签指着别的提交时不许悄悄挪走它");
+    if (!clash.ok) {
+      assert.match(clash.message, /已经存在/, "并且把「为什么没做」说清楚");
+      assert.equal(clash.reason, "merge_failed");
+    }
+    assert.equal(
+      git(repo, "rev-parse", `${acceptTagName(taskId)}^{commit}`),
+      tagged,
+      "标签原样没动",
+    );
   }
 
   // 11. 清理档位：「只删 worktree，分支留着」与「都留着」。

@@ -22,6 +22,7 @@ import { augmentedEnv } from "./executors/spawn.js";
 import { RUNS_DIR } from "./paths.js";
 import { startPreview, type PreviewStep } from "./preview.js";
 import { appendTaskTimeline } from "./task-timeline.js";
+import { askAboutFailure } from "./task-question.js";
 import { taskWorkspace } from "./task-workspace.js";
 
 const run = promisify(execFile);
@@ -115,6 +116,7 @@ async function runAccept(task: TaskRow, step: WorkflowStep): Promise<SegmentResu
 
 // 把紧跟某个锚点之后的那一段跑完。任何一站砸了就地停下——后面的站多半依赖前面的产物
 // （典型：先跑 build 再起预览），继续往下跑只会把一个错误变成两个。
+// 「卡住了怎么办」不在这儿决定：那是 applyFailPolicy 的事，调用方拿到结果自己按。
 export async function runSegment(
   task: TaskRow,
   def: WorkflowDef | null,
@@ -129,19 +131,13 @@ export async function runSegment(
         : step.kind === "accept" && !opts.skipAccept
           ? await runAccept(task, step)
           : { ok: true } as SegmentResult;
-    if (!result.ok) {
-      await appendTaskTimeline(
-        task.id,
-        `这条线卡在「${STEP_LABELS[step.kind]}」这一站${step.fail?.mode === "back" ? "，交回去重做" : "，停下等你处理"}。`,
-      );
-      return result;
-    }
+    if (!result.ok) return result;
   }
   return { ok: true };
 }
 
 // ── 失败策略与推进 ─────────────────────────────────────────────────────────
-// 「回到某一步重做」得有个数着的地方，否则一条老是跑不过的命令会把任务打回无数次。
+// 「打回给 AI 重做」得有个数着的地方，否则一条老是跑不过的命令会把任务打回无数次。
 // 计数落盘（跟预览记录一个套路）：重启后照样数得清，一段跑通就清掉。
 function attemptsPath(taskId: string): string {
   return join(RUNS_DIR, taskId, "workflow-steps.json");
@@ -168,6 +164,55 @@ function clearAttempts(taskId: string): void {
   rmSync(attemptsPath(taskId), { force: true });
 }
 
+/**
+ * 一站没过之后按线上写的那一档收尾 —— **三档都在这儿真的做出来**，这是整条线上
+ * 「没过怎么办」的唯一实现处（段落里的命令/预览/合并、干活那一站没干成、以后新增的
+ * 站，全走这一个入口）：
+ *   stop —— 只写一行时间线，任务停在原地等人。
+ *   ask  —— 把「接下来怎么办」挂成提问，答复照常送进这个任务的会话。
+ *   back —— 把报错交回给干活的 agent，最多 max 轮，轮数落盘数着。
+ * 无论走哪一档，这条线都**卡住了**：调用方一律不要再往下推（别派审、别送进人工关口）。
+ */
+export async function applyFailPolicy(
+  task: TaskRow,
+  step: WorkflowStep,
+  reason: string | null | undefined,
+  repairPrompt: (round: number) => string,
+): Promise<void> {
+  const label = STEP_LABELS[step.kind];
+  const fail = step.fail;
+  if (fail?.mode === "ask") {
+    await askAboutFailure(task.id, label, reason);
+    await appendTaskTimeline(task.id, `这条线卡在「${label}」这一站；线上写的是「问我一句」，已经把问题挂给你了。`);
+    return;
+  }
+  if (fail?.mode !== "back") {
+    await appendTaskTimeline(task.id, `这条线卡在「${label}」这一站，停下等你处理。`);
+    return;
+  }
+  const round = bumpAttempt(task.id, step.id);
+  if (round > Math.max(1, fail.max)) {
+    await appendTaskTimeline(
+      task.id,
+      `「${label}」已经打回重做 ${fail.max} 次仍没过，按线上写的上限停下等你处理。`,
+    );
+    return;
+  }
+  await appendTaskTimeline(task.id, `这条线卡在「${label}」这一站，按线上写的打回给 AI 重做（第 ${round} 次）。`);
+  const { continueTask } = await import("./orchestrator.js");
+  await continueTask(task.id, repairPrompt(round), { system: "wake" }).catch((error) => appendTaskTimeline(
+    task.id,
+    `想把这一站打回重做，但唤醒任务时出错（${error instanceof Error ? error.message : String(error)}），请手动续跑。`,
+  ));
+}
+
+function stepFailPrompt(step: WorkflowStep, reason: string | null | undefined) {
+  return (round: number) =>
+    `这条线在「${STEP_LABELS[step.kind]}」这一站没过（第 ${round} 次）：\n\n`
+    + `${"```"}\n${reason ?? ""}\n${"```"}\n\n`
+    + "请修到它能过，然后照常确认完成。";
+}
+
 // 跑完一段并按线上写的失败策略收尾。返回 false = 这条线卡住了，调用方**不要再往下推**
 // （别在一条卡住的线上派审、也别把它送进人工关口）。
 async function advance(task: TaskRow, def: WorkflowDef | null, anchor: AnchorKind): Promise<boolean> {
@@ -177,27 +222,7 @@ async function advance(task: TaskRow, def: WorkflowDef | null, anchor: AnchorKin
     return true;
   }
   const step = result.failed!;
-  const fail = step.fail;
-  if (fail?.mode !== "back") return false;
-  const round = bumpAttempt(task.id, step.id);
-  if (round > Math.max(1, fail.max)) {
-    await appendTaskTimeline(
-      task.id,
-      `「${STEP_LABELS[step.kind]}」已经交回去重做 ${fail.max} 次仍没过，按线上写的上限停下等你处理。`,
-    );
-    return false;
-  }
-  const { continueTask } = await import("./orchestrator.js");
-  await continueTask(
-    task.id,
-    `这条线在「${STEP_LABELS[step.kind]}」这一站没过（第 ${round} 次）：\n\n`
-    + `${"```"}\n${result.reason ?? ""}\n${"```"}\n\n`
-    + "请修到它能过，然后照常确认完成。",
-    { system: "wake" },
-  ).catch((error) => appendTaskTimeline(
-    task.id,
-    `想把这一站交回去重做，但唤醒任务时出错（${error instanceof Error ? error.message : String(error)}），请手动续跑。`,
-  ));
+  await applyFailPolicy(task, step, result.reason, stepFailPrompt(step, result.reason));
   return false;
 }
 
@@ -209,4 +234,23 @@ export function advanceAfterRun(task: TaskRow, def: WorkflowDef | null): Promise
 /** 验完之后那一段（「自动验证」到「等我点头」之间）—— 典型用途就是在这儿把预览打开。 */
 export function advanceAfterVerify(task: TaskRow, def: WorkflowDef | null): Promise<boolean> {
   return advance(task, def, "verify");
+}
+
+/**
+ * 「让 AI 干活」这一站**自己**没干成（这一轮以 failed 结算）时按线上写的那一档走。
+ *
+ * 跟上面两个的区别是它读的不是「干完之后那一段」，而是干活那一站本身的失败分支——
+ * 用户在线路图上给这一站选了「问我一句」或「打回给 AI 重做 3 轮」，就得真的问、真的
+ * 重做，否则那颗标签就是画着好看的。手停（canceled）不走这儿：那是用户自己按的。
+ */
+export async function applyRunFailPolicy(task: TaskRow, def: WorkflowDef | null): Promise<void> {
+  const step = def?.steps.find((s) => s.kind === "run");
+  if (!step?.fail || step.fail.mode === "stop") return; // 停下等人 = 什么都不用做
+  await applyFailPolicy(
+    task,
+    step,
+    "这一轮以失败结算：agent 没有确认完成，或者中途异常退出了。",
+    (round) => `这条线在「${STEP_LABELS.run}」这一站没干成（第 ${round} 次）：上一轮没有确认完成。\n\n`
+      + "请接着把它做完，然后照常确认完成。",
+  );
 }

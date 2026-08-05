@@ -9,7 +9,6 @@
 // ② 走到哪一站是从任务真实的 status/stage 反推的（resolveCursor），不是假进度条。
 //    第二期执行链接管落了真游标之后，这个文件一行都不用改。
 import type { Task } from "@harness/shared";
-import type { WorkflowDef } from "@harness/shared/workflow";
 import { STEP_LABELS } from "@harness/shared/workflow";
 import { ArrowUUpLeft, Check, Warning } from "@phosphor-icons/react";
 import { AcceptanceControls } from "../team/TeamReviewWorkspace.tsx";
@@ -31,9 +30,8 @@ function stateWord(stop: RailStop): string {
 }
 
 function Stop({
-  def, stop, index, catalog, task, onTaskUpdated, notify,
+  stop, index, catalog, task, onTaskUpdated, notify,
 }: {
-  def: WorkflowDef;
   stop: RailStop;
   index: number;
   catalog: ExecutorCatalog;
@@ -42,7 +40,7 @@ function Stop({
   notify: (message: string) => void;
 }) {
   const chips = stepChips(stop.step, (id) => executorName(catalog, id));
-  const fail = failText(def, stop.step);
+  const fail = failText(stop.step);
   const gate = stop.step.kind === "human" && stop.state !== "pending" && atHumanGate(task);
 
   return (
@@ -133,7 +131,6 @@ export function WorkflowInspector({
             {stops.map((stop, index) => (
               <Stop
                 key={stop.step.id}
-                def={def}
                 stop={stop}
                 index={index}
                 catalog={catalog}

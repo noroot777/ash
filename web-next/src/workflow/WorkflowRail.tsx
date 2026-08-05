@@ -8,12 +8,12 @@ import type { Task } from "@harness/shared";
 import type { StepKind, WorkflowDef, WorkflowIssue, WorkflowStep } from "@harness/shared/workflow";
 import { STEP_KINDS, STEP_LABELS, hasFailBranch } from "@harness/shared/workflow";
 import { ArrowUUpLeft, Plus } from "@phosphor-icons/react";
-import { useDismissable } from "../lib/useDismissable.ts";
+import { Popover } from "./Popover.tsx";
 import { executorName, useExecutorCatalog, type ExecutorCatalog } from "./executorCatalog.ts";
 import { ExecutorEditor, FailEditor, MultiEditor, SelectEditor, TextEditor } from "./StepEditors.tsx";
 import { STEP_FIELDS, stepChips, type FieldSpec } from "./stepFields.ts";
 import { STEP_SHORT, railStops } from "./workflowModel.ts";
-import { canAddStep, failText, insertStep, moveStep, patchFail, patchParams, removeStep } from "./workflowEdit.ts";
+import { canAddKind, canAddStep, failText, insertStep, moveStep, patchFail, patchParams, removeStep } from "./workflowEdit.ts";
 
 /** 执行器、模型、强度是联动的一组，点哪颗都开同一个编辑器。 */
 const EXECUTOR_FIELDS = new Set(["executor", "model", "effort"]);
@@ -22,19 +22,35 @@ function fieldSpec(kind: StepKind, key: string): FieldSpec | undefined {
   return STEP_FIELDS[kind].find((spec) => spec.key === key);
 }
 
-function Popover({
-  label, onClose, children,
+/** 一颗可点的标签 + 它自己那张菜单。菜单挂在 body 上（见 Popover），不会被卡片裁掉。 */
+function ChipSlot({
+  className, label, text, disabled, open, onToggle, onClose, children,
 }: {
+  className: string;
   label: string;
+  text: React.ReactNode;
+  disabled: boolean;
+  open: boolean;
+  onToggle: () => void;
   onClose: () => void;
   children: React.ReactNode;
 }) {
-  const box = useRef<HTMLDivElement>(null);
-  useDismissable({ enabled: true, containerRef: box, onClose });
+  const anchor = useRef<HTMLButtonElement>(null);
   return (
-    <div className="wf-pop" ref={box} role="dialog" aria-label={label}>
-      <div className="wf-pop-title">{label}</div>
-      {children}
+    <div className="wf-chip-slot">
+      <button
+        type="button"
+        ref={anchor}
+        className={className}
+        disabled={disabled}
+        aria-expanded={open}
+        onClick={onToggle}
+      >
+        {text}
+      </button>
+      {open && (
+        <Popover anchorRef={anchor} label={label} onClose={onClose}>{children}</Popover>
+      )}
     </div>
   );
 }
@@ -52,7 +68,7 @@ function StepBody({
 }) {
   const [open, setOpen] = useState<string | null>(null);
   const chips = stepChips(step, (id) => executorName(catalog, id));
-  const fail = failText(def, step);
+  const fail = failText(step);
   const editable = !!onChange;
   const close = () => setOpen(null);
 
@@ -65,69 +81,57 @@ function StepBody({
         任务显示 <b>{statusLabel}</b>{note && <em>· {note}</em>}
       </div>
       {chips.map((chip) => (
-        <div className="wf-chip-slot" key={chip.key}>
-          <button
-            type="button"
-            className={`wf-chip${chip.warn ? " is-warn" : ""}`}
-            disabled={!editable}
-            aria-expanded={open === chip.key}
-            onClick={() => setOpen((current) => (current === chip.key ? null : chip.key))}
-          >
-            {chip.text}
-          </button>
-          {open === chip.key && spec && (
-            <Popover label={spec.label} onClose={close}>
-              {EXECUTOR_FIELDS.has(spec.type) ? (
-                <ExecutorEditor
-                  step={step}
-                  catalog={catalog}
-                  onPatch={(patch) => onChange?.(patchParams(def, step.id, patch))}
-                />
-              ) : spec.type === "select" ? (
-                <SelectEditor
-                  spec={spec}
-                  value={typeof value === "string" ? value : ""}
-                  onPick={(next) => { onChange?.(patchParams(def, step.id, { [spec.key]: next })); close(); }}
-                />
-              ) : spec.type === "multi" ? (
-                <MultiEditor
-                  spec={spec}
-                  values={Array.isArray(value) ? (value as string[]) : []}
-                  onToggle={(next) => onChange?.(patchParams(def, step.id, { [spec.key]: next }))}
-                />
-              ) : spec.type === "text" ? (
-                <TextEditor
-                  spec={spec}
-                  value={typeof value === "string" ? value : ""}
-                  onChange={(next) => onChange?.(patchParams(def, step.id, { [spec.key]: next.trim() || null }))}
-                />
-              ) : null}
-            </Popover>
+        <ChipSlot
+          key={chip.key}
+          className={`wf-chip${chip.warn ? " is-warn" : ""}`}
+          label={fieldSpec(step.kind, chip.key)?.label ?? chip.key}
+          text={chip.text}
+          disabled={!editable}
+          open={open === chip.key}
+          onToggle={() => setOpen((current) => (current === chip.key ? null : chip.key))}
+          onClose={close}
+        >
+          {spec && open === chip.key && (
+            EXECUTOR_FIELDS.has(spec.type) ? (
+              <ExecutorEditor
+                step={step}
+                catalog={catalog}
+                onPatch={(patch) => onChange?.(patchParams(def, step.id, patch))}
+              />
+            ) : spec.type === "select" ? (
+              <SelectEditor
+                spec={spec}
+                value={typeof value === "string" ? value : ""}
+                onPick={(next) => { onChange?.(patchParams(def, step.id, { [spec.key]: next })); close(); }}
+              />
+            ) : spec.type === "multi" ? (
+              <MultiEditor
+                spec={spec}
+                values={Array.isArray(value) ? (value as string[]) : []}
+                onToggle={(next) => onChange?.(patchParams(def, step.id, { [spec.key]: next }))}
+              />
+            ) : spec.type === "text" ? (
+              <TextEditor
+                spec={spec}
+                value={typeof value === "string" ? value : ""}
+                onChange={(next) => onChange?.(patchParams(def, step.id, { [spec.key]: next.trim() || null }))}
+              />
+            ) : null
           )}
-        </div>
+        </ChipSlot>
       ))}
       {fail && hasFailBranch(step.kind) && (
-        <div className="wf-chip-slot">
-          <button
-            type="button"
-            className="wf-failchip"
-            disabled={!editable}
-            aria-expanded={open === "fail"}
-            onClick={() => setOpen((current) => (current === "fail" ? null : "fail"))}
-          >
-            <ArrowUUpLeft size={11} weight="bold" aria-hidden="true" />
-            失败 → {fail}
-          </button>
-          {open === "fail" && (
-            <Popover label="这一站失败了怎么办" onClose={close}>
-              <FailEditor
-                def={def}
-                step={step}
-                onPatch={(patch) => onChange?.(patchFail(def, step.id, patch))}
-              />
-            </Popover>
-          )}
-        </div>
+        <ChipSlot
+          className="wf-failchip"
+          label="这一站失败了怎么办"
+          text={<><ArrowUUpLeft size={11} weight="bold" aria-hidden="true" />失败 → {fail}</>}
+          disabled={!editable}
+          open={open === "fail"}
+          onToggle={() => setOpen((current) => (current === "fail" ? null : "fail"))}
+          onClose={close}
+        >
+          <FailEditor step={step} onPatch={(patch) => onChange?.(patchFail(def, step.id, patch))} />
+        </ChipSlot>
       )}
     </div>
   );
@@ -141,11 +145,13 @@ function AddStop({
   onChange: (def: WorkflowDef) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const anchor = useRef<HTMLButtonElement>(null);
   if (!canAddStep(def)) return <div className="wf-seg" />;
   return (
     <div className="wf-seg">
       <button
         type="button"
+        ref={anchor}
         className="wf-add"
         aria-label={`在第 ${at + 1} 站前面加一站`}
         aria-expanded={open}
@@ -154,19 +160,25 @@ function AddStop({
         <Plus size={11} weight="bold" aria-hidden="true" />
       </button>
       {open && (
-        <Popover label="加一站" onClose={() => setOpen(false)}>
+        <Popover anchorRef={anchor} label="加一站" onClose={() => setOpen(false)}>
           <div className="wf-pop-options">
             {STEP_KINDS.map((kind) => (
               <button
                 key={kind}
                 type="button"
                 className="wf-pop-option"
+                disabled={!canAddKind(def, kind)}
                 onClick={() => { onChange(insertStep(def, at, kind)); setOpen(false); }}
               >
                 {STEP_LABELS[kind]}
               </button>
             ))}
           </div>
+          {/* 「会停下来等」的那几站每种只能有一个（执行链认的是事件不是序号），已经有了
+              的就在这儿灰掉并说明白，而不是让用户加完之后再被保存时的红字打回。 */}
+          {STEP_KINDS.some((kind) => !canAddKind(def, kind)) && (
+            <p className="wf-pop-hint">灰掉的那几站这条线上已经有了 —— 每种只能有一站。</p>
+          )}
         </Popover>
       )}
     </div>
