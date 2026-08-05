@@ -225,6 +225,20 @@ function move(step) {
   rowsEl.querySelector(`[data-id="${selected}"]`)?.scrollIntoView({ block: "nearest" });
 }
 
+/* ── 行高档位 ─────────────────────────────────────────
+   34 = 跟收起态、跟现在产品一模一样的行高（is-flat：每格压成一行）；
+   46 / 62 = 让需求和最后一条消息各占两行，看得清但一屏行数少一半。 */
+const ROW_HEIGHTS = [34, 46, 62];
+
+function setRowH(h) {
+  if (!ROW_HEIGHTS.includes(h)) return;
+  document.documentElement.style.setProperty("--rowh", `${h}px`);
+  win.classList.toggle("is-flat", h === 34);
+  for (const btn of $("rowh").querySelectorAll("[data-h]")) {
+    btn.classList.toggle("is-on", Number(btn.dataset.h) === h);
+  }
+}
+
 /* ── 事件 ─────────────────────────────────────────────── */
 rowsEl.addEventListener("click", (e) => {
   const row = e.target.closest(".row[data-id]");
@@ -244,8 +258,9 @@ $("filters").addEventListener("click", (e) => {
 
 $("toggle").addEventListener("click", () => setSpread(!spread));
 $("scrim").addEventListener("click", () => setSpread(false));
-$("dense").addEventListener("change", (e) => {
-  document.documentElement.style.setProperty("--rowh", e.target.checked ? "46px" : "62px");
+$("rowh").addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-h]");
+  if (btn) setRowH(Number(btn.dataset.h));
 });
 
 window.addEventListener("keydown", (e) => {
@@ -255,13 +270,16 @@ window.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && spread) { e.preventDefault(); setSpread(false); return; }
   if (key === "j" || e.key === "ArrowDown") { e.preventDefault(); move(1); return; }
   if (key === "k" || e.key === "ArrowUp") { e.preventDefault(); move(-1); return; }
+  if (e.key >= "1" && e.key <= "3") { e.preventDefault(); setRowH(ROW_HEIGHTS[Number(e.key) - 1]); return; }
   if (e.key === "Enter" && spread) { e.preventDefault(); setSpread(false); }
 });
 
 render();
-// 方便截图 / 分享某个状态：#spread 直接以铺开态打开，#spread-todo 再叠上「需要你处理」筛选。
+// 方便截图 / 分享某个状态：#spread 直接以铺开态打开，#spread-todo 再叠上「需要你处理」
+// 筛选，#spread-flat 用 34px 等高档（跟现在的列表同一个行高，便于并排对比）。
 if (location.hash.startsWith("#spread")) {
   if (location.hash === "#spread-todo") filter = "todo";
+  if (location.hash === "#spread-flat") setRowH(34);
   requestAnimationFrame(() => setSpread(true));
 }
 
