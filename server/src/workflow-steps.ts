@@ -104,12 +104,13 @@ async function runPreview(task: TaskRow, step: PreviewStep): Promise<SegmentResu
 
 // 「合并并清理」这一站：**不在这里另写一套合并**，直接调用户点「验收通过」走的那条路
 // （acceptTask 带着仓库锁、冲突处理、「绝不 -D」的规矩）。区别只在谁按下的：线上没写
-// 「等我点头」时，走到这一站就是这条线自己按的。
+// 「等我点头」时，走到这一站就是这条线自己按的——所以传 `"workflow"`，这条路只做线上
+// 真画了的事（人亲手点则相反，手按覆盖线上写没写，理由见 shared 的 acceptPlan）。
 // 怎么合、清到什么程度全读这一站的参数——acceptTask 里的 acceptPlan() 读的就是它。
 async function runAccept(task: TaskRow, step: WorkflowStep): Promise<SegmentResult> {
   await appendTaskTimeline(task.id, "这条线上没写「等我点头」，走到「合并并清理」就自己合了。");
   const { acceptTask } = await import("./task-accept.js");
-  const result = await acceptTask(task.id);
+  const result = await acceptTask(task.id, "workflow");
   if (result.accepted) return { ok: true };
   return { ok: false, failed: step, reason: result.error };
 }

@@ -185,7 +185,7 @@ assert.deepEqual(stepsAfterAnchor(fast, "verify"), [], "线上没这个锚点就
 assert.deepEqual(stepsAfterAnchor(null, "run"), []);
 
 // ── 验收通过那一刻按线上写的做 ────────────────────────────────────────────
-const { acceptPlan } = await import("@harness/shared/workflow-policy");
+const { acceptPlan, hasAcceptStation } = await import("@harness/shared/workflow-policy");
 assert.deepEqual(
   acceptPlan(null), { merge: "safe", clean: "all" },
   "老任务身上没有线：验收还是老规矩(安全合并 + worktree 和分支都删)，行为分毫不变",
@@ -194,16 +194,35 @@ assert.deepEqual(
   acceptPlan(standard), { merge: "safe", clean: "all" },
   "标准交付那一站写的就是安全合并 + 全清",
 );
+// 线上没画「合并并清理」时，做什么取决于谁按的——这两条是同一条线、同一份配置，
+// 只因按下的人不同而分岔，所以必须成对钉住，改一条就会露出另一条。
 assert.deepEqual(
-  acceptPlan(fast), { merge: null, clean: "none" },
-  "线上没有「合并并清理」这一站：点验收只是「我认可这份产物」，git 一动不动",
+  acceptPlan(fast, "workflow"), { merge: null, clean: "none" },
+  "线自己走到验收、线上又没画这一站：git 一动不动（没画的事不自动发生）",
 );
+assert.deepEqual(
+  acceptPlan(fast, "human"), { merge: "safe", clean: "all" },
+  "同一条线上人亲手点验收：照老规矩合并并清理——手按覆盖线上写没写",
+);
+assert.deepEqual(
+  acceptPlan(fast), { merge: "safe", clean: "all" },
+  "缺省就是人按的：绝大多数调用方是用户点的按钮，自动路径必须显式说自己是 workflow",
+);
+assert.equal(hasAcceptStation(fast), false, "快速通道线上确实没画这一站");
+assert.equal(hasAcceptStation(standard), true, "标准交付画了");
+assert.equal(hasAcceptStation(null), false, "身上没有线的老任务也算没画（文案照实说）");
+// 线上**画了**这一站时，两条路完全一致——覆盖只发生在「线上没写」的空白处，
+// 不是「人按下就无视线上参数」。用户特意选了 squash，手动验收也得是 squash。
 const squashLine = structuredClone(standard);
 const squashStep = squashLine.steps.find((s) => s.kind === "accept")!;
 if (squashStep.kind === "accept") squashStep.p = { strategy: "squash", clean: "worktree" };
 assert.deepEqual(
   acceptPlan(squashLine), { merge: "squash", clean: "worktree" },
   "改了那一站的参数，验收就按改后的做——线上画着什么，按下去就发生什么",
+);
+assert.deepEqual(
+  acceptPlan(squashLine, "workflow"), acceptPlan(squashLine, "human"),
+  "线上画了这一站：谁按的都按它写的做，人按不会把 squash 改回 safe",
 );
 
 // ── 命令站真跑 ────────────────────────────────────────────────────────────
