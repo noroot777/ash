@@ -8,11 +8,14 @@ import {
   useScheduledMessages,
 } from "../components/ScheduledMessages.tsx";
 import { defaultOnceTime } from "../components/ScheduleControl.tsx";
+import { SlashMenu } from "../components/SlashMenu.tsx";
 import { InspectorHost } from "../inspector/index.ts";
 import { api, type ReplyTaskResult, type TeamCuaStatus } from "../lib/api.ts";
 import { OriginTaskBar } from "../components/TaskOrigin.tsx";
 import { useConversation } from "../lib/useConversation.ts";
 import { useServerEvents } from "../lib/events.ts";
+import { useSkills } from "../lib/useSkills.ts";
+import { useSlashCompletion } from "../lib/useSlashCompletion.ts";
 import { useTaskReadState } from "../lib/useTaskReadState.ts";
 import { AttachmentPicker, UploadAttachmentList, useAttachments } from "../task-detail/Attachments.tsx";
 import { QuestionCard } from "../task-detail/QuestionCard.tsx";
@@ -80,6 +83,15 @@ function TeamReplyBox({
   const scheduled = useScheduledMessages(task.id);
   const uploads = useAttachments();
   const disabled = !!task.archived;
+  // 技能按**调度者自己的执行器**算：这句话是发给调度台那个会话的，执行者手上装的
+  // 技能跟它不是一回事（派活时该带什么由调度者自己在 dispatch 里写）。
+  const skills = useSkills({
+    agentType: task.agentType,
+    projectId: task.projectId,
+    executorId: task.executorId,
+    enabled: !disabled,
+  });
+  const slash = useSlashCompletion({ value, setValue, skills: skills.skills, disabled });
   useEffect(() => {
     setValue("");
     setError(null);
@@ -114,6 +126,17 @@ function TeamReplyBox({
     && (!!value.trim() || uploads.attachments.length > 0);
   return (
     <div className="team-reply-shell">
+      {slash.open && (
+        <SlashMenu
+          className="team-reply-command-menu"
+          ariaLabel="技能补全"
+          hint="已装技能 · 回车补全，原样发给调度者的 CLI"
+          items={slash.items}
+          selectedIndex={slash.selectedIndex}
+          onHover={slash.setIndex}
+          onPick={slash.pick}
+        />
+      )}
       {scheduleOpen && (
         <ScheduledSendPanel
           value={sendAt}
@@ -140,9 +163,10 @@ function TeamReplyBox({
           value={value}
           disabled={disabled}
           placeholder={disabled ? "团队已归档（只读）" : task.status === "idle" ? "调度者待命中，说句话就接回同一会话…" : "插一句话（改方向、加要求、直接替它拍板）…"}
-          onChange={(event) => { setValue(event.target.value); setScheduleOpen(false); }}
+          onChange={(event) => { setValue(event.target.value); setScheduleOpen(false); slash.onValueChange(); }}
           onPaste={uploads.onPaste}
           onKeyDown={(event) => {
+            if (slash.onKeyDown(event)) return;
             if ((event.metaKey || event.ctrlKey) && event.key === "Enter") { event.preventDefault(); void send(); }
           }}
         />

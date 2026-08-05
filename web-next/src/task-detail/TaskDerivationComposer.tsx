@@ -15,6 +15,7 @@ import {
   X,
 } from "@phosphor-icons/react";
 import { Dropdown } from "../components/Dropdown.tsx";
+import { SlashMenu } from "../components/SlashMenu.tsx";
 import { Button, Toggle } from "../components/ui.tsx";
 import { ExecutorPickerField } from "../composer/ExecutorPickerField.tsx";
 import {
@@ -27,6 +28,8 @@ import {
   useAgentAvailability,
 } from "../lib/agentAvailability.ts";
 import { api } from "../lib/api.ts";
+import { useSkills } from "../lib/useSkills.ts";
+import { useSlashCompletion } from "../lib/useSlashCompletion.ts";
 import {
   buildTaskDerivationBody,
   defaultDebateTopic,
@@ -237,6 +240,21 @@ export function TaskDerivationComposer({
     (teamMode ? noteRef : topicRef).current?.focus();
   }, [live, teamMode]);
 
+  // 附言最终进的是**调度者**的 prompt，所以技能按调度者那台执行器算。
+  const leadSelection = parseExecutorValue(lead.profile, profiles, { agentType: TEAM_DEFAULTS.lead, executorId: null });
+  const leadSkills = useSkills({
+    agentType: leadSelection.agentType,
+    projectId: task.projectId,
+    executorId: leadSelection.executorId,
+    enabled: teamMode,
+  });
+  const noteSlash = useSlashCompletion({
+    value: note,
+    setValue: (next) => { noteTouched.current = true; setNote(next); },
+    skills: leadSkills.skills,
+    disabled: !teamMode,
+  });
+
   const worktree = derivedWorktreeDefaults(
     task,
     worktreeContext?.branches ?? [],
@@ -436,9 +454,22 @@ export function TaskDerivationComposer({
                 onChange={(event) => {
                   noteTouched.current = true;
                   setNote(event.target.value);
+                  noteSlash.onValueChange();
                 }}
+                onKeyDown={(event) => { noteSlash.onKeyDown(event); }}
                 placeholder="补充执行重点、边界或验收要求…"
               />
+              {noteSlash.open && (
+                <SlashMenu
+                  className="task-derivation-slash-menu"
+                  ariaLabel="技能补全"
+                  hint="已装技能 · 回车补全，原样写进调度者的 prompt"
+                  items={noteSlash.items}
+                  selectedIndex={noteSlash.selectedIndex}
+                  onHover={noteSlash.setIndex}
+                  onPick={noteSlash.pick}
+                />
+              )}
             </label>
           </>
         ) : (
