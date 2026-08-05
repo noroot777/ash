@@ -89,12 +89,21 @@ export function workflowPolicy(def: WorkflowDef | null | undefined): WorkflowPol
 // squash / 只打标签）、清到什么程度（删 worktree 和分支 / 只删 worktree / 都留着），
 // 全读那一站的参数。
 //
-// 线上**没有**这一站时 merge = null，意思是「这条线不合并」——点验收就只是「我认可
-// 这份产物」，git 一动不动，分支和 worktree 都留着。这不是省事：线路图上画着什么，
-// 按下去就该发生什么；线上没画合并却偷偷合了，比不合更让人猝不及防（要合就在编排里
-// 加上这一站，或者自己合）。
+// 线上**没有**这一站时，做什么取决于**谁按下的**——同一个「验收通过」，线自己走到
+// 和人亲手点，不是一件事：
 //
-// 老任务（身上根本没有线）走 null → 老规矩 safe + all，行为分毫不变。
+// - 线自己走到（`by: "workflow"`）→ merge = null，git 一动不动。线路图上画着什么，
+//   跑起来就只该发生什么；没画合并却自动合了，比不合更让人猝不及防。
+// - **人亲手点**（`by: "human"`，默认）→ 老规矩 safe + all，覆盖线上写没写。人不会被
+//   自己按的按钮吓到，「猝不及防」这条理由在这条路上不成立；而一个叫「验收通过」的
+//   按钮如果只记一笔「我认可」，它实际上就是个点赞按钮——用户点完还得自己去 git 里
+//   合一遍，编排配置从「描述流程」变成了「拦着人」。手按的这一下是最高指令。
+//   不可逆的部分由按下之前的确认框兜：前端 `acceptanceMessage` 照实说清这一按会发生
+//   什么，包括「线上没画这一站，但手动验收仍会合」。
+//
+// 老任务（身上根本没有线）走 null → 老规矩 safe + all，两条路都一样，行为分毫不变。
+//
+// 推论：以后再加**自动**触发验收的路径，必须显式传 `"workflow"`；默认值是给人用的。
 export interface AcceptPlan {
   /** 怎么合；null = 这条线不合并，只标记验收 */
   merge: AcceptStrategy | null;
@@ -104,9 +113,22 @@ export interface AcceptPlan {
 
 export const LEGACY_ACCEPT_PLAN: AcceptPlan = { merge: "safe", clean: "all" };
 
-export function acceptPlan(def: WorkflowDef | null | undefined): AcceptPlan {
+/** 这次验收是谁按下的。默认是人——自动路径必须自己显式说明。 */
+export type AcceptBy = "human" | "workflow";
+
+/** 线上有没有画「合并并清理」这一站（人工验收会覆盖它，但文案要照实说）。 */
+export function hasAcceptStation(def: WorkflowDef | null | undefined): boolean {
+  return !!def && def.steps.some((s) => s.kind === "accept");
+}
+
+export function acceptPlan(
+  def: WorkflowDef | null | undefined,
+  by: AcceptBy = "human",
+): AcceptPlan {
   if (!def) return LEGACY_ACCEPT_PLAN;
   const step = def.steps.find((s) => s.kind === "accept");
-  if (!step || step.kind !== "accept") return { merge: null, clean: "none" };
+  if (!step || step.kind !== "accept") {
+    return by === "human" ? LEGACY_ACCEPT_PLAN : { merge: null, clean: "none" };
+  }
   return { merge: step.p.strategy, clean: step.p.clean };
 }

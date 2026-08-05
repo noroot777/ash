@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { Session, Task } from "@harness/shared";
 import { STAGE_LABELS, taskDisplayStatus } from "@harness/shared";
-import { acceptPlan } from "@harness/shared/workflow-policy";
+import { acceptPlan, hasAcceptStation } from "@harness/shared/workflow-policy";
 import { ArrowsClockwise, CaretDown, CheckCircle, GitBranch, GitCommit, SpinnerGap, WarningCircle, X } from "@phosphor-icons/react";
 import { TaskStatusDot } from "../components/TaskStatusDot.tsx";
 import { api, type AcceptTaskFailure, type TaskCommit, type TaskDiffResult } from "../lib/api.ts";
@@ -30,6 +30,10 @@ type ReviewData = {
 // 这是不可逆动作的最后一道说明，它跟实际会发生的事哪怕差一点，用户按下去就会被闪。
 // 口径与服务端一致：squash 和「只打标签」之后 git 不认为分支已合并，所以那两档即便
 // 选了「删 worktree 和任务分支」，分支也会保留（绝不 -D），这里就照实说。
+//
+// 线上没画「合并并清理」时**手动验收照样合**（手按覆盖线上写没写，理由见 shared 的
+// acceptPlan）——这时更要把话说全：既说清会发生什么，也说清这不是线上写的。这道确认
+// 框就是那条规则的安全兜底，措辞含糊等于把兜底拆了。
 function acceptanceMessage(task: Task): string {
   const team = task.mode === "team";
   if (!task.useWorktree) {
@@ -42,9 +46,11 @@ function acceptanceMessage(task: Task): string {
   const worktree = team ? "团队 worktree" : "任务 worktree";
   const target = task.worktreeBase || "项目当前分支";
   const tail = team ? "并联动验收共享执行者。" : "";
-  if (!plan.merge) {
-    return `这条线上没写「合并并清理」：点验收只是认可这份产物，git 一动不动，${branch}与 ${worktree} 都留着。${tail}`;
-  }
+  // 手动验收永远有合并方案（acceptPlan 的 human 口径），这里只是类型兜底。
+  if (!plan.merge) return `这会把该任务标记为验收完成。${tail}`;
+  const offScript = !hasAcceptStation(task.workflow)
+    ? "这条线上没画「合并并清理」，但手动验收按默认规矩来："
+    : "";
   const merge = plan.merge === "tag"
     ? `不合并，只在${branch}头上打一个 harness-accepted 标签（${target} 一动不动）`
     : plan.merge === "squash"
@@ -56,7 +62,7 @@ function acceptanceMessage(task: Task): string {
     : plan.clean === "worktree" || keepsBranch
       ? `，随后清理 ${worktree}，分支保留${keepsBranch && plan.clean === "all" ? "（这一档 git 不认为它已合并，不强删）" : ""}`
       : `，随后清理 ${worktree} 与分支`;
-  return `${merge}${clean}。${tail}`;
+  return `${offScript}${merge}${clean}。${tail}`;
 }
 
 function AcceptanceFailureNotice({ failure }: { failure: AcceptTaskFailure }) {
