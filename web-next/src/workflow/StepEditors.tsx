@@ -74,15 +74,20 @@ export function TextEditor({
   onChange: (value: string) => void;
 }) {
   return (
-    <textarea
-      className="wf-pop-text"
-      value={value}
-      rows={spec.key === "instruction" ? 3 : 1}
-      placeholder={spec.placeholder}
-      spellCheck={false}
-      autoFocus
-      onChange={(event) => onChange(event.target.value)}
-    />
+    <div className="wf-pop-form">
+      <textarea
+        className="wf-pop-text"
+        value={value}
+        rows={spec.key === "instruction" ? 3 : 1}
+        placeholder={spec.placeholder}
+        spellCheck={false}
+        autoFocus
+        onChange={(event) => onChange(event.target.value)}
+      />
+      {/* 填的时候就得知道的事（典型：预览的 $PORT），写在填字的地方才有用 —— 等命令
+          跑挂了再从日志里看出来，用户已经白等一轮了。 */}
+      {spec.hint && <p className="wf-pop-hint">{spec.hint}</p>}
+    </div>
   );
 }
 

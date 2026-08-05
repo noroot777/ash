@@ -33,6 +33,7 @@
     "test:workflow": "tsx scripts/test-workflow-def.ts",
     "test:workflow-library": "tsx scripts/test-workflow-library.ts",
     "test:workflow-run": "tsx scripts/test-workflow-run.ts",
+    "test:preview-log": "tsx scripts/test-preview-log.ts",
     "test:openai-converter": "tsx scripts/test-openai-converter.ts"
   },
   "dependencies": {
