@@ -24,7 +24,7 @@ import type {
 import { AGENT_TYPES, TEAM_DEFAULTS } from "@harness/shared";
 import { inheritExecutorOverrides, pickExecutor } from "@harness/shared/executors";
 import { STEP_LABELS } from "@harness/shared/workflow";
-import { workflowPolicy } from "@harness/shared/workflow-policy";
+import { anchorAt, firstAnchor, workflowPolicy } from "@harness/shared/workflow-policy";
 import { asc, eq } from "drizzle-orm";
 import type { Hono } from "hono";
 import { bus } from "./bus.js";
@@ -58,7 +58,8 @@ import {
 } from "./review-policy.js";
 import { continueWhenIdle } from "./runs.js";
 import { taskWorkflowDef } from "./workflows.js";
-import { advanceAfterRun, advanceAfterVerify, applyRunFailPolicy } from "./workflow-steps.js";
+import { advanceWorkflowFrom, settleFrom } from "./workflow-advance.js";
+import { applyRunFailPolicy } from "./workflow-steps.js";
 import { now } from "./util.js";
 
 type TaskRow = typeof tasks.$inferSelect;
@@ -156,17 +157,30 @@ export async function startVerifyRound(
     throw new Error("该任务已有一轮审查尚未结束");
   }
   const round = nextReviewRound(legacy.length + (target.verifyRounds ?? 0));
+  // 这一轮验的是线上**哪一站**。轮次号（round）仍然全局递增——它是证据目录名
+  // `review/round-<n>`，一条线上有好几站验证时按站数会撞车。判定用的「这一站验到第几
+  // 轮」另记在 `verify_station_rounds` 上：换一站就归零，否则第一站用掉的轮次会算到
+  // 第二站头上，用户在第二站写的「没过就重做 2 轮」一进门就用完了。
+  const station = anchorAt(taskWorkflowDef(target.workflow), target.workflowAt, "verify")?.id ?? null;
   const execution = await reviewExecution(target, withVerifyExecutor(target, override));
   const project = (await db.select().from(projects).where(eq(projects.id, target.projectId))).at(0);
 
-  await db.update(tasks).set({ verifyRound: round, updatedAt: now() }).where(eq(tasks.id, targetId));
+  await db
+    .update(tasks)
+    .set({
+      verifyRound: round,
+      reviewStep: station,
+      verifyStationRounds: target.reviewStep === station ? (target.verifyStationRounds ?? 0) : 0,
+      updatedAt: now(),
+    })
+    .where(eq(tasks.id, targetId));
   await setTaskStage(targetId, "verifying");
   await appendTaskTimeline(targetId, `第 ${round} 轮验证开始：就在这个任务的工作目录里跑，不另起审查任务。`);
   bus.publish({ type: "task.review", taskId: targetId });
 
   continueWhenIdle(
     targetId,
-    verifyProtocolFor(target, round, project?.repoPath ?? "(项目已不存在)"),
+    verifyProtocolFor(target, round, project?.repoPath ?? "(项目已不存在)", station),
     {
       system: "run",
       sideTurn: true,
@@ -202,43 +216,65 @@ async function reviewCoverageFor(target: TaskRow): Promise<ReviewCoverageFinding
 }
 
 /**
+ * 这一轮是**这一站**验证的第几轮（历史那批独立审查任务的口径：数它们的行）。
+ *
+ * 跟证据轮次号的区别：那个是这个任务验过的总次数（同时也是证据目录名，必须全局唯一）；
+ * 一条线上有好几站验证时，第二站的第一轮不该继承第一站用掉的轮数——否则用户在第二站
+ * 写的「没过就重做 2 轮」会当场用完。就地验证轮没有独立任务行可数，按站的轮数记在被验
+ * 任务的 `verify_station_rounds` 上。
+ */
+async function roundAtStation(targetId: string, review: TaskRow): Promise<number> {
+  if (!review.reviewStep) return review.reviewRound ?? 1;
+  const rows = await db
+    .select({ reviewRound: tasks.reviewRound, reviewStep: tasks.reviewStep })
+    .from(tasks)
+    .where(eq(tasks.reviewOf, targetId));
+  return rows.filter((row) =>
+    row.reviewStep === review.reviewStep && (row.reviewRound ?? 0) <= (review.reviewRound ?? 0),
+  ).length || 1;
+}
+
+/**
  * 一轮验证结束后怎么走 —— 就地验证轮和历史独立审查任务**共用这一段**。
  *
  * `outcome` 是这一轮本身的落位（跑完了 / 挂了 / 被停），不是被验任务的状态：就地验证
  * 是旁路回合，任务状态本来就该原样不动，拿它当验证结果会把「任务是 done」误读成
  * 「验证通过」。`reviewTaskId` 非空 = 历史那种独立审查任务。
+ *
+ * `at` 是「这一轮验的是线上哪一站、按站数是第几轮」：轮数上限、失败策略、验完往哪走
+ * 全读这一站的（`station` 为 null = 身上没线的老任务，退化成老行为）。
  */
 async function concludeRound(
   target: TaskRow,
   round: number,
   outcome: Settlement,
   reviewTaskId: string | null,
+  at: { station: string | null; stationRound: number },
 ): Promise<void> {
+  const { station, stationRound } = at;
   const conclusion = target.stage === "verified" || target.stage === "verify_failed"
     ? target.stage as ReviewConclusion
     : null;
   const workflow = taskWorkflowDef(target.workflow);
-  const policy = workflowPolicy(workflow);
+  const policy = workflowPolicy(workflow, station);
   const action = reviewOutcomeAction({
     reviewStatus: outcome,
     conclusion,
     reviewRequested: target.reviewRequested,
-    round,
+    round: stationRound,
     parentIsTeam: await parentIsTeam(target),
     workflow,
+    at: station,
   });
   const by = reviewTaskId ? `审查任务 ${reviewTaskId} ` : "";
 
   if (outcome === "done") await writeConclusion(target.id, round, reviewTaskId, conclusion);
   bus.publish({ type: "task.review", taskId: target.id });
   if (action === "verified") {
-    // 验完之后线上还写着的那几站（跑一条命令、把预览打开）在这儿跑——人工关口之前
-    // 就得把预览起好，不然用户点进来只有一句「待验收」，没东西可看。跑砸了就停在
-    // 那儿，不再往人工关口推。
-    if (!(await advanceAfterVerify(target, workflow))) return;
-    // 验过了，线上后面还写着「等我点头」：任务就停在这一站，列表里显示「待验收」。
-    // 停的是**验收阶段**不是 status —— 动 status 会顺带停住它所在的队列，那是另一件事。
-    if (policy?.humanGate) await enterHumanGate(target.id);
+    // 验完之后线上还写着的那几站在这儿跑，然后走到下一个锚点：可能是又一站「自动验证」，
+    // 也可能是「等我点头」。人工关口之前就得把预览起好，不然用户点进来只有一句
+    // 「待验收」，没东西可看。中间任何一段跑砸了就停在那儿，不再往下推。
+    await advanceWorkflowFrom(target, workflow, station);
     return;
   }
   if (action === "failed") {
@@ -280,6 +316,7 @@ async function concludeRound(
     parentIsTeam: await parentIsTeam(target),
     reviewRequested: target.reviewRequested,
     workflow,
+    at: station,
   });
   await appendTaskTimeline(target.id, `第 ${round} 轮验证未通过，已把报告和证据路径交回原任务续跑修复。`);
   // 打回修复也要等这一轮退干净：就地验证的结论正是在这个任务自己的结算钩子里下的，
@@ -293,7 +330,7 @@ async function concludeRound(
       report,
       images,
       coverage,
-      autoNext: plan.auto && round < plan.maxRounds,
+      autoNext: plan.auto && stationRound < plan.maxRounds,
     }),
     {},
     (error) => appendTaskTimeline(
@@ -312,18 +349,24 @@ async function finishVerifyRound(target: TaskRow, turnOk: boolean): Promise<void
   if (target.question || target.resumePrompt) return;
   // verify_rounds 数的是**就地轮次的个数**，不是轮次号：轮次号还要算上历史那批独立
   // 审查任务占掉的号（`nextReviewRound(legacy.length + verifyRounds)`），拿号当计数会
-  // 让下一轮跳号。
+  // 让下一轮跳号。verify_station_rounds 则是「这一站」验过几轮，判定轮数上限用它。
+  const stationRound = (target.verifyStationRounds ?? 0) + 1;
   await db
     .update(tasks)
     .set({
       verifyRound: null,
       verifyRounds: (target.verifyRounds ?? 0) + 1,
+      verifyStationRounds: stationRound,
       updatedAt: now(),
     })
     .where(eq(tasks.id, target.id));
   // 旁路回合的落位永远是任务原来的终态，说明不了验证跑成没跑成，所以这里用回合本身
   // 是否干净收尾来判：崩了/被手停 → 这一轮没结论，按 failed 收尾。
-  await concludeRound(target, round, turnOk ? "done" : "failed", null);
+  await concludeRound(target, round, turnOk ? "done" : "failed", null, {
+    // 开这一轮时把站号记在了被验任务身上；老数据没有就回落到线上第一站验证。
+    station: target.reviewStep ?? firstAnchor(taskWorkflowDef(target.workflow), "verify")?.id ?? null,
+    stationRound,
+  });
 }
 
 /** 历史做法：独立审查任务跑完之后的收尾。启动路径已经拆掉，这条只服务存量数据。 */
@@ -332,14 +375,18 @@ async function finishReview(review: TaskRow, status: Settlement): Promise<void> 
     ? (await db.select().from(tasks).where(eq(tasks.id, review.reviewOf))).at(0)
     : null;
   if (!target) return;
-  await concludeRound(target, review.reviewRound ?? 1, status, review.id);
+  await concludeRound(target, review.reviewRound ?? 1, status, review.id, {
+    // 这一轮验的是哪一站：审查任务身上记着（老审查任务没记，回落到线上第一站验证）。
+    station: review.reviewStep ?? firstAnchor(taskWorkflowDef(target.workflow), "verify")?.id ?? null,
+    stationRound: await roundAtStation(target.id, review),
+  });
 }
 
 // 「等我点头」这一站落地：把验收阶段停在 awaiting_acceptance。
 // **只动 stage 不动 status** —— status 是调度用的（改成 awaiting_review 会顺带停住这个
 // 任务所在的队列），而这条线只描述这一个任务干完之后怎么走，不该外溢到队列/分组。
 // 显示上也不需要动 status：taskDisplayStatus 里 stage 优先，列表那一格就是「待验收」。
-async function enterHumanGate(taskId: string): Promise<void> {
+export async function enterHumanGate(taskId: string): Promise<void> {
   const row = (await db.select({ stage: tasks.stage }).from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!row || row.stage === "awaiting_acceptance" || row.stage === "merged" || row.stage === "accepted") return;
   await setTaskStage(taskId, "awaiting_acceptance");
@@ -388,9 +435,14 @@ export async function handleTaskSettlement(
     return;
   }
   const isTeamWorker = await parentIsTeam(task);
-  // 干完之后线上紧跟着的那几站（跑一条命令、打开预览）先跑掉，再谈要不要验：
-  // 一条连 lint 都没过的产物不值得占着一轮验证的工时。跑砸了就停在那儿。
-  if (confirmedDone && status === "done" && !(await advanceAfterRun(task, workflow))) return;
+  // 身上有线：整条线怎么走全交给推进器 —— 跑完这一段、决定下一个锚点是再验一站、
+  // 停在人工关口还是走到头。**从哪一站接着走**由 settleFrom 定（游标停在某一站验证上
+  // 时要退回它前面那个锚点，好让那一段重跑一遍再重新验，而不是当它验过了）。
+  if (confirmedDone && status === "done" && workflow && task.mode !== "team") {
+    await advanceWorkflowFrom(task, workflow, settleFrom(workflow, task.workflowAt));
+    return;
+  }
+  // 身上没线的老任务照旧：团队那边要求审查就开一轮就地验证。
   if (shouldAutoDispatchReview({
     confirmedDone,
     status,
@@ -403,14 +455,6 @@ export async function handleTaskSettlement(
     workflow,
   })) {
     await startVerifyRound(task.id);
-    return;
-  }
-
-  // 没有自动验证这一站，但线上写着「等我点头」：干完就直接停在人工关口。
-  // （有验证站时这一步在 concludeRound 里做 —— 得先验完才轮到人看。）
-  const policy = workflowPolicy(workflow);
-  if (confirmedDone && status === "done" && policy?.humanGate && !policy.verify) {
-    await enterHumanGate(task.id);
   }
 }
 

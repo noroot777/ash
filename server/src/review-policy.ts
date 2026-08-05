@@ -29,8 +29,11 @@ export function reviewPlan(input: {
   parentIsTeam: boolean;
   reviewRequested: boolean;
   workflow?: WorkflowDef | null;
+  // 说的是**哪一站**验证（`tasks.workflow_at`）。一条线上可以有多站「自动验证」，
+  // 轮数和失败策略各读各的那一站；省略 = 线上第一站，正是只有一站时的老行为。
+  at?: string | null;
 }): { auto: boolean; maxRounds: number; policy: WorkflowPolicy | null } {
-  const policy = workflowPolicy(input.workflow);
+  const policy = workflowPolicy(input.workflow, input.at);
   if (!policy || !policy.verify) {
     return {
       auto: !policy && input.parentIsTeam && input.reviewRequested,
@@ -66,13 +69,48 @@ export function shouldAutoDispatchReview(input: {
 
 export type ReviewOutcomeAction = "verified" | "repair" | "stop" | "failed" | "invalid";
 
+/**
+ * 执行链走到**某一站**「自动验证」跟前时做什么。
+ *
+ * 跟 `shouldAutoDispatchReview` 的分工：那个回答的是「这个任务干完之后要不要开审查链」
+ * （身上没有线的老任务只有这一问）；这个回答的是「线上这一站现在怎么办」——一条线可以
+ * 有好几站验证，每一站各数各的轮数。三个答案：
+ *   dispatch —— 派一轮审查，线停在这一站等结论。
+ *   skip     —— 这一站不用验（团队关了审查 / 这一站已经验过了），接着往下走。
+ *   halt     —— 这一站没过而且轮数用尽：**停下**。绝不能因为「验不过」就绕过它往下走，
+ *               那等于把用户画在线上的验证站当成了装饰。
+ */
+export type VerifyStationAction = "dispatch" | "skip" | "halt";
+
+export function verifyStationAction(input: {
+  parentIsTeam: boolean;
+  reviewRequested: boolean;
+  mode: string;
+  workflow?: WorkflowDef | null;
+  /** 这一站的 step id */
+  at: string;
+  /** 被审任务当前的 stage */
+  stage: string | null;
+  /** 这一站已经派过几轮审查 */
+  rounds: number;
+}): VerifyStationAction {
+  if (input.mode === "team") return "skip";
+  const plan = reviewPlan(input);
+  if (!plan.auto) return "skip";
+  if (input.rounds === 0) return "dispatch";
+  if (input.stage !== "verify_failed") return "skip";
+  return input.rounds < plan.maxRounds ? "dispatch" : "halt";
+}
+
 export function reviewOutcomeAction(input: {
   reviewStatus: Settlement;
   conclusion: string | null;
   reviewRequested: boolean;
+  // 这一站验到第几轮了（同一站的第几次派审，不是这个任务被审过的总次数）。
   round: number;
   parentIsTeam?: boolean;
   workflow?: WorkflowDef | null;
+  at?: string | null;
 }): ReviewOutcomeAction {
   if (input.reviewStatus === "failed" || input.reviewStatus === "canceled") return "failed";
   if (input.reviewStatus !== "done") return "invalid";
@@ -82,6 +120,7 @@ export function reviewOutcomeAction(input: {
     parentIsTeam: input.parentIsTeam ?? true,
     reviewRequested: input.reviewRequested,
     workflow: input.workflow,
+    at: input.at,
   });
   // 跑满这条线写的轮数就是自动链的终点。再往后的轮次只可能是人手动派的，所以它可以
   // 再交回去修一次，而不是又悄悄排一轮复审。
@@ -93,7 +132,7 @@ export function reviewOutcomeAction(input: {
 // 「用哪个模型验」这件事写在线上的「自动验证」那一站里，派审时拿它当默认执行器。
 // 用户在界面上手点「再审一轮」并且指定了执行器时，以手点的为准 —— 那是此刻的意思。
 export function withVerifyExecutor(target: TaskRow, override: ReviewDispatchInput): ReviewDispatchInput {
-  const verify = workflowPolicy(taskWorkflowDef(target.workflow))?.verify;
+  const verify = workflowPolicy(taskWorkflowDef(target.workflow), target.workflowAt)?.verify;
   if (!verify) return override;
   if (override.executorId || override.agentType) return override;
   return {

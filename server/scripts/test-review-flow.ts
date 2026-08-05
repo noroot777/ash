@@ -300,6 +300,7 @@ await handleTaskSettlement(inlineId, "done", false, true);
 inline = await readTask();
 assert.equal(inline.verifyRound, null, "验完必须清掉 verify_round");
 assert.equal(inline.verifyRounds, 1, "验完一轮要记账，下一轮的轮次号靠它推出来");
+assert.equal(inline.verifyStationRounds, 1, "这一站也要单独记账：轮数上限是按站算的");
 assert.equal(await readConclusion(inlineId, 1), "verified", "结论要落盘，刷新后仍看得见");
 
 const inlineInfo = await (async () => {
@@ -318,6 +319,28 @@ assert.deepEqual(
   "就地轮次没有独立审查任务，reviewTaskId 必须是 null",
 );
 rmSync(resolve(reviewRoundDir(inlineId, 1), "../.."), { recursive: true, force: true });
+
+// ── 一条线上有好几站验证时，轮数得按站算 ────────────────────────────────────
+// 轮数上限是按站写的（第二站写「没过重做 2 轮」，不该继承第一站用掉的轮数）。就地验证
+// 轮没有独立任务行可数，所以按站的轮数记在被验任务的 verify_station_rounds 上、站号记
+// 在 review_step 上；漏掉这一份，一站验证会因为「一轮都没验过」被无限重派。
+const { stationRounds } = await import("../src/workflow-advance.js");
+await db.update(tasks)
+  .set({ reviewStep: "v-second", verifyStationRounds: 2 })
+  .where(eq(tasks.id, inlineId));
+assert.equal(await stationRounds(inlineId, "v-second"), 2, "就地验证轮必须计入本站轮数");
+assert.equal(await stationRounds(inlineId, "v-first"), 0, "换一站就从零开始，不继承别站用掉的轮数");
+
+// 存量的独立审查任务是另一种载体，两边要一起数。老审查任务身上没有 review_step，
+// 按「那时一条线只可能有一站验证」算进第一站。
+await db.insert(tasks).values({
+  id: "verify-legacy-row", projectId: "project", groupId: null, parentId: null,
+  title: "legacy review", body: "", mode: "single", status: "done",
+  reviewOf: inlineId, reviewRound: 1, reviewStep: "v-second",
+  priority: "none", labels: "[]", dependsOn: "[]", resumeDependsOn: "[]",
+  agentType: "claude", autoTitle: false, createdAt: at, updatedAt: at,
+});
+assert.equal(await stationRounds(inlineId, "v-second"), 3, "两种载体的轮数要加在一起");
 
 // ── 验证起不来时不许把原任务打成 failed ──────────────────────────────────────
 // 旁路回合的整个前提是「验证不改任务状态」，而启动路径上有好几处会抛错（执行器解析

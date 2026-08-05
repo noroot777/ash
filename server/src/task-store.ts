@@ -81,6 +81,7 @@ const toTask = (r: TaskRow, profiles: AgentLabelRow[] = []): Task => ({
   useWorktree: r.useWorktree,
   worktreeBase: r.worktreeBase,
   workflow: r.workflow ? JSON.parse(r.workflow) : null,
+  workflowAt: r.workflowAt ?? null,
   originTaskId: r.originTaskId ?? null,
   resumePrompt: r.resumePrompt ?? null,
   question: r.question ?? null,

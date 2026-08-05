@@ -296,6 +296,10 @@ export interface Task {
   // §Workflow 这个任务当初挑的那条线，**创建时拷下来的快照**（改起手式库不会追着改
   // 它）。老任务为 null —— 那时还没有这个概念，按写死的老流程走。
   workflow?: WorkflowDef | null;
+  // §Workflow 这条线此刻停在哪一站（step id）。有了它，「自动验证」「等我点头」才能在
+  // 一条线上出现多次——唤醒事件落回来时才知道是**第几个**验证站有了结论、用户在**哪
+  // 一道**关口点了头。null = 还没走到任何锚点，或者是没有线的老任务。
+  workflowAt?: string | null;
   // Backlink used by debate ↔ team derivation chains.
   originTaskId?: string | null;
   // §Pause 检查点续跑指令；非空时结算 paused，恢复后清空。

@@ -27,8 +27,9 @@ export const REVIEW_OVERWRITE_CHECK =
   "并先调用 ask_question 等人工确认，不要仅因此上报 verify_failed。";
 
 // 「验什么」是用户在线上勾的，不能只画在界面里：不传给验证者，那几个勾就是装饰。
-function requiredChecks(target: TaskRow): string {
-  const checks = workflowPolicy(taskWorkflowDef(target.workflow))?.verify?.p.checks ?? [];
+// 一条线上可以有好几站验证，各勾各的——所以读**这一轮验的那一站**。
+function requiredChecks(target: TaskRow, at: string | null | undefined): string {
+  const checks = workflowPolicy(taskWorkflowDef(target.workflow), at)?.verify?.p.checks ?? [];
   return checks.length
     ? `这条线上勾的验证项必须逐项过：${checks.map((c) => VERIFY_CHECK_LABELS[c]).join("、")}。` +
       `发现别的风险照样报，但这几项不能跳。\n\n`
@@ -57,7 +58,13 @@ function verifyRules(evidenceDir: string): string {
  * ② 结论调 `report_stage` 报给**你自己**，本回合**不要**调 `complete_task` ——
  *    这一轮是搭着任务跑的旁路回合，任务的完成状态不由它改写。
  */
-export function verifyProtocolFor(target: TaskRow, round: number, repoPath: string): string {
+export function verifyProtocolFor(
+  target: TaskRow,
+  round: number,
+  repoPath: string,
+  // 这一轮验的是线上哪一站（`WorkflowStep.id`）；null = 身上没线，或回落到第一站。
+  station: string | null = null,
+): string {
   const evidenceDir = reviewRoundDir(target.id, round);
   const baseline = target.useWorktree ? target.worktreeBase || "项目当前基线" : "当前工作树的基准提交";
   return `【自动验证 · 第 ${round} 轮】\n` +
@@ -65,7 +72,7 @@ export function verifyProtocolFor(target: TaskRow, round: number, repoPath: stri
     `默认它有问题，去找出问题，而不是复述你做了什么。\n\n` +
     `验证对象：${target.id} / ${target.title}\n` +
     `目标正文：\n${target.body || "(无正文)"}\n\n` +
-    requiredChecks(target) +
+    requiredChecks(target, station ?? target.workflowAt) +
     `先检查真实改动：项目仓库 ${repoPath}；你当前的工作目录就是被验产物所在的目录；` +
     `比较基线 ${baseline}。先看 git status / git diff / 相关提交，再决定验证范围。\n\n` +
     `${REVIEW_OVERWRITE_CHECK}\n\n` +
@@ -97,7 +104,7 @@ export async function reviewProtocolFor(
   return `【审查任务 · 第 ${review.reviewRound} 轮】\n` +
     `审查对象：${target.id} / ${target.title}\n` +
     `目标正文：\n${target.body || "(无正文)"}\n\n` +
-    requiredChecks(target) +
+    requiredChecks(target, review.reviewStep ?? target.workflowAt) +
     `先检查真实改动：项目仓库 ${repoPath}；被审工作目录 ${workspace.path}；` +
     `被审分支 ${workspace.branch ?? "(无 Git 分支)"}；比较基线 ${baseline}。` +
     `先看 git status / git diff / 相关提交，再决定验证范围。\n\n` +
