@@ -31,6 +31,7 @@ import { WorkerTeamLink } from "@/components/WorkerTeamLink";
 import { MarkdownText } from "@/components/MarkdownText";
 import { PriorityBars } from "@/components/ui";
 import { SignalBar } from "@/components/SignalBar";
+import { SkillSuggestions } from "@/components/SkillSuggestions";
 import { DateTimeButton } from "@/components/DateTimeField";
 import { TaskTimeChip, formatInstant } from "@/lib/time";
 import { canArchive } from "@harness/shared";
@@ -547,6 +548,14 @@ export default function TaskDetail() {
             </Pressable>
           </View>
         ))}
+
+        <SkillSuggestions
+          agentType={task.agentType}
+          projectId={task.projectId}
+          executorId={task.executorId}
+          value={input}
+          onPick={(command) => setInput(`${command} `)}
+        />
 
         <View style={{ flexDirection: "row", alignItems: "flex-end", gap: 8 }}>
           <TextInput

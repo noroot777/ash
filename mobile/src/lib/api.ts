@@ -10,6 +10,7 @@ import type {
   AgentType,
   Schedule,
   ScheduledMessage,
+  SkillList,
   Group,
   GroupMode,
   DebateSpeaker,
@@ -217,6 +218,20 @@ export const api = {
 
   agents: (): Promise<AgentExecutorProfile[]> => req("/agents").then(j),
   detectAgents: (): Promise<DetectedAgent[]> => req("/agents/detect").then(j),
+
+  // 某个执行器在某个项目下已装的 `/技能`。手机只拿来做补全:选中一条就是把
+  // `/名字` 写进输入框,原样发下去由 CLI 自己认,harness 不改写。
+  skills: (query: {
+    agentType: string;
+    projectId?: string;
+    executorId?: string;
+  }): Promise<SkillList> => {
+    const params = new URLSearchParams({ agentType: query.agentType });
+    if (query.projectId) params.set("projectId", query.projectId);
+    if (query.executorId) params.set("executorId", query.executorId);
+    return req(`/skills?${params.toString()}`).then(j);
+  },
+
   llmProviders: (): Promise<LlmProvider[]> => req("/llm-providers").then(j),
   probeModels: (body: {
     protocol: LlmProtocol;
