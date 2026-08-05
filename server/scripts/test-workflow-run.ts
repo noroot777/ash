@@ -25,19 +25,23 @@ const std = workflowPolicy(standard)!;
 assert.ok(std.verify, "标准交付带「自动验证」这一站");
 assert.equal(std.verifyRounds, 2, "标准交付写的是没过拐回去,最多 2 轮");
 assert.equal(std.onVerifyFail, "back", "标准交付没过是拐回第一站重做");
-assert.equal(std.humanGate, true, "标准交付验完要等人点头");
+// 「验完要不要停下等人」**不是**能从整条线一次算出来的属性(那正是 2026-08-05 那次
+// 关口被跳过的错误模型),它由推进器按游标逐站走出来 —— 所以这里只钉「线上画没画这
+// 一站」,走到那儿停不停由下面的 nextAnchor 与 test-workflow-gate 钉。
+const hasGate = (def: { steps: { kind: string }[] }) => def.steps.some((s) => s.kind === "human");
+assert.equal(hasGate(standard), true, "标准交付画了「等我点头」");
 assert.equal(std.autoAccept, true, "标准交付点头之后要合并");
 
 const quick = workflowPolicy(fast)!;
 assert.equal(quick.verify, null, "极速原型不验");
-assert.equal(quick.humanGate, false, "极速原型干完就算完");
+assert.equal(hasGate(fast), false, "极速原型干完就算完");
 assert.equal(quick.autoAccept, false, "极速原型不合并");
 
 // 一条 干活 → 等我点头 的线:没有验证站,但照样得停下等人
 const gateOnly = { workspace: "isolated" as const, steps: [makeStep("run", "s1"), makeStep("human", "s2")] };
 const gate = workflowPolicy(gateOnly)!;
 assert.equal(gate.verify, null, "这条线不自动验");
-assert.equal(gate.humanGate, true, "但它写着等我点头");
+assert.equal(hasGate(gateOnly), true, "但它写着等我点头");
 
 // 没过就停下等人:轮数退化成 1,不存在第二轮
 const stopLine = structuredClone(standard);
@@ -235,8 +239,15 @@ const perStation = structuredClone(multi);
 assert.equal(workflowPolicy(perStation, "m3")!.verifyRounds, 3, "第一站写了最多 3 轮");
 assert.equal(workflowPolicy(perStation, "m7")!.onVerifyFail, "stop", "第二站写的是没过就停下等人");
 assert.equal(
-  workflowPolicy(perStation, "m7")!.humanGate, true,
+  nextAnchor(perStation, "m7")?.kind, "human",
   "第二站后面还有一道关口:验完照样停下等人",
+);
+// 自带起手式也走同一条判据:验证站之后的下一个会停的点就是那道关口。**读的是站的
+// 前后关系,不是「线上有没有 human」**——用户可以把关口画在验证前面(见
+// test-workflow-gate),那时验证站后面就没有关口了,推进器该往下走而不是回头找人。
+assert.equal(
+  nextAnchor(standard, standard.steps.find((s) => s.kind === "verify")!.id)?.kind, "human",
+  "标准交付验完的下一个停靠点是「等我点头」",
 );
 
 // ── 打回重做之后该重验哪一站 ──────────────────────────────────────────────

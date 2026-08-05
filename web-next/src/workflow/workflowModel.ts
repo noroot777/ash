@@ -6,11 +6,15 @@
 //    `taskDisplayStatus(STEP_RUNTIME[kind])` 派生 —— 用户照着线路图预期「待验收」，
 //    在列表里就得能按「待验收」找到它，差一个字这条线就白画了。
 //
-// ② **游标是派生的，不是存的**。执行链接管（第二期）之前，任务身上没有「现在在第几
-//    站」这个字段，所以这里从 status/stage 反推。反推表就是 STEP_RUNTIME 的逆向：
-//    stage=verifying 说明在 verify 站，awaiting_acceptance 说明在 human 站。
-//    精度有限（preview/command 站在 status 上跟 run 站长得一样，一律算作 run 之后的
-//    在途），但**它读的是真实状态，不是假进度条** —— 第二期落了真游标就换掉这里。
+// ② **优先读任务身上那个真游标**（`tasks.workflow_at`，执行链第二期落的），反推只是
+//    没有游标时的回落。这个先后顺序是有代价才换来的：反推表把 stage 当成站的代名词
+//    （verifying → verify 站、awaiting_acceptance → human 站），而这两件事**并不等价**
+//    —— agent 自己会按完成协议自报 stage，线上又允许把「等我点头」画在「自动验证」
+//    前面，于是任务停在 human 站、stage 却是 verifying 时，反推会把游标指到后面那个
+//    verify 站，前面的关口就被画成「✓ 已过」。用户看到的是「我压根没点头，它却说我
+//    点过了」（2026-08-05 事故，见 docs/incidents.md「关口画在验证前面就被跳过」）。
+//    反推留给老任务和还没走到任何锚点的任务：精度有限（preview/command 站在 status 上
+//    跟 run 站长得一样，一律算作 run 之后的在途），但读的仍是真实状态，不是假进度条。
 import type { Task, TaskStage } from "@harness/shared";
 import { taskDisplayStatus } from "@harness/shared";
 import type { StepKind, WorkflowDef, WorkflowStep } from "@harness/shared/workflow";
@@ -94,13 +98,18 @@ export interface RailStop {
   note: string | null;
 }
 
+/** 线路图读任务时只用得上这几个字段（`workflowAt` 是真游标，其余用于回落反推）。 */
+export type CursorTask = Pick<Task, "status" | "stage" | "question" | "workflowAt">;
+
 /**
  * 游标停在哪一站。返回 index = -1 表示还没开工；index >= steps.length 表示整条走完。
  * blocked = 停在这一站但没往下走（失败 / 暂停 / 等答复）。
+ *
+ * 先看任务身上的真游标，读不到才按 status/stage 反推（理由见文件头 ②）。
  */
 export function resolveCursor(
   steps: WorkflowStep[],
-  task: Pick<Task, "status" | "stage" | "question"> | null,
+  task: CursorTask | null,
 ): { index: number; blocked: boolean } {
   if (!task || !steps.length) return { index: -1, blocked: false };
   const first = (kind: StepKind) => steps.findIndex((s) => s.kind === kind);
@@ -115,9 +124,18 @@ export function resolveCursor(
   const stalled = task.status === "failed" || task.status === "canceled" || task.status === "paused";
   const waiting = !!task.question;
 
+  // 验收结论盖过游标：合并/验收是这条线的终点，而游标此刻多半还停在最后那道关口上
+  // （放行之后才往下走完剩下的段）。
+  if (task.stage === "accepted") return { index: steps.length, blocked: false };
+  if (task.stage === "merged") return { index: pick(first("accept"), steps.length), blocked: false };
+
+  // 真游标：任务此刻确实停在这一站，不用猜。
+  const cursor = task.workflowAt ? steps.findIndex((s) => s.id === task.workflowAt) : -1;
+  if (cursor >= 0) {
+    return { index: cursor, blocked: stalled || waiting || task.stage === "verify_failed" };
+  }
+
   const byStage: Partial<Record<TaskStage, () => { index: number; blocked: boolean }>> = {
-    accepted: () => ({ index: steps.length, blocked: false }),
-    merged: () => ({ index: pick(first("accept"), steps.length), blocked: false }),
     awaiting_acceptance: () => ({ index: pick(first("human"), after("run")), blocked: false }),
     verifying: () => ({ index: pick(first("verify"), after("run")), blocked: false }),
     verify_failed: () => ({ index: pick(first("verify"), after("run")), blocked: true }),
@@ -144,7 +162,7 @@ export function resolveCursor(
 
 export function railStops(
   def: WorkflowDef,
-  task: Pick<Task, "status" | "stage" | "question"> | null,
+  task: CursorTask | null,
 ): RailStop[] {
   const { index, blocked } = resolveCursor(def.steps, task);
   return def.steps.map((step, i) => ({
@@ -153,4 +171,15 @@ export function railStops(
     statusLabel: stepStatusLabel(step.kind),
     note: stepNote(step.kind),
   }));
+}
+
+/**
+ * 游标此刻就停在这一站（`current` 和 `blocked` 都是「停在这儿」，区别只在动没动弹）。
+ *
+ * 用在人工关口那两个**真**按钮（验收通过 / 打回重修）上：判据必须是「线确实走到了这
+ * 道关口」，不能只看 `stage === "awaiting_acceptance"` —— 那个 stage 可能是 agent 自报
+ * 的，也可能属于线上**另一道**关口。
+ */
+export function isCursorStop(stop: RailStop): boolean {
+  return stop.state === "current" || stop.state === "blocked";
 }

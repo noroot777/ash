@@ -388,8 +388,13 @@ async function finishReview(review: TaskRow, status: Settlement): Promise<void> 
 // 显示上也不需要动 status：taskDisplayStatus 里 stage 优先，列表那一格就是「待验收」。
 export async function enterHumanGate(taskId: string): Promise<void> {
   const row = (await db.select({ stage: tasks.stage }).from(tasks).where(eq(tasks.id, taskId))).at(0);
-  if (!row || row.stage === "awaiting_acceptance" || row.stage === "merged" || row.stage === "accepted") return;
-  await setTaskStage(taskId, "awaiting_acceptance");
+  if (!row || row.stage === "merged" || row.stage === "accepted") return;
+  // stage 早就是 awaiting_acceptance 也照样往下走。那个 stage 可能是**别处写的**——agent
+  // 自报、上一道关口放行前留下的——跟「这条线此刻真的走到了关口」不是一回事。早先在这里
+  // 一并 return，后果是关口**静默**停下：时间线上一个字都没有，用户看见任务停着不动，
+  // 无从判断它是在等自己点头还是卡住了。只跳过重复的 setTaskStage（免得多一行没信息量
+  // 的「验收阶段更新：待验收」），那句「走到等我点头」照写。
+  if (row.stage !== "awaiting_acceptance") await setTaskStage(taskId, "awaiting_acceptance");
   await appendTaskTimeline(taskId, "这条线走到「等我点头」，停在待验收等你决定。");
 }
 

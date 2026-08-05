@@ -26,8 +26,6 @@ export interface WorkflowPolicy {
   verifyRounds: number;
   /** 没过之后这条线怎么走：停下等人 / 把「怎么办」问到任务上 / 打回给 AI 重做 */
   onVerifyFail: "stop" | "ask" | "back";
-  /** 验完停下等人（线上有「等我点头」，且排在验证之后） */
-  humanGate: boolean;
   /** 点头之后要合并（线上有「合并并清理」） */
   autoAccept: boolean;
 }
@@ -154,15 +152,17 @@ export function workflowPolicy(
   if (!def) return null;
   const steps = def.steps;
   const verify = anchorAt(def, at, "verify") as VerifyStep | null;
-  const at_ = verify ? steps.indexOf(verify) : -1;
   const fail = verify?.fail ?? null;
+  // 这里**不再有 humanGate**。它曾经的判据是「有 human 站且排在 verify 之后」——那是
+  // 「按锚点类型读线」时代的遗物，用户把「等我点头」画在「自动验证」前面时，整条线会
+  // 被判成「没写等我点头」，一路自动验证 + 自动合并（2026-08-05 事故，见
+  // docs/incidents.md「关口画在验证前面就被跳过」）。停不停下等人是**推进器按游标**
+  // 逐站走出来的结论，不是这里能一次算出的属性；再想在这儿加一个同类问句之前，先问
+  // 一句「它是不是又在假设某种站的顺序」。
   return {
     verify,
     verifyRounds: fail?.mode === "back" ? Math.max(1, fail.max) : 1,
     onVerifyFail: fail?.mode ?? "stop",
-    // 没有验证站时 at_ = -1，于是「排在验证之后」退化成「线上有这一站」，正是想要的：
-    // 一条 干活 → 等我点头 的线照样停下等人。
-    humanGate: steps.some((step, i) => step.kind === "human" && i > at_),
     autoAccept: steps.some((step) => step.kind === "accept"),
   };
 }
