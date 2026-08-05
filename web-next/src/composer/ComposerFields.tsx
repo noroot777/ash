@@ -94,11 +94,16 @@ export function ComposerFields({
   labels: string[];
   onLabelsChange: (labels: string[]) => void;
   onCreateGroup: () => void;
-  /** 「干完之后」那一节。它只在单任务下出现，位置固定在执行模式与任务选项之间。 */
+  /** 「干完之后」那一节。它只在单任务下出现，位置固定在最上面（起手式即执行配置）。 */
   workflowSlot?: ReactNode;
 }) {
   return (
     <div className="composer-config">
+      {/* 单任务没有「执行模式」这一节：谁来干活写在起手式的「让 AI 干活」那一站上，
+          两处各摆一个执行器选择迟早对不上（用户在这儿改了，起手式上还写着另一个）。
+          团队/辩论仍要这一节 —— 它们的角色分工（调度者/执行者/审查者、正反方）不在
+          起手式里。 */}
+      {mode !== "single" && (
       <section className="composer-config-section is-execution">
         <header className="composer-section-heading">
           <span><SlidersHorizontal size={14} /></span>
@@ -108,9 +113,6 @@ export function ComposerFields({
           <PresetBar currentConfig={currentTeamConfig} profiles={profiles} onApply={onApplyTeamPreset} notify={notify} />
         )}
         <div className={`composer-executor-grid is-${mode}`}>
-          {mode === "single" && (
-            <ExecutorPickerField label="执行器" value={executors.single.profile} types={workerTypes} profiles={profiles} knownProfiles={profiles} fallbackType="claude" override={executors.single} onChange={(value) => onExecutorChange("single", value)} onOverrideChange={(patch) => onOverrideChange("single", patch)} />
-          )}
           {mode === "team" && (
             <>
               <ExecutorPickerField label="调度者执行器" value={executors.lead.profile} types={leadTypes} profiles={leadProfiles} knownProfiles={profiles} fallbackType="claude" override={executors.lead} onChange={(value) => onExecutorChange("lead", value)} onOverrideChange={(patch) => onOverrideChange("lead", patch)} />
@@ -129,6 +131,12 @@ export function ComposerFields({
           <p className={`composer-agent-availability is-${availabilityTone ?? "warning"}`}>{availabilityMessage}</p>
         )}
       </section>
+      )}
+
+      {/* 单任务的执行器提示没了宿主 section，单独摆一行，别让「没有可用执行器」这类话消失。 */}
+      {mode === "single" && availabilityMessage && (
+        <p className={`composer-agent-availability is-${availabilityTone ?? "warning"}`}>{availabilityMessage}</p>
+      )}
 
       {workflowSlot}
 
