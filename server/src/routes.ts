@@ -33,7 +33,7 @@ import { mountNoteRoutes } from "./notes.js";
 import { mountTeamPresetRoutes } from "./team-presets.js";
 import { findWorkflow, mountWorkflowRoutes } from "./workflows.js";
 import { getAppSettings, parseAppSettingsPatch, patchAppSettings } from "./app-settings.js";
-import { listSkills } from "./skills.js";
+import { mountSkillRoutes } from "./skill-routes.js";
 import { mountTaskRoutes } from "./task-routes.js";
 import { mountTaskRunRoutes } from "./task-run-routes.js";
 import { mountOpenAiConverterRoutes } from "./openai-converter/routes.js";
@@ -214,34 +214,8 @@ api.get("/agents/detect", async (c) => c.json(await detectLocalAgents()));
 // 已知 CLI 目录:含上面那几个可执行器(带 type),外加一批只做「装没装」展示的。
 api.get("/agents/catalog", async (c) => c.json(await detectKnownClis()));
 
-// 这个 CLI 现在能用哪些 `/技能`(给输入框的斜杠补全用)。
-// cwd 取项目仓库根:worktree 里的 `.claude/skills` 是同一份仓库内容的副本,
-// 而 init 事件校准过来的 worktree 路径由 skills 模块自己按前缀认领。
-// executorId 只用来看这个执行器是不是跑在 ssh 上 —— 远端的技能装在远端盘上,
-// 本机扫不出来,这种情况如实返回空表 + remote:true,不假装。
-api.get("/skills", async (c) => {
-  const agentType = c.req.query("agentType") || "claude";
-  const projectId = c.req.query("projectId") || "";
-  const executorId = c.req.query("executorId") || "";
-  const force = c.req.query("refresh") === "1";
-  let cwd = "";
-  if (projectId) {
-    const [p] = await db.select().from(projects).where(eq(projects.id, projectId));
-    cwd = p?.repoPath ?? "";
-  }
-  let remote = false;
-  const [row] = executorId
-    ? await db.select().from(agents).where(eq(agents.id, executorId))
-    : await db.select().from(agents).where(eq(agents.type, agentType as AgentType));
-  if (row) {
-    try {
-      remote = JSON.parse(row.target || "{}")?.kind === "ssh";
-    } catch {
-      /* 目标字段脏了就当本机 */
-    }
-  }
-  return c.json(listSkills({ agentType, cwd, force, remote }));
-});
+// `/技能` 的三个端点在 `routes-skills.ts`(cwd 取项目仓库根、ssh 执行器不拿本机盘冒充)。
+mountSkillRoutes(api);
 
 api.post("/agents", async (c) => {
   const b = await c.req.json<any>();

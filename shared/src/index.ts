@@ -27,44 +27,18 @@ export interface AppSettings {
   defaultWorkflowId: string;
   // 输入框里的 `/技能` 清单多久重拉一次(秒)。0 = 关闭轮询,只在打开输入框那一下拉。
   // 这是**前端轮询间隔**,不是服务端扫描周期:服务端每次请求都真扫盘(命中 mtime
-  // 指纹就走缓存,~0.5ms),所以调小它只是多几个 HTTP 往返,不会拖慢磁盘。
+  // 指纹就走缓存,~0.5ms)。按小时计:装新技能是低频动作,等不及有「立即重新扫描」。
   skillRefreshSeconds: number;
 }
 
 export const DEFAULT_APP_SETTINGS: Readonly<AppSettings> = Object.freeze({
   worktreeDefault: true,
   defaultWorkflowId: "",
-  skillRefreshSeconds: 60,
+  skillRefreshSeconds: 3600,
 });
 
 // ── CLI skills (输入框的 `/` 补全) ────────────────────────────────────────
-// harness 在这件事上一行提示词都不写：`/名字` 原样留在 prompt 里，CLI 自己认。
-export type SkillSource = "project" | "user" | "plugin" | "builtin";
-
-export interface SkillEntry {
-  /** 技能名,不含斜杠;插件技能带 `插件名:` 前缀。 */
-  name: string;
-  /** 直接补进正文的那串文本(含斜杠)。 */
-  command: string;
-  description: string;
-  source: SkillSource;
-  /** 软链跟随后的物理路径,用来跨 CLI 认出「这是同一个技能」;内置技能没有。 */
-  realPath: string | null;
-  /** 除了当前这个 CLI,还有谁也装了同一份(按 realPath 认)。 */
-  alsoIn: AgentType[];
-}
-
-export interface SkillList {
-  agentType: AgentType;
-  cwd: string;
-  /** 每个 SKILL.md 的 mtime+size 拼串;前端可拿它短路。 */
-  fingerprint: string;
-  /** true = 这份清单被 claude 的 init 事件校准过(含内置技能)。 */
-  authoritative: boolean;
-  /** true = 目标是 ssh 远端,扫不到它的技能;不报错也不假装有。 */
-  remote: boolean;
-  skills: SkillEntry[];
-}
+export type { SkillEntry, SkillList, SkillScanOverview, SkillScanRow, SkillSource } from "./skills.ts";
 
 // ── Agents (§5) ────────────────────────────────────────────────────────────
 // Abstraction layer: the *type* is what you @ / pick as a debater.

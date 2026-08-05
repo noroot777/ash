@@ -597,6 +597,77 @@
   .settings-group-main > span, .settings-group-main .settings-paused { display: none; }
 }
 
+/* 技能扫描：每个已注册执行器一行「扫到了什么」 */
+.skill-scan-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.skill-scan-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 0.4fr) minmax(0, 1fr);
+  align-items: baseline;
+  gap: 12px;
+  border-bottom: 1px solid var(--line);
+  padding: 10px 14px;
+}
+
+.skill-scan-who {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.skill-scan-who b {
+  font-size: 13px;
+}
+
+.skill-scan-who em {
+  color: var(--faint);
+  font-size: 11px;
+  font-style: normal;
+}
+
+.skill-scan-what {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.skill-scan-count {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.skill-scan-count i {
+  color: var(--faint);
+  font-size: 11px;
+  font-style: normal;
+}
+
+/* 样本只是给人一眼认出「扫的是不是我那批」，一行放不下就截断，不换行堆高 */
+.skill-scan-sample {
+  overflow: hidden;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.skill-scan-note {
+  color: var(--faint);
+  font-size: 12px;
+}
+
+@media (max-width: 680px) {
+  .skill-scan-row { grid-template-columns: 1fr; }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .settings-resume-dots .is-running,
   .settings-resume-dots .is-queued { animation: none; opacity: 1; transform: none; }

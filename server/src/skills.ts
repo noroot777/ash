@@ -14,7 +14,14 @@
 import { closeSync, openSync, readFileSync, readSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, sep } from "node:path";
-import type { AgentType, SkillEntry, SkillList, SkillSource } from "@harness/shared";
+import type {
+  AgentType,
+  SkillEntry,
+  SkillList,
+  SkillScanOverview,
+  SkillScanRow,
+  SkillSource,
+} from "@harness/shared";
 
 // 扫得动的 CLI。其余 agentType 一律空表(degrade,不报错)。
 const SCANNABLE = ["claude", "codex", "gemini"] as const;
@@ -331,4 +338,40 @@ export function warmSkills(cwds: string[]): void {
       }
     }
   }
+}
+
+/**
+ * 设置页的「谁扫到了什么」:按**已注册的执行器 profile** 逐行给出条数与样本。
+ *
+ * 为什么按 profile 而不是按 CLI 类型列:技能目录确实是按类型定的(`~/.claude/skills`
+ * 之类),同类型的两个 profile 扫出来一模一样 —— 但**能不能扫**是 profile 级的事
+ * (ssh 那台的技能在远端盘上)。用户注册了 5 个执行器,就该看见这 5 行各自是什么情况,
+ * 而不是看见 3 行 CLI 类型然后自己去推哪个 profile 对应哪行。
+ */
+export function scanOverview(opts: {
+  cwd: string;
+  executors: { id: string | null; label: string; agentType: string; remote: boolean }[];
+  force?: boolean;
+}): SkillScanOverview {
+  const rows: SkillScanRow[] = opts.executors.map((executor) => {
+    const list = listSkills({
+      agentType: executor.agentType,
+      cwd: opts.cwd,
+      force: opts.force,
+      remote: executor.remote,
+    });
+    const bySource: Record<SkillSource, number> = { project: 0, user: 0, plugin: 0, builtin: 0 };
+    for (const skill of list.skills) bySource[skill.source] += 1;
+    return {
+      executorId: executor.id,
+      executorLabel: executor.label,
+      agentType: list.agentType,
+      remote: list.remote,
+      scannable: isScannable(executor.agentType),
+      count: list.skills.length,
+      bySource,
+      sample: list.skills.slice(0, 6).map((skill) => skill.command),
+    };
+  });
+  return { cwd: opts.cwd, scannedAt: new Date().toISOString(), rows };
 }

@@ -19,6 +19,7 @@ import type {
   SearchHit,
   Session,
   SkillList,
+  SkillScanOverview,
   Task,
   TaskReviewInfo,
   TaskWorkspaceDiscardResult,
@@ -26,6 +27,7 @@ import type {
   TeamPreset,
   TeamPresetConfig,
 } from "@harness/shared";
+import { DEFAULT_APP_SETTINGS } from "@harness/shared";
 import type { WorkflowDef, WorkflowItem } from "@harness/shared/workflow";
 
 const API_ROOT = "/api";
@@ -213,9 +215,16 @@ export type ReplyTaskResult =
   | { scheduled: true; message: ScheduledMessage };
 
 export const api = {
-  settings: (): Promise<AppSettings> => request("/settings"),
-  patchSettings: (patch: Partial<AppSettings>): Promise<AppSettings> =>
-    request("/settings", json("PATCH", patch)),
+  // 老服务端不认识新加的设置项时会漏字段,补上出厂默认再交出去 —— 界面上出现
+  // 「每 undefined 秒」这种东西比少一个设置项更难看,而且它没法自愈。
+  settings: async (): Promise<AppSettings> => ({
+    ...DEFAULT_APP_SETTINGS,
+    ...(await request<AppSettings>("/settings")),
+  }),
+  patchSettings: async (patch: Partial<AppSettings>): Promise<AppSettings> => ({
+    ...DEFAULT_APP_SETTINGS,
+    ...(await request<AppSettings>("/settings", json("PATCH", patch))),
+  }),
 
   projects: (): Promise<ProjectView[]> => request("/projects"),
   createProject: (name: string, repoPath: string): Promise<ProjectView> =>
@@ -395,6 +404,11 @@ export const api = {
     if (query.refresh) params.set("refresh", "1");
     return request(`/skills?${params.toString()}`);
   },
+  // 设置页:每个已注册执行器各自扫到多少技能。rescan 版强制重扫(绕过指纹缓存)。
+  skillsOverview: (projectId?: string): Promise<SkillScanOverview> =>
+    request(`/skills/overview${projectId ? `?projectId=${encodeURIComponent(projectId)}` : ""}`),
+  rescanSkills: (projectId?: string): Promise<SkillScanOverview> =>
+    request(`/skills/rescan${projectId ? `?projectId=${encodeURIComponent(projectId)}` : ""}`, json("POST", {})),
   createAgent: (agent: Partial<AgentExecutorProfile>): Promise<AgentExecutorProfile> =>
     request("/agents", json("POST", agent)),
   patchAgent: (

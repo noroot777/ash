@@ -1,16 +1,18 @@
-// `/` 技能补全的数据层回归测试(只碰临时目录,不碰 DB、不起 CLI):
+// `/` 技能补全的数据层回归测试(不起 CLI,读写全关在 mkdtemp 里):
 //   listSkills —— 扫盘、软链、跨 CLI 去重角标、ssh 执行器不假装
 //   指纹 —— 改 SKILL.md 的 description,不重启也要跟着变
 //   calibrateSkills —— init 事件与磁盘取**并集**,内置命令走白名单
+//   scanOverview —— 设置页按已注册执行器逐行列出「谁扫到了什么」
+//   parseAppSettingsPatch —— 刷新间隔按小时计的边界
 // 跑:npm -w server run test:skills
 //
 // 只用**项目级**技能根(`<cwd>/.claude/skills`、`<cwd>/.codex/skills`),
-// 这样整场测试都关在 mkdtemp 里,不会读写用户真实的 ~/.claude。
+// 这样不会读写用户真实的 ~/.claude;末尾那段会开 DB,库也指在临时目录里。
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { calibrateSkills, listSkills, resetSkillCache } from "../src/skills.js";
+import { calibrateSkills, listSkills, resetSkillCache, scanOverview } from "../src/skills.js";
 
 const root = mkdtempSync(join(tmpdir(), "harness-skills-"));
 process.on("exit", () => rmSync(root, { recursive: true, force: true }));
@@ -105,5 +107,47 @@ const remote = listSkills({ agentType: "claude", cwd: root, remote: true });
 assert.deepEqual(remote.skills, [], "ssh 执行器扫的是本机盘,那不是它要跑的地方");
 assert.equal(remote.remote, true, "要把 remote 如实告诉前端,好让菜单说人话而不是显示空");
 assert.deepEqual(listSkills({ agentType: "grok", cwd: root }).skills, [], "没有技能目录约定的 CLI 返回空清单");
+
+// ── 设置页的「谁扫到了什么」:按已注册的执行器 profile 逐行 ───────────────────
+
+const overview = scanOverview({
+  cwd: root,
+  executors: [
+    { id: "e1", label: "claude@本机", agentType: "claude", remote: false },
+    { id: "e2", label: "claude@远端", agentType: "claude", remote: true },
+    { id: "e3", label: "grok@本机", agentType: "grok", remote: false },
+  ],
+});
+assert.deepEqual(
+  overview.rows.map((row) => row.executorLabel),
+  ["claude@本机", "claude@远端", "grok@本机"],
+  "同类型的两个 profile 各占一行:能不能扫是 profile 级的事",
+);
+assert.ok(overview.rows[0]!.count >= 2, "本机那行要有条数");
+assert.ok(overview.rows[0]!.bySource.project >= 2, "项目级技能要计进 project 桶");
+assert.ok(overview.rows[0]!.sample.every((command) => command.startsWith("/")), "样本是可直接补全的命令");
+assert.equal(overview.rows[1]!.count, 0, "ssh 那行不拿本机结果冒充");
+assert.equal(overview.rows[1]!.remote, true);
+assert.equal(overview.rows[2]!.scannable, false, "没有技能目录约定的 CLI 要标出来,而不是显示 0 条");
+
+// ── 刷新间隔:按小时计,0 或 1~24 小时 ────────────────────────────────────────
+// 动态 import:app-settings 会连带打开 DB,先把库指到临时文件,别碰用户真实的 data/。
+process.env.HARNESS_DB = join(root, "settings-test.db");
+const { parseAppSettingsPatch } = await import("../src/app-settings.js");
+const rejects = (seconds: number) =>
+  assert.throws(() => parseAppSettingsPatch({ skillRefreshSeconds: seconds }), /1~24 小时/);
+
+assert.deepEqual(parseAppSettingsPatch({ skillRefreshSeconds: 0 }), { skillRefreshSeconds: 0 }, "0 = 关闭轮询");
+assert.deepEqual(parseAppSettingsPatch({ skillRefreshSeconds: 3600 }), { skillRefreshSeconds: 3600 });
+assert.deepEqual(parseAppSettingsPatch({ skillRefreshSeconds: 86400 }), { skillRefreshSeconds: 86400 });
+rejects(60); // 旧的分钟级档位
+rejects(900);
+rejects(3599);
+rejects(86401); // 超过 24 小时
+assert.throws(
+  () => parseAppSettingsPatch({ skillRefreshSecond: 3600 }),
+  /未知设置项/,
+  "拼错的 key 要当场被拒(线上那次「未知设置项」就是前端比服务端新)",
+);
 
 console.log("skills tests passed");
