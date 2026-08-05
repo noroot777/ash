@@ -148,9 +148,12 @@ export function TaskDetail({
     setDeleteOpen(false);
     setDerivation(null);
   }, [initialReviewOpen, task.id]);
+  // 换任务一律作废(别把上一个任务的目标念到这一个头上);同一个任务停下来也作废,
+  // 免得下一次「运行」照抄旧目标。
+  useEffect(() => setPendingExecutor(null), [task.id]);
   useEffect(() => {
     if (task.status !== "running" && task.status !== "queued") setPendingExecutor(null);
-  }, [task.id, task.status]);
+  }, [task.status]);
 
   const changeReviewOpen = (open: boolean) => {
     setReviewOpen(open);
