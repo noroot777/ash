@@ -25,11 +25,16 @@ export interface AppSettings {
   // 新建任务默认用哪条起手式（workflows.id 或内置 key）。空串 = 没设过，服务端落到
   // DEFAULT_WORKFLOW_KEY —— 那个 key 是运行时常量，这里不能 import（见上面的说明）。
   defaultWorkflowId: string;
+  // 输入框里的 `/技能` 清单多久重拉一次(秒)。0 = 关闭轮询,只在打开输入框那一下拉。
+  // 这是**前端轮询间隔**,不是服务端扫描周期:服务端每次请求都真扫盘(命中 mtime
+  // 指纹就走缓存,~0.5ms),所以调小它只是多几个 HTTP 往返,不会拖慢磁盘。
+  skillRefreshSeconds: number;
 }
 
 export const DEFAULT_APP_SETTINGS: Readonly<AppSettings> = Object.freeze({
   worktreeDefault: true,
   defaultWorkflowId: "",
+  skillRefreshSeconds: 60,
 });
 
 // ── Agents (§5) ────────────────────────────────────────────────────────────

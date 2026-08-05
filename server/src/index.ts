@@ -147,6 +147,13 @@ async function initializeServer() {
   // 所以重启后照样收得掉：先扫一遍孤儿，之后定时收 idle 那一档。
   const { startPreviewSweeper } = await import("./preview.js");
   startPreviewSweeper();
+  // 技能清单预热:第一次在输入框敲 `/` 之前就把磁盘扫完(冷扫 ~15ms,之后靠
+  // mtime 指纹命中缓存)。best-effort,失败了请求那一刻自己会重扫。
+  void (async () => {
+    const [{ warmSkills }, { projects }] = await Promise.all([import("./skills.js"), import("./db/schema.js")]);
+    const { db } = await import("./db/index.js");
+    warmSkills((await db.select().from(projects)).map((p) => p.repoPath));
+  })().catch(() => {});
   return { startScheduler: schedulesModule.startScheduler, api: routesModule.api };
 }
 

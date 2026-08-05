@@ -1,11 +1,12 @@
 import { randomUUID } from "node:crypto";
 import type { ChildProcess } from "node:child_process";
 import { createInterface } from "node:readline";
-import type { AgentEvent, ExecTarget } from "@harness/shared";
+import type { AgentEvent, AgentType, ExecTarget } from "@harness/shared";
 import type { AgentExecutor, RelayConfig, ResidentHandle, RunHandle, RunOpts } from "./types.js";
 import { spawnForRun, detachedInfo } from "./detached.js";
 import { spawnAgent, resumeFor, resumeInner, spawnErrorMessage, killChild, forceFinishOnExit, redactSecrets } from "./spawn.js";
 import { relayRoot } from "../llm.js";
+import { calibrateSkills } from "../skills.js";
 
 // Drives the real `claude` CLI in headless stream-json mode (prompt via stdin).
 //   claude -p --output-format stream-json --verbose --dangerously-skip-permissions
@@ -37,6 +38,12 @@ export class ClaudeExecutor implements AgentExecutor {
     this.label = opts.name ?? `claude@${where}${opts.model ? "·" + opts.model : ""}`;
   }
 
+  // 只有跑在**本机**的 claude 才配校准技能缓存:ssh 上那份技能装在远端盘上,
+  // 本机扫不出来也对不上,拿它的清单去覆盖本机结果只会凭空多出一批点不动的技能。
+  private calibrateAs(): AgentType | undefined {
+    return this.target.kind === "local" ? this.type : undefined;
+  }
+
   resumeCommand(cwd: string, sessionId: string): string {
     return resumeFor(this.target, cwd, resumeInner.claude(sessionId), this.relayEnvHint ?? "");
   }
@@ -53,14 +60,14 @@ export class ClaudeExecutor implements AgentExecutor {
     const args = this.buildArgs(opts, sessionId, false);
     const commandLine = redactSecrets(`${this.bin} ${args.join(" ")} <prompt via stdin>`);
     const child = spawnForRun(this.target, opts.cwd, this.bin, args, opts.prompt, this.env(), opts.detach);
-    return { sessionId, commandLine, events: parseClaudeStream(child), kill: () => killChild(child), detached: detachedInfo(child) };
+    return { sessionId, commandLine, events: parseClaudeStream(child, undefined, this.bin, this.calibrateAs()), kill: () => killChild(child), detached: detachedInfo(child) };
   }
 
   attach(child: ChildProcess, opts: { sessionId: string; commandLine: string }): RunHandle {
     return {
       sessionId: opts.sessionId,
       commandLine: opts.commandLine,
-      events: parseClaudeStream(child),
+      events: parseClaudeStream(child, undefined, this.bin, this.calibrateAs()),
       kill: () => child.kill(),
       detached: detachedInfo(child),
     };
@@ -81,7 +88,7 @@ export class ClaudeExecutor implements AgentExecutor {
     return {
       sessionId,
       commandLine,
-      events: parseClaudeStream(child, resident),
+      events: parseClaudeStream(child, resident, this.bin, this.calibrateAs()),
       send: (text: string) => {
         child.stdin?.write(userLine(text));
       },
@@ -135,10 +142,14 @@ const userLine = (text: string) =>
 // 流要一直开着;只有进程真的没了才 done。
 // bin 只影响 spawn 报错文案 —— 导出是为了让目录里「输出格式跟 claude 一致」的
 // CLI(stream-json 的 --output-format)直接复用这一份解析,不必各写一遍。
+// calibrateAs:只有**确知自己是哪种 CLI 的本机进程**才传(见下面 init 分支)。
+// 复用这份 parser 的第三方 CLI 一律不传 —— 它们的技能名跟 claude 的不是一回事,
+// 拿 bin 名去猜会把别人的技能塞进 claude 的缓存。
 export async function* parseClaudeStream(
   child: ReturnType<typeof spawnAgent>,
   resident?: { interruptPending: boolean },
   bin = "claude",
+  calibrateAs?: AgentType,
 ): AsyncIterable<AgentEvent> {
   const queue: AgentEvent[] = [];
   let resolve: (() => void) | null = null;
@@ -183,6 +194,16 @@ export async function* parseClaudeStream(
       return; // deltas drive the live stream; the trailing complete message handles tools
     }
     if (ev.type === "system" && ev.session_id) {
+      // init 事件白送一份**权威**技能清单(skills / slash_commands / cwd 都在里面),
+      // 顺手校准 skills 模块的扫描结果 —— 这是唯一不用额外起一个 CLI 进程就能拿到
+      // 「这个 CLI 自己认哪些技能」的机会,别浪费。纯旁路:失败也不能影响事件流。
+      if (calibrateAs && ev.subtype === "init" && typeof ev.cwd === "string") {
+        try {
+          calibrateSkills(calibrateAs, ev.cwd, ev.skills, ev.slash_commands);
+        } catch {
+          /* 校准是锦上添花,坏了就还用扫描结果 */
+        }
+      }
       push({ kind: "session", cliSessionId: ev.session_id });
     } else if (ev.type === "assistant" && ev.message?.content) {
       flushText(); // settle this message's text-delta tail before its tools
