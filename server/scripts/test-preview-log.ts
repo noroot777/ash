@@ -13,7 +13,7 @@
 // 把用户领到**别人的服务**上去验收自己的改动。所以撞车判定排在就绪判定前面。
 //
 // 跑法：npm -w server run test:preview-log
-import { portConflict, portHint } from "../src/preview-log.js";
+import { pickPreviewUrl, portConflict, portHint } from "../src/preview-log.js";
 
 let failures = 0;
 function check(name: string, actual: unknown, expected: unknown) {
@@ -60,6 +60,36 @@ const hint = portHint(51234);
 check("借到端口时把端口写进提示", hint.includes("PORT=51234"), true);
 check("提示带上认 $PORT 的写法", hint.includes("--port $PORT"), true);
 check("没借到端口就只说变量名", portHint(null).includes("环境变量 PORT"), true);
+
+// —— 日志里哪个地址才是预览本尊 ——
+// 一条 `npm run dev` 并排起好几个服务是常态，谁先把地址打出来纯看运气；挑错了就是把
+// 用户领到隔壁那个服务上去验收自己的改动。借出去的那个端口优先。
+const both = "[server] API listening on http://localhost:4317\n"
+  + "[web] ➜  Local:   http://localhost:54798/\n";
+check("借出去的端口优先，哪怕它印得更晚", pickPreviewUrl(both, 54798), {
+  url: "http://localhost:54798/", port: 54798, lent: true,
+});
+check("没借到端口就取第一个", pickPreviewUrl(both, null), {
+  url: "http://localhost:4317", port: 4317, lent: false,
+});
+check("借的端口没出现在日志里也取第一个", pickPreviewUrl(both, 51234), {
+  url: "http://localhost:4317", port: 4317, lent: false,
+});
+check("没有地址", pickPreviewUrl("compiling...\n", 5173), null);
+check("地址不带端口就按协议默认", pickPreviewUrl("running at http://localhost/\n", null), {
+  url: "http://localhost/", port: 80, lent: false,
+});
+// 正则带 /g,一不小心就会把 lastIndex 留在模块级变量上——第二次调用从半截开始扫,
+// 于是「同一份日志问两次给两个答案」。轮询每秒都要问一次,这条必须钉住。
+check("同一份日志问两次答案一样", pickPreviewUrl(both, 54798), pickPreviewUrl(both, 54798));
+
+// —— 撞车 + 自己的地址同时出现：preview.ts 的那个例外 ——
+// 后端撞上本机已在跑的那份、前端认了 $PORT 好好地起来了。两个纯函数各自照旧回答，
+// 由 preview.ts 组合成「这次不算失败」。这里钉的是它俩的输入。
+const mixed = "[server] [harness] Refusing to start: port 4317 is already in use.\n"
+  + "[web] ➜  Local:   http://localhost:54798/\n";
+check("撞车行照样认得出来", portConflict(mixed), "端口 4317 已经被别的进程占着");
+check("但预览本尊落在借来的端口上", pickPreviewUrl(mixed, 54798)?.lent, true);
 
 console.log(failures ? `\n${failures} 条没过` : "\n全过");
 process.exit(failures ? 1 : 0);

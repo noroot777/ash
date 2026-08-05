@@ -35,3 +35,34 @@ export function portHint(port: number | null): string {
     + `harness 已经给这次预览借了一个空闲端口，以环境变量 ${name} 传了进去 —— `
     + "把这一站的启动命令改成认它的写法就能错开，例如 `npm run dev -- --port $PORT`。";
 }
+
+/** 日志里印出来的本机地址。`lent` 为真表示它就落在我们借出去的那个端口上。 */
+export interface PreviewUrl {
+  url: string;
+  port: number;
+  lent: boolean;
+}
+
+const URL_RE = /https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0)(?::(\d{2,5}))?[^\s'"]*/gi;
+
+/**
+ * 从日志里挑出「预览本尊」的地址。
+ *
+ * 不能见到第一个 URL 就当它是：**一条 `npm run dev` 并排起好几个服务是常态**（concurrently
+ * 起前端 + 后端、框架顺带印一个 API 地址），谁先把自己的地址打出来纯看运气，挑错了就是把
+ * 用户领到隔壁那个服务上去验收。所以借出去的那个端口优先 —— 那是我们刚探出来的空闲端口，
+ * 命令认了它，落在上面的地址必然是这一站要看的东西。
+ *
+ * `lent` 这个标记还兼着第二个用处，见 preview.ts 里撞车判定的那个例外。
+ */
+export function pickPreviewUrl(log: string, lent: number | null): PreviewUrl | null {
+  let first: PreviewUrl | null = null;
+  for (const hit of log.matchAll(URL_RE)) {
+    const url = hit[0];
+    const port = Number(hit[1] ?? (url.startsWith("https") ? 443 : 80));
+    if (lent !== null && port === lent) return { url, port, lent: true };
+    first ??= { url, port, lent: false };
+  }
+  return first;
+}
+
