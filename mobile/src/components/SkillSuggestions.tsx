@@ -18,7 +18,7 @@ const SOURCE_LABEL: Record<SkillSource, string> = {
 };
 
 // 拉过的清单按「执行器+项目」记住:手机上每敲一次 `/` 都转一次圈太难看。
-const cache = new Map<string, SkillEntry[]>();
+const cache = new Map<string, { skills: SkillEntry[]; remote: boolean }>();
 
 export function slashToken(text: string): string | null {
   return /^\s*(\/\S*)$/.exec(text)?.[1]?.toLowerCase() ?? null;
@@ -42,18 +42,19 @@ export function SkillSuggestions({
   const wants = token !== null;
   const cli = agentType || "claude";
   const key = [cli, projectId ?? "", executorId ?? ""].join("|");
-  const [skills, setSkills] = useState<SkillEntry[]>(() => cache.get(key) ?? []);
+  const [state, setState] = useState(() => cache.get(key) ?? { skills: [], remote: false });
 
   useEffect(() => {
-    setSkills(cache.get(key) ?? []);
+    setState(cache.get(key) ?? { skills: [], remote: false });
     // 没敲斜杠就不发请求:这条带子是按需出现的,没必要每开一个任务就扫一遍磁盘。
     if (!wants) return;
     let alive = true;
     api
       .skills({ agentType: cli, projectId: projectId ?? undefined, executorId: executorId ?? undefined })
       .then((list) => {
-        cache.set(key, list.skills);
-        if (alive) setSkills(list.skills);
+        const next = { skills: list.skills, remote: list.remote };
+        cache.set(key, next);
+        if (alive) setState(next);
       })
       .catch(() => {
         // 拉不到就当没有技能:补全坏掉不该让输入框看起来出事。
@@ -64,7 +65,15 @@ export function SkillSuggestions({
   }, [cli, executorId, key, projectId, wants]);
 
   if (!token) return null;
-  const matches = skills.filter((skill) => skill.command.toLowerCase().startsWith(token));
+  if (state.remote) {
+    // ssh 执行器:技能装在远端盘上,本机列不出来。如实说,别装成「没装技能」。
+    return (
+      <Text style={{ color: theme.faint, fontSize: 11 }}>
+        这个执行器跑在 ssh 远端,技能清单只有它自己看得见——照常发 /名字,它认得。
+      </Text>
+    );
+  }
+  const matches = state.skills.filter((skill) => skill.command.toLowerCase().startsWith(token));
   if (!matches.length) return null;
 
   return (

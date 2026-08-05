@@ -26,6 +26,7 @@ export function ReplyBox({
   onSend,
   command,
   skills = EMPTY_SKILLS,
+  skillsRemote = false,
   inlinePanel,
 }: {
   task: Task;
@@ -55,6 +56,9 @@ export function ReplyBox({
   // 当前执行器已装的技能。选中只把 `/名字` 补进正文——harness 不替它写任何提示词,
   // 也不把这条文本当成派生命令截走。
   skills?: SkillEntry[];
+  // 执行器在 ssh 那头:技能装在远端盘上,本机扫不到。这时候如实说一句,
+  // 别让空菜单看起来像「这台机器没装技能」。
+  skillsRemote?: boolean;
   inlinePanel?: ReactNode;
 }) {
   const [value, setValue] = useState("");
@@ -294,7 +298,9 @@ export function ReplyBox({
         <SlashMenu
           className="task-reply-command-menu"
           ariaLabel="斜杠命令与技能"
-          hint={`${firstSkillIndex === 0 ? "技能" : "派生命令与技能"} · ↑↓ 选择，回车${selectedIsSkill ? "补全" : "确认"}，Esc 取消`}
+          hint={skillsRemote
+            ? "派生命令 · 远端(ssh)执行器的技能装在那头，本机列不出来"
+            : `${firstSkillIndex === 0 ? "技能" : "派生命令与技能"} · ↑↓ 选择，回车${selectedIsSkill ? "补全" : "确认"}，Esc 取消`}
           items={candidates}
           selectedIndex={selectedIndex}
           onHover={setCommandIndex}

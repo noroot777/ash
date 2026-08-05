@@ -639,7 +639,9 @@ export function TaskComposerPanel({
               <SlashMenu
                 className="composer-slash-menu"
                 ariaLabel="斜杠命令与技能"
-                hint="↑↓ 选择，回车确认，Esc 关闭"
+                hint={skills.remote
+                  ? "模式命令 · 远端(ssh)执行器的技能装在那头，本机列不出来"
+                  : "↑↓ 选择，回车确认，Esc 关闭"}
                 items={slashCandidates}
                 selectedIndex={slashSelected}
                 onHover={setSlashIndex}

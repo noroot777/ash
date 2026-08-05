@@ -91,7 +91,7 @@ function TeamReplyBox({
     executorId: task.executorId,
     enabled: !disabled,
   });
-  const slash = useSlashCompletion({ value, setValue, skills: skills.skills, disabled });
+  const slash = useSlashCompletion({ value, setValue, skills: skills.skills, remote: skills.remote, disabled });
   useEffect(() => {
     setValue("");
     setError(null);
@@ -130,9 +130,12 @@ function TeamReplyBox({
         <SlashMenu
           className="team-reply-command-menu"
           ariaLabel="技能补全"
-          hint="已装技能 · 回车补全，原样发给调度者的 CLI"
+          hint={skills.remote
+            ? "远端(ssh)调度者的技能装在那头，本机列不出来"
+            : "已装技能 · 回车补全，原样发给调度者的 CLI"}
           items={slash.items}
           selectedIndex={slash.selectedIndex}
+          emptyText="这台调度者跑在 ssh 远端，技能清单只有它自己看得见——照常敲 /名字 发过去，它认得。"
           onHover={slash.setIndex}
           onPick={slash.pick}
         />

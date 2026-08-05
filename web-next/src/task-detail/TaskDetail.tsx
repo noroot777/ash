@@ -309,6 +309,7 @@ export function TaskDetail({
                     task={task}
                     hasConversation={hasConversation}
                     skills={skills.skills}
+                    skillsRemote={skills.remote}
                     onSend={async (text, attachments, { executorLabel, ...options }) => {
                       const result = await api.replyTask(task.id, text, { attachments, ...options });
                       // 按**结果**分支而不是按请求参数:任务正在跑时后端会把这条落成
