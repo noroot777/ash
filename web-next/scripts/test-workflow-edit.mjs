@@ -1,8 +1,9 @@
 // 编排时的连带修复（web-next/src/workflow/workflowEdit.ts）。
 //
-// 盯住一件事：**任何一次改动之后，这条线仍然能存进去**。加站要挡住重复的锚点、id
-// 不能撞车、挪站不能误伤别站的失败策略；如果修复漏在某条路径上，用户的表现是「改了
-// 一下，就说这条线存不了，还不知道为什么」。
+// 盯住一件事：**任何一次改动之后，这条线仍然能存进去**。加站要挡住那两种单例站
+// （「让 AI 干活」「合并并清理」）、id 不能撞车、挪站不能误伤别站的失败策略；如果修复
+// 漏在某条路径上，用户的表现是「改了一下，就说这条线存不了，还不知道为什么」。反过来
+// 也一样要盯：菜单**多**灰掉一种站，用户的表现是「这站画不上去，也没人告诉我为什么」。
 //
 // 跑法：npm -w web-next run test:workflow-edit
 import assert from "node:assert/strict";
@@ -25,10 +26,33 @@ assert.deepEqual(kinds(insertStep(base, 0, "command")), ["command", "run", "huma
 assert.deepEqual(kinds(insertStep(base, 99, "command")), ["run", "human", "accept", "command"], "越界就插末尾");
 assert.equal(new Set(ids(insertStep(base, 1, "verify"))).size, 4, "新站的 id 不能撞车");
 
-// 会停下来等的那几站每种只能有一个：菜单据此置灰，插进去也得原样退回
-assert.equal(canAddKind(base, "human"), false, "已经有「等我点头」了");
+// 只有「让 AI 干活」和「合并并清理」每条线至多一站：菜单据此置灰，插进去也得原样退回
+assert.equal(canAddKind(base, "run"), false, "已经有「让 AI 干活」了：两个起点说不清从哪儿开工");
+assert.equal(canAddKind(base, "accept"), false, "已经有「合并并清理」了：合两遍没有意义");
+assert.equal(insertStep(base, 1, "accept"), base, "单例站不能悄悄插进去");
+assert.equal(insertStep(base, 0, "run"), base, "——两站都是,不只是那一个");
+
+// 「自动验证」「等我点头」想画几站画几站：执行链认游标 workflow_at（这条线此刻停在
+// 哪一站的 id），不再是「哪一类锚点过去了」，所以第二站不会被静默跳过。
 assert.equal(canAddKind(base, "verify"), true);
-assert.equal(insertStep(base, 1, "accept"), base, "重复的锚点不能悄悄插进去");
+assert.equal(canAddKind(base, "human"), true, "已经有一道「等我点头」了,还能再加一道");
+assert.deepEqual(
+  kinds(insertStep(base, 1, "human")), ["run", "human", "human", "accept"],
+  "两道人工关口:前面那道是放行,最后一道才是「去合吧」",
+);
+assert.deepEqual(
+  kinds(insertStep(insertStep(base, 1, "verify"), 2, "verify")),
+  ["run", "verify", "verify", "human", "accept"],
+  "两站自动验证:先粗验再细验",
+);
+assert.equal(
+  new Set(ids(insertStep(insertStep(base, 1, "verify"), 2, "verify"))).size, 5,
+  "连加两站同类,id 也不能撞车",
+);
+assert.ok(
+  isWorkflowUsable(insertStep(insertStep(base, 1, "verify"), 1, "human")),
+  "加完还得是一条能存进去的线——菜单放行了,闸那边就不能再拦",
+);
 
 // 删掉中间那站再加，id 要能补空位而不是一路涨
 const gap = removeStep(line("run", "verify", "human"), "s2");
