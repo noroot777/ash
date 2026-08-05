@@ -600,3 +600,27 @@
 @media (prefers-reduced-motion: reduce) {
   .task-pin { transition: none; }
 }
+
+/* ── 斜杠菜单（回复框 / 新建任务共用的 SlashMenu） ─────────────────────────── */
+/* 定位与外框各自归各自的容器类；这里只管两处一模一样的分隔线、角标和空态。 */
+.slash-menu-divider {
+  display: block;
+  margin-top: 3px;
+  border-top: 1px solid var(--line2);
+  padding: 6px 7px 4px;
+  color: var(--faint);
+  font-size: 9.5px;
+}
+.slash-menu-tag {
+  flex: 0 0 auto;
+  margin-left: auto;
+  border-radius: 4px;
+  background: var(--raised);
+  padding: 1px 5px;
+  color: var(--faint);
+  font-size: 9px;
+  font-style: normal;
+  white-space: nowrap;
+}
+.slash-menu-tag + .slash-menu-tag { margin-left: 4px; }
+.slash-menu-empty { margin: 4px 7px 7px; color: var(--faint); font-size: 10.5px; }

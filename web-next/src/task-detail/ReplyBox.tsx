@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import type { AgentExecutorProfile, AgentType, Task } from "@harness/shared";
+import type { AgentExecutorProfile, AgentType, SkillEntry, Task } from "@harness/shared";
 import { sameExecutor } from "@harness/shared/executors";
 import { ArrowUp, CaretDown, Clock, Robot, SpinnerGap, X } from "@phosphor-icons/react";
 import {
@@ -14,13 +14,18 @@ import { api, type ReplyTaskResult } from "../lib/api.ts";
 import { useProviders } from "../lib/modelCatalog.ts";
 import { AgentModelPicker } from "./AgentModelPicker.tsx";
 import { AttachmentPicker, UploadAttachmentList, useAttachments } from "./Attachments.tsx";
+import { SlashMenu } from "../components/SlashMenu.tsx";
+import { mergeSlashItems, slashToken, type SlashItem } from "../lib/useSkills.ts";
 import type { AgentModelSelection, MentionTarget } from "./mentionPicker.ts";
+
+const EMPTY_SKILLS: SkillEntry[] = [];
 
 export function ReplyBox({
   task,
   hasConversation,
   onSend,
   command,
+  skills = EMPTY_SKILLS,
   inlinePanel,
 }: {
   task: Task;
@@ -47,6 +52,9 @@ export function ReplyBox({
     resetKey?: number;
     items: { command: string; label: string; hint?: string }[];
   };
+  // 当前执行器已装的技能。选中只把 `/名字` 补进正文——harness 不替它写任何提示词,
+  // 也不把这条文本当成派生命令截走。
+  skills?: SkillEntry[];
   inlinePanel?: ReactNode;
 }) {
   const [value, setValue] = useState("");
@@ -129,14 +137,16 @@ export function ReplyBox({
     return () => { alive = false; };
   }, []);
 
-  const commandCandidates = (text: string) => {
-    const token = /^\s*(\/\S*)$/.exec(text)?.[1]?.toLowerCase();
-    return token ? command?.items.filter((item) => item.command.startsWith(token)) ?? [] : [];
-  };
+  // 派生命令(harness 自己的)排在技能前面,中间画一条线:前者换的是「谁来干」,
+  // 后者只是给这一轮加一句提示词,点错的代价差着量级。
+  const harnessItems: SlashItem[] = (command?.items ?? []).map((item) => ({ ...item, kind: "harness" }));
+  const commandCandidates = (text: string) => mergeSlashItems(harnessItems, skills, slashToken(text));
   const candidates = commandCandidates(value);
+  const firstSkillIndex = candidates.findIndex((item) => item.kind === "skill");
   const menuOpen = !menuDismissed && candidates.length > 0;
   const selectedIndex = Math.min(commandIndex, Math.max(0, candidates.length - 1));
   const commandMatch = !!command && command.matches(value);
+  const selectedIsSkill = candidates[selectedIndex]?.kind === "skill";
   const commandActive = commandMatch || menuOpen;
   const mentionMatch = /(?:^|\s)@([a-z0-9_-]*)$/i.exec(value);
   const registeredTypes = registeredAgentTypes(profiles);
@@ -168,8 +178,19 @@ export function ReplyBox({
   const activeExecutorLabel = profiles.find((profile) => profile.id === activeExecutorId)?.name
     ?? activeAgent;
 
-  const pickCommand = (text: string) => {
-    command?.onSubmit(text);
+  const pickCommand = (item: SlashItem) => {
+    // 技能不是派生命令:它只是**补全**。`/名字` 原样留在正文里跟着这一轮发下去,
+    // 由 CLI 自己认——harness 一行提示词都不写,所以这里绝不能把它截走。
+    if (item.kind === "skill") {
+      const next = `${item.command} `;
+      setValue(next);
+      setCommandIndex(0);
+      setMenuDismissed(false);
+      command?.onChange?.(next);
+      textareaRef.current?.focus();
+      return;
+    }
+    command?.onSubmit(item.command);
     setValue("");
     setCommandIndex(0);
     setMenuDismissed(false);
@@ -226,11 +247,11 @@ export function ReplyBox({
 
   const send = async (scheduledAt?: string) => {
     if (menuOpen) {
-      pickCommand(candidates[selectedIndex]!.command);
+      pickCommand(candidates[selectedIndex]!);
       return;
     }
     if (commandMatch) {
-      pickCommand(value.trim());
+      pickCommand({ command: value.trim(), label: "", kind: "harness" });
       return;
     }
     if (disabled || sending || uploads.uploading || (!value.trim() && !uploads.attachments.length)) return;
@@ -270,23 +291,15 @@ export function ReplyBox({
   return (
     <div className="task-reply-shell">
       {menuOpen && (
-        <div className="task-reply-command-menu" role="listbox" aria-label="派生命令">
-          <small>派生命令 · ↑↓ 选择，回车确认，Esc 取消</small>
-          {candidates.map((item, index) => (
-            <button
-              type="button"
-              role="option"
-              aria-selected={index === selectedIndex}
-              key={item.command}
-              onMouseEnter={() => setCommandIndex(index)}
-              onClick={() => pickCommand(item.command)}
-            >
-              <b>{item.command}</b>
-              <span>{item.label}</span>
-              {item.hint && <em>{item.hint}</em>}
-            </button>
-          ))}
-        </div>
+        <SlashMenu
+          className="task-reply-command-menu"
+          ariaLabel="斜杠命令与技能"
+          hint={`${firstSkillIndex === 0 ? "技能" : "派生命令与技能"} · ↑↓ 选择，回车${selectedIsSkill ? "补全" : "确认"}，Esc 取消`}
+          items={candidates}
+          selectedIndex={selectedIndex}
+          onHover={setCommandIndex}
+          onPick={pickCommand}
+        />
       )}
       {mentionOpen && !menuOpen && (
         <div className="task-reply-mention-menu" role="listbox" aria-label="召唤智能体">
@@ -379,7 +392,7 @@ export function ReplyBox({
               }
               if (event.key === "Enter") {
                 event.preventDefault();
-                pickCommand(candidates[selectedIndex]!.command);
+                pickCommand(candidates[selectedIndex]!);
                 return;
               }
               if (event.key === "Escape") {
@@ -470,7 +483,8 @@ export function ReplyBox({
           )}
           <span>
             {uploads.uploading ? "上传中…"
-              : commandActive ? "回车配置"
+              : selectedIsSkill ? "回车补全"
+                : commandActive ? "回车配置"
                 : queueing ? (target ? "排队：跑完按上面这套发出" : "⌘↵ 排队，跑完自动发出")
                   : target ? "本回合按上面这套跑" : "⌘↵ 发送"}
           </span>
@@ -479,7 +493,7 @@ export function ReplyBox({
             type="button"
             disabled={sending || uploads.uploading || (!commandActive && (disabled || (!value.trim() && !uploads.attachments.length)))}
             onClick={() => void send()}
-            aria-label={commandActive ? "打开派生配置" : queueing ? "排队发送，任务跑完自动发出" : "发送回复"}
+            aria-label={selectedIsSkill ? "把技能补进正文" : commandActive ? "打开派生配置" : queueing ? "排队发送，任务跑完自动发出" : "发送回复"}
           >
             {sending ? <SpinnerGap size={15} className="is-spinning" /> : <ArrowUp size={15} weight="bold" />}
           </button>

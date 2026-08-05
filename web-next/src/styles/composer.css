@@ -122,8 +122,10 @@
   z-index: 3;
   top: 48px;
   left: 12px;
-  width: 310px;
-  overflow: hidden;
+  width: 340px;
+  /* 技能一多就得能滚(本机 57 条);键盘选中项的 scrollIntoView 在 SlashMenu 里。 */
+  max-height: min(46vh, 320px);
+  overflow-y: auto;
   border: 1px solid var(--line2);
   border-radius: 10px;
   background: var(--panel);
@@ -159,6 +161,20 @@
   color: var(--muted);
   font-size: 11px;
 }
+
+/* 技能行:描述可能很长,截断而不是把整张菜单撑歪。 */
+.composer-slash-menu button { min-height: 34px; height: auto; }
+.composer-slash-menu em {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--faint);
+  font-size: 10px;
+  font-style: normal;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.composer-slash-menu button:hover,
+.composer-slash-menu button[aria-selected="true"] { border-radius: 7px; background: var(--sel-bg); }
 
 .composer-config {
   display: grid;

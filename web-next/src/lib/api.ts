@@ -18,6 +18,7 @@ import type {
   ScheduledMessage,
   SearchHit,
   Session,
+  SkillList,
   Task,
   TaskReviewInfo,
   TaskWorkspaceDiscardResult,
@@ -381,6 +382,19 @@ export const api = {
     { type: AgentType; bin: string; available: boolean; path: string | null; version: string | null; resident: boolean }[]
   > => request("/agents/detect"),
   detectClis: (): Promise<DetectedCli[]> => request("/agents/catalog"),
+  // 这个执行器在这个项目下已经装了哪些 `/技能`。refresh=true 跳过服务端的指纹缓存。
+  skills: (query: {
+    agentType: string;
+    projectId?: string;
+    executorId?: string;
+    refresh?: boolean;
+  }): Promise<SkillList> => {
+    const params = new URLSearchParams({ agentType: query.agentType });
+    if (query.projectId) params.set("projectId", query.projectId);
+    if (query.executorId) params.set("executorId", query.executorId);
+    if (query.refresh) params.set("refresh", "1");
+    return request(`/skills?${params.toString()}`);
+  },
   createAgent: (agent: Partial<AgentExecutorProfile>): Promise<AgentExecutorProfile> =>
     request("/agents", json("POST", agent)),
   patchAgent: (

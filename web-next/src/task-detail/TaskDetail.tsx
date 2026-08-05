@@ -5,6 +5,7 @@ import { FlowArrow, Info, MagnifyingGlass } from "@phosphor-icons/react";
 import { InspectorHost, type InspectorDescriptor } from "../inspector/index.ts";
 import { api } from "../lib/api.ts";
 import { useConversation } from "../lib/useConversation.ts";
+import { useSkills } from "../lib/useSkills.ts";
 import { useTaskReadState } from "../lib/useTaskReadState.ts";
 import { conversationToMarkdown } from "./conversationModel.ts";
 import { ConversationFeed } from "./ConversationFeed.tsx";
@@ -137,6 +138,15 @@ export function TaskDetail({
     ],
     defaultActiveTabId: reviewFocused ? "review" : "info",
   }), [hasWorkflow, reviewFocused, task.status]);
+
+  // 这一轮由哪个执行器跑,`/` 就补它自己装的技能(ReplyBox 里 @ 召唤别人时列表
+  // 不跟着变——那是「本回合换人」,而技能清单按任务常设执行器给,够用且不闪)。
+  const skills = useSkills({
+    agentType: task.agentType,
+    projectId: task.projectId,
+    executorId: task.executorId,
+    enabled: task.mode === "single" && !task.archived,
+  });
 
   useEffect(() => {
     let alive = true;
@@ -298,6 +308,7 @@ export function TaskDetail({
                   <ReplyBox
                     task={task}
                     hasConversation={hasConversation}
+                    skills={skills.skills}
                     onSend={async (text, attachments, { executorLabel, ...options }) => {
                       const result = await api.replyTask(task.id, text, { attachments, ...options });
                       // 按**结果**分支而不是按请求参数:任务正在跑时后端会把这条落成

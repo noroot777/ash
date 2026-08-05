@@ -14,34 +14,7 @@
 import { closeSync, openSync, readFileSync, readSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, sep } from "node:path";
-import type { AgentType } from "@harness/shared";
-
-export type SkillSource = "project" | "user" | "plugin" | "builtin";
-
-export interface SkillEntry {
-  /** 技能名,不含斜杠;插件技能带 `插件名:` 前缀。 */
-  name: string;
-  /** 直接补进正文的那串文本(含斜杠)。 */
-  command: string;
-  description: string;
-  source: SkillSource;
-  /** 软链跟随后的物理路径,用来跨 CLI 认出「这是同一个技能」;内置技能没有。 */
-  realPath: string | null;
-  /** 除了当前这个 CLI,还有谁也装了同一份(按 realPath 认)。 */
-  alsoIn: AgentType[];
-}
-
-export interface SkillList {
-  agentType: AgentType;
-  cwd: string;
-  /** 每个 SKILL.md 的 mtime+size 拼串;前端可拿它短路。 */
-  fingerprint: string;
-  /** true = 这份清单被 claude 的 init 事件校准过(含内置技能)。 */
-  authoritative: boolean;
-  /** true = 目标是 ssh 远端,扫不到它的技能;不报错也不假装有。 */
-  remote: boolean;
-  skills: SkillEntry[];
-}
+import type { AgentType, SkillEntry, SkillList, SkillSource } from "@harness/shared";
 
 // 扫得动的 CLI。其余 agentType 一律空表(degrade,不报错)。
 const SCANNABLE = ["claude", "codex", "gemini"] as const;

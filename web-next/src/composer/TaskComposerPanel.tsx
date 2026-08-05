@@ -30,6 +30,9 @@ import {
   type ExecutorSelection,
 } from "../lib/agentAvailability.ts";
 import { api } from "../lib/api.ts";
+import { mergeSlashItems, slashToken, type SlashItem } from "../lib/useSkills.ts";
+import { useSkills } from "../lib/useSkills.ts";
+import { SlashMenu } from "../components/SlashMenu.tsx";
 import { AttachmentPicker, UploadAttachmentList, useAttachments } from "../task-detail/Attachments.tsx";
 import { attachmentView } from "../task-detail/utils.ts";
 import { ComposerFields } from "./ComposerFields.tsx";
@@ -50,11 +53,19 @@ const MODES: { value: TaskMode; label: string; icon: typeof Robot }[] = [
   { value: "team", label: "团队", icon: UsersThree },
   { value: "debate", label: "辩论", icon: Scales },
 ];
+// harness 自己的三条切换命令。**这张表是固定的**:下面 changeBody 那个「敲完空格
+// 就把命令从正文里吃掉」的正则只认这三个词,技能绝不能进这张表 —— 技能的 `/名字`
+// 必须原样留在正文里发下去(harness 一行提示词都不写,CLI 自己认)。
 const SLASHES = [
   { command: "/single", mode: "single" as const, label: "创建单任务" },
   { command: "/team", mode: "team" as const, label: "创建常驻团队" },
   { command: "/debate", mode: "debate" as const, label: "发起双智能体辩论" },
 ];
+const HARNESS_SLASH_ITEMS: SlashItem[] = SLASHES.map((item) => ({
+  command: item.command,
+  label: item.label,
+  kind: "harness",
+}));
 
 function defaultProfile(profiles: AgentExecutorProfile[], type: AgentType) {
   return profiles.find((profile) => profile.type === type && profile.isDefault)
@@ -120,6 +131,8 @@ export function TaskComposerPanel({
   const [scheduleAt, setScheduleAt] = useState("");
   const [scheduleCron, setScheduleCron] = useState(DEFAULT_CRON);
   const [groupDialogOpen, setGroupDialogOpen] = useState(false);
+  const [slashIndex, setSlashIndex] = useState(0);
+  const [slashDismissed, setSlashDismissed] = useState(false);
   const workflow = useComposerWorkflow({
     project,
     isRepo: project.health.isRepo,
@@ -194,14 +207,12 @@ export function TaskComposerPanel({
     () => [...new Set([...seedAttachments, ...uploads.attachments.map((item) => item.path)])],
     [seedAttachments, uploads.attachments],
   );
-  const slashCandidates = useMemo(() => {
-    const match = /^\s*(\/\S*)$/.exec(body);
-    return match ? SLASHES.filter((item) => item.command.startsWith(match[1]!.toLowerCase())) : [];
-  }, [body]);
   const applySlash = (nextMode: TaskMode, rest = "") => {
     onModeChange(nextMode);
     setBody(rest);
   };
+  // 只认 single/team/debate:敲 `/team 目标…` 直接切模式并把命令摘掉(它是指令不是内容)。
+  // 技能走不到这里,所以 `/brandkit 做张图` 会原样留在正文里 —— 这正是要的。
   const changeBody = (value: string) => {
     const parsed = /^\s*\/(single|team|debate)\s+([\s\S]*)$/i.exec(value);
     if (parsed) applySlash(parsed[1]!.toLowerCase() as TaskMode, parsed[2] ?? "");
@@ -266,6 +277,29 @@ export function TaskComposerPanel({
     profiles,
     { agentType: "codex", executorId: null },
   );
+  // 正文最后是发给谁的,`/` 就补谁的技能:单任务给「让 AI 干活」那一站的执行器,
+  // 团队给调度者。**辩论刻意不补**:同一段议题会同时发给两个不同的 CLI,只有一边
+  // 装了的技能在另一边就是一句没人认的文本,那种「一半生效」比不提供更难查。
+  const slashRun = mode === "team" ? leadExecutor : singleRun;
+  const skills = useSkills({
+    agentType: slashRun.agentType,
+    projectId: project.id,
+    executorId: slashRun.executorId,
+    enabled: mode !== "debate",
+  });
+  const slashCandidates = mergeSlashItems(HARNESS_SLASH_ITEMS, skills.skills, slashDismissed ? null : slashToken(body));
+  const slashSelected = Math.min(slashIndex, Math.max(0, slashCandidates.length - 1));
+  const pickSlash = (item: SlashItem) => {
+    const harness = SLASHES.find((entry) => entry.command === item.command);
+    if (harness && item.kind === "harness") {
+      applySlash(harness.mode);
+      return;
+    }
+    // 技能只是补全:补进正文,原样跟着任务正文发下去。
+    setBody(`${item.command} `);
+    setSlashIndex(0);
+  };
+
   const executorTypes: Record<ComposerExecutorRole, AgentType> = {
     single: singleExecutor.agentType,
     lead: leadExecutor.agentType,
@@ -563,7 +597,11 @@ export function TaskComposerPanel({
             <textarea
               autoFocus
               value={body}
-              onChange={(event) => changeBody(event.target.value)}
+              onChange={(event) => {
+                changeBody(event.target.value);
+                setSlashIndex(0);
+                setSlashDismissed(false);
+              }}
               onPaste={uploads.onPaste}
               placeholder={mode === "team"
                 ? "给调度者的目标…（可输入 /single 或 /debate 切换）"
@@ -571,9 +609,25 @@ export function TaskComposerPanel({
                   ? "要讨论并形成结论的议题…"
                   : "描述要做什么…（可输入 /team 或 /debate）"}
               onKeyDown={(event) => {
-                if (event.key === "Enter" && slashCandidates.length === 1 && body.trim() === slashCandidates[0]!.command) {
-                  event.preventDefault();
-                  applySlash(slashCandidates[0]!.mode);
+                if (slashCandidates.length) {
+                  if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+                    event.preventDefault();
+                    const step = event.key === "ArrowDown" ? 1 : slashCandidates.length - 1;
+                    setSlashIndex((slashSelected + step) % slashCandidates.length);
+                    return;
+                  }
+                  if (event.key === "Enter" && !event.metaKey && !event.ctrlKey) {
+                    event.preventDefault();
+                    pickSlash(slashCandidates[slashSelected]!);
+                    return;
+                  }
+                  if (event.key === "Escape") {
+                    // 只关菜单,别把整个新建面板也关了(外层 window 上挂着 Esc 关闭)。
+                    event.preventDefault();
+                    event.stopPropagation();
+                    setSlashDismissed(true);
+                    return;
+                  }
                 }
                 if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
                   event.preventDefault();
@@ -582,14 +636,15 @@ export function TaskComposerPanel({
               }}
             />
             {!!slashCandidates.length && (
-              <div className="composer-slash-menu">
-                <small>斜杠命令</small>
-                {slashCandidates.map((item) => (
-                  <button type="button" className="ui-selectable" key={item.command} onClick={() => applySlash(item.mode)}>
-                    <b>{item.command}</b><span>{item.label}</span>
-                  </button>
-                ))}
-              </div>
+              <SlashMenu
+                className="composer-slash-menu"
+                ariaLabel="斜杠命令与技能"
+                hint="↑↓ 选择，回车确认，Esc 关闭"
+                items={slashCandidates}
+                selectedIndex={slashSelected}
+                onHover={setSlashIndex}
+                onPick={pickSlash}
+              />
             )}
           </div>
           {mode !== "debate" && (
