@@ -319,6 +319,49 @@ assert.deepEqual(
 );
 rmSync(resolve(reviewRoundDir(inlineId, 1), "../.."), { recursive: true, force: true });
 
+// ── 验证起不来时不许把原任务打成 failed ──────────────────────────────────────
+// 旁路回合的整个前提是「验证不改任务状态」，而启动路径上有好几处会抛错（执行器解析
+// 撞上不兼容的模型/思考强度、worktree 建不出来）。原状态必须在这些解析**之前**落进
+// followUpFrom，否则 catch 那边读不到，只能把一个 done 的任务打成 failed。
+const { continueTask } = await import("../src/orchestrator.js");
+const failId = "verify-start-fail";
+await db.insert(tasks).values({
+  id: failId,
+  projectId: "project",
+  groupId: null,
+  parentId: null,
+  title: "verify start failure",
+  body: "",
+  mode: "single",
+  status: "done",
+  stage: "verifying",
+  verifyRound: 1,
+  verifyRounds: 0,
+  reviewRequested: true,
+  priority: "none",
+  labels: "[]",
+  dependsOn: "[]",
+  resumeDependsOn: "[]",
+  agentType: "claude",
+  autoTitle: false,
+  createdAt: at,
+  updatedAt: at,
+});
+// 起不来的原因随便挑一个真实的：claude 没有 no-such-effort 这个档位，resolveExecutorFor
+// 会在起进程之前就抛错 —— 所以这条用例不会真的拉起 CLI。
+await continueTask(failId, "验证一下", {
+  system: "run",
+  sideTurn: true,
+  agent: "claude",
+  reasoningEffort: "no-such-effort",
+});
+const failed = (await db.select().from(tasks).where(eq(tasks.id, failId))).at(0)!;
+assert.equal(failed.status, "done", "验证启动失败不能把原任务的终态改坏");
+assert.equal(failed.followUpFrom, null, "结算后要清掉 followUpFrom");
+assert.equal(failed.verifyRound, null, "起不来的那一轮不能永远占着「正在验证」");
+assert.equal(failed.verifyRounds, 1, "这一轮算跑过了（无结论），下一轮接着往下数");
+rmSync(resolve(reviewRoundDir(failId, 1), "../.."), { recursive: true, force: true });
+
 rmSync(resolve(base, "../.."), { recursive: true, force: true });
 rmSync(root, { recursive: true, force: true });
 console.log("review flow tests passed");

@@ -384,6 +384,33 @@ export async function continueTask(
     // 整套按它跑；没 @ 就沿用任务自己的常设配置。三个字段必须同进同出：思考强度的档位表
     // 是跟着 CLI 走的，只要换了智能体，任务自带的强度就属于另一张表，不能漏过来。
     const summoned = !!opts.agent;
+    // 续聊(follow-up):任务已经到终态了,用户又发来一条消息 —— 这一轮是「任务
+    // 之后的对话」,不是任务的执行。把续聊前的终态记下来:队列一律按它看待这个
+    // 成员(既不算「有人在跑」冻住整条线,也不会被当成可启动项拉起来),结算时
+    // 再回到它(见 settleTaskStatus 的续聊分支)。
+    // 只认真人消息:后端发起的续跑(retry / 手点运行 / 队列推进 / 上游唤醒)带
+    // opts.system,那是真的在执行这个任务,照旧占住队列位置。
+    // 例外是旁路回合(opts.sideTurn,就地验证):它虽然由后端发起,却同样不是这个
+    // 任务的执行 —— 验证没通过不该把一个 done 打成 failed。任务身上还挂着 verify_round
+    // 时,这一轮同样算旁路:验证中途提问、答复回来续跑的那一回合仍属于这轮验证,
+    // 走的却是普通的 /answer,不带 sideTurn。
+    // 旁路回合恢复的是**进这一轮之前的原状态**,不限 done/failed/canceled —— 用户可以
+    // 对一个 paused 的任务手点「再验一轮」,验完它该还是 paused。
+    // **这一段必须排在所有可能抛错的解析之前**(执行器解析、工作目录解析都会抛:模型与
+    // 思考强度不兼容、worktree 建不出来),catch 那边只认库里的 followUpFrom —— 落库晚
+    // 一步,一个 done 的任务就会因为「验证没起来」被打成 failed。
+    const sideTurn = !!opts.sideTurn || !!task.verifyRound;
+    const followUpFrom = sideTurn
+      ? (task.status === "running" || task.status === "queued" ? null : task.status)
+      : !opts.system && ["done", "failed", "canceled"].includes(task.status)
+        ? task.status
+        : null;
+    // 新回合起点:顺手清掉上一轮残留的完成确认(确认只在本回合内有效)。
+    await db
+      .update(tasks)
+      .set({ followUpFrom, completeConfirmedAt: null, updatedAt: now() })
+      .where(eq(tasks.id, taskId));
+
     const ex = await resolveExecutorFor({
       executorId: summoned ? opts.executorId ?? null : task.executorId,
       type: agent,
@@ -398,31 +425,6 @@ export async function continueTask(
       .sort((a, b) => b.startedAt.localeCompare(a.startedAt));
     const prev = all.find((s) => s.agentType === agent); // this agent's own session, if any
     const resuming = !!prev?.cliSessionId;
-    // 续聊(follow-up):任务已经到终态了,用户又发来一条消息 —— 这一轮是「任务
-    // 之后的对话」,不是任务的执行。把续聊前的终态记下来:队列一律按它看待这个
-    // 成员(既不算「有人在跑」冻住整条线,也不会被当成可启动项拉起来),结算时
-    // 再回到它(见 settleTaskStatus 的续聊分支)。
-    // 只认真人消息:后端发起的续跑(retry / 手点运行 / 队列推进 / 上游唤醒)带
-    // opts.system,那是真的在执行这个任务,照旧占住队列位置。
-    // 例外是旁路回合(opts.sideTurn,就地验证):它虽然由后端发起,却同样不是这个
-    // 任务的执行 —— 验证没通过不该把一个 done 打成 failed。任务身上还挂着 verify_round
-    // 时,这一轮同样算旁路:验证中途提问、答复回来续跑的那一回合仍属于这轮验证,
-    // 走的却是普通的 /answer,不带 sideTurn。
-    // 旁路回合恢复的是**进这一轮之前的原状态**,不限 done/failed/canceled —— 用户可以
-    // 对一个 paused 的任务手点「再验一轮」,验完它该还是 paused。
-    // 先落库再解析工作目录:后者可能抛错(worktree 建不出来),catch 那边要靠这个
-    // 字段把任务放回原来的终态,而不是把一个 done 打成 failed。
-    const sideTurn = !!opts.sideTurn || !!task.verifyRound;
-    const followUpFrom = sideTurn
-      ? (task.status === "running" || task.status === "queued" ? null : task.status)
-      : !opts.system && ["done", "failed", "canceled"].includes(task.status)
-        ? task.status
-        : null;
-    // 新回合起点:顺手清掉上一轮残留的完成确认(确认只在本回合内有效)。
-    await db
-      .update(tasks)
-      .set({ followUpFrom, completeConfirmedAt: null, updatedAt: now() })
-      .where(eq(tasks.id, taskId));
 
     // Where the work lives: the agent's own cwd, else any session's cwd (so the
     // invitee sees prior output), else materialize the task workdir.
