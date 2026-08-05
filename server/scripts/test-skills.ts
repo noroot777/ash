@@ -1,0 +1,109 @@
+// `/` 技能补全的数据层回归测试(只碰临时目录,不碰 DB、不起 CLI):
+//   listSkills —— 扫盘、软链、跨 CLI 去重角标、ssh 执行器不假装
+//   指纹 —— 改 SKILL.md 的 description,不重启也要跟着变
+//   calibrateSkills —— init 事件与磁盘取**并集**,内置命令走白名单
+// 跑:npm -w server run test:skills
+//
+// 只用**项目级**技能根(`<cwd>/.claude/skills`、`<cwd>/.codex/skills`),
+// 这样整场测试都关在 mkdtemp 里,不会读写用户真实的 ~/.claude。
+import assert from "node:assert/strict";
+import { mkdtempSync, mkdirSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { calibrateSkills, listSkills, resetSkillCache } from "../src/skills.js";
+
+const root = mkdtempSync(join(tmpdir(), "harness-skills-"));
+process.on("exit", () => rmSync(root, { recursive: true, force: true }));
+
+// 名字取得刁钻些:用户 ~/.claude/skills 里的真技能也会一起列出来,别撞名。
+const ALPHA = "zz-probe-alpha";
+const BETA = "zz-probe-beta";
+
+function writeSkill(cli: "claude" | "codex", name: string, description: string): string {
+  const dir = join(root, `.${cli}`, "skills", name);
+  mkdirSync(dir, { recursive: true });
+  const file = join(dir, "SKILL.md");
+  writeFileSync(file, `---\nname: ${name}\ndescription: ${description}\n---\n\n正文\n`);
+  return dir;
+}
+
+const find = (list: ReturnType<typeof listSkills>, name: string) =>
+  list.skills.find((skill) => skill.name === name);
+
+// ── 扫盘:项目级技能能被看见,description 从 frontmatter 来 ───────────────────
+
+const alphaDir = writeSkill("claude", ALPHA, "第一版描述");
+resetSkillCache();
+let list = listSkills({ agentType: "claude", cwd: root });
+assert.equal(find(list, ALPHA)?.command, `/${ALPHA}`, "项目级技能应该出现在清单里");
+assert.equal(find(list, ALPHA)?.description, "第一版描述");
+assert.equal(find(list, ALPHA)?.source, "project");
+assert.equal(list.authoritative, false, "没有 init 校准时不能自称权威");
+
+// ── 热加:不清缓存、不重启,新加的技能目录也要出现(指纹变了就重扫) ─────────
+
+writeSkill("claude", BETA, "后来才加的");
+list = listSkills({ agentType: "claude", cwd: root });
+assert.ok(find(list, BETA), "新加的技能目录必须不重启就能出现");
+
+// ── 指纹逐文件 stat:只改 SKILL.md 内容(根目录 mtime 不变)也要跟着变 ────────
+// 这是「改 description 菜单永远显示旧文案」那个 bug 的回归用例。
+const alphaFile = join(alphaDir, "SKILL.md");
+writeFileSync(alphaFile, `---\nname: ${ALPHA}\ndescription: 改过的描述\n---\n\n正文\n`);
+const future = new Date(Date.now() + 2000);
+utimesSync(alphaFile, future, future); // 同一毫秒内写入时 mtime 可能不变,手动推一下
+list = listSkills({ agentType: "claude", cwd: root });
+assert.equal(find(list, ALPHA)?.description, "改过的描述", "改了 description 必须跟着变");
+
+// ── 软链 + 跨 CLI 去重:同一份物理技能给 codex 也挂一个,claude 侧打「也在」角标 ──
+// 用 statSync 跟随软链才看得见;readdirSync(withFileTypes).isDirectory() 会静默漏掉。
+mkdirSync(join(root, ".codex", "skills"), { recursive: true });
+symlinkSync(alphaDir, join(root, ".codex", "skills", ALPHA));
+resetSkillCache();
+const codex = listSkills({ agentType: "codex", cwd: root });
+assert.ok(find(codex, ALPHA), "软链过来的技能目录必须被 codex 看见");
+assert.ok(!find(codex, BETA), "没软链过来的不该出现在 codex 清单里");
+list = listSkills({ agentType: "claude", cwd: root });
+assert.deepEqual(find(list, ALPHA)?.alsoIn, ["codex"], "同一份物理技能要标出还在哪个 CLI 里");
+assert.deepEqual(find(list, BETA)?.alsoIn, [], "只有一处的不该标角标");
+
+// ── init 校准:与磁盘取并集,内置命令只放行白名单 ─────────────────────────────
+
+const ONLY_IN_INIT = "zz-probe-from-init";
+calibrateSkills("claude", root, [ALPHA, ONLY_IN_INIT], ["review", "compact", "cost"]);
+list = listSkills({ agentType: "claude", cwd: root });
+assert.equal(list.authoritative, true, "拿到 init 事件后算权威清单");
+assert.ok(find(list, ONLY_IN_INIT), "init 报了但磁盘上没有的(内置/插件)也要列出来");
+assert.equal(find(list, ONLY_IN_INIT)?.source, "builtin");
+assert.ok(find(list, BETA), "**并集**:init 那一轮之后新装的技能不能被交集抹掉");
+assert.ok(find(list, "review"), "白名单里的内置斜杠命令要放行");
+assert.ok(!find(list, "compact"), "白名单之外的内置命令不进技能菜单");
+assert.ok(!find(list, "cost"), "白名单之外的内置命令不进技能菜单");
+assert.equal(find(list, ALPHA)?.description, "改过的描述", "磁盘上有的以磁盘为准,别被 init 覆盖成占位文案");
+
+// ── 校准按 cwd 前缀认亲:任务多半跑在 <repo>/.worktrees/<id> 里 ───────────────
+
+resetSkillCache();
+calibrateSkills("claude", join(root, ".worktrees", "abc123"), [ONLY_IN_INIT], []);
+list = listSkills({ agentType: "claude", cwd: root });
+assert.ok(find(list, ONLY_IN_INIT), "worktree 里跑出来的校准要能算到项目根上");
+resetSkillCache();
+calibrateSkills("claude", `${root}-sibling`, [ONLY_IN_INIT], []);
+list = listSkills({ agentType: "claude", cwd: root });
+assert.ok(!find(list, ONLY_IN_INIT), "只是前缀像的兄弟目录不算自家 worktree");
+
+// 空 init(claude 有时先吐一个不带 skills 的事件)不能把已有校准打成空白
+resetSkillCache();
+calibrateSkills("claude", root, [ONLY_IN_INIT], []);
+calibrateSkills("claude", root, [], []);
+list = listSkills({ agentType: "claude", cwd: root });
+assert.ok(find(list, ONLY_IN_INIT), "空的 init 事件应当被忽略,不能清掉上一次校准");
+
+// ── ssh 执行器 / 不认识的 CLI:宁可空,也不拿本机磁盘冒充 ─────────────────────
+
+const remote = listSkills({ agentType: "claude", cwd: root, remote: true });
+assert.deepEqual(remote.skills, [], "ssh 执行器扫的是本机盘,那不是它要跑的地方");
+assert.equal(remote.remote, true, "要把 remote 如实告诉前端,好让菜单说人话而不是显示空");
+assert.deepEqual(listSkills({ agentType: "grok", cwd: root }).skills, [], "没有技能目录约定的 CLI 返回空清单");
+
+console.log("skills tests passed");

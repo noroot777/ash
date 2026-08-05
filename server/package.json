@@ -38,7 +38,8 @@
     "test:workflow-gate": "tsx scripts/test-workflow-gate.ts",
     "test:preview-log": "tsx scripts/test-preview-log.ts",
     "test:preview-probe": "tsx scripts/test-preview-probe.ts",
-    "test:openai-converter": "tsx scripts/test-openai-converter.ts"
+    "test:openai-converter": "tsx scripts/test-openai-converter.ts",
+    "test:skills": "tsx scripts/test-skills.ts"
   },
   "dependencies": {
     "@harness/shared": "*",
