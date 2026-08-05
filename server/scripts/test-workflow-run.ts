@@ -25,19 +25,23 @@ const std = workflowPolicy(standard)!;
 assert.ok(std.verify, "标准交付带「自动验证」这一站");
 assert.equal(std.verifyRounds, 2, "标准交付写的是没过拐回去,最多 2 轮");
 assert.equal(std.onVerifyFail, "back", "标准交付没过是拐回第一站重做");
-assert.equal(std.humanGate, true, "标准交付验完要等人点头");
+// 「验完要不要停下等人」**不是**能从整条线一次算出来的属性(那正是 2026-08-05 那次
+// 关口被跳过的错误模型),它由推进器按游标逐站走出来 —— 所以这里只钉「线上画没画这
+// 一站」,走到那儿停不停由下面的 nextAnchor 与 test-workflow-gate 钉。
+const hasGate = (def: { steps: { kind: string }[] }) => def.steps.some((s) => s.kind === "human");
+assert.equal(hasGate(standard), true, "标准交付画了「等我点头」");
 assert.equal(std.autoAccept, true, "标准交付点头之后要合并");
 
 const quick = workflowPolicy(fast)!;
 assert.equal(quick.verify, null, "极速原型不验");
-assert.equal(quick.humanGate, false, "极速原型干完就算完");
+assert.equal(hasGate(fast), false, "极速原型干完就算完");
 assert.equal(quick.autoAccept, false, "极速原型不合并");
 
 // 一条 干活 → 等我点头 的线:没有验证站,但照样得停下等人
 const gateOnly = { workspace: "isolated" as const, steps: [makeStep("run", "s1"), makeStep("human", "s2")] };
 const gate = workflowPolicy(gateOnly)!;
 assert.equal(gate.verify, null, "这条线不自动验");
-assert.equal(gate.humanGate, true, "但它写着等我点头");
+assert.equal(hasGate(gateOnly), true, "但它写着等我点头");
 
 // 没过就停下等人:轮数退化成 1,不存在第二轮
 const stopLine = structuredClone(standard);
@@ -184,8 +188,131 @@ assert.deepEqual(
 assert.deepEqual(stepsAfterAnchor(fast, "verify"), [], "线上没这个锚点就是空段");
 assert.deepEqual(stepsAfterAnchor(null, "run"), []);
 
+// ── 一条线上写好几站「自动验证」「等我点头」 ──────────────────────────────
+// 段落按**站的 id** 切,不按锚点类型——这正是这两类站能出现多次的前提。以前按类型切
+// 的时候,第二个 verify 没有任何东西能把它跟第一个区分开,只会被静默跳过。
+const { segmentAfter, nextAnchor, prevAnchor, isFinalHumanGate, anchorAt } =
+  await import("@harness/shared/workflow-policy");
+const multi = {
+  workspace: "isolated" as const,
+  steps: [
+    makeStep("run", "m1"), makeStep("command", "m2"),
+    makeStep("verify", "m3"), makeStep("preview", "m4"),
+    makeStep("human", "m5"), makeStep("command", "m6"),
+    makeStep("verify", "m7"),
+    makeStep("human", "m8"), makeStep("accept", "m9"),
+  ],
+};
+assert.deepEqual(
+  segmentAfter(multi, "m3").map((s) => s.id), ["m4"],
+  "第一站验完之后跑 m4:段落认的是这一站的 id,不是「线上第一个 verify」",
+);
+assert.deepEqual(
+  segmentAfter(multi, "m7").map((s) => s.id), [],
+  "第二站验完之后紧接着就是第二道关口,中间没有站",
+);
+assert.deepEqual(
+  segmentAfter(multi, "m5").map((s) => s.id), ["m6"],
+  "第一道关口放行之后那一段——不是「点头就合并」,后面还画着东西呢",
+);
+assert.equal(nextAnchor(multi, "m1")?.id, "m3", "干完之后下一个停下来等的点是第一站验证");
+assert.equal(nextAnchor(multi, "m3")?.id, "m5", "第一站验完之后是第一道关口");
+assert.equal(nextAnchor(multi, "m5")?.id, "m7", "第一道关口放行之后是第二站验证");
+assert.equal(nextAnchor(multi, "m8"), null, "最后一道关口之后再没有会停的站了,这条线走到头");
+assert.equal(prevAnchor(multi, "m7")?.id, "m5", "第二站没过要退回的是它前面那个锚点");
+assert.equal(prevAnchor(multi, "m3")?.id, "m1", "第一站没过就退回干活站,那正是老行为");
+assert.equal(prevAnchor(multi, "m1"), null, "干活站前面没有锚点了");
+assert.equal(
+  isFinalHumanGate(multi, "m5"), false,
+  "中途关口:这一按是「放行」,绝不能顺手把不可逆的合并做掉",
+);
+assert.equal(isFinalHumanGate(multi, "m8"), true, "最后一道关口才是「这份产物我认了,去合吧」");
+assert.equal(isFinalHumanGate(multi, null), true, "游标丢了当最后一道处理——那正是只有一道关口的老行为");
+assert.equal(isFinalHumanGate(multi, "m3"), true, "游标压根不在关口上(比如停在验证站)时不改变老语义");
+
+// **只有一道关口，但画在验证前面**——用户最常画的那种线（干活 → 预览 → 等我点头 →
+// 验证 → 合并）。旧判据只数「后面还有没有别的『等我点头』」，这条线一道都没有，于是
+// 它被判成最终关口:点验收直接合并 + 删 worktree + 删分支,用户亲手画在中间的「自动
+// 验证」被整站跳过(2026-08-05 事故第二段,见 docs/incidents.md)。判据必须是「后面还
+// 有没有**任何**会停下来的站」,新判据是旧判据的超集,上面 multi 那几条一字未改。
+const gateFirst = {
+  workspace: "isolated" as const,
+  steps: [
+    makeStep("run", "g1"), makeStep("preview", "g2"), makeStep("human", "g3"),
+    makeStep("verify", "g4"), makeStep("accept", "g5"),
+  ],
+};
+assert.equal(
+  isFinalHumanGate(gateFirst, "g3"), false,
+  "关口后面还画着「自动验证」,这一按就只能是放行——一道关口不等于最后一道关口",
+);
+assert.equal(nextAnchor(gateFirst, "g3")?.id, "g4", "放行之后该去的正是那一站验证");
+assert.equal(anchorAt(multi, "m7", "verify")?.id, "m7", "游标指着第二站,读的就是第二站的参数");
+assert.equal(anchorAt(multi, null, "verify")?.id, "m3", "游标为空回落到线上第一站,老任务行为不变");
+assert.equal(anchorAt(multi, "m5", "verify")?.id, "m3", "游标指的不是这一类锚点时同样回落");
+// 每一站可以各写各的失败策略,读的是**游标那一站**的
+const perStation = structuredClone(multi);
+(perStation.steps.find((s) => s.id === "m3") as { fail: unknown }).fail = { mode: "back", max: 3 };
+(perStation.steps.find((s) => s.id === "m7") as { fail: unknown }).fail = { mode: "stop", max: 3 };
+assert.equal(workflowPolicy(perStation, "m3")!.verifyRounds, 3, "第一站写了最多 3 轮");
+assert.equal(workflowPolicy(perStation, "m7")!.onVerifyFail, "stop", "第二站写的是没过就停下等人");
+assert.equal(
+  nextAnchor(perStation, "m7")?.kind, "human",
+  "第二站后面还有一道关口:验完照样停下等人",
+);
+// 自带起手式也走同一条判据:验证站之后的下一个会停的点就是那道关口。**读的是站的
+// 前后关系,不是「线上有没有 human」**——用户可以把关口画在验证前面(见
+// test-workflow-gate),那时验证站后面就没有关口了,推进器该往下走而不是回头找人。
+assert.equal(
+  nextAnchor(standard, standard.steps.find((s) => s.kind === "verify")!.id)?.kind, "human",
+  "标准交付验完的下一个停靠点是「等我点头」",
+);
+
+// ── 打回重做之后该重验哪一站 ──────────────────────────────────────────────
+const { settleFrom } = await import("../src/workflow-advance.js");
+assert.equal(
+  settleFrom(multi, "m7"), "m5",
+  "第二站没过、重做完再结算:退回它前面那个锚点,那一段重跑一遍再**重新验这一站**",
+);
+assert.equal(settleFrom(multi, "m3"), "m1", "第一站没过就退回干活站");
+assert.equal(settleFrom(multi, null), "m1", "游标丢了从干活站起,老行为");
+assert.equal(settleFrom(multi, "m5"), "m1", "游标不在验证站上(正常干完一轮)就是从干活站起");
+assert.equal(settleFrom(null, "m7"), null, "身上没有线的老任务不进推进器");
+
+// ── 每一站的验证轮数各数各的 ──────────────────────────────────────────────
+const { verifyStationAction } = await import("../src/review-policy.js");
+const station = {
+  parentIsTeam: false, reviewRequested: false, mode: "single",
+  workflow: perStation, at: "m3", stage: null as string | null, rounds: 0,
+};
+assert.equal(verifyStationAction(station), "dispatch", "这一站还没验过:派审");
+assert.equal(
+  verifyStationAction({ ...station, rounds: 1, stage: "verify_failed" }), "dispatch",
+  "这一站没过一轮、线上写着最多 3 轮:再验一轮",
+);
+assert.equal(
+  verifyStationAction({ ...station, rounds: 3, stage: "verify_failed" }), "halt",
+  "轮数用尽是**停下**不是跳过——绝不绕过用户亲手画的验证站",
+);
+assert.equal(
+  verifyStationAction({ ...station, at: "m7", rounds: 1, stage: "verify_failed" }), "halt",
+  "第二站写的是「没过就停下等人」:第一轮没过就停",
+);
+assert.equal(
+  verifyStationAction({ ...station, rounds: 1, stage: null }), "skip",
+  "这一站已经验过又没判失败:算过了,往下走",
+);
+assert.equal(
+  verifyStationAction({ ...station, mode: "team" }), "skip",
+  "团队调度台不进推进器",
+);
+assert.equal(
+  verifyStationAction({ ...station, parentIsTeam: true, reviewRequested: false }), "skip",
+  "团队执行者没要求审查:不能因为默认起手式带了验证站就凭空冒出审查任务",
+);
+
 // ── 验收通过那一刻按线上写的做 ────────────────────────────────────────────
-const { acceptPlan } = await import("@harness/shared/workflow-policy");
+const { acceptPlan, hasAcceptStation } = await import("@harness/shared/workflow-policy");
 assert.deepEqual(
   acceptPlan(null), { merge: "safe", clean: "all" },
   "老任务身上没有线：验收还是老规矩(安全合并 + worktree 和分支都删)，行为分毫不变",
@@ -194,16 +321,53 @@ assert.deepEqual(
   acceptPlan(standard), { merge: "safe", clean: "all" },
   "标准交付那一站写的就是安全合并 + 全清",
 );
+// 线上没画「合并并清理」时，做什么取决于谁按的——这两条是同一条线、同一份配置，
+// 只因按下的人不同而分岔，所以必须成对钉住，改一条就会露出另一条。
 assert.deepEqual(
-  acceptPlan(fast), { merge: null, clean: "none" },
-  "线上没有「合并并清理」这一站：点验收只是「我认可这份产物」，git 一动不动",
+  acceptPlan(fast, "workflow"), { merge: null, clean: "none" },
+  "线自己走到验收、线上又没画这一站：git 一动不动（没画的事不自动发生）",
 );
+assert.deepEqual(
+  acceptPlan(fast, "human"), { merge: "safe", clean: "all" },
+  "同一条线上人亲手点验收：照老规矩合并并清理——手按覆盖线上写没写",
+);
+assert.deepEqual(
+  acceptPlan(fast), { merge: "safe", clean: "all" },
+  "缺省就是人按的：绝大多数调用方是用户点的按钮，自动路径必须显式说自己是 workflow",
+);
+// 中途关口按下的「验收通过」= 放行,不是「去合吧」。这条是红线:线上还画着别的站,
+// 顺手把不可逆的合并做掉,是拿用户没表达过的意思替他做主。
+assert.deepEqual(
+  acceptPlan(multi, "human", "m5"), { merge: null, clean: "none" },
+  "中途关口:人亲手点也不合并、不清理——这一按只放行这一关",
+);
+assert.deepEqual(
+  acceptPlan(multi, "human", "m8"), { merge: "safe", clean: "all" },
+  "最后一道关口:照线上那一站写的合并并清理",
+);
+assert.deepEqual(
+  acceptPlan(multi, "human"), { merge: "safe", clean: "all" },
+  "不传游标就是老行为(只有一道关口),分毫不变",
+);
+assert.deepEqual(
+  acceptPlan(gateFirst, "human", "g3"), { merge: null, clean: "none" },
+  "关口画在验证前面:那一按是放行,git 一动都不许动(不然后面那站验证连工作区都没了)",
+);
+assert.equal(hasAcceptStation(fast), false, "快速通道线上确实没画这一站");
+assert.equal(hasAcceptStation(standard), true, "标准交付画了");
+assert.equal(hasAcceptStation(null), false, "身上没有线的老任务也算没画（文案照实说）");
+// 线上**画了**这一站时，两条路完全一致——覆盖只发生在「线上没写」的空白处，
+// 不是「人按下就无视线上参数」。用户特意选了 squash，手动验收也得是 squash。
 const squashLine = structuredClone(standard);
 const squashStep = squashLine.steps.find((s) => s.kind === "accept")!;
 if (squashStep.kind === "accept") squashStep.p = { strategy: "squash", clean: "worktree" };
 assert.deepEqual(
   acceptPlan(squashLine), { merge: "squash", clean: "worktree" },
   "改了那一站的参数，验收就按改后的做——线上画着什么，按下去就发生什么",
+);
+assert.deepEqual(
+  acceptPlan(squashLine, "workflow"), acceptPlan(squashLine, "human"),
+  "线上画了这一站：谁按的都按它写的做，人按不会把 squash 改回 safe",
 );
 
 // ── 命令站真跑 ────────────────────────────────────────────────────────────
@@ -232,7 +396,7 @@ const okStep = makeStep("command", "c1");
 if (okStep.kind === "command") okStep.p = { cmd: "touch ran.txt", where: "workspace" };
 const okLine = { workspace: "shared" as const, steps: [makeStep("run", "r"), okStep] };
 assert.deepEqual(
-  await runSegment(task, okLine, "run"), { ok: true },
+  await runSegment(task, okLine, "r"), { ok: true },
   "命令站跑通了这一段就算过",
 );
 assert.ok(existsSync(join(repo, "ran.txt")), "命令真的在任务工作目录里跑过");
@@ -241,7 +405,7 @@ const badStep = makeStep("command", "c2");
 if (badStep.kind === "command") badStep.p = { cmd: "echo 这条过不了 >&2; exit 3", where: "repo" };
 const badLine = { workspace: "shared" as const, steps: [makeStep("run", "r"), badStep, okStep] };
 rmSync(join(repo, "ran.txt"), { force: true }); // 先擦掉上一段的产物，下面那句断言才算数
-const bad = await runSegment(task, badLine, "run");
+const bad = await runSegment(task, badLine, "r");
 assert.equal(bad.ok, false, "命令没跑过,这一段就卡在这儿");
 assert.equal(bad.failed?.id, "c2", "卡在哪一站要报得出来——调用方靠它读失败策略");
 assert.match(bad.reason ?? "", /这条过不了/, "把命令自己的话原样带出来,别只说一句失败");
@@ -255,7 +419,7 @@ assert.ok(
 // 这里要钉住的是**谁按的**——线上没写「等我点头」，就该由这条线自己按。
 const acceptLine = { workspace: "shared" as const, steps: [makeStep("run", "r"), makeStep("accept", "ac")] };
 assert.deepEqual(
-  await runSegment(task, acceptLine, "run"), { ok: true },
+  await runSegment(task, acceptLine, "r"), { ok: true },
   "干完之后紧接着就是「合并并清理」：不等人，自己按",
 );
 const afterAccept = (await db.select().from(tasks)).find((row) => row.id === "t1")!;
@@ -264,7 +428,7 @@ assert.equal(afterAccept.stage, "accepted", "按下去之后阶段真的走到 a
 const { eq } = await import("drizzle-orm");
 await db.update(tasks).set({ stage: null }).where(eq(tasks.id, "t1")); // 擦掉上面那次的痕迹
 assert.deepEqual(
-  await runSegment(task, acceptLine, "run", { skipAccept: true }), { ok: true },
+  await runSegment(task, acceptLine, "r", { skipAccept: true }), { ok: true },
   "用户刚点完验收时回头跑这一段，得跳过这一站——那正是刚做完的事",
 );
 assert.equal(

@@ -70,6 +70,17 @@ export const tasks = sqliteTable("tasks", {
   pinnedAt: integer("pinned_at"), // null=未置顶；多个置顶任务按时间戳排序
   reviewOf: text("review_of"), // 审查任务 → 被审任务 id；普通任务为 null
   reviewRound: integer("review_round"), // 审查任务针对该目标的轮次（从 1 开始）
+  // 就地验证：验证轮不再另起一个任务，而是在这个任务自己身上多跑一个旁路回合。
+  // verify_round 非空 = 此刻正在跑第几轮验证（结算时清空）；verify_rounds = 已经跑完几轮。
+  verifyRound: integer("verify_round"),
+  verifyRounds: integer("verify_rounds").notNull().default(0),
+  // 这一站（review_step）已经就地验过几轮。轮数上限按站算，而就地验证轮没有独立任务
+  // 行可数，所以自己记一个：开新一轮时发现换站了就归零。
+  verifyStationRounds: integer("verify_station_rounds").notNull().default(0),
+  // 验的是线上**哪一站**「自动验证」（WorkflowStep.id）。一条线可以写不止一站，
+  // 轮数上限得按站分开数，否则第一站用掉的轮次会算到第二站头上。老数据为 null =
+  // 线上第一站。历史那批独立审查任务把它记在自己身上，就地验证轮记在被验任务身上。
+  reviewStep: text("review_step"),
   reviewRequested: integer("review_requested", { mode: "boolean" }).notNull().default(false),
   priority: text("priority").notNull().default("none"),
   labels: text("labels").notNull().default("[]"), // json
@@ -98,6 +109,11 @@ export const tasks = sqliteTable("tasks", {
   // 这个任务当初挑的那条线，**创建时拷进来的快照**（json WorkflowDef）。之后改起手式
   // 库不会追着改它 —— 「起手式」不是「模板引用」。空 = 老任务，走旧的写死流程。
   workflow: text("workflow"),
+  // 这条线此刻停在哪一站（WorkflowStep.id，只会是锚点站：干活 / 自动验证 / 等我点头）。
+  // 执行链靠它把「某一轮审查有了结论」「用户点了头」落回**具体那一站**，于是同一类站
+  // 可以在一条线上出现多次。空 = 还没走到任何锚点，或者老任务——调用方一律回落到线上
+  // 第一个同类锚点（shared 的 anchorAt），所以它丢了也只是退化成老行为，不会卡死。
+  workflowAt: text("workflow_at"),
   worktreeBase: text("worktree_base"),
   originTaskId: text("origin_task_id"), // 回链来源任务(null = 直接创建)
   // 检查点续跑：agent 调 pause_task 时填进来；下次 resume 时取出喂给 CLI 会话并清空。

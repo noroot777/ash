@@ -134,8 +134,9 @@ export type AcceptTaskSuccess = {
   accepted: true;
   taskId: string;
   status: string;
-  stage: "accepted";
-  kind: "already_accepted" | "in_place" | "isolated_worktree";
+  /** 中途关口放行不是验收，stage 会被清回「进行中」 */
+  stage: "accepted" | null;
+  kind: "already_accepted" | "in_place" | "isolated_worktree" | "marked_only" | "gate_released";
   sharedWorkersAccepted?: number;
   targetBranch?: string;
   merge?: string;
@@ -330,10 +331,11 @@ export const api = {
     request(`/tasks/${id(taskId)}/workspace`),
   taskReview: (taskId: string): Promise<TaskReviewInfo> =>
     request(`/tasks/${id(taskId)}/review`),
+  // 验证轮就跑在原任务身上（不再另起审查任务），所以只回一个轮次号。
   dispatchTaskReview: (
     taskId: string,
     input: ReviewDispatchInput,
-  ): Promise<{ reviewTask: Task }> =>
+  ): Promise<{ round: number }> =>
     request(`/tasks/${id(taskId)}/review/dispatch`, json("POST", input)),
   taskReviewFileUrl: (taskId: string, round: number, name: string): string =>
     apiPath(`/tasks/${id(taskId)}/review/file?round=${id(String(round))}&name=${id(name)}`),

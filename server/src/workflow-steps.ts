@@ -1,7 +1,7 @@
 // 线上那些「当场就能做完」的站：跑一条命令、打开预览。
 //
 // 它们夹在几个会停下来等的站中间（干活等 agent、自动验证等审查任务、等我点头等人），
-// 所以是**成段**跑的——段落切分在 shared 的 stepsAfterAnchor()，这里只管把一段跑完。
+// 所以是**成段**跑的——段落切分在 shared 的 segmentAfter()，这里只管把一段跑完。
 //
 // 两条不变量：
 //   ① 每一站的成败都往时间线写一行。刷新后仍看得见「跑了什么、成没成、为什么」，
@@ -13,7 +13,7 @@ import { execFile } from "node:child_process";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { stepsAfterAnchor, type AnchorKind } from "@harness/shared/workflow-policy";
+import { segmentAfter } from "@harness/shared/workflow-policy";
 import type { WorkflowDef, WorkflowStep } from "@harness/shared/workflow";
 import { STEP_LABELS } from "@harness/shared/workflow";
 import { db } from "./db/index.js";
@@ -24,6 +24,7 @@ import { startPreview, type PreviewStep } from "./preview.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { askAboutFailure } from "./task-question.js";
 import { taskWorkspace } from "./task-workspace.js";
+import { continueWhenIdle } from "./runs.js";
 
 const run = promisify(execFile);
 
@@ -104,26 +105,27 @@ async function runPreview(task: TaskRow, step: PreviewStep): Promise<SegmentResu
 
 // 「合并并清理」这一站：**不在这里另写一套合并**，直接调用户点「验收通过」走的那条路
 // （acceptTask 带着仓库锁、冲突处理、「绝不 -D」的规矩）。区别只在谁按下的：线上没写
-// 「等我点头」时，走到这一站就是这条线自己按的。
+// 「等我点头」时，走到这一站就是这条线自己按的——所以传 `"workflow"`，这条路只做线上
+// 真画了的事（人亲手点则相反，手按覆盖线上写没写，理由见 shared 的 acceptPlan）。
 // 怎么合、清到什么程度全读这一站的参数——acceptTask 里的 acceptPlan() 读的就是它。
 async function runAccept(task: TaskRow, step: WorkflowStep): Promise<SegmentResult> {
   await appendTaskTimeline(task.id, "这条线上没写「等我点头」，走到「合并并清理」就自己合了。");
   const { acceptTask } = await import("./task-accept.js");
-  const result = await acceptTask(task.id);
+  const result = await acceptTask(task.id, "workflow");
   if (result.accepted) return { ok: true };
   return { ok: false, failed: step, reason: result.error };
 }
 
-// 把紧跟某个锚点之后的那一段跑完。任何一站砸了就地停下——后面的站多半依赖前面的产物
+// 把紧跟**某一站**之后的那一段跑完。任何一站砸了就地停下——后面的站多半依赖前面的产物
 // （典型：先跑 build 再起预览），继续往下跑只会把一个错误变成两个。
 // 「卡住了怎么办」不在这儿决定：那是 applyFailPolicy 的事，调用方拿到结果自己按。
 export async function runSegment(
   task: TaskRow,
   def: WorkflowDef | null,
-  anchor: AnchorKind,
+  fromStepId: string | null | undefined,
   opts: SegmentOptions = {},
 ): Promise<SegmentResult> {
-  for (const step of stepsAfterAnchor(def, anchor)) {
+  for (const step of segmentAfter(def, fromStepId)) {
     const result = step.kind === "command"
       ? await runCommand(task, step)
       : step.kind === "preview"
@@ -199,10 +201,11 @@ export async function applyFailPolicy(
     return;
   }
   await appendTaskTimeline(task.id, `这条线卡在「${label}」这一站，按线上写的打回给 AI 重做（第 ${round} 次）。`);
-  const { continueTask } = await import("./orchestrator.js");
-  await continueTask(task.id, repairPrompt(round), { system: "wake" }).catch((error) => appendTaskTimeline(
+  // 打回重做要等这个任务当前这一轮退干净：这些失败策略是在结算钩子里做的，那一刻
+  // 任务的单飞锁还锁着，直接 continueTask 会被静默挡回、打回就此石沉大海。
+  continueWhenIdle(task.id, repairPrompt(round), { system: "wake" }, (error) => appendTaskTimeline(
     task.id,
-    `想把这一站打回重做，但唤醒任务时出错（${error instanceof Error ? error.message : String(error)}），请手动续跑。`,
+    `想把这一站打回重做，但唤醒任务时出错（${error}），请手动续跑。`,
   ));
 }
 
@@ -215,8 +218,13 @@ function stepFailPrompt(step: WorkflowStep, reason: string | null | undefined) {
 
 // 跑完一段并按线上写的失败策略收尾。返回 false = 这条线卡住了，调用方**不要再往下推**
 // （别在一条卡住的线上派审、也别把它送进人工关口）。
-async function advance(task: TaskRow, def: WorkflowDef | null, anchor: AnchorKind): Promise<boolean> {
-  const result = await runSegment(task, def, anchor);
+export async function advanceSegment(
+  task: TaskRow,
+  def: WorkflowDef | null,
+  fromStepId: string | null | undefined,
+  opts: SegmentOptions = {},
+): Promise<boolean> {
+  const result = await runSegment(task, def, fromStepId, opts);
   if (result.ok) {
     clearAttempts(task.id);
     return true;
@@ -224,16 +232,6 @@ async function advance(task: TaskRow, def: WorkflowDef | null, anchor: AnchorKin
   const step = result.failed!;
   await applyFailPolicy(task, step, result.reason, stepFailPrompt(step, result.reason));
   return false;
-}
-
-/** 干完之后那一段（「让 AI 干活」到下一个会停下来等的站之间）。 */
-export function advanceAfterRun(task: TaskRow, def: WorkflowDef | null): Promise<boolean> {
-  return advance(task, def, "run");
-}
-
-/** 验完之后那一段（「自动验证」到「等我点头」之间）—— 典型用途就是在这儿把预览打开。 */
-export function advanceAfterVerify(task: TaskRow, def: WorkflowDef | null): Promise<boolean> {
-  return advance(task, def, "verify");
 }
 
 /**

@@ -88,6 +88,11 @@
   padding: 64px 0 96px;
 }
 
+/* 横着长的那几节（起手式的线路图）用更宽的栏 —— 判据在 SettingsPage 的 WIDE_SECTIONS。 */
+.settings-content[data-wide="yes"] {
+  width: min(1440px, calc(100% - 48px));
+}
+
 .settings-heading {
   display: flex;
   min-height: 62px;

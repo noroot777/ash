@@ -11,13 +11,14 @@ import { join, resolve } from "node:path";
 const root = mkdtempSync(join(tmpdir(), "harness-review-flow-"));
 process.env.HARNESS_DB = join(root, "harness.db");
 
+const { mountReviewRoutes } = await import("../src/review.js");
+// 证据落盘（路径边界、结论文件）住在 review-evidence.ts，措辞住在 review-prompts.ts。
 const {
   nextReviewRound,
-  mountReviewRoutes,
-  REVIEW_OVERWRITE_CHECK,
   reviewRoundDir,
   safeReviewFilePath,
-} = await import("../src/review.js");
+} = await import("../src/review-evidence.js");
+const { REVIEW_OVERWRITE_CHECK } = await import("../src/review-prompts.js");
 // 判定（该不该派、几轮、找谁验）住在 review-policy.ts，是纯函数，所以这一段全程不起
 // 数据库、不起 CLI。
 const {
@@ -249,6 +250,140 @@ rmSync(reviewParent, { force: true });
 
 const info = await api.request(`/tasks/${taskId}/review`);
 assert.deepEqual(await info.json(), { reviewRequested: true, rounds: [] });
+
+// ── 就地验证轮的收尾语义 ────────────────────────────────────────────────────
+// 验证现在跑在被验任务自己身上（旁路回合），所以「这一轮完了没有」只能从
+// verify_round / question / resumePrompt 上读，不能从任务状态读 —— 任务状态在旁路
+// 回合里本来就该原样不动。这两条最容易回归，钉住它们。
+const { handleTaskSettlement } = await import("../src/review.js");
+const { readConclusion } = await import("../src/review-evidence.js");
+const { eq } = await import("drizzle-orm");
+const inlineId = "verify-inline-test";
+const readTask = async () =>
+  (await db.select().from(tasks).where(eq(tasks.id, inlineId))).at(0)!;
+
+await db.insert(tasks).values({
+  id: inlineId,
+  projectId: "project",
+  groupId: null,
+  parentId: null,
+  title: "inline verify target",
+  body: "",
+  mode: "single",
+  status: "done",
+  stage: "verifying",
+  verifyRound: 1,
+  verifyRounds: 0,
+  reviewRequested: true,
+  priority: "none",
+  labels: "[]",
+  dependsOn: "[]",
+  resumeDependsOn: "[]",
+  agentType: "claude",
+  autoTitle: false,
+  createdAt: at,
+  updatedAt: at,
+});
+
+// ① 验证回合中途提问：这一轮还没验完，轮次标记必须留着，也不许下结论 ——
+//    否则答复回来的那一回合会被当成「验完了却没给结论」。
+await db.update(tasks).set({ question: "这个按钮该长什么样？" }).where(eq(tasks.id, inlineId));
+await handleTaskSettlement(inlineId, "paused", false, true);
+let inline = await readTask();
+assert.equal(inline.verifyRound, 1, "验证回合以提问结束时必须保留 verify_round");
+assert.equal(inline.verifyRounds, 0, "还没验完，不能记账为已跑完一轮");
+assert.equal(await readConclusion(inlineId, 1), null, "还没验完，不能落结论文件");
+
+// ② 答复之后真正验完：清轮次标记、记账 +1，并把 stage 上的结论固化成结论文件。
+await db.update(tasks).set({ question: null, stage: "verified" }).where(eq(tasks.id, inlineId));
+await handleTaskSettlement(inlineId, "done", false, true);
+inline = await readTask();
+assert.equal(inline.verifyRound, null, "验完必须清掉 verify_round");
+assert.equal(inline.verifyRounds, 1, "验完一轮要记账，下一轮的轮次号靠它推出来");
+assert.equal(inline.verifyStationRounds, 1, "这一站也要单独记账：轮数上限是按站算的");
+assert.equal(await readConclusion(inlineId, 1), "verified", "结论要落盘，刷新后仍看得见");
+
+const inlineInfo = await (async () => {
+  const response = await api.request(`/tasks/${inlineId}/review`);
+  return (await response.json()) as { rounds: Array<Record<string, unknown>> };
+})();
+assert.equal(inlineInfo.rounds.length, 1, "就地验证轮同样要出现在验证记录里");
+assert.deepEqual(
+  {
+    round: inlineInfo.rounds[0].round,
+    where: inlineInfo.rounds[0].where,
+    reviewTaskId: inlineInfo.rounds[0].reviewTaskId,
+    conclusion: inlineInfo.rounds[0].conclusion,
+  },
+  { round: 1, where: "inline", reviewTaskId: null, conclusion: "verified" },
+  "就地轮次没有独立审查任务，reviewTaskId 必须是 null",
+);
+rmSync(resolve(reviewRoundDir(inlineId, 1), "../.."), { recursive: true, force: true });
+
+// ── 一条线上有好几站验证时，轮数得按站算 ────────────────────────────────────
+// 轮数上限是按站写的（第二站写「没过重做 2 轮」，不该继承第一站用掉的轮数）。就地验证
+// 轮没有独立任务行可数，所以按站的轮数记在被验任务的 verify_station_rounds 上、站号记
+// 在 review_step 上；漏掉这一份，一站验证会因为「一轮都没验过」被无限重派。
+const { stationRounds } = await import("../src/workflow-advance.js");
+await db.update(tasks)
+  .set({ reviewStep: "v-second", verifyStationRounds: 2 })
+  .where(eq(tasks.id, inlineId));
+assert.equal(await stationRounds(inlineId, "v-second"), 2, "就地验证轮必须计入本站轮数");
+assert.equal(await stationRounds(inlineId, "v-first"), 0, "换一站就从零开始，不继承别站用掉的轮数");
+
+// 存量的独立审查任务是另一种载体，两边要一起数。老审查任务身上没有 review_step，
+// 按「那时一条线只可能有一站验证」算进第一站。
+await db.insert(tasks).values({
+  id: "verify-legacy-row", projectId: "project", groupId: null, parentId: null,
+  title: "legacy review", body: "", mode: "single", status: "done",
+  reviewOf: inlineId, reviewRound: 1, reviewStep: "v-second",
+  priority: "none", labels: "[]", dependsOn: "[]", resumeDependsOn: "[]",
+  agentType: "claude", autoTitle: false, createdAt: at, updatedAt: at,
+});
+assert.equal(await stationRounds(inlineId, "v-second"), 3, "两种载体的轮数要加在一起");
+
+// ── 验证起不来时不许把原任务打成 failed ──────────────────────────────────────
+// 旁路回合的整个前提是「验证不改任务状态」，而启动路径上有好几处会抛错（执行器解析
+// 撞上不兼容的模型/思考强度、worktree 建不出来）。原状态必须在这些解析**之前**落进
+// followUpFrom，否则 catch 那边读不到，只能把一个 done 的任务打成 failed。
+const { continueTask } = await import("../src/orchestrator.js");
+const failId = "verify-start-fail";
+await db.insert(tasks).values({
+  id: failId,
+  projectId: "project",
+  groupId: null,
+  parentId: null,
+  title: "verify start failure",
+  body: "",
+  mode: "single",
+  status: "done",
+  stage: "verifying",
+  verifyRound: 1,
+  verifyRounds: 0,
+  reviewRequested: true,
+  priority: "none",
+  labels: "[]",
+  dependsOn: "[]",
+  resumeDependsOn: "[]",
+  agentType: "claude",
+  autoTitle: false,
+  createdAt: at,
+  updatedAt: at,
+});
+// 起不来的原因随便挑一个真实的：claude 没有 no-such-effort 这个档位，resolveExecutorFor
+// 会在起进程之前就抛错 —— 所以这条用例不会真的拉起 CLI。
+await continueTask(failId, "验证一下", {
+  system: "run",
+  sideTurn: true,
+  agent: "claude",
+  reasoningEffort: "no-such-effort",
+});
+const failed = (await db.select().from(tasks).where(eq(tasks.id, failId))).at(0)!;
+assert.equal(failed.status, "done", "验证启动失败不能把原任务的终态改坏");
+assert.equal(failed.followUpFrom, null, "结算后要清掉 followUpFrom");
+assert.equal(failed.verifyRound, null, "起不来的那一轮不能永远占着「正在验证」");
+assert.equal(failed.verifyRounds, 1, "这一轮算跑过了（无结论），下一轮接着往下数");
+rmSync(resolve(reviewRoundDir(failId, 1), "../.."), { recursive: true, force: true });
 
 rmSync(resolve(base, "../.."), { recursive: true, force: true });
 rmSync(root, { recursive: true, force: true });

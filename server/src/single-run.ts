@@ -5,7 +5,7 @@
 // 结算规则是全局单点，谁也不该另造一份。
 import type { WriteStream } from "node:fs";
 import { eq, sql } from "drizzle-orm";
-import type { AgentEvent, AgentType } from "@harness/shared";
+import type { AgentEvent, AgentType, TaskStatus } from "@harness/shared";
 import { db } from "./db/index.js";
 import { tasks, sessions } from "./db/schema.js";
 import { bus } from "./bus.js";
@@ -23,9 +23,17 @@ async function setStatus(taskId: string, status: Parameters<typeof setTaskStatus
   await setTaskStatus(taskId, status);
 }
 
-export async function afterSettlement(taskId: string, status: "canceled" | "paused" | "done" | "failed", confirmedDone: boolean) {
+// status 是 TaskStatus 而不是四个终态：**旁路回合（就地验证）结算时恢复的是进这一轮
+// 之前的原状态**，可能是 paused、backlog 一类非终态。收窄在这里没有任何保护作用，只会
+// 逼调用方 as 一下。
+export async function afterSettlement(
+  taskId: string,
+  status: TaskStatus,
+  confirmedDone: boolean,
+  turnOk = true,
+) {
   try {
-    await handleTaskSettlement(taskId, status, confirmedDone);
+    await handleTaskSettlement(taskId, status, confirmedDone, turnOk);
   } catch (error) {
     // Review orchestration is a post-settlement side effect. A failure here must
     // never rewrite an already-settled worker/reviewer status.
@@ -56,7 +64,7 @@ export async function settleTaskStatus(
   exitStatus: number,
   stopped: StopSettle | null,
 ): Promise<{
-  status: "canceled" | "paused" | "done" | "failed";
+  status: TaskStatus;
   note?: string;
   confirmedDone: boolean;
 }> {
@@ -85,7 +93,8 @@ export async function settleTaskStatus(
   // 用户给一个已完成的任务发条消息(「再发布一下」),不该因为 agent 这一轮没调
   // complete_task 就把 done 打成 failed;手停一轮闲聊也不该把它抹成 canceled。
   if (t?.followUpFrom) {
-    const back = t.followUpFrom as "done" | "failed" | "canceled";
+    // 旁路回合(就地验证)恢复的可能是 paused/backlog 一类的原状态,不止三个终态。
+    const back = t.followUpFrom as Parameters<typeof setStatus>[1];
     await db.update(tasks).set({ followUpFrom: null, updatedAt: now() }).where(eq(tasks.id, taskId));
     if (confirmed) {
       await setStatus(taskId, "done");
@@ -276,7 +285,9 @@ export async function consumeSingleRun(a: {
     })
     .where(eq(sessions.id, sessId));
   const settled = await settleTaskStatus(taskId, exitStatus, stopped);
-  await afterSettlement(taskId, settled.status, settled.confirmedDone);
+  // turnOk = 这一回合本身干净收尾了(没被停、退出码 0)。跟落位状态不是一回事:旁路
+  // 回合(就地验证)的落位是任务原来的终态,只有它说得清这一轮跑成没跑成。
+  await afterSettlement(taskId, settled.status, settled.confirmedDone, !stopped && exitStatus === 0);
   if (settled.note) {
     // 诊断正文留在 .md 原始产物里；trace 负责刷新后的折叠块，SSE 负责实时显示。
     out.write(`\n> ${settled.note}\n`);

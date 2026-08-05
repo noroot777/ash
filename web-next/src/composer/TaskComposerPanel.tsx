@@ -219,6 +219,28 @@ export function TaskComposerPanel({
     profiles,
     { agentType: "claude", executorId: null },
   );
+  // 单任务面板上没有执行器选择器了：谁来干活写在起手式「让 AI 干活」那一站上。
+  // 那一站留空（executorId=null）的意思是「跟随任务的执行器」，此时才回落到这里
+  // 算出来的默认执行器——它照样参与可用性校验，只是不出现在界面上。
+  const runStep = mode === "single" ? workflow.def?.steps.find((step) => step.kind === "run") ?? null : null;
+  const runStepParams = runStep?.p as
+    { executorId: string | null; model: string | null; reasoningEffort: string | null } | undefined;
+  const runStepProfile = runStepParams?.executorId
+    ? profiles.find((profile) => profile.id === runStepParams.executorId) ?? null
+    : null;
+  const singleRun = runStepProfile
+    ? {
+      agentType: runStepProfile.type,
+      executorId: runStepProfile.id,
+      model: runStepParams?.model || null,
+      reasoningEffort: runStepParams?.reasoningEffort || null,
+    }
+    : {
+      agentType: singleExecutor.agentType,
+      executorId: singleExecutor.executorId,
+      model: executors.single.model || null,
+      reasoningEffort: executors.single.effort || null,
+    };
   const leadExecutor = parseExecutorValue(
     executors.lead.profile,
     profiles,
@@ -349,7 +371,11 @@ export function TaskComposerPanel({
   };
   const noExecutor = profilesReady && nothingRunnable(profiles);
   const unavailableRole = mode === "single"
-    ? !isExecutorPickable(singleExecutor, workerTypes, profiles) ? "执行器" : null
+    ? !isExecutorPickable(
+      { agentType: singleRun.agentType, executorId: singleRun.executorId },
+      workerTypes,
+      profiles,
+    ) ? "执行器" : null
     : mode === "debate"
       ? !isExecutorPickable(debaterAExecutor, workerTypes, profiles) ? "辩手 A"
         : !isExecutorPickable(debaterBExecutor, workerTypes, profiles) ? "辩手 B" : null
@@ -360,7 +386,13 @@ export function TaskComposerPanel({
   const availabilityMessage = noExecutor
     ? "还没有已注册执行器，暂不能创建任务；请先到执行器设置注册本地 CLI 或新增 SSH 执行器。"
     : unavailableRole
-      ? `${unavailableRole}当前未注册或不支持该角色，请更换执行器。`
+      // 单任务的执行器只有起手式那一处能改，提示就得把人指到那儿去，别说「请更换执行器」
+      // 却在面板上找不到可换的地方。
+      ? mode === "single"
+        ? runStepParams?.executorId
+          ? "起手式「让 AI 干活」那一站选的执行器未注册，请展开编排换一个。"
+          : "默认执行器未注册，请到执行器设置注册，或在起手式「让 AI 干活」那一站指定一个。"
+        : `${unavailableRole}当前未注册或不支持该角色，请更换执行器。`
       : mode === "team" && detection.status === "loading"
         ? "正在确认已注册调度者的常驻会话能力…"
         : mode === "team" && detection.status === "failed"
@@ -442,10 +474,10 @@ export function TaskComposerPanel({
           body: body.trim(),
           attachments: allAttachments,
           mode,
-          agentType: executorTypes.single,
-          executorId: singleExecutor.executorId,
-          model: executors.single.model || null,
-          reasoningEffort: executors.single.effort || null,
+          agentType: singleRun.agentType,
+          executorId: singleRun.executorId,
+          model: singleRun.model,
+          reasoningEffort: singleRun.reasoningEffort,
           useWorktree: project.health.isRepo && useWorktree,
           worktreeBase: useWorktree && base ? base : null,
           workflowId: workflow.workflowId,

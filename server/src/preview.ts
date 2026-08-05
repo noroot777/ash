@@ -11,12 +11,14 @@
 // http://localhost:xxxx），拿到之后再按用户选的那档确认——端口连得上 / 日志也说了
 // ready / HTTP 真返回 200。等不到就是这一站失败，绝不写一句「预览已起」骗人。
 import { spawn } from "node:child_process";
-import { connect } from "node:net";
+import { createServer } from "node:net";
 import { existsSync, mkdirSync, openSync, closeSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { PreviewLife, PreviewReady, WorkflowStep } from "@harness/shared/workflow";
+import type { PreviewLife, WorkflowStep } from "@harness/shared/workflow";
 import { augmentedEnv, killByPid } from "./executors/spawn.js";
 import { RUNS_DIR } from "./paths.js";
+import { portConflict, pickPreviewUrl, portHint } from "./preview-log.js";
+import { ready } from "./preview-probe.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { now } from "./util.js";
 
@@ -40,8 +42,35 @@ const POLL_MS = 500;
 const IDLE_LIFE_MS = 30 * 60_000;
 const SWEEP_MS = 5 * 60_000;
 
-const READY_WORDS = /ready|listening|started|compiled|running at|server running/i;
-const URL_RE = /https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0)(?::(\d{2,5}))?[^\s'"]*/i;
+// 「端口撞车怎么认、日志里哪个地址才是预览本尊、认出来说什么」都在 preview-log.ts
+//（纯函数，回归 test:preview-log）；「连不连得上、算不算起来了」在 preview-probe.ts
+//（回归 test:preview-probe）。两个都不进 db，才测得动。
+
+/**
+ * 借一个空闲端口，以环境变量 `PORT` 传给启动命令。
+ *
+ * 起因是一类**必然**发生的撞车：预览跑在任务自己的 worktree 里，命令却是从项目里抄来的
+ * `npm run dev`，端口写死在脚本里。而同一个项目此刻多半已经有一份在跑（开发者自己那份、
+ * 或者另一个任务的预览），于是这一站不是「有时候起不来」，是**一次都起不来**。
+ *
+ * 认 `PORT` 的框架（Next / CRA / Nest / Express / vite 的 `--port $PORT` 写法）就此自动
+ * 错开；不认的也不会更糟——那种情况下我们至少还能在日志里当场认出撞车并说人话。
+ * 端口是 listen(0) 拿的，关掉再交给子进程，中间有个理论上的竞态窗口，抢不到就还是撞车
+ * 那条路，不额外补偿。
+ */
+function freePort(): Promise<number | null> {
+  return new Promise((resolve) => {
+    const probe = createServer();
+    probe.once("error", () => resolve(null));
+    probe.listen(0, "127.0.0.1", () => {
+      const address = probe.address();
+      const port = typeof address === "object" && address ? address.port : null;
+      probe.close(() => resolve(port));
+    });
+  });
+}
+
+/** 撞车时给的下一步在 preview-log.ts。 */
 
 function recordPath(taskId: string): string {
   return join(RUNS_DIR, taskId, "preview.json");
@@ -75,35 +104,6 @@ function tail(path: string, max = 4000): string {
   }
 }
 
-function canConnect(port: number): Promise<boolean> {
-  return new Promise((resolve) => {
-    const socket = connect({ host: "127.0.0.1", port });
-    const done = (ok: boolean) => {
-      socket.destroy();
-      resolve(ok);
-    };
-    socket.setTimeout(1000);
-    socket.once("connect", () => done(true));
-    socket.once("timeout", () => done(false));
-    socket.once("error", () => done(false));
-  });
-}
-
-async function http200(url: string): Promise<boolean> {
-  try {
-    const res = await fetch(url, { signal: AbortSignal.timeout(3000) });
-    return res.status === 200;
-  } catch {
-    return false;
-  }
-}
-
-async function ready(mode: PreviewReady, url: string, port: number, log: string): Promise<boolean> {
-  if (mode === "http200") return http200(url);
-  if (!(await canConnect(port))) return false;
-  return mode === "port" || READY_WORDS.test(log);
-}
-
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export type PreviewResult =
@@ -121,7 +121,11 @@ export async function startPreview(
   const dir = join(RUNS_DIR, taskId);
   mkdirSync(dir, { recursive: true });
   const log = join(dir, "preview.log");
-  writeFileSync(log, `$ ${step.p.cmd}\n`);
+  const lent = await freePort();
+  // 日志头把注入的环境变量照实写出来，不只写命令：用户翻 preview.log 时得能一眼看出
+  // 「harness 到底把什么交给了这条命令」，而不是去猜端口是谁定的。
+  const banner = lent ? `$ PORT=${lent} BROWSER=none ${step.p.cmd}\n` : `$ ${step.p.cmd}\n`;
+  writeFileSync(log, banner);
   const fd = openSync(log, "a");
   let pid: number;
   try {
@@ -129,7 +133,9 @@ export async function startPreview(
       cwd,
       detached: true,
       stdio: ["ignore", fd, fd],
-      env: augmentedEnv(),
+      // BROWSER=none：dev server 的 `--open` 会去拉一个真浏览器窗口，预览是后台起的，
+      // 那扇窗户没人要。PORT 的来由见 freePort 的注释。
+      env: { ...augmentedEnv(), ...(lent ? { PORT: String(lent) } : {}), BROWSER: "none" },
     });
     child.unref();
     if (!child.pid) return { ok: false, reason: "预览进程没起来" };
@@ -144,16 +150,26 @@ export async function startPreview(
   while (Date.now() < deadline) {
     await sleep(POLL_MS);
     const text = tail(log);
+    const found = pickPreviewUrl(text, lent);
+    // 顺序要紧：撞车先判，再判进程死没死、再判起没起来。见 PORT_TAKEN_RE 那儿的 ②。
+    //
+    // 只有一个例外：日志里已经出现了**借给这条命令的那个端口**上的地址。那个端口是我们
+    // 刚探出来的空闲端口，此刻占着它的只可能是这条命令自己起的进程，所以 ② 担心的
+    // 「连到别人的服务上去」在这一支不成立。而它救的是一类常态 —— 一条 `npm run dev`
+    // 并排起好几个服务（典型：concurrently 起前端 + 后端），后端撞上本机已在跑的那份，
+    // 前端明明认了 $PORT 好好地起来了，却被后端那一行日志连坐判死。
+    const conflict = found?.lent ? null : portConflict(text);
+    if (conflict) {
+      killByPid(pid);
+      return { ok: false, reason: `${conflict}。\n\n${portHint(lent)}\n\n最后几行日志：\n${text.slice(-600)}` };
+    }
     if (!alive(pid)) {
       return { ok: false, reason: `预览进程已退出。最后几行日志：\n${text.slice(-800)}` };
     }
-    const hit = URL_RE.exec(text);
-    if (!hit) continue;
-    const url = hit[0];
-    const port = Number(hit[1] ?? (url.startsWith("https") ? 443 : 80));
-    if (!(await ready(step.p.ready, url, port, text))) continue;
+    if (!found) continue;
+    if (!(await ready(step.p.ready, found.url, found.port, text))) continue;
     const record: PreviewRecord = {
-      taskId, cmd: step.p.cmd, pid, url, port, life: step.p.life, startedAt: now(), log,
+      taskId, cmd: step.p.cmd, pid, url: found.url, port: found.port, life: step.p.life, startedAt: now(), log,
     };
     writeFileSync(recordPath(taskId), JSON.stringify(record, null, 2));
     return { ok: true, record };

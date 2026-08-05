@@ -54,16 +54,30 @@ check("点头在前就放行", denials(line(["run", "human", "accept"])), []);
 check("预览之后没人看", denials(line(["run", "preview"])), ["预览起来之后没有人工关口，没人会去看它"]);
 check("预览之后有人看", denials(line(["run", "preview", "human"])), []);
 
-// 会停下来等的站每种只能有一个。这不是洁癖:执行链是被事件唤醒的,唤醒时只说得清
-// 「哪一类锚点过去了」,说不清是第几个,所以第二个同类锚点必然永远轮不到 ——
-// 线路图上画着一站永远不会跑,是比「不让存」严重得多的谎。
+// 只剩两种站每条线至多一个:「让 AI 干活」是这条线的起点(两个起点说不清从哪儿开工),
+// 「合并并清理」是终局的不可逆动作(合两遍没有意义)。
+//
+// 「自动验证」「等我点头」曾经也在这张名单上,理由是执行链被唤醒时只说得清「哪一类
+// 锚点过去了」、说不清是第几个。那个理由已经不成立:任务身上记着游标 `workflow_at`,
+// 段落按**站的 id** 切,所以想画几站验证、几道关口都行(见 test-workflow-run.ts)。
 for (const kind of SINGLETON_KINDS) {
   const dup = line(["run", "human", kind, kind]);
   check(`两站「${STEP_LABELS[kind]}」`, denials(dup).includes(`「${STEP_LABELS[kind]}」只能有一站`), true);
 }
-// 反过来:不会停下来等的站可以重复,自由编排靠的就是它们
+check("干活站在名单上", SINGLETON_KINDS.includes("run" as never), true);
+check("合并站在名单上", SINGLETON_KINDS.includes("accept" as never), true);
+check("验证站不在名单上了", SINGLETON_KINDS.includes("verify" as never), false);
+check("人工关口不在名单上了", SINGLETON_KINDS.includes("human" as never), false);
+// 反过来:除那两站之外都可以重复,自由编排靠的就是它们
 check("命令站可以来好几遍", denials(line(["run", "command", "verify", "command", "human", "command"])), []);
 check("预览起两次也行", denials(line(["run", "preview", "preview", "human"])), []);
+check("验两遍:先粗验再细验", denials(line(["run", "verify", "command", "verify", "human"])), []);
+check("两道关口:中途放行一次,最后再点一次头", denials(line(["run", "human", "command", "human", "accept"])), []);
+check(
+  "验一次点一次头再验一次点一次头",
+  denials(line(["run", "verify", "human", "command", "verify", "human", "accept"])),
+  [],
+);
 
 // 失败策略只剩「怎么办 + 几轮」两个旋钮,轮数有边界
 const back = line(["run", "verify"]);
@@ -143,6 +157,16 @@ check("轮数超上限就夹到上限", normalizeWorkflowDef({
 check("不认识的失败档回落成停下等人", normalizeWorkflowDef({
   steps: [{ kind: "run", fail: { mode: "teleport", max: 2 } }],
 }).def?.steps[0]!.fail, { mode: "stop", max: 2 });
+
+// 人工关口「什么都不给看」：前一站起了预览，人自己去点，不需要 diff/报告/截图。
+// 「字段缺了」和「显式给了空数组」是两件事，混在一起就等于「这个勾去不掉」——
+// 用户取消完最后一项、存完再读回来，它又长回 diff+report。
+check("人工关口显式给空数组就当真", normalizeWorkflowDef({
+  steps: [{ kind: "run" }, { kind: "human", p: { show: [], notify: [] } }],
+}).def?.steps[1]!.p, { show: [], notify: [] });
+check("人工关口缺字段仍补默认", normalizeWorkflowDef({
+  steps: [{ kind: "run" }, { kind: "human" }],
+}).def?.steps[1]!.p, { show: ["diff", "report"], notify: [] });
 
 // 幂等：内置 → JSON → normalize 应当原样回来，否则存一次盘就漂一次
 for (const b of BUILTIN_WORKFLOWS) {

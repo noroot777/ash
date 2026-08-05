@@ -51,6 +51,11 @@ const PROJECT_SECTIONS: SettingsSection[] = ["project", "groups", "archive"];
 // 有、刷新一次就掉回默认」的半接通状态。
 const SYSTEM_SECTIONS: SettingsSection[] = SYSTEM_NAV.map((item) => item.id);
 
+// 内容**横着长**的那几节要更宽的栏。880px 那档是为「一行一个设置项」的竖排表单定的，
+// 起手式却是一条横版线路图：站数一多，880px 里必然出横向滚动条，而滚动条一出，用户
+// 就看不见这条线到底有几站——那正是这个页面唯一要传达的信息。
+const WIDE_SECTIONS: SettingsSection[] = ["workflows"];
+
 export function parseSettingsSection(value: string | null): SettingsSection | null {
   if (value === "agents") return "executors";
   const section = value as SettingsSection;
@@ -128,7 +133,7 @@ export function SettingsPage({
       </aside>
 
       <main className="settings-main">
-        <div className="settings-content">
+        <div className="settings-content" data-wide={WIDE_SECTIONS.includes(section) ? "yes" : "no"}>
           {section === "providers" && <ProvidersSettings notify={notify} />}
           {section === "executors" && <ExecutorsSettings notify={notify} />}
           {section === "modes" && <ModesSettings notify={notify} />}

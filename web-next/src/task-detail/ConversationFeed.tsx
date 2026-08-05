@@ -207,7 +207,6 @@ export function ConversationFeed({
   footer?: React.ReactNode;
 }) {
   const scroll = useRef<HTMLDivElement>(null);
-  const objective = parseAttachmentText(task.body);
   const activityPhase = runActivityPhase(task.status, runActivityTail(items));
   const activityExecutor = runActivityExecutor({
     sessions,
@@ -219,13 +218,6 @@ export function ConversationFeed({
     <ImagePreviewGroup isolated>
       <div className="conversation-scroll-region task-conversation-wrap">
         <div className="task-conversation" ref={scroll}>
-          {task.body.trim() && (
-            <details className="task-objective" open={items.length === 0}>
-              <summary>任务目标</summary>
-              <MarkdownBody text={objective.body} />
-              <MessageAttachments paths={objective.paths} />
-            </details>
-          )}
           {items.map((item) => {
             if (item.kind === "agent") return <AgentMessage key={item.id} item={item} />;
             if (item.kind === "user") return <UserMessage key={item.id} item={item} />;

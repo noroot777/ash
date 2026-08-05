@@ -6,19 +6,27 @@
 //
 // 两条口径不许在这儿另开一份：
 // ① 每站底下那行字来自 railStops()，也就是任务列表里那一格的同一个词；
-// ② 走到哪一站是从任务真实的 status/stage 反推的（resolveCursor），不是假进度条。
-//    第二期执行链接管落了真游标之后，这个文件一行都不用改。
+// ② 走到哪一站读的是任务身上那个真游标（resolveCursor），不是假进度条，也不是从
+//    stage 猜的——尤其是人工关口那两个真按钮，判据只能是「游标停在这一道上」。
 import type { Task } from "@harness/shared";
-import { STEP_LABELS } from "@harness/shared/workflow";
+import { STEP_LABELS, WORKSPACE_LABELS } from "@harness/shared/workflow";
 import { ArrowUUpLeft, Check, Warning } from "@phosphor-icons/react";
 import { AcceptanceControls } from "../team/TeamReviewWorkspace.tsx";
 import { executorName, useExecutorCatalog, type ExecutorCatalog } from "./executorCatalog.ts";
 import { stepChips } from "./stepFields.ts";
 import { failText } from "./workflowEdit.ts";
-import { railStops, workflowSummary, type RailStop } from "./workflowModel.ts";
+import { railStops, workflowSummary, isCursorStop, type RailStop } from "./workflowModel.ts";
 
-/** 人工关口上那两个按钮是**真**验收/打回，所以只在任务确实停在那儿时才给。 */
-function atHumanGate(task: Task): boolean {
+/**
+ * 人工关口上那两个按钮是**真**验收/打回，所以只在**线确实停在这一道关口**时才给。
+ *
+ * 判据是游标（isCursorStop），不是 stage：`awaiting_acceptance` 只说明「有人把这个任务
+ * 标成了待验收」，可能是 agent 按完成协议自报的，也可能属于线上另一道关口——照它给
+ * 按钮，用户就会在一道还没轮到的关口上按下不可逆的验收。任务状态仍要一起满足，免得
+ * 游标刚落到这一站、关口还没真正停下就先把按钮亮出来。
+ */
+function atHumanGate(task: Task, stop: RailStop): boolean {
+  if (stop.step.kind !== "human" || !isCursorStop(stop)) return false;
   return task.stage === "awaiting_acceptance" || task.status === "awaiting_review";
 }
 
@@ -41,7 +49,7 @@ function Stop({
 }) {
   const chips = stepChips(stop.step, (id) => executorName(catalog, id));
   const fail = failText(stop.step);
-  const gate = stop.step.kind === "human" && stop.state !== "pending" && atHumanGate(task);
+  const gate = atHumanGate(task, stop);
 
   return (
     <li className="wf-vst" data-state={stop.state}>
@@ -118,7 +126,7 @@ export function WorkflowInspector({
           </div>
           <div className="task-inspector-row">
             <span>在哪儿干活</span>
-            <div>{def.workspace === "isolated" ? "单独开一份工作区" : "直接在项目目录里"}</div>
+            <div>{WORKSPACE_LABELS[def.workspace]}</div>
           </div>
           <p className="task-inspector-note">
             这是任务创建那一刻拷下来的一份快照。之后在设置里改起手式，不会追着改它。

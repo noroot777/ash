@@ -15,12 +15,15 @@ export const STEP_LABELS: Record<StepKind, string> = {
   human: "等我点头", command: "跑一条命令", accept: "合并并清理",
 };
 
-// 每种「会停下来等的站」在一条线上至多一次 —— 执行链是**被事件唤醒**的（agent 干完、
-// 审查有了结论、用户点了头），它认的是「哪一类事件」而不是「走到第几站」。同一类出现
-// 两次，第二次没有任何东西能把它区分出来，只会被静默跳过（`run → 跑命令 → run → 跑命令`
-// 校验全绿，实际只跑得到第一条命令）。「合并并清理」同理，而且它还是不可逆的。
-// 编排器据此把已经有了的这几站从「加一站」菜单里去掉，checkWorkflow 再兜一道底。
-export const SINGLETON_KINDS = ["run", "verify", "human", "accept"] as const;
+// 「合并并清理」和「让 AI 干活」在一条线上至多一次。
+//   accept —— 不可逆，而且合完之后这条线上再没有第二次可合的东西。
+//   run    —— 执行链是**被这一轮结算唤醒**的，唤醒时只知道「有一轮干完了」，说不清
+//              是第几个 run 站；两个 run 站的第二个没有任何东西能把它区分出来。
+// 「自动验证」和「等我点头」不在此列：它们各自的唤醒事件（某一轮审查有了结论、用户
+// 在某个关口点了头）都能落到**具体那一站**上——执行链按 `tasks.workflow_at` 这个游标
+// 推进（见 workflow-policy.ts 的段落切分），所以一条线上写两轮验证、两道关口是真的
+// 跑得出来的。编排器据此只把已经有了的 run/accept 从「加一站」菜单里去掉。
+export const SINGLETON_KINDS = ["run", "accept"] as const;
 export type SingletonKind = (typeof SINGLETON_KINDS)[number];
 export function isSingletonKind(kind: StepKind): kind is SingletonKind {
   return (SINGLETON_KINDS as readonly string[]).includes(kind);
@@ -184,7 +187,7 @@ export function checkWorkflow(def: WorkflowDef): WorkflowIssue[] {
   if (!steps.some((s) => s.kind === "run")) {
     issues.push({ level: "deny", text: "没有「让 AI 干活」这一站，任务不会开工" });
   }
-  // 每种「会停下来等的站」至多一次；理由和取舍见 SINGLETON_KINDS 那儿的注释。
+  // 「让 AI 干活」「合并并清理」至多一次；理由和取舍见 SINGLETON_KINDS 那儿的注释。
   // 宁可在这儿拒绝，也不能让线路图上画着一站永远不会跑。
   for (const kind of SINGLETON_KINDS) {
     const hit = steps.filter((s) => s.kind === kind);
@@ -216,6 +219,19 @@ export function checkWorkflow(def: WorkflowDef): WorkflowIssue[] {
     }
     if (s.kind === "preview" && !s.p.cmd.trim()) {
       issues.push({ level: "deny", text: "预览的启动命令是空的", stepId: s.id });
+    }
+  }
+  // 两站「会停下来等的站」贴在一起，中间什么都没有：跑得出来，但第一站刚放行就立刻
+  // 又停一次，多半是编排时插错了位置。只提醒不拦——真想要「验两轮」也说得通。
+  for (const [i, s] of steps.entries()) {
+    const next = steps[i + 1];
+    if (!next || s.kind !== next.kind) continue;
+    if (s.kind === "human" || s.kind === "verify") {
+      issues.push({
+        level: "warn",
+        text: `两站「${STEP_LABELS[s.kind]}」挨在一起，中间没有别的站`,
+        stepId: next.id,
+      });
     }
   }
   if (def.workspace === "shared" && accepts.length) {
@@ -287,8 +303,14 @@ function normalizeParams(kind: StepKind, raw: unknown): StepParams[StepKind] {
     };
   }
   if (kind === "human") {
-    const show = pickEnums(r.show, HUMAN_SHOW);
-    return { show: show.length ? show : d.human().show, notify: pickEnums(r.notify, HUMAN_NOTIFY) };
+    return {
+      // 「字段缺了」和「显式给了空数组」必须分开看：缺了照旧补默认（老数据、手写 JSON
+      // 的行为一点不变），而空数组**当真** —— 用户把三项都取消掉是一种真实用法（什么都
+      // 不给，我自己打开前一站的预览去点）。原来一律回落默认，表现出来就是界面上「这
+      // 个勾去不掉」：取消完最后一项、存完再回来，它又原样长回去了。
+      show: Array.isArray(r.show) ? pickEnums(r.show, HUMAN_SHOW) : d.human().show,
+      notify: pickEnums(r.notify, HUMAN_NOTIFY),
+    };
   }
   if (kind === "command") {
     return { cmd: pickText(r.cmd, d.command().cmd), where: pickEnum(r.where, COMMAND_WHERE, "workspace") };

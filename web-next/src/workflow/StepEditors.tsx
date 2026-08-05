@@ -62,6 +62,18 @@ export function MultiEditor({
           {option.label}
         </button>
       ))}
+      {/* 「一个都不选」得有个能点的地方。靠「把最后一项也点掉」表达同一件事，界面上看不
+          出这是允许的（人工关口尤其：什么都不给、自己去点前一站的预览，是正经用法）。 */}
+      {spec.emptyOk && (
+        <button
+          type="button"
+          aria-pressed={!values.length}
+          className={`wf-pop-option is-none${values.length ? "" : " is-on"}`}
+          onClick={() => onToggle([])}
+        >
+          {spec.emptyText}
+        </button>
+      )}
     </div>
   );
 }
@@ -74,15 +86,20 @@ export function TextEditor({
   onChange: (value: string) => void;
 }) {
   return (
-    <textarea
-      className="wf-pop-text"
-      value={value}
-      rows={spec.key === "instruction" ? 3 : 1}
-      placeholder={spec.placeholder}
-      spellCheck={false}
-      autoFocus
-      onChange={(event) => onChange(event.target.value)}
-    />
+    <div className="wf-pop-form">
+      <textarea
+        className="wf-pop-text"
+        value={value}
+        rows={spec.key === "instruction" ? 3 : 1}
+        placeholder={spec.placeholder}
+        spellCheck={false}
+        autoFocus
+        onChange={(event) => onChange(event.target.value)}
+      />
+      {/* 填的时候就得知道的事（典型：预览的 $PORT），写在填字的地方才有用 —— 等命令
+          跑挂了再从日志里看出来，用户已经白等一轮了。 */}
+      {spec.hint && <p className="wf-pop-hint">{spec.hint}</p>}
+    </div>
   );
 }
 

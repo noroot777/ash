@@ -1,13 +1,13 @@
 import { mkdirSync, createWriteStream, existsSync } from "node:fs";
 import { join } from "node:path";
 import { eq, inArray } from "drizzle-orm";
-import type { AgentType } from "@harness/shared";
+import type { AgentType, TaskStatus } from "@harness/shared";
 import { db } from "./db/index.js";
 import { tasks, projects, sessions } from "./db/schema.js";
 import { bus } from "./bus.js";
 import { id, now, attachmentsPrompt } from "./util.js";
 import { setTaskStatus } from "./status.js";
-import { trackRun, untrackRun, isRunning, takeStopped } from "./runs.js";
+import { trackRun, untrackRun, isRunning, takeStopped, claimTurn, releaseTurn } from "./runs.js";
 import { consumeSingleRun, afterSettlement } from "./single-run.js";
 import { FOLLOW_UP_LABEL } from "./labels.js";
 import { taskWorkspace } from "./task-workspace.js";
@@ -20,9 +20,9 @@ import { writeTurn as writeTurnLine, runTracePaths } from "./transcript.js";
 import { startTeam, deliverToLead } from "./team/session.js";
 import { workerPreambleFor } from "./team/dispatch.js";
 import { reopenAcceptedStage } from "./task-stage.js";
-import { reviewProtocolFor, reviewReminderFor } from "./review.js";
+import { reviewProtocolFor, reviewReminderFor, verifyReminderFor } from "./review-prompts.js";
+import { peerNoticeFor } from "./peer-context.js";
 
-const running = new Set<string>(); // taskIds currently executing (single-flight)
 
 // Single tasks run headless — nobody can answer a mid-run prompt. Tell the agent
 // to act autonomously rather than stall waiting for confirmation; if it genuinely
@@ -34,6 +34,14 @@ const AUTONOMY =
 // the SAME working directory, so it should read the current state before acting.
 const COLLAB_INVITE =
   "你被叫来加入这个任务的协作。当前工作目录里可能已经有其他 agent 的产出，请先了解现状再动手。\n\n";
+
+// 被召唤进来的智能体只收到用户 @ 它的那一句话 —— 任务本身是干什么的，它一无所知
+// （task.body 只进 fresh run 的 prompt，而它走的是 continueTask 这条路）。撞上
+// 「审一下上面的提交」这种自带上下文的召唤还能靠工作目录补齐，换成依赖任务描述的
+// 活就只能靠猜。所以首次入场时把原始描述一并给它，之后的回合不再重复（它自己的
+// 会话里已经有了）。
+const TASK_BRIEF = (body: string) =>
+  `【本任务的原始描述】（你是中途被叫进来的，这是任务最初的交代，供你了解背景）\n${body.trim()}\n\n`;
 
 // When a task that was interrupted (server restart → failed, manual stop →
 // canceled, group pause → paused, or a non-zero exit) is (re)started, we RESUME
@@ -59,8 +67,8 @@ function writeTurn(
 // 完成协议前言(严格 done):告诉 agent 它的 taskId 和「必须亲口确认完成」的
 // 规则。fresh run 用长版(第一回合,完整交代);reply/resume 回合用短版追加在
 // 消息尾部(每回合都提醒,上下文再长 agent 也不至于忘)。
-const ACCEPTANCE_REMINDER = (taskId: string, sharedTeamWorker: boolean, reviewTask: boolean) => reviewTask
-  ? "验收辅路:审查任务不适用 accept_task；它只负责给被审任务下验证结论并留证。"
+const ACCEPTANCE_REMINDER = (taskId: string, sharedTeamWorker: boolean, verifying: boolean) => verifying
+  ? "验收辅路:验证回合不适用 accept_task；这一轮只负责给出验证结论并留证。"
   : sharedTeamWorker
     ? "验收辅路:本共享执行者不适用 accept_task；合并与验收由团队级处理。"
     : `验收辅路:准备交给人工验收前可调用 report_stage(taskId="${taskId}", stage="awaiting_acceptance")；` +
@@ -125,7 +133,7 @@ export async function reconcileInterrupted(): Promise<void> {
   const teamIds = orphaned.filter((t) => t.mode === "team").map((t) => t.id);
   const others = orphaned.filter((t) => t.mode !== "team");
   for (const t of others) {
-    const back = (t.followUpFrom as "done" | "failed" | "canceled" | null) ?? "failed";
+    const back = (t.followUpFrom as TaskStatus | null) ?? "failed";
     if (t.followUpFrom || t.completeConfirmedAt) {
       await db
         .update(tasks)
@@ -177,8 +185,7 @@ export async function runTask(taskId: string): Promise<void> {
   // 不是一个回合。放在最前面,于是 /tasks/:id/run、retry、queue 推进都自动生效。
   const mode = (await db.select({ mode: tasks.mode }).from(tasks).where(eq(tasks.id, taskId))).at(0)?.mode;
   if (mode === "team") return startTeam(taskId);
-  if (running.has(taskId)) return;
-  running.add(taskId);
+  if (!claimTurn(taskId)) return;
   let handle: RunHandle | undefined;
   try {
     const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
@@ -216,8 +223,15 @@ export async function runTask(taskId: string): Promise<void> {
     const sharedTeamWorker = !task.useWorktree && teamPreamble.length > 0;
     const reviewTask = !!task.reviewOf;
     const reviewProtocol = reviewTask ? await reviewProtocolFor(task, ws, project.repoPath) : "";
+    // fresh run 通常是任务里的头一个智能体，但不总是：任务跑过 codex 之后用户把
+    // agentType 换成 claude 再点运行，就会从这里起跑一条全新会话 —— 前面那位的
+    // 对话记录还在盘上，同样该告知。prev 传 undefined（这个智能体自己没跑过），
+    // 于是在场的都算新面孔；任务里只有它自己时返回空串，fresh run 一如往常。
+    const priorSessions = await db.select().from(sessions).where(eq(sessions.taskId, taskId));
+    const peerNotice = peerNoticeFor({ taskId, self: agentType, all: priorSessions, prev: undefined });
     const prompt =
       AUTONOMY + COMPLETION_PROTOCOL(taskId, sharedTeamWorker, reviewTask) + teamPreamble + reviewProtocol +
+      peerNotice +
       (autoTitle ? TITLE_HINT + objective : objective);
     const turnStart = now();
     const sessId = id();
@@ -274,10 +288,10 @@ export async function runTask(taskId: string): Promise<void> {
     });
     const status = takeStopped(taskId) ?? "failed";
     await setStatus(taskId, status);
-    await afterSettlement(taskId, status, false);
+    await afterSettlement(taskId, status, false, false);
   } finally {
     if (handle) untrackRun(taskId, handle);
-    running.delete(taskId);
+    releaseTurn(taskId);
   }
 }
 
@@ -333,6 +347,13 @@ export async function continueTask(
     reasoningEffort?: string | null;
     attachments?: string[];
     system?: ResumeReason;
+    /**
+     * 旁路回合：这一轮不是「任务本身在执行」，而是搭着这个任务的工作目录/会话另做一件事
+     * （就地验证轮）。语义上跟续聊同一条：**只可能让任务变好，不会让它变差** ——
+     * 本回合不确认完成，任务就原样回到进这一轮之前的终态。跟续聊的区别只在于它是后端
+     * 发起的（带 system），所以要显式开这个开关，否则会被当成一次普通的系统续跑。
+     */
+    sideTurn?: boolean;
     throwOnTeamUnavailable?: boolean;
   } = {},
 ): Promise<void> {
@@ -350,8 +371,7 @@ export async function continueTask(
       throwOnOpenFailure: opts.throwOnTeamUnavailable,
     });
   }
-  if (running.has(taskId)) return;
-  running.add(taskId);
+  if (!claimTurn(taskId)) return;
   const agentType = opts.agent ?? "claude"; // re-derived below once the task loads; kept for the catch handler
   let handle: RunHandle | undefined;
   try {
@@ -364,6 +384,33 @@ export async function continueTask(
     // 整套按它跑；没 @ 就沿用任务自己的常设配置。三个字段必须同进同出：思考强度的档位表
     // 是跟着 CLI 走的，只要换了智能体，任务自带的强度就属于另一张表，不能漏过来。
     const summoned = !!opts.agent;
+    // 续聊(follow-up):任务已经到终态了,用户又发来一条消息 —— 这一轮是「任务
+    // 之后的对话」,不是任务的执行。把续聊前的终态记下来:队列一律按它看待这个
+    // 成员(既不算「有人在跑」冻住整条线,也不会被当成可启动项拉起来),结算时
+    // 再回到它(见 settleTaskStatus 的续聊分支)。
+    // 只认真人消息:后端发起的续跑(retry / 手点运行 / 队列推进 / 上游唤醒)带
+    // opts.system,那是真的在执行这个任务,照旧占住队列位置。
+    // 例外是旁路回合(opts.sideTurn,就地验证):它虽然由后端发起,却同样不是这个
+    // 任务的执行 —— 验证没通过不该把一个 done 打成 failed。任务身上还挂着 verify_round
+    // 时,这一轮同样算旁路:验证中途提问、答复回来续跑的那一回合仍属于这轮验证,
+    // 走的却是普通的 /answer,不带 sideTurn。
+    // 旁路回合恢复的是**进这一轮之前的原状态**,不限 done/failed/canceled —— 用户可以
+    // 对一个 paused 的任务手点「再验一轮」,验完它该还是 paused。
+    // **这一段必须排在所有可能抛错的解析之前**(执行器解析、工作目录解析都会抛:模型与
+    // 思考强度不兼容、worktree 建不出来),catch 那边只认库里的 followUpFrom —— 落库晚
+    // 一步,一个 done 的任务就会因为「验证没起来」被打成 failed。
+    const sideTurn = !!opts.sideTurn || !!task.verifyRound;
+    const followUpFrom = sideTurn
+      ? (task.status === "running" || task.status === "queued" ? null : task.status)
+      : !opts.system && ["done", "failed", "canceled"].includes(task.status)
+        ? task.status
+        : null;
+    // 新回合起点:顺手清掉上一轮残留的完成确认(确认只在本回合内有效)。
+    await db
+      .update(tasks)
+      .set({ followUpFrom, completeConfirmedAt: null, updatedAt: now() })
+      .where(eq(tasks.id, taskId));
+
     const ex = await resolveExecutorFor({
       executorId: summoned ? opts.executorId ?? null : task.executorId,
       type: agent,
@@ -378,21 +425,6 @@ export async function continueTask(
       .sort((a, b) => b.startedAt.localeCompare(a.startedAt));
     const prev = all.find((s) => s.agentType === agent); // this agent's own session, if any
     const resuming = !!prev?.cliSessionId;
-    // 续聊(follow-up):任务已经到终态了,用户又发来一条消息 —— 这一轮是「任务
-    // 之后的对话」,不是任务的执行。把续聊前的终态记下来:队列一律按它看待这个
-    // 成员(既不算「有人在跑」冻住整条线,也不会被当成可启动项拉起来),结算时
-    // 再回到它(见 settleTaskStatus 的续聊分支)。
-    // 只认真人消息:后端发起的续跑(retry / 手点运行 / 队列推进 / 上游唤醒)带
-    // opts.system,那是真的在执行这个任务,照旧占住队列位置。
-    // 先落库再解析工作目录:后者可能抛错(worktree 建不出来),catch 那边要靠这个
-    // 字段把任务放回原来的终态,而不是把一个 done 打成 failed。
-    const followUpFrom =
-      !opts.system && ["done", "failed", "canceled"].includes(task.status) ? task.status : null;
-    // 新回合起点:顺手清掉上一轮残留的完成确认(确认只在本回合内有效)。
-    await db
-      .update(tasks)
-      .set({ followUpFrom, completeConfirmedAt: null, updatedAt: now() })
-      .where(eq(tasks.id, taskId));
 
     // Where the work lives: the agent's own cwd, else any session's cwd (so the
     // invitee sees prior output), else materialize the task workdir.
@@ -421,15 +453,32 @@ export async function continueTask(
     const invited = !prev; // first time this agent is pulled into the task
     const userTurnText = userText + attachmentsPrompt(opts.attachments);
     const sharedTeamWorker = !task.useWorktree && (await workerPreambleFor(task)).length > 0;
+    // 验证回合（旧的独立审查任务，或这个任务自己身上的就地验证轮）：完成协议的
+    // 验收那一句要换掉 —— 这一轮的产出是结论和证据，不是「这个任务可以合并了」。
     const reviewTask = !!task.reviewOf;
-    const reviewReminder = reviewTask ? reviewReminderFor(task) : "";
+    const verifying = reviewTask || !!task.verifyRound;
+    // 每回合都重贴一遍「你现在在干什么」：验证轮可能中途提问、被打断再续跑，
+    // 那些回合都不带最初那段协议，只有从任务状态派生的提醒能跟到底。
+    const reviewReminder = reviewTask
+      ? reviewReminderFor(task)
+      : task.verifyRound
+        ? verifyReminderFor(task.id, task.verifyRound)
+        : "";
+    // 「本任务里还有别人」的告知。触发条件是**有新面孔**（上一轮跑完之后才进来的
+    // 同伴），不是 invited —— 挂在 invited 上恰好漏掉最需要它的那个：任务的原生
+    // agent 第一轮走 runTask 直接起跑、从没被「召唤」过，于是后来 @ 进来的同伴它
+    // 一次都不会知道（正是 2026-08-04 那个「claude 自己考古 codex 会话」的现场）。
+    // prev 必须是**更新 session 行之前**的快照：锚点取的 endedAt 会在 resume 时被清空。
+    const peerNotice = peerNoticeFor({ taskId, self: agent, all, prev });
     const prompt =
       (invited ? COLLAB_INVITE : "") +
+      (invited && task.body.trim() ? TASK_BRIEF(task.body) : "") +
+      peerNotice +
       userTurnText +
       (workspaceReset ? WORKSPACE_RESET(cwd) : "") +
       (followUpFrom
-        ? FOLLOW_UP_REMINDER(taskId, followUpFrom, sharedTeamWorker, reviewTask)
-        : COMPLETION_REMINDER(taskId, sharedTeamWorker, reviewTask)) +
+        ? FOLLOW_UP_REMINDER(taskId, followUpFrom, sharedTeamWorker, verifying)
+        : COMPLETION_REMINDER(taskId, sharedTeamWorker, verifying)) +
       (reviewReminder ? `\n${reviewReminder}` : "");
     const turnStart = now();
     const sessId = resuming ? prev!.id : id();
@@ -536,13 +585,13 @@ export async function continueTask(
     // 续聊回合里出的岔子(典型:worktree 建不出来)不该把任务状态打差 —— 同
     // settleTaskStatus 的约定:续聊只能让任务变好,不能让它变坏。
     const row = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
-    const back = row?.followUpFrom as "done" | "failed" | "canceled" | null | undefined;
+    const back = row?.followUpFrom as TaskStatus | null | undefined;
     if (back) await db.update(tasks).set({ followUpFrom: null, updatedAt: now() }).where(eq(tasks.id, taskId));
     const status = takeStopped(taskId) ?? back ?? "failed";
     await setStatus(taskId, status);
-    await afterSettlement(taskId, status, false);
+    await afterSettlement(taskId, status, false, false);
   } finally {
     if (handle) untrackRun(taskId, handle);
-    running.delete(taskId);
+    releaseTurn(taskId);
   }
 }

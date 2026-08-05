@@ -1,11 +1,21 @@
-import { constants as fsConstants } from "node:fs";
-import { lstat, mkdir, open, readFile, readdir } from "node:fs/promises";
-import { basename, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
+// 验证轮的**编排**：什么时候开一轮、这一轮谁来跑、跑完了怎么走。
+//
+// 现在的做法是**就地验证**：不再另起一个审查任务，而是在被验任务自己身上多跑一个
+// 旁路回合（`tasks.verify_round` 记着正在跑第几轮）。结论仍走 `report_stage`，证据仍
+// 落 `data/runs/<taskId>/review/round-<n>/`，打回修复仍是同一个任务续跑 —— 变的只是
+// 「验证这件事住在哪个任务身上」。
+//
+// 老数据里还有一批独立审查任务（`tasks.review_of` 指向被审任务），它们的启动路径已经
+// 拆掉，但**跑完之后的结算路径完整保留**（`finishReview`），否则重启时正在跑的那些
+// 审查任务会没人收尾。两条路最后汇进同一个 `concludeRound`。
+//
+// 判定（该不该验、几轮、找谁验）住在 review-policy.ts；证据读写住在 review-evidence.ts；
+// 提示词正文住在 review-prompts.ts。
+import { extname } from "node:path";
 import type {
   AgentType,
   ReviewConclusion,
   ReviewDispatchInput,
-  Task,
   TaskReviewInfo,
   TaskReviewRound,
   TaskStatus,
@@ -13,23 +23,31 @@ import type {
 } from "@harness/shared";
 import { AGENT_TYPES, TEAM_DEFAULTS } from "@harness/shared";
 import { inheritExecutorOverrides, pickExecutor } from "@harness/shared/executors";
-import { VERIFY_CHECK_LABELS, STEP_LABELS } from "@harness/shared/workflow";
-import { workflowPolicy } from "@harness/shared/workflow-policy";
+import { STEP_LABELS } from "@harness/shared/workflow";
+import { anchorAt, firstAnchor, workflowPolicy } from "@harness/shared/workflow-policy";
 import { asc, eq } from "drizzle-orm";
 import type { Hono } from "hono";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
 import { agents, projects, sessions, tasks } from "./db/schema.js";
-import { RUNS_DIR } from "./paths.js";
 import {
   detectReviewCoverage,
-  repairCoverageGuard,
   type ReviewCoverageFinding,
 } from "./review-coverage.js";
+import {
+  REVIEW_MIME,
+  nextReviewRound,
+  readConclusion,
+  readReport,
+  readReviewFile,
+  safeReviewFilePath,
+  screenshots,
+  writeConclusion,
+} from "./review-evidence.js";
+import { repairPrompt, verifyProtocolFor } from "./review-prompts.js";
 import { setTaskStage } from "./task-stage.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { askAboutFailure } from "./task-question.js";
-import { createTasks } from "./task-store.js";
 import {
   MAX_AUTO_REVIEW_ROUNDS,
   reviewOutcomeAction,
@@ -38,81 +56,13 @@ import {
   withVerifyExecutor,
   type Settlement,
 } from "./review-policy.js";
+import { continueWhenIdle } from "./runs.js";
 import { taskWorkflowDef } from "./workflows.js";
-import { advanceAfterRun, advanceAfterVerify, applyRunFailPolicy } from "./workflow-steps.js";
-import type { Workspace } from "./git.js";
-import { id, now } from "./util.js";
-
-const REVIEW_MIME: Record<string, string> = {
-  ".png": "image/png",
-  ".jpg": "image/jpeg",
-  ".jpeg": "image/jpeg",
-  ".md": "text/markdown; charset=utf-8",
-};
+import { advanceWorkflowFrom, settleFrom } from "./workflow-advance.js";
+import { applyRunFailPolicy } from "./workflow-steps.js";
+import { now } from "./util.js";
 
 type TaskRow = typeof tasks.$inferSelect;
-
-export const REVIEW_OVERWRITE_CHECK =
-  "若声称行为在仓库里不存在或已被改掉，先查被审产物提交之后是否有后续提交触及同批文件；" +
-  "若有，在报告写明“疑似被后续提交有意覆盖，建议人工确认而非自动打回”及提交 hash、说明和文件，" +
-  "并先调用 ask_question 等人工确认，不要仅因此上报 verify_failed。";
-
-
-export function reviewRoundDir(taskId: string, round: number): string {
-  return join(RUNS_DIR, taskId, "review", `round-${round}`);
-}
-
-export function nextReviewRound(existingRounds: number): number {
-  return Math.max(0, Math.floor(existingRounds)) + 1;
-}
-
-// Resolve only one file inside a single round directory. Both the route and its
-// regression test use this helper so path traversal cannot drift from policy.
-export function safeReviewFilePath(taskId: string, round: number, name: string): string | null {
-  if (
-    !Number.isInteger(round) ||
-    round < 1 ||
-    !taskId ||
-    basename(taskId) !== taskId ||
-    !name ||
-    basename(name) !== name
-  ) return null;
-  const base = resolve(reviewRoundDir(taskId, round));
-  const file = resolve(base, name);
-  return file.startsWith(base + sep) ? file : null;
-}
-
-// Lexical containment is not enough: a reviewer can replace `review` or
-// `round-N` with a symlink and make an otherwise harmless `report.md` resolve
-// outside RUNS_DIR. Walk every directory component with lstat so both reads and
-// server-owned conclusion writes reject symlink ancestors.
-async function safeReviewDirectory(dir: string, create = false): Promise<boolean> {
-  const root = resolve(RUNS_DIR);
-  const target = resolve(dir);
-  const rel = relative(root, target);
-  if (!rel || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) return false;
-  if (create) await mkdir(root, { recursive: true });
-  try {
-    const rootStat = await lstat(root);
-    if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) return false;
-  } catch {
-    return false;
-  }
-  let current = root;
-  for (const part of rel.split(sep)) {
-    current = join(current, part);
-    if (create) await mkdir(current).catch((error: NodeJS.ErrnoException) => {
-      if (error.code !== "EEXIST") throw error;
-    });
-    try {
-      const stat = await lstat(current);
-      if (!stat.isDirectory() || stat.isSymbolicLink()) return false;
-    } catch {
-      return false;
-    }
-  }
-  return true;
-}
 
 function reviewerConfig(lead: TaskRow | null): TeamConfig {
   if (!lead?.team) return TEAM_DEFAULTS;
@@ -123,6 +73,9 @@ function reviewerConfig(lead: TaskRow | null): TeamConfig {
   }
 }
 
+// 这一轮找谁来验。默认是任务自己的执行器（就地验证 = 同一个 agent 回过头审自己），
+// 线上的「自动验证」那一站或用户手点时可以指定另一个执行器 —— **交叉验证的价值就靠
+// 这里保住**：换个执行器就是换一双眼睛，同一份工作目录、同一个任务，各走各的会话线。
 async function reviewExecution(target: TaskRow, override: ReviewDispatchInput) {
   const lead = target.parentId
     ? (await db.select().from(tasks).where(eq(tasks.id, target.parentId))).at(0) ?? null
@@ -161,217 +114,88 @@ async function reviewExecution(target: TaskRow, override: ReviewDispatchInput) {
     defaultReasoningEffort: teamLead ? cfg.reviewerReasoningEffort : target.reasoningEffort,
   });
   return {
-    parentId: teamLead?.id ?? null,
-    groupId: teamLead ? target.groupId : null,
     agentType: (picked.agentType ?? fallback.agentType ?? "claude") as AgentType,
     executorId: picked.executorId,
     ...inherited,
   };
 }
 
-export async function dispatchReviewTask(
+/** 历史那批独立审查任务（可能还没跑完）。轮次编号要接着它们往下数。 */
+async function legacyReviewTasks(targetId: string): Promise<TaskRow[]> {
+  return db
+    .select()
+    .from(tasks)
+    .where(eq(tasks.reviewOf, targetId))
+    .orderBy(asc(tasks.reviewRound), asc(tasks.createdAt));
+}
+
+/** 这个任务一共验过几轮（历史独立审查任务 + 就地验证轮）。 */
+export async function reviewRoundsOf(target: TaskRow): Promise<number> {
+  return (await legacyReviewTasks(target.id)).length + (target.verifyRounds ?? 0);
+}
+
+/**
+ * 开一轮就地验证：在被验任务自己身上多跑一个旁路回合，不另起任务。
+ *
+ * 三件事必须一起做对：
+ * ① `verify_round` 落库 —— 它既是「此刻有一轮在跑」的锁，也是每回合提醒的依据
+ *    （验证轮中途提问、被打断续跑时，只有从任务状态派生的提醒能跟到底）；
+ * ② 续跑必须等**当前这一轮**退干净（`continueWhenIdle`）—— 自动验证是在结算钩子里
+ *    触发的，那一刻单飞锁还锁着这个任务，直接 continueTask 会被静默挡回；
+ * ③ 起不来要把 `verify_round` 清掉，否则任务永远卡在「正在验证」。
+ */
+export async function startVerifyRound(
   targetId: string,
   override: ReviewDispatchInput = {},
-): Promise<Task> {
+): Promise<{ round: number }> {
   const target = (await db.select().from(tasks).where(eq(tasks.id, targetId))).at(0);
-  if (!target) throw new Error("被审任务不存在");
-  if (target.reviewOf) throw new Error("审查任务自身不能再派审");
-
-  const existing = await db.select().from(tasks).where(eq(tasks.reviewOf, targetId));
-  if (existing.some((review) => ["backlog", "queued", "running", "paused"].includes(review.status))) {
+  if (!target) throw new Error("被验任务不存在");
+  if (target.reviewOf) throw new Error("审查任务自身不能再验");
+  if (target.verifyRound) throw new Error("该任务已有一轮验证正在进行");
+  const legacy = await legacyReviewTasks(targetId);
+  if (legacy.some((review) => ["backlog", "queued", "running", "paused"].includes(review.status))) {
     throw new Error("该任务已有一轮审查尚未结束");
   }
-  const round = nextReviewRound(existing.length);
+  const round = nextReviewRound(legacy.length + (target.verifyRounds ?? 0));
+  // 这一轮验的是线上**哪一站**。轮次号（round）仍然全局递增——它是证据目录名
+  // `review/round-<n>`，一条线上有好几站验证时按站数会撞车。判定用的「这一站验到第几
+  // 轮」另记在 `verify_station_rounds` 上：换一站就归零，否则第一站用掉的轮次会算到
+  // 第二站头上，用户在第二站写的「没过就重做 2 轮」一进门就用完了。
+  const station = anchorAt(taskWorkflowDef(target.workflow), target.workflowAt, "verify")?.id ?? null;
   const execution = await reviewExecution(target, withVerifyExecutor(target, override));
-  const at = now();
-  const reviewId = id();
-  const [created] = await createTasks([{
-    id: reviewId,
-    projectId: target.projectId,
-    groupId: execution.groupId,
-    parentId: execution.parentId,
-    title: `审查:${target.title}`,
-    body: `审查任务 ${target.id} 的第 ${round} 轮。按注入的审查协议真实运行验证并留证。`,
-    mode: "single",
-    status: "backlog",
-    stage: null,
-    reviewOf: target.id,
-    reviewRound: round,
-    reviewRequested: false,
-    priority: target.priority,
-    labels: "[]",
-    dependsOn: "[]",
-    resumeDependsOn: "[]",
-    agentType: execution.agentType,
-    executorId: execution.executorId,
-    model: execution.model,
-    reasoningEffort: execution.reasoningEffort,
-    autoTitle: false,
-    debate: null,
-    team: null,
-    reportBack: false,
-    scheduleId: null,
-    createdAt: at,
-    updatedAt: at,
-    useWorktree: false,
-    worktreeBase: null,
-    originTaskId: target.id,
-  }]);
-  if (!created) throw new Error("创建审查任务失败");
+  const project = (await db.select().from(projects).where(eq(projects.id, target.projectId))).at(0);
 
-  await setTaskStage(target.id, "verifying");
-  bus.publish({ type: "task.review", taskId: target.id });
-  void import("./orchestrator.js")
-    .then(({ runTask }) => runTask(reviewId))
-    .catch((error) => appendTaskTimeline(
-      target.id,
-      `第 ${round} 轮审查启动失败：${error instanceof Error ? error.message : String(error)}`,
-    ));
-  return created;
-}
+  await db
+    .update(tasks)
+    .set({
+      verifyRound: round,
+      reviewStep: station,
+      verifyStationRounds: target.reviewStep === station ? (target.verifyStationRounds ?? 0) : 0,
+      updatedAt: now(),
+    })
+    .where(eq(tasks.id, targetId));
+  await setTaskStage(targetId, "verifying");
+  await appendTaskTimeline(targetId, `第 ${round} 轮验证开始：就在这个任务的工作目录里跑，不另起审查任务。`);
+  bus.publish({ type: "task.review", taskId: targetId });
 
-export async function reviewProtocolFor(
-  review: TaskRow,
-  workspace: Workspace,
-  repoPath: string,
-): Promise<string> {
-  if (!review.reviewOf || !review.reviewRound) return "";
-  const target = (await db.select().from(tasks).where(eq(tasks.id, review.reviewOf))).at(0);
-  if (!target) return `【审查任务】被审任务 ${review.reviewOf} 已不存在，记录问题后结束本轮。\n\n`;
-  const evidenceDir = reviewRoundDir(target.id, review.reviewRound);
-  const baseline = target.useWorktree ? target.worktreeBase || "项目当前基线" : "当前工作树的基准提交";
-  // 「验什么」是用户在线上勾的，不能只画在界面里：不传给审查者，那几个勾就是装饰。
-  const checks = workflowPolicy(taskWorkflowDef(target.workflow))?.verify?.p.checks ?? [];
-  const required = checks.length
-    ? `这条线上勾的验证项必须逐项过：${checks.map((c) => VERIFY_CHECK_LABELS[c]).join("、")}。` +
-      `发现别的风险照样报，但这几项不能跳。\n\n`
-    : "";
-  return `【审查任务 · 第 ${review.reviewRound} 轮】\n` +
-    `审查对象：${target.id} / ${target.title}\n` +
-    `目标正文：\n${target.body || "(无正文)"}\n\n` +
-    required +
-    `先检查真实改动：项目仓库 ${repoPath}；被审工作目录 ${workspace.path}；` +
-    `被审分支 ${workspace.branch ?? "(无 Git 分支)"}；比较基线 ${baseline}。` +
-    `先看 git status / git diff / 相关提交，再决定验证范围。\n\n` +
-    `${REVIEW_OVERWRITE_CHECK}\n\n` +
-    `必须真实运行验证：只读代码或只过编译不算。web 改动必须启动服务，用浏览器确认行为并截图；` +
-    `其它改动也必须运行与风险相称的测试或产物。\n\n` +
-    `浏览器验证优先走 CDP（Chrome DevTools Protocol）直连/复用浏览器；确实走不通才允许退回 playwright 一类工具。` +
-    `一旦用了 playwright，审查结束前必须把它落在仓库工作区里的产物删干净（.playwright-cli/、playwright-report/、test-results/ 等），` +
-    `并用 git status 确认没有留下未跟踪文件——残留会把工作区弄脏，直接导致后续验收合并被拒。\n\n` +
-    `验证收尾必须清场：审查结束前把你为验证启动的所有服务/进程全部停掉（dev server、mock server、throwaway 实例等），` +
-    `确认监听端口已释放，不许留孤儿进程在后台。\n\n` +
-    `证据强制落盘：\n` +
-    `- 必写报告：${join(evidenceDir, "report.md")}（包含结论、依据、发现的问题）\n` +
-    `- 截图：放在 ${evidenceDir} 目录内\n` +
-    `- 证据**只落盘，绝不 git add / commit 进仓库**（data/ 本就在 .gitignore 里，不要 -f 强加）：` +
-    `验收界面直接从磁盘读证据，塞进 git 只会拿二进制文件污染被审分支的验收 diff\n\n` +
-    `审查结束时，调用 report_stage(taskId="${target.id}", stage="verified"|"verify_failed") 给被审任务下结论；` +
-    `最后调用 complete_task(taskId="${review.id}") 确认你自己的审查任务完成。` +
-    `不要给审查任务自身上报 stage。\n\n`;
-}
-
-export function reviewReminderFor(review: Pick<TaskRow, "id" | "reviewOf" | "reviewRound">): string {
-  if (!review.reviewOf || !review.reviewRound) return "";
-  const dir = reviewRoundDir(review.reviewOf, review.reviewRound);
-  return `审查提醒:这是第 ${review.reviewRound} 轮审查；必须真实运行验证并把报告写到 ${join(dir, "report.md")}，` +
-    `截图放同目录（只落盘，绝不 commit 进仓库）；浏览器验证优先 CDP，退回 playwright 的话结束前必须删掉它在工作区的产物（.playwright-cli/ 等）；` +
-    `验证完停掉自己启动的所有服务/进程；` +
-    `结束前对被审任务 ${review.reviewOf} 调 report_stage(verified|verify_failed)，` +
-    `再对审查任务自身 ${review.id} 调 complete_task。`;
-}
-
-async function readReport(taskId: string, round: number): Promise<string> {
-  return (await readReviewFile(taskId, round, "report.md"))?.toString("utf8") ?? "";
-}
-
-async function screenshots(taskId: string, round: number): Promise<string[]> {
-  try {
-    const dir = reviewRoundDir(taskId, round);
-    if (!(await safeReviewDirectory(dir))) return [];
-    return (await readdir(dir, { withFileTypes: true }))
-      .filter((entry) => entry.isFile() && [".png", ".jpg", ".jpeg"].includes(extname(entry.name).toLowerCase()))
-      .map((entry) => entry.name)
-      .sort();
-  } catch {
-    return [];
-  }
-}
-
-async function readReviewFile(taskId: string, round: number, name: string): Promise<Buffer | null> {
-  const file = safeReviewFilePath(taskId, round, name);
-  if (!file) return null;
-  try {
-    if (!(await safeReviewDirectory(reviewRoundDir(taskId, round)))) return null;
-    // lstat (not stat) rejects symlinks, including a reviewer-created link to a
-    // file outside the evidence directory with an otherwise harmless .md name.
-    if (!(await lstat(file)).isFile()) return null;
-    return await readFile(file);
-  } catch {
-    return null;
-  }
-}
-
-async function writeConclusion(targetId: string, round: number, reviewTaskId: string, conclusion: ReviewConclusion) {
-  if (!conclusion) return;
-  const dir = reviewRoundDir(targetId, round);
-  if (!(await safeReviewDirectory(dir, true))) return;
-  const file = join(dir, "conclusion.json");
-  try {
-    const handle = await open(
-      file,
-      fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_NOFOLLOW,
-      0o600,
-    );
-    try {
-      await handle.writeFile(
-        JSON.stringify({ conclusion, reviewTaskId, recordedAt: now() }, null, 2) + "\n",
-      );
-    } finally {
-      await handle.close();
-    }
-  } catch (error) {
-    // A conclusion is immutable once recorded. EEXIST also covers a malicious
-    // final symlink without following or overwriting its target.
-    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-  }
-}
-
-async function readConclusion(targetId: string, round: number): Promise<ReviewConclusion> {
-  try {
-    const raw = await readReviewFile(targetId, round, "conclusion.json");
-    if (!raw) return null;
-    const parsed = JSON.parse(raw.toString("utf8")) as {
-      conclusion?: unknown;
-    };
-    return parsed.conclusion === "verified" || parsed.conclusion === "verify_failed"
-      ? parsed.conclusion
-      : null;
-  } catch {
-    return null;
-  }
-}
-
-function repairPrompt(
-  target: TaskRow,
-  review: TaskRow,
-  report: string,
-  images: string[],
-  coverage: ReviewCoverageFinding | null,
-  autoNext: boolean,
-): string {
-  const dir = reviewRoundDir(target.id, review.reviewRound ?? 1);
-  const evidence = images.length
-    ? images.map((name) => `- ${join(dir, name)}`).join("\n")
-    : "- (本轮没有截图文件)";
-  const coverageGuard = repairCoverageGuard(coverage);
-  return `【自动审查未通过 · 第 ${review.reviewRound} 轮】\n` +
-    `审查任务 ${review.id} 已给出 verify_failed。请按报告修复，不要扩大原任务边界。\n\n` +
-    (coverageGuard ? `${coverageGuard}\n\n` : "") +
-    `审查报告：\n${report || "(审查者未写 report.md；请结合会话与现有产物排查)"}\n\n` +
-    `证据目录：${dir}\n${evidence}\n\n` +
-    `修完必须调用 complete_task(taskId="${target.id}") 确认完成；` +
-    (autoNext ? "确认后 harness 会自动派发下一轮复审。" : "本轮不自动续派，确认后可由用户手动再次派审。");
+  continueWhenIdle(
+    targetId,
+    verifyProtocolFor(target, round, project?.repoPath ?? "(项目已不存在)", station),
+    {
+      system: "run",
+      sideTurn: true,
+      agent: execution.agentType,
+      executorId: execution.executorId,
+      model: execution.model,
+      reasoningEffort: execution.reasoningEffort,
+    },
+    async (error) => {
+      await db.update(tasks).set({ verifyRound: null, updatedAt: now() }).where(eq(tasks.id, targetId));
+      await appendTaskTimeline(targetId, `第 ${round} 轮验证启动失败：${error}`);
+      bus.publish({ type: "task.review", taskId: targetId });
+    },
+  );
+  return { round };
 }
 
 async function reviewCoverageFor(target: TaskRow): Promise<ReviewCoverageFinding | null> {
@@ -391,46 +215,76 @@ async function reviewCoverageFor(target: TaskRow): Promise<ReviewCoverageFinding
   });
 }
 
-async function finishReview(review: TaskRow, status: Settlement): Promise<void> {
-  const target = review.reviewOf
-    ? (await db.select().from(tasks).where(eq(tasks.id, review.reviewOf))).at(0)
-    : null;
-  if (!target) return;
-  const round = review.reviewRound ?? 1;
+/**
+ * 这一轮是**这一站**验证的第几轮（历史那批独立审查任务的口径：数它们的行）。
+ *
+ * 跟证据轮次号的区别：那个是这个任务验过的总次数（同时也是证据目录名，必须全局唯一）；
+ * 一条线上有好几站验证时，第二站的第一轮不该继承第一站用掉的轮数——否则用户在第二站
+ * 写的「没过就重做 2 轮」会当场用完。就地验证轮没有独立任务行可数，按站的轮数记在被验
+ * 任务的 `verify_station_rounds` 上。
+ */
+async function roundAtStation(targetId: string, review: TaskRow): Promise<number> {
+  if (!review.reviewStep) return review.reviewRound ?? 1;
+  const rows = await db
+    .select({ reviewRound: tasks.reviewRound, reviewStep: tasks.reviewStep })
+    .from(tasks)
+    .where(eq(tasks.reviewOf, targetId));
+  return rows.filter((row) =>
+    row.reviewStep === review.reviewStep && (row.reviewRound ?? 0) <= (review.reviewRound ?? 0),
+  ).length || 1;
+}
+
+/**
+ * 一轮验证结束后怎么走 —— 就地验证轮和历史独立审查任务**共用这一段**。
+ *
+ * `outcome` 是这一轮本身的落位（跑完了 / 挂了 / 被停），不是被验任务的状态：就地验证
+ * 是旁路回合，任务状态本来就该原样不动，拿它当验证结果会把「任务是 done」误读成
+ * 「验证通过」。`reviewTaskId` 非空 = 历史那种独立审查任务。
+ *
+ * `at` 是「这一轮验的是线上哪一站、按站数是第几轮」：轮数上限、失败策略、验完往哪走
+ * 全读这一站的（`station` 为 null = 身上没线的老任务，退化成老行为）。
+ */
+async function concludeRound(
+  target: TaskRow,
+  round: number,
+  outcome: Settlement,
+  reviewTaskId: string | null,
+  at: { station: string | null; stationRound: number },
+): Promise<void> {
+  const { station, stationRound } = at;
   const conclusion = target.stage === "verified" || target.stage === "verify_failed"
     ? target.stage as ReviewConclusion
     : null;
   const workflow = taskWorkflowDef(target.workflow);
-  const policy = workflowPolicy(workflow);
+  const policy = workflowPolicy(workflow, station);
   const action = reviewOutcomeAction({
-    reviewStatus: status,
+    reviewStatus: outcome,
     conclusion,
     reviewRequested: target.reviewRequested,
-    round,
+    round: stationRound,
     parentIsTeam: await parentIsTeam(target),
     workflow,
+    at: station,
   });
+  const by = reviewTaskId ? `审查任务 ${reviewTaskId} ` : "";
 
-  if (status === "done") await writeConclusion(target.id, round, review.id, conclusion);
+  if (outcome === "done") await writeConclusion(target.id, round, reviewTaskId, conclusion);
   bus.publish({ type: "task.review", taskId: target.id });
   if (action === "verified") {
-    // 验完之后线上还写着的那几站（跑一条命令、把预览打开）在这儿跑——人工关口之前
-    // 就得把预览起好，不然用户点进来只有一句「待验收」，没东西可看。跑砸了就停在
-    // 那儿，不再往人工关口推。
-    if (!(await advanceAfterVerify(target, workflow))) return;
-    // 验过了，线上后面还写着「等我点头」：任务就停在这一站，列表里显示「待验收」。
-    // 停的是**验收阶段**不是 status —— 动 status 会顺带停住它所在的队列，那是另一件事。
-    if (policy?.humanGate) await enterHumanGate(target.id);
+    // 验完之后线上还写着的那几站在这儿跑，然后走到下一个锚点：可能是又一站「自动验证」，
+    // 也可能是「等我点头」。人工关口之前就得把预览起好，不然用户点进来只有一句
+    // 「待验收」，没东西可看。中间任何一段跑砸了就停在那儿，不再往下推。
+    await advanceWorkflowFrom(target, workflow, station);
     return;
   }
   if (action === "failed") {
-    await appendTaskTimeline(target.id, `第 ${round} 轮审查任务 ${review.id} 以 ${status} 结束；不自动循环，等待人工处理。`);
+    await appendTaskTimeline(target.id, `第 ${round} 轮验证${by ? `（${by.trim()}）` : ""}以 ${outcome} 结束；不自动循环，等待人工处理。`);
     return;
   }
   if (action === "invalid") {
     await appendTaskTimeline(
       target.id,
-      `第 ${round} 轮审查任务 ${review.id} 已结束，但未给被审任务上报 verified/verify_failed；等待人工处理。`,
+      `第 ${round} 轮验证${by ? `（${by.trim()}）` : ""}已结束，但没有给出 verified/verify_failed 结论；等待人工处理。`,
     );
     return;
   }
@@ -439,17 +293,17 @@ async function finishReview(review: TaskRow, status: Settlement): Promise<void> 
     // 「没过就停下等人」，对用户是两件事。
     const byPolicy = policy?.verify && policy.onVerifyFail !== "back";
     if (byPolicy && policy.onVerifyFail === "ask") {
-      // 「问我一句」得真的问出来：把审查报告的开头附上，用户不用点进审查任务就能判断。
+      // 「问我一句」得真的问出来：把验证报告的开头附上，用户不用点进证据就能判断。
       await askAboutFailure(target.id, STEP_LABELS.verify, await readReport(target.id, round));
       await appendTaskTimeline(
         target.id,
-        `第 ${round} 轮审查未通过；这条线写的是「没过就问我一句」，已经把问题挂给你了。`,
+        `第 ${round} 轮验证未通过；这条线写的是「没过就问我一句」，已经把问题挂给你了。`,
       );
       return;
     }
     await appendTaskTimeline(target.id, byPolicy
-      ? `第 ${round} 轮审查未通过；这条线写的是「没过就停下等人」，现停在 verify_failed 等人处理。`
-      : `第 ${round} 轮审查仍未通过；自动复审上限为 ${policy?.verify ? policy.verifyRounds : MAX_AUTO_REVIEW_ROUNDS} 轮，现停在 verify_failed 等人处理。`);
+      ? `第 ${round} 轮验证未通过；这条线写的是「没过就停下等人」，现停在 verify_failed 等人处理。`
+      : `第 ${round} 轮验证仍未通过；自动复验上限为 ${policy?.verify ? policy.verifyRounds : MAX_AUTO_REVIEW_ROUNDS} 轮，现停在 verify_failed 等人处理。`);
     return;
   }
 
@@ -462,27 +316,85 @@ async function finishReview(review: TaskRow, status: Settlement): Promise<void> 
     parentIsTeam: await parentIsTeam(target),
     reviewRequested: target.reviewRequested,
     workflow,
+    at: station,
   });
-  await appendTaskTimeline(target.id, `第 ${round} 轮审查未通过，已把审查报告和证据路径交回原任务续跑修复。`);
-  void import("./orchestrator.js")
-    .then(({ continueTask }) => continueTask(
+  await appendTaskTimeline(target.id, `第 ${round} 轮验证未通过，已把报告和证据路径交回原任务续跑修复。`);
+  // 打回修复也要等这一轮退干净：就地验证的结论正是在这个任务自己的结算钩子里下的，
+  // 那一刻它的单飞锁还锁着。
+  continueWhenIdle(
+    target.id,
+    repairPrompt({
+      target,
+      round,
+      reviewTaskId,
+      report,
+      images,
+      coverage,
+      autoNext: plan.auto && stationRound < plan.maxRounds,
+    }),
+    {},
+    (error) => appendTaskTimeline(
       target.id,
-      repairPrompt(target, review, report, images, coverage, plan.auto && round < plan.maxRounds),
-    ))
-    .catch((error) => appendTaskTimeline(
-      target.id,
-      `审查打回失败：唤醒原任务时出错（${error instanceof Error ? error.message : String(error)}），请手动续跑。`,
-    ));
+      `验证打回失败：唤醒原任务时出错（${error}），请手动续跑。`,
+    ),
+  );
+}
+
+/** 就地验证轮结束：清掉轮次标记、记账，再走公共的收尾。 */
+async function finishVerifyRound(target: TaskRow, turnOk: boolean): Promise<void> {
+  const round = target.verifyRound ?? 1;
+  // 这一轮还没跑完：agent 中途提问（等答复）或写下了检查点（等续跑）。轮次标记留着，
+  // 答复/续跑回来的那一回合仍然是这一轮验证 —— 此时下结论会把「还没验完」记成
+  // 「验完了但没给结论」。
+  if (target.question || target.resumePrompt) return;
+  // verify_rounds 数的是**就地轮次的个数**，不是轮次号：轮次号还要算上历史那批独立
+  // 审查任务占掉的号（`nextReviewRound(legacy.length + verifyRounds)`），拿号当计数会
+  // 让下一轮跳号。verify_station_rounds 则是「这一站」验过几轮，判定轮数上限用它。
+  const stationRound = (target.verifyStationRounds ?? 0) + 1;
+  await db
+    .update(tasks)
+    .set({
+      verifyRound: null,
+      verifyRounds: (target.verifyRounds ?? 0) + 1,
+      verifyStationRounds: stationRound,
+      updatedAt: now(),
+    })
+    .where(eq(tasks.id, target.id));
+  // 旁路回合的落位永远是任务原来的终态，说明不了验证跑成没跑成，所以这里用回合本身
+  // 是否干净收尾来判：崩了/被手停 → 这一轮没结论，按 failed 收尾。
+  await concludeRound(target, round, turnOk ? "done" : "failed", null, {
+    // 开这一轮时把站号记在了被验任务身上；老数据没有就回落到线上第一站验证。
+    station: target.reviewStep ?? firstAnchor(taskWorkflowDef(target.workflow), "verify")?.id ?? null,
+    stationRound,
+  });
+}
+
+/** 历史做法：独立审查任务跑完之后的收尾。启动路径已经拆掉，这条只服务存量数据。 */
+async function finishReview(review: TaskRow, status: Settlement): Promise<void> {
+  const target = review.reviewOf
+    ? (await db.select().from(tasks).where(eq(tasks.id, review.reviewOf))).at(0)
+    : null;
+  if (!target) return;
+  await concludeRound(target, review.reviewRound ?? 1, status, review.id, {
+    // 这一轮验的是哪一站：审查任务身上记着（老审查任务没记，回落到线上第一站验证）。
+    station: review.reviewStep ?? firstAnchor(taskWorkflowDef(target.workflow), "verify")?.id ?? null,
+    stationRound: await roundAtStation(target.id, review),
+  });
 }
 
 // 「等我点头」这一站落地：把验收阶段停在 awaiting_acceptance。
 // **只动 stage 不动 status** —— status 是调度用的（改成 awaiting_review 会顺带停住这个
 // 任务所在的队列），而这条线只描述这一个任务干完之后怎么走，不该外溢到队列/分组。
 // 显示上也不需要动 status：taskDisplayStatus 里 stage 优先，列表那一格就是「待验收」。
-async function enterHumanGate(taskId: string): Promise<void> {
+export async function enterHumanGate(taskId: string): Promise<void> {
   const row = (await db.select({ stage: tasks.stage }).from(tasks).where(eq(tasks.id, taskId))).at(0);
-  if (!row || row.stage === "awaiting_acceptance" || row.stage === "merged" || row.stage === "accepted") return;
-  await setTaskStage(taskId, "awaiting_acceptance");
+  if (!row || row.stage === "merged" || row.stage === "accepted") return;
+  // stage 早就是 awaiting_acceptance 也照样往下走。那个 stage 可能是**别处写的**——agent
+  // 自报、上一道关口放行前留下的——跟「这条线此刻真的走到了关口」不是一回事。早先在这里
+  // 一并 return，后果是关口**静默**停下：时间线上一个字都没有，用户看见任务停着不动，
+  // 无从判断它是在等自己点头还是卡住了。只跳过重复的 setTaskStage（免得多一行没信息量
+  // 的「验收阶段更新：待验收」），那句「走到等我点头」照写。
+  if (row.stage !== "awaiting_acceptance") await setTaskStage(taskId, "awaiting_acceptance");
   await appendTaskTimeline(taskId, "这条线走到「等我点头」，停在待验收等你决定。");
 }
 
@@ -495,13 +407,23 @@ async function parentIsTeam(task: TaskRow): Promise<boolean> {
 // Single settlement hook. It is invoked only by the real run loop after a turn
 // settles, never by setTaskStatus/manual PATCH, so a casual follow-up that falls
 // back to done cannot accidentally create another review.
+//
+// `turnOk` = 这一回合本身干净收尾了（没被停、退出码 0）。它跟 `status` 不是一回事：
+// 旁路回合（就地验证）的 status 是任务原来的终态，只有 turnOk 说得清这一轮跑成没跑成。
 export async function handleTaskSettlement(
   taskId: string,
-  status: Settlement,
+  status: TaskStatus,
   confirmedDone: boolean,
+  turnOk = true,
 ): Promise<void> {
   const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!task) return;
+  // 就地验证轮：这一回合是搭在任务上的验证，不是任务的执行 —— 不派新验证、不推线，
+  // 只把这一轮的结论收掉。
+  if (task.verifyRound) {
+    await finishVerifyRound(task, turnOk);
+    return;
+  }
   if (task.reviewOf) {
     if (status === "done" || status === "failed" || status === "canceled") {
       await finishReview(task, status);
@@ -518,10 +440,14 @@ export async function handleTaskSettlement(
     return;
   }
   const isTeamWorker = await parentIsTeam(task);
-  // 干完之后线上紧跟着的那几站（跑一条命令、打开预览）先跑掉，再谈要不要派审：
-  // 一条连 lint 都没过的产物不值得占着一个审查任务的工时。跑砸了就停在那儿。
-  if (confirmedDone && status === "done" && !(await advanceAfterRun(task, workflow))) return;
-  const rounds = await db.select({ id: tasks.id }).from(tasks).where(eq(tasks.reviewOf, task.id));
+  // 身上有线：整条线怎么走全交给推进器 —— 跑完这一段、决定下一个锚点是再验一站、
+  // 停在人工关口还是走到头。**从哪一站接着走**由 settleFrom 定（游标停在某一站验证上
+  // 时要退回它前面那个锚点，好让那一段重跑一遍再重新验，而不是当它验过了）。
+  if (confirmedDone && status === "done" && workflow && task.mode !== "team") {
+    await advanceWorkflowFrom(task, workflow, settleFrom(workflow, task.workflowAt));
+    return;
+  }
+  // 身上没线的老任务照旧：团队那边要求审查就开一轮就地验证。
   if (shouldAutoDispatchReview({
     confirmedDone,
     status,
@@ -530,45 +456,68 @@ export async function handleTaskSettlement(
     reviewOf: task.reviewOf,
     reviewRequested: task.reviewRequested,
     stage: task.stage,
-    existingRounds: rounds.length,
+    existingRounds: await reviewRoundsOf(task),
     workflow,
   })) {
-    await dispatchReviewTask(task.id);
-    return;
-  }
-
-  // 没有自动验证这一站，但线上写着「等我点头」：干完就直接停在人工关口。
-  // （有验证站时这一步在 finishReview 里做 —— 得先验完才轮到人看。）
-  const policy = workflowPolicy(workflow);
-  if (confirmedDone && status === "done" && policy?.humanGate && !policy.verify) {
-    await enterHumanGate(task.id);
+    await startVerifyRound(task.id);
   }
 }
 
+// 一个任务验过的所有轮次，按轮次号排好：历史的独立审查任务（where:"task"）和现在的
+// 就地验证轮（where:"inline"）混在一条时间线上，前端只认轮次号和结论。
 async function reviewInfo(target: TaskRow): Promise<TaskReviewInfo> {
-  const rows = await db
-    .select()
-    .from(tasks)
-    .where(eq(tasks.reviewOf, target.id))
-    .orderBy(asc(tasks.reviewRound), asc(tasks.createdAt));
-  const latestId = rows.at(-1)?.id;
-  const rounds: TaskReviewRound[] = await Promise.all(rows.map(async (review) => {
-    const round = review.reviewRound ?? 1;
-    let conclusion = await readConclusion(target.id, round);
-    if (!conclusion && review.id === latestId && review.status === "done") {
-      conclusion = target.stage === "verified" || target.stage === "verify_failed"
-        ? target.stage as ReviewConclusion
-        : null;
-    }
-    return {
-      round,
-      reviewTaskId: review.id,
-      reviewTaskStatus: review.status as TaskStatus,
-      conclusion,
-      reportMarkdown: await readReport(target.id, round),
-      screenshots: await screenshots(target.id, round),
-    };
-  }));
+  const legacy = await legacyReviewTasks(target.id);
+  const legacyRounds = new Set(legacy.map((review) => review.reviewRound ?? 1));
+  const latestLegacyId = legacy.at(-1)?.id;
+  // 就地轮次没有自己的行，只有一个计数 —— 轮次号是连续的，把历史占掉的号跳过去。
+  const inline: number[] = [];
+  for (let round = 1; inline.length < (target.verifyRounds ?? 0) + (target.verifyRound ? 1 : 0); round++) {
+    if (!legacyRounds.has(round)) inline.push(round);
+  }
+  const latestRound = Math.max(0, ...legacyRounds, ...inline);
+
+  const rounds: TaskReviewRound[] = await Promise.all([
+    ...legacy.map(async (review): Promise<TaskReviewRound> => {
+      const round = review.reviewRound ?? 1;
+      let conclusion = await readConclusion(target.id, round);
+      if (!conclusion && review.id === latestLegacyId && review.status === "done") {
+        conclusion = target.stage === "verified" || target.stage === "verify_failed"
+          ? target.stage as ReviewConclusion
+          : null;
+      }
+      return {
+        round,
+        where: "task",
+        reviewTaskId: review.id,
+        reviewTaskStatus: review.status as TaskStatus,
+        conclusion,
+        reportMarkdown: await readReport(target.id, round),
+        screenshots: await screenshots(target.id, round),
+      };
+    }),
+    ...inline.map(async (round): Promise<TaskReviewRound> => {
+      const running = target.verifyRound === round;
+      let conclusion = running ? null : await readConclusion(target.id, round);
+      // 最后一轮的结论文件可能还没落（结论写在结算那一步），此时看任务身上的 stage。
+      if (!conclusion && !running && round === latestRound) {
+        conclusion = target.stage === "verified" || target.stage === "verify_failed"
+          ? target.stage as ReviewConclusion
+          : null;
+      }
+      return {
+        round,
+        where: "inline",
+        reviewTaskId: null,
+        // 就地验证没有独立任务，这一格说的是「这一轮跑完没有」：正在跑 → running，
+        // 跑完 → done。前端只拿它显示轮次状态。
+        reviewTaskStatus: running ? "running" : "done",
+        conclusion,
+        reportMarkdown: await readReport(target.id, round),
+        screenshots: await screenshots(target.id, round),
+      };
+    }),
+  ]);
+  rounds.sort((a, b) => a.round - b.round);
   return { reviewRequested: target.reviewRequested, rounds };
 }
 
@@ -594,15 +543,16 @@ export function mountReviewRoutes(api: Hono): void {
       : c.json({ error: "not found" }, 404);
   });
 
+  // 路径保持 /review/dispatch（老客户端还在用），但它现在开的是就地验证轮，不再建任务。
   api.post("/tasks/:id/review/dispatch", async (c) => {
     const taskId = c.req.param("id");
     const target = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
     if (!target) return c.json({ error: "not found" }, 404);
-    if (target.reviewOf) return c.json({ error: "审查任务自身不能再派审" }, 409);
-    if (target.mode !== "single") return c.json({ error: "当前只支持审查 single 任务", mode: target.mode }, 409);
-    if (target.archived) return c.json({ error: "归档任务不能派审" }, 409);
+    if (target.reviewOf) return c.json({ error: "审查任务自身不能再验" }, 409);
+    if (target.mode !== "single") return c.json({ error: "当前只支持验证 single 任务", mode: target.mode }, 409);
+    if (target.archived) return c.json({ error: "归档任务不能验证" }, 409);
     if (target.status === "running" || target.status === "queued") {
-      return c.json({ error: "目标仍在运行或排队，结束后再派审", status: target.status }, 409);
+      return c.json({ error: "目标仍在运行或排队，结束后再验", status: target.status }, 409);
     }
     const body = await c.req.json<ReviewDispatchInput>().catch(() => ({} as ReviewDispatchInput));
     if (body.agentType !== undefined && !AGENT_TYPES.includes(body.agentType)) {
@@ -615,7 +565,7 @@ export function mountReviewRoutes(api: Hono): void {
       }
     }
     try {
-      return c.json({ reviewTask: await dispatchReviewTask(taskId, body) }, 201);
+      return c.json(await startVerifyRound(taskId, body), 201);
     } catch (error) {
       return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);
     }

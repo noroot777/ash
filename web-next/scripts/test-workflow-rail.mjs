@@ -2,8 +2,8 @@
 //
 // ① **站底下那行字 = 任务列表里那一格的字**。线路图说走到这步会显示「待验收」，
 //    用户就会在列表里按这三个字找它；差一个字，这条线在他眼里就是错的。
-// ② **游标读的是真实状态**，不是假进度条：换句话说，线路图上亮着的那一站，必须能
-//    从任务此刻的 status/stage 反推出来，反过来也对得上 STEP_RUNTIME。
+// ② **游标读的是真实状态**，不是假进度条：优先读任务身上那个真游标（workflowAt），
+//    读不到才从 status/stage 反推——反推出来的位置也必须对得上 STEP_RUNTIME。
 //
 // 跑法：npm -w web-next run test:workflow-rail
 //
@@ -93,6 +93,51 @@ assert.deepEqual(resolveCursor([], { status: "running", stage: null, question: n
 const weird = [makeStep("human", "h"), makeStep("run", "r")];
 const cursor = resolveCursor(weird, { status: "awaiting_review", stage: "awaiting_acceptance", question: null });
 assert.equal(cursor.index, 0, "human 排在前面时游标就该在前面");
+
+// ── ③ 真游标压过反推 ──────────────────────────────────────────────────────
+// 用户可以把「等我点头」画在「自动验证」**前面**（bq3PLDuZzZOt 那条线就是），这时
+// stage 跟站不是一一对应的：任务停在关口上，stage 却可能是别处写的 verifying。反推
+// 会指到后面那个 verify 站，把还没点过的关口画成「✓ 已过」——用户看到的是「我没点头
+// 它却说我点了」。有真游标就必须读游标。
+const gateFirst = {
+  workspace: "isolated",
+  steps: [makeStep("run", "s1"), makeStep("human", "s2"), makeStep("verify", "s3"), makeStep("accept", "s4")],
+};
+assert.deepEqual(
+  resolveCursor(gateFirst.steps, { status: "done", stage: "verifying", question: null, workflowAt: "s2" }),
+  { index: 1, blocked: false },
+  "游标停在关口就是停在关口，stage 说什么都不算数",
+);
+assert.deepEqual(
+  railStops(gateFirst, { status: "done", stage: "verifying", question: null, workflowAt: "s2" }).map((s) => s.state),
+  ["done", "current", "pending", "pending"],
+  "**没点头的关口绝不能画成已过**",
+);
+// 点过头之后游标才挪到验证站
+assert.deepEqual(
+  railStops(gateFirst, { status: "running", stage: "verifying", question: null, workflowAt: "s3" }).map((s) => s.state),
+  ["done", "done", "current", "pending"],
+);
+// 停在这一站但没往下走的三种，游标路径也要标成卡住
+assert.equal(resolveCursor(gateFirst.steps, { status: "failed", stage: null, question: null, workflowAt: "s1" }).blocked, true);
+assert.equal(resolveCursor(gateFirst.steps, { status: "running", stage: null, question: "选哪个？", workflowAt: "s1" }).blocked, true);
+assert.equal(resolveCursor(gateFirst.steps, { status: "done", stage: "verify_failed", question: null, workflowAt: "s3" }).blocked, true);
+// 验收结论压过游标：合并/验收是终点，而游标多半还停在最后那道关口上
+assert.deepEqual(
+  resolveCursor(gateFirst.steps, { status: "done", stage: "accepted", question: null, workflowAt: "s2" }),
+  { index: 4, blocked: false },
+  "验收完 = 整条走完，别被停在半路的游标拽回去",
+);
+assert.deepEqual(
+  resolveCursor(gateFirst.steps, { status: "done", stage: "merged", question: null, workflowAt: "s2" }),
+  { index: 3, blocked: false },
+);
+// 游标指向线上没有的站（换过快照的老任务）→ 回落反推，不能算成 -1 或越界
+assert.deepEqual(
+  resolveCursor(std.steps, { status: "awaiting_review", stage: "awaiting_acceptance", question: null, workflowAt: "gone" }),
+  { index: 2, blocked: false },
+  "游标指到线外时按老办法反推",
+);
 
 // ── 摘要行那三个数 ────────────────────────────────────────────────────────
 // 「顺利走完 N 步 · 要你出面 N 次 · 不顺利最多起 N 次 AI」 —— 它写在新建面板上，用户

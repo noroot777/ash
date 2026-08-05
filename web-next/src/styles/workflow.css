@@ -9,20 +9,41 @@
 }
 
 .wf-rail {
+  /* 列是「段、站」交替（DOM 顺序 seg → plate/node/body → seg …，见 WorkflowRail 的
+     注释），grid-auto-columns 的两个值正好循环套上去，段列和站列各有自己的下限与
+     伸缩比：**宽度够就摊开填满，不够才一起挤到下限**。
+     这里**刻意不写 min-width: min-content** —— 那等于把宽度交给内容说了算，站一多必然
+     顶出横向滚动条；而滚动条一出，用户就看不见这条线总共几站，那恰恰是这张图唯一要
+     传达的东西。挤到下限还装不下（十几站的长线）才滚，那时滚动是诚实的。 */
+  --wf-seg-min: 16px;
+  --wf-seg-fr: 0.22fr;
+  --wf-stop-min: 116px;
   display: grid;
   grid-auto-flow: column;
+  grid-auto-columns: minmax(var(--wf-seg-min), var(--wf-seg-fr)) minmax(var(--wf-stop-min), 1fr);
   grid-template-rows: auto 30px auto;
   align-items: start;
   padding: 22px 4px 10px;
-  min-width: min-content;
+  width: 100%;
+}
+
+/* 站一多就整体紧一档：下限、字号、内边距一起收，能多塞三四站还不出滚动条。
+   阈值由 WorkflowRail 按站数给，不在 CSS 里猜。 */
+.wf-rail[data-dense="yes"] {
+  --wf-seg-min: 13px;
+  --wf-seg-fr: 0.13fr;
+  --wf-stop-min: 94px;
 }
 
 /* ── 名牌 ─────────────────────────────────────────────────────────── */
+/* min-width: 0 是这一整套自适应的前提：不给 0，grid 会拿 min-content 当列下限，
+   于是「谁的字长谁说了算」，列宽又回到内容手里。 */
 .wf-plate {
   position: relative;
   grid-row: 1;
-  padding: 0 10px 10px;
-  min-width: 148px;
+  justify-self: center;
+  padding: 0 8px 10px;
+  min-width: 0;
   max-width: 210px;
   text-align: center;
 }
@@ -118,7 +139,7 @@
   position: relative;
   display: flex;
   align-items: center;
-  width: 40px;
+  min-width: 0;
 }
 .wf-seg::before {
   content: "";
@@ -165,27 +186,31 @@
 /* ── 站台底下：状态一行 + 参数 chips ──────────────────────────────── */
 .wf-body {
   grid-row: 3;
+  justify-self: center;
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 4px;
-  padding: 12px 8px 0;
-  min-width: 148px;
+  padding: 12px 6px 0;
+  min-width: 0;
   max-width: 210px;
 }
 
+/* 换行而不是 nowrap：列宽由 grid 定死之后，nowrap 只会让这行字捅到隔壁站底下去。 */
 .wf-status {
   font-size: 11px;
+  line-height: 1.45;
   color: var(--faint);
-  white-space: nowrap;
+  text-align: center;
 }
 .wf-status b { font-weight: 560; color: var(--muted); }
 .wf-status em { font-style: normal; margin-left: 3px; }
 
-.wf-chip-slot { position: relative; max-width: 100%; }
+.wf-chip-slot { position: relative; min-width: 0; max-width: 100%; }
 
 .wf-chip,
 .wf-failchip {
+  min-width: 0;
   max-width: 100%;
   padding: 3px 9px;
   border-radius: 8px;
@@ -221,6 +246,15 @@
 }
 .wf-failchip:hover:not(:disabled) { background: color-mix(in srgb, var(--amber) 15%, transparent); }
 .wf-failchip:disabled { cursor: default; }
+
+/* 紧一档时字和内边距跟着收 —— 只收下限不收字号的话，站是塞进去了，chip 却全成了
+   省略号，等于用「看得见几站」换掉了「看得清每站是什么」。 */
+.wf-rail[data-dense="yes"] .wf-plate { padding-bottom: 8px; }
+.wf-rail[data-dense="yes"] .wf-plate h4 { margin-top: 5px; font-size: 12.5px; }
+.wf-rail[data-dense="yes"] .wf-body { padding: 10px 3px 0; gap: 3px; }
+.wf-rail[data-dense="yes"] .wf-status { font-size: 10.5px; }
+.wf-rail[data-dense="yes"] .wf-chip,
+.wf-rail[data-dense="yes"] .wf-failchip { padding: 3px 7px; font-size: 11px; }
 
 /* ── 执行态：走到哪一站 ───────────────────────────────────────────── */
 .wf-node.is-done i { box-shadow: inset 0 0 0 2.5px var(--green); color: var(--green); }
@@ -293,6 +327,16 @@
 .wf-pop-option:hover:not(:disabled) { background: var(--hover-bg); }
 .wf-pop-option:disabled { color: var(--faint); cursor: default; }
 .wf-pop-option.is-on { background: var(--accent-soft); color: var(--accent); font-weight: 540; }
+/* 「一个都不选」那颗：它是这组选项的反面而不是又一项，用一道分隔线和淡一档的字
+   把它跟上面几项分开，选中时照样是 is-on 的高亮（它确实是当前的选择）。 */
+.wf-pop-option.is-none {
+  margin-top: 4px;
+  padding-top: 8px;
+  color: var(--muted);
+  box-shadow: inset 0 1px 0 var(--line);
+  border-radius: 0 0 8px 8px;
+}
+.wf-pop-option.is-none.is-on { color: var(--accent); }
 
 /* 加站菜单里每一条前面点一颗这一类站的颜色，和线上的站台是同一套记号 */
 .wf-pop-kind { display: flex; align-items: center; gap: 7px; }
@@ -389,48 +433,55 @@
 
 .wf-pop-hint { margin: 2px 6px 0; font-size: 11px; color: var(--faint); }
 
-/* ── 设置 › 起手式：左库右编辑 ────────────────────────────────────── */
+/* ── 设置 › 起手式：上面一条横 tab，下面整幅编辑区 ─────────────────── */
+/* 竖列表放左边会吃掉 230px，而这一页最缺宽度的恰恰是线路图（5 站起步）。 */
 .wf-lib {
-  display: grid;
-  grid-template-columns: 232px minmax(0, 1fr);
-  gap: 16px;
-  align-items: start;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  align-items: stretch;
 }
 
-.wf-lib-side { display: flex; flex-direction: column; gap: 6px; }
-.wf-lib-list { display: flex; flex-direction: column; gap: 1px; }
-
-.wf-lib-group {
-  padding: 12px 8px 4px;
+.wf-lib-tabs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding-bottom: 6px;
+  overflow-x: auto;
+  scrollbar-width: thin;
+  box-shadow: inset 0 -1px 0 var(--line);
+}
+/* 横条上的组名：不占一整行，只在两组之间立一小段说明。 */
+.wf-lib-tabgroup {
+  flex: none;
+  padding: 0 8px 0 10px;
   font-size: 10.5px;
   font-weight: 600;
   letter-spacing: 0.04em;
-  color: var(--faint);
-}
-.wf-lib-group:first-child { padding-top: 2px; }
-
-.wf-lib-row {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  padding: 7px 9px;
-  text-align: left;
-}
-.wf-lib-row small {
-  font-size: 11px;
-  color: var(--faint);
-  overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
+  color: var(--faint);
 }
+.wf-lib-tabgroup:first-child { padding-left: 2px; }
 
-.wf-lib-name {
-  display: flex;
+.wf-lib-tab {
+  flex: none;
+  display: inline-flex;
   align-items: center;
   gap: 5px;
+  padding: 6px 11px;
+  border-radius: 8px 8px 0 0;
   font-size: 12.5px;
   font-weight: 520;
+  white-space: nowrap;
+  color: var(--muted);
+  background: transparent;
+}
+.wf-lib-tab:hover { background: var(--hover-bg); color: var(--ink); }
+/* 选中的那颗压着底线，视觉上跟下面的编辑区连成一片。 */
+.wf-lib-tab[aria-selected="true"] {
   color: var(--ink);
+  background: var(--raised);
+  box-shadow: inset 0 -2px 0 var(--accent);
 }
 
 .wf-tag {
@@ -451,25 +502,34 @@
 }
 
 .wf-lib-new {
-  display: flex;
+  flex: none;
+  display: inline-flex;
   align-items: center;
   gap: 5px;
-  padding: 7px 9px;
+  margin-left: 6px;
+  padding: 6px 11px;
   border-radius: 8px;
   font-size: 12.5px;
+  white-space: nowrap;
   color: var(--muted);
 }
 .wf-lib-new:hover { background: var(--hover-bg); color: var(--ink); }
 
 .wf-lib-main { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
 
-.wf-lib-head { display: flex; flex-direction: column; gap: 4px; }
+/* .settings-card 自己不带内边距（内边距一向由里面的 .settings-row 给），而这张卡片
+   直接装的是输入框和按钮，没有那种行容器 —— 所以内边距得自己补，否则标题连同下面
+   一排按钮全贴着卡片边框，跟下面两张卡片对不上一条线。 */
+.wf-lib-head { display: flex; flex-direction: column; gap: 4px; padding: 14px 16px; }
 
 .wf-lib-title,
 .wf-lib-desc {
-  width: 100%;
+  /* 负 margin 是为了让 hover 的高亮块比文字宽出一圈，文字本身仍落在内边距那条线上
+     （所以静止态跟下面按钮的左边缘是对齐的）。两边都要负，只负左边会让输入框整体
+     右溢出 6px —— 卡片 overflow:hidden，右边那截高亮块会被切掉。 */
+  align-self: stretch;
   padding: 3px 6px;
-  margin-left: -6px;
+  margin-inline: -6px;
   border: 0;
   border-radius: 7px;
   background: transparent;
@@ -477,10 +537,11 @@
 }
 .wf-lib-title { font-size: 16px; font-weight: 600; color: var(--ink); }
 .wf-lib-desc { font-size: 12.5px; color: var(--muted); }
+.wf-lib-desc::placeholder { color: var(--faint); }
 .wf-lib-title:hover,
 .wf-lib-desc:hover { background: var(--raised); }
 
-.wf-lib-actions { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.wf-lib-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
 .wf-lib-actions button {
   display: inline-flex;
   align-items: center;
@@ -494,6 +555,9 @@
 }
 .wf-lib-actions button:hover:not(:disabled) { background: var(--raised); color: var(--ink); }
 .wf-lib-actions .wf-danger:hover:not(:disabled) { color: var(--red); }
+/* 这句 hint 在弹层里靠 6px 左 margin 跟弹层的内容对齐；卡片里内边距已经由卡片给了，
+   再留 6px 就比标题和按钮都往右缩一截。 */
+.wf-lib-head .wf-pop-hint { margin: 8px 0 0; }
 
 /* 存不进去的时候顶着这条，而不是等用户点了保存才报错——本来就没有保存按钮。 */
 .wf-deny {
@@ -506,10 +570,6 @@
 }
 
 .wf-lib-rail { padding: 0; overflow: hidden; }
-
-@media (max-width: 900px) {
-  .wf-lib { grid-template-columns: minmax(0, 1fr); }
-}
 
 .wf-picker { max-width: 320px; }
 
