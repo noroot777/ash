@@ -24,6 +24,7 @@ import { startPreview, type PreviewStep } from "./preview.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { askAboutFailure } from "./task-question.js";
 import { taskWorkspace } from "./task-workspace.js";
+import { continueWhenIdle } from "./runs.js";
 
 const run = promisify(execFile);
 
@@ -200,10 +201,11 @@ export async function applyFailPolicy(
     return;
   }
   await appendTaskTimeline(task.id, `这条线卡在「${label}」这一站，按线上写的打回给 AI 重做（第 ${round} 次）。`);
-  const { continueTask } = await import("./orchestrator.js");
-  await continueTask(task.id, repairPrompt(round), { system: "wake" }).catch((error) => appendTaskTimeline(
+  // 打回重做要等这个任务当前这一轮退干净：这些失败策略是在结算钩子里做的，那一刻
+  // 任务的单飞锁还锁着，直接 continueTask 会被静默挡回、打回就此石沉大海。
+  continueWhenIdle(task.id, repairPrompt(round), { system: "wake" }, (error) => appendTaskTimeline(
     task.id,
-    `想把这一站打回重做，但唤醒任务时出错（${error instanceof Error ? error.message : String(error)}），请手动续跑。`,
+    `想把这一站打回重做，但唤醒任务时出错（${error}），请手动续跑。`,
   ));
 }
 

@@ -47,10 +47,11 @@ export function mountTaskStageRoutes(api: Hono): void {
 
     const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
     if (!task) return c.json({ error: "not found" }, 404);
-    // 团队调度台是常驻协调角色，没有「实现/验证/验收」语义。验证阶段现在由独立
-    // 审查任务给被审对象上报；服务端保留兼容入口，不硬封普通任务调用。
+    // 团队调度台是常驻协调角色，没有「实现/验证/验收」语义。验证阶段现在由被验任务
+    // 在自己的验证回合里上报（存量的独立审查任务仍给被审对象上报）；服务端保留兼容
+    // 入口，不硬封普通任务调用。
     if (task.mode === "team") {
-      return c.json({ error: "团队调度台不适用验收阶段，请由审查任务给被审对象上报", mode: task.mode }, 409);
+      return c.json({ error: "团队调度台不适用验收阶段，请在被验任务的验证回合里上报", mode: task.mode }, 409);
     }
     if (task.archived) return c.json({ error: "归档任务不能再上报验收阶段" }, 409);
 

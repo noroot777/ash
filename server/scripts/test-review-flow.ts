@@ -11,13 +11,14 @@ import { join, resolve } from "node:path";
 const root = mkdtempSync(join(tmpdir(), "harness-review-flow-"));
 process.env.HARNESS_DB = join(root, "harness.db");
 
+const { mountReviewRoutes } = await import("../src/review.js");
+// 证据落盘（路径边界、结论文件）住在 review-evidence.ts，措辞住在 review-prompts.ts。
 const {
   nextReviewRound,
-  mountReviewRoutes,
-  REVIEW_OVERWRITE_CHECK,
   reviewRoundDir,
   safeReviewFilePath,
-} = await import("../src/review.js");
+} = await import("../src/review-evidence.js");
+const { REVIEW_OVERWRITE_CHECK } = await import("../src/review-prompts.js");
 // 判定（该不该派、几轮、找谁验）住在 review-policy.ts，是纯函数，所以这一段全程不起
 // 数据库、不起 CLI。
 const {
@@ -249,6 +250,74 @@ rmSync(reviewParent, { force: true });
 
 const info = await api.request(`/tasks/${taskId}/review`);
 assert.deepEqual(await info.json(), { reviewRequested: true, rounds: [] });
+
+// ── 就地验证轮的收尾语义 ────────────────────────────────────────────────────
+// 验证现在跑在被验任务自己身上（旁路回合），所以「这一轮完了没有」只能从
+// verify_round / question / resumePrompt 上读，不能从任务状态读 —— 任务状态在旁路
+// 回合里本来就该原样不动。这两条最容易回归，钉住它们。
+const { handleTaskSettlement } = await import("../src/review.js");
+const { readConclusion } = await import("../src/review-evidence.js");
+const { eq } = await import("drizzle-orm");
+const inlineId = "verify-inline-test";
+const readTask = async () =>
+  (await db.select().from(tasks).where(eq(tasks.id, inlineId))).at(0)!;
+
+await db.insert(tasks).values({
+  id: inlineId,
+  projectId: "project",
+  groupId: null,
+  parentId: null,
+  title: "inline verify target",
+  body: "",
+  mode: "single",
+  status: "done",
+  stage: "verifying",
+  verifyRound: 1,
+  verifyRounds: 0,
+  reviewRequested: true,
+  priority: "none",
+  labels: "[]",
+  dependsOn: "[]",
+  resumeDependsOn: "[]",
+  agentType: "claude",
+  autoTitle: false,
+  createdAt: at,
+  updatedAt: at,
+});
+
+// ① 验证回合中途提问：这一轮还没验完，轮次标记必须留着，也不许下结论 ——
+//    否则答复回来的那一回合会被当成「验完了却没给结论」。
+await db.update(tasks).set({ question: "这个按钮该长什么样？" }).where(eq(tasks.id, inlineId));
+await handleTaskSettlement(inlineId, "paused", false, true);
+let inline = await readTask();
+assert.equal(inline.verifyRound, 1, "验证回合以提问结束时必须保留 verify_round");
+assert.equal(inline.verifyRounds, 0, "还没验完，不能记账为已跑完一轮");
+assert.equal(await readConclusion(inlineId, 1), null, "还没验完，不能落结论文件");
+
+// ② 答复之后真正验完：清轮次标记、记账 +1，并把 stage 上的结论固化成结论文件。
+await db.update(tasks).set({ question: null, stage: "verified" }).where(eq(tasks.id, inlineId));
+await handleTaskSettlement(inlineId, "done", false, true);
+inline = await readTask();
+assert.equal(inline.verifyRound, null, "验完必须清掉 verify_round");
+assert.equal(inline.verifyRounds, 1, "验完一轮要记账，下一轮的轮次号靠它推出来");
+assert.equal(await readConclusion(inlineId, 1), "verified", "结论要落盘，刷新后仍看得见");
+
+const inlineInfo = await (async () => {
+  const response = await api.request(`/tasks/${inlineId}/review`);
+  return (await response.json()) as { rounds: Array<Record<string, unknown>> };
+})();
+assert.equal(inlineInfo.rounds.length, 1, "就地验证轮同样要出现在验证记录里");
+assert.deepEqual(
+  {
+    round: inlineInfo.rounds[0].round,
+    where: inlineInfo.rounds[0].where,
+    reviewTaskId: inlineInfo.rounds[0].reviewTaskId,
+    conclusion: inlineInfo.rounds[0].conclusion,
+  },
+  { round: 1, where: "inline", reviewTaskId: null, conclusion: "verified" },
+  "就地轮次没有独立审查任务，reviewTaskId 必须是 null",
+);
+rmSync(resolve(reviewRoundDir(inlineId, 1), "../.."), { recursive: true, force: true });
 
 rmSync(resolve(base, "../.."), { recursive: true, force: true });
 rmSync(root, { recursive: true, force: true });

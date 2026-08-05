@@ -27,7 +27,14 @@ export type ReviewConclusion = "verified" | "verify_failed" | null;
 
 export interface TaskReviewRound {
   round: number;
-  reviewTaskId: string;
+  /**
+   * 这一轮在哪儿跑的：
+   * - `inline` = 就地验证，在被验任务自己身上多跑一个旁路回合（现在的做法）
+   * - `task` = 历史做法，另起一个独立审查任务（`reviewTaskId` 指向它）
+   */
+  where: "inline" | "task";
+  /** 独立审查任务的 id；就地验证没有另一个任务，为 null */
+  reviewTaskId: string | null;
   reviewTaskStatus: TaskStatus;
   conclusion: ReviewConclusion;
   reportMarkdown: string;

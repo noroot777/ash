@@ -5,7 +5,7 @@
 // 跟 review.ts 分开是因为它们是两件事：这里回答「该不该、几轮、找谁」，那边负责
 // 建审查任务、写证据、打回原任务。判定这一侧现在要读任务身上那条线，再挤在一个文件里
 // 会把一份七百行的文件推得更长。
-import type { ReviewDispatchInput } from "@harness/shared";
+import type { ReviewDispatchInput, TaskStatus } from "@harness/shared";
 import type { WorkflowDef } from "@harness/shared/workflow";
 import {
   LEGACY_AUTO_REVIEW_ROUNDS, workflowPolicy, type WorkflowPolicy,
@@ -47,7 +47,7 @@ export function reviewPlan(input: {
 
 export function shouldAutoDispatchReview(input: {
   confirmedDone: boolean;
-  status: Settlement;
+  status: TaskStatus;
   parentIsTeam: boolean;
   mode: string;
   reviewOf: string | null;

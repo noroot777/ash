@@ -70,6 +70,10 @@ export const tasks = sqliteTable("tasks", {
   pinnedAt: integer("pinned_at"), // null=未置顶；多个置顶任务按时间戳排序
   reviewOf: text("review_of"), // 审查任务 → 被审任务 id；普通任务为 null
   reviewRound: integer("review_round"), // 审查任务针对该目标的轮次（从 1 开始）
+  // 就地验证：验证轮不再另起一个任务，而是在这个任务自己身上多跑一个旁路回合。
+  // verify_round 非空 = 此刻正在跑第几轮验证（结算时清空）；verify_rounds = 已经跑完几轮。
+  verifyRound: integer("verify_round"),
+  verifyRounds: integer("verify_rounds").notNull().default(0),
   reviewRequested: integer("review_requested", { mode: "boolean" }).notNull().default(false),
   priority: text("priority").notNull().default("none"),
   labels: text("labels").notNull().default("[]"), // json
