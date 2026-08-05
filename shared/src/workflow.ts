@@ -287,8 +287,14 @@ function normalizeParams(kind: StepKind, raw: unknown): StepParams[StepKind] {
     };
   }
   if (kind === "human") {
-    const show = pickEnums(r.show, HUMAN_SHOW);
-    return { show: show.length ? show : d.human().show, notify: pickEnums(r.notify, HUMAN_NOTIFY) };
+    return {
+      // 「字段缺了」和「显式给了空数组」必须分开看：缺了照旧补默认（老数据、手写 JSON
+      // 的行为一点不变），而空数组**当真** —— 用户把三项都取消掉是一种真实用法（什么都
+      // 不给，我自己打开前一站的预览去点）。原来一律回落默认，表现出来就是界面上「这
+      // 个勾去不掉」：取消完最后一项、存完再回来，它又原样长回去了。
+      show: Array.isArray(r.show) ? pickEnums(r.show, HUMAN_SHOW) : d.human().show,
+      notify: pickEnums(r.notify, HUMAN_NOTIFY),
+    };
   }
   if (kind === "command") {
     return { cmd: pickText(r.cmd, d.command().cmd), where: pickEnum(r.where, COMMAND_WHERE, "workspace") };

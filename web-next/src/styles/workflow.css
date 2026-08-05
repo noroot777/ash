@@ -327,6 +327,16 @@
 .wf-pop-option:hover:not(:disabled) { background: var(--hover-bg); }
 .wf-pop-option:disabled { color: var(--faint); cursor: default; }
 .wf-pop-option.is-on { background: var(--accent-soft); color: var(--accent); font-weight: 540; }
+/* 「一个都不选」那颗：它是这组选项的反面而不是又一项，用一道分隔线和淡一档的字
+   把它跟上面几项分开，选中时照样是 is-on 的高亮（它确实是当前的选择）。 */
+.wf-pop-option.is-none {
+  margin-top: 4px;
+  padding-top: 8px;
+  color: var(--muted);
+  box-shadow: inset 0 1px 0 var(--line);
+  border-radius: 0 0 8px 8px;
+}
+.wf-pop-option.is-none.is-on { color: var(--accent); }
 
 /* 加站菜单里每一条前面点一颗这一类站的颜色，和线上的站台是同一套记号 */
 .wf-pop-kind { display: flex; align-items: center; gap: 7px; }
@@ -423,48 +433,55 @@
 
 .wf-pop-hint { margin: 2px 6px 0; font-size: 11px; color: var(--faint); }
 
-/* ── 设置 › 起手式：左库右编辑 ────────────────────────────────────── */
+/* ── 设置 › 起手式：上面一条横 tab，下面整幅编辑区 ─────────────────── */
+/* 竖列表放左边会吃掉 230px，而这一页最缺宽度的恰恰是线路图（5 站起步）。 */
 .wf-lib {
-  display: grid;
-  grid-template-columns: 232px minmax(0, 1fr);
-  gap: 16px;
-  align-items: start;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  align-items: stretch;
 }
 
-.wf-lib-side { display: flex; flex-direction: column; gap: 6px; }
-.wf-lib-list { display: flex; flex-direction: column; gap: 1px; }
-
-.wf-lib-group {
-  padding: 12px 8px 4px;
+.wf-lib-tabs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding-bottom: 6px;
+  overflow-x: auto;
+  scrollbar-width: thin;
+  box-shadow: inset 0 -1px 0 var(--line);
+}
+/* 横条上的组名：不占一整行，只在两组之间立一小段说明。 */
+.wf-lib-tabgroup {
+  flex: none;
+  padding: 0 8px 0 10px;
   font-size: 10.5px;
   font-weight: 600;
   letter-spacing: 0.04em;
-  color: var(--faint);
-}
-.wf-lib-group:first-child { padding-top: 2px; }
-
-.wf-lib-row {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  padding: 7px 9px;
-  text-align: left;
-}
-.wf-lib-row small {
-  font-size: 11px;
-  color: var(--faint);
-  overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
+  color: var(--faint);
 }
+.wf-lib-tabgroup:first-child { padding-left: 2px; }
 
-.wf-lib-name {
-  display: flex;
+.wf-lib-tab {
+  flex: none;
+  display: inline-flex;
   align-items: center;
   gap: 5px;
+  padding: 6px 11px;
+  border-radius: 8px 8px 0 0;
   font-size: 12.5px;
   font-weight: 520;
+  white-space: nowrap;
+  color: var(--muted);
+  background: transparent;
+}
+.wf-lib-tab:hover { background: var(--hover-bg); color: var(--ink); }
+/* 选中的那颗压着底线，视觉上跟下面的编辑区连成一片。 */
+.wf-lib-tab[aria-selected="true"] {
   color: var(--ink);
+  background: var(--raised);
+  box-shadow: inset 0 -2px 0 var(--accent);
 }
 
 .wf-tag {
@@ -485,12 +502,15 @@
 }
 
 .wf-lib-new {
-  display: flex;
+  flex: none;
+  display: inline-flex;
   align-items: center;
   gap: 5px;
-  padding: 7px 9px;
+  margin-left: 6px;
+  padding: 6px 11px;
   border-radius: 8px;
   font-size: 12.5px;
+  white-space: nowrap;
   color: var(--muted);
 }
 .wf-lib-new:hover { background: var(--hover-bg); color: var(--ink); }
@@ -540,10 +560,6 @@
 }
 
 .wf-lib-rail { padding: 0; overflow: hidden; }
-
-@media (max-width: 900px) {
-  .wf-lib { grid-template-columns: minmax(0, 1fr); }
-}
 
 .wf-picker { max-width: 320px; }
 

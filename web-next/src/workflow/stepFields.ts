@@ -16,7 +16,10 @@ export interface FieldOption { value: string; label: string }
 
 export type FieldSpec =
   | { key: string; label: string; type: "select"; options: FieldOption[] }
-  | { key: string; label: string; type: "multi"; options: FieldOption[]; emptyText: string }
+  // emptyOk：一个都不选是**正经选项**而不是没填完（典型：人工关口「什么都不给，我自己
+  // 去看」）。它决定 chip 要不要标黄，也决定弹层里给不给那颗「都不给」的按钮 —— 少了
+  // 后者，用户只能靠「把最后一个也点掉」来表达，界面上根本看不出这是允许的。
+  | { key: string; label: string; type: "multi"; options: FieldOption[]; emptyText: string; emptyOk?: boolean }
   | { key: string; label: string; type: "text"; placeholder: string; emptyText: string; hint?: string }
   | { key: string; label: string; type: "executor"; emptyText: string }
   | { key: string; label: string; type: "model" }
@@ -51,8 +54,16 @@ export const STEP_FIELDS: Record<StepKind, FieldSpec[]> = {
     { key: "life", label: "什么时候关掉", type: "select", options: opts(PREVIEW_LIFE, PREVIEW_LIFE_LABELS) },
   ],
   human: [
-    { key: "show", label: "给我看什么", type: "multi", options: opts(HUMAN_SHOW, HUMAN_SHOW_LABELS), emptyText: "什么都不给看" },
-    { key: "notify", label: "怎么叫我", type: "multi", options: opts(HUMAN_NOTIFY, HUMAN_NOTIFY_LABELS), emptyText: "不通知" },
+    // 这两项都可以一个不选：不给看什么，是因为人自己会去点前一站起的预览；不通知，
+    // 是因为人就守在跟前。所以它们 emptyOk，空了不标黄。
+    {
+      key: "show", label: "给我看什么", type: "multi", options: opts(HUMAN_SHOW, HUMAN_SHOW_LABELS),
+      emptyText: "什么都不给，我自己去看", emptyOk: true,
+    },
+    {
+      key: "notify", label: "怎么叫我", type: "multi", options: opts(HUMAN_NOTIFY, HUMAN_NOTIFY_LABELS),
+      emptyText: "不通知", emptyOk: true,
+    },
   ],
   command: [
     { key: "cmd", label: "命令", type: "text", placeholder: "npm run lint", emptyText: "还没填命令" },
@@ -81,7 +92,11 @@ export function fieldChip(
   if (spec.type === "multi") {
     const list = Array.isArray(value) ? (value as string[]) : [];
     const labels = list.map((v) => spec.options.find((o) => o.value === v)?.label ?? v);
-    return { key: spec.key, text: labels.length ? labels.join("、") : spec.emptyText, warn: !labels.length };
+    return {
+      key: spec.key,
+      text: labels.length ? labels.join("、") : spec.emptyText,
+      warn: !labels.length && !spec.emptyOk,
+    };
   }
   if (spec.type === "select") {
     const found = spec.options.find((o) => o.value === value);

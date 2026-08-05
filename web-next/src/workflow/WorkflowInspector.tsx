@@ -9,7 +9,7 @@
 // ② 走到哪一站是从任务真实的 status/stage 反推的（resolveCursor），不是假进度条。
 //    第二期执行链接管落了真游标之后，这个文件一行都不用改。
 import type { Task } from "@harness/shared";
-import { STEP_LABELS } from "@harness/shared/workflow";
+import { STEP_LABELS, WORKSPACE_LABELS } from "@harness/shared/workflow";
 import { ArrowUUpLeft, Check, Warning } from "@phosphor-icons/react";
 import { AcceptanceControls } from "../team/TeamReviewWorkspace.tsx";
 import { executorName, useExecutorCatalog, type ExecutorCatalog } from "./executorCatalog.ts";
@@ -118,7 +118,7 @@ export function WorkflowInspector({
           </div>
           <div className="task-inspector-row">
             <span>在哪儿干活</span>
-            <div>{def.workspace === "isolated" ? "单独开一份工作区" : "直接在项目目录里"}</div>
+            <div>{WORKSPACE_LABELS[def.workspace]}</div>
           </div>
           <p className="task-inspector-note">
             这是任务创建那一刻拷下来的一份快照。之后在设置里改起手式，不会追着改它。

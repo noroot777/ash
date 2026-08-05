@@ -144,6 +144,16 @@ check("不认识的失败档回落成停下等人", normalizeWorkflowDef({
   steps: [{ kind: "run", fail: { mode: "teleport", max: 2 } }],
 }).def?.steps[0]!.fail, { mode: "stop", max: 2 });
 
+// 人工关口「什么都不给看」：前一站起了预览，人自己去点，不需要 diff/报告/截图。
+// 「字段缺了」和「显式给了空数组」是两件事，混在一起就等于「这个勾去不掉」——
+// 用户取消完最后一项、存完再读回来，它又长回 diff+report。
+check("人工关口显式给空数组就当真", normalizeWorkflowDef({
+  steps: [{ kind: "run" }, { kind: "human", p: { show: [], notify: [] } }],
+}).def?.steps[1]!.p, { show: [], notify: [] });
+check("人工关口缺字段仍补默认", normalizeWorkflowDef({
+  steps: [{ kind: "run" }, { kind: "human" }],
+}).def?.steps[1]!.p, { show: ["diff", "report"], notify: [] });
+
 // 幂等：内置 → JSON → normalize 应当原样回来，否则存一次盘就漂一次
 for (const b of BUILTIN_WORKFLOWS) {
   const def = builtinWorkflowDef(b.key)!;
