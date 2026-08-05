@@ -83,18 +83,19 @@ function ReviewRound({
 }) {
   const [open, setOpen] = useState(true);
   const state = roundState(round);
+  const reviewTaskId = round.reviewTaskId;
   return (
     <article className={`review-round ${state.className}`}>
       <button type="button" onClick={() => setOpen((value) => !value)} aria-expanded={open}>
         <span>{round.round}</span>
         <b>第 {round.round} 轮</b>
         <em>{state.icon}{state.label}</em>
-        <small>{TASK_STATUS_LABELS[round.reviewTaskStatus]}</small>
+        <small>{round.where === "task" ? `独立审查 · ${TASK_STATUS_LABELS[round.reviewTaskStatus]}` : "就地验证"}</small>
         <CaretDown size={12} weight="bold" />
       </button>
       {open && (
         <div>
-          {round.reportMarkdown ? <MarkdownBody text={round.reportMarkdown} /> : <p>审查报告尚未写入。</p>}
+          {round.reportMarkdown ? <MarkdownBody text={round.reportMarkdown} /> : <p>验证报告尚未写入。</p>}
           {round.screenshots.length > 0 && (
             <section className="review-shots">
               <h5><ImageSquare size={12} />证据截图 · {round.screenshots.length}</h5>
@@ -113,8 +114,9 @@ function ReviewRound({
               </div>
             </section>
           )}
-          {onOpenTask && (
-            <button className="review-round__open-task" type="button" onClick={() => onOpenTask(round.reviewTaskId)}>
+          {/* 就地验证没有另一个任务可打开（reviewTaskId 为 null），只有历史的独立审查轮才有。 */}
+          {onOpenTask && reviewTaskId && (
+            <button className="review-round__open-task" type="button" onClick={() => onOpenTask(reviewTaskId)}>
               打开审查任务<ArrowSquareOut size={12} />
             </button>
           )}
@@ -127,8 +129,8 @@ function ReviewRound({
 export function ReviewEvidence({
   taskId,
   state,
-  title = "审查记录",
-  emptyMessage = "尚无审查记录。",
+  title = "验证记录",
+  emptyMessage = "尚无验证记录。",
   onOpenTask,
   actions,
 }: {
@@ -149,15 +151,15 @@ export function ReviewEvidence({
             <small>{rounds.length ? `已记录 ${rounds.length} 轮真实运行验证` : "结论、报告与截图集中保存在这里"}</small>
           </div>
         </header>
-        {state.loading && <p><SpinnerGap size={13} className="is-spinning" />正在读取审查记录…</p>}
+        {state.loading && <p><SpinnerGap size={13} className="is-spinning" />正在读取验证记录…</p>}
         {!state.loading && state.error && (
-          <p className="is-error">审查记录加载失败：{state.error} <button type="button" onClick={() => void state.reload()}>重试</button></p>
+          <p className="is-error">验证记录加载失败：{state.error} <button type="button" onClick={() => void state.reload()}>重试</button></p>
         )}
         {!state.loading && !state.error && !rounds.length && <p>{emptyMessage}</p>}
         {actions}
         {rounds.map((round) => (
           <ReviewRound
-            key={`${round.round}-${round.reviewTaskId}`}
+            key={`${round.round}-${round.where}`}
             taskId={taskId}
             round={round}
             onOpenTask={onOpenTask}
@@ -184,15 +186,15 @@ export function DispatchReviewEvidence({
   const dispatchSupported = task.mode === "single" && !task.reviewOf && !task.archived;
   const emptyMessage = dispatchSupported
     ? task.status === "running" || task.status === "queued"
-      ? "尚无独立审查记录；目标结束后可派出真实运行验证。"
-      : "尚无独立审查记录，可立即派出一轮真实运行验证。"
-    : "尚无独立审查记录。";
+      ? "尚无验证记录；目标结束后可就地开始真实运行验证。"
+      : "尚无验证记录，可立即开始一轮真实运行验证。"
+    : "尚无验证记录。";
 
   return (
     <ReviewEvidence
       taskId={task.id}
       state={{ info, loading, error, reload: load }}
-      title="独立审查证据"
+      title="验证证据"
       emptyMessage={emptyMessage}
       actions={!loading ? (
         <ReviewDispatchControl

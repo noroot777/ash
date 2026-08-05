@@ -67,7 +67,8 @@ export function ReviewDispatchControl({
   const [effort, setEffort] = useState(defaults.effort);
   const [open, setOpen] = useState(prominent);
   const [dispatching, setDispatching] = useState(false);
-  const [dispatchedReviewId, setDispatchedReviewId] = useState<string | null>(null);
+  // 验证轮不再是一个独立任务，所以「我刚点过」记的是轮次号：等这一轮出现在 rounds 里就解锁。
+  const [dispatchedRound, setDispatchedRound] = useState<number | null>(null);
   const workerTypes = useMemo(() => registeredAgentTypes(profiles), [profiles]);
 
   useEffect(() => {
@@ -90,7 +91,7 @@ export function ReviewDispatchControl({
     setModel(defaults.model);
     setEffort(defaults.effort);
     setOpen(prominent);
-    setDispatchedReviewId(null);
+    setDispatchedRound(null);
   }, [defaults, prominent, task.id]);
 
   useEffect(() => {
@@ -104,10 +105,10 @@ export function ReviewDispatchControl({
   }, [defaults.selection.agentType, profiles, profilesReady, selection, workerTypes]);
 
   useEffect(() => {
-    if (dispatchedReviewId && rounds.some((round) => round.reviewTaskId === dispatchedReviewId)) {
-      setDispatchedReviewId(null);
+    if (dispatchedRound !== null && rounds.some((round) => round.round === dispatchedRound)) {
+      setDispatchedRound(null);
     }
-  }, [dispatchedReviewId, rounds]);
+  }, [dispatchedRound, rounds]);
 
   if (task.mode !== "single" || task.reviewOf || task.archived) return null;
 
@@ -117,7 +118,7 @@ export function ReviewDispatchControl({
   const noExecutor = profilesReady && nothingRunnable(profiles);
   const selectionPickable = isExecutorPickable(selection, workerTypes, profiles);
   const locallyUnavailable = profilesReady && !selectionPickable;
-  const dispatchLocked = !!activeRound || !!dispatchedReviewId;
+  const dispatchLocked = !!activeRound || dispatchedRound !== null;
   const canSend = !targetBusy
     && !dispatchLocked
     && !dispatching
@@ -125,11 +126,11 @@ export function ReviewDispatchControl({
     && !noExecutor
     && selectionPickable;
   const nextRound = rounds.reduce((highest, round) => Math.max(highest, round.round), 0) + 1;
-  const actionLabel = rounds.length ? "补派下一轮" : "派出独立审查";
+  const actionLabel = rounds.length ? "再验一轮" : "开始验证";
   const availabilityMessage = availabilityPending
     ? "正在读取已注册执行器…"
     : profilesFailed
-      ? "Profile 列表读取失败，暂不能派发审查。"
+      ? "Profile 列表读取失败，暂不能开始验证。"
       : noExecutor
         ? "还没有已注册 Profile。"
         : locallyUnavailable
@@ -141,16 +142,16 @@ export function ReviewDispatchControl({
     if (!canSend) return;
     setDispatching(true);
     try {
-      const { reviewTask } = await api.dispatchTaskReview(task.id, {
+      const { round } = await api.dispatchTaskReview(task.id, {
         agentType: selection.agentType,
         executorId: selection.executorId,
         model: model.trim() || null,
         reasoningEffort: effort || null,
       });
-      setDispatchedReviewId(reviewTask.id);
+      setDispatchedRound(round);
       setOpen(false);
       await onRefresh();
-      notify(`已派出第 ${reviewTask.reviewRound ?? nextRound} 轮审查`);
+      notify(`已开始第 ${round} 轮验证`);
     } catch (reason) {
       notify(reason instanceof Error ? reason.message : String(reason));
       await onRefresh();
@@ -164,8 +165,8 @@ export function ReviewDispatchControl({
       <div className="review-dispatch-heading">
         <span><MagnifyingGlass size={13} weight="bold" /></span>
         <div>
-          <b>{dispatchLocked ? "独立审查正在进行" : actionLabel}</b>
-          <small>{targetBusy ? "目标仍在运行或排队，结束后才能派审。" : dispatchLocked ? "当前轮次结束后可补派下一轮。" : `将立即启动第 ${nextRound} 轮真实运行验证。`}</small>
+          <b>{dispatchLocked ? "验证正在进行" : actionLabel}</b>
+          <small>{targetBusy ? "目标仍在运行或排队，结束后才能验证。" : dispatchLocked ? "当前轮次结束后可再验一轮。" : `将就在这个任务上立即开始第 ${nextRound} 轮真实运行验证。`}</small>
         </div>
         <button
           type="button"
@@ -174,7 +175,7 @@ export function ReviewDispatchControl({
           aria-expanded={open}
         >
           {dispatchLocked || dispatching ? <SpinnerGap size={12} className="is-spinning" /> : <MagnifyingGlass size={12} />}
-          {dispatchLocked ? "审查进行中" : open ? "收起" : actionLabel}
+          {dispatchLocked ? "验证进行中" : open ? "收起" : actionLabel}
         </button>
       </div>
       {open && !targetBusy && !dispatchLocked && (
@@ -182,7 +183,7 @@ export function ReviewDispatchControl({
           <fieldset disabled={dispatching}>
             <div className="review-dispatch-fields">
               <ExecutorPickerField
-                label="审查执行器"
+                label="验证执行器"
                 value={executorValue(selection)}
                 types={workerTypes}
                 profiles={profiles}
@@ -207,10 +208,10 @@ export function ReviewDispatchControl({
               </p>
             )}
             <footer>
-              <span>模型与思考强度留空时跟随所选执行器。</span>
+              <span>模型与思考强度留空时跟随所选执行器；换执行器就是换一双眼睛来验同一份产物。</span>
               <button type="submit" disabled={!canSend}>
                 {dispatching && <SpinnerGap size={12} className="is-spinning" />}
-                {dispatching ? "派发中…" : `确认派出第 ${nextRound} 轮`}
+                {dispatching ? "启动中…" : `确认开始第 ${nextRound} 轮`}
               </button>
             </footer>
           </fieldset>
