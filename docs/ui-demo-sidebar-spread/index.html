@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>侧边栏横向铺开 · 一眼看完今天所有任务走到哪了</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div class="stage">
+  <p class="cap"><b>任务一多，侧边栏那一列只剩标题，得挨个点进去才知道该处理谁。</b>
+    这张 demo 把同一份列表<b>就地向右铺满</b>：状态点和标题<b>横向一格都不动</b>（所以铺开像拉窗帘，不是换了个页面），
+    多出来的横向空间依次写上<b>走到哪一步</b>、<b>原始需求</b>、<b>最后一条消息</b>。
+    看准了点一下就选中并收回原样，再按一次快捷键也收回。</p>
+
+  <!-- ══ 遥控器（demo 专用，产品里没有这一行） ══════════════════ -->
+  <div class="ctl">
+    <button class="play" id="toggle">铺开 / 收起</button>
+    <span class="keys">页面里直接按 <kbd>F</kbd>（或 <kbd>\</kbd>）铺开 · <kbd>Esc</kbd> 收起 · <kbd>J</kbd><kbd>K</kbd> 上下选 · <kbd>Enter</kbd> 打开</span>
+    <span class="sp"></span>
+    <label class="sw"><input type="checkbox" id="dense"><i></i><span>紧凑行高</span></label>
+  </div>
+
+  <!-- ══ 模拟窗口 ═══════════════════════════════════════════════ -->
+  <div class="win" id="win">
+    <div class="scrim" id="scrim"></div>
+
+    <!-- 侧边栏：就是它自己变宽，不是另开一个面板 -->
+    <aside class="side" id="side">
+      <div class="side-top">
+        <div class="proj">
+          <span class="avatar">HA</span>
+          <span class="proj-name">harness</span>
+          <span class="caret">⌄</span>
+        </div>
+        <div class="tools">
+          <button class="ico" title="搜索">⌕</button>
+          <button class="ico" title="随手记">✎</button>
+          <button class="ico" title="分组">▤</button>
+          <button class="ico" title="新建任务">＋</button>
+        </div>
+      </div>
+
+      <!-- 铺开后才出现：筛选条 + 列名 -->
+      <div class="fbar" id="fbar">
+        <div class="filters" id="filters"></div>
+        <span class="sp"></span>
+        <span class="hint"><kbd>J</kbd><kbd>K</kbd> 选 · <kbd>Enter</kbd> 打开 · <kbd>F</kbd>/<kbd>Esc</kbd> 收起</span>
+      </div>
+
+      <div class="tree" id="tree">
+        <div class="rows" id="rows"></div>
+      </div>
+
+      <div class="side-bottom">
+        <span class="conn"><i></i>实时已连接</span>
+        <span class="count" id="footcount"></span>
+      </div>
+    </aside>
+
+    <!-- 主区：任务详情（示意），点选后跟着换 -->
+    <main class="main" id="main">
+      <div class="mhd">
+        <span class="chip" id="mchip"></span>
+        <b id="mtitle"></b>
+        <span class="path" id="mpath"></span>
+        <span class="sp"></span>
+        <span class="ico">⋯</span>
+      </div>
+      <div class="mbody" id="mbody"></div>
+      <div class="mft"><span id="mreply"></span><i>⏎</i></div>
+    </main>
+  </div>
+
+  <!-- ══ 说明 ═══════════════════════════════════════════════════ -->
+  <div class="notes">
+    <section>
+      <h3>三个刻意的取舍</h3>
+      <ul>
+        <li><b>左边两列横向钉死。</b>状态点 22px、标题列左边缘 22px 处起，铺开前后同一个横向位置；只有截断点从 214 放宽到 300，让标题多露出小半句。所以铺开是「露出右边」而不是「重排列表」，眼睛不用重新找任务；分区（置顶 / 协作任务 / 普通任务）和顺序也原样保留，跟 <code>taskTreeModel.ts</code> 现在的分组一致。行会因为多出的筛选条整体下移一点点，这段是有过渡动画的。</li>
+        <li><b>「走到哪一步」写的是 stage 而不是 status。</b>仓库里这两个是正交的：status 管调度（运行中 / 排队中 / 暂停中），stage 管验收进度（验证中 / 待验收 / 已合并）。铺开后一行能同时写下这两层，外加它在工作流里第几站、跑了多久——这正是窄侧边栏塞不下的东西。</li>
+        <li><b>需要你拍板的行淡染成琥珀色</b>（等答复 / 待验收 / 失败），并在顶上给一个「需要你处理 N」的筛选。不画左侧指示条——全局约定里选中态只用淡染背景。</li>
+      </ul>
+    </section>
+    <section>
+      <h3>还没定、想听你一句话的</h3>
+      <ul>
+        <li><b>快捷键定哪个。</b>demo 用了 <kbd>F</kbd>（铺开 / full）并兼听 <kbd>\</kbd>。现有裸键已占 <code>j k c r</code>，<kbd>F</kbd> 是空的；要是你更顺手 <kbd>Cmd</kbd>+<kbd>\</kbd> 或空格，改一行就行。</li>
+        <li><b>「最后一条消息」取哪条。</b>demo 取的是会话里最新一条（不论谁说的），等答复时优先取那句提问。另一种取法是「永远只取最后一次追问 / 提问」，没提问就留空——更聚焦但空行会多。</li>
+        <li><b>要不要记住铺开状态。</b>现在每次都从收起开始。也可以像折叠分区那样写 localStorage。</li>
+      </ul>
+    </section>
+    <section>
+      <h3>真做进 web-next 的话，动这几处</h3>
+      <ul>
+        <li><code>web-next/src/workspace/useWorkspaceShortcuts.ts</code>：加一个裸键（走现有的 <code>isTextEntry</code> / <code>hasBlockingLayer</code> 护栏）。</li>
+        <li><code>web-next/src/workspace/WorkspaceShell.tsx</code>：持有 <code>spread</code> 状态，传给侧边栏；点任务时顺手关掉。</li>
+        <li><code>web-next/src/workspace/TaskTree.tsx</code>：<code>TaskRow</code> 多渲染四个格子（stage / body / 最后消息 / 时间），窄态由 CSS 裁掉，不改分组逻辑。</li>
+        <li>「最后一条消息」需要一个列表接口能带上的字段（现在的 <code>Task</code> 上没有），要么服务端在列表里补一个 <code>lastMessage</code> 摘要，要么前端按需拉。这块是唯一有后端改动的地方。</li>
+      </ul>
+    </section>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
