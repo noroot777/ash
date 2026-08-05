@@ -108,20 +108,27 @@ assert.deepEqual(remote.skills, [], "ssh 执行器扫的是本机盘,那不是�
 assert.equal(remote.remote, true, "要把 remote 如实告诉前端,好让菜单说人话而不是显示空");
 assert.deepEqual(listSkills({ agentType: "grok", cwd: root }).skills, [], "没有技能目录约定的 CLI 返回空清单");
 
-// ── 设置页的「谁扫到了什么」:按已注册的执行器 profile 逐行 ───────────────────
+// ── 设置页的「谁扫到了什么」:按 CLI 类型 × 本机/远端归并 ──────────────────────
+// 同一个 CLI 的几个 profile 只差供应商,扫出来必然是同一份,逐行列出去是噪声。
 
 const overview = scanOverview({
   cwd: root,
   executors: [
-    { id: "e1", label: "claude@本机", agentType: "claude", remote: false },
-    { id: "e2", label: "claude@远端", agentType: "claude", remote: true },
-    { id: "e3", label: "grok@本机", agentType: "grok", remote: false },
+    { label: "claude@官方", agentType: "claude", remote: false },
+    { label: "claude@公司自建", agentType: "claude", remote: false },
+    { label: "claude@远端", agentType: "claude", remote: true },
+    { label: "grok@本机", agentType: "grok", remote: false },
   ],
 });
 assert.deepEqual(
-  overview.rows.map((row) => row.executorLabel),
-  ["claude@本机", "claude@远端", "grok@本机"],
-  "同类型的两个 profile 各占一行:能不能扫是 profile 级的事",
+  overview.rows.map((row) => `${row.agentType}${row.remote ? "@ssh" : ""}`),
+  ["claude", "claude@ssh", "grok"],
+  "同类型的本机 profile 合成一行,ssh 的另算一行",
+);
+assert.deepEqual(
+  overview.rows[0]!.executors,
+  ["claude@官方", "claude@公司自建"],
+  "被归并掉的 profile 名字要留在行里,好让人确认自己注册的那几个都在",
 );
 assert.ok(overview.rows[0]!.count >= 2, "本机那行要有条数");
 assert.ok(overview.rows[0]!.bySource.project >= 2, "项目级技能要计进 project 桶");
@@ -129,6 +136,10 @@ assert.ok(overview.rows[0]!.sample.every((command) => command.startsWith("/")), 
 assert.equal(overview.rows[1]!.count, 0, "ssh 那行不拿本机结果冒充");
 assert.equal(overview.rows[1]!.remote, true);
 assert.equal(overview.rows[2]!.scannable, false, "没有技能目录约定的 CLI 要标出来,而不是显示 0 条");
+
+// 一个 profile 都没注册时(路由那边兜的 fallback):不能凭空造出一个空名字
+const bare = scanOverview({ cwd: root, executors: [{ label: "", agentType: "claude", remote: false }] });
+assert.deepEqual(bare.rows[0]!.executors, [], "没有 profile 名字时给空数组,不是 ['']");
 
 // ── 刷新间隔:按小时计,0 或 1~24 小时 ────────────────────────────────────────
 // 动态 import:app-settings 会连带打开 DB,先把库指到临时文件,别碰用户真实的 data/。
