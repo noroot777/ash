@@ -9,20 +9,41 @@
 }
 
 .wf-rail {
+  /* 列是「段、站」交替（DOM 顺序 seg → plate/node/body → seg …，见 WorkflowRail 的
+     注释），grid-auto-columns 的两个值正好循环套上去，段列和站列各有自己的下限与
+     伸缩比：**宽度够就摊开填满，不够才一起挤到下限**。
+     这里**刻意不写 min-width: min-content** —— 那等于把宽度交给内容说了算，站一多必然
+     顶出横向滚动条；而滚动条一出，用户就看不见这条线总共几站，那恰恰是这张图唯一要
+     传达的东西。挤到下限还装不下（十几站的长线）才滚，那时滚动是诚实的。 */
+  --wf-seg-min: 16px;
+  --wf-seg-fr: 0.22fr;
+  --wf-stop-min: 116px;
   display: grid;
   grid-auto-flow: column;
+  grid-auto-columns: minmax(var(--wf-seg-min), var(--wf-seg-fr)) minmax(var(--wf-stop-min), 1fr);
   grid-template-rows: auto 30px auto;
   align-items: start;
   padding: 22px 4px 10px;
-  min-width: min-content;
+  width: 100%;
+}
+
+/* 站一多就整体紧一档：下限、字号、内边距一起收，能多塞三四站还不出滚动条。
+   阈值由 WorkflowRail 按站数给，不在 CSS 里猜。 */
+.wf-rail[data-dense="yes"] {
+  --wf-seg-min: 13px;
+  --wf-seg-fr: 0.13fr;
+  --wf-stop-min: 94px;
 }
 
 /* ── 名牌 ─────────────────────────────────────────────────────────── */
+/* min-width: 0 是这一整套自适应的前提：不给 0，grid 会拿 min-content 当列下限，
+   于是「谁的字长谁说了算」，列宽又回到内容手里。 */
 .wf-plate {
   position: relative;
   grid-row: 1;
-  padding: 0 10px 10px;
-  min-width: 148px;
+  justify-self: center;
+  padding: 0 8px 10px;
+  min-width: 0;
   max-width: 210px;
   text-align: center;
 }
@@ -118,7 +139,7 @@
   position: relative;
   display: flex;
   align-items: center;
-  width: 40px;
+  min-width: 0;
 }
 .wf-seg::before {
   content: "";
@@ -165,27 +186,31 @@
 /* ── 站台底下：状态一行 + 参数 chips ──────────────────────────────── */
 .wf-body {
   grid-row: 3;
+  justify-self: center;
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 4px;
-  padding: 12px 8px 0;
-  min-width: 148px;
+  padding: 12px 6px 0;
+  min-width: 0;
   max-width: 210px;
 }
 
+/* 换行而不是 nowrap：列宽由 grid 定死之后，nowrap 只会让这行字捅到隔壁站底下去。 */
 .wf-status {
   font-size: 11px;
+  line-height: 1.45;
   color: var(--faint);
-  white-space: nowrap;
+  text-align: center;
 }
 .wf-status b { font-weight: 560; color: var(--muted); }
 .wf-status em { font-style: normal; margin-left: 3px; }
 
-.wf-chip-slot { position: relative; max-width: 100%; }
+.wf-chip-slot { position: relative; min-width: 0; max-width: 100%; }
 
 .wf-chip,
 .wf-failchip {
+  min-width: 0;
   max-width: 100%;
   padding: 3px 9px;
   border-radius: 8px;
@@ -221,6 +246,15 @@
 }
 .wf-failchip:hover:not(:disabled) { background: color-mix(in srgb, var(--amber) 15%, transparent); }
 .wf-failchip:disabled { cursor: default; }
+
+/* 紧一档时字和内边距跟着收 —— 只收下限不收字号的话，站是塞进去了，chip 却全成了
+   省略号，等于用「看得见几站」换掉了「看得清每站是什么」。 */
+.wf-rail[data-dense="yes"] .wf-plate { padding-bottom: 8px; }
+.wf-rail[data-dense="yes"] .wf-plate h4 { margin-top: 5px; font-size: 12.5px; }
+.wf-rail[data-dense="yes"] .wf-body { padding: 10px 3px 0; gap: 3px; }
+.wf-rail[data-dense="yes"] .wf-status { font-size: 10.5px; }
+.wf-rail[data-dense="yes"] .wf-chip,
+.wf-rail[data-dense="yes"] .wf-failchip { padding: 3px 7px; font-size: 11px; }
 
 /* ── 执行态：走到哪一站 ───────────────────────────────────────────── */
 .wf-node.is-done i { box-shadow: inset 0 0 0 2.5px var(--green); color: var(--green); }

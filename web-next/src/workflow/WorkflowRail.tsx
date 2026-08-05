@@ -18,6 +18,15 @@ import { canAddKind, canAddStep, failText, insertStep, moveStep, patchFail, patc
 /** 执行器、模型、强度是联动的一组，点哪颗都开同一个编辑器。 */
 const EXECUTOR_FIELDS = new Set(["executor", "model", "effort"]);
 
+/**
+ * 站数到了这个数就整体紧一档（CSS 那边收下限与字号）。
+ *
+ * 6 是量出来的，不是拍的：起手式那一页主栏约 1100px，段列和站列按 0.22/1 分伸缩比，
+ * 6 站正好把站列压到 116px 的下限；再多一站就得靠紧凑档才不出滚动条。内置起手式最长
+ * 的一条是 5 站，所以常规情况下永远是宽松档，只有用户自己接长了才会紧。
+ */
+const DENSE_FROM = 6;
+
 function fieldSpec(kind: StepKind, key: string): FieldSpec | undefined {
   return STEP_FIELDS[kind].find((spec) => spec.key === key);
 }
@@ -215,7 +224,11 @@ export function WorkflowRail({
     <div className={`wf-rail-scroll${className ? ` ${className}` : ""}`}>
       {/* 三行 grid，站与连接段交替成列：名牌 / 线上的站点 / 站台底下的参数与状态。
           段和站是兄弟元素而不是嵌套，才能让三行在所有列上严格对齐。 */}
-      <div className="wf-rail" data-editable={editable ? "yes" : "no"}>
+      <div
+        className="wf-rail"
+        data-editable={editable ? "yes" : "no"}
+        data-dense={stops.length >= DENSE_FROM ? "yes" : "no"}
+      >
         {onChange ? <AddStop def={def} at={0} onChange={onChange} /> : <div className="wf-seg" />}
         {stops.map((stop, i) => {
           const trouble = issues.some((issue) => issue.stepId === stop.step.id);
