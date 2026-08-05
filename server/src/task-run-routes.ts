@@ -36,7 +36,7 @@ import { setTaskStatus } from "./status.js";
 import { dispatchWorkers, type DispatchSpec } from "./team/dispatch.js";
 import { haltTeam } from "./team/session.js";
 import { enrichTasks } from "./task-store.js";
-import { setTaskQuestion } from "./task-question.js";
+import { askingAgentFor, setTaskQuestion } from "./task-question.js";
 import { parseSessionTrace, sessionTracePath, sessionTranscriptPath } from "./transcript.js";
 import { resumeCommandFor } from "./executors/resume.js";
 import { id, now } from "./util.js";
@@ -320,7 +320,16 @@ api.post("/tasks/:id/answer", async (c) => {
   bus.publish({ type: "task.question", taskId, updatedAt, question: null, questionOptions: null, questionItems: null });
   // 调度台不说「完成任务」——它没有完成一说,只是拿到答案接着安排。
   const tail = r.mode === "team" ? "请据此接着安排。" : "请据此继续完成任务。";
-  void continueTask(taskId, `【答复】你之前的提问:「${r.question}」\n\n${a}\n\n${tail}`);
+  // 送回给提问的那一个:普通任务可以住着好几个 agent(@ 召唤进来的各有会话行),
+  // 默认续跑走的是任务常设执行器,那多半不是刚才停下来提问的那个。
+  // 只在**类型**不同时才改路由:会话行是按 agentType 找的(continueTask 里的 prev),
+  // 同类型换 profile 仍是同一条会话,照任务常设配置续跑即可——显式指定会让这一回合
+  // 变成「召唤」,把任务自带的 model/reasoningEffort 一并清掉。
+  const asker = r.mode === "single" ? await askingAgentFor(taskId) : null;
+  const route = asker && asker.agent !== r.agentType
+    ? { agent: asker.agent, executorId: asker.executorId, model: null, reasoningEffort: null }
+    : {};
+  void continueTask(taskId, `【答复】你之前的提问:「${r.question}」\n\n${a}\n\n${tail}`, route);
   return c.json({ answered: true, resumed: true });
 });
 

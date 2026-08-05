@@ -20,6 +20,7 @@
     "test:worktree-recovery": "tsx scripts/test-worktree-recovery.ts",
     "test:workspace-cleanup": "tsx scripts/test-workspace-cleanup.ts",
     "test:executor-resolution": "tsx scripts/test-executor-resolution.ts",
+    "test:answer-routing": "tsx scripts/test-answer-routing.ts",
     "test:executor-overrides": "tsx scripts/test-executor-overrides.ts",
     "test:cli-catalog": "tsx scripts/test-cli-catalog.ts",
     "test:task-derivation": "tsx scripts/test-task-derivation-policy.ts",

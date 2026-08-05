@@ -34,6 +34,9 @@ export function ReplyBox({
       model?: string | null;
       reasoningEffort?: string | null;
       sendAt?: string;
+      // 只用于显示:这一回合会由谁跑。服务端不认这个字段(调用方要摘掉再发),
+      // 它补的是「消息已发出、会话行还没落库」那一两秒里横幅没名字可报的空窗。
+      executorLabel?: string | null;
     },
   ) => Promise<ReplyTaskResult>;
   command?: {
@@ -160,6 +163,10 @@ export function ReplyBox({
   );
   const activeModel = summary.model;
   const activeEffort = summary.effort;
+  // 胶囊上写着谁,这一回合就该由谁跑——横幅在会话行落库前先照抄这个名字,
+  // 免得它去报任务的常设执行器(@grok 干活时报 codex 就是这么来的)。
+  const activeExecutorLabel = profiles.find((profile) => profile.id === activeExecutorId)?.name
+    ?? activeAgent;
 
   const pickCommand = (text: string) => {
     command?.onSubmit(text);
@@ -239,6 +246,7 @@ export function ReplyBox({
           model: target?.model ?? null,
           reasoningEffort: target?.reasoningEffort ?? null,
           sendAt: scheduledAt,
+          executorLabel: activeExecutorLabel,
         },
       );
       if ("scheduled" in result) scheduled.add(result.message);

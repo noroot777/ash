@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { CaretRight, Copy, File, Wrench, X } from "@phosphor-icons/react";
-import type { Task } from "@harness/shared";
-import { runActivityPhase, type RunActivityTail } from "@harness/shared/run-activity";
+import type { Session, Task } from "@harness/shared";
+import { runActivityExecutor, runActivityPhase, runActivityTail } from "@harness/shared/run-activity";
 import type { AgentAuxEvent, ConversationItem } from "./conversationModel.ts";
 import { ConversationScrollControls } from "../components/ConversationScrollControls.tsx";
 import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
@@ -191,27 +191,29 @@ function UserMessage({
 export function ConversationFeed({
   task,
   items,
+  sessions,
+  pendingExecutor,
   loading,
   error,
   footer,
 }: {
   task: Task;
   items: ConversationItem[];
+  sessions: Session[];
+  /** 刚发出去、服务端还没落下会话行的那一回合目标(见 runActivityExecutor)。 */
+  pendingExecutor?: string | null;
   loading: boolean;
   error: Error | null;
   footer?: React.ReactNode;
 }) {
   const scroll = useRef<HTMLDivElement>(null);
   const objective = parseAttachmentText(task.body);
-  const last = items.at(-1);
-  const tail: RunActivityTail = !last
-    ? "empty"
-    : last.kind === "user"
-      ? "user"
-      : last.kind === "agent"
-        ? last.endedAt ? "agent-ended" : "agent-active"
-        : "other";
-  const activityPhase = runActivityPhase(task.status, tail);
+  const activityPhase = runActivityPhase(task.status, runActivityTail(items));
+  const activityExecutor = runActivityExecutor({
+    sessions,
+    pending: pendingExecutor,
+    fallback: task.executorLabel ?? task.agentType,
+  });
 
   return (
     <ImagePreviewGroup isolated>
@@ -240,7 +242,7 @@ export function ConversationFeed({
               status={task.status}
               mode={task.mode}
               phase={activityPhase}
-              executor={task.executorLabel?.trim() || task.agentType}
+              executor={activityExecutor}
               queuePosition={task.queuePosition}
             />
           )}

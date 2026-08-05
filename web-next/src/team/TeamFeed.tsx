@@ -1,6 +1,6 @@
 import { useRef } from "react";
 import type { Task } from "@harness/shared";
-import { runActivityPhase, type RunActivityTail } from "@harness/shared/run-activity";
+import { runActivityPhase, runActivityTail } from "@harness/shared/run-activity";
 import type { Batch } from "@harness/shared/team";
 import { ArrowElbowDownRight, ArrowRight, SpinnerGap } from "@phosphor-icons/react";
 import { ConversationScrollControls } from "../components/ConversationScrollControls.tsx";
@@ -155,17 +155,11 @@ export function TeamFeed({
 }) {
   const scroll = useRef<HTMLDivElement>(null);
   const byId = new Map(workers.map((worker) => [worker.id, worker]));
-  const last = rows.at(-1);
-  const tail: RunActivityTail = !last
-    ? "empty"
-    : last.kind !== "conv"
-      ? "other"
-      : last.item.kind === "user"
-        ? "user"
-        : last.item.kind === "agent"
-          ? last.item.endedAt ? "agent-ended" : "agent-active"
-          : "other";
-  const activityPhase = runActivityPhase(task.status, tail);
+  // 派活卡片和事件行都不是「消息」:夹在末尾不该把「已收到你的消息」冲掉。
+  const activityPhase = runActivityPhase(
+    task.status,
+    runActivityTail(rows.map((row) => (row.kind === "conv" ? row.item : { kind: "batch" }))),
+  );
   return (
     <ImagePreviewGroup isolated>
       <div className="conversation-scroll-region">

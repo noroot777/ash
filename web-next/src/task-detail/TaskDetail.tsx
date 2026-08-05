@@ -103,6 +103,9 @@ export function TaskDetail({
     committed: boolean;
   } | null>(null);
   const [derivationResetKey, setDerivationResetKey] = useState(0);
+  // 刚发出去的那一回合由谁跑。会话行一落库就由它接管(见 runActivityExecutor),
+  // 这里只补中间那一两秒;任务停下来就作废,免得下一次「运行」照抄旧目标。
+  const [pendingExecutor, setPendingExecutor] = useState<string | null>(null);
   const { indicatorForTask } = useTaskReadState(allTasks, task.id);
   const conversation = useConversation(task.id);
   const followUps = useMemo(
@@ -145,6 +148,9 @@ export function TaskDetail({
     setDeleteOpen(false);
     setDerivation(null);
   }, [initialReviewOpen, task.id]);
+  useEffect(() => {
+    if (task.status !== "running" && task.status !== "queued") setPendingExecutor(null);
+  }, [task.id, task.status]);
 
   const changeReviewOpen = (open: boolean) => {
     setReviewOpen(open);
@@ -270,6 +276,8 @@ export function TaskDetail({
                   <ConversationFeed
                     task={task}
                     items={conversation.items}
+                    sessions={conversation.sessions}
+                    pendingExecutor={pendingExecutor}
                     loading={conversation.refreshing}
                     error={conversation.error}
                     footer={task.question ? (
@@ -287,7 +295,7 @@ export function TaskDetail({
                   <ReplyBox
                     task={task}
                     hasConversation={hasConversation}
-                    onSend={async (text, attachments, options) => {
+                    onSend={async (text, attachments, { executorLabel, ...options }) => {
                       const result = await api.replyTask(task.id, text, { attachments, ...options });
                       // 按**结果**分支而不是按请求参数:任务正在跑时后端会把这条落成
                       // 排队消息(前端没传 sendAt 也一样)。没真发出去就绝不能先贴进会话,
@@ -298,6 +306,8 @@ export function TaskDetail({
                           : `已安排 ${new Date(result.message.sendAt).toLocaleString()} 发送`);
                         return result;
                       }
+                      // 这一轮真发出去了,横幅先按这个名字报,等会话行落库再由它接管。
+                      setPendingExecutor(executorLabel ?? null);
                       conversation.addUser(text, attachments);
                       notify(options.agent
                         ? `已召唤 @${options.agent}${options.model ? ` · ${options.model}` : ""}${options.reasoningEffort ? ` · ${options.reasoningEffort}` : ""} 继续任务`

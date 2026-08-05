@@ -10,10 +10,10 @@
 // 类型错误」，干活的 agent 就带着这句话接着干；答「先这样，我自己来」，它就停在那儿。
 import { eq } from "drizzle-orm";
 import { MAX_QUESTION_OPTIONS, MAX_QUESTION_OPTION_LEN } from "@harness/shared";
-import type { QuestionItem } from "@harness/shared";
+import type { AgentType, QuestionItem } from "@harness/shared";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
-import { tasks } from "./db/schema.js";
+import { agents, sessions, tasks } from "./db/schema.js";
 import { now } from "./util.js";
 
 export interface AskInput {
@@ -43,6 +43,30 @@ export async function setTaskQuestion({ taskId, question, options = [], items = 
     questionOptions: options.length ? options : null,
     questionItems: items,
   });
+}
+
+/**
+ * 答复该送回给**提问的那个** agent,而不是任务的常设执行器。
+ *
+ * 一个普通任务可以住着好几个智能体(每个 @ 召唤进来的都有自己的会话行),提问的
+ * 完全可能是被召唤来的那个。照 `task.agentType` 续跑等于把答复念给了另一个 CLI:
+ * 它既没提过这个问题,也没有那一回合的上下文。会话行按**回合时间**取最新的那条,
+ * 就是刚停下来提问的那条(单飞锁保证同一时刻只有一个在跑)。
+ *
+ * executorId 由会话记下的 profile 名反查:同一类型下换过 profile(供应商/模型都可能
+ * 不同)时,续跑得回到当初那一个,查不到才按类型默认执行器降级。
+ */
+export async function askingAgentFor(
+  taskId: string,
+): Promise<{ agent: AgentType; executorId: string | null } | null> {
+  const turnAt = (row: { turnStartedAt: string | null; startedAt: string }) => row.turnStartedAt ?? row.startedAt;
+  const latest = (await db.select().from(sessions).where(eq(sessions.taskId, taskId)))
+    .filter((row) => row.role === "single")
+    .sort((left, right) => turnAt(left).localeCompare(turnAt(right)))
+    .at(-1);
+  if (!latest) return null;
+  const profile = (await db.select().from(agents).where(eq(agents.name, latest.executor))).at(0);
+  return { agent: latest.agentType as AgentType, executorId: profile?.id ?? null };
 }
 
 /**
