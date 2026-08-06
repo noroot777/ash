@@ -12,7 +12,7 @@ import { MessageAttachments } from "../task-detail/Attachments.tsx";
 import { AcceptanceControls } from "../team/TeamReviewWorkspace.tsx";
 import { DispatchReviewEvidence } from "../team/ReviewEvidence.tsx";
 import { parseAttachmentText } from "../task-detail/utils.ts";
-import { CommitStrip } from "./CommitStrip.tsx";
+import { ChangeMetaBar } from "./ChangeMetaBar.tsx";
 import { ReviewDiffViewer } from "./ReviewDiffViewer.tsx";
 import { sharedTeamParent } from "./reviewModel.ts";
 
@@ -21,18 +21,6 @@ type ReviewData = {
   commits: TaskCommit[];
   diff: TaskDiffResult;
 };
-
-function BranchFacts({ task, data }: { task: Task; data: ReviewData | null }) {
-  const source = data?.diff.sourceBranch || data?.branch || "项目当前分支";
-  const target = data?.diff.targetBranch || task.worktreeBase || "项目当前分支";
-  return (
-    <dl className="single-review-facts">
-      <div><dt>源分支</dt><dd><GitBranch size={12} />{source}</dd></div>
-      <div><dt>合入目标</dt><dd>{target}</dd></div>
-      <div><dt>比较基点</dt><dd>{data?.diff.mergeBase?.slice(0, 12) || "由服务端解析"}</dd></div>
-    </dl>
-  );
-}
 
 function SharedWorkerFacts({ parent, branch }: { parent: Task; branch: string | null }) {
   const params = new URLSearchParams({ project: parent.projectId, task: parent.id });
@@ -111,13 +99,18 @@ export function TaskReviewWorkspace({
           </header>
           <div className="single-review-card-body">
             <MessageAttachments paths={objective.paths} />
-            {sharedParent ? <SharedWorkerFacts parent={sharedParent} branch={sharedBranch} /> : <BranchFacts task={task} data={data} />}
+            {sharedParent && <SharedWorkerFacts parent={sharedParent} branch={sharedBranch} />}
             <DispatchReviewEvidence task={task} parentTask={parentTask} notify={notify} />
             {loading && <p className="single-review-loading"><SpinnerGap size={14} className="is-spinning" />{sharedParent ? "正在读取共享分支归属…" : "正在汇总提交与 diff…"}</p>}
             {!loading && error && <p className="single-review-error">{sharedParent ? "共享分支归属读取失败" : "提交与 diff 加载失败"}：{error}</p>}
             {!sharedParent && !loading && data && (
               <div className="single-review-content">
-                <CommitStrip commits={data.commits} branch={data.branch} />
+                <ChangeMetaBar
+                  source={data.diff.sourceBranch || data.branch || "项目当前分支"}
+                  target={data.diff.targetBranch || task.worktreeBase || "项目当前分支"}
+                  where={data.diff.mergeBase ? `基点 ${data.diff.mergeBase.slice(0, 8)}` : null}
+                  commits={data.commits}
+                />
                 <ReviewDiffViewer result={data.diff} />
               </div>
             )}

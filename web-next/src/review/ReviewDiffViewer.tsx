@@ -1,6 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
-import { FileCode, GitDiff, WarningCircle } from "@phosphor-icons/react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { CornersIn, CornersOut, FileCode, GitDiff, WarningCircle } from "@phosphor-icons/react";
 import type { TaskDiffResult } from "../lib/api.ts";
+import { useDismissable } from "../lib/useDismissable.ts";
 
 type DiffSection = {
   file: TaskDiffResult["files"][number];
@@ -123,10 +125,19 @@ export function ReviewDiffViewer({ result }: { result: TaskDiffResult }) {
   const sections = useMemo(() => splitDiff(result), [result]);
   const [selected, setSelected] = useState(0);
   const [visibleLines, setVisibleLines] = useState(INITIAL_LINE_COUNT);
+  const [zoomed, setZoomed] = useState(false);
+  const zoomBox = useRef<HTMLDivElement>(null);
   useEffect(() => {
     setSelected(0);
     setVisibleLines(INITIAL_LINE_COUNT);
   }, [result]);
+  // 放大层必须 portal 到 body：主工作区自己开了一个堆叠上下文（`sidebar-spread.css`），
+  // 留在原地的 z-index 只在它家里排座次，再大也盖不住左边的任务栏和右边的侧边栏。
+  // 层高取 92：压过所有页面内容（≤90），但低于抽屉(95/96)、确认框(120)、大图预览(220)
+  // 这些后开的浮层——放大着的时候再弹什么，那个仍在最上面，不会被 diff 盖住。
+  // 关闭交给 useDismissable：它按打开顺序记一摞，Esc 一次只退最上面那一层，所以放大态下
+  // 开的确认框先吃 Esc，再按一次才退出放大。
+  useDismissable({ enabled: zoomed, containerRef: zoomBox, onClose: () => setZoomed(false) });
   const selectedIndex = Math.min(selected, Math.max(sections.length - 1, 0));
   const section = sections[selectedIndex];
   const lines = useMemo(() => parseDiffLines(section?.body ?? ""), [section?.body]);
@@ -139,7 +150,7 @@ export function ReviewDiffViewer({ result }: { result: TaskDiffResult }) {
   if (!sections.length) {
     return <div className="single-review-empty">任务分支相对基线没有文件改动。</div>;
   }
-  return (
+  const layout = (
     <div className="single-review-diff-layout">
       <FileRail sections={sections} selected={selectedIndex} onSelect={(index) => { setSelected(index); setVisibleLines(INITIAL_LINE_COUNT); }} />
       <section className="single-review-diff">
@@ -147,6 +158,14 @@ export function ReviewDiffViewer({ result }: { result: TaskDiffResult }) {
           <div><GitDiff size={14} /><b>{section.file.path}</b></div>
           <span><i>+{section.file.additions ?? "?"}</i><em>−{section.file.deletions ?? "?"}</em></span>
           <small>总计 +{additions} −{deletions}</small>
+          <button
+            type="button"
+            className="single-review-zoom"
+            aria-pressed={zoomed}
+            onClick={() => setZoomed((value) => !value)}
+          >
+            {zoomed ? <><CornersIn size={13} />退出放大 · Esc</> : <><CornersOut size={13} />放大</>}
+          </button>
         </header>
         {result.truncated && (
           <div className="single-review-warning"><WarningCircle size={13} weight="fill" />diff 超过 {formatBytes(result.limitBytes)}，这里只展示服务端返回的截断内容。</div>
@@ -171,5 +190,18 @@ export function ReviewDiffViewer({ result }: { result: TaskDiffResult }) {
         )}
       </section>
     </div>
+  );
+  if (!zoomed) return layout;
+  return createPortal(
+    <div
+      className="review-zoom-layer"
+      ref={zoomBox}
+      role="dialog"
+      aria-modal="true"
+      aria-label={`放大查看改动：${section.file.path}`}
+    >
+      {layout}
+    </div>,
+    document.body,
   );
 }

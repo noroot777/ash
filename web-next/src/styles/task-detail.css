@@ -652,7 +652,10 @@
 .task-queue-row > button:hover { background: var(--overlay); color: var(--red); }
 .task-queue-drawer > footer { border-top: 0.5px solid var(--line); padding: 10px 16px; color: var(--faint); font-size: 10px; }
 
-.task-modal-scrim { position: fixed; z-index: 120; inset: 0; display: grid; place-items: center; background: rgb(40 42 48 / 34%); padding: 20px; }
+/* 确认框 portal 到 body 并登记进那一摞可关闭层（见 ConfirmDialog.tsx）：层高要压过所有
+   可能在它下面开着的东西——随手记/群组这些浮层(205~210)、diff 放大层(92)、抽屉(95/96)，
+   否则从那些层里弹出的确认框会被自己的来源盖住。 */
+.task-modal-scrim { position: fixed; z-index: 230; inset: 0; display: grid; place-items: center; background: rgb(40 42 48 / 34%); padding: 20px; }
 .task-confirm-dialog { width: min(480px, 94vw); border: 1px solid var(--line2); border-radius: 13px; background: var(--panel); padding: 16px; box-shadow: var(--shadow); }
 .task-confirm-dialog > header { display: flex; align-items: center; gap: 9px; }
 .task-confirm-dialog > header > span { display: grid; width: 28px; height: 28px; place-items: center; border-radius: 8px; background: var(--accent-soft); color: var(--accent); }

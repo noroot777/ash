@@ -1,5 +1,8 @@
 .team-review-workspace { display: flex; min-height: 0; flex: 1; flex-direction: column; background: var(--canvas); }
-.team-review-subbar { display: flex; min-height: 52px; flex: 0 0 auto; align-items: center; gap: 10px; border-bottom: .5px solid var(--line); background: var(--panel); padding: 8px 16px; }
+.team-review-subbar { display: flex; min-height: 52px; flex: 0 0 auto; flex-wrap: wrap; align-items: center; gap: 10px; border-bottom: .5px solid var(--line); background: var(--panel); padding: 8px 16px; }
+/* 验收动作提到顶栏：它是这一屏唯一的动作，不该跟着调度台卡片一起被折叠收走。失败详情
+   换行铺满顶栏下沿，不去挤那句共享执行者摘要。 */
+.team-review-subbar .team-accept-failure { flex: 1 0 100%; margin: 0; }
 .team-review-subbar > div:first-child { min-width: 0; flex: 1; }
 .team-review-subbar b, .team-review-subbar small { display: block; }
 .team-review-subbar b { font-size: 12.5px; }
@@ -23,10 +26,6 @@
 .team-review-record-title small { background: color-mix(in lch,var(--accent) 8%,var(--raised)); color: var(--accent); }
 .team-review-record-title p { display: -webkit-box; overflow: hidden; margin: 5px 0 0; color: var(--faint); font-size: 10.5px; line-height: 1.45; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 .team-review-record-body { display: grid; gap: 12px; border-top: .5px solid var(--line); background: color-mix(in lch,var(--canvas) 72%,var(--panel)); padding: 12px; }
-.team-review-facts { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 8px; margin: 0; }
-.team-review-facts > div { min-width: 0; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); padding: 7px 8px; }
-.team-review-facts dt { color: var(--faint); font-size: 9px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; }
-.team-review-facts dd { display: flex; min-width: 0; align-items: center; gap: 4px; overflow: hidden; margin: 3px 0 0; color: var(--muted); font-family: var(--font-mono); font-size: 9.5px; text-overflow: ellipsis; white-space: nowrap; }
 
 .team-accept-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 5px; }
 .team-accept-actions > button, .team-accept-actions > span { display: inline-flex; height: 27px; align-items: center; gap: 5px; border: 1px solid var(--line2); border-radius: 7px; background: var(--panel); padding: 0 8px; color: var(--muted); font-size: 10.5px; font-weight: 600; }
@@ -123,12 +122,10 @@
 .team-acceptance-queue > header > span { color: var(--faint); font-size: 10px; }
 .team-acceptance-queue > div { display: grid; grid-template-columns: repeat(auto-fit,minmax(min(100%,470px),1fr)); gap: 10px; padding: 10px; }
 .team-acceptance-queue .team-review-record-body { padding: 9px; }
-.team-acceptance-queue .team-review-facts { grid-template-columns: 1fr; }
 .team-acceptance-queue .single-review-diff-layout { grid-template-columns: 1fr; }
 .team-acceptance-queue .single-review-files > div { max-height: 220px; }
 
 @media (max-width: 760px) {
-  .team-review-facts { grid-template-columns: 1fr; }
   .team-review-record > header { flex-wrap: wrap; }
   .team-accept-actions { width: 100%; justify-content: flex-end; }
   .review-dispatch-fields { grid-template-columns: 1fr; }

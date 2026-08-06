@@ -1,5 +1,7 @@
-import { useEffect } from "react";
+import { useRef } from "react";
+import { createPortal } from "react-dom";
 import { Warning } from "@phosphor-icons/react";
+import { useDismissable } from "../lib/useDismissable.ts";
 
 export function ConfirmDialog({
   title,
@@ -24,16 +26,16 @@ export function ConfirmDialog({
   onConfirm: () => void;
   onClose: () => void;
 }) {
-  useEffect(() => {
-    const close = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !busy) onClose();
-    };
-    window.addEventListener("keydown", close);
-    return () => window.removeEventListener("keydown", close);
-  }, [busy, onClose]);
+  const scrim = useRef<HTMLDivElement>(null);
+  // 登记进那一摞可关闭层，并 portal 到 body。两件事都是为了「后开的在最上面」：
+  // ① 确认框常常是从别的全屏层里弹出来的（放大态的 diff、铺开的侧边栏），留在原地会被
+  //    那一层的堆叠上下文困住；② 不在这摞层里的话，点确认框会被下面那层读成「点了外面」
+  //    而把它连根关掉，Esc 也会被抢走。进了摞就按打开顺序处理：Esc 先关这一个。
+  // 遮罩铺满全屏，所以「点外面」只可能是点遮罩本身，仍由下面的 onMouseDown 判定。
+  useDismissable({ enabled: !busy, containerRef: scrim, onClose });
 
-  return (
-    <div className="task-modal-scrim" role="presentation" onMouseDown={(event) => {
+  return createPortal(
+    <div className="task-modal-scrim" ref={scrim} role="presentation" onMouseDown={(event) => {
       if (event.target === event.currentTarget && !busy) onClose();
     }}>
       <section className="task-confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="task-confirm-title">
@@ -50,6 +52,7 @@ export function ConfirmDialog({
           </button>
         </footer>
       </section>
-    </div>
+    </div>,
+    document.body,
   );
 }

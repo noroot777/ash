@@ -3,13 +3,13 @@ import type { Session, Task } from "@harness/shared";
 import { taskDisplayStatus } from "@harness/shared";
 import { acceptPlan, hasAcceptStation, isFinalHumanGate, nextAnchor } from "@harness/shared/workflow-policy";
 import { STEP_LABELS } from "@harness/shared/workflow";
-import { ArrowsClockwise, CaretDown, CheckCircle, GitBranch, SpinnerGap, WarningCircle, X } from "@phosphor-icons/react";
+import { ArrowsClockwise, CaretDown, CheckCircle, SpinnerGap, WarningCircle, X } from "@phosphor-icons/react";
 import { TaskStatusDot } from "../components/TaskStatusDot.tsx";
 import { api, type AcceptTaskFailure, type TaskCommit, type TaskDiffResult } from "../lib/api.ts";
 import type { IndicatorForTask } from "../lib/useTaskReadState.ts";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import { parseAttachmentText } from "../task-detail/utils.ts";
-import { CommitStrip } from "../review/CommitStrip.tsx";
+import { ChangeMetaBar, worktreeLabel } from "../review/ChangeMetaBar.tsx";
 import { ReviewDiffViewer } from "../review/ReviewDiffViewer.tsx";
 import { DispatchReviewEvidence } from "./ReviewEvidence.tsx";
 
@@ -206,27 +206,54 @@ export function AcceptanceControls({
   );
 }
 
-function WorkspaceFacts({ task, data }: { task: Task; data: ReviewData | null }) {
-  const session = data?.sessions[data.sessions.length - 1];
-  return (
-    <dl className="team-review-facts">
-      <div><dt>源分支</dt><dd><GitBranch size={12} />{data?.diff.sourceBranch || data?.branch || session?.branch || "项目当前分支"}</dd></div>
-      <div><dt>合入目标</dt><dd>{data?.diff.targetBranch || task.worktreeBase || "项目当前分支"}</dd></div>
-      <div><dt>worktree</dt><dd title={session?.worktreePath || undefined}>{session?.worktreePath || (task.useWorktree ? "尚未记录" : "共享项目目录")}</dd></div>
-    </dl>
-  );
+function useReviewChanges(task: Task) {
+  const [data, setData] = useState<ReviewData | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    let alive = true;
+    setLoading(true);
+    Promise.all([api.taskCommits(task.id), api.taskDiff(task.id), api.sessions(task.id)]).then(
+      ([commits, diff, sessions]) => {
+        if (!alive) return;
+        setData({ commits: commits.commits, branch: commits.branch, diff, sessions });
+        setError(null);
+      },
+      (reason) => { if (alive) setError(reason instanceof Error ? reason.message : String(reason)); },
+    ).finally(() => { if (alive) setLoading(false); });
+    return () => { alive = false; };
+  }, [task.id, task.updatedAt]);
+  return { data, loading, error };
 }
 
-function ChangeSummary({ data, loading, error }: { data: ReviewData | null; loading: boolean; error: string | null }) {
+function ChangeSummary({ task, data, loading, error }: { task: Task; data: ReviewData | null; loading: boolean; error: string | null }) {
   if (loading) return <p className="team-review-loading"><SpinnerGap size={13} className="is-spinning" />正在读取分支与提交…</p>;
   if (error) return <p className="team-review-loading is-error">改动信息读取失败：{error}</p>;
   if (!data) return null;
+  const session = data.sessions[data.sessions.length - 1];
   return (
     <div className="team-review-change">
-      <CommitStrip commits={data.commits} branch={data.branch} />
+      <ChangeMetaBar
+        source={data.diff.sourceBranch || data.branch || session?.branch || "项目当前分支"}
+        target={data.diff.targetBranch || task.worktreeBase || "项目当前分支"}
+        where={session?.worktreePath
+          ? worktreeLabel(session.worktreePath)
+          : task.useWorktree ? "worktree 尚未记录" : "共享项目目录"}
+        commits={data.commits}
+      />
       <ReviewDiffViewer result={data.diff} />
     </div>
   );
+}
+
+// 调度台这一份不再套「可折叠的记录卡」：标题、角色、状态、目标正文在团队视图和右侧审查
+// 侧边栏里各有一份，验证证据也在侧边栏点得开——铺在这里只是把真正要看的 diff 往下推。
+// 验收动作上提到了顶栏（那是这一屏唯一的动作，不该跟着卡片折叠一起消失），所以这里只剩
+// 它独有的东西：共享分支的改动本身。
+function LeadChanges({ task, onReadTask }: { task: Task; onReadTask: (task: Task) => void }) {
+  const { data, loading, error } = useReviewChanges(task);
+  useEffect(() => { onReadTask(task); }, [onReadTask, task]);
+  return <ChangeSummary task={task} data={data} loading={loading} error={error} />;
 }
 
 function ReviewRecord({
@@ -251,9 +278,7 @@ function ReviewRecord({
   notify: (message: string) => void;
 }) {
   const [open, setOpen] = useState(defaultOpen);
-  const [data, setData] = useState<ReviewData | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const { data, loading, error } = useReviewChanges(task);
   const objective = parseAttachmentText(task.body).body;
   const display = taskDisplayStatus(task.status, task.stage, !!task.question);
   const indicator = indicatorForTask(task);
@@ -261,19 +286,6 @@ function ReviewRecord({
   useEffect(() => {
     if (open) onReadTask(task);
   }, [onReadTask, open, task]);
-  useEffect(() => {
-    let alive = true;
-    setLoading(true);
-    Promise.all([api.taskCommits(task.id), api.taskDiff(task.id), api.sessions(task.id)]).then(
-      ([commits, diff, sessions]) => {
-        if (!alive) return;
-        setData({ commits: commits.commits, branch: commits.branch, diff, sessions });
-        setError(null);
-      },
-      (reason) => { if (alive) setError(reason instanceof Error ? reason.message : String(reason)); },
-    ).finally(() => { if (alive) setLoading(false); });
-    return () => { alive = false; };
-  }, [task.id, task.updatedAt]);
   return (
     <article className="team-review-record">
       <header>
@@ -287,9 +299,8 @@ function ReviewRecord({
       </header>
       {open && (
         <div className="team-review-record-body">
-          <WorkspaceFacts task={task} data={data} />
           <DispatchReviewEvidence task={task} parentTask={parentTask} notify={notify} />
-          <ChangeSummary data={data} loading={loading} error={error} />
+          <ChangeSummary task={task} data={data} loading={loading} error={error} />
         </div>
       )}
     </article>
@@ -326,11 +337,12 @@ export function TeamReviewWorkspace({
     <section className="team-review-workspace">
       <header className="team-review-subbar">
         <div><b>团队验收台</b><small>{sharedNote}</small></div>
+        <AcceptanceControls task={lead} onTaskUpdated={onTaskUpdated} notify={notify} />
         <button type="button" onClick={onClose}><X size={13} />返回团队流</button>
       </header>
       <div className="team-review-scroll">
         <div className="team-review-stack">
-          <ReviewRecord task={lead} role={lead.useWorktree ? "调度台 / 共享 worktree" : "调度台 / 项目工作区"} actions defaultOpen onTaskUpdated={onTaskUpdated} indicatorForTask={indicatorForTask} onReadTask={onReadTask} notify={notify} />
+          <LeadChanges task={lead} onReadTask={onReadTask} />
           {/* 没有独立 worktree 执行者时整节不出现：它的空态说的就是顶上那句「随团队整体验收
               联动标记」，留一个 0 项的空壳只是把验收按钮往下推。有独立执行者时它才是唯一的
               逐个合入/打回入口，那时必须在。 */}

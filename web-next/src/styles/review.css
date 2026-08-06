@@ -30,11 +30,25 @@
 .single-review-error { color:var(--red); }
 /* 提交横铺一条，宽度全留给下面的「改动文件 + diff」（理由见 CommitStrip.tsx）。 */
 .single-review-content { display:grid; min-width:0; gap:10px; }
+/* 分支 → 合入目标 + 提交，压成一条元信息行（理由见 ChangeMetaBar.tsx）。 */
+.review-meta-bar { min-width:0; overflow:hidden; border:1px solid var(--line); border-radius:8px; background:var(--panel); }
+.review-meta-bar__line { display:flex; min-height:32px; flex-wrap:wrap; align-items:center; gap:6px; padding:5px 9px; color:var(--muted); font-size:10px; }
+.review-meta-bar__line > svg { flex:0 0 auto; color:var(--faint); }
+.review-meta-bar code { min-width:0; overflow:hidden; font-family:var(--font-mono); font-size:9.5px; text-overflow:ellipsis; white-space:nowrap; }
+.review-meta-bar__branch { display:inline-flex; min-width:0; align-items:center; gap:5px; }
+.review-meta-bar__branch svg { flex:0 0 auto; color:var(--faint); }
+.review-meta-bar__branch code { color:var(--accent); }
+.review-meta-bar__where { flex:0 0 auto; border-radius:5px; background:var(--raised); padding:2px 6px; color:var(--faint); font-size:9px; }
+.review-meta-bar__toggle { display:inline-flex; height:24px; flex:0 0 auto; align-items:center; gap:5px; margin-left:auto; border:1px solid var(--line2); border-radius:6px; background:var(--panel); padding:0 8px; color:var(--muted); font-size:9.5px; }
+.review-meta-bar__toggle:hover:not(:disabled) { background:var(--raised); color:var(--ink); }
+.review-meta-bar__toggle:disabled { color:var(--faint); }
+.review-meta-bar__toggle > svg:last-child { transition:transform 140ms ease; }
+.review-meta-bar__toggle[aria-expanded="true"] > svg:last-child { transform:rotate(180deg); }
+.review-meta-bar__commits { border-top:.5px solid var(--line); padding:8px 9px; }
+.review-meta-bar__commits > small { display:block; margin-bottom:6px; color:var(--faint); font-size:9px; }
+.review-meta-bar__commits .review-commit-strip { border:0; border-radius:0; }
+.review-meta-bar__commits .review-commit-strip > ul { padding:0; }
 .review-commit-strip { overflow:hidden; border:1px solid var(--line); border-radius:8px; background:var(--panel); }
-.review-commit-strip > header { display:flex; min-height:34px; flex-wrap:wrap; align-items:center; gap:8px; border-bottom:.5px solid var(--line); padding:6px 9px; color:var(--muted); font-size:10.5px; }
-.review-commit-strip > header > span { display:inline-flex; flex:0 0 auto; align-items:center; gap:5px; }
-.review-commit-strip > header > code { min-width:0; max-width:260px; overflow:hidden; color:var(--accent); font-size:9px; text-overflow:ellipsis; white-space:nowrap; }
-.review-commit-strip > header > small { margin-left:auto; color:var(--faint); font-size:9px; }
 .review-commit-strip > ul { display:grid; grid-template-columns:repeat(auto-fill,minmax(min(100%,290px),1fr)); gap:6px; margin:0; padding:8px 9px; list-style:none; }
 .review-commit-strip > ul > li { display:flex; min-width:0; align-items:baseline; gap:6px; border:1px solid var(--line); border-radius:6px; background:var(--canvas); padding:5px 7px; }
 .review-commit-strip li code { flex:0 0 auto; color:var(--accent); font-family:var(--font-mono); font-size:9px; }
@@ -64,6 +78,16 @@
 .single-review-diff > header b { overflow:hidden; font-family:var(--font-mono); font-size:10px; font-weight:550; text-overflow:ellipsis; white-space:nowrap; }
 .single-review-diff > header > span { display:flex; gap:5px; font-family:var(--font-mono); font-size:9px; }
 .single-review-diff > header small { color:var(--faint); font-size:9px; }
+.single-review-zoom { display:inline-flex; height:24px; flex:0 0 auto; align-items:center; gap:5px; border:1px solid var(--line2); border-radius:6px; background:var(--panel); padding:0 8px; color:var(--muted); font-size:9.5px; }
+.single-review-zoom:hover { background:var(--raised); color:var(--ink); }
+.single-review-zoom[aria-pressed="true"] { border-color:color-mix(in lch,var(--accent) 40%,var(--line2)); color:var(--accent); }
+/* diff 放大层：portal 到 body，层高 92 —— 压过页面内容，低于抽屉/确认框/大图这些后开的
+   浮层（理由与整张 z 序见 ReviewDiffViewer.tsx）。里面从固定高度改成撑满这一屏。 */
+.review-zoom-layer { position:fixed; z-index:92; inset:0; display:flex; background:var(--canvas); padding:12px; }
+.review-zoom-layer > .single-review-diff-layout { min-height:0; flex:1; }
+.review-zoom-layer .single-review-files,.review-zoom-layer .single-review-diff { display:flex; min-height:0; flex-direction:column; }
+.review-zoom-layer .single-review-files > div { max-height:none; flex:1; }
+.review-zoom-layer .single-review-code { max-height:none; flex:1; }
 .single-review-warning { display:flex; align-items:center; gap:6px; border-bottom:.5px solid color-mix(in lch,var(--amber) 25%,var(--line)); background:color-mix(in lch,var(--amber) 7%,var(--panel)); padding:7px 10px; color:var(--amber); font-size:9.5px; }
 .single-review-empty { display:grid; min-height:140px; place-items:center; border:1px dashed var(--line2); border-radius:8px; background:var(--panel); padding:18px; color:var(--faint); font-size:10.5px; text-align:center; }
 .single-review-diff .single-review-empty { border:0; border-radius:0; }
@@ -80,5 +104,5 @@
 .single-review-line.is-hunk > code { color:#4f58a8; }
 .single-review-line.is-meta > code { color:#a1a1aa; }
 .single-review-more-lines { position:sticky; left:0; width:100%; min-width:612px; height:32px; border:0; border-top:1px solid var(--line); background:var(--panel); color:var(--accent); font-size:9.5px; }
-@media (max-width:760px) { .single-review-facts,.single-review-diff-layout { grid-template-columns:1fr; } .single-review-files > div { max-height:220px; } .single-review-card-head { flex-wrap:wrap; } .single-review-card-head .team-accept-actions { width:100%; justify-content:flex-end; } .review-commit-strip > header > small { margin-left:0; flex:1 0 100%; } }
-@media (prefers-reduced-motion:reduce) { .single-review-workspace * { scroll-behavior:auto; } }
+@media (max-width:760px) { .single-review-facts,.single-review-diff-layout { grid-template-columns:1fr; } .single-review-files > div { max-height:220px; } .single-review-card-head { flex-wrap:wrap; } .single-review-card-head .team-accept-actions { width:100%; justify-content:flex-end; } }
+@media (prefers-reduced-motion:reduce) { .single-review-workspace * { scroll-behavior:auto; } .review-meta-bar__toggle > svg:last-child { transition:none; } }
