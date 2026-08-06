@@ -11,11 +11,13 @@ import type { SessionRole } from "./session.ts";
 
 // ── HITL gates (§7) ──────────────────────────────────────────────────────────
 export type GateName = "G1" | "G2"; // G2 is legacy, retained for historical events
+// inject/ask 的 attachments 是**已上传文件的本地绝对路径**(与回复框同一套):服务端
+// 把它们拼成 attachmentsPrompt 附在给辩手的 prompt 末尾,辩手自己去 Read。
 export type GateAction =
   | { kind: "approve"; text?: string; side?: "A" | "B" } // side is retained for older clients
   | { kind: "reject" } // 打回终止
-  | { kind: "inject"; text: string } // 注入意见 → 回炉再辩（始终双方一起回炉）
-  | { kind: "ask"; text: string; target?: "A" | "B" }; // 提问 → 答完继续；target 缺省=问双方，指定=只问那一位辩手
+  | { kind: "inject"; text: string; attachments?: string[] } // 注入意见 → 回炉再辩（始终双方一起回炉）
+  | { kind: "ask"; text: string; target?: "A" | "B"; attachments?: string[] }; // 提问 → 答完继续；target 缺省=问双方，指定=只问那一位辩手
 
 // ── Executor streaming events (§12) ──────────────────────────────────────────
 export type AgentEvent =

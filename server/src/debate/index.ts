@@ -24,6 +24,7 @@ import type { AgentExecutor } from "../executors/types.js";
 import { RUNS_DIR } from "../paths.js";
 import * as P from "./prompts.js";
 import { waitForGate } from "./gates.js";
+import { gateUserMessage } from "./user-message.js";
 import { canSettleDebate as canSettle, debateConsensusBy as consensusBy, isDebateConsensus as isConsensus } from "./settlement.js";
 
 const RAISE_RE = /(^|\n)\s*\[可收敛\]/;
@@ -497,7 +498,7 @@ export async function resumeAtGate(taskId: string, action: GateAction): Promise<
 
     if (action.kind === "reject") return void (await setStatus(taskId, "canceled"));
     if (action.kind === "approve") return void (await setStatus(taskId, "done"));
-    await reDebate(ctx, action.kind, action.text, action.kind === "ask" ? action.target : undefined);
+    await reDebate(ctx, action.kind, action.text, action.kind === "ask" ? action.target : undefined, action.attachments);
     await finishDiscussion(ctx);
   } catch (err) {
     failDebate(taskId, err);
@@ -534,11 +535,14 @@ async function runRebuttalLoop(ctx: Ctx): Promise<boolean> {
 // at a single debater: only that side runs, the other keeps its state untouched
 // (so a directed clarification can't knock the opponent off an already-raised
 // hand). inject always re-runs BOTH — 回炉 means both reconsider.
-async function reDebate(ctx: Ctx, kind: "inject" | "ask", text: string, target?: "A" | "B") {
+async function reDebate(ctx: Ctx, kind: "inject" | "ask", text: string, target?: "A" | "B", attachments?: string[]) {
   ctx.round++;
   const tgt = kind === "ask" ? target : undefined; // inject ignores target
-  recordUserTurn(ctx.taskId, ctx.round, text, tgt); // the human's words land in the timeline first
-  const prompt = kind === "inject" ? P.injectFeedback(text, ctx.round) : P.question(text, ctx.round);
+  // 附件(截图/文件)跟着人的这句话走:时间线上的气泡和辩手拿到的 prompt 都带上它们,
+  // 辩手按路径自己 Read。成稿单点在 gateUserMessage。
+  const message = gateUserMessage(text, attachments);
+  recordUserTurn(ctx.taskId, ctx.round, message, tgt); // the human's words land in the timeline first
+  const prompt = kind === "inject" ? P.injectFeedback(message, ctx.round) : P.question(message, ctx.round);
   // 提问=澄清,不该打回已达成的收敛/结论(继承既有状态);注入=回炉重议,允许双方改判(不继承)。
   const inhA = kind === "ask" ? { raised: ctx.raisedA, agrees: ctx.agreesA, conclusion: ctx.conclusionA } : undefined;
   const inhB = kind === "ask" ? { raised: ctx.raisedB, agrees: ctx.agreesB, conclusion: ctx.conclusionB } : undefined;
@@ -557,7 +561,7 @@ async function reDebate(ctx: Ctx, kind: "inject" | "ask", text: string, target?:
 async function finishDiscussion(ctx: Ctx): Promise<void> {
   const { taskId, cfg } = ctx;
   if (cfg.gateG1 === "on") {
-    const approved = await runGate(taskId, (k, t, target) => reDebate(ctx, k, t, target), () => ({
+    const approved = await runGate(taskId, (k, t, target, files) => reDebate(ctx, k, t, target, files), () => ({
       consensus: isConsensus(ctx),
       consensusBy: consensusBy(ctx),
       conclusionA: ctx.conclusionA ?? null,
@@ -574,7 +578,7 @@ async function finishDiscussion(ctx: Ctx): Promise<void> {
 // re-debate changed things).
 async function runGate(
   taskId: string,
-  reAction: (kind: "inject" | "ask", text: string, target?: "A" | "B") => Promise<void>,
+  reAction: (kind: "inject" | "ask", text: string, target?: "A" | "B", attachments?: string[]) => Promise<void>,
   getInfo?: () => { consensus: boolean; consensusBy?: DebateConsensusBy; conclusionA: string | null; conclusionB: string | null },
 ): Promise<boolean> {
   while (true) {
@@ -592,6 +596,6 @@ async function runGate(
     }
     if (action.kind === "reject") return false;
     await setStatus(taskId, "running");
-    await reAction(action.kind, action.text, action.kind === "ask" ? action.target : undefined);
+    await reAction(action.kind, action.text, action.kind === "ask" ? action.target : undefined, action.attachments);
   }
 }

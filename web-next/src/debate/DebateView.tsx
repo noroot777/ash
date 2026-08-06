@@ -69,12 +69,15 @@ function TurnBubble({
 }) {
   const newRound = turn.round !== previousRound;
   if (turn.speaker === "user") {
+    // 这一轮可能是「一句话 + 一张截图」:正文里那段附件清单要还原成缩略图,而不是把本地路径原样念给用户看。
+    const said = parseAttachmentText(turn.text);
     return (
       <div className="debate-turn-wrap">
         {newRound && <div className="debate-round-divider"><span />第 {turn.round} 轮<span /></div>}
         <article className="debate-user-turn">
           <header><b>你</b>{turn.target && <span>→ 辩手 {turn.target}</span>}{turn.at && <time>{formatInstant(turn.at)}</time>}</header>
-          <p>{turn.text}</p>
+          {said.body && <p>{said.body}</p>}
+          <MessageAttachments paths={said.paths} />
         </article>
       </div>
     );

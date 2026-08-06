@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { parseAttachmentText } from "@harness/shared/attachments";
 import { applyDebateEvent, emptyDebate, rebuildDebateState } from "../src/debate/debateState.ts";
 
 const start = { type: "debate.progress", taskId: "t1", round: 1, speaker: "A", phase: "start", startedAt: "2026-08-06T01:00:00.000Z" };
@@ -38,5 +39,17 @@ const withUser = applyDebateEvent(emptyDebate(), { type: "debate.user", taskId: 
 assert.equal(withUser.turns[0].speaker, "user");
 assert.deepEqual(withUser.turns[0].events, []);
 assert.equal(withUser.turns[0].target, "A");
+
+// 带附件的那一句:气泡要把附件段还原成缩略图,而不是把本地路径原样念给用户看。
+const withFiles = applyDebateEvent(emptyDebate(), {
+  type: "debate.user",
+  taskId: "t1",
+  round: 2,
+  text: "看这张图\n\n[用户附带的文件，请用 Read 工具查看以下本地文件]\n- /tmp/uploads/a-image.png",
+  at: "2026-08-06T01:05:00.000Z",
+});
+const said = parseAttachmentText(withFiles.turns[0].text);
+assert.equal(said.body, "看这张图");
+assert.deepEqual(said.paths, ["/tmp/uploads/a-image.png"]);
 
 console.log("debate timeline ok");

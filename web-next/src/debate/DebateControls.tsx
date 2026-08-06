@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { GateAction, Task } from "@harness/shared";
 import { CheckCircle, Question, SpinnerGap, WarningCircle } from "@phosphor-icons/react";
+import { AttachmentPicker, UploadAttachmentList, useAttachments } from "../task-detail/Attachments.tsx";
 import type { DebateGate } from "./debateState.ts";
 import { DebateHandoffBar } from "./DebateHandoff.tsx";
 import { gateAllowsRevision } from "./handoffPolicy.ts";
@@ -33,13 +34,18 @@ export function DebateGateControls({
   const [mode, setMode] = useState<"inject" | "ask" | null>(null);
   const [text, setText] = useState("");
   const [target, setTarget] = useState<"A" | "B" | "both">("both");
+  const uploads = useAttachments();
+  // 只贴一张图不打字也算数(截图往往就是全部要说的话):文本或附件有一样就能提交。
+  const canSubmit = !!text.trim() || uploads.attachments.length > 0;
   const submit = async () => {
+    if (!canSubmit || !mode || uploads.uploading) return;
     const message = text.trim();
-    if (!message || !mode) return;
+    const attachments = uploads.attachments.map((attachment) => attachment.path);
     await onGate(mode === "inject"
-      ? { kind: "inject", text: message }
-      : { kind: "ask", text: message, target: target === "both" ? undefined : target });
+      ? { kind: "inject", text: message, attachments }
+      : { kind: "ask", text: message, target: target === "both" ? undefined : target, attachments });
     setText("");
+    uploads.clear();
     setMode(null);
     setTarget("both");
   };
@@ -78,8 +84,12 @@ export function DebateGateControls({
       {mode && !handedOff && (
         <div className="debate-gate-composer">
           {mode === "ask" && <div className="debate-targets"><span>提问对象</span>{(["both", "A", "B"] as const).map((value) => <button type="button" className={target === value ? "is-selected" : ""} key={value} onClick={() => setTarget(value)}>{value === "both" ? "双方" : `辩手 ${value}`}</button>)}</div>}
-          <textarea autoFocus rows={3} value={text} placeholder={mode === "inject" ? "补充意见，双方据此回炉再辩…" : "写下要澄清的问题…"} onChange={(event) => setText(event.target.value)} onKeyDown={(event) => { if ((event.metaKey || event.ctrlKey) && event.key === "Enter") { event.preventDefault(); void submit(); } }} />
-          <button type="button" disabled={busy || !text.trim()} onClick={() => void submit()}>{busy ? <SpinnerGap size={13} className="is-spinning" /> : null}提交并继续</button>
+          <UploadAttachmentList attachments={uploads.attachments} error={uploads.error} onRemove={uploads.remove} />
+          <textarea autoFocus rows={3} value={text} placeholder={mode === "inject" ? "补充意见，双方据此回炉再辩（可粘贴截图）…" : "写下要澄清的问题（可粘贴截图）…"} onChange={(event) => setText(event.target.value)} onPaste={uploads.onPaste} onKeyDown={(event) => { if ((event.metaKey || event.ctrlKey) && event.key === "Enter") { event.preventDefault(); void submit(); } }} />
+          <div className="debate-gate-composer-actions">
+            <AttachmentPicker addFiles={uploads.addFiles} disabled={busy} />
+            <button type="button" className="debate-gate-submit" disabled={busy || uploads.uploading || !canSubmit} onClick={() => void submit()}>{busy || uploads.uploading ? <SpinnerGap size={13} className="is-spinning" /> : null}{uploads.uploading ? "上传中…" : "提交并继续"}</button>
+          </div>
         </div>
       )}
     </section>
