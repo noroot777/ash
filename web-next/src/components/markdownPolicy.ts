@@ -1,4 +1,5 @@
 import { api } from "../lib/api.ts";
+import { attachmentView, isImagePath } from "../task-detail/utils.ts";
 
 const REVIEW_FILE_PATH = /\/data\/runs\/([\w-]+)\/review\/round-(\d+)\/([^/]+)$/;
 
@@ -7,18 +8,21 @@ export type ReviewFileTarget = {
   url: string;
 };
 
+// 坏转义原样留着：允许哪些文件名、路径安不安全，权威在服务端，不在这里。
+function decodeSafe(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
 export function reviewFileTarget(path?: string): ReviewFileTarget | null {
   if (!path) return null;
   const match = path.match(REVIEW_FILE_PATH);
   if (!match) return null;
   const [, taskId, round, encodedName] = match;
-  let name = encodedName;
-  try {
-    name = decodeURIComponent(encodedName);
-  } catch {
-    // Keep malformed escapes unchanged; the server remains the authority for
-    // allowed review filenames and path safety.
-  }
+  const name = decodeSafe(encodedName);
   return { name, url: api.taskReviewFileUrl(taskId, Number(round), name) };
 }
 
@@ -29,6 +33,49 @@ export function isLocalOpenHref(href?: string): href is string {
   } catch {
     return false;
   }
+}
+
+function sameOriginUrl(href: string): URL | null {
+  try {
+    const url = new URL(href, window.location.origin);
+    return url.origin === window.location.origin ? url : null;
+  } catch {
+    return null;
+  }
+}
+
+/** 站内取得到的那张图：灯箱要的 url，加上给人看的名字。 */
+export type ImagePreviewTarget = ReviewFileTarget;
+
+// 正文里指向图片的**链接**（不是 `![]()` 内嵌图），点开要落进全站统一的灯箱，而不是
+// 甩出一个新标签页——新标签页没有上一张/下一张、没有 Esc 关闭，还把人从对话里带走了。
+// 判定顺序就是「这张图住在哪」，每一档都对应一个真能把字节吐出来的接口：
+//   ① 验证证据 data/runs/<task>/review/round-<n>/…  → 证据接口（绝对路径、file:// 都认）
+//   ② 用户贴的附件 data/uploads/<file>              → 附件接口
+//   ③ 本来就是站内 URL（/api/uploads/… 一类）        → 原样用
+// 其余一律返回 null 交回普通链接：**站外图和本机磁盘路径都不接管**——后者拼出来的同源
+// URL 服务端根本取不到，灯箱只会白给一个空框，比新标签页更糟。
+export function imagePreviewTarget(href?: string): ImagePreviewTarget | null {
+  if (!href) return null;
+  // 「用系统应用打开本地文件」是另一条路，不抢它的链接。
+  if (isLocalOpenHref(href)) return null;
+  return servableImage(href);
+}
+
+function servableImage(href: string): ImagePreviewTarget | null {
+  const review = reviewFileTarget(href);
+  if (review) return isImagePath(review.name) ? review : null;
+
+  const url = sameOriginUrl(href);
+  const external = /^https?:/i.test(href) && !url;
+  if (!external) {
+    const attachment = attachmentView(href.replace(/^file:\/\//i, ""));
+    if (attachment.image && attachment.url) return { name: attachment.name, url: attachment.url };
+  }
+
+  if (!url || !isImagePath(url.pathname)) return null;
+  if (!/^https?:/i.test(href) && !url.pathname.startsWith("/api/")) return null;
+  return { name: decodeSafe(url.pathname.split("/").pop() ?? "") || "图片", url: url.toString() };
 }
 
 export function currentOriginOpenLocalUrl(href: string): string {

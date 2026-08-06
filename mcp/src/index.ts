@@ -368,7 +368,7 @@ server.registerTool(
   {
     title: "上报验证结论",
     description:
-      "在验证回合里上报与 TaskStatus 正交的验证结论，不会改变队列或任务结算。验证轮开始时后端自动置 verifying；真实运行验证后报 verified 或 verify_failed。web 改动必须启动服务、用浏览器确认并截图，只读代码或只过编译不算验证。验证现在就跑在被验任务自己身上（旁路回合），所以 taskId 填被验任务的 id——那多半就是你当前这个任务；历史的独立审查任务仍填被审任务 id，不是审查任务自己的 id。implemented/awaiting_acceptance/merged/accepted 保留给兼容与验收链路；团队调度台(mode=team)仍不适用。普通执行回合不自我上报验证阶段。",
+      "在验证回合里上报与 TaskStatus 正交的验证结论，不会改变队列或任务结算。验证轮开始时后端自动置 verifying；真实运行验证后报 verified 或 verify_failed。web 改动必须启动服务、用浏览器确认行为，只读代码或只过编译不算验证；截图按需——改动看得见时必须截，看不见的改动（服务端逻辑、CLI、脚本）不需要截图，报告里贴命令与输出即可。验证现在就跑在被验任务自己身上（旁路回合），所以 taskId 填被验任务的 id——那多半就是你当前这个任务；历史的独立审查任务仍填被审任务 id，不是审查任务自己的 id。implemented/awaiting_acceptance/merged/accepted 保留给兼容与验收链路；团队调度台(mode=team)仍不适用。普通执行回合不自我上报验证阶段。",
     inputSchema: {
       taskId: z.string().describe("被验任务 id（就地验证时即当前任务；历史独立审查任务填被审任务 id）"),
       stage: TASK_STAGE.describe(`阶段：${STAGE_ORDER.join(" | ")}`),
