@@ -1,0 +1,61 @@
+/* 文件树 Inspector + 会话区文件查看器 */
+
+.file-tree { display:flex; min-height:0; height:100%; flex-direction:column; }
+.file-tree__head { display:flex; flex:0 0 auto; align-items:center; gap:6px; border-bottom:.5px solid var(--line); padding:8px 9px; }
+.file-tree__where { min-width:0; flex:1; }
+.file-tree__where b { display:flex; min-width:0; align-items:center; gap:4px; overflow:hidden; color:var(--ink); font-size:11px; font-weight:600; text-overflow:ellipsis; white-space:nowrap; }
+.file-tree__where b > svg { flex:0 0 auto; color:var(--accent); }
+.file-tree__where small { display:block; overflow:hidden; margin-top:2px; color:var(--faint); font-size:9px; text-overflow:ellipsis; white-space:nowrap; direction:rtl; text-align:left; }
+.file-tree__action { display:grid; width:24px; height:24px; flex:0 0 auto; place-items:center; border:1px solid var(--line2); border-radius:6px; background:var(--panel); color:var(--muted); }
+.file-tree__action:hover:not(:disabled) { background:var(--raised); color:var(--ink); }
+.file-tree__action[aria-pressed="true"] { border-color:color-mix(in lch,var(--accent) 35%,var(--line2)); background:color-mix(in lch,var(--accent) 9%,var(--panel)); color:var(--accent); }
+.file-tree__action:disabled { opacity:.5; }
+
+.file-tree__error { display:flex; align-items:center; gap:5px; margin:8px 9px 0; border:1px solid color-mix(in lch,var(--red) 26%,var(--line)); border-radius:7px; background:color-mix(in lch,var(--red) 6%,var(--panel)); padding:6px 8px; color:var(--red); font-size:10px; }
+.file-tree__body { min-height:0; flex:1; overflow:auto; padding:4px 0 16px; }
+.file-tree__hint { margin:2px 0; color:var(--faint); font-size:9.5px; }
+
+.file-tree__row { display:flex; width:100%; min-height:24px; align-items:center; gap:5px; border:0; border-radius:5px; background:transparent; padding-right:8px; text-align:left; }
+.file-tree__row:hover { background:var(--raised); }
+.file-tree__row.is-active { background:color-mix(in lch,var(--accent) 12%,var(--panel)); box-shadow:inset 2px 0 var(--accent); }
+.file-tree__row.is-ignored { opacity:.5; }
+.file-tree__caret { display:grid; width:10px; flex:0 0 10px; place-items:center; color:var(--faint); }
+.file-tree__glyph { display:grid; flex:0 0 auto; place-items:center; color:var(--faint); }
+.file-tree__row.is-active .file-tree__glyph { color:var(--accent); }
+.file-tree__name { min-width:0; flex:1; overflow:hidden; color:var(--muted); font-size:11px; text-overflow:ellipsis; white-space:nowrap; }
+.file-tree__row.is-active .file-tree__name { color:var(--ink); font-weight:600; }
+.file-tree__tag { flex:0 0 auto; border-radius:3px; background:var(--overlay); padding:0 3px; color:var(--faint); font-size:8px; font-style:normal; }
+.file-tree__row small { flex:0 0 auto; color:var(--faint); font-family:var(--font-mono); font-size:8.5px; }
+
+.file-viewer { display:flex; min-width:0; min-height:0; flex:1; flex-direction:column; background:var(--canvas); }
+.file-viewer__bar { display:flex; min-height:52px; flex:0 0 auto; align-items:center; gap:8px; border-bottom:.5px solid var(--line); background:var(--panel); padding:8px 16px; }
+.file-viewer__title { min-width:0; flex:1; }
+.file-viewer__title b { display:block; overflow:hidden; color:var(--ink); font-size:12.5px; text-overflow:ellipsis; white-space:nowrap; }
+.file-viewer__title small { display:block; overflow:hidden; color:var(--faint); font-size:10px; text-overflow:ellipsis; white-space:nowrap; }
+.file-viewer__action { display:inline-flex; height:28px; flex:0 0 auto; align-items:center; gap:5px; border:1px solid var(--line2); border-radius:7px; background:var(--panel); padding:0 9px; color:var(--muted); font-size:10.5px; }
+.file-viewer__action:hover:not(:disabled) { background:var(--raised); color:var(--ink); }
+.file-viewer__action:disabled { opacity:.5; }
+.file-viewer__notice { display:flex; align-items:center; gap:5px; margin:0; border-bottom:.5px solid var(--line); background:color-mix(in lch,var(--amber) 8%,var(--panel)); padding:6px 16px; color:var(--muted); font-size:10px; }
+.file-viewer__body { display:flex; min-height:0; flex:1; flex-direction:column; overflow:auto; }
+.file-viewer__state { display:flex; align-items:center; gap:6px; margin:18px; color:var(--faint); font-size:11px; }
+.file-viewer__state.is-error { color:var(--red); }
+
+.file-viewer__code { display:flex; min-height:0; flex:1; align-items:flex-start; background:var(--panel); }
+.file-viewer__gutter { position:sticky; left:0; display:flex; flex:0 0 auto; flex-direction:column; border-right:.5px solid var(--line); background:var(--panel); padding:12px 8px 24px; color:var(--faint); font-family:var(--font-mono); font-size:11px; line-height:1.6; text-align:right; user-select:none; }
+.file-viewer__text { min-width:0; flex:1; margin:0; padding:12px 16px 24px; color:var(--ink); font-family:var(--font-mono); font-size:11px; line-height:1.6; white-space:pre; }
+
+.file-viewer__media { display:grid; min-height:0; flex:1; place-items:center; padding:20px; }
+.file-viewer__media img { max-width:100%; max-height:100%; border:1px solid var(--line); border-radius:8px; background:var(--panel); object-fit:contain; }
+.file-viewer__pdf { min-height:0; flex:1; border:0; background:var(--panel); }
+.file-viewer__placeholder { max-width:420px; margin:40px auto; border:1px dashed var(--line2); border-radius:10px; padding:22px; text-align:center; }
+.file-viewer__placeholder b { color:var(--ink); font-size:12px; }
+.file-viewer__placeholder p { margin:6px 0 0; color:var(--faint); font-size:10.5px; line-height:1.6; }
+
+.file-openwith { position:relative; flex:0 0 auto; }
+.file-openwith__menu { position:absolute; z-index:40; top:calc(100% + 5px); right:0; width:250px; max-height:340px; overflow-y:auto; }
+.file-openwith__hint { margin:0; padding:8px 10px; color:var(--faint); font-size:10px; }
+.file-openwith__hint.is-error { color:var(--red); }
+.file-openwith__app { display:flex; min-width:0; flex-direction:column; gap:1px; }
+.file-openwith__app b { display:flex; align-items:center; gap:4px; color:var(--ink); font-size:11px; font-weight:550; }
+.file-openwith__app b > svg { color:var(--accent); }
+.file-openwith__app small { color:var(--faint); font-size:9px; }

@@ -127,6 +127,59 @@ export type TaskDiffResult = {
   reason?: string;
 };
 
+/** 任务实际在哪干活。服务端只读地解析，绝不为了看文件而新建 worktree。 */
+export type FileWorkspaceRoot = {
+  path: string;
+  branch: string | null;
+  gitRepo: boolean;
+  source: "session" | "worktree" | "repo";
+};
+
+export type FileEntry = {
+  name: string;
+  path: string;
+  kind: "dir" | "file";
+  size: number;
+  mtime: string | null;
+  ignored: boolean;
+  symlink: boolean;
+};
+
+export type FileListing = {
+  root: FileWorkspaceRoot;
+  path: string;
+  entries: FileEntry[];
+  truncated: boolean;
+};
+
+export type FileContent = {
+  path: string;
+  name: string;
+  size: number;
+  mtime: string | null;
+  kind: "text" | "image" | "pdf" | "binary";
+  text: string | null;
+  truncated: boolean;
+  absPath: string;
+  mime: string | null;
+};
+
+/** 本机上能打开某个文件的一个应用。`match` 说明它凭什么被列进来。 */
+export type AppOpener = {
+  id: string;
+  name: string;
+  detail: string;
+  match: "extension" | "type" | "generic";
+  isDefault: boolean;
+};
+
+export type OpenerProbe = {
+  platform: string;
+  canReveal: boolean;
+  apps: AppOpener[];
+  note: string | null;
+};
+
 export type AcceptTaskWarning = {
   reason: "temporary_cleanup_failed";
   message: string;
@@ -359,6 +412,24 @@ export const api = {
     request(`/tasks/${id(taskId)}/diff`),
   taskCommits: (taskId: string): Promise<{ branch: string | null; commits: TaskCommit[] }> =>
     request(`/tasks/${id(taskId)}/commits`),
+
+  taskFiles: (taskId: string, path = ""): Promise<FileListing> =>
+    request(`/tasks/${id(taskId)}/files?path=${id(path)}`),
+  taskFile: (taskId: string, path: string): Promise<{ root: FileWorkspaceRoot; file: FileContent }> =>
+    request(`/tasks/${id(taskId)}/file?path=${id(path)}`),
+  // 图片/PDF 预览直接把这个地址交给 <img>/<iframe>，不经过 JSON。
+  taskFileRawUrl: (taskId: string, path: string): string =>
+    apiPath(`/tasks/${id(taskId)}/file/raw?path=${id(path)}`),
+  taskFileOpeners: (taskId: string, path: string, refresh = false): Promise<OpenerProbe> =>
+    request(`/tasks/${id(taskId)}/file/openers?path=${id(path)}${refresh ? "&refresh=1" : ""}`),
+  revealTaskFile: (taskId: string, path: string): Promise<{ ok: true; absPath: string }> =>
+    request(`/tasks/${id(taskId)}/file/reveal`, json("POST", { path })),
+  openTaskFile: (
+    taskId: string,
+    path: string,
+    appId: string | null,
+  ): Promise<{ ok: true; absPath: string }> =>
+    request(`/tasks/${id(taskId)}/file/open`, json("POST", { path, appId })),
 
   notes: (projectId?: string): Promise<Note[]> =>
     request(`/notes${projectId ? `?projectId=${id(projectId)}` : ""}`),

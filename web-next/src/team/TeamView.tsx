@@ -10,6 +10,7 @@ import {
 import { defaultOnceTime } from "../components/ScheduleControl.tsx";
 import { SlashMenu } from "../components/SlashMenu.tsx";
 import { InspectorHost } from "../inspector/index.ts";
+import { FileViewer } from "../files/FileViewer.tsx";
 import { api, type ReplyTaskResult, type TeamCuaStatus } from "../lib/api.ts";
 import { OriginTaskBar } from "../components/TaskOrigin.tsx";
 import { useConversation } from "../lib/useConversation.ts";
@@ -324,6 +325,8 @@ export function TeamView({
   const [groups, setGroups] = useState<Group[]>([]);
   const [selectedWorkerId, setSelectedWorkerId] = useState<string | null>(null);
   const [reviewOpen, setReviewOpen] = useState(initialReviewOpen);
+  // 中间那一栏同一时刻只放一样东西：团队会话 / 验收台 / 文件。
+  const [openFilePath, setOpenFilePath] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [iterateBusy, setIterateBusy] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
@@ -407,6 +410,7 @@ export function TeamView({
 
   const changeReviewOpen = (open: boolean) => {
     setReviewOpen(open);
+    if (open) setOpenFilePath(null);
     onReviewOpenChange?.(open);
   };
   useEffect(() => {
@@ -512,6 +516,12 @@ export function TeamView({
         onOpenTask: openTaskById,
         indicatorForTask,
         workerLiveLines,
+        openFilePath,
+        onOpenFile: (path: string) => {
+          setOpenFilePath(path);
+          setSelectedWorkerId(null);
+          if (reviewOpen) changeReviewOpen(false);
+        },
       } satisfies TeamInspectorContext}
       tabPolicy={inspectorPolicy}
     >
@@ -542,6 +552,13 @@ export function TeamView({
       />
       {reviewOpen ? (
         <TeamReviewWorkspace lead={task} workers={workers} onClose={() => changeReviewOpen(false)} onTaskUpdated={onTaskUpdate} indicatorForTask={indicatorForTask} onReadTask={markTaskRead} notify={notify} />
+      ) : openFilePath ? (
+        <FileViewer
+          taskId={task.id}
+          path={openFilePath}
+          onClose={() => setOpenFilePath(null)}
+          notify={notify}
+        />
       ) : (
         <>
           {task.question && (

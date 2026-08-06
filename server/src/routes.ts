@@ -36,6 +36,7 @@ import { getAppSettings, parseAppSettingsPatch, patchAppSettings } from "./app-s
 import { mountSkillRoutes } from "./skill-routes.js";
 import { mountTaskRoutes } from "./task-routes.js";
 import { mountTaskRunRoutes } from "./task-run-routes.js";
+import { mountFileRoutes } from "./file-routes.js";
 import { mountOpenAiConverterRoutes } from "./openai-converter/routes.js";
 import { mountProviderTestRoutes } from "./provider-test.js";
 
@@ -524,6 +525,8 @@ api.post("/groups/resolve", async (c) => {
 
 mountTaskRoutes(api);
 mountTaskRunRoutes(api);
+// 任务工作目录的只读文件浏览 + 交给本机去做的三个动作(实现在 ./file-routes.ts)。
+mountFileRoutes(api);
 // ── 供应商 (relay, system-level) — 挂给执行器用,harness 不直连它跑推理 ────────
 const toProvider = (r: typeof llmProviders.$inferSelect): LlmProvider => ({
   id: r.id,
