@@ -1,24 +1,17 @@
 import { useEffect, useMemo, useState } from "react";
 import type { Session, Task } from "@harness/shared";
-import { STAGE_LABELS, taskDisplayStatus } from "@harness/shared";
+import { taskDisplayStatus } from "@harness/shared";
 import { acceptPlan, hasAcceptStation, isFinalHumanGate, nextAnchor } from "@harness/shared/workflow-policy";
 import { STEP_LABELS } from "@harness/shared/workflow";
-import { ArrowsClockwise, CaretDown, CheckCircle, GitBranch, GitCommit, SpinnerGap, WarningCircle, X } from "@phosphor-icons/react";
+import { ArrowsClockwise, CaretDown, CheckCircle, GitBranch, SpinnerGap, WarningCircle, X } from "@phosphor-icons/react";
 import { TaskStatusDot } from "../components/TaskStatusDot.tsx";
 import { api, type AcceptTaskFailure, type TaskCommit, type TaskDiffResult } from "../lib/api.ts";
-import type { IndicatorForTask, TaskStatusIndicator } from "../lib/useTaskReadState.ts";
+import type { IndicatorForTask } from "../lib/useTaskReadState.ts";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
-import { formatInstant, parseAttachmentText } from "../task-detail/utils.ts";
+import { parseAttachmentText } from "../task-detail/utils.ts";
+import { CommitStrip } from "../review/CommitStrip.tsx";
 import { ReviewDiffViewer } from "../review/ReviewDiffViewer.tsx";
 import { DispatchReviewEvidence } from "./ReviewEvidence.tsx";
-
-function reviewStatusIndicator(task: Task): TaskStatusIndicator {
-  if (task.question || task.status === "paused" || task.status === "awaiting_review") return "attention";
-  if (task.status === "running" || task.status === "queued") return "active";
-  if (task.status === "backlog" || task.status === "idle") return "pending";
-  if (task.stage === "verify_failed" || task.status === "failed" || task.status === "canceled") return "error";
-  return "success";
-}
 
 type ReviewData = {
   commits: TaskCommit[];
@@ -229,14 +222,8 @@ function ChangeSummary({ data, loading, error }: { data: ReviewData | null; load
   if (error) return <p className="team-review-loading is-error">改动信息读取失败：{error}</p>;
   if (!data) return null;
   return (
-    <div className="team-review-change-grid">
-      <section>
-        <h4><GitCommit size={13} />提交 · {data.commits.length}</h4>
-        {!data.commits.length && <p>没有可展示的提交。</p>}
-        {data.commits.map((commit) => (
-          <div className="team-review-commit" key={commit.sha}><code>{commit.sha.slice(0, 8)}</code><span>{commit.subject}</span><time>{formatInstant(commit.at)}</time></div>
-        ))}
-      </section>
+    <div className="team-review-change">
+      <CommitStrip commits={data.commits} branch={data.branch} />
       <ReviewDiffViewer result={data.diff} />
     </div>
   );
@@ -309,35 +296,6 @@ function ReviewRecord({
   );
 }
 
-function SharedWorkerVerification({
-  lead,
-  workers,
-  notify,
-}: {
-  lead: Task;
-  workers: Task[];
-  notify: (message: string) => void;
-}) {
-  const [selectedId, setSelectedId] = useState<string | null>(workers.find((worker) => worker.stage === "verify_failed")?.id ?? workers[0]?.id ?? null);
-  const selected = workers.find((worker) => worker.id === selectedId) ?? null;
-  const failed = workers.filter((worker) => worker.stage === "verify_failed").length;
-  return (
-    <section className="team-shared-verification">
-      <header><div><b>共享执行者验证</b><small>代码改动已包含在调度台共享分支中，团队级验收会联动标记这些执行者。</small></div><span className={failed ? "is-failed" : ""}>{failed ? `${failed} 个验证失败` : `${workers.length} 个共享执行者`}</span></header>
-      <div className="team-shared-worker-grid">
-        {workers.map((worker) => (
-          <button type="button" key={worker.id} className={selectedId === worker.id ? "is-selected" : worker.stage === "verify_failed" ? "is-failed" : ""} onClick={() => setSelectedId((current) => current === worker.id ? null : worker.id)}>
-            <TaskStatusDot indicator={reviewStatusIndicator(worker)} surface="team" />
-            <span><b>{worker.title}</b><small>{worker.stage ? STAGE_LABELS[worker.stage] : worker.status}</small></span>
-            <em>{worker.stage || "未上报"}</em><CaretDown size={12} />
-          </button>
-        ))}
-      </div>
-      {selected && <div className="team-shared-evidence"><b>{selected.title}</b><DispatchReviewEvidence task={selected} parentTask={lead} notify={notify} /></div>}
-    </section>
-  );
-}
-
 export function TeamReviewWorkspace({
   lead,
   workers,
@@ -357,16 +315,22 @@ export function TeamReviewWorkspace({
 }) {
   const sharedWorkers = useMemo(() => workers.filter((worker) => !worker.useWorktree), [workers]);
   const independentWorkers = useMemo(() => workers.filter((worker) => worker.useWorktree), [workers]);
+  // 共享执行者不在这里逐个铺开——它们的改动就在上面这份共享分支 diff 里，逐个的轮次与
+  // 证据在右侧审查侧边栏。这里只留一句摘要，因为「按下验收会联动标记它们」是不可逆动作
+  // 的前提事实，用户在按之前该看得见（确认框里也说了同一件事）。
+  const sharedFailed = sharedWorkers.filter((worker) => worker.stage === "verify_failed").length;
+  const sharedNote = sharedWorkers.length
+    ? `共享分支上还有 ${sharedWorkers.length} 个执行者${sharedFailed ? `（${sharedFailed} 个验证未通过）` : ""}，随团队整体验收联动标记；逐个证据见右侧审查。`
+    : "核对共享分支与独立 worktree 后分别验收或打回。";
   return (
     <section className="team-review-workspace">
       <header className="team-review-subbar">
-        <div><b>团队验收台</b><small>配合右侧审查记录，核对共享分支与独立 worktree 后分别验收或打回。</small></div>
+        <div><b>团队验收台</b><small>{sharedNote}</small></div>
         <button type="button" onClick={onClose}><X size={13} />返回团队流</button>
       </header>
       <div className="team-review-scroll">
         <div className="team-review-stack">
           <ReviewRecord task={lead} role={lead.useWorktree ? "调度台 / 共享 worktree" : "调度台 / 项目工作区"} actions defaultOpen onTaskUpdated={onTaskUpdated} indicatorForTask={indicatorForTask} onReadTask={onReadTask} notify={notify} />
-          {sharedWorkers.length > 0 && <SharedWorkerVerification lead={lead} workers={sharedWorkers} notify={notify} />}
           <section className="team-acceptance-queue">
             <header><div><b>独立执行者待验收队列</b><small>每个显式 worktree 都有独立分支与合入动作，按执行者分别处理。</small></div><span>{independentWorkers.length} 项</span></header>
             {independentWorkers.length ? (

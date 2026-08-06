@@ -4,7 +4,6 @@ import { taskDisplayStatus } from "@harness/shared";
 import {
   CaretDown,
   GitBranch,
-  GitCommit,
   SpinnerGap,
   X,
 } from "@phosphor-icons/react";
@@ -12,7 +11,8 @@ import { api, type TaskCommit, type TaskDiffResult } from "../lib/api.ts";
 import { MessageAttachments } from "../task-detail/Attachments.tsx";
 import { AcceptanceControls } from "../team/TeamReviewWorkspace.tsx";
 import { DispatchReviewEvidence } from "../team/ReviewEvidence.tsx";
-import { formatInstant, parseAttachmentText } from "../task-detail/utils.ts";
+import { parseAttachmentText } from "../task-detail/utils.ts";
+import { CommitStrip } from "./CommitStrip.tsx";
 import { ReviewDiffViewer } from "./ReviewDiffViewer.tsx";
 import { sharedTeamParent } from "./reviewModel.ts";
 
@@ -48,22 +48,6 @@ function SharedWorkerFacts({ parent, branch }: { parent: Task; branch: string | 
         <a href={`/?${params.toString()}`}>打开父团队</a>
       </div>
     </>
-  );
-}
-
-function CommitList({ branch, commits }: { branch: string | null; commits: TaskCommit[] }) {
-  return (
-    <section className="single-review-commits">
-      <header><span><GitCommit size={13} />提交</span><b>{commits.length}</b></header>
-      {branch && <code className="single-review-branch" title={branch}>{branch}</code>}
-      {!commits.length && <p>没有可归属到该任务分支的提交。</p>}
-      {commits.map((commit) => (
-        <article key={commit.sha}>
-          <code>{commit.sha.slice(0, 8)}</code>
-          <div><b>{commit.subject}</b><time>{formatInstant(commit.at)}</time></div>
-        </article>
-      ))}
-    </section>
   );
 }
 
@@ -133,7 +117,7 @@ export function TaskReviewWorkspace({
             {!loading && error && <p className="single-review-error">{sharedParent ? "共享分支归属读取失败" : "提交与 diff 加载失败"}：{error}</p>}
             {!sharedParent && !loading && data && (
               <div className="single-review-content">
-                <CommitList branch={data.branch} commits={data.commits} />
+                <CommitStrip commits={data.commits} branch={data.branch} />
                 <ReviewDiffViewer result={data.diff} />
               </div>
             )}

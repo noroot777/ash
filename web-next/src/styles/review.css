@@ -28,20 +28,25 @@
 .single-review-shared-note > a { display:inline-flex; height:27px; flex:0 0 auto; align-items:center; border:1px solid var(--line2); border-radius:7px; background:var(--panel); padding:0 8px; color:var(--accent); font-size:9.5px; font-weight:600; }
 .single-review-loading,.single-review-error { display:flex; align-items:center; gap:6px; margin:0; border:1px dashed var(--line2); border-radius:8px; padding:18px; color:var(--faint); font-size:10.5px; }
 .single-review-error { color:var(--red); }
-.single-review-content { display:grid; min-width:0; grid-template-columns:230px minmax(0,1fr); gap:10px; }
-.single-review-commits,.single-review-files,.single-review-diff { min-width:0; overflow:hidden; border:1px solid var(--line); border-radius:8px; background:var(--panel); }
-.single-review-commits > header,.single-review-files > header { display:flex; height:34px; align-items:center; justify-content:space-between; border-bottom:.5px solid var(--line); padding:0 9px; color:var(--muted); font-size:10.5px; }
-.single-review-commits > header span,.single-review-files > header span { display:inline-flex; align-items:center; gap:5px; }
-.single-review-commits > header b,.single-review-files > header b { color:var(--faint); font-size:9.5px; }
-.single-review-branch { display:block; overflow:hidden; border-bottom:.5px solid var(--line); padding:7px 9px; color:var(--accent); font-size:9px; text-overflow:ellipsis; white-space:nowrap; }
-.single-review-commits > p { margin:0; padding:16px 9px; color:var(--faint); font-size:10px; text-align:center; }
-.single-review-commits > article { display:flex; gap:7px; border-top:.5px solid var(--line); padding:8px 9px; }
-.single-review-commits > article:first-of-type { border-top:0; }
-.single-review-commits > article > code { flex:0 0 auto; color:var(--accent); font-size:9px; }
-.single-review-commits > article > div { min-width:0; }
-.single-review-commits > article b,.single-review-commits > article time { display:block; }
-.single-review-commits > article b { color:var(--muted); font-size:10px; font-weight:550; line-height:1.4; }
-.single-review-commits > article time { margin-top:2px; color:var(--faint); font-size:8.5px; }
+/* 提交横铺一条，宽度全留给下面的「改动文件 + diff」（理由见 CommitStrip.tsx）。 */
+.single-review-content { display:grid; min-width:0; gap:10px; }
+.review-commit-strip { overflow:hidden; border:1px solid var(--line); border-radius:8px; background:var(--panel); }
+.review-commit-strip > header { display:flex; min-height:34px; flex-wrap:wrap; align-items:center; gap:8px; border-bottom:.5px solid var(--line); padding:6px 9px; color:var(--muted); font-size:10.5px; }
+.review-commit-strip > header > span { display:inline-flex; flex:0 0 auto; align-items:center; gap:5px; }
+.review-commit-strip > header > code { min-width:0; max-width:260px; overflow:hidden; color:var(--accent); font-size:9px; text-overflow:ellipsis; white-space:nowrap; }
+.review-commit-strip > header > small { margin-left:auto; color:var(--faint); font-size:9px; }
+.review-commit-strip > ul { display:grid; grid-template-columns:repeat(auto-fill,minmax(min(100%,290px),1fr)); gap:6px; margin:0; padding:8px 9px; list-style:none; }
+.review-commit-strip > ul > li { display:flex; min-width:0; align-items:baseline; gap:6px; border:1px solid var(--line); border-radius:6px; background:var(--canvas); padding:5px 7px; }
+.review-commit-strip li code { flex:0 0 auto; color:var(--accent); font-family:var(--font-mono); font-size:9px; }
+.review-commit-strip li b { min-width:0; flex:1; overflow:hidden; color:var(--muted); font-size:10px; font-weight:550; text-overflow:ellipsis; white-space:nowrap; }
+.review-commit-strip li time { flex:0 0 auto; color:var(--faint); font-size:8.5px; }
+.review-commit-strip > p { margin:0; padding:14px 9px; color:var(--faint); font-size:10px; text-align:center; }
+.review-commit-strip > button { width:100%; min-height:29px; border:0; border-top:.5px solid var(--line); background:var(--canvas); color:var(--accent); font-size:9.5px; }
+.review-commit-strip > button:hover { background:var(--raised); }
+.single-review-files,.single-review-diff { min-width:0; overflow:hidden; border:1px solid var(--line); border-radius:8px; background:var(--panel); }
+.single-review-files > header { display:flex; height:34px; align-items:center; justify-content:space-between; border-bottom:.5px solid var(--line); padding:0 9px; color:var(--muted); font-size:10.5px; }
+.single-review-files > header span { display:inline-flex; align-items:center; gap:5px; }
+.single-review-files > header b { color:var(--faint); font-size:9.5px; }
 .single-review-diff-layout { display:grid; min-width:0; grid-template-columns:240px minmax(0,1fr); gap:10px; }
 .single-review-files > div { max-height:620px; overflow-y:auto; }
 .single-review-files > div > button { display:flex; width:100%; min-height:34px; align-items:center; gap:7px; border:0; border-top:.5px solid var(--line); background:transparent; padding:6px 8px; text-align:left; }
@@ -75,6 +80,5 @@
 .single-review-line.is-hunk > code { color:#4f58a8; }
 .single-review-line.is-meta > code { color:#a1a1aa; }
 .single-review-more-lines { position:sticky; left:0; width:100%; min-width:612px; height:32px; border:0; border-top:1px solid var(--line); background:var(--panel); color:var(--accent); font-size:9.5px; }
-@media (max-width:1000px) { .single-review-content { grid-template-columns:1fr; } .single-review-commits { display:none; } }
-@media (max-width:760px) { .single-review-facts,.single-review-diff-layout { grid-template-columns:1fr; } .single-review-files > div { max-height:220px; } .single-review-card-head { flex-wrap:wrap; } .single-review-card-head .team-accept-actions { width:100%; justify-content:flex-end; } }
+@media (max-width:760px) { .single-review-facts,.single-review-diff-layout { grid-template-columns:1fr; } .single-review-files > div { max-height:220px; } .single-review-card-head { flex-wrap:wrap; } .single-review-card-head .team-accept-actions { width:100%; justify-content:flex-end; } .review-commit-strip > header > small { margin-left:0; flex:1 0 100%; } }
 @media (prefers-reduced-motion:reduce) { .single-review-workspace * { scroll-behavior:auto; } }
