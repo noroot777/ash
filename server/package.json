@@ -39,11 +39,13 @@
     "test:workflow-library": "tsx scripts/test-workflow-library.ts",
     "test:workflow-run": "tsx scripts/test-workflow-run.ts",
     "test:workflow-gate": "tsx scripts/test-workflow-gate.ts",
+    "test:verify-override": "tsx scripts/test-verify-override.ts",
     "test:preview-log": "tsx scripts/test-preview-log.ts",
     "test:preview-probe": "tsx scripts/test-preview-probe.ts",
     "test:openai-converter": "tsx scripts/test-openai-converter.ts",
     "test:skills": "tsx scripts/test-skills.ts",
-    "test:file-browser": "tsx scripts/test-file-browser.ts"
+    "test:file-browser": "tsx scripts/test-file-browser.ts",
+    "test:mcp-handoff": "tsx scripts/test-mcp-handoff.ts"
   },
   "dependencies": {
     "@harness/shared": "*",

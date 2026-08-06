@@ -15,6 +15,7 @@ import { reattachDetachedAgent } from "./executors/detached.js";
 import { RUNS_DIR } from "./paths.js";
 import { consumeSingleRun } from "./single-run.js";
 import { isSameProcess } from "./proc.js";
+import { findMcpChannelHolders } from "./mcp-holders.js";
 
 // 「现在重启会打断谁」——给 scripts/restart.sh 的安全闸用。
 //
@@ -23,20 +24,25 @@ import { isSameProcess } from "./proc.js";
 // 「判为 failed」——一句现在是假的话。判据要从「有几个在跑」改成
 // 「**有几个是重启会真断的**」。
 //
-// 分三类，各自的依据都摆出来，别让调用方再猜：
+// 分四类，各自的依据都摆出来，别让调用方再猜：
 //  · survives    单飞 + 有活着的 detached 进程 → 重启后按 pid+offset 接管，无感
 //  · resumes     团队调度台 → 进程会断，但下次有人说话就 --resume 接回；
 //                丢的是当前这一轮，不是整个任务
 //  · interrupted 真会被判 failed 的：老代码起的（没 agent_pid）、queued 还没起
 //                进程的、ssh 目标的、进程已经不在的
+//  · mcpDisrupted survives 里**手上还握着 harness MCP 子进程**的那几个。重启
+//                :4317 伤不到它们，但 restart.sh 第 3 步的 `pkill` 会当场掐断
+//                它们的交卷通道（2026-08-06 那次验证白跑就是这么来的）。这一类
+//                跟 survives 是**包含关系不是并列**：它们仍然活得过重启。
 export type RestartImpact = {
   survives: { id: string; title: string; pid: number }[];
   resumes: { id: string; title: string }[];
   interrupted: { id: string; title: string; reason: string }[];
+  mcpDisrupted: { id: string; title: string; pid: number }[];
 };
 
 export async function restartImpact(): Promise<RestartImpact> {
-  const out: RestartImpact = { survives: [], resumes: [], interrupted: [] };
+  const out: RestartImpact = { survives: [], resumes: [], interrupted: [], mcpDisrupted: [] };
   for (const t of await db.select().from(tasks).where(inArray(tasks.status, ["running", "queued"]))) {
     const label = { id: t.id, title: t.title || t.id };
     if (t.mode === "team") {
@@ -63,6 +69,8 @@ export async function restartImpact(): Promise<RestartImpact> {
     }
     out.survives.push({ ...label, pid: sess.agentPid });
   }
+  const holders = await findMcpChannelHolders(out.survives.map((s) => s.pid));
+  out.mcpDisrupted = out.survives.filter((s) => holders.has(s.pid));
   return out;
 }
 

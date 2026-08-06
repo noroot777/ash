@@ -629,3 +629,25 @@
 .wf-vnote { margin: 4px 0 0; color: var(--faint); font-size: 9.5px; line-height: 1.5; }
 .wf-vgate { margin-top: 7px; }
 .wf-vgate .team-accept-actions { flex-wrap: wrap; }
+/* 验证站上那两个按钮（再验一轮 / 人工强制通过）：跟人工关口那副（.team-accept-actions）
+   同一副长相——两处都是「这条线停在我这儿了，你来处理」，长得不一样只会让人以为它们
+   是两类东西。多出来的只有红色那一档：线上画着「合并并清理」时，强制通过会连带把合并
+   做掉，按钮得先红给人看。 */
+.wf-verify-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; }
+.wf-verify-actions > button {
+  display: inline-flex;
+  height: 27px;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid var(--line2);
+  border-radius: 7px;
+  background: var(--panel);
+  padding: 0 8px;
+  color: var(--muted);
+  font-size: 10.5px;
+  font-weight: 600;
+}
+.wf-verify-actions > button:hover:not(:disabled) { background: var(--raised); color: var(--ink); }
+.wf-verify-actions > button:disabled { opacity: .55; cursor: not-allowed; }
+.wf-verify-actions > button.is-primary { border-color: var(--accent); background: var(--accent); color: #fff; }
+.wf-verify-actions > button.is-danger { border-color: var(--red); background: var(--red); color: #fff; }
