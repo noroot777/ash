@@ -50,8 +50,14 @@ try {
   await zoomLayer.waitFor();
 
   // 铺满窗口，但右边让开 inspector 那一列：放大是把 diff 铺开来看，旁边的审查记录得留着。
+  // fixture 抄了 `.workspace-shell` 右边那 8px 内边距，inspector 因此差一点没贴到窗口右缘——
+  // 让位的判据必须容得下这一点，否则真实页面里一条 inspector 都找不到（放大又会盖回去）。
   const viewport = page.viewportSize();
   const inspectorBox = await inspector.boundingBox();
+  assert.ok(
+    viewport.width - (inspectorBox.x + inspectorBox.width) >= 8,
+    "fixture 该保留右侧内边距，inspector 不能正好贴死窗口右缘",
+  );
   const box = await zoomLayer.boundingBox();
   assert.deepEqual(
     { x: box.x, y: box.y, width: box.width, height: box.height },
@@ -77,10 +83,11 @@ try {
   assert.ok(overInspector, "inspector 不该被放大层盖住");
 
   // 拖宽 inspector，放大层跟着让位（ResizeObserver）。
+  const widened = Math.round(inspectorBox.x + inspectorBox.width - 420);
   await inspector.evaluate((node) => node.style.setProperty("--inspector-width", "420px"));
   await page.waitForFunction(
-    () => Math.round(document.querySelector(".review-zoom-layer").getBoundingClientRect().width) === 860,
-    null,
+    (expected) => Math.round(document.querySelector(".review-zoom-layer").getBoundingClientRect().width) === expected,
+    widened,
     { timeout: 2000 },
   );
   await inspector.evaluate((node) => node.style.setProperty("--inspector-width", "300px"));

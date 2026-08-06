@@ -21,14 +21,18 @@ const INITIAL_LINE_COUNT = 360;
 const ZOOM_BASE_Z = 92;
 
 // 放大时要让开的，是贴着窗口右缘的那条 inspector——审查记录、验证证据都在里面，盖住它
-// 等于把这一屏唯一的旁证也收走了。按「右缘对齐」找而不是顺着自己的 DOM 往上找：diff 有时
+// 等于把这一屏唯一的旁证也收走了。按「最靠右」找而不是顺着自己的 DOM 往上找：diff 有时
 // 长在团队的执行者抽屉里，那里面还嵌着一条自己的 inspector，让开它会在窗口中间掏个洞。
+// 留 24px 的容差是必须的：`.workspace-shell` 右边有 8px 内边距，要求严丝合缝贴住窗口右缘
+// 就一条都找不到，放大又会盖回 inspector 上去（第一版就是这么漏的）。
+const RIGHT_EDGE_SLACK = 24;
+
 function rightEdgeInspector(): HTMLElement | null {
-  const hosts = [...document.querySelectorAll<HTMLElement>(".inspector-host")];
-  return hosts.find((host) => {
-    const rect = host.getBoundingClientRect();
-    return rect.width > 0 && Math.abs(rect.right - window.innerWidth) <= 1;
-  }) ?? null;
+  const hosts = [...document.querySelectorAll<HTMLElement>(".inspector-host")]
+    .map((host) => ({ host, rect: host.getBoundingClientRect() }))
+    .filter(({ rect }) => rect.width > 0 && window.innerWidth - rect.right <= RIGHT_EDGE_SLACK)
+    .sort((a, b) => b.rect.right - a.rect.right);
+  return hosts[0]?.host ?? null;
 }
 
 // 自己所在那一层有多高。执行者抽屉是 z-index 95，放大层固定 92 就会被它盖住，按钮看着

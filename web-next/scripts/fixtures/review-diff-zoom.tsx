@@ -38,10 +38,14 @@ const diff: TaskDiffResult = {
 // 自成一个堆叠上下文）、右边 inspector（挂在主区里面）。两条约束都靠这个结构才测得出来：
 // 放大层留在原地盖不住任务栏，所以必须 portal；inspector 又在主区那个上下文里，portal 之后
 // 单靠 z-index 一定会把它也盖掉，所以只能靠让出宽度。
+//
+// 外层那圈 padding 抄的是 `.workspace-shell`（`workspace.css`）：右边 8px 让 inspector 差
+// 这么一点没贴到窗口右缘。别当它是装饰——第一版就是在这 8px 上翻的车：让位的判据要求右缘
+// 严丝合缝对齐窗口，fixture 恰好对齐所以全绿，真实页面里一条都找不到，放大照样盖住 inspector。
 function Fixture() {
   const [confirming, setConfirming] = useState(false);
   return (
-    <div style={{ display: "flex", height: 640 }}>
+    <div style={{ display: "flex", height: 640, padding: "8px 8px 8px 0" }}>
       <aside id="fixture-rail" style={{ width: 220, minWidth: 220, background: "var(--chrome)", padding: 12 }}>
         任务栏
       </aside>
