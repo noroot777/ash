@@ -477,7 +477,8 @@
   margin-top: 9px;
 }
 
-.team-info-panel__empty {
+.team-info-panel__empty,
+.team-review-inspector__empty {
   margin: 0;
   color: var(--faint);
   font-size: 10.5px;

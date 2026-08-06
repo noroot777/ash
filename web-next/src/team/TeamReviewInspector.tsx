@@ -15,6 +15,18 @@ function reviewLabel(task: Task) {
   return TASK_STATUS_LABELS[task.status];
 }
 
+// 这一条决定「点开有没有东西看」：要么另派了审查执行者（`reviewOf` 指向被审者），要么
+// 自己走过就地验证轮（stage 落在验证三态）或已请求自动审查。
+//
+// 判据里**没有** `accepted`：团队整体验收会把每个执行者连同调度台一起标成「验收完成」，
+// 那是验收痕迹不是验证痕迹。照它列出来，列表里就会混进一堆点开只有「尚无审查记录」的
+// 执行者和调度台——用户看到的正是那一屏。被审对象自己的 accepted 不受影响：它由代表它
+// 的那条审查任务带进列表，不走这条判据。
+function hasReviewRecord(task: Task): boolean {
+  if (task.reviewOf || task.reviewRequested) return true;
+  return task.stage === "verifying" || task.stage === "verified" || task.stage === "verify_failed";
+}
+
 // 抽屉里这一份要单独成组件：只有开着的时候才去拉记录，关着不发请求。
 function TargetEvidence({
   subject,
@@ -73,7 +85,7 @@ export function TeamReviewInspector({
     const seen = new Map<string, number>();
     const list: Task[] = [];
     for (const task of all) {
-      if (reviewedIds.has(task.id)) continue;
+      if (reviewedIds.has(task.id) || !hasReviewRecord(task)) continue;
       const at = task.reviewOf ? seen.get(task.reviewOf) : undefined;
       if (at === undefined) {
         if (task.reviewOf) seen.set(task.reviewOf, list.length);
@@ -98,13 +110,12 @@ export function TeamReviewInspector({
     [lead.id, workerIndex],
   );
 
-  const ranked = useMemo(() => targets.filter((task) => task.id !== lead.id), [lead.id, targets]);
-  const counted = ranked.length ? ranked : targets;
-  const completed = counted.filter((task) => {
+  // 统计口径跟列表完全一致：列出几条就是几个审查对象，不会出现「列表两条、统计说三个」。
+  const completed = targets.filter((task) => {
     const stage = subjectOf(task).stage;
     return stage === "verified" || stage === "accepted";
   }).length;
-  const failed = counted.filter((task) => subjectOf(task).stage === "verify_failed").length;
+  const failed = targets.filter((task) => subjectOf(task).stage === "verify_failed").length;
 
   // 抽屉默认不弹：一进来就盖住列表反而更难挑。点哪条开哪条，再点一次收起。
   const [openId, setOpenId] = useState<string | null>(null);
@@ -126,7 +137,7 @@ export function TeamReviewInspector({
           </span>
           <div>
             <b>{failed ? `${failed} 项未通过` : "团队审查"}</b>
-            <small>{completed} 项已验证 · {counted.length} 个审查对象</small>
+            <small>{completed} 项已验证 · {targets.length} 个审查对象</small>
           </div>
         </header>
         <div className="review-inspector__actions">
@@ -135,8 +146,22 @@ export function TeamReviewInspector({
       </section>
 
       <section className="team-review-inspector__targets" aria-label="团队审查对象">
-        <header><b>审查对象</b><small>{reviewedIds.size ? "审查执行者代表它审的那个执行者，点开在左侧看轮次与证据" : "点开在左侧看各自的轮次与证据"}</small></header>
+        <header>
+          <b>审查对象</b>
+          <small>
+            {!targets.length
+              ? "跑过验证轮或派了审查执行者的对象会出现在这里"
+              : reviewedIds.size
+                ? "审查执行者代表它审的那个执行者，点开在左侧看轮次与证据"
+                : "点开在左侧看各自的轮次与证据"}
+          </small>
+        </header>
         <div ref={listRef}>
+          {!targets.length && (
+            <p className="team-review-inspector__empty">
+              这个团队还没有审查记录。执行者只是被验收标记过，并不代表验证跑过——所以这里先空着，而不是把整队执行者列成一排空记录。
+            </p>
+          )}
           {targets.map((target) => {
             const targetSubject = subjectOf(target);
             return (

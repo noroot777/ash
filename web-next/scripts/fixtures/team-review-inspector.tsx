@@ -24,7 +24,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
           reviewTaskStatus: "done",
           conclusion: "verified",
           reportMarkdown: `${review[1]} 的验证报告`,
-          screenshots: [],
+          screenshots: ["shot.png"],
         }],
       }),
       { status: 200, headers: { "content-type": "application/json" } },
@@ -53,11 +53,14 @@ function task(id: string, title: string, extra: Partial<Task> = {}): Task {
   };
 }
 
-const lead = task("lead", "团队：随手记全屏", { parentId: null, mode: "team", status: "idle" });
+// 调度台与 w3 都是被团队整体验收连带标上 accepted 的:验收痕迹不是验证痕迹,列表里不该出现。
+const lead = task("lead", "团队：随手记全屏", { parentId: null, mode: "team", status: "idle", stage: "accepted" });
 const workers: Task[] = [
   task("w1", "做搜索", { stage: "verified" }),
   task("w2", "做弹窗", { stage: "verify_failed" }),
-  task("w3", "改图标"),
+  task("w3", "改图标", { stage: "accepted" }),
+  // 就地验证的执行者:没有审查任务代表它,自己带着验证 stage 进列表。
+  task("w4", "写文案", { stage: "verified" }),
   task("r1", "审查:做搜索", { reviewOf: "w1", stage: "accepted" }),
   task("r2", "审查:做弹窗", { reviewOf: "w2" }),
   // 同一个执行者被审第二轮：列表里该收敛成一条，留后派的这个。
