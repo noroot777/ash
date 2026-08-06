@@ -621,28 +621,43 @@
 
 .skill-scan-row {
   display: grid;
-  grid-template-columns: minmax(120px, 0.4fr) minmax(0, 1fr);
+  grid-template-columns: minmax(140px, 0.4fr) minmax(0, 1fr);
   align-items: baseline;
   gap: 12px;
   border-bottom: 1px solid var(--line);
   padding: 10px 14px;
 }
 
+/* 左列两行：第一行是这一行的主语（CLI 类型），第二行列出被归并进来的 profile 名字。
+   四个 claude profile 合成一行之后，人得能确认「我注册的那几个都在这一行里」，
+   所以名字必须列出来，而且要允许换行——`claude@官方 · claude@公司自建 · …` 很容易超宽。 */
 .skill-scan-who {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 6px;
+  display: grid;
+  gap: 2px;
+  min-width: 0;
 }
 
 .skill-scan-who b {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   font-size: 13px;
 }
 
 .skill-scan-who em {
+  overflow-wrap: anywhere;
   color: var(--faint);
   font-size: 11px;
   font-style: normal;
+}
+
+.skill-scan-tag {
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 0 5px;
+  color: var(--faint);
+  font-size: 10px;
+  font-weight: 500;
 }
 
 .skill-scan-what {

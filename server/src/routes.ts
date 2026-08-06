@@ -215,7 +215,7 @@ api.get("/agents/detect", async (c) => c.json(await detectLocalAgents()));
 // 已知 CLI 目录:含上面那几个可执行器(带 type),外加一批只做「装没装」展示的。
 api.get("/agents/catalog", async (c) => c.json(await detectKnownClis()));
 
-// `/技能` 的三个端点在 `routes-skills.ts`(cwd 取项目仓库根、ssh 执行器不拿本机盘冒充)。
+// `/技能` 的三个端点在 `skill-routes.ts`(cwd 取项目仓库根、ssh 执行器不拿本机盘冒充)。
 mountSkillRoutes(api);
 
 api.post("/agents", async (c) => {

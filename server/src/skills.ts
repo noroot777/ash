@@ -341,33 +341,41 @@ export function warmSkills(cwds: string[]): void {
 }
 
 /**
- * 设置页的「谁扫到了什么」:按**已注册的执行器 profile** 逐行给出条数与样本。
+ * 设置页的「谁扫到了什么」:按 **CLI 类型 × 本机/远端** 归并后逐行给出条数与样本。
  *
- * 为什么按 profile 而不是按 CLI 类型列:技能目录确实是按类型定的(`~/.claude/skills`
- * 之类),同类型的两个 profile 扫出来一模一样 —— 但**能不能扫**是 profile 级的事
- * (ssh 那台的技能在远端盘上)。用户注册了 5 个执行器,就该看见这 5 行各自是什么情况,
- * 而不是看见 3 行 CLI 类型然后自己去推哪个 profile 对应哪行。
+ * 归并这一维的理由写在 `SkillScanRow` 的注释里(一句话:换供应商不会换出另一份技能)。
+ * 这里只强调实现上的一条:归并键必须带上 remote —— 同一个 CLI 既注册了本机 profile
+ * 又注册了 ssh profile 时,那是**两行**,不能让本机那份的条数替远端说话。
  */
 export function scanOverview(opts: {
   cwd: string;
-  executors: { id: string | null; label: string; agentType: string; remote: boolean }[];
+  executors: { label: string; agentType: string; remote: boolean }[];
   force?: boolean;
 }): SkillScanOverview {
-  const rows: SkillScanRow[] = opts.executors.map((executor) => {
+  const groups = new Map<string, { agentType: string; remote: boolean; executors: string[] }>();
+  for (const executor of opts.executors) {
+    const key = `${executor.agentType}|${executor.remote ? "ssh" : "local"}`;
+    // 空 label = 调用方在「一个 profile 都没注册」时兜的那几行,没有名字可署。
+    const named = executor.label ? [executor.label] : [];
+    const group = groups.get(key);
+    if (group) group.executors.push(...named);
+    else groups.set(key, { agentType: executor.agentType, remote: executor.remote, executors: named });
+  }
+
+  const rows: SkillScanRow[] = [...groups.values()].map((group) => {
     const list = listSkills({
-      agentType: executor.agentType,
+      agentType: group.agentType,
       cwd: opts.cwd,
       force: opts.force,
-      remote: executor.remote,
+      remote: group.remote,
     });
     const bySource: Record<SkillSource, number> = { project: 0, user: 0, plugin: 0, builtin: 0 };
     for (const skill of list.skills) bySource[skill.source] += 1;
     return {
-      executorId: executor.id,
-      executorLabel: executor.label,
       agentType: list.agentType,
       remote: list.remote,
-      scannable: isScannable(executor.agentType),
+      executors: group.executors,
+      scannable: isScannable(group.agentType),
       count: list.skills.length,
       bySource,
       sample: list.skills.slice(0, 6).map((skill) => skill.command),

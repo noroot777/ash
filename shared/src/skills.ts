@@ -33,14 +33,20 @@ export interface SkillList {
   skills: SkillEntry[];
 }
 
-/** 设置页里「谁扫到了什么」的一行:一个**已注册的执行器 profile**。 */
+/**
+ * 设置页里「谁扫到了什么」的一行:一个 **CLI 类型 × 本机/远端** 的组合。
+ *
+ * 不按执行器 profile 逐行列:技能目录是按 CLI 类型定的(`~/.claude/skills` 之类),
+ * 同一个 CLI 的几个 profile 差别只在供应商——那影响的是「谁来算」,不是「装了什么」,
+ * 扫出来必然是同一份。四个 claude profile 各占一行、条数样本一模一样,是噪声不是信息。
+ * 唯一真会改变结果的是 ssh:那台的技能在它自己的盘上,所以只按这一维再分一行。
+ */
 export interface SkillScanRow {
-  /** agents.id;为空 = 这个 CLI 还没注册 profile,只是按类型扫了一下。 */
-  executorId: string | null;
-  executorLabel: string;
   agentType: AgentType;
-  /** ssh 远端:技能在那头的盘上,本机扫不到,不假装有。 */
+  /** true = 这一行说的是跑在 ssh 远端的那些 profile。 */
   remote: boolean;
+  /** 这一行覆盖了哪些已注册的 profile(按名字);空 = 该 CLI 还没注册 profile。 */
+  executors: string[];
   /** 这个 CLI 有没有技能目录约定(claude/codex/gemini 之外的返回 false)。 */
   scannable: boolean;
   count: number;
@@ -49,6 +55,7 @@ export interface SkillScanRow {
   /** 前几个名字,让人一眼认出扫的是不是自己那批。 */
   sample: string[];
 }
+
 
 export interface SkillScanOverview {
   /** 扫的是哪个项目的仓库根;空串 = 只有用户级/插件级技能。 */
