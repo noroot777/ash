@@ -6,10 +6,11 @@
 // 一条都没进，于是照着作废的原始正文打回了正确产物）。
 // 跑:npm -w server run test:user-directives
 import assert from "node:assert/strict";
-import { capDirectives, directivesIn, formatDirectives } from "../src/user-directives.js";
+import { capDirectives, directivesIn, formatDirectives, orderDirectives } from "../src/user-directives.js";
 
 const turn = (t: string, text: string, extra: Record<string, unknown> = {}) =>
   `\x1e${JSON.stringify({ t, agent: "claude", text, at: "2026-08-05T14:19:10.000Z", ...extra })}`;
+const SESSION_START = "2026-08-05T08:00:00.000Z";
 
 // ── 谁能进这一段 ────────────────────────────────────────────────────────────
 
@@ -25,7 +26,7 @@ const raw = [
   "我继续跑一轮验证。",
 ].join("\n");
 
-const found = directivesIn(raw);
+const found = directivesIn(raw, SESSION_START);
 assert.deepEqual(
   found.map((d) => d.text),
   ["等高的吧，再就是把「走到哪一步」这一列删掉", "顺便把行高调紧一点"],
@@ -36,17 +37,51 @@ assert.equal(found[0]?.at, "2026-08-05T14:19:10.000Z", "时刻原样带出，验
 // 附件是需求的一部分（用户经常直接贴图说「改成这样」），路径必须跟着走。
 const withFile = directivesIn(
   turn("user", "按这个截图改\n\n[用户附带的文件]\n- /tmp/shot.png"),
+  SESSION_START,
 );
 assert.deepEqual(withFile[0]?.attachments, ["/tmp/shot.png"], "附件路径摘出来");
 assert.equal(withFile[0]?.text, "按这个截图改", "附件块不留在正文里");
 
 // 只贴图不打字也是一条需求，不能因为正文空就丢掉。
 assert.equal(
-  directivesIn(turn("user", "[用户附带的文件]\n- /tmp/only.png")).length,
+  directivesIn(turn("user", "[用户附带的文件]\n- /tmp/only.png"), SESSION_START).length,
   1,
   "光贴图没打字也算一条",
 );
-assert.equal(directivesIn(turn("user", "   \n  ")).length, 0, "纯空白不算一条");
+assert.equal(directivesIn(turn("user", "   \n  "), SESSION_START).length, 0, "纯空白不算一条");
+
+// ── 跨会话必须按时刻排，不能按会话先后拼 ────────────────────────────────────
+//
+// 一条会话可以被反复 resume（sessions 行复用、startedAt 不动），所以「先开的会话」里
+// 完全可能有比「后开的会话」更晚的话。真实形状：claude 会话 A 说 X → @ 来 codex 开会话
+// B 说 Y → 切回 A 说 Z。按会话拼会得到 X、Z、Y，而提示词紧接着写着「冲突以更晚的为准」
+// —— 验证者会据此认定 Y 推翻了 Z，正好把最新的需求当成作废的。
+const at = (iso: string, text: string) => turn("user", text, { at: iso });
+const sessionA = directivesIn(
+  [at("2026-08-06T10:00:00.000Z", "X 最早说的"), at("2026-08-06T12:00:00.000Z", "Z 最后说的")].join("\n"),
+  "2026-08-06T09:00:00.000Z",
+);
+const sessionB = directivesIn(
+  at("2026-08-06T11:00:00.000Z", "Y 中间说的"),
+  "2026-08-06T10:30:00.000Z", // 会话 B 开得比 A 晚，但它里面那条话在 Z 之前
+);
+assert.deepEqual(
+  orderDirectives([...sessionA, ...sessionB]).map((d) => d.text),
+  ["X 最早说的", "Y 中间说的", "Z 最后说的"],
+  "按时刻排（会话 A 续接后说的 Z 必须排在会话 B 的 Y 之后）",
+);
+
+// 没有 at 的老围栏：沿用同文件里前一条的时刻，再没有就退到会话 startedAt。
+const legacy = directivesIn(
+  [turn("user", "老围栏没时刻", { at: undefined }), at("2026-08-06T13:00:00.000Z", "新围栏有时刻")].join("\n"),
+  "2026-08-06T09:30:00.000Z",
+);
+assert.equal(legacy[0]?.at, null, "没有时刻就如实给 null，不编一个");
+assert.deepEqual(
+  orderDirectives([...legacy, ...sessionB]).map((d) => d.text),
+  ["老围栏没时刻", "Y 中间说的", "新围栏有时刻"],
+  "缺时刻的按会话 startedAt 定位，且不打乱它所在文件的内部顺序",
+);
 
 // ── 截断要说出来，不能静默砍 ────────────────────────────────────────────────
 
@@ -71,7 +106,12 @@ assert.match(
 
 assert.equal(formatDirectives(capDirectives([], [], false)), "", "没有追加需求就不占地方");
 
-const text = formatDirectives(capDirectives(found, ["/data/runs/T/s.md"], false));
+// 但「一条都没扫到」和「扫漏了」不是一回事：后者必须出声，否则验证者会当成前者。
+const blind = formatDirectives(capDirectives([], ["/data/runs/T/big.md"], true));
+assert.match(blind, /只扫了尾部/, "空手而归但扫漏了，仍要说出来");
+assert.match(blind, /\/data\/runs\/T\/big\.md/, "并给出该自己去翻的记录路径");
+
+const text = formatDirectives(capDirectives(orderDirectives(found), ["/data/runs/T/s.md"], false));
 assert.match(text, /同等效力/, "必须点明与原始正文同等效力");
 assert.match(text, /以更晚的为准/, "冲突时的取舍要写死，别让验证者自己猜");
 assert.match(text, /1\. \[2026-08-05T14:19:10\.000Z\] 等高的吧/, "按时间先后编号列出");

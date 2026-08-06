@@ -29,6 +29,9 @@ export type UserDirective = {
   attachments: string[];
 };
 
+/** 带排序键的中间形态。`key` 只用来排序，不外露给提示词。 */
+export type TimedDirective = UserDirective & { key: string };
+
 export type CollectedDirectives = {
   /** 按时间先后排好，只保留最新的 MAX_ITEMS 条。 */
   items: UserDirective[];
@@ -65,15 +68,40 @@ async function readTranscript(path: string): Promise<{ text: string; whole: bool
   }
 }
 
-/** 一份会话正文里我说过的所有话，保持文件内的先后顺序。 */
-export function directivesIn(raw: string): UserDirective[] {
+/**
+ * 一份会话正文里我说过的所有话，保持文件内的先后顺序，并给每条算一个排序键。
+ *
+ * 键取「这条自己的 `at`」，没有就沿用**同一份文件里前一条**的 `at`，再没有就退到会话
+ * 的 `startedAt`。这是个单调下界：同一份文件内写入顺序就是时间顺序，所以沿用前一条只会
+ * 让缺时刻的老围栏跟着它前面那条走，不会把文件内顺序搅乱。
+ */
+export function directivesIn(raw: string, sessionStartedAt: string): TimedDirective[] {
+  let floor = sessionStartedAt;
   return parseSessionOutput(raw)
     .filter((seg): seg is Extract<ConvSeg, { kind: "user" }> => isUserFollowUp(seg))
     .map((seg) => {
+      if (seg.at) floor = seg.at;
       const { body, paths } = parseAttachmentText(seg.text);
-      return { at: seg.at ?? null, text: body.trim(), attachments: paths };
+      return { at: seg.at ?? null, text: body.trim(), attachments: paths, key: floor };
     })
     .filter((item) => item.text.length > 0 || item.attachments.length > 0);
+}
+
+/**
+ * 把各会话的条目合成一条时间线。**必须按时刻排，不能按会话先后拼**：一条会话可以被
+ * 反复 resume（`continueTask` 复用同一行、`startedAt` 不动，只刷 `turnStartedAt`），
+ * 所以「先开的会话」里完全可能有比「后开的会话」更晚的话。
+ *
+ * 真实形状：claude 会话 A 里说 X → @ 来 codex 开会话 B 说 Y → 切回 A 说 Z。按会话拼
+ * 得到 X、Z、Y，而提示词紧接着写着「按时间先后，冲突以更晚的为准」—— 验证者会据此认定
+ * Y 推翻了 Z，正好把最新的需求当成作废的。
+ */
+export function orderDirectives(items: TimedDirective[]): UserDirective[] {
+  return items
+    .map((item, index) => ({ item, index }))
+    // 同一时刻并列时退回原始下标（会话顺序 + 文件顺序），保证结果稳定可复现。
+    .sort((a, b) => a.item.key.localeCompare(b.item.key) || a.index - b.index)
+    .map(({ item }) => ({ at: item.at, text: item.text, attachments: item.attachments }));
 }
 
 /**
@@ -103,30 +131,37 @@ export async function collectUserDirectives(taskId: string): Promise<CollectedDi
     .where(eq(sessions.taskId, taskId))
     .orderBy(asc(sessions.startedAt));
 
-  const items: UserDirective[] = [];
+  const items: TimedDirective[] = [];
   const transcripts: string[] = [];
   let truncated = false;
   for (const row of rows) {
     const path = sessionTranscriptPath(taskId, row.id);
     try {
       const { text, whole } = await readTranscript(path);
-      const found = directivesIn(text);
-      if (!found.length) continue;
-      // 会话按 startedAt 升序、文件内保持原序，拼起来就是时间序。刻意不按 `at` 重排：
-      // 老会话的围栏没有 at，混排会把它们全甩到一头去。
-      items.push(...found);
-      transcripts.push(path);
+      // 截断标记要**先于**「这份有没有找到东西」记下：一份超大会话的尾部没有真人追问，
+      // 不代表它更早的地方也没有 —— 那正是最需要说出来的情况。
       if (!whole) truncated = true;
+      const found = directivesIn(text, row.startedAt);
+      items.push(...found);
+      // 贡献了条目、或者可能藏着没扫到的条目，才值得把路径列给验证者。
+      if (found.length || !whole) transcripts.push(path);
     } catch {
       // 这份正文读不动（被删了 / 权限）——跳过它，别让一份坏文件把整段上下文废掉。
     }
   }
-  return capDirectives(items, transcripts, truncated);
+  return capDirectives(orderDirectives(items), transcripts, truncated);
 }
 
-/** 拼成能直接塞进 prompt 的一段。没有追问就是空串（不留一句「（无）」占地方）。 */
+/** 拼成能直接塞进 prompt 的一段。没有追问、也没扫漏，就是空串（不留一句「（无）」占地方）。 */
 export function formatDirectives(collected: CollectedDirectives): string {
-  if (!collected.items.length) return "";
+  if (!collected.items.length) {
+    // 一条都没收到**且**扫过的正文都是完整的 —— 这才是真的「没有追加需求」。
+    if (!collected.truncated) return "";
+    // 否则是「没扫到」，跟「没有」不是一回事：不说出来，验证者会当成后者。
+    return `【任务开始之后我追加的需求变更】\n` +
+      `没能读全：会话正文过大，只扫了尾部，更早的地方可能有改过的需求没收进来。` +
+      `涉及原始正文之外的判断时，请自己去翻：${collected.transcripts.join("、") || "(记录路径不可用)"}\n\n`;
+  }
   const lines = collected.items.map((item, index) => {
     const when = item.at ? `[${item.at}] ` : "";
     const files = item.attachments.length
