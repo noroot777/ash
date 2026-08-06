@@ -17,6 +17,7 @@ import { appendSessionTrace, writeTurnEnd, writeRunError } from "./transcript.js
 import { notifyTeamLead } from "./team/inbox.js";
 import { handleTaskSettlement } from "./review.js";
 import { FOLLOW_UP_LABEL } from "./labels.js";
+import { reconcileTurnBaseline } from "./turn-baseline.js";
 
 
 async function setStatus(taskId: string, status: Parameters<typeof setTaskStatus>[1]) {
@@ -285,6 +286,10 @@ export async function consumeSingleRun(a: {
     })
     .where(eq(sessions.id, sessId));
   const settled = await settleTaskStatus(taskId, exitStatus, stopped);
+  // 这一轮到底改没改东西:改了就把上一版的验证/验收记录清掉,没改且屋子是临时搭的就拆掉。
+  // **必须排在 afterSettlement 之前** —— 那一步会拿着游标把这条线往下推,账晚清一步,
+  // 上一版的验证结论就已经替新改动放行了(详见 turn-baseline.ts)。
+  await reconcileTurnBaseline(taskId, settled.confirmedDone);
   // turnOk = 这一回合本身干净收尾了(没被停、退出码 0)。跟落位状态不是一回事:旁路
   // 回合(就地验证)的落位是任务原来的终态,只有它说得清这一轮跑成没跑成。
   await afterSettlement(taskId, settled.status, settled.confirmedDone, !stopped && exitStatus === 0);

@@ -34,16 +34,42 @@ export async function clearTaskStage(taskId: string, note: string): Promise<void
   await appendTaskTimeline(taskId, note);
 }
 
-// 已验收的任务又被唤醒 —— 用户发来真人消息、或调度者接着派活 —— 就把 stage 清回
-// null,列表把它从「已验收」挪回「进行中」;干完再验收一次即可翻篇。accepted 只代表
-// 上一版产物已经验收,不能覆盖验收后的新增改动;这条规则对 single/team/debate 一致。
+// 已翻篇的任务又被唤醒 —— 用户发来真人消息、或调度者接着派活 —— 就把 stage 清回
+// null,列表把它从「已验收」挪回「进行中」;干完再验收一次即可翻篇。
+//
+// **accepted 和 merged 都要清**:merged 是「已经合进去了、只差最后落个验收章」,同样是
+// 上一版的结论。留着它的后果不只是显示不准 —— `enterHumanGate` 见到 merged 会**静默
+// 跳过**「等我点头」那道关口(review.ts),于是新一版改动一路走到底、连问都不问用户一句。
+// accepted 只代表上一版产物已经验收,不能覆盖验收后的新增改动;这条规则对
+// single/team/debate 一致。
 // 走内部更新而不是 POST /tasks/:id/stage:那道 mode==="team" 的 409 是挡 **agent 自报**
 // 的外部协议入口(调度台没有实现/验证语义),挡的不是这条内部规则;广播必须保留,
 // 否则前端分组要等下次全量拉取才动。
-export async function reopenAcceptedStage(taskId: string): Promise<boolean> {
+//
+// **返回摘掉的是哪块牌子**（没摘则 null）：摘牌发生在回合最前面，那时还不知道这一轮
+// 会不会真产出改动。调用方要能在结算时发现「白摘了」并原样挂回去（见 turn-baseline.ts
+// 与下面的 restoreTaskStage）。旧调用方只判真假的话语义不变 —— 摘到了就是真值。
+export async function reopenAcceptedStage(taskId: string): Promise<"accepted" | "merged" | null> {
   const t = (await db.select({ stage: tasks.stage }).from(tasks).where(eq(tasks.id, taskId))).at(0);
-  if (!t || t.stage !== "accepted") return false;
+  if (!t || (t.stage !== "accepted" && t.stage !== "merged")) return null;
   await clearTaskStage(taskId, "任务又被唤醒，验收阶段清回进行中（完成后重新验收即可再次翻篇）");
+  return t.stage;
+}
+
+/**
+ * 把 `reopenAcceptedStage` 摘掉的牌子原样挂回去，与 clearTaskStage 对称（同样自带 note
+ * 和广播）。用在「这一轮结算下来工作目录一个字节没变」——用户只是问了句话，摘牌是白摘的。
+ *
+ * **只在牌子位还空着时放回**：这一轮 agent 自己上报过新阶段（report_stage）的话，那是更
+ * 新的结论，不能被一张旧牌子盖掉。
+ */
+export async function restoreTaskStage(taskId: string, stage: TaskStage, note: string): Promise<boolean> {
+  const t = (await db.select({ stage: tasks.stage }).from(tasks).where(eq(tasks.id, taskId))).at(0);
+  if (!t || t.stage) return false;
+  const updatedAt = now();
+  await db.update(tasks).set({ stage, updatedAt }).where(eq(tasks.id, taskId));
+  bus.publish({ type: "task.stage", taskId, stage, updatedAt });
+  await appendTaskTimeline(taskId, note);
   return true;
 }
 
