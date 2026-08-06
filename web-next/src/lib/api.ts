@@ -231,6 +231,18 @@ export type AcceptTaskFailure = {
 
 export type AcceptTaskResult = AcceptTaskSuccess | AcceptTaskFailure;
 
+// 人工强制通过一站「自动验证」之后的落点：签字之后线可能停在下一道关口、又开了一轮
+// 验证、也可能直接合并完了，所以回的是**推进之后**的游标与验收阶段。
+export type VerifyOverrideResult = {
+  forced: true;
+  taskId: string;
+  station: string;
+  workflowAt: string | null;
+  stage: string | null;
+  /** 签字落下了，但这一站之后那一段没跑完 —— 如实说，别报成一句「已放行」。 */
+  advanceError?: string;
+};
+
 function isAcceptTaskResult(body: unknown): body is AcceptTaskResult {
   return typeof body === "object" && body !== null && "accepted" in body &&
     typeof body.accepted === "boolean";
@@ -406,6 +418,10 @@ export const api = {
     request(`/tasks/${id(taskId)}/review/dispatch`, json("POST", input)),
   taskReviewFileUrl: (taskId: string, round: number, name: string): string =>
     apiPath(`/tasks/${id(taskId)}/review/file?round=${id(String(round))}&name=${id(name)}`),
+  // 人工替这一站「自动验证」签字放行。**后端会接着把这一站之后那一段跑掉**——线上
+  // 画着「合并并清理」时这一按就是真合并，调用点必须先把话说清楚再让人按。
+  forcePassVerify: (taskId: string): Promise<VerifyOverrideResult> =>
+    request(`/tasks/${id(taskId)}/workflow/verify-override`, { method: "POST" }),
   acceptTask: async (taskId: string): Promise<AcceptTaskResult> => {
     const response = await fetch(apiPath(`/tasks/${id(taskId)}/accept`), { method: "POST" });
     const body = await parseBody(response);

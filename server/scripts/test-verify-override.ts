@@ -125,7 +125,13 @@ assert.equal(t3.verifyRounds, 2, "**没跑完的轮不计数**：它不该占掉
 assert.equal(t3.question, null, "那一回合早已结束，提问卡片不该继续挂着等人答");
 assert.equal(t3.workflowAt, "s3", "照样往下走");
 
-// ── ⑤ 线上写着「合并并清理」：这一按是**真合并**（前端确认框要照实说的那件事）──
+// ── ⑤ 已经验收完成的任务：挡回（再签一次 = 让合并站再合一遍）─────────────
+await makeTask("t4", gated, { stage: "accepted" });
+const settled = await forcePassVerifyStation("t4");
+assert.equal("forced" in settled, false, "已验收完成的任务不该还能强制通过");
+assert.equal((settled as { httpStatus: number }).httpStatus, 409);
+
+// ── ⑥ 线上写着「合并并清理」：这一按是**真合并**（前端确认框要照实说的那件事）──
 const repo2 = join(root, "repo2");
 execFileSync("git", ["init", "-q", "-b", "main", repo2]);
 const git = (cwd: string, ...args: string[]) =>

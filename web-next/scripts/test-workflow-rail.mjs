@@ -14,7 +14,7 @@
 import assert from "node:assert/strict";
 import { STAGE_LABELS, TASK_STATUS_LABELS } from "@harness/shared";
 import { STEP_KINDS, STEP_RUNTIME, makeStep } from "@harness/shared/workflow";
-import { railStops, resolveCursor, stepStatusLabel, stepTitle, workflowCost, workflowSummary } from "../src/workflow/workflowModel.ts";
+import { railStops, resolveCursor, stepStatusLabel, stepTitle, verifyStationAtCursor, workflowCost, workflowSummary } from "../src/workflow/workflowModel.ts";
 
 const line = (...kinds) => ({
   workspace: "isolated",
@@ -138,6 +138,23 @@ assert.deepEqual(
   { index: 2, blocked: false },
   "游标指到线外时按老办法反推",
 );
+
+// ── ④ 验证站上那两个按钮该不该出现 ────────────────────────────────────────
+// 「再验一轮 / 人工强制通过」有两个表面（线路图、验证页），判据必须只有这一条，而且
+// **只认真游标**：后端受理强制通过的条件就是「workflowAt 落在一个 verify 站上」，按
+// stage 反推给按钮，用户按下去只会换回一句 409。
+const stopped = (extra) => verifyStationAtCursor({ workflow: gateFirst, status: "done", stage: null, question: null, ...extra });
+assert.deepEqual(stopped({ workflowAt: "s3", stage: "verify_failed" })?.stationId, "s3", "验证没过就该给出路");
+assert.deepEqual(stopped({ workflowAt: "s3", stage: "verifying" })?.stationId, "s3",
+  "**验证器压根没上报**时 stage 停在 verifying，那正是最需要按钮的一种，不许拿 stage 卡掉");
+assert.equal(stopped({ workflowAt: "s2", stage: "verify_failed" }), null, "游标停在关口时不该冒出强制通过");
+assert.equal(stopped({ workflowAt: "s1" }), null);
+assert.equal(stopped({ workflowAt: "gone", stage: "verify_failed" }), null, "游标指到线外 = 后端也认不出这一站");
+assert.equal(stopped({ workflowAt: null, stage: "verify_failed" }), null, "没有真游标就不给（反推出来的位置后端不认）");
+assert.equal(stopped({ workflowAt: "s3", stage: "accepted" }), null, "已验收 = 这条线走完了，别再给放行键");
+assert.equal(stopped({ workflowAt: "s3", stage: "merged" }), null);
+assert.equal(verifyStationAtCursor({ workflow: null, status: "done", stage: "verify_failed", question: null, workflowAt: "s3" }),
+  null, "没有编排的老任务不需要它：线上没有等着放行的合并");
 
 // ── 摘要行那三个数 ────────────────────────────────────────────────────────
 // 「顺利走完 N 步 · 要你出面 N 次 · 不顺利最多起 N 次 AI」 —— 它写在新建面板上，用户

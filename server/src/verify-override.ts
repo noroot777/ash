@@ -57,6 +57,12 @@ export async function forcePassVerifyStation(
     return { error: "只有 single 任务有验证站", mode: task.mode, httpStatus: 409 };
   }
   if (task.archived) return { error: "归档任务不能强制通过验证", httpStatus: 409 };
+  // 已经验收/合并完的任务不受理：游标此刻可能仍停在验证站上（放行之后才把剩下那段跑
+  // 完），但再签一次字就是让后面的 accept 站**再合并一次**。前端同一条口径在
+  // `verifyStationAtCursor`（web-next/src/workflow/workflowModel.ts）。
+  if (task.stage === "accepted" || task.stage === "merged") {
+    return { error: "这个任务已经验收完成，不需要再强制通过验证", stage: task.stage, httpStatus: 409 };
+  }
   // 还在跑就不受理：那一轮验证可能下一秒就给出结论，此刻签字等于跟它抢方向盘，
   // 而 `advanceWorkflowFrom` 跑的那一段又会跟正在跑的回合撞进同一个工作目录。
   if (task.status === "running" || task.status === "queued") {

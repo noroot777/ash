@@ -183,3 +183,26 @@ export function railStops(
 export function isCursorStop(stop: RailStop): boolean {
   return stop.state === "current" || stop.state === "blocked";
 }
+
+/**
+ * 游标此刻停着的那一站是不是「自动验证」；是就把线和站 id 一起给出来。
+ *
+ * 「验证站上那两个按钮」有两个表面（工作流页的线路图、验证页顶上那排动作），判据必须
+ * 是同一条 —— 一边给按钮另一边不给，用户就得靠试才知道该去哪儿按。
+ *
+ * 跟画线路图那条口径的差别是**故意的**：这里只认 `workflowAt` 这个真游标，不吃 stage
+ * 反推。画图时反推是「没有更好的信息，先按状态猜个位置」，猜偏了只是画得不准；这两颗
+ * 按钮背后是后端一个会真合并的动作，而它的受理条件恰恰是「`workflowAt` 落在一个 verify
+ * 站上」——按反推给按钮，用户按下去只会换回一句 409。没有游标的老任务本来也不需要它：
+ * 线上没有后续的合并等着放行，验证没过时直接人工验收即可。
+ *
+ * 已验收/已合并的任务一律返回 null：那时这条线其实走完了（`resolveCursor` 里同一条
+ * 口径），游标停在哪儿都不该再冒出一颗「强制通过」。
+ */
+export function verifyStationAtCursor(task: Task): { def: WorkflowDef; stationId: string } | null {
+  const def = task.workflow;
+  if (!def || !task.workflowAt) return null;
+  if (task.stage === "accepted" || task.stage === "merged") return null;
+  const step = def.steps.find((candidate) => candidate.id === task.workflowAt);
+  return step && step.kind === "verify" ? { def, stationId: step.id } : null;
+}

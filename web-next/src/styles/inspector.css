@@ -557,6 +557,12 @@
 .review-inspector__actions button:disabled { cursor: not-allowed; opacity: 0.48; }
 .review-inspector__actions button span { min-width: 0; flex: 1; }
 .review-inspector__actions button > svg:last-child { margin-left: auto; }
+/* 「人工强制通过」那颗。写在 hover 规则**之后**是必须的：同特异性时后写的赢，否则一
+   悬停就褪回中性灰，看着像换了一颗按钮。红色只在这一按会连带真合并时出现。 */
+.review-inspector__actions button.is-primary { background: color-mix(in lch,var(--accent) 8%,var(--panel)); color: var(--accent); font-weight: 650; }
+.review-inspector__actions button.is-primary:hover:not(:disabled) { background: color-mix(in lch,var(--accent) 15%,var(--panel)); color: var(--accent); }
+.review-inspector__actions button.is-danger { background: color-mix(in lch,var(--red) 8%,var(--panel)); color: var(--red); font-weight: 650; }
+.review-inspector__actions button.is-danger:hover:not(:disabled) { background: color-mix(in lch,var(--red) 15%,var(--panel)); color: var(--red); }
 .review-inspector__notice { margin: 7px 7px 0; color: var(--faint); font-size: 9.5px; line-height: 1.5; }
 .review-inspector__notice.is-warning { color: var(--red); }
 .review-inspector__dispatch { border-bottom: 0.5px solid var(--line); background: color-mix(in lch,var(--panel) 80%,var(--canvas)); padding: 12px 14px; }

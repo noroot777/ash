@@ -9,13 +9,15 @@
 // ② 走到哪一站读的是任务身上那个真游标（resolveCursor），不是假进度条，也不是从
 //    stage 猜的——尤其是人工关口那两个真按钮，判据只能是「游标停在这一道上」。
 import type { Task } from "@harness/shared";
+import type { WorkflowDef } from "@harness/shared/workflow";
 import { STEP_LABELS, WORKSPACE_LABELS } from "@harness/shared/workflow";
 import { ArrowUUpLeft, Check, Warning } from "@phosphor-icons/react";
 import { AcceptanceControls } from "../team/TeamReviewWorkspace.tsx";
 import { executorName, useExecutorCatalog, type ExecutorCatalog } from "./executorCatalog.ts";
 import { stepChips } from "./stepFields.ts";
+import { VerifyGateControls } from "./VerifyGateControls.tsx";
 import { failText } from "./workflowEdit.ts";
-import { railStops, workflowSummary, isCursorStop, type RailStop } from "./workflowModel.ts";
+import { railStops, workflowSummary, isCursorStop, verifyStationAtCursor, type RailStop } from "./workflowModel.ts";
 
 /**
  * 人工关口上那两个按钮是**真**验收/打回，所以只在**线确实停在这一道关口**时才给。
@@ -30,6 +32,16 @@ function atHumanGate(task: Task, stop: RailStop): boolean {
   return task.stage === "awaiting_acceptance" || task.status === "awaiting_review";
 }
 
+/**
+ * 验证站上那两个按钮（再验一轮 / 人工强制通过）的判据在 `verifyStationAtCursor` 单点，
+ * 这里只把算好的站 id 传下去。两处刻意不同：
+ *
+ * ① 人工关口那两个按钮要 stage/status 一起确认「关口真停下了」，因为线刚走到关口那一
+ *    瞬间按下去是笔不可逆的账；
+ * ② 验证站相反——它卡住的三种方式里有一种是**验证器压根没上报**，那时 stage 停在
+ *    verifying、跟「正在验」长得一模一样，再叠 stage 条件，最该给出路的那一种反而没有
+ *    按钮。真在跑的那一轮由按钮自己按 status 灰掉（后端同样会 409），不靠这里拦。
+ */
 function stateWord(stop: RailStop): string {
   if (stop.state === "done") return "已过";
   if (stop.state === "current") return stop.statusLabel;
@@ -38,11 +50,13 @@ function stateWord(stop: RailStop): string {
 }
 
 function Stop({
-  stop, index, catalog, task, onTaskUpdated, notify,
+  stop, index, catalog, def, verifyStationId, task, onTaskUpdated, notify,
 }: {
   stop: RailStop;
   index: number;
   catalog: ExecutorCatalog;
+  def: WorkflowDef;
+  verifyStationId: string | null;
   task: Task;
   onTaskUpdated: (task: Task) => void;
   notify: (message: string) => void;
@@ -50,6 +64,7 @@ function Stop({
   const chips = stepChips(stop.step, (id) => executorName(catalog, id));
   const fail = failText(stop.step);
   const gate = atHumanGate(task, stop);
+  const verify = verifyStationId === stop.step.id;
 
   return (
     <li className="wf-vst" data-state={stop.state}>
@@ -80,6 +95,17 @@ function Stop({
           <div className="wf-vgate">
             <AcceptanceControls task={task} onTaskUpdated={onTaskUpdated} notify={notify} />
             <p className="wf-vnote">在这儿按，和在审查页里按是同一件事。</p>
+          </div>
+        )}
+        {verify && (
+          <div className="wf-vgate">
+            <VerifyGateControls
+              task={task}
+              def={def}
+              stationId={stop.step.id}
+              onTaskUpdated={onTaskUpdated}
+              notify={notify}
+            />
           </div>
         )}
       </div>
@@ -114,6 +140,7 @@ export function WorkflowInspector({
   }
 
   const stops = railStops(def, task);
+  const verifyStationId = verifyStationAtCursor(task)?.stationId ?? null;
 
   return (
     <div className="task-inspector" aria-label="工作流">
@@ -142,6 +169,8 @@ export function WorkflowInspector({
                 stop={stop}
                 index={index}
                 catalog={catalog}
+                def={def}
+                verifyStationId={verifyStationId}
                 task={task}
                 onTaskUpdated={onTaskUpdated}
                 notify={notify}

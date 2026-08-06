@@ -18,6 +18,8 @@ import { ExecutorModelPicker } from "../components/ExecutorModelPicker.tsx";
 import { registeredAgentTypes } from "../lib/agentAvailability.ts";
 import { api } from "../lib/api.ts";
 import { ReviewEvidence, useTaskReviewInfo } from "../team/ReviewEvidence.tsx";
+import { ForcePassVerifyButton } from "../workflow/VerifyGateControls.tsx";
+import { verifyStationAtCursor } from "../workflow/workflowModel.ts";
 
 const REVIEW_IN_FLIGHT = new Set(["backlog", "queued", "running", "paused"]);
 const AUTO_REVIEW_LIMIT = 2;
@@ -79,12 +81,14 @@ export function TaskReviewInspector({
   allTasks,
   onOpenTask,
   onOpenReview,
+  onTaskUpdated,
   notify,
 }: {
   task: Task;
   allTasks: Task[];
   onOpenTask: (taskId: string) => void;
   onOpenReview: () => void;
+  onTaskUpdated: (task: Task) => void;
   notify: (message: string) => void;
 }) {
   const review = useTaskReviewInfo(task.id);
@@ -143,6 +147,10 @@ export function TaskReviewInspector({
   const autoLimitReached = !!review.info?.reviewRequested
     && task.stage === "verify_failed"
     && rounds.some((round) => round.round >= AUTO_REVIEW_LIMIT && round.conclusion === "verify_failed");
+  // 线停在「自动验证」这一站时，这里也得有一条出路：卡住的人多半是从这一页点进来看
+  // 证据的，不该再让他猜「要去工作流页才有按钮」。判据与线路图那边同源（都出自
+  // resolveCursor），没有编排的老任务返回 null——它们的验证不卡任何东西。
+  const verifyStation = useMemo(() => verifyStationAtCursor(task), [task]);
 
   useEffect(() => {
     if (!profilesReady || executorRunnable) return;
@@ -194,9 +202,25 @@ export function TaskReviewInspector({
             <span>{dispatching ? "启动中" : activeRound ? "验证进行中" : dispatchOpen ? "收起验证配置" : "验一轮"}</span>
           </button>
           <button type="button" onClick={onOpenReview}><span>打开改动工作区</span><CaretRight size={13} /></button>
+          {verifyStation && (
+            <ForcePassVerifyButton
+              task={task}
+              def={verifyStation.def}
+              stationId={verifyStation.stationId}
+              disabled={dispatching}
+              onTaskUpdated={onTaskUpdated}
+              notify={notify}
+            />
+          )}
         </div>
         {blockedReason && <p className="review-inspector__notice">{blockedReason}</p>}
-        {autoLimitReached && <p className="review-inspector__notice is-warning">自动复验已达上限，等待人工处理。</p>}
+        {autoLimitReached && (
+          <p className="review-inspector__notice is-warning">
+            {verifyStation
+              ? "自动复验已达上限。可以按上面「验一轮」再验，或由你签字强制通过。"
+              : "自动复验已达上限，等待人工处理。"}
+          </p>
+        )}
       </section>
 
       {dispatchOpen && !blockedReason && (
