@@ -21,7 +21,7 @@ const EXTRA_PATHS = [
   `${homedir()}/.bun/bin`,
   `${homedir()}/.deno/bin`,
 ];
-function augmentedEnv() {
+export function augmentedEnv() {
   const cur = process.env.PATH ?? "";
   const have = new Set(cur.split(":"));
   const extra = EXTRA_PATHS.filter((p) => !have.has(p));
@@ -32,7 +32,9 @@ function augmentedEnv() {
 // EXTRA_PATHS. Returns null if it can't be found anywhere. Spawning the absolute
 // path removes all dependence on the child's inherited PATH — so a remaining
 // ENOENT can only mean a bad cwd, never a missing binary.
-function resolveBin(bin: string): string | null {
+// 导出是为了让「候选 bin 探测」(bin-probe.ts,检测与执行共用的单点)跟真正
+// spawn 时的查找口径**完全一致** —— 检测说可用、执行却 ENOENT,根因就是两套查找。
+export function resolveBin(bin: string): string | null {
   if (bin.includes("/")) {
     try { accessSync(bin, constants.X_OK); return bin; } catch { return null; }
   }
@@ -60,7 +62,7 @@ const isDir = (p: string) => {
 // then waits forever for a `done` that never comes — the task is stuck 'running',
 // unstoppable, until a restart (2026-07-28: reproduced by replying to a task whose
 // worktree had been deleted). So we hold the error until someone subscribes.
-function failedChild(message: string): ChildProcess {
+export function failedChild(message: string): ChildProcess {
   const child: any = new EventEmitter();
   child.stdout = Readable.from([]);
   child.stderr = Readable.from([]);
@@ -186,39 +188,46 @@ export function spawnAgent(
   if (!isDir(cwd)) return failedChild(`工作目录不存在：${cwd}`);
   const abs = resolveBin(bin);
   if (!abs) return failedChild(`找不到 ${bin} 命令(不在 PATH，也不在常见目录)`);
-  // 追踪 fd(见 killEscapees):打开一个本次运行专属文件,把 fd 作为 stdio[3]
-  // 传给子进程 —— 后代无论怎么换组/被收养都带着它,stop 时可按文件反查。
-  // best-effort:开不出来就照旧 spawn,只是丢掉逃逸追踪能力。
-  let trackFd: number | null = null;
-  let trackPath: string | null = null;
-  try {
-    trackPath = join(tmpdir(), `harness-track-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
-    trackFd = openSync(trackPath, "w");
-  } catch {
-    trackPath = null;
-  }
-  const stdio: Array<"pipe" | number> = trackFd === null ? ["pipe", "pipe", "pipe"] : ["pipe", "pipe", "pipe", trackFd];
+  const track = openTrackFd();
+  const stdio: Array<"pipe" | number> = track.fd === null ? ["pipe", "pipe", "pipe"] : ["pipe", "pipe", "pipe", track.fd];
   const child = spawn(abs, args, { cwd, stdio, env: { ...augmentedEnv(), ...extraEnv }, detached: true });
-  if (trackFd !== null && trackPath) {
-    closeSync(trackFd); // 子进程已持有副本,父进程这份立即关掉
-    trackFiles.set(child, trackPath);
-    const cleanupPath = trackPath;
-    child.on("close", () => {
-      // 延迟删除:killChild 的补刀清扫(SIGTERM 后 2s)要靠文件名 lsof;
-      // unlink 早了就查不到了。60s 后基本尘埃落定。
-      const t = setTimeout(() => {
-        try {
-          unlinkSync(cleanupPath);
-        } catch {
-          /* already gone */
-        }
-      }, 60_000);
-      (t as { unref?: () => void }).unref?.();
-    });
-  }
+  registerTrackFd(child, track);
   child.stdin?.write(prompt);
   if (!opts?.keepStdin) child.stdin?.end();
   return child;
+}
+
+// 追踪 fd(见 killEscapees):打开一个本次运行专属文件,把 fd 作为 stdio[3] 传给
+// 子进程 —— 后代无论怎么换组/被收养都带着它,stop 时可按文件名 lsof 反查。
+// best-effort:开不出来就照旧 spawn,只是丢掉逃逸追踪能力。
+// 抽成一对函数是为了让 detached.ts 那条路(输出走文件)复用同一套逃逸追踪,
+// 而不是各写一份 —— 少一份就意味着那条路上的孤儿没人管。
+export function openTrackFd(): { fd: number | null; path: string | null } {
+  try {
+    const path = join(tmpdir(), `harness-track-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+    return { fd: openSync(path, "w"), path };
+  } catch {
+    return { fd: null, path: null };
+  }
+}
+
+export function registerTrackFd(child: ChildProcess, track: { fd: number | null; path: string | null }): void {
+  if (track.fd === null || !track.path) return;
+  closeSync(track.fd); // 子进程已持有副本,父进程这份立即关掉
+  trackFiles.set(child, track.path);
+  const cleanupPath = track.path;
+  child.on("close", () => {
+    // 延迟删除:killChild 的补刀清扫(SIGTERM 后 2s)要靠文件名 lsof;
+    // unlink 早了就查不到了。60s 后基本尘埃落定。
+    const t = setTimeout(() => {
+      try {
+        unlinkSync(cleanupPath);
+      } catch {
+        /* already gone */
+      }
+    }, 60_000);
+    (t as { unref?: () => void }).unref?.();
+  });
 }
 
 // Wrap a resume command for the target so it is copy-paste runnable (§13).
@@ -274,6 +283,37 @@ export function killChild(child: ChildProcess): void {
   (t as { unref?: () => void }).unref?.();
 }
 
+// 只有 pid 时的击杀(重启后接管的 agent 走这条 —— ChildProcess 句柄随上一个
+// server 进程一起没了,追踪 fd 的 WeakMap 也没了)。
+// 只剩三层里的第①③层:进程组信号 + 2s 后补 SIGKILL。第②层(继承 fd 反查逃逸者)
+// 做不到,因为那份映射是内存态的。代价:重启前就已经逃出进程组的孤儿杀不到 ——
+// 如实记在这里,别让以后的人以为这条路和 killChild 等价。
+export function killByPid(pid: number): void {
+  if (!Number.isInteger(pid) || pid <= 1) return;
+  const signal = (sig: NodeJS.Signals) => {
+    try {
+      process.kill(-pid, sig); // 组杀:spawn 时 detached,agent 就是组长
+    } catch {
+      try {
+        process.kill(pid, sig);
+      } catch {
+        /* already gone */
+      }
+    }
+  };
+  signal("SIGTERM");
+  const t = setTimeout(() => {
+    let alive = true;
+    try {
+      process.kill(pid, 0);
+    } catch {
+      alive = false;
+    }
+    if (alive) signal("SIGKILL");
+  }, 2000);
+  (t as { unref?: () => void }).unref?.();
+}
+
 // exit(进程亡)之后 close(所有 stdio 关闭)通常毫秒级跟到;但当管道写端被
 // 残留的孙进程握着、或 CLI 死得不干净时,close 永远不来 —— 事件流不结束,
 // run loop 挂死,任务卡 running 且 stop 无效。这里在 exit 后限时等待 flush,
@@ -294,28 +334,13 @@ export function forceFinishOnExit(
 }
 
 // The per-agent *interactive* resume command (what a human pastes to see the
-// session and continue) — single source of truth, used both when storing a
-// session and when recomputing the display command on read. (The harness's own
-// headless resume is built separately inside each executor's run().)
+// session and continue) — 模板本体现在登记在目录里各 spec 的
+// `exec.session.interactive`,这里只留 claude/codex 两个自带专用执行器的引用,
+// 供 claude.ts / codex.ts / catalog 复用同一份字符串。展示用的那条命令由
+// `executors/resume.ts` 的 resumeCommandFor 按目录重算(还要过一道「sessionId
+// 是不是 CLI 真认得的 id」的判定,见 generic.ts 的 hasTrustedSessionId)。
+// (The harness's own headless resume is built separately inside each executor's run().)
 export const resumeInner: Record<string, (id: string) => string> = {
   claude: (id) => `claude --resume ${id}`,
   codex: (id) => `codex resume ${id}`,
-  antigravity: (id) => `antigravity --resume ${id}`,
 };
-
-// Build the display resume command from persisted session fields, so it always
-// reflects the current format (no stale stored strings when the format changes).
-// relayEnv 是本次运行挂的供应商前缀(已脱敏),旧行为 null 就跟以前完全一样。
-export function resumeCommandFor(
-  agentType: string,
-  targetStr: string | null | undefined,
-  cwd: string,
-  cliSessionId: string,
-  relayEnv?: string | null,
-): string {
-  const inner = (resumeInner[agentType] ?? resumeInner.claude)(cliSessionId);
-  const target: ExecTarget = targetStr?.startsWith("ssh:")
-    ? { kind: "ssh", host: targetStr.slice(4) }
-    : { kind: "local" };
-  return resumeFor(target, cwd, inner, relayEnv ?? "");
-}

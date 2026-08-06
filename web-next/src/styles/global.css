@@ -1,0 +1,266 @@
+@import "tailwindcss";
+@import "./controls.css";
+@import "./conversation-scroll.css";
+@import "./image-preview.css";
+@import "./task-origin.css";
+@import "./task-tree.css";
+@import "./workspace.css";
+@import "./workspace-enhancements.css";
+@import "./sidebar-spread.css";
+@import "./task-detail.css";
+@import "./team.css";
+@import "./inspector.css";
+@import "./team-review.css";
+@import "./review.css";
+@import "./files.css";
+@import "./debate.css";
+@import "./settings.css";
+@import "./overlays.css";
+@import "./groups-panel.css";
+@import "./composer.css";
+@import "./composer-presets.css";
+@import "./schedule.css";
+@import "./reply.css";
+@import "./workflow.css";
+@import "./workflow-composer.css";
+@import "./parity.css";
+
+@theme {
+  --font-sans: "Inter Variable", "Inter", "SF Pro Display", -apple-system,
+    BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-mono: ui-monospace, "SFMono-Regular", Consolas, monospace;
+
+  --color-chrome: lch(94.44% 0.5 282);
+  --color-canvas: lch(97.94% 0.5 282);
+  --color-panel: lch(100% 0 282);
+  --color-raised: lch(96.914% 0 282);
+  --color-overlay: lch(95.886% 0 282);
+  --color-line: lch(90.55% 0 282);
+  --color-line2: lch(86.5% 0 282);
+  --color-ink: lch(9.794% 0 282);
+  --color-muted: lch(39.176% 1.25 282);
+  --color-faint: lch(64.64% 1.25 282);
+  --color-accent: #5e6ad2;
+  --color-accent-soft: lch(92.5% 12 286);
+  --color-green: #168466;
+  --color-green-soft: #e3f4ed;
+  --color-red: #d93d4c;
+  --color-amber: #b57b00;
+  --color-cyan: #0e9db8;
+  --color-hover: lch(91.64% 0.5 282);
+  --color-selected: lch(89.54% 0.5 282);
+}
+
+:root {
+  color-scheme: light;
+  --chrome: var(--color-chrome);
+  --canvas: var(--color-canvas);
+  --panel: var(--color-panel);
+  --raised: var(--color-raised);
+  --overlay: var(--color-overlay);
+  --line: var(--color-line);
+  --line2: var(--color-line2);
+  --ink: var(--color-ink);
+  --muted: var(--color-muted);
+  --faint: var(--color-faint);
+  --accent: var(--color-accent);
+  --accent-soft: var(--color-accent-soft);
+  --green: var(--color-green);
+  --green-bg: var(--color-green-soft);
+  --red: var(--color-red);
+  --amber: var(--color-amber);
+  --cyan: var(--color-cyan);
+  --hover-bg: var(--color-hover);
+  --sel-bg: var(--color-selected);
+  --shadow: lch(0 0 0 / 0.08) 0 9px 48px,
+    lch(0 0 0 / 0.1) 0 6px 24px, lch(0 0 0 / 0.04) 0 1px 1px;
+  --surface-shadow: lch(0 0 0 / 0.02) 0 3px 6px -2px,
+    lch(0 0 0 / 0.04) 0 1px 1px;
+  --control-shadow: lch(0 0 0 / 0.103) 0 0 0 1px, var(--surface-shadow);
+  --control-hover-shadow: lch(0 0 0 / 0.147) 0 0 0 1px, var(--surface-shadow);
+  --menu-shadow: lch(0 0 0 / 0.02) 0 6px 18px,
+    lch(0 0 0 / 0.04) 0 3px 9px, lch(0 0 0 / 0.04) 0 1px 1px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  width: 100%;
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--chrome);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 450;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  font-feature-settings: "cv11", "ss01";
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+code,
+.mono {
+  font-family: var(--font-mono);
+}
+
+::placeholder {
+  color: var(--faint);
+}
+
+::selection {
+  background: color-mix(in lch, var(--accent) 18%, transparent);
+}
+
+.run-activity {
+  display: flex;
+  max-width: 790px;
+  align-items: center;
+  gap: 7px;
+  margin: 2px 0 18px;
+  color: var(--faint);
+}
+
+.run-activity-signal {
+  display: flex;
+  width: 20px;
+  height: 20px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  border-radius: 50%;
+  background: var(--overlay);
+  color: color-mix(in lch, var(--accent) 55%, var(--faint));
+}
+
+.run-activity-signal i {
+  width: 2.5px;
+  height: 2.5px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: run-activity-pulse 1s ease-in-out infinite;
+}
+
+.run-activity-signal i:nth-child(2) { animation-delay: 150ms; }
+.run-activity-signal i:nth-child(3) { animation-delay: 300ms; }
+.run-activity-copy { display: flex; min-width: 0; flex-wrap: wrap; align-items: baseline; column-gap: 6px; }
+.run-activity-copy b,
+.run-activity-copy small { display: inline; }
+.run-activity-copy b { color: var(--muted); font-size: 10.5px; font-weight: 600; }
+.run-activity-copy small { color: var(--faint); font-size: 10.5px; line-height: 1.45; }
+.run-activity-copy small::before { margin-right: 6px; color: var(--line2); content: "·"; }
+.debate-stream > .run-activity { max-width: 980px; margin-right: auto; margin-left: auto; }
+
+@keyframes run-activity-pulse {
+  0%, 65%, 100% { opacity: .25; transform: translateY(0); }
+  32% { opacity: 1; transform: translateY(-2px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .run-activity-signal i { animation: none; }
+}
+
+:focus-visible,
+.is-focus {
+  outline: 1px solid #6d78d5;
+  outline-offset: 0;
+}
+
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible,
+.ui-input.is-focus {
+  outline-offset: -1px;
+}
+
+[disabled],
+.is-disabled {
+  cursor: default;
+  opacity: 0.42;
+}
+
+/* Linear/macOS 式覆盖滚动条：静止时隐去，移入滚动区后显形。 */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+
+*:hover {
+  scrollbar-color: rgb(55 57 63 / 28%) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+  background: transparent;
+}
+
+*:hover::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-track,
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  min-height: 30px;
+  border: 2px solid transparent;
+  border-radius: 9999px;
+  background: transparent;
+  background-clip: content-box;
+}
+
+*:hover::-webkit-scrollbar-thumb {
+  background: rgb(55 57 63 / 28%);
+  background-clip: content-box;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: rgb(55 57 63 / 44%);
+  background-clip: content-box;
+}
+
+/* S2 选中态：统一淡染背景，不绘制左侧指示条。 */
+.ui-selectable {
+  border-radius: 8px;
+  transition: background-color 150ms ease-out, color 150ms ease-out;
+}
+
+.ui-selectable:hover:not(.is-selected):not([aria-selected="true"]) {
+  background: var(--hover-bg);
+}
+
+.ui-selectable.is-selected,
+.ui-selectable[aria-selected="true"] {
+  background: var(--sel-bg);
+  color: var(--ink);
+}

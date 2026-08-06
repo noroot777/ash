@@ -33,13 +33,14 @@ function makeRepo(name: string): string {
 }
 
 try {
+  const { prepareWorktree, worktreeBranchName } = await import("../src/git.js");
   const {
+    acceptTagName,
     cleanupAcceptedTask,
+    cleanupPlanFor,
     mergeTaskBranch,
-    prepareWorktree,
     withTemporaryCleanupOutcome,
-    worktreeBranchName,
-  } = await import("../src/git.js");
+  } = await import("../src/git-accept.js");
   const { taskBranchDiff } = await import("../src/git-diff.js");
   const { db, ensureSchema } = await import("../src/db/index.js");
   const { projects, tasks } = await import("../src/db/schema.js");
@@ -277,7 +278,122 @@ try {
     assert.equal(stageOf(isolatedId), "awaiting_acceptance", "独立 worktree 执行者仍由自身验收");
   }
 
-  console.log("accept merge: git 场景 / 清理警告 / team 并发守卫 / 共享执行者验收口径全部通过");
+  // 9. 线上写「squash 合并」：目标分支上只多出一个提交，任务分支照旧留着。
+  {
+    const repo = makeRepo("squash");
+    const taskId = "acceptsq0009";
+    const ws = await prepareWorktree(repo, taskId, "main");
+    for (const n of ["one", "two"]) {
+      writeFileSync(join(ws.path, `${n}.txt`), `${n}\n`);
+      git(ws.path, "add", "-A");
+      git(ws.path, "commit", "-m", `task ${n}`);
+    }
+    const before = git(repo, "rev-parse", "main");
+    git(repo, "checkout", "-b", "parking");
+
+    const merged = await mergeTaskBranch(repo, taskId, "main", "squash");
+    assert.equal(merged.ok, true);
+    if (!merged.ok) throw new Error(merged.message);
+    assert.equal(merged.method, "squash");
+    assert.equal(
+      git(repo, "rev-list", "--count", `${before}..main`), "1",
+      "两个提交压成一个",
+    );
+    assert.equal(
+      git(repo, "show", "--name-only", "--format=", "main").split("\n").sort().join(","),
+      "one.txt,two.txt",
+      "两次改动都进去了",
+    );
+    assert.notEqual(git(repo, "rev-parse", "main"), git(repo, "rev-parse", worktreeBranchName(taskId)));
+
+    // squash 之后 git 不认为任务分支已合并，所以自动清理**不去删分支**（绝不用 -D）。
+    const cleanup = await cleanupAcceptedTask(repo, taskId, "main", { worktree: true, branch: false });
+    assert.equal(cleanup.ok, true);
+    if (!cleanup.ok) throw new Error(cleanup.message);
+    assert.equal(cleanup.worktreeRemoved, true);
+    assert.equal(cleanup.branchDeleted, false);
+    assert.equal(existsSync(ws.path), false);
+    assert.equal(hasRef(repo, worktreeBranchName(taskId)), true, "分支保留，用户想删自己删");
+  }
+
+  // 10. 线上写「只打标签，不合并」：目标分支一个字节都不动。
+  {
+    const repo = makeRepo("tag-only");
+    const taskId = "accepttg0010";
+    const ws = await prepareWorktree(repo, taskId, "main");
+    writeFileSync(join(ws.path, "tagged.txt"), "tagged\n");
+    git(ws.path, "add", "-A");
+    git(ws.path, "commit", "-m", "task tagged");
+    const before = git(repo, "rev-parse", "main");
+
+    const merged = await mergeTaskBranch(repo, taskId, "main", "tag");
+    assert.equal(merged.ok, true);
+    if (!merged.ok) throw new Error(merged.message);
+    assert.equal(merged.method, "tagged");
+    assert.equal(merged.tag, acceptTagName(taskId));
+    assert.equal(git(repo, "rev-parse", "main"), before, "目标分支没动");
+    assert.equal(
+      git(repo, "rev-parse", `${acceptTagName(taskId)}^{commit}`),
+      git(repo, "rev-parse", worktreeBranchName(taskId)),
+      "标签打在任务分支的头上",
+    );
+
+    // 再验一次是幂等的（同一个提交上重复打标签不算错）
+    const again = await mergeTaskBranch(repo, taskId, "main", "tag");
+    assert.equal(again.ok, true, "标签已经指向这个提交了，再点一次验收不该报错");
+
+    // 但标签若已经指向**别的**提交，就绝不覆盖：那多半是别人的东西，
+    // 覆盖掉之后原来指的提交可能再也找不回来。宁可停下来说清楚，让人自己处置。
+    const tagged = git(repo, "rev-parse", `${acceptTagName(taskId)}^{commit}`);
+    writeFileSync(join(ws.path, "more.txt"), "more\n");
+    git(ws.path, "add", "-A");
+    git(ws.path, "commit", "-m", "task moved on");
+    const clash = await mergeTaskBranch(repo, taskId, "main", "tag");
+    assert.equal(clash.ok, false, "标签指着别的提交时不许悄悄挪走它");
+    if (!clash.ok) {
+      assert.match(clash.message, /已经存在/, "并且把「为什么没做」说清楚");
+      assert.equal(clash.reason, "merge_failed");
+    }
+    assert.equal(
+      git(repo, "rev-parse", `${acceptTagName(taskId)}^{commit}`),
+      tagged,
+      "标签原样没动",
+    );
+  }
+
+  // 11. 清理档位：「只删 worktree，分支留着」与「都留着」。
+  {
+    assert.deepEqual(cleanupPlanFor("all"), { worktree: true, branch: true });
+    assert.deepEqual(cleanupPlanFor("worktree"), { worktree: true, branch: false });
+    assert.deepEqual(cleanupPlanFor("none"), { worktree: false, branch: false });
+
+    const repo = makeRepo("keep-branch");
+    const taskId = "acceptkb0011";
+    const ws = await prepareWorktree(repo, taskId, "main");
+    writeFileSync(join(ws.path, "keep.txt"), "keep\n");
+    git(ws.path, "add", "-A");
+    git(ws.path, "commit", "-m", "task keep");
+    git(repo, "checkout", "-b", "parking");
+    const merged = await mergeTaskBranch(repo, taskId, "main");
+    assert.equal(merged.ok, true);
+
+    const kept = await cleanupAcceptedTask(repo, taskId, "main", cleanupPlanFor("none"));
+    assert.equal(kept.ok, true);
+    if (!kept.ok) throw new Error(kept.message);
+    assert.equal(kept.worktreeRemoved, false);
+    assert.equal(kept.branchDeleted, false);
+    assert.equal(existsSync(ws.path), true, "「都留着」就真的一个都不删");
+
+    const halfway = await cleanupAcceptedTask(repo, taskId, "main", cleanupPlanFor("worktree"));
+    assert.equal(halfway.ok, true);
+    if (!halfway.ok) throw new Error(halfway.message);
+    assert.equal(halfway.worktreeRemoved, true);
+    assert.equal(halfway.branchDeleted, false);
+    assert.equal(existsSync(ws.path), false);
+    assert.equal(hasRef(repo, worktreeBranchName(taskId)), true, "已合并也照样按线上写的留着分支");
+  }
+
+  console.log("accept merge: git 场景 / 三种合并档位 / 清理档位 / 清理警告 / team 并发守卫 / 共享执行者验收口径全部通过");
 } finally {
   rmSync(root, { recursive: true, force: true });
 }

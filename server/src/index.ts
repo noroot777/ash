@@ -6,6 +6,7 @@ import { readFile } from "node:fs/promises";
 import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { join, extname, normalize } from "node:path";
+import type { Context } from "hono";
 import {
   acquireDbSingletonLock,
   SingletonConflictError,
@@ -110,11 +111,13 @@ const { startScheduler, api } = await initializeServer().catch((e) =>
 );
 
 async function initializeServer() {
-  const [{ ensureSchema }, { migrateQueues }, { reconcileInterrupted }, schedulesModule, routesModule, stageModule, acceptanceModule, reviewModule] =
+  const [{ ensureSchema }, { migrateQueues }, { reconcileInterrupted }, { reattachRunningTasks }, { sweepRunLogs }, schedulesModule, routesModule, stageModule, acceptanceModule, reviewModule] =
     await Promise.all([
       import("./db/index.js"),
       import("./db/migrateQueues.js"),
       import("./orchestrator.js"),
+      import("./reattach.js"),
+      import("./run-logs-gc.js"),
       import("./schedules.js"),
       import("./routes.js"),
       import("./task-stage.js"),
@@ -124,10 +127,33 @@ async function initializeServer() {
 
   await ensureSchema();
   await migrateQueues(); // 一次性把 legacy depends_on / resume_depends_on 迁到 queue_items（幂等）
+  // **顺序不能反**：先把还活着的 agent 接管回来（它们的输出走文件，压根没随上
+  // 一个 server 进程一起死），再 reconcile 剩下那些真被打断的。反过来的话，一个
+  // 正在干活的 agent 会先被判 failed，用户一点重试就有第二个 agent 进同一个
+  // worktree —— 那是数据损坏，不是显示问题。
+  await reattachRunningTasks();
   await reconcileInterrupted(); // recover tasks left "running"/"queued" by a previous crash/restart
+  // 回收上一轮遗留的原始输出文件（纯传输介质，正文早已进 .md）。放在接管之后：
+  // 它靠 sessions 判断哪些文件仍在用，接管完那份名单才是准的。best-effort。
+  void sweepRunLogs()
+    .then(({ removed, bytes }) => {
+      if (removed) console.log(`[harness] 回收 ${removed} 个已结束运行的原始输出文件（${(bytes / 1048576).toFixed(1)} MB）`);
+    })
+    .catch((err) => console.error("[harness] 原始输出文件回收失败（不影响运行）:", err));
   stageModule.mountTaskStageRoutes(routesModule.api);
   acceptanceModule.mountTaskAcceptanceRoutes(routesModule.api);
   reviewModule.mountReviewRoutes(routesModule.api);
+  // 预览进程是 harness 主动起的长驻服务，判据全落在盘上（data/runs/<task>/preview.json），
+  // 所以重启后照样收得掉：先扫一遍孤儿，之后定时收 idle 那一档。
+  const { startPreviewSweeper } = await import("./preview.js");
+  startPreviewSweeper();
+  // 技能清单预热:第一次在输入框敲 `/` 之前就把磁盘扫完(冷扫 ~15ms,之后靠
+  // mtime 指纹命中缓存)。best-effort,失败了请求那一刻自己会重扫。
+  void (async () => {
+    const [{ warmSkills }, { projects }] = await Promise.all([import("./skills.js"), import("./db/schema.js")]);
+    const { db } = await import("./db/index.js");
+    warmSkills((await db.select().from(projects)).map((p) => p.repoPath));
+  })().catch(() => {});
   return { startScheduler: schedulesModule.startScheduler, api: routesModule.api };
 }
 
@@ -201,10 +227,11 @@ app.get("/review/*", async (c) => {
   });
 });
 
-// Serve the built SPA (web/dist) in production. Path is resolved relative to this
-// module (works regardless of cwd). In dev, Vite serves on :5173 and proxies /api.
-const DIST = fileURLToPath(new URL("../../web/dist", import.meta.url));
-const hasBuild = existsSync(join(DIST, "index.html"));
+// Serve the built SPA in production. The path is resolved relative to this module
+// (works regardless of cwd). API/review/mobile routes above remain higher-priority
+// than the final web catch-all below.
+const WEB_DIST = fileURLToPath(new URL("../../web-next/dist", import.meta.url));
+const hasWebBuild = existsSync(join(WEB_DIST, "index.html"));
 
 const MIME: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
@@ -229,7 +256,7 @@ const MIME: Record<string, string> = {
 // 点着看手机 app,不用开真机。同源 → 预览里的 app 直接连本机 :4317 拿数据(mobile
 // config.ts 在 web 下默认用 location.origin)。app.json experiments.baseUrl="/mobile/app"
 // 让导出资源路径落在这个子前缀下。改了 mobile 代码要重新 build:mobile 再刷新。
-// 必须注册在下方 web/dist 的 "/*" catch-all 之前,否则被 SPA 兜底截走。
+// 必须注册在下方 web-next/dist 的 "/*" catch-all 之前,否则被 SPA 兜底截走。
 const MOBILE_DIST = fileURLToPath(new URL("../../mobile/dist", import.meta.url));
 const hasMobile = existsSync(join(MOBILE_DIST, "index.html"));
 const mobileMiss = "手机预览还没构建 —— 在仓库根跑 `npm run build:mobile` 生成 mobile/dist 后刷新。";
@@ -283,6 +310,21 @@ const cacheHeader = (file: string): string =>
       ? "public, max-age=31536000, immutable"
       : "no-cache";
 
+async function serveSpa(c: Context, dist: string, rel: string) {
+  const candidate = normalize(join(dist, rel));
+  const file =
+    (candidate === dist || candidate.startsWith(dist + "/")) &&
+    existsSync(candidate) &&
+    statSync(candidate).isFile()
+      ? candidate
+      : join(dist, "index.html");
+  const body = await readFile(file);
+  return c.body(body, 200, {
+    "content-type": MIME[extname(file)] ?? "application/octet-stream",
+    "cache-control": cacheHeader(file),
+  });
+}
+
 app.get("/mobile/app", (c) => c.redirect("/mobile/app/"));
 app.get("/mobile/app/*", async (c) => {
   if (!hasMobile) return c.text(mobileMiss, 503);
@@ -298,26 +340,12 @@ app.get("/mobile/app/*", async (c) => {
   });
 });
 
-if (hasBuild) {
-  app.get("/*", async (c) => {
-    const urlPath = decodeURIComponent(new URL(c.req.url).pathname);
-    // Resolve within DIST; fall back to index.html for SPA routes.
-    const candidate = normalize(join(DIST, urlPath));
-    const file =
-      candidate.startsWith(DIST) && existsSync(candidate) && statSync(candidate).isFile()
-        ? candidate
-        : join(DIST, "index.html");
-    const body = await readFile(file);
-    return c.body(body, 200, {
-      "content-type": MIME[extname(file)] ?? "application/octet-stream",
-      "cache-control": cacheHeader(file),
-    });
-  });
-} else {
-  app.get("/", (c) =>
-    c.text("Harness server running. Web build not found — run `npm run dev` (Vite :5173) or `npm run build`."),
-  );
-}
+const webMiss = "Harness web build not found — run `npm -w web-next run build`.";
+app.get("/*", (c) => {
+  if (!hasWebBuild) return c.text(webMiss, 503);
+  const rel = decodeURIComponent(new URL(c.req.url).pathname).replace(/^\/+/, "");
+  return serveSpa(c, WEB_DIST, rel);
+});
 
 // Bind the port before starting the scheduler. A process that cannot accept
 // HTTP callbacks must never be allowed to poll schedules or launch agents.

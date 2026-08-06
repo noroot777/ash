@@ -1,0 +1,591 @@
+.task-composer-panel {
+  display: grid;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  grid-template-rows: 48px minmax(0, 1fr) 58px;
+  background: var(--panel);
+}
+
+.composer-header {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  border-bottom: 1px solid var(--line);
+  padding: 0 16px;
+}
+
+.composer-header > b {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.composer-header > span:not(.workspace-kind-chip) {
+  color: var(--faint);
+  font-size: 10px;
+}
+
+.composer-header .ui-button {
+  margin-left: auto;
+}
+
+.composer-scroll {
+  min-height: 0;
+  overflow-y: auto;
+  background: var(--canvas);
+}
+
+.composer-inner {
+  width: min(820px, calc(100% - 40px));
+  margin: 0 auto;
+  padding: 30px 0 54px;
+}
+
+.composer-tabs {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 12px;
+}
+
+.composer-tabs button {
+  display: inline-flex;
+  height: 30px;
+  align-items: center;
+  gap: 6px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  padding: 0 12px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.composer-tabs button:hover {
+  background: var(--raised);
+  color: var(--ink);
+}
+
+.composer-tabs button[aria-selected="true"] {
+  background: var(--sel-bg);
+  color: var(--ink);
+  font-weight: 550;
+}
+
+.composer-tabs > span {
+  margin-left: auto;
+  color: var(--faint);
+  font-size: 9px;
+}
+
+.composer-title {
+  width: 100%;
+  height: 36px;
+  margin-top: 18px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--panel);
+  padding: 0 12px;
+  outline: 0;
+  font-size: 13px;
+}
+
+.composer-title:focus,
+.composer-objective textarea:focus,
+.composer-field input:focus,
+.composer-field select:focus {
+  border-color: var(--accent);
+}
+
+.composer-objective {
+  position: relative;
+  margin-top: 10px;
+}
+
+.composer-objective textarea {
+  display: block;
+  width: 100%;
+  min-height: 240px;
+  resize: vertical;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel);
+  padding: 14px;
+  outline: 0;
+  font-size: 14px;
+  line-height: 1.75;
+}
+
+.composer-slash-menu {
+  position: absolute;
+  z-index: 3;
+  top: 48px;
+  left: 12px;
+  width: 340px;
+  /* 技能一多就得能滚(本机 57 条);键盘选中项的 scrollIntoView 在 SlashMenu 里。 */
+  max-height: min(46vh, 320px);
+  overflow-y: auto;
+  border: 1px solid var(--line2);
+  border-radius: 10px;
+  background: var(--panel);
+  padding: 5px;
+  box-shadow: var(--menu-shadow);
+}
+
+.composer-slash-menu > small {
+  display: block;
+  padding: 4px 7px;
+  color: var(--faint);
+  font-size: 9px;
+}
+
+.composer-slash-menu button {
+  display: flex;
+  width: 100%;
+  height: 34px;
+  align-items: center;
+  gap: 9px;
+  border: 0;
+  background: transparent;
+  padding: 0 8px;
+  text-align: left;
+}
+
+.composer-slash-menu b {
+  color: var(--accent);
+  font: 600 11px var(--font-mono);
+}
+
+.composer-slash-menu span {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+/* 技能行:描述可能很长,截断而不是把整张菜单撑歪。 */
+.composer-slash-menu button { min-height: 34px; height: auto; }
+.composer-slash-menu em {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--faint);
+  font-size: 10px;
+  font-style: normal;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.composer-slash-menu button:hover,
+.composer-slash-menu button[aria-selected="true"] { border-radius: 7px; background: var(--sel-bg); }
+
+.composer-config {
+  display: grid;
+  gap: 12px;
+  margin-top: 22px;
+  border-top: 1px solid var(--line);
+  padding-top: 18px;
+}
+
+.composer-config-section,
+
+.composer-config-section {
+  padding: 14px;
+}
+
+.composer-config-section.is-execution {
+  border-color: color-mix(in lch, var(--accent) 18%, var(--line));
+}
+
+.composer-section-heading {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+}
+
+.composer-section-heading > span,
+
+.is-execution .composer-section-heading > span {
+  background: color-mix(in lch, var(--accent) 10%, var(--raised));
+  color: var(--accent);
+}
+
+.composer-section-heading h2,
+.composer-section-heading p {
+  margin: 0;
+}
+
+.composer-section-heading h2 {
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.composer-section-heading p {
+  margin-top: 1px;
+  color: var(--faint);
+  font-size: 9.5px;
+}
+
+.composer-executor-grid,
+.composer-option-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px 14px;
+  margin-top: 14px;
+}
+
+.composer-executor-grid.is-team {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.composer-executor-grid.is-single {
+  grid-template-columns: minmax(0, 1fr);
+  width: min(100%, 390px);
+}
+
+/* 显式声明这一列可以被压窄。默认的隐式列是 `auto`（min-width: auto），一旦里面
+   有长模型名，整栏就会被 min-content 顶宽——团队那三栏并排时直接互相压出格子。 */
+.composer-field,
+.composer-toggle-field {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 6px;
+}
+
+.composer-field > span,
+.composer-toggle-field > span {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 550;
+}
+
+.composer-field input,
+.composer-field select {
+  width: 100%;
+  height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  padding: 0 10px;
+  outline: 0;
+  font-size: 12px;
+}
+
+/* 统一下拉在新建面板里跟输入框同高同框，免得一行里两种控件对不齐。 */
+.composer-field .ui-dropdown-trigger {
+  height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  padding: 0 10px;
+  color: var(--ink);
+  font-size: 12px;
+  box-shadow: none;
+}
+
+.composer-field .ui-dropdown-trigger.is-mono > span:first-child,
+.composer-field .ui-dropdown-trigger > span.is-placeholder {
+  font-size: 12px;
+}
+
+.composer-field .ui-dropdown-trigger:hover:not(:disabled),
+.composer-field .ui-dropdown-trigger[aria-expanded="true"] {
+  border-color: var(--accent);
+  background: var(--panel);
+  box-shadow: none;
+}
+
+/* 选执行器那一栏：两颗胶囊并排——「执行器 · 模型」+「思考强度」，点开是同一套
+   `.agent-model-picker` 浮层。浮层挂到 body 上按触发器定位（`is-floating`），因为
+   新建面板的卡片是 overflow: hidden 的，贴着卡片内部弹会被裁掉半截。 */
+.composer-executor-picker {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+/* 团队那三栏一行摆两颗会很挤：给模型胶囊一个 160px 的理想宽度，栏位窄到放不下时
+   强度那颗自己换行到下一排，而不是把整栏撑破。 */
+.composer-executor-picker > .executor-model-picker {
+  min-width: 0;
+  flex: 1 1 160px;
+}
+
+.composer-executor-picker > .effort-picker {
+  flex: 0 0 auto;
+}
+
+/* 新建面板里所有控件统一 34px，两颗胶囊也得跟着，否则一行里高低不齐。 */
+.composer-field .effort-picker-trigger {
+  height: 34px;
+}
+
+.composer-field .composer-executor-trigger {
+  max-width: 100%;
+  min-width: 0;
+  gap: 6px;
+  height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  padding: 0 10px;
+  box-shadow: none;
+}
+
+.composer-field .composer-executor-trigger:hover:not(:disabled),
+.composer-field .composer-executor-trigger[aria-expanded="true"] {
+  border-color: var(--accent);
+  box-shadow: none;
+}
+
+.composer-executor-trigger > svg:first-child {
+  flex: 0 0 auto;
+  color: var(--muted);
+}
+
+/* 胶囊里四段（图标 / CLI / Profile 名 / 模型）都得能被压窄并自己省略号，否则
+   任意一段变长都会把整颗胶囊顶出所在栏。 */
+.composer-executor-trigger > b {
+  min-width: 0;
+  flex: 0 1 auto;
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-executor-trigger > span {
+  min-width: 0;
+  max-width: 40%;
+  flex: 0 1 auto;
+  overflow: hidden;
+  color: var(--faint);
+  font-size: 10.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-executor-trigger > code {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  color: var(--muted);
+  font: 10.5px var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-executor-trigger > .ui-select-caret {
+  flex: 0 0 auto;
+}
+
+.composer-field-run.is-error {
+  color: var(--red);
+}
+
+/* 「改回跟随任务的执行器」这一档：选出去以后得有路回来，但它不是第三颗胶囊——
+   写成一行小字链接，别跟上面两颗抢注意力。 */
+.composer-field-unset {
+  justify-self: start;
+  padding: 0;
+  color: var(--muted);
+  font-size: 10.5px;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.composer-field-unset:hover:not(:disabled) { color: var(--accent); }
+.composer-field-unset:disabled { color: var(--faint); cursor: default; }
+
+/* 选择器只写得下 Profile 名 + Profile 自带模型;覆盖生效时实际跑的是别的模型,
+   所以生效值单独占一行,覆盖态再加个角标(见 executorRunSummary)。 */
+.composer-field-run {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.composer-field-run > em {
+  border-radius: 4px;
+  background: color-mix(in lch, var(--accent) 14%, transparent);
+  padding: 1px 4px;
+  color: var(--accent);
+  font-size: 9px;
+  font-style: normal;
+  font-weight: 600;
+}
+
+.composer-toggle-field .ui-choice {
+  display: flex;
+  height: 34px;
+  align-items: center;
+  gap: 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  padding: 0 10px;
+  font-size: 11px;
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+.composer-override-group {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--panel);
+  padding: 9px;
+}
+
+.composer-override-group > b {
+  display: block;
+  margin-bottom: 8px;
+  color: var(--muted);
+  font-size: 9.5px;
+  font-weight: 650;
+}
+
+.composer-override-group > div {
+  display: grid;
+  gap: 8px;
+}
+
+.composer-seed-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.composer-seed-attachment {
+  position: relative;
+  display: flex;
+  max-width: 240px;
+  height: 48px;
+  align-items: center;
+  gap: 7px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--panel);
+  padding: 4px 24px 4px 6px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.composer-seed-attachment > img {
+  width: 38px;
+  height: 38px;
+  flex: 0 0 38px;
+  border-radius: 5px;
+  object-fit: cover;
+}
+
+.composer-seed-attachment > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.composer-seed-attachment > button {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  display: grid;
+  width: 16px;
+  height: 16px;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: var(--raised);
+  color: var(--faint);
+}
+
+.composer-warning {
+  margin: 9px 0 0;
+  border-radius: 8px;
+  background: rgb(181 123 0 / 8%);
+  padding: 8px 10px;
+  color: var(--amber);
+  font-size: 10px;
+}
+
+.composer-agent-availability {
+  margin: 9px 0 0;
+  border-radius: 8px;
+  background: rgb(181 123 0 / 8%);
+  padding: 7px 9px;
+  color: var(--amber);
+  font-size: 10px;
+}
+
+.composer-agent-availability.is-loading {
+  background: var(--raised);
+  color: var(--faint);
+}
+
+.composer-agent-availability.is-empty {
+  border: 1px dashed color-mix(in lch, var(--amber) 35%, var(--line));
+}
+
+.composer-footer {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  border-top: 1px solid var(--line);
+  background: var(--panel);
+  padding: 0 16px;
+}
+
+.composer-footer > div {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  gap: 7px;
+}
+
+.composer-footer > div > span {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 5px;
+  color: var(--faint);
+  font-size: 9px;
+}
+
+.composer-footer .task-reply-icon {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+}
+
+.composer-footer .task-reply-icon:hover {
+  background: var(--raised);
+  color: var(--ink);
+}
+
+@media (max-width: 720px) {
+  .composer-inner { width: calc(100% - 26px); }
+  .composer-executor-grid,
+  .composer-executor-grid.is-team,
+  .composer-option-grid,
+  .composer-tabs > span { display: none; }
+  .composer-footer > div > span { display: none; }
+}

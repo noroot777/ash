@@ -10,13 +10,37 @@
       "types": "./src/index.ts",
       "default": "./src/index.ts"
     },
+    "./attachments": {
+      "types": "./src/attachments.ts",
+      "default": "./src/attachments.ts"
+    },
     "./team": {
       "types": "./src/team.ts",
       "default": "./src/team.ts"
     },
+    "./run-activity": {
+      "types": "./src/run-activity.ts",
+      "default": "./src/run-activity.ts"
+    },
     "./executors": {
       "types": "./src/executor-overrides.ts",
       "default": "./src/executor-overrides.ts"
+    },
+    "./workflow": {
+      "types": "./src/workflow.ts",
+      "default": "./src/workflow.ts"
+    },
+    "./workflow-policy": {
+      "types": "./src/workflow-policy.ts",
+      "default": "./src/workflow-policy.ts"
+    },
+    "./workflow-presets": {
+      "types": "./src/workflow-presets.ts",
+      "default": "./src/workflow-presets.ts"
+    },
+    "./cli-presets": {
+      "types": "./src/cli-presets.ts",
+      "default": "./src/cli-presets.ts"
     }
   },
   "scripts": {

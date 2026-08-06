@@ -1,4 +1,4 @@
-import type { AgentType } from "./index.js";
+import type { AgentType } from "./index.ts";
 
 // "lead" = 团队任务的常驻调度台会话（一个进程跑很多回合，见 server/src/team）；
 // 执行者自己的会话仍是 "single"。
@@ -25,6 +25,7 @@ export interface Session {
   resumeCommand: string | null; // ready-to-paste resume command
   commandLine: string | null; // full command invoked
   startedAt: string;
+  turnStartedAt?: string | null; // latest turn on a reusable session row
   endedAt: string | null; // when this run finished (set with exitStatus); null while live
   exitStatus: number | null;
 }

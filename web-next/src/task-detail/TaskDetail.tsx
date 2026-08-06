@@ -1,0 +1,416 @@
+import { useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
+import type { Group, Session, Task } from "@harness/shared";
+import { isUserFollowUp } from "@harness/shared";
+import { FlowArrow, FolderOpen, Info, MagnifyingGlass } from "@phosphor-icons/react";
+import { InspectorHost, type InspectorDescriptor } from "../inspector/index.ts";
+import { FileTreeInspector } from "../files/FileTreeInspector.tsx";
+import { FileViewer } from "../files/FileViewer.tsx";
+import { api } from "../lib/api.ts";
+import { useConversation } from "../lib/useConversation.ts";
+import { useSkills } from "../lib/useSkills.ts";
+import { useTaskReadState } from "../lib/useTaskReadState.ts";
+import { conversationToMarkdown } from "./conversationModel.ts";
+import { ConversationFeed } from "./ConversationFeed.tsx";
+import { DeleteTaskDialog } from "./DeleteTaskDialog.tsx";
+import { QuestionCard } from "./QuestionCard.tsx";
+import { ReplyBox } from "./ReplyBox.tsx";
+import { TaskDerivationComposer } from "./TaskDerivationComposer.tsx";
+import { TaskHeader, type PrimaryAction } from "./TaskHeader.tsx";
+import { TaskInspector } from "./TaskInspector.tsx";
+import {
+  canDeriveTask,
+  isTaskDerivationCommand,
+  parseTaskDerivationCommand,
+  TASK_DERIVATION_COMMANDS,
+  type TaskDerivationCommand,
+} from "./taskDerivation.ts";
+import { TaskReviewInspector } from "./TaskReviewInspector.tsx";
+import { TaskReviewWorkspace } from "../review/TaskReviewWorkspace.tsx";
+import { WorkflowInspector } from "../workflow/WorkflowInspector.tsx";
+import { OriginTaskBar } from "../components/TaskOrigin.tsx";
+import { DerivedTaskLinks } from "../components/DerivedTaskLinks.tsx";
+
+interface TaskInspectorContext {
+  task: Task;
+  groups: Group[];
+  sessions: Session[];
+  allTasks: Task[];
+  followUps: { text: string; attachments: string[]; at?: string }[];
+  onOpenTask: (taskId: string) => void;
+  onOpenReview: () => void;
+  onTaskUpdated: (task: Task) => void;
+  onPatch: (patch: Partial<Task>) => Promise<void>;
+  onQueueChanged: (updatedTask?: Task) => void;
+  openFilePath: string | null;
+  onOpenFile: (path: string) => void;
+  notify: (message: string) => void;
+}
+
+const TASK_INSPECTORS: readonly InspectorDescriptor<TaskInspectorContext>[] = [
+  {
+    id: "info",
+    title: "信息",
+    icon: <Info size={14} />,
+    defaultOpen: true,
+    render: (context) => <TaskInspector {...context} />,
+  },
+  {
+    id: "review",
+    title: "审查",
+    icon: <MagnifyingGlass size={14} />,
+    render: (context) => <TaskReviewInspector {...context} />,
+  },
+  {
+    id: "files",
+    title: "文件",
+    icon: <FolderOpen size={14} />,
+    render: (context) => (
+      <FileTreeInspector
+        taskId={context.task.id}
+        activePath={context.openFilePath}
+        onOpenFile={context.onOpenFile}
+      />
+    ),
+  },
+  {
+    id: "workflow",
+    title: "工作流",
+    icon: <FlowArrow size={14} />,
+    render: (context) => (
+      <WorkflowInspector
+        task={context.task}
+        onTaskUpdated={context.onTaskUpdated}
+        notify={context.notify}
+      />
+    ),
+  },
+];
+
+const REVIEW_FOCUS_STAGES = new Set(["verifying", "verified", "verify_failed", "awaiting_acceptance"]);
+
+export function TaskDetail({
+  task,
+  allTasks,
+  onTaskUpdate,
+  onDeleted,
+  onOpenTask,
+  initialReviewOpen = false,
+  onReviewOpenChange,
+  inspectorMode = "page",
+  inspectorToggleTarget = null,
+  notify,
+}: {
+  task: Task;
+  allTasks: Task[];
+  onTaskUpdate: (task: Task) => void;
+  onDeleted: (taskId: string) => void;
+  onOpenTask: (taskId: string) => void;
+  initialReviewOpen?: boolean;
+  onReviewOpenChange?: (open: boolean) => void;
+  inspectorMode?: "page" | "drawer";
+  inspectorToggleTarget?: HTMLElement | null;
+  notify: (message: string) => void;
+}) {
+  const [groups, setGroups] = useState<Group[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [reviewOpen, setReviewOpen] = useState(initialReviewOpen);
+  // 中间那一栏同一时刻只放一样东西：会话 / 审查工作区 / 文件。
+  const [openFilePath, setOpenFilePath] = useState<string | null>(null);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [derivation, setDerivation] = useState<{
+    command: TaskDerivationCommand;
+    committed: boolean;
+  } | null>(null);
+  const [derivationResetKey, setDerivationResetKey] = useState(0);
+  // 刚发出去的那一回合由谁跑。会话行一落库就由它接管(见 runActivityExecutor),
+  // 这里只补中间那一两秒;任务停下来就作废,免得下一次「运行」照抄旧目标。
+  const [pendingExecutor, setPendingExecutor] = useState<string | null>(null);
+  const { indicatorForTask } = useTaskReadState(allTasks, task.id);
+  const conversation = useConversation(task.id);
+  const followUps = useMemo(
+    () => conversation.items.flatMap((item) => (
+      item.kind === "user" && isUserFollowUp(item)
+        ? [{ text: item.text, attachments: item.attachments, ...(item.at ? { at: item.at } : {}) }]
+        : []
+    )),
+    [conversation.items],
+  );
+  const markdown = useMemo(
+    () => conversationToMarkdown(conversation.items, task),
+    [conversation.items, task],
+  );
+  const hasConversation = conversation.sessions.length > 0 || conversation.items.length > 0;
+  const derivationAllowed = canDeriveTask(task);
+  const reviewFocused = REVIEW_FOCUS_STAGES.has(task.stage ?? "")
+    || allTasks.some((candidate) => candidate.reviewOf === task.id);
+  // 有编排的任务才默认把「工作流」页签开出来：老任务身上没有这条线，开出来只有一句
+  // 「这个任务没有编排」，白占一个页签。
+  const hasWorkflow = !!task.workflow;
+  const inspectorPolicy = useMemo(() => ({
+    stateKey: `single:${task.status}:${reviewFocused ? "review" : "info"}:${hasWorkflow ? "wf" : "-"}`,
+    requiredTabId: "info",
+    defaultOpenTabIds: [
+      "info",
+      ...(reviewFocused ? ["review"] : []),
+      ...(hasWorkflow ? ["workflow"] : []),
+    ],
+    defaultActiveTabId: reviewFocused ? "review" : "info",
+  }), [hasWorkflow, reviewFocused, task.status]);
+
+  // 这一轮由哪个执行器跑,`/` 就补它自己装的技能(ReplyBox 里 @ 召唤别人时列表
+  // 不跟着变——那是「本回合换人」,而技能清单按任务常设执行器给,够用且不闪)。
+  const skills = useSkills({
+    agentType: task.agentType,
+    projectId: task.projectId,
+    executorId: task.executorId,
+    enabled: task.mode === "single" && !task.archived,
+  });
+
+  useEffect(() => {
+    let alive = true;
+    api.groups(task.projectId).then((rows) => { if (alive) setGroups(rows); }).catch(() => undefined);
+    return () => { alive = false; };
+  }, [task.projectId]);
+  useEffect(() => {
+    setReviewOpen(initialReviewOpen);
+    setDeleteOpen(false);
+    setDerivation(null);
+    setOpenFilePath(null);
+  }, [initialReviewOpen, task.id]);
+  // 换任务一律作废(别把上一个任务的目标念到这一个头上);同一个任务停下来也作废,
+  // 免得下一次「运行」照抄旧目标。
+  useEffect(() => setPendingExecutor(null), [task.id]);
+  useEffect(() => {
+    if (task.status !== "running" && task.status !== "queued") setPendingExecutor(null);
+  }, [task.status]);
+
+  const changeReviewOpen = (open: boolean) => {
+    setReviewOpen(open);
+    if (open) setOpenFilePath(null);
+    onReviewOpenChange?.(open);
+  };
+
+  const closeDerivation = () => {
+    setDerivation(null);
+    setDerivationResetKey((current) => current + 1);
+  };
+
+  const refreshTask = async () => {
+    const updated = await api.task(task.id);
+    onTaskUpdate(updated);
+    return updated;
+  };
+
+  const patch = async (value: Partial<Task>) => {
+    const updated = await api.patchTask(task.id, value);
+    onTaskUpdate(updated);
+  };
+
+  const perform = async (action: Exclude<PrimaryAction, null>) => {
+    if (action === "accept") return changeReviewOpen(true);
+    setBusy(true);
+    try {
+      if (action === "run") await api.runTask(task.id);
+      if (action === "retry") await api.retryTask(task.id);
+      if (action === "stop") await api.stopTask(task.id);
+      if (action === "unarchive") onTaskUpdate(await api.unarchiveTask(task.id));
+      else await refreshTask();
+    } catch (reason) {
+      notify(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const archive = async () => {
+    setBusy(true);
+    try {
+      onTaskUpdate(task.archived ? await api.unarchiveTask(task.id) : await api.archiveTask(task.id));
+    } catch (reason) {
+      notify(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const requeue = async () => {
+    setBusy(true);
+    try {
+      const result = await api.requeueTask(task.id);
+      onTaskUpdate(result.task);
+      notify(result.movedToEnd ? "已重新排队并移到队尾" : "已重新排队");
+    } catch (reason) {
+      notify(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const refresh = async () => {
+    try {
+      await Promise.all([conversation.refetch(), refreshTask()]);
+      notify("任务详情已刷新");
+    } catch (reason) {
+      notify(reason instanceof Error ? reason.message : String(reason));
+    }
+  };
+
+  const inspectorContextKey = inspectorMode === "drawer" ? `task-drawer:${task.id}` : `task:${task.id}`;
+
+  return (
+    <InspectorHost
+      contextKey={inspectorContextKey}
+      descriptors={TASK_INSPECTORS}
+      context={{
+        task,
+        groups,
+        sessions: conversation.sessions,
+        allTasks,
+        followUps,
+        onOpenTask,
+        onOpenReview: () => changeReviewOpen(true),
+        onTaskUpdated: onTaskUpdate,
+        onPatch: patch,
+        onQueueChanged: (updatedTask) => {
+          if (updatedTask) onTaskUpdate(updatedTask);
+          else void refreshTask();
+        },
+        openFilePath,
+        onOpenFile: (path: string) => {
+          setOpenFilePath(path);
+          if (reviewOpen) changeReviewOpen(false);
+        },
+        notify,
+      }}
+      defaultVisible={inspectorMode === "page"}
+      tabPolicy={inspectorPolicy}
+    >
+      {({ toggleButton }) => (
+        <>
+          <div className="task-detail">
+            <OriginTaskBar task={task} allTasks={allTasks} onOpen={onOpenTask} />
+            <TaskHeader
+              task={task}
+              conversationMarkdown={markdown}
+              busy={busy}
+              refreshing={conversation.refreshing}
+              onTitle={(title) => patch({ title, autoTitle: false })}
+              onTogglePin={() => patch({ pinnedAt: task.pinnedAt != null ? null : Date.now() })}
+              onPrimary={(action) => void perform(action)}
+              onRequeue={() => void requeue()}
+              onArchive={() => void archive()}
+              onRefresh={() => void refresh()}
+              onReview={() => changeReviewOpen(!reviewOpen)}
+              onDelete={() => setDeleteOpen(true)}
+              indicatorForTask={indicatorForTask}
+              inspectorToggle={inspectorMode === "drawer" && inspectorToggleTarget ? undefined : toggleButton}
+              notify={notify}
+            />
+            {reviewOpen ? (
+              <TaskReviewWorkspace task={task} allTasks={allTasks} onClose={() => changeReviewOpen(false)} onTaskUpdated={onTaskUpdate} notify={notify} />
+            ) : openFilePath ? (
+              <FileViewer
+                taskId={task.id}
+                path={openFilePath}
+                onClose={() => setOpenFilePath(null)}
+                notify={notify}
+              />
+            ) : (
+              <div className="task-detail-body">
+                <section className="task-detail-main" aria-label="任务会话">
+                  <ConversationFeed
+                    task={task}
+                    items={conversation.items}
+                    sessions={conversation.sessions}
+                    pendingExecutor={pendingExecutor}
+                    loading={conversation.refreshing}
+                    error={conversation.error}
+                    footer={task.question ? (
+                      <QuestionCard
+                        task={task}
+                        onAnswer={async (answer) => {
+                          await api.answerTask(task.id, answer);
+                          conversation.addUser(answer, [], { answer: true });
+                          notify("已发送答复，任务正在续跑");
+                        }}
+                      />
+                    ) : undefined}
+                  />
+                  <DerivedTaskLinks sourceTaskId={task.id} allTasks={allTasks} onOpen={onOpenTask} />
+                  <ReplyBox
+                    task={task}
+                    hasConversation={hasConversation}
+                    skills={skills.skills}
+                    skillsRemote={skills.remote}
+                    onSend={async (text, attachments, { executorLabel, ...options }) => {
+                      const result = await api.replyTask(task.id, text, { attachments, ...options });
+                      // 按**结果**分支而不是按请求参数:任务正在跑时后端会把这条落成
+                      // 排队消息(前端没传 sendAt 也一样)。没真发出去就绝不能先贴进会话,
+                      // 否则用户看到自己的话已在时间线上、agent 却还没收到。
+                      if ("scheduled" in result) {
+                        notify(result.message.mode === "queued"
+                          ? "任务进行中，已排队；这一轮结束后自动发出"
+                          : `已安排 ${new Date(result.message.sendAt).toLocaleString()} 发送`);
+                        return result;
+                      }
+                      // 这一轮真发出去了,横幅先按这个名字报,等会话行落库再由它接管。
+                      setPendingExecutor(executorLabel ?? null);
+                      conversation.addUser(text, attachments);
+                      notify(options.agent
+                        ? `已召唤 @${options.agent}${options.model ? ` · ${options.model}` : ""}${options.reasoningEffort ? ` · ${options.reasoningEffort}` : ""} 继续任务`
+                        : "回复已发送");
+                      return result;
+                    }}
+                    command={derivationAllowed ? {
+                      matches: isTaskDerivationCommand,
+                      items: TASK_DERIVATION_COMMANDS,
+                      resetKey: derivationResetKey,
+                      onSubmit: (text) => {
+                        const parsed = parseTaskDerivationCommand(text);
+                        if (parsed) setDerivation({ command: parsed, committed: true });
+                      },
+                      onChange: (text) => {
+                        setDerivation((current) => {
+                          if (current?.committed) return current;
+                          const parsed = parseTaskDerivationCommand(text);
+                          return parsed ? { command: parsed, committed: false } : null;
+                        });
+                      },
+                      onCancel: closeDerivation,
+                    } : undefined}
+                    inlinePanel={derivationAllowed && derivation ? (
+                      <TaskDerivationComposer
+                        key={derivation.command.kind}
+                        task={task}
+                        command={derivation.command}
+                        live={!derivation.committed}
+                        onClose={closeDerivation}
+                        onCreated={(created) => {
+                          onTaskUpdate(created);
+                          onOpenTask(created.id);
+                        }}
+                        notify={notify}
+                      />
+                    ) : undefined}
+                  />
+                </section>
+              </div>
+            )}
+            {deleteOpen && (
+              <DeleteTaskDialog
+                task={task}
+                notify={notify}
+                onDeleted={() => onDeleted(task.id)}
+                onClose={() => setDeleteOpen(false)}
+              />
+            )}
+          </div>
+          {inspectorMode === "drawer" && inspectorToggleTarget
+            ? createPortal(toggleButton, inspectorToggleTarget)
+            : null}
+        </>
+      )}
+    </InspectorHost>
+  );
+}

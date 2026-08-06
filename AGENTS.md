@@ -5,7 +5,7 @@
 | 去处 | 装什么 | 谁读得到 |
 |---|---|---|
 | `server/CLAUDE.md` | 改 server 代码时要知道的实现说明 | claude（懒加载：接触 `server/` 文件后才注入） |
-| `web/CLAUDE.md` | 改前端代码时要知道的说明 | claude（同上） |
+| `web-next/CLAUDE.md` | 改前端代码时要知道的说明 | claude（同上） |
 | `mobile/AGENTS.md` | mobile 约定 | claude / codex |
 | `docs/incidents.md` | 事故经过、踩坑记录、被证伪的路 | 想查「为什么非得这样」时自己翻 |
 | 代码注释 / 类型 / 检查脚本 / 回归测试 | 能做进系统的全部 | 所有执行器，无条件 |
@@ -17,7 +17,7 @@
 确立新约定时按这个顺序往下问，能停在哪一档就停在哪一档：
 
 1. 让它**编译不过**（类型 / API 形状）
-2. 让**检查脚本**拦住（`scripts/check-conventions.mjs`，挂在 web build 前置）
+2. 让**检查脚本**拦住（`scripts/check-conventions.mjs`，挂在前端 build 前置）
 3. 用**回归测试**钉住（`server/scripts/test-*.ts`）
 4. 写成**就近的代码注释**（改这块代码的人一定会看到）
 5. 写进**目录级** `CLAUDE.md`
@@ -34,6 +34,10 @@
 ## 重构授权
 
 随时留意需求是否已经变动到「现有代码结构不再合适」的程度。一旦判断需求变动足够大、值得重构，就大胆重构，不要为了迁就旧结构而打补丁。
+
+## 派活:操作电脑的活给 codex
+
+浏览器/CDP/GUI 自动化这类「操作电脑」任务,一律派 codex(codex@cpa·gpt-5.6-sol)执行,不派 claude(用户 2026-07-30 指定)。
 
 ## 任务完成协议
 

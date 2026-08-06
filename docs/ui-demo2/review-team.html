@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
+<title>团队验收台 — Harness UI 讨论稿 v2</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="shell">
+    <div data-include="sidebar" data-selected="team1"></div>
+    <main class="main" data-surface>
+      <header class="app-bar">
+        <span class="kind-chip">团队</span>
+        <span class="app-title">自动验证相关 - 依旧大改</span>
+        <span class="status-pill gray"><i class="dot"></i>已收工 · 待验收</span>
+        <div class="app-actions">
+          <a class="ui-btn primary" href="team.html">返回协作</a>
+          <button class="ui-btn icon-btn" data-action="menu" aria-label="更多操作" aria-expanded="false">…</button>
+        </div>
+        <div class="overflow-menu">
+          <button>复制调度者的全部对话</button>
+          <button>导出对话为 Markdown</button>
+          <hr>
+          <button>归档团队</button>
+        </div>
+      </header>
+
+      <div class="review-subbar">
+        <div class="copy">
+          <b>团队验收台</b>
+          <small>团队级验收会合并并清理共享分支，并联动标记全部共享执行者</small>
+        </div>
+        <div class="actions">
+          <button class="ui-btn primary">✓ 验收通过</button>
+          <a class="ui-btn" href="team.html">× 返回团队流</a>
+        </div>
+      </div>
+
+      <div class="review-workspace">
+        <div class="review-stack">
+          <article class="review-record-card">
+            <header class="review-record-head">
+              <span class="record-caret">⌄</span>
+              <i class="mdot indigo"></i>
+              <div class="record-copy">
+                <div class="record-title">
+                  <b>自动验证相关 - 依旧大改</b>
+                  <span>调度台 / 共享 worktree</span>
+                  <small>待验收</small>
+                </div>
+                <p>审查机制需要真实跑通，保留完整执行记录。web 那条线改完要有人真的开浏览器点一遍。</p>
+              </div>
+            </header>
+            <div class="review-record-body">
+              <section class="evidence-panel" aria-label="调度台独立审查证据">
+                <div class="evidence-panel-head">
+                  <span class="evidence-icon">⌕</span>
+                  <div><b>独立审查证据</b><small>验收前请结合审查结论、报告与截图判断</small></div>
+                </div>
+                <p class="evidence-empty">尚无独立审查记录。</p>
+              </section>
+
+              <div class="review-content-grid">
+                <div class="review-side-stack">
+                  <section class="commit-stack">
+                    <h4>提交 · 4</h4>
+                    <p class="branch-line mono">harness/team/Mh8DxPRf</p>
+                    <div class="commit-row"><code>05e2b1a9</code><span>接入团队收工判据与时间轴</span><small>11:58</small></div>
+                    <div class="commit-row"><code>bc34ff10</code><span>隐藏已收工团队的停止动作</span><small>11:39</small></div>
+                    <div class="commit-row"><code>2f0e8b73</code><span>补齐共享执行者审查摘要</span><small>11:18</small></div>
+                    <div class="commit-row"><code>cc81a7d0</code><span>保存真实浏览器验证证据</span><small>10:52</small></div>
+                  </section>
+
+                  <section class="user-message-block" aria-label="用户消息">
+                    <h4>用户消息 · 2</h4>
+                    <div class="user-message-card">
+                      <p>审查机制需要真实跑通，保留完整执行记录。web 那条线改完要有人真的开浏览器点一遍。</p>
+                      <time>07/30 09:57</time>
+                    </div>
+                    <div class="user-message-card">
+                      <p>验证时留下的图片要能直接看缩略图，点开后还要能看大图，不要另造一个证据页面。</p>
+                      <time>07/30 10:31</time>
+                    </div>
+                    <small class="message-scope">口径：聚合会话中 kind=user 的消息；问答卡答复不计入。</small>
+                  </section>
+                </div>
+
+                <section class="diff-stack" aria-label="共享分支文件改动">
+                  <div class="diff-summary"><b>文件改动</b><span class="good">+214</span><span class="bad">−71</span><small>7 个文件</small><code>harness/team/Mh8DxPRf → main</code></div>
+                  <div class="diff-file">
+                    <div class="diff-head"><code>web/src/team/TeamHeader.tsx</code><span class="stats">+54 −21</span></div>
+                    <div class="diff-body">
+                      <div class="dl hunk"><span class="ln">…</span><span class="lc">@@ 团队收工后的头部动作</span></div>
+                      <div class="dl del"><span class="ln">95</span><span class="lc">- const stopped = workers.every(done);</span></div>
+                      <div class="dl add"><span class="ln">95</span><span class="lc">+ const settled = isTeamSettled(leadLive, workers);</span></div>
+                      <div class="dl add"><span class="ln">96</span><span class="lc">+ const showHalt = live &amp;&amp; !settled;</span></div>
+                    </div>
+                  </div>
+                  <div class="diff-file">
+                    <div class="diff-head"><code>web/src/ReviewWorkspace.tsx</code><span class="stats">+73 −18</span></div>
+                    <div class="diff-body">
+                      <div class="dl add"><span class="ln">334</span><span class="lc">+ &lt;h3&gt;共享执行者验证&lt;/h3&gt;</span></div>
+                      <div class="dl add"><span class="ln">384</span><span class="lc">+ &lt;TaskReviewEvidence taskId={selectedWorker.id} /&gt;</span></div>
+                    </div>
+                  </div>
+                </section>
+              </div>
+            </div>
+          </article>
+
+          <section class="shared-verification" aria-label="共享执行者验证摘要">
+            <header class="shared-verification-head">
+              <div><b>共享执行者验证</b><small>共享执行者的代码改动已包含在上方共享分支 diff 中，验收团队整体即可。</small></div>
+              <span>3 个共享执行者</span>
+            </header>
+            <div class="shared-worker-grid">
+              <button class="shared-worker-card">
+                <i class="mdot green"></i><span><b>审查者机制:shared 层</b><small>第 2 轮 · verified</small></span><em class="stage verified">verified</em><strong>›</strong>
+              </button>
+              <button class="shared-worker-card selected" aria-expanded="true">
+                <i class="mdot amber"></i><span><b>审查者机制:web 接入</b><small>第 2 轮 · verifying</small></span><em class="stage verifying">verifying</em><strong>⌄</strong>
+              </button>
+              <button class="shared-worker-card">
+                <i class="mdot red"></i><span><b>审查:全链路真实运行</b><small>第 1 轮 · verify_failed</small></span><em class="stage failed">verify_failed</em><strong>›</strong>
+              </button>
+            </div>
+
+            <div class="shared-evidence-expanded">
+              <p class="selected-worker-title">审查者机制:web 接入</p>
+              <section class="evidence-panel" aria-label="共享执行者独立审查证据">
+                <div class="evidence-panel-head">
+                  <span class="evidence-icon">⌕</span>
+                  <div><b>独立审查证据</b><small>已记录 2 轮真实运行验证</small></div>
+                </div>
+                <article class="review-round-card">
+                  <div class="round-head"><span class="round-no fail">1</span><b>第 1 轮</b><span class="verdict fail">verify_failed</span><small>审查任务：完成</small></div>
+                  <div class="round-report">
+                    <b>审查报告：</b>自然收工后仍显示「停止全组」，时间轴右端也继续按秒增长。判据没有统一使用 shared 的 isTeamSettled，阻断验收。
+                    <div class="auto-return"><span>↩</span><span>已自动打回原任务修复；修复完成后进入第 2 轮复审。</span></div>
+                    <div class="shot-label">截图 · 3</div>
+                    <div class="shot-grid">
+                      <button class="evidence-shot" title="点击查看大图"><span class="shot"></span><span>01-stop-button.png</span><i>放大</i></button>
+                      <button class="evidence-shot" title="点击查看大图"><span class="shot alt"></span><span>02-timeline-end.png</span><i>放大</i></button>
+                      <button class="evidence-shot" title="点击查看大图"><span class="shot code"></span><span>03-console-clean.png</span><i>放大</i></button>
+                    </div>
+                  </div>
+                </article>
+                <article class="review-round-card">
+                  <div class="round-head"><span class="round-no verifying">2</span><b>第 2 轮</b><span class="verdict verifying">verifying</span><small>审查任务：运行中</small></div>
+                  <div class="round-report"><b>审查报告：</b>正在用真实浏览器复查按钮显隐、时间轴收口和 file:// 控制台；本轮尚未写入最终结论。</div>
+                </article>
+              </section>
+            </div>
+          </section>
+        </div>
+      </div>
+    </main>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
+<title>控件全状态对照 — Harness UI 讨论稿 v2</title>
+<link rel="stylesheet" href="style.css">
+<style>
+  .component-doc{max-width:1180px;margin:0 auto;padding:44px 28px 120px}
+  .component-doc h1{margin:0 0 8px;font-size:30px;letter-spacing:-.035em}.component-doc>.lead{max-width:800px;margin:0 0 28px;color:var(--muted);font-size:13px}
+  .measure-note{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;margin-bottom:24px;border:1px solid var(--line);border-radius:10px;background:var(--line);overflow:hidden}
+  .measure-note div{background:var(--panel);padding:10px 12px}.measure-note b{display:block;font-size:11px}.measure-note small{display:block;margin-top:2px;color:var(--faint);font-size:10px}
+  .control-section{margin-top:30px}.control-section h2{margin:0 0 4px;font-size:17px;font-weight:600}.control-section>p{margin:0 0 12px;color:var(--muted);font-size:11.5px}
+  .spec{overflow:hidden;border:1px solid var(--line2);border-radius:10px;background:var(--panel)}
+  .state-grid{display:grid;grid-template-columns:110px repeat(5,minmax(120px,1fr));align-items:stretch}
+  .state-grid>*{min-height:68px;border-right:1px solid var(--line);border-bottom:1px solid var(--line);padding:10px}.state-grid>*:nth-child(6n){border-right:0}.state-grid>*:nth-last-child(-n+6){border-bottom:0}
+  .state-head{display:flex;align-items:center;color:var(--faint);font-size:10px;font-weight:650}.state-name{display:flex;align-items:center;color:var(--muted);font-size:11px;font-weight:600}.state-cell{display:flex;align-items:center;justify-content:center;background:var(--panel)}
+  .c-btn{display:inline-flex;height:28px;align-items:center;justify-content:center;gap:6px;border:1px solid transparent;border-radius:8px;padding:0 10px;color:var(--muted);font-size:12px;font-weight:500;box-shadow:var(--control-shadow);transition:background-color .15s,border .15s,color .15s,box-shadow .15s,opacity .15s}
+  .c-btn.secondary{background:var(--panel)}.c-btn.primary{background:var(--accent);color:#fff;box-shadow:0 0 0 1px rgba(67,76,164,.28),0 1px 2px rgba(40,42,48,.12)}
+  .c-btn.ghost{background:transparent;box-shadow:none}.c-btn.icon{width:28px;border-radius:9999px;padding:0;background:transparent;box-shadow:none;font-size:15px}
+  .c-btn.is-hover,.c-btn.secondary:hover{background:var(--overlay);color:var(--ink);box-shadow:var(--control-hover-shadow)}.c-btn.primary.is-hover{background:#5560c4;color:#fff}.c-btn.ghost.is-hover,.c-btn.icon.is-hover{background:var(--raised);color:var(--ink);box-shadow:none}
+  .c-btn.is-active{background:var(--panel);box-shadow:var(--control-shadow)}.c-btn.primary.is-active{background:#4d57b5;box-shadow:inset 0 1px 2px rgba(20,24,80,.24)}.c-btn.ghost.is-active,.c-btn.icon.is-active{background:var(--overlay);box-shadow:none}
+  .is-focus{outline:1px solid #6d78d5!important;outline-offset:0}.is-disabled{cursor:default!important;opacity:.42!important}
+  .c-input{width:180px;height:32px;border:.5px solid lch(86.5% 0 282);border-radius:8px;background:var(--panel);padding:0 12px;outline:0;font-size:13px;transition:border-color .15s,opacity .15s}.c-input.is-hover{border-color:lch(78.5% 0 282)}.c-input.is-focus{border-color:lch(78.5% 0 282);outline-offset:-1px!important}
+  .input-state-grid{display:grid;grid-template-columns:repeat(4,minmax(180px,1fr));gap:1px;margin-bottom:12px;border:1px solid var(--line);border-radius:10px;background:var(--line);overflow:hidden}.input-state{background:var(--panel);padding:12px}.input-state label{display:block;margin-bottom:8px;color:var(--faint);font-size:10px;font-weight:650}.input-state .c-input{width:100%}
+  .c-select{display:flex;width:180px;height:30px;align-items:center;border:1px solid transparent;border-radius:8px;background:var(--panel);padding:0 10px;color:lch(20% 1 282);font-size:13px;box-shadow:var(--control-shadow);transition:background-color .15s,border .15s,color .15s,box-shadow .15s}.c-select span{margin-left:auto;color:var(--faint)}
+  .c-select.is-hover{background:var(--overlay);box-shadow:var(--control-hover-shadow)}.c-select.is-active{background:var(--panel);box-shadow:var(--control-shadow)}
+  .menu-demo{width:250px;border:1px solid var(--line2);border-radius:12px;background:var(--panel);box-shadow:var(--menu-shadow);padding:4px 0;overflow:hidden}
+  .menu-item{display:flex;height:32px;align-items:center;margin:0 4px;border-radius:6px;padding:0 8px;color:var(--ink);font-size:13px}.menu-item.hover{background:var(--raised)}.menu-item.danger{color:var(--red)}.menu-item kbd{margin-left:auto;color:var(--faint);font:10px ui-monospace,monospace}.menu-sep{height:1px;margin:4px 8px;background:var(--line)}
+  .choice-line{display:flex;align-items:center;gap:10px}.check{position:relative;width:14px;height:14px;border:1px solid var(--line2);border-radius:4px;background:var(--panel);transition:background-color .15s,border-color .15s,box-shadow .15s}.check.checked{border-color:var(--accent);background:var(--accent)}.check.checked::after{content:"✓";position:absolute;inset:-2px 0 0;color:#fff;font-size:11px;text-align:center}.check.is-hover{border-color:lch(65% 2 282)}.check.is-active{box-shadow:inset 0 1px 2px rgba(0,0,0,.16)}
+  .toggle{position:relative;width:30px;height:20px;border-radius:72px;background:lch(82.484% .054 281.837);transition:background-color .15s ease-out,opacity .15s ease-out}.toggle::after{content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.18);transition:transform .15s ease-out}.toggle.on{background:var(--accent)}.toggle.on::after{transform:translateX(10px)}.toggle.is-hover{filter:brightness(.97)}.toggle.is-active::after{width:17px}
+  .tooltip-demo{position:relative;display:flex;align-items:center;justify-content:center;width:160px;height:70px}.tip-target{display:grid;width:28px;height:28px;place-items:center;border-radius:9999px;background:var(--raised);color:var(--muted)}.tooltip{position:absolute;left:50%;bottom:56px;transform:translateX(-50%);white-space:nowrap;border-radius:6px;background:lch(20% 1 282);padding:5px 8px;color:#fff;font-size:11px;box-shadow:0 3px 9px rgba(0,0,0,.16)}.tooltip::after{content:"";position:absolute;left:50%;bottom:-4px;width:8px;height:8px;transform:translateX(-50%) rotate(45deg);background:inherit}
+  .chip-line{display:flex;flex-wrap:wrap;gap:8px}.chip{display:inline-flex;height:24px;align-items:center;gap:6px;border-radius:9999px;padding:0 8px;color:var(--muted);font-size:11px;font-weight:500}.chip:hover{background:var(--raised)}.chip .dot{width:7px;height:7px;border-radius:50%;background:var(--line2)}.chip .dot.green{background:var(--green)}.chip .dot.amber{background:var(--amber)}.chip .dot.red{background:var(--red)}.chip .dot.indigo{background:var(--accent)}.kbd-chip{border:1px solid var(--line);border-radius:4px;background:var(--canvas);padding:1px 5px;color:var(--faint);font:10px ui-monospace,monospace}
+  .scroll-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}.scroll-demo{height:190px;overflow:auto;border:1px solid var(--line2);border-radius:10px;background:var(--panel)}.scroll-demo h3{position:sticky;top:0;margin:0;border-bottom:1px solid var(--line);background:var(--panel);padding:8px 10px;font-size:11px;z-index:1}.scroll-demo .row{height:32px;margin:1px 5px;border-radius:7px;padding:7px 8px;color:var(--muted);font-size:11px}.scroll-demo .row:nth-child(4){background:var(--raised);color:var(--ink)}
+  .scroll-demo.mainish .row{height:44px;border-bottom:1px solid var(--line);border-radius:0}.scroll-demo.inspectish .row{height:55px}.scroll-demo.menuish{height:154px;padding:4px}.scroll-demo.menuish .row{height:32px;margin:0;border-radius:6px}
+  .scroll-demo.show-scrollbar::-webkit-scrollbar{width:10px}.scroll-demo.show-scrollbar::-webkit-scrollbar-thumb{background:rgba(55,57,63,.28);background-clip:content-box}
+  @media(max-width:900px){.measure-note,.scroll-grid,.input-state-grid{grid-template-columns:1fr 1fr}.state-grid{grid-template-columns:90px repeat(5,130px);overflow-x:auto}.component-doc{padding-left:16px;padding-right:16px}}
+</style>
+</head>
+<body class="doc-page">
+  <main class="component-doc">
+    <h1>控件全状态对照</h1>
+    <p class="lead">每列是固定状态样本，不依赖鼠标停留，便于逐项验收；真实控件仍保留悬停与聚焦。数据来自 Linear 浅色主题的浏览器计算样式，统一使用 150ms 过渡。</p>
+    <div class="measure-note">
+      <div><b>按钮</b><small>28/32px · 8px / 胶囊圆角 · 500</small></div>
+      <div><b>输入 / 选择器</b><small>32/30px · 8px · 0.5px 边框</small></div>
+      <div><b>菜单</b><small>12px 圆角 · 32px 行 · 三层短阴影</small></div>
+      <div><b>动效</b><small>150ms · 缓出 · 按下不缩放</small></div>
+    </div>
+
+    <section class="control-section">
+      <h2>按钮类型 × 全状态</h2>
+      <p>次级按钮使用极淡内环与两层微阴影；幽灵按钮与图标钮静态无底，悬停才出现 L96.914 灰面。</p>
+      <div class="spec state-grid">
+        <div class="state-head">类型</div><div class="state-head">静态</div><div class="state-head">悬停</div><div class="state-head">按下</div><div class="state-head">聚焦</div><div class="state-head">禁用</div>
+        <div class="state-name">主按钮</div><div class="state-cell"><button class="c-btn primary">创建并运行</button></div><div class="state-cell"><button class="c-btn primary is-hover">创建并运行</button></div><div class="state-cell"><button class="c-btn primary is-active">创建并运行</button></div><div class="state-cell"><button class="c-btn primary is-focus">创建并运行</button></div><div class="state-cell"><button class="c-btn primary is-disabled" disabled>创建并运行</button></div>
+        <div class="state-name">次级按钮</div><div class="state-cell"><button class="c-btn secondary">编辑</button></div><div class="state-cell"><button class="c-btn secondary is-hover">编辑</button></div><div class="state-cell"><button class="c-btn secondary is-active">编辑</button></div><div class="state-cell"><button class="c-btn secondary is-focus">编辑</button></div><div class="state-cell"><button class="c-btn secondary is-disabled" disabled>编辑</button></div>
+        <div class="state-name">幽灵按钮</div><div class="state-cell"><button class="c-btn ghost">自定义</button></div><div class="state-cell"><button class="c-btn ghost is-hover">自定义</button></div><div class="state-cell"><button class="c-btn ghost is-active">自定义</button></div><div class="state-cell"><button class="c-btn ghost is-focus">自定义</button></div><div class="state-cell"><button class="c-btn ghost is-disabled" disabled>自定义</button></div>
+        <div class="state-name">图标钮</div><div class="state-cell"><button class="c-btn icon" aria-label="更多">⋯</button></div><div class="state-cell"><button class="c-btn icon is-hover">⋯</button></div><div class="state-cell"><button class="c-btn icon is-active">⋯</button></div><div class="state-cell"><button class="c-btn icon is-focus">⋯</button></div><div class="state-cell"><button class="c-btn icon is-disabled" disabled>⋯</button></div>
+      </div>
+    </section>
+
+    <section class="control-section">
+      <h2>输入框与选择器</h2>
+      <p>Linear 实测输入框为 0.5px L86.5 边框；hover 变 L78.5，focus 用 1px 主色 outline 且 offset −1px，与边框重合成单层细 ring。</p>
+      <div class="input-state-grid" aria-label="输入框四态">
+        <div class="input-state"><label>静态</label><input class="c-input" value="范小舟" aria-label="静态输入框"></div>
+        <div class="input-state"><label>悬停</label><input class="c-input is-hover" value="范小舟" aria-label="悬停输入框"></div>
+        <div class="input-state"><label>聚焦</label><input class="c-input is-focus" value="范小舟" aria-label="聚焦输入框"></div>
+        <div class="input-state"><label>禁用</label><input class="c-input is-disabled" value="范小舟" aria-label="禁用输入框" disabled></div>
+      </div>
+      <div class="spec state-grid">
+        <div class="state-head">控件</div><div class="state-head">静态</div><div class="state-head">悬停</div><div class="state-head">按下 / 展开</div><div class="state-head">聚焦</div><div class="state-head">禁用</div>
+        <div class="state-name">选择器</div><div class="state-cell"><div class="c-select">智能体（默认）<span>⌄</span></div></div><div class="state-cell"><div class="c-select is-hover">智能体（默认）<span>⌄</span></div></div><div class="state-cell"><div class="c-select is-active">智能体（默认）<span>⌃</span></div></div><div class="state-cell"><div class="c-select is-focus">智能体（默认）<span>⌄</span></div></div><div class="state-cell"><div class="c-select is-disabled">智能体（默认）<span>⌄</span></div></div>
+      </div>
+      <div style="display:flex;gap:18px;align-items:flex-start;margin-top:12px">
+        <div class="menu-demo" role="menu"><div class="menu-item hover">智能体（默认）<kbd>↵</kbd></div><div class="menu-item">收件箱<kbd>G I</kbd></div><div class="menu-item">我的任务<kbd>G M</kbd></div><div class="menu-sep"></div><div class="menu-item">当前周期<kbd>C</kbd></div><div class="menu-item danger">移除默认视图</div></div>
+        <p style="max-width:420px;margin:8px 0;color:var(--muted);font-size:11.5px;line-height:1.65">实测菜单：1px L86.5 边框、12px 圆角、三层短阴影；菜单项 32px，高亮只给一层极浅灰，右侧快捷键使用等宽 10px 灰字。分隔线左右缩进 8px。</p>
+      </div>
+    </section>
+
+    <section class="control-section">
+      <h2>复选框与开关</h2>
+      <p>状态色只占 14×14 复选框或 30×20 开关；禁用态降低透明度，不给整行铺灰。</p>
+      <div class="spec state-grid">
+        <div class="state-head">控件</div><div class="state-head">静态</div><div class="state-head">悬停</div><div class="state-head">按下 / 选中</div><div class="state-head">聚焦</div><div class="state-head">禁用</div>
+        <div class="state-name">复选框</div><div class="state-cell choice-line"><span class="check"></span>未选择</div><div class="state-cell choice-line"><span class="check is-hover"></span>未选择</div><div class="state-cell choice-line"><span class="check checked is-active"></span>已选择</div><div class="state-cell choice-line"><span class="check checked is-focus"></span>已选择</div><div class="state-cell choice-line is-disabled"><span class="check checked"></span>已选择</div>
+        <div class="state-name">开关</div><div class="state-cell choice-line"><span class="toggle"></span>关闭</div><div class="state-cell choice-line"><span class="toggle on is-hover"></span>开启</div><div class="state-cell choice-line"><span class="toggle on is-active"></span>开启</div><div class="state-cell choice-line"><span class="toggle on is-focus"></span>开启</div><div class="state-cell choice-line is-disabled"><span class="toggle on"></span>开启</div>
+      </div>
+    </section>
+
+    <section class="control-section">
+      <h2>提示浮层与状态标记</h2>
+      <p>提示浮层使用深灰小面；状态标记不做大面积彩底，状态色只放在微点或小图标。</p>
+      <div class="spec" style="display:grid;grid-template-columns:260px 1fr;gap:24px;align-items:center;padding:22px">
+        <div class="tooltip-demo"><span class="tip-target">?</span><span class="tooltip">打开帮助菜单&nbsp; <span style="opacity:.6">?</span></span></div>
+        <div class="chip-line"><span class="chip"><i class="dot green"></i>运行中</span><span class="chip"><i class="dot amber"></i>排队</span><span class="chip"><i class="dot red"></i>验证失败</span><span class="chip"><i class="dot indigo"></i>辩论中</span><span class="chip">项目 A</span><span class="kbd-chip">⌘ K</span></div>
+      </div>
+    </section>
+
+    <section class="control-section">
+      <h2>覆盖式细滚动条</h2>
+      <p>下面四块分别模拟侧栏、正文、详情栏、下拉菜单。静止时轨道与滑块透明；移入区域后滑块出现，8px 轨道扩到 10px，滑块保持半透明圆角。</p>
+      <div class="scroll-grid">
+        <div class="scroll-demo"><h3>侧栏任务树</h3><div class="row">协作任务</div><div class="row">自动验证相关</div><div class="row">审查者机制</div><div class="row">SSE 断线重连</div><div class="row">清理 worktree</div><div class="row">已完成任务</div><div class="row">其他项目</div><div class="row">移动端修复</div></div>
+        <div class="scroll-demo mainish"><h3>正文活动流</h3><div class="row">你创建了任务 · 09:57</div><div class="row">调度者派出 3 个执行者</div><div class="row">执行者确认完成</div><div class="row">审查第 1 轮未通过</div><div class="row">自动打回继续</div><div class="row">第 2 轮已验证</div></div>
+        <div class="scroll-demo inspectish show-scrollbar"><h3>详情栏 · 展示悬停态</h3><div class="row">状态 · 已验证</div><div class="row">执行器 · codex@cpa</div><div class="row">分支 · harness/pSHdnp</div><div class="row">审查 · 2 轮</div><div class="row">任务原文</div><div class="row">验收证据</div></div>
+        <div class="scroll-demo menuish"><h3>下拉菜单</h3><div class="row">智能体（默认）</div><div class="row">收件箱</div><div class="row">我的任务</div><div class="row">全部任务</div><div class="row">当前周期</div><div class="row">项目</div><div class="row">视图</div></div>
+      </div>
+    </section>
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>

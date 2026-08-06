@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
+<title>新建任务面板 — Harness UI 讨论稿 v2</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="shell">
+    <div data-include="sidebar" data-selected=""></div>
+    <main class="main mode-team" data-surface>
+      <header class="app-bar">
+        <span class="kind-chip plain">新建</span>
+        <span class="app-title">新建任务(内嵌面板,非弹层——任务树此刻不高亮任何一行)</span>
+        <div class="app-actions">
+          <button class="ui-btn">取消 Esc</button>
+        </div>
+      </header>
+      <div class="composer-panel">
+        <div class="mode-tabs" role="tablist" aria-label="任务模式">
+          <button data-action="mode" data-mode="single" role="tab" aria-selected="false">单任务</button>
+          <button data-action="mode" data-mode="team" role="tab" aria-selected="true">团队</button>
+          <button data-action="mode" data-mode="debate" role="tab" aria-selected="false">辩论</button>
+          <span class="mt-hint">切换模式不冲掉已填内容</span>
+        </div>
+        <div class="composer-body">
+          <textarea class="composer-text" aria-label="任务正文">把审查者机制接到移动端:任务列表要能看到 verified / verify_failed 徽标,会话页展示每轮审查结论。移动端是定时拉取,不加 SSE。改完跑 tsc + build:mobile,交互验证归审查者。</textarea>
+          <div class="field-grid">
+            <div class="field" data-monly="team"><label>调度者执行器</label>
+              <div class="fake-select"><span class="wc-ava">C</span>claude@ccb·claude-fable-5<small>默认</small><span class="fs-caret">▾</span></div>
+            </div>
+            <div class="field" data-monly="team"><label>执行者执行器</label>
+              <div class="fake-select"><span class="wc-ava">X</span>codex@cpa·gpt-5.6-sol<small>×N 由调度者定</small><span class="fs-caret">▾</span></div>
+            </div>
+            <div class="field" data-monly="single"><label>执行器</label>
+              <div class="fake-select"><span class="wc-ava">C</span>claude@ccb·claude-fable-5<small>默认</small><span class="fs-caret">▾</span></div>
+            </div>
+            <div class="field" data-monly="debate"><label>正方执行器</label>
+              <div class="fake-select"><span class="wc-ava">C</span>claude@ccb·claude-fable-5<span class="fs-caret">▾</span></div>
+            </div>
+            <div class="field" data-monly="debate"><label>反方执行器</label>
+              <div class="fake-select"><span class="wc-ava">X</span>codex@cpa·gpt-5.6-sol<span class="fs-caret">▾</span></div>
+            </div>
+            <div class="field"><label>模型</label>
+              <div class="fake-select">跟随执行器<span class="fs-caret">▾</span></div>
+            </div>
+            <div class="field"><label>思考强度</label>
+              <div class="fake-select">跟随执行器<span class="fs-caret">▾</span></div>
+            </div>
+            <div class="field" data-monly="debate"><label>轮数</label>
+              <div class="fake-select">3 轮交锋 + 裁决<span class="fs-caret">▾</span></div>
+            </div>
+            <div class="field" data-monly="team"><label>自动审查</label>
+              <div class="toggle-line">执行者确认完成后自动派审<span class="tgl"></span></div>
+            </div>
+            <div class="field"><label>worktree</label>
+              <div class="toggle-line">独立 worktree<small>跟随全局默认:开</small><span class="tgl"></span></div>
+            </div>
+            <div class="field"><label>base 分支</label>
+              <div class="fake-select mono">当前 HEAD · harness/pSHdnpMo<span class="fs-caret">▾</span></div>
+            </div>
+          </div>
+        </div>
+        <div class="composer-foot">
+          <span class="hint">⌘↵ 创建并运行 · 正文是整张单子里最该大的那一块</span>
+          <button class="ui-btn">仅创建</button>
+          <button class="ui-btn primary">创建并运行</button>
+        </div>
+      </div>
+    </main>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>

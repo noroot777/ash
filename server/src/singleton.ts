@@ -9,6 +9,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { resolveHarnessDbFile, ensureHarnessDbDir } from "./db/path.js";
+import { inspectProcess as inspectProcessInfo, type ProcessInfo } from "./proc.js";
 
 const LOCK_VERSION = 1;
 const LOCK_SUFFIX = ".harness.lock";
@@ -25,13 +26,6 @@ type LockFile = {
   cwd: string;
   argv: string[];
   token: string;
-};
-
-type ProcessInfo = {
-  pid: number;
-  startedAt: string | null;
-  startedAtMs: number | null;
-  command: string | null;
 };
 
 export class SingletonConflictError extends Error {
@@ -211,24 +205,7 @@ function isPidAlive(pid: number) {
 }
 
 function inspectProcess(pid: number): ProcessInfo | null {
-  try {
-    const out = execFileSync("ps", ["-p", String(pid), "-o", "lstart=", "-o", "command=", "-ww"], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    }).trim();
-    if (!out) return null;
-    const m = /^(.{24})\s+(.*)$/.exec(out);
-    const startedAt = m ? m[1]!.trim() : null;
-    const parsed = startedAt ? Date.parse(startedAt) : Number.NaN;
-    return {
-      pid,
-      startedAt,
-      startedAtMs: Number.isNaN(parsed) ? null : parsed,
-      command: m ? m[2]!.trim() : out,
-    };
-  } catch {
-    return null;
-  }
+  return inspectProcessInfo(pid);
 }
 
 function findLiveHarnessDbHolders(dbFile: string): ProcessInfo[] {

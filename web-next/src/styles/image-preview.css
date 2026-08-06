@@ -1,0 +1,77 @@
+.image-preview-trigger { cursor: zoom-in; }
+
+.image-preview-lightbox {
+  position: fixed;
+  z-index: 220;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  background: rgb(8 9 12 / 86%);
+  padding: 58px 76px 54px;
+  backdrop-filter: blur(3px);
+}
+
+.image-preview-lightbox > img {
+  display: block;
+  width: auto;
+  height: auto;
+  max-width: calc(100vw - 152px);
+  max-height: calc(100vh - 112px);
+  max-height: calc(100dvh - 112px);
+  border-radius: 8px;
+  box-shadow: 0 24px 90px rgb(0 0 0 / 46%);
+  object-fit: contain;
+  user-select: none;
+}
+
+.image-preview-lightbox > button {
+  position: absolute;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgb(255 255 255 / 22%);
+  border-radius: 50%;
+  background: rgb(0 0 0 / 38%);
+  color: white;
+  box-shadow: 0 8px 28px rgb(0 0 0 / 22%);
+  backdrop-filter: blur(8px);
+}
+
+.image-preview-lightbox > button:hover { background: rgb(0 0 0 / 58%); }
+.image-preview-lightbox > button:focus-visible { outline: 2px solid rgb(255 255 255 / 82%); outline-offset: 2px; }
+.image-preview-lightbox__close { top: 16px; right: 18px; width: 36px; height: 36px; }
+.image-preview-lightbox__prev,
+.image-preview-lightbox__next { top: 50%; width: 42px; height: 42px; transform: translateY(-50%); }
+.image-preview-lightbox__prev { left: 20px; }
+.image-preview-lightbox__next { right: 20px; }
+
+.image-preview-lightbox__meta {
+  position: absolute;
+  top: 17px;
+  left: 22px;
+  right: 70px;
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  color: white;
+  font-size: 11px;
+}
+
+.image-preview-lightbox__meta span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.image-preview-lightbox__meta small { flex: 0 0 auto; font-size: 10px; font-variant-numeric: tabular-nums; opacity: 0.78; }
+
+@media (max-width: 640px) {
+  .image-preview-lightbox { padding: 56px 48px 48px; }
+  .image-preview-lightbox > img {
+    max-width: calc(100vw - 96px);
+    max-height: calc(100vh - 104px);
+    max-height: calc(100dvh - 104px);
+  }
+  .image-preview-lightbox__prev { left: 7px; }
+  .image-preview-lightbox__next { right: 7px; }
+  .image-preview-lightbox__prev,
+  .image-preview-lightbox__next { width: 36px; height: 36px; }
+}

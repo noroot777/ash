@@ -5,6 +5,7 @@
 //
 // 跑法:
 //   HARNESS_DB=/tmp/test-executor-resolution-$RANDOM.db npx tsx server/scripts/test-executor-resolution.ts
+import assert from "node:assert/strict";
 import { eq } from "drizzle-orm";
 
 if (!process.env.HARNESS_DB) {
@@ -66,6 +67,37 @@ if (stale.label !== "codex@default" || stale.type !== "codex") {
 const omitted = await resolveExecutorFor({ type: "codex" });
 if (omitted.label !== "codex@default" || omitted.type !== "codex") {
   throw new Error(`executorId 缺省应使用 codex@default, got ${omitted.label}/${omitted.type}`);
+}
+
+await assert.rejects(
+  () => resolveExecutorFor({ type: "codex", model: "gpt-5.5", reasoningEffort: "ultra" }),
+  /gpt-5\.5 不支持思考强度 ultra.*low、medium、high、xhigh/,
+  "所有执行入口最终都要在 spawn 前拦住已知非法的模型/强度组合",
+);
+const validModelEffort = await resolveExecutorFor({ type: "codex", model: "gpt-5.6-sol", reasoningEffort: "ultra" });
+assert.equal(validModelEffort.type, "codex", "模型能力规则允许的组合应正常解析执行器");
+
+// build() 必须把「检测命中的备用命令名」一路传给 GenericCliExecutor。死认 bins[0]
+// 时,只装了备用名的机器会被 /agents/catalog 判为可用、派任务却稳定 ENOENT
+// (cursor 的 cursor-agent → agent、antigravity 的 antigravity → agy)。
+// 这里临时把某个 generic spec 的候选改成「主 bin 不存在 + 备用 bin 是 echo」,
+// 只改运行时值、跑完就还原,不碰任何 spec 文件(B 阶段有人在并行改它们)。
+const { AGENT_TYPES } = await import("@harness/shared");
+const { CLI_SPEC_BY_KEY } = await import("../src/executors/catalog/index.js");
+const genericType = AGENT_TYPES.find((t) => !CLI_SPEC_BY_KEY[t].factory);
+if (!genericType) throw new Error("目录里没有一个走 GenericCliExecutor 的 spec,这条用例失去意义");
+const spec = CLI_SPEC_BY_KEY[genericType];
+const originalBins = spec.bins;
+spec.bins = ["harness-missing-primary-bin", "echo"];
+try {
+  const ex = await resolveExecutorFor({ type: genericType });
+  const handle = ex.run({ prompt: "probe", cwd: process.cwd() });
+  handle.kill();
+  if (!handle.commandLine.startsWith("echo ")) {
+    throw new Error(`主 bin 缺失时应改用可用的备用名 echo, got: ${handle.commandLine}`);
+  }
+} finally {
+  spec.bins = originalBins;
 }
 
 console.log("executor resolution tests passed");

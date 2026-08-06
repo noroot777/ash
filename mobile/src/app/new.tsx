@@ -48,6 +48,7 @@ export default function NewTask() {
   const [providers, setProviders] = useState<LlmProvider[]>([]);
   const [detectedAgents, setDetectedAgents] = useState<DetectedAgent[]>([]);
   const [detectedLoaded, setDetectedLoaded] = useState(false);
+  const [detectFailed, setDetectFailed] = useState(false);
   const [leadPick, setLeadPick] = useState<ExecutorSelection | null>(null);
   const [workerPick, setWorkerPick] = useState<ExecutorSelection | null>(null);
   const [leadModel, setLeadModel] = useState("");
@@ -108,52 +109,114 @@ export default function NewTask() {
     setBase("");
   }, [projectId]);
 
-  // Executor profiles + providers drive ordinary and team model choices. Local
-  // detection remains team-only because it shells out to inspect resident support.
+  // Executor profiles + providers drive ordinary and team model choices. 本机检测
+  // 也一起拉：普通任务的执行器候选同样只列探到的 CLI（目录里 15 个，没装的选出来只会
+  // 跑失败），所以不能再等切到团队模式才探。mobile 是拉取风格，这里就一次性拉完。
   useEffect(() => {
     let alive = true;
-    Promise.all([api.agents().catch(() => []), api.llmProviders().catch(() => [])]).then(([nextProfiles, nextProviders]) => {
+    Promise.all([
+      api.agents().catch(() => []),
+      api.llmProviders().catch(() => []),
+      api
+        .detectAgents()
+        .then((list) => ({ list, failed: false }))
+        // 探测失败必须与「一个都没装」分开：候选列表上长得一样，但只有后者该拦住建单。
+        .catch(() => ({ list: [] as DetectedAgent[], failed: true })),
+    ]).then(([nextProfiles, nextProviders, detection]) => {
       if (!alive) return;
       setProfiles(nextProfiles);
       setProviders(nextProviders);
+      setDetectedAgents(detection.list);
+      setDetectFailed(detection.failed);
+      setDetectedLoaded(true);
     });
     return () => {
       alive = false;
     };
   }, []);
 
-  useEffect(() => {
-    if (!teamOn || detectedLoaded) return;
-    let alive = true;
-    api.detectAgents().catch(() => []).then((detected) => {
-      if (!alive) return;
-      setDetectedAgents(detected);
-      setDetectedLoaded(true);
-    });
-    return () => {
-      alive = false;
-    };
-  }, [teamOn, detectedLoaded]);
-
-  const leadTypes = useMemo<AgentType[]>(() => {
-    const resident = detectedAgents.filter((item) => item.available && item.resident).map((item) => item.type);
-    return resident.length ? resident : [TEAM_DEFAULTS.lead];
+  // 「按类型新选」的候选**只有本机探到的 available**，顺序跟 AGENT_TYPES，允许为空。
+  // 刻意不并入已注册 profile 的类型、也不兜底 claude：那会凭空造出一个本机没装的候选
+  // （2026-07-30 审查拦下过）。已注册的 profile 由 ExecutionConfig 的 executorOptions
+  // 单独列出。与 web 的 useDetectedAgents.availableTypes 同一条口径。
+  const availableTypes = useMemo<AgentType[]>(() => {
+    const usable = new Set<string>(
+      detectedAgents.filter((item) => item.available).map((item) => item.type),
+    );
+    return AGENT_TYPES.filter((type) => usable.has(type));
   }, [detectedAgents]);
-  const workerTypes = useMemo<AgentType[]>(() => {
-    const available = detectedAgents.filter((item) => item.available).map((item) => item.type);
-    return available.length ? available : [...AGENT_TYPES];
+  // 哪些类型**有能力**当调度者(执行器实现了 openResident)。detect 只在 CLI 装了的时候才去
+  // 问执行器,没装的一律报 resident:false —— 所以要并上一份已知能力名单兜底,否则「本机没装
+  // claude、但注册了 ssh 的 claude 调度者」会被误判成没有可用调度者(第二轮审查抓到)。
+  // 这份名单是服务端 openResident 实现的镜像,与 web useDetectedAgents.residentTypes 同源。
+  const residentTypes = useMemo<AgentType[]>(() => {
+    const capable = new Set<string>(["claude"]);
+    for (const item of detectedAgents) if (item.resident) capable.add(item.type);
+    return AGENT_TYPES.filter((type) => capable.has(type));
   }, [detectedAgents]);
+  // 「能不能常驻」与「本机装没装」是两个独立条件:按类型新选调度者要两个都满足,
+  // 但**已注册 profile 只按 resident 筛** —— 它可能是 ssh 远端,本机自然探不到。
+  const leadTypes = useMemo<AgentType[]>(
+    () => residentTypes.filter((type) => availableTypes.includes(type)),
+    [residentTypes, availableTypes],
+  );
+  const leadProfiles = useMemo(
+    () => profiles.filter((profile) => residentTypes.includes(profile.type)),
+    [profiles, residentTypes],
+  );
+  // 这个选择在本机还成不成立：指名 profile 的看 profile 还在不在（可能是 ssh 远端，本机
+  // 探不到也照样能用），按类型默认的看类型探到没探到。
+  const pickable = (
+    selection: ExecutorSelection,
+    types: AgentType[],
+    pool: AgentExecutorProfile[] = profiles,
+  ) =>
+    selection.executorId
+      ? pool.some((profile) => profile.id === selection.executorId)
+      : types.includes(selection.agentType);
+  // 当前选择不可用时顺移到哪:先一个 available 类型(可要求避开 avoid,给两个角色留不同
+  // 视角),没有就退到任一已注册 profile,都没有返回 null。与 web fallbackExecutor 同口径。
+  const fallbackExecutor = (
+    types: AgentType[],
+    pool: AgentExecutorProfile[],
+    avoid?: AgentType,
+  ): ExecutorSelection | null => {
+    const type = types.find((item) => item !== avoid) ?? types[0];
+    if (type) return { agentType: type, executorId: null };
+    const profile =
+      pool.find((item) => item.type !== avoid && item.isDefault)
+      ?? pool.find((item) => item.type !== avoid)
+      ?? pool.find((item) => item.isDefault)
+      ?? pool[0];
+    return profile ? { agentType: profile.type, executorId: profile.id } : null;
+  };
   const leadSelection: ExecutorSelection =
-    leadPick && leadTypes.includes(leadPick.agentType)
+    leadPick && pickable(leadPick, leadTypes, leadProfiles)
       ? leadPick
-      : { agentType: leadTypes[0]!, executorId: null };
+      : fallbackExecutor(leadTypes, leadProfiles) ?? { agentType: TEAM_DEFAULTS.lead, executorId: null };
   const workerSelection: ExecutorSelection =
-    workerPick && workerTypes.includes(workerPick.agentType)
+    workerPick && pickable(workerPick, availableTypes)
       ? workerPick
-      : {
-          agentType: workerTypes.find((type) => type !== leadSelection.agentType) ?? leadSelection.agentType,
-          executorId: null,
-        };
+      : fallbackExecutor(availableTypes, profiles, leadSelection.agentType)
+        ?? { agentType: leadSelection.agentType, executorId: leadSelection.executorId };
+  // 默认执行器写死 claude，这台机器上没装 claude 时它就是一单必然失败的任务。检测回来后
+  // 当前选择不成立就顺移：先第一个 available 类型，没有就退到任一已注册 profile；两者都
+  // 没有时保留原值并在界面上明示（不硬堵提交——检测失败与「真的什么都没装」长得一样）。
+  useEffect(() => {
+    if (!detectedLoaded || pickable(executorPick, availableTypes)) return;
+    const next = fallbackExecutor(availableTypes, profiles);
+    if (!next) return;
+    setExecutorPick(next);
+    setModel("");
+    setReasoningEffort("");
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- pickable 只读 profiles，已在依赖里
+  }, [detectedLoaded, availableTypes, executorPick, profiles]);
+  const unavailablePick = detectedLoaded && !pickable(executorPick, availableTypes)
+    ? executorPick.agentType
+    : null;
+  // 真的一个都没有（探测成功、零 available、零已注册 profile）= 建出来必然起不来,拦住提交。
+  // 探测失败时不拦：分不清「没装」和「探不出来」,拦住会把一次接口抖动变成「新建任务坏了」。
+  const noExecutor = detectedLoaded && !detectFailed && availableTypes.length === 0 && profiles.length === 0;
 
   const pickLaunch = (m: LaunchMode) => {
     if (m === "once") Keyboard.dismiss(); // 让出键盘，给 iOS inline spinner 腾位
@@ -199,6 +262,13 @@ export default function NewTask() {
   };
 
   const submit = async () => {
+    // 挡板放在提交函数里,不只挂在按钮的 disabled 上 —— web 那边就是因为只挂了按钮,⌘↵
+    // 绕过去建出一单必然失败的任务(第三轮审查抓到)。mobile 现在没有第二条提交路径,但
+    // 判据留在这里,以后加手势/快捷键自动继承。
+    if (noExecutor) {
+      setError("本机没检测到任何可用的智能体 CLI，也没有已注册的执行器；先装一个或注册一个再建任务");
+      return;
+    }
     if (!projectId) {
       setError("请选择项目");
       return;
@@ -310,7 +380,8 @@ export default function NewTask() {
             lead={leadSelection}
             worker={workerSelection}
             leadTypes={leadTypes}
-            workerTypes={workerTypes}
+            leadProfiles={leadProfiles}
+            workerTypes={availableTypes}
             profiles={profiles}
             providers={providers}
             leadModel={leadModel}
@@ -332,7 +403,7 @@ export default function NewTask() {
               role="执行器"
               icon="hardware-chip-outline"
               selection={executorPick}
-              types={[...AGENT_TYPES]}
+              types={availableTypes}
               profiles={profiles}
               providers={providers}
               model={model}
@@ -341,6 +412,16 @@ export default function NewTask() {
               onModelChange={setModel}
               onReasoningEffortChange={setReasoningEffort}
             />
+            {unavailablePick && !noExecutor ? (
+              // 警示色沿用 TeamOverview 那处的 amber-500 字面值（主题里没有 warning 角色，
+              // danger 留给真错误）。
+              <Text style={{ marginTop: 6, color: "#F59E0B", fontSize: 11.5, lineHeight: 16 }}>
+                本机没检测到「{unavailablePick}」这个 CLI，这单很可能起不来。
+                {detectFailed
+                  ? "（这次检测请求本身失败了，也可能只是探不出来。）"
+                  : "装好后到桌面端「管理执行器」点检测，或注册一个（ssh 远端也算）。"}
+              </Text>
+            ) : null}
           </Field>
         ) : null}
 
@@ -432,10 +513,17 @@ export default function NewTask() {
 
         {error ? <Text style={{ color: theme.danger, fontSize: 13 }}>{error}</Text> : null}
 
+        {/* 一个能干活的都没有 = 建了必然起不来,所以按钮也禁用;这条提示与模式无关,普通/团队都要看到。 */}
+        {noExecutor ? (
+          <Text style={{ color: "#F59E0B", fontSize: 11.5, lineHeight: 16 }}>
+            本机没检测到任何可用的智能体 CLI，也没有已注册的执行器 —— 建出来的任务起不来，所以先拦住了。装一个 CLI 后到桌面端「管理执行器」点检测，或注册一个（ssh 远端也算）。
+          </Text>
+        ) : null}
+
         <Button
           label={busy ? "提交中…" : activeMode.btn}
           onPress={submit}
-          disabled={busy || (launch === "cron" && !cron.trim())}
+          disabled={busy || noExecutor || (launch === "cron" && !cron.trim())}
           style={{ marginTop: 4 }}
         />
       </ScrollView>

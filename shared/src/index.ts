@@ -1,16 +1,16 @@
 // Core domain types shared between server and web.
 // Mirrors the decisions in DESIGN.md (§3 data model, §5 agents, §7 debate,
 // §8 statuses, §12 debate mechanism, §13 sessions).
-import type { SessionRole } from "./session.js";
-import type { TeamConfig } from "./team.js";
-export type { Session, SessionRole } from "./session.js";
+import type { TeamConfig } from "./team.ts";
+import type { WorkflowDef } from "./workflow.ts";
+export type { Session, SessionRole } from "./session.ts";
 export type {
   ReviewConclusion,
   ReviewDispatchInput,
   TaskReviewInfo,
   TaskReviewRound,
   TeamConfig,
-} from "./team.js";
+} from "./team.ts";
 // 执行器覆盖的继承规则住在 ./executor-overrides.ts,走 "@harness/shared/executors"
 // 子路径导出(跟 "@harness/shared/team" 同一套):index.ts 只做类型再导出,不能在这里
 // 转发运行时函数 —— 服务端直接跑 .ts 源码,而 Node 的类型擦除不会把 "./x.js" 映射
@@ -22,39 +22,54 @@ export type {
 // current factory defaults without requiring seed rows.
 export interface AppSettings {
   worktreeDefault: boolean;
+  // 新建任务默认用哪条起手式（workflows.id 或内置 key）。空串 = 没设过，服务端落到
+  // DEFAULT_WORKFLOW_KEY —— 那个 key 是运行时常量，这里不能 import（见上面的说明）。
+  defaultWorkflowId: string;
+  // 输入框里的 `/技能` 清单多久重拉一次(秒)。0 = 关闭轮询,只在打开输入框那一下拉。
+  // 这是**前端轮询间隔**,不是服务端扫描周期:服务端每次请求都真扫盘(命中 mtime
+  // 指纹就走缓存,~0.5ms)。按小时计:装新技能是低频动作,等不及有「立即重新扫描」。
+  skillRefreshSeconds: number;
 }
 
 export const DEFAULT_APP_SETTINGS: Readonly<AppSettings> = Object.freeze({
   worktreeDefault: true,
+  defaultWorkflowId: "",
+  skillRefreshSeconds: 3600,
 });
+
+// ── CLI skills (输入框的 `/` 补全) ────────────────────────────────────────
+export type { SkillEntry, SkillList, SkillScanOverview, SkillScanRow, SkillSource } from "./skills.ts";
 
 // ── Agents (§5) ────────────────────────────────────────────────────────────
 // Abstraction layer: the *type* is what you @ / pick as a debater.
 // Single source of truth: the runtime list drives both the union type and any
 // server-side validation (e.g. the batch API), so they can never drift.
-export const AGENT_TYPES = ["claude", "codex", "antigravity"] as const;
+//
+// 顺序 = 展示顺序,与 server/src/executors/catalog 的登记顺序一致。**加/删一个
+// 智能体只有两步**:这个数组加/删一个字符串,catalog 目录加/删一个 spec 文件
+// (catalog/index.ts 的 `satisfies Record<AgentType, CliSpec>` 会在编译期逼你两边对齐)。
+export const AGENT_TYPES = [
+  "claude",
+  "codex",
+  "antigravity",
+  "gemini",
+  "opencode",
+  "trae",
+  "grok",
+  "kimi",
+  "cursor",
+  "qwen",
+  "qoder",
+  "copilot",
+  "kiro",
+  "kilo",
+  "pi",
+] as const;
 export type AgentType = (typeof AGENT_TYPES)[number];
 
-// CLI-native model aliases used when an executor is on its official account.
-// Provider-backed executors replace these with that provider's /v1/models list.
-export const CLI_MODEL_PRESETS: Record<AgentType, readonly string[]> = {
-  claude: ["opus", "sonnet", "haiku", "fable"],
-  codex: ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4"],
-  antigravity: [],
-};
-
-// CLI-specific reasoning levels. Unsupported model/effort combinations are
-// rejected by the CLI/API at run time (for example gpt-5.5 tops out at xhigh).
-export const REASONING_EFFORT_VALUES: Record<AgentType, readonly string[]> = {
-  claude: ["low", "medium", "high", "xhigh", "max"],
-  codex: ["low", "medium", "high", "xhigh", "ultra", "max"],
-  antigravity: [],
-};
-
-export const REASONING_EFFORT_DETAIL: Record<string, string> = {
-  xhigh: "gpt-5.5 支持的最高档",
-  ultra: "仅 gpt-5.6-sol/terra 等新模型支持",
-};
+// CLI 各自的模型别名(CLI_MODEL_PRESETS)与思考强度档位(REASONING_EFFORT_VALUES /
+// REASONING_EFFORT_DETAIL)在 `./cli-presets.ts`,走子路径 `@harness/shared/cli-presets`。
+// 这里刻意不转发:服务端跑 shared 的 .ts 源码,index 转发运行时值会让它起不来。
 
 // Execution layer: a concrete executor under a type (CLI + target + model).
 export interface AgentExecutorProfile {
@@ -85,6 +100,8 @@ export interface Project {
   id: string;
   name: string;
   repoPath: string; // git repo this project's tasks operate on
+  // 本项目新建任务默认走哪条起手式；null = 跟随全局默认（见 AppSettings）
+  workflowId: string | null;
   createdAt: string;
 }
 
@@ -124,15 +141,22 @@ export interface TaskWorkspaceDiscardResult {
   branchError: string | null;
 }
 
+export interface NoteTaskLink {
+  taskId: string;
+  title: string;
+  status: TaskStatus;
+  archived: boolean;
+  linkedAt: number;
+}
+
 // Quick notes are project-scoped scraps that keep the user's original text.
-// `taskId` is a backlink set after one or more notes are merged into a task;
-// the note itself remains available for reference.
+// Every conversion appends a task backlink; the note itself remains available.
 export interface Note {
   id: string;
   projectId: string;
   body: string;
   attachments: string[];
-  taskId: string | null;
+  taskLinks: NoteTaskLink[];
   createdAt: number;
   updatedAt: number;
 }
@@ -277,6 +301,13 @@ export interface Task {
   // Existing worktrees are reused; cleanup is an explicit user action.
   useWorktree?: boolean;
   worktreeBase?: string | null;
+  // §Workflow 这个任务当初挑的那条线，**创建时拷下来的快照**（改起手式库不会追着改
+  // 它）。老任务为 null —— 那时还没有这个概念，按写死的老流程走。
+  workflow?: WorkflowDef | null;
+  // §Workflow 这条线此刻停在哪一站（step id）。有了它，「自动验证」「等我点头」才能在
+  // 一条线上出现多次——唤醒事件落回来时才知道是**第几个**验证站有了结论、用户在**哪
+  // 一道**关口点了头。null = 还没走到任何锚点，或者是没有线的老任务。
+  workflowAt?: string | null;
   // Backlink used by debate ↔ team derivation chains.
   originTaskId?: string | null;
   // §Pause 检查点续跑指令；非空时结算 paused，恢复后清空。
@@ -292,6 +323,19 @@ export interface Task {
 export interface QuestionItem {
   question: string;
   options?: string[];
+}
+
+// 侧边栏横向铺开时，每一行右边那句「我发的最后一条追问」（判据见 `isUserFollowUp`）。
+// 会话正文不在库里，而是 data/runs/<taskId>/<sessionId>.md，读一次要摸盘 —— 所以它
+// **不进** `Task`、不进 /tasks 列表，由 POST /tasks/follow-ups 在铺开的那一下按需批量取。
+export interface TaskFollowUp {
+  taskId: string;
+  // 已摘掉附件块的正文，超长截断（悬浮卡片够用，不是全文归档）。
+  text: string;
+  truncated: boolean;
+  at: string | null;
+  // 附件路径原样带回，交给前端的 attachmentView 变成缩略图 / 下载链接。
+  attachments: string[];
 }
 
 // 候选答案的上限：server 校验、MCP 工具描述、网页渲染共用这一处来源（写死两遍
@@ -343,54 +387,32 @@ export const TEAM_DEFAULTS: TeamConfig = { lead: "claude", worker: "claude", rev
 // base_url + key,顶掉 CLI 自己的登录账号 —— 于是 claude@官方 和 claude@公司
 // 可以并存。全局(不分项目)。harness 自己不再直连它调模型。
 export type LlmProtocol = "anthropic" | "openai";
+
+// 选模型面板(对话框 @ 之后那一步、以及所有模型下拉)从哪里拿这家供应商的候选模型:
+// "api"    = 每次打开都调它的 /models 接口,拿到什么列什么(总是最新,但慢且可能失败)
+// "pinned" = 只列用户在供应商页面固定下来的那几个(离线、稳定、可控)
+// 两者随时可切换;切到 pinned 时 pinnedModels 为空只是「这家暂时没候选」,不是错误。
+export type ProviderModelListMode = "api" | "pinned";
+export const PROVIDER_MODEL_LIST_MODES: readonly ProviderModelListMode[] = ["api", "pinned"];
+
 export interface LlmProvider {
   id: string;
   name: string;
   protocol: LlmProtocol; // anthropic-compatible (挂 claude) | openai-compatible (挂 codex)
   baseUrl: string; // 根地址,不含 /v1 —— e.g. https://your-relay.com
   model: string;
+  // OpenAI 兼容供应商若只实现 Chat Completions，开启后由 harness 把 Codex 的
+  // Responses API 请求/流式响应转换成 Chat Completions 再转回来。
+  protocolConversionEnabled: boolean;
+  modelListMode: ProviderModelListMode;
+  pinnedModels: string[]; // modelListMode === "pinned" 时的候选;另一模式下保留不动
   hasKey: boolean; // the key itself is never sent to the client; only whether one is set
   createdAt: string;
 }
 
 // ── Global search (⌘K) ───────────────────────────────────────────────────────
-// One hit per task or note. Task fields rank title > body > conversation, and
-// task hits are returned before note hits. `conversation` means the match was
-// found inside the task's session transcripts (data/runs/<taskId>/*.md|jsonl),
-// which is where run artifacts like output directory names live.
-export type SearchField = "title" | "body" | "conversation";
-export interface TaskSearchHit {
-  kind: "task";
-  id: string;
-  title: string;
-  status: TaskStatus;
-  projectId: string;
-  projectName: string | null;
-  archived: boolean;
-  field: SearchField;
-  // Context around the first match, whitespace-collapsed to one line.
-  // Empty for title hits (the title is already shown).
-  snippet: string;
-  // Task body prefix for the command-palette preview.
-  preview?: string;
-  updatedAt: string;
-}
-
-export interface NoteSearchHit {
-  kind: "note";
-  id: string;
-  title: string;
-  projectId: string;
-  projectName: string | null;
-  field: "body";
-  snippet: string;
-  // Note body for the command-palette preview.
-  preview?: string;
-  updatedAt: string;
-  taskId: string | null;
-}
-
-export type SearchHit = TaskSearchHit | NoteSearchHit;
+// 形状住在 ./search.ts(纯类型,这里只再导出)。
+export type { NoteSearchHit, SearchField, SearchHit, TaskSearchHit } from "./search.ts";
 
 // ── Attachments (pasted into the composer / reply box) ───────────────────────
 // Pasted images OR files. We don't feed them to a vision API — each is persisted
@@ -426,6 +448,7 @@ export interface BatchTaskInput {
   reasoningEffort?: string | null; // overrides defaults.reasoningEffort
   useWorktree?: boolean; // overrides defaults.useWorktree; omitted follows the global setting
   worktreeBase?: string | null; // base ref when this task uses a worktree
+  workflowId?: string | null; // 起手式 id；省略则按项目→全局默认解析，并拷成快照
   priority?: Priority;
   labels?: string[];
   // Each entry is resolved against sibling `key`s first; anything that doesn't
@@ -446,6 +469,7 @@ export interface BatchCreateTasksBody {
     model?: string | null;
     reasoningEffort?: string | null;
     useWorktree?: boolean; // omitted follows DEFAULT_APP_SETTINGS.worktreeDefault
+    workflowId?: string | null; // 这一批默认走哪条起手式
     worktreeBase?: string | null;
     priority?: Priority;
     labels?: string[];
@@ -467,6 +491,13 @@ export interface DebateConfig {
   debaterB: AgentType;
   debaterAExecutorId?: string | null;
   debaterBExecutorId?: string | null;
+  // Per-debater model / effort overrides. null = follow that debater's executor
+  // profile. Debaters are picked independently, so their models are too — a
+  // single task-level model would silently apply to both sides.
+  debaterAModel?: string | null;
+  debaterAReasoningEffort?: string | null;
+  debaterBModel?: string | null;
+  debaterBReasoningEffort?: string | null;
   maxRounds: number | null; // null = unlimited
   gateG1: HitlGate; // consensus gate
 }
@@ -478,6 +509,10 @@ export const DEBATE_DEFAULTS: DebateConfig = {
   debaterB: "codex",
   debaterAExecutorId: null,
   debaterBExecutorId: null,
+  debaterAModel: null,
+  debaterAReasoningEffort: null,
+  debaterBModel: null,
+  debaterBReasoningEffort: null,
   maxRounds: null,
   gateG1: "on",
 };
@@ -489,6 +524,7 @@ export function normalizeDebateConfig(value: unknown): DebateConfig {
   const raw = value && typeof value === "object" ? value as Record<string, unknown> : {};
   const agent = (v: unknown, fallback: AgentType): AgentType =>
     typeof v === "string" && AGENT_TYPES.includes(v as AgentType) ? v as AgentType : fallback;
+  const text = (v: unknown): string | null => (typeof v === "string" && v.trim() ? v.trim() : null);
   const maxRounds = raw.maxRounds === null
     ? null
     : typeof raw.maxRounds === "number" && Number.isFinite(raw.maxRounds) && raw.maxRounds >= 1
@@ -501,6 +537,10 @@ export function normalizeDebateConfig(value: unknown): DebateConfig {
     debaterB: agent(raw.debaterB, DEBATE_DEFAULTS.debaterB),
     debaterAExecutorId: typeof raw.debaterAExecutorId === "string" ? raw.debaterAExecutorId : null,
     debaterBExecutorId: typeof raw.debaterBExecutorId === "string" ? raw.debaterBExecutorId : null,
+    debaterAModel: text(raw.debaterAModel),
+    debaterAReasoningEffort: text(raw.debaterAReasoningEffort),
+    debaterBModel: text(raw.debaterBModel),
+    debaterBReasoningEffort: text(raw.debaterBReasoningEffort),
     maxRounds,
     gateG1: raw.gateG1 === "off" ? "off" : "on",
   };
@@ -520,88 +560,36 @@ export interface Schedule {
   createdAt: string;
 }
 
-// A reply scheduled to send to a task's agent at a future time. Unlike Schedule
-// (which re-runs a task), this delivers a message via continueTask once `sendAt`
-// passes and the task is idle. A task may have several pending messages.
+// 一条「待发送消息」：不是重跑任务（那是 Schedule），而是等条件到了用
+// continueTask 把这句话送进任务**原来那个会话**。两种到期条件，也就是 mode：
+//   • timed  = 定时发送：等 `sendAt` 这个时刻到了再发（任务此刻在忙就继续等）
+//   • queued = 排队追问：不看时间，任务一空下来就发（运行中还想补一句时用）
+// 两者共用同一张表、同一条投递链路和同一个取消入口——区别只有「什么时候算到期」
+// 这一条，其余（附件、@指派的执行器/模型/思考强度、托盘展示、取消）完全一样。
+// 一个任务可以同时挂多条，按 `sendAt` 升序依次投递，每次只发一条。
 export type ScheduledMessageStatus = "pending" | "sent" | "canceled";
+export type ScheduledMessageMode = "timed" | "queued";
 export interface ScheduledMessage {
   id: string;
   taskId: string;
   text: string;
   attachments: string[];
   agent: AgentType | null;
-  sendAt: string; // ISO 到期发送时间
+  // @指派时一并选定的执行器/模型/思考强度；null = 按 agent 的默认执行器 / 跟随执行器。
+  executorId: string | null;
+  model: string | null;
+  reasoningEffort: string | null;
+  mode: ScheduledMessageMode;
+  // timed：ISO 到期发送时间。queued：入队时刻（排队消息不看时间，只用它排先后）。
+  sendAt: string;
   status: ScheduledMessageStatus;
   createdAt: string;
   sentAt: string | null;
 }
 
-// ── HITL gates (§7) ──────────────────────────────────────────────────────────
-export type GateName = "G1" | "G2"; // G2 is legacy, retained for historical events
-export type GateAction =
-  | { kind: "approve"; text?: string; side?: "A" | "B" } // side is retained for older clients
-  | { kind: "reject" } // 打回终止
-  | { kind: "inject"; text: string } // 注入意见 → 回炉再辩（始终双方一起回炉）
-  | { kind: "ask"; text: string; target?: "A" | "B" }; // 提问 → 答完继续；target 缺省=问双方，指定=只问那一位辩手
-
-// ── Executor streaming events (§12) ──────────────────────────────────────────
-export type AgentEvent =
-  | { kind: "thinking"; text: string }
-  | { kind: "text"; text: string }
-  | { kind: "tool"; name: string; detail?: string }
-  | { kind: "session"; cliSessionId: string }
-  | { kind: "system"; text: string } // a backend-initiated 〔系统〕 trace (e.g. 继续) — its own bubble, not agent text
-  | { kind: "error"; message: string }
-  // 常驻会话（team 调度台）专用：一个回合说完了，但进程还活着等下一条消息。
-  // 一次性 run() 永远不发这个 —— 它的回合结束就是进程结束(done)。
-  | { kind: "turnEnd" }
-  | { kind: "done"; exitStatus: number };
-
-export type DebateSpeaker = "A" | "B" | "impl" | "review" | "user"; // impl/review are legacy transcript speakers
-
-// SSE envelope pushed to the web client.
-export type ServerEvent =
-  | { type: "task.created"; task: Task }
-  | { type: "task.updated"; task: Task }
-  | { type: "task.status"; taskId: string; status: TaskStatus; startedAt?: string | null; endedAt?: string | null; activeMs?: number | null; liveSince?: string | null }
-  | { type: "task.stage"; taskId: string; stage: TaskStage | null }
-  | { type: "task.review"; taskId: string }
-  | { type: "task.title"; taskId: string; title: string }
-  // 提问态变化（§Team）：agent 调 ask_question 提问、或答复把它清空。task.status
-  // 只带状态字段，question 不跟着走 —— 少了这条事件，卡片要等下次全量拉取才出现/
-  // 消失（答复完卡片还杵在那，像是没答上）。question=null 即「已答复，撤掉卡片」。
-  | {
-      type: "task.question";
-      taskId: string;
-      question: string | null;
-      questionOptions: string[] | null;
-      questionItems: QuestionItem[] | null;
-    }
-  | {
-      type: "agent.event";
-      taskId: string;
-      sessionId: string;
-      role: SessionRole;
-      agentType?: AgentType; // which agent produced it (single tasks can host several via @-mention)
-      event: AgentEvent;
-    }
-  | {
-      type: "debate.progress";
-      taskId: string;
-      round: number;
-      speaker: DebateSpeaker;
-      phase: "start" | "end";
-      raisedHand?: boolean;
-      at?: string;
-      startedAt?: string;
-      durationMs?: number;
-    }
-  | { type: "debate.gate"; taskId: string; gate: GateName; open: boolean; consensus?: boolean; consensusBy?: DebateConsensusBy; conclusionA?: string | null; conclusionB?: string | null }
-  // A human intervention in a /debate timeline (gate inject/ask). Carries the time
-  // so the timeline can show when the user spoke. Persisted in the transcript too.
-  // target: when a 提问 was directed at one debater, which side — so the timeline
-  // can show 「你 → 辩手A」 (undefined = addressed to both).
-  | { type: "debate.user"; taskId: string; round: number; text: string; at: string; target?: "A" | "B" };
+// ── HITL gates (§7) / Executor streaming events (§12) ───────────────────────
+// 形状住在 ./events.ts(纯类型,这里只再导出);拆分理由见那个文件的头部注释。
+export type { AgentEvent, DebateSpeaker, GateAction, GateName, ServerEvent } from "./events.ts";
 
 // ── Session-snapshot parsing ──────────────────────────────────────────────
 // A persisted session .md is mostly agent Markdown, but backend continues and
@@ -614,8 +602,31 @@ export const LEGACY_SYS_MARKER = "〔系统〕继续（从中断处）";
 
 export type ConvSeg =
   | { kind: "agent"; text: string; endedAt?: string }
-  | { kind: "user"; text: string; at?: string }
+  // bySystem：走真人回合通道、但作者是后端的那种（验证打回、验收冲突交接）。
+  // 它们**必须**是 user 回合（要 followUpFrom 护住任务原来的终态），所以只能另开一位来标。
+  | { kind: "user"; text: string; at?: string; bySystem?: true }
   | { kind: "system"; text: string; at?: string };
+
+// 「答复」是回答 agent 提问的那条，走 /tasks/:id/answer 时由服务端加的前缀。
+export const ANSWER_PREFIX = "【答复】";
+
+// 化石名单，只服务**加 by 标记之前**写下的老会话：那时后端代写的消息跟真人打的字
+// 在盘上长得一模一样，只能靠开头这几个方括号认（名单是把 data/runs 全扫一遍点出来的，
+// 「自动审查」是「自动验证」之前的老措辞）。老正文不会再变，所以这张表也永远不用加
+// 东西 —— 新增的后端代写消息走 continueTask 的 `byBackend`，落盘就带 by:"system"。
+// 代价说在明处：真人**引用**这些原话再补一句时会被误判成代写（实测有过一次），
+// 只影响老会话，且宁可漏一条也好过把机器的话冒充成我说的。
+const LEGACY_SYSTEM_AUTHORED = [ANSWER_PREFIX, "【自动审查未通过", "【自动验证未通过", "【验收未通过"];
+
+// 「后续追问」= 真人自己打字发的话。两处判据必须是同一份：详情页 Inspector 的
+// 「后续追问」列表，和侧边栏铺开后那一列。三件事都要排除：
+// ① agent 说的（kind 不是 user）；② 系统代发的继续/恢复提示（落成 kind:"system"）；
+// ③ 后端代用户发、但占着真人回合的那些（验证打回、验收冲突、答复提问）。
+export function isUserFollowUp(seg: { kind: string; text?: string | null; bySystem?: boolean }): boolean {
+  const text = seg.text ?? "";
+  if (seg.kind !== "user" || !text.trim() || seg.bySystem) return false;
+  return !LEGACY_SYSTEM_AUTHORED.some((prefix) => text.startsWith(prefix));
+}
 
 export function parseSessionOutput(out: string): ConvSeg[] {
   const segs: ConvSeg[] = [];
@@ -648,7 +659,7 @@ export function parseSessionOutput(out: string): ConvSeg[] {
     if (trimmed.startsWith("> 续聊回合异常结束(")) continue;
     if (line.startsWith("\x1e")) {
       try {
-        const j = JSON.parse(line.slice(1)) as { t?: string; text?: string; at?: string };
+        const j = JSON.parse(line.slice(1)) as { t?: string; text?: string; at?: string; by?: string };
         flush();
         if (j.t === "agentEnd") {
           // Not a new bubble — it stamps where the agent turn that just flushed
@@ -660,7 +671,7 @@ export function parseSessionOutput(out: string): ConvSeg[] {
         segs.push(
           j.t === "system"
             ? { kind: "system", text: j.text || LEGACY_SYS_MARKER, at: j.at }
-            : { kind: "user", text: j.text ?? "", at: j.at },
+            : { kind: "user", text: j.text ?? "", at: j.at, ...(j.by === "system" ? { bySystem: true as const } : {}) },
         );
         continue;
       } catch {

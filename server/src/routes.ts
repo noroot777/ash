@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { getConnInfo } from "@hono/node-server/conninfo";
 import { streamSSE } from "hono/streaming";
-import { eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import { readFile } from "node:fs/promises";
 import { existsSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
 import { spawn } from "node:child_process";
@@ -11,12 +11,14 @@ import type {
   Project,
   ProjectView,
   Group,
+  AgentType,
   LlmProvider,
   LlmProtocol,
 } from "@harness/shared";
 import { maxBytesFor, attachmentKind } from "@harness/shared";
+import { isReasoningEffortSupported, normalizeReasoningEffort, reasoningEffortsFor } from "@harness/shared/cli-presets";
 import { db } from "./db/index.js";
-import { projects, groups, tasks, sessions, schedules, agents, llmProviders, notes } from "./db/schema.js";
+import { projects, groups, tasks, sessions, schedules, agents, llmProviders, notes, noteTasks } from "./db/schema.js";
 import { bus } from "./bus.js";
 import { id, now } from "./util.js";
 import { listModels } from "./llm.js";
@@ -29,15 +31,28 @@ import { discardTaskWorkspace } from "./workspace-cleanup.js";
 import { mountDebateIterationRoutes } from "./debate/iteration.js";
 import { mountNoteRoutes } from "./notes.js";
 import { mountTeamPresetRoutes } from "./team-presets.js";
+import { findWorkflow, mountWorkflowRoutes } from "./workflows.js";
 import { getAppSettings, parseAppSettingsPatch, patchAppSettings } from "./app-settings.js";
+import { mountSkillRoutes } from "./skill-routes.js";
 import { mountTaskRoutes } from "./task-routes.js";
 import { mountTaskRunRoutes } from "./task-run-routes.js";
+import { mountFileRoutes } from "./file-routes.js";
+import { mountOpenAiConverterRoutes } from "./openai-converter/routes.js";
+import { mountProviderTestRoutes } from "./provider-test.js";
 
 export const api = new Hono();
 mountNoteRoutes(api);
 
 // ── health ───────────────────────────────────────────────────────────────
 api.get("/health", (c) => c.json({ ok: true, ts: now() }));
+
+// 「现在重启会打断谁」。scripts/restart.sh 的安全闸靠它决定拦不拦 —— 只数
+// running/queued 的个数已经不对了：agent 输出走文件之后，多数单飞任务重启不会断。
+// 动态 import：这条路只在人工重启时被打一次，没必要把 reattach 那条链拉进启动路径。
+api.get("/restart-impact", async (c) => {
+  const { restartImpact } = await import("./reattach.js");
+  return c.json(await restartImpact());
+});
 
 // ── global settings ──────────────────────────────────────────────────────
 api.get("/settings", async (c) => c.json(await getAppSettings()));
@@ -200,16 +215,27 @@ api.get("/agents/detect", async (c) => c.json(await detectLocalAgents()));
 // 已知 CLI 目录:含上面那几个可执行器(带 type),外加一批只做「装没装」展示的。
 api.get("/agents/catalog", async (c) => c.json(await detectKnownClis()));
 
+// `/技能` 的三个端点在 `routes-skills.ts`(cwd 取项目仓库根、ssh 执行器不拿本机盘冒充)。
+mountSkillRoutes(api);
+
 api.post("/agents", async (c) => {
   const b = await c.req.json<any>();
+  const type = b.type as AgentType;
+  const model = b.model?.trim() || null;
+  if (b.reasoningEffort && !isReasoningEffortSupported(type, model, b.reasoningEffort)) {
+    return c.json({
+      error: `${type} 模型 ${model ?? "（跟随 CLI）"} 不支持思考强度 ${b.reasoningEffort}`,
+      allowedReasoningEfforts: reasoningEffortsFor(type, model),
+    }, 400);
+  }
   const row = {
     id: id(),
     name: b.name,
-    type: b.type,
+    type,
     target: JSON.stringify(b.target ?? { kind: "local" }),
-    model: b.model ?? null,
+    model,
     extraArgs: JSON.stringify(b.extraArgs ?? []),
-    reasoningEffort: b.reasoningEffort || null,
+    reasoningEffort: normalizeReasoningEffort(type, model, b.reasoningEffort),
     // 只落 "fast";"standard"/空 归一成 null(标准=不传参,单一表示)
     speed: b.speed === "fast" ? "fast" : null,
     providerId: b.providerId || null,
@@ -228,10 +254,21 @@ api.patch("/agents/:id", async (c) => {
   const b = await c.req.json<any>();
   const patch: Record<string, unknown> = {};
   if (b.name !== undefined) patch.name = b.name;
-  if (b.model !== undefined) patch.model = b.model || null;
+  const type = existing.type as AgentType;
+  const nextModel = b.model !== undefined ? b.model?.trim() || null : existing.model;
+  const requestedEffort = b.reasoningEffort !== undefined ? b.reasoningEffort : existing.reasoningEffort;
+  if (b.reasoningEffort && !isReasoningEffortSupported(type, nextModel, b.reasoningEffort)) {
+    return c.json({
+      error: `${type} 模型 ${nextModel ?? "（跟随 CLI）"} 不支持思考强度 ${b.reasoningEffort}`,
+      allowedReasoningEfforts: reasoningEffortsFor(type, nextModel),
+    }, 400);
+  }
+  if (b.model !== undefined) patch.model = nextModel;
   if (b.target !== undefined) patch.target = JSON.stringify(b.target);
   if (b.extraArgs !== undefined) patch.extraArgs = JSON.stringify(b.extraArgs);
-  if (b.reasoningEffort !== undefined) patch.reasoningEffort = b.reasoningEffort || null;
+  if (b.reasoningEffort !== undefined || b.model !== undefined) {
+    patch.reasoningEffort = normalizeReasoningEffort(type, nextModel, requestedEffort);
+  }
   if (b.speed !== undefined) patch.speed = b.speed === "fast" ? "fast" : null;
   if (b.providerId !== undefined) patch.providerId = b.providerId || null;
   if (b.isDefault === true) {
@@ -265,7 +302,7 @@ api.get("/projects", async (c) =>
 api.post("/projects", async (c) => {
   const b = await c.req.json<{ name: string; repoPath: string }>();
   if (!b.name?.trim()) return c.json({ error: "name required" }, 400);
-  const row = { id: id(), name: b.name.trim(), repoPath: tidyRepoPath(b.repoPath), apiKeys: null, createdAt: now() };
+  const row = { id: id(), name: b.name.trim(), repoPath: tidyRepoPath(b.repoPath), apiKeys: null, workflowId: null, createdAt: now() };
   await db.insert(projects).values(row);
   return c.json(toProject(row), 201);
 });
@@ -302,7 +339,7 @@ api.post("/projects/resolve", async (c) => {
   }
 
   // 3) Genuinely new project.
-  const row = { id: id(), name, repoPath, apiKeys: null, createdAt: now() };
+  const row = { id: id(), name, repoPath, apiKeys: null, workflowId: null, createdAt: now() };
   await db.insert(projects).values(row);
   return c.json(toProject(row), 201);
 });
@@ -318,6 +355,15 @@ api.patch("/projects/:id", async (c) => {
     patch.name = b.name.trim();
   }
   if (b.repoPath !== undefined) patch.repoPath = tidyRepoPath(b.repoPath);
+  // 项目默认起手式：空串/null 都表示「跟随全局默认」，存成 null 保持一种写法
+  if (b.workflowId !== undefined) {
+    if (b.workflowId !== null && typeof b.workflowId !== "string") {
+      return c.json({ error: "workflowId 必须是字符串或 null" }, 400);
+    }
+    const wid = typeof b.workflowId === "string" ? b.workflowId.trim() : "";
+    if (wid && !(await findWorkflow(wid))) return c.json({ error: "起手式不存在" }, 400);
+    patch.workflowId = wid || null;
+  }
   if (Object.keys(patch).length) await db.update(projects).set(patch).where(eq(projects.id, pid));
   const updated = (await db.select().from(projects).where(eq(projects.id, pid))).at(0)!;
   return c.json(toProject(updated));
@@ -336,8 +382,11 @@ api.delete("/projects/:id", async (c) => {
     rmSync(join(RUNS_DIR, t.id), { recursive: true, force: true });
     rmSync(join(DATA_DIR, "scratch", t.id), { recursive: true, force: true });
   }
+  if (ptasks.length) await db.delete(noteTasks).where(inArray(noteTasks.taskId, ptasks.map((task) => task.id)));
   await db.delete(tasks).where(eq(tasks.projectId, pid));
   await db.delete(groups).where(eq(groups.projectId, pid));
+  const projectNotes = await db.select({ id: notes.id }).from(notes).where(eq(notes.projectId, pid));
+  if (projectNotes.length) await db.delete(noteTasks).where(inArray(noteTasks.noteId, projectNotes.map((note) => note.id)));
   await db.delete(notes).where(eq(notes.projectId, pid));
   await db.delete(projects).where(eq(projects.id, pid));
   return c.json({ deleted: true });
@@ -476,6 +525,8 @@ api.post("/groups/resolve", async (c) => {
 
 mountTaskRoutes(api);
 mountTaskRunRoutes(api);
+// 任务工作目录的只读文件浏览 + 交给本机去做的三个动作(实现在 ./file-routes.ts)。
+mountFileRoutes(api);
 // ── 供应商 (relay, system-level) — 挂给执行器用,harness 不直连它跑推理 ────────
 const toProvider = (r: typeof llmProviders.$inferSelect): LlmProvider => ({
   id: r.id,
@@ -483,9 +534,28 @@ const toProvider = (r: typeof llmProviders.$inferSelect): LlmProvider => ({
   protocol: r.protocol as LlmProtocol,
   baseUrl: r.baseUrl,
   model: r.model,
+  protocolConversionEnabled: r.protocolConversionEnabled,
+  modelListMode: r.modelListMode === "pinned" ? "pinned" : "api",
+  pinnedModels: parsePinnedModels(r.pinnedModels),
   hasKey: !!r.apiKey, // never return the key itself
   createdAt: r.createdAt,
 });
+
+// 固定模型列表:去空白、去重、保序。存的是 json string[],但老行/脏数据都得能读回来。
+function parsePinnedModels(raw: unknown): string[] {
+  const list = typeof raw === "string" ? (() => { try { return JSON.parse(raw); } catch { return []; } })() : raw;
+  if (!Array.isArray(list)) return [];
+  return normalizePinnedModels(list);
+}
+
+function normalizePinnedModels(list: unknown[]): string[] {
+  const seen = new Set<string>();
+  for (const item of list) {
+    const model = typeof item === "string" ? item.trim() : "";
+    if (model) seen.add(model);
+  }
+  return [...seen];
+}
 
 api.get("/llm-providers", async (c) => c.json((await db.select().from(llmProviders)).map(toProvider)));
 
@@ -519,13 +589,17 @@ api.post("/llm-providers/models", async (c) => {
 api.post("/llm-providers", async (c) => {
   const b = await c.req.json<Partial<LlmProvider> & { apiKey?: string }>();
   if (!b.name?.trim() || !b.baseUrl?.trim()) return c.json({ error: "名称和网址(baseUrl)必填" }, 400);
+  const protocol = b.protocol === "anthropic" ? "anthropic" : "openai";
   const row = {
     id: id(),
     name: b.name.trim(),
-    protocol: b.protocol === "anthropic" ? "anthropic" : "openai",
+    protocol,
     baseUrl: b.baseUrl.trim(),
     apiKey: (b.apiKey ?? "").trim(),
     model: (b.model ?? "").trim(),
+    protocolConversionEnabled: protocol === "openai" && b.protocolConversionEnabled === true,
+    modelListMode: b.modelListMode === "pinned" ? "pinned" : "api",
+    pinnedModels: JSON.stringify(normalizePinnedModels(b.pinnedModels ?? [])),
     createdAt: now(),
   };
   await db.insert(llmProviders).values(row);
@@ -542,6 +616,12 @@ api.patch("/llm-providers/:id", async (c) => {
   if (b.protocol !== undefined) patch.protocol = b.protocol === "anthropic" ? "anthropic" : "openai";
   if (b.baseUrl !== undefined) patch.baseUrl = b.baseUrl;
   if (b.model !== undefined) patch.model = b.model;
+  // 模式与固定列表各自独立更新:切模式不清空已固定的模型,切回来还在(需求「随便切换」)。
+  if (b.modelListMode !== undefined) patch.modelListMode = b.modelListMode === "pinned" ? "pinned" : "api";
+  if (b.pinnedModels !== undefined) patch.pinnedModels = JSON.stringify(normalizePinnedModels(b.pinnedModels ?? []));
+  const nextProtocol = b.protocol === undefined ? existing.protocol : b.protocol === "anthropic" ? "anthropic" : "openai";
+  if (nextProtocol === "anthropic") patch.protocolConversionEnabled = false;
+  else if (b.protocolConversionEnabled !== undefined) patch.protocolConversionEnabled = b.protocolConversionEnabled === true;
   if (b.apiKey) patch.apiKey = b.apiKey; // 只在传了非空 key 时更新(留空=不动)
   await db.update(llmProviders).set(patch).where(eq(llmProviders.id, pid));
   const updated = (await db.select().from(llmProviders).where(eq(llmProviders.id, pid))).at(0)!;
@@ -556,11 +636,15 @@ api.delete("/llm-providers/:id", async (c) => {
   return c.json({ deleted: true });
 });
 
+mountOpenAiConverterRoutes(api);
+mountProviderTestRoutes(api);
+
 // ── queues (顺序依赖原语,DESIGN-scheduling.md §1) ─────────────────────────────
 // 端点实现与 helper 都在 ./queues.ts(routes.ts 已经很长,队列语义集中一处更好改)。
 mountQueueRoutes(api);
 mountDebateIterationRoutes(api);
 mountTeamPresetRoutes(api);
+mountWorkflowRoutes(api);
 
 // ── SSE stream (§12) ───────────────────────────────────────────────────────
 api.get("/events", (c) =>

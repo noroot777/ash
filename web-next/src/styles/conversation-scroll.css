@@ -1,0 +1,50 @@
+.conversation-scroll-region {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+}
+
+.conversation-scroll-button {
+  position: absolute;
+  z-index: 8;
+  left: 50%;
+  display: grid;
+  width: 30px;
+  height: 30px;
+  transform: translateX(-50%);
+  place-items: center;
+  border: 1px solid var(--line2);
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--panel) 90%, transparent);
+  color: var(--muted);
+  box-shadow: var(--menu-shadow);
+  opacity: 0.8;
+  backdrop-filter: blur(4px);
+  transition: opacity 200ms, transform 200ms, color 200ms;
+}
+
+.conversation-scroll-button--top { top: 12px; }
+.conversation-scroll-button--bottom { bottom: 12px; }
+
+.conversation-scroll-button:hover {
+  color: var(--ink);
+  opacity: 1;
+}
+
+.conversation-scroll-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.conversation-scroll-button.is-hidden {
+  pointer-events: none;
+  opacity: 0;
+}
+
+.conversation-scroll-button--top.is-hidden { transform: translate(-50%, -4px); }
+.conversation-scroll-button--bottom.is-hidden { transform: translate(-50%, 4px); }
+
+@media (prefers-reduced-motion: reduce) {
+  .conversation-scroll-button { transition: none; }
+}

@@ -1,0 +1,488 @@
+.agent-profiles-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin: 0 2px 8px;
+}
+
+.settings-section .agent-profiles-section-head h2 {
+  margin: 0;
+}
+
+.agent-profiles-section-head > div,
+.agent-profile-group-actions {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.agent-detection-results {
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in lch, var(--green-bg) 30%, var(--panel));
+}
+
+.agent-detection-results-head {
+  display: flex;
+  min-height: 34px;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  border-bottom: 1px solid var(--line);
+  padding: 9px 12px 7px;
+}
+
+.agent-detection-results-head b {
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.agent-detection-results-head small {
+  color: var(--faint);
+  font-size: 9px;
+}
+
+.agent-detection-results .settings-muted {
+  margin: 0;
+}
+
+.agent-detection-results .settings-cli-grid article:nth-last-child(-n + 2) {
+  border-bottom: 0;
+}
+
+.agent-cli-registered {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  color: var(--green);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.agent-profile-group-head {
+  min-height: 40px;
+  grid-template-columns: 26px minmax(100px, auto) minmax(110px, 1fr) auto;
+  gap: 8px;
+  padding: 5px 8px 5px 10px;
+}
+
+.agent-profile-group-head .settings-agent-avatar {
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+  font-size: 10px;
+}
+
+.agent-profile-group-head > .agent-profile-group-copy {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.agent-profile-group-head > .agent-profile-group-actions {
+  align-items: center;
+}
+
+.agent-profile-group-actions {
+  justify-self: end;
+}
+
+.agent-profile-group-add {
+  height: 24px;
+  padding-inline: 6px;
+  font-size: 9px;
+}
+
+.agent-profile-group-actions .settings-icon-danger {
+  width: 24px;
+  height: 24px;
+}
+
+.agent-profile-name-button {
+  min-width: 0;
+  overflow: hidden;
+  border: 0;
+  background: transparent;
+  padding: 2px 0;
+  color: var(--ink);
+  font-size: 10px;
+  font-weight: 600;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-profile-name-button:hover {
+  color: var(--accent);
+}
+
+.agent-profile-name-input {
+  width: 100%;
+  min-width: 38px;
+  height: 25px;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  background: var(--canvas);
+  padding: 0 5px;
+  color: var(--ink);
+  font-size: 10px;
+  font-weight: 600;
+  outline: 0;
+}
+
+.agent-profile-table {
+  overflow: visible;
+}
+
+.agent-profile-columns,
+.agent-profile-row {
+  display: grid;
+  grid-template-columns:
+    minmax(150px, 1.65fr)
+    minmax(96px, 0.75fr)
+    minmax(120px, 1.15fr)
+    78px
+    60px
+    100px;
+  align-items: center;
+  gap: 6px;
+  padding-inline: 9px;
+}
+
+.agent-profile-columns {
+  min-height: 22px;
+  border-top: 1px solid var(--line);
+  background: color-mix(in lch, var(--raised) 38%, var(--panel));
+  color: var(--faint);
+  font-size: 8px;
+  font-weight: 650;
+  letter-spacing: 0.045em;
+  text-transform: uppercase;
+}
+
+.agent-profile-actions-heading {
+  padding-right: 4px;
+  text-align: right;
+}
+
+.agent-profile-row {
+  position: relative;
+  min-height: 36px;
+  border-top: 1px solid color-mix(in lch, var(--line) 82%, transparent);
+  padding-block: 3px;
+}
+
+.agent-profile-row:hover,
+.agent-profile-row:focus-within {
+  background: color-mix(in lch, var(--raised) 40%, transparent);
+}
+
+.agent-profile-identity {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+}
+
+.agent-profile-identity small {
+  overflow: hidden;
+  flex: none;
+  max-width: 78px;
+  color: var(--faint);
+  font-size: 8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-profile-identity small::before {
+  margin-right: 6px;
+  content: "·";
+}
+
+.agent-profile-cell,
+.agent-profile-args-control {
+  min-width: 0;
+}
+
+/* 执行器表是紧凑行：统一下拉在这里缩一号（高 26 / 字号 11），但仍是同一套
+   .ui-select-trigger，四个格子彼此一致，也跟别处的下拉是同一种东西。 */
+.agent-profile-cell .ui-dropdown-trigger {
+  height: 26px;
+  border-radius: 6px;
+  background: transparent;
+  padding: 0 6px;
+  color: var(--muted);
+  font-size: 11px;
+  box-shadow: none;
+}
+
+.agent-profile-cell .ui-dropdown-trigger.is-mono > span:first-child {
+  font-size: 11px;
+}
+
+.agent-profile-cell .ui-dropdown-trigger > span.is-placeholder {
+  font-size: 11px;
+}
+
+.agent-profile-cell .ui-dropdown-trigger:hover:not(:disabled) {
+  background: color-mix(in lch, var(--raised) 62%, transparent);
+  color: var(--ink);
+  box-shadow: none;
+}
+
+.agent-profile-cell .ui-dropdown-trigger[aria-expanded="true"] {
+  background: var(--canvas);
+  color: var(--ink);
+  box-shadow: inset 0 0 0 1px var(--line2);
+}
+
+.agent-profile-cell .agent-model-control {
+  gap: 0;
+}
+
+/* 强度那一格跟同排的下拉长一个样：这一列只有 78px，边框和 34px 高度会顶出格子。 */
+.agent-profile-cell .effort-picker {
+  min-width: 0;
+}
+
+.agent-profile-cell .effort-picker-trigger {
+  width: 100%;
+  height: 26px;
+  border-color: transparent;
+  border-radius: 6px;
+  background: transparent;
+  padding: 0 6px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.agent-profile-cell .effort-picker-trigger > em {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 11px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-profile-cell .effort-picker-trigger:hover:not(:disabled) {
+  border-color: transparent;
+  background: color-mix(in lch, var(--raised) 62%, transparent);
+  color: var(--ink);
+}
+
+.agent-profile-cell .effort-picker-trigger[aria-expanded="true"] {
+  border-color: transparent;
+  background: var(--canvas);
+  color: var(--ink);
+  box-shadow: inset 0 0 0 1px var(--line2);
+}
+
+.agent-profile-cell .effort-picker-trigger.is-error {
+  border-color: var(--red);
+  color: var(--red);
+}
+
+/* 这一格塞不下解释文字，红色警告态 + 浮层里的说明已经足够。 */
+.agent-profile-cell .effort-picker-warning {
+  display: none;
+}
+
+.agent-profile-actions {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 2px;
+}
+
+.agent-profile-hover-action,
+.agent-profile-default:not(.is-current) {
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(1px);
+  transition: opacity 120ms ease, transform 120ms ease;
+}
+
+.agent-profile-row:hover .agent-profile-hover-action,
+.agent-profile-row:hover .agent-profile-default,
+.agent-profile-row:focus-within .agent-profile-hover-action,
+.agent-profile-row:focus-within .agent-profile-default {
+  opacity: 1;
+  pointer-events: auto;
+  transform: none;
+}
+
+.agent-profile-default {
+  display: flex;
+  min-width: 24px;
+  justify-content: center;
+}
+
+.agent-profile-default.is-current .settings-default-tag {
+  display: inline-flex;
+  height: 20px;
+  align-items: center;
+  gap: 3px;
+  padding: 0 5px;
+  font-size: 8px;
+}
+
+.agent-profile-default-action,
+.agent-profile-actions .settings-icon-danger,
+.agent-profile-args-summary {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  padding: 0;
+  color: var(--faint);
+}
+
+.agent-profile-default-action:hover,
+.agent-profile-args-summary:hover,
+.agent-profile-args-summary[aria-expanded="true"] {
+  background: var(--raised);
+  color: var(--accent);
+}
+
+.agent-profile-default-action:focus-visible,
+.agent-profile-args-summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.agent-profile-args-control {
+  position: relative;
+}
+
+.agent-profile-args-summary {
+  position: relative;
+  text-align: left;
+}
+
+.agent-profile-args-summary > span {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.agent-profile-args-summary.has-value::after {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 4px;
+  height: 4px;
+  border: 1px solid var(--panel);
+  border-radius: 999px;
+  background: var(--accent);
+  content: "";
+}
+
+.agent-profile-actions .agent-profile-args-popover {
+  right: 0;
+}
+
+.agent-profile-delete {
+  width: 24px;
+  height: 24px;
+}
+
+.agent-ssh-form {
+  display: grid;
+  grid-template-columns: minmax(120px, 0.55fr) minmax(210px, 1fr);
+  gap: 10px;
+}
+
+.agent-ssh-form label {
+  display: grid;
+  gap: 5px;
+}
+
+.agent-ssh-form label > span {
+  color: var(--faint);
+  font-size: 9px;
+  font-weight: 650;
+  letter-spacing: 0.045em;
+  text-transform: uppercase;
+}
+
+.agent-ssh-form input,
+.agent-ssh-form select {
+  width: 100%;
+  min-width: 0;
+  height: 30px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--canvas);
+  padding: 0 8px;
+  color: var(--ink);
+  font-size: 11px;
+  outline: 0;
+}
+
+.agent-ssh-form input:focus,
+.agent-ssh-form select:focus {
+  border-color: var(--accent);
+}
+
+@media (max-width: 900px) {
+  .agent-profile-table {
+    overflow-x: auto;
+  }
+
+  .agent-profile-columns,
+  .agent-profile-row {
+    min-width: 650px;
+  }
+
+  .agent-profile-actions .agent-profile-args-popover {
+    right: auto;
+  }
+}
+
+@media (max-width: 680px) {
+  .agent-profiles-section-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .agent-profile-group-head {
+    grid-template-columns: 26px minmax(0, 1fr) auto;
+  }
+
+  .agent-profile-group-actions {
+    grid-column: 3;
+  }
+
+  .agent-ssh-form {
+    grid-template-columns: 1fr;
+  }
+
+  .agent-detection-results .settings-cli-grid article:nth-last-child(2) {
+    border-bottom: 1px solid var(--line);
+  }
+}
+
+@media (hover: none), (max-width: 680px) {
+  .agent-profile-hover-action,
+  .agent-profile-default:not(.is-current) {
+    opacity: 1;
+    pointer-events: auto;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-profile-hover-action,
+  .agent-profile-default:not(.is-current) {
+    transition: none;
+  }
+}

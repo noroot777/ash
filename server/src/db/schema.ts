@@ -1,4 +1,4 @@
-import { sqliteTable, text, integer, uniqueIndex } from "drizzle-orm/sqlite-core";
+import { index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 // JSON columns are stored as text and parsed in the repository layer.
 // Schema mirrors shared/src/index.ts.
@@ -8,6 +8,8 @@ export const projects = sqliteTable("projects", {
   name: text("name").notNull(),
   repoPath: text("repo_path").notNull(),
   apiKeys: text("api_keys"), // legacy project-level credentials, kept for compatibility
+  // 本项目新建任务默认用哪条起手式（workflows.id 或内置 key）。空 = 跟随全局默认。
+  workflowId: text("workflow_id"),
   createdAt: text("created_at").notNull(),
 });
 
@@ -24,10 +26,24 @@ export const notes = sqliteTable("notes", {
   projectId: text("project_id").notNull(),
   body: text("body").notNull(),
   attachments: text("attachments"), // json string[]
-  taskId: text("task_id"),
   createdAt: integer("created_at").notNull(),
   updatedAt: integer("updated_at").notNull(),
 });
+
+// 一条随手记可以反复转成多个任务。独立关联表既保留完整历史，也让同一任务幂等去重；
+// created_at 是转换发生时间，详情页按它倒序展示。
+export const noteTasks = sqliteTable(
+  "note_tasks",
+  {
+    noteId: text("note_id").notNull(),
+    taskId: text("task_id").notNull(),
+    createdAt: integer("created_at").notNull(),
+  },
+  (t) => ({
+    noteTaskIdx: uniqueIndex("note_tasks_note_task_idx").on(t.noteId, t.taskId),
+    taskIdx: index("note_tasks_task_idx").on(t.taskId),
+  }),
+);
 
 export const groups = sqliteTable("groups", {
   id: text("id").primaryKey(),
@@ -54,6 +70,17 @@ export const tasks = sqliteTable("tasks", {
   pinnedAt: integer("pinned_at"), // null=未置顶；多个置顶任务按时间戳排序
   reviewOf: text("review_of"), // 审查任务 → 被审任务 id；普通任务为 null
   reviewRound: integer("review_round"), // 审查任务针对该目标的轮次（从 1 开始）
+  // 就地验证：验证轮不再另起一个任务，而是在这个任务自己身上多跑一个旁路回合。
+  // verify_round 非空 = 此刻正在跑第几轮验证（结算时清空）；verify_rounds = 已经跑完几轮。
+  verifyRound: integer("verify_round"),
+  verifyRounds: integer("verify_rounds").notNull().default(0),
+  // 这一站（review_step）已经就地验过几轮。轮数上限按站算，而就地验证轮没有独立任务
+  // 行可数，所以自己记一个：开新一轮时发现换站了就归零。
+  verifyStationRounds: integer("verify_station_rounds").notNull().default(0),
+  // 验的是线上**哪一站**「自动验证」（WorkflowStep.id）。一条线可以写不止一站，
+  // 轮数上限得按站分开数，否则第一站用掉的轮次会算到第二站头上。老数据为 null =
+  // 线上第一站。历史那批独立审查任务把它记在自己身上，就地验证轮记在被验任务身上。
+  reviewStep: text("review_step"),
   reviewRequested: integer("review_requested", { mode: "boolean" }).notNull().default(false),
   priority: text("priority").notNull().default("none"),
   labels: text("labels").notNull().default("[]"), // json
@@ -79,6 +106,14 @@ export const tasks = sqliteTable("tasks", {
   // on branch `harness/<id8>` based off `worktreeBase` (null = current HEAD) before
   // running. False / missing repo → behaves like before (runs in repoPath).
   useWorktree: integer("use_worktree", { mode: "boolean" }).notNull().default(false),
+  // 这个任务当初挑的那条线，**创建时拷进来的快照**（json WorkflowDef）。之后改起手式
+  // 库不会追着改它 —— 「起手式」不是「模板引用」。空 = 老任务，走旧的写死流程。
+  workflow: text("workflow"),
+  // 这条线此刻停在哪一站（WorkflowStep.id，只会是锚点站：干活 / 自动验证 / 等我点头）。
+  // 执行链靠它把「某一轮审查有了结论」「用户点了头」落回**具体那一站**，于是同一类站
+  // 可以在一条线上出现多次。空 = 还没走到任何锚点，或者老任务——调用方一律回落到线上
+  // 第一个同类锚点（shared 的 anchorAt），所以它丢了也只是退化成老行为，不会卡死。
+  workflowAt: text("workflow_at"),
   worktreeBase: text("worktree_base"),
   originTaskId: text("origin_task_id"), // 回链来源任务(null = 直接创建)
   // 检查点续跑：agent 调 pause_task 时填进来；下次 resume 时取出喂给 CLI 会话并清空。
@@ -127,6 +162,24 @@ export const teamPresets = sqliteTable("team_presets", {
   createdAt: text("created_at").notNull(),
 });
 
+// 起手式库。系统自带的那几条**没有种子行**：builtin_key 非空的行 = 用户对某条
+// 自带起手式的覆写，删掉这行就回到 shared/workflow-presets.ts 里的出厂定义。
+// 用户自建的行 builtin_key 为空。disabled 只对自带的有意义（自带的删不掉，只能停用）。
+export const workflows = sqliteTable(
+  "workflows",
+  {
+    id: text("id").primaryKey(),
+    builtinKey: text("builtin_key"), // 非空 = 覆写某条系统自带的
+    name: text("name").notNull(),
+    description: text("description").notNull().default(""),
+    def: text("def").notNull(), // json WorkflowDef
+    disabled: integer("disabled", { mode: "boolean" }).notNull().default(false),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (t) => ({ builtinIdx: uniqueIndex("workflows_builtin_idx").on(t.builtinKey) }),
+);
+
 export const sessions = sqliteTable("sessions", {
   id: text("id").primaryKey(),
   taskId: text("task_id").notNull(),
@@ -154,6 +207,20 @@ export const sessions = sqliteTable("sessions", {
   // lifespan instead of a (wrong) execution time.
   activeMs: integer("active_ms"),
   turnStartedAt: text("turn_started_at"),
+  // ── 解绑重启（executors/detached.ts）────────────────────────────────────
+  // 单飞任务的 agent 输出走文件而不是匿名管道，所以它活得过 server 重启。
+  // 下面这组是重启后接管它所需的全部线索；常驻会话（团队调度台）不走这条路，
+  // 这几列对它恒为 null——它靠 cli_session_id 的 --resume 自动接回。
+  agentPid: integer("agent_pid"),
+  // ps 的 lstart 原文。**必须跟 pid 一起比**：pid 会被复用，光 kill(pid,0)
+  // 只能证明「有个进程叫这个号」，不能证明还是当初那个 agent。
+  agentStartedAt: text("agent_started_at"),
+  agentOutPath: text("agent_out_path"),
+  agentErrPath: text("agent_err_path"),
+  agentRcPath: text("agent_rc_path"),
+  // 已安全消费到的 stdout 字节位置，永远落在换行边界（见 detached.ts 的
+  // tailFile）。重启后从这里接着读 → 不丢行也不重行。
+  agentOffset: integer("agent_offset"),
 });
 
 export const schedules = sqliteTable("schedules", {
@@ -167,17 +234,22 @@ export const schedules = sqliteTable("schedules", {
   createdAt: text("created_at").notNull(),
 });
 
-// Scheduled replies: a message to send to a task's agent at a future time
-// (continueTask at sendAt). Distinct from `schedules` (which re-runs a task):
-// a task may have several pending messages; the scheduler fires each when due
-// and the task is idle.
+// Scheduled replies: a message to send to a task's agent when it comes due
+// (continueTask). Distinct from `schedules` (which re-runs a task): a task may
+// have several pending messages; the scheduler fires each when due and the task
+// is idle. `mode` decides what "due" means — timed=到点，queued=任务一空闲就发。
 export const scheduledMessages = sqliteTable("scheduled_messages", {
   id: text("id").primaryKey(),
   taskId: text("task_id").notNull(),
   text: text("text").notNull().default(""),
   attachments: text("attachments").notNull().default("[]"), // json string[]
   agent: text("agent"), // AgentType | null（@指派目标）
-  sendAt: text("send_at").notNull(), // ISO 到期发送时间
+  // @指派时一并选定的执行器与模型：定时发送落地时要跑的还是用户当时选的那一个。
+  executorId: text("executor_id"), // agents.id | null（null=按 agent 类型默认执行器）
+  model: text("model"), // 模型覆盖 | null（跟随执行器）
+  reasoningEffort: text("reasoning_effort"), // 思考强度覆盖 | null（跟随执行器）
+  mode: text("mode").notNull().default("timed"), // timed | queued
+  sendAt: text("send_at").notNull(), // timed=ISO 到期时间；queued=入队时刻（只用来排先后）
   status: text("status").notNull().default("pending"), // pending | sent | canceled
   createdAt: text("created_at").notNull(),
   sentAt: text("sent_at"),
@@ -214,5 +286,9 @@ export const llmProviders = sqliteTable("llm_providers", {
   baseUrl: text("base_url").notNull(), // 根地址,不含 /v1(各处按需自行补)
   apiKey: text("api_key").notNull().default(""), // 本机存储,GET 不回传明文
   model: text("model").notNull().default(""),
+  protocolConversionEnabled: integer("protocol_conversion_enabled", { mode: "boolean" }).notNull().default(false),
+  // 选模型面板的候选来源:'api'=每次现调 /models;'pinned'=只用 pinned_models(json string[])。
+  modelListMode: text("model_list_mode").notNull().default("api"),
+  pinnedModels: text("pinned_models").notNull().default("[]"),
   createdAt: text("created_at").notNull(),
 });

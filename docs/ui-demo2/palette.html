@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
+<title>命令面板 ⌘K — Harness UI 讨论稿 v2</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="shell">
+    <div data-include="sidebar" data-selected="team1"></div>
+    <main class="main" data-surface>
+      <header class="app-bar">
+        <span class="kind-chip">团队</span>
+        <span class="app-title">自动验证相关 - 依旧大改</span>
+        <span class="status-pill"><i class="dot"></i>运行中</span>
+        <div class="app-actions">
+          <button class="ui-btn icon-btn" aria-label="更多操作">…</button>
+          <button class="ui-btn icon-btn" aria-label="开关 Inspector">▥</button>
+        </div>
+      </header>
+      <div class="work-body">
+        <section class="conversation">
+          <div class="messages">
+            <div class="feed-card"><span class="feed-tag dispatch">派活</span><b>调度者</b> 背景内容,命令面板之下。</div>
+          </div>
+        </section>
+      </div>
+    </main>
+  </div>
+
+  <div class="scrim"></div>
+  <div class="palette" role="dialog" aria-label="命令面板">
+    <div class="pal-input"><i>⌕</i><input value="dr" aria-label="搜索任务、随手记,或输入命令">
+      <kbd>esc</kbd>
+    </div>
+    <div class="pal-scroll">
+      <div class="pal-label">切换项目</div>
+      <div class="pal-row selectable selected"><span class="pi proj-avatar g2">D</span>
+        <span class="pt">dr-pipeline<small>~/code/dr-pipeline · 3 个任务在跑</small></span><kbd>↵</kbd>
+      </div>
+      <div class="pal-label">任务</div>
+      <div class="pal-row selectable"><span class="pi">●</span>
+        <span class="pt">daily-report:视频条目化流水线<small>dr-pipeline · 运行中</small></span>
+      </div>
+      <div class="pal-row selectable"><span class="pi">○</span>
+        <span class="pt">dr 日报模板改版<small>dr-pipeline · 已完成</small></span>
+      </div>
+      <div class="pal-label">随手记</div>
+      <div class="pal-row selectable"><span class="pi">✐</span>
+        <span class="pt">dr 流水线绝对路径的坑<small>不兼容 worktree,派任务显式关掉</small></span>
+      </div>
+      <div class="pal-label">命令</div>
+      <div class="pal-row selectable"><span class="pi">＋</span>
+        <span class="pt">新建随手记</span><kbd>N I</kbd>
+      </div>
+      <div class="pal-row selectable"><span class="pi">▸</span>
+        <span class="pt">运行分组:每日流水线<small>serial · 4 个任务</small></span>
+      </div>
+      <div class="pal-row selectable"><span class="pi">⊞</span>
+        <span class="pt">分组管理</span>
+      </div>
+    </div>
+    <div class="pal-foot"><span>↑↓ 选择</span><span>↵ 执行</span><span>esc 关闭</span><span>选中态跟随右下角切换器</span></div>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>

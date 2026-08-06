@@ -1,0 +1,40 @@
+{
+  "name": "@harness/web-next",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "node ../scripts/check-conventions.mjs && tsc -b && vite build",
+    "test:image-preview": "node scripts/test-image-preview.mjs",
+    "test:inspector-attachments": "node scripts/test-inspector-attachments.mjs",
+    "test:open-with": "node scripts/test-open-with-menu.mjs",
+    "test:data-layer": "node --experimental-strip-types scripts/test-data-layer.mjs",
+    "test:run-activity": "node --experimental-strip-types scripts/test-run-activity.mjs",
+    "test:task-tree": "node --experimental-strip-types scripts/test-task-tree.mjs",
+    "test:workspace-history": "node --experimental-strip-types scripts/test-workspace-history.mjs",
+    "test:workflow-rail": "node --experimental-strip-types scripts/test-workflow-rail.mjs",
+    "test:workflow-edit": "node --experimental-strip-types scripts/test-workflow-edit.mjs",
+    "typecheck": "tsc -p tsconfig.json",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@fontsource-variable/inter": "^5.2.8",
+    "@harness/shared": "*",
+    "@phosphor-icons/react": "^2.1.10",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.0.0",
+    "@types/react": "^19.0.2",
+    "@types/react-dom": "^19.0.2",
+    "@vitejs/plugin-react": "^4.3.4",
+    "playwright-core": "^1.62.0",
+    "tailwindcss": "^4.0.0",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.5"
+  }
+}

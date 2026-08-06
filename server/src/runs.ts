@@ -95,3 +95,72 @@ export class CanceledRun extends Error {
     this.name = "CanceledRun";
   }
 }
+
+// ── 单飞锁与「这一轮跑完之后」────────────────────────────────────────────────
+// 一个任务同一时刻只跑一个回合。锁本身原来住在 orchestrator 里，挪到这个中立模块
+// 是因为「等这个任务当前这一轮退干净了再给它起下一轮」需要跟锁同一份真相：
+// **结算钩子是在 run loop 的 try 里调的**（afterSettlement → handleTaskSettlement），
+// 那一刻锁还锁着，此时对同一个任务调 continueTask 会被直接挡回、什么都不发生 ——
+// 就地验证轮正是这种情况。于是由 run loop 释放锁的同一处把队列排空，不靠
+// setTimeout 赌事件循环的先后。
+const turns = new Set<string>();
+const afterTurn = new Map<string, Array<() => void>>();
+
+/** 抢占这个任务的回合；已经有人在跑就返回 false（调用方直接放弃这一次）。 */
+export function claimTurn(taskId: string): boolean {
+  if (turns.has(taskId)) return false;
+  turns.add(taskId);
+  return true;
+}
+
+/** 回合结束：先放锁，再跑「等这一轮跑完」的回调（它们多半要立刻起下一轮）。 */
+export function releaseTurn(taskId: string): void {
+  turns.delete(taskId);
+  const waiting = afterTurn.get(taskId);
+  if (!waiting) return;
+  afterTurn.delete(taskId);
+  for (const fn of waiting) {
+    try {
+      fn();
+    } catch (error) {
+      console.error(`[harness] after-turn hook failed for ${taskId}:`, error);
+    }
+  }
+}
+
+/** 任务空着就立刻执行，正在跑就排到它这一轮退出之后。 */
+export function whenTurnIdle(taskId: string, fn: () => void): void {
+  if (!turns.has(taskId)) {
+    fn();
+    return;
+  }
+  const waiting = afterTurn.get(taskId);
+  if (waiting) waiting.push(fn);
+  else afterTurn.set(taskId, [fn]);
+}
+
+/**
+ * 结算钩子里给同一个任务续跑的**唯一安全写法**：等它这一轮退干净再送消息。
+ *
+ * 直接 `continueTask` 会被单飞锁静默挡回（结算钩子跑在 run loop 的 try 里，锁还锁着），
+ * 表现是「什么都没发生」——就地验证轮起不来、打回重做的提示没人收。动态 import 是为了
+ * 不让这个中立模块回头依赖 orchestrator（类型是纯类型引用，不构成运行时环）。
+ */
+type ContinueOpts = Parameters<(typeof import("./orchestrator.js"))["continueTask"]>[2];
+
+export function continueWhenIdle(
+  taskId: string,
+  text: string,
+  opts: ContinueOpts = {},
+  onError?: (message: string) => void | Promise<unknown>,
+): void {
+  whenTurnIdle(taskId, () => {
+    void import("./orchestrator.js")
+      .then(({ continueTask }) => continueTask(taskId, text, opts))
+      .catch((error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        console.error(`[harness] continueWhenIdle(${taskId}) failed:`, error);
+        return onError?.(message);
+      });
+  });
+}

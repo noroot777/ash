@@ -3,6 +3,7 @@ import type { TaskStatus } from "@harness/shared";
 import { db } from "./db/index.js";
 import { tasks, sessions } from "./db/schema.js";
 import { bus } from "./bus.js";
+import { stopPreviewOnRerun } from "./preview.js";
 import { now, runsTiming } from "./util.js";
 
 const TERMINAL: TaskStatus[] = ["done", "failed", "canceled"];
@@ -18,15 +19,19 @@ const TERMINAL: TaskStatus[] = ["done", "failed", "canceled"];
 //   • otherwise  : leave the timestamps untouched.
 export async function setTaskStatus(taskId: string, status: TaskStatus): Promise<void> {
   const cur = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
+  const updatedAt = now();
   let startedAt = cur?.startedAt ?? null;
   let endedAt = cur?.endedAt ?? null;
-  const patch: Record<string, unknown> = { status, updatedAt: now() };
+  const patch: Record<string, unknown> = { status, updatedAt };
 
   if (status === "running") {
-    if (!startedAt) patch.startedAt = startedAt = now();
+    if (!startedAt) patch.startedAt = startedAt = updatedAt;
     patch.endedAt = endedAt = null;
+    // 又开跑了：上一轮起的预览指向的是上一版代码，留着只会让人对着旧页面验新改动。
+    // 收在这儿是因为**所有**开跑路径都经过这一个函数（手点运行、队列推进、修复续跑）。
+    if (cur && cur.status !== "running") await stopPreviewOnRerun(taskId);
   } else if (TERMINAL.includes(status)) {
-    patch.endedAt = endedAt = now();
+    patch.endedAt = endedAt = updatedAt;
   }
 
   await db.update(tasks).set(patch).where(eq(tasks.id, taskId));
@@ -40,7 +45,7 @@ export async function setTaskStatus(taskId: string, status: TaskStatus): Promise
     .from(sessions)
     .where(eq(sessions.taskId, taskId));
   const timing = runs.length ? runsTiming(runs) : {};
-  bus.publish({ type: "task.status", taskId, status, startedAt, endedAt, ...timing });
+  bus.publish({ type: "task.status", taskId, status, updatedAt, startedAt, endedAt, ...timing });
 
   // 队列推进钩子(DESIGN §3):任务进 done / canceled / failed / paused 时,
   // 如果它在某个 queue 里,触发那个 queue 的下一位推进。
@@ -56,5 +61,13 @@ export async function setTaskStatus(taskId: string, status: TaskStatus): Promise
         console.error(`[harness] advanceQueueFromTask(${taskId}) failed:`, err),
       ),
     );
+  }
+
+  // 待发送消息钩子:任务一不在跑了,就把排着队的那条送进去(排队追问的正常触发源)。
+  // 只靠 scheduler 的 30s tick 的话,用户会对着一条本该立刻发出的消息干等最多半分钟,
+  // 界面上看起来就像「排队坏了」。paused 也算空闲——提问中的任务照样接得住回复。
+  // awaiting_review 是明确的"等人"语义,不在此列;判定与投递单点仍在 pending-messages.ts。
+  if (status !== "running" && status !== "queued" && status !== "awaiting_review") {
+    void import("./pending-messages.js").then(({ flushPendingForTask }) => flushPendingForTask(taskId));
   }
 }

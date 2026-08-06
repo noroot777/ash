@@ -6,9 +6,12 @@ import { bus } from "./bus.js";
 import { runsTiming } from "./util.js";
 import { getAppSettings } from "./app-settings.js";
 import { projectHealthLight } from "./git.js";
+import { resolveWorkflowDef } from "./workflows.js";
 
 export type TaskRow = typeof tasks.$inferSelect;
-export type NewTaskRow = typeof tasks.$inferInsert & { id: string };
+// workflowId 不是列：它是**创建那一刻**用来挑起手式的 id，落库时会被换成 tasks.workflow
+// 里的那份快照（见 createTasks）。调用方给 id，库里存线本身。
+export type NewTaskRow = typeof tasks.$inferInsert & { id: string; workflowId?: string | null };
 
 type AgentLabelRow = { id: string; name: string; type: string; isDefault: boolean };
 
@@ -77,6 +80,8 @@ const toTask = (r: TaskRow, profiles: AgentLabelRow[] = []): Task => ({
   archivedAt: r.archivedAt,
   useWorktree: r.useWorktree,
   worktreeBase: r.worktreeBase,
+  workflow: r.workflow ? JSON.parse(r.workflow) : null,
+  workflowAt: r.workflowAt ?? null,
   originTaskId: r.originTaskId ?? null,
   resumePrompt: r.resumePrompt ?? null,
   question: r.question ?? null,
@@ -122,6 +127,22 @@ export async function enrichTasks(rows: TaskRow[]): Promise<Task[]> {
   });
 }
 
+// 任务创建时把那条线**拷一份**进 tasks.workflow。起手式是「起手式」不是「模板引用」：
+// 之后改库、停用、恢复默认，都不会追着改已经开工的任务 —— 用户改库时要能放心改，不必
+// 先想一遍「这会不会把正在跑的 40 个任务也改了」。
+//
+// workspace 这一栏刻意**跟着 useWorktree 走，而不是反过来**：这一期只落数据、不接管
+// 执行链。让起手式来决定「要不要开 worktree」得等前端真能选起手式的那一期，否则用户在
+// 全局设置里关掉的 worktree，会被一条他还看不见的线悄悄打开。
+async function snapshotWorkflow(
+  workflowId: string | null | undefined,
+  projectId: string,
+  useWorktree: boolean,
+): Promise<string> {
+  const { def } = await resolveWorkflowDef({ explicitId: workflowId, projectId });
+  return JSON.stringify({ ...def, workspace: useWorktree ? "isolated" : "shared" });
+}
+
 // All task creation paths go through here. afterInsert lets callers persist
 // queue membership before serialization/broadcast, so the event matches GET /tasks.
 export async function createTasks(
@@ -141,15 +162,21 @@ export async function createTasks(
     .from(projects)
     .where(inArray(projects.id, projectIds));
   const repoByProject = new Map(projectRows.map((project) => [project.id, project.repoPath] as const));
-  const normalizedRows = rows.map((row): NewTaskRow => {
+  const normalizedRows = await Promise.all(rows.map(async (row): Promise<typeof tasks.$inferInsert & { id: string }> => {
     const requested = row.useWorktree ?? defaultUseWorktree;
     const useWorktree = requested && projectHealthLight(repoByProject.get(row.projectId)).isRepo;
+    const { workflowId, ...rest } = row;
     return {
-      ...row,
+      ...rest,
       useWorktree,
       worktreeBase: useWorktree ? row.worktreeBase ?? null : null,
+      // 审查任务（reviewOf 非空）不拷线：它本身就是别人那条线上「验证」那一站长出来的
+      // 产物，再给它配一条自己的线就成了「审查任务的审查任务」。
+      workflow: row.workflow ?? (row.reviewOf
+        ? null
+        : await snapshotWorkflow(workflowId, row.projectId, useWorktree)),
     };
-  });
+  }));
   await db.insert(tasks).values(normalizedRows);
   await afterInsert?.();
   const persisted = await db

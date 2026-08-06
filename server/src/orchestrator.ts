@@ -1,25 +1,29 @@
 import { mkdirSync, createWriteStream, existsSync } from "node:fs";
 import { join } from "node:path";
-import { eq, inArray, sql } from "drizzle-orm";
-import type { AgentType } from "@harness/shared";
+import { eq, inArray } from "drizzle-orm";
+import type { AgentType, TaskStatus } from "@harness/shared";
 import { db } from "./db/index.js";
 import { tasks, projects, sessions } from "./db/schema.js";
 import { bus } from "./bus.js";
 import { id, now, attachmentsPrompt } from "./util.js";
 import { setTaskStatus } from "./status.js";
-import { trackRun, untrackRun, takeStopped, takeConfirmed, type StopSettle } from "./runs.js";
+import { trackRun, untrackRun, isRunning, takeStopped, claimTurn, releaseTurn } from "./runs.js";
+import { consumeSingleRun, afterSettlement } from "./single-run.js";
+import { FOLLOW_UP_LABEL } from "./labels.js";
 import { taskWorkspace } from "./task-workspace.js";
 import { resolveExecutorFor } from "./executors/index.js";
 import type { RunHandle } from "./executors/types.js";
+import { detachedPathsFor } from "./executors/detached.js";
+import { inspectProcess } from "./proc.js";
 import { RUNS_DIR } from "./paths.js";
-import { writeTurn as writeTurnLine, writeTurnEnd, writeRunError, runTracePaths } from "./transcript.js";
+import { writeTurn as writeTurnLine, runTracePaths } from "./transcript.js";
 import { startTeam, deliverToLead } from "./team/session.js";
 import { workerPreambleFor } from "./team/dispatch.js";
-import { notifyTeamLead } from "./team/inbox.js";
 import { reopenAcceptedStage } from "./task-stage.js";
-import { handleTaskSettlement, reviewProtocolFor, reviewReminderFor } from "./review.js";
+import { reviewProtocolFor, reviewReminderFor, verifyReminderFor } from "./review-prompts.js";
+import { peerNoticeFor } from "./peer-context.js";
+import { recordTurnBaseline } from "./turn-baseline.js";
 
-const running = new Set<string>(); // taskIds currently executing (single-flight)
 
 // Single tasks run headless — nobody can answer a mid-run prompt. Tell the agent
 // to act autonomously rather than stall waiting for confirmation; if it genuinely
@@ -31,6 +35,14 @@ const AUTONOMY =
 // the SAME working directory, so it should read the current state before acting.
 const COLLAB_INVITE =
   "你被叫来加入这个任务的协作。当前工作目录里可能已经有其他 agent 的产出，请先了解现状再动手。\n\n";
+
+// 被召唤进来的智能体只收到用户 @ 它的那一句话 —— 任务本身是干什么的，它一无所知
+// （task.body 只进 fresh run 的 prompt，而它走的是 continueTask 这条路）。撞上
+// 「审一下上面的提交」这种自带上下文的召唤还能靠工作目录补齐，换成依赖任务描述的
+// 活就只能靠猜。所以首次入场时把原始描述一并给它，之后的回合不再重复（它自己的
+// 会话里已经有了）。
+const TASK_BRIEF = (body: string) =>
+  `【本任务的原始描述】（你是中途被叫进来的，这是任务最初的交代，供你了解背景）\n${body.trim()}\n\n`;
 
 // When a task that was interrupted (server restart → failed, manual stop →
 // canceled, group pause → paused, or a non-zero exit) is (re)started, we RESUME
@@ -45,15 +57,19 @@ const SYS_MARKER = "〔系统〕继续（从中断处）";
 
 // A non-text interjection in the run timeline is persisted as one sentinel line
 // (see transcript.ts) so live and reloaded views read identically.
-function writeTurn(out: NodeJS.WritableStream, turn: { t: "user" | "system"; agent: AgentType; text: string }): void {
-  writeTurnLine(out, turn, now());
+function writeTurn(
+  out: NodeJS.WritableStream,
+  turn: { t: "user" | "system"; agent: AgentType; text: string },
+  at = now(),
+): void {
+  writeTurnLine(out, turn, at);
 }
 
 // 完成协议前言(严格 done):告诉 agent 它的 taskId 和「必须亲口确认完成」的
 // 规则。fresh run 用长版(第一回合,完整交代);reply/resume 回合用短版追加在
 // 消息尾部(每回合都提醒,上下文再长 agent 也不至于忘)。
-const ACCEPTANCE_REMINDER = (taskId: string, sharedTeamWorker: boolean, reviewTask: boolean) => reviewTask
-  ? "验收辅路:审查任务不适用 accept_task；它只负责给被审任务下验证结论并留证。"
+const ACCEPTANCE_REMINDER = (taskId: string, sharedTeamWorker: boolean, verifying: boolean) => verifying
+  ? "验收辅路:验证回合不适用 accept_task；这一轮只负责给出验证结论并留证。"
   : sharedTeamWorker
     ? "验收辅路:本共享执行者不适用 accept_task；合并与验收由团队级处理。"
     : `验收辅路:准备交给人工验收前可调用 report_stage(taskId="${taskId}", stage="awaiting_acceptance")；` +
@@ -66,7 +82,6 @@ const COMPLETION_REMINDER = (taskId: string, sharedTeamWorker: boolean, reviewTa
 // 续聊(follow-up)回合的尾巴:任务早就到终态了,这一轮是「完成之后的对话」,
 // 不该拿严格完成协议吓唬 agent(不确认就 failed)—— 这一轮不确认,任务状态原样
 // 不动。只有它真把任务推进到新的完成时才需要确认。
-const FOLLOW_UP_LABEL: Record<string, string> = { done: "已完成", failed: "失败", canceled: "已取消" };
 const FOLLOW_UP_REMINDER = (taskId: string, from: string, sharedTeamWorker: boolean, reviewTask: boolean) =>
   `\n\n(harness:这是任务在「${FOLLOW_UP_LABEL[from] ?? from}」之后的续聊,taskId=${taskId}。任务状态不会因为本回合而改变,本回合不需要 complete_task;只有当你在这一轮把任务推进到了新的完成状态时,才调用 complete_task(taskId="${taskId}")确认。${ACCEPTANCE_REMINDER(taskId, sharedTeamWorker, reviewTask)})`;
 
@@ -94,134 +109,6 @@ async function setStatus(taskId: string, status: Parameters<typeof setTaskStatus
   await setTaskStatus(taskId, status);
 }
 
-async function afterSettlement(taskId: string, status: "canceled" | "paused" | "done" | "failed", confirmedDone: boolean) {
-  try {
-    await handleTaskSettlement(taskId, status, confirmedDone);
-  } catch (error) {
-    // Review orchestration is a post-settlement side effect. A failure here must
-    // never rewrite an already-settled worker/reviewer status.
-    console.error(`[harness] review settlement hook failed for ${taskId}:`, error);
-  }
-}
-
-// 任务跑完一回合时的状态落位：续聊回合(followUpFrom 非空) → 除非确认完成,否则
-// 回到续聊前的终态；手停 → canceled；分组暂停停 → paused（恢复分组时
-// 队列 head 还是它，从原 CLI 会话续跑，而不是被当 canceled 跳过去启动下一个）；
-// agent 在本回合内调过 ask_question（留下 question） → paused 且队列挂起等答复；
-// 调过 pause_task（写下 resumePrompt） → paused，等依赖满足或用户手动 resume；
-// 退出码非 0 → failed。exit 0 走严格 done
-// 协议：agent 必须在回合内调过 complete_task 确认
-// 「目标真的达成了」才落 done —— exit 0 只证明 CLI 进程正常退出,agent 报错后
-// 退出照样 exit 0,假 done 会误推进队列、错误唤醒下游。未确认 → failed(重试
-// 会 resume 续跑,代价低)。逃生口:HARNESS_LAX_DONE=1 退回「exit 0 即 done」
-// (接没配 harness MCP 的 agent 时用)。一处算清楚,run / continue 共用。
-// 队列推进：done / canceled / failed / paused 进 setTaskStatus 后会触发同 queue 推进。
-// 返回落位状态 + note(未确认降级的说明,调用方写进时间线让用户知道为什么)。
-const STRICT_DONE = !process.env.HARNESS_LAX_DONE;
-const UNCONFIRMED_NOTE =
-  "回合正常结束,但本回合内没有收到 complete_task 的完成确认 —— 按严格完成协议记为 failed。可能是 agent 没调用;也可能它调了但被拒(409,如任务状态在运行中被外部改动)。若任务其实已完成,可手动把状态改成已完成;重试则会从中断处续跑。";
-const GROUP_PAUSED_NOTE =
-  "分组被暂停,本回合被中止 —— 任务落为已暂停;点「运行/继续」恢复分组时会从当前会话接着跑。";
-async function settleTaskStatus(
-  taskId: string,
-  exitStatus: number,
-  stopped: StopSettle | null,
-): Promise<{
-  status: "canceled" | "paused" | "done" | "failed";
-  note?: string;
-  confirmedDone: boolean;
-}> {
-  const memConfirmed = takeConfirmed(taskId); // 无条件消费,别让标记漏到下一回合
-  const t = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
-  // 完成确认有两条道:同进程的内存标记,和落库的时间戳(complete_confirmed_at)。
-  // 任一命中即算确认 —— 确认与结算未必在同一个进程里(历史事故:僵尸实例在跑这
-  // 个回合,agent 的 complete_task 走 HTTP 打到了监听进程,内存标记落在别人家,
-  // 结算这边什么都没看见,于是 agent 明明确认了却记 failed)。DB 那份无条件清掉。
-  const confirmed = memConfirmed || !!t?.completeConfirmedAt;
-  if (t?.completeConfirmedAt) {
-    await db.update(tasks).set({ completeConfirmedAt: null, updatedAt: now() }).where(eq(tasks.id, taskId));
-  }
-  // 执行者结算 → 按需唤醒团队调度者(§Team)。只有提问、失败、以及 reportBack 的
-  // done 会投递;普通 done 静默(UI 自己会更新,不花一轮模型调用)。非团队任务
-  // (parentId 空)里 notifyTeamLead 直接返回。
-  const notify = (kind: Parameters<typeof notifyTeamLead>[1], q?: string) => {
-    if (!t) return;
-    void notifyTeamLead(t, kind, q).catch((err) =>
-      console.error(`[harness] notifyTeamLead(${taskId}) failed:`, err),
-    );
-  };
-  // 续聊(follow-up)回合:任务早就是终态,这一轮是终态之后的对话,不是任务的执行。
-  // 规则一句话:**续聊只能把任务变成 done(本回合亲口确认),不会让它变差** ——
-  // 其余情况(没确认、异常退出、手停、组暂停)一律回到续聊前的那个终态。理由:
-  // 用户给一个已完成的任务发条消息(「再发布一下」),不该因为 agent 这一轮没调
-  // complete_task 就把 done 打成 failed;手停一轮闲聊也不该把它抹成 canceled。
-  if (t?.followUpFrom) {
-    const back = t.followUpFrom as "done" | "failed" | "canceled";
-    await db.update(tasks).set({ followUpFrom: null, updatedAt: now() }).where(eq(tasks.id, taskId));
-    if (confirmed) {
-      await setStatus(taskId, "done");
-      notify("done");
-      return { status: "done", confirmedDone: true };
-    }
-    await setStatus(taskId, back);
-    const label = FOLLOW_UP_LABEL[back] ?? back;
-    if (t.question) {
-      // 提问照常通知/展示(问题卡片不看状态),但不把终态改成 paused —— 那会让它
-      // 重新占住队列位置。答复走 /answer,又是一个续聊回合。
-      notify("question", t.question);
-      return { status: back, note: `续聊回合以提问结束,等待答复:「${t.question}」(任务状态仍为「${label}」)`, confirmedDone: false };
-    }
-    if (stopped) {
-      const why = stopped === "paused" ? "分组被暂停" : "被手动停止";
-      return { status: back, note: `续聊回合${why},任务状态保持「${label}」不变。`, confirmedDone: false };
-    }
-    if (exitStatus !== 0) {
-      return { status: back, note: `续聊回合异常结束(退出码 ${exitStatus}),任务状态保持「${label}」不变。`, confirmedDone: false };
-    }
-    return { status: back, confirmedDone: false };
-  }
-  if (stopped === "canceled") {
-    await setStatus(taskId, "canceled");
-    return { status: "canceled", confirmedDone: false };
-  }
-  if (stopped === "paused") {
-    // 组暂停打断:落 paused 占住队列位置(组是 paused 的,推进钩子不会动)。
-    // 恢复分组 → advanceQueue 选中它 → resumeOrRunTask 无 resumePrompt 走
-    // RESUME_PROMPT 续原会话。若它被杀前调过 ask_question,question 仍在,
-    // pickNextLaunchable 会继续挡住等答复——提问通知照发(团队调度者那边该
-    // 知道它在等什么),不因组暂停而丢。
-    await setStatus(taskId, "paused");
-    if (t?.question) {
-      notify("question", t.question);
-      return { status: "paused", note: `本回合以提问暂停,等待答复:「${t.question}」`, confirmedDone: false };
-    }
-    return { status: "paused", note: GROUP_PAUSED_NOTE, confirmedDone: false };
-  }
-  // 提问优先于检查点:question 非空 → paused,但队列不推进、不自动续跑
-  // (pickNextLaunchable 会挡住),等 answer_question 带答复唤醒。
-  if (t?.question) {
-    await setStatus(taskId, "paused");
-    notify("question", t.question);
-    return { status: "paused", note: `本回合以提问暂停,等待答复:「${t.question}」`, confirmedDone: false };
-  }
-  if (t?.resumePrompt) {
-    await setStatus(taskId, "paused");
-    return { status: "paused", confirmedDone: false };
-  }
-  if (exitStatus !== 0) {
-    await setStatus(taskId, "failed");
-    notify("failed");
-    return { status: "failed", confirmedDone: false };
-  }
-  if (confirmed || !STRICT_DONE) {
-    await setStatus(taskId, "done");
-    notify("done");
-    return { status: "done", confirmedDone: confirmed };
-  }
-  await setStatus(taskId, "failed");
-  notify("failed_unconfirmed");
-  return { status: "failed", note: UNCONFIRMED_NOTE, confirmedDone: false };
-}
 
 // On (re)start nothing is actually running, so any task still in an in-flight
 // status was interrupted (e.g. the server restarted mid-run). Mark those failed
@@ -236,12 +123,18 @@ async function settleTaskStatus(
 // 打成 failed 之后没有任何人去推,整条串行队列就一直停在那等(实测:重启后
 // 后面的任务再也不会自动开始,得手点一次「运行分组」)。
 export async function reconcileInterrupted(): Promise<void> {
-  const orphaned = await db.select().from(tasks).where(inArray(tasks.status, ["running", "queued"]));
+  // **必须在 reattachRunningTasks 之后调用**（index.ts 保证顺序）。被成功接管的
+  // 任务此刻有活的 handle，isRunning 为真 —— 它们绝不能再被当成「被打断」判
+  // failed：那会让一个正在干活的 agent 在界面上显示失败，用户一点重试就会有
+  // 第二个 agent 进同一个 worktree。
+  // 用 isRunning（runs.ts，中立模块）而不是回头 import reattach，依赖保持单向。
+  const orphaned = (await db.select().from(tasks).where(inArray(tasks.status, ["running", "queued"])))
+    .filter((t) => !isRunning(t.id));
   if (!orphaned.length) return;
   const teamIds = orphaned.filter((t) => t.mode === "team").map((t) => t.id);
   const others = orphaned.filter((t) => t.mode !== "team");
   for (const t of others) {
-    const back = (t.followUpFrom as "done" | "failed" | "canceled" | null) ?? "failed";
+    const back = (t.followUpFrom as TaskStatus | null) ?? "failed";
     if (t.followUpFrom || t.completeConfirmedAt) {
       await db
         .update(tasks)
@@ -257,6 +150,33 @@ export async function reconcileInterrupted(): Promise<void> {
       (followUps ? `, ${followUps} follow-up turn(s) → 原终态` : "") +
       (teamIds.length ? `, ${teamIds.length} team task(s) → idle` : ""),
   );
+  wakeInterruptedLeads(teamIds);
+}
+
+// 被打断在「正在思考/派活」当口的团队调度台，重启后必须主动叫醒一次。
+//
+// 平时调度台是被执行者事件唤醒的（提问 / 失败 / reportBack 完成，见
+// team/inbox.ts）。但如果它被打断时手头那批执行者**已经全部跑完**，就再也没有
+// 人会来敲它的门了 —— 它会一直 idle 躺着，只能等用户自己去戳一下。这是重启在
+// 团队链路上唯一真正会「卡住」的地方。
+//
+// 只叫醒 teamIds（重启时正好是 running/queued 的那些，即确实被打断在半途）。
+// 本来就 idle 的不动：它没有未竟的一轮，叫它等于白烧一次模型调用。
+// startTeam 走的是 deliver → 内存里没有 lead → openLead 的 --resume 接回，
+// 调度者会收到「你被中断过」的提示，自己 list_tasks 看现状。
+function wakeInterruptedLeads(teamIds: string[]): void {
+  if (!teamIds.length) return;
+  // 稍等一下再叫：让 server 先把启动流程走完（含上面的接管），调度者一睁眼
+  // 看到的执行者状态才是最终的，不会基于半截快照做决策。
+  const t = setTimeout(() => {
+    for (const teamId of teamIds) {
+      void startTeam(teamId).catch((err) =>
+        console.error(`[harness] 唤醒被打断的团队调度台 ${teamId} 失败:`, err),
+      );
+    }
+    console.log(`[harness] 已叫醒 ${teamIds.length} 个被打断的团队调度台`);
+  }, 3000);
+  (t as { unref?: () => void }).unref?.();
 }
 
 // M1: execute a single-agent task in the project's working dir, stream output over
@@ -266,8 +186,7 @@ export async function runTask(taskId: string): Promise<void> {
   // 不是一个回合。放在最前面,于是 /tasks/:id/run、retry、queue 推进都自动生效。
   const mode = (await db.select({ mode: tasks.mode }).from(tasks).where(eq(tasks.id, taskId))).at(0)?.mode;
   if (mode === "team") return startTeam(taskId);
-  if (running.has(taskId)) return;
-  running.add(taskId);
+  if (!claimTurn(taskId)) return;
   let handle: RunHandle | undefined;
   try {
     const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
@@ -305,14 +224,24 @@ export async function runTask(taskId: string): Promise<void> {
     const sharedTeamWorker = !task.useWorktree && teamPreamble.length > 0;
     const reviewTask = !!task.reviewOf;
     const reviewProtocol = reviewTask ? await reviewProtocolFor(task, ws, project.repoPath) : "";
+    // fresh run 通常是任务里的头一个智能体，但不总是：任务跑过 codex 之后用户把
+    // agentType 换成 claude 再点运行，就会从这里起跑一条全新会话 —— 前面那位的
+    // 对话记录还在盘上，同样该告知。prev 传 undefined（这个智能体自己没跑过），
+    // 于是在场的都算新面孔；任务里只有它自己时返回空串，fresh run 一如往常。
+    const priorSessions = await db.select().from(sessions).where(eq(sessions.taskId, taskId));
+    const peerNotice = peerNoticeFor({ taskId, self: agentType, all: priorSessions, prev: undefined });
     const prompt =
       AUTONOMY + COMPLETION_PROTOCOL(taskId, sharedTeamWorker, reviewTask) + teamPreamble + reviewProtocol +
+      peerNotice +
       (autoTitle ? TITLE_HINT + objective : objective);
     const turnStart = now();
     const sessId = id();
     const runDir = join(RUNS_DIR, taskId);
     mkdirSync(runDir, { recursive: true });
-    handle = ex.run({ prompt, cwd: ws.path, trace: runTracePaths(runDir, sessId, turnStart) });
+    // 解绑重启：输出落盘而不是走匿名管道，于是这个 agent 活得过 server 重启
+    // （见 executors/detached.ts）。ssh 目标会在 spawnForRun 里自动退回管道。
+    const detach = detachedPathsFor(runDir, sessId, turnStart);
+    handle = ex.run({ prompt, cwd: ws.path, trace: runTracePaths(runDir, sessId, turnStart), detach });
     trackRun(taskId, handle);
 
     let cliSessionId = handle.sessionId;
@@ -334,79 +263,22 @@ export async function runTask(taskId: string): Promise<void> {
       turnStartedAt: turnStart,
       activeMs: 0,
       exitStatus: null as number | null,
+      // 重启后靠这几个字段找回并接管它。pid 为空 = 这一轮没走 detached
+      //（ssh 目标 / 预检失败），那就是老语义：重启即中断。
+      agentPid: handle.detached?.pid ?? null,
+      agentStartedAt: handle.detached ? inspectProcess(handle.detached.pid)?.startedAt ?? null : null,
+      agentOutPath: handle.detached ? detach.out : null,
+      agentErrPath: handle.detached ? detach.err : null,
+      agentRcPath: handle.detached ? detach.rc : null,
+      agentOffset: 0,
     };
     await db.insert(sessions).values(sessRow);
 
     const out = createWriteStream(join(runDir, `${sessId}.md`), { flags: "a" });
-
-    let exitStatus = 0;
-    let titleDone = !autoTitle; // when autoTitle, swallow text until the title line is parsed
-    let head = "";
-    const emitText = (text: string) => {
-      if (!text) return;
-      out.write(text);
-      bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: "single", agentType, event: { kind: "text", text } });
-    };
-
-    for await (const event of handle.events) {
-      if (event.kind === "session") {
-        if (event.cliSessionId !== cliSessionId) {
-          cliSessionId = event.cliSessionId;
-          await db
-            .update(sessions)
-            .set({ cliSessionId, resumeCommand: ex.resumeCommand(ws.path, cliSessionId) })
-            .where(eq(sessions.id, sessId));
-        }
-        bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: "single", agentType, event });
-        continue;
-      }
-      if (event.kind === "text" && !titleDone) {
-        head += event.text;
-        const nl = head.indexOf("\n");
-        if (nl < 0) continue; // still buffering the first line
-        const firstLine = head.slice(0, nl);
-        const rest = head.slice(nl + 1);
-        const m = firstLine.match(/标题[:：]\s*(.+)/);
-        if (m) {
-          const newTitle = m[1].trim().replace(/[`*"]/g, "").slice(0, 30);
-          if (newTitle) {
-            await db.update(tasks).set({ title: newTitle, autoTitle: false, updatedAt: now() }).where(eq(tasks.id, taskId));
-            bus.publish({ type: "task.title", taskId, title: newTitle });
-          }
-        }
-        titleDone = true;
-        emitText(m ? rest : head); // matched: drop the title line; else flush buffer
-        continue;
-      }
-      if (event.kind === "text" || event.kind === "thinking") {
-        out.write(event.text);
-        bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: "single", agentType, event });
-      } else {
-        if (event.kind === "error") writeRunError(out, event.message);
-        bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: "single", agentType, event });
-        if (event.kind === "done") exitStatus = event.exitStatus;
-      }
-    }
-    if (!titleDone && head) emitText(head); // agent never produced a newline
-
-    // A stop kills the subprocess → the stream ends like a normal exit; settle
-    // by the stop kind (manual → canceled, group pause → paused) so it can be
-    // re-run / continued.
-    const stopped = takeStopped(taskId);
-    const endIso = now();
-    await db
-      .update(sessions)
-      .set({ exitStatus, endedAt: endIso, activeMs: sql`COALESCE(${sessions.activeMs}, 0) + ${Math.max(0, Date.parse(endIso) - Date.parse(turnStart))}` })
-      .where(eq(sessions.id, sessId));
-    const settled = await settleTaskStatus(taskId, exitStatus, stopped);
-    await afterSettlement(taskId, settled.status, settled.confirmedDone);
-    if (settled.note) {
-      // 未确认降级为 failed:写进 .md(reload 可见)+ 广播(live 可见)
-      out.write(`\n> ${settled.note}\n`);
-      bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: "single", agentType, event: { kind: "error", message: settled.note } });
-    }
-    writeTurnEnd(out, endIso); // fence this turn's real end before closing the .md
-    out.end();
+    await consumeSingleRun({
+      taskId, sessId, agentType, ex, cwd: ws.path,
+      handle, out, turnStart, cliSessionId, autoTitle,
+    });
   } catch (err) {
     bus.publish({
       type: "agent.event",
@@ -417,12 +289,14 @@ export async function runTask(taskId: string): Promise<void> {
     });
     const status = takeStopped(taskId) ?? "failed";
     await setStatus(taskId, status);
-    await afterSettlement(taskId, status, false);
+    await afterSettlement(taskId, status, false, false);
   } finally {
     if (handle) untrackRun(taskId, handle);
-    running.delete(taskId);
+    releaseTurn(taskId);
   }
 }
+
+
 
 // Decide between a fresh run and a resume when (re)starting a single task. A task
 // that was interrupted keeps a session row with a cliSessionId (server restart
@@ -460,22 +334,57 @@ export async function resumeOrRunTask(
 // that agent already has a session here, resume it; otherwise invite it fresh
 // into the SAME working directory (same-dir collaboration). Single-flight by
 // taskId keeps invitees from running concurrently with the main agent.
+//
+// opts.executorId / opts.model / opts.reasoningEffort 是 @ 提及那一步选定的**具体执行器、
+// 模型与思考强度**（对话框里那个「智能体 · 模型」框）。只作用于这一回合：任务自己的
+// executorId/model/reasoningEffort 是它的常设配置，被 @ 换成别的执行器时不该被这一次召唤改写。
 export async function continueTask(
   taskId: string,
   userText: string,
-  opts: { agent?: AgentType; attachments?: string[]; system?: ResumeReason } = {},
+  opts: {
+    agent?: AgentType;
+    executorId?: string | null;
+    model?: string | null;
+    reasoningEffort?: string | null;
+    attachments?: string[];
+    system?: ResumeReason;
+    /**
+     * 旁路回合：这一轮不是「任务本身在执行」，而是搭着这个任务的工作目录/会话另做一件事
+     * （就地验证轮）。语义上跟续聊同一条：**只可能让任务变好，不会让它变差** ——
+     * 本回合不确认完成，任务就原样回到进这一轮之前的终态。跟续聊的区别只在于它是后端
+     * 发起的（带 system），所以要显式开这个开关，否则会被当成一次普通的系统续跑。
+     */
+    sideTurn?: boolean;
+    /**
+     * 这一轮的字是**后端代写**的（验证打回的报告、验收冲突的交接说明），但它必须占一个
+     * 真人回合 —— 带 system 会被当成「系统续跑」，followUpFrom 就护不住任务原来的终态。
+     * 于是落盘时标一位 by:"system"，让读端（Inspector 的「后续追问」、侧边栏铺开那一列）
+     * 能把它跟我自己打的字分开。默认 false = 真人发的。
+     */
+    byBackend?: boolean;
+    throwOnTeamUnavailable?: boolean;
+  } = {},
 ): Promise<void> {
-  // 已验收的协作任务收到真人消息 = 它又开工了,stage 清回「进行中」(见 reopenAcceptedStage)。
+  // 已验收的任务收到真人消息 = 旧验收不再覆盖新增改动,stage 清回「进行中」。
   // 只认真人消息:带 opts.system 的 retry / 手点运行 / 队列推进 / 上游唤醒不算,跟下面
-  // followUpFrom 用的是同一条口径。放在最前面,team(下面就分流走了)和 debate 一起覆盖。
-  if (!opts.system) await reopenAcceptedStage(taskId);
+  // followUpFrom 用的是同一条口径。放在最前面,确保 single/team/debate 走同一规则。
+  //
+  // 摘牌必须**立刻**发生(界面上任务当场从「已验收」挪回进行中),可这时还不知道这一轮
+  // 会不会真改东西 —— 纯询问也照摘。所以接住摘掉的是哪块牌子交给基线快照:结算发现
+  // 工作目录一个字节没变,就把它原样挂回去(turn-baseline.ts)。team 走下面的 stdin 分支、
+  // 不拍照,维持原样(调度台本来就不走验收链)。
+  const reopenedStage = opts.system ? null : await reopenAcceptedStage(taskId);
   // 团队任务(§Team):插话直接写进常驻调度台的 stdin —— 即时、同一会话、用户侧
   // 感觉不断线。不占这里的单飞锁(那把锁是给「一次运行 = 一个回合」的单任务用的,
   // 调度台的一次运行是整段常驻)。于是 /reply、/answer、@提及全都自动生效。
   const teamMode = (await db.select({ mode: tasks.mode }).from(tasks).where(eq(tasks.id, taskId))).at(0)?.mode;
-  if (teamMode === "team") return deliverToLead(taskId, userText, { attachments: opts.attachments });
-  if (running.has(taskId)) return;
-  running.add(taskId);
+  if (teamMode === "team") {
+    return deliverToLead(taskId, userText, {
+      attachments: opts.attachments,
+      throwOnOpenFailure: opts.throwOnTeamUnavailable,
+    });
+  }
+  if (!claimTurn(taskId)) return;
   const agentType = opts.agent ?? "claude"; // re-derived below once the task loads; kept for the catch handler
   let handle: RunHandle | undefined;
   try {
@@ -484,11 +393,42 @@ export async function continueTask(
     if (task.mode !== "single") throw new Error("reply is for single tasks");
 
     const agent = opts.agent ?? (task.agentType as AgentType) ?? "claude";
+    // 对话框里 @ 出来的那一步是**显式选择**（智能体 + 执行器 + 模型 + 思考强度），这一回合
+    // 整套按它跑；没 @ 就沿用任务自己的常设配置。三个字段必须同进同出：思考强度的档位表
+    // 是跟着 CLI 走的，只要换了智能体，任务自带的强度就属于另一张表，不能漏过来。
+    const summoned = !!opts.agent;
+    // 续聊(follow-up):任务已经到终态了,用户又发来一条消息 —— 这一轮是「任务
+    // 之后的对话」,不是任务的执行。把续聊前的终态记下来:队列一律按它看待这个
+    // 成员(既不算「有人在跑」冻住整条线,也不会被当成可启动项拉起来),结算时
+    // 再回到它(见 settleTaskStatus 的续聊分支)。
+    // 只认真人消息:后端发起的续跑(retry / 手点运行 / 队列推进 / 上游唤醒)带
+    // opts.system,那是真的在执行这个任务,照旧占住队列位置。
+    // 例外是旁路回合(opts.sideTurn,就地验证):它虽然由后端发起,却同样不是这个
+    // 任务的执行 —— 验证没通过不该把一个 done 打成 failed。任务身上还挂着 verify_round
+    // 时,这一轮同样算旁路:验证中途提问、答复回来续跑的那一回合仍属于这轮验证,
+    // 走的却是普通的 /answer,不带 sideTurn。
+    // 旁路回合恢复的是**进这一轮之前的原状态**,不限 done/failed/canceled —— 用户可以
+    // 对一个 paused 的任务手点「再验一轮」,验完它该还是 paused。
+    // **这一段必须排在所有可能抛错的解析之前**(执行器解析、工作目录解析都会抛:模型与
+    // 思考强度不兼容、worktree 建不出来),catch 那边只认库里的 followUpFrom —— 落库晚
+    // 一步,一个 done 的任务就会因为「验证没起来」被打成 failed。
+    const sideTurn = !!opts.sideTurn || !!task.verifyRound;
+    const followUpFrom = sideTurn
+      ? (task.status === "running" || task.status === "queued" ? null : task.status)
+      : !opts.system && ["done", "failed", "canceled"].includes(task.status)
+        ? task.status
+        : null;
+    // 新回合起点:顺手清掉上一轮残留的完成确认(确认只在本回合内有效)。
+    await db
+      .update(tasks)
+      .set({ followUpFrom, completeConfirmedAt: null, updatedAt: now() })
+      .where(eq(tasks.id, taskId));
+
     const ex = await resolveExecutorFor({
-      executorId: opts.agent ? null : task.executorId,
+      executorId: summoned ? opts.executorId ?? null : task.executorId,
       type: agent,
-      model: task.model,
-      reasoningEffort: task.reasoningEffort,
+      model: summoned ? opts.model ?? null : task.model,
+      reasoningEffort: summoned ? opts.reasoningEffort ?? null : task.reasoningEffort,
     });
     const project = (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0);
 
@@ -498,21 +438,6 @@ export async function continueTask(
       .sort((a, b) => b.startedAt.localeCompare(a.startedAt));
     const prev = all.find((s) => s.agentType === agent); // this agent's own session, if any
     const resuming = !!prev?.cliSessionId;
-    // 续聊(follow-up):任务已经到终态了,用户又发来一条消息 —— 这一轮是「任务
-    // 之后的对话」,不是任务的执行。把续聊前的终态记下来:队列一律按它看待这个
-    // 成员(既不算「有人在跑」冻住整条线,也不会被当成可启动项拉起来),结算时
-    // 再回到它(见 settleTaskStatus 的续聊分支)。
-    // 只认真人消息:后端发起的续跑(retry / 手点运行 / 队列推进 / 上游唤醒)带
-    // opts.system,那是真的在执行这个任务,照旧占住队列位置。
-    // 先落库再解析工作目录:后者可能抛错(worktree 建不出来),catch 那边要靠这个
-    // 字段把任务放回原来的终态,而不是把一个 done 打成 failed。
-    const followUpFrom =
-      !opts.system && ["done", "failed", "canceled"].includes(task.status) ? task.status : null;
-    // 新回合起点:顺手清掉上一轮残留的完成确认(确认只在本回合内有效)。
-    await db
-      .update(tasks)
-      .set({ followUpFrom, completeConfirmedAt: null, updatedAt: now() })
-      .where(eq(tasks.id, taskId));
 
     // Where the work lives: the agent's own cwd, else any session's cwd (so the
     // invitee sees prior output), else materialize the task workdir.
@@ -524,42 +449,70 @@ export async function continueTask(
     // the branch is gone too.
     let cwd = recorded;
     let workspaceReset = false;
+    let freshWorkspace = false;
     if (!existsSync(cwd)) {
       if (project) {
         const ws = await taskWorkspace(task, project.repoPath);
         cwd = ws.path;
+        freshWorkspace = !!ws.fresh;
         // Only a resumed session carries stale memory worth correcting; a fresh
         // session starts empty-handed and needs no warning.
-        workspaceReset = !!ws.fresh && resuming;
+        workspaceReset = freshWorkspace && resuming;
       } else if (!cwd) {
         cwd = ".";
       }
     }
 
     await setStatus(taskId, "running");
+    // 起跑前给工作目录拍一张照，结算时再拍一张比对：这一轮真改了东西，就把上一版的
+    // 验证/验收记录清掉重走一遍（详见 turn-baseline.ts）。只给真人消息拍 —— 系统续跑、
+    // 队列推进、验证打回后叫 agent 修，那些轮次改代码是本分，清账反而打断正在跑的流程。
+    if (!opts.system && !sideTurn) await recordTurnBaseline(taskId, cwd, freshWorkspace, reopenedStage);
 
     const invited = !prev; // first time this agent is pulled into the task
     const userTurnText = userText + attachmentsPrompt(opts.attachments);
     const sharedTeamWorker = !task.useWorktree && (await workerPreambleFor(task)).length > 0;
+    // 验证回合（旧的独立审查任务，或这个任务自己身上的就地验证轮）：完成协议的
+    // 验收那一句要换掉 —— 这一轮的产出是结论和证据，不是「这个任务可以合并了」。
     const reviewTask = !!task.reviewOf;
-    const reviewReminder = reviewTask ? reviewReminderFor(task) : "";
+    const verifying = reviewTask || !!task.verifyRound;
+    // 每回合都重贴一遍「你现在在干什么」：验证轮可能中途提问、被打断再续跑，
+    // 那些回合都不带最初那段协议，只有从任务状态派生的提醒能跟到底。
+    const reviewReminder = reviewTask
+      ? reviewReminderFor(task)
+      : task.verifyRound
+        ? verifyReminderFor(task.id, task.verifyRound)
+        : "";
+    // 「本任务里还有别人」的告知。触发条件是**有新面孔**（上一轮跑完之后才进来的
+    // 同伴），不是 invited —— 挂在 invited 上恰好漏掉最需要它的那个：任务的原生
+    // agent 第一轮走 runTask 直接起跑、从没被「召唤」过，于是后来 @ 进来的同伴它
+    // 一次都不会知道（正是 2026-08-04 那个「claude 自己考古 codex 会话」的现场）。
+    // prev 必须是**更新 session 行之前**的快照：锚点取的 endedAt 会在 resume 时被清空。
+    const peerNotice = peerNoticeFor({ taskId, self: agent, all, prev });
     const prompt =
       (invited ? COLLAB_INVITE : "") +
+      (invited && task.body.trim() ? TASK_BRIEF(task.body) : "") +
+      peerNotice +
       userTurnText +
       (workspaceReset ? WORKSPACE_RESET(cwd) : "") +
       (followUpFrom
-        ? FOLLOW_UP_REMINDER(taskId, followUpFrom, sharedTeamWorker, reviewTask)
-        : COMPLETION_REMINDER(taskId, sharedTeamWorker, reviewTask)) +
+        ? FOLLOW_UP_REMINDER(taskId, followUpFrom, sharedTeamWorker, verifying)
+        : COMPLETION_REMINDER(taskId, sharedTeamWorker, verifying)) +
       (reviewReminder ? `\n${reviewReminder}` : "");
     const turnStart = now();
     const sessId = resuming ? prev!.id : id();
     const runDir = join(RUNS_DIR, taskId);
     mkdirSync(runDir, { recursive: true });
+    // 续聊/重试/队列推进/唤醒这一路也要解绑 —— 漏掉它等于只保护「全新起跑」的
+    // 回合，而任务被 resume 的次数远多于第一次起跑（实测:重启时在跑的任务里
+    // 一半是 resume 回合，全都还挂在匿名管道上）。
+    const detach = detachedPathsFor(runDir, sessId, turnStart);
     handle = ex.run({
       prompt,
       cwd,
       sessionId: resuming ? prev!.cliSessionId! : undefined,
       trace: runTracePaths(runDir, sessId, turnStart),
+      detach,
     });
     trackRun(taskId, handle);
 
@@ -579,6 +532,14 @@ export async function continueTask(
           commandLine: handle.commandLine,
           executor: ex.label,
           relayEnv: ex.relayEnvHint ?? null,
+          // 这一轮的解绑线索。**必须整组刷新**:沿用上一轮的 pid/offset 会让重启
+          // 去接一个早就没了的进程,或者从上一轮的字节位置读这一轮的新文件。
+          agentPid: handle.detached?.pid ?? null,
+          agentStartedAt: handle.detached ? inspectProcess(handle.detached.pid)?.startedAt ?? null : null,
+          agentOutPath: handle.detached ? detach.out : null,
+          agentErrPath: handle.detached ? detach.err : null,
+          agentRcPath: handle.detached ? detach.rc : null,
+          agentOffset: 0,
         })
         .where(eq(sessions.id, sessId));
     } else {
@@ -601,6 +562,12 @@ export async function continueTask(
         turnStartedAt: turnStart,
         activeMs: 0,
         exitStatus: null,
+        agentPid: handle.detached?.pid ?? null,
+        agentStartedAt: handle.detached ? inspectProcess(handle.detached.pid)?.startedAt ?? null : null,
+        agentOutPath: handle.detached ? detach.out : null,
+        agentErrPath: handle.detached ? detach.err : null,
+        agentRcPath: handle.detached ? detach.rc : null,
+        agentOffset: 0,
       });
     }
 
@@ -608,52 +575,27 @@ export async function continueTask(
     if (opts.system) {
       // Backend-initiated 继续: a 〔系统〕 trace (its own bubble), NOT a 你→ reply.
       // Persist as a structured turn (reload) and emit a matching system event (live).
-      writeTurn(out, { t: "system", agent, text: SYS_MARKER });
+      writeTurn(out, { t: "system", agent, text: SYS_MARKER }, turnStart);
       bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: "single", agentType: agent, event: { kind: "system", text: SYS_MARKER } });
     } else {
       // 你→@agent reply, persisted as a structured turn so a reloaded thread shows
       // the human turn as its own bubble (live, the client already shows it).
-      writeTurn(out, { t: "user", agent, text: userTurnText });
+      writeTurn(out, { t: "user", agent, text: userTurnText, ...(opts.byBackend ? { by: "system" as const } : {}) }, turnStart);
     }
     if (workspaceReset) {
       // 让用户也看见:agent 这一轮是在一个空目录上重新开始的。只发 toast 不算数,
       // 刷新后仍要能看出来(见 AGENTS.md 关于持久可见状态的约定)。
-      writeTurn(out, { t: "system", agent, text: WORKSPACE_RESET_MARKER });
+      writeTurn(out, { t: "system", agent, text: WORKSPACE_RESET_MARKER }, turnStart);
       bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: "single", agentType: agent, event: { kind: "system", text: WORKSPACE_RESET_MARKER } });
     }
 
-    let exitStatus = 0;
-    for await (const event of handle.events) {
-      if (event.kind === "session") {
-        if (event.cliSessionId !== cliSessionId) {
-          cliSessionId = event.cliSessionId;
-          await db
-            .update(sessions)
-            .set({ cliSessionId, resumeCommand: ex.resumeCommand(cwd, cliSessionId) })
-            .where(eq(sessions.id, sessId));
-        }
-        bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: "single", agentType: agent, event });
-        continue;
-      }
-      if (event.kind === "text" || event.kind === "thinking") out.write(event.text);
-      else if (event.kind === "error") writeRunError(out, event.message);
-      if (event.kind === "done") exitStatus = event.exitStatus;
-      bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: "single", agentType: agent, event });
-    }
-    const stopped = takeStopped(taskId);
-    const endIso = now();
-    await db
-      .update(sessions)
-      .set({ exitStatus, endedAt: endIso, activeMs: sql`COALESCE(${sessions.activeMs}, 0) + ${Math.max(0, Date.parse(endIso) - Date.parse(turnStart))}` })
-      .where(eq(sessions.id, sessId));
-    const settled = await settleTaskStatus(taskId, exitStatus, stopped);
-    await afterSettlement(taskId, settled.status, settled.confirmedDone);
-    if (settled.note) {
-      out.write(`\n> ${settled.note}\n`);
-      bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: "single", agentType: agent, event: { kind: "error", message: settled.note } });
-    }
-    writeTurnEnd(out, endIso); // fence this turn's real end before closing the .md
-    out.end();
+    // 跟 fresh run 共用同一份消费+结算(autoTitle=false:标题在第一轮就定了)。
+    // 原来这里是一份几乎一样的内联拷贝,两份会漂 —— 而且那份没有 offset 持久化,
+    // 于是 resume 回合被重启接管时会从字节 0 重放整轮输出。
+    await consumeSingleRun({
+      taskId, sessId, agentType: agent, ex, cwd,
+      handle, out, turnStart, cliSessionId, autoTitle: false,
+    });
   } catch (err) {
     bus.publish({
       type: "agent.event", taskId, sessionId: "", role: "single", agentType,
@@ -662,13 +604,13 @@ export async function continueTask(
     // 续聊回合里出的岔子(典型:worktree 建不出来)不该把任务状态打差 —— 同
     // settleTaskStatus 的约定:续聊只能让任务变好,不能让它变坏。
     const row = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
-    const back = row?.followUpFrom as "done" | "failed" | "canceled" | null | undefined;
+    const back = row?.followUpFrom as TaskStatus | null | undefined;
     if (back) await db.update(tasks).set({ followUpFrom: null, updatedAt: now() }).where(eq(tasks.id, taskId));
     const status = takeStopped(taskId) ?? back ?? "failed";
     await setStatus(taskId, status);
-    await afterSettlement(taskId, status, false);
+    await afterSettlement(taskId, status, false, false);
   } finally {
     if (handle) untrackRun(taskId, handle);
-    running.delete(taskId);
+    releaseTurn(taskId);
   }
 }

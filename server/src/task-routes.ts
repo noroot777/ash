@@ -1,18 +1,24 @@
 import type { AgentType, BatchCreateTasksBody, BatchTaskInput, Group, Task, TaskStatus, TaskWorkspaceDiscardResult } from "@harness/shared";
 import { AGENT_TYPES, isUserSettableStatus } from "@harness/shared";
+import { isReasoningEffortSupported, normalizeReasoningEffort, reasoningEffortsFor } from "@harness/shared/cli-presets";
 import { inheritExecutorOverrides, pickExecutor, sameExecutor } from "@harness/shared/executors";
+import { normalizeWorkflowDef } from "@harness/shared/workflow";
 import { asc, eq } from "drizzle-orm";
 import type { Hono } from "hono";
 import { db } from "./db/index.js";
-import { agents, groups, projects, queueItems, tasks } from "./db/schema.js";
+import { agents, groups, noteTasks, projects, queueItems, tasks } from "./db/schema.js";
 import { repoKey } from "./git.js";
 import { detectTaskWorkspace, discardTaskWorkspace } from "./workspace-cleanup.js";
+import { followUpsFor } from "./task-follow-up.js";
 import { advanceQueue, pauseGroup, runGroup } from "./scheduler.js";
 import { setTaskStatus } from "./status.js";
 import { createTasks, enrichTasks, publishTaskUpdated } from "./task-store.js";
 import { attachmentsPrompt, id, now } from "./util.js";
 
 export function mountTaskRoutes(api: Hono): void {
+  // 一次最多问这么多任务的追问 —— 每个都要摸一次盘，别让一个手抖的请求
+  // 把整个进程钉在 I/O 上。侧边栏一屏也放不下这么多行。
+  const MAX_FOLLOW_UP_TASKS = 200;
   const agentTypeForExecutor = async (executorId?: string | null): Promise<AgentType | null> => {
     if (!executorId) return null;
     const row = (await db.select({ type: agents.type }).from(agents).where(eq(agents.id, executorId))).at(0);
@@ -25,6 +31,14 @@ export function mountTaskRoutes(api: Hono): void {
 api.get("/tasks", async (c) => {
   const rows = await db.select().from(tasks);
   return c.json(await enrichTasks(rows));
+});
+
+// 侧边栏铺开时才拉：一批任务各自「我发的最后一条追问」（读的是会话 .md，不是库）。
+// 用 POST 是因为要一次带上几十个 id，塞进 query 会顶到 URL 长度上限。
+api.post("/tasks/follow-ups", async (c) => {
+  const body = await c.req.json<{ taskIds?: unknown }>().catch(() => ({ taskIds: [] }));
+  const ids = Array.isArray(body.taskIds) ? body.taskIds.filter((id): id is string => typeof id === "string") : [];
+  return c.json(await followUpsFor(ids.slice(0, MAX_FOLLOW_UP_TASKS)));
 });
 
 api.get("/tasks/:id", async (c) => {
@@ -40,7 +54,16 @@ api.post("/tasks", async (c) => {
     title: string;
     attachments?: string[];
     appendToQueue?: string; // 可选:把新任务追加到指定 queue 的尾部
+    workflowId?: string | null; // 挑哪条起手式;省略则按项目→全局默认解析
   }>();
+  // 新建面板允许**就地改这条线**（挑一个起手式再动两下），改完的那份直接随任务提交，
+  // 不用先在库里存一条。收下来的仍然只是一份快照,跟 workflowId 那条路殊途同归。
+  let inlineWorkflow: string | null = null;
+  if (b.workflow !== undefined && b.workflow !== null) {
+    const parsed = normalizeWorkflowDef(b.workflow);
+    if ("error" in parsed) return c.json({ error: `workflow 不合法:${parsed.error}` }, 400);
+    inlineWorkflow = JSON.stringify(parsed.def);
+  }
   const derivationMode = b.mode === "team" || b.mode === "debate";
   if (derivationMode && b.parentId !== undefined && b.parentId !== null) {
     return c.json(
@@ -136,6 +159,10 @@ api.post("/tasks", async (c) => {
     useWorktree: b.useWorktree,
     worktreeBase: b.worktreeBase ?? null,
     originTaskId: b.originTaskId ?? null,
+    // createTasks 把它换成 tasks.workflow 里的快照（起手式是快照不是引用）。
+    // 就地改过的线已经是快照了,直接落 workflow,createTasks 不会再去库里查。
+    workflowId: b.workflowId ?? null,
+    workflow: inlineWorkflow,
   };
   // 可选:追加到现有 queue 的尾部。要求:queue 已存在,且新 task 跟
   // queue 已有任务的 groupId 一致(违反就 400,不静默)。
@@ -248,8 +275,24 @@ api.patch("/tasks/:id", async (c) => {
     defaultReasoningEffort: existing.reasoningEffort,
   });
   const executorChanged = !sameExecutor(beforeExecutor, afterExecutor);
+  const finalType = afterExecutor.agentType;
+  const normalizedEffort = finalType
+    ? normalizeReasoningEffort(finalType, patchedOverrides.model, patchedOverrides.reasoningEffort)
+    : patchedOverrides.reasoningEffort;
+  if (
+    finalType
+    && b.reasoningEffort !== undefined
+    && b.reasoningEffort
+    && !isReasoningEffortSupported(finalType, patchedOverrides.model, b.reasoningEffort)
+  ) {
+    const allowed = reasoningEffortsFor(finalType, patchedOverrides.model);
+    return c.json({
+      error: `${finalType} 模型 ${patchedOverrides.model ?? "（跟随执行器）"} 不支持思考强度 ${b.reasoningEffort}`,
+      allowedReasoningEfforts: allowed,
+    }, 400);
+  }
   if (b.model !== undefined || executorChanged) patch.model = patchedOverrides.model;
-  if (b.reasoningEffort !== undefined || executorChanged) patch.reasoningEffort = patchedOverrides.reasoningEffort;
+  if (b.reasoningEffort !== undefined || b.model !== undefined || executorChanged) patch.reasoningEffort = normalizedEffort;
   if (b.mode !== undefined) patch.mode = b.mode;
   if (b.debate !== undefined) patch.debate = b.debate ? JSON.stringify(b.debate) : null;
   // 注意:dependsOn / resumeDependsOn 不再可编辑(DESIGN-scheduling.md):
@@ -296,6 +339,7 @@ api.delete("/tasks/:id", async (c) => {
     : undefined;
   const wantWorktree = c.req.query("worktree") === "1";
   const wantBranch = c.req.query("branch") === "1";
+  await db.delete(noteTasks).where(eq(noteTasks.taskId, tid));
   await db.delete(tasks).where(eq(tasks.id, tid));
   let cleanup: TaskWorkspaceDiscardResult | null = null;
   if (project && (wantWorktree || wantBranch)) {
@@ -483,6 +527,7 @@ api.post("/groups/:groupId/tasks/batch", async (c) => {
       useWorktree: s.useWorktree !== undefined ? s.useWorktree : b.defaults?.useWorktree,
       worktreeBase:
         s.worktreeBase !== undefined ? s.worktreeBase : b.defaults?.worktreeBase ?? null,
+      workflowId: s.workflowId !== undefined ? s.workflowId : b.defaults?.workflowId ?? null,
     };
   });
 

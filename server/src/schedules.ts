@@ -1,9 +1,9 @@
 import { eq } from "drizzle-orm";
-import type { AgentType } from "@harness/shared";
 import { db } from "./db/index.js";
-import { schedules, scheduledMessages, tasks, groups } from "./db/schema.js";
-import { runTask, continueTask } from "./orchestrator.js";
+import { schedules, tasks, groups } from "./db/schema.js";
+import { runTask } from "./orchestrator.js";
 import { runDebate } from "./debate/index.js";
+import { deliverPendingMessages } from "./pending-messages.js";
 
 // ── Minimal 5-field cron matcher (minute hour dom month dow), local time ──────
 // Supports *, n, a-b, */n, and comma lists. No seconds, no names.
@@ -73,7 +73,7 @@ async function fire(taskId: string) {
   else void runTask(taskId); // 全新一轮(新 session),不接续上次会话
 }
 
-async function tick() {
+export async function tick() {
   const now = new Date();
   const rows = await db.select().from(schedules).where(eq(schedules.enabled, true));
   for (const s of rows) {
@@ -94,31 +94,11 @@ async function tick() {
     }
   }
 
-  // ── Due scheduled messages (定时发消息；独立于 schedules 表) ─────────────────
-  // The once/cron loop above re-RUNS a task FRESH (new session); these DELIVER a
-  // queued reply via continueTask (resume the existing session). Fire only when the task is idle — continueTask silently drops a
-  // reply to a busy task — and mark sent before firing so an overlapping tick
-  // won't re-pick it (continueTask's own running.has single-flight is the final guard).
-  const due = (await db.select().from(scheduledMessages).where(eq(scheduledMessages.status, "pending")))
-    .filter((m) => new Date(m.sendAt) <= now);
-  const firedTasks = new Set<string>(); // at most one delivery per task per tick
-  for (const m of due) {
-    try {
-      if (firedTasks.has(m.taskId)) continue;
-      const t = (await db.select().from(tasks).where(eq(tasks.id, m.taskId))).at(0);
-      if (!t || t.archived || t.mode !== "single") {
-        // Can never be delivered → void it instead of retrying forever.
-        await db.update(scheduledMessages).set({ status: "canceled" }).where(eq(scheduledMessages.id, m.id));
-        continue;
-      }
-      if (t.status === "running" || t.status === "queued") continue; // busy → retry next tick
-      firedTasks.add(m.taskId);
-      await db.update(scheduledMessages).set({ status: "sent", sentAt: now.toISOString() }).where(eq(scheduledMessages.id, m.id));
-      void continueTask(m.taskId, m.text, { attachments: JSON.parse(m.attachments), agent: (m.agent as AgentType) ?? undefined });
-    } catch {
-      /* keep ticking */
-    }
-  }
+  // ── 待发送消息(定时发送 + 排队追问)──────────────────────────────────────
+  // 上面的 once/cron 循环是把任务**重跑一遍**(新 session);这里是把一句话送进
+  // 任务原来那个会话(continueTask)。判定与投递单点在 pending-messages.ts ——
+  // 排队消息的正常触发源是任务落终态时的钩子,这里是定时消息的到期路径兼兜底。
+  await deliverPendingMessages();
 }
 
 // Catch-up on startup: missed one-shots (at < now, never fired) fire once via the

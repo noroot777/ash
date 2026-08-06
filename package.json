@@ -6,14 +6,15 @@
   "workspaces": [
     "shared",
     "server",
-    "web",
+    "web-next",
     "mcp"
   ],
   "scripts": {
-    "dev": "concurrently -n server,web -c blue,magenta \"npm:dev:server\" \"npm:dev:web\"",
+    "dev": "node scripts/dev.mjs",
+    "dev:all": "concurrently -n server,web -c blue,magenta \"npm:dev:server\" \"npm:dev:web\"",
     "dev:server": "PORT=4317 npm -w server run dev",
-    "dev:web": "npm -w web run dev",
-    "build": "npm -w shared run build && npm -w web run build && npm -w server run build && npm -w mcp run build",
+    "dev:web": "npm -w web-next run dev",
+    "build": "npm -w shared run build && npm -w web-next run build && npm -w server run build && npm -w mcp run build",
     "build:mobile": "cd mobile && npx expo export -p web",
     "restart": "bash scripts/restart.sh",
     "start": "npm -w server run start",

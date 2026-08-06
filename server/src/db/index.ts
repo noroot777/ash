@@ -23,8 +23,14 @@ export async function ensureSchema() {
     );
     CREATE TABLE IF NOT EXISTS notes (
       id TEXT PRIMARY KEY, project_id TEXT NOT NULL, body TEXT NOT NULL,
-      attachments TEXT, task_id TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+      attachments TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS note_tasks (
+      note_id TEXT NOT NULL, task_id TEXT NOT NULL, created_at INTEGER NOT NULL
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS note_tasks_note_task_idx
+      ON note_tasks (note_id, task_id);
+    CREATE INDEX IF NOT EXISTS note_tasks_task_idx ON note_tasks (task_id);
     CREATE TABLE IF NOT EXISTS groups (
       id TEXT PRIMARY KEY, project_id TEXT NOT NULL, name TEXT NOT NULL,
       mode TEXT NOT NULL DEFAULT 'parallel',
@@ -36,6 +42,8 @@ export async function ensureSchema() {
       status TEXT NOT NULL DEFAULT 'backlog', stage TEXT, pinned_at INTEGER,
       priority TEXT NOT NULL DEFAULT 'none',
       review_of TEXT, review_round INTEGER, review_requested INTEGER NOT NULL DEFAULT 0,
+      verify_round INTEGER, verify_rounds INTEGER NOT NULL DEFAULT 0,
+      verify_station_rounds INTEGER NOT NULL DEFAULT 0,
       labels TEXT NOT NULL DEFAULT '[]', depends_on TEXT NOT NULL DEFAULT '[]',
       resume_depends_on TEXT NOT NULL DEFAULT '[]',
       agent_type TEXT, executor_id TEXT, model TEXT, reasoning_effort TEXT,
@@ -67,13 +75,17 @@ export async function ensureSchema() {
     );
     CREATE TABLE IF NOT EXISTS scheduled_messages (
       id TEXT PRIMARY KEY, task_id TEXT NOT NULL, text TEXT NOT NULL DEFAULT '',
-      attachments TEXT NOT NULL DEFAULT '[]', agent TEXT, send_at TEXT NOT NULL,
+      attachments TEXT NOT NULL DEFAULT '[]', agent TEXT,
+      executor_id TEXT, model TEXT, mode TEXT NOT NULL DEFAULT 'timed', send_at TEXT NOT NULL,
       status TEXT NOT NULL DEFAULT 'pending', created_at TEXT NOT NULL, sent_at TEXT
     );
     CREATE TABLE IF NOT EXISTS llm_providers (
       id TEXT PRIMARY KEY, name TEXT NOT NULL,
       protocol TEXT NOT NULL DEFAULT 'openai', base_url TEXT NOT NULL,
       api_key TEXT NOT NULL DEFAULT '', model TEXT NOT NULL DEFAULT '',
+      protocol_conversion_enabled INTEGER NOT NULL DEFAULT 0,
+      model_list_mode TEXT NOT NULL DEFAULT 'api',
+      pinned_models TEXT NOT NULL DEFAULT '[]',
       created_at TEXT NOT NULL
     );
     CREATE TABLE IF NOT EXISTS queue_items (
@@ -84,6 +96,13 @@ export async function ensureSchema() {
     );
     CREATE UNIQUE INDEX IF NOT EXISTS queue_items_queue_pos_idx
       ON queue_items (queue_id, position);
+    CREATE TABLE IF NOT EXISTS workflows (
+      id TEXT PRIMARY KEY, builtin_key TEXT, name TEXT NOT NULL,
+      description TEXT NOT NULL DEFAULT '', def TEXT NOT NULL,
+      disabled INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS workflows_builtin_idx ON workflows (builtin_key);
   `);
   // Tolerant migration for DBs created before columns were added.
   try {
@@ -139,10 +158,45 @@ export async function ensureSchema() {
     "ALTER TABLE tasks ADD COLUMN stage TEXT",
     // 正交列表展示字段：null=未置顶，整数毫秒时间戳用于多个置顶任务排序
     "ALTER TABLE tasks ADD COLUMN pinned_at INTEGER",
+    // §工作流：项目默认起手式 + 任务创建时拷下的那条线（快照，不是引用）
+    "ALTER TABLE projects ADD COLUMN workflow_id TEXT",
+    "ALTER TABLE tasks ADD COLUMN workflow TEXT",
     // 独立审查任务与被审目标的关系；review_requested 只在团队 dispatch worker 上置位。
     "ALTER TABLE tasks ADD COLUMN review_of TEXT",
     "ALTER TABLE tasks ADD COLUMN review_round INTEGER",
     "ALTER TABLE tasks ADD COLUMN review_requested INTEGER NOT NULL DEFAULT 0",
+    // 就地验证轮：验证不再另起一个审查任务，而是在原任务上多跑一个旁路回合。
+    // review_of/review_round 保留，只为让历史那批独立审查任务仍能读出来。
+    "ALTER TABLE tasks ADD COLUMN verify_round INTEGER",
+    "ALTER TABLE tasks ADD COLUMN verify_rounds INTEGER NOT NULL DEFAULT 0",
+    // 就地验证轮没有独立任务行可数，所以「这一站验过几轮」得自己记：换一站就归零，
+    // 站号记在同一行的 review_step 上。
+    "ALTER TABLE tasks ADD COLUMN verify_station_rounds INTEGER NOT NULL DEFAULT 0",
+    // 一条线上可以写不止一站「自动验证」/「等我点头」：游标记住此刻停在哪一站，
+    // 审查任务记住自己验的是哪一站（轮数上限按站分开数）。
+    "ALTER TABLE tasks ADD COLUMN workflow_at TEXT",
+    "ALTER TABLE tasks ADD COLUMN review_step TEXT",
+    // 解绑重启（executors/detached.ts）：agent 输出走文件而不是匿名管道，于是它
+    // 活得过 server 重启。这几列是重启后「找回并接管」所需的全部线索——pid 认
+    // 进程、started_at 防 pid 复用、out_path 是原始输出、offset 是已消费到哪个
+    // 字节（永远落在换行边界），从那里接着读就不丢不重。
+    "ALTER TABLE sessions ADD COLUMN agent_pid INTEGER",
+    "ALTER TABLE sessions ADD COLUMN agent_started_at TEXT",
+    "ALTER TABLE sessions ADD COLUMN agent_out_path TEXT",
+    "ALTER TABLE sessions ADD COLUMN agent_err_path TEXT",
+    "ALTER TABLE sessions ADD COLUMN agent_rc_path TEXT",
+    "ALTER TABLE sessions ADD COLUMN agent_offset INTEGER",
+    // OpenAI 兼容供应商：把 Codex 的 Responses API 适配到仅有 Chat Completions 的上游。
+    "ALTER TABLE llm_providers ADD COLUMN protocol_conversion_enabled INTEGER NOT NULL DEFAULT 0",
+    // 选模型面板的候选来源：api=每次现调 /models；pinned=只用固定下来的这几个。
+    "ALTER TABLE llm_providers ADD COLUMN model_list_mode TEXT NOT NULL DEFAULT 'api'",
+    "ALTER TABLE llm_providers ADD COLUMN pinned_models TEXT NOT NULL DEFAULT '[]'",
+    // 定时发送的 @指派：连执行器、模型、思考强度一起记住，到点还是跑用户当时选的那一套。
+    "ALTER TABLE scheduled_messages ADD COLUMN executor_id TEXT",
+    "ALTER TABLE scheduled_messages ADD COLUMN model TEXT",
+    "ALTER TABLE scheduled_messages ADD COLUMN reasoning_effort TEXT",
+    // 排队追问：运行中发出的消息不看时间，任务一空闲就投递（timed 是老的定时发送）。
+    "ALTER TABLE scheduled_messages ADD COLUMN mode TEXT NOT NULL DEFAULT 'timed'",
   ]) {
     try {
       await client.execute(sql);
@@ -150,8 +204,22 @@ export async function ensureSchema() {
       /* column already exists */
     }
   }
+  await migrateLegacyNoteTaskLinks();
   await dropRetiredColumns();
   await dropRetiredTables();
+}
+
+// notes.task_id 曾经只能记住最后一次转换。先把老值搬进多对多关联表，再由下面的
+// retired-column 清理删掉旧列；顺序不能反，否则用户现存的回链会丢。
+async function migrateLegacyNoteTaskLinks(): Promise<void> {
+  const info = await client.execute("PRAGMA table_info(notes)");
+  if (!info.rows.some((r) => r.name === "task_id")) return;
+  await client.execute(`
+    INSERT OR IGNORE INTO note_tasks (note_id, task_id, created_at)
+    SELECT id, task_id, updated_at
+    FROM notes
+    WHERE task_id IS NOT NULL AND TRIM(task_id) <> ''
+  `);
 }
 
 // 退役列:功能改掉后没人再读、但老库里还留着的列。放这里一次性清掉,而不是让
@@ -161,6 +229,8 @@ export async function ensureSchema() {
 // 新建库压根不会有这些列(上面的 CREATE TABLE 里没有),所以只对老库生效。
 // 加一条的前提:全仓 grep 确认没有任何读写,且列里的值已无恢复价值。
 const RETIRED_COLUMNS: { table: string; column: string; why: string }[] = [
+  // 随手记现在通过 note_tasks 保留每一次转任务记录；迁移函数已先回填老值
+  { table: "notes", column: "task_id", why: "随手记改为多任务历史关联" },
   // worktree 从「按分组配」改成「按任务 opt-in」(tasks.use_worktree)后废弃
   { table: "groups", column: "use_worktree", why: "worktree 改为按任务 opt-in" },
   // 「编排组/协调者」被 /team 团队模式取代(groups.owner_task_id + tasks.parent_id)

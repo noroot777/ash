@@ -184,6 +184,15 @@ export class RunTraceRecorder {
     }
   }
 
+  /**
+   * 只收尾文件、不做 codex 那套分类。给不适用 classifyCodexExit 的执行器用
+   * (GenericCliExecutor 的 textParser:它没有 turn.completed 这类事件,硬套
+   * 分类会得到「Codex 未收到 turn.completed」这种张冠李戴的诊断)。
+   */
+  close(): void {
+    this.closeFiles();
+  }
+
   private closeFiles(): void {
     for (const fd of [this.eventsFd, this.stderrFd]) {
       if (fd === null) continue;

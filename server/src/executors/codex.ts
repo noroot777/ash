@@ -1,8 +1,12 @@
+import type { ChildProcess } from "node:child_process";
 import { createInterface } from "node:readline";
 import type { AgentEvent, ExecTarget } from "@harness/shared";
-import type { AgentExecutor, RelayConfig, RunHandle, RunOpts } from "./types.js";
+import type { AgentExecutor, RelayConfig, ResidentHandle, RunHandle, RunOpts } from "./types.js";
+import { openCodexResident } from "./codex-resident.js";
+import { spawnForRun, detachedInfo } from "./detached.js";
 import { spawnAgent, resumeFor, resumeInner, spawnErrorMessage, killChild, forceFinishOnExit, redactSecrets } from "./spawn.js";
 import { relayApi } from "../llm.js";
+import { protocolConverterBaseUrl } from "../openai-converter/common.js";
 import { formatFailureForTimeline, RunTraceRecorder, type RunTracePaths } from "./diagnostics.js";
 
 // 供应商的 key 走环境变量,不进命令行 —— `-c` 参数会原样进 commandLine,而后者存进
@@ -52,12 +56,16 @@ export class CodexExecutor implements AgentExecutor {
   private relayArgs(): string[] {
     if (!this.relay) return [];
     const p = `model_providers.${RELAY_PROVIDER_ID}`;
+    const baseUrl = this.relay.protocolConversionEnabled
+      ? relayApi(protocolConverterBaseUrl(this.relay.providerId))
+      : relayApi(this.relay.baseUrl);
     return [
       "-c", `model_provider="${RELAY_PROVIDER_ID}"`,
       "-c", `${p}.name="${this.relay.name.replace(/"/g, "")}"`,
-      "-c", `${p}.base_url="${relayApi(this.relay.baseUrl)}"`,
+      "-c", `${p}.base_url="${baseUrl}"`,
       // codex 0.14x 起废弃了 wire_api="chat"(启动直接报错退出),只认 Responses API。
-      // 所以给 codex 用的供应商必须支持 /v1/responses,光有 /v1/chat/completions 不行。
+      // 供应商只有 /chat/completions 时，protocolConversionEnabled 会把 base_url 指到
+      // harness 内置转换端点，再由它转换请求、流式事件与最终响应。
       "-c", `${p}.wire_api="responses"`,
       "-c", `${p}.env_key="${RELAY_ENV_KEY}"`,
     ];
@@ -67,7 +75,11 @@ export class CodexExecutor implements AgentExecutor {
     return this.relay ? { [RELAY_ENV_KEY]: this.relay.apiKey } : undefined;
   }
 
-  run(opts: RunOpts): RunHandle {
+  // 一次性 run 与常驻回合共用的参数装配。`-C`/`--json`/`-m`/sandbox 是
+  // `codex exec` 的选项;`resume` 是子命令,只吃自己的 flag + [SESSION_ID]
+  // [PROMPT] —— 所以 exec 选项必须排在 `resume` **前面**(否则 "unexpected
+  // argument '-C'")。
+  private execArgs(opts: { cwd: string; model?: string; extraArgs?: string[] }, sessionId: string): string[] {
     const model = opts.model ?? this.model;
     const common = ["--json", "--skip-git-repo-check", "-C", opts.cwd, "--dangerously-bypass-approvals-and-sandbox"];
     if (model) common.push("-m", model);
@@ -79,15 +91,13 @@ export class CodexExecutor implements AgentExecutor {
     // 注册表配置的固定参数在前,单次调用的 opts.extraArgs 在后(后者可覆盖前者)。
     if (this.extraArgs.length) common.push(...this.extraArgs);
     if (opts.extraArgs?.length) common.push(...opts.extraArgs);
-    // `-C`/`--json`/`-m`/sandbox are `codex exec` options; `resume` is a
-    // subcommand that takes only its own flags + [SESSION_ID] [PROMPT]. So the
-    // exec options must precede `resume`, not follow it (else: "unexpected argument '-C'").
-    const args = opts.sessionId
-      ? ["exec", ...common, "resume", opts.sessionId, "-"]
-      : ["exec", ...common, "-"];
+    return sessionId ? ["exec", ...common, "resume", sessionId, "-"] : ["exec", ...common, "-"];
+  }
 
+  run(opts: RunOpts): RunHandle {
+    const args = this.execArgs(opts, opts.sessionId ?? "");
     const commandLine = redactSecrets(`${this.bin} ${args.join(" ")} <prompt via stdin>`);
-    const child = spawnAgent(this.target, opts.cwd, this.bin, args, opts.prompt, this.env());
+    const child = spawnForRun(this.target, opts.cwd, this.bin, args, opts.prompt, this.env(), opts.detach);
     const lifecycle = { stopRequested: false };
     return {
       sessionId: opts.sessionId ?? "",
@@ -97,7 +107,48 @@ export class CodexExecutor implements AgentExecutor {
         lifecycle.stopRequested = true;
         killChild(child);
       },
+      detached: detachedInfo(child),
     };
+  }
+
+  attach(child: ChildProcess, opts: { sessionId: string; commandLine: string }): RunHandle {
+    const lifecycle = { stopRequested: false };
+    return {
+      sessionId: opts.sessionId,
+      commandLine: opts.commandLine,
+      // 接管的是上一轮留下的进程，trace 那份诊断在它自己那一轮已经写过了。
+      events: parseCodexStream(child, undefined, lifecycle),
+      kill: () => {
+        lifecycle.stopRequested = true;
+        child.kill();
+      },
+      detached: detachedInfo(child),
+    };
+  }
+
+  // 常驻会话(§Team 的调度台)。codex 没有 claude 那种 stdin 注入通道,所以这里
+  // 是**会话级常驻**:每个回合起一个 `codex exec resume <thread_id>` 进程,会话
+  // 在 codex 自己的 thread 里连着。取舍、实测结论与两处可见差异写在
+  // executors/codex-resident.ts 头部。
+  openResident(opts: RunOpts): ResidentHandle {
+    return openCodexResident({
+      initialSessionId: opts.sessionId ?? "",
+      initialPrompt: opts.prompt,
+      startTurn: (prompt, sessionId) => {
+        const args = this.execArgs(opts, sessionId);
+        const lifecycle = { stopRequested: false };
+        // 常驻的每一轮都是**新进程**,所以 stdin 照旧读完即关(keepStdin 是
+        // claude 那种「一个进程吃多个回合」才需要的)。
+        const child = spawnAgent(this.target, opts.cwd, this.bin, args, prompt, this.env());
+        return {
+          child,
+          commandLine: redactSecrets(`${this.bin} ${args.join(" ")} <prompt via stdin>`),
+          lifecycle,
+          events: parseCodexStream(child, undefined, lifecycle),
+        };
+      },
+      killTurn: (child) => killChild(child),
+    });
   }
 }
 

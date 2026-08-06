@@ -1,29 +1,53 @@
 import { eq, or } from "drizzle-orm";
 import type { Hono } from "hono";
+import { acceptPlan, anchorAt, hasAcceptStation, isFinalHumanGate, nextAnchor, segmentAfter } from "@harness/shared/workflow-policy";
+import type { AcceptBy } from "@harness/shared/workflow-policy";
+import { ACCEPT_CLEAN_LABELS, ACCEPT_STRATEGY_LABELS, STEP_LABELS } from "@harness/shared/workflow";
 import { db } from "./db/index.js";
 import { projects, tasks } from "./db/schema.js";
 import { handOffConflict, type ConflictHandoff } from "./accept-conflict.js";
-import { cleanupAcceptedTask, mergeTaskBranch, resolveTaskMergeTarget } from "./git.js";
+import { resolveTaskMergeTarget } from "./git.js";
+import { cleanupAcceptedTask, cleanupPlanFor, mergeTaskBranch } from "./git-accept.js";
+import { taskWorkflowDef } from "./workflows.js";
 import { taskBranchDiff } from "./git-diff.js";
 import { publishTaskUpdated } from "./task-store.js";
+import { stopPreviewAtAccept } from "./preview.js";
 import { withRepoLock } from "./repo-lock.js";
-import { setTaskStage } from "./task-stage.js";
+import { setTaskStage, clearTaskStage } from "./task-stage.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 
 type AcceptSuccess = {
   accepted: true;
   taskId: string;
   status: string;
-  stage: "accepted";
-  kind: "already_accepted" | "in_place" | "isolated_worktree";
+  /** 中途关口放行不是验收，stage 会被清回「进行中」，所以这里可能是 null */
+  stage: "accepted" | null;
+  kind: "already_accepted" | "in_place" | "isolated_worktree" | "marked_only" | "gate_released";
   sharedWorkersAccepted?: number;
   targetBranch?: string;
   merge?: string;
+  /** 「只打标签不合并」那一档打下的标签名 */
+  tag?: string;
   worktreePath?: string;
   worktreeRemoved?: boolean;
   branch?: string;
   branchDeleted?: boolean;
   warnings?: AcceptWarning[];
+  /**
+   * 「点头之后」那一段（发布脚本之类）跑得怎么样。线上没写这一段就没有这个字段。
+   *
+   * 它**不影响 accepted**：合并和清理已经真的做完了，改回 accepted:false 等于谎报另一头。
+   * 但也不能不说 —— 一个挂掉的发布脚本被吞成「验收成功」，用户下一次知道是在线上出事
+   * 的时候。所以合并的结论和尾段的结论分开报，各说各的。
+   */
+  tail?: AcceptTail;
+};
+
+type AcceptTail = {
+  ok: boolean;
+  /** 卡在哪一站（用中文站名，直接能显示） */
+  step?: string;
+  reason?: string;
 };
 
 type AcceptWarning = {
@@ -65,6 +89,8 @@ const mergeLabel: Record<string, string> = {
   already_merged: "任务分支此前已合并",
   fast_forward: "纯 fast-forward",
   merge_commit: "--no-ff 合并提交",
+  squash: "squash 合并（压成一个提交）",
+  tagged: "只打标签，未合并",
 };
 
 const acceptingTaskIds = new Set<string>();
@@ -99,6 +125,10 @@ async function finalizeAcceptance(
   message: string,
 ): Promise<SharedWorkerAcceptance | null> {
   await setTaskStage(task.id, "accepted");
+  // 人工关口到此结束，这条线也走到终点了：线上写着「下一个人工关口结束时回收」和
+  // 「任务结束时回收」的预览都在这儿收掉。「点头之后」那一段还没开跑，所以那一段
+  // 特意编排的预览不会被这一下误伤。
+  await stopPreviewAtAccept(task.id);
   const sharedWorkers = task.mode === "team" ? await acceptSharedTeamWorkers(task.id) : null;
   await appendTaskTimeline(
     task.id,
@@ -182,7 +212,7 @@ async function acceptWithoutCleanup(
   };
 }
 
-async function acceptTaskUnlocked(taskId: string): Promise<AcceptTaskResult> {
+async function acceptTaskUnlocked(taskId: string, by: AcceptBy): Promise<AcceptTaskResult> {
   const requestedTask = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!requestedTask) {
     return { accepted: false, httpStatus: 404, taskId, reason: "not_found", error: "not found", phase: "initial" };
@@ -222,6 +252,26 @@ async function acceptTaskUnlocked(taskId: string): Promise<AcceptTaskResult> {
     };
   }
 
+  // 停在一道**后面还有站要走**的「等我点头」上时，这一按的意思是「这一关我放行」，不是
+  // 「这份产物我认了，去合吧」—— 后面还画着别的站呢（最常见的就是关口画在「自动验证」
+  // 前面），顺手把不可逆的合并做掉，等于拿用户没表达过的意思替他做主，还把他亲手画的
+  // 那一站整站跳过。所以这一档不合、不清、也不落 accepted，只把阶段清回进行中，让这条
+  // 线接着往下走（往下走那一步在锁外跑，见 acceptTask）。
+  // 判定单点在 shared 的 isFinalHumanGate；前端确认框读同一个判定，措辞跟着变。
+  const gateDef = taskWorkflowDef(task.workflow);
+  if (!isFinalHumanGate(gateDef, task.workflowAt)) {
+    const guard = await acceptanceGuard(taskId, "before_accept");
+    if (guard.failure) return guard.failure;
+    const next = nextAnchor(gateDef, task.workflowAt);
+    const where = next ? `后面还写着「${STEP_LABELS[next.kind]}」` : "这条线上后面还写着别的站";
+    await clearTaskStage(
+      taskId,
+      `你在这一道「等我点头」放行了：${where}，所以没有合并、也没有清理，接着往下走。`,
+    );
+    await publishTaskUpdated(taskId);
+    return { accepted: true, taskId, status: task.status, stage: null, kind: "gate_released" };
+  }
+
   // A task that deliberately ran in the project's existing checkout has no
   // harness/<id> branch or harness-owned worktree to merge/delete.
   if (!task.useWorktree) {
@@ -247,16 +297,41 @@ async function acceptTaskUnlocked(taskId: string): Promise<AcceptTaskResult> {
     };
   }
 
+  // 「验收通过」这个动作 = 执行线上那一站「合并并清理」，所以怎么合、清到什么程度
+  // 都读它的参数。线上没有这一站时看谁按的：人按的照老规矩合（手按是最高指令），
+  // 线自己走到的才一动不动——判定单点在 shared 的 acceptPlan，那里写着为什么。
+  const def = taskWorkflowDef(task.workflow);
+  const plan = acceptPlan(def, by, task.workflowAt);
+  // 只有自动路径落得到这里（`runAccept` 仅在线上真有这一站时才跑，所以实际到不了；
+  // 留着是给以后新增的自动触发点兜底）。人按的那一下永远拿到老规矩。
+  if (!plan.merge) {
+    const guard = await acceptanceGuard(taskId, "before_accept");
+    if (guard.failure) return guard.failure;
+    return acceptWithoutCleanup(
+      task,
+      "marked_only",
+      `验收通过：这条线上没有「合并并清理」这一站，所以只记下「我认可这份产物」，` +
+        `没有动 git —— 任务分支和 worktree 都留着。要让这条线自己合，在编排里加上这一站即可。`,
+    );
+  }
+
+  // 线上没画这一站、却是人亲手点的 → 照老规矩合，但必须说清「这不是线上写的，是你按的」，
+  // 否则用户回头看时间线会以为编排里有一站他没印象加过。
+  const offScript = by === "human" && !hasAcceptStation(def);
   await appendTaskTimeline(
     taskId,
-    `开始验收：准备将任务分支合并到 ${task.worktreeBase?.trim() || "项目当前分支"}；冲突时只报告并回滚，不会强制合并。`,
+    (offScript
+      ? `开始验收：这条线上没画「合并并清理」，但你亲手点了验收通过 —— 手动验收按默认规矩`
+      : `开始验收：按线上写的`) +
+      `「${ACCEPT_STRATEGY_LABELS[plan.merge]}、${ACCEPT_CLEAN_LABELS[plan.clean]}」处理，` +
+      `目标 ${task.worktreeBase?.trim() || "项目当前分支"}；冲突时只报告并回滚，不会强制合并。`,
   );
   const mergeGuard = await acceptanceGuard(taskId, "before_merge");
   if (mergeGuard.failure) {
     await appendTaskTimeline(taskId, `验收暂缓：${mergeGuard.failure.error}`);
     return mergeGuard.failure;
   }
-  const merge = await mergeTaskBranch(project.repoPath, taskId, task.worktreeBase);
+  const merge = await mergeTaskBranch(project.repoPath, taskId, task.worktreeBase, plan.merge);
 
   // Retry after a previous partial success: stage=merged plus an already-removed
   // source branch means `git branch -d` did its job; finish the stage transition.
@@ -308,10 +383,13 @@ async function acceptTaskUnlocked(taskId: string): Promise<AcceptTaskResult> {
     };
   }
 
-  await setTaskStage(taskId, "merged");
+  const tagged = merge.method === "tagged";
+  if (!tagged) await setTaskStage(taskId, "merged");
   await appendTaskTimeline(
     taskId,
-    `合并完成：${merge.sourceBranch} → ${merge.targetBranch}（${mergeLabel[merge.method] ?? merge.method}）。`,
+    tagged
+      ? `已按线上写的「只打标签不合并」在 ${merge.sourceBranch} 上打下标签 ${merge.tag}；目标分支 ${merge.targetBranch} 一个字节都没动。`
+      : `合并完成：${merge.sourceBranch} → ${merge.targetBranch}（${mergeLabel[merge.method] ?? merge.method}）。`,
   );
   for (const warning of merge.warnings ?? []) {
     await appendTaskTimeline(taskId, `合并清理警告：${warning.message}`);
@@ -328,7 +406,20 @@ async function acceptTaskUnlocked(taskId: string): Promise<AcceptTaskResult> {
       warnings: merge.warnings,
     };
   }
-  const cleanup = await cleanupAcceptedTask(project.repoPath, taskId, merge.targetBranch);
+
+  // squash 和「只打标签」之后，任务分支在 git 眼里**并没有**被合并（squash 是新造一个
+  // 提交，标签压根没合），所以 `git branch -d` 一定会被拒。删分支这一项在这两档里直接
+  // 不做并说清楚原因——绝不改用 `-D`：自动流程强删分支是不可逆的，那是用户自己按的活。
+  const cleanPlan = cleanupPlanFor(plan.clean);
+  const branchUnmergeable = merge.method === "squash" || tagged;
+  const branchKeptReason = !cleanPlan.branch
+    ? `线上写的是「${ACCEPT_CLEAN_LABELS[plan.clean]}」`
+    : branchUnmergeable
+      ? `${tagged ? "只打了标签没合并" : "squash 之后 git 不认为它已合并"}，按约定不强删`
+      : null;
+  if (branchUnmergeable) cleanPlan.branch = false;
+
+  const cleanup = await cleanupAcceptedTask(project.repoPath, taskId, merge.targetBranch, cleanPlan);
   if (!cleanup.ok) {
     await appendTaskTimeline(
       taskId,
@@ -350,8 +441,17 @@ async function acceptTaskUnlocked(taskId: string): Promise<AcceptTaskResult> {
 
   await appendTaskTimeline(
     taskId,
-    `清理完成：${cleanup.worktreeRemoved ? `已删除 worktree ${cleanup.worktreePath}` : "任务 worktree 已不存在"}；` +
-      `${cleanup.branchDeleted ? `已用 git branch -d 删除 ${cleanup.sourceBranch}` : `分支 ${cleanup.sourceBranch} 已不存在`}。`,
+    `清理完成：${
+      !cleanPlan.worktree
+        ? `按线上写的保留了 worktree ${cleanup.worktreePath}`
+        : cleanup.worktreeRemoved ? `已删除 worktree ${cleanup.worktreePath}` : "任务 worktree 已不存在"
+    }；${
+      cleanup.branchDeleted
+        ? `已用 git branch -d 删除 ${cleanup.sourceBranch}`
+        : branchKeptReason
+          ? `分支 ${cleanup.sourceBranch} 保留（${branchKeptReason}）`
+          : `分支 ${cleanup.sourceBranch} 已不存在`
+    }。`,
   );
   const sharedWorkers = await finalizeAcceptance(
     task,
@@ -365,6 +465,7 @@ async function acceptTaskUnlocked(taskId: string): Promise<AcceptTaskResult> {
     kind: "isolated_worktree",
     targetBranch: merge.targetBranch,
     merge: merge.method,
+    ...(merge.tag ? { tag: merge.tag } : {}),
     worktreePath: cleanup.worktreePath,
     worktreeRemoved: cleanup.worktreeRemoved,
     branch: cleanup.sourceBranch,
@@ -387,7 +488,9 @@ async function acceptanceRepoPath(taskId: string): Promise<string | null> {
   return project?.repoPath ?? null;
 }
 
-export async function acceptTask(taskId: string): Promise<AcceptTaskResult> {
+// `by` 默认 human：这个函数的调用方绝大多数是「用户按了验收通过」（HTTP 路由、MCP
+// accept_task），只有 workflow-steps 里那条「线自己走到这一站」要显式传 "workflow"。
+export async function acceptTask(taskId: string, by: AcceptBy = "human"): Promise<AcceptTaskResult> {
   if (acceptingTaskIds.has(taskId)) {
     return {
       accepted: false,
@@ -398,9 +501,10 @@ export async function acceptTask(taskId: string): Promise<AcceptTaskResult> {
     };
   }
   acceptingTaskIds.add(taskId);
+  let result: AcceptTaskResult;
   try {
     const repoPath = await acceptanceRepoPath(taskId);
-    return await withRepoLock(repoPath, async (wait) => {
+    result = await withRepoLock(repoPath, async (wait) => {
       if (wait.queued) {
         // 排队是刷新后仍看得见的事实,不只是"点了没反应"。
         await appendTaskTimeline(
@@ -408,11 +512,82 @@ export async function acceptTask(taskId: string): Promise<AcceptTaskResult> {
           `验收排队：同一仓库有其它验收/worktree 操作正在执行，已等待 ${(wait.waitedMs / 1000).toFixed(1)}s 后开始本次验收。`,
         );
       }
-      return acceptTaskUnlocked(taskId);
+      return acceptTaskUnlocked(taskId, by);
     });
   } finally {
     acceptingTaskIds.delete(taskId);
   }
+  if (result.accepted) {
+    // 两条尾巴，都在仓库锁**之外**跑（这些命令可能好几分钟，占着锁会让同仓库的其它
+    // 验收干等）：中途关口放行 = 让这条线接着往下走；真正的验收 = 跑「点头之后」那一段。
+    if (result.kind === "gate_released") await releaseGate(taskId);
+    else {
+      const tail = await runAcceptedTail(taskId, by);
+      if (tail) result = { ...result, tail };
+    }
+  }
+  return result;
+}
+
+// 中途关口放行之后接着往下走：跑完这一段，再按下一个锚点是什么决定（又一站验证、
+// 下一道关口、还是这条线走到头）。**不传 skipAccept** —— 这一按没有做任何合并，
+// 线上真画了「合并并清理」就该由它自己走到那一站时执行。
+async function releaseGate(taskId: string): Promise<void> {
+  const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
+  if (!task) return;
+  const { advanceWorkflowFrom } = await import("./workflow-advance.js");
+  await advanceWorkflowFrom(task, taskWorkflowDef(task.workflow), task.workflowAt)
+    .catch((error) => appendTaskTimeline(
+      taskId,
+      `放行之后想接着往下走，但出错了（${error instanceof Error ? error.message : String(error)}），请手动续跑。`,
+    ));
+}
+
+// 点头之后线上还写着的那几站（跑一条发布命令、把预览再开起来之类）。
+// 放在仓库锁**之外**跑：这些命令可能跑好几分钟，占着锁会让同仓库的其它验收干等。
+// skipAccept 是因为「合并并清理」正是刚做完的这件事,不能再做一遍。
+//
+// 跑砸了**不会把验收改成失败**（合并确实做完了），但要如实带回去，并按这一站写的失败
+// 策略收尾——线路图上给它挂了「问我一句」，就得真的问出来。
+async function runAcceptedTail(taskId: string, by: AcceptBy): Promise<AcceptTail | null> {
+  const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
+  if (!task) return null;
+  const def = taskWorkflowDef(task.workflow);
+  // 「点头之后」是**哪一道**点头之后：读游标（`tasks.workflow_at`），游标丢了回落到线上
+  // 第一道关口——那正是只有一道关口时的老行为。
+  const gate = anchorAt(def, task.workflowAt, "human")?.id ?? null;
+  if (!segmentAfter(def, gate).some((step) => step.kind !== "accept")) return null;
+  const { runSegment } = await import("./workflow-steps.js");
+  const result = await runSegment(task, def, gate, { skipAccept: true });
+  if (result.ok) return { ok: true };
+
+  const step = result.failed!;
+  const label = STEP_LABELS[step.kind];
+  await appendTaskTimeline(
+    taskId,
+    `合并已经做完了，卡住的是「点头之后」那一段：「${label}」没跑过。产物已经合进去，这一段要不要补跑由你定。`,
+  );
+  // 「打回给 AI 重做」在这一段有个真做不到的情况：清理那一档刚把 worktree 和分支收掉，
+  // 唤醒 agent 也没有地方可干活。这时不假装打回，改成把问题挂给用户并说明为什么。
+  // 这里必须带上 `by`：人工验收在线上没画这一站时照样清了工作区，用默认口径会算成
+  // 「工作区还在」，于是打回一个已经不存在的 worktree。
+  const workspaceGone = task.useWorktree && acceptPlan(def, by, task.workflowAt).clean !== "none";
+  if (step.fail?.mode === "back" && workspaceGone) {
+    await appendTaskTimeline(taskId, `「${label}」写的是「打回给 AI 重做」，但工作区刚随验收清掉了，没法再打回；改成问你一句。`);
+    const { askAboutFailure } = await import("./task-question.js");
+    await askAboutFailure(taskId, label, result.reason);
+  } else {
+    const { applyFailPolicy } = await import("./workflow-steps.js");
+    await applyFailPolicy(
+      task,
+      step,
+      result.reason,
+      (round) => `验收之后的「${label}」这一站没跑过（第 ${round} 次）：\n\n`
+        + `${"```"}\n${result.reason ?? ""}\n${"```"}\n\n`
+        + "产物已经合并，请把这一段修到能跑过，然后照常确认完成。",
+    );
+  }
+  return { ok: false, step: label, reason: result.reason };
 }
 
 export function mountTaskAcceptanceRoutes(api: Hono): void {

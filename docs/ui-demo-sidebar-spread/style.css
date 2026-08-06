@@ -1,0 +1,259 @@
+/* 侧边栏横向铺开。令牌照抄 web-next 的 global.css，行的尺寸照抄 task-tree.css：
+   22px 状态列、34px 行高、8px 圆角、淡染选中态、不画左侧指示条。
+   铺开的实现要点：侧边栏本身 width 260px → 满宽，行的列模板在切换瞬间就换成
+   最终形态，.rows 同时被钉在最终宽度上 —— 所以变宽过程中右边几列不会回流，
+   看上去是「拉窗帘露出来」，而不是「重新排版」。
+   硬约束：铺开前后每一行的纵向位置必须逐像素相同。为此行高恒定 34px，
+   .side-top 恒定 68px，行上方不新增任何一行（没有筛选行、没有列名行）。 */
+*{margin:0;padding:0;box-sizing:border-box}
+/* 浏览器自带的 [hidden]{display:none} 只是元素选择器，任何带 display 的类规则
+   （.lb / .lb-bar button）都能盖掉它 —— 于是 hidden 的大图照样画出来。钉死。 */
+[hidden]{display:none !important}
+:root{
+  --chrome:lch(94.44% .5 282);--canvas:lch(97.94% .5 282);--panel:#fff;
+  --raised:lch(96.914% 0 282);--overlay:lch(95.886% 0 282);
+  --line:lch(90.55% 0 282);--line2:lch(86.5% 0 282);
+  --ink:lch(9.794% 0 282);--muted:lch(39.176% 1.25 282);--faint:lch(64.64% 1.25 282);
+  --accent:#5e6ad2;--accent-soft:lch(92.5% 12 286);
+  --green:#168466;--green-soft:#e3f4ed;--red:#d93d4c;--amber:#b57b00;--cyan:#0e9db8;
+  --hover:lch(91.64% .5 282);--sel:lch(89.54% .5 282);
+  --shadow:lch(0 0 0/.08) 0 9px 48px,lch(0 0 0/.1) 0 6px 24px,lch(0 0 0/.04) 0 1px 1px;
+  --ease:cubic-bezier(.32,.72,0,1);
+  /* 侧边栏 260 － 两侧 12 内边距 － 22 状态列 = 标题列 214。铺开后左边缘原样钉住，
+     只把截断点右移到 300 —— 位置不动，标题却能多露出小半句。 */
+  --title-w:214px;
+  --title-wide:300px;
+}
+body{background:var(--chrome);color:var(--ink);padding:34px 0 64px;
+  font:13px/1.5 "Inter Variable",Inter,-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC",sans-serif;
+  font-weight:450;-webkit-font-smoothing:antialiased}
+button,input{font:inherit;color:inherit;border:0;background:none;cursor:pointer}
+code{font:10.5px/1 ui-monospace,"SF Mono",monospace;background:var(--raised);padding:1.5px 5px;border-radius:4px}
+kbd{font:10px/1 ui-monospace,"SF Mono",monospace;background:var(--panel);color:var(--muted);
+  padding:2.5px 5px;border-radius:4px;box-shadow:0 0 0 1px var(--line2);margin:0 1px}
+.stage{width:min(1180px,100% - 44px);margin:0 auto}
+.cap{font-size:12.5px;color:var(--muted);line-height:1.85;margin-bottom:18px;max-width:860px}
+.cap--hl{max-width:1000px;padding:10px 13px;border-radius:10px;background:var(--panel);
+  box-shadow:0 0 0 1px var(--line);line-height:1.8}
+.cap b{color:var(--ink);font-weight:600}
+.sp{flex:1}
+
+/* ── 遥控器 ─────────────────────────────────────────────── */
+.ctl{display:flex;align-items:center;gap:12px;padding:9px 12px;border-radius:11px;
+  background:var(--panel);box-shadow:0 0 0 1px var(--line);margin-bottom:12px}
+.play{height:28px;padding:0 13px;border-radius:8px;font-size:12px;font-weight:500;
+  color:#fff;background:var(--accent);transition:filter .2s var(--ease)}
+.play:hover{filter:brightness(1.08)}
+.keys{font-size:11.5px;color:var(--faint)}
+/* 标尺开关 */
+.sw{display:flex;align-items:center;gap:7px;font-size:11.5px;color:var(--muted);
+  cursor:pointer;white-space:nowrap;user-select:none}
+.sw input{position:absolute;opacity:0;pointer-events:none}
+.sw i{position:relative;width:30px;height:18px;flex:0 0 30px;border-radius:9999px;
+  background:var(--line2);transition:background .18s var(--ease)}
+.sw i::after{content:"";position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;
+  background:#fff;box-shadow:0 1px 2px lch(0 0 0/.22);transition:transform .18s var(--ease)}
+.sw input:checked+i{background:var(--red)}
+.sw input:checked+i::after{transform:translateX(12px)}
+
+/* ── 窗口 ───────────────────────────────────────────────── */
+.win{position:relative;height:700px;border-radius:13px;background:var(--chrome);
+  box-shadow:0 0 0 1px var(--line),lch(0 0 0/.05) 0 6px 22px;padding:8px 8px 8px 0;overflow:hidden}
+.scrim{position:absolute;inset:0;z-index:2;background:lch(0 0 0/.16);opacity:0;
+  pointer-events:none;transition:opacity .3s var(--ease)}
+.win.is-spread .scrim{opacity:1;pointer-events:auto}
+/* 标尺：按收起态每一行的上边缘钉的红线，铺开后不重画 —— 行有没有上下漂一眼可验 */
+.ruler{position:absolute;inset:0;z-index:4;pointer-events:none}
+.ruler i{position:absolute;left:0;right:0;height:0;
+  border-top:1px dashed color-mix(in lch,var(--red) 58%,transparent)}
+
+/* ── 主区（示意） ───────────────────────────────────────── */
+.main{margin-left:260px;height:100%;display:flex;flex-direction:column;overflow:hidden;
+  border-radius:11px;background:var(--panel);box-shadow:0 0 0 1px var(--line)}
+.mhd{display:flex;align-items:center;gap:9px;height:44px;flex:0 0 44px;padding:0 13px;
+  border-bottom:1px solid var(--line)}
+.mhd b{font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.path{font:10.5px/1 ui-monospace,"SF Mono",monospace;color:var(--faint);white-space:nowrap}
+.mbody{flex:1;overflow:hidden;padding:16px 18px;display:flex;flex-direction:column;gap:12px}
+.msg{max-width:560px;font-size:12.5px;line-height:1.75}
+.msg em{display:block;font-style:normal;font-size:10px;font-weight:600;color:var(--faint);margin-bottom:4px}
+.msg p{padding:9px 12px;border-radius:11px;background:var(--raised);color:var(--muted)}
+.msg--you{align-self:flex-end;text-align:right}
+.msg--you p{background:var(--accent-soft);color:var(--ink);text-align:left}
+.msg--ask p{background:color-mix(in lch,var(--amber) 10%,var(--panel));
+  box-shadow:0 0 0 1px color-mix(in lch,var(--amber) 30%,transparent);color:var(--ink)}
+.mft{display:flex;align-items:center;gap:8px;height:42px;flex:0 0 42px;margin:0 13px 13px;
+  padding:0 12px;border-radius:10px;background:var(--raised);color:var(--faint);font-size:12px}
+.mft i{font-style:normal;font-size:11px}
+.mft span{flex:1}
+
+/* ── 侧边栏本体 ─────────────────────────────────────────── */
+.side{position:absolute;z-index:3;left:0;top:8px;bottom:8px;width:260px;
+  display:flex;flex-direction:column;overflow:hidden;padding:0 12px;background:var(--chrome);
+  transition:width .34s var(--ease),background .34s var(--ease),box-shadow .34s var(--ease),padding .34s var(--ease)}
+.win.is-spread .side{width:calc(100% - 8px);border-radius:12px;background:var(--panel);
+  box-shadow:var(--shadow);padding:0 12px}
+
+/* 顶部：铺开前后恒定 68px（8 内边距 + 32 + 28），行数、行高都不变。
+   筛选条和快捷键提示占的是收起时本来就空着的第二行，所以不多吃一个像素的高度，
+   下面 .tree 的起点在两态里完全一致 —— 这是「每一行纵向不动」的前提。 */
+.side-top{display:grid;grid-template-columns:minmax(0,1fr) auto;grid-template-rows:32px 28px;
+  align-items:center;height:68px;flex:0 0 68px;padding-top:8px}
+.proj{grid-area:1/1;display:flex;align-items:center;gap:7px;height:28px;padding:0 6px 0 5px;border-radius:9px}
+.proj:hover{background:var(--hover)}
+.avatar{display:grid;place-items:center;width:18px;height:18px;flex:0 0 18px;border-radius:6px;
+  background:var(--accent);color:#fff;font-size:9px;font-weight:750}
+.proj-name{flex:1;font-size:13px;font-weight:550}
+.win.is-spread .proj-name,.win.is-closing .proj-name{flex:0 0 auto}
+.caret{color:var(--faint);font-size:11px}
+.tools{grid-area:1/2;display:flex;align-items:center;justify-content:flex-end;gap:3px}
+.ico{display:grid;place-items:center;width:28px;height:28px;border-radius:9999px;color:var(--muted);font-size:14px}
+.ico:hover{background:var(--hover);color:var(--ink)}
+
+/* 筛选条：位置固定在第二行，只是收起时不显形 */
+.filters{grid-area:2/1;display:flex;gap:4px;overflow:hidden}
+.fb{height:26px;padding:0 10px;border-radius:8px;font-size:11.5px;color:var(--muted);white-space:nowrap;
+  transition:background .15s var(--ease),color .15s var(--ease)}
+.fb b{font-weight:600}
+.fb span{color:var(--faint);margin-left:5px;font:10px/1 ui-monospace,"SF Mono",monospace}
+.fb:hover{background:var(--hover)}
+.fb.is-on{background:var(--sel);color:var(--ink)}
+.fb.is-todo b{color:var(--amber)}
+/* 提示文字比图标行还宽，留在网格里会把项目名挤扁，所以收起时整个撤出布局 */
+.hint{grid-area:2/2;justify-self:end;display:none;font-size:11px;color:var(--faint);white-space:nowrap}
+.win.is-spread .hint,.win.is-closing .hint{display:block}
+
+.tree{flex:1;min-height:0;overflow:hidden auto;margin-top:6px;padding-bottom:12px}
+.rows{width:100%}
+.win.is-spread .rows,.win.is-closing .rows{width:var(--spread-w,1100px)}
+
+.side-bottom{display:flex;align-items:center;gap:8px;height:34px;flex:0 0 34px;
+  border-top:1px solid var(--line);font-size:11px;color:var(--faint)}
+.conn{display:flex;align-items:center;gap:6px;flex:1}
+.conn i{width:6px;height:6px;border-radius:50%;background:var(--green)}
+.count{font:10px/1 ui-monospace,"SF Mono",monospace}
+
+/* ── 分区标题 ───────────────────────────────────────────── */
+.sec{display:flex;align-items:center;height:30px;padding:8px 7px 3px;
+  color:var(--faint);font-size:11.5px;font-weight:500}
+.sec.is-empty{display:none}
+
+/* ── 行：铺开前后只有列模板在变 ─────────────────────────
+   高度恒定 34px（跟现在产品里一模一样），行上方也不新增任何一行，
+   所以每一行的纵向位置在两态里逐像素相同 —— 铺开是「右边露出来」，不是「重排」。 */
+.row{display:grid;grid-template-columns:22px minmax(0,var(--title-w)) 0 0 0;align-items:center;
+  height:34px;border-radius:8px;text-align:left;width:100%;
+  transition:background-color .15s var(--ease)}
+.row:hover{background:var(--hover)}
+.row.is-sel{background:var(--sel)}
+.win.is-spread .row,.win.is-closing .row{
+  grid-template-columns:22px var(--title-wide) minmax(0,1.3fr) minmax(0,1.5fr) 76px}
+.win.is-spread .row.is-todo:not(.is-sel){background:color-mix(in lch,var(--amber) 6%,transparent)}
+.win.is-spread .row.is-todo:hover:not(.is-sel){background:color-mix(in lch,var(--amber) 11%,transparent)}
+.row.is-hidden{display:none}
+
+.c{min-width:0;overflow:hidden;display:flex;align-items:center;gap:7px}
+.c-dot{justify-content:center}
+.c-title{padding-right:10px}
+/* 照抄 task-tree.css：标题不用省略号，用右端渐隐遮罩收尾。
+   b 必须撑满列宽（flex:1），否则它会收缩到内容宽，遮罩就吃掉短标题的末字。 */
+.c-title b{flex:1;min-width:0;font-size:13px;font-weight:400;
+  color:color-mix(in lch,var(--ink) 52%,var(--muted));white-space:nowrap;overflow:hidden;
+  -webkit-mask-image:linear-gradient(90deg,#000 calc(100% - 18px),transparent);
+  mask-image:linear-gradient(90deg,#000 calc(100% - 18px),transparent)}
+.row:hover .c-title b,.row.is-sel .c-title b{color:var(--ink)}
+.x{opacity:0;transition:opacity .16s var(--ease)}
+.win.is-spread .x{opacity:1;transition:opacity .26s var(--ease) .1s}
+.c-body,.c-last{padding-right:16px}
+/* 一行到底：34px 装不下第二行，需求和最后一条消息各截一行 */
+.c-body p,.c-last p{flex:1;min-width:0;font-size:11.5px;color:var(--muted);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.c-body p{color:var(--faint)}
+.row.is-sel .c-body p,.row.is-sel .c-last p{color:var(--muted)}
+.who{flex:0 0 auto;font-style:normal;font-size:9.5px;font-weight:600;color:var(--faint);letter-spacing:.02em}
+.who--ask{color:var(--amber)}
+.who--you{color:var(--accent)}
+.c-time{padding-right:8px;font:10px/1 ui-monospace,"SF Mono",monospace;color:var(--faint)}
+/* 有图的格子在右端留个记号，不然没人知道该往哪指 */
+.clip{flex:0 0 auto;display:inline-flex;align-items:center;gap:2px;height:15px;padding:0 5px;
+  border-radius:5px;background:var(--raised);color:var(--faint);
+  font:9.5px/1 ui-monospace,"SF Mono",monospace;font-style:normal}
+.row.is-sel .clip{background:var(--panel)}
+
+/* ── 悬浮全文卡片 ───────────────────────────────────────
+   position:fixed：它跟列表的布局互不相干，弹出来不会挤动任何一行。 */
+.pop{position:fixed;z-index:6;width:max-content;max-width:520px;padding:12px 14px 13px;
+  border-radius:12px;background:var(--panel);box-shadow:var(--shadow),0 0 0 1px var(--line);
+  animation:pop-in .13s var(--ease)}
+@keyframes pop-in{from{opacity:0;transform:translateY(-3px)}to{opacity:1;transform:none}}
+.pop-hd{display:flex;align-items:baseline;gap:8px;margin-bottom:7px;font-size:10.5px;color:var(--faint)}
+.pop-hd b{font-size:10.5px;font-weight:650;color:var(--muted)}
+.pop-hd span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pop p{font-size:12.5px;line-height:1.8;color:var(--ink)}
+.pop-tip{margin-top:9px;font-size:10px;color:var(--faint)}
+
+/* ── 缩略图：悬浮卡片和右边详情气泡共用 ─────────────────── */
+.shots{display:flex;flex-wrap:wrap;gap:8px;margin-top:11px}
+.thumb{width:112px;height:70px;border-radius:8px;overflow:hidden;background:var(--raised);
+  box-shadow:0 0 0 1px var(--line);cursor:zoom-in;
+  transition:box-shadow .15s var(--ease),transform .15s var(--ease)}
+.thumb img{display:block;width:100%;height:100%;object-fit:cover}
+.thumb:hover{box-shadow:0 0 0 2px var(--accent);transform:translateY(-1px)}
+.msg .shots{margin-top:8px}
+.msg--you .shots{justify-content:flex-end}
+
+/* ── 大图 ───────────────────────────────────────────────
+   点任意处关闭，翻页按钮自己吃掉点击。 */
+.lb{position:fixed;inset:0;z-index:9;display:flex;flex-direction:column;align-items:center;
+  justify-content:center;gap:14px;padding:40px;cursor:zoom-out;background:lch(0 0 0/.62);
+  animation:pop-in .16s var(--ease)}
+.lb img{max-width:min(1120px,92vw);max-height:74vh;border-radius:10px;background:#fff;
+  box-shadow:lch(0 0 0/.42) 0 18px 60px}
+.lb-bar{display:flex;align-items:center;gap:14px;color:#fff;font-size:12px}
+.lb-bar button{display:grid;place-items:center;width:30px;height:30px;border-radius:9999px;
+  background:lch(100% 0 0/.16);color:#fff;font-size:16px;line-height:1;cursor:pointer;
+  transition:background .15s var(--ease)}
+.lb-bar button:hover{background:lch(100% 0 0/.32)}
+.lb-tip{color:lch(100% 0 0/.6);font-size:10.5px}
+.lb-tip kbd{background:lch(100% 0 0/.14);color:#fff;box-shadow:none}
+
+/* ── 状态点：照抄 task-tree.css ─────────────────────────── */
+.dot{width:7px;height:7px;flex:0 0 7px;border-radius:50%}
+.dot--quiet{border:1px solid color-mix(in lch,var(--faint) 72%,transparent);background:transparent}
+.dot--active{background:var(--muted);animation:pulse 1.35s ease-in-out infinite}
+.dot--attention{background:var(--amber)}
+.dot--success{background:var(--green)}
+.dot--error{background:var(--red)}
+.dot--pending{width:9px;height:9px;flex-basis:9px;border:1.5px dashed color-mix(in lch,var(--faint) 70%,transparent);background:transparent}
+@keyframes pulse{0%,100%{opacity:.68;transform:scale(.84)}50%{opacity:1;transform:scale(1.18)}}
+@media (prefers-reduced-motion:reduce){.dot--active{animation:none;opacity:1}}
+
+/* ── 阶段徽标 ───────────────────────────────────────────── */
+.chip{display:inline-flex;align-items:center;height:19px;padding:0 7px;border-radius:6px;
+  font-size:10.5px;font-weight:550;white-space:nowrap;background:var(--raised);color:var(--muted)}
+.chip--amber{background:color-mix(in lch,var(--amber) 15%,var(--panel));color:var(--amber)}
+.chip--green{background:var(--green-soft);color:var(--green)}
+.chip--red{background:color-mix(in lch,var(--red) 12%,var(--panel));color:var(--red)}
+.chip--blue{background:var(--accent-soft);color:var(--accent)}
+.chip--cyan{background:color-mix(in lch,var(--cyan) 13%,var(--panel));color:var(--cyan)}
+.mhd .chip{flex:0 0 auto}
+
+/* ── 说明 ───────────────────────────────────────────────── */
+.notes{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px;margin-top:20px}
+.notes section{padding:14px 16px;border-radius:11px;background:var(--panel);box-shadow:0 0 0 1px var(--line)}
+.notes h3{font-size:11.5px;font-weight:600;color:var(--ink);margin-bottom:8px}
+.notes ul{list-style:none;display:flex;flex-direction:column;gap:9px}
+.notes li{font-size:11.5px;line-height:1.75;color:var(--muted);padding-left:12px;position:relative}
+.notes li::before{content:"";position:absolute;left:0;top:8px;width:4px;height:4px;
+  border-radius:50%;background:var(--line2)}
+.notes b{color:var(--ink);font-weight:600}
+
+/* 窄屏：先丢时间列，再丢原始需求列 */
+@media (max-width:1120px){
+  .win.is-spread .row,.win.is-closing .row{
+    grid-template-columns:22px var(--title-wide) minmax(0,1.2fr) minmax(0,1.4fr) 0}
+}
+@media (max-width:900px){
+  .win.is-spread .row,.win.is-closing .row{
+    grid-template-columns:22px var(--title-w) 0 minmax(0,1fr) 0}
+}

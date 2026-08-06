@@ -1,0 +1,406 @@
+.team-presets-settings-card {
+  overflow: visible;
+}
+
+.team-presets-loading {
+  display: flex;
+  min-height: 180px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--faint);
+  font-size: 11px;
+}
+
+.team-presets-loading.is-error {
+  color: var(--red);
+}
+
+.team-presets-settings-layout {
+  display: grid;
+  min-height: 560px;
+  grid-template-columns: 220px minmax(0, 1fr);
+}
+
+.team-presets-list {
+  overflow: hidden;
+  border-right: 1px solid var(--line);
+  border-radius: 11px 0 0 11px;
+  background: color-mix(in lch, var(--raised) 42%, var(--panel));
+}
+
+.team-presets-list > header {
+  display: flex;
+  min-height: 42px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border-bottom: 1px solid var(--line);
+  padding: 0 9px 0 12px;
+}
+
+.team-presets-list-meta {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+}
+
+.team-presets-list-meta b {
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.team-presets-list-meta span {
+  display: grid;
+  min-width: 20px;
+  height: 20px;
+  place-items: center;
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--faint);
+  font-size: 9px;
+}
+
+.team-presets-list-add {
+  display: inline-flex;
+  height: 25px;
+  align-items: center;
+  gap: 3px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  padding: 0 6px;
+  color: var(--accent);
+  font-size: 9px;
+  font-weight: 650;
+}
+
+.team-presets-list-add:hover,
+.team-presets-list-add[aria-pressed="true"] {
+  background: var(--accent-soft);
+}
+
+.team-presets-list-items {
+  min-width: 0;
+}
+
+.team-presets-list-empty {
+  display: grid;
+  min-height: 150px;
+  place-content: center;
+  justify-items: center;
+  gap: 8px;
+  color: var(--faint);
+  font-size: 10px;
+}
+
+.team-presets-list-item {
+  display: grid;
+  width: 100%;
+  min-width: 0;
+  gap: 4px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  background: transparent;
+  padding: 10px 12px 11px;
+  color: var(--muted);
+  text-align: left;
+}
+
+.team-presets-list-item:hover {
+  background: var(--hover-bg);
+}
+
+.team-presets-list-item[aria-selected="true"] {
+  background: var(--panel);
+  box-shadow: inset 3px 0 var(--accent);
+  color: var(--ink);
+}
+
+.team-presets-list-item > b,
+.team-presets-list-role > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.team-presets-list-item > b {
+  margin-bottom: 1px;
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.team-presets-list-role {
+  --role-color: #665493;
+  display: grid;
+  min-width: 0;
+  min-height: 15px;
+  grid-template-columns: 14px minmax(0, 1fr);
+  align-items: center;
+  gap: 5px;
+  color: var(--faint);
+  font-size: 9px;
+}
+
+.team-presets-list-role.is-worker { --role-color: #287567; }
+.team-presets-list-role.is-reviewer { --role-color: #a76338; }
+
+.team-presets-list-role > svg {
+  color: var(--role-color);
+}
+
+.team-presets-list-role.is-off {
+  opacity: 0.65;
+}
+
+.team-preset-editor {
+  min-width: 0;
+}
+
+.team-preset-editor-head {
+  display: flex;
+  min-height: 58px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border-bottom: 1px solid var(--line);
+  padding: 10px 14px;
+}
+
+.team-preset-editor-head > div:first-child {
+  display: grid;
+  gap: 3px;
+}
+
+.team-preset-editor-head b {
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.team-preset-editor-head small {
+  color: var(--faint);
+  font-size: 9px;
+}
+
+.team-preset-editor-head > div:last-child {
+  display: flex;
+  gap: 7px;
+}
+
+.team-preset-editor-fields {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+}
+
+.team-preset-name-field,
+.team-preset-role-fields label {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.team-preset-name-field > span,
+.team-preset-role-fields label > span {
+  color: var(--faint);
+  font-size: 9px;
+  font-weight: 650;
+  letter-spacing: 0.045em;
+  text-transform: uppercase;
+}
+
+.team-preset-name-field input,
+.team-preset-role-fields input,
+.team-preset-role-fields select {
+  width: 100%;
+  min-width: 0;
+  height: 31px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--canvas);
+  padding: 0 8px;
+  color: var(--ink);
+  outline: 0;
+  font-size: 11px;
+}
+
+/* 统一下拉在这张卡里跟上面的输入框长一样：同高、同圆角、同底色。 */
+.team-preset-role-fields .ui-dropdown-trigger {
+  height: 31px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--canvas);
+  padding: 0 8px;
+  color: var(--ink);
+  font-size: 11px;
+  box-shadow: none;
+}
+
+.team-preset-role-fields .ui-dropdown-trigger.is-mono > span:first-child,
+.team-preset-role-fields .ui-dropdown-trigger > span.is-placeholder {
+  font-size: 11px;
+}
+
+.team-preset-role-fields .ui-dropdown-trigger:hover:not(:disabled),
+.team-preset-role-fields .ui-dropdown-trigger[aria-expanded="true"] {
+  border-color: var(--accent);
+  background: var(--canvas);
+  box-shadow: none;
+}
+
+.team-preset-name-field input:focus,
+.team-preset-role-fields input:focus,
+.team-preset-role-fields select:focus {
+  border-color: var(--accent);
+}
+
+.team-preset-review-row {
+  display: flex;
+  min-height: 52px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: color-mix(in lch, var(--raised) 45%, var(--panel));
+  padding: 8px 11px;
+}
+
+.team-preset-review-row > div {
+  display: grid;
+  gap: 2px;
+}
+
+.team-preset-review-row b {
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.team-preset-review-row small {
+  color: var(--faint);
+  font-size: 9px;
+}
+
+.team-preset-role {
+  --role-color: #665493;
+  display: grid;
+  grid-template-columns: 104px minmax(0, 1fr);
+  align-items: end;
+  gap: 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: color-mix(in lch, var(--role-color) 2%, var(--panel));
+  padding: 9px 10px;
+}
+
+.team-preset-role.is-worker { --role-color: #287567; }
+.team-preset-role.is-reviewer { --role-color: #a76338; }
+
+.team-preset-role > header {
+  display: flex;
+  min-width: 0;
+  min-height: 31px;
+  align-items: center;
+  gap: 7px;
+}
+
+.team-preset-role > header > span {
+  display: grid;
+  width: 25px;
+  height: 25px;
+  flex: none;
+  place-items: center;
+  border-radius: 7px;
+  background: color-mix(in lch, var(--role-color) 14%, var(--panel));
+  color: var(--role-color);
+}
+
+.team-preset-role > header b {
+  overflow: hidden;
+  font-size: 11px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 调度者选了不支持常驻会话的类型时的说明,单独占一行横跨 header + fields 两列。 */
+.team-preset-role-warning {
+  margin: 0;
+  grid-column: 1 / -1;
+  border-radius: 7px;
+  background: rgb(181 123 0 / 8%);
+  padding: 6px 8px;
+  color: var(--amber);
+  font-size: 10px;
+  line-height: 1.6;
+}
+
+/* 三栏：类型 / 执行器 Profile / 模型（模型下拉里再分第二步选思考强度）。 */
+/* 三格(类型/Profile/模型)已合成 ExecutorPickerField 里的两颗胶囊,这里只剩一项。 */
+.team-preset-role-fields {
+  display: grid;
+  min-width: 0;
+  gap: 8px;
+}
+
+.team-preset-role-fields .agent-model-control {
+  gap: 0;
+}
+
+@media (max-width: 900px) {
+  .team-presets-settings-layout {
+    grid-template-columns: 180px minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 820px) {
+  .team-preset-role {
+    grid-template-columns: 96px minmax(0, 1fr);
+  }
+
+}
+
+@media (max-width: 680px) {
+  .team-presets-settings-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .team-presets-list {
+    overflow: hidden;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+    border-radius: 11px 11px 0 0;
+  }
+
+  .team-presets-list-items {
+    display: flex;
+    overflow-x: auto;
+  }
+
+  .team-presets-list-empty {
+    min-width: 180px;
+    min-height: 96px;
+    flex: 1;
+  }
+
+  .team-presets-list-item {
+    width: 200px;
+    flex: 0 0 200px;
+    border-right: 1px solid var(--line);
+  }
+
+  .team-preset-editor-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+}
+
+@media (max-width: 460px) {
+  .team-preset-role {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+
+}

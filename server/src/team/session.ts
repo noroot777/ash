@@ -1,8 +1,12 @@
 // ── 常驻调度台(§Team)────────────────────────────────────────────────────────
-// 一个 mode:"team" 的任务 = 一个不退的 CLI 进程(claude,stream-json 双向)。
-// 三种入站消息汇到同一根管子(进程 stdin):用户插话、执行者汇报、执行者提问。
-// 于是旧编排组的三个毛病一起消失:30s tick 延迟、continueTask 单飞锁丢消息、
-// 「协调者顶着一次性任务状态机反复 done→running」。
+// 一个 mode:"team" 的任务 = 一个不断的 CLI **会话**。三种入站消息汇到同一根管子:
+// 用户插话、执行者汇报、执行者提问。于是旧编排组的三个毛病一起消失:30s tick
+// 延迟、continueTask 单飞锁丢消息、「协调者顶着一次性任务状态机反复 done→running」。
+//
+// 「会话不断」有两种实现,本文件不关心是哪种(都藏在 ResidentHandle 后面):
+//   • claude = 进程级常驻,一个进程吃多个回合(stream-json 双向)
+//   • codex  = 会话级常驻,每回合一个 `exec resume <thread_id>` 进程
+//     (它没有 stdin 注入通道;实测与取舍见 executors/codex-resident.ts)
 //
 // ── Step 0 实测结论(claude 2.1.185,别再试一遍)─────────────────────────────
 // ①常驻可行:一个进程连吃多条 stream-json user 消息,session_id 全程同一个,
@@ -37,7 +41,7 @@ import { taskWorkspace } from "../task-workspace.js";
 import { resolveExecutorFor } from "../executors/index.js";
 import type { ResidentHandle } from "../executors/types.js";
 import { RUNS_DIR } from "../paths.js";
-import { writeTurn, writeTurnEnd, writeRunError } from "../transcript.js";
+import { appendSessionTrace, writeTurn, writeTurnEnd, writeRunError } from "../transcript.js";
 import { LEAD_PREAMBLE, LEAD_NUDGE, LEAD_RESUMED, LEAD_WORKSPACE_RESET } from "./prompts.js";
 
 // 空闲多久回收进程(0/负数 = 永不回收)。测试用 HARNESS_TEAM_IDLE_MS=5000。
@@ -84,9 +88,9 @@ export function teamIsLive(taskId: string): boolean {
 export async function deliverToLead(
   taskId: string,
   text: string,
-  opts: { attachments?: string[] } = {},
+  opts: { attachments?: string[]; throwOnOpenFailure?: boolean } = {},
 ): Promise<void> {
-  await deliver(taskId, text + attachmentsPrompt(opts.attachments), "user");
+  await deliver(taskId, text + attachmentsPrompt(opts.attachments), "user", opts.throwOnOpenFailure);
 }
 
 // 执行者汇报/提问,以及 harness 自己的唤醒语(inbox.ts 用)。
@@ -116,7 +120,12 @@ export async function haltTeam(taskId: string): Promise<void> {
 }
 
 // ── 投递 ────────────────────────────────────────────────────────────────────
-async function deliver(taskId: string, text: string, kind: Kind): Promise<void> {
+async function deliver(
+  taskId: string,
+  text: string,
+  kind: Kind,
+  throwOnOpenFailure = false,
+): Promise<void> {
   let lead = leads.get(taskId);
   // 进程还活着,但它脚下的目录已经没了 —— 典型情形:调度者按用户吩咐删掉了自己
   // 所在的那个 worktree(它嘴上说"我已回落到主检出",实际 cwd 还钉在被删的路径
@@ -139,10 +148,22 @@ async function deliver(taskId: string, text: string, kind: Kind): Promise<void> 
     if (!inflight) {
       // 开台失败(典型:worktree 建不出来)不能静默 —— 路由是 void 调用的,抛出去
       // 只会变成被兜底吞掉的 unhandledRejection,用户什么都看不到。
-      await open(taskId, text, kind).catch((err) => reportOpenFailure(taskId, err));
+      try {
+        await open(taskId, text, kind);
+      } catch (err) {
+        await reportOpenFailure(taskId, err);
+        if (throwOnOpenFailure) throw err;
+      }
       return;
     }
-    lead = await inflight; // 别开第二个进程:等它开完,这条按普通消息送
+    try {
+      lead = await inflight; // 别开第二个进程:等它开完,这条按普通消息送
+    } catch (err) {
+      // 发起 open 的那条消息负责记录失败；定时消息还要把失败传回 scheduler，
+      // 让 pending 明确落 canceled，而不是到点后静默消失。
+      if (throwOnOpenFailure) throw err;
+      return;
+    }
   }
   push(lead, text, kind);
 }
@@ -159,6 +180,7 @@ async function reportOpenFailure(taskId: string, err: unknown): Promise<void> {
     const out = createWriteStream(join(RUNS_DIR, taskId, `${last.id}.md`), { flags: "a" });
     writeRunError(out, message);
     out.end();
+    appendSessionTrace(taskId, last.id, last.turnStartedAt ?? last.startedAt, { kind: "error", message });
   }
   bus.publish({
     type: "agent.event",
@@ -187,18 +209,20 @@ function push(lead: Lead, text: string, kind: Kind): void {
       recordSystemTurn(lead, INTERRUPT_NOTE);
     }
     // 你→ 的插话只写 .md(实时由客户端乐观显示),跟单任务 reply 一致。
-    writeTurn(lead.out, { t: "user", agent: lead.agentType, text }, now());
+    const at = now();
+    writeTurn(lead.out, { t: "user", agent: lead.agentType, text }, at);
     lead.handle.send(text);
-    void beginTurn(lead);
+    void beginTurn(lead, at);
     return;
   }
   if (lead.busy) {
     lead.pending.push(text); // 回合结束再合并成一条,省一轮模型调用
     return;
   }
-  recordSystemTurn(lead, text);
+  const at = now();
+  recordSystemTurn(lead, text, at);
   lead.handle.send(text);
-  void beginTurn(lead);
+  void beginTurn(lead, at);
 }
 
 // ── 开台 / 接回 ─────────────────────────────────────────────────────────────
@@ -304,8 +328,18 @@ async function openLead(taskId: string, rawText: string, kind: Kind): Promise<Le
 // ── 事件消费 ────────────────────────────────────────────────────────────────
 async function consume(lead: Lead): Promise<void> {
   let exitStatus = 0;
+  let pendingTraceText = "";
+  const flushTraceText = () => {
+    if (!pendingTraceText) return;
+    appendSessionTrace(lead.taskId, lead.sessId, lead.turnStart ?? now(), {
+      kind: "text",
+      text: pendingTraceText,
+    });
+    pendingTraceText = "";
+  };
   for await (const event of lead.handle.events) {
     if (event.kind === "turnEnd") {
+      flushTraceText();
       await endTurn(lead);
       continue;
     }
@@ -326,11 +360,21 @@ async function consume(lead: Lead): Promise<void> {
       publish(lead, event);
       continue;
     }
-    if (event.kind === "text" || event.kind === "thinking") lead.out.write(event.text);
-    else if (event.kind === "error") writeRunError(lead.out, event.message);
+    if (event.kind === "text") {
+      lead.out.write(event.text);
+      pendingTraceText += event.text;
+    }
+    else {
+      flushTraceText();
+      if (event.kind === "thinking" || event.kind === "tool" || event.kind === "error") {
+        appendSessionTrace(lead.taskId, lead.sessId, lead.turnStart ?? now(), event);
+      }
+      if (event.kind === "error") writeRunError(lead.out, event.message);
+    }
     if (event.kind === "done") exitStatus = event.exitStatus;
     publish(lead, event);
   }
+  flushTraceText();
   await closeLead(lead, exitStatus);
 }
 
@@ -374,9 +418,10 @@ async function endTurn(lead: Lead): Promise<void> {
   if (lead.pending.length) {
     const merged = lead.pending.join("\n\n---\n\n");
     lead.pending = [];
-    recordSystemTurn(lead, merged);
+    const at = now();
+    recordSystemTurn(lead, merged, at);
     lead.handle.send(merged);
-    await beginTurn(lead);
+    await beginTurn(lead, at);
     return;
   }
   await setTaskStatus(lead.taskId, "idle");
@@ -403,6 +448,7 @@ async function closeLead(lead: Lead, exitStatus: number): Promise<void> {
     // 既不是回收也不是手停 —— 进程自己没了。会话还在,说句话就能接回。
     const msg = `调度台进程意外退出(exit ${exitStatus})。CLI 会话还在,再说一句话会自动接回;需要的话也可以点「继续」。`;
     writeRunError(lead.out, msg);
+    appendSessionTrace(lead.taskId, lead.sessId, lead.turnStart ?? endIso, { kind: "error", message: msg }, endIso);
     publish(lead, { kind: "error", message: msg });
   }
   writeTurnEnd(lead.out, endIso);

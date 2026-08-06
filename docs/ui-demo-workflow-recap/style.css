@@ -1,0 +1,188 @@
+/* 照着刚跑完的那次改 —— 暖纸底 · 一页任务详情，编排藏在时间线里（无依赖） */
+:root{
+  --paper:#faf6ef;
+  --paper-2:#f3ede2;
+  --card:#fffdf9;
+  --ink:#1f1c18;
+  --mid:#5d5850;
+  --faint:#948c80;
+  --hair:rgba(31,28,24,.11);
+  --hair-2:rgba(31,28,24,.06);
+  --red:#b4432f;
+  --amber:#9a6c12;
+  --green:#3f7a4e;
+  --ease:cubic-bezier(.32,.72,0,1);
+  --mono:"SF Mono","JetBrains Mono",ui-monospace,Menlo,monospace;
+  --sans:"PingFang SC","Hiragino Sans GB","Plus Jakarta Sans","Noto Sans SC",sans-serif;
+}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+html,body{margin:0;background:var(--paper);color:var(--ink)}
+body{
+  font-family:var(--sans);-webkit-font-smoothing:antialiased;
+  background-image:radial-gradient(900px 420px at 12% -6%,rgba(214,196,166,.45),transparent 70%),
+                   radial-gradient(700px 380px at 92% 4%,rgba(178,199,190,.32),transparent 72%);
+  background-repeat:no-repeat;
+}
+button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:pointer}
+button[disabled]{cursor:default;opacity:.4}
+.grain{
+  position:fixed;inset:0;z-index:60;pointer-events:none;opacity:.05;
+  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='140' height='140'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3'/></filter><rect width='140' height='140' filter='url(%23n)'/></svg>");
+}
+main{max-width:960px;margin:0 auto;padding:78px 30px 120px}
+
+/* ── 抬头 ─────────────────────────────────────────── */
+.eyebrow{
+  display:inline-block;padding:5px 12px;border-radius:999px;
+  font:500 10px/1 var(--mono);letter-spacing:.22em;color:var(--mid);
+  background:rgba(31,28,24,.05);box-shadow:inset 0 0 0 1px var(--hair-2);
+}
+.hero h1{margin:20px 0 0;font-size:44px;line-height:1.2;font-weight:640;letter-spacing:-.03em}
+.hero h1 em{font-style:normal;color:var(--mid)}
+.lede{max-width:660px;margin:16px 0 0;font-size:14px;line-height:1.95;color:var(--mid)}
+.lede b{font-weight:600;color:var(--ink)}
+
+/* ── 任务卡 ────────────────────────────────────────── */
+.task{margin-top:42px;padding:8px;border-radius:28px;background:var(--paper-2);
+  box-shadow:inset 0 0 0 1px var(--hair-2),0 30px 70px -50px rgba(31,28,24,.5)}
+.task-in{border-radius:21px;background:var(--card);box-shadow:inset 0 0 0 1px var(--hair-2)}
+.thd{display:flex;align-items:center;gap:11px;padding:18px 24px;border-bottom:1px solid var(--hair-2)}
+.thd .hash{font:500 11px/1 var(--mono);color:var(--faint);letter-spacing:.05em}
+.thd b{font-size:15px;font-weight:640;letter-spacing:-.01em}
+.thd .badge{padding:4px 9px;border-radius:99px;font-size:10.5px;font-weight:600;
+  color:var(--green);background:rgba(63,122,78,.11)}
+.thd .who{margin-left:auto;font-size:11.5px;color:var(--faint)}
+
+/* ── 时间线 ────────────────────────────────────────── */
+.tl{padding:8px 24px 4px}
+.ev{
+  position:relative;display:flex;align-items:center;gap:13px;padding:12px 0;
+  transition:opacity .4s var(--ease);
+}
+.ev .tm{flex:none;width:52px;font:500 11px/1 var(--mono);color:var(--faint);letter-spacing:.02em}
+.ev .node{
+  flex:none;width:11px;height:11px;border-radius:50%;background:var(--card);
+  box-shadow:0 0 0 2px var(--tone),0 0 0 6px color-mix(in srgb,var(--tone) 15%,transparent);
+}
+/* 竖着的那条轨：画在圆点上，最后一站不画 */
+.ev::after{content:"";position:absolute;left:63px;top:calc(50% + 10px);bottom:-19px;width:1.5px;
+  background:var(--hair)}
+.ev:last-child::after{display:none}
+.ev .txt{flex:1;min-width:0}
+.ev .txt b{display:block;font-size:14px;font-weight:600;letter-spacing:-.01em}
+.ev .meta{display:block;margin-top:4px;font-size:11.5px;color:var(--faint);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ev .res{flex:none;font-size:12px;color:var(--mid)}
+.ev .more{
+  flex:none;width:26px;height:26px;border-radius:9px;font-size:14px;line-height:1;color:var(--faint);
+  opacity:0;transition:opacity .3s var(--ease),background .3s var(--ease);
+}
+.ev:hover .more,.ev .more:focus-visible{opacity:1}
+.ev .more:hover{background:var(--paper-2);color:var(--ink)}
+
+.ev.future .node{background:var(--paper);box-shadow:0 0 0 2px color-mix(in srgb,var(--tone) 55%,transparent)}
+.ev.future .tm{color:var(--amber);font-weight:600}
+.ev.future .res{color:var(--amber)}
+.ev.future{animation:in .55s var(--ease) both}
+@keyframes in{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:none}}
+.ev.off{opacity:.42}
+.ev.off .txt b{text-decoration:line-through;text-decoration-color:var(--hair)}
+.ev.off .res{color:var(--red)}
+.ev.fresh{background:rgba(154,108,18,.07);border-radius:12px}
+
+/* 两步中间的那道缝 —— 平时看不见，鼠标过去才出现 */
+.joint{position:relative;height:12px}
+.joint button{
+  position:absolute;left:44px;right:0;top:-3px;height:18px;display:flex;align-items:center;gap:7px;
+  font-size:11.5px;color:var(--faint);opacity:0;transition:opacity .28s var(--ease);
+}
+.joint button::before{content:"";position:absolute;left:19px;right:6px;top:8px;height:1.5px;
+  background:repeating-linear-gradient(90deg,var(--amber) 0 4px,transparent 4px 9px);opacity:.55}
+.joint button span{position:relative;z-index:1;padding-left:14px;color:var(--amber);font-size:13px}
+.joint button>*{background:var(--card)}
+.joint:hover button,.joint button:focus-visible{opacity:1}
+
+.hint{padding:12px 24px 16px;font-size:11.5px;color:var(--faint);border-top:1px solid var(--hair-2)}
+.hint b{color:var(--mid)}
+.hint i{font-style:normal;font-family:var(--mono)}
+
+/* ── 存到哪 ────────────────────────────────────────── */
+.save{margin-top:16px;padding:7px;border-radius:24px;background:rgba(154,108,18,.1);
+  box-shadow:inset 0 0 0 1px rgba(154,108,18,.2);animation:in .5s var(--ease) both}
+.save-in{border-radius:18px;background:var(--card);box-shadow:inset 0 0 0 1px var(--hair-2);padding:16px 20px}
+.ln{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.ln .tag{font-size:11px;font-weight:600;color:var(--amber);letter-spacing:.04em}
+.chips{display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+.chips .c{position:relative;padding-left:13px;font-size:12.5px;font-weight:560}
+.chips .c::before{content:"";position:absolute;left:0;top:50%;margin-top:-3px;width:6px;height:6px;
+  border-radius:50%;background:var(--tone)}
+.chips .ar{color:var(--faint);font-size:11px}
+.ln .cost{margin-left:auto;font-size:11.5px;color:var(--faint)}
+.g{margin-top:9px;font-size:12px;color:var(--mid)}
+.g em{display:inline-block;margin-right:8px;font-style:normal;font:600 9.5px/1.7 var(--mono);
+  letter-spacing:.1em;color:var(--amber)}
+.g.deny,.g.deny em{color:var(--red)}
+.ask{display:flex;align-items:stretch;gap:8px;margin-top:14px;padding-top:13px;
+  border-top:1px solid var(--hair-2);flex-wrap:wrap}
+.ask .q{align-self:center;margin-right:4px;font-size:12.5px;font-weight:600}
+.sc{padding:9px 14px;border-radius:14px;text-align:left;background:var(--paper-2);
+  box-shadow:inset 0 0 0 1px var(--hair-2);transition:background .35s var(--ease),transform .35s var(--ease)}
+.sc:hover:not([disabled]){background:var(--ink);transform:translateY(-1px)}
+.sc:hover:not([disabled]) b,.sc:hover:not([disabled]) em{color:var(--paper)}
+.sc b{display:block;font-size:12.5px}
+.sc em{display:block;margin-top:2px;font-style:normal;font-size:10.5px;color:var(--faint)}
+.undo{align-self:center;margin-left:auto;font-size:11.5px;color:var(--faint)}
+.undo:hover{color:var(--red)}
+.done{display:flex;align-items:center;gap:10px;margin-top:14px;padding-top:13px;border-top:1px solid var(--hair-2)}
+.done b{font-size:13px;color:var(--green)}
+.done span{font-size:12px;color:var(--faint)}
+.done button{margin-left:auto;padding:6px 13px;border-radius:99px;font-size:11.5px;font-weight:600;
+  background:var(--paper-2);box-shadow:inset 0 0 0 1px var(--hair-2)}
+
+/* ── 弹层 ─────────────────────────────────────────── */
+.pop{position:fixed;z-index:70;width:296px;padding:6px;border-radius:20px;background:var(--paper-2);
+  box-shadow:inset 0 0 0 1px var(--hair-2),0 28px 64px -32px rgba(31,28,24,.62)}
+.pop .inner{border-radius:15px;background:var(--card);box-shadow:inset 0 0 0 1px var(--hair-2);padding:9px}
+.pop h3{margin:2px 4px 8px;font-size:11px;font-weight:600;color:var(--faint);letter-spacing:.04em}
+.pop .sub{margin:10px 4px 5px;padding-top:8px;border-top:1px solid var(--hair-2);
+  font-size:10.5px;color:var(--faint)}
+.pop .back{display:block;margin:0 0 6px;padding:4px;font-size:11px;color:var(--faint)}
+.pop .back:hover{color:var(--ink)}
+.opt{display:flex;align-items:flex-start;gap:9px;width:100%;padding:9px;border-radius:12px;
+  text-align:left;font-size:12.5px;transition:background .3s var(--ease)}
+.opt:hover{background:var(--paper-2)}
+.opt.line{align-items:center}
+.opt i{flex:none;width:13px;font-style:normal;font-size:11px;color:var(--faint);text-align:center}
+.opt[data-on="true"]{font-weight:600}
+.opt[data-on="true"] i{color:var(--green)}
+.opt[data-on="false"] i{color:transparent}
+.opt .d{width:8px;height:8px;margin-top:4px;border-radius:50%;background:var(--tone)}
+.opt .tx{min-width:0}
+.opt .tx b{display:block;font-size:12.5px;font-weight:600}
+.opt .tx em{display:block;margin-top:3px;font-style:normal;font-size:11px;line-height:1.6;color:var(--faint)}
+.opt.dive .tx em{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pop .ft{display:flex;align-items:center;gap:10px;padding:9px 5px 2px;margin-top:5px;
+  border-top:1px solid var(--hair-2);font-size:11px;color:var(--faint)}
+.pop .ft button{margin-left:auto;padding:5px 12px;border-radius:99px;font-size:11.5px;font-weight:600;
+  background:var(--ink);color:var(--paper)}
+
+/* ── 说明 ─────────────────────────────────────────── */
+.notes{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:44px}
+.notes .note{padding:18px 19px;border-radius:18px;background:rgba(255,253,249,.7);
+  box-shadow:inset 0 0 0 1px var(--hair-2)}
+.notes .note b{display:block;font-size:13px;margin-bottom:7px}
+.notes .note p{margin:0;font-size:12.5px;line-height:1.85;color:var(--mid)}
+.notes .note p b{display:inline;font-size:inherit;margin:0}
+.notes .note a{color:var(--ink);text-decoration:none;box-shadow:inset 0 -1px 0 var(--hair);
+  transition:box-shadow .4s var(--ease)}
+.notes .note a:hover{box-shadow:inset 0 -2px 0 rgba(31,28,24,.4)}
+
+@media (max-width:820px){
+  main{padding:54px 18px 80px}
+  .hero h1{font-size:32px}
+  .thd{flex-wrap:wrap}
+  .thd .who{margin-left:0;width:100%}
+  .notes{grid-template-columns:1fr}
+  .ln .cost{margin-left:0;width:100%}
+}

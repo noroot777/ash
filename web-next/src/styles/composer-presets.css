@@ -1,0 +1,245 @@
+/* 新建面板里的「团队预设」：预设条 + 预设卡 + 另存为弹窗。
+   从 composer.css 拆出来的——那份已经越过 700 行，而预设是一整块自足的 UI，
+   跟输入区、执行器栏没有共用选择器。 */
+
+.composer-preset-bar {
+  margin-top: 14px;
+  border: 1px solid color-mix(in lch, var(--accent) 18%, var(--line));
+  border-radius: 10px;
+  background: color-mix(in lch, var(--accent) 3%, var(--canvas));
+  padding: 10px;
+}
+
+.composer-preset-heading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.composer-preset-heading > div {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: baseline;
+  gap: 7px;
+}
+
+.composer-preset-heading b {
+  font-size: 10.5px;
+  font-weight: 650;
+}
+
+.composer-preset-heading span {
+  overflow: hidden;
+  color: var(--faint);
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-preset-heading .ui-button {
+  flex: 0 0 auto;
+  height: 27px;
+  font-size: 10.5px;
+}
+
+.composer-preset-empty {
+  display: flex;
+  min-height: 48px;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  margin-top: 8px;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  color: var(--faint);
+  font-size: 10px;
+}
+
+.composer-preset-empty.is-error {
+  color: var(--red);
+}
+
+.composer-preset-empty .ui-button {
+  height: 24px;
+  font-size: 10px;
+}
+
+.composer-preset-list {
+  display: flex;
+  gap: 7px;
+  overflow-x: auto;
+  margin-top: 8px;
+  padding-bottom: 2px;
+}
+
+.composer-preset-card {
+  position: relative;
+  display: grid;
+  width: 185px;
+  min-width: 185px;
+  min-height: 74px;
+  align-content: center;
+  gap: 4px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--panel);
+  padding: 8px 9px;
+  text-align: left;
+  box-shadow: 0 1px 2px rgb(30 32 38 / 3%);
+  transition: border-color 150ms ease-out, background-color 150ms ease-out, box-shadow 150ms ease-out;
+}
+
+.composer-preset-card:hover {
+  border-color: var(--line2);
+  background: var(--canvas);
+}
+
+.composer-preset-card[aria-pressed="true"] {
+  border-color: color-mix(in lch, var(--accent) 54%, var(--line));
+  background: color-mix(in lch, var(--accent) 5%, var(--panel));
+  box-shadow: inset 0 2px var(--accent);
+}
+
+.composer-preset-card > b {
+  overflow: hidden;
+  font-size: 11px;
+  font-weight: 620;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-preset-card > span,
+.composer-preset-card > small {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.composer-preset-card > span > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-preset-card > span > span:first-child {
+  max-width: 62px;
+}
+
+.composer-preset-card > small {
+  color: var(--accent);
+}
+
+.composer-preset-card > small.is-off {
+  color: var(--faint);
+}
+
+.composer-preset-selection {
+  display: flex;
+  min-height: 34px;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  border-top: 1px solid var(--line);
+  padding-top: 8px;
+}
+
+.composer-preset-selection > span {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  gap: 5px;
+  overflow: hidden;
+  color: var(--green);
+  font-size: 9.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-preset-selection.is-changed > span {
+  color: var(--amber);
+}
+
+.composer-preset-selection > div {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 4px;
+}
+
+.composer-preset-selection .ui-button {
+  height: 25px;
+  padding: 0 8px;
+  font-size: 9.5px;
+  box-shadow: none;
+}
+
+.composer-preset-dialog {
+  width: min(430px, 94vw);
+  border: 1px solid var(--line2);
+  border-radius: 13px;
+  background: var(--panel);
+  padding: 16px;
+  box-shadow: var(--shadow);
+}
+
+.composer-preset-dialog > header {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+}
+
+.composer-preset-dialog > header > span {
+  display: grid;
+  width: 29px;
+  height: 29px;
+  flex: 0 0 29px;
+  place-items: center;
+  border-radius: 8px;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.composer-preset-dialog h2,
+.composer-preset-dialog p {
+  margin: 0;
+}
+
+.composer-preset-dialog h2 {
+  font-size: 14px;
+}
+
+.composer-preset-dialog p {
+  margin-top: 2px;
+  color: var(--faint);
+  font-size: 10px;
+}
+
+.composer-preset-dialog > label {
+  display: grid;
+  gap: 6px;
+  margin-top: 15px;
+}
+
+.composer-preset-dialog > label > span {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.composer-preset-dialog > footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 7px;
+  margin-top: 16px;
+}
+
+@media (max-width: 720px) {
+  .composer-preset-heading > div > span { display: none; }
+  .composer-preset-selection { align-items: flex-start; flex-direction: column; }
+  .composer-preset-selection > div { width: 100%; flex-wrap: wrap; }
+}

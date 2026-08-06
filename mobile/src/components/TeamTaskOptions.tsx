@@ -12,6 +12,7 @@ export function TeamTaskOptions({
   lead,
   worker,
   leadTypes,
+  leadProfiles,
   workerTypes,
   profiles,
   providers,
@@ -31,6 +32,8 @@ export function TeamTaskOptions({
   lead: ExecutorSelection;
   worker: ExecutorSelection;
   leadTypes: AgentType[];
+  /** 调度者那一栏能挑的 profile(已按 resident 收窄);缺省用共用的全量。 */
+  leadProfiles?: AgentExecutorProfile[];
   workerTypes: AgentType[];
   profiles: AgentExecutorProfile[];
   providers: LlmProvider[];
@@ -94,7 +97,7 @@ export function TeamTaskOptions({
             role="调度者"
             selection={lead}
             types={leadTypes}
-            profiles={profiles}
+            profiles={leadProfiles ?? profiles}
             providers={providers}
             model={leadModel}
             reasoningEffort={leadReasoningEffort}

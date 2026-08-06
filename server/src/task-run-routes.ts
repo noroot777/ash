@@ -5,6 +5,7 @@ import type {
   GateAction,
   QuestionItem,
   ScheduledMessage,
+  ScheduledMessageMode,
   ScheduledMessageStatus,
   Session,
   TaskStatus,
@@ -35,8 +36,9 @@ import { setTaskStatus } from "./status.js";
 import { dispatchWorkers, type DispatchSpec } from "./team/dispatch.js";
 import { haltTeam } from "./team/session.js";
 import { enrichTasks } from "./task-store.js";
-import { sessionTranscriptPath } from "./transcript.js";
-import { resumeCommandFor } from "./executors/spawn.js";
+import { askingAgentFor, setTaskQuestion } from "./task-question.js";
+import { parseSessionTrace, sessionTracePath, sessionTranscriptPath } from "./transcript.js";
+import { resumeCommandFor } from "./executors/resume.js";
 import { id, now } from "./util.js";
 
 export function mountTaskRunRoutes(api: Hono): void {
@@ -53,6 +55,7 @@ export function mountTaskRunRoutes(api: Hono): void {
     ...r,
     attachments: JSON.parse(r.attachments),
     agent: (r.agent as AgentType) ?? null,
+    mode: r.mode as ScheduledMessageMode,
     status: r.status as ScheduledMessageStatus,
   });
 
@@ -72,6 +75,20 @@ api.get("/sessions/:id/output", async (c) => {
     return c.text(text);
   } catch {
     return c.text("");
+  }
+});
+
+// Persisted non-body execution trace. It deliberately lives outside the
+// Markdown transcript so reasoning/tool events never become assistant prose.
+api.get("/sessions/:id/trace", async (c) => {
+  const sid = c.req.param("id");
+  const row = (await db.select().from(sessions).where(eq(sessions.id, sid))).at(0);
+  if (!row) return c.json({ error: "not found" }, 404);
+  try {
+    const raw = await readFile(sessionTracePath(row.taskId, sid), "utf8");
+    return c.json(parseSessionTrace(raw));
+  } catch {
+    return c.json([]);
   }
 });
 
@@ -269,22 +286,7 @@ api.post("/tasks/:id/ask", async (c) => {
   if (!r) return c.json({ error: "not found" }, 404);
   if (r.mode !== "team" && r.status !== "running")
     return c.json({ error: "只能在任务正在运行时提问", status: r.status }, 409);
-  await db
-    .update(tasks)
-    .set({
-      question: q,
-      questionOptions: opts.length ? JSON.stringify(opts) : null,
-      questionItems: questionItems ? JSON.stringify(questionItems) : null,
-      updatedAt: now(),
-    })
-    .where(eq(tasks.id, taskId));
-  bus.publish({
-    type: "task.question",
-    taskId,
-    question: q,
-    questionOptions: opts.length ? opts : null,
-    questionItems,
-  });
+  await setTaskQuestion({ taskId, question: q, options: opts, items: questionItems });
   return c.json({
     asked: true,
     options: opts,
@@ -310,14 +312,24 @@ api.post("/tasks/:id/answer", async (c) => {
   if (r.mode !== "team" && (r.status === "running" || r.status === "queued")) {
     return c.json({ error: "提问回合还没结束,等任务落 paused 再答复", status: r.status }, 409);
   }
+  const updatedAt = now();
   await db
     .update(tasks)
-    .set({ question: null, questionOptions: null, questionItems: null, updatedAt: now() })
+    .set({ question: null, questionOptions: null, questionItems: null, updatedAt })
     .where(eq(tasks.id, taskId));
-  bus.publish({ type: "task.question", taskId, question: null, questionOptions: null, questionItems: null });
+  bus.publish({ type: "task.question", taskId, updatedAt, question: null, questionOptions: null, questionItems: null });
   // 调度台不说「完成任务」——它没有完成一说,只是拿到答案接着安排。
   const tail = r.mode === "team" ? "请据此接着安排。" : "请据此继续完成任务。";
-  void continueTask(taskId, `【答复】你之前的提问:「${r.question}」\n\n${a}\n\n${tail}`);
+  // 送回给提问的那一个:普通任务可以住着好几个 agent(@ 召唤进来的各有会话行),
+  // 默认续跑走的是任务常设执行器,那多半不是刚才停下来提问的那个。
+  // 只在**类型**不同时才改路由:会话行是按 agentType 找的(continueTask 里的 prev),
+  // 同类型换 profile 仍是同一条会话,照任务常设配置续跑即可——显式指定会让这一回合
+  // 变成「召唤」,把任务自带的 model/reasoningEffort 一并清掉。
+  const asker = r.mode === "single" ? await askingAgentFor(taskId) : null;
+  const route = asker && asker.agent !== r.agentType
+    ? { agent: asker.agent, executorId: asker.executorId, model: null, reasoningEffort: null }
+    : {};
+  void continueTask(taskId, `【答复】你之前的提问:「${r.question}」\n\n${a}\n\n${tail}`, route);
   return c.json({ answered: true, resumed: true });
 });
 
@@ -379,14 +391,26 @@ api.post("/tasks/:id/team/kill-cua", async (c) => {
 
 // Reply to a single task: resume its CLI session with the user's message so an
 // agent that stopped to ask can be answered and keep going (same session).
-// With `sendAt` (a future ISO time), the reply is queued as a scheduled_message
-// and delivered later by the scheduler (schedules.ts) instead of fired now.
+// 两种情况会落成一条**待发送消息**(scheduled_messages)而不是立刻投递,返回 202
+// { scheduled:true, message } 让前端把它显示在输入框上方的托盘里:
+//   • 带 `sendAt`(将来的 ISO 时刻)= 定时发送(mode=timed)
+//   • 单任务正在跑 = 排队追问(mode=queued),等它这一轮跑完自动发出
+// 后者是刻意不再 409 的:运行中想补一句是常态,把话接住比把用户挡回去有用。真正
+// 的投递时机与判定单点在 pending-messages.ts。
 // 团队(§Team)的「插话」也走这个端点,但两道给一次性会话设的挡板对它不适用:
 // 调度台是常驻进程,正在说话(running)时也接得住(continueTask → deliverToLead 直接
 // 写进 stdin),这就是「发出去当前会话就接住、看着从没断线」的手感。
 api.post("/tasks/:id/reply", async (c) => {
   const taskId = c.req.param("id");
-  const b = await c.req.json<{ text?: string; attachments?: string[]; agent?: AgentType; sendAt?: string }>();
+  const b = await c.req.json<{
+    text?: string;
+    attachments?: string[];
+    agent?: AgentType;
+    executorId?: string | null;
+    model?: string | null;
+    reasoningEffort?: string | null;
+    sendAt?: string;
+  }>();
   if (!b.text?.trim() && !b.attachments?.length) return c.json({ error: "empty" }, 400);
   if (b.agent && !AGENT_TYPES.includes(b.agent)) return c.json({ error: "未知的 agent", agent: b.agent }, 400);
   const r = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
@@ -394,18 +418,26 @@ api.post("/tasks/:id/reply", async (c) => {
   if (r.archived) return c.json({ error: "任务已归档，先取消归档再回复", archived: true }, 409);
   const isTeam = r.mode === "team";
   if (!isTeam && r.mode !== "single") return c.json({ error: "仅单任务支持回复" }, 409);
-  // Scheduled send: persist and let the scheduler deliver it when due + idle.
-  // Allowed even while the task is running — it fires in the future, not now.
-  if (b.sendAt) {
-    const when = new Date(b.sendAt);
-    if (Number.isNaN(when.getTime()) || when.getTime() <= Date.now())
-      return c.json({ error: "定时时间必须是将来的有效时间" }, 400);
+  // 定时发送 / 排队追问:都只是"现在不发",落库交给 pending-messages 投递。
+  const queueWhileRunning = !isTeam && (r.status === "running" || r.status === "queued");
+  if (b.sendAt || queueWhileRunning) {
+    // 排队的 sendAt 不表示"到点才发",只用来排先后,所以取此刻;定时的必须是将来。
+    let when = new Date();
+    if (b.sendAt) {
+      when = new Date(b.sendAt);
+      if (Number.isNaN(when.getTime()) || when.getTime() <= Date.now())
+        return c.json({ error: "定时时间必须是将来的有效时间" }, 400);
+    }
     const row = {
       id: id(),
       taskId,
       text: (b.text ?? "").trim(),
       attachments: JSON.stringify(b.attachments ?? []),
       agent: b.agent ?? null,
+      executorId: b.executorId ?? null,
+      model: b.model?.trim() || null,
+      reasoningEffort: b.reasoningEffort?.trim() || null,
+      mode: (b.sendAt ? "timed" : "queued") satisfies ScheduledMessageMode,
       sendAt: when.toISOString(),
       status: "pending" as const,
       createdAt: now(),
@@ -414,8 +446,13 @@ api.post("/tasks/:id/reply", async (c) => {
     await db.insert(scheduledMessages).values(row);
     return c.json({ scheduled: true, message: toScheduledMessage(row) }, 202);
   }
-  if (!isTeam && (r.status === "running" || r.status === "queued")) return c.json({ error: "任务进行中" }, 409);
-  void continueTask(taskId, (b.text ?? "").trim(), { attachments: b.attachments, agent: b.agent });
+  void continueTask(taskId, (b.text ?? "").trim(), {
+    attachments: b.attachments,
+    agent: b.agent,
+    executorId: b.executorId ?? null,
+    model: b.model?.trim() || null,
+    reasoningEffort: b.reasoningEffort?.trim() || null,
+  });
   return c.json({ started: true }, 202);
 });
 

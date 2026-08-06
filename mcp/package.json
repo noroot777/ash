@@ -9,7 +9,8 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc -p tsconfig.json",
-    "start": "node dist/index.js"
+    "start": "node dist/index.js",
+    "test:reconnect": "npm run build && node scripts/test-reconnect.mjs"
   },
   "dependencies": {
     "@harness/shared": "*",

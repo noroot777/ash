@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
+<title>辩论视图 — Harness UI 讨论稿 v2</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="shell">
+    <div data-include="sidebar" data-selected="debate1"></div>
+    <main class="main" data-surface>
+      <header class="app-bar">
+        <span class="kind-chip">辩论</span>
+        <span class="app-title">评审:回复框交互方案</span>
+        <span class="status-pill amber"><i class="dot"></i>第 2 / 3 轮</span>
+        <div class="app-actions">
+          <button class="ui-btn primary">提前裁决</button>
+          <button class="ui-btn danger">暂停</button>
+          <button class="ui-btn icon-btn" data-action="menu" aria-label="更多操作" aria-expanded="false">…</button>
+          <button class="ui-btn icon-btn" data-action="inspector" aria-label="开关 Inspector" aria-expanded="true">▥</button>
+        </div>
+        <div class="overflow-menu">
+          <button>复制全部对话</button>
+          <button>下载为 Markdown</button>
+          <button>复制任务链接</button>
+          <hr>
+          <button>归档辩论</button>
+          <button class="delete">删除辩论</button>
+        </div>
+      </header>
+      <div class="work-body">
+        <section class="conversation">
+          <div class="messages">
+            <div class="debate-config">
+              <h3>辩题:回复框应该「常驻贴底」还是「悬浮可收起」?</h3>
+              <div class="dc-grid">
+                <div><dt>正方</dt><dd>claude@ccb·claude-fable-5 · 常驻贴底</dd></div>
+                <div><dt>反方</dt><dd>codex@cpa·gpt-5.6-sol · 悬浮可收起</dd></div>
+                <div><dt>轮数</dt><dd>3 轮交锋 + 裁决</dd></div>
+                <div><dt>裁决人</dt><dd>claude@ccb·claude-fable-5(独立会话)</dd></div>
+              </div>
+            </div>
+            <div class="event-line">第 1 轮 · 立论</div>
+            <div class="debate-msg">
+              <div class="speaker"><i></i>正方 · claude@ccb</div>
+              <div class="bubble"><b>常驻贴底是会话工具的肌肉记忆。</b>用户 80% 的操作是「看完最后一条就回」,输入框任何时刻不在指尖,都是在给最高频动作加一步。收起状态还引入了「现在能不能打字」这个本不存在的疑问。</div>
+            </div>
+            <div class="debate-msg side-b">
+              <div class="speaker"><i></i>反方 · codex@cpa</div>
+              <div class="bubble"><b>但 harness 的会话不是聊天,是审阅。</b>大部分时间用户在读执行记录、看 diff,回复是低频的收尾动作。常驻输入框吃掉 120px 纵向空间,在 13 寸屏上正文只剩 60%。悬浮态默认收起,⌘↵ 或点击即展开,高频阅读让位。</div>
+            </div>
+            <div class="event-line">第 2 轮 · 交锋(进行中)</div>
+            <div class="debate-msg">
+              <div class="speaker"><i></i>正方 · claude@ccb</div>
+              <div class="bubble">「审阅为主」恰恰支持贴底:审阅的产出就是一句指令。反方方案里用户每次回复多两次交互,一天按 30 次回复算就是 60 次多余点击。空间问题应该用「输入框失焦自动缩到一行」解决,而不是整个藏起来。</div>
+            </div>
+            <div class="debate-msg side-b">
+              <div class="speaker"><i></i>反方 · codex@cpa</div>
+              <div class="bubble">失焦缩一行可以接受,这已经是向悬浮方案的收敛——分歧只剩「缩到一行」还是「缩到零」。我保留的核心主张:正文空间优先级高于输入可见性,任何常驻元素都要为它让路。</div>
+            </div>
+          </div>
+          <div class="debate-ctrl">
+            <span class="hint">第 2 轮进行中 · 双方发言后进入第 3 轮</span>
+            <button class="ui-btn">追加追问</button>
+            <button class="ui-btn">跳到裁决</button>
+            <button class="ui-btn primary">继续下一轮</button>
+          </div>
+        </section>
+        <aside class="inspector" aria-label="辩论 Inspector">
+          <div class="inspect-scroll">
+            <div class="inspect-head">Inspector<span>辩论详情</span>
+              <button class="inspect-close" data-action="inspector" aria-label="关闭 Inspector">×</button>
+            </div>
+            <section class="inspect-group">
+              <div class="inspect-label">属性</div>
+              <dl class="kv"><dt>状态</dt><dd>第 2 / 3 轮</dd><dt>优先级</dt><dd>无</dd><dt>分组</dt><dd>方案评审</dd><dt>标签</dt><dd>web · 交互</dd></dl>
+            </section>
+            <section class="inspect-group">
+              <div class="inspect-label">双方</div>
+              <dl class="kv">
+                <dt>正方</dt><dd>claude@ccb·claude-fable-5</dd>
+                <dt>反方</dt><dd>codex@cpa·gpt-5.6-sol</dd>
+                <dt>裁决人</dt><dd>claude@ccb(独立会话)</dd>
+              </dl>
+            </section>
+            <section class="inspect-group">
+              <div class="inspect-label">进度</div>
+              <div class="stat-row"><div class="stat"><b>1</b>已完轮</div><div class="stat"><b>4</b>发言</div><div class="stat"><b>1</b>收敛点</div></div>
+            </section>
+            <section class="inspect-group">
+              <details><summary>辩题原文</summary>
+                <p class="prompt-copy">回复框应该「常驻贴底」还是「悬浮可收起」?结合 harness 审阅型会话的真实使用比例给出结论,允许折中方案。</p>
+              </details>
+            </section>
+          </div>
+        </aside>
+      </div>
+    </main>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>

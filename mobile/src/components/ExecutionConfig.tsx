@@ -4,8 +4,9 @@ import type { AgentExecutorProfile, AgentType, LlmProvider } from "@harness/shar
 import {
   CLI_MODEL_PRESETS,
   REASONING_EFFORT_DETAIL,
-  REASONING_EFFORT_VALUES,
-} from "@harness/shared";
+  isReasoningEffortSupported,
+  reasoningEffortsFor,
+} from "@harness/shared/cli-presets";
 import { sameExecutor } from "@harness/shared/executors";
 import { Ionicons } from "@expo/vector-icons";
 import { api } from "@/lib/api";
@@ -64,13 +65,26 @@ export function ExecutionConfig({
     modelValues,
     modelDetail(selection, profile),
   );
+  // 档位跟着**当前模型**的能力规则收窄；模型没设或未登记时退回该 CLI 的并集。
+  // 多数 CLI 没有（或还没实测出）思考强度档位，这时 sheet 里只剩一条「跟随执行器」，
+  // 点开一个单选项没有意义 —— 整个 trigger 不渲染。已经设过值的仍要渲染：换类型后
+  // 留下的旧覆盖得有地方看见和清掉。
+  const effortValues = reasoningEffortsFor(selection.agentType, model);
+  const effortPickable = effortValues.length > 0 || !!reasoningEffort;
   const effortOptions = followOptions(
-    REASONING_EFFORT_VALUES[selection.agentType],
+    // 已选档位不在允许集合里时它不在候选中，得补一条，否则想清掉都点不着。
+    reasoningEffort && !effortValues.includes(reasoningEffort)
+      ? [reasoningEffort, ...effortValues]
+      : effortValues,
     effortDetail(selection, profile),
   );
+  // 模型和强度是两件独立的事：换模型不静默改强度，对不上就在下面写清楚，让用户
+  // 自己决定改哪一边。静默清空会让人以为自己没点中。
+  const effortSupported = isReasoningEffortSupported(selection.agentType, model, reasoningEffort);
+  const commitModel = (next: string) => onModelChange(next);
   const executorItems = useMemo(
-    () => executorOptions(types, profiles),
-    [types, profiles],
+    () => executorOptions(types, profiles, selection),
+    [types, profiles, selection],
   );
 
   const openModel = () => {
@@ -130,12 +144,20 @@ export function ExecutionConfig({
       />
       <View style={{ flexDirection: "row", gap: 8 }}>
         <ConfigTrigger label="模型" value={model || "跟随执行器"} onPress={openModel} />
-        <ConfigTrigger
-          label="思考强度"
-          value={reasoningEffort || "跟随执行器"}
-          onPress={() => setPicker("effort")}
-        />
+        {effortPickable ? (
+          <ConfigTrigger
+            label="思考强度"
+            value={reasoningEffort || "跟随执行器"}
+            tone={effortSupported ? "normal" : "error"}
+            onPress={() => setPicker("effort")}
+          />
+        ) : null}
       </View>
+      {effortSupported ? null : (
+        <Text style={{ color: theme.danger, fontSize: 10.5 }}>
+          {model || "当前模型"} 不支持 {reasoningEffort}，请改选档位或换一个模型
+        </Text>
+      )}
 
       {picker ? (
         <SelectSheet
@@ -153,7 +175,7 @@ export function ExecutionConfig({
                 onReasoningEffortChange("");
               }
               onSelectionChange(selected);
-            } else if (picker === "model") onModelChange(next);
+            } else if (picker === "model") commitModel(next);
             else onReasoningEffortChange(next);
           }}
           onClose={() => setPicker(null)}
@@ -168,14 +190,14 @@ export function ExecutionConfig({
                   autoCorrect={false}
                   style={{ flex: 1, fontFamily: fonts.mono, fontSize: 13 }}
                   onSubmitEditing={() => {
-                    onModelChange(customModel.trim());
+                    commitModel(customModel.trim());
                     setPicker(null);
                   }}
                 />
                 <Button
                   label="使用"
                   onPress={() => {
-                    onModelChange(customModel.trim());
+                    commitModel(customModel.trim());
                     setPicker(null);
                   }}
                 />
@@ -199,8 +221,20 @@ export function ExecutionConfig({
   );
 }
 
-function ConfigTrigger({ label, value, onPress }: { label: string; value: string; onPress: () => void }) {
+function ConfigTrigger({
+  label,
+  value,
+  tone = "normal",
+  onPress,
+}: {
+  label: string;
+  value: string;
+  /** error = 当前选中的档位这个模型吃不下，红边提醒但仍可点开改。 */
+  tone?: "normal" | "error";
+  onPress: () => void;
+}) {
   const theme = useTheme();
+  const bad = tone === "error";
   return (
     <Pressable
       onPress={onPress}
@@ -210,12 +244,18 @@ function ConfigTrigger({ label, value, onPress }: { label: string; value: string
         paddingHorizontal: 11,
         paddingVertical: 9,
         borderRadius: radius.md,
+        borderWidth: bad ? 1 : 0,
+        borderColor: bad ? theme.danger : "transparent",
         backgroundColor: pressed ? theme.overlay : theme.panel,
       })}
     >
       <Text style={{ color: theme.faint, fontSize: 10, fontFamily: fonts.mono }}>{label}</Text>
       <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
-        <Text style={{ flex: 1, color: theme.ink, fontSize: 12, fontFamily: fonts.bodySemi }} numberOfLines={1}>
+        {bad ? <Ionicons name="warning" size={12} color={theme.danger} /> : null}
+        <Text
+          style={{ flex: 1, color: bad ? theme.danger : theme.ink, fontSize: 12, fontFamily: fonts.bodySemi }}
+          numberOfLines={1}
+        >
           {value}
         </Text>
         <Ionicons name="chevron-down" size={12} color={theme.faint} />
@@ -271,8 +311,26 @@ function parseSelection(
   return profile ? { agentType: profile.type, executorId: profile.id } : fallback;
 }
 
-function executorOptions(types: AgentType[], profiles: AgentExecutorProfile[]): SelectSheetOption[] {
-  return types.flatMap((type) => {
+// 选项分两路，别混成一路（2026-07-30 审查拦下过一次）：
+// 1. **「默认 X」只从 types 生成**，而 types 只装本机探到的 available（调用点负责过滤）——
+//    这是「按类型新选」，没探到的选出来就是一单必然起不来的任务。
+// 2. **已注册的 profile 恒列出**，哪怕它的类型此刻没探到（ssh 远端本机自然探不到）；但列出
+//    profile ≠ 把它的类型也变成第 1 类候选，所以这些单独排在后面、不带「默认 X」。
+// 3. 当前生效的选择两路都不在时（老任务用的 CLI 刚被卸掉），补一条标注状态的条目：让 sheet
+//    能打勾、也让用户看见原因。它永远等于当前值，构不成一个新的可选类型。
+function executorOptions(
+  types: AgentType[],
+  profiles: AgentExecutorProfile[],
+  selection: ExecutorSelection,
+): SelectSheetOption[] {
+  const profileOption = (profile: AgentExecutorProfile, suffix?: string): SelectSheetOption => ({
+    value: profile.id,
+    label: profile.name,
+    detail: [profile.type, profile.model || "默认模型", profile.isDefault ? "类型默认" : null, suffix]
+      .filter(Boolean)
+      .join(" · "),
+  });
+  const options = types.flatMap((type) => {
     const defaultProfile = profiles.find((profile) => profile.type === type && profile.isDefault);
     return [
       {
@@ -280,15 +338,20 @@ function executorOptions(types: AgentType[], profiles: AgentExecutorProfile[]): 
         label: `默认 ${type}`,
         detail: defaultProfile ? `当前使用 ${defaultProfile.name}` : "跟随该类型的默认执行器",
       },
-      ...profiles
-        .filter((profile) => profile.type === type)
-        .map((profile) => ({
-          value: profile.id,
-          label: profile.name,
-          detail: [profile.type, profile.model || "默认模型", profile.isDefault ? "类型默认" : null]
-            .filter(Boolean)
-            .join(" · "),
-        })),
+      ...profiles.filter((profile) => profile.type === type).map((profile) => profileOption(profile)),
     ];
   });
+  options.push(
+    ...profiles
+      .filter((profile) => !types.includes(profile.type))
+      .map((profile) => profileOption(profile, "本机未检测到")),
+  );
+  if (!selection.executorId && !types.includes(selection.agentType)) {
+    options.push({
+      value: `default:${selection.agentType}`,
+      label: `默认 ${selection.agentType}`,
+      detail: "当前设置 · 本机未检测到该 CLI，很可能起不来",
+    });
+  }
+  return options;
 }

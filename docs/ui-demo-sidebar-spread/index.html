@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>侧边栏横向铺开 · 一眼看完今天所有任务走到哪了</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div class="stage">
+  <p class="cap"><b>任务一多，侧边栏那一列只剩标题，得挨个点进去才知道该处理谁。</b>
+    这张 demo 把同一份列表<b>就地向右铺满</b>：每一行<b>横向、纵向都待在原处一格不动</b>——行不长高、不上下漂，
+    只是右边多露出<b>原始需求</b>和<b>最后一条消息</b>。看准了点一下就选中并收回原样，再按一次快捷键也收回。
+    这两列一行放不下的，<b>鼠标指上去</b>弹一张全文卡片；带图的格子右端标着 <code>▣ 2</code>，卡片里的图<b>点开就是大图</b>。</p>
+  <p class="cap cap--hl">打开右上角的<b>标尺</b>：它会照着<b>收起时</b>每一行的上边缘钉一排红线，然后按 <kbd>F</kbd> 铺开——
+    线不用重画，每一行仍然精确压在自己那条线上。为此让路的是两样东西：铺开时不再插入筛选条那一行（挪进了顶部本来就空着的地方），列名行去掉了。</p>
+
+  <!-- ══ 遥控器（demo 专用，产品里没有这一行） ══════════════════ -->
+  <div class="ctl">
+    <button class="play" id="toggle">铺开 / 收起</button>
+    <span class="keys">页面里直接按 <kbd>F</kbd>（或 <kbd>\</kbd>）铺开 · <kbd>Esc</kbd> 收起 · <kbd>J</kbd><kbd>K</kbd> 上下选 · <kbd>Enter</kbd> 打开 · 指住右边两列看全文、点图放大</span>
+    <span class="sp"></span>
+    <label class="sw"><input type="checkbox" id="ruler"><i></i><span>标尺（看行有没有动）</span></label>
+  </div>
+
+  <!-- ══ 模拟窗口 ═══════════════════════════════════════════════ -->
+  <div class="win" id="win">
+    <div class="scrim" id="scrim"></div>
+    <div class="ruler" id="rulerbox" hidden></div>
+
+    <!-- 侧边栏：就是它自己变宽，不是另开一个面板 -->
+    <aside class="side" id="side">
+      <div class="side-top">
+        <div class="proj">
+          <span class="avatar">HA</span>
+          <span class="proj-name">harness</span>
+          <span class="caret">⌄</span>
+        </div>
+        <!-- 筛选条和快捷键提示塞进 side-top 本来就空着的右半边和第二行，
+             不另占一行 —— 这样铺开前后 side-top 都是 68px，下面每一行的
+             纵向位置分毫不动。 -->
+        <span class="hint x"><kbd>J</kbd><kbd>K</kbd> 选 · <kbd>Enter</kbd> 打开 · <kbd>F</kbd>/<kbd>Esc</kbd> 收起</span>
+        <div class="filters x" id="filters"></div>
+        <div class="tools">
+          <button class="ico" title="搜索">⌕</button>
+          <button class="ico" title="随手记">✎</button>
+          <button class="ico" title="分组">▤</button>
+          <button class="ico" title="新建任务">＋</button>
+        </div>
+      </div>
+
+      <div class="tree" id="tree">
+        <div class="rows" id="rows"></div>
+      </div>
+
+      <div class="side-bottom">
+        <span class="conn"><i></i>实时已连接</span>
+        <span class="count" id="footcount"></span>
+      </div>
+    </aside>
+
+    <!-- 主区：任务详情（示意），点选后跟着换 -->
+    <main class="main" id="main">
+      <div class="mhd">
+        <span class="chip" id="mchip"></span>
+        <b id="mtitle"></b>
+        <span class="path" id="mpath"></span>
+        <span class="sp"></span>
+        <span class="ico">⋯</span>
+      </div>
+      <div class="mbody" id="mbody"></div>
+      <div class="mft"><span id="mreply"></span><i>⏎</i></div>
+    </main>
+  </div>
+
+  <!-- 悬浮全文卡片 + 大图。都是 position:fixed，跟 .win 的布局完全无关，
+       所以弹出来不会挤动任何一行。 -->
+  <div class="pop" id="pop" hidden></div>
+  <div class="lb" id="lb" hidden>
+    <img id="lbimg" alt="">
+    <div class="lb-bar">
+      <button id="lbprev" data-step="-1" title="上一张">‹</button>
+      <span id="lbcap"></span>
+      <button id="lbnext" data-step="1" title="下一张">›</button>
+    </div>
+    <span class="lb-tip">点任意处关闭 · <kbd>←</kbd><kbd>→</kbd> 翻页 · <kbd>Esc</kbd> 关</span>
+  </div>
+
+  <!-- ══ 说明 ═══════════════════════════════════════════════════ -->
+  <div class="notes">
+    <section>
+      <h3>四个刻意的取舍</h3>
+      <ul>
+        <li><b>每一行原地不动，横向和纵向都是。</b>状态点 22px、标题左边缘 22px 处起，铺开前后同一个横向位置（只把截断点从 214 放宽到 300，让标题多露出小半句）；行高恒定 34px，顶上也不新增任何一行，所以纵向位置也分毫不差。铺开因此是「露出右边」而不是「重排列表」，眼睛不用重新找任务。分区（置顶 / 协作任务 / 普通任务）和顺序原样保留，跟 <code>taskTreeModel.ts</code> 现在的分组一致。</li>
+        <li><b>为了纵向不动，砍了两样东西。</b>筛选条不再单占一行，挪进顶部项目名右边和图标那一行的空白里；列名行（走到哪一步 / 原始需求 / …）整个去掉——它一插进来，下面每一行就得下移 24px。所以列的含义只能靠内容自身认：追问那一列前面永远挂着<b>你说</b>，原始需求是更淡的那一列。（demo 里还画着「它说 / 它问你」，实现时那一列已经定为只放我自己发的话，见下。）</li>
+        <li><b>需要你拍板的行淡染成琥珀色</b>（等答复 / 待验收 / 失败），并在顶上给一个「需要你处理 N」的筛选。不画左侧指示条——全局约定里选中态只用淡染背景。</li>
+        <li><b>放不下的不硬塞，指上去再给。</b>34px 一行只够放一句被截断的话，所以剩下的都藏在悬浮里：指住<b>原始需求</b>或<b>最后一条消息</b>停 0.16 秒，弹一张全文卡片。卡片是 <code>position:fixed</code> 的，跟列表布局互不相干，弹出来<b>一行都不会动</b>；鼠标从格子移到卡片上也不会消失，所以卡片里的图点得到。带图的格子右端标 <code>▣ N</code>（一眼看出这条有截图，不用悬浮试探），点缩略图开大图，<kbd>←</kbd><kbd>→</kbd> 翻页，<kbd>Esc</kbd> 只关大图、不顺手把侧边栏也收了。</li>
+      </ul>
+    </section>
+    <section>
+      <h3>还没定、想听你一句话的</h3>
+      <ul>
+        <li><b>删掉「走到哪一步」之后，状态还够认吗。</b>现在只剩左边那颗状态点（跑着的会呼吸、要你处理的是琥珀、失败是红），阶段文字（待验收 / 验证中 / 已合并）和「工作流 5/5」都没了；顺带一起没的还有标题下面那行执行器和耗时（<code>claude · 已跑 6m</code>）——34px 一行放不下第二行字。要是扫的时候还是想一眼分清「在跑」和「等我点头」，可以把 chip 挪回标题左边一格，不新增列、也不影响纵向。</li>
+        <li><b>快捷键定哪个。</b>demo 用了 <kbd>F</kbd>（铺开 / full）并兼听 <kbd>\</kbd>。现有裸键已占 <code>j k c r</code>，<kbd>F</kbd> 是空的；要是你更顺手 <kbd>Cmd</kbd>+<kbd>\</kbd> 或空格，改一行就行。</li>
+        <li><b>那一列取哪条：已定为「我发的最后一条追问」。</b>demo 里取的是会话最新一条（不论谁说的），实现时改掉了——扫一屏列表时想知道的是<b>我上次跟它说了什么</b>，agent 说了什么点进去看即可。判据单点在 shared 的 <code>isUserFollowUp</code>，跟详情页 Inspector 的「后续追问」共用一份：agent 说的不算、系统代发的「继续」不算、后端代用户发的（验证打回、验收冲突交接、【答复】）也不算——最后这类占的是真人回合（要靠它护住任务原来的终态），所以落盘时另标一位 <code>by:"system"</code> 才分得开。</li>
+        <li><b>要不要记住铺开状态。</b>现在每次都从收起开始。也可以像折叠分区那样写 localStorage。</li>
+        <li><b>全文卡片是「指上去就弹」还是「按住 / 点一下钉住」。</b>现在是悬停 0.16 秒自动弹、移开 0.14 秒自动收——扫的时候最省事，但鼠标横穿列表会一路弹。要是嫌吵，可以改成只有按住某个键（或点 <code>▣ N</code>）才弹，代价是多一个动作。</li>
+      </ul>
+    </section>
+    <section>
+      <h3>真做进 web-next 的话，动这几处</h3>
+      <ul>
+        <li><code>web-next/src/workspace/useWorkspaceShortcuts.ts</code>：加一个裸键（走现有的 <code>isTextEntry</code> / <code>hasBlockingLayer</code> 护栏）。</li>
+        <li><code>web-next/src/workspace/WorkspaceShell.tsx</code>：持有 <code>spread</code> 状态，传给侧边栏；点任务时顺手关掉。</li>
+        <li><code>web-next/src/workspace/TaskTree.tsx</code>：<code>TaskRow</code> 多渲染三个格子（原始需求 / 最后一条消息 / 时间），窄态由 CSS 裁成 0 宽，行高和分组逻辑都不动。</li>
+        <li><code>WorkspaceSidebar.tsx</code>：筛选条要放进 <code>workspace-sidebar-top</code> 里，不能新起一行，否则纵向就动了。</li>
+        <li>「最后一条消息」需要一个列表接口能带上的字段（现在的 <code>Task</code> 上没有），要么服务端在列表里补一个摘要，要么前端按需拉。这块是唯一有后端改动的地方——顺带要带上<b>附件缩略图</b>（悬浮卡片里的 <code>▣ N</code> 和大图靠它），demo 里这些图是现画的 SVG 假图。</li>
+      </ul>
+    </section>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
