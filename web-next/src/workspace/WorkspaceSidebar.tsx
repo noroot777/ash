@@ -9,8 +9,34 @@ import {
 import { ProjectAvatar } from "./ProjectAvatar.tsx";
 import { ProjectSwitcher } from "./ProjectSwitcher.tsx";
 import { TaskTree } from "./TaskTree.tsx";
+import { SPREAD_FILTERS, spreadBucket, type SidebarSpread } from "./useSidebarSpread.ts";
 import { workspaceModifierLabel } from "./useWorkspaceShortcuts.ts";
 import { WorkspaceResizeHandle } from "./WorkspaceResizeHandle.tsx";
+
+// 铺开时才出现的一排筛选。它占的是顶部图标那一行本来就空着的左半边 —— 不新起一行，
+// 否则下面每一行都会跟着下移，「铺开前后逐像素不动」当场就破了。
+function SpreadFilterBar({ spread, tasks, projectId }: { spread: SidebarSpread; tasks: Task[]; projectId: string | null }) {
+  const scope = tasks.filter((task) => task.projectId === projectId && !task.archived && !task.parentId);
+  return (
+    <div className="workspace-spread-filters">
+      {SPREAD_FILTERS.map((item) => {
+        const count = item.key === "all" ? scope.length : scope.filter((task) => spreadBucket(task) === item.key).length;
+        return (
+          <button
+            key={item.key}
+            className={`workspace-spread-filter${spread.filter === item.key ? " is-on" : ""}${item.key === "todo" ? " is-todo" : ""}`}
+            type="button"
+            aria-pressed={spread.filter === item.key}
+            onClick={() => spread.setFilter(item.key)}
+          >
+            <b>{item.label}</b>
+            <span>{count}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
 
 export function WorkspaceSidebar({
   projects,
@@ -19,6 +45,7 @@ export function WorkspaceSidebar({
   selectedTaskId,
   connected,
   collapsed,
+  spread,
   width,
   onWidthChange,
   onProject,
@@ -37,6 +64,7 @@ export function WorkspaceSidebar({
   selectedTaskId: string | null;
   connected: boolean;
   collapsed: boolean;
+  spread: SidebarSpread;
   width: number;
   onWidthChange: (width: number) => void;
   onProject: (projectId: string) => void;
@@ -63,7 +91,7 @@ export function WorkspaceSidebar({
   }
 
   return (
-    <aside className="workspace-sidebar" aria-label="项目和任务导航">
+    <aside className={`workspace-sidebar${spread.laidOut ? " is-spread" : ""}${spread.open ? " is-spread-open" : ""}`} aria-label="项目和任务导航">
       <div className="workspace-sidebar-top">
         <ProjectSwitcher
           projects={projects}
@@ -73,6 +101,7 @@ export function WorkspaceSidebar({
           onSettings={onSettings}
         />
         <div className="workspace-sidebar-tools" role="toolbar" aria-label="任务工具">
+          {spread.open && <SpreadFilterBar spread={spread} tasks={tasks} projectId={currentProject?.id ?? null} />}
           <button className="workspace-side-icon" type="button" title={`搜索 ${modifier} K`} aria-label={`搜索 ${modifier} K`} onClick={onSearch}>
             <MagnifyingGlass size={15} aria-hidden="true" />
           </button>
@@ -93,6 +122,7 @@ export function WorkspaceSidebar({
         currentProjectId={currentProject?.id ?? null}
         tasks={tasks}
         selectedTaskId={selectedTaskId}
+        spread={spread}
         onTask={onTask}
       />
 
@@ -101,6 +131,11 @@ export function WorkspaceSidebar({
           <i aria-hidden="true" />
           {connected ? "实时已连接" : "实时连接中断"}
         </span>
+        {spread.open && (
+          <span className="workspace-spread-hint">
+            <kbd>J</kbd><kbd>K</kbd> 选 · <kbd>Enter</kbd> 打开 · 指住右边两列看全文 · <kbd>F</kbd>/<kbd>Esc</kbd> 收起
+          </span>
+        )}
         <button type="button" onClick={onToggleCollapsed} aria-label="收起侧边栏">
           <SidebarSimple size={14} weight="bold" aria-hidden="true" />
           收起

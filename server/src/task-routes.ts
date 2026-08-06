@@ -9,12 +9,16 @@ import { db } from "./db/index.js";
 import { agents, groups, noteTasks, projects, queueItems, tasks } from "./db/schema.js";
 import { repoKey } from "./git.js";
 import { detectTaskWorkspace, discardTaskWorkspace } from "./workspace-cleanup.js";
+import { lastMessagesFor } from "./task-last-message.js";
 import { advanceQueue, pauseGroup, runGroup } from "./scheduler.js";
 import { setTaskStatus } from "./status.js";
 import { createTasks, enrichTasks, publishTaskUpdated } from "./task-store.js";
 import { attachmentsPrompt, id, now } from "./util.js";
 
 export function mountTaskRoutes(api: Hono): void {
+  // 一次最多问这么多任务的最后一条消息 —— 每个都要摸一次盘，别让一个手抖的请求
+  // 把整个进程钉在 I/O 上。侧边栏一屏也放不下这么多行。
+  const MAX_LAST_MESSAGE_TASKS = 200;
   const agentTypeForExecutor = async (executorId?: string | null): Promise<AgentType | null> => {
     if (!executorId) return null;
     const row = (await db.select({ type: agents.type }).from(agents).where(eq(agents.id, executorId))).at(0);
@@ -27,6 +31,14 @@ export function mountTaskRoutes(api: Hono): void {
 api.get("/tasks", async (c) => {
   const rows = await db.select().from(tasks);
   return c.json(await enrichTasks(rows));
+});
+
+// 侧边栏铺开时才拉：一批任务各自的最后一条消息（读的是会话 .md 的尾巴，不是库）。
+// 用 POST 是因为要一次带上几十个 id，塞进 query 会顶到 URL 长度上限。
+api.post("/tasks/last-messages", async (c) => {
+  const body = await c.req.json<{ taskIds?: unknown }>().catch(() => ({ taskIds: [] }));
+  const ids = Array.isArray(body.taskIds) ? body.taskIds.filter((id): id is string => typeof id === "string") : [];
+  return c.json(await lastMessagesFor(ids.slice(0, MAX_LAST_MESSAGE_TASKS)));
 });
 
 api.get("/tasks/:id", async (c) => {

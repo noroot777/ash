@@ -20,6 +20,7 @@ import { DeleteTaskDialog } from "../task-detail/DeleteTaskDialog.tsx";
 import { CreateGroupDialog, CreateProjectDialog } from "../overlays/CreateEntityDialog.tsx";
 import { orderedTopLevelTasks } from "./taskTreeModel.ts";
 import { useWorkspaceShortcuts } from "./useWorkspaceShortcuts.ts";
+import { useSidebarSpread } from "./useSidebarSpread.ts";
 import {
   readWorkspaceSidebarWidth,
   WORKSPACE_SIDEBAR_STORAGE_KEY,
@@ -58,6 +59,7 @@ export function WorkspaceShell() {
   const [sidebarWidth, setSidebarWidth] = useState(readWorkspaceSidebarWidth);
   const [toast, setToast] = useState<string | null>(null);
   const { tasks, setTasks, loading: tasksLoading, error: tasksError, connected, settlementVersion } = useTasks();
+  const spread = useSidebarSpread(tasks, projectId, settlementVersion);
 
   const notify = useCallback((message: string) => {
     setToast(message);
@@ -150,7 +152,9 @@ export function WorkspaceShell() {
     setTaskId((current) => current === deletedId ? null : current);
   }, [setTasks]);
   const selectProject = (nextProjectId: string) => { setProjectId(nextProjectId); setTaskId(null); setComposer(null); setNotes(null); setReviewTaskId(null); setSettingsSection(null); };
-  const selectTask = (task: Task) => {
+  // keepSpread：J/K 在铺开态里只是挪选中行，右边那两列还得接着看；点行或按 Enter 才算「选定了」，
+  // 那时候铺开自己收起来把主区还回去。
+  const selectTask = (task: Task, options?: { keepSpread?: boolean }) => {
     pushTaskHistoryEntry(task);
     setProjectId(task.projectId);
     setTaskId(task.id);
@@ -158,6 +162,7 @@ export function WorkspaceShell() {
     setNotes(null);
     setReviewTaskId(null);
     setSettingsSection(null);
+    if (!options?.keepSpread) spread.close();
   };
   const selectTaskById = (nextTaskId: string) => {
     const target = tasks.find((task) => task.id === nextTaskId);
@@ -195,11 +200,14 @@ export function WorkspaceShell() {
     enabled: !settingsSection && !groupsPanelOpen,
     paletteOpen,
     composerOpen: composer !== null,
+    spreadOpen: spread.open,
     orderedTasks,
     selectedTaskId: taskId,
     onTogglePalette: () => setPaletteOpen((value) => !value),
     onCreate: () => openComposer("single"),
-    onTask: selectTask,
+    onTask: (task) => selectTask(task, { keepSpread: true }),
+    onToggleSpread: () => { if (collapsed) setCollapsed(false); spread.toggle(); },
+    onCloseSpread: spread.close,
   });
 
   const notesProject = notes ? projects.find((project) => project.id === notes.projectId) ?? null : null;
@@ -227,8 +235,8 @@ export function WorkspaceShell() {
   />{overlays}</>;
 
   return (
-    <><div className="workspace-shell" style={{ "--workspace-sidebar-width": `${sidebarWidth}px` } as CSSProperties}>
-      <WorkspaceSidebar projects={projects} currentProject={currentProject} tasks={tasks} selectedTaskId={taskId} connected={connected} collapsed={collapsed} width={sidebarWidth} onWidthChange={setSidebarWidth} onProject={selectProject} onTask={selectTask} onToggleCollapsed={() => setCollapsed((value) => !value)} onSearch={() => setPaletteOpen(true)} onNotes={() => openNotes()} onGroups={() => setGroupsPanelOpen(true)} onCreate={() => openComposer("single")} onNewProject={() => setCreateDialog("project")} onSettings={() => openSettings("executors")} />
+    <><div className={`workspace-shell${spread.laidOut ? " is-spread" : ""}`} style={{ "--workspace-sidebar-width": `${sidebarWidth}px` } as CSSProperties}>
+      <WorkspaceSidebar projects={projects} currentProject={currentProject} tasks={tasks} selectedTaskId={taskId} connected={connected} collapsed={collapsed} spread={spread} width={sidebarWidth} onWidthChange={setSidebarWidth} onProject={selectProject} onTask={selectTask} onToggleCollapsed={() => { spread.close(); setCollapsed((value) => !value); }} onSearch={() => setPaletteOpen(true)} onNotes={() => openNotes()} onGroups={() => setGroupsPanelOpen(true)} onCreate={() => openComposer("single")} onNewProject={() => setCreateDialog("project")} onSettings={() => openSettings("executors")} />
       <main className="workspace-main">
         {loadError && <div className="workspace-load-error">{loadError.message}</div>}
         {composer && currentProject ? <TaskComposerPanel project={currentProject} groups={groups} initialDraft={composer.draft} mode={composer.mode} onModeChange={(mode) => setComposer((current) => current ? { ...current, mode } : null)} onCancel={() => setComposer(null)} onCreated={createTask} onCreateGroup={createComposerGroup} notify={notify} /> : selectedTask?.mode === "team" ? (

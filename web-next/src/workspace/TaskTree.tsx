@@ -6,6 +6,8 @@ import { OriginTaskChip, taskParentLink } from "../components/TaskOrigin.tsx";
 import { TaskStatusDot } from "../components/TaskStatusDot.tsx";
 import { useTaskReadState, type IndicatorForTask } from "../lib/useTaskReadState.ts";
 import { ProjectAvatar } from "./ProjectAvatar.tsx";
+import { SpreadPeekLayer, SpreadRowCells, SpreadRowProvider, useSpreadPeek, useSpreadRow } from "./TaskSpread.tsx";
+import { spreadBucket, type SidebarSpread, type SpreadFilter } from "./useSidebarSpread.ts";
 import { buildTaskTree, orderedTopLevelTasks } from "./taskTreeModel.ts";
 
 type TaskTreeProps = {
@@ -13,6 +15,7 @@ type TaskTreeProps = {
   currentProjectId: string | null;
   tasks: Task[];
   selectedTaskId: string | null;
+  spread: SidebarSpread;
   onTask: (task: Task) => void;
 };
 
@@ -107,8 +110,10 @@ function TaskRow({
   const indicator = indicatorForTask(task);
   const hasOrigin = showOrigin && taskParentLink(task, allTasks) !== null;
   const hasMeta = task.mode === "debate" || trailing != null;
+  const spreadRow = useSpreadRow();
+  const spreadCells = spreadRow?.spread.laidOut ? spreadRow : null;
   return (
-    <div className={`workspace-task-row-wrap ui-selectable${selected ? " is-selected" : ""}${wrapperClassName ? ` ${wrapperClassName}` : ""}`}>
+    <div className={`workspace-task-row-wrap ui-selectable${selected ? " is-selected" : ""}${wrapperClassName ? ` ${wrapperClassName}` : ""}${spreadCells && spreadBucket(task) === "todo" ? " is-todo" : ""}`}>
       <span className="workspace-task-leading">
         {leading ?? <StatusMarker indicator={indicator} />}
       </span>
@@ -128,6 +133,7 @@ function TaskRow({
           </span>
         )}
       </button>
+      {spreadCells && <SpreadRowCells task={task} ctx={spreadCells} onOpen={() => onTask(task)} />}
       {hasOrigin && (
         <OriginTaskChip
           task={task}
@@ -231,12 +237,14 @@ function CurrentProjectTree({
   selectedTaskId,
   onTask,
   indicatorForTask,
+  filter,
 }: {
   tasks: Task[];
   allTasks: Task[];
   selectedTaskId: string | null;
   onTask: (task: Task) => void;
   indicatorForTask: IndicatorForTask;
+  filter: SpreadFilter;
 }) {
   const sections = useMemo(() => buildTaskTree(tasks, { unifiedPinned: true }), [tasks]);
   const { collapsed, toggle: toggleCollapsed } = useCollapsedSections();
@@ -252,10 +260,13 @@ function CurrentProjectTree({
     <>
       {sections.map((section) => {
         const sectionCollapsed = collapsed.has(section.key);
-        const selectedIndex = section.tasks.findIndex((task) => task.id === selectedTaskId);
+        // 筛选只在铺开时可选（窄态没有那排按钮），所以窄态这里恒等于全集。
+        const kept = filter === "all" ? section.tasks : section.tasks.filter((task) => spreadBucket(task) === filter);
+        if (!kept.length) return null;
+        const selectedIndex = kept.findIndex((task) => task.id === selectedTaskId);
         const previewExpanded = previewExpandedSections.has(section.key) || selectedIndex >= TASK_PREVIEW_LIMIT;
-        const visibleTasks = previewExpanded ? section.tasks : section.tasks.slice(0, TASK_PREVIEW_LIMIT);
-        const hiddenCount = section.tasks.length - TASK_PREVIEW_LIMIT;
+        const visibleTasks = previewExpanded ? kept : kept.slice(0, TASK_PREVIEW_LIMIT);
+        const hiddenCount = kept.length - TASK_PREVIEW_LIMIT;
         return (
           <section className={`workspace-task-section${sectionCollapsed ? " is-collapsed" : ""}`} data-task-section={section.key} key={section.key}>
             <button
@@ -285,7 +296,7 @@ function CurrentProjectTree({
                     <TaskRow key={task.id} task={task} allTasks={allTasks} selectedTaskId={selectedTaskId} onTask={onTask} indicatorForTask={indicatorForTask} />
                   ),
                 )}
-                {section.tasks.length > TASK_PREVIEW_LIMIT && (
+                {kept.length > TASK_PREVIEW_LIMIT && (
                   <button className="workspace-task-more" type="button" onClick={() => togglePreview(section.key)}>
                     {previewExpanded ? "收起" : `显示另外 ${hiddenCount} 条`}
                   </button>
@@ -347,7 +358,7 @@ function OtherProject({
   );
 }
 
-export function TaskTree({ projects, currentProjectId, tasks, selectedTaskId, onTask }: TaskTreeProps) {
+export function TaskTree({ projects, currentProjectId, tasks, selectedTaskId, spread, onTask }: TaskTreeProps) {
   const { indicatorForTask } = useTaskReadState(tasks, selectedTaskId);
   const activeTasks = useMemo(() => tasks.filter((task) => !task.archived), [tasks]);
   const currentTasks = useMemo(
@@ -355,25 +366,30 @@ export function TaskTree({ projects, currentProjectId, tasks, selectedTaskId, on
     [activeTasks, currentProjectId],
   );
   const otherProjects = projects.filter((project) => project.id !== currentProjectId);
+  const { peek, peekAt, peekOut, hold, hide } = useSpreadPeek(spread.laidOut);
+  const rowContext = useMemo(() => ({ spread, peekAt, peekOut }), [peekAt, peekOut, spread]);
   return (
-    <nav className="workspace-task-tree" aria-label="任务树">
-      <CurrentProjectTree tasks={currentTasks} allTasks={tasks} selectedTaskId={selectedTaskId} onTask={onTask} indicatorForTask={indicatorForTask} />
-      {otherProjects.length > 0 && (
-        <section className="workspace-other-projects">
-          <header className="workspace-task-section-title">其他项目</header>
-          {otherProjects.map((project) => (
-            <OtherProject
-              key={project.id}
-              project={project}
-              tasks={activeTasks.filter((task) => task.projectId === project.id)}
-              allTasks={tasks}
-              selectedTaskId={selectedTaskId}
-              onTask={onTask}
-              indicatorForTask={indicatorForTask}
-            />
-          ))}
-        </section>
-      )}
-    </nav>
+    <SpreadRowProvider value={rowContext}>
+      <nav className="workspace-task-tree" aria-label="任务树" onScroll={hide}>
+        <CurrentProjectTree tasks={currentTasks} allTasks={tasks} selectedTaskId={selectedTaskId} onTask={onTask} indicatorForTask={indicatorForTask} filter={spread.open ? spread.filter : "all"} />
+        {otherProjects.length > 0 && (
+          <section className="workspace-other-projects">
+            <header className="workspace-task-section-title">其他项目</header>
+            {otherProjects.map((project) => (
+              <OtherProject
+                key={project.id}
+                project={project}
+                tasks={activeTasks.filter((task) => task.projectId === project.id)}
+                allTasks={tasks}
+                selectedTaskId={selectedTaskId}
+                onTask={onTask}
+                indicatorForTask={indicatorForTask}
+              />
+            ))}
+          </section>
+        )}
+      </nav>
+      <SpreadPeekLayer peek={peek} spread={spread} onHold={hold} onLeave={peekOut} />
+    </SpreadRowProvider>
   );
 }

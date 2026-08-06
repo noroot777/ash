@@ -10,6 +10,10 @@
       "types": "./src/index.ts",
       "default": "./src/index.ts"
     },
+    "./attachments": {
+      "types": "./src/attachments.ts",
+      "default": "./src/attachments.ts"
+    },
     "./team": {
       "types": "./src/team.ts",
       "default": "./src/team.ts"

@@ -19,6 +19,7 @@ import type {
   SearchHit,
   Session,
   Task,
+  TaskLastMessage,
   TaskReviewInfo,
   TaskWorkspaceDiscardResult,
   TaskWorkspaceLeftover,
@@ -264,6 +265,9 @@ export const api = {
 
   tasks: (): Promise<Task[]> => request("/tasks"),
   task: (taskId: string): Promise<Task> => request(`/tasks/${id(taskId)}`),
+  // 侧边栏铺开那一下才调：一批任务各自的最后一条消息。读不到的任务不在返回里。
+  lastMessages: (taskIds: string[]): Promise<TaskLastMessage[]> =>
+    request("/tasks/last-messages", json("POST", { taskIds })),
   createTask: (
     task: Partial<Task> & {
       projectId: string;

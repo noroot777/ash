@@ -5,11 +5,14 @@ type ShortcutOptions = {
   enabled: boolean;
   paletteOpen: boolean;
   composerOpen: boolean;
+  spreadOpen: boolean;
   orderedTasks: Task[];
   selectedTaskId: string | null;
   onTogglePalette: () => void;
   onCreate: () => void;
   onTask: (task: Task) => void;
+  onToggleSpread: () => void;
+  onCloseSpread: () => void;
 };
 
 function isTextEntry(target: EventTarget | null): boolean {
@@ -36,11 +39,14 @@ export function useWorkspaceShortcuts({
   enabled,
   paletteOpen,
   composerOpen,
+  spreadOpen,
   orderedTasks,
   selectedTaskId,
   onTogglePalette,
   onCreate,
   onTask,
+  onToggleSpread,
+  onCloseSpread,
 }: ShortcutOptions): void {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -54,6 +60,25 @@ export function useWorkspaceShortcuts({
       }
       if (!enabled || paletteOpen || isTextEntry(event.target) || hasBlockingLayer()) return;
       if (event.metaKey || event.ctrlKey || event.altKey) return;
+
+      // 大图开着时 hasBlockingLayer() 已经把这里整段挡掉了，所以 Esc 只关大图、
+      // 不会顺手把铺开也收了 —— 这条不需要在这里再判一次。
+      if (event.key === "Escape" && spreadOpen) {
+        event.preventDefault();
+        onCloseSpread();
+        return;
+      }
+      // 铺开态里 J/K 只挪选中行（详情已经在背后跟着换了），Enter 表示「就它了」：收起铺开露出详情。
+      if (event.key === "Enter" && spreadOpen) {
+        event.preventDefault();
+        onCloseSpread();
+        return;
+      }
+      if (event.key === "f" || event.key === "\\") {
+        event.preventDefault();
+        onToggleSpread();
+        return;
+      }
 
       const index = orderedTasks.findIndex((task) => task.id === selectedTaskId);
       if (event.key === "j" || event.key === "ArrowDown") {
@@ -80,7 +105,7 @@ export function useWorkspaceShortcuts({
     };
     window.addEventListener("keydown", onKeyDown, true);
     return () => window.removeEventListener("keydown", onKeyDown, true);
-  }, [composerOpen, enabled, onCreate, onTask, onTogglePalette, orderedTasks, paletteOpen, selectedTaskId]);
+  }, [composerOpen, enabled, onCloseSpread, onCreate, onTask, onToggleSpread, onTogglePalette, orderedTasks, paletteOpen, selectedTaskId, spreadOpen]);
 
   useEffect(() => {
     if (!selectedTaskId) return;

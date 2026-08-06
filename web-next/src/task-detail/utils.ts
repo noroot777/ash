@@ -64,37 +64,11 @@ export function taskDurationInfo(task: Task, now = Date.now()): TaskDurationInfo
   };
 }
 
-const ATTACHMENT_HEADER = /^\s*\[用户附带的文件[^\]]*\]\s*$/;
-const ATTACHMENT_PATH = /^\s*-\s+(.+?)\s*$/;
 const IMAGE_EXT = /\.(?:avif|bmp|gif|jpe?g|png|svg|webp)$/i;
 
-export function parseAttachmentText(text: string): { body: string; paths: string[] } {
-  const lines = text.replace(/\r\n?/g, "\n").split("\n");
-  const body: string[] = [];
-  const paths: string[] = [];
-  for (let index = 0; index < lines.length; index += 1) {
-    if (!ATTACHMENT_HEADER.test(lines[index] ?? "")) {
-      body.push(lines[index] ?? "");
-      continue;
-    }
-    let cursor = index + 1;
-    while (cursor < lines.length && !(lines[cursor] ?? "").trim()) cursor += 1;
-    const block: string[] = [];
-    while (cursor < lines.length) {
-      const match = ATTACHMENT_PATH.exec(lines[cursor] ?? "");
-      if (!match) break;
-      block.push(match[1]!);
-      cursor += 1;
-    }
-    if (!block.length) {
-      body.push(lines[index] ?? "");
-      continue;
-    }
-    paths.push(...block);
-    index = cursor - 1;
-  }
-  return { body: body.join("\n").trim(), paths };
-}
+// 解析逻辑搬进了 shared（server 读「最后一条消息」时要用同一份），这里只转出去，
+// 免得所有调用点跟着改 import。
+export { parseAttachmentText } from "@harness/shared/attachments";
 
 export function attachmentView(path: string): { name: string; url: string | null; image: boolean } {
   const normalized = path.trim().replaceAll("\\", "/");

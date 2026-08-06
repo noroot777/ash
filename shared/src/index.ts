@@ -317,6 +317,20 @@ export interface QuestionItem {
   options?: string[];
 }
 
+// 侧边栏横向铺开时，每一行右边那句「最后一条消息」。会话正文不在库里，而是
+// data/runs/<taskId>/<sessionId>.md，读一次要摸盘 —— 所以它**不进** `Task`、不进
+// /tasks 列表，由 POST /tasks/last-messages 在铺开的那一下按需批量取。
+export interface TaskLastMessage {
+  taskId: string;
+  who: "agent" | "user" | "system";
+  // 已摘掉附件块的正文，超长截断（悬浮卡片够用，不是全文归档）。
+  text: string;
+  truncated: boolean;
+  at: string | null;
+  // 附件路径原样带回，交给前端的 attachmentView 变成缩略图 / 下载链接。
+  attachments: string[];
+}
+
 // 候选答案的上限：server 校验、MCP 工具描述、网页渲染共用这一处来源（写死两遍
 // 必然改一处漏一处）。超限一律 400 而不是静默截断 —— 悄悄砍掉一个候选，agent
 // 以为它还在、用户压根没见过，两边对不上。
