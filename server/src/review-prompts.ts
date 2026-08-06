@@ -17,6 +17,7 @@ import { VERIFY_CHECK_LABELS } from "@harness/shared/workflow";
 import { workflowPolicy } from "@harness/shared/workflow-policy";
 import { taskWorkflowDef } from "./workflows.js";
 import { reviewRoundDir } from "./review-evidence.js";
+import { userDirectivesFor } from "./user-directives.js";
 import type { Workspace } from "./git.js";
 
 type TaskRow = typeof tasks.$inferSelect;
@@ -57,14 +58,19 @@ function verifyRules(evidenceDir: string): string {
  * ① 你**已经在**被验的工作目录里，不用再找它在哪；
  * ② 结论调 `report_stage` 报给**你自己**，本回合**不要**调 `complete_task` ——
  *    这一轮是搭着任务跑的旁路回合，任务的完成状态不由它改写。
+ *
+ * 「目标正文」后面必须紧跟用户中途追加的需求（`userDirectivesFor`）：`tasks.body` 是
+ * 建任务那一刻的原始需求，之后在对话框里改的需求从不回写到它。同执行器回头验自己时
+ * 那些话就在会话上下文里，所以这个洞一直没露头；验证站一换执行器就是全新会话，只剩
+ * 一份过期需求（实证见 `user-directives.ts` 顶部）。
  */
-export function verifyProtocolFor(
+export async function verifyProtocolFor(
   target: TaskRow,
   round: number,
   repoPath: string,
   // 这一轮验的是线上哪一站（`WorkflowStep.id`）；null = 身上没线，或回落到第一站。
   station: string | null = null,
-): string {
+): Promise<string> {
   const evidenceDir = reviewRoundDir(target.id, round);
   const baseline = target.useWorktree ? target.worktreeBase || "项目当前基线" : "当前工作树的基准提交";
   return `【自动验证 · 第 ${round} 轮】\n` +
@@ -72,6 +78,7 @@ export function verifyProtocolFor(
     `默认它有问题，去找出问题，而不是复述你做了什么。\n\n` +
     `验证对象：${target.id} / ${target.title}\n` +
     `目标正文：\n${target.body || "(无正文)"}\n\n` +
+    (await userDirectivesFor(target.id)) +
     requiredChecks(target, station ?? target.workflowAt) +
     `先检查真实改动：项目仓库 ${repoPath}；你当前的工作目录就是被验产物所在的目录；` +
     `比较基线 ${baseline}。先看 git status / git diff / 相关提交，再决定验证范围。\n\n` +
@@ -104,6 +111,7 @@ export async function reviewProtocolFor(
   return `【审查任务 · 第 ${review.reviewRound} 轮】\n` +
     `审查对象：${target.id} / ${target.title}\n` +
     `目标正文：\n${target.body || "(无正文)"}\n\n` +
+    (await userDirectivesFor(target.id)) +
     requiredChecks(target, review.reviewStep ?? target.workflowAt) +
     `先检查真实改动：项目仓库 ${repoPath}；被审工作目录 ${workspace.path}；` +
     `被审分支 ${workspace.branch ?? "(无 Git 分支)"}；比较基线 ${baseline}。` +

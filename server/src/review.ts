@@ -178,9 +178,13 @@ export async function startVerifyRound(
   await appendTaskTimeline(targetId, `第 ${round} 轮验证开始：就在这个任务的工作目录里跑，不另起审查任务。`);
   bus.publish({ type: "task.review", taskId: targetId });
 
+  // 协议正文要读会话正文（捞用户中途追加的需求），先 await 出来再排队。这不影响
+  // `continueWhenIdle` 的语义：它是「空着就立刻跑、在跑就排到这一轮之后」，多几次
+  // await 只会让判断发生得更晚一点，两条路都仍然正确。
+  const protocol = await verifyProtocolFor(target, round, project?.repoPath ?? "(项目已不存在)", station);
   continueWhenIdle(
     targetId,
-    verifyProtocolFor(target, round, project?.repoPath ?? "(项目已不存在)", station),
+    protocol,
     {
       system: "run",
       sideTurn: true,

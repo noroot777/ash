@@ -14,6 +14,7 @@
     "test:reattach": "tsx scripts/test-reattach.ts",
     "test:queue": "tsx scripts/test-queue-order.ts",
     "test:follow-up": "tsx scripts/test-follow-up.ts",
+    "test:user-directives": "tsx scripts/test-user-directives.ts",
     "test:task-workspace": "tsx scripts/test-task-workspace.ts",
     "test:reopen-acceptance": "tsx scripts/test-reopen-acceptance.ts",
     "test:accept-merge": "tsx scripts/test-accept-merge.ts",
