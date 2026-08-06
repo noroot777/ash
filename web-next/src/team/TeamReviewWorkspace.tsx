@@ -331,12 +331,15 @@ export function TeamReviewWorkspace({
       <div className="team-review-scroll">
         <div className="team-review-stack">
           <ReviewRecord task={lead} role={lead.useWorktree ? "调度台 / 共享 worktree" : "调度台 / 项目工作区"} actions defaultOpen onTaskUpdated={onTaskUpdated} indicatorForTask={indicatorForTask} onReadTask={onReadTask} notify={notify} />
-          <section className="team-acceptance-queue">
-            <header><div><b>独立执行者待验收队列</b><small>每个显式 worktree 都有独立分支与合入动作，按执行者分别处理。</small></div><span>{independentWorkers.length} 项</span></header>
-            {independentWorkers.length ? (
+          {/* 没有独立 worktree 执行者时整节不出现：它的空态说的就是顶上那句「随团队整体验收
+              联动标记」，留一个 0 项的空壳只是把验收按钮往下推。有独立执行者时它才是唯一的
+              逐个合入/打回入口，那时必须在。 */}
+          {independentWorkers.length > 0 && (
+            <section className="team-acceptance-queue">
+              <header><div><b>独立执行者待验收队列</b><small>每个显式 worktree 都有独立分支与合入动作，按执行者分别处理。</small></div><span>{independentWorkers.length} 项</span></header>
               <div>{independentWorkers.map((worker, index) => <ReviewRecord key={worker.id} task={worker} parentTask={lead} role={`执行者 ${index + 1}`} actions defaultOpen={worker.stage === "awaiting_acceptance" || worker.stage === "verify_failed"} onTaskUpdated={onTaskUpdated} indicatorForTask={indicatorForTask} onReadTask={onReadTask} notify={notify} />)}</div>
-            ) : <p>没有独立 worktree 执行者；共享执行者随团队整体验收。</p>}
-          </section>
+            </section>
+          )}
         </div>
       </div>
     </section>

@@ -60,12 +60,18 @@ const workers: Task[] = [
   task("w3", "改图标"),
   task("r1", "审查:做搜索", { reviewOf: "w1", stage: "accepted" }),
   task("r2", "审查:做弹窗", { reviewOf: "w2" }),
+  // 同一个执行者被审第二轮：列表里该收敛成一条，留后派的这个。
+  task("r3", "审查:做搜索(复审)", { reviewOf: "w1", stage: "accepted" }),
 ];
 
+// 侧边栏在页面右侧，左边是主工作区——抽屉贴着侧边栏左边缘展开，所以位置断言要有这块留白。
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <aside className="inspector-host" style={{ width: 360, height: 640 }}>
-      <TeamReviewInspector lead={lead} workers={workers} onOpenReview={() => undefined} onOpenTask={() => undefined} />
-    </aside>
+    <div style={{ display: "flex", height: 640 }}>
+      <div style={{ flex: 1 }} />
+      <aside className="inspector-host" style={{ width: 360, minWidth: 360 }}>
+        <TeamReviewInspector lead={lead} workers={workers} onOpenReview={() => undefined} onOpenTask={() => undefined} />
+      </aside>
+    </div>
   </StrictMode>,
 );

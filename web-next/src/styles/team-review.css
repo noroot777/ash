@@ -122,7 +122,6 @@
 .team-acceptance-queue > header small { color: var(--faint); font-size: 9.5px; }
 .team-acceptance-queue > header > span { color: var(--faint); font-size: 10px; }
 .team-acceptance-queue > div { display: grid; grid-template-columns: repeat(auto-fit,minmax(min(100%,470px),1fr)); gap: 10px; padding: 10px; }
-.team-acceptance-queue > p { margin: 0; padding: 24px 12px; color: var(--faint); text-align: center; font-size: 10.5px; }
 .team-acceptance-queue .team-review-record-body { padding: 9px; }
 .team-acceptance-queue .team-review-facts { grid-template-columns: 1fr; }
 .team-acceptance-queue .single-review-diff-layout { grid-template-columns: 1fr; }
