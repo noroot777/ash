@@ -22,32 +22,37 @@ try {
   const unsubscribe = bus.subscribe((event) => events.push(event));
 
   for (const mode of ["single", "team", "debate"] as const) {
-    const id = `accepted-${mode}`;
-    await db.insert(tasks).values({
-      id,
-      projectId: "project",
-      title: mode,
-      body: "",
-      mode,
-      status: "done",
-      stage: "accepted",
-      priority: "none",
-      labels: "[]",
-      dependsOn: "[]",
-      resumeDependsOn: "[]",
-      createdAt: at,
-      updatedAt: at,
-    });
+    for (const stage of ["accepted", "merged"] as const) {
+      const id = `${stage}-${mode}`;
+      await db.insert(tasks).values({
+        id,
+        projectId: "project",
+        title: mode,
+        body: "",
+        mode,
+        status: "done",
+        stage,
+        priority: "none",
+        labels: "[]",
+        dependsOn: "[]",
+        resumeDependsOn: "[]",
+        createdAt: at,
+        updatedAt: at,
+      });
 
-    assert.equal(await reopenAcceptedStage(id), true, `${mode} 续聊应撤销旧验收结论`);
-    const row = (await db.select({ stage: tasks.stage, updatedAt: tasks.updatedAt }).from(tasks).where(eq(tasks.id, id))).at(0);
-    assert.equal(row?.stage, null);
-    const stageEvent = events.find((event) => event.type === "task.stage" && event.taskId === id && event.stage === null);
-    assert.ok(
-      stageEvent,
-      `${mode} 应广播 stage=null`,
-    );
-    assert.equal(stageEvent.updatedAt, row?.updatedAt, `${mode} 的 SSE 与数据库 updatedAt 应一致`);
+      // merged 跟 accepted 一样是**上一版**的结论，必须一起撤销。留着它的后果不只是
+      // 显示不准：`enterHumanGate` 见到 merged 会**静默跳过**「等我点头」那道关口，
+      // 于是续聊改出来的新一版一路走到底，连问都不问用户一句。
+      assert.equal(await reopenAcceptedStage(id), true, `${mode} 的 ${stage} 续聊时应撤销旧结论`);
+      const row = (await db.select({ stage: tasks.stage, updatedAt: tasks.updatedAt }).from(tasks).where(eq(tasks.id, id))).at(0);
+      assert.equal(row?.stage, null);
+      const stageEvent = events.find((event) => event.type === "task.stage" && event.taskId === id && event.stage === null);
+      assert.ok(
+        stageEvent,
+        `${mode} 的 ${stage} 应广播 stage=null`,
+      );
+      assert.equal(stageEvent.updatedAt, row?.updatedAt, `${mode} 的 ${stage} 的 SSE 与数据库 updatedAt 应一致`);
+    }
   }
 
   await db.insert(tasks).values({
@@ -65,9 +70,9 @@ try {
     createdAt: at,
     updatedAt: at,
   });
-  assert.equal(await reopenAcceptedStage("not-accepted"), false, "非 accepted 阶段不得改写");
+  assert.equal(await reopenAcceptedStage("not-accepted"), false, "非 accepted/merged 阶段不得改写");
   unsubscribe();
-  console.log("reopen acceptance: single/team/debate 回归验证通过");
+  console.log("reopen acceptance: single/team/debate × accepted/merged 回归验证通过");
 } finally {
   rmSync(root, { recursive: true, force: true });
 }

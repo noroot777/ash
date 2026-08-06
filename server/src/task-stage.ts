@@ -34,15 +34,20 @@ export async function clearTaskStage(taskId: string, note: string): Promise<void
   await appendTaskTimeline(taskId, note);
 }
 
-// 已验收的任务又被唤醒 —— 用户发来真人消息、或调度者接着派活 —— 就把 stage 清回
-// null,列表把它从「已验收」挪回「进行中」;干完再验收一次即可翻篇。accepted 只代表
-// 上一版产物已经验收,不能覆盖验收后的新增改动;这条规则对 single/team/debate 一致。
+// 已翻篇的任务又被唤醒 —— 用户发来真人消息、或调度者接着派活 —— 就把 stage 清回
+// null,列表把它从「已验收」挪回「进行中」;干完再验收一次即可翻篇。
+//
+// **accepted 和 merged 都要清**:merged 是「已经合进去了、只差最后落个验收章」,同样是
+// 上一版的结论。留着它的后果不只是显示不准 —— `enterHumanGate` 见到 merged 会**静默
+// 跳过**「等我点头」那道关口(review.ts),于是新一版改动一路走到底、连问都不问用户一句。
+// accepted 只代表上一版产物已经验收,不能覆盖验收后的新增改动;这条规则对
+// single/team/debate 一致。
 // 走内部更新而不是 POST /tasks/:id/stage:那道 mode==="team" 的 409 是挡 **agent 自报**
 // 的外部协议入口(调度台没有实现/验证语义),挡的不是这条内部规则;广播必须保留,
 // 否则前端分组要等下次全量拉取才动。
 export async function reopenAcceptedStage(taskId: string): Promise<boolean> {
   const t = (await db.select({ stage: tasks.stage }).from(tasks).where(eq(tasks.id, taskId))).at(0);
-  if (!t || t.stage !== "accepted") return false;
+  if (!t || (t.stage !== "accepted" && t.stage !== "merged")) return false;
   await clearTaskStage(taskId, "任务又被唤醒，验收阶段清回进行中（完成后重新验收即可再次翻篇）");
   return true;
 }

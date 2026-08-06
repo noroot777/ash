@@ -22,6 +22,7 @@ import { workerPreambleFor } from "./team/dispatch.js";
 import { reopenAcceptedStage } from "./task-stage.js";
 import { reviewProtocolFor, reviewReminderFor, verifyReminderFor } from "./review-prompts.js";
 import { peerNoticeFor } from "./peer-context.js";
+import { recordTurnBaseline } from "./turn-baseline.js";
 
 
 // Single tasks run headless — nobody can answer a mid-run prompt. Tell the agent
@@ -436,19 +437,25 @@ export async function continueTask(
     // the branch is gone too.
     let cwd = recorded;
     let workspaceReset = false;
+    let freshWorkspace = false;
     if (!existsSync(cwd)) {
       if (project) {
         const ws = await taskWorkspace(task, project.repoPath);
         cwd = ws.path;
+        freshWorkspace = !!ws.fresh;
         // Only a resumed session carries stale memory worth correcting; a fresh
         // session starts empty-handed and needs no warning.
-        workspaceReset = !!ws.fresh && resuming;
+        workspaceReset = freshWorkspace && resuming;
       } else if (!cwd) {
         cwd = ".";
       }
     }
 
     await setStatus(taskId, "running");
+    // 起跑前给工作目录拍一张照，结算时再拍一张比对：这一轮真改了东西，就把上一版的
+    // 验证/验收记录清掉重走一遍（详见 turn-baseline.ts）。只给真人消息拍 —— 系统续跑、
+    // 队列推进、验证打回后叫 agent 修，那些轮次改代码是本分，清账反而打断正在跑的流程。
+    if (!opts.system && !sideTurn) await recordTurnBaseline(taskId, cwd, freshWorkspace);
 
     const invited = !prev; // first time this agent is pulled into the task
     const userTurnText = userText + attachmentsPrompt(opts.attachments);
