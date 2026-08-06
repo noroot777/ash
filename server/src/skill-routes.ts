@@ -34,21 +34,20 @@ const isRemoteExecutor = async (agentType: string, executorId: string): Promise<
   return !!row && targetKindOf(row.target) === "ssh";
 };
 
-// 设置页的「谁扫到了什么」:列出**已注册的执行器 profile** 各自扫到多少技能。
+// 设置页的「谁扫到了什么」。这里只负责把已注册的 profile 摊平交给 scanOverview,
+// 「哪些 profile 算同一行」的规则在那边(CLI 类型 × 本机/远端)。
 // force 时绕过 mtime 指纹,连 frontmatter 一起重读。
 const skillsOverview = async (projectId: string, force: boolean) => {
   const cwd = await repoPathOf(projectId);
   const rows = await db.select().from(agents);
   const executors = rows.map((row) => ({
-    id: row.id,
     label: row.name,
     agentType: row.type,
     remote: targetKindOf(row.target) === "ssh",
   }));
   // 一个 profile 都没注册时不给空白页:按 CLI 类型各列一行,至少让人看见扫得到什么。
   const fallback = ["claude", "codex", "gemini"].map((agentType) => ({
-    id: null,
-    label: `${agentType}（未注册执行器）`,
+    label: "",
     agentType,
     remote: false,
   }));
