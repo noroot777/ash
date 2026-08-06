@@ -21,7 +21,7 @@ import { api, type GitOverview } from "../lib/api.ts";
 import type { SettingsSection } from "../settings/SettingsPage.tsx";
 import { TaskModeIcon, taskModeLabel, taskParentLink, taskParentMode } from "../components/TaskOrigin.tsx";
 import { GitOverviewPanel, GitProjectStep } from "./CommandPaletteGit.tsx";
-import { SearchHitList, SearchPreview } from "./CommandPaletteSearch.tsx";
+import { SearchHitList, SearchHitRow, SearchPreview } from "./CommandPaletteSearch.tsx";
 import {
   ScopeProjectStep,
   ScopeToken,
@@ -297,6 +297,16 @@ export function CommandPalette({
 
   if (!open) return null;
 
+  // 搜的是某个任务的 id 时,那条命中钉在最前面——命令之前,而不只是搜索结果
+  // 内部的第一条。用户给的是精确坐标,列表第一行就得是他要的那个任务,回车直达。
+  const firstHit = hits[0];
+  const idHit = step === "search" && !slashMode && firstHit?.kind === "task" && firstHit.field === "id"
+    ? firstHit
+    : undefined;
+  const pinned = idHit ? 1 : 0;
+  const restHits = idHit ? hits.slice(1) : hits;
+  const hitStart = pinned + items.length;
+
   const resetActive = () => {
     setActive(0);
     mouse.current = null;
@@ -376,8 +386,10 @@ export function CommandPalette({
     }
     if (step === "git-overview") return;
     if (slashMode) return chooseSlashCommand(slashCommands[index]);
-    if (index < items.length) runItem(items[index]);
-    else openHit(hits[index - items.length]);
+    if (idHit && index === 0) return openHit(idHit);
+    const offset = index - pinned;
+    if (offset < items.length) runItem(items[offset]);
+    else openHit(restHits[offset - items.length]);
   };
   const hover = (index: number, event: ReactMouseEvent) => {
     const previous = mouse.current;
@@ -387,8 +399,7 @@ export function CommandPalette({
   };
 
   const gitProject = projects.find((project) => project.id === gitProjectId);
-  const hitStart = items.length;
-  const activeHit = active >= hitStart ? hits[active - hitStart] : undefined;
+  const activeHit = idHit && active === 0 ? idHit : active >= hitStart ? restHits[active - hitStart] : undefined;
   const hasHits = step === "search" && !slashMode && hits.length > 0;
   const wide = hasHits || step === "git-overview";
   const placeholder = step === "scope-project" ? "选择项目…"
@@ -480,8 +491,15 @@ export function CommandPalette({
         {step === "search" && !slashMode && (
           <div className="palette-body">
             <div className="palette-results">
-              {items.map((item, index) => {
-                const header = index === 0 || items[index - 1]?.group !== item.group ? item.group : null;
+              {idHit && (
+                <div>
+                  <div className="palette-label">按 ID 命中</div>
+                  <SearchHitRow hit={idHit} index={0} active={active} query={query} onHover={hover} onOpen={openHit} />
+                </div>
+              )}
+              {items.map((item, position) => {
+                const index = position + pinned;
+                const header = position === 0 || items[position - 1]?.group !== item.group ? item.group : null;
                 return (
                   <div key={item.key}>
                     {header && <div className="palette-label">{header}</div>}
@@ -494,7 +512,7 @@ export function CommandPalette({
                   </div>
                 );
               })}
-              <SearchHitList hits={hits} active={active} startIndex={hitStart} query={query} onHover={hover} onOpen={openHit} />
+              <SearchHitList hits={restHits} active={active} startIndex={hitStart} query={query} onHover={hover} onOpen={openHit} />
               {!normalTotal && <p className="palette-empty">{searching ? "搜索中…" : query.trim().length >= 2 ? "没有匹配的命令、任务或随手记" : "无匹配命令"}</p>}
               {searching && normalTotal > 0 && !hits.length && <p className="px-4 py-2 text-center text-[10px] text-faint">搜索中…</p>}
             </div>

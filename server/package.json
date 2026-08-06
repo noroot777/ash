@@ -13,6 +13,7 @@
     "test:detached": "tsx scripts/test-detached-survival.ts",
     "test:reattach": "tsx scripts/test-reattach.ts",
     "test:queue": "tsx scripts/test-queue-order.ts",
+    "test:search": "tsx scripts/test-search-query.ts",
     "test:follow-up": "tsx scripts/test-follow-up.ts",
     "test:user-directives": "tsx scripts/test-user-directives.ts",
     "test:task-workspace": "tsx scripts/test-task-workspace.ts",
