@@ -140,8 +140,10 @@ export function taskIdCandidates(query: ParsedSearchQuery): string[] {
   return [...candidates];
 }
 
+// 整串 id 或 8 位以上的前缀都算「就是这个任务」。两边都压小写:候选来自
+// tokenize 时已小写化的词,但导出的函数不该指望调用方记得这件事。
 export function isTaskIdMatch(taskId: string, candidate: string): boolean {
-  return taskId.toLowerCase().startsWith(candidate);
+  return taskId.toLowerCase().startsWith(candidate.toLowerCase());
 }
 
 function matchingTerms(text: string, query: ParsedSearchQuery): SearchTerm[] {
