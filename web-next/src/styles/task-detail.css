@@ -325,10 +325,18 @@
 .task-execution-pulse { width: 3px; height: 3px; flex: none; border-radius: 50%; background: currentColor; opacity: .72; }
 .task-execution-events { margin: 1px 0 1px 7px; border-left: 1px solid color-mix(in srgb, var(--line) 72%, transparent); padding: 1px 0 2px 6px; }
 .task-tool-line { margin-top: 2px; border: 0; color: color-mix(in srgb, var(--faint) 82%, transparent); font-size: 9.5px; }
-.task-tool-line summary { display: inline-flex; max-width: 100%; cursor: pointer; align-items: center; gap: 6px; border-radius: 6px; padding: 3px 6px; list-style: none; }
+.task-tool-line summary,
+.task-tool-line .task-tool-head { display: flex; max-width: 100%; cursor: pointer; align-items: baseline; gap: 6px; border-radius: 6px; padding: 3px 6px; list-style: none; }
+.task-tool-line.is-flat .task-tool-head { cursor: default; }
 .task-tool-line summary:hover { color: var(--muted); }
 .task-tool-line summary::-webkit-details-marker { display: none; }
-.task-tool-line summary span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task-tool-line svg,
+.task-tool-line summary > span:first-child,
+.task-tool-line .task-tool-head > span:first-child { flex: none; align-self: center; }
+.task-tool-name { flex: none; font-weight: 500; }
+/* 展开后直接看见执行了什么:命令/文件走等宽,占满剩余宽度,超长省略。 */
+.task-tool-summary { flex: 1 1 auto; min-width: 0; overflow: hidden; color: color-mix(in srgb, var(--faint) 92%, transparent); font-family: var(--font-mono); font-size: 9.5px; text-overflow: ellipsis; white-space: nowrap; }
+.task-tool-line summary:hover .task-tool-summary { color: var(--muted); }
 .task-tool-line pre { max-height: 220px; overflow: auto; margin: 4px 0 2px 6px; border-left: 2px solid var(--line); padding: 4px 8px; white-space: pre-wrap; }
 .task-tool-line--error { color: var(--red); }
 .task-session-meta { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px; }

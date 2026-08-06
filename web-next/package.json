@@ -11,6 +11,7 @@
     "test:open-with": "node scripts/test-open-with-menu.mjs",
     "test:data-layer": "node --experimental-strip-types scripts/test-data-layer.mjs",
     "test:run-activity": "node --experimental-strip-types scripts/test-run-activity.mjs",
+    "test:tool-summary": "node --experimental-strip-types scripts/test-tool-summary.mjs",
     "test:task-tree": "node --experimental-strip-types scripts/test-task-tree.mjs",
     "test:workspace-history": "node --experimental-strip-types scripts/test-workspace-history.mjs",
     "test:workflow-rail": "node --experimental-strip-types scripts/test-workflow-rail.mjs",

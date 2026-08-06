@@ -1,6 +1,7 @@
 import type { AgentEvent, ServerEvent, Session, Task } from "@harness/shared";
 import { ANSWER_PREFIX, parseSessionOutput } from "@harness/shared";
 import type { SessionTraceEntry } from "../lib/api.ts";
+import type { ExecutionEvent } from "../lib/executionTrace.ts";
 import { formatInstant, parseAttachmentText } from "./utils.ts";
 
 export type LiveAgentEvent = Extract<ServerEvent, { type: "agent.event" }>;
@@ -9,11 +10,9 @@ export type TimelineEntry =
   | { kind: "user"; id: string; text: string; attachments: string[]; at: string; isAnswer?: boolean }
   | { kind: "server"; id: string; event: LiveAgentEvent; receivedAt?: string };
 
-export type AgentAuxEvent = {
-  kind: "tool" | "thinking" | "error";
-  label: string;
-  detail?: string;
-};
+// 「执行过程」块里的一行(工具 / 思考 / 异常)。形状与渲染都归 lib/executionTrace,
+// 普通任务、团队、辩论共用同一份 —— 这里只保留旧名字的别名。
+export type AgentAuxEvent = ExecutionEvent;
 
 export type AgentContentSegment = {
   id: string;

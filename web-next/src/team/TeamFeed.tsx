@@ -4,6 +4,7 @@ import { runActivityPhase, runActivityTail } from "@harness/shared/run-activity"
 import type { Batch } from "@harness/shared/team";
 import { ArrowElbowDownRight, ArrowRight, SpinnerGap } from "@phosphor-icons/react";
 import { ConversationScrollControls } from "../components/ConversationScrollControls.tsx";
+import { ExecutionDetails } from "../components/ExecutionTrace.tsx";
 import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
 import { RunActivity } from "../components/RunActivity.tsx";
@@ -11,7 +12,6 @@ import { SessionMeta } from "../components/SessionMeta.tsx";
 import { TaskStatusDot } from "../components/TaskStatusDot.tsx";
 import type { IndicatorForTask } from "../lib/useTaskReadState.ts";
 import { MessageAttachments } from "../task-detail/Attachments.tsx";
-import { ExecutionDetails } from "../task-detail/ConversationFeed.tsx";
 import { durationBetween, formatInstant, parseAttachmentText } from "../task-detail/utils.ts";
 import { executorLabel, parseInbound, teamLeadLabel, workerStatusText, type InboundMessage, type TeamFeedRow } from "./teamModel.ts";
 
