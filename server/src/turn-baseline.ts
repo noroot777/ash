@@ -12,7 +12,8 @@
 //
 //   照片不一样 + agent 确认完成 → 清账：游标搬回第一站、验证轮数归零、stage 清空
 //   照片不一样但没确认完成     → 什么都不动（这一轮本来就没走完）
-//   照片一样                   → 线一个字节不动（纯询问不该重置任何东西）
+//   照片一样                   → 线一个字节不动（纯询问不该重置任何东西），并把回合开头
+//                                摘掉的「已验收/已合并」牌子原样挂回去 —— 那是白摘的
 //   照片一样 + 屋子是这一轮新建的空壳 → 拆屋（见 discardEmptyShell）
 //   照片取不到（非 git / 命令挂了） → 保守当作「变了」
 //
@@ -29,11 +30,12 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { eq } from "drizzle-orm";
+import { STAGE_LABELS } from "@harness/shared";
 import { firstAnchor } from "@harness/shared/workflow-policy";
 import { db } from "./db/index.js";
 import { projects, tasks } from "./db/schema.js";
 import { RUNS_DIR } from "./paths.js";
-import { clearTaskStage } from "./task-stage.js";
+import { clearTaskStage, restoreTaskStage } from "./task-stage.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { now } from "./util.js";
 import { setWorkflowAt } from "./workflow-advance.js";
@@ -48,6 +50,11 @@ interface TurnBaseline {
   fingerprint: string | null;
   /** 这个工作目录是不是这一轮才凭空建出来的空壳（分支和目录都没了才会是 true）。 */
   fresh: boolean;
+  /**
+   * 回合开头 `reopenAcceptedStage` 摘掉的那块牌子（没摘则 null/缺省）。摘牌必须立刻发生，
+   * 可那时还不知道这一轮会不会真改东西；照片一样就说明白摘了，结算时按这个值挂回去。
+   */
+  stage?: "accepted" | "merged" | null;
   at: string;
 }
 
@@ -85,9 +92,20 @@ async function fingerprint(cwd: string): Promise<string | null> {
  * 起跑前的第一张照。落磁盘而不是内存：`data/runs/<taskId>/turn-baseline.json`
  * 活得过 server 重启，重启后接管（reattach）那一路照样能比对上。
  */
-export async function recordTurnBaseline(taskId: string, cwd: string, fresh: boolean): Promise<void> {
+export async function recordTurnBaseline(
+  taskId: string,
+  cwd: string,
+  fresh: boolean,
+  reopenedStage: "accepted" | "merged" | null = null,
+): Promise<void> {
   try {
-    const snapshot: TurnBaseline = { cwd, fingerprint: await fingerprint(cwd), fresh, at: now() };
+    const snapshot: TurnBaseline = {
+      cwd,
+      fingerprint: await fingerprint(cwd),
+      fresh,
+      stage: reopenedStage,
+      at: now(),
+    };
     mkdirSync(join(RUNS_DIR, taskId), { recursive: true });
     writeFileSync(baselinePath(taskId), JSON.stringify(snapshot));
   } catch (error) {
@@ -183,6 +201,15 @@ export async function reconcileTurnBaseline(taskId: string, confirmedDone: boole
     if (changed) {
       if (confirmedDone) await resetWorkflowLedger(taskId);
       return;
+    }
+    // 一个字节没变 = 纯询问。回合开头摘掉的「已验收/已合并」牌子是白摘的，挂回去 ——
+    // 不然用户只是问一句「这段为什么这么做」，任务就从已验收掉回进行中，还得再点一次验收。
+    if (base.stage) {
+      await restoreTaskStage(
+        taskId,
+        base.stage,
+        `这一轮没有产出任何改动，验收阶段放回「${STAGE_LABELS[base.stage]}」——纯询问不用重新验收一次。`,
+      );
     }
     if (base.fresh) await discardEmptyShell(taskId);
   } catch (error) {

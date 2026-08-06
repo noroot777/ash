@@ -361,7 +361,12 @@ export async function continueTask(
   // 已验收的任务收到真人消息 = 旧验收不再覆盖新增改动,stage 清回「进行中」。
   // 只认真人消息:带 opts.system 的 retry / 手点运行 / 队列推进 / 上游唤醒不算,跟下面
   // followUpFrom 用的是同一条口径。放在最前面,确保 single/team/debate 走同一规则。
-  if (!opts.system) await reopenAcceptedStage(taskId);
+  //
+  // 摘牌必须**立刻**发生(界面上任务当场从「已验收」挪回进行中),可这时还不知道这一轮
+  // 会不会真改东西 —— 纯询问也照摘。所以接住摘掉的是哪块牌子交给基线快照:结算发现
+  // 工作目录一个字节没变,就把它原样挂回去(turn-baseline.ts)。team 走下面的 stdin 分支、
+  // 不拍照,维持原样(调度台本来就不走验收链)。
+  const reopenedStage = opts.system ? null : await reopenAcceptedStage(taskId);
   // 团队任务(§Team):插话直接写进常驻调度台的 stdin —— 即时、同一会话、用户侧
   // 感觉不断线。不占这里的单飞锁(那把锁是给「一次运行 = 一个回合」的单任务用的,
   // 调度台的一次运行是整段常驻)。于是 /reply、/answer、@提及全都自动生效。
@@ -455,7 +460,7 @@ export async function continueTask(
     // 起跑前给工作目录拍一张照，结算时再拍一张比对：这一轮真改了东西，就把上一版的
     // 验证/验收记录清掉重走一遍（详见 turn-baseline.ts）。只给真人消息拍 —— 系统续跑、
     // 队列推进、验证打回后叫 agent 修，那些轮次改代码是本分，清账反而打断正在跑的流程。
-    if (!opts.system && !sideTurn) await recordTurnBaseline(taskId, cwd, freshWorkspace);
+    if (!opts.system && !sideTurn) await recordTurnBaseline(taskId, cwd, freshWorkspace, reopenedStage);
 
     const invited = !prev; // first time this agent is pulled into the task
     const userTurnText = userText + attachmentsPrompt(opts.attachments);

@@ -8,7 +8,9 @@
 // 三条是这套判据的全部要害，改动任何一条都必须让这里先红：
 //   ① 改了代码 + 确认完成 → 账本必须**整个**清干净（游标、轮数、review_step、stage
 //      四样少清一样，新代码都还能从那个缺口溜过去）；
-//   ② 只是问了句话 → 线**一个字节都不许动**（否则纯询问会把用户辛苦走到的位置打回起点）；
+//   ② 只是问了句话 → 线**一个字节都不许动**（否则纯询问会把用户辛苦走到的位置打回起点）。
+//      这一条**必须按 continueTask 的真实顺序调**（先摘牌再拍照），跳过入口直接调底层函数
+//      会给出跟真实路径相反的保证 —— 上一版就是这么漏掉「纯询问也会摘掉已合并」的；
 //   ③ 验证没过时用户插进来指点 → **不清零**（用户拍板）。那还是同一版在修，清零的话
 //      轮数上限就形同虚设：每被打回一次说句话，就能无限重验。
 //
@@ -36,9 +38,10 @@ const { db, ensureSchema } = await import("../src/db/index.js");
 const { projects, tasks } = await import("../src/db/schema.js");
 const { eq } = await import("drizzle-orm");
 const { RUNS_DIR } = await import("../src/paths.js");
+const { reopenAcceptedStage, setTaskStage } = await import("../src/task-stage.js");
 const { recordTurnBaseline, reconcileTurnBaseline } = await import("../src/turn-baseline.js");
 
-const IDS = ["tb-changed", "tb-asked", "tb-verify-failed", "tb-unconfirmed", "tb-shell01"];
+const IDS = ["tb-changed", "tb-asked", "tb-restaged", "tb-verify-failed", "tb-unconfirmed", "tb-shell01"];
 
 try {
   await ensureSchema();
@@ -85,6 +88,8 @@ try {
   const row = async (id: string) => (await db.select().from(tasks).where(eq(tasks.id, id))).at(0)!;
 
   // ── ① 改了代码 + 确认完成 → 账本整个清干净 ───────────────────────────────
+  // 这条**有意不走摘牌**：真实路径下 accepted/merged 早在回合开头就被摘了，这里留着牌子，
+  // 顺带覆盖「摘牌管不着的那些 stage（verified 等）在清账时也得一起清」。
   await makeSettledTask("tb-changed", "merged");
   await recordTurnBaseline("tb-changed", repo, false);
   writeFileSync(join(repo, "agent-wrote-this.txt"), "new version\n"); // agent 干了活
@@ -98,15 +103,35 @@ try {
   assert.equal(cleared.stage, null, "merged/accepted 留着的话，「等我点头」那道关口会静默放行");
 
   // ── ② 只问了句话 → 线一个字节都不许动 ────────────────────────────────────
+  // **必须按 continueTask 的真实顺序走**：真人消息进来先摘牌（orchestrator.ts 开头无条件
+  // 调 reopenAcceptedStage），隔了近百行才拍照。上一版这条测试直接调后两个函数、跳过摘牌
+  // 那一步，于是给出了跟真实路径**相反**的保证 —— 真跑起来纯询问照样把「已合并」摘掉，
+  // 用户问一句话就得重新点一次验收（第 2 轮验收 P1）。新增函数时别再图省事跳过入口。
   await makeSettledTask("tb-asked", "merged");
-  await recordTurnBaseline("tb-asked", repo, false);
+  const reopened = await reopenAcceptedStage("tb-asked");
+  assert.equal(reopened, "merged", "回合开头照旧摘牌（既有行为），但要把摘掉的是哪块交出来");
+  assert.equal((await row("tb-asked")).stage, null, "前置条件：这时候牌子确实已经被摘掉了");
+  await recordTurnBaseline("tb-asked", repo, false, reopened);
   await reconcileTurnBaseline("tb-asked", true); // 工作区一个字节没变
 
   const untouched = await row("tb-asked");
   assert.equal(untouched.workflowAt, "s2", "纯询问不该把游标打回起点");
   assert.equal(untouched.verifyStationRounds, 2, "纯询问不该清零验证轮数");
   assert.equal(untouched.reviewStep, "s2", "纯询问不该动 review_step");
-  assert.equal(untouched.stage, "merged", "纯询问不该撤销上一版的验收结论");
+  assert.equal(untouched.stage, "merged", "白摘的牌子必须挂回去，否则问一句话就得重新验收一次");
+
+  // ── ②′ 这一轮 agent 自己报了新阶段 → 旧牌子不许盖回去 ────────────────────
+  await makeSettledTask("tb-restaged", "accepted");
+  const reopenedAgain = await reopenAcceptedStage("tb-restaged");
+  await recordTurnBaseline("tb-restaged", repo, false, reopenedAgain);
+  await setTaskStage("tb-restaged", "verified"); // agent 在这一轮 report_stage
+  await reconcileTurnBaseline("tb-restaged", true);
+
+  assert.equal(
+    (await row("tb-restaged")).stage,
+    "verified",
+    "这一轮报的结论比回合开头那块旧牌子新，恢复时不能盖掉它",
+  );
 
   // ── ③ 验证没过时用户插手 → 不清零（用户 2026-08-06 拍板） ────────────────
   await makeSettledTask("tb-verify-failed", "verify_failed");
@@ -164,7 +189,9 @@ try {
     "零提交的空分支跟着一起删 —— 它在界面上没有任何入口，留着就是纯垃圾",
   );
 
-  console.log("turn baseline: 改了就清账 / 只问不动 / 验证没过不清零 / 未确认不动 / 空壳拆屋，五条通过");
+  console.log(
+    "turn baseline: 改了就清账 / 只问不动+牌子挂回 / 新结论不被盖 / 验证没过不清零 / 未确认不动 / 空壳拆屋，六条通过",
+  );
 } finally {
   for (const id of IDS) rmSync(join(RUNS_DIR, id), { recursive: true, force: true });
   rmSync(root, { recursive: true, force: true });

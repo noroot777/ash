@@ -43,7 +43,11 @@ try {
       // merged 跟 accepted 一样是**上一版**的结论，必须一起撤销。留着它的后果不只是
       // 显示不准：`enterHumanGate` 见到 merged 会**静默跳过**「等我点头」那道关口，
       // 于是续聊改出来的新一版一路走到底，连问都不问用户一句。
-      assert.equal(await reopenAcceptedStage(id), true, `${mode} 的 ${stage} 续聊时应撤销旧结论`);
+      //
+      // 返回值不是布尔而是**摘掉的那块牌子**：摘牌在回合最前面发生，那时还不知道这一轮
+      // 会不会真改东西。结算发现工作目录一个字节没变（纯询问）时，turn-baseline.ts 要靠
+      // 这个值把牌子原样挂回去 —— 不然问一句话就得重新点一次验收。
+      assert.equal(await reopenAcceptedStage(id), stage, `${mode} 的 ${stage} 续聊时应撤销旧结论并交出摘掉的牌子`);
       const row = (await db.select({ stage: tasks.stage, updatedAt: tasks.updatedAt }).from(tasks).where(eq(tasks.id, id))).at(0);
       assert.equal(row?.stage, null);
       const stageEvent = events.find((event) => event.type === "task.stage" && event.taskId === id && event.stage === null);
@@ -70,7 +74,7 @@ try {
     createdAt: at,
     updatedAt: at,
   });
-  assert.equal(await reopenAcceptedStage("not-accepted"), false, "非 accepted/merged 阶段不得改写");
+  assert.equal(await reopenAcceptedStage("not-accepted"), null, "非 accepted/merged 阶段不得改写");
   unsubscribe();
   console.log("reopen acceptance: single/team/debate × accepted/merged 回归验证通过");
 } finally {
