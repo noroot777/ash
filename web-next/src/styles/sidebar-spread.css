@@ -31,6 +31,12 @@
 
 .workspace-shell.is-spread .workspace-main {
   margin-left: var(--workspace-sidebar-width, 260px);
+  /* 主区整块自成一层，于是它内部的 z-index 只在自己家里排座次，跟侧边栏比高低的
+     只剩「主区」这一个。少了这句，主区里任何比 5 大的 z-index 都会从铺开的侧边栏
+     底下钻出来：任务头是 12（.task-detail-header），实测就那么横在最上面一条没被盖住。
+     用 isolation 而不是 position:relative —— 后者会把主区变成定位包含块，
+     铺开的一瞬间改掉里面绝对定位元素的参照物。 */
+  isolation: isolate;
 }
 
 .workspace-sidebar.is-spread {
