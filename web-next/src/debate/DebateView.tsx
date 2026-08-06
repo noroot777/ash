@@ -17,6 +17,7 @@ import {
   Trash,
 } from "@phosphor-icons/react";
 import { ConversationScrollControls } from "../components/ConversationScrollControls.tsx";
+import { ExecutionDetails } from "../components/ExecutionTrace.tsx";
 import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
 import { RunActivity } from "../components/RunActivity.tsx";
@@ -93,10 +94,8 @@ function TurnBubble({
           {turn.raised && <em>✋ 可收敛</em>}
           {!turn.done && <TypingDots />}
         </header>
-        {turn.tools.map((tool, index) => (
-          <details className="debate-tool" key={`${tool.name}-${index}`}><summary>{tool.name}</summary>{tool.detail && <pre>{tool.detail}</pre>}</details>
-        ))}
-        {!turn.done && !turn.text && !turn.tools.length && <p className="debate-thinking">正在组织本轮观点…</p>}
+        <ExecutionDetails events={turn.events} running={!turn.done} />
+        {!turn.done && !turn.text && !turn.events.length && <p className="debate-thinking">正在组织本轮观点…</p>}
         {turn.text && <MarkdownBody text={turn.text} />}
         {turn.error && <p className="debate-turn-error">{turn.error}</p>}
       </article>

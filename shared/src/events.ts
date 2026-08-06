@@ -32,6 +32,11 @@ export type AgentEvent =
 
 export type DebateSpeaker = "A" | "B" | "impl" | "review" | "user"; // impl/review are legacy transcript speakers
 
+// 一个辩手回合里的执行过程(它跑了什么命令、读了什么文件、想了什么)。落进
+// transcript.jsonl 的回合行,好让刷新后的时间线仍能展开「执行过程」——实时那份
+// 是从 agent.event 流里攒的,不落盘就只在当次连接里存在。
+export type TurnTraceEvent = { kind: "tool" | "thinking"; label: string; detail?: string };
+
 // SSE envelope pushed to the web client.
 export type ServerEvent =
   | { type: "task.created"; task: Task }

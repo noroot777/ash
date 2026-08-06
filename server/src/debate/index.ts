@@ -9,6 +9,7 @@ import type {
   SessionRole,
   ServerEvent,
   TaskStatus,
+  TurnTraceEvent,
 } from "@harness/shared";
 import { normalizeDebateConfig } from "@harness/shared";
 import { db } from "../db/index.js";
@@ -164,6 +165,9 @@ async function runTurn(args: {
   let text = "";
   let exit = 0;
   let errorMsg: string | undefined;
+  // 本回合的执行过程,随回合一起落盘(见 TurnTraceEvent):刷新后时间线才展得开。
+  const trace: TurnTraceEvent[] = [];
+  const TRACE_CAP = 200;
   try {
     for await (const event of handle.events) {
       bus.publish({ type: "agent.event", taskId, sessionId: rowId, role, event });
@@ -176,7 +180,10 @@ async function runTurn(args: {
       } else if (event.kind === "text") {
         text += event.text;
         out.write(event.text + "\n");
+      } else if (event.kind === "tool") {
+        if (trace.length < TRACE_CAP) trace.push({ kind: "tool", label: event.name, detail: event.detail });
       } else if (event.kind === "thinking") {
+        if (trace.length < TRACE_CAP) trace.push({ kind: "thinking", label: "思考过程", detail: event.text });
         out.write("〔思考〕" + event.text + "\n");
       } else if (event.kind === "error") {
         errorMsg = event.message;
@@ -218,7 +225,7 @@ async function runTurn(args: {
   try {
     appendFileSync(
       join(runDir, "transcript.jsonl"),
-      JSON.stringify({ round, speaker, text, raised, agrees, conclusion, error: errorMsg, startedAt: turnStart, at: endIso, durationMs }) + "\n",
+      JSON.stringify({ round, speaker, text, raised, agrees, conclusion, error: errorMsg, startedAt: turnStart, at: endIso, durationMs, events: trace }) + "\n",
     );
   } catch {
     /* best effort */

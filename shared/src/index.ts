@@ -589,7 +589,7 @@ export interface ScheduledMessage {
 
 // ── HITL gates (§7) / Executor streaming events (§12) ───────────────────────
 // 形状住在 ./events.ts(纯类型,这里只再导出);拆分理由见那个文件的头部注释。
-export type { AgentEvent, DebateSpeaker, GateAction, GateName, ServerEvent } from "./events.ts";
+export type { AgentEvent, DebateSpeaker, GateAction, GateName, ServerEvent, TurnTraceEvent } from "./events.ts";
 
 // ── Session-snapshot parsing ──────────────────────────────────────────────
 // A persisted session .md is mostly agent Markdown, but backend continues and

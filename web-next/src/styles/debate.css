@@ -31,7 +31,8 @@
 .debate-turn > header b { color:var(--muted); font-size:9.5px; font-weight:550; }.debate-turn > header time,.debate-turn > header small { color:var(--faint); }
 .debate-turn > header em { border-radius:999px; background:color-mix(in lch,var(--amber) 10%,var(--raised)); padding:1px 5px; color:var(--amber); font-size:9px; font-style:normal; }
 .debate-turn .task-markdown { font-size:12px; line-height:1.65; }.debate-turn .task-markdown > :first-child { margin-top:2px; }
-.debate-tool { margin:5px 0; color:var(--faint); font-size:9.5px; }.debate-tool summary { cursor:pointer; }.debate-tool pre { max-height:160px; overflow:auto; border-left:2px solid var(--line); padding-left:7px; white-space:pre-wrap; }
+/* 执行过程沿用普通任务那套折叠块(.task-execution-block,见 task-detail.css),这里只收窄一点。 */
+.debate-turn .task-execution-block { max-width:100%; margin-bottom:3px; }
 .debate-thinking,.debate-turn-error { margin:4px 0 0; color:var(--faint); font-size:10.5px; }.debate-turn-error { color:var(--red); }
 .debate-user-turn { width:min(78%,720px); margin-left:auto; border:1px solid color-mix(in lch,var(--accent) 28%,var(--line)); border-radius:9px; background:color-mix(in lch,var(--accent) 6%,var(--panel)); padding:8px 10px; }
 .debate-user-turn header { display:flex; gap:6px; color:var(--faint); font-size:9.5px; }.debate-user-turn header b { color:var(--accent); }.debate-user-turn header time { margin-left:auto; }.debate-user-turn p { margin:3px 0 0; color:var(--ink); font-size:11.5px; white-space:pre-wrap; }
