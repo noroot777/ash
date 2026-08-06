@@ -14,6 +14,7 @@ import { STEP_LABELS, WORKSPACE_LABELS } from "@harness/shared/workflow";
 import { ArrowUUpLeft, Check, Warning } from "@phosphor-icons/react";
 import { AcceptanceControls } from "../team/TeamReviewWorkspace.tsx";
 import { executorName, useExecutorCatalog, type ExecutorCatalog } from "./executorCatalog.ts";
+import { PreviewRestartButton } from "./PreviewRestartButton.tsx";
 import { stepChips } from "./stepFields.ts";
 import { VerifyGateControls } from "./VerifyGateControls.tsx";
 import { failText } from "./workflowEdit.ts";
@@ -106,6 +107,14 @@ function Stop({
               onTaskUpdated={onTaskUpdated}
               notify={notify}
             />
+          </div>
+        )}
+        {/* 走过的预览站底下常驻一颗手动开关：预览会在任务一开跑时被收掉，而把它起回来
+            的自动路径只有一条（agent 确认完成 → 线往前走到这一站），问一句就没了。
+            还没走到的站（pending）不给——那会儿起的是上一版代码。 */}
+        {stop.step.kind === "preview" && stop.state !== "pending" && (
+          <div className="wf-vgate">
+            <PreviewRestartButton task={task} step={stop.step} notify={notify} />
           </div>
         )}
       </div>

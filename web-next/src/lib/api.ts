@@ -422,6 +422,13 @@ export const api = {
   // 画着「合并并清理」时这一按就是真合并，调用点必须先把话说清楚再让人按。
   forcePassVerify: (taskId: string): Promise<VerifyOverrideResult> =>
     request(`/tasks/${id(taskId)}/workflow/verify-override`, { method: "POST" }),
+  // 把「打开预览」这一站按原样再跑一次。**这条路不推线**（游标、验证轮数一律不动），
+  // 而且要等预览真起来才返回——最长两分钟，调用点得让按钮一直转着。
+  restartPreview: (
+    taskId: string,
+    stepId: string,
+  ): Promise<{ ok: true; url: string | null; port: number | null }> =>
+    request(`/tasks/${id(taskId)}/preview/restart`, json("POST", { stepId })),
   acceptTask: async (taskId: string): Promise<AcceptTaskResult> => {
     const response = await fetch(apiPath(`/tasks/${id(taskId)}/accept`), { method: "POST" });
     const body = await parseBody(response);

@@ -32,6 +32,7 @@ import { mountDebateIterationRoutes } from "./debate/iteration.js";
 import { mountNoteRoutes } from "./notes.js";
 import { mountTeamPresetRoutes } from "./team-presets.js";
 import { findWorkflow, mountWorkflowRoutes } from "./workflows.js";
+import { mountPreviewRoutes } from "./preview-routes.js";
 import { getAppSettings, parseAppSettingsPatch, patchAppSettings } from "./app-settings.js";
 import { mountSkillRoutes } from "./skill-routes.js";
 import { mountTaskRoutes } from "./task-routes.js";
@@ -645,6 +646,7 @@ mountQueueRoutes(api);
 mountDebateIterationRoutes(api);
 mountTeamPresetRoutes(api);
 mountWorkflowRoutes(api);
+mountPreviewRoutes(api);
 
 // ── SSE stream (§12) ───────────────────────────────────────────────────────
 api.get("/events", (c) =>
