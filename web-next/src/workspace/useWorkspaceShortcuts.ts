@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import type { Task } from "@harness/shared";
+import { hasOpenLayer } from "../lib/useDismissable.ts";
 
 type ShortcutOptions = {
   enabled: boolean;
@@ -64,6 +65,9 @@ export function useWorkspaceShortcuts({
       // 大图开着时 hasBlockingLayer() 已经把这里整段挡掉了，所以 Esc 只关大图、
       // 不会顺手把铺开也收了 —— 这条不需要在这里再判一次。
       if (event.key === "Escape" && spreadOpen) {
+        // Esc 是「一次退一层」的键：还有浮层开着（悬停弹出的全文卡片、下拉…）就让给它，
+        // 由 useDismissable 那摞关掉最上面一层。铺开是最外层，轮到它是最后一下。
+        if (hasOpenLayer()) return;
         event.preventDefault();
         onCloseSpread();
         return;

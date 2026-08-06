@@ -389,7 +389,7 @@ export function TaskTree({ projects, currentProjectId, tasks, selectedTaskId, sp
           </section>
         )}
       </nav>
-      <SpreadPeekLayer peek={peek} spread={spread} onHold={hold} onLeave={peekOut} />
+      <SpreadPeekLayer peek={peek} spread={spread} onHold={hold} onLeave={peekOut} onDismiss={hide} />
     </SpreadRowProvider>
   );
 }

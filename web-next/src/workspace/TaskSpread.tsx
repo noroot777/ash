@@ -4,6 +4,7 @@ import type { Task, TaskLastMessage } from "@harness/shared";
 import { parseAttachmentText } from "@harness/shared/attachments";
 import { Image as ImageIcon } from "@phosphor-icons/react";
 import { MessageAttachments } from "../task-detail/Attachments.tsx";
+import { useDismissable } from "../lib/useDismissable.ts";
 import type { SidebarSpread } from "./useSidebarSpread.ts";
 
 // 悬停多久才弹（扫列表时鼠标横穿一片行，立刻弹会一路闪），移开多久才收（留一段
@@ -14,6 +15,13 @@ const PEEK_MARGIN = 8;
 
 type PeekKind = "body" | "last";
 type Peek = { task: Task; kind: PeekKind; rect: DOMRect };
+
+// 大图是盖在卡片上面的一层。它开着的时候卡片既不能被 Esc 收掉，也不能因为鼠标挪到
+// 大图上（卡片会收到 mouseleave）就自己消失 —— 大图是卡片这棵子树里渲染的，卡片一卸载
+// 它跟着一起没。
+function lightboxOpen(): boolean {
+  return document.querySelector('[role="dialog"][aria-modal="true"]') !== null;
+}
 
 export type SpreadRowContext = {
   spread: SidebarSpread;
@@ -127,7 +135,7 @@ export function useSpreadPeek(enabled: boolean) {
   const peekAt = useCallback((task: Task, kind: PeekKind, cell: HTMLElement) => {
     if (!enabled) return;
     // 大图开着的时候不弹：卡片会藏在遮罩背后偷偷占着焦点。
-    if (document.querySelector('[role="dialog"][aria-modal="true"]')) return;
+    if (lightboxOpen()) return;
     clear();
     showTimer.current = window.setTimeout(() => setPeek({ task, kind, rect: cell.getBoundingClientRect() }), PEEK_DELAY);
   }, [enabled]);
@@ -135,7 +143,14 @@ export function useSpreadPeek(enabled: boolean) {
   const peekOut = useCallback(() => {
     if (showTimer.current) window.clearTimeout(showTimer.current);
     showTimer.current = null;
-    hideTimer.current = window.setTimeout(() => setPeek(null), PEEK_GRACE);
+    const armHide = () => {
+      hideTimer.current = window.setTimeout(() => {
+        // 大图还开着就接着等 —— 此刻收卡片等于把用户正在看的那张图一起卸载掉。
+        if (lightboxOpen()) { armHide(); return; }
+        setPeek(null);
+      }, PEEK_GRACE);
+    };
+    armHide();
   }, []);
 
   const hold = useCallback(() => {
@@ -154,15 +169,21 @@ export function SpreadPeekCard({
   last,
   onHold,
   onLeave,
+  onDismiss,
 }: {
   peek: Peek;
   last: TaskLastMessage | undefined;
   onHold: () => void;
   onLeave: () => void;
+  onDismiss: () => void;
 }) {
   const card = useRef<HTMLDivElement | null>(null);
   const [placed, setPlaced] = useState<{ left: number; top: number } | null>(null);
   const { title, subtitle, text, paths } = peekContent(peek.task, peek.kind, last);
+
+  // 排进全局的浮层栈：Esc 一次只退一层，所以这张卡片开着时那一下 Esc 归它，
+  // 收起铺开得再按一次。大图开着时让给大图 —— 它是压在卡片上面的那一层。
+  useDismissable({ enabled: true, containerRef: card, onClose: () => { if (!lightboxOpen()) onDismiss(); } });
 
   // 先落地再量：卡片多高取决于文字多长，量不到就没法决定往下弹还是往上弹。
   useEffect(() => {
@@ -203,12 +224,21 @@ export function SpreadPeekCard({
   );
 }
 
-export function SpreadPeekLayer({ peek, spread, onHold, onLeave }: {
+export function SpreadPeekLayer({ peek, spread, onHold, onLeave, onDismiss }: {
   peek: Peek | null;
   spread: SidebarSpread;
   onHold: () => void;
   onLeave: () => void;
+  onDismiss: () => void;
 }): ReactNode {
   if (!peek) return null;
-  return <SpreadPeekCard peek={peek} last={spread.lastMessages.get(peek.task.id)} onHold={onHold} onLeave={onLeave} />;
+  return (
+    <SpreadPeekCard
+      peek={peek}
+      last={spread.lastMessages.get(peek.task.id)}
+      onHold={onHold}
+      onLeave={onLeave}
+      onDismiss={onDismiss}
+    />
+  );
 }

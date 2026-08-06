@@ -17,6 +17,14 @@ type Layer = {
 };
 const layers: Layer[] = [];
 
+/**
+ * 此刻有没有可关闭的浮层开着。给「Esc 一次退一层」的外圈用：铺开的侧边栏、全屏视图
+ * 这类最外层收到 Esc 前先问一句，有浮层就让给它，由上面那摞自己关最上面那一层。
+ */
+export function hasOpenLayer(): boolean {
+  return layers.length > 0;
+}
+
 export function useDismissable<
   Container extends HTMLElement,
   RestoreFocus extends HTMLElement = HTMLElement,
