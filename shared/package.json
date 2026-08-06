@@ -41,6 +41,10 @@
     "./cli-presets": {
       "types": "./src/cli-presets.ts",
       "default": "./src/cli-presets.ts"
+    },
+    "./mcp-delivery": {
+      "types": "./src/mcp-delivery.ts",
+      "default": "./src/mcp-delivery.ts"
     }
   },
   "scripts": {

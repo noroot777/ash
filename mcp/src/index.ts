@@ -8,6 +8,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { AGENT_TYPES, MAX_QUESTION_ITEMS, MAX_QUESTION_OPTIONS, MAX_QUESTION_OPTION_LEN, STAGE_ORDER } from "@harness/shared";
+import { UNDELIVERED_NET_CODES } from "@harness/shared/mcp-delivery";
 
 const BASE = (process.env.HARNESS_URL ?? "http://localhost:4317").replace(/\/+$/, "");
 
@@ -37,16 +38,21 @@ const RECONNECT_WINDOW_MS = Number(process.env.HARNESS_RECONNECT_MS ?? 60_000);
 // (server 重启期间的确切表现),请求一个字节都没发出去,重试绝不会重复执行。
 // 刻意**不**含 UND_ERR_SOCKET / ECONNRESET:那些是「连上了又断」,可能已经送达,
 // 重试就会把 dispatch 这类非幂等操作做两遍。
+//
+// 码表来自 shared,跟 server 那边「回合结算时补捞漏掉的交卷」是同一份口径
+// (`shared/src/mcp-delivery.ts`)。注意那边另有一份**更宽**的判据
+// (`isUndeliveredMcpFailure`,连 ECONNRESET 都算没送达)——那份只在幂等白名单
+// 的保护下才成立,**不能搬到这里**:这里对所有工具一视同仁。
+//
 // 形状实测(Node 26):`http://localhost:<关闭端口>` 抛 AggregateError,code 挂在
 // AggregateError 自己身上、errors 里是 IPv4/IPv6 各一条;`http://127.0.0.1:…`
 // 抛普通 Error。两种都要认。
-const RETRYABLE = new Set(["ECONNREFUSED", "ENOTFOUND", "EAI_AGAIN"]);
 function retryableCode(e: unknown): string | null {
   const cause = (e as { cause?: unknown })?.cause;
   const code = (cause as { code?: string })?.code;
-  if (code && RETRYABLE.has(code)) return code;
+  if (code && UNDELIVERED_NET_CODES.has(code)) return code;
   const inner = (cause as { errors?: Array<{ code?: string }> })?.errors;
-  const first = inner?.find((x) => x?.code && RETRYABLE.has(x.code));
+  const first = inner?.find((x) => x?.code && UNDELIVERED_NET_CODES.has(x.code));
   return first?.code ?? null;
 }
 

@@ -1,5 +1,9 @@
 import { fileURLToPath } from "node:url";
 
+// 仓库根。`data/` 之外还有一处要用它：判断某个 `node …/mcp/dist/index.js` 子进程
+// 是不是**本仓库这份** harness MCP（mcp-holders.ts）。
+export const REPO_DIR = fileURLToPath(new URL("../..", import.meta.url));
+
 // Anchor data to <repo>/data regardless of launch cwd, so the DB and run
 // artifacts live in one place whether started via `npm start`, `npm -w server`,
 // or `tsx` in dev (DESIGN.md §11 — fixes the cwd-dependent data location).

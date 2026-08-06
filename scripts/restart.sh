@@ -5,6 +5,7 @@
 #   FORCE=1 npm run restart    # 即使有任务在跑也强制重启(会把它们判为 failed)
 #   WAIT=1 npm run restart     # 有任务在跑就【等】它们排空再重启,而不是中止
 #   SKIP_MCP=1 npm run restart # 只重建+重启 :4317,不刷新 MCP(不打断正在用 harness MCP 的会话)
+#   FORCE_MCP=1 npm run restart # 明知有 agent 正握着 MCP 通道,也照样刷新(会掐断它们的交卷)
 #
 # 跑法说明:
 #  - :4317 跑的是编译后的 dist,所以改完源码必须先 build 再重启,本脚本一并做掉。
@@ -21,8 +22,13 @@
 #    注意残留竞态:检查与 kill 之间仍可能有 queued 任务抢跑 —— 真正关死这个窗口
 #    需要服务端的 drain 模式(停止启动新任务并如实报告已排空),这里够不着。
 #  - harness MCP 是每个 Codex/Claude 会话各自 spawn 的 stdio 子进程(node mcp/dist/index.js),
-#    不是常驻端口。这里只杀掉这些"旧代码"子进程;客户端下次用到时会用新的 mcp/dist 重新拉起。
-#    注意:正在用 harness MCP 的会话会断开,需要重连/重开;别在跑 skill 的当口执行本脚本。
+#    不是常驻端口。第 3 步杀掉这些"旧代码"子进程;客户端下次用到时会用新的 mcp/dist 重新拉起。
+#    **这一刀是本脚本唯一真能伤到正在干活的 agent 的地方**(重启 :4317 它们无感,见上一条):
+#    通道一断,它那轮的 report_stage/complete_task 就撞 `Transport closed`。所以第 3 步之前
+#    再问一次服务端「谁手里还握着 MCP」(restart-impact 的 mcpDisrupted),有人握着就**默认
+#    跳过刷新**并说明——改了 mcp/ 非要立刻生效再 FORCE_MCP=1 跑一遍。
+#    (兜底另有一层:harness 会在回合结算时补录那些"确定没送达"的交卷调用,见
+#     server/src/mcp-handoff.ts;但白名单只有三个工具,能不掐断还是不掐断。)
 set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -49,6 +55,14 @@ impact_detail() {
   curl -fsS "localhost:${PORT}/api/restart-impact" 2>/dev/null \
     | sed 's/{"id"/\n{"id"/g' | grep '"reason"' \
     | sed 's/.*"title":"\([^"]*\)".*"reason":"\([^"]*\)".*/     · \1 —— \2/' | head -8
+}
+
+# 同上,但列的是「手里握着 MCP 通道」的那几个(它们没有 reason,只有 pid)。
+impact_detail_mcp() {
+  curl -fsS "localhost:${PORT}/api/restart-impact" 2>/dev/null \
+    | { grep -o '"mcpDisrupted":\[[^]]*\]' || true; } \
+    | tr '{' '\n' | { grep '"pid"' || true; } \
+    | sed 's/.*"title":"\([^"]*\)".*"pid":\([0-9]*\).*/     · \1 (pid \2)/' | head -8
 }
 
 # WAIT=1 用:轮询到「不再有会被打断的任务」为止,把「人守着等」换成「脚本替你等」。
@@ -119,9 +133,20 @@ else
 fi
 
 echo "▶ 3/3 刷新 harness MCP…"
+# 谁手里还握着 MCP 通道。**在服务端重启完之后才问**:此刻接管已经做完,答案是最新的。
+# 拿不到(server 没起来/老版本没这个字段)算 0,退回原来的行为。
+MCP_HOLDERS="$(impact_field mcpDisrupted)"
 if [ -n "${SKIP_MCP:-}" ]; then
   echo "  ⏭ SKIP_MCP:跳过——不动 MCP 子进程,正在用 harness MCP 的会话不会被打断。"
   echo "     (代价:这些会话仍跑旧 mcp/dist;只有改了 mcp/ 才需去掉 SKIP_MCP 再跑一次。)"
+elif [ "${MCP_HOLDERS:-0}" -gt 0 ] && [ -z "${FORCE_MCP:-}${FORCE:-}" ]; then
+  # 默认不掐断正在干活的 agent:刷新 MCP 的收益只是"旧会话用上新 mcp 代码",
+  # 代价却是它这一轮的交卷调用当场失败(2026-08-06 验证白跑)。收益远小于代价,
+  # 所以默认让路,并把出路说清楚。
+  echo "  ⏭ 有 $MCP_HOLDERS 个正在干活的 agent 手里握着 harness MCP 通道,已跳过刷新以免掐断它们的交卷。"
+  impact_detail_mcp
+  echo "     (:$PORT 已经是新代码;这些会话仍跑旧 mcp/dist。)"
+  echo "     改了 mcp/ 需要立刻生效:  FORCE_MCP=1 npm run restart"
 else
   # 末尾锚定 $:只命中独立的 `node …/mcp/dist/index.js` 子进程,绝不误杀含该路径于 --mcp-config 里的
   # claude/codex 父进程(已验证)。
@@ -129,6 +154,7 @@ else
   # 同上:pgrep 无匹配返回非零,别让 pipefail 触发多余的 echo —— N 保证是单个整数。
   N="$(pgrep -f "$MCP_PAT" 2>/dev/null | wc -l | tr -d ' ')"
   if [ "${N:-0}" -gt 0 ]; then
+    [ "${MCP_HOLDERS:-0}" -gt 0 ] && echo "  ⚠ 强制刷新:$MCP_HOLDERS 个在跑的 agent 手里的 MCP 通道会被掐断,它们这一轮的交卷调用会失败。"
     pkill -f "$MCP_PAT" 2>/dev/null || true
     echo "  ✓ 清掉 $N 个旧 MCP 进程,下次会话/调用即用新代码"
   else

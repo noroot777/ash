@@ -239,6 +239,18 @@ async function roundAtStation(targetId: string, review: TaskRow): Promise<number
 }
 
 /**
+ * 「线停在自动验证这一站」的收尾话。三条停下的路（跑挂了 / 没给结论 / 没通过）共用同
+ * 一句，因为对用户来说它们是同一件事：**轮到你了，而且有两个按钮可按**。
+ *
+ * 原来三处都只写「等待人工处理」——用户看到的就是一句「等待人工处理」加一个红色的
+ * 「无结论」，既不知道要处理什么，也不知道在哪处理（2026-08-06 用户原话：「关键也没说
+ * 让我处理什么啊」）。措辞跟界面上那两颗按钮逐字对齐（`VerifyGateControls.tsx`），
+ * 改按钮名字的时候这里也要跟着改。
+ */
+const STUCK_AT_VERIFY =
+  "线停在「自动验证」这一站等你：看过验证报告和截图后，认可就点「人工强制通过」放行，想重跑就点「再验一轮」。";
+
+/**
  * 一轮验证结束后怎么走 —— 就地验证轮和历史独立审查任务**共用这一段**。
  *
  * `outcome` 是这一轮本身的落位（跑完了 / 挂了 / 被停），不是被验任务的状态：就地验证
@@ -282,13 +294,13 @@ async function concludeRound(
     return;
   }
   if (action === "failed") {
-    await appendTaskTimeline(target.id, `第 ${round} 轮验证${by ? `（${by.trim()}）` : ""}以 ${outcome} 结束；不自动循环，等待人工处理。`);
+    await appendTaskTimeline(target.id, `第 ${round} 轮验证${by ? `（${by.trim()}）` : ""}以 ${outcome} 结束；${STUCK_AT_VERIFY}`);
     return;
   }
   if (action === "invalid") {
     await appendTaskTimeline(
       target.id,
-      `第 ${round} 轮验证${by ? `（${by.trim()}）` : ""}已结束，但没有给出 verified/verify_failed 结论；等待人工处理。`,
+      `第 ${round} 轮验证${by ? `（${by.trim()}）` : ""}已结束，但没有把 verified / verify_failed 的结论写回来，线不会替你放行。${STUCK_AT_VERIFY}`,
     );
     return;
   }
@@ -306,8 +318,8 @@ async function concludeRound(
       return;
     }
     await appendTaskTimeline(target.id, byPolicy
-      ? `第 ${round} 轮验证未通过；这条线写的是「没过就停下等人」，现停在 verify_failed 等人处理。`
-      : `第 ${round} 轮验证仍未通过；自动复验上限为 ${policy?.verify ? policy.verifyRounds : MAX_AUTO_REVIEW_ROUNDS} 轮，现停在 verify_failed 等人处理。`);
+      ? `第 ${round} 轮验证未通过；这条线写的是「没过就停下等人」，现停在 verify_failed。${STUCK_AT_VERIFY}`
+      : `第 ${round} 轮验证仍未通过；自动复验上限为 ${policy?.verify ? policy.verifyRounds : MAX_AUTO_REVIEW_ROUNDS} 轮，现停在 verify_failed。${STUCK_AT_VERIFY}`);
     return;
   }
 

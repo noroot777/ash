@@ -44,7 +44,8 @@
     "test:preview-probe": "tsx scripts/test-preview-probe.ts",
     "test:openai-converter": "tsx scripts/test-openai-converter.ts",
     "test:skills": "tsx scripts/test-skills.ts",
-    "test:file-browser": "tsx scripts/test-file-browser.ts"
+    "test:file-browser": "tsx scripts/test-file-browser.ts",
+    "test:mcp-handoff": "tsx scripts/test-mcp-handoff.ts"
   },
   "dependencies": {
     "@harness/shared": "*",

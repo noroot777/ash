@@ -18,6 +18,7 @@ import { notifyTeamLead } from "./team/inbox.js";
 import { handleTaskSettlement } from "./review.js";
 import { FOLLOW_UP_LABEL } from "./labels.js";
 import { reconcileTurnBaseline } from "./turn-baseline.js";
+import { replayUndeliveredMcpCalls } from "./mcp-handoff.js";
 
 
 async function setStatus(taskId: string, status: Parameters<typeof setTaskStatus>[1]) {
@@ -285,6 +286,15 @@ export async function consumeSingleRun(a: {
       agentOffset: detached ? detached.committed() : null,
     })
     .where(eq(sessions.id, sessId));
+  // 这一轮有没有「交卷时通道断了」的调用：有就替它补录。**必须排在 settleTaskStatus
+  // 之前** —— complete_task 的补录要赶在结算读确认标记之前落库，晚一步，一个干完活的
+  // 任务就已经被记成 failed 了（详见 mcp-handoff.ts）。
+  await replayUndeliveredMcpCalls({
+    taskId,
+    sessId,
+    turnStart: a.turnStart,
+    agentType,
+  }).catch(() => 0);
   const settled = await settleTaskStatus(taskId, exitStatus, stopped);
   // 这一轮到底改没改东西:改了就把上一版的验证/验收记录清掉,没改且屋子是临时搭的就拆掉。
   // **必须排在 afterSettlement 之前** —— 那一步会拿着游标把这条线往下推,账晚清一步,
