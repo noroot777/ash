@@ -1,9 +1,10 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { AppSettings } from "@harness/shared";
 import { DEFAULT_APP_SETTINGS } from "@harness/shared";
 import { Toggle } from "../components/ui.tsx";
 import { api } from "../lib/api.ts";
 import { WorkflowPicker, useWorkflows } from "../workflow/WorkflowPicker.tsx";
+import { SkillScanCard } from "./SkillScanCard.tsx";
 
 export function DefaultsSettings({ notify }: { notify: (message: string) => void }) {
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_APP_SETTINGS);
@@ -16,6 +17,17 @@ export function DefaultsSettings({ notify }: { notify: (message: string) => void
       .catch((error) => notify(error instanceof Error ? error.message : "默认规则读取失败"))
       .finally(() => setLoading(false));
   }, [notify]);
+
+  const patchSkillRefresh = useCallback(
+    async (seconds: number) => {
+      try {
+        setSettings(await api.patchSettings({ skillRefreshSeconds: seconds }));
+      } catch (error) {
+        notify(error instanceof Error ? error.message : "默认规则保存失败");
+      }
+    },
+    [notify],
+  );
 
   return (
     <>
@@ -67,6 +79,12 @@ export function DefaultsSettings({ notify }: { notify: (message: string) => void
           </div>
         </div>
       </section>
+      <SkillScanCard
+        seconds={settings.skillRefreshSeconds}
+        loading={loading}
+        onChangeSeconds={patchSkillRefresh}
+        notify={notify}
+      />
     </>
   );
 }

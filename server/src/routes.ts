@@ -33,8 +33,10 @@ import { mountNoteRoutes } from "./notes.js";
 import { mountTeamPresetRoutes } from "./team-presets.js";
 import { findWorkflow, mountWorkflowRoutes } from "./workflows.js";
 import { getAppSettings, parseAppSettingsPatch, patchAppSettings } from "./app-settings.js";
+import { mountSkillRoutes } from "./skill-routes.js";
 import { mountTaskRoutes } from "./task-routes.js";
 import { mountTaskRunRoutes } from "./task-run-routes.js";
+import { mountFileRoutes } from "./file-routes.js";
 import { mountOpenAiConverterRoutes } from "./openai-converter/routes.js";
 import { mountProviderTestRoutes } from "./provider-test.js";
 
@@ -212,6 +214,9 @@ api.get("/agents", async (c) => c.json((await db.select().from(agents)).map(toAg
 api.get("/agents/detect", async (c) => c.json(await detectLocalAgents()));
 // 已知 CLI 目录:含上面那几个可执行器(带 type),外加一批只做「装没装」展示的。
 api.get("/agents/catalog", async (c) => c.json(await detectKnownClis()));
+
+// `/技能` 的三个端点在 `routes-skills.ts`(cwd 取项目仓库根、ssh 执行器不拿本机盘冒充)。
+mountSkillRoutes(api);
 
 api.post("/agents", async (c) => {
   const b = await c.req.json<any>();
@@ -520,6 +525,8 @@ api.post("/groups/resolve", async (c) => {
 
 mountTaskRoutes(api);
 mountTaskRunRoutes(api);
+// 任务工作目录的只读文件浏览 + 交给本机去做的三个动作(实现在 ./file-routes.ts)。
+mountFileRoutes(api);
 // ── 供应商 (relay, system-level) — 挂给执行器用,harness 不直连它跑推理 ────────
 const toProvider = (r: typeof llmProviders.$inferSelect): LlmProvider => ({
   id: r.id,

@@ -2,10 +2,13 @@ import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import type { Group, Session, Task } from "@harness/shared";
 import { isUserFollowUp } from "@harness/shared";
-import { FlowArrow, Info, MagnifyingGlass } from "@phosphor-icons/react";
+import { FlowArrow, FolderOpen, Info, MagnifyingGlass } from "@phosphor-icons/react";
 import { InspectorHost, type InspectorDescriptor } from "../inspector/index.ts";
+import { FileTreeInspector } from "../files/FileTreeInspector.tsx";
+import { FileViewer } from "../files/FileViewer.tsx";
 import { api } from "../lib/api.ts";
 import { useConversation } from "../lib/useConversation.ts";
+import { useSkills } from "../lib/useSkills.ts";
 import { useTaskReadState } from "../lib/useTaskReadState.ts";
 import { conversationToMarkdown } from "./conversationModel.ts";
 import { ConversationFeed } from "./ConversationFeed.tsx";
@@ -39,6 +42,8 @@ interface TaskInspectorContext {
   onTaskUpdated: (task: Task) => void;
   onPatch: (patch: Partial<Task>) => Promise<void>;
   onQueueChanged: (updatedTask?: Task) => void;
+  openFilePath: string | null;
+  onOpenFile: (path: string) => void;
   notify: (message: string) => void;
 }
 
@@ -55,6 +60,18 @@ const TASK_INSPECTORS: readonly InspectorDescriptor<TaskInspectorContext>[] = [
     title: "审查",
     icon: <MagnifyingGlass size={14} />,
     render: (context) => <TaskReviewInspector {...context} />,
+  },
+  {
+    id: "files",
+    title: "文件",
+    icon: <FolderOpen size={14} />,
+    render: (context) => (
+      <FileTreeInspector
+        taskId={context.task.id}
+        activePath={context.openFilePath}
+        onOpenFile={context.onOpenFile}
+      />
+    ),
   },
   {
     id: "workflow",
@@ -98,6 +115,8 @@ export function TaskDetail({
   const [groups, setGroups] = useState<Group[]>([]);
   const [busy, setBusy] = useState(false);
   const [reviewOpen, setReviewOpen] = useState(initialReviewOpen);
+  // 中间那一栏同一时刻只放一样东西：会话 / 审查工作区 / 文件。
+  const [openFilePath, setOpenFilePath] = useState<string | null>(null);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [derivation, setDerivation] = useState<{
     command: TaskDerivationCommand;
@@ -139,6 +158,15 @@ export function TaskDetail({
     defaultActiveTabId: reviewFocused ? "review" : "info",
   }), [hasWorkflow, reviewFocused, task.status]);
 
+  // 这一轮由哪个执行器跑,`/` 就补它自己装的技能(ReplyBox 里 @ 召唤别人时列表
+  // 不跟着变——那是「本回合换人」,而技能清单按任务常设执行器给,够用且不闪)。
+  const skills = useSkills({
+    agentType: task.agentType,
+    projectId: task.projectId,
+    executorId: task.executorId,
+    enabled: task.mode === "single" && !task.archived,
+  });
+
   useEffect(() => {
     let alive = true;
     api.groups(task.projectId).then((rows) => { if (alive) setGroups(rows); }).catch(() => undefined);
@@ -148,6 +176,7 @@ export function TaskDetail({
     setReviewOpen(initialReviewOpen);
     setDeleteOpen(false);
     setDerivation(null);
+    setOpenFilePath(null);
   }, [initialReviewOpen, task.id]);
   // 换任务一律作废(别把上一个任务的目标念到这一个头上);同一个任务停下来也作废,
   // 免得下一次「运行」照抄旧目标。
@@ -158,6 +187,7 @@ export function TaskDetail({
 
   const changeReviewOpen = (open: boolean) => {
     setReviewOpen(open);
+    if (open) setOpenFilePath(null);
     onReviewOpenChange?.(open);
   };
 
@@ -246,6 +276,11 @@ export function TaskDetail({
           if (updatedTask) onTaskUpdate(updatedTask);
           else void refreshTask();
         },
+        openFilePath,
+        onOpenFile: (path: string) => {
+          setOpenFilePath(path);
+          if (reviewOpen) changeReviewOpen(false);
+        },
         notify,
       }}
       defaultVisible={inspectorMode === "page"}
@@ -274,6 +309,13 @@ export function TaskDetail({
             />
             {reviewOpen ? (
               <TaskReviewWorkspace task={task} allTasks={allTasks} onClose={() => changeReviewOpen(false)} onTaskUpdated={onTaskUpdate} notify={notify} />
+            ) : openFilePath ? (
+              <FileViewer
+                taskId={task.id}
+                path={openFilePath}
+                onClose={() => setOpenFilePath(null)}
+                notify={notify}
+              />
             ) : (
               <div className="task-detail-body">
                 <section className="task-detail-main" aria-label="任务会话">
@@ -299,6 +341,8 @@ export function TaskDetail({
                   <ReplyBox
                     task={task}
                     hasConversation={hasConversation}
+                    skills={skills.skills}
+                    skillsRemote={skills.remote}
                     onSend={async (text, attachments, { executorLabel, ...options }) => {
                       const result = await api.replyTask(task.id, text, { attachments, ...options });
                       // 按**结果**分支而不是按请求参数:任务正在跑时后端会把这条落成

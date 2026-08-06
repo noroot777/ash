@@ -10,6 +10,10 @@
   color: var(--muted);
   font-size: 12px;
   font-weight: 500;
+  /* 高度写死 28px 的按钮**不可能**正确渲染换行的文字：中文可逐字断行，被 flex 压窄
+     一点就竖排成一列并溢出盒子（2026-08-05 设置页「立即重新扫描」实拍）。这是所有
+     按钮共有的性质，所以护在这里，别等下一处再补一次。 */
+  white-space: nowrap;
   box-shadow: var(--control-shadow);
   transition: background-color 150ms ease-out, border-color 150ms ease-out,
     color 150ms ease-out, box-shadow 150ms ease-out, opacity 150ms ease-out;
@@ -600,3 +604,27 @@
 @media (prefers-reduced-motion: reduce) {
   .task-pin { transition: none; }
 }
+
+/* ── 斜杠菜单（回复框 / 新建任务共用的 SlashMenu） ─────────────────────────── */
+/* 定位与外框各自归各自的容器类；这里只管两处一模一样的分隔线、角标和空态。 */
+.slash-menu-divider {
+  display: block;
+  margin-top: 3px;
+  border-top: 1px solid var(--line2);
+  padding: 6px 7px 4px;
+  color: var(--faint);
+  font-size: 9.5px;
+}
+.slash-menu-tag {
+  flex: 0 0 auto;
+  margin-left: auto;
+  border-radius: 4px;
+  background: var(--raised);
+  padding: 1px 5px;
+  color: var(--faint);
+  font-size: 9px;
+  font-style: normal;
+  white-space: nowrap;
+}
+.slash-menu-tag + .slash-menu-tag { margin-left: 4px; }
+.slash-menu-empty { margin: 4px 7px 7px; color: var(--faint); font-size: 10.5px; }

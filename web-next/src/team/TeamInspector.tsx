@@ -1,9 +1,10 @@
 import type { Group, Session, Task } from "@harness/shared";
 import { agentMix } from "@harness/shared/team";
-import { Clock, Info, MagnifyingGlass, UsersThree } from "@phosphor-icons/react";
+import { Clock, FolderOpen, Info, MagnifyingGlass, UsersThree } from "@phosphor-icons/react";
 import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
 import { SessionMeta } from "../components/SessionMeta.tsx";
+import { FileTreeInspector } from "../files/FileTreeInspector.tsx";
 import type { InspectorDescriptor } from "../inspector/index.ts";
 import type { IndicatorForTask } from "../lib/useTaskReadState.ts";
 import { MessageAttachments } from "../task-detail/Attachments.tsx";
@@ -31,6 +32,8 @@ export interface TeamInspectorContext {
   onOpenTask: (taskId: string) => void;
   indicatorForTask: IndicatorForTask;
   workerLiveLines: Record<string, string>;
+  openFilePath: string | null;
+  onOpenFile: (path: string) => void;
 }
 
 function ConfigValue({ label, value }: { label: string; value: string }) {
@@ -171,6 +174,19 @@ export const TEAM_INSPECTORS: readonly InspectorDescriptor<TeamInspectorContext>
         workers={context.workers}
         onOpenReview={context.onOpenReview}
         onOpenTask={context.onOpenTask}
+      />
+    ),
+  },
+  {
+    id: "files",
+    title: "文件",
+    icon: <FolderOpen size={14} />,
+    // 团队共享调度台的工作目录，所以这棵树就是整队人正在改的那份文件。
+    render: (context) => (
+      <FileTreeInspector
+        taskId={context.task.id}
+        activePath={context.openFilePath}
+        onOpenFile={context.onOpenFile}
       />
     ),
   },

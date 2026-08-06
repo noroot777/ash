@@ -18,6 +18,8 @@ import type {
   ScheduledMessage,
   SearchHit,
   Session,
+  SkillList,
+  SkillScanOverview,
   Task,
   TaskFollowUp,
   TaskReviewInfo,
@@ -26,6 +28,7 @@ import type {
   TeamPreset,
   TeamPresetConfig,
 } from "@harness/shared";
+import { DEFAULT_APP_SETTINGS } from "@harness/shared";
 import type { WorkflowDef, WorkflowItem } from "@harness/shared/workflow";
 
 const API_ROOT = "/api";
@@ -125,6 +128,59 @@ export type TaskDiffResult = {
   reason?: string;
 };
 
+/** 任务实际在哪干活。服务端只读地解析，绝不为了看文件而新建 worktree。 */
+export type FileWorkspaceRoot = {
+  path: string;
+  branch: string | null;
+  gitRepo: boolean;
+  source: "session" | "worktree" | "repo";
+};
+
+export type FileEntry = {
+  name: string;
+  path: string;
+  kind: "dir" | "file";
+  size: number;
+  mtime: string | null;
+  ignored: boolean;
+  symlink: boolean;
+};
+
+export type FileListing = {
+  root: FileWorkspaceRoot;
+  path: string;
+  entries: FileEntry[];
+  truncated: boolean;
+};
+
+export type FileContent = {
+  path: string;
+  name: string;
+  size: number;
+  mtime: string | null;
+  kind: "text" | "image" | "pdf" | "binary";
+  text: string | null;
+  truncated: boolean;
+  absPath: string;
+  mime: string | null;
+};
+
+/** 本机上能打开某个文件的一个应用。`match` 说明它凭什么被列进来。 */
+export type AppOpener = {
+  id: string;
+  name: string;
+  detail: string;
+  match: "extension" | "type" | "generic";
+  isDefault: boolean;
+};
+
+export type OpenerProbe = {
+  platform: string;
+  canReveal: boolean;
+  apps: AppOpener[];
+  note: string | null;
+};
+
 export type AcceptTaskWarning = {
   reason: "temporary_cleanup_failed";
   message: string;
@@ -213,9 +269,16 @@ export type ReplyTaskResult =
   | { scheduled: true; message: ScheduledMessage };
 
 export const api = {
-  settings: (): Promise<AppSettings> => request("/settings"),
-  patchSettings: (patch: Partial<AppSettings>): Promise<AppSettings> =>
-    request("/settings", json("PATCH", patch)),
+  // 老服务端不认识新加的设置项时会漏字段,补上出厂默认再交出去 —— 界面上出现
+  // 「每 undefined 秒」这种东西比少一个设置项更难看,而且它没法自愈。
+  settings: async (): Promise<AppSettings> => ({
+    ...DEFAULT_APP_SETTINGS,
+    ...(await request<AppSettings>("/settings")),
+  }),
+  patchSettings: async (patch: Partial<AppSettings>): Promise<AppSettings> => ({
+    ...DEFAULT_APP_SETTINGS,
+    ...(await request<AppSettings>("/settings", json("PATCH", patch))),
+  }),
 
   projects: (): Promise<ProjectView[]> => request("/projects"),
   createProject: (name: string, repoPath: string): Promise<ProjectView> =>
@@ -354,6 +417,24 @@ export const api = {
   taskCommits: (taskId: string): Promise<{ branch: string | null; commits: TaskCommit[] }> =>
     request(`/tasks/${id(taskId)}/commits`),
 
+  taskFiles: (taskId: string, path = ""): Promise<FileListing> =>
+    request(`/tasks/${id(taskId)}/files?path=${id(path)}`),
+  taskFile: (taskId: string, path: string): Promise<{ root: FileWorkspaceRoot; file: FileContent }> =>
+    request(`/tasks/${id(taskId)}/file?path=${id(path)}`),
+  // 图片/PDF 预览直接把这个地址交给 <img>/<iframe>，不经过 JSON。
+  taskFileRawUrl: (taskId: string, path: string): string =>
+    apiPath(`/tasks/${id(taskId)}/file/raw?path=${id(path)}`),
+  taskFileOpeners: (taskId: string, path: string, refresh = false): Promise<OpenerProbe> =>
+    request(`/tasks/${id(taskId)}/file/openers?path=${id(path)}${refresh ? "&refresh=1" : ""}`),
+  revealTaskFile: (taskId: string, path: string): Promise<{ ok: true; absPath: string }> =>
+    request(`/tasks/${id(taskId)}/file/reveal`, json("POST", { path })),
+  openTaskFile: (
+    taskId: string,
+    path: string,
+    appId: string | null,
+  ): Promise<{ ok: true; absPath: string }> =>
+    request(`/tasks/${id(taskId)}/file/open`, json("POST", { path, appId })),
+
   notes: (projectId?: string): Promise<Note[]> =>
     request(`/notes${projectId ? `?projectId=${id(projectId)}` : ""}`),
   createNote: (note: { projectId: string; body: string; attachments?: string[] }): Promise<Note> =>
@@ -385,6 +466,24 @@ export const api = {
     { type: AgentType; bin: string; available: boolean; path: string | null; version: string | null; resident: boolean }[]
   > => request("/agents/detect"),
   detectClis: (): Promise<DetectedCli[]> => request("/agents/catalog"),
+  // 这个执行器在这个项目下已经装了哪些 `/技能`。refresh=true 跳过服务端的指纹缓存。
+  skills: (query: {
+    agentType: string;
+    projectId?: string;
+    executorId?: string;
+    refresh?: boolean;
+  }): Promise<SkillList> => {
+    const params = new URLSearchParams({ agentType: query.agentType });
+    if (query.projectId) params.set("projectId", query.projectId);
+    if (query.executorId) params.set("executorId", query.executorId);
+    if (query.refresh) params.set("refresh", "1");
+    return request(`/skills?${params.toString()}`);
+  },
+  // 设置页:每个已注册执行器各自扫到多少技能。rescan 版强制重扫(绕过指纹缓存)。
+  skillsOverview: (projectId?: string): Promise<SkillScanOverview> =>
+    request(`/skills/overview${projectId ? `?projectId=${encodeURIComponent(projectId)}` : ""}`),
+  rescanSkills: (projectId?: string): Promise<SkillScanOverview> =>
+    request(`/skills/rescan${projectId ? `?projectId=${encodeURIComponent(projectId)}` : ""}`, json("POST", {})),
   createAgent: (agent: Partial<AgentExecutorProfile>): Promise<AgentExecutorProfile> =>
     request("/agents", json("POST", agent)),
   patchAgent: (

@@ -12,6 +12,13 @@ const SETTING_SPECS = {
     ok: (v: unknown) => typeof v === "string" && v.length <= 64,
     hint: "必须是字符串（起手式 id，空串 = 跟随系统推荐）",
   },
+  skillRefreshSeconds: {
+    // 按**小时**计:装新技能是低频动作,而等不及的人有「立即重新扫描」和「关掉输入框
+    // 再打开」两条即时通道,没必要让所有页面每分钟对着服务端刷一遍 HTTP。
+    ok: (v: unknown) =>
+      typeof v === "number" && Number.isInteger(v) && (v === 0 || (v >= 3600 && v <= 86400)),
+    hint: "必须是 0（关闭轮询）或 3600~86400 之间的整数秒（1~24 小时）",
+  },
 } satisfies { [K in keyof AppSettings]: { ok: (v: unknown) => boolean; hint: string } };
 
 const SETTING_KEYS = Object.keys(SETTING_SPECS) as (keyof AppSettings)[];
