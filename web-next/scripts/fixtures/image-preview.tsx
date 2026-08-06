@@ -19,6 +19,8 @@ const links = [
   "",
   "[附件](/Users/fjh/code/harness/data/uploads/AbCdEfGh1234-image-preview-one.png)",
   "",
+  "[证据接口图](/api/tasks/tsk1234/review/file?round=2&name=image-preview-one.png)",
+  "",
   "[站外图](https://example.com/remote.png)",
 ].join("\n");
 

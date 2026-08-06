@@ -73,9 +73,14 @@ function servableImage(href: string): ImagePreviewTarget | null {
     if (attachment.image && attachment.url) return { name: attachment.name, url: attachment.url };
   }
 
-  if (!url || !isImagePath(url.pathname)) return null;
+  if (!url) return null;
+  // 站内 URL 的文件名一般就在 pathname 末段；验证证据接口是例外，它把名字放在 ?name=
+  // （用户从证据面板「复制图片地址」再贴回对话里，走的就是这一条）。
+  const named = url.pathname.endsWith("/review/file") ? url.searchParams.get("name") : null;
+  const name = decodeSafe(named ?? url.pathname.split("/").pop() ?? "");
+  if (!isImagePath(name)) return null;
   if (!/^https?:/i.test(href) && !url.pathname.startsWith("/api/")) return null;
-  return { name: decodeSafe(url.pathname.split("/").pop() ?? "") || "图片", url: url.toString() };
+  return { name: name || "图片", url: url.toString() };
 }
 
 export function currentOriginOpenLocalUrl(href: string): string {
