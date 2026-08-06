@@ -144,7 +144,6 @@
   letter-spacing: 0.02em;
 }
 
-.workspace-spread-who.is-ask { color: var(--amber); }
 .workspace-spread-who.is-you { color: var(--accent); }
 
 .workspace-spread-cell--time {

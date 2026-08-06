@@ -354,6 +354,13 @@ export async function continueTask(
      * 发起的（带 system），所以要显式开这个开关，否则会被当成一次普通的系统续跑。
      */
     sideTurn?: boolean;
+    /**
+     * 这一轮的字是**后端代写**的（验证打回的报告、验收冲突的交接说明），但它必须占一个
+     * 真人回合 —— 带 system 会被当成「系统续跑」，followUpFrom 就护不住任务原来的终态。
+     * 于是落盘时标一位 by:"system"，让读端（Inspector 的「后续追问」、侧边栏铺开那一列）
+     * 能把它跟我自己打的字分开。默认 false = 真人发的。
+     */
+    byBackend?: boolean;
     throwOnTeamUnavailable?: boolean;
   } = {},
 ): Promise<void> {
@@ -561,7 +568,7 @@ export async function continueTask(
     } else {
       // 你→@agent reply, persisted as a structured turn so a reloaded thread shows
       // the human turn as its own bubble (live, the client already shows it).
-      writeTurn(out, { t: "user", agent, text: userTurnText }, turnStart);
+      writeTurn(out, { t: "user", agent, text: userTurnText, ...(opts.byBackend ? { by: "system" as const } : {}) }, turnStart);
     }
     if (workspaceReset) {
       // 让用户也看见:agent 这一轮是在一个空目录上重新开始的。只发 toast 不算数,

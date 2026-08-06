@@ -317,12 +317,11 @@ export interface QuestionItem {
   options?: string[];
 }
 
-// 侧边栏横向铺开时，每一行右边那句「最后一条消息」。会话正文不在库里，而是
-// data/runs/<taskId>/<sessionId>.md，读一次要摸盘 —— 所以它**不进** `Task`、不进
-// /tasks 列表，由 POST /tasks/last-messages 在铺开的那一下按需批量取。
-export interface TaskLastMessage {
+// 侧边栏横向铺开时，每一行右边那句「我发的最后一条追问」（判据见 `isUserFollowUp`）。
+// 会话正文不在库里，而是 data/runs/<taskId>/<sessionId>.md，读一次要摸盘 —— 所以它
+// **不进** `Task`、不进 /tasks 列表，由 POST /tasks/follow-ups 在铺开的那一下按需批量取。
+export interface TaskFollowUp {
   taskId: string;
-  who: "agent" | "user" | "system";
   // 已摘掉附件块的正文，超长截断（悬浮卡片够用，不是全文归档）。
   text: string;
   truncated: boolean;
@@ -595,8 +594,31 @@ export const LEGACY_SYS_MARKER = "〔系统〕继续（从中断处）";
 
 export type ConvSeg =
   | { kind: "agent"; text: string; endedAt?: string }
-  | { kind: "user"; text: string; at?: string }
+  // bySystem：走真人回合通道、但作者是后端的那种（验证打回、验收冲突交接）。
+  // 它们**必须**是 user 回合（要 followUpFrom 护住任务原来的终态），所以只能另开一位来标。
+  | { kind: "user"; text: string; at?: string; bySystem?: true }
   | { kind: "system"; text: string; at?: string };
+
+// 「答复」是回答 agent 提问的那条，走 /tasks/:id/answer 时由服务端加的前缀。
+export const ANSWER_PREFIX = "【答复】";
+
+// 化石名单，只服务**加 by 标记之前**写下的老会话：那时后端代写的消息跟真人打的字
+// 在盘上长得一模一样，只能靠开头这几个方括号认（名单是把 data/runs 全扫一遍点出来的，
+// 「自动审查」是「自动验证」之前的老措辞）。老正文不会再变，所以这张表也永远不用加
+// 东西 —— 新增的后端代写消息走 continueTask 的 `byBackend`，落盘就带 by:"system"。
+// 代价说在明处：真人**引用**这些原话再补一句时会被误判成代写（实测有过一次），
+// 只影响老会话，且宁可漏一条也好过把机器的话冒充成我说的。
+const LEGACY_SYSTEM_AUTHORED = [ANSWER_PREFIX, "【自动审查未通过", "【自动验证未通过", "【验收未通过"];
+
+// 「后续追问」= 真人自己打字发的话。两处判据必须是同一份：详情页 Inspector 的
+// 「后续追问」列表，和侧边栏铺开后那一列。三件事都要排除：
+// ① agent 说的（kind 不是 user）；② 系统代发的继续/恢复提示（落成 kind:"system"）；
+// ③ 后端代用户发、但占着真人回合的那些（验证打回、验收冲突、答复提问）。
+export function isUserFollowUp(seg: { kind: string; text?: string | null; bySystem?: boolean }): boolean {
+  const text = seg.text ?? "";
+  if (seg.kind !== "user" || !text.trim() || seg.bySystem) return false;
+  return !LEGACY_SYSTEM_AUTHORED.some((prefix) => text.startsWith(prefix));
+}
 
 export function parseSessionOutput(out: string): ConvSeg[] {
   const segs: ConvSeg[] = [];
@@ -629,7 +651,7 @@ export function parseSessionOutput(out: string): ConvSeg[] {
     if (trimmed.startsWith("> 续聊回合异常结束(")) continue;
     if (line.startsWith("\x1e")) {
       try {
-        const j = JSON.parse(line.slice(1)) as { t?: string; text?: string; at?: string };
+        const j = JSON.parse(line.slice(1)) as { t?: string; text?: string; at?: string; by?: string };
         flush();
         if (j.t === "agentEnd") {
           // Not a new bubble — it stamps where the agent turn that just flushed
@@ -641,7 +663,7 @@ export function parseSessionOutput(out: string): ConvSeg[] {
         segs.push(
           j.t === "system"
             ? { kind: "system", text: j.text || LEGACY_SYS_MARKER, at: j.at }
-            : { kind: "user", text: j.text ?? "", at: j.at },
+            : { kind: "user", text: j.text ?? "", at: j.at, ...(j.by === "system" ? { bySystem: true as const } : {}) },
         );
         continue;
       } catch {

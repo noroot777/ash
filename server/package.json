@@ -13,6 +13,7 @@
     "test:detached": "tsx scripts/test-detached-survival.ts",
     "test:reattach": "tsx scripts/test-reattach.ts",
     "test:queue": "tsx scripts/test-queue-order.ts",
+    "test:follow-up": "tsx scripts/test-follow-up.ts",
     "test:task-workspace": "tsx scripts/test-task-workspace.ts",
     "test:reopen-acceptance": "tsx scripts/test-reopen-acceptance.ts",
     "test:accept-merge": "tsx scripts/test-accept-merge.ts",

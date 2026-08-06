@@ -1,5 +1,5 @@
 import type { AgentEvent, ServerEvent, Session, Task } from "@harness/shared";
-import { parseSessionOutput } from "@harness/shared";
+import { ANSWER_PREFIX, parseSessionOutput } from "@harness/shared";
 import type { SessionTraceEntry } from "../lib/api.ts";
 import { formatInstant, parseAttachmentText } from "./utils.ts";
 
@@ -35,7 +35,7 @@ export type ConversationItem =
       markdown: string;
       segments: AgentContentSegment[];
     }
-  | { kind: "user"; id: string; text: string; attachments: string[]; at?: string; isAnswer?: boolean }
+  | { kind: "user"; id: string; text: string; attachments: string[]; at?: string; isAnswer?: boolean; bySystem?: boolean }
   | { kind: "event"; id: string; text: string; at?: string; tone?: "neutral" | "error" };
 
 export type PersistedConversation = { session: Session; output: string; trace?: SessionTraceEntry[] };
@@ -289,7 +289,10 @@ export function buildConversationItems(
           text: segment.text,
           attachments: [],
           at: segment.at,
-          isAnswer: segment.text.startsWith("【答复】"),
+          isAnswer: segment.text.startsWith(ANSWER_PREFIX),
+          // 后端代写、占着真人回合的那种（验证打回、验收冲突）。照常渲染成 user 气泡，
+          // 但「后续追问」不收它 —— 判据统一在 shared 的 isUserFollowUp。
+          bySystem: segment.bySystem,
         });
         turnStartedAt = segment.at ?? turnStartedAt;
       } else if (segment.kind === "system") {

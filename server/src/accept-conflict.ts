@@ -42,7 +42,8 @@ export async function handOffConflict(
   const prompt = CONFLICT_PROMPT({ sourceBranch, targetBranch, conflictFiles: files });
   try {
     // 不 await:continueTask 会把整个回合跑完,验收请求不能挂在上面等。
-    void continueTask(task.id, prompt).catch(async (err) => {
+    // byBackend：占真人回合，但字是后端写的 —— 别混进「我发的追问」里。
+    void continueTask(task.id, prompt, { byBackend: true }).catch(async (err) => {
       await appendTaskTimeline(
         task.id,
         `冲突交接失败：唤醒该任务解冲突时出错（${err instanceof Error ? err.message : String(err)}），请手动处理。`,

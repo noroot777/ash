@@ -332,7 +332,8 @@ async function concludeRound(
       coverage,
       autoNext: plan.auto && stationRound < plan.maxRounds,
     }),
-    {},
+    // 打回是真人回合（护住原终态），但报告是后端写的，标一位免得被当成我的追问。
+    { byBackend: true },
     (error) => appendTaskTimeline(
       target.id,
       `验证打回失败：唤醒原任务时出错（${error}），请手动续跑。`,

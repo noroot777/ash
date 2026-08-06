@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type MouseEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import type { Task, TaskLastMessage } from "@harness/shared";
+import type { Task, TaskFollowUp } from "@harness/shared";
 import { parseAttachmentText } from "@harness/shared/attachments";
 import { Image as ImageIcon } from "@phosphor-icons/react";
 import { MessageAttachments } from "../task-detail/Attachments.tsx";
@@ -51,32 +51,22 @@ function firstLine(text: string): string {
   return text.split("\n").map((line) => line.trim()).find(Boolean) ?? "";
 }
 
-type Speaker = { label: string; tone: "" | "ask" | "you" };
-
-// 删掉了「走到哪一步」那一列，所以列的含义只能靠内容自己认：最后一条消息前面
-// 永远挂着说话人，原始需求是更淡的那一列。
-function speakerOf(task: Task, last: TaskLastMessage | undefined): Speaker {
-  if (task.question) return { label: "它问你", tone: "ask" };
-  if (!last) return { label: "", tone: "" };
-  if (last.who === "user") return { label: "你说", tone: "you" };
-  if (last.who === "system") return { label: "系统", tone: "" };
-  return { label: "它说", tone: "" };
-}
-
 type Peeked = { title: string; subtitle: string; text: string; paths: string[] };
 
-function peekContent(task: Task, kind: PeekKind, last: TaskLastMessage | undefined): Peeked {
+// 这一列只放**我自己**发的话（判据是 shared 的 isUserFollowUp，跟详情页 Inspector
+// 那个「后续追问」列表同一份）：agent 说了什么、系统代发的继续提示，都不进来。
+const NO_FOLLOW_UP = "还没追问过";
+
+function peekContent(task: Task, kind: PeekKind, last: TaskFollowUp | undefined, known: boolean): Peeked {
   if (kind === "body") {
     const { body, paths } = parseAttachmentText(task.body ?? "");
     return { title: "原始需求", subtitle: task.title || "未命名任务", text: body || "这个任务没有写需求。", paths };
   }
-  const speaker = speakerOf(task, last);
-  const text = task.question || last?.text || "";
   return {
-    title: "最后一条消息",
-    subtitle: `${speaker.label || "还没有消息"} · ${compactAge(task.question ? task.updatedAt : last?.at ?? task.updatedAt)}`,
-    text: text || "这个任务还没有任何消息。",
-    paths: task.question ? [] : last?.attachments ?? [],
+    title: "后续追问",
+    subtitle: last ? `我发的最新一条 · ${compactAge(last.at ?? task.updatedAt)}` : (known ? NO_FOLLOW_UP : "还没读到"),
+    text: last?.text || (known ? "这个任务你还没有追问过 —— 只有原始需求。" : "还没读到这个任务的追问。"),
+    paths: last?.attachments ?? [],
   };
 }
 
@@ -93,13 +83,10 @@ function ClipMark({ count }: { count: number }) {
 // 铺开后每一行右边多出来的三格。窄态不渲染，宽态由 CSS 的列模板给出宽度；
 // 行高仍然是 34px，上方也不新增任何一行 —— 铺开是「露出右边」，不是「重排」。
 export function SpreadRowCells({ task, ctx, onOpen }: { task: Task; ctx: SpreadRowContext; onOpen: () => void }) {
-  const last = ctx.spread.lastMessages.get(task.id);
-  // 没问过后端的行（比如别的项目）只留一个破折号，不能写「还没有消息」——那是在编。
-  const known = ctx.spread.loaded.has(task.id) || Boolean(task.question);
+  const last = ctx.spread.followUps.get(task.id);
+  // 没问过后端的行（比如别的项目）只留一个破折号，不能写「还没追问过」——那是在编。
+  const known = ctx.spread.loaded.has(task.id);
   const { body, paths } = parseAttachmentText(task.body ?? "");
-  const speaker = speakerOf(task, last);
-  const lastText = task.question || last?.text || "";
-  const lastPaths = task.question ? [] : last?.attachments ?? [];
   const cell = (kind: PeekKind) => ({
     onClick: onOpen,
     onMouseEnter: (event: MouseEvent<HTMLSpanElement>) => ctx.peekAt(task, kind, event.currentTarget),
@@ -112,9 +99,11 @@ export function SpreadRowCells({ task, ctx, onOpen }: { task: Task; ctx: SpreadR
         <ClipMark count={paths.length} />
       </span>
       <span className="workspace-spread-cell workspace-spread-cell--last" {...cell("last")}>
-        {speaker.label && <em className={`workspace-spread-who${speaker.tone ? ` is-${speaker.tone}` : ""}`}>{speaker.label}</em>}
-        <p className={lastText ? "" : "is-empty"}>{firstLine(lastText) || (known ? "还没有消息" : "—")}</p>
-        <ClipMark count={lastPaths.length} />
+        {/* 没有列名行，列的含义只能靠内容自己认：这一格开头永远挂着「你说」，
+            对面那一列（原始需求）是更淡的那一列。 */}
+        {last && <em className="workspace-spread-who is-you">你说</em>}
+        <p className={last ? "" : "is-empty"}>{last ? firstLine(last.text) : (known ? NO_FOLLOW_UP : "—")}</p>
+        <ClipMark count={last?.attachments.length ?? 0} />
       </span>
       <span className="workspace-spread-cell workspace-spread-cell--time" onClick={onOpen}>{compactAge(task.updatedAt)}</span>
     </>
@@ -167,19 +156,21 @@ export function useSpreadPeek(enabled: boolean) {
 export function SpreadPeekCard({
   peek,
   last,
+  known,
   onHold,
   onLeave,
   onDismiss,
 }: {
   peek: Peek;
-  last: TaskLastMessage | undefined;
+  last: TaskFollowUp | undefined;
+  known: boolean;
   onHold: () => void;
   onLeave: () => void;
   onDismiss: () => void;
 }) {
   const card = useRef<HTMLDivElement | null>(null);
   const [placed, setPlaced] = useState<{ left: number; top: number } | null>(null);
-  const { title, subtitle, text, paths } = peekContent(peek.task, peek.kind, last);
+  const { title, subtitle, text, paths } = peekContent(peek.task, peek.kind, last, known);
 
   // 排进全局的浮层栈：Esc 一次只退一层，所以这张卡片开着时那一下 Esc 归它，
   // 收起铺开得再按一次。大图开着时让给大图 —— 它是压在卡片上面的那一层。
@@ -235,7 +226,8 @@ export function SpreadPeekLayer({ peek, spread, onHold, onLeave, onDismiss }: {
   return (
     <SpreadPeekCard
       peek={peek}
-      last={spread.lastMessages.get(peek.task.id)}
+      last={spread.followUps.get(peek.task.id)}
+      known={spread.loaded.has(peek.task.id)}
       onHold={onHold}
       onLeave={onLeave}
       onDismiss={onDismiss}

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { Task, TaskLastMessage } from "@harness/shared";
+import type { Task, TaskFollowUp } from "@harness/shared";
 import { api } from "../lib/api.ts";
 
 // 收起动画的时长，必须和 sidebar-spread.css 里 .workspace-sidebar 的 width 过渡对齐：
@@ -33,9 +33,9 @@ export type SidebarSpread = {
   laidOut: boolean;
   filter: SpreadFilter;
   setFilter: (filter: SpreadFilter) => void;
-  lastMessages: Map<string, TaskLastMessage>;
-  // 已经问过后端的任务 —— 「问过但没有消息」和「还没问」得分开说，
-  // 否则别的项目那些没问过的行会被写成「还没有消息」，是在编。
+  followUps: Map<string, TaskFollowUp>;
+  // 已经问过后端的任务 —— 「问过但我没追问过」和「还没问后端」得分开说，
+  // 否则别的项目那些没问过的行会被写成「还没追问过」，是在编。
   loaded: Set<string>;
   toggle: () => void;
   close: () => void;
@@ -47,7 +47,7 @@ export function useSidebarSpread(tasks: Task[], projectId: string | null, revisi
   const [open, setOpen] = useState(false);
   const [laidOut, setLaidOut] = useState(false);
   const [filter, setFilter] = useState<SpreadFilter>("all");
-  const [lastMessages, setLastMessages] = useState<Map<string, TaskLastMessage>>(new Map());
+  const [followUps, setFollowUps] = useState<Map<string, TaskFollowUp>>(new Map());
   const [loaded, setLoaded] = useState<Set<string>>(new Set());
   const closeTimer = useRef<number | null>(null);
 
@@ -73,10 +73,10 @@ export function useSidebarSpread(tasks: Task[], projectId: string | null, revisi
     if (!open || !idsKey) return;
     let alive = true;
     const ids = idsKey.split(",");
-    api.lastMessages(ids)
+    api.followUps(ids)
       .then((rows) => {
         if (!alive) return;
-        setLastMessages(new Map(rows.map((row) => [row.taskId, row])));
+        setFollowUps(new Map(rows.map((row) => [row.taskId, row])));
         setLoaded(new Set(ids));
       })
       // 读不到就让那一列留白。铺开是个扫一眼的动作，为它弹一条错误提示更吵。
@@ -86,5 +86,5 @@ export function useSidebarSpread(tasks: Task[], projectId: string | null, revisi
 
   const toggle = useCallback(() => setOpen((value) => !value), []);
   const close = useCallback(() => setOpen(false), []);
-  return { open, laidOut: open || laidOut, filter, setFilter, lastMessages, loaded, toggle, close };
+  return { open, laidOut: open || laidOut, filter, setFilter, followUps, loaded, toggle, close };
 }

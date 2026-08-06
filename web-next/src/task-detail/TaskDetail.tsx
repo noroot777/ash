@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import type { Group, Session, Task } from "@harness/shared";
+import { isUserFollowUp } from "@harness/shared";
 import { FlowArrow, Info, MagnifyingGlass } from "@phosphor-icons/react";
 import { InspectorHost, type InspectorDescriptor } from "../inspector/index.ts";
 import { api } from "../lib/api.ts";
@@ -110,7 +111,7 @@ export function TaskDetail({
   const conversation = useConversation(task.id);
   const followUps = useMemo(
     () => conversation.items.flatMap((item) => (
-      item.kind === "user" && !item.isAnswer
+      item.kind === "user" && isUserFollowUp(item)
         ? [{ text: item.text, attachments: item.attachments, ...(item.at ? { at: item.at } : {}) }]
         : []
     )),
