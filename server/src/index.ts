@@ -111,7 +111,7 @@ const { startScheduler, api } = await initializeServer().catch((e) =>
 );
 
 async function initializeServer() {
-  const [{ ensureSchema }, { migrateQueues }, { reconcileInterrupted }, { reattachRunningTasks }, { sweepRunLogs }, schedulesModule, routesModule, stageModule, acceptanceModule, reviewModule] =
+  const [{ ensureSchema }, { migrateQueues }, { reconcileInterrupted }, { reattachRunningTasks }, { sweepRunLogs }, schedulesModule, routesModule, stageModule, acceptanceModule, reviewModule, verifyOverrideModule] =
     await Promise.all([
       import("./db/index.js"),
       import("./db/migrateQueues.js"),
@@ -123,6 +123,7 @@ async function initializeServer() {
       import("./task-stage.js"),
       import("./task-accept.js"),
       import("./review.js"),
+      import("./verify-override.js"),
     ]);
 
   await ensureSchema();
@@ -143,6 +144,8 @@ async function initializeServer() {
   stageModule.mountTaskStageRoutes(routesModule.api);
   acceptanceModule.mountTaskAcceptanceRoutes(routesModule.api);
   reviewModule.mountReviewRoutes(routesModule.api);
+  // 人工替一站「自动验证」签字放行（验证器不认账时唯一的出路）。
+  verifyOverrideModule.mountVerifyOverrideRoutes(routesModule.api);
   // 预览进程是 harness 主动起的长驻服务，判据全落在盘上（data/runs/<task>/preview.json），
   // 所以重启后照样收得掉：先扫一遍孤儿，之后定时收 idle 那一档。
   const { startPreviewSweeper } = await import("./preview.js");
