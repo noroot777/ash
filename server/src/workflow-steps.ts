@@ -20,10 +20,11 @@ import { db } from "./db/index.js";
 import { projects, tasks } from "./db/schema.js";
 import { augmentedEnv } from "./executors/spawn.js";
 import { RUNS_DIR } from "./paths.js";
-import { startPreview, type PreviewStep } from "./preview.js";
+import { readPreview, startPreview, type PreviewStep } from "./preview.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { askAboutFailure } from "./task-question.js";
 import { taskWorkspace } from "./task-workspace.js";
+import { taskWorkflowDef } from "./workflows.js";
 import { continueWhenIdle } from "./runs.js";
 
 const run = promisify(execFile);
@@ -251,4 +252,57 @@ export async function applyRunFailPolicy(task: TaskRow, def: WorkflowDef | null)
     (round) => `这条线在「${STEP_LABELS.run}」这一站没干成（第 ${round} 次）：上一轮没有确认完成。\n\n`
       + "请接着把它做完，然后照常确认完成。",
   );
+}
+
+// ── 手动重开预览 ───────────────────────────────────────────────────────────
+/**
+ * 界面上那颗「重启预览」按钮的真身。**不属于「线在往前走」**：不动游标、不碰失败策略、
+ * 不写任何账，就是把这一站的命令按原样再跑一次。
+ *
+ * 为什么非得有一颗手动的：预览在**任务一开跑**那一下就被收掉了（`stopPreviewOnRerun`，
+ * 收在 `status.ts` 那个唯一入口），因为此刻新一版代码还没出来，留着旧页面只会让人对着
+ * 上一版验新改动。而重新把它起来的机会只有一条：agent 亲口确认完成、这条线往前走到
+ * 这一站。于是「用户问一句、agent 没确认完成」的轮次就成了洼地——预览被收了，线也没
+ * 往前走，没有任何一条自动路径会再把它起来，用户只能盯着一个再也打不开的地址。
+ */
+export type PreviewRestart =
+  | { ok: true; url: string | null; port: number | null }
+  | { ok: false; reason: string; code: "gone" | "nostep" | "busy" | "failed" };
+
+/** 同一个任务同时点两下：第二下必须挡回去。`startPreview` 是「先停旧的再起新的」，
+ *  可第一下那份此刻还没落盘，停不到——两个 dev server 一起活着，其中一个成了没人认领
+ *  的孤儿，端口还占着。 */
+const restartingPreview = new Set<string>();
+
+export async function restartTaskPreview(taskId: string, stepId?: string | null): Promise<PreviewRestart> {
+  const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
+  if (!task) return { ok: false, reason: "这个任务不在了", code: "gone" };
+  const steps = (taskWorkflowDef(task.workflow)?.steps ?? []).filter(
+    (step): step is PreviewStep => step.kind === "preview",
+  );
+  // 一条线上「打开预览」**不是** singleton（只有干活和合并是），所以调用方得指名道姓说
+  // 重启哪一站；只有一站时才允许省略。
+  const step = stepId ? steps.find((s) => s.id === stepId) : steps.length === 1 ? steps[0] : null;
+  if (!step) {
+    return {
+      ok: false,
+      code: "nostep",
+      reason: stepId
+        ? "这条线上没有这一站「打开预览」（线是任务创建那一刻的快照，可能已经跟库里的不一样了）"
+        : steps.length ? "这条线上不止一站「打开预览」，得说清楚重启哪一站" : "这条线上没有「打开预览」这一站",
+    };
+  }
+  if (restartingPreview.has(taskId)) {
+    return { ok: false, reason: "这个任务的预览正在起，等它起来（或起不来）再说", code: "busy" };
+  }
+  restartingPreview.add(taskId);
+  try {
+    // 直接复用线自己跑这一站的那条路：成败两种时间线都由它写，刷新后仍看得见。
+    const result = await runPreview(task, step);
+    if (!result.ok) return { ok: false, reason: result.reason ?? "预览没起来", code: "failed" };
+    const record = readPreview(taskId);
+    return { ok: true, url: record?.url ?? null, port: record?.port ?? null };
+  } finally {
+    restartingPreview.delete(taskId);
+  }
 }
