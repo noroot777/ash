@@ -192,7 +192,7 @@ export async function runTask(taskId: string): Promise<void> {
   try {
     const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
     if (!task) throw new Error("task not found");
-    if (task.mode !== "single") throw new Error("debate mode runs in M4");
+    if (task.mode !== "single") throw new Error("duet mode runs in M4");
 
     const project = (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0);
     if (!project) throw new Error("project not found");
@@ -315,7 +315,7 @@ export async function resumeOrRunTask(
   opts: { reason?: ResumeReason } = {},
 ): Promise<void> {
   const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
-  if (!task || task.mode !== "single") return runTask(taskId); // debates/missing → unchanged path
+  if (!task || task.mode !== "single") return runTask(taskId); // duets/missing → unchanged path
   // 检查点续跑：把 agent 写好的 resumePrompt 当作 user 消息丢回 continueTask，
   // 跑同一会话同一目录；先清空字段避免回合内再次 settle 时又被认成 paused。
   // 调度器会先把可启动任务标成 queued，因此这里不能只看 status === "paused"。
@@ -371,7 +371,7 @@ export async function continueTask(
 ): Promise<void> {
   // 已验收的任务收到真人消息 = 旧验收不再覆盖新增改动,stage 清回「进行中」。
   // 只认真人消息:带 opts.system 的 retry / 手点运行 / 队列推进 / 上游唤醒不算,跟下面
-  // followUpFrom 用的是同一条口径。放在最前面,确保 single/team/debate 走同一规则。
+  // followUpFrom 用的是同一条口径。放在最前面,确保 single/team/duet 走同一规则。
   //
   // 摘牌必须**立刻**发生(界面上任务当场从「已验收」挪回进行中),可这时还不知道这一轮
   // 会不会真改东西 —— 纯询问也照摘。所以接住摘掉的是哪块牌子交给基线快照:结算发现

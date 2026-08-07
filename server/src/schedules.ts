@@ -2,7 +2,7 @@ import { eq } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { schedules, tasks, groups } from "./db/schema.js";
 import { runTask } from "./orchestrator.js";
-import { runDebate } from "./debate/index.js";
+import { runDuet } from "./duet/index.js";
 import { deliverPendingMessages } from "./pending-messages.js";
 
 // ── Minimal 5-field cron matcher (minute hour dom month dow), local time ──────
@@ -69,7 +69,7 @@ async function fire(taskId: string) {
     const g = (await db.select().from(groups).where(eq(groups.id, t.groupId))).at(0);
     if (g?.paused) return;
   }
-  if (t.mode === "debate") void runDebate(taskId);
+  if (t.mode === "duet") void runDuet(taskId);
   else void runTask(taskId); // 全新一轮(新 session),不接续上次会话
 }
 

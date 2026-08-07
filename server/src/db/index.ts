@@ -47,7 +47,7 @@ export async function ensureSchema() {
       labels TEXT NOT NULL DEFAULT '[]', depends_on TEXT NOT NULL DEFAULT '[]',
       resume_depends_on TEXT NOT NULL DEFAULT '[]',
       agent_type TEXT, executor_id TEXT, model TEXT, reasoning_effort TEXT,
-      auto_title INTEGER NOT NULL DEFAULT 0, debate TEXT, schedule_id TEXT,
+      auto_title INTEGER NOT NULL DEFAULT 0, duet TEXT, schedule_id TEXT,
       created_at TEXT NOT NULL, updated_at TEXT NOT NULL, started_at TEXT, ended_at TEXT,
       archived INTEGER NOT NULL DEFAULT 0, archived_at TEXT
     );
@@ -205,8 +205,25 @@ export async function ensureSchema() {
     }
   }
   await migrateLegacyNoteTaskLinks();
+  await migrateDebateToDuet();
   await dropRetiredColumns();
   await dropRetiredTables();
+}
+
+// 辩论模式更名为讨论(duet,2026-08-07):列、mode 值、会话角色一起迁。全部幂等——
+// RENAME 在已迁移/新库上报「no such column」被吞掉,UPDATE 匹配 0 行就是空转。
+// tasks.duet JSON 里的旧字段(debaterA…)不迁,由 normalizeDuetConfig 兜底读旧写新;
+// transcript.jsonl 里的旧事件类型(debate.*)也不迁,读取端归一。
+async function migrateDebateToDuet(): Promise<void> {
+  try {
+    await client.execute("ALTER TABLE tasks RENAME COLUMN debate TO duet");
+    console.log("[harness] tasks.debate 列已更名为 duet");
+  } catch {
+    /* 已迁移或新库 */
+  }
+  await client.execute("UPDATE tasks SET mode = 'duet' WHERE mode = 'debate'");
+  await client.execute("UPDATE sessions SET role = 'voiceA' WHERE role = 'debaterA'");
+  await client.execute("UPDATE sessions SET role = 'voiceB' WHERE role = 'debaterB'");
 }
 
 // notes.task_id 曾经只能记住最后一次转换。先把老值搬进多对多关联表，再由下面的

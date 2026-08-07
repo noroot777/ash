@@ -368,7 +368,7 @@ server.registerTool(
   {
     title: "上报验证结论",
     description:
-      "在验证回合里上报与 TaskStatus 正交的验证结论，不会改变队列或任务结算。验证轮开始时后端自动置 verifying；真实运行验证后报 verified 或 verify_failed。web 改动必须启动服务、用浏览器确认并截图，只读代码或只过编译不算验证。验证现在就跑在被验任务自己身上（旁路回合），所以 taskId 填被验任务的 id——那多半就是你当前这个任务；历史的独立审查任务仍填被审任务 id，不是审查任务自己的 id。implemented/awaiting_acceptance/merged/accepted 保留给兼容与验收链路；团队调度台(mode=team)仍不适用。普通执行回合不自我上报验证阶段。",
+      "在验证回合里上报与 TaskStatus 正交的验证结论，不会改变队列或任务结算。验证轮开始时后端自动置 verifying；真实运行验证后报 verified 或 verify_failed。web 改动必须启动服务、用浏览器确认行为，只读代码或只过编译不算验证；截图按需——改动看得见时必须截，看不见的改动（服务端逻辑、CLI、脚本）不需要截图，报告里贴命令与输出即可。验证现在就跑在被验任务自己身上（旁路回合），所以 taskId 填被验任务的 id——那多半就是你当前这个任务；历史的独立审查任务仍填被审任务 id，不是审查任务自己的 id。implemented/awaiting_acceptance/merged/accepted 保留给兼容与验收链路；团队调度台(mode=team)仍不适用。普通执行回合不自我上报验证阶段。",
     inputSchema: {
       taskId: z.string().describe("被验任务 id（就地验证时即当前任务；历史独立审查任务填被审任务 id）"),
       stage: TASK_STAGE.describe(`阶段：${STAGE_ORDER.join(" | ")}`),
@@ -505,13 +505,13 @@ server.registerTool(
   {
     title: "派活给执行者(团队调度者专用)",
     description:
-      "团队调度者(mode=team 的任务)用这个派活:一次建 N 个执行者任务,绑到自己名下,默认立刻起跑。每个执行者是一个完整的 CLI agent(自己还能开子代理),默认与调度台在同一个工作目录里干活;团队开启 worktree 时也共享它。\n\n• mode=\"serial\"(多个任务时的默认)会把这批串成 A→B→C,前一个 done 后下一个自动起跑;mode=\"parallel\" 才是真并行(限流 4 个),确认互不干扰再用。\n• 每个 body 要自带完整上下文 —— 执行者之间彼此不知情,也看不到你和用户的对话。**要划清文件/模块边界就自己写进每个执行者的 body**,否则并行的执行者会互相踩。\n• review 缺省跟随团队配置（默认开启）；单项传 false 可跳过该执行者的自动审查。\n• reportBack:true = 它做完要叫醒你(你打算接着安排下一步时用);false(默认)= 静默完成,你随时能用 list_tasks 查。\n• 你会被唤醒的时机只有三种:执行者提问、执行者失败、reportBack 的执行者完成。\n\n返回执行者的 id + 标题,后续用 get_task / run_task / answer_question 引用它们。",
+      "团队调度者(mode=team 的任务)用这个派活:一次建 N 个执行者任务,绑到自己名下,默认立刻起跑。每个执行者是一个完整的 CLI agent(自己还能开子代理),默认与调度台在同一个工作目录里干活;团队开启 worktree 时也共享它。\n\n• mode=\"serial\"(多个任务时的默认)会把这批串成 A→B→C,前一个 done 后下一个自动起跑;mode=\"parallel\" 才是真并行(限流 4 个),确认互不干扰再用。\n• **body 写目标、背景、约束、验收标准,不写实现步骤**——执行者是和你同级智能的完整 agent,how 留给它;用户指定的做法、已确认的硬约束、已证伪的路线属于约束要传达,开放的实现选择才留给它。body 要自带完整上下文(执行者彼此不知情,也看不到你和用户的对话)。只有 parallel 时才需要在各自 body 里划清文件/模块边界,否则并行的执行者会互相踩;serial 不必划界。\n• review 缺省跟随团队配置（默认开启）；单项传 false 可跳过该执行者的自动审查。\n• reportBack:true = 它做完要叫醒你(你打算接着安排下一步时用);false(默认)= 静默完成,你随时能用 list_tasks 查。\n• 你会被唤醒的时机只有三种:执行者提问、执行者失败、reportBack 的执行者完成。\n\n返回执行者的 id + 标题,后续用 get_task / run_task / answer_question 引用它们。",
     inputSchema: {
       leadTaskId: z.string().describe("你自己的 taskId(团队任务,prompt 前言里有)"),
       tasks: z
         .array(
           z.object({
-            body: z.string().min(1).describe("给执行者的完整指令:目标、上下文、文件边界、验收标准"),
+            body: z.string().min(1).describe("给执行者的完整指令:目标、背景、约束、验收标准(不写实现步骤;parallel 时另加文件边界)"),
             title: z.string().optional().describe("简短标题(界面上显示);省略则取 body 第一行"),
             agentType: AGENT_TYPE.optional().describe("覆盖团队默认的执行者类型"),
             executorId: z.string().nullable().optional().describe("覆盖团队执行者任务的默认执行器 profile(agents.id)。指定则优先用该 profile；为空/悬空时按 agentType 默认执行器降级"),

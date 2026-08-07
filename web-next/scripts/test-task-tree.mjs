@@ -18,7 +18,7 @@ function task(id, mode, { pinnedAt = null, status = "done", stage = null, create
 const mixed = [
   task("collab-pinned", "team", { pinnedAt: 100 }),
   task("single-pinned", "single", { pinnedAt: 200 }),
-  task("collab-normal", "debate"),
+  task("collab-normal", "duet"),
   task("single-normal", "single"),
 ];
 

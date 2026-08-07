@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { TEAM_DEFAULTS, taskDisplayStatus, type AgentExecutorProfile, type AgentType, type Task } from "@harness/shared";
-import { ArrowRight, Scales, UsersThree, Warning } from "@phosphor-icons/react";
+import { ArrowRight, ChatsCircle, UsersThree, Warning } from "@phosphor-icons/react";
 import { ExecutorPickerField } from "../composer/ExecutorPickerField.tsx";
 import {
   executorValue,
@@ -12,7 +12,7 @@ import {
   useAgentAvailability,
 } from "../lib/agentAvailability.ts";
 import { api } from "../lib/api.ts";
-import { teamDebateIterationState } from "./handoffPolicy.ts";
+import { teamDuetIterationState } from "./handoffPolicy.ts";
 
 export type HandoffChoice = {
   note: string;
@@ -28,7 +28,7 @@ const emptyChoice = (agentType: AgentType): Choice => ({
   effort: "",
 });
 
-export function DebateHandoffModal({
+export function DuetHandoffModal({
   busy,
   onClose,
   onConfirm,
@@ -107,22 +107,22 @@ export function DebateHandoffModal({
   const canConfirm = !busy && !noExecutor && !roleBlocked;
   const submitHandoff = async () => { if (canConfirm && await onConfirm(choice)) onClose(); };
   return (
-    <div className="debate-handoff-scrim" onMouseDown={(event) => event.target === event.currentTarget && !busy && onClose()}>
-      <section className="debate-handoff-modal" role="dialog" aria-modal="true" aria-labelledby="debate-handoff-title">
-        <header><span><UsersThree size={17} weight="fill" /></span><div><h2 id="debate-handoff-title">接力成团</h2><p>辩题、结论和完整转写路径会一并交给新团队。</p></div></header>
-        <div className="debate-handoff-grid">
+    <div className="duet-handoff-scrim" onMouseDown={(event) => event.target === event.currentTarget && !busy && onClose()}>
+      <section className="duet-handoff-modal" role="dialog" aria-modal="true" aria-labelledby="duet-handoff-title">
+        <header><span><UsersThree size={17} weight="fill" /></span><div><h2 id="duet-handoff-title">接力成团</h2><p>议题、共同方案和完整转写路径会一并交给新团队。</p></div></header>
+        <div className="duet-handoff-grid">
           <ExecutorPickerField label="调度者" value={lead.profile} types={leadTypes} profiles={leadProfiles} knownProfiles={profiles} fallbackType={TEAM_DEFAULTS.lead} override={lead} onChange={(profile) => setLead({ profile, model: "", effort: "" })} onOverrideChange={(patch) => setLead((current) => ({ ...current, ...patch }))} />
           <ExecutorPickerField label="默认执行者" value={worker.profile} types={workerTypes} profiles={profiles} knownProfiles={profiles} fallbackType={TEAM_DEFAULTS.worker} override={worker} onChange={(profile) => setWorker({ profile, model: "", effort: "" })} onOverrideChange={(patch) => setWorker((current) => ({ ...current, ...patch }))} />
         </div>
-        {availabilityMessage && <p className="debate-handoff-warning"><Warning size={13} />{availabilityMessage}</p>}
-        <label className="debate-handoff-note"><span>可选附言</span><textarea rows={4} value={note} placeholder="补充执行重点、边界或验收要求…" onChange={(event) => setNote(event.target.value)} /></label>
+        {availabilityMessage && <p className="duet-handoff-warning"><Warning size={13} />{availabilityMessage}</p>}
+        <label className="duet-handoff-note"><span>可选附言</span><textarea rows={4} value={note} placeholder="补充执行重点、边界或验收要求…" onChange={(event) => setNote(event.target.value)} /></label>
         <footer><button type="button" disabled={busy} onClick={onClose}>取消</button><button type="button" className="is-primary" disabled={!canConfirm} onClick={() => void submitHandoff()}>{busy ? "创建中…" : "创建并开干"}</button></footer>
       </section>
     </div>
   );
 }
 
-export function DebateHandoffBar({
+export function DuetHandoffBar({
   linkedTeams,
   allTasks,
   busy,
@@ -141,15 +141,15 @@ export function DebateHandoffBar({
 }) {
   if (linkedTeams.length > 0) {
     return (
-      <div className="debate-handoff-stack">
-        <div className="debate-linked-team-list" aria-label="关联团队">
+      <div className="duet-handoff-stack">
+        <div className="duet-linked-team-list" aria-label="关联团队">
           {linkedTeams.map((team) => {
-            const iteration = teamDebateIterationState(team, allTasks);
+            const iteration = teamDuetIterationState(team, allTasks);
             const status = taskDisplayStatus(team.status, team.stage, !!team.question).label;
             const iterationBusy = iterationBusyId === team.id;
             return (
-              <div className="debate-linked-team" key={team.id}>
-                <button type="button" className="debate-linked-team-main" onClick={() => onOpenTask(team)}>
+              <div className="duet-linked-team" key={team.id}>
+                <button type="button" className="duet-linked-team-main" onClick={() => onOpenTask(team)}>
                   <span><UsersThree size={15} weight="fill" /></span>
                   <div><small>已接力成团</small><b>{team.title}</b></div>
                   <em>{team.archived ? "已归档" : status}</em><ArrowRight size={13} />
@@ -157,27 +157,27 @@ export function DebateHandoffBar({
                 {iteration.eligible && (
                   <button
                     type="button"
-                    className="debate-iterate-team"
+                    className="duet-iterate-team"
                     disabled={busy}
                     onClick={() => onIterateTeam(team)}
-                    title={iteration.existing ? "打开这个团队已经创建的下一轮辩论" : "读取团队执行记录，沿用来源辩论配置创建下一轮"}
+                    title={iteration.existing ? "打开这个团队已经创建的下一轮讨论" : "读取团队执行记录，沿用来源讨论配置创建下一轮"}
                   >
-                    <Scales size={12} weight="fill" />
-                    {iterationBusy ? "创建中…" : iteration.existing ? "打开下一轮" : "再辩一轮"}
+                    <ChatsCircle size={12} weight="fill" />
+                    {iterationBusy ? "创建中…" : iteration.existing ? "打开下一轮" : "再讨论一轮"}
                   </button>
                 )}
               </div>
             );
           })}
         </div>
-        <button type="button" className="debate-new-team" disabled={busy} onClick={onOpenTeam}>
+        <button type="button" className="duet-new-team" disabled={busy} onClick={onOpenTeam}>
           <UsersThree size={13} weight="fill" />{busy ? "创建中…" : "再开一组"}
         </button>
       </div>
     );
   }
   return (
-    <div className="debate-handoff-bar">
+    <div className="duet-handoff-bar">
       <div><b>把结论交给团队落实</b><small>创建团队前可选择调度者和默认执行者。</small></div>
       <button type="button" disabled={busy} onClick={onOpenTeam}><UsersThree size={13} weight="fill" />{busy ? "创建中…" : "接力成团"}</button>
     </div>

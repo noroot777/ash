@@ -10,11 +10,15 @@ import { db } from "./db/index.js";
 import { notes, noteTasks, projects, tasks } from "./db/schema.js";
 import { RUNS_DIR } from "./paths.js";
 
-const FIELD_RANK: Record<SearchField, number> = { title: 0, body: 1, conversation: 2 };
+const FIELD_RANK: Record<SearchField, number> = { id: 0, title: 1, body: 2, conversation: 3 };
 const SNIPPET_RADIUS = 60;
 const MAX_HITS = 50;
 const TASK_PREVIEW_LIMIT = 2_000;
 const NOTE_PREVIEW_LIMIT = 4_000;
+
+// 任务 id 是 nanoid(12),字母表 [A-Za-z0-9_-];harness 分支只带前 8 位
+// (`harness/<id8>`),所以 8 位以上的前缀同样算「就是这个任务」。
+const TASK_ID_PATTERN = /^[a-z0-9_-]{8,12}$/;
 
 export type SearchTerm = {
   value: string;
@@ -110,10 +114,36 @@ export function parseSearchQuery(query: string): ParsedSearchQuery {
 }
 
 export function matchesSearchQuery(text: string, query: ParsedSearchQuery): boolean {
-  const lower = text.toLowerCase();
-  if (query.excluded.some((term) => lower.includes(term.value))) return false;
+  if (isExcluded(text, query)) return false;
   if (!query.groups.length) return query.excluded.length > 0;
+  const lower = text.toLowerCase();
   return query.groups.some((group) => group.every((term) => lower.includes(term.value)));
+}
+
+function isExcluded(text: string, query: ParsedSearchQuery): boolean {
+  const lower = text.toLowerCase();
+  return query.excluded.some((term) => lower.includes(term.value));
+}
+
+// 查询里长得像任务 id 的片段。只看正向词:`-<id>` 是「别给我看这个」,把它
+// 钉到第一位正好相反。term.value 已经被 tokenize 小写化,匹配也按小写比,
+// 8 位以上的前缀在两种大小写下撞车不是现实风险。
+export function taskIdCandidates(query: ParsedSearchQuery): string[] {
+  const candidates = new Set<string>();
+  for (const term of query.groups.flat()) {
+    // 按「id 里不可能出现的字符」切一刀,于是直接粘 `harness/<id8>`、
+    // `/tasks/<id>` 这类 URL 或 `taskId=<id>` 也能把 id 本体露出来。
+    for (const part of term.value.split(/[^a-z0-9_-]+/)) {
+      if (TASK_ID_PATTERN.test(part)) candidates.add(part);
+    }
+  }
+  return [...candidates];
+}
+
+// 整串 id 或 8 位以上的前缀都算「就是这个任务」。两边都压小写:候选来自
+// tokenize 时已小写化的词,但导出的函数不该指望调用方记得这件事。
+export function isTaskIdMatch(taskId: string, candidate: string): boolean {
+  return taskId.toLowerCase().startsWith(candidate.toLowerCase());
 }
 
 function matchingTerms(text: string, query: ParsedSearchQuery): SearchTerm[] {
@@ -182,25 +212,34 @@ export async function searchAll(query: string, options: SearchOptions = {}): Pro
   const noteTaskCounts = new Map<string, number>();
   for (const link of allNoteTaskRows) noteTaskCounts.set(link.noteId, (noteTaskCounts.get(link.noteId) ?? 0) + 1);
   const taskHits: Extract<SearchHit, { kind: "task" }>[] = [];
+  const idCandidates = taskIdCandidates(parsed);
 
   await Promise.all(
     taskRows.map(async (task) => {
       const conversation = await readRunText(task.id);
       const corpus = `${task.title}\n${task.body}\n${conversation}`;
-      if (!matchesSearchQuery(corpus, parsed)) return;
+      // 按 id 命中的那条要能凭空冒出来:任务自己的 id 不在自己的标题/正文里,
+      // 还没跑过的任务连会话都没有,靠 corpus 匹配永远搜不到它自己。排除词
+      // 仍然有效——用户显式说了别看这条,就别钉它。
+      const byId = idCandidates.some((candidate) => isTaskIdMatch(task.id, candidate))
+        && !isExcluded(corpus, parsed);
+      if (!byId && !matchesSearchQuery(corpus, parsed)) return;
 
-      const terms = matchingTerms(corpus, parsed);
-      let field: SearchField = "title";
+      let field: SearchField = "id";
       let snippet = "";
-      const bodyTerms = terms.filter((term) => task.body.toLowerCase().includes(term.value));
-      const conversationTerms = terms.filter((term) => conversation.toLowerCase().includes(term.value));
-      if (!terms.some((term) => task.title.toLowerCase().includes(term.value))) {
-        if (bodyTerms.length) {
-          field = "body";
-          snippet = findSnippet(task.body, bodyTerms) ?? "";
-        } else if (conversationTerms.length) {
-          field = "conversation";
-          snippet = findSnippet(conversation, conversationTerms) ?? "";
+      if (!byId) {
+        const terms = matchingTerms(corpus, parsed);
+        const bodyTerms = terms.filter((term) => task.body.toLowerCase().includes(term.value));
+        const conversationTerms = terms.filter((term) => conversation.toLowerCase().includes(term.value));
+        field = "title";
+        if (!terms.some((term) => task.title.toLowerCase().includes(term.value))) {
+          if (bodyTerms.length) {
+            field = "body";
+            snippet = findSnippet(task.body, bodyTerms) ?? "";
+          } else if (conversationTerms.length) {
+            field = "conversation";
+            snippet = findSnippet(conversation, conversationTerms) ?? "";
+          }
         }
       }
       taskHits.push({

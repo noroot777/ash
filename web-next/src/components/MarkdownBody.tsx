@@ -3,8 +3,9 @@ import { createPortal } from "react-dom";
 import { X } from "@phosphor-icons/react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { ImagePreviewGroup, PreviewableImage } from "./ImagePreview.tsx";
+import { ImagePreviewGroup, PreviewableImage, PreviewableImageLink } from "./ImagePreview.tsx";
 import {
+  imagePreviewTarget,
   isLocalOpenHref,
   openLocalPath,
   remarkSoftBreaks,
@@ -26,6 +27,22 @@ function MarkdownDocument({ text, onReviewReport, onActionError }: {
             const reviewFile = reviewFileTarget(href);
             const reviewMarkdown = reviewFile !== null && /\.md$/i.test(reviewFile.name);
             const localOpen = isLocalOpenHref(href);
+            // 指向图片的链接跟内嵌图走同一个灯箱（也就跟同一条消息里的其它图编在一组，
+            // 能左右翻）。按住 ⌘/Ctrl/Shift 或中键仍然是浏览器原来那套「新标签页打开」，
+            // 由 PreviewableImageLink 自己让路。
+            const image = imagePreviewTarget(href);
+            if (image) {
+              return (
+                <PreviewableImageLink
+                  {...props}
+                  src={image.url}
+                  href={image.url}
+                  alt={image.name}
+                  label={image.name}
+                  onClick={onClick}
+                />
+              );
+            }
             return (
               <a
                 {...props}
@@ -51,12 +68,14 @@ function MarkdownDocument({ text, onReviewReport, onActionError }: {
             );
           },
           img: ({ src, alt }) => {
-            const reviewFile = reviewFileTarget(typeof src === "string" ? src : undefined);
+            const raw = typeof src === "string" ? src : "";
+            const image = imagePreviewTarget(raw);
             return (
               <PreviewableImage
                 className="task-markdown-image"
-                src={reviewFile?.url ?? (typeof src === "string" ? src : "")}
+                src={image?.url ?? raw}
                 alt={alt ?? ""}
+                label={alt || image?.name}
               />
             );
           },

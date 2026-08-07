@@ -55,7 +55,7 @@ export function ExecutorPickerField({
   /** 传了就多给一个改回「不指定」的入口——不然选出去就回不来了。 */
   onUnset?: () => void;
   onChange: (value: string) => void;
-  /** 不传就只落执行器（辩手那种服务端根本不收模型的表面）。 */
+  /** 不传就只落执行器（讨论者那种服务端根本不收模型的表面）。 */
   onOverrideChange?: (patch: { model?: string; effort?: string }) => void;
 }) {
   const unset = unsetText !== undefined && !value;

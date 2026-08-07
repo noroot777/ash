@@ -24,8 +24,8 @@ import { bus } from "./bus.js";
 import { forceKillCuaService, lastCuaResidualStatus, refreshCuaResidualStatus } from "./cua.js";
 import { db } from "./db/index.js";
 import { projects, queueItems, schedules, scheduledMessages, sessions, tasks } from "./db/schema.js";
-import { resumeDebate, resumeAtGate, runDebate } from "./debate/index.js";
-import { resolveGate } from "./debate/gates.js";
+import { resumeDuet, resumeAtGate, runDuet } from "./duet/index.js";
+import { resolveGate } from "./duet/gates.js";
 import { taskCommits } from "./git.js";
 import { continueTask, resumeOrRunTask, runTask } from "./orchestrator.js";
 import { RUNS_DIR } from "./paths.js";
@@ -92,14 +92,19 @@ api.get("/sessions/:id/trace", async (c) => {
   }
 });
 
-// Persisted debate transcript (rebuilds the timeline on reload, §12).
-api.get("/tasks/:id/debate", async (c) => {
+// Persisted duet transcript (rebuilds the timeline on reload, §12). Old
+// transcripts predate the debate→duet rename — normalize their event types here
+// so the web reducer only ever sees `duet.*`.
+api.get("/tasks/:id/duet", async (c) => {
   try {
     const raw = await readFile(join(RUNS_DIR, c.req.param("id"), "transcript.jsonl"), "utf8");
     const turns = raw
       .split("\n")
       .filter(Boolean)
-      .map((l) => JSON.parse(l));
+      .map((l) => JSON.parse(l))
+      .map((t) => (typeof t?.type === "string" && t.type.startsWith("debate.")
+        ? { ...t, type: `duet.${t.type.slice("debate.".length)}` }
+        : t));
     return c.json(turns);
   } catch {
     return c.json([]);
@@ -129,7 +134,7 @@ api.post("/tasks/:id/run", async (c) => {
     );
   }
   // Fire-and-forget; progress streams over /api/events.
-  if (r.mode === "debate") void runDebate(taskId);
+  if (r.mode === "duet") void runDuet(taskId);
   else void resumeOrRunTask(taskId, { reason: "run" });
   return c.json({ started: true }, 202);
 });
@@ -154,7 +159,7 @@ api.post("/tasks/:id/fire", async (c) => {
       409,
     );
   }
-  if (r.mode === "debate") void runDebate(taskId);
+  if (r.mode === "duet") void runDuet(taskId);
   else void runTask(taskId); // 全新一轮,永不 resume
   return c.json({ started: true, fresh: true }, 202);
 });
@@ -474,15 +479,15 @@ api.delete("/scheduled-messages/:mid", async (c) => {
   return c.json({ canceled: true });
 });
 
-// Retry a failed debate: re-run only the failed (last) turn, then continue —
-// instead of re-running the whole debate. Single tasks just re-run.
+// Retry a failed duet: re-run only the failed (last) turn, then continue —
+// instead of re-running the whole duet. Single tasks just re-run.
 api.post("/tasks/:id/retry", async (c) => {
   const taskId = c.req.param("id");
   const r = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!r) return c.json({ error: "not found" }, 404);
   if (r.archived) return c.json({ error: "任务已归档，先取消归档再重试", archived: true }, 409);
   if (r.status !== "failed") return c.json({ error: "只有失败的任务可以重试", status: r.status }, 409);
-  if (r.mode === "debate") void resumeDebate(taskId);
+  if (r.mode === "duet") void resumeDuet(taskId);
   else void resumeOrRunTask(taskId, { reason: "retry" });
   return c.json({ started: true }, 202);
 });
@@ -580,9 +585,9 @@ api.post("/tasks/:id/gate", async (c) => {
   const action = await c.req.json<GateAction>();
   if (resolveGate(taskId, action)) return c.json({ ok: true });
   // No in-memory gate (e.g. the server restarted). If the task is still awaiting
-  // a decision, resume the debate from the gate and apply the action.
+  // a decision, resume the duet from the gate and apply the action.
   const t = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
-  if (t?.status === "awaiting_review" && t.mode === "debate") {
+  if (t?.status === "awaiting_review" && t.mode === "duet") {
     void resumeAtGate(taskId, action);
     return c.json({ ok: true, resumed: true });
   }

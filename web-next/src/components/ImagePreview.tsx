@@ -14,6 +14,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { CaretLeft, CaretRight, X } from "@phosphor-icons/react";
+import { useDismissable } from "../lib/useDismissable.ts";
 
 type ImageProps = ComponentPropsWithoutRef<"img"> & { label?: string };
 type ImageLinkProps = ComponentPropsWithoutRef<"a"> & {
@@ -57,6 +58,7 @@ function ImageLightbox({
   onIndexChange: (index: number) => void;
   onClose: () => void;
 }) {
+  const box = useRef<HTMLDivElement>(null);
   const current = images[index] ?? images[0];
   const grouped = images.length > 1;
   const step = useCallback((delta: number) => {
@@ -64,12 +66,19 @@ function ImageLightbox({
     onIndexChange((index + delta + images.length) % images.length);
   }, [grouped, images.length, index, onIndexChange]);
 
+  // 大图是从别的浮层里点开的（审查抽屉、菜单、对话气泡），portal 到 body 之后 DOM 上就
+  // 不在它们内部了——不登记进这一摞层，点这张大图/关闭按钮会被外层读成「点了外面」，
+  // 连人带浮层一起关掉；Esc 也会被外层抢先吃掉。登记之后两条都按打开顺序自己处理。
+  useDismissable({ enabled: true, containerRef: box, onClose });
+
   useEffect(() => {
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     return () => { document.body.style.overflow = previousOverflow; };
   }, []);
 
+  // 键盘另拦一道:左右翻页是这里独有的,而 Esc 要挡住那些不在层栈里、直接监听 document
+  // 的全局快捷键(铺开的侧边栏、全屏视图),否则关一张图会顺手把底下的视图也收了。
   useEffect(() => {
     const interceptKeys = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
@@ -96,6 +105,7 @@ function ImageLightbox({
   return createPortal(
     <div
       className="image-preview-lightbox"
+      ref={box}
       role="dialog"
       aria-modal="true"
       aria-label={`图片预览：${label}`}

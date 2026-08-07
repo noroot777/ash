@@ -5,8 +5,8 @@ import type { AgentType } from "./index.ts";
 export type SessionRole =
   | "single"
   | "lead"
-  | "debaterA"
-  | "debaterB"
+  | "voiceA"
+  | "voiceB"
   | "implementer" // legacy: retained so historical sessions still decode
   | "reviewer"; // legacy: retained so historical sessions still decode
 

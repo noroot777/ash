@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { DUET_DEFAULTS } from "@harness/shared/duet";
 import type {
   AgentExecutorProfile,
   AgentType,
@@ -10,8 +11,8 @@ import type {
   TaskMode,
   TeamPresetConfig,
 } from "@harness/shared";
-import { DEFAULT_APP_SETTINGS, DEBATE_DEFAULTS } from "@harness/shared";
-import { Paperclip, Robot, Scales, UsersThree, X } from "@phosphor-icons/react";
+import { DEFAULT_APP_SETTINGS } from "@harness/shared";
+import { Paperclip, Robot, ChatsCircle, UsersThree, X } from "@phosphor-icons/react";
 import { ImagePreviewGroup, PreviewableImage } from "../components/ImagePreview.tsx";
 import {
   DEFAULT_CRON,
@@ -51,7 +52,7 @@ export type ComposerDraft = { body: string; attachments: string[]; noteIds?: str
 const MODES: { value: TaskMode; label: string; icon: typeof Robot }[] = [
   { value: "single", label: "单任务", icon: Robot },
   { value: "team", label: "团队", icon: UsersThree },
-  { value: "debate", label: "辩论", icon: Scales },
+  { value: "duet", label: "讨论", icon: ChatsCircle },
 ];
 // harness 自己的三条切换命令。**这张表是固定的**:下面 changeBody 那个「敲完空格
 // 就把命令从正文里吃掉」的正则只认这三个词,技能绝不能进这张表 —— 技能的 `/名字`
@@ -59,7 +60,7 @@ const MODES: { value: TaskMode; label: string; icon: typeof Robot }[] = [
 const SLASHES = [
   { command: "/single", mode: "single" as const, label: "创建单任务" },
   { command: "/team", mode: "team" as const, label: "创建常驻团队" },
-  { command: "/debate", mode: "debate" as const, label: "发起双智能体辩论" },
+  { command: "/duet", mode: "duet" as const, label: "发起双智能体讨论" },
 ];
 const HARNESS_SLASH_ITEMS: SlashItem[] = SLASHES.map((item) => ({
   command: item.command,
@@ -168,8 +169,8 @@ export function TaskComposerPanel({
         lead: { ...current.lead, profile: claudeValue },
         worker: { ...current.worker, profile: codexValue },
         reviewer: { ...current.reviewer, profile: codexValue },
-        debaterA: { ...current.debaterA, profile: claudeValue },
-        debaterB: { ...current.debaterB, profile: codexValue },
+        voiceA: { ...current.voiceA, profile: claudeValue },
+        voiceB: { ...current.voiceB, profile: codexValue },
       }));
     }).catch((error) => {
       if (alive) notify(error instanceof Error ? error.message : "执行器配置读取失败");
@@ -211,10 +212,10 @@ export function TaskComposerPanel({
     onModeChange(nextMode);
     setBody(rest);
   };
-  // 只认 single/team/debate:敲 `/team 目标…` 直接切模式并把命令摘掉(它是指令不是内容)。
+  // 只认 single/team/duet:敲 `/team 目标…` 直接切模式并把命令摘掉(它是指令不是内容)。
   // 技能走不到这里,所以 `/brandkit 做张图` 会原样留在正文里 —— 这正是要的。
   const changeBody = (value: string) => {
-    const parsed = /^\s*\/(single|team|debate)\s+([\s\S]*)$/i.exec(value);
+    const parsed = /^\s*\/(single|team|duet)\s+([\s\S]*)$/i.exec(value);
     if (parsed) applySlash(parsed[1]!.toLowerCase() as TaskMode, parsed[2] ?? "");
     else setBody(value);
   };
@@ -267,25 +268,25 @@ export function TaskComposerPanel({
     profiles,
     { agentType: workerExecutor.agentType, executorId: null },
   );
-  const debaterAExecutor = parseExecutorValue(
-    executors.debaterA.profile,
+  const voiceAExecutor = parseExecutorValue(
+    executors.voiceA.profile,
     profiles,
     { agentType: "claude", executorId: null },
   );
-  const debaterBExecutor = parseExecutorValue(
-    executors.debaterB.profile,
+  const voiceBExecutor = parseExecutorValue(
+    executors.voiceB.profile,
     profiles,
     { agentType: "codex", executorId: null },
   );
   // 正文最后是发给谁的,`/` 就补谁的技能:单任务给「让 AI 干活」那一站的执行器,
-  // 团队给调度者。**辩论刻意不补**:同一段议题会同时发给两个不同的 CLI,只有一边
+  // 团队给调度者。**讨论刻意不补**:同一段议题会同时发给两个不同的 CLI,只有一边
   // 装了的技能在另一边就是一句没人认的文本,那种「一半生效」比不提供更难查。
   const slashRun = mode === "team" ? leadExecutor : singleRun;
   const skills = useSkills({
     agentType: slashRun.agentType,
     projectId: project.id,
     executorId: slashRun.executorId,
-    enabled: mode !== "debate",
+    enabled: mode !== "duet",
   });
   const slashCandidates = mergeSlashItems(HARNESS_SLASH_ITEMS, skills.skills, slashDismissed ? null : slashToken(body));
   const slashSelected = Math.min(slashIndex, Math.max(0, slashCandidates.length - 1));
@@ -305,8 +306,8 @@ export function TaskComposerPanel({
     lead: leadExecutor.agentType,
     worker: workerExecutor.agentType,
     reviewer: reviewerExecutor.agentType,
-    debaterA: debaterAExecutor.agentType,
-    debaterB: debaterBExecutor.agentType,
+    voiceA: voiceAExecutor.agentType,
+    voiceB: voiceBExecutor.agentType,
   };
 
   useEffect(() => {
@@ -333,17 +334,17 @@ export function TaskComposerPanel({
         profiles,
         worker?.agentType ?? "codex",
       ) ?? worker;
-      const debaterA = reconcile(current.debaterA.profile, workerTypes, profiles, "claude");
-      const debaterB = reconcile(
-        current.debaterB.profile,
+      const voiceA = reconcile(current.voiceA.profile, workerTypes, profiles, "claude");
+      const voiceB = reconcile(
+        current.voiceB.profile,
         workerTypes,
         profiles,
         "codex",
-        debaterA?.agentType,
+        voiceA?.agentType,
       );
       let changed = false;
       const next = { ...current };
-      const resolved = { single, lead, worker, reviewer, debaterA, debaterB };
+      const resolved = { single, lead, worker, reviewer, voiceA, voiceB };
       for (const [role, selection] of Object.entries(resolved) as [ComposerExecutorRole, ExecutorSelection | null][]) {
         if (!selection || current[role].profile === executorValue(selection)) continue;
         next[role] = { profile: executorValue(selection), model: "", effort: "" };
@@ -410,9 +411,9 @@ export function TaskComposerPanel({
       workerTypes,
       profiles,
     ) ? "执行器" : null
-    : mode === "debate"
-      ? !isExecutorPickable(debaterAExecutor, workerTypes, profiles) ? "辩手 A"
-        : !isExecutorPickable(debaterBExecutor, workerTypes, profiles) ? "辩手 B" : null
+    : mode === "duet"
+      ? !isExecutorPickable(voiceAExecutor, workerTypes, profiles) ? "讨论者 A"
+        : !isExecutorPickable(voiceBExecutor, workerTypes, profiles) ? "讨论者 B" : null
       : !isExecutorPickable(leadExecutor, leadTypes, leadProfiles) ? "调度者"
         : !isExecutorPickable(workerExecutor, workerTypes, profiles) ? "执行者"
           : review && !isExecutorPickable(reviewerExecutor, workerTypes, profiles) ? "审查者" : null;
@@ -438,7 +439,7 @@ export function TaskComposerPanel({
   const scheduleError = launchMode === "once" || launchMode === "cron"
     ? scheduleValidationError(launchMode, scheduleAt, scheduleCron)
     : null;
-  const canSubmit = (mode === "debate" ? !!body.trim() : !!body.trim() || allAttachments.length > 0)
+  const canSubmit = (mode === "duet" ? !!body.trim() : !!body.trim() || allAttachments.length > 0)
     && !busy && !noExecutor && !roleBlocked && !scheduleError;
 
   const changeLaunchMode = (next: LaunchMode) => {
@@ -453,7 +454,7 @@ export function TaskComposerPanel({
     try {
       const explicitTitle = title.trim();
       const provisionalTitle = body.trim().split(/\r?\n/)[0]!.slice(0, 42)
-        || (mode === "debate" ? "新建辩论" : "未命名任务");
+        || (mode === "duet" ? "新建讨论" : "未命名任务");
       const common = {
         projectId: project.id,
         title: explicitTitle || provisionalTitle,
@@ -462,18 +463,18 @@ export function TaskComposerPanel({
         groupId: groupId || null,
         labels,
       };
-      if (mode === "debate") {
-        task = await api.createTask({ ...common, mode, debate: {
-          ...DEBATE_DEFAULTS,
+      if (mode === "duet") {
+        task = await api.createTask({ ...common, mode, duet: {
+          ...DUET_DEFAULTS,
           topic: body.trim(),
-          debaterA: debaterAExecutor.agentType,
-          debaterB: debaterBExecutor.agentType,
-          debaterAExecutorId: debaterAExecutor.executorId,
-          debaterBExecutorId: debaterBExecutor.executorId,
-          debaterAModel: executors.debaterA.model || null,
-          debaterAReasoningEffort: executors.debaterA.effort || null,
-          debaterBModel: executors.debaterB.model || null,
-          debaterBReasoningEffort: executors.debaterB.effort || null,
+          voiceA: voiceAExecutor.agentType,
+          voiceB: voiceBExecutor.agentType,
+          voiceAExecutorId: voiceAExecutor.executorId,
+          voiceBExecutorId: voiceBExecutor.executorId,
+          voiceAModel: executors.voiceA.model || null,
+          voiceAReasoningEffort: executors.voiceA.effort || null,
+          voiceBModel: executors.voiceB.model || null,
+          voiceBReasoningEffort: executors.voiceB.effort || null,
           maxRounds: rounds ? Math.max(1, Number(rounds) || 3) : null,
           gateG1: gate ? "on" : "off",
         } });
@@ -604,10 +605,10 @@ export function TaskComposerPanel({
               }}
               onPaste={uploads.onPaste}
               placeholder={mode === "team"
-                ? "给调度者的目标…（可输入 /single 或 /debate 切换）"
-                : mode === "debate"
+                ? "给调度者的目标…（可输入 /single 或 /duet 切换）"
+                : mode === "duet"
                   ? "要讨论并形成结论的议题…"
-                  : "描述要做什么…（可输入 /team 或 /debate）"}
+                  : "描述要做什么…（可输入 /team 或 /duet）"}
               onKeyDown={(event) => {
                 if (slashCandidates.length) {
                   if (event.key === "ArrowDown" || event.key === "ArrowUp") {
@@ -649,7 +650,7 @@ export function TaskComposerPanel({
               />
             )}
           </div>
-          {mode !== "debate" && (
+          {mode !== "duet" && (
             <ImagePreviewGroup isolated>
               <UploadAttachmentList attachments={uploads.attachments} error={uploads.error} onRemove={uploads.remove} />
               <SeedAttachmentList
@@ -658,8 +659,8 @@ export function TaskComposerPanel({
               />
             </ImagePreviewGroup>
           )}
-          {mode === "debate" && allAttachments.length > 0 && (
-            <p className="composer-warning">辩论配置不接收附件；附件仍保留，切回单任务或团队后会随任务提交。</p>
+          {mode === "duet" && allAttachments.length > 0 && (
+            <p className="composer-warning">讨论配置不接收附件；附件仍保留，切回单任务或团队后会随任务提交。</p>
           )}
           <ComposerFields
             mode={mode}
@@ -702,10 +703,10 @@ export function TaskComposerPanel({
       </div>
       <footer className="composer-footer">
         <div>
-          {mode !== "debate" && <AttachmentPicker addFiles={uploads.addFiles} disabled={busy} />}
+          {mode !== "duet" && <AttachmentPicker addFiles={uploads.addFiles} disabled={busy} />}
           <span>
             <Paperclip size={13} />
-            {mode === "debate" ? "辩论不收附件" : `${allAttachments.length} 个附件`} · ⌘↵ 按当前启动方式创建
+            {mode === "duet" ? "讨论不收附件" : `${allAttachments.length} 个附件`} · ⌘↵ 按当前启动方式创建
           </span>
         </div>
         <ComposerLaunchControl

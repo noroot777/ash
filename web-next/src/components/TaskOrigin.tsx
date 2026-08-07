@@ -1,7 +1,7 @@
 import { useRef, useState, type MouseEvent } from "react";
 import { createPortal } from "react-dom";
 import type { Task } from "@harness/shared";
-import { FileText, Scales, UsersThree } from "@phosphor-icons/react";
+import { FileText, ChatsCircle, UsersThree } from "@phosphor-icons/react";
 
 export type TaskParentLink = {
   taskId: string;
@@ -10,7 +10,7 @@ export type TaskParentLink = {
 };
 
 export function taskModeLabel(mode: Task["mode"]): string {
-  if (mode === "debate") return "辩论";
+  if (mode === "duet") return "讨论";
   if (mode === "team") return "团队";
   return "任务";
 }
@@ -35,7 +35,7 @@ export function taskParentRelation(link: TaskParentLink): string {
 }
 
 export function TaskModeIcon({ mode, size = 14 }: { mode: Task["mode"]; size?: number }) {
-  if (mode === "debate") return <Scales size={size} aria-hidden="true" />;
+  if (mode === "duet") return <ChatsCircle size={size} aria-hidden="true" />;
   if (mode === "team") return <UsersThree size={size} aria-hidden="true" />;
   return <FileText size={size} aria-hidden="true" />;
 }

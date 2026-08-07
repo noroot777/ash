@@ -1,5 +1,8 @@
 .team-review-workspace { display: flex; min-height: 0; flex: 1; flex-direction: column; background: var(--canvas); }
-.team-review-subbar { display: flex; min-height: 52px; flex: 0 0 auto; align-items: center; gap: 10px; border-bottom: .5px solid var(--line); background: var(--panel); padding: 8px 16px; }
+.team-review-subbar { display: flex; min-height: 52px; flex: 0 0 auto; flex-wrap: wrap; align-items: center; gap: 10px; border-bottom: .5px solid var(--line); background: var(--panel); padding: 8px 16px; }
+/* 验收动作提到顶栏：它是这一屏唯一的动作，不该跟着调度台卡片一起被折叠收走。失败详情
+   换行铺满顶栏下沿，不去挤那句共享执行者摘要。 */
+.team-review-subbar .team-accept-failure { flex: 1 0 100%; margin: 0; }
 .team-review-subbar > div:first-child { min-width: 0; flex: 1; }
 .team-review-subbar b, .team-review-subbar small { display: block; }
 .team-review-subbar b { font-size: 12.5px; }
@@ -23,10 +26,6 @@
 .team-review-record-title small { background: color-mix(in lch,var(--accent) 8%,var(--raised)); color: var(--accent); }
 .team-review-record-title p { display: -webkit-box; overflow: hidden; margin: 5px 0 0; color: var(--faint); font-size: 10.5px; line-height: 1.45; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 .team-review-record-body { display: grid; gap: 12px; border-top: .5px solid var(--line); background: color-mix(in lch,var(--canvas) 72%,var(--panel)); padding: 12px; }
-.team-review-facts { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 8px; margin: 0; }
-.team-review-facts > div { min-width: 0; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); padding: 7px 8px; }
-.team-review-facts dt { color: var(--faint); font-size: 9px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; }
-.team-review-facts dd { display: flex; min-width: 0; align-items: center; gap: 4px; overflow: hidden; margin: 3px 0 0; color: var(--muted); font-family: var(--font-mono); font-size: 9.5px; text-overflow: ellipsis; white-space: nowrap; }
 
 .team-accept-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 5px; }
 .team-accept-actions > button, .team-accept-actions > span { display: inline-flex; height: 27px; align-items: center; gap: 5px; border: 1px solid var(--line2); border-radius: 7px; background: var(--panel); padding: 0 8px; color: var(--muted); font-size: 10.5px; font-weight: 600; }
@@ -53,16 +52,7 @@
 .team-return-feedback { display: block; width: 100%; resize: vertical; border: 1px solid var(--line2); border-radius: 8px; background: var(--canvas); padding: 8px 9px; color: var(--ink); font-size: 11.5px; line-height: 1.5; outline: 0; }
 .team-return-feedback:focus { border-color: color-mix(in lch,var(--accent) 55%,var(--line2)); }
 
-.team-review-change-grid { display: grid; grid-template-columns: 230px minmax(0,1fr); gap: 10px; }
-.team-review-change-grid > section { min-width: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
-.team-review-change-grid h4 { display: flex; height: 34px; align-items: center; gap: 6px; margin: 0; border-bottom: .5px solid var(--line); padding: 0 9px; color: var(--muted); font-size: 10.5px; }
-.team-review-change-grid h4 em { margin-left: auto; color: var(--faint); font-style: normal; }
-.team-review-change-grid > section > p { margin: 9px; color: var(--faint); font-size: 10px; }
-.team-review-commit { display: flex; min-height: 31px; align-items: center; gap: 7px; border-top: .5px solid var(--line); padding: 5px 9px; }
-.team-review-commit:first-of-type { border-top: 0; }
-.team-review-commit code { flex: 0 0 auto; color: var(--accent); font-size: 9.5px; }
-.team-review-commit span { min-width: 0; flex: 1; overflow: hidden; color: var(--muted); font-size: 10.5px; text-overflow: ellipsis; white-space: nowrap; }
-.team-review-commit time { color: var(--faint); font-size: 9px; }
+.team-review-change { display: grid; min-width: 0; gap: 10px; }
 .team-review-loading { display: flex; align-items: center; gap: 6px; margin: 0; color: var(--faint); font-size: 10.5px; }
 .team-review-loading.is-error { color: var(--red); }
 
@@ -123,37 +113,19 @@
 .team-review-shots img { display: block; width: 100%; aspect-ratio: 16/9; background: var(--raised); object-fit: cover; }
 .team-review-shots span { display: block; overflow: hidden; padding: 5px 6px; color: var(--muted); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
 
-.team-shared-verification, .team-acceptance-queue { overflow: hidden; border: 1px solid var(--line2); border-radius: 10px; background: var(--panel); }
-.team-shared-verification > header, .team-acceptance-queue > header { display: flex; align-items: flex-start; gap: 8px; border-bottom: .5px solid var(--line); padding: 10px 12px; }
-.team-shared-verification > header > div, .team-acceptance-queue > header > div { min-width: 0; flex: 1; }
-.team-shared-verification > header b, .team-shared-verification > header small, .team-acceptance-queue > header b, .team-acceptance-queue > header small { display: block; }
-.team-shared-verification > header b, .team-acceptance-queue > header b { font-size: 11.5px; }
-.team-shared-verification > header small, .team-acceptance-queue > header small { color: var(--faint); font-size: 9.5px; }
-.team-shared-verification > header > span, .team-acceptance-queue > header > span { color: var(--faint); font-size: 10px; }
-.team-shared-verification > header > span.is-failed { color: var(--red); font-weight: 650; }
-.team-shared-worker-grid { display: grid; grid-template-columns: repeat(auto-fit,minmax(240px,1fr)); gap: 7px; padding: 9px; }
-.team-shared-worker-grid > button { display: flex; min-width: 0; align-items: center; gap: 7px; border: 1px solid var(--line); border-radius: 7px; background: var(--canvas); padding: 7px 8px; text-align: left; }
-.team-shared-worker-grid > button:hover, .team-shared-worker-grid > button.is-selected { border-color: color-mix(in lch,var(--accent) 34%,var(--line)); background: color-mix(in lch,var(--accent) 4%,var(--canvas)); }
-.team-shared-worker-grid > button.is-failed { border-color: color-mix(in lch,var(--red) 35%,var(--line)); background: color-mix(in lch,var(--red) 4%,var(--canvas)); }
-.team-shared-worker-grid > button > span { min-width: 0; flex: 1; }
-.team-shared-worker-grid b, .team-shared-worker-grid small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.team-shared-worker-grid b { color: var(--ink); font-size: 10.5px; }
-.team-shared-worker-grid small { color: var(--faint); font-size: 9px; }
-.team-shared-worker-grid em { border-radius: 4px; background: var(--raised); padding: 1px 5px; color: var(--muted); font-size: 9px; font-style: normal; }
-.team-shared-worker-grid svg { color: var(--faint); transform: rotate(-90deg); }
-.team-shared-worker-grid .is-selected svg { transform: rotate(0); }
-.team-shared-evidence { border-top: .5px solid var(--line); background: var(--canvas); padding: 9px; }
-.team-shared-evidence > b { display: block; margin: 0 0 7px; color: var(--muted); font-size: 10.5px; }
+.team-acceptance-queue { overflow: hidden; border: 1px solid var(--line2); border-radius: 10px; background: var(--panel); }
+.team-acceptance-queue > header { display: flex; align-items: flex-start; gap: 8px; border-bottom: .5px solid var(--line); padding: 10px 12px; }
+.team-acceptance-queue > header > div { min-width: 0; flex: 1; }
+.team-acceptance-queue > header b, .team-acceptance-queue > header small { display: block; }
+.team-acceptance-queue > header b { font-size: 11.5px; }
+.team-acceptance-queue > header small { color: var(--faint); font-size: 9.5px; }
+.team-acceptance-queue > header > span { color: var(--faint); font-size: 10px; }
 .team-acceptance-queue > div { display: grid; grid-template-columns: repeat(auto-fit,minmax(min(100%,470px),1fr)); gap: 10px; padding: 10px; }
-.team-acceptance-queue > p { margin: 0; padding: 24px 12px; color: var(--faint); text-align: center; font-size: 10.5px; }
 .team-acceptance-queue .team-review-record-body { padding: 9px; }
-.team-acceptance-queue .team-review-facts { grid-template-columns: 1fr; }
-.team-acceptance-queue .team-review-change-grid { grid-template-columns: 1fr; }
 .team-acceptance-queue .single-review-diff-layout { grid-template-columns: 1fr; }
 .team-acceptance-queue .single-review-files > div { max-height: 220px; }
 
 @media (max-width: 760px) {
-  .team-review-facts, .team-review-change-grid { grid-template-columns: 1fr; }
   .team-review-record > header { flex-wrap: wrap; }
   .team-accept-actions { width: 100%; justify-content: flex-end; }
   .review-dispatch-fields { grid-template-columns: 1fr; }

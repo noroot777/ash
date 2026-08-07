@@ -89,7 +89,7 @@ async function seedTask(
     resumeDependsOn: opts.resumeDependsOn ?? "[]",
     agentType: null,
     autoTitle: false,
-    debate: null,
+    duet: null,
     scheduleId: null,
     createdAt: ts,
     updatedAt: ts,

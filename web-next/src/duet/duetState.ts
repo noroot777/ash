@@ -1,9 +1,9 @@
-import type { DebateConsensusBy, DebateSpeaker, GateName, ServerEvent } from "@harness/shared";
+import type { DuetConsensusBy, DuetSpeaker, GateName, ServerEvent } from "@harness/shared";
 import type { ExecutionEvent } from "../lib/executionTrace.ts";
 
-export type DebateTurn = {
+export type DuetTurn = {
   round: number;
-  speaker: DebateSpeaker;
+  speaker: DuetSpeaker;
   text: string;
   /** 本回合的执行过程(工具/思考),与普通任务、团队共用一个「执行过程」折叠块。 */
   events: ExecutionEvent[];
@@ -18,41 +18,41 @@ export type DebateTurn = {
   target?: "A" | "B";
 };
 
-export type DebateGate = {
+export type DuetGate = {
   gate: GateName;
   open: boolean;
   consensus?: boolean;
-  consensusBy?: DebateConsensusBy;
+  consensusBy?: DuetConsensusBy;
   conclusionA?: string | null;
   conclusionB?: string | null;
 };
 
-export type DebateState = { turns: DebateTurn[]; gate: DebateGate | null };
+export type DuetState = { turns: DuetTurn[]; gate: DuetGate | null };
 // 落盘的回合行:events 是后加的,旧 transcript 里没有(缺省当作没有执行过程)。
-export type PersistedDebateTurn = Omit<DebateTurn, "events" | "done" | "raised"> & { raised?: boolean; events?: ExecutionEvent[] };
-export type PersistedDebateEntry =
-  | PersistedDebateTurn
-  | Extract<ServerEvent, { type: "debate.gate" | "debate.progress" }>;
+export type PersistedDuetTurn = Omit<DuetTurn, "events" | "done" | "raised"> & { raised?: boolean; events?: ExecutionEvent[] };
+export type PersistedDuetEntry =
+  | PersistedDuetTurn
+  | Extract<ServerEvent, { type: "duet.gate" | "duet.progress" }>;
 
-export const emptyDebate = (): DebateState => ({ turns: [], gate: null });
+export const emptyDuet = (): DuetState => ({ turns: [], gate: null });
 
-function isPersistedGate(entry: PersistedDebateEntry): entry is Extract<ServerEvent, { type: "debate.gate" }> {
-  return (entry as { type?: string }).type === "debate.gate";
+function isPersistedGate(entry: PersistedDuetEntry): entry is Extract<ServerEvent, { type: "duet.gate" }> {
+  return (entry as { type?: string }).type === "duet.gate";
 }
 
-function isPersistedProgress(entry: PersistedDebateEntry): entry is Extract<ServerEvent, { type: "debate.progress" }> {
-  return (entry as { type?: string }).type === "debate.progress";
+function isPersistedProgress(entry: PersistedDuetEntry): entry is Extract<ServerEvent, { type: "duet.progress" }> {
+  return (entry as { type?: string }).type === "duet.progress";
 }
 
-function speakerOf(role: string): DebateSpeaker {
-  if (role === "debaterB") return "B";
+function speakerOf(role: string): DuetSpeaker {
+  if (role === "voiceB") return "B";
   if (role === "implementer") return "impl";
   if (role === "reviewer") return "review";
   return "A";
 }
 
-export function applyDebateEvent(state: DebateState, event: ServerEvent): DebateState {
-  if (event.type === "debate.progress") {
+export function applyDuetEvent(state: DuetState, event: ServerEvent): DuetState {
+  if (event.type === "duet.progress") {
     if (event.phase === "start") {
       const turns = [...state.turns];
       for (let index = turns.length - 1; index >= 0; index -= 1) {
@@ -90,7 +90,7 @@ export function applyDebateEvent(state: DebateState, event: ServerEvent): Debate
     }
     return { ...state, turns };
   }
-  if (event.type === "debate.gate") {
+  if (event.type === "duet.gate") {
     const previous = state.gate?.gate === event.gate ? state.gate : null;
     return {
       ...state,
@@ -104,7 +104,7 @@ export function applyDebateEvent(state: DebateState, event: ServerEvent): Debate
       },
     };
   }
-  if (event.type === "debate.user") {
+  if (event.type === "duet.user") {
     return {
       ...state,
       turns: [...state.turns, {
@@ -137,19 +137,19 @@ export function applyDebateEvent(state: DebateState, event: ServerEvent): Debate
   return state;
 }
 
-export function latestActiveDebateTurn(turns: DebateTurn[]): DebateTurn | null {
+export function latestActiveDuetTurn(turns: DuetTurn[]): DuetTurn | null {
   return [...turns].reverse().find((turn) =>
     !turn.done && (turn.speaker === "A" || turn.speaker === "B"),
   ) ?? null;
 }
 
-export function rebuildDebateState(entries: PersistedDebateEntry[]): DebateState {
-  let state = emptyDebate();
+export function rebuildDuetState(entries: PersistedDuetEntry[]): DuetState {
+  let state = emptyDuet();
   for (const entry of entries) {
-    if (isPersistedGate(entry)) state = applyDebateEvent(state, entry);
-    else if (isPersistedProgress(entry)) state = applyDebateEvent(state, entry);
+    if (isPersistedGate(entry)) state = applyDuetEvent(state, entry);
+    else if (isPersistedProgress(entry)) state = applyDuetEvent(state, entry);
     else {
-      const completed: DebateTurn = { ...entry, raised: !!entry.raised, events: entry.events ?? [], done: true };
+      const completed: DuetTurn = { ...entry, raised: !!entry.raised, events: entry.events ?? [], done: true };
       const turns = [...state.turns];
       let replaced = false;
       for (let index = turns.length - 1; index >= 0; index -= 1) {

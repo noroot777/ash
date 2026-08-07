@@ -2,11 +2,14 @@
 // 「只能搬类型、不能搬运行时值」的原因见 ./events.ts 头部注释。
 import type { TaskStatus } from "./index.ts";
 
-// One hit per task or note. Task fields rank title > body > conversation, and
-// task hits are returned before note hits. `conversation` means the match was
-// found inside the task's session transcripts (data/runs/<taskId>/*.md|jsonl),
+// One hit per task or note. Task fields rank id > title > body > conversation,
+// and task hits are returned before note hits. `conversation` means the match
+// was found inside the task's session transcripts (data/runs/<taskId>/*.md|jsonl),
 // which is where run artifacts like output directory names live.
-export type SearchField = "title" | "body" | "conversation";
+// `id` means the query itself is this task's id (or its 8-char branch prefix):
+// it outranks everything, and it is the one field that can produce a hit with no
+// match in the corpus at all — a task's own id appears nowhere in its own text.
+export type SearchField = "id" | "title" | "body" | "conversation";
 
 export interface TaskSearchHit {
   kind: "task";

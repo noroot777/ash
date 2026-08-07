@@ -24,7 +24,7 @@ export function DerivedTaskLinks({
   onOpen: (taskId: string) => void;
 }) {
   const derived = allTasks
-    .filter((task) => task.originTaskId === sourceTaskId && (task.mode === "team" || task.mode === "debate"))
+    .filter((task) => task.originTaskId === sourceTaskId && (task.mode === "team" || task.mode === "duet"))
     .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
   if (!derived.length) return null;
 

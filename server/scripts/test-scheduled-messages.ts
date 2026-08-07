@@ -66,7 +66,7 @@ const taskRow = (id: string, lead: "claude" | "gemini", status: "idle" | "runnin
   agentType: lead,
   executorId: null,
   autoTitle: false,
-  debate: null,
+  duet: null,
   team: JSON.stringify({ ...TEAM_DEFAULTS, lead }),
   scheduleId: null,
   createdAt: at,
@@ -127,7 +127,7 @@ assert.equal(
 );
 assert.equal(pending.deliveryVerdict({ mode: "queued", sendAt: dueAt }, single("done"), now).action, "deliver");
 assert.equal(
-  pending.deliveryVerdict({ mode: "timed", sendAt: dueAt }, { mode: "debate", status: "done", archived: false }, now)
+  pending.deliveryVerdict({ mode: "timed", sendAt: dueAt }, { mode: "duet", status: "done", archived: false }, now)
     .action,
   "cancel",
   "辩论任务不支持回复,等下去也没意义",

@@ -10,7 +10,7 @@ import {
   DotsThree,
   DownloadSimple,
   Play,
-  Scales,
+  ChatsCircle,
   Stop,
   Trash,
 } from "@phosphor-icons/react";
@@ -20,7 +20,7 @@ import { TaskStatusDot } from "../components/TaskStatusDot.tsx";
 import type { IndicatorForTask } from "../lib/useTaskReadState.ts";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import { safeDownloadName } from "../task-detail/utils.ts";
-import { teamDebateIterationState } from "../debate/handoffPolicy.ts";
+import { teamDuetIterationState } from "../duet/handoffPolicy.ts";
 
 export function TeamHeader({
   task,
@@ -38,7 +38,7 @@ export function TeamHeader({
   onRun,
   onHalt,
   onResume,
-  onIterateDebate,
+  onIterateDuet,
   onArchive,
   onDelete,
   indicatorForTask,
@@ -60,7 +60,7 @@ export function TeamHeader({
   onRun: () => void;
   onHalt: () => void;
   onResume: () => void;
-  onIterateDebate: () => void;
+  onIterateDuet: () => void;
   onArchive: () => void;
   onDelete: () => void;
   indicatorForTask: IndicatorForTask;
@@ -76,7 +76,7 @@ export function TeamHeader({
   const pausedGroups = groups.filter((group) => group.paused);
   const stopped = pausedGroups.length > 0 || haltedByHistory;
   const settled = isTeamSettled(task.status === "running", workers);
-  const iteration = teamDebateIterationState(task, allTasks);
+  const iteration = teamDuetIterationState(task, allTasks);
   const display = taskDisplayStatus(task.status, task.stage, !!task.question);
   const indicator = indicatorForTask(task);
 
@@ -148,11 +148,11 @@ export function TeamHeader({
               type="button"
               className="is-iterate"
               disabled={busy || iterateBusy}
-              onClick={onIterateDebate}
-              title={iteration.existing ? "打开这个团队已经创建的下一轮辩论" : "读取团队执行记录，沿用来源辩论配置创建下一轮"}
+              onClick={onIterateDuet}
+              title={iteration.existing ? "打开这个团队已经创建的下一轮讨论" : "读取团队执行记录，沿用来源讨论配置创建下一轮"}
             >
-              <Scales size={13} weight="fill" />
-              {iterateBusy ? "创建中…" : iteration.existing ? "打开下一轮" : "再辩一轮"}
+              <ChatsCircle size={13} weight="fill" />
+              {iterateBusy ? "创建中…" : iteration.existing ? "打开下一轮" : "再讨论一轮"}
             </button>
           )}
           {!task.archived && !settled && !stopped && !teamNeverStarted(task.status) && (

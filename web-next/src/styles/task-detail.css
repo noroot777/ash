@@ -514,7 +514,7 @@
 .task-derivation-slash-menu > button[aria-selected="true"] { background: var(--sel-bg); }
 .task-derivation-slash-menu b { flex: 0 0 auto; color: var(--accent); font-family: var(--font-mono); font-size: 11.5px; }
 .task-derivation-slash-menu em { min-width: 0; overflow: hidden; color: var(--faint); font-size: 10px; font-style: normal; text-overflow: ellipsis; white-space: nowrap; }
-.task-derivation-debate-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.task-derivation-duet-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
 .task-derivation-gate { display: grid; gap: 6px; }
 .task-derivation-gate > span { color: var(--muted); font-size: 10px; font-weight: 550; }
 .task-derivation-gate .ui-choice { min-height: 34px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); padding: 0 9px; }
@@ -537,12 +537,12 @@
 
 @media (max-width: 880px) {
   .task-derivation-role-grid { grid-template-columns: 1fr; }
-  .task-derivation-debate-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .task-derivation-duet-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 @media (max-width: 620px) {
   .task-reply-inline-panel { left: 8px; right: 8px; }
-  .task-derivation-debate-grid { grid-template-columns: 1fr; }
+  .task-derivation-duet-grid { grid-template-columns: 1fr; }
   .task-derivation-footer { align-items: stretch; }
   .task-derivation-worktree { width: 100%; }
   .task-derivation-actions { width: 100%; justify-content: flex-end; }
@@ -660,7 +660,10 @@
 .task-queue-row > button:hover { background: var(--overlay); color: var(--red); }
 .task-queue-drawer > footer { border-top: 0.5px solid var(--line); padding: 10px 16px; color: var(--faint); font-size: 10px; }
 
-.task-modal-scrim { position: fixed; z-index: 120; inset: 0; display: grid; place-items: center; background: rgb(40 42 48 / 34%); padding: 20px; }
+/* 确认框 portal 到 body 并登记进那一摞可关闭层（见 ConfirmDialog.tsx）：层高要压过所有
+   可能在它下面开着的东西——随手记/群组这些浮层(205~210)、diff 放大层(92)、抽屉(95/96)，
+   否则从那些层里弹出的确认框会被自己的来源盖住。 */
+.task-modal-scrim { position: fixed; z-index: 230; inset: 0; display: grid; place-items: center; background: rgb(40 42 48 / 34%); padding: 20px; }
 .task-confirm-dialog { width: min(480px, 94vw); border: 1px solid var(--line2); border-radius: 13px; background: var(--panel); padding: 16px; box-shadow: var(--shadow); }
 .task-confirm-dialog > header { display: flex; align-items: center; gap: 9px; }
 .task-confirm-dialog > header > span { display: grid; width: 28px; height: 28px; place-items: center; border-radius: 8px; background: var(--accent-soft); color: var(--accent); }

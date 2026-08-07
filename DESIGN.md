@@ -29,7 +29,7 @@ Project(边界 = 一个 git 仓库)
 │
 ├─【执行层】 Task「让谁干一件具体的事」
 │                ├─ Agent「谁来干」── 类型(claude/codex)→ 默认执行器；执行目标 = 本地 spawn / ssh shell
-│                └─ Session × N「每次执行的凭证」── resume / 多 agent 接力 / debate 角色
+│                └─ Session × N「每次执行的凭证」── resume / 多 agent 接力 / duet 角色
 │
 ├─【空间维度】Group：一组相关 Task 怎么调度（parallel/serial + dependsOn）
 └─【时间维度】Schedule：Task 何时自动触发（once / cron）
@@ -55,7 +55,7 @@ Project(边界 = 一个 git 仓库)
 2. **归属** — 落到一个 **Project**(哪个 repo)+ 一个 **Group**(怎么和兄弟一起跑)。
 3. **排队** — Group `mode` + 自身 `dependsOn` 决定何时启动(`backlog → queued`)。
 4. **执行** — **Agent** 在一个隔离 **worktree**(默认开,`git worktree add` 出独立分支)里跑,落一条 **Session**(`queued → running`)。*隔离边界*:worktree 只隔 git 工作树 + 分支,**不隔**依赖 / 端口 / 外部 DB。
-5. **协作** — `@` 第二个 agent、`reply` 纠偏、或 debate 多角色——**每个动作都给这个 Task 再挂一条 Session**。
+5. **协作** — `@` 第二个 agent、`reply` 纠偏、或 duet 多角色——**每个动作都给这个 Task 再挂一条 Session**。
 6. **落幕** — `done / failed / canceled`(`awaiting_review` = 卡在 HITL 门,"机器停下等人"的特色态),留下分支 commits 与可 resume 的凭证。
 7. **复盘**(规划) — 结果 → 反思 → 新 Task / Group → 回到第 1 步。回路闭合,系统自我迭代。
 
@@ -67,11 +67,11 @@ Project(边界 = 一个 git 仓库)
 
 ```
 轴一·结构(要不要拆)        轴二·执行(每个任务怎么跑)
-   ├ 不拆 ─────────────────► single / race / debate 三选一
-   └ 拆成子任务 ──► 每个子任务，再各自 single / race / debate
+   ├ 不拆 ─────────────────► single / race / duet 三选一
+   └ 拆成子任务 ──► 每个子任务，再各自 single / race / duet
 ```
 
-> 例「加用户认证」:拆成 5 个子任务(结构轴);其中"设计架构"跑 `debate`、"实现 API"跑 `race`、其余 `single`(执行轴)。**拆解决定有几个任务,模式决定每个怎么跑——两件事。**
+> 例「加用户认证」:拆成 5 个子任务(结构轴);其中"设计架构"跑 `duet`、"实现 API"跑 `race`、其余 `single`(执行轴)。**拆解决定有几个任务,模式决定每个怎么跑——两件事。**
 
 ### 轴一 · 拆解(一个任务 → 一窝子任务)
 
@@ -87,16 +87,16 @@ Project(边界 = 一个 git 仓库)
 
 **现状支持度**:✅ 建带依赖的子任务链(`create_task_chain`)+ 拓扑调度;❌ 缺三样——`task → 子 Group` 的连接(`childGroupId`)、父任务挂起状态(`awaiting_children`)、执行中 agent 主动发起拆解的触发(需 agent 连 harness MCP + 拆解约定)。
 
-### 轴二 · 执行模式:`single → race → debate` 光谱
+### 轴二 · 执行模式:`single → race → duet` 光谱
 
 即"这个任务我愿投入多少冗余,要广度还是深度":
 - **single**:1 agent 1 次,默认。
 - **race / best-of-N**(规划):N agent **独立隔离**并行 → 比 diff 选 1。**费 token 换命中率、不费脑**(广度)。**必须 per-candidate worktree 隔离**(同目录并行会互覆盖、多样性塌缩);**保持纯粹只选优、不内置 review**;受隔离边界限制,适合"改代码"非"起服务"。
-- **debate**:两 agent 盲态开局 → 多轮对抗 → 收敛并给出结论，可选 G1 共识门。**费 token + 脑力换深度**。机制:**编排器是唯一信使、严格串行回合、盲态开局、举手收敛**。需要落地代码时，辩论结束后交给 `/team` 拆解执行与验收。
+- **duet(讨论)**:两个声音盲态开局 → 多轮互相吸收、补强、演进方案 → 收敛出一份共同方案，可选 G1 共识门。**费 token + 脑力换深度**。机制:**编排器是唯一信使、严格串行回合、盲态开局、举手收敛**——盲态与串行保证两种声音真实独立,目标函数是合出更完善的方案而不是驳倒对方。需要落地代码时，讨论结束后交给 `/team` 拆解执行与验收。
 
 **复盘是第三件事(回路,非这两轴)**:用一个 agent 回看会话,把结果转成可继续执行的新 Task / Group。要点:输入结构化、输出**可一键执行**(建议→Task / 问题→卡片)。
 
-> 三者不冲突:`拆解` 动"几个任务"(结构)、`single/race/debate` 动"每个怎么跑"(执行)、`复盘` 动"跑完反哺"(回路)——三个不同层面。`planner`/`自拆` 只是拆解的两个时机,不是独立概念。
+> 三者不冲突:`拆解` 动"几个任务"(结构)、`single/race/duet` 动"每个怎么跑"(执行)、`复盘` 动"跑完反哺"(回路)——三个不同层面。`planner`/`自拆` 只是拆解的两个时机,不是独立概念。
 
 ---
 
@@ -121,7 +121,7 @@ Project(边界 = 一个 git 仓库)
 
 ## 附 A. 里程碑(已完成)
 
-M0 骨架 → M1 单 agent 垂直切片 → M2 任务管理(Linear 式:状态/优先级/标签 + Cmd-K)→ M3 分组并行/串行调度 → M4 debate 对抗(双门 HITL)→ M5 定时执行 → M6 打磨(agent 注册表 / ssh 目标)。见 git log。
+M0 骨架 → M1 单 agent 垂直切片 → M2 任务管理(Linear 式:状态/优先级/标签 + Cmd-K)→ M3 分组并行/串行调度 → M4 duet 讨论(原 debate 对抗,双门 HITL;2026-08 更名并改为协作研讨语义)→ M5 定时执行 → M6 打磨(agent 注册表 / ssh 目标)。见 git log。
 
 ## 附 B. 待后续决定
 

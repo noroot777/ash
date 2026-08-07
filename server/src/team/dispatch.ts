@@ -121,7 +121,7 @@ export async function dispatchWorkers(
       model: overrides.model,
       reasoningEffort: overrides.reasoningEffort,
       autoTitle: false, // 调度者派活时给的标题就是标题,不让执行者自己改名
-      debate: null as string | null,
+      duet: null as string | null,
       team: null as string | null,
       reportBack: s.reportBack ?? false,
       scheduleId: null as string | null,

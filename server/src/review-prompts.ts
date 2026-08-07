@@ -38,8 +38,12 @@ function requiredChecks(target: TaskRow, at: string | null | undefined): string 
 }
 
 // 「怎么验、证据放哪」两套说法共用的正文。
+//
+// 截图是**按需**的（用户 2026-08-06 拍板）：一张没人看的截图不叫证据，只是给验收的人
+// 多一次点开再关掉。判据写成「改动看不看得见」而不是「web / 非 web」——同样是 web 改动，
+// 调个接口超时跟挪个按钮，前者截图上什么都看不出来。真实运行验证本身一步都不减。
 function verifyRules(evidenceDir: string): string {
-  return `必须真实运行验证：只读代码或只过编译不算。web 改动必须启动服务，用浏览器确认行为并截图；` +
+  return `必须真实运行验证：只读代码或只过编译不算。web 改动必须启动服务、用浏览器确认行为；` +
     `其它改动也必须运行与风险相称的测试或产物。\n\n` +
     `浏览器验证优先走 CDP（Chrome DevTools Protocol）直连/复用浏览器；确实走不通才允许退回 playwright 一类工具。` +
     `一旦用了 playwright，验证结束前必须把它落在仓库工作区里的产物删干净（.playwright-cli/、playwright-report/、test-results/ 等），` +
@@ -47,8 +51,10 @@ function verifyRules(evidenceDir: string): string {
     `验证收尾必须清场：结束前把你为验证启动的所有服务/进程全部停掉（dev server、mock server、throwaway 实例等），` +
     `确认监听端口已释放，不许留孤儿进程在后台。\n\n` +
     `证据强制落盘：\n` +
-    `- 必写报告：${join(evidenceDir, "report.md")}（包含结论、依据、发现的问题）\n` +
-    `- 截图：放在 ${evidenceDir} 目录内\n` +
+    `- 必写报告：${join(evidenceDir, "report.md")}（包含结论、依据、发现的问题）——**报告是唯一必交的证据**，` +
+    `跑过的命令与关键输出贴进去\n` +
+    `- 截图按需：**改动看得见**（界面、渲染结果、视觉回归）时必须截，因为文字替代不了；` +
+    `看不见的改动（服务端逻辑、CLI、脚本、纯数据）**不需要截图就别截**，别为了凑证据补一张没有信息量的图。截了就放在 ${evidenceDir} 目录内\n` +
     `- 证据**只落盘，绝不 git add / commit 进仓库**（data/ 本就在 .gitignore 里，不要 -f 强加）：` +
     `验收界面直接从磁盘读证据，塞进 git 只会拿二进制文件污染被审分支的验收 diff\n\n`;
 }
@@ -92,7 +98,8 @@ export async function verifyProtocolFor(
 export function verifyReminderFor(taskId: string, round: number): string {
   const dir = reviewRoundDir(taskId, round);
   return `验证提醒:你正在跑本任务的第 ${round} 轮自动验证（不是继续做需求）。必须真实运行验证并把报告写到 ${join(dir, "report.md")}，` +
-    `截图放同目录（只落盘，绝不 commit 进仓库）；浏览器验证优先 CDP，退回 playwright 的话结束前必须删掉它在工作区的产物（.playwright-cli/ 等）；` +
+    `改动看得见（界面/渲染结果）才截图、放同目录，看不见的改动不用截（都只落盘，绝不 commit 进仓库）；` +
+    `浏览器验证优先 CDP，退回 playwright 的话结束前必须删掉它在工作区的产物（.playwright-cli/ 等）；` +
     `验证完停掉自己启动的所有服务/进程；` +
     `结束前调 report_stage(taskId="${taskId}", stage="verified"|"verify_failed") 给出结论，本回合不要调 complete_task。`;
 }
@@ -128,7 +135,8 @@ export function reviewReminderFor(review: Pick<TaskRow, "id" | "reviewOf" | "rev
   if (!review.reviewOf || !review.reviewRound) return "";
   const dir = reviewRoundDir(review.reviewOf, review.reviewRound);
   return `审查提醒:这是第 ${review.reviewRound} 轮审查；必须真实运行验证并把报告写到 ${join(dir, "report.md")}，` +
-    `截图放同目录（只落盘，绝不 commit 进仓库）；浏览器验证优先 CDP，退回 playwright 的话结束前必须删掉它在工作区的产物（.playwright-cli/ 等）；` +
+    `改动看得见（界面/渲染结果）才截图、放同目录，看不见的改动不用截（都只落盘，绝不 commit 进仓库）；` +
+    `浏览器验证优先 CDP，退回 playwright 的话结束前必须删掉它在工作区的产物（.playwright-cli/ 等）；` +
     `验证完停掉自己启动的所有服务/进程；` +
     `结束前对被审任务 ${review.reviewOf} 调 report_stage(verified|verify_failed)，` +
     `再对审查任务自身 ${review.id} 调 complete_task。`;
@@ -146,9 +154,10 @@ export function repairPrompt(input: {
 }): string {
   const { target, round, reviewTaskId } = input;
   const dir = reviewRoundDir(target.id, round);
+  // 没截图不是缺证据：截图按需，看不见的改动本来就不该有图（见 verifyRules）。
   const evidence = input.images.length
     ? input.images.map((name) => `- ${join(dir, name)}`).join("\n")
-    : "- (本轮没有截图文件)";
+    : "- (本轮无截图，报告即全部证据)";
   const coverageGuard = repairCoverageGuard(input.coverage);
   return `【自动验证未通过 · 第 ${round} 轮】\n` +
     (reviewTaskId

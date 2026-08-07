@@ -178,7 +178,7 @@ export function VerifyGateControls({
 
   return (
     <>
-      <div className="wf-verify-actions">
+      <div className="wf-vactions">
         <button type="button" disabled={inFlight || !!busy} onClick={() => void redo()}>
           {busy === "redo" ? <SpinnerGap size={13} className="is-spinning" /> : <MagnifyingGlass size={13} />}
           <span>{busy === "redo" ? "启动中" : inFlight ? "执行中" : "再验一轮"}</span>

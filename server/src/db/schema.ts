@@ -64,7 +64,7 @@ export const tasks = sqliteTable("tasks", {
   parentId: text("parent_id"),
   title: text("title").notNull(),
   body: text("body").notNull().default(""),
-  mode: text("mode").notNull().default("single"), // single | debate | team
+  mode: text("mode").notNull().default("single"), // single | duet | team
   status: text("status").notNull().default("backlog"),
   stage: text("stage"), // 正交验收阶段；不参与 status 调度/结算语义
   pinnedAt: integer("pinned_at"), // null=未置顶；多个置顶任务按时间戳排序
@@ -91,7 +91,7 @@ export const tasks = sqliteTable("tasks", {
   model: text("model"), // null=跟随执行器 profile；非空=任务级覆盖
   reasoningEffort: text("reasoning_effort"), // null=跟随执行器 profile；非空=任务级覆盖
   autoTitle: integer("auto_title", { mode: "boolean" }).notNull().default(false),
-  debate: text("debate"), // json DebateConfig
+  duet: text("duet"), // json DuetConfig
   team: text("team"), // json TeamConfig（mode:"team" 的调度者/默认执行者类型）
   // 执行者旗标：done 时是否汇报给调度者（dispatch 时逐个指定）。
   reportBack: integer("report_back", { mode: "boolean" }).notNull().default(false),

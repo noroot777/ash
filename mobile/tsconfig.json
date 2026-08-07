@@ -11,8 +11,13 @@
       ],
       "@harness/shared": [
         "../shared/src/index.ts"
+      ],
+      "@harness/shared/duet": [
+        "../shared/src/duet.ts"
       ]
-    }
+    },
+    "allowImportingTsExtensions": true,
+    "noEmit": true
   },
   "include": [
     "**/*.ts",

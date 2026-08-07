@@ -221,9 +221,6 @@
   z-index: 210;
 }
 
-.notes-scrim + .task-modal-scrim {
-  z-index: 220;
-}
 
 .notes-panel > header {
   display: flex;

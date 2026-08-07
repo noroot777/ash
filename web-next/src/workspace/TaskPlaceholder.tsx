@@ -5,7 +5,7 @@ import { workspaceModifierLabel } from "./useWorkspaceShortcuts.ts";
 
 function taskKind(task: Task): string {
   if (task.mode === "team") return "团队";
-  if (task.mode === "debate") return "辩论";
+  if (task.mode === "duet") return "讨论";
   return "任务";
 }
 

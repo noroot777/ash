@@ -33,11 +33,18 @@ export function useDismissable<
   containerRef,
   onClose,
   restoreFocusRef,
+  closeOnOutside = true,
 }: {
   enabled: boolean;
   containerRef: RefObject<Container | null>;
   onClose: () => void;
   restoreFocusRef?: RefObject<RestoreFocus | null>;
+  /**
+   * 菜单、气泡这类「点别处就该收起来」的浮层保持默认 true。放大视图那种「铺开一块地方
+   * 长期看着、旁边的 inspector 还要接着点」的层传 false：它照样进这摞（Esc 仍按顺序一次
+   * 退一层、里层的点击仍不算点外面），只是不再把「点外面」当成关闭意图。
+   */
+  closeOnOutside?: boolean;
 }) {
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
@@ -58,7 +65,7 @@ export function useDismissable<
         || inner.restoreFocusRef?.current?.contains(target));
     };
 
-    const closeOnOutside = (event: Event) => {
+    const dismissOnOutside = (event: Event) => {
       const target = event.target;
       if (
         !(target instanceof Node)
@@ -80,15 +87,17 @@ export function useDismissable<
 
     // Capture keeps dismissal reliable when the destination stops bubbling.
     // Click covers keyboard and assistive activation paths without pointerdown.
-    document.addEventListener("pointerdown", closeOnOutside, true);
-    document.addEventListener("click", closeOnOutside, true);
+    if (closeOnOutside) {
+      document.addEventListener("pointerdown", dismissOnOutside, true);
+      document.addEventListener("click", dismissOnOutside, true);
+    }
     document.addEventListener("keydown", closeOnEscape, true);
     return () => {
       const at = layers.indexOf(layer);
       if (at >= 0) layers.splice(at, 1);
-      document.removeEventListener("pointerdown", closeOnOutside, true);
-      document.removeEventListener("click", closeOnOutside, true);
+      document.removeEventListener("pointerdown", dismissOnOutside, true);
+      document.removeEventListener("click", dismissOnOutside, true);
       document.removeEventListener("keydown", closeOnEscape, true);
     };
-  }, [containerRef, enabled, restoreFocusRef]);
+  }, [closeOnOutside, containerRef, enabled, restoreFocusRef]);
 }

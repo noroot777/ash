@@ -1,4 +1,4 @@
-export type ComposerExecutorRole = "single" | "lead" | "worker" | "reviewer" | "debaterA" | "debaterB";
+export type ComposerExecutorRole = "single" | "lead" | "worker" | "reviewer" | "voiceA" | "voiceB";
 
 export interface ComposerExecutorConfig {
   profile: string;
@@ -15,8 +15,8 @@ export function emptyComposerExecutorConfigs(): ComposerExecutorConfigs {
     lead: empty(),
     worker: empty(),
     reviewer: empty(),
-    debaterA: empty(),
-    debaterB: empty(),
+    voiceA: empty(),
+    voiceB: empty(),
   };
 }
 

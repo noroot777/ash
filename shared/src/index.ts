@@ -1,7 +1,8 @@
 // Core domain types shared between server and web.
-// Mirrors the decisions in DESIGN.md (§3 data model, §5 agents, §7 debate,
-// §8 statuses, §12 debate mechanism, §13 sessions).
+// Mirrors the decisions in DESIGN.md (§3 data model, §5 agents, §7 duet,
+// §8 statuses, §12 duet mechanism, §13 sessions).
 import type { TeamConfig } from "./team.ts";
+import type { DuetConfig } from "./duet.ts";
 import type { WorkflowDef } from "./workflow.ts";
 export type { Session, SessionRole } from "./session.ts";
 export type {
@@ -41,7 +42,7 @@ export const DEFAULT_APP_SETTINGS: Readonly<AppSettings> = Object.freeze({
 export type { SkillEntry, SkillList, SkillScanOverview, SkillScanRow, SkillSource } from "./skills.ts";
 
 // ── Agents (§5) ────────────────────────────────────────────────────────────
-// Abstraction layer: the *type* is what you @ / pick as a debater.
+// Abstraction layer: the *type* is what you @ / pick as a duet voice.
 // Single source of truth: the runtime list drives both the union type and any
 // server-side validation (e.g. the batch API), so they can never drift.
 //
@@ -177,7 +178,7 @@ export interface Group {
   createdAt: string;
 }
 
-export type TaskMode = "single" | "debate" | "team";
+export type TaskMode = "single" | "duet" | "team";
 
 export type TaskStatus =
   | "backlog"
@@ -279,8 +280,8 @@ export interface Task {
   reasoningEffort?: string | null;
   // Read-only label for the selected/default executor profile.
   executorLabel?: string | null;
-  // debate mode config (§7):
-  debate?: DebateConfig;
+  // duet (讨论) mode config (§7):
+  duet?: DuetConfig;
   // team mode config (§Team)：调度者 + 默认执行者类型。只有 mode:"team" 的任务有。
   team?: TeamConfig;
   // §Team：执行者 done 后是否额外唤醒调度者汇报。
@@ -308,7 +309,7 @@ export interface Task {
   // 一条线上出现多次——唤醒事件落回来时才知道是**第几个**验证站有了结论、用户在**哪
   // 一道**关口点了头。null = 还没走到任何锚点，或者是没有线的老任务。
   workflowAt?: string | null;
-  // Backlink used by debate ↔ team derivation chains.
+  // Backlink used by duet ↔ team derivation chains.
   originTaskId?: string | null;
   // §Pause 检查点续跑指令；非空时结算 paused，恢复后清空。
   resumePrompt?: string | null;
@@ -476,75 +477,10 @@ export interface BatchCreateTasksBody {
   };
 }
 
-// ── Debate (§7) ──────────────────────────────────────────────────────────────
-export type HitlGate = "off" | "on";
-export type DebateConsensusBy = "both" | "A" | "B";
-
-// /debate is discussion-only: two debaters challenge each other and produce a
-// conclusion. Code execution belongs to /team.
-export type DebateStyle = "debate";
-
-export interface DebateConfig {
-  topic: string;
-  style: DebateStyle;
-  debaterA: AgentType;
-  debaterB: AgentType;
-  debaterAExecutorId?: string | null;
-  debaterBExecutorId?: string | null;
-  // Per-debater model / effort overrides. null = follow that debater's executor
-  // profile. Debaters are picked independently, so their models are too — a
-  // single task-level model would silently apply to both sides.
-  debaterAModel?: string | null;
-  debaterAReasoningEffort?: string | null;
-  debaterBModel?: string | null;
-  debaterBReasoningEffort?: string | null;
-  maxRounds: number | null; // null = unlimited
-  gateG1: HitlGate; // consensus gate
-}
-
-export const DEBATE_DEFAULTS: DebateConfig = {
-  topic: "",
-  style: "debate",
-  debaterA: "claude",
-  debaterB: "codex",
-  debaterAExecutorId: null,
-  debaterBExecutorId: null,
-  debaterAModel: null,
-  debaterAReasoningEffort: null,
-  debaterBModel: null,
-  debaterBReasoningEffort: null,
-  maxRounds: null,
-  gateG1: "on",
-};
-
-// Database rows and localStorage may contain fields from retired debate variants.
-// Normalize at every boundary so old tasks remain readable while all new runs
-// use the single supported debate shape.
-export function normalizeDebateConfig(value: unknown): DebateConfig {
-  const raw = value && typeof value === "object" ? value as Record<string, unknown> : {};
-  const agent = (v: unknown, fallback: AgentType): AgentType =>
-    typeof v === "string" && AGENT_TYPES.includes(v as AgentType) ? v as AgentType : fallback;
-  const text = (v: unknown): string | null => (typeof v === "string" && v.trim() ? v.trim() : null);
-  const maxRounds = raw.maxRounds === null
-    ? null
-    : typeof raw.maxRounds === "number" && Number.isFinite(raw.maxRounds) && raw.maxRounds >= 1
-      ? Math.floor(raw.maxRounds)
-      : DEBATE_DEFAULTS.maxRounds;
-  return {
-    topic: typeof raw.topic === "string" ? raw.topic : DEBATE_DEFAULTS.topic,
-    style: "debate",
-    debaterA: agent(raw.debaterA, DEBATE_DEFAULTS.debaterA),
-    debaterB: agent(raw.debaterB, DEBATE_DEFAULTS.debaterB),
-    debaterAExecutorId: typeof raw.debaterAExecutorId === "string" ? raw.debaterAExecutorId : null,
-    debaterBExecutorId: typeof raw.debaterBExecutorId === "string" ? raw.debaterBExecutorId : null,
-    debaterAModel: text(raw.debaterAModel),
-    debaterAReasoningEffort: text(raw.debaterAReasoningEffort),
-    debaterBModel: text(raw.debaterBModel),
-    debaterBReasoningEffort: text(raw.debaterBReasoningEffort),
-    maxRounds,
-    gateG1: raw.gateG1 === "off" ? "off" : "on",
-  };
-}
+// ── Duet 讨论 (§7) ───────────────────────────────────────────────────────────
+// 类型从 ./duet.ts 再导出(type-only,编译期抹掉,安全);DUET_DEFAULTS 与
+// normalizeDuetConfig 是运行时值,走子路径 `@harness/shared/duet`。
+export type { DuetConfig, DuetConsensusBy, DuetStyle, HitlGate } from "./duet.ts";
 
 // ── Scheduling (§9) ──────────────────────────────────────────────────────────
 // Schedules attach to a Task. Once = fire at a timestamp then disable; cron =
@@ -589,7 +525,7 @@ export interface ScheduledMessage {
 
 // ── HITL gates (§7) / Executor streaming events (§12) ───────────────────────
 // 形状住在 ./events.ts(纯类型,这里只再导出);拆分理由见那个文件的头部注释。
-export type { AgentEvent, DebateSpeaker, GateAction, GateName, ServerEvent, TurnTraceEvent } from "./events.ts";
+export type { AgentEvent, DuetSpeaker, GateAction, GateName, ServerEvent, TurnTraceEvent } from "./events.ts";
 
 // ── Session-snapshot parsing ──────────────────────────────────────────────
 // A persisted session .md is mostly agent Markdown, but backend continues and

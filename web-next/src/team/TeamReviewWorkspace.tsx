@@ -1,24 +1,17 @@
 import { useEffect, useMemo, useState } from "react";
 import type { Session, Task } from "@harness/shared";
-import { STAGE_LABELS, taskDisplayStatus } from "@harness/shared";
+import { taskDisplayStatus } from "@harness/shared";
 import { acceptPlan, hasAcceptStation, isFinalHumanGate, nextAnchor } from "@harness/shared/workflow-policy";
 import { STEP_LABELS } from "@harness/shared/workflow";
-import { ArrowsClockwise, CaretDown, CheckCircle, GitBranch, GitCommit, SpinnerGap, WarningCircle, X } from "@phosphor-icons/react";
+import { ArrowsClockwise, CaretDown, CheckCircle, SpinnerGap, WarningCircle, X } from "@phosphor-icons/react";
 import { TaskStatusDot } from "../components/TaskStatusDot.tsx";
 import { api, type AcceptTaskFailure, type TaskCommit, type TaskDiffResult } from "../lib/api.ts";
-import type { IndicatorForTask, TaskStatusIndicator } from "../lib/useTaskReadState.ts";
+import type { IndicatorForTask } from "../lib/useTaskReadState.ts";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
-import { formatInstant, parseAttachmentText } from "../task-detail/utils.ts";
+import { parseAttachmentText } from "../task-detail/utils.ts";
+import { ChangeMetaBar, worktreeLabel } from "../review/ChangeMetaBar.tsx";
 import { ReviewDiffViewer } from "../review/ReviewDiffViewer.tsx";
 import { DispatchReviewEvidence } from "./ReviewEvidence.tsx";
-
-function reviewStatusIndicator(task: Task): TaskStatusIndicator {
-  if (task.question || task.status === "paused" || task.status === "awaiting_review") return "attention";
-  if (task.status === "running" || task.status === "queued") return "active";
-  if (task.status === "backlog" || task.status === "idle") return "pending";
-  if (task.stage === "verify_failed" || task.status === "failed" || task.status === "canceled") return "error";
-  return "success";
-}
 
 type ReviewData = {
   commits: TaskCommit[];
@@ -213,33 +206,54 @@ export function AcceptanceControls({
   );
 }
 
-function WorkspaceFacts({ task, data }: { task: Task; data: ReviewData | null }) {
-  const session = data?.sessions[data.sessions.length - 1];
-  return (
-    <dl className="team-review-facts">
-      <div><dt>源分支</dt><dd><GitBranch size={12} />{data?.diff.sourceBranch || data?.branch || session?.branch || "项目当前分支"}</dd></div>
-      <div><dt>合入目标</dt><dd>{data?.diff.targetBranch || task.worktreeBase || "项目当前分支"}</dd></div>
-      <div><dt>worktree</dt><dd title={session?.worktreePath || undefined}>{session?.worktreePath || (task.useWorktree ? "尚未记录" : "共享项目目录")}</dd></div>
-    </dl>
-  );
+function useReviewChanges(task: Task) {
+  const [data, setData] = useState<ReviewData | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    let alive = true;
+    setLoading(true);
+    Promise.all([api.taskCommits(task.id), api.taskDiff(task.id), api.sessions(task.id)]).then(
+      ([commits, diff, sessions]) => {
+        if (!alive) return;
+        setData({ commits: commits.commits, branch: commits.branch, diff, sessions });
+        setError(null);
+      },
+      (reason) => { if (alive) setError(reason instanceof Error ? reason.message : String(reason)); },
+    ).finally(() => { if (alive) setLoading(false); });
+    return () => { alive = false; };
+  }, [task.id, task.updatedAt]);
+  return { data, loading, error };
 }
 
-function ChangeSummary({ data, loading, error }: { data: ReviewData | null; loading: boolean; error: string | null }) {
+function ChangeSummary({ task, data, loading, error }: { task: Task; data: ReviewData | null; loading: boolean; error: string | null }) {
   if (loading) return <p className="team-review-loading"><SpinnerGap size={13} className="is-spinning" />正在读取分支与提交…</p>;
   if (error) return <p className="team-review-loading is-error">改动信息读取失败：{error}</p>;
   if (!data) return null;
+  const session = data.sessions[data.sessions.length - 1];
   return (
-    <div className="team-review-change-grid">
-      <section>
-        <h4><GitCommit size={13} />提交 · {data.commits.length}</h4>
-        {!data.commits.length && <p>没有可展示的提交。</p>}
-        {data.commits.map((commit) => (
-          <div className="team-review-commit" key={commit.sha}><code>{commit.sha.slice(0, 8)}</code><span>{commit.subject}</span><time>{formatInstant(commit.at)}</time></div>
-        ))}
-      </section>
+    <div className="team-review-change">
+      <ChangeMetaBar
+        source={data.diff.sourceBranch || data.branch || session?.branch || "项目当前分支"}
+        target={data.diff.targetBranch || task.worktreeBase || "项目当前分支"}
+        where={session?.worktreePath
+          ? worktreeLabel(session.worktreePath)
+          : task.useWorktree ? "worktree 尚未记录" : "共享项目目录"}
+        commits={data.commits}
+      />
       <ReviewDiffViewer result={data.diff} />
     </div>
   );
+}
+
+// 调度台这一份不再套「可折叠的记录卡」：标题、角色、状态、目标正文在团队视图和右侧审查
+// 侧边栏里各有一份，验证证据也在侧边栏点得开——铺在这里只是把真正要看的 diff 往下推。
+// 验收动作上提到了顶栏（那是这一屏唯一的动作，不该跟着卡片折叠一起消失），所以这里只剩
+// 它独有的东西：共享分支的改动本身。
+function LeadChanges({ task, onReadTask }: { task: Task; onReadTask: (task: Task) => void }) {
+  const { data, loading, error } = useReviewChanges(task);
+  useEffect(() => { onReadTask(task); }, [onReadTask, task]);
+  return <ChangeSummary task={task} data={data} loading={loading} error={error} />;
 }
 
 function ReviewRecord({
@@ -264,9 +278,7 @@ function ReviewRecord({
   notify: (message: string) => void;
 }) {
   const [open, setOpen] = useState(defaultOpen);
-  const [data, setData] = useState<ReviewData | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const { data, loading, error } = useReviewChanges(task);
   const objective = parseAttachmentText(task.body).body;
   const display = taskDisplayStatus(task.status, task.stage, !!task.question);
   const indicator = indicatorForTask(task);
@@ -274,19 +286,6 @@ function ReviewRecord({
   useEffect(() => {
     if (open) onReadTask(task);
   }, [onReadTask, open, task]);
-  useEffect(() => {
-    let alive = true;
-    setLoading(true);
-    Promise.all([api.taskCommits(task.id), api.taskDiff(task.id), api.sessions(task.id)]).then(
-      ([commits, diff, sessions]) => {
-        if (!alive) return;
-        setData({ commits: commits.commits, branch: commits.branch, diff, sessions });
-        setError(null);
-      },
-      (reason) => { if (alive) setError(reason instanceof Error ? reason.message : String(reason)); },
-    ).finally(() => { if (alive) setLoading(false); });
-    return () => { alive = false; };
-  }, [task.id, task.updatedAt]);
   return (
     <article className="team-review-record">
       <header>
@@ -300,41 +299,11 @@ function ReviewRecord({
       </header>
       {open && (
         <div className="team-review-record-body">
-          <WorkspaceFacts task={task} data={data} />
           <DispatchReviewEvidence task={task} parentTask={parentTask} notify={notify} />
-          <ChangeSummary data={data} loading={loading} error={error} />
+          <ChangeSummary task={task} data={data} loading={loading} error={error} />
         </div>
       )}
     </article>
-  );
-}
-
-function SharedWorkerVerification({
-  lead,
-  workers,
-  notify,
-}: {
-  lead: Task;
-  workers: Task[];
-  notify: (message: string) => void;
-}) {
-  const [selectedId, setSelectedId] = useState<string | null>(workers.find((worker) => worker.stage === "verify_failed")?.id ?? workers[0]?.id ?? null);
-  const selected = workers.find((worker) => worker.id === selectedId) ?? null;
-  const failed = workers.filter((worker) => worker.stage === "verify_failed").length;
-  return (
-    <section className="team-shared-verification">
-      <header><div><b>共享执行者验证</b><small>代码改动已包含在调度台共享分支中，团队级验收会联动标记这些执行者。</small></div><span className={failed ? "is-failed" : ""}>{failed ? `${failed} 个验证失败` : `${workers.length} 个共享执行者`}</span></header>
-      <div className="team-shared-worker-grid">
-        {workers.map((worker) => (
-          <button type="button" key={worker.id} className={selectedId === worker.id ? "is-selected" : worker.stage === "verify_failed" ? "is-failed" : ""} onClick={() => setSelectedId((current) => current === worker.id ? null : worker.id)}>
-            <TaskStatusDot indicator={reviewStatusIndicator(worker)} surface="team" />
-            <span><b>{worker.title}</b><small>{worker.stage ? STAGE_LABELS[worker.stage] : worker.status}</small></span>
-            <em>{worker.stage || "未上报"}</em><CaretDown size={12} />
-          </button>
-        ))}
-      </div>
-      {selected && <div className="team-shared-evidence"><b>{selected.title}</b><DispatchReviewEvidence task={selected} parentTask={lead} notify={notify} /></div>}
-    </section>
   );
 }
 
@@ -357,22 +326,32 @@ export function TeamReviewWorkspace({
 }) {
   const sharedWorkers = useMemo(() => workers.filter((worker) => !worker.useWorktree), [workers]);
   const independentWorkers = useMemo(() => workers.filter((worker) => worker.useWorktree), [workers]);
+  // 共享执行者不在这里逐个铺开——它们的改动就在上面这份共享分支 diff 里，逐个的轮次与
+  // 证据在右侧审查侧边栏。这里只留一句摘要，因为「按下验收会联动标记它们」是不可逆动作
+  // 的前提事实，用户在按之前该看得见（确认框里也说了同一件事）。
+  const sharedFailed = sharedWorkers.filter((worker) => worker.stage === "verify_failed").length;
+  const sharedNote = sharedWorkers.length
+    ? `共享分支上还有 ${sharedWorkers.length} 个执行者${sharedFailed ? `（${sharedFailed} 个验证未通过）` : ""}，随团队整体验收联动标记；逐个证据见右侧审查。`
+    : "核对共享分支与独立 worktree 后分别验收或打回。";
   return (
     <section className="team-review-workspace">
       <header className="team-review-subbar">
-        <div><b>团队验收台</b><small>配合右侧审查记录，核对共享分支与独立 worktree 后分别验收或打回。</small></div>
+        <div><b>团队验收台</b><small>{sharedNote}</small></div>
+        <AcceptanceControls task={lead} onTaskUpdated={onTaskUpdated} notify={notify} />
         <button type="button" onClick={onClose}><X size={13} />返回团队流</button>
       </header>
       <div className="team-review-scroll">
         <div className="team-review-stack">
-          <ReviewRecord task={lead} role={lead.useWorktree ? "调度台 / 共享 worktree" : "调度台 / 项目工作区"} actions defaultOpen onTaskUpdated={onTaskUpdated} indicatorForTask={indicatorForTask} onReadTask={onReadTask} notify={notify} />
-          {sharedWorkers.length > 0 && <SharedWorkerVerification lead={lead} workers={sharedWorkers} notify={notify} />}
-          <section className="team-acceptance-queue">
-            <header><div><b>独立执行者待验收队列</b><small>每个显式 worktree 都有独立分支与合入动作，按执行者分别处理。</small></div><span>{independentWorkers.length} 项</span></header>
-            {independentWorkers.length ? (
+          <LeadChanges task={lead} onReadTask={onReadTask} />
+          {/* 没有独立 worktree 执行者时整节不出现：它的空态说的就是顶上那句「随团队整体验收
+              联动标记」，留一个 0 项的空壳只是把验收按钮往下推。有独立执行者时它才是唯一的
+              逐个合入/打回入口，那时必须在。 */}
+          {independentWorkers.length > 0 && (
+            <section className="team-acceptance-queue">
+              <header><div><b>独立执行者待验收队列</b><small>每个显式 worktree 都有独立分支与合入动作，按执行者分别处理。</small></div><span>{independentWorkers.length} 项</span></header>
               <div>{independentWorkers.map((worker, index) => <ReviewRecord key={worker.id} task={worker} parentTask={lead} role={`执行者 ${index + 1}`} actions defaultOpen={worker.stage === "awaiting_acceptance" || worker.stage === "verify_failed"} onTaskUpdated={onTaskUpdated} indicatorForTask={indicatorForTask} onReadTask={onReadTask} notify={notify} />)}</div>
-            ) : <p>没有独立 worktree 执行者；共享执行者随团队整体验收。</p>}
-          </section>
+            </section>
+          )}
         </div>
       </div>
     </section>

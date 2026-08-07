@@ -66,6 +66,11 @@ export function taskDurationInfo(task: Task, now = Date.now()): TaskDurationInfo
 
 const IMAGE_EXT = /\.(?:avif|bmp|gif|jpe?g|png|svg|webp)$/i;
 
+/** 这个路径/URL 指向图片吗（查询串与 #hash 不参与判断）。判定单点，别再另写一份后缀表。 */
+export function isImagePath(path: string): boolean {
+  return IMAGE_EXT.test(path.split(/[?#]/)[0] ?? "");
+}
+
 // 解析逻辑搬进了 shared（server 读「最后一条消息」时要用同一份），这里只转出去，
 // 免得所有调用点跟着改 import。
 export { parseAttachmentText } from "@harness/shared/attachments";
@@ -76,7 +81,7 @@ export function attachmentView(path: string): { name: string; url: string | null
   const uploaded = /(?:^|\/)data\/uploads\/([^/]+)$/.exec(normalized)?.[1] ?? null;
   const url = uploaded ? `/api/uploads/${encodeURIComponent(uploaded)}` : null;
   const displayName = name.replace(/^[A-Za-z0-9_-]{12}-/, "") || name;
-  return { name: displayName, url, image: !!url && IMAGE_EXT.test(uploaded ?? "") };
+  return { name: displayName, url, image: !!url && isImagePath(uploaded ?? "") };
 }
 
 export function safeDownloadName(task: Task): string {

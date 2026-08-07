@@ -477,7 +477,8 @@
   margin-top: 9px;
 }
 
-.team-info-panel__empty {
+.team-info-panel__empty,
+.team-review-inspector__empty {
   margin: 0;
   color: var(--faint);
   font-size: 10.5px;
@@ -624,6 +625,21 @@
 .team-review-inspector__targets button b { color: var(--ink); font-size: 10.5px; }
 .team-review-inspector__targets button small { color: var(--faint); font-size: 9px; }
 .team-review-inspector__targets button em { flex: 0 0 auto; border-radius: 4px; background: var(--raised); padding: 2px 5px; color: var(--muted); font-size: 8.5px; font-style: normal; }
+.team-review-inspector__targets button.is-selected em { background: color-mix(in lch,var(--accent) 12%,var(--raised)); color: var(--accent); }
+
+/* 贴着审查侧边栏左边缘的那一屉，位置与尺寸由 ReviewEvidenceDrawer 量出来写在 style 上。
+   z 要压过执行者抽屉（95）：那一屉里也有 inspector，审查内容得浮在它上面才看得见。 */
+.review-evidence-drawer { position: fixed; z-index: 96; display: flex; overflow: hidden; flex-direction: column; border: 1px solid var(--line2); border-right: 0; border-radius: 12px 0 0 12px; background: var(--canvas); box-shadow: -18px 0 50px rgb(30 32 38 / 16%); animation: review-evidence-drawer-in 200ms cubic-bezier(.22,1,.36,1) both; }
+.review-evidence-drawer > header { display: flex; min-height: 38px; flex: 0 0 auto; align-items: center; gap: 8px; border-bottom: .5px solid var(--line); background: var(--raised); padding: 6px 8px 6px 12px; }
+.review-evidence-drawer > header > div { min-width: 0; flex: 1; }
+.review-evidence-drawer > header b, .review-evidence-drawer > header small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.review-evidence-drawer > header b { color: var(--ink); font-size: 11px; }
+.review-evidence-drawer > header small { color: var(--faint); font-size: 9px; }
+.review-evidence-drawer > header > button { display: inline-flex; height: 24px; flex: 0 0 auto; align-items: center; gap: 4px; border: 0; border-radius: 5px; background: transparent; padding: 0 7px; color: var(--muted); font-size: 10px; }
+.review-evidence-drawer > header > button:hover { background: var(--overlay); color: var(--ink); }
+.review-evidence-drawer__scroll { min-height: 0; flex: 1; overflow: auto; padding: 11px; }
+
+@keyframes review-evidence-drawer-in { from { transform: translateX(16px); opacity: 0; } to { transform: none; opacity: 1; } }
 
 @media (max-width: 720px) {
   .team-header-actions > .inspector-toggle {
@@ -636,5 +652,9 @@
   .inspector-host__resize-handle::after,
   .review-round svg {
     transition: none;
+  }
+
+  .review-evidence-drawer {
+    animation: none;
   }
 }

@@ -55,7 +55,7 @@ const TASK_SECTIONS: readonly TaskSection[] = [
   {
     key: "collab",
     label: "协作任务",
-    matches: (task) => task.mode === "team" || task.mode === "debate",
+    matches: (task) => task.mode === "team" || task.mode === "duet",
     groups: COLLAB_GROUPS,
   },
   {

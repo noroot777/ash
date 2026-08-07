@@ -1,18 +1,18 @@
 import type { Session, Task } from "@harness/shared";
 import { TASK_STATUS_LABELS } from "@harness/shared";
 
-export type TaskDerivationKind = "team" | "debate";
+export type TaskDerivationKind = "team" | "duet";
 
 export type TaskDerivationCommand = {
   kind: TaskDerivationKind;
   note: string;
 };
 
-const DERIVATION_COMMAND = /^\/(team|debate)\b/i;
+const DERIVATION_COMMAND = /^\/(team|duet)\b/i;
 
 export const TASK_DERIVATION_COMMANDS = [
   { command: "/team", label: "组队开干", hint: "以当前任务为背景创建团队" },
-  { command: "/debate", label: "发起辩论", hint: "以当前任务为背景发起辩论" },
+  { command: "/duet", label: "发起讨论", hint: "以当前任务为背景发起讨论" },
 ];
 
 export function parseTaskDerivationCommand(text: string): TaskDerivationCommand | null {
@@ -33,7 +33,7 @@ export function canDeriveTask(task: Pick<Task, "parentId" | "reviewOf">): boolea
   return task.parentId === null && !task.reviewOf;
 }
 
-export function defaultDebateTopic(task: Task, supplement: string): string {
+export function defaultDuetTopic(task: Task, supplement: string): string {
   const title = task.title.trim() || "当前任务";
   const base = `围绕任务「${title}」的目标与当前进展，比较可行方案、关键风险和下一步，并形成可验证的结论。`;
   return supplement.trim() ? `${base}\n\n补充关注：${supplement.trim()}` : base;
@@ -77,7 +77,7 @@ export function buildTaskDerivationBody(
   const lines = [
     kind === "team"
       ? "请以这个普通任务为背景，先理解已有目标与进展，再拆解工作、组织团队执行并验证交付。"
-      : "请以这个普通任务为背景展开对抗式讨论；两位辩手先核对已有目标与进展，再比较方案并给出可验证结论。",
+      : "请以这个普通任务为背景展开讨论；两位讨论者先核对已有目标与进展，再各自给出方案、互相吸收补强，合出一个可验证的共同方案。",
     "",
     "## 来源普通任务",
     `任务标题：${task.title}`,
@@ -98,7 +98,7 @@ export function buildTaskDerivationBody(
 
   const note = userNote.trim();
   if (note) {
-    lines.push("", kind === "debate" ? "## 用户附言（本次辩题）" : "## 用户附言", note);
+    lines.push("", kind === "duet" ? "## 用户附言（本次议题）" : "## 用户附言", note);
   }
 
   lines.push("", `来源任务 ID（仅供溯源）：${task.id}`);

@@ -10,7 +10,7 @@ const TERMINAL: TaskStatus[] = ["done", "failed", "canceled"];
 
 // Single source of truth for changing a task's status. Besides persisting the
 // status it maintains the run-timing columns and broadcasts them, so every
-// surface (single run, debate, scheduler, manual patch) keeps `startedAt` /
+// surface (single run, duet, scheduler, manual patch) keeps `startedAt` /
 // `endedAt` consistent and the web can show start/end/duration live:
 //   • → running  : stamp startedAt once (first run), clear endedAt.
 //   • → terminal : stamp endedAt (run finished).

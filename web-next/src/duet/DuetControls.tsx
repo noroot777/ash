@@ -2,11 +2,11 @@ import { useState } from "react";
 import type { GateAction, Task } from "@harness/shared";
 import { CheckCircle, Question, SpinnerGap, WarningCircle } from "@phosphor-icons/react";
 import { AttachmentPicker, UploadAttachmentList, useAttachments } from "../task-detail/Attachments.tsx";
-import type { DebateGate } from "./debateState.ts";
-import { DebateHandoffBar } from "./DebateHandoff.tsx";
+import type { DuetGate } from "./duetState.ts";
+import { DuetHandoffBar } from "./DuetHandoff.tsx";
 import { gateAllowsRevision } from "./handoffPolicy.ts";
 
-export function DebateGateControls({
+export function DuetGateControls({
   gate,
   round,
   maxRounds,
@@ -19,7 +19,7 @@ export function DebateGateControls({
   onOpenTask,
   onIterateTeam,
 }: {
-  gate: DebateGate;
+  gate: DuetGate;
   round: number;
   maxRounds: number | null;
   busy: boolean;
@@ -53,19 +53,19 @@ export function DebateGateControls({
   const consensusBy = gate.consensusBy ?? (consensus ? "both" : undefined);
   const handedOff = !gateAllowsRevision(linkedTeams[0]);
   return (
-    <section className="debate-control-shell">
-      <div className="debate-control-summary">
-        <span className={consensus ? "is-consensus" : "is-split"}>{consensus ? <CheckCircle size={13} weight="fill" /> : <WarningCircle size={13} weight="fill" />}{handedOff ? "结论已交给团队，辩论只剩收尾" : consensus ? (consensusBy === "both" ? "双方已收敛" : `辩手 ${consensusBy} 声明一致`) : "双方仍有分歧"}</span>
+    <section className="duet-control-shell">
+      <div className="duet-control-summary">
+        <span className={consensus ? "is-consensus" : "is-split"}>{consensus ? <CheckCircle size={13} weight="fill" /> : <WarningCircle size={13} weight="fill" />}{handedOff ? "结论已交给团队，讨论只剩收尾" : consensus ? (consensusBy === "both" ? "双方已收敛" : `讨论者 ${consensusBy} 声明一致`) : "双方仍有分歧"}</span>
         <small>第 {round}{maxRounds ? ` / ${maxRounds}` : ""} 轮 · {gate.gate} 收敛门</small>
       </div>
       {(gate.conclusionA || gate.conclusionB) && (
-        <div className="debate-gate-conclusions">
+        <div className="duet-gate-conclusions">
           {gate.conclusionA && <p><b>A</b>{gate.conclusionA}</p>}
           {gate.conclusionB && <p><b>B</b>{gate.conclusionB}</p>}
         </div>
       )}
-      <div className="debate-control-actions">
-        <DebateHandoffBar
+      <div className="duet-control-actions">
+        <DuetHandoffBar
           linkedTeams={linkedTeams}
           allTasks={allTasks}
           busy={busy}
@@ -74,7 +74,7 @@ export function DebateGateControls({
           onOpenTask={onOpenTask}
           onIterateTeam={onIterateTeam}
         />
-        <button type="button" className="is-approve" disabled={busy} onClick={() => void onGate({ kind: "approve" })}>{handedOff ? "结束辩论" : "放行结束"}</button>
+        <button type="button" className="is-approve" disabled={busy} onClick={() => void onGate({ kind: "approve" })}>{handedOff ? "结束讨论" : "放行结束"}</button>
         {!handedOff && <>
           <button type="button" disabled={busy} onClick={() => void onGate({ kind: "reject" })}>打回终止</button>
           <button type="button" className={mode === "inject" ? "is-active" : ""} disabled={busy} onClick={() => setMode((current) => current === "inject" ? null : "inject")}>注入意见</button>
@@ -82,13 +82,13 @@ export function DebateGateControls({
         </>}
       </div>
       {mode && !handedOff && (
-        <div className="debate-gate-composer">
-          {mode === "ask" && <div className="debate-targets"><span>提问对象</span>{(["both", "A", "B"] as const).map((value) => <button type="button" className={target === value ? "is-selected" : ""} key={value} onClick={() => setTarget(value)}>{value === "both" ? "双方" : `辩手 ${value}`}</button>)}</div>}
+        <div className="duet-gate-composer">
+          {mode === "ask" && <div className="duet-targets"><span>提问对象</span>{(["both", "A", "B"] as const).map((value) => <button type="button" className={target === value ? "is-selected" : ""} key={value} onClick={() => setTarget(value)}>{value === "both" ? "双方" : `讨论者 ${value}`}</button>)}</div>}
           <UploadAttachmentList attachments={uploads.attachments} error={uploads.error} onRemove={uploads.remove} />
-          <textarea autoFocus rows={3} value={text} placeholder={mode === "inject" ? "补充意见，双方据此回炉再辩（可粘贴截图）…" : "写下要澄清的问题（可粘贴截图）…"} onChange={(event) => setText(event.target.value)} onPaste={uploads.onPaste} onKeyDown={(event) => { if ((event.metaKey || event.ctrlKey) && event.key === "Enter") { event.preventDefault(); void submit(); } }} />
-          <div className="debate-gate-composer-actions">
+          <textarea autoFocus rows={3} value={text} placeholder={mode === "inject" ? "补充意见，双方据此回炉再讨论（可粘贴截图）…" : "写下要澄清的问题（可粘贴截图）…"} onChange={(event) => setText(event.target.value)} onPaste={uploads.onPaste} onKeyDown={(event) => { if ((event.metaKey || event.ctrlKey) && event.key === "Enter") { event.preventDefault(); void submit(); } }} />
+          <div className="duet-gate-composer-actions">
             <AttachmentPicker addFiles={uploads.addFiles} disabled={busy} />
-            <button type="button" className="debate-gate-submit" disabled={busy || uploads.uploading || !canSubmit} onClick={() => void submit()}>{busy || uploads.uploading ? <SpinnerGap size={13} className="is-spinning" /> : null}{uploads.uploading ? "上传中…" : "提交并继续"}</button>
+            <button type="button" className="duet-gate-submit" disabled={busy || uploads.uploading || !canSubmit} onClick={() => void submit()}>{busy || uploads.uploading ? <SpinnerGap size={13} className="is-spinning" /> : null}{uploads.uploading ? "上传中…" : "提交并继续"}</button>
           </div>
         </div>
       )}
@@ -96,9 +96,9 @@ export function DebateGateControls({
   );
 }
 
-export function DebateProgressBar({ round, maxRounds, gateEnabled }: { round: number; maxRounds: number | null; gateEnabled: boolean }) {
+export function DuetProgressBar({ round, maxRounds, gateEnabled }: { round: number; maxRounds: number | null; gateEnabled: boolean }) {
   return (
-    <div className="debate-progress-bar">
+    <div className="duet-progress-bar">
       <span>第 {round || 1}{maxRounds ? ` / ${maxRounds}` : ""} 轮</span>
       <i />
       <small>{gateEnabled ? "结束前进入 G1 收敛门" : "达到共识或轮次上限后自动结束"}</small>

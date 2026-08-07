@@ -1,5 +1,5 @@
 // Registry of in-flight agent subprocesses, keyed by task, so a running task can
-// be killed on demand (manual stop / group pause) — the orchestrator/debate
+// be killed on demand (manual stop / group pause) — the orchestrator/duet
 // register each live run here and the /stop API calls stopTask. A `stopping` map
 // lets the run loops distinguish a requested kill from a crash (→ failed), AND
 // carries how the kill should settle: a manual stop settles `canceled`(可跳过),
@@ -63,7 +63,7 @@ export function takeStopped(taskId: string): StopSettle | null {
   return s;
 }
 
-// 兼容旧语义(debate 用):是否被主动停止,不区分落位。消费标记,同 takeStopped。
+// 兼容旧语义(duet 用):是否被主动停止,不区分落位。消费标记,同 takeStopped。
 export function takeCanceled(taskId: string): boolean {
   return takeStopped(taskId) !== null;
 }
@@ -87,7 +87,7 @@ export function takeConfirmed(taskId: string): boolean {
   return confirmed.delete(taskId);
 }
 
-// Thrown by a run step when a stop was requested mid-flight, so the debate
+// Thrown by a run step when a stop was requested mid-flight, so the duet
 // pipeline unwinds to its top-level catch and settles as `canceled`.
 export class CanceledRun extends Error {
   constructor() {

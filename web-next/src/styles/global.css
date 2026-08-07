@@ -13,7 +13,7 @@
 @import "./team-review.css";
 @import "./review.css";
 @import "./files.css";
-@import "./debate.css";
+@import "./duet.css";
 @import "./settings.css";
 @import "./overlays.css";
 @import "./groups-panel.css";
@@ -175,7 +175,7 @@ code,
 .run-activity-copy b { color: var(--muted); font-size: 10.5px; font-weight: 600; }
 .run-activity-copy small { color: var(--faint); font-size: 10.5px; line-height: 1.45; }
 .run-activity-copy small::before { margin-right: 6px; color: var(--line2); content: "·"; }
-.debate-stream > .run-activity { max-width: 980px; margin-right: auto; margin-left: auto; }
+.duet-stream > .run-activity { max-width: 980px; margin-right: auto; margin-left: auto; }
 
 @keyframes run-activity-pulse {
   0%, 65%, 100% { opacity: .25; transform: translateY(0); }
