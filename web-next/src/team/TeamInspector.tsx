@@ -3,7 +3,7 @@ import { agentMix } from "@harness/shared/team";
 import { Clock, FolderOpen, Info, MagnifyingGlass, UsersThree } from "@phosphor-icons/react";
 import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
-import { SessionMeta } from "../components/SessionMeta.tsx";
+import { MessageFooter } from "../components/MessageFooter.tsx";
 import { FileTreeInspector } from "../files/FileTreeInspector.tsx";
 import type { InspectorDescriptor } from "../inspector/index.ts";
 import type { IndicatorForTask } from "../lib/useTaskReadState.ts";
@@ -133,7 +133,7 @@ function TeamInfoPanel({ task, workers, sessions }: Pick<TeamInspectorContext, "
           />
           {task.worktreeBase && <ConfigValue label="合入目标" value={task.worktreeBase} />}
         </dl>
-        {latestSession && <SessionMeta session={latestSession} />}
+        {latestSession && <MessageFooter session={latestSession} />}
         <TaskTimeMeta task={task} />
       </section>
     </div>

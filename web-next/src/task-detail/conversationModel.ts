@@ -34,7 +34,7 @@ export type ConversationItem =
       session?: Session;
       /** 这一回合的 token 用量。null = 这家 CLI 不报账、或这轮跑在本功能之前。 */
       usage?: TokenUsage | null;
-      /** 整条会话至今的累计用量。只挂在显示 SessionMeta 的那条气泡上。 */
+      /** 整条会话至今的累计用量。只挂在本会话最后一条气泡上（尾栏显示会话信息的那条）。 */
       sessionUsage?: TokenUsage | null;
       /** 整条会话此刻的上下文水位（跟累计用量是两回事）。同样只挂在那条气泡上。 */
       sessionContext?: ContextUsage | null;

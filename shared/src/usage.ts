@@ -110,7 +110,12 @@ export interface ContextUsage {
   used: number;
   /** 上下文窗口。CLI 自报的优先;没人报就按模型名估;估不出是 null。 */
   window: number | null;
-  /** window 是估出来的(不是 CLI 自报)。true 时界面必须说明白,别让人当准数用。 */
+  /**
+   * window 是估出来的(不是 CLI 自报)。true 时界面必须说明白,别让人当准数用。
+   * 眼下**恒为 true** —— 唯一在采水位的 claude CLI 不自报窗口,只能按模型名估。
+   * 留着这个字段不是给未来留钩子,是因为「这个分母准不准」是数据本身的属性:
+   * 哪天换成自报的来源,界面那个 `~` 该消失,而不是靠改一处渲染逻辑记得取消。
+   */
   windowEstimated: boolean;
 }
 
@@ -126,8 +131,8 @@ export function hasContext(c: ContextUsage | null | undefined): c is ContextUsag
 }
 
 /**
- * 模型名 → 上下文窗口的**兜底估算**。CLI 自报的永远优先(codex 的 token_count 事件
- * 自带 `model_context_window`),这张表只服务不报的那些(claude CLI 就不报)。
+ * 模型名 → 上下文窗口的**兜底估算**。claude CLI 不自报窗口,只能按模型名查这张表。
+ * (CLI 若自报则永远优先,只是眼下没有这样的来源。)
  *
  * 只放有把握的:宁可返回 null(界面退化成只显示绝对水位、不显示百分比),也不要编一个
  * 分母出来 —— 「还剩 60%」是拿来做决定的,错的分母比没有更坏。

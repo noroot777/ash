@@ -8,9 +8,8 @@ import { ExecutionDetails } from "../components/ExecutionTrace.tsx";
 import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
 import { RunActivity } from "../components/RunActivity.tsx";
-import { SessionMeta } from "../components/SessionMeta.tsx";
+import { MessageFooter } from "../components/MessageFooter.tsx";
 import { TaskStatusDot } from "../components/TaskStatusDot.tsx";
-import { TokenUsageChip } from "../components/TokenUsageChip.tsx";
 import type { IndicatorForTask } from "../lib/useTaskReadState.ts";
 import { MessageAttachments } from "../task-detail/Attachments.tsx";
 import { durationBetween, formatInstant, parseAttachmentText } from "../task-detail/utils.ts";
@@ -25,7 +24,6 @@ function AgentRow({ row }: { row: Extract<TeamFeedRow, { kind: "conv" }>["item"]
         <b>{row.label}</b>
         {row.at && <time>{formatInstant(row.at)}</time>}
         {duration && <small className="task-turn-duration" title={`开始 ${formatInstant(row.at)} · 结束 ${formatInstant(row.endedAt)}`}>· ⏱ {duration} 用时</small>}
-        <TokenUsageChip turn={row.usage} />
       </header>
       {row.segments.map((segment, index) => (
         <section className="task-agent-segment" key={segment.id}>
@@ -33,9 +31,12 @@ function AgentRow({ row }: { row: Extract<TeamFeedRow, { kind: "conv" }>["item"]
           {segment.markdown && <MarkdownBody text={segment.markdown} />}
         </section>
       ))}
-      {row.showSessionMeta && row.session && (
-        <SessionMeta session={row.session} sessionUsage={row.sessionUsage} sessionContext={row.sessionContext} />
-      )}
+      <MessageFooter
+        turnUsage={row.usage}
+        session={row.showSessionMeta ? row.session : null}
+        sessionUsage={row.sessionUsage}
+        sessionContext={row.sessionContext}
+      />
     </article>
   );
 }

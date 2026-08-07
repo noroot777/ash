@@ -8,8 +8,7 @@ import { ExecutionDetails } from "../components/ExecutionTrace.tsx";
 import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
 import { RunActivity } from "../components/RunActivity.tsx";
-import { SessionMeta } from "../components/SessionMeta.tsx";
-import { TokenUsageChip } from "../components/TokenUsageChip.tsx";
+import { MessageFooter } from "../components/MessageFooter.tsx";
 import { MessageAttachments } from "./Attachments.tsx";
 import { durationBetween, formatInstant, parseAttachmentText } from "./utils.ts";
 
@@ -35,9 +34,6 @@ function AgentMessage({
               · ⏱ {duration} 用时
             </small>
           )}
-          {/* 本轮的账**每条气泡都挂在头部**，跟旁边的 ⏱ 用时同族（都是这一轮的成本）。
-              位置不许随「是不是会话最后一条」变——那样同一个数会在气泡顶和气泡底之间跳。 */}
-          <TokenUsageChip turn={item.usage} />
           <button type="button" onClick={() => copyText(item.markdown)} aria-label="复制这条回复">
             <Copy size={13} aria-hidden="true" />
           </button>
@@ -48,9 +44,14 @@ function AgentMessage({
             {segment.markdown && <MarkdownBody text={segment.markdown} />}
           </section>
         ))}
-        {item.showSessionMeta && item.session && (
-          <SessionMeta session={item.session} sessionUsage={item.sessionUsage} sessionContext={item.sessionContext} />
-        )}
+        {/* 账目一律在尾栏，头部不放。位置不许随「是不是会话最后一条」变——
+            那样同一个数会在气泡顶和气泡底之间跳，而这条规则用户看不见。 */}
+        <MessageFooter
+          turnUsage={item.usage}
+          session={item.showSessionMeta ? item.session : null}
+          sessionUsage={item.sessionUsage}
+          sessionContext={item.sessionContext}
+        />
       </div>
     </article>
   );
