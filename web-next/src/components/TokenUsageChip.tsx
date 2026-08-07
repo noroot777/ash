@@ -2,20 +2,22 @@ import { useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Coins } from "@phosphor-icons/react";
 import type { TokenUsage } from "@harness/shared";
-import { formatCost, formatTokens, formatTokensExact, hasUsage, usageTotal } from "@harness/shared/usage";
+import { formatTokens, formatTokensExact, hasUsage, usageTotal } from "@harness/shared/usage";
 import { useDismissable } from "../lib/useDismissable.ts";
 import { placementStyle, usePanelPlacement } from "../lib/usePanelPlacement.ts";
 
 /**
  * 「这一轮花了多少 token / 这条会话至今累计多少」的那颗胶囊。
  *
- * 胶囊上只放一眼能扫的两个数（本轮 · 会话），明细（输入/缓存/输出/费用）藏在浮层里：
+ * 胶囊上只放一眼能扫的两个数（本轮 · 会话），明细（输入/缓存/输出）藏在浮层里：
  * 会话尾巴那一行已经挤着会话 id 和 resume 命令，再铺开四五个数就没人看了。
  *
  * 口径三条，都不在这里做决定、只负责如实显示：
  * ① 数字是**所有**进出模型的 token（缓存读也算），归一化在 `shared/src/usage.ts`；
  * ② `null` 不等于 0 —— 那家 CLI 不报账、或这轮跑在本功能上线之前，一律不显示；
- * ③ 费用只有 claude 报，codex 那边是 null，所以明细里那一行会缺席而不是写 $0。
+ * ③ **一颗胶囊只代表一个 agent**（一条会话 = 一个执行器）。同一任务里换过执行器、
+ *    或 @ 了别人插一手，各算各的，任何地方都不许把不同 agent 的账加成一个数
+ *    —— 单价不同，加起来那个数不代表任何东西（用户 2026-08-07 明确要求分开）。
  */
 export function TokenUsageChip({
   turn,
@@ -111,7 +113,6 @@ function UsageRows({ turn, session }: { turn: TokenUsage | null; session: TokenU
   ];
   const shown = rows.filter((row) =>
     (turn ? row.pick(turn) : 0) > 0 || (session ? row.pick(session) : 0) > 0);
-  const cost = [turn, session].map((u) => (u ? formatCost(u.costUsd) : null));
 
   return (
     <dl>
@@ -122,13 +123,6 @@ function UsageRows({ turn, session }: { turn: TokenUsage | null; session: TokenU
           {session && <dd>{formatTokensExact(row.pick(session))}</dd>}
         </div>
       ))}
-      {(cost[0] || cost[1]) && (
-        <div className="is-cost">
-          <dt>费用</dt>
-          {turn && <dd>{cost[0] ?? "—"}</dd>}
-          {session && <dd>{cost[1] ?? "—"}</dd>}
-        </div>
-      )}
       {!!session?.turns && (
         <div className="is-turns">
           <dt>回合数</dt>

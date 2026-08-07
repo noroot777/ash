@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
-import type { AgentExecutorProfile, Group, Session, Task, TaskStatus } from "@harness/shared";
+import type { AgentExecutorProfile, Group, Session, Task, TaskStatus, TokenUsage } from "@harness/shared";
 import { isUserSettableStatus, TASK_STATUS_LABELS } from "@harness/shared";
 import { REASONING_EFFORT_DETAIL } from "@harness/shared/cli-presets";
-import { formatCost, formatTokens, formatTokensExact, hasUsage, sumUsage, usageTotal } from "@harness/shared/usage";
+import { addUsage, formatTokens, formatTokensExact, hasUsage, usageTotal } from "@harness/shared/usage";
 import { ArrowSquareOut, CaretRight, ListNumbers } from "@phosphor-icons/react";
 import { api } from "../lib/api.ts";
 import { Dropdown } from "../components/Dropdown.tsx";
@@ -141,8 +141,19 @@ export function TaskInspector({
     () => [...sessions].sort((left, right) => right.startedAt.localeCompare(left.startedAt))[0],
     [sessions],
   );
-  // 整个任务的账 = 它名下所有会话之和（换执行器、@别人插一手都会各开一条会话行）。
-  const taskUsage = useMemo(() => sumUsage(sessions.map((session) => session.usage)), [sessions]);
+  // 一个 agent 一行，**不同 agent 绝不相加**：单价、上下文、缓存策略都不是一回事，
+  // 加出来那个数不代表任何东西（用户 2026-08-07 明确要求分开看）。同一个执行器名下的
+  // 多条会话（重跑、续跑各开一行）才合并 —— 那才是同一副账。
+  const usageByExecutor = useMemo(() => {
+    const groups = new Map<string, TokenUsage>();
+    for (const session of sessions) {
+      if (!session.usage) continue;
+      const label = session.executor || session.agentType;
+      const previous = groups.get(label);
+      groups.set(label, previous ? addUsage(previous, session.usage) : session.usage);
+    }
+    return [...groups].filter(([, usage]) => hasUsage(usage));
+  }, [sessions]);
   const queuePosition = queueItems.findIndex((item) => item.taskId === task.id);
   const nextQueueItem = queuePosition >= 0 ? queueItems[queuePosition + 1] : undefined;
 
@@ -337,17 +348,14 @@ export function TaskInspector({
           {task.startedAt && <InspectorRow label="开始时间"><span>{formatInstant(task.startedAt)}</span></InspectorRow>}
           {task.endedAt && <InspectorRow label="结束时间"><span>{formatInstant(task.endedAt)}</span></InspectorRow>}
           {duration && <InspectorRow label={duration.label}><span title={duration.title}>{duration.text}</span></InspectorRow>}
-          {hasUsage(taskUsage) && (
-            <InspectorRow label="Token 用量">
-              <span aria-label={`全部会话累计 ${formatTokensExact(usageTotal(taskUsage))} token`}>
-                {[
-                  formatTokens(usageTotal(taskUsage)),
-                  taskUsage.turns ? `${taskUsage.turns} 轮` : "",
-                  formatCost(taskUsage.costUsd) ?? "",
-                ].filter(Boolean).join(" · ")}
+          {usageByExecutor.map(([label, usage], index) => (
+            <InspectorRow key={label} label={index === 0 ? "Token 用量" : ""}>
+              <span aria-label={`${label} 累计 ${formatTokensExact(usageTotal(usage))} token`}>
+                {usageByExecutor.length > 1 && <em className="task-usage-who">{label}</em>}
+                {[formatTokens(usageTotal(usage)), usage.turns ? `${usage.turns} 轮` : ""].filter(Boolean).join(" · ")}
               </span>
             </InspectorRow>
-          )}
+          ))}
           {latestSession?.branch && <InspectorRow label="分支"><code>{latestSession.branch}</code></InspectorRow>}
           {latestSession?.worktreePath && <InspectorRow label="worktree"><code>{latestSession.worktreePath}</code></InspectorRow>}
           {latestSession?.resumeCommand && (

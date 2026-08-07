@@ -82,6 +82,11 @@ export function formatTokensExact(n: number): string {
   return Math.round(n).toLocaleString("en-US");
 }
 
+/**
+ * 费用。**界面上目前一处都不显示**（用户 2026-08-07：只看 token，不看钱）——
+ * 账还照记（claude 的 result 行自带 total_cost_usd，白来的），以后要看时不用回头补采集。
+ * 想显示的话记得：codex 不报价，null 得显示成「未知」而不是 $0。
+ */
 export function formatCost(usd: number | null): string | null {
   if (usd === null || !Number.isFinite(usd)) return null;
   if (usd > 0 && usd < 0.01) return "<$0.01";
