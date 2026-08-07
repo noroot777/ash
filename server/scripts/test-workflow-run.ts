@@ -443,7 +443,8 @@ const port = 14000 + (process.pid % 900);
 const previewStep = makeStep("preview", "pv");
 if (previewStep.kind === "preview") {
   previewStep.p = {
-    cmd: `node -e "if(process.env.HARNESS_PREVIEW!=='1')process.exit(12);require('http').createServer((q,s)=>s.end('ok')).listen(${port},()=>console.log('ready on http://localhost:${port}/'))"`,
+    cmd: `node -e "if(process.env.HARNESS_PREVIEW!=='1'||process.env.HARNESS_PREVIEW_MODE!=='test')process.exit(12);require('http').createServer((q,s)=>s.end('ok')).listen(${port},()=>console.log('ready on http://localhost:${port}/'))"`,
+    mode: "test",
     ready: "http200",
     life: "gate",
   };
@@ -457,21 +458,24 @@ if (started.ok) {
   const replacement = makeStep("preview", "pv-replacement");
   if (replacement.kind === "preview") {
     replacement.p = {
-      cmd: `node -e "require('http').createServer((q,s)=>s.end('next')).listen(${port + 1},()=>console.log('ready on http://localhost:${port + 1}/'))"`,
+      cmd: `node -e "if(process.env.HARNESS_PREVIEW_MODE!=='full')process.exit(13);require('http').createServer((q,s)=>s.end('next')).listen(${port + 1},()=>console.log('ready on http://localhost:${port + 1}/'))"`,
+      mode: "full",
       ready: "http200",
       life: "gate",
     };
   }
   const replaced = await startPreview("t2", replacement as never, repo);
-  assert.equal(replaced.ok, true, "另一个任务起预览时能替换旧的");
-  assert.equal(readPreview("t1"), null, "共享库全局只留一个预览，旧任务记录已回收");
-  assert.ok(readPreview("t2"), "新任务接管唯一预览记录");
+  assert.equal(replaced.ok, true, "另一个任务的预览也能起来");
+  assert.ok(readPreview("t1"), "不同 worktree/任务的预览可以并行，旧预览仍在");
+  assert.ok(readPreview("t2"), "新预览有自己的记录");
+  assert.equal(await fetch(`http://localhost:${port + 1}/`).then((res) => res.text()), "next");
   assert.equal(await stopPreview("t2", "测试收尾"), true);
   assert.equal(readPreview("t2"), null, "收掉之后记录一并删掉");
   const unsafe = makeStep("preview", "pv-unsafe");
   if (unsafe.kind === "preview") {
     unsafe.p = {
       cmd: `node -e "console.log('[harness] scheduler started');require('http').createServer((q,s)=>s.end('bad')).listen(${port + 3},()=>console.log('ready on http://localhost:${port + 3}/'))"`,
+      mode: "command",
       ready: "http200",
       life: "gate",
     };
@@ -479,6 +483,7 @@ if (started.ok) {
   const refused = await startPreview("t3", unsafe as never, repo);
   assert.equal(refused.ok, false, "旧分支预览一旦启动真调度器必须当场拒绝");
   if (!refused.ok) assert.match(refused.reason, /真调度器/);
+  assert.equal(await stopPreview("t1", "测试收尾"), true);
   await new Promise((r) => setTimeout(r, 300));
   assert.equal(
     await fetch(`http://localhost:${port}/`).then(() => true).catch(() => false),
@@ -550,6 +555,7 @@ const taskLife = makeStep("preview", "pv2");
 if (taskLife.kind === "preview") {
   taskLife.p = {
     cmd: `node -e "require('http').createServer((q,s)=>s.end('ok')).listen(${port + 2},()=>console.log('ready on http://localhost:${port + 2}/'))"`,
+    mode: "command",
     ready: "http200",
     life: "task",
   };

@@ -21,8 +21,8 @@
 //      否则预览的 `reattachRunningTasks` 会 pid + 启动时间双双比中，真去接管它的输出。
 //
 // 还有一件事得说在明处：`llm_providers` 里存着明文 key，搬过去等于在
-// 主仓 `data/preview-test.db` 里多一份。同机器、同用户、同样在 .gitignore 里，跟主库
-// 是同一条信任边界；但它是持久测试库，不会随 worktree 删除。不搬的代价是挂了供应商的
+// `<worktree>/data/preview.db` 里多一份。同机器、同用户、同样在 .gitignore 里，跟主库
+// 是同一条信任边界；worktree 删除时它也一起清理。不搬的代价是挂了供应商的
 // 执行器（本项目日常用的那几个正是）在预览里起不来 CLI —— 那就等于没播种。
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
@@ -128,7 +128,7 @@ export function copyConfigTables(source: Client, dest: Client): Promise<Record<s
  * · `sessions.agent_*` —— pid、ps 启动时间、输出文件路径。pid + 启动时间是
  *   `isSameProcess` 的**全部**判据，副本跟主库拿的是同一台机器上同一个进程，它会**判中**，
  *   然后预览就开始 tail 一个正在被主实例消费的输出文件。
- * · `schedules` / `scheduled_messages` —— 持久库上可能是旧分支或人工操作留下的，
+ * · `schedules` / `scheduled_messages` —— 预览库上可能是旧分支或人工操作留下的，
  *   每次启动都清空，防止它在任何漏掉预览标记的旧后端上到点派活。
  *
  * 列不存在就跳过那一条（分支删过列的情形），失败只记一笔——洗不干净的代价大，但让 server

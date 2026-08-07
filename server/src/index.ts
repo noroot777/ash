@@ -129,7 +129,7 @@ async function initializeServer() {
     ]);
 
   await ensureSchema();
-  // 预览实例第一次从主库播种，之后复用同一份持久测试库。
+  // 测试库档第一次从主库播种，之后复用这个 worktree 自己的副本。
   if (process.env.HARNESS_SEED_FROM) {
     const { seedPreviewDb } = await import("./preview-seed.js");
     const mode = process.env.HARNESS_SEED_MODE === "config" ? "config" : "snapshot";
@@ -139,7 +139,7 @@ async function initializeServer() {
   if (IS_PREVIEW_INSTANCE) {
     const { sanitizeSnapshot } = await import("./preview-seed.js");
     const washed = await sanitizeSnapshot((await import("./db/index.js")).dbClient);
-    console.log(`[harness] 共享预览库已洗运行态：${washed.join("、") || "无"}`);
+    console.log(`[harness] 预览库已洗运行态：${washed.join("、") || "无"}`);
   }
   await migrateQueues(); // 一次性把 legacy depends_on / resume_depends_on 迁到 queue_items（幂等）
   // **顺序不能反**：先把还活着的 agent 接管回来（它们的输出走文件，压根没随上

@@ -1,52 +1,14 @@
-// `npm run dev` 有两个调用方，要的东西不一样：
+// `npm run dev` 被人手调用时照旧启动 4317 + 前端；被 harness 预览站调用时，
+// `PORT` 是借来的前端端口，`HARNESS_PREVIEW_MODE` 是页面上选的启动方式：
 //
-//   · 你自己开发 —— 后端（4317）+ 前端一起起。原来的行为，一点没变。
-//   · harness 的预览站（`server/src/preview.ts`）—— 它在任务自己的 worktree 里跑这条
-//     命令，并借一个空闲端口用环境变量 `PORT` 递进来。这种时候起**整套**：这个分支的
-//     后端 + 这个分支的前端，前端的 `/api` 打到前者，两个都是 worktree 里的代码。
+//   frontend  只起这个 worktree 的前端，/api 打回本机 4317
+//   full      起这个 worktree 的前后端，用 `<worktree>/data/preview-empty.db`，只播种设置
+//   test      起这个 worktree 的前后端，用 `<worktree>/data/preview.db`，首次从主库播种
+//   command   项目自定义；对本脚本来说沿用 test 这个安全默认
 //
-// 判据用 `PORT` 而不是另开一个变量：借端口这件事本身就是「有人在替我起预览」的信号，
-// 而 `PORT` 是 harness 唯一注入的那一个（来由见 preview.ts 里 freePort 的注释）。
-//
-// **为什么不再只起前端**（2026-08-07 改掉的旧做法）：前端的 `/api` 默认 proxy 到本机
-// 那份 4317，于是预览是「新前端 + 旧后端」。凡是需要后端配合的改动（新字段、新接口）
-// 在预览里一律看不见，而且**失败得静悄悄**——接口照常 200，只是少一个字段，前端按
-// 「没有就不显示」处理，看上去跟功能没做一模一样。用户对着这样的预览验收，结论是错的。
-//
-// 旧做法列的三个坎，各自的解法：
-//   ① 后端端口写死 4317 → 这里自己借第二个空闲端口，不走 `dev:server`。
-//   ② 同一个库只允许一个 server（锁的粒度是 **DB 文件路径**，见 server/src/singleton.ts）
-//      → 所有 harness 预览共用主仓 `data/preview-test.db`；主 harness 起新预览前先收掉旧的。
-//   ③ 后端启动那行 `http://localhost:<port>` 会被就绪判定当成预览地址（它挑日志里第一个
-//      地址）→ 转发时把 scheme 去掉，见 forward()。
-//
-// 预览的库是**主库创建的持久测试副本**（主仓 `data/preview-test.db`），不是空库、
-// 也不是主库本身。第一次从主库播种，之后预览里的改动会保留；每次启动只清理运行态。
-//
-//   · 不能共用主库文件：单实例锁的粒度就是 DB 文件路径（server/src/singleton.ts）。真让
-//     两个 server 开同一个库，第二个照样 30s tick、照样拉起 agent，而它的子进程只在它自己
-//     内存里——主界面点停止停不掉它（`docs/incidents.md`「端口撞车产幽灵」）。
-//   · 不能是空库：一个执行器都没有，新建任务面板直接写着「还没有已注册执行器」，创建按钮
-//     是灰的；任务列表也空空如也，凡是得有数据才看得见的改动（token 计数就是）一概验不了。
-//   · 所以是持久副本 + 每次洗运行态：running 任务、会话上的真 pid 会被洗掉，并且压根不留
-//     schedules/scheduled_messages（白名单和洗法在 server/src/preview-seed.ts）。
-//
-// 快照兜不住的两处，另外堵：①任务行带着**真** worktree 路径和分支名 → 预览实例上合并/删
-// worktree/删分支一律拒绝，调度器也不启动（server/src/preview-instance.ts）；②会话正文是
-// 文件不是库行 → `HARNESS_RUNS_FALLBACK` 让预览**只读**回退到主仓的 data/runs，写照旧落
-// 自己的（paths.ts / transcript.ts），所以预览里对老任务说话不会污染真实历史。
-//
-// **想换个花样，改预览站那一格的命令就行，不用碰这里**——那一格本来就是一条 shell 命令：
-//
-//   npm -w web-next run dev                 只起前端，/api 打回本机 4317 的真数据（老行为）
-//   npm run dev                             整套 + 共享持久测试库（默认）
-//   HARNESS_SEED_MODE=config npm run dev    整套，但只搬设置不搬任务（快照出问题时的退路）
-//   HARNESS_SEED_FROM= npm run dev          整套，空库
-//   HARNESS_DB=/tmp/我的.db npm run dev      整套，用你自己的库（不清空、不播种覆盖）
-//
-// 刻意**不**把这几档做成起手式上的复选框：预览站是所有项目共用的（Go、Rails、静态站都在
-// 用它），而「前端/后端/测试库」是 harness 自己的项目结构——做成字段，别的项目那几格永远
-// 空着还得挨个解释。通用层只存命令，项目特有的花样归项目自己的脚本认，就是这条分界。
+// 每个 worktree 的 DB 文件路径不同，所以各预览后端可并行；单实例锁仍保证同一份库
+// 不会被两个 server 同时调度。测试库每次启动都洗掉 pid/running/定时任务，预览实例也
+// 无条件禁用调度器、接管与合并清理。
 //
 // **预览里的 agent 够不着预览这台 harness 的 MCP**，这条得先说清楚，不然会以为坏了：
 // harness MCP 是注册在用户 `~/.claude.json` 里的，那条记录写死了
@@ -71,10 +33,29 @@ if (!lent) {
   const child = spawn("npm", ["run", "dev:all"], { stdio: "inherit" });
   child.on("exit", (code, signal) => process.exit(signal ? 1 : code ?? 0));
 } else {
-  await startPreviewStack(Number(lent));
+  const requested = process.env.HARNESS_PREVIEW_MODE;
+  const mode = requested === "frontend" || requested === "full" || requested === "test" ? requested : "test";
+  if (mode === "frontend") startFrontendOnly(Number(lent));
+  else await startPreviewStack(Number(lent), mode);
 }
 
-async function startPreviewStack(webPort) {
+function startFrontendOnly(webPort) {
+  const proxy = process.env.HARNESS_PROXY ?? "http://127.0.0.1:4317";
+  console.log(`[dev] 预览：只起前端 ${webPort}，/api 打到 ${proxy}。`);
+  const web = spawn("npm", ["-w", "web-next", "run", "dev"], {
+    cwd: REPO,
+    stdio: "inherit",
+    env: {
+      ...process.env,
+      PORT: String(webPort),
+      HARNESS_PROXY: proxy,
+      VITE_HARNESS_PREVIEW: "预览实例 · 只启动这个分支的前端 · API 连本机 4317",
+    },
+  });
+  watchChildren([["前端", web]]);
+}
+
+async function startPreviewStack(webPort, mode) {
   const apiPort = await freePort();
   if (!apiPort) {
     console.error("[dev] 借不到端口给预览的后端，这一站起不来。");
@@ -82,18 +63,17 @@ async function startPreviewStack(webPort) {
   }
   const mainData = mainRepoDataDir();
   const apiUrl = `http://127.0.0.1:${apiPort}`;
-  // 下面这三样**外面给了就听外面的**。预览站那一格存的就是一条 shell 命令，所以
-  // `HARNESS_DB=/tmp/我的测试库.db npm run dev` 天然能表达「这次用我自己的库」——
-  // 不必为此在起手式上多开一个字段（那种字段对非 harness 项目永远是空的，见文件头）。
-  //   · HARNESS_DB       换一个库。默认是主仓共享的 preview-test.db，任何一档都不自动删库。
-  //   · HARNESS_SEED_FROM 换源库；显式给空串 = 起一个空库（server 端判的是非空）。
-  //   · HARNESS_SEED_MODE server 端已经认（`config` = 只搬设置不搬任务），这里原样透传。
-  // 指到主库本身会被单实例锁挡下来（锁的粒度就是 DB 文件路径），后端起不来、整套一起收，
-  // 理由写在 preview.log 第一屏——这正是我们要的结果，不额外拦一道。
-  const dbFile = process.env.HARNESS_DB || join(mainData, "preview-test.db");
+  const ownDb = mode === "full" ? "preview-empty.db" : "preview.db";
+  const dbFile = process.env.HARNESS_DB || fileURLToPath(new URL(`../data/${ownDb}`, import.meta.url));
   const firstBoot = !existsSync(dbFile);
+  const seedFrom = process.env.HARNESS_SEED_FROM
+    ?? (firstBoot ? join(mainData, "harness.db") : "");
+  const seedMode = process.env.HARNESS_SEED_MODE ?? (mode === "full" ? "config" : "snapshot");
+  const dbLabel = mode === "test"
+    ? `${dbFile}，${firstBoot ? "首次从主库播种" : "复用这个 worktree 的测试数据"}`
+    : `${dbFile}，${firstBoot ? "首次只播种设置" : "复用这个 worktree 的独立数据"}`;
   console.log(
-    `[dev] 预览：整套起——后端 ${apiPort}（持久测试库 ${dbFile}，${firstBoot ? "首次从主库播种" : "复用现有数据，不自动清空"}）、`
+    `[dev] 预览：整套起——后端 ${apiPort}（独立库 ${dbLabel}）、`
     + `前端 ${webPort}，前端的 /api 打到后端。`,
   );
 
@@ -113,7 +93,8 @@ async function startPreviewStack(webPort) {
       PORT: String(apiPort),
       HARNESS_DB: dbFile,
       HARNESS_URL: apiUrl,
-      HARNESS_SEED_FROM: process.env.HARNESS_SEED_FROM ?? (firstBoot ? join(mainData, "harness.db") : ""),
+      HARNESS_SEED_FROM: seedFrom,
+      HARNESS_SEED_MODE: seedMode,
       HARNESS_RUNS_FALLBACK: process.env.HARNESS_RUNS_FALLBACK ?? join(mainData, "runs"),
       HARNESS_PREVIEW: "1",
       HARNESS_LAX_DONE: "1",
@@ -129,11 +110,17 @@ async function startPreviewStack(webPort) {
       ...process.env,
       PORT: String(webPort),
       HARNESS_PROXY: apiUrl,
-      VITE_HARNESS_PREVIEW: "预览实例 · 这个分支的前端 + 后端 · 共享持久测试库（改不到真数据；不能验收/删分支）",
+      VITE_HARNESS_PREVIEW: mode === "test"
+        ? "预览实例 · 这个分支的前端 + 后端 · 自己的测试库快照"
+        : "预览实例 · 这个分支的前端 + 后端 · 自己的独立新库",
     },
   });
 
-  for (const [name, child] of [["后端", api], ["前端", web]]) {
+  watchChildren([["后端", api], ["前端", web]]);
+}
+
+function watchChildren(children) {
+  for (const [name, child] of children) {
     child.on("exit", (code, signal) => {
       console.error(`[dev] 预览的${name}退出了（code=${code} signal=${signal ?? "-"}），整套一起收。`);
       teardown();

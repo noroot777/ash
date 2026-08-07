@@ -9,7 +9,8 @@ import {
   ACCEPT_CLEAN, ACCEPT_CLEAN_LABELS, ACCEPT_STRATEGY, ACCEPT_STRATEGY_LABELS,
   COMMAND_WHERE, COMMAND_WHERE_LABELS, HUMAN_NOTIFY, HUMAN_NOTIFY_LABELS,
   HUMAN_SHOW, HUMAN_SHOW_LABELS, PREVIEW_LIFE, PREVIEW_LIFE_LABELS,
-  PREVIEW_READY, PREVIEW_READY_LABELS, VERIFY_CHECKS, VERIFY_CHECK_LABELS,
+  PREVIEW_MODE, PREVIEW_MODE_LABELS, PREVIEW_READY, PREVIEW_READY_LABELS,
+  VERIFY_CHECKS, VERIFY_CHECK_LABELS,
 } from "@harness/shared/workflow";
 
 export interface FieldOption { value: string; label: string }
@@ -42,12 +43,16 @@ export const STEP_FIELDS: Record<StepKind, FieldSpec[]> = {
     { key: "checks", label: "验什么（全过才算过）", type: "multi", options: opts(VERIFY_CHECKS, VERIFY_CHECK_LABELS), emptyText: "还没选验什么" },
   ],
   preview: [
+    {
+      key: "mode", label: "启动方式", type: "select", options: opts(PREVIEW_MODE, PREVIEW_MODE_LABELS),
+    },
     // 端口这句得写在这儿，不能只写进文档：预览起在自己的 worktree 里，而同一个项目
     // 此刻通常已经有一份在跑（用户自己那份、或别的任务的预览），写死端口必撞。harness
     // 每次都借一个空闲端口用 PORT 传进来，命令认它才错得开。
     {
       key: "cmd", label: "启动命令", type: "text", placeholder: "npm run dev", emptyText: "还没填命令",
-      hint: "harness 每次会借一个空闲端口，用环境变量 $PORT 传给这条命令。端口写死的话，"
+      hint: "harness 会把上面的选择作为 $HARNESS_PREVIEW_MODE 传给命令；项目不识别它时，"
+        + "就是普通自定义命令。同时每次借一个空闲端口，用 $PORT 传入。端口写死的话，"
         + "同一个项目已经有一份在跑时必然撞车 —— 写成认 $PORT 的形式（例如 npm run dev -- --port $PORT）才错得开。",
     },
     { key: "ready", label: "怎么算起来了", type: "select", options: opts(PREVIEW_READY, PREVIEW_READY_LABELS) },

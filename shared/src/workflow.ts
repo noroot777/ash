@@ -81,6 +81,8 @@ export const VERIFY_CHECK_LABELS: Record<VerifyCheck, string> = {
 
 export const PREVIEW_READY = ["port", "port+log", "http200"] as const;
 export type PreviewReady = (typeof PREVIEW_READY)[number];
+export const PREVIEW_MODE = ["command", "frontend", "full", "test"] as const;
+export type PreviewMode = (typeof PREVIEW_MODE)[number];
 export const PREVIEW_LIFE = ["gate", "task", "idle30"] as const;
 export type PreviewLife = (typeof PREVIEW_LIFE)[number];
 
@@ -101,6 +103,12 @@ export type AcceptClean = (typeof ACCEPT_CLEAN)[number];
 // 文案都从这儿取，谁也别再自己写一份。
 export const PREVIEW_READY_LABELS: Record<PreviewReady, string> = {
   port: "端口可连就算起来了", "port+log": "端口可连 + 日志 ready", http200: "HTTP 返回 200",
+};
+export const PREVIEW_MODE_LABELS: Record<PreviewMode, string> = {
+  command: "按项目启动命令",
+  frontend: "只启动前端",
+  full: "前后端全启动（独立新库）",
+  test: "前后端 + 测试库快照",
 };
 export const PREVIEW_LIFE_LABELS: Record<PreviewLife, string> = {
   gate: "下一个人工关口结束时回收", task: "任务结束时回收",
@@ -131,7 +139,7 @@ export const WORKSPACE_LABELS: Record<Workspace, string> = {
 export interface StepParams {
   run: { instruction: string | null; executorId: string | null; model: string | null; reasoningEffort: string | null };
   verify: { executorId: string | null; model: string | null; reasoningEffort: string | null; checks: VerifyCheck[] };
-  preview: { cmd: string; ready: PreviewReady; life: PreviewLife };
+  preview: { cmd: string; mode: PreviewMode; ready: PreviewReady; life: PreviewLife };
   human: { show: HumanShow[]; notify: HumanNotify[] };
   command: { cmd: string; where: CommandWhere };
   accept: { strategy: AcceptStrategy; clean: AcceptClean };
@@ -151,7 +159,7 @@ export interface WorkflowDef {
 export const DEFAULT_PARAMS: { [K in StepKind]: () => StepParams[K] } = {
   run: () => ({ instruction: null, executorId: null, model: null, reasoningEffort: null }),
   verify: () => ({ executorId: null, model: null, reasoningEffort: null, checks: ["build"] }),
-  preview: () => ({ cmd: "npm run dev", ready: "port+log", life: "gate" }),
+  preview: () => ({ cmd: "npm run dev", mode: "test", ready: "port+log", life: "gate" }),
   human: () => ({ show: ["diff", "report"], notify: ["inbox", "push"] }),
   command: () => ({ cmd: "npm run lint", where: "workspace" }),
   accept: () => ({ strategy: "safe", clean: "all" }),
@@ -298,6 +306,7 @@ function normalizeParams(kind: StepKind, raw: unknown): StepParams[StepKind] {
   if (kind === "preview") {
     return {
       cmd: pickText(r.cmd, d.preview().cmd),
+      mode: pickEnum(r.mode, PREVIEW_MODE, "test"),
       ready: pickEnum(r.ready, PREVIEW_READY, "port+log"),
       life: pickEnum(r.life, PREVIEW_LIFE, "gate"),
     };
