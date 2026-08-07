@@ -61,7 +61,7 @@ export function TokenUsageChip({
 
   const parts = [
     showTurn ? `本轮 ${formatTokens(usageTotal(turn))}` : "",
-    showSession ? `会话 ${formatTokens(usageTotal(session))}` : "",
+    showSession ? `总 ${formatTokens(usageTotal(session))}` : "",
   ].filter(Boolean);
   const spoken = [
     showTurn ? `本轮 ${formatTokensExact(usageTotal(turn))} token` : "",
