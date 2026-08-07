@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { ChildProcess } from "node:child_process";
 import { createInterface } from "node:readline";
-import type { AgentEvent, AgentType, ExecTarget } from "@harness/shared";
+import type { AgentEvent, AgentType, ExecTarget, TokenUsage } from "@harness/shared";
 import type { AgentExecutor, RelayConfig, ResidentHandle, RunHandle, RunOpts } from "./types.js";
 import { spawnForRun, detachedInfo } from "./detached.js";
 import { spawnAgent, resumeFor, resumeInner, spawnErrorMessage, killChild, forceFinishOnExit, redactSecrets } from "./spawn.js";
@@ -223,6 +223,8 @@ export async function* parseClaudeStream(
     } else if (ev.type === "result") {
       flushText();
       if (ev.session_id) push({ kind: "session", cliSessionId: ev.session_id });
+      const usage = claudeUsage(ev);
+      if (usage) push({ kind: "usage", usage });
       // 我们自己发的 interrupt 会把本回合收成 error_during_execution —— 那是
       // 「用户插话打断」的预期结果,不是故障,不报错。只吞掉紧跟其后的那一个
       // result(标志立即清掉),所以最坏情况也只影响一个回合的错误上报。
@@ -293,3 +295,42 @@ const shortJson = (v: unknown) => {
     return undefined;
   }
 };
+
+const num = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) ? v : 0);
+
+// `result` 行自带这一回合的账单。两处数据来源,取 **modelUsage** 优先:
+//   • `usage`      —— 本回合累加,但只有主模型那一份;
+//   • `modelUsage` —— 按模型分组的完整账(小模型跑标题/压缩也在里面),且 costUSD
+//                     跟 total_cost_usd 同源。
+// 一个都没有(旧版 CLI / 复用这份 parser 的第三方 CLI 不报账)就返回 null ——
+// **不要退化成全 0**,那会让界面把「没报账」显示成「没花钱」。
+function claudeUsage(ev: any): TokenUsage | null {
+  const models = ev?.modelUsage && typeof ev.modelUsage === "object" ? Object.values<any>(ev.modelUsage) : [];
+  const cost = typeof ev?.total_cost_usd === "number" && Number.isFinite(ev.total_cost_usd)
+    ? ev.total_cost_usd
+    : models.length
+      ? models.reduce((sum, m) => sum + num(m?.costUSD), 0)
+      : null;
+  if (models.length) {
+    return {
+      input: models.reduce((s, m) => s + num(m?.inputTokens), 0),
+      output: models.reduce((s, m) => s + num(m?.outputTokens), 0),
+      cacheRead: models.reduce((s, m) => s + num(m?.cacheReadInputTokens), 0),
+      cacheWrite: models.reduce((s, m) => s + num(m?.cacheCreationInputTokens), 0),
+      reasoning: 0, // claude 不单列思考 token(已含在 output 里)
+      costUsd: cost,
+      turns: 1,
+    };
+  }
+  const u = ev?.usage;
+  if (!u || typeof u !== "object") return null;
+  return {
+    input: num(u.input_tokens),
+    output: num(u.output_tokens),
+    cacheRead: num(u.cache_read_input_tokens),
+    cacheWrite: num(u.cache_creation_input_tokens),
+    reasoning: 0,
+    costUsd: cost,
+    turns: 1,
+  };
+}

@@ -197,6 +197,15 @@ export async function ensureSchema() {
     "ALTER TABLE scheduled_messages ADD COLUMN reasoning_effort TEXT",
     // 排队追问：运行中发出的消息不看时间，任务一空闲就投递（timed 是老的定时发送）。
     "ALTER TABLE scheduled_messages ADD COLUMN mode TEXT NOT NULL DEFAULT 'timed'",
+    // Token 用量:一条会话行按回合累加(口径统一在 shared/src/usage.ts)。全 null
+    // = 这条会话建在本功能之前、或那家 CLI 不报账——**不能当 0 展示**。
+    "ALTER TABLE sessions ADD COLUMN usage_input INTEGER",
+    "ALTER TABLE sessions ADD COLUMN usage_output INTEGER",
+    "ALTER TABLE sessions ADD COLUMN usage_cache_read INTEGER",
+    "ALTER TABLE sessions ADD COLUMN usage_cache_write INTEGER",
+    "ALTER TABLE sessions ADD COLUMN usage_reasoning INTEGER",
+    "ALTER TABLE sessions ADD COLUMN usage_cost_usd REAL",
+    "ALTER TABLE sessions ADD COLUMN usage_turns INTEGER",
   ]) {
     try {
       await client.execute(sql);

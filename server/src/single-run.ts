@@ -19,6 +19,7 @@ import { handleTaskSettlement } from "./review.js";
 import { FOLLOW_UP_LABEL } from "./labels.js";
 import { reconcileTurnBaseline } from "./turn-baseline.js";
 import { replayUndeliveredMcpCalls } from "./mcp-handoff.js";
+import { addSessionUsage } from "./usage.js";
 
 
 async function setStatus(taskId: string, status: Parameters<typeof setTaskStatus>[1]) {
@@ -199,7 +200,7 @@ export async function consumeSingleRun(a: {
     bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: "single", agentType, event: { kind: "text", text } });
   };
   const persistTrace = (event: AgentEvent, at?: string) => {
-    if (event.kind === "thinking" || event.kind === "tool" || event.kind === "error") {
+    if (event.kind === "thinking" || event.kind === "tool" || event.kind === "error" || event.kind === "usage") {
       flushTraceText();
       appendSessionTrace(taskId, sessId, a.turnStart, event, at);
     } else if (event.kind === "done" || event.kind === "turnEnd") {
@@ -259,6 +260,8 @@ export async function consumeSingleRun(a: {
       } else {
         persistTrace(event);
         if (event.kind === "error") writeRunError(out, event.message);
+        // 会话行累计这一笔（本轮那份留在 trace 里，刷新后按回合放回各自的气泡）。
+        if (event.kind === "usage") await addSessionUsage(sessId, event.usage);
         bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: "single", agentType, event });
         if (event.kind === "done") exitStatus = event.exitStatus;
       }

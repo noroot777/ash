@@ -1,6 +1,6 @@
 import type { ChildProcess } from "node:child_process";
 import { createInterface } from "node:readline";
-import type { AgentEvent, ExecTarget } from "@harness/shared";
+import type { AgentEvent, ExecTarget, TokenUsage } from "@harness/shared";
 import type { AgentExecutor, RelayConfig, ResidentHandle, RunHandle, RunOpts } from "./types.js";
 import { openCodexResident } from "./codex-resident.js";
 import { spawnForRun, detachedInfo } from "./detached.js";
@@ -192,6 +192,8 @@ async function* parseCodexStream(
       push({ kind: "session", cliSessionId: ev.thread_id });
     } else if (ev.type === "turn.completed") {
       turnCompleted = true;
+      const usage = codexUsage(ev.usage);
+      if (usage) push({ kind: "usage", usage });
     } else if (ev.type === "turn.failed") {
       turnFailedMessage = eventErrorMessage(ev) ?? "Codex 返回 turn.failed，但没有附带错误说明。";
       structuredErrors.push(turnFailedMessage);
@@ -260,8 +262,27 @@ async function* parseCodexStream(
   }
 }
 
-const eventErrorMessage = (ev: any): string | null => {
-  const value = ev?.message ?? ev?.error?.message ?? ev?.error ?? ev?.detail;
+const num = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) ? v : 0);
+
+// `turn.completed` 自带这一回合的账单:
+//   {"usage":{"input_tokens":N,"cached_input_tokens":N,"output_tokens":N,"reasoning_output_tokens":N}}
+// 跟 claude 的口径差一处:codex 的 `input_tokens` **已经包含**命中缓存的那部分,
+// 所以要减出来,否则缓存读会被算两遍。codex 不报价 → costUsd 恒 null(不是 0)。
+function codexUsage(u: any): TokenUsage | null {
+  if (!u || typeof u !== "object") return null;
+  const cacheRead = num(u.cached_input_tokens);
+  return {
+    input: Math.max(0, num(u.input_tokens) - cacheRead),
+    output: num(u.output_tokens),
+    cacheRead,
+    cacheWrite: 0, // codex 不区分缓存写入
+    reasoning: num(u.reasoning_output_tokens),
+    costUsd: null,
+    turns: 1,
+  };
+}
+
+const eventErrorMessage = (ev: any): string | null => {  const value = ev?.message ?? ev?.error?.message ?? ev?.error ?? ev?.detail;
   if (value === undefined || value === null) return null;
   return shortStr(value).slice(0, 2000);
 };

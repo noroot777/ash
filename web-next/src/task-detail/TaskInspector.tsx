@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { AgentExecutorProfile, Group, Session, Task, TaskStatus } from "@harness/shared";
 import { isUserSettableStatus, TASK_STATUS_LABELS } from "@harness/shared";
 import { REASONING_EFFORT_DETAIL } from "@harness/shared/cli-presets";
+import { formatCost, formatTokens, formatTokensExact, hasUsage, sumUsage, usageTotal } from "@harness/shared/usage";
 import { ArrowSquareOut, CaretRight, ListNumbers } from "@phosphor-icons/react";
 import { api } from "../lib/api.ts";
 import { Dropdown } from "../components/Dropdown.tsx";
@@ -140,6 +141,8 @@ export function TaskInspector({
     () => [...sessions].sort((left, right) => right.startedAt.localeCompare(left.startedAt))[0],
     [sessions],
   );
+  // 整个任务的账 = 它名下所有会话之和（换执行器、@别人插一手都会各开一条会话行）。
+  const taskUsage = useMemo(() => sumUsage(sessions.map((session) => session.usage)), [sessions]);
   const queuePosition = queueItems.findIndex((item) => item.taskId === task.id);
   const nextQueueItem = queuePosition >= 0 ? queueItems[queuePosition + 1] : undefined;
 
@@ -334,6 +337,17 @@ export function TaskInspector({
           {task.startedAt && <InspectorRow label="开始时间"><span>{formatInstant(task.startedAt)}</span></InspectorRow>}
           {task.endedAt && <InspectorRow label="结束时间"><span>{formatInstant(task.endedAt)}</span></InspectorRow>}
           {duration && <InspectorRow label={duration.label}><span title={duration.title}>{duration.text}</span></InspectorRow>}
+          {hasUsage(taskUsage) && (
+            <InspectorRow label="Token 用量">
+              <span aria-label={`全部会话累计 ${formatTokensExact(usageTotal(taskUsage))} token`}>
+                {[
+                  formatTokens(usageTotal(taskUsage)),
+                  taskUsage.turns ? `${taskUsage.turns} 轮` : "",
+                  formatCost(taskUsage.costUsd) ?? "",
+                ].filter(Boolean).join(" · ")}
+              </span>
+            </InspectorRow>
+          )}
           {latestSession?.branch && <InspectorRow label="分支"><code>{latestSession.branch}</code></InspectorRow>}
           {latestSession?.worktreePath && <InspectorRow label="worktree"><code>{latestSession.worktreePath}</code></InspectorRow>}
           {latestSession?.resumeCommand && (

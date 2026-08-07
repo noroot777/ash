@@ -8,6 +8,7 @@
 // 编译期就被抹掉,所以安全 —— 下面对 ./index.js 的反向 type import 同理。
 import type { AgentType, DebateConsensusBy, QuestionItem, Task, TaskStage, TaskStatus } from "./index.ts";
 import type { SessionRole } from "./session.ts";
+import type { TokenUsage } from "./usage.ts";
 
 // ── HITL gates (§7) ──────────────────────────────────────────────────────────
 export type GateName = "G1" | "G2"; // G2 is legacy, retained for historical events
@@ -24,6 +25,10 @@ export type AgentEvent =
   | { kind: "tool"; name: string; detail?: string }
   | { kind: "session"; cliSessionId: string }
   | { kind: "system"; text: string } // a backend-initiated 〔系统〕 trace (e.g. 继续) — its own bubble, not agent text
+  // 本回合的 token 用量,由执行器从 CLI 的收尾事件(claude 的 result / codex 的
+  // turn.completed)解析。每回合至多一条,恒在该回合的 turnEnd/done 之前。拿不到
+  // 用量的 CLI 一条都不发 —— 展示端据此判断「这家报不报账」。
+  | { kind: "usage"; usage: TokenUsage }
   | { kind: "error"; message: string }
   // 常驻会话（team 调度台）专用：一个回合说完了，但进程还活着等下一条消息。
   // 一次性 run() 永远不发这个 —— 它的回合结束就是进程结束(done)。

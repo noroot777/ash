@@ -1,5 +1,6 @@
-import type { AgentEvent, ServerEvent, Session, Task } from "@harness/shared";
+import type { AgentEvent, ServerEvent, Session, Task, TokenUsage } from "@harness/shared";
 import { ANSWER_PREFIX, parseSessionOutput } from "@harness/shared";
+import { addUsage, sumUsage, usageTotal } from "@harness/shared/usage";
 import type { SessionTraceEntry } from "../lib/api.ts";
 import { formatInstant, parseAttachmentText } from "./utils.ts";
 
@@ -32,6 +33,10 @@ export type ConversationItem =
       markerEndedAt?: string | null;
       showSessionMeta?: boolean;
       session?: Session;
+      /** 这一回合的 token 用量。null = 这家 CLI 不报账、或这轮跑在本功能之前。 */
+      usage?: TokenUsage | null;
+      /** 整条会话至今的累计用量。只挂在显示 SessionMeta 的那条气泡上。 */
+      sessionUsage?: TokenUsage | null;
       markdown: string;
       segments: AgentContentSegment[];
     }
@@ -42,6 +47,9 @@ export type PersistedConversation = { session: Session; output: string; trace?: 
 
 type ConversationEventItem = Extract<ConversationItem, { kind: "event" }>;
 type AgentTraceEvent = Extract<AgentEvent, { kind: "thinking" | "tool" | "error" }>;
+type TracedContentEntry = SessionTraceEntry & {
+  event: Exclude<SessionTraceEntry["event"], { kind: "usage" }>;
+};
 type PersistedTurnTimes = Map<string, number[]>;
 type SessionRunBounds = {
   endedAt: string | null;
@@ -138,11 +146,20 @@ function takeTraceGroup(
   return groups.get(nearest) ?? [];
 }
 
+// 这一回合报了多少 token。同一回合理论上只有一条(执行器每轮至多推一次),多条时
+// 按累计处理,免得将来某家 CLI 分批报账时这里悄悄少算。
+function traceUsage(entries: SessionTraceEntry[]): TokenUsage | null {
+  return sumUsage(entries.map((entry) => (entry.event.kind === "usage" ? entry.event.usage : null)));
+}
+
 function contentSegments(
-  entries: SessionTraceEntry[],
+  traced: SessionTraceEntry[],
   fallbackMarkdown: string,
   idPrefix: string,
 ): AgentContentSegment[] {
+  // usage 只是这一回合的账,不是执行过程的一步 —— 漏掉这道过滤它会被 auxEvent
+  // 当成未知事件渲染成一行异常。
+  const entries = traced.filter((entry): entry is TracedContentEntry => entry.event.kind !== "usage");
   const auxEntries = entries.filter((entry) => entry.event.kind !== "text");
   if (!entries.some((entry) => entry.event.kind === "text")) {
     return [{
@@ -225,6 +242,7 @@ function appendAgent(
     endedAt: null,
     markerEndedAt: null,
     session,
+    usage: null,
     markdown: "",
     segments: [],
   };
@@ -315,6 +333,7 @@ export function buildConversationItems(
           endedAt: null,
           markerEndedAt: segment.endedAt ?? null,
           session,
+          usage: traceUsage(traceEntries),
           markdown: segment.text,
           segments: contentSegments(traceEntries, segment.text, `persisted:segment:${session.id}:${index}`),
         });
@@ -334,6 +353,7 @@ export function buildConversationItems(
         endedAt: null,
         markerEndedAt: null,
         session,
+        usage: traceUsage(entries),
         markdown: segments.map((segment) => segment.markdown).join(""),
         segments,
       });
@@ -381,6 +401,8 @@ export function buildConversationItems(
     if (event.kind === "session") continue;
     const agent = appendAgent(items, entry.event, sessions);
     if (event.kind === "text") appendAgentText(agent, event.text);
+    // 用量恒在本回合的 turnEnd/done 之前到，所以它落在的就是刚说完话的那条气泡。
+    if (event.kind === "usage") agent.usage = agent.usage ? addUsage(agent.usage, event.usage) : event.usage;
     if (event.kind === "tool" || event.kind === "thinking" || event.kind === "error") {
       appendAgentAux(agent, event);
     }
@@ -426,12 +448,26 @@ export function buildConversationItems(
       ?? inferredRunEnd(item.at, runBounds.get(item.sessionId));
   }
 
+  // 会话累计有两个来源：sessions 行是服务端账本（权威、跨刷新），但它要等下一次
+  // 拉取才带上刚结束的这一轮；直播时客户端手上的"各轮之和"反而更新。取总量大的
+  // 那个，数字就只会往前走，不会在回合结束的那一瞬先缩回去。
+  const sessionTurnTotals = new Map<string, TokenUsage>();
+  for (const item of items) {
+    if (item.kind !== "agent" || !item.usage) continue;
+    const previous = sessionTurnTotals.get(item.sessionId);
+    sessionTurnTotals.set(item.sessionId, previous ? addUsage(previous, item.usage) : item.usage);
+  }
+
   const sessionMetaSeen = new Set<string>();
   for (let index = items.length - 1; index >= 0; index -= 1) {
     const item = items[index]!;
     if (item.kind !== "agent") continue;
     item.showSessionMeta = !sessionMetaSeen.has(item.sessionId);
     sessionMetaSeen.add(item.sessionId);
+    if (!item.showSessionMeta) continue;
+    const persisted = item.session?.usage ?? null;
+    const live = sessionTurnTotals.get(item.sessionId) ?? null;
+    item.sessionUsage = !persisted || (live && usageTotal(live) > usageTotal(persisted)) ? live : persisted;
   }
   return items;
 }

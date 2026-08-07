@@ -1,4 +1,4 @@
-import { index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+import { index, integer, real, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 // JSON columns are stored as text and parsed in the repository layer.
 // Schema mirrors shared/src/index.ts.
@@ -221,6 +221,18 @@ export const sessions = sqliteTable("sessions", {
   // 已安全消费到的 stdout 字节位置，永远落在换行边界（见 detached.ts 的
   // tailFile）。重启后从这里接着读 → 不丢行也不重行。
   agentOffset: integer("agent_offset"),
+  // ── Token 用量（server/src/usage.ts）────────────────────────────────────
+  // 这条会话行**跨回合累加**的账（同 active_ms 的模式：会话可复用，每回合结束
+  // 时把执行器报的那笔加上去）。口径归一在 shared/src/usage.ts：input 不含缓存、
+  // cache_read/cache_write 分列。全 null = 建在本功能之前或那家 CLI 不报账，
+  // 展示端据此区分「没数据」与「0」。cost 只有 claude 报得出，codex 恒 null。
+  usageInput: integer("usage_input"),
+  usageOutput: integer("usage_output"),
+  usageCacheRead: integer("usage_cache_read"),
+  usageCacheWrite: integer("usage_cache_write"),
+  usageReasoning: integer("usage_reasoning"),
+  usageCostUsd: real("usage_cost_usd"),
+  usageTurns: integer("usage_turns"),
 });
 
 export const schedules = sqliteTable("schedules", {
