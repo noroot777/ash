@@ -5,7 +5,7 @@ import type { WorkflowDef } from "./workflow.ts";
 export type { Session, SessionRole } from "./session.ts";
 // 归一化后的 token 用量。运行时函数(累加/格式化)走 "@harness/shared/usage" 子路径
 // 导出,这里同上只再导出类型。
-export type { TokenUsage } from "./usage.ts";
+export type { ContextUsage, TokenUsage } from "./usage.ts";
 export type {
   ReviewConclusion,
   ReviewDispatchInput,

@@ -424,7 +424,7 @@
   background: var(--panel);
 }
 
-.team-info-panel__section > .task-session-meta {
+.team-info-panel__section > .task-message-footer {
   margin-top: 8px;
 }
 

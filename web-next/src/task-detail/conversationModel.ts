@@ -1,4 +1,4 @@
-import type { AgentEvent, ServerEvent, Session, Task, TokenUsage } from "@harness/shared";
+import type { AgentEvent, ContextUsage, ServerEvent, Session, Task, TokenUsage } from "@harness/shared";
 import { ANSWER_PREFIX, parseSessionOutput } from "@harness/shared";
 import { addUsage, sumUsage, usageTotal } from "@harness/shared/usage";
 import type { SessionTraceEntry } from "../lib/api.ts";
@@ -34,8 +34,10 @@ export type ConversationItem =
       session?: Session;
       /** 这一回合的 token 用量。null = 这家 CLI 不报账、或这轮跑在本功能之前。 */
       usage?: TokenUsage | null;
-      /** 整条会话至今的累计用量。只挂在显示 SessionMeta 的那条气泡上。 */
+      /** 整条会话至今的累计用量。只挂在本会话最后一条气泡上（尾栏显示会话信息的那条）。 */
       sessionUsage?: TokenUsage | null;
+      /** 整条会话此刻的上下文水位（跟累计用量是两回事）。同样只挂在那条气泡上。 */
+      sessionContext?: ContextUsage | null;
       markdown: string;
       segments: AgentContentSegment[];
     }
@@ -365,6 +367,8 @@ export function buildConversationItems(
   // persisted timeline by each turn's own timestamp before live arrivals append.
   items.sort((left, right) => conversationItemTime(left) - conversationItemTime(right));
 
+  // 直播里报上来的上下文水位，按会话取最后一条（覆盖语义，见 shared/src/usage.ts）。
+  const liveContext = new Map<string, ContextUsage>();
   for (const entry of timelineAfterPersistedTurns(timeline, persistedTurns)) {
     if (entry.kind === "user") {
       items.push({
@@ -402,6 +406,8 @@ export function buildConversationItems(
     if (event.kind === "text") appendAgentText(agent, event.text);
     // 用量恒在本回合的 turnEnd/done 之前到，所以它落在的就是刚说完话的那条气泡。
     if (event.kind === "usage") agent.usage = agent.usage ? addUsage(agent.usage, event.usage) : event.usage;
+    // 水位是覆盖不是累加：后到的那条就是此刻，跟它前面报过什么无关。
+    if (event.kind === "context") liveContext.set(entry.event.sessionId, event.context);
     if (event.kind === "tool" || event.kind === "thinking" || event.kind === "error") {
       appendAgentAux(agent, event);
     }
@@ -467,6 +473,8 @@ export function buildConversationItems(
     const persisted = item.session?.usage ?? null;
     const live = sessionTurnTotals.get(item.sessionId) ?? null;
     item.sessionUsage = !persisted || (live && usageTotal(live) > usageTotal(persisted)) ? live : persisted;
+    // 水位不比大小：直播时刚报的那条就是最新，会话行上那份要等下次拉取才跟上。
+    item.sessionContext = liveContext.get(item.sessionId) ?? item.session?.context ?? null;
   }
   return items;
 }

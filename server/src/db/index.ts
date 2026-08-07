@@ -215,6 +215,10 @@ export async function ensureSchema() {
     "ALTER TABLE sessions ADD COLUMN usage_reasoning INTEGER",
     "ALTER TABLE sessions ADD COLUMN usage_cost_usd REAL",
     "ALTER TABLE sessions ADD COLUMN usage_turns INTEGER",
+    // 上下文水位:**覆盖**式,跟上面那组累加流水是两个概念(见 shared/src/usage.ts)。
+    "ALTER TABLE sessions ADD COLUMN context_used INTEGER",
+    "ALTER TABLE sessions ADD COLUMN context_window INTEGER",
+    "ALTER TABLE sessions ADD COLUMN context_window_estimated INTEGER",
   ]) {
     try {
       await client.execute(sql);

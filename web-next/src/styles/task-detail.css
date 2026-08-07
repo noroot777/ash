@@ -339,27 +339,20 @@
 .task-tool-line summary:hover .task-tool-summary { color: var(--muted); }
 .task-tool-line pre { max-height: 220px; overflow: auto; margin: 4px 0 2px 6px; border-left: 2px solid var(--line); padding: 4px 8px; white-space: pre-wrap; }
 .task-tool-line--error { color: var(--red); }
-.task-session-meta { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px; }
-.task-session-meta button { max-width: 240px; overflow: hidden; border: 1px solid var(--line); border-radius: 5px; background: transparent; padding: 2px 6px; color: var(--faint); font-family: var(--font-mono); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
-.task-session-meta button:hover { border-color: var(--line2); background: var(--raised); color: var(--muted); }
+/* 一条气泡的尾栏：会话 id、resume 命令、三颗账目胶囊全在这一行。 */
+.task-message-footer { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; margin-top: 7px; }
+.task-message-footer button { max-width: 240px; overflow: hidden; border: 1px solid var(--line); border-radius: 5px; background: transparent; padding: 2px 6px; color: var(--faint); font-family: var(--font-mono); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.task-message-footer button:hover { border-color: var(--line2); background: var(--raised); color: var(--muted); }
 
-/* Token 用量。会话尾巴那一行跟旁边两颗 chip 同款；单轮那颗挂在气泡头部 ⏱ 用时 后面，
-   要躲开「复制这条回复」那条 margin-left:auto + 22px 方块的规则，否则会被压成一个
-   看不见的小方格。 */
+/* Token 用量。三颗都在尾栏里，跟 .task-message-footer 的按钮同款外形。 */
 .token-usage-chip { display: inline-flex; align-items: center; gap: 3px; border: 1px solid var(--line); border-radius: 5px; background: transparent; padding: 2px 6px; color: var(--faint); font-family: var(--font-mono); font-size: 9px; white-space: nowrap; }
 .token-usage-chip:hover { border-color: var(--line2); background: var(--raised); color: var(--muted); }
-.task-message header .token-usage-chip {
-  display: inline-flex;
-  width: auto;
-  height: auto;
-  margin-left: 0;
-  border: 0;
-  border-radius: 4px;
-  padding: 0 3px;
-  opacity: 1;
-  font-size: 9.5px;
-}
-.task-message header .token-usage-chip:hover { background: var(--raised); color: var(--ink); }
+
+/* 上下文水位。借 .token-usage-chip 的外形（两颗并排要长得像一家人），只多一条进度条；
+   进红区才变色 —— 中间再插一档黄色，「变色」这个信号就不值钱了。 */
+.context-meter-chip.is-tight { border-color: var(--red); color: var(--red); }
+.context-meter-bar { display: inline-block; width: 22px; height: 3px; overflow: hidden; border-radius: 2px; background: var(--line2); }
+.context-meter-bar > span { display: block; height: 100%; background: currentColor; opacity: 0.75; }
 
 .token-usage-panel {
   position: fixed;

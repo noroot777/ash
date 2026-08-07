@@ -252,6 +252,10 @@ async function* parseCodexStream(
     finish({ exitStatus: exit, exitSignal: child.signalCode, forceFinished: true });
   });
 
+  // codex **不报上下文水位**：`exec --json` 的 stdout 里只有整回合累加的 usage，没有
+  // 「此刻装了多少」。曾经从它的 rollout 文件（~/.codex/sessions/…）里捞过，但那是私有
+  // 格式、升级即失效，用户 2026-08-07 拍板不要。所以这条流里没有 `context` 事件，
+  // codex 会话的水位胶囊不显示 —— 缺了就是缺了，别拿整回合累加去冒充水位。
   while (true) {
     if (queue.length) {
       yield queue.shift()!;
