@@ -33,12 +33,12 @@ export const STEP_FIELDS: Record<StepKind, FieldSpec[]> = {
     { key: "instruction", label: "额外交代", type: "text", placeholder: "留空就照任务描述做", emptyText: "照任务描述做" },
     { key: "executorId", label: "谁来干", type: "executor", emptyText: "跟随任务的执行器" },
     { key: "model", label: "模型", type: "model" },
-    { key: "reasoningEffort", label: "思考强度", type: "effort" },
+    { key: "reasoningEffort", label: "智能水平", type: "effort" },
   ],
   verify: [
     { key: "executorId", label: "谁来验", type: "executor", emptyText: "跟随任务的执行器" },
     { key: "model", label: "用什么模型验", type: "model" },
-    { key: "reasoningEffort", label: "思考强度", type: "effort" },
+    { key: "reasoningEffort", label: "智能水平", type: "effort" },
     { key: "checks", label: "验什么（全过才算过）", type: "multi", options: opts(VERIFY_CHECKS, VERIFY_CHECK_LABELS), emptyText: "还没选验什么" },
   ],
   preview: [

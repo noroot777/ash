@@ -1,7 +1,7 @@
 import { useLayoutEffect, useState, type CSSProperties, type RefObject } from "react";
 
 /**
- * 「贴着触发器弹出的 fixed 浮层」放在哪。选执行器、选模型、选思考强度这几颗胶囊
+ * 「贴着触发器弹出的 fixed 浮层」放在哪。选执行器、选模型、选智能水平这几颗胶囊
  * 都要用，所以抽在这里一次算清楚。
  *
  * 为什么不用 CSS 的 absolute + `bottom: 100%`：这些触发器的祖先卡片是

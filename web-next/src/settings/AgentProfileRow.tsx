@@ -163,7 +163,7 @@ export function AgentProfileRow({
             value={profile.model ?? ""}
             disabled={busy}
             compact
-            // 换模型不动档位：对不上时由旁边那颗强度胶囊出提示，让用户自己决定改哪边。
+            // 换模型不动档位：对不上时由旁边那颗智能水平胶囊出提示，让用户自己决定改哪边。
             // 以前这里静默归一，结果是「我明明选了 ultra，回头一看变成空的」。
             onChange={(model) => onChange({ ...profile, model: model || undefined })}
             onCommit={(model) => void patch({ model })}
@@ -175,7 +175,7 @@ export function AgentProfileRow({
             model={profile.model ?? null}
             value={profile.reasoningEffort ?? ""}
             disabled={busy}
-            label={`${profile.name} 的思考强度`}
+            label={`${profile.name} 的智能水平`}
             followLabel="跟随 CLI"
             onChange={(reasoningEffort) => void patch({ reasoningEffort })}
           />

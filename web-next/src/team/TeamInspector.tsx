@@ -66,7 +66,7 @@ function RoleConfig({
       {!disabled && (
         <dl>
           <ConfigValue label="模型" value={model} />
-          <ConfigValue label="思考强度" value={effort} />
+          <ConfigValue label="智能水平" value={effort} />
         </dl>
       )}
       {note && <p>{note}</p>}

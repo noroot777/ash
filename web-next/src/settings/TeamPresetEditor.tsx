@@ -157,10 +157,10 @@ function TeamRoleFields({
         <small>{meta.hint}</small>
       </header>
       <div className="team-preset-role-fields">
-        {/* 跟新建面板同一颗：执行器和模型合成一颗胶囊，思考强度是并排的另一颗。
+        {/* 跟新建面板同一副形状：一颗三段胶囊「智能体 · 模型 · 智能水平」。
             见 composer/ExecutorPickerField.tsx。 */}
         <ExecutorPickerField
-          label={`${meta.label} 的执行器与模型`}
+          label={`${meta.label} 的智能体与模型`}
           value={executorValue({ agentType: value.agentType, executorId: value.executorId })}
           types={typeOptions}
           profiles={typeProfiles}

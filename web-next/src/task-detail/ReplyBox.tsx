@@ -1,14 +1,14 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { AgentExecutorProfile, AgentType, SkillEntry, Task } from "@harness/shared";
 import { sameExecutor } from "@harness/shared/executors";
-import { ArrowUp, CaretDown, Clock, Robot, SpinnerGap, X } from "@phosphor-icons/react";
+import { ArrowUp, Clock, Robot, SpinnerGap, X } from "@phosphor-icons/react";
 import {
   ScheduledMessageTray,
   ScheduledSendPanel,
   useScheduledMessages,
 } from "../components/ScheduledMessages.tsx";
 import { defaultOnceTime } from "../components/ScheduleControl.tsx";
-import { EffortPicker } from "../components/EffortPicker.tsx";
+import { RunTargetPicker } from "../components/RunTargetPicker.tsx";
 import { executorRunSummary, registeredAgentTypes } from "../lib/agentAvailability.ts";
 import { api, type ReplyTaskResult } from "../lib/api.ts";
 import { useProviders } from "../lib/modelCatalog.ts";
@@ -69,12 +69,12 @@ export function ReplyBox({
   const [mentionIndex, setMentionIndex] = useState(0);
   const [mentionDismissed, setMentionDismissed] = useState(false);
   const [target, setTarget] = useState<MentionTarget | null>(null);
-  // 「@ 先选智能体」和「点胶囊从头改」共用同一个浮层，只是进入的阶段不同。
-  const [picker, setPicker] = useState<{ stage: "agent" | "model"; agent: AgentType } | null>(null);
+  // 只剩 `@` 那条路会开这个浮层：正文里选中智能体之后紧接着选模型。点胶囊改配置由
+  // 胶囊自己管（三段各开各的浮层，见 components/RunTargetPicker.tsx）。
+  const [picker, setPicker] = useState<{ agent: AgentType } | null>(null);
   const [scheduleOpen, setScheduleOpen] = useState(false);
   const [sendAt, setSendAt] = useState("");
   const scheduleTriggerRef = useRef<HTMLButtonElement>(null);
-  const chipRef = useRef<HTMLButtonElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [profiles, setProfiles] = useState<AgentExecutorProfile[]>([]);
   const [profilesReady, setProfilesReady] = useState(false);
@@ -215,10 +215,10 @@ export function ReplyBox({
     setValue((current) => current.replace(/@[a-z0-9_-]*$/i, ""));
     setMentionIndex(0);
     setMentionDismissed(false);
-    setPicker({ stage: "model", agent });
+    setPicker({ agent });
   };
 
-  // 选完智能体和模型：执行器没换就把已选的思考强度留着（用户只是换了个模型），
+  // 选完智能体和模型：执行器没换就把已选的智能水平留着（用户只是换了个模型），
   // 换了执行器才清成「跟随」——旧档位在新 CLI 上多半根本不存在。
   const commitTarget = (next: AgentModelSelection) => {
     setTarget((current) => {
@@ -238,7 +238,7 @@ export function ReplyBox({
     textareaRef.current?.focus();
   };
 
-  // 只改思考强度也算「本回合这么跑」：没召唤过就以任务当前配置为底稿建一份覆盖，
+  // 只改智能水平也算「本回合这么跑」：没召唤过就以任务当前配置为底稿建一份覆盖，
   // 免得用户点了档位却什么都没发生。
   const commitEffort = (effort: string) => {
     setTarget((current) => ({
@@ -333,10 +333,10 @@ export function ReplyBox({
           types={registeredTypes.length ? registeredTypes : [activeAgent]}
           profiles={profiles}
           providers={providers}
-          initialStage={picker.stage}
+          initialStage="model"
           initialAgent={picker.agent}
           currentExecutorId={activeExecutorId}
-          triggerRef={chipRef}
+          triggerRef={textareaRef}
           onCommit={commitTarget}
           onCancel={() => {
             setPicker(null);
@@ -455,27 +455,20 @@ export function ReplyBox({
           >
             <Clock size={14} />
           </button>
-          <button
-            ref={chipRef}
-            type="button"
-            className={`task-reply-chip${target ? " is-summoned" : ""}`}
-            disabled={disabled || sending || commandActive}
-            aria-label={`当前智能体 ${activeAgent}${activeModel ? `，模型 ${activeModel}` : ""}；点击更改`}
-            onClick={() => setPicker((open) => (open ? null : { stage: "agent", agent: activeAgent }))}
-          >
-            <Robot size={12} aria-hidden="true" />
-            <b>{activeAgent}</b>
-            <span>{activeModel ?? "跟随执行器"}</span>
-            <CaretDown size={9} weight="bold" aria-hidden="true" />
-          </button>
-          {/* 思考强度是并排的第二颗胶囊：只想调档位时不必重走一遍选模型。 */}
-          <EffortPicker
-            type={activeAgent}
-            model={activeModel}
-            value={activeEffort ?? ""}
+          {/* 一颗三段胶囊：智能体 · 模型 · 智能水平。三段各管一件事，点哪段只改哪段，
+              跟新建面板、工作流站点用的是同一副形状（components/RunTargetPicker.tsx）。 */}
+          <RunTargetPicker
+            label="本回合由谁来跑"
+            types={registeredTypes.length ? registeredTypes : [activeAgent]}
+            profiles={profiles}
+            selection={{ agentType: activeAgent, executorId: activeExecutorId }}
+            model={activeModel ?? null}
+            effort={activeEffort ?? ""}
             variant="chip"
+            highlight={!!target}
             disabled={disabled || sending || commandActive}
-            onChange={commitEffort}
+            onCommit={commitTarget}
+            onEffortChange={commitEffort}
           />
           {target && (
             <button

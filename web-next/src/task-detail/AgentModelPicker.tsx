@@ -15,16 +15,17 @@ import {
 } from "./mentionPicker.ts";
 
 /**
- * 「派谁 + 跑哪个模型」两步选择器。自带筛选框与键盘导航，用在两个入口：
+ * 「派谁 + 跑哪个模型」选择器。自带筛选框与键盘导航，用在三个入口：
  * ① 对话框里 @ 选中智能体之后，直接以第二步（选模型）打开；
- * ② 点「智能体 · 模型」胶囊，从第一步（选智能体）打开。
+ * ② 点三段胶囊的**智能体**那一段（`agentOnly`）：只列智能体，选完就落，不往下一步走；
+ * ③ 点三段胶囊的**模型**那一段：直接以第二步打开当前智能体的模型列表。
  *
  * 第二步按**供应商分块**：块标题是供应商名，块内是它的模型——供应商和模型是同一
  * 步里的两件事，看着「哪家的」直接点「哪一个」。候选从哪来由供应商设置里的「每次
  * 调用 API / 固定模型」决定（见 lib/modelCatalog.ts）。当前执行器所在的那一块排在
  * 最前面：多数时候要换的就是它旗下的另一个模型。
  *
- * **思考强度不在这里**：它是并排的另一颗胶囊（components/EffortPicker.tsx）。混进
+ * **智能水平不在这里**：它是同一颗胶囊的第三段（components/EffortPicker.tsx）。混进
  * 来会让「只想换个模型」的人多走一步，也让「只想调档位」的人得重选一遍模型。
  *
  * 两种落点：默认贴着调用方自己的定位上下文（对话框在页面底部，朝上弹）；传 `anchorRef`
@@ -40,6 +41,7 @@ export function AgentModelPicker({
   providers,
   initialStage,
   initialAgent,
+  agentOnly = false,
   currentExecutorId = null,
   triggerRef,
   anchorRef,
@@ -51,6 +53,11 @@ export function AgentModelPicker({
   providers: LlmProvider[];
   initialStage: Stage;
   initialAgent: AgentType;
+  /**
+   * 只选智能体：选完直接 onCommit（executorId / model 都给 null = 跟随该类型的默认
+   * 执行器），不再往「选模型」推。三段胶囊的第一段用它——那一段管的就只有智能体。
+   */
+  agentOnly?: boolean;
   /** 当前生效的执行器：它挂的供应商在第二步里排最前。 */
   currentExecutorId?: string | null;
   triggerRef?: RefObject<HTMLElement | null>;
@@ -94,6 +101,12 @@ export function AgentModelPicker({
   const canGoBack = stage === "model" && initialStage === "agent";
 
   const openModels = (next: AgentType) => {
+    // agentOnly：这一段管的就只有智能体，选完即落。executorId 留空 = 跟随该类型的
+    // 默认执行器；模型给 null，由调用方按「换人了」把覆盖打回跟随。
+    if (agentOnly) {
+      onCommit({ agent: next, executorId: null, model: null });
+      return;
+    }
     setAgent(next);
     setStage("model");
     setQuery("");
@@ -181,7 +194,8 @@ export function AgentModelPicker({
             >
               <b>@{row.agent}</b>
               <span>{row.detail}</span>
-              <CaretRight size={11} aria-hidden="true" />
+              {/* 只有「还要接着选模型」时才画这个箭头：agentOnly 下点完就落，画了是骗人。 */}
+              {!agentOnly && <CaretRight size={11} aria-hidden="true" />}
             </button>
           ))}
         </div>

@@ -66,7 +66,7 @@ export function ExecutionConfig({
     modelDetail(selection, profile),
   );
   // 档位跟着**当前模型**的能力规则收窄；模型没设或未登记时退回该 CLI 的并集。
-  // 多数 CLI 没有（或还没实测出）思考强度档位，这时 sheet 里只剩一条「跟随执行器」，
+  // 多数 CLI 没有（或还没实测出）智能水平档位，这时 sheet 里只剩一条「跟随执行器」，
   // 点开一个单选项没有意义 —— 整个 trigger 不渲染。已经设过值的仍要渲染：换类型后
   // 留下的旧覆盖得有地方看见和清掉。
   const effortValues = reasoningEffortsFor(selection.agentType, model);
@@ -137,18 +137,32 @@ export function ExecutionConfig({
         <Ionicons name={icon} size={15} color={theme.accent} />
         <Text style={{ color: theme.faint, fontSize: 11, fontFamily: fonts.mono }}>{role}</Text>
       </View>
-      <ConfigTrigger
-        label="执行器"
-        value={selectionLabel(selection, profiles)}
-        onPress={() => setPicker("executor")}
-      />
-      <View style={{ flexDirection: "row", gap: 8 }}>
-        <ConfigTrigger label="模型" value={model || "跟随执行器"} onPress={openModel} />
+      {/* 跟 web 同一副形状：一颗三段胶囊「智能体 · 模型 · 智能水平」，一段管一件事。
+          三段挤一行在手机上偏窄，所以中间那段（模型名最长）多分一点宽，各自单行省略。 */}
+      <View
+        style={{
+          flexDirection: "row",
+          overflow: "hidden",
+          borderRadius: radius.md,
+          borderWidth: effortSupported ? 0 : 1,
+          borderColor: effortSupported ? "transparent" : theme.danger,
+          backgroundColor: theme.panel,
+        }}
+      >
+        <ConfigTrigger
+          label="智能体"
+          value={selectionLabel(selection, profiles)}
+          grow={1}
+          onPress={() => setPicker("executor")}
+        />
+        <ConfigTrigger label="模型" value={model || "跟随执行器"} grow={1.35} divider onPress={openModel} />
         {effortPickable ? (
           <ConfigTrigger
-            label="思考强度"
+            label="智能水平"
             value={reasoningEffort || "跟随执行器"}
             tone={effortSupported ? "normal" : "error"}
+            grow={0.9}
+            divider
             onPress={() => setPicker("effort")}
           />
         ) : null}
@@ -161,13 +175,13 @@ export function ExecutionConfig({
 
       {picker ? (
         <SelectSheet
-          title={picker === "executor" ? `选择${role}` : picker === "model" ? `${role}模型` : `${role}思考强度`}
+          title={picker === "executor" ? `选择${role}` : picker === "model" ? `${role}模型` : `${role}智能水平`}
           options={options}
           value={value}
           onSelect={(next) => {
             if (picker === "executor") {
               const selected = parseSelection(next, profiles, selection);
-              // 换执行器 = 旧的模型/思考强度覆盖作废（那套模型 id 多半在新执行器上
+              // 换执行器 = 旧的模型/智能水平覆盖作废（那套模型 id 多半在新执行器上
               // 不存在）。清空动作放在这一层，三个调用点共用；判定走 shared 的
               // sameExecutor，与 web 和服务端同一条口径。
               if (!sameExecutor(selected, selection)) {
@@ -225,12 +239,18 @@ function ConfigTrigger({
   label,
   value,
   tone = "normal",
+  grow = 1,
+  divider = false,
   onPress,
 }: {
   label: string;
   value: string;
-  /** error = 当前选中的档位这个模型吃不下，红边提醒但仍可点开改。 */
+  /** error = 当前选中的档位这个模型吃不下，红字提醒但仍可点开改。 */
   tone?: "normal" | "error";
+  /** 这一段分多少宽：模型名最长，给它多一点。 */
+  grow?: number;
+  /** 除第一段外都画一道左分隔线——三段是一颗胶囊，不是三颗。 */
+  divider?: boolean;
   onPress: () => void;
 }) {
   const theme = useTheme();
@@ -239,17 +259,17 @@ function ConfigTrigger({
     <Pressable
       onPress={onPress}
       style={({ pressed }) => ({
-        flex: 1,
+        flex: grow,
+        minWidth: 0,
         gap: 3,
-        paddingHorizontal: 11,
+        paddingHorizontal: 10,
         paddingVertical: 9,
-        borderRadius: radius.md,
-        borderWidth: bad ? 1 : 0,
-        borderColor: bad ? theme.danger : "transparent",
-        backgroundColor: pressed ? theme.overlay : theme.panel,
+        borderLeftWidth: divider ? 1 : 0,
+        borderLeftColor: theme.line,
+        backgroundColor: pressed ? theme.overlay : "transparent",
       })}
     >
-      <Text style={{ color: theme.faint, fontSize: 10, fontFamily: fonts.mono }}>{label}</Text>
+      <Text style={{ color: theme.faint, fontSize: 10, fontFamily: fonts.mono }} numberOfLines={1}>{label}</Text>
       <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
         {bad ? <Ionicons name="warning" size={12} color={theme.danger} /> : null}
         <Text
@@ -288,7 +308,7 @@ function effortDetail(selection: ExecutorSelection, profile?: AgentExecutorProfi
   const name = profile?.name ?? `默认 ${selection.agentType}`;
   return profile?.reasoningEffort
     ? `使用「${name}」的 ${profile.reasoningEffort}`
-    : `使用「${name}」的默认强度`;
+    : `使用「${name}」的默认智能水平`;
 }
 
 function selectionValue(selection: ExecutorSelection): string {

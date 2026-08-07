@@ -21,5 +21,6 @@
 
 - 团队“收工”判据只用 shared 的 `isTeamSettled`；收工与被停止是两件事，分别决定时间轴收口和“恢复全组”入口。
 - 执行器候选与可运行判据统一来自 `src/lib/agentAvailability.ts`。已注册 profile、本机探测和 resident 能力是三类独立信息，不能互相代替。
-- 换执行器时模型与思考强度重置为“跟随执行器”。创建面走 `src/composer/executorOverrides.ts`，存量任务走对话框底部的 `src/task-detail/ReplyBox.tsx`，预设走 `src/settings/TeamPresetEditor.tsx`；一致性判断复用 shared 的 `sameExecutor`。
-- 每一处“选谁干活”都是同一副形状：`composer/ExecutorPickerField.tsx` 的两颗胶囊——前面“执行器 · 模型”，后面“思考强度”（模型撑不起已选档位时由后者出提示，不静默改）。新建/派生面板、模式预设、工作流站点（`workflow/StepEditors.tsx`）都用它；工作流多的那档“跟随任务的执行器”是它的 `unsetText`/`onUnset`，不是另一副形状。别再另起下拉，也别给同一份 model/effort 开第二个编辑入口；`TaskInspector` 的执行信息只读展示 `executorRunSummary` 算出的生效值。
+- 换执行器时模型与智能水平重置为“跟随执行器”。创建面走 `src/composer/executorOverrides.ts`，存量任务走对话框底部的 `src/task-detail/ReplyBox.tsx`，预设走 `src/settings/TeamPresetEditor.tsx`；一致性判断复用 shared 的 `sameExecutor`。
+- 每一处“选谁干活”都是同一副形状：`components/RunTargetPicker.tsx` 的**一颗三段胶囊——智能体 · 模型 · 智能水平**（模型撑不起已选档位时由第三段出提示，不静默改）。三段各点各的浮层：只想换模型的人不必重选智能体，只想调档位的人也不必重走选模型；点回同一个智能体不算改动，不清模型。表面统一经 `composer/ExecutorPickerField.tsx` 接入——新建/派生面板、模式预设、duet、派审、工作流站点（`workflow/StepEditors.tsx`）都用它；工作流多的那档“跟随任务的执行器”是它的 `unsetText`/`onUnset`，不是另一副形状。对话框底部那颗是同一组件的 `variant="chip"`。别再另起下拉，也别给同一份 model/effort 开第二个编辑入口；`TaskInspector` 的执行信息只读展示 `executorRunSummary` 算出的生效值。
+- 用户可见文案里“思考强度”一律叫**智能水平**；内部字段名仍是 `reasoningEffort`/`effort`，不要跟着改。

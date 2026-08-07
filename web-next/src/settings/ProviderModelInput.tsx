@@ -21,7 +21,7 @@ export { clearProviderModelCache } from "../lib/modelCatalog.ts";
  * 再点下拉**只剩当前这一个**，看着就是坏的。现在走统一的 Dropdown —— 候选永远是
  * 完整一份，筛选是浮层里另一个输入框的事，手填目录之外的模型名也仍然支持。
  *
- * 传了 `effort` 就在旁边并排一颗独立的思考强度胶囊（EffortPicker）：模型和档位是
+ * 传了 `effort` 就在旁边并排一颗独立的智能水平胶囊（EffortPicker）：模型和档位是
  * 两件事，换模型不顺手把档位改掉；新模型不支持已选档位时由那颗胶囊出提示，让用户
  * 自己决定改哪一边。
  */
@@ -40,7 +40,7 @@ export function ProviderModelInput({
   value: string;
   disabled?: boolean;
   compact?: boolean;
-  /** 传了就在模型旁边并排一颗思考强度胶囊。 */
+  /** 传了就在模型旁边并排一颗智能水平胶囊。 */
   effort?: { value: string; onChange: (value: string) => void };
   onChange: (value: string) => void;
   onCommit?: (value: string) => void;

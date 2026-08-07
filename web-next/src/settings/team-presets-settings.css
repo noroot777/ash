@@ -336,8 +336,7 @@
   line-height: 1.6;
 }
 
-/* 三栏：类型 / 执行器 Profile / 模型（模型下拉里再分第二步选思考强度）。 */
-/* 三格(类型/Profile/模型)已合成 ExecutorPickerField 里的两颗胶囊,这里只剩一项。 */
+/* 三格(类型/Profile/模型)已合成 ExecutorPickerField 里的一颗三段胶囊,这里只剩一项。 */
 .team-preset-role-fields {
   display: grid;
   min-width: 0;

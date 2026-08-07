@@ -77,11 +77,13 @@
 .review-dispatch-heading > button:disabled { cursor: not-allowed; opacity: .55; }
 .review-dispatch-control > form { border-top: .5px solid color-mix(in lch,var(--accent) 16%,var(--line)); }
 .review-dispatch-control fieldset { min-width: 0; margin: 0; border: 0; padding: 9px; }
-/* 一栏：执行器胶囊（浮层里一路选到模型和思考强度）。 */
+/* 一栏：那颗三段胶囊「智能体 · 模型 · 智能水平」。 */
 .review-dispatch-fields { display: grid; gap: 8px; max-width: 420px; }
 .review-dispatch-fields .composer-field { gap: 4px; }
 .review-dispatch-fields .composer-field > span { font-size: 9px; }
 .review-dispatch-fields .composer-field input, .review-dispatch-fields .composer-field select { height: 30px; border-radius: 7px; font-size: 10.5px; }
+/* 这一栏整体比新建面板紧一档，胶囊也跟着收到 30px，别在一片 30 里立一颗 34。 */
+.review-dispatch-fields .composer-field .run-target-picker { height: 30px; }
 .review-dispatch-availability { display: flex; align-items: center; gap: 5px; margin: 7px 0 0; color: var(--faint); font-size: 9.5px; line-height: 1.45; }
 .review-dispatch-availability.is-error { color: var(--red); }
 .review-dispatch-control form footer { display: flex; align-items: center; gap: 8px; margin-top: 9px; }

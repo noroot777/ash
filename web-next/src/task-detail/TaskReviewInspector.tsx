@@ -13,8 +13,7 @@ import {
   SpinnerGap,
   WarningCircle,
 } from "@phosphor-icons/react";
-import { EffortPicker } from "../components/EffortPicker.tsx";
-import { ExecutorModelPicker } from "../components/ExecutorModelPicker.tsx";
+import { RunTargetPicker } from "../components/RunTargetPicker.tsx";
 import { registeredAgentTypes } from "../lib/agentAvailability.ts";
 import { api } from "../lib/api.ts";
 import { useTaskReviewInfo } from "../team/ReviewEvidence.tsx";
@@ -231,33 +230,27 @@ export function TaskReviewInspector({
           <div className="review-inspector__fields">
             <label>
               <span>验证执行器与模型</span>
-              {/* 执行器 · 模型一颗胶囊，思考强度另一颗——跟其它选模型的地方同一形状。 */}
-              <div className="model-effort-row">
-                <ExecutorModelPicker
-                  label="验证执行器与模型"
-                  types={registeredTypes}
-                  profiles={profiles}
-                  selection={{ agentType: selection.agentType, executorId: selection.executorId }}
-                  model={selection.model || null}
-                  emptyText="暂无已注册执行器"
-                  onCommit={(target) => setSelection((current) => {
-                    const next = { agentType: target.agent, executorId: target.executorId };
-                    return {
-                      ...current,
-                      ...next,
-                      model: target.model ?? "",
-                      // 换了执行器才清强度：旧档位在新 CLI 上多半根本不存在。
-                      reasoningEffort: sameExecutor(next, current) ? current.reasoningEffort : "",
-                    };
-                  })}
-                />
-                <EffortPicker
-                  type={selection.agentType}
-                  model={selection.model}
-                  value={selection.reasoningEffort}
-                  onChange={(reasoningEffort) => setSelection((current) => ({ ...current, reasoningEffort }))}
-                />
-              </div>
+              {/* 跟其它选模型的地方同一副形状：一颗三段胶囊「智能体 · 模型 · 智能水平」。 */}
+              <RunTargetPicker
+                label="验证执行器与模型"
+                types={registeredTypes}
+                profiles={profiles}
+                selection={{ agentType: selection.agentType, executorId: selection.executorId }}
+                model={selection.model || null}
+                effort={selection.reasoningEffort}
+                emptyText="暂无已注册执行器"
+                onCommit={(target) => setSelection((current) => {
+                  const next = { agentType: target.agent, executorId: target.executorId };
+                  return {
+                    ...current,
+                    ...next,
+                    model: target.model ?? "",
+                    // 换了执行器才清智能水平：旧档位在新 CLI 上多半根本不存在。
+                    reasoningEffort: sameExecutor(next, current) ? current.reasoningEffort : "",
+                  };
+                })}
+                onEffortChange={(reasoningEffort) => setSelection((current) => ({ ...current, reasoningEffort }))}
+              />
             </label>
           </div>
           {!profilesReady && <p className="review-inspector__notice">正在读取已注册执行器…</p>}

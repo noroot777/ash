@@ -293,92 +293,27 @@
   box-shadow: none;
 }
 
-/* 选执行器那一栏：两颗胶囊并排——「执行器 · 模型」+「思考强度」，点开是同一套
-   `.agent-model-picker` 浮层。浮层挂到 body 上按触发器定位（`is-floating`），因为
-   新建面板的卡片是 overflow: hidden 的，贴着卡片内部弹会被裁掉半截。 */
+/* 选执行器那一栏：一颗三段胶囊「智能体 · 模型 · 智能水平」，每一段点开各自的浮层。
+   浮层挂到 body 上按被点的那一段定位（`is-floating`），因为新建面板的卡片是
+   overflow: hidden 的，贴着卡片内部弹会被裁掉半截。 */
 .composer-executor-picker {
   display: flex;
   min-width: 0;
-  flex-wrap: wrap;
   align-items: center;
-  gap: 6px;
 }
 
-/* 团队那三栏一行摆两颗会很挤：给模型胶囊一个 160px 的理想宽度，栏位窄到放不下时
-   强度那颗自己换行到下一排，而不是把整栏撑破。 */
-.composer-executor-picker > .executor-model-picker {
-  min-width: 0;
-  flex: 1 1 160px;
-}
-
-.composer-executor-picker > .effort-picker {
-  flex: 0 0 auto;
-}
-
-/* 新建面板里所有控件统一 34px，两颗胶囊也得跟着，否则一行里高低不齐。 */
-.composer-field .effort-picker-trigger {
-  height: 34px;
-}
-
-.composer-field .composer-executor-trigger {
-  max-width: 100%;
-  min-width: 0;
-  gap: 6px;
-  height: 34px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--panel);
-  padding: 0 10px;
-  box-shadow: none;
-}
-
-.composer-field .composer-executor-trigger:hover:not(:disabled),
-.composer-field .composer-executor-trigger[aria-expanded="true"] {
-  border-color: var(--accent);
-  box-shadow: none;
-}
-
-.composer-executor-trigger > svg:first-child {
-  flex: 0 0 auto;
-  color: var(--muted);
-}
-
-/* 胶囊里四段（图标 / CLI / Profile 名 / 模型）都得能被压窄并自己省略号，否则
-   任意一段变长都会把整颗胶囊顶出所在栏。 */
-.composer-executor-trigger > b {
-  min-width: 0;
-  flex: 0 1 auto;
-  overflow: hidden;
-  color: var(--ink);
-  font-size: 12px;
-  font-weight: 600;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.composer-executor-trigger > span {
-  min-width: 0;
-  max-width: 40%;
-  flex: 0 1 auto;
-  overflow: hidden;
-  color: var(--faint);
-  font-size: 10.5px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.composer-executor-trigger > code {
+.composer-executor-picker > .run-target-picker {
   min-width: 0;
   flex: 1;
-  overflow: hidden;
-  color: var(--muted);
-  font: 10.5px var(--font-mono);
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
-.composer-executor-trigger > .ui-select-caret {
-  flex: 0 0 auto;
+/* 新建面板里所有控件统一 34px，这颗胶囊也得跟着，否则一行里高低不齐。 */
+.composer-field .run-target-picker {
+  height: 34px;
+}
+
+.composer-field .run-target-picker:hover {
+  border-color: var(--accent);
 }
 
 .composer-field-run.is-error {

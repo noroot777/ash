@@ -3,9 +3,9 @@
 // 设计上刻意不做成「选中这一站 → 右边面板 → 找到那一行」的三步走：一条几站的线，
 // 绝大多数改动应该是一次点击。所以每种字段的编辑器都做得尽量短，能一眼看完。
 //
-// 例外是执行器那一组（谁来干 / 什么模型 / 多大强度）：它们本来就是联动的一组，
+// 例外是执行器那一组（谁来干 / 什么模型 / 多高的智能水平）：它们本来就是联动的一组，
 // 拆成三个弹层反而更烦，所以点其中任意一颗都开这一个编辑器。这一组不自己画控件，
-// 直接用全站统一的那副形状（composer/ExecutorPickerField.tsx 的两颗胶囊）。
+// 直接用全站统一的那副形状（composer/ExecutorPickerField.tsx 的三段胶囊）。
 import { useEffect, useRef } from "react";
 import type { FailPolicy, WorkflowStep } from "@harness/shared/workflow";
 import { FAIL_MODES, FAIL_MODE_LABELS, MAX_FAIL_ROUNDS } from "@harness/shared/workflow";
@@ -126,9 +126,9 @@ export function ExecutorEditor({
 
   return (
     <div className="wf-pop-form">
-      {/* 跟新建面板、模式预设同一副形状的两颗胶囊，多一档「跟随任务的执行器」。 */}
+      {/* 跟新建面板、模式预设同一副形状的三段胶囊，多一档「跟随任务的执行器」。 */}
       <ExecutorPickerField
-        label="谁来干 · 用什么模型"
+        label="智能体 · 模型 · 智能水平"
         value={profile ? executorValue({ agentType: profile.type, executorId: profile.id }) : ""}
         types={types}
         profiles={catalog.profiles}

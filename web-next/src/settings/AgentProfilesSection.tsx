@@ -230,7 +230,7 @@ export function AgentProfilesSection({
           </div>
         )}
         <div className="settings-card-foot agent-profile-foot">
-          <span>供应商决定账号与模型目录；任务仍可逐个覆盖执行器、模型和思考强度。</span>
+          <span>供应商决定账号与模型目录；任务仍可逐个覆盖执行器、模型和智能水平。</span>
         </div>
       </div>
       {addingSsh && (

@@ -10,7 +10,7 @@ import type { ModelGroup } from "../lib/modelCatalog.ts";
 /**
  * 选择器负责的部分：派谁、用哪个执行器、跑哪个模型。
  *
- * **思考强度不在里面**——它是并排的另一颗胶囊（components/EffortPicker.tsx），
+ * **智能水平不在里面**——它是胶囊的第三段（components/EffortPicker.tsx），
  * 换模型不顺手改档位，改档位也不用重走一遍选模型。
  */
 export type AgentModelSelection = {
@@ -19,9 +19,9 @@ export type AgentModelSelection = {
   model: string | null; // null = 跟随执行器自己的模型
 };
 
-/** 一次 @ 选择的最终结果：上面那三项，加上单独选的思考强度。 */
+/** 一次 @ 选择的最终结果：上面那三项，加上单独选的智能水平。 */
 export type MentionTarget = AgentModelSelection & {
-  reasoningEffort: string | null; // null = 跟随执行器自己的思考强度
+  reasoningEffort: string | null; // null = 跟随执行器自己的智能水平
 };
 
 export type AgentRow = {

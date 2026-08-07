@@ -137,7 +137,7 @@ export function preferredExecutor(
 }
 
 /**
- * 该选择**实际会跑**的模型与思考强度。
+ * 该选择**实际会跑**的模型与智能水平。
  *
  * Profile 名字里常常写着一个模型（`codex@cpa·gpt-5.6-sol`），但预设/任务级覆盖可以
  * 把它换成别的（存进 `*Model` / `*ReasoningEffort`）。只显示 Profile 名 + Profile

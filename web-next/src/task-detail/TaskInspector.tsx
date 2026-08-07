@@ -340,7 +340,7 @@ export function TaskInspector({
           <InspectorRow label="模型">
             <span>{run.model ?? "跟随执行器"}</span>
           </InspectorRow>
-          <InspectorRow label="思考强度">
+          <InspectorRow label="智能水平">
             <span>{run.effort ? (REASONING_EFFORT_DETAIL[run.effort] ? `${run.effort}（${REASONING_EFFORT_DETAIL[run.effort]}）` : run.effort) : "跟随执行器"}</span>
           </InspectorRow>
           {availabilityMessage && <p className="task-inspector-note">{availabilityMessage}</p>}

@@ -208,7 +208,7 @@ export function ReviewDispatchControl({
               </p>
             )}
             <footer>
-              <span>模型与思考强度留空时跟随所选执行器；换执行器就是换一双眼睛来验同一份产物。</span>
+              <span>模型与智能水平留空时跟随所选执行器；换执行器就是换一双眼睛来验同一份产物。</span>
               <button type="submit" disabled={!canSend}>
                 {dispatching && <SpinnerGap size={12} className="is-spinning" />}
                 {dispatching ? "启动中…" : `确认开始第 ${nextRound} 轮`}

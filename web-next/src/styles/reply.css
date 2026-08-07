@@ -21,19 +21,13 @@
 .scheduled-send-panel button:disabled { opacity: .42; }
 .reply-schedule-button { display: grid; width: 29px; height: 29px; place-items: center; border: 0; border-radius: 7px; background: transparent; color: var(--muted); }
 .reply-schedule-button:hover:not(:disabled) { background: var(--raised); color: var(--ink); }
-/* 对话框底部那颗「智能体 · 模型」胶囊：常态显示任务当前配置，@ 召唤后高亮成强调色。 */
-.task-reply-chip { display: inline-flex; height: 24px; max-width: 260px; align-items: center; gap: 5px; border: 1px solid var(--line2); border-radius: 999px; background: var(--overlay); padding: 0 7px 0 8px; color: var(--muted); font-size: 10px; }
-.task-reply-chip:hover:not(:disabled) { border-color: color-mix(in lch, var(--accent) 40%, var(--line2)); color: var(--ink); }
-.task-reply-chip:disabled { opacity: .5; }
-.task-reply-chip > b { color: var(--ink); font-family: var(--font-mono); font-size: 10.5px; font-weight: 550; }
-.task-reply-chip > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); }
-.task-reply-chip > svg:last-child { flex: 0 0 auto; color: var(--faint); }
-.task-reply-chip.is-summoned { border-color: color-mix(in lch, var(--accent) 45%, transparent); background: color-mix(in lch, var(--accent) 10%, transparent); }
-.task-reply-chip.is-summoned > b { color: var(--accent); }
+/* 对话框底部那颗胶囊本体在 controls.css（`.run-target-picker.is-chip`）；这里只剩
+   「取消 @ 召唤」那颗小圆叉，它挂在胶囊外面，不属于三段中的任何一段。 */
 .task-reply-chip-reset { display: grid; width: 19px; height: 19px; place-items: center; border: 0; border-radius: 50%; background: transparent; color: var(--faint); }
 .task-reply-chip-reset:hover { background: var(--raised); color: var(--ink); }
 
-/* 三步选择器：智能体 → 模型（按供应商分块）→ 思考强度。 */
+/* 选模型的浮层：从智能体那一段点开是「智能体 → 模型」两步，从模型那一段点开直接
+   落到模型这一步（按供应商分块）。智能水平是胶囊的第三段，不在这张浮层里。 */
 .agent-model-picker {
   position: absolute;
   z-index: 27;
@@ -103,7 +97,7 @@
 .agent-model-picker-rows button > b { min-width: 0; overflow: hidden; color: var(--ink); font-family: var(--font-mono); font-size: 11px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
 .agent-model-picker-rows button > span { min-width: 0; flex: 1; overflow: hidden; color: var(--faint); font-size: 9.5px; text-align: right; text-overflow: ellipsis; white-space: nowrap; }
 .agent-model-picker-rows button > svg { flex: 0 0 auto; color: var(--faint); }
-/* 第三步（思考强度）的面包屑里回显上一步选定的模型。 */
+/* 面包屑里回显上一步选定的智能体/模型名，等宽字体跟列表里的写法对齐。 */
 .agent-model-picker-crumb > code { font-family: var(--font-mono); font-size: 9.5px; }
 .agent-model-picker > footer { border-top: 0.5px solid var(--line); padding: 5px 9px 6px; color: var(--faint); font-size: 9px; }
 .team-reply-shell { position: relative; }

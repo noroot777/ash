@@ -18,9 +18,9 @@ import { useDismissable } from "../lib/useDismissable.ts";
  * 浮层 portal 到 body 且 fixed 定位（表格/卡片的 overflow 裁不到它），候选永远是
  * 完整的一份，筛选是**另一个**输入框的事。
  *
- * 这里**只选一个值**。曾经有过一个 `step2`（选完模型接着在同一个浮层里选思考强度），
+ * 这里**只选一个值**。曾经有过一个 `step2`（选完模型接着在同一个浮层里选智能水平），
  * 已经撤掉：模型和档位是两件独立的事，绑成一个下拉会逼「只想改档位」的人重走一遍选
- * 模型。现在档位是并排的另一颗胶囊，见 components/EffortPicker.tsx。
+ * 模型。现在档位是胶囊的第三段，见 components/EffortPicker.tsx。
  */
 
 export type DropdownOption = {

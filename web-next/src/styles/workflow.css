@@ -403,9 +403,9 @@
 
 .wf-pop-form { display: flex; flex-direction: column; gap: 6px; }
 
-/* 执行器那一组用的是全站统一的两颗胶囊（composer/ExecutorPickerField.tsx），比原来
+/* 执行器那一组用的是全站统一的三段胶囊（composer/ExecutorPickerField.tsx），比原来
    的下拉宽：弹层按内容取宽，这里给个下限，免得模型名一长就折成三行。 */
-.wf-pop-form .composer-field { min-width: 244px; }
+.wf-pop-form .composer-field { min-width: 320px; }
 
 .wf-pop-row {
   display: flex;
