@@ -640,7 +640,7 @@ api.delete("/llm-providers/:id", async (c) => {
 mountOpenAiConverterRoutes(api);
 mountProviderTestRoutes(api);
 
-// ── queues (顺序依赖原语,DESIGN-scheduling.md §1) ─────────────────────────────
+// ── queues (顺序依赖原语) ────────────────────────────────────────────────────
 // 端点实现与 helper 都在 ./queues.ts(routes.ts 已经很长,队列语义集中一处更好改)。
 mountQueueRoutes(api);
 mountDuetIterationRoutes(api);

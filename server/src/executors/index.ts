@@ -17,7 +17,7 @@ async function defaultProfile(type: AgentType): Promise<AgentRow | null> {
   return rows.find((r) => r.isDefault) ?? rows[0] ?? null;
 }
 
-// Resolve an AgentType to a concrete executor (DESIGN.md §5: two-level model —
+// Resolve an AgentType to a concrete executor (two-level model:
 // you pick a *type*, the registry resolves the default executor profile under
 // it, including model + local/ssh target). Falls back to a built-in local
 // default when no profile is registered.

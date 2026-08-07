@@ -1,5 +1,5 @@
 // 队列(queue)这一层的全部 HTTP 端点 + 共享 helper。
-// queue 是有序的 task id 列表(顺序依赖原语,DESIGN-scheduling.md §1):前一个
+// queue 是有序的 task id 列表(顺序依赖原语):前一个
 // done/canceled/failed 后,后一个自动启动。
 // 不变量:
 //   ① 同一 queue 内所有 task 必须在同一个 group(或都无 group)——应用层校验;

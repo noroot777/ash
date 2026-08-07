@@ -17,9 +17,10 @@ import { normalizeWorkflowDef, resolveWorkflowFromList } from "@harness/shared/w
 import {
   BUILTIN_WORKFLOWS, DEFAULT_WORKFLOW_KEY, builtinWorkflowDef, isBuiltinKey,
 } from "@harness/shared/workflow-presets";
+import { firstAnchor } from "@harness/shared/workflow-policy";
 import { getAppSettings, patchAppSettings } from "./app-settings.js";
 import { db } from "./db/index.js";
-import { projects, workflows } from "./db/schema.js";
+import { projects, tasks, workflows } from "./db/schema.js";
 import { id, now } from "./util.js";
 
 type Row = typeof workflows.$inferSelect;
@@ -50,6 +51,36 @@ function readDef(raw: string): WorkflowDef | null {
 // 或过不了闸的，当成「这个任务没有线」，于是它走老路子——绝不能让一条坏快照把任务卡死。
 export function taskWorkflowDef(raw: string | null | undefined): WorkflowDef | null {
   return raw ? readDef(raw) : null;
+}
+
+/**
+ * 「这条线此刻正停在『让 AI 干活』这一站，等 agent 确认完成」——真就返回这条线的定义。
+ *
+ * 两处问的是同一个问题，所以只能有一份实现：起跑前 orchestrator 拿它决定要不要提醒
+ * agent「线在等你确认」，结算后 turn-baseline 拿它决定要不要给用户写那句「线停在这儿了」。
+ * 一处一份的那一版当场就说了假话：喂给 agent 的那句漏掉了游标判断，而 verify_failed
+ * 那一档是**故意不清账**的（同一版在修，见 turn-baseline 的例外②），游标还停在验证站上，
+ * 嘴上却写着「停在让 AI 干活」。
+ *
+ * 现读现判、不接受外面传进来的游标：清账（`recordTurnBaseline`）就排在回合开头、prompt
+ * 拼出来之前，回合开头读到的那个游标是**清账前**的旧值。
+ *
+ * 三个前提缺一不可：线上真有「让 AI 干活」这一站、这条线还有后续的站（只有一站的线没什么
+ * 可停的）、游标此刻确实停在那一站。
+ */
+export async function railStalledAtRun(taskId: string): Promise<WorkflowDef | null> {
+  const row = (await db
+    .select({ workflow: tasks.workflow, workflowAt: tasks.workflowAt })
+    .from(tasks)
+    .where(eq(tasks.id, taskId))).at(0);
+  if (!row) return null;
+  const def = taskWorkflowDef(row.workflow);
+  if (!def || def.steps.length < 2) return null;
+  const run = firstAnchor(def, "run");
+  if (!run) return null;
+  // 游标为空 = 还没起跑，等价于停在第一站。
+  if ((row.workflowAt ?? run.id) !== run.id) return null;
+  return def;
 }
 
 function rowItem(row: Row, builtinName?: string, builtinDesc?: string): WorkflowItem {

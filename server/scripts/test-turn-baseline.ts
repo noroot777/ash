@@ -27,7 +27,7 @@
 // Run: npm -w server run test:turn-baseline
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -43,13 +43,15 @@ git("add", "-A");
 git("commit", "-qm", "seed");
 
 const { db, ensureSchema } = await import("../src/db/index.js");
-const { projects, tasks } = await import("../src/db/schema.js");
+const { projects, sessions, tasks } = await import("../src/db/schema.js");
 const { eq } = await import("drizzle-orm");
 const { RUNS_DIR } = await import("../src/paths.js");
+const { sessionTranscriptPath } = await import("../src/transcript.js");
 const { reopenAcceptedStage, setTaskStage } = await import("../src/task-stage.js");
 const { recordTurnBaseline, reconcileTurnBaseline } = await import("../src/turn-baseline.js");
+const { railStalledAtRun } = await import("../src/workflows.js");
 
-const IDS = ["tb-changed", "tb-asked", "tb-restaged", "tb-verify-failed", "tb-unconfirmed", "tb-legacy", "tb-shell01"];
+const IDS = ["tb-changed", "tb-asked", "tb-restaged", "tb-verify-failed", "tb-unconfirmed", "tb-legacy", "tb-clean", "tb-midline", "tb-shell01"];
 
 try {
   await ensureSchema();
@@ -94,6 +96,24 @@ try {
     });
   }
   const row = async (id: string) => (await db.select().from(tasks).where(eq(tasks.id, id))).at(0)!;
+
+  // 时间线要落到**某个 session 行**上（appendTaskTimeline 找不到就静默返回 false），
+  // 所以断言「有没有写那句话」的用例必须先给任务开一条会话。
+  async function openSession(taskId: string): Promise<void> {
+    await db.insert(sessions).values({
+      id: `${taskId}-sess`,
+      taskId,
+      role: "primary",
+      agentType: "claude",
+      executor: "claude",
+      target: "claude",
+      startedAt: at,
+    });
+  }
+  const timeline = (taskId: string) => {
+    const path = sessionTranscriptPath(taskId, `${taskId}-sess`);
+    return existsSync(path) ? readFileSync(path, "utf8") : "";
+  };
 
   // ── ① 改了代码 → 账本整个清干净，而且**清在回合开头** ────────────────────
   // 这条**有意不走摘牌**：真实路径下 accepted/merged 早在回合开头就被摘了，这里留着牌子，
@@ -204,7 +224,62 @@ try {
   assert.equal(legacy.verifyStationRounds, 0, "补清同样是四样一起清");
   assert.equal(legacy.stage, null, "同上");
 
-  // ── ⑤ 空壳工作间没被动过 → 拆屋 ──────────────────────────────────────────
+  // ── ⑤ 账本本来就干净 → 那句「线停在起点」照写 ─────────────────────────────
+  // 病根（2026-08-07，实测任务 1rojF5Tjau91）：这句说明原先挂在「这一轮清到了账」上
+  // （`cleared && !confirmedDone`）。可连着续聊第二轮时，回合开头账本本来就是干净的
+  // ——游标已经在 s1、牌子上一轮就被摘走了——`resetWorkflowLedger` 返回 null，于是
+  // 一个字都不写。而洼地一模一样存在：agent 改完代码只调了 report_stage 就收工，线的
+  // 推进只认 complete_task，游标停在第一站不动。用户看到的是「怎么第一步就停了」，
+  // 时间线上没有任何线索。判据必须是「改了代码 + 没确认 + 游标还停在 run 站」。
+  await makeSettledTask("tb-clean", null);
+  await db.update(tasks)
+    .set({ workflowAt: "s1", verifyStationRounds: 0, reviewStep: null })
+    .where(eq(tasks.id, "tb-clean"));
+  await openSession("tb-clean");
+  await recordTurnBaseline("tb-clean", repo, false);
+  assert.equal(
+    (await row("tb-clean")).workflowAt, "s1",
+    "前置条件：账本本来就是干净的（这一轮开头没什么可清，resetWorkflowLedger 返回 null）",
+  );
+  writeFileSync(join(repo, "second-follow-up.txt"), "changed again\n");
+  await reconcileTurnBaseline("tb-clean", false); // 改了代码，但没调 complete_task
+
+  assert.match(
+    timeline("tb-clean"),
+    /停在「让 AI 干活」这一站/,
+    "账本干净不代表没掉进洼地 —— 线停在起点等确认，这句必须照写，否则用户只看到任务不动",
+  );
+
+  // ── ⑤′ 线早走过 run 站了 → 这句话是错的，不许写 ───────────────────────────
+  // 上一条放宽了判据，这条守住另一头：游标不在 run 站时说「停在让 AI 干活」是假消息。
+  await makeSettledTask("tb-midline", null); // workflowAt 默认就是 s2
+  await openSession("tb-midline");
+  await recordTurnBaseline("tb-midline", repo, false);
+  writeFileSync(join(repo, "midline.txt"), "changed\n");
+  await db.update(tasks).set({ workflowAt: "s2" }).where(eq(tasks.id, "tb-midline")); // 清账搬到 s1 后再放回
+  await reconcileTurnBaseline("tb-midline", false);
+
+  assert.doesNotMatch(
+    timeline("tb-midline"),
+    /停在「让 AI 干活」这一站/,
+    "游标不在 run 站，线早走过去了 —— 这句是假消息",
+  );
+
+  // ── ⑤″ 喂给 agent 的那句提醒跟上面两条同源 ────────────────────────────────
+  // orchestrator 起跑前也要问「线是不是停在 run 站等确认」，问的必须是同一个判据 ——
+  // 它自己写一份的那一版漏了游标判断，verify_failed（故意不清账、游标留在验证站）的
+  // 轮次上就会对 agent 说「它停在让 AI 干活这一站」，是假话。
+  assert.ok(
+    await railStalledAtRun("tb-clean"),
+    "游标停在 s1 → 提醒 agent「线在等你确认」是真话",
+  );
+  assert.equal(
+    await railStalledAtRun("tb-midline"),
+    null,
+    "游标在 s2 → 一个字都不能对 agent 说「停在让 AI 干活」",
+  );
+
+  // ── ⑥ 空壳工作间没被动过 → 拆屋 ──────────────────────────────────────────
   const shellId = "tb-shell01";
   const shellPath = join(repo, ".worktrees", shellId);
   const shellBranch = `harness/${shellId.slice(0, 8)}`;
@@ -241,7 +316,8 @@ try {
 
   console.log(
     "turn baseline: 开头就清账 / 改了保持清空 / 只问则原样放回+牌子挂回 / 新结论不被盖 /"
-    + " 验证没过不清零 / 没确认也清账 / 老基线补清 / 空壳拆屋，八条通过",
+    + " 验证没过不清零 / 没确认也清账 / 老基线补清 / 停在起点要说清 / 走过了就不说 /"
+    + " 提醒 agent 同一判据 / 空壳拆屋，十一条通过",
   );
 } finally {
   for (const id of IDS) rmSync(join(RUNS_DIR, id), { recursive: true, force: true });

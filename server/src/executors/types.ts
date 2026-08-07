@@ -18,7 +18,7 @@ export interface RunOpts {
 
 // A planned invocation: the resolved session id + exact command, plus a live
 // event stream. The orchestrator records sessionId/commandLine for traceability
-// (DESIGN.md §13) before/while consuming the stream. `kill` terminates the
+// before/while consuming the stream. `kill` terminates the
 // underlying subprocess (manual stop) — the stream then ends like a normal exit.
 export interface RunHandle {
   sessionId: string;
@@ -74,7 +74,7 @@ export interface ExecutorBuildOpts {
   relay?: RelayConfig;
 }
 
-// Hand-rolled adapter (DESIGN.md §7/§10: no Vercel AI SDK). Each CLI type gets
+// Hand-rolled adapter (no Vercel AI SDK). Each CLI type gets
 // one implementation that knows its flags, stream-json format, and resume scheme.
 export interface AgentExecutor {
   readonly type: AgentType;

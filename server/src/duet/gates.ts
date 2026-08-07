@@ -1,6 +1,6 @@
 import type { GateAction } from "@harness/shared";
 
-// In-process HITL gate rendezvous (DESIGN.md §7). The duet orchestrator awaits
+// In-process HITL gate rendezvous. The duet orchestrator awaits
 // a human decision; the API resolves it. Lives in the long-running server.
 // (M4: in-memory only — a server restart abandons an open gate. Acceptable for now.)
 const pending = new Map<string, (a: GateAction) => void>();

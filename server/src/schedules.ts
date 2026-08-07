@@ -50,8 +50,8 @@ const sameMinute = (a: string, b: Date) => {
   return da.getFullYear() === b.getFullYear() && da.getMonth() === b.getMonth() && da.getDate() === b.getDate() && da.getHours() === b.getHours() && da.getMinutes() === b.getMinutes();
 };
 
-// Fire a scheduled task = start a FRESH run (DESIGN.md §9: a schedule RE-RUNS its
-// task). Never resume the prior CLI session: a recurring cron must open a new run
+// Fire a scheduled task = start a FRESH run (a schedule RE-RUNS its task).
+// Never resume the prior CLI session: a recurring cron must open a new run
 // each tick, not 继续 yesterday's conversation — interruption-recovery (resume) is
 // the manual run/retry/group path's job, and "continue at a future time" is what
 // scheduledMessages (定时发消息 → continueTask) is for. (See the bug where a daily
@@ -103,7 +103,7 @@ export async function tick() {
 
 // Catch-up on startup: missed one-shots (at < now, never fired) fire once via the
 // normal tick. Missed cron runs are NOT backfilled — only the next match fires
-// (DESIGN.md §9: recurring only runs the most recent, no pile-up).
+// (recurring only runs the most recent, no pile-up).
 export function startScheduler(intervalMs = 30_000) {
   // 先回收上一个进程留下的投递租约,再跑第一次 tick:被重启掐在「已认领、还没送到」
   // 当口的排队/定时消息,靠这两步在开机后立刻补发出去(见 pending-messages.ts 的租约一节)。

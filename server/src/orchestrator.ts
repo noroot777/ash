@@ -2,6 +2,7 @@ import { mkdirSync, createWriteStream, existsSync } from "node:fs";
 import { join } from "node:path";
 import { eq, inArray } from "drizzle-orm";
 import type { AgentType, TaskStatus } from "@harness/shared";
+import { STEP_LABELS } from "@harness/shared/workflow";
 import { db } from "./db/index.js";
 import { tasks, projects, sessions } from "./db/schema.js";
 import { bus } from "./bus.js";
@@ -24,6 +25,7 @@ import { reviewProtocolFor, reviewReminderFor, verifyReminderFor } from "./revie
 import { peerNoticeFor } from "./peer-context.js";
 import { recordTurnBaseline } from "./turn-baseline.js";
 import { recordTurnStart } from "./turn-output.js";
+import { railStalledAtRun } from "./workflows.js";
 
 
 // Single tasks run headless — nobody can answer a mid-run prompt. Tell the agent
@@ -88,9 +90,41 @@ const COMPLETION_REMINDER = (taskId: string, sharedTeamWorker: boolean, reviewTa
 // 续聊(follow-up)回合的尾巴:任务早就到终态了,这一轮是「完成之后的对话」,
 // 不该拿严格完成协议吓唬 agent(不确认就 failed)—— 这一轮不确认,任务状态原样
 // 不动。只有它真把任务推进到新的完成时才需要确认。
-const FOLLOW_UP_REMINDER = (taskId: string, from: string, sharedTeamWorker: boolean, reviewTask: boolean) =>
+const FOLLOW_UP_REMINDER = (
+  taskId: string, from: string, sharedTeamWorker: boolean, reviewTask: boolean, rail: string,
+) =>
   !STRICT_DONE_PROTOCOL ? "" :
-  `\n\n(harness:这是任务在「${FOLLOW_UP_LABEL[from] ?? from}」之后的续聊,taskId=${taskId}。任务状态不会因为本回合而改变,本回合不需要 complete_task;只有当你在这一轮把任务推进到了新的完成状态时,才调用 complete_task(taskId="${taskId}")确认。${ACCEPTANCE_REMINDER(taskId, sharedTeamWorker, reviewTask)})`;
+  `\n\n(harness:这是任务在「${FOLLOW_UP_LABEL[from] ?? from}」之后的续聊,taskId=${taskId}。任务状态不会因为本回合而改变,本回合不需要 complete_task;只有当你在这一轮把任务推进到了新的完成状态时,才调用 complete_task(taskId="${taskId}")确认。${rail}${ACCEPTANCE_REMINDER(taskId, sharedTeamWorker, reviewTask)})`;
+
+// 「你这一轮要是改了代码,这条线在等你确认」—— 只在续聊回合、且任务身上真挂着一条
+// 还有后续站的线时追加。
+//
+// 补它是因为上面那句「不需要 complete_task」在有线的任务上会把 agent 引进一个洼地:
+// 用户续聊说「改成 XXX」,agent 改完、按验收辅路那句调了 report_stage(awaiting_acceptance)
+// 就收工 —— 它以为已经交给人工验收了,可**线的推进只认 complete_task**
+// (`handleTaskSettlement` 的 `confirmedDone && status === "done"`),于是新一版代码躺在
+// 那儿,预览没开、人工关口没到,游标停在「让 AI 干活」原地不动,用户看到的是「怎么第一步
+// 就停了」(实测任务 1rojF5Tjau91)。改代码这一档本来就属于「把任务推进到了新的完成状态」,
+// 只是没人对 agent 明说过 —— 它得同时知道这条线存在、以及不确认的后果是线不走。
+const FOLLOW_UP_RAIL_NOTE = (taskId: string, summary: string) =>
+  `\n本任务身上挂着一条执行链(${summary}),它停在「让 AI 干活」这一站等你确认:` +
+  `你这一轮**改了代码**就属于上面说的「推进到了新的完成状态」,做完请调 complete_task(taskId="${taskId}")确认,` +
+  `后面的站才会自己往下跑;只调 report_stage 不会推动这条线。纯回答问题、没动代码则不用确认。`;
+
+/**
+ * 线上除了「让 AI 干活」还有别的站、且游标此刻真停在那一站时,给续聊回合补一句上面那段。
+ *
+ * 判据本体在 `railStalledAtRun`,跟结算后写给用户的那句同源 —— 各写各的那一版里,这头
+ * 漏了游标判断,验证打回(verify_failed)的轮次上就会对 agent 说假话:那一档故意不清账、
+ * 游标还停在验证站,提醒里却写着「停在让 AI 干活」。
+ *
+ * 必须排在 `recordTurnBaseline` 之后:清账会把游标搬回起点,搬之前读到的是旧值。
+ */
+async function followUpRailNote(taskId: string): Promise<string> {
+  const def = await railStalledAtRun(taskId);
+  if (!def) return "";
+  return FOLLOW_UP_RAIL_NOTE(taskId, def.steps.map((step) => STEP_LABELS[step.kind]).join(" → "));
+}
 
 // The task's worktree was gone AND its branch with it, so we rebuilt an empty one.
 // The CLI conversation lives outside the worktree (~/.claude/projects/<escaped
@@ -187,7 +221,7 @@ function wakeInterruptedLeads(teamIds: string[]): void {
 }
 
 // M1: execute a single-agent task in the project's working dir, stream output over
-// SSE, and persist a session credential (DESIGN.md §1/§4/§12/§13).
+// SSE, and persist a session credential.
 export async function runTask(taskId: string): Promise<void> {
   // 团队任务(§Team)走常驻调度台,不占单飞锁 —— 它的「一次运行」是整段常驻,
   // 不是一个回合。放在最前面,于是 /tasks/:id/run、retry、queue 推进都自动生效。
@@ -529,6 +563,8 @@ export async function continueTask(
     // 一次都不会知道（正是 2026-08-04 那个「claude 自己考古 codex 会话」的现场）。
     // prev 必须是**更新 session 行之前**的快照：锚点取的 endedAt 会在 resume 时被清空。
     const peerNotice = peerNoticeFor({ taskId, self: agent, all, prev });
+    // 验证轮/审查任务不提这条线：那一轮的产出是结论，不是新一版代码。
+    const railNote = followUpFrom && !verifying ? await followUpRailNote(taskId) : "";
     const prompt =
       (invited ? COLLAB_INVITE : "") +
       (invited && task.body.trim() ? TASK_BRIEF(task.body) : "") +
@@ -536,7 +572,7 @@ export async function continueTask(
       userTurnText +
       (workspaceReset ? WORKSPACE_RESET(cwd) : "") +
       (followUpFrom
-        ? FOLLOW_UP_REMINDER(taskId, followUpFrom, sharedTeamWorker, verifying)
+        ? FOLLOW_UP_REMINDER(taskId, followUpFrom, sharedTeamWorker, verifying, railNote)
         : COMPLETION_REMINDER(taskId, sharedTeamWorker, verifying)) +
       (reviewReminder ? `\n${reviewReminder}` : "");
     const turnStart = now();

@@ -273,7 +273,7 @@ export const scheduledMessages = sqliteTable("scheduled_messages", {
 
 // Queue items: ordered list of tasks where each task waits for the one
 // immediately before it in the queue. Replaces the legacy depends_on /
-// resume_depends_on pointer model. See DESIGN-scheduling.md.
+// resume_depends_on pointer model.
 //
 // Invariants (enforced at application layer, NOT DB constraints):
 //   - All tasks in one queue belong to the same group (or all have null group_id)

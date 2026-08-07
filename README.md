@@ -1,8 +1,8 @@
 # Harness
 
-编排本地 / 远程编程智能体（claude / codex / …）的控制台。设计见 [DESIGN.md](./DESIGN.md)。
+编排本地 / 远程编程智能体（claude / codex / …）的控制台。
 
-## 技术栈（DESIGN.md §11）
+## 技术栈
 
 单后端进程（Hono）托管 Vite + React + Tailwind 构建的 SPA；SQLite（libsql 驱动）+ Drizzle；SSE 实时；一体单仓。
 
@@ -32,4 +32,4 @@ npm start        # 后端在 :4317 同时托管前端 dist 与 API
 
 ## 里程碑
 
-见 DESIGN.md §14。当前：**M0 项目骨架** ✅ → M1 单 agent 垂直切片。
+M0 项目骨架 ✅ → M1 单 agent 垂直切片。

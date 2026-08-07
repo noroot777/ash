@@ -1,0 +1,12 @@
+#!/bin/sh
+# 「加规则要先经用户同意」的闸。挂 commit-msg 而不是 pre-commit,是因为判断要用到
+# commit message(授权口令写在那儿),而 pre-commit 跑的时候 message 还没生成。
+#
+# 判断与文案都在 scripts/rule-guard.mjs。
+#
+# 换机器/新克隆后需要一次性执行：git config core.hooksPath .githooks
+# （config 不随 clone 传播,所以这个 hook 每次都会 echo 一行,静默失效时你能立刻发现。）
+
+echo "[commit-msg] 约定文件规则闸"
+node scripts/rule-guard.mjs "$1" || exit 1
+exit 0
