@@ -109,7 +109,7 @@ export function DuetHandoffModal({
   return (
     <div className="duet-handoff-scrim" onMouseDown={(event) => event.target === event.currentTarget && !busy && onClose()}>
       <section className="duet-handoff-modal" role="dialog" aria-modal="true" aria-labelledby="duet-handoff-title">
-        <header><span><UsersThree size={17} weight="fill" /></span><div><h2 id="duet-handoff-title">接力成团</h2><p>辩题、结论和完整转写路径会一并交给新团队。</p></div></header>
+        <header><span><UsersThree size={17} weight="fill" /></span><div><h2 id="duet-handoff-title">接力成团</h2><p>议题、共同方案和完整转写路径会一并交给新团队。</p></div></header>
         <div className="duet-handoff-grid">
           <ExecutorPickerField label="调度者" value={lead.profile} types={leadTypes} profiles={leadProfiles} knownProfiles={profiles} fallbackType={TEAM_DEFAULTS.lead} override={lead} onChange={(profile) => setLead({ profile, model: "", effort: "" })} onOverrideChange={(patch) => setLead((current) => ({ ...current, ...patch }))} />
           <ExecutorPickerField label="默认执行者" value={worker.profile} types={workerTypes} profiles={profiles} knownProfiles={profiles} fallbackType={TEAM_DEFAULTS.worker} override={worker} onChange={(profile) => setWorker({ profile, model: "", effort: "" })} onOverrideChange={(patch) => setWorker((current) => ({ ...current, ...patch }))} />

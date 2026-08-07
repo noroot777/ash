@@ -1,4 +1,5 @@
 import { mkdirSync, createWriteStream, appendFileSync, readFileSync, writeFileSync } from "node:fs";
+import { normalizeDuetConfig } from "@harness/shared/duet";
 import { join } from "node:path";
 import { eq, sql } from "drizzle-orm";
 import type {
@@ -10,7 +11,6 @@ import type {
   ServerEvent,
   TaskStatus,
 } from "@harness/shared";
-import { normalizeDuetConfig } from "@harness/shared";
 import { db } from "../db/index.js";
 import { tasks, projects, sessions } from "../db/schema.js";
 import { bus } from "../bus.js";
@@ -284,7 +284,7 @@ async function synthesizePlan(ctx: Ctx): Promise<void> {
   try {
     const t = await runTurn({
       taskId: ctx.taskId, role: "voiceA", speaker: "synthesis", round: ctx.round,
-      executor: ctx.exA, prompt: P.synthesize(), cwd: ctx.cwd,
+      executor: ctx.exA, prompt: P.synthesize(ctx.lastB), cwd: ctx.cwd,
       rowId: ctx.A.rowId, resumeCliId: ctx.A.cliId || undefined,
     });
     ctx.A.cliId = t.cliId;

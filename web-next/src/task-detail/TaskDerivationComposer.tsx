@@ -1,10 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
+import { DUET_DEFAULTS } from "@harness/shared/duet";
 import type { AgentExecutorProfile, AgentType, DuetConfig, Task, TeamConfig } from "@harness/shared";
-import {
-  DUET_DEFAULTS,
-  DEFAULT_APP_SETTINGS,
-  TEAM_DEFAULTS,
-} from "@harness/shared";
+import { DEFAULT_APP_SETTINGS, TEAM_DEFAULTS } from "@harness/shared";
 import {
   GitBranch,
   ChatsCircle,
@@ -488,7 +485,7 @@ export function TaskDerivationComposer({
                   topicTouched.current = true;
                   setTopic(event.target.value);
                 }}
-                placeholder="让两个 AI 围绕什么展开对抗…"
+                placeholder="让两个 AI 围绕什么展开讨论…"
               />
             </label>
             <div className="task-derivation-duet-grid">
@@ -513,7 +510,7 @@ export function TaskDerivationComposer({
                 <Toggle checked={gate} onChange={setGate} label={gate ? "需要确认" : "自动结束"} />
               </label>
             </div>
-            <p className="task-derivation-explainer">盲态开局 → 多轮对抗 → 给出结论（不改代码）。共识闸门开启时，收敛后会停下让你定夺。</p>
+            <p className="task-derivation-explainer">盲态开局 → 多轮互相吸收补强 → 收敛后合稿出共同方案（不改代码）。共识闸门开启时，方案合出后会停下让你定夺。</p>
           </>
         )}
       </div>
@@ -530,7 +527,7 @@ export function TaskDerivationComposer({
           <Button variant="ghost" onClick={onClose} disabled={busy}>取消 Esc</Button>
           <Button variant="primary" onClick={() => void submit()} disabled={!canSubmit}>
             {busy && <SpinnerGap size={14} className="is-spinning" />}
-            {busy ? "创建中…" : teamMode ? "创建并开干" : "创建并开辩"}
+            {busy ? "创建中…" : teamMode ? "创建并开干" : "创建并开聊"}
             {!busy && <kbd>⌘↵</kbd>}
           </Button>
         </div>

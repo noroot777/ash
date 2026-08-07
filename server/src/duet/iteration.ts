@@ -1,9 +1,9 @@
 import { existsSync } from "node:fs";
+import { normalizeDuetConfig } from "@harness/shared/duet";
 import { readFile } from "node:fs/promises";
 import type { Hono } from "hono";
 import { and, desc, eq } from "drizzle-orm";
 import type { Task } from "@harness/shared";
-import { normalizeDuetConfig } from "@harness/shared";
 import { isTeamSettled } from "@harness/shared/team";
 import { db } from "../db/index.js";
 import { sessions, tasks } from "../db/schema.js";
@@ -17,6 +17,7 @@ import { duetConsensusBy } from "./settlement.js";
 type DuetEntry = {
   type?: string;
   speaker?: string;
+  round?: number;
   text?: string;
   error?: string;
   raised?: boolean;
@@ -61,10 +62,18 @@ function consensusBy(lastA?: DuetEntry, lastB?: DuetEntry): DuetEntry["consensus
   });
 }
 
-function conclusionLines(entries: DuetEntry[]): string[] {
+export function conclusionLines(entries: DuetEntry[]): string[] {
   // 收敛后的合稿(共同方案)是上一轮的正式产出,有它就引用全文;两行一句话的
-  // 结论只是没有合稿的老讨论的降级。
-  const plan = [...entries].reverse().find((entry) => entry.speaker === "synthesis" && !entry.error && nonEmpty(entry.text));
+  // 结论只是没有合稿的老讨论的降级。**过时的合稿不作数**:回炉/澄清后重新合稿
+  // 失败时,留在 transcript 里的还是反馈前的旧方案,把它标成正式产出会把用户
+  // 已推翻的版本重新扶正 —— 判据是合稿轮次不早于最后一次 A/B 发言轮次。
+  const lastVoiceRound = entries.reduce(
+    (max, entry) => (!entry.type && (entry.speaker === "A" || entry.speaker === "B") && typeof entry.round === "number" ? Math.max(max, entry.round) : max),
+    0,
+  );
+  const plan = [...entries].reverse().find((entry) =>
+    entry.speaker === "synthesis" && !entry.error && nonEmpty(entry.text)
+      && typeof entry.round === "number" && entry.round >= lastVoiceRound);
   if (plan) return ["上一轮讨论收敛后的共同方案如下：", "", plan.text!.trim()];
   const verdict = [...entries].reverse().find((entry) =>
     (entry.type === "duet.gate" || entry.type === "debate.gate")

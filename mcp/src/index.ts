@@ -505,7 +505,7 @@ server.registerTool(
   {
     title: "派活给执行者(团队调度者专用)",
     description:
-      "团队调度者(mode=team 的任务)用这个派活:一次建 N 个执行者任务,绑到自己名下,默认立刻起跑。每个执行者是一个完整的 CLI agent(自己还能开子代理),默认与调度台在同一个工作目录里干活;团队开启 worktree 时也共享它。\n\n• mode=\"serial\"(多个任务时的默认)会把这批串成 A→B→C,前一个 done 后下一个自动起跑;mode=\"parallel\" 才是真并行(限流 4 个),确认互不干扰再用。\n• **body 写目标、背景、约束、验收标准,不写实现步骤**——执行者是和你同级智能的完整 agent,how 留给它;用户明确指定了做法才原样传达。body 要自带完整上下文(执行者彼此不知情,也看不到你和用户的对话)。只有 parallel 时才需要在各自 body 里划清文件/模块边界,否则并行的执行者会互相踩;serial 不必划界。\n• review 缺省跟随团队配置（默认开启）；单项传 false 可跳过该执行者的自动审查。\n• reportBack:true = 它做完要叫醒你(你打算接着安排下一步时用);false(默认)= 静默完成,你随时能用 list_tasks 查。\n• 你会被唤醒的时机只有三种:执行者提问、执行者失败、reportBack 的执行者完成。\n\n返回执行者的 id + 标题,后续用 get_task / run_task / answer_question 引用它们。",
+      "团队调度者(mode=team 的任务)用这个派活:一次建 N 个执行者任务,绑到自己名下,默认立刻起跑。每个执行者是一个完整的 CLI agent(自己还能开子代理),默认与调度台在同一个工作目录里干活;团队开启 worktree 时也共享它。\n\n• mode=\"serial\"(多个任务时的默认)会把这批串成 A→B→C,前一个 done 后下一个自动起跑;mode=\"parallel\" 才是真并行(限流 4 个),确认互不干扰再用。\n• **body 写目标、背景、约束、验收标准,不写实现步骤**——执行者是和你同级智能的完整 agent,how 留给它;用户指定的做法、已确认的硬约束、已证伪的路线属于约束要传达,开放的实现选择才留给它。body 要自带完整上下文(执行者彼此不知情,也看不到你和用户的对话)。只有 parallel 时才需要在各自 body 里划清文件/模块边界,否则并行的执行者会互相踩;serial 不必划界。\n• review 缺省跟随团队配置（默认开启）；单项传 false 可跳过该执行者的自动审查。\n• reportBack:true = 它做完要叫醒你(你打算接着安排下一步时用);false(默认)= 静默完成,你随时能用 list_tasks 查。\n• 你会被唤醒的时机只有三种:执行者提问、执行者失败、reportBack 的执行者完成。\n\n返回执行者的 id + 标题,后续用 get_task / run_task / answer_question 引用它们。",
     inputSchema: {
       leadTaskId: z.string().describe("你自己的 taskId(团队任务,prompt 前言里有)"),
       tasks: z

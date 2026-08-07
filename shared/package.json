@@ -14,6 +14,10 @@
       "types": "./src/attachments.ts",
       "default": "./src/attachments.ts"
     },
+    "./duet": {
+      "types": "./src/duet.ts",
+      "default": "./src/duet.ts"
+    },
     "./team": {
       "types": "./src/team.ts",
       "default": "./src/team.ts"

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { DUET_DEFAULTS } from "@harness/shared/duet";
 import type {
   AgentExecutorProfile,
   AgentType,
@@ -10,7 +11,7 @@ import type {
   TaskMode,
   TeamPresetConfig,
 } from "@harness/shared";
-import { DEFAULT_APP_SETTINGS, DUET_DEFAULTS } from "@harness/shared";
+import { DEFAULT_APP_SETTINGS } from "@harness/shared";
 import { Paperclip, Robot, ChatsCircle, UsersThree, X } from "@phosphor-icons/react";
 import { ImagePreviewGroup, PreviewableImage } from "../components/ImagePreview.tsx";
 import {

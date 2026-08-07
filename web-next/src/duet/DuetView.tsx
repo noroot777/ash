@@ -1,12 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { normalizeDuetConfig } from "@harness/shared/duet";
 import type { GateAction, Session, Task } from "@harness/shared";
 import { runActivityPhase } from "@harness/shared/run-activity";
-import {
-  TEAM_DEFAULTS,
-  canArchive,
-  normalizeDuetConfig,
-  taskDisplayStatus,
-} from "@harness/shared";
+import { TEAM_DEFAULTS, canArchive, taskDisplayStatus } from "@harness/shared";
 import {
   Archive,
   ChatCircle,

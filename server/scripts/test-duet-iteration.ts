@@ -139,6 +139,17 @@ try {
   assert.equal(created.duet.gateG1, "off");
   assert.equal(created.duet.topic, "应该采用方案甲还是方案乙？", "stored config must be reused unchanged");
 
+  // 过时合稿不作数:回炉(round 3)后重新合稿失败,留下的 round 2 旧方案不能再当正式产出。
+  const stale = iteration.conclusionLines([
+    { round: 2, speaker: "A", conclusion: "旧结论A" },
+    { round: 2, speaker: "synthesis", text: "# 旧方案" },
+    { round: 3, speaker: "A", raised: true, agrees: true, conclusion: "新结论A" },
+    { round: 3, speaker: "B", raised: true, agrees: true, conclusion: "新结论A" },
+    { round: 3, speaker: "synthesis", text: "", error: "合稿失败" },
+  ]);
+  assert.ok(!stale.join("\n").includes("旧方案"), "stale plan must not be presented as the official output");
+  assert.match(stale.join("\n"), /新结论A/);
+
   const repeated = await app.request(`/tasks/${teamId}/team/iterate-duet`, { method: "POST" });
   assert.equal(repeated.status, 200);
   assert.equal(((await repeated.json()) as { id: string }).id, created.id);
