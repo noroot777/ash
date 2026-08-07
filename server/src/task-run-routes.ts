@@ -37,7 +37,7 @@ import { dispatchWorkers, type DispatchSpec } from "./team/dispatch.js";
 import { haltTeam } from "./team/session.js";
 import { enrichTasks } from "./task-store.js";
 import { askingAgentFor, setTaskQuestion } from "./task-question.js";
-import { parseSessionTrace, sessionTracePath, sessionTranscriptPath } from "./transcript.js";
+import { parseSessionTrace, readableRunPath, sessionTracePath, sessionTranscriptPath } from "./transcript.js";
 import { sessionUsage } from "./usage.js";
 import { resumeCommandFor } from "./executors/resume.js";
 import { id, now } from "./util.js";
@@ -73,7 +73,7 @@ api.get("/sessions/:id/output", async (c) => {
   const row = (await db.select().from(sessions).where(eq(sessions.id, sid))).at(0);
   if (!row) return c.json({ error: "not found" }, 404);
   try {
-    const text = await readFile(join(RUNS_DIR, row.taskId, `${sid}.md`), "utf8");
+    const text = await readFile(readableRunPath(sessionTranscriptPath(row.taskId, sid)), "utf8");
     return c.text(text);
   } catch {
     return c.text("");
@@ -87,7 +87,7 @@ api.get("/sessions/:id/trace", async (c) => {
   const row = (await db.select().from(sessions).where(eq(sessions.id, sid))).at(0);
   if (!row) return c.json({ error: "not found" }, 404);
   try {
-    const raw = await readFile(sessionTracePath(row.taskId, sid), "utf8");
+    const raw = await readFile(readableRunPath(sessionTracePath(row.taskId, sid)), "utf8");
     return c.json(parseSessionTrace(raw));
   } catch {
     return c.json([]);
@@ -99,7 +99,7 @@ api.get("/sessions/:id/trace", async (c) => {
 // so the web reducer only ever sees `duet.*`.
 api.get("/tasks/:id/duet", async (c) => {
   try {
-    const raw = await readFile(join(RUNS_DIR, c.req.param("id"), "transcript.jsonl"), "utf8");
+    const raw = await readFile(readableRunPath(join(RUNS_DIR, c.req.param("id"), "transcript.jsonl")), "utf8");
     const turns = raw
       .split("\n")
       .filter(Boolean)

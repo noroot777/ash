@@ -2,10 +2,10 @@
 // <sessId>.trace.jsonl，其中相邻 text delta 会先合并成正文片段再落盘。一次性 run
 // 与常驻调度台都走这里，因此刷新能把每组 thinking/tool 放回它所启动的正文片段，
 // 同时非正文事件绝不会混进 assistant Markdown。
-import { appendFileSync, mkdirSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { appendFileSync, existsSync, mkdirSync } from "node:fs";
+import { dirname, isAbsolute, join, relative } from "node:path";
 import type { AgentEvent, AgentType } from "@harness/shared";
-import { RUNS_DIR } from "./paths.js";
+import { RUNS_DIR, RUNS_FALLBACK_DIR } from "./paths.js";
 
 type AgentTraceEvent = Extract<AgentEvent, { kind: "thinking" | "tool" | "error" }>;
 type TraceTextEvent = { kind: "text"; text: string };
@@ -28,6 +28,20 @@ export function sessionTranscriptPath(taskId: string, sessionId: string): string
 
 export function sessionTracePath(taskId: string, sessionId: string): string {
   return join(RUNS_DIR, taskId, `${sessionId}.trace.jsonl`);
+}
+
+/**
+ * **读**一份 run 产物时用的路径：本地没有就回退到 `RUNS_FALLBACK_DIR`（见 paths.ts）。
+ *
+ * 只有预览实例设了那个变量，其余情况这个函数恒等于原样返回。**写入一律不要过这里**——
+ * 回退目录是别人的（主仓的）data/runs，往里写等于篡改真实历史。
+ */
+export function readableRunPath(path: string): string {
+  if (!RUNS_FALLBACK_DIR || existsSync(path)) return path;
+  const rel = relative(RUNS_DIR, path);
+  // 不在 RUNS_DIR 底下的路径不归这条规则管（别把回退目录当成任意路径的前缀）。
+  if (!rel || rel.startsWith("..") || isAbsolute(rel)) return path;
+  return join(RUNS_FALLBACK_DIR, rel);
 }
 
 export function appendSessionTrace(

@@ -24,6 +24,7 @@ import {
   worktreePathFor,
 } from "./git.js";
 import { withRepoLock } from "./repo-lock.js";
+import { assertNotPreviewInstance } from "./preview-instance.js";
 
 const exec = promisify(execFile);
 
@@ -228,6 +229,9 @@ export async function mergeTaskBranch(
   requestedTarget: string | null | undefined,
   strategy: AcceptStrategy = "safe",
 ): Promise<TaskMergeResult> {
+  // 预览实例上一律拒绝：合的是**真**分支（见 preview-instance.ts）。acceptTask 那头已经
+  // 结构化挡了一道，这里是给其它调用路径兜的底。
+  assertNotPreviewInstance("合并任务分支");
   return withRepoLock(repoPath, () => mergeTaskBranchLocked(repoPath, taskId, requestedTarget, strategy));
 }
 

@@ -12,6 +12,8 @@ import {
   SingletonConflictError,
   type SingletonLock,
 } from "./singleton.js";
+// 纯粹读一个环境变量，不碰 DB，所以可以静态 import（其余会打开库的模块一律等拿到锁之后）。
+import { IS_PREVIEW_INSTANCE } from "./preview-instance.js";
 
 let singletonLock: SingletonLock | null = null;
 let activeServer: ReturnType<typeof serve> | null = null;
@@ -127,11 +129,13 @@ async function initializeServer() {
     ]);
 
   await ensureSchema();
-  // 预览实例专用：从主库把「设置」搬过来（执行器、供应商、项目清单…），运行态一张表都不搬。
-  // 只有 scripts/dev.mjs 起预览时才会带这个变量；空库没有执行器 = 预览里建不了任务。
+  // 预览实例专用：从主库搬一份数据进这个空库（默认整份快照，运行态搬完立刻洗；
+  // `HARNESS_SEED_MODE=config` 退回只搬设置）。只有 scripts/dev.mjs 起预览时才带这个变量。
+  // **必须排在 reattachRunningTasks 之前**：洗掉的正是它会拿去接管的那些 pid。
   if (process.env.HARNESS_SEED_FROM) {
-    const { seedPreviewConfig } = await import("./preview-seed.js");
-    await seedPreviewConfig(process.env.HARNESS_SEED_FROM);
+    const { seedPreviewDb } = await import("./preview-seed.js");
+    const mode = process.env.HARNESS_SEED_MODE === "config" ? "config" : "snapshot";
+    await seedPreviewDb(process.env.HARNESS_SEED_FROM, mode);
   }
   await migrateQueues(); // 一次性把 legacy depends_on / resume_depends_on 迁到 queue_items（幂等）
   // **顺序不能反**：先把还活着的 agent 接管回来（它们的输出走文件，压根没随上
@@ -359,10 +363,16 @@ app.get("/*", (c) => {
 // Bind the port before starting the scheduler. A process that cannot accept
 // HTTP callbacks must never be allowed to poll schedules or launch agents.
 activeServer = serve({ fetch: app.fetch, port }, (info) => {
-  try {
-    startScheduler();
-  } catch (e) {
-    exitAfterStartupFailure("scheduler failed to start", e);
+  // 预览实例**不跑调度器**：它连的是主库的快照，一条 cron 到点就会拿真项目目录去派活。
+  // 快照压根没搬 schedules / scheduled_messages，这里是同一件事的第二道保险（成本一行）。
+  if (IS_PREVIEW_INSTANCE) {
+    console.log("[harness] 预览实例：调度器没启动（不会到点派活、不会到点发消息）");
+  } else {
+    try {
+      startScheduler();
+    } catch (e) {
+      exitAfterStartupFailure("scheduler failed to start", e);
+    }
   }
   startupComplete = true;
   console.log(`[harness] server on http://localhost:${info.port}`);
