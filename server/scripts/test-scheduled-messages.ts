@@ -1,10 +1,26 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { eq } from "drizzle-orm";
 import { TEAM_DEFAULTS } from "@harness/shared";
 
+// ── 子进程分支:制造「进程死在投递中途」的真实现场 ────────────────────────────
+// 父进程把自己 fork 出一份、指向同一个库(HARNESS_DB 从环境继承)。这里用**投递路径
+// 自己那个函数**抢下租约,然后 SIGKILL 自己 —— 没有 finally、没有 catch、没有任何清理
+// 机会,库里就留下一条「pending + 有租约」的行。
+// 那正是 2026-08-07 消息死掉的当口:当时它已经被标成 sent,补发扫描只查 pending,于是
+// 再也没人管它。现在它还是 pending,重启后必须能自己回来。
+const crashMessageId = process.env.HARNESS_TEST_CRASH_MESSAGE;
+if (crashMessageId) {
+  const { beginDelivery } = await import("../src/pending-messages.js");
+  if (!(await beginDelivery(crashMessageId))) process.exit(3); // 没抢到 = 测试前提就不成立
+  process.kill(process.pid, "SIGKILL");
+}
+
+const selfPath = fileURLToPath(import.meta.url);
 const root = mkdtempSync(join(tmpdir(), "harness-scheduled-messages-"));
 const fakeBin = join(root, "bin");
 const leadLog = join(root, "lead-input.jsonl");
@@ -25,11 +41,12 @@ printf '%s\\n' '{"type":"result","subtype":"success","session_id":"scheduled-mes
   { mode: 0o755 },
 );
 
-const [{ db, ensureSchema }, schema, schedulesModule, pending, status, transcript, paths] = await Promise.all([
+const [{ db, ensureSchema }, schema, schedulesModule, pending, runs, status, transcript, paths] = await Promise.all([
   import("../src/db/index.js"),
   import("../src/db/schema.js"),
   import("../src/schedules.js"),
   import("../src/pending-messages.js"),
+  import("../src/runs.js"),
   import("../src/status.js"),
   import("../src/transcript.js"),
   import("../src/paths.js"),
@@ -44,13 +61,15 @@ const projectId = "scheduled-project";
 const deliveredTaskId = "scheduled-team-delivered";
 const unavailableTaskId = "scheduled-team-unavailable";
 const queuedTaskId = "scheduled-single-queued";
+const lockedTaskId = "scheduled-single-locked";
+const crashTaskId = "scheduled-single-crashed";
 const unavailableSessionId = "scheduled-team-unavailable-session";
 const unavailableTranscript = transcript.sessionTranscriptPath(unavailableTaskId, unavailableSessionId);
 
 // 「调度台不可用」这一档必须与本机装了什么 CLI 无关:claude/codex 都实现了常驻会话,
 // 装了真 codex 的机器上它会真的开起来。用一个走 GenericCliExecutor 的类型(它们一律
 // 不实现 openResident,这正是「谁能当调度者」的过滤条件),失败点就锁死在协议上。
-const taskRow = (id: string, lead: "claude" | "gemini", status: "idle" | "running") => ({
+const taskRow = (id: string, lead: "claude" | "gemini", status: "idle" | "running" | "done") => ({
   id,
   projectId,
   groupId: null,
@@ -88,10 +107,14 @@ const messageRow = (id: string, taskId: string, text: string, mode: "timed" | "q
   status: "pending",
   createdAt: at,
   sentAt: null,
+  deliveringSince: null,
 });
 
+// 15s 而不是 3s:每一步都是「真的起一个进程 + 真的写盘」,而这个脚本常常与前端构建、
+// 其它回归测试挤在同一台机器上跑。超时是用来兜死锁的,不是用来卡性能的 —— 定太紧,
+// 失败信息会指向一个根本没坏的地方。
 const waitFor = async (predicate: () => boolean | Promise<boolean>, message: string) => {
-  const deadline = Date.now() + 3000;
+  const deadline = Date.now() + 15_000;
   while (!(await predicate())) {
     if (Date.now() >= deadline) throw new Error(message);
     await new Promise((resolve) => setTimeout(resolve, 25));
@@ -140,6 +163,8 @@ try {
     taskRow(deliveredTaskId, "claude", "running"),
     taskRow(unavailableTaskId, "gemini", "idle"),
     { ...taskRow(queuedTaskId, "claude", "running"), mode: "single", team: null },
+    { ...taskRow(lockedTaskId, "claude", "running"), mode: "single", team: null },
+    { ...taskRow(crashTaskId, "claude", "done"), mode: "single", team: null },
   ]);
   await db.insert(sessions).values({
     id: unavailableSessionId,
@@ -156,6 +181,7 @@ try {
     messageRow("scheduled-delivered", deliveredTaskId, "团队定时消息到期"),
     messageRow("scheduled-unavailable", unavailableTaskId, "这条消息应安全取消"),
     messageRow("scheduled-queued", queuedTaskId, "排队追问:等这一轮跑完再发", "queued"),
+    messageRow("scheduled-locked", lockedTaskId, "结算钩子里投递的这句话不许丢", "queued"),
   ]);
 
   await schedulesModule.tick();
@@ -180,6 +206,8 @@ try {
     "lead 不可用的取消原因没有写入持久时间线",
   );
   assert.match(readFileSync(unavailableTranscript, "utf8"), /调度台不可用/);
+  // 取消 = 这条消息从托盘上消失,原文必须在时间线上留底,否则用户只能凭记忆重打一遍。
+  assert.match(readFileSync(unavailableTranscript, "utf8"), /原文：这条消息应安全取消/);
 
   console.log("✓ 团队定时消息到期后进入 lead 常驻会话并标记 sent");
   console.log("✓ lead 不可用时消息安全取消并把原因写入时间线");
@@ -196,14 +224,16 @@ try {
 
   // 这一步就是真实链路:run loop 结算 → setTaskStatus → flushPendingForTask。
   await status.setTaskStatus(queuedTaskId, "done");
+  // 先等**会话真的起来**再看状态位:sent 的定义就是「原话已经进会话了」,所以这两个
+  // 断言的先后顺序本身也是在钉这条不变量 —— 反过来先等到 sent 却等不到会话,那才是 bug。
   await waitFor(
-    async () => (await db.select().from(scheduledMessages)
-      .where(eq(scheduledMessages.id, "scheduled-queued"))).at(0)!.status === "sent",
+    async () => (await db.select().from(sessions).where(eq(sessions.taskId, queuedTaskId))).length > 0,
     "任务落终态后排队消息没有被立刻发出(status 钩子没接上?)",
   );
   await waitFor(
-    async () => (await db.select().from(sessions).where(eq(sessions.taskId, queuedTaskId))).length > 0,
-    "排队消息标记 sent 了却没真的送进任务会话",
+    async () => (await db.select().from(scheduledMessages)
+      .where(eq(scheduledMessages.id, "scheduled-queued"))).at(0)!.status === "sent",
+    "原话已经进会话了,库里那条却还没标成 sent",
   );
   // 等这一轮结算完再进 finally:临时目录连 DB 一起删,而 run loop 还在往里写。
   await waitFor(
@@ -215,6 +245,111 @@ try {
   );
   await new Promise((resolve) => setTimeout(resolve, 200));
   console.log("✓ 排队追问:运行中原地等待,任务一空闲立即投递进原会话");
+
+  // ── 结算钩子里投递:单飞锁还锁着,消息也一个字都不能丢 ────────────────────
+  // 真实链路是 run loop 的 try 里 setTaskStatus → flushPendingForTask,**那一刻这一轮
+  // 的单飞锁还锁着**。上面那一段是在锁外调的,所以它测不到这个格:2026-08-07 就是在
+  // 这里丢的消息——claim 已经把它标成 sent,continueTask 却被锁静默挡回,托盘和时间线
+  // 同时没有,用户那句话凭空蒸发。这里把锁真的锁上复现它。
+  assert.equal(runs.claimTurn(lockedTaskId), true, "测试自身前提:这一轮的锁应该抢得到");
+  await status.setTaskStatus(lockedTaskId, "done");
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  assert.equal(
+    (await db.select().from(sessions).where(eq(sessions.taskId, lockedTaskId))).length,
+    0,
+    "锁还锁着就不该起下一轮(会跟当前这一轮撞在一起)",
+  );
+  // 等待期间那一行必须**还是 pending**:这段等待只活在内存里,服务此刻重启就随之
+  // 蒸发。行要是已经标成 sent,开机第一次 tick 的补发扫描就看不见它了——同一个消息
+  // 消失,只是触发条件从「锁」换成了「重启」。
+  assert.equal(
+    (await db.select().from(scheduledMessages).where(eq(scheduledMessages.id, "scheduled-locked"))).at(0)!.status,
+    "pending",
+    "还没真送出去就先标了 sent——这会儿重启,消息就再也没人管了",
+  );
+
+  runs.releaseTurn(lockedTaskId); // run loop 的 finally
+  await waitFor(
+    async () => (await db.select().from(sessions).where(eq(sessions.taskId, lockedTaskId))).length > 0,
+    "这一轮退干净之后排队消息仍然没送进会话——消息被单飞锁静默吞掉了",
+  );
+  const locked = (await db.select().from(scheduledMessages)
+    .where(eq(scheduledMessages.id, "scheduled-locked"))).at(0)!;
+  assert.equal(locked.status, "sent", "真送进会话之后才算 sent");
+  // 「送到了」的判据是**刷新后仍看得见**:原话作为一个真人回合落进会话时间线。
+  const lockedSession = (await db.select().from(sessions).where(eq(sessions.taskId, lockedTaskId))).at(0)!;
+  const lockedTranscript = transcript.sessionTranscriptPath(lockedTaskId, lockedSession.id);
+  await waitFor(
+    () => existsSync(lockedTranscript)
+      && readFileSync(lockedTranscript, "utf8").includes("结算钩子里投递的这句话不许丢"),
+    "消息标成 sent 了,原话却没落进会话时间线",
+  );
+  await waitFor(
+    async () => {
+      const t = (await db.select().from(tasks).where(eq(tasks.id, lockedTaskId))).at(0)!;
+      return t.status !== "running" && t.status !== "queued";
+    },
+    "结算钩子里投递出去的那一轮没有结算",
+  );
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  console.log("✓ 结算钩子里投递:锁还锁着不抢跑,锁一放立刻把原话送进会话");
+
+  // ── 进程死在投递中途:重启后必须自己回来 ──────────────────────────────────
+  // 上一段证明了「锁挡回不丢消息」,但锁不是唯一能掐断投递的东西 —— 服务重启会把内存里
+  // 的等待/在途标记连根拔掉。所以「有人正在送」必须**落库**成一个可回收的租约,而不是
+  // 提前把状态改成 sent:后者一断电就是一条永远没人管的 sent 行(2026-08-07 那条就是)。
+  await db.insert(scheduledMessages).values([
+    messageRow("scheduled-crashed", crashTaskId, "重启也不许弄丢这句话", "queued"),
+  ]);
+  const crash = spawnSync(process.execPath, [...process.execArgv, selfPath], {
+    env: { ...process.env, HARNESS_TEST_CRASH_MESSAGE: "scheduled-crashed" },
+    encoding: "utf8",
+  });
+  assert.equal(crash.signal, "SIGKILL", `子进程应当在持有租约时被硬杀:${crash.stderr ?? ""}`);
+
+  const crashed = (await db.select().from(scheduledMessages)
+    .where(eq(scheduledMessages.id, "scheduled-crashed"))).at(0)!;
+  assert.equal(crashed.status, "pending", "投递中途的行必须还是 pending —— 这是它还能被补发的唯一前提");
+  assert.ok(crashed.deliveringSince, "「有人正在送」必须落库,否则重启后没人知道这条得重投");
+
+  // 租约还挂着时不许有人插手:真在跑的那个投递(以及另一个触发源)都靠它排他。
+  await pending.deliverPendingMessages();
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  assert.equal(
+    (await db.select().from(sessions).where(eq(sessions.taskId, crashTaskId))).length,
+    0,
+    "租约还挂着就抢着投递了——同一条消息会被发两遍",
+  );
+
+  // 这就是「重启」:一个新进程走真实开机路径(startScheduler 先回收租约再跑第一次 tick)。
+  schedulesModule.startScheduler(3_600_000);
+  await waitFor(
+    async () => (await db.select().from(sessions).where(eq(sessions.taskId, crashTaskId))).length > 0,
+    "重启后没人补发这条消息——它被永久卡在「正在投递」了",
+  );
+  const crashSession = (await db.select().from(sessions).where(eq(sessions.taskId, crashTaskId))).at(0)!;
+  const crashTranscript = transcript.sessionTranscriptPath(crashTaskId, crashSession.id);
+  await waitFor(
+    () => existsSync(crashTranscript) && readFileSync(crashTranscript, "utf8").includes("重启也不许弄丢这句话"),
+    "重启补发之后原话仍然没有落进会话时间线",
+  );
+  await waitFor(
+    async () => {
+      const m = (await db.select().from(scheduledMessages)
+        .where(eq(scheduledMessages.id, "scheduled-crashed"))).at(0)!;
+      return m.status === "sent" && m.deliveringSince === null;
+    },
+    "补发成功后应当标 sent 并清掉租约",
+  );
+  await waitFor(
+    async () => {
+      const t = (await db.select().from(tasks).where(eq(tasks.id, crashTaskId))).at(0)!;
+      return t.status !== "running" && t.status !== "queued";
+    },
+    "重启补发出去的那一轮没有结算",
+  );
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  console.log("✓ 进程死在投递中途:行留在 pending + 租约,重启后开机第一件事就把它补发出去");
 } finally {
   if (originalPath === undefined) delete process.env.PATH;
   else process.env.PATH = originalPath;
@@ -222,5 +357,8 @@ try {
   rmSync(join(paths.RUNS_DIR, deliveredTaskId), { recursive: true, force: true });
   rmSync(join(paths.RUNS_DIR, unavailableTaskId), { recursive: true, force: true });
   rmSync(join(paths.RUNS_DIR, queuedTaskId), { recursive: true, force: true });
+  rmSync(join(paths.RUNS_DIR, lockedTaskId), { recursive: true, force: true });
+  rmSync(join(paths.RUNS_DIR, crashTaskId), { recursive: true, force: true });
   rmSync(root, { recursive: true, force: true });
+  process.exit(0); // startScheduler 的 interval 还挂着,不然进程不会自己退
 }

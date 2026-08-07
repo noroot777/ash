@@ -81,7 +81,8 @@ export async function ensureSchema() {
       id TEXT PRIMARY KEY, task_id TEXT NOT NULL, text TEXT NOT NULL DEFAULT '',
       attachments TEXT NOT NULL DEFAULT '[]', agent TEXT,
       executor_id TEXT, model TEXT, mode TEXT NOT NULL DEFAULT 'timed', send_at TEXT NOT NULL,
-      status TEXT NOT NULL DEFAULT 'pending', created_at TEXT NOT NULL, sent_at TEXT
+      status TEXT NOT NULL DEFAULT 'pending', created_at TEXT NOT NULL, sent_at TEXT,
+      delivering_since TEXT
     );
     CREATE TABLE IF NOT EXISTS llm_providers (
       id TEXT PRIMARY KEY, name TEXT NOT NULL,
@@ -201,6 +202,10 @@ export async function ensureSchema() {
     "ALTER TABLE scheduled_messages ADD COLUMN reasoning_effort TEXT",
     // 排队追问：运行中发出的消息不看时间，任务一空闲就投递（timed 是老的定时发送）。
     "ALTER TABLE scheduled_messages ADD COLUMN mode TEXT NOT NULL DEFAULT 'timed'",
+    // 投递租约：行仍是 pending，只是标着「有人正在送」。**它必须落库**——进程死在
+    // 「已认领、还没送到」当口时，内存里的等待/在途标记全没了，只有库里这个标记能让
+    // 开机扫描认出「这条得重新投递」（见 docs/incidents.md「排队消息凭空消失」）。
+    "ALTER TABLE scheduled_messages ADD COLUMN delivering_since TEXT",
     // Token 用量:一条会话行按回合累加(口径统一在 shared/src/usage.ts)。全 null
     // = 这条会话建在本功能之前、或那家 CLI 不报账——**不能当 0 展示**。
     "ALTER TABLE sessions ADD COLUMN usage_input INTEGER",

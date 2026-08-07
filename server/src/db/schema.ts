@@ -265,6 +265,10 @@ export const scheduledMessages = sqliteTable("scheduled_messages", {
   status: text("status").notNull().default("pending"), // pending | sent | canceled
   createdAt: text("created_at").notNull(),
   sentAt: text("sent_at"),
+  // 「有人正在把这条送进会话」的租约（ISO 时刻），行本身仍是 pending。sent 只在原话
+  // 真的落进会话之后才写，所以 sent 永远意味着「用户刷新后看得见」。租约是内存态的
+  // 持久投影：进程一换就作废（开机 reclaimStaleDeliveries 全清），那条消息回到待发送。
+  deliveringSince: text("delivering_since"),
 });
 
 // Queue items: ordered list of tasks where each task waits for the one

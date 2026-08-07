@@ -328,14 +328,18 @@ export async function resumeOrRunTask(
   if (task.resumePrompt) {
     const rp = task.resumePrompt;
     await db.update(tasks).set({ resumePrompt: null, updatedAt: now() }).where(eq(tasks.id, taskId));
-    return continueTask(taskId, rp, { system: opts.reason ?? "run" });
+    await continueTask(taskId, rp, { system: opts.reason ?? "run" });
+    return;
   }
   const agent = (task.agentType as AgentType) ?? "claude";
   const prev = (await db.select().from(sessions).where(eq(sessions.taskId, taskId)))
     .filter((s) => s.agentType === agent)
     .sort((a, b) => b.startedAt.localeCompare(a.startedAt))
     .at(0);
-  if (prev?.cliSessionId) return continueTask(taskId, RESUME_PROMPT, { system: opts.reason ?? "run" });
+  if (prev?.cliSessionId) {
+    await continueTask(taskId, RESUME_PROMPT, { system: opts.reason ?? "run" });
+    return;
+  }
   return runTask(taskId); // no resumable session → fresh
 }
 
@@ -348,6 +352,12 @@ export async function resumeOrRunTask(
 // opts.executorId / opts.model / opts.reasoningEffort 是 @ 提及那一步选定的**具体执行器、
 // 模型与思考强度**（对话框里那个「智能体 · 模型」框）。只作用于这一回合：任务自己的
 // executorId/model/reasoningEffort 是它的常设配置，被 @ 换成别的执行器时不该被这一次召唤改写。
+//
+// **返回值 = 这一次调用有没有接管这个回合**。false 只有一种来源：单飞锁被别人占着，
+// 这一句话**一个字都没送出去**。以前这里 `return`（Promise<void>），调用方无从分辨
+// 「跑完了」和「压根没跑」，于是排队消息被标成 sent 之后凭空消失（`docs/incidents.md`
+// 「排队消息凭空消失」）。凡是拿着**用户原话**来调它的调用方，都必须处理 false —— 要么
+// 退回待发送队列重试，要么如实告诉用户没送出去，绝不许静默丢字。
 export async function continueTask(
   taskId: string,
   userText: string,
@@ -372,9 +382,18 @@ export async function continueTask(
      * 能把它跟我自己打的字分开。默认 false = 真人发的。
      */
     byBackend?: boolean;
+    /**
+     * 「用户这句话已经**落盘**了」的回调 —— 在原话作为一个真人回合写进会话之后立刻调，
+     * 不等这一轮跑完（`continueTask` 要等整轮结束才 resolve，那时早过了）。
+     *
+     * 给排队/定时消息用：它们要在这一刻、而不是更早，才把库里那条标成 sent。早一步标，
+     * 进程死在中间就是「托盘里没了、会话里也没有」——用户那句话凭空蒸发
+     * （见 docs/incidents.md「排队消息凭空消失」）。
+     */
+    onDelivered?: () => void | Promise<unknown>;
     throwOnTeamUnavailable?: boolean;
   } = {},
-): Promise<void> {
+): Promise<boolean> {
   // 已验收的任务收到真人消息 = 旧验收不再覆盖新增改动,stage 清回「进行中」。
   // 只认真人消息:带 opts.system 的 retry / 手点运行 / 队列推进 / 上游唤醒不算,跟下面
   // followUpFrom 用的是同一条口径。放在最前面,确保 single/team/duet 走同一规则。
@@ -389,12 +408,17 @@ export async function continueTask(
   // 调度台的一次运行是整段常驻)。于是 /reply、/answer、@提及全都自动生效。
   const teamMode = (await db.select({ mode: tasks.mode }).from(tasks).where(eq(tasks.id, taskId))).at(0)?.mode;
   if (teamMode === "team") {
-    return deliverToLead(taskId, userText, {
+    await deliverToLead(taskId, userText, {
       attachments: opts.attachments,
       throwOnOpenFailure: opts.throwOnTeamUnavailable,
     });
+    if (opts.onDelivered) {
+      try { await opts.onDelivered(); } catch { /* 记账失败不拖累这一轮 */ }
+    }
+    return true;
   }
-  if (!claimTurn(taskId)) return;
+  // 抢不到 = 这个任务此刻正跑着别的回合,这一句话没送出去。调用方必须知道(见函数注释)。
+  if (!claimTurn(taskId)) return false;
   const agentType = opts.agent ?? "claude"; // re-derived below once the task loads; kept for the catch handler
   let handle: RunHandle | undefined;
   try {
@@ -598,6 +622,12 @@ export async function continueTask(
       // the human turn as its own bubble (live, the client already shows it).
       writeTurn(out, { t: "user", agent, text: userTurnText, ...(opts.byBackend ? { by: "system" as const } : {}) }, turnStart);
     }
+    // 到这里这句话已经**两处落地**:agent 进程早在上面就带着它起来了,原文也刚写进会话
+    // 落盘文件。排队/定时消息就是在这一刻、而不是更早,才把库里那条标成 sent。
+    // 回调自己出错不许影响这一轮(它只是记账)。
+    if (opts.onDelivered) {
+      try { await opts.onDelivered(); } catch { /* 记账失败不拖累这一轮 */ }
+    }
     if (workspaceReset) {
       // 让用户也看见:agent 这一轮是在一个空目录上重新开始的。只发 toast 不算数,
       // 刷新后仍要能看出来(见 AGENTS.md 关于持久可见状态的约定)。
@@ -629,4 +659,7 @@ export async function continueTask(
     if (handle) untrackRun(taskId, handle);
     releaseTurn(taskId);
   }
+  // 走到这里 = 这一回合确实由本次调用接管了(跑成还是跑挂都算,错误已经在 catch 里
+  // 落到时间线/状态上)。只有「被单飞锁挡回」才返回 false,那才是「一个字没送出去」。
+  return true;
 }

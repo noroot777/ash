@@ -3,7 +3,7 @@ import { db } from "./db/index.js";
 import { schedules, tasks, groups } from "./db/schema.js";
 import { runTask } from "./orchestrator.js";
 import { runDuet } from "./duet/index.js";
-import { deliverPendingMessages } from "./pending-messages.js";
+import { deliverPendingMessages, reclaimStaleDeliveries } from "./pending-messages.js";
 
 // ── Minimal 5-field cron matcher (minute hour dom month dow), local time ──────
 // Supports *, n, a-b, */n, and comma lists. No seconds, no names.
@@ -105,7 +105,11 @@ export async function tick() {
 // normal tick. Missed cron runs are NOT backfilled — only the next match fires
 // (DESIGN.md §9: recurring only runs the most recent, no pile-up).
 export function startScheduler(intervalMs = 30_000) {
-  void tick();
+  // 先回收上一个进程留下的投递租约,再跑第一次 tick:被重启掐在「已认领、还没送到」
+  // 当口的排队/定时消息,靠这两步在开机后立刻补发出去(见 pending-messages.ts 的租约一节)。
+  void reclaimStaleDeliveries()
+    .catch((err) => console.error("[harness] reclaimStaleDeliveries failed:", err))
+    .then(() => tick());
   setInterval(() => void tick(), intervalMs);
   console.log("[harness] scheduler started");
 }
