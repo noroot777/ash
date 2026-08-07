@@ -9,7 +9,11 @@ import { RUNS_DIR } from "./paths.js";
 
 type AgentTraceEvent = Extract<AgentEvent, { kind: "thinking" | "tool" | "error" }>;
 type TraceTextEvent = { kind: "text"; text: string };
-export type SessionTraceEvent = AgentTraceEvent | TraceTextEvent;
+// 本回合的 token 用量。落 trace 而不是只落库,是因为**会话行只有累计值**——刷新
+// 后要按回合把「这一轮花了多少」放回各自的气泡,就得有一份按 turnStartedAt 分组
+// 的记录,而 trace 天生就是这个形状。
+type TraceUsageEvent = Extract<AgentEvent, { kind: "usage" }>;
+export type SessionTraceEvent = AgentTraceEvent | TraceTextEvent | TraceUsageEvent;
 export type SessionTraceEntry = {
   at: string;
   turnStartedAt: string;
@@ -55,8 +59,9 @@ export function parseSessionTrace(raw: string): SessionTraceEntry[] {
         typeof entry.at !== "string"
         || typeof entry.turnStartedAt !== "string"
         || !event
-        || !["text", "thinking", "tool", "error"].includes(event.kind)
+        || !["text", "thinking", "tool", "error", "usage"].includes(event.kind)
         || (event.kind === "text" && typeof event.text !== "string")
+        || (event.kind === "usage" && (!event.usage || typeof event.usage !== "object"))
       ) continue;
       entries.push(entry as SessionTraceEntry);
     } catch {

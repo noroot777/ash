@@ -55,10 +55,11 @@ function lastText(turns: DuetTurn[], speaker: "A" | "B"): string {
 // 收敛后的合稿(共同方案)是讨论的正式产出;有它就整段带给调度者,双方最后
 // 发言只作过程证据。老讨论(改名前)没有合稿轮,退回结论两行 + 双方发言。
 // **过时的合稿不作数**:回炉后重新合稿失败时,留下的还是反馈前的旧方案,
-// 判据是合稿轮次不早于最后一次 A/B 发言轮次。
+// 判据是合稿轮次不早于最后一次活动轮次。**用户介入也算活动**:意见落盘后讨论者
+// 还没跑完就中断的场景里,A/B 轮次没变,但旧方案已被那条意见推翻。
 function latestPlan(turns: DuetTurn[]): string | null {
   const lastVoiceRound = turns.reduce(
-    (max, turn) => (turn.speaker === "A" || turn.speaker === "B" ? Math.max(max, turn.round) : max),
+    (max, turn) => (turn.speaker === "A" || turn.speaker === "B" || turn.speaker === "user" ? Math.max(max, turn.round) : max),
     0,
   );
   return [...turns].reverse().find((turn) =>

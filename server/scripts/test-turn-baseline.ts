@@ -6,8 +6,10 @@
 // 静默放行。于是没人验过的新代码被自动合并、分支被删，而用户以为它还会走一遍流程。
 //
 // 三条是这套判据的全部要害，改动任何一条都必须让这里先红：
-//   ① 改了代码 + 确认完成 → 账本必须**整个**清干净（游标、轮数、review_step、stage
-//      四样少清一样，新代码都还能从那个缺口溜过去）；
+//   ① 改了代码 → 账本必须**整个**清干净（游标、轮数、review_step、stage 四样少清一样，
+//      新代码都还能从那个缺口溜过去）。**跟这一轮确认没确认完成无关**：续聊回合本来就
+//      不要求确认（followUpFrom 会回落到原终态），按确认与否决定清不清，最常见的那条路
+//      恰好一个字都不清（2026-08-07，任务 1rojF5Tjau91）；
 //   ② 只是问了句话 → 线**一个字节都不许动**（否则纯询问会把用户辛苦走到的位置打回起点）。
 //      这一条**必须按 continueTask 的真实顺序调**（先摘牌再拍照），跳过入口直接调底层函数
 //      会给出跟真实路径相反的保证 —— 上一版就是这么漏掉「纯询问也会摘掉已合并」的；
@@ -87,7 +89,7 @@ try {
   }
   const row = async (id: string) => (await db.select().from(tasks).where(eq(tasks.id, id))).at(0)!;
 
-  // ── ① 改了代码 + 确认完成 → 账本整个清干净 ───────────────────────────────
+  // ── ① 改了代码 → 账本整个清干净 ──────────────────────────────────────────
   // 这条**有意不走摘牌**：真实路径下 accepted/merged 早在回合开头就被摘了，这里留着牌子，
   // 顺带覆盖「摘牌管不着的那些 stage（verified 等）在清账时也得一起清」。
   await makeSettledTask("tb-changed", "merged");
@@ -144,15 +146,22 @@ try {
   assert.equal(stillFailing.workflowAt, "s2", "还停在那一站上，不是新开一版");
   assert.equal(stillFailing.stage, "verify_failed", "结论还没被推翻，别替它翻篇");
 
-  // ── ④ 改了但 agent 没确认完成 → 什么都不动 ───────────────────────────────
+  // ── ④ 改了代码但这一轮没确认完成 → 照样清账（2026-08-07 反转） ────────────
+  // 这条曾经断言「什么都不动」，理由是「一次中断不该把上一版的成绩抹了」。反转的理由：
+  // **续聊回合本来就不要求确认完成**（followUpFrom 会把它回落到原终态），而那恰恰是
+  // 「验收完又让 agent 改点东西」的主路 —— 按确认与否决定清不清，主路一个字都不清：
+  // 上一版那道已放行的关口、已验满的轮数继续替新代码站台，游标还停在验证站上，谁点一下
+  // 「再验一轮」或「人工强制通过」，没人验过也没经过关口的新代码就被合并了（实测任务
+  // 1rojF5Tjau91）。真被中断且**一个字节没改**的回合照片相同，本来就走不到这条分支。
   await makeSettledTask("tb-unconfirmed", "merged");
   await recordTurnBaseline("tb-unconfirmed", repo, false);
   writeFileSync(join(repo, "half-done.txt"), "interrupted\n");
-  await reconcileTurnBaseline("tb-unconfirmed", false);
+  await reconcileTurnBaseline("tb-unconfirmed", false); // 这一轮没确认完成
 
   const halfway = await row("tb-unconfirmed");
-  assert.equal(halfway.workflowAt, "s2", "这一轮压根没走完，线不该被搬动");
-  assert.equal(halfway.verifyStationRounds, 2, "没确认完成就清账 = 一次中断就把上一版的成绩抹了");
+  assert.equal(halfway.workflowAt, "s1", "改了字节就是新一版，这一轮确认没确认完成都得把游标搬回起点");
+  assert.equal(halfway.verifyStationRounds, 0, "上一版验满的轮数不能留着，否则这一站被判 skip 整站略过");
+  assert.equal(halfway.stage, null, "merged 留着的话，「等我点头」看见它就静默放行");
 
   // ── ⑤ 空壳工作间没被动过 → 拆屋 ──────────────────────────────────────────
   const shellId = "tb-shell01";
@@ -190,7 +199,7 @@ try {
   );
 
   console.log(
-    "turn baseline: 改了就清账 / 只问不动+牌子挂回 / 新结论不被盖 / 验证没过不清零 / 未确认不动 / 空壳拆屋，六条通过",
+    "turn baseline: 改了就清账 / 只问不动+牌子挂回 / 新结论不被盖 / 验证没过不清零 / 没确认也清账 / 空壳拆屋，六条通过",
   );
 } finally {
   for (const id of IDS) rmSync(join(RUNS_DIR, id), { recursive: true, force: true });

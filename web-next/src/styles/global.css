@@ -264,3 +264,21 @@ select:focus-visible,
   background: var(--sel-bg);
   color: var(--ink);
 }
+
+/* 预览实例角标（`VITE_HARNESS_PREVIEW`，只在预览起的前端上出现）。
+   `pointer-events: none` 是必须的：它盖在右下角，谁也不该因为它点不到底下的按钮。 */
+.preview-badge {
+  position: fixed;
+  right: 10px;
+  bottom: 8px;
+  z-index: 90;
+  padding: 3px 9px;
+  border: 1px solid color-mix(in lch, var(--accent) 30%, transparent);
+  border-radius: 9999px;
+  background: color-mix(in lch, var(--accent) 12%, var(--panel));
+  color: var(--faint);
+  font-size: 10.5px;
+  letter-spacing: 0.01em;
+  pointer-events: none;
+  user-select: none;
+}

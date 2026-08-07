@@ -79,19 +79,48 @@ ${text}
 请直接、简洁地回答这个问题（第 ${round} 轮）。回答后讨论继续。本轮不要写 ${RAISE_MARK} 除非你确实认为可以收敛了。全程中文。`;
 }
 
-// 收敛后的合稿轮:把讨论成果整理成一份完整的共同方案文档。它是 /duet 的正式
-// 产出——gate 上那两行 140 字的结论只够扫一眼,拍板与交接执行需要的是这份全文。
-export function synthesize(opponentLatest: string): string {
-  return `讨论已收敛。下面是对方（讨论者 B）的最后一轮发言——你可能还没见过它的最新版本，合稿前先读完并把它纳入：
+// 收敛后(或讨论停下来后)的合稿轮:把讨论成果整理成一份完整的共同方案文档。它是
+// /duet 的正式产出——gate 上那两行 140 字的结论只够扫一眼,拍板与交接执行需要的
+// 是这份全文。停止原因有三种,措辞必须如实,不许把分歧包装成共识:
+//   consensus    双方结论一致 → 共同方案
+//   agreedToStop 双方同意停止但各自保留结论 → 决策文档(这不是轮数耗尽!)
+//   roundCap     到达轮数上限仍未收敛 → 决策文档
+// userNote 是用户最近一次 gate 介入的原文——合稿由 A 执行,定向提问 B 时 A 没
+// 见过问题,只看 B 的回答会不知所云。
+export type SynthesizeStop = "consensus" | "agreedToStop" | "roundCap";
+
+export function synthesize(args: {
+  opponentLatest: string;
+  stop: SynthesizeStop;
+  userNote?: { text: string; target?: "A" | "B" };
+}): string {
+  const consensus = args.stop === "consensus";
+  const head = consensus
+    ? "讨论已收敛。"
+    : args.stop === "agreedToStop"
+      ? "双方一致认为讨论可以停止，但**各自保留了不同结论**，没有达成共识。"
+      : "讨论到达轮数上限，双方**没有达成收敛**，仍存在实质分歧。";
+  const goal = consensus
+    ? "现在请你把这场讨论的成果整理成一份**共同方案**——它是这场讨论的正式产出：用户拿它拍板，后续团队拿它拆解执行。"
+    : "现在请你把这场讨论整理成一份**决策文档**供用户拍板：双方已有的共同点整理成方案基础，真实分歧如实列进「残留分歧」——**绝不要把没达成的共识写成已达成**。";
+  const noteBlock = args.userNote
+    ? `
+
+=== 用户最近的介入${args.userNote.target ? `（当时只发给了讨论者 ${args.userNote.target}）` : ""} ===
+${args.userNote.text}`
+    : "";
+  return `${head}${noteBlock}
+
+下面是对方（讨论者 B）的最后一轮发言——你可能还没见过它的最新版本，合稿前先读完并把它纳入：
 
 === 讨论者 B 的最后发言 ===
-${opponentLatest}
+${args.opponentLatest}
 
-现在请你把这场讨论的成果整理成一份**共同方案**——它是这场讨论的正式产出：用户拿它拍板，后续团队拿它拆解执行。只输出方案文档本身，不要开场白和客套。
+${goal}只输出方案文档本身，不要开场白和客套。
 
 结构要求（markdown）：
 # 方案
-<方案本体：完整、自洽、可执行。写双方融合后的最终共识，不是你单方的最后一版。>
+<方案本体：完整、自洽、可执行。写双方融合后的${consensus ? "最终共识" : "共同点基础"}，不是你单方的最后一版。>
 
 ## 关键决策与理由
 <双方一致同意的关键选择及理由，包括讨论中被放弃的备选和放弃原因。>

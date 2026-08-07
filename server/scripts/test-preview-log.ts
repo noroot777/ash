@@ -91,5 +91,18 @@ const mixed = "[server] [harness] Refusing to start: port 4317 is already in use
 check("撞车行照样认得出来", portConflict(mixed), "端口 4317 已经被别的进程占着");
 check("但预览本尊落在借来的端口上", pickPreviewUrl(mixed, 54798)?.lent, true);
 
+// —— harness 自己的预览：整套起（scripts/dev.mjs）——
+// 预览起的是这个分支的前端 **和** 后端（2026-08-07 改的，理由在 dev.mjs 头部）。于是
+// 日志里必然有两个本机地址，而后端那行往往先打出来。dev.mjs 转发后端日志时把 scheme
+// 去掉就是为这一条：`lent` 优先只在前端那行**已经打出来**之后才管用，在那之前 `first`
+// 会把用户领到 API 上（点开一片 JSON，还以为预览坏了）。所以钉的是更强的一条——
+// 后端那行**根本不该成为候选**，连兜底路径都够不着它。
+const stack = "[api] [harness] server on localhost:62398\n"
+  + "  ➜  Local:   http://127.0.0.1:62396/\n";
+check("后端那行进不了候选（scheme 已被 dev.mjs 去掉）", pickPreviewUrl(stack, null), {
+  url: "http://127.0.0.1:62396/", port: 62396, lent: false,
+});
+check("前端那行还没打出来时也不会误挑后端", pickPreviewUrl("[api] [harness] server on localhost:62398\n", 62396), null);
+
 console.log(failures ? `\n${failures} 条没过` : "\n全过");
 process.exit(failures ? 1 : 0);
