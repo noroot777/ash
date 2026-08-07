@@ -26,6 +26,10 @@
       "types": "./src/run-activity.ts",
       "default": "./src/run-activity.ts"
     },
+    "./usage": {
+      "types": "./src/usage.ts",
+      "default": "./src/usage.ts"
+    },
     "./executors": {
       "types": "./src/executor-overrides.ts",
       "default": "./src/executor-overrides.ts"
