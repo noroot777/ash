@@ -491,10 +491,13 @@ async function cleanupAcceptedTaskLocked(
     try {
       await removeWorktree(repo, worktreePath, false);
     } catch (error) {
+      // 走到这儿只剩一种情形：工作区真脏（半删除的空壳已经由 removeWorktree 自己收拾了）。
+      // 那是该拦的——里面可能有没提交的东西，自动流程不替用户拍板扔掉，所以连脱困办法
+      // 一起写进时间线，别让人对着 git 原话干瞪眼。
       return {
         ok: false,
         reason: "worktree_remove_failed",
-        message: `任务 worktree 删除失败：${gitError(error)}`,
+        message: `任务 worktree 删除失败：${gitError(error)}（多半是 ${worktreePath} 里还有没提交的改动：去看一眼，提交或丢弃之后再点一次验收）`,
         sourceBranch,
         targetBranch,
         worktreePath,
