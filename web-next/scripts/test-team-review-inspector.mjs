@@ -40,7 +40,7 @@ try {
   const page = await browser.newPage();
   await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/team-review-inspector.html`);
 
-  const targets = page.locator(".team-review-inspector__targets button");
+  const targets = page.locator(".review-inspector__targets button");
   await targets.first().waitFor();
 
   // 列表只留「点开确实有东西看」的对象：审查记录只挂在被审任务身上，所以被审过的执行者

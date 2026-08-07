@@ -7,7 +7,7 @@ import {
   WarningCircle,
 } from "@phosphor-icons/react";
 import { ReviewEvidence, useTaskReviewInfo } from "./ReviewEvidence.tsx";
-import { ReviewEvidenceDrawer } from "./ReviewEvidenceDrawer.tsx";
+import { ReviewEvidenceDrawer } from "../review/ReviewEvidenceDrawer.tsx";
 
 function reviewLabel(task: Task) {
   if (task.stage) return STAGE_LABELS[task.stage];
@@ -125,7 +125,7 @@ export function TeamReviewInspector({
   const openedSubject = opened ? subjectOf(opened) : null;
 
   return (
-    <div className="review-inspector team-review-inspector" aria-label="团队审查" ref={rootRef}>
+    <div className="review-inspector" aria-label="团队审查" ref={rootRef}>
       <section className="review-inspector__overview">
         <header>
           <span className={`review-inspector__status${failed ? " is-verify_failed" : completed ? " is-verified" : ""}`}>
@@ -145,7 +145,7 @@ export function TeamReviewInspector({
         </div>
       </section>
 
-      <section className="team-review-inspector__targets" aria-label="团队审查对象">
+      <section className="review-inspector__targets" aria-label="团队审查对象">
         <header>
           <b>审查对象</b>
           <small>
@@ -158,7 +158,7 @@ export function TeamReviewInspector({
         </header>
         <div ref={listRef}>
           {!targets.length && (
-            <p className="team-review-inspector__empty">
+            <p className="review-inspector__empty">
               这个团队还没有审查记录。执行者只是被验收标记过，并不代表验证跑过——所以这里先空着，而不是把整队执行者列成一排空记录。
             </p>
           )}

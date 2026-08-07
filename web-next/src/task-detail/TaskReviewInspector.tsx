@@ -17,7 +17,8 @@ import { EffortPicker } from "../components/EffortPicker.tsx";
 import { ExecutorModelPicker } from "../components/ExecutorModelPicker.tsx";
 import { registeredAgentTypes } from "../lib/agentAvailability.ts";
 import { api } from "../lib/api.ts";
-import { ReviewEvidence, useTaskReviewInfo } from "../team/ReviewEvidence.tsx";
+import { useTaskReviewInfo } from "../team/ReviewEvidence.tsx";
+import { TaskReviewRounds } from "../review/TaskReviewRounds.tsx";
 import { ForcePassVerifyButton } from "../workflow/VerifyGateControls.tsx";
 import { verifyStationAtCursor } from "../workflow/workflowModel.ts";
 
@@ -269,14 +270,12 @@ export function TaskReviewInspector({
         </section>
       )}
 
-      <div className="review-inspector__evidence">
-        <ReviewEvidence
-          taskId={task.id}
-          state={review}
-          emptyMessage={review.info?.reviewRequested ? "验证已启用，等待首轮结果。" : "任务完成后可自动验证，也可以在上方手动补一轮。"}
-          onOpenTask={onOpenTask}
-        />
-      </div>
+      <TaskReviewRounds
+        taskId={task.id}
+        state={review}
+        emptyMessage={review.info?.reviewRequested ? "验证已启用，等待首轮结果。" : "任务完成后可自动验证，也可以在上方手动补一轮。"}
+        onOpenTask={onOpenTask}
+      />
     </div>
   );
 }

@@ -59,7 +59,7 @@ export function useTaskReviewInfo(taskId: string): TaskReviewState {
   return { info, loading, error, reload };
 }
 
-function roundState(round: TaskReviewRound) {
+export function roundState(round: TaskReviewRound) {
   if (round.conclusion === "verified") {
     return { className: "is-verified", label: "已通过", icon: <CheckCircle size={11} weight="fill" /> };
   }
@@ -70,6 +70,53 @@ function roundState(round: TaskReviewRound) {
     return { className: "is-verifying", label: "进行中", icon: <SpinnerGap size={11} className="is-spinning" /> };
   }
   return { className: "is-inconclusive", label: "无结论", icon: <WarningCircle size={11} /> };
+}
+
+export function roundWhere(round: TaskReviewRound) {
+  return round.where === "task" ? `独立审查 · ${TASK_STATUS_LABELS[round.reviewTaskStatus]}` : "就地验证";
+}
+
+// 一轮验证的正文：报告、证据截图、回到审查任务的出口。单拎出来是因为它有两个去处——
+// 宽处（改动工作区）整篇铺开看，窄处（inspector 侧栏）塞不下，改由抽屉装着它。
+export function ReviewRoundBody({
+  taskId,
+  round,
+  onOpenTask,
+}: {
+  taskId: string;
+  round: TaskReviewRound;
+  onOpenTask?: (taskId: string) => void;
+}) {
+  const reviewTaskId = round.reviewTaskId;
+  return (
+    <>
+      {round.reportMarkdown ? <MarkdownBody text={round.reportMarkdown} /> : <p>验证报告尚未写入。</p>}
+      {round.screenshots.length > 0 && (
+        <section className="review-shots">
+          <h5><ImageSquare size={12} />证据截图 · {round.screenshots.length}</h5>
+          <div>
+            {round.screenshots.map((name) => (
+              <div className="review-shot" key={name}>
+                <PreviewableImage
+                  src={api.taskReviewFileUrl(taskId, round.round, name)}
+                  alt={name}
+                  label={`第 ${round.round} 轮 · ${name}`}
+                  loading="lazy"
+                />
+                <span>{name}</span>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+      {/* 就地验证没有另一个任务可打开（reviewTaskId 为 null），只有历史的独立审查轮才有。 */}
+      {onOpenTask && reviewTaskId && (
+        <button className="review-round__open-task" type="button" onClick={() => onOpenTask(reviewTaskId)}>
+          打开审查任务<ArrowSquareOut size={12} />
+        </button>
+      )}
+    </>
+  );
 }
 
 function ReviewRound({
@@ -83,43 +130,18 @@ function ReviewRound({
 }) {
   const [open, setOpen] = useState(true);
   const state = roundState(round);
-  const reviewTaskId = round.reviewTaskId;
   return (
     <article className={`review-round ${state.className}`}>
       <button type="button" onClick={() => setOpen((value) => !value)} aria-expanded={open}>
         <span>{round.round}</span>
         <b>第 {round.round} 轮</b>
         <em>{state.icon}{state.label}</em>
-        <small>{round.where === "task" ? `独立审查 · ${TASK_STATUS_LABELS[round.reviewTaskStatus]}` : "就地验证"}</small>
+        <small>{roundWhere(round)}</small>
         <CaretDown size={12} weight="bold" />
       </button>
       {open && (
-        <div>
-          {round.reportMarkdown ? <MarkdownBody text={round.reportMarkdown} /> : <p>验证报告尚未写入。</p>}
-          {round.screenshots.length > 0 && (
-            <section className="review-shots">
-              <h5><ImageSquare size={12} />证据截图 · {round.screenshots.length}</h5>
-              <div>
-                {round.screenshots.map((name) => (
-                  <div className="review-shot" key={name} title="点击查看大图">
-                    <PreviewableImage
-                      src={api.taskReviewFileUrl(taskId, round.round, name)}
-                      alt={name}
-                      label={`第 ${round.round} 轮 · ${name}`}
-                      loading="lazy"
-                    />
-                    <span>{name}</span>
-                  </div>
-                ))}
-              </div>
-            </section>
-          )}
-          {/* 就地验证没有另一个任务可打开（reviewTaskId 为 null），只有历史的独立审查轮才有。 */}
-          {onOpenTask && reviewTaskId && (
-            <button className="review-round__open-task" type="button" onClick={() => onOpenTask(reviewTaskId)}>
-              打开审查任务<ArrowSquareOut size={12} />
-            </button>
-          )}
+        <div className="review-round-body">
+          <ReviewRoundBody taskId={taskId} round={round} onOpenTask={onOpenTask} />
         </div>
       )}
     </article>

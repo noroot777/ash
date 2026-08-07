@@ -478,7 +478,7 @@
 }
 
 .team-info-panel__empty,
-.team-review-inspector__empty {
+.review-inspector__empty {
   margin: 0;
   color: var(--faint);
   font-size: 10.5px;
@@ -575,7 +575,11 @@
 .review-inspector__fields input:focus, .review-inspector__fields select:focus { border-color: var(--accent); }
 .review-inspector__dispatch > button { display: inline-flex; min-height: 29px; align-items: center; gap: 5px; margin-top: 10px; border: 0; border-radius: 7px; background: var(--accent); padding: 0 10px; color: white; font-size: 10.5px; font-weight: 650; }
 .review-inspector__dispatch > button:disabled { cursor: not-allowed; opacity: 0.48; }
-.review-inspector__evidence { padding: 11px; }
+/* 读取中 / 读取失败 / 空 —— 这三条也长在审查对象列表里，得躲开条目按钮那套强样式，
+   否则「重试」会长得像列表里多出来的一条。 */
+.review-inspector__targets .review-inspector__empty { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.review-inspector__targets .review-inspector__empty button { flex: 0 0 auto; border: 0; border-radius: 5px; background: var(--raised); padding: 3px 7px; color: var(--muted); font-size: 9.5px; }
+.review-inspector__targets .review-inspector__empty.is-error { color: var(--red); }
 
 .review-evidence { overflow: hidden; border: 1px solid color-mix(in lch,var(--accent) 20%,var(--line)); border-radius: 9px; background: color-mix(in lch,var(--accent) 3%,var(--panel)); }
 .review-evidence > header { display: flex; min-height: 42px; align-items: center; border-bottom: 0.5px solid color-mix(in lch,var(--accent) 14%,var(--line)); padding: 6px 10px; }
@@ -597,10 +601,12 @@
 .review-round > button > small { min-width: 0; overflow: hidden; color: var(--faint); font-size: 9.5px; text-overflow: ellipsis; white-space: nowrap; }
 .review-round > button > svg:last-child { margin-left: auto; flex: 0 0 auto; transition: transform 140ms ease; }
 .review-round > button[aria-expanded="false"] > svg:last-child { transform: rotate(-90deg); }
-.review-round > div { border-top: 0.5px solid var(--line); padding: 9px 10px; color: var(--muted); font-size: 10.5px; line-height: 1.6; }
-.review-round > div > :first-child { margin-top: 0; }
-.review-round > div > :last-child { margin-bottom: 0; }
-.review-round .task-markdown { font-size: 10.5px; line-height: 1.6; }
+.review-round > .review-round-body { border-top: 0.5px solid var(--line); padding: 9px 10px; }
+/* 正文排版跟「谁装着它」解耦：折叠卡片里是它，inspector 侧栏塞不下时抽屉里也是它。 */
+.review-round-body { color: var(--muted); font-size: 10.5px; line-height: 1.6; }
+.review-round-body > :first-child { margin-top: 0; }
+.review-round-body > :last-child { margin-bottom: 0; }
+.review-round-body .task-markdown { font-size: 10.5px; line-height: 1.6; }
 .review-shots { margin-top: 9px; border-top: 0.5px solid var(--line); padding-top: 8px; }
 .review-shots h5 { display: flex; align-items: center; gap: 5px; margin: 0 0 6px; color: var(--faint); font-size: 9.5px; text-transform: uppercase; }
 .review-shots > div { display: grid; grid-template-columns: repeat(auto-fill,minmax(120px,1fr)); gap: 7px; }
@@ -611,21 +617,21 @@
 .review-round__open-task { display: inline-flex; align-items: center; gap: 5px; margin-top: 8px; border: 0; border-radius: 6px; background: var(--raised); padding: 4px 7px; color: var(--muted); font-size: 9.5px; }
 .review-round__open-task:hover { color: var(--ink); }
 
-.team-review-inspector__targets { border-bottom: 0.5px solid var(--line); padding: 12px 14px; }
-.team-review-inspector__targets > header { margin-bottom: 7px; }
-.team-review-inspector__targets > header b, .team-review-inspector__targets > header small { display: block; }
-.team-review-inspector__targets > header b { color: var(--muted); font-size: 10.5px; }
-.team-review-inspector__targets > header small { color: var(--faint); font-size: 9px; }
-.team-review-inspector__targets > div { display: grid; gap: 5px; }
-.team-review-inspector__targets button { display: flex; min-width: 0; align-items: center; gap: 7px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); padding: 7px 8px; text-align: left; }
-.team-review-inspector__targets button:hover, .team-review-inspector__targets button.is-selected { border-color: color-mix(in lch,var(--accent) 38%,var(--line)); background: color-mix(in lch,var(--accent) 4%,var(--panel)); }
-.team-review-inspector__targets button.is-failed { border-color: color-mix(in lch,var(--red) 34%,var(--line)); }
-.team-review-inspector__targets button > span { min-width: 0; flex: 1; }
-.team-review-inspector__targets button b, .team-review-inspector__targets button small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.team-review-inspector__targets button b { color: var(--ink); font-size: 10.5px; }
-.team-review-inspector__targets button small { color: var(--faint); font-size: 9px; }
-.team-review-inspector__targets button em { flex: 0 0 auto; border-radius: 4px; background: var(--raised); padding: 2px 5px; color: var(--muted); font-size: 8.5px; font-style: normal; }
-.team-review-inspector__targets button.is-selected em { background: color-mix(in lch,var(--accent) 12%,var(--raised)); color: var(--accent); }
+.review-inspector__targets { border-bottom: 0.5px solid var(--line); padding: 12px 14px; }
+.review-inspector__targets > header { margin-bottom: 7px; }
+.review-inspector__targets > header b, .review-inspector__targets > header small { display: block; }
+.review-inspector__targets > header b { color: var(--muted); font-size: 10.5px; }
+.review-inspector__targets > header small { color: var(--faint); font-size: 9px; }
+.review-inspector__targets > div { display: grid; gap: 5px; }
+.review-inspector__targets button { display: flex; min-width: 0; align-items: center; gap: 7px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); padding: 7px 8px; text-align: left; }
+.review-inspector__targets button:hover, .review-inspector__targets button.is-selected { border-color: color-mix(in lch,var(--accent) 38%,var(--line)); background: color-mix(in lch,var(--accent) 4%,var(--panel)); }
+.review-inspector__targets button.is-failed { border-color: color-mix(in lch,var(--red) 34%,var(--line)); }
+.review-inspector__targets button > span { min-width: 0; flex: 1; }
+.review-inspector__targets button b, .review-inspector__targets button small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.review-inspector__targets button b { color: var(--ink); font-size: 10.5px; }
+.review-inspector__targets button small { color: var(--faint); font-size: 9px; }
+.review-inspector__targets button em { flex: 0 0 auto; border-radius: 4px; background: var(--raised); padding: 2px 5px; color: var(--muted); font-size: 8.5px; font-style: normal; }
+.review-inspector__targets button.is-selected em { background: color-mix(in lch,var(--accent) 12%,var(--raised)); color: var(--accent); }
 
 /* 贴着审查侧边栏左边缘的那一屉，位置与尺寸由 ReviewEvidenceDrawer 量出来写在 style 上。
    z 要压过执行者抽屉（95）：那一屉里也有 inspector，审查内容得浮在它上面才看得见。 */
