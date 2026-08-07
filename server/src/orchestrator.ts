@@ -2,6 +2,7 @@ import { mkdirSync, createWriteStream, existsSync } from "node:fs";
 import { join } from "node:path";
 import { eq, inArray } from "drizzle-orm";
 import type { AgentType, TaskStatus } from "@harness/shared";
+import { STEP_LABELS } from "@harness/shared/workflow";
 import { db } from "./db/index.js";
 import { tasks, projects, sessions } from "./db/schema.js";
 import { bus } from "./bus.js";
@@ -24,6 +25,7 @@ import { reviewProtocolFor, reviewReminderFor, verifyReminderFor } from "./revie
 import { peerNoticeFor } from "./peer-context.js";
 import { recordTurnBaseline } from "./turn-baseline.js";
 import { recordTurnStart } from "./turn-output.js";
+import { taskWorkflowDef } from "./workflows.js";
 
 
 // Single tasks run headless — nobody can answer a mid-run prompt. Tell the agent
@@ -88,9 +90,34 @@ const COMPLETION_REMINDER = (taskId: string, sharedTeamWorker: boolean, reviewTa
 // 续聊(follow-up)回合的尾巴:任务早就到终态了,这一轮是「完成之后的对话」,
 // 不该拿严格完成协议吓唬 agent(不确认就 failed)—— 这一轮不确认,任务状态原样
 // 不动。只有它真把任务推进到新的完成时才需要确认。
-const FOLLOW_UP_REMINDER = (taskId: string, from: string, sharedTeamWorker: boolean, reviewTask: boolean) =>
+const FOLLOW_UP_REMINDER = (
+  taskId: string, from: string, sharedTeamWorker: boolean, reviewTask: boolean, rail: string,
+) =>
   !STRICT_DONE_PROTOCOL ? "" :
-  `\n\n(harness:这是任务在「${FOLLOW_UP_LABEL[from] ?? from}」之后的续聊,taskId=${taskId}。任务状态不会因为本回合而改变,本回合不需要 complete_task;只有当你在这一轮把任务推进到了新的完成状态时,才调用 complete_task(taskId="${taskId}")确认。${ACCEPTANCE_REMINDER(taskId, sharedTeamWorker, reviewTask)})`;
+  `\n\n(harness:这是任务在「${FOLLOW_UP_LABEL[from] ?? from}」之后的续聊,taskId=${taskId}。任务状态不会因为本回合而改变,本回合不需要 complete_task;只有当你在这一轮把任务推进到了新的完成状态时,才调用 complete_task(taskId="${taskId}")确认。${rail}${ACCEPTANCE_REMINDER(taskId, sharedTeamWorker, reviewTask)})`;
+
+// 「你这一轮要是改了代码,这条线在等你确认」—— 只在续聊回合、且任务身上真挂着一条
+// 还有后续站的线时追加。
+//
+// 补它是因为上面那句「不需要 complete_task」在有线的任务上会把 agent 引进一个洼地:
+// 用户续聊说「改成 XXX」,agent 改完、按验收辅路那句调了 report_stage(awaiting_acceptance)
+// 就收工 —— 它以为已经交给人工验收了,可**线的推进只认 complete_task**
+// (`handleTaskSettlement` 的 `confirmedDone && status === "done"`),于是新一版代码躺在
+// 那儿,预览没开、人工关口没到,游标停在「让 AI 干活」原地不动,用户看到的是「怎么第一步
+// 就停了」(实测任务 1rojF5Tjau91)。改代码这一档本来就属于「把任务推进到了新的完成状态」,
+// 只是没人对 agent 明说过 —— 它得同时知道这条线存在、以及不确认的后果是线不走。
+const FOLLOW_UP_RAIL_NOTE = (taskId: string, summary: string) =>
+  `\n本任务身上挂着一条执行链(${summary}),它停在「让 AI 干活」这一站等你确认:` +
+  `你这一轮**改了代码**就属于上面说的「推进到了新的完成状态」,做完请调 complete_task(taskId="${taskId}")确认,` +
+  `后面的站才会自己往下跑;只调 report_stage 不会推动这条线。纯回答问题、没动代码则不用确认。`;
+
+/** 线上除了「让 AI 干活」还有别的站时,给续聊回合补一句上面那段。 */
+function followUpRailNote(taskId: string, workflow: string | null | undefined): string {
+  const def = taskWorkflowDef(workflow);
+  if (!def || def.steps.length < 2) return "";
+  if (!def.steps.some((step) => step.kind === "run")) return "";
+  return FOLLOW_UP_RAIL_NOTE(taskId, def.steps.map((step) => STEP_LABELS[step.kind]).join(" → "));
+}
 
 // The task's worktree was gone AND its branch with it, so we rebuilt an empty one.
 // The CLI conversation lives outside the worktree (~/.claude/projects/<escaped
@@ -512,7 +539,11 @@ export async function continueTask(
       userTurnText +
       (workspaceReset ? WORKSPACE_RESET(cwd) : "") +
       (followUpFrom
-        ? FOLLOW_UP_REMINDER(taskId, followUpFrom, sharedTeamWorker, verifying)
+        ? FOLLOW_UP_REMINDER(
+            taskId, followUpFrom, sharedTeamWorker, verifying,
+            // 验证轮/审查任务不提这条线：那一轮的产出是结论，不是新一版代码。
+            verifying ? "" : followUpRailNote(taskId, task.workflow),
+          )
         : COMPLETION_REMINDER(taskId, sharedTeamWorker, verifying)) +
       (reviewReminder ? `\n${reviewReminder}` : "");
     const turnStart = now();

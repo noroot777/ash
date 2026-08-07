@@ -182,8 +182,33 @@ const RESET_NOTE =
 
 /** 清了账、线却不会自己往下走的那一档，得把「停在哪、怎么让它继续」说出来。 */
 const RESET_STALLED_NOTE =
-  "这一轮没有确认完成，所以线就停在「让 AI 干活」这一站，不会自己往下走"
+  "这一轮改了代码，但没有确认完成（complete_task），所以线就停在「让 AI 干活」这一站，不会自己往下走"
   + "——再回一句让它把这一版确认完成，后面的站（预览 / 等我点头 / 验证）就会照常接着跑。";
+
+/**
+ * 「线停在起点等确认」这一档的说明，写进时间线。
+ *
+ * **判据不能是「这一轮清到了账」**（原先写的是 `cleared && !confirmedDone`）：连着续聊
+ * 第二轮时，回合开头账本本来就是干净的（游标已经在 run 站上、牌子已被摘走），
+ * `resetWorkflowLedger` 返回 null —— 可洼地一模一样存在，用户反而更需要这句话。实测
+ * 任务 1rojF5Tjau91：agent 改完代码只调了 report_stage 就收工，线停在第一站，时间线上
+ * 一个字都没有，用户只能问「怎么在第一步就停了」。
+ *
+ * 三个前提缺一不可：线上真有「让 AI 干活」这一站、这条线还有后续的站（只有一站的线
+ * 没什么可停的）、游标此刻确实停在那一站（不在就说明线早走过去了，这句话是错的）。
+ */
+async function noteStalledAtRun(taskId: string): Promise<void> {
+  const row = (await db
+    .select({ workflow: tasks.workflow, workflowAt: tasks.workflowAt })
+    .from(tasks)
+    .where(eq(tasks.id, taskId))).at(0);
+  if (!row) return;
+  const def = taskWorkflowDef(row.workflow);
+  const run = def && def.steps.length > 1 ? firstAnchor(def, "run") : null;
+  if (!run) return;
+  if ((row.workflowAt ?? run.id) !== run.id) return;
+  await appendTaskTimeline(taskId, RESET_STALLED_NOTE);
+}
 
 /** 白清一场：纯询问回合的收尾。 */
 const RESTORE_NOTE =
@@ -281,8 +306,8 @@ async function discardEmptyShell(taskId: string): Promise<void> {
  * （`handleTaskSettlement → advanceWorkflowFrom(settleFrom(...))`），放回晚一步就会
  * 把纯询问回合的游标推乱。
  *
- * `confirmedDone` **只用来挑那行时间线的措辞**（清完之后线会不会自己往下走）。它绝不能
- * 再回到「清不清账」的判断里 —— 那正是上一次要修的病，理由见文件头。
+ * `confirmedDone` **只决定要不要补那行「线停在起点等确认」的说明**。它绝不能再回到
+ * 「清不清账」的判断里 —— 那正是上一次要修的病，理由见文件头。
  */
 export async function reconcileTurnBaseline(taskId: string, confirmedDone: boolean): Promise<void> {
   const base = takeTurnBaseline(taskId);
@@ -293,15 +318,10 @@ export async function reconcileTurnBaseline(taskId: string, confirmedDone: boole
     if (changed) {
       // 账开头就清了，这里什么都不用做。唯一的例外是 `ledger` 字段缺失 —— 那张基线是
       // 升级前的旧 server 写的，那一轮开头没清过，退回老路径在这儿补清一次。
-      const cleared = base.ledger === undefined ? await resetWorkflowLedger(taskId) : base.ledger;
-      // 清了账、线又不会自己往下走的那一档，到这会儿才知道，补一句说明停在哪
-      // （这句点名了「让 AI 干活」那一站，所以线上真有这么一站才写）。
-      if (cleared && !confirmedDone) {
-        const t = (await db.select({ workflow: tasks.workflow }).from(tasks).where(eq(tasks.id, taskId))).at(0);
-        if (t && firstAnchor(taskWorkflowDef(t.workflow), "run")) {
-          await appendTaskTimeline(taskId, RESET_STALLED_NOTE);
-        }
-      }
+      if (base.ledger === undefined) await resetWorkflowLedger(taskId);
+      // 改了代码却没确认完成 = 线停在起点不动。到这会儿才知道，补一句说明停在哪。
+      // **跟「这次清没清到账」无关**，理由见 noteStalledAtRun。
+      if (!confirmedDone) await noteStalledAtRun(taskId);
       return;
     }
     // 一个字节没变 = 纯询问。回合开头清掉的账、摘掉的「已验收/已合并」牌子都是白清的，
