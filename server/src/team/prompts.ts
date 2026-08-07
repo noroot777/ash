@@ -32,10 +32,10 @@ export const TEAM_WORKER_PREAMBLE = (taskId: string) =>
 export const INBOUND_QUESTION = (t: { id: string; title: string }, question: string) =>
   `【执行者提问】「${t.title}」(taskId=${t.id})已暂停等你答复,问题:\n${question}\n\n先调查(get_task 看它的任务详情、按需读仓库现状),再 answer_question(taskId="${t.id}", answer=...)答复 —— 答复会自动唤醒它续跑。你也拿不准就 ask_question 转问用户。`;
 
-export const INBOUND_FAILED = (t: { id: string; title: string }, unconfirmed: boolean) =>
+export const INBOUND_FAILED = (t: { id: string; title: string }, unconfirmed: boolean, outputHint = "") =>
   `【执行者失败】「${t.title}」(taskId=${t.id})本回合以 failed 结束${
     unconfirmed ? "(回合正常退出但没调 complete_task 确认 —— 按严格完成协议记 failed,也可能其实已经做完了)" : ""
-  }。查它的会话与产物:确实做完了 → patch_task 修正状态;没做完 → run_task 让它从中断处续跑,或改任务重派。队列不会因为它失败而停,后面的执行者照常在跑。`;
+  }。查它的会话与产物:确实做完了 → patch_task 修正状态;没做完 → run_task 让它从中断处续跑,或改任务重派。队列不会因为它失败而停,后面的执行者照常在跑。${outputHint}`;
 
 export const INBOUND_DONE = (t: { id: string; title: string }) =>
   `【执行者完成】「${t.title}」(taskId=${t.id})报告完成(你派它时要求了汇报)。核查产物,再决定下一步:验收、派后续执行者、还是收尾告诉用户。`;

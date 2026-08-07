@@ -18,6 +18,7 @@ import { notifyTeamLead } from "./team/inbox.js";
 import { handleTaskSettlement } from "./review.js";
 import { FOLLOW_UP_LABEL } from "./labels.js";
 import { reconcileTurnBaseline } from "./turn-baseline.js";
+import { clearTurnStart, turnOutputHint } from "./turn-output.js";
 import { replayUndeliveredMcpCalls } from "./mcp-handoff.js";
 
 
@@ -83,9 +84,9 @@ export async function settleTaskStatus(
   // 执行者结算 → 按需唤醒团队调度者(§Team)。只有提问、失败、以及 reportBack 的
   // done 会投递;普通 done 静默(UI 自己会更新,不花一轮模型调用)。非团队任务
   // (parentId 空)里 notifyTeamLead 直接返回。
-  const notify = (kind: Parameters<typeof notifyTeamLead>[1], q?: string) => {
+  const notify = (kind: Parameters<typeof notifyTeamLead>[1], q?: string, extra?: string) => {
     if (!t) return;
-    void notifyTeamLead(t, kind, q).catch((err) =>
+    void notifyTeamLead(t, kind, q, extra).catch((err) =>
       console.error(`[harness] notifyTeamLead(${taskId}) failed:`, err),
     );
   };
@@ -158,9 +159,12 @@ export async function settleTaskStatus(
     notify("done");
     return { status: "done", confirmedDone: confirmed };
   }
+  // 记 failed 之前先看一眼这一轮到底有没有产出:有就在通知里直说「你有 N 个新提交」,
+  // 比通用文案快得多地指到病灶(多半只是漏了交卷)。**只影响措辞,不改落位**。
+  const hint = await turnOutputHint(taskId);
   await setStatus(taskId, "failed");
-  notify("failed_unconfirmed");
-  return { status: "failed", note: UNCONFIRMED_NOTE, confirmedDone: false };
+  notify("failed_unconfirmed", undefined, hint);
+  return { status: "failed", note: UNCONFIRMED_NOTE + hint, confirmedDone: false };
 }
 
 // 消费一次单飞运行的事件流，直到它结束，然后结算。
@@ -296,6 +300,7 @@ export async function consumeSingleRun(a: {
     agentType,
   }).catch(() => 0);
   const settled = await settleTaskStatus(taskId, exitStatus, stopped);
+  clearTurnStart(taskId); // 只有「未确认 failed」那一支会读它,别的支路在这儿扔掉残页
   // 这一轮到底改没改东西:改了就把上一版的验证/验收记录清掉,没改且屋子是临时搭的就拆掉。
   // **必须排在 afterSettlement 之前** —— 那一步会拿着游标把这条线往下推,账晚清一步,
   // 上一版的验证结论就已经替新改动放行了(详见 turn-baseline.ts)。

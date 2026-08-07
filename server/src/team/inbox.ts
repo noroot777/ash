@@ -18,6 +18,8 @@ export async function notifyTeamLead(
   worker: typeof tasks.$inferSelect,
   kind: InboundKind,
   question?: string | null,
+  /** 结算探到的产出线索（`turn-output.ts`）。调度者拿到「它有 3 个新提交」才不会盲目重派。 */
+  outputHint?: string,
 ): Promise<void> {
   if (!worker.parentId) return; // 不是谁的执行者
   if (kind === "done" && !worker.reportBack) return; // 静默完成
@@ -30,7 +32,7 @@ export async function notifyTeamLead(
       ? INBOUND_QUESTION(ref, withOptions(worker, question))
       : kind === "done"
         ? INBOUND_DONE(ref)
-        : INBOUND_FAILED(ref, kind === "failed_unconfirmed");
+        : INBOUND_FAILED(ref, kind === "failed_unconfirmed", outputHint);
   await sendInbound(lead.id, text);
 }
 

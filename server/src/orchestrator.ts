@@ -23,6 +23,7 @@ import { reopenAcceptedStage } from "./task-stage.js";
 import { reviewProtocolFor, reviewReminderFor, verifyReminderFor } from "./review-prompts.js";
 import { peerNoticeFor } from "./peer-context.js";
 import { recordTurnBaseline } from "./turn-baseline.js";
+import { recordTurnStart } from "./turn-output.js";
 
 
 // Single tasks run headless — nobody can answer a mid-run prompt. Tell the agent
@@ -206,6 +207,9 @@ export async function runTask(taskId: string): Promise<void> {
     // Ordinary tasks resolve exactly as before. Team workers additionally inherit
     // their lead's shared workspace unless they explicitly request another worktree.
     const ws = await taskWorkspace(task, project.repoPath);
+    // 这一轮到底留下了什么:只服务「没交卷」时的通知措辞(turn-output.ts)。fresh run
+    // 也要记 —— 漏交卷最常发生在这一路,而 turn-baseline 只给真人续聊拍照。
+    await recordTurnStart(taskId, ws.path);
     const agentType = (task.agentType as AgentType) ?? "claude";
     const ex = await resolveExecutorFor({
       executorId: task.executorId,
@@ -468,6 +472,9 @@ export async function continueTask(
     // 验证/验收记录清掉重走一遍（详见 turn-baseline.ts）。只给真人消息拍 —— 系统续跑、
     // 队列推进、验证打回后叫 agent 修，那些轮次改代码是本分，清账反而打断正在跑的流程。
     if (!opts.system && !sideTurn) await recordTurnBaseline(taskId, cwd, freshWorkspace, reopenedStage);
+    // 「有产出却没交卷」的探针跟上面那张照片是两回事:它只管通知怎么措辞,所以**每一轮都记**
+    // (系统续跑、队列推进的回合同样会漏交卷)。详见 turn-output.ts。
+    await recordTurnStart(taskId, cwd);
 
     const invited = !prev; // first time this agent is pulled into the task
     const userTurnText = userText + attachmentsPrompt(opts.attachments);

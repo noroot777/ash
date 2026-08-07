@@ -17,6 +17,7 @@
     "test:user-directives": "tsx scripts/test-user-directives.ts",
     "test:task-workspace": "tsx scripts/test-task-workspace.ts",
     "test:turn-baseline": "tsx scripts/test-turn-baseline.ts",
+    "test:turn-output": "tsx scripts/test-turn-output.ts",
     "test:reopen-acceptance": "tsx scripts/test-reopen-acceptance.ts",
     "test:accept-merge": "tsx scripts/test-accept-merge.ts",
     "test:repo-lock": "tsx scripts/test-repo-lock.ts",
