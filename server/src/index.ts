@@ -129,21 +129,28 @@ async function initializeServer() {
     ]);
 
   await ensureSchema();
-  // 预览实例专用：从主库搬一份数据进这个空库（默认整份快照，运行态搬完立刻洗；
-  // `HARNESS_SEED_MODE=config` 退回只搬设置）。只有 scripts/dev.mjs 起预览时才带这个变量。
-  // **必须排在 reattachRunningTasks 之前**：洗掉的正是它会拿去接管的那些 pid。
+  // 预览实例第一次从主库播种，之后复用同一份持久测试库。
   if (process.env.HARNESS_SEED_FROM) {
     const { seedPreviewDb } = await import("./preview-seed.js");
     const mode = process.env.HARNESS_SEED_MODE === "config" ? "config" : "snapshot";
     await seedPreviewDb(process.env.HARNESS_SEED_FROM, mode);
+  }
+  // 测试库会持久，所以每次启动都重新洗运行态；不能只在首次播种时洗。
+  if (IS_PREVIEW_INSTANCE) {
+    const { sanitizeSnapshot } = await import("./preview-seed.js");
+    const washed = await sanitizeSnapshot((await import("./db/index.js")).dbClient);
+    console.log(`[harness] 共享预览库已洗运行态：${washed.join("、") || "无"}`);
   }
   await migrateQueues(); // 一次性把 legacy depends_on / resume_depends_on 迁到 queue_items（幂等）
   // **顺序不能反**：先把还活着的 agent 接管回来（它们的输出走文件，压根没随上
   // 一个 server 进程一起死），再 reconcile 剩下那些真被打断的。反过来的话，一个
   // 正在干活的 agent 会先被判 failed，用户一点重试就有第二个 agent 进同一个
   // worktree —— 那是数据损坏，不是显示问题。
-  await reattachRunningTasks();
-  await reconcileInterrupted(); // recover tasks left "running"/"queued" by a previous crash/restart
+  // 预览永远不接管、不结算真 agent。即使某份旧库没洗干净，这道硬闸也保证它不碰真进程。
+  if (!IS_PREVIEW_INSTANCE) {
+    await reattachRunningTasks();
+    await reconcileInterrupted(); // recover tasks left "running"/"queued" by a previous crash/restart
+  }
   // 回收上一轮遗留的原始输出文件（纯传输介质，正文早已进 .md）。放在接管之后：
   // 它靠 sessions 判断哪些文件仍在用，接管完那份名单才是准的。best-effort。
   void sweepRunLogs()

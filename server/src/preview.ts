@@ -16,7 +16,7 @@ import { existsSync, mkdirSync, openSync, closeSync, readFileSync, readdirSync, 
 import { join } from "node:path";
 import type { PreviewLife, WorkflowStep } from "@harness/shared/workflow";
 import { augmentedEnv, killByPid } from "./executors/spawn.js";
-import { RUNS_DIR } from "./paths.js";
+import { DATA_DIR, RUNS_DIR } from "./paths.js";
 import { portConflict, pickPreviewUrl, portHint } from "./preview-log.js";
 import { ready } from "./preview-probe.js";
 import { appendTaskTimeline } from "./task-timeline.js";
@@ -41,6 +41,8 @@ const POLL_MS = 500;
 /** idle30 那一档：满这么久就回收（见 PREVIEW_LIFE_LABELS 的口径说明）。 */
 const IDLE_LIFE_MS = 30 * 60_000;
 const SWEEP_MS = 5 * 60_000;
+const SHARED_PREVIEW_DB = join(DATA_DIR, "preview-test.db");
+const UNSAFE_SCHEDULER_LOG = "[harness] scheduler started";
 
 // 「端口撞车怎么认、日志里哪个地址才是预览本尊、认出来说什么」都在 preview-log.ts
 //（纯函数，回归 test:preview-log）；「连不连得上、算不算起来了」在 preview-probe.ts
@@ -110,6 +112,24 @@ export type PreviewResult =
   | { ok: true; record: PreviewRecord }
   | { ok: false; reason: string };
 
+/**
+ * 共享库只能有一个后端。跨任务同时起预览时串行这一整段，否则两边都在旧记录
+ * 落盘前开进程，单实例锁只能让其中一个以“启动失败”收场，另一个任务还以为自己的预览在。
+ */
+let previewLaunchTail: Promise<void> = Promise.resolve();
+
+async function withPreviewLaunchLock<T>(run: () => Promise<T>): Promise<T> {
+  const previous = previewLaunchTail;
+  let release!: () => void;
+  previewLaunchTail = new Promise<void>((resolve) => { release = resolve; });
+  await previous;
+  try {
+    return await run();
+  } finally {
+    release();
+  }
+}
+
 // 起一个预览。cwd 由调用方给（任务自己的工作区），因为「在哪儿跑」是工作区的事，
 // 不该在这里第二次推导。
 export async function startPreview(
@@ -117,14 +137,25 @@ export async function startPreview(
   step: PreviewStep,
   cwd: string,
 ): Promise<PreviewResult> {
-  await stopPreview(taskId, null);
+  return withPreviewLaunchLock(() => startPreviewUnlocked(taskId, step, cwd));
+}
+
+async function startPreviewUnlocked(
+  taskId: string,
+  step: PreviewStep,
+  cwd: string,
+): Promise<PreviewResult> {
+  await stopOtherPreviews(taskId);
+  const previewEnv = await environmentForPreview(cwd);
   const dir = join(RUNS_DIR, taskId);
   mkdirSync(dir, { recursive: true });
   const log = join(dir, "preview.log");
   const lent = await freePort();
   // 日志头把注入的环境变量照实写出来，不只写命令：用户翻 preview.log 时得能一眼看出
   // 「harness 到底把什么交给了这条命令」，而不是去猜端口是谁定的。
-  const banner = lent ? `$ PORT=${lent} BROWSER=none ${step.p.cmd}\n` : `$ ${step.p.cmd}\n`;
+  const banner = lent
+    ? `$ PORT=${lent} BROWSER=none HARNESS_PREVIEW=1${previewEnv.HARNESS_DB ? ` HARNESS_DB=${previewEnv.HARNESS_DB}` : ""} ${step.p.cmd}\n`
+    : `$ HARNESS_PREVIEW=1 ${step.p.cmd}\n`;
   writeFileSync(log, banner);
   const fd = openSync(log, "a");
   let pid: number;
@@ -135,7 +166,7 @@ export async function startPreview(
       stdio: ["ignore", fd, fd],
       // BROWSER=none：dev server 的 `--open` 会去拉一个真浏览器窗口，预览是后台起的，
       // 那扇窗户没人要。PORT 的来由见 freePort 的注释。
-      env: { ...augmentedEnv(), ...(lent ? { PORT: String(lent) } : {}), BROWSER: "none" },
+      env: { ...augmentedEnv(), ...previewEnv, ...(lent ? { PORT: String(lent) } : {}), BROWSER: "none" },
     });
     child.unref();
     if (!child.pid) return { ok: false, reason: "预览进程没起来" };
@@ -150,6 +181,13 @@ export async function startPreview(
   while (Date.now() < deadline) {
     await sleep(POLL_MS);
     const text = tail(log);
+    if (text.includes(UNSAFE_SCHEDULER_LOG)) {
+      killByPid(pid);
+      return {
+        ok: false,
+        reason: "这个分支的预览后端启动了真调度器，安全协议过旧，已立即回收。请先把当前分支同步到新版预览隔离逻辑。",
+      };
+    }
     const found = pickPreviewUrl(text, lent);
     // 顺序要紧：撞车先判，再判进程死没死、再判起没起来。见 PORT_TAKEN_RE 那儿的 ②。
     //
@@ -179,6 +217,61 @@ export async function startPreview(
     ok: false,
     reason: `等了 ${Math.round(READY_TIMEOUT_MS / 1000)} 秒还没起来。最后几行日志：\n${tail(log).slice(-800)}`,
   };
+}
+
+/** 共享库的含义就是全局只留一个 harness 预览；被新预览替换要留下可刷新看见的时间线。 */
+async function stopOtherPreviews(taskId: string): Promise<void> {
+  let taskIds: string[] = [];
+  try {
+    taskIds = readdirSync(RUNS_DIR);
+  } catch {
+    // runs 目录还没创建，就没有旧预览。
+  }
+  const oldPids: number[] = [];
+  for (const otherId of taskIds) {
+    const record = readPreview(otherId);
+    if (!record) continue;
+    oldPids.push(record.pid);
+    await stopPreview(
+      otherId,
+      otherId === taskId ? null : `任务 ${taskId} 启动了共享测试库的新预览`,
+    );
+  }
+  // killByPid 先 TERM、2s 后才补 KILL；给旧 server 一点时间释放共享库锁。
+  for (let i = 0; i < 12; i++) {
+    const oldAlive = oldPids.some(alive);
+    if (!oldAlive) break;
+    await sleep(250);
+  }
+}
+
+/**
+ * 预览命令是通用站，所以只对 package name 为 harness 的工作区强制共享库。
+ * HARNESS_PREVIEW 则始终注入：新分支用它禁用调度/接管，其他项目没有读它就是无害环境变量。
+ */
+async function environmentForPreview(cwd: string): Promise<Record<string, string>> {
+  const env = { HARNESS_PREVIEW: "1" } as Record<string, string>;
+  try {
+    const pkg = JSON.parse(readFileSync(join(cwd, "package.json"), "utf8")) as { name?: string };
+    if (pkg.name !== "harness" || !existsSync(join(cwd, "server", "package.json"))) return env;
+  } catch {
+    return env;
+  }
+  env.HARNESS_DB = SHARED_PREVIEW_DB;
+  env.HARNESS_SHARED_PREVIEW_DB = "1";
+  if (existsSync(SHARED_PREVIEW_DB)) {
+    const [{ createClient }, { sanitizeSnapshot }] = await Promise.all([
+      import("@libsql/client"),
+      import("./preview-seed.js"),
+    ]);
+    const client = createClient({ url: `file:${SHARED_PREVIEW_DB}` });
+    try {
+      await sanitizeSnapshot(client);
+    } finally {
+      client.close();
+    }
+  }
+  return env;
 }
 
 // 收掉一个任务的预览。reason 非空才往时间线写一行——刷新后仍能看出「预览被收了、

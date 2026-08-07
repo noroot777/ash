@@ -16,19 +16,19 @@
 // 旧做法列的三个坎，各自的解法：
 //   ① 后端端口写死 4317 → 这里自己借第二个空闲端口，不走 `dev:server`。
 //   ② 同一个库只允许一个 server（锁的粒度是 **DB 文件路径**，见 server/src/singleton.ts）
-//      → 预览用自己的库 `<worktree>/data/preview.db`，跟本机那份天然错开，谁都不用让路。
+//      → 所有 harness 预览共用主仓 `data/preview-test.db`；主 harness 起新预览前先收掉旧的。
 //   ③ 后端启动那行 `http://localhost:<port>` 会被就绪判定当成预览地址（它挑日志里第一个
 //      地址）→ 转发时把 scheme 去掉，见 forward()。
 //
-// 预览的库是**主库的快照**（`data/preview.db`，每次起预览重新拷一份），不是空库、也不是
-// 主库本身。三句话说清为什么是这个形状：
+// 预览的库是**主库创建的持久测试副本**（主仓 `data/preview-test.db`），不是空库、
+// 也不是主库本身。第一次从主库播种，之后预览里的改动会保留；每次启动只清理运行态。
 //
 //   · 不能共用主库文件：单实例锁的粒度就是 DB 文件路径（server/src/singleton.ts）。真让
 //     两个 server 开同一个库，第二个照样 30s tick、照样拉起 agent，而它的子进程只在它自己
 //     内存里——主界面点停止停不掉它（`docs/incidents.md`「端口撞车产幽灵」）。
 //   · 不能是空库：一个执行器都没有，新建任务面板直接写着「还没有已注册执行器」，创建按钮
 //     是灰的；任务列表也空空如也，凡是得有数据才看得见的改动（token 计数就是）一概验不了。
-//   · 所以是快照 + 洗运行态：搬完立刻把 running 的任务、会话上的真 pid 洗掉，并且压根不搬
+//   · 所以是持久副本 + 每次洗运行态：running 任务、会话上的真 pid 会被洗掉，并且压根不留
 //     schedules/scheduled_messages（白名单和洗法在 server/src/preview-seed.ts）。
 //
 // 快照兜不住的两处，另外堵：①任务行带着**真** worktree 路径和分支名 → 预览实例上合并/删
@@ -39,7 +39,7 @@
 // **想换个花样，改预览站那一格的命令就行，不用碰这里**——那一格本来就是一条 shell 命令：
 //
 //   npm -w web-next run dev                 只起前端，/api 打回本机 4317 的真数据（老行为）
-//   npm run dev                             整套 + 主库快照（默认）
+//   npm run dev                             整套 + 共享持久测试库（默认）
 //   HARNESS_SEED_MODE=config npm run dev    整套，但只搬设置不搬任务（快照出问题时的退路）
 //   HARNESS_SEED_FROM= npm run dev          整套，空库
 //   HARNESS_DB=/tmp/我的.db npm run dev      整套，用你自己的库（不清空、不播种覆盖）
@@ -59,7 +59,7 @@
 // 代价说在明处：预览里 ask_question / report_stage 这些 MCP 工具同样不通。要连它们一起
 // 修，得让 harness 每次起 CLI 时自带 mcp 配置，那是另一件事、另一个爆炸半径。
 import { execFileSync, spawn } from "node:child_process";
-import { rmSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { createServer } from "node:net";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -85,24 +85,15 @@ async function startPreviewStack(webPort) {
   // 下面这三样**外面给了就听外面的**。预览站那一格存的就是一条 shell 命令，所以
   // `HARNESS_DB=/tmp/我的测试库.db npm run dev` 天然能表达「这次用我自己的库」——
   // 不必为此在起手式上多开一个字段（那种字段对非 harness 项目永远是空的，见文件头）。
-  //   · HARNESS_DB       换一个库。给了自己的库就**不删**它，见下面的 managed。
+  //   · HARNESS_DB       换一个库。默认是主仓共享的 preview-test.db，任何一档都不自动删库。
   //   · HARNESS_SEED_FROM 换源库；显式给空串 = 起一个空库（server 端判的是非空）。
   //   · HARNESS_SEED_MODE server 端已经认（`config` = 只搬设置不搬任务），这里原样透传。
   // 指到主库本身会被单实例锁挡下来（锁的粒度就是 DB 文件路径），后端起不来、整套一起收，
   // 理由写在 preview.log 第一屏——这正是我们要的结果，不额外拦一道。
-  const managed = !process.env.HARNESS_DB;
-  const dbFile = process.env.HARNESS_DB || fileURLToPath(new URL("../data/preview.db", import.meta.url));
-  // 每次起预览都换一张新快照。预览的意义是「照着**这一版代码**看**现在**这台 harness」，
-  // 沿用上次那份会看到几天前的世界（新加的执行器、新建的任务都不在），而那种错位很难自己
-  // 发现。代价是上一次在预览里点出来的东西不留——它本来就是一次性的。
-  // **只删我们自己管的那份**：用户拿自己的测试库来跑，里头多半有他攒下的东西，删掉是数据损失。
-  if (managed) {
-    for (const suffix of ["", "-wal", "-shm"]) {
-      try { rmSync(`${dbFile}${suffix}`, { force: true }); } catch { /* 占用/权限：照旧起，只是快照是旧的 */ }
-    }
-  }
+  const dbFile = process.env.HARNESS_DB || join(mainData, "preview-test.db");
+  const firstBoot = !existsSync(dbFile);
   console.log(
-    `[dev] 预览：整套起——后端 ${apiPort}（库 ${dbFile}${managed ? "" : "，你指定的，不清空"}）、`
+    `[dev] 预览：整套起——后端 ${apiPort}（持久测试库 ${dbFile}，${firstBoot ? "首次从主库播种" : "复用现有数据，不自动清空"}）、`
     + `前端 ${webPort}，前端的 /api 打到后端。`,
   );
 
@@ -122,7 +113,7 @@ async function startPreviewStack(webPort) {
       PORT: String(apiPort),
       HARNESS_DB: dbFile,
       HARNESS_URL: apiUrl,
-      HARNESS_SEED_FROM: process.env.HARNESS_SEED_FROM ?? join(mainData, "harness.db"),
+      HARNESS_SEED_FROM: process.env.HARNESS_SEED_FROM ?? (firstBoot ? join(mainData, "harness.db") : ""),
       HARNESS_RUNS_FALLBACK: process.env.HARNESS_RUNS_FALLBACK ?? join(mainData, "runs"),
       HARNESS_PREVIEW: "1",
       HARNESS_LAX_DONE: "1",
@@ -138,7 +129,7 @@ async function startPreviewStack(webPort) {
       ...process.env,
       PORT: String(webPort),
       HARNESS_PROXY: apiUrl,
-      VITE_HARNESS_PREVIEW: "预览实例 · 这个分支的前端 + 后端 · 主库快照（改不到真数据；不能验收/删分支）",
+      VITE_HARNESS_PREVIEW: "预览实例 · 这个分支的前端 + 后端 · 共享持久测试库（改不到真数据；不能验收/删分支）",
     },
   });
 

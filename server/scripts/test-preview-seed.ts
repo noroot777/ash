@@ -64,6 +64,7 @@ try {
     CREATE TABLE tasks (id TEXT PRIMARY KEY, status TEXT NOT NULL, mode TEXT NOT NULL DEFAULT 'single', verify_round INTEGER);
     CREATE TABLE sessions (id TEXT PRIMARY KEY, task_id TEXT NOT NULL, agent_pid INTEGER, agent_started_at TEXT, agent_offset INTEGER, usage_output INTEGER);
     CREATE TABLE schedules (id TEXT PRIMARY KEY, task_id TEXT NOT NULL, cron TEXT);
+    CREATE TABLE scheduled_messages (id TEXT PRIMARY KEY, task_id TEXT NOT NULL, status TEXT NOT NULL);
     INSERT INTO app_settings VALUES ('worktreeDefault', 'true');
     INSERT INTO llm_providers VALUES ('p1', 'cpa', 'sk-real-key');
     INSERT INTO agents VALUES ('a1', 'claude@local', 'claude', NULL, 1, NULL);
@@ -75,6 +76,7 @@ try {
     INSERT INTO tasks VALUES ('t4', 'running', 'team', NULL);
     INSERT INTO sessions VALUES ('s1', 't1', 4242, 'Mon Aug 7 10:00:00 2026', 991, 706);
     INSERT INTO schedules VALUES ('sch1', 't3', '0 9 * * *');
+    INSERT INTO scheduled_messages VALUES ('msg1', 't3', 'pending');
   `);
   // 预览库：agents 少一列 speed、多一列 note —— 两个方向的 schema 漂移同时存在。
   // 另外**故意不建 team_presets / workflows / notes**，模拟「这张表这个分支还没有」。
@@ -89,6 +91,9 @@ try {
     CREATE TABLE tasks (id TEXT PRIMARY KEY, status TEXT NOT NULL, mode TEXT NOT NULL DEFAULT 'single', verify_round INTEGER);
     CREATE TABLE sessions (id TEXT PRIMARY KEY, task_id TEXT NOT NULL, agent_pid INTEGER, agent_started_at TEXT, agent_offset INTEGER, usage_output INTEGER);
     CREATE TABLE schedules (id TEXT PRIMARY KEY, task_id TEXT NOT NULL, cron TEXT);
+    CREATE TABLE scheduled_messages (id TEXT PRIMARY KEY, task_id TEXT NOT NULL, status TEXT NOT NULL);
+    INSERT INTO schedules VALUES ('old-sch', 'old', '0 1 * * *');
+    INSERT INTO scheduled_messages VALUES ('old-msg', 'old', 'pending');
   `);
 
   // —— config 档：老行为，一张运行态都不进来 ——
@@ -118,8 +123,8 @@ try {
   // —— snapshot 档：运行态也搬，搬完必须洗 ——
   const snap = await copyTables(source, dest, SNAPSHOT_TABLES);
   check("快照搬了任务与会话", { tasks: snap.tasks, sessions: snap.sessions }, { tasks: 4, sessions: 1 });
-  check("定时任务不在搬运名单里，所以副本里一条都没有",
-    Number((await dest.execute("SELECT COUNT(*) AS n FROM schedules")).rows[0].n), 0);
+  check("主库的定时任务没搬进来",
+    (await dest.execute("SELECT id FROM schedules ORDER BY id")).rows.map((row) => row.id), ["old-sch"]);
   check("token 账跟着会话行一起进来（不然预览里芯片没数）",
     (await dest.execute("SELECT usage_output FROM sessions WHERE id='s1'")).rows[0].usage_output, 706);
 
@@ -135,6 +140,10 @@ try {
   // 的输出文件。
   check("会话上的真 pid 与位置全洗干净", [sess.agent_pid, sess.agent_started_at, sess.agent_offset], [null, null, null]);
   check("洗的是运行态，不碰账", (await dest.execute("SELECT usage_output FROM sessions WHERE id='s1'")).rows[0].usage_output, 706);
+  check("持久测试库里旧定时任务每次启动都清空",
+    Number((await dest.execute("SELECT COUNT(*) AS n FROM schedules")).rows[0].n), 0);
+  check("持久测试库里旧待发消息每次启动都清空",
+    Number((await dest.execute("SELECT COUNT(*) AS n FROM scheduled_messages")).rows[0].n), 0);
 } finally {
   source.close();
   dest.close();

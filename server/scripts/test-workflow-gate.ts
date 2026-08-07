@@ -21,11 +21,12 @@ import { join } from "node:path";
 
 const root = mkdtempSync(join(tmpdir(), "harness-workflow-gate-"));
 process.env.HARNESS_DB = join(root, "harness.db");
+process.env.HARNESS_RUNS_DIR = join(root, "runs");
 // 段落里那条命令要有地方跑：给一个真的 git 仓库当项目根目录。
 const repo = join(root, "repo");
 execFileSync("git", ["init", "-q", repo]);
 
-const { db, ensureSchema } = await import("../src/db/index.js");
+const { db, dbClient, ensureSchema } = await import("../src/db/index.js");
 const { projects, tasks } = await import("../src/db/schema.js");
 const { eq } = await import("drizzle-orm");
 const { advanceWorkflowFrom } = await import("../src/workflow-advance.js");
@@ -75,10 +76,11 @@ async function makeTask(id: string): Promise<void> {
 }
 
 const row = async (id: string) => (await db.select().from(tasks).where(eq(tasks.id, id))).at(0)!;
+const noAgent = { startVerifyRound: async () => ({ round: 1 }) };
 
 // ── ① 干活结算之后：跑完命令那一段，停在关口 ─────────────────────────────
 await makeTask("t1");
-await advanceWorkflowFrom(await row("t1"), taskWorkflowDef(JSON.stringify(line)), "s1");
+await advanceWorkflowFrom(await row("t1"), taskWorkflowDef(JSON.stringify(line)), "s1", noAgent);
 const stopped = await row("t1");
 
 assert.equal(stopped.workflowAt, "s3", "游标必须停在用户画的那道「等我点头」上");
@@ -87,9 +89,8 @@ assert.equal(stopped.verifyRound, null, "**没点头就不许开验证**：这�
 assert.notEqual(stopped.stage, "accepted", "更不许自己合并");
 
 // ── ② 人点了「放行」之后：这才轮到验证站 ─────────────────────────────────
-// 验证站真开起来会拉 CLI，所以这里只验「游标挪到了验证站」这一步：atVerifyStation
-// 先 setWorkflowAt 再 startVerifyRound，起不起得来都不影响游标这个断言。
-await advanceWorkflowFrom(await row("t1"), taskWorkflowDef(JSON.stringify(line)), "s3");
+// 这里只验「游标挪到了验证站」，显式注入 no-op 验证副作用，绝不启真 CLI。
+await advanceWorkflowFrom(await row("t1"), taskWorkflowDef(JSON.stringify(line)), "s3", noAgent);
 assert.equal((await row("t1")).workflowAt, "s4", "点过头之后才走到验证站");
 
 // ── ③ 关口在验证**后面**（自带起手式那种）照旧 ───────────────────────────
@@ -103,7 +104,7 @@ const classic = {
 };
 await makeTask("t2");
 await db.update(tasks).set({ workflow: JSON.stringify(classic) }).where(eq(tasks.id, "t2"));
-await advanceWorkflowFrom(await row("t2"), taskWorkflowDef(JSON.stringify(classic)), "s1");
+await advanceWorkflowFrom(await row("t2"), taskWorkflowDef(JSON.stringify(classic)), "s1", noAgent);
 assert.equal((await row("t2")).workflowAt, "c2", "老顺序不变：干完先去验证站");
 assert.notEqual((await row("t2")).stage, "awaiting_acceptance", "验证站还没验完，不该先跳到关口");
 
@@ -141,7 +142,7 @@ writeFileSync(join(ws.path, "work.txt"), "产物\n");
 git(ws.path, "add", "-A");
 git(ws.path, "commit", "-q", "-m", "干完了");
 
-const released = await acceptTask(gateTask);
+const released = await acceptTask(gateTask, "human", noAgent);
 assert.equal(released.accepted, true);
 assert.equal(released.kind, "gate_released", "关口后面还画着「自动验证」，这一按只能是放行");
 // 三条不可逆的事，一条都不许发生
@@ -158,8 +159,5 @@ assert.notEqual(after.stage, "accepted", "放行不是验收完成");
 assert.notEqual(after.stage, "merged", "放行更不是已合并");
 
 console.log("workflow gate ok");
+dbClient.close();
 rmSync(root, { recursive: true, force: true });
-// 断言都在游标上，验证站起不起得来无所谓；但 t2/④ 走到验证站会**异步**排一轮起跑，
-// 库刚被删掉，它落地时会喷一串 SQLITE_READONLY_DBMOVED。断言过了就直接退，别让
-// 这串跟测试无关的噪音盖住结论。
-process.exit(0);
