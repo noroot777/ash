@@ -11,10 +11,12 @@
 //      不让用户对着一条已经该发的消息干等最多 30 秒
 // 于是「排队」不需要第二套定时器:它就是一条永远已到期、但要等任务空闲的消息。
 //
-// **一条铁律:消息一旦被 claim 成 sent,就必须真的进到会话里,否则要原样退回 pending
-// 或者把原文抄进时间线。** 它同时从托盘和时间线上消失 = 用户那句话凭空蒸发,连「我
-// 发过」都无从证明(2026-08-07 事故,见 docs/incidents.md「排队消息凭空消失」)。
-import { and, eq } from "drizzle-orm";
+// **一条铁律:`sent` 只在原话真的进了会话之后才写。** 反过来说,库里还是 pending 的消息
+// 一定还在托盘里等着 —— 无论是被锁挡着、还是进程刚被重启掐掉。它同时从托盘和时间线上
+// 消失 = 用户那句话凭空蒸发,连「我发过」都无从证明(2026-08-07 事故,见
+// docs/incidents.md「排队消息凭空消失」)。做法是把「有人正在送」拆成一个**独立的租约字段**
+// (`delivering_since`,行本身仍是 pending),而不是提前把状态改成 sent。
+import { and, eq, isNotNull, isNull } from "drizzle-orm";
 import type { AgentType, ScheduledMessageMode } from "@harness/shared";
 import { db } from "./db/index.js";
 import { scheduledMessages, tasks } from "./db/schema.js";
@@ -53,6 +55,7 @@ export async function enqueueMessage(input: {
     status: "pending" as const,
     createdAt: now(),
     sentAt: null,
+    deliveringSince: null,
   };
   await db.insert(scheduledMessages).values(row);
   return row;
@@ -107,21 +110,20 @@ function cooling(taskId: string, at: number): boolean {
 // 消失,行要是那时已经是 sent 就再也没人管它了。
 const inFlight = new Set<string>();
 
-// 抢下之后最终没能送出去:把消息原样退回待发送队列(托盘里重新出现),下一次触发
-// 再送。**宁可晚发,不能不发** —— 消息一旦被标 sent 却没进会话,用户那句话就同时从
-// 托盘和时间线上消失了,连「我发过」都无从证明(见 docs/incidents.md「排队消息凭空消失」)。
-async function restorePendingMessage(message: Row): Promise<void> {
+// 抢下之后最终没能送出去:把租约还回去(托盘里它压根没消失过),下一次触发再送。
+// **宁可晚发,不能不发。**
+async function abortDelivery(message: Row): Promise<void> {
   lastFiredAt.delete(message.taskId);
   await db
     .update(scheduledMessages)
-    .set({ status: "pending", sentAt: null })
-    .where(and(eq(scheduledMessages.id, message.id), eq(scheduledMessages.status, "sent")));
+    .set({ deliveringSince: null })
+    .where(and(eq(scheduledMessages.id, message.id), eq(scheduledMessages.status, "pending")));
 }
 
 export async function cancelPendingMessage(message: Row, reason: string): Promise<void> {
   await db
     .update(scheduledMessages)
-    .set({ status: "canceled", sentAt: null })
+    .set({ status: "canceled", sentAt: null, deliveringSince: null })
     .where(eq(scheduledMessages.id, message.id));
   const label = message.mode === "queued" ? "排队消息" : "定时消息";
   const when = message.mode === "queued" ? "" : `（原定 ${message.sendAt}）`;
@@ -135,15 +137,58 @@ export async function cancelPendingMessage(message: Row, reason: string): Promis
   }
 }
 
-// 抢占一条消息:pending → sent 必须是原子的,否则两个触发源会把同一条发两遍。
-// 抢到才返回 true(WHERE 里带 status='pending',谁的 UPDATE 真改到行谁就赢)。
-async function claim(messageId: string): Promise<boolean> {
+// ── 投递租约 ──────────────────────────────────────────────────────────────────
+// 「抢下这条消息」和「这条消息已经送到」是**两件事**,必须分开记:
+//   beginDelivery: pending 且没人占 → 打上租约(行还是 pending,托盘照常显示)
+//   markSent:      原话真的落进会话之后才写 sent —— 这是唯一写 sent 的地方
+//   abortDelivery: 没送成,把租约还回去,行原样留在 pending
+// 原来这两件事合成一步(直接 pending → sent),于是「已认领、还没送到」这个当口就是
+// 一个消息会凭空消失的窗口:锁挡回、进程被重启掐掉,行都已经是 sent 了,补发扫描
+// (只查 pending)再也看不见它。
+
+// 抢占一条消息必须是原子的,否则两个触发源会把同一条发两遍(WHERE 里带 status='pending'
+// 且租约为空,谁的 UPDATE 真改到行谁就赢)。
+//
+// 导出是给崩溃测试用的:`test-scheduled-messages.ts` 的子进程拿它抢下租约后立刻 SIGKILL
+// 自己,好让「另一个进程死在投递中途」这个现场由**真实路径本身**造出来,而不是测试手写
+// 一行假状态。投递逻辑之外不要调它。
+export async function beginDelivery(messageId: string): Promise<boolean> {
   const claimed = await db
     .update(scheduledMessages)
-    .set({ status: "sent", sentAt: now() })
-    .where(and(eq(scheduledMessages.id, messageId), eq(scheduledMessages.status, "pending")))
+    .set({ deliveringSince: now() })
+    .where(
+      and(
+        eq(scheduledMessages.id, messageId),
+        eq(scheduledMessages.status, "pending"),
+        isNull(scheduledMessages.deliveringSince),
+      ),
+    )
     .returning({ id: scheduledMessages.id });
   return claimed.length > 0;
+}
+
+// 原话已经进会话了,这才落 sent。用 status='pending' 兜一道:等待期间用户手动取消过的
+// 消息不该被这一步复活。
+async function markSent(messageId: string): Promise<void> {
+  await db
+    .update(scheduledMessages)
+    .set({ status: "sent", sentAt: now(), deliveringSince: null })
+    .where(and(eq(scheduledMessages.id, messageId), eq(scheduledMessages.status, "pending")));
+}
+
+// 开机时清空所有租约(startScheduler 在第一次 tick 之前调)。**不需要超时启发式**:
+// 租约是内存态的持久投影,进程一换,上一轮所有「正在送」的回调就都不存在了 ——
+// 按定义此刻没有任何投递在进行中,全清即可,那些消息回到待发送、这一次 tick 就补上。
+// 唯一的代价方向是安全的那一边:万一进程死在「原话已落盘、sent 还没写」的毫秒缝里,
+// 结果是**重发一次**,而不是丢一句话。
+export async function reclaimStaleDeliveries(): Promise<number> {
+  const reclaimed = await db
+    .update(scheduledMessages)
+    .set({ deliveringSince: null })
+    .where(and(eq(scheduledMessages.status, "pending"), isNotNull(scheduledMessages.deliveringSince)))
+    .returning({ id: scheduledMessages.id });
+  if (reclaimed.length) console.log(`[harness] 回收 ${reclaimed.length} 条中断的待发送消息投递`);
+  return reclaimed.length;
 }
 
 function deliveryOptions(m: Row) {
@@ -159,20 +204,31 @@ function deliveryOptions(m: Row) {
 
 // 单任务的实际投递:在**当前这一轮退干净之后**才跑(由 whenTurnIdle 排空)。
 //
-// 认领(pending → sent)必须留在这里、而不是在排上等待之前做:等待是内存里的回调,
-// 服务重启会把它连同 inFlight 一起抹掉。行要是那时已经是 sent,重启后的补发扫描
-// (startScheduler 开机第一次 tick)就看不见它了 —— 用户那句话又一次凭空消失,只是
-// 触发条件从「锁」换成了「重启」。留在 pending 则最坏情况只是晚发一会儿。
+// 三个状态迁移各自对应一件真事,别再合并:
+//   beginDelivery  = 我来送这条(行仍是 pending,重启/崩溃后开机自动回收重投)
+//   onDelivered    = 原话进会话了 → markSent(唯一写 sent 的地方)
+//   落空 / 出错     = abortDelivery 把租约还回去,消息留在托盘里等下一次
 async function deliverWhenIdle(message: Row, options: ReturnType<typeof deliveryOptions>): Promise<void> {
+  let delivered = false;
   try {
     // 等待期间它还是 pending,所以用户可能已经手动取消、另一个触发源也可能抢先
-    // 送掉了。认领不到就什么都不做。
-    if (!(await claim(message.id))) return;
+    // 送掉了。抢不到租约就什么都不做。
+    if (!(await beginDelivery(message.id))) return;
     lastFiredAt.set(message.taskId, Date.now());
     // 排空的一瞬间被别的路径抢走了回合(队列推进、用户手点运行):这一句一个字都
     // 没送出去,退回队列等下一次触发。
-    if (!(await continueTask(message.taskId, message.text, options))) await restorePendingMessage(message);
+    const started = await continueTask(message.taskId, message.text, {
+      ...options,
+      onDelivered: async () => {
+        delivered = true;
+        await markSent(message.id);
+      },
+    });
+    if (!started) await abortDelivery(message);
   } catch (error) {
+    // 已经送进会话之后才炸的(agent 半路挂了),那是这一轮运行的事故,不是消息没送到:
+    // 消息保持 sent,绝不能再把原文抄进时间线冒充「未发送」。
+    if (delivered) return;
     const detail = error instanceof Error ? error.message : String(error);
     await cancelPendingMessage(message, `续跑失败：${detail}`).catch(() => {});
   } finally {
@@ -184,7 +240,12 @@ async function deliverWhenIdle(message: Row, options: ReturnType<typeof delivery
 // (tick 用)。同一个任务一次只发一条——发完它就又在跑了,剩下的继续排着。
 export async function deliverPendingMessages(taskId?: string): Promise<void> {
   const at = new Date();
-  const all = await db.select().from(scheduledMessages).where(eq(scheduledMessages.status, "pending"));
+  // 带租约的行 = 本进程另一条路径正在送它,跳过(开机时 reclaimStaleDeliveries 已经把
+  // 上一个进程留下的租约全清了,所以这里看到的租约一定是活的)。
+  const all = await db
+    .select()
+    .from(scheduledMessages)
+    .where(and(eq(scheduledMessages.status, "pending"), isNull(scheduledMessages.deliveringSince)));
   const pending = (taskId ? all.filter((m) => m.taskId === taskId) : all)
     .sort((a, b) => a.sendAt.localeCompare(b.sendAt)); // 排队消息的 sendAt=入队时刻,天然是先来后到
   const fired = new Set<string>(); // 每个任务每轮至多投递一条
@@ -200,12 +261,22 @@ export async function deliverPendingMessages(taskId?: string): Promise<void> {
       }
       const options = deliveryOptions(m);
       if (t!.mode === "team") {
-        if (!(await claim(m.id))) continue; // 另一个触发源刚抢走
+        if (!(await beginDelivery(m.id))) continue; // 另一个触发源刚抢走
         fired.add(m.taskId);
         lastFiredAt.set(m.taskId, Date.now());
+        let delivered = false;
         try {
-          await continueTask(m.taskId, m.text, { ...options, throwOnTeamUnavailable: true });
+          const started = await continueTask(m.taskId, m.text, {
+            ...options,
+            throwOnTeamUnavailable: true,
+            onDelivered: async () => {
+              delivered = true;
+              await markSent(m.id);
+            },
+          });
+          if (!started) await abortDelivery(m); // 理论上团队路径不会被挡回,租约也不留悬
         } catch (reason) {
+          if (delivered) throw reason; // 已经进调度台了,不是「未发送」,交给外层日志
           const detail = reason instanceof Error ? reason.message : String(reason);
           await cancelPendingMessage(m, `调度台不可用：${detail}`);
         }

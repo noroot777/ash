@@ -382,6 +382,15 @@ export async function continueTask(
      * 能把它跟我自己打的字分开。默认 false = 真人发的。
      */
     byBackend?: boolean;
+    /**
+     * 「用户这句话已经**落盘**了」的回调 —— 在原话作为一个真人回合写进会话之后立刻调，
+     * 不等这一轮跑完（`continueTask` 要等整轮结束才 resolve，那时早过了）。
+     *
+     * 给排队/定时消息用：它们要在这一刻、而不是更早，才把库里那条标成 sent。早一步标，
+     * 进程死在中间就是「托盘里没了、会话里也没有」——用户那句话凭空蒸发
+     * （见 docs/incidents.md「排队消息凭空消失」）。
+     */
+    onDelivered?: () => void | Promise<unknown>;
     throwOnTeamUnavailable?: boolean;
   } = {},
 ): Promise<boolean> {
@@ -403,6 +412,9 @@ export async function continueTask(
       attachments: opts.attachments,
       throwOnOpenFailure: opts.throwOnTeamUnavailable,
     });
+    if (opts.onDelivered) {
+      try { await opts.onDelivered(); } catch { /* 记账失败不拖累这一轮 */ }
+    }
     return true;
   }
   // 抢不到 = 这个任务此刻正跑着别的回合,这一句话没送出去。调用方必须知道(见函数注释)。
@@ -609,6 +621,12 @@ export async function continueTask(
       // 你→@agent reply, persisted as a structured turn so a reloaded thread shows
       // the human turn as its own bubble (live, the client already shows it).
       writeTurn(out, { t: "user", agent, text: userTurnText, ...(opts.byBackend ? { by: "system" as const } : {}) }, turnStart);
+    }
+    // 到这里这句话已经**两处落地**:agent 进程早在上面就带着它起来了,原文也刚写进会话
+    // 落盘文件。排队/定时消息就是在这一刻、而不是更早,才把库里那条标成 sent。
+    // 回调自己出错不许影响这一轮(它只是记账)。
+    if (opts.onDelivered) {
+      try { await opts.onDelivered(); } catch { /* 记账失败不拖累这一轮 */ }
     }
     if (workspaceReset) {
       // 让用户也看见:agent 这一轮是在一个空目录上重新开始的。只发 toast 不算数,

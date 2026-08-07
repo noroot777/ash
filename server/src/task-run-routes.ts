@@ -486,7 +486,11 @@ api.delete("/scheduled-messages/:mid", async (c) => {
   const m = (await db.select().from(scheduledMessages).where(eq(scheduledMessages.id, mid))).at(0);
   if (!m) return c.json({ error: "not found" }, 404);
   if (m.status !== "pending") return c.json({ error: "只能取消待发送的消息", status: m.status }, 409);
-  await db.update(scheduledMessages).set({ status: "canceled" }).where(eq(scheduledMessages.id, mid));
+  // 一并清掉投递租约:它是「有人正在送」的记号,消息都取消了就不该留着。真撞上正在
+  // 投递的那一瞬间也不会出岔子——markSent 的 WHERE 带 status='pending',取消过的行不会
+  // 被它复活(见 pending-messages.ts 的租约一节)。
+  await db.update(scheduledMessages).set({ status: "canceled", deliveringSince: null })
+    .where(eq(scheduledMessages.id, mid));
   return c.json({ canceled: true });
 });
 
