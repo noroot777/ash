@@ -30,6 +30,11 @@ import { now } from "./util.js";
 
 type TaskRow = typeof tasks.$inferSelect;
 
+export interface WorkflowAdvanceOptions extends SegmentOptions {
+  /** 测试只验证游标时注入 no-op，避免为一条断言真的启动 Claude/Codex。 */
+  startVerifyRound?: (taskId: string) => Promise<unknown>;
+}
+
 /** 把游标挪到某一站并广播。广播不能省，理由见文件头不变量①。 */
 export async function setWorkflowAt(taskId: string, stepId: string | null): Promise<void> {
   await db.update(tasks).set({ workflowAt: stepId, updatedAt: now() }).where(eq(tasks.id, taskId));
@@ -65,7 +70,12 @@ async function parentIsTeam(task: TaskRow): Promise<boolean> {
   return parent?.mode === "team";
 }
 
-async function atVerifyStation(task: TaskRow, def: WorkflowDef, station: WorkflowStep): Promise<boolean> {
+async function atVerifyStation(
+  task: TaskRow,
+  def: WorkflowDef,
+  station: WorkflowStep,
+  opts: WorkflowAdvanceOptions,
+): Promise<boolean> {
   const action = verifyStationAction({
     parentIsTeam: await parentIsTeam(task),
     reviewRequested: task.reviewRequested,
@@ -85,7 +95,8 @@ async function atVerifyStation(task: TaskRow, def: WorkflowDef, station: Workflo
   }
   // 先挪游标再开验证：开那一步要读游标才知道该用哪一站写的执行器去验。
   await setWorkflowAt(task.id, station.id);
-  const { startVerifyRound } = await import("./review.js");
+  const startVerifyRound = opts.startVerifyRound
+    ?? (await import("./review.js")).startVerifyRound;
   await startVerifyRound(task.id).catch((error) => appendTaskTimeline(
     task.id,
     `想在「${STEP_LABELS.verify}」这一站开一轮验证，但没开起来（${error instanceof Error ? error.message : String(error)}）。`,
@@ -104,7 +115,7 @@ export async function advanceWorkflowFrom(
   task: TaskRow,
   def: WorkflowDef | null,
   fromStepId: string | null | undefined,
-  opts: SegmentOptions = {},
+  opts: WorkflowAdvanceOptions = {},
 ): Promise<void> {
   if (!def || !fromStepId) return;
   let from: string | null = fromStepId;
@@ -124,7 +135,7 @@ export async function advanceWorkflowFrom(
       return;
     }
     if (next.kind === "verify") {
-      if (!(await atVerifyStation(task, def, next))) return;
+      if (!(await atVerifyStation(task, def, next, opts))) return;
       // 跳过这一站：游标照样挪过去，免得下一次事件落回来又从头判一遍。
       await setWorkflowAt(task.id, next.id);
       from = next.id;

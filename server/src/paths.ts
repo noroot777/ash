@@ -1,4 +1,5 @@
 import { fileURLToPath } from "node:url";
+import { resolve } from "node:path";
 
 // 仓库根。`data/` 之外还有一处要用它：判断某个 `node …/mcp/dist/index.js` 子进程
 // 是不是**本仓库这份** harness MCP（mcp-holders.ts）。
@@ -8,7 +9,10 @@ export const REPO_DIR = fileURLToPath(new URL("../..", import.meta.url));
 // artifacts live in one place whether started via `npm start`, `npm -w server`,
 // or `tsx` in dev (fixes the cwd-dependent data location).
 export const DATA_DIR = fileURLToPath(new URL("../../data", import.meta.url));
-export const RUNS_DIR = fileURLToPath(new URL("../../data/runs", import.meta.url));
+// 只给真库测试用：流程测试会写时间线/验证证据，不能污染正式 data/runs。
+export const RUNS_DIR = process.env.HARNESS_RUNS_DIR
+  ? resolve(process.env.HARNESS_RUNS_DIR)
+  : fileURLToPath(new URL("../../data/runs", import.meta.url));
 // 预览实例专用的**只读**回退目录（`HARNESS_RUNS_FALLBACK`，指向主仓的 data/runs）。
 //
 // 为什么需要它：会话正文和 trace 是**文件**，不在库里。预览库是主库的快照，所以任务和

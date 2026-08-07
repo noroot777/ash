@@ -16,6 +16,7 @@ import { IS_PREVIEW_INSTANCE, previewRefusal } from "./preview-instance.js";
 import { withRepoLock } from "./repo-lock.js";
 import { setTaskStage, clearTaskStage } from "./task-stage.js";
 import { appendTaskTimeline } from "./task-timeline.js";
+import type { WorkflowAdvanceOptions } from "./workflow-advance.js";
 
 type AcceptSuccess = {
   accepted: true;
@@ -492,7 +493,11 @@ async function acceptanceRepoPath(taskId: string): Promise<string | null> {
 
 // `by` 默认 human：这个函数的调用方绝大多数是「用户按了验收通过」（HTTP 路由、MCP
 // accept_task），只有 workflow-steps 里那条「线自己走到这一站」要显式传 "workflow"。
-export async function acceptTask(taskId: string, by: AcceptBy = "human"): Promise<AcceptTaskResult> {
+export async function acceptTask(
+  taskId: string,
+  by: AcceptBy = "human",
+  advanceOpts: WorkflowAdvanceOptions = {},
+): Promise<AcceptTaskResult> {
   // 预览实例：库是主库的快照，任务行指的却是真分支、真 worktree。走结构化拒绝而不是抛
   // 异常，UI 才能把这句话原样显示在验收按钮旁边（见 preview-instance.ts）。
   if (IS_PREVIEW_INSTANCE) {
@@ -533,7 +538,7 @@ export async function acceptTask(taskId: string, by: AcceptBy = "human"): Promis
   if (result.accepted) {
     // 两条尾巴，都在仓库锁**之外**跑（这些命令可能好几分钟，占着锁会让同仓库的其它
     // 验收干等）：中途关口放行 = 让这条线接着往下走；真正的验收 = 跑「点头之后」那一段。
-    if (result.kind === "gate_released") await releaseGate(taskId);
+    if (result.kind === "gate_released") await releaseGate(taskId, advanceOpts);
     else {
       const tail = await runAcceptedTail(taskId, by);
       if (tail) result = { ...result, tail };
@@ -545,11 +550,11 @@ export async function acceptTask(taskId: string, by: AcceptBy = "human"): Promis
 // 中途关口放行之后接着往下走：跑完这一段，再按下一个锚点是什么决定（又一站验证、
 // 下一道关口、还是这条线走到头）。**不传 skipAccept** —— 这一按没有做任何合并，
 // 线上真画了「合并并清理」就该由它自己走到那一站时执行。
-async function releaseGate(taskId: string): Promise<void> {
+async function releaseGate(taskId: string, opts: WorkflowAdvanceOptions): Promise<void> {
   const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!task) return;
   const { advanceWorkflowFrom } = await import("./workflow-advance.js");
-  await advanceWorkflowFrom(task, taskWorkflowDef(task.workflow), task.workflowAt)
+  await advanceWorkflowFrom(task, taskWorkflowDef(task.workflow), task.workflowAt, opts)
     .catch((error) => appendTaskTimeline(
       taskId,
       `放行之后想接着往下走，但出错了（${error instanceof Error ? error.message : String(error)}），请手动续跑。`,

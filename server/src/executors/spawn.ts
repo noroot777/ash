@@ -80,6 +80,20 @@ export function failedChild(message: string): ChildProcess {
   return child as ChildProcess;
 }
 
+/**
+ * 真库流程测试会把 RUNS_DIR 指到临时目录。这种进程默认绝不起真 CLI：测试只想
+ * 验证游标/状态却误走生产副作用，就是 2026-08-07 一次泄漏 19 个 Claude 回合的根因。
+ * 少数确实要验证进程管理的测试必须显式给 HARNESS_ALLOW_REAL_AGENT=1；不再依赖每个调用点
+ * 记得注入 no-op。
+ */
+export function guardAgentSpawn(bin: string): ChildProcess | null {
+  if (!process.env.HARNESS_RUNS_DIR || process.env.HARNESS_ALLOW_REAL_AGENT === "1") return null;
+  return failedChild(
+    `测试隔离环境禁止启动真执行器 ${bin}；`
+    + "这个测试若就是要验证进程管理，显式设 HARNESS_ALLOW_REAL_AGENT=1",
+  );
+}
+
 // Turn a spawn error into a truthful message. `precise` errors (from pre-flight)
 // pass through; a raw ENOENT here is the rare in-flight case (binary vanished).
 export function spawnErrorMessage(bin: string, err: NodeJS.ErrnoException): string {
@@ -171,6 +185,8 @@ export function spawnAgent(
   extraEnv?: Record<string, string>,
   opts?: { keepStdin?: boolean },
 ): ChildProcess {
+  const blocked = guardAgentSpawn(bin);
+  if (blocked) return blocked;
   const envPrefix = extraEnv
     ? Object.entries(extraEnv)
         .map(([k, v]) => `${k}=${shq(v)} `)

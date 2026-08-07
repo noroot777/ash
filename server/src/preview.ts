@@ -41,6 +41,7 @@ const POLL_MS = 500;
 /** idle30 那一档：满这么久就回收（见 PREVIEW_LIFE_LABELS 的口径说明）。 */
 const IDLE_LIFE_MS = 30 * 60_000;
 const SWEEP_MS = 5 * 60_000;
+const UNSAFE_SCHEDULER_LOG = "[harness] scheduler started";
 
 // 「端口撞车怎么认、日志里哪个地址才是预览本尊、认出来说什么」都在 preview-log.ts
 //（纯函数，回归 test:preview-log）；「连不连得上、算不算起来了」在 preview-probe.ts
@@ -124,7 +125,9 @@ export async function startPreview(
   const lent = await freePort();
   // 日志头把注入的环境变量照实写出来，不只写命令：用户翻 preview.log 时得能一眼看出
   // 「harness 到底把什么交给了这条命令」，而不是去猜端口是谁定的。
-  const banner = lent ? `$ PORT=${lent} BROWSER=none ${step.p.cmd}\n` : `$ ${step.p.cmd}\n`;
+  const banner = lent
+    ? `$ PORT=${lent} BROWSER=none HARNESS_PREVIEW=1 HARNESS_PREVIEW_MODE=${step.p.mode} ${step.p.cmd}\n`
+    : `$ HARNESS_PREVIEW=1 HARNESS_PREVIEW_MODE=${step.p.mode} ${step.p.cmd}\n`;
   writeFileSync(log, banner);
   const fd = openSync(log, "a");
   let pid: number;
@@ -135,7 +138,13 @@ export async function startPreview(
       stdio: ["ignore", fd, fd],
       // BROWSER=none：dev server 的 `--open` 会去拉一个真浏览器窗口，预览是后台起的，
       // 那扇窗户没人要。PORT 的来由见 freePort 的注释。
-      env: { ...augmentedEnv(), ...(lent ? { PORT: String(lent) } : {}), BROWSER: "none" },
+      env: {
+        ...augmentedEnv(),
+        HARNESS_PREVIEW: "1",
+        HARNESS_PREVIEW_MODE: step.p.mode,
+        ...(lent ? { PORT: String(lent) } : {}),
+        BROWSER: "none",
+      },
     });
     child.unref();
     if (!child.pid) return { ok: false, reason: "预览进程没起来" };
@@ -150,6 +159,13 @@ export async function startPreview(
   while (Date.now() < deadline) {
     await sleep(POLL_MS);
     const text = tail(log);
+    if (text.includes(UNSAFE_SCHEDULER_LOG)) {
+      killByPid(pid);
+      return {
+        ok: false,
+        reason: "这个分支的预览后端启动了真调度器，安全协议过旧，已立即回收。请先把当前分支同步到新版预览隔离逻辑。",
+      };
+    }
     const found = pickPreviewUrl(text, lent);
     // 顺序要紧：撞车先判，再判进程死没死、再判起没起来。见 PORT_TAKEN_RE 那儿的 ②。
     //

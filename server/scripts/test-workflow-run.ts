@@ -8,6 +8,7 @@ import { join } from "node:path";
 
 const root = mkdtempSync(join(tmpdir(), "harness-workflow-run-"));
 process.env.HARNESS_DB = join(root, "harness.db");
+process.env.HARNESS_RUNS_DIR = join(root, "runs");
 
 const { builtinWorkflowDef } = await import("@harness/shared/workflow-presets");
 const { makeStep } = await import("@harness/shared/workflow");
@@ -442,7 +443,8 @@ const port = 14000 + (process.pid % 900);
 const previewStep = makeStep("preview", "pv");
 if (previewStep.kind === "preview") {
   previewStep.p = {
-    cmd: `node -e "require('http').createServer((q,s)=>s.end('ok')).listen(${port},()=>console.log('ready on http://localhost:${port}/'))"`,
+    cmd: `node -e "if(process.env.HARNESS_PREVIEW!=='1'||process.env.HARNESS_PREVIEW_MODE!=='test')process.exit(12);require('http').createServer((q,s)=>s.end('ok')).listen(${port},()=>console.log('ready on http://localhost:${port}/'))"`,
+    mode: "test",
     ready: "http200",
     life: "gate",
   };
@@ -453,8 +455,35 @@ if (started.ok) {
   assert.equal(started.record.port, port, "端口从日志里那行地址读出来");
   assert.equal((await fetch(started.record.url!)).status, 200, "起来之后真能访问");
   assert.ok(readPreview("t1"), "pid 落盘了,server 重启后照样收得掉");
+  const replacement = makeStep("preview", "pv-replacement");
+  if (replacement.kind === "preview") {
+    replacement.p = {
+      cmd: `node -e "if(process.env.HARNESS_PREVIEW_MODE!=='full')process.exit(13);require('http').createServer((q,s)=>s.end('next')).listen(${port + 1},()=>console.log('ready on http://localhost:${port + 1}/'))"`,
+      mode: "full",
+      ready: "http200",
+      life: "gate",
+    };
+  }
+  const replaced = await startPreview("t2", replacement as never, repo);
+  assert.equal(replaced.ok, true, "另一个任务的预览也能起来");
+  assert.ok(readPreview("t1"), "不同 worktree/任务的预览可以并行，旧预览仍在");
+  assert.ok(readPreview("t2"), "新预览有自己的记录");
+  assert.equal(await fetch(`http://localhost:${port + 1}/`).then((res) => res.text()), "next");
+  assert.equal(await stopPreview("t2", "测试收尾"), true);
+  assert.equal(readPreview("t2"), null, "收掉之后记录一并删掉");
+  const unsafe = makeStep("preview", "pv-unsafe");
+  if (unsafe.kind === "preview") {
+    unsafe.p = {
+      cmd: `node -e "console.log('[harness] scheduler started');require('http').createServer((q,s)=>s.end('bad')).listen(${port + 3},()=>console.log('ready on http://localhost:${port + 3}/'))"`,
+      mode: "command",
+      ready: "http200",
+      life: "gate",
+    };
+  }
+  const refused = await startPreview("t3", unsafe as never, repo);
+  assert.equal(refused.ok, false, "旧分支预览一旦启动真调度器必须当场拒绝");
+  if (!refused.ok) assert.match(refused.reason, /真调度器/);
   assert.equal(await stopPreview("t1", "测试收尾"), true);
-  assert.equal(readPreview("t1"), null, "收掉之后记录一并删掉");
   await new Promise((r) => setTimeout(r, 300));
   assert.equal(
     await fetch(`http://localhost:${port}/`).then(() => true).catch(() => false),
@@ -525,7 +554,8 @@ await clearQuestion();
 const taskLife = makeStep("preview", "pv2");
 if (taskLife.kind === "preview") {
   taskLife.p = {
-    cmd: `node -e "require('http').createServer((q,s)=>s.end('ok')).listen(${port + 1},()=>console.log('ready on http://localhost:${port + 1}/'))"`,
+    cmd: `node -e "require('http').createServer((q,s)=>s.end('ok')).listen(${port + 2},()=>console.log('ready on http://localhost:${port + 2}/'))"`,
+    mode: "command",
     ready: "http200",
     life: "task",
   };
@@ -537,7 +567,7 @@ await stopPreviewAtAccept("t1");
 assert.equal(readPreview("t1"), null, "验收走完就是这个任务的终点,选了「任务结束时回收」就真的在这儿收掉");
 await new Promise((r) => setTimeout(r, 300));
 assert.equal(
-  await fetch(`http://localhost:${port + 1}/`).then(() => true).catch(() => false),
+  await fetch(`http://localhost:${port + 2}/`).then(() => true).catch(() => false),
   false,
   "端口真让出来了,不是只删了记录",
 );
