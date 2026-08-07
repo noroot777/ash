@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { statSync } from "node:fs";
 import type { TaskWorkspaceLeftover, TaskWorkspaceDiscardResult } from "@harness/shared";
-import { expandHome, gitError, localBranchExists, removeWorktree, worktreeBranchName, worktreePathFor } from "./git.js";
+import { dirtyFilesAt, expandHome, gitError, listFiles, localBranchExists, removeWorktree, worktreeBranchName, worktreePathFor } from "./git.js";
 import { withRepoLock } from "./repo-lock.js";
 
 const exec = promisify(execFile);
@@ -72,7 +72,13 @@ export async function discardTaskWorkspace(
         await removeWorktree(repo, path, !!opts.force);
         out.worktreeRemoved = true;
       } catch (error) {
-        out.worktreeError = gitError(error);
+        // 这条报错是用户决定「要不要再点一次、这回带 force」的**唯一**依据,所以不能只
+        // 转述 git 那句 "contains modified or untracked files" —— 强删掉的是哪几个文件,
+        // 得当场摆在他面前。跟验收清理失败报的是同一份清单。
+        const dirty = await dirtyFilesAt(path);
+        out.worktreeError = dirty.length > 0
+          ? `${gitError(error)}（挡路的是这 ${dirty.length} 个文件：${listFiles(dirty)}）`
+          : gitError(error);
       }
       await exec("git", ["-C", repo, "worktree", "prune"]).catch(() => {});
     }

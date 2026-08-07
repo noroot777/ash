@@ -91,12 +91,17 @@ function AcceptanceFailureNotice({ failure }: { failure: AcceptTaskFailure }) {
           )}
         </div>
       </div>
-      {failure.conflictFiles?.length ? (
-        <div className="team-accept-conflict-files">
-          <span>冲突文件（{failure.conflictFiles.length}）</span>
-          <ul>{failure.conflictFiles.map((file) => <li key={file}><code>{file}</code></li>)}</ul>
+      {/* 冲突文件和挡路文件是同一类信息——「验收停在这儿，该去动的是这几个文件」。前者来自
+          合并撞冲突，后者来自目标分支/任务 worktree 里还有没提交的东西，所以一副样子渲染。 */}
+      {([
+        ["冲突文件", failure.conflictFiles],
+        ["挡路的文件", failure.dirtyFiles],
+      ] as const).map(([label, files]) => files?.length ? (
+        <div key={label} className="team-accept-conflict-files">
+          <span>{label}（{files.length}）</span>
+          <ul>{files.map((file) => <li key={file}><code>{file}</code></li>)}</ul>
         </div>
-      ) : null}
+      ) : null)}
     </div>
   );
 }

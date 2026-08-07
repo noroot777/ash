@@ -342,6 +342,37 @@ export function gitError(error: unknown): string {
   return ((error as { stderr?: string }).stderr || (error as Error).message || String(error)).trim();
 }
 
+export function porcelainFiles(output: string): string[] {
+  return output
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => line.slice(3).trim())
+    .filter(Boolean);
+}
+
+/**
+ * 某个工作区里挡路的东西（未提交改动 + 未跟踪文件）。
+ *
+ * 用在**报错路径**上：删 worktree 被 git 拒时，它只回一句 "contains modified or untracked
+ * files"，不说是哪个文件——障碍又不会自己消失，于是用户每重试一次都撞同一堵墙、还是同一句
+ * 看不出所以然的话。所以拒绝的同时把清单查出来一起报。查不动就当没有：这已经是报错路径，
+ * 再抛一次只会把「worktree 删不掉」换成一句更没头绪的话。
+ */
+export async function dirtyFilesAt(cwd: string): Promise<string[]> {
+  try {
+    const { stdout } = await exec("git", ["-C", cwd, "status", "--porcelain"]);
+    return porcelainFiles(stdout).sort();
+  } catch {
+    return [];
+  }
+}
+
+/** 报错文案里的文件清单：够用来认出是哪几个，又不至于把一屏刷满（全量留在结构化字段里）。 */
+export function listFiles(files: string[], limit = 8): string {
+  const head = files.slice(0, limit).join("、");
+  return files.length > limit ? `${head} 等 ${files.length} 个` : head;
+}
+
 export async function localBranchExists(repo: string, branch: string): Promise<boolean> {
   try {
     await exec("git", ["-C", repo, "show-ref", "--verify", "--quiet", `refs/heads/${branch}`]);
