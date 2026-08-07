@@ -10,12 +10,22 @@
 // 照片 = sha256(`git rev-parse HEAD` + `git diff HEAD` + `git ls-files --others`)。
 // 三样都要：只看 HEAD 会漏「改了但没提交」，只看文件名单会漏「一个已改的文件又被改一次」。
 //
-//   照片不一样 + agent 确认完成 → 清账：游标搬回第一站、验证轮数归零、stage 清空
-//   照片不一样但没确认完成     → 什么都不动（这一轮本来就没走完）
+//   照片不一样                 → 清账：游标搬回第一站、验证轮数归零、stage 清空
 //   照片一样                   → 线一个字节不动（纯询问不该重置任何东西），并把回合开头
 //                                摘掉的「已验收/已合并」牌子原样挂回去 —— 那是白摘的
 //   照片一样 + 屋子是这一轮新建的空壳 → 拆屋（见 discardEmptyShell）
 //   照片取不到（非 git / 命令挂了） → 保守当作「变了」
+//
+// **清账只看照片，不看这一轮 agent 确认没确认完成**（2026-08-07 改）。这两件事被混过
+// 一次：确认完成决定的是「这一轮的成绩算不算、线要不要接着往下走」，清账清的是「上一版
+// 的成绩还算不算数」——而后者只取决于工作目录里的字节变没变。混在一起漏掉的正是最常见
+// 的那条路：**续聊回合本来就不要求确认完成**（`followUpFrom` 会把它回落到原终态），于是
+// 用户发一句「这块再改改」、agent 改完提交、没调 complete_task，账就一个字没清。上一版
+// 那道「等我点头」仍记成已放行、那一站验证仍记着已验满轮，游标还停在验证站上：接下来
+// 谁点一下「再验一轮」或「人工强制通过」，没人验过、也没经过关口的新代码就被合并了
+// （实测：任务 1rojF5Tjau91）。原先那条「没确认就什么都不动」的理由是「一次中断不该把
+// 上一版的成绩抹了」——可照片一样时本来就不会动，会被抹的一律是**真改了字节**的中断，
+// 那本来就该抹。
 //
 // 两个刻意的例外：
 //   ① **只给真人消息拍照**（`!opts.system`，与 `followUpFrom` / `reopenAcceptedStage`
@@ -131,6 +141,11 @@ function takeTurnBaseline(taskId: string): TurnBaseline | null {
 const RESET_NOTE =
   "这一轮产出了新的改动，之前那一版的验证与验收记录已清空，这条线从头再走一遍（上一版验过了，不能替这一版放行）。";
 
+/** 清了账、线却不会自己往下走的那一档，得把「停在哪、怎么让它继续」说出来。 */
+const RESET_STALLED_NOTE =
+  "这一轮没有确认完成，所以线就停在「让 AI 干活」这一站，不会自己往下走"
+  + "——再回一句让它把这一版确认完成，后面的站（预览 / 等我点头 / 验证）就会照常接着跑。";
+
 /**
  * 清账：把这条线退回起点，让新改动重新过一遍验证和验收。
  *
@@ -139,8 +154,12 @@ const RESET_NOTE =
  * （`stage`）清空。**游标要搬回 run 站的 id，不能清成 null** —— 前端在没有游标时会按
  * status 猜位置（`web-next/src/workflow/workflowModel.ts` 的 `resolveCursor`：done 且
  * 无游标 → 落在 run 之后那一站），清成 null 反而显示成「已经走过第一站了」。
+ *
+ * `willAdvance` **只管那行时间线多不多一句**，不参与清不清的判断（判据只有照片）：
+ * 这一轮确认完成了，紧接着 `afterSettlement` 就会把线推下去，用户看得见它在走；没确认
+ * 的话线就停在起点，不说一句，用户只会看着一个「已完成」的任务停在第一站发懵。
  */
-async function resetWorkflowLedger(taskId: string): Promise<void> {
+async function resetWorkflowLedger(taskId: string, willAdvance: boolean): Promise<void> {
   const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!task) return;
   // 验证没过正在修 —— 同一版的事，账不能清（否则轮数上限形同虚设）。
@@ -152,9 +171,10 @@ async function resetWorkflowLedger(taskId: string): Promise<void> {
     !!task.reviewStep ||
     (!!task.workflowAt && task.workflowAt !== runId);
   if (!stale) return; // 账本本来就是空的，别写一行没信息量的时间线
+  const note = willAdvance || !runId ? RESET_NOTE : `${RESET_NOTE}${RESET_STALLED_NOTE}`;
   // clearTaskStage 顺带广播 task.stage 并写时间线；没有 stage 可清时自己补那一行。
-  if (task.stage) await clearTaskStage(taskId, RESET_NOTE);
-  else await appendTaskTimeline(taskId, RESET_NOTE);
+  if (task.stage) await clearTaskStage(taskId, note);
+  else await appendTaskTimeline(taskId, note);
   await db
     .update(tasks)
     .set({ verifyStationRounds: 0, reviewStep: null, updatedAt: now() })
@@ -191,6 +211,9 @@ async function discardEmptyShell(taskId: string): Promise<void> {
  *
  * **必须排在 `afterSettlement` 之前**：那一步会拿着游标把这条线往下推
  * （`handleTaskSettlement → advanceWorkflowFrom(settleFrom(...))`），账晚清一步就来不及了。
+ *
+ * `confirmedDone` **只用来挑那行时间线的措辞**（清完之后线会不会自己往下走）。它绝不能
+ * 再回到「清不清账」的判断里 —— 那正是这次要修的病，理由见文件头。
  */
 export async function reconcileTurnBaseline(taskId: string, confirmedDone: boolean): Promise<void> {
   const base = takeTurnBaseline(taskId);
@@ -199,7 +222,8 @@ export async function reconcileTurnBaseline(taskId: string, confirmedDone: boole
     const after = await fingerprint(base.cwd);
     const changed = base.fingerprint === null || after === null || after !== base.fingerprint;
     if (changed) {
-      if (confirmedDone) await resetWorkflowLedger(taskId);
+      // 确认没确认完成都要清：账本记的是上一版的成绩，而这一版的字节已经不一样了。
+      await resetWorkflowLedger(taskId, confirmedDone);
       return;
     }
     // 一个字节没变 = 纯询问。回合开头摘掉的「已验收/已合并」牌子是白摘的，挂回去 ——

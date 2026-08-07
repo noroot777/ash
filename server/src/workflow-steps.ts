@@ -105,12 +105,23 @@ async function runPreview(task: TaskRow, step: PreviewStep): Promise<SegmentResu
 }
 
 // 「合并并清理」这一站：**不在这里另写一套合并**，直接调用户点「验收通过」走的那条路
-// （acceptTask 带着仓库锁、冲突处理、「绝不 -D」的规矩）。区别只在谁按下的：线上没写
-// 「等我点头」时，走到这一站就是这条线自己按的——所以传 `"workflow"`，这条路只做线上
-// 真画了的事（人亲手点则相反，手按覆盖线上写没写，理由见 shared 的 acceptPlan）。
+// （acceptTask 带着仓库锁、冲突处理、「绝不 -D」的规矩）。区别只在谁按下的：走到这一站
+// 就是这条线自己按的——所以传 `"workflow"`，这条路只做线上真画了的事（人亲手点则相反，
+// 手按覆盖线上写没写，理由见 shared 的 acceptPlan）。
 // 怎么合、清到什么程度全读这一站的参数——acceptTask 里的 acceptPlan() 读的就是它。
-async function runAccept(task: TaskRow, step: WorkflowStep): Promise<SegmentResult> {
-  await appendTaskTimeline(task.id, "这条线上没写「等我点头」，走到「合并并清理」就自己合了。");
+//
+// 那行时间线要照实说**这一合是怎么来的**，而它有两种来路：线上压根没画关口（没人点过
+// 头），和关口画在前面、用户已经在那儿放行过了。早先只写死前一种，于是「干活 → 预览 →
+// 等我点头 → 验证 → 合并」这种线合并时会写出「这条线上没写「等我点头」」——用户几分钟
+// 前刚在那道关口点过放行，看到这句只会以为系统把他那一下弄丢了。
+async function runAccept(task: TaskRow, def: WorkflowDef | null, step: WorkflowStep): Promise<SegmentResult> {
+  const gated = !!def?.steps.some((s) => s.kind === "human");
+  await appendTaskTimeline(
+    task.id,
+    gated
+      ? "你在前面那道「等我点头」放行过了，线走到「合并并清理」，按线上写的合。"
+      : "这条线上没写「等我点头」，走到「合并并清理」就自己合了。",
+  );
   const { acceptTask } = await import("./task-accept.js");
   const result = await acceptTask(task.id, "workflow");
   if (result.accepted) return { ok: true };
@@ -132,7 +143,7 @@ export async function runSegment(
       : step.kind === "preview"
         ? await runPreview(task, step)
         : step.kind === "accept" && !opts.skipAccept
-          ? await runAccept(task, step)
+          ? await runAccept(task, def, step)
           : { ok: true } as SegmentResult;
     if (!result.ok) return result;
   }
