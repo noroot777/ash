@@ -35,6 +35,7 @@
     "test:claude-stream": "tsx scripts/test-claude-stream-errors.ts",
     "test:codex-resident": "tsx scripts/test-codex-resident.ts",
     "test:session-trace": "tsx scripts/test-session-trace.ts",
+    "test:usage": "tsx scripts/test-usage-accounting.ts",
     "test:peer-context": "tsx scripts/test-peer-context.ts",
     "test:workflow": "tsx scripts/test-workflow-def.ts",
     "test:workflow-library": "tsx scripts/test-workflow-library.ts",

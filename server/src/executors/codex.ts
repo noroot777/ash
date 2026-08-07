@@ -268,7 +268,7 @@ const num = (v: unknown): number => (typeof v === "number" && Number.isFinite(v)
 //   {"usage":{"input_tokens":N,"cached_input_tokens":N,"output_tokens":N,"reasoning_output_tokens":N}}
 // 跟 claude 的口径差一处:codex 的 `input_tokens` **已经包含**命中缓存的那部分,
 // 所以要减出来,否则缓存读会被算两遍。codex 不报价 → costUsd 恒 null(不是 0)。
-function codexUsage(u: any): TokenUsage | null {
+export function codexUsage(u: any): TokenUsage | null {
   if (!u || typeof u !== "object") return null;
   const cacheRead = num(u.cached_input_tokens);
   return {

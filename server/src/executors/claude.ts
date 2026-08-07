@@ -304,7 +304,7 @@ const num = (v: unknown): number => (typeof v === "number" && Number.isFinite(v)
 //                     跟 total_cost_usd 同源。
 // 一个都没有(旧版 CLI / 复用这份 parser 的第三方 CLI 不报账)就返回 null ——
 // **不要退化成全 0**,那会让界面把「没报账」显示成「没花钱」。
-function claudeUsage(ev: any): TokenUsage | null {
+export function claudeUsage(ev: any): TokenUsage | null {
   const models = ev?.modelUsage && typeof ev.modelUsage === "object" ? Object.values<any>(ev.modelUsage) : [];
   const cost = typeof ev?.total_cost_usd === "number" && Number.isFinite(ev.total_cost_usd)
     ? ev.total_cost_usd
