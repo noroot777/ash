@@ -13,10 +13,13 @@ import { tmpdir } from "node:os";
 import { mkdtempSync, realpathSync, rmSync, statSync } from "node:fs";
 import type { AcceptClean, AcceptStrategy } from "@harness/shared/workflow";
 import {
+  dirtyFilesAt,
   expandHome,
   gitError,
   isGitRepo,
+  listFiles,
   localBranchExists,
+  porcelainFiles,
   removeWorktree,
   resolveTaskMergeTarget,
   symbolicBranch,
@@ -98,6 +101,8 @@ export type TaskCleanupResult =
       sourceBranch: string;
       targetBranch: string;
       worktreePath: string;
+      /** 挡住清理的文件（worktree 里未提交/未跟踪的那些）。跟合并失败的同名字段一个意思。 */
+      dirtyFiles?: string[];
     };
 
 async function isAncestor(repo: string, ancestor: string, descendant: string): Promise<boolean> {
@@ -128,14 +133,6 @@ async function checkedOutPath(repo: string, branch: string): Promise<string | nu
     else if (!line) path = null;
   }
   return null;
-}
-
-function porcelainFiles(output: string): string[] {
-  return output
-    .split("\n")
-    .filter(Boolean)
-    .map((line) => line.slice(3).trim())
-    .filter(Boolean);
 }
 
 async function conflictFiles(cwd: string): Promise<string[]> {
@@ -492,15 +489,22 @@ async function cleanupAcceptedTaskLocked(
       await removeWorktree(repo, worktreePath, false);
     } catch (error) {
       // 走到这儿只剩一种情形：工作区真脏（半删除的空壳已经由 removeWorktree 自己收拾了）。
-      // 那是该拦的——里面可能有没提交的东西，自动流程不替用户拍板扔掉，所以连脱困办法
-      // 一起写进时间线，别让人对着 git 原话干瞪眼。
+      // 那是该拦的——里面可能有没提交的东西，自动流程不替用户拍板扔掉。但 git 只会说一句
+      // "contains modified or untracked files"，不说是哪个文件；这障碍又不会自己消失，于是
+      // 每点一次验收都撞同一堵墙、还是同一句看不出所以然的话。所以当场把挡路的清单查出来
+      // 一起报——跟合并失败报冲突文件是同一副样子。
+      const dirtyFiles = await dirtyFilesAt(worktreePath);
+      const blocking = dirtyFiles.length > 0
+        ? `挡路的是 ${worktreePath} 里这 ${dirtyFiles.length} 个文件：${listFiles(dirtyFiles)}；提交或丢弃它们之后再点一次验收`
+        : `多半是 ${worktreePath} 里还有没提交的改动：去看一眼，提交或丢弃之后再点一次验收`;
       return {
         ok: false,
         reason: "worktree_remove_failed",
-        message: `任务 worktree 删除失败：${gitError(error)}（多半是 ${worktreePath} 里还有没提交的改动：去看一眼，提交或丢弃之后再点一次验收）`,
+        message: `任务 worktree 删除失败：${gitError(error)}（${blocking}）`,
         sourceBranch,
         targetBranch,
         worktreePath,
+        dirtyFiles,
       };
     }
   }

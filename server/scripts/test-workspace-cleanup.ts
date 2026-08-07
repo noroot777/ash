@@ -85,6 +85,12 @@ try {
     const res = await discardTaskWorkspace(repo, taskId, { worktree: true, branch: true });
     assert.equal(res.worktreeRemoved, false, "脏 worktree 不该被默认删掉");
     assert.ok(res.worktreeError, "必须把 git 的拒绝理由带回去");
+    // 这条报错是用户决定「要不要带 force 再点一次」的唯一依据：git 只说"有未跟踪文件"，
+    // 不说是哪个——强删掉的是什么，得当场看得见。
+    assert.ok(
+      res.worktreeError?.includes("scratch.txt"),
+      `拒绝理由要点名挡路的文件，实际是：${res.worktreeError}`,
+    );
     assert.equal(existsSync(ws.path), true, "文件必须还在");
     assert.equal(res.branchDeleted, false, "目录还占着分支,分支也删不掉");
     assert.ok(res.branchError);

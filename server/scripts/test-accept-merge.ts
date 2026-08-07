@@ -393,7 +393,43 @@ try {
     assert.equal(hasRef(repo, worktreeBranchName(taskId)), true, "已合并也照样按线上写的留着分支");
   }
 
-  console.log("accept merge: git 场景 / 三种合并档位 / 清理档位 / 清理警告 / team 并发守卫 / 共享执行者验收口径全部通过");
+  // 12. 清理被脏工作区拦下时，报错要指名道姓说是哪几个文件。
+  //     git 只回一句 "contains modified or untracked files"，而这障碍不会自己消失：不说
+  //     文件名，用户每重试一次都撞同一堵墙、还是同一句看不出所以然的话（实测事故：一个
+  //     忘了删的 _v3_fixed.ts 让验收连着卡了三次，时间线里也只有 git 那句原话）。
+  {
+    const repo = makeRepo("dirty-worktree");
+    const taskId = "acceptdw0012";
+    const ws = await prepareWorktree(repo, taskId, "main");
+    writeFileSync(join(ws.path, "done.txt"), "done\n");
+    git(ws.path, "add", "-A");
+    git(ws.path, "commit", "-m", "task done");
+    git(repo, "checkout", "-b", "parking");
+    assert.equal((await mergeTaskBranch(repo, taskId, "main")).ok, true);
+
+    // 一个未跟踪、一个已跟踪但改过——两种都该被点名。
+    writeFileSync(join(ws.path, "scratch-draft.ts"), "// 忘了删的草稿\n");
+    writeFileSync(join(ws.path, "done.txt"), "done\nlocal edit\n");
+
+    const blocked = await cleanupAcceptedTask(repo, taskId, "main");
+    assert.equal(blocked.ok, false, "工作区脏就该拦住，不替用户拍板扔东西");
+    if (blocked.ok) throw new Error("脏工作区竟然被清理了");
+    assert.equal(blocked.reason, "worktree_remove_failed");
+    assert.deepEqual(blocked.dirtyFiles, ["done.txt", "scratch-draft.ts"], "结构化字段给全量");
+    for (const file of ["done.txt", "scratch-draft.ts"]) {
+      assert.ok(blocked.message.includes(file), `报错原文要点名 ${file}，光转述 git 那句不算`);
+    }
+    assert.equal(existsSync(ws.path), true, "拦下之后工作区原样还在");
+
+    // 收拾掉挡路的，再点一次验收就该一路走完——脱困办法确实管用。
+    rmSync(join(ws.path, "scratch-draft.ts"));
+    git(ws.path, "checkout", "--", "done.txt");
+    const retried = await cleanupAcceptedTask(repo, taskId, "main");
+    assert.equal(retried.ok, true, "障碍清掉后重试要能过");
+    assert.equal(existsSync(ws.path), false);
+  }
+
+  console.log("accept merge: git 场景 / 三种合并档位 / 清理档位 / 清理警告 / 脏工作区点名 / team 并发守卫 / 共享执行者验收口径全部通过");
 } finally {
   rmSync(root, { recursive: true, force: true });
 }

@@ -435,6 +435,7 @@ async function acceptTaskUnlocked(taskId: string, by: AcceptBy): Promise<AcceptT
       sourceBranch: cleanup.sourceBranch,
       targetBranch: cleanup.targetBranch,
       worktreePath: cleanup.worktreePath,
+      dirtyFiles: cleanup.dirtyFiles,
       warnings: merge.warnings,
     };
   }
