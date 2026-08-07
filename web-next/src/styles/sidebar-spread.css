@@ -223,7 +223,8 @@
 .workspace-spread-filter.is-todo b { color: var(--amber); }
 
 /* ── 窄态的一排点：同一个筛选的另一副长相 ────────────────
-   摆在顶部图标行的右端、紧挨着图标组（工具行本身 justify-content:flex-end）。
+   靠左摆，占的是顶部图标行本来就空着的左半边（margin-right:auto 把图标组顶回右端），
+   跟铺开态那排胶囊同一个起点 —— 按 F 来回切时点和胶囊原地换脸，不会左右跳。
    一颗点 = 一档状态；「全部」不占点位，表现为一颗都没亮。
    尺寸是按侧边栏最窄那档（220px）算死的：五颗点 65px + 四颗图标 112px + 四道 3px 间隙
    = 189px，正好落在可用的 195px 里。想把点做大先回来算这道题，否则最窄时会溢出侧栏。 */
@@ -233,6 +234,7 @@
   flex: 0 0 auto;
   align-items: center;
   gap: 0;
+  margin-right: auto;
   animation: workspace-spread-dots-in 160ms ease-out;
 }
 
@@ -263,14 +265,15 @@
   transition: transform 140ms ease-out, box-shadow 140ms ease-out;
 }
 
-/* 这一档一个任务都没有：留个空心，位置还在（不然点会左右挪，指哪打哪就没了）。 */
-.workspace-spread-dot.is-empty i {
-  background: transparent;
-  box-shadow: inset 0 0 0 1.5px color-mix(in lch, var(--spread-dot) 50%, transparent);
-}
+/* 这一档一个任务都没有：还是实心，只是淡下去。位置不动（不然点会左右挪，指哪打哪就没了）。 */
+.workspace-spread-dot.is-empty i { opacity: 0.4; }
 
 .workspace-spread-dot:hover i,
 .workspace-spread-dot:focus-visible i { transform: scale(1.28); }
+
+.workspace-spread-dot.is-empty:hover i,
+.workspace-spread-dot.is-empty:focus-visible i,
+.workspace-spread-dot.is-empty.is-on i { opacity: 1; }
 
 .workspace-spread-dot:focus-visible { outline: none; }
 

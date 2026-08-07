@@ -92,7 +92,8 @@ function SpreadFilterDot({
   );
 }
 
-// 窄态的那排点：顶部图标行右侧、紧挨着图标组。一颗点 = 一档状态，选中即只看这一档。
+// 窄态的那排点：顶部图标行的左半边，跟铺开态那排胶囊同一个起点；图标组仍在最右边不动。
+// 一颗点 = 一档状态，选中即只看这一档。
 export function SpreadFilterDots({ spread, counts }: { spread: SidebarSpread; counts: SpreadCounts }) {
   const toggle = filterToggler(spread);
   return (
