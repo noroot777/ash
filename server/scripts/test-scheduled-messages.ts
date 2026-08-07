@@ -25,11 +25,12 @@ printf '%s\\n' '{"type":"result","subtype":"success","session_id":"scheduled-mes
   { mode: 0o755 },
 );
 
-const [{ db, ensureSchema }, schema, schedulesModule, pending, status, transcript, paths] = await Promise.all([
+const [{ db, ensureSchema }, schema, schedulesModule, pending, runs, status, transcript, paths] = await Promise.all([
   import("../src/db/index.js"),
   import("../src/db/schema.js"),
   import("../src/schedules.js"),
   import("../src/pending-messages.js"),
+  import("../src/runs.js"),
   import("../src/status.js"),
   import("../src/transcript.js"),
   import("../src/paths.js"),
@@ -44,6 +45,7 @@ const projectId = "scheduled-project";
 const deliveredTaskId = "scheduled-team-delivered";
 const unavailableTaskId = "scheduled-team-unavailable";
 const queuedTaskId = "scheduled-single-queued";
+const lockedTaskId = "scheduled-single-locked";
 const unavailableSessionId = "scheduled-team-unavailable-session";
 const unavailableTranscript = transcript.sessionTranscriptPath(unavailableTaskId, unavailableSessionId);
 
@@ -140,6 +142,7 @@ try {
     taskRow(deliveredTaskId, "claude", "running"),
     taskRow(unavailableTaskId, "gemini", "idle"),
     { ...taskRow(queuedTaskId, "claude", "running"), mode: "single", team: null },
+    { ...taskRow(lockedTaskId, "claude", "running"), mode: "single", team: null },
   ]);
   await db.insert(sessions).values({
     id: unavailableSessionId,
@@ -156,6 +159,7 @@ try {
     messageRow("scheduled-delivered", deliveredTaskId, "团队定时消息到期"),
     messageRow("scheduled-unavailable", unavailableTaskId, "这条消息应安全取消"),
     messageRow("scheduled-queued", queuedTaskId, "排队追问:等这一轮跑完再发", "queued"),
+    messageRow("scheduled-locked", lockedTaskId, "结算钩子里投递的这句话不许丢", "queued"),
   ]);
 
   await schedulesModule.tick();
@@ -180,6 +184,8 @@ try {
     "lead 不可用的取消原因没有写入持久时间线",
   );
   assert.match(readFileSync(unavailableTranscript, "utf8"), /调度台不可用/);
+  // 取消 = 这条消息从托盘上消失,原文必须在时间线上留底,否则用户只能凭记忆重打一遍。
+  assert.match(readFileSync(unavailableTranscript, "utf8"), /原文：这条消息应安全取消/);
 
   console.log("✓ 团队定时消息到期后进入 lead 常驻会话并标记 sent");
   console.log("✓ lead 不可用时消息安全取消并把原因写入时间线");
@@ -215,6 +221,46 @@ try {
   );
   await new Promise((resolve) => setTimeout(resolve, 200));
   console.log("✓ 排队追问:运行中原地等待,任务一空闲立即投递进原会话");
+
+  // ── 结算钩子里投递:单飞锁还锁着,消息也一个字都不能丢 ────────────────────
+  // 真实链路是 run loop 的 try 里 setTaskStatus → flushPendingForTask,**那一刻这一轮
+  // 的单飞锁还锁着**。上面那一段是在锁外调的,所以它测不到这个格:2026-08-07 就是在
+  // 这里丢的消息——claim 已经把它标成 sent,continueTask 却被锁静默挡回,托盘和时间线
+  // 同时没有,用户那句话凭空蒸发。这里把锁真的锁上复现它。
+  assert.equal(runs.claimTurn(lockedTaskId), true, "测试自身前提:这一轮的锁应该抢得到");
+  await status.setTaskStatus(lockedTaskId, "done");
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  assert.equal(
+    (await db.select().from(sessions).where(eq(sessions.taskId, lockedTaskId))).length,
+    0,
+    "锁还锁着就不该起下一轮(会跟当前这一轮撞在一起)",
+  );
+
+  runs.releaseTurn(lockedTaskId); // run loop 的 finally
+  await waitFor(
+    async () => (await db.select().from(sessions).where(eq(sessions.taskId, lockedTaskId))).length > 0,
+    "这一轮退干净之后排队消息仍然没送进会话——消息被单飞锁静默吞掉了",
+  );
+  const locked = (await db.select().from(scheduledMessages)
+    .where(eq(scheduledMessages.id, "scheduled-locked"))).at(0)!;
+  assert.equal(locked.status, "sent", "真送进会话之后才算 sent");
+  // 「送到了」的判据是**刷新后仍看得见**:原话作为一个真人回合落进会话时间线。
+  const lockedSession = (await db.select().from(sessions).where(eq(sessions.taskId, lockedTaskId))).at(0)!;
+  const lockedTranscript = transcript.sessionTranscriptPath(lockedTaskId, lockedSession.id);
+  await waitFor(
+    () => existsSync(lockedTranscript)
+      && readFileSync(lockedTranscript, "utf8").includes("结算钩子里投递的这句话不许丢"),
+    "消息标成 sent 了,原话却没落进会话时间线",
+  );
+  await waitFor(
+    async () => {
+      const t = (await db.select().from(tasks).where(eq(tasks.id, lockedTaskId))).at(0)!;
+      return t.status !== "running" && t.status !== "queued";
+    },
+    "结算钩子里投递出去的那一轮没有结算",
+  );
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  console.log("✓ 结算钩子里投递:锁还锁着不抢跑,锁一放立刻把原话送进会话");
 } finally {
   if (originalPath === undefined) delete process.env.PATH;
   else process.env.PATH = originalPath;
@@ -222,5 +268,6 @@ try {
   rmSync(join(paths.RUNS_DIR, deliveredTaskId), { recursive: true, force: true });
   rmSync(join(paths.RUNS_DIR, unavailableTaskId), { recursive: true, force: true });
   rmSync(join(paths.RUNS_DIR, queuedTaskId), { recursive: true, force: true });
+  rmSync(join(paths.RUNS_DIR, lockedTaskId), { recursive: true, force: true });
   rmSync(root, { recursive: true, force: true });
 }

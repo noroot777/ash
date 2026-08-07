@@ -29,6 +29,7 @@ import { resolveGate } from "./duet/gates.js";
 import { taskCommits } from "./git.js";
 import { continueTask, resumeOrRunTask, runTask } from "./orchestrator.js";
 import { RUNS_DIR } from "./paths.js";
+import { enqueueMessage } from "./pending-messages.js";
 import { isOvertaken, queueBlockers, repackQueue, tailOrder } from "./queues.js";
 import { confirmDone, stopTask } from "./runs.js";
 import { advanceQueue } from "./scheduler.js";
@@ -336,7 +337,13 @@ api.post("/tasks/:id/answer", async (c) => {
   const route = asker && asker.agent !== r.agentType
     ? { agent: asker.agent, executorId: asker.executorId, model: null, reasoningEffort: null }
     : {};
-  void continueTask(taskId, `【答复】你之前的提问:「${r.question}」\n\n${a}\n\n${tail}`, route);
+  const answerText = `【答复】你之前的提问:「${r.question}」\n\n${a}\n\n${tail}`;
+  // 同 /reply:被单飞锁挡回时答复一个字都没送出去,落成排队消息等任务空下来再发,
+  // 绝不静默丢掉(问题已经清了,丢了就是死局——agent 永远等不到答案)。
+  void continueTask(taskId, answerText, route).then(async (started) => {
+    if (started) return;
+    await enqueueMessage({ taskId, text: answerText, ...route });
+  });
   return c.json({ answered: true, resumed: true });
 });
 
@@ -435,30 +442,32 @@ api.post("/tasks/:id/reply", async (c) => {
       if (Number.isNaN(when.getTime()) || when.getTime() <= Date.now())
         return c.json({ error: "定时时间必须是将来的有效时间" }, 400);
     }
-    const row = {
-      id: id(),
+    const row = await enqueueMessage({
       taskId,
       text: (b.text ?? "").trim(),
-      attachments: JSON.stringify(b.attachments ?? []),
+      attachments: b.attachments,
       agent: b.agent ?? null,
       executorId: b.executorId ?? null,
       model: b.model?.trim() || null,
       reasoningEffort: b.reasoningEffort?.trim() || null,
-      mode: (b.sendAt ? "timed" : "queued") satisfies ScheduledMessageMode,
-      sendAt: when.toISOString(),
-      status: "pending" as const,
-      createdAt: now(),
-      sentAt: null,
-    };
-    await db.insert(scheduledMessages).values(row);
+      mode: b.sendAt ? "timed" : "queued",
+      sendAt: when,
+    });
     return c.json({ scheduled: true, message: toScheduledMessage(row) }, 202);
   }
-  void continueTask(taskId, (b.text ?? "").trim(), {
+  const route = {
     attachments: b.attachments,
     agent: b.agent,
     executorId: b.executorId ?? null,
     model: b.model?.trim() || null,
     reasoningEffort: b.reasoningEffort?.trim() || null,
+  };
+  // 上面那两道挡板看的是 tasks.status,而单飞锁是内存态的:结算已经把状态落成终态、
+  // 这一轮却还没退干净的那道缝里,continueTask 会被挡回并返回 false。**不能就这么把
+  // 用户的字丢了** —— 原样落成一条排队消息,任务一空下来照常发出去(托盘也会显示)。
+  void continueTask(taskId, (b.text ?? "").trim(), route).then(async (started) => {
+    if (started) return;
+    await enqueueMessage({ taskId, text: (b.text ?? "").trim(), ...route, agent: b.agent ?? null });
   });
   return c.json({ started: true }, 202);
 });

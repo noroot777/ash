@@ -10,15 +10,53 @@
 //   ② 任务落终态时的钩子(status.ts)——排队消息的正常路径,做到「跑完立刻发出」,
 //      不让用户对着一条已经该发的消息干等最多 30 秒
 // 于是「排队」不需要第二套定时器:它就是一条永远已到期、但要等任务空闲的消息。
+//
+// **一条铁律:消息一旦被 claim 成 sent,就必须真的进到会话里,否则要原样退回 pending
+// 或者把原文抄进时间线。** 它同时从托盘和时间线上消失 = 用户那句话凭空蒸发,连「我
+// 发过」都无从证明(2026-08-07 事故,见 docs/incidents.md「排队消息凭空消失」)。
 import { and, eq } from "drizzle-orm";
-import type { AgentType } from "@harness/shared";
+import type { AgentType, ScheduledMessageMode } from "@harness/shared";
 import { db } from "./db/index.js";
 import { scheduledMessages, tasks } from "./db/schema.js";
 import { continueTask } from "./orchestrator.js";
+import { whenTurnIdle } from "./runs.js";
 import { appendTaskTimeline } from "./task-timeline.js";
-import { now } from "./util.js";
+import { id, now } from "./util.js";
 
 type Row = typeof scheduledMessages.$inferSelect;
+
+// 落一条待发送消息(排队/定时同一张表,见文件头)。**入队的单点**:`/reply` 的正常
+// 排队路径、以及「立刻发却被单飞锁挡回」的兜底都走它,免得两处各拼一份 row。
+export async function enqueueMessage(input: {
+  taskId: string;
+  text: string;
+  attachments?: string[];
+  agent?: AgentType | null;
+  executorId?: string | null;
+  model?: string | null;
+  reasoningEffort?: string | null;
+  mode?: ScheduledMessageMode;
+  // 排队消息不看钟点,sendAt 只用来排先后,所以默认取此刻。
+  sendAt?: Date;
+}): Promise<Row> {
+  const row = {
+    id: id(),
+    taskId: input.taskId,
+    text: input.text,
+    attachments: JSON.stringify(input.attachments ?? []),
+    agent: input.agent ?? null,
+    executorId: input.executorId ?? null,
+    model: input.model ?? null,
+    reasoningEffort: input.reasoningEffort ?? null,
+    mode: input.mode ?? ("queued" satisfies ScheduledMessageMode),
+    sendAt: (input.sendAt ?? new Date()).toISOString(),
+    status: "pending" as const,
+    createdAt: now(),
+    sentAt: null,
+  };
+  await db.insert(scheduledMessages).values(row);
+  return row;
+}
 
 // 判定所需的最小任务形状,写成结构类型,单测就能直接喂字面量。
 export type DeliveryTaskView = { mode: string | null; status: string; archived: boolean };
@@ -60,6 +98,22 @@ function cooling(taskId: string, at: number): boolean {
   return last != null && at - last < FIRE_COOLDOWN_MS;
 }
 
+// 已经抢下、但还在等这个任务当前那一轮退干净的投递。冷却窗口(5s)只够盖住
+// continueTask 内部那道缝,盖不住「等一轮跑完」——那可能是几十分钟。这段时间里
+// 同一任务的第二条消息绝不能也被抢下来,否则两条会挤在一起争同一个回合。
+const inFlight = new Set<string>();
+
+// 抢下之后最终没能送出去:把消息原样退回待发送队列(托盘里重新出现),下一次触发
+// 再送。**宁可晚发,不能不发** —— 消息一旦被标 sent 却没进会话,用户那句话就同时从
+// 托盘和时间线上消失了,连「我发过」都无从证明(见 docs/incidents.md「排队消息凭空消失」)。
+async function restorePendingMessage(message: Row): Promise<void> {
+  lastFiredAt.delete(message.taskId);
+  await db
+    .update(scheduledMessages)
+    .set({ status: "pending", sentAt: null })
+    .where(and(eq(scheduledMessages.id, message.id), eq(scheduledMessages.status, "sent")));
+}
+
 export async function cancelPendingMessage(message: Row, reason: string): Promise<void> {
   await db
     .update(scheduledMessages)
@@ -67,7 +121,11 @@ export async function cancelPendingMessage(message: Row, reason: string): Promis
     .where(eq(scheduledMessages.id, message.id));
   const label = message.mode === "queued" ? "排队消息" : "定时消息";
   const when = message.mode === "queued" ? "" : `（原定 ${message.sendAt}）`;
-  const note = `〔系统〕${label}未发送，已取消${when}：${reason}`;
+  // 原文必须一起留下:这条消息取消之后就从托盘里消失了,不把用户打的字抄进时间线,
+  // 他就只能凭记忆重打一遍。截断只为不撑爆时间线,够认出是哪句话即可。
+  const text = message.text.trim();
+  const quoted = text ? `\n原文：${text.length > 500 ? `${text.slice(0, 500)}…` : text}` : "";
+  const note = `〔系统〕${label}未发送，已取消${when}：${reason}${quoted}`;
   if (!(await appendTaskTimeline(message.taskId, note))) {
     console.warn(`[harness] ${note} task=${message.taskId} message=${message.id}`);
   }
@@ -105,7 +163,7 @@ export async function deliverPendingMessages(taskId?: string): Promise<void> {
   const fired = new Set<string>(); // 每个任务每轮至多投递一条
   for (const m of pending) {
     try {
-      if (fired.has(m.taskId) || cooling(m.taskId, at.getTime())) continue;
+      if (fired.has(m.taskId) || inFlight.has(m.taskId) || cooling(m.taskId, at.getTime())) continue;
       const t = (await db.select().from(tasks).where(eq(tasks.id, m.taskId))).at(0) ?? null;
       const verdict = deliveryVerdict(m, t, at);
       if (verdict.action === "wait") continue;
@@ -125,7 +183,26 @@ export async function deliverPendingMessages(taskId?: string): Promise<void> {
           await cancelPendingMessage(m, `调度台不可用：${detail}`);
         }
       } else {
-        void continueTask(m.taskId, m.text, options);
+        // 单任务必须等它**当前这一轮退干净**再送。两个触发源里的终态钩子
+        // (setTaskStatus → flushPendingForTask)是在 run loop 的 try 里调的,那一刻
+        // 单飞锁还锁着;直接 continueTask 会被静默挡回,而消息刚刚已经被 claim 成 sent
+        // ——托盘里没了、会话里也没有,用户那句话就此蒸发。`whenTurnIdle` 由
+        // releaseTurn 同一处排空,是结算钩子里给同一个任务续跑的唯一安全写法。
+        inFlight.add(m.taskId);
+        whenTurnIdle(m.taskId, () => {
+          void continueTask(m.taskId, m.text, options)
+            .then(async (started) => {
+              inFlight.delete(m.taskId);
+              // 排空的一瞬间被别的路径抢走了回合(队列推进、用户手点运行):这一句
+              // 一个字都没送出去,退回队列等下一次触发。
+              if (!started) await restorePendingMessage(m);
+            })
+            .catch(async (error) => {
+              inFlight.delete(m.taskId);
+              const detail = error instanceof Error ? error.message : String(error);
+              await cancelPendingMessage(m, `续跑失败：${detail}`);
+            });
+        });
       }
     } catch {
       /* 一条投递失败不影响其它任务,下一轮再来 */

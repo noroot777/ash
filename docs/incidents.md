@@ -199,3 +199,40 @@ return !def.steps.slice(idx + 1).some((step) => step.kind === "human");   // ←
 
 - **一个判断有几处实现，就要有几盏红灯**。推进器那条路修好之后，`acceptTask` 这条路上同名的判断仍是旧的：`test-workflow-gate.ts` 当时只测推进器，全绿，而用户点下去的正是没测的那条。所以这次的回归直接在真库 + 真 git 仓库上调 `acceptTask`，断言 main 的 ref 一动没动、worktree 还在、分支还在。
 - **worktree 里没有 `node_modules`，`@harness/shared` 会解析到主仓那份**（本次首跑就是这么撞出来的：改完 shared 测试照红，因为 server 读的是主仓的旧文件）。改 shared 时先 `ln -sfn ../../shared node_modules/@harness/shared`，否则验证的是别的分支的代码。
+
+---
+
+## 排队消息凭空消失：被单飞锁静默吞掉（2026-08-07）
+
+对应约定：`server/src/pending-messages.ts` 文件头那条「一旦 claim 成 sent 就必须真的进到会话里」，以及 `continueTask` 的布尔返回值。回归：`npm -w server run test:scheduled-messages`。
+
+用户的原话是「我刚才好像在一个任务里发了一个排队的任务，但是不知道是切了几次会话或刷新页面的原因，还是重启了服务的原因，现在找不到那个排队的消息了」。**三个猜测全不成立**：消息既没被刷新弄丢，也跟重启无关，它是被后端悄悄吃了。
+
+库里的证据链精确到毫秒（任务 `1rojF5Tjau91`，消息 `bwaiaJm7J84t`）：
+
+```
+06:10:02.366  用户在运行中的任务里发话 → scheduled_messages 落一条 mode=queued/status=pending
+06:14:04.271  sessions.ended_at —— agent 这一轮结束
+06:14:04.281  scheduled_messages.sent_at —— 终态钩子抢下这条消息，标成 sent（+10ms）
+06:14:04.316  时间线还在写结算产物（+45ms，说明 run loop 的 try 还没走完）
+              ……此后 sessions.turn_started_at 再没变过：**没有任何一轮为这条消息跑起来**
+```
+
+根因是一条早就写在 `server/src/runs.ts` 文件头、却没人在这条链路上遵守的规矩：**结算钩子跑在 run loop 的 `try` 里，那一刻单飞锁还锁着**。`setTaskStatus` → `flushPendingForTask` → `deliverPendingMessages` 先原子地把消息 `pending → sent`（防两个触发源重发），紧接着 `void continueTask(...)`，而 `continueTask` 第一句就是 `if (!claimTurn(taskId)) return;` —— 抢不到锁，直接返回，什么都不发生。
+
+于是这条消息同时从**两个**地方消失：托盘只显示 `pending`，它已经是 `sent` 了；会话时间线里从没写过这一轮。用户手上一点痕迹都不剩，连「我确实发过」都无从证明——这比报个错坏得多。
+
+两处让它变得更难发现的细节：
+
+- `runs.ts` 里其实早就备好了唯一安全写法 `continueWhenIdle`（由 `releaseTurn` 同一处排空），注释甚至写明了「直接 `continueTask` 会被静默挡回」。就地验证轮用了它，排队消息这条链路没用——**规矩只写在注释里，就只能保护读过那段注释的人**。
+- `test-scheduled-messages.ts` 里已有一条「排队追问」的用例，而且它是绿的：它直接调 `setTaskStatus(taskId, "done")`，**锁在测试里根本没锁上**。测试复刻了调用顺序，没复刻并发状态，于是格子看着覆盖了、真实链路一次都没走过。
+
+三层修法，缺一层都还能漏：
+
+1. **投递等锁退干净**：单任务分支改走 `whenTurnIdle`，另加一个 `inFlight` 集合——冷却窗口只有 5 秒，而「等一轮跑完」可能是几十分钟，这段时间里同一任务的第二条消息绝不能也被抢下来。
+2. **`continueTask` 返回 `boolean`**：`false` 只有一个来源——被单飞锁挡回、这句话一个字没送出去。把「跑完了」和「压根没跑」在类型上分开，所有拿着用户原话的调用方（`/reply` 的立刻发、`/answer`）都据此兜底：原样落成一条排队消息，任务空下来照发。
+3. **实在送不出去也要留底**：`cancelPendingMessage` 把**原文**一并抄进时间线。取消意味着它从托盘上消失，不留原文用户就只能凭记忆重打一遍。
+
+回归用例直接把锁锁上（`claimTurn` → `setTaskStatus` → `releaseTurn`）复现了 2026-08-07 这一格：锁着时不许起下一轮，锁一放必须把原话落进会话时间线。改回旧写法它当场变红。
+
+一条可迁移的推论：**「消息/指令类的东西被标成已处理」和「它真的被处理了」必须是同一件事**，中间隔着一个静默 return 就是一次数据丢失。凡是先改状态再触发副作用的地方，都要问一句「副作用没发生的话，这条状态谁来退回去」。
