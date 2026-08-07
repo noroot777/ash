@@ -40,17 +40,17 @@ async function setStatus(taskId: string, status: TaskStatus) {
 // the /duet timeline shows when the user spoke. Best-effort transcript append;
 // the live event drives the open page. `target` marks a 提问 directed at one
 // voice (so the timeline can show 「你 → 讨论者A」).
-function recordUserTurn(taskId: string, round: number, text: string, target?: "A" | "B") {
+function recordUserTurn(taskId: string, round: number, text: string, kind: "inject" | "ask", target?: "A" | "B") {
   const at = now();
   try {
     appendFileSync(
       join(RUNS_DIR, taskId, "transcript.jsonl"),
-      JSON.stringify({ round, speaker: "user", text, at, target }) + "\n",
+      JSON.stringify({ round, speaker: "user", text, at, target, kind }) + "\n",
     );
   } catch {
     /* best effort */
   }
-  bus.publish({ type: "duet.user", taskId, round, text, at, target });
+  bus.publish({ type: "duet.user", taskId, round, text, at, target, kind });
 }
 
 // Gate verdicts are part of the duet timeline too. Persisting both open and
@@ -291,6 +291,19 @@ function lastUserNoteOf(rows: any[]): { text: string; target?: "A" | "B" } | und
   return note ? { text: note.text, target: note.target === "A" || note.target === "B" ? note.target : undefined } : undefined;
 }
 
+// 某一轮是否是 gate 介入轮:同 round 的最后一条 user 行。kind 旧行没存 —— 按
+// 「有 target 即定向提问,否则按 inject」推断(inject 双方回炉,是更保守的一档)。
+export function gateRoundOf(
+  rows: { speaker?: string; round?: number; text?: string; target?: string; kind?: string }[],
+  round: number,
+): { kind: "inject" | "ask"; text: string; target?: "A" | "B" } | null {
+  const note = [...rows].reverse().find((r) => r.speaker === "user" && r.round === round && typeof r.text === "string" && r.text.trim());
+  if (!note) return null;
+  const target = note.target === "A" || note.target === "B" ? note.target : undefined;
+  const kind = note.kind === "ask" || note.kind === "inject" ? note.kind : target ? "ask" : "inject";
+  return { kind, text: note.text!, target };
+}
+
 // 收敛后的合稿轮:resume 讨论者 A 的会话(整场上下文都在),把讨论成果整理成一份
 // 共同方案文档,作为 /duet 的正式产出——gate 上两行 140 字的结论只够扫一眼,拍板
 // 与交接执行需要的是全文。inject/提问回炉后方案会过时,进 gate 前按 planRound
@@ -302,7 +315,12 @@ async function synthesizePlan(ctx: Ctx): Promise<void> {
     const t = await runTurn({
       taskId: ctx.taskId, role: "voiceA", speaker: "synthesis", round: ctx.round,
       executor: ctx.exA,
-      prompt: P.synthesize({ opponentLatest: ctx.lastB, consensus: isConsensus(ctx), userNote: ctx.lastUserNote }),
+      prompt: P.synthesize({
+        // 三种停下来的原因要如实告知合稿者:双方举手但结论不同 ≠ 轮数耗尽。
+        stop: isConsensus(ctx) ? "consensus" : canSettle(ctx) ? "agreedToStop" : "roundCap",
+        opponentLatest: ctx.lastB,
+        userNote: ctx.lastUserNote,
+      }),
       cwd: ctx.cwd,
       rowId: ctx.A.rowId, resumeCliId: ctx.A.cliId || undefined,
     });
@@ -440,20 +458,38 @@ export async function resumeDuet(taskId: string): Promise<void> {
     // then hand to the normal loop (which continues from the next round).
     const R = failedTurn.round;
     const sp = failedTurn.speaker as "A" | "B";
-    const re = (s: "A" | "B", round: number) =>
-      runTurn({
+    // 失败的这一轮如果是 gate 介入轮(同 round 有 user 行),重跑必须**重放用户的
+    // 原话**(inject 回炉 / ask 提问),不能退回普通 evolve —— 否则重试后任务是继续
+    // 了,用户的意见/问题/附件却被丢了。kind 落盘于 recordUserTurn;旧行没有 kind,
+    // 按「有 target 即定向提问」推断,否则按 inject(双方回炉,更保守)。
+    const gateNote = gateRoundOf(rows, R);
+    const re = (s: "A" | "B", round: number) => {
+      const isGateRound = round === R && !!gateNote;
+      const inheritOf = (side: "A" | "B") => (side === "A"
+        ? { raised: ctx.raisedA, agrees: ctx.agreesA, conclusion: ctx.conclusionA }
+        : { raised: ctx.raisedB, agrees: ctx.agreesB, conclusion: ctx.conclusionB });
+      return runTurn({
         taskId, role: s === "A" ? "voiceA" : "voiceB", speaker: s, round,
         executor: s === "A" ? exA : exB,
-        prompt: round === 1 ? P.opening(cfg.topic, cwd) : P.evolve(s === "A" ? ctx.lastB : ctx.lastA, round),
+        prompt: isGateRound
+          ? (gateNote!.kind === "inject" ? P.injectFeedback(gateNote!.text, round) : P.question(gateNote!.text, round))
+          : round === 1 ? P.opening(cfg.topic, cwd) : P.evolve(s === "A" ? ctx.lastB : ctx.lastA, round),
         cwd, rowId: s === "A" ? ctx.A.rowId : ctx.B.rowId,
         resumeCliId: (s === "A" ? ctx.A.cliId : ctx.B.cliId) || undefined,
+        // 与 reDiscuss 同语义:提问=澄清,继承既有收敛状态;注入=回炉,允许改判。
+        inherit: isGateRound && gateNote!.kind === "ask" ? inheritOf(s) : undefined,
       });
+    };
 
     const t1 = await re(sp, R);
     if (failed(t1)) return void (await setStatus(taskId, "failed"));
     applyTurn(ctx, sp, t1);
-    // If A failed mid-round, B of the same round still needs to run.
-    if (R > 1 && sp === "A" && !canSettle(ctx)) {
+    // A failed mid-round → B of the same round may still need to run. 补跑口径与
+    // reDiscuss 对齐:inject/双向 ask 双方都要跑(不看 canSettle);定向介入只跑
+    // 目标方;普通 evolve 轮维持「A 已收敛就不再叫 B」。
+    const needB = R > 1 && sp === "A"
+      && (gateNote ? !gateNote.target : !canSettle(ctx));
+    if (needB) {
       const t2 = await re("B", R);
       if (failed(t2)) return void (await setStatus(taskId, "failed"));
       applyTurn(ctx, "B", t2);
@@ -587,7 +623,7 @@ async function reDiscuss(ctx: Ctx, kind: "inject" | "ask", text: string, target?
   // 附件(截图/文件)跟着人的这句话走:时间线上的气泡和讨论者拿到的 prompt 都带上它们,
   // 讨论者按路径自己 Read。成稿单点在 gateUserMessage。
   const message = gateUserMessage(text, attachments);
-  recordUserTurn(ctx.taskId, ctx.round, message, tgt); // the human's words land in the timeline first
+  recordUserTurn(ctx.taskId, ctx.round, message, kind, tgt); // the human's words land in the timeline first
   const prompt = kind === "inject" ? P.injectFeedback(message, ctx.round) : P.question(message, ctx.round);
   // 提问=澄清,不该打回已达成的收敛/结论(继承既有状态);注入=回炉重议,允许双方改判(不继承)。
   const inhA = kind === "ask" ? { raised: ctx.raisedA, agrees: ctx.agreesA, conclusion: ctx.conclusionA } : undefined;

@@ -159,6 +159,13 @@ try {
   ]);
   assert.ok(!interrupted.join("\n").includes("旧方案"), "a user note after the plan must invalidate it");
 
+  // retry 重放判定:失败轮若是 gate 介入轮,要用原 inject/question prompt 重放。
+  const { gateRoundOf } = await import("../src/duet/index.js");
+  assert.equal(gateRoundOf([{ speaker: "user", round: 3, text: "补充意见", kind: "inject" }], 3)?.kind, "inject");
+  assert.equal(gateRoundOf([{ speaker: "user", round: 3, text: "只问B", target: "B" }], 3)?.kind, "ask", "old rows without kind: target implies ask");
+  assert.equal(gateRoundOf([{ speaker: "user", round: 3, text: "无kind无target" }], 3)?.kind, "inject", "old rows without kind/target default to inject");
+  assert.equal(gateRoundOf([{ speaker: "user", round: 2, text: "别的轮" }], 3), null);
+
   const repeated = await app.request(`/tasks/${teamId}/team/iterate-duet`, { method: "POST" });
   assert.equal(repeated.status, 200);
   assert.equal(((await repeated.json()) as { id: string }).id, created.id);

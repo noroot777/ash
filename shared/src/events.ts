@@ -83,4 +83,5 @@ export type ServerEvent =
   // so the timeline can show when the user spoke. Persisted in the transcript too.
   // target: when a 提问 was directed at one voice, which side — so the timeline
   // can show 「你 → 讨论者A」 (undefined = addressed to both).
-  | { type: "duet.user"; taskId: string; round: number; text: string; at: string; target?: "A" | "B" };
+  // kind 落盘是为了 retry 能重放这次介入(inject 回炉 / ask 提问的 prompt 不同);旧行没有 kind,读取端按 target 有无推断。
+  | { type: "duet.user"; taskId: string; round: number; text: string; at: string; target?: "A" | "B"; kind?: "inject" | "ask" };
