@@ -36,6 +36,18 @@
 // 文件不是库行 → `HARNESS_RUNS_FALLBACK` 让预览**只读**回退到主仓的 data/runs，写照旧落
 // 自己的（paths.ts / transcript.ts），所以预览里对老任务说话不会污染真实历史。
 //
+// **想换个花样，改预览站那一格的命令就行，不用碰这里**——那一格本来就是一条 shell 命令：
+//
+//   npm -w web-next run dev                 只起前端，/api 打回本机 4317 的真数据（老行为）
+//   npm run dev                             整套 + 主库快照（默认）
+//   HARNESS_SEED_MODE=config npm run dev    整套，但只搬设置不搬任务（快照出问题时的退路）
+//   HARNESS_SEED_FROM= npm run dev          整套，空库
+//   HARNESS_DB=/tmp/我的.db npm run dev      整套，用你自己的库（不清空、不播种覆盖）
+//
+// 刻意**不**把这几档做成起手式上的复选框：预览站是所有项目共用的（Go、Rails、静态站都在
+// 用它），而「前端/后端/测试库」是 harness 自己的项目结构——做成字段，别的项目那几格永远
+// 空着还得挨个解释。通用层只存命令，项目特有的花样归项目自己的脚本认，就是这条分界。
+//
 // **预览里的 agent 够不着预览这台 harness 的 MCP**，这条得先说清楚，不然会以为坏了：
 // harness MCP 是注册在用户 `~/.claude.json` 里的，那条记录写死了
 // `env: {HARNESS_URL: "http://localhost:4317"}`；而 claude 只把配置里列的 env 交给 MCP
@@ -68,16 +80,31 @@ async function startPreviewStack(webPort) {
     console.error("[dev] 借不到端口给预览的后端，这一站起不来。");
     process.exit(1);
   }
-  const dbFile = fileURLToPath(new URL("../data/preview.db", import.meta.url));
   const mainData = mainRepoDataDir();
   const apiUrl = `http://127.0.0.1:${apiPort}`;
+  // 下面这三样**外面给了就听外面的**。预览站那一格存的就是一条 shell 命令，所以
+  // `HARNESS_DB=/tmp/我的测试库.db npm run dev` 天然能表达「这次用我自己的库」——
+  // 不必为此在起手式上多开一个字段（那种字段对非 harness 项目永远是空的，见文件头）。
+  //   · HARNESS_DB       换一个库。给了自己的库就**不删**它，见下面的 managed。
+  //   · HARNESS_SEED_FROM 换源库；显式给空串 = 起一个空库（server 端判的是非空）。
+  //   · HARNESS_SEED_MODE server 端已经认（`config` = 只搬设置不搬任务），这里原样透传。
+  // 指到主库本身会被单实例锁挡下来（锁的粒度就是 DB 文件路径），后端起不来、整套一起收，
+  // 理由写在 preview.log 第一屏——这正是我们要的结果，不额外拦一道。
+  const managed = !process.env.HARNESS_DB;
+  const dbFile = process.env.HARNESS_DB || fileURLToPath(new URL("../data/preview.db", import.meta.url));
   // 每次起预览都换一张新快照。预览的意义是「照着**这一版代码**看**现在**这台 harness」，
   // 沿用上次那份会看到几天前的世界（新加的执行器、新建的任务都不在），而那种错位很难自己
   // 发现。代价是上一次在预览里点出来的东西不留——它本来就是一次性的。
-  for (const suffix of ["", "-wal", "-shm"]) {
-    try { rmSync(`${dbFile}${suffix}`, { force: true }); } catch { /* 占用/权限：照旧起，只是快照是旧的 */ }
+  // **只删我们自己管的那份**：用户拿自己的测试库来跑，里头多半有他攒下的东西，删掉是数据损失。
+  if (managed) {
+    for (const suffix of ["", "-wal", "-shm"]) {
+      try { rmSync(`${dbFile}${suffix}`, { force: true }); } catch { /* 占用/权限：照旧起，只是快照是旧的 */ }
+    }
   }
-  console.log(`[dev] 预览：整套起——后端 ${apiPort}（库 ${dbFile}）、前端 ${webPort}，前端的 /api 打到后端。`);
+  console.log(
+    `[dev] 预览：整套起——后端 ${apiPort}（库 ${dbFile}${managed ? "" : "，你指定的，不清空"}）、`
+    + `前端 ${webPort}，前端的 /api 打到后端。`,
+  );
 
   // HARNESS_URL 要跟着传：agent 进程继承 server 的环境变量，harness MCP 就靠它知道
   // 「complete_task 该报给谁」。不传的话预览里跑的任务会去敲本机那份 4317。
@@ -85,6 +112,8 @@ async function startPreviewStack(webPort) {
   // HARNESS_RUNS_FALLBACK：历史会话的正文/trace 是文件不是库行，只读回退到主仓那份。
   // HARNESS_PREVIEW：告诉后端「你是预览」——不启动调度器，不许合并/删 worktree/删分支。
   // HARNESS_LAX_DONE：预览里退回「exit 0 即 done」，理由见下面 MCP 那段。
+  // 前四个用 `??` 让外面覆盖得了（`??` 而不是 `||`：空串是「不要播种」这个明确意思）；
+  // 后两个是闸不是配置，一律写死——外面能关掉的闸不叫闸。
   const api = spawn("npm", ["-w", "server", "run", "dev"], {
     cwd: REPO,
     stdio: ["ignore", "pipe", "pipe"],
@@ -93,8 +122,8 @@ async function startPreviewStack(webPort) {
       PORT: String(apiPort),
       HARNESS_DB: dbFile,
       HARNESS_URL: apiUrl,
-      HARNESS_SEED_FROM: join(mainData, "harness.db"),
-      HARNESS_RUNS_FALLBACK: join(mainData, "runs"),
+      HARNESS_SEED_FROM: process.env.HARNESS_SEED_FROM ?? join(mainData, "harness.db"),
+      HARNESS_RUNS_FALLBACK: process.env.HARNESS_RUNS_FALLBACK ?? join(mainData, "runs"),
       HARNESS_PREVIEW: "1",
       HARNESS_LAX_DONE: "1",
     },
