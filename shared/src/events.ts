@@ -14,8 +14,8 @@ export type GateName = "G1" | "G2"; // G2 is legacy, retained for historical eve
 export type GateAction =
   | { kind: "approve"; text?: string; side?: "A" | "B" } // side is retained for older clients
   | { kind: "reject" } // 打回终止
-  | { kind: "inject"; text: string } // 注入意见 → 回炉再辩（始终双方一起回炉）
-  | { kind: "ask"; text: string; target?: "A" | "B" }; // 提问 → 答完继续；target 缺省=问双方，指定=只问那一位辩手
+  | { kind: "inject"; text: string } // 注入意见 → 回炉再讨论（始终双方一起回炉）
+  | { kind: "ask"; text: string; target?: "A" | "B" }; // 提问 → 答完继续；target 缺省=问双方，指定=只问那一位讨论者
 
 // ── Executor streaming events (§12) ──────────────────────────────────────────
 export type AgentEvent =
@@ -30,7 +30,8 @@ export type AgentEvent =
   | { kind: "turnEnd" }
   | { kind: "done"; exitStatus: number };
 
-export type DuetSpeaker = "A" | "B" | "impl" | "review" | "user"; // impl/review are legacy transcript speakers
+// synthesis = 收敛后的合稿轮(共同方案);impl/review are legacy transcript speakers
+export type DuetSpeaker = "A" | "B" | "synthesis" | "impl" | "review" | "user";
 
 // SSE envelope pushed to the web client.
 export type ServerEvent =
@@ -74,5 +75,5 @@ export type ServerEvent =
   // A human intervention in a /duet timeline (gate inject/ask). Carries the time
   // so the timeline can show when the user spoke. Persisted in the transcript too.
   // target: when a 提问 was directed at one voice, which side — so the timeline
-  // can show 「你 → 辩手A」 (undefined = addressed to both).
+  // can show 「你 → 讨论者A」 (undefined = addressed to both).
   | { type: "duet.user"; taskId: string; round: number; text: string; at: string; target?: "A" | "B" };

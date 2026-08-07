@@ -67,7 +67,7 @@ api.post("/tasks", async (c) => {
   const derivationMode = b.mode === "team" || b.mode === "duet";
   if (derivationMode && b.parentId !== undefined && b.parentId !== null) {
     return c.json(
-      { error: "派生执行者或审查任务不能再创建团队/辩论任务", parentId: b.parentId },
+      { error: "派生执行者或审查任务不能再创建团队/讨论任务", parentId: b.parentId },
       409,
     );
   }
@@ -80,7 +80,7 @@ api.post("/tasks", async (c) => {
     ).at(0);
     if (source && (source.parentId !== null || source.reviewOf !== null)) {
       return c.json(
-        { error: "派生执行者或审查任务不能再创建团队/辩论任务", originTaskId: b.originTaskId },
+        { error: "派生执行者或审查任务不能再创建团队/讨论任务", originTaskId: b.originTaskId },
         409,
       );
     }

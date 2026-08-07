@@ -51,6 +51,12 @@ function lastText(turns: DuetTurn[], speaker: "A" | "B"): string {
   return [...turns].reverse().find((turn) => turn.speaker === speaker && turn.text.trim())?.text.trim() ?? "（尚无完整发言）";
 }
 
+// 收敛后的合稿(共同方案)是讨论的正式产出;有它就整段带给调度者,双方最后
+// 发言只作过程证据。老讨论(改名前)没有合稿轮,退回结论两行 + 双方发言。
+function latestPlan(turns: DuetTurn[]): string | null {
+  return [...turns].reverse().find((turn) => turn.speaker === "synthesis" && !turn.error && turn.text.trim())?.text.trim() ?? null;
+}
+
 export function buildDuetHandoffBody(
   task: Task,
   gate: DuetGate | null,
@@ -61,10 +67,11 @@ export function buildDuetHandoffBody(
   const config = normalizeDuetConfig(task.duet);
   const original = config.topic.trim() || task.body.trim() || task.title;
   const resolvedGate = gate ?? latestDuetGate(turns, task.status === "awaiting_review");
+  const plan = latestPlan(turns);
   const lines = [
     "请接手下面这场讨论的结果，先拆解工作，再组织团队执行并验证交付。",
     "",
-    "## 原辩题",
+    "## 原议题",
     `讨论标题：${task.title}`,
     original,
     "",
@@ -74,6 +81,7 @@ export function buildDuetHandoffBody(
     statusLine(task.status, resolvedGate),
     resolvedGate?.conclusionA ? `- 讨论者 A：${resolvedGate.conclusionA}` : "- 讨论者 A：未留下明确结论",
     resolvedGate?.conclusionB ? `- 讨论者 B：${resolvedGate.conclusionB}` : "- 讨论者 B：未留下明确结论",
+    ...(plan ? ["", "## 共同方案（讨论的正式产出，拆解执行以它为准）", plan] : []),
     "",
     "## 双方最后一轮完整发言",
     "### 讨论者 A",

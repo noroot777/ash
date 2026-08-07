@@ -104,7 +104,7 @@ async function runTurn(args: {
   rowId?: string; // reuse a voice's session row across turns
   resumeCliId?: string; // resume the CLI session
   branch?: string | null;
-  // 收敛状态下限:进入本轮前该方已有的 raised/结论。提问(ask)轮辩手被要求不写
+  // 收敛状态下限:进入本轮前该方已有的 raised/结论。提问(ask)轮讨论者被要求不写
   // [可收敛],若它本轮没主动收敛就继承既有状态,避免一次澄清把已达成的共识打回。
   inherit?: { raised: boolean; agrees: boolean; conclusion?: string };
 }): Promise<Turn> {
@@ -193,7 +193,7 @@ async function runTurn(args: {
   let raised = RAISE_RE.test(text);
   let agrees = raised && AGREE_RE.test(text);
   let conclusion = text.match(CONC_RE)?.[1]?.trim().slice(0, 140) || undefined;
-  // 提问轮:辩手按 prompt 不写 [可收敛]。若它进入本轮前本就已收敛,一次澄清提问不该让它
+  // 提问轮:讨论者按 prompt 不写 [可收敛]。若它进入本轮前本就已收敛,一次澄清提问不该让它
   // "放下手"——继承既有收敛状态，否则 isConsensus 会被一次提问打回为"未达成一致"。
   if (args.inherit && !raised) {
     raised = args.inherit.raised;
@@ -255,6 +255,9 @@ interface Ctx {
   agreesB: boolean;
   conclusionA?: string;
   conclusionB?: string;
+  // 最近一次合稿(synthesis)对应的发言轮次;null=还没合过稿。方案是否过时的判据:
+  // planRound < 最后一个 A/B 发言轮(ctx.round)。
+  planRound: number | null;
 }
 
 function applyTurn(ctx: Ctx, sp: "A" | "B", t: Turn) {
@@ -262,6 +265,33 @@ function applyTurn(ctx: Ctx, sp: "A" | "B", t: Turn) {
     ctx.A.cliId = t.cliId; ctx.lastA = t.text; ctx.raisedA = t.raised; ctx.agreesA = t.agrees; ctx.conclusionA = t.conclusion;
   } else {
     ctx.B.cliId = t.cliId; ctx.lastB = t.text; ctx.raisedB = t.raised; ctx.agreesB = t.agrees; ctx.conclusionB = t.conclusion;
+  }
+}
+
+// transcript 重建时找最近一次成功合稿的轮次(speaker "synthesis" 且无 error)。
+function lastPlanRound(rows: any[]): number | null {
+  const plan = [...rows].reverse().find((r) => r.speaker === "synthesis" && !r.error && typeof r.round === "number");
+  return plan ? plan.round : null;
+}
+
+// 收敛后的合稿轮:resume 讨论者 A 的会话(整场上下文都在),把讨论成果整理成一份
+// 共同方案文档,作为 /duet 的正式产出——gate 上两行 140 字的结论只够扫一眼,拍板
+// 与交接执行需要的是全文。inject/提问回炉后方案会过时,进 gate 前按 planRound
+// 判据重新合稿。失败降级:讨论本身已收敛,合稿失败不该把整场打成 failed——
+// transcript 里已留错误行(时间线可见),照常走 gate/done。
+async function synthesizePlan(ctx: Ctx): Promise<void> {
+  if (ctx.planRound != null && ctx.planRound >= ctx.round) return; // 方案没过时
+  try {
+    const t = await runTurn({
+      taskId: ctx.taskId, role: "voiceA", speaker: "synthesis", round: ctx.round,
+      executor: ctx.exA, prompt: P.synthesize(), cwd: ctx.cwd,
+      rowId: ctx.A.rowId, resumeCliId: ctx.A.cliId || undefined,
+    });
+    ctx.A.cliId = t.cliId;
+    if (!failed(t)) ctx.planRound = ctx.round;
+  } catch (err) {
+    if (err instanceof CanceledRun) throw err; // 手动停止照常结算 canceled
+    /* 合稿失败降级:错误行已落 transcript,不拦收敛 */
   }
 }
 
@@ -279,7 +309,7 @@ async function loadBase(taskId: string) {
   const cfg = derivedBody ? { ...storedCfg, topic: derivedBody } : storedCfg;
   const project = (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0);
   if (!project) throw new Error("project not found");
-  // 每个辩手各自的模型/强度；没设才退回任务级（派生辩论会带着来源任务的设置）。
+  // 每个讨论者各自的模型/强度；没设才退回任务级（派生讨论会带着来源任务的设置）。
   const exA = await resolveExecutorFor({
     executorId: cfg.voiceAExecutorId,
     type: cfg.voiceA,
@@ -325,6 +355,7 @@ export async function runDuet(taskId: string): Promise<void> {
       A: { rowId: a.rowId, cliId: a.cliId }, B: { rowId: b.rowId, cliId: b.cliId }, round: 1,
       lastA: a.text, lastB: b.text, raisedA: a.raised, raisedB: b.raised,
       agreesA: a.agrees, agreesB: b.agrees, conclusionA: a.conclusion, conclusionB: b.conclusion,
+      planRound: null,
     };
     if (!(await runRebuttalLoop(ctx))) return;
     await finishDiscussion(ctx);
@@ -374,6 +405,7 @@ export async function resumeDuet(taskId: string): Promise<void> {
       raisedA: ra?.raised ?? false, raisedB: rb?.raised ?? false,
       agreesA: ra?.agrees ?? false, agreesB: rb?.agrees ?? false,
       conclusionA: ra?.conclusion, conclusionB: rb?.conclusion,
+      planRound: lastPlanRound(rows),
     };
     await setStatus(taskId, "running");
 
@@ -392,7 +424,7 @@ export async function resumeDuet(taskId: string): Promise<void> {
       runTurn({
         taskId, role: s === "A" ? "voiceA" : "voiceB", speaker: s, round,
         executor: s === "A" ? exA : exB,
-        prompt: round === 1 ? P.opening(cfg.topic, cwd) : P.rebuttal(s === "A" ? ctx.lastB : ctx.lastA, round),
+        prompt: round === 1 ? P.opening(cfg.topic, cwd) : P.evolve(s === "A" ? ctx.lastB : ctx.lastA, round),
         cwd, rowId: s === "A" ? ctx.A.rowId : ctx.B.rowId,
         resumeCliId: (s === "A" ? ctx.A.cliId : ctx.B.cliId) || undefined,
       });
@@ -484,6 +516,7 @@ export async function resumeAtGate(taskId: string, action: GateAction): Promise<
       raisedA: ra?.raised ?? false, raisedB: rb?.raised ?? false,
       agreesA: ra?.agrees ?? false, agreesB: rb?.agrees ?? false,
       conclusionA: ra?.conclusion, conclusionB: rb?.conclusion,
+      planRound: lastPlanRound(rows),
     };
     recordGateEvent({ type: "duet.gate", taskId, gate: "G1", open: false });
     await setStatus(taskId, "running");
@@ -507,14 +540,14 @@ async function runRebuttalLoop(ctx: Ctx): Promise<boolean> {
     ctx.round++;
     const at = await runTurn({
       taskId, role: "voiceA", speaker: "A", round: ctx.round, executor: exA,
-      prompt: P.rebuttal(ctx.lastB, ctx.round), cwd, rowId: ctx.A.rowId, resumeCliId: ctx.A.cliId || undefined,
+      prompt: P.evolve(ctx.lastB, ctx.round), cwd, rowId: ctx.A.rowId, resumeCliId: ctx.A.cliId || undefined,
     });
     if (failed(at)) { await setStatus(taskId, "failed"); return false; }
     applyTurn(ctx, "A", at);
     if (canSettle(ctx)) break;
     const bt = await runTurn({
       taskId, role: "voiceB", speaker: "B", round: ctx.round, executor: exB,
-      prompt: P.rebuttal(ctx.lastA, ctx.round), cwd, rowId: ctx.B.rowId, resumeCliId: ctx.B.cliId || undefined,
+      prompt: P.evolve(ctx.lastA, ctx.round), cwd, rowId: ctx.B.rowId, resumeCliId: ctx.B.cliId || undefined,
     });
     if (failed(bt)) { await setStatus(taskId, "failed"); return false; }
     applyTurn(ctx, "B", bt);
@@ -545,12 +578,17 @@ async function reDiscuss(ctx: Ctx, kind: "inject" | "ask", text: string, target?
   }
 }
 
-// /duet is discussion-only: after convergence, the conclusions are the output.
-// 收敛门(G1)开 → 让人读结论后放行(=结束)/打回(=取消)/注入·提问(=再辩)；关 → 直接 done。
+// /duet is discussion-only: after convergence a synthesis turn writes the joint
+// plan, and that document is the output.
+// 收敛门(G1)开 → 让人读方案后放行(=结束)/打回(=取消)/注入·提问(=再讨论)；关 → 直接 done。
 async function finishDiscussion(ctx: Ctx): Promise<void> {
   const { taskId, cfg } = ctx;
+  await synthesizePlan(ctx); // 先合稿再开门:gate 上用户拍板的依据就是这份方案
   if (cfg.gateG1 === "on") {
-    const approved = await runGate(taskId, (k, t, target) => reDiscuss(ctx, k, t, target), () => ({
+    const approved = await runGate(taskId, async (k, t, target) => {
+      await reDiscuss(ctx, k, t, target);
+      await synthesizePlan(ctx); // 回炉/澄清后方案已过时,重新合稿再开门
+    }, () => ({
       consensus: isConsensus(ctx),
       consensusBy: consensusBy(ctx),
       conclusionA: ctx.conclusionA ?? null,
@@ -558,7 +596,7 @@ async function finishDiscussion(ctx: Ctx): Promise<void> {
     }));
     if (!approved) return void (await setStatus(taskId, "canceled"));
   }
-  await setStatus(taskId, "done"); // 讨论结束，结论即是产出
+  await setStatus(taskId, "done"); // 讨论结束,共同方案(合稿)即是产出
 }
 
 // Open a HITL gate and act on the human's decision; loops on inject/ask. The

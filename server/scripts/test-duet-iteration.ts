@@ -99,6 +99,7 @@ try {
   writeFileSync(duetTranscript, [
     JSON.stringify({ round: 2, speaker: "A", raised: true, agrees: true, conclusion: "采用方案甲并补充迁移保护" }),
     JSON.stringify({ round: 2, speaker: "B", raised: true, agrees: true, conclusion: "采用方案甲并补充迁移保护" }),
+    JSON.stringify({ round: 2, speaker: "synthesis", text: "# 方案\n采用方案甲，迁移必须幂等。\n\n## 残留分歧\n无", raised: false }),
     JSON.stringify({
       type: "debate.gate",
       taskId: duetId,
@@ -127,7 +128,9 @@ try {
     duet: typeof DUET_DEFAULTS;
   };
   assert.equal(created.originTaskId, teamId);
-  assert.match(created.body, /共识结论：采用方案甲并补充迁移保护/);
+  assert.match(created.body, /上一轮讨论收敛后的共同方案如下/, "synthesis plan must take precedence");
+  assert.match(created.body, /采用方案甲，迁移必须幂等/);
+  assert.doesNotMatch(created.body, /共识结论：/, "with a plan present the 2-line conclusion fallback must not appear");
   assert.match(created.body, new RegExp(leadSessionId));
   assert.match(created.body, /执行暴露了什么新问题/);
   assert.equal(created.duet.voiceAExecutorId, "executor-a");

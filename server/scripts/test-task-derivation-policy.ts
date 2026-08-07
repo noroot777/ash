@@ -72,7 +72,7 @@ try {
 
   let response = await createDerived({ mode: "team", originTaskId: "worker" });
   assert.equal(response.status, 409, "worker must not derive a team task");
-  assert.match((await response.json() as { error: string }).error, /不能再创建团队\/辩论任务/);
+  assert.match((await response.json() as { error: string }).error, /不能再创建团队\/讨论任务/);
 
   response = await createDerived({ mode: "duet", originTaskId: "reviewer" });
   assert.equal(response.status, 409, "reviewer without parentId must not derive a duet task");

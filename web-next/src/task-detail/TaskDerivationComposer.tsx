@@ -479,7 +479,7 @@ export function TaskDerivationComposer({
         ) : (
           <>
             <label className="task-derivation-note">
-              <span>本次辩题</span>
+              <span>本次议题</span>
               <textarea
                 ref={topicRef}
                 value={topic}

@@ -11,6 +11,7 @@ import {
   Archive,
   ChatCircle,
   ChatTeardrop,
+  ClipboardText,
   Play,
   SpinnerGap,
   Stop,
@@ -78,15 +79,15 @@ function TurnBubble({
       </div>
     );
   }
-  const side = turn.speaker === "B" ? "B" : turn.speaker === "A" ? "A" : "history";
-  const role = turn.speaker === "A" ? "讨论者 A" : turn.speaker === "B" ? "讨论者 B" : turn.speaker === "review" ? "历史审查" : "历史实现";
+  const side = turn.speaker === "B" ? "B" : turn.speaker === "A" ? "A" : turn.speaker === "synthesis" ? "synthesis" : "history";
+  const role = turn.speaker === "A" ? "讨论者 A" : turn.speaker === "B" ? "讨论者 B" : turn.speaker === "synthesis" ? "共同方案" : turn.speaker === "review" ? "历史审查" : "历史实现";
   const shownAt = turn.at ?? turn.startedAt ?? session?.startedAt;
   return (
     <div className="duet-turn-wrap">
       {newRound && <div className="duet-round-divider"><span />第 {turn.round} 轮{turn.round === 1 ? " · 盲态开局" : ""}<span /></div>}
       <article className={`duet-turn duet-turn--${side}`}>
         <header>
-          <span>{side === "B" ? <ChatTeardrop size={12} weight="fill" /> : <ChatCircle size={12} weight="fill" />}{role}</span>
+          <span>{side === "synthesis" ? <ClipboardText size={12} weight="fill" /> : side === "B" ? <ChatTeardrop size={12} weight="fill" /> : <ChatCircle size={12} weight="fill" />}{role}</span>
           <b>{session?.executor || fallback}</b>
           {shownAt && <time>{formatInstant(shownAt)}</time>}
           {typeof turn.durationMs === "number" && <small>· ⏱ {formatDuration(turn.durationMs)} 用时</small>}
@@ -96,7 +97,7 @@ function TurnBubble({
         {turn.tools.map((tool, index) => (
           <details className="duet-tool" key={`${tool.name}-${index}`}><summary>{tool.name}</summary>{tool.detail && <pre>{tool.detail}</pre>}</details>
         ))}
-        {!turn.done && !turn.text && !turn.tools.length && <p className="duet-thinking">正在组织本轮观点…</p>}
+        {!turn.done && !turn.text && !turn.tools.length && <p className="duet-thinking">{side === "synthesis" ? "正在把讨论成果整理成共同方案…" : "正在组织本轮观点…"}</p>}
         {turn.text && <MarkdownBody text={turn.text} />}
         {turn.error && <p className="duet-turn-error">{turn.error}</p>}
       </article>
@@ -316,7 +317,7 @@ export function DuetView({
       <ImagePreviewGroup isolated>
         <section className="duet-config-card">
           <div>
-            <small>辩题</small><h2>{topic.body || config.topic || task.title}</h2><MessageAttachments paths={topic.paths} />
+            <small>议题</small><h2>{topic.body || config.topic || task.title}</h2><MessageAttachments paths={topic.paths} />
             <ScheduleControl
               taskId={task.id}
               notify={notify}

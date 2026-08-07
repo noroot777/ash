@@ -26,6 +26,7 @@
 .duet-turn::before { position:absolute; top:8px; bottom:8px; left:-1px; width:2px; border-radius:2px; background:#3890ba; content:""; }
 .duet-turn--B { margin-left:auto; }.duet-turn--B::before { right:-1px; left:auto; background:#28a17c; }
 .duet-turn--history { width:100%; }.duet-turn--history::before { background:var(--amber); }
+.duet-turn--synthesis { width:100%; border-color:color-mix(in lch,#8b5cf6 30%,var(--line)); }.duet-turn--synthesis::before { background:#8b5cf6; }.duet-turn--synthesis > header > span { color:#7c4fe0; }
 .duet-turn > header { display:flex; min-height:18px; flex-wrap:wrap; align-items:center; gap:6px; margin-bottom:3px; color:var(--faint); font-size:9.5px; }
 .duet-turn > header > span { display:inline-flex; align-items:center; gap:4px; color:#2478a4; font-weight:700; }.duet-turn--B > header > span { color:#168466; }
 .duet-turn > header b { color:var(--muted); font-size:9.5px; font-weight:550; }.duet-turn > header time,.duet-turn > header small { color:var(--faint); }

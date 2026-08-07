@@ -98,7 +98,7 @@ export function buildTaskDerivationBody(
 
   const note = userNote.trim();
   if (note) {
-    lines.push("", kind === "duet" ? "## 用户附言（本次辩题）" : "## 用户附言", note);
+    lines.push("", kind === "duet" ? "## 用户附言（本次议题）" : "## 用户附言", note);
   }
 
   lines.push("", `来源任务 ID（仅供溯源）：${task.id}`);
