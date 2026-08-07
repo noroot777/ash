@@ -1,8 +1,8 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { join, isAbsolute, dirname } from "node:path";
+import { join, isAbsolute, dirname, resolve } from "node:path";
 import { homedir } from "node:os";
-import { mkdirSync, statSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, statSync, existsSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import type { ProjectHealth } from "@harness/shared";
 import { DATA_DIR } from "./paths.js";
 import { withRepoLock } from "./repo-lock.js";
@@ -152,6 +152,26 @@ export function worktreePathFor(repoPath: string, taskId: string): string {
   return join(expandHome(repoPath), ".worktrees", taskId);
 }
 
+// 半删除的 worktree 残骸。`git worktree remove` 的收尾是「删注册项 → 递归删目录内容 →
+// rmdir 顶层」，而它**不删被 .gitignore 掉的东西**（node_modules/dist/日志）：顶层于是
+// 撞上 "Directory not empty" 失败，留下一个没有 `.git`、git 也不再认识的空壳。
+// 这个空壳是两桩事故的同一个根因：
+//   · 验收清理每次重试都撞 "is not a working tree"，任务永远卡在 merged 验收不掉；
+//   · prepareWorktree 看见目录还在就当成活 worktree 复用，agent 在里面跑 git，
+//     命令一路上溯到主仓 —— 提交和切分支直接打在主仓上。
+// 判据只认两条，宁可漏判也不误删：必须在 harness 自己的 `<repo>/.worktrees/` 底下，
+// 而且连 `.git` 都没有 —— 还挂着 `.git` 的目录是活工作树（或别人的仓库），不归这里管。
+function worktreeLeftoverAt(repoPath: string, path: string): boolean {
+  if (!isDir(path) || existsSync(join(path, ".git"))) return false;
+  return resolve(dirname(path)) === resolve(join(expandHome(repoPath), ".worktrees"));
+}
+
+// 抹掉残骸，顺带 prune 掉 git 那边可能还留着的陈旧注册项。
+async function discardWorktreeLeftover(repo: string, path: string): Promise<void> {
+  rmSync(path, { recursive: true, force: true });
+  await exec("git", ["-C", repo, "worktree", "prune"]).catch(() => {});
+}
+
 // 「这个任务留下的 worktree/分支还在不在」搬到了 ./workspace-cleanup.ts
 // (detectTaskWorkspace):删除任务时要连分支一起问,光看目录在不在已经不够。
 
@@ -246,6 +266,10 @@ async function prepareWorktreeLocked(
   }
   const path = worktreePathFor(repoPath, taskId);
   const branch = worktreeBranchName(taskId);
+  // 上一次清理留下的空壳（见 worktreeLeftoverAt）先抹掉再说：直接复用它等于让 agent 在
+  // 一个不是 worktree 的目录里干活，它的 git 命令会上溯到主仓。清掉之后走下面的恢复
+  // 路径，分支还在就把工作原样接回来。
+  if (worktreeLeftoverAt(repo, path)) await discardWorktreeLeftover(repo, path);
   if (isDir(path)) {
     // Re-use: read whatever branch the existing worktree is actually on (might
     // differ if the user manipulated it manually). isWorktree=true so callers
@@ -282,15 +306,30 @@ async function prepareWorktreeLocked(
 export async function removeWorktree(repoPath: string, path: string, force: boolean): Promise<void> {
   return withRepoLock(repoPath, async () => {
     const repo = expandHome(repoPath);
+    // 上一次删到一半留下的残骸：git 已经不认这个目录，再 remove 一次只会回一句
+    // "is not a working tree"，重试多少遍都撞同一堵墙。抹掉空壳正是调用方要的结果。
+    if (worktreeLeftoverAt(repo, path)) {
+      await discardWorktreeLeftover(repo, path);
+      return;
+    }
     const args = ["-C", repo, "worktree", "remove"];
     if (force) args.push("--force");
     args.push(path);
     try {
       await exec("git", args);
     } catch (err) {
+      // 这次失败是哪一种，看状态而不是报错文本：`.git` 已经没了 = git 那侧删干净了、
+      // 只剩 ignored 文件残渣撑着顶层目录，补一刀，别把半删除状态留给下一次；`.git`
+      // 还在 = 「工作区脏」这类真拒绝，原样抛上去让用户看见 git 原话再自己决定。
+      if (worktreeLeftoverAt(repo, path)) {
+        await discardWorktreeLeftover(repo, path);
+        return;
+      }
       const stderr = (err as { stderr?: string }).stderr?.trim() || (err as Error).message;
       throw new Error(stderr);
     }
+    // git 报成功、目录却还杵在那儿：同样是 ignored 残渣，顺手抹平。
+    if (worktreeLeftoverAt(repo, path)) await discardWorktreeLeftover(repo, path);
   });
 }
 
