@@ -63,7 +63,7 @@ import { clearTaskStage, restoreTaskStage } from "./task-stage.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { now } from "./util.js";
 import { setWorkflowAt } from "./workflow-advance.js";
-import { taskWorkflowDef } from "./workflows.js";
+import { railStalledAtRun, taskWorkflowDef } from "./workflows.js";
 import { discardTaskWorkspace } from "./workspace-cleanup.js";
 
 const exec = promisify(execFile);
@@ -194,19 +194,11 @@ const RESET_STALLED_NOTE =
  * 任务 1rojF5Tjau91：agent 改完代码只调了 report_stage 就收工，线停在第一站，时间线上
  * 一个字都没有，用户只能问「怎么在第一步就停了」。
  *
- * 三个前提缺一不可：线上真有「让 AI 干活」这一站、这条线还有后续的站（只有一站的线
- * 没什么可停的）、游标此刻确实停在那一站（不在就说明线早走过去了，这句话是错的）。
+ * 判据本体在 `railStalledAtRun` —— 起跑前喂给 agent 的那句提醒问的是同一个问题，
+ * 两处必须同进同退。
  */
 async function noteStalledAtRun(taskId: string): Promise<void> {
-  const row = (await db
-    .select({ workflow: tasks.workflow, workflowAt: tasks.workflowAt })
-    .from(tasks)
-    .where(eq(tasks.id, taskId))).at(0);
-  if (!row) return;
-  const def = taskWorkflowDef(row.workflow);
-  const run = def && def.steps.length > 1 ? firstAnchor(def, "run") : null;
-  if (!run) return;
-  if ((row.workflowAt ?? run.id) !== run.id) return;
+  if (!(await railStalledAtRun(taskId))) return;
   await appendTaskTimeline(taskId, RESET_STALLED_NOTE);
 }
 

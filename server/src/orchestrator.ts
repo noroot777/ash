@@ -25,7 +25,7 @@ import { reviewProtocolFor, reviewReminderFor, verifyReminderFor } from "./revie
 import { peerNoticeFor } from "./peer-context.js";
 import { recordTurnBaseline } from "./turn-baseline.js";
 import { recordTurnStart } from "./turn-output.js";
-import { taskWorkflowDef } from "./workflows.js";
+import { railStalledAtRun } from "./workflows.js";
 
 
 // Single tasks run headless — nobody can answer a mid-run prompt. Tell the agent
@@ -111,11 +111,18 @@ const FOLLOW_UP_RAIL_NOTE = (taskId: string, summary: string) =>
   `你这一轮**改了代码**就属于上面说的「推进到了新的完成状态」,做完请调 complete_task(taskId="${taskId}")确认,` +
   `后面的站才会自己往下跑;只调 report_stage 不会推动这条线。纯回答问题、没动代码则不用确认。`;
 
-/** 线上除了「让 AI 干活」还有别的站时,给续聊回合补一句上面那段。 */
-function followUpRailNote(taskId: string, workflow: string | null | undefined): string {
-  const def = taskWorkflowDef(workflow);
-  if (!def || def.steps.length < 2) return "";
-  if (!def.steps.some((step) => step.kind === "run")) return "";
+/**
+ * 线上除了「让 AI 干活」还有别的站、且游标此刻真停在那一站时,给续聊回合补一句上面那段。
+ *
+ * 判据本体在 `railStalledAtRun`,跟结算后写给用户的那句同源 —— 各写各的那一版里,这头
+ * 漏了游标判断,验证打回(verify_failed)的轮次上就会对 agent 说假话:那一档故意不清账、
+ * 游标还停在验证站,提醒里却写着「停在让 AI 干活」。
+ *
+ * 必须排在 `recordTurnBaseline` 之后:清账会把游标搬回起点,搬之前读到的是旧值。
+ */
+async function followUpRailNote(taskId: string): Promise<string> {
+  const def = await railStalledAtRun(taskId);
+  if (!def) return "";
   return FOLLOW_UP_RAIL_NOTE(taskId, def.steps.map((step) => STEP_LABELS[step.kind]).join(" → "));
 }
 
@@ -532,6 +539,8 @@ export async function continueTask(
     // 一次都不会知道（正是 2026-08-04 那个「claude 自己考古 codex 会话」的现场）。
     // prev 必须是**更新 session 行之前**的快照：锚点取的 endedAt 会在 resume 时被清空。
     const peerNotice = peerNoticeFor({ taskId, self: agent, all, prev });
+    // 验证轮/审查任务不提这条线：那一轮的产出是结论，不是新一版代码。
+    const railNote = followUpFrom && !verifying ? await followUpRailNote(taskId) : "";
     const prompt =
       (invited ? COLLAB_INVITE : "") +
       (invited && task.body.trim() ? TASK_BRIEF(task.body) : "") +
@@ -539,11 +548,7 @@ export async function continueTask(
       userTurnText +
       (workspaceReset ? WORKSPACE_RESET(cwd) : "") +
       (followUpFrom
-        ? FOLLOW_UP_REMINDER(
-            taskId, followUpFrom, sharedTeamWorker, verifying,
-            // 验证轮/审查任务不提这条线：那一轮的产出是结论，不是新一版代码。
-            verifying ? "" : followUpRailNote(taskId, task.workflow),
-          )
+        ? FOLLOW_UP_REMINDER(taskId, followUpFrom, sharedTeamWorker, verifying, railNote)
         : COMPLETION_REMINDER(taskId, sharedTeamWorker, verifying)) +
       (reviewReminder ? `\n${reviewReminder}` : "");
     const turnStart = now();

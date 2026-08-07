@@ -49,6 +49,7 @@ const { RUNS_DIR } = await import("../src/paths.js");
 const { sessionTranscriptPath } = await import("../src/transcript.js");
 const { reopenAcceptedStage, setTaskStage } = await import("../src/task-stage.js");
 const { recordTurnBaseline, reconcileTurnBaseline } = await import("../src/turn-baseline.js");
+const { railStalledAtRun } = await import("../src/workflows.js");
 
 const IDS = ["tb-changed", "tb-asked", "tb-restaged", "tb-verify-failed", "tb-unconfirmed", "tb-legacy", "tb-clean", "tb-midline", "tb-shell01"];
 
@@ -264,6 +265,20 @@ try {
     "游标不在 run 站，线早走过去了 —— 这句是假消息",
   );
 
+  // ── ⑤″ 喂给 agent 的那句提醒跟上面两条同源 ────────────────────────────────
+  // orchestrator 起跑前也要问「线是不是停在 run 站等确认」，问的必须是同一个判据 ——
+  // 它自己写一份的那一版漏了游标判断，verify_failed（故意不清账、游标留在验证站）的
+  // 轮次上就会对 agent 说「它停在让 AI 干活这一站」，是假话。
+  assert.ok(
+    await railStalledAtRun("tb-clean"),
+    "游标停在 s1 → 提醒 agent「线在等你确认」是真话",
+  );
+  assert.equal(
+    await railStalledAtRun("tb-midline"),
+    null,
+    "游标在 s2 → 一个字都不能对 agent 说「停在让 AI 干活」",
+  );
+
   // ── ⑥ 空壳工作间没被动过 → 拆屋 ──────────────────────────────────────────
   const shellId = "tb-shell01";
   const shellPath = join(repo, ".worktrees", shellId);
@@ -302,7 +317,7 @@ try {
   console.log(
     "turn baseline: 开头就清账 / 改了保持清空 / 只问则原样放回+牌子挂回 / 新结论不被盖 /"
     + " 验证没过不清零 / 没确认也清账 / 老基线补清 / 停在起点要说清 / 走过了就不说 /"
-    + " 空壳拆屋，十条通过",
+    + " 提醒 agent 同一判据 / 空壳拆屋，十一条通过",
   );
 } finally {
   for (const id of IDS) rmSync(join(RUNS_DIR, id), { recursive: true, force: true });
