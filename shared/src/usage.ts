@@ -92,3 +92,51 @@ export function formatCost(usd: number | null): string | null {
   if (usd > 0 && usd < 0.01) return "<$0.01";
   return `$${usd.toFixed(2)}`;
 }
+
+// ── 上下文水位 ───────────────────────────────────────────────────────────────
+//
+// **跟上面的 TokenUsage 是两个概念,别混成一个数**:
+//
+//   · TokenUsage 是**流水**——一轮里每次 API 调用的 token 全加起来,会话累计更是所有
+//     轮次相加。长会话动辄几千万,因为缓存读每次调用都重算一遍。它可加(addUsage)。
+//   · ContextUsage 是**水位**——最近一次 API 调用带进模型的输入有多大,也就是此刻上下
+//     文窗口里装了多少。它**不可加,只能覆盖**。
+//
+// 一条流水 18.53M 的会话,水位可能才 12 万。拿流水去除以窗口会得出「早就爆了 90 倍」
+// 这种荒谬结论 —— 这就是必须分成两个类型的原因,别图省事把 used 塞进 TokenUsage。
+
+export interface ContextUsage {
+  /** 最近一次 API 调用的输入 token(含缓存命中的那部分)= 此刻上下文水位。 */
+  used: number;
+  /** 上下文窗口。CLI 自报的优先;没人报就按模型名估;估不出是 null。 */
+  window: number | null;
+  /** window 是估出来的(不是 CLI 自报)。true 时界面必须说明白,别让人当准数用。 */
+  windowEstimated: boolean;
+}
+
+/** 水位占窗口的比例 0..1。没有窗口就 null —— 调用方据此决定显不显示百分比。 */
+export function contextRatio(c: ContextUsage | null | undefined): number | null {
+  if (!c || !c.window || c.window <= 0) return null;
+  return Math.min(1, Math.max(0, c.used / c.window));
+}
+
+/** 有没有真水位。0 表示没采到,跟 hasUsage 同一条口径。 */
+export function hasContext(c: ContextUsage | null | undefined): c is ContextUsage {
+  return !!c && c.used > 0;
+}
+
+/**
+ * 模型名 → 上下文窗口的**兜底估算**。CLI 自报的永远优先(codex 的 token_count 事件
+ * 自带 `model_context_window`),这张表只服务不报的那些(claude CLI 就不报)。
+ *
+ * 只放有把握的:宁可返回 null(界面退化成只显示绝对水位、不显示百分比),也不要编一个
+ * 分母出来 —— 「还剩 60%」是拿来做决定的,错的分母比没有更坏。
+ */
+export function guessContextWindow(model: string | null | undefined): number | null {
+  const m = (model ?? "").toLowerCase();
+  if (!m) return null;
+  // Claude 各代模型的标准窗口都是 20 万;1M 要显式开 beta,不默认假设。
+  if (m.includes("claude") || /^(opus|sonnet|haiku)\b/.test(m)) return 200_000;
+  return null;
+}
+

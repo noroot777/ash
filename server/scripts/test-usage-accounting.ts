@@ -8,6 +8,9 @@
 //    不能被算成 $0 摊进总额。
 // ③ 累加而不是覆盖：一条 sessions 行会被复用（--resume 续跑、常驻调度台每个
 //    回合都记在同一行），跟 active_ms 同一副形状。
+// ④ **但上下文水位恰恰相反，是覆盖**：它是「此刻装了多少」，累加会得出一个没有
+//    物理意义的数（流水 18M 的会话水位可能才 12 万）。同一个文件里两种账并存，
+//    所以这条必须在测试里钉死。
 //
 // Run: npm -w server run test:usage
 import assert from "node:assert/strict";
@@ -21,11 +24,11 @@ process.env.HARNESS_DB = join(root, "harness.db");
 const { db, ensureSchema } = await import("../src/db/index.js");
 const { sessions } = await import("../src/db/schema.js");
 const { eq } = await import("drizzle-orm");
-const { addSessionUsage, sessionUsage } = await import("../src/usage.js");
-const { claudeUsage } = await import("../src/executors/claude.js");
+const { addSessionUsage, sessionUsage, setSessionContext, sessionContext } = await import("../src/usage.js");
+const { claudeUsage, claudeContextUsed } = await import("../src/executors/claude.js");
 const { codexUsage } = await import("../src/executors/codex.js");
 const { appendSessionTrace, parseSessionTrace, sessionTracePath } = await import("../src/transcript.js");
-const { addUsage, sumUsage, usageTotal, hasUsage, formatTokens, formatCost } = await import("@harness/shared/usage");
+const { addUsage, sumUsage, usageTotal, hasUsage, formatTokens, formatCost, contextRatio, hasContext, guessContextWindow } = await import("@harness/shared/usage");
 
 try {
   await ensureSchema();
@@ -121,7 +124,31 @@ try {
   assert.equal(parseSessionTrace(`{"at":"x","event":{"kind":"usage"}}\n`).length, 0);
   rmSync(dirname(tracePath), { recursive: true, force: true });
 
-  console.log("Token 账本验证通过：口径可相加、未报账为 null、跨回合累加、单轮可回放");
+  // ── ④ 水位是覆盖不是累加 ─────────────────────────────────────────────────
+  // 这一段是整个文件里最容易被下一个人改错的地方：上面三段全在说「累加」，
+  // 顺手把 setSessionContext 也写成累加，长会话立刻算出「用了窗口的 90 倍」。
+  assert.equal(sessionContext(blank!), null, "还没采到水位的会话行读回来必须是 null");
+
+  await setSessionContext(sessId, { used: 61_200, window: 200_000, windowEstimated: true });
+  await setSessionContext(sessId, { used: 117_016, window: 200_000, windowEstimated: true });
+  const water = sessionContext((await db.select().from(sessions).where(eq(sessions.id, sessId)).get())!);
+  assert.ok(water);
+  assert.equal(water.used, 117_016, "水位必须被后一次覆盖；累加成 178,216 就是错的");
+  assert.equal(water.window, 200_000);
+  assert.equal(water.windowEstimated, true);
+  assert.equal(Math.round(contextRatio(water)! * 100), 59);
+
+  // 没有窗口 → 没有比例。宁可界面上不显示百分比，也不许编一个分母出来。
+  assert.equal(contextRatio({ used: 1_000, window: null, windowEstimated: false }), null);
+  assert.equal(hasContext({ used: 0, window: 200_000, windowEstimated: false }), false, "0 = 没采到");
+  assert.equal(guessContextWindow("claude-opus-5"), 200_000);
+  assert.equal(guessContextWindow("gpt-5.6-sol"), null, "猜不出就是 null，不许瞎垫一个");
+
+  // claude 的水位取**单次调用**的输入规模（含缓存命中的那部分——它确实在上下文里）。
+  assert.equal(claudeContextUsed({ input_tokens: 5, cache_read_input_tokens: 116_000, cache_creation_input_tokens: 1_011 }), 117_016);
+  assert.equal(claudeContextUsed(undefined), 0);
+
+  console.log("Token 账本验证通过：口径可相加、未报账为 null、跨回合累加、单轮可回放、水位覆盖不累加");
 } finally {
   rmSync(root, { recursive: true, force: true });
 }

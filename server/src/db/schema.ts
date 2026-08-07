@@ -233,6 +233,14 @@ export const sessions = sqliteTable("sessions", {
   usageReasoning: integer("usage_reasoning"),
   usageCostUsd: real("usage_cost_usd"),
   usageTurns: integer("usage_turns"),
+  // ── 上下文水位（同一个文件里的 setSessionContext）────────────────────────
+  // 上面那组是**累加**的流水，这三列是**覆盖**的水位：最近一次 API 调用带进模型
+  // 的输入有多大。两者差着数量级（流水 18M / 水位 12 万），别拿流水去算「还剩
+  // 多少上下文」。window 为 null = 谁也没报出窗口大小，界面只显示绝对水位。
+  contextUsed: integer("context_used"),
+  contextWindow: integer("context_window"),
+  // window 是按模型名估的（claude CLI 不报），不是 CLI 自报 —— 界面要标出来。
+  contextWindowEstimated: integer("context_window_estimated", { mode: "boolean" }),
 });
 
 export const schedules = sqliteTable("schedules", {

@@ -49,7 +49,7 @@ function AgentMessage({
           </section>
         ))}
         {item.showSessionMeta && item.session && (
-          <SessionMeta session={item.session} sessionUsage={item.sessionUsage} />
+          <SessionMeta session={item.session} sessionUsage={item.sessionUsage} sessionContext={item.sessionContext} />
         )}
       </div>
     </article>

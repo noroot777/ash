@@ -34,7 +34,7 @@ function AgentRow({ row }: { row: Extract<TeamFeedRow, { kind: "conv" }>["item"]
         </section>
       ))}
       {row.showSessionMeta && row.session && (
-        <SessionMeta session={row.session} sessionUsage={row.sessionUsage} />
+        <SessionMeta session={row.session} sessionUsage={row.sessionUsage} sessionContext={row.sessionContext} />
       )}
     </article>
   );

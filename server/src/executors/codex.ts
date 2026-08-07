@@ -3,6 +3,7 @@ import { createInterface } from "node:readline";
 import type { AgentEvent, ExecTarget, TokenUsage } from "@harness/shared";
 import type { AgentExecutor, RelayConfig, ResidentHandle, RunHandle, RunOpts } from "./types.js";
 import { openCodexResident } from "./codex-resident.js";
+import { readCodexContext } from "./codex-rollout.js";
 import { spawnForRun, detachedInfo } from "./detached.js";
 import { spawnAgent, resumeFor, resumeInner, spawnErrorMessage, killChild, forceFinishOnExit, redactSecrets } from "./spawn.js";
 import { relayApi } from "../llm.js";
@@ -165,6 +166,9 @@ async function* parseCodexStream(
   let lastEventType: string | null = null;
   let lastEventSummary: string | null = null;
   let agentMessageCount = 0;
+  // 收尾时拿它去 rollout 文件里读上下文水位（见 codex-rollout.ts）。每一回合——包括
+  // `exec resume` 的——都以 `thread.started` 开头，且同一条会话的 thread_id 不变。
+  let threadId = "";
   const structuredErrors: string[] = [];
   const trace = new RunTraceRecorder(tracePaths);
   const push = (e: AgentEvent) => {
@@ -189,6 +193,7 @@ async function* parseCodexStream(
     lastEventType = codexEventType(ev);
     lastEventSummary = codexEventSummary(ev);
     if (ev.type === "thread.started" && ev.thread_id) {
+      threadId = ev.thread_id;
       push({ kind: "session", cliSessionId: ev.thread_id });
     } else if (ev.type === "turn.completed") {
       turnCompleted = true;
@@ -252,9 +257,19 @@ async function* parseCodexStream(
     finish({ exitStatus: exit, exitSignal: child.signalCode, forceFinished: true });
   });
 
+  // 水位只能异步读（rollout 是文件），而 finish() 是同步的 —— 所以不在 finish 里 push，
+  // 而是在这里拦住 `done`，先补一条 `context` 再放行。这样「context 恒在 done 之前」
+  // 是结构保证的，不靠时序运气。
+  let contextDone = false;
   while (true) {
     if (queue.length) {
-      yield queue.shift()!;
+      const next = queue.shift()!;
+      if (next.kind === "done" && !contextDone) {
+        contextDone = true;
+        const context = await readCodexContext(threadId);
+        if (context) yield { kind: "context", context };
+      }
+      yield next;
       continue;
     }
     if (finished) return;

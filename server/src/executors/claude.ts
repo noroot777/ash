@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { ChildProcess } from "node:child_process";
 import { createInterface } from "node:readline";
 import type { AgentEvent, AgentType, ExecTarget, TokenUsage } from "@harness/shared";
+import { guessContextWindow } from "@harness/shared/usage";
 import type { AgentExecutor, RelayConfig, ResidentHandle, RunHandle, RunOpts } from "./types.js";
 import { spawnForRun, detachedInfo } from "./detached.js";
 import { spawnAgent, resumeFor, resumeInner, spawnErrorMessage, killChild, forceFinishOnExit, redactSecrets } from "./spawn.js";
@@ -175,6 +176,13 @@ export async function* parseClaudeStream(
     }
   };
 
+  // 上下文水位。**只有 `assistant` 事件里的 `message.usage` 是单次 API 调用的快照**
+  // —— 收尾的 `result` 行是整回合累加(几十次调用相加,长会话能到千万级),拿它当水位
+  // 会得出「上下文爆了 50 倍」。所以在这里逐条记下最新一次调用的输入规模,回合结束
+  // 时发一条 context 事件。claude CLI 不报窗口大小,窗口按模型名估(guessContextWindow)。
+  let contextUsed = 0;
+  let contextModel: string | null = null;
+
   const rl = createInterface({ input: child.stdout! });
   rl.on("line", (line) => {
     const t = line.trim();
@@ -207,6 +215,13 @@ export async function* parseClaudeStream(
       push({ kind: "session", cliSessionId: ev.session_id });
     } else if (ev.type === "assistant" && ev.message?.content) {
       flushText(); // settle this message's text-delta tail before its tools
+      // 这一次 API 调用装了多少进模型 = 上下文水位(见上面 contextUsed 的注释)。
+      // 合成消息不是真调用,它的 usage 不代表上下文,跳过。
+      if (ev.message.model && ev.message.model !== "<synthetic>") {
+        contextModel = ev.message.model;
+        const snapshot = claudeContextUsed(ev.message.usage);
+        if (snapshot > 0) contextUsed = snapshot;
+      }
       // CLI 本地合成的消息(model `<synthetic>`:模型不存在 / 鉴权失败 / 限流等)
       // **不经过 delta 流** —— 它是 CLI 自己拼出来的,不是模型吐的。所以这一类的
       // text 必须照收,跳过就等于把唯一一句错误说明扔了(见 docs/incidents.md
@@ -225,6 +240,12 @@ export async function* parseClaudeStream(
       if (ev.session_id) push({ kind: "session", cliSessionId: ev.session_id });
       const usage = claudeUsage(ev);
       if (usage) push({ kind: "usage", usage });
+      // 水位跟着流水一起发。窗口 claude 不报 → 按模型名估(估不出就 null，界面只
+      // 显示绝对水位、不显示百分比)。
+      if (contextUsed > 0) {
+        const window = guessContextWindow(contextModel ?? ev.model ?? null);
+        push({ kind: "context", context: { used: contextUsed, window, windowEstimated: window !== null } });
+      }
       // 我们自己发的 interrupt 会把本回合收成 error_during_execution —— 那是
       // 「用户插话打断」的预期结果,不是故障,不报错。只吞掉紧跟其后的那一个
       // result(标志立即清掉),所以最坏情况也只影响一个回合的错误上报。
@@ -297,6 +318,19 @@ const shortJson = (v: unknown) => {
 };
 
 const num = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) ? v : 0);
+
+/**
+ * 单次 API 调用的**上下文水位**：这一次请求带进模型的输入有多大。
+ *
+ * 三项都要算：`input_tokens` 是没命中缓存的部分，`cache_read` 是命中缓存的部分，
+ * `cache_creation` 是这次新写进缓存的部分 —— 三者合起来才是这一次请求的完整
+ * prompt。漏掉缓存那两项，水位会显示成几百 token（实测一次真实调用：input=2、
+ * cacheRead=115762、cacheWrite=668，只看 input 就等于什么都没测）。
+ */
+export function claudeContextUsed(u: any): number {
+  if (!u || typeof u !== "object") return 0;
+  return num(u.input_tokens) + num(u.cache_read_input_tokens) + num(u.cache_creation_input_tokens);
+}
 
 // `result` 行自带这一回合的账单。两处数据来源,取 **modelUsage** 优先:
 //   • `usage`      —— 本回合累加,但只有主模型那一份;

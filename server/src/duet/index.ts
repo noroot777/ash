@@ -22,7 +22,7 @@ import { taskWorkspace } from "../task-workspace.js";
 import { resolveExecutorFor } from "../executors/index.js";
 import type { AgentExecutor } from "../executors/types.js";
 import { RUNS_DIR } from "../paths.js";
-import { addSessionUsage } from "../usage.js";
+import { addSessionUsage, setSessionContext } from "../usage.js";
 import * as P from "./prompts.js";
 import { waitForGate } from "./gates.js";
 import { gateUserMessage } from "./user-message.js";
@@ -196,6 +196,8 @@ async function runTurn(args: {
       } else if (event.kind === "usage") {
         // 辩手每一轮都是新的 sessions 行,所以这里的"累计"就等于这一轮的用量。
         await addSessionUsage(rowId, event.usage);
+      } else if (event.kind === "context") {
+        await setSessionContext(rowId, event.context);
       } else if (event.kind === "done") {
         exit = event.exitStatus;
       }

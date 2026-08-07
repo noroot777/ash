@@ -361,6 +361,12 @@
 }
 .task-message header .token-usage-chip:hover { background: var(--raised); color: var(--ink); }
 
+/* 上下文水位。借 .token-usage-chip 的外形（两颗并排要长得像一家人），只多一条进度条；
+   进红区才变色 —— 中间再插一档黄色，「变色」这个信号就不值钱了。 */
+.context-meter-chip.is-tight { border-color: var(--red); color: var(--red); }
+.context-meter-bar { display: inline-block; width: 22px; height: 3px; overflow: hidden; border-radius: 2px; background: var(--line2); }
+.context-meter-bar > span { display: block; height: 100%; background: currentColor; opacity: 0.75; }
+
 .token-usage-panel {
   position: fixed;
   z-index: 60;

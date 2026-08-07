@@ -3,9 +3,12 @@
 //
 // 为什么累加而不是覆盖：一条 sessions 行会被复用（`--resume` 续跑、常驻调度台的
 // 每个回合都记在同一行），跟 active_ms 是同一副形状——那一列也是每回合往上加。
-// 单轮的用量另有去处（trace，见 transcript.ts），刷新后按回合回放。
+// 单轮的用量另有去处（trace，见 transcript.ts），刷新后按回合放回各自的气泡。
+//
+// **这个文件里还住着上下文水位（setSessionContext），它是覆盖式的**——两组列摆在
+// 一起是为了让下一个人一眼看见「有两种账，加法只适用于其中一种」。
 import { eq, sql } from "drizzle-orm";
-import type { TokenUsage } from "@harness/shared";
+import type { ContextUsage, TokenUsage } from "@harness/shared";
 import { db } from "./db/index.js";
 import { sessions } from "./db/schema.js";
 
@@ -35,6 +38,40 @@ export async function addSessionUsage(sessId: string, usage: TokenUsage): Promis
   } catch (error) {
     console.warn(`[harness] failed to record token usage for session ${sessId}:`, error);
   }
+}
+
+/**
+ * 上下文水位落库。**覆盖不累加** —— 这是这个函数跟 `addSessionUsage` 唯一但要命的
+ * 区别：水位是「此刻装了多少」，累加它会得出一个没有物理意义的数。
+ *
+ * 同样 best-effort：账本坏了不能反过来改变 agent 的执行结果。
+ */
+export async function setSessionContext(sessId: string, context: ContextUsage): Promise<void> {
+  try {
+    await db
+      .update(sessions)
+      .set({
+        contextUsed: Math.round(context.used),
+        contextWindow: context.window === null ? null : Math.round(context.window),
+        contextWindowEstimated: context.windowEstimated,
+      })
+      .where(eq(sessions.id, sessId));
+  } catch (error) {
+    console.warn(`[harness] failed to record context usage for session ${sessId}:`, error);
+  }
+}
+
+/** 会话行 → ContextUsage。没采到(null)跟「水位是 0」是两回事，前者不显示。 */
+export function sessionContext(row: Pick<
+  SessionRow,
+  "contextUsed" | "contextWindow" | "contextWindowEstimated"
+>): ContextUsage | null {
+  if (row.contextUsed === null || row.contextUsed === undefined) return null;
+  return {
+    used: row.contextUsed,
+    window: row.contextWindow ?? null,
+    windowEstimated: row.contextWindowEstimated ?? false,
+  };
 }
 
 /**
