@@ -20,14 +20,21 @@
 //   ③ 后端启动那行 `http://localhost:<port>` 会被就绪判定当成预览地址（它挑日志里第一个
 //      地址）→ 转发时把 scheme 去掉，见 forward()。
 //
-// 预览的库是**新库**，不是主库的副本。这是安全判断不是图省事：整库快照会把运行态
-// （pid、running 的任务、队列）一起带进副本，而副本上的调度器分不出真假——它会去接管、
-// 推进队列、甚至停掉本机正在干活的 agent。所以只搬**设置**那几张表（执行器、供应商、
-// 项目清单…，白名单在 server/src/preview-seed.ts），一张运行态的表都不进来。
+// 预览的库是**主库的快照**（`data/preview.db`，每次起预览重新拷一份），不是空库、也不是
+// 主库本身。三句话说清为什么是这个形状：
 //
-// 设置不搬也不行：空库里一个执行器都没有，新建任务面板直接写着「还没有已注册执行器，
-// 暂不能创建任务」，创建按钮是灰的——预览于是只剩静态页面可看，凡是得真跑一个任务才
-// 看得见的改动都验不了（2026-08-07 第一轮验证就卡在这儿）。
+//   · 不能共用主库文件：单实例锁的粒度就是 DB 文件路径（server/src/singleton.ts）。真让
+//     两个 server 开同一个库，第二个照样 30s tick、照样拉起 agent，而它的子进程只在它自己
+//     内存里——主界面点停止停不掉它（`docs/incidents.md`「端口撞车产幽灵」）。
+//   · 不能是空库：一个执行器都没有，新建任务面板直接写着「还没有已注册执行器」，创建按钮
+//     是灰的；任务列表也空空如也，凡是得有数据才看得见的改动（token 计数就是）一概验不了。
+//   · 所以是快照 + 洗运行态：搬完立刻把 running 的任务、会话上的真 pid 洗掉，并且压根不搬
+//     schedules/scheduled_messages（白名单和洗法在 server/src/preview-seed.ts）。
+//
+// 快照兜不住的两处，另外堵：①任务行带着**真** worktree 路径和分支名 → 预览实例上合并/删
+// worktree/删分支一律拒绝，调度器也不启动（server/src/preview-instance.ts）；②会话正文是
+// 文件不是库行 → `HARNESS_RUNS_FALLBACK` 让预览**只读**回退到主仓的 data/runs，写照旧落
+// 自己的（paths.ts / transcript.ts），所以预览里对老任务说话不会污染真实历史。
 //
 // **预览里的 agent 够不着预览这台 harness 的 MCP**，这条得先说清楚，不然会以为坏了：
 // harness MCP 是注册在用户 `~/.claude.json` 里的，那条记录写死了
@@ -40,6 +47,7 @@
 // 代价说在明处：预览里 ask_question / report_stage 这些 MCP 工具同样不通。要连它们一起
 // 修，得让 harness 每次起 CLI 时自带 mcp 配置，那是另一件事、另一个爆炸半径。
 import { execFileSync, spawn } from "node:child_process";
+import { rmSync } from "node:fs";
 import { createServer } from "node:net";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -61,12 +69,21 @@ async function startPreviewStack(webPort) {
     process.exit(1);
   }
   const dbFile = fileURLToPath(new URL("../data/preview.db", import.meta.url));
+  const mainData = mainRepoDataDir();
   const apiUrl = `http://127.0.0.1:${apiPort}`;
+  // 每次起预览都换一张新快照。预览的意义是「照着**这一版代码**看**现在**这台 harness」，
+  // 沿用上次那份会看到几天前的世界（新加的执行器、新建的任务都不在），而那种错位很难自己
+  // 发现。代价是上一次在预览里点出来的东西不留——它本来就是一次性的。
+  for (const suffix of ["", "-wal", "-shm"]) {
+    try { rmSync(`${dbFile}${suffix}`, { force: true }); } catch { /* 占用/权限：照旧起，只是快照是旧的 */ }
+  }
   console.log(`[dev] 预览：整套起——后端 ${apiPort}（库 ${dbFile}）、前端 ${webPort}，前端的 /api 打到后端。`);
 
   // HARNESS_URL 要跟着传：agent 进程继承 server 的环境变量，harness MCP 就靠它知道
   // 「complete_task 该报给谁」。不传的话预览里跑的任务会去敲本机那份 4317。
-  // HARNESS_SEED_FROM：新库开局从主库搬一份设置过来（见文件头）。
+  // HARNESS_SEED_FROM：开局从主库拷一份快照过来（见文件头）。
+  // HARNESS_RUNS_FALLBACK：历史会话的正文/trace 是文件不是库行，只读回退到主仓那份。
+  // HARNESS_PREVIEW：告诉后端「你是预览」——不启动调度器，不许合并/删 worktree/删分支。
   // HARNESS_LAX_DONE：预览里退回「exit 0 即 done」，理由见下面 MCP 那段。
   const api = spawn("npm", ["-w", "server", "run", "dev"], {
     cwd: REPO,
@@ -76,7 +93,9 @@ async function startPreviewStack(webPort) {
       PORT: String(apiPort),
       HARNESS_DB: dbFile,
       HARNESS_URL: apiUrl,
-      HARNESS_SEED_FROM: mainRepoDb(),
+      HARNESS_SEED_FROM: join(mainData, "harness.db"),
+      HARNESS_RUNS_FALLBACK: join(mainData, "runs"),
+      HARNESS_PREVIEW: "1",
       HARNESS_LAX_DONE: "1",
     },
   });
@@ -90,7 +109,7 @@ async function startPreviewStack(webPort) {
       ...process.env,
       PORT: String(webPort),
       HARNESS_PROXY: apiUrl,
-      VITE_HARNESS_PREVIEW: "预览实例 · 这个分支的前端 + 后端 · 独立的库",
+      VITE_HARNESS_PREVIEW: "预览实例 · 这个分支的前端 + 后端 · 主库快照（改不到真数据；不能验收/删分支）",
     },
   });
 
@@ -109,18 +128,18 @@ async function startPreviewStack(webPort) {
 }
 
 /**
- * 主库在哪：预览跑在 worktree 里，`<worktree>/data/` 是空的，主库在**主仓**的 `data/`。
- * `--git-common-dir` 在 worktree 里指回主仓的 `.git`，取它的上一级就是主仓根；不是
- * worktree（你自己 `npm run dev`）时它指向本仓的 `.git`，答案一样对。
+ * 主仓的 `data/` 在哪：预览跑在 worktree 里，`<worktree>/data/` 是空的，主库和一千个
+ * 历史 run 目录都在**主仓**。`--git-common-dir` 在 worktree 里指回主仓的 `.git`，取它的
+ * 上一级就是主仓根；不是 worktree（你自己 `npm run dev`）时它指向本仓的 `.git`，答案一样对。
  */
-function mainRepoDb() {
+function mainRepoDataDir() {
   try {
     const gitDir = execFileSync("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], {
       cwd: REPO, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
     }).trim();
-    return join(dirname(gitDir), "data", "harness.db");
+    return join(dirname(gitDir), "data");
   } catch {
-    return join(REPO, "data", "harness.db"); // 不是 git 仓库就按本地猜一个，搬不到就搬不到
+    return join(REPO, "data"); // 不是 git 仓库就按本地猜一个，搬不到就搬不到
   }
 }
 

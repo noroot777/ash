@@ -5,6 +5,7 @@ import { homedir } from "node:os";
 import { mkdirSync, statSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import type { ProjectHealth } from "@harness/shared";
 import { DATA_DIR } from "./paths.js";
+import { assertNotPreviewInstance } from "./preview-instance.js";
 import { withRepoLock } from "./repo-lock.js";
 
 const exec = promisify(execFile);
@@ -280,6 +281,8 @@ async function prepareWorktreeLocked(
 // in the delete-task confirmation. Returns nothing on success; throws with the
 // raw git stderr so the UI can surface "dirty, use --force" etc.
 export async function removeWorktree(repoPath: string, path: string, force: boolean): Promise<void> {
+  // 预览实例上一律拒绝：快照里的任务行指的是**真** worktree，删掉不可逆（见 preview-instance.ts）。
+  assertNotPreviewInstance("删 worktree");
   return withRepoLock(repoPath, async () => {
     const repo = expandHome(repoPath);
     const args = ["-C", repo, "worktree", "remove"];

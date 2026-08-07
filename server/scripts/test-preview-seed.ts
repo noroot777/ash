@@ -1,14 +1,14 @@
 // 预览播种（server/src/preview-seed.ts）。
 //
-// 这条测试钉的是**「什么不该被搬」比「什么该被搬」更要命**：
+// 这条测试钉的是**「什么不该被搬、搬了必须洗掉什么」比「什么该被搬」更要命**：
 //
-//   · 少搬了设置 = 预览里一个执行器都没有，新建任务的按钮是灰的，预览退化成静态页面
-//     （2026-08-07 第一轮验证正是卡在这儿）。烦，但一眼看得见。
-//   · 多搬了运行态 = 副本上的调度器拿着真 pid、真 running 任务去接管、推进队列、
-//     甚至停掉本机正在干活的 agent。看不见，且损坏的是**主实例**的活。
+//   · 少搬了 = 预览里一个执行器都没有、任务列表空空如也，凡是得有数据才看得见的改动
+//     一概验不了（2026-08-07 第一轮验证正是卡在这儿）。烦，但一眼看得见。
+//   · 多搬了、或者搬了没洗 = 副本上的调度器拿着**真** pid、真 running 任务去接管、
+//     推进队列、甚至停掉本机正在干活的 agent。看不见，且损坏的是**主实例**的活。
 //
-// 所以白名单是正着列的，这里也正着钉：新表默认进不来，谁想让它进来得先改常量、
-// 而改常量会撞上下面这条「运行态一张都不许在名单里」。
+// 所以两张名单都是正着列的（新表默认进不来），且快照档多一条硬约束：schedules /
+// scheduled_messages 一张都不许进——那两张一进副本，预览就会到点替你派活、替你发消息。
 //
 // 跑法：npm -w server run test:preview-seed
 import { mkdtempSync, rmSync } from "node:fs";
@@ -20,7 +20,8 @@ const root = mkdtempSync(join(tmpdir(), "harness-preview-seed-"));
 // preview-seed 会 import db/index.js（模块加载时就打开库）。先把库指到临时目录，
 // 免得跑一次测试就在仓库的 data/ 下多一个文件。
 process.env.HARNESS_DB = join(root, "app.db");
-const { CONFIG_TABLES, copyConfigTables } = await import("../src/preview-seed.js");
+const { CONFIG_TABLES, SNAPSHOT_TABLES, copyConfigTables, copyTables, sanitizeSnapshot } =
+  await import("../src/preview-seed.js");
 
 let failures = 0;
 function check(name: string, actual: unknown, expected: unknown) {
@@ -34,19 +35,24 @@ function check(name: string, actual: unknown, expected: unknown) {
   }
 }
 
-// —— 运行态一张都不许在白名单里 ——
-// 这条不依赖任何数据库，它钉的是名单本身。加表的人不会来读这份文件，但会跑测试。
+// —— 名单本身（不碰数据库）。加表的人不会来读这份文件，但会跑测试 ——
 for (const forbidden of ["tasks", "sessions", "groups", "queues", "queue_items", "schedules", "scheduled_messages", "notes"]) {
-  check(`白名单里没有 ${forbidden}`, (CONFIG_TABLES as readonly string[]).includes(forbidden), false);
+  check(`config 档白名单里没有 ${forbidden}`, (CONFIG_TABLES as readonly string[]).includes(forbidden), false);
+}
+for (const forbidden of ["schedules", "scheduled_messages"]) {
+  // 这两张是「会替你干活」的：一进副本，预览的调度器就拿真项目目录去派活/发消息。
+  check(`快照也不搬 ${forbidden}`, (SNAPSHOT_TABLES as readonly string[]).includes(forbidden), false);
 }
 check("供应商排在执行器前面（被引用的先落地）",
   CONFIG_TABLES.indexOf("llm_providers") < CONFIG_TABLES.indexOf("agents"), true);
+check("快照搬任务，也搬它的分组与队列",
+  ["groups", "tasks", "sessions", "queue_items"].every((t) => (SNAPSHOT_TABLES as readonly string[]).includes(t)), true);
 
 const source = createClient({ url: `file:${join(root, "live.db")}` });
 const dest = createClient({ url: `file:${join(root, "preview.db")}` });
 
 try {
-  // 主库：设置有货，运行态也有货（后者必须原地不动）。
+  // 主库：设置有货，运行态也有货。
   await source.executeMultiple(`
     CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
     CREATE TABLE llm_providers (id TEXT PRIMARY KEY, name TEXT NOT NULL, api_key TEXT NOT NULL DEFAULT '');
@@ -55,16 +61,23 @@ try {
       provider_id TEXT, is_default INTEGER NOT NULL DEFAULT 0, speed TEXT
     );
     CREATE TABLE projects (id TEXT PRIMARY KEY, name TEXT NOT NULL, repo_path TEXT NOT NULL);
-    CREATE TABLE tasks (id TEXT PRIMARY KEY, status TEXT NOT NULL);
+    CREATE TABLE tasks (id TEXT PRIMARY KEY, status TEXT NOT NULL, mode TEXT NOT NULL DEFAULT 'single', verify_round INTEGER);
+    CREATE TABLE sessions (id TEXT PRIMARY KEY, task_id TEXT NOT NULL, agent_pid INTEGER, agent_started_at TEXT, agent_offset INTEGER, usage_output INTEGER);
+    CREATE TABLE schedules (id TEXT PRIMARY KEY, task_id TEXT NOT NULL, cron TEXT);
     INSERT INTO app_settings VALUES ('worktreeDefault', 'true');
     INSERT INTO llm_providers VALUES ('p1', 'cpa', 'sk-real-key');
     INSERT INTO agents VALUES ('a1', 'claude@local', 'claude', NULL, 1, NULL);
     INSERT INTO agents VALUES ('a2', 'codex@cpa', 'codex', 'p1', 0, 'fast');
     INSERT INTO projects VALUES ('proj', 'harness', '/repo');
-    INSERT INTO tasks VALUES ('t1', 'running');
+    INSERT INTO tasks VALUES ('t1', 'running', 'single', 2);
+    INSERT INTO tasks VALUES ('t2', 'queued', 'single', NULL);
+    INSERT INTO tasks VALUES ('t3', 'done', 'single', NULL);
+    INSERT INTO tasks VALUES ('t4', 'running', 'team', NULL);
+    INSERT INTO sessions VALUES ('s1', 't1', 4242, 'Mon Aug 7 10:00:00 2026', 991, 706);
+    INSERT INTO schedules VALUES ('sch1', 't3', '0 9 * * *');
   `);
   // 预览库：agents 少一列 speed、多一列 note —— 两个方向的 schema 漂移同时存在。
-  // 另外**故意不建 team_presets / workflows**，模拟「这张表这个分支还没有」。
+  // 另外**故意不建 team_presets / workflows / notes**，模拟「这张表这个分支还没有」。
   await dest.executeMultiple(`
     CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
     CREATE TABLE llm_providers (id TEXT PRIMARY KEY, name TEXT NOT NULL, api_key TEXT NOT NULL DEFAULT '');
@@ -73,12 +86,15 @@ try {
       provider_id TEXT, is_default INTEGER NOT NULL DEFAULT 0, note TEXT
     );
     CREATE TABLE projects (id TEXT PRIMARY KEY, name TEXT NOT NULL, repo_path TEXT NOT NULL);
-    CREATE TABLE tasks (id TEXT PRIMARY KEY, status TEXT NOT NULL);
+    CREATE TABLE tasks (id TEXT PRIMARY KEY, status TEXT NOT NULL, mode TEXT NOT NULL DEFAULT 'single', verify_round INTEGER);
+    CREATE TABLE sessions (id TEXT PRIMARY KEY, task_id TEXT NOT NULL, agent_pid INTEGER, agent_started_at TEXT, agent_offset INTEGER, usage_output INTEGER);
+    CREATE TABLE schedules (id TEXT PRIMARY KEY, task_id TEXT NOT NULL, cron TEXT);
   `);
 
+  // —— config 档：老行为，一张运行态都不进来 ——
   const copied = await copyConfigTables(source, dest);
-  check("搬了哪些表、各几行", copied, { app_settings: 1, llm_providers: 1, agents: 2, projects: 1 });
-  check("运行态没被搬", Number((await dest.execute("SELECT COUNT(*) AS n FROM tasks")).rows[0].n), 0);
+  check("config 档搬了哪些表、各几行", copied, { app_settings: 1, llm_providers: 1, agents: 2, projects: 1 });
+  check("config 档不搬任务", Number((await dest.execute("SELECT COUNT(*) AS n FROM tasks")).rows[0].n), 0);
   check("表不存在也只是跳过，不炸", "team_presets" in copied, false);
 
   // 执行器要完整可用：挂着的供应商得在，key 得是真的（否则起 CLI 时注入的是个空壳）。
@@ -98,6 +114,27 @@ try {
   check("非空的表跳过，空了的表补上", again, { projects: 1 });
   check("预览里改过的配置没被覆盖",
     (await dest.execute("SELECT name FROM agents WHERE id='a1'")).rows[0].name, "我在预览里改过的名字");
+
+  // —— snapshot 档：运行态也搬，搬完必须洗 ——
+  const snap = await copyTables(source, dest, SNAPSHOT_TABLES);
+  check("快照搬了任务与会话", { tasks: snap.tasks, sessions: snap.sessions }, { tasks: 4, sessions: 1 });
+  check("定时任务不在搬运名单里，所以副本里一条都没有",
+    Number((await dest.execute("SELECT COUNT(*) AS n FROM schedules")).rows[0].n), 0);
+  check("token 账跟着会话行一起进来（不然预览里芯片没数）",
+    (await dest.execute("SELECT usage_output FROM sessions WHERE id='s1'")).rows[0].usage_output, 706);
+
+  await sanitizeSnapshot(dest);
+  const statuses = (await dest.execute("SELECT id, status FROM tasks ORDER BY id")).rows
+    .map((r) => [r.id, r.status]);
+  check("在跑的任务落成 paused、团队台落成 idle、终态原样",
+    statuses, [["t1", "paused"], ["t2", "paused"], ["t3", "done"], ["t4", "idle"]]);
+  check("正在跑的验证轮清空", (await dest.execute("SELECT verify_round FROM tasks WHERE id='t1'")).rows[0].verify_round, null);
+  const sess = (await dest.execute("SELECT agent_pid, agent_started_at, agent_offset FROM sessions WHERE id='s1'")).rows[0];
+  // 这条是整份测试里最要命的一行：pid + 启动时间是 isSameProcess 的全部判据，副本跟主库
+  // 拿的是同一台机器上同一个进程，留着就会**判中**，预览于是开始 tail 一个主实例正在消费
+  // 的输出文件。
+  check("会话上的真 pid 与位置全洗干净", [sess.agent_pid, sess.agent_started_at, sess.agent_offset], [null, null, null]);
+  check("洗的是运行态，不碰账", (await dest.execute("SELECT usage_output FROM sessions WHERE id='s1'")).rows[0].usage_output, 706);
 } finally {
   source.close();
   dest.close();

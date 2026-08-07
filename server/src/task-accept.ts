@@ -12,6 +12,7 @@ import { taskWorkflowDef } from "./workflows.js";
 import { taskBranchDiff } from "./git-diff.js";
 import { publishTaskUpdated } from "./task-store.js";
 import { stopPreviewAtAccept } from "./preview.js";
+import { IS_PREVIEW_INSTANCE, previewRefusal } from "./preview-instance.js";
 import { withRepoLock } from "./repo-lock.js";
 import { setTaskStage, clearTaskStage } from "./task-stage.js";
 import { appendTaskTimeline } from "./task-timeline.js";
@@ -491,6 +492,17 @@ async function acceptanceRepoPath(taskId: string): Promise<string | null> {
 // `by` 默认 human：这个函数的调用方绝大多数是「用户按了验收通过」（HTTP 路由、MCP
 // accept_task），只有 workflow-steps 里那条「线自己走到这一站」要显式传 "workflow"。
 export async function acceptTask(taskId: string, by: AcceptBy = "human"): Promise<AcceptTaskResult> {
+  // 预览实例：库是主库的快照，任务行指的却是真分支、真 worktree。走结构化拒绝而不是抛
+  // 异常，UI 才能把这句话原样显示在验收按钮旁边（见 preview-instance.ts）。
+  if (IS_PREVIEW_INSTANCE) {
+    return {
+      accepted: false,
+      httpStatus: 409,
+      taskId,
+      reason: "preview_instance",
+      error: previewRefusal("验收通过"),
+    };
+  }
   if (acceptingTaskIds.has(taskId)) {
     return {
       accepted: false,
