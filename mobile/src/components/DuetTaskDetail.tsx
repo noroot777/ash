@@ -289,7 +289,7 @@ function TurnEntry({
   const side = entry.speaker === "B" ? "B" : entry.speaker === "A" ? "A" : entry.speaker;
   const color = side === "B" ? DUET_COLOR : theme.accent;
   const agent = side === "A" ? cfg.voiceA : side === "B" ? cfg.voiceB : undefined;
-  const label = side === "impl" ? "执行者（历史）" : side === "review" ? "审阅者（历史）" : side === "synthesis" ? "共同方案" : `讨论者 ${side}`;
+  const label = side === "impl" ? "执行者（历史）" : side === "review" ? "审阅者（历史）" : side === "synthesis" ? (!entry.stop || entry.stop === "consensus" ? "共同方案" : "决策文档 · 未共识") : `讨论者 ${side}`;
   return (
     <View
       style={{

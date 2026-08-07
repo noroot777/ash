@@ -20,6 +20,7 @@ type DuetEntry = {
   round?: number;
   text?: string;
   error?: string;
+  stop?: string; // 合稿行的停止原因(consensus/agreedToStop/roundCap/midway);旧行无此字段
   raised?: boolean;
   agrees?: boolean;
   consensus?: boolean;
@@ -76,7 +77,18 @@ export function conclusionLines(entries: DuetEntry[]): string[] {
   const plan = [...entries].reverse().find((entry) =>
     entry.speaker === "synthesis" && !entry.error && nonEmpty(entry.text)
       && typeof entry.round === "number" && entry.round >= lastVoiceRound);
-  if (plan) return ["上一轮讨论收敛后的共同方案如下：", "", plan.text!.trim()];
+  if (plan) {
+    // 合稿行带停止原因:未共识的决策文档不能被冠以「收敛后的共同方案」——那会让
+    // 本轮讨论者把有分歧的文档当定案。旧行没有 stop,按共识处理(当时只在收敛后合稿)。
+    const agreed = !plan.stop || plan.stop === "consensus";
+    return [
+      agreed
+        ? "上一轮讨论收敛后的共同方案如下："
+        : "上一轮讨论**没有达成共识**，以下是当时整理的决策文档——「残留分歧」需要在本轮重点复盘：",
+      "",
+      plan.text!.trim(),
+    ];
+  }
   const verdict = [...entries].reverse().find((entry) =>
     (entry.type === "duet.gate" || entry.type === "debate.gate")
       && (entry.consensus !== undefined || entry.conclusionA != null || entry.conclusionB != null));

@@ -5,6 +5,8 @@ export type DuetTurn = {
   round: number;
   speaker: DuetSpeaker;
   text: string;
+  // 合稿轮的停止原因(consensus/agreedToStop/roundCap/midway);其余轮与旧行为 undefined。
+  stop?: string;
   /** 本回合的执行过程(工具/思考),与普通任务、团队共用一个「执行过程」折叠块。 */
   events: ExecutionEvent[];
   raised: boolean;

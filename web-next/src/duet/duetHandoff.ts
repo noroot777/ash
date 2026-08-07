@@ -57,14 +57,17 @@ function lastText(turns: DuetTurn[], speaker: "A" | "B"): string {
 // **过时的合稿不作数**:回炉后重新合稿失败时,留下的还是反馈前的旧方案,
 // 判据是合稿轮次不早于最后一次活动轮次。**用户介入也算活动**:意见落盘后讨论者
 // 还没跑完就中断的场景里,A/B 轮次没变,但旧方案已被那条意见推翻。
-function latestPlan(turns: DuetTurn[]): string | null {
+function latestPlan(turns: DuetTurn[]): { text: string; agreed: boolean } | null {
   const lastVoiceRound = turns.reduce(
     (max, turn) => (turn.speaker === "A" || turn.speaker === "B" || turn.speaker === "user" ? Math.max(max, turn.round) : max),
     0,
   );
-  return [...turns].reverse().find((turn) =>
+  const plan = [...turns].reverse().find((turn) =>
     turn.speaker === "synthesis" && !turn.error && turn.text.trim() && turn.round >= lastVoiceRound,
-  )?.text.trim() ?? null;
+  );
+  if (!plan) return null;
+  // stop 旧行没有,按共识处理(当时只在收敛后合稿)。
+  return { text: plan.text.trim(), agreed: !plan.stop || plan.stop === "consensus" };
 }
 
 export function buildDuetHandoffBody(
@@ -91,7 +94,11 @@ export function buildDuetHandoffBody(
     statusLine(task.status, resolvedGate),
     resolvedGate?.conclusionA ? `- 讨论者 A：${resolvedGate.conclusionA}` : "- 讨论者 A：未留下明确结论",
     resolvedGate?.conclusionB ? `- 讨论者 B：${resolvedGate.conclusionB}` : "- 讨论者 B：未留下明确结论",
-    ...(plan ? ["", "## 共同方案（讨论的正式产出，拆解执行以它为准）", plan] : []),
+    ...(plan
+      ? plan.agreed
+        ? ["", "## 共同方案（讨论的正式产出，拆解执行以它为准）", plan.text]
+        : ["", "## 决策文档（讨论未达成共识——执行前必须先解决「残留分歧」，不可直接当定案）", plan.text]
+      : []),
     "",
     "## 双方最后一轮完整发言",
     "### 讨论者 A",

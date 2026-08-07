@@ -80,7 +80,7 @@ function TurnBubble({
     );
   }
   const side = turn.speaker === "B" ? "B" : turn.speaker === "A" ? "A" : turn.speaker === "synthesis" ? "synthesis" : "history";
-  const role = turn.speaker === "A" ? "讨论者 A" : turn.speaker === "B" ? "讨论者 B" : turn.speaker === "synthesis" ? "共同方案" : turn.speaker === "review" ? "历史审查" : "历史实现";
+  const role = turn.speaker === "A" ? "讨论者 A" : turn.speaker === "B" ? "讨论者 B" : turn.speaker === "synthesis" ? (!turn.stop || turn.stop === "consensus" ? "共同方案" : "决策文档 · 未共识") : turn.speaker === "review" ? "历史审查" : "历史实现";
   const shownAt = turn.at ?? turn.startedAt ?? session?.startedAt;
   return (
     <div className="duet-turn-wrap">

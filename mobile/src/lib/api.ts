@@ -71,6 +71,7 @@ export type TeamCuaKillResult = {
 };
 
 export type DuetTranscriptTurn = {
+  stop?: string; // 合稿轮的停止原因;consensus 之外都是未共识的决策文档
   type?: undefined;
   round: number;
   speaker: DuetSpeaker;

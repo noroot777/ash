@@ -85,9 +85,10 @@ ${text}
 //   consensus    双方结论一致 → 共同方案
 //   agreedToStop 双方同意停止但各自保留结论 → 决策文档(这不是轮数耗尽!)
 //   roundCap     到达轮数上限仍未收敛 → 决策文档
+//   midway       用户介入回炉后刚更新了一轮、尚未重新收敛,先开门给用户看 → 决策文档
 // userNote 是用户最近一次 gate 介入的原文——合稿由 A 执行,定向提问 B 时 A 没
 // 见过问题,只看 B 的回答会不知所云。
-export type SynthesizeStop = "consensus" | "agreedToStop" | "roundCap";
+export type SynthesizeStop = "consensus" | "agreedToStop" | "roundCap" | "midway";
 
 export function synthesize(args: {
   opponentLatest: string;
@@ -99,7 +100,9 @@ export function synthesize(args: {
     ? "讨论已收敛。"
     : args.stop === "agreedToStop"
       ? "双方一致认为讨论可以停止，但**各自保留了不同结论**，没有达成共识。"
-      : "讨论到达轮数上限，双方**没有达成收敛**，仍存在实质分歧。";
+      : args.stop === "midway"
+        ? "用户介入后双方各自更新了一轮方案，**尚未重新走到收敛**；现在把当前状态整理出来供用户裁决。"
+        : "讨论到达轮数上限，双方**没有达成收敛**，仍存在实质分歧。";
   const goal = consensus
     ? "现在请你把这场讨论的成果整理成一份**共同方案**——它是这场讨论的正式产出：用户拿它拍板，后续团队拿它拆解执行。"
     : "现在请你把这场讨论整理成一份**决策文档**供用户拍板：双方已有的共同点整理成方案基础，真实分歧如实列进「残留分歧」——**绝不要把没达成的共识写成已达成**。";

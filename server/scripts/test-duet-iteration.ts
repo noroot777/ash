@@ -159,6 +159,16 @@ try {
   ]);
   assert.ok(!interrupted.join("\n").includes("旧方案"), "a user note after the plan must invalidate it");
 
+  // 未共识的合稿(agreedToStop/roundCap/midway)不能被冠以「收敛后的共同方案」。
+  const split = iteration.conclusionLines([
+    { round: 4, speaker: "A", raised: true, agrees: false, conclusion: "方案甲" },
+    { round: 4, speaker: "B", raised: true, agrees: false, conclusion: "方案乙" },
+    { round: 4, speaker: "synthesis", text: "# 方案\n共同点……\n## 残留分歧\n甲 vs 乙", stop: "agreedToStop" },
+  ]);
+  assert.match(split.join("\n"), /没有达成共识/, "non-consensus plan must not be presented as agreed");
+  assert.doesNotMatch(split.join("\n"), /收敛后的共同方案/);
+  assert.match(split.join("\n"), /甲 vs 乙/);
+
   // retry 重放判定:失败轮若是 gate 介入轮,要用原 inject/question prompt 重放。
   const { gateRoundOf } = await import("../src/duet/index.js");
   assert.equal(gateRoundOf([{ speaker: "user", round: 3, text: "补充意见", kind: "inject" }], 3)?.kind, "inject");

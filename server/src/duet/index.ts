@@ -110,6 +110,9 @@ async function runTurn(args: {
   // 收敛状态下限:进入本轮前该方已有的 raised/结论。提问(ask)轮讨论者被要求不写
   // [可收敛],若它本轮没主动收敛就继承既有状态,避免一次澄清把已达成的共识打回。
   inherit?: { raised: boolean; agrees: boolean; conclusion?: string };
+  // 附加进 transcript 行的元数据(如合稿轮的 stop 标签),读取端靠它区分
+  // 「已收敛的共同方案」与「未共识的决策文档」。
+  extra?: Record<string, unknown>;
 }): Promise<Turn> {
   const { taskId, role, speaker, round, executor, prompt, cwd } = args;
   // A stop requested between turns: don't even spawn the next one.
@@ -230,7 +233,7 @@ async function runTurn(args: {
   try {
     appendFileSync(
       join(runDir, "transcript.jsonl"),
-      JSON.stringify({ round, speaker, text, raised, agrees, conclusion, error: errorMsg, startedAt: turnStart, at: endIso, durationMs, events: trace }) + "\n",
+      JSON.stringify({ ...args.extra, round, speaker, text, raised, agrees, conclusion, error: errorMsg, startedAt: turnStart, at: endIso, durationMs, events: trace }) + "\n",
     );
   } catch {
     /* best effort */
@@ -315,16 +318,21 @@ export function gateRoundOf(
 // transcript 里已留错误行(时间线可见),照常走 gate/done。
 async function synthesizePlan(ctx: Ctx): Promise<void> {
   if (ctx.planRound != null && ctx.planRound >= ctx.round) return; // 方案没过时
+  const stop: P.SynthesizeStop = isConsensus(ctx)
+    ? "consensus"
+    : canSettle(ctx)
+      ? "agreedToStop"
+      : ctx.round >= ctx.cap
+        ? "roundCap"
+        : "midway";
   try {
     const t = await runTurn({
       taskId: ctx.taskId, role: "voiceA", speaker: "synthesis", round: ctx.round,
       executor: ctx.exA,
-      prompt: P.synthesize({
-        // 三种停下来的原因要如实告知合稿者:双方举手但结论不同 ≠ 轮数耗尽。
-        stop: isConsensus(ctx) ? "consensus" : canSettle(ctx) ? "agreedToStop" : "roundCap",
-        opponentLatest: ctx.lastB,
-        userNote: ctx.lastUserNote,
-      }),
+      // 停止原因要如实告知合稿者并落盘:双方举手但结论不同 ≠ 轮数耗尽;
+      // 回炉后刚更新一轮、还没到轮数上限也没重新收敛 = midway(先开门给用户看)。
+      prompt: P.synthesize({ stop, opponentLatest: ctx.lastB, userNote: ctx.lastUserNote }),
+      extra: { stop },
       cwd: ctx.cwd,
       rowId: ctx.A.rowId, resumeCliId: ctx.A.cliId || undefined,
     });
