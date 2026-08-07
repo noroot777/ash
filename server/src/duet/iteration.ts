@@ -66,9 +66,11 @@ export function conclusionLines(entries: DuetEntry[]): string[] {
   // 收敛后的合稿(共同方案)是上一轮的正式产出,有它就引用全文;两行一句话的
   // 结论只是没有合稿的老讨论的降级。**过时的合稿不作数**:回炉/澄清后重新合稿
   // 失败时,留在 transcript 里的还是反馈前的旧方案,把它标成正式产出会把用户
-  // 已推翻的版本重新扶正 —— 判据是合稿轮次不早于最后一次 A/B 发言轮次。
+  // 已推翻的版本重新扶正 —— 判据是合稿轮次不早于最后一次活动轮次。**用户介入
+  // 也算活动**:意见先落盘、讨论者还没跑完就中断的场景里,A/B 轮次没变,但旧
+  // 方案已被那条意见推翻。
   const lastVoiceRound = entries.reduce(
-    (max, entry) => (!entry.type && (entry.speaker === "A" || entry.speaker === "B") && typeof entry.round === "number" ? Math.max(max, entry.round) : max),
+    (max, entry) => (!entry.type && (entry.speaker === "A" || entry.speaker === "B" || entry.speaker === "user") && typeof entry.round === "number" ? Math.max(max, entry.round) : max),
     0,
   );
   const plan = [...entries].reverse().find((entry) =>

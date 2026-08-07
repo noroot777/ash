@@ -150,6 +150,15 @@ try {
   assert.ok(!stale.join("\n").includes("旧方案"), "stale plan must not be presented as the official output");
   assert.match(stale.join("\n"), /新结论A/);
 
+  // 用户意见已落盘、讨论者还没跑完就中断:A/B 轮次没动,但旧合稿已被那条意见推翻。
+  const interrupted = iteration.conclusionLines([
+    { round: 2, speaker: "A", raised: true, agrees: true, conclusion: "结论X" },
+    { round: 2, speaker: "B", raised: true, agrees: true, conclusion: "结论X" },
+    { round: 2, speaker: "synthesis", text: "# 旧方案" },
+    { round: 3, speaker: "user", text: "这个方向不对，推翻重来" },
+  ]);
+  assert.ok(!interrupted.join("\n").includes("旧方案"), "a user note after the plan must invalidate it");
+
   const repeated = await app.request(`/tasks/${teamId}/team/iterate-duet`, { method: "POST" });
   assert.equal(repeated.status, 200);
   assert.equal(((await repeated.json()) as { id: string }).id, created.id);

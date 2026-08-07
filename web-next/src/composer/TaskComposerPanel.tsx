@@ -12,8 +12,8 @@ import type {
   TeamPresetConfig,
 } from "@harness/shared";
 import { DEFAULT_APP_SETTINGS } from "@harness/shared";
-import { Paperclip, Robot, ChatsCircle, UsersThree, X } from "@phosphor-icons/react";
-import { ImagePreviewGroup, PreviewableImage } from "../components/ImagePreview.tsx";
+import { Paperclip } from "@phosphor-icons/react";
+import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
 import {
   DEFAULT_CRON,
   defaultOnceTime,
@@ -35,8 +35,8 @@ import { mergeSlashItems, slashToken, type SlashItem } from "../lib/useSkills.ts
 import { useSkills } from "../lib/useSkills.ts";
 import { SlashMenu } from "../components/SlashMenu.tsx";
 import { AttachmentPicker, UploadAttachmentList, useAttachments } from "../task-detail/Attachments.tsx";
-import { attachmentView } from "../task-detail/utils.ts";
 import { ComposerFields } from "./ComposerFields.tsx";
+import { HARNESS_SLASH_ITEMS, MODES, SLASHES, SeedAttachmentList, defaultProfile } from "./composerParts.tsx";
 import { useComposerWorkflow } from "./ComposerWorkflow.tsx";
 import { ComposerLaunchControl, type LaunchMode } from "./ComposerLaunchControl.tsx";
 import { CreateGroupDialog } from "../overlays/CreateEntityDialog.tsx";
@@ -48,48 +48,6 @@ import {
 } from "./executorOverrides.ts";
 
 export type ComposerDraft = { body: string; attachments: string[]; noteIds?: string[] };
-
-const MODES: { value: TaskMode; label: string; icon: typeof Robot }[] = [
-  { value: "single", label: "单任务", icon: Robot },
-  { value: "team", label: "团队", icon: UsersThree },
-  { value: "duet", label: "讨论", icon: ChatsCircle },
-];
-// harness 自己的三条切换命令。**这张表是固定的**:下面 changeBody 那个「敲完空格
-// 就把命令从正文里吃掉」的正则只认这三个词,技能绝不能进这张表 —— 技能的 `/名字`
-// 必须原样留在正文里发下去(harness 一行提示词都不写,CLI 自己认)。
-const SLASHES = [
-  { command: "/single", mode: "single" as const, label: "创建单任务" },
-  { command: "/team", mode: "team" as const, label: "创建常驻团队" },
-  { command: "/duet", mode: "duet" as const, label: "发起双智能体讨论" },
-];
-const HARNESS_SLASH_ITEMS: SlashItem[] = SLASHES.map((item) => ({
-  command: item.command,
-  label: item.label,
-  kind: "harness",
-}));
-
-function defaultProfile(profiles: AgentExecutorProfile[], type: AgentType) {
-  return profiles.find((profile) => profile.type === type && profile.isDefault)
-    ?? profiles.find((profile) => profile.type === type);
-}
-
-function SeedAttachmentList({ paths, onRemove }: { paths: string[]; onRemove: (path: string) => void }) {
-  if (!paths.length) return null;
-  return (
-    <div className="composer-seed-attachments">
-      {paths.map((path) => {
-        const view = attachmentView(path);
-        return (
-          <div className="composer-seed-attachment" key={path}>
-            {view.image && view.url ? <PreviewableImage src={view.url} alt={view.name} /> : <Paperclip size={14} aria-hidden="true" />}
-            <span>{view.name}</span>
-            <button type="button" onClick={() => onRemove(path)} aria-label={`移除 ${view.name}`}><X size={10} aria-hidden="true" /></button>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
 
 export function TaskComposerPanel({
   project,

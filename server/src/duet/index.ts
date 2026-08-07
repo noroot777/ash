@@ -266,6 +266,9 @@ interface Ctx {
   // 最近一次合稿(synthesis)对应的发言轮次;null=还没合过稿。方案是否过时的判据:
   // planRound < 最后一个 A/B 发言轮(ctx.round)。
   planRound: number | null;
+  // 用户最近一次 gate 介入(inject/提问)的原文。合稿由 A 的会话执行,定向提问 B 时
+  // A 没见过问题原文,只看 B 的回答会不知所云 —— 合稿 prompt 把它一并附上。
+  lastUserNote?: { text: string; target?: "A" | "B" };
 }
 
 function applyTurn(ctx: Ctx, sp: "A" | "B", t: Turn) {
@@ -282,6 +285,12 @@ function lastPlanRound(rows: any[]): number | null {
   return plan ? plan.round : null;
 }
 
+// transcript 重建时找用户最近一次 gate 介入(inject/提问)的原文,喂给合稿。
+function lastUserNoteOf(rows: any[]): { text: string; target?: "A" | "B" } | undefined {
+  const note = [...rows].reverse().find((r) => r.speaker === "user" && typeof r.text === "string" && r.text.trim());
+  return note ? { text: note.text, target: note.target === "A" || note.target === "B" ? note.target : undefined } : undefined;
+}
+
 // 收敛后的合稿轮:resume 讨论者 A 的会话(整场上下文都在),把讨论成果整理成一份
 // 共同方案文档,作为 /duet 的正式产出——gate 上两行 140 字的结论只够扫一眼,拍板
 // 与交接执行需要的是全文。inject/提问回炉后方案会过时,进 gate 前按 planRound
@@ -292,7 +301,9 @@ async function synthesizePlan(ctx: Ctx): Promise<void> {
   try {
     const t = await runTurn({
       taskId: ctx.taskId, role: "voiceA", speaker: "synthesis", round: ctx.round,
-      executor: ctx.exA, prompt: P.synthesize(ctx.lastB), cwd: ctx.cwd,
+      executor: ctx.exA,
+      prompt: P.synthesize({ opponentLatest: ctx.lastB, consensus: isConsensus(ctx), userNote: ctx.lastUserNote }),
+      cwd: ctx.cwd,
       rowId: ctx.A.rowId, resumeCliId: ctx.A.cliId || undefined,
     });
     ctx.A.cliId = t.cliId;
@@ -414,6 +425,7 @@ export async function resumeDuet(taskId: string): Promise<void> {
       agreesA: ra?.agrees ?? false, agreesB: rb?.agrees ?? false,
       conclusionA: ra?.conclusion, conclusionB: rb?.conclusion,
       planRound: lastPlanRound(rows),
+      lastUserNote: lastUserNoteOf(rows),
     };
     await setStatus(taskId, "running");
 
@@ -525,6 +537,7 @@ export async function resumeAtGate(taskId: string, action: GateAction): Promise<
       agreesA: ra?.agrees ?? false, agreesB: rb?.agrees ?? false,
       conclusionA: ra?.conclusion, conclusionB: rb?.conclusion,
       planRound: lastPlanRound(rows),
+      lastUserNote: lastUserNoteOf(rows),
     };
     recordGateEvent({ type: "duet.gate", taskId, gate: "G1", open: false });
     await setStatus(taskId, "running");
@@ -579,14 +592,20 @@ async function reDiscuss(ctx: Ctx, kind: "inject" | "ask", text: string, target?
   // 提问=澄清,不该打回已达成的收敛/结论(继承既有状态);注入=回炉重议,允许双方改判(不继承)。
   const inhA = kind === "ask" ? { raised: ctx.raisedA, agrees: ctx.agreesA, conclusion: ctx.conclusionA } : undefined;
   const inhB = kind === "ask" ? { raised: ctx.raisedB, agrees: ctx.agreesB, conclusion: ctx.conclusionB } : undefined;
+  // 回炉轮跟正常轮一样要有失败检查:失败的回合文本是空的/错的,吞下去会让任务
+  // 带着垃圾状态继续合稿、重开 gate,甚至被批准完成。抛出去由外层 failDuet 落
+  // failed(错误行已在 transcript,用户可重试)。
   if (tgt !== "B") {
     const at = await runTurn({ taskId: ctx.taskId, role: "voiceA", speaker: "A", round: ctx.round, executor: ctx.exA, prompt, cwd: ctx.cwd, rowId: ctx.A.rowId, resumeCliId: ctx.A.cliId || undefined, inherit: inhA });
+    if (failed(at)) throw new Error(`讨论者 A 在回炉轮失败${at.error ? `：${at.error}` : ""}`);
     applyTurn(ctx, "A", at);
   }
   if (tgt !== "A") {
     const bt = await runTurn({ taskId: ctx.taskId, role: "voiceB", speaker: "B", round: ctx.round, executor: ctx.exB, prompt, cwd: ctx.cwd, rowId: ctx.B.rowId, resumeCliId: ctx.B.cliId || undefined, inherit: inhB });
+    if (failed(bt)) throw new Error(`讨论者 B 在回炉轮失败${bt.error ? `：${bt.error}` : ""}`);
     applyTurn(ctx, "B", bt);
   }
+  ctx.lastUserNote = { text: message, target: tgt };
 }
 
 // /duet is discussion-only: after convergence a synthesis turn writes the joint
