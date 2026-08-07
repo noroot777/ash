@@ -306,7 +306,9 @@ function normalizeParams(kind: StepKind, raw: unknown): StepParams[StepKind] {
   if (kind === "preview") {
     return {
       cmd: pickText(r.cmd, d.preview().cmd),
-      mode: pickEnum(r.mode, PREVIEW_MODE, "test"),
+      // 新建站由 DEFAULT_PARAMS 明确写 test；老数据没有 mode 时必须保持原来的
+      // 「照启动命令跑」语义，不能在一次 normalize 后静默变成 Harness 的测试库快照。
+      mode: pickEnum(r.mode, PREVIEW_MODE, "command"),
       ready: pickEnum(r.ready, PREVIEW_READY, "port+log"),
       life: pickEnum(r.life, PREVIEW_LIFE, "gate"),
     };

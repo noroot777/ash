@@ -141,12 +141,12 @@ check("没给 id 就按位置补", loose.def?.steps.map((s) => s.id), ["s1", "s2
 check("preview 没有失败分支", normalizeWorkflowDef({
   steps: [{ kind: "run" }, { kind: "preview", fail: { mode: "stop", max: 2 } }, { kind: "human" }],
 }).def?.steps[1]!.fail, null);
-check("老预览站没有 mode 时回落到测试库快照", normalizeWorkflowDef({
+check("老预览站没有 mode 时保持按启动命令跑", normalizeWorkflowDef({
   steps: [{ kind: "run" }, { kind: "preview", p: { cmd: "make preview" } }, { kind: "human" }],
-}).def?.steps[1]!.p, { cmd: "make preview", mode: "test", ready: "port+log", life: "gate" });
+}).def?.steps[1]!.p, { cmd: "make preview", mode: "command", ready: "port+log", life: "gate" });
 check("预览启动方式越界回落", normalizeWorkflowDef({
   steps: [{ kind: "run" }, { kind: "preview", p: { mode: "magic" } }, { kind: "human" }],
-}).def?.steps[1]!.p, { cmd: "npm run dev", mode: "test", ready: "port+log", life: "gate" });
+}).def?.steps[1]!.p, { cmd: "npm run dev", mode: "command", ready: "port+log", life: "gate" });
 
 // 老数据里的 backTo 到这儿被丢掉:那个旋钮从来没接通过执行链,留着就是骗人。丢掉之后
 // 「怎么办」和「几轮」原样保留,老任务的行为跟它实际发生过的行为一致(= 打回重做)。

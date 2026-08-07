@@ -22,7 +22,10 @@ import { closeSync, openSync, readFileSync, readSync, existsSync } from "node:fs
 import { join } from "node:path";
 import type { ExecTarget } from "@harness/shared";
 import { isSameProcess } from "../proc.js";
-import { shq, resolveBin, augmentedEnv, failedChild, openTrackFd, registerTrackFd, killChild, killByPid, spawnAgent } from "./spawn.js";
+import {
+  shq, resolveBin, augmentedEnv, failedChild, guardAgentSpawn,
+  openTrackFd, registerTrackFd, killChild, killByPid, spawnAgent,
+} from "./spawn.js";
 
 // 一次运行的三个落盘文件。rc 是退出码 —— 管道模式下退出码是 close 事件白送的,
 // 换成文件后没人告诉我们了,只能让 shell 跑完自己写一个数字进去。
@@ -199,6 +202,8 @@ export function spawnDetachedAgent(
   paths: DetachedPaths,
   extraEnv?: Record<string, string>,
 ): DetachedChild | ChildProcess {
+  const blocked = guardAgentSpawn(bin);
+  if (blocked) return blocked;
   if (target.kind === "ssh") {
     // ssh 那头的进程本来就不挂在本地 server 的管道上,不需要这套;调用方回退到
     // 普通 spawnAgent。这里显式拒绝,免得以后有人以为它支持。

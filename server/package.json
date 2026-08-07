@@ -44,6 +44,7 @@
     "test:workflow-library": "tsx scripts/test-workflow-library.ts",
     "test:workflow-run": "tsx scripts/test-workflow-run.ts",
     "test:workflow-gate": "tsx scripts/test-workflow-gate.ts",
+    "test:agent-spawn-guard": "tsx scripts/test-agent-spawn-guard.ts",
     "test:verify-override": "tsx scripts/test-verify-override.ts",
     "test:preview-log": "tsx scripts/test-preview-log.ts",
     "test:preview-seed": "tsx scripts/test-preview-seed.ts",
