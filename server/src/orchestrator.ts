@@ -221,7 +221,7 @@ function wakeInterruptedLeads(teamIds: string[]): void {
 }
 
 // M1: execute a single-agent task in the project's working dir, stream output over
-// SSE, and persist a session credential (DESIGN.md §1/§4/§12/§13).
+// SSE, and persist a session credential.
 export async function runTask(taskId: string): Promise<void> {
   // 团队任务(§Team)走常驻调度台,不占单飞锁 —— 它的「一次运行」是整段常驻,
   // 不是一个回合。放在最前面,于是 /tasks/:id/run、retry、queue 推进都自动生效。

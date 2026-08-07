@@ -152,7 +152,7 @@ async function killEscapees(child: ChildProcess, sig: NodeJS.Signals): Promise<v
 
 // Spawn an agent CLI either locally or over ssh, feeding the prompt via stdin
 // (avoids escaping large prompts in argv, and works identically for both
-// targets — DESIGN.md §0/§2: local spawn vs `ssh host "cd repo && <cli> …"`).
+// targets: local spawn vs `ssh host "cd repo && <cli> …"`).
 // detached: true 让 agent 自成进程组，killChild 才能对整棵进程树发 kill(-pid)。
 // 不这样的话 stop 只杀 CLI 本身，它拉起的孙进程(ffmpeg、打包器…)继承着我们的
 // stdout/stderr 管道不死，流永远不 EOF，run loop 收不到 close → 任务永远停不掉

@@ -139,7 +139,7 @@ api.post("/tasks", async (c) => {
     priority: b.priority ?? "none",
     labels: JSON.stringify(b.labels ?? []),
     // dependsOn / resumeDependsOn 字段保留为 []。新模型用 queue_items
-    // 表达顺序依赖(DESIGN-scheduling.md);input 上的这俩字段已不再接受。
+    // 表达顺序依赖;input 上的这俩字段已不再接受。
     dependsOn: "[]",
     resumeDependsOn: "[]",
     agentType: b.agentType ?? (teamConfig ? teamConfig.lead : executorType) ?? null,
@@ -295,7 +295,7 @@ api.patch("/tasks/:id", async (c) => {
   if (b.reasoningEffort !== undefined || b.model !== undefined || executorChanged) patch.reasoningEffort = normalizedEffort;
   if (b.mode !== undefined) patch.mode = b.mode;
   if (b.duet !== undefined) patch.duet = b.duet ? JSON.stringify(b.duet) : null;
-  // 注意:dependsOn / resumeDependsOn 不再可编辑(DESIGN-scheduling.md):
+  // 注意:dependsOn / resumeDependsOn 不再可编辑:
   // 改顺序请用 /queues/:id/* 端点;调整队列归属请用 remove + insert/append。
   // resumePrompt：让用户编辑 agent 留下的续跑指令（写得不好就改、不想续跑就传空
   // 串清空）。"" / null 都映射为 null —— 跟 settleTaskStatus 检查保持一致。
@@ -410,7 +410,7 @@ api.post("/groups/:id/pause", async (c) => {
 });
 
 // Batch-create single-mode tasks into an EXISTING group, agent-facing (§ interfaces).
-// `chain:true` creates a queue with these tasks in array order (DESIGN-scheduling.md);
+// `chain:true` creates a queue with these tasks in array order;
 // arbitrary pairwise dependsOn between siblings is no longer supported (use chain
 // or split into multiple batches). projectId 从 group 继承。可选 run 立即触发 runGroup。
 api.post("/groups/:groupId/tasks/batch", async (c) => {
@@ -446,7 +446,7 @@ api.post("/groups/:groupId/tasks/batch", async (c) => {
     }
   }
 
-  // 拒绝 legacy 字段:本版本不再接受 dependsOn / resumeDependsOn(DESIGN-scheduling.md)。
+  // 拒绝 legacy 字段:本版本不再接受 dependsOn / resumeDependsOn。
   // 想串行就用 chain:true,想跨组依赖就用 queue API。
   for (const [i, s] of specs.entries()) {
     if (s.dependsOn?.length || s.resumeDependsOn?.length) {

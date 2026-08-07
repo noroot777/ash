@@ -1,6 +1,4 @@
 // Core domain types shared between server and web.
-// Mirrors the decisions in DESIGN.md (§3 data model, §5 agents, §7 duet,
-// §8 statuses, §12 duet mechanism, §13 sessions).
 import type { TeamConfig } from "./team.ts";
 import type { DuetConfig } from "./duet.ts";
 import type { WorkflowDef } from "./workflow.ts";
@@ -228,7 +226,7 @@ export type Priority = "none" | "low" | "medium" | "high" | "urgent";
 // so `canceled` is allowed here — they want to redo it. running/queued = already
 // in flight; awaiting_review = waiting on a gate; done = finished (must not be
 // casually re-run via this endpoint). paused = 跑到检查点等续跑。
-// Distinct from the queue advance rule (DESIGN-scheduling.md §3) which treats
+// Distinct from the queue advance rule, which treats
 // `canceled` as transparent and only advances on `done` — that's the
 // group/queue automation view, not direct user intent.
 export const SINGLE_RUN_FROM: TaskStatus[] = ["backlog", "canceled", "failed", "paused"];
@@ -268,9 +266,9 @@ export interface Task {
   reviewRequested?: boolean;
   priority: Priority;
   labels: string[];
-  dependsOn: string[]; // [废弃,保留为 []] 旧的指针依赖,被 queue 模型取代,见 DESIGN-scheduling.md
+  dependsOn: string[]; // [废弃,保留为 []] 旧的指针依赖,被 queue 模型取代
   resumeDependsOn: string[]; // [废弃,保留为 []] 同上
-  // 队列归属与位置（null = 不在队列），推进规则见 DESIGN-scheduling.md §1。
+  // 队列归属与位置（null = 不在队列），推进规则见 queues.ts。
   queueId?: string | null;
   queuePosition?: number | null;
   autoTitle?: boolean; // title is AI-generated on first run until the user edits it

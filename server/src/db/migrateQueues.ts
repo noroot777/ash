@@ -44,7 +44,7 @@ function connectedComponents<T extends { id: string; dependsOn: string; resumeDe
 }
 
 // 把 legacy 的 depends_on / resume_depends_on 数据迁到 queue_items 表。
-// 由 ensureSchema 完成后调一次。详见 DESIGN-scheduling.md §8。
+// 由 ensureSchema 完成后调一次。
 //
 // 幂等：如果所有 task 的 legacy 字段都已经清空（[]），直接返回。
 // 自检：DAG (depends_on 长度 > 1) / 跨 group / fresh-vs-resume 指向不同

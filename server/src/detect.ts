@@ -94,7 +94,7 @@ async function detectOne(cli: KnownCli): Promise<DetectedCli> {
   };
 }
 
-// 探测整份已知 CLI 目录(DESIGN.md §5/§0)。全量返回、不做过滤 —— 装了没装、
+// 探测整份已知 CLI 目录。全量返回、不做过滤 —— 装了没装、
 // 执行参数实测没实测(untested)都在字段里,界面自己决定怎么展示。
 export function detectKnownClis(): Promise<DetectedCli[]> {
   return Promise.all(KNOWN_CLIS.map(detectOne));
