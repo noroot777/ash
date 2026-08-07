@@ -21,7 +21,7 @@ try {
   const events: ServerEvent[] = [];
   const unsubscribe = bus.subscribe((event) => events.push(event));
 
-  for (const mode of ["single", "team", "debate"] as const) {
+  for (const mode of ["single", "team", "duet"] as const) {
     for (const stage of ["accepted", "merged"] as const) {
       const id = `${stage}-${mode}`;
       await db.insert(tasks).values({
@@ -76,7 +76,7 @@ try {
   });
   assert.equal(await reopenAcceptedStage("not-accepted"), null, "非 accepted/merged 阶段不得改写");
   unsubscribe();
-  console.log("reopen acceptance: single/team/debate × accepted/merged 回归验证通过");
+  console.log("reopen acceptance: single/team/duet × accepted/merged 回归验证通过");
 } finally {
   rmSync(root, { recursive: true, force: true });
 }

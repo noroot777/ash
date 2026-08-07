@@ -89,14 +89,14 @@ export function ReplyBox({
   const disabled = task.mode !== "single" || task.archived || (!hasConversation && !queueing);
   const inputDisabled = disabled && !command;
   const reason = task.mode !== "single"
-    ? "请在对应的团队或辩论页面继续操作"
+    ? "请在对应的团队或讨论页面继续操作"
     : task.archived
-      ? command ? "任务已归档；仍可输入 /team 或 /debate 创建派生任务…" : "任务已归档，无法继续回复"
+      ? command ? "任务已归档；仍可输入 /team 或 /duet 创建派生任务…" : "任务已归档，无法继续回复"
       : queueing
-        ? command ? "任务进行中；发送即排队，也可输入 /team 或 /debate 派生任务…" : "任务进行中，发送即排队，这一轮结束自动发出（⌘↵）…"
+        ? command ? "任务进行中；发送即排队，也可输入 /team 或 /duet 派生任务…" : "任务进行中，发送即排队，这一轮结束自动发出（⌘↵）…"
         : !hasConversation
-          ? command ? "可输入 /team 创建团队，或输入 /debate 发起辩论…" : "先运行任务，再继续回复"
-          : command ? "回复并继续；输入 /team 或 /debate 可派生新任务…" : "回复并继续（⌘↵ 发送，可粘贴图片或文件）…";
+          ? command ? "可输入 /team 创建团队，或输入 /duet 发起讨论…" : "先运行任务，再继续回复"
+          : command ? "回复并继续；输入 /team 或 /duet 可派生新任务…" : "回复并继续（⌘↵ 发送，可粘贴图片或文件）…";
 
   const resetComposer = () => {
     setValue("");

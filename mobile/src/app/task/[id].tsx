@@ -25,7 +25,7 @@ import { useTheme, radius, fonts } from "@/lib/theme";
 import { Ionicons } from "@expo/vector-icons";
 import { Conversation } from "@/components/Conversation";
 import { QuestionCard } from "@/components/QuestionCard";
-import { DebateTaskDetail } from "@/components/DebateTaskDetail";
+import { DuetTaskDetail } from "@/components/DuetTaskDetail";
 import { TeamTaskDetail } from "@/components/team/TeamTaskDetail";
 import { WorkerTeamLink } from "@/components/WorkerTeamLink";
 import { MarkdownText } from "@/components/MarkdownText";
@@ -114,7 +114,7 @@ export default function TaskDetail() {
   // pulls the final tail once and then stops (the .md no longer grows). Returning
   // to the foreground forces an immediate catch-up pull.
   useEffect(() => {
-    if (!task || task.mode === "debate") return;
+    if (!task || task.mode === "duet") return;
     const running = task?.status === "running" || task?.status === "queued";
     let timer: ReturnType<typeof setInterval> | null = null;
     const pull = () => loadConv().catch(() => {});
@@ -133,7 +133,7 @@ export default function TaskDetail() {
   // 回前台立即补拉一次；状态一变也立刻补拉——排队消息正是在任务转空闲那一刻被投递出去的，
   // 靠慢轮询会让它在列表里多挂十几秒。
   useEffect(() => {
-    if (!task || task.mode === "debate") return;
+    if (!task || task.mode === "duet") return;
     loadPending();
     const timer = setInterval(loadPending, PENDING_POLL_MS);
     const sub = AppState.addEventListener("change", (s) => {
@@ -338,9 +338,9 @@ export default function TaskDetail() {
     );
   }
 
-  if (task.mode === "debate") {
+  if (task.mode === "duet") {
     return (
-      <DebateTaskDetail
+      <DuetTaskDetail
         task={task}
         onArchive={onArchive}
         onUnarchive={onUnarchive}

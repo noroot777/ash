@@ -28,7 +28,7 @@ import { searchAll } from "./search.js";
 import { projectHealthLight, projectHealthFull, tidyRepoPath, repoKey, listBranches } from "./git.js";
 import { getGitOverview } from "./git-overview.js";
 import { discardTaskWorkspace } from "./workspace-cleanup.js";
-import { mountDebateIterationRoutes } from "./debate/iteration.js";
+import { mountDuetIterationRoutes } from "./duet/iteration.js";
 import { mountNoteRoutes } from "./notes.js";
 import { mountTeamPresetRoutes } from "./team-presets.js";
 import { findWorkflow, mountWorkflowRoutes } from "./workflows.js";
@@ -643,7 +643,7 @@ mountProviderTestRoutes(api);
 // ── queues (顺序依赖原语,DESIGN-scheduling.md §1) ─────────────────────────────
 // 端点实现与 helper 都在 ./queues.ts(routes.ts 已经很长,队列语义集中一处更好改)。
 mountQueueRoutes(api);
-mountDebateIterationRoutes(api);
+mountDuetIterationRoutes(api);
 mountTeamPresetRoutes(api);
 mountWorkflowRoutes(api);
 mountPreviewRoutes(api);

@@ -3,16 +3,16 @@ import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { Hono } from "hono";
 import { eq } from "drizzle-orm";
-import { DEBATE_DEFAULTS } from "@harness/shared";
+import { DUET_DEFAULTS } from "@harness/shared";
 
 if (!process.env.HARNESS_DB?.startsWith("/tmp/")) {
-  throw new Error("test-debate-iteration requires HARNESS_DB under /tmp");
+  throw new Error("test-duet-iteration requires HARNESS_DB under /tmp");
 }
 
 const [{ db, ensureSchema }, schema, iteration, transcript] = await Promise.all([
   import("../src/db/index.js"),
   import("../src/db/schema.js"),
-  import("../src/debate/iteration.js"),
+  import("../src/duet/iteration.js"),
   import("../src/transcript.js"),
 ]);
 const { projects, sessions, tasks } = schema;
@@ -20,12 +20,12 @@ await ensureSchema();
 
 const at = "2026-07-27T12:00:00.000Z";
 const projectId = "iteration-project";
-const debateId = "iteration-debate";
+const duetId = "iteration-debate";
 const teamId = "iteration-team";
 const workerId = "iteration-worker";
 const leadSessionId = "iteration-lead-session";
 const leadTranscript = transcript.sessionTranscriptPath(teamId, leadSessionId);
-const debateTranscript = leadTranscript.replace(`${teamId}/${leadSessionId}.md`, `${debateId}/transcript.jsonl`);
+const duetTranscript = leadTranscript.replace(`${teamId}/${leadSessionId}.md`, `${duetId}/transcript.jsonl`);
 
 const taskRow = (overrides: Record<string, unknown>) => ({
   id: "base-task",
@@ -43,7 +43,7 @@ const taskRow = (overrides: Record<string, unknown>) => ({
   agentType: null,
   executorId: null,
   autoTitle: false,
-  debate: null,
+  duet: null,
   team: null,
   scheduleId: null,
   createdAt: at,
@@ -58,23 +58,30 @@ try {
   await db.insert(projects).values({ id: projectId, name: "iteration", repoPath: "/tmp", apiKeys: null, createdAt: at });
   await db.insert(tasks).values([
     taskRow({
-      id: debateId,
+      id: duetId,
       title: "选择稳定的架构",
       body: "旧辩论正文",
-      mode: "debate",
+      mode: "duet",
       status: "done",
-      debate: JSON.stringify({
-        ...DEBATE_DEFAULTS,
+      // 刻意用改名前的旧字段(debaterA…)与旧事件类型(debate.gate)入库:
+      // 钉住 normalizeDuetConfig 与 transcript 读取端的向后兼容。
+      // 注意是**纯旧形状**(不混新字段) —— 老库里就是这个样子。
+      duet: JSON.stringify({
         topic: "应该采用方案甲还是方案乙？",
+        style: "debate",
         debaterA: "codex",
         debaterB: "claude",
         debaterAExecutorId: "executor-a",
         debaterBExecutorId: "executor-b",
+        debaterAModel: null,
+        debaterAReasoningEffort: null,
+        debaterBModel: null,
+        debaterBReasoningEffort: null,
         maxRounds: 6,
         gateG1: "off",
       }),
     }),
-    taskRow({ id: teamId, title: "落实架构", mode: "team", status: "running", originTaskId: debateId }),
+    taskRow({ id: teamId, title: "落实架构", mode: "team", status: "running", originTaskId: duetId }),
     taskRow({ id: workerId, title: "验证方案", parentId: teamId, status: "running" }),
   ]);
   await db.insert(sessions).values({
@@ -87,53 +94,53 @@ try {
     startedAt: at,
   });
   mkdirSync(dirname(leadTranscript), { recursive: true });
-  mkdirSync(dirname(debateTranscript), { recursive: true });
+  mkdirSync(dirname(duetTranscript), { recursive: true });
   writeFileSync(leadTranscript, "团队完成了实现，并发现数据库升级需要保持幂等。\n");
-  writeFileSync(debateTranscript, [
+  writeFileSync(duetTranscript, [
     JSON.stringify({ round: 2, speaker: "A", raised: true, agrees: true, conclusion: "采用方案甲并补充迁移保护" }),
     JSON.stringify({ round: 2, speaker: "B", raised: true, agrees: true, conclusion: "采用方案甲并补充迁移保护" }),
     JSON.stringify({
       type: "debate.gate",
-      taskId: debateId,
+      taskId: duetId,
       gate: "G1",
       open: true,
       consensus: true,
       conclusionA: "采用方案甲并补充迁移保护",
       conclusionB: "采用方案甲并补充迁移保护",
     }),
-    JSON.stringify({ type: "debate.gate", taskId: debateId, gate: "G1", open: false }),
+    JSON.stringify({ type: "debate.gate", taskId: duetId, gate: "G1", open: false }),
   ].join("\n") + "\n");
 
   const app = new Hono();
-  iteration.mountDebateIterationRoutes(app);
-  let response = await app.request(`/tasks/${teamId}/team/iterate-debate`, { method: "POST" });
+  iteration.mountDuetIterationRoutes(app);
+  let response = await app.request(`/tasks/${teamId}/team/iterate-duet`, { method: "POST" });
   assert.equal(response.status, 409, "active team must not iterate");
 
   await db.update(tasks).set({ status: "idle" }).where(eq(tasks.id, teamId));
   await db.update(tasks).set({ status: "done" }).where(eq(tasks.id, workerId));
-  response = await app.request(`/tasks/${teamId}/team/iterate-debate`, { method: "POST" });
+  response = await app.request(`/tasks/${teamId}/team/iterate-duet`, { method: "POST" });
   assert.equal(response.status, 201);
   const created = await response.json() as {
     id: string;
     body: string;
     originTaskId: string;
-    debate: typeof DEBATE_DEFAULTS;
+    duet: typeof DUET_DEFAULTS;
   };
   assert.equal(created.originTaskId, teamId);
   assert.match(created.body, /共识结论：采用方案甲并补充迁移保护/);
   assert.match(created.body, new RegExp(leadSessionId));
   assert.match(created.body, /执行暴露了什么新问题/);
-  assert.equal(created.debate.debaterAExecutorId, "executor-a");
-  assert.equal(created.debate.debaterBExecutorId, "executor-b");
-  assert.equal(created.debate.maxRounds, 6);
-  assert.equal(created.debate.gateG1, "off");
-  assert.equal(created.debate.topic, "应该采用方案甲还是方案乙？", "stored config must be reused unchanged");
+  assert.equal(created.duet.voiceAExecutorId, "executor-a");
+  assert.equal(created.duet.voiceBExecutorId, "executor-b");
+  assert.equal(created.duet.maxRounds, 6);
+  assert.equal(created.duet.gateG1, "off");
+  assert.equal(created.duet.topic, "应该采用方案甲还是方案乙？", "stored config must be reused unchanged");
 
-  const repeated = await app.request(`/tasks/${teamId}/team/iterate-debate`, { method: "POST" });
+  const repeated = await app.request(`/tasks/${teamId}/team/iterate-duet`, { method: "POST" });
   assert.equal(repeated.status, 200);
   assert.equal(((await repeated.json()) as { id: string }).id, created.id);
-  console.log("debate iteration endpoint: ok");
+  console.log("duet iteration endpoint: ok");
 } finally {
   rmSync(dirname(leadTranscript), { recursive: true, force: true });
-  rmSync(dirname(debateTranscript), { recursive: true, force: true });
+  rmSync(dirname(duetTranscript), { recursive: true, force: true });
 }

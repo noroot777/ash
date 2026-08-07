@@ -6,7 +6,7 @@
 // "./x.js" 说明符映射回 "./x.ts",index 里**转发运行时值**会让进程起不来
 // (见 server/CLAUDE.md「执行器与模型」最后一条)。`import type` / `export type`
 // 编译期就被抹掉,所以安全 —— 下面对 ./index.js 的反向 type import 同理。
-import type { AgentType, DebateConsensusBy, QuestionItem, Task, TaskStage, TaskStatus } from "./index.ts";
+import type { AgentType, DuetConsensusBy, QuestionItem, Task, TaskStage, TaskStatus } from "./index.ts";
 import type { SessionRole } from "./session.ts";
 
 // ── HITL gates (§7) ──────────────────────────────────────────────────────────
@@ -30,7 +30,7 @@ export type AgentEvent =
   | { kind: "turnEnd" }
   | { kind: "done"; exitStatus: number };
 
-export type DebateSpeaker = "A" | "B" | "impl" | "review" | "user"; // impl/review are legacy transcript speakers
+export type DuetSpeaker = "A" | "B" | "impl" | "review" | "user"; // impl/review are legacy transcript speakers
 
 // SSE envelope pushed to the web client.
 export type ServerEvent =
@@ -60,19 +60,19 @@ export type ServerEvent =
       event: AgentEvent;
     }
   | {
-      type: "debate.progress";
+      type: "duet.progress";
       taskId: string;
       round: number;
-      speaker: DebateSpeaker;
+      speaker: DuetSpeaker;
       phase: "start" | "end";
       raisedHand?: boolean;
       at?: string;
       startedAt?: string;
       durationMs?: number;
     }
-  | { type: "debate.gate"; taskId: string; gate: GateName; open: boolean; consensus?: boolean; consensusBy?: DebateConsensusBy; conclusionA?: string | null; conclusionB?: string | null }
-  // A human intervention in a /debate timeline (gate inject/ask). Carries the time
+  | { type: "duet.gate"; taskId: string; gate: GateName; open: boolean; consensus?: boolean; consensusBy?: DuetConsensusBy; conclusionA?: string | null; conclusionB?: string | null }
+  // A human intervention in a /duet timeline (gate inject/ask). Carries the time
   // so the timeline can show when the user spoke. Persisted in the transcript too.
-  // target: when a 提问 was directed at one debater, which side — so the timeline
+  // target: when a 提问 was directed at one voice, which side — so the timeline
   // can show 「你 → 辩手A」 (undefined = addressed to both).
-  | { type: "debate.user"; taskId: string; round: number; text: string; at: string; target?: "A" | "B" };
+  | { type: "duet.user"; taskId: string; round: number; text: string; at: string; target?: "A" | "B" };

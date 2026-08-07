@@ -403,8 +403,8 @@ export const api = {
     request(`/tasks/${id(taskId)}/team/cua-status`),
   killTeamCua: (taskId: string): Promise<unknown> =>
     request(`/tasks/${id(taskId)}/team/kill-cua`, { method: "POST" }),
-  iterateTeamDebate: (taskId: string): Promise<Task> =>
-    request(`/tasks/${id(taskId)}/team/iterate-debate`, { method: "POST" }),
+  iterateTeamDuet: (taskId: string): Promise<Task> =>
+    request(`/tasks/${id(taskId)}/team/iterate-duet`, { method: "POST" }),
 
   taskWorkspace: (taskId: string): Promise<TaskWorkspaceLeftover> =>
     request(`/tasks/${id(taskId)}/workspace`),
@@ -550,8 +550,8 @@ export const api = {
   },
   sessionTrace: (sessionId: string): Promise<SessionTraceEntry[]> =>
     request(`/sessions/${id(sessionId)}/trace`),
-  debateTranscript: (taskId: string): Promise<unknown[]> =>
-    request(`/tasks/${id(taskId)}/debate`),
+  duetTranscript: (taskId: string): Promise<unknown[]> =>
+    request(`/tasks/${id(taskId)}/duet`),
 
   schedule: (taskId: string): Promise<Schedule | null> =>
     request(`/tasks/${id(taskId)}/schedule`),

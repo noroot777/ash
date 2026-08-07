@@ -64,7 +64,7 @@ api.post("/tasks", async (c) => {
     if ("error" in parsed) return c.json({ error: `workflow 不合法:${parsed.error}` }, 400);
     inlineWorkflow = JSON.stringify(parsed.def);
   }
-  const derivationMode = b.mode === "team" || b.mode === "debate";
+  const derivationMode = b.mode === "team" || b.mode === "duet";
   if (derivationMode && b.parentId !== undefined && b.parentId !== null) {
     return c.json(
       { error: "派生执行者或审查任务不能再创建团队/辩论任务", parentId: b.parentId },
@@ -147,8 +147,8 @@ api.post("/tasks", async (c) => {
     model: b.model || null,
     reasoningEffort: b.reasoningEffort || null,
     autoTitle: b.autoTitle ?? false,
-    debate: b.debate ? JSON.stringify(b.debate) : null,
-    // mode:"team" 的调度者/默认执行者类型(跟 debate 对称)。别漏 —— 漏了就静默退回
+    duet: b.duet ? JSON.stringify(b.duet) : null,
+    // mode:"team" 的调度者/默认执行者类型(跟 duet 对称)。别漏 —— 漏了就静默退回
     // TEAM_DEFAULTS,用户在启动器上挑的那两个旋钮全白挑。
     team: teamConfig ? JSON.stringify(teamConfig) : null,
     scheduleId: null,
@@ -206,7 +206,7 @@ api.post("/tasks", async (c) => {
   return c.json(created!, 201);
 });
 
-// Partial update: title/body/status/pinnedAt/priority/labels/groupId/agentType/executorId/model/reasoningEffort/mode/debate.
+// Partial update: title/body/status/pinnedAt/priority/labels/groupId/agentType/executorId/model/reasoningEffort/mode/duet.
 api.patch("/tasks/:id", async (c) => {
   const tid = c.req.param("id");
   const existing = (await db.select().from(tasks).where(eq(tasks.id, tid))).at(0);
@@ -294,7 +294,7 @@ api.patch("/tasks/:id", async (c) => {
   if (b.model !== undefined || executorChanged) patch.model = patchedOverrides.model;
   if (b.reasoningEffort !== undefined || b.model !== undefined || executorChanged) patch.reasoningEffort = normalizedEffort;
   if (b.mode !== undefined) patch.mode = b.mode;
-  if (b.debate !== undefined) patch.debate = b.debate ? JSON.stringify(b.debate) : null;
+  if (b.duet !== undefined) patch.duet = b.duet ? JSON.stringify(b.duet) : null;
   // 注意:dependsOn / resumeDependsOn 不再可编辑(DESIGN-scheduling.md):
   // 改顺序请用 /queues/:id/* 端点;调整队列归属请用 remove + insert/append。
   // resumePrompt：让用户编辑 agent 留下的续跑指令（写得不好就改、不想续跑就传空
@@ -518,7 +518,7 @@ api.post("/groups/:groupId/tasks/batch", async (c) => {
       model: overrides.model,
       reasoningEffort: overrides.reasoningEffort,
       autoTitle: !explicitTitle, // no explicit title → let the first run name it
-      debate: null as string | null,
+      duet: null as string | null,
       scheduleId: null as string | null,
       createdAt: ts,
       updatedAt: ts,

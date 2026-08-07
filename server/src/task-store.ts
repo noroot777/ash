@@ -1,5 +1,6 @@
 import { eq, inArray } from "drizzle-orm";
 import type { AgentType, QuestionItem, Task, TaskStage, TaskStatus } from "@harness/shared";
+import { normalizeDuetConfig } from "@harness/shared";
 import { db } from "./db/index.js";
 import { agents, projects, queueItems, sessions, tasks } from "./db/schema.js";
 import { bus } from "./bus.js";
@@ -68,7 +69,8 @@ const toTask = (r: TaskRow, profiles: AgentLabelRow[] = []): Task => ({
   reasoningEffort: r.reasoningEffort ?? null,
   executorLabel: executorLabelFor(profiles, r.executorId, (r.agentType as AgentType) ?? null),
   autoTitle: r.autoTitle,
-  debate: r.debate ? JSON.parse(r.debate) : undefined,
+  // 读出口归一:老库 JSON 可能还是改名前的 debaterA… 形状,前端永远只见 voiceA…。
+  duet: r.duet ? normalizeDuetConfig(JSON.parse(r.duet)) : undefined,
   team: r.team ? enrichTeamExecutorLabels(JSON.parse(r.team), profiles) : undefined,
   reportBack: r.reportBack,
   scheduleId: r.scheduleId,
@@ -151,7 +153,7 @@ export async function createTasks(
 ): Promise<Task[]> {
   if (rows.length === 0) return [];
   // Creation defaults belong here so every ordinary path (HTTP single, batch /
-  // chain, debate handoff, future clients) gets the same behavior. Explicit
+  // chain, duet handoff, future clients) gets the same behavior. Explicit
   // true/false wins, but a non-repo project can never materialize a worktree.
   const defaultUseWorktree = rows.some((row) => row.useWorktree === undefined)
     ? (await getAppSettings()).worktreeDefault

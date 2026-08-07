@@ -11,12 +11,12 @@ import {
 } from "react-native";
 import { Stack } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
-import { canArchive, normalizeDebateConfig, type Task } from "@harness/shared";
+import { canArchive, normalizeDuetConfig, type Task } from "@harness/shared";
 import {
   api,
-  type DebateTranscriptEntry,
-  type DebateTranscriptGate,
-  type DebateTranscriptTurn,
+  type DuetTranscriptEntry,
+  type DuetTranscriptGate,
+  type DuetTranscriptTurn,
 } from "@/lib/api";
 import { refreshAll } from "@/lib/data";
 import { STATUS_META } from "@/lib/constants";
@@ -26,10 +26,10 @@ import { MarkdownText } from "@/components/MarkdownText";
 import { PriorityBars } from "@/components/ui";
 import { SignalBar } from "@/components/SignalBar";
 
-const DEBATE_COLOR = "#8B5CF6";
+const DUET_COLOR = "#8B5CF6";
 const TRANSCRIPT_POLL_MS = 3000;
 
-export function DebateTaskDetail({
+export function DuetTaskDetail({
   task,
   onArchive,
   onUnarchive,
@@ -41,15 +41,15 @@ export function DebateTaskDetail({
   onDelete: () => void;
 }) {
   const theme = useTheme();
-  const cfg = normalizeDebateConfig(task.debate);
+  const cfg = normalizeDuetConfig(task.duet);
   const meta = STATUS_META[task.status];
-  const [entries, setEntries] = useState<DebateTranscriptEntry[]>([]);
+  const [entries, setEntries] = useState<DuetTranscriptEntry[]>([]);
   const [refreshing, setRefreshing] = useState(false);
   const scrollRef = useRef<ScrollView>(null);
   const stickToBottomRef = useRef(true);
 
   const loadTranscript = useCallback(async () => {
-    setEntries(await api.debateTranscript(task.id));
+    setEntries(await api.duetTranscript(task.id));
   }, [task.id]);
 
   useEffect(() => {
@@ -125,7 +125,7 @@ export function DebateTaskDetail({
         <SignalBar status={task.status} height={58} />
         <View style={{ flex: 1, gap: 9 }}>
           <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
-            <DebateBadge />
+            <DuetBadge />
             <Text style={{ color: meta?.color, fontSize: 11, fontFamily: fonts.monoMed, letterSpacing: 1 }}>
               {task.status.toUpperCase().replace(/_/g, " ")}
             </Text>
@@ -136,7 +136,7 @@ export function DebateTaskDetail({
           </Text>
           <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
             <Text style={{ color: theme.muted, fontSize: 12, fontFamily: fonts.mono }}>
-              A @{cfg.debaterA} ↔ B @{cfg.debaterB}
+              A @{cfg.voiceA} ↔ B @{cfg.voiceB}
             </Text>
             <PriorityBars priority={task.priority} />
             <TaskTimeChip task={task} />
@@ -161,15 +161,15 @@ export function DebateTaskDetail({
             alignItems: "flex-start",
             gap: 8,
             borderRadius: radius.md,
-            backgroundColor: `${DEBATE_COLOR}12`,
+            backgroundColor: `${DUET_COLOR}12`,
             borderWidth: 1,
-            borderColor: `${DEBATE_COLOR}40`,
+            borderColor: `${DUET_COLOR}40`,
             padding: 11,
           }}
         >
-          <Ionicons name="eye-outline" size={16} color={DEBATE_COLOR} />
+          <Ionicons name="eye-outline" size={16} color={DUET_COLOR} />
           <Text style={{ flex: 1, color: theme.muted, fontSize: 12, lineHeight: 18 }}>
-            手机端为只读辩论记录。运行、停止、重试和收敛门裁决请在网页端操作；这里会自动刷新发言与状态。
+            手机端为只读讨论记录。运行、停止、重试和收敛门裁决请在网页端操作；这里会自动刷新发言与状态。
           </Text>
         </View>
 
@@ -184,13 +184,13 @@ export function DebateTaskDetail({
               gap: 7,
             }}
           >
-            <Text style={{ color: theme.faint, fontSize: 11, fontFamily: fonts.monoMed }}>辩论议题</Text>
+            <Text style={{ color: theme.faint, fontSize: 11, fontFamily: fonts.monoMed }}>讨论议题</Text>
             <MarkdownText value={task.body || cfg.topic} style={{ color: theme.muted, fontSize: 14, lineHeight: 20 }} />
           </View>
         ) : null}
 
         <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
-          <Text style={{ color: theme.ink, fontSize: 13, fontFamily: fonts.bodySemi }}>辩论记录</Text>
+          <Text style={{ color: theme.ink, fontSize: 13, fontFamily: fonts.bodySemi }}>讨论记录</Text>
           <Text style={{ color: theme.faint, fontSize: 11, fontFamily: fonts.mono }}>
             {cfg.maxRounds == null ? "轮数不设限" : `最多 ${cfg.maxRounds} 轮`} · 收敛门{cfg.gateG1 === "on" ? "开启" : "关闭"}
           </Text>
@@ -207,8 +207,8 @@ export function DebateTaskDetail({
         {entries.length === 0 ? (
           <Text style={{ color: theme.faint, fontSize: 13, textAlign: "center", paddingVertical: 24 }}>
             {task.status === "running" || task.status === "queued"
-              ? "辩论正在开始，首轮记录写入后会显示在这里…"
-              : "还没有持久化的辩论记录"}
+              ? "讨论正在开始，首轮记录写入后会显示在这里…"
+              : "还没有持久化的讨论记录"}
           </Text>
         ) : null}
 
@@ -225,7 +225,7 @@ export function DebateTaskDetail({
           >
             <Text style={{ color: theme.ok, fontSize: 12, fontFamily: fonts.bodySemi }}>讨论结论</Text>
             {conclusions.a ? <ConclusionLine label="A" value={conclusions.a} color={theme.accent} theme={theme} /> : null}
-            {conclusions.b ? <ConclusionLine label="B" value={conclusions.b} color={DEBATE_COLOR} theme={theme} /> : null}
+            {conclusions.b ? <ConclusionLine label="B" value={conclusions.b} color={DUET_COLOR} theme={theme} /> : null}
           </View>
         ) : null}
       </ScrollView>
@@ -233,7 +233,7 @@ export function DebateTaskDetail({
   );
 }
 
-function DebateBadge() {
+function DuetBadge() {
   return (
     <View
       style={{
@@ -243,11 +243,11 @@ function DebateBadge() {
         paddingHorizontal: 7,
         paddingVertical: 3,
         borderRadius: radius.pill,
-        backgroundColor: `${DEBATE_COLOR}20`,
+        backgroundColor: `${DUET_COLOR}20`,
       }}
     >
-      <Ionicons name="chatbubbles-outline" size={12} color={DEBATE_COLOR} />
-      <Text style={{ color: DEBATE_COLOR, fontSize: 10, fontFamily: fonts.monoMed }}>辩论</Text>
+      <Ionicons name="chatbubbles-outline" size={12} color={DUET_COLOR} />
+      <Text style={{ color: DUET_COLOR, fontSize: 10, fontFamily: fonts.monoMed }}>讨论</Text>
     </View>
   );
 }
@@ -257,12 +257,12 @@ function TurnEntry({
   cfg,
   theme,
 }: {
-  entry: DebateTranscriptTurn;
-  cfg: ReturnType<typeof normalizeDebateConfig>;
+  entry: DuetTranscriptTurn;
+  cfg: ReturnType<typeof normalizeDuetConfig>;
   theme: Theme;
 }) {
   if (entry.speaker === "user") {
-    const target = entry.target ? ` → 辩手${entry.target}` : " → 双方";
+    const target = entry.target ? ` → 讨论者${entry.target}` : " → 双方";
     return (
       <View style={{ alignSelf: "flex-end", width: "90%", gap: 4 }}>
         <Text style={{ color: theme.faint, fontSize: 11, textAlign: "right", fontFamily: fonts.mono }}>
@@ -286,9 +286,9 @@ function TurnEntry({
   }
 
   const side = entry.speaker === "B" ? "B" : entry.speaker === "A" ? "A" : entry.speaker;
-  const color = side === "B" ? DEBATE_COLOR : theme.accent;
-  const agent = side === "A" ? cfg.debaterA : side === "B" ? cfg.debaterB : undefined;
-  const label = side === "impl" ? "执行者（历史）" : side === "review" ? "审阅者（历史）" : `辩手 ${side}`;
+  const color = side === "B" ? DUET_COLOR : theme.accent;
+  const agent = side === "A" ? cfg.voiceA : side === "B" ? cfg.voiceB : undefined;
+  const label = side === "impl" ? "执行者（历史）" : side === "review" ? "审阅者（历史）" : `讨论者 ${side}`;
   return (
     <View
       style={{
@@ -331,14 +331,14 @@ function TurnEntry({
   );
 }
 
-function GateEntry({ entry, theme }: { entry: DebateTranscriptGate; theme: Theme }) {
+function GateEntry({ entry, theme }: { entry: DuetTranscriptGate; theme: Theme }) {
   const verdict = entry.consensus === true ? " · 已达成共识" : entry.consensus === false ? " · 分歧待裁决" : "";
   return (
     <View style={{ gap: 8 }}>
       <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
         <View style={{ flex: 1, minWidth: 12, height: 1, backgroundColor: theme.line }} />
         <View style={{ flexShrink: 1, flexDirection: "row", flexWrap: "wrap", justifyContent: "center", alignItems: "center", gap: 5 }}>
-          <Ionicons name={entry.open ? "pause-circle-outline" : "checkmark-circle-outline"} size={13} color={DEBATE_COLOR} />
+          <Ionicons name={entry.open ? "pause-circle-outline" : "checkmark-circle-outline"} size={13} color={DUET_COLOR} />
           <Text style={{ flexShrink: 1, color: theme.faint, fontSize: 11, textAlign: "center" }}>
             {entry.open ? `收敛门等待裁决${verdict}` : "收敛门已关闭"}
           </Text>
@@ -348,7 +348,7 @@ function GateEntry({ entry, theme }: { entry: DebateTranscriptGate; theme: Theme
       {entry.open && (entry.conclusionA || entry.conclusionB) ? (
         <View style={{ backgroundColor: theme.raised, borderRadius: radius.md, padding: 10, gap: 6 }}>
           {entry.conclusionA ? <ConclusionLine label="A" value={entry.conclusionA} color={theme.accent} theme={theme} /> : null}
-          {entry.conclusionB ? <ConclusionLine label="B" value={entry.conclusionB} color={DEBATE_COLOR} theme={theme} /> : null}
+          {entry.conclusionB ? <ConclusionLine label="B" value={entry.conclusionB} color={DUET_COLOR} theme={theme} /> : null}
         </View>
       ) : null}
     </View>
@@ -364,10 +364,10 @@ function ConclusionLine({ label, value, color, theme }: { label: string; value: 
   );
 }
 
-function isGate(entry: DebateTranscriptEntry): entry is DebateTranscriptGate {
-  return entry.type === "debate.gate";
+function isGate(entry: DuetTranscriptEntry): entry is DuetTranscriptGate {
+  return entry.type === "duet.gate";
 }
 
-function isTurn(entry: DebateTranscriptEntry): entry is DebateTranscriptTurn {
+function isTurn(entry: DuetTranscriptEntry): entry is DuetTranscriptTurn {
   return !isGate(entry);
 }

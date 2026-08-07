@@ -121,18 +121,18 @@ export function runActivityCopy({
       detail: "调度者正在读取需求；开始拆活后，派活记录和执行者状态会出现在这里。",
     };
   }
-  if (mode === "debate") {
+  if (mode === "duet") {
     if (phase === "replying") return {
       title: "双方已收到你的补充",
-      detail: "辩手正在结合新信息准备下一次发言，内容会实时显示在这里。",
+      detail: "讨论者正在结合新信息准备下一次发言，内容会实时显示在这里。",
     };
     if (phase === "continuing") return {
       title: "正在准备下一次发言",
-      detail: "本轮仍在继续；下一位辩手开口后，内容会实时显示在这里。",
+      detail: "本轮仍在继续；下一位讨论者开口后，内容会实时显示在这里。",
     };
     return {
-      title: "正在启动首轮辩论",
-      detail: "双方辩手正在就绪；第一位辩手开始发言后，内容会实时显示在这里。",
+      title: "正在启动首轮讨论",
+      detail: "双方讨论者正在就绪；第一位讨论者开始发言后，内容会实时显示在这里。",
     };
   }
   if (phase === "replying") return {

@@ -101,7 +101,7 @@ export function ComposerFields({
     <div className="composer-config">
       {/* 单任务没有「执行模式」这一节：谁来干活写在起手式的「让 AI 干活」那一站上，
           两处各摆一个执行器选择迟早对不上（用户在这儿改了，起手式上还写着另一个）。
-          团队/辩论仍要这一节 —— 它们的角色分工（调度者/执行者/审查者、正反方）不在
+          团队/讨论仍要这一节 —— 它们的角色分工（调度者/执行者/审查者、正反方）不在
           起手式里。 */}
       {mode !== "single" && (
       <section className="composer-config-section is-execution">
@@ -120,10 +120,10 @@ export function ComposerFields({
               <ExecutorPickerField label="审查者执行器" value={executors.reviewer.profile} types={workerTypes} profiles={profiles} knownProfiles={profiles} fallbackType={executorTypes.worker} override={executors.reviewer} onChange={(value) => onExecutorChange("reviewer", value)} onOverrideChange={(patch) => onOverrideChange("reviewer", patch)} />
             </>
           )}
-          {mode === "debate" && (
+          {mode === "duet" && (
             <>
-              <ExecutorPickerField label="正方执行器" value={executors.debaterA.profile} types={workerTypes} profiles={profiles} knownProfiles={profiles} fallbackType="claude" override={executors.debaterA} onChange={(value) => onExecutorChange("debaterA", value)} onOverrideChange={(patch) => onOverrideChange("debaterA", patch)} />
-              <ExecutorPickerField label="反方执行器" value={executors.debaterB.profile} types={workerTypes} profiles={profiles} knownProfiles={profiles} fallbackType="codex" override={executors.debaterB} onChange={(value) => onExecutorChange("debaterB", value)} onOverrideChange={(patch) => onOverrideChange("debaterB", patch)} />
+              <ExecutorPickerField label="正方执行器" value={executors.voiceA.profile} types={workerTypes} profiles={profiles} knownProfiles={profiles} fallbackType="claude" override={executors.voiceA} onChange={(value) => onExecutorChange("voiceA", value)} onOverrideChange={(patch) => onOverrideChange("voiceA", patch)} />
+              <ExecutorPickerField label="反方执行器" value={executors.voiceB.profile} types={workerTypes} profiles={profiles} knownProfiles={profiles} fallbackType="codex" override={executors.voiceB} onChange={(value) => onExecutorChange("voiceB", value)} onOverrideChange={(patch) => onOverrideChange("voiceB", patch)} />
             </>
           )}
         </div>
@@ -152,7 +152,7 @@ export function ComposerFields({
               <Toggle checked={review} onChange={onReviewChange} label={review ? "已开启" : "已关闭"} />
             </label>
           )}
-          {mode === "debate" && (
+          {mode === "duet" && (
             <>
               <div className="composer-field">
                 <span>最多轮数</span>
@@ -174,7 +174,7 @@ export function ComposerFields({
               </label>
             </>
           )}
-          {mode !== "debate" && isRepo && (
+          {mode !== "duet" && isRepo && (
             <>
               <label className="composer-toggle-field">
                 <span>worktree</span>
@@ -198,7 +198,7 @@ export function ComposerFields({
               </div>
             </>
           )}
-          {mode !== "debate" && (
+          {mode !== "duet" && (
             <div className="composer-field">
               <span>分组</span>
               <Dropdown

@@ -12,7 +12,7 @@ import {
   NotePencil,
   Play,
   Plus,
-  Scales,
+  ChatsCircle,
   Stack,
   Stop,
   Trash,
@@ -57,7 +57,7 @@ type CommandPaletteProps = {
   onTask: (task: Task) => void;
   onTaskUpdated: (task: Task) => void;
   onNote: (projectId: string, noteId: string | null) => void;
-  onComposer: (mode?: "single" | "team" | "debate") => void;
+  onComposer: (mode?: "single" | "team" | "duet") => void;
   onNewGroup: () => void;
   onNewProject: () => void;
   onDeleteTask: (task: Task) => void;
@@ -252,7 +252,7 @@ export function CommandPalette({
     }
     result.push(
       { key: "new:task", group: "新建", label: "新建任务", keys: "C", icon: <Plus size={15} />, run: closeRun(() => onComposer("single")) },
-      { key: "new:debate", group: "新建", label: "新建辩论 · 给你答案", icon: <Scales size={15} />, run: closeRun(() => onComposer("debate")) },
+      { key: "new:duet", group: "新建", label: "新建讨论 · 给你答案", icon: <ChatsCircle size={15} />, run: closeRun(() => onComposer("duet")) },
       { key: "new:note", group: "新建", label: "新建随手记", keys: "NI", icon: <NotePencil size={15} />, run: closeRun(() => { if (currentProject) onNote(currentProject.id, "__new__"); }) },
       { key: "new:group", group: "新建", label: "新建分组", icon: <Stack size={15} />, run: closeRun(onNewGroup) },
       { key: "new:project", group: "新建", label: "新建项目", icon: <FolderPlus size={15} />, run: closeRun(onNewProject) },

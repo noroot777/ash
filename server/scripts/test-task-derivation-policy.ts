@@ -36,7 +36,7 @@ const taskRow = (overrides: Record<string, unknown>) => ({
   agentType: "claude",
   executorId: null,
   autoTitle: false,
-  debate: null,
+  duet: null,
   team: null,
   scheduleId: null,
   createdAt: at,
@@ -74,17 +74,17 @@ try {
   assert.equal(response.status, 409, "worker must not derive a team task");
   assert.match((await response.json() as { error: string }).error, /不能再创建团队\/辩论任务/);
 
-  response = await createDerived({ mode: "debate", originTaskId: "reviewer" });
-  assert.equal(response.status, 409, "reviewer without parentId must not derive a debate task");
+  response = await createDerived({ mode: "duet", originTaskId: "reviewer" });
+  assert.equal(response.status, 409, "reviewer without parentId must not derive a duet task");
 
   response = await createDerived({ mode: "team", parentId: "worker" });
   assert.equal(response.status, 409, "direct nested team creation must also be rejected");
 
-  response = await createDerived({ mode: "debate", originTaskId: "base-task", useWorktree: false });
-  assert.equal(response.status, 201, "ordinary top-level tasks may still derive debates");
+  response = await createDerived({ mode: "duet", originTaskId: "base-task", useWorktree: false });
+  assert.equal(response.status, 201, "ordinary top-level tasks may still derive duets");
 
-  response = await createDerived({ mode: "debate", originTaskId: "lead", useWorktree: false });
-  assert.equal(response.status, 201, "top-level debate/team iteration chains must stay supported");
+  response = await createDerived({ mode: "duet", originTaskId: "lead", useWorktree: false });
+  assert.equal(response.status, 201, "top-level duet/team iteration chains must stay supported");
 
   console.log("task derivation policy tests passed");
 } finally {

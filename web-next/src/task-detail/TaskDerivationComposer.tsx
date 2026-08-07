@@ -1,13 +1,13 @@
 import { useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
-import type { AgentExecutorProfile, AgentType, DebateConfig, Task, TeamConfig } from "@harness/shared";
+import type { AgentExecutorProfile, AgentType, DuetConfig, Task, TeamConfig } from "@harness/shared";
 import {
-  DEBATE_DEFAULTS,
+  DUET_DEFAULTS,
   DEFAULT_APP_SETTINGS,
   TEAM_DEFAULTS,
 } from "@harness/shared";
 import {
   GitBranch,
-  Scales,
+  ChatsCircle,
   SpinnerGap,
   TreeStructure,
   UsersThree,
@@ -32,7 +32,7 @@ import { useSkills } from "../lib/useSkills.ts";
 import { useSlashCompletion } from "../lib/useSlashCompletion.ts";
 import {
   buildTaskDerivationBody,
-  defaultDebateTopic,
+  defaultDuetTopic,
   derivedWorktreeDefaults,
   type TaskDerivationCommand,
 } from "./taskDerivation.ts";
@@ -120,13 +120,13 @@ export function TaskDerivationComposer({
   const [lead, setLead] = useState<ExecutorChoice>(emptyChoice);
   const [worker, setWorker] = useState<ExecutorChoice>(emptyChoice);
   const [reviewer, setReviewer] = useState<ExecutorChoice>(emptyChoice);
-  const [debaterA, setDebaterA] = useState<ExecutorChoice>(emptyChoice);
-  const [debaterB, setDebaterB] = useState<ExecutorChoice>(emptyChoice);
+  const [voiceA, setVoiceA] = useState<ExecutorChoice>(emptyChoice);
+  const [voiceB, setVoiceB] = useState<ExecutorChoice>(emptyChoice);
   const [reviewEnabled, setReviewEnabled] = useState(true);
-  const [rounds, setRounds] = useState(DEBATE_DEFAULTS.maxRounds === null ? "" : String(DEBATE_DEFAULTS.maxRounds));
-  const [gate, setGate] = useState(DEBATE_DEFAULTS.gateG1 === "on");
+  const [rounds, setRounds] = useState(DUET_DEFAULTS.maxRounds === null ? "" : String(DUET_DEFAULTS.maxRounds));
+  const [gate, setGate] = useState(DUET_DEFAULTS.gateG1 === "on");
   const [note, setNote] = useState(command.note);
-  const [topic, setTopic] = useState(() => defaultDebateTopic(task, command.note));
+  const [topic, setTopic] = useState(() => defaultDuetTopic(task, command.note));
   const [worktreeContext, setWorktreeContext] = useState<WorktreeContext | null>(null);
   const noteTouched = useRef(false);
   const topicTouched = useRef(false);
@@ -162,18 +162,18 @@ export function TaskDerivationComposer({
         { agentType: TEAM_DEFAULTS.lead, executorId: null },
       ).agentType;
       const workerProfile = preferredSelection(availableTypes, profiles, "codex", leadType);
-      const debateAProfile = preferredSelection(availableTypes, profiles, DEBATE_DEFAULTS.debaterA);
-      const debateAType = parseExecutorValue(
-        debateAProfile,
+      const duetAProfile = preferredSelection(availableTypes, profiles, DUET_DEFAULTS.voiceA);
+      const duetAType = parseExecutorValue(
+        duetAProfile,
         profiles,
-        { agentType: DEBATE_DEFAULTS.debaterA, executorId: null },
+        { agentType: DUET_DEFAULTS.voiceA, executorId: null },
       ).agentType;
       setLead({ profile: leadProfile, model: "", effort: "" });
       setWorker({ profile: workerProfile, model: "", effort: "" });
       setReviewer({ profile: workerProfile, model: "", effort: "" });
-      setDebaterA({ profile: debateAProfile, model: "", effort: "" });
-      setDebaterB({
-        profile: preferredSelection(availableTypes, profiles, DEBATE_DEFAULTS.debaterB, debateAType),
+      setVoiceA({ profile: duetAProfile, model: "", effort: "" });
+      setVoiceB({
+        profile: preferredSelection(availableTypes, profiles, DUET_DEFAULTS.voiceB, duetAType),
         model: "",
         effort: "",
       });
@@ -197,8 +197,8 @@ export function TaskDerivationComposer({
     setLead((current) => reconcileChoice(current, leadTypes, leadProfiles, TEAM_DEFAULTS.lead));
     setWorker((current) => reconcileChoice(current, availableTypes, profiles, TEAM_DEFAULTS.worker));
     setReviewer((current) => reconcileChoice(current, availableTypes, profiles, TEAM_DEFAULTS.worker));
-    setDebaterA((current) => reconcileChoice(current, availableTypes, profiles, DEBATE_DEFAULTS.debaterA));
-    setDebaterB((current) => reconcileChoice(current, availableTypes, profiles, DEBATE_DEFAULTS.debaterB));
+    setVoiceA((current) => reconcileChoice(current, availableTypes, profiles, DUET_DEFAULTS.voiceA));
+    setVoiceB((current) => reconcileChoice(current, availableTypes, profiles, DUET_DEFAULTS.voiceB));
   }, [
     availableTypes,
     detection.status,
@@ -232,7 +232,7 @@ export function TaskDerivationComposer({
   useEffect(() => {
     if (!live) return;
     if (teamMode && !noteTouched.current) setNote(command.note);
-    if (!teamMode && !topicTouched.current) setTopic(defaultDebateTopic(task, command.note));
+    if (!teamMode && !topicTouched.current) setTopic(defaultDuetTopic(task, command.note));
   }, [command.note, live, task, teamMode]);
 
   useEffect(() => {
@@ -284,17 +284,17 @@ export function TaskDerivationComposer({
           ? "审查者"
           : null
     : !isExecutorPickable(
-      parseExecutorValue(debaterA.profile, profiles, { agentType: DEBATE_DEFAULTS.debaterA, executorId: null }),
+      parseExecutorValue(voiceA.profile, profiles, { agentType: DUET_DEFAULTS.voiceA, executorId: null }),
       availableTypes,
       profiles,
     )
-      ? "辩手 A"
+      ? "讨论者 A"
       : !isExecutorPickable(
-        parseExecutorValue(debaterB.profile, profiles, { agentType: DEBATE_DEFAULTS.debaterB, executorId: null }),
+        parseExecutorValue(voiceB.profile, profiles, { agentType: DUET_DEFAULTS.voiceB, executorId: null }),
         availableTypes,
         profiles,
       )
-        ? "辩手 B"
+        ? "讨论者 B"
         : null;
   const roleBlocked = !!unavailableRole;
   const canSubmit = !busy && executorsReady && !!worktreeContext && !noExecutor && !roleBlocked
@@ -359,27 +359,27 @@ export function TaskDerivationComposer({
           worktreeBase: worktree.worktreeBase,
         });
       } else {
-        const debaterASelection = parseExecutorValue(
-          debaterA.profile,
+        const voiceASelection = parseExecutorValue(
+          voiceA.profile,
           profiles,
-          { agentType: DEBATE_DEFAULTS.debaterA, executorId: null },
+          { agentType: DUET_DEFAULTS.voiceA, executorId: null },
         );
-        const debaterBSelection = parseExecutorValue(
-          debaterB.profile,
+        const voiceBSelection = parseExecutorValue(
+          voiceB.profile,
           profiles,
-          { agentType: DEBATE_DEFAULTS.debaterB, executorId: null },
+          { agentType: DUET_DEFAULTS.voiceB, executorId: null },
         );
-        const debate: DebateConfig = {
-          ...DEBATE_DEFAULTS,
+        const duet: DuetConfig = {
+          ...DUET_DEFAULTS,
           topic: topic.trim(),
-          debaterA: debaterASelection.agentType,
-          debaterB: debaterBSelection.agentType,
-          debaterAExecutorId: debaterASelection.executorId,
-          debaterBExecutorId: debaterBSelection.executorId,
-          debaterAModel: debaterA.model || null,
-          debaterAReasoningEffort: debaterA.effort || null,
-          debaterBModel: debaterB.model || null,
-          debaterBReasoningEffort: debaterB.effort || null,
+          voiceA: voiceASelection.agentType,
+          voiceB: voiceBSelection.agentType,
+          voiceAExecutorId: voiceASelection.executorId,
+          voiceBExecutorId: voiceBSelection.executorId,
+          voiceAModel: voiceA.model || null,
+          voiceAReasoningEffort: voiceA.effort || null,
+          voiceBModel: voiceB.model || null,
+          voiceBReasoningEffort: voiceB.effort || null,
           maxRounds: rounds === "" ? null : Math.max(1, Number(rounds) || 3),
           gateG1: gate ? "on" : "off",
         };
@@ -387,9 +387,9 @@ export function TaskDerivationComposer({
           projectId: task.projectId,
           title: `任务讨论：${task.title}`.slice(0, 60),
           body,
-          mode: "debate",
+          mode: "duet",
           originTaskId: task.id,
-          debate,
+          duet,
           autoTitle: false,
           worktreeBase: worktree.worktreeBase,
         });
@@ -404,7 +404,7 @@ export function TaskDerivationComposer({
     onCreated(created);
     try {
       await api.runTask(created.id);
-      notify(teamMode ? "已创建团队任务并开干" : "已创建辩论任务并开跑");
+      notify(teamMode ? "已创建团队任务并开干" : "已创建讨论任务并开跑");
     } catch (error) {
       notify(`任务已创建，但启动失败：${error instanceof Error ? error.message : "未知错误"}`);
     }
@@ -413,7 +413,7 @@ export function TaskDerivationComposer({
   return (
     <section
       className={`task-derivation-card is-${command.kind}`}
-      aria-label={teamMode ? "创建派生团队任务" : "创建派生辩论任务"}
+      aria-label={teamMode ? "创建派生团队任务" : "创建派生讨论任务"}
       onKeyDown={(event) => {
         if (event.key === "Escape" && !busy) {
           event.preventDefault();
@@ -426,9 +426,9 @@ export function TaskDerivationComposer({
       }}
     >
       <header className="task-derivation-header">
-        <span>{teamMode ? <UsersThree size={16} weight="fill" /> : <Scales size={16} weight="fill" />}</span>
+        <span>{teamMode ? <UsersThree size={16} weight="fill" /> : <ChatsCircle size={16} weight="fill" />}</span>
         <div>
-          <b>{teamMode ? "以当前任务为背景创建团队" : "以当前任务为背景发起辩论"}</b>
+          <b>{teamMode ? "以当前任务为背景创建团队" : "以当前任务为背景发起讨论"}</b>
           <small>命令不会发给当前 agent；新任务不会改变来源任务状态。</small>
         </div>
         <Button variant="icon" onClick={onClose} disabled={busy} aria-label="取消派生"><X size={14} /></Button>
@@ -491,9 +491,9 @@ export function TaskDerivationComposer({
                 placeholder="让两个 AI 围绕什么展开对抗…"
               />
             </label>
-            <div className="task-derivation-debate-grid">
-              <ExecutorField label="辩手 A" choice={debaterA} types={availableTypes} profiles={profiles} knownProfiles={profiles} fallbackType={DEBATE_DEFAULTS.debaterA} onChange={setDebaterA} />
-              <ExecutorField label="辩手 B" choice={debaterB} types={availableTypes} profiles={profiles} knownProfiles={profiles} fallbackType={DEBATE_DEFAULTS.debaterB} onChange={setDebaterB} />
+            <div className="task-derivation-duet-grid">
+              <ExecutorField label="讨论者 A" choice={voiceA} types={availableTypes} profiles={profiles} knownProfiles={profiles} fallbackType={DUET_DEFAULTS.voiceA} onChange={setVoiceA} />
+              <ExecutorField label="讨论者 B" choice={voiceB} types={availableTypes} profiles={profiles} knownProfiles={profiles} fallbackType={DUET_DEFAULTS.voiceB} onChange={setVoiceB} />
               <div className="composer-field">
                 <span>最多轮数</span>
                 <Dropdown

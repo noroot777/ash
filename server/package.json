@@ -28,6 +28,7 @@
     "test:executor-overrides": "tsx scripts/test-executor-overrides.ts",
     "test:cli-catalog": "tsx scripts/test-cli-catalog.ts",
     "test:task-derivation": "tsx scripts/test-task-derivation-policy.ts",
+    "test:duet-iteration": "tsx scripts/test-duet-iteration.ts",
     "test:task-event-timestamps": "tsx scripts/test-task-event-timestamps.ts",
     "test:notes": "tsx scripts/test-note-task-history.ts",
     "test:scheduled-messages": "tsx scripts/test-scheduled-messages.ts",

@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import type { Hono } from "hono";
 import { and, desc, eq } from "drizzle-orm";
 import type { Task } from "@harness/shared";
-import { normalizeDebateConfig } from "@harness/shared";
+import { normalizeDuetConfig } from "@harness/shared";
 import { isTeamSettled } from "@harness/shared/team";
 import { db } from "../db/index.js";
 import { sessions, tasks } from "../db/schema.js";
@@ -12,9 +12,9 @@ import { createTasks, enrichTasks } from "../task-store.js";
 import { sessionTranscriptPath } from "../transcript.js";
 import { id, now } from "../util.js";
 import { join } from "node:path";
-import { debateConsensusBy } from "./settlement.js";
+import { duetConsensusBy } from "./settlement.js";
 
-type DebateEntry = {
+type DuetEntry = {
   type?: string;
   speaker?: string;
   raised?: boolean;
@@ -30,7 +30,7 @@ function nonEmpty(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
-async function debateEntries(taskId: string): Promise<DebateEntry[]> {
+async function duetEntries(taskId: string): Promise<DuetEntry[]> {
   try {
     const raw = await readFile(join(RUNS_DIR, taskId, "transcript.jsonl"), "utf8");
     return raw
@@ -39,7 +39,7 @@ async function debateEntries(taskId: string): Promise<DebateEntry[]> {
       .flatMap((line) => {
         try {
           const parsed = JSON.parse(line);
-          return parsed && typeof parsed === "object" ? [parsed as DebateEntry] : [];
+          return parsed && typeof parsed === "object" ? [parsed as DuetEntry] : [];
         } catch {
           return [];
         }
@@ -49,9 +49,9 @@ async function debateEntries(taskId: string): Promise<DebateEntry[]> {
   }
 }
 
-function consensusBy(lastA?: DebateEntry, lastB?: DebateEntry): DebateEntry["consensusBy"] {
+function consensusBy(lastA?: DuetEntry, lastB?: DuetEntry): DuetEntry["consensusBy"] {
   if (!lastA && !lastB) return undefined;
-  return debateConsensusBy({
+  return duetConsensusBy({
     raisedA: !!lastA?.raised,
     raisedB: !!lastB?.raised,
     agreesA: !!lastA?.agrees,
@@ -59,9 +59,9 @@ function consensusBy(lastA?: DebateEntry, lastB?: DebateEntry): DebateEntry["con
   });
 }
 
-function conclusionLines(entries: DebateEntry[]): string[] {
+function conclusionLines(entries: DuetEntry[]): string[] {
   const verdict = [...entries].reverse().find((entry) =>
-    entry.type === "debate.gate"
+    (entry.type === "duet.gate" || entry.type === "debate.gate")
       && (entry.consensus !== undefined || entry.conclusionA != null || entry.conclusionB != null));
   const lastA = [...entries].reverse().find((entry) => entry.speaker === "A");
   const lastB = [...entries].reverse().find((entry) => entry.speaker === "B");
@@ -82,18 +82,18 @@ function conclusionLines(entries: DebateEntry[]): string[] {
 }
 
 export function buildIterationBody(args: {
-  originalDebate: Task;
+  originalDuet: Task;
   team: Task;
   transcriptPath: string;
   conclusions: string[];
 }): string {
-  const cfg = normalizeDebateConfig(args.originalDebate.debate);
-  const originalTopic = cfg.topic.trim() || args.originalDebate.body.trim() || args.originalDebate.title;
+  const cfg = normalizeDuetConfig(args.originalDuet.duet);
+  const originalTopic = cfg.topic.trim() || args.originalDuet.body.trim() || args.originalDuet.title;
   return [
     "这是一次执行后的复盘辩论。两位辩手必须先阅读团队执行记录，再评估方案，不要只复述上一轮观点。",
     "",
     "## 原辩题",
-    `原辩论标题：${args.originalDebate.title}`,
+    `原辩论标题：${args.originalDuet.title}`,
     originalTopic,
     "",
     "## 上轮共识结论",
@@ -109,12 +109,12 @@ export function buildIterationBody(args: {
     "结论必须给出具体、可执行、可验证的下一步；如果现有证据不足，要明确还需验证什么。",
     "",
     `来源团队任务 ID：${args.team.id}`,
-    `上轮辩论任务 ID：${args.originalDebate.id}`,
+    `上轮辩论任务 ID：${args.originalDuet.id}`,
   ].join("\n");
 }
 
-export function mountDebateIterationRoutes(api: Hono): void {
-  api.post("/tasks/:id/team/iterate-debate", async (c) => {
+export function mountDuetIterationRoutes(api: Hono): void {
+  api.post("/tasks/:id/team/iterate-duet", async (c) => {
     const teamId = c.req.param("id");
     const teamRow = (await db.select().from(tasks).where(eq(tasks.id, teamId))).at(0);
     if (!teamRow) return c.json({ error: "团队任务不存在" }, 404);
@@ -122,7 +122,7 @@ export function mountDebateIterationRoutes(api: Hono): void {
     if (!teamRow.originTaskId) return c.json({ error: "该团队没有来源辩论，不能沿用上一轮配置" }, 409);
 
     const originalRow = (await db.select().from(tasks).where(eq(tasks.id, teamRow.originTaskId))).at(0);
-    if (!originalRow || originalRow.mode !== "debate" || !originalRow.debate) {
+    if (!originalRow || originalRow.mode !== "duet" || !originalRow.duet) {
       return c.json({ error: "来源任务不是有效辩论，不能发起再辩一轮" }, 409);
     }
     if (originalRow.projectId !== teamRow.projectId) {
@@ -136,11 +136,11 @@ export function mountDebateIterationRoutes(api: Hono): void {
     }
 
     // Idempotent under double-click/network retry: one settled team has exactly
-    // one next debate in the iteration chain.
+    // one next duet in the iteration chain.
     const existingRow = (await db
       .select()
       .from(tasks)
-      .where(and(eq(tasks.originTaskId, teamId), eq(tasks.mode, "debate"))))
+      .where(and(eq(tasks.originTaskId, teamId), eq(tasks.mode, "duet"))))
       .at(0);
     if (existingRow) return c.json((await enrichTasks([existingRow]))[0]);
 
@@ -156,23 +156,23 @@ export function mountDebateIterationRoutes(api: Hono): void {
       return c.json({ error: "调度台执行记录尚未落盘，请稍后重试" }, 409);
     }
 
-    const [originalDebate, team] = await enrichTasks([originalRow, teamRow]);
+    const [originalDuet, team] = await enrichTasks([originalRow, teamRow]);
     const body = buildIterationBody({
-      originalDebate: originalDebate!,
+      originalDuet: originalDuet!,
       team: team!,
       transcriptPath,
-      conclusions: conclusionLines(await debateEntries(originalRow.id)),
+      conclusions: conclusionLines(await duetEntries(originalRow.id)),
     });
     const ts = now();
-    const debateId = id();
+    const duetId = id();
     const [created] = await createTasks([{
-      id: debateId,
+      id: duetId,
       projectId: teamRow.projectId,
       groupId: null,
       parentId: null,
       title: `${originalRow.title} · 再辩一轮`.slice(0, 30),
       body,
-      mode: "debate",
+      mode: "duet",
       status: "backlog",
       priority: originalRow.priority,
       labels: originalRow.labels,
@@ -183,10 +183,10 @@ export function mountDebateIterationRoutes(api: Hono): void {
       model: originalRow.model,
       reasoningEffort: originalRow.reasoningEffort,
       autoTitle: true,
-      // Keep the original debate knobs byte-for-byte (debater profiles, round
-      // cap, gate policy, and original topic). runDebate uses this task's body
-      // as the effective topic, so the iteration brief reaches both debaters.
-      debate: originalRow.debate,
+      // Keep the original duet knobs byte-for-byte (voice profiles, round
+      // cap, gate policy, and original topic). runDuet uses this task's body
+      // as the effective topic, so the iteration brief reaches both voices.
+      duet: originalRow.duet,
       team: null,
       scheduleId: null,
       createdAt: ts,

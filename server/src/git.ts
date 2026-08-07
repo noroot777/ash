@@ -46,7 +46,7 @@ export function repoKey(p: string | null | undefined): string {
 }
 
 // Guarantee an existing working directory for a run. Prefer the project's
-// repoPath; if it is empty/missing — e.g. a pure-discussion debate, or a project
+// repoPath; if it is empty/missing — e.g. a pure-discussion duet, or a project
 // whose path was never created — fall back to a per-task scratch dir. This keeps
 // read-only phases (discussion, repo-less tasks) alive instead of dying with a
 // misleading `spawn ENOENT` on a non-existent cwd. Only the write/implement

@@ -13,7 +13,7 @@ export interface SlashItem {
   command: string;
   label: string;
   hint?: string;
-  /** harness 自己的派生命令(/team、/debate)vs CLI 已装的技能。 */
+  /** harness 自己的派生命令(/team、/duet)vs CLI 已装的技能。 */
   kind: "harness" | "skill";
   source?: SkillSource;
   /** 同一份技能还装在哪些别的 CLI 上(按物理路径认)。 */
@@ -137,7 +137,7 @@ export function toSlashItems(skills: SkillEntry[]): SlashItem[] {
 
 /**
  * 合成候选:**harness 自己的命令永远排在最前**。它们改变的是「谁来干这件事」
- * (派生一个团队/一场辩论),技能只是给当前这轮加一句提示词 —— 前者点错了代价大得多,
+ * (派生一个团队/一场讨论),技能只是给当前这轮加一句提示词 —— 前者点错了代价大得多,
  * 不能让某个 CLI 装了个叫 team 的技能就把它挤下去。
  */
 export function mergeSlashItems(harness: SlashItem[], skills: SkillEntry[], token: string | null): SlashItem[] {

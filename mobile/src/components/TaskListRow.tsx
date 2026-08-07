@@ -7,7 +7,7 @@ import { PriorityBars } from "@/components/ui";
 import { TaskTimeChip } from "@/lib/time";
 import { useTheme, radius, fonts } from "@/lib/theme";
 
-const DEBATE_COLOR = "#8B5CF6";
+const DUET_COLOR = "#8B5CF6";
 
 export function TaskListRow({
   task,
@@ -135,7 +135,7 @@ function TaskCard({ task, parentTitle, onPress }: { task: Task; parentTitle?: st
       <SignalBar status={task.status} height={nested ? 34 : 38} />
       <View style={{ flex: 1, gap: 5 }}>
         <View style={{ flexDirection: "row", alignItems: "flex-start", gap: 7 }}>
-          {task.mode === "debate" ? <CollaborationBadge mode="debate" /> : null}
+          {task.mode === "duet" ? <CollaborationBadge mode="duet" /> : null}
           <Text
             style={{ flex: 1, color: theme.ink, fontSize: nested ? 14 : 15, fontFamily: fonts.bodySemi }}
             numberOfLines={2}
@@ -170,10 +170,10 @@ function TaskCard({ task, parentTitle, onPress }: { task: Task; parentTitle?: st
   );
 }
 
-function CollaborationBadge({ mode }: { mode: "team" | "debate" }) {
+function CollaborationBadge({ mode }: { mode: "team" | "duet" }) {
   const theme = useTheme();
-  const debate = mode === "debate";
-  const color = debate ? DEBATE_COLOR : theme.accent;
+  const duet = mode === "duet";
+  const color = duet ? DUET_COLOR : theme.accent;
   return (
     <View
       style={{
@@ -183,11 +183,11 @@ function CollaborationBadge({ mode }: { mode: "team" | "debate" }) {
         paddingHorizontal: 7,
         paddingVertical: 3,
         borderRadius: radius.pill,
-        backgroundColor: debate ? `${DEBATE_COLOR}20` : theme.raised,
+        backgroundColor: duet ? `${DUET_COLOR}20` : theme.raised,
       }}
     >
-      <Ionicons name={debate ? "chatbubbles-outline" : "people"} size={12} color={color} />
-      <Text style={{ color, fontSize: 10, fontFamily: fonts.monoMed }}>{debate ? "辩论" : "团队"}</Text>
+      <Ionicons name={duet ? "chatbubbles-outline" : "people"} size={12} color={color} />
+      <Text style={{ color, fontSize: 10, fontFamily: fonts.monoMed }}>{duet ? "讨论" : "团队"}</Text>
     </View>
   );
 }

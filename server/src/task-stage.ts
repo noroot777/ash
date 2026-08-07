@@ -41,7 +41,7 @@ export async function clearTaskStage(taskId: string, note: string): Promise<void
 // 上一版的结论。留着它的后果不只是显示不准 —— `enterHumanGate` 见到 merged 会**静默
 // 跳过**「等我点头」那道关口(review.ts),于是新一版改动一路走到底、连问都不问用户一句。
 // accepted 只代表上一版产物已经验收,不能覆盖验收后的新增改动;这条规则对
-// single/team/debate 一致。
+// single/team/duet 一致。
 // 走内部更新而不是 POST /tasks/:id/stage:那道 mode==="team" 的 409 是挡 **agent 自报**
 // 的外部协议入口(调度台没有实现/验证语义),挡的不是这条内部规则;广播必须保留,
 // 否则前端分组要等下次全量拉取才动。

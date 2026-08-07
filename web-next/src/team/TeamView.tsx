@@ -29,7 +29,7 @@ import { TeamAttentionBar } from "./TeamAttentionBar.tsx";
 import { TeamHeader } from "./TeamHeader.tsx";
 import { TEAM_INSPECTORS, type TeamInspectorContext } from "./TeamInspector.tsx";
 import { TeamReviewWorkspace } from "./TeamReviewWorkspace.tsx";
-import { teamDebateIterationState } from "../debate/handoffPolicy.ts";
+import { teamDuetIterationState } from "../duet/handoffPolicy.ts";
 import { activeTeamHaltMarker, leadTurns, teamFeedOptions } from "./teamModel.ts";
 
 function liveLineForEvent(event: AgentEvent, textBuffer: string): string | null {
@@ -445,8 +445,8 @@ export function TeamView({
       setBusy(false);
     }
   };
-  const iterateDebate = async () => {
-    const iteration = teamDebateIterationState(task, allTasks);
+  const iterateDuet = async () => {
+    const iteration = teamDuetIterationState(task, allTasks);
     if (!iteration.eligible) return;
     if (iteration.existing) {
       onSelectTask(iteration.existing);
@@ -455,21 +455,21 @@ export function TeamView({
     if (iterateBusy) return;
     setIterateBusy(true);
     try {
-      let target = await api.iterateTeamDebate(task.id);
+      let target = await api.iterateTeamDuet(task.id);
       onTaskUpdate(target);
       if (target.status === "backlog") {
         try {
           await api.runTask(target.id);
-          notify("已创建新一轮辩论并开跑");
+          notify("已创建新一轮讨论并开跑");
           try {
             target = await api.task(target.id);
             onTaskUpdate(target);
           } catch { /* task.status 事件仍会刷新列表 */ }
         } catch (reason) {
-          notify(`新一轮辩论已创建，但启动失败：${reason instanceof Error ? reason.message : String(reason)}`);
+          notify(`新一轮讨论已创建，但启动失败：${reason instanceof Error ? reason.message : String(reason)}`);
         }
       } else {
-        notify("已打开这个团队现有的下一轮辩论");
+        notify("已打开这个团队现有的下一轮讨论");
       }
       onSelectTask(target);
     } catch (reason) {
@@ -543,7 +543,7 @@ export function TeamView({
         onRun={() => void perform("run")}
         onHalt={() => void perform("halt")}
         onResume={() => void perform("resume")}
-        onIterateDebate={() => void iterateDebate()}
+        onIterateDuet={() => void iterateDuet()}
         onArchive={() => void perform("archive")}
         onDelete={() => setDeleteOpen(true)}
         indicatorForTask={indicatorForTask}

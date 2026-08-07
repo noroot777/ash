@@ -13,7 +13,7 @@ import type {
   SkillList,
   Group,
   GroupMode,
-  DebateSpeaker,
+  DuetSpeaker,
   GateName,
   LlmProvider,
   LlmProtocol,
@@ -70,10 +70,10 @@ export type TeamCuaKillResult = {
   warning: string;
 };
 
-export type DebateTranscriptTurn = {
+export type DuetTranscriptTurn = {
   type?: undefined;
   round: number;
-  speaker: DebateSpeaker;
+  speaker: DuetSpeaker;
   text: string;
   raised?: boolean;
   agrees?: boolean;
@@ -83,8 +83,8 @@ export type DebateTranscriptTurn = {
   target?: "A" | "B";
 };
 
-export type DebateTranscriptGate = {
-  type: "debate.gate";
+export type DuetTranscriptGate = {
+  type: "duet.gate";
   taskId: string;
   gate: GateName;
   open: boolean;
@@ -93,7 +93,7 @@ export type DebateTranscriptGate = {
   conclusionB?: string | null;
 };
 
-export type DebateTranscriptEntry = DebateTranscriptTurn | DebateTranscriptGate;
+export type DuetTranscriptEntry = DuetTranscriptTurn | DuetTranscriptGate;
 
 function base(): string {
   const b = getBaseURL();
@@ -199,7 +199,7 @@ export const api = {
 
   sessions: (taskId: string): Promise<Session[]> => req(`/tasks/${taskId}/sessions`).then(j),
   sessionOutput: (id: string): Promise<string> => req(`/sessions/${id}/output`).then((r) => r.text()),
-  debateTranscript: (taskId: string): Promise<DebateTranscriptEntry[]> => req(`/tasks/${taskId}/debate`).then(j),
+  duetTranscript: (taskId: string): Promise<DuetTranscriptEntry[]> => req(`/tasks/${taskId}/duet`).then(j),
 
   // —— 分组(并行/串行批次):列表/增删改 + 整组运行/暂停。group 无 archived,删除只解绑成员。
   groups: (projectId?: string): Promise<Group[]> =>
