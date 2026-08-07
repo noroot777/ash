@@ -239,9 +239,10 @@ export const sessions = sqliteTable("sessions", {
   // 多少上下文」。window 为 null = 谁也没报出窗口大小，界面只显示绝对水位。
   contextUsed: integer("context_used"),
   contextWindow: integer("context_window"),
-  // window 眼下恒为「估的」：只有 claude 在采水位，而它不自报窗口 —— 界面要标出来。
-  // codex 的 stdout 根本没有水位（曾经读它的私有 rollout 文件，用户 2026-08-07 拍板
-  // 撤掉），所以 codex 会话这三列恒 null，胶囊不显示。
+  // window 是不是「估的」：claude 在 result.modelUsage 里自报窗口，读到了就是准数
+  // （false）；自报缺失才按模型名估（true，估不出则 window 为 null）。codex 的 stdout
+  // 根本没有水位（曾经读它的私有 rollout 文件，用户 2026-08-07 拍板撤掉），所以 codex
+  // 会话这三列恒 null，胶囊不显示。
   contextWindowEstimated: integer("context_window_estimated", { mode: "boolean" }),
 });
 

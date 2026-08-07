@@ -179,7 +179,7 @@ export async function* parseClaudeStream(
   // 上下文水位。**只有 `assistant` 事件里的 `message.usage` 是单次 API 调用的快照**
   // —— 收尾的 `result` 行是整回合累加(几十次调用相加,长会话能到千万级),拿它当水位
   // 会得出「上下文爆了 50 倍」。所以在这里逐条记下最新一次调用的输入规模,回合结束
-  // 时发一条 context 事件。claude CLI 不报窗口大小,窗口按模型名估(guessContextWindow)。
+  // 时发一条 context 事件。窗口(分母)反过来只有 `result` 行有,见 claudeContextWindow。
   let contextUsed = 0;
   let contextModel: string | null = null;
 
@@ -240,11 +240,16 @@ export async function* parseClaudeStream(
       if (ev.session_id) push({ kind: "session", cliSessionId: ev.session_id });
       const usage = claudeUsage(ev);
       if (usage) push({ kind: "usage", usage });
-      // 水位跟着流水一起发。窗口 claude 不报 → 按模型名估(估不出就 null，界面只
-      // 显示绝对水位、不显示百分比)。
+      // 水位跟着流水一起发。分母优先用 claude 自报的(见 claudeContextWindow ——
+      // 1M 窗口只有那儿认得出),自报缺失才退回按模型名估。
       if (contextUsed > 0) {
-        const window = guessContextWindow(contextModel ?? ev.model ?? null);
-        push({ kind: "context", context: { used: contextUsed, window, windowEstimated: window !== null } });
+        const model = contextModel ?? ev.model ?? null;
+        const reported = claudeContextWindow(ev, model);
+        const window = reported ?? guessContextWindow(model);
+        push({
+          kind: "context",
+          context: { used: contextUsed, window, windowEstimated: reported === null && window !== null },
+        });
       }
       // 我们自己发的 interrupt 会把本回合收成 error_during_execution —— 那是
       // 「用户插话打断」的预期结果,不是故障,不报错。只吞掉紧跟其后的那一个
@@ -330,6 +335,42 @@ const num = (v: unknown): number => (typeof v === "number" && Number.isFinite(v)
 export function claudeContextUsed(u: any): number {
   if (!u || typeof u !== "object") return 0;
   return num(u.input_tokens) + num(u.cache_read_input_tokens) + num(u.cache_creation_input_tokens);
+}
+
+/**
+ * 上下文窗口有多大 —— claude **自报**在 `result.modelUsage.<model>.contextWindow`,
+ * 拿到就用,这是唯一准确的分母。
+ *
+ * 为什么非从这里读、不能按模型名猜:两处模型名**看起来一样但含义不同** ——
+ * `assistant` 事件里是 `claude-opus-5`,`modelUsage` 的 key 是 `claude-opus-5[1m]`,
+ * 那个 `[1m]` 后缀是 1M 窗口的**唯一线索**,而它只存在于 key 上。也就是说 200k 会话
+ * 和 1M 会话的 `message.model` 逐字相同,按名字猜从原理上分不开(实测库里 1M 记录 7 条
+ * 也是这个形状)。猜错的后果不是差一点:94% 剩余会显示成 72%,水位过 20 万还会提前
+ * 变红报「快满了」。
+ *
+ * 匹配两步:先精确,再拿 key 剥掉 `[...]` 后缀比。都对不上时**只有 modelUsage 里
+ * 恰好只有一项**才敢用它 —— 多项时小模型(跑标题/压缩的 haiku)也在里面,它的 200k
+ * 会把主模型的 1M 冒充掉。
+ */
+export function claudeContextWindow(ev: any, model: string | null): number | null {
+  const mu = ev?.modelUsage;
+  if (!mu || typeof mu !== "object") return null;
+  const pick = (key: string): number | null => {
+    const w = mu[key]?.contextWindow;
+    return typeof w === "number" && Number.isFinite(w) && w > 0 ? Math.trunc(w) : null;
+  };
+  if (model) {
+    const exact = pick(model);
+    if (exact) return exact;
+    for (const key of Object.keys(mu)) {
+      if (key.replace(/\[[^\]]*\]$/, "") === model) {
+        const w = pick(key);
+        if (w) return w;
+      }
+    }
+  }
+  const keys = Object.keys(mu);
+  return keys.length === 1 ? pick(keys[0]!) : null;
 }
 
 // `result` 行自带这一回合的账单。两处数据来源,取 **modelUsage** 优先:

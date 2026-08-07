@@ -14,7 +14,8 @@
 //
 // Run: npm -w server run test:usage
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -25,10 +26,23 @@ const { db, ensureSchema } = await import("../src/db/index.js");
 const { sessions } = await import("../src/db/schema.js");
 const { eq } = await import("drizzle-orm");
 const { addSessionUsage, sessionUsage, setSessionContext, sessionContext } = await import("../src/usage.js");
-const { claudeUsage, claudeContextUsed } = await import("../src/executors/claude.js");
+const { claudeUsage, claudeContextUsed, claudeContextWindow, parseClaudeStream } = await import("../src/executors/claude.js");
 const { codexUsage } = await import("../src/executors/codex.js");
 const { appendSessionTrace, parseSessionTrace, sessionTracePath } = await import("../src/transcript.js");
 const { addUsage, sumUsage, usageTotal, hasUsage, formatTokens, formatCost, contextRatio, hasContext, guessContextWindow } = await import("@harness/shared/usage");
+
+/** 拿假 CLI stdout 真跑一遍解析器,把它吐出的 context 事件取回来(同 test-claude-stream-errors 的套路)。 */
+async function parseFakeClaude(lines: unknown[]) {
+  const script = join(root, `stub-${lines.length}-${Math.random().toString(36).slice(2, 8)}.mjs`);
+  writeFileSync(script, lines.map((l) => `process.stdout.write(${JSON.stringify(JSON.stringify(l) + "\n")});`).join("\n"));
+  const child = spawn(process.execPath, [script], { stdio: ["pipe", "pipe", "pipe"] });
+  child.stdin?.end();
+  let context: unknown = null;
+  for await (const event of parseClaudeStream(child as any, undefined)) {
+    if ((event as any).kind === "context") context = (event as any).context;
+  }
+  return context;
+}
 
 try {
   await ensureSchema();
@@ -148,7 +162,68 @@ try {
   assert.equal(claudeContextUsed({ input_tokens: 5, cache_read_input_tokens: 116_000, cache_creation_input_tokens: 1_011 }), 117_016);
   assert.equal(claudeContextUsed(undefined), 0);
 
-  console.log("Token 账本验证通过：口径可相加、未报账为 null、跨回合累加、单轮可回放、水位覆盖不累加");
+  // ── ⑤ 分母:自报永远压过猜测 ──────────────────────────────────────────────
+  // 这一段钉的是一个**按模型名猜不出来**的事实：开了 1M 窗口的会话，assistant 事件里
+  // 的模型名跟普通 200k 会话逐字相同（都是 claude-opus-5），唯一的线索 `[1m]` 只出现
+  // 在 result.modelUsage 的 key 上。漏读自报值 → 1M 会话「剩 94%」被显示成「剩 72%」，
+  // 水位过 20 万还会提前变红报快满了（2026-08-07 审查抓到的 P1）。
+  assert.equal(
+    claudeContextWindow({ modelUsage: { "claude-opus-5[1m]": { contextWindow: 1_000_000 } } }, "claude-opus-5"),
+    1_000_000,
+    "`claude-opus-5` 必须认出 `claude-opus-5[1m]` 这个 key——差的就是那个后缀",
+  );
+  assert.equal(
+    claudeContextWindow({ modelUsage: { "claude-opus-5": { contextWindow: 200_000 } } }, "claude-opus-5"),
+    200_000,
+    "精确同名当然也要认",
+  );
+  // 小模型（跑标题/压缩的 haiku）也在 modelUsage 里，它的 200k 不许冒充主模型的窗口。
+  assert.equal(
+    claudeContextWindow({
+      modelUsage: {
+        "claude-opus-5[1m]": { contextWindow: 1_000_000 },
+        "claude-haiku-4-5": { contextWindow: 200_000 },
+      },
+    }, "claude-opus-5"),
+    1_000_000,
+  );
+  assert.equal(
+    claudeContextWindow({
+      modelUsage: { "a-model": { contextWindow: 111 }, "b-model": { contextWindow: 222 } },
+    }, "对不上的名字"),
+    null,
+    "多项且认不出是哪个模型时不许挑一个——挑错了分母比没有更坏",
+  );
+  assert.equal(claudeContextWindow({}, "claude-opus-5"), null, "没有 modelUsage 就是没自报");
+  assert.equal(
+    claudeContextWindow({ modelUsage: { "claude-opus-5": { contextWindow: 0 } } }, "claude-opus-5"),
+    null,
+    "0 / 非有限值不是窗口",
+  );
+
+  // 端到端跑一遍解析器：上面全是纯函数，而 P1 出在**接线**上（读到了自报值却没往
+  // context 事件里传）。喂两行真形状的 stdout，看它最后吐出来的那颗胶囊的数据。
+  const oneMega = await parseFakeClaude([
+    { type: "assistant", message: { model: "claude-opus-5", usage: { input_tokens: 5, cache_read_input_tokens: 116_000 }, content: [] } },
+    { type: "result", subtype: "success", modelUsage: { "claude-opus-5[1m]": { contextWindow: 1_000_000, inputTokens: 5 } } },
+  ]);
+  assert.deepEqual(
+    oneMega,
+    { used: 116_005, window: 1_000_000, windowEstimated: false },
+    "自报 1M 必须原样传到 context 事件，且不许标成估算",
+  );
+
+  const noReport = await parseFakeClaude([
+    { type: "assistant", message: { model: "claude-opus-5", usage: { input_tokens: 5, cache_read_input_tokens: 116_000 }, content: [] } },
+    { type: "result", subtype: "success", usage: { input_tokens: 5 } },
+  ]);
+  assert.deepEqual(
+    noReport,
+    { used: 116_005, window: 200_000, windowEstimated: true },
+    "没自报才退回按模型名估，且必须标成估算",
+  );
+
+  console.log("Token 账本验证通过：口径可相加、未报账为 null、跨回合累加、单轮可回放、水位覆盖不累加、窗口自报压过猜测");
 } finally {
   rmSync(root, { recursive: true, force: true });
 }
