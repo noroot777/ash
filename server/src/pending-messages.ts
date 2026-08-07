@@ -98,9 +98,13 @@ function cooling(taskId: string, at: number): boolean {
   return last != null && at - last < FIRE_COOLDOWN_MS;
 }
 
-// 已经抢下、但还在等这个任务当前那一轮退干净的投递。冷却窗口(5s)只够盖住
-// continueTask 内部那道缝,盖不住「等一轮跑完」——那可能是几十分钟。这段时间里
-// 同一任务的第二条消息绝不能也被抢下来,否则两条会挤在一起争同一个回合。
+// 已经排上、正在等这个任务当前那一轮退干净的投递。冷却窗口(5s)只够盖住
+// continueTask 内部那道缝,盖不住「等一轮跑完」。这段时间里同一任务的第二条消息
+// 绝不能也被排上,否则两条会挤在一起争同一个回合。
+//
+// 注意它只是**同进程内的去重**,不是「已认领」的标记 —— 等待期间那一行必须仍是
+// pending(见 deliverWhenIdle):进程随时可能被重启掐掉,内存里的等待回调会一起
+// 消失,行要是那时已经是 sent 就再也没人管它了。
 const inFlight = new Set<string>();
 
 // 抢下之后最终没能送出去:把消息原样退回待发送队列(托盘里重新出现),下一次触发
@@ -153,6 +157,29 @@ function deliveryOptions(m: Row) {
   };
 }
 
+// 单任务的实际投递:在**当前这一轮退干净之后**才跑(由 whenTurnIdle 排空)。
+//
+// 认领(pending → sent)必须留在这里、而不是在排上等待之前做:等待是内存里的回调,
+// 服务重启会把它连同 inFlight 一起抹掉。行要是那时已经是 sent,重启后的补发扫描
+// (startScheduler 开机第一次 tick)就看不见它了 —— 用户那句话又一次凭空消失,只是
+// 触发条件从「锁」换成了「重启」。留在 pending 则最坏情况只是晚发一会儿。
+async function deliverWhenIdle(message: Row, options: ReturnType<typeof deliveryOptions>): Promise<void> {
+  try {
+    // 等待期间它还是 pending,所以用户可能已经手动取消、另一个触发源也可能抢先
+    // 送掉了。认领不到就什么都不做。
+    if (!(await claim(message.id))) return;
+    lastFiredAt.set(message.taskId, Date.now());
+    // 排空的一瞬间被别的路径抢走了回合(队列推进、用户手点运行):这一句一个字都
+    // 没送出去,退回队列等下一次触发。
+    if (!(await continueTask(message.taskId, message.text, options))) await restorePendingMessage(message);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    await cancelPendingMessage(message, `续跑失败：${detail}`).catch(() => {});
+  } finally {
+    inFlight.delete(message.taskId);
+  }
+}
+
 // 投递一批待发送消息。taskId 非空 = 只看这个任务(终态钩子用);为空 = 全表扫一遍
 // (tick 用)。同一个任务一次只发一条——发完它就又在跑了,剩下的继续排着。
 export async function deliverPendingMessages(taskId?: string): Promise<void> {
@@ -171,11 +198,11 @@ export async function deliverPendingMessages(taskId?: string): Promise<void> {
         await cancelPendingMessage(m, verdict.reason);
         continue;
       }
-      if (!(await claim(m.id))) continue; // 另一个触发源刚抢走
-      fired.add(m.taskId);
-      lastFiredAt.set(m.taskId, Date.now());
       const options = deliveryOptions(m);
       if (t!.mode === "team") {
+        if (!(await claim(m.id))) continue; // 另一个触发源刚抢走
+        fired.add(m.taskId);
+        lastFiredAt.set(m.taskId, Date.now());
         try {
           await continueTask(m.taskId, m.text, { ...options, throwOnTeamUnavailable: true });
         } catch (reason) {
@@ -185,24 +212,11 @@ export async function deliverPendingMessages(taskId?: string): Promise<void> {
       } else {
         // 单任务必须等它**当前这一轮退干净**再送。两个触发源里的终态钩子
         // (setTaskStatus → flushPendingForTask)是在 run loop 的 try 里调的,那一刻
-        // 单飞锁还锁着;直接 continueTask 会被静默挡回,而消息刚刚已经被 claim 成 sent
-        // ——托盘里没了、会话里也没有,用户那句话就此蒸发。`whenTurnIdle` 由
-        // releaseTurn 同一处排空,是结算钩子里给同一个任务续跑的唯一安全写法。
+        // 单飞锁还锁着;直接 continueTask 会被静默挡回,消息就此蒸发。`whenTurnIdle`
+        // 由 releaseTurn 同一处排空,是结算钩子里给同一个任务续跑的唯一安全写法。
+        fired.add(m.taskId);
         inFlight.add(m.taskId);
-        whenTurnIdle(m.taskId, () => {
-          void continueTask(m.taskId, m.text, options)
-            .then(async (started) => {
-              inFlight.delete(m.taskId);
-              // 排空的一瞬间被别的路径抢走了回合(队列推进、用户手点运行):这一句
-              // 一个字都没送出去,退回队列等下一次触发。
-              if (!started) await restorePendingMessage(m);
-            })
-            .catch(async (error) => {
-              inFlight.delete(m.taskId);
-              const detail = error instanceof Error ? error.message : String(error);
-              await cancelPendingMessage(m, `续跑失败：${detail}`);
-            });
-        });
+        whenTurnIdle(m.taskId, () => void deliverWhenIdle(m, options));
       }
     } catch {
       /* 一条投递失败不影响其它任务,下一轮再来 */

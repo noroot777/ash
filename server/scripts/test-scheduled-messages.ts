@@ -235,6 +235,14 @@ try {
     0,
     "锁还锁着就不该起下一轮(会跟当前这一轮撞在一起)",
   );
+  // 等待期间那一行必须**还是 pending**:这段等待只活在内存里,服务此刻重启就随之
+  // 蒸发。行要是已经标成 sent,开机第一次 tick 的补发扫描就看不见它了——同一个消息
+  // 消失,只是触发条件从「锁」换成了「重启」。
+  assert.equal(
+    (await db.select().from(scheduledMessages).where(eq(scheduledMessages.id, "scheduled-locked"))).at(0)!.status,
+    "pending",
+    "还没真送出去就先标了 sent——这会儿重启,消息就再也没人管了",
+  );
 
   runs.releaseTurn(lockedTaskId); // run loop 的 finally
   await waitFor(
