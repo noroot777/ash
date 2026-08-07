@@ -343,9 +343,9 @@
 .task-session-meta button { max-width: 240px; overflow: hidden; border: 1px solid var(--line); border-radius: 5px; background: transparent; padding: 2px 6px; color: var(--faint); font-family: var(--font-mono); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
 .task-session-meta button:hover { border-color: var(--line2); background: var(--raised); color: var(--muted); }
 
-/* Token 用量。会话尾巴那一行跟旁边两颗 chip 同款；单轮那颗挂在气泡头部 ⏱ 用时 后面，
-   要躲开「复制这条回复」那条 margin-left:auto + 22px 方块的规则，否则会被压成一个
-   看不见的小方格。 */
+/* Token 用量。气泡头部那颗（本轮）挂在 ⏱ 用时 后面，要躲开「复制这条回复」那条
+   margin-left:auto + 22px 方块的规则，否则会被压成一个看不见的小方格；气泡尾部那颗
+   （会话累计）跟 .task-session-meta 里的按钮同款。 */
 .token-usage-chip { display: inline-flex; align-items: center; gap: 3px; border: 1px solid var(--line); border-radius: 5px; background: transparent; padding: 2px 6px; color: var(--faint); font-family: var(--font-mono); font-size: 9px; white-space: nowrap; }
 .token-usage-chip:hover { border-color: var(--line2); background: var(--raised); color: var(--muted); }
 .task-message header .token-usage-chip {

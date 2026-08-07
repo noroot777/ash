@@ -25,7 +25,7 @@ function AgentRow({ row }: { row: Extract<TeamFeedRow, { kind: "conv" }>["item"]
         <b>{row.label}</b>
         {row.at && <time>{formatInstant(row.at)}</time>}
         {duration && <small className="task-turn-duration" title={`开始 ${formatInstant(row.at)} · 结束 ${formatInstant(row.endedAt)}`}>· ⏱ {duration} 用时</small>}
-        {!row.showSessionMeta && <TokenUsageChip turn={row.usage} />}
+        <TokenUsageChip turn={row.usage} />
       </header>
       {row.segments.map((segment, index) => (
         <section className="task-agent-segment" key={segment.id}>
@@ -34,7 +34,7 @@ function AgentRow({ row }: { row: Extract<TeamFeedRow, { kind: "conv" }>["item"]
         </section>
       ))}
       {row.showSessionMeta && row.session && (
-        <SessionMeta session={row.session} turnUsage={row.usage} sessionUsage={row.sessionUsage} />
+        <SessionMeta session={row.session} sessionUsage={row.sessionUsage} />
       )}
     </article>
   );

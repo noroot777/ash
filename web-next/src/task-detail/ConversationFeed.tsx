@@ -35,8 +35,9 @@ function AgentMessage({
               · ⏱ {duration} 用时
             </small>
           )}
-          {/* 会话尾巴那条气泡的账在 SessionMeta 里（本轮 + 累计一起给），这里就别重复了。 */}
-          {!item.showSessionMeta && <TokenUsageChip turn={item.usage} />}
+          {/* 本轮的账**每条气泡都挂在头部**，跟旁边的 ⏱ 用时同族（都是这一轮的成本）。
+              位置不许随「是不是会话最后一条」变——那样同一个数会在气泡顶和气泡底之间跳。 */}
+          <TokenUsageChip turn={item.usage} />
           <button type="button" onClick={() => copyText(item.markdown)} aria-label="复制这条回复">
             <Copy size={13} aria-hidden="true" />
           </button>
@@ -48,7 +49,7 @@ function AgentMessage({
           </section>
         ))}
         {item.showSessionMeta && item.session && (
-          <SessionMeta session={item.session} turnUsage={item.usage} sessionUsage={item.sessionUsage} />
+          <SessionMeta session={item.session} sessionUsage={item.sessionUsage} />
         )}
       </div>
     </article>
