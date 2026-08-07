@@ -10,11 +10,24 @@
 // 照片 = sha256(`git rev-parse HEAD` + `git diff HEAD` + `git ls-files --others`)。
 // 三样都要：只看 HEAD 会漏「改了但没提交」，只看文件名单会漏「一个已改的文件又被改一次」。
 //
-//   照片不一样                 → 清账：游标搬回第一站、验证轮数归零、stage 清空
-//   照片一样                   → 线一个字节不动（纯询问不该重置任何东西），并把回合开头
-//                                摘掉的「已验收/已合并」牌子原样挂回去 —— 那是白摘的
+//   照片不一样                 → 账保持清空（清账在回合开头就做了，见下）
+//   照片一样                   → 把开头清掉的账原样放回，连同摘掉的「已验收/已合并」
+//                                牌子 —— 纯询问不该重置任何东西，那些都是白清的
 //   照片一样 + 屋子是这一轮新建的空壳 → 拆屋（见 discardEmptyShell）
 //   照片取不到（非 git / 命令挂了） → 保守当作「变了」
+//
+// **清账在回合开头就做，不等结算**（2026-08-07 第二次改）。一开始它排在结算那一步，
+// 判据本身没错，可一个回合要跑几十分钟 —— 这整段时间账本还记着上一版的成绩，于是
+// 线路图上「等我点头」写着 ✓已过、游标停在「自动验证」，而 agent 正在底下重做这一版。
+// 显示错只是表象：游标落在 verify 站，那一站的「再验一轮」「人工强制通过」两颗按钮
+// 此刻就是可点的，点下去 `advanceWorkflowFrom` 会直接跑完 accept 段——**把一个正在被
+// 改写的分支合并掉、再删掉 agent 脚下的 worktree**。所以「上一版的成绩作废」必须在
+// 收到指令那一刻就生效，而不是等干完才追认（实测：任务 nInnSY6WiMoS）。
+//
+// 反过来那一档（纯询问）用「先清、照片一样再放回」补偿，跟隔壁 `reopenAcceptedStage`
+// 摘牌 / `restoreTaskStage` 挂回是同一副结构：摘牌也是回合开头无条件做的，那时同样
+// 不知道这一轮会不会真改东西。代价是纯询问期间线路图短暂退回起点 —— 换来的是那段
+// 时间里**没有任何会合并的按钮**，这笔买卖稳赚。
 //
 // **清账只看照片，不看这一轮 agent 确认没确认完成**（2026-08-07 改）。这两件事被混过
 // 一次：确认完成决定的是「这一轮的成绩算不算、线要不要接着往下走」，清账清的是「上一版
@@ -40,6 +53,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { eq } from "drizzle-orm";
+import type { TaskStage } from "@harness/shared";
 import { STAGE_LABELS } from "@harness/shared";
 import { firstAnchor } from "@harness/shared/workflow-policy";
 import { db } from "./db/index.js";
@@ -65,7 +79,22 @@ interface TurnBaseline {
    * 可那时还不知道这一轮会不会真改东西；照片一样就说明白摘了，结算时按这个值挂回去。
    */
   stage?: "accepted" | "merged" | null;
+  /**
+   * 回合开头清掉的账本原值，照片一样时原样放回。三种取值要分清：
+   *   `LedgerSnapshot` → 开头清过账，结算时按它恢复
+   *   `null`           → 开头查过、不用清（账本本来就干净，或 verify_failed 那一档）
+   *   字段缺失         → **旧版 server 写的基线**，那一轮开头没清过，结算时退回老路径补清一次
+   */
+  ledger?: LedgerSnapshot | null;
   at: string;
+}
+
+/** 一条线的「上一版成绩」全在这四样里，清和放回都必须四样一起动。 */
+interface LedgerSnapshot {
+  workflowAt: string | null;
+  verifyStationRounds: number;
+  reviewStep: string | null;
+  stage: TaskStage | null;
 }
 
 const baselinePath = (taskId: string) => join(RUNS_DIR, taskId, "turn-baseline.json");
@@ -99,8 +128,13 @@ async function fingerprint(cwd: string): Promise<string | null> {
 }
 
 /**
- * 起跑前的第一张照。落磁盘而不是内存：`data/runs/<taskId>/turn-baseline.json`
- * 活得过 server 重启，重启后接管（reattach）那一路照样能比对上。
+ * 起跑前的第一张照 —— 顺手把上一版的账清了。
+ *
+ * 落磁盘而不是内存：`data/runs/<taskId>/turn-baseline.json` 活得过 server 重启，
+ * 重启后接管（reattach）那一路照样能比对上。
+ *
+ * **拍照必须排在清账前面**：清账会写 `tasks` 表，不碰工作目录，本来两边不相干；但真出了
+ * 岔子（清账抛异常）时，先拍到的照还在，结算那头至少能照老路把账补清，不会连基线都没有。
  */
 export async function recordTurnBaseline(
   taskId: string,
@@ -114,6 +148,7 @@ export async function recordTurnBaseline(
       fingerprint: await fingerprint(cwd),
       fresh,
       stage: reopenedStage,
+      ledger: await resetWorkflowLedger(taskId),
       at: now(),
     };
     mkdirSync(join(RUNS_DIR, taskId), { recursive: true });
@@ -138,48 +173,80 @@ function takeTurnBaseline(taskId: string): TurnBaseline | null {
   }
 }
 
+// 这行写在**回合开头**，那会儿还不知道 agent 会不会真动代码，所以措辞得是前瞻的：
+// 先说清「已经退回起点了」，再把「白退了会放回去」这条兜底讲明白。
 const RESET_NOTE =
-  "这一轮产出了新的改动，之前那一版的验证与验收记录已清空，这条线从头再走一遍（上一版验过了，不能替这一版放行）。";
+  "收到新的指令，这条线先退回「让 AI 干活」这一站：上一版的验证与验收记录已清空，"
+  + "改完要从头再走一遍（上一版验过了，不能替这一版放行）。"
+  + "这一轮要是一个字节都没改，会把刚才清掉的原样放回去。";
 
 /** 清了账、线却不会自己往下走的那一档，得把「停在哪、怎么让它继续」说出来。 */
 const RESET_STALLED_NOTE =
   "这一轮没有确认完成，所以线就停在「让 AI 干活」这一站，不会自己往下走"
   + "——再回一句让它把这一版确认完成，后面的站（预览 / 等我点头 / 验证）就会照常接着跑。";
 
+/** 白清一场：纯询问回合的收尾。 */
+const RESTORE_NOTE =
+  "这一轮没有产出任何改动，线路图已放回原处——纯询问不用重走一遍流程。";
+const restoreStageNote = (stage: TaskStage) =>
+  "这一轮没有产出任何改动，线路图已放回原处、验收阶段放回"
+  + `「${STAGE_LABELS[stage]}」——纯询问不用重走一遍流程。`;
+
 /**
- * 清账：把这条线退回起点，让新改动重新过一遍验证和验收。
+ * 清账：把这条线退回起点，让新改动重新过一遍验证和验收。**返回被清掉的原值**，
+ * 照片一样时按它原样放回（见 `restoreWorkflowLedger`）；本来就不用清则返回 null。
  *
  * 三样东西一起清，少一样都还能让新代码溜过去：游标（`workflow_at`）搬回「让 AI 干活」
  * 那一站、这一站验过几轮（`verify_station_rounds` + `review_step`）归零、验收阶段
  * （`stage`）清空。**游标要搬回 run 站的 id，不能清成 null** —— 前端在没有游标时会按
  * status 猜位置（`web-next/src/workflow/workflowModel.ts` 的 `resolveCursor`：done 且
  * 无游标 → 落在 run 之后那一站），清成 null 反而显示成「已经走过第一站了」。
- *
- * `willAdvance` **只管那行时间线多不多一句**，不参与清不清的判断（判据只有照片）：
- * 这一轮确认完成了，紧接着 `afterSettlement` 就会把线推下去，用户看得见它在走；没确认
- * 的话线就停在起点，不说一句，用户只会看着一个「已完成」的任务停在第一站发懵。
  */
-async function resetWorkflowLedger(taskId: string, willAdvance: boolean): Promise<void> {
+async function resetWorkflowLedger(taskId: string): Promise<LedgerSnapshot | null> {
   const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
-  if (!task) return;
+  if (!task) return null;
   // 验证没过正在修 —— 同一版的事，账不能清（否则轮数上限形同虚设）。
-  if (task.stage === "verify_failed") return;
+  if (task.stage === "verify_failed") return null;
   const runId = firstAnchor(taskWorkflowDef(task.workflow), "run")?.id ?? null;
+  const before: LedgerSnapshot = {
+    workflowAt: task.workflowAt ?? null,
+    verifyStationRounds: task.verifyStationRounds ?? 0,
+    reviewStep: task.reviewStep ?? null,
+    stage: (task.stage as TaskStage | null) ?? null,
+  };
   const stale =
-    !!task.stage ||
-    (task.verifyStationRounds ?? 0) > 0 ||
-    !!task.reviewStep ||
-    (!!task.workflowAt && task.workflowAt !== runId);
-  if (!stale) return; // 账本本来就是空的，别写一行没信息量的时间线
-  const note = willAdvance || !runId ? RESET_NOTE : `${RESET_NOTE}${RESET_STALLED_NOTE}`;
+    !!before.stage ||
+    before.verifyStationRounds > 0 ||
+    !!before.reviewStep ||
+    (!!before.workflowAt && before.workflowAt !== runId);
+  if (!stale) return null; // 账本本来就是空的，别写一行没信息量的时间线
   // clearTaskStage 顺带广播 task.stage 并写时间线；没有 stage 可清时自己补那一行。
-  if (task.stage) await clearTaskStage(taskId, note);
-  else await appendTaskTimeline(taskId, note);
+  if (before.stage) await clearTaskStage(taskId, RESET_NOTE);
+  else await appendTaskTimeline(taskId, RESET_NOTE);
   await db
     .update(tasks)
     .set({ verifyStationRounds: 0, reviewStep: null, updatedAt: now() })
     .where(eq(tasks.id, taskId));
-  if (runId && task.workflowAt !== runId) await setWorkflowAt(taskId, runId); // 广播 task.updated
+  if (runId && before.workflowAt !== runId) await setWorkflowAt(taskId, runId); // 广播 task.updated
+  return before;
+}
+
+/**
+ * 把开头清掉的账原样放回（纯询问回合）：游标、这一站验过几轮、review_step。
+ *
+ * **stage 不在这儿放**，由调用方统一处理 —— 那块牌子有两条来路（开头 `reopenAcceptedStage`
+ * 摘走的 accepted/merged，和这里清掉的其它阶段），时间线也只该为这件事写一行。
+ */
+async function restoreWorkflowLedger(taskId: string, ledger: LedgerSnapshot): Promise<void> {
+  await db
+    .update(tasks)
+    .set({
+      verifyStationRounds: ledger.verifyStationRounds,
+      reviewStep: ledger.reviewStep,
+      updatedAt: now(),
+    })
+    .where(eq(tasks.id, taskId));
+  await setWorkflowAt(taskId, ledger.workflowAt); // 广播 task.updated
 }
 
 /**
@@ -207,13 +274,15 @@ async function discardEmptyShell(taskId: string): Promise<void> {
 }
 
 /**
- * 结算时拍第二张照并作出决定。
+ * 结算时拍第二张照并作出决定。账在回合开头就清过了，这里只做两件事：
+ * 照片一样 → 把清掉的原样放回（外加拆空壳屋）；照片不一样 → 保持清空。
  *
  * **必须排在 `afterSettlement` 之前**：那一步会拿着游标把这条线往下推
- * （`handleTaskSettlement → advanceWorkflowFrom(settleFrom(...))`），账晚清一步就来不及了。
+ * （`handleTaskSettlement → advanceWorkflowFrom(settleFrom(...))`），放回晚一步就会
+ * 把纯询问回合的游标推乱。
  *
  * `confirmedDone` **只用来挑那行时间线的措辞**（清完之后线会不会自己往下走）。它绝不能
- * 再回到「清不清账」的判断里 —— 那正是这次要修的病，理由见文件头。
+ * 再回到「清不清账」的判断里 —— 那正是上一次要修的病，理由见文件头。
  */
 export async function reconcileTurnBaseline(taskId: string, confirmedDone: boolean): Promise<void> {
   const base = takeTurnBaseline(taskId);
@@ -222,19 +291,30 @@ export async function reconcileTurnBaseline(taskId: string, confirmedDone: boole
     const after = await fingerprint(base.cwd);
     const changed = base.fingerprint === null || after === null || after !== base.fingerprint;
     if (changed) {
-      // 确认没确认完成都要清：账本记的是上一版的成绩，而这一版的字节已经不一样了。
-      await resetWorkflowLedger(taskId, confirmedDone);
+      // 账开头就清了，这里什么都不用做。唯一的例外是 `ledger` 字段缺失 —— 那张基线是
+      // 升级前的旧 server 写的，那一轮开头没清过，退回老路径在这儿补清一次。
+      const cleared = base.ledger === undefined ? await resetWorkflowLedger(taskId) : base.ledger;
+      // 清了账、线又不会自己往下走的那一档，到这会儿才知道，补一句说明停在哪
+      // （这句点名了「让 AI 干活」那一站，所以线上真有这么一站才写）。
+      if (cleared && !confirmedDone) {
+        const t = (await db.select({ workflow: tasks.workflow }).from(tasks).where(eq(tasks.id, taskId))).at(0);
+        if (t && firstAnchor(taskWorkflowDef(t.workflow), "run")) {
+          await appendTaskTimeline(taskId, RESET_STALLED_NOTE);
+        }
+      }
       return;
     }
-    // 一个字节没变 = 纯询问。回合开头摘掉的「已验收/已合并」牌子是白摘的，挂回去 ——
-    // 不然用户只是问一句「这段为什么这么做」，任务就从已验收掉回进行中，还得再点一次验收。
-    if (base.stage) {
-      await restoreTaskStage(
-        taskId,
-        base.stage,
-        `这一轮没有产出任何改动，验收阶段放回「${STAGE_LABELS[base.stage]}」——纯询问不用重新验收一次。`,
-      );
-    }
+    // 一个字节没变 = 纯询问。回合开头清掉的账、摘掉的「已验收/已合并」牌子都是白清的，
+    // 放回去 —— 不然用户只是问一句「这段为什么这么做」，任务就从已验收掉回进行中，
+    // 线路图也退回第一站，还得再点一次验收。
+    if (base.ledger) await restoreWorkflowLedger(taskId, base.ledger);
+    // 牌子的两条来路互斥：accepted/merged 在开头就被 `reopenAcceptedStage` 摘走了，
+    // 轮到清账时 stage 已经是空的；其余阶段（verified / awaiting_acceptance…）才落在账里。
+    // `restoreTaskStage` 只在牌子位还空着时放 —— 这一轮 agent 自报过新阶段的话那是更新的
+    // 结论，不能被旧牌子盖掉；那种情况下退回只写一行不带阶段的说明。
+    const stageBack = base.stage ?? base.ledger?.stage ?? null;
+    const staged = stageBack ? await restoreTaskStage(taskId, stageBack, restoreStageNote(stageBack)) : false;
+    if (!staged && base.ledger) await appendTaskTimeline(taskId, RESTORE_NOTE);
     if (base.fresh) await discardEmptyShell(taskId);
   } catch (error) {
     console.warn(`[harness] failed to reconcile turn baseline for ${taskId}:`, error);

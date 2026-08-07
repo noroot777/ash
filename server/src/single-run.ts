@@ -314,10 +314,11 @@ export async function consumeSingleRun(a: {
   }).catch(() => 0);
   const settled = await settleTaskStatus(taskId, exitStatus, stopped);
   clearTurnStart(taskId); // 只有「未确认 failed」那一支会读它,别的支路在这儿扔掉残页
-  // 这一轮到底改没改东西:改了就把上一版的验证/验收记录清掉,没改且屋子是临时搭的就拆掉。
-  // 清不清只看照片,confirmedDone 只挑那行时间线的措辞(理由见 turn-baseline.ts)。
-  // **必须排在 afterSettlement 之前** —— 那一步会拿着游标把这条线往下推,账晚清一步,
-  // 上一版的验证结论就已经替新改动放行了(详见 turn-baseline.ts)。
+  // 这一轮到底改没改东西:账在回合开头就清过了,这里只管「白清了要放回去」——
+  // 一个字节没改就把游标/轮数/验收阶段原样放回,屋子是临时搭的还顺手拆掉。
+  // 只看照片,confirmedDone 只挑那行时间线的措辞(理由见 turn-baseline.ts)。
+  // **必须排在 afterSettlement 之前** —— 那一步会拿着游标把这条线往下推,放回晚一步
+  // 就会把纯询问回合的游标推乱(详见 turn-baseline.ts)。
   await reconcileTurnBaseline(taskId, settled.confirmedDone);
   // turnOk = 这一回合本身干净收尾了(没被停、退出码 0)。跟落位状态不是一回事:旁路
   // 回合(就地验证)的落位是任务原来的终态,只有它说得清这一轮跑成没跑成。
