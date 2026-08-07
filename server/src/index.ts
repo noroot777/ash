@@ -127,6 +127,12 @@ async function initializeServer() {
     ]);
 
   await ensureSchema();
+  // 预览实例专用：从主库把「设置」搬过来（执行器、供应商、项目清单…），运行态一张表都不搬。
+  // 只有 scripts/dev.mjs 起预览时才会带这个变量；空库没有执行器 = 预览里建不了任务。
+  if (process.env.HARNESS_SEED_FROM) {
+    const { seedPreviewConfig } = await import("./preview-seed.js");
+    await seedPreviewConfig(process.env.HARNESS_SEED_FROM);
+  }
   await migrateQueues(); // 一次性把 legacy depends_on / resume_depends_on 迁到 queue_items（幂等）
   // **顺序不能反**：先把还活着的 agent 接管回来（它们的输出走文件，压根没随上
   // 一个 server 进程一起死），再 reconcile 剩下那些真被打断的。反过来的话，一个

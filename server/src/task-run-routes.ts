@@ -38,6 +38,7 @@ import { haltTeam } from "./team/session.js";
 import { enrichTasks } from "./task-store.js";
 import { askingAgentFor, setTaskQuestion } from "./task-question.js";
 import { parseSessionTrace, sessionTracePath, sessionTranscriptPath } from "./transcript.js";
+import { sessionUsage } from "./usage.js";
 import { resumeCommandFor } from "./executors/resume.js";
 import { id, now } from "./util.js";
 
@@ -50,6 +51,7 @@ export function mountTaskRunRoutes(api: Hono): void {
     resumeCommand: r.cliSessionId
       ? resumeCommandFor(r.agentType, r.target, r.cwd ?? r.worktreePath ?? ".", r.cliSessionId, r.relayEnv)
       : r.resumeCommand,
+    usage: sessionUsage(r),
   });
   const toScheduledMessage = (r: typeof scheduledMessages.$inferSelect): ScheduledMessage => ({
     ...r,

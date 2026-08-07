@@ -2,21 +2,171 @@
 //
 //   · 你自己开发 —— 后端（4317）+ 前端一起起。原来的行为，一点没变。
 //   · harness 的预览站（`server/src/preview.ts`）—— 它在任务自己的 worktree 里跑这条
-//     命令，并借一个空闲端口用环境变量 `PORT` 递进来。这种时候**只该起前端**：
-//       ① 后端端口写死 4317、同一个库还只允许一个实例，本机那份正跑着，再起一份必然
-//          撞车；撞车那行日志（`Refusing to start: port 4317 is already in use`）又正好
-//          命中 harness 的撞车判据，于是前端明明起来了，整个预览还是被判死；
-//       ② 预览本来就是看前端，它的 `/api` 会 proxy 到本机那份 4317，数据是真的
-//          （见 `web-next/vite.config.ts`）。
+//     命令，并借一个空闲端口用环境变量 `PORT` 递进来。这种时候起**整套**：这个分支的
+//     后端 + 这个分支的前端，前端的 `/api` 打到前者，两个都是 worktree 里的代码。
 //
 // 判据用 `PORT` 而不是另开一个变量：借端口这件事本身就是「有人在替我起预览」的信号，
 // 而 `PORT` 是 harness 唯一注入的那一个（来由见 preview.ts 里 freePort 的注释）。
-import { spawn } from "node:child_process";
+//
+// **为什么不再只起前端**（2026-08-07 改掉的旧做法）：前端的 `/api` 默认 proxy 到本机
+// 那份 4317，于是预览是「新前端 + 旧后端」。凡是需要后端配合的改动（新字段、新接口）
+// 在预览里一律看不见，而且**失败得静悄悄**——接口照常 200，只是少一个字段，前端按
+// 「没有就不显示」处理，看上去跟功能没做一模一样。用户对着这样的预览验收，结论是错的。
+//
+// 旧做法列的三个坎，各自的解法：
+//   ① 后端端口写死 4317 → 这里自己借第二个空闲端口，不走 `dev:server`。
+//   ② 同一个库只允许一个 server（锁的粒度是 **DB 文件路径**，见 server/src/singleton.ts）
+//      → 预览用自己的库 `<worktree>/data/preview.db`，跟本机那份天然错开，谁都不用让路。
+//   ③ 后端启动那行 `http://localhost:<port>` 会被就绪判定当成预览地址（它挑日志里第一个
+//      地址）→ 转发时把 scheme 去掉，见 forward()。
+//
+// 预览的库是**新库**，不是主库的副本。这是安全判断不是图省事：整库快照会把运行态
+// （pid、running 的任务、队列）一起带进副本，而副本上的调度器分不出真假——它会去接管、
+// 推进队列、甚至停掉本机正在干活的 agent。所以只搬**设置**那几张表（执行器、供应商、
+// 项目清单…，白名单在 server/src/preview-seed.ts），一张运行态的表都不进来。
+//
+// 设置不搬也不行：空库里一个执行器都没有，新建任务面板直接写着「还没有已注册执行器，
+// 暂不能创建任务」，创建按钮是灰的——预览于是只剩静态页面可看，凡是得真跑一个任务才
+// 看得见的改动都验不了（2026-08-07 第一轮验证就卡在这儿）。
+//
+// **预览里的 agent 够不着预览这台 harness 的 MCP**，这条得先说清楚，不然会以为坏了：
+// harness MCP 是注册在用户 `~/.claude.json` 里的，那条记录写死了
+// `env: {HARNESS_URL: "http://localhost:4317"}`；而 claude 只把配置里列的 env 交给 MCP
+// 子进程，**不传父进程的环境变量**（实测：父进程设的 HARNESS_URL / 自定义变量在 MCP
+// 子进程的 environ 里根本不出现）。所以预览里跑的任务，`complete_task` 一定打去主实例、
+// 拿一个 404 —— 严格完成协议下每个任务都会以 failed 收场。于是预览走既有的逃生口
+// `HARNESS_LAX_DONE=1`（「接没配 harness MCP 的 agent 时用」，正是这个情形）：exit 0 即
+// done，同时完成协议的前言也不再发（做不到的指令不如不说，见 single-run.ts）。
+// 代价说在明处：预览里 ask_question / report_stage 这些 MCP 工具同样不通。要连它们一起
+// 修，得让 harness 每次起 CLI 时自带 mcp 配置，那是另一件事、另一个爆炸半径。
+import { execFileSync, spawn } from "node:child_process";
+import { createServer } from "node:net";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const REPO = fileURLToPath(new URL("..", import.meta.url));
 
 const lent = process.env.PORT;
-if (lent) {
-  console.log(`[dev] 有人借了 PORT=${lent} 进来，按预览处理：只起前端，后端用本机已经在跑的那份。`);
+if (!lent) {
+  const child = spawn("npm", ["run", "dev:all"], { stdio: "inherit" });
+  child.on("exit", (code, signal) => process.exit(signal ? 1 : code ?? 0));
+} else {
+  await startPreviewStack(Number(lent));
 }
 
-const child = spawn("npm", ["run", lent ? "dev:web" : "dev:all"], { stdio: "inherit" });
-child.on("exit", (code, signal) => process.exit(signal ? 1 : code ?? 0));
+async function startPreviewStack(webPort) {
+  const apiPort = await freePort();
+  if (!apiPort) {
+    console.error("[dev] 借不到端口给预览的后端，这一站起不来。");
+    process.exit(1);
+  }
+  const dbFile = fileURLToPath(new URL("../data/preview.db", import.meta.url));
+  const apiUrl = `http://127.0.0.1:${apiPort}`;
+  console.log(`[dev] 预览：整套起——后端 ${apiPort}（库 ${dbFile}）、前端 ${webPort}，前端的 /api 打到后端。`);
+
+  // HARNESS_URL 要跟着传：agent 进程继承 server 的环境变量，harness MCP 就靠它知道
+  // 「complete_task 该报给谁」。不传的话预览里跑的任务会去敲本机那份 4317。
+  // HARNESS_SEED_FROM：新库开局从主库搬一份设置过来（见文件头）。
+  // HARNESS_LAX_DONE：预览里退回「exit 0 即 done」，理由见下面 MCP 那段。
+  const api = spawn("npm", ["-w", "server", "run", "dev"], {
+    cwd: REPO,
+    stdio: ["ignore", "pipe", "pipe"],
+    env: {
+      ...process.env,
+      PORT: String(apiPort),
+      HARNESS_DB: dbFile,
+      HARNESS_URL: apiUrl,
+      HARNESS_SEED_FROM: mainRepoDb(),
+      HARNESS_LAX_DONE: "1",
+    },
+  });
+  forward(api.stdout);
+  forward(api.stderr);
+
+  const web = spawn("npm", ["-w", "web-next", "run", "dev"], {
+    cwd: REPO,
+    stdio: "inherit",
+    env: {
+      ...process.env,
+      PORT: String(webPort),
+      HARNESS_PROXY: apiUrl,
+      VITE_HARNESS_PREVIEW: "预览实例 · 这个分支的前端 + 后端 · 独立的库",
+    },
+  });
+
+  for (const [name, child] of [["后端", api], ["前端", web]]) {
+    child.on("exit", (code, signal) => {
+      console.error(`[dev] 预览的${name}退出了（code=${code} signal=${signal ?? "-"}），整套一起收。`);
+      teardown();
+    });
+    child.on("error", (error) => {
+      console.error(`[dev] 预览的${name}起不来：${error.message}`);
+      teardown();
+    });
+  }
+  process.on("SIGINT", teardown);
+  process.on("SIGTERM", teardown);
+}
+
+/**
+ * 主库在哪：预览跑在 worktree 里，`<worktree>/data/` 是空的，主库在**主仓**的 `data/`。
+ * `--git-common-dir` 在 worktree 里指回主仓的 `.git`，取它的上一级就是主仓根；不是
+ * worktree（你自己 `npm run dev`）时它指向本仓的 `.git`，答案一样对。
+ */
+function mainRepoDb() {
+  try {
+    const gitDir = execFileSync("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], {
+      cwd: REPO, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    return join(dirname(gitDir), "data", "harness.db");
+  } catch {
+    return join(REPO, "data", "harness.db"); // 不是 git 仓库就按本地猜一个，搬不到就搬不到
+  }
+}
+
+let down = false;
+/**
+ * 收摊得收干净：npm 不会把信号往下传给它拉起的 `tsx watch` / vite，逐个 `child.kill()`
+ * 必留孤儿（一个 dev server 占着端口没人管）。而预览这条路上整棵树都在同一个进程组里
+ * （preview.ts 用 `sh -lc` detached 起的那个组），所以直接对**整组**发信号——一发全中，
+ * 包括我们自己，正好就是「一个死了整套收」。只在预览分支这么干：你自己开发时那个组是
+ * 终端的前台作业组，轰整组会连着把别的东西一起带走。
+ */
+function teardown() {
+  if (down) return;
+  down = true;
+  try { process.kill(0, "SIGTERM"); } catch { /* 组已经空了 */ }
+  setTimeout(() => process.exit(1), 300);
+}
+
+function freePort() {
+  return new Promise((resolve) => {
+    const probe = createServer();
+    probe.once("error", () => resolve(null));
+    probe.listen(0, "127.0.0.1", () => {
+      const address = probe.address();
+      const port = typeof address === "object" && address ? address.port : null;
+      probe.close(() => resolve(port));
+    });
+  });
+}
+
+/**
+ * 后端的日志按行转出去，顺手把 `http://` 去掉。
+ *
+ * 不是嫌它长：预览的就绪判定挑的是日志里第一个 `http://localhost:...`，而后端那行
+ * `[harness] server on http://localhost:<port>` 多半比 vite 先打出来——照原样转，用户点开
+ * 预览会落到 API 上（一片 JSON）。去掉 scheme 就不再匹配那条正则，人还是读得懂。
+ */
+function forward(stream) {
+  let buf = "";
+  stream.setEncoding("utf8");
+  const emit = (line) => process.stdout.write(`[api] ${line.replace(/https?:\/\//g, "")}\n`);
+  stream.on("data", (chunk) => {
+    buf += chunk;
+    const lines = buf.split("\n");
+    buf = lines.pop() ?? "";
+    for (const line of lines) emit(line);
+  });
+  stream.on("end", () => { if (buf) emit(buf); });
+}

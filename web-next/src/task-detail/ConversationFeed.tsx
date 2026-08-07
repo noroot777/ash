@@ -9,6 +9,7 @@ import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
 import { RunActivity } from "../components/RunActivity.tsx";
 import { SessionMeta } from "../components/SessionMeta.tsx";
+import { TokenUsageChip } from "../components/TokenUsageChip.tsx";
 import { MessageAttachments } from "./Attachments.tsx";
 import { durationBetween, formatInstant, parseAttachmentText } from "./utils.ts";
 
@@ -34,6 +35,8 @@ function AgentMessage({
               · ⏱ {duration} 用时
             </small>
           )}
+          {/* 会话尾巴那条气泡的账在 SessionMeta 里（本轮 + 累计一起给），这里就别重复了。 */}
+          {!item.showSessionMeta && <TokenUsageChip turn={item.usage} />}
           <button type="button" onClick={() => copyText(item.markdown)} aria-label="复制这条回复">
             <Copy size={13} aria-hidden="true" />
           </button>
@@ -44,7 +47,9 @@ function AgentMessage({
             {segment.markdown && <MarkdownBody text={segment.markdown} />}
           </section>
         ))}
-        {item.showSessionMeta && item.session && <SessionMeta session={item.session} />}
+        {item.showSessionMeta && item.session && (
+          <SessionMeta session={item.session} turnUsage={item.usage} sessionUsage={item.sessionUsage} />
+        )}
       </div>
     </article>
   );
