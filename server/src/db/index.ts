@@ -11,6 +11,10 @@ const client = createClient({ url: `file:${dbFile}` });
 
 export const db = drizzle(client, { schema });
 
+// 原始连接。日常一律用上面的 `db`（drizzle，有类型）；只有「按运行时拿到的列名搬表」
+// 这种拿不到静态类型的活儿才需要它（preview-seed.ts）。
+export { client as dbClient };
+
 // Minimal bootstrap so the app runs without a separate migration step in dev.
 // `npm run db:push` (drizzle-kit) remains the source of truth for migrations.
 export async function ensureSchema() {

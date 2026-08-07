@@ -20,18 +20,31 @@
 //   ③ 后端启动那行 `http://localhost:<port>` 会被就绪判定当成预览地址（它挑日志里第一个
 //      地址）→ 转发时把 scheme 去掉，见 forward()。
 //
-// 预览的库是**空库**，不是真实数据的副本。这是安全判断不是图省事：快照会把运行态
-// （pid、running 的任务）一起带进副本，而副本上的调度器分不出真假——它会去接管、推进
-// 队列、甚至停掉本机正在干活的 agent。开局只从本机那份同步一份**项目清单**（只读 HTTP，
-// 不碰对方的库文件），够你直接建个任务跑起来；跑出来的东西都记在预览自己的库里。
-import { spawn } from "node:child_process";
+// 预览的库是**新库**，不是主库的副本。这是安全判断不是图省事：整库快照会把运行态
+// （pid、running 的任务、队列）一起带进副本，而副本上的调度器分不出真假——它会去接管、
+// 推进队列、甚至停掉本机正在干活的 agent。所以只搬**设置**那几张表（执行器、供应商、
+// 项目清单…，白名单在 server/src/preview-seed.ts），一张运行态的表都不进来。
+//
+// 设置不搬也不行：空库里一个执行器都没有，新建任务面板直接写着「还没有已注册执行器，
+// 暂不能创建任务」，创建按钮是灰的——预览于是只剩静态页面可看，凡是得真跑一个任务才
+// 看得见的改动都验不了（2026-08-07 第一轮验证就卡在这儿）。
+//
+// **预览里的 agent 够不着预览这台 harness 的 MCP**，这条得先说清楚，不然会以为坏了：
+// harness MCP 是注册在用户 `~/.claude.json` 里的，那条记录写死了
+// `env: {HARNESS_URL: "http://localhost:4317"}`；而 claude 只把配置里列的 env 交给 MCP
+// 子进程，**不传父进程的环境变量**（实测：父进程设的 HARNESS_URL / 自定义变量在 MCP
+// 子进程的 environ 里根本不出现）。所以预览里跑的任务，`complete_task` 一定打去主实例、
+// 拿一个 404 —— 严格完成协议下每个任务都会以 failed 收场。于是预览走既有的逃生口
+// `HARNESS_LAX_DONE=1`（「接没配 harness MCP 的 agent 时用」，正是这个情形）：exit 0 即
+// done，同时完成协议的前言也不再发（做不到的指令不如不说，见 single-run.ts）。
+// 代价说在明处：预览里 ask_question / report_stage 这些 MCP 工具同样不通。要连它们一起
+// 修，得让 harness 每次起 CLI 时自带 mcp 配置，那是另一件事、另一个爆炸半径。
+import { execFileSync, spawn } from "node:child_process";
 import { createServer } from "node:net";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-/** 本机那份 server。跟 `dev:server` 里写死的是同一个约定端口，只用来只读地要项目清单。 */
-const LIVE_API = "http://127.0.0.1:4317";
 const REPO = fileURLToPath(new URL("..", import.meta.url));
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const lent = process.env.PORT;
 if (!lent) {
@@ -53,10 +66,19 @@ async function startPreviewStack(webPort) {
 
   // HARNESS_URL 要跟着传：agent 进程继承 server 的环境变量，harness MCP 就靠它知道
   // 「complete_task 该报给谁」。不传的话预览里跑的任务会去敲本机那份 4317。
+  // HARNESS_SEED_FROM：新库开局从主库搬一份设置过来（见文件头）。
+  // HARNESS_LAX_DONE：预览里退回「exit 0 即 done」，理由见下面 MCP 那段。
   const api = spawn("npm", ["-w", "server", "run", "dev"], {
     cwd: REPO,
     stdio: ["ignore", "pipe", "pipe"],
-    env: { ...process.env, PORT: String(apiPort), HARNESS_DB: dbFile, HARNESS_URL: apiUrl },
+    env: {
+      ...process.env,
+      PORT: String(apiPort),
+      HARNESS_DB: dbFile,
+      HARNESS_URL: apiUrl,
+      HARNESS_SEED_FROM: mainRepoDb(),
+      HARNESS_LAX_DONE: "1",
+    },
   });
   forward(api.stdout);
   forward(api.stderr);
@@ -68,7 +90,7 @@ async function startPreviewStack(webPort) {
       ...process.env,
       PORT: String(webPort),
       HARNESS_PROXY: apiUrl,
-      VITE_HARNESS_PREVIEW: "预览实例 · 这个分支的前端 + 后端 · 独立空库",
+      VITE_HARNESS_PREVIEW: "预览实例 · 这个分支的前端 + 后端 · 独立的库",
     },
   });
 
@@ -84,8 +106,22 @@ async function startPreviewStack(webPort) {
   }
   process.on("SIGINT", teardown);
   process.on("SIGTERM", teardown);
+}
 
-  void seedProjects(apiUrl);
+/**
+ * 主库在哪：预览跑在 worktree 里，`<worktree>/data/` 是空的，主库在**主仓**的 `data/`。
+ * `--git-common-dir` 在 worktree 里指回主仓的 `.git`，取它的上一级就是主仓根；不是
+ * worktree（你自己 `npm run dev`）时它指向本仓的 `.git`，答案一样对。
+ */
+function mainRepoDb() {
+  try {
+    const gitDir = execFileSync("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], {
+      cwd: REPO, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    return join(dirname(gitDir), "data", "harness.db");
+  } catch {
+    return join(REPO, "data", "harness.db"); // 不是 git 仓库就按本地猜一个，搬不到就搬不到
+  }
 }
 
 let down = false;
@@ -133,39 +169,4 @@ function forward(stream) {
     for (const line of lines) emit(line);
   });
   stream.on("end", () => { if (buf) emit(buf); });
-}
-
-/**
- * 给空库补一份项目清单：只读地问本机那份 4317 要，再用幂等的 resolve 接口写进预览
- * 自己的库。已经有项目就什么都不做（这个 worktree 之前预览过），拿不到也就算了——
- * 少一份便利而已，不该反过来拖垮预览。
- */
-async function seedProjects(apiUrl) {
-  let mine = null;
-  for (let i = 0; i < 240 && mine === null; i++) {
-    mine = await getJson(`${apiUrl}/api/projects`);
-    if (mine === null) await sleep(500);
-  }
-  if (!Array.isArray(mine) || mine.length) return;
-  const live = await getJson(`${LIVE_API}/api/projects`);
-  if (!Array.isArray(live) || !live.length) return;
-  for (const project of live) {
-    try {
-      await fetch(`${apiUrl}/api/projects/resolve`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ repoPath: project.repoPath, name: project.name }),
-      });
-    } catch { /* 少一个项目而已 */ }
-  }
-  console.log(`[dev] 预览的空库里补了 ${live.length} 个项目（只有清单，没有任务）。`);
-}
-
-async function getJson(url) {
-  try {
-    const res = await fetch(url);
-    return res.ok ? await res.json() : null;
-  } catch {
-    return null;
-  }
 }
