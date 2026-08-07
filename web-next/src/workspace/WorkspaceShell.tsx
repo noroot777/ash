@@ -20,7 +20,7 @@ import { DeleteTaskDialog } from "../task-detail/DeleteTaskDialog.tsx";
 import { CreateGroupDialog, CreateProjectDialog } from "../overlays/CreateEntityDialog.tsx";
 import { orderedTopLevelTasks } from "./taskTreeModel.ts";
 import { useWorkspaceShortcuts } from "./useWorkspaceShortcuts.ts";
-import { useSidebarSpread } from "./useSidebarSpread.ts";
+import { spreadBucket, useSidebarSpread } from "./useSidebarSpread.ts";
 import {
   readWorkspaceSidebarWidth,
   WORKSPACE_SIDEBAR_STORAGE_KEY,
@@ -137,12 +137,14 @@ export function WorkspaceShell() {
   const selectedTask = tasks.find((task) => task.id === taskId && task.projectId === projectId) ?? null;
   const loadError = projectsError ?? tasksError;
   const activeTaskCount = useMemo(() => tasks.filter((task) => task.projectId === projectId && task.parentId === null && !task.archived).length, [projectId, tasks]);
+  // J/K 走的是「屏幕上看得见的那些行」，所以筛选开着时它也得跟着筛 —— 否则按一下就跳到
+  // 一个被隐藏的任务上，看着像选中丢了。
   const orderedTasks = useMemo(
     () => orderedTopLevelTasks(
       tasks.filter((task) => task.projectId === projectId && !task.archived),
       { unifiedPinned: true },
-    ),
-    [projectId, tasks],
+    ).filter((task) => spread.filter === "all" || spreadBucket(task) === spread.filter),
+    [projectId, spread.filter, tasks],
   );
   const updateTask = useCallback((updated: Task) => setTasks((current) => current.some((task) => task.id === updated.id)
     ? current.map((task) => task.id === updated.id ? updated : task)

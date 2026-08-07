@@ -18,6 +18,13 @@ export const SPREAD_FILTERS: { key: SpreadFilter; label: string }[] = [
   { key: "accepted", label: "验收完成" },
 ];
 
+// 窄态那排点只画五个桶：「全部」在点上表现为「一个都没选中」，不占一个点位。
+export const SPREAD_BUCKET_FILTERS = SPREAD_FILTERS.filter(
+  (item): item is { key: SpreadBucket; label: string } => item.key !== "all",
+);
+
+export type SpreadCounts = Record<SpreadFilter, number>;
+
 // 分堆的判据只问一句：这一行现在轮到谁动。轮到我 = todo（等答复 / 待验收 / 失败），
 // 机器在动 = run，谁也没轮到 = wait，收了尾 = done，走完验收 = accepted。
 //
@@ -37,10 +44,24 @@ export function spreadBucket(task: Task): SpreadBucket {
   return "wait";
 }
 
+// 筛选按钮（铺开态的胶囊、窄态的点）共用同一份计数：口径分两处写，早晚会对不上。
+// 口径 = 当前项目的顶层活任务，跟任务树里被筛的那批行是同一批。
+export function spreadCounts(tasks: Task[], projectId: string | null): SpreadCounts {
+  const counts: SpreadCounts = { all: 0, todo: 0, run: 0, wait: 0, done: 0, accepted: 0 };
+  for (const task of tasks) {
+    if (task.projectId !== projectId || task.archived || task.parentId) continue;
+    counts.all += 1;
+    counts[spreadBucket(task)] += 1;
+  }
+  return counts;
+}
+
 export type SidebarSpread = {
   open: boolean;
   // 铺开态的排版是否生效（open，或者收起动画还没跑完）。
   laidOut: boolean;
+  // 筛选是**跨两态共享的一份状态**：铺开态那排胶囊和窄态那排点读写的是同一个值，
+  // 所以在哪边选的，切到另一边还是它 —— 铺开里挑了「在跑」，收起后窄态那颗点也亮着。
   filter: SpreadFilter;
   setFilter: (filter: SpreadFilter) => void;
   followUps: Map<string, TaskFollowUp>;
@@ -53,6 +74,7 @@ export type SidebarSpread = {
 
 // 铺开是**每次从收起开始**的临时视角，不写 localStorage：它是「让我扫一眼」的动作，
 // 不是一种常驻布局；下次打开页面还停在铺开态的话，反而挡住了主区。
+// 筛选同理不落盘 —— 它会把列表藏掉大半，刷新后还留着的话，下次打开只会当成「任务没了」。
 export function useSidebarSpread(tasks: Task[], projectId: string | null, revision: number): SidebarSpread {
   const [open, setOpen] = useState(false);
   const [laidOut, setLaidOut] = useState(false);

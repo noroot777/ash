@@ -8,35 +8,12 @@ import {
 } from "@phosphor-icons/react";
 import { ProjectAvatar } from "./ProjectAvatar.tsx";
 import { ProjectSwitcher } from "./ProjectSwitcher.tsx";
+import { SpreadFilterControls } from "./SpreadFilterControls.tsx";
 import { TaskTree } from "./TaskTree.tsx";
-import { SPREAD_FILTERS, spreadBucket, type SidebarSpread } from "./useSidebarSpread.ts";
+import { type SidebarSpread } from "./useSidebarSpread.ts";
 import { workspaceModifierLabel } from "./useWorkspaceShortcuts.ts";
 import { WorkspaceResizeHandle } from "./WorkspaceResizeHandle.tsx";
 
-// 铺开时才出现的一排筛选。它占的是顶部图标那一行本来就空着的左半边 —— 不新起一行，
-// 否则下面每一行都会跟着下移，「铺开前后逐像素不动」当场就破了。
-function SpreadFilterBar({ spread, tasks, projectId }: { spread: SidebarSpread; tasks: Task[]; projectId: string | null }) {
-  const scope = tasks.filter((task) => task.projectId === projectId && !task.archived && !task.parentId);
-  return (
-    <div className="workspace-spread-filters">
-      {SPREAD_FILTERS.map((item) => {
-        const count = item.key === "all" ? scope.length : scope.filter((task) => spreadBucket(task) === item.key).length;
-        return (
-          <button
-            key={item.key}
-            className={`workspace-spread-filter${spread.filter === item.key ? " is-on" : ""}${item.key === "todo" ? " is-todo" : ""}`}
-            type="button"
-            aria-pressed={spread.filter === item.key}
-            onClick={() => spread.setFilter(item.key)}
-          >
-            <b>{item.label}</b>
-            <span>{count}</span>
-          </button>
-        );
-      })}
-    </div>
-  );
-}
 
 export function WorkspaceSidebar({
   projects,
@@ -101,7 +78,7 @@ export function WorkspaceSidebar({
           onSettings={onSettings}
         />
         <div className="workspace-sidebar-tools" role="toolbar" aria-label="任务工具">
-          {spread.open && <SpreadFilterBar spread={spread} tasks={tasks} projectId={currentProject?.id ?? null} />}
+          <SpreadFilterControls spread={spread} tasks={tasks} projectId={currentProject?.id ?? null} />
           <button className="workspace-side-icon" type="button" title={`搜索 ${modifier} K`} aria-label={`搜索 ${modifier} K`} onClick={onSearch}>
             <MagnifyingGlass size={15} aria-hidden="true" />
           </button>

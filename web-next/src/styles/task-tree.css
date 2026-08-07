@@ -356,6 +356,19 @@
   font-size: 11px;
 }
 
+.workspace-task-empty-action {
+  display: block;
+  margin: 6px auto 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  padding: 2px 8px;
+  color: var(--accent);
+  font-size: 11px;
+}
+
+.workspace-task-empty-action:hover { background: var(--hover-bg); }
+
 .workspace-task-more {
   display: flex;
   width: calc(100% - 22px);

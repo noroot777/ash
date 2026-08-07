@@ -7,7 +7,7 @@ import { TaskStatusDot } from "../components/TaskStatusDot.tsx";
 import { useTaskReadState, type IndicatorForTask } from "../lib/useTaskReadState.ts";
 import { ProjectAvatar } from "./ProjectAvatar.tsx";
 import { SpreadPeekLayer, SpreadRowCells, SpreadRowProvider, useSpreadPeek, useSpreadRow } from "./TaskSpread.tsx";
-import { spreadBucket, type SidebarSpread, type SpreadFilter } from "./useSidebarSpread.ts";
+import { spreadBucket, SPREAD_FILTERS, type SidebarSpread, type SpreadFilter } from "./useSidebarSpread.ts";
 import { buildTaskTree, orderedTopLevelTasks } from "./taskTreeModel.ts";
 
 type TaskTreeProps = {
@@ -238,6 +238,7 @@ function CurrentProjectTree({
   onTask,
   indicatorForTask,
   filter,
+  onClearFilter,
 }: {
   tasks: Task[];
   allTasks: Task[];
@@ -245,6 +246,7 @@ function CurrentProjectTree({
   onTask: (task: Task) => void;
   indicatorForTask: IndicatorForTask;
   filter: SpreadFilter;
+  onClearFilter: () => void;
 }) {
   const sections = useMemo(() => buildTaskTree(tasks, { unifiedPinned: true }), [tasks]);
   const { collapsed, toggle: toggleCollapsed } = useCollapsedSections();
@@ -255,13 +257,26 @@ function CurrentProjectTree({
     else next.add(sectionKey);
     return next;
   });
-  if (!sections.length) return <p className="workspace-task-empty">还没有任务</p>;
+  const keptBySection = sections.map((section) => ({
+    section,
+    kept: filter === "all" ? section.tasks : section.tasks.filter((task) => spreadBucket(task) === filter),
+  }));
+  // 一条不剩时必须自己说出来，还得给条退路：窄态那排点很小，不说清楚的话看着就是「任务全没了」。
+  if (!keptBySection.some((entry) => entry.kept.length)) {
+    const label = SPREAD_FILTERS.find((item) => item.key === filter)?.label ?? filter;
+    return (
+      <p className="workspace-task-empty">
+        {filter === "all" ? "还没有任务" : `「${label}」下没有任务`}
+        {filter !== "all" && (
+          <button className="workspace-task-empty-action" type="button" onClick={onClearFilter}>显示全部</button>
+        )}
+      </p>
+    );
+  }
   return (
     <>
-      {sections.map((section) => {
+      {keptBySection.map(({ section, kept }) => {
         const sectionCollapsed = collapsed.has(section.key);
-        // 筛选只在铺开时可选（窄态没有那排按钮），所以窄态这里恒等于全集。
-        const kept = filter === "all" ? section.tasks : section.tasks.filter((task) => spreadBucket(task) === filter);
         if (!kept.length) return null;
         const selectedIndex = kept.findIndex((task) => task.id === selectedTaskId);
         const previewExpanded = previewExpandedSections.has(section.key) || selectedIndex >= TASK_PREVIEW_LIMIT;
@@ -371,7 +386,7 @@ export function TaskTree({ projects, currentProjectId, tasks, selectedTaskId, sp
   return (
     <SpreadRowProvider value={rowContext}>
       <nav className="workspace-task-tree" aria-label="任务树" onScroll={hide}>
-        <CurrentProjectTree tasks={currentTasks} allTasks={tasks} selectedTaskId={selectedTaskId} onTask={onTask} indicatorForTask={indicatorForTask} filter={spread.open ? spread.filter : "all"} />
+        <CurrentProjectTree tasks={currentTasks} allTasks={tasks} selectedTaskId={selectedTaskId} onTask={onTask} indicatorForTask={indicatorForTask} filter={spread.filter} onClearFilter={() => spread.setFilter("all")} />
         {otherProjects.length > 0 && (
           <section className="workspace-other-projects">
             <header className="workspace-task-section-title">其他项目</header>
