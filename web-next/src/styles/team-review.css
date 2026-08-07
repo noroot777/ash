@@ -1,16 +1,5 @@
-.team-review-workspace { display: flex; min-height: 0; flex: 1; flex-direction: column; background: var(--canvas); }
-.team-review-subbar { display: flex; min-height: 52px; flex: 0 0 auto; flex-wrap: wrap; align-items: center; gap: 10px; border-bottom: .5px solid var(--line); background: var(--panel); padding: 8px 16px; }
-/* 验收动作提到顶栏：它是这一屏唯一的动作，不该跟着调度台卡片一起被折叠收走。失败详情
-   换行铺满顶栏下沿，不去挤那句共享执行者摘要。 */
-.team-review-subbar .team-accept-failure { flex: 1 0 100%; margin: 0; }
-.team-review-subbar > div:first-child { min-width: 0; flex: 1; }
-.team-review-subbar b, .team-review-subbar small { display: block; }
-.team-review-subbar b { font-size: 12.5px; }
-.team-review-subbar small { color: var(--faint); font-size: 10px; }
-.team-review-subbar > button, .team-review-subbar > a { display: inline-flex; height: 28px; align-items: center; gap: 5px; border: 1px solid var(--line2); border-radius: 7px; background: var(--panel); padding: 0 9px; color: var(--muted); font-size: 10.5px; }
-.team-review-subbar > button:hover, .team-review-subbar > a:hover { background: var(--raised); color: var(--ink); }
-.team-review-scroll { min-height: 0; flex: 1; overflow-y: auto; padding: 18px clamp(14px,3vw,34px) 38px; }
-.team-review-stack { display: flex; width: 100%; max-width: 1180px; margin: 0 auto; flex-direction: column; gap: 14px; }
+/* 验收台外壳(workspace / subbar / scroll / stack)在 review.css 里与普通任务的那一份合并
+   定义,两边共用同一副形状。这里只留团队独有的部分。 */
 
 .team-review-record { overflow: hidden; border: 1px solid var(--line2); border-radius: 11px; background: var(--panel); box-shadow: 0 1px 2px rgb(30 32 38 / 4%); }
 .team-review-record > header { display: flex; align-items: flex-start; gap: 8px; padding: 11px 12px; }

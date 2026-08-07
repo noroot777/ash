@@ -1,24 +1,20 @@
-.single-review-workspace { display:flex; min-height:0; flex:1; flex-direction:column; background:var(--canvas); }
-.single-review-subbar { display:flex; min-height:52px; flex:0 0 auto; align-items:center; gap:9px; border-bottom:.5px solid var(--line); background:var(--panel); padding:8px 16px; }
-.single-review-subbar > div:first-child { min-width:0; flex:1; }
-.single-review-subbar b,.single-review-subbar small { display:block; }
-.single-review-subbar b { font-size:12.5px; }
-.single-review-subbar small { color:var(--faint); font-size:10px; }
-.single-review-subbar > button,.single-review-subbar > a { display:inline-flex; height:28px; align-items:center; gap:5px; border:1px solid var(--line2); border-radius:7px; background:var(--panel); padding:0 9px; color:var(--muted); font-size:10.5px; }
-.single-review-subbar > button:hover,.single-review-subbar > a:hover { background:var(--raised); color:var(--ink); }
-.single-review-scroll { min-height:0; flex:1; overflow-y:auto; padding:18px clamp(14px,3vw,34px) 38px; }
-.single-review-card { width:100%; max-width:1240px; margin:0 auto; overflow:hidden; border:1px solid var(--line2); border-radius:11px; background:var(--panel); box-shadow:0 1px 2px rgb(30 32 38 / 4%); }
-.single-review-card-head { display:flex; align-items:flex-start; gap:8px; padding:11px 12px; }
-.single-review-card-head > svg { margin-top:6px; color:var(--faint); }
-.single-review-stage-dot { width:7px; height:7px; flex:0 0 7px; margin-top:9px; border-radius:50%; background:var(--green); }
-.single-review-card-head > div { min-width:0; flex:1; }
-.single-review-card-head > div > span { display:flex; flex-wrap:wrap; align-items:center; gap:6px; }
-.single-review-card-head > div b { min-width:0; overflow:hidden; color:var(--ink); font-size:12.5px; text-overflow:ellipsis; white-space:nowrap; }
-.single-review-card-head > div em,.single-review-card-head > div small { border-radius:4px; background:var(--raised); padding:1px 5px; color:var(--muted); font-size:9.5px; font-style:normal; }
-.single-review-card-head > div small { background:color-mix(in lch,var(--accent) 8%,var(--raised)); color:var(--accent); }
-.single-review-card-head > div p { display:-webkit-box; overflow:hidden; margin:5px 0 0; color:var(--faint); font-size:10.5px; line-height:1.45; -webkit-box-orient:vertical; -webkit-line-clamp:2; }
+/* 验收台外壳:普通任务(single)和团队(team)共用同一副形状——顶栏一行放标题、验收动作和
+   返回,主体一列只铺这一屏独有的东西(改动本身)。两边的选择器并排写在这一处,拆成两份迟早
+   只改一边就漂开了;team-review.css 那边只留团队独有的部分(可折叠的执行者记录卡等)。 */
+.single-review-workspace,.team-review-workspace { display:flex; min-height:0; flex:1; flex-direction:column; background:var(--canvas); }
+.single-review-subbar,.team-review-subbar { display:flex; min-height:52px; flex:0 0 auto; flex-wrap:wrap; align-items:center; gap:10px; border-bottom:.5px solid var(--line); background:var(--panel); padding:8px 16px; }
+/* 验收动作提到顶栏:它是这一屏唯一的动作,不该跟着卡片一起被折叠收走。失败详情换行铺满
+   顶栏下沿,不去挤旁边那句副标题。 */
+.single-review-subbar .team-accept-failure,.team-review-subbar .team-accept-failure { flex:1 0 100%; margin:0; }
+.single-review-subbar > div:first-child,.team-review-subbar > div:first-child { min-width:0; flex:1; }
+.single-review-subbar b,.single-review-subbar small,.team-review-subbar b,.team-review-subbar small { display:block; }
+.single-review-subbar b,.team-review-subbar b { font-size:12.5px; }
+.single-review-subbar small,.team-review-subbar small { color:var(--faint); font-size:10px; }
+.single-review-subbar > button,.single-review-subbar > a,.team-review-subbar > button,.team-review-subbar > a { display:inline-flex; height:28px; align-items:center; gap:5px; border:1px solid var(--line2); border-radius:7px; background:var(--panel); padding:0 9px; color:var(--muted); font-size:10.5px; }
+.single-review-subbar > button:hover,.single-review-subbar > a:hover,.team-review-subbar > button:hover,.team-review-subbar > a:hover { background:var(--raised); color:var(--ink); }
+.single-review-scroll,.team-review-scroll { min-height:0; flex:1; overflow-y:auto; padding:18px clamp(14px,3vw,34px) 38px; }
+.single-review-stack,.team-review-stack { display:flex; width:100%; max-width:1180px; margin:0 auto; flex-direction:column; gap:14px; }
 .single-review-shared-badge { display:inline-flex; height:27px; align-items:center; border:1px solid color-mix(in lch,var(--cyan) 28%,var(--line)); border-radius:7px; background:color-mix(in lch,var(--cyan) 6%,var(--panel)); padding:0 8px; color:var(--cyan); font-size:10px; font-weight:650; }
-.single-review-card-body { display:grid; gap:12px; border-top:.5px solid var(--line); background:color-mix(in lch,var(--canvas) 72%,var(--panel)); padding:12px; }
 .single-review-facts { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:8px; margin:0; }
 .single-review-facts > div { min-width:0; border:1px solid var(--line); border-radius:7px; background:var(--panel); padding:7px 8px; }
 .single-review-facts dt { color:var(--faint); font-size:9px; font-weight:700; letter-spacing:.05em; text-transform:uppercase; }
@@ -107,5 +103,5 @@
 .single-review-line.is-hunk > code { color:#4f58a8; }
 .single-review-line.is-meta > code { color:#a1a1aa; }
 .single-review-more-lines { position:sticky; left:0; width:100%; min-width:612px; height:32px; border:0; border-top:1px solid var(--line); background:var(--panel); color:var(--accent); font-size:9.5px; }
-@media (max-width:760px) { .single-review-facts,.single-review-diff-layout { grid-template-columns:1fr; } .single-review-files > div { max-height:220px; } .single-review-card-head { flex-wrap:wrap; } .single-review-card-head .team-accept-actions { width:100%; justify-content:flex-end; } }
+@media (max-width:760px) { .single-review-facts,.single-review-diff-layout { grid-template-columns:1fr; } .single-review-files > div { max-height:220px; } }
 @media (prefers-reduced-motion:reduce) { .single-review-workspace * { scroll-behavior:auto; } .review-meta-bar__toggle > svg:last-child { transition:none; } }
