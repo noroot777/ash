@@ -60,6 +60,14 @@ let bad = 0;
 const fail = (m: string) => { console.log("   ✕ " + m); bad++; };
 const okLine = (m: string) => console.log("   ✓ " + m);
 
+function macChineseStart(pid: number): string | null {
+  const ms = inspectProcess(pid)?.startedAtMs;
+  if (ms === null || ms === undefined) return null;
+  const d = new Date(ms);
+  const two = (n: number) => String(n).padStart(2, "0");
+  return `六  ${d.getMonth() + 1}月/${String(d.getDate()).padStart(2, " ")} ${two(d.getHours())}:${two(d.getMinutes())}:${two(d.getSeconds())} ${d.getFullYear()}`;
+}
+
 async function makeCase(taskId: string, live: boolean) {
   await db.insert(projects).values({ id: `p-${taskId}`, name: "t", repoPath: dir, createdAt: now() } as never);
   await db.insert(tasks).values({
@@ -84,7 +92,9 @@ async function makeCase(taskId: string, live: boolean) {
     id: sessId, taskId, role: "single", agentType: "claude", executor: "claude@local",
     target: "local", cwd: dir, cliSessionId: "cli-sess-1", commandLine: "fake",
     startedAt: now(), turnStartedAt: now(), activeMs: 0,
-    agentPid: pid, agentStartedAt: inspectProcess(pid)?.startedAt ?? null,
+    // 模拟旧 server 在中文 locale 下落库、重启后新 server 用 C locale 读取 ps。
+    // 两段字符串不同，但指向同一秒，必须仍能接管。
+    agentPid: pid, agentStartedAt: live ? macChineseStart(pid) : inspectProcess(pid)?.startedAt ?? null,
     agentOutPath: paths.out, agentErrPath: paths.err, agentRcPath: paths.rc,
     agentOffset: 0,
   } as never);

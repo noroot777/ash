@@ -14,6 +14,18 @@ export type ProcessInfo = {
   command: string | null;
 };
 
+// `ps -o lstart` 跟随 locale。旧 server 可能把「六  8月/ 8 11:11:17 2026」存进 DB，
+// 新 server 若以 LC_ALL=C 启动会读到「Sat Aug  8 11:11:17 2026」；字符串不等但其实
+// 是同一秒。先认标准 Date.parse，再兼容 macOS 中文 lstart，供已有 session 平滑接回。
+function parseStartedAt(raw: string): number | null {
+  const standard = Date.parse(raw);
+  if (!Number.isNaN(standard)) return standard;
+  const zh = /^\S+\s+(\d{1,2})月\/?\s*(\d{1,2})\s+(\d{2}):(\d{2}):(\d{2})\s+(\d{4})$/.exec(raw);
+  if (!zh) return null;
+  const [, month, day, hour, minute, second, year] = zh.map(Number);
+  return new Date(year!, month! - 1, day!, hour!, minute!, second!).getTime();
+}
+
 // ps 一次拿到启动时间和完整命令行。查不到(进程没了 / ps 不可用)一律 null,
 // 调用方按「不存在」处理 —— 宁可误判成死了(最多多做一次恢复),不能误判成活着
 // (那会让 harness 一直等一个永远不会有输出的进程)。
@@ -22,16 +34,17 @@ export function inspectProcess(pid: number): ProcessInfo | null {
   try {
     const out = execFileSync("ps", ["-p", String(pid), "-o", "lstart=", "-o", "command=", "-ww"], {
       encoding: "utf8",
+      env: { ...process.env, LC_ALL: "C", LANG: "C" },
       stdio: ["ignore", "pipe", "ignore"],
     }).trim();
     if (!out) return null;
     const m = /^(.{24})\s+(.*)$/.exec(out);
     const startedAt = m ? m[1]!.trim() : null;
-    const parsed = startedAt ? Date.parse(startedAt) : Number.NaN;
+    const parsed = startedAt ? parseStartedAt(startedAt) : null;
     return {
       pid,
       startedAt,
-      startedAtMs: Number.isNaN(parsed) ? null : parsed,
+      startedAtMs: parsed,
       command: m ? m[2]!.trim() : out,
     };
   } catch {
@@ -40,11 +53,13 @@ export function inspectProcess(pid: number): ProcessInfo | null {
 }
 
 // 「这个 pid 还是当初那个进程吗」。expectedStartedAt 为空时退化成单纯的存在性
-// 检查(调用方没记启动时间就只能这样),记了就必须对上 —— ps 的 lstart 精度是秒,
-// 所以用字符串相等而不是数值近似。
+// 检查(调用方没记启动时间就只能这样),记了就必须对上。先走原文快路径；locale 不同
+// 时把两边都还原到本机时间戳比较。ps 的 lstart 精度是秒，所以必须精确相等。
 export function isSameProcess(pid: number, expectedStartedAt?: string | null): boolean {
   const info = inspectProcess(pid);
   if (!info) return false;
   if (!expectedStartedAt) return true;
-  return info.startedAt === expectedStartedAt;
+  if (info.startedAt === expectedStartedAt) return true;
+  const expectedMs = parseStartedAt(expectedStartedAt);
+  return expectedMs !== null && info.startedAtMs !== null && info.startedAtMs === expectedMs;
 }
