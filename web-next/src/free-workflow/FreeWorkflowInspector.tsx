@@ -1,5 +1,5 @@
-import type { FreeReviewRun, Task } from "@harness/shared";
-import { CheckCircle, GitMerge, MagnifyingGlass, MonitorPlay, SpinnerGap, WarningCircle } from "@phosphor-icons/react";
+import type { FreeReviewRun, FreeWorkflowPreviewEvent, FreeWorkflowState, Task } from "@harness/shared";
+import { CheckCircle, GitMerge, MagnifyingGlass, MonitorPlay, SpinnerGap, StopCircle, WarningCircle } from "@phosphor-icons/react";
 import { api } from "../lib/api.ts";
 import { useFreeWorkflowState } from "./useFreeWorkflowState.ts";
 
@@ -11,12 +11,31 @@ const RUN_LABELS: Record<FreeReviewRun["status"], string> = {
   failed: "审查链异常停止",
 };
 
+type Activity =
+  | { type: "review"; at: string; key: string; run: FreeReviewRun }
+  | { type: "preview"; at: string; key: string; event: FreeWorkflowPreviewEvent }
+  | { type: "merge"; at: string; key: string; merge: FreeWorkflowState["merge"] };
+
+function actualActivities(state: FreeWorkflowState | null): Activity[] {
+  if (!state) return [];
+  const activities: Activity[] = [
+    ...state.reviews.map((run): Activity => ({ type: "review", at: run.createdAt, key: `review-${run.id}`, run })),
+    ...state.previewEvents.map((event): Activity => ({ type: "preview", at: event.occurredAt, key: `preview-${event.id}`, event })),
+  ];
+  if (state.merge.status !== "idle" && state.merge.updatedAt) {
+    activities.push({ type: "merge", at: state.merge.updatedAt, key: "merge", merge: state.merge });
+  }
+  return activities.sort((a, b) => a.at.localeCompare(b.at) || a.key.localeCompare(b.key));
+}
+
 export function FreeWorkflowInspector({ task, reviewOnly = false }: { task: Task; reviewOnly?: boolean }) {
   const free = useFreeWorkflowState(task.id);
   if (free.loading && !free.state) return <div className="free-workflow-inspector is-loading"><SpinnerGap size={14} className="is-spinning" />正在生成实际工作流…</div>;
   if (free.error && !free.state) return <div className="free-workflow-inspector is-loading is-error"><WarningCircle size={14} />{free.error}</div>;
   const state = free.state;
   const reviews = state?.reviews ?? [];
+  const activities = actualActivities(state);
+  const latestPreviewEvent = state?.previewEvents.at(-1);
 
   return (
     <div className="free-workflow-inspector">
@@ -25,16 +44,27 @@ export function FreeWorkflowInspector({ task, reviewOnly = false }: { task: Task
           <header><span>根据实际情况生成</span><small>这里不预判下一步，只记录真正发生过的操作。</small></header>
           <ol>
             <li className="is-done"><span><CheckCircle size={14} weight="fill" /></span><div><b>任务执行</b><small>{task.status === "running" ? "正在进行" : `当前状态：${task.status}`}</small></div></li>
-            {reviews.map((run) => (
-              <li key={run.id} className={run.status === "passed" ? "is-done" : run.status === "failed" || run.status === "exhausted" ? "is-warning" : "is-active"}>
-                <span>{run.status === "reviewing" || run.status === "repairing" ? <SpinnerGap size={14} className="is-spinning" /> : run.status === "passed" ? <CheckCircle size={14} weight="fill" /> : <MagnifyingGlass size={14} />}</span>
-                <div><b>{run.reviewerName} · {run.checkMode === "logic" ? "逻辑检查" : "语法检查"}</b><small>{RUN_LABELS[run.status]} · 已到第 {run.currentRound} 轮 / 最多 {run.retryLimit + 1} 轮</small></div>
-              </li>
-            ))}
-            {state?.preview.running && <li className="is-active"><span><MonitorPlay size={14} /></span><div><b>预览已打开</b><small>{state.preview.url ?? state.preview.command}</small></div></li>}
-            {state?.merge.status !== "idle" && <li className={state?.merge.status === "merged" ? "is-done" : state?.merge.status === "failed" ? "is-warning" : "is-active"}><span><GitMerge size={14} /></span><div><b>合并&清理</b><small>{state?.merge.message ?? "处理中"}</small></div></li>}
+            {activities.map((activity) => {
+              if (activity.type === "review") {
+                const run = activity.run;
+                return <li key={activity.key} className={run.status === "passed" ? "is-done" : run.status === "failed" || run.status === "exhausted" ? "is-warning" : "is-active"}>
+                  <span>{run.status === "reviewing" || run.status === "repairing" ? <SpinnerGap size={14} className="is-spinning" /> : run.status === "passed" ? <CheckCircle size={14} weight="fill" /> : <MagnifyingGlass size={14} />}</span>
+                  <div><b>{run.reviewerName} · {run.checkMode === "logic" ? "逻辑检查" : "语法检查"}</b><small>{RUN_LABELS[run.status]} · 已到第 {run.currentRound} 轮 / 最多 {run.retryLimit + 1} 轮</small></div>
+                </li>;
+              }
+              if (activity.type === "preview") {
+                const active = activity.event.kind === "preview_opened" && latestPreviewEvent?.id === activity.event.id && !!state?.preview.running;
+                return <li key={activity.key} className={active ? "is-active" : "is-done"}>
+                  <span>{activity.event.kind === "preview_opened" ? <MonitorPlay size={14} /> : <StopCircle size={14} />}</span>
+                  <div><b>{activity.event.kind === "preview_opened" ? "预览已打开" : "预览已关闭"}</b><small>{activity.event.detail}</small></div>
+                </li>;
+              }
+              return <li key={activity.key} className={activity.merge.status === "merged" ? "is-done" : activity.merge.status === "failed" ? "is-warning" : "is-active"}>
+                <span><GitMerge size={14} /></span><div><b>合并&清理</b><small>{activity.merge.message ?? "处理中"}</small></div>
+              </li>;
+            })}
           </ol>
-          {!reviews.length && !state?.preview.running && state?.merge.status === "idle" && <p>目前只有任务执行本身；派审、预览或合并后，这里会按发生顺序补出记录。</p>}
+          {!activities.length && <p>目前只有任务执行本身；派审、预览或合并后，这里会按发生顺序补出记录。</p>}
         </section>
       )}
 

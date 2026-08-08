@@ -49,7 +49,7 @@ check("审查者配置会进入预览", (CONFIG_TABLES as readonly string[]).inc
 check("快照搬任务，也搬它的分组与队列",
   ["groups", "tasks", "sessions", "queue_items"].every((t) => (SNAPSHOT_TABLES as readonly string[]).includes(t)), true);
 check("快照会带上自由工作流实际记录",
-  ["free_workflow_states", "free_review_runs", "free_review_rounds"].every((t) => (SNAPSHOT_TABLES as readonly string[]).includes(t)), true);
+  ["free_workflow_states", "free_workflow_events", "free_review_runs", "free_review_rounds"].every((t) => (SNAPSHOT_TABLES as readonly string[]).includes(t)), true);
 
 const source = createClient({ url: `file:${join(root, "live.db")}` });
 const dest = createClient({ url: `file:${join(root, "preview.db")}` });
@@ -66,6 +66,7 @@ try {
     CREATE TABLE projects (id TEXT PRIMARY KEY, name TEXT NOT NULL, repo_path TEXT NOT NULL);
     CREATE TABLE tasks (id TEXT PRIMARY KEY, status TEXT NOT NULL, mode TEXT NOT NULL DEFAULT 'single', verify_round INTEGER);
     CREATE TABLE sessions (id TEXT PRIMARY KEY, task_id TEXT NOT NULL, agent_pid INTEGER, agent_started_at TEXT, agent_offset INTEGER, usage_output INTEGER);
+    CREATE TABLE free_workflow_events (id TEXT PRIMARY KEY, task_id TEXT NOT NULL, kind TEXT NOT NULL, source TEXT NOT NULL, detail TEXT, occurred_at TEXT NOT NULL);
     CREATE TABLE schedules (id TEXT PRIMARY KEY, task_id TEXT NOT NULL, cron TEXT);
     CREATE TABLE scheduled_messages (id TEXT PRIMARY KEY, task_id TEXT NOT NULL, status TEXT NOT NULL);
     INSERT INTO app_settings VALUES ('worktreeDefault', 'true');
@@ -78,6 +79,7 @@ try {
     INSERT INTO tasks VALUES ('t3', 'done', 'single', NULL);
     INSERT INTO tasks VALUES ('t4', 'running', 'team', NULL);
     INSERT INTO sessions VALUES ('s1', 't1', 4242, 'Mon Aug 7 10:00:00 2026', 991, 706);
+    INSERT INTO free_workflow_events VALUES ('event1', 't3', 'preview_closed', 'user', 'http://127.0.0.1:4567', '2026-08-08T10:00:00.000Z');
     INSERT INTO schedules VALUES ('sch1', 't3', '0 9 * * *');
     INSERT INTO scheduled_messages VALUES ('msg1', 't3', 'pending');
   `);
@@ -93,6 +95,7 @@ try {
     CREATE TABLE projects (id TEXT PRIMARY KEY, name TEXT NOT NULL, repo_path TEXT NOT NULL);
     CREATE TABLE tasks (id TEXT PRIMARY KEY, status TEXT NOT NULL, mode TEXT NOT NULL DEFAULT 'single', verify_round INTEGER);
     CREATE TABLE sessions (id TEXT PRIMARY KEY, task_id TEXT NOT NULL, agent_pid INTEGER, agent_started_at TEXT, agent_offset INTEGER, usage_output INTEGER);
+    CREATE TABLE free_workflow_events (id TEXT PRIMARY KEY, task_id TEXT NOT NULL, kind TEXT NOT NULL, source TEXT NOT NULL, detail TEXT, occurred_at TEXT NOT NULL);
     CREATE TABLE schedules (id TEXT PRIMARY KEY, task_id TEXT NOT NULL, cron TEXT);
     CREATE TABLE scheduled_messages (id TEXT PRIMARY KEY, task_id TEXT NOT NULL, status TEXT NOT NULL);
     INSERT INTO schedules VALUES ('old-sch', 'old', '0 1 * * *');
@@ -126,6 +129,7 @@ try {
   // —— snapshot 档：运行态也搬，搬完必须洗 ——
   const snap = await copyTables(source, dest, SNAPSHOT_TABLES);
   check("快照搬了任务与会话", { tasks: snap.tasks, sessions: snap.sessions }, { tasks: 4, sessions: 1 });
+  check("快照保留自由工作流预览历史", (await dest.execute("SELECT kind FROM free_workflow_events WHERE id='event1'")).rows[0].kind, "preview_closed");
   check("主库的定时任务没搬进来",
     (await dest.execute("SELECT id FROM schedules ORDER BY id")).rows.map((row) => row.id), ["old-sch"]);
   check("token 账跟着会话行一起进来（不然预览里芯片没数）",

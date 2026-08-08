@@ -58,6 +58,7 @@ export const SNAPSHOT_TABLES = [
   "sessions",
   "queue_items",
   "free_workflow_states",
+  "free_workflow_events",
   "free_review_runs",
   "free_review_rounds",
 ] as const;

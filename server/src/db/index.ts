@@ -118,6 +118,12 @@ export async function ensureSchema() {
       merge_status TEXT NOT NULL DEFAULT 'idle', merge_message TEXT,
       merged_at TEXT, updated_at TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS free_workflow_events (
+      id TEXT PRIMARY KEY, task_id TEXT NOT NULL, kind TEXT NOT NULL,
+      source TEXT NOT NULL, detail TEXT, occurred_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS free_workflow_events_task_idx
+      ON free_workflow_events (task_id, occurred_at);
     CREATE TABLE IF NOT EXISTS free_review_runs (
       id TEXT PRIMARY KEY, task_id TEXT NOT NULL, reviewer_id TEXT,
       reviewer_name TEXT NOT NULL, agent_type TEXT NOT NULL, executor_id TEXT,

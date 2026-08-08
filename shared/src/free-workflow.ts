@@ -58,16 +58,29 @@ export interface FreeWorkflowPreviewState {
   startedAt: string | null;
 }
 
+export type FreeWorkflowPreviewEventKind = "preview_opened" | "preview_closed";
+export type FreeWorkflowPreviewEventSource = "user" | "merge" | "rerun" | "system";
+
+export interface FreeWorkflowPreviewEvent {
+  id: string;
+  kind: FreeWorkflowPreviewEventKind;
+  source: FreeWorkflowPreviewEventSource;
+  detail: string | null;
+  occurredAt: string;
+}
+
 export interface FreeWorkflowMergeState {
   status: "idle" | "merging" | "merged" | "failed";
   message: string | null;
   mergedAt: string | null;
+  updatedAt: string | null;
 }
 
 export interface FreeWorkflowState {
   taskId: string;
   selectedReviewerId: string | null;
   preview: FreeWorkflowPreviewState;
+  previewEvents: FreeWorkflowPreviewEvent[];
   merge: FreeWorkflowMergeState;
   reviews: FreeReviewRun[];
 }

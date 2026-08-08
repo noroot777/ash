@@ -6,6 +6,7 @@ import type {
   FreeReviewDispatchInput,
   FreeReviewRun,
   FreeReviewRound,
+  FreeWorkflowPreviewEvent,
   FreeWorkflowState,
   TaskStatus,
 } from "@harness/shared";
@@ -18,12 +19,14 @@ import {
   agents,
   freeReviewRounds,
   freeReviewRuns,
+  freeWorkflowEvents,
   freeWorkflowStates,
   projects,
   reviewerProfiles,
   tasks,
 } from "./db/schema.js";
 import { cleanupAcceptedTask, mergeTaskBranch } from "./git-accept.js";
+import { recordFreePreviewEvent } from "./free-workflow-events.js";
 import { projectHealthLight } from "./git.js";
 import { continueWhenIdle } from "./runs.js";
 import { RUNS_DIR } from "./paths.js";
@@ -389,6 +392,12 @@ async function startFreePreview(taskId: string) {
     };
     const result = await startPreview(taskId, step, workspace.path);
     if (!result.ok) throw new Error(result.reason);
+    await recordFreePreviewEvent(taskId, {
+      kind: "preview_opened",
+      source: "user",
+      detail: result.record.url ?? result.record.cmd,
+      occurredAt: result.record.startedAt,
+    });
     await appendTaskTimeline(taskId, `自由工作流预览已打开：${result.record.url ?? command}`);
     bus.publish({ type: "task.review", taskId });
     return result.record;
@@ -419,7 +428,7 @@ async function mergeAndClean(taskId: string): Promise<{ merged: true; message: s
       taskId, selectedReviewerId: null, mergeStatus: "merging", mergeMessage: null, mergedAt: null, updatedAt: at,
     }).onConflictDoUpdate({ target: freeWorkflowStates.taskId, set: { mergeStatus: "merging", mergeMessage: null, updatedAt: at } });
     try {
-      await stopPreview(taskId, "开始合并并清理，自由工作流顺手关闭预览");
+      await stopPreview(taskId, "开始合并并清理，自由工作流顺手关闭预览", "merge");
       const project = (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0);
       if (!project) throw new Error("项目不存在");
       let message: string;
@@ -454,10 +463,12 @@ async function mergeAndClean(taskId: string): Promise<{ merged: true; message: s
 }
 
 export async function freeWorkflowState(taskId: string): Promise<FreeWorkflowState> {
-  const [state, runs, profileRows] = await Promise.all([
+  const [state, runs, profileRows, eventRows] = await Promise.all([
     db.select().from(freeWorkflowStates).where(eq(freeWorkflowStates.taskId, taskId)).then((rows) => rows.at(0)),
     db.select().from(freeReviewRuns).where(eq(freeReviewRuns.taskId, taskId)).orderBy(desc(freeReviewRuns.createdAt)),
     db.select({ id: agents.id, name: agents.name }).from(agents),
+    db.select().from(freeWorkflowEvents).where(eq(freeWorkflowEvents.taskId, taskId))
+      .orderBy(asc(freeWorkflowEvents.occurredAt)),
   ]);
   const roundRows = runs.length
     ? await db.select().from(freeReviewRounds).where(inArray(freeReviewRounds.runId, runs.map((run) => run.id)))
@@ -492,6 +503,13 @@ export async function freeWorkflowState(taskId: string): Promise<FreeWorkflowSta
     finishedAt: run.finishedAt,
   }));
   const preview = readPreview(taskId);
+  const previewEvents: FreeWorkflowPreviewEvent[] = eventRows.map((event) => ({
+    id: event.id,
+    kind: event.kind as FreeWorkflowPreviewEvent["kind"],
+    source: event.source as FreeWorkflowPreviewEvent["source"],
+    detail: event.detail,
+    occurredAt: event.occurredAt,
+  }));
   return {
     taskId,
     selectedReviewerId: state?.selectedReviewerId ?? null,
@@ -502,10 +520,12 @@ export async function freeWorkflowState(taskId: string): Promise<FreeWorkflowSta
       command: preview?.cmd ?? null,
       startedAt: preview?.startedAt ?? null,
     },
+    previewEvents,
     merge: {
       status: (state?.mergeStatus as FreeWorkflowState["merge"]["status"] | undefined) ?? "idle",
       message: state?.mergeMessage ?? null,
       mergedAt: state?.mergedAt ?? null,
+      updatedAt: state?.updatedAt ?? null,
     },
     reviews,
   };
@@ -547,7 +567,7 @@ export function mountFreeWorkflowRoutes(api: Hono): void {
     if (freeActionLocks.has(taskId)) return c.json({ error: "当前已有自由工作流操作正在进行" }, 409);
     freeActionLocks.add(taskId);
     try {
-      const stopped = await stopPreview(taskId, "用户关闭了自由工作流预览");
+      const stopped = await stopPreview(taskId, "用户关闭了自由工作流预览", "user");
       bus.publish({ type: "task.review", taskId });
       return c.json({ stopped });
     } finally {

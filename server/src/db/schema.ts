@@ -201,6 +201,19 @@ export const freeWorkflowStates = sqliteTable("free_workflow_states", {
   updatedAt: text("updated_at").notNull(),
 });
 
+export const freeWorkflowEvents = sqliteTable(
+  "free_workflow_events",
+  {
+    id: text("id").primaryKey(),
+    taskId: text("task_id").notNull(),
+    kind: text("kind").notNull(),
+    source: text("source").notNull(),
+    detail: text("detail"),
+    occurredAt: text("occurred_at").notNull(),
+  },
+  (t) => ({ taskIdx: index("free_workflow_events_task_idx").on(t.taskId, t.occurredAt) }),
+);
+
 export const freeReviewRuns = sqliteTable(
   "free_review_runs",
   {

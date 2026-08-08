@@ -12,6 +12,7 @@ try {
   const { agents, freeReviewRuns, projects } = await import("../src/db/schema.js");
   const { createTasks } = await import("../src/task-store.js");
   const { mountFreeWorkflowRoutes, freeReviewOutcome, freeReviewResumeOptions } = await import("../src/free-workflow.js");
+  const { recordFreePreviewEvent } = await import("../src/free-workflow-events.js");
   const { mountReviewerProfileRoutes } = await import("../src/reviewer-profiles.js");
   const { mountTaskRoutes } = await import("../src/task-routes.js");
   const { mountTaskStageRoutes } = await import("../src/task-stage.js");
@@ -58,6 +59,25 @@ try {
   assert.equal(state.status, 200);
   assert.deepEqual((await state.json() as { reviews: unknown[] }).reviews, []);
 
+  await recordFreePreviewEvent("free-task", {
+    kind: "preview_opened", source: "user", detail: "http://127.0.0.1:4567",
+    occurredAt: "2026-08-08T10:00:00.000Z",
+  });
+  await recordFreePreviewEvent("free-task", {
+    kind: "preview_closed", source: "user", detail: "http://127.0.0.1:4567",
+    occurredAt: "2026-08-08T10:01:00.000Z",
+  });
+  const previewHistory = await api.request("/tasks/free-task/free-workflow");
+  assert.deepEqual(
+    (await previewHistory.json() as { previewEvents: Array<{ kind: string; source: string; detail: string | null; occurredAt: string }> }).previewEvents
+      .map(({ kind, source, detail, occurredAt }) => ({ kind, source, detail, occurredAt })),
+    [
+      { kind: "preview_opened", source: "user", detail: "http://127.0.0.1:4567", occurredAt: "2026-08-08T10:00:00.000Z" },
+      { kind: "preview_closed", source: "user", detail: "http://127.0.0.1:4567", occurredAt: "2026-08-08T10:01:00.000Z" },
+    ],
+    "预览关闭后，打开与关闭事件仍应按实际发生顺序保留",
+  );
+
   const review = await api.request("/tasks/free-task/free-workflow/review", {
     method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify({ reviewerId: reviewer.id, checkMode: "logic", retryLimit: 1 }),
@@ -99,6 +119,7 @@ try {
   console.log("✓ 自由任务不携带起手式快照");
   console.log("✓ 默认 1 次自动复审的轮数语义正确");
   console.log("✓ 审查者 CRUD 与自由工作流初始状态可用");
+  console.log("✓ 预览打开与关闭事件持久保留且按发生顺序返回");
   console.log("✓ backlog、旧 stage 与旧 accept 路径均被隔离");
   console.log("✓ 派生任务与起手式引用不能混入自由工作流");
   console.log("✓ 审查续跑保持独立 reviewer 会话与原模型配置");
