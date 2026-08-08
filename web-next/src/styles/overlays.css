@@ -300,6 +300,10 @@
   padding: 8px;
 }
 
+.notes-status-filter { width: 92px; flex: none; }
+.notes-status-filter .ui-dropdown-trigger { border-color: var(--line); padding: 0 7px; font-size: 10px; box-shadow: none; }
+.notes-status-filter-menu { z-index: 215; }
+
 .notes-list-tools label {
   display: flex;
   min-width: 0;
@@ -684,6 +688,9 @@
   .has-preview .palette-body { grid-template-columns: minmax(0, 1fr); }
   .palette-preview { display: none; }
   .notes-body { grid-template-columns: 210px minmax(0, 1fr); }
+  .notes-list { grid-template-rows: 82px minmax(0, 1fr); }
+  .notes-list-tools { flex-wrap: wrap; }
+  .notes-list-tools > button { order: 1; } .notes-status-filter { order: 2; width: 100%; }
   .notes-panel > footer > span { display: none; }
 }
 

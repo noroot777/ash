@@ -57,11 +57,12 @@ export function Dropdown({
   note = "",
   mono = false,
   className = "",
+  panelClassName = "",
   onClear,
   clearLabel = "清空",
 }: {
   value: string;
-  options: DropdownOption[];
+  options: readonly DropdownOption[];
   onChange: (value: string) => void;
   /** 无可见标题时的可访问名称。 */
   label: string;
@@ -76,6 +77,7 @@ export function Dropdown({
   note?: string;
   mono?: boolean;
   className?: string;
+  panelClassName?: string;
   /** 给一个「回到不设置」的出口；候选列表里就不必再占一行「跟随…」。 */
   onClear?: () => void;
   clearLabel?: string;
@@ -199,7 +201,7 @@ export function Dropdown({
 
       {open && place && createPortal(
         <div
-          className="ui-dropdown-panel"
+          className={`ui-dropdown-panel ${panelClassName}`.trim()}
           ref={panelRef}
           tabIndex={-1}
           onKeyDown={onKeyDown}

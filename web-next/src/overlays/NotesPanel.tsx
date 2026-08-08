@@ -11,11 +11,13 @@ import type { Note, ProjectView } from "@harness/shared";
 import { ArrowSquareOut, CheckCircle, CornersIn, CornersOut, File, MagnifyingGlass, NotePencil, Plus, Trash, X } from "@phosphor-icons/react";
 import { ImagePreviewGroup, PreviewableImage } from "../components/ImagePreview.tsx";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
+import { Dropdown } from "../components/Dropdown.tsx";
 import { Button } from "../components/ui.tsx";
 import { api } from "../lib/api.ts";
 import { AttachmentPicker, UploadAttachmentList, useAttachments } from "../task-detail/Attachments.tsx";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import { attachmentView } from "../task-detail/utils.ts";
+import { filterNotes, NOTE_CONVERSION_FILTERS, type NoteConversionFilter } from "./notesFilter.ts";
 
 const titleOf = (body: string) => body.split(/\r?\n/).map((line) => line.trim()).find(Boolean)?.slice(0, 42) || "无标题随手记";
 const ordered = (rows: Note[]) => [...rows].sort((a, b) => b.updatedAt - a.updatedAt);
@@ -182,6 +184,7 @@ export function NotesPanel({ project, initialNoteId, onClose, onTask, onConvert,
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const [draft, setDraft] = useState<NoteDraft>(initialDraft);
   const [query, setQuery] = useState("");
+  const [conversionFilter, setConversionFilter] = useState<NoteConversionFilter>("all");
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState(true);
   const [saveState, setSaveState] = useState<SaveState>("saved");
@@ -298,11 +301,14 @@ export function NotesPanel({ project, initialNoteId, onClose, onTask, onConvert,
   const active = rows.find((note) => note.id === activeId) ?? null;
   const dirty = !sameDraft(draft, savedDraftRef.current);
   const newDraft = draft.id === null;
-  const filtered = useMemo(() => {
-    const keyword = query.trim().toLocaleLowerCase();
-    if (!keyword) return rows;
-    return rows.filter((note) => (note.id === draft.id ? draft.body : note.body).toLocaleLowerCase().includes(keyword));
-  }, [draft.body, draft.id, query, rows]);
+  const filtered = useMemo(
+    () => filterNotes(rows, query, conversionFilter, draft),
+    [conversionFilter, draft, query, rows],
+  );
+  const emptyListText = query.trim() ? "没有匹配的随手记"
+    : conversionFilter === "converted" ? "没有已转任务的随手记"
+      : conversionFilter === "unconverted" ? "没有未转任务的随手记"
+        : "还没有随手记";
   const saveStatus = newDraft && !draft.body.trim() && !draft.attachments.length ? "输入后自动保存"
     : saveState === "saving" ? "正在保存…"
       : saveState === "pending" ? "等待自动保存"
@@ -354,6 +360,7 @@ export function NotesPanel({ project, initialNoteId, onClose, onTask, onConvert,
     setSaveState("saved");
     setEditing(true);
     setQuery("");
+    setConversionFilter("all");
     uploads.clear();
   };
   const remove = async () => {
@@ -426,14 +433,14 @@ export function NotesPanel({ project, initialNoteId, onClose, onTask, onConvert,
           </div>
         </header>
         <div className="notes-body">
-          <aside className="notes-list"><div className="notes-list-tools"><label><MagnifyingGlass size={14} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索随手记…" /></label><button type="button" onClick={() => void create()} aria-label="新建随手记"><Plus size={15} /></button></div><div className="notes-scroll" role="list" aria-label="随手记列表">
+          <aside className="notes-list"><div className="notes-list-tools"><label><MagnifyingGlass size={14} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索随手记…" /></label><Dropdown className="notes-status-filter" panelClassName="notes-status-filter-menu" value={conversionFilter} options={NOTE_CONVERSION_FILTERS} onChange={(value) => setConversionFilter(value as NoteConversionFilter)} label="按转任务状态筛选随手记" filterable={false} /><button type="button" onClick={() => void create()} aria-label="新建随手记"><Plus size={15} /></button></div><div className="notes-scroll" role="list" aria-label="随手记列表">
             {!loading && newDraft && <div className="note-row ui-selectable is-selected" role="listitem"><span className="note-pick-placeholder" /><button className="note-row-main" type="button" onClick={() => setEditing(true)}><b>{titleOf(draft.body)}</b><small>{draft.body.trim() ? saveStatus : "尚未保存"}</small></button></div>}
             {filtered.map((note) => <div className={`note-row ui-selectable${note.taskLinks.length ? " is-converted" : ""}${note.id === draft.id ? " is-selected" : ""}`} key={note.id} role="listitem">
               <button className="note-pick" type="button" role="checkbox" aria-checked={picked.has(note.id)} aria-label={`选择 ${titleOf(note.body)}`} onClick={() => togglePicked(note.id)}><span className={`ui-checkbox${picked.has(note.id) ? " is-checked" : ""}`} aria-hidden="true" /></button>
               <button className="note-row-main" type="button" onClick={() => void select(note)}><b>{titleOf(note.id === draft.id ? draft.body : note.body)}</b><small>{noteTime(note.updatedAt)}</small></button>
               {note.taskLinks.length > 0 && <button className="note-task-badge" type="button" title="打开最近关联任务" onClick={async () => { if (await flushDraft()) onTask(note.taskLinks[0].taskId); }}><CheckCircle size={12} weight="duotone" aria-hidden="true" /><span>已转 {note.taskLinks.length} 个</span><ArrowSquareOut className="note-task-arrow" size={11} aria-hidden="true" /></button>}
             </div>)}
-            {loading && <p>读取中…</p>}{!loading && !filtered.length && !newDraft && <p>没有匹配的随手记</p>}
+            {loading && <p>读取中…</p>}{!loading && !filtered.length && !newDraft && <p>{emptyListText}</p>}
           </div></aside>
           <main className="note-editor">
             <div className="note-meta">
