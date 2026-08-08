@@ -6,6 +6,7 @@ import remarkGfm from "remark-gfm";
 import { ImagePreviewGroup, PreviewableImage, PreviewableImageLink } from "./ImagePreview.tsx";
 import {
   imagePreviewTarget,
+  isLocalDiskImagePath,
   isLocalOpenHref,
   openLocalPath,
   remarkSoftBreaks,
@@ -70,6 +71,7 @@ function MarkdownDocument({ text, onReviewReport, onActionError }: {
           img: ({ src, alt }) => {
             const raw = typeof src === "string" ? src : "";
             const image = imagePreviewTarget(raw);
+            if (!image && isLocalDiskImagePath(raw)) return null;
             return (
               <PreviewableImage
                 className="task-markdown-image"

@@ -16,10 +16,15 @@ import {
   registeredAgentTypes,
   teamExecutorCandidates,
 } from "../src/lib/agentAvailability.ts";
+import { isLocalDiskImagePath } from "../src/components/markdownPolicy.ts";
 
 const originalFetch = globalThis.fetch;
 
 try {
+  assert.equal(isLocalDiskImagePath("/tmp/cli-drawer.jpg"), true);
+  assert.equal(isLocalDiskImagePath("file:///Users/fjh/cli-drawer.png"), true);
+  assert.equal(isLocalDiskImagePath("/api/uploads/cli-drawer.jpg"), false);
+
   const failure = {
     accepted: false,
     taskId: "missing",
@@ -169,6 +174,38 @@ try {
   assert.deepEqual(
     liveInterleaved[0]?.kind === "agent" ? liveInterleaved[0].segments.map(({ markdown, events }) => [markdown, events[0]?.kind]) : [],
     [["正文一", "thinking"], ["正文二", "tool"]],
+  );
+
+  const persistedAttachmentPath = "/tmp/harness/data/uploads/persisted-agent-image.png";
+  const attachmentConversation = buildConversationItems(
+    [{
+      session: { ...session, endedAt: "2026-07-30T01:00:10.000Z" },
+      output: "图片如下。",
+      trace: [
+        { at: "2026-07-30T01:00:01.000Z", turnStartedAt: session.startedAt, event: { kind: "text", text: "图片如下。" } },
+        { at: "2026-07-30T01:00:02.000Z", turnStartedAt: session.startedAt, event: { kind: "attachment", path: persistedAttachmentPath } },
+      ],
+    }],
+    [{ ...session, endedAt: "2026-07-30T01:00:10.000Z" }],
+    [],
+  );
+  assert.deepEqual(
+    attachmentConversation[0]?.kind === "agent"
+      ? attachmentConversation[0].segments.flatMap((segment) => segment.attachments)
+      : [],
+    [persistedAttachmentPath],
+  );
+
+  const liveAttachmentPath = "/tmp/harness/data/uploads/live-agent-image.jpg";
+  const liveAttachmentConversation = buildConversationItems([], [session], [
+    { kind: "server", id: "live-text", event: { type: "agent.event", taskId: "task-1", sessionId: session.id, role: "single", event: { kind: "text", text: "实时图片。" } } },
+    { kind: "server", id: "live-image", event: { type: "agent.event", taskId: "task-1", sessionId: session.id, role: "single", event: { kind: "attachment", path: liveAttachmentPath } } },
+  ]);
+  assert.deepEqual(
+    liveAttachmentConversation[0]?.kind === "agent"
+      ? liveAttachmentConversation[0].segments.flatMap((segment) => segment.attachments)
+      : [],
+    [liveAttachmentPath],
   );
 
   const traceOnlyConversation = buildConversationItems(

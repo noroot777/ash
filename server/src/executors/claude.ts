@@ -8,6 +8,7 @@ import { spawnForRun, detachedInfo } from "./detached.js";
 import { spawnAgent, resumeFor, resumeInner, spawnErrorMessage, killChild, forceFinishOnExit, redactSecrets } from "./spawn.js";
 import { relayRoot } from "../llm.js";
 import { calibrateSkills } from "../skills.js";
+import { persistMarkdownImages, persistToolResultImages } from "../agent-attachments.js";
 
 // Drives the real `claude` CLI in headless stream-json mode (prompt via stdin).
 //   claude -p --output-format stream-json --verbose --dangerously-skip-permissions
@@ -182,6 +183,7 @@ export async function* parseClaudeStream(
   // 时发一条 context 事件。窗口(分母)反过来只有 `result` 行有,见 claudeContextWindow。
   let contextUsed = 0;
   let contextModel: string | null = null;
+  const seenImages = new Set<string>();
 
   const rl = createInterface({ input: child.stdout! });
   rl.on("line", (line) => {
@@ -235,6 +237,16 @@ export async function* parseClaudeStream(
         } else if (block.type === "tool_use") push({ kind: "tool", name: block.name, detail: shortJson(block.input) });
       }
       if (hadText) push({ kind: "text", text: "\n\n" }); // paragraph break, identical live & on reload
+      for (const block of ev.message.content) {
+        if (block.type !== "text" || typeof block.text !== "string") continue;
+        for (const path of persistMarkdownImages(block.text, seenImages)) push({ kind: "attachment", path });
+      }
+    } else if (ev.type === "user" && Array.isArray(ev.message?.content)) {
+      flushText();
+      for (const block of ev.message.content) {
+        if (block?.type !== "tool_result") continue;
+        for (const path of persistToolResultImages(block.content, seenImages)) push({ kind: "attachment", path });
+      }
     } else if (ev.type === "result") {
       flushText();
       if (ev.session_id) push({ kind: "session", cliSessionId: ev.session_id });
@@ -271,6 +283,7 @@ export async function* parseClaudeStream(
       }
       // 常驻:回合说完了,进程还活着等下一条消息 —— 流不结束。
       if (resident) push({ kind: "turnEnd" });
+      seenImages.clear();
     }
   });
 

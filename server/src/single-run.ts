@@ -216,7 +216,7 @@ export async function consumeSingleRun(a: {
   const persistTrace = (event: AgentEvent, at?: string) => {
     // `context` 刻意不进 trace：trace 是「按回合回放各自的气泡」，而水位属于整条会话的
     // 此刻、只有最后一个值有意义，它的家在 sessions 行上（setSessionContext）。
-    if (event.kind === "thinking" || event.kind === "tool" || event.kind === "error" || event.kind === "usage") {
+    if (event.kind === "thinking" || event.kind === "tool" || event.kind === "error" || event.kind === "usage" || event.kind === "attachment") {
       flushTraceText();
       appendSessionTrace(taskId, sessId, a.turnStart, event, at);
     } else if (event.kind === "done" || event.kind === "turnEnd") {

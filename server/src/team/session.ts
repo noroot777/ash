@@ -367,7 +367,7 @@ async function consume(lead: Lead): Promise<void> {
     }
     else {
       flushTraceText();
-      if (event.kind === "thinking" || event.kind === "tool" || event.kind === "error" || event.kind === "usage") {
+      if (event.kind === "thinking" || event.kind === "tool" || event.kind === "error" || event.kind === "usage" || event.kind === "attachment") {
         appendSessionTrace(lead.taskId, lead.sessId, lead.turnStart ?? now(), event);
       }
       // 调度台是常驻会话：一条 sessions 行吃很多回合，累计就落在这一行上。

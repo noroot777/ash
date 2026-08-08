@@ -27,13 +27,21 @@ try {
     name: "exec",
     detail: "rg -n trace",
   }, "2026-08-01T01:00:02.000Z");
+  appendSessionTrace(taskId, sessionId, turnStartedAt, {
+    kind: "attachment",
+    path: "/tmp/data/uploads/agent-result.png",
+  }, "2026-08-01T01:00:03.000Z");
 
   const parsed = parseSessionTrace(`${readFileSync(path, "utf8")}not-json\n`);
-  assert.equal(parsed.length, 3);
+  assert.equal(parsed.length, 4);
   assert.equal(parsed[0]?.event.kind, "thinking");
   assert.equal(parsed[1]?.event.kind, "text");
   assert.equal(parsed[2]?.event.kind, "tool");
   assert.equal(parsed[2]?.turnStartedAt, turnStartedAt);
+  assert.deepEqual(parsed[3]?.event, {
+    kind: "attachment",
+    path: "/tmp/data/uploads/agent-result.png",
+  });
   console.log("会话执行轨迹持久化验证通过");
 } finally {
   rmSync(dirname(path), { recursive: true, force: true });

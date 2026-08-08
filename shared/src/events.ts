@@ -25,6 +25,7 @@ export type AgentEvent =
   | { kind: "thinking"; text: string }
   | { kind: "text"; text: string }
   | { kind: "tool"; name: string; detail?: string }
+  | { kind: "attachment"; path: string }
   | { kind: "session"; cliSessionId: string }
   | { kind: "system"; text: string } // a backend-initiated 〔系统〕 trace (e.g. 继续) — its own bubble, not agent text
   // 本回合的 token 用量,由执行器从 CLI 的收尾事件(claude 的 result / codex 的

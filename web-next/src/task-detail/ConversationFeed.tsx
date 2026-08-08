@@ -41,6 +41,7 @@ function AgentMessage({
         {item.segments.map((segment, index) => (
           <section className="task-agent-segment" key={segment.id}>
             <ExecutionDetails events={segment.events} running={!item.endedAt && index === item.segments.length - 1} />
+            <MessageAttachments paths={segment.attachments} />
             {segment.markdown && <MarkdownBody text={segment.markdown} />}
           </section>
         ))}

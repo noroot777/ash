@@ -28,6 +28,7 @@ function AgentRow({ row }: { row: Extract<TeamFeedRow, { kind: "conv" }>["item"]
       {row.segments.map((segment, index) => (
         <section className="task-agent-segment" key={segment.id}>
           <ExecutionDetails events={segment.events} running={!row.endedAt && index === row.segments.length - 1} />
+          <MessageAttachments paths={segment.attachments} />
           {segment.markdown && <MarkdownBody text={segment.markdown} />}
         </section>
       ))}

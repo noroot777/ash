@@ -103,6 +103,7 @@ export type SessionTraceEntry = {
     | { kind: "text"; text: string }
     | { kind: "thinking"; text: string }
     | { kind: "tool"; name: string; detail?: string }
+    | { kind: "attachment"; path: string }
     | { kind: "error"; message: string }
     // 这一回合的 token 账（服务端每轮至多写一条）。它不是执行过程里的一步，渲染时
     // 要单独摘出去，别混进「执行过程」那串事件。

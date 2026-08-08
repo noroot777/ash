@@ -62,6 +62,13 @@ export function imagePreviewTarget(href?: string): ImagePreviewTarget | null {
   return servableImage(href);
 }
 
+export function isLocalDiskImagePath(href: string): boolean {
+  if (!isImagePath(href)) return false;
+  return /^file:\/\//i.test(href)
+    || /^\/(?:Users|home|tmp|private\/tmp|var\/folders)\//.test(href)
+    || /^[A-Za-z]:[\\/]/.test(href);
+}
+
 function servableImage(href: string): ImagePreviewTarget | null {
   const review = reviewFileTarget(href);
   if (review) return isImagePath(review.name) ? review : null;

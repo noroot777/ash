@@ -13,7 +13,8 @@ type TraceTextEvent = { kind: "text"; text: string };
 // 后要按回合把「这一轮花了多少」放回各自的气泡,就得有一份按 turnStartedAt 分组
 // 的记录,而 trace 天生就是这个形状。
 type TraceUsageEvent = Extract<AgentEvent, { kind: "usage" }>;
-export type SessionTraceEvent = AgentTraceEvent | TraceTextEvent | TraceUsageEvent;
+type TraceAttachmentEvent = Extract<AgentEvent, { kind: "attachment" }>;
+export type SessionTraceEvent = AgentTraceEvent | TraceTextEvent | TraceUsageEvent | TraceAttachmentEvent;
 export type SessionTraceEntry = {
   at: string;
   turnStartedAt: string;
@@ -73,8 +74,9 @@ export function parseSessionTrace(raw: string): SessionTraceEntry[] {
         typeof entry.at !== "string"
         || typeof entry.turnStartedAt !== "string"
         || !event
-        || !["text", "thinking", "tool", "error", "usage"].includes(event.kind)
+        || !["text", "thinking", "tool", "error", "usage", "attachment"].includes(event.kind)
         || (event.kind === "text" && typeof event.text !== "string")
+        || (event.kind === "attachment" && typeof event.path !== "string")
         || (event.kind === "usage" && (!event.usage || typeof event.usage !== "object"))
       ) continue;
       entries.push(entry as SessionTraceEntry);

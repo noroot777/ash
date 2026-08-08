@@ -19,6 +19,7 @@ export type AgentContentSegment = {
   id: string;
   markdown: string;
   events: AgentAuxEvent[];
+  attachments: string[];
 };
 
 export type ConversationItem =
@@ -50,6 +51,9 @@ type ConversationEventItem = Extract<ConversationItem, { kind: "event" }>;
 type AgentTraceEvent = Extract<AgentEvent, { kind: "thinking" | "tool" | "error" }>;
 type TracedContentEntry = SessionTraceEntry & {
   event: Exclude<SessionTraceEntry["event"], { kind: "usage" }>;
+};
+type TracedAttachmentEntry = TracedContentEntry & {
+  event: Extract<SessionTraceEntry["event"], { kind: "attachment" }>;
 };
 type PersistedTurnTimes = Map<string, number[]>;
 type SessionRunBounds = {
@@ -161,25 +165,34 @@ function contentSegments(
   // usage 只是这一回合的账,不是执行过程的一步 —— 漏掉这道过滤它会被 auxEvent
   // 当成未知事件渲染成一行异常。
   const entries = traced.filter((entry): entry is TracedContentEntry => entry.event.kind !== "usage");
-  const auxEntries = entries.filter((entry) => entry.event.kind !== "text");
+  const auxEntries = entries.filter((entry) => entry.event.kind !== "text" && entry.event.kind !== "attachment");
+  const attachmentEntries = entries.filter(
+    (entry): entry is TracedAttachmentEntry => entry.event.kind === "attachment",
+  );
   if (!entries.some((entry) => entry.event.kind === "text")) {
     return [{
       id: `${idPrefix}:0`,
       markdown: fallbackMarkdown,
       events: auxEntries.map((entry) => auxEvent(entry.event as AgentTraceEvent)),
+      attachments: attachmentEntries.map((entry) => entry.event.path),
     }];
   }
 
   const segments: AgentContentSegment[] = [];
-  let current: AgentContentSegment = { id: `${idPrefix}:0`, markdown: "", events: [] };
+  let current: AgentContentSegment = { id: `${idPrefix}:0`, markdown: "", events: [], attachments: [] };
   const pushCurrent = () => {
-    if (!current.markdown && !current.events.length) return;
+    if (!current.markdown && !current.events.length && !current.attachments.length) return;
     segments.push(current);
-    current = { id: `${idPrefix}:${segments.length}`, markdown: "", events: [] };
+    current = { id: `${idPrefix}:${segments.length}`, markdown: "", events: [], attachments: [] };
   };
   for (const entry of entries) {
     if (entry.event.kind === "text") {
       current.markdown += entry.event.text;
+      continue;
+    }
+    if (entry.event.kind === "attachment") {
+      if (current.markdown) pushCurrent();
+      if (!current.attachments.includes(entry.event.path)) current.attachments.push(entry.event.path);
       continue;
     }
     if (current.markdown) pushCurrent();
@@ -196,13 +209,14 @@ function contentSegments(
     id: `${idPrefix}:fallback`,
     markdown: fallbackMarkdown || structuredMarkdown,
     events: auxEntries.map((entry) => auxEvent(entry.event as AgentTraceEvent)),
+    attachments: attachmentEntries.map((entry) => entry.event.path),
   }];
 }
 
 function currentSegment(agent: Extract<ConversationItem, { kind: "agent" }>): AgentContentSegment {
   const existing = agent.segments.at(-1);
   if (existing) return existing;
-  const created = { id: `${agent.id}:segment:0`, markdown: "", events: [] };
+  const created = { id: `${agent.id}:segment:0`, markdown: "", events: [], attachments: [] };
   agent.segments.push(created);
   return created;
 }
@@ -215,10 +229,19 @@ function appendAgentText(agent: Extract<ConversationItem, { kind: "agent" }>, te
 function appendAgentAux(agent: Extract<ConversationItem, { kind: "agent" }>, event: AgentTraceEvent): void {
   let segment = currentSegment(agent);
   if (segment.markdown) {
-    segment = { id: `${agent.id}:segment:${agent.segments.length}`, markdown: "", events: [] };
+    segment = { id: `${agent.id}:segment:${agent.segments.length}`, markdown: "", events: [], attachments: [] };
     agent.segments.push(segment);
   }
   segment.events.push(auxEvent(event));
+}
+
+function appendAgentAttachment(agent: Extract<ConversationItem, { kind: "agent" }>, path: string): void {
+  let segment = currentSegment(agent);
+  if (segment.markdown) {
+    segment = { id: `${agent.id}:segment:${agent.segments.length}`, markdown: "", events: [], attachments: [] };
+    agent.segments.push(segment);
+  }
+  if (!segment.attachments.includes(path)) segment.attachments.push(path);
 }
 
 function agentLabel(session: Session | undefined, event?: LiveAgentEvent): string {
@@ -404,6 +427,7 @@ export function buildConversationItems(
     if (event.kind === "session") continue;
     const agent = appendAgent(items, entry.event, sessions);
     if (event.kind === "text") appendAgentText(agent, event.text);
+    if (event.kind === "attachment") appendAgentAttachment(agent, event.path);
     // 用量恒在本回合的 turnEnd/done 之前到，所以它落在的就是刚说完话的那条气泡。
     if (event.kind === "usage") agent.usage = agent.usage ? addUsage(agent.usage, event.usage) : event.usage;
     // 水位是覆盖不是累加：后到的那条就是此刻，跟它前面报过什么无关。
