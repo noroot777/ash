@@ -16,9 +16,12 @@ try {
     rows: 20,
   });
   let output = "";
+  let unsubscribe: (() => void) | null = null;
   const received = new Promise<void>((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error(`terminal output timed out: ${JSON.stringify(output)}`)), 5000);
-    manager.subscribe(session.id, "project-test", (event) => {
+    const timeout = setTimeout(() => {
+      reject(new Error(`terminal output timed out: ${JSON.stringify(output)}`));
+    }, 5000);
+    unsubscribe = manager.subscribe(session.id, "project-test", (event) => {
       if (event.type !== "data") return;
       output += event.data;
       if (output.includes("__HARNESS_TERMINAL_OK__") && output.includes(cwd)) {
@@ -27,12 +30,16 @@ try {
       }
     });
   });
+  assert.ok(unsubscribe);
   assert.equal(manager.get(session.id, "wrong-project"), null);
   assert.equal(manager.resize(session.id, "project-test", 110, 32), true);
   assert.equal(manager.write(session.id, "project-test", "printf '__HARNESS_TERMINAL_OK__\\n'; pwd\n"), true);
   await received;
   assert.ok(manager.eventsAfter(session.id, "project-test", 0)?.length);
-  assert.equal(manager.close(session.id, "project-test"), true);
+  assert.equal(manager.sweepIdleSessions(Date.now() + 31 * 60 * 1000), 0);
+  assert.ok(manager.get(session.id, "project-test"));
+  unsubscribe();
+  assert.equal(manager.sweepIdleSessions(Date.now() + 31 * 60 * 1000), 1);
   assert.equal(manager.get(session.id), null);
   console.log("terminal session test passed");
 } finally {

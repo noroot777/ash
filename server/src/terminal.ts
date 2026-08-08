@@ -68,7 +68,7 @@ export class TerminalSessionManager {
   private readonly sweeper: ReturnType<typeof setInterval>;
 
   constructor() {
-    this.sweeper = setInterval(() => this.sweep(), 60_000);
+    this.sweeper = setInterval(() => this.sweepIdleSessions(), 60_000);
     this.sweeper.unref?.();
   }
 
@@ -158,6 +158,17 @@ export class TerminalSessionManager {
     for (const sessionId of [...this.sessions.keys()]) this.close(sessionId);
   }
 
+  sweepIdleSessions(now = Date.now()): number {
+    const cutoff = now - IDLE_TTL_MS;
+    let closed = 0;
+    for (const session of this.sessions.values()) {
+      // A subscriber means the CLI is still open, even when the shell is silent.
+      if (session.listeners.size > 0 || session.lastAccessedAt >= cutoff) continue;
+      if (this.close(session.id)) closed += 1;
+    }
+    return closed;
+  }
+
   private session(sessionId: string, projectId?: string): TerminalSession | null {
     const session = this.sessions.get(sessionId) ?? null;
     if (session && (!projectId || session.projectId === projectId)) return session;
@@ -181,12 +192,6 @@ export class TerminalSessionManager {
     for (const listener of session.listeners) listener(next);
   }
 
-  private sweep(): void {
-    const cutoff = Date.now() - IDLE_TTL_MS;
-    for (const session of this.sessions.values()) {
-      if (session.lastAccessedAt < cutoff) this.close(session.id);
-    }
-  }
 }
 
 export const terminalSessions = new TerminalSessionManager();
