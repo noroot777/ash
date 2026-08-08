@@ -6,9 +6,9 @@
 import { createWriteStream } from "node:fs";
 import { join } from "node:path";
 import { eq, inArray } from "drizzle-orm";
-import type { AgentType } from "@harness/shared";
+import type { AgentType, SessionRole } from "@harness/shared";
 import { db } from "./db/index.js";
-import { tasks, sessions } from "./db/schema.js";
+import { agents, tasks, sessions } from "./db/schema.js";
 import { trackRun, untrackRun } from "./runs.js";
 import { resolveExecutorFor } from "./executors/index.js";
 import { reattachDetachedAgent } from "./executors/detached.js";
@@ -54,7 +54,7 @@ export async function restartImpact(): Promise<RestartImpact> {
       continue;
     }
     const sess = (await db.select().from(sessions).where(eq(sessions.taskId, t.id)))
-      .filter((s) => s.role === "single" && !s.endedAt)
+      .filter((s) => (s.role === "single" || s.role === "reviewer") && !s.endedAt)
       .sort((a, b) => b.startedAt.localeCompare(a.startedAt))
       .at(0);
     if (!sess?.agentPid) {
@@ -93,7 +93,7 @@ export async function reattachRunningTasks(): Promise<Set<string>> {
   for (const task of candidates) {
     if (task.mode !== "single") continue; // 团队调度台走 --resume 自动接回，不在这条路上
     const sess = (await db.select().from(sessions).where(eq(sessions.taskId, task.id)))
-      .filter((s) => s.role === "single" && s.agentPid && s.agentOutPath && !s.endedAt)
+      .filter((s) => (s.role === "single" || s.role === "reviewer") && s.agentPid && s.agentOutPath && !s.endedAt)
       .sort((a, b) => b.startedAt.localeCompare(a.startedAt))
       .at(0);
     if (!sess?.agentPid || !sess.agentOutPath || !sess.agentErrPath || !sess.agentRcPath) continue;
@@ -107,11 +107,12 @@ export async function reattachRunningTasks(): Promise<Set<string>> {
     if (!child) continue; // 它已经不在了 → 交给 reconcileInterrupted
 
     try {
+      const profile = (await db.select({ id: agents.id }).from(agents).where(eq(agents.name, sess.executor))).at(0);
       const ex = await resolveExecutorFor({
-        executorId: task.executorId,
-        type: task.agentType as AgentType,
-        model: task.model,
-        reasoningEffort: task.reasoningEffort,
+        executorId: profile?.id ?? task.executorId,
+        type: sess.agentType as AgentType,
+        model: null,
+        reasoningEffort: null,
       });
       if (!ex.attach) {
         child.kill();
@@ -128,14 +129,14 @@ export async function reattachRunningTasks(): Promise<Set<string>> {
       void consumeSingleRun({
         taskId: task.id,
         sessId: sess.id,
-        agentType: task.agentType as AgentType,
+        agentType: sess.agentType as AgentType,
         ex,
         cwd: sess.cwd ?? "",
         handle,
         out,
         turnStart: sess.turnStartedAt ?? sess.startedAt,
         cliSessionId: sess.cliSessionId ?? "",
-        autoTitle: false, // 标题在被打断之前那一段就已经解析过了
+        autoTitle: false, role: sess.role as SessionRole, // 标题在被打断之前那一段就已经解析过了
       })
         .catch((err) => console.error(`[harness] 接管 ${task.id} 的消费循环出错:`, err))
         .finally(() => {

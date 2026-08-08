@@ -23,6 +23,7 @@ import type { Hono } from "hono";
 import { bus } from "./bus.js";
 import { forceKillCuaService, lastCuaResidualStatus, refreshCuaResidualStatus } from "./cua.js";
 import { db } from "./db/index.js";
+import { freeReviewResumeOptions } from "./free-workflow.js";
 import { projects, queueItems, schedules, scheduledMessages, sessions, tasks } from "./db/schema.js";
 import { resumeDuet, resumeAtGate, runDuet } from "./duet/index.js";
 import { resolveGate } from "./duet/gates.js";
@@ -335,9 +336,10 @@ api.post("/tasks/:id/answer", async (c) => {
   // 同类型换 profile 仍是同一条会话,照任务常设配置续跑即可——显式指定会让这一回合
   // 变成「召唤」,把任务自带的 model/reasoningEffort 一并清掉。
   const asker = r.mode === "single" ? await askingAgentFor(taskId) : null;
-  const route = asker && asker.agent !== r.agentType
+  const reviewRoute = asker?.role === "reviewer" ? await freeReviewResumeOptions(taskId) : null;
+  const route = reviewRoute ?? (asker && asker.agent !== r.agentType
     ? { agent: asker.agent, executorId: asker.executorId, model: null, reasoningEffort: null }
-    : {};
+    : {});
   const answerText = `【答复】你之前的提问:「${r.question}」\n\n${a}\n\n${tail}`;
   // 同 /reply:被单飞锁挡回时答复一个字都没送出去,落成排队消息等任务空下来再发,
   // 绝不静默丢掉(问题已经清了,丢了就是死局——agent 永远等不到答案)。

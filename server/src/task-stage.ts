@@ -7,6 +7,7 @@ import { db } from "./db/index.js";
 import { tasks } from "./db/schema.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { now } from "./util.js";
+import { reportFreeReviewConclusion } from "./free-workflow.js";
 
 export async function setTaskStage(
   taskId: string,
@@ -92,6 +93,18 @@ export function mountTaskStageRoutes(api: Hono): void {
       return c.json({ error: "团队调度台不适用验收阶段，请在被验任务的验证回合里上报", mode: task.mode }, 409);
     }
     if (task.archived) return c.json({ error: "归档任务不能再上报验收阶段" }, 409);
+
+    try {
+      const freeReview = await reportFreeReviewConclusion(taskId, body.stage);
+      if (freeReview) {
+        return c.json({ reported: true, taskId, stage: body.stage, freeReview, timelineRecorded: false });
+      }
+    } catch (error) {
+      return c.json({ error: error instanceof Error ? error.message : String(error) }, 409);
+    }
+    if (task.workflowMode === "free") {
+      return c.json({ error: "自由工作流不使用起手式 stage；请由页面快捷按钮按需派审、预览或合并" }, 409);
+    }
 
     const { updatedAt, timelineRecorded } = await setTaskStage(taskId, body.stage);
     return c.json({ reported: true, taskId, stage: body.stage, updatedAt, timelineRecorded });

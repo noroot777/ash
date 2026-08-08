@@ -45,8 +45,11 @@ for (const forbidden of ["schedules", "scheduled_messages"]) {
 }
 check("供应商排在执行器前面（被引用的先落地）",
   CONFIG_TABLES.indexOf("llm_providers") < CONFIG_TABLES.indexOf("agents"), true);
+check("审查者配置会进入预览", (CONFIG_TABLES as readonly string[]).includes("reviewer_profiles"), true);
 check("快照搬任务，也搬它的分组与队列",
   ["groups", "tasks", "sessions", "queue_items"].every((t) => (SNAPSHOT_TABLES as readonly string[]).includes(t)), true);
+check("快照会带上自由工作流实际记录",
+  ["free_workflow_states", "free_review_runs", "free_review_rounds"].every((t) => (SNAPSHOT_TABLES as readonly string[]).includes(t)), true);
 
 const source = createClient({ url: `file:${join(root, "live.db")}` });
 const dest = createClient({ url: `file:${join(root, "preview.db")}` });

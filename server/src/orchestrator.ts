@@ -1,7 +1,7 @@
 import { mkdirSync, createWriteStream, existsSync } from "node:fs";
 import { join } from "node:path";
 import { eq, inArray } from "drizzle-orm";
-import type { AgentType, TaskStatus } from "@harness/shared";
+import type { AgentType, SessionRole, TaskStatus } from "@harness/shared";
 import { STEP_LABELS } from "@harness/shared/workflow";
 import { db } from "./db/index.js";
 import { tasks, projects, sessions } from "./db/schema.js";
@@ -26,19 +26,16 @@ import { peerNoticeFor } from "./peer-context.js";
 import { recordTurnBaseline } from "./turn-baseline.js";
 import { recordTurnStart } from "./turn-output.js";
 import { railStalledAtRun } from "./workflows.js";
-
-
+import { freeReviewReminder, isFreeReviewTurn } from "./free-workflow.js";
 // Single tasks run headless — nobody can answer a mid-run prompt. Tell the agent
 // to act autonomously rather than stall waiting for confirmation; if it genuinely
 // needs input it can still ask, and the user replies via continueTask (resume).
 const AUTONOMY =
   "你在一个无人值守的自动化环境中运行，没有人能实时回复你。请尽量自主完成：遇到多个合理方案时，选最稳妥的一个并在结果中说明假设与取舍；不要停下来等待人工确认，除非信息确实不足以继续。\n\n";
-
 // Prefix for an agent invited into an existing task via @-mention. It joins in
 // the SAME working directory, so it should read the current state before acting.
 const COLLAB_INVITE =
   "你被叫来加入这个任务的协作。当前工作目录里可能已经有其他 agent 的产出，请先了解现状再动手。\n\n";
-
 // 被召唤进来的智能体只收到用户 @ 它的那一句话 —— 任务本身是干什么的，它一无所知
 // （task.body 只进 fresh run 的 prompt，而它走的是 continueTask 这条路）。撞上
 // 「审一下上面的提交」这种自带上下文的召唤还能靠工作目录补齐，换成依赖任务描述的
@@ -67,34 +64,34 @@ function writeTurn(
 ): void {
   writeTurnLine(out, turn, at);
 }
-
 // 完成协议前言(严格 done):告诉 agent 它的 taskId 和「必须亲口确认完成」的
 // 规则。fresh run 用长版(第一回合,完整交代);reply/resume 回合用短版追加在
 // 消息尾部(每回合都提醒,上下文再长 agent 也不至于忘)。
-//
 // 宽松模式(HARNESS_LAX_DONE,典型:预览实例)下这三段一律退化成空串 —— 那台 harness
 // 的 MCP 对 agent 不可达,交代了它也做不到,理由见 single-run.ts 的 STRICT_DONE_PROTOCOL。
-const ACCEPTANCE_REMINDER = (taskId: string, sharedTeamWorker: boolean, verifying: boolean) => verifying
+const ACCEPTANCE_REMINDER = (taskId: string, sharedTeamWorker: boolean, verifying: boolean, free = false) => verifying
   ? "验收辅路:验证回合不适用 accept_task；这一轮只负责给出验证结论并留证。"
+  : free
+    ? "自由工作流:完成实现后只调用 complete_task；不要调用 report_stage 或 accept_task，派审、预览、合并与清理由用户在页面快捷按钮中按需触发。"
   : sharedTeamWorker
     ? "验收辅路:本共享执行者不适用 accept_task；合并与验收由团队级处理。"
     : `验收辅路:准备交给人工验收前可调用 report_stage(taskId="${taskId}", stage="awaiting_acceptance")；` +
       `只有用户明确表示「验收通过/可以合并」时，调用 accept_task(taskId="${taskId}")，不要自行运行 git merge、worktree remove 或 branch -d。`;
-const COMPLETION_PROTOCOL = (taskId: string, sharedTeamWorker: boolean, reviewTask: boolean) =>
+const COMPLETION_PROTOCOL = (taskId: string, sharedTeamWorker: boolean, reviewTask: boolean, free = false) =>
   !STRICT_DONE_PROTOCOL ? "" :
-  `【完成协议】本任务在 harness 的 taskId 是 ${taskId}。当且仅当你确定任务目标已经达成时,在结束前调用 harness MCP 的 complete_task(taskId="${taskId}")确认完成;未确认就结束,本回合会按未完成记为 failed。跑到需要等待外部条件的检查点时,改用 pause_task 写下续跑指令。\n\n${ACCEPTANCE_REMINDER(taskId, sharedTeamWorker, reviewTask)}\n\n`;
-const COMPLETION_REMINDER = (taskId: string, sharedTeamWorker: boolean, reviewTask: boolean) =>
+  `【完成协议】本任务在 harness 的 taskId 是 ${taskId}。当且仅当你确定任务目标已经达成时,在结束前调用 harness MCP 的 complete_task(taskId="${taskId}")确认完成;未确认就结束,本回合会按未完成记为 failed。跑到需要等待外部条件的检查点时,改用 pause_task 写下续跑指令。\n\n${ACCEPTANCE_REMINDER(taskId, sharedTeamWorker, reviewTask, free)}\n\n`;
+const COMPLETION_REMINDER = (taskId: string, sharedTeamWorker: boolean, reviewTask: boolean, free = false) =>
   !STRICT_DONE_PROTOCOL ? "" :
-  `\n\n(harness 完成协议:taskId=${taskId}。若本回合结束时任务目标已达成,先调用 complete_task 确认再结束,否则按未完成记 failed;到等待检查点则用 pause_task。${ACCEPTANCE_REMINDER(taskId, sharedTeamWorker, reviewTask)})`;
+  `\n\n(harness 完成协议:taskId=${taskId}。若本回合结束时任务目标已达成,先调用 complete_task 确认再结束,否则按未完成记 failed;到等待检查点则用 pause_task。${ACCEPTANCE_REMINDER(taskId, sharedTeamWorker, reviewTask, free)})`;
 
 // 续聊(follow-up)回合的尾巴:任务早就到终态了,这一轮是「完成之后的对话」,
 // 不该拿严格完成协议吓唬 agent(不确认就 failed)—— 这一轮不确认,任务状态原样
 // 不动。只有它真把任务推进到新的完成时才需要确认。
 const FOLLOW_UP_REMINDER = (
-  taskId: string, from: string, sharedTeamWorker: boolean, reviewTask: boolean, rail: string,
+  taskId: string, from: string, sharedTeamWorker: boolean, reviewTask: boolean, rail: string, free = false,
 ) =>
   !STRICT_DONE_PROTOCOL ? "" :
-  `\n\n(harness:这是任务在「${FOLLOW_UP_LABEL[from] ?? from}」之后的续聊,taskId=${taskId}。任务状态不会因为本回合而改变,本回合不需要 complete_task;只有当你在这一轮把任务推进到了新的完成状态时,才调用 complete_task(taskId="${taskId}")确认。${rail}${ACCEPTANCE_REMINDER(taskId, sharedTeamWorker, reviewTask)})`;
+  `\n\n(harness:这是任务在「${FOLLOW_UP_LABEL[from] ?? from}」之后的续聊,taskId=${taskId}。任务状态不会因为本回合而改变,本回合不需要 complete_task;只有当你在这一轮把任务推进到了新的完成状态时,才调用 complete_task(taskId="${taskId}")确认。${rail}${ACCEPTANCE_REMINDER(taskId, sharedTeamWorker, reviewTask, free)})`;
 
 // 「你这一轮要是改了代码,这条线在等你确认」—— 只在续聊回合、且任务身上真挂着一条
 // 还有后续站的线时追加。
@@ -275,7 +272,7 @@ export async function runTask(taskId: string): Promise<void> {
     const priorSessions = await db.select().from(sessions).where(eq(sessions.taskId, taskId));
     const peerNotice = peerNoticeFor({ taskId, self: agentType, all: priorSessions, prev: undefined });
     const prompt =
-      AUTONOMY + COMPLETION_PROTOCOL(taskId, sharedTeamWorker, reviewTask) + teamPreamble + reviewProtocol +
+      AUTONOMY + COMPLETION_PROTOCOL(taskId, sharedTeamWorker, reviewTask, task.workflowMode === "free") + teamPreamble + reviewProtocol +
       peerNotice +
       (autoTitle ? TITLE_HINT + objective : objective);
     const turnStart = now();
@@ -402,13 +399,9 @@ export async function continueTask(
     reasoningEffort?: string | null;
     attachments?: string[];
     system?: ResumeReason;
-    /**
-     * 旁路回合：这一轮不是「任务本身在执行」，而是搭着这个任务的工作目录/会话另做一件事
-     * （就地验证轮）。语义上跟续聊同一条：**只可能让任务变好，不会让它变差** ——
-     * 本回合不确认完成，任务就原样回到进这一轮之前的终态。跟续聊的区别只在于它是后端
-     * 发起的（带 system），所以要显式开这个开关，否则会被当成一次普通的系统续跑。
-     */
+    /** 旁路回合结束后恢复进入旁路前的任务状态。 */
     sideTurn?: boolean;
+    sessionRole?: Extract<SessionRole, "single" | "reviewer">; freshSession?: boolean;
     /**
      * 这一轮的字是**后端代写**的（验证打回的报告、验收冲突的交接说明），但它必须占一个
      * 真人回合 —— 带 system 会被当成「系统续跑」，followUpFrom 就护不住任务原来的终态。
@@ -454,6 +447,7 @@ export async function continueTask(
   // 抢不到 = 这个任务此刻正跑着别的回合,这一句话没送出去。调用方必须知道(见函数注释)。
   if (!claimTurn(taskId)) return false;
   const agentType = opts.agent ?? "claude"; // re-derived below once the task loads; kept for the catch handler
+  const sessionRole = opts.sessionRole ?? "single";
   let handle: RunHandle | undefined;
   try {
     const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
@@ -480,7 +474,8 @@ export async function continueTask(
     // **这一段必须排在所有可能抛错的解析之前**(执行器解析、工作目录解析都会抛:模型与
     // 思考强度不兼容、worktree 建不出来),catch 那边只认库里的 followUpFrom —— 落库晚
     // 一步,一个 done 的任务就会因为「验证没起来」被打成 failed。
-    const sideTurn = !!opts.sideTurn || !!task.verifyRound;
+    const freeReviewTurn = await isFreeReviewTurn(taskId);
+    const sideTurn = !!opts.sideTurn || !!task.verifyRound || freeReviewTurn;
     const followUpFrom = sideTurn
       ? (task.status === "running" || task.status === "queued" ? null : task.status)
       : !opts.system && ["done", "failed", "canceled"].includes(task.status)
@@ -504,7 +499,7 @@ export async function continueTask(
     // each invited via @-mention. Newest first.
     const all = (await db.select().from(sessions).where(eq(sessions.taskId, taskId)))
       .sort((a, b) => b.startedAt.localeCompare(a.startedAt));
-    const prev = all.find((s) => s.agentType === agent); // this agent's own session, if any
+    const prev = opts.freshSession ? undefined : all.find((s) => s.agentType === agent && s.role === sessionRole);
     const resuming = !!prev?.cliSessionId;
 
     // Where the work lives: the agent's own cwd, else any session's cwd (so the
@@ -549,14 +544,17 @@ export async function continueTask(
     // 验证回合（旧的独立审查任务，或这个任务自己身上的就地验证轮）：完成协议的
     // 验收那一句要换掉 —— 这一轮的产出是结论和证据，不是「这个任务可以合并了」。
     const reviewTask = !!task.reviewOf;
-    const verifying = reviewTask || !!task.verifyRound;
+    const verifying = reviewTask || !!task.verifyRound || freeReviewTurn;
+    const freeWorkflow = task.workflowMode === "free";
     // 每回合都重贴一遍「你现在在干什么」：验证轮可能中途提问、被打断再续跑，
     // 那些回合都不带最初那段协议，只有从任务状态派生的提醒能跟到底。
     const reviewReminder = reviewTask
       ? reviewReminderFor(task)
       : task.verifyRound
         ? verifyReminderFor(task.id, task.verifyRound)
-        : "";
+        : freeReviewTurn
+          ? await freeReviewReminder(task.id)
+          : "";
     // 「本任务里还有别人」的告知。触发条件是**有新面孔**（上一轮跑完之后才进来的
     // 同伴），不是 invited —— 挂在 invited 上恰好漏掉最需要它的那个：任务的原生
     // agent 第一轮走 runTask 直接起跑、从没被「召唤」过，于是后来 @ 进来的同伴它
@@ -572,8 +570,8 @@ export async function continueTask(
       userTurnText +
       (workspaceReset ? WORKSPACE_RESET(cwd) : "") +
       (followUpFrom
-        ? FOLLOW_UP_REMINDER(taskId, followUpFrom, sharedTeamWorker, verifying, railNote)
-        : COMPLETION_REMINDER(taskId, sharedTeamWorker, verifying)) +
+        ? FOLLOW_UP_REMINDER(taskId, followUpFrom, sharedTeamWorker, verifying, railNote, freeWorkflow)
+        : COMPLETION_REMINDER(taskId, sharedTeamWorker, verifying, freeWorkflow)) +
       (reviewReminder ? `\n${reviewReminder}` : "");
     const turnStart = now();
     const sessId = resuming ? prev!.id : id();
@@ -623,7 +621,7 @@ export async function continueTask(
       await db.insert(sessions).values({
         id: sessId,
         taskId,
-        role: "single",
+        role: sessionRole,
         agentType: agent,
         executor: ex.label,
         target: "local",
@@ -652,7 +650,7 @@ export async function continueTask(
       // Backend-initiated 继续: a 〔系统〕 trace (its own bubble), NOT a 你→ reply.
       // Persist as a structured turn (reload) and emit a matching system event (live).
       writeTurn(out, { t: "system", agent, text: SYS_MARKER }, turnStart);
-      bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: "single", agentType: agent, event: { kind: "system", text: SYS_MARKER } });
+      bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: sessionRole, agentType: agent, event: { kind: "system", text: SYS_MARKER } });
     } else {
       // 你→@agent reply, persisted as a structured turn so a reloaded thread shows
       // the human turn as its own bubble (live, the client already shows it).
@@ -668,7 +666,7 @@ export async function continueTask(
       // 让用户也看见:agent 这一轮是在一个空目录上重新开始的。只发 toast 不算数,
       // 刷新后仍要能看出来(见 AGENTS.md 关于持久可见状态的约定)。
       writeTurn(out, { t: "system", agent, text: WORKSPACE_RESET_MARKER }, turnStart);
-      bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: "single", agentType: agent, event: { kind: "system", text: WORKSPACE_RESET_MARKER } });
+      bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: sessionRole, agentType: agent, event: { kind: "system", text: WORKSPACE_RESET_MARKER } });
     }
 
     // 跟 fresh run 共用同一份消费+结算(autoTitle=false:标题在第一轮就定了)。
@@ -676,11 +674,11 @@ export async function continueTask(
     // 于是 resume 回合被重启接管时会从字节 0 重放整轮输出。
     await consumeSingleRun({
       taskId, sessId, agentType: agent, ex, cwd,
-      handle, out, turnStart, cliSessionId, autoTitle: false,
+      handle, out, turnStart, cliSessionId, autoTitle: false, role: sessionRole,
     });
   } catch (err) {
     bus.publish({
-      type: "agent.event", taskId, sessionId: "", role: "single", agentType,
+      type: "agent.event", taskId, sessionId: "", role: sessionRole, agentType,
       event: { kind: "error", message: String(err instanceof Error ? err.message : err) },
     });
     // 续聊回合里出的岔子(典型:worktree 建不出来)不该把任务状态打差 —— 同

@@ -3,6 +3,7 @@ import { AGENT_TYPES, isUserSettableStatus } from "@harness/shared";
 import { isReasoningEffortSupported, normalizeReasoningEffort, reasoningEffortsFor } from "@harness/shared/cli-presets";
 import { inheritExecutorOverrides, pickExecutor, sameExecutor } from "@harness/shared/executors";
 import { normalizeWorkflowDef } from "@harness/shared/workflow";
+import { TASK_WORKFLOW_MODES } from "@harness/shared/free-workflow";
 import { asc, eq } from "drizzle-orm";
 import type { Hono } from "hono";
 import { db } from "./db/index.js";
@@ -56,6 +57,16 @@ api.post("/tasks", async (c) => {
     appendToQueue?: string; // 可选:把新任务追加到指定 queue 的尾部
     workflowId?: string | null; // 挑哪条起手式;省略则按项目→全局默认解析
   }>();
+  const workflowMode = b.workflowMode ?? "preset";
+  if (!(TASK_WORKFLOW_MODES as readonly string[]).includes(workflowMode)) {
+    return c.json({ error: "workflowMode 只能是 free 或 preset" }, 400);
+  }
+  if (workflowMode === "free" && ((b.mode ?? "single") !== "single" || b.parentId != null || b.reviewOf != null)) {
+    return c.json({ error: "自由工作流只适用于普通单任务" }, 409);
+  }
+  if (workflowMode === "free" && (b.workflow != null || b.workflowId != null)) {
+    return c.json({ error: "自由工作流不能同时携带起手式" }, 400);
+  }
   // 新建面板允许**就地改这条线**（挑一个起手式再动两下），改完的那份直接随任务提交，
   // 不用先在库里存一条。收下来的仍然只是一份快照,跟 workflowId 那条路殊途同归。
   let inlineWorkflow: string | null = null;
@@ -163,6 +174,7 @@ api.post("/tasks", async (c) => {
     // 就地改过的线已经是快照了,直接落 workflow,createTasks 不会再去库里查。
     workflowId: b.workflowId ?? null,
     workflow: inlineWorkflow,
+    workflowMode,
   };
   // 可选:追加到现有 queue 的尾部。要求:queue 已存在,且新 task 跟
   // queue 已有任务的 groupId 一致(违反就 400,不静默)。

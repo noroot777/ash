@@ -46,6 +46,10 @@
       "types": "./src/workflow-presets.ts",
       "default": "./src/workflow-presets.ts"
     },
+    "./free-workflow": {
+      "types": "./src/free-workflow.ts",
+      "default": "./src/free-workflow.ts"
+    },
     "./cli-presets": {
       "types": "./src/cli-presets.ts",
       "default": "./src/cli-presets.ts"

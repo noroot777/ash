@@ -9,7 +9,7 @@ export type SessionRole =
   | "voiceA"
   | "voiceB"
   | "implementer" // legacy: retained so historical sessions still decode
-  | "reviewer"; // legacy: retained so historical sessions still decode
+  | "reviewer"; // 独立审查会话（自由工作流复用，也兼容历史记录）
 
 export interface Session {
   id: string;

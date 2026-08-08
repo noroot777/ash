@@ -4,6 +4,8 @@ import type {
   AppSettings,
   AttachmentKind,
   BatchCreateTasksBody,
+  FreeReviewDispatchInput,
+  FreeWorkflowState,
   GateAction,
   Group,
   LlmProtocol,
@@ -14,6 +16,7 @@ import type {
   ProjectView,
   ProviderModelListMode,
   ReviewDispatchInput,
+  ReviewerProfile,
   Schedule,
   ScheduledMessage,
   SearchHit,
@@ -452,6 +455,18 @@ export const api = {
     request(`/tasks/${id(taskId)}/review/dispatch`, json("POST", input)),
   taskReviewFileUrl: (taskId: string, round: number, name: string): string =>
     apiPath(`/tasks/${id(taskId)}/review/file?round=${id(String(round))}&name=${id(name)}`),
+  freeWorkflow: (taskId: string): Promise<FreeWorkflowState> =>
+    request(`/tasks/${id(taskId)}/free-workflow`),
+  dispatchFreeReview: (taskId: string, input: FreeReviewDispatchInput): Promise<FreeWorkflowState> =>
+    request(`/tasks/${id(taskId)}/free-workflow/review`, json("POST", input)),
+  startFreePreview: (taskId: string): Promise<FreeWorkflowState["preview"]> =>
+    request(`/tasks/${id(taskId)}/free-workflow/preview`, { method: "POST" }),
+  stopFreePreview: (taskId: string): Promise<{ stopped: boolean }> =>
+    request(`/tasks/${id(taskId)}/free-workflow/preview`, { method: "DELETE" }),
+  mergeFreeWorkflow: (taskId: string): Promise<{ merged: true; message: string }> =>
+    request(`/tasks/${id(taskId)}/free-workflow/merge`, { method: "POST" }),
+  freeReviewFileUrl: (taskId: string, runId: string, round: number, name: string): string =>
+    apiPath(`/tasks/${id(taskId)}/free-workflow/review-file?run=${id(runId)}&round=${id(String(round))}&name=${id(name)}`),
   // 人工替这一站「自动验证」签字放行。**后端会接着把这一站之后那一段跑掉**——线上
   // 画着「合并并清理」时这一按就是真合并，调用点必须先把话说清楚再让人按。
   forcePassVerify: (taskId: string): Promise<VerifyOverrideResult> =>
@@ -549,6 +564,17 @@ export const api = {
   ): Promise<AgentExecutorProfile> => request(`/agents/${id(agentId)}`, json("PATCH", patch)),
   deleteAgent: (agentId: string): Promise<{ deleted: true }> =>
     request(`/agents/${id(agentId)}`, { method: "DELETE" }),
+
+  reviewerProfiles: (): Promise<ReviewerProfile[]> => request("/reviewer-profiles"),
+  createReviewerProfile: (
+    profile: Pick<ReviewerProfile, "name" | "agentType" | "executorId" | "model" | "reasoningEffort">,
+  ): Promise<ReviewerProfile> => request("/reviewer-profiles", json("POST", profile)),
+  patchReviewerProfile: (
+    profileId: string,
+    patch: Partial<Pick<ReviewerProfile, "name" | "agentType" | "executorId" | "model" | "reasoningEffort">>,
+  ): Promise<ReviewerProfile> => request(`/reviewer-profiles/${id(profileId)}`, json("PATCH", patch)),
+  deleteReviewerProfile: (profileId: string): Promise<{ deleted: true }> =>
+    request(`/reviewer-profiles/${id(profileId)}`, { method: "DELETE" }),
 
   // 起手式库。自带条目的 id 就是内置 key（"standard"），删不掉——DELETE 会 409，
   // 「不想看见它」走 patchWorkflow({disabled:true})，「改坏了」走 restoreWorkflow。

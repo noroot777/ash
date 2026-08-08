@@ -108,6 +108,30 @@ export async function ensureSchema() {
       created_at TEXT NOT NULL, updated_at TEXT NOT NULL
     );
     CREATE UNIQUE INDEX IF NOT EXISTS workflows_builtin_idx ON workflows (builtin_key);
+    CREATE TABLE IF NOT EXISTS reviewer_profiles (
+      id TEXT PRIMARY KEY, name TEXT NOT NULL, agent_type TEXT NOT NULL,
+      executor_id TEXT, model TEXT, reasoning_effort TEXT,
+      created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS free_workflow_states (
+      task_id TEXT PRIMARY KEY, selected_reviewer_id TEXT,
+      merge_status TEXT NOT NULL DEFAULT 'idle', merge_message TEXT,
+      merged_at TEXT, updated_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS free_review_runs (
+      id TEXT PRIMARY KEY, task_id TEXT NOT NULL, reviewer_id TEXT,
+      reviewer_name TEXT NOT NULL, agent_type TEXT NOT NULL, executor_id TEXT,
+      model TEXT, reasoning_effort TEXT, check_mode TEXT NOT NULL,
+      retry_limit INTEGER NOT NULL DEFAULT 1, current_round INTEGER NOT NULL DEFAULT 1,
+      status TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, finished_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS free_review_runs_task_idx ON free_review_runs (task_id, created_at);
+    CREATE TABLE IF NOT EXISTS free_review_rounds (
+      id TEXT PRIMARY KEY, run_id TEXT NOT NULL, round INTEGER NOT NULL,
+      status TEXT NOT NULL, conclusion TEXT, started_at TEXT NOT NULL, ended_at TEXT
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS free_review_rounds_run_round_idx
+      ON free_review_rounds (run_id, round);
   `);
   // Tolerant migration for DBs created before columns were added.
   try {
@@ -180,6 +204,7 @@ export async function ensureSchema() {
     // 一条线上可以写不止一站「自动验证」/「等我点头」：游标记住此刻停在哪一站，
     // 审查任务记住自己验的是哪一站（轮数上限按站分开数）。
     "ALTER TABLE tasks ADD COLUMN workflow_at TEXT",
+    "ALTER TABLE tasks ADD COLUMN workflow_mode TEXT NOT NULL DEFAULT 'preset'",
     "ALTER TABLE tasks ADD COLUMN review_step TEXT",
     // 解绑重启（executors/detached.ts）：agent 输出走文件而不是匿名管道，于是它
     // 活得过 server 重启。这几列是重启后「找回并接管」所需的全部线索——pid 认

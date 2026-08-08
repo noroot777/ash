@@ -24,6 +24,7 @@
 @import "./reply.css";
 @import "./workflow.css";
 @import "./workflow-composer.css";
+@import "./free-workflow.css";
 @import "./parity.css";
 
 @theme {

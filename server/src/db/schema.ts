@@ -109,6 +109,7 @@ export const tasks = sqliteTable("tasks", {
   // 这个任务当初挑的那条线，**创建时拷进来的快照**（json WorkflowDef）。之后改起手式
   // 库不会追着改它 —— 「起手式」不是「模板引用」。空 = 老任务，走旧的写死流程。
   workflow: text("workflow"),
+  workflowMode: text("workflow_mode").notNull().default("preset"), // preset | free
   // 这条线此刻停在哪一站（WorkflowStep.id，只会是锚点站：干活 / 自动验证 / 等我点头）。
   // 执行链靠它把「某一轮审查有了结论」「用户点了头」落回**具体那一站**，于是同一类站
   // 可以在一条线上出现多次。空 = 还没走到任何锚点，或者老任务——调用方一律回落到线上
@@ -178,6 +179,62 @@ export const workflows = sqliteTable(
     updatedAt: text("updated_at").notNull(),
   },
   (t) => ({ builtinIdx: uniqueIndex("workflows_builtin_idx").on(t.builtinKey) }),
+);
+
+export const reviewerProfiles = sqliteTable("reviewer_profiles", {
+  id: text("id").primaryKey(),
+  name: text("name").notNull(),
+  agentType: text("agent_type").notNull(),
+  executorId: text("executor_id"),
+  model: text("model"),
+  reasoningEffort: text("reasoning_effort"),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+
+export const freeWorkflowStates = sqliteTable("free_workflow_states", {
+  taskId: text("task_id").primaryKey(),
+  selectedReviewerId: text("selected_reviewer_id"),
+  mergeStatus: text("merge_status").notNull().default("idle"),
+  mergeMessage: text("merge_message"),
+  mergedAt: text("merged_at"),
+  updatedAt: text("updated_at").notNull(),
+});
+
+export const freeReviewRuns = sqliteTable(
+  "free_review_runs",
+  {
+    id: text("id").primaryKey(),
+    taskId: text("task_id").notNull(),
+    reviewerId: text("reviewer_id"),
+    reviewerName: text("reviewer_name").notNull(),
+    agentType: text("agent_type").notNull(),
+    executorId: text("executor_id"),
+    model: text("model"),
+    reasoningEffort: text("reasoning_effort"),
+    checkMode: text("check_mode").notNull(),
+    retryLimit: integer("retry_limit").notNull().default(1),
+    currentRound: integer("current_round").notNull().default(1),
+    status: text("status").notNull(),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+    finishedAt: text("finished_at"),
+  },
+  (t) => ({ taskIdx: index("free_review_runs_task_idx").on(t.taskId, t.createdAt) }),
+);
+
+export const freeReviewRounds = sqliteTable(
+  "free_review_rounds",
+  {
+    id: text("id").primaryKey(),
+    runId: text("run_id").notNull(),
+    round: integer("round").notNull(),
+    status: text("status").notNull(),
+    conclusion: text("conclusion"),
+    startedAt: text("started_at").notNull(),
+    endedAt: text("ended_at"),
+  },
+  (t) => ({ runRoundIdx: uniqueIndex("free_review_rounds_run_round_idx").on(t.runId, t.round) }),
 );
 
 export const sessions = sqliteTable("sessions", {

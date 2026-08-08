@@ -8,6 +8,7 @@ import {
   PlugsConnected,
   FlowArrow,
   Robot,
+  MagnifyingGlass,
   SlidersHorizontal,
   Stack,
 } from "@phosphor-icons/react";
@@ -19,8 +20,10 @@ import { ModesSettings } from "./ModesSettings.tsx";
 import { ProjectSettingsPanel } from "./ProjectSettingsPanel.tsx";
 import { ProvidersSettings } from "./ProvidersSettings.tsx";
 import { WorkflowsSettings } from "./WorkflowsSettings.tsx";
+import { ReviewerProfilesSettings } from "./ReviewerProfilesSettings.tsx";
 import "./agents-settings.css";
 import "./executors-settings.css";
+import "./reviewer-settings.css";
 
 export type SettingsSection =
   | "project"
@@ -30,6 +33,7 @@ export type SettingsSection =
   | "executors"
   | "modes"
   | "workflows"
+  | "reviewers"
   | "defaults";
 
 const PROJECT_NAV = [
@@ -43,6 +47,7 @@ const SYSTEM_NAV = [
   { id: "executors", label: "执行器", icon: Robot },
   { id: "modes", label: "执行模式", icon: CirclesThreePlus },
   { id: "workflows", label: "起手式", icon: FlowArrow },
+  { id: "reviewers", label: "审查者", icon: MagnifyingGlass },
   { id: "defaults", label: "默认规则", icon: SlidersHorizontal },
 ] as const;
 
@@ -138,6 +143,7 @@ export function SettingsPage({
           {section === "executors" && <ExecutorsSettings notify={notify} />}
           {section === "modes" && <ModesSettings notify={notify} />}
           {section === "workflows" && <WorkflowsSettings notify={notify} />}
+          {section === "reviewers" && <ReviewerProfilesSettings notify={notify} />}
           {section === "defaults" && <DefaultsSettings notify={notify} />}
           {section === "project" && project && (
             <ProjectSettingsPanel

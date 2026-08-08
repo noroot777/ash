@@ -5,6 +5,7 @@ import { tasks, sessions } from "./db/schema.js";
 import { bus } from "./bus.js";
 import { stopPreviewOnRerun } from "./preview.js";
 import { now, runsTiming } from "./util.js";
+import { resetFreeWorkflowMergeOnRun } from "./free-workflow.js";
 
 const TERMINAL: TaskStatus[] = ["done", "failed", "canceled"];
 
@@ -30,6 +31,7 @@ export async function setTaskStatus(taskId: string, status: TaskStatus): Promise
     // 又开跑了：上一轮起的预览指向的是上一版代码，留着只会让人对着旧页面验新改动。
     // 收在这儿是因为**所有**开跑路径都经过这一个函数（手点运行、队列推进、修复续跑）。
     if (cur && cur.status !== "running") await stopPreviewOnRerun(taskId);
+    if (cur?.workflowMode === "free" && cur.status !== "running") await resetFreeWorkflowMergeOnRun(taskId);
   } else if (TERMINAL.includes(status)) {
     patch.endedAt = endedAt = updatedAt;
   }

@@ -5,11 +5,12 @@ import type {
   Group,
   Priority,
   TaskMode,
+  TaskWorkflowMode,
   TeamPresetConfig,
 } from "@harness/shared";
 import { GearSix, SlidersHorizontal } from "@phosphor-icons/react";
 import { Dropdown } from "../components/Dropdown.tsx";
-import { Toggle } from "../components/ui.tsx";
+import { PillTabs, Toggle } from "../components/ui.tsx";
 import { TaskLabelsEditor } from "../components/TaskLabelsEditor.tsx";
 import type { ComposerExecutorConfigs, ComposerExecutorRole } from "./executorOverrides.ts";
 import { ExecutorPickerField } from "./ExecutorPickerField.tsx";
@@ -59,6 +60,8 @@ export function ComposerFields({
   onLabelsChange,
   onCreateGroup,
   workflowSlot,
+  workflowMode,
+  onWorkflowModeChange,
 }: {
   mode: TaskMode;
   profiles: AgentExecutorProfile[];
@@ -96,6 +99,8 @@ export function ComposerFields({
   onCreateGroup: () => void;
   /** 「干完之后」那一节。它只在单任务下出现，位置固定在最上面（起手式即执行配置）。 */
   workflowSlot?: ReactNode;
+  workflowMode: TaskWorkflowMode;
+  onWorkflowModeChange: (mode: TaskWorkflowMode) => void;
 }) {
   return (
     <div className="composer-config">
@@ -138,7 +143,35 @@ export function ComposerFields({
         <p className={`composer-agent-availability is-${availabilityTone ?? "warning"}`}>{availabilityMessage}</p>
       )}
 
-      {workflowSlot}
+      {mode === "single" && (
+        <section className="composer-config-section is-workflow-mode">
+          <header className="composer-section-heading">
+            <span><SlidersHorizontal size={14} /></span>
+            <div><h2>工作方式</h2><p>自由模式按需派审、预览和合并；起手式按预设线路自动推进。</p></div>
+          </header>
+          <PillTabs
+            label="工作方式"
+            value={workflowMode}
+            items={[{ value: "free", label: "自由工作流" }, { value: "preset", label: "起手式" }]}
+            onChange={onWorkflowModeChange}
+          />
+          {workflowMode === "free" && (
+            <ExecutorPickerField
+              label="任务执行器"
+              value={executors.single.profile}
+              types={workerTypes}
+              profiles={profiles}
+              knownProfiles={profiles}
+              fallbackType="claude"
+              override={executors.single}
+              onChange={(value) => onExecutorChange("single", value)}
+              onOverrideChange={(patch) => onOverrideChange("single", patch)}
+            />
+          )}
+        </section>
+      )}
+
+      {workflowMode === "preset" && workflowSlot}
 
       <section className="composer-config-section is-options">
         <header className="composer-section-heading">

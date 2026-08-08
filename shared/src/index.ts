@@ -2,6 +2,7 @@
 import type { TeamConfig } from "./team.ts";
 import type { DuetConfig } from "./duet.ts";
 import type { WorkflowDef } from "./workflow.ts";
+import type { TaskWorkflowMode } from "./free-workflow.ts";
 export type { Session, SessionRole } from "./session.ts";
 // 归一化后的 token 用量。运行时函数(累加/格式化)走 "@harness/shared/usage" 子路径
 // 导出,这里同上只再导出类型。
@@ -13,6 +14,15 @@ export type {
   TaskReviewRound,
   TeamConfig,
 } from "./team.ts";
+export type {
+  FreeReviewCheckMode,
+  FreeReviewDispatchInput,
+  FreeReviewRound,
+  FreeReviewRun,
+  FreeWorkflowState,
+  ReviewerProfile,
+  TaskWorkflowMode,
+} from "./free-workflow.ts";
 // 执行器覆盖的继承规则住在 ./executor-overrides.ts,走 "@harness/shared/executors"
 // 子路径导出(跟 "@harness/shared/team" 同一套):index.ts 只做类型再导出,不能在这里
 // 转发运行时函数 —— 服务端直接跑 .ts 源码,而 Node 的类型擦除不会把 "./x.js" 映射
@@ -306,6 +316,8 @@ export interface Task {
   // §Workflow 这个任务当初挑的那条线，**创建时拷下来的快照**（改起手式库不会追着改
   // 它）。老任务为 null —— 那时还没有这个概念，按写死的老流程走。
   workflow?: WorkflowDef | null;
+  // 普通任务的执行方式。preset 读取上面的起手式快照；free 完全由显式操作驱动。
+  workflowMode?: TaskWorkflowMode;
   // §Workflow 这条线此刻停在哪一站（step id）。有了它，「自动验证」「等我点头」才能在
   // 一条线上出现多次——唤醒事件落回来时才知道是**第几个**验证站有了结论、用户在**哪
   // 一道**关口点了头。null = 还没走到任何锚点，或者是没有线的老任务。

@@ -30,6 +30,8 @@ import { TaskReviewWorkspace } from "../review/TaskReviewWorkspace.tsx";
 import { WorkflowInspector } from "../workflow/WorkflowInspector.tsx";
 import { OriginTaskBar } from "../components/TaskOrigin.tsx";
 import { DerivedTaskLinks } from "../components/DerivedTaskLinks.tsx";
+import { FreeWorkflowInspector } from "../free-workflow/FreeWorkflowInspector.tsx";
+import { FreeWorkflowToolbar } from "../free-workflow/FreeWorkflowToolbar.tsx";
 
 interface TaskInspectorContext {
   task: Task;
@@ -73,20 +75,18 @@ const TASK_INSPECTORS: readonly InspectorDescriptor<TaskInspectorContext>[] = [
     title: "工作流",
     icon: <GitBranch size={14} />,
     defaultOpen: true,
-    render: (context) => (
-      <WorkflowInspector
-        task={context.task}
-        onTaskUpdated={context.onTaskUpdated}
-        notify={context.notify}
-      />
-    ),
+    render: (context) => context.task.workflowMode === "free"
+      ? <FreeWorkflowInspector task={context.task} />
+      : <WorkflowInspector task={context.task} onTaskUpdated={context.onTaskUpdated} notify={context.notify} />,
   },
   {
     id: "review",
     title: "审查",
     icon: <MagnifyingGlass size={14} />,
     defaultOpen: true,
-    render: (context) => <TaskReviewInspector {...context} />,
+    render: (context) => context.task.workflowMode === "free"
+      ? <FreeWorkflowInspector task={context.task} reviewOnly />
+      : <TaskReviewInspector {...context} />,
   },
 ];
 
@@ -306,6 +306,7 @@ export function TaskDetail({
               inspectorToggle={inspectorMode === "drawer" && inspectorToggleTarget ? undefined : toggleButton}
               notify={notify}
             />
+            <FreeWorkflowToolbar task={task} notify={notify} />
             {reviewOpen ? (
               <TaskReviewWorkspace task={task} allTasks={allTasks} onClose={() => changeReviewOpen(false)} onTaskUpdated={onTaskUpdate} notify={notify} />
             ) : openFilePath ? (

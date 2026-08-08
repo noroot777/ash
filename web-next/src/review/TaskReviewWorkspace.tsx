@@ -81,7 +81,9 @@ export function TaskReviewWorkspace({
         <div><b>{sharedParent ? "共享执行者审查" : "改动与提交"}</b><small>{sharedParent ? "该执行者随父团队共享分支统一验收" : "验证证据见右侧审查记录；这里核对任务分支相对基线的提交与 diff"}</small></div>
         {sharedParent
           ? <span className="single-review-shared-badge">随团队验收</span>
-          : <AcceptanceControls task={task} onTaskUpdated={onTaskUpdated} notify={notify} />}
+          : task.workflowMode === "free"
+            ? <span className="single-review-shared-badge">用会话上方“合并&清理”操作</span>
+            : <AcceptanceControls task={task} onTaskUpdated={onTaskUpdated} notify={notify} />}
         <button type="button" onClick={onClose}><X size={13} />返回对话</button>
       </header>
       <div className="single-review-scroll">

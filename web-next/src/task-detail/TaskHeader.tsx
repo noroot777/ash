@@ -29,6 +29,7 @@ function primaryAction(task: Task): { kind: PrimaryAction; label: string; danger
   if (task.status === "running") return { kind: "stop", label: "停止", danger: true };
   if (task.stage === "accepted") return { kind: null, label: "已验收", disabled: true };
   if (task.parentId !== null && task.status === "done") return { kind: null, label: "已完成", disabled: true };
+  if (task.workflowMode === "free" && task.status === "done") return { kind: null, label: "已完成", disabled: true };
   if (task.status === "done" || task.stage === "awaiting_acceptance" || task.stage === "verified") {
     return { kind: "accept", label: "验收" };
   }

@@ -10,7 +10,7 @@
 // 类型错误」，干活的 agent 就带着这句话接着干；答「先这样，我自己来」，它就停在那儿。
 import { eq } from "drizzle-orm";
 import { MAX_QUESTION_OPTIONS, MAX_QUESTION_OPTION_LEN } from "@harness/shared";
-import type { AgentType, QuestionItem } from "@harness/shared";
+import type { AgentType, QuestionItem, SessionRole } from "@harness/shared";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
 import { agents, sessions, tasks } from "./db/schema.js";
@@ -58,15 +58,15 @@ export async function setTaskQuestion({ taskId, question, options = [], items = 
  */
 export async function askingAgentFor(
   taskId: string,
-): Promise<{ agent: AgentType; executorId: string | null } | null> {
+): Promise<{ agent: AgentType; executorId: string | null; role: Extract<SessionRole, "single" | "reviewer"> } | null> {
   const turnAt = (row: { turnStartedAt: string | null; startedAt: string }) => row.turnStartedAt ?? row.startedAt;
   const latest = (await db.select().from(sessions).where(eq(sessions.taskId, taskId)))
-    .filter((row) => row.role === "single")
+    .filter((row) => row.role === "single" || row.role === "reviewer")
     .sort((left, right) => turnAt(left).localeCompare(turnAt(right)))
     .at(-1);
   if (!latest) return null;
   const profile = (await db.select().from(agents).where(eq(agents.name, latest.executor))).at(0);
-  return { agent: latest.agentType as AgentType, executorId: profile?.id ?? null };
+  return { agent: latest.agentType as AgentType, executorId: profile?.id ?? null, role: latest.role as "single" | "reviewer" };
 }
 
 /**

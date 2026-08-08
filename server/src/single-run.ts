@@ -5,7 +5,7 @@
 // 结算规则是全局单点，谁也不该另造一份。
 import type { WriteStream } from "node:fs";
 import { eq, sql } from "drizzle-orm";
-import type { AgentEvent, AgentType, TaskStatus } from "@harness/shared";
+import type { AgentEvent, AgentType, SessionRole, TaskStatus } from "@harness/shared";
 import { db } from "./db/index.js";
 import { tasks, sessions } from "./db/schema.js";
 import { bus } from "./bus.js";
@@ -16,6 +16,7 @@ import type { AgentExecutor, RunHandle } from "./executors/types.js";
 import { appendSessionTrace, writeTurnEnd, writeRunError } from "./transcript.js";
 import { notifyTeamLead } from "./team/inbox.js";
 import { handleTaskSettlement } from "./review.js";
+import { handleFreeWorkflowSettlement } from "./free-workflow.js";
 import { FOLLOW_UP_LABEL } from "./labels.js";
 import { reconcileTurnBaseline } from "./turn-baseline.js";
 import { clearTurnStart, turnOutputHint } from "./turn-output.js";
@@ -37,6 +38,7 @@ export async function afterSettlement(
   turnOk = true,
 ) {
   try {
+    if (await handleFreeWorkflowSettlement(taskId, status, confirmedDone, turnOk)) return;
     await handleTaskSettlement(taskId, status, confirmedDone, turnOk);
   } catch (error) {
     // Review orchestration is a post-settlement side effect. A failure here must
@@ -195,8 +197,10 @@ export async function consumeSingleRun(a: {
   turnStart: string;
   cliSessionId: string;
   autoTitle: boolean;
+  role?: SessionRole;
 }): Promise<void> {
   const { taskId, sessId, agentType, ex, out } = a;
+  const role = a.role ?? "single";
   let cliSessionId = a.cliSessionId;
   let exitStatus = 0;
   let titleDone = !a.autoTitle; // when autoTitle, swallow text until the title line is parsed
@@ -211,7 +215,7 @@ export async function consumeSingleRun(a: {
     if (!text) return;
     out.write(text);
     pendingTraceText += text;
-    bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: "single", agentType, event: { kind: "text", text } });
+    bus.publish({ type: "agent.event", taskId, sessionId: sessId, role, agentType, event: { kind: "text", text } });
   };
   const persistTrace = (event: AgentEvent, at?: string) => {
     // `context` 刻意不进 trace：trace 是「按回合回放各自的气泡」，而水位属于整条会话的
@@ -249,7 +253,7 @@ export async function consumeSingleRun(a: {
             .set({ cliSessionId, resumeCommand: ex.resumeCommand(a.cwd, cliSessionId) })
             .where(eq(sessions.id, sessId));
         }
-        bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: "single", agentType, event });
+        bus.publish({ type: "agent.event", taskId, sessionId: sessId, role, agentType, event });
         continue;
       }
       if (event.kind === "text" && !titleDone) {
@@ -280,7 +284,7 @@ export async function consumeSingleRun(a: {
         if (event.kind === "usage") await addSessionUsage(sessId, event.usage);
         // 水位相反：**覆盖**。它属于整条会话的此刻，不属于某一个回合，所以也不进 trace。
         if (event.kind === "context") await setSessionContext(sessId, event.context);
-        bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: "single", agentType, event });
+        bus.publish({ type: "agent.event", taskId, sessionId: sessId, role, agentType, event });
         if (event.kind === "done") exitStatus = event.exitStatus;
       }
     }
@@ -331,7 +335,7 @@ export async function consumeSingleRun(a: {
     // 诊断正文留在 .md 原始产物里；trace 负责刷新后的折叠块，SSE 负责实时显示。
     out.write(`\n> ${settled.note}\n`);
     persistTrace({ kind: "error", message: settled.note }, endIso);
-    bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: "single", agentType, event: { kind: "error", message: settled.note } });
+    bus.publish({ type: "agent.event", taskId, sessionId: sessId, role, agentType, event: { kind: "error", message: settled.note } });
   }
   writeTurnEnd(out, endIso); // fence this turn's real end before closing the .md
   out.end();

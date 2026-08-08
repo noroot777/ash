@@ -1,0 +1,580 @@
+import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync } from "node:fs";
+import { extname, join, resolve } from "node:path";
+import type {
+  AgentType,
+  FreeReviewCheckMode,
+  FreeReviewDispatchInput,
+  FreeReviewRun,
+  FreeReviewRound,
+  FreeWorkflowState,
+  TaskStatus,
+} from "@harness/shared";
+import { FREE_REVIEW_CHECK_MODES } from "@harness/shared/free-workflow";
+import { and, asc, desc, eq, inArray } from "drizzle-orm";
+import type { Hono } from "hono";
+import { bus } from "./bus.js";
+import { db } from "./db/index.js";
+import {
+  agents,
+  freeReviewRounds,
+  freeReviewRuns,
+  freeWorkflowStates,
+  projects,
+  reviewerProfiles,
+  tasks,
+} from "./db/schema.js";
+import { cleanupAcceptedTask, mergeTaskBranch } from "./git-accept.js";
+import { projectHealthLight } from "./git.js";
+import { continueWhenIdle } from "./runs.js";
+import { RUNS_DIR } from "./paths.js";
+import { appendTaskTimeline } from "./task-timeline.js";
+import { taskWorkspace } from "./task-workspace.js";
+import { readPreview, startPreview, stopPreview, type PreviewStep } from "./preview.js";
+import { userDirectivesFor } from "./user-directives.js";
+import { id, now } from "./util.js";
+
+type TaskRow = typeof tasks.$inferSelect;
+type ReviewRunRow = typeof freeReviewRuns.$inferSelect;
+
+const ACTIVE_REVIEW_STATUSES = ["reviewing", "repairing"] as const;
+const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".webp"]);
+const MAX_RETRIES = 5;
+const freeActionLocks = new Set<string>();
+
+export function freeReviewOutcome(input: {
+  turnOk: boolean;
+  conclusion: string | null;
+  currentRound: number;
+  retryLimit: number;
+}): "failed" | "passed" | "repair" | "exhausted" {
+  if (!input.turnOk || (input.conclusion !== "verified" && input.conclusion !== "verify_failed")) return "failed";
+  if (input.conclusion === "verified") return "passed";
+  return input.currentRound <= input.retryLimit ? "repair" : "exhausted";
+}
+
+function evidenceDir(taskId: string, runId: string, round: number): string {
+  return join(RUNS_DIR, taskId, "free-review", runId, `round-${round}`);
+}
+
+function reportPath(taskId: string, runId: string, round: number): string {
+  return join(evidenceDir(taskId, runId, round), "report.md");
+}
+
+function readReport(taskId: string, runId: string, round: number): string {
+  try {
+    const file = reviewFile(taskId, runId, round, "report.md");
+    return file ? readFileSync(file, "utf8") : "";
+  }
+  catch { return ""; }
+}
+
+function screenshots(taskId: string, runId: string, round: number): string[] {
+  try {
+    return readdirSync(evidenceDir(taskId, runId, round), { withFileTypes: true })
+      .filter((entry) => entry.isFile() && IMAGE_EXTENSIONS.has(extname(entry.name).toLowerCase()))
+      .map((entry) => entry.name)
+      .sort();
+  } catch {
+    return [];
+  }
+}
+
+function reviewFile(taskId: string, runId: string, round: number, name: string): string | null {
+  if (!name || name !== name.split(/[\\/]/).at(-1)) return null;
+  const base = resolve(evidenceDir(taskId, runId, round));
+  const file = resolve(base, name);
+  if (!file.startsWith(base + "/") || !existsSync(file)) return null;
+  const info = lstatSync(file);
+  if (!info.isFile() || info.isSymbolicLink()) return null;
+  const realBase = realpathSync(base);
+  const realFile = realpathSync(file);
+  return realFile.startsWith(realBase + "/") ? realFile : null;
+}
+
+async function activeReview(taskId: string): Promise<ReviewRunRow | null> {
+  return (await db.select().from(freeReviewRuns)
+    .where(and(
+      eq(freeReviewRuns.taskId, taskId),
+      inArray(freeReviewRuns.status, [...ACTIVE_REVIEW_STATUSES]),
+    ))
+    .orderBy(desc(freeReviewRuns.createdAt))
+    .limit(1)).at(0) ?? null;
+}
+
+async function assertBeforeMerge(taskId: string): Promise<void> {
+  const state = (await db.select({ mergeStatus: freeWorkflowStates.mergeStatus })
+    .from(freeWorkflowStates).where(eq(freeWorkflowStates.taskId, taskId))).at(0);
+  if (state?.mergeStatus === "merging") throw new Error("合并&清理正在进行");
+  if (state?.mergeStatus === "merged") throw new Error("任务已合并清理；如需继续修改，请先重新运行任务");
+}
+
+export async function isFreeReviewTurn(taskId: string): Promise<boolean> {
+  return (await activeReview(taskId))?.status === "reviewing";
+}
+
+export async function freeReviewResumeOptions(taskId: string) {
+  const run = await activeReview(taskId);
+  if (!run || run.status !== "reviewing") return null;
+  return {
+    agent: run.agentType as AgentType,
+    executorId: run.executorId,
+    model: run.model,
+    reasoningEffort: run.reasoningEffort,
+    sessionRole: "reviewer" as const,
+  };
+}
+
+export async function resetFreeWorkflowMergeOnRun(taskId: string): Promise<void> {
+  if ((await activeReview(taskId))?.status === "reviewing") return;
+  const state = (await db.select({ mergeStatus: freeWorkflowStates.mergeStatus })
+    .from(freeWorkflowStates).where(eq(freeWorkflowStates.taskId, taskId))).at(0);
+  if (!state || state.mergeStatus === "idle") return;
+  await db.update(freeWorkflowStates).set({ mergeStatus: "idle", mergeMessage: null, mergedAt: null, updatedAt: now() })
+    .where(eq(freeWorkflowStates.taskId, taskId));
+  bus.publish({ type: "task.review", taskId });
+}
+
+export async function freeReviewReminder(taskId: string): Promise<string> {
+  const run = await activeReview(taskId);
+  if (!run || run.status !== "reviewing") return "";
+  return `自由工作流审查提醒：你正在执行第 ${run.currentRound} 轮${run.checkMode === "logic" ? "逻辑" : "语法"}审查。` +
+    `报告必须写到 ${reportPath(taskId, run.id, run.currentRound)}；结束前调用 report_stage(verified|verify_failed)，` +
+    `不要调用 complete_task 或 accept_task。`;
+}
+
+function checkMode(value: unknown): FreeReviewCheckMode {
+  if (typeof value !== "string" || !(FREE_REVIEW_CHECK_MODES as readonly string[]).includes(value)) {
+    throw new Error("审查类型只能是 syntax 或 logic");
+  }
+  return value as FreeReviewCheckMode;
+}
+
+function retryLimit(value: unknown): number {
+  if (!Number.isInteger(value) || Number(value) < 0 || Number(value) > MAX_RETRIES) {
+    throw new Error(`自动复审轮数必须是 0-${MAX_RETRIES} 的整数`);
+  }
+  return Number(value);
+}
+
+async function reviewPrompt(task: TaskRow, run: ReviewRunRow, round: number, repoPath: string): Promise<string> {
+  const dir = evidenceDir(task.id, run.id, round);
+  const focus = run.checkMode === "syntax"
+    ? "本轮只做语法与机械质量检查：编译、类型、lint、格式、明显的 API/导入错误和相关测试。不要扩张成产品方案评审。"
+    : "本轮做逻辑审查：除编译与测试外，重点找行为错误、状态竞争、失败路径、边界条件和回归风险。涉及可见前端改动时必须启动页面真实操作并截图；是否还需要其它截图由你按证据价值判断。";
+  return `【自由工作流 · 第 ${round} 轮审查】\n` +
+    `你是独立审查者，不是继续实现需求。默认产物可能有问题，主动寻找能复现的缺陷。\n\n` +
+    `任务：${task.id} / ${task.title}\n原始需求：\n${task.body || "(无正文)"}\n\n` +
+    (await userDirectivesFor(task.id)) +
+    `${focus}\n\n先检查 ${repoPath} 中的真实 git status、diff 和提交，再选择验证命令。` +
+    `必须真实运行与风险相称的检查；浏览器验证优先复用 CDP，退回 playwright 时结束前清掉工作区产物并停掉所有临时服务。\n\n` +
+    `证据必须落盘：报告写到 ${join(dir, "report.md")}；截图如有必要放在同一目录。证据不要 git add/commit。\n\n` +
+    `结束前调用 report_stage(taskId="${task.id}", stage="verified"|"verify_failed") 给出结论。` +
+    `这是旁路审查回合，不要调用 complete_task，也不要调用 accept_task。`;
+}
+
+function repairPrompt(taskId: string, run: ReviewRunRow, report: string, images: string[]): string {
+  const evidence = images.length ? images.map((name) => `- ${name}`).join("\n") : "- 本轮无截图";
+  return `【自由工作流审查未通过 · 第 ${run.currentRound} 轮】\n` +
+    `请按下面的审查意见修复，不要扩大原任务边界。修复完成并验证后调用 complete_task(taskId="${taskId}")；` +
+    `harness 随后会自动派同一位审查者复审。\n\n审查报告：\n${report || "(审查者未写 report.md，请结合本轮会话排查)"}\n\n` +
+    `截图：\n${evidence}`;
+}
+
+async function failReviewStart(run: ReviewRunRow, message: string): Promise<void> {
+  const at = now();
+  await db.update(freeReviewRounds).set({ status: "error", endedAt: at })
+    .where(and(eq(freeReviewRounds.runId, run.id), eq(freeReviewRounds.round, run.currentRound)));
+  await db.update(freeReviewRuns).set({ status: "failed", updatedAt: at, finishedAt: at })
+    .where(eq(freeReviewRuns.id, run.id));
+  await appendTaskTimeline(run.taskId, `自由工作流第 ${run.currentRound} 轮审查启动失败：${message}`);
+  bus.publish({ type: "task.review", taskId: run.taskId });
+}
+
+async function launchReviewRound(task: TaskRow, run: ReviewRunRow): Promise<void> {
+  const project = (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0);
+  const prompt = await reviewPrompt(task, run, run.currentRound, project?.repoPath ?? "(项目已不存在)");
+  await appendTaskTimeline(task.id, `自由工作流第 ${run.currentRound} 轮审查开始：${run.reviewerName} · ${run.checkMode === "logic" ? "逻辑检查" : "语法检查"}。`);
+  bus.publish({ type: "task.review", taskId: task.id });
+  continueWhenIdle(task.id, prompt, {
+    system: "run",
+    sideTurn: true,
+    agent: run.agentType as AgentType,
+    executorId: run.executorId,
+    model: run.model,
+    reasoningEffort: run.reasoningEffort,
+    sessionRole: "reviewer",
+    freshSession: run.currentRound === 1,
+  }, (error) => failReviewStart(run, error));
+}
+
+async function nextRound(task: TaskRow, run: ReviewRunRow): Promise<void> {
+  const round = run.currentRound + 1;
+  const at = now();
+  const nextRun = { ...run, status: "reviewing", currentRound: round, updatedAt: at };
+  try {
+    await db.insert(freeReviewRounds).values({
+      id: id(), runId: run.id, round, status: "reviewing", conclusion: null, startedAt: at, endedAt: null,
+    });
+    await db.update(freeReviewRuns).set({ status: "reviewing", currentRound: round, updatedAt: at })
+      .where(eq(freeReviewRuns.id, run.id));
+    await launchReviewRound(task, nextRun);
+  } catch (error) {
+    await failReviewStart(nextRun, error instanceof Error ? error.message : String(error));
+    throw error;
+  }
+}
+
+export async function reportFreeReviewConclusion(
+  taskId: string,
+  stage: string,
+): Promise<{ runId: string; round: number } | null> {
+  const run = await activeReview(taskId);
+  if (!run || run.status !== "reviewing") return null;
+  if (stage !== "verified" && stage !== "verify_failed") {
+    throw new Error("自由工作流审查回合只能上报 verified 或 verify_failed");
+  }
+  await db.update(freeReviewRounds).set({ conclusion: stage })
+    .where(and(eq(freeReviewRounds.runId, run.id), eq(freeReviewRounds.round, run.currentRound)));
+  bus.publish({ type: "task.review", taskId });
+  return { runId: run.id, round: run.currentRound };
+}
+
+export async function handleFreeWorkflowSettlement(
+  taskId: string,
+  status: TaskStatus,
+  confirmedDone: boolean,
+  turnOk: boolean,
+): Promise<boolean> {
+  const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
+  if (!task || task.workflowMode !== "free") return false;
+  const run = await activeReview(taskId);
+  if (!run) return true;
+
+  if (run.status === "repairing") {
+    if (confirmedDone && status === "done") await nextRound(task, run);
+    return true;
+  }
+
+  if (task.question || task.resumePrompt) return true;
+  const round = (await db.select().from(freeReviewRounds)
+    .where(and(eq(freeReviewRounds.runId, run.id), eq(freeReviewRounds.round, run.currentRound)))).at(0);
+  if (!round) return true;
+  const at = now();
+  const outcome = freeReviewOutcome({
+    turnOk,
+    conclusion: round.conclusion,
+    currentRound: run.currentRound,
+    retryLimit: run.retryLimit,
+  });
+  if (outcome === "failed") {
+    await db.update(freeReviewRounds).set({ status: "error", endedAt: at }).where(eq(freeReviewRounds.id, round.id));
+    await db.update(freeReviewRuns).set({ status: "failed", updatedAt: at, finishedAt: at }).where(eq(freeReviewRuns.id, run.id));
+    await appendTaskTimeline(taskId, `自由工作流第 ${run.currentRound} 轮审查未能正常给出结论，已停止自动链。`);
+    bus.publish({ type: "task.review", taskId });
+    return true;
+  }
+
+  const passed = outcome === "passed";
+  await db.update(freeReviewRounds).set({ status: passed ? "passed" : "failed", endedAt: at })
+    .where(eq(freeReviewRounds.id, round.id));
+  if (passed) {
+    await db.update(freeReviewRuns).set({ status: "passed", updatedAt: at, finishedAt: at })
+      .where(eq(freeReviewRuns.id, run.id));
+    await appendTaskTimeline(taskId, `自由工作流第 ${run.currentRound} 轮审查通过（${run.reviewerName}）。`);
+    bus.publish({ type: "task.review", taskId });
+    return true;
+  }
+
+  const report = readReport(taskId, run.id, run.currentRound);
+  const images = screenshots(taskId, run.id, run.currentRound);
+  if (outcome === "repair") {
+    await db.update(freeReviewRuns).set({ status: "repairing", updatedAt: at }).where(eq(freeReviewRuns.id, run.id));
+    await appendTaskTimeline(taskId, `自由工作流第 ${run.currentRound} 轮审查未通过，意见已发回会话；修复完成后自动复审。`);
+    bus.publish({ type: "task.review", taskId });
+    continueWhenIdle(taskId, repairPrompt(taskId, run, report, images), { byBackend: true }, async (error) => {
+      const failedAt = now();
+      await db.update(freeReviewRuns).set({ status: "failed", updatedAt: failedAt, finishedAt: failedAt })
+        .where(eq(freeReviewRuns.id, run.id));
+      await appendTaskTimeline(taskId, `自由工作流审查意见投递失败：${error}`);
+      bus.publish({ type: "task.review", taskId });
+    });
+    return true;
+  }
+
+  await db.update(freeReviewRuns).set({ status: "exhausted", updatedAt: at, finishedAt: at })
+    .where(eq(freeReviewRuns.id, run.id));
+  await appendTaskTimeline(taskId, `自由工作流审查仍未通过，自动复审次数已用完；现在由你决定直接合并或再开一轮审查。`);
+  bus.publish({ type: "task.review", taskId });
+  return true;
+}
+
+async function startFreeReview(taskId: string, input: FreeReviewDispatchInput): Promise<FreeWorkflowState> {
+  const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
+  if (!task) throw new Error("任务不存在");
+  if (task.mode !== "single" || task.parentId || task.reviewOf) throw new Error("自由工作流只适用于普通单任务");
+  if (task.workflowMode !== "free") throw new Error("当前任务不是自由工作流");
+  if (task.archived) throw new Error("归档任务不能派审");
+  if (task.status === "backlog") throw new Error("任务尚未运行，完成实现后再派审");
+  if (task.status === "running" || task.status === "queued") throw new Error("任务正在运行或排队，结束后再派审");
+  if (freeActionLocks.has(taskId)) throw new Error("当前已有自由工作流操作正在进行");
+  freeActionLocks.add(taskId);
+  try {
+    await assertBeforeMerge(taskId);
+    if (await activeReview(taskId)) throw new Error("当前已有审查或修复链在进行");
+    const profile = (await db.select().from(reviewerProfiles).where(eq(reviewerProfiles.id, input.reviewerId))).at(0);
+    if (!profile) throw new Error("所选审查者不存在");
+    const mode = checkMode(input.checkMode);
+    const retries = retryLimit(input.retryLimit);
+    const at = now();
+    const run: ReviewRunRow = {
+      id: id(), taskId, reviewerId: profile.id, reviewerName: profile.name,
+      agentType: profile.agentType, executorId: profile.executorId, model: profile.model,
+      reasoningEffort: profile.reasoningEffort, checkMode: mode, retryLimit: retries,
+      currentRound: 1, status: "reviewing", createdAt: at, updatedAt: at, finishedAt: null,
+    };
+    await db.insert(freeReviewRuns).values(run);
+    try {
+      await db.insert(freeReviewRounds).values({
+        id: id(), runId: run.id, round: 1, status: "reviewing", conclusion: null, startedAt: at, endedAt: null,
+      });
+      await db.insert(freeWorkflowStates).values({
+        taskId, selectedReviewerId: profile.id, mergeStatus: "idle", mergeMessage: null, mergedAt: null, updatedAt: at,
+      }).onConflictDoUpdate({
+        target: freeWorkflowStates.taskId,
+        set: { selectedReviewerId: profile.id, updatedAt: at },
+      });
+      await launchReviewRound(task, run);
+    } catch (error) {
+      await failReviewStart(run, error instanceof Error ? error.message : String(error));
+      throw error;
+    }
+    return freeWorkflowState(taskId);
+  } finally {
+    freeActionLocks.delete(taskId);
+  }
+}
+
+function previewCommand(cwd: string): string {
+  const packageJson = join(cwd, "package.json");
+  if (!existsSync(packageJson)) throw new Error("工作区没有 package.json，无法自动判断预览命令");
+  let scripts: Record<string, unknown> = {};
+  try { scripts = JSON.parse(readFileSync(packageJson, "utf8")).scripts ?? {}; }
+  catch { throw new Error("package.json 无法读取，无法自动判断预览命令"); }
+  const script = typeof scripts.dev === "string" ? "dev" : typeof scripts.start === "string" ? "start" : null;
+  if (!script) throw new Error("package.json 没有 dev 或 start 脚本，请先在项目中补充预览命令");
+  if (existsSync(join(cwd, "pnpm-lock.yaml"))) return `pnpm run ${script}`;
+  if (existsSync(join(cwd, "yarn.lock"))) return `yarn ${script}`;
+  return `npm run ${script}`;
+}
+
+async function startFreePreview(taskId: string) {
+  if (freeActionLocks.has(taskId)) throw new Error("当前已有自由工作流操作正在进行");
+  freeActionLocks.add(taskId);
+  try {
+    const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
+    if (!task || task.workflowMode !== "free" || task.mode !== "single" || task.parentId || task.reviewOf) {
+      throw new Error("当前任务不支持自由预览");
+    }
+    if (task.status === "backlog") throw new Error("任务尚未运行，完成实现后再打开预览");
+    if (task.status === "running" || task.status === "queued") throw new Error("任务正在修改代码，结束后再打开预览");
+    await assertBeforeMerge(taskId);
+    const project = (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0);
+    if (!project) throw new Error("项目不存在");
+    const workspace = await taskWorkspace(task, project.repoPath);
+    const command = previewCommand(workspace.path);
+    const step: PreviewStep = {
+      id: "free-preview", kind: "preview",
+      p: { cmd: command, mode: "frontend", ready: "port+log", life: "task" },
+      fail: null,
+    };
+    const result = await startPreview(taskId, step, workspace.path);
+    if (!result.ok) throw new Error(result.reason);
+    await appendTaskTimeline(taskId, `自由工作流预览已打开：${result.record.url ?? command}`);
+    bus.publish({ type: "task.review", taskId });
+    return result.record;
+  } finally {
+    freeActionLocks.delete(taskId);
+  }
+}
+
+async function mergeAndClean(taskId: string): Promise<{ merged: true; message: string }> {
+  const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
+  if (!task || task.workflowMode !== "free" || task.mode !== "single" || task.parentId || task.reviewOf) {
+    throw new Error("当前任务不支持自由合并");
+  }
+  if (task.archived) throw new Error("归档任务不能合并");
+  if (task.status === "backlog") throw new Error("任务尚未运行，没有可合并的产物");
+  if (task.status === "running" || task.status === "queued") throw new Error("任务仍在运行或排队，结束后再合并");
+  if (await activeReview(taskId)) throw new Error("审查或修复仍在进行，结束后再合并");
+  if (freeActionLocks.has(taskId)) throw new Error("当前已有自由工作流操作正在进行");
+  freeActionLocks.add(taskId);
+  try {
+    const existing = (await db.select().from(freeWorkflowStates)
+      .where(eq(freeWorkflowStates.taskId, taskId))).at(0);
+    if (existing?.mergeStatus === "merged") {
+      return { merged: true, message: existing.mergeMessage ?? "任务已合并并清理" };
+    }
+    const at = now();
+    await db.insert(freeWorkflowStates).values({
+      taskId, selectedReviewerId: null, mergeStatus: "merging", mergeMessage: null, mergedAt: null, updatedAt: at,
+    }).onConflictDoUpdate({ target: freeWorkflowStates.taskId, set: { mergeStatus: "merging", mergeMessage: null, updatedAt: at } });
+    try {
+      await stopPreview(taskId, "开始合并并清理，自由工作流顺手关闭预览");
+      const project = (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0);
+      if (!project) throw new Error("项目不存在");
+      let message: string;
+      if (!projectHealthLight(project.repoPath).isRepo || !task.useWorktree) {
+        message = task.useWorktree
+          ? "项目不是 Git 仓库，没有可合并分支；预览已关闭"
+          : "任务直接在项目目录执行，没有独立分支可合并或清理；预览已关闭";
+      } else {
+        const merge = await mergeTaskBranch(project.repoPath, taskId, null, "safe");
+        if (!merge.ok) throw new Error(merge.message);
+        const cleanup = await cleanupAcceptedTask(project.repoPath, taskId, merge.targetBranch);
+        if (!cleanup.ok) throw new Error(`合并已完成，但清理失败：${cleanup.message}`);
+        message = `已安全合并 ${merge.sourceBranch} → ${merge.targetBranch}，并清理任务 worktree${cleanup.branchDeleted ? "与分支" : ""}`;
+      }
+      const finishedAt = now();
+      await db.update(freeWorkflowStates).set({ mergeStatus: "merged", mergeMessage: message, mergedAt: finishedAt, updatedAt: finishedAt })
+        .where(eq(freeWorkflowStates.taskId, taskId));
+      await appendTaskTimeline(taskId, `自由工作流合并&清理完成：${message}`);
+      bus.publish({ type: "task.review", taskId });
+      return { merged: true, message };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      await db.update(freeWorkflowStates).set({ mergeStatus: "failed", mergeMessage: message, updatedAt: now() })
+        .where(eq(freeWorkflowStates.taskId, taskId));
+      await appendTaskTimeline(taskId, `自由工作流合并&清理失败：${message}`);
+      bus.publish({ type: "task.review", taskId });
+      throw error;
+    }
+  } finally {
+    freeActionLocks.delete(taskId);
+  }
+}
+
+export async function freeWorkflowState(taskId: string): Promise<FreeWorkflowState> {
+  const [state, runs, profileRows] = await Promise.all([
+    db.select().from(freeWorkflowStates).where(eq(freeWorkflowStates.taskId, taskId)).then((rows) => rows.at(0)),
+    db.select().from(freeReviewRuns).where(eq(freeReviewRuns.taskId, taskId)).orderBy(desc(freeReviewRuns.createdAt)),
+    db.select({ id: agents.id, name: agents.name }).from(agents),
+  ]);
+  const roundRows = runs.length
+    ? await db.select().from(freeReviewRounds).where(inArray(freeReviewRounds.runId, runs.map((run) => run.id)))
+      .orderBy(asc(freeReviewRounds.round))
+    : [];
+  const roundsByRun = new Map<string, typeof roundRows>();
+  for (const round of roundRows) roundsByRun.set(round.runId, [...(roundsByRun.get(round.runId) ?? []), round]);
+  const reviews: FreeReviewRun[] = runs.map((run) => ({
+    id: run.id,
+    reviewerId: run.reviewerId,
+    reviewerName: run.reviewerName,
+    agentType: run.agentType as AgentType,
+    executorId: run.executorId,
+    executorLabel: profileRows.find((profile) => profile.id === run.executorId)?.name ?? null,
+    model: run.model,
+    reasoningEffort: run.reasoningEffort,
+    checkMode: run.checkMode as FreeReviewCheckMode,
+    retryLimit: run.retryLimit,
+    currentRound: run.currentRound,
+    status: run.status as FreeReviewRun["status"],
+    rounds: (roundsByRun.get(run.id) ?? []).map((round): FreeReviewRound => ({
+      round: round.round,
+      status: round.status as FreeReviewRound["status"],
+      conclusion: round.conclusion as FreeReviewRound["conclusion"],
+      reportMarkdown: readReport(taskId, run.id, round.round),
+      screenshots: screenshots(taskId, run.id, round.round),
+      startedAt: round.startedAt,
+      endedAt: round.endedAt,
+    })),
+    createdAt: run.createdAt,
+    updatedAt: run.updatedAt,
+    finishedAt: run.finishedAt,
+  }));
+  const preview = readPreview(taskId);
+  return {
+    taskId,
+    selectedReviewerId: state?.selectedReviewerId ?? null,
+    preview: {
+      running: !!preview,
+      url: preview?.url ?? null,
+      port: preview?.port ?? null,
+      command: preview?.cmd ?? null,
+      startedAt: preview?.startedAt ?? null,
+    },
+    merge: {
+      status: (state?.mergeStatus as FreeWorkflowState["merge"]["status"] | undefined) ?? "idle",
+      message: state?.mergeMessage ?? null,
+      mergedAt: state?.mergedAt ?? null,
+    },
+    reviews,
+  };
+}
+
+export function mountFreeWorkflowRoutes(api: Hono): void {
+  api.get("/tasks/:id/free-workflow", async (c) => {
+    const task = (await db.select({ workflowMode: tasks.workflowMode }).from(tasks).where(eq(tasks.id, c.req.param("id")))).at(0);
+    if (!task) return c.json({ error: "not found" }, 404);
+    if (task.workflowMode !== "free") return c.json({ error: "当前任务不是自由工作流" }, 409);
+    return c.json(await freeWorkflowState(c.req.param("id")));
+  });
+
+  api.post("/tasks/:id/free-workflow/review", async (c) => {
+    try {
+      return c.json(await startFreeReview(c.req.param("id"), await c.req.json<FreeReviewDispatchInput>()), 201);
+    } catch (error) {
+      return c.json({ error: error instanceof Error ? error.message : String(error) }, 409);
+    }
+  });
+
+  api.post("/tasks/:id/free-workflow/preview", async (c) => {
+    try {
+      const record = await startFreePreview(c.req.param("id"));
+      return c.json({ running: true, url: record.url, port: record.port, command: record.cmd, startedAt: record.startedAt });
+    } catch (error) {
+      return c.json({ error: error instanceof Error ? error.message : String(error) }, 409);
+    }
+  });
+
+  api.delete("/tasks/:id/free-workflow/preview", async (c) => {
+    const taskId = c.req.param("id");
+    const task = (await db.select({
+      workflowMode: tasks.workflowMode, mode: tasks.mode, parentId: tasks.parentId, reviewOf: tasks.reviewOf,
+    }).from(tasks).where(eq(tasks.id, taskId))).at(0);
+    if (!task || task.workflowMode !== "free" || task.mode !== "single" || task.parentId || task.reviewOf) {
+      return c.json({ error: "当前任务不支持自由预览" }, 409);
+    }
+    if (freeActionLocks.has(taskId)) return c.json({ error: "当前已有自由工作流操作正在进行" }, 409);
+    freeActionLocks.add(taskId);
+    try {
+      const stopped = await stopPreview(taskId, "用户关闭了自由工作流预览");
+      bus.publish({ type: "task.review", taskId });
+      return c.json({ stopped });
+    } finally {
+      freeActionLocks.delete(taskId);
+    }
+  });
+
+  api.post("/tasks/:id/free-workflow/merge", async (c) => {
+    try { return c.json(await mergeAndClean(c.req.param("id"))); }
+    catch (error) { return c.json({ error: error instanceof Error ? error.message : String(error) }, 409); }
+  });
+
+  api.get("/tasks/:id/free-workflow/review-file", async (c) => {
+    const taskId = c.req.param("id");
+    const runId = c.req.query("run") ?? "";
+    const round = Number(c.req.query("round"));
+    const name = c.req.query("name") ?? "";
+    const owned = Number.isInteger(round) && round > 0
+      ? (await db.select({ id: freeReviewRounds.id }).from(freeReviewRounds)
+        .innerJoin(freeReviewRuns, eq(freeReviewRounds.runId, freeReviewRuns.id))
+        .where(and(eq(freeReviewRuns.id, runId), eq(freeReviewRuns.taskId, taskId), eq(freeReviewRounds.round, round)))
+        .limit(1)).at(0)
+      : null;
+    const file = owned ? reviewFile(taskId, runId, round, name) : null;
+    if (!file) return c.json({ error: "not found" }, 404);
+    const mime = extname(file).toLowerCase() === ".png" ? "image/png"
+      : extname(file).toLowerCase() === ".webp" ? "image/webp" : "image/jpeg";
+    return c.body(Uint8Array.from(readFileSync(file)), 200, { "content-type": mime });
+  });
+}

@@ -41,6 +41,8 @@ import { mountFileRoutes } from "./file-routes.js";
 import { mountOpenAiConverterRoutes } from "./openai-converter/routes.js";
 import { mountProviderTestRoutes } from "./provider-test.js";
 import { mountTerminalRoutes } from "./terminal.js";
+import { mountFreeWorkflowRoutes } from "./free-workflow.js";
+import { mountReviewerProfileRoutes } from "./reviewer-profiles.js";
 
 export const api = new Hono();
 mountNoteRoutes(api);
@@ -649,6 +651,8 @@ mountDuetIterationRoutes(api);
 mountTeamPresetRoutes(api);
 mountWorkflowRoutes(api);
 mountPreviewRoutes(api);
+mountReviewerProfileRoutes(api);
+mountFreeWorkflowRoutes(api);
 
 // ── SSE stream (§12) ───────────────────────────────────────────────────────
 api.get("/events", (c) =>

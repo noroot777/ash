@@ -219,6 +219,17 @@ async function acceptTaskUnlocked(taskId: string, by: AcceptBy): Promise<AcceptT
   if (!requestedTask) {
     return { accepted: false, httpStatus: 404, taskId, reason: "not_found", error: "not found", phase: "initial" };
   }
+  if (requestedTask.workflowMode === "free") {
+    return {
+      accepted: false,
+      httpStatus: 409,
+      taskId,
+      reason: "free_workflow_acceptance_not_applicable",
+      error: "自由工作流不走起手式验收；请使用任务会话上方的“合并&清理”按钮",
+      status: requestedTask.status,
+      phase: "initial",
+    };
+  }
   const requestedParent = requestedTask.parentId
     ? (await db.select().from(tasks).where(eq(tasks.id, requestedTask.parentId))).at(0)
     : null;

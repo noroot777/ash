@@ -83,6 +83,7 @@ const toTask = (r: TaskRow, profiles: AgentLabelRow[] = []): Task => ({
   useWorktree: r.useWorktree,
   worktreeBase: r.worktreeBase,
   workflow: r.workflow ? JSON.parse(r.workflow) : null,
+  workflowMode: r.workflowMode as Task["workflowMode"],
   workflowAt: r.workflowAt ?? null,
   originTaskId: r.originTaskId ?? null,
   resumePrompt: r.resumePrompt ?? null,
@@ -174,9 +175,11 @@ export async function createTasks(
       worktreeBase: useWorktree ? row.worktreeBase ?? null : null,
       // 审查任务（reviewOf 非空）不拷线：它本身就是别人那条线上「验证」那一站长出来的
       // 产物，再给它配一条自己的线就成了「审查任务的审查任务」。
-      workflow: row.workflow ?? (row.reviewOf
+      workflow: row.workflowMode === "free"
         ? null
-        : await snapshotWorkflow(workflowId, row.projectId, useWorktree)),
+        : row.workflow ?? (row.reviewOf
+          ? null
+          : await snapshotWorkflow(workflowId, row.projectId, useWorktree)),
     };
   }));
   await db.insert(tasks).values(normalizedRows);
