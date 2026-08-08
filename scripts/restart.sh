@@ -100,6 +100,9 @@ drain_wait() {
 # FORCE 优先 —— 既然打算强杀,等就没有意义了。
 if [ -n "${WAIT:-}" ] && [ -z "${FORCE:-}" ]; then drain_wait; fi
 
+echo "▶ 依赖同步…"
+npm install --no-audit --no-fund || { echo "✕ 依赖同步失败,已中止——服务端未重启。"; exit 1; }
+
 echo "▶ 1/3 构建 (shared → web-next → server → mcp)…"
 npm run build || { echo "✕ 构建失败,已中止——服务端未重启,跑的还是旧代码。"; exit 1; }
 

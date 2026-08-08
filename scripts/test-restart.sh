@@ -16,6 +16,7 @@ trap cleanup EXIT
 
 cat > "$FAKE_BIN/npm" <<'EOF'
 #!/usr/bin/env bash
+printf '%s\n' "$*" >> "$RESTART_TEST_TMP/npm.log"
 exit 0
 EOF
 
@@ -72,6 +73,8 @@ PATH="$FAKE_BIN:$PATH" \
 
 grep -q '14317 已就绪' "$TMP/output.log"
 grep -q '✅ 完成' "$TMP/output.log"
+[ "$(sed -n '1p' "$TMP/npm.log")" = "install --no-audit --no-fund" ]
+[ "$(sed -n '2p' "$TMP/npm.log")" = "run build" ]
 SERVER_PID="$(cat "$TMP/server.pid")"
 kill -0 "$SERVER_PID"
 [ "$(ps -p "$SERVER_PID" -o ppid= | tr -d ' ')" = "1" ]
