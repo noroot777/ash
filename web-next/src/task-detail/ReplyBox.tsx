@@ -28,6 +28,7 @@ export function ReplyBox({
   skills = EMPTY_SKILLS,
   skillsRemote = false,
   inlinePanel,
+  topRail,
 }: {
   task: Task;
   hasConversation: boolean;
@@ -60,6 +61,7 @@ export function ReplyBox({
   // 别让空菜单看起来像「这台机器没装技能」。
   skillsRemote?: boolean;
   inlinePanel?: ReactNode;
+  topRail?: ReactNode;
 }) {
   const [value, setValue] = useState("");
   const [sending, setSending] = useState(false);
@@ -293,7 +295,7 @@ export function ReplyBox({
     && (!!value.trim() || uploads.attachments.length > 0);
 
   return (
-    <div className="task-reply-shell">
+    <div className={`task-reply-shell${topRail ? " has-top-rail" : ""}`}>
       {menuOpen && (
         <SlashMenu
           className="task-reply-command-menu"
@@ -365,6 +367,7 @@ export function ReplyBox({
       />
       <UploadAttachmentList attachments={uploads.attachments} error={uploads.error} onRemove={uploads.remove} />
       {sendError && <p className="task-reply-error">{sendError}</p>}
+      {topRail}
       <div className="task-reply-box">
         <textarea
           ref={textareaRef}

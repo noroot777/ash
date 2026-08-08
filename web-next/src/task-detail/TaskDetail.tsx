@@ -306,7 +306,6 @@ export function TaskDetail({
               inspectorToggle={inspectorMode === "drawer" && inspectorToggleTarget ? undefined : toggleButton}
               notify={notify}
             />
-            <FreeWorkflowToolbar task={task} notify={notify} />
             {reviewOpen ? (
               <TaskReviewWorkspace task={task} allTasks={allTasks} onClose={() => changeReviewOpen(false)} onTaskUpdated={onTaskUpdate} notify={notify} />
             ) : openFilePath ? (
@@ -341,6 +340,9 @@ export function TaskDetail({
                   <ReplyBox
                     task={task}
                     hasConversation={hasConversation}
+                    topRail={task.workflowMode === "free" && task.mode === "single" && !task.parentId && !task.reviewOf
+                      ? <FreeWorkflowToolbar task={task} notify={notify} />
+                      : undefined}
                     skills={skills.skills}
                     skillsRemote={skills.remote}
                     onSend={async (text, attachments, { executorLabel, ...options }) => {
