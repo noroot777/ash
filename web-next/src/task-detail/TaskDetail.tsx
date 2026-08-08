@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import type { Group, Session, Task } from "@harness/shared";
 import { isUserFollowUp } from "@harness/shared";
-import { FlowArrow, FolderOpen, Info, MagnifyingGlass } from "@phosphor-icons/react";
+import { FolderOpen, GitBranch, Info, MagnifyingGlass } from "@phosphor-icons/react";
 import { InspectorHost, type InspectorDescriptor } from "../inspector/index.ts";
 import { FileTreeInspector } from "../files/FileTreeInspector.tsx";
 import { FileViewer } from "../files/FileViewer.tsx";
@@ -56,15 +56,10 @@ const TASK_INSPECTORS: readonly InspectorDescriptor<TaskInspectorContext>[] = [
     render: (context) => <TaskInspector {...context} />,
   },
   {
-    id: "review",
-    title: "审查",
-    icon: <MagnifyingGlass size={14} />,
-    render: (context) => <TaskReviewInspector {...context} />,
-  },
-  {
     id: "files",
     title: "文件",
     icon: <FolderOpen size={14} />,
+    defaultOpen: true,
     render: (context) => (
       <FileTreeInspector
         taskId={context.task.id}
@@ -76,7 +71,8 @@ const TASK_INSPECTORS: readonly InspectorDescriptor<TaskInspectorContext>[] = [
   {
     id: "workflow",
     title: "工作流",
-    icon: <FlowArrow size={14} />,
+    icon: <GitBranch size={14} />,
+    defaultOpen: true,
     render: (context) => (
       <WorkflowInspector
         task={context.task}
@@ -84,6 +80,13 @@ const TASK_INSPECTORS: readonly InspectorDescriptor<TaskInspectorContext>[] = [
         notify={context.notify}
       />
     ),
+  },
+  {
+    id: "review",
+    title: "审查",
+    icon: <MagnifyingGlass size={14} />,
+    defaultOpen: true,
+    render: (context) => <TaskReviewInspector {...context} />,
   },
 ];
 
@@ -144,19 +147,12 @@ export function TaskDetail({
   const derivationAllowed = canDeriveTask(task);
   const reviewFocused = REVIEW_FOCUS_STAGES.has(task.stage ?? "")
     || allTasks.some((candidate) => candidate.reviewOf === task.id);
-  // 有编排的任务才默认把「工作流」页签开出来：老任务身上没有这条线，开出来只有一句
-  // 「这个任务没有编排」，白占一个页签。
-  const hasWorkflow = !!task.workflow;
   const inspectorPolicy = useMemo(() => ({
-    stateKey: `single:${task.status}:${reviewFocused ? "review" : "info"}:${hasWorkflow ? "wf" : "-"}`,
+    stateKey: `single:all-tabs-v1:${task.status}:${reviewFocused ? "review" : "info"}`,
     requiredTabId: "info",
-    defaultOpenTabIds: [
-      "info",
-      ...(reviewFocused ? ["review"] : []),
-      ...(hasWorkflow ? ["workflow"] : []),
-    ],
+    defaultOpenTabIds: ["info", "files", "workflow", "review"],
     defaultActiveTabId: reviewFocused ? "review" : "info",
-  }), [hasWorkflow, reviewFocused, task.status]);
+  }), [reviewFocused, task.status]);
 
   // 这一轮由哪个执行器跑,`/` 就补它自己装的技能(ReplyBox 里 @ 召唤别人时列表
   // 不跟着变——那是「本回合换人」,而技能清单按任务常设执行器给,够用且不闪)。

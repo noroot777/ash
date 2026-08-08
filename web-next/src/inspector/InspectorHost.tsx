@@ -43,21 +43,26 @@ function defaultState<Context>(
   };
 }
 
-function uniqueValidTabs(ids: readonly string[], descriptorIds: ReadonlySet<string>) {
-  return [...new Set(ids.filter((id) => descriptorIds.has(id)))];
+function orderedValidTabs<Context>(
+  ids: readonly string[],
+  descriptors: readonly InspectorDescriptor<Context>[],
+) {
+  const requested = new Set(ids);
+  return descriptors.filter((descriptor) => requested.has(descriptor.id)).map((descriptor) => descriptor.id);
 }
 
-function applyTabPolicy(
+function applyTabPolicy<Context>(
   state: InspectorState,
   policy: InspectorTabPolicy,
-  descriptorIds: ReadonlySet<string>,
+  descriptors: readonly InspectorDescriptor<Context>[],
 ): InspectorState {
-  const openTabs = uniqueValidTabs([
+  const descriptorIds = new Set(descriptors.map((descriptor) => descriptor.id));
+  const openTabs = orderedValidTabs([
     ...state.openTabs,
     policy.requiredTabId,
     ...policy.defaultOpenTabIds,
     policy.defaultActiveTabId,
-  ], descriptorIds);
+  ], descriptors);
   const activeTab = descriptorIds.has(policy.defaultActiveTabId)
     ? policy.defaultActiveTabId
     : openTabs[0] ?? null;
@@ -80,13 +85,13 @@ function readState<Context>(
   const descriptorIds = new Set(descriptors.map((descriptor) => descriptor.id));
   try {
     const raw = window.localStorage.getItem(storageKey);
-    if (!raw) return tabPolicy ? applyTabPolicy(fallback, tabPolicy, descriptorIds) : fallback;
+    if (!raw) return tabPolicy ? applyTabPolicy(fallback, tabPolicy, descriptors) : fallback;
     const parsed = JSON.parse(raw) as Partial<InspectorState>;
     const storedTabs = Array.isArray(parsed.openTabs)
       ? parsed.openTabs.filter((id): id is string => typeof id === "string")
       : null;
     const validTabs = storedTabs
-      ? [...new Set(storedTabs.filter((id) => descriptorIds.has(id)))]
+      ? orderedValidTabs(storedTabs, descriptors)
       : fallback.openTabs;
     const openTabs = storedTabs && storedTabs.length > 0 && validTabs.length === 0
       ? fallback.openTabs
@@ -103,7 +108,7 @@ function readState<Context>(
     let restored = { openTabs, activeTab, width, visible, policyKey };
     if (tabPolicy && policyKey !== tabPolicy.stateKey) {
       // A semantic task-state change deliberately wins over restored focus once.
-      return applyTabPolicy(restored, tabPolicy, descriptorIds);
+      return applyTabPolicy(restored, tabPolicy, descriptors);
     }
     if (tabPolicy && visible && descriptorIds.has(tabPolicy.requiredTabId)
       && !restored.openTabs.includes(tabPolicy.requiredTabId)) {
@@ -111,7 +116,7 @@ function readState<Context>(
     }
     return restored;
   } catch {
-    return tabPolicy ? applyTabPolicy(fallback, tabPolicy, descriptorIds) : fallback;
+    return tabPolicy ? applyTabPolicy(fallback, tabPolicy, descriptors) : fallback;
   }
 }
 
@@ -198,7 +203,7 @@ function InspectorHostState<Context>({
 
   useEffect(() => {
     setState((current) => {
-      const openTabs = current.openTabs.filter((id) => descriptorById.has(id));
+      const openTabs = orderedValidTabs(current.openTabs, descriptors);
       const activeTab = current.activeTab && openTabs.includes(current.activeTab)
         ? current.activeTab
         : openTabs[0] ?? null;
@@ -211,15 +216,15 @@ function InspectorHostState<Context>({
       ) return current;
       return { ...current, openTabs, activeTab, visible };
     });
-  }, [descriptorById]);
+  }, [descriptorById, descriptors]);
 
   useEffect(() => {
     if (!tabPolicy) return;
     // localStorage wins while stateKey is unchanged; a new semantic state wins exactly once.
     setState((current) => current.policyKey === tabPolicy.stateKey
       ? current
-      : applyTabPolicy(current, tabPolicy, new Set(descriptorById.keys())));
-  }, [descriptorById, tabPolicy?.stateKey]);
+      : applyTabPolicy(current, tabPolicy, descriptors));
+  }, [descriptors, tabPolicy?.stateKey]);
 
   useEffect(() => {
     try {
@@ -264,6 +269,7 @@ function InspectorHostState<Context>({
         && !openTabs.includes(tabPolicy.requiredTabId)) {
         openTabs = [...openTabs, tabPolicy.requiredTabId];
       }
+      openTabs = orderedValidTabs(openTabs, descriptors);
       return {
         ...current,
         openTabs,
@@ -287,7 +293,7 @@ function InspectorHostState<Context>({
   const openTab = (id: string) => {
     setState((current) => ({
       ...current,
-      openTabs: current.openTabs.includes(id) ? current.openTabs : [...current.openTabs, id],
+      openTabs: orderedValidTabs([...current.openTabs, id], descriptors),
       activeTab: id,
       visible: true,
     }));
