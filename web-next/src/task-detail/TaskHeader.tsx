@@ -54,6 +54,7 @@ export function TaskHeader({
   onReview,
   onDelete,
   indicatorForTask,
+  terminalToggle,
   inspectorToggle,
   notify,
 }: {
@@ -70,6 +71,7 @@ export function TaskHeader({
   onReview: () => void;
   onDelete: () => void;
   indicatorForTask: IndicatorForTask;
+  terminalToggle?: ReactNode;
   inspectorToggle?: ReactNode;
   notify: (message: string) => void;
 }) {
@@ -231,6 +233,7 @@ export function TaskHeader({
           </div>
         )}
       </div>
+      {terminalToggle}
       {inspectorToggle}
     </header>
   );

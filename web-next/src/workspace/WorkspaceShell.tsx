@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
 import type { Group, GroupMode, ProjectView, Task, TaskMode } from "@harness/shared";
 import { api } from "../lib/api.ts";
 import { useTasks } from "../lib/useTasks.ts";
@@ -26,6 +26,9 @@ import {
   WORKSPACE_SIDEBAR_STORAGE_KEY,
 } from "./WorkspaceResizeHandle.tsx";
 import { pushTaskHistoryEntry } from "./workspaceHistory.ts";
+import { TerminalToggle } from "./TerminalToggle.tsx";
+
+const ProjectTerminal = lazy(() => import("./ProjectTerminal.tsx").then((module) => ({ default: module.ProjectTerminal })));
 
 type ContextView = "review" | "settings" | "palette" | "notes" | "create";
 
@@ -58,6 +61,7 @@ export function WorkspaceShell() {
   const [collapsed, setCollapsed] = useState(() => window.localStorage.getItem("harness-next:sidebar-collapsed") === "1");
   const [sidebarWidth, setSidebarWidth] = useState(readWorkspaceSidebarWidth);
   const [toast, setToast] = useState<string | null>(null);
+  const [terminalOpen, setTerminalOpen] = useState(false);
   const { tasks, setTasks, loading: tasksLoading, error: tasksError, connected, settlementVersion } = useTasks();
   const spread = useSidebarSpread(tasks, projectId, settlementVersion);
 
@@ -213,6 +217,9 @@ export function WorkspaceShell() {
   });
 
   const notesProject = notes ? projects.find((project) => project.id === notes.projectId) ?? null : null;
+  const terminalToggle = currentProject ? (
+    <TerminalToggle open={terminalOpen} onToggle={() => setTerminalOpen((open) => !open)} />
+  ) : null;
   const overlays = <>
     <CommandPalette open={paletteOpen} projects={projects} currentProject={currentProject} tasks={tasks} selectedTask={selectedTask} groups={groups} onClose={() => setPaletteOpen(false)} onProject={selectProject} onTask={selectTask} onTaskUpdated={updateTask} onNote={openNotes} onComposer={openComposer} onNewGroup={() => currentProject ? setCreateDialog("group") : notify("先选择一个项目")} onNewProject={() => setCreateDialog("project")} onDeleteTask={setDeleteTarget} onSettings={openSettings} notify={notify} />
     {notes && notesProject && <NotesPanel key={`${notes.projectId}:${notes.noteId ?? "list"}`} project={notesProject} initialNoteId={notes.noteId} onClose={() => setNotes(null)} onTask={(nextTaskId) => { const task = tasks.find((row) => row.id === nextTaskId); if (task) selectTask(task); else api.task(nextTaskId).then(selectTask).catch(() => notify("关联任务读取失败")); setNotes(null); }} onConvert={(draft) => { setNotes(null); setSettingsSection(null); setComposer({ mode: "single", draft }); }} notify={notify} />}
@@ -242,12 +249,13 @@ export function WorkspaceShell() {
       <main className="workspace-main">
         {loadError && <div className="workspace-load-error">{loadError.message}</div>}
         {composer && currentProject ? <TaskComposerPanel project={currentProject} groups={groups} initialDraft={composer.draft} mode={composer.mode} onModeChange={(mode) => setComposer((current) => current ? { ...current, mode } : null)} onCancel={() => setComposer(null)} onCreated={createTask} onCreateGroup={createComposerGroup} notify={notify} /> : selectedTask?.mode === "team" ? (
-          <TeamView task={selectedTask} allTasks={tasks} onTaskUpdate={updateTask} onTaskDeleted={deleteTask} onSelectTask={selectTask} initialReviewOpen={reviewTaskId === selectedTask.id} onReviewOpenChange={(open) => setReviewTaskId(open ? selectedTask.id : null)} notify={notify} />
+          <TeamView task={selectedTask} allTasks={tasks} onTaskUpdate={updateTask} onTaskDeleted={deleteTask} onSelectTask={selectTask} initialReviewOpen={reviewTaskId === selectedTask.id} onReviewOpenChange={(open) => setReviewTaskId(open ? selectedTask.id : null)} terminalToggle={terminalToggle} notify={notify} />
         ) : selectedTask?.mode === "duet" ? (
-          <DuetView task={selectedTask} allTasks={tasks} onTaskUpdated={updateTask} onTaskCreated={(created) => setTasks((current) => current.some((task) => task.id === created.id) ? current.map((task) => task.id === created.id ? created : task) : [created, ...current])} onTaskDeleted={deleteTask} onSelectTask={selectTask} notify={notify} />
+          <DuetView task={selectedTask} allTasks={tasks} onTaskUpdated={updateTask} onTaskCreated={(created) => setTasks((current) => current.some((task) => task.id === created.id) ? current.map((task) => task.id === created.id ? created : task) : [created, ...current])} onTaskDeleted={deleteTask} onSelectTask={selectTask} terminalToggle={terminalToggle} notify={notify} />
         ) : selectedTask ? (
-          <TaskDetail task={selectedTask} allTasks={tasks} onTaskUpdate={updateTask} onDeleted={deleteTask} onOpenTask={selectTaskById} initialReviewOpen={reviewTaskId === selectedTask.id} onReviewOpenChange={(open) => setReviewTaskId(open ? selectedTask.id : null)} notify={notify} />
-        ) : <><header className="workspace-app-bar"><span className="workspace-kind-chip">项目</span><span className="workspace-app-title">{currentProject?.name ?? "Harness"}</span>{currentProject && <span className="workspace-app-count">{activeTaskCount} 项任务</span>}</header><div className="workspace-columns"><section className="workspace-primary" aria-label="主工作区"><TaskPlaceholder project={currentProject} task={null} /></section><aside className="workspace-inspector-slot" aria-label="Inspector 占位"><div><span>Inspector</span><small>项目概览</small></div><p>选择任务后，这里会显示可操作属性、执行信息与队列。</p></aside></div></>}
+          <TaskDetail task={selectedTask} allTasks={tasks} onTaskUpdate={updateTask} onDeleted={deleteTask} onOpenTask={selectTaskById} initialReviewOpen={reviewTaskId === selectedTask.id} onReviewOpenChange={(open) => setReviewTaskId(open ? selectedTask.id : null)} terminalToggle={terminalToggle} notify={notify} />
+        ) : <><header className="workspace-app-bar"><span className="workspace-kind-chip">项目</span><span className="workspace-app-title">{currentProject?.name ?? "Harness"}</span>{currentProject && <span className="workspace-app-count">{activeTaskCount} 项任务</span>}{terminalToggle}</header><div className="workspace-columns"><section className="workspace-primary" aria-label="主工作区"><TaskPlaceholder project={currentProject} task={null} /></section><aside className="workspace-inspector-slot" aria-label="Inspector 占位"><div><span>Inspector</span><small>项目概览</small></div><p>选择任务后，这里会显示可操作属性、执行信息与队列。</p></aside></div></>}
+        {terminalOpen && currentProject && <Suspense fallback={null}><ProjectTerminal key={currentProject.id} project={currentProject} onClose={() => setTerminalOpen(false)} notify={notify} /></Suspense>}
       </main>
     </div>{overlays}</>
   );

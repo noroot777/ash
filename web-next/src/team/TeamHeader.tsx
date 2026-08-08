@@ -42,6 +42,7 @@ export function TeamHeader({
   onArchive,
   onDelete,
   indicatorForTask,
+  terminalToggle,
   inspectorToggle,
   notify,
 }: {
@@ -64,6 +65,7 @@ export function TeamHeader({
   onArchive: () => void;
   onDelete: () => void;
   indicatorForTask: IndicatorForTask;
+  terminalToggle?: ReactNode;
   inspectorToggle?: ReactNode;
   notify: (message: string) => void;
 }) {
@@ -180,6 +182,7 @@ export function TeamHeader({
               </div>
             )}
           </div>
+          {terminalToggle}
           {inspectorToggle}
         </div>
       </header>

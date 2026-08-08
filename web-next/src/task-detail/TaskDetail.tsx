@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import type { Group, Session, Task } from "@harness/shared";
 import { isUserFollowUp } from "@harness/shared";
@@ -102,6 +102,7 @@ export function TaskDetail({
   onReviewOpenChange,
   inspectorMode = "page",
   inspectorToggleTarget = null,
+  terminalToggle,
   notify,
 }: {
   task: Task;
@@ -113,6 +114,7 @@ export function TaskDetail({
   onReviewOpenChange?: (open: boolean) => void;
   inspectorMode?: "page" | "drawer";
   inspectorToggleTarget?: HTMLElement | null;
+  terminalToggle?: ReactNode;
   notify: (message: string) => void;
 }) {
   const [groups, setGroups] = useState<Group[]>([]);
@@ -300,6 +302,7 @@ export function TaskDetail({
               onReview={() => changeReviewOpen(!reviewOpen)}
               onDelete={() => setDeleteOpen(true)}
               indicatorForTask={indicatorForTask}
+              terminalToggle={terminalToggle}
               inspectorToggle={inspectorMode === "drawer" && inspectorToggleTarget ? undefined : toggleButton}
               notify={notify}
             />

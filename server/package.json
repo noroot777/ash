@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "postinstall": "node scripts/prepare-node-pty.mjs",
     "dev": "tsx watch src/index.ts",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
@@ -53,7 +54,8 @@
     "test:skills": "tsx scripts/test-skills.ts",
     "test:file-browser": "tsx scripts/test-file-browser.ts",
     "test:mcp-handoff": "tsx scripts/test-mcp-handoff.ts",
-    "test:duet-gate-attachments": "tsx scripts/test-duet-gate-attachments.ts"
+    "test:duet-gate-attachments": "tsx scripts/test-duet-gate-attachments.ts",
+    "test:terminal": "tsx scripts/test-terminal.ts"
   },
   "dependencies": {
     "@harness/shared": "*",
@@ -61,7 +63,8 @@
     "@libsql/client": "^0.14.0",
     "drizzle-orm": "^0.38.3",
     "hono": "^4.6.14",
-    "nanoid": "^5.0.9"
+    "nanoid": "^5.0.9",
+    "node-pty": "^1.1.0"
   },
   "devDependencies": {
     "drizzle-kit": "^0.30.1",

@@ -280,6 +280,18 @@ export type TeamCuaStatus = {
   };
 };
 
+export type TerminalSessionInfo = {
+  id: string;
+  projectId: string;
+  cwd: string;
+  shell: string;
+  name: string;
+};
+
+export type TerminalEvent =
+  | { seq: number; type: "data"; data: string }
+  | { seq: number; type: "exit"; exitCode: number; signal?: number };
+
 export type ReplyTaskResult =
   | { started: true }
   | { scheduled: true; message: ScheduledMessage };
@@ -313,6 +325,23 @@ export const api = {
     request(`/projects/${id(projectId)}/branches`),
   projectGitOverview: (projectId: string): Promise<GitOverview> =>
     request(`/projects/${id(projectId)}/git-overview`),
+  createTerminalSession: (
+    projectId: string,
+    size: { cols: number; rows: number },
+  ): Promise<TerminalSessionInfo> =>
+    request(`/projects/${id(projectId)}/terminal/sessions`, json("POST", size)),
+  terminalEventsUrl: (projectId: string, sessionId: string): string =>
+    apiPath(`/projects/${id(projectId)}/terminal/sessions/${id(sessionId)}/events`),
+  writeTerminalSession: (projectId: string, sessionId: string, data: string): Promise<void> =>
+    request(`/projects/${id(projectId)}/terminal/sessions/${id(sessionId)}/input`, json("POST", { data })),
+  resizeTerminalSession: (
+    projectId: string,
+    sessionId: string,
+    size: { cols: number; rows: number },
+  ): Promise<void> =>
+    request(`/projects/${id(projectId)}/terminal/sessions/${id(sessionId)}/resize`, json("POST", size)),
+  closeTerminalSession: (projectId: string, sessionId: string): Promise<void> =>
+    request(`/projects/${id(projectId)}/terminal/sessions/${id(sessionId)}`, { method: "DELETE" }),
   checkPath: (repoPath: string): Promise<ProjectHealth> =>
     request("/projects/check", json("POST", { repoPath })),
   discardTaskWorkspace: (

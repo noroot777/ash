@@ -40,6 +40,7 @@ import { mountTaskRunRoutes } from "./task-run-routes.js";
 import { mountFileRoutes } from "./file-routes.js";
 import { mountOpenAiConverterRoutes } from "./openai-converter/routes.js";
 import { mountProviderTestRoutes } from "./provider-test.js";
+import { mountTerminalRoutes } from "./terminal.js";
 
 export const api = new Hono();
 mountNoteRoutes(api);
@@ -639,6 +640,7 @@ api.delete("/llm-providers/:id", async (c) => {
 
 mountOpenAiConverterRoutes(api);
 mountProviderTestRoutes(api);
+mountTerminalRoutes(api);
 
 // ── queues (顺序依赖原语) ────────────────────────────────────────────────────
 // 端点实现与 helper 都在 ./queues.ts(routes.ts 已经很长,队列语义集中一处更好改)。
