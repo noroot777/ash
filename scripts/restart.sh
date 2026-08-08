@@ -35,6 +35,15 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO"
 PORT="${PORT:-4317}"
 LOG="${HARNESS_LOG:-/tmp/harness-$PORT.log}"
+START_TIMEOUT="${START_TIMEOUT:-30}"
+SERVER_NODE="${SERVER_NODE:-$(command -v node)}"
+
+# 本机控制面请求绝不能跟着 HTTP_PROXY / ALL_PROXY 绕去代理。这个环境常驻代理但没设
+# NO_PROXY；服务重启的几秒空窗里，代理会记住一次上游失败，于是 server 已经同秒监听，
+# 这里仍连续拿到失败并误报「没起来」。所有 :$PORT 探测统一从这一个入口直连。
+local_curl() {
+  curl --noproxy '*' "$@"
+}
 
 # 「现在重启会真正打断几个任务」。**不是** running/queued 的个数 —— agent 的输出
 # 走文件之后（server/src/executors/detached.ts），单飞任务的进程压根不随 server 死，
@@ -44,7 +53,7 @@ LOG="${HARNESS_LOG:-/tmp/harness-$PORT.log}"
 # 免得这边说能接、那边又不认。
 # server 没起来/查不到 → 算 0（本来就没什么可打断的），照旧重启。
 impact_field() { # $1 = survives|resumes|interrupted
-  curl -fsS "localhost:${PORT}/api/restart-impact" 2>/dev/null \
+  local_curl -fsS "http://localhost:${PORT}/api/restart-impact" 2>/dev/null \
     | { grep -o "\"$1\":\[[^]]*\]" || true; } \
     | { grep -o '"id":"' || true; } | wc -l | tr -d ' '
 }
@@ -52,14 +61,14 @@ interrupt_count() { impact_field interrupted; }
 
 # 详情:被打断的那几个是谁、为什么。只在真要拦人时才拉，省一次请求。
 impact_detail() {
-  curl -fsS "localhost:${PORT}/api/restart-impact" 2>/dev/null \
+  local_curl -fsS "http://localhost:${PORT}/api/restart-impact" 2>/dev/null \
     | sed 's/{"id"/\n{"id"/g' | grep '"reason"' \
     | sed 's/.*"title":"\([^"]*\)".*"reason":"\([^"]*\)".*/     · \1 —— \2/' | head -8
 }
 
 # 同上,但列的是「手里握着 MCP 通道」的那几个(它们没有 reason,只有 pid)。
 impact_detail_mcp() {
-  curl -fsS "localhost:${PORT}/api/restart-impact" 2>/dev/null \
+  local_curl -fsS "http://localhost:${PORT}/api/restart-impact" 2>/dev/null \
     | { grep -o '"mcpDisrupted":\[[^]]*\]' || true; } \
     | tr '{' '\n' | { grep '"pid"' || true; } \
     | sed 's/.*"title":"\([^"]*\)".*"pid":\([0-9]*\).*/     · \1 (pid \2)/' | head -8
@@ -124,12 +133,30 @@ if [ -n "$OLD" ]; then
   kill "$OLD" 2>/dev/null || true
   for _ in $(seq 1 25); do lsof -nP -iTCP:"$PORT" -sTCP:LISTEN -t >/dev/null 2>&1 || break; sleep 0.2; done
 fi
-nohup node server/dist/index.js > "$LOG" 2>&1 & disown
-for _ in $(seq 1 25); do curl -fsS "localhost:$PORT/api/health" >/dev/null 2>&1 && break; sleep 0.2; done
-if curl -fsS "localhost:$PORT/api/health" >/dev/null 2>&1; then
+SERVER_PID="$(node scripts/start-detached.mjs "$LOG" "$SERVER_NODE" server/dist/index.js)" || {
+  echo "  ✕ :$PORT 启动命令拉起失败,看 $LOG"
+  exit 1
+}
+READY=0
+STARTED_AT=$SECONDS
+while [ $((SECONDS - STARTED_AT)) -lt "$START_TIMEOUT" ]; do
+  if local_curl -fsS --connect-timeout 1 --max-time 2 "http://localhost:$PORT/api/health" >/dev/null 2>&1; then
+    READY=1
+    break
+  fi
+  # 启动进程已经退出就别傻等满超时；反之给迁移/重启接管留足时间。
+  kill -0 "$SERVER_PID" 2>/dev/null || break
+  sleep 0.2
+done
+if [ "$READY" -eq 1 ]; then
   echo "  ✓ :$PORT 已就绪(日志 $LOG)"
 else
-  echo "  ✕ :$PORT 没起来,看 $LOG"; exit 1
+  if kill -0 "$SERVER_PID" 2>/dev/null; then
+    echo "  ✕ :$PORT 等待 ${START_TIMEOUT}s 仍未就绪,但启动进程还在运行;看 $LOG"
+  else
+    echo "  ✕ :$PORT 启动进程已退出,看 $LOG"
+  fi
+  exit 1
 fi
 
 echo "▶ 3/3 刷新 harness MCP…"
