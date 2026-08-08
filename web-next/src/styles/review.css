@@ -3,9 +3,9 @@
    只改一边就漂开了;team-review.css 那边只留团队独有的部分(可折叠的执行者记录卡等)。 */
 .single-review-workspace,.team-review-workspace { display:flex; min-height:0; flex:1; flex-direction:column; background:var(--canvas); }
 .single-review-subbar,.team-review-subbar { display:flex; min-height:52px; flex:0 0 auto; flex-wrap:wrap; align-items:center; gap:10px; border-bottom:.5px solid var(--line); background:var(--panel); padding:8px 16px; }
-/* 验收动作提到顶栏:它是这一屏唯一的动作,不该跟着卡片一起被折叠收走。失败详情换行铺满
-   顶栏下沿,不去挤旁边那句副标题。 */
-.single-review-subbar .team-accept-failure,.team-review-subbar .team-accept-failure { flex:1 0 100%; margin:0; }
+/* 验收动作提到顶栏:它是这一屏唯一的动作,不该跟着卡片一起被折叠收走。失败详情排在
+   整行操作之后再换行铺满顶栏下沿，确保后写在 DOM 里的「返回」仍和验收按钮留在同一行。 */
+.single-review-subbar .team-accept-failure,.team-review-subbar .team-accept-failure { order:1; flex:1 0 100%; margin:0; }
 .single-review-subbar > div:first-child,.team-review-subbar > div:first-child { min-width:0; flex:1; }
 .single-review-subbar b,.single-review-subbar small,.team-review-subbar b,.team-review-subbar small { display:block; }
 .single-review-subbar b,.team-review-subbar b { font-size:12.5px; }
