@@ -113,6 +113,12 @@ export function WorkspaceSidebar({
             <kbd>J</kbd><kbd>K</kbd> 选 · <kbd>Enter</kbd> 打开 · 指住右边两列看全文 · <kbd>F</kbd>/<kbd>Esc</kbd> 收起
           </span>
         )}
+        {!spread.open && (
+          <span className="workspace-spread-shortcut" aria-label="按 F 打开任务列表">
+            <kbd>F</kbd>
+            {width < 240 ? "打开" : "打开任务列表"}
+          </span>
+        )}
         <button type="button" onClick={onToggleCollapsed} aria-label="收起侧边栏">
           <SidebarSimple size={14} weight="bold" aria-hidden="true" />
           收起
