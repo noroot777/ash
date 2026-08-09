@@ -24,7 +24,7 @@ process.env.HARNESS_DB = join(root, "harness.db");
 process.env.HARNESS_RUNS_DIR = join(root, "runs");
 
 const { db, ensureSchema } = await import("../src/db/index.js");
-const { sessions } = await import("../src/db/schema.js");
+const { appSettings, sessions } = await import("../src/db/schema.js");
 const { eq } = await import("drizzle-orm");
 const {
   addSessionUsage,
@@ -138,6 +138,7 @@ try {
     { input: 1_000, output: 380, cacheRead: 3_000, cacheWrite: 0, reasoning: 160, costUsd: null, turns: 1 },
     "Codex 第二轮只能把累计快照的差值写进 trace/UI",
   );
+  assert.equal(normalizedCodexEvent.accounting, "incremental", "新 trace 必须标明已经归一，读侧不能再求一次差");
   const after = await db.select().from(sessions).where(eq(sessions.id, sessId)).get();
   const total = sessionUsage(after!);
   assert.ok(total);
@@ -163,6 +164,7 @@ try {
 
   // ── ③ 旧账自动纠偏 ───────────────────────────────────────────────────────
   const legacyCodexId = "legacy-codex-session";
+  const incompleteCodexId = "incomplete-codex-session";
   const legacyClaudeId = "legacy-claude-session";
   await db.insert(sessions).values([
     {
@@ -179,6 +181,22 @@ try {
       usageCacheRead: 9_000,
       usageCacheWrite: 0,
       usageReasoning: 9_000,
+      usageTurns: 2,
+    },
+    {
+      id: incompleteCodexId,
+      taskId: "incomplete-codex-task",
+      role: "single",
+      agentType: "codex",
+      executor: "codex",
+      target: "local",
+      cliSessionId: "incomplete-thread",
+      startedAt: "2026-08-07T01:00:00.000Z",
+      usageInput: 20,
+      usageOutput: 10,
+      usageCacheRead: 180,
+      usageCacheWrite: 0,
+      usageReasoning: 6,
       usageTurns: 2,
     },
     {
@@ -202,14 +220,20 @@ try {
   const cumulative2 = { input: 20, output: 10, cacheRead: 180, cacheWrite: 0, reasoning: 6, costUsd: null, turns: 1 };
   appendSessionTrace("legacy-codex-task", legacyCodexId, "2026-08-07T01:00:00.000Z", { kind: "usage", usage: cumulative1 }, "2026-08-07T01:01:00.000Z");
   appendSessionTrace("legacy-codex-task", legacyCodexId, "2026-08-07T02:00:00.000Z", { kind: "usage", usage: cumulative2 }, "2026-08-07T02:01:00.000Z");
+  // 数据库说有两轮，trace 只有一轮：不能猜旧累计基线，也不能让下一次 resume 把整份
+  // 累计值再加一次。
+  appendSessionTrace("incomplete-codex-task", incompleteCodexId, "2026-08-07T01:00:00.000Z", { kind: "usage", usage: cumulative1 }, "2026-08-07T01:01:00.000Z");
   const claudeTurn1 = { input: 2, output: 7, cacheRead: 30, cacheWrite: 4, reasoning: 0, costUsd: 0.1, turns: 1 };
   const claudeTurn2 = { input: 3, output: 8, cacheRead: 40, cacheWrite: 5, reasoning: 0, costUsd: 0.2, turns: 1 };
   appendSessionTrace("legacy-claude-task", legacyClaudeId, "2026-08-07T01:00:00.000Z", { kind: "usage", usage: claudeTurn1 }, "2026-08-07T01:01:00.000Z");
   appendSessionTrace("legacy-claude-task", legacyClaudeId, "2026-08-07T02:00:00.000Z", { kind: "usage", usage: claudeTurn2 }, "2026-08-07T02:01:00.000Z");
 
+  await db.insert(appSettings).values({ key: "internal.usage-accounting-v2", value: "{}" });
   const repaired = await repairLegacyUsageAccounting();
+  assert.equal(repaired.alreadyApplied, false, "跑过 v2 的实例仍要执行 v3 缺失基线补救");
   assert.equal(repaired.repairedCodexSessions, 1);
   assert.equal(repaired.repairedClaudeSessions, 1);
+  assert.ok(repaired.skippedSessions >= 1, "不完整 Codex trace 必须走跳过 + 待建基线路径");
   assert.deepEqual(
     sessionUsage((await db.select().from(sessions).where(eq(sessions.id, legacyCodexId)).get())!),
     { ...cumulative2, turns: 2 },
@@ -219,6 +243,33 @@ try {
     sessionUsage((await db.select().from(sessions).where(eq(sessions.id, legacyClaudeId)).get())!),
     addUsage(claudeTurn1, claudeTurn2),
     "Claude 旧账仍按每轮增量重建",
+  );
+  const incompleteNext = { ...cumulative2, input: 24, output: 12, cacheRead: 200, reasoning: 7 };
+  const baselineOnly = await recordSessionUsageEvent(
+    incompleteCodexId,
+    { kind: "usage", usage: incompleteNext },
+    "codex",
+    "incomplete-thread",
+  );
+  assert.deepEqual(
+    baselineOnly.usage,
+    { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0, costUsd: null, turns: 1 },
+    "旧 trace 不完整时下一轮只建立累计基线，不能把整条线程再次入账",
+  );
+  assert.deepEqual(
+    sessionUsage((await db.select().from(sessions).where(eq(sessions.id, incompleteCodexId)).get())!),
+    { input: 20, output: 10, cacheRead: 180, cacheWrite: 0, reasoning: 6, costUsd: null, turns: 3 },
+  );
+  const afterBaseline = await recordSessionUsageEvent(
+    incompleteCodexId,
+    { kind: "usage", usage: { ...incompleteNext, input: 30, output: 15, cacheRead: 230, reasoning: 9 } },
+    "codex",
+    "incomplete-thread",
+  );
+  assert.deepEqual(
+    afterBaseline.usage,
+    { input: 6, output: 3, cacheRead: 30, cacheWrite: 0, reasoning: 2, costUsd: null, turns: 1 },
+    "基线建立后的再下一轮恢复正常求差",
   );
   const nextLegacy = { ...cumulative2, input: 24, output: 12, cacheRead: 200, reasoning: 7 };
   const nextLegacyEvent = await recordSessionUsageEvent(

@@ -31,6 +31,8 @@ export const usageCumulativeSnapshots = sqliteTable("usage_cumulative_snapshots"
   cacheWrite: integer("cache_write_tokens").notNull(),
   reasoning: integer("reasoning_tokens").notNull(),
   costUsd: real("cost_usd"),
+  // false = 旧 trace 不完整，拿不到上一份累计值。下一次上报只建立基线、不入 token 账。
+  baselineReady: integer("baseline_ready", { mode: "boolean" }).notNull().default(true),
   updatedAt: text("updated_at").notNull(),
 });
 

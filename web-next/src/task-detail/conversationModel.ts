@@ -127,6 +127,40 @@ function groupedTrace(trace: SessionTraceEntry[]): Map<string, SessionTraceEntry
   return groups;
 }
 
+function legacyCodexUsageDelta(current: TokenUsage, previous: TokenUsage | null): TokenUsage {
+  const reset = !!previous && (
+    current.input < previous.input
+    || current.output < previous.output
+    || current.cacheRead < previous.cacheRead
+    || current.cacheWrite < previous.cacheWrite
+    || current.reasoning < previous.reasoning
+  );
+  if (!previous || reset) return { ...current, turns: 1 };
+  return {
+    input: current.input - previous.input,
+    output: current.output - previous.output,
+    cacheRead: current.cacheRead - previous.cacheRead,
+    cacheWrite: current.cacheWrite - previous.cacheWrite,
+    reasoning: current.reasoning - previous.reasoning,
+    costUsd: null,
+    turns: 1,
+  };
+}
+
+// 7c274c0 之前的 Codex trace 保存的是 turn.completed 的线程累计快照。sessions 汇总
+// 虽已由启动迁移校正，旧气泡若仍把这些快照相加，刷新后又会显示虚高。新 trace 带
+// accounting=incremental；只有无标记的 Codex 历史事件需要在读侧求差。
+function normalizedPersistedTrace(trace: SessionTraceEntry[], session: Session): SessionTraceEntry[] {
+  if (session.agentType !== "codex") return trace;
+  let previous: TokenUsage | null = null;
+  return trace.map((entry) => {
+    if (entry.event.kind !== "usage" || entry.event.accounting === "incremental") return entry;
+    const usage = legacyCodexUsageDelta(entry.event.usage, previous);
+    previous = entry.event.usage;
+    return { ...entry, event: { ...entry.event, usage, accounting: "incremental" } };
+  });
+}
+
 function takeTraceGroup(
   groups: Map<string, SessionTraceEntry[]>,
   consumed: Set<string>,
@@ -319,7 +353,7 @@ export function buildConversationItems(
 
   for (const { session, output, trace = [] } of ordered) {
     const segments = parseSessionOutput(output);
-    const traceGroups = groupedTrace(trace);
+    const traceGroups = groupedTrace(normalizedPersistedTrace(trace, session));
     const consumedTrace = new Set<string>();
     let turnStartedAt = session.startedAt;
     segments.forEach((segment, index) => {

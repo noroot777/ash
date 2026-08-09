@@ -10,7 +10,7 @@ import { db } from "./db/index.js";
 import { sessions, usageCumulativeSnapshots } from "./db/schema.js";
 
 type SessionRow = typeof sessions.$inferSelect;
-type UsageEvent = Extract<AgentEvent, { kind: "usage" }>;
+type UsageEvent = Extract<AgentEvent, { kind: "usage" }> & { accounting?: "incremental" };
 export type UsageAccounting =
   | { kind: "incremental" }
   | { kind: "cumulative"; sourceId: string };
@@ -73,15 +73,19 @@ export async function addSessionUsage(
       if (accounting.kind === "cumulative") {
         const row = await tx.select().from(usageCumulativeSnapshots)
           .where(eq(usageCumulativeSnapshots.sourceId, accounting.sourceId)).get();
-        booked = cumulativeUsageDelta(reported, row ? {
-          input: row.input,
-          output: row.output,
-          cacheRead: row.cacheRead,
-          cacheWrite: row.cacheWrite,
-          reasoning: row.reasoning,
-          costUsd: row.costUsd,
-          turns: 1,
-        } : null);
+        booked = row && !row.baselineReady
+          ? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0, costUsd: null, turns: 1 }
+          : cumulativeUsageDelta(reported, row
+            ? {
+              input: row.input,
+              output: row.output,
+              cacheRead: row.cacheRead,
+              cacheWrite: row.cacheWrite,
+              reasoning: row.reasoning,
+              costUsd: row.costUsd,
+              turns: 1,
+            }
+            : null);
         await tx.insert(usageCumulativeSnapshots).values({
           sourceId: accounting.sourceId,
           input: reported.input,
@@ -90,6 +94,7 @@ export async function addSessionUsage(
           cacheWrite: reported.cacheWrite,
           reasoning: reported.reasoning,
           costUsd: reported.costUsd,
+          baselineReady: true,
           updatedAt: new Date().toISOString(),
         }).onConflictDoUpdate({
           target: usageCumulativeSnapshots.sourceId,
@@ -100,6 +105,7 @@ export async function addSessionUsage(
             cacheWrite: reported.cacheWrite,
             reasoning: reported.reasoning,
             costUsd: reported.costUsd,
+            baselineReady: true,
             updatedAt: new Date().toISOString(),
           },
         });
@@ -131,7 +137,7 @@ export async function recordSessionUsageEvent(
   cliSessionId: string | null | undefined,
 ): Promise<UsageEvent> {
   const usage = await addSessionUsage(sessId, event.usage, usageAccountingFor(agentType, cliSessionId));
-  return { ...event, usage };
+  return { ...event, usage, accounting: "incremental" };
 }
 
 /**

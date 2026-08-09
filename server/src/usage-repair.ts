@@ -10,7 +10,9 @@ import { appSettings, sessions, usageCumulativeSnapshots } from "./db/schema.js"
 import { readableRunPath, parseSessionTrace, sessionTracePath } from "./transcript.js";
 import { cumulativeUsageDelta } from "./usage.js";
 
-const REPAIR_KEY = "internal.usage-accounting-v2";
+// v3 在 v2 的正确历史重算之外，还给“不完整、无法重算”的 Codex 线程写待建基线。
+// 换 key 是为了已经跑过 v2 的实例也会执行这次补救。
+const REPAIR_KEY = "internal.usage-accounting-v3";
 
 type UsageEntry = { at: string; usage: TokenUsage };
 type Candidate = {
@@ -65,6 +67,7 @@ export async function repairLegacyUsageAccounting(): Promise<{
 
   const totals = new Map<string, TokenUsage>();
   const finalSnapshots = new Map<string, TokenUsage>();
+  const pendingSnapshots = new Set<string>();
   const repaired = new Set<string>();
 
   for (const row of candidates.filter((item) => item.agentType === "claude")) {
@@ -81,7 +84,10 @@ export async function repairLegacyUsageAccounting(): Promise<{
     codexGroups.set(key, [...(codexGroups.get(key) ?? []), row]);
   }
   for (const [key, group] of codexGroups) {
-    if (group.some((row) => !row.entries || row.entries.length !== row.expectedTurns)) continue;
+    if (group.some((row) => !row.entries || row.entries.length !== row.expectedTurns)) {
+      pendingSnapshots.add(key);
+      continue;
+    }
     const events = group.flatMap((row) => row.entries!.map((entry) => ({ ...entry, rowId: row.id })))
       .sort((a, b) => a.at.localeCompare(b.at));
     let previous: TokenUsage | null = null;
@@ -114,12 +120,26 @@ export async function repairLegacyUsageAccounting(): Promise<{
         cacheWrite: Math.round(usage.cacheWrite),
         reasoning: Math.round(usage.reasoning),
         costUsd: usage.costUsd,
+        baselineReady: true,
         updatedAt: new Date().toISOString(),
       };
       await tx.insert(usageCumulativeSnapshots).values({ sourceId: key, ...values }).onConflictDoUpdate({
         target: usageCumulativeSnapshots.sourceId,
         set: values,
       });
+    }
+    for (const key of pendingSnapshots) {
+      await tx.insert(usageCumulativeSnapshots).values({
+        sourceId: key,
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        reasoning: 0,
+        costUsd: null,
+        baselineReady: false,
+        updatedAt: new Date().toISOString(),
+      }).onConflictDoNothing();
     }
     await tx.insert(appSettings).values({
       key: REPAIR_KEY,
