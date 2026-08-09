@@ -13,7 +13,7 @@ export function FreeWorkflowToolbar({ task, notify }: { task: Task; notify: (mes
   const [previewBusy, setPreviewBusy] = useState(false);
   const [mergeBusy, setMergeBusy] = useState(false);
   const activeReview = free.state?.reviews.find((run) => run.status === "reviewing" || run.status === "repairing");
-  const reviewArmed = !!free.state?.reviewReservation.armed && !activeReview;
+  const reviewArmed = !!free.state?.reviewReservation?.armed && !activeReview;
   const taskBusy = task.status === "running" || task.status === "queued";
   const taskReady = task.status !== "backlog";
   const mergeStarted = free.state?.merge.status === "merging" || free.state?.merge.status === "merged";

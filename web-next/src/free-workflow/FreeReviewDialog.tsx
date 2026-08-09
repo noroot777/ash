@@ -31,8 +31,8 @@ export function FreeReviewDialog({
   const [reviewers, setReviewers] = useState<ReviewerProfile[]>([]);
   const [profiles, setProfiles] = useState<AgentExecutorProfile[]>([]);
   const [selectedId, setSelectedId] = useState(state?.selectedReviewerId ?? "");
-  const [checkMode, setCheckMode] = useState<FreeReviewCheckMode>(state?.reviewReservation.checkMode ?? "logic");
-  const [retryLimit, setRetryLimit] = useState(String(state?.reviewReservation.retryLimit ?? 1));
+  const [checkMode, setCheckMode] = useState<FreeReviewCheckMode>(state?.reviewReservation?.checkMode ?? "logic");
+  const [retryLimit, setRetryLimit] = useState(String(state?.reviewReservation?.retryLimit ?? 1));
   const [creating, setCreating] = useState(false);
   const [draft, setDraft] = useState<ReviewerDraft>(() => createReviewerDraft());
   const [loading, setLoading] = useState(true);
@@ -51,13 +51,13 @@ export function FreeReviewDialog({
         ? state.selectedReviewerId
         : nextReviewers[0]?.id ?? "";
       setSelectedId(preferred);
-      setCheckMode(state?.reviewReservation.checkMode ?? "logic");
-      setRetryLimit(String(state?.reviewReservation.retryLimit ?? 1));
+      setCheckMode(state?.reviewReservation?.checkMode ?? "logic");
+      setRetryLimit(String(state?.reviewReservation?.retryLimit ?? 1));
       setCreating(nextReviewers.length === 0);
     }).catch((error) => notify(error instanceof Error ? error.message : "审查者读取失败"))
       .finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
-  }, [notify, state?.reviewReservation.checkMode, state?.reviewReservation.retryLimit, state?.selectedReviewerId]);
+  }, [notify, state?.reviewReservation?.checkMode, state?.reviewReservation?.retryLimit, state?.selectedReviewerId]);
 
   const create = async () => {
     if (!draft.name.trim() || busy) return;
@@ -150,10 +150,10 @@ export function FreeReviewDialog({
           </div>
         )}
         <footer>
-          {state?.reviewReservation.armed && <button type="button" disabled={busy} onClick={() => void cancelReservation()}>取消预约</button>}
-          <button type="button" disabled={busy} onClick={onClose}>{state?.reviewReservation.armed ? "关闭" : "取消"}</button>
+          {state?.reviewReservation?.armed && <button type="button" disabled={busy} onClick={() => void cancelReservation()}>取消预约</button>}
+          <button type="button" disabled={busy} onClick={onClose}>{state?.reviewReservation?.armed ? "关闭" : "取消"}</button>
           <button className="is-primary" type="button" disabled={busy || loading || !selectedId} onClick={() => void submit()}>
-            {busy ? (reservationMode ? "保存中…" : "启动中…") : reservationMode ? (state?.reviewReservation.armed ? "保存预约" : "预约审查") : "开始审查"}
+            {busy ? (reservationMode ? "保存中…" : "启动中…") : reservationMode ? (state?.reviewReservation?.armed ? "保存预约" : "预约审查") : "开始审查"}
           </button>
         </footer>
       </section>

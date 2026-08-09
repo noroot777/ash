@@ -15,7 +15,7 @@ export type ReservedFreeReview = {
 export async function startReservedFreeReview(
   taskId: string,
   reservation: ReservedFreeReview,
-  start: (input: { reviewerId: string; checkMode: unknown; retryLimit: unknown }) => Promise<void>,
+  start: (input: { reviewerId: string; checkMode: unknown; retryLimit: unknown }) => Promise<unknown>,
 ): Promise<void> {
   if (!reservation?.armed) return;
   if (!reservation.reviewerId) {
