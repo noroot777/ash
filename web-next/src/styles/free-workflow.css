@@ -3,7 +3,7 @@
 .is-workflow-mode .ui-tabs { width:max-content; max-width:100%; }
 .is-workflow-mode > .composer-field { width:min(100%,520px); }
 
-.task-reply-shell.has-top-rail { padding-top:6px; }
+.task-reply-shell.has-top-rail { border-top:0; padding-top:6px; }
 .free-workflow-toolbar { position:relative; z-index:2; display:flex; width:max-content; max-width:100%; flex-wrap:wrap; align-items:center; gap:1px; margin:0 0 2px; overflow-x:auto; border:0; background:transparent; padding:0; box-shadow:none; }
 .free-workflow-toolbar button { position:relative; display:inline-flex; height:26px; flex:0 0 auto; align-items:center; gap:5px; border:0; border-radius:7px; background:transparent; padding:0 8px; color:var(--muted); font-size:11px; font-weight:600; letter-spacing:-.01em; transition:background .12s ease,color .12s ease; }
 .free-workflow-toolbar button svg { flex:0 0 auto; opacity:.72; }
