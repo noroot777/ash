@@ -31,7 +31,9 @@ import { projectHealthLight } from "./git.js";
 import { continueWhenIdle } from "./runs.js";
 import { RUNS_DIR } from "./paths.js";
 import { appendTaskTimeline } from "./task-timeline.js";
+import { setTaskStage } from "./task-stage.js";
 import { taskWorkspace } from "./task-workspace.js";
+import { publishTaskUpdated } from "./task-store.js";
 import { readPreview, startPreview, stopPreview, type PreviewStep } from "./preview.js";
 import { userDirectivesFor } from "./user-directives.js";
 import { id, now } from "./util.js";
@@ -421,6 +423,10 @@ async function mergeAndClean(taskId: string): Promise<{ merged: true; message: s
     const existing = (await db.select().from(freeWorkflowStates)
       .where(eq(freeWorkflowStates.taskId, taskId))).at(0);
     if (existing?.mergeStatus === "merged") {
+      if (task.stage !== "accepted") {
+        await setTaskStage(taskId, "accepted");
+        await publishTaskUpdated(taskId);
+      }
       return { merged: true, message: existing.mergeMessage ?? "任务已合并并清理" };
     }
     const at = now();
@@ -444,9 +450,11 @@ async function mergeAndClean(taskId: string): Promise<{ merged: true; message: s
         message = `已安全合并 ${merge.sourceBranch} → ${merge.targetBranch}，并清理任务 worktree${cleanup.branchDeleted ? "与分支" : ""}`;
       }
       const finishedAt = now();
+      await setTaskStage(taskId, "accepted");
       await db.update(freeWorkflowStates).set({ mergeStatus: "merged", mergeMessage: message, mergedAt: finishedAt, updatedAt: finishedAt })
         .where(eq(freeWorkflowStates.taskId, taskId));
       await appendTaskTimeline(taskId, `自由工作流合并&清理完成：${message}`);
+      await publishTaskUpdated(taskId);
       bus.publish({ type: "task.review", taskId });
       return { merged: true, message };
     } catch (error) {

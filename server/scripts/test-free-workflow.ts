@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { eq } from "drizzle-orm";
 import { Hono } from "hono";
 
 const root = mkdtempSync(join(tmpdir(), "harness-free-workflow-"));
@@ -9,7 +10,7 @@ process.env.HARNESS_DB = join(root, "harness.db");
 
 try {
   const { ensureSchema, db } = await import("../src/db/index.js");
-  const { agents, freeReviewRuns, projects } = await import("../src/db/schema.js");
+  const { agents, freeReviewRuns, projects, tasks } = await import("../src/db/schema.js");
   const { createTasks } = await import("../src/task-store.js");
   const { mountFreeWorkflowRoutes, freeReviewOutcome, freeReviewResumeOptions } = await import("../src/free-workflow.js");
   const { recordFreePreviewEvent } = await import("../src/free-workflow-events.js");
@@ -36,6 +37,16 @@ try {
   }]);
   assert.equal(task?.workflowMode, "free");
   assert.equal(task?.workflow, null, "自由任务不能被 createTasks 偷偷补上默认起手式");
+
+  await createTasks([{
+    id: "free-merge-task", projectId: "p", groupId: null, parentId: null,
+    title: "free merge", body: "test", mode: "single", status: "done", priority: "none",
+    labels: "[]", dependsOn: "[]", resumeDependsOn: "[]", agentType: "codex",
+    executorId: "reviewer-executor", model: null, reasoningEffort: null, autoTitle: false,
+    duet: null, team: null, reportBack: false, scheduleId: null,
+    createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    useWorktree: false, worktreeBase: null, originTaskId: null, workflowMode: "free",
+  }]);
 
   assert.equal(freeReviewOutcome({ turnOk: true, conclusion: "verify_failed", currentRound: 1, retryLimit: 1 }), "repair");
   assert.equal(freeReviewOutcome({ turnOk: true, conclusion: "verify_failed", currentRound: 2, retryLimit: 1 }), "exhausted");
@@ -105,6 +116,17 @@ try {
   });
   assert.equal(mixed.status, 400, "自由工作流不能夹带起手式引用");
 
+  const merged = await api.request("/tasks/free-merge-task/free-workflow/merge", { method: "POST" });
+  assert.equal(merged.status, 200);
+  let mergedTask = (await db.select().from(tasks).where(eq(tasks.id, "free-merge-task"))).at(0);
+  assert.equal(mergedTask?.stage, "accepted", "合并清理成功后应把自由任务标为已验收");
+
+  await db.update(tasks).set({ stage: null }).where(eq(tasks.id, "free-merge-task"));
+  const mergedAgain = await api.request("/tasks/free-merge-task/free-workflow/merge", { method: "POST" });
+  assert.equal(mergedAgain.status, 200);
+  mergedTask = (await db.select().from(tasks).where(eq(tasks.id, "free-merge-task"))).at(0);
+  assert.equal(mergedTask?.stage, "accepted", "历史已合并记录再次命中接口时应补齐已验收阶段");
+
   const reviewAt = new Date().toISOString();
   await db.insert(freeReviewRuns).values({
     id: "active-review", taskId: "free-task", reviewerId: reviewer.id, reviewerName: "Codex logic",
@@ -122,6 +144,7 @@ try {
   console.log("✓ 预览打开与关闭事件持久保留且按发生顺序返回");
   console.log("✓ backlog、旧 stage 与旧 accept 路径均被隔离");
   console.log("✓ 派生任务与起手式引用不能混入自由工作流");
+  console.log("✓ 合并清理成功与历史幂等路径都会落到已验收");
   console.log("✓ 审查续跑保持独立 reviewer 会话与原模型配置");
 } finally {
   rmSync(root, { recursive: true, force: true });

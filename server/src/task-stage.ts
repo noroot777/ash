@@ -7,7 +7,6 @@ import { db } from "./db/index.js";
 import { tasks } from "./db/schema.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { now } from "./util.js";
-import { reportFreeReviewConclusion } from "./free-workflow.js";
 
 export async function setTaskStage(
   taskId: string,
@@ -95,6 +94,7 @@ export function mountTaskStageRoutes(api: Hono): void {
     if (task.archived) return c.json({ error: "归档任务不能再上报验收阶段" }, 409);
 
     try {
+      const { reportFreeReviewConclusion } = await import("./free-workflow.js");
       const freeReview = await reportFreeReviewConclusion(taskId, body.stage);
       if (freeReview) {
         return c.json({ reported: true, taskId, stage: body.stage, freeReview, timelineRecorded: false });
