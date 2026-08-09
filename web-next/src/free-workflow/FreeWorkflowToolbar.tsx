@@ -55,16 +55,16 @@ export function FreeWorkflowToolbar({ task, notify }: { task: Task; notify: (mes
   return (
     <>
       <div className="free-workflow-toolbar" aria-label="自由工作流快捷操作">
-        <button type="button" className="is-review" data-state={activeReview?.status ?? "idle"} disabled={!taskReady || taskBusy || mergeStarted || !!activeReview} onClick={() => setReviewOpen(true)}>
-          <span className="free-workflow-action-icon">{activeReview?.status === "reviewing" ? <SpinnerGap size={14} className="is-spinning" /> : <MagnifyingGlass size={14} weight="bold" />}</span>
+        <button type="button" className={`is-review${activeReview ? " is-busy" : ""}`} data-state={activeReview?.status ?? "idle"} disabled={!taskReady || taskBusy || mergeStarted || !!activeReview} onClick={() => setReviewOpen(true)}>
+          {activeReview?.status === "reviewing" ? <SpinnerGap size={13} className="is-spinning" /> : <MagnifyingGlass size={13} weight="regular" />}
           <span>{activeReview?.status === "reviewing" ? "审查中" : activeReview?.status === "repairing" ? "等待修复" : "派审查"}</span>
         </button>
-        <button type="button" className="is-preview" aria-pressed={!!free.state?.preview.running} disabled={!taskReady || taskBusy || mergeStarted || previewBusy} onClick={() => void togglePreview()}>
-          <span className="free-workflow-action-icon">{previewBusy ? <SpinnerGap size={14} className="is-spinning" /> : free.state?.preview.running ? <StopCircle size={14} weight="bold" /> : <MonitorPlay size={14} weight="bold" />}</span>
+        <button type="button" className={`is-preview${previewBusy ? " is-busy" : ""}`} aria-pressed={!!free.state?.preview.running} disabled={!taskReady || taskBusy || mergeStarted || previewBusy} onClick={() => void togglePreview()}>
+          {previewBusy ? <SpinnerGap size={13} className="is-spinning" /> : free.state?.preview.running ? <StopCircle size={13} weight="regular" /> : <MonitorPlay size={13} weight="regular" />}
           <span>{previewBusy ? "处理中" : free.state?.preview.running ? "关闭预览" : "打开预览"}</span>
         </button>
-        <button type="button" className="is-merge" data-state={free.state?.merge.status ?? "idle"} disabled={!taskReady || taskBusy || !!activeReview || mergeBusy || free.state?.merge.status === "merged"} onClick={() => setMergeOpen(true)}>
-          <span className="free-workflow-action-icon">{mergeBusy ? <SpinnerGap size={14} className="is-spinning" /> : <GitMerge size={14} weight="bold" />}</span>
+        <button type="button" className={`is-merge${mergeBusy ? " is-busy" : ""}`} data-state={free.state?.merge.status ?? "idle"} disabled={!taskReady || taskBusy || !!activeReview || mergeBusy || free.state?.merge.status === "merged"} onClick={() => setMergeOpen(true)}>
+          {mergeBusy ? <SpinnerGap size={13} className="is-spinning" /> : <GitMerge size={13} weight="regular" />}
           <span>{free.state?.merge.status === "merged" ? "已合并清理" : "合并&清理"}</span>
         </button>
         {free.state?.preview.running && free.state.preview.url && <a href={free.state.preview.url} target="_blank" rel="noreferrer" aria-label="在新窗口打开预览"><ArrowSquareOut size={13} /><span>预览页</span></a>}

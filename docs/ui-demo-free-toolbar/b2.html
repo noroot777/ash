@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>B 方案迭代 · 贴边 + 按钮重做</title>
+<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="b2.css">
+</head>
+<body class="b2-page">
+  <header class="page-head b2-head">
+    <div>
+      <p class="eyebrow">B · 第二轮 · 已拍板 B1</p>
+      <h1>贴紧输入框 · 按钮再好看一点</h1>
+      <p class="lede">
+        上一版 B 的两个问题：① 芯片和对话框间距偏大，像飘在半空；
+        ② 按钮本身（圆角胶囊 + 色块图标徽章）偏「标签感」，不够利落。
+        下面三档都<strong>贴到 2–3px</strong>，只在按钮造型上分叉——点按钮可循环状态。
+        <strong>最终选定 B1 轻文字</strong>；实现交接文稿见
+        <a href="HANDOFF-B1.md" style="color:var(--accent);font-weight:650">HANDOFF-B1.md</a>。
+      </p>
+      <p class="back"><a href="index.html">← 回全方案对照</a></p>
+    </div>
+    <aside class="legend">
+      <b>本轮改什么</b>
+      <ul>
+        <li>间距 8px → <b>2–3px</b></li>
+        <li>去掉厚重色底图标方块</li>
+        <li>高度 30 → <b>26–27</b></li>
+        <li>左缘与输入框对齐</li>
+      </ul>
+    </aside>
+  </header>
+
+  <nav class="jump" aria-label="迭代导航">
+    <a href="#b0">B0 上一版</a>
+    <a href="#b1">B1 轻文字</a>
+    <a href="#b2">B2 浅底组 ★</a>
+    <a href="#b3">B3 细描边</a>
+  </nav>
+
+  <!-- B0 reference -->
+  <section class="card b2-card" id="b0">
+    <div class="card-meta">
+      <span class="tag is-current">上一版</span>
+      <h2>B0 · 原悬浮芯片（对照）</h2>
+      <p>间距 8px、圆角胶囊、带色底图标方块。问题：飘、碎、像贴纸。</p>
+    </div>
+    <div class="stage">
+      <div class="reply-shell">
+        <div class="fw-chips" aria-label="上一版">
+          <button type="button" class="chip is-review" data-demo>
+            <i class="ico review">⌕</i><span>派审查</span>
+          </button>
+          <button type="button" class="chip is-preview" data-demo>
+            <i class="ico preview">▶</i><span>打开预览</span>
+          </button>
+          <button type="button" class="chip is-merge" data-demo>
+            <i class="ico merge">⎇</i><span>合并&amp;清理</span>
+          </button>
+        </div>
+        <div class="reply-box">
+          <div class="reply-text muted">任务进行中；发送即排队，也可输入 /team 或 /duet 派生任务…</div>
+          <div class="reply-foot">
+            <button class="icon-btn">📎</button>
+            <button class="icon-btn">⏱</button>
+            <div class="exec-pill">
+              <span>codex ▾</span><span>gpt-5.6-sol ▾</span><span>xhigh ▾</span>
+            </div>
+            <span class="send-hint">⌘↵ 排队，跑完自动发出</span>
+            <button class="send-btn">↑</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- B1 ghost text — shipped decision -->
+  <section class="card b2-card" id="b1">
+    <div class="card-meta">
+      <span class="tag is-rec">已拍板</span>
+      <h2>B1 · 轻文字按钮</h2>
+      <p>无边框、无底；细线图标 + 字。悬停才出现浅底。最安静，和输入框几乎「贴着说话」。</p>
+      <ul class="pros-cons">
+        <li class="pro">最不抢戏，间距感也最贴</li>
+        <li class="pro">没有胶囊贴纸感</li>
+        <li class="con">可点区域提示偏弱，首次可能略难发现</li>
+      </ul>
+    </div>
+    <div class="stage">
+      <div class="reply-shell is-tight">
+        <div class="fw-tight fw-ghost" aria-label="自由工作流快捷操作">
+          <button type="button" class="gbtn is-review" data-demo>
+            <svg class="gico" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.2" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M10.2 10.2 13.5 13.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+            <span>派审查</span>
+          </button>
+          <button type="button" class="gbtn is-preview" data-demo>
+            <svg class="gico" viewBox="0 0 16 16" aria-hidden="true"><rect x="2.5" y="3.5" width="11" height="9" rx="1.6" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M6.8 6.2v3.6l3.2-1.8z" fill="currentColor"/></svg>
+            <span>打开预览</span>
+          </button>
+          <button type="button" class="gbtn is-merge" data-demo>
+            <svg class="gico" viewBox="0 0 16 16" aria-hidden="true"><circle cx="4.5" cy="4" r="1.5" fill="none" stroke="currentColor" stroke-width="1.3"/><circle cx="4.5" cy="12" r="1.5" fill="none" stroke="currentColor" stroke-width="1.3"/><circle cx="11.5" cy="8" r="1.5" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M4.5 5.5v5M4.5 8h5.5" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+            <span>合并&amp;清理</span>
+          </button>
+        </div>
+        <div class="reply-box">
+          <div class="reply-text muted">任务进行中；发送即排队，也可输入 /team 或 /duet 派生任务…</div>
+          <div class="reply-foot">
+            <button class="icon-btn">📎</button>
+            <button class="icon-btn">⏱</button>
+            <div class="exec-pill">
+              <span>codex ▾</span><span>gpt-5.6-sol ▾</span><span>xhigh ▾</span>
+            </div>
+            <span class="send-hint">⌘↵ 排队，跑完自动发出</span>
+            <button class="send-btn">↑</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- B2 soft group — not chosen -->
+  <section class="card b2-card" id="b2">
+    <div class="card-meta">
+      <span class="tag">未选</span>
+      <h2>B2 · 浅底工具组</h2>
+      <p>三个动作收在一条<strong>极浅底 + 细描边</strong>的矮条里，按钮之间用发丝竖线分隔。贴边 2px；图标是线描、同色文字，不做彩色方块。整组像输入框的「眉」，不是飘着的标签。</p>
+      <ul class="pros-cons">
+        <li class="pro">成组、贴边，不再飘、不再碎</li>
+        <li class="pro">可点范围清晰，又不回书签咬合</li>
+        <li class="pro">色只用在悬停/进行中，默认安静</li>
+        <li class="con">比纯文字多一丁点视觉重量</li>
+      </ul>
+    </div>
+    <div class="stage">
+      <div class="reply-shell is-tight">
+        <div class="fw-tight fw-soft" aria-label="自由工作流快捷操作">
+          <button type="button" class="sbtn is-review" data-demo>
+            <svg class="gico" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.2" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M10.2 10.2 13.5 13.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+            <span>派审查</span>
+          </button>
+          <button type="button" class="sbtn is-preview" data-demo>
+            <svg class="gico" viewBox="0 0 16 16" aria-hidden="true"><rect x="2.5" y="3.5" width="11" height="9" rx="1.6" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M6.8 6.2v3.6l3.2-1.8z" fill="currentColor"/></svg>
+            <span>打开预览</span>
+          </button>
+          <button type="button" class="sbtn is-merge" data-demo>
+            <svg class="gico" viewBox="0 0 16 16" aria-hidden="true"><circle cx="4.5" cy="4" r="1.5" fill="none" stroke="currentColor" stroke-width="1.3"/><circle cx="4.5" cy="12" r="1.5" fill="none" stroke="currentColor" stroke-width="1.3"/><circle cx="11.5" cy="8" r="1.5" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M4.5 5.5v5M4.5 8h5.5" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+            <span>合并&amp;清理</span>
+          </button>
+        </div>
+        <div class="reply-box">
+          <div class="reply-text muted">任务进行中；发送即排队，也可输入 /team 或 /duet 派生任务…</div>
+          <div class="reply-foot">
+            <button class="icon-btn">📎</button>
+            <button class="icon-btn">⏱</button>
+            <div class="exec-pill">
+              <span>codex ▾</span><span>gpt-5.6-sol ▾</span><span>xhigh ▾</span>
+            </div>
+            <span class="send-hint">⌘↵ 排队，跑完自动发出</span>
+            <button class="send-btn">↑</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- B3 outlined pills refined -->
+  <section class="card b2-card" id="b3">
+    <div class="card-meta">
+      <span class="tag">候选</span>
+      <h2>B3 · 细描边胶囊（去色块）</h2>
+      <p>保留 pill 外形，但去掉色底图标方块：线描图标 + 同色字，边框更细、高度更矮、间距 3px。比 B0 干净，比 B2 仍略「标签」。</p>
+      <ul class="pros-cons">
+        <li class="pro">沿用上一版语言，改动认知成本低</li>
+        <li class="pro">可点暗示比 B1 强</li>
+        <li class="con">三个独立胶囊仍比成组方案碎一点</li>
+      </ul>
+    </div>
+    <div class="stage">
+      <div class="reply-shell is-tight">
+        <div class="fw-tight fw-outline" aria-label="自由工作流快捷操作">
+          <button type="button" class="obtn is-review" data-demo>
+            <svg class="gico" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.2" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M10.2 10.2 13.5 13.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+            <span>派审查</span>
+          </button>
+          <button type="button" class="obtn is-preview" data-demo>
+            <svg class="gico" viewBox="0 0 16 16" aria-hidden="true"><rect x="2.5" y="3.5" width="11" height="9" rx="1.6" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M6.8 6.2v3.6l3.2-1.8z" fill="currentColor"/></svg>
+            <span>打开预览</span>
+          </button>
+          <button type="button" class="obtn is-merge" data-demo>
+            <svg class="gico" viewBox="0 0 16 16" aria-hidden="true"><circle cx="4.5" cy="4" r="1.5" fill="none" stroke="currentColor" stroke-width="1.3"/><circle cx="4.5" cy="12" r="1.5" fill="none" stroke="currentColor" stroke-width="1.3"/><circle cx="11.5" cy="8" r="1.5" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M4.5 5.5v5M4.5 8h5.5" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+            <span>合并&amp;清理</span>
+          </button>
+        </div>
+        <div class="reply-box">
+          <div class="reply-text muted">任务进行中；发送即排队，也可输入 /team 或 /duet 派生任务…</div>
+          <div class="reply-foot">
+            <button class="icon-btn">📎</button>
+            <button class="icon-btn">⏱</button>
+            <div class="exec-pill">
+              <span>codex ▾</span><span>gpt-5.6-sol ▾</span><span>xhigh ▾</span>
+            </div>
+            <span class="send-hint">⌘↵ 排队，跑完自动发出</span>
+            <button class="send-btn">↑</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- states for recommended -->
+  <section class="card b2-card states-card">
+    <div class="card-meta">
+      <span class="tag">交互</span>
+      <h2>B2 状态一览</h2>
+      <p>默认中性；悬停带一点动作色；busy / active 才用实底强调。</p>
+    </div>
+    <div class="stage states-stage">
+      <div class="state-row">
+        <span class="state-name">idle</span>
+        <div class="fw-tight fw-soft">
+          <button class="sbtn is-review"><svg class="gico" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.2" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M10.2 10.2 13.5 13.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg><span>派审查</span></button>
+          <button class="sbtn is-preview"><svg class="gico" viewBox="0 0 16 16"><rect x="2.5" y="3.5" width="11" height="9" rx="1.6" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M6.8 6.2v3.6l3.2-1.8z" fill="currentColor"/></svg><span>打开预览</span></button>
+          <button class="sbtn is-merge"><svg class="gico" viewBox="0 0 16 16"><circle cx="4.5" cy="4" r="1.5" fill="none" stroke="currentColor" stroke-width="1.3"/><circle cx="4.5" cy="12" r="1.5" fill="none" stroke="currentColor" stroke-width="1.3"/><circle cx="11.5" cy="8" r="1.5" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M4.5 5.5v5M4.5 8h5.5" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg><span>合并&amp;清理</span></button>
+        </div>
+      </div>
+      <div class="state-row">
+        <span class="state-name">busy</span>
+        <div class="fw-tight fw-soft">
+          <button class="sbtn is-review is-busy"><svg class="gico spin" viewBox="0 0 16 16"><path d="M8 2.2a5.8 5.8 0 1 1-4.1 1.7" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg><span>审查中</span></button>
+          <button class="sbtn is-preview is-busy"><svg class="gico spin" viewBox="0 0 16 16"><path d="M8 2.2a5.8 5.8 0 1 1-4.1 1.7" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg><span>处理中</span></button>
+          <button class="sbtn is-merge is-busy"><svg class="gico spin" viewBox="0 0 16 16"><path d="M8 2.2a5.8 5.8 0 1 1-4.1 1.7" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg><span>合并中</span></button>
+        </div>
+      </div>
+      <div class="state-row">
+        <span class="state-name">active</span>
+        <div class="fw-tight fw-soft">
+          <button class="sbtn is-review is-active"><svg class="gico" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.2" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M10.2 10.2 13.5 13.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg><span>等待修复</span></button>
+          <button class="sbtn is-preview is-active" aria-pressed="true"><svg class="gico" viewBox="0 0 16 16"><rect x="3.2" y="3.2" width="9.6" height="9.6" rx="1.4" fill="currentColor"/></svg><span>关闭预览</span></button>
+          <button class="sbtn is-merge is-active"><svg class="gico" viewBox="0 0 16 16"><path d="M3.5 8.2 6.6 11.2 12.5 4.8" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg><span>已合并清理</span></button>
+        </div>
+      </div>
+      <div class="state-row">
+        <span class="state-name">disabled</span>
+        <div class="fw-tight fw-soft">
+          <button class="sbtn is-review" disabled><svg class="gico" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.2" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M10.2 10.2 13.5 13.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg><span>派审查</span></button>
+          <button class="sbtn is-preview" disabled><svg class="gico" viewBox="0 0 16 16"><rect x="2.5" y="3.5" width="11" height="9" rx="1.6" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M6.8 6.2v3.6l3.2-1.8z" fill="currentColor"/></svg><span>打开预览</span></button>
+          <button class="sbtn is-merge" disabled><svg class="gico" viewBox="0 0 16 16"><circle cx="4.5" cy="4" r="1.5" fill="none" stroke="currentColor" stroke-width="1.3"/><circle cx="4.5" cy="12" r="1.5" fill="none" stroke="currentColor" stroke-width="1.3"/><circle cx="11.5" cy="8" r="1.5" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M4.5 5.5v5M4.5 8h5.5" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg><span>合并&amp;清理</span></button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <footer class="page-foot">
+    <div>
+      <b>已拍板 B1 · 轻文字按钮</b>
+      <p>
+        间距 2px；无边框无底；线描图标 + muted 字；悬停浅底；busy/active 才上动作色。
+        实现请跟 <a href="HANDOFF-B1.md" style="color:var(--accent);font-weight:650">HANDOFF-B1.md</a>，
+        视觉真源是本页 <a href="#b1" style="color:var(--accent);font-weight:650">#b1</a>。
+      </p>
+    </div>
+    <p class="path">产物：<code>docs/ui-demo-free-toolbar/b2.html</code> + <code>HANDOFF-B1.md</code> · 未改产品代码</p>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>

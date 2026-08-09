@@ -1,0 +1,345 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>自由工作流 · 对话框快捷操作 · UI 讨论稿</title>
+<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="style-extras.css">
+</head>
+<body>
+  <header class="page-head">
+    <div>
+      <p class="eyebrow">Harness · free-workflow toolbar</p>
+      <h1>对话框上那排快捷按钮 · 重设计讨论稿</h1>
+      <p class="lede">
+        现状是输入框左上角「书签 / 页签」形态：与输入框边框咬合、圆角只开上面、底边被裁掉。
+        用户反馈：丑，且不喜欢书签式展示。下面 6 个方案都放在同一套对话框骨架里对照；
+        点按钮可切换 idle / busy / active / disabled 状态看交互。
+        <strong>已选定 B</strong> 后的贴边 + 按钮重做见
+        <a href="b2.html" style="color:var(--accent);font-weight:650">b2.html →</a>
+      </p>
+    </div>
+    <aside class="legend">
+      <b>对照说明</b>
+      <ul>
+        <li><span class="dot review"></span>派审查 · accent</li>
+        <li><span class="dot preview"></span>预览 · cyan</li>
+        <li><span class="dot merge"></span>合并&amp;清理 · green</li>
+        <li>A 是现状 · 其余是候选</li>
+      </ul>
+    </aside>
+  </header>
+
+  <nav class="jump" aria-label="方案导航">
+    <a href="#a">A 现状书签</a>
+    <a href="#b">B 悬浮芯片</a>
+    <a href="#c">C 内嵌顶栏</a>
+    <a href="#d">D 底栏并入</a>
+    <a href="#e">E 分段控件</a>
+    <a href="#f">F 图标轨</a>
+  </nav>
+
+  <!-- ════════════════ A 现状 ════════════════ -->
+  <section class="card" id="a">
+    <div class="card-meta">
+      <span class="tag is-current">现状</span>
+      <h2>A · 书签 Tab</h2>
+      <p>独立条贴在输入框左上角，<code>border-bottom</code> 与输入框咬合，左上圆角被压平。像浏览器页签 / 书签，视觉权重偏高，和底部工具行也脱节。</p>
+      <ul class="pros-cons">
+        <li class="con">书签形态本身就是吐槽点</li>
+        <li class="con">与输入框外轮廓咬合，圆角不完整</li>
+        <li class="pro">位置显眼，新用户容易发现</li>
+      </ul>
+    </div>
+    <div class="stage">
+      <div class="reply-shell has-bookmark">
+        <div class="fw-bookmark" aria-label="自由工作流快捷操作">
+          <button type="button" class="fw-btn is-review" data-demo>
+            <i class="ico review">⌕</i><span>派审查</span>
+          </button>
+          <button type="button" class="fw-btn is-preview" data-demo>
+            <i class="ico preview">▶</i><span>打开预览</span>
+          </button>
+          <button type="button" class="fw-btn is-merge" data-demo>
+            <i class="ico merge">⎇</i><span>合并&amp;清理</span>
+          </button>
+        </div>
+        <div class="reply-box is-clipped-tl">
+          <div class="reply-text muted">任务进行中；发送即排队，也可输入 /team 或 /duet 派生任务…</div>
+          <div class="reply-foot">
+            <button class="icon-btn" title="附件">📎</button>
+            <button class="icon-btn" title="定时">⏱</button>
+            <div class="exec-pill">
+              <span>codex ▾</span><span>gpt-5.6-sol ▾</span><span>xhigh ▾</span>
+            </div>
+            <span class="send-hint">⌘↵ 排队，跑完自动发出</span>
+            <button class="send-btn" title="发送">↑</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════════════ B 悬浮芯片 ════════════════ -->
+  <section class="card" id="b">
+    <div class="card-meta">
+      <span class="tag is-rec">推荐</span>
+      <h2>B · 悬浮芯片行</h2>
+      <p>彻底去掉书签咬合：三个 soft pill 浮在输入框上方，与输入框保持 6–8px 间隙，输入框四角完整圆角。动作区是「工具条」，不是「页签」。</p>
+      <ul class="pros-cons">
+        <li class="pro">告别书签形态，最直接对症</li>
+        <li class="pro">输入框轮廓干净、完整</li>
+        <li class="pro">改动面小：只改 toolbar 布局/样式，结构几乎不变</li>
+        <li class="con">仍占一行纵向空间（与现状相当）</li>
+      </ul>
+    </div>
+    <div class="stage">
+      <div class="reply-shell">
+        <div class="fw-chips" aria-label="自由工作流快捷操作">
+          <button type="button" class="chip is-review" data-demo>
+            <i class="ico review">⌕</i><span>派审查</span>
+          </button>
+          <button type="button" class="chip is-preview" data-demo>
+            <i class="ico preview">▶</i><span>打开预览</span>
+          </button>
+          <button type="button" class="chip is-merge" data-demo>
+            <i class="ico merge">⎇</i><span>合并&amp;清理</span>
+          </button>
+        </div>
+        <div class="reply-box">
+          <div class="reply-text muted">任务进行中；发送即排队，也可输入 /team 或 /duet 派生任务…</div>
+          <div class="reply-foot">
+            <button class="icon-btn">📎</button>
+            <button class="icon-btn">⏱</button>
+            <div class="exec-pill">
+              <span>codex ▾</span><span>gpt-5.6-sol ▾</span><span>xhigh ▾</span>
+            </div>
+            <span class="send-hint">⌘↵ 排队，跑完自动发出</span>
+            <button class="send-btn">↑</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════════════ C 内嵌顶栏 ════════════════ -->
+  <section class="card" id="c">
+    <div class="card-meta">
+      <span class="tag">候选</span>
+      <h2>C · 输入框内嵌顶栏</h2>
+      <p>动作收进输入框内部顶部一条浅色轨，用细线与正文区分。整体是「一块控件」，不再有外挂结构。</p>
+      <ul class="pros-cons">
+        <li class="pro">视觉一体化，外轮廓始终完整圆角</li>
+        <li class="pro">不额外占 shell 外部高度（挤在 box 内）</li>
+        <li class="con">与输入区域抢纵向空间，长文时略挤</li>
+        <li class="con">容易被读成「当前模式标签」而不是「可点操作」</li>
+      </ul>
+    </div>
+    <div class="stage">
+      <div class="reply-shell">
+        <div class="reply-box has-inner-rail">
+          <div class="fw-inner" aria-label="自由工作流快捷操作">
+            <span class="rail-label">工作流</span>
+            <button type="button" class="link-btn is-review" data-demo><i>⌕</i>派审查</button>
+            <button type="button" class="link-btn is-preview" data-demo><i>▶</i>打开预览</button>
+            <button type="button" class="link-btn is-merge" data-demo><i>⎇</i>合并&amp;清理</button>
+          </div>
+          <div class="reply-text muted">任务进行中；发送即排队，也可输入 /team 或 /duet 派生任务…</div>
+          <div class="reply-foot">
+            <button class="icon-btn">📎</button>
+            <button class="icon-btn">⏱</button>
+            <div class="exec-pill">
+              <span>codex ▾</span><span>gpt-5.6-sol ▾</span><span>xhigh ▾</span>
+            </div>
+            <span class="send-hint">⌘↵ 排队，跑完自动发出</span>
+            <button class="send-btn">↑</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════════════ D 底栏并入 ════════════════ -->
+  <section class="card" id="d">
+    <div class="card-meta">
+      <span class="tag">候选</span>
+      <h2>D · 并入底栏工具行</h2>
+      <p>把三个动作塞进输入框底栏左侧（附件 / 定时右边），与执行器选择器同层。零额外高度，最「工具化」。</p>
+      <ul class="pros-cons">
+        <li class="pro">不占额外纵向空间，输入框更干净</li>
+        <li class="pro">和发送、执行器在同一操作平面</li>
+        <li class="con">底栏已经挤（附件/定时/执行器/提示/发送），窄屏会折行或溢出</li>
+        <li class="con">重要动作（合并）与次要图标混在一起，层级变弱</li>
+      </ul>
+    </div>
+    <div class="stage">
+      <div class="reply-shell">
+        <div class="reply-box">
+          <div class="reply-text muted">任务进行中；发送即排队，也可输入 /team 或 /duet 派生任务…</div>
+          <div class="reply-foot is-crowded">
+            <button class="icon-btn">📎</button>
+            <button class="icon-btn">⏱</button>
+            <span class="foot-sep"></span>
+            <div class="fw-inline" aria-label="自由工作流快捷操作">
+              <button type="button" class="mini is-review" data-demo><i>⌕</i>派审</button>
+              <button type="button" class="mini is-preview" data-demo><i>▶</i>预览</button>
+              <button type="button" class="mini is-merge" data-demo><i>⎇</i>合并</button>
+            </div>
+            <div class="exec-pill">
+              <span>codex ▾</span><span>gpt-5.6-sol ▾</span><span>xhigh ▾</span>
+            </div>
+            <span class="send-hint">⌘↵ 排队</span>
+            <button class="send-btn">↑</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════════════ E 分段控件 ════════════════ -->
+  <section class="card" id="e">
+    <div class="card-meta">
+      <span class="tag">候选</span>
+      <h2>E · 分段控件（segmented）</h2>
+      <p>三个动作收成一组「胶囊分段控件」，浮在输入框上方。像 iOS segmented control / Linear filter，整体感强、颜色克制（色只在 icon 上）。</p>
+      <ul class="pros-cons">
+        <li class="pro">成组感强，不再散成三个独立按钮</li>
+        <li class="pro">和书签完全不同语言，辨识度高</li>
+        <li class="con">分段控件常被用于「互斥选项」，这里却是三个独立动作，语义略拧</li>
+        <li class="con">合并是破坏性操作，和审查/预览平铺在同一段里略冒险</li>
+      </ul>
+    </div>
+    <div class="stage">
+      <div class="reply-shell">
+        <div class="fw-seg" role="group" aria-label="自由工作流快捷操作">
+          <button type="button" class="seg is-review" data-demo>
+            <i class="ico review">⌕</i><span>派审查</span>
+          </button>
+          <button type="button" class="seg is-preview" data-demo>
+            <i class="ico preview">▶</i><span>打开预览</span>
+          </button>
+          <button type="button" class="seg is-merge" data-demo>
+            <i class="ico merge">⎇</i><span>合并&amp;清理</span>
+          </button>
+        </div>
+        <div class="reply-box">
+          <div class="reply-text muted">任务进行中；发送即排队，也可输入 /team 或 /duet 派生任务…</div>
+          <div class="reply-foot">
+            <button class="icon-btn">📎</button>
+            <button class="icon-btn">⏱</button>
+            <div class="exec-pill">
+              <span>codex ▾</span><span>gpt-5.6-sol ▾</span><span>xhigh ▾</span>
+            </div>
+            <span class="send-hint">⌘↵ 排队，跑完自动发出</span>
+            <button class="send-btn">↑</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════════════ F 图标轨 ════════════════ -->
+  <section class="card" id="f">
+    <div class="card-meta">
+      <span class="tag">候选</span>
+      <h2>F · 极简图标轨</h2>
+      <p>只保留带色底的图标按钮 + 悬停/焦点时显示文字（本 demo 用 <code>title</code> / 固定小标签双轨）。最省空间、最安静；适合已经熟悉产品的用户。</p>
+      <ul class="pros-cons">
+        <li class="pro">视觉噪音最低，不抢输入框</li>
+        <li class="pro">窄屏友好</li>
+        <li class="con">首次发现成本高，中文标签是产品优势被丢掉</li>
+        <li class="con">「合并&amp;清理」这种重操作不宜只靠图标</li>
+      </ul>
+    </div>
+    <div class="stage">
+      <div class="reply-shell">
+        <div class="fw-icons" aria-label="自由工作流快捷操作">
+          <button type="button" class="ico-only is-review" data-demo title="派审查">
+            <i class="ico review">⌕</i>
+            <em>派审查</em>
+          </button>
+          <button type="button" class="ico-only is-preview" data-demo title="打开预览">
+            <i class="ico preview">▶</i>
+            <em>预览</em>
+          </button>
+          <button type="button" class="ico-only is-merge" data-demo title="合并&amp;清理">
+            <i class="ico merge">⎇</i>
+            <em>合并</em>
+          </button>
+        </div>
+        <div class="reply-box">
+          <div class="reply-text muted">任务进行中；发送即排队，也可输入 /team 或 /duet 派生任务…</div>
+          <div class="reply-foot">
+            <button class="icon-btn">📎</button>
+            <button class="icon-btn">⏱</button>
+            <div class="exec-pill">
+              <span>codex ▾</span><span>gpt-5.6-sol ▾</span><span>xhigh ▾</span>
+            </div>
+            <span class="send-hint">⌘↵ 排队，跑完自动发出</span>
+            <button class="send-btn">↑</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 状态对照条 -->
+  <section class="card states-card">
+    <div class="card-meta">
+      <span class="tag">交互</span>
+      <h2>状态一览（以 B 悬浮芯片为例）</h2>
+      <p>点击各 demo 按钮会在 idle → busy → active → disabled 间循环。下面固定展示四种状态，方便并排看。</p>
+    </div>
+    <div class="stage states-stage">
+      <div class="state-row">
+        <span class="state-name">idle</span>
+        <div class="fw-chips">
+          <button class="chip is-review"><i class="ico review">⌕</i><span>派审查</span></button>
+          <button class="chip is-preview"><i class="ico preview">▶</i><span>打开预览</span></button>
+          <button class="chip is-merge"><i class="ico merge">⎇</i><span>合并&amp;清理</span></button>
+        </div>
+      </div>
+      <div class="state-row">
+        <span class="state-name">busy</span>
+        <div class="fw-chips">
+          <button class="chip is-review is-busy"><i class="ico review spin">↻</i><span>审查中</span></button>
+          <button class="chip is-preview is-busy"><i class="ico preview spin">↻</i><span>处理中</span></button>
+          <button class="chip is-merge is-busy"><i class="ico merge spin">↻</i><span>合并中</span></button>
+        </div>
+      </div>
+      <div class="state-row">
+        <span class="state-name">active</span>
+        <div class="fw-chips">
+          <button class="chip is-review is-active"><i class="ico review">⌕</i><span>等待修复</span></button>
+          <button class="chip is-preview is-active" aria-pressed="true"><i class="ico preview">■</i><span>关闭预览</span></button>
+          <button class="chip is-merge is-active"><i class="ico merge">✓</i><span>已合并清理</span></button>
+        </div>
+      </div>
+      <div class="state-row">
+        <span class="state-name">disabled</span>
+        <div class="fw-chips">
+          <button class="chip is-review" disabled><i class="ico review">⌕</i><span>派审查</span></button>
+          <button class="chip is-preview" disabled><i class="ico preview">▶</i><span>打开预览</span></button>
+          <button class="chip is-merge" disabled><i class="ico merge">⎇</i><span>合并&amp;清理</span></button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <footer class="page-foot">
+    <div>
+      <b>默认推荐 B · 悬浮芯片行</b>
+      <p>
+        假设与取舍：用户明确讨厌「书签似的展示」，所以优先砍掉咬合结构；
+        三项是独立动作（非互斥模式），因此不用分段控件当首选；
+        合并是破坏性操作，不宜缩成纯图标。B 改动面最小、对症最准。
+        若你更在意「零额外高度」，再在 D / C 之间挑；若要更成组，再看 E。
+      </p>
+    </div>
+    <p class="path">产物：<code>docs/ui-demo-free-toolbar/index.html</code> · 本地打开即可 · 未改产品代码</p>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>

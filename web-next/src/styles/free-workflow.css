@@ -3,22 +3,20 @@
 .is-workflow-mode .ui-tabs { width:max-content; max-width:100%; }
 .is-workflow-mode > .composer-field { width:min(100%,520px); }
 
-.task-reply-shell.has-top-rail { padding-top:8px; }
-.task-reply-shell.has-top-rail .task-reply-box { border-top-left-radius:0; }
-.free-workflow-toolbar { position:relative; z-index:2; display:flex; width:max-content; max-width:100%; min-height:40px; align-items:center; gap:2px; margin-bottom:-1px; overflow-x:auto; border:1px solid var(--line2); border-bottom-color:var(--panel); border-radius:12px 12px 0 0; background:linear-gradient(180deg,color-mix(in lch,var(--raised) 72%,var(--panel)),var(--panel)); padding:4px 5px 5px; box-shadow:0 -1px 2px rgb(23 27 38 / 3%); }
-.free-workflow-toolbar button { position:relative; display:inline-flex; height:31px; flex:0 0 auto; align-items:center; gap:6px; border:0; border-radius:8px; background:transparent; padding:0 9px 0 5px; color:var(--muted); font-size:10.5px; font-weight:650; transition:background .14s ease,color .14s ease,box-shadow .14s ease; }
-.free-workflow-toolbar button:hover:not(:disabled) { background:var(--panel); color:var(--ink); box-shadow:inset 0 0 0 1px var(--line),0 1px 2px rgb(23 27 38 / 5%); }
-.free-workflow-toolbar button:focus-visible,.free-workflow-toolbar > a:focus-visible { outline:2px solid color-mix(in lch,var(--accent) 48%,transparent); outline-offset:-2px; }
-.free-workflow-toolbar button:disabled { cursor:not-allowed; opacity:.46; }
-.free-workflow-action-icon { display:grid; width:23px; height:23px; flex:0 0 23px; place-items:center; border-radius:7px; box-shadow:inset 0 0 0 1px color-mix(in lch,currentColor 14%,transparent); }
-.free-workflow-toolbar button.is-review .free-workflow-action-icon { background:color-mix(in lch,var(--accent) 10%,var(--panel)); color:var(--accent); }
-.free-workflow-toolbar button.is-preview .free-workflow-action-icon { background:color-mix(in lch,var(--cyan) 10%,var(--panel)); color:var(--cyan); }
-.free-workflow-toolbar button.is-merge .free-workflow-action-icon { background:color-mix(in lch,var(--green) 10%,var(--panel)); color:var(--green); }
-.free-workflow-toolbar button.is-review[data-state="reviewing"],.free-workflow-toolbar button.is-review[data-state="repairing"] { background:color-mix(in lch,var(--accent) 5%,var(--panel)); color:var(--ink); }
-.free-workflow-toolbar button.is-preview[aria-pressed="true"] { background:color-mix(in lch,var(--cyan) 5%,var(--panel)); color:var(--ink); }
-.free-workflow-toolbar button.is-merge[data-state="merged"] { background:color-mix(in lch,var(--green) 5%,var(--panel)); color:var(--ink); }
-.free-workflow-toolbar > a { display:inline-flex; height:25px; flex:0 0 auto; align-items:center; gap:4px; margin-left:3px; border-left:1px solid var(--line); padding:0 7px 0 9px; color:var(--cyan); font-size:9.5px; font-weight:600; text-decoration:none; white-space:nowrap; }
-.free-workflow-toolbar > a:hover { color:var(--ink); }
+.task-reply-shell.has-top-rail { padding-top:6px; }
+.free-workflow-toolbar { position:relative; z-index:2; display:flex; width:max-content; max-width:100%; flex-wrap:wrap; align-items:center; gap:1px; margin:0 0 2px; overflow-x:auto; border:0; background:transparent; padding:0; box-shadow:none; }
+.free-workflow-toolbar button { position:relative; display:inline-flex; height:26px; flex:0 0 auto; align-items:center; gap:5px; border:0; border-radius:7px; background:transparent; padding:0 8px; color:var(--muted); font-size:11px; font-weight:600; letter-spacing:-.01em; transition:background .12s ease,color .12s ease; }
+.free-workflow-toolbar button svg { flex:0 0 auto; opacity:.72; }
+.free-workflow-toolbar button:hover:not(:disabled) { background:color-mix(in lch,var(--raised) 85%,var(--panel)); color:var(--ink); }
+.free-workflow-toolbar button:hover:not(:disabled) svg { opacity:1; }
+.free-workflow-toolbar button:focus-visible,.free-workflow-toolbar > a:focus-visible { outline:2px solid color-mix(in lch,var(--accent) 48%,transparent); outline-offset:1px; }
+.free-workflow-toolbar button:disabled { cursor:not-allowed; opacity:.38; }
+.free-workflow-toolbar button.is-review.is-busy,.free-workflow-toolbar button.is-review[data-state="reviewing"],.free-workflow-toolbar button.is-review[data-state="repairing"] { background:color-mix(in lch,var(--accent) 8%,transparent); color:var(--accent); }
+.free-workflow-toolbar button.is-preview.is-busy,.free-workflow-toolbar button.is-preview[aria-pressed="true"] { background:color-mix(in lch,var(--cyan) 8%,transparent); color:var(--cyan); }
+.free-workflow-toolbar button.is-merge.is-busy,.free-workflow-toolbar button.is-merge[data-state="merging"],.free-workflow-toolbar button.is-merge[data-state="merged"] { background:color-mix(in lch,var(--green) 8%,transparent); color:var(--green); }
+.free-workflow-toolbar button.is-busy svg,.free-workflow-toolbar button[data-state="reviewing"] svg,.free-workflow-toolbar button[data-state="repairing"] svg,.free-workflow-toolbar button[aria-pressed="true"] svg,.free-workflow-toolbar button[data-state="merged"] svg { opacity:1; }
+.free-workflow-toolbar > a { display:inline-flex; height:26px; flex:0 0 auto; align-items:center; gap:4px; margin-left:2px; border:0; border-radius:7px; padding:0 8px; color:var(--muted); font-size:11px; font-weight:600; text-decoration:none; white-space:nowrap; }
+.free-workflow-toolbar > a:hover { background:color-mix(in lch,var(--raised) 85%,var(--panel)); color:var(--ink); }
 
 .free-review-dialog { width:min(720px,96vw); max-height:min(760px,92vh); overflow:hidden; border:1px solid var(--line2); border-radius:15px; background:var(--panel); box-shadow:var(--shadow); }
 .free-review-dialog > header { display:grid; min-height:66px; grid-template-columns:34px minmax(0,1fr) 28px; align-items:center; gap:10px; border-bottom:1px solid var(--line); padding:10px 14px; }
@@ -93,10 +91,8 @@
 .free-review-screenshots span { display:block; overflow:hidden; padding:4px 5px; text-overflow:ellipsis; white-space:nowrap; }
 
 @media (max-width:800px) {
-  .free-workflow-toolbar { width:100%; border-radius:12px 12px 0 0; }
-  .free-workflow-toolbar button { flex:1; justify-content:center; }
+  .free-workflow-toolbar { width:100%; }
   .free-workflow-toolbar > a { display:none; }
-  .task-reply-shell.has-top-rail .task-reply-box { border-radius:0 0 12px 12px; }
   .free-review-dialog-body { grid-template-columns:1fr; }
   .free-review-reviewers { border-right:0; border-bottom:1px solid var(--line); }
 }
