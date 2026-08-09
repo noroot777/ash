@@ -4,12 +4,13 @@
 // Run: npm -w server run test:review
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 const root = mkdtempSync(join(tmpdir(), "harness-review-flow-"));
 process.env.HARNESS_DB = join(root, "harness.db");
+process.env.HARNESS_RUNS_DIR = join(root, "runs");
 
 const { mountReviewRoutes } = await import("../src/review.js");
 // 证据落盘（路径边界、结论文件）住在 review-evidence.ts，措辞住在 review-prompts.ts。
@@ -18,7 +19,8 @@ const {
   reviewRoundDir,
   safeReviewFilePath,
 } = await import("../src/review-evidence.js");
-const { REVIEW_OVERWRITE_CHECK } = await import("../src/review-prompts.js");
+const { REVIEW_OVERWRITE_CHECK, verifyProtocolFor } = await import("../src/review-prompts.js");
+const { initialTaskObjective, invitedTaskBrief } = await import("../src/invited-task-brief.js");
 // 判定（该不该派、几轮、找谁验）住在 review-policy.ts，是纯函数，所以这一段全程不起
 // 数据库、不起 CLI。
 const {
@@ -88,6 +90,9 @@ assert.equal(nextReviewRound(0), 1);
 assert.equal(nextReviewRound(1), 2);
 assert.equal(nextReviewRound(2), 3, "手动派审不受两轮自动上限限制");
 assert.match(REVIEW_OVERWRITE_CHECK, /ask_question/, "审查 prompt 必须要求覆盖场景先等人工拍板");
+assert.equal(invitedTaskBrief("原始需求 /grill-me", true, true), "", "新审查者入场时不能从通用任务简介漏回技能名");
+assert.match(invitedTaskBrief("普通协作需求", true, false), /普通协作需求/, "普通中途协作者仍须拿到任务简介");
+assert.equal(initialTaskObjective("历史审查正文 /grill-me", "审查", true), "", "历史独立审查任务的 fresh prompt 也不能重复夹带正文");
 
 assert.equal(
   reviewOutcomeAction({ reviewStatus: "done", conclusion: "verify_failed", reviewRequested: true, round: 1 }),
@@ -213,8 +218,8 @@ await db.insert(tasks).values({
   projectId: "project",
   groupId: null,
   parentId: null,
-  title: "path target",
-  body: "",
+  title: "path target /grill-me",
+  body: "原始需求里点名 /grill-me",
   mode: "single",
   status: "done",
   stage: null,
@@ -228,6 +233,13 @@ await db.insert(tasks).values({
   createdAt: at,
   updatedAt: at,
 });
+const promptTarget = (await db.select().from(tasks)).find((row) => row.id === taskId)!;
+const reviewPrompt = await verifyProtocolFor(promptTarget, 1, root);
+assert.doesNotMatch(reviewPrompt, /grill-me|原始需求里点名/, "自动验证 prompt 不得原样夹带被审需求里的技能名");
+assert.match(reviewPrompt, /request-context\.md/, "自动验证应通过文件交付需求上下文");
+const requestContext = readFileSync(join(base, "request-context.md"), "utf8");
+assert.match(requestContext, /path target \/grill-me/);
+assert.match(requestContext, /原始需求里点名 \/grill-me/, "需求文件不能为了避免误触而删掉验收信息");
 const api = new Hono();
 mountReviewRoutes(api);
 const traversal = await api.request(

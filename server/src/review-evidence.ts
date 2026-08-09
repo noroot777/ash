@@ -47,7 +47,7 @@ export function safeReviewFilePath(taskId: string, round: number, name: string):
 // `round-N` with a symlink and make an otherwise harmless `report.md` resolve
 // outside RUNS_DIR. Walk every directory component with lstat so both reads and
 // server-owned conclusion writes reject symlink ancestors.
-async function safeReviewDirectory(dir: string, create = false): Promise<boolean> {
+export async function safeRunDirectory(dir: string, create = false): Promise<boolean> {
   const root = resolve(RUNS_DIR);
   const target = resolve(dir);
   const rel = relative(root, target);
@@ -82,7 +82,7 @@ export async function readReport(taskId: string, round: number): Promise<string>
 export async function screenshots(taskId: string, round: number): Promise<string[]> {
   try {
     const dir = reviewRoundDir(taskId, round);
-    if (!(await safeReviewDirectory(dir))) return [];
+    if (!(await safeRunDirectory(dir))) return [];
     return (await readdir(dir, { withFileTypes: true }))
       .filter((entry) => entry.isFile() && [".png", ".jpg", ".jpeg"].includes(extname(entry.name).toLowerCase()))
       .map((entry) => entry.name)
@@ -96,7 +96,7 @@ export async function readReviewFile(taskId: string, round: number, name: string
   const file = safeReviewFilePath(taskId, round, name);
   if (!file) return null;
   try {
-    if (!(await safeReviewDirectory(reviewRoundDir(taskId, round)))) return null;
+    if (!(await safeRunDirectory(reviewRoundDir(taskId, round)))) return null;
     // lstat (not stat) rejects symlinks, including a reviewer-created link to a
     // file outside the evidence directory with an otherwise harmless .md name.
     if (!(await lstat(file)).isFile()) return null;
@@ -115,7 +115,7 @@ export async function writeConclusion(
 ): Promise<void> {
   if (!conclusion) return;
   const dir = reviewRoundDir(targetId, round);
-  if (!(await safeReviewDirectory(dir, true))) return;
+  if (!(await safeRunDirectory(dir, true))) return;
   const file = join(dir, "conclusion.json");
   try {
     const handle = await open(

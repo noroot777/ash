@@ -17,7 +17,7 @@ import { VERIFY_CHECK_LABELS } from "@harness/shared/workflow";
 import { workflowPolicy } from "@harness/shared/workflow-policy";
 import { taskWorkflowDef } from "./workflows.js";
 import { reviewRoundDir } from "./review-evidence.js";
-import { userDirectivesFor } from "./user-directives.js";
+import { reviewRequestReference } from "./review-request-context.js";
 import type { Workspace } from "./git.js";
 
 type TaskRow = typeof tasks.$inferSelect;
@@ -65,10 +65,8 @@ function verifyRules(evidenceDir: string): string {
  * ② 结论调 `report_stage` 报给**你自己**，本回合**不要**调 `complete_task` ——
  *    这一轮是搭着任务跑的旁路回合，任务的完成状态不由它改写。
  *
- * 「目标正文」后面必须紧跟用户中途追加的需求（`userDirectivesFor`）：`tasks.body` 是
- * 建任务那一刻的原始需求，之后在对话框里改的需求从不回写到它。同执行器回头验自己时
- * 那些话就在会话上下文里，所以这个洞一直没露头；验证站一换执行器就是全新会话，只剩
- * 一份过期需求（实证见 `user-directives.ts` 顶部）。
+ * 原始正文和中途追加需求由 `reviewRequestReference` 固化到证据目录：既不能漏掉后续改动，
+ * 也不能把原需求里的 skill / 斜杠命令原样塞进新审查 user message，误触本轮技能。
  */
 export async function verifyProtocolFor(
   target: TaskRow,
@@ -79,12 +77,11 @@ export async function verifyProtocolFor(
 ): Promise<string> {
   const evidenceDir = reviewRoundDir(target.id, round);
   const baseline = target.useWorktree ? target.worktreeBase || "项目当前基线" : "当前工作树的基准提交";
+  const requirements = await reviewRequestReference(target, evidenceDir);
   return `【自动验证 · 第 ${round} 轮】\n` +
     `这一轮不是继续做需求，而是**回过头验收你自己刚才的产物**。请切换成审查者的立场：` +
     `默认它有问题，去找出问题，而不是复述你做了什么。\n\n` +
-    `验证对象：${target.id} / ${target.title}\n` +
-    `目标正文：\n${target.body || "(无正文)"}\n\n` +
-    (await userDirectivesFor(target.id)) +
+    `验证对象：${target.id}\n${requirements}\n\n` +
     requiredChecks(target, station ?? target.workflowAt) +
     `先检查真实改动：项目仓库 ${repoPath}；你当前的工作目录就是被验产物所在的目录；` +
     `比较基线 ${baseline}。先看 git status / git diff / 相关提交，再决定验证范围。\n\n` +
@@ -115,10 +112,9 @@ export async function reviewProtocolFor(
   if (!target) return `【审查任务】被审任务 ${review.reviewOf} 已不存在，记录问题后结束本轮。\n\n`;
   const evidenceDir = reviewRoundDir(target.id, review.reviewRound);
   const baseline = target.useWorktree ? target.worktreeBase || "项目当前基线" : "当前工作树的基准提交";
+  const requirements = await reviewRequestReference(target, evidenceDir);
   return `【审查任务 · 第 ${review.reviewRound} 轮】\n` +
-    `审查对象：${target.id} / ${target.title}\n` +
-    `目标正文：\n${target.body || "(无正文)"}\n\n` +
-    (await userDirectivesFor(target.id)) +
+    `审查对象：${target.id}\n${requirements}\n\n` +
     requiredChecks(target, review.reviewStep ?? target.workflowAt) +
     `先检查真实改动：项目仓库 ${repoPath}；被审工作目录 ${workspace.path}；` +
     `被审分支 ${workspace.branch ?? "(无 Git 分支)"}；比较基线 ${baseline}。` +

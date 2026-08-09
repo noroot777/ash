@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { eq } from "drizzle-orm";
 import { Hono } from "hono";
 
@@ -11,15 +11,16 @@ process.env.HARNESS_RUNS_DIR = join(root, "runs");
 
 try {
   const { ensureSchema, db } = await import("../src/db/index.js");
-  const { agents, freeReviewRounds, freeReviewRuns, projects, tasks } = await import("../src/db/schema.js");
+  const { agents, freeReviewRounds, freeReviewRuns, projects, sessions, tasks } = await import("../src/db/schema.js");
   const { createTasks } = await import("../src/task-store.js");
-  const { mountFreeWorkflowRoutes, freeReviewOutcome, freeReviewResumeOptions, handleFreeWorkflowSettlement } = await import("../src/free-workflow.js");
+  const { mountFreeWorkflowRoutes, freeReviewOutcome, freeReviewPrompt, freeReviewResumeOptions, handleFreeWorkflowSettlement } = await import("../src/free-workflow.js");
   const { recordFreePreviewEvent } = await import("../src/free-workflow-events.js");
   const { claimTurn } = await import("../src/runs.js");
   const { mountReviewerProfileRoutes } = await import("../src/reviewer-profiles.js");
   const { mountTaskRoutes } = await import("../src/task-routes.js");
   const { mountTaskStageRoutes } = await import("../src/task-stage.js");
   const { acceptTask } = await import("../src/task-accept.js");
+  const { sessionTranscriptPath } = await import("../src/transcript.js");
   await ensureSchema();
 
   await db.insert(projects).values({ id: "p", name: "test", repoPath: root, apiKeys: null, workflowId: null, createdAt: new Date().toISOString() });
@@ -39,6 +40,35 @@ try {
   }]);
   assert.equal(task?.workflowMode, "free");
   assert.equal(task?.workflow, null, "自由任务不能被 createTasks 偷偷补上默认起手式");
+
+  const directiveAt = "2026-08-09T07:23:33.985Z";
+  await db.insert(sessions).values({
+    id: "skill-directive-session", taskId: "free-task", role: "lead", agentType: "codex",
+    executor: "codex@test", target: '{"kind":"local"}', startedAt: directiveAt,
+  });
+  const directivePath = sessionTranscriptPath("free-task", "skill-directive-session");
+  mkdirSync(dirname(directivePath), { recursive: true });
+  writeFileSync(directivePath, `\x1e${JSON.stringify({
+    t: "user", agent: "codex", text: "把排队需求也一起做完\n/grill-me", at: directiveAt,
+  })}\n`);
+  const promptTask = (await db.select().from(tasks).where(eq(tasks.id, "free-task"))).at(0)!;
+  const promptRun: Parameters<typeof freeReviewPrompt>[1] = {
+    id: "skill-review", taskId: "free-task", reviewerId: "reviewer", reviewerName: "Codex logic",
+    agentType: "codex", executorId: "reviewer-executor", model: null, reasoningEffort: "high",
+    checkMode: "logic", retryLimit: 1, currentRound: 1, status: "reviewing",
+    createdAt: directiveAt, updatedAt: directiveAt, finishedAt: null,
+  };
+  const skillPrompt = await freeReviewPrompt({
+    ...promptTask,
+    title: "标题也可能点名 /grill-me",
+    body: "原始正文要求运行 /grill-me",
+  }, promptRun, 1, root);
+  assert.doesNotMatch(skillPrompt, /grill-me|把排队需求也一起做完/, "自由审查 prompt 不得原样夹带技能名或用户追问");
+  assert.match(skillPrompt, /request-context\.md/, "自由审查应改为引用需求文件");
+  const skillContext = readFileSync(join(root, "runs", "free-task", "free-review", "skill-review", "round-1", "request-context.md"), "utf8");
+  assert.match(skillContext, /标题也可能点名 \/grill-me/);
+  assert.match(skillContext, /原始正文要求运行 \/grill-me/);
+  assert.match(skillContext, /把排队需求也一起做完[\s\S]*\/grill-me/, "需求文件仍须完整保留后续追问");
 
   await createTasks([{
     id: "free-merge-task", projectId: "p", groupId: null, parentId: null,
@@ -280,6 +310,7 @@ try {
   console.log("✓ 派生任务与起手式引用不能混入自由工作流");
   console.log("✓ 合并清理成功与历史幂等路径都会落到已验收");
   console.log("✓ 审查续跑保持独立 reviewer 会话与原模型配置");
+  console.log("✓ 技能名与斜杠命令只进入需求参考文件，不进入自由审查 prompt");
   console.log("✓ 自由审查报告与截图接口返回正确内容类型");
 } finally {
   rmSync(root, { recursive: true, force: true });

@@ -28,6 +28,7 @@ import { recordTurnStart } from "./turn-output.js";
 import { railStalledAtRun } from "./workflows.js";
 import { freeReviewReminder, isFreeReviewTurn } from "./free-workflow.js";
 import { withSkillInvocation } from "./skills.js";
+import { initialTaskObjective, invitedTaskBrief } from "./invited-task-brief.js";
 // Single tasks run headless — nobody can answer a mid-run prompt. Tell the agent
 // to act autonomously rather than stall waiting for confirmation; if it genuinely
 // needs input it can still ask, and the user replies via continueTask (resume).
@@ -42,9 +43,6 @@ const COLLAB_INVITE =
 // 「审一下上面的提交」这种自带上下文的召唤还能靠工作目录补齐，换成依赖任务描述的
 // 活就只能靠猜。所以首次入场时把原始描述一并给它，之后的回合不再重复（它自己的
 // 会话里已经有了）。
-const TASK_BRIEF = (body: string) =>
-  `【本任务的原始描述】（你是中途被叫进来的，这是任务最初的交代，供你了解背景）\n${body.trim()}\n\n`;
-
 // When a task that was interrupted (server restart → failed, manual stop →
 // canceled, group pause → paused, or a non-zero exit) is (re)started, we RESUME
 // its existing CLI session with this nudge instead of re-running from scratch —
@@ -259,12 +257,12 @@ export async function runTask(taskId: string): Promise<void> {
     const autoTitle = !!task.autoTitle;
     const TITLE_HINT =
       "请在正式开始前，第一行只输出：标题：<不超过14字、概括本次任务的简短标题>，然后换行，再正常完成下面的任务。\n\n任务：\n";
-    const objective = withSkillInvocation({ agentType, cwd: ws.path, text: task.body?.trim() || task.title, remote: ex.target.kind === "ssh" });
+    const reviewTask = !!task.reviewOf;
+    const objective = withSkillInvocation({ agentType, cwd: ws.path, text: initialTaskObjective(task.body, task.title, reviewTask), remote: ex.target.kind === "ssh" });
     // 团队执行者多一段前言(卡住走 ask_question 直达调度者、别自己扩张边界)。
     // 只拼进 prompt,不写进 tasks.body —— body 是调度者给的需求正文,界面展示那份。
     const teamPreamble = await workerPreambleFor(task);
     const sharedTeamWorker = !task.useWorktree && teamPreamble.length > 0;
-    const reviewTask = !!task.reviewOf;
     const reviewProtocol = reviewTask ? await reviewProtocolFor(task, ws, project.repoPath) : "";
     // fresh run 通常是任务里的头一个智能体，但不总是：任务跑过 codex 之后用户把
     // agentType 换成 claude 再点运行，就会从这里起跑一条全新会话 —— 前面那位的
@@ -566,7 +564,7 @@ export async function continueTask(
     const railNote = followUpFrom && !verifying ? await followUpRailNote(taskId) : "";
     const prompt =
       (invited ? COLLAB_INVITE : "") +
-      (invited && task.body.trim() ? TASK_BRIEF(task.body) : "") +
+      invitedTaskBrief(task.body, invited, verifying) +
       peerNotice +
       promptedUserTurnText +
       (workspaceReset ? WORKSPACE_RESET(cwd) : "") +

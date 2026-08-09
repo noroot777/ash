@@ -37,7 +37,7 @@ import { taskWorkspace } from "./task-workspace.js";
 import { publishTaskUpdated } from "./task-store.js";
 import { readPreview, startPreview, stopPreview, type PreviewStep } from "./preview.js";
 import { REVIEW_MIME } from "./review-evidence.js";
-import { userDirectivesFor } from "./user-directives.js";
+import { reviewRequestReference } from "./review-request-context.js";
 import { id, now } from "./util.js";
 
 type TaskRow = typeof tasks.$inferSelect;
@@ -217,15 +217,15 @@ async function cancelFreeReviewReservation(taskId: string): Promise<FreeWorkflow
   }
 }
 
-async function reviewPrompt(task: TaskRow, run: ReviewRunRow, round: number, repoPath: string): Promise<string> {
+export async function freeReviewPrompt(task: TaskRow, run: ReviewRunRow, round: number, repoPath: string): Promise<string> {
   const dir = evidenceDir(task.id, run.id, round);
+  const requirements = await reviewRequestReference(task, dir);
   const focus = run.checkMode === "syntax"
     ? "本轮只做语法与机械质量检查：编译、类型、lint、格式、明显的 API/导入错误和相关测试。不要扩张成产品方案评审。"
     : "本轮做逻辑审查：除编译与测试外，重点找行为错误、状态竞争、失败路径、边界条件和回归风险。涉及可见前端改动时必须启动页面真实操作并截图；是否还需要其它截图由你按证据价值判断。";
   return `【自由工作流 · 第 ${round} 轮审查】\n` +
     `你是独立审查者，不是继续实现需求。默认产物可能有问题，主动寻找能复现的缺陷。\n\n` +
-    `任务：${task.id} / ${task.title}\n原始需求：\n${task.body || "(无正文)"}\n\n` +
-    (await userDirectivesFor(task.id)) +
+    `任务：${task.id}\n${requirements}\n\n` +
     `${focus}\n\n先检查 ${repoPath} 中的真实 git status、diff 和提交，再选择验证命令。` +
     `必须真实运行与风险相称的检查；浏览器验证优先复用 CDP，退回 playwright 时结束前清掉工作区产物并停掉所有临时服务。\n\n` +
     `证据必须落盘：报告写到 ${join(dir, "report.md")}；截图如有必要放在同一目录。证据不要 git add/commit。\n\n` +
@@ -253,7 +253,7 @@ async function failReviewStart(run: ReviewRunRow, message: string): Promise<void
 
 async function launchReviewRound(task: TaskRow, run: ReviewRunRow): Promise<void> {
   const project = (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0);
-  const prompt = await reviewPrompt(task, run, run.currentRound, project?.repoPath ?? "(项目已不存在)");
+  const prompt = await freeReviewPrompt(task, run, run.currentRound, project?.repoPath ?? "(项目已不存在)");
   await appendTaskTimeline(task.id, `自由工作流第 ${run.currentRound} 轮审查开始：${run.reviewerName} · ${run.checkMode === "logic" ? "逻辑检查" : "语法检查"}。`);
   bus.publish({ type: "task.review", taskId: task.id });
   continueWhenIdle(task.id, prompt, {
