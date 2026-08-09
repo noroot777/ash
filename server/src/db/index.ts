@@ -25,6 +25,17 @@ export async function ensureSchema() {
     CREATE TABLE IF NOT EXISTS app_settings (
       key TEXT PRIMARY KEY, value TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS usage_cumulative_snapshots (
+      source_id TEXT PRIMARY KEY,
+      input_tokens INTEGER NOT NULL,
+      output_tokens INTEGER NOT NULL,
+      cache_read_tokens INTEGER NOT NULL,
+      cache_write_tokens INTEGER NOT NULL,
+      reasoning_tokens INTEGER NOT NULL,
+      cost_usd REAL,
+      baseline_ready INTEGER NOT NULL DEFAULT 1,
+      updated_at TEXT NOT NULL
+    );
     CREATE TABLE IF NOT EXISTS notes (
       id TEXT PRIMARY KEY, project_id TEXT NOT NULL, body TEXT NOT NULL,
       attachments TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
@@ -250,6 +261,9 @@ export async function ensureSchema() {
     "ALTER TABLE sessions ADD COLUMN context_used INTEGER",
     "ALTER TABLE sessions ADD COLUMN context_window INTEGER",
     "ALTER TABLE sessions ADD COLUMN context_window_estimated INTEGER",
+    // Codex 旧 trace 不完整时没有可信累计基线：下一回合只采基线，宁可少记一轮，也不
+    // 把整条线程累计值再次加进 sessions。
+    "ALTER TABLE usage_cumulative_snapshots ADD COLUMN baseline_ready INTEGER NOT NULL DEFAULT 1",
   ]) {
     try {
       await client.execute(sql);

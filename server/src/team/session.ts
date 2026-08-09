@@ -42,7 +42,7 @@ import { resolveExecutorFor } from "../executors/index.js";
 import type { ResidentHandle } from "../executors/types.js";
 import { RUNS_DIR } from "../paths.js";
 import { appendSessionTrace, writeTurn, writeTurnEnd, writeRunError } from "../transcript.js";
-import { addSessionUsage, setSessionContext } from "../usage.js";
+import { recordSessionUsageEvent, setSessionContext } from "../usage.js";
 import { LEAD_PREAMBLE, LEAD_NUDGE, LEAD_RESUMED, LEAD_WORKSPACE_RESET } from "./prompts.js";
 
 // 空闲多久回收进程(0/负数 = 永不回收)。测试用 HARNESS_TEAM_IDLE_MS=5000。
@@ -366,18 +366,21 @@ async function consume(lead: Lead): Promise<void> {
       pendingTraceText += event.text;
     }
     else {
+      const emittedEvent = event.kind === "usage"
+        ? await recordSessionUsageEvent(lead.sessId, event, lead.agentType, lead.cliSessionId)
+        : event;
       flushTraceText();
-      if (event.kind === "thinking" || event.kind === "tool" || event.kind === "error" || event.kind === "usage" || event.kind === "attachment") {
-        appendSessionTrace(lead.taskId, lead.sessId, lead.turnStart ?? now(), event);
+      if (emittedEvent.kind === "thinking" || emittedEvent.kind === "tool" || emittedEvent.kind === "error" || emittedEvent.kind === "usage" || emittedEvent.kind === "attachment") {
+        appendSessionTrace(lead.taskId, lead.sessId, lead.turnStart ?? now(), emittedEvent);
       }
-      // 调度台是常驻会话：一条 sessions 行吃很多回合，累计就落在这一行上。
-      if (event.kind === "usage") await addSessionUsage(lead.sessId, event.usage);
       // 水位相反：**覆盖**。常驻会话尤其需要它——流水一路加到几百万，只有水位能回答
       // 「这个调度台离上下文塞满还有多远」。
-      if (event.kind === "context") await setSessionContext(lead.sessId, event.context);
-      if (event.kind === "error") writeRunError(lead.out, event.message);
+      if (emittedEvent.kind === "context") await setSessionContext(lead.sessId, emittedEvent.context);
+      if (emittedEvent.kind === "error") writeRunError(lead.out, emittedEvent.message);
+      if (emittedEvent.kind === "done") exitStatus = emittedEvent.exitStatus;
+      publish(lead, emittedEvent);
+      continue;
     }
-    if (event.kind === "done") exitStatus = event.exitStatus;
     publish(lead, event);
   }
   flushTraceText();

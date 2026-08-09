@@ -2,16 +2,7 @@ import { mkdirSync, createWriteStream, appendFileSync, readFileSync, writeFileSy
 import { normalizeDuetConfig } from "@harness/shared/duet";
 import { join } from "node:path";
 import { eq, sql } from "drizzle-orm";
-import type {
-  DuetConfig,
-  DuetConsensusBy,
-  DuetSpeaker,
-  GateAction,
-  SessionRole,
-  ServerEvent,
-  TaskStatus,
-  TurnTraceEvent,
-} from "@harness/shared";
+import type { DuetConfig, DuetConsensusBy, DuetSpeaker, GateAction, SessionRole, TaskStatus, TurnTraceEvent } from "@harness/shared";
 import { db } from "../db/index.js";
 import { tasks, projects, sessions } from "../db/schema.js";
 import { bus } from "../bus.js";
@@ -22,11 +13,12 @@ import { taskWorkspace } from "../task-workspace.js";
 import { resolveExecutorFor } from "../executors/index.js";
 import type { AgentExecutor } from "../executors/types.js";
 import { RUNS_DIR } from "../paths.js";
-import { addSessionUsage, setSessionContext } from "../usage.js";
+import { recordSessionUsageEvent, setSessionContext } from "../usage.js";
 import * as P from "./prompts.js";
 import { waitForGate } from "./gates.js";
 import { gateUserMessage } from "./user-message.js";
 import { canSettleDuet as canSettle, duetConsensusBy as consensusBy, isDuetConsensus as isConsensus } from "./settlement.js";
+import { recordGateEvent, recordTurnStart, recordUserTurn } from "./timeline.js";
 
 const RAISE_RE = /(^|\n)\s*\[可收敛\]/;
 const AGREE_RE = /与对方一致[：:]\s*是/; // self-declared agreement with the opponent's conclusion
@@ -35,52 +27,6 @@ const running = new Set<string>();
 
 async function setStatus(taskId: string, status: TaskStatus) {
   await setTaskStatus(taskId, status);
-}
-
-// Persist + broadcast a human intervention (gate inject/ask) as a `user` turn so
-// the /duet timeline shows when the user spoke. Best-effort transcript append;
-// the live event drives the open page. `target` marks a 提问 directed at one
-// voice (so the timeline can show 「你 → 讨论者A」).
-function recordUserTurn(taskId: string, round: number, text: string, kind: "inject" | "ask", target?: "A" | "B") {
-  const at = now();
-  try {
-    appendFileSync(
-      join(RUNS_DIR, taskId, "transcript.jsonl"),
-      JSON.stringify({ round, speaker: "user", text, at, target, kind }) + "\n",
-    );
-  } catch {
-    /* best effort */
-  }
-  bus.publish({ type: "duet.user", taskId, round, text, at, target, kind });
-}
-
-// Gate verdicts are part of the duet timeline too. Persisting both open and
-// close events lets the web rebuild the last consensus/conclusions after reload;
-// the close event intentionally omits verdict fields and the reducer retains the
-// values from its matching open event.
-function recordGateEvent(event: Extract<ServerEvent, { type: "duet.gate" }>) {
-  try {
-    const runDir = join(RUNS_DIR, event.taskId);
-    mkdirSync(runDir, { recursive: true });
-    appendFileSync(join(runDir, "transcript.jsonl"), JSON.stringify(event) + "\n");
-  } catch {
-    /* best effort */
-  }
-  bus.publish(event);
-}
-
-// A turn can stay silent for a long time before its first text event. Persisting
-// the start signal lets a refreshed/reconnected page still show which voice is
-// actually running instead of guessing that the duet is between turns.
-function recordTurnStart(event: Extract<ServerEvent, { type: "duet.progress" }> & { phase: "start" }) {
-  try {
-    const runDir = join(RUNS_DIR, event.taskId);
-    mkdirSync(runDir, { recursive: true });
-    appendFileSync(join(runDir, "transcript.jsonl"), JSON.stringify(event) + "\n");
-  } catch {
-    /* best effort */
-  }
-  bus.publish(event);
 }
 
 interface Turn {
@@ -175,7 +121,10 @@ async function runTurn(args: {
   const TRACE_CAP = 200;
   try {
     for await (const event of handle.events) {
-      bus.publish({ type: "agent.event", taskId, sessionId: rowId, role, event });
+      const emittedEvent = event.kind === "usage"
+        ? await recordSessionUsageEvent(rowId, event, executor.type, cliId)
+        : event;
+      bus.publish({ type: "agent.event", taskId, sessionId: rowId, role, event: emittedEvent });
       if (event.kind === "session" && event.cliSessionId !== cliId) {
         cliId = event.cliSessionId;
         await db
@@ -193,9 +142,6 @@ async function runTurn(args: {
       } else if (event.kind === "error") {
         errorMsg = event.message;
         out.write("✕ " + event.message + "\n");
-      } else if (event.kind === "usage") {
-        // 辩手每一轮都是新的 sessions 行,所以这里的"累计"就等于这一轮的用量。
-        await addSessionUsage(rowId, event.usage);
       } else if (event.kind === "context") {
         await setSessionContext(rowId, event.context);
       } else if (event.kind === "done") {

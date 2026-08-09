@@ -36,7 +36,7 @@ function check(name: string, actual: unknown, expected: unknown) {
 }
 
 // —— 名单本身（不碰数据库）。加表的人不会来读这份文件，但会跑测试 ——
-for (const forbidden of ["tasks", "sessions", "groups", "queues", "queue_items", "schedules", "scheduled_messages", "notes"]) {
+for (const forbidden of ["tasks", "sessions", "usage_cumulative_snapshots", "groups", "queues", "queue_items", "schedules", "scheduled_messages", "notes"]) {
   check(`config 档白名单里没有 ${forbidden}`, (CONFIG_TABLES as readonly string[]).includes(forbidden), false);
 }
 for (const forbidden of ["schedules", "scheduled_messages"]) {
@@ -48,6 +48,8 @@ check("供应商排在执行器前面（被引用的先落地）",
 check("审查者配置会进入预览", (CONFIG_TABLES as readonly string[]).includes("reviewer_profiles"), true);
 check("快照搬任务，也搬它的分组与队列",
   ["groups", "tasks", "sessions", "queue_items"].every((t) => (SNAPSHOT_TABLES as readonly string[]).includes(t)), true);
+check("快照会连 Codex 累计基线一起搬",
+  (SNAPSHOT_TABLES as readonly string[]).includes("usage_cumulative_snapshots"), true);
 check("快照会带上自由工作流实际记录",
   ["free_workflow_states", "free_workflow_events", "free_review_runs", "free_review_rounds"].every((t) => (SNAPSHOT_TABLES as readonly string[]).includes(t)), true);
 
@@ -66,6 +68,7 @@ try {
     CREATE TABLE projects (id TEXT PRIMARY KEY, name TEXT NOT NULL, repo_path TEXT NOT NULL);
     CREATE TABLE tasks (id TEXT PRIMARY KEY, status TEXT NOT NULL, mode TEXT NOT NULL DEFAULT 'single', verify_round INTEGER);
     CREATE TABLE sessions (id TEXT PRIMARY KEY, task_id TEXT NOT NULL, agent_pid INTEGER, agent_started_at TEXT, agent_offset INTEGER, usage_output INTEGER);
+    CREATE TABLE usage_cumulative_snapshots (source_id TEXT PRIMARY KEY, input_tokens INTEGER NOT NULL);
     CREATE TABLE free_workflow_events (id TEXT PRIMARY KEY, task_id TEXT NOT NULL, kind TEXT NOT NULL, source TEXT NOT NULL, detail TEXT, occurred_at TEXT NOT NULL);
     CREATE TABLE schedules (id TEXT PRIMARY KEY, task_id TEXT NOT NULL, cron TEXT);
     CREATE TABLE scheduled_messages (id TEXT PRIMARY KEY, task_id TEXT NOT NULL, status TEXT NOT NULL);
@@ -79,6 +82,7 @@ try {
     INSERT INTO tasks VALUES ('t3', 'done', 'single', NULL);
     INSERT INTO tasks VALUES ('t4', 'running', 'team', NULL);
     INSERT INTO sessions VALUES ('s1', 't1', 4242, 'Mon Aug 7 10:00:00 2026', 991, 706);
+    INSERT INTO usage_cumulative_snapshots VALUES ('codex:thread-1', 123456);
     INSERT INTO free_workflow_events VALUES ('event1', 't3', 'preview_closed', 'user', 'http://127.0.0.1:4567', '2026-08-08T10:00:00.000Z');
     INSERT INTO schedules VALUES ('sch1', 't3', '0 9 * * *');
     INSERT INTO scheduled_messages VALUES ('msg1', 't3', 'pending');
@@ -95,6 +99,7 @@ try {
     CREATE TABLE projects (id TEXT PRIMARY KEY, name TEXT NOT NULL, repo_path TEXT NOT NULL);
     CREATE TABLE tasks (id TEXT PRIMARY KEY, status TEXT NOT NULL, mode TEXT NOT NULL DEFAULT 'single', verify_round INTEGER);
     CREATE TABLE sessions (id TEXT PRIMARY KEY, task_id TEXT NOT NULL, agent_pid INTEGER, agent_started_at TEXT, agent_offset INTEGER, usage_output INTEGER);
+    CREATE TABLE usage_cumulative_snapshots (source_id TEXT PRIMARY KEY, input_tokens INTEGER NOT NULL);
     CREATE TABLE free_workflow_events (id TEXT PRIMARY KEY, task_id TEXT NOT NULL, kind TEXT NOT NULL, source TEXT NOT NULL, detail TEXT, occurred_at TEXT NOT NULL);
     CREATE TABLE schedules (id TEXT PRIMARY KEY, task_id TEXT NOT NULL, cron TEXT);
     CREATE TABLE scheduled_messages (id TEXT PRIMARY KEY, task_id TEXT NOT NULL, status TEXT NOT NULL);
@@ -134,6 +139,8 @@ try {
     (await dest.execute("SELECT id FROM schedules ORDER BY id")).rows.map((row) => row.id), ["old-sch"]);
   check("token 账跟着会话行一起进来（不然预览里芯片没数）",
     (await dest.execute("SELECT usage_output FROM sessions WHERE id='s1'")).rows[0].usage_output, 706);
+  check("Codex 累计基线跟着进来（否则预览续聊会重复累计）",
+    (await dest.execute("SELECT input_tokens FROM usage_cumulative_snapshots WHERE source_id='codex:thread-1'")).rows[0].input_tokens, 123456);
 
   await sanitizeSnapshot(dest);
   const statuses = (await dest.execute("SELECT id, status FROM tasks ORDER BY id")).rows

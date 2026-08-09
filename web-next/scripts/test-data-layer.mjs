@@ -152,6 +152,57 @@ try {
   assert.equal(conversation[2].kind === "agent" ? conversation[2].at : null, "2026-07-30T01:01:00.000Z");
   assert.equal(conversation[0].kind === "agent" ? conversation[0].showSessionMeta : null, false);
   assert.equal(conversation[2].kind === "agent" ? conversation[2].showSessionMeta : null, true);
+
+  const cumulative1 = { input: 10, output: 5, cacheRead: 90, cacheWrite: 0, reasoning: 3, costUsd: null, turns: 1 };
+  const cumulative2 = { input: 20, output: 10, cacheRead: 180, cacheWrite: 0, reasoning: 6, costUsd: null, turns: 1 };
+  const repairedSession = { ...session, usage: { ...cumulative2, turns: 2 } };
+  const repairedConversation = buildConversationItems(
+    [{
+      session: repairedSession,
+      output: `第一轮。\n\u001e${JSON.stringify({ t: "user", text: "继续", at: "2026-07-30T01:01:00.000Z" })}\n第二轮。`,
+      trace: [
+        { at: "2026-07-30T01:00:30.000Z", turnStartedAt: session.startedAt, event: { kind: "usage", usage: cumulative1 } },
+        { at: "2026-07-30T01:01:30.000Z", turnStartedAt: "2026-07-30T01:01:00.000Z", event: { kind: "usage", usage: cumulative2 } },
+      ],
+    }],
+    [repairedSession],
+    [],
+  );
+  const repairedAgentTurns = repairedConversation.filter((item) => item.kind === "agent");
+  assert.equal(repairedAgentTurns[0]?.usage && repairedAgentTurns[0].usage.input + repairedAgentTurns[0].usage.cacheRead + repairedAgentTurns[0].usage.output, 105);
+  assert.equal(repairedAgentTurns[1]?.usage && repairedAgentTurns[1].usage.input + repairedAgentTurns[1].usage.cacheRead + repairedAgentTurns[1].usage.output, 105);
+  assert.deepEqual(
+    repairedAgentTurns.at(-1)?.sessionUsage,
+    { ...cumulative2, turns: 2 },
+    "Codex 旧 trace 要在读侧从累计快照换算成单轮差值，不能刷新后又显示 315",
+  );
+  const markedConversation = buildConversationItems(
+    [{
+      session: repairedSession,
+      output: `第一轮。\n\u001e${JSON.stringify({ t: "user", text: "继续", at: "2026-07-30T01:01:00.000Z" })}\n第二轮。`,
+      trace: [
+        { at: "2026-07-30T01:00:30.000Z", turnStartedAt: session.startedAt, event: { kind: "usage", usage: cumulative1, accounting: "incremental" } },
+        { at: "2026-07-30T01:01:30.000Z", turnStartedAt: "2026-07-30T01:01:00.000Z", event: { kind: "usage", usage: cumulative1, accounting: "incremental" } },
+      ],
+    }],
+    [repairedSession],
+    [],
+  ).filter((item) => item.kind === "agent");
+  assert.equal(markedConversation[1]?.usage?.cacheRead, 90, "新 trace 已是增量，不能被历史兼容逻辑二次求差");
+
+  const clearedContext = buildConversationItems([], [{
+    ...session,
+    context: { used: 117_016, window: 353_400, windowEstimated: false },
+  }], [
+    { kind: "server", id: "context-text", event: { type: "agent.event", taskId: "task-1", sessionId: session.id, role: "single", event: { kind: "text", text: "新一轮。" } } },
+    { kind: "server", id: "context-clear", event: { type: "agent.event", taskId: "task-1", sessionId: session.id, role: "single", event: { kind: "context", context: { used: 0, window: null, windowEstimated: false } } } },
+  ]);
+  assert.deepEqual(
+    clearedContext.at(-1)?.kind === "agent" ? clearedContext.at(-1)?.sessionContext : undefined,
+    { used: 0, window: null, windowEstimated: false },
+    "直播没采到哨兵必须压过 sessions 行上的旧水位，渲染层会因 used=0 隐藏胶囊",
+  );
+
   const exported = conversationToMarkdown(conversation, { ...task, title: "测试会话", body: "目标" });
   assert.match(exported, /## 你 ·/);
   assert.doesNotMatch(exported, /rg -n trace/);

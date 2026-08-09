@@ -141,6 +141,13 @@ async function initializeServer() {
     const washed = await sanitizeSnapshot((await import("./db/index.js")).dbClient);
     console.log(`[harness] 预览库已洗运行态：${washed.join("、") || "无"}`);
   }
+  const usageRepair = await (await import("./usage-repair.js")).repairLegacyUsageAccounting();
+  if (!usageRepair.alreadyApplied) {
+    console.log(
+      `[harness] Token 历史账已校正：Codex ${usageRepair.repairedCodexSessions} 条，`
+      + `Claude ${usageRepair.repairedClaudeSessions} 条，证据不足跳过 ${usageRepair.skippedSessions} 条`,
+    );
+  }
   await migrateQueues(); // 一次性把 legacy depends_on / resume_depends_on 迁到 queue_items（幂等）
   // **顺序不能反**：先把还活着的 agent 接管回来（它们的输出走文件，压根没随上
   // 一个 server 进程一起死），再 reconcile 剩下那些真被打断的。反过来的话，一个

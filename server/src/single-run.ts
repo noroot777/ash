@@ -21,7 +21,7 @@ import { FOLLOW_UP_LABEL } from "./labels.js";
 import { reconcileTurnBaseline } from "./turn-baseline.js";
 import { clearTurnStart, turnOutputHint } from "./turn-output.js";
 import { replayUndeliveredMcpCalls } from "./mcp-handoff.js";
-import { addSessionUsage, setSessionContext } from "./usage.js";
+import { recordSessionUsageEvent, setSessionContext } from "./usage.js";
 
 
 async function setStatus(taskId: string, status: Parameters<typeof setTaskStatus>[1]) {
@@ -278,14 +278,15 @@ export async function consumeSingleRun(a: {
       if (event.kind === "text") {
         emitText(event.text);
       } else {
-        persistTrace(event);
-        if (event.kind === "error") writeRunError(out, event.message);
-        // 会话行累计这一笔（本轮那份留在 trace 里，刷新后按回合放回各自的气泡）。
-        if (event.kind === "usage") await addSessionUsage(sessId, event.usage);
+        const emittedEvent = event.kind === "usage"
+          ? await recordSessionUsageEvent(sessId, event, agentType, cliSessionId)
+          : event;
+        persistTrace(emittedEvent);
+        if (emittedEvent.kind === "error") writeRunError(out, emittedEvent.message);
         // 水位相反：**覆盖**。它属于整条会话的此刻，不属于某一个回合，所以也不进 trace。
-        if (event.kind === "context") await setSessionContext(sessId, event.context);
-        bus.publish({ type: "agent.event", taskId, sessionId: sessId, role, agentType, event });
-        if (event.kind === "done") exitStatus = event.exitStatus;
+        if (emittedEvent.kind === "context") await setSessionContext(sessId, emittedEvent.context);
+        bus.publish({ type: "agent.event", taskId, sessionId: sessId, role, agentType, event: emittedEvent });
+        if (emittedEvent.kind === "done") exitStatus = emittedEvent.exitStatus;
       }
     }
   } finally {
