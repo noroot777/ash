@@ -328,7 +328,7 @@ export function listSkills(opts: {
 }
 
 /**
- * 把用户放在任意独立行开头的 `/{技能}` 变成确定调用。tasks.body 不改，只改本回合 prompt。
+ * 把用户在正文任意位置明确写下的 `/{技能}` 变成确定调用。tasks.body 不改，只改本回合 prompt。
  * 只认当前执行器真实扫到的完整命令，所以正文中的路径和未安装名字不会被误改写。
  */
 export function withSkillInvocation(opts: {
@@ -337,11 +337,25 @@ export function withSkillInvocation(opts: {
   text: string;
   remote?: boolean;
 }): string {
-  const available = new Map(listSkills(opts).skills.map((skill) => [skill.command, skill]));
-  const selected = [...opts.text.matchAll(/(?:^|\n)[\t ]*(\/\S+)(?=\s|$)/g)]
-    .map((match) => available.get(match[1]!))
-    .filter((skill): skill is SkillEntry => !!skill)
-    .filter((skill, index, all) => all.findIndex((candidate) => candidate.command === skill.command) === index);
+  if (!opts.text.includes("/")) return opts.text;
+  const neighbor = /[\p{L}\p{N}_./:\-]/u;
+  const mentionAt = (command: string) => {
+    let from = 0;
+    while (from < opts.text.length) {
+      const at = opts.text.indexOf(command, from);
+      if (at < 0) return -1;
+      const before = at > 0 ? opts.text[at - 1]! : "";
+      const after = opts.text[at + command.length] ?? "";
+      if ((!before || !neighbor.test(before)) && (!after || !neighbor.test(after))) return at;
+      from = at + command.length;
+    }
+    return -1;
+  };
+  const selected = listSkills(opts).skills
+    .map((skill) => ({ skill, at: mentionAt(skill.command) }))
+    .filter((hit) => hit.at >= 0)
+    .sort((a, b) => a.at - b.at)
+    .map((hit) => hit.skill);
   if (!selected.length) return opts.text;
 
   const lines = selected.map((skill) => skill.realPath

@@ -47,9 +47,12 @@ const invoked = withSkillInvocation({ agentType: "claude", cwd: root, text: `/${
 assert.match(invoked, /已选择 skill/);
 assert.ok(invoked.includes(JSON.stringify(join(find(list, ALPHA)!.realPath!, "SKILL.md"))), "命中已安装 skill 要注入准确 SKILL.md 路径");
 assert.ok(invoked.endsWith(`/${ALPHA} 做一件事`), "原始命令与参数仍然保留");
-assert.equal(withSkillInvocation({ agentType: "claude", cwd: root, text: `请用 /${ALPHA}` }), `请用 /${ALPHA}`, "句子中间的 slash 不当作显式调用");
+const inlineInvocation = withSkillInvocation({ agentType: "claude", cwd: root, text: `请用 /${ALPHA} 检查方案` });
+assert.match(inlineInvocation, /已选择 skill/, "句子中间有边界的已安装 skill 也必须调用");
 const trailingInvocation = withSkillInvocation({ agentType: "claude", cwd: root, text: `长段任务需求\n/${ALPHA}` });
 assert.match(trailingInvocation, /已选择 skill/, "正文末尾独立一行的 skill 也必须调用");
+assert.equal(withSkillInvocation({ agentType: "claude", cwd: root, text: `路径 /${ALPHA}/file.txt` }), `路径 /${ALPHA}/file.txt`, "skill 名只是路径前缀时不误调用");
+assert.equal(withSkillInvocation({ agentType: "claude", cwd: root, text: `https://example.com/${ALPHA}` }), `https://example.com/${ALPHA}`, "URL 里的 skill 名不误调用");
 assert.equal(withSkillInvocation({ agentType: "claude", cwd: root, text: "/zz-not-installed 做事" }), "/zz-not-installed 做事", "未安装命令不改写");
 assert.equal(withSkillInvocation({ agentType: "claude", cwd: root, text: `/${ALPHA} 做事`, remote: true }), `/${ALPHA} 做事`, "ssh 不能注入本机路径");
 
