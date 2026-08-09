@@ -56,6 +56,9 @@ export const SNAPSHOT_TABLES = [
   "notes",
   "note_tasks",
   "sessions",
+  // sessions 的 Codex 总账要靠这份累计基线继续求差；只搬前者不搬后者，预览里一续聊
+  // 就会把整条线程累计值再加一次。
+  "usage_cumulative_snapshots",
   "queue_items",
   "free_workflow_states",
   "free_workflow_events",

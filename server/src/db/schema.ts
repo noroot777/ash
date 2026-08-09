@@ -21,6 +21,19 @@ export const appSettings = sqliteTable("app_settings", {
   value: text("value").notNull(),
 });
 
+// 外部 CLI 报“会话累计值”时的最后一份原始快照。它独立于 sessions：同一个 CLI
+// 会话可能跨多个 harness 行（例如讨论模式），按 source_id 才能正确算本轮差值。
+export const usageCumulativeSnapshots = sqliteTable("usage_cumulative_snapshots", {
+  sourceId: text("source_id").primaryKey(),
+  input: integer("input_tokens").notNull(),
+  output: integer("output_tokens").notNull(),
+  cacheRead: integer("cache_read_tokens").notNull(),
+  cacheWrite: integer("cache_write_tokens").notNull(),
+  reasoning: integer("reasoning_tokens").notNull(),
+  costUsd: real("cost_usd"),
+  updatedAt: text("updated_at").notNull(),
+});
+
 export const notes = sqliteTable("notes", {
   id: text("id").primaryKey(),
   projectId: text("project_id").notNull(),
@@ -310,9 +323,8 @@ export const sessions = sqliteTable("sessions", {
   contextUsed: integer("context_used"),
   contextWindow: integer("context_window"),
   // window 是不是「估的」：claude 在 result.modelUsage 里自报窗口，读到了就是准数
-  // （false）；自报缺失才按模型名估（true，估不出则 window 为 null）。codex 的 stdout
-  // 根本没有水位（曾经读它的私有 rollout 文件，用户 2026-08-07 拍板撤掉），所以 codex
-  // 会话这三列恒 null，胶囊不显示。
+  // （false）；自报缺失才按模型名估（true，估不出则 window 为 null）。codex 从私有
+  // rollout best-effort 读取；格式变化或本轮取不到时清空为 null，胶囊自然不显示旧值。
   contextWindowEstimated: integer("context_window_estimated", { mode: "boolean" }),
 });
 

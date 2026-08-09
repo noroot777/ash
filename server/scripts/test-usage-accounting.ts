@@ -6,8 +6,8 @@
 // ② 「没报账」≠「花了 0」：不报账的 CLI / 本功能之前建的会话行必须读回 null，
 //    界面才能区分「这家不报」和「真没花」。费用同理——codex 不报价，它的回合
 //    不能被算成 $0 摊进总额。
-// ③ 累加而不是覆盖：一条 sessions 行会被复用（--resume 续跑、常驻调度台每个
-//    回合都记在同一行），跟 active_ms 同一副形状。
+// ③ Claude 的 result 是本轮增量；Codex 的 turn.completed 是线程累计快照。前者
+//    逐轮加，后者先求差再加，不能拿同一种 SQL 对付两家。
 // ④ **但上下文水位恰恰相反，是覆盖**：它是「此刻装了多少」，累加会得出一个没有
 //    物理意义的数（流水 18M 的会话水位可能才 12 万）。同一个文件里两种账并存，
 //    所以这条必须在测试里钉死。
@@ -21,11 +21,19 @@ import { dirname, join } from "node:path";
 
 const root = mkdtempSync(join(tmpdir(), "harness-usage-"));
 process.env.HARNESS_DB = join(root, "harness.db");
+process.env.HARNESS_RUNS_DIR = join(root, "runs");
 
 const { db, ensureSchema } = await import("../src/db/index.js");
 const { sessions } = await import("../src/db/schema.js");
 const { eq } = await import("drizzle-orm");
-const { addSessionUsage, sessionUsage, setSessionContext, sessionContext } = await import("../src/usage.js");
+const {
+  addSessionUsage,
+  recordSessionUsageEvent,
+  sessionUsage,
+  setSessionContext,
+  sessionContext,
+} = await import("../src/usage.js");
+const { repairLegacyUsageAccounting } = await import("../src/usage-repair.js");
 const { claudeUsage, claudeContextUsed, claudeContextWindow, parseClaudeStream } = await import("../src/executors/claude.js");
 const { codexUsage, parseCodexStream } = await import("../src/executors/codex.js");
 const { parseCodexContextLines, readCodexContext } = await import("../src/executors/codex-rollout.js");
@@ -101,7 +109,7 @@ try {
   assert.equal(usageTotal(codex), usageTotal({ ...claude, cacheWrite: 0 }));
   assert.equal(codexUsage(undefined), null);
 
-  // ── ② 落库与累加 ─────────────────────────────────────────────────────────
+  // ── ② Claude 增量 + Codex 累计快照 ───────────────────────────────────────
   const sessId = "usage-session-1";
   await db.insert(sessions).values({
     id: sessId,
@@ -116,17 +124,29 @@ try {
   const blank = await db.select().from(sessions).where(eq(sessions.id, sessId)).get();
   assert.equal(sessionUsage(blank!), null, "还没记过账的会话行读回来必须是 null");
 
-  await addSessionUsage(sessId, claude);
-  await addSessionUsage(sessId, codex); // 换执行器续跑：同一行上继续累加
+  await addSessionUsage(sessId, claude, { kind: "incremental" });
+  await addSessionUsage(sessId, codex, { kind: "cumulative", sourceId: "codex:test-thread" });
+  const codexNext = { ...codex, input: 4_404, output: 1_500, cacheRead: 23_000, reasoning: 800 };
+  const normalizedCodexEvent = await recordSessionUsageEvent(
+    sessId,
+    { kind: "usage", usage: codexNext },
+    "codex",
+    "test-thread",
+  );
+  assert.deepEqual(
+    normalizedCodexEvent.usage,
+    { input: 1_000, output: 380, cacheRead: 3_000, cacheWrite: 0, reasoning: 160, costUsd: null, turns: 1 },
+    "Codex 第二轮只能把累计快照的差值写进 trace/UI",
+  );
   const after = await db.select().from(sessions).where(eq(sessions.id, sessId)).get();
   const total = sessionUsage(after!);
   assert.ok(total);
-  assert.equal(total.input, 6_808);
-  assert.equal(total.output, 2_240);
-  assert.equal(total.cacheRead, 40_000);
+  assert.equal(total.input, 7_808, "Claude 增量 + Codex 最新累计值，不能叠两份 Codex 快照");
+  assert.equal(total.output, 2_620);
+  assert.equal(total.cacheRead, 43_000);
   assert.equal(total.cacheWrite, 500);
-  assert.equal(total.reasoning, 640);
-  assert.equal(total.turns, 2);
+  assert.equal(total.reasoning, 800);
+  assert.equal(total.turns, 3);
   assert.equal(total.costUsd, 4.08, "codex 那轮没报价，不能把总额摊薄或算成 0");
 
   // ── 展示侧的合并口径 ─────────────────────────────────────────────────────
@@ -141,7 +161,76 @@ try {
   assert.equal(formatCost(0.004), "<$0.01");
   assert.equal(formatCost(4.08), "$4.08");
 
-  // ── ③ 单轮的账要能落进 trace，刷新后按回合回放 ───────────────────────────
+  // ── ③ 旧账自动纠偏 ───────────────────────────────────────────────────────
+  const legacyCodexId = "legacy-codex-session";
+  const legacyClaudeId = "legacy-claude-session";
+  await db.insert(sessions).values([
+    {
+      id: legacyCodexId,
+      taskId: "legacy-codex-task",
+      role: "single",
+      agentType: "codex",
+      executor: "codex",
+      target: "local",
+      cliSessionId: "legacy-thread",
+      startedAt: "2026-08-07T01:00:00.000Z",
+      usageInput: 9_000,
+      usageOutput: 9_000,
+      usageCacheRead: 9_000,
+      usageCacheWrite: 0,
+      usageReasoning: 9_000,
+      usageTurns: 2,
+    },
+    {
+      id: legacyClaudeId,
+      taskId: "legacy-claude-task",
+      role: "single",
+      agentType: "claude",
+      executor: "claude",
+      target: "local",
+      cliSessionId: "legacy-claude-thread",
+      startedAt: "2026-08-07T01:00:00.000Z",
+      usageInput: 1,
+      usageOutput: 1,
+      usageCacheRead: 1,
+      usageCacheWrite: 1,
+      usageReasoning: 0,
+      usageTurns: 2,
+    },
+  ]);
+  const cumulative1 = { input: 10, output: 5, cacheRead: 90, cacheWrite: 0, reasoning: 3, costUsd: null, turns: 1 };
+  const cumulative2 = { input: 20, output: 10, cacheRead: 180, cacheWrite: 0, reasoning: 6, costUsd: null, turns: 1 };
+  appendSessionTrace("legacy-codex-task", legacyCodexId, "2026-08-07T01:00:00.000Z", { kind: "usage", usage: cumulative1 }, "2026-08-07T01:01:00.000Z");
+  appendSessionTrace("legacy-codex-task", legacyCodexId, "2026-08-07T02:00:00.000Z", { kind: "usage", usage: cumulative2 }, "2026-08-07T02:01:00.000Z");
+  const claudeTurn1 = { input: 2, output: 7, cacheRead: 30, cacheWrite: 4, reasoning: 0, costUsd: 0.1, turns: 1 };
+  const claudeTurn2 = { input: 3, output: 8, cacheRead: 40, cacheWrite: 5, reasoning: 0, costUsd: 0.2, turns: 1 };
+  appendSessionTrace("legacy-claude-task", legacyClaudeId, "2026-08-07T01:00:00.000Z", { kind: "usage", usage: claudeTurn1 }, "2026-08-07T01:01:00.000Z");
+  appendSessionTrace("legacy-claude-task", legacyClaudeId, "2026-08-07T02:00:00.000Z", { kind: "usage", usage: claudeTurn2 }, "2026-08-07T02:01:00.000Z");
+
+  const repaired = await repairLegacyUsageAccounting();
+  assert.equal(repaired.repairedCodexSessions, 1);
+  assert.equal(repaired.repairedClaudeSessions, 1);
+  assert.deepEqual(
+    sessionUsage((await db.select().from(sessions).where(eq(sessions.id, legacyCodexId)).get())!),
+    { ...cumulative2, turns: 2 },
+    "Codex 旧账应恢复成最后一份累计快照，而不是两份快照相加",
+  );
+  assert.deepEqual(
+    sessionUsage((await db.select().from(sessions).where(eq(sessions.id, legacyClaudeId)).get())!),
+    addUsage(claudeTurn1, claudeTurn2),
+    "Claude 旧账仍按每轮增量重建",
+  );
+  const nextLegacy = { ...cumulative2, input: 24, output: 12, cacheRead: 200, reasoning: 7 };
+  const nextLegacyEvent = await recordSessionUsageEvent(
+    legacyCodexId,
+    { kind: "usage", usage: nextLegacy },
+    "codex",
+    "legacy-thread",
+  );
+  assert.equal(usageTotal(nextLegacyEvent.usage), 26, "历史修复还要给后续续聊留下累计基线");
+  assert.equal((await repairLegacyUsageAccounting()).alreadyApplied, true, "历史纠偏只能执行一次");
+
+  // ── ④ 单轮的账要能落进 trace，刷新后按回合回放 ───────────────────────────
   const traceTask = `usage-trace-${process.pid}`;
   const tracePath = sessionTracePath(traceTask, sessId);
   appendSessionTrace(traceTask, sessId, "2026-08-07T01:00:00.000Z", { kind: "text", text: "干完了。" });
@@ -155,7 +244,7 @@ try {
   assert.equal(parseSessionTrace(`{"at":"x","event":{"kind":"usage"}}\n`).length, 0);
   rmSync(dirname(tracePath), { recursive: true, force: true });
 
-  // ── ④ 水位是覆盖不是累加 ─────────────────────────────────────────────────
+  // ── ⑤ 水位是覆盖不是累加 ─────────────────────────────────────────────────
   // 这一段是整个文件里最容易被下一个人改错的地方：上面三段全在说「累加」，
   // 顺手把 setSessionContext 也写成累加，长会话立刻算出「用了窗口的 90 倍」。
   assert.equal(sessionContext(blank!), null, "还没采到水位的会话行读回来必须是 null");
@@ -186,7 +275,7 @@ try {
   assert.equal(claudeContextUsed({ input_tokens: 5, cache_read_input_tokens: 116_000, cache_creation_input_tokens: 1_011 }), 117_016);
   assert.equal(claudeContextUsed(undefined), 0);
 
-  // ── ⑤ 分母:自报永远压过猜测 ──────────────────────────────────────────────
+  // ── ⑥ 分母:自报永远压过猜测 ──────────────────────────────────────────────
   // 这一段钉的是一个**按模型名猜不出来**的事实：开了 1M 窗口的会话，assistant 事件里
   // 的模型名跟普通 200k 会话逐字相同（都是 claude-opus-5），唯一的线索 `[1m]` 只出现
   // 在 result.modelUsage 的 key 上。漏读自报值 → 1M 会话「剩 94%」被显示成「剩 72%」，
@@ -247,7 +336,7 @@ try {
     "没自报才退回按模型名估，且必须标成估算",
   );
 
-  // ── ⑥ Codex 私有 rollout 变格式时必须失败关闭 ───────────────────────────
+  // ── ⑦ Codex 私有 rollout 变格式时必须失败关闭 ───────────────────────────
   const oldAt = "2026-08-07T10:00:00.000Z";
   const currentAt = "2026-08-07T11:00:00.000Z";
   const currentTurn = Date.parse(currentAt) - 1;
@@ -342,7 +431,7 @@ try {
     "私有格式变化后必须发没采到哨兵，清掉旧值且不显示水位",
   );
 
-  console.log("Token 账本验证通过：流水累计、水位覆盖、窗口自报、Codex rollout 变格式失败关闭");
+  console.log("Token 账本验证通过：Claude 增量、Codex 累计求差、历史纠偏、水位覆盖");
 } finally {
   rmSync(root, { recursive: true, force: true });
 }

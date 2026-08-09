@@ -303,10 +303,11 @@ export async function* parseCodexStream(
 
 const num = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) ? v : 0);
 
-// `turn.completed` 自带这一回合的账单:
+// `turn.completed` 在 resume 后报的是**整条 Codex 线程累计账**，不是本轮增量：
 //   {"usage":{"input_tokens":N,"cached_input_tokens":N,"output_tokens":N,"reasoning_output_tokens":N}}
-// 跟 claude 的口径差一处:codex 的 `input_tokens` **已经包含**命中缓存的那部分,
-// 所以要减出来,否则缓存读会被算两遍。codex 不报价 → costUsd 恒 null(不是 0)。
+// 这里只做供应商字段归一；server/usage.ts 按 cli_session_id 跟上一份累计快照求差，
+// 才得到真正的本轮账。另一个口径差异是 input_tokens 已含缓存命中，必须先减出来。
+// codex 不报价 → costUsd 恒 null(不是 0)。
 export function codexUsage(u: any): TokenUsage | null {
   if (!u || typeof u !== "object") return null;
   const cacheRead = num(u.cached_input_tokens);

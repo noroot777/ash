@@ -25,6 +25,16 @@ export async function ensureSchema() {
     CREATE TABLE IF NOT EXISTS app_settings (
       key TEXT PRIMARY KEY, value TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS usage_cumulative_snapshots (
+      source_id TEXT PRIMARY KEY,
+      input_tokens INTEGER NOT NULL,
+      output_tokens INTEGER NOT NULL,
+      cache_read_tokens INTEGER NOT NULL,
+      cache_write_tokens INTEGER NOT NULL,
+      reasoning_tokens INTEGER NOT NULL,
+      cost_usd REAL,
+      updated_at TEXT NOT NULL
+    );
     CREATE TABLE IF NOT EXISTS notes (
       id TEXT PRIMARY KEY, project_id TEXT NOT NULL, body TEXT NOT NULL,
       attachments TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
