@@ -48,12 +48,15 @@ export async function addSessionUsage(sessId: string, usage: TokenUsage): Promis
  */
 export async function setSessionContext(sessId: string, context: ContextUsage): Promise<void> {
   try {
+    // used=0 是执行器明确声明“本轮没采到”的哨兵（shared 的 hasContext 也按此判断）。
+    // 必须把库里的旧值清空，否则格式变化后界面仍会展示上一轮陈旧水位。
+    const measured = context.used > 0;
     await db
       .update(sessions)
       .set({
-        contextUsed: Math.round(context.used),
-        contextWindow: context.window === null ? null : Math.round(context.window),
-        contextWindowEstimated: context.windowEstimated,
+        contextUsed: measured ? Math.round(context.used) : null,
+        contextWindow: measured && context.window !== null ? Math.round(context.window) : null,
+        contextWindowEstimated: measured ? context.windowEstimated : null,
       })
       .where(eq(sessions.id, sessId));
   } catch (error) {

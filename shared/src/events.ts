@@ -34,7 +34,6 @@ export type AgentEvent =
   | { kind: "usage"; usage: TokenUsage }
   // 上下文**水位**(不是流水,区别见 shared/src/usage.ts 的 ContextUsage)。每回合至多
   // 一条,恒在该回合的 turnEnd/done 之前。落库是**覆盖**不是累加。
-  // 眼下只有 claude 发得出:codex 的 `exec --json` 里没有水位,一条都不发。
   | { kind: "context"; context: ContextUsage }
   | { kind: "error"; message: string }
   // 常驻会话（team 调度台）专用：一个回合说完了，但进程还活着等下一条消息。

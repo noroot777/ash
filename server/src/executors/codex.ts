@@ -3,6 +3,7 @@ import { createInterface } from "node:readline";
 import type { AgentEvent, ExecTarget, TokenUsage } from "@harness/shared";
 import type { AgentExecutor, RelayConfig, ResidentHandle, RunHandle, RunOpts } from "./types.js";
 import { openCodexResident } from "./codex-resident.js";
+import { readCodexContext } from "./codex-rollout.js";
 import { spawnForRun, detachedInfo } from "./detached.js";
 import { spawnAgent, resumeFor, resumeInner, spawnErrorMessage, killChild, forceFinishOnExit, redactSecrets } from "./spawn.js";
 import { relayApi } from "../llm.js";
@@ -96,6 +97,7 @@ export class CodexExecutor implements AgentExecutor {
   }
 
   run(opts: RunOpts): RunHandle {
+    const contextNotBeforeMs = Date.now();
     const args = this.execArgs(opts, opts.sessionId ?? "");
     const commandLine = redactSecrets(`${this.bin} ${args.join(" ")} <prompt via stdin>`);
     const child = spawnForRun(this.target, opts.cwd, this.bin, args, opts.prompt, this.env(), opts.detach);
@@ -103,7 +105,10 @@ export class CodexExecutor implements AgentExecutor {
     return {
       sessionId: opts.sessionId ?? "",
       commandLine,
-      events: parseCodexStream(child, opts.trace, lifecycle),
+      events: parseCodexStream(child, opts.trace, lifecycle, {
+        initialThreadId: opts.sessionId ?? "",
+        contextNotBeforeMs,
+      }),
       kill: () => {
         lifecycle.stopRequested = true;
         killChild(child);
@@ -118,7 +123,11 @@ export class CodexExecutor implements AgentExecutor {
       sessionId: opts.sessionId,
       commandLine: opts.commandLine,
       // 接管的是上一轮留下的进程，trace 那份诊断在它自己那一轮已经写过了。
-      events: parseCodexStream(child, undefined, lifecycle),
+      // 重启接管拿不到原回合起点；从接管时刻算下界，宁可少一轮水位也不复用旧值。
+      events: parseCodexStream(child, undefined, lifecycle, {
+        initialThreadId: opts.sessionId,
+        contextNotBeforeMs: Date.now(),
+      }),
       kill: () => {
         lifecycle.stopRequested = true;
         child.kill();
@@ -136,6 +145,7 @@ export class CodexExecutor implements AgentExecutor {
       initialSessionId: opts.sessionId ?? "",
       initialPrompt: opts.prompt,
       startTurn: (prompt, sessionId) => {
+        const contextNotBeforeMs = Date.now();
         const args = this.execArgs(opts, sessionId);
         const lifecycle = { stopRequested: false };
         // 常驻的每一轮都是**新进程**,所以 stdin 照旧读完即关(keepStdin 是
@@ -145,7 +155,10 @@ export class CodexExecutor implements AgentExecutor {
           child,
           commandLine: redactSecrets(`${this.bin} ${args.join(" ")} <prompt via stdin>`),
           lifecycle,
-          events: parseCodexStream(child, undefined, lifecycle),
+          events: parseCodexStream(child, undefined, lifecycle, {
+            initialThreadId: sessionId,
+            contextNotBeforeMs,
+          }),
         };
       },
       killTurn: (child) => killChild(child),
@@ -153,10 +166,11 @@ export class CodexExecutor implements AgentExecutor {
   }
 }
 
-async function* parseCodexStream(
+export async function* parseCodexStream(
   child: ReturnType<typeof spawnAgent>,
   tracePaths: RunTracePaths | undefined,
   lifecycle: { stopRequested: boolean },
+  contextOptions: { initialThreadId: string; contextNotBeforeMs: number },
 ): AsyncIterable<AgentEvent> {
   const queue: AgentEvent[] = [];
   let resolve: (() => void) | null = null;
@@ -166,6 +180,7 @@ async function* parseCodexStream(
   let lastEventType: string | null = null;
   let lastEventSummary: string | null = null;
   let agentMessageCount = 0;
+  let threadId = contextOptions.initialThreadId;
   const seenImages = new Set<string>();
   const structuredErrors: string[] = [];
   const trace = new RunTraceRecorder(tracePaths);
@@ -191,6 +206,7 @@ async function* parseCodexStream(
     lastEventType = codexEventType(ev);
     lastEventSummary = codexEventSummary(ev);
     if (ev.type === "thread.started" && ev.thread_id) {
+      threadId = ev.thread_id;
       push({ kind: "session", cliSessionId: ev.thread_id });
     } else if (ev.type === "turn.completed") {
       turnCompleted = true;
@@ -261,13 +277,23 @@ async function* parseCodexStream(
     finish({ exitStatus: exit, exitSignal: child.signalCode, forceFinished: true });
   });
 
-  // codex **不报上下文水位**：`exec --json` 的 stdout 里只有整回合累加的 usage，没有
-  // 「此刻装了多少」。曾经从它的 rollout 文件（~/.codex/sessions/…）里捞过，但那是私有
-  // 格式、升级即失效，用户 2026-08-07 拍板不要。所以这条流里没有 `context` 事件，
-  // codex 会话的水位胶囊不显示 —— 缺了就是缺了，别拿整回合累加去冒充水位。
+  // stdout 没有水位；在 done 前 best-effort 读取本回合 rollout。私有格式变化时读取器
+  // 返回 null，界面自然不显示，任务结算仍照常进行。
+  let contextDone = false;
   while (true) {
     if (queue.length) {
-      yield queue.shift()!;
+      const next = queue.shift()!;
+      if (next.kind === "done" && !contextDone) {
+        contextDone = true;
+        const context = await readCodexContext(threadId, contextOptions.contextNotBeforeMs);
+        // used=0 的哨兵也必须发：它会清掉 sessions 行上的上一轮旧水位。否则私有格式
+        // 变化后读取器虽已失败关闭，界面却仍拿数据库里的陈旧数字冒充当前值。
+        yield {
+          kind: "context",
+          context: context ?? { used: 0, window: null, windowEstimated: false },
+        };
+      }
+      yield next;
       continue;
     }
     if (finished) return;

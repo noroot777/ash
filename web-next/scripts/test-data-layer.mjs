@@ -152,6 +152,20 @@ try {
   assert.equal(conversation[2].kind === "agent" ? conversation[2].at : null, "2026-07-30T01:01:00.000Z");
   assert.equal(conversation[0].kind === "agent" ? conversation[0].showSessionMeta : null, false);
   assert.equal(conversation[2].kind === "agent" ? conversation[2].showSessionMeta : null, true);
+
+  const clearedContext = buildConversationItems([], [{
+    ...session,
+    context: { used: 117_016, window: 353_400, windowEstimated: false },
+  }], [
+    { kind: "server", id: "context-text", event: { type: "agent.event", taskId: "task-1", sessionId: session.id, role: "single", event: { kind: "text", text: "新一轮。" } } },
+    { kind: "server", id: "context-clear", event: { type: "agent.event", taskId: "task-1", sessionId: session.id, role: "single", event: { kind: "context", context: { used: 0, window: null, windowEstimated: false } } } },
+  ]);
+  assert.deepEqual(
+    clearedContext.at(-1)?.kind === "agent" ? clearedContext.at(-1)?.sessionContext : undefined,
+    { used: 0, window: null, windowEstimated: false },
+    "直播没采到哨兵必须压过 sessions 行上的旧水位，渲染层会因 used=0 隐藏胶囊",
+  );
+
   const exported = conversationToMarkdown(conversation, { ...task, title: "测试会话", body: "目标" });
   assert.match(exported, /## 你 ·/);
   assert.doesNotMatch(exported, /rg -n trace/);
