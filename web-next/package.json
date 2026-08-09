@@ -10,6 +10,7 @@
     "test:inspector-attachments": "node scripts/test-inspector-attachments.mjs",
     "test:open-with": "node scripts/test-open-with-menu.mjs",
     "test:team-review-inspector": "node scripts/test-team-review-inspector.mjs",
+    "test:free-review-copy": "node --experimental-strip-types scripts/test-free-review-copy.mjs",
     "test:task-review-rounds": "node scripts/test-task-review-rounds.mjs",
     "test:review-diff-zoom": "node scripts/test-review-diff-zoom.mjs",
     "test:data-layer": "node --experimental-strip-types scripts/test-data-layer.mjs",

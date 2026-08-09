@@ -1,15 +1,8 @@
 import type { FreeReviewRun, FreeWorkflowPreviewEvent, FreeWorkflowState, Task } from "@harness/shared";
 import { CheckCircle, GitMerge, MagnifyingGlass, MonitorPlay, SpinnerGap, StopCircle, WarningCircle } from "@phosphor-icons/react";
 import { api } from "../lib/api.ts";
+import { FREE_REVIEW_RUN_LABELS, freeReviewActivityDetail, freeReviewActivityTitle } from "./freeReviewCopy.ts";
 import { useFreeWorkflowState } from "./useFreeWorkflowState.ts";
-
-const RUN_LABELS: Record<FreeReviewRun["status"], string> = {
-  reviewing: "审查中",
-  repairing: "修改中，完成后自动复审",
-  passed: "已通过",
-  exhausted: "轮数用尽，等待人工决定",
-  failed: "审查链异常停止",
-};
 
 type Activity =
   | { type: "review"; at: string; key: string; run: FreeReviewRun }
@@ -49,7 +42,7 @@ export function FreeWorkflowInspector({ task, reviewOnly = false }: { task: Task
                 const run = activity.run;
                 return <li key={activity.key} className={run.status === "passed" ? "is-done" : run.status === "failed" || run.status === "exhausted" ? "is-warning" : "is-active"}>
                   <span>{run.status === "reviewing" || run.status === "repairing" ? <SpinnerGap size={14} className="is-spinning" /> : run.status === "passed" ? <CheckCircle size={14} weight="fill" /> : <MagnifyingGlass size={14} />}</span>
-                  <div><b>{run.reviewerName} · {run.checkMode === "logic" ? "逻辑检查" : "语法检查"}</b><small>{RUN_LABELS[run.status]} · 已到第 {run.currentRound} 轮 / 最多 {run.retryLimit + 1} 轮</small></div>
+                  <div><b>{freeReviewActivityTitle(run)}</b><small>{freeReviewActivityDetail(run)}</small></div>
                 </li>;
               }
               if (activity.type === "preview") {
@@ -73,7 +66,7 @@ export function FreeWorkflowInspector({ task, reviewOnly = false }: { task: Task
         {!reviews.length && <p>点击会话上方的“派审查”，选择审查者、检查类型和自动复审次数。</p>}
         {reviews.map((run) => (
           <details key={run.id}>
-            <summary><span><b>{run.reviewerName}</b><small>{run.checkMode === "logic" ? "逻辑检查" : "语法检查"} · {RUN_LABELS[run.status]}</small></span><em>{run.rounds.length} 轮</em></summary>
+            <summary><span><b>{run.reviewerName}</b><small>{run.checkMode === "logic" ? "逻辑检查" : "语法检查"} · {FREE_REVIEW_RUN_LABELS[run.status]}</small></span><em>{run.rounds.length} 轮</em></summary>
             <div>
               {run.rounds.map((round) => (
                 <article key={round.round}>
