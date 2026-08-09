@@ -79,6 +79,12 @@ export interface FreeWorkflowMergeState {
 export interface FreeWorkflowState {
   taskId: string;
   selectedReviewerId: string | null;
+  reviewReservation: {
+    armed: boolean;
+    reviewerId: string | null;
+    checkMode: FreeReviewCheckMode | null;
+    retryLimit: number | null;
+  };
   preview: FreeWorkflowPreviewState;
   previewEvents: FreeWorkflowPreviewEvent[];
   merge: FreeWorkflowMergeState;

@@ -13,6 +13,7 @@ export function FreeWorkflowToolbar({ task, notify }: { task: Task; notify: (mes
   const [previewBusy, setPreviewBusy] = useState(false);
   const [mergeBusy, setMergeBusy] = useState(false);
   const activeReview = free.state?.reviews.find((run) => run.status === "reviewing" || run.status === "repairing");
+  const reviewArmed = !!free.state?.reviewReservation.armed && !activeReview;
   const taskBusy = task.status === "running" || task.status === "queued";
   const taskReady = task.status !== "backlog";
   const mergeStarted = free.state?.merge.status === "merging" || free.state?.merge.status === "merged";
@@ -55,9 +56,10 @@ export function FreeWorkflowToolbar({ task, notify }: { task: Task; notify: (mes
   return (
     <>
       <div className="free-workflow-toolbar" aria-label="自由工作流快捷操作">
-        <button type="button" className={`is-review${activeReview ? " is-busy" : ""}`} data-state={activeReview?.status ?? "idle"} disabled={!taskReady || taskBusy || mergeStarted || !!activeReview} onClick={() => setReviewOpen(true)}>
+        <button type="button" className={`is-review${activeReview ? " is-busy" : ""}${reviewArmed ? " is-armed" : ""}`} data-state={activeReview?.status ?? (reviewArmed ? "armed" : "idle")} disabled={!taskReady || mergeStarted || !!activeReview} onClick={() => setReviewOpen(true)}>
           {activeReview?.status === "reviewing" ? <SpinnerGap size={13} className="is-spinning" /> : <MagnifyingGlass size={13} weight="regular" />}
-          <span>{activeReview?.status === "reviewing" ? "审查中" : activeReview?.status === "repairing" ? "等待修复" : "派审查"}</span>
+          <span>{activeReview?.status === "reviewing" ? "审查中" : activeReview?.status === "repairing" ? "等待修复" : reviewArmed ? "已预约审查" : "派审查"}</span>
+          {reviewArmed && <i className="free-review-armed-dot" aria-hidden="true" />}
         </button>
         <button type="button" className={`is-preview${previewBusy ? " is-busy" : ""}`} aria-pressed={!!free.state?.preview.running} disabled={!taskReady || taskBusy || mergeStarted || previewBusy} onClick={() => void togglePreview()}>
           {previewBusy ? <SpinnerGap size={13} className="is-spinning" /> : free.state?.preview.running ? <StopCircle size={13} weight="regular" /> : <MonitorPlay size={13} weight="regular" />}
@@ -69,7 +71,7 @@ export function FreeWorkflowToolbar({ task, notify }: { task: Task; notify: (mes
         </button>
         {free.state?.preview.running && free.state.preview.url && <a href={free.state.preview.url} target="_blank" rel="noreferrer" aria-label="在新窗口打开预览"><ArrowSquareOut size={13} /><span>预览页</span></a>}
       </div>
-      {reviewOpen && <FreeReviewDialog taskId={task.id} state={free.state} onDispatched={free.setState} onClose={() => setReviewOpen(false)} notify={notify} />}
+      {reviewOpen && <FreeReviewDialog taskId={task.id} state={free.state} reservationMode={taskBusy || reviewArmed} onChanged={free.setState} onClose={() => setReviewOpen(false)} notify={notify} />}
       {mergeOpen && <ConfirmDialog title="合并并清理" message={free.state?.preview.running ? "将安全合并任务分支、清理 worktree 和分支，并先关闭当前预览。" : "将安全合并任务分支，并清理任务 worktree 与分支。"} confirmLabel="合并&清理" busy={mergeBusy} onConfirm={() => void merge()} onClose={() => setMergeOpen(false)} />}
     </>
   );

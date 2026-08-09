@@ -126,6 +126,8 @@ export async function ensureSchema() {
     );
     CREATE TABLE IF NOT EXISTS free_workflow_states (
       task_id TEXT PRIMARY KEY, selected_reviewer_id TEXT,
+      review_armed INTEGER NOT NULL DEFAULT 0, review_check_mode TEXT,
+      review_retry_limit INTEGER,
       merge_status TEXT NOT NULL DEFAULT 'idle', merge_message TEXT,
       merged_at TEXT, updated_at TEXT NOT NULL
     );
@@ -248,6 +250,10 @@ export async function ensureSchema() {
     // 「已认领、还没送到」当口时，内存里的等待/在途标记全没了，只有库里这个标记能让
     // 开机扫描认出「这条得重新投递」（见 docs/incidents.md「排队消息凭空消失」）。
     "ALTER TABLE scheduled_messages ADD COLUMN delivering_since TEXT",
+    // 自由工作流预约审查：只保存一份配置，confirmed done 后复用现有派审链。
+    "ALTER TABLE free_workflow_states ADD COLUMN review_armed INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE free_workflow_states ADD COLUMN review_check_mode TEXT",
+    "ALTER TABLE free_workflow_states ADD COLUMN review_retry_limit INTEGER",
     // Token 用量:一条会话行按回合累加(口径统一在 shared/src/usage.ts)。全 null
     // = 这条会话建在本功能之前、或那家 CLI 不报账——**不能当 0 展示**。
     "ALTER TABLE sessions ADD COLUMN usage_input INTEGER",

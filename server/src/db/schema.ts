@@ -210,6 +210,9 @@ export const reviewerProfiles = sqliteTable("reviewer_profiles", {
 export const freeWorkflowStates = sqliteTable("free_workflow_states", {
   taskId: text("task_id").primaryKey(),
   selectedReviewerId: text("selected_reviewer_id"),
+  reviewArmed: integer("review_armed", { mode: "boolean" }).notNull().default(false),
+  reviewCheckMode: text("review_check_mode"),
+  reviewRetryLimit: integer("review_retry_limit"),
   mergeStatus: text("merge_status").notNull().default("idle"),
   mergeMessage: text("merge_message"),
   mergedAt: text("merged_at"),

@@ -11,7 +11,8 @@
 .free-workflow-toolbar button:hover:not(:disabled) svg { opacity:1; }
 .free-workflow-toolbar button:focus-visible,.free-workflow-toolbar > a:focus-visible { outline:2px solid color-mix(in lch,var(--accent) 48%,transparent); outline-offset:1px; }
 .free-workflow-toolbar button:disabled { cursor:not-allowed; opacity:.38; }
-.free-workflow-toolbar button.is-review.is-busy,.free-workflow-toolbar button.is-review[data-state="reviewing"],.free-workflow-toolbar button.is-review[data-state="repairing"] { background:color-mix(in lch,var(--accent) 8%,transparent); color:var(--accent); }
+.free-workflow-toolbar button.is-review.is-busy,.free-workflow-toolbar button.is-review.is-armed,.free-workflow-toolbar button.is-review[data-state="reviewing"],.free-workflow-toolbar button.is-review[data-state="repairing"] { background:color-mix(in lch,var(--accent) 8%,transparent); color:var(--accent); }
+.free-review-armed-dot { width:6px; height:6px; border-radius:50%; background:var(--accent); box-shadow:0 0 0 2px color-mix(in lch,var(--accent) 18%,transparent); }
 .free-workflow-toolbar button.is-preview.is-busy,.free-workflow-toolbar button.is-preview[aria-pressed="true"] { background:color-mix(in lch,var(--cyan) 8%,transparent); color:var(--cyan); }
 .free-workflow-toolbar button.is-merge.is-busy,.free-workflow-toolbar button.is-merge[data-state="merging"],.free-workflow-toolbar button.is-merge[data-state="merged"] { background:color-mix(in lch,var(--green) 8%,transparent); color:var(--green); }
 .free-workflow-toolbar button.is-busy svg,.free-workflow-toolbar button[data-state="reviewing"] svg,.free-workflow-toolbar button[data-state="repairing"] svg,.free-workflow-toolbar button[aria-pressed="true"] svg,.free-workflow-toolbar button[data-state="merged"] svg { opacity:1; }

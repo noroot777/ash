@@ -15,13 +15,15 @@ import {
 export function FreeReviewDialog({
   taskId,
   state,
-  onDispatched,
+  reservationMode,
+  onChanged,
   onClose,
   notify,
 }: {
   taskId: string;
   state: FreeWorkflowState | null;
-  onDispatched: (state: FreeWorkflowState) => void;
+  reservationMode: boolean;
+  onChanged: (state: FreeWorkflowState) => void;
   onClose: () => void;
   notify: (message: string) => void;
 }) {
@@ -29,8 +31,8 @@ export function FreeReviewDialog({
   const [reviewers, setReviewers] = useState<ReviewerProfile[]>([]);
   const [profiles, setProfiles] = useState<AgentExecutorProfile[]>([]);
   const [selectedId, setSelectedId] = useState(state?.selectedReviewerId ?? "");
-  const [checkMode, setCheckMode] = useState<FreeReviewCheckMode>("logic");
-  const [retryLimit, setRetryLimit] = useState("1");
+  const [checkMode, setCheckMode] = useState<FreeReviewCheckMode>(state?.reviewReservation.checkMode ?? "logic");
+  const [retryLimit, setRetryLimit] = useState(String(state?.reviewReservation.retryLimit ?? 1));
   const [creating, setCreating] = useState(false);
   const [draft, setDraft] = useState<ReviewerDraft>(() => createReviewerDraft());
   const [loading, setLoading] = useState(true);
@@ -49,11 +51,13 @@ export function FreeReviewDialog({
         ? state.selectedReviewerId
         : nextReviewers[0]?.id ?? "";
       setSelectedId(preferred);
+      setCheckMode(state?.reviewReservation.checkMode ?? "logic");
+      setRetryLimit(String(state?.reviewReservation.retryLimit ?? 1));
       setCreating(nextReviewers.length === 0);
     }).catch((error) => notify(error instanceof Error ? error.message : "审查者读取失败"))
       .finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
-  }, [notify, state?.selectedReviewerId]);
+  }, [notify, state?.reviewReservation.checkMode, state?.reviewReservation.retryLimit, state?.selectedReviewerId]);
 
   const create = async () => {
     if (!draft.name.trim() || busy) return;
@@ -71,20 +75,39 @@ export function FreeReviewDialog({
     }
   };
 
-  const dispatch = async () => {
+  const submit = async () => {
     if (!selectedId || busy) return;
     setBusy(true);
     try {
-      const next = await api.dispatchFreeReview(taskId, {
+      const input = {
         reviewerId: selectedId,
         checkMode,
         retryLimit: Number(retryLimit),
-      });
-      onDispatched(next);
-      notify(`已派出 ${reviewers.find((item) => item.id === selectedId)?.name ?? "审查者"}`);
+      };
+      const next = reservationMode
+        ? await api.reserveFreeReview(taskId, input)
+        : await api.dispatchFreeReview(taskId, input);
+      onChanged(next);
+      const name = reviewers.find((item) => item.id === selectedId)?.name ?? "审查者";
+      notify(reservationMode ? `已预约完成后由「${name}」审查` : `已派出 ${name}`);
       onClose();
     } catch (error) {
-      notify(error instanceof Error ? error.message : "派审失败");
+      notify(error instanceof Error ? error.message : reservationMode ? "预约审查失败" : "派审失败");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const cancelReservation = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const next = await api.cancelFreeReviewReservation(taskId);
+      onChanged(next);
+      notify("已取消审查预约");
+      onClose();
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "取消审查预约失败");
     } finally {
       setBusy(false);
     }
@@ -97,7 +120,7 @@ export function FreeReviewDialog({
       <section className="free-review-dialog" role="dialog" aria-modal="true" aria-labelledby="free-review-title">
         <header>
           <span><MagnifyingGlass size={17} weight="bold" /></span>
-          <div><h2 id="free-review-title">派审查</h2><p>选择一套审查者配置，再决定检查深度与失败后的自动复审次数。</p></div>
+          <div><h2 id="free-review-title">派审查</h2><p>{reservationMode ? "选择审查者与检查深度；任务确认完成后自动开始。" : "选择一套审查者配置，再决定检查深度与失败后的自动复审次数。"}</p></div>
           <button type="button" aria-label="关闭派审" disabled={busy} onClick={onClose}><X size={15} /></button>
         </header>
         {loading ? <div className="free-review-loading"><SpinnerGap size={15} className="is-spinning" />正在读取审查者…</div> : (
@@ -126,7 +149,13 @@ export function FreeReviewDialog({
             </section>
           </div>
         )}
-        <footer><button type="button" disabled={busy} onClick={onClose}>取消</button><button className="is-primary" type="button" disabled={busy || loading || !selectedId} onClick={() => void dispatch()}>{busy ? "启动中…" : "开始审查"}</button></footer>
+        <footer>
+          {state?.reviewReservation.armed && <button type="button" disabled={busy} onClick={() => void cancelReservation()}>取消预约</button>}
+          <button type="button" disabled={busy} onClick={onClose}>{state?.reviewReservation.armed ? "关闭" : "取消"}</button>
+          <button className="is-primary" type="button" disabled={busy || loading || !selectedId} onClick={() => void submit()}>
+            {busy ? (reservationMode ? "保存中…" : "启动中…") : reservationMode ? (state?.reviewReservation.armed ? "保存预约" : "预约审查") : "开始审查"}
+          </button>
+        </footer>
       </section>
     </div>,
     document.body,

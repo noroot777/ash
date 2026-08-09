@@ -12,8 +12,9 @@ try {
   const { ensureSchema, db } = await import("../src/db/index.js");
   const { agents, freeReviewRuns, projects, tasks } = await import("../src/db/schema.js");
   const { createTasks } = await import("../src/task-store.js");
-  const { mountFreeWorkflowRoutes, freeReviewOutcome, freeReviewResumeOptions } = await import("../src/free-workflow.js");
+  const { mountFreeWorkflowRoutes, freeReviewOutcome, freeReviewResumeOptions, handleFreeWorkflowSettlement } = await import("../src/free-workflow.js");
   const { recordFreePreviewEvent } = await import("../src/free-workflow-events.js");
+  const { claimTurn } = await import("../src/runs.js");
   const { mountReviewerProfileRoutes } = await import("../src/reviewer-profiles.js");
   const { mountTaskRoutes } = await import("../src/task-routes.js");
   const { mountTaskStageRoutes } = await import("../src/task-stage.js");
@@ -48,6 +49,16 @@ try {
     useWorktree: false, worktreeBase: null, originTaskId: null, workflowMode: "free",
   }]);
 
+  await createTasks([{
+    id: "free-reservation-task", projectId: "p", groupId: null, parentId: null,
+    title: "free reservation", body: "test", mode: "single", status: "running", priority: "none",
+    labels: "[]", dependsOn: "[]", resumeDependsOn: "[]", agentType: "codex",
+    executorId: "reviewer-executor", model: null, reasoningEffort: null, autoTitle: false,
+    duet: null, team: null, reportBack: false, scheduleId: null,
+    createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    useWorktree: false, worktreeBase: null, originTaskId: null, workflowMode: "free",
+  }]);
+
   assert.equal(freeReviewOutcome({ turnOk: true, conclusion: "verify_failed", currentRound: 1, retryLimit: 1 }), "repair");
   assert.equal(freeReviewOutcome({ turnOk: true, conclusion: "verify_failed", currentRound: 2, retryLimit: 1 }), "exhausted");
   assert.equal(freeReviewOutcome({ turnOk: true, conclusion: "verified", currentRound: 1, retryLimit: 1 }), "passed");
@@ -65,6 +76,39 @@ try {
   assert.equal(created.status, 201);
   const reviewer = await created.json() as { id: string };
   assert.ok(reviewer.id);
+
+  const reserveReview = async (checkMode: "logic" | "syntax", retryLimit: number) => api.request(
+    "/tasks/free-reservation-task/free-workflow/review-reservation",
+    { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ reviewerId: reviewer.id, checkMode, retryLimit }) },
+  );
+  let reserved = await reserveReview("logic", 1);
+  assert.equal(reserved.status, 200);
+  let reservedState = await reserved.json() as { reviewReservation: { armed: boolean; checkMode: string | null; retryLimit: number | null } };
+  assert.deepEqual(reservedState.reviewReservation, { armed: true, reviewerId: reviewer.id, checkMode: "logic", retryLimit: 1 });
+
+  reserved = await reserveReview("syntax", 2);
+  assert.equal(reserved.status, 200);
+  reservedState = await reserved.json() as typeof reservedState;
+  assert.deepEqual(reservedState.reviewReservation, { armed: true, reviewerId: reviewer.id, checkMode: "syntax", retryLimit: 2 }, "重复预约应覆盖同一份配置");
+
+  const canceledReservation = await api.request("/tasks/free-reservation-task/free-workflow/review-reservation", { method: "DELETE" });
+  assert.equal(canceledReservation.status, 200);
+  assert.equal((await canceledReservation.json() as { reviewReservation: { armed: boolean } }).reviewReservation.armed, false);
+
+  await reserveReview("logic", 2);
+  await db.update(tasks).set({ status: "failed" }).where(eq(tasks.id, "free-reservation-task"));
+  await handleFreeWorkflowSettlement("free-reservation-task", "failed", false, false);
+  assert.equal((await api.request("/tasks/free-reservation-task/free-workflow").then((response) => response.json()) as { reviewReservation: { armed: boolean } }).reviewReservation.armed, true, "失败结算应保留预约");
+
+  await db.update(tasks).set({ status: "done" }).where(eq(tasks.id, "free-reservation-task"));
+  assert.equal(claimTurn("free-reservation-task"), true);
+  await handleFreeWorkflowSettlement("free-reservation-task", "done", true, true);
+  const triggered = await api.request("/tasks/free-reservation-task/free-workflow");
+  const triggeredState = await triggered.json() as { reviewReservation: { armed: boolean }; reviews: Array<{ status: string; checkMode: string; retryLimit: number }> };
+  assert.equal(triggeredState.reviewReservation.armed, false);
+  assert.deepEqual(triggeredState.reviews.map(({ status, checkMode, retryLimit }) => ({ status, checkMode, retryLimit })), [
+    { status: "reviewing", checkMode: "logic", retryLimit: 2 },
+  ], "confirmed done 应按预约配置自动派出且只派一份审查");
 
   const state = await api.request("/tasks/free-task/free-workflow");
   assert.equal(state.status, 200);
@@ -141,6 +185,7 @@ try {
   console.log("✓ 自由任务不携带起手式快照");
   console.log("✓ 默认 1 次自动复审的轮数语义正确");
   console.log("✓ 审查者 CRUD 与自由工作流初始状态可用");
+  console.log("✓ 运行中可预约、覆盖、取消，失败保留且 confirmed done 后只自动派出一次");
   console.log("✓ 预览打开与关闭事件持久保留且按发生顺序返回");
   console.log("✓ backlog、旧 stage 与旧 accept 路径均被隔离");
   console.log("✓ 派生任务与起手式引用不能混入自由工作流");

@@ -45,7 +45,6 @@ const ACTIVE_REVIEW_STATUSES = ["reviewing", "repairing"] as const;
 const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".webp"]);
 const MAX_RETRIES = 5;
 const freeActionLocks = new Set<string>();
-
 export function freeReviewOutcome(input: {
   turnOk: boolean;
   conclusion: string | null;
@@ -160,6 +159,61 @@ function retryLimit(value: unknown): number {
   }
   return Number(value);
 }
+async function reserveFreeReview(taskId: string, input: FreeReviewDispatchInput): Promise<FreeWorkflowState> {
+  const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
+  if (!task) throw new Error("任务不存在");
+  if (task.mode !== "single" || task.parentId || task.reviewOf) throw new Error("自由工作流只适用于普通单任务");
+  if (task.workflowMode !== "free") throw new Error("当前任务不是自由工作流");
+  if (task.archived) throw new Error("归档任务不能预约审查");
+  if (task.status === "backlog") throw new Error("任务尚未运行，开始执行后再预约审查");
+  if (task.status === "done") throw new Error("任务已完成，请直接派审查");
+  if (freeActionLocks.has(taskId)) throw new Error("当前已有自由工作流操作正在进行");
+  freeActionLocks.add(taskId);
+  try {
+    await assertBeforeMerge(taskId);
+    if (await activeReview(taskId)) throw new Error("当前已有审查或修复链在进行");
+    const profile = (await db.select().from(reviewerProfiles).where(eq(reviewerProfiles.id, input.reviewerId))).at(0);
+    if (!profile) throw new Error("所选审查者不存在");
+    const mode = checkMode(input.checkMode);
+    const retries = retryLimit(input.retryLimit);
+    const at = now();
+    const existing = (await db.select({ reviewArmed: freeWorkflowStates.reviewArmed }).from(freeWorkflowStates)
+      .where(eq(freeWorkflowStates.taskId, taskId))).at(0);
+    await db.insert(freeWorkflowStates).values({
+      taskId, selectedReviewerId: profile.id, reviewArmed: true, reviewCheckMode: mode, reviewRetryLimit: retries,
+      mergeStatus: "idle", mergeMessage: null, mergedAt: null, updatedAt: at,
+    }).onConflictDoUpdate({
+      target: freeWorkflowStates.taskId,
+      set: { selectedReviewerId: profile.id, reviewArmed: true, reviewCheckMode: mode, reviewRetryLimit: retries, updatedAt: at },
+    });
+    await appendTaskTimeline(taskId, `${existing?.reviewArmed ? "已更新" : "已预约"}完成后审查：${profile.name} · ` +
+      `${mode === "logic" ? "逻辑检查" : "语法检查"} · 自动复审 ${retries} 轮。`);
+    bus.publish({ type: "task.review", taskId });
+    return freeWorkflowState(taskId);
+  } finally {
+    freeActionLocks.delete(taskId);
+  }
+}
+async function cancelFreeReviewReservation(taskId: string): Promise<FreeWorkflowState> {
+  const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
+  if (!task) throw new Error("任务不存在");
+  if (task.mode !== "single" || task.parentId || task.reviewOf || task.workflowMode !== "free") throw new Error("当前任务不支持自由审查");
+  if (freeActionLocks.has(taskId)) throw new Error("当前已有自由工作流操作正在进行");
+  freeActionLocks.add(taskId);
+  try {
+    const state = (await db.select({ reviewArmed: freeWorkflowStates.reviewArmed }).from(freeWorkflowStates)
+      .where(eq(freeWorkflowStates.taskId, taskId))).at(0);
+    if (state?.reviewArmed) {
+      const at = now();
+      await db.update(freeWorkflowStates).set({ reviewArmed: false, updatedAt: at }).where(eq(freeWorkflowStates.taskId, taskId));
+      await appendTaskTimeline(taskId, "已取消完成后审查预约。");
+      bus.publish({ type: "task.review", taskId });
+    }
+    return freeWorkflowState(taskId);
+  } finally {
+    freeActionLocks.delete(taskId);
+  }
+}
 
 async function reviewPrompt(task: TaskRow, run: ReviewRunRow, round: number, repoPath: string): Promise<string> {
   const dir = evidenceDir(task.id, run.id, round);
@@ -253,7 +307,27 @@ export async function handleFreeWorkflowSettlement(
   const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!task || task.workflowMode !== "free") return false;
   const run = await activeReview(taskId);
-  if (!run) return true;
+  if (!run) {
+    if (confirmedDone && status === "done") {
+      const reservation = (await db.select({
+        armed: freeWorkflowStates.reviewArmed, reviewerId: freeWorkflowStates.selectedReviewerId,
+        checkMode: freeWorkflowStates.reviewCheckMode, retryLimit: freeWorkflowStates.reviewRetryLimit,
+      }).from(freeWorkflowStates).where(eq(freeWorkflowStates.taskId, taskId))).at(0);
+      if (reservation?.armed && reservation.reviewerId) {
+        try {
+          await startFreeReview(taskId, {
+            reviewerId: reservation.reviewerId, checkMode: checkMode(reservation.checkMode ?? "logic"),
+            retryLimit: retryLimit(reservation.retryLimit ?? 1),
+          });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          await appendTaskTimeline(taskId, `完成后审查启动失败：${message}`);
+          bus.publish({ type: "task.review", taskId });
+        }
+      }
+    }
+    return true;
+  }
 
   if (run.status === "repairing") {
     if (confirmedDone && status === "done") await nextRound(task, run);
@@ -343,10 +417,15 @@ async function startFreeReview(taskId: string, input: FreeReviewDispatchInput): 
         id: id(), runId: run.id, round: 1, status: "reviewing", conclusion: null, startedAt: at, endedAt: null,
       });
       await db.insert(freeWorkflowStates).values({
-        taskId, selectedReviewerId: profile.id, mergeStatus: "idle", mergeMessage: null, mergedAt: null, updatedAt: at,
+        taskId, selectedReviewerId: profile.id, reviewArmed: false,
+        reviewCheckMode: mode, reviewRetryLimit: retries,
+        mergeStatus: "idle", mergeMessage: null, mergedAt: null, updatedAt: at,
       }).onConflictDoUpdate({
         target: freeWorkflowStates.taskId,
-        set: { selectedReviewerId: profile.id, updatedAt: at },
+        set: {
+          selectedReviewerId: profile.id, reviewArmed: false,
+          reviewCheckMode: mode, reviewRetryLimit: retries, updatedAt: at,
+        },
       });
       await launchReviewRound(task, run);
     } catch (error) {
@@ -521,6 +600,12 @@ export async function freeWorkflowState(taskId: string): Promise<FreeWorkflowSta
   return {
     taskId,
     selectedReviewerId: state?.selectedReviewerId ?? null,
+    reviewReservation: {
+      armed: state?.reviewArmed ?? false,
+      reviewerId: state?.reviewArmed ? state.selectedReviewerId : null,
+      checkMode: state?.reviewArmed ? checkMode(state.reviewCheckMode ?? "logic") : null,
+      retryLimit: state?.reviewArmed ? retryLimit(state.reviewRetryLimit ?? 1) : null,
+    },
     preview: {
       running: !!preview,
       url: preview?.url ?? null,
@@ -554,7 +639,14 @@ export function mountFreeWorkflowRoutes(api: Hono): void {
       return c.json({ error: error instanceof Error ? error.message : String(error) }, 409);
     }
   });
-
+  api.put("/tasks/:id/free-workflow/review-reservation", async (c) => {
+    try { return c.json(await reserveFreeReview(c.req.param("id"), await c.req.json<FreeReviewDispatchInput>())); }
+    catch (error) { return c.json({ error: error instanceof Error ? error.message : String(error) }, 409); }
+  });
+  api.delete("/tasks/:id/free-workflow/review-reservation", async (c) => {
+    try { return c.json(await cancelFreeReviewReservation(c.req.param("id"))); }
+    catch (error) { return c.json({ error: error instanceof Error ? error.message : String(error) }, 409); }
+  });
   api.post("/tasks/:id/free-workflow/preview", async (c) => {
     try {
       const record = await startFreePreview(c.req.param("id"));
