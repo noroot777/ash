@@ -5,8 +5,8 @@ import { api } from "@/lib/api";
 import { useTheme, radius, fonts } from "@/lib/theme";
 
 // 手机上的 `/` 补全。桌面那套是键盘菜单(↑↓ + 回车),手机没有键盘导航,所以做成
-// 输入框上方的一条横向候选带:点一下把 `/名字 ` 填进输入框,原样发下去由 CLI 自己
-// 认 —— harness 不写任何提示词,也不截走这条消息。
+// 输入框上方的一条横向候选带:点一下把 `/名字 ` 填进输入框，发送时由
+// server 按当前执行器的扫描结果注入准确 SKILL.md，原始消息仍保留。
 //
 // 只在「整段正文就是一个斜杠 token」时出现,句子中间的 `/` 不打扰打字。
 
@@ -79,7 +79,7 @@ export function SkillSuggestions({
   return (
     <View style={{ gap: 6 }}>
       <Text style={{ color: theme.faint, fontSize: 11 }}>
-        已装技能 · 点一下补进输入框,原样发给 CLI 自己认
+        已装技能 · 点一下补进输入框，发送时自动调用
       </Text>
       <ScrollView
         horizontal

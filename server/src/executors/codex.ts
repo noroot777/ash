@@ -26,7 +26,7 @@ export class CodexExecutor implements AgentExecutor {
   readonly label: string;
   // 供应商的 env 前缀,token 已换成占位符 —— 存进 sessions.relay_env 供恢复命令展示。
   readonly relayEnvHint?: string;
-  private target: ExecTarget;
+  readonly target: ExecTarget;
   private bin: string;
   private model?: string;
   private extraArgs: string[];

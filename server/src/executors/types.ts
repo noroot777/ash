@@ -79,6 +79,7 @@ export interface ExecutorBuildOpts {
 export interface AgentExecutor {
   readonly type: AgentType;
   readonly label: string; // e.g. "claude@local·opus"
+  readonly target: ExecTarget;
   // 挂了供应商时,恢复命令要带的 env 前缀(token 已换成 <你的key> 占位符)。
   // 存进 sessions.relay_env —— 否则复制出来的命令会走 CLI 自己的官方账号。
   readonly relayEnvHint?: string;

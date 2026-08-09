@@ -27,6 +27,7 @@ import { recordTurnBaseline } from "./turn-baseline.js";
 import { recordTurnStart } from "./turn-output.js";
 import { railStalledAtRun } from "./workflows.js";
 import { freeReviewReminder, isFreeReviewTurn } from "./free-workflow.js";
+import { withSkillInvocation } from "./skills.js";
 // Single tasks run headless — nobody can answer a mid-run prompt. Tell the agent
 // to act autonomously rather than stall waiting for confirmation; if it genuinely
 // needs input it can still ask, and the user replies via continueTask (resume).
@@ -258,7 +259,7 @@ export async function runTask(taskId: string): Promise<void> {
     const autoTitle = !!task.autoTitle;
     const TITLE_HINT =
       "请在正式开始前，第一行只输出：标题：<不超过14字、概括本次任务的简短标题>，然后换行，再正常完成下面的任务。\n\n任务：\n";
-    const objective = task.body?.trim() || task.title;
+    const objective = withSkillInvocation({ agentType, cwd: ws.path, text: task.body?.trim() || task.title, remote: ex.target.kind === "ssh" });
     // 团队执行者多一段前言(卡住走 ask_question 直达调度者、别自己扩张边界)。
     // 只拼进 prompt,不写进 tasks.body —— body 是调度者给的需求正文,界面展示那份。
     const teamPreamble = await workerPreambleFor(task);
@@ -537,9 +538,9 @@ export async function continueTask(
     // 「有产出却没交卷」的探针跟上面那张照片是两回事:它只管通知怎么措辞,所以**每一轮都记**
     // (系统续跑、队列推进的回合同样会漏交卷)。详见 turn-output.ts。
     await recordTurnStart(taskId, cwd);
-
     const invited = !prev; // first time this agent is pulled into the task
     const userTurnText = userText + attachmentsPrompt(opts.attachments);
+    const promptedUserTurnText = withSkillInvocation({ agentType: agent, cwd, text: userTurnText, remote: ex.target.kind === "ssh" });
     const sharedTeamWorker = !task.useWorktree && (await workerPreambleFor(task)).length > 0;
     // 验证回合（旧的独立审查任务，或这个任务自己身上的就地验证轮）：完成协议的
     // 验收那一句要换掉 —— 这一轮的产出是结论和证据，不是「这个任务可以合并了」。
@@ -567,7 +568,7 @@ export async function continueTask(
       (invited ? COLLAB_INVITE : "") +
       (invited && task.body.trim() ? TASK_BRIEF(task.body) : "") +
       peerNotice +
-      userTurnText +
+      promptedUserTurnText +
       (workspaceReset ? WORKSPACE_RESET(cwd) : "") +
       (followUpFrom
         ? FOLLOW_UP_REMINDER(taskId, followUpFrom, sharedTeamWorker, verifying, railNote, freeWorkflow)

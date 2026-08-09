@@ -221,7 +221,7 @@ export const api = {
   detectAgents: (): Promise<DetectedAgent[]> => req("/agents/detect").then(j),
 
   // 某个执行器在某个项目下已装的 `/技能`。手机只拿来做补全:选中一条就是把
-  // `/名字` 写进输入框,原样发下去由 CLI 自己认,harness 不改写。
+  // `/名字` 写进输入框，原文保留；server 运行前会注入对应 SKILL.md。
   skills: (query: {
     agentType: string;
     projectId?: string;

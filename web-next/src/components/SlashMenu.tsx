@@ -41,7 +41,7 @@ export function SlashMenu({
       {items.map((item, index) => (
         <Fragment key={`${item.kind}:${item.command}`}>
           {index === firstSkillIndex && firstSkillIndex > 0 && (
-            <small className="slash-menu-divider">已装技能 · 原样发给 CLI 自己认</small>
+            <small className="slash-menu-divider">已装技能 · 发送时自动调用</small>
           )}
           <button
             ref={index === selectedIndex ? selectedRef : undefined}

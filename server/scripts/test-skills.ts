@@ -1,5 +1,5 @@
 // `/` 技能补全的数据层回归测试(不起 CLI,读写全关在 mkdtemp 里):
-//   listSkills —— 扫盘、软链、跨 CLI 去重角标、ssh 执行器不假装
+//   listSkills / withSkillInvocation —— 扫盘、调用注入、ssh 执行器不假装
 //   指纹 —— 改 SKILL.md 的 description,不重启也要跟着变
 //   calibrateSkills —— init 事件与磁盘取**并集**,内置命令走白名单
 //   scanOverview —— 设置页按已注册执行器逐行列出「谁扫到了什么」
@@ -12,7 +12,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { calibrateSkills, listSkills, resetSkillCache, scanOverview } from "../src/skills.js";
+import { calibrateSkills, listSkills, resetSkillCache, scanOverview, withSkillInvocation } from "../src/skills.js";
 
 const root = mkdtempSync(join(tmpdir(), "harness-skills-"));
 process.on("exit", () => rmSync(root, { recursive: true, force: true }));
@@ -41,6 +41,15 @@ assert.equal(find(list, ALPHA)?.command, `/${ALPHA}`, "项目级技能应该出�
 assert.equal(find(list, ALPHA)?.description, "第一版描述");
 assert.equal(find(list, ALPHA)?.source, "project");
 assert.equal(list.authoritative, false, "没有 init 校准时不能自称权威");
+
+// 无人值守/完成协议前言会让 slash 不再位于 prompt 开头，所以必须显式指向 SKILL.md。
+const invoked = withSkillInvocation({ agentType: "claude", cwd: root, text: `/${ALPHA} 做一件事` });
+assert.match(invoked, /已选择 skill/);
+assert.ok(invoked.includes(JSON.stringify(join(find(list, ALPHA)!.realPath!, "SKILL.md"))), "命中已安装 skill 要注入准确 SKILL.md 路径");
+assert.ok(invoked.endsWith(`/${ALPHA} 做一件事`), "原始命令与参数仍然保留");
+assert.equal(withSkillInvocation({ agentType: "claude", cwd: root, text: `请用 /${ALPHA}` }), `请用 /${ALPHA}`, "只认正文开头的显式调用");
+assert.equal(withSkillInvocation({ agentType: "claude", cwd: root, text: "/zz-not-installed 做事" }), "/zz-not-installed 做事", "未安装命令不改写");
+assert.equal(withSkillInvocation({ agentType: "claude", cwd: root, text: `/${ALPHA} 做事`, remote: true }), `/${ALPHA} 做事`, "ssh 不能注入本机路径");
 
 // ── 热加:不清缓存、不重启,新加的技能目录也要出现(指纹变了就重扫) ─────────
 
@@ -82,6 +91,8 @@ assert.ok(find(list, "review"), "白名单里的内置斜杠命令要放行");
 assert.ok(!find(list, "compact"), "白名单之外的内置命令不进技能菜单");
 assert.ok(!find(list, "cost"), "白名单之外的内置命令不进技能菜单");
 assert.equal(find(list, ALPHA)?.description, "改过的描述", "磁盘上有的以磁盘为准,别被 init 覆盖成占位文案");
+const builtinInvocation = withSkillInvocation({ agentType: "claude", cwd: root, text: "/review 检查改动" });
+assert.match(builtinInvocation, /CLI 已报告可用的内置 skill/, "没有磁盘路径的内置 skill 也要显式调用");
 
 // ── 校准按 cwd 前缀认亲:任务多半跑在 <repo>/.worktrees/<id> 里 ───────────────
 

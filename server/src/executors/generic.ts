@@ -22,7 +22,7 @@ export class GenericCliExecutor implements AgentExecutor {
   readonly label: string;
   readonly relayEnvHint?: string;
   private spec: CliSpec;
-  private target: ExecTarget;
+  readonly target: ExecTarget;
   private bin: string;
   private model?: string;
   private extraArgs: string[];

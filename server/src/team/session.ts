@@ -44,6 +44,7 @@ import { RUNS_DIR } from "../paths.js";
 import { appendSessionTrace, writeTurn, writeTurnEnd, writeRunError } from "../transcript.js";
 import { recordSessionUsageEvent, setSessionContext } from "../usage.js";
 import { LEAD_PREAMBLE, LEAD_NUDGE, LEAD_RESUMED, LEAD_WORKSPACE_RESET } from "./prompts.js";
+import { withSkillInvocation } from "../skills.js";
 
 // 空闲多久回收进程(0/负数 = 永不回收)。测试用 HARNESS_TEAM_IDLE_MS=5000。
 const IDLE_MS = Number(process.env.HARNESS_TEAM_IDLE_MS ?? 30 * 60_000);
@@ -69,6 +70,7 @@ interface Lead {
   model: string | null;
   reasoningEffort: string | null;
   cwd: string;
+  remote: boolean;
   handle: ResidentHandle;
   out: WriteStream;
   busy: boolean;
@@ -204,6 +206,7 @@ function push(lead: Lead, text: string, kind: Kind): void {
   if (!text.trim()) return;
   clearIdle(lead);
   if (kind === "user") {
+    const promptedText = withSkillInvocation({ agentType: lead.agentType, cwd: lead.cwd, text, remote: lead.remote });
     // 见头注 ②③:不打断的话用户要干等一整个回合,那就不是 steering 了。
     if (lead.busy) {
       lead.handle.interrupt();
@@ -212,7 +215,7 @@ function push(lead: Lead, text: string, kind: Kind): void {
     // 你→ 的插话只写 .md(实时由客户端乐观显示),跟单任务 reply 一致。
     const at = now();
     writeTurn(lead.out, { t: "user", agent: lead.agentType, text }, at);
-    lead.handle.send(text);
+    lead.handle.send(promptedText);
     void beginTurn(lead, at);
     return;
   }
@@ -252,15 +255,16 @@ async function openLead(taskId: string, rawText: string, kind: Kind): Promise<Le
     .sort((a, b) => b.startedAt.localeCompare(a.startedAt))
     .at(0);
   const resuming = !!prev?.cliSessionId;
-  const objective = task.body?.trim() || task.title;
+  const objective = withSkillInvocation({ agentType: cfg.lead, cwd: ws.path, text: task.body?.trim() || task.title, remote: ex.target.kind === "ssh" });
   const text = kind === "start" && resuming ? LEAD_NUDGE : rawText;
+  const promptedText = kind === "user" ? withSkillInvocation({ agentType: cfg.lead, cwd: ws.path, text, remote: ex.target.kind === "ssh" }) : text;
   // 接回:上下文都在 CLI 会话里,只补一句「你被中断过」。全新开台:前言 + 目标
   // (哪怕这次是被一条消息带起来的,前言也必须有 —— 否则它不知道自己是调度者)。
   // ws.fresh = 原 worktree 连分支一起没了、这次是重建的空目录,接回的调度者记忆
   // 还在但文件已经不在,必须打断这个连续性。
   const message = resuming
-    ? LEAD_RESUMED + text + (ws.fresh ? LEAD_WORKSPACE_RESET(ws.path) : "")
-    : LEAD_PREAMBLE(taskId, cfg.worker) + objective + (text ? `\n\n【新消息】${text}` : "");
+    ? LEAD_RESUMED + promptedText + (ws.fresh ? LEAD_WORKSPACE_RESET(ws.path) : "")
+    : LEAD_PREAMBLE(taskId, cfg.worker) + objective + (promptedText ? `\n\n【新消息】${promptedText}` : "");
 
   const turnStart = now();
   const sessId = resuming ? prev!.id : id();
@@ -306,6 +310,7 @@ async function openLead(taskId: string, rawText: string, kind: Kind): Promise<Le
     model: task.model || cfg.leadModel || null,
     reasoningEffort: task.reasoningEffort || cfg.leadReasoningEffort || null,
     cwd: ws.path,
+    remote: ex.target.kind === "ssh",
     handle,
     out: createWriteStream(join(runDir, `${sessId}.md`), { flags: "a" }),
     busy: false,

@@ -1,5 +1,5 @@
 // CLI 技能(输入框的 `/` 补全)的数据形状。
-// harness 在这件事上一行提示词都不写：`/名字` 原样留在 prompt 里，CLI 自己认。
+// `/{名字}` 原样留在正文里；server 运行前会用这份清单注入准确 SKILL.md。
 //
 // 从 `index.ts` 拆出来只有一个理由:那个文件到 700 行了。类型经 index 原样 re-export,
 // 调用方仍从 `@harness/shared` 拿(**只能是 type-only 转发**——server 直接跑 .ts 源码,

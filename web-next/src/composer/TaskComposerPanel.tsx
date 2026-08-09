@@ -253,7 +253,7 @@ export function TaskComposerPanel({
       applySlash(harness.mode);
       return;
     }
-    // 技能只是补全:补进正文,原样跟着任务正文发下去。
+    // 技能只是补全:命令留在正文里，server 运行前据此注入 SKILL.md。
     setBody(`${item.command} `);
     setSlashIndex(0);
   };

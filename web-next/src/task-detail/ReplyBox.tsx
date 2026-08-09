@@ -54,8 +54,8 @@ export function ReplyBox({
     resetKey?: number;
     items: { command: string; label: string; hint?: string }[];
   };
-  // 当前执行器已装的技能。选中只把 `/名字` 补进正文——harness 不替它写任何提示词,
-  // 也不把这条文本当成派生命令截走。
+  // 当前执行器已装的技能。选中只把 `/名字` 补进正文，不把它当派生命令截走；
+  // server 会在运行这一回合前注入对应 SKILL.md。
   skills?: SkillEntry[];
   // 执行器在 ssh 那头:技能装在远端盘上,本机扫不到。这时候如实说一句,
   // 别让空菜单看起来像「这台机器没装技能」。
@@ -186,7 +186,7 @@ export function ReplyBox({
 
   const pickCommand = (item: SlashItem) => {
     // 技能不是派生命令:它只是**补全**。`/名字` 原样留在正文里跟着这一轮发下去,
-    // 由 CLI 自己认——harness 一行提示词都不写,所以这里绝不能把它截走。
+    // server 会据此注入 SKILL.md，所以这里绝不能把它截走。
     if (item.kind === "skill") {
       const next = `${item.command} `;
       setValue(next);

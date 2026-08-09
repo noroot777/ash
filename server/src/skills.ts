@@ -1,8 +1,8 @@
 // 「这个 CLI 自己已经装了哪些技能」——供对话框/新建任务里的 `/` 补全用。
 //
-// harness 在这件事上**一行提示词都不写**:技能是 claude/codex 自带的能力,`/名字`
-// 原样留在 prompt 里发下去,CLI 自己认(claude 是 CLI 解析 slash;codex 是模型照着
-// 技能索引自己去读 SKILL.md)。这里只负责把「有哪些」露出来。
+// 菜单仍只把 `/{名字}` 补进正文；运行前则用同一份扫描结果把命中的
+// SKILL.md 精确路径注入 prompt。不能只指望 CLI/模型自己认 slash：harness 的无人
+// 值守、完成协议等前言会排在任务正文前，`/skill` 已经不是 CLI 的首条命令。
 //
 // 三层取数(取数永远是全量,3ms 不值得做 diff 协议):
 //  ① 全量扫盘 —— 唯一的取数方式,只在指纹对不上/强制刷新时发生
@@ -325,6 +325,29 @@ export function listSkills(opts: {
     authoritative: !!calibration,
     skills,
   };
+}
+
+/**
+ * 把用户放在正文开头的 `/{技能}` 变成确定调用。tasks.body 不改，只改本回合 prompt。
+ * 只认当前执行器真实扫到的完整命令，所以 `/tmp/x` 和未安装名字不会被误改写。
+ */
+export function withSkillInvocation(opts: {
+  agentType: string;
+  cwd: string;
+  text: string;
+  remote?: boolean;
+}): string {
+  const command = /^\s*(\/\S+)(?=\s|$)/.exec(opts.text)?.[1];
+  if (!command) return opts.text;
+  const skill = listSkills(opts).skills.find((entry) => entry.command === command);
+  if (!skill) return opts.text;
+
+  const source = skill.realPath
+    ? `开始其他工作前，必须完整读取并遵循 ${JSON.stringify(join(skill.realPath, "SKILL.md"))}。`
+    : `这是 ${opts.agentType} CLI 已报告可用的内置 skill；必须按 ${JSON.stringify(command)} 执行。`;
+  const directive = `【已选择 skill：${command}】用户明确要求本回合调用该 skill。${source}`
+    + `\n${command} 后的文本是交给该 skill 的任务参数；不得把这个命令当作普通正文略过。`;
+  return `${directive}\n\n${opts.text}`;
 }
 
 /** server 启动预热:把常用 CLI 的清单先扫进内存,免得第一次敲 `/` 等 IO。 */
