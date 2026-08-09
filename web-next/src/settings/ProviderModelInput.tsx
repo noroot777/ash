@@ -22,8 +22,8 @@ export { clearProviderModelCache } from "../lib/modelCatalog.ts";
  * 完整一份，筛选是浮层里另一个输入框的事，手填目录之外的模型名也仍然支持。
  *
  * 传了 `effort` 就在旁边并排一颗独立的智能水平胶囊（EffortPicker）：模型和档位是
- * 两件事，换模型不顺手把档位改掉；新模型不支持已选档位时由那颗胶囊出提示，让用户
- * 自己决定改哪一边。
+ * 两件事，换模型不顺手把档位改掉，但选定模型后会向右打开档位；新模型不支持已选值
+ * 时由那颗胶囊出提示，让用户自己决定改哪一边。
  */
 export function ProviderModelInput({
   type,
@@ -53,6 +53,7 @@ export function ProviderModelInput({
     provider ? (cachedProviderModels(provider) ? "ready" : "loading") : "idle",
   );
   const [error, setError] = useState("");
+  const [effortOpen, setEffortOpen] = useState(false);
 
   const pinnedMode = provider?.modelListMode === "pinned";
 
@@ -130,6 +131,7 @@ export function ProviderModelInput({
   const commit = (next: string) => {
     onChange(next);
     onCommit?.(next);
+    if (effort) setEffortOpen(true);
   };
 
   const clear = () => commit("");
@@ -159,6 +161,8 @@ export function ProviderModelInput({
             model={value || provider?.model || null}
             value={effort.value}
             disabled={disabled}
+            open={effortOpen}
+            onOpenChange={setEffortOpen}
             onChange={effort.onChange}
           />
         )}

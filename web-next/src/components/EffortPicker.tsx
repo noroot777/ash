@@ -33,6 +33,8 @@ export function EffortPicker({
   variant = "field",
   label = "智能水平",
   followLabel = "跟随执行器",
+  open: controlledOpen,
+  onOpenChange,
   onChange,
 }: {
   /** null = 还不知道会落到哪个 CLI，按通用档位给候选。 */
@@ -49,9 +51,12 @@ export function EffortPicker({
   label?: string;
   /** 「不覆盖」那一行的措辞：执行器设置页里跟随的是 CLI 而不是执行器。 */
   followLabel?: string;
+  /** 传入后由外层控制展开态，用于前一段选定后向右接续打开。 */
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
   onChange: (value: string) => void;
 }) {
-  const [open, setOpen] = useState(false);
+  const [localOpen, setLocalOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const efforts = useMemo(() => {
@@ -63,25 +68,30 @@ export function EffortPicker({
   const supported = !type || isReasoningEffortSupported(type, model, value);
   const place = usePanelPlacement(triggerRef, panelRef, { minWidth: 200, minHeight: 120, fallbackHeight: 220 });
 
+  // 这个模型没有档位可选：胶囊只作说明用（选过的值仍要显示，否则用户看不见要清什么）。
+  const empty = efforts.length === 0;
+  const pickable = !disabled && (!empty || !!value);
+  const open = (controlledOpen ?? localOpen) && pickable;
+  const changeOpen = (next: boolean) => {
+    if (controlledOpen === undefined) setLocalOpen(next);
+    onOpenChange?.(next);
+  };
+  const hint = !supported
+    ? `${model || "当前模型"} 不支持 ${value}`
+    : empty
+      ? "该模型没有可调档位"
+      : null;
+
   useDismissable({
     enabled: open,
     containerRef: panelRef,
-    onClose: () => setOpen(false),
+    onClose: () => changeOpen(false),
     restoreFocusRef: triggerRef,
   });
 
   useLayoutEffect(() => {
     if (open) panelRef.current?.focus();
   }, [open]);
-
-  // 这个模型没有档位可选：胶囊只作说明用（选过的值仍要显示，否则用户看不见要清什么）。
-  const empty = efforts.length === 0;
-  const pickable = !disabled && (!empty || !!value);
-  const hint = !supported
-    ? `${model || "当前模型"} 不支持 ${value}`
-    : empty
-      ? "该模型没有可调档位"
-      : null;
 
   const rows = [{ value: "", label: followLabel, detail: "不指定，由上游决定" }, ...efforts.map((effort) => ({
     value: effort,
@@ -110,7 +120,7 @@ export function EffortPicker({
           role="option"
           aria-selected={row.value === value}
           key={row.value || "follow"}
-          onClick={() => { onChange(row.value); setOpen(false); triggerRef.current?.focus(); }}
+          onClick={() => { onChange(row.value); changeOpen(false); triggerRef.current?.focus(); }}
         >
           <b>{row.label}</b>
           {row.detail && <span>{row.detail}</span>}
@@ -123,7 +133,7 @@ export function EffortPicker({
           role="option"
           aria-selected
           className="is-unsupported"
-          onClick={() => { onChange(""); setOpen(false); triggerRef.current?.focus(); }}
+          onClick={() => { onChange(""); changeOpen(false); triggerRef.current?.focus(); }}
         >
           <b>{value}</b>
           <span>当前设置 · 点此清除</span>
@@ -142,7 +152,7 @@ export function EffortPicker({
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-label={`${label}：${value || followLabel}${supported ? "" : "（当前模型不支持）"}；点击更改`}
-        onClick={() => setOpen((current) => !current)}
+        onClick={() => changeOpen(!open)}
       >
         {!supported && <Warning size={11} weight="fill" aria-hidden="true" />}
         <em>{value || (empty ? "无档位" : "跟随")}</em>

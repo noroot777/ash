@@ -81,34 +81,43 @@ export function ExecutionConfig({
   // 模型和强度是两件独立的事：换模型不静默改强度，对不上就在下面写清楚，让用户
   // 自己决定改哪一边。静默清空会让人以为自己没点中。
   const effortSupported = isReasoningEffortSupported(selection.agentType, model, reasoningEffort);
-  const commitModel = (next: string) => onModelChange(next);
+  const commitModel = (next: string) => {
+    onModelChange(next);
+    const canContinue = reasoningEffortsFor(selection.agentType, next).length > 0 || !!reasoningEffort;
+    setPicker(canContinue ? "effort" : null);
+  };
   const executorItems = useMemo(
     () => executorOptions(types, profiles, selection),
     [types, profiles, selection],
   );
 
-  const openModel = () => {
-    setCustomModel(model);
+  const openModelFor = (nextSelection: ExecutorSelection, nextModel: string) => {
+    const nextProfile = profileForSelection(nextSelection, profiles);
+    const nextProvider = nextProfile?.providerId
+      ? providers.find((item) => item.id === nextProfile.providerId)
+      : undefined;
+    setCustomModel(nextModel);
     setPicker("model");
     setModelError(null);
-    if (!provider) {
+    if (!nextProvider) {
       setProviderModels(null);
       return;
     }
-    const cached = providerModelCache.get(provider.id);
+    const cached = providerModelCache.get(nextProvider.id);
     if (cached) {
       setProviderModels(cached);
       return;
     }
     setProviderModels(null);
     api
-      .probeModels({ protocol: provider.protocol, baseUrl: provider.baseUrl, id: provider.id })
+      .probeModels({ protocol: nextProvider.protocol, baseUrl: nextProvider.baseUrl, id: nextProvider.id })
       .then(({ models }) => {
-        providerModelCache.set(provider.id, models);
+        providerModelCache.set(nextProvider.id, models);
         setProviderModels(models);
       })
       .catch((error) => setModelError(error instanceof Error ? error.message : String(error)));
   };
+  const openModel = () => openModelFor(selection, model);
 
   const options = picker === "executor"
     ? executorItems
@@ -137,8 +146,8 @@ export function ExecutionConfig({
         <Ionicons name={icon} size={15} color={theme.accent} />
         <Text style={{ color: theme.faint, fontSize: 11, fontFamily: fonts.mono }}>{role}</Text>
       </View>
-      {/* 跟 web 同一副形状：一颗三段胶囊「智能体 · 模型 · 智能水平」，一段管一件事。
-          三段挤一行在手机上偏窄，所以中间那段（模型名最长）多分一点宽，各自单行省略。 */}
+      {/* 跟 web 同一副形状：一颗三段胶囊「智能体 · 模型 · 智能水平」，选定前一段后
+          默认向右接着打开后一段。手机上给模型多一点宽，各段都保持单行省略。 */}
       <View
         style={{
           flexDirection: "row",
@@ -189,10 +198,13 @@ export function ExecutionConfig({
                 onReasoningEffortChange("");
               }
               onSelectionChange(selected);
+              openModelFor(selected, sameExecutor(selected, selection) ? model : "");
             } else if (picker === "model") commitModel(next);
             else onReasoningEffortChange(next);
           }}
-          onClose={() => setPicker(null)}
+          // 选中前一段时会先把 picker 推到后一段；只关闭仍停在原段的 sheet，避免
+          // SelectSheet 随后的默认关闭把刚接续打开的下一段覆盖掉。
+          onClose={() => setPicker((current) => current === picker ? null : current)}
           header={picker === "model" ? (
             <View style={{ gap: 8 }}>
               <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
@@ -205,14 +217,12 @@ export function ExecutionConfig({
                   style={{ flex: 1, fontFamily: fonts.mono, fontSize: 13 }}
                   onSubmitEditing={() => {
                     commitModel(customModel.trim());
-                    setPicker(null);
                   }}
                 />
                 <Button
                   label="使用"
                   onPress={() => {
                     commitModel(customModel.trim());
-                    setPicker(null);
                   }}
                 />
               </View>

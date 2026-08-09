@@ -458,8 +458,8 @@ export function ReplyBox({
           >
             <Clock size={14} />
           </button>
-          {/* 一颗三段胶囊：智能体 · 模型 · 智能水平。三段各管一件事，点哪段只改哪段，
-              跟新建面板、工作流站点用的是同一副形状（components/RunTargetPicker.tsx）。 */}
+          {/* 一颗三段胶囊：智能体 · 模型 · 智能水平。可单独改任一段，也可选完前一段后
+              向右接着配置；跟新建面板、工作流站点用同一组件。 */}
           <RunTargetPicker
             label="本回合由谁来跑"
             types={registeredTypes.length ? registeredTypes : [activeAgent]}

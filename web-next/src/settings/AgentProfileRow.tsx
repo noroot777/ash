@@ -31,6 +31,7 @@ export function AgentProfileRow({
   const [busy, setBusy] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [editingName, setEditingName] = useState(false);
+  const [effortOpen, setEffortOpen] = useState(false);
   const [nameDraft, setNameDraft] = useState(profile.name);
   const cancelNameCommit = useRef(false);
   const providerOptions = providersForAgent(profile.type, providers);
@@ -166,7 +167,11 @@ export function AgentProfileRow({
             // 换模型不动档位：对不上时由旁边那颗智能水平胶囊出提示，让用户自己决定改哪边。
             // 以前这里静默归一，结果是「我明明选了 ultra，回头一看变成空的」。
             onChange={(model) => onChange({ ...profile, model: model || undefined })}
-            onCommit={(model) => void patch({ model })}
+            onCommit={(model) => {
+              void patch({ model }).then((saved) => {
+                if (saved) setEffortOpen(true);
+              });
+            }}
           />
         </div>
         <div className="agent-profile-cell">
@@ -177,6 +182,8 @@ export function AgentProfileRow({
             disabled={busy}
             label={`${profile.name} 的智能水平`}
             followLabel="跟随 CLI"
+            open={effortOpen}
+            onOpenChange={setEffortOpen}
             onChange={(reasoningEffort) => void patch({ reasoningEffort })}
           />
         </div>
