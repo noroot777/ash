@@ -110,6 +110,77 @@ try {
     { status: "reviewing", checkMode: "logic", retryLimit: 2 },
   ], "confirmed done 应按预约配置自动派出且只派一份审查");
 
+  // 删除审查者时必须同步 disarm：否则 UI 仍显示已预约，结算因 reviewerId 为空静默不派审。
+  await createTasks([{
+    id: "free-deleted-reviewer-task", projectId: "p", groupId: null, parentId: null,
+    title: "free deleted reviewer", body: "test", mode: "single", status: "running", priority: "none",
+    labels: "[]", dependsOn: "[]", resumeDependsOn: "[]", agentType: "codex",
+    executorId: "reviewer-executor", model: null, reasoningEffort: null, autoTitle: false,
+    duet: null, team: null, reportBack: false, scheduleId: null,
+    createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    useWorktree: false, worktreeBase: null, originTaskId: null, workflowMode: "free",
+  }]);
+  const disposableReviewerRes = await api.request("/reviewer-profiles", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ name: "Disposable", agentType: "codex", executorId: "reviewer-executor", model: null, reasoningEffort: "high" }),
+  });
+  assert.equal(disposableReviewerRes.status, 201);
+  const disposableReviewer = await disposableReviewerRes.json() as { id: string };
+  const reservedDisposable = await api.request(
+    "/tasks/free-deleted-reviewer-task/free-workflow/review-reservation",
+    { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ reviewerId: disposableReviewer.id, checkMode: "logic", retryLimit: 1 }) },
+  );
+  assert.equal(reservedDisposable.status, 200);
+  assert.equal((await reservedDisposable.json() as { reviewReservation: { armed: boolean } }).reviewReservation.armed, true);
+
+  const deletedReviewer = await api.request(`/reviewer-profiles/${disposableReviewer.id}`, { method: "DELETE" });
+  assert.equal(deletedReviewer.status, 200);
+  const afterDeleteState = await api.request("/tasks/free-deleted-reviewer-task/free-workflow").then((response) => response.json()) as {
+    reviewReservation: { armed: boolean; reviewerId: string | null };
+  };
+  assert.deepEqual(afterDeleteState.reviewReservation, { armed: false, reviewerId: null, checkMode: null, retryLimit: null },
+    "删除审查者后预约必须取消，不能留下 armed 且 reviewerId 为空");
+
+  await db.update(tasks).set({ status: "done" }).where(eq(tasks.id, "free-deleted-reviewer-task"));
+  assert.equal(claimTurn("free-deleted-reviewer-task"), true);
+  await handleFreeWorkflowSettlement("free-deleted-reviewer-task", "done", true, true);
+  const afterDeleteSettle = await api.request("/tasks/free-deleted-reviewer-task/free-workflow").then((response) => response.json()) as {
+    reviewReservation: { armed: boolean }; reviews: unknown[];
+  };
+  assert.equal(afterDeleteSettle.reviewReservation.armed, false);
+  assert.deepEqual(afterDeleteSettle.reviews, [], "审查者已删除时 confirmed done 不得静默保留空预约，也不应派出审查");
+
+  // 结算守底：历史脏数据 armed=true 且 reviewerId=null 时必须 disarm 并留痕，不能静默跳过。
+  await createTasks([{
+    id: "free-orphan-arm-task", projectId: "p", groupId: null, parentId: null,
+    title: "free orphan arm", body: "test", mode: "single", status: "done", priority: "none",
+    labels: "[]", dependsOn: "[]", resumeDependsOn: "[]", agentType: "codex",
+    executorId: "reviewer-executor", model: null, reasoningEffort: null, autoTitle: false,
+    duet: null, team: null, reportBack: false, scheduleId: null,
+    createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    useWorktree: false, worktreeBase: null, originTaskId: null, workflowMode: "free",
+  }]);
+  const { freeWorkflowStates } = await import("../src/db/schema.js");
+  await db.insert(freeWorkflowStates).values({
+    taskId: "free-orphan-arm-task", selectedReviewerId: null, reviewArmed: true,
+    reviewCheckMode: "logic", reviewRetryLimit: 1, mergeStatus: "idle", mergeMessage: null, mergedAt: null,
+    updatedAt: new Date().toISOString(),
+  });
+  assert.equal(
+    (await api.request("/tasks/free-orphan-arm-task/free-workflow").then((response) => response.json()) as { reviewReservation: { armed: boolean } }).reviewReservation.armed,
+    false,
+    "读状态时 armed 且无 reviewerId 不得对外表现为已预约",
+  );
+  assert.equal(claimTurn("free-orphan-arm-task"), true);
+  await handleFreeWorkflowSettlement("free-orphan-arm-task", "done", true, true);
+  const orphanAfter = await api.request("/tasks/free-orphan-arm-task/free-workflow").then((response) => response.json()) as {
+    reviewReservation: { armed: boolean }; reviews: unknown[];
+  };
+  assert.equal(orphanAfter.reviewReservation.armed, false);
+  assert.deepEqual(orphanAfter.reviews, [], "脏预约结算后应 disarm 且不派审");
+  const orphanRow = (await db.select().from(freeWorkflowStates).where(eq(freeWorkflowStates.taskId, "free-orphan-arm-task"))).at(0);
+  assert.equal(orphanRow?.reviewArmed, false, "结算守底应把 DB 里的 reviewArmed 清掉");
+
   const state = await api.request("/tasks/free-task/free-workflow");
   assert.equal(state.status, 200);
   assert.deepEqual((await state.json() as { reviews: unknown[] }).reviews, []);
@@ -186,6 +257,7 @@ try {
   console.log("✓ 默认 1 次自动复审的轮数语义正确");
   console.log("✓ 审查者 CRUD 与自由工作流初始状态可用");
   console.log("✓ 运行中可预约、覆盖、取消，失败保留且 confirmed done 后只自动派出一次");
+  console.log("✓ 删除审查者会取消预约；脏 armed 状态读路径与结算路径均不会静默失效");
   console.log("✓ 预览打开与关闭事件持久保留且按发生顺序返回");
   console.log("✓ backlog、旧 stage 与旧 accept 路径均被隔离");
   console.log("✓ 派生任务与起手式引用不能混入自由工作流");

@@ -26,6 +26,7 @@ import {
   tasks,
 } from "./db/schema.js";
 import { cleanupAcceptedTask, mergeTaskBranch } from "./git-accept.js";
+import { startReservedFreeReview } from "./free-review-reservations.js";
 import { recordFreePreviewEvent } from "./free-workflow-events.js";
 import { projectHealthLight } from "./git.js";
 import { continueWhenIdle } from "./runs.js";
@@ -313,18 +314,11 @@ export async function handleFreeWorkflowSettlement(
         armed: freeWorkflowStates.reviewArmed, reviewerId: freeWorkflowStates.selectedReviewerId,
         checkMode: freeWorkflowStates.reviewCheckMode, retryLimit: freeWorkflowStates.reviewRetryLimit,
       }).from(freeWorkflowStates).where(eq(freeWorkflowStates.taskId, taskId))).at(0);
-      if (reservation?.armed && reservation.reviewerId) {
-        try {
-          await startFreeReview(taskId, {
-            reviewerId: reservation.reviewerId, checkMode: checkMode(reservation.checkMode ?? "logic"),
-            retryLimit: retryLimit(reservation.retryLimit ?? 1),
-          });
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          await appendTaskTimeline(taskId, `完成后审查启动失败：${message}`);
-          bus.publish({ type: "task.review", taskId });
-        }
-      }
+      await startReservedFreeReview(taskId, reservation, (input) => startFreeReview(taskId, {
+        reviewerId: input.reviewerId,
+        checkMode: checkMode(input.checkMode ?? "logic"),
+        retryLimit: retryLimit(input.retryLimit ?? 1),
+      }));
     }
     return true;
   }
@@ -597,14 +591,16 @@ export async function freeWorkflowState(taskId: string): Promise<FreeWorkflowSta
     detail: event.detail,
     occurredAt: event.occurredAt,
   }));
+  const reservationReviewerId = state?.reviewArmed ? state.selectedReviewerId ?? null : null;
+  const reservationArmed = !!reservationReviewerId;
   return {
     taskId,
     selectedReviewerId: state?.selectedReviewerId ?? null,
     reviewReservation: {
-      armed: state?.reviewArmed ?? false,
-      reviewerId: state?.reviewArmed ? state.selectedReviewerId : null,
-      checkMode: state?.reviewArmed ? checkMode(state.reviewCheckMode ?? "logic") : null,
-      retryLimit: state?.reviewArmed ? retryLimit(state.reviewRetryLimit ?? 1) : null,
+      armed: reservationArmed,
+      reviewerId: reservationReviewerId,
+      checkMode: reservationArmed ? checkMode(state?.reviewCheckMode ?? "logic") : null,
+      retryLimit: reservationArmed ? retryLimit(state?.reviewRetryLimit ?? 1) : null,
     },
     preview: {
       running: !!preview,

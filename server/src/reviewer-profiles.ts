@@ -2,8 +2,10 @@ import type { AgentType, ReviewerProfile } from "@harness/shared";
 import { AGENT_TYPES } from "@harness/shared";
 import { desc, eq } from "drizzle-orm";
 import type { Hono } from "hono";
+import { bus } from "./bus.js";
 import { db } from "./db/index.js";
 import { agents, freeWorkflowStates, reviewerProfiles } from "./db/schema.js";
+import { appendTaskTimeline } from "./task-timeline.js";
 import { id, now } from "./util.js";
 
 type ReviewerRow = typeof reviewerProfiles.$inferSelect;
@@ -106,9 +108,23 @@ export function mountReviewerProfileRoutes(api: Hono): void {
     const profileId = c.req.param("id");
     const existing = (await db.select({ id: reviewerProfiles.id }).from(reviewerProfiles).where(eq(reviewerProfiles.id, profileId))).at(0);
     if (!existing) return c.json({ error: "审查者不存在" }, 404);
+    // 先摘掉引用再删配置：预约态必须同步 disarm，否则 UI 仍显示「已预约」而结算因 reviewerId 为空静默不派审。
+    const affected = await db.select({
+      taskId: freeWorkflowStates.taskId,
+      reviewArmed: freeWorkflowStates.reviewArmed,
+    }).from(freeWorkflowStates).where(eq(freeWorkflowStates.selectedReviewerId, profileId));
+    const at = now();
+    await db.update(freeWorkflowStates).set({
+      selectedReviewerId: null,
+      reviewArmed: false,
+      updatedAt: at,
+    }).where(eq(freeWorkflowStates.selectedReviewerId, profileId));
     await db.delete(reviewerProfiles).where(eq(reviewerProfiles.id, profileId));
-    await db.update(freeWorkflowStates).set({ selectedReviewerId: null, updatedAt: now() })
-      .where(eq(freeWorkflowStates.selectedReviewerId, profileId));
+    for (const row of affected) {
+      if (!row.reviewArmed) continue;
+      await appendTaskTimeline(row.taskId, "完成后审查预约已取消：所选审查者配置已被删除。");
+      bus.publish({ type: "task.review", taskId: row.taskId });
+    }
     return c.json({ deleted: true });
   });
 }
