@@ -47,7 +47,9 @@ const invoked = withSkillInvocation({ agentType: "claude", cwd: root, text: `/${
 assert.match(invoked, /已选择 skill/);
 assert.ok(invoked.includes(JSON.stringify(join(find(list, ALPHA)!.realPath!, "SKILL.md"))), "命中已安装 skill 要注入准确 SKILL.md 路径");
 assert.ok(invoked.endsWith(`/${ALPHA} 做一件事`), "原始命令与参数仍然保留");
-assert.equal(withSkillInvocation({ agentType: "claude", cwd: root, text: `请用 /${ALPHA}` }), `请用 /${ALPHA}`, "只认正文开头的显式调用");
+assert.equal(withSkillInvocation({ agentType: "claude", cwd: root, text: `请用 /${ALPHA}` }), `请用 /${ALPHA}`, "句子中间的 slash 不当作显式调用");
+const trailingInvocation = withSkillInvocation({ agentType: "claude", cwd: root, text: `长段任务需求\n/${ALPHA}` });
+assert.match(trailingInvocation, /已选择 skill/, "正文末尾独立一行的 skill 也必须调用");
 assert.equal(withSkillInvocation({ agentType: "claude", cwd: root, text: "/zz-not-installed 做事" }), "/zz-not-installed 做事", "未安装命令不改写");
 assert.equal(withSkillInvocation({ agentType: "claude", cwd: root, text: `/${ALPHA} 做事`, remote: true }), `/${ALPHA} 做事`, "ssh 不能注入本机路径");
 
@@ -56,6 +58,8 @@ assert.equal(withSkillInvocation({ agentType: "claude", cwd: root, text: `/${ALP
 writeSkill("claude", BETA, "后来才加的");
 list = listSkills({ agentType: "claude", cwd: root });
 assert.ok(find(list, BETA), "新加的技能目录必须不重启就能出现");
+const multiple = withSkillInvocation({ agentType: "claude", cwd: root, text: `/${ALPHA}\n完成任务\n/${BETA}` });
+assert.ok(multiple.includes(`- /${ALPHA}：`) && multiple.includes(`- /${BETA}：`), "同一任务声明多个 skill 时要全部调用");
 
 // ── 指纹逐文件 stat:只改 SKILL.md 内容(根目录 mtime 不变)也要跟着变 ────────
 // 这是「改 description 菜单永远显示旧文案」那个 bug 的回归用例。

@@ -328,8 +328,8 @@ export function listSkills(opts: {
 }
 
 /**
- * 把用户放在正文开头的 `/{技能}` 变成确定调用。tasks.body 不改，只改本回合 prompt。
- * 只认当前执行器真实扫到的完整命令，所以 `/tmp/x` 和未安装名字不会被误改写。
+ * 把用户放在任意独立行开头的 `/{技能}` 变成确定调用。tasks.body 不改，只改本回合 prompt。
+ * 只认当前执行器真实扫到的完整命令，所以正文中的路径和未安装名字不会被误改写。
  */
 export function withSkillInvocation(opts: {
   agentType: string;
@@ -337,16 +337,18 @@ export function withSkillInvocation(opts: {
   text: string;
   remote?: boolean;
 }): string {
-  const command = /^\s*(\/\S+)(?=\s|$)/.exec(opts.text)?.[1];
-  if (!command) return opts.text;
-  const skill = listSkills(opts).skills.find((entry) => entry.command === command);
-  if (!skill) return opts.text;
+  const available = new Map(listSkills(opts).skills.map((skill) => [skill.command, skill]));
+  const selected = [...opts.text.matchAll(/(?:^|\n)[\t ]*(\/\S+)(?=\s|$)/g)]
+    .map((match) => available.get(match[1]!))
+    .filter((skill): skill is SkillEntry => !!skill)
+    .filter((skill, index, all) => all.findIndex((candidate) => candidate.command === skill.command) === index);
+  if (!selected.length) return opts.text;
 
-  const source = skill.realPath
-    ? `开始其他工作前，必须完整读取并遵循 ${JSON.stringify(join(skill.realPath, "SKILL.md"))}。`
-    : `这是 ${opts.agentType} CLI 已报告可用的内置 skill；必须按 ${JSON.stringify(command)} 执行。`;
-  const directive = `【已选择 skill：${command}】用户明确要求本回合调用该 skill。${source}`
-    + `\n${command} 后的文本是交给该 skill 的任务参数；不得把这个命令当作普通正文略过。`;
+  const lines = selected.map((skill) => skill.realPath
+    ? `- ${skill.command}：开始其他工作前，必须完整读取并遵循 ${JSON.stringify(join(skill.realPath, "SKILL.md"))}。`
+    : `- ${skill.command}：这是 ${opts.agentType} CLI 已报告可用的内置 skill，必须按该命令执行。`);
+  const directive = `【已选择 skill】用户明确要求本回合调用下列 skill：\n${lines.join("\n")}`
+    + `\n整段任务正文都是交给这些 skill 的任务上下文；不得把这些命令当作普通正文略过。`;
   return `${directive}\n\n${opts.text}`;
 }
 
