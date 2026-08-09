@@ -1,5 +1,7 @@
 import type { FreeReviewRun, FreeWorkflowPreviewEvent, FreeWorkflowState, Task } from "@harness/shared";
 import { CheckCircle, GitMerge, MagnifyingGlass, MonitorPlay, SpinnerGap, StopCircle, WarningCircle } from "@phosphor-icons/react";
+import { ImagePreviewGroup, PreviewableImage } from "../components/ImagePreview.tsx";
+import { MarkdownBody } from "../components/MarkdownBody.tsx";
 import { api } from "../lib/api.ts";
 import { FREE_REVIEW_RUN_LABELS, freeReviewActivityDetail, freeReviewActivityTitle } from "./freeReviewCopy.ts";
 import { useFreeWorkflowState } from "./useFreeWorkflowState.ts";
@@ -71,8 +73,24 @@ export function FreeWorkflowInspector({ task, reviewOnly = false }: { task: Task
               {run.rounds.map((round) => (
                 <article key={round.round}>
                   <header><b>第 {round.round} 轮</b><span>{round.status === "reviewing" ? "进行中" : round.conclusion === "verified" ? "通过" : round.conclusion === "verify_failed" ? "未通过" : "异常"}</span></header>
-                  {round.reportMarkdown ? <pre>{round.reportMarkdown}</pre> : <p>报告尚未生成。</p>}
-                  {!!round.screenshots.length && <div className="free-review-screenshots">{round.screenshots.map((name) => <a key={name} href={api.freeReviewFileUrl(task.id, run.id, round.round, name)} target="_blank" rel="noreferrer"><img src={api.freeReviewFileUrl(task.id, run.id, round.round, name)} alt={name} /><span>{name}</span></a>)}</div>}
+                  <ImagePreviewGroup isolated>
+                    {round.reportMarkdown ? <MarkdownBody text={round.reportMarkdown} /> : <p>报告尚未生成。</p>}
+                    {!!round.screenshots.length && (
+                      <div className="free-review-screenshots">
+                        {round.screenshots.map((name) => (
+                          <div key={name}>
+                            <PreviewableImage
+                              src={api.freeReviewFileUrl(task.id, run.id, round.round, name)}
+                              alt={name}
+                              label={`第 ${round.round} 轮 · ${name}`}
+                              loading="lazy"
+                            />
+                            <span>{name}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </ImagePreviewGroup>
                 </article>
               ))}
             </div>

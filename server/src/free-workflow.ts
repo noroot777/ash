@@ -36,6 +36,7 @@ import { setTaskStage } from "./task-stage.js";
 import { taskWorkspace } from "./task-workspace.js";
 import { publishTaskUpdated } from "./task-store.js";
 import { readPreview, startPreview, stopPreview, type PreviewStep } from "./preview.js";
+import { REVIEW_MIME } from "./review-evidence.js";
 import { userDirectivesFor } from "./user-directives.js";
 import { id, now } from "./util.js";
 
@@ -689,8 +690,7 @@ export function mountFreeWorkflowRoutes(api: Hono): void {
       : null;
     const file = owned ? reviewFile(taskId, runId, round, name) : null;
     if (!file) return c.json({ error: "not found" }, 404);
-    const mime = extname(file).toLowerCase() === ".png" ? "image/png"
-      : extname(file).toLowerCase() === ".webp" ? "image/webp" : "image/jpeg";
+    const mime = REVIEW_MIME[extname(file).toLowerCase()] ?? "application/octet-stream";
     return c.body(Uint8Array.from(readFileSync(file)), 200, { "content-type": mime });
   });
 }

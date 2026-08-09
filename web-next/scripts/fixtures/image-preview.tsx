@@ -21,6 +21,11 @@ const links = [
   "",
   "[证据接口图](/api/tasks/tsk1234/review/file?round=2&name=image-preview-one.png)",
   "",
+  "自由审查：[自由报告](/Users/fjh/code/harness/data/runs/tsk1234/free-review/run-abc/round-1/report.md)"
+  + " · [自由截图](/Users/fjh/code/harness/data/runs/tsk1234/free-review/run-abc/round-1/image-preview-two.png)",
+  "",
+  "[自由证据接口图](/api/tasks/tsk1234/free-workflow/review-file?run=run-abc&round=1&name=image-preview-one.png)",
+  "",
   "[站外图](https://example.com/remote.png)",
 ].join("\n");
 

@@ -86,8 +86,9 @@
 .free-review-history article > header { display:flex; justify-content:space-between; color:var(--muted); font-size:9.5px; }
 .free-review-history article pre { overflow:auto; max-height:260px; margin:7px 0 0; white-space:pre-wrap; color:var(--muted); font:9px/1.55 var(--font-mono); }
 .free-review-history article p { margin:7px 0 0; color:var(--faint); font-size:9px; }
+.free-review-history article .task-markdown { overflow:auto; max-height:260px; margin-top:7px; font-size:9px; line-height:1.55; }
 .free-review-screenshots { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:6px; margin-top:8px; }
-.free-review-screenshots a { overflow:hidden; border:1px solid var(--line); border-radius:7px; background:var(--panel); color:var(--faint); font-size:8.5px; text-decoration:none; }
+.free-review-screenshots > div { overflow:hidden; border:1px solid var(--line); border-radius:7px; background:var(--panel); color:var(--faint); font-size:8.5px; }
 .free-review-screenshots img { display:block; width:100%; aspect-ratio:16/10; object-fit:cover; }
 .free-review-screenshots span { display:block; overflow:hidden; padding:4px 5px; text-overflow:ellipsis; white-space:nowrap; }
 

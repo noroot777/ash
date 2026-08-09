@@ -38,6 +38,14 @@ try {
 
   browser = await chromium.launch({ executablePath: await executablePath(), headless: true });
   const page = await browser.newPage();
+  await page.route("**/api/tasks/tsk1234/free-workflow/review-file?*", async (route) => {
+    const name = new URL(route.request().url()).searchParams.get("name");
+    if (name === "report.md") {
+      await route.fulfill({ status: 200, contentType: "text/markdown; charset=utf-8", body: "# 自由审查报告\n\n报告已在应用内打开。" });
+      return;
+    }
+    await route.continue();
+  });
   await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/image-preview.html`);
 
   const thumbnails = page.locator("#inline img[role=button]");
@@ -62,13 +70,16 @@ try {
 
   // 指向图片的链接：点开必须是站内灯箱，绝不是新标签页（用户 2026-08-06 报的就是这个）。
   const links = page.locator("#links");
-  const shot = links.getByRole("link", { name: "截图" });
-  const attachment = links.getByRole("link", { name: "附件" });
-  const served = links.getByRole("link", { name: "证据接口图" });
-  const report = links.getByRole("link", { name: "报告" });
-  const remote = links.getByRole("link", { name: "站外图" });
+  const shot = links.getByRole("link", { name: "截图", exact: true });
+  const attachment = links.getByRole("link", { name: "附件", exact: true });
+  const served = links.getByRole("link", { name: "证据接口图", exact: true });
+  const report = links.getByRole("link", { name: "报告", exact: true });
+  const freeReport = links.getByRole("link", { name: "自由报告", exact: true });
+  const freeShot = links.getByRole("link", { name: "自由截图", exact: true });
+  const freeServed = links.getByRole("link", { name: "自由证据接口图", exact: true });
+  const remote = links.getByRole("link", { name: "站外图", exact: true });
   await shot.waitFor();
-  assert.equal(await links.locator("a[aria-haspopup=dialog]").count(), 3, "只有站内取得到的那几张图接管成图片预览");
+  assert.equal(await links.locator("a[aria-haspopup=dialog]").count(), 5, "所有站内取得到的图片都接管成统一预览");
   assert.equal(await shot.getAttribute("target"), null, "图片链接不再另开标签页");
   assert.match(
     await shot.getAttribute("href"),
@@ -78,25 +89,50 @@ try {
   // 文件名藏在 ?name= 里的证据接口 URL（从证据面板复制图片地址再贴回来就是这个形状）。
   assert.equal(await served.getAttribute("aria-haspopup"), "dialog", "证据接口 URL 也认得出是图片");
   assert.equal(await report.getAttribute("aria-haspopup"), null, "报告 .md 仍走站内报告弹层，不是图片预览");
+  assert.equal(await freeReport.getAttribute("target"), null, "自由审查报告不再另开页面");
+  assert.match(
+    await freeReport.getAttribute("href"),
+    /\/api\/tasks\/tsk1234\/free-workflow\/review-file\?run=run-abc&round=1&name=report\.md$/,
+  );
+  assert.equal(await freeShot.getAttribute("aria-haspopup"), "dialog", "自由审查目录里的图片也使用统一灯箱");
+  assert.equal(await freeServed.getAttribute("aria-haspopup"), "dialog", "自由审查接口 URL 也认得出是图片");
   assert.equal(await remote.getAttribute("aria-haspopup"), null, "站外图不接管");
   assert.equal(await remote.getAttribute("target"), "_blank", "站外图保持新标签页打开");
 
   await shot.click();
   await dialog.waitFor();
-  assert.equal(await page.getByText("1 / 4", { exact: true }).count(), 1, "链接图和内嵌图编在同一组里");
+  assert.equal(await page.getByText("1 / 6", { exact: true }).count(), 1, "链接图和内嵌图编在同一组里");
   assert.match(await dialog.locator("img").getAttribute("src"), /review\/file\?round=1&name=image-preview-two\.png$/);
 
   await page.keyboard.press("ArrowRight");
-  assert.equal(await page.getByText("2 / 4", { exact: true }).count(), 1, "翻到同一条消息里的内嵌图");
+  assert.equal(await page.getByText("2 / 6", { exact: true }).count(), 1, "翻到同一条消息里的内嵌图");
   assert.match(await dialog.locator("img").getAttribute("src"), /\/image-preview-one\.png$/);
 
   await page.keyboard.press("ArrowRight");
-  assert.equal(await page.getByText("3 / 4", { exact: true }).count(), 1, "再翻到附件链接那张");
+  assert.equal(await page.getByText("3 / 6", { exact: true }).count(), 1, "再翻到附件链接那张");
   assert.match(await dialog.locator("img").getAttribute("src"), /\/api\/uploads\/AbCdEfGh1234-image-preview-one\.png$/);
 
   await page.keyboard.press("ArrowRight");
-  assert.equal(await page.getByText("4 / 4", { exact: true }).count(), 1, "最后是证据接口那张");
+  assert.equal(await page.getByText("4 / 6", { exact: true }).count(), 1, "接着是常规证据接口那张");
   assert.match(await dialog.locator("img").getAttribute("src"), /review\/file\?round=2&name=image-preview-one\.png$/);
+
+  await page.keyboard.press("ArrowRight");
+  assert.equal(await page.getByText("5 / 6", { exact: true }).count(), 1, "自由审查目录图片也在同一组");
+  assert.match(await dialog.locator("img").getAttribute("src"), /free-workflow\/review-file\?run=run-abc&round=1&name=image-preview-two\.png$/);
+
+  await page.keyboard.press("ArrowRight");
+  assert.equal(await page.getByText("6 / 6", { exact: true }).count(), 1, "最后是自由审查接口图");
+  assert.match(await dialog.locator("img").getAttribute("src"), /free-workflow\/review-file\?run=run-abc&round=1&name=image-preview-one\.png$/);
+  await page.keyboard.press("Escape");
+  await dialog.waitFor({ state: "detached" });
+
+  const pageCount = page.context().pages().length;
+  await freeReport.click();
+  const reportDialog = page.getByRole("dialog", { name: "report.md" });
+  await reportDialog.waitFor();
+  assert.equal(page.context().pages().length, pageCount, "自由审查报告必须留在当前页面内打开");
+  assert.equal(await reportDialog.getByRole("heading", { name: "自由审查报告" }).count(), 1, "Markdown 报告应按正文渲染");
+  assert.equal(await reportDialog.getByText("报告已在应用内打开。").count(), 1);
 
   console.log("image preview group test passed");
 } finally {

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
@@ -7,10 +7,11 @@ import { Hono } from "hono";
 
 const root = mkdtempSync(join(tmpdir(), "harness-free-workflow-"));
 process.env.HARNESS_DB = join(root, "harness.db");
+process.env.HARNESS_RUNS_DIR = join(root, "runs");
 
 try {
   const { ensureSchema, db } = await import("../src/db/index.js");
-  const { agents, freeReviewRuns, projects, tasks } = await import("../src/db/schema.js");
+  const { agents, freeReviewRounds, freeReviewRuns, projects, tasks } = await import("../src/db/schema.js");
   const { createTasks } = await import("../src/task-store.js");
   const { mountFreeWorkflowRoutes, freeReviewOutcome, freeReviewResumeOptions, handleFreeWorkflowSettlement } = await import("../src/free-workflow.js");
   const { recordFreePreviewEvent } = await import("../src/free-workflow-events.js");
@@ -249,9 +250,25 @@ try {
     checkMode: "logic", retryLimit: 1, currentRound: 1, status: "reviewing",
     createdAt: reviewAt, updatedAt: reviewAt, finishedAt: null,
   });
+  await db.insert(freeReviewRounds).values({
+    id: "active-review-round-1", runId: "active-review", round: 1, status: "reviewing",
+    conclusion: null, startedAt: reviewAt, endedAt: null,
+  });
   assert.deepEqual(await freeReviewResumeOptions("free-task"), {
     agent: "codex", executorId: "reviewer-executor", model: "gpt-review", reasoningEffort: "high", sessionRole: "reviewer",
   });
+
+  const evidence = join(root, "runs", "free-task", "free-review", "active-review", "round-1");
+  mkdirSync(evidence, { recursive: true });
+  writeFileSync(join(evidence, "report.md"), "# 审查报告\n\n内容可读。\n");
+  writeFileSync(join(evidence, "shot.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+  const reportFile = await api.request("/tasks/free-task/free-workflow/review-file?run=active-review&round=1&name=report.md");
+  assert.equal(reportFile.status, 200);
+  assert.match(reportFile.headers.get("content-type") ?? "", /^text\/markdown; charset=utf-8/i);
+  assert.equal(await reportFile.text(), "# 审查报告\n\n内容可读。\n");
+  const screenshotFile = await api.request("/tasks/free-task/free-workflow/review-file?run=active-review&round=1&name=shot.png");
+  assert.equal(screenshotFile.status, 200);
+  assert.equal(screenshotFile.headers.get("content-type"), "image/png");
 
   console.log("✓ 自由任务不携带起手式快照");
   console.log("✓ 默认 1 次自动复审的轮数语义正确");
@@ -263,6 +280,7 @@ try {
   console.log("✓ 派生任务与起手式引用不能混入自由工作流");
   console.log("✓ 合并清理成功与历史幂等路径都会落到已验收");
   console.log("✓ 审查续跑保持独立 reviewer 会话与原模型配置");
+  console.log("✓ 自由审查报告与截图接口返回正确内容类型");
 } finally {
   rmSync(root, { recursive: true, force: true });
 }

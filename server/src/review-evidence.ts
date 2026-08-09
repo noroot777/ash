@@ -15,6 +15,7 @@ export const REVIEW_MIME: Record<string, string> = {
   ".png": "image/png",
   ".jpg": "image/jpeg",
   ".jpeg": "image/jpeg",
+  ".webp": "image/webp",
   ".md": "text/markdown; charset=utf-8",
 };
 
