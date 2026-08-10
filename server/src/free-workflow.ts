@@ -39,6 +39,7 @@ import { publishTaskUpdated } from "./task-store.js";
 import { startPreview, stopPreview, type PreviewStep } from "./preview.js";
 import { REVIEW_MIME } from "./review-evidence.js";
 import { reviewRequestReference } from "./review-request-context.js";
+import { BROWSER_VERIFICATION_POLICY, BROWSER_VERIFICATION_REMINDER } from "./browser-verification-policy.js";
 import { id, now } from "./util.js";
 
 type TaskRow = typeof tasks.$inferSelect;
@@ -115,6 +116,7 @@ export async function freeReviewReminder(taskId: string): Promise<string> {
   const run = await activeReview(taskId);
   if (!run || run.status !== "reviewing") return "";
   return `自由工作流审查提醒：你正在执行第 ${run.currentRound} 轮${run.checkMode === "logic" ? "逻辑" : "语法"}审查。` +
+    BROWSER_VERIFICATION_REMINDER +
     `报告必须写到 ${freeReviewReportPath(taskId, run.id, run.currentRound)}；结束前调用 report_stage(verified|verify_failed)，` +
     `不要调用 complete_task 或 accept_task。`;
 }
@@ -200,7 +202,8 @@ export async function freeReviewPrompt(task: TaskRow, run: ReviewRunRow, round: 
     `你是独立审查者，不是继续实现需求。默认产物可能有问题，主动寻找能复现的缺陷。\n\n` +
     `任务：${task.id}\n${requirements}\n\n` +
     `${focus}\n\n先检查 ${repoPath} 中的真实 git status、diff 和提交，再选择验证命令。` +
-    `必须真实运行与风险相称的检查；浏览器验证优先复用 CDP，退回 playwright 时结束前清掉工作区产物并停掉所有临时服务。\n\n` +
+    `必须真实运行与风险相称的检查。\n\n${BROWSER_VERIFICATION_POLICY}` +
+    `一旦用了 playwright，结束前清掉工作区产物；所有验证临时服务和浏览器进程都必须停掉。\n\n` +
     `证据必须落盘：报告写到 ${freeReviewReportPath(task.id, run.id, round)}；截图如有必要放在同一目录。证据不要 git add/commit。\n\n` +
     `结束前调用 report_stage(taskId="${task.id}", stage="verified"|"verify_failed") 给出结论。` +
     `这是旁路审查回合，不要调用 complete_task，也不要调用 accept_task。`;
