@@ -146,16 +146,11 @@ export function repairPrompt(input: {
   target: TaskRow;
   round: number;
   reviewTaskId: string | null;
-  images: string[];
   coverage: ReviewCoverageFinding | null;
   autoNext: boolean;
 }): string {
   const { target, round, reviewTaskId } = input;
   const dir = reviewRoundDir(target.id, round);
-  // 没截图不是缺证据：截图按需，看不见的改动本来就不该有图（见 verifyRules）。
-  const evidence = input.images.length
-    ? input.images.map((name) => `- [${name}](${join(dir, name)})`).join("\n")
-    : "- (本轮无截图，报告即全部证据)";
   const coverageGuard = repairCoverageGuard(input.coverage);
   return `【自动验证未通过 · 第 ${round} 轮】\n` +
     (reviewTaskId
@@ -163,7 +158,7 @@ export function repairPrompt(input: {
       : `第 ${round} 轮验证结论是 verify_failed。`) +
     `请先完整读取 [report.md](${join(dir, "report.md")})，再按报告修复，不要扩大原任务边界。\n\n` +
     (coverageGuard ? `${coverageGuard}\n\n` : "") +
-    `证据目录：${dir}\n${evidence}\n\n` +
+    `证据目录：${dir}\n\n` +
     `修完必须调用 complete_task(taskId="${target.id}") 确认完成；` +
     (input.autoNext ? "确认后 harness 会自动再验一轮。" : "本轮不自动续验，确认后可由用户手动再验一轮。");
 }

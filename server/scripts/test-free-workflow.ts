@@ -95,9 +95,9 @@ try {
   assert.match(skillContext, /标题也可能点名 \/grill-me/);
   assert.match(skillContext, /原始正文要求运行 \/grill-me/);
   assert.match(skillContext, /把排队需求也一起做完[\s\S]*\/grill-me/, "需求文件仍须完整保留后续追问");
-  const repair = freeRepairPrompt("free-task", promptRun, ["shot.png"]);
+  const repair = freeRepairPrompt("free-task", promptRun);
   assert.match(repair, /\[report\.md\]\([^\n]+report\.md\)/, "修复交接应引用唯一的 report.md");
-  assert.match(repair, /\[shot\.png\]\([^\n]+shot\.png\)/, "截图证据应以路径交接");
+  assert.doesNotMatch(repair, /shot\.png|截图：/, "截图已收进报告，不应在修复交接里重复列出");
   assert.doesNotMatch(repair, /审查报告：\n#/, "修复交接不得复制报告正文");
 
   await createTasks([{
@@ -173,7 +173,7 @@ try {
   const exhaustedEvidence = join(root, "runs", "free-exhausted-task", "free-review", exhaustedRun.id, "round-2");
   mkdirSync(exhaustedEvidence, { recursive: true });
   writeFileSync(join(exhaustedEvidence, "report.md"), "# 仍需修复\n\n按钮状态不对。\n");
-  const manualRepair = freeManualRepairPrompt("free-exhausted-task", exhaustedRun, []);
+  const manualRepair = freeManualRepairPrompt("free-exhausted-task", exhaustedRun);
   assert.match(manualRepair, /自动复审已停止/);
   assert.match(manualRepair, /不会擅自增加审查轮数/);
   assert.match(manualRepair, /预约了复审，完成后按预约开始/);

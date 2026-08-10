@@ -1,6 +1,21 @@
 .task-message--user.is-system-authored { justify-content: flex-start; padding-right: 38px; padding-left: 30px; }
 .task-message--user.is-system-authored .task-user-bubble,
-.team-feed-user.is-system-authored > div { border-color: var(--line2); background: var(--overlay); box-shadow: inset 2px 0 color-mix(in lch, var(--muted) 42%, transparent); }
+.team-feed-user.is-system-authored > div {
+  max-width: min(760px, 92%);
+  border: 0;
+  border-left: 2px solid color-mix(in lch, var(--accent) 26%, var(--line2));
+  border-radius: 0;
+  background: transparent;
+  padding: 3px 0 5px 12px;
+  box-shadow: none;
+}
+.task-message--user.is-system-authored header,
+.team-feed-user.is-system-authored header { margin-bottom: 2px; }
 .task-message--user.is-system-authored .task-markdown,
-.team-feed-user.is-system-authored .task-markdown { font-size: 12px; line-height: 1.62; }
+.team-feed-user.is-system-authored .task-markdown { color: var(--muted); font-size: 12px; line-height: 1.62; }
 .team-feed-user.is-system-authored { justify-content: flex-start; padding-right: 42px; padding-left: 30px; }
+
+@media (max-width: 560px) {
+  .task-message--user.is-system-authored { padding-right: 10px; padding-left: 10px; }
+  .task-message--user.is-system-authored .task-user-bubble { max-width: 100%; }
+}

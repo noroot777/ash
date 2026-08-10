@@ -27,7 +27,6 @@ import {
   freeReviewEvidenceDir,
   freeReviewFile,
   freeReviewReportPath,
-  freeReviewScreenshots,
 } from "./free-review-files.js";
 import { freeWorkflowState } from "./free-workflow-state.js";
 import { projectHealthLight } from "./git.js";
@@ -209,23 +208,21 @@ export async function freeReviewPrompt(task: TaskRow, run: ReviewRunRow, round: 
     `这是旁路审查回合，不要调用 complete_task，也不要调用 accept_task。`;
 }
 
-export function freeRepairPrompt(taskId: string, run: ReviewRunRow, images: string[]): string {
+export function freeRepairPrompt(taskId: string, run: ReviewRunRow): string {
   const dir = freeReviewEvidenceDir(taskId, run.id, run.currentRound);
-  const evidence = images.length ? images.map((name) => `- [${name}](${join(dir, name)})`).join("\n") : "- 本轮无截图";
   return `【自由工作流审查未通过 · 第 ${run.currentRound} 轮】\n` +
     `请先完整读取 [report.md](${freeReviewReportPath(taskId, run.id, run.currentRound)})，再按报告修复，不要扩大原任务边界。` +
     `修复完成并验证后调用 complete_task(taskId="${taskId}")；harness 随后会自动派同一位审查者复审。\n\n` +
-    `证据目录：${dir}\n\n截图：\n${evidence}`;
+    `证据目录：${dir}`;
 }
 
-export function freeManualRepairPrompt(taskId: string, run: ReviewRunRow, images: string[]): string {
+export function freeManualRepairPrompt(taskId: string, run: ReviewRunRow): string {
   const dir = freeReviewEvidenceDir(taskId, run.id, run.currentRound);
-  const evidence = images.length ? images.map((name) => `- [${name}](${join(dir, name)})`).join("\n") : "- 本轮无截图";
   return `【自由工作流审查未通过 · 自动复审已停止】\n` +
     `请先完整读取 [report.md](${freeReviewReportPath(taskId, run.id, run.currentRound)})，再按第 ${run.currentRound} 轮意见修复，不要扩大原任务边界。` +
     `修复完成并验证后调用 complete_task(taskId="${taskId}")。本次不会擅自增加审查轮数；` +
     `如果用户在修复期间预约了复审，完成后按预约开始，否则等待用户决定再次审查或合并。\n\n` +
-    `证据目录：${dir}\n\n截图：\n${evidence}`;
+    `证据目录：${dir}`;
 }
 
 async function failReviewStart(run: ReviewRunRow, message: string): Promise<void> {
@@ -362,12 +359,11 @@ export async function handleFreeWorkflowSettlement(
     return true;
   }
 
-  const images = freeReviewScreenshots(taskId, run.id, run.currentRound);
   if (outcome === "repair") {
     await db.update(freeReviewRuns).set({ status: "repairing", updatedAt: at }).where(eq(freeReviewRuns.id, run.id));
     await appendTaskTimeline(taskId, `自由工作流第 ${run.currentRound} 轮审查未通过，意见已发回会话；修复完成后自动复审。`);
     bus.publish({ type: "task.review", taskId });
-    continueWhenIdle(taskId, freeRepairPrompt(taskId, run, images), { byBackend: true }, async (error) => {
+    continueWhenIdle(taskId, freeRepairPrompt(taskId, run), { byBackend: true }, async (error) => {
       const failedAt = now();
       await db.update(freeReviewRuns).set({ status: "failed", updatedAt: failedAt, finishedAt: failedAt })
         .where(eq(freeReviewRuns.id, run.id));
@@ -461,8 +457,7 @@ async function startManualFreeReviewRepair(taskId: string): Promise<FreeWorkflow
       .where(eq(freeReviewRuns.id, run.id));
     await appendTaskTimeline(taskId, `已按自由工作流第 ${run.currentRound} 轮审查意见发起修复；本次不会自动增加复审轮数。`);
     bus.publish({ type: "task.review", taskId });
-    const images = freeReviewScreenshots(taskId, run.id, run.currentRound);
-    continueWhenIdle(taskId, freeManualRepairPrompt(taskId, run, images), { byBackend: true }, async (error) => {
+    continueWhenIdle(taskId, freeManualRepairPrompt(taskId, run), { byBackend: true }, async (error) => {
       const failedAt = now();
       await db.update(freeReviewRuns).set({ status: "exhausted", updatedAt: failedAt, finishedAt: failedAt })
         .where(eq(freeReviewRuns.id, run.id));

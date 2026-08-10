@@ -103,12 +103,11 @@ const repair = repairPrompt({
   target: { id: "review-target" } as never,
   round: 2,
   reviewTaskId: null,
-  images: ["browser.png"],
   coverage: null,
   autoNext: true,
 });
 assert.match(repair, /\[report\.md\]\([^\n]+report\.md\)/, "验证打回应只引用 report.md");
-assert.match(repair, /\[browser\.png\]\([^\n]+browser\.png\)/, "截图应以证据路径交接");
+assert.doesNotMatch(repair, /browser\.png|截图：/, "截图已收进报告，不应在验证打回里重复列出");
 assert.doesNotMatch(repair, /验证报告：/, "验证打回不再复制报告正文");
 
 assert.equal(
