@@ -51,6 +51,8 @@ try {
   assert.match(await repairFixture.locator(".review-inspector__overview small").innerText(), /自动复审已停止/);
   await repairButton.click();
   await repairToolbar.getByRole("status").filter({ hasText: "按意见修复中" }).waitFor();
+  assert.equal(await repairFixture.getByRole("button", { name: "按第 2 轮意见修复" }).count(), 0, "同 taskId 的其它实例必须在 API 返回后立即收敛，不能等轮询");
+  await repairFixture.getByRole("status").filter({ hasText: "正在按审查意见修复" }).waitFor();
   const reserveButton = repairToolbar.getByRole("button", { name: "预约复审" });
   await reserveButton.waitFor();
   assert.equal(await reserveButton.isEnabled(), true, "修复状态与预约动作必须分开，修复中仍可预约");
