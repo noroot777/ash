@@ -65,11 +65,12 @@ function UserMessage({
 }) {
   const parsed = parseAttachmentText(item.text);
   const paths = [...parsed.paths, ...item.attachments];
+  const bySystem = !!item.bySystem;
   return (
-    <article className="task-message task-message--user">
+    <article className={`task-message task-message--user${bySystem ? " is-system-authored" : ""}`}>
       <div className="task-user-bubble">
         <header>
-          <b>你</b>
+          <b>{bySystem ? "系统" : "你"}</b>
           {item.at && <time>{formatInstant(item.at)}</time>}
           {parsed.body && (
             <button type="button" onClick={() => copyText(parsed.body)} aria-label="复制这条回复">
@@ -77,7 +78,7 @@ function UserMessage({
             </button>
           )}
         </header>
-        {parsed.body && <p>{parsed.body}</p>}
+        {parsed.body && (bySystem ? <MarkdownBody text={parsed.body} /> : <p>{parsed.body}</p>)}
         <MessageAttachments paths={paths} />
       </div>
     </article>

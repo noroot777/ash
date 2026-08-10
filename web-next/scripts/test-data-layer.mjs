@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { mergeFeed, timeMs } from "@harness/shared/team";
 import { ApiError, api } from "../src/lib/api.ts";
+import { mergeUserTimeline } from "../src/lib/useConversation.ts";
 import { deriveTaskStatusIndicator, readEventForTask, readTaskIds } from "../src/lib/useTaskReadState.ts";
 import { applyTaskMetadataEvent, applyTaskStatusEvent } from "../src/lib/useTasks.ts";
 import { buildConversationItems, conversationToMarkdown } from "../src/task-detail/conversationModel.ts";
@@ -152,6 +153,30 @@ try {
   assert.equal(conversation[2].kind === "agent" ? conversation[2].at : null, "2026-07-30T01:01:00.000Z");
   assert.equal(conversation[0].kind === "agent" ? conversation[0].showSessionMeta : null, false);
   assert.equal(conversation[2].kind === "agent" ? conversation[2].showSessionMeta : null, true);
+
+  const optimisticReply = {
+    kind: "user",
+    id: "optimistic-reply",
+    text: "请继续",
+    attachments: ["/tmp/proof.png"],
+    at: "2026-07-30T01:01:00.000Z",
+    source: "optimistic",
+  };
+  const serverReply = {
+    kind: "user",
+    id: "server-reply",
+    text: "请继续\n\n[用户附带的文件，请用 Read 工具查看以下本地文件]\n- /tmp/proof.png",
+    attachments: [],
+    at: "2026-07-30T01:01:00.020Z",
+    source: "server",
+  };
+  assert.deepEqual(mergeUserTimeline([optimisticReply], serverReply), [serverReply], "服务端落盘事件应替换同一条乐观消息");
+  assert.deepEqual(mergeUserTimeline([serverReply], optimisticReply), [serverReply], "事件先到时，后来的乐观消息不能重复追加");
+
+  const systemHandoff = { ...serverReply, id: "system-handoff", text: "请读取 report.md", bySystem: true };
+  const handoffConversation = buildConversationItems([], [session], mergeUserTimeline([], systemHandoff));
+  assert.equal(handoffConversation[0]?.kind === "user" ? handoffConversation[0].bySystem : false, true);
+  assert.match(conversationToMarkdown(handoffConversation, { ...task, title: "test", body: "" }), /## 系统/);
 
   const cumulative1 = { input: 10, output: 5, cacheRead: 90, cacheWrite: 0, reasoning: 3, costUsd: null, turns: 1 };
   const cumulative2 = { input: 20, output: 10, cacheRead: 180, cacheWrite: 0, reasoning: 6, costUsd: null, turns: 1 };

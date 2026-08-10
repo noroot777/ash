@@ -8,7 +8,7 @@ import { formatInstant, parseAttachmentText } from "./utils.ts";
 export type LiveAgentEvent = Extract<ServerEvent, { type: "agent.event" }>;
 
 export type TimelineEntry =
-  | { kind: "user"; id: string; text: string; attachments: string[]; at: string; isAnswer?: boolean }
+  | { kind: "user"; id: string; text: string; attachments: string[]; at: string; isAnswer?: boolean; bySystem?: boolean; source?: "optimistic" | "server" }
   | { kind: "server"; id: string; event: LiveAgentEvent; receivedAt?: string };
 
 // 「执行过程」块里的一行(工具 / 思考 / 异常)。形状与渲染都归 lib/executionTrace,
@@ -435,6 +435,7 @@ export function buildConversationItems(
         attachments: entry.attachments,
         at: entry.at,
         isAnswer: entry.isAnswer,
+        bySystem: entry.bySystem,
       });
       continue;
     }
@@ -549,7 +550,7 @@ export function conversationToMarkdown(items: ConversationItem[], task: Task): s
       const parsed = parseAttachmentText(item.text);
       const paths = [...parsed.paths, ...item.attachments];
       const body = [parsed.body, ...paths.map((path) => `- ${path}`)].filter(Boolean).join("\n");
-      if (body) parts.push(`## 你${item.at ? ` · ${formatInstant(item.at)}` : ""}\n\n${body}`);
+      if (body) parts.push(`## ${item.bySystem ? "系统" : "你"}${item.at ? ` · ${formatInstant(item.at)}` : ""}\n\n${body}`);
       continue;
     }
     const body = item.markdown.trim();

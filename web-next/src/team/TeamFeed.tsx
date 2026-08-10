@@ -46,11 +46,12 @@ function UserRow({ row }: { row: Extract<TeamFeedRow, { kind: "conv" }>["item"] 
   if (row.kind !== "user") return null;
   const parsed = parseAttachmentText(row.text);
   const paths = [...parsed.paths, ...row.attachments];
+  const bySystem = !!row.bySystem;
   return (
-    <article className="team-feed-user">
+    <article className={`team-feed-user${bySystem ? " is-system-authored" : ""}`}>
       <div>
-        <header><b>你</b>{row.at && <time>{formatInstant(row.at)}</time>}</header>
-        {parsed.body && <p>{parsed.body}</p>}
+        <header><b>{bySystem ? "系统" : "你"}</b>{row.at && <time>{formatInstant(row.at)}</time>}</header>
+        {parsed.body && (bySystem ? <MarkdownBody text={parsed.body} /> : <p>{parsed.body}</p>)}
         <MessageAttachments paths={paths} />
       </div>
     </article>

@@ -17,7 +17,8 @@ import type { RunHandle } from "./executors/types.js";
 import { detachedPathsFor } from "./executors/detached.js";
 import { inspectProcess } from "./proc.js";
 import { RUNS_DIR } from "./paths.js";
-import { writeTurn as writeTurnLine, runTracePaths } from "./transcript.js";
+import { writeTurn, runTracePaths } from "./transcript.js";
+import { recordUserConversationTurn } from "./conversation-turn.js";
 import { startTeam, deliverToLead } from "./team/session.js";
 import { workerPreambleFor } from "./team/dispatch.js";
 import { reopenAcceptedStage } from "./task-stage.js";
@@ -54,15 +55,6 @@ const RESUME_PROMPT =
 // user reply), shown identically live (SSE) and on reload (.md).
 const SYS_MARKER = "〔系统〕继续（从中断处）";
 
-// A non-text interjection in the run timeline is persisted as one sentinel line
-// (see transcript.ts) so live and reloaded views read identically.
-function writeTurn(
-  out: NodeJS.WritableStream,
-  turn: { t: "user" | "system"; agent: AgentType; text: string },
-  at = now(),
-): void {
-  writeTurnLine(out, turn, at);
-}
 // 完成协议前言(严格 done):告诉 agent 它的 taskId 和「必须亲口确认完成」的
 // 规则。fresh run 用长版(第一回合,完整交代);reply/resume 回合用短版追加在
 // 消息尾部(每回合都提醒,上下文再长 agent 也不至于忘)。
@@ -652,8 +644,8 @@ export async function continueTask(
       bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: sessionRole, agentType: agent, event: { kind: "system", text: SYS_MARKER } });
     } else {
       // 你→@agent reply, persisted as a structured turn so a reloaded thread shows
-      // the human turn as its own bubble (live, the client already shows it).
-      writeTurn(out, { t: "user", agent, text: userTurnText, ...(opts.byBackend ? { by: "system" as const } : {}) }, turnStart);
+      // the human/backend turn as its own bubble; the matching event keeps every client live.
+      recordUserConversationTurn({ taskId, sessionId: sessId, role: sessionRole, agentType: agent, out, text: userTurnText, at: turnStart, bySystem: opts.byBackend });
     }
     // 到这里这句话已经**两处落地**:agent 进程早在上面就带着它起来了,原文也刚写进会话
     // 落盘文件。排队/定时消息就是在这一刻、而不是更早,才把库里那条标成 sent。

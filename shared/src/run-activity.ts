@@ -18,7 +18,7 @@ export type RunActivityCopy = {
 };
 
 /** 会话流里的一条:只关心它是不是「消息」,以及 agent 那条收没收口。 */
-export type RunActivityMessage = { kind: string; endedAt?: string | null };
+export type RunActivityMessage = { kind: string; endedAt?: string | null; bySystem?: boolean };
 
 /** 一条会话行(sessions 表的形状),用来判断此刻是谁在跑。 */
 export type RunActivityActor = {
@@ -37,7 +37,7 @@ export function runActivityTail(items: readonly RunActivityMessage[]): RunActivi
   if (!items.length) return "empty";
   for (let index = items.length - 1; index >= 0; index -= 1) {
     const item = items[index]!;
-    if (item.kind === "user") return "user";
+    if (item.kind === "user") return item.bySystem ? "other" : "user";
     if (item.kind === "agent") return item.endedAt ? "agent-ended" : "agent-active";
   }
   return "other";

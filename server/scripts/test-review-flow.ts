@@ -19,7 +19,7 @@ const {
   reviewRoundDir,
   safeReviewFilePath,
 } = await import("../src/review-evidence.js");
-const { REVIEW_OVERWRITE_CHECK, verifyProtocolFor } = await import("../src/review-prompts.js");
+const { REVIEW_OVERWRITE_CHECK, repairPrompt, verifyProtocolFor } = await import("../src/review-prompts.js");
 const { initialTaskObjective, invitedTaskBrief } = await import("../src/invited-task-brief.js");
 // 判定（该不该派、几轮、找谁验）住在 review-policy.ts，是纯函数，所以这一段全程不起
 // 数据库、不起 CLI。
@@ -93,6 +93,17 @@ assert.match(REVIEW_OVERWRITE_CHECK, /ask_question/, "审查 prompt 必须要求
 assert.equal(invitedTaskBrief("原始需求 /grill-me", true, true), "", "新审查者入场时不能从通用任务简介漏回技能名");
 assert.match(invitedTaskBrief("普通协作需求", true, false), /普通协作需求/, "普通中途协作者仍须拿到任务简介");
 assert.equal(initialTaskObjective("历史审查正文 /grill-me", "审查", true), "", "历史独立审查任务的 fresh prompt 也不能重复夹带正文");
+const repair = repairPrompt({
+  target: { id: "review-target" } as never,
+  round: 2,
+  reviewTaskId: null,
+  images: ["browser.png"],
+  coverage: null,
+  autoNext: true,
+});
+assert.match(repair, /\[report\.md\]\([^\n]+report\.md\)/, "验证打回应只引用 report.md");
+assert.match(repair, /\[browser\.png\]\([^\n]+browser\.png\)/, "截图应以证据路径交接");
+assert.doesNotMatch(repair, /验证报告：/, "验证打回不再复制报告正文");
 
 assert.equal(
   reviewOutcomeAction({ reviewStatus: "done", conclusion: "verify_failed", reviewRequested: true, round: 1 }),
