@@ -1,7 +1,8 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import type { Task } from "@harness/shared";
+import type { FreeWorkflowState, Task } from "@harness/shared";
 import { FreeWorkflowInspector } from "../../src/free-workflow/FreeWorkflowInspector.tsx";
+import { FreeWorkflowToolbar } from "../../src/free-workflow/FreeWorkflowToolbar.tsx";
 import "../../src/styles/global.css";
 
 const state = {
@@ -68,7 +69,7 @@ const state = {
   }],
 };
 
-const repairState = {
+const repairState: FreeWorkflowState = {
   taskId: "free-repair-task",
   selectedReviewerId: null,
   reviewReservation: { armed: false, reviewerId: null, checkMode: null, retryLimit: null },
@@ -107,6 +108,27 @@ const repairState = {
   }],
 };
 
+const manualChatState: FreeWorkflowState = {
+  ...repairState,
+  taskId: "free-chat-rework-task",
+  reviews: repairState.reviews.map((run) => ({
+    ...run,
+    id: "run-chat-rework",
+    status: "reworking",
+  })),
+};
+
+const reviewer = {
+  id: "reviewer-one", name: "Codex 审查", agentType: "codex", executorId: "reviewer-executor",
+  executorLabel: "codex@test", model: "gpt-test", reasoningEffort: "high",
+  createdAt: "2026-08-09T00:00:00.000Z", updatedAt: "2026-08-09T00:00:00.000Z",
+};
+
+const agentProfile = {
+  id: "reviewer-executor", name: "codex@test", type: "codex", target: { kind: "local" },
+  model: "gpt-test", reasoningEffort: "high", isDefault: true,
+};
+
 const nativeFetch = window.fetch.bind(window);
 window.fetch = (input, init) => {
   const url = new URL(typeof input === "string" ? input : input.url, window.location.origin);
@@ -122,9 +144,31 @@ window.fetch = (input, init) => {
       (window as Window & { __repairRequests?: number }).__repairRequests =
         ((window as Window & { __repairRequests?: number }).__repairRequests ?? 0) + 1;
     }
+    if (init?.method === "PUT" && url.pathname.endsWith("/review-reservation")) {
+      repairState.selectedReviewerId = reviewer.id;
+      repairState.reviewReservation = { armed: true, reviewerId: reviewer.id, checkMode: "logic", retryLimit: 1 };
+      (window as Window & { __reservationRequests?: number }).__reservationRequests =
+        ((window as Window & { __reservationRequests?: number }).__reservationRequests ?? 0) + 1;
+    }
     return Promise.resolve(new Response(JSON.stringify(repairState), {
       status: 200,
       headers: { "content-type": "application/json" },
+    }));
+  }
+  if (url.pathname === "/api/tasks/free-chat-rework-task/free-workflow") {
+    return Promise.resolve(new Response(JSON.stringify(manualChatState), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    }));
+  }
+  if (url.pathname === "/api/reviewer-profiles") {
+    return Promise.resolve(new Response(JSON.stringify([reviewer]), {
+      status: 200, headers: { "content-type": "application/json" },
+    }));
+  }
+  if (url.pathname === "/api/agents") {
+    return Promise.resolve(new Response(JSON.stringify([agentProfile]), {
+      status: 200, headers: { "content-type": "application/json" },
     }));
   }
   return nativeFetch(input, init);
@@ -141,11 +185,28 @@ const repairTask = {
   id: "free-repair-task",
   title: "自由工作流手动修复",
   status: "done",
+  mode: "single",
+  parentId: null,
+  reviewOf: null,
+  workflowMode: "free",
+} as Task;
+
+const manualChatTask = {
+  id: "free-chat-rework-task",
+  title: "自由工作流普通修改",
+  status: "running",
+  mode: "single",
+  parentId: null,
+  reviewOf: null,
   workflowMode: "free",
 } as Task;
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
+    <div style={{ display: "grid", gap: 6, width: 760, margin: "12px 0 12px auto", background: "white", padding: 8 }}>
+      <div className="toolbar-repair-fixture"><FreeWorkflowToolbar task={repairTask} notify={() => undefined} /></div>
+      <div className="toolbar-chat-rework-fixture"><FreeWorkflowToolbar task={manualChatTask} notify={() => undefined} /></div>
+    </div>
     <div style={{ display: "flex", gap: 20, height: 640 }}>
       <div style={{ flex: 1 }} />
       <aside className="inspector-host workflow-inspector-fixture" style={{ width: 380, height: 640 }}>

@@ -44,7 +44,7 @@ import { id, now } from "./util.js";
 type TaskRow = typeof tasks.$inferSelect;
 type ReviewRunRow = typeof freeReviewRuns.$inferSelect;
 
-const ACTIVE_REVIEW_STATUSES = ["reviewing", "repairing", "manual_repairing"] as const;
+const ACTIVE_REVIEW_STATUSES = ["reviewing", "repairing", "manual_repairing", "reworking"] as const;
 const MAX_RETRIES = 5;
 const freeActionLocks = new Set<string>();
 export { freeWorkflowState };
@@ -102,6 +102,15 @@ export async function resetFreeWorkflowMergeOnRun(taskId: string): Promise<void>
   bus.publish({ type: "task.review", taskId });
 }
 
+export async function markFreeReviewReworking(taskId: string): Promise<void> {
+  const run = (await db.select().from(freeReviewRuns).where(eq(freeReviewRuns.taskId, taskId))
+    .orderBy(desc(freeReviewRuns.createdAt)).limit(1)).at(0);
+  if (!run || run.status !== "exhausted") return;
+  await db.update(freeReviewRuns).set({ status: "reworking", updatedAt: now(), finishedAt: null })
+    .where(eq(freeReviewRuns.id, run.id));
+  bus.publish({ type: "task.review", taskId });
+}
+
 export async function freeReviewReminder(taskId: string): Promise<string> {
   const run = await activeReview(taskId);
   if (!run || run.status !== "reviewing") return "";
@@ -130,12 +139,14 @@ async function reserveFreeReview(taskId: string, input: FreeReviewDispatchInput)
   if (task.workflowMode !== "free") throw new Error("当前任务不是自由工作流");
   if (task.archived) throw new Error("归档任务不能预约审查");
   if (task.status === "backlog") throw new Error("任务尚未运行，开始执行后再预约审查");
-  if (task.status === "done") throw new Error("任务已完成，请直接派审查");
   if (freeActionLocks.has(taskId)) throw new Error("当前已有自由工作流操作正在进行");
   freeActionLocks.add(taskId);
   try {
     await assertBeforeMerge(taskId);
-    if (await activeReview(taskId)) throw new Error("当前已有审查或修复链在进行");
+    const active = await activeReview(taskId);
+    const reworking = active?.status === "manual_repairing" || active?.status === "reworking";
+    if (task.status === "done" && !reworking) throw new Error("任务已完成，请直接派审查");
+    if (active && !reworking) throw new Error("当前已有审查或修复链在进行");
     const profile = (await db.select().from(reviewerProfiles).where(eq(reviewerProfiles.id, input.reviewerId))).at(0);
     if (!profile) throw new Error("所选审查者不存在");
     const mode = checkMode(input.checkMode);
@@ -209,7 +220,8 @@ export function freeManualRepairPrompt(taskId: string, run: ReviewRunRow, images
   const evidence = images.length ? images.map((name) => `- [${name}](${join(dir, name)})`).join("\n") : "- 本轮无截图";
   return `【自由工作流审查未通过 · 自动复审已停止】\n` +
     `请先完整读取 [report.md](${freeReviewReportPath(taskId, run.id, run.currentRound)})，再按第 ${run.currentRound} 轮意见修复，不要扩大原任务边界。` +
-    `修复完成并验证后调用 complete_task(taskId="${taskId}")。本次只修复，不会自动增加审查轮数；结束后由用户决定再次审查或合并。\n\n` +
+    `修复完成并验证后调用 complete_task(taskId="${taskId}")。本次不会擅自增加审查轮数；` +
+    `如果用户在修复期间预约了复审，完成后按预约开始，否则等待用户决定再次审查或合并。\n\n` +
     `证据目录：${dir}\n\n截图：\n${evidence}`;
 }
 
@@ -280,19 +292,20 @@ export async function handleFreeWorkflowSettlement(
 ): Promise<boolean> {
   const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!task || task.workflowMode !== "free") return false;
+  const startReservation = async () => {
+    const reservation = (await db.select({
+      armed: freeWorkflowStates.reviewArmed, reviewerId: freeWorkflowStates.selectedReviewerId,
+      checkMode: freeWorkflowStates.reviewCheckMode, retryLimit: freeWorkflowStates.reviewRetryLimit,
+    }).from(freeWorkflowStates).where(eq(freeWorkflowStates.taskId, taskId))).at(0);
+    await startReservedFreeReview(taskId, reservation, (input) => startFreeReview(taskId, {
+      reviewerId: input.reviewerId,
+      checkMode: checkMode(input.checkMode ?? "logic"),
+      retryLimit: retryLimit(input.retryLimit ?? 1),
+    }));
+  };
   const run = await activeReview(taskId);
   if (!run) {
-    if (confirmedDone && status === "done") {
-      const reservation = (await db.select({
-        armed: freeWorkflowStates.reviewArmed, reviewerId: freeWorkflowStates.selectedReviewerId,
-        checkMode: freeWorkflowStates.reviewCheckMode, retryLimit: freeWorkflowStates.reviewRetryLimit,
-      }).from(freeWorkflowStates).where(eq(freeWorkflowStates.taskId, taskId))).at(0);
-      await startReservedFreeReview(taskId, reservation, (input) => startFreeReview(taskId, {
-        reviewerId: input.reviewerId,
-        checkMode: checkMode(input.checkMode ?? "logic"),
-        retryLimit: retryLimit(input.retryLimit ?? 1),
-      }));
-    }
+    if (confirmedDone && status === "done") await startReservation();
     return true;
   }
 
@@ -301,15 +314,18 @@ export async function handleFreeWorkflowSettlement(
     return true;
   }
 
-  if (run.status === "manual_repairing") {
+  if (run.status === "manual_repairing" || run.status === "reworking") {
     if (task.question || task.resumePrompt) return true;
     const at = now();
-    await db.update(freeReviewRuns).set({ status: "exhausted", updatedAt: at, finishedAt: at })
+    const completed = confirmedDone && status === "done";
+    await db.update(freeReviewRuns).set({ status: completed ? "superseded" : "exhausted", updatedAt: at, finishedAt: at })
       .where(eq(freeReviewRuns.id, run.id));
-    await appendTaskTimeline(taskId, confirmedDone && status === "done"
-      ? `已按自由工作流第 ${run.currentRound} 轮审查意见完成修复；自动复审仍保持停止，等待你决定再审或合并。`
-      : `按自由工作流第 ${run.currentRound} 轮意见发起的修复未确认完成；自动复审保持停止。`);
+    const explicit = run.status === "manual_repairing";
+    await appendTaskTimeline(taskId, completed
+      ? `${explicit ? `已按自由工作流第 ${run.currentRound} 轮审查意见完成修复` : "任务已有新修改"}；上一轮结论已过期，等待重新审查。`
+      : `${explicit ? `按自由工作流第 ${run.currentRound} 轮意见发起的修复` : "本轮修改"}未确认完成；上一轮审查仍保持轮数用尽状态。`);
     bus.publish({ type: "task.review", taskId });
+    if (completed) await startReservation();
     return true;
   }
 

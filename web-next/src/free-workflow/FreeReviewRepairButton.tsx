@@ -27,7 +27,7 @@ export function FreeReviewRepairButton({
     setBusy(true);
     try {
       onChanged(await api.repairFreeReview(taskId));
-      notify(`已按第 ${run.currentRound} 轮审查意见发起修复；修完后可再审一轮`);
+      notify(`已按第 ${run.currentRound} 轮审查意见发起修复；可立即预约完成后的复审`);
     } catch (error) {
       notify(error instanceof Error ? error.message : "发起审查修复失败");
     } finally {
