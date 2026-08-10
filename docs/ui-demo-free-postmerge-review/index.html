@@ -3,226 +3,92 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>自由工作流 · 合并后基线审查</title>
+  <title>自由工作流 · 合并后审查操作 Demo</title>
   <link rel="icon" href="data:,">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
   <main class="demo-page">
-    <header class="demo-intro">
-      <div>
-        <p class="eyebrow">Harness / free workflow / post-merge audit</p>
-        <h1>合进去，再审最终落地的那一版。</h1>
-        <p>这个 demo 把“产物审查”和“基线审查”拆开：合并前看任务分支，合并后锁定目标分支的准确 commit，在临时只读 worktree 里做最终集成验证。</p>
-      </div>
-      <aside class="demo-state-switch" aria-label="快速切换演示状态">
-        <b>快速看状态</b>
-        <div>
-          <button type="button" data-demo-state="ready" class="is-active">待合并</button>
-          <button type="button" data-demo-state="merged">已合并</button>
-          <button type="button" data-demo-state="reviewing">审查中</button>
-          <button type="button" data-demo-state="failed">发现问题</button>
-          <button type="button" data-demo-state="passed">已通过</button>
-        </div>
-      </aside>
+    <header class="demo-bar">
+      <div><b>自由工作流 · 合并后审查操作 Demo</b><span>直接点任务对话框输入框上方的按钮</span></div>
+      <ol><li class="is-active" id="guideMerge">点“合并&amp;清理”</li><li id="guideReview">点变化后的“审查已合并结果”</li><li id="guideResult">查看审查结果</li></ol>
+      <button type="button" id="resetDemo">重新演示</button>
     </header>
 
-    <section class="demo-stage" aria-label="自由工作流合并后审查界面演示">
-      <div class="window-bar">
-        <div class="traffic"><i></i><i></i><i></i></div>
-        <div class="project-switcher"><span class="project-mark">H</span><b>harness</b><small>/ task GctxgEbq</small></div>
-        <div class="window-meta"><span class="sync-dot"></span>本地工作区</div>
-      </div>
+    <section class="app-window">
+      <aside class="sidebar">
+        <header><span class="brand">H</span><b>Harness</b><button type="button">⌄</button></header>
+        <nav><a>收件箱 <i>4</i></a><a class="is-active">任务</a><a>分组</a><a>起手式</a></nav>
+        <div class="side-section"><small>进行中</small><button type="button" class="task-row is-active"><span class="task-dot"></span><div><b>合并后审查</b><small id="sideTaskStatus">实现完成</small></div></button><button type="button" class="task-row"><span class="task-dot is-muted"></span><div><b>修复预览日志</b><small>等待执行</small></div></button></div>
+        <footer><span>fjh</span><small>本地工作区</small></footer>
+      </aside>
 
-      <div class="app-shell">
-        <section class="conversation">
-          <header class="task-head">
-            <div>
-              <span class="task-kicker">自由工作流 · single</span>
-              <h2>合并后在基线分支做最终审查</h2>
-            </div>
-            <span class="task-status" id="taskStatus">实现完成</span>
-            <button class="plain-icon" type="button" aria-label="更多操作">•••</button>
-          </header>
+      <section class="task-view">
+        <header class="task-header">
+          <div><small>harness / 自由工作流</small><h1>合并以后到基线分支再审一遍</h1></div>
+          <span class="status-pill" id="taskStatus">已完成</span>
+          <button type="button" class="icon-button" aria-label="更多">•••</button>
+        </header>
 
-          <div class="conversation-scroll">
-            <article class="message is-user">
-              <small>你 · 10:28</small>
-              <p>实现已经完成。合并以后，再到主分支最终落下来的版本上审一遍，确认集成结果没有问题。</p>
-            </article>
-            <article class="message is-agent">
-              <small>Codex · 10:42</small>
-              <p>实现与回归检查已完成，任务分支包含 3 个提交。当前 worktree 干净，可以进入合并。</p>
-              <div class="commit-row"><code>harness/GctxgEbq</code><span>3 commits</span><span>+284 −31</span></div>
-            </article>
+        <div class="conversation">
+          <article class="turn is-user"><small>你 · 14:18</small><p>实现做完以后先合并清理，然后去合并后的 main 上审查最终结果。</p></article>
+          <article class="turn is-agent"><small>Codex · 14:31</small><p>实现与测试均已完成。任务分支有 3 个提交，worktree 干净，可以执行自由工作流操作。</p><div class="chips"><code>harness/GctxgEbq</code><span>3 commits</span><span>tests passed</span></div></article>
 
-            <div class="system-event is-visible" id="mergeEvent">
-              <span class="event-icon">↗</span>
-              <div><b id="mergeEventTitle">等待执行“合并&清理”</b><small id="mergeEventText">目标 main · 安全合并 · 清理任务 worktree 与分支</small></div>
-              <time id="mergeEventTime">现在</time>
-            </div>
-            <div class="system-event" id="reviewEvent">
-              <span class="event-icon is-audit">⌕</span>
-              <div><b id="reviewEventTitle">合并后基线审查</b><small id="reviewEventText">等待合并完成后启动</small></div>
-              <time id="reviewEventTime">—</time>
-            </div>
+          <div class="timeline-note" id="timelineNote"><span>✓</span><div><b>实现完成</b><small>等待你决定派审、预览或直接合并</small></div><time>14:31</time></div>
+          <div class="timeline-note is-hidden" id="mergeNote"><span>↗</span><div><b id="mergeNoteTitle">正在合并并清理</b><small id="mergeNoteText">锁定 main 前后 commit，删除任务 worktree 与分支</small></div><time id="mergeNoteTime">进行中</time></div>
+          <div class="timeline-note is-hidden" id="reviewNote"><span>⌕</span><div><b id="reviewNoteTitle">合并后基线审查</b><small id="reviewNoteText">main@8f41c2d · 临时 detached worktree</small></div><time id="reviewNoteTime">进行中</time></div>
+        </div>
+
+        <div class="composer-shell">
+          <div class="merge-banner" id="mergeBanner"><span>✓</span><div><b>已安全合并到 main</b><small><code>5a13d70 → 8f41c2d</code> · 任务 worktree 与分支已清理</small></div><button type="button" id="showSnapshot">查看快照</button></div>
+
+          <div class="button-change-hint" id="buttonHint"><span>看这里</span><p id="buttonHintText">点击“合并&amp;清理”，确认后这排按钮会原位变化。</p></div>
+
+          <div class="free-workflow-toolbar" aria-label="自由工作流快捷操作">
+            <button type="button" class="is-review" id="reviewButton" data-state="idle">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"></circle><path d="m15.5 15.5 4 4"></path></svg>
+              <span id="reviewLabel">派审查</span>
+            </button>
+            <button type="button" class="is-preview" id="previewButton" aria-pressed="false">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="13" rx="2"></rect><path d="M8 21h8M12 17v4"></path></svg>
+              <span id="previewLabel">打开预览</span>
+            </button>
+            <button type="button" class="is-merge" id="mergeButton" data-state="idle">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="5" r="2"></circle><circle cx="18" cy="19" r="2"></circle><path d="M6 7v5c0 3 2 5 5 5h5M18 17V8M14 11l4-4 4 4"></path></svg>
+              <span id="mergeLabel">合并&amp;清理</span>
+            </button>
+            <button type="button" class="is-snapshot is-hidden" id="snapshotChip">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3 5 21M19 3l-2 18M3 9h18M2 15h18"></path></svg>
+              <span>main@8f41c2d</span>
+            </button>
           </div>
 
-          <div class="composer-wrap">
-            <div class="merged-banner" id="mergedBanner">
-              <span class="merged-check">✓</span>
-              <div><b>已合并到 main</b><small><code>5a13d70..8f41c2d</code> · 原任务 worktree 已清理</small></div>
-              <button type="button" id="copyCommit">复制 commit</button>
-            </div>
-            <div class="free-toolbar" aria-label="自由工作流快捷操作">
-              <button type="button" class="action is-review" id="preReviewButton">
-                <span class="action-icon">⌕</span><span>派产物审查</span>
-              </button>
-              <button type="button" class="action is-preview" id="previewButton">
-                <span class="action-icon">▻</span><span>打开预览</span>
-              </button>
-              <button type="button" class="action is-merge" id="mergeButton">
-                <span class="action-icon">↗</span><span>合并&amp;清理</span>
-              </button>
-              <button type="button" class="action is-post-review" id="postReviewButton">
-                <span class="action-icon">◎</span><span id="postReviewLabel">审查已合并结果</span>
-              </button>
-              <button type="button" class="action is-snapshot" id="snapshotButton">
-                <span class="action-icon">#</span><span>查看基线快照</span>
-              </button>
-            </div>
-            <div class="reply-box">
-              <span>继续交代修改，或使用上方自由工作流动作…</span>
-              <div class="executor-pill">codex · gpt-5.6-sol · xhigh</div>
-              <button type="button" aria-label="发送">↑</button>
-            </div>
-          </div>
-        </section>
+          <div class="reply-box"><div class="reply-placeholder">回复任务，或使用上方自由工作流操作…</div><footer><button type="button" class="mini-icon">＋</button><button type="button" class="mini-icon">@</button><div class="executor-pill">codex <i>·</i> gpt-5.6-sol <i>·</i> xhigh</div><span>⌘ ↵</span><button type="button" class="send-button">↑</button></footer></div>
+        </div>
+      </section>
 
-        <aside class="inspector">
-          <nav class="inspector-tabs" aria-label="检查器页面">
-            <button type="button"><span>详情</span></button>
-            <button type="button" class="is-active"><span>实际工作流</span></button>
-            <button type="button"><span>审查</span><i id="reviewBadge">1</i></button>
-            <button type="button"><span>文件</span></button>
-          </nav>
+      <aside class="inspector">
+        <nav><button type="button">详情</button><button type="button" class="is-active">实际工作流</button><button type="button">审查 <i id="reviewCount">1</i></button></nav>
+        <div class="inspector-scroll">
+          <section class="actual-workflow"><header><div><b>实际工作流</b><small>按真实操作逐项追加</small></div><span id="workflowStatus">等待操作</span></header><ol>
+            <li class="is-done"><span>✓</span><div><b>执行</b><small>实现完成 · 3 commits</small></div><time>14:31</time></li>
+            <li id="inspectorMerge"><span>2</span><div><b>合并&amp;清理</b><small id="inspectorMergeText">尚未开始</small></div><time id="inspectorMergeTime">—</time></li>
+            <li id="inspectorReview"><span>3</span><div><b>合并后审查</b><small id="inspectorReviewText">合并后可手动发起</small></div><time id="inspectorReviewTime">—</time></li>
+          </ol></section>
 
-          <div class="inspector-scroll">
-            <section class="workflow-overview">
-              <header class="section-head">
-                <div><b>实际工作流</b><small>按真实发生顺序记账，不预设线路</small></div>
-                <span class="live-pill" id="livePill">等待操作</span>
-              </header>
-              <ol class="audit-timeline">
-                <li class="is-done">
-                  <span class="rail-dot">✓</span>
-                  <div><b>实现完成</b><small>任务分支 harness/GctxgEbq · 3 commits</small></div>
-                  <time>10:42</time>
-                </li>
-                <li class="is-done">
-                  <span class="rail-dot">✓</span>
-                  <div><b>产物审查</b><small>逻辑检查通过 · 任务 worktree</small></div>
-                  <time>10:49</time>
-                </li>
-                <li id="mergeTimelineItem">
-                  <span class="rail-dot">3</span>
-                  <div><b>合并&amp;清理</b><small id="mergeTimelineText">等待你确认不可逆操作</small></div>
-                  <time id="mergeTimelineTime">—</time>
-                </li>
-                <li id="reviewTimelineItem">
-                  <span class="rail-dot">4</span>
-                  <div><b>基线审查</b><small id="reviewTimelineText">合并后检查最终集成状态</small></div>
-                  <time id="reviewTimelineTime">—</time>
-                </li>
-              </ol>
-            </section>
+          <section class="snapshot-panel is-hidden" id="snapshotPanel"><header><span>#</span><div><b>基线审查快照</b><small>审查对象固定，不跟随 main 后续移动</small></div></header><dl><div><dt>目标</dt><dd>main</dd></div><div><dt>合并前</dt><dd>5a13d70</dd></div><div><dt>合并后</dt><dd>8f41c2d</dd></div><div><dt>diff</dt><dd>5a13d70..8f41c2d</dd></div></dl><p><span>审查目录</span><code>.worktrees/.review/GctxgEbq/rvw-01</code></p></section>
 
-            <section class="snapshot-card" id="snapshotCard">
-              <header>
-                <span class="snapshot-mark">#</span>
-                <div><b>不可变审查快照</b><small>审查期间 main 后续前进也不会改变对象</small></div>
-                <span class="lock-pill">LOCKED</span>
-              </header>
-              <dl>
-                <div><dt>目标分支</dt><dd>main</dd></div>
-                <div><dt>合并前</dt><dd><code>5a13d70</code></dd></div>
-                <div><dt>合并后</dt><dd><code>8f41c2d</code></dd></div>
-                <div><dt>实际 diff</dt><dd><code>5a13d70..8f41c2d</code></dd></div>
-              </dl>
-              <p><span>临时目录</span><code>.worktrees/.review/GctxgEbq/rvw-01</code></p>
-            </section>
+          <section class="review-panel is-hidden" id="reviewPanel"><header><div><b>合并后基线审查</b><small id="reviewPanelSubtitle">Codex · main@8f41c2d</small></div><span id="reviewPanelStatus">运行中</span></header><div class="review-running" id="reviewRunning"><i></i><div><b>正在检查最终集成状态</b><small>构建测试 · 逻辑路径 · 浏览器点检</small></div></div><div class="result-box is-hidden" id="resultBox"><span id="resultMark">!</span><div><b id="resultTitle">发现 1 个问题</b><small id="resultText">合并后的清理入口仍引用已删除的任务 worktree。</small></div></div><div class="review-sim is-hidden" id="reviewSim"><small>Demo 里选择一个结果：</small><button type="button" id="failReview">模拟发现问题</button><button type="button" id="passReview">模拟通过</button></div><div class="failure-actions is-hidden" id="failureActions"><button type="button" class="is-primary" id="createFix">基于 main 创建修复任务</button><button type="button" id="retryReview">再审一轮</button></div></section>
 
-            <section class="review-card" id="reviewCard">
-              <header class="section-head">
-                <div><b>合并后基线审查</b><small id="reviewSubtitle">尚未启动</small></div>
-                <span class="review-status" id="reviewStatus">待开始</span>
-              </header>
-
-              <div class="review-running" id="reviewRunning">
-                <span class="radar"><i></i></span>
-                <div><b>Codex 正在审查 main@8f41c2d</b><small>构建与测试 · 集成逻辑 · 浏览器真实点检</small></div>
-              </div>
-
-              <div class="review-result" id="reviewResult">
-                <div class="result-summary">
-                  <span id="resultIcon">!</span>
-                  <div><b id="resultTitle">发现 1 个集成问题</b><small id="resultText">主分支上的清理入口仍引用已经删除的任务 worktree。</small></div>
-                </div>
-                <div class="finding">
-                  <span>P1</span>
-                  <p><b>合并后的真实路径会返回 404</b>审查对象是最终 commit，不会把问题误归到已经删除的任务分支。</p>
-                </div>
-              </div>
-
-              <div class="review-actions" id="reviewActions">
-                <button type="button" class="primary" id="createRepair">基于 main 创建修复任务</button>
-                <button type="button" id="retryReview">再审一轮</button>
-                <button type="button" id="acceptRisk">接受风险</button>
-              </div>
-              <div class="simulation-actions" id="simulationActions">
-                <span>演示审查结论：</span>
-                <button type="button" data-result="failed">模拟发现问题</button>
-                <button type="button" data-result="passed">模拟通过</button>
-              </div>
-            </section>
-
-            <section class="repair-card" id="repairCard">
-              <span class="repair-icon">↳</span>
-              <div><b>已创建修复任务 FIX-204</b><small>基于 main@8f41c2d 新建独立 worktree；原任务保持“已合并”。</small></div>
-              <button type="button">打开任务</button>
-            </section>
-          </div>
-        </aside>
-      </div>
+          <section class="fix-panel is-hidden" id="fixPanel"><span>↳</span><div><b>修复任务 FIX-204 已创建</b><small>基于 main@8f41c2d 新建独立 worktree</small></div><button type="button">打开</button></section>
+        </div>
+      </aside>
     </section>
-
-    <footer class="demo-notes">
-      <section><b>为什么不恢复原 worktree</b><p>原任务已经合并清理；恢复它会重新制造任务分支，并混淆“产物审查”和“最终集成审查”。</p></section>
-      <section><b>为什么锁定 commit</b><p>main 可能继续前进。审查固定的合并后 commit，报告才能稳定复现，也能准确展示本次进入基线的 diff。</p></section>
-      <section><b>失败以后不自动改主分支</b><p>合并不可逆。发现问题后创建新的修复任务，让风险与后续改动都有独立、持久的记录。</p></section>
-    </footer>
   </main>
 
-  <div class="modal-backdrop" id="mergeModal" aria-hidden="true">
-    <section class="modal" role="dialog" aria-modal="true" aria-labelledby="mergeModalTitle">
-      <span class="modal-icon is-merge">↗</span>
-      <div><p class="modal-kicker">不可逆操作</p><h2 id="mergeModalTitle">合并到 main 并清理任务工作区？</h2></div>
-      <p>系统会先记录 main 当前 commit，再安全合并任务分支，记录合并后 commit，最后删除任务 worktree 与分支。</p>
-      <dl class="modal-facts"><div><dt>来源</dt><dd>harness/GctxgEbq</dd></div><div><dt>目标</dt><dd>main</dd></div><div><dt>清理</dt><dd>worktree + branch</dd></div></dl>
-      <footer><button type="button" data-close-modal>取消</button><button type="button" class="primary" id="confirmMerge">确认合并&amp;清理</button></footer>
-    </section>
-  </div>
+  <div class="dialog-layer is-hidden" id="mergeDialog"><section class="confirm-dialog" role="dialog" aria-modal="true"><header><span class="dialog-icon is-green">↗</span><div><h2>合并并清理</h2><p>将安全合并任务分支，并清理任务 worktree 与分支。</p></div></header><div class="merge-facts"><div><small>来源</small><b>harness/GctxgEbq</b></div><div><small>目标</small><b>main</b></div><div><small>清理</small><b>worktree + branch</b></div></div><footer><button type="button" data-close>取消</button><button type="button" class="is-primary is-green" id="confirmMerge">合并&amp;清理</button></footer></section></div>
 
-  <div class="modal-backdrop" id="reviewModal" aria-hidden="true">
-    <section class="modal" role="dialog" aria-modal="true" aria-labelledby="reviewModalTitle">
-      <span class="modal-icon is-review">◎</span>
-      <div><p class="modal-kicker">合并后审计</p><h2 id="reviewModalTitle">审查 main@8f41c2d</h2></div>
-      <p>将创建临时 detached worktree。审查只读固定 commit，不恢复原任务分支，也不改变任务“已合并”状态。</p>
-      <label class="select-field"><span>审查者</span><select><option>Codex · gpt-5.6-sol · xhigh</option><option>Claude · opus · high</option></select></label>
-      <label class="select-field"><span>检查范围</span><select><option>逻辑 + 构建测试 + 浏览器点检</option><option>语法与机械质量</option></select></label>
-      <footer><button type="button" data-close-modal>取消</button><button type="button" class="primary" id="confirmReview">开始基线审查</button></footer>
-    </section>
-  </div>
+  <div class="dialog-layer is-hidden" id="reviewDialog"><section class="free-review-dialog" role="dialog" aria-modal="true"><header><span><svg viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"></circle><path d="m15.5 15.5 4 4"></path></svg></span><div><h2 id="reviewDialogTitle">派审查</h2><p id="reviewDialogCopy">选择审查者、检查类型和自动复审次数。</p></div><button type="button" data-close>×</button></header><div class="free-review-dialog-body"><section class="reviewer-list"><div class="dialog-section-title"><b>审查者</b><button type="button">＋ 新建</button></div><button type="button" class="reviewer is-selected"><span class="avatar">C</span><div><b>Codex 严格审查</b><small>codex · gpt-5.6-sol · xhigh</small></div><span class="check">✓</span></button><button type="button" class="reviewer"><span class="avatar is-claude">A</span><div><b>Claude 产品审查</b><small>claude · opus · high</small></div></button></section><section class="review-options"><label><span>检查类型</span><select><option>逻辑检查</option><option>语法检查</option></select></label><label><span>自动复审</span><select><option>0 轮</option><option>1 轮</option><option>2 轮</option></select></label><div class="target-box" id="targetBox"><small>审查对象</small><b id="targetTitle">任务 worktree</b><code id="targetDetail">harness/GctxgEbq</code></div></section></div><footer><button type="button" data-close>取消</button><button type="button" class="is-primary" id="confirmReview">开始审查</button></footer></section></div>
 
   <div class="toast" id="toast" role="status"></div>
   <script src="app.js"></script>

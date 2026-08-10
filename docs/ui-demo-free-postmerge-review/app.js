@@ -1,149 +1,169 @@
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
 
-const els = {
-  taskStatus: $("#taskStatus"), livePill: $("#livePill"), reviewBadge: $("#reviewBadge"),
-  mergedBanner: $("#mergedBanner"), mergeButton: $("#mergeButton"), preReviewButton: $("#preReviewButton"),
-  copyCommit: $("#copyCommit"),
-  previewButton: $("#previewButton"), postReviewButton: $("#postReviewButton"), postReviewLabel: $("#postReviewLabel"),
-  snapshotButton: $("#snapshotButton"), snapshotCard: $("#snapshotCard"), reviewCard: $("#reviewCard"),
-  mergeTimelineItem: $("#mergeTimelineItem"), mergeTimelineText: $("#mergeTimelineText"), mergeTimelineTime: $("#mergeTimelineTime"),
-  reviewTimelineItem: $("#reviewTimelineItem"), reviewTimelineText: $("#reviewTimelineText"), reviewTimelineTime: $("#reviewTimelineTime"),
-  mergeEvent: $("#mergeEvent"), mergeEventTitle: $("#mergeEventTitle"), mergeEventText: $("#mergeEventText"), mergeEventTime: $("#mergeEventTime"),
-  reviewEvent: $("#reviewEvent"), reviewEventTitle: $("#reviewEventTitle"), reviewEventText: $("#reviewEventText"), reviewEventTime: $("#reviewEventTime"),
-  reviewStatus: $("#reviewStatus"), reviewSubtitle: $("#reviewSubtitle"), reviewRunning: $("#reviewRunning"),
-  reviewResult: $("#reviewResult"), resultIcon: $("#resultIcon"), resultTitle: $("#resultTitle"), resultText: $("#resultText"),
-  reviewActions: $("#reviewActions"), simulationActions: $("#simulationActions"), repairCard: $("#repairCard"),
-  mergeModal: $("#mergeModal"), reviewModal: $("#reviewModal"), toast: $("#toast"),
+const el = {
+  reviewButton: $("#reviewButton"), reviewLabel: $("#reviewLabel"), previewButton: $("#previewButton"), previewLabel: $("#previewLabel"),
+  mergeButton: $("#mergeButton"), mergeLabel: $("#mergeLabel"), snapshotChip: $("#snapshotChip"), mergeBanner: $("#mergeBanner"),
+  buttonHint: $("#buttonHint"), buttonHintText: $("#buttonHintText"), taskStatus: $("#taskStatus"), sideTaskStatus: $("#sideTaskStatus"),
+  guideMerge: $("#guideMerge"), guideReview: $("#guideReview"), guideResult: $("#guideResult"),
+  mergeDialog: $("#mergeDialog"), reviewDialog: $("#reviewDialog"), reviewDialogTitle: $("#reviewDialogTitle"), reviewDialogCopy: $("#reviewDialogCopy"),
+  targetTitle: $("#targetTitle"), targetDetail: $("#targetDetail"), timelineNote: $("#timelineNote"), mergeNote: $("#mergeNote"),
+  mergeNoteTitle: $("#mergeNoteTitle"), mergeNoteText: $("#mergeNoteText"), mergeNoteTime: $("#mergeNoteTime"), reviewNote: $("#reviewNote"),
+  reviewNoteTitle: $("#reviewNoteTitle"), reviewNoteText: $("#reviewNoteText"), reviewNoteTime: $("#reviewNoteTime"),
+  workflowStatus: $("#workflowStatus"), inspectorMerge: $("#inspectorMerge"), inspectorMergeText: $("#inspectorMergeText"), inspectorMergeTime: $("#inspectorMergeTime"),
+  inspectorReview: $("#inspectorReview"), inspectorReviewText: $("#inspectorReviewText"), inspectorReviewTime: $("#inspectorReviewTime"),
+  snapshotPanel: $("#snapshotPanel"), reviewPanel: $("#reviewPanel"), reviewPanelStatus: $("#reviewPanelStatus"), reviewPanelSubtitle: $("#reviewPanelSubtitle"),
+  reviewRunning: $("#reviewRunning"), reviewSim: $("#reviewSim"), resultBox: $("#resultBox"), resultMark: $("#resultMark"), resultTitle: $("#resultTitle"),
+  resultText: $("#resultText"), failureActions: $("#failureActions"), fixPanel: $("#fixPanel"), reviewCount: $("#reviewCount"), toast: $("#toast"),
 };
 
 let state = "ready";
 let previewOpen = false;
-let repairCreated = false;
+let reviewTarget = "product";
+let mergeTimer;
 let toastTimer;
 
-function showToast(message) {
+function showToast(text) {
   clearTimeout(toastTimer);
-  els.toast.textContent = message;
-  els.toast.classList.add("is-visible");
-  toastTimer = setTimeout(() => els.toast.classList.remove("is-visible"), 2200);
+  el.toast.textContent = text;
+  el.toast.classList.add("is-visible");
+  toastTimer = setTimeout(() => el.toast.classList.remove("is-visible"), 2200);
 }
 
-function openModal(modal) {
-  modal.classList.add("is-open");
-  modal.setAttribute("aria-hidden", "false");
+function openDialog(dialog) { dialog.classList.remove("is-hidden"); }
+function closeDialog(dialog) { dialog.classList.add("is-hidden"); }
+
+function setGuide(step) {
+  [el.guideMerge, el.guideReview, el.guideResult].forEach((item, index) => item.classList.toggle("is-active", index === step));
 }
 
-function closeModal(modal) {
-  modal.classList.remove("is-open");
-  modal.setAttribute("aria-hidden", "true");
-}
-
-function mark(item, kind) {
-  item.classList.remove("is-done", "is-active", "is-failed");
+function setTimelineItem(item, kind, mark) {
+  item.classList.remove("is-active", "is-done", "is-failed");
   if (kind) item.classList.add(kind);
+  item.querySelector(":scope > span").textContent = mark;
 }
 
 function render() {
+  const merging = state === "merging";
   const merged = ["merged", "reviewing", "failed", "passed"].includes(state);
   const reviewing = state === "reviewing";
   const failed = state === "failed";
   const passed = state === "passed";
 
-  $$('[data-demo-state]').forEach((button) => button.classList.toggle("is-active", button.dataset.demoState === state));
-  els.taskStatus.textContent = failed ? "已合并 · 审查未过" : reviewing ? "已合并 · 审查中" : merged ? "已合并" : state === "merging" ? "合并中" : "实现完成";
-  els.taskStatus.className = `task-status${merged && !failed ? " is-merged" : ""}${failed ? " is-warning" : ""}`;
-  els.livePill.textContent = reviewing ? "审查运行中" : failed ? "需要处理" : passed ? "全部通过" : merged ? "已合并" : state === "merging" ? "正在合并" : "等待操作";
-  els.livePill.className = `live-pill${reviewing || state === "merging" ? " is-live" : ""}${merged && !reviewing && !failed ? " is-done" : ""}`;
+  el.taskStatus.textContent = failed ? "已合并 · 审查未过" : reviewing ? "已合并 · 审查中" : merged ? "已合并" : merging ? "合并中" : "已完成";
+  el.taskStatus.className = `status-pill${merged && !failed ? " is-green" : ""}${failed ? " is-red" : ""}`;
+  el.sideTaskStatus.textContent = failed ? "合并后发现问题" : reviewing ? "基线审查中" : merged ? "已合并清理" : merging ? "正在合并" : "实现完成";
 
-  els.mergedBanner.classList.toggle("is-visible", merged);
-  els.preReviewButton.style.display = merged ? "none" : "inline-flex";
-  els.previewButton.style.display = merged ? "none" : "inline-flex";
-  els.mergeButton.style.display = merged ? "none" : "inline-flex";
-  els.mergeButton.disabled = state === "merging";
-  els.mergeButton.classList.toggle("is-busy", state === "merging");
-  els.mergeButton.querySelector("span:last-child").textContent = state === "merging" ? "合并中…" : "合并&清理";
-  els.postReviewButton.classList.toggle("is-visible", merged);
-  els.snapshotButton.classList.toggle("is-visible", merged);
-  els.postReviewButton.disabled = reviewing;
-  els.postReviewButton.classList.toggle("is-busy", reviewing);
-  els.postReviewLabel.textContent = reviewing ? "基线审查中" : failed || passed ? "再审一轮" : "审查已合并结果";
+  el.reviewButton.disabled = merging || reviewing;
+  el.previewButton.disabled = merging || merged;
+  el.mergeButton.disabled = merging || merged;
+  el.reviewButton.dataset.state = reviewing ? "reviewing" : failed ? "failed" : passed ? "passed" : merged ? "merged" : "idle";
+  el.mergeButton.dataset.state = merging ? "merging" : merged ? "merged" : "idle";
+  el.mergeButton.classList.toggle("is-spinning", merging);
+  el.reviewButton.classList.toggle("is-spinning", reviewing);
+  el.reviewLabel.textContent = reviewing ? "基线审查中" : failed || passed ? "再审一轮" : merged ? "审查已合并结果" : "派审查";
+  el.previewLabel.textContent = merged ? "预览已关闭" : previewOpen ? "关闭预览" : "打开预览";
+  el.previewButton.setAttribute("aria-pressed", String(previewOpen && !merged));
+  el.mergeLabel.textContent = merging ? "合并中…" : merged ? "已合并清理" : "合并&清理";
+  el.snapshotChip.classList.toggle("is-hidden", !merged);
+  el.mergeBanner.classList.toggle("is-visible", merged);
 
-  mark(els.mergeTimelineItem, state === "merging" ? "is-active" : merged ? "is-done" : "");
-  els.mergeTimelineItem.querySelector(".rail-dot").textContent = merged ? "✓" : state === "merging" ? "↗" : "3";
-  els.mergeTimelineText.textContent = state === "merging" ? "正在锁定 commit 并清理任务 worktree" : merged ? "main · 5a13d70 → 8f41c2d · 已清理" : "等待你确认不可逆操作";
-  els.mergeTimelineTime.textContent = merged ? "10:53" : state === "merging" ? "现在" : "—";
+  el.buttonHint.className = `button-change-hint${merged ? " is-success" : ""}${reviewing ? " is-review" : ""}`;
+  el.buttonHint.querySelector("span").textContent = reviewing ? "运行中" : merged ? "按钮已变化" : "看这里";
+  el.buttonHintText.textContent = reviewing
+    ? "“审查已合并结果”已经原位变成“基线审查中”。"
+    : merged
+      ? "原来的“派审查”现在变成“审查已合并结果”；可以直接继续点。"
+      : "点击“合并&清理”，确认后这排按钮会原位变化。";
 
-  const reviewMark = reviewing ? "is-active" : failed ? "is-failed" : passed ? "is-done" : "";
-  mark(els.reviewTimelineItem, reviewMark);
-  els.reviewTimelineItem.querySelector(".rail-dot").textContent = passed ? "✓" : failed ? "!" : reviewing ? "⌕" : "4";
-  els.reviewTimelineText.textContent = reviewing ? "正在临时 detached worktree 中检查" : failed ? "发现 1 个集成问题，等待处理" : passed ? "main@8f41c2d 已通过最终审查" : "合并后检查最终集成状态";
-  els.reviewTimelineTime.textContent = reviewing ? "进行中" : failed || passed ? "11:06" : "—";
+  el.timelineNote.classList.toggle("is-hidden", merging || merged);
+  el.mergeNote.classList.toggle("is-hidden", !merging && !merged);
+  el.mergeNote.classList.toggle("is-active", merging);
+  el.mergeNoteTitle.textContent = merging ? "正在合并并清理" : "已安全合并到 main";
+  el.mergeNoteText.textContent = merging ? "锁定 main 前后 commit，删除任务 worktree 与分支" : "main@8f41c2d · 原任务 worktree 与分支已清理";
+  el.mergeNoteTime.textContent = merging ? "进行中" : "14:34";
+  el.reviewNote.classList.toggle("is-hidden", !reviewing && !failed && !passed);
+  el.reviewNote.classList.toggle("is-active", reviewing);
+  el.reviewNote.classList.toggle("is-failed", failed);
+  el.reviewNoteTitle.textContent = reviewing ? "正在审查已合并结果" : failed ? "基线审查发现问题" : "基线审查通过";
+  el.reviewNoteText.textContent = reviewing ? "main@8f41c2d · 临时 detached worktree" : failed ? "P1 · 已合并状态保持不变" : "构建、测试与真实点检全部通过";
+  el.reviewNoteTime.textContent = reviewing ? "进行中" : "14:46";
 
-  els.mergeEvent.classList.toggle("is-visible", !merged || state === "merging");
-  els.mergeEventTitle.textContent = state === "merging" ? "正在安全合并并清理" : "等待执行“合并&清理”";
-  els.mergeEventText.textContent = state === "merging" ? "记录 main 前后 commit · 删除任务 worktree 与分支" : "目标 main · 安全合并 · 清理任务 worktree 与分支";
-  els.mergeEventTime.textContent = state === "merging" ? "进行中" : "现在";
-  els.reviewEvent.classList.toggle("is-visible", merged);
-  els.reviewEventTitle.textContent = reviewing ? "合并后基线审查正在运行" : failed ? "合并后审查发现问题" : passed ? "合并后基线审查通过" : "可以审查已合并结果";
-  els.reviewEventText.textContent = reviewing ? "main@8f41c2d · 临时 detached worktree" : failed ? "P1 · 已合并状态保持不变" : passed ? "构建、测试与浏览器点检全部通过" : "对象已锁定为 main@8f41c2d";
-  els.reviewEventTime.textContent = reviewing ? "进行中" : failed || passed ? "11:06" : "现在";
+  el.workflowStatus.textContent = reviewing ? "审查中" : failed ? "需要处理" : passed ? "已通过" : merged ? "已合并" : merging ? "合并中" : "等待操作";
+  el.workflowStatus.className = reviewing || merging ? "is-active" : failed ? "is-failed" : merged ? "is-done" : "";
+  setTimelineItem(el.inspectorMerge, merging ? "is-active" : merged ? "is-done" : "", merged ? "✓" : merging ? "↗" : "2");
+  el.inspectorMergeText.textContent = merging ? "正在锁定 commit 并清理" : merged ? "main@8f41c2d · 已清理" : "尚未开始";
+  el.inspectorMergeTime.textContent = merged ? "14:34" : merging ? "进行中" : "—";
+  setTimelineItem(el.inspectorReview, reviewing ? "is-active" : failed ? "is-failed" : passed ? "is-done" : "", reviewing ? "⌕" : failed ? "!" : passed ? "✓" : "3");
+  el.inspectorReviewText.textContent = reviewing ? "正在检查最终集成状态" : failed ? "发现 1 个问题" : passed ? "最终集成验证通过" : "合并后可手动发起";
+  el.inspectorReviewTime.textContent = reviewing ? "进行中" : failed || passed ? "14:46" : "—";
 
-  els.snapshotCard.classList.toggle("is-visible", merged);
-  els.reviewCard.classList.toggle("is-visible", merged);
-  els.reviewRunning.classList.toggle("is-visible", reviewing);
-  els.reviewResult.classList.toggle("is-visible", failed || passed);
-  els.reviewResult.classList.toggle("is-passed", passed);
-  els.reviewActions.classList.toggle("is-visible", failed);
-  els.simulationActions.classList.toggle("is-visible", reviewing);
-  els.repairCard.classList.toggle("is-visible", repairCreated && failed);
-  els.reviewBadge.textContent = failed || passed ? "2" : "1";
-
-  els.reviewStatus.textContent = reviewing ? "运行中" : failed ? "未通过" : passed ? "已通过" : "待开始";
-  els.reviewStatus.className = `review-status${reviewing ? " is-running" : ""}${failed ? " is-failed" : ""}${passed ? " is-passed" : ""}`;
-  els.reviewSubtitle.textContent = reviewing ? "Codex · 逻辑检查 · main@8f41c2d" : failed ? "第 1 轮 · 发现问题" : passed ? "第 1 轮 · 最终集成验证通过" : "尚未启动";
+  el.snapshotPanel.classList.toggle("is-hidden", !merged);
+  el.reviewPanel.classList.toggle("is-hidden", !reviewing && !failed && !passed);
+  el.reviewRunning.classList.toggle("is-hidden", !reviewing);
+  el.reviewSim.classList.toggle("is-hidden", !reviewing);
+  el.resultBox.classList.toggle("is-hidden", !failed && !passed);
+  el.resultBox.classList.toggle("is-passed", passed);
+  el.failureActions.classList.toggle("is-hidden", !failed);
+  el.reviewPanelStatus.textContent = reviewing ? "运行中" : failed ? "未通过" : "已通过";
+  el.reviewPanelStatus.className = reviewing ? "is-active" : failed ? "is-failed" : "is-done";
+  el.reviewPanelSubtitle.textContent = reviewing ? "Codex · main@8f41c2d" : failed ? "第 1 轮 · 发现问题" : "第 1 轮 · 审查通过";
   if (passed) {
-    els.resultIcon.textContent = "✓";
-    els.resultTitle.textContent = "最终集成状态符合预期";
-    els.resultText.textContent = "构建、测试和浏览器真实点检全部通过；临时审查 worktree 已清理。";
+    el.resultMark.textContent = "✓";
+    el.resultTitle.textContent = "最终集成状态符合预期";
+    el.resultText.textContent = "构建、测试和浏览器真实点检全部通过。";
   } else {
-    els.resultIcon.textContent = "!";
-    els.resultTitle.textContent = "发现 1 个集成问题";
-    els.resultText.textContent = "主分支上的清理入口仍引用已经删除的任务 worktree。";
+    el.resultMark.textContent = "!";
+    el.resultTitle.textContent = "发现 1 个问题";
+    el.resultText.textContent = "合并后的清理入口仍引用已删除的任务 worktree。";
   }
+  el.reviewCount.textContent = failed || passed ? "2" : "1";
+  if (merging || state === "ready") setGuide(0); else if (merged) setGuide(1); else setGuide(2);
 }
 
-function setState(next) {
-  state = next;
-  if (next !== "failed") repairCreated = false;
+function reset() {
+  clearTimeout(mergeTimer);
+  state = "ready";
+  previewOpen = false;
+  reviewTarget = "product";
+  el.fixPanel.classList.add("is-hidden");
+  closeDialog(el.mergeDialog);
+  closeDialog(el.reviewDialog);
   render();
 }
 
-$$('[data-demo-state]').forEach((button) => button.addEventListener("click", () => setState(button.dataset.demoState)));
-els.mergeButton.addEventListener("click", () => openModal(els.mergeModal));
-els.postReviewButton.addEventListener("click", () => openModal(els.reviewModal));
-els.snapshotButton.addEventListener("click", () => { els.snapshotCard.scrollIntoView({ behavior: "smooth", block: "center" }); showToast("已定位到不可变审查快照"); });
-els.preReviewButton.addEventListener("click", () => showToast("这是合并前的任务产物审查；本 demo 重点展示合并后的第二种审查"));
-els.previewButton.addEventListener("click", () => { previewOpen = !previewOpen; els.previewButton.querySelector("span:last-child").textContent = previewOpen ? "关闭预览" : "打开预览"; showToast(previewOpen ? "预览已打开" : "预览已关闭"); });
-els.copyCommit.addEventListener("click", () => showToast("已复制 8f41c2d"));
-
+el.mergeButton.addEventListener("click", () => openDialog(el.mergeDialog));
+el.previewButton.addEventListener("click", () => { previewOpen = !previewOpen; render(); showToast(previewOpen ? "预览已打开" : "预览已关闭"); });
+el.reviewButton.addEventListener("click", () => {
+  reviewTarget = ["merged", "failed", "passed"].includes(state) ? "baseline" : "product";
+  el.reviewDialogTitle.textContent = reviewTarget === "baseline" ? "审查已合并结果" : "派审查";
+  el.reviewDialogCopy.textContent = reviewTarget === "baseline" ? "选择审查者，验证合并到基线后的最终集成状态。" : "选择审查者、检查类型和自动复审次数。";
+  el.targetTitle.textContent = reviewTarget === "baseline" ? "合并后基线快照" : "任务 worktree";
+  el.targetDetail.textContent = reviewTarget === "baseline" ? "main@8f41c2d · detached" : "harness/GctxgEbq";
+  openDialog(el.reviewDialog);
+});
 $("#confirmMerge").addEventListener("click", () => {
-  closeModal(els.mergeModal);
-  setState("merging");
-  setTimeout(() => { setState("merged"); showToast("已安全合并到 main，并记录审查快照 8f41c2d"); }, 1100);
+  closeDialog(el.mergeDialog);
+  state = "merging";
+  render();
+  mergeTimer = setTimeout(() => { state = "merged"; previewOpen = false; render(); showToast("合并&清理完成；“派审查”已变成“审查已合并结果”"); }, 1100);
 });
 $("#confirmReview").addEventListener("click", () => {
-  closeModal(els.reviewModal);
-  setState("reviewing");
-  showToast("已在临时 detached worktree 启动基线审查");
+  closeDialog(el.reviewDialog);
+  if (reviewTarget === "product") { showToast("已启动合并前产物审查；请重置后按演示步骤体验合并后审查"); return; }
+  state = "reviewing";
+  render();
+  showToast("已在 main@8f41c2d 的临时 worktree 启动审查");
 });
-$$('[data-result]').forEach((button) => button.addEventListener("click", () => setState(button.dataset.result)));
-$("#createRepair").addEventListener("click", () => { repairCreated = true; render(); showToast("已基于 main@8f41c2d 创建修复任务 FIX-204"); });
-$("#retryReview").addEventListener("click", () => setState("reviewing"));
-$("#acceptRisk").addEventListener("click", () => { setState("passed"); showToast("风险已确认；原审查报告仍保留"); });
-
-$$('[data-close-modal]').forEach((button) => button.addEventListener("click", () => closeModal(button.closest(".modal-backdrop"))));
-$$('.modal-backdrop').forEach((modal) => modal.addEventListener("click", (event) => { if (event.target === modal) closeModal(modal); }));
-document.addEventListener("keydown", (event) => { if (event.key === "Escape") $$('.modal-backdrop.is-open').forEach(closeModal); });
+$("#failReview").addEventListener("click", () => { state = "failed"; render(); });
+$("#passReview").addEventListener("click", () => { state = "passed"; render(); });
+$("#retryReview").addEventListener("click", () => { state = "reviewing"; render(); });
+$("#createFix").addEventListener("click", () => { el.fixPanel.classList.remove("is-hidden"); showToast("已基于 main@8f41c2d 创建修复任务 FIX-204"); });
+$("#showSnapshot").addEventListener("click", () => { el.snapshotPanel.scrollIntoView({ behavior: "smooth", block: "center" }); showToast("已定位到基线审查快照"); });
+el.snapshotChip.addEventListener("click", () => el.snapshotPanel.scrollIntoView({ behavior: "smooth", block: "center" }));
+$("#resetDemo").addEventListener("click", reset);
+$$('[data-close]').forEach((button) => button.addEventListener("click", () => closeDialog(button.closest(".dialog-layer"))));
+$$('.dialog-layer').forEach((layer) => layer.addEventListener("click", (event) => { if (event.target === layer) closeDialog(layer); }));
+document.addEventListener("keydown", (event) => { if (event.key === "Escape") $$('.dialog-layer:not(.is-hidden)').forEach(closeDialog); });
 
 render();
