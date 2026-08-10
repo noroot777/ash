@@ -23,6 +23,7 @@ import { QuestionCard } from "../task-detail/QuestionCard.tsx";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import { DeleteTaskDialog } from "../task-detail/DeleteTaskDialog.tsx";
 import { TaskDetail } from "../task-detail/TaskDetail.tsx";
+import { useTaskReplyDraft } from "../task-detail/TaskReplyDrafts.tsx";
 import { conversationToMarkdown } from "../task-detail/conversationModel.ts";
 import { TeamFeed } from "./TeamFeed.tsx";
 import { TeamAttentionBar } from "./TeamAttentionBar.tsx";
@@ -75,14 +76,16 @@ function TeamReplyBox({
   task: Task;
   onSend: (text: string, attachments: string[], options: { sendAt?: string }) => Promise<ReplyTaskResult>;
 }) {
-  const [value, setValue] = useState("");
+  const draft = useTaskReplyDraft(task.id);
+  const value = draft.text;
+  const setValue = draft.setText;
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [scheduleOpen, setScheduleOpen] = useState(false);
   const [sendAt, setSendAt] = useState("");
   const scheduleTriggerRef = useRef<HTMLButtonElement>(null);
   const scheduled = useScheduledMessages(task.id);
-  const uploads = useAttachments();
+  const uploads = useAttachments({ value: draft.attachments, onChange: draft.setAttachments });
   const disabled = !!task.archived;
   // 技能按**调度者自己的执行器**算：这句话是发给调度台那个会话的，执行者手上装的
   // 技能跟它不是一回事（派活时该带什么由调度者自己在 dispatch 里写）。
@@ -94,12 +97,10 @@ function TeamReplyBox({
   });
   const slash = useSlashCompletion({ value, setValue, skills: skills.skills, remote: skills.remote, disabled });
   useEffect(() => {
-    setValue("");
     setError(null);
     setScheduleOpen(false);
     setSendAt("");
-    uploads.clear();
-  }, [task.id, uploads.clear]);
+  }, [task.id]);
   const send = async (scheduledAt?: string) => {
     if (disabled || sending || uploads.uploading || (!value.trim() && !uploads.attachments.length)) return;
     setSending(true);

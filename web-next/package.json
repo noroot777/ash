@@ -24,6 +24,7 @@
     "test:spread-filter": "node --experimental-strip-types scripts/test-spread-filter.mjs",
     "test:notes-filter": "node --experimental-strip-types scripts/test-notes-filter.mjs",
     "test:workspace-history": "node --experimental-strip-types scripts/test-workspace-history.mjs",
+    "test:reply-drafts": "node scripts/test-reply-drafts.mjs",
     "test:workflow-rail": "node --experimental-strip-types scripts/test-workflow-rail.mjs",
     "test:workflow-edit": "node --experimental-strip-types scripts/test-workflow-edit.mjs",
     "typecheck": "tsc -p tsconfig.json",

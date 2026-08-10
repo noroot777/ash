@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState, type ClipboardEvent } from "react";
+import { useCallback, useRef, useState, type ClipboardEvent, type SetStateAction } from "react";
 import { File as FileIcon, Paperclip, X } from "@phosphor-icons/react";
 import { maxBytesFor, type AttachmentKind } from "@harness/shared";
 import { ImagePreviewGroup, PreviewableImage } from "../components/ImagePreview.tsx";
@@ -39,10 +39,28 @@ function dataUrl(file: File): Promise<string> {
   });
 }
 
-export function useAttachments() {
-  const [attachments, setAttachments] = useState<UploadAttachment[]>([]);
+export function useAttachments({
+  value,
+  onChange,
+}: {
+  value?: UploadAttachment[];
+  onChange?: (attachments: UploadAttachment[]) => void;
+} = {}) {
+  const [storedAttachments, setStoredAttachments] = useState<UploadAttachment[]>([]);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const controlled = value !== undefined;
+  const attachments = value ?? storedAttachments;
+  const attachmentsRef = useRef(attachments);
+  attachmentsRef.current = attachments;
+
+  const setAttachments = useCallback((update: SetStateAction<UploadAttachment[]>) => {
+    const current = attachmentsRef.current;
+    const next = typeof update === "function" ? update(current) : update;
+    attachmentsRef.current = next;
+    if (!controlled) setStoredAttachments(next);
+    onChange?.(next);
+  }, [controlled, onChange]);
 
   const addFiles = useCallback(async (files: File[]) => {
     if (!files.length) return;
@@ -65,7 +83,7 @@ export function useAttachments() {
     } finally {
       setUploading(false);
     }
-  }, []);
+  }, [setAttachments]);
 
   const onPaste = useCallback((event: ClipboardEvent<HTMLTextAreaElement>) => {
     const files = pastedFiles(event);
@@ -76,11 +94,11 @@ export function useAttachments() {
 
   const remove = useCallback((path: string) => {
     setAttachments((current) => current.filter((attachment) => attachment.path !== path));
-  }, []);
+  }, [setAttachments]);
   const clear = useCallback(() => {
     setAttachments([]);
     setError(null);
-  }, []);
+  }, [setAttachments]);
 
   return { attachments, uploading, error, addFiles, onPaste, remove, clear };
 }
