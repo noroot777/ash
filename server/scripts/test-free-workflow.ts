@@ -13,8 +13,19 @@ try {
   const { ensureSchema, db } = await import("../src/db/index.js");
   const { agents, freeReviewRounds, freeReviewRuns, projects, sessions, tasks } = await import("../src/db/schema.js");
   const { createTasks } = await import("../src/task-store.js");
-  const { mountFreeWorkflowRoutes, freeReviewOutcome, freeReviewPrompt, freeReviewResumeOptions, handleFreeWorkflowSettlement } = await import("../src/free-workflow.js");
-  const { finishFreeTaskExecution, recordFreePreviewEvent, recordFreeTaskExecutionStartIfFree } = await import("../src/free-workflow-events.js");
+  const {
+    mountFreeWorkflowRoutes,
+    freeReviewOutcome,
+    freeReviewPrompt,
+    freeRepairPrompt,
+    freeReviewResumeOptions,
+    handleFreeWorkflowSettlement,
+  } = await import("../src/free-workflow.js");
+  const {
+    finishFreeTaskExecution,
+    recordFreePreviewEvent,
+    recordFreeTaskExecutionStartIfFree,
+  } = await import("../src/free-workflow-events.js");
   const { claimTurn } = await import("../src/runs.js");
   const { mountReviewerProfileRoutes } = await import("../src/reviewer-profiles.js");
   const { mountTaskRoutes } = await import("../src/task-routes.js");
@@ -69,6 +80,10 @@ try {
   assert.match(skillContext, /标题也可能点名 \/grill-me/);
   assert.match(skillContext, /原始正文要求运行 \/grill-me/);
   assert.match(skillContext, /把排队需求也一起做完[\s\S]*\/grill-me/, "需求文件仍须完整保留后续追问");
+  const repair = freeRepairPrompt("free-task", promptRun, ["shot.png"]);
+  assert.match(repair, /\[report\.md\]\([^\n]+report\.md\)/, "修复交接应引用唯一的 report.md");
+  assert.match(repair, /\[shot\.png\]\([^\n]+shot\.png\)/, "截图证据应以路径交接");
+  assert.doesNotMatch(repair, /审查报告：\n#/, "修复交接不得复制报告正文");
 
   await createTasks([{
     id: "free-merge-task", projectId: "p", groupId: null, parentId: null,

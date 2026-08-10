@@ -39,6 +39,7 @@
     "test:claude-stream": "tsx scripts/test-claude-stream-errors.ts",
     "test:codex-resident": "tsx scripts/test-codex-resident.ts",
     "test:session-trace": "tsx scripts/test-session-trace.ts",
+    "test:conversation-turn": "tsx scripts/test-conversation-turn.ts",
     "test:agent-attachments": "tsx scripts/test-agent-attachments.ts",
     "test:usage": "tsx scripts/test-usage-accounting.ts",
     "test:peer-context": "tsx scripts/test-peer-context.ts",

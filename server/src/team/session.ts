@@ -42,6 +42,7 @@ import { resolveExecutorFor } from "../executors/index.js";
 import type { ResidentHandle } from "../executors/types.js";
 import { RUNS_DIR } from "../paths.js";
 import { appendSessionTrace, writeTurn, writeTurnEnd, writeRunError } from "../transcript.js";
+import { recordUserConversationTurn } from "../conversation-turn.js";
 import { recordSessionUsageEvent, setSessionContext } from "../usage.js";
 import { LEAD_PREAMBLE, LEAD_NUDGE, LEAD_RESUMED, LEAD_WORKSPACE_RESET } from "./prompts.js";
 import { withSkillInvocation } from "../skills.js";
@@ -212,9 +213,8 @@ function push(lead: Lead, text: string, kind: Kind): void {
       lead.handle.interrupt();
       recordSystemTurn(lead, INTERRUPT_NOTE);
     }
-    // 你→ 的插话只写 .md(实时由客户端乐观显示),跟单任务 reply 一致。
     const at = now();
-    writeTurn(lead.out, { t: "user", agent: lead.agentType, text }, at);
+    recordUserConversationTurn({ taskId: lead.taskId, sessionId: lead.sessId, role: "lead", agentType: lead.agentType, out: lead.out, text, at });
     lead.handle.send(promptedText);
     void beginTurn(lead, at);
     return;
@@ -320,12 +320,10 @@ async function openLead(taskId: string, rawText: string, kind: Kind): Promise<Le
     closing: null,
   };
   leads.set(taskId, lead);
-  // 接回时把带我们回来的那条消息记进时间线(全新开台的首条消息是「运行的
-  // prompt」,跟单任务一样不记 turn)。
-  if (resuming) {
-    if (kind === "user") writeTurn(lead.out, { t: "user", agent: lead.agentType, text }, turnStart);
-    else recordSystemTurn(lead, text, turnStart);
-  }
+  // 运行按钮带来的首个任务 prompt 不另记 turn；用户亲自发来的消息无论是否顺手
+  // 打开了调度台，都必须成为可持久、可实时同步的一条 user turn。
+  if (kind === "user") recordUserConversationTurn({ taskId, sessionId: sessId, role: "lead", agentType: lead.agentType, out: lead.out, text, at: turnStart });
+  else if (resuming) recordSystemTurn(lead, text, turnStart);
   void beginTurn(lead, turnStart);
   void consume(lead).catch((err) => console.error(`[harness] team consume(${taskId}) failed:`, err));
   return lead;

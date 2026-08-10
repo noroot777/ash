@@ -323,8 +323,7 @@ async function concludeRound(
     return;
   }
 
-  const [report, images, coverage] = await Promise.all([
-    readReport(target.id, round),
+  const [images, coverage] = await Promise.all([
     screenshots(target.id, round),
     reviewCoverageFor(target),
   ]);
@@ -343,7 +342,6 @@ async function concludeRound(
       target,
       round,
       reviewTaskId,
-      report,
       images,
       coverage,
       autoNext: plan.auto && stationRound < plan.maxRounds,

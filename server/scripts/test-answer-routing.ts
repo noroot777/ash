@@ -69,7 +69,7 @@ await db.insert(sessions).values([
 ]);
 assert.deepEqual(
   await askingAgentFor("task-1"),
-  { agent: "grok", executorId: "grok-local" },
+  { agent: "grok", executorId: "grok-local", role: "single" },
   "提问的是被召唤进来的 grok,答复就该回到 grok(executorId 由 profile 名反查)",
 );
 
@@ -77,7 +77,7 @@ assert.deepEqual(
 await db.delete(agents);
 assert.deepEqual(
   await askingAgentFor("task-1"),
-  { agent: "grok", executorId: null },
+  { agent: "grok", executorId: null, role: "single" },
   "profile 查不到时只降级 executorId,不能连 agentType 一起丢",
 );
 
@@ -95,9 +95,9 @@ await db.insert(sessions).values([
 ]);
 assert.equal((await askingAgentFor("task-1"))?.agent, "codex", "取回合时间最新的那条会话");
 
-// 团队执行者的会话行(role != single)不参与单飞任务的答复路由。
+// 团队调度台的 lead 会话不参与单飞/审查任务的答复路由。
 await db.delete(sessions);
 await db.insert(sessions).values([session({ role: "lead", agentType: "claude", executor: "claude@ccb" })]);
-assert.equal(await askingAgentFor("task-1"), null, "只认 role=single 的会话行");
+assert.equal(await askingAgentFor("task-1"), null, "只认 single/reviewer 会话行");
 
 console.log("answer routing tests passed");

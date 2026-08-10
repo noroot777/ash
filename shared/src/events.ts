@@ -78,6 +78,19 @@ export type ServerEvent =
       agentType?: AgentType; // which agent produced it (single tasks can host several via @-mention)
       event: AgentEvent;
     }
+  // A user-channel turn after it has been persisted to the session transcript.
+  // bySystem marks backend-authored handoffs (review repair / merge conflict):
+  // they start a real follow-up turn, but the UI must not attribute them to the user.
+  | {
+      type: "conversation.turn";
+      taskId: string;
+      sessionId: string;
+      role: SessionRole;
+      agentType: AgentType;
+      text: string;
+      at: string;
+      bySystem?: true;
+    }
   | {
       type: "duet.progress";
       taskId: string;

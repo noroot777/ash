@@ -8,6 +8,7 @@ import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import {
   createReviewerDraft,
   ReviewerProfileFields,
+  ReviewerProfileSummary,
   reviewerDraft,
   reviewerPayload,
   type ReviewerDraft,
@@ -108,7 +109,7 @@ export function ReviewerProfilesSettings({ notify }: { notify: (message: string)
                 {reviewers.map((reviewer) => (
                   <button key={reviewer.id} type="button" aria-selected={editingId === reviewer.id} onClick={() => select(reviewer)}>
                     <b>{reviewer.name}</b>
-                    <small>{reviewer.executorLabel ?? reviewer.agentType}{reviewer.model ? ` · ${reviewer.model}` : ""}</small>
+                    <ReviewerProfileSummary reviewer={reviewer} profiles={profiles} />
                   </button>
                 ))}
               </aside>

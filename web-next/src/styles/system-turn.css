@@ -1,0 +1,6 @@
+.task-message--user.is-system-authored { justify-content: flex-start; padding-right: 38px; padding-left: 30px; }
+.task-message--user.is-system-authored .task-user-bubble,
+.team-feed-user.is-system-authored > div { border-color: var(--line2); background: var(--overlay); box-shadow: inset 2px 0 color-mix(in lch, var(--muted) 42%, transparent); }
+.task-message--user.is-system-authored .task-markdown,
+.team-feed-user.is-system-authored .task-markdown { font-size: 12px; line-height: 1.62; }
+.team-feed-user.is-system-authored { justify-content: flex-start; padding-right: 42px; padding-left: 30px; }

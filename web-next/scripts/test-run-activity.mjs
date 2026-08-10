@@ -18,6 +18,7 @@ assert.equal(runActivityPhase("backlog", "user"), null);
 assert.equal(runActivityTail([]), "empty");
 assert.equal(runActivityTail([{ kind: "event" }]), "other");
 assert.equal(runActivityTail([{ kind: "user" }, { kind: "event" }]), "user");
+assert.equal(runActivityTail([{ kind: "user", bySystem: true }]), "other", "后端交接不能冒充用户刚发的消息");
 assert.equal(runActivityTail([{ kind: "agent", endedAt: null }, { kind: "event" }]), "agent-active");
 assert.equal(runActivityTail([{ kind: "agent", endedAt: "2026-08-04T00:00:00.000Z" }]), "agent-ended");
 assert.equal(runActivityTail([{ kind: "agent", endedAt: null }, { kind: "user" }]), "user");

@@ -12,6 +12,7 @@
     "test:run-target-picker": "node scripts/test-run-target-picker.mjs",
     "test:team-review-inspector": "node scripts/test-team-review-inspector.mjs",
     "test:free-review-copy": "node --experimental-strip-types scripts/test-free-review-copy.mjs",
+    "test:reviewer-profile-summary": "node scripts/test-reviewer-profile-summary.mjs",
     "test:free-workflow-inspector": "node scripts/test-free-workflow-inspector.mjs",
     "test:task-review-rounds": "node scripts/test-task-review-rounds.mjs",
     "test:review-diff-zoom": "node scripts/test-review-diff-zoom.mjs",

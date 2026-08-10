@@ -330,7 +330,6 @@ export function TaskDetail({
                         task={task}
                         onAnswer={async (answer) => {
                           await api.answerTask(task.id, answer);
-                          conversation.addUser(answer, [], { answer: true });
                           notify("已发送答复，任务正在续跑");
                         }}
                       />

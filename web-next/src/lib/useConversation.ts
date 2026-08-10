@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { Session } from "@harness/shared";
+import { ANSWER_PREFIX, type Session } from "@harness/shared";
 import { api } from "./api.ts";
 import { useServerEvents } from "./events.ts";
 import {
@@ -7,8 +7,44 @@ import {
   type PersistedConversation,
   type TimelineEntry,
 } from "../task-detail/conversationModel.ts";
+import { parseAttachmentText } from "../task-detail/utils.ts";
 
 const settledStatuses = new Set(["done", "failed", "canceled", "idle"]);
+const SAME_TURN_WINDOW_MS = 30_000;
+
+function userTurnSignature(entry: Extract<TimelineEntry, { kind: "user" }>): string {
+  const parsed = parseAttachmentText(entry.text);
+  const paths = [...parsed.paths, ...entry.attachments].map((path) => path.trim()).filter(Boolean).sort();
+  return `${parsed.body.replace(/\s+/g, "")}\0${paths.join("\0")}`;
+}
+
+function sameUserTurn(
+  left: Extract<TimelineEntry, { kind: "user" }>,
+  right: Extract<TimelineEntry, { kind: "user" }>,
+): boolean {
+  if (!!left.bySystem !== !!right.bySystem || userTurnSignature(left) !== userTurnSignature(right)) return false;
+  const delta = Math.abs(Date.parse(left.at) - Date.parse(right.at));
+  return Number.isFinite(delta) && delta <= SAME_TURN_WINDOW_MS;
+}
+
+export function mergeUserTimeline(
+  current: TimelineEntry[],
+  entry: Extract<TimelineEntry, { kind: "user" }>,
+): TimelineEntry[] {
+  let match = -1;
+  for (let index = current.length - 1; index >= 0; index -= 1) {
+    const candidate = current[index];
+    if (candidate?.kind === "user" && candidate.source !== entry.source && sameUserTurn(candidate, entry)) {
+      match = index;
+      break;
+    }
+  }
+  if (match < 0) return [...current, entry];
+  if (entry.source !== "server") return current;
+  const next = [...current];
+  next[match] = entry;
+  return next;
+}
 
 export function useConversation(taskId: string, revision = 0) {
   const [sessions, setSessions] = useState<Session[]>([]);
@@ -28,6 +64,10 @@ export function useConversation(taskId: string, revision = 0) {
   // refresh never captures a stale length and keeps an already persisted event.
   const appendTimeline = useCallback((entry: TimelineEntry) => {
     replaceTimeline([...timelineRef.current, entry]);
+  }, [replaceTimeline]);
+
+  const appendUserTurn = useCallback((entry: Extract<TimelineEntry, { kind: "user" }>) => {
+    replaceTimeline(mergeUserTimeline(timelineRef.current, entry));
   }, [replaceTimeline]);
 
   const load = useCallback(async (preserveArrivals: boolean) => {
@@ -67,6 +107,19 @@ export function useConversation(taskId: string, revision = 0) {
 
   const connected = useServerEvents(
     useCallback((event) => {
+      if (event.type === "conversation.turn" && event.taskId === taskId) {
+        appendUserTurn({
+          kind: "user",
+          id: `server:${event.sessionId}:${event.at}`,
+          text: event.text,
+          attachments: [],
+          at: event.at,
+          isAnswer: event.text.startsWith(ANSWER_PREFIX),
+          bySystem: event.bySystem,
+          source: "server",
+        });
+        void api.sessions(taskId).then(setSessions).catch(() => undefined);
+      }
       if (event.type === "agent.event" && event.taskId === taskId) {
         appendTimeline({
           kind: "server",
@@ -85,7 +138,7 @@ export function useConversation(taskId: string, revision = 0) {
       ) {
         void load(true);
       }
-    }, [appendTimeline, load, taskId]),
+    }, [appendTimeline, appendUserTurn, load, taskId]),
   );
 
   const addUser = useCallback((
@@ -100,9 +153,10 @@ export function useConversation(taskId: string, revision = 0) {
       attachments,
       at: new Date().toISOString(),
       isAnswer: options.answer,
+      source: "optimistic",
     };
-    appendTimeline(entry);
-  }, [appendTimeline]);
+    appendUserTurn(entry);
+  }, [appendUserTurn]);
 
   const items = useMemo(
     () => buildConversationItems(persisted, sessions, timeline),
