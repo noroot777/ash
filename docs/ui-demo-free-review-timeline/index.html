@@ -16,14 +16,15 @@
         <p>
           本稿不合并同名审查：即使审查者和检查类型相同，只要中间发生过任务执行，
           就分别显示为“第 1 次审查 → 任务执行 → 第 2 次审查”。每条记录都带具体时间；
-          下方审查报告默认收起，点某一次审查展开，再点同一条收回。
+          “审查记录”整块默认停靠在底部；点时间线里的某次审查，整块面板向上弹出并直接打开对应报告，
+          再点同一个时间线节点就整体收回。
         </p>
       </div>
       <aside>
         <b>本稿确认三件事</b>
         <span><i class="legend-line"></i>事件按时间交替排列</span>
         <span><i class="legend-time"></i>开始时间与耗时始终可见</span>
-        <span><i class="legend-spin"></i>正在运行的图标持续转圈</span>
+        <span><i class="legend-spin"></i>审查节点同时控制底部抽屉</span>
       </aside>
     </header>
 
@@ -92,42 +93,52 @@
 
               <ol class="event-timeline">
                 <li class="event is-done">
-                  <span class="event-icon"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5.5 10.3 2.7 2.8 6.4-6.5"/></svg></span>
-                  <div class="event-copy">
-                    <div><b>任务执行</b><time datetime="2026-08-10T14:02:00+08:00">14:02</time></div>
-                    <small><span>已完成</span><i>14 分钟</i><em>初次实现</em></small>
+                  <div class="event-row">
+                    <span class="event-icon"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5.5 10.3 2.7 2.8 6.4-6.5"/></svg></span>
+                    <div class="event-copy">
+                      <div><b>任务执行</b><time datetime="2026-08-10T14:02:00+08:00">14:02</time></div>
+                      <small><span>已完成</span><i>14 分钟</i><em>初次实现</em></small>
+                    </div>
                   </div>
                 </li>
-                <li class="event is-done">
-                  <span class="event-icon"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5.5 10.3 2.7 2.8 6.4-6.5"/></svg></span>
-                  <div class="event-copy">
-                    <div><b>第 1 次审查 · 逻辑检查</b><time datetime="2026-08-10T14:17:00+08:00">14:17</time></div>
-                    <small><span>已通过</span><i>3 分钟</i><em>5.5 审查</em></small>
-                  </div>
+                <li class="event is-done is-review-event" data-review-event="1">
+                  <button class="review-event-trigger" type="button" aria-expanded="false" aria-controls="review-dock">
+                    <span class="event-icon"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5.5 10.3 2.7 2.8 6.4-6.5"/></svg></span>
+                    <span class="event-copy">
+                      <span><b>第 1 次审查 · 逻辑检查</b><time datetime="2026-08-10T14:17:00+08:00">14:17</time></span>
+                      <small><span>已通过</span><i>3 分钟</i><em>5.5 审查</em></small>
+                    </span>
+                  </button>
                 </li>
                 <li class="event is-done is-execution">
-                  <span class="event-icon"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5.5 10.3 2.7 2.8 6.4-6.5"/></svg></span>
-                  <div class="event-copy">
-                    <div><b>任务执行</b><time datetime="2026-08-10T14:31:00+08:00">14:31</time></div>
-                    <small><span>已完成</span><i>15 分钟</i><em>续聊修改</em></small>
+                  <div class="event-row">
+                    <span class="event-icon"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5.5 10.3 2.7 2.8 6.4-6.5"/></svg></span>
+                    <div class="event-copy">
+                      <div><b>任务执行</b><time datetime="2026-08-10T14:31:00+08:00">14:31</time></div>
+                      <small><span>已完成</span><i>15 分钟</i><em>续聊修改</em></small>
+                    </div>
                   </div>
                 </li>
-                <li class="event is-running">
-                  <span class="event-icon spinner" aria-label="正在运行"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 2.5a7.5 7.5 0 1 1-5.3 2.2"/></svg></span>
-                  <div class="event-copy">
-                    <div><b>第 2 次审查 · 逻辑检查</b><time datetime="2026-08-10T14:47:00+08:00">14:47</time></div>
-                    <small><span>审查中</span><i class="live-duration" data-start-minutes="0">刚刚开始</i><em>5.5 审查</em></small>
-                  </div>
+                <li class="event is-running is-review-event" data-review-event="2">
+                  <button class="review-event-trigger" type="button" aria-expanded="false" aria-controls="review-dock">
+                    <span class="event-icon spinner" aria-label="正在运行"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 2.5a7.5 7.5 0 1 1-5.3 2.2"/></svg></span>
+                    <span class="event-copy">
+                      <span><b>第 2 次审查 · 逻辑检查</b><time datetime="2026-08-10T14:47:00+08:00">14:47</time></span>
+                      <small><span>审查中</span><i class="live-duration" data-start-minutes="0">刚刚开始</i><em>5.5 审查</em></small>
+                    </span>
+                  </button>
                 </li>
               </ol>
             </section>
+          </div>
 
-            <section class="review-history">
-              <header class="section-heading history-heading">
-                <div><b>审查记录</b><small>默认收起 · 一次只展开一条</small></div>
-                <span>2 次审查</span>
-              </header>
-
+          <section class="review-dock" id="review-dock" aria-expanded="false">
+            <button class="dock-toggle" type="button" aria-expanded="false" aria-controls="review-dock-body">
+              <span><b>审查记录</b><small class="dock-hint">点上方某个审查查看详情</small></span>
+              <em>2 次审查</em>
+              <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4 10 4-4 4 4"/></svg>
+            </button>
+            <div class="review-dock-body" id="review-dock-body" aria-hidden="true" inert>
               <div class="review-list">
                 <article class="review-card" data-review="1">
                   <button class="review-toggle" type="button" aria-expanded="false" aria-controls="review-detail-1">
@@ -174,16 +185,16 @@
                   </div>
                 </article>
               </div>
-            </section>
-          </div>
+            </div>
+          </section>
         </aside>
       </div>
     </section>
 
     <footer class="demo-notes">
       <section><b>为什么把第二次“任务执行”画回来</b><p>这里展示的是事实日志，不是预设流程。相同名称的两次审查之间只要发生过续聊修改，那次执行就是理解因果关系的关键节点，不能被审查摘要吞掉。</p></section>
-      <section><b>为什么审查详情按“次”收起</b><p>列表摘要保留时间、状态和检查类型；报告、截图、秒级耗时只在点开后出现。长任务的默认高度因此只随事件条数线性增长，不会被长报告放大。</p></section>
-      <section><b>交互试法</b><p>点“第 1 次审查”查看完整报告，再点同一行收起；点“第 2 次审查”会自动收起上一条。正在运行的时间线图标与状态点会持续转圈。</p></section>
+      <section><b>为什么整块停靠在底部</b><p>默认只占一条标题栏，不参与工作流的长列表高度。需要看报告时才覆盖式向上展开，报告再长也不会把工作流继续往下推。</p></section>
+      <section><b>交互试法</b><p>点时间线“第 1 次审查”，底部整块弹起且第 1 条已打开；再点同一节点整体收回。点“第 2 次审查”则保持抽屉打开并切换到第 2 条。</p></section>
     </footer>
   </main>
   <script src="app.js"></script>
