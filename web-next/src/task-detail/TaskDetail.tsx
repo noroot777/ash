@@ -85,7 +85,7 @@ const TASK_INSPECTORS: readonly InspectorDescriptor<TaskInspectorContext>[] = [
     icon: <MagnifyingGlass size={14} />,
     defaultOpen: true,
     render: (context) => context.task.workflowMode === "free"
-      ? <FreeWorkflowInspector task={context.task} reviewOnly />
+      ? <FreeWorkflowInspector task={context.task} reviewOnly onOpenReview={context.onOpenReview} notify={context.notify} />
       : <TaskReviewInspector {...context} />,
   },
 ];

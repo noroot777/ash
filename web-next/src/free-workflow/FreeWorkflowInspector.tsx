@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import type {
   FreeReviewRound,
   FreeReviewRun,
@@ -7,11 +7,22 @@ import type {
   FreeWorkflowState,
   Task,
 } from "@harness/shared";
-import { CheckCircle, GitMerge, MagnifyingGlass, MonitorPlay, SpinnerGap, StopCircle, WarningCircle } from "@phosphor-icons/react";
-import { ImagePreviewGroup, PreviewableImage } from "../components/ImagePreview.tsx";
+import {
+  CaretRight,
+  CheckCircle,
+  GitMerge,
+  MagnifyingGlass,
+  MonitorPlay,
+  SpinnerGap,
+  StopCircle,
+  WarningCircle,
+} from "@phosphor-icons/react";
+import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
 import { api } from "../lib/api.ts";
-import { FREE_REVIEW_RUN_LABELS } from "./freeReviewCopy.ts";
+import { ReviewEvidenceDrawer } from "../review/ReviewEvidenceDrawer.tsx";
+import { ReviewScreenshotStrip } from "../review/ReviewScreenshotStrip.tsx";
+import { FreeReviewDialog } from "./FreeReviewDialog.tsx";
 import { useFreeWorkflowState } from "./useFreeWorkflowState.ts";
 
 type Activity =
@@ -19,6 +30,8 @@ type Activity =
   | { type: "review"; at: string; key: string; run: FreeReviewRun; round: FreeReviewRound }
   | { type: "preview"; at: string; key: string; event: FreeWorkflowPreviewEvent }
   | { type: "merge"; at: string; key: string; merge: FreeWorkflowState["merge"] };
+
+type ReviewActivity = Extract<Activity, { type: "review" }>;
 
 function actualActivities(state: FreeWorkflowState | null): Activity[] {
   if (!state) return [];
@@ -82,59 +95,153 @@ function reviewKey(runId: string, round: number): string {
   return `${runId}:${round}`;
 }
 
-export function FreeWorkflowInspector({ task, reviewOnly = false }: { task: Task; reviewOnly?: boolean }) {
+function reviewStatusIcon(round: FreeReviewRound) {
+  if (round.status === "reviewing") return <SpinnerGap size={11} className="is-spinning" />;
+  if (round.conclusion === "verified") return <CheckCircle size={11} weight="fill" />;
+  return <WarningCircle size={11} weight="fill" />;
+}
+
+export function FreeWorkflowInspector({
+  task,
+  reviewOnly = false,
+  onOpenReview,
+  notify,
+}: {
+  task: Task;
+  reviewOnly?: boolean;
+  onOpenReview?: () => void;
+  notify?: (message: string) => void;
+}) {
   const free = useFreeWorkflowState(task.id);
-  const [dockOpen, setDockOpen] = useState(false);
   const [selectedReviewKey, setSelectedReviewKey] = useState<string | null>(null);
-  const [openRunId, setOpenRunId] = useState<string | null>(null);
-  const roundRefs = useRef(new Map<string, HTMLElement>());
+  const [reviewDialogOpen, setReviewDialogOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const workflowListRef = useRef<HTMLOListElement>(null);
+  const reviewListRef = useRef<HTMLDivElement>(null);
   const state = free.state;
   const reviews = state?.reviews ?? [];
   const activities = useMemo(() => actualActivities(state), [state]);
   const latestPreviewEvent = state?.previewEvents.at(-1);
-  const reviewActivities = activities.filter((activity): activity is Extract<Activity, { type: "review" }> => activity.type === "review");
-
-  useEffect(() => {
-    if (!dockOpen || !selectedReviewKey) return;
-    const frame = requestAnimationFrame(() => roundRefs.current.get(selectedReviewKey)?.scrollIntoView({ block: "nearest" }));
-    return () => cancelAnimationFrame(frame);
-  }, [dockOpen, selectedReviewKey]);
+  const reviewActivities = activities.filter((activity): activity is ReviewActivity => activity.type === "review");
+  const opened = selectedReviewKey
+    ? reviewActivities.find((activity) => reviewKey(activity.run.id, activity.round.round) === selectedReviewKey) ?? null
+    : null;
+  const latestReview = reviewActivities.at(-1);
+  const activeReview = reviews.find((run) => run.status === "reviewing" || run.status === "repairing");
+  const reviewArmed = !!state?.reviewReservation?.armed && !activeReview;
+  const taskBusy = task.status === "running" || task.status === "queued";
+  const taskReady = task.status !== "backlog";
+  const mergeStarted = state?.merge.status === "merging" || state?.merge.status === "merged";
 
   if (free.loading && !free.state) return <div className="free-workflow-inspector is-loading"><SpinnerGap size={14} className="is-spinning" />正在生成实际工作流…</div>;
   if (free.error && !free.state) return <div className="free-workflow-inspector is-loading is-error"><WarningCircle size={14} />{free.error}</div>;
 
   const selectReview = (run: FreeReviewRun, round: FreeReviewRound) => {
     const key = reviewKey(run.id, round.round);
-    if (dockOpen && selectedReviewKey === key) {
-      setDockOpen(false);
-      setOpenRunId(null);
-      return;
-    }
-    setSelectedReviewKey(key);
-    setOpenRunId(run.id);
-    setDockOpen(true);
+    setSelectedReviewKey((current) => current === key ? null : key);
   };
 
-  const toggleDock = () => {
-    if (dockOpen) {
-      setDockOpen(false);
-      setOpenRunId(null);
-      return;
-    }
-    const latest = reviewActivities.at(-1);
-    if (latest) {
-      setSelectedReviewKey(reviewKey(latest.run.id, latest.round.round));
-      setOpenRunId(latest.run.id);
-    }
-    setDockOpen(true);
-  };
+  const drawer = opened && (
+    <ImagePreviewGroup isolated>
+      <ReviewEvidenceDrawer
+        anchorRef={rootRef}
+        keepOpenRef={reviewOnly ? reviewListRef : workflowListRef}
+        title={`第 ${opened.round.round} 轮审查`}
+        subtitle={`${reviewRoundLabel(opened.round)} · ${opened.run.reviewerName} · ${opened.run.checkMode === "logic" ? "逻辑检查" : "语法检查"}`}
+        onClose={() => setSelectedReviewKey(null)}
+        footer={opened.round.screenshots.length ? (
+          <ReviewScreenshotStrip items={opened.round.screenshots.map((name) => ({
+            key: name,
+            name,
+            src: api.freeReviewFileUrl(task.id, opened.run.id, opened.round.round, name),
+            label: `第 ${opened.round.round} 轮 · ${name}`,
+          }))} />
+        ) : undefined}
+      >
+        <div className="review-round-body">
+          {opened.round.reportMarkdown ? <MarkdownBody text={opened.round.reportMarkdown} /> : <p>报告尚未生成。</p>}
+        </div>
+      </ReviewEvidenceDrawer>
+    </ImagePreviewGroup>
+  );
+
+  if (reviewOnly) {
+    return (
+      <>
+        <div className="review-inspector free-workflow-review-inspector" aria-label="自由任务审查" ref={rootRef}>
+          <section className="review-inspector__overview">
+            <header>
+              <span className={`review-inspector__status${latestReview?.round.conclusion ? ` is-${latestReview.round.conclusion}` : ""}`}>
+                {latestReview ? reviewStatusIcon(latestReview.round) : <MagnifyingGlass size={13} />}
+              </span>
+              <div>
+                <b>{reviewActivities.length ? `${reviewActivities.length} 轮审查` : "自由审查"}</b>
+                <small>{latestReview ? `最近一轮${reviewRoundLabel(latestReview.round)}` : "尚未派审"}</small>
+              </div>
+            </header>
+            <div className="review-inspector__actions">
+              <button
+                type="button"
+                disabled={!taskReady || mergeStarted || !!activeReview || !notify}
+                onClick={() => setReviewDialogOpen(true)}
+              >
+                {activeReview ? <SpinnerGap size={13} className="is-spinning" /> : <MagnifyingGlass size={13} />}
+                <span>{activeReview?.status === "reviewing" ? "审查进行中" : activeReview?.status === "repairing" ? "等待修复" : reviewArmed ? "调整预约审查" : reviewActivities.length ? "再审一轮" : "派审查"}</span>
+              </button>
+              {onOpenReview && <button type="button" onClick={onOpenReview}><span>打开改动工作区</span><CaretRight size={13} /></button>}
+            </div>
+          </section>
+
+          <section className="review-inspector__targets" aria-label="自由审查轮次">
+            <header>
+              <b>审查记录</b>
+              <small>{reviewActivities.length ? `已记录 ${reviewActivities.length} 轮审查，点开在左侧看报告与截图` : "结论、报告与截图集中保存在这里"}</small>
+            </header>
+            <div ref={reviewListRef}>
+              {!reviewActivities.length && <p className="review-inspector__empty">点击上方“派审查”，选择审查者、检查类型和自动复审次数。</p>}
+              {reviewActivities.map((activity) => {
+                const key = reviewKey(activity.run.id, activity.round.round);
+                const failed = activity.round.status !== "reviewing" && activity.round.conclusion !== "verified";
+                return (
+                  <button
+                    type="button"
+                    key={key}
+                    className={key === selectedReviewKey ? "is-selected" : failed ? "is-failed" : ""}
+                    aria-expanded={key === selectedReviewKey}
+                    onClick={() => selectReview(activity.run, activity.round)}
+                  >
+                    <span>
+                      <b>第 {activity.round.round} 轮</b>
+                      <small>{activity.run.reviewerName} · {activity.run.checkMode === "logic" ? "逻辑检查" : "语法检查"} · {timing(activity.round.startedAt, activity.round.endedAt)}</small>
+                    </span>
+                    <em>{reviewStatusIcon(activity.round)}{reviewRoundLabel(activity.round)}</em>
+                  </button>
+                );
+              })}
+            </div>
+          </section>
+        </div>
+        {drawer}
+        {reviewDialogOpen && notify && (
+          <FreeReviewDialog
+            taskId={task.id}
+            state={state}
+            reservationMode={taskBusy || reviewArmed}
+            onChanged={free.setState}
+            onClose={() => setReviewDialogOpen(false)}
+            notify={notify}
+          />
+        )}
+      </>
+    );
+  }
 
   return (
-    <div className={`free-workflow-inspector${reviewOnly ? " is-review-only" : " has-review-dock"}`}>
-      {!reviewOnly && (
+    <>
+      <div className="free-workflow-inspector" ref={rootRef}>
         <section className="free-workflow-generated">
           <header><span>根据实际情况生成</span><small>这里不预判下一步，只记录真正发生过的操作。</small></header>
-          <ol>
+          <ol ref={workflowListRef}>
             {activities.map((activity) => {
               if (activity.type === "execution") {
                 const running = activity.execution.status === "running";
@@ -147,8 +254,9 @@ export function FreeWorkflowInspector({ task, reviewOnly = false }: { task: Task
               if (activity.type === "review") {
                 const active = activity.round.status === "reviewing";
                 const passed = activity.round.conclusion === "verified";
+                const key = reviewKey(activity.run.id, activity.round.round);
                 return <li key={activity.key} className={active ? "is-active" : passed ? "is-done" : "is-warning"}>
-                  <button type="button" aria-expanded={dockOpen && selectedReviewKey === reviewKey(activity.run.id, activity.round.round)} onClick={() => selectReview(activity.run, activity.round)}>
+                  <button type="button" aria-expanded={selectedReviewKey === key} onClick={() => selectReview(activity.run, activity.round)}>
                     <span>{active ? <SpinnerGap size={14} className="is-spinning" /> : passed ? <CheckCircle size={14} weight="fill" /> : <MagnifyingGlass size={14} />}</span>
                     <div><b>{activity.run.reviewerName} · {activity.run.checkMode === "logic" ? "逻辑检查" : "语法检查"}</b><small>{reviewRoundLabel(activity.round)} · 第 {activity.round.round} 轮 / 最多 {activity.run.retryLimit + 1} 轮 · {timing(activity.round.startedAt, activity.round.endedAt)}</small></div>
                   </button>
@@ -161,69 +269,16 @@ export function FreeWorkflowInspector({ task, reviewOnly = false }: { task: Task
                   <div><b>{activity.event.kind === "preview_opened" ? "预览已打开" : "预览已关闭"}</b><small>{activity.event.detail} · {timeText(activity.event.occurredAt)}</small></div>
                 </li>;
               }
+              const merging = activity.merge.status === "merging";
               return <li key={activity.key} className={activity.merge.status === "merged" ? "is-done" : activity.merge.status === "failed" ? "is-warning" : "is-active"}>
-                <span><GitMerge size={14} /></span><div><b>合并&清理</b><small>{activity.merge.message ?? "处理中"} · {timeText(activity.at)}</small></div>
+                <span>{merging ? <SpinnerGap size={14} className="is-spinning" /> : <GitMerge size={14} />}</span><div><b>合并&清理</b><small>{activity.merge.message ?? "处理中"} · {timeText(activity.at)}</small></div>
               </li>;
             })}
           </ol>
           {!activities.length && <p>目前还没有实际工作流记录；任务执行、派审、预览或合并后，这里会按发生顺序补出记录。</p>}
         </section>
-      )}
-
-      <section className={`free-review-history${reviewOnly ? "" : ` is-docked${dockOpen ? " is-open" : ""}`}`}>
-        {reviewOnly ? (
-          <header><b>审查记录</b><small>{reviews.length ? `${reviews.length} 轮审查链` : "尚未派审"}</small></header>
-        ) : (
-          <header>
-            <button className="free-review-history__dock-toggle" type="button" aria-expanded={dockOpen} onClick={toggleDock}>
-              <b>审查记录</b><small>{reviews.length ? `${reviews.length} 轮审查链` : "尚未派审"}</small>
-            </button>
-          </header>
-        )}
-        <div className="free-review-history__records" inert={!reviewOnly && !dockOpen}>
-          {!reviews.length && <p>点击会话上方的“派审查”，选择审查者、检查类型和自动复审次数。</p>}
-          {reviews.map((run) => (
-            <details
-              key={run.id}
-              open={reviewOnly ? undefined : dockOpen && openRunId === run.id}
-              onToggle={reviewOnly ? undefined : (event) => {
-                if (event.currentTarget.open) setOpenRunId(run.id);
-                else if (openRunId === run.id) setOpenRunId(null);
-              }}
-            >
-              <summary><span><b>{run.reviewerName}</b><small>{run.checkMode === "logic" ? "逻辑检查" : "语法检查"} · {FREE_REVIEW_RUN_LABELS[run.status]}</small></span><em>{run.rounds.length} 轮</em></summary>
-              <div>
-                {run.rounds.map((round) => {
-                  const key = reviewKey(run.id, round.round);
-                  return (
-                    <article key={round.round} ref={(node) => { if (node) roundRefs.current.set(key, node); else roundRefs.current.delete(key); }}>
-                      <header><b>第 {round.round} 轮</b><span>{reviewRoundLabel(round)} · {timing(round.startedAt, round.endedAt)}</span></header>
-                      <ImagePreviewGroup isolated>
-                        {round.reportMarkdown ? <MarkdownBody text={round.reportMarkdown} /> : <p>报告尚未生成。</p>}
-                        {!!round.screenshots.length && (
-                          <div className="free-review-screenshots">
-                            {round.screenshots.map((name) => (
-                              <div key={name}>
-                                <PreviewableImage
-                                  src={api.freeReviewFileUrl(task.id, run.id, round.round, name)}
-                                  alt={name}
-                                  label={`第 ${round.round} 轮 · ${name}`}
-                                  loading="lazy"
-                                />
-                                <span>{name}</span>
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                      </ImagePreviewGroup>
-                    </article>
-                  );
-                })}
-              </div>
-            </details>
-          ))}
-        </div>
-      </section>
-    </div>
+      </div>
+      {drawer}
+    </>
   );
 }

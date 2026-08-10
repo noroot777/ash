@@ -14,7 +14,7 @@ const state = {
     { id: "execution-1", status: "completed", startedAt: "2026-08-09T00:00:00.000Z", endedAt: "2026-08-09T00:09:00.000Z" },
     { id: "execution-2", status: "completed", startedAt: "2026-08-09T00:20:00.000Z", endedAt: "2026-08-09T00:29:00.000Z" },
   ],
-  merge: { status: "idle", message: null, mergedAt: null, updatedAt: null },
+  merge: { status: "merging", message: "正在合并", mergedAt: null, updatedAt: "2026-08-09T00:40:00.000Z" },
   reviews: [{
     id: "run-def",
     reviewerId: null,
@@ -58,7 +58,7 @@ const state = {
       status: "passed",
       conclusion: "verified",
       reportMarkdown: "# 审查结论\n\n**统一预览已验证。**",
-      screenshots: ["shot-one.png", "shot-two.png"],
+      screenshots: ["shot-one.png", "shot-two.png", "shot-three.png", "shot-four.png", "shot-five.png", "shot-six.png"],
       startedAt: "2026-08-09T00:10:00.000Z",
       endedAt: "2026-08-09T00:11:00.000Z",
     }],
@@ -89,12 +89,13 @@ const task = {
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <div style={{ display: "flex", gap: 20 }}>
+    <div style={{ display: "flex", gap: 20, height: 640 }}>
+      <div style={{ flex: 1 }} />
       <aside className="inspector-host workflow-inspector-fixture" style={{ width: 380, height: 640 }}>
         <FreeWorkflowInspector task={task} />
       </aside>
       <aside className="inspector-host review-only-fixture" style={{ width: 380, height: 640 }}>
-        <FreeWorkflowInspector task={task} reviewOnly />
+        <FreeWorkflowInspector task={task} reviewOnly onOpenReview={() => undefined} notify={() => undefined} />
       </aside>
     </div>
   </StrictMode>,
