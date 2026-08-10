@@ -26,6 +26,7 @@ try {
     freeReviewResumeOptions,
     handleFreeWorkflowSettlement,
   } = await import("../src/free-workflow.js");
+  const { releaseFreeWorkflowAction, tryAcquireFreeWorkflowAction } = await import("../src/free-workflow-lock.js");
   const {
     finishFreeTaskExecution,
     recordFreePreviewEvent,
@@ -340,6 +341,21 @@ try {
   assert.equal(acceptedAgain.accepted, true, "自由任务重复验收应沿用统一幂等语义");
   acceptedTask = (await db.select().from(tasks).where(eq(tasks.id, "free-accept-task"))).at(0);
   assert.equal(acceptedTask?.stage, "accepted");
+  assert.equal(tryAcquireFreeWorkflowAction("free-worktree-task"), true);
+  try {
+    const lockedAcceptance = await acceptTask("free-worktree-task");
+    assert.equal(lockedAcceptance.accepted, false, "其它自由操作持锁时不得开始验收");
+    if (!lockedAcceptance.accepted) assert.equal(lockedAcceptance.reason, "free_workflow_action_in_progress");
+    const lockedReview = await api.request("/tasks/free-worktree-task/free-workflow/review", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ reviewerId: reviewer.id, checkMode: "logic", retryLimit: 1 }),
+    });
+    assert.equal(lockedReview.status, 409, "统一验收与派审必须共用同一把自由操作锁");
+    assert.equal(git(repo, "rev-parse", "main"), mainBeforeAcceptance, "自由操作互斥时不得推进目标分支");
+    assert.equal(existsSync(worktree.path), true, "自由操作互斥时不得清理任务 worktree");
+  } finally {
+    releaseFreeWorkflowAction("free-worktree-task");
+  }
   const blockingReviewAt = new Date().toISOString();
   await db.insert(freeReviewRuns).values({
     id: "blocking-review", taskId: "free-worktree-task", reviewerId: reviewer.id, reviewerName: "Codex logic",
@@ -401,7 +417,7 @@ try {
   console.log("✓ 每次自由任务执行都独立保留起止时间与状态");
   console.log("✓ backlog 与旧 stage 路径仍被隔离，完成后可统一验收");
   console.log("✓ 派生任务与起手式引用不能混入自由工作流");
-  console.log("✓ 自由合并接口已删除，活跃审查门禁、统一验收、worktree 合并清理与幂等语义可用");
+  console.log("✓ 自由合并接口已删除，共享操作锁、活跃审查门禁、统一验收与 worktree 清理可用");
   console.log("✓ 审查续跑保持独立 reviewer 会话与原模型配置");
   console.log("✓ 技能名与斜杠命令只进入需求参考文件，不进入自由审查 prompt");
   console.log("✓ 自由审查报告与截图接口返回正确内容类型");

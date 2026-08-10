@@ -22,6 +22,7 @@ import {
 } from "./db/schema.js";
 import { startReservedFreeReview } from "./free-review-reservations.js";
 import { recordFreePreviewEvent } from "./free-workflow-events.js";
+import { releaseFreeWorkflowAction, tryAcquireFreeWorkflowAction } from "./free-workflow-lock.js";
 import {
   freeReviewEvidenceDir,
   freeReviewFile,
@@ -42,7 +43,6 @@ type ReviewRunRow = typeof freeReviewRuns.$inferSelect;
 
 const ACTIVE_REVIEW_STATUSES = ["reviewing", "repairing"] as const;
 const MAX_RETRIES = 5;
-const freeActionLocks = new Set<string>();
 export { freeWorkflowState };
 export function freeReviewOutcome(input: {
   turnOk: boolean;
@@ -121,8 +121,7 @@ async function reserveFreeReview(taskId: string, input: FreeReviewDispatchInput)
   if (task.status === "backlog") throw new Error("任务尚未运行，开始执行后再预约审查");
   if (task.status === "done") throw new Error("任务已完成，请直接派审查");
   assertBeforeAcceptance(task);
-  if (freeActionLocks.has(taskId)) throw new Error("当前已有自由工作流操作正在进行");
-  freeActionLocks.add(taskId);
+  if (!tryAcquireFreeWorkflowAction(taskId)) throw new Error("当前已有自由工作流操作正在进行");
   try {
     if (await activeReview(taskId)) throw new Error("当前已有审查或修复链在进行");
     const profile = (await db.select().from(reviewerProfiles).where(eq(reviewerProfiles.id, input.reviewerId))).at(0);
@@ -144,15 +143,14 @@ async function reserveFreeReview(taskId: string, input: FreeReviewDispatchInput)
     bus.publish({ type: "task.review", taskId });
     return freeWorkflowState(taskId);
   } finally {
-    freeActionLocks.delete(taskId);
+    releaseFreeWorkflowAction(taskId);
   }
 }
 async function cancelFreeReviewReservation(taskId: string): Promise<FreeWorkflowState> {
   const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!task) throw new Error("任务不存在");
   if (task.mode !== "single" || task.parentId || task.reviewOf || task.workflowMode !== "free") throw new Error("当前任务不支持自由审查");
-  if (freeActionLocks.has(taskId)) throw new Error("当前已有自由工作流操作正在进行");
-  freeActionLocks.add(taskId);
+  if (!tryAcquireFreeWorkflowAction(taskId)) throw new Error("当前已有自由工作流操作正在进行");
   try {
     const state = (await db.select({ reviewArmed: freeWorkflowStates.reviewArmed }).from(freeWorkflowStates)
       .where(eq(freeWorkflowStates.taskId, taskId))).at(0);
@@ -164,7 +162,7 @@ async function cancelFreeReviewReservation(taskId: string): Promise<FreeWorkflow
     }
     return freeWorkflowState(taskId);
   } finally {
-    freeActionLocks.delete(taskId);
+    releaseFreeWorkflowAction(taskId);
   }
 }
 
@@ -342,8 +340,7 @@ async function startFreeReview(taskId: string, input: FreeReviewDispatchInput): 
   if (task.status === "backlog") throw new Error("任务尚未运行，完成实现后再派审");
   if (task.status === "running" || task.status === "queued") throw new Error("任务正在运行或排队，结束后再派审");
   assertBeforeAcceptance(task);
-  if (freeActionLocks.has(taskId)) throw new Error("当前已有自由工作流操作正在进行");
-  freeActionLocks.add(taskId);
+  if (!tryAcquireFreeWorkflowAction(taskId)) throw new Error("当前已有自由工作流操作正在进行");
   try {
     if (await activeReview(taskId)) throw new Error("当前已有审查或修复链在进行");
     const profile = (await db.select().from(reviewerProfiles).where(eq(reviewerProfiles.id, input.reviewerId))).at(0);
@@ -380,7 +377,7 @@ async function startFreeReview(taskId: string, input: FreeReviewDispatchInput): 
     }
     return freeWorkflowState(taskId);
   } finally {
-    freeActionLocks.delete(taskId);
+    releaseFreeWorkflowAction(taskId);
   }
 }
 
@@ -398,8 +395,7 @@ function previewCommand(cwd: string): string {
 }
 
 async function startFreePreview(taskId: string) {
-  if (freeActionLocks.has(taskId)) throw new Error("当前已有自由工作流操作正在进行");
-  freeActionLocks.add(taskId);
+  if (!tryAcquireFreeWorkflowAction(taskId)) throw new Error("当前已有自由工作流操作正在进行");
   try {
     const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
     if (!task || task.workflowMode !== "free" || task.mode !== "single" || task.parentId || task.reviewOf) {
@@ -429,7 +425,7 @@ async function startFreePreview(taskId: string) {
     bus.publish({ type: "task.review", taskId });
     return result.record;
   } finally {
-    freeActionLocks.delete(taskId);
+    releaseFreeWorkflowAction(taskId);
   }
 }
 
@@ -473,14 +469,13 @@ export function mountFreeWorkflowRoutes(api: Hono): void {
     if (!task || task.workflowMode !== "free" || task.mode !== "single" || task.parentId || task.reviewOf) {
       return c.json({ error: "当前任务不支持自由预览" }, 409);
     }
-    if (freeActionLocks.has(taskId)) return c.json({ error: "当前已有自由工作流操作正在进行" }, 409);
-    freeActionLocks.add(taskId);
+    if (!tryAcquireFreeWorkflowAction(taskId)) return c.json({ error: "当前已有自由工作流操作正在进行" }, 409);
     try {
       const stopped = await stopPreview(taskId, "用户关闭了自由工作流预览", "user");
       bus.publish({ type: "task.review", taskId });
       return c.json({ stopped });
     } finally {
-      freeActionLocks.delete(taskId);
+      releaseFreeWorkflowAction(taskId);
     }
   });
 
