@@ -76,6 +76,15 @@ try {
   }, promptRun, 1, root);
   assert.doesNotMatch(skillPrompt, /grill-me|把排队需求也一起做完/, "自由审查 prompt 不得原样夹带技能名或用户追问");
   assert.match(skillPrompt, /request-context\.md/, "自由审查应改为引用需求文件");
+  const groupedBrowser = skillPrompt.indexOf("扩展具名分组后台标签");
+  const headlessBrowser = skillPrompt.indexOf("独立无头浏览器");
+  const headedBrowser = skillPrompt.indexOf("独立有头浏览器");
+  assert.ok(
+    groupedBrowser >= 0 && groupedBrowser < headlessBrowser && headlessBrowser < headedBrowser,
+    "自由审查 prompt 必须保留三级浏览器降级顺序",
+  );
+  assert.match(skillPrompt, /不得接管、复用或直连用户的普通标签/, "自由审查不得操作用户普通 Chrome 标签");
+  assert.match(skillPrompt, /Playwright.*headless/i, "自由审查的 Playwright 必须默认无头");
   const skillContext = readFileSync(join(root, "runs", "free-task", "free-review", "skill-review", "round-1", "request-context.md"), "utf8");
   assert.match(skillContext, /标题也可能点名 \/grill-me/);
   assert.match(skillContext, /原始正文要求运行 \/grill-me/);

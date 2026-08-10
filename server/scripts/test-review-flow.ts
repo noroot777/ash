@@ -19,7 +19,13 @@ const {
   reviewRoundDir,
   safeReviewFilePath,
 } = await import("../src/review-evidence.js");
-const { REVIEW_OVERWRITE_CHECK, repairPrompt, verifyProtocolFor } = await import("../src/review-prompts.js");
+const {
+  REVIEW_OVERWRITE_CHECK,
+  repairPrompt,
+  reviewReminderFor,
+  verifyProtocolFor,
+  verifyReminderFor,
+} = await import("../src/review-prompts.js");
 const { initialTaskObjective, invitedTaskBrief } = await import("../src/invited-task-brief.js");
 // 判定（该不该派、几轮、找谁验）住在 review-policy.ts，是纯函数，所以这一段全程不起
 // 数据库、不起 CLI。
@@ -248,6 +254,17 @@ const promptTarget = (await db.select().from(tasks)).find((row) => row.id === ta
 const reviewPrompt = await verifyProtocolFor(promptTarget, 1, root);
 assert.doesNotMatch(reviewPrompt, /grill-me|原始需求里点名/, "自动验证 prompt 不得原样夹带被审需求里的技能名");
 assert.match(reviewPrompt, /request-context\.md/, "自动验证应通过文件交付需求上下文");
+const assertBrowserOrder = (text: string, source: string) => {
+  const grouped = text.indexOf("扩展具名分组后台标签");
+  const headless = text.indexOf("独立无头浏览器");
+  const headed = text.indexOf("独立有头浏览器");
+  assert.ok(grouped >= 0 && grouped < headless && headless < headed, `${source} 必须保留三级浏览器降级顺序`);
+  assert.match(text, /不得操作用户普通 Chrome 标签|不得接管、复用或直连用户的普通标签/, `${source} 必须保护用户普通标签`);
+  assert.match(text, /Playwright.*headless/i, `${source} 必须把 Playwright 默认限制为无头`);
+};
+assertBrowserOrder(reviewPrompt, "自动验证 prompt");
+assertBrowserOrder(verifyReminderFor(taskId, 1), "自动验证续跑提醒");
+assertBrowserOrder(reviewReminderFor({ id: "legacy-review", reviewOf: taskId, reviewRound: 1 }), "历史审查续跑提醒");
 const requestContext = readFileSync(join(base, "request-context.md"), "utf8");
 assert.match(requestContext, /path target \/grill-me/);
 assert.match(requestContext, /原始需求里点名 \/grill-me/, "需求文件不能为了避免误触而删掉验收信息");
