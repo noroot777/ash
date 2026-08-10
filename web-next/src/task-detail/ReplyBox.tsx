@@ -17,6 +17,7 @@ import { AttachmentPicker, UploadAttachmentList, useAttachments } from "./Attach
 import { SlashMenu } from "../components/SlashMenu.tsx";
 import { mergeSlashItems, slashToken, type SlashItem } from "../lib/useSkills.ts";
 import type { AgentModelSelection, MentionTarget } from "./mentionPicker.ts";
+import { useTaskReplyDraft } from "./TaskReplyDrafts.tsx";
 
 const EMPTY_SKILLS: SkillEntry[] = [];
 
@@ -63,7 +64,9 @@ export function ReplyBox({
   inlinePanel?: ReactNode;
   topRail?: ReactNode;
 }) {
-  const [value, setValue] = useState("");
+  const draft = useTaskReplyDraft(task.id);
+  const value = draft.text;
+  const setValue = draft.setText;
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
   const [commandIndex, setCommandIndex] = useState(0);
@@ -83,7 +86,12 @@ export function ReplyBox({
   const [profilesFailed, setProfilesFailed] = useState(false);
   const providers = useProviders();
   const scheduled = useScheduledMessages(task.id);
-  const uploads = useAttachments();
+  const uploads = useAttachments({
+    value: draft.attachments,
+    onChange: draft.setAttachments,
+    pending: draft.pendingUploads,
+    onPendingChange: draft.setPendingUploads,
+  });
   // 任务正在跑不再是「不能说话」,而是「说了先排队」:发出去的消息落成一条待发送
   // 消息(mode=queued),这一轮一结束由服务端自动送进同一个会话。所以 disabled 只留
   // 真正没得说的情况——不是单任务、已归档、以及从没跑过因而没有会话可续。
@@ -100,8 +108,7 @@ export function ReplyBox({
           ? command ? "可输入 /team 创建团队，或输入 /duet 发起讨论…" : "先运行任务，再继续回复"
           : command ? "回复并继续；输入 /team 或 /duet 可派生新任务…" : "回复并继续（⌘↵ 发送，可粘贴图片或文件）…";
 
-  const resetComposer = () => {
-    setValue("");
+  const resetComposerState = () => {
     setCommandIndex(0);
     setMenuDismissed(false);
     setMentionIndex(0);
@@ -113,12 +120,18 @@ export function ReplyBox({
   };
 
   useEffect(() => {
-    resetComposer();
+    resetComposerState();
     setSendError(null);
-    uploads.clear();
-  }, [task.id, uploads.clear]);
+  }, [task.id]);
 
-  useEffect(() => { resetComposer(); }, [command?.resetKey]);
+  const commandReset = useRef({ taskId: task.id, key: command?.resetKey });
+  useEffect(() => {
+    const previous = commandReset.current;
+    commandReset.current = { taskId: task.id, key: command?.resetKey };
+    if (previous.taskId !== task.id || previous.key === command?.resetKey) return;
+    setValue("");
+    resetComposerState();
+  }, [command?.resetKey, task.id]);
 
   // 任务从「在跑」变成别的状态 = 排着的那条这会儿已经被投递进会话了（服务端在结算
   // 那一刻就发）。托盘得跟着少一行，否则它会一直挂在那儿像是没发出去。
