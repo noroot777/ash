@@ -57,15 +57,12 @@ export function ReviewerProfileSummary({
   );
   const model = run.model ?? "跟随 CLI";
   const effort = run.effort ?? "跟随 CLI";
+  const executor = reviewer.executorLabel ?? inheritedProfile?.name ?? reviewer.agentType;
 
   return (
-    <span className="reviewer-profile-summary">
-      <small>{reviewer.executorLabel ?? inheritedProfile?.name ?? reviewer.agentType}</small>
-      <span className="reviewer-run-details">
-        <span aria-label={`模型：${model}`}><i>模型</i><code>{model}</code></span>
-        <span aria-label={`智能水平：${effort}`}><i>智能水平</i><code>{effort}</code></span>
-      </span>
-    </span>
+    <small className="reviewer-profile-summary" aria-label={`智能体：${executor}；模型：${model}；智能水平：${effort}`}>
+      <span>{executor}</span><i aria-hidden="true">·</i><code>{model}</code><i aria-hidden="true">·</i><code>{effort}</code>
+    </small>
   );
 }
 

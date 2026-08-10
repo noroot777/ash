@@ -50,10 +50,15 @@ try {
   assert.equal(await summary.getByText("codex@local", { exact: true }).count(), 1);
   assert.equal(await summary.getByText("gpt-5.6-sol", { exact: true }).count(), 1);
   assert.equal(await summary.getByText("ultra", { exact: true }).count(), 1);
-  assert.match(await summary.textContent() ?? "", /模型gpt-5\.6-sol智能水平ultra/);
+  assert.match(await summary.textContent() ?? "", /codex@local·gpt-5\.6-sol·ultra/);
+  assert.equal(await summary.evaluate((element) => getComputedStyle(element).whiteSpace), "nowrap");
+  const partTops = await summary.locator(":scope > span, :scope > code").evaluateAll((elements) => (
+    elements.map((element) => Math.round(element.getBoundingClientRect().top))
+  ));
+  assert(Math.max(...partTops) - Math.min(...partTops) <= 2, "智能体、模型与智能水平应保持在同一行");
 
   const card = await page.locator(".free-review-reviewer-list > button").boundingBox();
-  assert(card && card.height < 78, "模型与智能水平不应把审查者条目撑得过高");
+  assert(card && card.height < 64, "单行摘要不应把审查者条目撑得过高");
   console.log("reviewer profile summary test passed");
 } finally {
   await browser?.close();
