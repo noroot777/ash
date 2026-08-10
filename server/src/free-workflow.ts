@@ -65,6 +65,10 @@ async function activeReview(taskId: string): Promise<ReviewRunRow | null> {
     .limit(1)).at(0) ?? null;
 }
 
+export async function hasActiveFreeReview(taskId: string): Promise<boolean> {
+  return !!(await activeReview(taskId));
+}
+
 function assertBeforeAcceptance(task: TaskRow): void {
   if (task.stage === "accepted" || task.stage === "merged") {
     throw new Error("任务已进入验收结果；如需继续修改，请先重新运行任务");

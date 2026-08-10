@@ -340,6 +340,25 @@ try {
   assert.equal(acceptedAgain.accepted, true, "自由任务重复验收应沿用统一幂等语义");
   acceptedTask = (await db.select().from(tasks).where(eq(tasks.id, "free-accept-task"))).at(0);
   assert.equal(acceptedTask?.stage, "accepted");
+  const blockingReviewAt = new Date().toISOString();
+  await db.insert(freeReviewRuns).values({
+    id: "blocking-review", taskId: "free-worktree-task", reviewerId: reviewer.id, reviewerName: "Codex logic",
+    agentType: "codex", executorId: "reviewer-executor", model: "gpt-review", reasoningEffort: "high",
+    checkMode: "logic", retryLimit: 1, currentRound: 1, status: "reviewing",
+    createdAt: blockingReviewAt, updatedAt: blockingReviewAt, finishedAt: null,
+  });
+  let reviewBlocked = await acceptTask("free-worktree-task");
+  assert.equal(reviewBlocked.accepted, false, "自由审查进行中不得验收");
+  if (!reviewBlocked.accepted) assert.equal(reviewBlocked.reason, "free_review_in_progress");
+  assert.equal(git(repo, "rev-parse", "main"), mainBeforeAcceptance, "审查中不得推进目标分支");
+  assert.equal(existsSync(worktree.path), true, "审查中不得清理任务 worktree");
+  await db.update(freeReviewRuns).set({ status: "repairing", updatedAt: new Date().toISOString() })
+    .where(eq(freeReviewRuns.id, "blocking-review"));
+  reviewBlocked = await acceptTask("free-worktree-task");
+  assert.equal(reviewBlocked.accepted, false, "等待修复时不得验收");
+  if (!reviewBlocked.accepted) assert.equal(reviewBlocked.reason, "free_review_in_progress");
+  await db.update(freeReviewRuns).set({ status: "passed", updatedAt: new Date().toISOString(), finishedAt: new Date().toISOString() })
+    .where(eq(freeReviewRuns.id, "blocking-review"));
   const worktreeAccepted = await acceptTask("free-worktree-task");
   assert.equal(worktreeAccepted.accepted, true, "自由任务的独立 worktree 应复用统一安全合并与清理");
   assert.notEqual(git(repo, "rev-parse", "main"), mainBeforeAcceptance, "统一验收应推进目标分支");
@@ -382,7 +401,7 @@ try {
   console.log("✓ 每次自由任务执行都独立保留起止时间与状态");
   console.log("✓ backlog 与旧 stage 路径仍被隔离，完成后可统一验收");
   console.log("✓ 派生任务与起手式引用不能混入自由工作流");
-  console.log("✓ 自由合并接口已删除，统一验收、worktree 合并清理与幂等语义可用");
+  console.log("✓ 自由合并接口已删除，活跃审查门禁、统一验收、worktree 合并清理与幂等语义可用");
   console.log("✓ 审查续跑保持独立 reviewer 会话与原模型配置");
   console.log("✓ 技能名与斜杠命令只进入需求参考文件，不进入自由审查 prompt");
   console.log("✓ 自由审查报告与截图接口返回正确内容类型");

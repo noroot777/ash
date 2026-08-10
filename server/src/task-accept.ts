@@ -8,6 +8,7 @@ import { projects, tasks } from "./db/schema.js";
 import { handOffConflict, type ConflictHandoff } from "./accept-conflict.js";
 import { resolveTaskMergeTarget } from "./git.js";
 import { cleanupAcceptedTask, cleanupPlanFor, mergeTaskBranch } from "./git-accept.js";
+import { hasActiveFreeReview } from "./free-workflow.js";
 import { taskWorkflowDef } from "./workflows.js";
 import { taskBranchDiff } from "./git-diff.js";
 import { publishTaskUpdated } from "./task-store.js";
@@ -231,6 +232,21 @@ async function acceptTaskUnlocked(taskId: string, by: AcceptBy): Promise<AcceptT
       taskId,
       reason: "free_workflow_not_ready_for_acceptance",
       error: "自由工作流尚未完成；任务完成后再进入验收页处理",
+      status: requestedTask.status,
+      phase: "initial",
+    };
+  }
+  if (
+    requestedTask.workflowMode === "free"
+    && requestedTask.stage !== "accepted"
+    && await hasActiveFreeReview(taskId)
+  ) {
+    return {
+      accepted: false,
+      httpStatus: 409,
+      taskId,
+      reason: "free_review_in_progress",
+      error: "自由工作流审查或修复仍在进行，结束后再验收",
       status: requestedTask.status,
       phase: "initial",
     };

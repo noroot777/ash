@@ -6,6 +6,7 @@ import {
   X,
 } from "@phosphor-icons/react";
 import { api, type TaskCommit, type TaskDiffResult } from "../lib/api.ts";
+import { useFreeWorkflowState } from "../free-workflow/useFreeWorkflowState.ts";
 import { AcceptanceControls } from "../team/TeamReviewWorkspace.tsx";
 import { ChangeMetaBar } from "./ChangeMetaBar.tsx";
 import { ReviewDiffViewer } from "./ReviewDiffViewer.tsx";
@@ -52,6 +53,19 @@ export function TaskReviewWorkspace({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const sharedParent = sharedTeamParent(task, allTasks);
+  const free = useFreeWorkflowState(task.id, task.workflowMode === "free");
+  const activeFreeReview = free.state?.reviews.find((run) => run.status === "reviewing" || run.status === "repairing");
+  const acceptanceBlock = task.workflowMode !== "free"
+    ? null
+    : activeFreeReview?.status === "reviewing"
+      ? "审查进行中"
+      : activeFreeReview?.status === "repairing"
+        ? "等待修复"
+        : !free.state && free.loading
+          ? "读取审查状态"
+          : !free.state && free.error
+            ? "审查状态未知"
+            : null;
 
   useEffect(() => {
     let alive = true;
@@ -81,7 +95,7 @@ export function TaskReviewWorkspace({
         <div><b>{sharedParent ? "共享执行者审查" : "改动与提交"}</b><small>{sharedParent ? "该执行者随父团队共享分支统一验收" : "验证证据见右侧审查记录；这里核对任务分支相对基线的提交与 diff"}</small></div>
         {sharedParent
           ? <span className="single-review-shared-badge">随团队验收</span>
-          : <AcceptanceControls task={task} onTaskUpdated={onTaskUpdated} notify={notify} />}
+          : <AcceptanceControls task={task} onTaskUpdated={onTaskUpdated} notify={notify} acceptanceBlock={acceptanceBlock} />}
         <button type="button" onClick={onClose}><X size={13} />返回对话</button>
       </header>
       <div className="single-review-scroll">

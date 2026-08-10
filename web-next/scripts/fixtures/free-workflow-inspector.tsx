@@ -85,6 +85,29 @@ const acceptanceState = {
   reviews: [],
 };
 
+const reviewingAcceptanceState = {
+  ...acceptanceState,
+  taskId: "free-reviewing-ui",
+  reviews: [{
+    id: "acceptance-review",
+    reviewerId: null,
+    reviewerName: "Codex 审查",
+    agentType: "codex",
+    executorId: null,
+    executorLabel: null,
+    model: null,
+    reasoningEffort: null,
+    checkMode: "logic",
+    retryLimit: 1,
+    currentRound: 1,
+    status: "reviewing",
+    rounds: [],
+    createdAt: "2026-08-09T01:10:00.000Z",
+    updatedAt: "2026-08-09T01:10:00.000Z",
+    finishedAt: null,
+  }],
+};
+
 const nativeFetch = window.fetch.bind(window);
 window.fetch = (input, init) => {
   const url = new URL(typeof input === "string" ? input : input.url, window.location.origin);
@@ -100,13 +123,19 @@ window.fetch = (input, init) => {
       headers: { "content-type": "application/json" },
     }));
   }
-  if (url.pathname === "/api/tasks/free-accept-ui/commits") {
+  if (url.pathname === "/api/tasks/free-reviewing-ui/free-workflow") {
+    return Promise.resolve(new Response(JSON.stringify(reviewingAcceptanceState), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    }));
+  }
+  if (url.pathname === "/api/tasks/free-accept-ui/commits" || url.pathname === "/api/tasks/free-reviewing-ui/commits") {
     return Promise.resolve(new Response(JSON.stringify({ branch: "harness/free-accept-ui", commits: [] }), {
       status: 200,
       headers: { "content-type": "application/json" },
     }));
   }
-  if (url.pathname === "/api/tasks/free-accept-ui/diff") {
+  if (url.pathname === "/api/tasks/free-accept-ui/diff" || url.pathname === "/api/tasks/free-reviewing-ui/diff") {
     return Promise.resolve(new Response(JSON.stringify({
       available: true,
       sourceBranch: "harness/free-accept-ui",
@@ -155,12 +184,18 @@ const acceptanceTask = {
   archived: false,
 } as Task;
 
-function AcceptanceFixture() {
+const reviewingAcceptanceTask = {
+  ...acceptanceTask,
+  id: "free-reviewing-ui",
+  title: "自由任务审查中",
+} as Task;
+
+function AcceptanceFixture({ task, className }: { task: Task; className: string }) {
   const [reviewOpen, setReviewOpen] = useState(false);
   return (
-    <section className="acceptance-fixture">
+    <section className={className}>
       <TaskHeader
-        task={acceptanceTask}
+        task={task}
         conversationMarkdown=""
         busy={false}
         refreshing={false}
@@ -176,8 +211,8 @@ function AcceptanceFixture() {
         notify={() => undefined}
       />
       {reviewOpen
-        ? <TaskReviewWorkspace task={acceptanceTask} allTasks={[acceptanceTask]} onClose={() => setReviewOpen(false)} onTaskUpdated={() => undefined} notify={() => undefined} />
-        : <FreeWorkflowToolbar task={acceptanceTask} notify={() => undefined} />}
+        ? <TaskReviewWorkspace task={task} allTasks={[task]} onClose={() => setReviewOpen(false)} onTaskUpdated={() => undefined} notify={() => undefined} />
+        : <FreeWorkflowToolbar task={task} notify={() => undefined} />}
     </section>
   );
 }
@@ -194,7 +229,8 @@ createRoot(document.getElementById("root")!).render(
           <FreeWorkflowInspector task={task} reviewOnly onOpenReview={() => undefined} notify={() => undefined} />
         </aside>
       </div>
-      <AcceptanceFixture />
+      <AcceptanceFixture task={acceptanceTask} className="acceptance-fixture" />
+      <AcceptanceFixture task={reviewingAcceptanceTask} className="acceptance-blocked-fixture" />
     </div>
   </StrictMode>,
 );

@@ -18,8 +18,9 @@
 
 .team-accept-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 5px; }
 .team-accept-actions > button, .team-accept-actions > span { display: inline-flex; height: 27px; align-items: center; gap: 5px; border: 1px solid var(--line2); border-radius: 7px; background: var(--panel); padding: 0 8px; color: var(--muted); font-size: 10.5px; font-weight: 600; }
-.team-accept-actions > button:hover { background: var(--raised); color: var(--ink); }
+.team-accept-actions > button:hover:not(:disabled) { background: var(--raised); color: var(--ink); }
 .team-accept-actions > button.is-primary { border-color: var(--accent); background: var(--accent); color: white; }
+.team-accept-actions > button:disabled { cursor: not-allowed; opacity: .52; }
 .team-accept-actions > span { border-color: color-mix(in lch,var(--green) 24%,var(--line)); background: var(--green-bg); color: var(--green); }
 .team-accept-failure { margin: 0 12px 11px 51px; border: 1px solid color-mix(in lch,var(--red) 30%,var(--line)); border-radius: 8px; background: color-mix(in lch,var(--red) 5%,var(--panel)); padding: 9px 10px; color: var(--red); font-size: 10.5px; }
 .team-accept-failure.is-handed-off { border-color: color-mix(in lch,var(--amber) 34%,var(--line)); background: color-mix(in lch,var(--amber) 7%,var(--panel)); color: var(--amber); }
