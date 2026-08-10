@@ -7,7 +7,7 @@ import { ImagePreviewGroup, PreviewableImage, PreviewableImageLink } from "./Ima
 import {
   imagePreviewTarget,
   isLocalDiskImagePath,
-  isLocalOpenHref,
+  localOpenUrl,
   openLocalPath,
   remarkSoftBreaks,
   reviewFileTarget,
@@ -27,7 +27,7 @@ function MarkdownDocument({ text, onReviewReport, onActionError }: {
           a: ({ node: _node, href, onClick, ...props }) => {
             const reviewFile = reviewFileTarget(href);
             const reviewMarkdown = reviewFile !== null && /\.md$/i.test(reviewFile.name);
-            const localOpen = isLocalOpenHref(href);
+            const localOpen = localOpenUrl(href);
             // 指向图片的链接跟内嵌图走同一个灯箱（也就跟同一条消息里的其它图编在一组，
             // 能左右翻）。按住 ⌘/Ctrl/Shift 或中键仍然是浏览器原来那套「新标签页打开」，
             // 由 PreviewableImageLink 自己让路。
@@ -47,7 +47,7 @@ function MarkdownDocument({ text, onReviewReport, onActionError }: {
             return (
               <a
                 {...props}
-                href={reviewFile?.url ?? href}
+                href={reviewFile?.url ?? localOpen ?? href}
                 target={localOpen || reviewMarkdown ? undefined : "_blank"}
                 rel={localOpen || reviewMarkdown ? undefined : "noreferrer"}
                 onClick={(event) => {
@@ -58,10 +58,10 @@ function MarkdownDocument({ text, onReviewReport, onActionError }: {
                     onReviewReport(reviewFile);
                     return;
                   }
-                  if (!localOpen || !href) return;
+                  if (!localOpen) return;
                   event.preventDefault();
                   onActionError(null);
-                  void openLocalPath(href).catch((reason: unknown) => {
+                  void openLocalPath(localOpen).catch((reason: unknown) => {
                     onActionError(reason instanceof Error ? reason.message : String(reason));
                   });
                 }}

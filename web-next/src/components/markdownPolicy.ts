@@ -47,6 +47,40 @@ export function isLocalOpenHref(href?: string): href is string {
   }
 }
 
+const POSIX_DISK_ROOT = /^\/(?:Users|home|root|tmp|private|var|Volumes|opt|workspace|workspaces|mnt|srv)\//;
+const WINDOWS_DISK_ROOT = /^[A-Za-z]:[\\/]/;
+
+/** Return the actual filesystem path represented by a Markdown destination. */
+export function localDiskPath(href?: string): string | null {
+  const raw = href?.trim();
+  if (!raw) return null;
+  if (/^file:\/\//i.test(raw)) {
+    try {
+      const url = new URL(raw);
+      const path = decodeSafe(url.pathname);
+      if (url.hostname && url.hostname !== "localhost") return `//${url.hostname}${path}`;
+      return /^\/[A-Za-z]:\//.test(path) ? path.slice(1) : path;
+    } catch {
+      return null;
+    }
+  }
+  if (WINDOWS_DISK_ROOT.test(raw) || /^\\\\[^\\]+\\[^\\]+/.test(raw)) return decodeSafe(raw);
+  if (!POSIX_DISK_ROOT.test(raw)) return null;
+  const boundary = raw.search(/[?#]/);
+  return decodeSafe(boundary < 0 ? raw : raw.slice(0, boundary));
+}
+
+/** Raw disk paths and explicit open-local URLs converge on one visible, clickable endpoint. */
+export function localOpenUrl(href?: string): string | null {
+  if (!href) return null;
+  if (isLocalOpenHref(href)) return currentOriginOpenLocalUrl(href);
+  const path = localDiskPath(href);
+  if (!path) return null;
+  const target = new URL("/api/open-local", window.location.origin);
+  target.searchParams.set("path", path);
+  return target.toString();
+}
+
 function sameOriginUrl(href: string): URL | null {
   try {
     const url = new URL(href, window.location.origin);
@@ -69,8 +103,8 @@ export type ImagePreviewTarget = ReviewFileTarget;
 //   ① 验证证据 data/runs/<task>/{review,free-review}/… → 对应证据接口（绝对路径、file:// 都认）
 //   ② 用户贴的附件 data/uploads/<file>                → 附件接口
 //   ③ 本来就是站内 URL（/api/uploads/… 一类）          → 原样用
-// 其余一律返回 null 交回普通链接：**站外图和本机磁盘路径都不接管**——后者拼出来的同源
-// URL 服务端根本取不到，灯箱只会白给一个空框，比新标签页更糟。
+// 其余一律返回 null 交回普通链接策略：站外图照常新开，本机磁盘路径则由 localOpenUrl
+// 改写到安全打开端点；这里不能拿一个服务端取不到的 URL 硬塞给灯箱。
 export function imagePreviewTarget(href?: string): ImagePreviewTarget | null {
   if (!href) return null;
   // 「用系统应用打开本地文件」是另一条路，不抢它的链接。
@@ -79,10 +113,8 @@ export function imagePreviewTarget(href?: string): ImagePreviewTarget | null {
 }
 
 export function isLocalDiskImagePath(href: string): boolean {
-  if (!isImagePath(href)) return false;
-  return /^file:\/\//i.test(href)
-    || /^\/(?:Users|home|tmp|private\/tmp|var\/folders)\//.test(href)
-    || /^[A-Za-z]:[\\/]/.test(href);
+  const path = localDiskPath(href);
+  return path !== null && isImagePath(path);
 }
 
 function servableImage(href: string): ImagePreviewTarget | null {
@@ -114,7 +146,9 @@ export function currentOriginOpenLocalUrl(href: string): string {
 }
 
 export async function openLocalPath(href: string): Promise<void> {
-  const response = await fetch(currentOriginOpenLocalUrl(href));
+  const target = localOpenUrl(href);
+  if (!target) throw new Error("不是可打开的本地路径");
+  const response = await fetch(target);
   if (!response.ok) throw new Error(await response.text() || `HTTP ${response.status}`);
 }
 

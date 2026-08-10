@@ -38,6 +38,11 @@ try {
 
   browser = await chromium.launch({ executablePath: await executablePath(), headless: true });
   const page = await browser.newPage();
+  const localOpenRequests = [];
+  await page.route("**/api/open-local?*", async (route) => {
+    localOpenRequests.push(new URL(route.request().url()).searchParams.get("path"));
+    await route.fulfill({ status: 200, contentType: "text/html; charset=utf-8", body: "已打开" });
+  });
   await page.route("**/api/tasks/tsk1234/free-workflow/review-file?*", async (route) => {
     const name = new URL(route.request().url()).searchParams.get("name");
     if (name === "report.md") {
@@ -77,6 +82,7 @@ try {
   const freeReport = links.getByRole("link", { name: "自由报告", exact: true });
   const freeShot = links.getByRole("link", { name: "自由截图", exact: true });
   const freeServed = links.getByRole("link", { name: "自由证据接口图", exact: true });
+  const localDemo = links.getByRole("link", { name: "本地 Demo", exact: true });
   const remote = links.getByRole("link", { name: "站外图", exact: true });
   await shot.waitFor();
   assert.equal(await links.locator("a[aria-haspopup=dialog]").count(), 5, "所有站内取得到的图片都接管成统一预览");
@@ -96,8 +102,20 @@ try {
   );
   assert.equal(await freeShot.getAttribute("aria-haspopup"), "dialog", "自由审查目录里的图片也使用统一灯箱");
   assert.equal(await freeServed.getAttribute("aria-haspopup"), "dialog", "自由审查接口 URL 也认得出是图片");
+  const localDemoHref = new URL(await localDemo.getAttribute("href"));
+  assert.equal(localDemoHref.pathname, "/api/open-local", "绝对本地路径的可见链接必须指向真实打开端点");
+  assert.equal(localDemoHref.searchParams.get("path"), "/Users/fjh/code/harness/.worktrees/demo/docs/baseline/index.html");
+  assert.equal(await localDemo.getAttribute("target"), null, "本地路径由当前页面调用打开端点，不新开错误空页");
   assert.equal(await remote.getAttribute("aria-haspopup"), null, "站外图不接管");
   assert.equal(await remote.getAttribute("target"), "_blank", "站外图保持新标签页打开");
+
+  const pageUrl = page.url();
+  const pageCountBeforeLocalOpen = page.context().pages().length;
+  await localDemo.click();
+  await page.waitForFunction(() => performance.getEntriesByType("resource").some((entry) => entry.name.includes("/api/open-local?")));
+  assert.deepEqual(localOpenRequests, ["/Users/fjh/code/harness/.worktrees/demo/docs/baseline/index.html"]);
+  assert.equal(page.url(), pageUrl, "打开本地文件不能把当前对话页导航走");
+  assert.equal(page.context().pages().length, pageCountBeforeLocalOpen, "打开本地文件不能先弹一个错误标签页");
 
   await shot.click();
   await dialog.waitFor();

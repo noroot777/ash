@@ -18,7 +18,7 @@ import {
   registeredAgentTypes,
   teamExecutorCandidates,
 } from "../src/lib/agentAvailability.ts";
-import { isLocalDiskImagePath } from "../src/components/markdownPolicy.ts";
+import { isLocalDiskImagePath, localDiskPath } from "../src/components/markdownPolicy.ts";
 import { createTerminalTab, withoutTerminalTab } from "../src/workspace/terminalTabs.ts";
 
 const originalFetch = globalThis.fetch;
@@ -27,6 +27,11 @@ try {
   assert.equal(isLocalDiskImagePath("/tmp/cli-drawer.jpg"), true);
   assert.equal(isLocalDiskImagePath("file:///Users/fjh/cli-drawer.png"), true);
   assert.equal(isLocalDiskImagePath("/api/uploads/cli-drawer.jpg"), false);
+  assert.equal(localDiskPath("/Users/fjh/My%20Demo/index.html"), "/Users/fjh/My Demo/index.html");
+  assert.equal(localDiskPath("file:///Volumes/demo/My%20Demo/index.html"), "/Volumes/demo/My Demo/index.html");
+  assert.equal(localDiskPath("C:\\work\\demo\\index.html"), "C:\\work\\demo\\index.html");
+  assert.equal(localDiskPath("/api/tasks/demo/file"), null);
+  assert.equal(localDiskPath("https://example.com/index.html"), null);
   const terminalTabs = [
     createTerminalTab("cli-1", 1, "harness", "/repo"),
     createTerminalTab("cli-2", 2, "harness", "/repo"),

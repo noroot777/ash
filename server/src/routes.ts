@@ -1,11 +1,9 @@
 import { Hono } from "hono";
-import { getConnInfo } from "@hono/node-server/conninfo";
 import { streamSSE } from "hono/streaming";
 import { eq, inArray } from "drizzle-orm";
 import { readFile } from "node:fs/promises";
-import { existsSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
-import { spawn } from "node:child_process";
-import { join, basename, extname, resolve, sep } from "node:path";
+import { rmSync, mkdirSync, writeFileSync } from "node:fs";
+import { join, basename, extname } from "node:path";
 import { RUNS_DIR, DATA_DIR, UPLOADS_DIR } from "./paths.js";
 import type {
   Project,
@@ -43,9 +41,11 @@ import { mountProviderTestRoutes } from "./provider-test.js";
 import { mountTerminalRoutes } from "./terminal.js";
 import { mountFreeWorkflowRoutes } from "./free-workflow.js";
 import { mountReviewerProfileRoutes } from "./reviewer-profiles.js";
+import { mountLocalOpenRoutes } from "./local-open-routes.js";
 
 export const api = new Hono();
 mountNoteRoutes(api);
+mountLocalOpenRoutes(api);
 
 // ── health ───────────────────────────────────────────────────────────────
 api.get("/health", (c) => c.json({ ok: true, ts: now() }));
@@ -84,43 +84,6 @@ api.get("/search", async (c) => {
   }
   const searchType = type === "tasks" || type === "notes" ? type : undefined;
   return c.json(await searchAll(q, { projectId, type: searchType }));
-});
-
-const LOCAL_OPEN_ROOTS = (process.env.HARNESS_LOCAL_OPEN_ROOTS ??
-  "/Users/fjh/code/daily-report/videos:/Users/fjh/code/harness/review")
-  .split(":")
-  .map((p) => resolve(p))
-  .filter(Boolean);
-
-// open-local 信任的是「连接来源 IP」而非 Host 头(Host 可随意伪造):本机 loopback
-// 或 Tailscale 网段(100.64.0.0/10 CGNAT + 其 IPv6 fd7a:115c:a1e0::/48)放行——
-// tailnet 里全是自己的设备,从手机/别的电脑点开也应该能在 Mac 上打开文件。
-const isTrustedRemote = (addr: string | undefined): boolean => {
-  const a = (addr ?? "").replace(/^::ffff:/i, "");
-  if (a === "127.0.0.1" || a === "::1") return true;
-  if (a.toLowerCase().startsWith("fd7a:115c:a1e0:")) return true;
-  const m = /^100\.(\d+)\./.exec(a);
-  return m !== null && Number(m[1]) >= 64 && Number(m[1]) <= 127;
-};
-
-const isAllowedLocalPath = (path: string): boolean =>
-  LOCAL_OPEN_ROOTS.some((root) => path === root || path.startsWith(root + sep));
-
-api.all("/open-local", async (c) => {
-  if (!isTrustedRemote(getConnInfo(c).remote.address)) {
-    return c.text("只允许本机或 Tailscale 网内设备调用 open-local", 403);
-  }
-  const raw = c.req.query("path") ?? "";
-  const target = resolve(raw);
-  if (!raw || !isAllowedLocalPath(target) || !existsSync(target)) {
-    return c.text("local path is missing, outside the allowlist, or does not exist", 400);
-  }
-  const child = spawn("open", [target], { detached: true, stdio: "ignore" });
-  child.unref();
-  return c.html(
-    `<!doctype html><meta charset=utf-8><title>Opened</title>` +
-      `<body style="font:14px -apple-system,system-ui,sans-serif;padding:20px">已打开：<code>${target}</code></body>`,
-  );
 });
 
 // ── attachment uploads (pasted into the composer / reply box) ────────────────
