@@ -644,6 +644,20 @@
 .review-evidence-drawer > header > button { display: inline-flex; height: 24px; flex: 0 0 auto; align-items: center; gap: 4px; border: 0; border-radius: 5px; background: transparent; padding: 0 7px; color: var(--muted); font-size: 10px; }
 .review-evidence-drawer > header > button:hover { background: var(--overlay); color: var(--ink); }
 .review-evidence-drawer__scroll { min-height: 0; flex: 1; overflow: auto; padding: 11px; }
+.review-evidence-drawer__footer { flex: 0 0 auto; border-top: .5px solid var(--line); background: var(--raised); padding: 8px 10px 9px; }
+
+/* 截图始终留在抽屉底边；数量只增加横向长度，不再把报告正文越顶越短。 */
+.review-screenshot-strip { min-width: 0; }
+.review-screenshot-strip > header { display: flex; align-items: center; gap: 5px; margin-bottom: 6px; color: var(--faint); font-size: 9px; }
+.review-screenshot-strip > header > span { display: inline-flex; align-items: center; gap: 4px; font-weight: 650; }
+.review-screenshot-strip > header > em { border-radius: 999px; background: var(--overlay); padding: 1px 5px; color: var(--muted); font-style: normal; }
+.review-screenshot-strip > header > small { margin-left: auto; color: var(--faint); font-size: 8.5px; }
+.review-screenshot-strip__rail { display: flex; min-width: 0; gap: 7px; overflow-x: auto; overscroll-behavior-x: contain; padding-bottom: 2px; scroll-snap-type: x proximity; }
+.review-screenshot-strip__rail:focus-visible { border-radius: 6px; outline: 2px solid color-mix(in lch,var(--accent) 38%,transparent); outline-offset: 2px; }
+.review-screenshot-strip__item { width: 112px; min-width: 112px; overflow: hidden; flex: 0 0 112px; border: 1px solid var(--line); border-radius: 7px; background: var(--canvas); scroll-snap-align: start; }
+.review-screenshot-strip__item:hover { border-color: color-mix(in lch,var(--accent) 42%,var(--line)); }
+.review-screenshot-strip__item img { display: block; width: 100%; aspect-ratio: 16/9; background: var(--panel); object-fit: cover; }
+.review-screenshot-strip__item span { display: block; overflow: hidden; padding: 4px 5px; color: var(--muted); font-size: 8.5px; text-overflow: ellipsis; white-space: nowrap; }
 
 @keyframes review-evidence-drawer-in { from { transform: translateX(16px); opacity: 0; } to { transform: none; opacity: 1; } }
 

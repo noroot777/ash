@@ -82,16 +82,18 @@ export function ReviewRoundBody({
   taskId,
   round,
   onOpenTask,
+  includeScreenshots = true,
 }: {
   taskId: string;
   round: TaskReviewRound;
   onOpenTask?: (taskId: string) => void;
+  includeScreenshots?: boolean;
 }) {
   const reviewTaskId = round.reviewTaskId;
   return (
     <>
       {round.reportMarkdown ? <MarkdownBody text={round.reportMarkdown} /> : <p>验证报告尚未写入。</p>}
-      {round.screenshots.length > 0 && (
+      {includeScreenshots && round.screenshots.length > 0 && (
         <section className="review-shots">
           <h5><ImageSquare size={12} />证据截图 · {round.screenshots.length}</h5>
           <div>

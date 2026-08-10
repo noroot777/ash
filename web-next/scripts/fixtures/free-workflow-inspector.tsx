@@ -58,7 +58,7 @@ const state = {
       status: "passed",
       conclusion: "verified",
       reportMarkdown: "# 审查结论\n\n**统一预览已验证。**",
-      screenshots: ["shot-one.png", "shot-two.png"],
+      screenshots: ["shot-one.png", "shot-two.png", "shot-three.png", "shot-four.png", "shot-five.png", "shot-six.png"],
       startedAt: "2026-08-09T00:10:00.000Z",
       endedAt: "2026-08-09T00:11:00.000Z",
     }],
@@ -94,7 +94,7 @@ createRoot(document.getElementById("root")!).render(
         <FreeWorkflowInspector task={task} />
       </aside>
       <aside className="inspector-host review-only-fixture" style={{ width: 380, height: 640 }}>
-        <FreeWorkflowInspector task={task} reviewOnly />
+        <FreeWorkflowInspector task={task} reviewOnly onOpenReview={() => undefined} notify={() => undefined} />
       </aside>
     </div>
   </StrictMode>,

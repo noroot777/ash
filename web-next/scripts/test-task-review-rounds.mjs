@@ -80,7 +80,7 @@ try {
   // 证据截图点开的大图 portal 到 body，DOM 上不在抽屉里：它必须登记进浮层那一摞，
   // 否则点大图会被抽屉读成「点了外面」、Esc 也会连抽屉一起关。
   const lightbox = page.locator(".image-preview-lightbox");
-  await drawer.locator(".review-shots img").first().click();
+  await drawer.locator(".review-screenshot-strip img").first().click();
   await lightbox.waitFor();
   assert.equal(await drawer.count(), 1, "点开证据大图不该把抽屉一起关了");
   await page.keyboard.press("Escape");
@@ -97,6 +97,15 @@ try {
   assert.equal(await drawer.count(), 1);
   assert.equal(await page.locator(".review-evidence-drawer > header b").innerText(), "第 3 轮验证");
   assert.equal(await drawer.getByRole("button", { name: "打开审查任务" }).count(), 0, "就地验证没有审查任务可打开");
+  assert.equal(await drawer.locator(".review-screenshot-strip img").count(), 8, "多张证据截图都应保留在底部图片区");
+  assert.equal(
+    await drawer.locator(".review-screenshot-strip__rail").evaluate((node) => node.scrollWidth > node.clientWidth),
+    true,
+    "图片数量增加时只横向滚动，不能持续占用报告高度",
+  );
+  const drawerBoxAfterSwitch = await drawer.boundingBox();
+  const footerBox = await drawer.locator(".review-evidence-drawer__footer").boundingBox();
+  assert.ok(Math.abs(footerBox.y + footerBox.height - (drawerBoxAfterSwitch.y + drawerBoxAfterSwitch.height)) <= 1, "图片区应固定贴住抽屉底边");
 
   // 再点同一条收起来：点开是开关，不是单选。
   await rounds.nth(2).click();
@@ -105,6 +114,7 @@ try {
   await rounds.nth(1).click();
   await drawer.waitFor();
   await drawer.getByText("验证报告尚未写入。").first().waitFor();
+  assert.equal(await drawer.locator(".review-evidence-drawer__footer").count(), 0, "没有截图的轮次不应留下空白底栏");
   await page.keyboard.press("Escape");
   await drawer.waitFor({ state: "detached" });
 

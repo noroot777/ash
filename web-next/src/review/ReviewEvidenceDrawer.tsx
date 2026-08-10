@@ -22,6 +22,7 @@ export function ReviewEvidenceDrawer({
   subtitle,
   onClose,
   children,
+  footer,
 }: {
   /** 侧边栏里的任意元素；抽屉贴着它所在的 inspector 面板左边缘展开 */
   anchorRef: RefObject<HTMLElement | null>;
@@ -31,6 +32,8 @@ export function ReviewEvidenceDrawer({
   subtitle?: string;
   onClose: () => void;
   children: ReactNode;
+  /** 固定在抽屉底部的证据区；正文单独滚动，截图再多也不挤掉报告。 */
+  footer?: ReactNode;
 }) {
   const box = useRef<HTMLDivElement>(null);
   const [at, setAt] = useState<Box | null>(null);
@@ -92,6 +95,7 @@ export function ReviewEvidenceDrawer({
         <button type="button" onClick={onClose} aria-label="关闭审查内容"><X size={13} />关闭</button>
       </header>
       <div className="review-evidence-drawer__scroll">{children}</div>
+      {footer && <div className="review-evidence-drawer__footer">{footer}</div>}
     </aside>,
     document.body,
   );
