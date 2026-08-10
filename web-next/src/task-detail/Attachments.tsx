@@ -1,4 +1,11 @@
-import { useCallback, useRef, useState, type ClipboardEvent, type SetStateAction } from "react";
+import {
+  useCallback,
+  useRef,
+  useState,
+  type ClipboardEvent,
+  type Dispatch,
+  type SetStateAction,
+} from "react";
 import { File as FileIcon, Paperclip, X } from "@phosphor-icons/react";
 import { maxBytesFor, type AttachmentKind } from "@harness/shared";
 import { ImagePreviewGroup, PreviewableImage } from "../components/ImagePreview.tsx";
@@ -44,22 +51,17 @@ export function useAttachments({
   onChange,
 }: {
   value?: UploadAttachment[];
-  onChange?: (attachments: UploadAttachment[]) => void;
+  onChange?: Dispatch<SetStateAction<UploadAttachment[]>>;
 } = {}) {
   const [storedAttachments, setStoredAttachments] = useState<UploadAttachment[]>([]);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const controlled = value !== undefined;
   const attachments = value ?? storedAttachments;
-  const attachmentsRef = useRef(attachments);
-  attachmentsRef.current = attachments;
 
   const setAttachments = useCallback((update: SetStateAction<UploadAttachment[]>) => {
-    const current = attachmentsRef.current;
-    const next = typeof update === "function" ? update(current) : update;
-    attachmentsRef.current = next;
-    if (!controlled) setStoredAttachments(next);
-    onChange?.(next);
+    if (controlled) onChange?.(update);
+    else setStoredAttachments(update);
   }, [controlled, onChange]);
 
   const addFiles = useCallback(async (files: File[]) => {

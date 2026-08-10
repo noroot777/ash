@@ -38,20 +38,35 @@ try {
 
   browser = await chromium.launch({ executablePath: await executablePath(), headless: true });
   const page = await browser.newPage();
+  let uploadCount = 0;
+  let releaseFirstUpload;
+  let markFirstUploadStarted;
+  let markFirstUploadFinished;
+  const firstUploadRelease = new Promise((resolve) => { releaseFirstUpload = resolve; });
+  const firstUploadStarted = new Promise((resolve) => { markFirstUploadStarted = resolve; });
+  const firstUploadFinished = new Promise((resolve) => { markFirstUploadFinished = resolve; });
   await page.route("**/api/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
     if (path === "/api/uploads") {
+      const requestNumber = ++uploadCount;
+      const request = JSON.parse(route.request().postData() ?? "{}");
+      const name = typeof request.name === "string" ? request.name : `upload-${requestNumber}.png`;
+      if (requestNumber === 1) {
+        markFirstUploadStarted();
+        await firstUploadRelease;
+      }
       await route.fulfill({
         status: 200,
         contentType: "application/json",
         body: JSON.stringify({
-          id: "upload-1",
-          path: "/tmp/draft-image.png",
+          id: `upload-${requestNumber}`,
+          path: `/tmp/${name}`,
           url: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
-          name: "draft-image.png",
+          name,
           kind: "image",
         }),
       });
+      if (requestNumber === 1) markFirstUploadFinished();
       return;
     }
     await route.fulfill({ status: 200, contentType: "application/json", body: "[]" });
@@ -63,15 +78,15 @@ try {
   const chooser = page.waitForEvent("filechooser");
   await page.getByRole("button", { name: "上传附件" }).click();
   await (await chooser).setFiles({
-    name: "draft-image.png",
+    name: "a-delayed.png",
     mimeType: "image/png",
     buffer: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64"),
   });
-  await page.getByText("draft-image.png", { exact: true }).waitFor();
+  await firstUploadStarted;
 
   await page.getByRole("button", { name: "任务 B" }).click();
   assert.equal(await input.inputValue(), "", "另一个任务应有独立的空草稿");
-  assert.equal(await page.getByText("draft-image.png", { exact: true }).count(), 0, "图片不能串到另一个任务");
+  assert.equal(await page.getByText("a-delayed.png", { exact: true }).count(), 0, "上传中的图片不能串到另一个任务");
   await input.fill("任务 B 的草稿");
   const secondChooser = page.waitForEvent("filechooser");
   await page.getByRole("button", { name: "上传附件" }).click();
@@ -80,24 +95,29 @@ try {
     mimeType: "image/png",
     buffer: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64"),
   });
-  await page.getByText("draft-image.png", { exact: true }).waitFor();
+  await page.getByText("task-b-image.png", { exact: true }).waitFor();
+  releaseFirstUpload();
+  await firstUploadFinished;
+  assert.equal(await page.getByText("a-delayed.png", { exact: true }).count(), 0, "旧任务上传完成后不能污染当前任务");
 
   await page.getByRole("button", { name: "任务 A" }).click();
   assert.equal(await input.inputValue(), "任务 A 的未发送内容", "切回任务后应恢复正文");
-  assert.equal(await page.getByText("draft-image.png", { exact: true }).count(), 1, "切回任务后应恢复图片");
+  assert.equal(await page.getByText("a-delayed.png", { exact: true }).count(), 1, "切回任务后应恢复延迟完成的图片");
+  assert.equal(await page.getByText("task-b-image.png", { exact: true }).count(), 0, "任务 A 不能混入任务 B 的图片");
 
   await page.getByRole("button", { name: "任务 B" }).click();
   assert.equal(await input.inputValue(), "任务 B 的草稿", "每个任务应保留自己的正文");
-  assert.equal(await page.getByText("draft-image.png", { exact: true }).count(), 1, "后续上传也应留在当前任务");
+  assert.equal(await page.getByText("task-b-image.png", { exact: true }).count(), 1, "后续上传也应留在当前任务");
+  assert.equal(await page.getByText("a-delayed.png", { exact: true }).count(), 0, "任务 B 不能混入任务 A 的图片");
 
   await page.getByRole("button", { name: "任务 A" }).click();
   await page.getByRole("button", { name: "发送回复" }).click();
   assert.equal(await input.inputValue(), "", "发送成功后应清掉当前任务正文");
-  assert.equal(await page.getByText("draft-image.png", { exact: true }).count(), 0, "发送成功后应清掉当前任务图片");
+  assert.equal(await page.getByText("a-delayed.png", { exact: true }).count(), 0, "发送成功后应清掉当前任务图片");
 
   await page.getByRole("button", { name: "任务 B" }).click();
   assert.equal(await input.inputValue(), "任务 B 的草稿", "发送一个任务不能清掉另一个任务的草稿");
-  assert.equal(await page.getByText("draft-image.png", { exact: true }).count(), 1, "发送一个任务不能清掉另一个任务的图片");
+  assert.equal(await page.getByText("task-b-image.png", { exact: true }).count(), 1, "发送一个任务不能清掉另一个任务的图片");
 
   console.log("task reply draft test passed");
 } finally {
