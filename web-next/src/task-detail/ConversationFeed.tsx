@@ -28,8 +28,10 @@ function AgentMessage({
       <span className="task-message-avatar" aria-hidden="true">{item.label.slice(0, 1).toUpperCase()}</span>
       <div className="task-message-content">
         <header>
-          <b>{item.label}</b>
-          <AgentRunMeta run={item.run} />
+          <span className="agent-run-identity">
+            <b>{item.label}</b>
+            <AgentRunMeta run={item.run} />
+          </span>
           {item.at && <time>{formatInstant(item.at)}</time>}
           {duration && (
             <small className="task-turn-duration" title={`开始 ${formatInstant(item.at)} · 结束 ${formatInstant(item.endedAt)}`}>
