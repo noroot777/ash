@@ -118,6 +118,21 @@ try {
   await page.keyboard.press("Escape");
   await drawer.waitFor({ state: "detached" });
 
+  // 手机和右侧 drawer 模式没有足够的左侧空间；此时证据抽屉必须转为视口内覆盖，
+  // 不能继续贴着 inspector 左边而只露出几十像素。
+  await page.setViewportSize({ width: 390, height: 740 });
+  await rounds.nth(2).click();
+  await drawer.waitFor();
+  await drawer.evaluate((node) => Promise.all(node.getAnimations().map((animation) => animation.finished)));
+  const mobileBox = await drawer.boundingBox();
+  assert.match(await drawer.getAttribute("class"), /is-overlay/, "窄屏应切换为视口内覆盖式抽屉");
+  assert.ok(mobileBox.x >= 11, `窄屏抽屉左边缘必须留在视口内，实测 ${mobileBox.x}`);
+  assert.ok(mobileBox.x + mobileBox.width <= 379, `窄屏抽屉右边缘必须留在视口内，实测 ${mobileBox.x + mobileBox.width}`);
+  assert.ok(mobileBox.width >= 360, `390px 视口下报告应获得可读宽度，实测 ${mobileBox.width}`);
+  assert.equal(await drawer.locator(".review-screenshot-strip img").count(), 8, "覆盖式抽屉仍须保留底部截图带");
+  await drawer.getByRole("button", { name: "关闭审查内容" }).click();
+  await drawer.waitFor({ state: "detached" });
+
   console.log("task review rounds test passed");
 } finally {
   await browser?.close();

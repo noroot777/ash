@@ -14,7 +14,7 @@ const state = {
     { id: "execution-1", status: "completed", startedAt: "2026-08-09T00:00:00.000Z", endedAt: "2026-08-09T00:09:00.000Z" },
     { id: "execution-2", status: "completed", startedAt: "2026-08-09T00:20:00.000Z", endedAt: "2026-08-09T00:29:00.000Z" },
   ],
-  merge: { status: "idle", message: null, mergedAt: null, updatedAt: null },
+  merge: { status: "merging", message: "正在合并", mergedAt: null, updatedAt: "2026-08-09T00:40:00.000Z" },
   reviews: [{
     id: "run-def",
     reviewerId: null,
@@ -89,7 +89,8 @@ const task = {
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <div style={{ display: "flex", gap: 20 }}>
+    <div style={{ display: "flex", gap: 20, height: 640 }}>
+      <div style={{ flex: 1 }} />
       <aside className="inspector-host workflow-inspector-fixture" style={{ width: 380, height: 640 }}>
         <FreeWorkflowInspector task={task} />
       </aside>

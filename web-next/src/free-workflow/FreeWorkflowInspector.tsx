@@ -269,8 +269,9 @@ export function FreeWorkflowInspector({
                   <div><b>{activity.event.kind === "preview_opened" ? "预览已打开" : "预览已关闭"}</b><small>{activity.event.detail} · {timeText(activity.event.occurredAt)}</small></div>
                 </li>;
               }
+              const merging = activity.merge.status === "merging";
               return <li key={activity.key} className={activity.merge.status === "merged" ? "is-done" : activity.merge.status === "failed" ? "is-warning" : "is-active"}>
-                <span><GitMerge size={14} /></span><div><b>合并&清理</b><small>{activity.merge.message ?? "处理中"} · {timeText(activity.at)}</small></div>
+                <span>{merging ? <SpinnerGap size={14} className="is-spinning" /> : <GitMerge size={14} />}</span><div><b>合并&清理</b><small>{activity.merge.message ?? "处理中"} · {timeText(activity.at)}</small></div>
               </li>;
             })}
           </ol>

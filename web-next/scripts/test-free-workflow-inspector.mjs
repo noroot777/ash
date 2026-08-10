@@ -80,8 +80,10 @@ try {
   const activities = workflow.locator(".free-workflow-generated li");
   assert.deepEqual(await activities.locator("b").allInnerTexts(), [
     "任务执行", "Codex 审查 · 逻辑检查", "任务执行", "Codex 审查 · 逻辑检查",
+    "合并&清理",
   ], "任务执行和审查必须按真实时间交替排列，不能合并同名审查");
   assert.match(await activities.nth(0).locator("small").innerText(), /8\/9.*9 分钟/);
+  assert.equal(await activities.last().locator("svg.is-spinning").count(), 1, "合并处理中应和其它运行中节点一样显示旋转图标");
 
   assert.equal(await drawer.count(), 0, "工作流中的审查正文默认也不弹出");
   await activities.nth(1).getByRole("button").click();

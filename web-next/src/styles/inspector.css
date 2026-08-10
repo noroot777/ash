@@ -636,6 +636,7 @@
 /* 贴着审查侧边栏左边缘的那一屉，位置与尺寸由 ReviewEvidenceDrawer 量出来写在 style 上。
    z 要压过执行者抽屉（95）：那一屉里也有 inspector，审查内容得浮在它上面才看得见。 */
 .review-evidence-drawer { position: fixed; z-index: 96; display: flex; overflow: hidden; flex-direction: column; border: 1px solid var(--line2); border-right: 0; border-radius: 12px 0 0 12px; background: var(--canvas); box-shadow: -18px 0 50px rgb(30 32 38 / 16%); animation: review-evidence-drawer-in 200ms cubic-bezier(.22,1,.36,1) both; }
+.review-evidence-drawer.is-overlay { border-right: 1px solid var(--line2); border-radius: 12px; box-shadow: 0 18px 50px rgb(30 32 38 / 20%); }
 .review-evidence-drawer > header { display: flex; min-height: 38px; flex: 0 0 auto; align-items: center; gap: 8px; border-bottom: .5px solid var(--line); background: var(--raised); padding: 6px 8px 6px 12px; }
 .review-evidence-drawer > header > div { min-width: 0; flex: 1; }
 .review-evidence-drawer > header b, .review-evidence-drawer > header small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

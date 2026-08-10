@@ -13,7 +13,7 @@ import { useDismissable } from "../lib/useDismissable.ts";
 const EDGE = 12;
 const MIN_WIDTH = 280;
 
-type Box = { right: number; top: number; height: number; width: number };
+type Box = { right: number; top: number; height: number; width: number; overlay: boolean };
 
 export function ReviewEvidenceDrawer({
   anchorRef,
@@ -45,13 +45,24 @@ export function ReviewEvidenceDrawer({
       const host = panel();
       if (!host) return;
       const rect = host.getBoundingClientRect();
-      // 侧边栏左边留给抽屉的空间就这么多；侧边栏被拖得很宽时抽屉跟着让步，不挤出屏幕。
-      const room = Math.max(MIN_WIDTH, rect.left - EDGE);
-      const next: Box = {
+      const leftRoom = rect.left - EDGE;
+      // 桌面端仍贴着 inspector 左边；左侧连最小可读宽度都放不下时，改为视口内覆盖，
+      // 否则 drawer 模式和手机上只会露出几十像素边缘。
+      const overlay = leftRoom < MIN_WIDTH;
+      const overlayTop = Math.max(EDGE, rect.top);
+      const overlayBottom = Math.min(window.innerHeight - EDGE, rect.bottom);
+      const next: Box = overlay ? {
+        right: EDGE,
+        top: overlayTop,
+        height: Math.max(0, overlayBottom - overlayTop),
+        width: Math.max(0, window.innerWidth - EDGE * 2),
+        overlay: true,
+      } : {
         right: Math.max(0, window.innerWidth - rect.left),
         top: rect.top,
         height: rect.height,
-        width: Math.min(rect.width, room),
+        width: Math.min(rect.width, leftRoom),
+        overlay: false,
       };
       setAt((current) =>
         current
@@ -59,6 +70,7 @@ export function ReviewEvidenceDrawer({
         && current.top === next.top
         && current.height === next.height
         && current.width === next.width
+        && current.overlay === next.overlay
           ? current
           : next);
     };
@@ -77,7 +89,7 @@ export function ReviewEvidenceDrawer({
 
   return createPortal(
     <aside
-      className="review-evidence-drawer"
+      className={`review-evidence-drawer${at?.overlay ? " is-overlay" : ""}`}
       ref={box}
       role="dialog"
       aria-label={title}
