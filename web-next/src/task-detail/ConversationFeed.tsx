@@ -4,6 +4,7 @@ import type { Session, Task } from "@harness/shared";
 import { runActivityExecutor, runActivityPhase, runActivityTail } from "@harness/shared/run-activity";
 import type { ConversationItem } from "./conversationModel.ts";
 import { ConversationScrollControls } from "../components/ConversationScrollControls.tsx";
+import { AgentRunMeta } from "../components/AgentRunMeta.tsx";
 import { ExecutionDetails } from "../components/ExecutionTrace.tsx";
 import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
@@ -28,6 +29,7 @@ function AgentMessage({
       <div className="task-message-content">
         <header>
           <b>{item.label}</b>
+          <AgentRunMeta run={item.run} />
           {item.at && <time>{formatInstant(item.at)}</time>}
           {duration && (
             <small className="task-turn-duration" title={`开始 ${formatInstant(item.at)} · 结束 ${formatInstant(item.endedAt)}`}>

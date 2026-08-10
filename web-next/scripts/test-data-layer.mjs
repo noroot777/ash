@@ -110,6 +110,8 @@ try {
     role: "single",
     agentType: "codex",
     executor: "codex@local",
+    model: "gpt-5.5",
+    reasoningEffort: "medium",
     target: "local",
     worktreePath: null,
     branch: null,
@@ -130,6 +132,10 @@ try {
         at: "2026-07-30T01:01:02.000Z",
         turnStartedAt: "2026-07-30T01:01:00.000Z",
         event: { kind: "tool", name: "exec", detail: "rg -n trace" },
+      }, {
+        at: "2026-07-30T01:01:00.000Z",
+        turnStartedAt: "2026-07-30T01:01:00.000Z",
+        event: { kind: "run", model: "gpt-5.6-sol", reasoningEffort: "high" },
       }],
     }],
     [session],
@@ -149,7 +155,9 @@ try {
   assert.deepEqual(conversation.map((item) => item.kind), ["agent", "user", "agent"]);
   assert.equal(conversation[2].kind === "agent" ? conversation[2].markdown : "", "正在处理。 已完成。");
   assert.equal(conversation[2].kind === "agent" ? conversation[2].segments[0]?.events.length : 0, 1);
+  assert.deepEqual(conversation[2].kind === "agent" ? conversation[2].run : null, { model: "gpt-5.6-sol", reasoningEffort: "high" });
   assert.equal(conversation[0].kind === "agent" ? conversation[0].at : null, "2026-07-30T01:00:00.000Z");
+  assert.deepEqual(conversation[0].kind === "agent" ? conversation[0].run : null, { model: "gpt-5.5", reasoningEffort: "medium" });
   assert.equal(conversation[0].kind === "agent" ? conversation[0].endedAt : null, "2026-07-30T01:01:00.000Z");
   assert.equal(conversation[2].kind === "agent" ? conversation[2].at : null, "2026-07-30T01:01:00.000Z");
   assert.equal(conversation[0].kind === "agent" ? conversation[0].showSessionMeta : null, false);
@@ -254,7 +262,7 @@ try {
   assert.equal(interleavedTrace[0]?.kind === "agent" ? interleavedTrace[0].segments[1]?.events[0]?.kind : null, "tool");
 
   const liveInterleaved = buildConversationItems([], [session], [
-    { kind: "server", id: "think-1", event: { type: "agent.event", taskId: "task-1", sessionId: session.id, role: "single", event: { kind: "thinking", text: "分析一" } } },
+    { kind: "server", id: "think-1", event: { type: "agent.event", taskId: "task-1", sessionId: session.id, role: "single", model: "gpt-5.6-sol", reasoningEffort: "high", event: { kind: "thinking", text: "分析一" } } },
     { kind: "server", id: "text-1", event: { type: "agent.event", taskId: "task-1", sessionId: session.id, role: "single", event: { kind: "text", text: "正文一" } } },
     { kind: "server", id: "tool-1", event: { type: "agent.event", taskId: "task-1", sessionId: session.id, role: "single", event: { kind: "tool", name: "exec", detail: "命令二" } } },
     { kind: "server", id: "text-2", event: { type: "agent.event", taskId: "task-1", sessionId: session.id, role: "single", event: { kind: "text", text: "正文二" } } },
@@ -264,6 +272,7 @@ try {
     liveInterleaved[0]?.kind === "agent" ? liveInterleaved[0].segments.map(({ markdown, events }) => [markdown, events[0]?.kind]) : [],
     [["正文一", "thinking"], ["正文二", "tool"]],
   );
+  assert.deepEqual(liveInterleaved[0]?.kind === "agent" ? liveInterleaved[0].run : null, { model: "gpt-5.6-sol", reasoningEffort: "high" });
 
   const persistedAttachmentPath = "/tmp/harness/data/uploads/persisted-agent-image.png";
   const attachmentConversation = buildConversationItems(

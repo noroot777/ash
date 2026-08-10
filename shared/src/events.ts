@@ -76,6 +76,8 @@ export type ServerEvent =
       sessionId: string;
       role: SessionRole;
       agentType?: AgentType; // which agent produced it (single tasks can host several via @-mention)
+      model?: string | null;
+      reasoningEffort?: string | null;
       event: AgentEvent;
     }
   // A user-channel turn after it has been persisted to the session transcript.

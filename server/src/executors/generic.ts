@@ -24,9 +24,9 @@ export class GenericCliExecutor implements AgentExecutor {
   private spec: CliSpec;
   readonly target: ExecTarget;
   private bin: string;
-  private model?: string;
+  readonly model?: string;
   private extraArgs: string[];
-  private reasoningEffort?: string;
+  readonly reasoningEffort?: string;
   private speed?: "fast";
   private relay?: RelayConfig;
 

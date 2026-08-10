@@ -4,6 +4,7 @@ import { runActivityPhase, runActivityTail } from "@harness/shared/run-activity"
 import type { Batch } from "@harness/shared/team";
 import { ArrowElbowDownRight, ArrowRight, SpinnerGap } from "@phosphor-icons/react";
 import { ConversationScrollControls } from "../components/ConversationScrollControls.tsx";
+import { AgentRunMeta } from "../components/AgentRunMeta.tsx";
 import { ExecutionDetails } from "../components/ExecutionTrace.tsx";
 import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
@@ -22,6 +23,7 @@ function AgentRow({ row }: { row: Extract<TeamFeedRow, { kind: "conv" }>["item"]
     <article className="team-feed-agent">
       <header>
         <b>{row.label}</b>
+        <AgentRunMeta run={row.run} />
         {row.at && <time>{formatInstant(row.at)}</time>}
         {duration && <small className="task-turn-duration" title={`开始 ${formatInstant(row.at)} · 结束 ${formatInstant(row.endedAt)}`}>· ⏱ {duration} 用时</small>}
       </header>

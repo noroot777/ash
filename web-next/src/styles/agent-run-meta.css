@@ -1,0 +1,28 @@
+.agent-run-meta {
+  display: inline-flex;
+  min-width: 0;
+  max-width: min(320px, 42vw);
+  align-items: center;
+  gap: 5px;
+  color: var(--faint);
+  font-size: 9.5px;
+  font-weight: 500;
+}
+
+.agent-run-meta::before {
+  content: "·";
+  color: var(--line2);
+}
+
+.agent-run-meta code {
+  min-width: 0;
+  overflow: hidden;
+  color: inherit;
+  font: inherit;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-run-meta code:first-of-type { max-width: min(210px, 28vw); }
+.agent-run-meta code:last-of-type { flex: 0 0 auto; }
+.agent-run-meta i { color: var(--line2); font-style: normal; }

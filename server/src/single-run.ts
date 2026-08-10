@@ -224,6 +224,11 @@ export async function consumeSingleRun(a: {
   let titleDone = !a.autoTitle; // when autoTitle, swallow text until the title line is parsed
   let head = "";
   let pendingTraceText = "";
+  const runMeta = { model: ex.model ?? null, reasoningEffort: ex.reasoningEffort ?? null };
+  appendSessionTrace(taskId, sessId, a.turnStart, { kind: "run", ...runMeta });
+  const publishEvent = (event: AgentEvent) => bus.publish({
+    type: "agent.event", taskId, sessionId: sessId, role, agentType, ...runMeta, event,
+  });
   const flushTraceText = () => {
     if (!pendingTraceText) return;
     appendSessionTrace(taskId, sessId, a.turnStart, { kind: "text", text: pendingTraceText });
@@ -233,7 +238,7 @@ export async function consumeSingleRun(a: {
     if (!text) return;
     out.write(text);
     pendingTraceText += text;
-    bus.publish({ type: "agent.event", taskId, sessionId: sessId, role, agentType, event: { kind: "text", text } });
+    publishEvent({ kind: "text", text });
   };
   const persistTrace = (event: AgentEvent, at?: string) => {
     // `context` 刻意不进 trace：trace 是「按回合回放各自的气泡」，而水位属于整条会话的
@@ -271,7 +276,7 @@ export async function consumeSingleRun(a: {
             .set({ cliSessionId, resumeCommand: ex.resumeCommand(a.cwd, cliSessionId) })
             .where(eq(sessions.id, sessId));
         }
-        bus.publish({ type: "agent.event", taskId, sessionId: sessId, role, agentType, event });
+        publishEvent(event);
         continue;
       }
       if (event.kind === "text" && !titleDone) {
@@ -303,7 +308,7 @@ export async function consumeSingleRun(a: {
         if (emittedEvent.kind === "error") writeRunError(out, emittedEvent.message);
         // 水位相反：**覆盖**。它属于整条会话的此刻，不属于某一个回合，所以也不进 trace。
         if (emittedEvent.kind === "context") await setSessionContext(sessId, emittedEvent.context);
-        bus.publish({ type: "agent.event", taskId, sessionId: sessId, role, agentType, event: emittedEvent });
+        publishEvent(emittedEvent);
         if (emittedEvent.kind === "done") exitStatus = emittedEvent.exitStatus;
       }
     }
@@ -355,7 +360,7 @@ export async function consumeSingleRun(a: {
     // 诊断正文留在 .md 原始产物里；trace 负责刷新后的折叠块，SSE 负责实时显示。
     out.write(`\n> ${settled.note}\n`);
     persistTrace({ kind: "error", message: settled.note }, endIso);
-    bus.publish({ type: "agent.event", taskId, sessionId: sessId, role, agentType, event: { kind: "error", message: settled.note } });
+    publishEvent({ kind: "error", message: settled.note });
   }
   writeTurnEnd(out, endIso); // fence this turn's real end before closing the .md
   out.end();
