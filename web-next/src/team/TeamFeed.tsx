@@ -22,8 +22,10 @@ function AgentRow({ row }: { row: Extract<TeamFeedRow, { kind: "conv" }>["item"]
   return (
     <article className="team-feed-agent">
       <header>
-        <b>{row.label}</b>
-        <AgentRunMeta run={row.run} />
+        <span className="agent-run-identity">
+          <b>{row.label}</b>
+          <AgentRunMeta run={row.run} />
+        </span>
         {row.at && <time>{formatInstant(row.at)}</time>}
         {duration && <small className="task-turn-duration" title={`开始 ${formatInstant(row.at)} · 结束 ${formatInstant(row.endedAt)}`}>· ⏱ {duration} 用时</small>}
       </header>
