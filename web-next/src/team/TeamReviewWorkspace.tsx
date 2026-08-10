@@ -51,9 +51,11 @@ function acceptanceMessage(task: Task): string {
   const tail = team ? "并联动验收共享执行者。" : "";
   // 手动验收永远有合并方案（acceptPlan 的 human 口径），这里只是类型兜底。
   if (!plan.merge) return `这会把该任务标记为验收完成。${tail}`;
-  const offScript = !hasAcceptStation(task.workflow)
-    ? "这条线上没画「合并并清理」，但手动验收按默认规矩来："
-    : "";
+  const offScript = task.workflowMode === "free"
+    ? "自由工作流没有预设合并站，手动验收按默认规矩来："
+    : !hasAcceptStation(task.workflow)
+      ? "这条线上没画「合并并清理」，但手动验收按默认规矩来："
+      : "";
   const merge = plan.merge === "tag"
     ? `不合并，只在${branch}头上打一个 harness-accepted 标签（${target} 一动不动）`
     : plan.merge === "squash"

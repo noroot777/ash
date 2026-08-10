@@ -14,8 +14,7 @@
 .free-workflow-toolbar button.is-review.is-busy,.free-workflow-toolbar button.is-review.is-armed,.free-workflow-toolbar button.is-review[data-state="reviewing"],.free-workflow-toolbar button.is-review[data-state="repairing"] { background:color-mix(in lch,var(--accent) 8%,transparent); color:var(--accent); }
 .free-review-armed-dot { width:6px; height:6px; border-radius:50%; background:var(--accent); box-shadow:0 0 0 2px color-mix(in lch,var(--accent) 18%,transparent); }
 .free-workflow-toolbar button.is-preview.is-busy,.free-workflow-toolbar button.is-preview[aria-pressed="true"] { background:color-mix(in lch,var(--cyan) 8%,transparent); color:var(--cyan); }
-.free-workflow-toolbar button.is-merge.is-busy,.free-workflow-toolbar button.is-merge[data-state="merging"],.free-workflow-toolbar button.is-merge[data-state="merged"] { background:color-mix(in lch,var(--green) 8%,transparent); color:var(--green); }
-.free-workflow-toolbar button.is-busy svg,.free-workflow-toolbar button[data-state="reviewing"] svg,.free-workflow-toolbar button[data-state="repairing"] svg,.free-workflow-toolbar button[aria-pressed="true"] svg,.free-workflow-toolbar button[data-state="merged"] svg { opacity:1; }
+.free-workflow-toolbar button.is-busy svg,.free-workflow-toolbar button[data-state="reviewing"] svg,.free-workflow-toolbar button[data-state="repairing"] svg,.free-workflow-toolbar button[aria-pressed="true"] svg { opacity:1; }
 .free-workflow-toolbar > a { display:inline-flex; height:26px; flex:0 0 auto; align-items:center; gap:4px; margin-left:2px; border:0; border-radius:7px; padding:0 8px; color:var(--muted); font-size:11px; font-weight:600; text-decoration:none; white-space:nowrap; }
 .free-workflow-toolbar > a:hover { background:color-mix(in lch,var(--raised) 85%,var(--panel)); color:var(--ink); }
 

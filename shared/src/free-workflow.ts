@@ -78,13 +78,6 @@ export interface FreeWorkflowExecution {
   endedAt: string | null;
 }
 
-export interface FreeWorkflowMergeState {
-  status: "idle" | "merging" | "merged" | "failed";
-  message: string | null;
-  mergedAt: string | null;
-  updatedAt: string | null;
-}
-
 export interface FreeWorkflowState {
   taskId: string;
   selectedReviewerId: string | null;
@@ -97,7 +90,6 @@ export interface FreeWorkflowState {
   preview: FreeWorkflowPreviewState;
   previewEvents: FreeWorkflowPreviewEvent[];
   executions: FreeWorkflowExecution[];
-  merge: FreeWorkflowMergeState;
   reviews: FreeReviewRun[];
 }
 

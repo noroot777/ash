@@ -213,9 +213,6 @@ export const freeWorkflowStates = sqliteTable("free_workflow_states", {
   reviewArmed: integer("review_armed", { mode: "boolean" }).notNull().default(false),
   reviewCheckMode: text("review_check_mode"),
   reviewRetryLimit: integer("review_retry_limit"),
-  mergeStatus: text("merge_status").notNull().default("idle"),
-  mergeMessage: text("merge_message"),
-  mergedAt: text("merged_at"),
   updatedAt: text("updated_at").notNull(),
 });
 

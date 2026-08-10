@@ -219,13 +219,18 @@ async function acceptTaskUnlocked(taskId: string, by: AcceptBy): Promise<AcceptT
   if (!requestedTask) {
     return { accepted: false, httpStatus: 404, taskId, reason: "not_found", error: "not found", phase: "initial" };
   }
-  if (requestedTask.workflowMode === "free") {
+  if (
+    requestedTask.workflowMode === "free"
+    && requestedTask.stage !== "accepted"
+    && requestedTask.stage !== "merged"
+    && requestedTask.status !== "done"
+  ) {
     return {
       accepted: false,
       httpStatus: 409,
       taskId,
-      reason: "free_workflow_acceptance_not_applicable",
-      error: "自由工作流不走起手式验收；请使用任务会话上方的“合并&清理”按钮",
+      reason: "free_workflow_not_ready_for_acceptance",
+      error: "自由工作流尚未完成；任务完成后再进入验收页处理",
       status: requestedTask.status,
       phase: "initial",
     };
@@ -334,7 +339,9 @@ async function acceptTaskUnlocked(taskId: string, by: AcceptBy): Promise<AcceptT
   await appendTaskTimeline(
     taskId,
     (offScript
-      ? `开始验收：这条线上没画「合并并清理」，但你亲手点了验收通过 —— 手动验收按默认规矩`
+      ? task.workflowMode === "free"
+        ? `开始验收：自由工作流没有预设合并站，手动验收按默认规矩`
+        : `开始验收：这条线上没画「合并并清理」，但你亲手点了验收通过 —— 手动验收按默认规矩`
       : `开始验收：按线上写的`) +
       `「${ACCEPT_STRATEGY_LABELS[plan.merge]}、${ACCEPT_CLEAN_LABELS[plan.clean]}」处理，` +
       `目标 ${task.worktreeBase?.trim() || "项目当前分支"}；冲突时只报告并回滚，不会强制合并。`,

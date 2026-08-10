@@ -20,7 +20,6 @@ import {
   reviewerProfiles,
   tasks,
 } from "./db/schema.js";
-import { cleanupAcceptedTask, mergeTaskBranch } from "./git-accept.js";
 import { startReservedFreeReview } from "./free-review-reservations.js";
 import { recordFreePreviewEvent } from "./free-workflow-events.js";
 import {
@@ -30,12 +29,9 @@ import {
   freeReviewScreenshots,
 } from "./free-review-files.js";
 import { freeWorkflowState } from "./free-workflow-state.js";
-import { projectHealthLight } from "./git.js";
 import { continueWhenIdle } from "./runs.js";
 import { appendTaskTimeline } from "./task-timeline.js";
-import { setTaskStage } from "./task-stage.js";
 import { taskWorkspace } from "./task-workspace.js";
-import { publishTaskUpdated } from "./task-store.js";
 import { startPreview, stopPreview, type PreviewStep } from "./preview.js";
 import { REVIEW_MIME } from "./review-evidence.js";
 import { reviewRequestReference } from "./review-request-context.js";
@@ -69,11 +65,10 @@ async function activeReview(taskId: string): Promise<ReviewRunRow | null> {
     .limit(1)).at(0) ?? null;
 }
 
-async function assertBeforeMerge(taskId: string): Promise<void> {
-  const state = (await db.select({ mergeStatus: freeWorkflowStates.mergeStatus })
-    .from(freeWorkflowStates).where(eq(freeWorkflowStates.taskId, taskId))).at(0);
-  if (state?.mergeStatus === "merging") throw new Error("合并&清理正在进行");
-  if (state?.mergeStatus === "merged") throw new Error("任务已合并清理；如需继续修改，请先重新运行任务");
+function assertBeforeAcceptance(task: TaskRow): void {
+  if (task.stage === "accepted" || task.stage === "merged") {
+    throw new Error("任务已进入验收结果；如需继续修改，请先重新运行任务");
+  }
 }
 
 export async function isFreeReviewTurn(taskId: string): Promise<boolean> {
@@ -90,16 +85,6 @@ export async function freeReviewResumeOptions(taskId: string) {
     reasoningEffort: run.reasoningEffort,
     sessionRole: "reviewer" as const,
   };
-}
-
-export async function resetFreeWorkflowMergeOnRun(taskId: string): Promise<void> {
-  if ((await activeReview(taskId))?.status === "reviewing") return;
-  const state = (await db.select({ mergeStatus: freeWorkflowStates.mergeStatus })
-    .from(freeWorkflowStates).where(eq(freeWorkflowStates.taskId, taskId))).at(0);
-  if (!state || state.mergeStatus === "idle") return;
-  await db.update(freeWorkflowStates).set({ mergeStatus: "idle", mergeMessage: null, mergedAt: null, updatedAt: now() })
-    .where(eq(freeWorkflowStates.taskId, taskId));
-  bus.publish({ type: "task.review", taskId });
 }
 
 export async function freeReviewReminder(taskId: string): Promise<string> {
@@ -131,10 +116,10 @@ async function reserveFreeReview(taskId: string, input: FreeReviewDispatchInput)
   if (task.archived) throw new Error("归档任务不能预约审查");
   if (task.status === "backlog") throw new Error("任务尚未运行，开始执行后再预约审查");
   if (task.status === "done") throw new Error("任务已完成，请直接派审查");
+  assertBeforeAcceptance(task);
   if (freeActionLocks.has(taskId)) throw new Error("当前已有自由工作流操作正在进行");
   freeActionLocks.add(taskId);
   try {
-    await assertBeforeMerge(taskId);
     if (await activeReview(taskId)) throw new Error("当前已有审查或修复链在进行");
     const profile = (await db.select().from(reviewerProfiles).where(eq(reviewerProfiles.id, input.reviewerId))).at(0);
     if (!profile) throw new Error("所选审查者不存在");
@@ -145,7 +130,7 @@ async function reserveFreeReview(taskId: string, input: FreeReviewDispatchInput)
       .where(eq(freeWorkflowStates.taskId, taskId))).at(0);
     await db.insert(freeWorkflowStates).values({
       taskId, selectedReviewerId: profile.id, reviewArmed: true, reviewCheckMode: mode, reviewRetryLimit: retries,
-      mergeStatus: "idle", mergeMessage: null, mergedAt: null, updatedAt: at,
+      updatedAt: at,
     }).onConflictDoUpdate({
       target: freeWorkflowStates.taskId,
       set: { selectedReviewerId: profile.id, reviewArmed: true, reviewCheckMode: mode, reviewRetryLimit: retries, updatedAt: at },
@@ -339,7 +324,7 @@ export async function handleFreeWorkflowSettlement(
 
   await db.update(freeReviewRuns).set({ status: "exhausted", updatedAt: at, finishedAt: at })
     .where(eq(freeReviewRuns.id, run.id));
-  await appendTaskTimeline(taskId, `自由工作流审查仍未通过，自动复审次数已用完；现在由你决定直接合并或再开一轮审查。`);
+  await appendTaskTimeline(taskId, `自由工作流审查仍未通过，自动复审次数已用完；现在由你决定验收通过或再开一轮审查。`);
   bus.publish({ type: "task.review", taskId });
   return true;
 }
@@ -352,10 +337,10 @@ async function startFreeReview(taskId: string, input: FreeReviewDispatchInput): 
   if (task.archived) throw new Error("归档任务不能派审");
   if (task.status === "backlog") throw new Error("任务尚未运行，完成实现后再派审");
   if (task.status === "running" || task.status === "queued") throw new Error("任务正在运行或排队，结束后再派审");
+  assertBeforeAcceptance(task);
   if (freeActionLocks.has(taskId)) throw new Error("当前已有自由工作流操作正在进行");
   freeActionLocks.add(taskId);
   try {
-    await assertBeforeMerge(taskId);
     if (await activeReview(taskId)) throw new Error("当前已有审查或修复链在进行");
     const profile = (await db.select().from(reviewerProfiles).where(eq(reviewerProfiles.id, input.reviewerId))).at(0);
     if (!profile) throw new Error("所选审查者不存在");
@@ -376,7 +361,7 @@ async function startFreeReview(taskId: string, input: FreeReviewDispatchInput): 
       await db.insert(freeWorkflowStates).values({
         taskId, selectedReviewerId: profile.id, reviewArmed: false,
         reviewCheckMode: mode, reviewRetryLimit: retries,
-        mergeStatus: "idle", mergeMessage: null, mergedAt: null, updatedAt: at,
+        updatedAt: at,
       }).onConflictDoUpdate({
         target: freeWorkflowStates.taskId,
         set: {
@@ -418,7 +403,7 @@ async function startFreePreview(taskId: string) {
     }
     if (task.status === "backlog") throw new Error("任务尚未运行，完成实现后再打开预览");
     if (task.status === "running" || task.status === "queued") throw new Error("任务正在修改代码，结束后再打开预览");
-    await assertBeforeMerge(taskId);
+    assertBeforeAcceptance(task);
     const project = (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0);
     if (!project) throw new Error("项目不存在");
     const workspace = await taskWorkspace(task, project.repoPath);
@@ -439,68 +424,6 @@ async function startFreePreview(taskId: string) {
     await appendTaskTimeline(taskId, `自由工作流预览已打开：${result.record.url ?? command}`);
     bus.publish({ type: "task.review", taskId });
     return result.record;
-  } finally {
-    freeActionLocks.delete(taskId);
-  }
-}
-
-async function mergeAndClean(taskId: string): Promise<{ merged: true; message: string }> {
-  const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
-  if (!task || task.workflowMode !== "free" || task.mode !== "single" || task.parentId || task.reviewOf) {
-    throw new Error("当前任务不支持自由合并");
-  }
-  if (task.archived) throw new Error("归档任务不能合并");
-  if (task.status === "backlog") throw new Error("任务尚未运行，没有可合并的产物");
-  if (task.status === "running" || task.status === "queued") throw new Error("任务仍在运行或排队，结束后再合并");
-  if (await activeReview(taskId)) throw new Error("审查或修复仍在进行，结束后再合并");
-  if (freeActionLocks.has(taskId)) throw new Error("当前已有自由工作流操作正在进行");
-  freeActionLocks.add(taskId);
-  try {
-    const existing = (await db.select().from(freeWorkflowStates)
-      .where(eq(freeWorkflowStates.taskId, taskId))).at(0);
-    if (existing?.mergeStatus === "merged") {
-      if (task.stage !== "accepted") {
-        await setTaskStage(taskId, "accepted");
-        await publishTaskUpdated(taskId);
-      }
-      return { merged: true, message: existing.mergeMessage ?? "任务已合并并清理" };
-    }
-    const at = now();
-    await db.insert(freeWorkflowStates).values({
-      taskId, selectedReviewerId: null, mergeStatus: "merging", mergeMessage: null, mergedAt: null, updatedAt: at,
-    }).onConflictDoUpdate({ target: freeWorkflowStates.taskId, set: { mergeStatus: "merging", mergeMessage: null, updatedAt: at } });
-    try {
-      await stopPreview(taskId, "开始合并并清理，自由工作流顺手关闭预览", "merge");
-      const project = (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0);
-      if (!project) throw new Error("项目不存在");
-      let message: string;
-      if (!projectHealthLight(project.repoPath).isRepo || !task.useWorktree) {
-        message = task.useWorktree
-          ? "项目不是 Git 仓库，没有可合并分支；预览已关闭"
-          : "任务直接在项目目录执行，没有独立分支可合并或清理；预览已关闭";
-      } else {
-        const merge = await mergeTaskBranch(project.repoPath, taskId, null, "safe");
-        if (!merge.ok) throw new Error(merge.message);
-        const cleanup = await cleanupAcceptedTask(project.repoPath, taskId, merge.targetBranch);
-        if (!cleanup.ok) throw new Error(`合并已完成，但清理失败：${cleanup.message}`);
-        message = `已安全合并 ${merge.sourceBranch} → ${merge.targetBranch}，并清理任务 worktree${cleanup.branchDeleted ? "与分支" : ""}`;
-      }
-      const finishedAt = now();
-      await setTaskStage(taskId, "accepted");
-      await db.update(freeWorkflowStates).set({ mergeStatus: "merged", mergeMessage: message, mergedAt: finishedAt, updatedAt: finishedAt })
-        .where(eq(freeWorkflowStates.taskId, taskId));
-      await appendTaskTimeline(taskId, `自由工作流合并&清理完成：${message}`);
-      await publishTaskUpdated(taskId);
-      bus.publish({ type: "task.review", taskId });
-      return { merged: true, message };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      await db.update(freeWorkflowStates).set({ mergeStatus: "failed", mergeMessage: message, updatedAt: now() })
-        .where(eq(freeWorkflowStates.taskId, taskId));
-      await appendTaskTimeline(taskId, `自由工作流合并&清理失败：${message}`);
-      bus.publish({ type: "task.review", taskId });
-      throw error;
-    }
   } finally {
     freeActionLocks.delete(taskId);
   }
@@ -555,11 +478,6 @@ export function mountFreeWorkflowRoutes(api: Hono): void {
     } finally {
       freeActionLocks.delete(taskId);
     }
-  });
-
-  api.post("/tasks/:id/free-workflow/merge", async (c) => {
-    try { return c.json(await mergeAndClean(c.req.param("id"))); }
-    catch (error) { return c.json({ error: error instanceof Error ? error.message : String(error) }, 409); }
   });
 
   api.get("/tasks/:id/free-workflow/review-file", async (c) => {

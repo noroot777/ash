@@ -467,8 +467,6 @@ export const api = {
     request(`/tasks/${id(taskId)}/free-workflow/preview`, { method: "POST" }),
   stopFreePreview: (taskId: string): Promise<{ stopped: boolean }> =>
     request(`/tasks/${id(taskId)}/free-workflow/preview`, { method: "DELETE" }),
-  mergeFreeWorkflow: (taskId: string): Promise<{ merged: true; message: string }> =>
-    request(`/tasks/${id(taskId)}/free-workflow/merge`, { method: "POST" }),
   freeReviewFileUrl: (taskId: string, runId: string, round: number, name: string): string =>
     apiPath(`/tasks/${id(taskId)}/free-workflow/review-file?run=${id(runId)}&round=${id(String(round))}&name=${id(name)}`),
   // 人工替这一站「自动验证」签字放行。**后端会接着把这一站之后那一段跑掉**——线上

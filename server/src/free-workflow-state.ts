@@ -153,12 +153,6 @@ export async function freeWorkflowState(taskId: string): Promise<FreeWorkflowSta
     },
     previewEvents,
     executions,
-    merge: {
-      status: (state?.mergeStatus as FreeWorkflowState["merge"]["status"] | undefined) ?? "idle",
-      message: state?.mergeMessage ?? null,
-      mergedAt: state?.mergedAt ?? null,
-      updatedAt: state?.updatedAt ?? null,
-    },
     reviews,
   };
 }

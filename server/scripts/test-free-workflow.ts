@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { eq } from "drizzle-orm";
@@ -8,6 +9,10 @@ import { Hono } from "hono";
 const root = mkdtempSync(join(tmpdir(), "harness-free-workflow-"));
 process.env.HARNESS_DB = join(root, "harness.db");
 process.env.HARNESS_RUNS_DIR = join(root, "runs");
+
+function git(cwd: string, ...args: string[]): string {
+  return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
+}
 
 try {
   const { ensureSchema, db } = await import("../src/db/index.js");
@@ -27,6 +32,7 @@ try {
     recordFreeTaskExecutionStartIfFree,
   } = await import("../src/free-workflow-events.js");
   const { claimTurn } = await import("../src/runs.js");
+  const { prepareWorktree } = await import("../src/git.js");
   const { mountReviewerProfileRoutes } = await import("../src/reviewer-profiles.js");
   const { mountTaskRoutes } = await import("../src/task-routes.js");
   const { mountTaskStageRoutes } = await import("../src/task-stage.js");
@@ -35,6 +41,15 @@ try {
   await ensureSchema();
 
   await db.insert(projects).values({ id: "p", name: "test", repoPath: root, apiKeys: null, workflowId: null, createdAt: new Date().toISOString() });
+  const repo = join(root, "repo");
+  mkdirSync(repo, { recursive: true });
+  git(repo, "init", "-b", "main");
+  git(repo, "config", "user.email", "test@example.com");
+  git(repo, "config", "user.name", "Harness Test");
+  writeFileSync(join(repo, "base.txt"), "base\n");
+  git(repo, "add", "base.txt");
+  git(repo, "commit", "-m", "base");
+  await db.insert(projects).values({ id: "p-git", name: "git test", repoPath: repo, apiKeys: null, workflowId: null, createdAt: new Date().toISOString() });
   await db.insert(agents).values({
     id: "reviewer-executor", name: "codex@test", type: "codex", target: '{"kind":"local"}',
     model: "gpt-test", extraArgs: "[]", reasoningEffort: "high", speed: null, providerId: null, isDefault: true,
@@ -86,14 +101,30 @@ try {
   assert.doesNotMatch(repair, /审查报告：\n#/, "修复交接不得复制报告正文");
 
   await createTasks([{
-    id: "free-merge-task", projectId: "p", groupId: null, parentId: null,
-    title: "free merge", body: "test", mode: "single", status: "done", priority: "none",
+    id: "free-accept-task", projectId: "p", groupId: null, parentId: null,
+    title: "free accept", body: "test", mode: "single", status: "done", priority: "none",
     labels: "[]", dependsOn: "[]", resumeDependsOn: "[]", agentType: "codex",
     executorId: "reviewer-executor", model: null, reasoningEffort: null, autoTitle: false,
     duet: null, team: null, reportBack: false, scheduleId: null,
     createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
     useWorktree: false, worktreeBase: null, originTaskId: null, workflowMode: "free",
   }]);
+
+  const [worktreeTask] = await createTasks([{
+    id: "free-worktree-task", projectId: "p-git", groupId: null, parentId: null,
+    title: "free worktree accept", body: "test", mode: "single", status: "done", priority: "none",
+    labels: "[]", dependsOn: "[]", resumeDependsOn: "[]", agentType: "codex",
+    executorId: "reviewer-executor", model: null, reasoningEffort: null, autoTitle: false,
+    duet: null, team: null, reportBack: false, scheduleId: null,
+    createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    useWorktree: true, worktreeBase: "main", originTaskId: null, workflowMode: "free",
+  }]);
+  assert.equal(worktreeTask?.useWorktree, true);
+  const worktree = await prepareWorktree(repo, "free-worktree-task", "main");
+  writeFileSync(join(worktree.path, "accepted.txt"), "accepted\n");
+  git(worktree.path, "add", "accepted.txt");
+  git(worktree.path, "commit", "-m", "free worktree result");
+  const mainBeforeAcceptance = git(repo, "rev-parse", "main");
 
   await createTasks([{
     id: "free-reservation-task", projectId: "p", groupId: null, parentId: null,
@@ -209,7 +240,7 @@ try {
   const { freeWorkflowStates } = await import("../src/db/schema.js");
   await db.insert(freeWorkflowStates).values({
     taskId: "free-orphan-arm-task", selectedReviewerId: null, reviewArmed: true,
-    reviewCheckMode: "logic", reviewRetryLimit: 1, mergeStatus: "idle", mergeMessage: null, mergedAt: null,
+    reviewCheckMode: "logic", reviewRetryLimit: 1,
     updatedAt: new Date().toISOString(),
   });
   assert.equal(
@@ -229,9 +260,10 @@ try {
 
   const state = await api.request("/tasks/free-task/free-workflow");
   assert.equal(state.status, 200);
-  const initialState = await state.json() as { reviews: unknown[]; executions: Array<{ status: string }> };
+  const initialState = await state.json() as { reviews: unknown[]; executions: Array<{ status: string }>; merge?: unknown };
   assert.deepEqual(initialState.reviews, []);
   assert.equal(initialState.executions.length, 1, "历史自由任务没有执行事件时仍应保留一条兼容记录");
+  assert.equal("merge" in initialState, false, "自由工作流状态不应再暴露第二套合并状态");
 
   const firstExecution = await recordFreeTaskExecutionStartIfFree("free-task", "2026-08-08T09:00:00.000Z");
   assert.ok(firstExecution);
@@ -285,7 +317,7 @@ try {
 
   const accepted = await acceptTask("free-task");
   assert.equal(accepted.accepted, false);
-  if (!accepted.accepted) assert.equal(accepted.reason, "free_workflow_acceptance_not_applicable");
+  if (!accepted.accepted) assert.equal(accepted.reason, "free_workflow_not_ready_for_acceptance");
 
   const derived = await api.request("/tasks", {
     method: "POST", headers: { "content-type": "application/json" },
@@ -298,16 +330,21 @@ try {
   });
   assert.equal(mixed.status, 400, "自由工作流不能夹带起手式引用");
 
-  const merged = await api.request("/tasks/free-merge-task/free-workflow/merge", { method: "POST" });
-  assert.equal(merged.status, 200);
-  let mergedTask = (await db.select().from(tasks).where(eq(tasks.id, "free-merge-task"))).at(0);
-  assert.equal(mergedTask?.stage, "accepted", "合并清理成功后应把自由任务标为已验收");
-
-  await db.update(tasks).set({ stage: null }).where(eq(tasks.id, "free-merge-task"));
-  const mergedAgain = await api.request("/tasks/free-merge-task/free-workflow/merge", { method: "POST" });
-  assert.equal(mergedAgain.status, 200);
-  mergedTask = (await db.select().from(tasks).where(eq(tasks.id, "free-merge-task"))).at(0);
-  assert.equal(mergedTask?.stage, "accepted", "历史已合并记录再次命中接口时应补齐已验收阶段");
+  const removedMerge = await api.request("/tasks/free-accept-task/free-workflow/merge", { method: "POST" });
+  assert.equal(removedMerge.status, 404, "自由工作流专属合并接口应删除");
+  const freeAccepted = await acceptTask("free-accept-task");
+  assert.equal(freeAccepted.accepted, true, "已完成的自由任务应走统一验收路径");
+  let acceptedTask = (await db.select().from(tasks).where(eq(tasks.id, "free-accept-task"))).at(0);
+  assert.equal(acceptedTask?.stage, "accepted", "统一验收成功后应把自由任务标为已验收");
+  const acceptedAgain = await acceptTask("free-accept-task");
+  assert.equal(acceptedAgain.accepted, true, "自由任务重复验收应沿用统一幂等语义");
+  acceptedTask = (await db.select().from(tasks).where(eq(tasks.id, "free-accept-task"))).at(0);
+  assert.equal(acceptedTask?.stage, "accepted");
+  const worktreeAccepted = await acceptTask("free-worktree-task");
+  assert.equal(worktreeAccepted.accepted, true, "自由任务的独立 worktree 应复用统一安全合并与清理");
+  assert.notEqual(git(repo, "rev-parse", "main"), mainBeforeAcceptance, "统一验收应推进目标分支");
+  assert.equal(existsSync(worktree.path), false, "统一验收应清理自由任务 worktree");
+  assert.equal(git(repo, "branch", "--list", "harness/free-worktree-task"), "", "统一验收应删除已合并任务分支");
 
   const reviewAt = new Date().toISOString();
   await db.insert(freeReviewRuns).values({
@@ -343,9 +380,9 @@ try {
   console.log("✓ 删除审查者会取消预约；脏 armed 状态读路径与结算路径均不会静默失效");
   console.log("✓ 预览打开与关闭事件持久保留且按发生顺序返回");
   console.log("✓ 每次自由任务执行都独立保留起止时间与状态");
-  console.log("✓ backlog、旧 stage 与旧 accept 路径均被隔离");
+  console.log("✓ backlog 与旧 stage 路径仍被隔离，完成后可统一验收");
   console.log("✓ 派生任务与起手式引用不能混入自由工作流");
-  console.log("✓ 合并清理成功与历史幂等路径都会落到已验收");
+  console.log("✓ 自由合并接口已删除，统一验收、worktree 合并清理与幂等语义可用");
   console.log("✓ 审查续跑保持独立 reviewer 会话与原模型配置");
   console.log("✓ 技能名与斜杠命令只进入需求参考文件，不进入自由审查 prompt");
   console.log("✓ 自由审查报告与截图接口返回正确内容类型");

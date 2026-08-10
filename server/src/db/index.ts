@@ -127,9 +127,7 @@ export async function ensureSchema() {
     CREATE TABLE IF NOT EXISTS free_workflow_states (
       task_id TEXT PRIMARY KEY, selected_reviewer_id TEXT,
       review_armed INTEGER NOT NULL DEFAULT 0, review_check_mode TEXT,
-      review_retry_limit INTEGER,
-      merge_status TEXT NOT NULL DEFAULT 'idle', merge_message TEXT,
-      merged_at TEXT, updated_at TEXT NOT NULL
+      review_retry_limit INTEGER, updated_at TEXT NOT NULL
     );
     CREATE TABLE IF NOT EXISTS free_workflow_events (
       id TEXT PRIMARY KEY, task_id TEXT NOT NULL, kind TEXT NOT NULL,
