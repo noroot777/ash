@@ -39,7 +39,7 @@ import { publishTaskUpdated } from "./task-store.js";
 import { startPreview, stopPreview, type PreviewStep } from "./preview.js";
 import { REVIEW_MIME } from "./review-evidence.js";
 import { reviewRequestReference } from "./review-request-context.js";
-import { BROWSER_VERIFICATION_POLICY } from "./browser-verification-policy.js";
+import { BROWSER_VERIFICATION_POLICY, BROWSER_VERIFICATION_REMINDER } from "./browser-verification-policy.js";
 import { id, now } from "./util.js";
 
 type TaskRow = typeof tasks.$inferSelect;
@@ -107,6 +107,7 @@ export async function freeReviewReminder(taskId: string): Promise<string> {
   const run = await activeReview(taskId);
   if (!run || run.status !== "reviewing") return "";
   return `自由工作流审查提醒：你正在执行第 ${run.currentRound} 轮${run.checkMode === "logic" ? "逻辑" : "语法"}审查。` +
+    BROWSER_VERIFICATION_REMINDER +
     `报告必须写到 ${freeReviewReportPath(taskId, run.id, run.currentRound)}；结束前调用 report_stage(verified|verify_failed)，` +
     `不要调用 complete_task 或 accept_task。`;
 }

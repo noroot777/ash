@@ -17,6 +17,7 @@ try {
     mountFreeWorkflowRoutes,
     freeReviewOutcome,
     freeReviewPrompt,
+    freeReviewReminder,
     freeRepairPrompt,
     freeReviewResumeOptions,
     handleFreeWorkflowSettlement,
@@ -76,15 +77,18 @@ try {
   }, promptRun, 1, root);
   assert.doesNotMatch(skillPrompt, /grill-me|把排队需求也一起做完/, "自由审查 prompt 不得原样夹带技能名或用户追问");
   assert.match(skillPrompt, /request-context\.md/, "自由审查应改为引用需求文件");
-  const groupedBrowser = skillPrompt.indexOf("扩展具名分组后台标签");
-  const headlessBrowser = skillPrompt.indexOf("独立无头浏览器");
-  const headedBrowser = skillPrompt.indexOf("独立有头浏览器");
-  assert.ok(
-    groupedBrowser >= 0 && groupedBrowser < headlessBrowser && headlessBrowser < headedBrowser,
-    "自由审查 prompt 必须保留三级浏览器降级顺序",
-  );
-  assert.match(skillPrompt, /不得接管、复用或直连用户的普通标签/, "自由审查不得操作用户普通 Chrome 标签");
-  assert.match(skillPrompt, /Playwright.*headless/i, "自由审查的 Playwright 必须默认无头");
+  const assertBrowserPolicy = (text: string, source: string) => {
+    const groupedBrowser = text.indexOf("扩展具名分组后台标签");
+    const headlessBrowser = text.indexOf("独立无头浏览器");
+    const headedBrowser = text.indexOf("独立有头浏览器");
+    assert.ok(
+      groupedBrowser >= 0 && groupedBrowser < headlessBrowser && headlessBrowser < headedBrowser,
+      `${source} 必须保留三级浏览器降级顺序`,
+    );
+    assert.match(text, /不得操作用户普通 Chrome 标签|不得接管、复用或直连用户的普通标签/, `${source} 不得操作用户普通 Chrome 标签`);
+    assert.match(text, /Playwright.*headless/i, `${source} 的 Playwright 必须默认无头`);
+  };
+  assertBrowserPolicy(skillPrompt, "自由审查 prompt");
   const skillContext = readFileSync(join(root, "runs", "free-task", "free-review", "skill-review", "round-1", "request-context.md"), "utf8");
   assert.match(skillContext, /标题也可能点名 \/grill-me/);
   assert.match(skillContext, /原始正文要求运行 \/grill-me/);
@@ -164,6 +168,7 @@ try {
   assert.deepEqual(triggeredState.reviews.map(({ status, checkMode, retryLimit }) => ({ status, checkMode, retryLimit })), [
     { status: "reviewing", checkMode: "logic", retryLimit: 2 },
   ], "confirmed done 应按预约配置自动派出且只派一份审查");
+  assertBrowserPolicy(await freeReviewReminder("free-reservation-task"), "自由审查续聊提醒");
 
   // 删除审查者时必须同步 disarm：否则 UI 仍显示已预约，结算因 reviewerId 为空静默不派审。
   await createTasks([{
