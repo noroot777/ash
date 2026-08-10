@@ -43,6 +43,16 @@ try {
   const reviewOnly = page.locator(".review-only-fixture");
   const reviewRounds = reviewOnly.locator(".review-inspector__targets button");
   await reviewRounds.first().waitFor();
+
+  const repairFixture = page.locator(".repair-fixture");
+  const repairButton = repairFixture.getByRole("button", { name: "按第 2 轮意见修复" });
+  await repairButton.waitFor();
+  assert.match(await repairFixture.locator(".review-inspector__overview small").innerText(), /自动复审已停止/);
+  await repairButton.click();
+  const repairingButton = repairFixture.getByRole("button", { name: "修复进行中" });
+  await repairingButton.waitFor();
+  assert.equal(await repairingButton.isDisabled(), true, "发起后应进入持久修复态，不能重复点击");
+  assert.equal(await page.evaluate(() => window.__repairRequests), 1, "一键修复只应发送一次请求");
   assert.deepEqual(await reviewRounds.locator("b").allInnerTexts(), ["第 1 轮", "第 1 轮"], "自由审查 inspector 应和普通任务一样按轮列出记录");
   assert.equal(await page.locator(".review-evidence-drawer").count(), 0, "审查正文默认不弹出");
   await reviewRounds.first().click();

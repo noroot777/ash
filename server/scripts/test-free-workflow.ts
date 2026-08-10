@@ -18,6 +18,7 @@ try {
     freeReviewOutcome,
     freeReviewPrompt,
     freeRepairPrompt,
+    freeManualRepairPrompt,
     freeReviewResumeOptions,
     handleFreeWorkflowSettlement,
   } = await import("../src/free-workflow.js");
@@ -96,6 +97,16 @@ try {
   }]);
 
   await createTasks([{
+    id: "free-exhausted-task", projectId: "p", groupId: null, parentId: null,
+    title: "free exhausted", body: "test", mode: "single", status: "done", priority: "none",
+    labels: "[]", dependsOn: "[]", resumeDependsOn: "[]", agentType: "codex",
+    executorId: "reviewer-executor", model: null, reasoningEffort: null, autoTitle: false,
+    duet: null, team: null, reportBack: false, scheduleId: null,
+    createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    useWorktree: false, worktreeBase: null, originTaskId: null, workflowMode: "free",
+  }]);
+
+  await createTasks([{
     id: "free-reservation-task", projectId: "p", groupId: null, parentId: null,
     title: "free reservation", body: "test", mode: "single", status: "running", priority: "none",
     labels: "[]", dependsOn: "[]", resumeDependsOn: "[]", agentType: "codex",
@@ -122,6 +133,43 @@ try {
   assert.equal(created.status, 201);
   const reviewer = await created.json() as { id: string };
   assert.ok(reviewer.id);
+
+  const exhaustedAt = new Date().toISOString();
+  const exhaustedRun = {
+    id: "exhausted-review", taskId: "free-exhausted-task", reviewerId: reviewer.id, reviewerName: "Codex logic",
+    agentType: "codex", executorId: "reviewer-executor", model: "gpt-review", reasoningEffort: "high",
+    checkMode: "logic", retryLimit: 1, currentRound: 2, status: "exhausted",
+    createdAt: exhaustedAt, updatedAt: exhaustedAt, finishedAt: exhaustedAt,
+  };
+  await db.insert(freeReviewRuns).values(exhaustedRun);
+  await db.insert(freeReviewRounds).values({
+    id: "exhausted-review-round-2", runId: exhaustedRun.id, round: 2, status: "failed",
+    conclusion: "verify_failed", startedAt: exhaustedAt, endedAt: exhaustedAt,
+  });
+  const exhaustedEvidence = join(root, "runs", "free-exhausted-task", "free-review", exhaustedRun.id, "round-2");
+  mkdirSync(exhaustedEvidence, { recursive: true });
+  writeFileSync(join(exhaustedEvidence, "report.md"), "# 仍需修复\n\n按钮状态不对。\n");
+  const manualRepair = freeManualRepairPrompt("free-exhausted-task", exhaustedRun, []);
+  assert.match(manualRepair, /自动复审已停止/);
+  assert.match(manualRepair, /本次只修复，不会自动增加审查轮数/);
+  assert.doesNotMatch(manualRepair, /随后会自动派同一位审查者复审/);
+
+  assert.equal(claimTurn("free-exhausted-task"), true, "测试应占住回合，避免真的启动执行器");
+  const repairStarted = await api.request("/tasks/free-exhausted-task/free-workflow/review/repair", { method: "POST" });
+  assert.equal(repairStarted.status, 200);
+  assert.equal(
+    (await repairStarted.json() as { reviews: Array<{ status: string }> }).reviews[0]?.status,
+    "manual_repairing",
+    "一键修复应先进入持久的手动修复态，防止重复点击",
+  );
+  const duplicateRepair = await api.request("/tasks/free-exhausted-task/free-workflow/review/repair", { method: "POST" });
+  assert.equal(duplicateRepair.status, 409, "手动修复进行中不得重复发起");
+  await handleFreeWorkflowSettlement("free-exhausted-task", "done", true, true);
+  assert.equal(
+    (await api.request("/tasks/free-exhausted-task/free-workflow").then((response) => response.json()) as { reviews: Array<{ status: string }> }).reviews[0]?.status,
+    "exhausted",
+    "修复完成后仍应停在人工决定点，不能偷偷增加自动复审轮数",
+  );
 
   const reserveReview = async (checkMode: "logic" | "syntax", retryLimit: number) => api.request(
     "/tasks/free-reservation-task/free-workflow/review-reservation",
@@ -338,6 +386,7 @@ try {
 
   console.log("✓ 自由任务不携带起手式快照");
   console.log("✓ 默认 1 次自动复审的轮数语义正确");
+  console.log("✓ 轮数用尽后可一键进入手动修复，完成后仍停在人工再审决策点");
   console.log("✓ 审查者 CRUD 与自由工作流初始状态可用");
   console.log("✓ 运行中可预约、覆盖、取消，失败保留且 confirmed done 后只自动派出一次");
   console.log("✓ 删除审查者会取消预约；脏 armed 状态读路径与结算路径均不会静默失效");

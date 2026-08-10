@@ -4,6 +4,7 @@ import { ArrowSquareOut, GitMerge, MagnifyingGlass, MonitorPlay, SpinnerGap, Sto
 import { api } from "../lib/api.ts";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import { FreeReviewDialog } from "./FreeReviewDialog.tsx";
+import { FreeReviewRepairButton } from "./FreeReviewRepairButton.tsx";
 import { useFreeWorkflowState } from "./useFreeWorkflowState.ts";
 
 export function FreeWorkflowToolbar({ task, notify }: { task: Task; notify: (message: string) => void }) {
@@ -12,7 +13,9 @@ export function FreeWorkflowToolbar({ task, notify }: { task: Task; notify: (mes
   const [mergeOpen, setMergeOpen] = useState(false);
   const [previewBusy, setPreviewBusy] = useState(false);
   const [mergeBusy, setMergeBusy] = useState(false);
-  const activeReview = free.state?.reviews.find((run) => run.status === "reviewing" || run.status === "repairing");
+  const latestReview = free.state?.reviews[0];
+  const exhaustedReview = latestReview?.status === "exhausted" ? latestReview : null;
+  const activeReview = free.state?.reviews.find((run) => run.status === "reviewing" || run.status === "repairing" || run.status === "manual_repairing");
   const reviewArmed = !!free.state?.reviewReservation?.armed && !activeReview;
   const taskBusy = task.status === "running" || task.status === "queued";
   const taskReady = task.status !== "backlog";
@@ -56,11 +59,23 @@ export function FreeWorkflowToolbar({ task, notify }: { task: Task; notify: (mes
   return (
     <>
       <div className="free-workflow-toolbar" aria-label="自由工作流快捷操作">
-        <button type="button" className={`is-review${activeReview ? " is-busy" : ""}${reviewArmed ? " is-armed" : ""}`} data-state={activeReview?.status ?? (reviewArmed ? "armed" : "idle")} disabled={!taskReady || mergeStarted || !!activeReview} onClick={() => setReviewOpen(true)}>
-          {activeReview?.status === "reviewing" ? <SpinnerGap size={13} className="is-spinning" /> : <MagnifyingGlass size={13} weight="regular" />}
-          <span>{activeReview?.status === "reviewing" ? "审查中" : activeReview?.status === "repairing" ? "等待修复" : reviewArmed ? "已预约审查" : "派审查"}</span>
-          {reviewArmed && <i className="free-review-armed-dot" aria-hidden="true" />}
-        </button>
+        {exhaustedReview ? (
+          <FreeReviewRepairButton
+            taskId={task.id}
+            run={exhaustedReview}
+            compact
+            className="is-review is-repair"
+            disabled={!taskReady || taskBusy || mergeStarted}
+            onChanged={free.setState}
+            notify={notify}
+          />
+        ) : (
+          <button type="button" className={`is-review${activeReview ? " is-busy" : ""}${reviewArmed ? " is-armed" : ""}`} data-state={activeReview?.status ?? (reviewArmed ? "armed" : "idle")} disabled={!taskReady || mergeStarted || !!activeReview} onClick={() => setReviewOpen(true)}>
+            {activeReview?.status === "reviewing" || activeReview?.status === "manual_repairing" ? <SpinnerGap size={13} className="is-spinning" /> : <MagnifyingGlass size={13} weight="regular" />}
+            <span>{activeReview?.status === "reviewing" ? "审查中" : activeReview?.status === "repairing" ? "等待修复" : activeReview?.status === "manual_repairing" ? "修复中" : reviewArmed ? "已预约审查" : "派审查"}</span>
+            {reviewArmed && <i className="free-review-armed-dot" aria-hidden="true" />}
+          </button>
+        )}
         <button type="button" className={`is-preview${previewBusy ? " is-busy" : ""}`} aria-pressed={!!free.state?.preview.running} disabled={!taskReady || taskBusy || mergeStarted || previewBusy} onClick={() => void togglePreview()}>
           {previewBusy ? <SpinnerGap size={13} className="is-spinning" /> : free.state?.preview.running ? <StopCircle size={13} weight="regular" /> : <MonitorPlay size={13} weight="regular" />}
           <span>{previewBusy ? "处理中" : free.state?.preview.running ? "关闭预览" : "打开预览"}</span>

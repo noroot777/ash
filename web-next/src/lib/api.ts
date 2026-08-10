@@ -459,6 +459,8 @@ export const api = {
     request(`/tasks/${id(taskId)}/free-workflow`),
   dispatchFreeReview: (taskId: string, input: FreeReviewDispatchInput): Promise<FreeWorkflowState> =>
     request(`/tasks/${id(taskId)}/free-workflow/review`, json("POST", input)),
+  repairFreeReview: (taskId: string): Promise<FreeWorkflowState> =>
+    request(`/tasks/${id(taskId)}/free-workflow/review/repair`, { method: "POST" }),
   reserveFreeReview: (taskId: string, input: FreeReviewDispatchInput): Promise<FreeWorkflowState> =>
     request(`/tasks/${id(taskId)}/free-workflow/review-reservation`, json("PUT", input)),
   cancelFreeReviewReservation: (taskId: string): Promise<FreeWorkflowState> =>

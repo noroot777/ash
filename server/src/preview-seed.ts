@@ -167,7 +167,7 @@ export async function sanitizeSnapshot(dest: Client): Promise<string[]> {
     await run("验证轮清零", `UPDATE tasks SET verify_round=NULL WHERE verify_round IS NOT NULL`);
   }
   if ((await columnsOf(dest, "free_review_runs")).length) {
-    await run("自由审查运行态清零", `UPDATE free_review_runs SET status='failed', finished_at=COALESCE(finished_at, updated_at) WHERE status IN ('reviewing','repairing')`);
+    await run("自由审查运行态清零", `UPDATE free_review_runs SET status='failed', finished_at=COALESCE(finished_at, updated_at) WHERE status IN ('reviewing','repairing','manual_repairing')`);
   }
   if ((await columnsOf(dest, "free_review_rounds")).length) {
     await run("自由审查轮次清零", `UPDATE free_review_rounds SET status='error', ended_at=COALESCE(ended_at, started_at) WHERE status='reviewing'`);

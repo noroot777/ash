@@ -23,6 +23,7 @@ import { api } from "../lib/api.ts";
 import { ReviewEvidenceDrawer } from "../review/ReviewEvidenceDrawer.tsx";
 import { ReviewScreenshotStrip } from "../review/ReviewScreenshotStrip.tsx";
 import { FreeReviewDialog } from "./FreeReviewDialog.tsx";
+import { FreeReviewRepairButton } from "./FreeReviewRepairButton.tsx";
 import { useFreeWorkflowState } from "./useFreeWorkflowState.ts";
 
 type Activity =
@@ -127,7 +128,9 @@ export function FreeWorkflowInspector({
     ? reviewActivities.find((activity) => reviewKey(activity.run.id, activity.round.round) === selectedReviewKey) ?? null
     : null;
   const latestReview = reviewActivities.at(-1);
-  const activeReview = reviews.find((run) => run.status === "reviewing" || run.status === "repairing");
+  const latestRun = reviews[0];
+  const exhaustedReview = latestRun?.status === "exhausted" ? latestRun : null;
+  const activeReview = reviews.find((run) => run.status === "reviewing" || run.status === "repairing" || run.status === "manual_repairing");
   const reviewArmed = !!state?.reviewReservation?.armed && !activeReview;
   const taskBusy = task.status === "running" || task.status === "queued";
   const taskReady = task.status !== "backlog";
@@ -176,17 +179,27 @@ export function FreeWorkflowInspector({
               </span>
               <div>
                 <b>{reviewActivities.length ? `${reviewActivities.length} 轮审查` : "自由审查"}</b>
-                <small>{latestReview ? `最近一轮${reviewRoundLabel(latestReview.round)}` : "尚未派审"}</small>
+                <small>{exhaustedReview ? `第 ${exhaustedReview.currentRound} 轮未通过 · 自动复审已停止` : latestReview ? `最近一轮${reviewRoundLabel(latestReview.round)}` : "尚未派审"}</small>
               </div>
             </header>
             <div className="review-inspector__actions">
+              {exhaustedReview && notify && (
+                <FreeReviewRepairButton
+                  taskId={task.id}
+                  run={exhaustedReview}
+                  className="is-repair"
+                  disabled={!taskReady || taskBusy || mergeStarted}
+                  onChanged={free.setState}
+                  notify={notify}
+                />
+              )}
               <button
                 type="button"
                 disabled={!taskReady || mergeStarted || !!activeReview || !notify}
                 onClick={() => setReviewDialogOpen(true)}
               >
                 {activeReview ? <SpinnerGap size={13} className="is-spinning" /> : <MagnifyingGlass size={13} />}
-                <span>{activeReview?.status === "reviewing" ? "审查进行中" : activeReview?.status === "repairing" ? "等待修复" : reviewArmed ? "调整预约审查" : reviewActivities.length ? "再审一轮" : "派审查"}</span>
+                <span>{activeReview?.status === "reviewing" ? "审查进行中" : activeReview?.status === "repairing" ? "等待修复" : activeReview?.status === "manual_repairing" ? "修复进行中" : reviewArmed ? "调整预约审查" : reviewActivities.length ? "再审一轮" : "派审查"}</span>
               </button>
               {onOpenReview && <button type="button" onClick={onOpenReview}><span>打开改动工作区</span><CaretRight size={13} /></button>}
             </div>
