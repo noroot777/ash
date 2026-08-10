@@ -1,5 +1,5 @@
 import type { AgentExecutorProfile, AgentType, ReviewerProfile } from "@harness/shared";
-import { executorValue, parseExecutorValue } from "../lib/agentAvailability.ts";
+import { executorProfileFor, executorRunSummary, executorValue, parseExecutorValue } from "../lib/agentAvailability.ts";
 import { ExecutorPickerField } from "../composer/ExecutorPickerField.tsx";
 
 export interface ReviewerDraft {
@@ -39,6 +39,34 @@ export function reviewerPayload(draft: ReviewerDraft, profiles: AgentExecutorPro
     model: draft.model.trim() || null,
     reasoningEffort: draft.effort || null,
   };
+}
+
+export function ReviewerProfileSummary({
+  reviewer,
+  profiles,
+}: {
+  reviewer: ReviewerProfile;
+  profiles: AgentExecutorProfile[];
+}) {
+  const selection = { agentType: reviewer.agentType, executorId: reviewer.executorId };
+  const inheritedProfile = executorProfileFor(selection, profiles);
+  const run = executorRunSummary(
+    selection,
+    profiles,
+    { model: reviewer.model, effort: reviewer.reasoningEffort },
+  );
+  const model = run.model ?? "跟随 CLI";
+  const effort = run.effort ?? "跟随 CLI";
+
+  return (
+    <span className="reviewer-profile-summary">
+      <small>{reviewer.executorLabel ?? inheritedProfile?.name ?? reviewer.agentType}</small>
+      <span className="reviewer-run-details">
+        <span aria-label={`模型：${model}`}><i>模型</i><code>{model}</code></span>
+        <span aria-label={`智能水平：${effort}`}><i>智能水平</i><code>{effort}</code></span>
+      </span>
+    </span>
+  );
 }
 
 export function ReviewerProfileFields({

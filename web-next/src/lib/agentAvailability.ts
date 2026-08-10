@@ -137,20 +137,31 @@ export function preferredExecutor(
 }
 
 /**
- * 该选择**实际会跑**的模型与智能水平。
+ * 该选择**实际会跑**的模型与智能水平。只选类型时按服务端相同顺序解析该类型的
+ * 默认 Profile（显式默认优先，否则取第一个），再叠加任务/预设级覆盖。
  *
  * Profile 名字里常常写着一个模型（`codex@cpa·gpt-5.6-sol`），但预设/任务级覆盖可以
  * 把它换成别的（存进 `*Model` / `*ReasoningEffort`）。只显示 Profile 名 + Profile
  * 自带模型，用户读到的就是被覆盖前的那个——所以生效值必须由这里统一算，界面照抄。
  */
+export function executorProfileFor(
+  selection: ExecutorSelection,
+  profiles: AgentExecutorProfile[],
+): AgentExecutorProfile | undefined {
+  const selected = selection.executorId
+    ? profiles.find((candidate) => candidate.id === selection.executorId)
+    : undefined;
+  return selected
+    ?? profiles.find((candidate) => candidate.type === selection.agentType && candidate.isDefault)
+    ?? profiles.find((candidate) => candidate.type === selection.agentType);
+}
+
 export function executorRunSummary(
   selection: ExecutorSelection,
   profiles: AgentExecutorProfile[],
   override?: { model?: string | null; effort?: string | null },
 ): { model: string | null; effort: string | null; overridden: boolean } {
-  const profile = selection.executorId
-    ? profiles.find((candidate) => candidate.id === selection.executorId)
-    : undefined;
+  const profile = executorProfileFor(selection, profiles);
   const overrideModel = override?.model?.trim() || null;
   const overrideEffort = override?.effort?.trim() || null;
   const model = overrideModel ?? profile?.model ?? null;

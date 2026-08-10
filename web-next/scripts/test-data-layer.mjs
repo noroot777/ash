@@ -13,6 +13,7 @@ import { emptyComposerExecutorConfigs, patchComposerExecutor, setComposerExecuto
 import { activeGroupTasks, resumeQueueModel } from "../src/settings/groupQueueModel.ts";
 import { leadTurns, teamFeedOptions } from "../src/team/teamModel.ts";
 import {
+  executorRunSummary,
   executorOptions,
   registeredAgentTypes,
   teamExecutorCandidates,
@@ -547,9 +548,24 @@ try {
   }
 
   const registeredProfiles = [
-    { id: "codex-local", name: "codex@local", type: "codex", model: null, isDefault: true },
+    { id: "codex-local", name: "codex@local", type: "codex", model: "gpt-5.6-sol", reasoningEffort: "ultra", isDefault: true },
     { id: "qwen-ssh", name: "qwen@remote", type: "qwen", model: "qwen3", isDefault: true },
   ];
+  assert.deepEqual(
+    executorRunSummary({ agentType: "codex", executorId: null }, registeredProfiles),
+    { model: "gpt-5.6-sol", effort: "ultra", overridden: false },
+    "类型默认审查者应展示实际继承的模型与智能水平",
+  );
+  assert.deepEqual(
+    executorRunSummary({ agentType: "codex", executorId: "codex-local" }, registeredProfiles, { effort: "high" }),
+    { model: "gpt-5.6-sol", effort: "high", overridden: true },
+    "审查者覆盖的智能水平应优先于执行器默认值",
+  );
+  assert.deepEqual(
+    executorRunSummary({ agentType: "codex", executorId: "deleted-profile" }, registeredProfiles),
+    { model: "gpt-5.6-sol", effort: "ultra", overridden: false },
+    "失效的执行器引用应与服务端一致回退到类型默认值",
+  );
   assert.deepEqual(registeredAgentTypes(registeredProfiles), ["codex", "qwen"]);
   const candidates = teamExecutorCandidates({
     status: "ready",

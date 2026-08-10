@@ -7,6 +7,7 @@ import { api } from "../lib/api.ts";
 import { useDismissable } from "../lib/useDismissable.ts";
 import {
   createReviewerDraft,
+  ReviewerProfileSummary,
   ReviewerProfileFields,
   reviewerPayload,
   type ReviewerDraft,
@@ -130,7 +131,7 @@ export function FreeReviewDialog({
               <div className="free-review-reviewer-list">
                 {reviewers.map((reviewer) => (
                   <button key={reviewer.id} type="button" aria-selected={selectedId === reviewer.id} onClick={() => { setSelectedId(reviewer.id); setCreating(false); }}>
-                    <span><b>{reviewer.name}</b><small>{reviewer.executorLabel ?? reviewer.agentType}{reviewer.model ? ` · ${reviewer.model}` : ""}</small></span>
+                    <span><b>{reviewer.name}</b><ReviewerProfileSummary reviewer={reviewer} profiles={profiles} /></span>
                     {selectedId === reviewer.id && <CheckCircle size={16} weight="fill" />}
                   </button>
                 ))}

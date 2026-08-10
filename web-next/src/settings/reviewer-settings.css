@@ -10,9 +10,9 @@
 .reviewer-settings-layout > aside > button { display:grid; width:100%; gap:3px; border:0; border-bottom:1px solid var(--line); background:transparent; padding:10px 12px; text-align:left; }
 .reviewer-settings-layout > aside > button:hover { background:var(--hover-bg); }
 .reviewer-settings-layout > aside > button[aria-selected="true"] { background:var(--panel); box-shadow:inset 3px 0 var(--accent); }
-.reviewer-settings-layout > aside > button b,.reviewer-settings-layout > aside > button small { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.reviewer-settings-layout > aside > button b { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .reviewer-settings-layout > aside > button b { font-size:11px; }
-.reviewer-settings-layout > aside > button small { color:var(--faint); font-size:9px; }
+.reviewer-settings-layout > aside .reviewer-profile-summary { margin-top:0; }
 .reviewer-settings-editor > header { display:flex; min-height:64px; align-items:center; justify-content:space-between; gap:12px; border-bottom:1px solid var(--line); padding:10px 14px; }
 .reviewer-settings-editor > header b,.reviewer-settings-editor > header small { display:block; }
 .reviewer-settings-editor > header b { font-size:12px; }
