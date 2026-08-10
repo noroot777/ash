@@ -96,12 +96,19 @@ try {
     buffer: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64"),
   });
   await page.getByText("task-b-image.png", { exact: true }).waitFor();
-  releaseFirstUpload();
-  await firstUploadFinished;
-  assert.equal(await page.getByText("a-delayed.png", { exact: true }).count(), 0, "旧任务上传完成后不能污染当前任务");
 
   await page.getByRole("button", { name: "任务 A" }).click();
   assert.equal(await input.inputValue(), "任务 A 的未发送内容", "切回任务后应恢复正文");
+  const sendButton = page.getByRole("button", { name: "发送回复" });
+  assert.equal(await sendButton.isDisabled(), true, "当前任务仍有图片上传时必须禁止发送");
+  assert.equal(await page.getByText("a-delayed.png", { exact: true }).count(), 0, "上传完成前不应提前显示图片");
+  await input.press("Control+Enter");
+  assert.equal(await input.inputValue(), "任务 A 的未发送内容", "上传中用快捷键也不能提前发送正文");
+
+  releaseFirstUpload();
+  await firstUploadFinished;
+  await page.getByText("a-delayed.png", { exact: true }).waitFor();
+  assert.equal(await sendButton.isEnabled(), true, "当前任务图片上传完成后才能恢复发送");
   assert.equal(await page.getByText("a-delayed.png", { exact: true }).count(), 1, "切回任务后应恢复延迟完成的图片");
   assert.equal(await page.getByText("task-b-image.png", { exact: true }).count(), 0, "任务 A 不能混入任务 B 的图片");
 
@@ -111,7 +118,7 @@ try {
   assert.equal(await page.getByText("a-delayed.png", { exact: true }).count(), 0, "任务 B 不能混入任务 A 的图片");
 
   await page.getByRole("button", { name: "任务 A" }).click();
-  await page.getByRole("button", { name: "发送回复" }).click();
+  await sendButton.click();
   assert.equal(await input.inputValue(), "", "发送成功后应清掉当前任务正文");
   assert.equal(await page.getByText("a-delayed.png", { exact: true }).count(), 0, "发送成功后应清掉当前任务图片");
 

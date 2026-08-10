@@ -85,7 +85,12 @@ function TeamReplyBox({
   const [sendAt, setSendAt] = useState("");
   const scheduleTriggerRef = useRef<HTMLButtonElement>(null);
   const scheduled = useScheduledMessages(task.id);
-  const uploads = useAttachments({ value: draft.attachments, onChange: draft.setAttachments });
+  const uploads = useAttachments({
+    value: draft.attachments,
+    onChange: draft.setAttachments,
+    pending: draft.pendingUploads,
+    onPendingChange: draft.setPendingUploads,
+  });
   const disabled = !!task.archived;
   // 技能按**调度者自己的执行器**算：这句话是发给调度台那个会话的，执行者手上装的
   // 技能跟它不是一回事（派活时该带什么由调度者自己在 dispatch 里写）。

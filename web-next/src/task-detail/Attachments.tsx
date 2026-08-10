@@ -49,24 +49,35 @@ function dataUrl(file: File): Promise<string> {
 export function useAttachments({
   value,
   onChange,
+  pending,
+  onPendingChange,
 }: {
   value?: UploadAttachment[];
   onChange?: Dispatch<SetStateAction<UploadAttachment[]>>;
+  pending?: number;
+  onPendingChange?: Dispatch<SetStateAction<number>>;
 } = {}) {
   const [storedAttachments, setStoredAttachments] = useState<UploadAttachment[]>([]);
-  const [uploading, setUploading] = useState(false);
+  const [storedPending, setStoredPending] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const controlled = value !== undefined;
+  const pendingControlled = pending !== undefined;
   const attachments = value ?? storedAttachments;
+  const uploading = (pending ?? storedPending) > 0;
 
   const setAttachments = useCallback((update: SetStateAction<UploadAttachment[]>) => {
     if (controlled) onChange?.(update);
     else setStoredAttachments(update);
   }, [controlled, onChange]);
 
+  const setPending = useCallback((update: SetStateAction<number>) => {
+    if (pendingControlled) onPendingChange?.(update);
+    else setStoredPending(update);
+  }, [onPendingChange, pendingControlled]);
+
   const addFiles = useCallback(async (files: File[]) => {
     if (!files.length) return;
-    setUploading(true);
+    setPending((current) => current + 1);
     setError(null);
     try {
       for (const file of files) {
@@ -83,9 +94,9 @@ export function useAttachments({
         }
       }
     } finally {
-      setUploading(false);
+      setPending((current) => Math.max(0, current - 1));
     }
-  }, [setAttachments]);
+  }, [setAttachments, setPending]);
 
   const onPaste = useCallback((event: ClipboardEvent<HTMLTextAreaElement>) => {
     const files = pastedFiles(event);

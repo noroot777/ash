@@ -86,7 +86,12 @@ export function ReplyBox({
   const [profilesFailed, setProfilesFailed] = useState(false);
   const providers = useProviders();
   const scheduled = useScheduledMessages(task.id);
-  const uploads = useAttachments({ value: draft.attachments, onChange: draft.setAttachments });
+  const uploads = useAttachments({
+    value: draft.attachments,
+    onChange: draft.setAttachments,
+    pending: draft.pendingUploads,
+    onPendingChange: draft.setPendingUploads,
+  });
   // 任务正在跑不再是「不能说话」,而是「说了先排队」:发出去的消息落成一条待发送
   // 消息(mode=queued),这一轮一结束由服务端自动送进同一个会话。所以 disabled 只留
   // 真正没得说的情况——不是单任务、已归档、以及从没跑过因而没有会话可续。
