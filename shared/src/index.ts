@@ -19,6 +19,8 @@ export type {
   FreeReviewDispatchInput,
   FreeReviewRound,
   FreeReviewRun,
+  FreeWorkflowExecution,
+  FreeWorkflowExecutionStatus,
   FreeWorkflowPreviewEvent,
   FreeWorkflowPreviewEventKind,
   FreeWorkflowPreviewEventSource,

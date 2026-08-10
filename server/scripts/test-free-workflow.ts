@@ -14,7 +14,7 @@ try {
   const { agents, freeReviewRounds, freeReviewRuns, projects, sessions, tasks } = await import("../src/db/schema.js");
   const { createTasks } = await import("../src/task-store.js");
   const { mountFreeWorkflowRoutes, freeReviewOutcome, freeReviewPrompt, freeReviewResumeOptions, handleFreeWorkflowSettlement } = await import("../src/free-workflow.js");
-  const { recordFreePreviewEvent } = await import("../src/free-workflow-events.js");
+  const { finishFreeTaskExecution, recordFreePreviewEvent, recordFreeTaskExecutionStartIfFree } = await import("../src/free-workflow-events.js");
   const { claimTurn } = await import("../src/runs.js");
   const { mountReviewerProfileRoutes } = await import("../src/reviewer-profiles.js");
   const { mountTaskRoutes } = await import("../src/task-routes.js");
@@ -214,7 +214,28 @@ try {
 
   const state = await api.request("/tasks/free-task/free-workflow");
   assert.equal(state.status, 200);
-  assert.deepEqual((await state.json() as { reviews: unknown[] }).reviews, []);
+  const initialState = await state.json() as { reviews: unknown[]; executions: Array<{ status: string }> };
+  assert.deepEqual(initialState.reviews, []);
+  assert.equal(initialState.executions.length, 1, "历史自由任务没有执行事件时仍应保留一条兼容记录");
+
+  const firstExecution = await recordFreeTaskExecutionStartIfFree("free-task", "2026-08-08T09:00:00.000Z");
+  assert.ok(firstExecution);
+  assert.equal(
+    await recordFreeTaskExecutionStartIfFree("free-task", "2026-08-08T09:00:00.000Z"),
+    firstExecution,
+    "服务重启接回同一回合时不得重复新增任务执行记录",
+  );
+  await finishFreeTaskExecution(firstExecution, "completed", "2026-08-08T09:10:00.000Z");
+  const secondExecution = await recordFreeTaskExecutionStartIfFree("free-task", "2026-08-08T11:00:00.000Z");
+  assert.ok(secondExecution);
+  await finishFreeTaskExecution(secondExecution, "completed", "2026-08-08T11:04:00.000Z");
+  const executionHistory = await api.request("/tasks/free-task/free-workflow").then((response) => response.json()) as {
+    executions: Array<{ id: string; status: string; startedAt: string; endedAt: string | null }>;
+  };
+  assert.deepEqual(executionHistory.executions, [
+    { id: firstExecution, status: "completed", startedAt: "2026-08-08T09:00:00.000Z", endedAt: "2026-08-08T09:10:00.000Z" },
+    { id: secondExecution, status: "completed", startedAt: "2026-08-08T11:00:00.000Z", endedAt: "2026-08-08T11:04:00.000Z" },
+  ], "每次任务执行必须独立保留起止时间，不能被后一次覆盖");
 
   await recordFreePreviewEvent("free-task", {
     kind: "preview_opened", source: "user", detail: "http://127.0.0.1:4567",
@@ -306,6 +327,7 @@ try {
   console.log("✓ 运行中可预约、覆盖、取消，失败保留且 confirmed done 后只自动派出一次");
   console.log("✓ 删除审查者会取消预约；脏 armed 状态读路径与结算路径均不会静默失效");
   console.log("✓ 预览打开与关闭事件持久保留且按发生顺序返回");
+  console.log("✓ 每次自由任务执行都独立保留起止时间与状态");
   console.log("✓ backlog、旧 stage 与旧 accept 路径均被隔离");
   console.log("✓ 派生任务与起手式引用不能混入自由工作流");
   console.log("✓ 合并清理成功与历史幂等路径都会落到已验收");

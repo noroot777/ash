@@ -1,25 +1,20 @@
-import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync } from "node:fs";
-import { extname, join, resolve } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { extname, join } from "node:path";
 import type {
   AgentType,
   FreeReviewCheckMode,
   FreeReviewDispatchInput,
-  FreeReviewRun,
-  FreeReviewRound,
-  FreeWorkflowPreviewEvent,
   FreeWorkflowState,
   TaskStatus,
 } from "@harness/shared";
 import { FREE_REVIEW_CHECK_MODES } from "@harness/shared/free-workflow";
-import { and, asc, desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray } from "drizzle-orm";
 import type { Hono } from "hono";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
 import {
-  agents,
   freeReviewRounds,
   freeReviewRuns,
-  freeWorkflowEvents,
   freeWorkflowStates,
   projects,
   reviewerProfiles,
@@ -28,14 +23,21 @@ import {
 import { cleanupAcceptedTask, mergeTaskBranch } from "./git-accept.js";
 import { startReservedFreeReview } from "./free-review-reservations.js";
 import { recordFreePreviewEvent } from "./free-workflow-events.js";
+import {
+  freeReviewEvidenceDir,
+  freeReviewFile,
+  freeReviewReportPath,
+  freeReviewScreenshots,
+  readFreeReviewReport,
+} from "./free-review-files.js";
+import { freeWorkflowState } from "./free-workflow-state.js";
 import { projectHealthLight } from "./git.js";
 import { continueWhenIdle } from "./runs.js";
-import { RUNS_DIR } from "./paths.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { setTaskStage } from "./task-stage.js";
 import { taskWorkspace } from "./task-workspace.js";
 import { publishTaskUpdated } from "./task-store.js";
-import { readPreview, startPreview, stopPreview, type PreviewStep } from "./preview.js";
+import { startPreview, stopPreview, type PreviewStep } from "./preview.js";
 import { REVIEW_MIME } from "./review-evidence.js";
 import { reviewRequestReference } from "./review-request-context.js";
 import { id, now } from "./util.js";
@@ -44,9 +46,9 @@ type TaskRow = typeof tasks.$inferSelect;
 type ReviewRunRow = typeof freeReviewRuns.$inferSelect;
 
 const ACTIVE_REVIEW_STATUSES = ["reviewing", "repairing"] as const;
-const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".webp"]);
 const MAX_RETRIES = 5;
 const freeActionLocks = new Set<string>();
+export { freeWorkflowState };
 export function freeReviewOutcome(input: {
   turnOk: boolean;
   conclusion: string | null;
@@ -56,45 +58,6 @@ export function freeReviewOutcome(input: {
   if (!input.turnOk || (input.conclusion !== "verified" && input.conclusion !== "verify_failed")) return "failed";
   if (input.conclusion === "verified") return "passed";
   return input.currentRound <= input.retryLimit ? "repair" : "exhausted";
-}
-
-function evidenceDir(taskId: string, runId: string, round: number): string {
-  return join(RUNS_DIR, taskId, "free-review", runId, `round-${round}`);
-}
-
-function reportPath(taskId: string, runId: string, round: number): string {
-  return join(evidenceDir(taskId, runId, round), "report.md");
-}
-
-function readReport(taskId: string, runId: string, round: number): string {
-  try {
-    const file = reviewFile(taskId, runId, round, "report.md");
-    return file ? readFileSync(file, "utf8") : "";
-  }
-  catch { return ""; }
-}
-
-function screenshots(taskId: string, runId: string, round: number): string[] {
-  try {
-    return readdirSync(evidenceDir(taskId, runId, round), { withFileTypes: true })
-      .filter((entry) => entry.isFile() && IMAGE_EXTENSIONS.has(extname(entry.name).toLowerCase()))
-      .map((entry) => entry.name)
-      .sort();
-  } catch {
-    return [];
-  }
-}
-
-function reviewFile(taskId: string, runId: string, round: number, name: string): string | null {
-  if (!name || name !== name.split(/[\\/]/).at(-1)) return null;
-  const base = resolve(evidenceDir(taskId, runId, round));
-  const file = resolve(base, name);
-  if (!file.startsWith(base + "/") || !existsSync(file)) return null;
-  const info = lstatSync(file);
-  if (!info.isFile() || info.isSymbolicLink()) return null;
-  const realBase = realpathSync(base);
-  const realFile = realpathSync(file);
-  return realFile.startsWith(realBase + "/") ? realFile : null;
 }
 
 async function activeReview(taskId: string): Promise<ReviewRunRow | null> {
@@ -144,7 +107,7 @@ export async function freeReviewReminder(taskId: string): Promise<string> {
   const run = await activeReview(taskId);
   if (!run || run.status !== "reviewing") return "";
   return `自由工作流审查提醒：你正在执行第 ${run.currentRound} 轮${run.checkMode === "logic" ? "逻辑" : "语法"}审查。` +
-    `报告必须写到 ${reportPath(taskId, run.id, run.currentRound)}；结束前调用 report_stage(verified|verify_failed)，` +
+    `报告必须写到 ${freeReviewReportPath(taskId, run.id, run.currentRound)}；结束前调用 report_stage(verified|verify_failed)，` +
     `不要调用 complete_task 或 accept_task。`;
 }
 
@@ -218,7 +181,7 @@ async function cancelFreeReviewReservation(taskId: string): Promise<FreeWorkflow
 }
 
 export async function freeReviewPrompt(task: TaskRow, run: ReviewRunRow, round: number, repoPath: string): Promise<string> {
-  const dir = evidenceDir(task.id, run.id, round);
+  const dir = freeReviewEvidenceDir(task.id, run.id, round);
   const requirements = await reviewRequestReference(task, dir);
   const focus = run.checkMode === "syntax"
     ? "本轮只做语法与机械质量检查：编译、类型、lint、格式、明显的 API/导入错误和相关测试。不要扩张成产品方案评审。"
@@ -228,7 +191,7 @@ export async function freeReviewPrompt(task: TaskRow, run: ReviewRunRow, round: 
     `任务：${task.id}\n${requirements}\n\n` +
     `${focus}\n\n先检查 ${repoPath} 中的真实 git status、diff 和提交，再选择验证命令。` +
     `必须真实运行与风险相称的检查；浏览器验证优先复用 CDP，退回 playwright 时结束前清掉工作区产物并停掉所有临时服务。\n\n` +
-    `证据必须落盘：报告写到 ${join(dir, "report.md")}；截图如有必要放在同一目录。证据不要 git add/commit。\n\n` +
+    `证据必须落盘：报告写到 ${freeReviewReportPath(task.id, run.id, round)}；截图如有必要放在同一目录。证据不要 git add/commit。\n\n` +
     `结束前调用 report_stage(taskId="${task.id}", stage="verified"|"verify_failed") 给出结论。` +
     `这是旁路审查回合，不要调用 complete_task，也不要调用 accept_task。`;
 }
@@ -359,8 +322,8 @@ export async function handleFreeWorkflowSettlement(
     return true;
   }
 
-  const report = readReport(taskId, run.id, run.currentRound);
-  const images = screenshots(taskId, run.id, run.currentRound);
+  const report = readFreeReviewReport(taskId, run.id, run.currentRound);
+  const images = freeReviewScreenshots(taskId, run.id, run.currentRound);
   if (outcome === "repair") {
     await db.update(freeReviewRuns).set({ status: "repairing", updatedAt: at }).where(eq(freeReviewRuns.id, run.id));
     await appendTaskTimeline(taskId, `自由工作流第 ${run.currentRound} 轮审查未通过，意见已发回会话；修复完成后自动复审。`);
@@ -544,83 +507,6 @@ async function mergeAndClean(taskId: string): Promise<{ merged: true; message: s
   }
 }
 
-export async function freeWorkflowState(taskId: string): Promise<FreeWorkflowState> {
-  const [state, runs, profileRows, eventRows] = await Promise.all([
-    db.select().from(freeWorkflowStates).where(eq(freeWorkflowStates.taskId, taskId)).then((rows) => rows.at(0)),
-    db.select().from(freeReviewRuns).where(eq(freeReviewRuns.taskId, taskId)).orderBy(desc(freeReviewRuns.createdAt)),
-    db.select({ id: agents.id, name: agents.name }).from(agents),
-    db.select().from(freeWorkflowEvents).where(eq(freeWorkflowEvents.taskId, taskId))
-      .orderBy(asc(freeWorkflowEvents.occurredAt)),
-  ]);
-  const roundRows = runs.length
-    ? await db.select().from(freeReviewRounds).where(inArray(freeReviewRounds.runId, runs.map((run) => run.id)))
-      .orderBy(asc(freeReviewRounds.round))
-    : [];
-  const roundsByRun = new Map<string, typeof roundRows>();
-  for (const round of roundRows) roundsByRun.set(round.runId, [...(roundsByRun.get(round.runId) ?? []), round]);
-  const reviews: FreeReviewRun[] = runs.map((run) => ({
-    id: run.id,
-    reviewerId: run.reviewerId,
-    reviewerName: run.reviewerName,
-    agentType: run.agentType as AgentType,
-    executorId: run.executorId,
-    executorLabel: profileRows.find((profile) => profile.id === run.executorId)?.name ?? null,
-    model: run.model,
-    reasoningEffort: run.reasoningEffort,
-    checkMode: run.checkMode as FreeReviewCheckMode,
-    retryLimit: run.retryLimit,
-    currentRound: run.currentRound,
-    status: run.status as FreeReviewRun["status"],
-    rounds: (roundsByRun.get(run.id) ?? []).map((round): FreeReviewRound => ({
-      round: round.round,
-      status: round.status as FreeReviewRound["status"],
-      conclusion: round.conclusion as FreeReviewRound["conclusion"],
-      reportMarkdown: readReport(taskId, run.id, round.round),
-      screenshots: screenshots(taskId, run.id, round.round),
-      startedAt: round.startedAt,
-      endedAt: round.endedAt,
-    })),
-    createdAt: run.createdAt,
-    updatedAt: run.updatedAt,
-    finishedAt: run.finishedAt,
-  }));
-  const preview = readPreview(taskId);
-  const previewEvents: FreeWorkflowPreviewEvent[] = eventRows.map((event) => ({
-    id: event.id,
-    kind: event.kind as FreeWorkflowPreviewEvent["kind"],
-    source: event.source as FreeWorkflowPreviewEvent["source"],
-    detail: event.detail,
-    occurredAt: event.occurredAt,
-  }));
-  const reservationReviewerId = state?.reviewArmed ? state.selectedReviewerId ?? null : null;
-  const reservationArmed = !!reservationReviewerId;
-  return {
-    taskId,
-    selectedReviewerId: state?.selectedReviewerId ?? null,
-    reviewReservation: {
-      armed: reservationArmed,
-      reviewerId: reservationReviewerId,
-      checkMode: reservationArmed ? checkMode(state?.reviewCheckMode ?? "logic") : null,
-      retryLimit: reservationArmed ? retryLimit(state?.reviewRetryLimit ?? 1) : null,
-    },
-    preview: {
-      running: !!preview,
-      url: preview?.url ?? null,
-      port: preview?.port ?? null,
-      command: preview?.cmd ?? null,
-      startedAt: preview?.startedAt ?? null,
-    },
-    previewEvents,
-    merge: {
-      status: (state?.mergeStatus as FreeWorkflowState["merge"]["status"] | undefined) ?? "idle",
-      message: state?.mergeMessage ?? null,
-      mergedAt: state?.mergedAt ?? null,
-      updatedAt: state?.updatedAt ?? null,
-    },
-    reviews,
-  };
-}
-
 export function mountFreeWorkflowRoutes(api: Hono): void {
   api.get("/tasks/:id/free-workflow", async (c) => {
     const task = (await db.select({ workflowMode: tasks.workflowMode }).from(tasks).where(eq(tasks.id, c.req.param("id")))).at(0);
@@ -688,7 +574,7 @@ export function mountFreeWorkflowRoutes(api: Hono): void {
         .where(and(eq(freeReviewRuns.id, runId), eq(freeReviewRuns.taskId, taskId), eq(freeReviewRounds.round, round)))
         .limit(1)).at(0)
       : null;
-    const file = owned ? reviewFile(taskId, runId, round, name) : null;
+    const file = owned ? freeReviewFile(taskId, runId, round, name) : null;
     if (!file) return c.json({ error: "not found" }, 404);
     const mime = REVIEW_MIME[extname(file).toLowerCase()] ?? "application/octet-stream";
     return c.body(Uint8Array.from(readFileSync(file)), 200, { "content-type": mime });

@@ -17,6 +17,7 @@ import { appendSessionTrace, writeTurnEnd, writeRunError } from "./transcript.js
 import { notifyTeamLead } from "./team/inbox.js";
 import { handleTaskSettlement } from "./review.js";
 import { handleFreeWorkflowSettlement } from "./free-workflow.js";
+import { finishFreeTaskExecution, recordFreeTaskExecutionStartIfFree } from "./free-workflow-events.js";
 import { FOLLOW_UP_LABEL } from "./labels.js";
 import { reconcileTurnBaseline } from "./turn-baseline.js";
 import { clearTurnStart, turnOutputHint } from "./turn-output.js";
@@ -201,6 +202,23 @@ export async function consumeSingleRun(a: {
 }): Promise<void> {
   const { taskId, sessId, agentType, ex, out } = a;
   const role = a.role ?? "single";
+  const executionEventId = role === "single"
+    ? await recordFreeTaskExecutionStartIfFree(taskId, a.turnStart).catch((error) => {
+        console.warn(`[harness] failed to record free workflow execution start for ${taskId}:`, error);
+        return null;
+      })
+    : null;
+  let executionFinished = false;
+  const closeExecution = async (status: "completed" | "failed" | "canceled" | "paused", endedAt: string) => {
+    if (!executionEventId || executionFinished) return;
+    try {
+      await finishFreeTaskExecution(executionEventId, status, endedAt);
+      executionFinished = true;
+    } catch (error) {
+      console.warn(`[harness] failed to record free workflow execution end for ${taskId}:`, error);
+    }
+  };
+  try {
   let cliSessionId = a.cliSessionId;
   let exitStatus = 0;
   let titleDone = !a.autoTitle; // when autoTitle, swallow text until the title line is parsed
@@ -300,6 +318,7 @@ export async function consumeSingleRun(a: {
   // re-run / continued.
   const stopped = takeStopped(taskId);
   const endIso = now();
+  await closeExecution(stopped ?? (exitStatus === 0 ? "completed" : "failed"), endIso);
   await db
     .update(sessions)
     .set({
@@ -340,4 +359,7 @@ export async function consumeSingleRun(a: {
   }
   writeTurnEnd(out, endIso); // fence this turn's real end before closing the .md
   out.end();
+  } finally {
+    await closeExecution("failed", now());
+  }
 }

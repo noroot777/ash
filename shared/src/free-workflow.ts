@@ -69,6 +69,15 @@ export interface FreeWorkflowPreviewEvent {
   occurredAt: string;
 }
 
+export type FreeWorkflowExecutionStatus = "running" | "completed" | "failed" | "canceled" | "paused";
+
+export interface FreeWorkflowExecution {
+  id: string;
+  status: FreeWorkflowExecutionStatus;
+  startedAt: string;
+  endedAt: string | null;
+}
+
 export interface FreeWorkflowMergeState {
   status: "idle" | "merging" | "merged" | "failed";
   message: string | null;
@@ -87,6 +96,7 @@ export interface FreeWorkflowState {
   };
   preview: FreeWorkflowPreviewState;
   previewEvents: FreeWorkflowPreviewEvent[];
+  executions: FreeWorkflowExecution[];
   merge: FreeWorkflowMergeState;
   reviews: FreeReviewRun[];
 }

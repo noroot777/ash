@@ -7,10 +7,40 @@ import "../../src/styles/global.css";
 const state = {
   taskId: "free-task",
   selectedReviewerId: null,
+  reviewReservation: { armed: false, reviewerId: null, checkMode: null, retryLimit: null },
   preview: { running: false, url: null, port: null, command: null, startedAt: null },
   previewEvents: [],
+  executions: [
+    { id: "execution-1", status: "completed", startedAt: "2026-08-09T00:00:00.000Z", endedAt: "2026-08-09T00:09:00.000Z" },
+    { id: "execution-2", status: "completed", startedAt: "2026-08-09T00:20:00.000Z", endedAt: "2026-08-09T00:29:00.000Z" },
+  ],
   merge: { status: "idle", message: null, mergedAt: null, updatedAt: null },
   reviews: [{
+    id: "run-def",
+    reviewerId: null,
+    reviewerName: "Codex 审查",
+    agentType: "codex",
+    executorId: null,
+    executorLabel: null,
+    model: null,
+    reasoningEffort: null,
+    checkMode: "logic",
+    retryLimit: 1,
+    currentRound: 1,
+    status: "reviewing",
+    rounds: [{
+      round: 1,
+      status: "reviewing",
+      conclusion: null,
+      reportMarkdown: "",
+      screenshots: [],
+      startedAt: "2026-08-09T00:30:00.000Z",
+      endedAt: null,
+    }],
+    createdAt: "2026-08-09T00:30:00.000Z",
+    updatedAt: "2026-08-09T00:30:00.000Z",
+    finishedAt: null,
+  }, {
     id: "run-abc",
     reviewerId: null,
     reviewerName: "Codex 审查",
@@ -29,12 +59,12 @@ const state = {
       conclusion: "verified",
       reportMarkdown: "# 审查结论\n\n**统一预览已验证。**",
       screenshots: ["shot-one.png", "shot-two.png"],
-      startedAt: "2026-08-09T00:00:00.000Z",
-      endedAt: "2026-08-09T00:01:00.000Z",
+      startedAt: "2026-08-09T00:10:00.000Z",
+      endedAt: "2026-08-09T00:11:00.000Z",
     }],
-    createdAt: "2026-08-09T00:00:00.000Z",
-    updatedAt: "2026-08-09T00:01:00.000Z",
-    finishedAt: "2026-08-09T00:01:00.000Z",
+    createdAt: "2026-08-09T00:10:00.000Z",
+    updatedAt: "2026-08-09T00:11:00.000Z",
+    finishedAt: "2026-08-09T00:11:00.000Z",
   }],
 };
 
@@ -59,8 +89,13 @@ const task = {
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <aside className="inspector-host" style={{ width: 380, height: 640 }}>
-      <FreeWorkflowInspector task={task} reviewOnly />
-    </aside>
+    <div style={{ display: "flex", gap: 20 }}>
+      <aside className="inspector-host workflow-inspector-fixture" style={{ width: 380, height: 640 }}>
+        <FreeWorkflowInspector task={task} />
+      </aside>
+      <aside className="inspector-host review-only-fixture" style={{ width: 380, height: 640 }}>
+        <FreeWorkflowInspector task={task} reviewOnly />
+      </aside>
+    </div>
   </StrictMode>,
 );
