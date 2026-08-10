@@ -6,6 +6,7 @@ import {
   X,
 } from "@phosphor-icons/react";
 import { api, type TaskCommit, type TaskDiffResult } from "../lib/api.ts";
+import { freeReviewBlockingLabel } from "../free-workflow/freeReviewCopy.ts";
 import { useFreeWorkflowState } from "../free-workflow/useFreeWorkflowState.ts";
 import { AcceptanceControls } from "../team/TeamReviewWorkspace.tsx";
 import { ChangeMetaBar } from "./ChangeMetaBar.tsx";
@@ -54,14 +55,12 @@ export function TaskReviewWorkspace({
   const [error, setError] = useState<string | null>(null);
   const sharedParent = sharedTeamParent(task, allTasks);
   const free = useFreeWorkflowState(task.id, task.workflowMode === "free");
-  const activeFreeReview = free.state?.reviews.find((run) => run.status === "reviewing" || run.status === "repairing");
+  const activeFreeReview = free.state?.reviews.find((run) => freeReviewBlockingLabel(run) !== null);
   const acceptanceBlock = task.workflowMode !== "free"
     ? null
-    : activeFreeReview?.status === "reviewing"
-      ? "审查进行中"
-      : activeFreeReview?.status === "repairing"
-        ? "等待修复"
-        : !free.state && free.loading
+    : activeFreeReview
+      ? freeReviewBlockingLabel(activeFreeReview)
+      : !free.state && free.loading
           ? "读取审查状态"
           : !free.state && free.error
             ? "审查状态未知"

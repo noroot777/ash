@@ -373,6 +373,16 @@ try {
   reviewBlocked = await acceptTask("free-worktree-task");
   assert.equal(reviewBlocked.accepted, false, "等待修复时不得验收");
   if (!reviewBlocked.accepted) assert.equal(reviewBlocked.reason, "free_review_in_progress");
+  await db.update(freeReviewRuns).set({ status: "manual_repairing", updatedAt: new Date().toISOString() })
+    .where(eq(freeReviewRuns.id, "blocking-review"));
+  reviewBlocked = await acceptTask("free-worktree-task");
+  assert.equal(reviewBlocked.accepted, false, "人工修复中不得验收");
+  if (!reviewBlocked.accepted) assert.equal(reviewBlocked.reason, "free_review_in_progress");
+  await db.update(freeReviewRuns).set({ status: "reworking", updatedAt: new Date().toISOString() })
+    .where(eq(freeReviewRuns.id, "blocking-review"));
+  reviewBlocked = await acceptTask("free-worktree-task");
+  assert.equal(reviewBlocked.accepted, false, "任务重新修改中不得验收");
+  if (!reviewBlocked.accepted) assert.equal(reviewBlocked.reason, "free_review_in_progress");
   await db.update(freeReviewRuns).set({ status: "passed", updatedAt: new Date().toISOString(), finishedAt: new Date().toISOString() })
     .where(eq(freeReviewRuns.id, "blocking-review"));
   const worktreeAccepted = await acceptTask("free-worktree-task");

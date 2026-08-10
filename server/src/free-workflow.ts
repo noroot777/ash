@@ -4,7 +4,6 @@ import type {
   AgentType,
   FreeReviewCheckMode,
   FreeReviewDispatchInput,
-  FreeWorkflowState,
   TaskStatus,
 } from "@harness/shared";
 import { FREE_REVIEW_CHECK_MODES } from "@harness/shared/free-workflow";
@@ -29,7 +28,7 @@ import {
   freeReviewReportPath,
   freeReviewScreenshots,
 } from "./free-review-files.js";
-import { freeWorkflowState } from "./free-workflow-state.js";
+import { freeWorkflowState, type FreeWorkflowApiState } from "./free-workflow-state.js";
 import { continueWhenIdle } from "./runs.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { taskWorkspace } from "./task-workspace.js";
@@ -41,7 +40,7 @@ import { id, now } from "./util.js";
 type TaskRow = typeof tasks.$inferSelect;
 type ReviewRunRow = typeof freeReviewRuns.$inferSelect;
 
-const ACTIVE_REVIEW_STATUSES = ["reviewing", "repairing"] as const;
+const ACTIVE_REVIEW_STATUSES = ["reviewing", "repairing", "manual_repairing", "reworking"] as const;
 const MAX_RETRIES = 5;
 export { freeWorkflowState };
 export function freeReviewOutcome(input: {
@@ -112,7 +111,7 @@ function retryLimit(value: unknown): number {
   }
   return Number(value);
 }
-async function reserveFreeReview(taskId: string, input: FreeReviewDispatchInput): Promise<FreeWorkflowState> {
+async function reserveFreeReview(taskId: string, input: FreeReviewDispatchInput): Promise<FreeWorkflowApiState> {
   const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!task) throw new Error("任务不存在");
   if (task.mode !== "single" || task.parentId || task.reviewOf) throw new Error("自由工作流只适用于普通单任务");
@@ -146,7 +145,7 @@ async function reserveFreeReview(taskId: string, input: FreeReviewDispatchInput)
     releaseFreeWorkflowAction(taskId);
   }
 }
-async function cancelFreeReviewReservation(taskId: string): Promise<FreeWorkflowState> {
+async function cancelFreeReviewReservation(taskId: string): Promise<FreeWorkflowApiState> {
   const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!task) throw new Error("任务不存在");
   if (task.mode !== "single" || task.parentId || task.reviewOf || task.workflowMode !== "free") throw new Error("当前任务不支持自由审查");
@@ -331,7 +330,7 @@ export async function handleFreeWorkflowSettlement(
   return true;
 }
 
-async function startFreeReview(taskId: string, input: FreeReviewDispatchInput): Promise<FreeWorkflowState> {
+async function startFreeReview(taskId: string, input: FreeReviewDispatchInput): Promise<FreeWorkflowApiState> {
   const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!task) throw new Error("任务不存在");
   if (task.mode !== "single" || task.parentId || task.reviewOf) throw new Error("自由工作流只适用于普通单任务");

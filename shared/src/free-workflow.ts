@@ -6,7 +6,15 @@ export type TaskWorkflowMode = (typeof TASK_WORKFLOW_MODES)[number];
 export const FREE_REVIEW_CHECK_MODES = ["syntax", "logic"] as const;
 export type FreeReviewCheckMode = (typeof FREE_REVIEW_CHECK_MODES)[number];
 
-export type FreeReviewRunStatus = "reviewing" | "repairing" | "passed" | "exhausted" | "failed";
+export type FreeReviewRunStatus =
+  | "reviewing"
+  | "repairing"
+  | "manual_repairing"
+  | "reworking"
+  | "passed"
+  | "exhausted"
+  | "superseded"
+  | "failed";
 export type FreeReviewRoundStatus = "reviewing" | "passed" | "failed" | "error";
 
 export interface ReviewerProfile {

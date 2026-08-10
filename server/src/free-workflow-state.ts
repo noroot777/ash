@@ -23,6 +23,8 @@ import {
 import { freeReviewScreenshots, readFreeReviewReport } from "./free-review-files.js";
 import { readPreview } from "./preview.js";
 
+export type FreeWorkflowApiState = Omit<FreeWorkflowState, "merge">;
+
 const EXECUTION_STATUSES = new Set<FreeWorkflowExecutionStatus>([
   "running", "completed", "failed", "canceled", "paused",
 ]);
@@ -58,7 +60,7 @@ function parseExecutionDetail(detail: string | null): { status: FreeWorkflowExec
   }
 }
 
-export async function freeWorkflowState(taskId: string): Promise<FreeWorkflowState> {
+export async function freeWorkflowState(taskId: string): Promise<FreeWorkflowApiState> {
   const [task, state, runs, profileRows, eventRows] = await Promise.all([
     db.select().from(tasks).where(eq(tasks.id, taskId)).then((rows) => rows.at(0)),
     db.select().from(freeWorkflowStates).where(eq(freeWorkflowStates.taskId, taskId)).then((rows) => rows.at(0)),

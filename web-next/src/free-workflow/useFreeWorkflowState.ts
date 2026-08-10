@@ -1,9 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
-import type { FreeWorkflowState } from "@harness/shared";
-import { api } from "../lib/api.ts";
+import { api, type FreeWorkflowApiState } from "../lib/api.ts";
 
 export function useFreeWorkflowState(taskId: string, enabled = true) {
-  const [state, setState] = useState<FreeWorkflowState | null>(null);
+  const [state, setState] = useState<FreeWorkflowApiState | null>(null);
   const [loading, setLoading] = useState(enabled);
   const [error, setError] = useState<string | null>(null);
 

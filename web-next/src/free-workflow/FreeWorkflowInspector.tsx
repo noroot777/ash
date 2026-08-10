@@ -4,7 +4,6 @@ import type {
   FreeReviewRun,
   FreeWorkflowExecution,
   FreeWorkflowPreviewEvent,
-  FreeWorkflowState,
   Task,
 } from "@harness/shared";
 import {
@@ -18,10 +17,11 @@ import {
 } from "@phosphor-icons/react";
 import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
-import { api } from "../lib/api.ts";
+import { api, type FreeWorkflowApiState } from "../lib/api.ts";
 import { ReviewEvidenceDrawer } from "../review/ReviewEvidenceDrawer.tsx";
 import { ReviewScreenshotStrip } from "../review/ReviewScreenshotStrip.tsx";
 import { FreeReviewDialog } from "./FreeReviewDialog.tsx";
+import { freeReviewBlockingLabel } from "./freeReviewCopy.ts";
 import { useFreeWorkflowState } from "./useFreeWorkflowState.ts";
 
 type Activity =
@@ -31,7 +31,7 @@ type Activity =
 
 type ReviewActivity = Extract<Activity, { type: "review" }>;
 
-function actualActivities(state: FreeWorkflowState | null): Activity[] {
+function actualActivities(state: FreeWorkflowApiState | null): Activity[] {
   if (!state) return [];
   const activities: Activity[] = [
     ...(state.executions ?? []).map((execution): Activity => ({
@@ -122,7 +122,7 @@ export function FreeWorkflowInspector({
     ? reviewActivities.find((activity) => reviewKey(activity.run.id, activity.round.round) === selectedReviewKey) ?? null
     : null;
   const latestReview = reviewActivities.at(-1);
-  const activeReview = reviews.find((run) => run.status === "reviewing" || run.status === "repairing");
+  const activeReview = reviews.find((run) => freeReviewBlockingLabel(run) !== null);
   const reviewArmed = !!state?.reviewReservation?.armed && !activeReview;
   const taskBusy = task.status === "running" || task.status === "queued";
   const taskReady = task.status !== "backlog";
@@ -181,7 +181,7 @@ export function FreeWorkflowInspector({
                 onClick={() => setReviewDialogOpen(true)}
               >
                 {activeReview ? <SpinnerGap size={13} className="is-spinning" /> : <MagnifyingGlass size={13} />}
-                <span>{activeReview?.status === "reviewing" ? "审查进行中" : activeReview?.status === "repairing" ? "等待修复" : reviewArmed ? "调整预约审查" : reviewActivities.length ? "再审一轮" : "派审查"}</span>
+                <span>{activeReview ? freeReviewBlockingLabel(activeReview) : reviewArmed ? "调整预约审查" : reviewActivities.length ? "再审一轮" : "派审查"}</span>
               </button>
               {onOpenReview && <button type="button" onClick={onOpenReview}><span>打开改动工作区</span><CaretRight size={13} /></button>}
             </div>

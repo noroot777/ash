@@ -3,13 +3,14 @@ import type { Task } from "@harness/shared";
 import { ArrowSquareOut, MagnifyingGlass, MonitorPlay, SpinnerGap, StopCircle } from "@phosphor-icons/react";
 import { api } from "../lib/api.ts";
 import { FreeReviewDialog } from "./FreeReviewDialog.tsx";
+import { freeReviewBlockingLabel } from "./freeReviewCopy.ts";
 import { useFreeWorkflowState } from "./useFreeWorkflowState.ts";
 
 export function FreeWorkflowToolbar({ task, notify }: { task: Task; notify: (message: string) => void }) {
   const free = useFreeWorkflowState(task.id, task.workflowMode === "free");
   const [reviewOpen, setReviewOpen] = useState(false);
   const [previewBusy, setPreviewBusy] = useState(false);
-  const activeReview = free.state?.reviews.find((run) => run.status === "reviewing" || run.status === "repairing");
+  const activeReview = free.state?.reviews.find((run) => freeReviewBlockingLabel(run) !== null);
   const reviewArmed = !!free.state?.reviewReservation?.armed && !activeReview;
   const taskBusy = task.status === "running" || task.status === "queued";
   const taskReady = task.status !== "backlog";
@@ -41,7 +42,7 @@ export function FreeWorkflowToolbar({ task, notify }: { task: Task; notify: (mes
       <div className="free-workflow-toolbar" aria-label="自由工作流快捷操作">
         <button type="button" className={`is-review${activeReview ? " is-busy" : ""}${reviewArmed ? " is-armed" : ""}`} data-state={activeReview?.status ?? (reviewArmed ? "armed" : "idle")} disabled={!taskReady || accepted || !!activeReview} onClick={() => setReviewOpen(true)}>
           {activeReview?.status === "reviewing" ? <SpinnerGap size={13} className="is-spinning" /> : <MagnifyingGlass size={13} weight="regular" />}
-          <span>{activeReview?.status === "reviewing" ? "审查中" : activeReview?.status === "repairing" ? "等待修复" : reviewArmed ? "已预约审查" : "派审查"}</span>
+          <span>{activeReview ? freeReviewBlockingLabel(activeReview) : reviewArmed ? "已预约审查" : "派审查"}</span>
           {reviewArmed && <i className="free-review-armed-dot" aria-hidden="true" />}
         </button>
         <button type="button" className={`is-preview${previewBusy ? " is-busy" : ""}`} aria-pressed={!!free.state?.preview.running} disabled={!taskReady || taskBusy || accepted || previewBusy} onClick={() => void togglePreview()}>
