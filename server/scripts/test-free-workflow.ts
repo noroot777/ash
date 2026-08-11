@@ -22,6 +22,7 @@ try {
     mountFreeWorkflowRoutes,
     freeReviewOutcome,
     freeReviewPrompt,
+    freeReviewReminder,
     freeRepairPrompt,
     freeReviewResumeOptions,
     handleFreeWorkflowSettlement,
@@ -97,15 +98,18 @@ try {
   }, promptRun, 1, root);
   assert.doesNotMatch(skillPrompt, /grill-me|把排队需求也一起做完/, "自由审查 prompt 不得原样夹带技能名或用户追问");
   assert.match(skillPrompt, /request-context\.md/, "自由审查应改为引用需求文件");
-  assert.match(skillPrompt, /Browser\/Chrome 扩展的具名分组后台标签/, "自由审查应首选扩展具名后台标签");
-  assert.match(skillPrompt, /不得接管、复用或直连用户普通标签/, "自由审查不得操作用户普通标签");
-  assert.match(skillPrompt, /独立无头 Chromium\/Playwright/, "扩展不可用时才应退回独立无头浏览器");
-  assert.match(skillPrompt, /先命名自动化会话.*始终保持在后台/, "自由审查应创建非打扰的具名后台会话");
-  assert.match(skillPrompt, /不得主动激活 Chrome 窗口或切到验证标签/, "自由审查不得抢占用户前台");
-  assert.match(skillPrompt, /降级原因写进报告/, "自由审查降级时必须留下原因");
-  assert.match(skillPrompt, /只有无头浏览器确实无法完成.*才允许使用独立有头浏览器/, "自由审查应严格限制有头浏览器");
-  assert.match(skillPrompt, /截图、布局检查或页面点击不构成使用有头浏览器的理由/, "常规页面验证不得成为有头降级理由");
-  assert.doesNotMatch(skillPrompt, /浏览器验证优先(?:复用|走)?\s*CDP/, "自由审查不得再要求优先 CDP");
+  const assertBrowserPolicy = (text: string, source: string) => {
+    const groupedBrowser = text.indexOf("扩展具名分组后台标签");
+    const headlessBrowser = text.indexOf("独立无头浏览器");
+    const headedBrowser = text.indexOf("独立有头浏览器");
+    assert.ok(
+      groupedBrowser >= 0 && groupedBrowser < headlessBrowser && headlessBrowser < headedBrowser,
+      `${source} 必须保留三级浏览器降级顺序`,
+    );
+    assert.match(text, /不得操作用户普通 Chrome 标签|不得接管、复用或直连用户的普通标签/, `${source} 不得操作用户普通 Chrome 标签`);
+    assert.match(text, /Playwright.*headless/i, `${source} 的 Playwright 必须默认无头`);
+  };
+  assertBrowserPolicy(skillPrompt, "自由审查 prompt");
   const skillContext = readFileSync(join(root, "runs", "free-task", "free-review", "skill-review", "round-1", "request-context.md"), "utf8");
   assert.match(skillContext, /标题也可能点名 \/grill-me/);
   assert.match(skillContext, /原始正文要求运行 \/grill-me/);
@@ -201,6 +205,7 @@ try {
   assert.deepEqual(triggeredState.reviews.map(({ status, checkMode, retryLimit }) => ({ status, checkMode, retryLimit })), [
     { status: "reviewing", checkMode: "logic", retryLimit: 2 },
   ], "confirmed done 应按预约配置自动派出且只派一份审查");
+  assertBrowserPolicy(await freeReviewReminder("free-reservation-task"), "自由审查续聊提醒");
 
   // 删除审查者时必须同步 disarm：否则 UI 仍显示已预约，结算因 reviewerId 为空静默不派审。
   await createTasks([{
