@@ -30,6 +30,7 @@ import { railStalledAtRun } from "./workflows.js";
 import { freeReviewReminder, isFreeReviewTurn } from "./free-workflow.js";
 import { withSkillInvocation } from "./skills.js";
 import { initialTaskObjective, invitedTaskBrief } from "./invited-task-brief.js";
+import { withGlobalBrowserPolicy } from "./browser-verification-policy.js";
 // Single tasks run headless — nobody can answer a mid-run prompt. Tell the agent
 // to act autonomously rather than stall waiting for confirmation; if it genuinely
 // needs input it can still ask, and the user replies via continueTask (resume).
@@ -262,10 +263,12 @@ export async function runTask(taskId: string): Promise<void> {
     // 于是在场的都算新面孔；任务里只有它自己时返回空串，fresh run 一如往常。
     const priorSessions = await db.select().from(sessions).where(eq(sessions.taskId, taskId));
     const peerNotice = peerNoticeFor({ taskId, self: agentType, all: priorSessions, prev: undefined });
-    const prompt =
+    const prompt = withGlobalBrowserPolicy(
       AUTONOMY + COMPLETION_PROTOCOL(taskId, sharedTeamWorker, reviewTask, task.workflowMode === "free") + teamPreamble + reviewProtocol +
       peerNotice +
-      (autoTitle ? TITLE_HINT + objective : objective);
+      (autoTitle ? TITLE_HINT + objective : objective),
+      "full",
+    );
     const turnStart = now();
     const sessId = id();
     const runDir = join(RUNS_DIR, taskId);
@@ -554,7 +557,7 @@ export async function continueTask(
     const peerNotice = peerNoticeFor({ taskId, self: agent, all, prev });
     // 验证轮/审查任务不提这条线：那一轮的产出是结论，不是新一版代码。
     const railNote = followUpFrom && !verifying ? await followUpRailNote(taskId) : "";
-    const prompt =
+    const prompt = withGlobalBrowserPolicy(
       (invited ? COLLAB_INVITE : "") +
       invitedTaskBrief(task.body, invited, verifying) +
       peerNotice +
@@ -563,7 +566,9 @@ export async function continueTask(
       (followUpFrom
         ? FOLLOW_UP_REMINDER(taskId, followUpFrom, sharedTeamWorker, verifying, railNote, freeWorkflow)
         : COMPLETION_REMINDER(taskId, sharedTeamWorker, verifying, freeWorkflow)) +
-      (reviewReminder ? `\n${reviewReminder}` : "");
+      (reviewReminder ? `\n${reviewReminder}` : ""),
+      resuming ? "reminder" : "full",
+    );
     const turnStart = now();
     const sessId = resuming ? prev!.id : id();
     const runDir = join(RUNS_DIR, taskId);

@@ -18,6 +18,7 @@ import * as P from "./prompts.js";
 import { waitForGate } from "./gates.js";
 import { gateUserMessage } from "./user-message.js";
 import { canSettleDuet as canSettle, duetConsensusBy as consensusBy, isDuetConsensus as isConsensus } from "./settlement.js";
+import { withGlobalBrowserPolicy } from "../browser-verification-policy.js";
 import { recordGateEvent, recordTurnStart, recordUserTurn } from "./timeline.js";
 
 const RAISE_RE = /(^|\n)\s*\[可收敛\]/;
@@ -64,7 +65,11 @@ async function runTurn(args: {
   // A stop requested between turns: don't even spawn the next one.
   if (isCanceling(taskId)) throw new CanceledRun();
   const turnStart = now();
-  const handle = executor.run({ prompt, cwd, sessionId: args.resumeCliId || undefined });
+  const handle = executor.run({
+    prompt: withGlobalBrowserPolicy(prompt, args.resumeCliId ? "reminder" : "full"),
+    cwd,
+    sessionId: args.resumeCliId || undefined,
+  });
   trackRun(taskId, handle);
   let cliId = handle.sessionId;
 

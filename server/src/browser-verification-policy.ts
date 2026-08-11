@@ -13,3 +13,20 @@ export const BROWSER_VERIFICATION_POLICY =
 export const BROWSER_VERIFICATION_REMINDER =
   `浏览器验证固定按“扩展具名分组后台标签 → 独立无头浏览器 → 确有必要才独立有头浏览器”降级；` +
   `不得操作用户普通 Chrome 标签或直连其调试端口，Playwright 默认 headless，任何降级原因都要写进报告；`;
+
+const GLOBAL_BROWSER_POLICY =
+  `【全局浏览器操作规范】无论当前任务是在实现、调试、验证、审查或讨论，只要操作浏览器都必须遵守下文。` +
+  `没有专门报告产物时，下文要求写进报告的降级说明改为写进本轮最终回复。\n` +
+  BROWSER_VERIFICATION_POLICY;
+
+const GLOBAL_BROWSER_REMINDER =
+  `【全局浏览器操作提醒】实现、调试、验证、审查和讨论中的浏览器操作都固定按` +
+  `“扩展具名分组后台标签 → 独立无头浏览器 → 确有必要才独立有头浏览器”降级；` +
+  `扩展会话先命名且标签保持后台，禁止激活 Chrome、切换验证标签、接管/复用/直连普通标签；` +
+  `Playwright 必须 headless，扩展失败及任何降级原因写进报告（无报告则写进最终回复）；` +
+  `只有无头无法完成浏览器外壳、扩展界面或系统级交互才可独立有头，截图、布局检查或页面点击不算理由。\n\n`;
+
+export function withGlobalBrowserPolicy(prompt: string, level: "full" | "reminder"): string {
+  if (prompt.includes("浏览器验证必须按以下顺序选择通道") || prompt.includes("【全局浏览器操作")) return prompt;
+  return (level === "full" ? GLOBAL_BROWSER_POLICY : GLOBAL_BROWSER_REMINDER) + prompt;
+}
