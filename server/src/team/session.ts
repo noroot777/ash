@@ -309,8 +309,8 @@ async function openLead(taskId: string, rawText: string, kind: Kind): Promise<Le
     cliSessionId,
     agentType: cfg.lead,
     executorId: cfg.leadExecutorId ?? null,
-    model: task.model || cfg.leadModel || null,
-    reasoningEffort: task.reasoningEffort || cfg.leadReasoningEffort || null,
+    model: ex.model ?? null,
+    reasoningEffort: ex.reasoningEffort ?? null,
     cwd: ws.path,
     remote: ex.target.kind === "ssh",
     handle,
@@ -399,6 +399,8 @@ function publish(lead: Lead, event: AgentEvent): void {
     sessionId: lead.sessId,
     role: "lead",
     agentType: lead.agentType,
+    model: lead.model,
+    reasoningEffort: lead.reasoningEffort,
     event,
   });
 }
@@ -414,6 +416,11 @@ async function beginTurn(lead: Lead, at = now()): Promise<void> {
   lead.busy = true;
   lead.turnStart = at;
   await db.update(sessions).set({ turnStartedAt: at, endedAt: null }).where(eq(sessions.id, lead.sessId));
+  appendSessionTrace(lead.taskId, lead.sessId, at, {
+    kind: "run",
+    model: lead.model,
+    reasoningEffort: lead.reasoningEffort,
+  });
   await setTaskStatus(lead.taskId, "running");
 }
 

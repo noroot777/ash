@@ -110,6 +110,7 @@ export type SessionTraceEntry = {
     | { kind: "tool"; name: string; detail?: string }
     | { kind: "attachment"; path: string }
     | { kind: "error"; message: string }
+    | { kind: "run"; model: string | null; reasoningEffort: string | null }
     // 这一回合的 token 账（服务端每轮至多写一条）。它不是执行过程里的一步，渲染时
     // 要单独摘出去，别混进「执行过程」那串事件。
     | { kind: "usage"; usage: TokenUsage; accounting?: "incremental" };
@@ -461,6 +462,8 @@ export const api = {
     request(`/tasks/${id(taskId)}/free-workflow`),
   dispatchFreeReview: (taskId: string, input: FreeReviewDispatchInput): Promise<FreeWorkflowApiState> =>
     request(`/tasks/${id(taskId)}/free-workflow/review`, json("POST", input)),
+  repairFreeReview: (taskId: string): Promise<FreeWorkflowApiState> =>
+    request(`/tasks/${id(taskId)}/free-workflow/review/repair`, { method: "POST" }),
   reserveFreeReview: (taskId: string, input: FreeReviewDispatchInput): Promise<FreeWorkflowApiState> =>
     request(`/tasks/${id(taskId)}/free-workflow/review-reservation`, json("PUT", input)),
   cancelFreeReviewReservation: (taskId: string): Promise<FreeWorkflowApiState> =>

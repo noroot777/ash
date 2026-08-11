@@ -33,6 +33,7 @@ export type ConversationItem =
       markerEndedAt?: string | null;
       showSessionMeta?: boolean;
       session?: Session;
+      run?: { model: string | null; reasoningEffort: string | null };
       /** 这一回合的 token 用量。null = 这家 CLI 不报账、或这轮跑在本功能之前。 */
       usage?: TokenUsage | null;
       /** 整条会话至今的累计用量。只挂在本会话最后一条气泡上（尾栏显示会话信息的那条）。 */
@@ -50,7 +51,7 @@ export type PersistedConversation = { session: Session; output: string; trace?: 
 type ConversationEventItem = Extract<ConversationItem, { kind: "event" }>;
 type AgentTraceEvent = Extract<AgentEvent, { kind: "thinking" | "tool" | "error" }>;
 type TracedContentEntry = SessionTraceEntry & {
-  event: Exclude<SessionTraceEntry["event"], { kind: "usage" }>;
+  event: Exclude<SessionTraceEntry["event"], { kind: "usage" | "run" }>;
 };
 type TracedAttachmentEntry = TracedContentEntry & {
   event: Extract<SessionTraceEntry["event"], { kind: "attachment" }>;
@@ -191,6 +192,30 @@ function traceUsage(entries: SessionTraceEntry[]): TokenUsage | null {
   return sumUsage(entries.map((entry) => (entry.event.kind === "usage" ? entry.event.usage : null)));
 }
 
+function traceRun(entries: SessionTraceEntry[]): { model: string | null; reasoningEffort: string | null } | undefined {
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const event = entries[index]?.event;
+    if (event?.kind === "run") return { model: event.model, reasoningEffort: event.reasoningEffort };
+  }
+  return undefined;
+}
+
+function liveRun(event: LiveAgentEvent): { model: string | null; reasoningEffort: string | null } | undefined {
+  if (event.model === undefined && event.reasoningEffort === undefined) return undefined;
+  return {
+    model: event.model?.trim() || null,
+    reasoningEffort: event.reasoningEffort?.trim() || null,
+  };
+}
+
+function sessionRun(session: Session | undefined): { model: string | null; reasoningEffort: string | null } | undefined {
+  if (!session || (session.model === undefined && session.reasoningEffort === undefined)) return undefined;
+  return {
+    model: session.model?.trim() || null,
+    reasoningEffort: session.reasoningEffort?.trim() || null,
+  };
+}
+
 function contentSegments(
   traced: SessionTraceEntry[],
   fallbackMarkdown: string,
@@ -198,7 +223,9 @@ function contentSegments(
 ): AgentContentSegment[] {
   // usage 只是这一回合的账,不是执行过程的一步 —— 漏掉这道过滤它会被 auxEvent
   // 当成未知事件渲染成一行异常。
-  const entries = traced.filter((entry): entry is TracedContentEntry => entry.event.kind !== "usage");
+  const entries = traced.filter((entry): entry is TracedContentEntry => (
+    entry.event.kind !== "usage" && entry.event.kind !== "run"
+  ));
   const auxEntries = entries.filter((entry) => entry.event.kind !== "text" && entry.event.kind !== "attachment");
   const attachmentEntries = entries.filter(
     (entry): entry is TracedAttachmentEntry => entry.event.kind === "attachment",
@@ -290,7 +317,12 @@ function appendAgent(
 ): Extract<ConversationItem, { kind: "agent" }> {
   const session = sessions.find((candidate) => candidate.id === event.sessionId);
   const last = items[items.length - 1];
-  if (last?.kind === "agent" && last.sessionId === event.sessionId) return last;
+  const explicitRun = liveRun(event);
+  if (last?.kind === "agent" && last.sessionId === event.sessionId) {
+    if (explicitRun) last.run = explicitRun;
+    return last;
+  }
+  const run = explicitRun ?? sessionRun(session);
   const item: Extract<ConversationItem, { kind: "agent" }> = {
     kind: "agent",
     id: `live:${event.sessionId}:${items.length}`,
@@ -300,6 +332,7 @@ function appendAgent(
     endedAt: null,
     markerEndedAt: null,
     session,
+    run,
     usage: null,
     markdown: "",
     segments: [],
@@ -391,6 +424,7 @@ export function buildConversationItems(
           endedAt: null,
           markerEndedAt: segment.endedAt ?? null,
           session,
+          run: traceRun(traceEntries) ?? sessionRun(session),
           usage: traceUsage(traceEntries),
           markdown: segment.text,
           segments: contentSegments(traceEntries, segment.text, `persisted:segment:${session.id}:${index}`),
@@ -401,6 +435,7 @@ export function buildConversationItems(
     // its execution block visible instead of dropping the persisted trace.
     for (const [traceTurn, entries] of traceGroups) {
       if (consumedTrace.has(traceTurn)) continue;
+      if (!entries.some((entry) => entry.event.kind !== "run" && entry.event.kind !== "usage")) continue;
       const segments = contentSegments(entries, "", `persisted:trace-segment:${session.id}:${traceTurn}`);
       items.push({
         kind: "agent",
@@ -411,6 +446,7 @@ export function buildConversationItems(
         endedAt: null,
         markerEndedAt: null,
         session,
+        run: traceRun(entries) ?? sessionRun(session),
         usage: traceUsage(entries),
         markdown: segments.map((segment) => segment.markdown).join(""),
         segments,

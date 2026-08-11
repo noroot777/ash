@@ -29,11 +29,14 @@ assert.equal(freeReviewActivityTitle({ ...run, status: "manual_repairing" }), "�
 assert.equal(
   freeReviewActivityDetail({ ...run, status: "manual_repairing" }),
   "按 5.5审查 第 1 轮意见修改 · 完成后等待或按预约复审",
+  "轮数用尽后的手动修复应说明预约复审语义",
 );
+
 assert.equal(freeReviewActivityTitle({ ...run, status: "reworking" }), "任务修改");
 assert.equal(
   freeReviewActivityDetail({ ...run, status: "reworking" }),
   "任务继续修改 · 完成后等待或按预约复审",
+  "普通对话触发的修改不能冒充按审查意见修复",
 );
 assert.equal(
   freeReviewActivityDetail({ ...run, status: "superseded" }),

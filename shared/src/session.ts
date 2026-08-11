@@ -17,6 +17,8 @@ export interface Session {
   role: SessionRole;
   agentType: AgentType;
   executor: string; // executor profile name
+  model?: string | null; // execution metadata; historical rows are best-effort enriched by the API
+  reasoningEffort?: string | null;
   target: string; // "local" | "ssh:host"
   worktreePath: string | null;
   branch: string | null;

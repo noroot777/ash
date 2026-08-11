@@ -28,9 +28,9 @@ export class CodexExecutor implements AgentExecutor {
   readonly relayEnvHint?: string;
   readonly target: ExecTarget;
   private bin: string;
-  private model?: string;
+  readonly model?: string;
   private extraArgs: string[];
-  private reasoningEffort?: string;
+  readonly reasoningEffort?: string;
   private speed?: "fast";
   private relay?: RelayConfig;
   constructor(opts: { model?: string; extraArgs?: string[]; reasoningEffort?: string; speed?: "fast"; bin?: string; target?: ExecTarget; name?: string; relay?: RelayConfig } = {}) {

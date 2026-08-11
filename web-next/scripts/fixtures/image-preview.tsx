@@ -26,6 +26,10 @@ const links = [
   "",
   "[自由证据接口图](/api/tasks/tsk1234/free-workflow/review-file?run=run-abc&round=1&name=image-preview-one.png)",
   "",
+  "[本地 Demo](/Users/fjh/code/harness/.worktrees/demo/docs/baseline/index.html)",
+  "",
+  "[普通本地文件](/Users/fjh/Documents/demo.html)",
+  "",
   "[站外图](https://example.com/remote.png)",
 ].join("\n");
 

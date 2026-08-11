@@ -38,6 +38,7 @@ export function FreeReviewDialog({
   const [draft, setDraft] = useState<ReviewerDraft>(() => createReviewerDraft());
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const dialogTitle = reservationMode ? (state?.reviewReservation?.armed ? "调整预约审查" : "预约审查") : "派审查";
   const types = useMemo(() => registeredAgentTypes(profiles), [profiles]);
   useDismissable({ enabled: !busy, containerRef: scrim, onClose });
 
@@ -121,8 +122,8 @@ export function FreeReviewDialog({
       <section className="free-review-dialog" role="dialog" aria-modal="true" aria-labelledby="free-review-title">
         <header>
           <span><MagnifyingGlass size={17} weight="bold" /></span>
-          <div><h2 id="free-review-title">派审查</h2><p>{reservationMode ? "选择审查者与检查深度；任务确认完成后自动开始。" : "选择一套审查者配置，再决定检查深度与失败后的自动复审次数。"}</p></div>
-          <button type="button" aria-label="关闭派审" disabled={busy} onClick={onClose}><X size={15} /></button>
+          <div><h2 id="free-review-title">{dialogTitle}</h2><p>{reservationMode ? "选择审查者与检查深度；任务确认完成后自动开始。" : "选择一套审查者配置，再决定检查深度与失败后的自动复审次数。"}</p></div>
+          <button type="button" aria-label={`关闭${dialogTitle}`} disabled={busy} onClick={onClose}><X size={15} /></button>
         </header>
         {loading ? <div className="free-review-loading"><SpinnerGap size={15} className="is-spinning" />正在读取审查者…</div> : (
           <div className="free-review-dialog-body">

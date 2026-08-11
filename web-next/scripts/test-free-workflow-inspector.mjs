@@ -43,6 +43,33 @@ try {
   const reviewOnly = page.locator(".review-only-fixture");
   const reviewRounds = reviewOnly.locator(".review-inspector__targets button");
   await reviewRounds.first().waitFor();
+
+  const repairFixture = page.locator(".repair-fixture");
+  const repairToolbar = page.locator(".toolbar-repair-fixture");
+  const repairButton = repairToolbar.getByRole("button", { name: "按意见修复" });
+  await repairButton.waitFor();
+  assert.match(await repairFixture.locator(".review-inspector__overview small").innerText(), /自动复审已停止/);
+  await repairButton.click();
+  await repairToolbar.getByRole("status").filter({ hasText: "按意见修复中" }).waitFor();
+  assert.equal(await repairFixture.getByRole("button", { name: "按第 2 轮意见修复" }).count(), 0, "同 taskId 的其它实例必须在 API 返回后立即收敛，不能等轮询");
+  await repairFixture.getByRole("status").filter({ hasText: "正在按审查意见修复" }).waitFor();
+  const reserveButton = repairToolbar.getByRole("button", { name: "预约复审" });
+  await reserveButton.waitFor();
+  assert.equal(await reserveButton.isEnabled(), true, "修复状态与预约动作必须分开，修复中仍可预约");
+  assert.equal(await repairToolbar.getByRole("button", { name: "打开预览" }).isDisabled(), true, "修改态落库后无需等待任务事件刷新，也必须立即禁用预览");
+  assert.equal(await page.evaluate(() => window.__repairRequests), 1, "一键修复只应发送一次请求");
+  await reserveButton.click();
+  const reviewDialog = page.locator(".free-review-dialog");
+  await reviewDialog.getByRole("heading", { name: "预约审查" }).waitFor();
+  await reviewDialog.locator("footer button.is-primary").click();
+  await repairToolbar.getByRole("button", { name: "已预约复审" }).waitFor();
+  assert.equal(await repairToolbar.getByRole("status").filter({ hasText: "按意见修复中" }).count(), 1, "保存预约不能覆盖正在修复的状态");
+  assert.equal(await page.evaluate(() => window.__reservationRequests), 1, "预约应保存一次并保留修复中状态");
+
+  const chatToolbar = page.locator(".toolbar-chat-rework-fixture");
+  await chatToolbar.getByRole("status").filter({ hasText: "任务修改中" }).waitFor();
+  assert.equal(await chatToolbar.getByRole("button", { name: "按意见修复" }).count(), 0, "普通对话修改不能冒充按意见修复");
+  assert.equal(await chatToolbar.getByRole("button", { name: "预约复审" }).isEnabled(), true, "普通对话修改中也应允许预约复审");
   assert.deepEqual(await reviewRounds.locator("b").allInnerTexts(), ["第 1 轮", "第 1 轮"], "自由审查 inspector 应和普通任务一样按轮列出记录");
   assert.equal(await page.locator(".review-evidence-drawer").count(), 0, "审查正文默认不弹出");
   await reviewRounds.first().click();

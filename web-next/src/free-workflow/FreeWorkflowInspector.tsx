@@ -21,7 +21,8 @@ import { api, type FreeWorkflowApiState } from "../lib/api.ts";
 import { ReviewEvidenceDrawer } from "../review/ReviewEvidenceDrawer.tsx";
 import { ReviewScreenshotStrip } from "../review/ReviewScreenshotStrip.tsx";
 import { FreeReviewDialog } from "./FreeReviewDialog.tsx";
-import { freeReviewBlockingLabel } from "./freeReviewCopy.ts";
+import { FreeReviewProgress } from "./FreeReviewProgress.tsx";
+import { FreeReviewRepairButton } from "./FreeReviewRepairButton.tsx";
 import { useFreeWorkflowState } from "./useFreeWorkflowState.ts";
 
 type Activity =
@@ -122,11 +123,36 @@ export function FreeWorkflowInspector({
     ? reviewActivities.find((activity) => reviewKey(activity.run.id, activity.round.round) === selectedReviewKey) ?? null
     : null;
   const latestReview = reviewActivities.at(-1);
-  const activeReview = reviews.find((run) => freeReviewBlockingLabel(run) !== null);
-  const reviewArmed = !!state?.reviewReservation?.armed && !activeReview;
+  const latestRun = reviews[0];
   const taskBusy = task.status === "running" || task.status === "queued";
+  const exhaustedReview = latestRun?.status === "exhausted" && !taskBusy ? latestRun : null;
+  const activeReview = reviews.find((run) => ["reviewing", "repairing", "manual_repairing", "reworking"].includes(run.status));
+  const reservableRework = activeReview?.status === "manual_repairing" || activeReview?.status === "reworking";
+  const blockingReview = activeReview?.status === "reviewing" || activeReview?.status === "repairing";
+  const reviewArmed = !!state?.reviewReservation?.armed;
+  const showTaskProgress = reservableRework || (taskBusy && (latestRun?.status === "exhausted" || latestRun?.status === "superseded"));
   const taskReady = task.status !== "backlog";
   const accepted = task.stage === "accepted" || task.stage === "merged";
+  const reservationMode = taskBusy || reservableRework || reviewArmed;
+  const reviewActionLabel = blockingReview
+    ? (activeReview?.status === "reviewing" ? "审查进行中" : "自动修复中")
+    : reviewArmed
+      ? "调整预约复审"
+      : reservationMode
+        ? "预约复审"
+        : latestRun?.status === "superseded"
+          ? "审查新改动"
+          : reviewActivities.length ? "再审一轮" : "派审查";
+  const overviewDetail = activeReview?.status === "manual_repairing"
+    ? `第 ${activeReview.currentRound} 轮意见修复中`
+    : activeReview?.status === "reworking"
+      ? "任务修改中 · 上一轮结论待更新"
+      : exhaustedReview
+        ? `第 ${exhaustedReview.currentRound} 轮未通过 · 自动复审已停止`
+        : latestRun?.status === "superseded"
+          ? "已有新修改 · 等待重新审查"
+          : latestReview ? `最近一轮${reviewRoundLabel(latestReview.round)}` : "尚未派审";
+  const overviewStatus = reservableRework ? activeReview.status : latestRun?.status === "superseded" ? "superseded" : null;
 
   if (free.loading && !free.state) return <div className="free-workflow-inspector is-loading"><SpinnerGap size={14} className="is-spinning" />正在生成实际工作流…</div>;
   if (free.error && !free.state) return <div className="free-workflow-inspector is-loading is-error"><WarningCircle size={14} />{free.error}</div>;
@@ -166,22 +192,41 @@ export function FreeWorkflowInspector({
         <div className="review-inspector free-workflow-review-inspector" aria-label="自由任务审查" ref={rootRef}>
           <section className="review-inspector__overview">
             <header>
-              <span className={`review-inspector__status${latestReview?.round.conclusion ? ` is-${latestReview.round.conclusion}` : ""}`}>
-                {latestReview ? reviewStatusIcon(latestReview.round) : <MagnifyingGlass size={13} />}
+              <span className={`review-inspector__status${overviewStatus ? ` is-${overviewStatus}` : latestReview?.round.conclusion ? ` is-${latestReview.round.conclusion}` : ""}`}>
+                {reservableRework
+                  ? <SpinnerGap size={13} className="is-spinning" />
+                  : latestRun?.status === "superseded"
+                    ? <MagnifyingGlass size={13} />
+                    : latestReview ? reviewStatusIcon(latestReview.round) : <MagnifyingGlass size={13} />}
               </span>
               <div>
                 <b>{reviewActivities.length ? `${reviewActivities.length} 轮审查` : "自由审查"}</b>
-                <small>{latestReview ? `最近一轮${reviewRoundLabel(latestReview.round)}` : "尚未派审"}</small>
+                <small>{overviewDetail}</small>
               </div>
             </header>
             <div className="review-inspector__actions">
+              {showTaskProgress && (
+                <FreeReviewProgress
+                  kind={reservableRework ? activeReview.status as "manual_repairing" | "reworking" : "task_running"}
+                />
+              )}
+              {exhaustedReview && notify && (
+                <FreeReviewRepairButton
+                  taskId={task.id}
+                  run={exhaustedReview}
+                  className="is-repair"
+                  disabled={!taskReady || taskBusy || accepted}
+                  onChanged={free.setState}
+                  notify={notify}
+                />
+              )}
               <button
                 type="button"
-                disabled={!taskReady || accepted || !!activeReview || !notify}
+                disabled={!taskReady || accepted || blockingReview || !notify}
                 onClick={() => setReviewDialogOpen(true)}
               >
-                {activeReview ? <SpinnerGap size={13} className="is-spinning" /> : <MagnifyingGlass size={13} />}
-                <span>{activeReview ? freeReviewBlockingLabel(activeReview) : reviewArmed ? "调整预约审查" : reviewActivities.length ? "再审一轮" : "派审查"}</span>
+                {blockingReview ? <SpinnerGap size={13} className="is-spinning" /> : <MagnifyingGlass size={13} />}
+                <span>{reviewActionLabel}</span>
               </button>
               {onOpenReview && <button type="button" onClick={onOpenReview}><span>打开改动工作区</span><CaretRight size={13} /></button>}
             </div>
@@ -221,7 +266,7 @@ export function FreeWorkflowInspector({
           <FreeReviewDialog
             taskId={task.id}
             state={state}
-            reservationMode={taskBusy || reviewArmed}
+            reservationMode={reservationMode}
             onChanged={free.setState}
             onClose={() => setReviewDialogOpen(false)}
             notify={notify}

@@ -56,6 +56,7 @@
     "test:openai-converter": "tsx scripts/test-openai-converter.ts",
     "test:skills": "tsx scripts/test-skills.ts",
     "test:file-browser": "tsx scripts/test-file-browser.ts",
+    "test:local-open": "tsx scripts/test-local-open.ts",
     "test:mcp-handoff": "tsx scripts/test-mcp-handoff.ts",
     "test:duet-gate-attachments": "tsx scripts/test-duet-gate-attachments.ts",
     "test:terminal": "tsx scripts/test-terminal.ts"

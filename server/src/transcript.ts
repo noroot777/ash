@@ -14,7 +14,8 @@ type TraceTextEvent = { kind: "text"; text: string };
 // 的记录,而 trace 天生就是这个形状。
 type TraceUsageEvent = Extract<AgentEvent, { kind: "usage" }>;
 type TraceAttachmentEvent = Extract<AgentEvent, { kind: "attachment" }>;
-export type SessionTraceEvent = AgentTraceEvent | TraceTextEvent | TraceUsageEvent | TraceAttachmentEvent;
+type TraceRunEvent = { kind: "run"; model: string | null; reasoningEffort: string | null };
+export type SessionTraceEvent = AgentTraceEvent | TraceTextEvent | TraceUsageEvent | TraceAttachmentEvent | TraceRunEvent;
 export type SessionTraceEntry = {
   at: string;
   turnStartedAt: string;
@@ -70,11 +71,16 @@ export function parseSessionTrace(raw: string): SessionTraceEntry[] {
     try {
       const entry = JSON.parse(line) as Partial<SessionTraceEntry>;
       const event = entry.event;
+      const validRun = event?.kind !== "run" || (
+        (event.model === null || typeof event.model === "string")
+        && (event.reasoningEffort === null || typeof event.reasoningEffort === "string")
+      );
       if (
         typeof entry.at !== "string"
         || typeof entry.turnStartedAt !== "string"
         || !event
-        || !["text", "thinking", "tool", "error", "usage", "attachment"].includes(event.kind)
+        || !["text", "thinking", "tool", "error", "usage", "attachment", "run"].includes(event.kind)
+        || !validRun
         || (event.kind === "text" && typeof event.text !== "string")
         || (event.kind === "attachment" && typeof event.path !== "string")
         || (event.kind === "usage" && (!event.usage || typeof event.usage !== "object"))

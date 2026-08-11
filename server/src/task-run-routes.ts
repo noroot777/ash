@@ -42,10 +42,14 @@ import { askingAgentFor, setTaskQuestion } from "./task-question.js";
 import { parseSessionTrace, readableRunPath, sessionTracePath, sessionTranscriptPath } from "./transcript.js";
 import { sessionContext, sessionUsage } from "./usage.js";
 import { resumeCommandFor } from "./executors/resume.js";
+import { sessionRunMeta } from "./session-run-meta.js";
 import { id, now } from "./util.js";
 
 export function mountTaskRunRoutes(api: Hono): void {
-  const toSession = (r: typeof sessions.$inferSelect): Session => ({
+  const toSession = (
+    r: typeof sessions.$inferSelect,
+    run: { model: string | null; reasoningEffort: string | null } = { model: null, reasoningEffort: null },
+  ): Session => ({
     ...r,
     role: r.role as Session["role"],
     agentType: r.agentType as Session["agentType"],
@@ -53,6 +57,7 @@ export function mountTaskRunRoutes(api: Hono): void {
     resumeCommand: r.cliSessionId
       ? resumeCommandFor(r.agentType, r.target, r.cwd ?? r.worktreePath ?? ".", r.cliSessionId, r.relayEnv)
       : r.resumeCommand,
+    ...run,
     usage: sessionUsage(r),
     context: sessionContext(r),
   });
@@ -66,8 +71,10 @@ export function mountTaskRunRoutes(api: Hono): void {
 
 // ── sessions (traceability credentials, §13) ───────────────────────────────
 api.get("/tasks/:id/sessions", async (c) => {
-  const rows = await db.select().from(sessions).where(eq(sessions.taskId, c.req.param("id")));
-  return c.json(rows.map(toSession));
+  const taskId = c.req.param("id");
+  const rows = await db.select().from(sessions).where(eq(sessions.taskId, taskId));
+  const runMeta = await sessionRunMeta(taskId, rows);
+  return c.json(rows.map((row) => toSession(row, runMeta.get(row.id))));
 });
 
 // Persisted output of a session (for reloads; live output comes via SSE).
