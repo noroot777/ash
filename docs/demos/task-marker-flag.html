@@ -1,0 +1,397 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>任务旗标 Demo — 彩色旗子做手动记号</title>
+<style>
+  :root {
+    color-scheme: light;
+    --chrome: lch(94.44% 0.5 282);
+    --canvas: lch(97.94% 0.5 282);
+    --panel: lch(100% 0 282);
+    --raised: lch(96.914% 0 282);
+    --line: lch(90.55% 0 282);
+    --line2: lch(86.5% 0 282);
+    --ink: lch(9.794% 0 282);
+    --muted: lch(39.176% 1.25 282);
+    --faint: lch(64.64% 1.25 282);
+    --accent: #5e6ad2;
+    --green: #168466;
+    --red: #d93d4c;
+    --amber: #b57b00;
+    --cyan: #0e9db8;
+    --hover-bg: lch(91.64% 0.5 282);
+    --sel-bg: lch(89.54% 0.5 282);
+    --menu-shadow: lch(0 0 0 / 0.06) 0 6px 18px, lch(0 0 0 / 0.06) 0 3px 9px, lch(0 0 0 / 0.05) 0 1px 1px, lch(0 0 0 / 0.1) 0 0 0 1px;
+    /* 旗标五色:形状(旗子)已与状态点(圆点)区隔,色相尽量拉开 */
+    --flag-red: #e5484d;
+    --flag-orange: #ee7c2b;
+    --flag-green: #30a46c;
+    --flag-blue: #2f8af5;
+    --flag-purple: #9d5bd2;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    height: 100vh;
+    display: flex;
+    background: var(--chrome);
+    color: var(--ink);
+    font-family: "Inter", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    font-size: 13px;
+    font-weight: 450;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+  button { font: inherit; color: inherit; cursor: pointer; border: 0; background: transparent; padding: 0; }
+
+  /* ---------- 侧栏 ---------- */
+  .sidebar {
+    width: 268px;
+    flex: 0 0 268px;
+    display: flex;
+    flex-direction: column;
+    padding: 14px 10px 10px;
+    gap: 2px;
+    overflow-y: auto;
+  }
+  .project-head { display: flex; align-items: center; gap: 9px; padding: 0 4px 10px; }
+  .project-avatar {
+    width: 26px; height: 26px; border-radius: 8px;
+    background: #7c4dbe; color: #fff;
+    display: grid; place-items: center;
+    font-size: 13px; font-weight: 700;
+  }
+  .project-name b { display: block; font-size: 14px; font-weight: 650; line-height: 1.2; }
+  .project-name span { color: var(--faint); font-size: 11px; }
+
+  .topbar { display: flex; align-items: center; justify-content: space-between; padding: 2px 4px 8px; }
+  .filter-dots { display: flex; align-items: center; gap: 9px; }
+  .filter-dots i { width: 8px; height: 8px; border-radius: 50%; }
+  .topbar-icons { display: flex; gap: 12px; color: var(--muted); }
+  .topbar-icons svg { display: block; }
+
+  .section-title { padding: 8px 6px 3px; color: var(--faint); font-size: 11px; font-weight: 600; }
+
+  /* 行结构对齐真实实现:22px leading + 内容,34px 行高 */
+  .row-wrap {
+    position: relative;
+    display: grid;
+    min-height: 34px;
+    grid-template-columns: 22px minmax(0, 1fr);
+    align-items: center;
+    border-radius: 7px;
+    --task-row-surface: var(--chrome);
+  }
+  .row-wrap:hover:not(.is-selected) { --task-row-surface: var(--hover-bg); background: var(--hover-bg); }
+  .row-wrap.is-selected { --task-row-surface: var(--sel-bg); background: var(--sel-bg); }
+  .row-leading { display: grid; width: 22px; height: 34px; place-items: center; }
+  .row-btn {
+    position: relative;
+    display: flex; width: 100%; height: 34px; min-width: 0;
+    align-items: center; overflow: hidden;
+    padding: 0 8px 0 1px; text-align: left;
+  }
+  .row-title {
+    min-width: 0; flex: 1; overflow: hidden; white-space: nowrap;
+    color: color-mix(in lch, var(--ink) 52%, var(--muted));
+    font-size: 13px; font-weight: 400;
+    mask-image: linear-gradient(90deg, #000 calc(100% - 18px), transparent);
+    -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 18px), transparent);
+  }
+  .row-wrap:hover .row-title, .row-wrap.is-selected .row-title { color: var(--ink); }
+
+  /* 状态点(照抄现有视觉) */
+  .dot { width: 7px; height: 7px; border-radius: 50%; }
+  .dot--quiet { background: transparent; border: 1px solid color-mix(in lch, var(--faint) 72%, transparent); }
+  .dot--active { background: var(--muted); animation: pulse 1.35s ease-in-out infinite; }
+  .dot--attention { background: var(--amber); }
+  .dot--success { background: var(--green); }
+  .dot--error { background: var(--red); }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+
+  /* ---------- 旗标(新增的部分) ---------- */
+  /* 已标记:常驻显示在行尾;未标记:hover 行时浮出灰旗入口 */
+  .row-flag {
+    position: absolute; z-index: 2;
+    top: 50%; right: 5px; transform: translateY(-50%);
+    display: grid; place-items: center;
+    width: 22px; height: 24px; border-radius: 6px;
+    opacity: 0; transition: opacity 120ms ease-out;
+    color: var(--faint);
+  }
+  .row-flag svg { display: block; }
+  .row-flag.is-set { opacity: 1; }
+  .row-wrap:hover .row-flag, .row-flag[aria-expanded="true"] { opacity: 1; }
+  .row-flag:hover, .row-flag[aria-expanded="true"] { background: color-mix(in lch, var(--ink) 8%, transparent); }
+  /* 有旗子(或 hover 浮出入口)时,标题在旗子前渐隐,不与旗子相压 */
+  .row-wrap:hover .row-title, .row-wrap:has(.row-flag.is-set) .row-title {
+    mask-image: linear-gradient(90deg, #000 calc(100% - 48px), transparent calc(100% - 27px));
+    -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 48px), transparent calc(100% - 27px));
+  }
+
+  .flag-red { color: var(--flag-red); }
+  .flag-orange { color: var(--flag-orange); }
+  .flag-green { color: var(--flag-green); }
+  .flag-blue { color: var(--flag-blue); }
+  .flag-purple { color: var(--flag-purple); }
+
+  /* 色板弹层 */
+  .flag-palette {
+    position: fixed; z-index: 50;
+    display: flex; align-items: center; gap: 2px;
+    padding: 5px;
+    border-radius: 10px;
+    background: var(--panel);
+    box-shadow: var(--menu-shadow);
+  }
+  .flag-palette button {
+    display: grid; place-items: center;
+    width: 28px; height: 28px; border-radius: 7px;
+  }
+  .flag-palette button:hover { background: var(--raised); }
+  .flag-palette button.is-current { background: var(--sel-bg); }
+  .flag-palette .palette-sep { width: 1px; height: 16px; margin: 0 3px; background: var(--line2); }
+  .flag-palette .palette-clear { color: var(--faint); }
+  .flag-palette .palette-clear:hover { color: var(--muted); }
+
+  /* ---------- 右侧:详情页 header ---------- */
+  .main { flex: 1; display: flex; flex-direction: column; min-width: 0; padding: 14px 14px 14px 0; }
+  .panel {
+    flex: 1; display: flex; flex-direction: column;
+    background: var(--canvas); border-radius: 12px;
+    box-shadow: lch(0 0 0 / 0.05) 0 1px 2px, lch(0 0 0 / 0.06) 0 0 0 0.5px;
+    overflow: hidden;
+  }
+  .detail-header {
+    display: flex; height: 44px; flex: 0 0 44px;
+    align-items: center; gap: 6px;
+    border-bottom: 0.5px solid var(--line);
+    padding: 0 10px 0 14px;
+  }
+  .detail-kind {
+    border-radius: 5px; background: var(--raised); padding: 2px 7px;
+    color: var(--muted); font-size: 9.5px; font-weight: 750;
+  }
+  .icon-btn {
+    display: grid; place-items: center;
+    width: 26px; height: 26px; border-radius: 7px;
+    color: var(--faint);
+  }
+  .icon-btn:hover, .icon-btn[aria-expanded="true"] { background: var(--raised); color: var(--muted); }
+  .icon-btn.is-set:hover { background: var(--raised); }
+  .detail-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; font-weight: 600; padding: 3px 5px; }
+  .detail-status { display: inline-flex; align-items: center; gap: 5px; padding: 3px 5px; color: var(--muted); font-size: 10px; font-weight: 650; }
+  .primary-action {
+    display: inline-flex; height: 28px; align-items: center; gap: 5px;
+    border-radius: 8px; background: var(--accent); color: #fff;
+    padding: 0 12px; font-size: 12px; font-weight: 600;
+  }
+
+  .canvas-body { flex: 1; display: grid; place-items: center; }
+  .demo-note { max-width: 420px; color: var(--muted); font-size: 12.5px; line-height: 1.9; }
+  .demo-note h1 { font-size: 13px; color: var(--ink); margin: 0 0 6px; }
+  .demo-note p { margin: 0 0 10px; }
+  .demo-note .inline-flag { display: inline-block; vertical-align: -2px; }
+  .demo-note kbd {
+    font: inherit; font-size: 11px; padding: 0 5px; border-radius: 4px;
+    background: var(--raised); box-shadow: inset 0 0 0 1px var(--line2);
+  }
+</style>
+</head>
+<body>
+
+<aside class="sidebar">
+  <div class="project-head">
+    <span class="project-avatar">H</span>
+    <div class="project-name"><b>harness</b><span>⑂ feat/free-pipeline</span></div>
+  </div>
+  <div class="topbar">
+    <div class="filter-dots" title="现有的状态筛选点(对照用,不可点)">
+      <i style="background: var(--amber)"></i>
+      <i style="background: var(--accent)"></i>
+      <i style="background: var(--faint)"></i>
+      <i style="background: var(--green)"></i>
+      <i style="background: var(--cyan)"></i>
+    </div>
+    <div class="topbar-icons">
+      <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="7" cy="7" r="4.4"/><path d="m10.4 10.4 3 3" stroke-linecap="round"/></svg>
+      <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M9.8 2.8 13.2 6.2 6 13.4H2.6V10Z" stroke-linejoin="round"/></svg>
+      <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M2.5 5.5 8 2.8l5.5 2.7L8 8.2Z" stroke-linejoin="round"/><path d="m2.5 8.4 5.5 2.7 5.5-2.7"/><path d="m2.5 11.2 5.5 2.7 5.5-2.7"/></svg>
+      <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M8 3v10M3 8h10"/></svg>
+    </div>
+  </div>
+  <div id="task-sections"></div>
+</aside>
+
+<main class="main">
+  <div class="panel">
+    <header class="detail-header">
+      <span class="detail-kind">任务</span>
+      <button class="icon-btn" title="置顶(现有功能,demo 里不可点)">
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9.3 2.2 13.8 6.7 11 7.6 8.4 13.5 6.2 11.3 2.5 15M8.4 13.5 4.5 9.6l-2-0.7 5.9-2.6Z"/></svg>
+      </button>
+      <button class="icon-btn" id="header-flag" aria-expanded="false" title="旗标"></button>
+      <span class="detail-title" id="header-title">—</span>
+      <span class="detail-status" id="header-status"></span>
+      <button class="primary-action">✓ 验收</button>
+    </header>
+    <div class="canvas-body">
+      <div class="demo-note">
+        <h1>彩色旗标 Demo</h1>
+        <p>左侧任务行 <b>hover</b> 时行尾浮出灰旗入口,点它打开色板;已标记的旗子<span class="inline-flag" id="note-flag"></span><b>常驻显示</b>,再点可换色或清除。</p>
+        <p>详情页入口是上方 header 里置顶按钮旁边的旗标按钮,与列表共用同一个色板。</p>
+        <p>顶部那排彩色圆点是<b>现有的状态筛选点</b>,放在这里做对照——圆点=系统状态,旗子=手动记号,形状上互不混淆。</p>
+        <p><kbd>Esc</kbd> 或点空白处关闭色板。</p>
+      </div>
+    </div>
+  </div>
+</main>
+
+<script>
+const FLAG_COLORS = ["red", "orange", "green", "blue", "purple"];
+const FLAG_LABELS = { red: "红", orange: "橙", green: "绿", blue: "蓝", purple: "紫" };
+
+function flagSvg(size) {
+  return `<svg width="${size}" height="${size}" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+    <path d="M3.75 1.25c.41 0 .75.34.75.75v.42c1.5-.66 3.02-.71 4.57-.2 1.5.5 2.88.44 4.18-.16.5-.23 1.05.13 1.05.68v6.07c0 .32-.18.62-.47.77-1.6.84-3.37.94-5.26.31-1.4-.46-2.74-.39-4.07.22V14a.75.75 0 0 1-1.5 0V2c0-.41.34-.75.75-.75Z"/>
+  </svg>`;
+}
+
+// demo 数据:status 点 + 预置的旗标
+const sections = [
+  { label: "置顶", tasks: [
+    { id: "t1", title: "worktree-agent-survives-restart 验收", status: "success", flag: "red" },
+    { id: "t2", title: "事项中心讨论区 @执行者派生", status: "active", flag: null },
+  ]},
+  { label: "最近", tasks: [
+    { id: "t3", title: "着色功能 UI 讨论", status: "attention", flag: "blue" },
+    { id: "t4", title: "review note + enter 快捷键", status: "success", flag: null },
+    { id: "t5", title: "inspector tab 快捷键", status: "success", flag: "orange" },
+    { id: "t6", title: "任务按最后更新排序,去掉优先级", status: "quiet", flag: null },
+    { id: "t7", title: "duet 合稿轮兼容层", status: "error", flag: "purple" },
+    { id: "t8", title: "移动端会话轮询降频", status: "quiet", flag: null },
+    { id: "t9", title: "CUA 旁路会话状态上报", status: "success", flag: "green" },
+    { id: "t10", title: "rule-guard 对称计账", status: "quiet", flag: null },
+  ]},
+];
+
+const state = { selectedId: "t3" };
+const tasks = sections.flatMap((s) => s.tasks);
+const byId = (id) => tasks.find((t) => t.id === id);
+
+const root = document.getElementById("task-sections");
+function render() {
+  root.innerHTML = "";
+  for (const section of sections) {
+    const title = document.createElement("div");
+    title.className = "section-title";
+    title.textContent = section.label;
+    root.appendChild(title);
+    for (const task of section.tasks) {
+      const wrap = document.createElement("div");
+      wrap.className = "row-wrap" + (task.id === state.selectedId ? " is-selected" : "");
+      wrap.innerHTML = `
+        <span class="row-leading"><i class="dot dot--${task.status}"></i></span>
+        <button class="row-btn" type="button"><span class="row-title">${task.title}</span></button>
+        <button class="row-flag${task.flag ? ` is-set flag-${task.flag}` : ""}" type="button" aria-expanded="false"
+          title="${task.flag ? `旗标:${FLAG_LABELS[task.flag]}(点击修改)` : "加旗标"}">${flagSvg(13)}</button>`;
+      wrap.querySelector(".row-btn").addEventListener("click", () => { state.selectedId = task.id; render(); });
+      wrap.querySelector(".row-flag").addEventListener("click", (event) => {
+        event.stopPropagation();
+        openPalette(event.currentTarget, task.id);
+      });
+      root.appendChild(wrap);
+    }
+  }
+  renderHeader();
+}
+
+const headerFlag = document.getElementById("header-flag");
+const STATUS_TEXT = { success: "已完成", active: "运行中", attention: "等待答复", error: "失败", quiet: "待命" };
+function renderHeader() {
+  const task = byId(state.selectedId);
+  document.getElementById("header-title").textContent = task.title;
+  document.getElementById("header-status").innerHTML =
+    `<i class="dot dot--${task.status}"></i>${STATUS_TEXT[task.status]}`;
+  headerFlag.className = "icon-btn" + (task.flag ? ` is-set flag-${task.flag}` : "");
+  headerFlag.innerHTML = flagSvg(14);
+  headerFlag.title = task.flag ? `旗标:${FLAG_LABELS[task.flag]}(点击修改)` : "加旗标";
+}
+headerFlag.addEventListener("click", (event) => {
+  event.stopPropagation();
+  openPalette(headerFlag, state.selectedId);
+});
+document.getElementById("note-flag").innerHTML = `<span class="flag-red" style="margin:0 2px">${flagSvg(12)}</span>`;
+
+// ---------- 色板弹层 ----------
+let palette = null;
+let paletteAnchor = null;
+function closePalette() {
+  if (!palette) return;
+  palette.remove();
+  palette = null;
+  if (paletteAnchor) paletteAnchor.setAttribute("aria-expanded", "false");
+  paletteAnchor = null;
+}
+function openPalette(anchor, taskId) {
+  const reopen = paletteAnchor === anchor;
+  closePalette();
+  if (reopen) return; // 点同一个入口 = 开关切换
+  const task = byId(taskId);
+  palette = document.createElement("div");
+  palette.className = "flag-palette";
+  palette.setAttribute("role", "menu");
+  for (const color of FLAG_COLORS) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = `flag-${color}` + (task.flag === color ? " is-current" : "");
+    btn.title = FLAG_LABELS[color];
+    btn.innerHTML = flagSvg(14);
+    btn.addEventListener("click", () => {
+      task.flag = task.flag === color ? null : color; // 点当前色 = 取消
+      closePalette();
+      render();
+    });
+    palette.appendChild(btn);
+  }
+  const sep = document.createElement("i");
+  sep.className = "palette-sep";
+  palette.appendChild(sep);
+  const clear = document.createElement("button");
+  clear.type = "button";
+  clear.className = "palette-clear";
+  clear.title = "清除旗标";
+  clear.innerHTML = `<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="m4 4 8 8M12 4l-8 8"/></svg>`;
+  clear.addEventListener("click", () => { task.flag = null; closePalette(); render(); });
+  palette.appendChild(clear);
+
+  document.body.appendChild(palette);
+  const rect = anchor.getBoundingClientRect();
+  const width = palette.offsetWidth;
+  const left = Math.min(Math.max(8, rect.left + rect.width / 2 - width / 2), window.innerWidth - width - 8);
+  const top = rect.bottom + 6 + palette.offsetHeight > window.innerHeight - 8
+    ? rect.top - 6 - palette.offsetHeight
+    : rect.bottom + 6;
+  palette.style.left = `${Math.round(left)}px`;
+  palette.style.top = `${Math.round(top)}px`;
+  anchor.setAttribute("aria-expanded", "true");
+  paletteAnchor = anchor;
+}
+document.addEventListener("click", (event) => {
+  if (palette && !palette.contains(event.target)) closePalette();
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") closePalette();
+});
+
+render();
+// 截图自查用:#open 时自动展开第一面旗子的色板
+if (location.hash === "#open") {
+  const anchor = document.querySelector(".row-flag.is-set");
+  if (anchor) openPalette(anchor, "t1");
+}
+</script>
+</body>
+</html>
