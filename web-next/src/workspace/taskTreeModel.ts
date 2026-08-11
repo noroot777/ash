@@ -25,6 +25,13 @@ export type TaskTreeOptions = {
   unifiedPinned?: boolean;
 };
 
+export type TaskPreview = {
+  visible: Task[];
+  hidden: Task[];
+};
+
+export const TASK_PREVIEW_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
 const PRIORITY_ORDER: Task["priority"][] = ["urgent", "high", "medium", "low", "none"];
 
 const COLLAB_GROUPS: TaskGroup[] = [
@@ -83,6 +90,25 @@ function sortTasks(tasks: Task[], pinned: boolean): Task[] {
       PRIORITY_ORDER.indexOf(a.priority) - PRIORITY_ORDER.indexOf(b.priority) ||
       b.createdAt.localeCompare(a.createdAt),
   );
+}
+
+export function previewTasksByAge(tasks: Task[], nowMs = Date.now()): TaskPreview {
+  const cutoff = nowMs - TASK_PREVIEW_MAX_AGE_MS;
+  const visible: Task[] = [];
+  const hidden: Task[] = [];
+  for (const task of tasks) {
+    const updatedAt = Date.parse(task.updatedAt);
+    (Number.isFinite(updatedAt) && updatedAt < cutoff ? hidden : visible).push(task);
+  }
+  if (visible.length > 0 || hidden.length === 0) return { visible, hidden };
+
+  const latest = hidden.reduce((candidate, task) => (
+    Date.parse(task.updatedAt) > Date.parse(candidate.updatedAt) ? task : candidate
+  ));
+  return {
+    visible: [latest],
+    hidden: hidden.filter((task) => task.id !== latest.id),
+  };
 }
 
 export function buildTaskTree(tasks: Task[], options: TaskTreeOptions = {}): TaskTreeSection[] {
