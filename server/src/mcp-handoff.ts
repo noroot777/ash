@@ -177,7 +177,7 @@ async function applyReplay(taskId: string, call: McpCallRecord): Promise<string 
     // round 依旧无结论、结算把审查判失败（审查实测复现）。
     const { reportFreeReviewConclusion } = await import("./free-workflow.js");
     try {
-      const freeReview = await reportFreeReviewConclusion(taskId, stage);
+      const freeReview = await reportFreeReviewConclusion(taskId, stage, { bySessionRecovery: true });
       if (freeReview) {
         return `自由审查结论（${stage}）当时因 MCP 通道中断没能写回，已补录到第 ${freeReview.round} 轮。`;
       }

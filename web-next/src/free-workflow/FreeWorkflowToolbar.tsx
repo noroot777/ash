@@ -28,6 +28,8 @@ export function FreeWorkflowToolbar({ task, notify }: { task: Task; notify: (mes
           : free.state?.reviews.length
             ? (stoppedRun ? "直接再审" : "再审")
             : "派审查";
+  // 未通过的意见只在结论仍然新鲜时才是「当前待办」：代码变过（stale）后那份报告针对的
+  // 世界已不存在，修复入口让位给「审查新改动」——后端同样会拒绝按过期意见发起修复。
 
   const togglePreview = async () => {
     if (previewBusy) return;
@@ -54,7 +56,7 @@ export function FreeWorkflowToolbar({ task, notify }: { task: Task; notify: (mes
     <>
       <div className="free-workflow-toolbar" aria-label="自由工作流快捷操作">
         {repairing && <FreeReviewProgress compact kind={view.autoRereview ? "auto_rereview" : "task_running"} />}
-        {stoppedRun && !taskBusy ? (
+        {stoppedRun && !taskBusy && !stale ? (
           <FreeReviewRepairButton
             taskId={task.id}
             run={stoppedRun}

@@ -48,6 +48,9 @@ export function freeReviewFile(taskId: string, runId: string, round: number, nam
   if (!file.startsWith(base + "/") || !existsSync(file)) return null;
   const info = lstatSync(file);
   if (!info.isFile() || info.isSymbolicLink()) return null;
+  // 硬链接 lstat 探测不出来（它就是普通文件）：nlink>1 说明同一 inode 还有别的名字，
+  // 可能指向证据根之外的内容——审查证据由审查者独立创建，正常永远是 1，直接拒。
+  if (info.nlink > 1) return null;
   const realBase = realpathSync(base);
   const realFile = realpathSync(file);
   return realFile.startsWith(realBase + "/") ? realFile : null;

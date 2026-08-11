@@ -57,15 +57,16 @@ export function TaskReviewWorkspace({
   const sharedParent = sharedTeamParent(task, allTasks);
   const free = useFreeWorkflowState(task.id, task.workflowMode === "free");
   const activeFreeReview = free.state?.reviews.find((run) => freeReviewBlockingLabel(run) !== null);
+  // 失败关闭：拿不到自由工作流状态（加载中、出错、或任何原因的 state 为空）就不开放
+  // 不可逆的验收按钮——「state 空 + loading 已结束」的缝隙也一样（StrictMode 重挂载
+  // 曾在这个缝隙里放出过约 2.5 秒的假「验收通过」）。
   const acceptanceBlock = task.workflowMode !== "free"
     ? null
     : activeFreeReview
       ? freeReviewBlockingLabel(activeFreeReview)
-      : !free.state && free.loading
-          ? "读取审查状态"
-          : !free.state && free.error
-            ? "审查状态未知"
-            : null;
+      : !free.state
+          ? (free.error ? "审查状态未知" : "读取审查状态")
+          : null;
   // 非阻塞警示：验收是用户主权，但「最后一轮没过 / 链异常断了 / 通过后代码又变了 /
   // 新鲜度无从判断」必须摆在明面上。失败向着「不确定」开，不向「没问题」开。
   const freeView = task.workflowMode === "free" ? freeReviewView(free.state, task) : null;

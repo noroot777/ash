@@ -23,7 +23,7 @@ import type { Hono } from "hono";
 import { bus } from "./bus.js";
 import { forceKillCuaService, lastCuaResidualStatus, refreshCuaResidualStatus } from "./cua.js";
 import { db } from "./db/index.js";
-import { freeReviewResumeOptions } from "./free-workflow.js";
+import { freeReviewResumeOptions, hasActiveFreeReview } from "./free-workflow.js";
 import { projects, queueItems, schedules, scheduledMessages, sessions, tasks } from "./db/schema.js";
 import { resumeDuet, resumeAtGate, runDuet } from "./duet/index.js";
 import { resolveGate } from "./duet/gates.js";
@@ -32,7 +32,7 @@ import { continueTask, resumeOrRunTask, runTask } from "./orchestrator.js";
 import { RUNS_DIR } from "./paths.js";
 import { enqueueMessage } from "./pending-messages.js";
 import { isOvertaken, queueBlockers, repackQueue, tailOrder } from "./queues.js";
-import { confirmDone, stopTask } from "./runs.js";
+import { confirmDone, isTurnClaimed, stopTask } from "./runs.js";
 import { advanceQueue } from "./scheduler.js";
 import { setTaskStatus } from "./status.js";
 import { dispatchWorkers, type DispatchSpec } from "./team/dispatch.js";
@@ -575,6 +575,14 @@ api.post("/tasks/:id/archive", async (c) => {
   if (r.archived) return c.json((await enrichTasks([r]))[0]); // idempotent
   if (!canArchive(r.status as TaskStatus)) {
     return c.json({ error: "只有已完成/失败/已取消的任务可以归档", status: r.status }, 409);
+  }
+  // 归档 = 冻结。回合被占（status 尚未落 running）或自由审查正在进行时归档，会让一个
+  // 「冻结」任务上继续跑回合/审查——先等它结束或停掉再归档。
+  if (isTurnClaimed(r.id)) {
+    return c.json({ error: "任务回合正在进行（状态尚未落库），结束后再归档", status: r.status }, 409);
+  }
+  if (r.workflowMode === "free" && await hasActiveFreeReview(r.id)) {
+    return c.json({ error: "自由审查正在进行，结束后再归档" }, 409);
   }
   const ts = now();
   // 团队(§Team):归档才是「这件事结束了」—— 先停掉调度台进程和所有在跑的执行者,

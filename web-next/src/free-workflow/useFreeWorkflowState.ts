@@ -29,7 +29,9 @@ function subscribe(taskId: string, listener: StateListener): () => void {
     if (taskListeners.size) return;
     listeners.delete(taskId);
     states.delete(taskId);
-    latestWriter.delete(taskId);
+    // latestWriter 刻意**不清**：它的生命周期要跟 inFlight 一致。StrictMode 的卸载/重挂载
+    // 会复用在飞的 GET——序号被清掉的话，那个响应回来就会因「无主序号」被丢弃，页面要
+    // 等下一轮轮询才有状态，验收页在这 2.5 秒里失败开放过。
   };
 }
 

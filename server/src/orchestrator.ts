@@ -684,7 +684,7 @@ export async function continueTask(
     if (back) await db.update(tasks).set({ followUpFrom: null, updatedAt: now() }).where(eq(tasks.id, taskId));
     const status = takeStopped(taskId) ?? back ?? "failed";
     await setStatus(taskId, status);
-    await afterSettlement(taskId, status, false, false);
+    await afterSettlement(taskId, status, false, false, sessionRole);
   } finally {
     if (handle) untrackRun(taskId, handle);
     releaseTurn(taskId);

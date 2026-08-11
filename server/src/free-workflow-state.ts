@@ -66,7 +66,7 @@ function parseExecutionDetail(detail: string | null): { status: FreeWorkflowExec
 // 当前任务工作区的 HEAD 与是否有未提交改动，**纯只读**（绝不重建 worktree——这是状态
 // 轮询，不是执行路径）。worktree 已被验收清理 → 双 null；非 worktree 任务读项目目录本身。
 // dirty 必须一起报：只比 HEAD 会把「审查后只改了工作区没提交」误判成新鲜（失败开放）。
-async function workspaceStateOf(
+export async function workspaceStateOf(
   task: { id: string; projectId: string; useWorktree: boolean },
 ): Promise<{ head: string | null; dirty: boolean | null }> {
   const project = (await db.select({ repoPath: projects.repoPath }).from(projects)

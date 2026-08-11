@@ -2,7 +2,7 @@
 // turn 锁窗口、结论证据门禁、证据路径 symlink、验收重试快照、旧状态迁移语义。
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { linkSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
@@ -18,7 +18,7 @@ function git(cwd: string, ...args: string[]): string {
 
 try {
   const { ensureSchema, db } = await import("../src/db/index.js");
-  const { agents, freeReviewRounds, freeReviewRuns, freeWorkflowStates, projects, tasks } = await import("../src/db/schema.js");
+  const { agents, freeReviewRounds, freeReviewRuns, freeWorkflowStates, projects, sessions, tasks } = await import("../src/db/schema.js");
   const { createTasks } = await import("../src/task-store.js");
   const { mountFreeWorkflowRoutes } = await import("../src/free-workflow.js");
   const { claimTurn, releaseTurn } = await import("../src/runs.js");
@@ -68,7 +68,7 @@ try {
   }]);
 
   // ── 第 1 轮审查修复回归 ──
-  
+
   // turn 锁窗口：claimTurn 之后、status 落 running 之前，验收与派审都必须被拦。
   await createTasks([{
     id: "free-turn-window-task", projectId: "p", groupId: null, parentId: null,
@@ -89,8 +89,8 @@ try {
   });
   assert.equal(turnBlockedDispatch.status, 409, "回合已被占时不得派审");
   releaseTurn("free-turn-window-task");
-  
-  // 结论证据门禁：没有非空 report.md 的 verified/verify_failed 一律拒收。
+
+  // 结论证据与身份门禁：没有活跃 reviewer 会话时结论拒收；没有非空 report.md 也拒收。
   const evidenceAt = new Date().toISOString();
   await db.insert(freeReviewRuns).values({
     id: "evidence-review", taskId: "free-turn-window-task", reviewerId: reviewer.id, reviewerName: "Codex logic",
@@ -102,25 +102,38 @@ try {
     id: "evidence-review-round-1", runId: "evidence-review", round: 1, status: "reviewing",
     conclusion: null, startedAt: evidenceAt, endedAt: null,
   });
-  const noReport = await api.request("/tasks/free-turn-window-task/stage", {
+  const evidenceDir = join(root, "runs", "free-turn-window-task", "free-review", "evidence-review", "round-1");
+  mkdirSync(evidenceDir, { recursive: true });
+  writeFileSync(join(evidenceDir, "report.md"), "# 有报告\n\n结论有效。\n");
+  const noSession = await api.request("/tasks/free-turn-window-task/stage", {
     method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify({ stage: "verified" }),
   });
-  assert.equal(noReport.status, 409, "没有报告的审查结论必须被拒收");
-  const evidenceDir = join(root, "runs", "free-turn-window-task", "free-review", "evidence-review", "round-1");
-  mkdirSync(evidenceDir, { recursive: true });
+  assert.equal(noSession.status, 409, "没有活跃 reviewer 会话的结论（迟到/误投）必须被拒收");
+  await db.insert(sessions).values({
+    id: "evidence-reviewer-session", taskId: "free-turn-window-task", role: "reviewer", agentType: "codex",
+    executor: "codex@test", target: '{"kind":"local"}', startedAt: evidenceAt,
+  });
+  writeFileSync(join(evidenceDir, "report.md"), " \n");
+  const blankReport = await api.request("/tasks/free-turn-window-task/stage", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ stage: "verified" }),
+  });
+  assert.equal(blankReport.status, 409, "只有空白字节的报告不算报告");
   writeFileSync(join(evidenceDir, "report.md"), "# 有报告\n\n结论有效。\n");
   const withReport = await api.request("/tasks/free-turn-window-task/stage", {
     method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify({ stage: "verified" }),
   });
-  assert.equal(withReport.status, 200, "报告就位后同一结论应被接受");
+  assert.equal(withReport.status, 200, "活跃审查会话 + 非空报告的结论应被接受");
   const evidenceRound = (await db.select().from(freeReviewRounds)
     .where(eq(freeReviewRounds.id, "evidence-review-round-1"))).at(0);
   assert.equal(evidenceRound?.conclusion, "verified");
   await db.update(freeReviewRuns).set({ status: "passed", finishedAt: new Date().toISOString() })
     .where(eq(freeReviewRuns.id, "evidence-review"));
-  
+  await db.update(sessions).set({ endedAt: new Date().toISOString() })
+    .where(eq(sessions.id, "evidence-reviewer-session"));
+
   // 证据路径安全：round 目录被换成 symlink 指到证据根之外时必须整体拒绝。
   const { freeReviewFile: safeFreeReviewFile } = await import("../src/free-review-files.js");
   const outside = join(root, "outside-evidence");
@@ -132,7 +145,12 @@ try {
   assert.equal(safeFreeReviewFile("free-task", "evil-run", 1, "secret.txt"), null, "symlink 祖先必须被拒绝");
   const evilFetch = await api.request("/tasks/free-task/free-workflow/review-file?run=evil-run&round=1&name=secret.txt");
   assert.equal(evilFetch.status, 404, "review-file 接口不得跟随 symlink 祖先读到证据根之外");
-  
+  // 硬链接 lstat 探测不出来：同 inode 的外部文件链接进证据目录也必须被拒（nlink>1）。
+  const hardParent = join(root, "runs", "free-task", "free-review", "hard-run", "round-1");
+  mkdirSync(hardParent, { recursive: true });
+  linkSync(join(outside, "secret.txt"), join(hardParent, "report.md"));
+  assert.equal(safeFreeReviewFile("free-task", "hard-run", 1, "report.md"), null, "硬链接证据文件必须被拒绝");
+
   // 部分成功重试：首次合并的 base 不能被 already_merged 的同值区间覆盖。
   await createTasks([{
     id: "free-retry-task", projectId: "p-git", groupId: null, parentId: null,
@@ -154,13 +172,44 @@ try {
   const afterFirstRetry = (await db.select().from(tasks).where(eq(tasks.id, "free-retry-task"))).at(0);
   assert.equal(afterFirstRetry?.stage, "merged", "合并成功但清理失败应停在 merged");
   assert.equal(afterFirstRetry?.acceptedBaseCommit, retryBase, "首次合并应记录真实 base");
+  const firstMergeCommit = afterFirstRetry?.acceptedMergeCommit;
   rmSync(join(retryWorktree.path, "blocking.tmp"));
+  // 重试前制造两种漂移：main 被无关提交推进 + 项目 checkout 切到别的分支。
+  // 一次验收生命周期内 target/base/merge 都必须冻结在首次值，不能跟着世界漂。
+  writeFileSync(join(repo, "unrelated.txt"), "unrelated\n");
+  git(repo, "add", "unrelated.txt");
+  git(repo, "commit", "-m", "unrelated advance");
+  git(repo, "checkout", "-b", "release");
   const retrySecond = await acceptTask("free-retry-task");
   assert.equal(retrySecond.accepted, true, "清障后重试应完成验收");
+  git(repo, "checkout", "main");
   const afterSecondRetry = (await db.select().from(tasks).where(eq(tasks.id, "free-retry-task"))).at(0);
+  assert.equal(afterSecondRetry?.acceptedTargetBranch, "main", "重试不得跟着项目 checkout 换目标分支");
   assert.equal(afterSecondRetry?.acceptedBaseCommit, retryBase, "重试不得用 already_merged 的同值区间覆盖首次 base");
+  assert.equal(afterSecondRetry?.acceptedMergeCommit, firstMergeCommit, "重试不得把 merge 端覆盖成含无关提交的新 tip");
   assert.notEqual(afterSecondRetry?.acceptedBaseCommit, afterSecondRetry?.acceptedMergeCommit, "合并区间不能塌缩成空区间");
-  
+
+  // reopen = 新验收生命周期：摘牌后再验收，快照三列必须整体换成第二版的值。
+  const { reopenAcceptedStage } = await import("../src/task-stage.js");
+  assert.equal(await reopenAcceptedStage("free-retry-task"), "accepted");
+  const secondWorktree = await prepareWorktree(repo, "free-retry-task", "main");
+  writeFileSync(join(secondWorktree.path, "retry2.txt"), "second life\n");
+  git(secondWorktree.path, "add", "retry2.txt");
+  git(secondWorktree.path, "commit", "-m", "second life result");
+  const secondBase = git(repo, "rev-parse", "main");
+  assert.notEqual(secondBase, retryBase, "第二个生命周期的 base 应该已经不同");
+  const secondAccept = await acceptTask("free-retry-task");
+  assert.equal(secondAccept.accepted, true, "reopen 后的第二次验收应成功");
+  const afterReopenAccept = (await db.select().from(tasks).where(eq(tasks.id, "free-retry-task"))).at(0);
+  assert.equal(afterReopenAccept?.acceptedBaseCommit, secondBase, "新生命周期不得沿用上一版的 base");
+
+  // 归档 = 冻结：验收后端必须拒绝归档任务。
+  await db.update(tasks).set({ archived: true }).where(eq(tasks.id, "free-turn-window-task"));
+  const archivedAccept = await acceptTask("free-turn-window-task");
+  assert.equal(archivedAccept.accepted, false, "归档任务不得验收");
+  if (!archivedAccept.accepted) assert.equal(archivedAccept.reason, "task_archived");
+  await db.update(tasks).set({ archived: false }).where(eq(tasks.id, "free-turn-window-task"));
+
   // 迁移语义：repairing 回填自动续轮预约；superseded 打上「已过期」哨兵锚点；
   // 已验收自由任务的遗留预约被注销。
   await createTasks([{
@@ -224,7 +273,73 @@ try {
     .where(eq(freeWorkflowStates.taskId, "free-legacy-superseded"))).at(0);
   assert.equal(acceptedLegacyReservation?.reviewArmed, false, "已验收自由任务的遗留预约必须被迁移注销");
 
-  console.log("✓ turn 锁窗口拦验收与派审；结论必须携报告；symlink 祖先被拒；重试不覆盖合并快照；旧状态迁移保语义");
+  // 删除 reviewer profile：手动预约取消，但 runId 续轮预约的配置冻结在 run 快照，必须保留。
+  const disposable = await api.request("/reviewer-profiles", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ name: "Disposable auto", agentType: "codex", executorId: "reviewer-executor", model: null, reasoningEffort: "high" }),
+  });
+  const disposableReviewer = await disposable.json() as { id: string };
+  await db.update(freeWorkflowStates).set({
+    selectedReviewerId: disposableReviewer.id, reviewArmed: true, reviewRunId: "legacy-repairing",
+    updatedAt: new Date().toISOString(),
+  }).where(eq(freeWorkflowStates.taskId, "free-legacy-task"));
+  const deletedAuto = await api.request(`/reviewer-profiles/${disposableReviewer.id}`, { method: "DELETE" });
+  assert.equal(deletedAuto.status, 200);
+  const autoAfterDelete = (await db.select().from(freeWorkflowStates)
+    .where(eq(freeWorkflowStates.taskId, "free-legacy-task"))).at(0);
+  assert.equal(autoAfterDelete?.reviewArmed, true, "删除 profile 不得取消自动续轮预约（配置冻结在 run 快照）");
+  assert.equal(autoAfterDelete?.reviewRunId, "legacy-repairing");
+  assert.equal(autoAfterDelete?.selectedReviewerId, null, "悬空的 profile 引用应被清掉");
+
+  // 启动对账：reviewing run 没有任何未结束的 reviewer 会话（死在投递链上）→ failed + 撤预约。
+  const { reconcileFreeReviews } = await import("../src/free-workflow.js");
+  const orphanAt = new Date().toISOString();
+  await db.insert(freeReviewRuns).values({
+    id: "orphan-reviewing", taskId: "free-legacy-task", reviewerId: null, reviewerName: "Codex logic",
+    agentType: "codex", executorId: "reviewer-executor", model: "gpt-review", reasoningEffort: "high",
+    checkMode: "logic", retryLimit: 1, currentRound: 1, status: "reviewing",
+    createdAt: orphanAt, updatedAt: orphanAt, finishedAt: null,
+  });
+  await db.insert(freeReviewRounds).values({
+    id: "orphan-reviewing-round-1", runId: "orphan-reviewing", round: 1, status: "reviewing",
+    conclusion: null, startedAt: orphanAt, endedAt: null,
+  });
+  await reconcileFreeReviews();
+  const orphanAfter = (await db.select().from(freeReviewRuns).where(eq(freeReviewRuns.id, "orphan-reviewing"))).at(0);
+  assert.equal(orphanAfter?.status, "failed", "重启后无 reviewer 会话的 reviewing run 必须被收拾成 failed");
+  const orphanReservation = (await db.select().from(freeWorkflowStates)
+    .where(eq(freeWorkflowStates.taskId, "free-legacy-task"))).at(0);
+  assert.equal(orphanReservation?.reviewArmed, false, "对账时同任务的预约应一并注销，避免反复撞失败链");
+
+  // 意见过期后不得按旧报告修复：锚点 ≠ 当前工作区 HEAD → 409，指向「审查新改动」。
+  await createTasks([{
+    id: "free-stale-task", projectId: "p-git", groupId: null, parentId: null,
+    title: "free stale repair", body: "test", mode: "single", status: "done",
+    labels: "[]", dependsOn: "[]", resumeDependsOn: "[]", agentType: "codex",
+    executorId: "reviewer-executor", model: null, reasoningEffort: null, autoTitle: false,
+    duet: null, team: null, reportBack: false, scheduleId: null,
+    createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    useWorktree: false, worktreeBase: null, originTaskId: null, workflowMode: "free",
+  }]);
+  const staleAt = new Date().toISOString();
+  await db.insert(freeReviewRuns).values({
+    id: "stale-review", taskId: "free-stale-task", reviewerId: null, reviewerName: "Codex logic",
+    agentType: "codex", executorId: "reviewer-executor", model: "gpt-review", reasoningEffort: "high",
+    checkMode: "logic", retryLimit: 0, currentRound: 1, status: "stopped",
+    createdAt: staleAt, updatedAt: staleAt, finishedAt: staleAt,
+  });
+  await db.insert(freeReviewRounds).values({
+    id: "stale-review-round-1", runId: "stale-review", round: 1, status: "failed",
+    conclusion: "verify_failed", reviewedCommit: "0000000000000000000000000000000000000000",
+    startedAt: staleAt, endedAt: staleAt,
+  });
+  const staleDir = join(root, "runs", "free-stale-task", "free-review", "stale-review", "round-1");
+  mkdirSync(staleDir, { recursive: true });
+  writeFileSync(join(staleDir, "report.md"), "# 意见\n\n针对旧代码。\n");
+  const staleRepair = await api.request("/tasks/free-stale-task/free-workflow/review/repair", { method: "POST" });
+  assert.equal(staleRepair.status, 409, "结论过期（锚点≠HEAD）时不得按旧意见发起修复");
+
+  console.log("✓ turn 锁窗口拦验收与派审；结论必须携报告且出自活跃审查会话；symlink/硬链接被拒；验收快照按生命周期冻结；归档只读；旧状态迁移保语义；重启对账收拾孤儿审查；过期意见不可修复");
 } finally {
   rmSync(root, { recursive: true, force: true });
 }

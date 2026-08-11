@@ -1,11 +1,11 @@
-import { eq, or } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import type { Hono } from "hono";
 import { acceptPlan, anchorAt, hasAcceptStation, isFinalHumanGate, nextAnchor, segmentAfter } from "@harness/shared/workflow-policy";
 import type { AcceptBy } from "@harness/shared/workflow-policy";
 import { ACCEPT_CLEAN_LABELS, ACCEPT_STRATEGY_LABELS, STEP_LABELS } from "@harness/shared/workflow";
 import { db } from "./db/index.js";
 import { projects, tasks } from "./db/schema.js";
-import { handOffConflict, type ConflictHandoff } from "./accept-conflict.js";
+import { handOffConflict } from "./accept-conflict.js";
 import { resolveTaskMergeTarget } from "./git.js";
 import { cleanupAcceptedTask, cleanupPlanFor, mergeTaskBranch } from "./git-accept.js";
 import { hasActiveFreeReview } from "./free-workflow.js";
@@ -17,9 +17,9 @@ import { publishTaskUpdated } from "./task-store.js";
 import { stopPreviewAtAccept } from "./preview.js";
 import { IS_PREVIEW_INSTANCE, previewRefusal } from "./preview-instance.js";
 import { withRepoLock } from "./repo-lock.js";
-import { isTurnClaimed } from "./runs.js";
 import { setTaskStage, clearTaskStage } from "./task-stage.js";
 import { acceptSharedTeamWorkers, sharedWorkerAcceptanceMessage, type SharedWorkerAcceptance } from "./task-accept-shared-workers.js";
+import { acceptanceGuard, type AcceptFailure, type AcceptWarning } from "./task-accept-guard.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { now } from "./util.js";
 import type { WorkflowAdvanceOptions } from "./workflow-advance.js";
@@ -58,38 +58,6 @@ type AcceptTail = {
   reason?: string;
 };
 
-type AcceptWarning = {
-  reason: "temporary_cleanup_failed";
-  message: string;
-  worktreePath: string;
-};
-
-type InFlightTask = {
-  id: string;
-  title: string;
-  status: string;
-  role: "task" | "shared_worker";
-};
-
-type AcceptFailure = {
-  accepted: false;
-  httpStatus: 404 | 409;
-  taskId: string;
-  reason: string;
-  error: string;
-  status?: string;
-  sourceBranch?: string;
-  targetBranch?: string | null;
-  conflictFiles?: string[];
-  dirtyFiles?: string[];
-  targetPath?: string;
-  worktreePath?: string;
-  /** 冲突已交给来源任务的 agent 去解(只在 merge_conflict 时出现) */
-  conflictHandoff?: ConflictHandoff;
-  phase?: "initial" | "before_accept" | "before_merge" | "before_cleanup";
-  inFlightTasks?: InFlightTask[];
-  warnings?: AcceptWarning[];
-};
 
 export type AcceptTaskResult = AcceptSuccess | AcceptFailure;
 
@@ -126,67 +94,6 @@ async function finalizeAcceptance(
   return sharedWorkers;
 }
 
-async function acceptanceState(taskId: string): Promise<{
-  task: typeof tasks.$inferSelect | null;
-  inFlightTasks: InFlightTask[];
-}> {
-  const related = await db
-    .select()
-    .from(tasks)
-    .where(or(eq(tasks.id, taskId), eq(tasks.parentId, taskId)));
-  const task = related.find((row) => row.id === taskId) ?? null;
-  if (!task) return { task: null, inFlightTasks: [] };
-
-  // DB status 之外还要看 turn 锁：续聊从 claimTurn 到写 running 之间有真实窗口，
-  // 只看 status 会在 agent 已开跑时合并并删掉它正在用的 worktree（审查实测复现）。
-  const inFlight = (row: typeof tasks.$inferSelect) =>
-    row.status === "running" || row.status === "queued" || isTurnClaimed(row.id);
-  const inFlightTasks: InFlightTask[] = [];
-  if (inFlight(task)) {
-    inFlightTasks.push({ id: task.id, title: task.title, status: task.status, role: "task" });
-  }
-  if (task.mode === "team") {
-    const workers = related.filter((row) => row.parentId === task.id);
-    for (const worker of workers) {
-      if (!worker.useWorktree && inFlight(worker)) {
-        inFlightTasks.push({ id: worker.id, title: worker.title, status: worker.status, role: "shared_worker" });
-      }
-    }
-  }
-  return { task, inFlightTasks };
-}
-
-async function acceptanceGuard(
-  taskId: string,
-  phase: AcceptFailure["phase"],
-): Promise<{ task: typeof tasks.$inferSelect | null; failure: AcceptFailure | null }> {
-  const state = await acceptanceState(taskId);
-  if (!state.task) {
-    return {
-      task: null,
-      failure: { accepted: false, httpStatus: 404, taskId, reason: "not_found", error: "not found", phase },
-    };
-  }
-  if (state.inFlightTasks.length === 0) return { task: state.task, failure: null };
-
-  const sharedWorkers = state.inFlightTasks.filter((item) => item.role === "shared_worker");
-  const listed = state.inFlightTasks.map((item) => `${item.title}（${item.id}，${item.status}）`).join("、");
-  return {
-    task: state.task,
-    failure: {
-      accepted: false,
-      httpStatus: 409,
-      taskId,
-      reason: sharedWorkers.length > 0 ? "shared_team_workers_in_flight" : "task_in_flight",
-      error: sharedWorkers.length > 0
-        ? `共享团队 worktree 仍被 running/queued 执行者使用，必须等它们结束后再验收：${listed}`
-        : `任务正在 running/queued，必须等当前执行结束后再验收：${listed}`,
-      status: state.task.status,
-      phase,
-      inFlightTasks: state.inFlightTasks,
-    },
-  };
-}
 
 async function acceptWithoutCleanup(
   task: typeof tasks.$inferSelect,
@@ -209,18 +116,34 @@ async function acceptTaskUnlocked(taskId: string, by: AcceptBy): Promise<AcceptT
   if (!requestedTask) {
     return { accepted: false, httpStatus: 404, taskId, reason: "not_found", error: "not found", phase: "initial" };
   }
+  // Archived = frozen/read-only（task-routes 的约定）：验收会合并、清理、改 stage，
+  // 全是写操作，归档任务一律拒——run/reply/review/repair/preview 的门禁都这么做。
+  if (requestedTask.archived) {
+    return {
+      accepted: false,
+      httpStatus: 409,
+      taskId,
+      reason: "task_archived",
+      error: "任务已归档（只读）；先取消归档再验收",
+      status: requestedTask.status,
+      phase: "initial",
+    };
+  }
+  // 自由任务在任何**终态**都可验收：done 是正常路径；failed/canceled 是「修复失败/被
+  // 手停后我接受上一版直接合并」——轮数用尽的时间线明确承诺过「由你决定验收」，只放行
+  // done 会让那句话在修复失败分支变成假承诺（验收页按钮可见却 409）。
   if (
     requestedTask.workflowMode === "free"
     && requestedTask.stage !== "accepted"
     && requestedTask.stage !== "merged"
-    && requestedTask.status !== "done"
+    && !["done", "failed", "canceled"].includes(requestedTask.status)
   ) {
     return {
       accepted: false,
       httpStatus: 409,
       taskId,
       reason: "free_workflow_not_ready_for_acceptance",
-      error: "自由工作流尚未完成；任务完成后再进入验收页处理",
+      error: "自由工作流尚未到可验收的状态；任务结束后再进入验收页处理",
       status: requestedTask.status,
       phase: "initial",
     };
@@ -361,7 +284,12 @@ async function acceptTaskUnlocked(taskId: string, by: AcceptBy): Promise<AcceptT
     await appendTaskTimeline(taskId, `验收暂缓：${mergeGuard.failure.error}`);
     return mergeGuard.failure;
   }
-  const merge = await mergeTaskBranch(project.repoPath, taskId, task.worktreeBase, plan.merge);
+  // 一次验收生命周期内目标分支必须冻结：合并成功、清理失败停在 merged 后重试时，
+  // 用 worktreeBase=null 动态解析会跟着项目当前 checkout 漂移——把同一任务再合进
+  // 另一条分支（审查实测复现）。重试一律回到首次记录的目标。
+  const retrying = task.stage === "merged";
+  const frozenTarget = retrying && task.acceptedTargetBranch ? task.acceptedTargetBranch : task.worktreeBase;
+  const merge = await mergeTaskBranch(project.repoPath, taskId, frozenTarget, plan.merge);
 
   // Retry after a previous partial success: stage=merged plus an already-removed
   // source branch means `git branch -d` did its job; finish the stage transition.
@@ -417,11 +345,18 @@ async function acceptTaskUnlocked(taskId: string, by: AcceptBy): Promise<AcceptT
   if (!tagged) await setTaskStage(taskId, "merged");
   // 结构化落账：目标分支 + 合并前后它的 commit。时间线文本反解不可靠，合并后基线
   // 审查（对 base@before..after 派新任务）只认这三列。
-  // base 只写一次：cleanup 失败停在 merged 后重试会拿到 already_merged（before==after），
-  // 无条件覆盖会把第一次真实的合并区间抹成空区间（审查实测复现），所以已有值时不动。
-  await db.update(tasks).set({
-    acceptedTargetBranch: merge.targetBranch,
+  // 快照按**一次验收生命周期**冻结：全新验收（stage 不是 merged）三列整体覆盖——
+  // reopen 后的第二次验收是新生命周期，不能沿用上一版的 base；清理失败后的重试
+  // （stage=merged）三列保持首次值——already_merged 的同值区间、重试期间目标分支被
+  // 别人推进产生的新 tip，都不能污染首次真实的合并区间（审查实测复现过两种覆盖）。
+  await db.update(tasks).set(retrying ? {
+    acceptedTargetBranch: task.acceptedTargetBranch ?? merge.targetBranch,
     acceptedBaseCommit: task.acceptedBaseCommit ?? merge.beforeCommit ?? null,
+    acceptedMergeCommit: task.acceptedMergeCommit ?? merge.afterCommit ?? null,
+    updatedAt: now(),
+  } : {
+    acceptedTargetBranch: merge.targetBranch,
+    acceptedBaseCommit: merge.beforeCommit ?? null,
     acceptedMergeCommit: merge.afterCommit ?? null,
     updatedAt: now(),
   }).where(eq(tasks.id, taskId));

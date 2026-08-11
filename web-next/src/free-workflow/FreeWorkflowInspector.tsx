@@ -126,7 +126,7 @@ export function FreeWorkflowInspector({
   const view = freeReviewView(state, task);
   const { latestRun, reviewing, stoppedRun, taskBusy, reservationArmed, repairing, stale } = view;
   const taskReady = task.status !== "backlog";
-  const accepted = task.stage === "accepted" || task.stage === "merged";
+  const locked = task.stage === "accepted" || task.stage === "merged" || !!task.archived;
   const reservationMode = taskBusy || reservationArmed;
   const reviewActionLabel = reviewing
     ? "审查进行中"
@@ -142,13 +142,15 @@ export function FreeWorkflowInspector({
     ? `第 ${reviewing.currentRound} 轮审查中`
     : repairing
       ? `第 ${latestRun?.currentRound ?? 1} 轮未通过 · 任务修改中`
-      : stoppedRun
-        ? `第 ${stoppedRun.currentRound} 轮未通过${view.autoRereview ? " · 修复后自动复审" : exhausted ? " · 自动复审已停止" : ""}`
-        : stale
-          ? "已通过，但之后代码有变化 · 结论可能过期"
-          : view.freshness === "unknown" && latestRun?.status === "passed"
-            ? "已通过 · 无法确认结论是否仍对应当前代码"
-            : latestReview ? `最近一轮${reviewRoundLabel(latestReview.round)}` : "尚未派审";
+      : stoppedRun && stale
+        ? `第 ${stoppedRun.currentRound} 轮未通过 · 之后代码有变化，建议审查新改动`
+        : stoppedRun
+          ? `第 ${stoppedRun.currentRound} 轮未通过${view.autoRereview ? " · 修复后自动复审" : exhausted ? " · 自动复审已停止" : ""}`
+          : stale
+            ? "已通过，但之后代码有变化 · 结论可能过期"
+            : view.freshness === "unknown" && latestRun?.status === "passed"
+              ? "已通过 · 无法确认结论是否仍对应当前代码"
+              : latestReview ? `最近一轮${reviewRoundLabel(latestReview.round)}` : "尚未派审";
   const overviewStatus = repairing ? "repairing" : stale ? "stale" : null;
 
   if (free.loading && !free.state) return <div className="free-workflow-inspector is-loading"><SpinnerGap size={14} className="is-spinning" />正在生成实际工作流…</div>;
@@ -203,19 +205,19 @@ export function FreeWorkflowInspector({
             </header>
             <div className="review-inspector__actions">
               {repairing && <FreeReviewProgress kind={view.autoRereview ? "auto_rereview" : "task_running"} />}
-              {stoppedRun && !taskBusy && notify && (
+              {stoppedRun && !taskBusy && !stale && notify && (
                 <FreeReviewRepairButton
                   taskId={task.id}
                   run={stoppedRun}
                   className="is-repair"
-                  disabled={!taskReady || accepted}
+                  disabled={!taskReady || locked}
                   onChanged={free.setState}
                   notify={notify}
                 />
               )}
               <button
                 type="button"
-                disabled={!taskReady || accepted || !!reviewing || !notify}
+                disabled={!taskReady || locked || !!reviewing || !notify}
                 onClick={() => setReviewDialogOpen(true)}
               >
                 {reviewing ? <SpinnerGap size={13} className="is-spinning" /> : <MagnifyingGlass size={13} />}

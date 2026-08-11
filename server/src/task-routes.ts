@@ -13,6 +13,7 @@ import { detectTaskWorkspace, discardTaskWorkspace } from "./workspace-cleanup.j
 import { followUpsFor } from "./task-follow-up.js";
 import { advanceQueue, pauseGroup, runGroup } from "./scheduler.js";
 import { setTaskStatus } from "./status.js";
+import { isTurnClaimed } from "./runs.js";
 import { createTasks, enrichTasks, publishTaskUpdated } from "./task-store.js";
 import { attachmentsPrompt, id, now } from "./util.js";
 
@@ -344,6 +345,12 @@ api.get("/tasks/:id/workspace", async (c) => {
 api.delete("/tasks/:id", async (c) => {
   const tid = c.req.param("id");
   const existing = (await db.select().from(tasks).where(eq(tasks.id, tid))).at(0);
+  // 正在执行的任务不能整行删掉：进程还活着、turn 还占着，删行会让回合结算写向不存在的
+  // 任务（审查实测：claimTurn 到 status 落库的窗口里 DELETE 直接 200）。turn 锁一并看，
+  // 常驻调度台 idle 时不受影响（status 不匹配、turn 未占）。
+  if (existing && (existing.status === "running" || existing.status === "queued" || isTurnClaimed(tid))) {
+    return c.json({ error: "任务正在执行，请先停止再删除", status: existing.status }, 409);
+  }
   const project = existing
     ? (await db.select().from(projects).where(eq(projects.id, existing.projectId))).at(0)
     : undefined;

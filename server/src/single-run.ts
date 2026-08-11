@@ -32,14 +32,18 @@ async function setStatus(taskId: string, status: Parameters<typeof setTaskStatus
 // status 是 TaskStatus 而不是四个终态：**旁路回合（就地验证）结算时恢复的是进这一轮
 // 之前的原状态**，可能是 paused、backlog 一类非终态。收窄在这里没有任何保护作用，只会
 // 逼调用方 as 一下。
+// role 是**这一回合自己的身份**（session 行里那份），自由工作流结算靠它分流「审查回合
+// 的结算」与「普通回合的结算」——不能靠查库猜（并发插入的 reviewing run 会把普通回合
+// 冒充成审查回合，审查实测复现）。
 export async function afterSettlement(
   taskId: string,
   status: TaskStatus,
   confirmedDone: boolean,
   turnOk = true,
+  role: SessionRole = "single",
 ) {
   try {
-    if (await handleFreeWorkflowSettlement(taskId, status, confirmedDone, turnOk)) return;
+    if (await handleFreeWorkflowSettlement(taskId, status, confirmedDone, turnOk, role)) return;
     await handleTaskSettlement(taskId, status, confirmedDone, turnOk);
   } catch (error) {
     // Review orchestration is a post-settlement side effect. A failure here must
@@ -355,7 +359,7 @@ export async function consumeSingleRun(a: {
   await reconcileTurnBaseline(taskId, settled.confirmedDone);
   // turnOk = 这一回合本身干净收尾了(没被停、退出码 0)。跟落位状态不是一回事:旁路
   // 回合(就地验证)的落位是任务原来的终态,只有它说得清这一轮跑成没跑成。
-  await afterSettlement(taskId, settled.status, settled.confirmedDone, !stopped && exitStatus === 0);
+  await afterSettlement(taskId, settled.status, settled.confirmedDone, !stopped && exitStatus === 0, role);
   if (settled.note) {
     // 诊断正文留在 .md 原始产物里；trace 负责刷新后的折叠块，SSE 负责实时显示。
     out.write(`\n> ${settled.note}\n`);

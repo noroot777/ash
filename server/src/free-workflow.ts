@@ -1,13 +1,14 @@
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { extname, join } from "node:path";
 import type {
   AgentType,
   FreeReviewCheckMode,
   FreeReviewDispatchInput,
+  SessionRole,
   TaskStatus,
 } from "@harness/shared";
 import { FREE_REVIEW_CHECK_MODES } from "@harness/shared/free-workflow";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, isNull } from "drizzle-orm";
 import type { Hono } from "hono";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
@@ -17,17 +18,19 @@ import {
   freeWorkflowStates,
   projects,
   reviewerProfiles,
+  sessions,
   tasks,
 } from "./db/schema.js";
-import { startReservedFreeReview } from "./free-review-reservations.js";
+import { disarmFreeReviewReservation, startReservedFreeReview } from "./free-review-reservations.js";
 import { recordFreePreviewEvent } from "./free-workflow-events.js";
 import { releaseFreeWorkflowAction, tryAcquireFreeWorkflowAction } from "./free-workflow-lock.js";
 import {
   freeReviewEvidenceDir,
   freeReviewFile,
   freeReviewReportPath,
+  readFreeReviewReport,
 } from "./free-review-files.js";
-import { freeWorkflowState, type FreeWorkflowApiState } from "./free-workflow-state.js";
+import { freeWorkflowState, workspaceStateOf, type FreeWorkflowApiState } from "./free-workflow-state.js";
 import { continueWhenIdle, isTurnClaimed, whenTurnIdle } from "./runs.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { taskWorkspace } from "./task-workspace.js";
@@ -235,6 +238,25 @@ async function failReviewStart(run: ReviewRunRow, message: string): Promise<void
   bus.publish({ type: "task.review", taskId: run.taskId });
 }
 
+/**
+ * 启动对账（排在 reattach 之后）：`reviewing` 是持久状态，真正的审查会话却在内存投递
+ * 链上——进程死在「run 已落 reviewing、reviewer 会话还没建」的当口，重启后没有任何
+ * 会话可接回、也没有残留可收拾，run 会永远挂在 reviewing，验收与再审持续 409。
+ * 判据：reviewing run 对应的任务没有**未结束的 reviewer 会话**（reattach 接回的会话
+ * ended_at 为空）→ 这条审查已经丢了，落 failed 并留痕，用户可再派一轮。
+ */
+export async function reconcileFreeReviews(): Promise<void> {
+  const stuck = await db.select().from(freeReviewRuns).where(eq(freeReviewRuns.status, "reviewing"));
+  for (const run of stuck) {
+    const live = (await db.select({ id: sessions.id }).from(sessions)
+      .where(and(eq(sessions.taskId, run.taskId), eq(sessions.role, "reviewer"), isNull(sessions.endedAt)))
+      .limit(1)).at(0);
+    if (live) continue; // reattach 已接回，让它自己跑完并正常结算
+    await failReviewStart(run, "服务重启时审查回合尚未启动或已丢失；可再派一轮审查");
+    await disarmFreeReviewReservation(run.taskId);
+  }
+}
+
 async function launchReviewRound(task: TaskRow, run: ReviewRunRow): Promise<void> {
   const project = (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0);
   // 锚定本轮结论的基准：审查启动时工作区的 HEAD。之后代码变没变、结论新不新鲜，
@@ -286,19 +308,28 @@ async function nextRound(task: TaskRow, run: ReviewRunRow): Promise<void> {
 export async function reportFreeReviewConclusion(
   taskId: string,
   stage: string,
+  opts: { bySessionRecovery?: boolean } = {},
 ): Promise<{ runId: string; round: number } | null> {
   const run = await reviewingRun(taskId);
   if (!run) return null;
   if (stage !== "verified" && stage !== "verify_failed") {
     throw new Error("自由工作流审查回合只能上报 verified 或 verify_failed");
   }
-  // report.md 是唯一必交证据——只写在 prompt 里挡不住，结论入口硬校验：没有非空报告
-  // 就拒收，审查者补写后重调即可。路径走 freeReviewFile 的安全解析（拒 symlink 祖先）。
-  const reportFile = freeReviewFile(taskId, run.id, run.currentRound, "report.md");
-  let reportBytes = 0;
-  try { reportBytes = reportFile ? statSync(reportFile).size : 0; } catch { reportBytes = 0; }
-  if (reportBytes === 0) {
-    throw new Error(`审查结论必须先落报告：请把报告写到 ${freeReviewReportPath(taskId, run.id, run.currentRound)} 再上报结论`);
+  // 结论必须出自**活跃的审查回合**：此刻这个任务正在跑的会话得是 reviewer——旧 reviewer
+  // 的迟到重放、无关会话的误投都拒收。MCP 补捞豁免（bySessionRecovery）：它发生在回合
+  // 收尾、session 已标结束之后，但调用出处已从该回合自己的调用记录里验证过。
+  if (!opts.bySessionRecovery) {
+    const live = (await db.select({ role: sessions.role }).from(sessions)
+      .where(and(eq(sessions.taskId, taskId), isNull(sessions.endedAt)))
+      .orderBy(desc(sessions.startedAt)).limit(1)).at(0);
+    if (live?.role !== "reviewer") {
+      throw new Error("当前没有正在进行的审查回合，结论已拒收（迟到或误投的调用不落账）");
+    }
+  }
+  // report.md 是唯一必交证据——只写在 prompt 里挡不住，结论入口硬校验：读取走安全解析
+  // （拒 symlink 祖先），且正文 trim 后非空（两个空白字节的「报告」不算报告）。
+  if (!readFreeReviewReport(taskId, run.id, run.currentRound).trim()) {
+    throw new Error(`审查结论必须先落报告：请把非空报告写到 ${freeReviewReportPath(taskId, run.id, run.currentRound)} 再上报结论`);
   }
   await db.update(freeReviewRounds).set({ conclusion: stage })
     .where(and(eq(freeReviewRounds.runId, run.id), eq(freeReviewRounds.round, run.currentRound)));
@@ -306,23 +337,28 @@ export async function reportFreeReviewConclusion(
   return { runId: run.id, round: run.currentRound };
 }
 
-// 自由工作流的回合结算只分两种回合：
-// - 审查旁路回合（run 处于 reviewing）：按 conclusion 落 round/run，未通过且还有轮数时
+// 自由工作流的回合结算只分两种回合，**按回合自己的 role 分流**，不按「库里有没有
+// reviewing run」猜——派审请求可能在普通回合 claimTurn 之后才插入 reviewing run
+// （TOCTOU），靠查库会把普通回合冒充成审查回合、把没有结论的审查链错杀成 failed：
+// - role=reviewer（审查旁路回合）：按 conclusion 落 round/run，未通过且还有轮数时
 //   发修复消息并挂**自动续轮预约**（runId）。
-// - 普通任务回合（首次完成 / 修复 / 用户续聊，不作区分）：confirmedDone 且落 done 时
-//   消费预约槽——runId 在就续那条链的下一轮，否则按用户预约开新链。
-// 没有任何「修复中/结论过期」状态要翻转：那些全是推导出来的展示。
+// - 其它 role（首次完成 / 修复 / 用户续聊）：confirmedDone 且落 done 时消费预约槽；
+//   若此刻存在并发插入的 reviewing run，不碰它——审查消息还在排队，回合结束后照常开跑。
 export async function handleFreeWorkflowSettlement(
   taskId: string,
   status: TaskStatus,
   confirmedDone: boolean,
   turnOk: boolean,
+  role: SessionRole = "single",
 ): Promise<boolean> {
   const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!task || task.workflowMode !== "free") return false;
   const run = await reviewingRun(taskId);
-  if (!run) {
+  if (role !== "reviewer") {
     if (task.question || task.resumePrompt) return true;
+    // 存在 reviewing run 说明有一条审查在排队等这个回合结束（并发派审）：不结算它、
+    // 也不消费预约（审查在跑时消费预约会双开）。
+    if (run) return true;
     if (confirmedDone && status === "done") {
       const reservation = (await db.select({
         armed: freeWorkflowStates.reviewArmed, reviewerId: freeWorkflowStates.selectedReviewerId,
@@ -333,7 +369,10 @@ export async function handleFreeWorkflowSettlement(
         continueRun: async (runId) => {
           const target = (await db.select().from(freeReviewRuns).where(eq(freeReviewRuns.id, runId))).at(0);
           if (!target || target.status !== "stopped") {
-            throw new Error("预约续审的审查链已不在等待状态");
+            // 链已不在等待状态（比如部分写入后被判 failed）：预约必须一并注销，
+            // 否则之后每次确认完成都会重复撞同一个错误。
+            await disarmFreeReviewReservation(taskId);
+            throw new Error("预约续审的审查链已不在等待状态，预约已取消");
           }
           await nextRound(task, target);
         },
@@ -349,6 +388,7 @@ export async function handleFreeWorkflowSettlement(
   }
 
   // ── 审查旁路回合结算 ──
+  if (!run) return true; // 审查回合结算时 run 已被外力改掉：没有可结算的对象
   if (task.question || task.resumePrompt) return true;
   const round = (await db.select().from(freeReviewRounds)
     .where(and(eq(freeReviewRounds.runId, run.id), eq(freeReviewRounds.round, run.currentRound)))).at(0);
@@ -482,8 +522,20 @@ async function startManualFreeReviewRepair(taskId: string): Promise<FreeWorkflow
     if (await reviewingRun(taskId)) throw new Error("审查回合正在进行，结束后再发起修复");
     const run = await latestRun(taskId);
     if (!run || run.status !== "stopped") throw new Error("最近一轮审查没有停在未通过状态");
-    if (!existsSync(freeReviewReportPath(taskId, run.id, run.currentRound))) {
-      throw new Error("最近一轮审查报告不存在，无法按意见发起修复");
+    // 报告读取走安全解析（拒 symlink 祖先），且必须有非空正文——raw existsSync 会被
+    // 换成 symlink 的 round 目录骗过，把外部路径写进发给实现 agent 的提示。
+    if (!readFreeReviewReport(taskId, run.id, run.currentRound).trim()) {
+      throw new Error("最近一轮审查报告不存在或为空，无法按意见发起修复");
+    }
+    // 意见已过期就别再按它修：审查后代码已变（新提交或未提交改动），那份报告针对的
+    // 世界不存在了——正确动作是「审查新改动」。锚点缺失（老数据）不可知，放行。
+    const concluded = (await db.select().from(freeReviewRounds)
+      .where(and(eq(freeReviewRounds.runId, run.id), eq(freeReviewRounds.round, run.currentRound)))).at(0);
+    if (concluded?.reviewedCommit) {
+      const workspace = await workspaceStateOf(task);
+      if (workspace.head && (workspace.head !== concluded.reviewedCommit || workspace.dirty)) {
+        throw new Error("审查意见针对的代码已变化（新提交或未提交改动）；请再派一轮审查，而不是按旧意见修复");
+      }
     }
     await appendTaskTimeline(taskId, `已按自由工作流第 ${run.currentRound} 轮审查意见发起修复。`);
     bus.publish({ type: "task.review", taskId });
@@ -562,13 +614,15 @@ export function mountFreeWorkflowRoutes(api: Hono): void {
 
   api.post("/tasks/:id/free-workflow/review", async (c) => {
     try {
-      // turn 锁只拦**外部请求**：claimTurn 到 status 落 running 之间的窗口里，DB 看起来
-      // 空闲、实际回合已开跑，此时派审会把普通回合误判成审查回合。结算内部的预约派审
-      // 不走这里——那时回合正在收尾，审查消息经 whenTurnIdle 排队是安全的。
+      // 先取完 body 再查 turn：body 可以是慢流，先查后读会留 TOCTOU 窗口（读 body 期间
+      // 回合被 claim，检查已过期）。turn 锁只拦**外部请求**——结算内部的预约派审发生在
+      // 回合收尾期（turn 占着），那条路不走这里，审查消息经 whenTurnIdle 排队是安全的。
+      // 检查过后仍可能被并发 claim，兜底在结算按 role 分流：普通回合不会碰 reviewing run。
+      const input = await c.req.json<FreeReviewDispatchInput>();
       if (isTurnClaimed(c.req.param("id"))) {
         return c.json({ error: "任务回合正在进行（状态尚未落库），结束后再派审" }, 409);
       }
-      return c.json(await startFreeReview(c.req.param("id"), await c.req.json<FreeReviewDispatchInput>()), 201);
+      return c.json(await startFreeReview(c.req.param("id"), input), 201);
     } catch (error) {
       return c.json({ error: error instanceof Error ? error.message : String(error) }, 409);
     }

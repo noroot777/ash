@@ -124,6 +124,8 @@ export function AcceptanceControls({
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<AcceptTaskFailure | null>(null);
   const inFlight = task.status === "running" || task.status === "queued";
+  // Archived = frozen/read-only：后端验收/打回都会 409，按钮必须一致地禁掉，不给假按钮。
+  const archived = !!task.archived;
   // 停在中途那道关口时，这一按是「放行」不是「验收」：按钮、确认框、提示三处一起改口，
   // 只改一处就会出现「按钮写着验收通过、确认框说只是放行」的自相矛盾。
   const midGate = !isFinalHumanGate(task.workflow, task.workflowAt);
@@ -190,11 +192,11 @@ export function AcceptanceControls({
           <span><CheckCircle size={13} weight="fill" />验收完成</span>
         ) : (
           <>
-            <button type="button" className="is-primary" disabled={inFlight || busy || !!acceptanceBlock} onClick={() => setAction("accept")}>
+            <button type="button" className="is-primary" disabled={archived || inFlight || busy || !!acceptanceBlock} onClick={() => setAction("accept")}>
               {busy ? <SpinnerGap size={13} className="is-spinning" /> : <CheckCircle size={13} weight="fill" />}
-              {busy ? (midGate ? "放行中" : "验收中") : inFlight ? "执行中" : acceptanceBlock ?? (midGate ? "放行，继续下一站" : "验收通过")}
+              {busy ? (midGate ? "放行中" : "验收中") : archived ? "已归档（只读）" : inFlight ? "执行中" : acceptanceBlock ?? (midGate ? "放行，继续下一站" : "验收通过")}
             </button>
-            <button type="button" disabled={inFlight || busy} onClick={() => setAction("return")}><WarningCircle size={13} />打回修改</button>
+            <button type="button" disabled={archived || inFlight || busy} onClick={() => setAction("return")}><WarningCircle size={13} />打回修改</button>
           </>
         )}
       </div>
