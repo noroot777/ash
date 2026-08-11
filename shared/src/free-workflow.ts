@@ -90,6 +90,9 @@ export interface FreeWorkflowExecution {
 export interface FreeWorkflowState {
   taskId: string;
   selectedReviewerId: string | null;
+  /** 服务端生成快照的单调时间戳。前端只接受更新的快照——「响应到达顺序」不是版本，
+   *  早先生成、更晚到达的 mutation 响应不能盖掉后来 GET 拿到的新世界。 */
+  stateVersion: number;
   /** 当前任务工作区 HEAD；null = 工作区不存在（如已验收清理）或不是 git 目录。 */
   workspaceHead: string | null;
   /** 工作区是否有未提交改动；null = 取不到（按未知处理，不能当干净）。 */

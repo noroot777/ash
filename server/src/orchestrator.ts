@@ -27,7 +27,7 @@ import { peerNoticeFor } from "./peer-context.js";
 import { recordTurnBaseline } from "./turn-baseline.js";
 import { recordTurnStart } from "./turn-output.js";
 import { railStalledAtRun } from "./workflows.js";
-import { freeReviewReminder, isFreeReviewTurn } from "./free-workflow.js";
+import { freeReviewReminder, freeReviewResumeOptions } from "./free-workflow.js";
 import { withSkillInvocation } from "./skills.js";
 import { initialTaskObjective, invitedTaskBrief } from "./invited-task-brief.js";
 import { withGlobalBrowserPolicy } from "./browser-verification-policy.js";
@@ -347,13 +347,14 @@ export async function resumeOrRunTask(
 ): Promise<void> {
   const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!task || task.mode !== "single") return runTask(taskId); // duets/missing → unchanged path
-  // 检查点续跑：把 agent 写好的 resumePrompt 当作 user 消息丢回 continueTask，
-  // 跑同一会话同一目录；先清空字段避免回合内再次 settle 时又被认成 paused。
-  // 调度器会先把可启动任务标成 queued，因此这里不能只看 status === "paused"。
+  // 检查点续跑：resumePrompt 当 user 消息回灌同一会话，先清空避免再次 settle 时又认成
+  // paused（调度器会先标 queued，不能只看 paused）。reviewing run 挂着 = 中断的是审查
+  // 回合：续跑必须带回 reviewer 身份与配置，否则以 single 恢复实现会话，审查链收不了尾。
   if (task.resumePrompt) {
     const rp = task.resumePrompt;
+    const reviewerRoute = await freeReviewResumeOptions(taskId);
     await db.update(tasks).set({ resumePrompt: null, updatedAt: now() }).where(eq(tasks.id, taskId));
-    await continueTask(taskId, rp, { system: opts.reason ?? "run" });
+    await continueTask(taskId, rp, { system: opts.reason ?? "run", ...(reviewerRoute ?? {}) });
     return;
   }
   const agent = (task.agentType as AgentType) ?? "claude";
@@ -362,7 +363,8 @@ export async function resumeOrRunTask(
     .sort((a, b) => b.startedAt.localeCompare(a.startedAt))
     .at(0);
   if (prev?.cliSessionId) {
-    await continueTask(taskId, RESUME_PROMPT, { system: opts.reason ?? "run" });
+    const reviewerRoute = await freeReviewResumeOptions(taskId);
+    await continueTask(taskId, RESUME_PROMPT, { system: opts.reason ?? "run", ...(reviewerRoute ?? {}) });
     return;
   }
   return runTask(taskId); // no resumable session → fresh
@@ -439,9 +441,9 @@ export async function continueTask(
     return true;
   }
   // 抢不到 = 这个任务此刻正跑着别的回合,这一句话没送出去。调用方必须知道(见函数注释)。
-  if (!claimTurn(taskId)) return false;
-  const agentType = opts.agent ?? "claude"; // re-derived below once the task loads; kept for the catch handler
   const sessionRole = opts.sessionRole ?? "single";
+  if (!claimTurn(taskId, sessionRole)) return false;
+  const agentType = opts.agent ?? "claude"; // re-derived below once the task loads; kept for the catch handler
   let handle: RunHandle | undefined;
   try {
     const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
@@ -468,7 +470,10 @@ export async function continueTask(
     // **这一段必须排在所有可能抛错的解析之前**(执行器解析、工作目录解析都会抛:模型与
     // 思考强度不兼容、worktree 建不出来),catch 那边只认库里的 followUpFrom —— 落库晚
     // 一步,一个 done 的任务就会因为「验证没起来」被打成 failed。
-    const freeReviewTurn = await isFreeReviewTurn(taskId);
+    // 自由审查回合的身份**只认 opts 显式传递**（派审投递、/answer 路由、checkpoint 续跑
+    // 各自带上 sessionRole=reviewer），不查库猜——库里的 reviewing run 可能是并发派审刚
+    // 插入的，按它猜会把一个普通用户回合整套套上 reviewer 语义（审查实测）。
+    const freeReviewTurn = sessionRole === "reviewer";
     const sideTurn = !!opts.sideTurn || !!task.verifyRound || freeReviewTurn;
     const followUpFrom = sideTurn
       ? (task.status === "running" || task.status === "queued" ? null : task.status)

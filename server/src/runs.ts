@@ -103,13 +103,18 @@ export class CanceledRun extends Error {
 // 那一刻锁还锁着，此时对同一个任务调 continueTask 会被直接挡回、什么都不发生 ——
 // 就地验证轮正是这种情况。于是由 run loop 释放锁的同一处把队列排空，不靠
 // setTimeout 赌事件循环的先后。
-const turns = new Set<string>();
+const turns = new Map<string, string>();
 const afterTurn = new Map<string, Array<() => void>>();
 
-/** 抢占这个任务的回合；已经有人在跑就返回 false（调用方直接放弃这一次）。 */
-export function claimTurn(taskId: string): boolean {
+/**
+ * 抢占这个任务的回合；已经有人在跑就返回 false（调用方直接放弃这一次）。
+ * role 是这一回合的身份（"single" / "reviewer"…）——它是**运行时事实**，审查结论的
+ * 归属检查（report_stage）读它，而不是查 sessions 表猜（session 行的 endedAt 语义
+ * 既不代表进程活着、也不代表回合归属，审查实测两个方向都错过）。
+ */
+export function claimTurn(taskId: string, role = "single"): boolean {
   if (turns.has(taskId)) return false;
-  turns.add(taskId);
+  turns.set(taskId, role);
   return true;
 }
 
@@ -122,6 +127,11 @@ export function claimTurn(taskId: string): boolean {
  */
 export function isTurnClaimed(taskId: string): boolean {
   return turns.has(taskId);
+}
+
+/** 当前回合的身份；没有回合在跑返回 null。 */
+export function turnRole(taskId: string): string | null {
+  return turns.get(taskId) ?? null;
 }
 
 /** 回合结束：先放锁，再跑「等这一轮跑完」的回调（它们多半要立刻起下一轮）。 */

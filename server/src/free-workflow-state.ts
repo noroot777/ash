@@ -164,6 +164,9 @@ export async function freeWorkflowState(taskId: string): Promise<FreeWorkflowApi
   return {
     taskId,
     selectedReviewerId: state?.selectedReviewerId ?? null,
+    // 版本 = 快照生成时刻（同 ms 并发生成时内容也等价，后到者覆盖无害）。前端据此
+    // 拒收「更早生成、更晚到达」的快照——到达顺序不是版本。
+    stateVersion: Date.now(),
     workspaceHead: workspace.head,
     workspaceDirty: workspace.dirty,
     reviewReservation: {

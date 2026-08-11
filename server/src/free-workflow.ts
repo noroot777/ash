@@ -8,7 +8,7 @@ import type {
   TaskStatus,
 } from "@harness/shared";
 import { FREE_REVIEW_CHECK_MODES } from "@harness/shared/free-workflow";
-import { and, desc, eq, isNull } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import type { Hono } from "hono";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
@@ -18,7 +18,6 @@ import {
   freeWorkflowStates,
   projects,
   reviewerProfiles,
-  sessions,
   tasks,
 } from "./db/schema.js";
 import { disarmFreeReviewReservation, startReservedFreeReview } from "./free-review-reservations.js";
@@ -31,7 +30,7 @@ import {
   readFreeReviewReport,
 } from "./free-review-files.js";
 import { freeWorkflowState, workspaceStateOf, type FreeWorkflowApiState } from "./free-workflow-state.js";
-import { continueWhenIdle, isTurnClaimed, whenTurnIdle } from "./runs.js";
+import { continueWhenIdle, isTurnClaimed, turnRole, whenTurnIdle } from "./runs.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { taskWorkspace } from "./task-workspace.js";
 import { headCommit } from "./git.js";
@@ -81,10 +80,6 @@ function assertBeforeAcceptance(task: TaskRow): void {
   if (task.stage === "accepted" || task.stage === "merged") {
     throw new Error("任务已进入验收结果；如需继续修改，请先重新运行任务");
   }
-}
-
-export async function isFreeReviewTurn(taskId: string): Promise<boolean> {
-  return !!(await reviewingRun(taskId));
 }
 
 export async function freeReviewResumeOptions(taskId: string) {
@@ -239,19 +234,23 @@ async function failReviewStart(run: ReviewRunRow, message: string): Promise<void
 }
 
 /**
- * 启动对账（排在 reattach 之后）：`reviewing` 是持久状态，真正的审查会话却在内存投递
- * 链上——进程死在「run 已落 reviewing、reviewer 会话还没建」的当口，重启后没有任何
- * 会话可接回、也没有残留可收拾，run 会永远挂在 reviewing，验收与再审持续 409。
- * 判据：reviewing run 对应的任务没有**未结束的 reviewer 会话**（reattach 接回的会话
- * ended_at 为空）→ 这条审查已经丢了，落 failed 并留痕，用户可再派一轮。
+ * 启动对账（排在 reattach 与 reconcileInterrupted 之后）：`reviewing` 是持久状态，真正的
+ * 审查会话却在内存投递链上——进程死在「run 已落 reviewing、reviewer 回合还没起」的当口，
+ * 重启后 run 会永远挂在 reviewing，验收与再审持续 409。
+ * 判据用**任务的运行事实**，不用 sessions 表（session 行的 endedAt 既不代表进程活着、也
+ * 不代表回合归属：reviewer 正常提问后 session 已结束、进程死了行却可能留 null，两个方向
+ * 都会判错，审查实测复现）：
+ * - 任务 running/queued 或 turn 已被占 → reattach 接回的回合活着，让它自己结算；
+ * - 任务挂着 question / resumePrompt → 审查回合在等答复或续跑，是正常的等待态；
+ * - 其余 → 这条审查已经没有任何东西能把它跑完，落 failed 并撤预约，用户可再派一轮。
  */
 export async function reconcileFreeReviews(): Promise<void> {
   const stuck = await db.select().from(freeReviewRuns).where(eq(freeReviewRuns.status, "reviewing"));
   for (const run of stuck) {
-    const live = (await db.select({ id: sessions.id }).from(sessions)
-      .where(and(eq(sessions.taskId, run.taskId), eq(sessions.role, "reviewer"), isNull(sessions.endedAt)))
-      .limit(1)).at(0);
-    if (live) continue; // reattach 已接回，让它自己跑完并正常结算
+    const task = (await db.select().from(tasks).where(eq(tasks.id, run.taskId))).at(0);
+    if (!task) continue;
+    if (task.status === "running" || task.status === "queued" || isTurnClaimed(task.id)) continue;
+    if (task.question || task.resumePrompt) continue;
     await failReviewStart(run, "服务重启时审查回合尚未启动或已丢失；可再派一轮审查");
     await disarmFreeReviewReservation(run.taskId);
   }
@@ -315,16 +314,13 @@ export async function reportFreeReviewConclusion(
   if (stage !== "verified" && stage !== "verify_failed") {
     throw new Error("自由工作流审查回合只能上报 verified 或 verify_failed");
   }
-  // 结论必须出自**活跃的审查回合**：此刻这个任务正在跑的会话得是 reviewer——旧 reviewer
-  // 的迟到重放、无关会话的误投都拒收。MCP 补捞豁免（bySessionRecovery）：它发生在回合
-  // 收尾、session 已标结束之后，但调用出处已从该回合自己的调用记录里验证过。
-  if (!opts.bySessionRecovery) {
-    const live = (await db.select({ role: sessions.role }).from(sessions)
-      .where(and(eq(sessions.taskId, taskId), isNull(sessions.endedAt)))
-      .orderBy(desc(sessions.startedAt)).limit(1)).at(0);
-    if (live?.role !== "reviewer") {
-      throw new Error("当前没有正在进行的审查回合，结论已拒收（迟到或误投的调用不落账）");
-    }
+  // 结论必须出自**活跃的审查回合**：读 turn 的运行时身份（claimTurn 时由 opts 显式落下），
+  // 不查 sessions 表——session 行的 endedAt 既不代表进程活着、也不代表回合归属（reattach
+  // 收尾先写 endedAt 再结算，正是误判窗口）。迟到重放（审查回合已结束 → turn 已释放）和
+  // 普通回合的误投（turnRole=single）都拒。MCP 补捞豁免这一检查——它发生在回合收尾、
+  // turn 已释放之后，但补捞方已核对过调用出自 reviewer 会话自己的回合记录。
+  if (!opts.bySessionRecovery && turnRole(taskId) !== "reviewer") {
+    throw new Error("当前没有正在进行的审查回合，结论已拒收（迟到或误投的调用不落账）");
   }
   // report.md 是唯一必交证据——只写在 prompt 里挡不住，结论入口硬校验：读取走安全解析
   // （拒 symlink 祖先），且正文 trim 后非空（两个空白字节的「报告」不算报告）。
@@ -374,7 +370,14 @@ export async function handleFreeWorkflowSettlement(
             await disarmFreeReviewReservation(taskId);
             throw new Error("预约续审的审查链已不在等待状态，预约已取消");
           }
-          await nextRound(task, target);
+          try {
+            await nextRound(task, target);
+          } catch (error) {
+            // 续轮起不来（典型：崩溃残留的半个 round 造成唯一键冲突，run 已被判 failed）
+            // 同样是永久性失败——留着预约就是一条永远执行不了的幽灵预约。
+            await disarmFreeReviewReservation(taskId);
+            throw error;
+          }
         },
         startNew: (input) => startFreeReview(taskId, {
           reviewerId: input.reviewerId,
@@ -527,15 +530,20 @@ async function startManualFreeReviewRepair(taskId: string): Promise<FreeWorkflow
     if (!readFreeReviewReport(taskId, run.id, run.currentRound).trim()) {
       throw new Error("最近一轮审查报告不存在或为空，无法按意见发起修复");
     }
-    // 意见已过期就别再按它修：审查后代码已变（新提交或未提交改动），那份报告针对的
-    // 世界不存在了——正确动作是「审查新改动」。锚点缺失（老数据）不可知，放行。
+    // 只有能**证明**意见仍对应当前代码才放行修复（失败向「不确定」开，不向「没问题」开）：
+    // 锚点缺失（老数据）、工作区读不到（已清理/非 git）都无从证明——正确动作是再派一轮
+    // 「审查新改动」，而不是按一份无法核对的报告唤醒实现 agent 改代码。
     const concluded = (await db.select().from(freeReviewRounds)
       .where(and(eq(freeReviewRounds.runId, run.id), eq(freeReviewRounds.round, run.currentRound)))).at(0);
-    if (concluded?.reviewedCommit) {
-      const workspace = await workspaceStateOf(task);
-      if (workspace.head && (workspace.head !== concluded.reviewedCommit || workspace.dirty)) {
-        throw new Error("审查意见针对的代码已变化（新提交或未提交改动）；请再派一轮审查，而不是按旧意见修复");
-      }
+    if (!concluded?.reviewedCommit) {
+      throw new Error("这轮审查缺少基准 commit，无法确认意见仍对应当前代码；请再派一轮审查");
+    }
+    const workspace = await workspaceStateOf(task);
+    if (!workspace.head || workspace.dirty == null) {
+      throw new Error("工作区不可读，无法确认审查意见仍对应当前代码；请再派一轮审查");
+    }
+    if (workspace.head !== concluded.reviewedCommit || workspace.dirty) {
+      throw new Error("审查意见针对的代码已变化（新提交或未提交改动）；请再派一轮审查，而不是按旧意见修复");
     }
     await appendTaskTimeline(taskId, `已按自由工作流第 ${run.currentRound} 轮审查意见发起修复。`);
     bus.publish({ type: "task.review", taskId });

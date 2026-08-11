@@ -11,6 +11,7 @@ import "../../src/styles/global.css";
 const state = {
   taskId: "free-task",
   selectedReviewerId: null,
+  stateVersion: 1,
   workspaceHead: "commit-current",
   workspaceDirty: false,
   reviewReservation: { armed: false, reviewerId: null, checkMode: null, retryLimit: null, note: null, runId: null },
@@ -80,6 +81,7 @@ const state = {
 const acceptanceState = {
   taskId: "free-accept-ui",
   selectedReviewerId: null,
+  stateVersion: 1,
   workspaceHead: "commit-current",
   workspaceDirty: false,
   reviewReservation: { armed: false, reviewerId: null, checkMode: null, retryLimit: null, note: null, runId: null },
@@ -120,6 +122,7 @@ const reviewingAcceptanceState = {
 const repairState: FreeWorkflowApiState = {
   taskId: "free-repair-task",
   selectedReviewerId: null,
+  stateVersion: 1,
   workspaceHead: "commit-current",
   workspaceDirty: false,
   reviewReservation: { armed: false, reviewerId: null, checkMode: null, retryLimit: null, note: null, runId: null },

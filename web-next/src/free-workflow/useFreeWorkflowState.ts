@@ -7,15 +7,15 @@ type StateListener = (state: FreeWorkflowApiState) => void;
 const states = new Map<string, FreeWorkflowApiState>();
 const listeners = new Map<string, Set<StateListener>>();
 const inFlight = new Map<string, Promise<FreeWorkflowApiState>>();
-// 每个 task 只允许「最后声明的来源」写入共享状态：mutation 响应和新发起的 GET 都会占
-// 一个更大的序号，早先在飞的 GET 返回时序号已旧，直接丢弃——否则「早发起晚返回」的
-// GET 会把 mutation 刚写入的新状态盖回旧值（窗口最长一个轮询周期）。
-const latestWriter = new Map<string, number>();
-let writerSeq = 0;
 
+// 唯一的新旧判据是**服务端生成快照的版本**（stateVersion）：mutation 响应先在服务端生成、
+// 之后才有 SSE 触发的 GET，即使它更晚到达，也是更旧的世界——按到达顺序或请求发起顺序猜
+// 都会把新状态盖回旧值（审查实测：旧 mutation body 晚到，把「审查中」回退成 stopped 动作）。
 function publish(taskId: string, state: FreeWorkflowApiState): void {
   const taskListeners = listeners.get(taskId);
   if (!taskListeners?.size) return;
+  const current = states.get(taskId);
+  if (current && current.stateVersion > state.stateVersion) return; // 更旧的快照，丢弃
   states.set(taskId, state);
   for (const listener of taskListeners) listener(state);
 }
@@ -29,9 +29,6 @@ function subscribe(taskId: string, listener: StateListener): () => void {
     if (taskListeners.size) return;
     listeners.delete(taskId);
     states.delete(taskId);
-    // latestWriter 刻意**不清**：它的生命周期要跟 inFlight 一致。StrictMode 的卸载/重挂载
-    // 会复用在飞的 GET——序号被清掉的话，那个响应回来就会因「无主序号」被丢弃，页面要
-    // 等下一轮轮询才有状态，验收页在这 2.5 秒里失败开放过。
   };
 }
 
@@ -40,10 +37,8 @@ function loadShared(taskId: string, force = false): Promise<FreeWorkflowApiState
     const running = inFlight.get(taskId);
     if (running) return running;
   }
-  const seq = ++writerSeq;
-  latestWriter.set(taskId, seq);
   const request = api.freeWorkflow(taskId).then((state) => {
-    if (latestWriter.get(taskId) === seq) publish(taskId, state);
+    publish(taskId, state);
     return state;
   }).finally(() => {
     if (inFlight.get(taskId) === request) inFlight.delete(taskId);
@@ -57,9 +52,8 @@ export function useFreeWorkflowState(taskId: string, enabled = true) {
   const [loading, setLoading] = useState(enabled);
   const [error, setError] = useState<string | null>(null);
 
-  // mutation 的响应就是此刻最权威的状态：占最新序号，让所有在飞 GET 作废。
+  // mutation 响应与 GET 走同一道版本门禁：谁的快照新谁说了算，与到达顺序无关。
   const setState = useCallback((next: FreeWorkflowApiState) => {
-    latestWriter.set(taskId, ++writerSeq);
     publish(taskId, next);
   }, [taskId]);
 

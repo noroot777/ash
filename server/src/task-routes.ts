@@ -351,6 +351,23 @@ api.delete("/tasks/:id", async (c) => {
   if (existing && (existing.status === "running" || existing.status === "queued" || isTurnClaimed(tid))) {
     return c.json({ error: "任务正在执行，请先停止再删除", status: existing.status }, 409);
   }
+  // 团队：执行者跟着 lead 活。任何 child 在飞就拒删（否则活着的 worker 失去父任务，
+  // 还可能连带清掉它正在用的共享工作区）；都停了则连 children 行一并删，不留悬空 parentId。
+  const children = existing ? await db.select().from(tasks).where(eq(tasks.parentId, tid)) : [];
+  const busyChild = children.find(
+    (child) => child.status === "running" || child.status === "queued" || isTurnClaimed(child.id),
+  );
+  if (busyChild) {
+    return c.json({
+      error: `执行者「${busyChild.title}」正在执行，请先停止团队再删除`,
+      childId: busyChild.id,
+      status: busyChild.status,
+    }, 409);
+  }
+  for (const child of children) {
+    await db.delete(noteTasks).where(eq(noteTasks.taskId, child.id));
+    await db.delete(tasks).where(eq(tasks.id, child.id));
+  }
   const project = existing
     ? (await db.select().from(projects).where(eq(projects.id, existing.projectId))).at(0)
     : undefined;

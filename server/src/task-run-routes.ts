@@ -24,6 +24,7 @@ import { bus } from "./bus.js";
 import { forceKillCuaService, lastCuaResidualStatus, refreshCuaResidualStatus } from "./cua.js";
 import { db } from "./db/index.js";
 import { freeReviewResumeOptions, hasActiveFreeReview } from "./free-workflow.js";
+import { isAcceptingTask } from "./task-accept.js";
 import { projects, queueItems, schedules, scheduledMessages, sessions, tasks } from "./db/schema.js";
 import { resumeDuet, resumeAtGate, runDuet } from "./duet/index.js";
 import { resolveGate } from "./duet/gates.js";
@@ -576,10 +577,13 @@ api.post("/tasks/:id/archive", async (c) => {
   if (!canArchive(r.status as TaskStatus)) {
     return c.json({ error: "只有已完成/失败/已取消的任务可以归档", status: r.status }, 409);
   }
-  // 归档 = 冻结。回合被占（status 尚未落 running）或自由审查正在进行时归档，会让一个
-  // 「冻结」任务上继续跑回合/审查——先等它结束或停掉再归档。
+  // 归档 = 冻结。回合被占（status 尚未落 running）、自由审查正在进行、或验收正在执行时
+  // 归档，会让一个「冻结」任务上继续跑回合/审查/合并写入——先等它结束或停掉再归档。
   if (isTurnClaimed(r.id)) {
     return c.json({ error: "任务回合正在进行（状态尚未落库），结束后再归档", status: r.status }, 409);
+  }
+  if (isAcceptingTask(r.id)) {
+    return c.json({ error: "任务正在验收中，结束后再归档" }, 409);
   }
   if (r.workflowMode === "free" && await hasActiveFreeReview(r.id)) {
     return c.json({ error: "自由审查正在进行，结束后再归档" }, 409);

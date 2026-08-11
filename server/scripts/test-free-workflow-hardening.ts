@@ -90,7 +90,8 @@ try {
   assert.equal(turnBlockedDispatch.status, 409, "回合已被占时不得派审");
   releaseTurn("free-turn-window-task");
 
-  // 结论证据与身份门禁：没有活跃 reviewer 会话时结论拒收；没有非空 report.md 也拒收。
+  // 结论证据与身份门禁：结论必须出自活跃的 reviewer 回合（turn 的运行时身份），
+  // 且必须已有非空 report.md。
   const evidenceAt = new Date().toISOString();
   await db.insert(freeReviewRuns).values({
     id: "evidence-review", taskId: "free-turn-window-task", reviewerId: reviewer.id, reviewerName: "Codex logic",
@@ -105,15 +106,19 @@ try {
   const evidenceDir = join(root, "runs", "free-turn-window-task", "free-review", "evidence-review", "round-1");
   mkdirSync(evidenceDir, { recursive: true });
   writeFileSync(join(evidenceDir, "report.md"), "# 有报告\n\n结论有效。\n");
-  const noSession = await api.request("/tasks/free-turn-window-task/stage", {
+  const noTurn = await api.request("/tasks/free-turn-window-task/stage", {
     method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify({ stage: "verified" }),
   });
-  assert.equal(noSession.status, 409, "没有活跃 reviewer 会话的结论（迟到/误投）必须被拒收");
-  await db.insert(sessions).values({
-    id: "evidence-reviewer-session", taskId: "free-turn-window-task", role: "reviewer", agentType: "codex",
-    executor: "codex@test", target: '{"kind":"local"}', startedAt: evidenceAt,
+  assert.equal(noTurn.status, 409, "没有活跃审查回合的结论（迟到/误投）必须被拒收");
+  assert.equal(claimTurn("free-turn-window-task", "single"), true);
+  const wrongRole = await api.request("/tasks/free-turn-window-task/stage", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ stage: "verified" }),
   });
+  assert.equal(wrongRole.status, 409, "普通实现回合里的结论调用必须被拒收");
+  releaseTurn("free-turn-window-task");
+  assert.equal(claimTurn("free-turn-window-task", "reviewer"), true);
   writeFileSync(join(evidenceDir, "report.md"), " \n");
   const blankReport = await api.request("/tasks/free-turn-window-task/stage", {
     method: "POST", headers: { "content-type": "application/json" },
@@ -125,14 +130,13 @@ try {
     method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify({ stage: "verified" }),
   });
-  assert.equal(withReport.status, 200, "活跃审查会话 + 非空报告的结论应被接受");
+  assert.equal(withReport.status, 200, "活跃审查回合 + 非空报告的结论应被接受");
+  releaseTurn("free-turn-window-task");
   const evidenceRound = (await db.select().from(freeReviewRounds)
     .where(eq(freeReviewRounds.id, "evidence-review-round-1"))).at(0);
   assert.equal(evidenceRound?.conclusion, "verified");
   await db.update(freeReviewRuns).set({ status: "passed", finishedAt: new Date().toISOString() })
     .where(eq(freeReviewRuns.id, "evidence-review"));
-  await db.update(sessions).set({ endedAt: new Date().toISOString() })
-    .where(eq(sessions.id, "evidence-reviewer-session"));
 
   // 证据路径安全：round 目录被换成 symlink 指到证据根之外时必须整体拒绝。
   const { freeReviewFile: safeFreeReviewFile } = await import("../src/free-review-files.js");
@@ -291,7 +295,9 @@ try {
   assert.equal(autoAfterDelete?.reviewRunId, "legacy-repairing");
   assert.equal(autoAfterDelete?.selectedReviewerId, null, "悬空的 profile 引用应被清掉");
 
-  // 启动对账：reviewing run 没有任何未结束的 reviewer 会话（死在投递链上）→ failed + 撤预约。
+  // 启动对账：judgment 用任务运行事实，不看 sessions——
+  // 等待答复（question 挂着）的审查回合是正常状态，不得误杀；
+  // 真正的孤儿（任务空闲且无等待态）才落 failed 并撤预约。
   const { reconcileFreeReviews } = await import("../src/free-workflow.js");
   const orphanAt = new Date().toISOString();
   await db.insert(freeReviewRuns).values({
@@ -304,6 +310,11 @@ try {
     id: "orphan-reviewing-round-1", runId: "orphan-reviewing", round: 1, status: "reviewing",
     conclusion: null, startedAt: orphanAt, endedAt: null,
   });
+  await db.update(tasks).set({ question: "请确认边界" }).where(eq(tasks.id, "free-legacy-task"));
+  await reconcileFreeReviews();
+  const waitingAfter = (await db.select().from(freeReviewRuns).where(eq(freeReviewRuns.id, "orphan-reviewing"))).at(0);
+  assert.equal(waitingAfter?.status, "reviewing", "等待答复的审查回合不得被对账误杀");
+  await db.update(tasks).set({ question: null }).where(eq(tasks.id, "free-legacy-task"));
   await reconcileFreeReviews();
   const orphanAfter = (await db.select().from(freeReviewRuns).where(eq(freeReviewRuns.id, "orphan-reviewing"))).at(0);
   assert.equal(orphanAfter?.status, "failed", "重启后无 reviewer 会话的 reviewing run 必须被收拾成 failed");

@@ -205,7 +205,7 @@ export function FreeWorkflowInspector({
             </header>
             <div className="review-inspector__actions">
               {repairing && <FreeReviewProgress kind={view.autoRereview ? "auto_rereview" : "task_running"} />}
-              {stoppedRun && !taskBusy && !stale && notify && (
+              {stoppedRun && !taskBusy && view.freshness === "fresh" && notify && (
                 <FreeReviewRepairButton
                   taskId={task.id}
                   run={stoppedRun}

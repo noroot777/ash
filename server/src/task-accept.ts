@@ -3,10 +3,12 @@ import type { Hono } from "hono";
 import { acceptPlan, anchorAt, hasAcceptStation, isFinalHumanGate, nextAnchor, segmentAfter } from "@harness/shared/workflow-policy";
 import type { AcceptBy } from "@harness/shared/workflow-policy";
 import { ACCEPT_CLEAN_LABELS, ACCEPT_STRATEGY_LABELS, STEP_LABELS } from "@harness/shared/workflow";
+import { STAGE_LABELS } from "@harness/shared";
+import { bus } from "./bus.js";
 import { db } from "./db/index.js";
 import { projects, tasks } from "./db/schema.js";
 import { handOffConflict } from "./accept-conflict.js";
-import { resolveTaskMergeTarget } from "./git.js";
+import { localBranchExists, resolveTaskMergeTarget } from "./git.js";
 import { cleanupAcceptedTask, cleanupPlanFor, mergeTaskBranch } from "./git-accept.js";
 import { hasActiveFreeReview } from "./free-workflow.js";
 import { disarmFreeReviewReservation } from "./free-review-reservations.js";
@@ -70,6 +72,11 @@ const mergeLabel: Record<string, string> = {
 };
 
 const acceptingTaskIds = new Set<string>();
+
+/** 验收是否正在进行（归档路由用：验收中途归档会形成「已冻结却继续合并写入」）。 */
+export function isAcceptingTask(taskId: string): boolean {
+  return acceptingTaskIds.has(taskId);
+}
 
 async function finalizeAcceptance(
   task: typeof tasks.$inferSelect,
@@ -293,9 +300,12 @@ async function acceptTaskUnlocked(taskId: string, by: AcceptBy): Promise<AcceptT
 
   // Retry after a previous partial success: stage=merged plus an already-removed
   // source branch means `git branch -d` did its job; finish the stage transition.
+  // 快路也要验证冻结目标**仍然存在**：mergeTaskBranchLocked 在检查目标之前就返回
+  // source_branch_missing，目标被删/改名时这里若只看字符串非空就 finalize，会把任务
+  // 盖成 accepted 而返回值宣称一个不存在的分支（审查实测复现）。
   if (!merge.ok && merge.reason === "source_branch_missing" && task.stage === "merged") {
     const targetBranch = merge.targetBranch ?? await resolveTaskMergeTarget(project.repoPath, task.worktreeBase);
-    if (targetBranch) {
+    if (targetBranch && await localBranchExists(project.repoPath, targetBranch)) {
       const guard = await acceptanceGuard(taskId, "before_accept");
       if (guard.failure) return guard.failure;
       const sharedWorkers = await finalizeAcceptance(
@@ -342,24 +352,32 @@ async function acceptTaskUnlocked(taskId: string, by: AcceptBy): Promise<AcceptT
   }
 
   const tagged = merge.method === "tagged";
-  if (!tagged) await setTaskStage(taskId, "merged");
-  // 结构化落账：目标分支 + 合并前后它的 commit。时间线文本反解不可靠，合并后基线
-  // 审查（对 base@before..after 派新任务）只认这三列。
+  // stage=merged 与快照三列**同一条 UPDATE** 落库（SQLite 单语句原子）：分两次写的话，
+  // 进程死在中间会留下「stage=merged、快照还是上一生命周期」的组合，重试便把第二版
+  // 产物合回旧目标分支（审查实测复现）。
   // 快照按**一次验收生命周期**冻结：全新验收（stage 不是 merged）三列整体覆盖——
   // reopen 后的第二次验收是新生命周期，不能沿用上一版的 base；清理失败后的重试
   // （stage=merged）三列保持首次值——already_merged 的同值区间、重试期间目标分支被
-  // 别人推进产生的新 tip，都不能污染首次真实的合并区间（审查实测复现过两种覆盖）。
-  await db.update(tasks).set(retrying ? {
+  // 别人推进产生的新 tip，都不能污染首次真实的合并区间。
+  const snapshot = retrying ? {
     acceptedTargetBranch: task.acceptedTargetBranch ?? merge.targetBranch,
     acceptedBaseCommit: task.acceptedBaseCommit ?? merge.beforeCommit ?? null,
     acceptedMergeCommit: task.acceptedMergeCommit ?? merge.afterCommit ?? null,
-    updatedAt: now(),
   } : {
     acceptedTargetBranch: merge.targetBranch,
     acceptedBaseCommit: merge.beforeCommit ?? null,
     acceptedMergeCommit: merge.afterCommit ?? null,
-    updatedAt: now(),
+  };
+  const mergedAt = now();
+  await db.update(tasks).set({
+    ...snapshot,
+    ...(tagged ? {} : { stage: "merged" }),
+    updatedAt: mergedAt,
   }).where(eq(tasks.id, taskId));
+  if (!tagged) {
+    bus.publish({ type: "task.stage", taskId, stage: "merged", updatedAt: mergedAt });
+    await appendTaskTimeline(taskId, `验收阶段更新：${STAGE_LABELS.merged}（merged）`);
+  }
   await appendTaskTimeline(
     taskId,
     tagged

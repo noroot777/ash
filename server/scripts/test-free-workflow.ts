@@ -148,7 +148,7 @@ try {
   const mainBeforeAcceptance = git(repo, "rev-parse", "main");
 
   await createTasks([{
-    id: "free-exhausted-task", projectId: "p", groupId: null, parentId: null,
+    id: "free-exhausted-task", projectId: "p-git", groupId: null, parentId: null,
     title: "free exhausted", body: "test", mode: "single", status: "done",
     labels: "[]", dependsOn: "[]", resumeDependsOn: "[]", agentType: "codex",
     executorId: "reviewer-executor", model: null, reasoningEffort: null, autoTitle: false,
@@ -205,7 +205,8 @@ try {
   await db.insert(freeReviewRuns).values(exhaustedRun);
   await db.insert(freeReviewRounds).values({
     id: "exhausted-review-round-2", runId: exhaustedRun.id, round: 2, status: "failed",
-    conclusion: "verify_failed", startedAt: exhaustedAt, endedAt: exhaustedAt,
+    conclusion: "verify_failed", reviewedCommit: git(repo, "rev-parse", "HEAD"),
+    startedAt: exhaustedAt, endedAt: exhaustedAt,
   });
   const exhaustedEvidence = join(root, "runs", "free-exhausted-task", "free-review", exhaustedRun.id, "round-2");
   mkdirSync(exhaustedEvidence, { recursive: true });

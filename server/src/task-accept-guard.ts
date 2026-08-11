@@ -81,6 +81,22 @@ export async function acceptanceGuard(
       failure: { accepted: false, httpStatus: 404, taskId, reason: "not_found", error: "not found", phase },
     };
   }
+  // 每个阶段都重查 archived：验收入口检查过之后、合并/清理之前，任务可能刚被归档——
+  // Archived = frozen/read-only，冻结之后一个字节都不能再写（审查实测过中途归档穿透）。
+  if (state.task.archived) {
+    return {
+      task: state.task,
+      failure: {
+        accepted: false,
+        httpStatus: 409,
+        taskId,
+        reason: "task_archived",
+        error: "任务已归档（只读）；先取消归档再验收",
+        status: state.task.status,
+        phase,
+      },
+    };
+  }
   if (state.inFlightTasks.length === 0) return { task: state.task, failure: null };
 
   const sharedWorkers = state.inFlightTasks.filter((item) => item.role === "shared_worker");

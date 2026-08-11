@@ -60,13 +60,18 @@ export function TaskReviewWorkspace({
   // 失败关闭：拿不到自由工作流状态（加载中、出错、或任何原因的 state 为空）就不开放
   // 不可逆的验收按钮——「state 空 + loading 已结束」的缝隙也一样（StrictMode 重挂载
   // 曾在这个缝隙里放出过约 2.5 秒的假「验收通过」）。
+  // 后端只在终态（done/failed/canceled）放行自由任务验收：paused/backlog 时按钮必须
+  // 同步禁用并说明原因，不给「可点却必 409」的假按钮。
+  const freeTerminal = ["done", "failed", "canceled"].includes(task.status);
   const acceptanceBlock = task.workflowMode !== "free"
     ? null
     : activeFreeReview
       ? freeReviewBlockingLabel(activeFreeReview)
-      : !free.state
-          ? (free.error ? "审查状态未知" : "读取审查状态")
-          : null;
+      : task.stage !== "accepted" && task.stage !== "merged" && !freeTerminal
+        ? "任务尚未结束"
+        : !free.state
+            ? (free.error ? "审查状态未知" : "读取审查状态")
+            : null;
   // 非阻塞警示：验收是用户主权，但「最后一轮没过 / 链异常断了 / 通过后代码又变了 /
   // 新鲜度无从判断」必须摆在明面上。失败向着「不确定」开，不向「没问题」开。
   const freeView = task.workflowMode === "free" ? freeReviewView(free.state, task) : null;
