@@ -27,7 +27,7 @@ import { peerNoticeFor } from "./peer-context.js";
 import { recordTurnBaseline } from "./turn-baseline.js";
 import { recordTurnStart } from "./turn-output.js";
 import { railStalledAtRun } from "./workflows.js";
-import { freeReviewReminder, isFreeReviewTurn, markFreeReviewReworking } from "./free-workflow.js";
+import { freeReviewReminder, isFreeReviewTurn } from "./free-workflow.js";
 import { withSkillInvocation } from "./skills.js";
 import { initialTaskObjective, invitedTaskBrief } from "./invited-task-brief.js";
 import { withGlobalBrowserPolicy } from "./browser-verification-policy.js";
@@ -468,7 +468,6 @@ export async function continueTask(
     // **这一段必须排在所有可能抛错的解析之前**(执行器解析、工作目录解析都会抛:模型与
     // 思考强度不兼容、worktree 建不出来),catch 那边只认库里的 followUpFrom —— 落库晚
     // 一步,一个 done 的任务就会因为「验证没起来」被打成 failed。
-    if (!opts.system && !opts.byBackend) await markFreeReviewReworking(taskId);
     const freeReviewTurn = await isFreeReviewTurn(taskId);
     const sideTurn = !!opts.sideTurn || !!task.verifyRound || freeReviewTurn;
     const followUpFrom = sideTurn

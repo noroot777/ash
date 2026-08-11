@@ -18,9 +18,12 @@ import {
   freeReviewRuns,
   freeWorkflowEvents,
   freeWorkflowStates,
+  projects,
   tasks,
 } from "./db/schema.js";
 import { freeReviewScreenshots, readFreeReviewReport } from "./free-review-files.js";
+import { headCommit, worktreePathFor } from "./git.js";
+import { existsSync } from "node:fs";
 import { readPreview } from "./preview.js";
 
 export type FreeWorkflowApiState = Omit<FreeWorkflowState, "merge">;
@@ -60,6 +63,17 @@ function parseExecutionDetail(detail: string | null): { status: FreeWorkflowExec
   }
 }
 
+// 当前任务工作区的 HEAD，**纯只读**（绝不重建 worktree——这是状态轮询，不是执行路径）。
+// worktree 已被验收清理 → null；非 worktree 任务读项目目录本身。
+async function workspaceHeadOf(task: { id: string; projectId: string; useWorktree: boolean }): Promise<string | null> {
+  const project = (await db.select({ repoPath: projects.repoPath }).from(projects)
+    .where(eq(projects.id, task.projectId))).at(0);
+  if (!project?.repoPath) return null;
+  if (!task.useWorktree) return headCommit(project.repoPath);
+  const path = worktreePathFor(project.repoPath, task.id);
+  return existsSync(path) ? headCommit(path) : null;
+}
+
 export async function freeWorkflowState(taskId: string): Promise<FreeWorkflowApiState> {
   const [task, state, runs, profileRows, eventRows] = await Promise.all([
     db.select().from(tasks).where(eq(tasks.id, taskId)).then((rows) => rows.at(0)),
@@ -94,6 +108,7 @@ export async function freeWorkflowState(taskId: string): Promise<FreeWorkflowApi
       round: round.round,
       status: round.status as FreeReviewRound["status"],
       conclusion: round.conclusion as FreeReviewRound["conclusion"],
+      reviewedCommit: round.reviewedCommit,
       reportMarkdown: readFreeReviewReport(taskId, run.id, round.round),
       screenshots: freeReviewScreenshots(taskId, run.id, round.round),
       startedAt: round.startedAt,
@@ -136,17 +151,22 @@ export async function freeWorkflowState(taskId: string): Promise<FreeWorkflowApi
       detail: event.detail,
       occurredAt: event.occurredAt,
     }));
+  // 预约可用的两种形态：续轮（runId 在，审查者配置取 run 行快照，profile 删了也能续）、
+  // 新链（必须有 reviewerId）。两者都不在 → 脏 armed，对外一律当未预约。
+  const reservationRunId = state?.reviewArmed ? state.reviewRunId ?? null : null;
   const reservationReviewerId = state?.reviewArmed ? state.selectedReviewerId ?? null : null;
-  const reservationArmed = !!reservationReviewerId;
+  const reservationArmed = !!reservationRunId || !!reservationReviewerId;
   return {
     taskId,
     selectedReviewerId: state?.selectedReviewerId ?? null,
+    workspaceHead: await workspaceHeadOf(task),
     reviewReservation: {
       armed: reservationArmed,
       reviewerId: reservationReviewerId,
       checkMode: reservationArmed ? storedCheckMode(state?.reviewCheckMode) : null,
       retryLimit: reservationArmed ? storedRetryLimit(state?.reviewRetryLimit) : null,
       note: reservationArmed ? state?.reviewNote ?? null : null,
+      runId: reservationRunId,
     },
     preview: {
       running: !!preview,

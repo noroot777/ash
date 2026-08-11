@@ -4,7 +4,7 @@ import { acceptPlan, anchorAt, hasAcceptStation, isFinalHumanGate, nextAnchor, s
 import type { AcceptBy } from "@harness/shared/workflow-policy";
 import { ACCEPT_CLEAN_LABELS, ACCEPT_STRATEGY_LABELS, STEP_LABELS } from "@harness/shared/workflow";
 import { db } from "./db/index.js";
-import { projects, tasks } from "./db/schema.js";
+import { freeWorkflowStates, projects, tasks } from "./db/schema.js";
 import { handOffConflict, type ConflictHandoff } from "./accept-conflict.js";
 import { resolveTaskMergeTarget } from "./git.js";
 import { cleanupAcceptedTask, cleanupPlanFor, mergeTaskBranch } from "./git-accept.js";
@@ -18,6 +18,7 @@ import { IS_PREVIEW_INSTANCE, previewRefusal } from "./preview-instance.js";
 import { withRepoLock } from "./repo-lock.js";
 import { setTaskStage, clearTaskStage } from "./task-stage.js";
 import { appendTaskTimeline } from "./task-timeline.js";
+import { now } from "./util.js";
 import type { WorkflowAdvanceOptions } from "./workflow-advance.js";
 
 type AcceptSuccess = {
@@ -133,6 +134,18 @@ async function finalizeAcceptance(
   // 「任务结束时回收」的预览都在这儿收掉。「点头之后」那一段还没开跑，所以那一段
   // 特意编排的预览不会被这一下误伤。
   await stopPreviewAtAccept(task.id);
+  // 自由工作流：验收即终局，挂着的复审预约一并注销 —— 否则它会在任务日后被唤醒的
+  // 某个回合里突然触发一场语境全变的审查（幽灵预约）。
+  if (task.workflowMode === "free") {
+    const state = (await db.select({ reviewArmed: freeWorkflowStates.reviewArmed })
+      .from(freeWorkflowStates).where(eq(freeWorkflowStates.taskId, task.id))).at(0);
+    if (state?.reviewArmed) {
+      await db.update(freeWorkflowStates)
+        .set({ reviewArmed: false, reviewNote: null, reviewRunId: null, updatedAt: now() })
+        .where(eq(freeWorkflowStates.taskId, task.id));
+      await appendTaskTimeline(task.id, "验收已完成，未消费的复审预约已一并取消。");
+    }
+  }
   const sharedWorkers = task.mode === "team" ? await acceptSharedTeamWorkers(task.id) : null;
   await appendTaskTimeline(
     task.id,
@@ -247,7 +260,7 @@ async function acceptTaskUnlocked(taskId: string, by: AcceptBy): Promise<AcceptT
       httpStatus: 409,
       taskId,
       reason: "free_review_in_progress",
-      error: "自由工作流审查或修复仍在进行，结束后再验收",
+      error: "自由工作流审查回合正在进行，结束后再验收",
       status: requestedTask.status,
       phase: "initial",
     };
@@ -422,6 +435,14 @@ async function acceptTaskUnlocked(taskId: string, by: AcceptBy): Promise<AcceptT
 
   const tagged = merge.method === "tagged";
   if (!tagged) await setTaskStage(taskId, "merged");
+  // 结构化落账：目标分支 + 合并前后它的 commit。时间线文本反解不可靠，合并后基线
+  // 审查（对 base@before..after 派新任务）只认这三列。
+  await db.update(tasks).set({
+    acceptedTargetBranch: merge.targetBranch,
+    acceptedBaseCommit: merge.beforeCommit ?? null,
+    acceptedMergeCommit: merge.afterCommit ?? null,
+    updatedAt: now(),
+  }).where(eq(tasks.id, taskId));
   await appendTaskTimeline(
     taskId,
     tagged

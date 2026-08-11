@@ -73,6 +73,9 @@ export type TaskMergeResult =
       method: TaskMergeMethod;
       /** 只在「只打标签不合并」那一档有值 */
       tag?: string;
+      /** 合并前后目标分支的 commit（结构化落账，供合并后基线审查用）。already_merged/tagged 时两者相等。 */
+      beforeCommit?: string | null;
+      afterCommit?: string | null;
       warnings?: TaskMergeWarning[];
     }
   | {
@@ -229,7 +232,15 @@ export async function mergeTaskBranch(
   // 预览实例上一律拒绝：合的是**真**分支（见 preview-instance.ts）。acceptTask 那头已经
   // 结构化挡了一道，这里是给其它调用路径兜的底。
   assertNotPreviewInstance("合并任务分支");
-  return withRepoLock(repoPath, () => mergeTaskBranchLocked(repoPath, taskId, requestedTarget, strategy));
+  return withRepoLock(repoPath, async () => {
+    // 合并前后目标分支的 commit 在锁内取，保证「before → 合并 → after」之间没有别人插队。
+    const repo = expandHome(repoPath);
+    const target = await resolveTaskMergeTarget(repo, requestedTarget);
+    const beforeCommit = target ? await commitOf(repo, target) : null;
+    const result = await mergeTaskBranchLocked(repoPath, taskId, requestedTarget, strategy);
+    if (!result.ok) return result;
+    return { ...result, beforeCommit, afterCommit: await commitOf(repo, result.targetBranch) };
+  });
 }
 
 // 目标分支得有个检出的地方才跑得了 merge。三种情况按危险程度排：目标就在项目目录上

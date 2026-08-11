@@ -6,15 +6,13 @@ export type TaskWorkflowMode = (typeof TASK_WORKFLOW_MODES)[number];
 export const FREE_REVIEW_CHECK_MODES = ["syntax", "logic"] as const;
 export type FreeReviewCheckMode = (typeof FREE_REVIEW_CHECK_MODES)[number];
 
-export type FreeReviewRunStatus =
-  | "reviewing"
-  | "repairing"
-  | "manual_repairing"
-  | "reworking"
-  | "passed"
-  | "exhausted"
-  | "superseded"
-  | "failed";
+// 审查链只落四个持久状态：reviewing 是唯一的「活」态（旁路审查回合正在跑），
+// passed / failed 是链的终局，stopped 是「最后一轮未通过后停住」。
+// 「修复中 / 等待复审 / 结论已过期」这些叙事一律**推导**，不落库：
+// - 修复中 = 任务本身 running（谁发起的都一样）
+// - 等待自动复审 = stopped + 预约槽里挂着 runId
+// - 结论过期 = round.reviewedCommit ≠ 当前工作区 HEAD
+export type FreeReviewRunStatus = "reviewing" | "passed" | "failed" | "stopped";
 export type FreeReviewRoundStatus = "reviewing" | "passed" | "failed" | "error";
 
 export interface ReviewerProfile {
@@ -33,6 +31,8 @@ export interface FreeReviewRound {
   round: number;
   status: FreeReviewRoundStatus;
   conclusion: "verified" | "verify_failed" | null;
+  /** 本轮启动时任务工作区的 HEAD；与当前 HEAD 不一致即「结论陈旧」。null = 未能取到（老数据/工作区缺失）。 */
+  reviewedCommit: string | null;
   reportMarkdown: string;
   screenshots: string[];
   startedAt: string;
@@ -90,12 +90,16 @@ export interface FreeWorkflowExecution {
 export interface FreeWorkflowState {
   taskId: string;
   selectedReviewerId: string | null;
+  /** 当前任务工作区 HEAD；null = 工作区不存在（如已验收清理）或不是 git 目录。 */
+  workspaceHead: string | null;
   reviewReservation: {
     armed: boolean;
     reviewerId: string | null;
     checkMode: FreeReviewCheckMode | null;
     retryLimit: number | null;
     note: string | null;
+    /** 非空 = 这是自动复审链的续轮预约（修复确认完成后在该 run 上续下一轮）。 */
+    runId: string | null;
   };
   preview: FreeWorkflowPreviewState;
   previewEvents: FreeWorkflowPreviewEvent[];

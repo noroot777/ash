@@ -70,6 +70,16 @@ export async function isGitRepo(repoPath: string): Promise<boolean> {
   }
 }
 
+/** 某个工作目录此刻的 HEAD commit；目录不存在/不是 git 目录返回 null。纯只读。 */
+export async function headCommit(path: string): Promise<string | null> {
+  try {
+    const { stdout } = await exec("git", ["-C", expandHome(path), "rev-parse", "HEAD"]);
+    return stdout.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
 // Cheap, synchronous health for a repoPath — exists + is-it-a-git-repo. Drives
 // the at-a-glance health dot everywhere a project is listed; no git spawn.
 // `.git` is a *file* in worktrees/submodules, so existsSync (not isDir).

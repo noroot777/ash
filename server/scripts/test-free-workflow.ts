@@ -16,7 +16,7 @@ function git(cwd: string, ...args: string[]): string {
 
 try {
   const { ensureSchema, db } = await import("../src/db/index.js");
-  const { agents, freeReviewRounds, freeReviewRuns, projects, sessions, tasks } = await import("../src/db/schema.js");
+  const { agents, freeReviewRounds, freeReviewRuns, freeWorkflowStates, projects, sessions, tasks } = await import("../src/db/schema.js");
   const { createTasks } = await import("../src/task-store.js");
   const {
     mountFreeWorkflowRoutes,
@@ -27,7 +27,6 @@ try {
     freeManualRepairPrompt,
     freeReviewResumeOptions,
     handleFreeWorkflowSettlement,
-    markFreeReviewReworking,
   } = await import("../src/free-workflow.js");
   const { releaseFreeWorkflowAction, tryAcquireFreeWorkflowAction } = await import("../src/free-workflow-lock.js");
   const {
@@ -200,7 +199,7 @@ try {
   const exhaustedRun = {
     id: "exhausted-review", taskId: "free-exhausted-task", reviewerId: reviewer.id, reviewerName: "Codex logic",
     agentType: "codex", executorId: "reviewer-executor", model: "gpt-review", reasoningEffort: "high",
-    checkMode: "logic", note: null, retryLimit: 1, currentRound: 2, status: "exhausted",
+    checkMode: "logic", note: null, retryLimit: 1, currentRound: 2, status: "stopped",
     createdAt: exhaustedAt, updatedAt: exhaustedAt, finishedAt: exhaustedAt,
   };
   await db.insert(freeReviewRuns).values(exhaustedRun);
@@ -222,41 +221,58 @@ try {
   assert.equal(repairStarted.status, 200);
   assert.equal(
     (await repairStarted.json() as { reviews: Array<{ status: string }> }).reviews[0]?.status,
-    "manual_repairing",
-    "一键修复应先进入持久的手动修复态，防止重复点击",
+    "stopped",
+    "一键修复只代发消息，不再翻转 run 状态（修复中由任务 running 推导）",
   );
   const repairReservation = await api.request("/tasks/free-exhausted-task/free-workflow/review-reservation", {
     method: "PUT", headers: { "content-type": "application/json" },
     body: JSON.stringify({ reviewerId: reviewer.id, checkMode: "logic", retryLimit: 1, note: "复审时关注按钮状态" }),
   });
-  assert.equal(repairReservation.status, 200, "修复进行中必须允许预约复审");
+  assert.equal(repairReservation.status, 200, "stopped 状态下必须允许预约复审（修复顺序不限）");
   assert.equal((await repairReservation.json() as { reviewReservation: { armed: boolean } }).reviewReservation.armed, true);
   const duplicateRepair = await api.request("/tasks/free-exhausted-task/free-workflow/review/repair", { method: "POST" });
-  assert.equal(duplicateRepair.status, 409, "手动修复进行中不得重复发起");
+  assert.equal(duplicateRepair.status, 409, "修复消息在途时不得重复发起");
   await handleFreeWorkflowSettlement("free-exhausted-task", "done", true, true);
   const afterRepair = await api.request("/tasks/free-exhausted-task/free-workflow").then((response) => response.json()) as {
     reviewReservation: { armed: boolean }; reviews: Array<{ id: string; status: string }>;
   };
   assert.equal(afterRepair.reviewReservation.armed, false, "预约复审启动后应清掉预约态");
-  assert.equal(afterRepair.reviews.find((run) => run.id === exhaustedRun.id)?.status, "superseded", "修复完成后旧结论应标为已过期");
+  assert.equal(afterRepair.reviews.find((run) => run.id === exhaustedRun.id)?.status, "stopped", "旧链保持 stopped，结论新鲜度由 reviewedCommit 判断");
   assert.equal(afterRepair.reviews.filter((run) => run.status === "reviewing").length, 1, "确认完成后应按预约自动派出一轮新审查");
 
-  const reworkRun = { ...exhaustedRun, id: "chat-rework", taskId: "free-rework-task", reviewerId: reviewer.id };
+  // 自动续轮预约（runId）：修复确认完成后在同一条 run 上续下一轮，不开新 run。
+  const reworkRun = { ...exhaustedRun, id: "chat-rework", taskId: "free-rework-task", reviewerId: reviewer.id, currentRound: 1 };
   await db.insert(freeReviewRuns).values(reworkRun);
   await db.insert(freeReviewRounds).values({
-    id: "chat-rework-round-2", runId: reworkRun.id, round: 2, status: "failed",
+    id: "chat-rework-round-1", runId: reworkRun.id, round: 1, status: "failed",
     conclusion: "verify_failed", startedAt: exhaustedAt, endedAt: exhaustedAt,
   });
-  await markFreeReviewReworking("free-rework-task");
-  let reworkState = await api.request("/tasks/free-rework-task/free-workflow").then((response) => response.json()) as { reviews: Array<{ status: string }> };
-  assert.equal(reworkState.reviews[0]?.status, "reworking", "普通对话开始后应进入中性的任务修改态");
+  let reworkState = await api.request("/tasks/free-rework-task/free-workflow").then((response) => response.json()) as { reviews: Array<{ status: string; currentRound: number }> };
+  assert.equal(reworkState.reviews[0]?.status, "stopped", "未通过后 run 停在 stopped，没有叙事状态要翻转");
+  // 无预约时确认完成：什么都不派，旧链保持 stopped。
   await handleFreeWorkflowSettlement("free-rework-task", "done", true, true);
   reworkState = await api.request("/tasks/free-rework-task/free-workflow").then((response) => response.json()) as typeof reworkState;
-  assert.equal(reworkState.reviews[0]?.status, "superseded", "普通对话确认完成后旧审查结论也应过期");
-  await db.update(freeReviewRuns).set({ status: "reworking", finishedAt: null }).where(eq(freeReviewRuns.id, reworkRun.id));
-  await handleFreeWorkflowSettlement("free-rework-task", "done", false, true);
-  reworkState = await api.request("/tasks/free-rework-task/free-workflow").then((response) => response.json()) as typeof reworkState;
-  assert.equal(reworkState.reviews[0]?.status, "exhausted", "普通对话未确认完成时不能谎称旧结论已过期");
+  assert.equal(reworkState.reviews.length, 1, "无预约时确认完成不得自动派审");
+  assert.equal(reworkState.reviews[0]?.status, "stopped");
+  // 挂续轮预约再确认完成：同一 run 续 round 2。
+  await db.insert(freeWorkflowStates).values({
+    taskId: "free-rework-task", selectedReviewerId: reviewer.id, reviewArmed: true,
+    reviewCheckMode: "logic", reviewRetryLimit: 1, reviewNote: null, reviewRunId: reworkRun.id,
+    updatedAt: new Date().toISOString(),
+  }).onConflictDoUpdate({
+    target: freeWorkflowStates.taskId,
+    set: { reviewArmed: true, reviewRunId: reworkRun.id, updatedAt: new Date().toISOString() },
+  });
+  assert.equal(claimTurn("free-rework-task"), true);
+  await handleFreeWorkflowSettlement("free-rework-task", "done", true, true);
+  const continuedState = await api.request("/tasks/free-rework-task/free-workflow").then((response) => response.json()) as {
+    reviewReservation: { armed: boolean; runId: string | null };
+    reviews: Array<{ id: string; status: string; currentRound: number }>;
+  };
+  assert.equal(continuedState.reviews.length, 1, "续轮预约应在原 run 上续，不得开新 run");
+  assert.equal(continuedState.reviews[0]?.status, "reviewing");
+  assert.equal(continuedState.reviews[0]?.currentRound, 2, "确认完成后应续到第 2 轮");
+  assert.equal(continuedState.reviewReservation.armed, false, "续轮开跑即消费预约槽");
 
   const reserveReview = async (checkMode: "logic" | "syntax", retryLimit: number, note: string | null = null) => api.request(
     "/tasks/free-reservation-task/free-workflow/review-reservation",
@@ -267,14 +283,14 @@ try {
   assert.equal(reserved.status, 200);
   let reservedState = await reserved.json() as { reviewReservation: { armed: boolean; checkMode: string | null; retryLimit: number | null; note: string | null } };
   assert.deepEqual(reservedState.reviewReservation, {
-    armed: true, reviewerId: reviewer.id, checkMode: "logic", retryLimit: 1, note: "重点检查窄屏布局",
+    armed: true, reviewerId: reviewer.id, checkMode: "logic", retryLimit: 1, note: "重点检查窄屏布局", runId: null,
   });
 
   reserved = await reserveReview("syntax", 2, "检查预约覆盖");
   assert.equal(reserved.status, 200);
   reservedState = await reserved.json() as typeof reservedState;
   assert.deepEqual(reservedState.reviewReservation, {
-    armed: true, reviewerId: reviewer.id, checkMode: "syntax", retryLimit: 2, note: "检查预约覆盖",
+    armed: true, reviewerId: reviewer.id, checkMode: "syntax", retryLimit: 2, note: "检查预约覆盖", runId: null,
   }, "重复预约应覆盖同一份配置与附言");
 
   const canceledReservation = await api.request("/tasks/free-reservation-task/free-workflow/review-reservation", { method: "DELETE" });
@@ -328,7 +344,7 @@ try {
   const afterDeleteState = await api.request("/tasks/free-deleted-reviewer-task/free-workflow").then((response) => response.json()) as {
     reviewReservation: { armed: boolean; reviewerId: string | null };
   };
-  assert.deepEqual(afterDeleteState.reviewReservation, { armed: false, reviewerId: null, checkMode: null, retryLimit: null, note: null },
+  assert.deepEqual(afterDeleteState.reviewReservation, { armed: false, reviewerId: null, checkMode: null, retryLimit: null, note: null, runId: null },
     "删除审查者后预约必须取消，不能留下 armed 且 reviewerId 为空");
 
   await db.update(tasks).set({ status: "done" }).where(eq(tasks.id, "free-deleted-reviewer-task"));
@@ -350,7 +366,6 @@ try {
     createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
     useWorktree: false, worktreeBase: null, originTaskId: null, workflowMode: "free",
   }]);
-  const { freeWorkflowStates } = await import("../src/db/schema.js");
   await db.insert(freeWorkflowStates).values({
     taskId: "free-orphan-arm-task", selectedReviewerId: null, reviewArmed: true,
     reviewCheckMode: "logic", reviewRetryLimit: 1, reviewNote: "不应泄漏的脏附言",
@@ -480,28 +495,24 @@ try {
   if (!reviewBlocked.accepted) assert.equal(reviewBlocked.reason, "free_review_in_progress");
   assert.equal(git(repo, "rev-parse", "main"), mainBeforeAcceptance, "审查中不得推进目标分支");
   assert.equal(existsSync(worktree.path), true, "审查中不得清理任务 worktree");
-  await db.update(freeReviewRuns).set({ status: "repairing", updatedAt: new Date().toISOString() })
+  // 修复进行中的保护由「任务本身 running」承担（结算后 run 不再有修复态可挡）。
+  await db.update(freeReviewRuns).set({ status: "stopped", updatedAt: new Date().toISOString(), finishedAt: new Date().toISOString() })
     .where(eq(freeReviewRuns.id, "blocking-review"));
+  await db.update(tasks).set({ status: "running" }).where(eq(tasks.id, "free-worktree-task"));
   reviewBlocked = await acceptTask("free-worktree-task");
-  assert.equal(reviewBlocked.accepted, false, "等待修复时不得验收");
-  if (!reviewBlocked.accepted) assert.equal(reviewBlocked.reason, "free_review_in_progress");
-  await db.update(freeReviewRuns).set({ status: "manual_repairing", updatedAt: new Date().toISOString() })
-    .where(eq(freeReviewRuns.id, "blocking-review"));
-  reviewBlocked = await acceptTask("free-worktree-task");
-  assert.equal(reviewBlocked.accepted, false, "人工修复中不得验收");
-  if (!reviewBlocked.accepted) assert.equal(reviewBlocked.reason, "free_review_in_progress");
-  await db.update(freeReviewRuns).set({ status: "reworking", updatedAt: new Date().toISOString() })
-    .where(eq(freeReviewRuns.id, "blocking-review"));
-  reviewBlocked = await acceptTask("free-worktree-task");
-  assert.equal(reviewBlocked.accepted, false, "任务重新修改中不得验收");
-  if (!reviewBlocked.accepted) assert.equal(reviewBlocked.reason, "free_review_in_progress");
-  await db.update(freeReviewRuns).set({ status: "passed", updatedAt: new Date().toISOString(), finishedAt: new Date().toISOString() })
-    .where(eq(freeReviewRuns.id, "blocking-review"));
+  assert.equal(reviewBlocked.accepted, false, "任务运行中（修复中）不得验收");
+  if (!reviewBlocked.accepted) assert.equal(reviewBlocked.reason, "free_workflow_not_ready_for_acceptance");
+  await db.update(tasks).set({ status: "done" }).where(eq(tasks.id, "free-worktree-task"));
+  // stopped（审查未通过后停住）不再挡验收：验收是用户主权，警示由验收页展示。
   const worktreeAccepted = await acceptTask("free-worktree-task");
   assert.equal(worktreeAccepted.accepted, true, "自由任务的独立 worktree 应复用统一安全合并与清理");
   assert.notEqual(git(repo, "rev-parse", "main"), mainBeforeAcceptance, "统一验收应推进目标分支");
   assert.equal(existsSync(worktree.path), false, "统一验收应清理自由任务 worktree");
   assert.equal(git(repo, "branch", "--list", "harness/free-worktree-task"), "", "统一验收应删除已合并任务分支");
+  const acceptedRow = (await db.select().from(tasks).where(eq(tasks.id, "free-worktree-task"))).at(0);
+  assert.equal(acceptedRow?.acceptedTargetBranch, "main", "验收应结构化记录目标分支");
+  assert.equal(acceptedRow?.acceptedBaseCommit, mainBeforeAcceptance, "验收应记录合并前目标 commit");
+  assert.equal(acceptedRow?.acceptedMergeCommit, git(repo, "rev-parse", "main"), "验收应记录合并后目标 commit");
 
   const reviewAt = new Date().toISOString();
   await db.insert(freeReviewRuns).values({
@@ -532,7 +543,7 @@ try {
 
   console.log("✓ 自由任务不携带起手式快照");
   console.log("✓ 默认 1 次自动复审的轮数语义正确");
-  console.log("✓ 显式修复与普通修改分态展示，修改中可预约且确认完成后按预约复审");
+  console.log("✓ 修复只代发消息不翻状态；预约槽统一承载用户预约与自动续轮");
   console.log("✓ 审查者 CRUD 与自由工作流初始状态可用");
   console.log("✓ 运行中可预约、覆盖、取消，失败保留且 confirmed done 后只自动派出一次");
   console.log("✓ 派审附言会校验、持久化并进入即时与预约审查提示");

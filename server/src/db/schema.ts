@@ -151,6 +151,12 @@ export const tasks = sqliteTable("tasks", {
   // 落库而不只放内存 —— 确认与结算若不在同一个进程里（历史事故：僵尸实例跑任务、
   // HTTP 打到监听进程），内存标记会静默丢掉，agent 明明确认了却记 failed。
   completeConfirmedAt: text("complete_confirmed_at"),
+  // 统一验收合并的结构化落账：目标分支 + 合并前后它的 commit。合并后基线审查（对
+  // base@before..after 派新任务）靠它，时间线文本反解不可靠。无合并动作（in_place /
+  // marked_only / 打标签）时保持 null 或 before==after。
+  acceptedTargetBranch: text("accepted_target_branch"),
+  acceptedBaseCommit: text("accepted_base_commit"),
+  acceptedMergeCommit: text("accepted_merge_commit"),
 });
 
 export const agents = sqliteTable("agents", {
@@ -213,6 +219,8 @@ export const freeWorkflowStates = sqliteTable("free_workflow_states", {
   reviewCheckMode: text("review_check_mode"),
   reviewRetryLimit: integer("review_retry_limit"),
   reviewNote: text("review_note"),
+  // 非空 = 自动复审链的续轮预约：修复确认完成后在这条 run 上续下一轮，而不是开新 run。
+  reviewRunId: text("review_run_id"),
   updatedAt: text("updated_at").notNull(),
 });
 
@@ -260,6 +268,8 @@ export const freeReviewRounds = sqliteTable(
     round: integer("round").notNull(),
     status: text("status").notNull(),
     conclusion: text("conclusion"),
+    // 本轮启动时任务工作区的 HEAD。结论新不新鲜靠它跟当前 HEAD 比，不靠状态字段。
+    reviewedCommit: text("reviewed_commit"),
     startedAt: text("started_at").notNull(),
     endedAt: text("ended_at"),
   },

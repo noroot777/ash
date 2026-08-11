@@ -126,7 +126,7 @@ export async function ensureSchema() {
     CREATE TABLE IF NOT EXISTS free_workflow_states (
       task_id TEXT PRIMARY KEY, selected_reviewer_id TEXT,
       review_armed INTEGER NOT NULL DEFAULT 0, review_check_mode TEXT,
-      review_retry_limit INTEGER, review_note TEXT,
+      review_retry_limit INTEGER, review_note TEXT, review_run_id TEXT,
       updated_at TEXT NOT NULL
     );
     CREATE TABLE IF NOT EXISTS free_workflow_events (
@@ -145,7 +145,8 @@ export async function ensureSchema() {
     CREATE INDEX IF NOT EXISTS free_review_runs_task_idx ON free_review_runs (task_id, created_at);
     CREATE TABLE IF NOT EXISTS free_review_rounds (
       id TEXT PRIMARY KEY, run_id TEXT NOT NULL, round INTEGER NOT NULL,
-      status TEXT NOT NULL, conclusion TEXT, started_at TEXT NOT NULL, ended_at TEXT
+      status TEXT NOT NULL, conclusion TEXT, reviewed_commit TEXT,
+      started_at TEXT NOT NULL, ended_at TEXT
     );
     CREATE UNIQUE INDEX IF NOT EXISTS free_review_rounds_run_round_idx
       ON free_review_rounds (run_id, round);
@@ -253,7 +254,13 @@ export async function ensureSchema() {
     "ALTER TABLE free_workflow_states ADD COLUMN review_check_mode TEXT",
     "ALTER TABLE free_workflow_states ADD COLUMN review_retry_limit INTEGER",
     "ALTER TABLE free_workflow_states ADD COLUMN review_note TEXT",
+    "ALTER TABLE free_workflow_states ADD COLUMN review_run_id TEXT",
     "ALTER TABLE free_review_runs ADD COLUMN note TEXT",
+    "ALTER TABLE free_review_rounds ADD COLUMN reviewed_commit TEXT",
+    // 统一验收的结构化合并落账（目标分支 + 合并前后 commit），合并后基线审查靠它。
+    "ALTER TABLE tasks ADD COLUMN accepted_target_branch TEXT",
+    "ALTER TABLE tasks ADD COLUMN accepted_base_commit TEXT",
+    "ALTER TABLE tasks ADD COLUMN accepted_merge_commit TEXT",
     // Token 用量:一条会话行按回合累加(口径统一在 shared/src/usage.ts)。全 null
     // = 这条会话建在本功能之前、或那家 CLI 不报账——**不能当 0 展示**。
     "ALTER TABLE sessions ADD COLUMN usage_input INTEGER",
@@ -279,8 +286,25 @@ export async function ensureSchema() {
   }
   await migrateLegacyNoteTaskLinks();
   await migrateDebateToDuet();
+  await migrateFreeReviewStatuses();
   await dropRetiredColumns();
   await dropRetiredTables();
+}
+
+// 审查链状态瘦身（2026-08-11）：叙事状态（修复中/结论过期/轮数用尽）改为推导，持久值
+// 只剩 reviewing/passed/failed/stopped。老库里的中间态一律收敛成 stopped——它们都表示
+// 「最后一轮未通过后停在半路」，链的延续意图已改由预约槽（review_run_id）承载。幂等：
+// 匹配 0 行就是空转。
+async function migrateFreeReviewStatuses(): Promise<void> {
+  try {
+    await client.execute(
+      `UPDATE free_review_runs
+       SET status='stopped', finished_at=COALESCE(finished_at, updated_at)
+       WHERE status IN ('repairing','manual_repairing','reworking','exhausted','superseded')`,
+    );
+  } catch (e) {
+    console.warn("[harness] 自由审查旧状态收敛失败,忽略:", e);
+  }
 }
 
 // 辩论模式更名为讨论(duet,2026-08-07):列、mode 值、会话角色一起迁。全部幂等——
@@ -329,6 +353,10 @@ const RETIRED_COLUMNS: { table: string; column: string; why: string }[] = [
   { table: "tasks", column: "issue_id", why: "事项中心已移除" },
   // 任务列表不再区分人工优先级，统一按状态/分区和最后更新时间展示
   { table: "tasks", column: "priority", why: "任务优先级已移除" },
+  // 自由工作流专属「合并&清理」被统一验收（task-accept）取代，状态列一并退役
+  { table: "free_workflow_states", column: "merge_status", why: "自由工作流合并已统一走验收" },
+  { table: "free_workflow_states", column: "merge_message", why: "自由工作流合并已统一走验收" },
+  { table: "free_workflow_states", column: "merged_at", why: "自由工作流合并已统一走验收" },
 ];
 
 // 退役整表与退役列遵循同一原则：新库不创建，老库启动时幂等清理，失败只告警。
