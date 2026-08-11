@@ -112,7 +112,6 @@ export async function dispatchWorkers(
       reviewRound: null as number | null,
       // Old TeamConfig rows omit review; omission deliberately means enabled.
       reviewRequested: typeof s.review === "boolean" ? s.review : cfg.review !== false,
-      priority: lead.priority,
       labels: "[]",
       dependsOn: "[]",
       resumeDependsOn: "[]",

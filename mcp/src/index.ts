@@ -110,7 +110,6 @@ const fail = (e: unknown) => ({
 // 从 shared 派生,别在这里另抄一张名单:AGENT_TYPES 加一个 CLI,MCP 工具的
 // 取值范围就跟着变(以前写死三个,新增执行器后 MCP 侧会莫名 400)。
 const AGENT_TYPE = z.enum(AGENT_TYPES);
-const PRIORITY = z.enum(["none", "low", "medium", "high", "urgent"]);
 const MODE = z.enum(["parallel", "serial"]);
 const TASK_STATUS = z.enum(["backlog", "done", "failed", "canceled"]);
 const TASK_STAGE = z.enum(STAGE_ORDER);
@@ -128,7 +127,6 @@ const taskShape = z.object({
   reasoningEffort: z.string().nullable().optional().describe("覆盖执行器 profile 的思考强度；缺省/null=跟随执行器"),
   useWorktree: z.boolean().optional().describe("是否在独立 worktree 中运行；缺省跟随全局默认，非 git 项目始终为 false"),
   worktreeBase: z.string().nullable().optional().describe("worktree 的 base ref；缺省使用项目当前 HEAD"),
-  priority: PRIORITY.optional(),
   labels: z.array(z.string()).optional().describe("任务标签"),
 });
 
@@ -201,7 +199,6 @@ server.registerTool(
         reasoningEffort: z.string().nullable().optional().describe("覆盖执行器 profile 的默认思考强度；缺省/null=跟随执行器，任务自身可覆盖"),
         useWorktree: z.boolean().optional().describe("默认是否使用 worktree；缺省跟随全局默认，任务自身可覆盖"),
         worktreeBase: z.string().nullable().optional().describe("默认 worktree base ref；任务自身可覆盖"),
-        priority: PRIORITY.optional(),
         labels: z.array(z.string()).optional(),
       }).optional().describe("每个任务的兜底值，任务自身可覆盖"),
     },
@@ -296,13 +293,12 @@ server.registerTool(
   {
     title: "更新任务",
     description:
-      "更新单个任务的可编辑字段:title/body/status/labels/priority/groupId/agentType/executorId/model/reasoningEffort。model/reasoningEffort 覆盖执行器 profile 的模型/思考强度，缺省或 null=跟随执行器；可在运行中修改，下一回合解析执行器时生效。executorId 指具体执行器 profile(agents.id),指定则优先用它；为空/悬空时按 agentType 默认执行器降级。**不能**用此工具改任务的队列归属——请用 queue_insert / queue_remove / queue_reorder;**想让失败/取消的任务回队列等待用 requeue_task**(它会顺带处理位置:被越过就排到队尾)。也不能把任务手动设为 running/queued/awaiting_review。**running/queued 任务的 status 一律不可改(会被 409 拒绝)——要停止/取消用 stop_task**,它才会真正杀掉 agent 进程树;直接 patch canceled 只改数据库,是 2026-07-21「complete_task 409 → failed 错乱」事故的根因。**正在执行的任务要确认完成时,也不要用 status=done——用 complete_task**:回合结束的严格结算只认 complete_task 的确认。",
+      "更新单个任务的可编辑字段:title/body/status/labels/groupId/agentType/executorId/model/reasoningEffort。model/reasoningEffort 覆盖执行器 profile 的模型/思考强度，缺省或 null=跟随执行器；可在运行中修改，下一回合解析执行器时生效。executorId 指具体执行器 profile(agents.id),指定则优先用它；为空/悬空时按 agentType 默认执行器降级。**不能**用此工具改任务的队列归属——请用 queue_insert / queue_remove / queue_reorder;**想让失败/取消的任务回队列等待用 requeue_task**(它会顺带处理位置:被越过就排到队尾)。也不能把任务手动设为 running/queued/awaiting_review。**running/queued 任务的 status 一律不可改(会被 409 拒绝)——要停止/取消用 stop_task**,它才会真正杀掉 agent 进程树;直接 patch canceled 只改数据库,是 2026-07-21「complete_task 409 → failed 错乱」事故的根因。**正在执行的任务要确认完成时,也不要用 status=done——用 complete_task**:回合结束的严格结算只认 complete_task 的确认。",
     inputSchema: {
       taskId: z.string(),
       title: z.string().optional(),
       body: z.string().optional(),
       status: TASK_STATUS.optional(),
-      priority: PRIORITY.optional(),
       labels: z.array(z.string()).optional(),
       groupId: z.string().nullable().optional(),
       agentType: AGENT_TYPE.nullable().optional(),

@@ -5,7 +5,6 @@ import type {
   AgentType,
   Group,
   GroupMode,
-  Priority,
   ProjectView,
   Task,
   TaskMode,
@@ -79,7 +78,6 @@ export function TaskComposerPanel({
   const [review, setReview] = useState(true);
   const [rounds, setRounds] = useState("3");
   const [gate, setGate] = useState(true);
-  const [priority, setPriority] = useState<Priority>("none");
   const [groupId, setGroupId] = useState("");
   const [labels, setLabels] = useState<string[]>([]);
   const [useWorktree, setUseWorktree] = useState(DEFAULT_APP_SETTINGS.worktreeDefault);
@@ -415,7 +413,6 @@ export function TaskComposerPanel({
         projectId: project.id,
         title: explicitTitle || provisionalTitle,
         autoTitle: !explicitTitle && mode === "single",
-        priority,
         groupId: groupId || null,
         labels,
       };
@@ -649,8 +646,6 @@ export function TaskComposerPanel({
             groups={groups}
             groupId={groupId}
             onGroupChange={setGroupId}
-            priority={priority}
-            onPriorityChange={setPriority}
             labels={labels}
             onLabelsChange={setLabels}
             onCreateGroup={() => setGroupDialogOpen(true)}

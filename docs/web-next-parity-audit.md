@@ -137,7 +137,7 @@
 ### 15. 新建任务不能在创建时设置 labels（已修）
 
 - 旧版位置：`web/src/TaskComposer.tsx:73,347-348,614-621` 维护标签并直接写入 create payload。
-- 新版现状：**缺失**。`web-next/src/composer/TaskComposerPanel.tsx:86-102,227-233` 只有 priority/group 等 state 和 common payload，没有 labels；创建后只能去 Inspector 补填。
+- 新版现状：**缺失**。`web-next/src/composer/TaskComposerPanel.tsx:86-102,227-233` 只有 group 等 state 和 common payload，没有 labels；创建后只能去 Inspector 补填。
 - 修复入手点：在 composer 的任务选项加入与 Inspector 共用的标签编辑器，payload 写 `labels`，连续创建时清空。
 - 修复结果：Composer 与 Inspector 现共用同一标签编辑器；单任务、团队和辩论创建 payload 均写入 `labels`，成功创建后清空标签状态，避免连续创建继承上一项标签。
 
@@ -180,10 +180,10 @@
 
 ### 21. 任务树缺少暂停阻塞原因和多项任务元数据（按用户要求撤销）
 
-- 旧版位置：`web/src/TaskList.tsx:235-278` 行内显示 priority、worktree、queue position、group、labels、来源；`web/src/ui.tsx:554-613` 对 paused 任务显示“在等谁”，可跳到首个阻塞任务。
-- 新版现状：**信息退化**。`web-next/src/workspace/TaskTree.tsx:114-139` 顶层行主要只有状态、置顶、模式和标题；没有暂停依赖、优先级、标签、分组、worktree、队列位置。选中任务后 Inspector 能看一部分，但无法横向扫列表。
+- 旧版位置：`web/src/TaskList.tsx:235-278` 行内显示 worktree、queue position、group、labels、来源；`web/src/ui.tsx:554-613` 对 paused 任务显示“在等谁”，可跳到首个阻塞任务。
+- 新版现状：**信息退化**。`web-next/src/workspace/TaskTree.tsx:114-139` 顶层行主要只有状态、置顶、模式和标题；没有暂停依赖、标签、分组、worktree、队列位置。选中任务后 Inspector 能看一部分，但无法横向扫列表。
 - 修复入手点：先恢复高价值且低噪声的 paused blocker 和 queue position；其余元数据做 hover/次行或可配置密度，避免把新版窄树挤爆。
-- 当前状态：列表元数据按用户要求撤销，任务行恢复 `feat/issue-center` 原版密度并移除 hover 弹窗；暂停阻塞、队列位置、优先级、分组、标签和 worktree 信息统一在 Inspector 内查看。
+- 当前状态：列表元数据按用户要求撤销，任务行恢复 `feat/issue-center` 原版密度并移除 hover 弹窗；暂停阻塞、队列位置、分组、标签和 worktree 信息统一在 Inspector 内查看。
 
 ## P3：低频效率与可发现性退化（审计识别 4，已修 4）
 

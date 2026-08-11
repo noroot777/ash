@@ -20,7 +20,7 @@ import {
 import { QueueDrawer } from "./QueueDrawer.tsx";
 import { InspectorPromptContent } from "./InspectorPromptContent.tsx";
 import { TaskChangeSummary } from "./TaskChangeSummary.tsx";
-import { formatInstant, PRIORITY_LABELS, taskDurationInfo } from "./utils.ts";
+import { formatInstant, taskDurationInfo } from "./utils.ts";
 
 const STATUS_ORDER: TaskStatus[] = [
   "running", "idle", "paused", "awaiting_review", "queued", "backlog", "done", "failed", "canceled",
@@ -278,16 +278,6 @@ export function TaskInspector({
               disabled={readOnly}
               filterable={false}
               onChange={(status) => void patch({ status: status as TaskStatus })}
-            />
-          </InspectorRow>
-          <InspectorRow label="优先级">
-            <Dropdown
-              label="优先级"
-              value={task.priority}
-              options={Object.entries(PRIORITY_LABELS).map(([value, label]) => ({ value, label }))}
-              disabled={readOnly}
-              filterable={false}
-              onChange={(priority) => void patch({ priority: priority as Task["priority"] })}
             />
           </InspectorRow>
           <InspectorRow label="分组">

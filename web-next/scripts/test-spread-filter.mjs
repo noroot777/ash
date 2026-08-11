@@ -15,11 +15,11 @@ function task(id, extra = {}) {
     status: "backlog",
     stage: null,
     question: null,
-    priority: "none",
     pinnedAt: null,
     parentId: null,
     archived: false,
     createdAt: "2026-08-01T00:00:00.000Z",
+    updatedAt: "2026-08-01T00:00:00.000Z",
     ...extra,
   };
 }

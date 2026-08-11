@@ -97,7 +97,6 @@ export const tasks = sqliteTable("tasks", {
   // 线上第一站。历史那批独立审查任务把它记在自己身上，就地验证轮记在被验任务身上。
   reviewStep: text("review_step"),
   reviewRequested: integer("review_requested", { mode: "boolean" }).notNull().default(false),
-  priority: text("priority").notNull().default("none"),
   labels: text("labels").notNull().default("[]"), // json
   dependsOn: text("depends_on").notNull().default("[]"), // json
   resumeDependsOn: text("resume_depends_on").notNull().default("[]"), // json

@@ -43,10 +43,10 @@ src/
     data.ts              初始 / 重连数据加载
     log.ts               AgentEvent → LogLine（移植自 web）
     taskActions.ts       运行按钮状态机（移植自 web）
-    constants.ts         状态 / 优先级元数据（颜色版）
+    constants.ts         状态元数据（颜色版）
     theme.ts             暗色调色板
   components/
-    ui.tsx               StatusDot / PriorityBars / Pill / Button
+    ui.tsx               StatusDot / Pill / Button
     Markdown.tsx         轻量 markdown 渲染（无额外依赖）
     Conversation.tsx     LogLine[] → 气泡时间线
 ```

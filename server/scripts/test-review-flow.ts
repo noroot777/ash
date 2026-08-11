@@ -240,7 +240,6 @@ await db.insert(tasks).values({
   status: "done",
   stage: null,
   reviewRequested: true,
-  priority: "none",
   labels: "[]",
   dependsOn: "[]",
   resumeDependsOn: "[]",
@@ -314,7 +313,6 @@ await db.insert(tasks).values({
   verifyRound: 1,
   verifyRounds: 0,
   reviewRequested: true,
-  priority: "none",
   labels: "[]",
   dependsOn: "[]",
   resumeDependsOn: "[]",
@@ -376,7 +374,7 @@ await db.insert(tasks).values({
   id: "verify-legacy-row", projectId: "project", groupId: null, parentId: null,
   title: "legacy review", body: "", mode: "single", status: "done",
   reviewOf: inlineId, reviewRound: 1, reviewStep: "v-second",
-  priority: "none", labels: "[]", dependsOn: "[]", resumeDependsOn: "[]",
+  labels: "[]", dependsOn: "[]", resumeDependsOn: "[]",
   agentType: "claude", autoTitle: false, createdAt: at, updatedAt: at,
 });
 assert.equal(await stationRounds(inlineId, "v-second"), 3, "两种载体的轮数要加在一起");
@@ -400,7 +398,6 @@ await db.insert(tasks).values({
   verifyRound: 1,
   verifyRounds: 0,
   reviewRequested: true,
-  priority: "none",
   labels: "[]",
   dependsOn: "[]",
   resumeDependsOn: "[]",

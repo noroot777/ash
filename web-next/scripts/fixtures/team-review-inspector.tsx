@@ -43,7 +43,6 @@ function task(id: string, title: string, extra: Partial<Task> = {}): Task {
     body: "",
     mode: "single",
     status: "done",
-    priority: "none",
     labels: [],
     dependsOn: [],
     resumeDependsOn: [],

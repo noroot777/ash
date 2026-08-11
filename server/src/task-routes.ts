@@ -147,7 +147,6 @@ api.post("/tasks", async (c) => {
     body: taskBody(b.body, taskId) + attachmentsPrompt(b.attachments),
     mode: b.mode ?? "single",
     status: (b.status && isUserSettableStatus(b.status) ? b.status : "backlog") as TaskStatus,
-    priority: b.priority ?? "none",
     labels: JSON.stringify(b.labels ?? []),
     // dependsOn / resumeDependsOn 字段保留为 []。新模型用 queue_items
     // 表达顺序依赖;input 上的这俩字段已不再接受。
@@ -218,7 +217,7 @@ api.post("/tasks", async (c) => {
   return c.json(created!, 201);
 });
 
-// Partial update: title/body/status/pinnedAt/priority/labels/groupId/agentType/executorId/model/reasoningEffort/mode/duet.
+// Partial update: title/body/status/pinnedAt/labels/groupId/agentType/executorId/model/reasoningEffort/mode/duet.
 api.patch("/tasks/:id", async (c) => {
   const tid = c.req.param("id");
   const existing = (await db.select().from(tasks).where(eq(tasks.id, tid))).at(0);
@@ -254,7 +253,6 @@ api.patch("/tasks/:id", async (c) => {
   if (b.body !== undefined) patch.body = b.body;
   if (b.autoTitle !== undefined) patch.autoTitle = b.autoTitle;
   if (b.pinnedAt !== undefined) patch.pinnedAt = b.pinnedAt;
-  if (b.priority !== undefined) patch.priority = b.priority;
   if (b.labels !== undefined) patch.labels = JSON.stringify(b.labels);
   if (b.groupId !== undefined) patch.groupId = b.groupId;
   const requestedExecutorId = b.executorId === "" ? null : b.executorId;
@@ -521,7 +519,6 @@ api.post("/groups/:groupId/tasks/batch", async (c) => {
       body: taskBody(s.body, ids[i]),
       mode: "single",
       status: "backlog",
-      priority: s.priority ?? b.defaults?.priority ?? "none",
       labels: JSON.stringify(s.labels ?? b.defaults?.labels ?? []),
       dependsOn: "[]", // 字段保留为空(legacy)
       resumeDependsOn: "[]",
