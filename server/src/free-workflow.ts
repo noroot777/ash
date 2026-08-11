@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { extname, join } from "node:path";
 import type {
   AgentType,
@@ -28,7 +28,7 @@ import {
   freeReviewReportPath,
 } from "./free-review-files.js";
 import { freeWorkflowState, type FreeWorkflowApiState } from "./free-workflow-state.js";
-import { continueWhenIdle, whenTurnIdle } from "./runs.js";
+import { continueWhenIdle, isTurnClaimed, whenTurnIdle } from "./runs.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { taskWorkspace } from "./task-workspace.js";
 import { headCommit } from "./git.js";
@@ -292,6 +292,14 @@ export async function reportFreeReviewConclusion(
   if (stage !== "verified" && stage !== "verify_failed") {
     throw new Error("自由工作流审查回合只能上报 verified 或 verify_failed");
   }
+  // report.md 是唯一必交证据——只写在 prompt 里挡不住，结论入口硬校验：没有非空报告
+  // 就拒收，审查者补写后重调即可。路径走 freeReviewFile 的安全解析（拒 symlink 祖先）。
+  const reportFile = freeReviewFile(taskId, run.id, run.currentRound, "report.md");
+  let reportBytes = 0;
+  try { reportBytes = reportFile ? statSync(reportFile).size : 0; } catch { reportBytes = 0; }
+  if (reportBytes === 0) {
+    throw new Error(`审查结论必须先落报告：请把报告写到 ${freeReviewReportPath(taskId, run.id, run.currentRound)} 再上报结论`);
+  }
   await db.update(freeReviewRounds).set({ conclusion: stage })
     .where(and(eq(freeReviewRounds.runId, run.id), eq(freeReviewRounds.round, run.currentRound)));
   bus.publish({ type: "task.review", taskId });
@@ -514,8 +522,10 @@ async function startFreePreview(taskId: string) {
     if (!task || task.workflowMode !== "free" || task.mode !== "single" || task.parentId || task.reviewOf) {
       throw new Error("当前任务不支持自由预览");
     }
+    if (task.archived) throw new Error("归档任务不能打开预览");
     if (task.status === "backlog") throw new Error("任务尚未运行，完成实现后再打开预览");
     if (task.status === "running" || task.status === "queued") throw new Error("任务正在修改代码，结束后再打开预览");
+    if (isTurnClaimed(taskId)) throw new Error("任务回合正在进行（状态尚未落库），结束后再打开预览");
     assertBeforeAcceptance(task);
     const project = (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0);
     if (!project) throw new Error("项目不存在");
@@ -552,6 +562,12 @@ export function mountFreeWorkflowRoutes(api: Hono): void {
 
   api.post("/tasks/:id/free-workflow/review", async (c) => {
     try {
+      // turn 锁只拦**外部请求**：claimTurn 到 status 落 running 之间的窗口里，DB 看起来
+      // 空闲、实际回合已开跑，此时派审会把普通回合误判成审查回合。结算内部的预约派审
+      // 不走这里——那时回合正在收尾，审查消息经 whenTurnIdle 排队是安全的。
+      if (isTurnClaimed(c.req.param("id"))) {
+        return c.json({ error: "任务回合正在进行（状态尚未落库），结束后再派审" }, 409);
+      }
       return c.json(await startFreeReview(c.req.param("id"), await c.req.json<FreeReviewDispatchInput>()), 201);
     } catch (error) {
       return c.json({ error: error instanceof Error ? error.message : String(error) }, 409);

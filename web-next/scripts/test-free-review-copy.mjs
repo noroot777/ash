@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import {
-  freeConclusionStale,
+  freeConclusionFreshness,
   freeReviewActivityDetail,
   freeReviewActivityTitle,
   freeReviewBlockingLabel,
@@ -31,24 +31,39 @@ assert.equal(freeReviewBlockingLabel({ ...run, status: "stopped" }), null);
 assert.equal(freeReviewBlockingLabel({ ...run, status: "passed" }), null);
 assert.equal(freeReviewBlockingLabel({ ...run, status: "failed" }), null);
 
-// 结论新鲜度锚定 commit：审查基准和当前 HEAD 不一致才算过期。
+// 结论新鲜度是三态：fresh 要求锚点等于 HEAD 且工作区干净；缺任何一项事实都是 unknown，
+// 绝不能失败开放地当成新鲜。
 const passedRun = {
   ...run,
   status: "passed",
   rounds: [{ round: 1, status: "passed", conclusion: "verified", reviewedCommit: "aaa" }],
 };
-assert.equal(freeConclusionStale(passedRun, "aaa"), false, "HEAD 未变不算过期");
-assert.equal(freeConclusionStale(passedRun, "bbb"), true, "HEAD 变了结论过期");
-assert.equal(freeConclusionStale(passedRun, null), false, "取不到 HEAD 不妄断过期");
+assert.equal(freeConclusionFreshness(passedRun, "aaa", false), "fresh", "锚点=HEAD 且工作区干净才是新鲜");
+assert.equal(freeConclusionFreshness(passedRun, "bbb", false), "stale", "HEAD 变了结论过期");
+assert.equal(freeConclusionFreshness(passedRun, "aaa", true), "stale", "未提交改动同样算过期，不能只看 HEAD");
+assert.equal(freeConclusionFreshness(passedRun, null, false), "unknown", "取不到 HEAD 是未知，不是新鲜");
+assert.equal(freeConclusionFreshness(passedRun, "aaa", null), "unknown", "读不到工作区脏净是未知");
 assert.equal(
-  freeConclusionStale({ ...passedRun, rounds: [{ round: 1, status: "passed", conclusion: "verified", reviewedCommit: null }] }, "bbb"),
-  false,
-  "老数据没有基准 commit 时不妄断",
+  freeConclusionFreshness({ ...passedRun, rounds: [{ round: 1, status: "passed", conclusion: "verified", reviewedCommit: null }] }, "bbb", false),
+  "unknown",
+  "老数据没有基准 commit 是未知，不是新鲜",
+);
+assert.equal(
+  freeConclusionFreshness({
+    ...passedRun,
+    rounds: [
+      { round: 1, status: "failed", conclusion: "verify_failed", reviewedCommit: "old" },
+      { round: 2, status: "passed", conclusion: "verified", reviewedCommit: null },
+    ],
+  }, "old", false),
+  "unknown",
+  "只认最新结论轮自己的锚点，不得回退借用旧轮",
 );
 
 // 叙事全部推导：修复中 = 任务在跑 + 未通过意见在身；自动复审 = 预约槽挂 runId。
 const stoppedState = {
   workspaceHead: "aaa",
+  workspaceDirty: false,
   reviewReservation: { armed: false, reviewerId: null, checkMode: null, retryLimit: null, note: null, runId: null },
   reviews: [{ ...run, status: "stopped" }],
 };

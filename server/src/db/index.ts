@@ -291,16 +291,48 @@ export async function ensureSchema() {
   await dropRetiredTables();
 }
 
-// 审查链状态瘦身（2026-08-11）：叙事状态（修复中/结论过期/轮数用尽）改为推导，持久值
-// 只剩 reviewing/passed/failed/stopped。老库里的中间态一律收敛成 stopped——它们都表示
-// 「最后一轮未通过后停在半路」，链的延续意图已改由预约槽（review_run_id）承载。幂等：
-// 匹配 0 行就是空转。
+// 审查链状态瘦身（2026-08-11）：叙事状态改为推导，持久值只剩 reviewing/passed/failed/stopped。
+// 老库的中间态**按旧语义逐类转换**，不能枚举压平（第 1 轮审查抓过三条丢语义）：
+// - repairing：旧结算是「确认完成后直接续下一轮」，新结算只消费预约槽 → 必须回填
+//   自动续轮预约（review_armed=1 + review_run_id），否则升级期间正在自动修复的任务静默断链。
+// - superseded：旧语义「代码已改过，未通过结论已过期」。压成 stopped 会让前端重新露出
+//   「按意见修复/未通过等待处理」。给该 run 最新一轮回填哨兵 reviewed_commit（永不等于任何
+//   HEAD），新鲜度推导即显示「代码已有新修改」而不是把旧意见当成当前待办。
+// - manual_repairing / reworking / exhausted：本来就是「未通过后停住」→ stopped。
+// - 已验收（accepted/merged）自由任务的遗留预约一并注销，否则 reopen 后触发幽灵审查。
+// 全部幂等：匹配 0 行就是空转。
+export const LEGACY_SUPERSEDED_ANCHOR = "legacy-superseded";
 async function migrateFreeReviewStatuses(): Promise<void> {
   try {
+    // repairing：回填自动续轮预约（先回填，再改状态，中途失败重启后仍能续上）。
+    const repairing = await client.execute(
+      `SELECT id, task_id FROM free_review_runs WHERE status='repairing'`,
+    );
+    for (const row of repairing.rows) {
+      await client.execute({
+        sql: `INSERT INTO free_workflow_states (task_id, selected_reviewer_id, review_armed, review_run_id, updated_at)
+              SELECT task_id, reviewer_id, 1, id, updated_at FROM free_review_runs WHERE id=:id
+              ON CONFLICT(task_id) DO UPDATE SET review_armed=1, review_run_id=excluded.review_run_id`,
+        args: { id: String(row.id) },
+      });
+    }
+    // superseded：最新一轮回填哨兵锚点 → 新鲜度推导为「已过期」。
+    await client.execute(
+      `UPDATE free_review_rounds SET reviewed_commit='${LEGACY_SUPERSEDED_ANCHOR}'
+       WHERE reviewed_commit IS NULL AND run_id IN (SELECT id FROM free_review_runs WHERE status='superseded')
+         AND round=(SELECT MAX(r2.round) FROM free_review_rounds r2 WHERE r2.run_id=free_review_rounds.run_id)`,
+    );
     await client.execute(
       `UPDATE free_review_runs
        SET status='stopped', finished_at=COALESCE(finished_at, updated_at)
        WHERE status IN ('repairing','manual_repairing','reworking','exhausted','superseded')`,
+    );
+    // 已验收自由任务的遗留预约不自愈会变幽灵审查。
+    await client.execute(
+      `UPDATE free_workflow_states SET review_armed=0, review_run_id=NULL, review_note=NULL
+       WHERE review_armed=1 AND task_id IN (
+         SELECT id FROM tasks WHERE workflow_mode='free' AND stage IN ('accepted','merged')
+       )`,
     );
   } catch (e) {
     console.warn("[harness] 自由审查旧状态收敛失败,忽略:", e);

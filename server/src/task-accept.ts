@@ -4,11 +4,12 @@ import { acceptPlan, anchorAt, hasAcceptStation, isFinalHumanGate, nextAnchor, s
 import type { AcceptBy } from "@harness/shared/workflow-policy";
 import { ACCEPT_CLEAN_LABELS, ACCEPT_STRATEGY_LABELS, STEP_LABELS } from "@harness/shared/workflow";
 import { db } from "./db/index.js";
-import { freeWorkflowStates, projects, tasks } from "./db/schema.js";
+import { projects, tasks } from "./db/schema.js";
 import { handOffConflict, type ConflictHandoff } from "./accept-conflict.js";
 import { resolveTaskMergeTarget } from "./git.js";
 import { cleanupAcceptedTask, cleanupPlanFor, mergeTaskBranch } from "./git-accept.js";
 import { hasActiveFreeReview } from "./free-workflow.js";
+import { disarmFreeReviewReservation } from "./free-review-reservations.js";
 import { releaseFreeWorkflowAction, tryAcquireFreeWorkflowAction } from "./free-workflow-lock.js";
 import { taskWorkflowDef } from "./workflows.js";
 import { taskBranchDiff } from "./git-diff.js";
@@ -16,6 +17,7 @@ import { publishTaskUpdated } from "./task-store.js";
 import { stopPreviewAtAccept } from "./preview.js";
 import { IS_PREVIEW_INSTANCE, previewRefusal } from "./preview-instance.js";
 import { withRepoLock } from "./repo-lock.js";
+import { isTurnClaimed } from "./runs.js";
 import { setTaskStage, clearTaskStage } from "./task-stage.js";
 import { acceptSharedTeamWorkers, sharedWorkerAcceptanceMessage, type SharedWorkerAcceptance } from "./task-accept-shared-workers.js";
 import { appendTaskTimeline } from "./task-timeline.js";
@@ -112,15 +114,8 @@ async function finalizeAcceptance(
   await stopPreviewAtAccept(task.id);
   // 自由工作流：验收即终局，挂着的复审预约一并注销 —— 否则它会在任务日后被唤醒的
   // 某个回合里突然触发一场语境全变的审查（幽灵预约）。
-  if (task.workflowMode === "free") {
-    const state = (await db.select({ reviewArmed: freeWorkflowStates.reviewArmed })
-      .from(freeWorkflowStates).where(eq(freeWorkflowStates.taskId, task.id))).at(0);
-    if (state?.reviewArmed) {
-      await db.update(freeWorkflowStates)
-        .set({ reviewArmed: false, reviewNote: null, reviewRunId: null, updatedAt: now() })
-        .where(eq(freeWorkflowStates.taskId, task.id));
-      await appendTaskTimeline(task.id, "验收已完成，未消费的复审预约已一并取消。");
-    }
+  if (task.workflowMode === "free" && await disarmFreeReviewReservation(task.id)) {
+    await appendTaskTimeline(task.id, "验收已完成，未消费的复审预约已一并取消。");
   }
   const sharedWorkers = task.mode === "team" ? await acceptSharedTeamWorkers(task.id) : null;
   await appendTaskTimeline(
@@ -142,14 +137,18 @@ async function acceptanceState(taskId: string): Promise<{
   const task = related.find((row) => row.id === taskId) ?? null;
   if (!task) return { task: null, inFlightTasks: [] };
 
+  // DB status 之外还要看 turn 锁：续聊从 claimTurn 到写 running 之间有真实窗口，
+  // 只看 status 会在 agent 已开跑时合并并删掉它正在用的 worktree（审查实测复现）。
+  const inFlight = (row: typeof tasks.$inferSelect) =>
+    row.status === "running" || row.status === "queued" || isTurnClaimed(row.id);
   const inFlightTasks: InFlightTask[] = [];
-  if (task.status === "running" || task.status === "queued") {
+  if (inFlight(task)) {
     inFlightTasks.push({ id: task.id, title: task.title, status: task.status, role: "task" });
   }
   if (task.mode === "team") {
     const workers = related.filter((row) => row.parentId === task.id);
     for (const worker of workers) {
-      if (!worker.useWorktree && (worker.status === "running" || worker.status === "queued")) {
+      if (!worker.useWorktree && inFlight(worker)) {
         inFlightTasks.push({ id: worker.id, title: worker.title, status: worker.status, role: "shared_worker" });
       }
     }
@@ -260,6 +259,11 @@ async function acceptTaskUnlocked(taskId: string, by: AcceptBy): Promise<AcceptT
   if (initial.failure) return initial.failure;
   const task = initial.task!;
   if (task.stage === "accepted") {
+    // 幂等快路也要补清预约：历史上可能形成 accepted + armed 的组合（旧版合并入口、
+    // 或写 accepted 与清预约之间进程退出），不自愈的话 reopen 后会触发幽灵审查。
+    if (task.workflowMode === "free" && await disarmFreeReviewReservation(task.id)) {
+      await appendTaskTimeline(task.id, "任务已验收，检测到遗留的复审预约，已补清。");
+    }
     const sharedWorkers = task.mode === "team" ? await acceptSharedTeamWorkers(task.id) : null;
     await appendTaskTimeline(
       taskId,
@@ -413,9 +417,11 @@ async function acceptTaskUnlocked(taskId: string, by: AcceptBy): Promise<AcceptT
   if (!tagged) await setTaskStage(taskId, "merged");
   // 结构化落账：目标分支 + 合并前后它的 commit。时间线文本反解不可靠，合并后基线
   // 审查（对 base@before..after 派新任务）只认这三列。
+  // base 只写一次：cleanup 失败停在 merged 后重试会拿到 already_merged（before==after），
+  // 无条件覆盖会把第一次真实的合并区间抹成空区间（审查实测复现），所以已有值时不动。
   await db.update(tasks).set({
     acceptedTargetBranch: merge.targetBranch,
-    acceptedBaseCommit: merge.beforeCommit ?? null,
+    acceptedBaseCommit: task.acceptedBaseCommit ?? merge.beforeCommit ?? null,
     acceptedMergeCommit: merge.afterCommit ?? null,
     updatedAt: now(),
   }).where(eq(tasks.id, taskId));

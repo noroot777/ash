@@ -92,6 +92,8 @@ export interface FreeWorkflowState {
   selectedReviewerId: string | null;
   /** 当前任务工作区 HEAD；null = 工作区不存在（如已验收清理）或不是 git 目录。 */
   workspaceHead: string | null;
+  /** 工作区是否有未提交改动；null = 取不到（按未知处理，不能当干净）。 */
+  workspaceDirty: boolean | null;
   reviewReservation: {
     armed: boolean;
     reviewerId: string | null;

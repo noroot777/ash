@@ -145,8 +145,10 @@ export function FreeWorkflowInspector({
       : stoppedRun
         ? `第 ${stoppedRun.currentRound} 轮未通过${view.autoRereview ? " · 修复后自动复审" : exhausted ? " · 自动复审已停止" : ""}`
         : stale
-          ? "已通过，但之后代码有新修改 · 结论可能过期"
-          : latestReview ? `最近一轮${reviewRoundLabel(latestReview.round)}` : "尚未派审";
+          ? "已通过，但之后代码有变化 · 结论可能过期"
+          : view.freshness === "unknown" && latestRun?.status === "passed"
+            ? "已通过 · 无法确认结论是否仍对应当前代码"
+            : latestReview ? `最近一轮${reviewRoundLabel(latestReview.round)}` : "尚未派审";
   const overviewStatus = repairing ? "repairing" : stale ? "stale" : null;
 
   if (free.loading && !free.state) return <div className="free-workflow-inspector is-loading"><SpinnerGap size={14} className="is-spinning" />正在生成实际工作流…</div>;

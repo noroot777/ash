@@ -80,6 +80,16 @@ export async function headCommit(path: string): Promise<string | null> {
   }
 }
 
+/** 工作目录是否有未提交改动（含未跟踪文件）；取不到返回 null（调用方按未知处理，不当干净）。 */
+export async function workspaceDirty(path: string): Promise<boolean | null> {
+  try {
+    const { stdout } = await exec("git", ["-C", expandHome(path), "status", "--porcelain"]);
+    return stdout.trim().length > 0;
+  } catch {
+    return null;
+  }
+}
+
 // Cheap, synchronous health for a repoPath — exists + is-it-a-git-repo. Drives
 // the at-a-glance health dot everywhere a project is listed; no git spawn.
 // `.git` is a *file* in worktrees/submodules, so existsSync (not isDir).

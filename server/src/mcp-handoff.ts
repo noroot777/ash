@@ -172,6 +172,23 @@ async function applyReplay(taskId: string, call: McpCallRecord): Promise<string 
   if (call.tool === "report_stage") {
     const stage = call.args.stage;
     if (!isTaskStage(stage)) return null;
+    // 必须复用与 HTTP 路由相同的业务入口：自由工作流的审查结论写在 round 上，
+    // 直接 setTaskStage 会把结论写进 tasks.stage（自由任务根本不用 preset stage），
+    // round 依旧无结论、结算把审查判失败（审查实测复现）。
+    const { reportFreeReviewConclusion } = await import("./free-workflow.js");
+    try {
+      const freeReview = await reportFreeReviewConclusion(taskId, stage);
+      if (freeReview) {
+        return `自由审查结论（${stage}）当时因 MCP 通道中断没能写回，已补录到第 ${freeReview.round} 轮。`;
+      }
+    } catch (error) {
+      // 补录不满足业务门禁（比如报告缺失）就如实跳过，让结算按「没有结论」处理。
+      console.warn(`[harness] replay report_stage(${taskId}) rejected:`, error);
+      return null;
+    }
+    const task = (await db.select({ workflowMode: tasks.workflowMode }).from(tasks)
+      .where(eq(tasks.id, taskId))).at(0);
+    if (task?.workflowMode === "free") return null; // 自由任务不写 preset stage
     await setTaskStage(taskId, stage);
     return `验证结论（${stage}）当时因 MCP 通道中断没能写回，已从本回合的调用记录中补录。`;
   }

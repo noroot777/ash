@@ -113,6 +113,17 @@ export function claimTurn(taskId: string): boolean {
   return true;
 }
 
+/**
+ * 只读探测：这个任务的回合是否已被占用。
+ *
+ * 给「验收 / 派审 / 修复 / 预览」这类守卫用：`tasks.status` 要到 continueTask 深处才写成
+ * running，claim 到落库之间有真实窗口——只看 DB status 会把一个已经开跑的任务当成空闲，
+ * 进而合并、删 worktree 或往它身上派审（审查报告实测复现过）。守卫必须两个都看。
+ */
+export function isTurnClaimed(taskId: string): boolean {
+  return turns.has(taskId);
+}
+
 /** 回合结束：先放锁，再跑「等这一轮跑完」的回调（它们多半要立刻起下一轮）。 */
 export function releaseTurn(taskId: string): void {
   turns.delete(taskId);
@@ -156,7 +167,15 @@ export function continueWhenIdle(
 ): void {
   whenTurnIdle(taskId, () => {
     void import("./orchestrator.js")
-      .then(({ continueTask }) => continueTask(taskId, text, opts))
+      .then(async ({ continueTask }) => {
+        // continueTask 返回 false = 一个字都没送出去（回合又被别人抢了）。吞掉它，
+        // 调用方的时间线就会停在「意见已发回会话」而消息实际没了——必须当失败上报。
+        const delivered = await continueTask(taskId, text, opts);
+        if (delivered === false) {
+          console.error(`[harness] continueWhenIdle(${taskId}) not delivered: turn re-claimed`);
+          await onError?.("回合被其它执行抢占，消息未能投递");
+        }
+      })
       .catch((error) => {
         const message = error instanceof Error ? error.message : String(error);
         console.error(`[harness] continueWhenIdle(${taskId}) failed:`, error);

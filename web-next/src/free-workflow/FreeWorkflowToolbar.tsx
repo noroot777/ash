@@ -15,7 +15,7 @@ export function FreeWorkflowToolbar({ task, notify }: { task: Task; notify: (mes
   const view = freeReviewView(free.state, task);
   const { latestRun, reviewing, stoppedRun, taskBusy, reservationArmed, repairing, stale } = view;
   const taskReady = task.status !== "backlog";
-  const accepted = task.stage === "accepted" || task.stage === "merged";
+  const locked = task.stage === "accepted" || task.stage === "merged" || task.archived;
   const reservationMode = taskBusy || reservationArmed;
   const reviewLabel = reviewing
     ? "审查中"
@@ -60,17 +60,17 @@ export function FreeWorkflowToolbar({ task, notify }: { task: Task; notify: (mes
             run={stoppedRun}
             compact
             className="is-review is-repair"
-            disabled={!taskReady || accepted}
+            disabled={!taskReady || locked}
             onChanged={free.setState}
             notify={notify}
           />
         ) : null}
-        <button type="button" className={`is-review${reviewing ? " is-busy" : ""}${reservationArmed ? " is-armed" : ""}`} data-state={reviewing ? "reviewing" : reservationArmed ? "armed" : latestRun?.status ?? "idle"} disabled={!taskReady || accepted || !!reviewing} onClick={() => setReviewOpen(true)}>
+        <button type="button" className={`is-review${reviewing ? " is-busy" : ""}${reservationArmed ? " is-armed" : ""}`} data-state={reviewing ? "reviewing" : reservationArmed ? "armed" : latestRun?.status ?? "idle"} disabled={!taskReady || locked || !!reviewing} onClick={() => setReviewOpen(true)}>
           {reviewing ? <SpinnerGap size={13} className="is-spinning" /> : <MagnifyingGlass size={13} weight="regular" />}
           <span>{reviewLabel}</span>
           {reservationArmed && <i className="free-review-armed-dot" aria-hidden="true" />}
         </button>
-        <button type="button" className={`is-preview${previewBusy ? " is-busy" : ""}`} aria-pressed={!!free.state?.preview.running} disabled={!taskReady || taskBusy || accepted || !!reviewing || previewBusy} onClick={() => void togglePreview()}>
+        <button type="button" className={`is-preview${previewBusy ? " is-busy" : ""}`} aria-pressed={!!free.state?.preview.running} disabled={!taskReady || taskBusy || locked || !!reviewing || previewBusy} onClick={() => void togglePreview()}>
           {previewBusy ? <SpinnerGap size={13} className="is-spinning" /> : free.state?.preview.running ? <StopCircle size={13} weight="regular" /> : <MonitorPlay size={13} weight="regular" />}
           <span>{previewBusy ? "处理中" : free.state?.preview.running ? "关闭预览" : "打开预览"}</span>
         </button>

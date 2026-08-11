@@ -15,6 +15,22 @@ export type ReservedFreeReview = {
   runId?: string | null;
 } | null | undefined;
 
+/**
+ * 注销一个自由任务的复审预约（幂等）。验收成功、重复验收快路和启动迁移都调它——
+ * 验收即终局，预约留着会在任务日后被唤醒的某个回合里触发语境全变的幽灵审查。
+ * 返回是否真的清掉了（调用方决定要不要写时间线）。
+ */
+export async function disarmFreeReviewReservation(taskId: string): Promise<boolean> {
+  const state = (await db.select({ reviewArmed: freeWorkflowStates.reviewArmed })
+    .from(freeWorkflowStates).where(eq(freeWorkflowStates.taskId, taskId))).at(0);
+  if (!state?.reviewArmed) return false;
+  await db.update(freeWorkflowStates)
+    .set({ reviewArmed: false, reviewNote: null, reviewRunId: null, updatedAt: now() })
+    .where(eq(freeWorkflowStates.taskId, taskId));
+  bus.publish({ type: "task.review", taskId });
+  return true;
+}
+
 // 「下次确认完成时派一轮审查」的唯一消费点。两种形态共用这一个槽位：
 // - runId 非空：自动复审链的续轮（round 未通过、还有轮数时由结算自动挂上）
 // - runId 为空：用户手动预约的新一条审查链

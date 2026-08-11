@@ -22,7 +22,7 @@ import {
   tasks,
 } from "./db/schema.js";
 import { freeReviewScreenshots, readFreeReviewReport } from "./free-review-files.js";
-import { headCommit, worktreePathFor } from "./git.js";
+import { headCommit, workspaceDirty, worktreePathFor } from "./git.js";
 import { existsSync } from "node:fs";
 import { readPreview } from "./preview.js";
 
@@ -63,15 +63,19 @@ function parseExecutionDetail(detail: string | null): { status: FreeWorkflowExec
   }
 }
 
-// 当前任务工作区的 HEAD，**纯只读**（绝不重建 worktree——这是状态轮询，不是执行路径）。
-// worktree 已被验收清理 → null；非 worktree 任务读项目目录本身。
-async function workspaceHeadOf(task: { id: string; projectId: string; useWorktree: boolean }): Promise<string | null> {
+// 当前任务工作区的 HEAD 与是否有未提交改动，**纯只读**（绝不重建 worktree——这是状态
+// 轮询，不是执行路径）。worktree 已被验收清理 → 双 null；非 worktree 任务读项目目录本身。
+// dirty 必须一起报：只比 HEAD 会把「审查后只改了工作区没提交」误判成新鲜（失败开放）。
+async function workspaceStateOf(
+  task: { id: string; projectId: string; useWorktree: boolean },
+): Promise<{ head: string | null; dirty: boolean | null }> {
   const project = (await db.select({ repoPath: projects.repoPath }).from(projects)
     .where(eq(projects.id, task.projectId))).at(0);
-  if (!project?.repoPath) return null;
-  if (!task.useWorktree) return headCommit(project.repoPath);
-  const path = worktreePathFor(project.repoPath, task.id);
-  return existsSync(path) ? headCommit(path) : null;
+  if (!project?.repoPath) return { head: null, dirty: null };
+  const path = task.useWorktree ? worktreePathFor(project.repoPath, task.id) : project.repoPath;
+  if (task.useWorktree && !existsSync(path)) return { head: null, dirty: null };
+  const [head, dirty] = await Promise.all([headCommit(path), workspaceDirty(path)]);
+  return { head, dirty };
 }
 
 export async function freeWorkflowState(taskId: string): Promise<FreeWorkflowApiState> {
@@ -156,10 +160,12 @@ export async function freeWorkflowState(taskId: string): Promise<FreeWorkflowApi
   const reservationRunId = state?.reviewArmed ? state.reviewRunId ?? null : null;
   const reservationReviewerId = state?.reviewArmed ? state.selectedReviewerId ?? null : null;
   const reservationArmed = !!reservationRunId || !!reservationReviewerId;
+  const workspace = await workspaceStateOf(task);
   return {
     taskId,
     selectedReviewerId: state?.selectedReviewerId ?? null,
-    workspaceHead: await workspaceHeadOf(task),
+    workspaceHead: workspace.head,
+    workspaceDirty: workspace.dirty,
     reviewReservation: {
       armed: reservationArmed,
       reviewerId: reservationReviewerId,

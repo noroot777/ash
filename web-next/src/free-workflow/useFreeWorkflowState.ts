@@ -7,6 +7,11 @@ type StateListener = (state: FreeWorkflowApiState) => void;
 const states = new Map<string, FreeWorkflowApiState>();
 const listeners = new Map<string, Set<StateListener>>();
 const inFlight = new Map<string, Promise<FreeWorkflowApiState>>();
+// 每个 task 只允许「最后声明的来源」写入共享状态：mutation 响应和新发起的 GET 都会占
+// 一个更大的序号，早先在飞的 GET 返回时序号已旧，直接丢弃——否则「早发起晚返回」的
+// GET 会把 mutation 刚写入的新状态盖回旧值（窗口最长一个轮询周期）。
+const latestWriter = new Map<string, number>();
+let writerSeq = 0;
 
 function publish(taskId: string, state: FreeWorkflowApiState): void {
   const taskListeners = listeners.get(taskId);
@@ -24,16 +29,23 @@ function subscribe(taskId: string, listener: StateListener): () => void {
     if (taskListeners.size) return;
     listeners.delete(taskId);
     states.delete(taskId);
+    latestWriter.delete(taskId);
   };
 }
 
-function loadShared(taskId: string): Promise<FreeWorkflowApiState> {
-  const running = inFlight.get(taskId);
-  if (running) return running;
+function loadShared(taskId: string, force = false): Promise<FreeWorkflowApiState> {
+  if (!force) {
+    const running = inFlight.get(taskId);
+    if (running) return running;
+  }
+  const seq = ++writerSeq;
+  latestWriter.set(taskId, seq);
   const request = api.freeWorkflow(taskId).then((state) => {
-    publish(taskId, state);
+    if (latestWriter.get(taskId) === seq) publish(taskId, state);
     return state;
-  }).finally(() => inFlight.delete(taskId));
+  }).finally(() => {
+    if (inFlight.get(taskId) === request) inFlight.delete(taskId);
+  });
   inFlight.set(taskId, request);
   return request;
 }
@@ -43,13 +55,17 @@ export function useFreeWorkflowState(taskId: string, enabled = true) {
   const [loading, setLoading] = useState(enabled);
   const [error, setError] = useState<string | null>(null);
 
-  const setState = useCallback((next: FreeWorkflowApiState) => publish(taskId, next), [taskId]);
+  // mutation 的响应就是此刻最权威的状态：占最新序号，让所有在飞 GET 作废。
+  const setState = useCallback((next: FreeWorkflowApiState) => {
+    latestWriter.set(taskId, ++writerSeq);
+    publish(taskId, next);
+  }, [taskId]);
 
-  const reload = useCallback(async (quiet = false) => {
+  const reload = useCallback(async (quiet = false, force = false) => {
     if (!enabled) return null;
     if (!quiet) setLoading(true);
     try {
-      const next = await loadShared(taskId);
+      const next = await loadShared(taskId, force);
       setError(null);
       return next;
     } catch (reason) {
@@ -84,7 +100,8 @@ export function useFreeWorkflowState(taskId: string, enabled = true) {
   }, [enabled, reload, taskId]);
 
   useServerEvents(useCallback((event) => {
-    if (enabled && event.type === "task.review" && event.taskId === taskId) void reload(true);
+    // 服务端刚宣布状态变了：强制发一个新 GET（复用早先在飞的请求拿到的可能还是变更前的世界）。
+    if (enabled && event.type === "task.review" && event.taskId === taskId) void reload(true, true);
   }, [enabled, reload, taskId]));
 
   return { state, setState, loading, error, reload };
