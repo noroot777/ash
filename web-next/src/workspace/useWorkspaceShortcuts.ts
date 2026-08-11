@@ -1,5 +1,10 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import type { Task } from "@harness/shared";
+import {
+  activateInspectorShortcut,
+  createInspectorShortcutSequence,
+  hasInspectorShortcutTarget,
+} from "../inspector/shortcuts.ts";
 import { hasOpenLayer } from "../lib/useDismissable.ts";
 
 type ShortcutOptions = {
@@ -49,18 +54,44 @@ export function useWorkspaceShortcuts({
   onToggleSpread,
   onCloseSpread,
 }: ShortcutOptions): void {
+  const inspectorSequence = useRef(createInspectorShortcutSequence());
+
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const commandPalette = (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k";
       if (commandPalette) {
+        inspectorSequence.current.reset();
         // The palette is global; enabled only gates the workspace navigation keys below.
         if (!paletteOpen && hasBlockingLayer()) return;
         event.preventDefault();
         onTogglePalette();
         return;
       }
-      if (!enabled || paletteOpen || isTextEntry(event.target) || hasBlockingLayer()) return;
-      if (event.metaKey || event.ctrlKey || event.altKey) return;
+      if (!enabled || paletteOpen || isTextEntry(event.target) || hasBlockingLayer()) {
+        inspectorSequence.current.reset();
+        return;
+      }
+      if (event.metaKey || event.ctrlKey || event.altKey) {
+        inspectorSequence.current.reset();
+        return;
+      }
+
+      if (hasInspectorShortcutTarget() && !event.repeat) {
+        const inspectorShortcut = inspectorSequence.current.handle(event.key);
+        if (inspectorShortcut.kind === "prefix") {
+          event.preventDefault();
+          event.stopImmediatePropagation();
+          return;
+        }
+        if (inspectorShortcut.kind === "shortcut") {
+          event.preventDefault();
+          event.stopImmediatePropagation();
+          activateInspectorShortcut(inspectorShortcut.key);
+          return;
+        }
+      } else if (!hasInspectorShortcutTarget()) {
+        inspectorSequence.current.reset();
+      }
 
       // 大图开着时 hasBlockingLayer() 已经把这里整段挡掉了，所以 Esc 只关大图、
       // 不会顺手把铺开也收了 —— 这条不需要在这里再判一次。

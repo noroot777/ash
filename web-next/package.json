@@ -7,6 +7,7 @@
     "dev": "vite",
     "build": "node ../scripts/check-conventions.mjs && tsc -b && vite build",
     "test:image-preview": "node scripts/test-image-preview.mjs",
+    "test:inspector-shortcuts": "node --experimental-strip-types scripts/test-inspector-shortcuts.mjs",
     "test:inspector-attachments": "node scripts/test-inspector-attachments.mjs",
     "test:open-with": "node scripts/test-open-with-menu.mjs",
     "test:run-target-picker": "node scripts/test-run-target-picker.mjs",
