@@ -8,7 +8,7 @@ import { useTaskReadState, type IndicatorForTask } from "../lib/useTaskReadState
 import { ProjectAvatar } from "./ProjectAvatar.tsx";
 import { SpreadPeekLayer, SpreadRowCells, SpreadRowProvider, useSpreadPeek, useSpreadRow } from "./TaskSpread.tsx";
 import { spreadBucket, SPREAD_FILTERS, type SidebarSpread, type SpreadFilter } from "./useSidebarSpread.ts";
-import { buildTaskTree, orderedTopLevelTasks } from "./taskTreeModel.ts";
+import { buildTaskTree, orderedTopLevelTasks, previewTasksByAge } from "./taskTreeModel.ts";
 
 type TaskTreeProps = {
   projects: ProjectView[];
@@ -278,10 +278,11 @@ function CurrentProjectTree({
       {keptBySection.map(({ section, kept }) => {
         const sectionCollapsed = collapsed.has(section.key);
         if (!kept.length) return null;
-        const selectedIndex = kept.findIndex((task) => task.id === selectedTaskId);
-        const previewExpanded = previewExpandedSections.has(section.key) || selectedIndex >= TASK_PREVIEW_LIMIT;
-        const visibleTasks = previewExpanded ? kept : kept.slice(0, TASK_PREVIEW_LIMIT);
-        const hiddenCount = kept.length - TASK_PREVIEW_LIMIT;
+        const preview = previewTasksByAge(kept);
+        const selectedTaskIsHidden = preview.hidden.some((task) => task.id === selectedTaskId);
+        const previewExpanded = previewExpandedSections.has(section.key) || selectedTaskIsHidden;
+        const visibleTasks = previewExpanded ? kept : preview.visible;
+        const hiddenCount = preview.hidden.length;
         return (
           <section className={`workspace-task-section${sectionCollapsed ? " is-collapsed" : ""}`} data-task-section={section.key} key={section.key}>
             <button
@@ -311,7 +312,7 @@ function CurrentProjectTree({
                     <TaskRow key={task.id} task={task} allTasks={allTasks} selectedTaskId={selectedTaskId} onTask={onTask} indicatorForTask={indicatorForTask} />
                   ),
                 )}
-                {kept.length > TASK_PREVIEW_LIMIT && (
+                {hiddenCount > 0 && (
                   <button className="workspace-task-more" type="button" onClick={() => togglePreview(section.key)}>
                     {previewExpanded ? "收起" : `显示另外 ${hiddenCount} 条`}
                   </button>
