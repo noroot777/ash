@@ -262,6 +262,11 @@ for (const [label, prompt] of [
   assert.match(prompt, /Browser\/Chrome 扩展的具名分组后台标签/, `${label}应首选扩展具名后台标签`);
   assert.match(prompt, /不得接管、复用或直连用户普通标签/, `${label}不得操作用户普通标签`);
   assert.match(prompt, /独立无头 Chromium\/Playwright/, `${label}仅在扩展不可用时退回独立无头浏览器`);
+  assert.match(prompt, /先命名自动化会话.*始终保持在后台/, `${label}应创建非打扰的具名后台会话`);
+  assert.match(prompt, /不得主动激活 Chrome 窗口或切到验证标签/, `${label}不得抢占用户前台`);
+  assert.match(prompt, /降级原因写进报告/, `${label}降级时必须留下原因`);
+  assert.match(prompt, /只有无头浏览器确实无法完成.*才允许使用独立有头浏览器/, `${label}应严格限制有头浏览器`);
+  assert.match(prompt, /截图、布局检查或页面点击不构成使用有头浏览器的理由/, `${label}不得为常规页面验证使用有头浏览器`);
   assert.doesNotMatch(prompt, /浏览器验证优先(?:复用|走)?\s*CDP/, `${label}不得再要求优先 CDP`);
 }
 const requestContext = readFileSync(join(base, "request-context.md"), "utf8");

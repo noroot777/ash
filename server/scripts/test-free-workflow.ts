@@ -100,6 +100,11 @@ try {
   assert.match(skillPrompt, /Browser\/Chrome 扩展的具名分组后台标签/, "自由审查应首选扩展具名后台标签");
   assert.match(skillPrompt, /不得接管、复用或直连用户普通标签/, "自由审查不得操作用户普通标签");
   assert.match(skillPrompt, /独立无头 Chromium\/Playwright/, "扩展不可用时才应退回独立无头浏览器");
+  assert.match(skillPrompt, /先命名自动化会话.*始终保持在后台/, "自由审查应创建非打扰的具名后台会话");
+  assert.match(skillPrompt, /不得主动激活 Chrome 窗口或切到验证标签/, "自由审查不得抢占用户前台");
+  assert.match(skillPrompt, /降级原因写进报告/, "自由审查降级时必须留下原因");
+  assert.match(skillPrompt, /只有无头浏览器确实无法完成.*才允许使用独立有头浏览器/, "自由审查应严格限制有头浏览器");
+  assert.match(skillPrompt, /截图、布局检查或页面点击不构成使用有头浏览器的理由/, "常规页面验证不得成为有头降级理由");
   assert.doesNotMatch(skillPrompt, /浏览器验证优先(?:复用|走)?\s*CDP/, "自由审查不得再要求优先 CDP");
   const skillContext = readFileSync(join(root, "runs", "free-task", "free-review", "skill-review", "round-1", "request-context.md"), "utf8");
   assert.match(skillContext, /标题也可能点名 \/grill-me/);
