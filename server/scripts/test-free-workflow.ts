@@ -39,7 +39,12 @@ try {
   const { mountTaskStageRoutes } = await import("../src/task-stage.js");
   const { acceptTask } = await import("../src/task-accept.js");
   const { sessionTranscriptPath } = await import("../src/transcript.js");
+  const { ACCEPTANCE_REMINDER } = await import("../src/orchestrator.js");
   await ensureSchema();
+
+  const freeAcceptanceReminder = ACCEPTANCE_REMINDER("free-task", false, false, true);
+  assert.match(freeAcceptanceReminder, /任务完成后由用户从统一验收页验收/, "自由任务完成协议应指向统一验收页");
+  assert.doesNotMatch(freeAcceptanceReminder, /合并.?清理/, "自由任务完成协议不得再指向已删除的合并快捷操作");
 
   await db.insert(projects).values({ id: "p", name: "test", repoPath: root, apiKeys: null, workflowId: null, createdAt: new Date().toISOString() });
   const repo = join(root, "repo");
