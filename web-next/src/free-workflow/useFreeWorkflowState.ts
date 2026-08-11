@@ -1,15 +1,14 @@
 import { useCallback, useEffect, useState } from "react";
-import type { FreeWorkflowState } from "@harness/shared";
-import { api } from "../lib/api.ts";
+import { api, type FreeWorkflowApiState } from "../lib/api.ts";
 import { useServerEvents } from "../lib/events.ts";
 
-type StateListener = (state: FreeWorkflowState) => void;
+type StateListener = (state: FreeWorkflowApiState) => void;
 
-const states = new Map<string, FreeWorkflowState>();
+const states = new Map<string, FreeWorkflowApiState>();
 const listeners = new Map<string, Set<StateListener>>();
-const inFlight = new Map<string, Promise<FreeWorkflowState>>();
+const inFlight = new Map<string, Promise<FreeWorkflowApiState>>();
 
-function publish(taskId: string, state: FreeWorkflowState): void {
+function publish(taskId: string, state: FreeWorkflowApiState): void {
   const taskListeners = listeners.get(taskId);
   if (!taskListeners?.size) return;
   states.set(taskId, state);
@@ -28,7 +27,7 @@ function subscribe(taskId: string, listener: StateListener): () => void {
   };
 }
 
-function loadShared(taskId: string): Promise<FreeWorkflowState> {
+function loadShared(taskId: string): Promise<FreeWorkflowApiState> {
   const running = inFlight.get(taskId);
   if (running) return running;
   const request = api.freeWorkflow(taskId).then((state) => {
@@ -40,11 +39,11 @@ function loadShared(taskId: string): Promise<FreeWorkflowState> {
 }
 
 export function useFreeWorkflowState(taskId: string, enabled = true) {
-  const [state, setLocalState] = useState<FreeWorkflowState | null>(null);
+  const [state, setLocalState] = useState<FreeWorkflowApiState | null>(null);
   const [loading, setLoading] = useState(enabled);
   const [error, setError] = useState<string | null>(null);
 
-  const setState = useCallback((next: FreeWorkflowState) => publish(taskId, next), [taskId]);
+  const setState = useCallback((next: FreeWorkflowApiState) => publish(taskId, next), [taskId]);
 
   const reload = useCallback(async (quiet = false) => {
     if (!enabled) return null;

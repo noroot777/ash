@@ -103,7 +103,7 @@ export function mountTaskStageRoutes(api: Hono): void {
       return c.json({ error: error instanceof Error ? error.message : String(error) }, 409);
     }
     if (task.workflowMode === "free") {
-      return c.json({ error: "自由工作流不使用起手式 stage；请由页面快捷按钮按需派审、预览或合并" }, 409);
+      return c.json({ error: "自由工作流不使用起手式 stage；请按需派审或预览，完成后从验收页验收" }, 409);
     }
 
     const { updatedAt, timelineRecorded } = await setTaskStage(taskId, body.stage);

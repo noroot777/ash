@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import type { AgentExecutorProfile, FreeReviewCheckMode, FreeWorkflowState, ReviewerProfile } from "@harness/shared";
+import type { AgentExecutorProfile, FreeReviewCheckMode, ReviewerProfile } from "@harness/shared";
 import { CheckCircle, MagnifyingGlass, Plus, SpinnerGap, X } from "@phosphor-icons/react";
 import { registeredAgentTypes } from "../lib/agentAvailability.ts";
-import { api } from "../lib/api.ts";
+import { api, type FreeWorkflowApiState } from "../lib/api.ts";
 import { useDismissable } from "../lib/useDismissable.ts";
 import {
   createReviewerDraft,
@@ -22,9 +22,9 @@ export function FreeReviewDialog({
   notify,
 }: {
   taskId: string;
-  state: FreeWorkflowState | null;
+  state: FreeWorkflowApiState | null;
   reservationMode: boolean;
-  onChanged: (state: FreeWorkflowState) => void;
+  onChanged: (state: FreeWorkflowApiState) => void;
   onClose: () => void;
   notify: (message: string) => void;
 }) {

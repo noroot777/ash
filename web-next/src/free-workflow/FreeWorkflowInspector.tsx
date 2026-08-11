@@ -4,13 +4,11 @@ import type {
   FreeReviewRun,
   FreeWorkflowExecution,
   FreeWorkflowPreviewEvent,
-  FreeWorkflowState,
   Task,
 } from "@harness/shared";
 import {
   CaretRight,
   CheckCircle,
-  GitMerge,
   MagnifyingGlass,
   MonitorPlay,
   SpinnerGap,
@@ -19,7 +17,7 @@ import {
 } from "@phosphor-icons/react";
 import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
-import { api } from "../lib/api.ts";
+import { api, type FreeWorkflowApiState } from "../lib/api.ts";
 import { ReviewEvidenceDrawer } from "../review/ReviewEvidenceDrawer.tsx";
 import { ReviewScreenshotStrip } from "../review/ReviewScreenshotStrip.tsx";
 import { FreeReviewDialog } from "./FreeReviewDialog.tsx";
@@ -30,12 +28,11 @@ import { useFreeWorkflowState } from "./useFreeWorkflowState.ts";
 type Activity =
   | { type: "execution"; at: string; key: string; execution: FreeWorkflowExecution }
   | { type: "review"; at: string; key: string; run: FreeReviewRun; round: FreeReviewRound }
-  | { type: "preview"; at: string; key: string; event: FreeWorkflowPreviewEvent }
-  | { type: "merge"; at: string; key: string; merge: FreeWorkflowState["merge"] };
+  | { type: "preview"; at: string; key: string; event: FreeWorkflowPreviewEvent };
 
 type ReviewActivity = Extract<Activity, { type: "review" }>;
 
-function actualActivities(state: FreeWorkflowState | null): Activity[] {
+function actualActivities(state: FreeWorkflowApiState | null): Activity[] {
   if (!state) return [];
   const activities: Activity[] = [
     ...(state.executions ?? []).map((execution): Activity => ({
@@ -46,9 +43,6 @@ function actualActivities(state: FreeWorkflowState | null): Activity[] {
     }))),
     ...state.previewEvents.map((event): Activity => ({ type: "preview", at: event.occurredAt, key: `preview-${event.id}`, event })),
   ];
-  if (state.merge.status !== "idle" && state.merge.updatedAt) {
-    activities.push({ type: "merge", at: state.merge.updatedAt, key: "merge", merge: state.merge });
-  }
   return activities.sort((a, b) => a.at.localeCompare(b.at) || a.key.localeCompare(b.key));
 }
 
@@ -138,7 +132,7 @@ export function FreeWorkflowInspector({
   const reviewArmed = !!state?.reviewReservation?.armed;
   const showTaskProgress = reservableRework || (taskBusy && (latestRun?.status === "exhausted" || latestRun?.status === "superseded"));
   const taskReady = task.status !== "backlog";
-  const mergeStarted = state?.merge.status === "merging" || state?.merge.status === "merged";
+  const accepted = task.stage === "accepted" || task.stage === "merged";
   const reservationMode = taskBusy || reservableRework || reviewArmed;
   const reviewActionLabel = blockingReview
     ? (activeReview?.status === "reviewing" ? "审查进行中" : "自动修复中")
@@ -221,14 +215,14 @@ export function FreeWorkflowInspector({
                   taskId={task.id}
                   run={exhaustedReview}
                   className="is-repair"
-                  disabled={!taskReady || taskBusy || mergeStarted}
+                  disabled={!taskReady || taskBusy || accepted}
                   onChanged={free.setState}
                   notify={notify}
                 />
               )}
               <button
                 type="button"
-                disabled={!taskReady || mergeStarted || blockingReview || !notify}
+                disabled={!taskReady || accepted || blockingReview || !notify}
                 onClick={() => setReviewDialogOpen(true)}
               >
                 {blockingReview ? <SpinnerGap size={13} className="is-spinning" /> : <MagnifyingGlass size={13} />}
@@ -315,13 +309,9 @@ export function FreeWorkflowInspector({
                   <div><b>{activity.event.kind === "preview_opened" ? "预览已打开" : "预览已关闭"}</b><small>{activity.event.detail} · {timeText(activity.event.occurredAt)}</small></div>
                 </li>;
               }
-              const merging = activity.merge.status === "merging";
-              return <li key={activity.key} className={activity.merge.status === "merged" ? "is-done" : activity.merge.status === "failed" ? "is-warning" : "is-active"}>
-                <span>{merging ? <SpinnerGap size={14} className="is-spinning" /> : <GitMerge size={14} />}</span><div><b>合并&清理</b><small>{activity.merge.message ?? "处理中"} · {timeText(activity.at)}</small></div>
-              </li>;
             })}
           </ol>
-          {!activities.length && <p>目前还没有实际工作流记录；任务执行、派审、预览或合并后，这里会按发生顺序补出记录。</p>}
+          {!activities.length && <p>目前还没有实际工作流记录；任务执行、派审或预览后，这里会按发生顺序补出记录。</p>}
         </section>
       </div>
       {drawer}

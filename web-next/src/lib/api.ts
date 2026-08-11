@@ -97,6 +97,8 @@ export type DeleteTaskResult = {
   cleanup: TaskWorkspaceDiscardResult | null;
 };
 
+export type FreeWorkflowApiState = Omit<FreeWorkflowState, "merge">;
+
 export type TaskCommit = { sha: string; subject: string; at: string };
 
 export type SessionTraceEntry = {
@@ -456,22 +458,20 @@ export const api = {
     request(`/tasks/${id(taskId)}/review/dispatch`, json("POST", input)),
   taskReviewFileUrl: (taskId: string, round: number, name: string): string =>
     apiPath(`/tasks/${id(taskId)}/review/file?round=${id(String(round))}&name=${id(name)}`),
-  freeWorkflow: (taskId: string): Promise<FreeWorkflowState> =>
+  freeWorkflow: (taskId: string): Promise<FreeWorkflowApiState> =>
     request(`/tasks/${id(taskId)}/free-workflow`),
-  dispatchFreeReview: (taskId: string, input: FreeReviewDispatchInput): Promise<FreeWorkflowState> =>
+  dispatchFreeReview: (taskId: string, input: FreeReviewDispatchInput): Promise<FreeWorkflowApiState> =>
     request(`/tasks/${id(taskId)}/free-workflow/review`, json("POST", input)),
-  repairFreeReview: (taskId: string): Promise<FreeWorkflowState> =>
+  repairFreeReview: (taskId: string): Promise<FreeWorkflowApiState> =>
     request(`/tasks/${id(taskId)}/free-workflow/review/repair`, { method: "POST" }),
-  reserveFreeReview: (taskId: string, input: FreeReviewDispatchInput): Promise<FreeWorkflowState> =>
+  reserveFreeReview: (taskId: string, input: FreeReviewDispatchInput): Promise<FreeWorkflowApiState> =>
     request(`/tasks/${id(taskId)}/free-workflow/review-reservation`, json("PUT", input)),
-  cancelFreeReviewReservation: (taskId: string): Promise<FreeWorkflowState> =>
+  cancelFreeReviewReservation: (taskId: string): Promise<FreeWorkflowApiState> =>
     request(`/tasks/${id(taskId)}/free-workflow/review-reservation`, { method: "DELETE" }),
-  startFreePreview: (taskId: string): Promise<FreeWorkflowState["preview"]> =>
+  startFreePreview: (taskId: string): Promise<FreeWorkflowApiState["preview"]> =>
     request(`/tasks/${id(taskId)}/free-workflow/preview`, { method: "POST" }),
   stopFreePreview: (taskId: string): Promise<{ stopped: boolean }> =>
     request(`/tasks/${id(taskId)}/free-workflow/preview`, { method: "DELETE" }),
-  mergeFreeWorkflow: (taskId: string): Promise<{ merged: true; message: string }> =>
-    request(`/tasks/${id(taskId)}/free-workflow/merge`, { method: "POST" }),
   freeReviewFileUrl: (taskId: string, runId: string, round: number, name: string): string =>
     apiPath(`/tasks/${id(taskId)}/free-workflow/review-file?run=${id(runId)}&round=${id(String(round))}&name=${id(name)}`),
   // 人工替这一站「自动验证」签字放行。**后端会接着把这一站之后那一段跑掉**——线上

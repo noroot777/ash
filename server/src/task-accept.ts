@@ -8,6 +8,8 @@ import { projects, tasks } from "./db/schema.js";
 import { handOffConflict, type ConflictHandoff } from "./accept-conflict.js";
 import { resolveTaskMergeTarget } from "./git.js";
 import { cleanupAcceptedTask, cleanupPlanFor, mergeTaskBranch } from "./git-accept.js";
+import { hasActiveFreeReview } from "./free-workflow.js";
+import { releaseFreeWorkflowAction, tryAcquireFreeWorkflowAction } from "./free-workflow-lock.js";
 import { taskWorkflowDef } from "./workflows.js";
 import { taskBranchDiff } from "./git-diff.js";
 import { publishTaskUpdated } from "./task-store.js";
@@ -219,13 +221,33 @@ async function acceptTaskUnlocked(taskId: string, by: AcceptBy): Promise<AcceptT
   if (!requestedTask) {
     return { accepted: false, httpStatus: 404, taskId, reason: "not_found", error: "not found", phase: "initial" };
   }
-  if (requestedTask.workflowMode === "free") {
+  if (
+    requestedTask.workflowMode === "free"
+    && requestedTask.stage !== "accepted"
+    && requestedTask.stage !== "merged"
+    && requestedTask.status !== "done"
+  ) {
     return {
       accepted: false,
       httpStatus: 409,
       taskId,
-      reason: "free_workflow_acceptance_not_applicable",
-      error: "自由工作流不走起手式验收；请使用任务会话上方的“合并&清理”按钮",
+      reason: "free_workflow_not_ready_for_acceptance",
+      error: "自由工作流尚未完成；任务完成后再进入验收页处理",
+      status: requestedTask.status,
+      phase: "initial",
+    };
+  }
+  if (
+    requestedTask.workflowMode === "free"
+    && requestedTask.stage !== "accepted"
+    && await hasActiveFreeReview(taskId)
+  ) {
+    return {
+      accepted: false,
+      httpStatus: 409,
+      taskId,
+      reason: "free_review_in_progress",
+      error: "自由工作流审查或修复仍在进行，结束后再验收",
       status: requestedTask.status,
       phase: "initial",
     };
@@ -334,7 +356,9 @@ async function acceptTaskUnlocked(taskId: string, by: AcceptBy): Promise<AcceptT
   await appendTaskTimeline(
     taskId,
     (offScript
-      ? `开始验收：这条线上没画「合并并清理」，但你亲手点了验收通过 —— 手动验收按默认规矩`
+      ? task.workflowMode === "free"
+        ? `开始验收：自由工作流没有预设合并站，手动验收按默认规矩`
+        : `开始验收：这条线上没画「合并并清理」，但你亲手点了验收通过 —— 手动验收按默认规矩`
       : `开始验收：按线上写的`) +
       `「${ACCEPT_STRATEGY_LABELS[plan.merge]}、${ACCEPT_CLEAN_LABELS[plan.clean]}」处理，` +
       `目标 ${task.worktreeBase?.trim() || "项目当前分支"}；冲突时只报告并回滚，不会强制合并。`,
@@ -494,12 +518,23 @@ async function acceptTaskUnlocked(taskId: string, by: AcceptBy): Promise<AcceptT
 // 冲进同一个 `.git`(见 repo-lock.ts 的三类事故)。整段而非只锁 merge 的原因是
 // 守卫判断不能过期 —— acceptTaskUnlocked 拿到锁后才重新读任务与项目,所以排在
 // 后面的验收看到的是前一个合并完成后的世界(目标分支已前进、stage 已更新)。
-async function acceptanceRepoPath(taskId: string): Promise<string | null> {
+async function acceptanceContext(taskId: string): Promise<{
+  repoPath: string | null;
+  freeWorkflow: boolean;
+  status?: string;
+}> {
   const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   // 没有独立 worktree 的任务只改 stage,不碰 git,不必占用仓库锁。
-  if (!task?.useWorktree) return null;
+  if (!task) return { repoPath: null, freeWorkflow: false };
+  if (!task.useWorktree) {
+    return { repoPath: null, freeWorkflow: task.workflowMode === "free", status: task.status };
+  }
   const project = (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0);
-  return project?.repoPath ?? null;
+  return {
+    repoPath: project?.repoPath ?? null,
+    freeWorkflow: task.workflowMode === "free",
+    status: task.status,
+  };
 }
 
 // `by` 默认 human：这个函数的调用方绝大多数是「用户按了验收通过」（HTTP 路由、MCP
@@ -531,19 +566,34 @@ export async function acceptTask(
   }
   acceptingTaskIds.add(taskId);
   let result: AcceptTaskResult;
+  let freeWorkflowLocked = false;
   try {
-    const repoPath = await acceptanceRepoPath(taskId);
-    result = await withRepoLock(repoPath, async (wait) => {
-      if (wait.queued) {
-        // 排队是刷新后仍看得见的事实,不只是"点了没反应"。
-        await appendTaskTimeline(
-          taskId,
-          `验收排队：同一仓库有其它验收/worktree 操作正在执行，已等待 ${(wait.waitedMs / 1000).toFixed(1)}s 后开始本次验收。`,
-        );
-      }
-      return acceptTaskUnlocked(taskId, by);
-    });
+    const context = await acceptanceContext(taskId);
+    if (context.freeWorkflow && !tryAcquireFreeWorkflowAction(taskId)) {
+      result = {
+        accepted: false,
+        httpStatus: 409,
+        taskId,
+        reason: "free_workflow_action_in_progress",
+        error: "当前已有自由工作流操作正在进行，结束后再验收",
+        status: context.status,
+        phase: "initial",
+      };
+    } else {
+      freeWorkflowLocked = context.freeWorkflow;
+      result = await withRepoLock(context.repoPath, async (wait) => {
+        if (wait.queued) {
+          // 排队是刷新后仍看得见的事实,不只是"点了没反应"。
+          await appendTaskTimeline(
+            taskId,
+            `验收排队：同一仓库有其它验收/worktree 操作正在执行，已等待 ${(wait.waitedMs / 1000).toFixed(1)}s 后开始本次验收。`,
+          );
+        }
+        return acceptTaskUnlocked(taskId, by);
+      });
+    }
   } finally {
+    if (freeWorkflowLocked) releaseFreeWorkflowAction(taskId);
     acceptingTaskIds.delete(taskId);
   }
   if (result.accepted) {

@@ -30,6 +30,7 @@ import { railStalledAtRun } from "./workflows.js";
 import { freeReviewReminder, isFreeReviewTurn, markFreeReviewReworking } from "./free-workflow.js";
 import { withSkillInvocation } from "./skills.js";
 import { initialTaskObjective, invitedTaskBrief } from "./invited-task-brief.js";
+import { withGlobalBrowserPolicy } from "./browser-verification-policy.js";
 // Single tasks run headless — nobody can answer a mid-run prompt. Tell the agent
 // to act autonomously rather than stall waiting for confirmation; if it genuinely
 // needs input it can still ask, and the user replies via continueTask (resume).
@@ -60,10 +61,10 @@ const SYS_MARKER = "〔系统〕继续（从中断处）";
 // 消息尾部(每回合都提醒,上下文再长 agent 也不至于忘)。
 // 宽松模式(HARNESS_LAX_DONE,典型:预览实例)下这三段一律退化成空串 —— 那台 harness
 // 的 MCP 对 agent 不可达,交代了它也做不到,理由见 single-run.ts 的 STRICT_DONE_PROTOCOL。
-const ACCEPTANCE_REMINDER = (taskId: string, sharedTeamWorker: boolean, verifying: boolean, free = false) => verifying
+export const ACCEPTANCE_REMINDER = (taskId: string, sharedTeamWorker: boolean, verifying: boolean, free = false) => verifying
   ? "验收辅路:验证回合不适用 accept_task；这一轮只负责给出验证结论并留证。"
   : free
-    ? "自由工作流:完成实现后只调用 complete_task；不要调用 report_stage 或 accept_task，派审、预览、合并与清理由用户在页面快捷按钮中按需触发。"
+    ? "自由工作流:完成实现后只调用 complete_task；不要调用 report_stage 或 accept_task。派审和预览由用户按需触发，任务完成后由用户从统一验收页验收。"
   : sharedTeamWorker
     ? "验收辅路:本共享执行者不适用 accept_task；合并与验收由团队级处理。"
     : `验收辅路:准备交给人工验收前可调用 report_stage(taskId="${taskId}", stage="awaiting_acceptance")；` +
@@ -262,10 +263,12 @@ export async function runTask(taskId: string): Promise<void> {
     // 于是在场的都算新面孔；任务里只有它自己时返回空串，fresh run 一如往常。
     const priorSessions = await db.select().from(sessions).where(eq(sessions.taskId, taskId));
     const peerNotice = peerNoticeFor({ taskId, self: agentType, all: priorSessions, prev: undefined });
-    const prompt =
+    const prompt = withGlobalBrowserPolicy(
       AUTONOMY + COMPLETION_PROTOCOL(taskId, sharedTeamWorker, reviewTask, task.workflowMode === "free") + teamPreamble + reviewProtocol +
       peerNotice +
-      (autoTitle ? TITLE_HINT + objective : objective);
+      (autoTitle ? TITLE_HINT + objective : objective),
+      "full",
+    );
     const turnStart = now();
     const sessId = id();
     const runDir = join(RUNS_DIR, taskId);
@@ -555,7 +558,7 @@ export async function continueTask(
     const peerNotice = peerNoticeFor({ taskId, self: agent, all, prev });
     // 验证轮/审查任务不提这条线：那一轮的产出是结论，不是新一版代码。
     const railNote = followUpFrom && !verifying ? await followUpRailNote(taskId) : "";
-    const prompt =
+    const prompt = withGlobalBrowserPolicy(
       (invited ? COLLAB_INVITE : "") +
       invitedTaskBrief(task.body, invited, verifying) +
       peerNotice +
@@ -564,7 +567,9 @@ export async function continueTask(
       (followUpFrom
         ? FOLLOW_UP_REMINDER(taskId, followUpFrom, sharedTeamWorker, verifying, railNote, freeWorkflow)
         : COMPLETION_REMINDER(taskId, sharedTeamWorker, verifying, freeWorkflow)) +
-      (reviewReminder ? `\n${reviewReminder}` : "");
+      (reviewReminder ? `\n${reviewReminder}` : ""),
+      resuming ? "reminder" : "full",
+    );
     const turnStart = now();
     const sessId = resuming ? prev!.id : id();
     const runDir = join(RUNS_DIR, taskId);

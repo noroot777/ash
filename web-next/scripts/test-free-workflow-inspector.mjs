@@ -123,10 +123,9 @@ try {
   const activities = workflow.locator(".free-workflow-generated li");
   assert.deepEqual(await activities.locator("b").allInnerTexts(), [
     "任务执行", "Codex 审查 · 逻辑检查", "任务执行", "Codex 审查 · 逻辑检查",
-    "合并&清理",
   ], "任务执行和审查必须按真实时间交替排列，不能合并同名审查");
   assert.match(await activities.nth(0).locator("small").innerText(), /8\/9.*9 分钟/);
-  assert.equal(await activities.last().locator("svg.is-spinning").count(), 1, "合并处理中应和其它运行中节点一样显示旋转图标");
+  assert.equal(await activities.last().locator("svg.is-spinning").count(), 1, "进行中的审查应显示旋转图标");
 
   assert.equal(await drawer.count(), 0, "工作流中的审查正文默认也不弹出");
   await activities.nth(1).getByRole("button").click();
@@ -139,6 +138,29 @@ try {
   assert.equal(await drawer.locator(".review-evidence-drawer__footer").count(), 0, "没有截图的轮次不应留下空白底栏");
   await activities.nth(3).getByRole("button").click();
   await drawer.waitFor({ state: "detached" });
+
+  const acceptance = page.locator(".acceptance-fixture");
+  const toolbar = acceptance.locator('[aria-label="自由工作流快捷操作"]');
+  await toolbar.waitFor();
+  assert.deepEqual(await toolbar.getByRole("button").allInnerTexts(), ["派审查", "打开预览"], "会话上方只保留派审与预览");
+  assert.equal(await acceptance.getByText("合并&清理", { exact: true }).count(), 0, "自由工作流快捷栏不再显示合并按钮");
+  const acceptButton = acceptance.getByRole("button", { name: "验收", exact: true });
+  await acceptButton.click();
+  const acceptanceWorkspace = acceptance.locator(".single-review-workspace");
+  await acceptanceWorkspace.waitFor();
+  const workspaceAcceptButton = acceptanceWorkspace.getByRole("button", { name: "验收通过", exact: true });
+  await workspaceAcceptButton.waitFor();
+  assert.equal(await workspaceAcceptButton.count(), 1, "自由任务应进入统一验收页");
+  assert.equal(await acceptanceWorkspace.getByText("用会话上方“合并&清理”操作", { exact: true }).count(), 0);
+
+  const blockedAcceptance = page.locator(".acceptance-blocked-fixture");
+  await blockedAcceptance.getByRole("button", { name: "验收", exact: true }).click();
+  const blockedWorkspace = blockedAcceptance.locator(".single-review-workspace");
+  await blockedWorkspace.waitFor();
+  const blockedButton = blockedWorkspace.getByRole("button", { name: "审查进行中", exact: true });
+  await blockedButton.waitFor();
+  assert.equal(await blockedButton.isDisabled(), true, "自由审查进行中应在验收页禁用验收按钮");
+  assert.equal(await blockedWorkspace.getByRole("button", { name: "验收通过", exact: true }).count(), 0);
 
   console.log("free workflow inspector preview test passed");
 } finally {

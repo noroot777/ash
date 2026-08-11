@@ -1,8 +1,11 @@
-import { StrictMode } from "react";
+import { StrictMode, useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { FreeWorkflowState, Task } from "@harness/shared";
+import type { Task } from "@harness/shared";
 import { FreeWorkflowInspector } from "../../src/free-workflow/FreeWorkflowInspector.tsx";
 import { FreeWorkflowToolbar } from "../../src/free-workflow/FreeWorkflowToolbar.tsx";
+import type { FreeWorkflowApiState } from "../../src/lib/api.ts";
+import { TaskReviewWorkspace } from "../../src/review/TaskReviewWorkspace.tsx";
+import { TaskHeader } from "../../src/task-detail/TaskHeader.tsx";
 import "../../src/styles/global.css";
 
 const state = {
@@ -15,7 +18,6 @@ const state = {
     { id: "execution-1", status: "completed", startedAt: "2026-08-09T00:00:00.000Z", endedAt: "2026-08-09T00:09:00.000Z" },
     { id: "execution-2", status: "completed", startedAt: "2026-08-09T00:20:00.000Z", endedAt: "2026-08-09T00:29:00.000Z" },
   ],
-  merge: { status: "merging", message: "正在合并", mergedAt: null, updatedAt: "2026-08-09T00:40:00.000Z" },
   reviews: [{
     id: "run-def",
     reviewerId: null,
@@ -71,7 +73,45 @@ const state = {
   }],
 };
 
-const repairState: FreeWorkflowState = {
+const acceptanceState = {
+  taskId: "free-accept-ui",
+  selectedReviewerId: null,
+  reviewReservation: { armed: false, reviewerId: null, checkMode: null, retryLimit: null },
+  preview: { running: false, url: null, port: null, command: null, startedAt: null },
+  previewEvents: [],
+  executions: [{
+    id: "execution-accept",
+    status: "completed",
+    startedAt: "2026-08-09T01:00:00.000Z",
+    endedAt: "2026-08-09T01:09:00.000Z",
+  }],
+  reviews: [],
+};
+
+const reviewingAcceptanceState = {
+  ...acceptanceState,
+  taskId: "free-reviewing-ui",
+  reviews: [{
+    id: "acceptance-review",
+    reviewerId: null,
+    reviewerName: "Codex 审查",
+    agentType: "codex",
+    executorId: null,
+    executorLabel: null,
+    model: null,
+    reasoningEffort: null,
+    checkMode: "logic",
+    retryLimit: 1,
+    currentRound: 1,
+    status: "reviewing",
+    rounds: [],
+    createdAt: "2026-08-09T01:10:00.000Z",
+    updatedAt: "2026-08-09T01:10:00.000Z",
+    finishedAt: null,
+  }],
+};
+
+const repairState: FreeWorkflowApiState = {
   taskId: "free-repair-task",
   selectedReviewerId: null,
   reviewReservation: { armed: false, reviewerId: null, checkMode: null, retryLimit: null, note: null },
@@ -81,7 +121,6 @@ const repairState: FreeWorkflowState = {
     id: "repair-execution", status: "completed",
     startedAt: "2026-08-09T01:00:00.000Z", endedAt: "2026-08-09T01:09:00.000Z",
   }],
-  merge: { status: "idle", message: null, mergedAt: null, updatedAt: null },
   reviews: [{
     id: "run-repair",
     reviewerId: null,
@@ -111,7 +150,7 @@ const repairState: FreeWorkflowState = {
   }],
 };
 
-const manualChatState: FreeWorkflowState = {
+const manualChatState: FreeWorkflowApiState = {
   ...repairState,
   taskId: "free-chat-rework-task",
   reviews: repairState.reviews.map((run) => ({
@@ -141,6 +180,12 @@ window.fetch = (input, init) => {
       headers: { "content-type": "application/json" },
     }));
   }
+  if (url.pathname === "/api/tasks/free-accept-ui/free-workflow") {
+    return Promise.resolve(new Response(JSON.stringify(acceptanceState), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    }));
+  }
   if (url.pathname.startsWith("/api/tasks/free-repair-task/free-workflow")) {
     if (init?.method === "POST" && url.pathname.endsWith("/review/repair")) {
       repairState.reviews[0].status = "manual_repairing";
@@ -162,8 +207,35 @@ window.fetch = (input, init) => {
       headers: { "content-type": "application/json" },
     }));
   }
+  if (url.pathname === "/api/tasks/free-reviewing-ui/free-workflow") {
+    return Promise.resolve(new Response(JSON.stringify(reviewingAcceptanceState), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    }));
+  }
   if (url.pathname === "/api/tasks/free-chat-rework-task/free-workflow") {
     return Promise.resolve(new Response(JSON.stringify(manualChatState), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    }));
+  }
+  if (url.pathname === "/api/tasks/free-accept-ui/commits" || url.pathname === "/api/tasks/free-reviewing-ui/commits") {
+    return Promise.resolve(new Response(JSON.stringify({ branch: "harness/free-accept-ui", commits: [] }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    }));
+  }
+  if (url.pathname === "/api/tasks/free-accept-ui/diff" || url.pathname === "/api/tasks/free-reviewing-ui/diff") {
+    return Promise.resolve(new Response(JSON.stringify({
+      available: true,
+      sourceBranch: "harness/free-accept-ui",
+      targetBranch: "main",
+      mergeBase: "0123456789abcdef",
+      diff: "",
+      files: [],
+      truncated: false,
+      limitBytes: 1024,
+    }), {
       status: 200,
       headers: { "content-type": "application/json" },
     }));
@@ -188,6 +260,62 @@ const task = {
   workflowMode: "free",
 } as Task;
 
+const acceptanceTask = {
+  id: "free-accept-ui",
+  projectId: "project-ui",
+  parentId: null,
+  title: "自由任务统一验收",
+  body: "完成后进入统一验收页",
+  mode: "single",
+  status: "done",
+  stage: null,
+  labels: [],
+  dependsOn: [],
+  resumeDependsOn: [],
+  agentType: "codex",
+  createdAt: "2026-08-09T01:00:00.000Z",
+  updatedAt: "2026-08-09T01:09:00.000Z",
+  endedAt: "2026-08-09T01:09:00.000Z",
+  workflowMode: "free",
+  workflow: null,
+  useWorktree: true,
+  worktreeBase: "main",
+  archived: false,
+} as Task;
+
+const reviewingAcceptanceTask = {
+  ...acceptanceTask,
+  id: "free-reviewing-ui",
+  title: "自由任务审查中",
+} as Task;
+
+function AcceptanceFixture({ task, className }: { task: Task; className: string }) {
+  const [reviewOpen, setReviewOpen] = useState(false);
+  return (
+    <section className={className}>
+      <TaskHeader
+        task={task}
+        conversationMarkdown=""
+        busy={false}
+        refreshing={false}
+        onTitle={async () => undefined}
+        onTogglePin={async () => undefined}
+        onPrimary={(action) => { if (action === "accept") setReviewOpen(true); }}
+        onRequeue={() => undefined}
+        onArchive={() => undefined}
+        onRefresh={() => undefined}
+        onReview={() => setReviewOpen((open) => !open)}
+        onDelete={() => undefined}
+        indicatorForTask={() => null}
+        notify={() => undefined}
+      />
+      {reviewOpen
+        ? <TaskReviewWorkspace task={task} allTasks={[task]} onClose={() => setReviewOpen(false)} onTaskUpdated={() => undefined} notify={() => undefined} />
+        : <FreeWorkflowToolbar task={task} notify={() => undefined} />}
+    </section>
+  );
+}
+
 const repairTask = {
   id: "free-repair-task",
   title: "自由工作流手动修复",
@@ -210,21 +338,25 @@ const manualChatTask = {
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <div style={{ display: "grid", gap: 6, width: 760, margin: "12px 0 12px auto", background: "white", padding: 8 }}>
-      <div className="toolbar-repair-fixture"><FreeWorkflowToolbar task={repairTask} notify={() => undefined} /></div>
-      <div className="toolbar-chat-rework-fixture"><FreeWorkflowToolbar task={manualChatTask} notify={() => undefined} /></div>
-    </div>
-    <div style={{ display: "flex", gap: 20, height: 640 }}>
-      <div style={{ flex: 1 }} />
-      <aside className="inspector-host workflow-inspector-fixture" style={{ width: 380, height: 640 }}>
-        <FreeWorkflowInspector task={task} />
+    <div>
+      <div style={{ display: "grid", gap: 6, width: 760, margin: "12px 0 12px auto", background: "white", padding: 8 }}>
+        <div className="toolbar-repair-fixture"><FreeWorkflowToolbar task={repairTask} notify={() => undefined} /></div>
+        <div className="toolbar-chat-rework-fixture"><FreeWorkflowToolbar task={manualChatTask} notify={() => undefined} /></div>
+      </div>
+      <div style={{ display: "flex", gap: 20, height: 640 }}>
+        <div style={{ flex: 1 }} />
+        <aside className="inspector-host workflow-inspector-fixture" style={{ width: 380, height: 640 }}>
+          <FreeWorkflowInspector task={task} />
+        </aside>
+        <aside className="inspector-host review-only-fixture" style={{ width: 380, height: 640 }}>
+          <FreeWorkflowInspector task={task} reviewOnly onOpenReview={() => undefined} notify={() => undefined} />
+        </aside>
+      </div>
+      <AcceptanceFixture task={acceptanceTask} className="acceptance-fixture" />
+      <AcceptanceFixture task={reviewingAcceptanceTask} className="acceptance-blocked-fixture" />
+      <aside className="inspector-host repair-fixture" style={{ width: 380, height: 360, marginTop: 20, marginLeft: "auto" }}>
+        <FreeWorkflowInspector task={repairTask} reviewOnly notify={() => undefined} />
       </aside>
-      <aside className="inspector-host review-only-fixture" style={{ width: 380, height: 640 }}>
-        <FreeWorkflowInspector task={task} reviewOnly onOpenReview={() => undefined} notify={() => undefined} />
-      </aside>
     </div>
-    <aside className="inspector-host repair-fixture" style={{ width: 380, height: 360, marginTop: 20, marginLeft: "auto" }}>
-      <FreeWorkflowInspector task={repairTask} reviewOnly notify={() => undefined} />
-    </aside>
   </StrictMode>,
 );

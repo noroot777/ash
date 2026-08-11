@@ -1,5 +1,9 @@
 import assert from "node:assert/strict";
-import { freeReviewActivityDetail, freeReviewActivityTitle } from "../src/free-workflow/freeReviewCopy.ts";
+import {
+  freeReviewActivityDetail,
+  freeReviewActivityTitle,
+  freeReviewBlockingLabel,
+} from "../src/free-workflow/freeReviewCopy.ts";
 
 const run = {
   reviewerName: "5.5审查",
@@ -38,5 +42,10 @@ assert.equal(
   freeReviewActivityDetail({ ...run, status: "superseded" }),
   "已有新修改，等待复审 · 已到第 1 轮 / 最多 2 轮",
 );
+assert.equal(freeReviewBlockingLabel({ ...run, status: "reviewing" }), "审查进行中");
+assert.equal(freeReviewBlockingLabel({ ...run, status: "repairing" }), "等待修复");
+assert.equal(freeReviewBlockingLabel({ ...run, status: "manual_repairing" }), "按意见修改中");
+assert.equal(freeReviewBlockingLabel({ ...run, status: "reworking" }), "任务修改中");
+assert.equal(freeReviewBlockingLabel({ ...run, status: "superseded" }), null);
 
 console.log("free review activity copy tests passed");

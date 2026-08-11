@@ -51,9 +51,11 @@ function acceptanceMessage(task: Task): string {
   const tail = team ? "并联动验收共享执行者。" : "";
   // 手动验收永远有合并方案（acceptPlan 的 human 口径），这里只是类型兜底。
   if (!plan.merge) return `这会把该任务标记为验收完成。${tail}`;
-  const offScript = !hasAcceptStation(task.workflow)
-    ? "这条线上没画「合并并清理」，但手动验收按默认规矩来："
-    : "";
+  const offScript = task.workflowMode === "free"
+    ? "自由工作流没有预设合并站，手动验收按默认规矩来："
+    : !hasAcceptStation(task.workflow)
+      ? "这条线上没画「合并并清理」，但手动验收按默认规矩来："
+      : "";
   const merge = plan.merge === "tag"
     ? `不合并，只在${branch}头上打一个 harness-accepted 标签（${target} 一动不动）`
     : plan.merge === "squash"
@@ -110,10 +112,12 @@ export function AcceptanceControls({
   task,
   onTaskUpdated,
   notify,
+  acceptanceBlock = null,
 }: {
   task: Task;
   onTaskUpdated: (task: Task) => void;
   notify: (message: string) => void;
+  acceptanceBlock?: string | null;
 }) {
   const [action, setAction] = useState<"accept" | "return" | null>(null);
   const [feedback, setFeedback] = useState("");
@@ -123,6 +127,10 @@ export function AcceptanceControls({
   // 停在中途那道关口时，这一按是「放行」不是「验收」：按钮、确认框、提示三处一起改口，
   // 只改一处就会出现「按钮写着验收通过、确认框说只是放行」的自相矛盾。
   const midGate = !isFinalHumanGate(task.workflow, task.workflowAt);
+
+  useEffect(() => {
+    if (acceptanceBlock && action === "accept") setAction(null);
+  }, [acceptanceBlock, action]);
 
   const accept = async () => {
     // The confirmation is single-use. Keep progress on the action button so a
@@ -182,9 +190,9 @@ export function AcceptanceControls({
           <span><CheckCircle size={13} weight="fill" />验收完成</span>
         ) : (
           <>
-            <button type="button" className="is-primary" disabled={inFlight || busy} onClick={() => setAction("accept")}>
+            <button type="button" className="is-primary" disabled={inFlight || busy || !!acceptanceBlock} onClick={() => setAction("accept")}>
               {busy ? <SpinnerGap size={13} className="is-spinning" /> : <CheckCircle size={13} weight="fill" />}
-              {busy ? (midGate ? "放行中" : "验收中") : inFlight ? "执行中" : midGate ? "放行，继续下一站" : "验收通过"}
+              {busy ? (midGate ? "放行中" : "验收中") : inFlight ? "执行中" : acceptanceBlock ?? (midGate ? "放行，继续下一站" : "验收通过")}
             </button>
             <button type="button" disabled={inFlight || busy} onClick={() => setAction("return")}><WarningCircle size={13} />打回修改</button>
           </>

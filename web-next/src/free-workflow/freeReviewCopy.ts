@@ -11,6 +11,14 @@ export const FREE_REVIEW_RUN_LABELS: Record<FreeReviewRun["status"], string> = {
   failed: "审查链异常停止",
 };
 
+export function freeReviewBlockingLabel(run: FreeReviewRun): string | null {
+  if (run.status === "reviewing") return "审查进行中";
+  if (run.status === "repairing") return "等待修复";
+  if (run.status === "manual_repairing") return "按意见修改中";
+  if (run.status === "reworking") return "任务修改中";
+  return null;
+}
+
 function checkModeLabel(run: FreeReviewRun): string {
   return run.checkMode === "logic" ? "逻辑检查" : "语法检查";
 }
@@ -24,7 +32,8 @@ export function freeReviewActivityTitle(run: FreeReviewRun): string {
 export function freeReviewActivityDetail(run: FreeReviewRun): string {
   if (run.status === "repairing" || run.status === "manual_repairing" || run.status === "reworking") {
     const next = run.status === "repairing" ? "完成后自动复审" : "完成后等待或按预约复审";
-    return `${run.status === "reworking" ? "任务继续修改" : `按 ${run.reviewerName} 第 ${run.currentRound} 轮意见修改`} · ${next}`;
+    const work = run.status === "reworking" ? "任务继续修改" : `按 ${run.reviewerName} 第 ${run.currentRound} 轮意见修改`;
+    return `${work} · ${next}`;
   }
   return `${FREE_REVIEW_RUN_LABELS[run.status]} · 已到第 ${run.currentRound} 轮 / 最多 ${run.retryLimit + 1} 轮`;
 }

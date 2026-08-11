@@ -26,6 +26,7 @@ const {
   verifyProtocolFor,
   verifyReminderFor,
 } = await import("../src/review-prompts.js");
+const { withGlobalBrowserPolicy } = await import("../src/browser-verification-policy.js");
 const { initialTaskObjective, invitedTaskBrief } = await import("../src/invited-task-brief.js");
 // 判定（该不该派、几轮、找谁验）住在 review-policy.ts，是纯函数，所以这一段全程不起
 // 数据库、不起 CLI。
@@ -263,6 +264,25 @@ const assertBrowserOrder = (text: string, source: string) => {
 assertBrowserOrder(reviewPrompt, "自动验证 prompt");
 assertBrowserOrder(verifyReminderFor(taskId, 1), "自动验证续跑提醒");
 assertBrowserOrder(reviewReminderFor({ id: "legacy-review", reviewOf: taskId, reviewRound: 1 }), "历史审查续跑提醒");
+const globalFreshPrompt = withGlobalBrowserPolicy("普通任务正文", "full");
+assert.match(globalFreshPrompt, /【全局浏览器操作规范】/, "普通新会话必须收到全局浏览器规范");
+assertBrowserOrder(globalFreshPrompt, "普通新会话");
+assert.match(globalFreshPrompt, /无报告则写进本轮最终回复|没有专门报告产物时/, "普通任务降级原因必须有可见落点");
+const globalResumePrompt = withGlobalBrowserPolicy("用户续聊", "reminder");
+assert.match(globalResumePrompt, /【全局浏览器操作提醒】/, "续聊与修复回合必须重贴浏览器提醒");
+assert.match(globalResumePrompt, /标签保持后台.*禁止激活 Chrome/, "续聊提醒必须保留非打扰约束");
+assert.match(globalResumePrompt, /截图、布局检查或页面点击不算理由/, "续聊提醒必须限制有头浏览器");
+assert.equal(withGlobalBrowserPolicy(reviewPrompt, "full"), reviewPrompt, "审查 prompt 已含完整策略时不得重复注入");
+
+const globalPromptCallsites = [
+  ["普通任务", new URL("../src/orchestrator.ts", import.meta.url), 2],
+  ["团队调度台", new URL("../src/team/session.ts", import.meta.url), 4],
+  ["duet 讨论者", new URL("../src/duet/index.ts", import.meta.url), 1],
+] as const;
+for (const [source, file, expected] of globalPromptCallsites) {
+  const calls = [...readFileSync(file, "utf8").matchAll(/withGlobalBrowserPolicy\(/g)].length;
+  assert.equal(calls, expected, `${source} 的所有 prompt 入口必须经过全局浏览器策略`);
+}
 const requestContext = readFileSync(join(base, "request-context.md"), "utf8");
 assert.match(requestContext, /path target \/grill-me/);
 assert.match(requestContext, /原始需求里点名 \/grill-me/, "需求文件不能为了避免误触而删掉验收信息");
