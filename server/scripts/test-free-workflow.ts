@@ -97,6 +97,10 @@ try {
   }, promptRun, 1, root);
   assert.doesNotMatch(skillPrompt, /grill-me|把排队需求也一起做完/, "自由审查 prompt 不得原样夹带技能名或用户追问");
   assert.match(skillPrompt, /request-context\.md/, "自由审查应改为引用需求文件");
+  assert.match(skillPrompt, /Browser\/Chrome 扩展的具名分组后台标签/, "自由审查应首选扩展具名后台标签");
+  assert.match(skillPrompt, /不得接管、复用或直连用户普通标签/, "自由审查不得操作用户普通标签");
+  assert.match(skillPrompt, /独立无头 Chromium\/Playwright/, "扩展不可用时才应退回独立无头浏览器");
+  assert.doesNotMatch(skillPrompt, /浏览器验证优先(?:复用|走)?\s*CDP/, "自由审查不得再要求优先 CDP");
   const skillContext = readFileSync(join(root, "runs", "free-task", "free-review", "skill-review", "round-1", "request-context.md"), "utf8");
   assert.match(skillContext, /标题也可能点名 \/grill-me/);
   assert.match(skillContext, /原始正文要求运行 \/grill-me/);

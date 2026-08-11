@@ -19,7 +19,13 @@ const {
   reviewRoundDir,
   safeReviewFilePath,
 } = await import("../src/review-evidence.js");
-const { REVIEW_OVERWRITE_CHECK, repairPrompt, verifyProtocolFor } = await import("../src/review-prompts.js");
+const {
+  REVIEW_OVERWRITE_CHECK,
+  repairPrompt,
+  reviewReminderFor,
+  verifyProtocolFor,
+  verifyReminderFor,
+} = await import("../src/review-prompts.js");
 const { initialTaskObjective, invitedTaskBrief } = await import("../src/invited-task-brief.js");
 // 判定（该不该派、几轮、找谁验）住在 review-policy.ts，是纯函数，所以这一段全程不起
 // 数据库、不起 CLI。
@@ -248,6 +254,16 @@ const promptTarget = (await db.select().from(tasks)).find((row) => row.id === ta
 const reviewPrompt = await verifyProtocolFor(promptTarget, 1, root);
 assert.doesNotMatch(reviewPrompt, /grill-me|原始需求里点名/, "自动验证 prompt 不得原样夹带被审需求里的技能名");
 assert.match(reviewPrompt, /request-context\.md/, "自动验证应通过文件交付需求上下文");
+for (const [label, prompt] of [
+  ["验证协议", reviewPrompt],
+  ["验证提醒", verifyReminderFor(taskId, 1)],
+  ["历史审查提醒", reviewReminderFor({ id: "review-task", reviewOf: taskId, reviewRound: 1 })],
+] as const) {
+  assert.match(prompt, /Browser\/Chrome 扩展的具名分组后台标签/, `${label}应首选扩展具名后台标签`);
+  assert.match(prompt, /不得接管、复用或直连用户普通标签/, `${label}不得操作用户普通标签`);
+  assert.match(prompt, /独立无头 Chromium\/Playwright/, `${label}仅在扩展不可用时退回独立无头浏览器`);
+  assert.doesNotMatch(prompt, /浏览器验证优先(?:复用|走)?\s*CDP/, `${label}不得再要求优先 CDP`);
+}
 const requestContext = readFileSync(join(base, "request-context.md"), "utf8");
 assert.match(requestContext, /path target \/grill-me/);
 assert.match(requestContext, /原始需求里点名 \/grill-me/, "需求文件不能为了避免误触而删掉验收信息");
