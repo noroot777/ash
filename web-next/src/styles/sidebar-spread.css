@@ -87,6 +87,17 @@
   transform: translate(-100%, -50%);
 }
 
+/* 星标同理拉回标题列末尾；行里同时有来源徽标（它也占着列末）时，星标让到它左边。 */
+.workspace-sidebar.is-spread .workspace-task-row-wrap > .workspace-task-star {
+  right: auto;
+  left: calc(22px + var(--spread-title-w) - 3px);
+  transform: translate(-100%, -50%);
+}
+
+.workspace-sidebar.is-spread .workspace-task-row-wrap:has(> .task-origin-chip) > .workspace-task-star {
+  left: calc(22px + var(--spread-title-w) - 27px);
+}
+
 /* 轮到你处理的那些行淡淡染一层琥珀：铺开是拿来「找出该我动的活」的。 */
 .workspace-sidebar.is-spread .workspace-task-row-wrap.is-todo:not(.is-selected) {
   background: color-mix(in lch, var(--amber) 6%, transparent);
@@ -288,6 +299,22 @@
 .workspace-spread-dot--wait { --spread-dot: var(--faint); }
 .workspace-spread-dot--done { --spread-dot: var(--green); }
 .workspace-spread-dot--accepted { --spread-dot: var(--cyan); }
+
+/* 星标那颗画成星形:它是手动记号不是状态桶,跟五颗状态圆点分开认。 */
+.workspace-spread-dot--starred { --spread-dot: var(--muted); }
+
+.workspace-spread-dot--starred i {
+  display: grid;
+  width: 11px;
+  height: 11px;
+  place-items: center;
+  background: transparent;
+  color: var(--muted);
+}
+
+.workspace-spread-dot--starred.is-on i { background: transparent; }
+
+.workspace-spread-dot--starred i svg { display: block; }
 
 .workspace-spread-tip {
   position: fixed;

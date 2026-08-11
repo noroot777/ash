@@ -274,6 +274,7 @@ export interface Task {
   status: TaskStatus;
   stage?: TaskStage | null;
   pinnedAt?: number | null; // null=未置顶；整数毫秒时间戳用于置顶区排序
+  starredAt?: number | null; // 星标：用户手动的软记号，与自动状态正交。null=未标
   reviewOf?: string | null;
   reviewRound?: number | null;
   reviewRequested?: boolean;

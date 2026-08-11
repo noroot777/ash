@@ -248,11 +248,19 @@ api.patch("/tasks/:id", async (c) => {
   ) {
     return c.json({ error: "pinnedAt 必须是非负整数时间戳或 null" }, 400);
   }
+  if (
+    b.starredAt !== undefined &&
+    b.starredAt !== null &&
+    (!Number.isSafeInteger(b.starredAt) || b.starredAt < 0)
+  ) {
+    return c.json({ error: "starredAt 必须是非负整数时间戳或 null" }, 400);
+  }
   const patch: Record<string, unknown> = { updatedAt: now() };
   if (b.title !== undefined) patch.title = b.title;
   if (b.body !== undefined) patch.body = b.body;
   if (b.autoTitle !== undefined) patch.autoTitle = b.autoTitle;
   if (b.pinnedAt !== undefined) patch.pinnedAt = b.pinnedAt;
+  if (b.starredAt !== undefined) patch.starredAt = b.starredAt;
   if (b.labels !== undefined) patch.labels = JSON.stringify(b.labels);
   if (b.groupId !== undefined) patch.groupId = b.groupId;
   const requestedExecutorId = b.executorId === "" ? null : b.executorId;

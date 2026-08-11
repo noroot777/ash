@@ -56,6 +56,7 @@ const toTask = (r: TaskRow, profiles: AgentLabelRow[] = []): Task => ({
   status: r.status as TaskStatus,
   stage: (r.stage as TaskStage | null) ?? null,
   pinnedAt: r.pinnedAt ?? null,
+  starredAt: r.starredAt ?? null,
   reviewOf: r.reviewOf ?? null,
   reviewRound: r.reviewRound ?? null,
   reviewRequested: r.reviewRequested,

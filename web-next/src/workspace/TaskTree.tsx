@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
 import type { ProjectView, Task } from "@harness/shared";
 import { statusCounts, workersOf } from "@harness/shared/team";
-import { CaretRight, ChatsCircle, UsersThree } from "@phosphor-icons/react";
+import { CaretRight, ChatsCircle, Star, UsersThree } from "@phosphor-icons/react";
 import { OriginTaskChip, taskParentLink } from "../components/TaskOrigin.tsx";
 import { TaskStatusDot } from "../components/TaskStatusDot.tsx";
+import { api } from "../lib/api.ts";
 import { useTaskReadState, type IndicatorForTask } from "../lib/useTaskReadState.ts";
 import { ProjectAvatar } from "./ProjectAvatar.tsx";
 import { SpreadPeekLayer, SpreadRowCells, SpreadRowProvider, useSpreadPeek, useSpreadRow } from "./TaskSpread.tsx";
-import { spreadBucket, SPREAD_FILTERS, type SidebarSpread, type SpreadFilter } from "./useSidebarSpread.ts";
+import { matchesSpreadFilter, spreadBucket, SPREAD_FILTERS, type SidebarSpread, type SpreadFilter } from "./useSidebarSpread.ts";
 import { buildTaskTree, orderedTopLevelTasks, previewTasksByAge } from "./taskTreeModel.ts";
 
 type TaskTreeProps = {
@@ -54,6 +55,27 @@ function StatusMarker({ indicator }: { indicator: ReturnType<IndicatorForTask> }
   return indicator
     ? <TaskStatusDot indicator={indicator} surface="workspace" />
     : <i className="workspace-status-dot workspace-status-dot--quiet" aria-hidden="true" />;
+}
+
+// 星标：用户手动的软记号（与自动状态正交）。已标的常驻行尾，未标的 hover 才浮出。
+// 失败不弹提示——列表以 SSE 的 task.updated 为准，没标上重点一次即可。
+function TaskStarButton({ task }: { task: Task }) {
+  const starred = task.starredAt != null;
+  return (
+    <button
+      className={`workspace-task-star${starred ? " is-starred" : ""}`}
+      type="button"
+      aria-pressed={starred}
+      aria-label={starred ? "取消星标" : "加星标"}
+      onClick={() => {
+        void api.patchTask(task.id, { starredAt: starred ? null : Date.now() }).catch((reason) => {
+          console.error("星标更新失败", reason);
+        });
+      }}
+    >
+      <Star size={13} weight={starred ? "fill" : "regular"} aria-hidden="true" />
+    </button>
+  );
 }
 
 function WorkerSummary({ workers, indicatorForTask }: { workers: Task[]; indicatorForTask: IndicatorForTask }) {
@@ -110,10 +132,11 @@ function TaskRow({
   const indicator = indicatorForTask(task);
   const hasOrigin = showOrigin && taskParentLink(task, allTasks) !== null;
   const hasMeta = task.mode === "duet" || trailing != null;
+  const canStar = task.parentId === null;
   const spreadRow = useSpreadRow();
   const spreadCells = spreadRow?.spread.laidOut ? spreadRow : null;
   return (
-    <div className={`workspace-task-row-wrap ui-selectable${selected ? " is-selected" : ""}${wrapperClassName ? ` ${wrapperClassName}` : ""}${spreadCells && spreadBucket(task) === "todo" ? " is-todo" : ""}`}>
+    <div className={`workspace-task-row-wrap ui-selectable${selected ? " is-selected" : ""}${wrapperClassName ? ` ${wrapperClassName}` : ""}${spreadCells && spreadBucket(task) === "todo" ? " is-todo" : ""}${task.starredAt != null ? " has-star" : ""}${canStar ? " can-star" : ""}`}>
       <span className="workspace-task-leading">
         {leading ?? <StatusMarker indicator={indicator} />}
       </span>
@@ -133,6 +156,7 @@ function TaskRow({
           </span>
         )}
       </button>
+      {canStar && <TaskStarButton task={task} />}
       {spreadCells && <SpreadRowCells task={task} ctx={spreadCells} onOpen={() => onTask(task)} />}
       {hasOrigin && (
         <OriginTaskChip
@@ -259,7 +283,7 @@ function CurrentProjectTree({
   });
   const keptBySection = sections.map((section) => ({
     section,
-    kept: filter === "all" ? section.tasks : section.tasks.filter((task) => spreadBucket(task) === filter),
+    kept: section.tasks.filter((task) => matchesSpreadFilter(task, filter)),
   }));
   // 一条不剩时必须自己说出来，还得给条退路：窄态那排点很小，不说清楚的话看着就是「任务全没了」。
   if (!keptBySection.some((entry) => entry.kept.length)) {
