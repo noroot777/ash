@@ -81,6 +81,20 @@ export function localOpenUrl(href?: string): string | null {
   return target.toString();
 }
 
+export type TaskFileOpenTarget = {
+  taskId: string;
+  path: string;
+};
+
+/** A managed worktree path can be reopened through the task API even after that worktree is cleaned. */
+export function taskFileOpenTarget(href?: string): TaskFileOpenTarget | null {
+  const diskPath = localDiskPath(href);
+  if (!diskPath) return null;
+  const normalized = diskPath.replace(/\\/g, "/");
+  const match = /(?:^|\/)\.worktrees\/([^/]+)\/(.+)$/.exec(normalized);
+  return match ? { taskId: match[1], path: match[2] } : null;
+}
+
 function sameOriginUrl(href: string): URL | null {
   try {
     const url = new URL(href, window.location.origin);
@@ -146,10 +160,23 @@ export function currentOriginOpenLocalUrl(href: string): string {
 }
 
 export async function openLocalPath(href: string): Promise<void> {
+  const taskFile = taskFileOpenTarget(href);
+  let taskFileError: unknown = null;
+  if (taskFile) {
+    try {
+      await api.openTaskFile(taskFile.taskId, taskFile.path, null);
+      return;
+    } catch (reason) {
+      taskFileError = reason;
+    }
+  }
   const target = localOpenUrl(href);
   if (!target) throw new Error("不是可打开的本地路径");
   const response = await fetch(target);
-  if (!response.ok) throw new Error(await response.text() || `HTTP ${response.status}`);
+  if (!response.ok) {
+    if (taskFileError instanceof Error) throw taskFileError;
+    throw new Error(await response.text() || `HTTP ${response.status}`);
+  }
 }
 
 type MarkdownNode = {

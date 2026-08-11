@@ -28,6 +28,8 @@ const links = [
   "",
   "[本地 Demo](/Users/fjh/code/harness/.worktrees/demo/docs/baseline/index.html)",
   "",
+  "[普通本地文件](/Users/fjh/Documents/demo.html)",
+  "",
   "[站外图](https://example.com/remote.png)",
 ].join("\n");
 

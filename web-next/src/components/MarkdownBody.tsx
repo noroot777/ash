@@ -61,7 +61,7 @@ function MarkdownDocument({ text, onReviewReport, onActionError }: {
                   if (!localOpen) return;
                   event.preventDefault();
                   onActionError(null);
-                  void openLocalPath(localOpen).catch((reason: unknown) => {
+                  void openLocalPath(href || localOpen).catch((reason: unknown) => {
                     onActionError(reason instanceof Error ? reason.message : String(reason));
                   });
                 }}
