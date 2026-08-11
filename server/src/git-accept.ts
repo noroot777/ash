@@ -109,7 +109,7 @@ export type TaskCleanupResult =
       dirtyFiles?: string[];
     };
 
-async function isAncestor(repo: string, ancestor: string, descendant: string): Promise<boolean> {
+export async function isAncestor(repo: string, ancestor: string, descendant: string): Promise<boolean> {
   try {
     await exec("git", ["-C", repo, "merge-base", "--is-ancestor", ancestor, descendant]);
     return true;
@@ -340,11 +340,16 @@ async function squashInCheckedOutTarget(
     await exec("git", ["-C", cwd, "commit", "-m", `squash 合并 ${sourceBranch}`]);
     return { ok: true, sourceBranch, targetBranch, method: "squash" };
   } catch (error) {
-    // 暂存区是空的：任务分支相对目标分支没有内容差异（典型是内容早就以别的方式进去了）。
-    // 这不是失败，按「已经合过了」报，免得用户对着一条报错找不出哪儿不对。
+    // 暂存区是空的：任务分支相对目标分支没有内容差异（典型是首次 squash 已进目标、
+    // 清理失败后重试）。这不是失败，按「已经合过了」报。**问 git 而不是猜错误文本**——
+    // 执行包装给出的可能只是泛化的 Command failed，靠正则匹配会漏（审查实测：重试
+    // 永远卡在 merged，只能手工介入）。diff --cached 要在 reset --hard 之前查。
     const message = gitError(error);
+    const stagedEmpty = await exec("git", ["-C", cwd, "diff", "--cached", "--quiet"])
+      .then(() => true)
+      .catch(() => false);
     await exec("git", ["-C", cwd, "reset", "--hard"]).catch(() => {});
-    if (/nothing to commit|no changes added/i.test(message)) {
+    if (stagedEmpty || /nothing to commit|no changes added/i.test(message)) {
       return { ok: true, sourceBranch, targetBranch, method: "already_merged" };
     }
     return {

@@ -392,10 +392,13 @@ export async function handleFreeWorkflowSettlement(
 
   // ── 审查旁路回合结算 ──
   if (!run) return true; // 审查回合结算时 run 已被外力改掉：没有可结算的对象
-  if (task.question || task.resumePrompt) return true;
   const round = (await db.select().from(freeReviewRounds)
     .where(and(eq(freeReviewRounds.runId, run.id), eq(freeReviewRounds.round, run.currentRound)))).at(0);
   if (!round) return true;
+  // 提问守卫只保护「审查回合以提问/检查点收尾」的场景（等答复回来续跑再结算）。
+  // reviewer 已交卷（round 有结论）就必须结算——question 可能是实现回合遗留的旧字段，
+  // 拿它挡住已有结论的审查会让链永远停在 reviewing（审查实测复现）。
+  if ((task.question || task.resumePrompt) && !round.conclusion) return true;
   const at = now();
   const outcome = freeReviewOutcome({
     turnOk,
@@ -460,6 +463,9 @@ async function startFreeReview(taskId: string, input: FreeReviewDispatchInput): 
   if (task.archived) throw new Error("归档任务不能派审");
   if (task.status === "backlog") throw new Error("任务尚未运行，完成实现后再派审");
   if (task.status === "running" || task.status === "queued") throw new Error("任务正在运行或排队，结束后再派审");
+  // 遗留的提问/续跑指令必须先处理：审查回合结算与启动对账都把这两个字段当「审查在等
+  // 答复」的正常态，带着旧字段开审会让新审查链永远收不了尾（审查实测复现）。
+  if (task.question || task.resumePrompt) throw new Error("任务正等待答复或续跑，处理后再派审");
   assertBeforeAcceptance(task);
   if (!tryAcquireFreeWorkflowAction(taskId)) throw new Error("当前已有自由工作流操作正在进行");
   try {

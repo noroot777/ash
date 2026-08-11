@@ -366,6 +366,10 @@ export const scheduledMessages = sqliteTable("scheduled_messages", {
   executorId: text("executor_id"), // agents.id | null（null=按 agent 类型默认执行器）
   model: text("model"), // 模型覆盖 | null（跟随执行器）
   reasoningEffort: text("reasoning_effort"), // 思考强度覆盖 | null（跟随执行器）
+  // 投递时恢复的回合身份（"reviewer" 等）。审查者提问回合还没 release turn、用户就答复
+  // 时答案会落到这里排队——不存 role 的话投递会以 single 身份进实现会话，reviewer 永远
+  // 收不到答案（审查实测复现）。null = 普通消息。
+  sessionRole: text("session_role"),
   mode: text("mode").notNull().default("timed"), // timed | queued
   sendAt: text("send_at").notNull(), // timed=ISO 到期时间；queued=入队时刻（只用来排先后）
   status: text("status").notNull().default("pending"), // pending | sent | canceled

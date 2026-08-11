@@ -9,7 +9,7 @@ import { db } from "./db/index.js";
 import { projects, tasks } from "./db/schema.js";
 import { handOffConflict } from "./accept-conflict.js";
 import { localBranchExists, resolveTaskMergeTarget } from "./git.js";
-import { cleanupAcceptedTask, cleanupPlanFor, mergeTaskBranch } from "./git-accept.js";
+import { cleanupAcceptedTask, cleanupPlanFor, isAncestor, mergeTaskBranch } from "./git-accept.js";
 import { hasActiveFreeReview } from "./free-workflow.js";
 import { disarmFreeReviewReservation } from "./free-review-reservations.js";
 import { releaseFreeWorkflowAction, tryAcquireFreeWorkflowAction } from "./free-workflow-lock.js";
@@ -305,7 +305,11 @@ async function acceptTaskUnlocked(taskId: string, by: AcceptBy): Promise<AcceptT
   // 盖成 accepted 而返回值宣称一个不存在的分支（审查实测复现）。
   if (!merge.ok && merge.reason === "source_branch_missing" && task.stage === "merged") {
     const targetBranch = merge.targetBranch ?? await resolveTaskMergeTarget(project.repoPath, task.worktreeBase);
-    if (targetBranch && await localBranchExists(project.repoPath, targetBranch)) {
+    // 目标分支「名字存在」不够：内容可能已被 reset 回合并前——已记录的合并结果必须
+    // 仍能从目标分支到达，否则 accepted 就是在为一份不存在的产物盖章（审查实测复现）。
+    const mergeReachable = targetBranch && await localBranchExists(project.repoPath, targetBranch)
+      && (!task.acceptedMergeCommit || await isAncestor(project.repoPath, task.acceptedMergeCommit, targetBranch));
+    if (mergeReachable) {
       const guard = await acceptanceGuard(taskId, "before_accept");
       if (guard.failure) return guard.failure;
       const sharedWorkers = await finalizeAcceptance(
@@ -356,18 +360,28 @@ async function acceptTaskUnlocked(taskId: string, by: AcceptBy): Promise<AcceptT
   // 进程死在中间会留下「stage=merged、快照还是上一生命周期」的组合，重试便把第二版
   // 产物合回旧目标分支（审查实测复现）。
   // 快照按**一次验收生命周期**冻结：全新验收（stage 不是 merged）三列整体覆盖——
-  // reopen 后的第二次验收是新生命周期，不能沿用上一版的 base；清理失败后的重试
-  // （stage=merged）三列保持首次值——already_merged 的同值区间、重试期间目标分支被
-  // 别人推进产生的新 tip，都不能污染首次真实的合并区间。
-  const snapshot = retrying ? {
+  // reopen 后的第二次验收是新生命周期，不能沿用上一版的 base。
+  // already_merged 与重试（stage=merged）都走「保留式」：这次没有真的动 ref，已有快照
+  // 描述的才是上一次真实合并；没有已有快照（Git 合并成功后、DB 落库前崩溃的窗口）时
+  // base 写 null——「不可知」是诚实的，before==after 的空区间是伪造（审查实测复现：
+  // 按空区间派合并结果审查会漏掉真正合入的全部代码）。
+  const preserveSnapshot = retrying || merge.method === "already_merged";
+  const snapshot = preserveSnapshot ? {
     acceptedTargetBranch: task.acceptedTargetBranch ?? merge.targetBranch,
-    acceptedBaseCommit: task.acceptedBaseCommit ?? merge.beforeCommit ?? null,
+    acceptedBaseCommit: task.acceptedBaseCommit
+      ?? (merge.method === "already_merged" ? null : merge.beforeCommit ?? null),
     acceptedMergeCommit: task.acceptedMergeCommit ?? merge.afterCommit ?? null,
   } : {
     acceptedTargetBranch: merge.targetBranch,
     acceptedBaseCommit: merge.beforeCommit ?? null,
     acceptedMergeCommit: merge.afterCommit ?? null,
   };
+  if (merge.method === "already_merged" && !task.acceptedBaseCommit) {
+    await appendTaskTimeline(
+      taskId,
+      "合并早已发生但没有留下本生命周期的快照（可能是上次验收中断）：合并前基准 commit 无法确认，已按「不可知」记录而不是伪造空区间。",
+    );
+  }
   const mergedAt = now();
   await db.update(tasks).set({
     ...snapshot,
@@ -524,42 +538,48 @@ export async function acceptTask(
   let result: AcceptTaskResult;
   let freeWorkflowLocked = false;
   try {
-    const context = await acceptanceContext(taskId);
-    if (context.freeWorkflow && !tryAcquireFreeWorkflowAction(taskId)) {
-      result = {
-        accepted: false,
-        httpStatus: 409,
-        taskId,
-        reason: "free_workflow_action_in_progress",
-        error: "当前已有自由工作流操作正在进行，结束后再验收",
-        status: context.status,
-        phase: "initial",
-      };
-    } else {
-      freeWorkflowLocked = context.freeWorkflow;
-      result = await withRepoLock(context.repoPath, async (wait) => {
-        if (wait.queued) {
-          // 排队是刷新后仍看得见的事实,不只是"点了没反应"。
-          await appendTaskTimeline(
-            taskId,
-            `验收排队：同一仓库有其它验收/worktree 操作正在执行，已等待 ${(wait.waitedMs / 1000).toFixed(1)}s 后开始本次验收。`,
-          );
-        }
-        return acceptTaskUnlocked(taskId, by);
-      });
+    try {
+      const context = await acceptanceContext(taskId);
+      if (context.freeWorkflow && !tryAcquireFreeWorkflowAction(taskId)) {
+        result = {
+          accepted: false,
+          httpStatus: 409,
+          taskId,
+          reason: "free_workflow_action_in_progress",
+          error: "当前已有自由工作流操作正在进行，结束后再验收",
+          status: context.status,
+          phase: "initial",
+        };
+      } else {
+        freeWorkflowLocked = context.freeWorkflow;
+        result = await withRepoLock(context.repoPath, async (wait) => {
+          if (wait.queued) {
+            // 排队是刷新后仍看得见的事实,不只是"点了没反应"。
+            await appendTaskTimeline(
+              taskId,
+              `验收排队：同一仓库有其它验收/worktree 操作正在执行，已等待 ${(wait.waitedMs / 1000).toFixed(1)}s 后开始本次验收。`,
+            );
+          }
+          return acceptTaskUnlocked(taskId, by);
+        });
+      }
+    } finally {
+      if (freeWorkflowLocked) releaseFreeWorkflowAction(taskId);
+    }
+    if (result.accepted) {
+      // 两条尾巴，都在**仓库锁之外**跑（这些命令可能好几分钟，占着锁会让同仓库的其它
+      // 验收干等），但仍在 acceptingTaskIds **之内**——尾段是本次验收的一部分，期间的
+      // 重复验收和归档都必须被挡（尾段命令重复执行 = 发布/部署跑两遍；归档 = 冻结后
+      // 继续写，审查实测两个方向都复现过）。
+      // 幂等：already_accepted 是「本次什么验收动作都没执行」的快路，绝不重跑尾段。
+      if (result.kind === "gate_released") await releaseGate(taskId, advanceOpts);
+      else if (result.kind !== "already_accepted") {
+        const tail = await runAcceptedTail(taskId, by);
+        if (tail) result = { ...result, tail };
+      }
     }
   } finally {
-    if (freeWorkflowLocked) releaseFreeWorkflowAction(taskId);
     acceptingTaskIds.delete(taskId);
-  }
-  if (result.accepted) {
-    // 两条尾巴，都在仓库锁**之外**跑（这些命令可能好几分钟，占着锁会让同仓库的其它
-    // 验收干等）：中途关口放行 = 让这条线接着往下走；真正的验收 = 跑「点头之后」那一段。
-    if (result.kind === "gate_released") await releaseGate(taskId, advanceOpts);
-    else {
-      const tail = await runAcceptedTail(taskId, by);
-      if (tail) result = { ...result, tail };
-    }
   }
   return result;
 }

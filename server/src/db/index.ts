@@ -249,6 +249,8 @@ export async function ensureSchema() {
     // 「已认领、还没送到」当口时，内存里的等待/在途标记全没了，只有库里这个标记能让
     // 开机扫描认出「这条得重新投递」（见 docs/incidents.md「排队消息凭空消失」）。
     "ALTER TABLE scheduled_messages ADD COLUMN delivering_since TEXT",
+    // 投递时恢复的回合身份（审查者提问期间排队的答复必须以 reviewer 身份送回）。
+    "ALTER TABLE scheduled_messages ADD COLUMN session_role TEXT",
     // 自由工作流预约审查：只保存一份配置，confirmed done 后复用现有派审链。
     "ALTER TABLE free_workflow_states ADD COLUMN review_armed INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE free_workflow_states ADD COLUMN review_check_mode TEXT",

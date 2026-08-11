@@ -58,7 +58,8 @@ export type FreeReviewView = {
   reservationArmed: boolean;
   /** armed 且挂着 runId = 自动复审链的续轮预约 */
   autoRereview: boolean;
-  /** 任务在改（running/queued）且有未通过意见在身或挂着预约 */
+  /** 任务在改（running/queued）且有未通过意见在身或挂着自动续轮——「修复中」的叙事。
+   *  用户手动预约（runId 空）不算：首次审查还没发生过，没有什么可「修复」的。 */
   repairing: boolean;
   /** 最近结论的新鲜度；最近一轮没有结论（reviewing/failed/无审查）时为 null */
   freshness: FreeReviewFreshness | null;
@@ -84,7 +85,7 @@ export function freeReviewView(state: FreeWorkflowState | null | undefined, task
     taskBusy,
     reservationArmed,
     autoRereview,
-    repairing: taskBusy && (!!stoppedRun || reservationArmed),
+    repairing: taskBusy && (!!stoppedRun || autoRereview),
     freshness,
     stale: freshness === "stale",
   };

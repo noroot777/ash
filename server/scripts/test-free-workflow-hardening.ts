@@ -350,7 +350,106 @@ try {
   const staleRepair = await api.request("/tasks/free-stale-task/free-workflow/review/repair", { method: "POST" });
   assert.equal(staleRepair.status, 409, "结论过期（锚点≠HEAD）时不得按旧意见发起修复");
 
-  console.log("✓ turn 锁窗口拦验收与派审；结论必须携报告且出自活跃审查会话；symlink/硬链接被拒；验收快照按生命周期冻结；归档只读；旧状态迁移保语义；重启对账收拾孤儿审查；过期意见不可修复");
+  // 派审必须先处理遗留的提问/续跑指令，否则新审查链会被旧字段永远卡在 reviewing。
+  await db.update(tasks).set({ question: "实现回合遗留的问题" }).where(eq(tasks.id, "free-stale-task"));
+  const dispatchWithQuestion = await api.request("/tasks/free-stale-task/free-workflow/review", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ reviewerId: reviewer.id, checkMode: "logic", retryLimit: 1 }),
+  });
+  assert.equal(dispatchWithQuestion.status, 409, "任务挂着遗留提问时不得派审");
+  // reviewer 已交卷（round 有结论）时，遗留 question 不能挡住结算。
+  const { handleFreeWorkflowSettlement } = await import("../src/free-workflow.js");
+  const strayAt = new Date().toISOString();
+  await db.insert(freeReviewRuns).values({
+    id: "stray-question-review", taskId: "free-stale-task", reviewerId: reviewer.id, reviewerName: "Codex logic",
+    agentType: "codex", executorId: "reviewer-executor", model: "gpt-review", reasoningEffort: "high",
+    checkMode: "logic", retryLimit: 0, currentRound: 1, status: "reviewing",
+    createdAt: strayAt, updatedAt: strayAt, finishedAt: null,
+  });
+  await db.insert(freeReviewRounds).values({
+    id: "stray-question-round-1", runId: "stray-question-review", round: 1, status: "reviewing",
+    conclusion: "verified", startedAt: strayAt, endedAt: null,
+  });
+  await handleFreeWorkflowSettlement("free-stale-task", "done", false, true, "reviewer");
+  const strayAfter = (await db.select().from(freeReviewRuns)
+    .where(eq(freeReviewRuns.id, "stray-question-review"))).at(0);
+  assert.equal(strayAfter?.status, "passed", "已交卷的审查不得被遗留 question 卡在 reviewing");
+  await db.update(tasks).set({ question: null }).where(eq(tasks.id, "free-stale-task"));
+
+  // squash 清理失败后的重试：目标已含内容，再次 squash 的空提交必须判为 already_merged
+  // （问 git 暂存区，不猜错误文本），否则任务永远越不过 merge 阶段。
+  const { mergeTaskBranch } = await import("../src/git-accept.js");
+  const squashWt = await prepareWorktree(repo, "free-squash-retry", "main");
+  writeFileSync(join(squashWt.path, "squash.txt"), "squash\n");
+  git(squashWt.path, "add", "squash.txt");
+  git(squashWt.path, "commit", "-m", "squash content");
+  const firstSquash = await mergeTaskBranch(repo, "free-squash-retry", "main", "squash");
+  assert.equal(firstSquash.ok && firstSquash.method, "squash", "首次 squash 合并应成功");
+  const retrySquash = await mergeTaskBranch(repo, "free-squash-retry", "main", "squash");
+  assert.equal(retrySquash.ok && retrySquash.method, "already_merged",
+    "重复 squash（暂存区为空）应判 already_merged，而不是卡死在 merge_failed");
+
+  // Git 已合并、DB 没落快照的崩溃窗口：重试拿到 already_merged 时 base 必须记「不可知」
+  // （null），不得伪造 before==after 的空区间。
+  await createTasks([{
+    id: "free-crash-task", projectId: "p-git", groupId: null, parentId: null,
+    title: "free crash window", body: "test", mode: "single", status: "done",
+    labels: "[]", dependsOn: "[]", resumeDependsOn: "[]", agentType: "codex",
+    executorId: "reviewer-executor", model: null, reasoningEffort: null, autoTitle: false,
+    duet: null, team: null, reportBack: false, scheduleId: null,
+    createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    useWorktree: true, worktreeBase: "main", originTaskId: null, workflowMode: "free",
+  }]);
+  const crashWt = await prepareWorktree(repo, "free-crash-task", "main");
+  writeFileSync(join(crashWt.path, "crash.txt"), "crash window\n");
+  git(crashWt.path, "add", "crash.txt");
+  git(crashWt.path, "commit", "-m", "crash window content");
+  // 模拟崩溃窗口：Git 合并真实发生（ref 已动），但 stage/快照都没写。
+  const crashMerge = await mergeTaskBranch(repo, "free-crash-task", "main", "safe");
+  assert.equal(crashMerge.ok, true);
+  const crashAccept = await acceptTask("free-crash-task");
+  assert.equal(crashAccept.accepted, true, "崩溃窗口后的重试验收应完成");
+  const crashRow = (await db.select().from(tasks).where(eq(tasks.id, "free-crash-task"))).at(0);
+  assert.equal(crashRow?.acceptedBaseCommit, null, "合并发生在记录缺失的窗口时 base 必须记不可知，不得伪造空区间");
+  assert.equal(crashRow?.acceptedMergeCommit, git(repo, "rev-parse", "main"));
+
+  // 快路的可达性校验：已记录的 merge commit 从目标分支不可达时不得盖 accepted。
+  await createTasks([{
+    id: "free-unreachable-task", projectId: "p-git", groupId: null, parentId: null,
+    title: "free unreachable", body: "test", mode: "single", status: "done",
+    labels: "[]", dependsOn: "[]", resumeDependsOn: "[]", agentType: "codex",
+    executorId: "reviewer-executor", model: null, reasoningEffort: null, autoTitle: false,
+    duet: null, team: null, reportBack: false, scheduleId: null,
+    createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    useWorktree: true, worktreeBase: "main", originTaskId: null, workflowMode: "free",
+  }]);
+  await db.update(tasks).set({
+    stage: "merged", acceptedTargetBranch: "main",
+    acceptedBaseCommit: git(repo, "rev-parse", "main"),
+    acceptedMergeCommit: "0000000000000000000000000000000000000000",
+  }).where(eq(tasks.id, "free-unreachable-task"));
+  const unreachableAccept = await acceptTask("free-unreachable-task");
+  assert.equal(unreachableAccept.accepted, false, "目标分支不再包含已记录的合并结果时不得盖 accepted");
+
+  // 排队消息要持久化回合身份：审查者提问期间排队的答复必须以 reviewer 身份送回。
+  const { enqueueMessage } = await import("../src/pending-messages.js");
+  const { scheduledMessages } = await import("../src/db/schema.js");
+  const queued = await enqueueMessage({
+    taskId: "free-stale-task", text: "【答复】继续", sessionRole: "reviewer",
+  });
+  const queuedRow = (await db.select().from(scheduledMessages)
+    .where(eq(scheduledMessages.id, queued.id))).at(0);
+  assert.equal(queuedRow?.sessionRole, "reviewer", "排队消息必须把 sessionRole 落库，投递时才能恢复身份");
+
+  // stateVersion 是修订号：task.review 事件驱动递增，同一毫秒内两份快照也分得出先后。
+  const { freeWorkflowState } = await import("../src/free-workflow-state.js");
+  const { bus } = await import("../src/bus.js");
+  const beforeBump = (await freeWorkflowState("free-stale-task")).stateVersion;
+  bus.publish({ type: "task.review", taskId: "free-stale-task" });
+  const afterBump = (await freeWorkflowState("free-stale-task")).stateVersion;
+  assert.equal(afterBump > beforeBump, true, "状态变更后修订号必须严格递增（不能依赖 wall-clock）");
+
+  console.log("✓ turn 锁窗口拦验收与派审；结论必须携报告且出自活跃审查回合；symlink/硬链接被拒；验收快照按生命周期冻结且崩溃窗口不伪造区间；快路验证合并结果可达；归档只读；旧状态迁移保语义；重启对账收拾孤儿审查；过期意见与遗留提问受控；squash 重试可越过；排队消息保身份；stateVersion 为修订号");
 } finally {
   rmSync(root, { recursive: true, force: true });
 }

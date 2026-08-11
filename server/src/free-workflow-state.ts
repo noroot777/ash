@@ -12,6 +12,7 @@ import type {
 import { FREE_REVIEW_CHECK_MODES } from "@harness/shared/free-workflow";
 import { asc, desc, eq, inArray } from "drizzle-orm";
 import { db } from "./db/index.js";
+import { bus } from "./bus.js";
 import {
   agents,
   freeReviewRounds,
@@ -27,6 +28,24 @@ import { existsSync } from "node:fs";
 import { readPreview } from "./preview.js";
 
 export type FreeWorkflowApiState = Omit<FreeWorkflowState, "merge">;
+
+// 每任务的状态修订号：**快照的版本必须是修订号，不能是 wall-clock**——同一毫秒内先后
+// 两份快照会拿到相同的 Date.now()，前端没法分辨谁新（审查实测：同 ms 插入一条 passed
+// review，旧快照照样覆盖新状态）。所有自由工作流状态变更都发 task.review 事件，订阅它
+// 做单点递增；与 Date.now() 取 max 是为了跨 server 重启仍近似单调（重启后计数从当前
+// 时刻起跳，必大于旧进程发出的任何版本）。
+const revisions = new Map<string, number>();
+function revisionOf(taskId: string): number {
+  const current = revisions.get(taskId);
+  if (current != null) return current;
+  const initial = Date.now();
+  revisions.set(taskId, initial);
+  return initial;
+}
+bus.subscribe((event) => {
+  if (event.type !== "task.review") return;
+  revisions.set(event.taskId, Math.max(revisionOf(event.taskId) + 1, Date.now()));
+});
 
 const EXECUTION_STATUSES = new Set<FreeWorkflowExecutionStatus>([
   "running", "completed", "failed", "canceled", "paused",
@@ -79,6 +98,10 @@ export async function workspaceStateOf(
 }
 
 export async function freeWorkflowState(taskId: string): Promise<FreeWorkflowApiState> {
+  // 版本在**读取开始前**取：读期间发生的变更会让修订号先行递增，这份快照便携带较小
+  // 版本、稍后被携带更大版本的重取覆盖——方向安全（新数据配小版本只多一次等价覆盖，
+  // 绝不会旧数据配大版本反向压新，那正是 wall-clock 版本的病）。
+  const stateVersion = revisionOf(taskId);
   const [task, state, runs, profileRows, eventRows] = await Promise.all([
     db.select().from(tasks).where(eq(tasks.id, taskId)).then((rows) => rows.at(0)),
     db.select().from(freeWorkflowStates).where(eq(freeWorkflowStates.taskId, taskId)).then((rows) => rows.at(0)),
@@ -164,9 +187,7 @@ export async function freeWorkflowState(taskId: string): Promise<FreeWorkflowApi
   return {
     taskId,
     selectedReviewerId: state?.selectedReviewerId ?? null,
-    // 版本 = 快照生成时刻（同 ms 并发生成时内容也等价，后到者覆盖无害）。前端据此
-    // 拒收「更早生成、更晚到达」的快照——到达顺序不是版本。
-    stateVersion: Date.now(),
+    stateVersion,
     workspaceHead: workspace.head,
     workspaceDirty: workspace.dirty,
     reviewReservation: {

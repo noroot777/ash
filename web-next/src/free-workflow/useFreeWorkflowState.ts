@@ -8,9 +8,10 @@ const states = new Map<string, FreeWorkflowApiState>();
 const listeners = new Map<string, Set<StateListener>>();
 const inFlight = new Map<string, Promise<FreeWorkflowApiState>>();
 
-// 唯一的新旧判据是**服务端生成快照的版本**（stateVersion）：mutation 响应先在服务端生成、
-// 之后才有 SSE 触发的 GET，即使它更晚到达，也是更旧的世界——按到达顺序或请求发起顺序猜
-// 都会把新状态盖回旧值（审查实测：旧 mutation body 晚到，把「审查中」回退成 stopped 动作）。
+// 唯一的新旧判据是**服务端的状态修订号**（stateVersion：task.review 事件驱动的单调计数，
+// 不是 wall-clock）：mutation 响应先在服务端生成、之后才有 SSE 触发的 GET，即使它更晚
+// 到达，修订号也更小——按到达顺序或请求发起顺序猜都会把新状态盖回旧值（审查实测两轮）。
+// 相等修订号 = 期间没有任何变更，内容等价，后到覆盖无害。
 function publish(taskId: string, state: FreeWorkflowApiState): void {
   const taskListeners = listeners.get(taskId);
   if (!taskListeners?.size) return;
