@@ -255,7 +255,11 @@ api.patch("/tasks/:id", async (c) => {
   ) {
     return c.json({ error: "starredAt 必须是非负整数时间戳或 null" }, 400);
   }
-  const patch: Record<string, unknown> = { updatedAt: now() };
+  // UI 只给顶层任务画星标入口:child/worker 一旦被标上就成了看不见也清不掉的隐形状态。
+  if (b.starredAt !== undefined && existing.parentId != null) {
+    return c.json({ error: "星标只支持顶层任务，执行者/子任务不能设置 starredAt" }, 400);
+  }
+  const patch: Record<string, unknown> = {};
   if (b.title !== undefined) patch.title = b.title;
   if (b.body !== undefined) patch.body = b.body;
   if (b.autoTitle !== undefined) patch.autoTitle = b.autoTitle;
@@ -320,6 +324,12 @@ api.patch("/tasks/:id", async (c) => {
   if (b.resumePrompt !== undefined) {
     patch.resumePrompt = b.resumePrompt && String(b.resumePrompt).trim() ? String(b.resumePrompt) : null;
   }
+  // updatedAt 在产品里是「最后活动时间」:同组排序、24 小时折叠、未读完成/失败事件键、
+  // 铺开态时间列都读它。星标是与活动正交的手动软记号 —— 只动 starredAt 的 PATCH 不推进
+  // updatedAt,否则给旧任务点星会让它跳到组首、解除折叠、把已读终态伪装成新事件。
+  // task.updated 事件照发(下方 publishTaskUpdated),前端仍实时回流。
+  const starOnly = "starredAt" in patch && Object.keys(patch).length === 1 && b.status === undefined;
+  if (!starOnly) patch.updatedAt = now();
   await db.update(tasks).set(patch).where(eq(tasks.id, tid));
   // Status goes through the shared helper so manual changes maintain the run-time
   // columns (startedAt/endedAt) and broadcast them just like a real run does.

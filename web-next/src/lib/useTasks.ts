@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ServerEvent, Task } from "@harness/shared";
 import { api } from "./api.ts";
 import { useServerEvents } from "./events.ts";
@@ -53,16 +53,20 @@ export function useTasks(projectId?: string) {
   const [error, setError] = useState<Error | null>(null);
   const [settlementVersion, setSettlementVersion] = useState(0);
 
-  const refetch = useCallback(async () => {
-    setLoading(true);
-    setError(null);
+  // silent：重连追平用。列表已经在屏幕上，不翻 loading（免得依赖它的初始化逻辑重跑）、
+  // 失败也不换错误横幅 —— 追平失败就等下一次事件或用户操作，别把好好的列表盖掉。
+  const refetch = useCallback(async (options?: { silent?: boolean }) => {
+    if (!options?.silent) {
+      setLoading(true);
+      setError(null);
+    }
     try {
       const allTasks = await api.tasks();
       setTasks(projectId ? allTasks.filter((task) => task.projectId === projectId) : allTasks);
     } catch (reason) {
-      setError(reason instanceof Error ? reason : new Error("任务列表读取失败"));
+      if (!options?.silent) setError(reason instanceof Error ? reason : new Error("任务列表读取失败"));
     } finally {
-      setLoading(false);
+      if (!options?.silent) setLoading(false);
     }
   }, [projectId]);
 
@@ -88,6 +92,15 @@ export function useTasks(projectId?: string) {
       }
     }, [projectId]),
   );
+
+  // SSE 没有事件 ID 也没有补发：断线窗口里错过的 task.updated 追不回来，页面会一直陈旧
+  // 到该任务下一次自己产生事件。所以从断线恢复时整表静默 refetch 一次，把界面追平。
+  const everConnected = useRef(false);
+  useEffect(() => {
+    if (!connected) return;
+    if (everConnected.current) void refetch({ silent: true });
+    else everConnected.current = true;
+  }, [connected, refetch]);
 
   return { tasks, setTasks, loading, error, connected, settlementVersion, refetch };
 }

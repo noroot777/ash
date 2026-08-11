@@ -415,7 +415,12 @@
 
 @container (max-width: 900px) {
   .workspace-sidebar.is-spread .workspace-task-row-wrap {
-    grid-template-columns: 22px minmax(0, 1fr) 0 minmax(0, 1.6fr) 0;
+    /* 标题列在窄容器里从固定 300px 改成弹性摊分:1fr 对 1.6fr 分掉 (行宽 - 22px 状态列)。
+       把 --spread-title-w 改写成同一笔账(差值 / 2.6),星标和来源徽标的「拉回标题列末尾」
+       定位才继续跟着实际列宽走,不会按 300px 悬在信息列里。声明在行上而不是侧栏上,
+       让缩进子列表各自覆盖过的 --spread-row-w 也能参与计算。 */
+    --spread-title-w: calc((var(--spread-row-w) - 22px) / 2.6);
+    grid-template-columns: 22px var(--spread-title-w) 0 minmax(0, 1.6fr) 0;
   }
   .workspace-spread-cell--body { display: none; }
   .workspace-spread-hint { display: none; }

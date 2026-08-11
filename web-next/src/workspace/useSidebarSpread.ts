@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Task, TaskFollowUp } from "@harness/shared";
 import { api } from "../lib/api.ts";
+import { orderedTopLevelTasks } from "./taskTreeModel.ts";
 
 // 收起动画的时长，必须和 sidebar-spread.css 里 .workspace-sidebar 的 width 过渡对齐：
 // 动画期间仍按铺开态排版，否则列会先「啪」地塌回去、侧边栏再慢慢滑窄，看着像闪了一下。
@@ -65,6 +66,16 @@ export function spreadCounts(tasks: Task[], projectId: string | null): SpreadCou
     counts[spreadBucket(task)] += 1;
   }
   return counts;
+}
+
+// J/K 快捷键遍历的「屏幕上可见的那份顶层列表」。筛选判据必须走 matchesSpreadFilter,
+// 别在调用点自己拼 `spreadBucket(task) === filter` —— starred 不是桶,那样星标筛选下
+// 快捷键会拿到空数组,按键被吞但选中不动。
+export function spreadVisibleTasks(tasks: Task[], projectId: string | null, filter: SpreadFilter): Task[] {
+  return orderedTopLevelTasks(
+    tasks.filter((task) => task.projectId === projectId && !task.archived),
+    { unifiedPinned: true },
+  ).filter((task) => matchesSpreadFilter(task, filter));
 }
 
 export type SidebarSpread = {

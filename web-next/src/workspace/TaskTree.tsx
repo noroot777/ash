@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { createContext, useContext, useEffect, useMemo, useState } from "react";
 import type { ProjectView, Task } from "@harness/shared";
 import { statusCounts, workersOf } from "@harness/shared/team";
 import { CaretRight, ChatsCircle, Star, UsersThree } from "@phosphor-icons/react";
@@ -18,7 +18,16 @@ type TaskTreeProps = {
   selectedTaskId: string | null;
   spread: SidebarSpread;
   onTask: (task: Task) => void;
+  onTaskUpdated: (task: Task) => void;
+  notify: (message: string) => void;
 };
+
+// 星标按钮埋在 TaskRow 里、TaskRow 又埋在三种列表里：回写和报错的通道用 context 递，
+// 免得每层组件都为它多两个 props。
+const TaskTreeActionsContext = createContext<{
+  onTaskUpdated: (task: Task) => void;
+  notify: (message: string) => void;
+} | null>(null);
 
 const TASK_PREVIEW_LIMIT = 12;
 const COLLAPSED_SECTIONS_STORAGE_KEY = "harness-next:task-tree:collapsed-sections";
@@ -58,8 +67,12 @@ function StatusMarker({ indicator }: { indicator: ReturnType<IndicatorForTask> }
 }
 
 // 星标：用户手动的软记号（与自动状态正交）。已标的常驻行尾，未标的 hover 才浮出。
-// 失败不弹提示——列表以 SSE 的 task.updated 为准，没标上重点一次即可。
+// PATCH 的成功返回直接回写本地列表 —— SSE 是补充通道不是唯一通道，断线窗口里点的星
+// 也得立刻落到界面上；失败走 notify 让用户看得见。in-flight 期间忽略重复点击，
+// 避免拿同一份旧 props 连发同方向请求。
 function TaskStarButton({ task }: { task: Task }) {
+  const actions = useContext(TaskTreeActionsContext);
+  const [busy, setBusy] = useState(false);
   const starred = task.starredAt != null;
   return (
     <button
@@ -68,9 +81,12 @@ function TaskStarButton({ task }: { task: Task }) {
       aria-pressed={starred}
       aria-label={starred ? "取消星标" : "加星标"}
       onClick={() => {
-        void api.patchTask(task.id, { starredAt: starred ? null : Date.now() }).catch((reason) => {
-          console.error("星标更新失败", reason);
-        });
+        if (busy) return;
+        setBusy(true);
+        api.patchTask(task.id, { starredAt: starred ? null : Date.now() })
+          .then((updated) => actions?.onTaskUpdated(updated))
+          .catch(() => actions?.notify(starred ? "取消星标失败" : "加星标失败"))
+          .finally(() => setBusy(false));
       }}
     >
       <Star size={13} weight={starred ? "fill" : "regular"} aria-hidden="true" />
@@ -398,7 +414,7 @@ function OtherProject({
   );
 }
 
-export function TaskTree({ projects, currentProjectId, tasks, selectedTaskId, spread, onTask }: TaskTreeProps) {
+export function TaskTree({ projects, currentProjectId, tasks, selectedTaskId, spread, onTask, onTaskUpdated, notify }: TaskTreeProps) {
   const { indicatorForTask } = useTaskReadState(tasks, selectedTaskId);
   const activeTasks = useMemo(() => tasks.filter((task) => !task.archived), [tasks]);
   const currentTasks = useMemo(
@@ -408,7 +424,9 @@ export function TaskTree({ projects, currentProjectId, tasks, selectedTaskId, sp
   const otherProjects = projects.filter((project) => project.id !== currentProjectId);
   const { peek, peekAt, peekOut, hold, hide } = useSpreadPeek(spread.laidOut);
   const rowContext = useMemo(() => ({ spread, peekAt, peekOut }), [peekAt, peekOut, spread]);
+  const treeActions = useMemo(() => ({ onTaskUpdated, notify }), [notify, onTaskUpdated]);
   return (
+    <TaskTreeActionsContext.Provider value={treeActions}>
     <SpreadRowProvider value={rowContext}>
       <nav className="workspace-task-tree" aria-label="任务树" onScroll={hide}>
         <CurrentProjectTree tasks={currentTasks} allTasks={tasks} selectedTaskId={selectedTaskId} onTask={onTask} indicatorForTask={indicatorForTask} filter={spread.filter} onClearFilter={() => spread.setFilter("all")} />
@@ -431,5 +449,6 @@ export function TaskTree({ projects, currentProjectId, tasks, selectedTaskId, sp
       </nav>
       <SpreadPeekLayer peek={peek} spread={spread} onHold={hold} onLeave={peekOut} onDismiss={hide} />
     </SpreadRowProvider>
+    </TaskTreeActionsContext.Provider>
   );
 }

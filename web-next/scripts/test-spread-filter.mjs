@@ -5,6 +5,7 @@ import {
   matchesSpreadFilter,
   spreadBucket,
   spreadCounts,
+  spreadVisibleTasks,
 } from "../src/workspace/useSidebarSpread.ts";
 import { orderedTopLevelTasks } from "../src/workspace/taskTreeModel.ts";
 
@@ -86,6 +87,17 @@ for (const row of rows) {
   assert.equal(matchesSpreadFilter(row, "starred"), row.starredAt != null, `${row.id}:starred`);
   assert.equal(matchesSpreadFilter(row, "all"), true);
 }
+
+// J/K 快捷键遍历的可见列表（spreadVisibleTasks）必须与树同口径。它曾在调用点自己拼
+// `spreadBucket === filter`：starred 不是桶，星标筛选下快捷键拿到空数组、按键被吞。
+for (const item of SPREAD_FILTERS) {
+  assert.deepEqual(
+    spreadVisibleTasks(tasks, "p1", item.key).map((row) => row.id),
+    rows.filter((row) => matchesSpreadFilter(row, item.key)).map((row) => row.id),
+    `visible:${item.key}`,
+  );
+}
+assert.equal(spreadVisibleTasks(tasks, "p1", "starred").length, counts.starred);
 
 // 空项目：每一档都是 0，点还是画满一排（画不出来就没地方取消筛选了）。
 const empty = spreadCounts(tasks, "p3");

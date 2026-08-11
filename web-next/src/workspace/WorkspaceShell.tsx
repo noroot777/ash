@@ -18,9 +18,8 @@ import { GroupsPanel } from "../overlays/GroupsPanel.tsx";
 import { TaskComposerPanel, type ComposerDraft } from "../composer/TaskComposerPanel.tsx";
 import { DeleteTaskDialog } from "../task-detail/DeleteTaskDialog.tsx";
 import { CreateGroupDialog, CreateProjectDialog } from "../overlays/CreateEntityDialog.tsx";
-import { orderedTopLevelTasks } from "./taskTreeModel.ts";
 import { useWorkspaceShortcuts } from "./useWorkspaceShortcuts.ts";
-import { spreadBucket, useSidebarSpread } from "./useSidebarSpread.ts";
+import { spreadVisibleTasks, useSidebarSpread } from "./useSidebarSpread.ts";
 import {
   readWorkspaceSidebarWidth,
   WORKSPACE_SIDEBAR_STORAGE_KEY,
@@ -142,12 +141,9 @@ export function WorkspaceShell() {
   const loadError = projectsError ?? tasksError;
   const activeTaskCount = useMemo(() => tasks.filter((task) => task.projectId === projectId && task.parentId === null && !task.archived).length, [projectId, tasks]);
   // J/K 走的是「屏幕上看得见的那些行」，所以筛选开着时它也得跟着筛 —— 否则按一下就跳到
-  // 一个被隐藏的任务上，看着像选中丢了。
+  // 一个被隐藏的任务上，看着像选中丢了。判据与 TaskTree 共用（spreadVisibleTasks）。
   const orderedTasks = useMemo(
-    () => orderedTopLevelTasks(
-      tasks.filter((task) => task.projectId === projectId && !task.archived),
-      { unifiedPinned: true },
-    ).filter((task) => spread.filter === "all" || spreadBucket(task) === spread.filter),
+    () => spreadVisibleTasks(tasks, projectId, spread.filter),
     [projectId, spread.filter, tasks],
   );
   const updateTask = useCallback((updated: Task) => setTasks((current) => current.some((task) => task.id === updated.id)
@@ -245,7 +241,7 @@ export function WorkspaceShell() {
 
   return (
     <><div className={`workspace-shell${spread.laidOut ? " is-spread" : ""}`} style={{ "--workspace-sidebar-width": `${sidebarWidth}px` } as CSSProperties}>
-      <WorkspaceSidebar projects={projects} currentProject={currentProject} tasks={tasks} selectedTaskId={taskId} connected={connected} collapsed={collapsed} spread={spread} width={sidebarWidth} onWidthChange={setSidebarWidth} onProject={selectProject} onTask={selectTask} onToggleCollapsed={() => { spread.close(); setCollapsed((value) => !value); }} onSearch={() => setPaletteOpen(true)} onNotes={() => openNotes()} onGroups={() => setGroupsPanelOpen(true)} onCreate={() => openComposer("single")} onNewProject={() => setCreateDialog("project")} onSettings={() => openSettings("executors")} />
+      <WorkspaceSidebar projects={projects} currentProject={currentProject} tasks={tasks} selectedTaskId={taskId} connected={connected} collapsed={collapsed} spread={spread} width={sidebarWidth} onWidthChange={setSidebarWidth} onProject={selectProject} onTask={selectTask} onTaskUpdated={updateTask} notify={notify} onToggleCollapsed={() => { spread.close(); setCollapsed((value) => !value); }} onSearch={() => setPaletteOpen(true)} onNotes={() => openNotes()} onGroups={() => setGroupsPanelOpen(true)} onCreate={() => openComposer("single")} onNewProject={() => setCreateDialog("project")} onSettings={() => openSettings("executors")} />
       <main className="workspace-main">
         {loadError && <div className="workspace-load-error">{loadError.message}</div>}
         {composer && currentProject ? <TaskComposerPanel project={currentProject} groups={groups} initialDraft={composer.draft} mode={composer.mode} onModeChange={(mode) => setComposer((current) => current ? { ...current, mode } : null)} onCancel={() => setComposer(null)} onCreated={createTask} onCreateGroup={createComposerGroup} notify={notify} /> : selectedTask?.mode === "team" ? (

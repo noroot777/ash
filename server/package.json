@@ -34,6 +34,7 @@
     "test:duet-iteration": "tsx scripts/test-duet-iteration.ts",
     "test:task-event-timestamps": "tsx scripts/test-task-event-timestamps.ts",
     "test:notes": "tsx scripts/test-note-task-history.ts",
+    "test:star": "tsx scripts/test-task-star.ts",
     "test:scheduled-messages": "tsx scripts/test-scheduled-messages.ts",
     "test:review": "tsx scripts/test-review-flow.ts",
     "test:claude-stream": "tsx scripts/test-claude-stream-errors.ts",
