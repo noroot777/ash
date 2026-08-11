@@ -78,7 +78,6 @@ const taskRow = (id: string, lead: "claude" | "gemini", status: "idle" | "runnin
   body: "验证团队定时消息",
   mode: "team",
   status,
-  priority: "none",
   labels: "[]",
   dependsOn: "[]",
   resumeDependsOn: "[]",

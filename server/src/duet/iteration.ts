@@ -203,7 +203,6 @@ export function mountDuetIterationRoutes(api: Hono): void {
       body,
       mode: "duet",
       status: "backlog",
-      priority: originalRow.priority,
       labels: originalRow.labels,
       dependsOn: "[]",
       resumeDependsOn: "[]",

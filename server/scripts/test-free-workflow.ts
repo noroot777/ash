@@ -66,7 +66,7 @@ try {
 
   const [task] = await createTasks([{
     id: "free-task", projectId: "p", groupId: null, parentId: null,
-    title: "free", body: "test", mode: "single", status: "backlog", priority: "none",
+    title: "free", body: "test", mode: "single", status: "backlog",
     labels: "[]", dependsOn: "[]", resumeDependsOn: "[]", agentType: "codex",
     executorId: "reviewer-executor", model: null, reasoningEffort: null, autoTitle: false,
     duet: null, team: null, reportBack: false, scheduleId: null,
@@ -123,7 +123,7 @@ try {
 
   await createTasks([{
     id: "free-accept-task", projectId: "p", groupId: null, parentId: null,
-    title: "free accept", body: "test", mode: "single", status: "done", priority: "none",
+    title: "free accept", body: "test", mode: "single", status: "done",
     labels: "[]", dependsOn: "[]", resumeDependsOn: "[]", agentType: "codex",
     executorId: "reviewer-executor", model: null, reasoningEffort: null, autoTitle: false,
     duet: null, team: null, reportBack: false, scheduleId: null,
@@ -133,7 +133,7 @@ try {
 
   const [worktreeTask] = await createTasks([{
     id: "free-worktree-task", projectId: "p-git", groupId: null, parentId: null,
-    title: "free worktree accept", body: "test", mode: "single", status: "done", priority: "none",
+    title: "free worktree accept", body: "test", mode: "single", status: "done",
     labels: "[]", dependsOn: "[]", resumeDependsOn: "[]", agentType: "codex",
     executorId: "reviewer-executor", model: null, reasoningEffort: null, autoTitle: false,
     duet: null, team: null, reportBack: false, scheduleId: null,
@@ -149,7 +149,7 @@ try {
 
   await createTasks([{
     id: "free-exhausted-task", projectId: "p", groupId: null, parentId: null,
-    title: "free exhausted", body: "test", mode: "single", status: "done", priority: "none",
+    title: "free exhausted", body: "test", mode: "single", status: "done",
     labels: "[]", dependsOn: "[]", resumeDependsOn: "[]", agentType: "codex",
     executorId: "reviewer-executor", model: null, reasoningEffort: null, autoTitle: false,
     duet: null, team: null, reportBack: false, scheduleId: null,
@@ -159,7 +159,7 @@ try {
 
   await createTasks([{
     id: "free-rework-task", projectId: "p", groupId: null, parentId: null,
-    title: "free rework", body: "test", mode: "single", status: "done", priority: "none",
+    title: "free rework", body: "test", mode: "single", status: "done",
     labels: "[]", dependsOn: "[]", resumeDependsOn: "[]", agentType: "codex",
     executorId: "reviewer-executor", model: null, reasoningEffort: null, autoTitle: false,
     duet: null, team: null, reportBack: false, scheduleId: null,
@@ -169,7 +169,7 @@ try {
 
   await createTasks([{
     id: "free-reservation-task", projectId: "p", groupId: null, parentId: null,
-    title: "free reservation", body: "test", mode: "single", status: "running", priority: "none",
+    title: "free reservation", body: "test", mode: "single", status: "running",
     labels: "[]", dependsOn: "[]", resumeDependsOn: "[]", agentType: "codex",
     executorId: "reviewer-executor", model: null, reasoningEffort: null, autoTitle: false,
     duet: null, team: null, reportBack: false, scheduleId: null,
@@ -294,7 +294,7 @@ try {
   // 删除审查者时必须同步 disarm：否则 UI 仍显示已预约，结算因 reviewerId 为空静默不派审。
   await createTasks([{
     id: "free-deleted-reviewer-task", projectId: "p", groupId: null, parentId: null,
-    title: "free deleted reviewer", body: "test", mode: "single", status: "running", priority: "none",
+    title: "free deleted reviewer", body: "test", mode: "single", status: "running",
     labels: "[]", dependsOn: "[]", resumeDependsOn: "[]", agentType: "codex",
     executorId: "reviewer-executor", model: null, reasoningEffort: null, autoTitle: false,
     duet: null, team: null, reportBack: false, scheduleId: null,
@@ -334,7 +334,7 @@ try {
   // 结算守底：历史脏数据 armed=true 且 reviewerId=null 时必须 disarm 并留痕，不能静默跳过。
   await createTasks([{
     id: "free-orphan-arm-task", projectId: "p", groupId: null, parentId: null,
-    title: "free orphan arm", body: "test", mode: "single", status: "done", priority: "none",
+    title: "free orphan arm", body: "test", mode: "single", status: "done",
     labels: "[]", dependsOn: "[]", resumeDependsOn: "[]", agentType: "codex",
     executorId: "reviewer-executor", model: null, reasoningEffort: null, autoTitle: false,
     duet: null, team: null, reportBack: false, scheduleId: null,

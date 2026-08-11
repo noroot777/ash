@@ -72,7 +72,7 @@ async function makeCase(taskId: string, live: boolean) {
   await db.insert(projects).values({ id: `p-${taskId}`, name: "t", repoPath: dir, createdAt: now() } as never);
   await db.insert(tasks).values({
     id: taskId, projectId: `p-${taskId}`, title: "接管用例", body: "", status: "running",
-    mode: "single", agentType: "claude", priority: "none", labels: "[]",
+    mode: "single", agentType: "claude", labels: "[]",
     createdAt: now(), updatedAt: now(), autoTitle: 0, useWorktree: 0,
   } as never);
 

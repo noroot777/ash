@@ -235,8 +235,6 @@ export function taskDisplayStatus(
   return { key: status, label: TASK_STATUS_LABELS[status] };
 }
 
-export type Priority = "none" | "low" | "medium" | "high" | "urgent";
-
 // Single-task user-Run guard (POST /tasks/:id/run). User explicitly clicked Run,
 // so `canceled` is allowed here — they want to redo it. running/queued = already
 // in flight; awaiting_review = waiting on a gate; done = finished (must not be
@@ -279,7 +277,6 @@ export interface Task {
   reviewOf?: string | null;
   reviewRound?: number | null;
   reviewRequested?: boolean;
-  priority: Priority;
   labels: string[];
   dependsOn: string[]; // [废弃,保留为 []] 旧的指针依赖,被 queue 模型取代
   resumeDependsOn: string[]; // [废弃,保留为 []] 同上
@@ -468,7 +465,6 @@ export interface BatchTaskInput {
   useWorktree?: boolean; // overrides defaults.useWorktree; omitted follows the global setting
   worktreeBase?: string | null; // base ref when this task uses a worktree
   workflowId?: string | null; // 起手式 id；省略则按项目→全局默认解析，并拷成快照
-  priority?: Priority;
   labels?: string[];
   // Each entry is resolved against sibling `key`s first; anything that doesn't
   // match a sibling key is treated as an existing task id and passed through.
@@ -490,7 +486,6 @@ export interface BatchCreateTasksBody {
     useWorktree?: boolean; // omitted follows DEFAULT_APP_SETTINGS.worktreeDefault
     workflowId?: string | null; // 这一批默认走哪条起手式
     worktreeBase?: string | null;
-    priority?: Priority;
     labels?: string[];
   };
 }

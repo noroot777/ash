@@ -262,7 +262,6 @@ const acceptanceTask = {
   mode: "single",
   status: "done",
   stage: null,
-  priority: "none",
   labels: [],
   dependsOn: [],
   resumeDependsOn: [],

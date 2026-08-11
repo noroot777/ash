@@ -69,7 +69,6 @@ async function makeTask(id: string, line: unknown, extra: Record<string, unknown
     mode: "single",
     status: "done",
     stage: "verify_failed",
-    priority: "none",
     labels: "[]",
     dependsOn: "[]",
     resumeDependsOn: "[]",

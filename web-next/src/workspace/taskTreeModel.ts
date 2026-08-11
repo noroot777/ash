@@ -32,8 +32,6 @@ export type TaskPreview = {
 
 export const TASK_PREVIEW_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
-const PRIORITY_ORDER: Task["priority"][] = ["urgent", "high", "medium", "low", "none"];
-
 const COLLAB_GROUPS: TaskGroup[] = [
   {
     key: "active",
@@ -87,8 +85,7 @@ function sortTasks(tasks: Task[], pinned: boolean): Task[] {
   return [...tasks].sort(
     (a, b) =>
       (pinned ? (b.pinnedAt ?? 0) - (a.pinnedAt ?? 0) : 0) ||
-      PRIORITY_ORDER.indexOf(a.priority) - PRIORITY_ORDER.indexOf(b.priority) ||
-      b.createdAt.localeCompare(a.createdAt),
+      b.updatedAt.localeCompare(a.updatedAt),
   );
 }
 

@@ -55,7 +55,6 @@ export async function ensureSchema() {
       id TEXT PRIMARY KEY, project_id TEXT NOT NULL, group_id TEXT, parent_id TEXT,
       title TEXT NOT NULL, body TEXT NOT NULL DEFAULT '', mode TEXT NOT NULL DEFAULT 'single',
       status TEXT NOT NULL DEFAULT 'backlog', stage TEXT, pinned_at INTEGER,
-      priority TEXT NOT NULL DEFAULT 'none',
       review_of TEXT, review_round INTEGER, review_requested INTEGER NOT NULL DEFAULT 0,
       verify_round INTEGER, verify_rounds INTEGER NOT NULL DEFAULT 0,
       verify_station_rounds INTEGER NOT NULL DEFAULT 0,
@@ -325,6 +324,8 @@ const RETIRED_COLUMNS: { table: string; column: string; why: string }[] = [
   { table: "groups", column: "coordinator_task_id", why: "编排组已被 /team 取代" },
   // 事项中心移除后，任务不再回链事项
   { table: "tasks", column: "issue_id", why: "事项中心已移除" },
+  // 任务列表不再区分人工优先级，统一按状态/分区和最后更新时间展示
+  { table: "tasks", column: "priority", why: "任务优先级已移除" },
 ];
 
 // 退役整表与退役列遵循同一原则：新库不创建，老库启动时幂等清理，失败只告警。

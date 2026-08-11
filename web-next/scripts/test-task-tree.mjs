@@ -16,7 +16,6 @@ function task(id, mode, {
     stage,
     createdAt,
     updatedAt,
-    priority: "none",
     parentId: null,
     archived: false,
   };
@@ -52,6 +51,18 @@ const withoutPinned = buildTaskTree([
   task("single-normal", "single"),
 ], { unifiedPinned: true });
 assert.deepEqual(withoutPinned.map((section) => section.key), ["collab", "single"]);
+
+const byLastUpdate = buildTaskTree([
+  task("created-later", "single", {
+    createdAt: "2026-08-11T10:00:00.000Z",
+    updatedAt: "2026-08-11T10:00:00.000Z",
+  }),
+  task("updated-later", "single", {
+    createdAt: "2026-08-10T10:00:00.000Z",
+    updatedAt: "2026-08-11T11:00:00.000Z",
+  }),
+]);
+assert.deepEqual(byLastUpdate[0].tasks.map((row) => row.id), ["updated-later", "created-later"]);
 
 const onlyPinned = buildTaskTree([
   task("only-collab", "team", { pinnedAt: 300 }),

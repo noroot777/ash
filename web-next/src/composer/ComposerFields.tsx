@@ -3,7 +3,6 @@ import type {
   AgentExecutorProfile,
   AgentType,
   Group,
-  Priority,
   TaskMode,
   TaskWorkflowMode,
   TeamPresetConfig,
@@ -15,14 +14,6 @@ import { TaskLabelsEditor } from "../components/TaskLabelsEditor.tsx";
 import type { ComposerExecutorConfigs, ComposerExecutorRole } from "./executorOverrides.ts";
 import { ExecutorPickerField } from "./ExecutorPickerField.tsx";
 import { PresetBar } from "./PresetBar.tsx";
-
-const PRIORITIES: { value: Priority; label: string }[] = [
-  { value: "none", label: "无优先级" },
-  { value: "low", label: "低" },
-  { value: "medium", label: "中" },
-  { value: "high", label: "高" },
-  { value: "urgent", label: "紧急" },
-];
 
 export function ComposerFields({
   mode,
@@ -54,8 +45,6 @@ export function ComposerFields({
   groups,
   groupId,
   onGroupChange,
-  priority,
-  onPriorityChange,
   labels,
   onLabelsChange,
   onCreateGroup,
@@ -92,8 +81,6 @@ export function ComposerFields({
   groups: Group[];
   groupId: string;
   onGroupChange: (value: string) => void;
-  priority: Priority;
-  onPriorityChange: (value: Priority) => void;
   labels: string[];
   onLabelsChange: (labels: string[]) => void;
   onCreateGroup: () => void;
@@ -176,7 +163,7 @@ export function ComposerFields({
       <section className="composer-config-section is-options">
         <header className="composer-section-heading">
           <span><GearSix size={14} /></span>
-          <div><h2>任务选项</h2><p>运行位置、组织方式与调度优先级。</p></div>
+          <div><h2>任务选项</h2><p>运行位置、组织方式与标签。</p></div>
         </header>
         <div className="composer-option-grid">
           {mode === "team" && (
@@ -256,16 +243,6 @@ export function ComposerFields({
               />
             </div>
           )}
-          <div className="composer-field">
-            <span>优先级</span>
-            <Dropdown
-              label="优先级"
-              value={priority}
-              options={PRIORITIES.map((item) => ({ value: item.value, label: item.label }))}
-              filterable={false}
-              onChange={(value) => onPriorityChange(value as Priority)}
-            />
-          </div>
           <div className="composer-label-field">
             <span>标签</span>
             <TaskLabelsEditor labels={labels} onChange={onLabelsChange} />

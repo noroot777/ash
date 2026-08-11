@@ -9,11 +9,10 @@ import {
   type AgentExecutorProfile,
   type AgentType,
   type LlmProvider,
-  type Priority,
 } from "@harness/shared";
 import { useStore } from "@/lib/store";
 import { api, type DetectedAgent } from "@/lib/api";
-import { PRIORITIES, LAUNCH_MODES, type LaunchMode } from "@/lib/constants";
+import { LAUNCH_MODES, type LaunchMode } from "@/lib/constants";
 import { groupLabel } from "@/lib/util";
 import { useTheme } from "@/lib/theme";
 import { Pill, Button, Input } from "@/components/ui";
@@ -55,7 +54,6 @@ export default function NewTask() {
   const [leadReasoningEffort, setLeadReasoningEffort] = useState("");
   const [workerModel, setWorkerModel] = useState("");
   const [workerReasoningEffort, setWorkerReasoningEffort] = useState("");
-  const [priority, setPriority] = useState<Priority>("none");
   // 启动时机（§9）：默认「立即执行」，与 web 一致。once 用 Date，cron 用裸 5 字段表达式。
   const [launch, setLaunch] = useState<LaunchMode>("run");
   const [at, setAt] = useState<Date>(() => new Date(Date.now() + 3600_000)); // 默认 +1h
@@ -313,7 +311,6 @@ export default function NewTask() {
               model: model || null,
               reasoningEffort: reasoningEffort || null,
             }),
-        priority,
         // Resident consoles do not run the single-task auto-title turn.
         autoTitle: teamOn ? false : !explicit,
         // Team worktree is opt-in too: when enabled, the resident lead and its
@@ -424,20 +421,6 @@ export default function NewTask() {
             ) : null}
           </Field>
         ) : null}
-
-        <Field label="优先级">
-          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
-            {PRIORITIES.map((p) => (
-              <Pill
-                key={p.key}
-                label={p.label}
-                color={p.bars > 0 ? p.color : undefined}
-                active={p.key === priority}
-                onPress={() => setPriority(p.key)}
-              />
-            ))}
-          </View>
-        </Field>
 
         <Field label="分组（可选）">
           <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>

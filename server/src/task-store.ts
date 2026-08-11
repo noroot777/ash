@@ -59,7 +59,6 @@ const toTask = (r: TaskRow, profiles: AgentLabelRow[] = []): Task => ({
   reviewOf: r.reviewOf ?? null,
   reviewRound: r.reviewRound ?? null,
   reviewRequested: r.reviewRequested,
-  priority: r.priority as Task["priority"],
   labels: JSON.parse(r.labels),
   dependsOn: JSON.parse(r.dependsOn),
   resumeDependsOn: JSON.parse(r.resumeDependsOn),

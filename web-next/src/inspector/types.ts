@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import type { InspectorShortcutKey } from "./shortcuts.ts";
 
 export interface InspectorDescriptor<Context> {
   id: string;
@@ -6,6 +7,7 @@ export interface InspectorDescriptor<Context> {
   icon: ReactNode;
   render: (context: Context) => ReactNode;
   defaultOpen?: boolean;
+  shortcut?: InspectorShortcutKey;
 }
 
 export interface InspectorTabPolicy {

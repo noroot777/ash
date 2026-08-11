@@ -146,6 +146,7 @@ export const TEAM_INSPECTORS: readonly InspectorDescriptor<TeamInspectorContext>
     title: "执行者",
     icon: <UsersThree size={14} />,
     defaultOpen: true,
+    shortcut: "e",
     render: (context) => (
       <WorkerRail
         workers={context.workers}
@@ -162,12 +163,14 @@ export const TEAM_INSPECTORS: readonly InspectorDescriptor<TeamInspectorContext>
     title: "信息",
     icon: <Info size={14} />,
     defaultOpen: true,
+    shortcut: "i",
     render: (context) => <TeamInfoPanel {...context} />,
   },
   {
     id: "review",
     title: "审查",
     icon: <MagnifyingGlass size={14} />,
+    shortcut: "r",
     render: (context) => (
       <TeamReviewInspector
         lead={context.task}
@@ -181,6 +184,7 @@ export const TEAM_INSPECTORS: readonly InspectorDescriptor<TeamInspectorContext>
     id: "files",
     title: "文件",
     icon: <FolderOpen size={14} />,
+    shortcut: "f",
     // 团队共享调度台的工作目录，所以这棵树就是整队人正在改的那份文件。
     render: (context) => (
       <FileTreeInspector
