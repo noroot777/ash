@@ -3,10 +3,11 @@ import type { Task } from "@harness/shared";
 import {
   GitBranch,
   SpinnerGap,
+  WarningCircle,
   X,
 } from "@phosphor-icons/react";
 import { api, type TaskCommit, type TaskDiffResult } from "../lib/api.ts";
-import { freeReviewBlockingLabel } from "../free-workflow/freeReviewCopy.ts";
+import { freeReviewBlockingLabel, freeReviewView } from "../free-workflow/freeReviewCopy.ts";
 import { useFreeWorkflowState } from "../free-workflow/useFreeWorkflowState.ts";
 import { AcceptanceControls } from "../team/TeamReviewWorkspace.tsx";
 import { ChangeMetaBar } from "./ChangeMetaBar.tsx";
@@ -65,6 +66,15 @@ export function TaskReviewWorkspace({
           : !free.state && free.error
             ? "审查状态未知"
             : null;
+  // 非阻塞警示：验收是用户主权，但「最后一轮没过 / 通过后代码又变了」必须摆在明面上。
+  const freeView = task.workflowMode === "free" ? freeReviewView(free.state, task) : null;
+  const acceptanceWarning = !freeView || task.stage === "accepted"
+    ? null
+    : freeView.stoppedRun
+      ? `最后一轮审查未通过（第 ${freeView.stoppedRun.currentRound} 轮）——验收合并即表示你接受该风险`
+      : freeView.stale
+        ? "审查通过后代码又有新修改，结论可能已过期——可先「审查新改动」再验收"
+        : null;
 
   useEffect(() => {
     let alive = true;
@@ -99,6 +109,11 @@ export function TaskReviewWorkspace({
       </header>
       <div className="single-review-scroll">
         <div className="single-review-stack">
+          {acceptanceWarning && (
+            <p className="single-review-warning" role="alert">
+              <WarningCircle size={14} weight="fill" />{acceptanceWarning}
+            </p>
+          )}
           {sharedParent && <SharedWorkerFacts parent={sharedParent} branch={sharedBranch} />}
           {loading && <p className="single-review-loading"><SpinnerGap size={14} className="is-spinning" />{sharedParent ? "正在读取共享分支归属…" : "正在汇总提交与 diff…"}</p>}
           {!loading && error && <p className="single-review-error">{sharedParent ? "共享分支归属读取失败" : "提交与 diff 加载失败"}：{error}</p>}

@@ -50,14 +50,19 @@ try {
   await repairButton.waitFor();
   assert.match(await repairFixture.locator(".review-inspector__overview small").innerText(), /自动复审已停止/);
   await repairButton.click();
-  await repairToolbar.getByRole("status").filter({ hasText: "按意见修复中" }).waitFor();
-  assert.equal(await repairFixture.getByRole("button", { name: "按第 2 轮意见修复" }).count(), 0, "同 taskId 的其它实例必须在 API 返回后立即收敛，不能等轮询");
-  await repairFixture.getByRole("status").filter({ hasText: "正在按审查意见修复" }).waitFor();
-  const reserveButton = repairToolbar.getByRole("button", { name: "预约复审" });
-  await reserveButton.waitFor();
-  assert.equal(await reserveButton.isEnabled(), true, "修复状态与预约动作必须分开，修复中仍可预约");
-  assert.equal(await repairToolbar.getByRole("button", { name: "打开预览" }).isDisabled(), true, "修改态落库后无需等待任务事件刷新，也必须立即禁用预览");
+  await page.waitForFunction(() => window.__repairRequests === 1);
   assert.equal(await page.evaluate(() => window.__repairRequests), 1, "一键修复只应发送一次请求");
+  assert.equal(await repairToolbar.getByRole("button", { name: "按意见修复" }).count(), 1, "修复只代发消息不翻状态，按钮保留（重复保护在服务端）");
+  assert.equal(await repairToolbar.getByRole("button", { name: "打开预览" }).isEnabled(), true, "任务空闲时预览应可用，未通过结论不再锁预览");
+  assert.equal(await repairToolbar.getByRole("button", { name: "直接再审" }).count(), 1, "空闲且未通过时主按钮是立即再审");
+
+  // 预约模式属于「任务在跑」的场景：修复/修改开跑后从这里预约完成后的复审。
+  const chatToolbar = page.locator(".toolbar-chat-rework-fixture");
+  await chatToolbar.getByRole("status").filter({ hasText: "任务修改中" }).waitFor();
+  assert.equal(await chatToolbar.getByRole("button", { name: "按意见修复" }).count(), 0, "任务运行中不显示修复入口（修改中由任务状态推导）");
+  const reserveButton = chatToolbar.getByRole("button", { name: "预约复审" });
+  await reserveButton.waitFor();
+  assert.equal(await reserveButton.isEnabled(), true, "任务修改中应允许预约复审");
   await reserveButton.click();
   const reviewDialog = page.locator(".free-review-dialog");
   await reviewDialog.getByRole("heading", { name: "预约审查" }).waitFor();
@@ -66,10 +71,10 @@ try {
   assert.ok(dialogBox && dialogBox.width <= 642, "派审弹窗应收窄到 640px 左右");
   assert.equal(await reviewDialog.evaluate((node) => node === document.activeElement), true, "弹窗打开后应接管焦点，让 Enter 可直接提交");
   await page.keyboard.press("Enter");
-  await repairToolbar.getByRole("button", { name: "已预约复审" }).waitFor();
+  await chatToolbar.getByRole("button", { name: "已预约复审" }).waitFor();
   assert.equal(await page.evaluate(() => window.__reservationRequests), 1, "弹窗打开后直接按 Enter 应提交一次");
 
-  await repairToolbar.getByRole("button", { name: "已预约复审" }).click();
+  await chatToolbar.getByRole("button", { name: "已预约复审" }).click();
   await reviewDialog.getByRole("heading", { name: "调整预约审查" }).waitFor();
   const note = reviewDialog.getByLabel("附言（可选）");
   await note.fill("重点检查窄屏布局");
@@ -77,15 +82,9 @@ try {
   await note.type("与键盘交互");
   assert.equal(await page.evaluate(() => window.__reservationRequests ?? 0), 1, "Shift+Enter 只能换行，不能提交");
   await note.press("Enter");
-  await repairToolbar.getByRole("button", { name: "已预约复审" }).waitFor();
-  assert.equal(await repairToolbar.getByRole("status").filter({ hasText: "按意见修复中" }).count(), 1, "保存预约不能覆盖正在修复的状态");
-  assert.equal(await page.evaluate(() => window.__reservationRequests), 2, "Enter 更新预约时应只新增一次请求并保留修复中状态");
+  await chatToolbar.getByRole("button", { name: "已预约复审" }).waitFor();
+  assert.equal(await page.evaluate(() => window.__reservationRequests), 2, "Enter 更新预约时应只新增一次请求");
   assert.equal(await page.evaluate(() => window.__reservationNote), "重点检查窄屏布局\n与键盘交互", "Enter 提交时必须携带附言");
-
-  const chatToolbar = page.locator(".toolbar-chat-rework-fixture");
-  await chatToolbar.getByRole("status").filter({ hasText: "任务修改中" }).waitFor();
-  assert.equal(await chatToolbar.getByRole("button", { name: "按意见修复" }).count(), 0, "普通对话修改不能冒充按意见修复");
-  assert.equal(await chatToolbar.getByRole("button", { name: "预约复审" }).isEnabled(), true, "普通对话修改中也应允许预约复审");
   assert.deepEqual(await reviewRounds.locator("b").allInnerTexts(), ["第 1 轮", "第 1 轮"], "自由审查 inspector 应和普通任务一样按轮列出记录");
   assert.equal(await page.locator(".review-evidence-drawer").count(), 0, "审查正文默认不弹出");
   await reviewRounds.first().click();

@@ -5,33 +5,28 @@ import { api } from "../lib/api.ts";
 import { FreeReviewDialog } from "./FreeReviewDialog.tsx";
 import { FreeReviewProgress } from "./FreeReviewProgress.tsx";
 import { FreeReviewRepairButton } from "./FreeReviewRepairButton.tsx";
+import { freeReviewView } from "./freeReviewCopy.ts";
 import { useFreeWorkflowState } from "./useFreeWorkflowState.ts";
 
 export function FreeWorkflowToolbar({ task, notify }: { task: Task; notify: (message: string) => void }) {
   const free = useFreeWorkflowState(task.id, task.workflowMode === "free");
   const [reviewOpen, setReviewOpen] = useState(false);
   const [previewBusy, setPreviewBusy] = useState(false);
-  const latestReview = free.state?.reviews[0];
-  const taskBusy = task.status === "running" || task.status === "queued";
-  const exhaustedReview = latestReview?.status === "exhausted" && !taskBusy ? latestReview : null;
-  const activeReview = free.state?.reviews.find((run) => ["reviewing", "repairing", "manual_repairing", "reworking"].includes(run.status));
-  const reservableRework = activeReview?.status === "manual_repairing" || activeReview?.status === "reworking";
-  const blockingReview = activeReview?.status === "reviewing" || activeReview?.status === "repairing";
-  const reviewArmed = !!free.state?.reviewReservation?.armed;
-  const showTaskProgress = reservableRework || (taskBusy && (latestReview?.status === "exhausted" || latestReview?.status === "superseded"));
+  const view = freeReviewView(free.state, task);
+  const { latestRun, reviewing, stoppedRun, taskBusy, reservationArmed, repairing, stale } = view;
   const taskReady = task.status !== "backlog";
   const accepted = task.stage === "accepted" || task.stage === "merged";
-  const reservationMode = taskBusy || reservableRework || reviewArmed;
-  const reviewLabel = blockingReview
-    ? (activeReview?.status === "reviewing" ? "审查中" : "自动修复中")
-    : reviewArmed
+  const reservationMode = taskBusy || reservationArmed;
+  const reviewLabel = reviewing
+    ? "审查中"
+    : reservationArmed
       ? "已预约复审"
       : reservationMode
         ? "预约复审"
-        : latestReview?.status === "superseded"
+        : stale
           ? "审查新改动"
           : free.state?.reviews.length
-            ? (exhaustedReview ? "直接再审" : "再审")
+            ? (stoppedRun ? "直接再审" : "再审")
             : "派审查";
 
   const togglePreview = async () => {
@@ -58,29 +53,24 @@ export function FreeWorkflowToolbar({ task, notify }: { task: Task; notify: (mes
   return (
     <>
       <div className="free-workflow-toolbar" aria-label="自由工作流快捷操作">
-        {showTaskProgress && (
-          <FreeReviewProgress
-            compact
-            kind={reservableRework ? activeReview.status as "manual_repairing" | "reworking" : "task_running"}
-          />
-        )}
-        {exhaustedReview ? (
+        {repairing && <FreeReviewProgress compact kind={view.autoRereview ? "auto_rereview" : "task_running"} />}
+        {stoppedRun && !taskBusy ? (
           <FreeReviewRepairButton
             taskId={task.id}
-            run={exhaustedReview}
+            run={stoppedRun}
             compact
             className="is-review is-repair"
-            disabled={!taskReady || taskBusy || accepted}
+            disabled={!taskReady || accepted}
             onChanged={free.setState}
             notify={notify}
           />
         ) : null}
-        <button type="button" className={`is-review${blockingReview ? " is-busy" : ""}${reviewArmed ? " is-armed" : ""}`} data-state={activeReview?.status ?? (reviewArmed ? "armed" : "idle")} disabled={!taskReady || accepted || blockingReview} onClick={() => setReviewOpen(true)}>
-          {blockingReview ? <SpinnerGap size={13} className="is-spinning" /> : <MagnifyingGlass size={13} weight="regular" />}
+        <button type="button" className={`is-review${reviewing ? " is-busy" : ""}${reservationArmed ? " is-armed" : ""}`} data-state={reviewing ? "reviewing" : reservationArmed ? "armed" : latestRun?.status ?? "idle"} disabled={!taskReady || accepted || !!reviewing} onClick={() => setReviewOpen(true)}>
+          {reviewing ? <SpinnerGap size={13} className="is-spinning" /> : <MagnifyingGlass size={13} weight="regular" />}
           <span>{reviewLabel}</span>
-          {reviewArmed && <i className="free-review-armed-dot" aria-hidden="true" />}
+          {reservationArmed && <i className="free-review-armed-dot" aria-hidden="true" />}
         </button>
-        <button type="button" className={`is-preview${previewBusy ? " is-busy" : ""}`} aria-pressed={!!free.state?.preview.running} disabled={!taskReady || taskBusy || accepted || !!activeReview || previewBusy} onClick={() => void togglePreview()}>
+        <button type="button" className={`is-preview${previewBusy ? " is-busy" : ""}`} aria-pressed={!!free.state?.preview.running} disabled={!taskReady || taskBusy || accepted || !!reviewing || previewBusy} onClick={() => void togglePreview()}>
           {previewBusy ? <SpinnerGap size={13} className="is-spinning" /> : free.state?.preview.running ? <StopCircle size={13} weight="regular" /> : <MonitorPlay size={13} weight="regular" />}
           <span>{previewBusy ? "处理中" : free.state?.preview.running ? "关闭预览" : "打开预览"}</span>
         </button>

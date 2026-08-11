@@ -17,6 +17,7 @@ import { stopPreviewAtAccept } from "./preview.js";
 import { IS_PREVIEW_INSTANCE, previewRefusal } from "./preview-instance.js";
 import { withRepoLock } from "./repo-lock.js";
 import { setTaskStage, clearTaskStage } from "./task-stage.js";
+import { acceptSharedTeamWorkers, sharedWorkerAcceptanceMessage, type SharedWorkerAcceptance } from "./task-accept-shared-workers.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { now } from "./util.js";
 import type { WorkflowAdvanceOptions } from "./workflow-advance.js";
@@ -99,31 +100,6 @@ const mergeLabel: Record<string, string> = {
 };
 
 const acceptingTaskIds = new Set<string>();
-
-type SharedWorkerAcceptance = {
-  total: number;
-  updated: number;
-  skipped: number;
-};
-
-async function acceptSharedTeamWorkers(leadId: string): Promise<SharedWorkerAcceptance> {
-  const sharedWorkers = (await db.select().from(tasks).where(eq(tasks.parentId, leadId)))
-    .filter((worker) => !worker.useWorktree);
-  let updated = 0;
-  for (const worker of sharedWorkers) {
-    if (worker.stage === "accepted") continue;
-    await setTaskStage(worker.id, "accepted");
-    await publishTaskUpdated(worker.id);
-    updated += 1;
-  }
-  return { total: sharedWorkers.length, updated, skipped: sharedWorkers.length - updated };
-}
-
-function sharedWorkerAcceptanceMessage(result: SharedWorkerAcceptance): string {
-  if (result.total === 0) return "团队级验收联动：未发现共享执行者，无需同步阶段。";
-  return `团队级验收联动：已将 ${result.updated} 个共享执行者的 stage 置为 accepted` +
-    `${result.skipped ? `，另有 ${result.skipped} 个此前已是 accepted、已跳过` : ""}。`;
-}
 
 async function finalizeAcceptance(
   task: typeof tasks.$inferSelect,

@@ -11,7 +11,8 @@ import "../../src/styles/global.css";
 const state = {
   taskId: "free-task",
   selectedReviewerId: null,
-  reviewReservation: { armed: false, reviewerId: null, checkMode: null, retryLimit: null, note: null },
+  workspaceHead: "commit-current",
+  reviewReservation: { armed: false, reviewerId: null, checkMode: null, retryLimit: null, note: null, runId: null },
   preview: { running: false, url: null, port: null, command: null, startedAt: null },
   previewEvents: [],
   executions: [
@@ -36,6 +37,7 @@ const state = {
       round: 1,
       status: "reviewing",
       conclusion: null,
+      reviewedCommit: "commit-current",
       reportMarkdown: "",
       screenshots: [],
       startedAt: "2026-08-09T00:30:00.000Z",
@@ -62,6 +64,7 @@ const state = {
       round: 1,
       status: "passed",
       conclusion: "verified",
+      reviewedCommit: "commit-current",
       reportMarkdown: "# 审查结论\n\n**统一预览已验证。**",
       screenshots: ["shot-one.png", "shot-two.png", "shot-three.png", "shot-four.png", "shot-five.png", "shot-six.png"],
       startedAt: "2026-08-09T00:10:00.000Z",
@@ -76,7 +79,8 @@ const state = {
 const acceptanceState = {
   taskId: "free-accept-ui",
   selectedReviewerId: null,
-  reviewReservation: { armed: false, reviewerId: null, checkMode: null, retryLimit: null },
+  workspaceHead: "commit-current",
+  reviewReservation: { armed: false, reviewerId: null, checkMode: null, retryLimit: null, note: null, runId: null },
   preview: { running: false, url: null, port: null, command: null, startedAt: null },
   previewEvents: [],
   executions: [{
@@ -114,7 +118,8 @@ const reviewingAcceptanceState = {
 const repairState: FreeWorkflowApiState = {
   taskId: "free-repair-task",
   selectedReviewerId: null,
-  reviewReservation: { armed: false, reviewerId: null, checkMode: null, retryLimit: null, note: null },
+  workspaceHead: "commit-current",
+  reviewReservation: { armed: false, reviewerId: null, checkMode: null, retryLimit: null, note: null, runId: null },
   preview: { running: false, url: null, port: null, command: null, startedAt: null },
   previewEvents: [],
   executions: [{
@@ -134,11 +139,12 @@ const repairState: FreeWorkflowApiState = {
     note: null,
     retryLimit: 1,
     currentRound: 2,
-    status: "exhausted",
+    status: "stopped",
     rounds: [{
       round: 2,
       status: "failed",
       conclusion: "verify_failed",
+      reviewedCommit: "commit-current",
       reportMarkdown: "# 仍需修复\n\n按钮状态不对。",
       screenshots: [],
       startedAt: "2026-08-09T01:10:00.000Z",
@@ -156,7 +162,7 @@ const manualChatState: FreeWorkflowApiState = {
   reviews: repairState.reviews.map((run) => ({
     ...run,
     id: "run-chat-rework",
-    status: "reworking",
+    status: "stopped",
   })),
 };
 
@@ -188,19 +194,8 @@ window.fetch = (input, init) => {
   }
   if (url.pathname.startsWith("/api/tasks/free-repair-task/free-workflow")) {
     if (init?.method === "POST" && url.pathname.endsWith("/review/repair")) {
-      repairState.reviews[0].status = "manual_repairing";
       (window as Window & { __repairRequests?: number }).__repairRequests =
         ((window as Window & { __repairRequests?: number }).__repairRequests ?? 0) + 1;
-    }
-    if (init?.method === "PUT" && url.pathname.endsWith("/review-reservation")) {
-      const body = JSON.parse(String(init.body ?? "{}")) as { note?: string | null };
-      repairState.selectedReviewerId = reviewer.id;
-      repairState.reviewReservation = {
-        armed: true, reviewerId: reviewer.id, checkMode: "logic", retryLimit: 1, note: body.note ?? null,
-      };
-      (window as Window & { __reservationNote?: string | null }).__reservationNote = body.note ?? null;
-      (window as Window & { __reservationRequests?: number }).__reservationRequests =
-        ((window as Window & { __reservationRequests?: number }).__reservationRequests ?? 0) + 1;
     }
     return Promise.resolve(new Response(JSON.stringify(repairState), {
       status: 200,
@@ -213,7 +208,17 @@ window.fetch = (input, init) => {
       headers: { "content-type": "application/json" },
     }));
   }
-  if (url.pathname === "/api/tasks/free-chat-rework-task/free-workflow") {
+  if (url.pathname.startsWith("/api/tasks/free-chat-rework-task/free-workflow")) {
+    if (init?.method === "PUT" && url.pathname.endsWith("/review-reservation")) {
+      const body = JSON.parse(String(init.body ?? "{}")) as { note?: string | null };
+      manualChatState.selectedReviewerId = reviewer.id;
+      manualChatState.reviewReservation = {
+        armed: true, reviewerId: reviewer.id, checkMode: "logic", retryLimit: 1, note: body.note ?? null, runId: null,
+      };
+      (window as Window & { __reservationNote?: string | null }).__reservationNote = body.note ?? null;
+      (window as Window & { __reservationRequests?: number }).__reservationRequests =
+        ((window as Window & { __reservationRequests?: number }).__reservationRequests ?? 0) + 1;
+    }
     return Promise.resolve(new Response(JSON.stringify(manualChatState), {
       status: 200,
       headers: { "content-type": "application/json" },

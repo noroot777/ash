@@ -39,7 +39,7 @@ export function FreeReviewRepairButton({
     <button
       type="button"
       className={className}
-      data-state={busy ? "starting-repair" : "exhausted"}
+      data-state={busy ? "starting-repair" : "stopped"}
       disabled={disabled || busy}
       onClick={() => void repair()}
     >

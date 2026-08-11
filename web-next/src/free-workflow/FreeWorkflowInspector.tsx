@@ -23,6 +23,7 @@ import { ReviewScreenshotStrip } from "../review/ReviewScreenshotStrip.tsx";
 import { FreeReviewDialog } from "./FreeReviewDialog.tsx";
 import { FreeReviewProgress } from "./FreeReviewProgress.tsx";
 import { FreeReviewRepairButton } from "./FreeReviewRepairButton.tsx";
+import { freeReviewView } from "./freeReviewCopy.ts";
 import { useFreeWorkflowState } from "./useFreeWorkflowState.ts";
 
 type Activity =
@@ -115,7 +116,6 @@ export function FreeWorkflowInspector({
   const workflowListRef = useRef<HTMLOListElement>(null);
   const reviewListRef = useRef<HTMLDivElement>(null);
   const state = free.state;
-  const reviews = state?.reviews ?? [];
   const activities = useMemo(() => actualActivities(state), [state]);
   const latestPreviewEvent = state?.previewEvents.at(-1);
   const reviewActivities = activities.filter((activity): activity is ReviewActivity => activity.type === "review");
@@ -123,36 +123,31 @@ export function FreeWorkflowInspector({
     ? reviewActivities.find((activity) => reviewKey(activity.run.id, activity.round.round) === selectedReviewKey) ?? null
     : null;
   const latestReview = reviewActivities.at(-1);
-  const latestRun = reviews[0];
-  const taskBusy = task.status === "running" || task.status === "queued";
-  const exhaustedReview = latestRun?.status === "exhausted" && !taskBusy ? latestRun : null;
-  const activeReview = reviews.find((run) => ["reviewing", "repairing", "manual_repairing", "reworking"].includes(run.status));
-  const reservableRework = activeReview?.status === "manual_repairing" || activeReview?.status === "reworking";
-  const blockingReview = activeReview?.status === "reviewing" || activeReview?.status === "repairing";
-  const reviewArmed = !!state?.reviewReservation?.armed;
-  const showTaskProgress = reservableRework || (taskBusy && (latestRun?.status === "exhausted" || latestRun?.status === "superseded"));
+  const view = freeReviewView(state, task);
+  const { latestRun, reviewing, stoppedRun, taskBusy, reservationArmed, repairing, stale } = view;
   const taskReady = task.status !== "backlog";
   const accepted = task.stage === "accepted" || task.stage === "merged";
-  const reservationMode = taskBusy || reservableRework || reviewArmed;
-  const reviewActionLabel = blockingReview
-    ? (activeReview?.status === "reviewing" ? "审查进行中" : "自动修复中")
-    : reviewArmed
+  const reservationMode = taskBusy || reservationArmed;
+  const reviewActionLabel = reviewing
+    ? "审查进行中"
+    : reservationArmed
       ? "调整预约复审"
       : reservationMode
         ? "预约复审"
-        : latestRun?.status === "superseded"
+        : stale
           ? "审查新改动"
           : reviewActivities.length ? "再审一轮" : "派审查";
-  const overviewDetail = activeReview?.status === "manual_repairing"
-    ? `第 ${activeReview.currentRound} 轮意见修复中`
-    : activeReview?.status === "reworking"
-      ? "任务修改中 · 上一轮结论待更新"
-      : exhaustedReview
-        ? `第 ${exhaustedReview.currentRound} 轮未通过 · 自动复审已停止`
-        : latestRun?.status === "superseded"
-          ? "已有新修改 · 等待重新审查"
+  const exhausted = stoppedRun && stoppedRun.currentRound > stoppedRun.retryLimit;
+  const overviewDetail = reviewing
+    ? `第 ${reviewing.currentRound} 轮审查中`
+    : repairing
+      ? `第 ${latestRun?.currentRound ?? 1} 轮未通过 · 任务修改中`
+      : stoppedRun
+        ? `第 ${stoppedRun.currentRound} 轮未通过${view.autoRereview ? " · 修复后自动复审" : exhausted ? " · 自动复审已停止" : ""}`
+        : stale
+          ? "已通过，但之后代码有新修改 · 结论可能过期"
           : latestReview ? `最近一轮${reviewRoundLabel(latestReview.round)}` : "尚未派审";
-  const overviewStatus = reservableRework ? activeReview.status : latestRun?.status === "superseded" ? "superseded" : null;
+  const overviewStatus = repairing ? "repairing" : stale ? "stale" : null;
 
   if (free.loading && !free.state) return <div className="free-workflow-inspector is-loading"><SpinnerGap size={14} className="is-spinning" />正在生成实际工作流…</div>;
   if (free.error && !free.state) return <div className="free-workflow-inspector is-loading is-error"><WarningCircle size={14} />{free.error}</div>;
@@ -193,9 +188,9 @@ export function FreeWorkflowInspector({
           <section className="review-inspector__overview">
             <header>
               <span className={`review-inspector__status${overviewStatus ? ` is-${overviewStatus}` : latestReview?.round.conclusion ? ` is-${latestReview.round.conclusion}` : ""}`}>
-                {reservableRework
+                {repairing
                   ? <SpinnerGap size={13} className="is-spinning" />
-                  : latestRun?.status === "superseded"
+                  : stale
                     ? <MagnifyingGlass size={13} />
                     : latestReview ? reviewStatusIcon(latestReview.round) : <MagnifyingGlass size={13} />}
               </span>
@@ -205,27 +200,23 @@ export function FreeWorkflowInspector({
               </div>
             </header>
             <div className="review-inspector__actions">
-              {showTaskProgress && (
-                <FreeReviewProgress
-                  kind={reservableRework ? activeReview.status as "manual_repairing" | "reworking" : "task_running"}
-                />
-              )}
-              {exhaustedReview && notify && (
+              {repairing && <FreeReviewProgress kind={view.autoRereview ? "auto_rereview" : "task_running"} />}
+              {stoppedRun && !taskBusy && notify && (
                 <FreeReviewRepairButton
                   taskId={task.id}
-                  run={exhaustedReview}
+                  run={stoppedRun}
                   className="is-repair"
-                  disabled={!taskReady || taskBusy || accepted}
+                  disabled={!taskReady || accepted}
                   onChanged={free.setState}
                   notify={notify}
                 />
               )}
               <button
                 type="button"
-                disabled={!taskReady || accepted || blockingReview || !notify}
+                disabled={!taskReady || accepted || !!reviewing || !notify}
                 onClick={() => setReviewDialogOpen(true)}
               >
-                {blockingReview ? <SpinnerGap size={13} className="is-spinning" /> : <MagnifyingGlass size={13} />}
+                {reviewing ? <SpinnerGap size={13} className="is-spinning" /> : <MagnifyingGlass size={13} />}
                 <span>{reviewActionLabel}</span>
               </button>
               {onOpenReview && <button type="button" onClick={onOpenReview}><span>打开改动工作区</span><CaretRight size={13} /></button>}
