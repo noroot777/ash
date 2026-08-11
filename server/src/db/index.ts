@@ -126,7 +126,7 @@ export async function ensureSchema() {
     CREATE TABLE IF NOT EXISTS free_workflow_states (
       task_id TEXT PRIMARY KEY, selected_reviewer_id TEXT,
       review_armed INTEGER NOT NULL DEFAULT 0, review_check_mode TEXT,
-      review_retry_limit INTEGER,
+      review_retry_limit INTEGER, review_note TEXT,
       merge_status TEXT NOT NULL DEFAULT 'idle', merge_message TEXT,
       merged_at TEXT, updated_at TEXT NOT NULL
     );
@@ -139,7 +139,7 @@ export async function ensureSchema() {
     CREATE TABLE IF NOT EXISTS free_review_runs (
       id TEXT PRIMARY KEY, task_id TEXT NOT NULL, reviewer_id TEXT,
       reviewer_name TEXT NOT NULL, agent_type TEXT NOT NULL, executor_id TEXT,
-      model TEXT, reasoning_effort TEXT, check_mode TEXT NOT NULL,
+      model TEXT, reasoning_effort TEXT, check_mode TEXT NOT NULL, note TEXT,
       retry_limit INTEGER NOT NULL DEFAULT 1, current_round INTEGER NOT NULL DEFAULT 1,
       status TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, finished_at TEXT
     );
@@ -253,6 +253,8 @@ export async function ensureSchema() {
     "ALTER TABLE free_workflow_states ADD COLUMN review_armed INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE free_workflow_states ADD COLUMN review_check_mode TEXT",
     "ALTER TABLE free_workflow_states ADD COLUMN review_retry_limit INTEGER",
+    "ALTER TABLE free_workflow_states ADD COLUMN review_note TEXT",
+    "ALTER TABLE free_review_runs ADD COLUMN note TEXT",
     // Token 用量:一条会话行按回合累加(口径统一在 shared/src/usage.ts)。全 null
     // = 这条会话建在本功能之前、或那家 CLI 不报账——**不能当 0 展示**。
     "ALTER TABLE sessions ADD COLUMN usage_input INTEGER",

@@ -8,7 +8,7 @@ import "../../src/styles/global.css";
 const state = {
   taskId: "free-task",
   selectedReviewerId: null,
-  reviewReservation: { armed: false, reviewerId: null, checkMode: null, retryLimit: null },
+  reviewReservation: { armed: false, reviewerId: null, checkMode: null, retryLimit: null, note: null },
   preview: { running: false, url: null, port: null, command: null, startedAt: null },
   previewEvents: [],
   executions: [
@@ -26,6 +26,7 @@ const state = {
     model: null,
     reasoningEffort: null,
     checkMode: "logic",
+    note: null,
     retryLimit: 1,
     currentRound: 1,
     status: "reviewing",
@@ -51,6 +52,7 @@ const state = {
     model: null,
     reasoningEffort: null,
     checkMode: "logic",
+    note: null,
     retryLimit: 1,
     currentRound: 1,
     status: "passed",
@@ -72,7 +74,7 @@ const state = {
 const repairState: FreeWorkflowState = {
   taskId: "free-repair-task",
   selectedReviewerId: null,
-  reviewReservation: { armed: false, reviewerId: null, checkMode: null, retryLimit: null },
+  reviewReservation: { armed: false, reviewerId: null, checkMode: null, retryLimit: null, note: null },
   preview: { running: false, url: null, port: null, command: null, startedAt: null },
   previewEvents: [],
   executions: [{
@@ -90,6 +92,7 @@ const repairState: FreeWorkflowState = {
     model: null,
     reasoningEffort: null,
     checkMode: "logic",
+    note: null,
     retryLimit: 1,
     currentRound: 2,
     status: "exhausted",
@@ -145,8 +148,12 @@ window.fetch = (input, init) => {
         ((window as Window & { __repairRequests?: number }).__repairRequests ?? 0) + 1;
     }
     if (init?.method === "PUT" && url.pathname.endsWith("/review-reservation")) {
+      const body = JSON.parse(String(init.body ?? "{}")) as { note?: string | null };
       repairState.selectedReviewerId = reviewer.id;
-      repairState.reviewReservation = { armed: true, reviewerId: reviewer.id, checkMode: "logic", retryLimit: 1 };
+      repairState.reviewReservation = {
+        armed: true, reviewerId: reviewer.id, checkMode: "logic", retryLimit: 1, note: body.note ?? null,
+      };
+      (window as Window & { __reservationNote?: string | null }).__reservationNote = body.note ?? null;
       (window as Window & { __reservationRequests?: number }).__reservationRequests =
         ((window as Window & { __reservationRequests?: number }).__reservationRequests ?? 0) + 1;
     }

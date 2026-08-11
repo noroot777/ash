@@ -61,10 +61,26 @@ try {
   await reserveButton.click();
   const reviewDialog = page.locator(".free-review-dialog");
   await reviewDialog.getByRole("heading", { name: "预约审查" }).waitFor();
-  await reviewDialog.locator("footer button.is-primary").click();
+  await reviewDialog.getByRole("button", { name: /Codex 审查/ }).waitFor();
+  const dialogBox = await reviewDialog.boundingBox();
+  assert.ok(dialogBox && dialogBox.width <= 642, "派审弹窗应收窄到 640px 左右");
+  assert.equal(await reviewDialog.evaluate((node) => node === document.activeElement), true, "弹窗打开后应接管焦点，让 Enter 可直接提交");
+  await page.keyboard.press("Enter");
+  await repairToolbar.getByRole("button", { name: "已预约复审" }).waitFor();
+  assert.equal(await page.evaluate(() => window.__reservationRequests), 1, "弹窗打开后直接按 Enter 应提交一次");
+
+  await repairToolbar.getByRole("button", { name: "已预约复审" }).click();
+  await reviewDialog.getByRole("heading", { name: "调整预约审查" }).waitFor();
+  const note = reviewDialog.getByLabel("附言（可选）");
+  await note.fill("重点检查窄屏布局");
+  await note.press("Shift+Enter");
+  await note.type("与键盘交互");
+  assert.equal(await page.evaluate(() => window.__reservationRequests ?? 0), 1, "Shift+Enter 只能换行，不能提交");
+  await note.press("Enter");
   await repairToolbar.getByRole("button", { name: "已预约复审" }).waitFor();
   assert.equal(await repairToolbar.getByRole("status").filter({ hasText: "按意见修复中" }).count(), 1, "保存预约不能覆盖正在修复的状态");
-  assert.equal(await page.evaluate(() => window.__reservationRequests), 1, "预约应保存一次并保留修复中状态");
+  assert.equal(await page.evaluate(() => window.__reservationRequests), 2, "Enter 更新预约时应只新增一次请求并保留修复中状态");
+  assert.equal(await page.evaluate(() => window.__reservationNote), "重点检查窄屏布局\n与键盘交互", "Enter 提交时必须携带附言");
 
   const chatToolbar = page.locator(".toolbar-chat-rework-fixture");
   await chatToolbar.getByRole("status").filter({ hasText: "任务修改中" }).waitFor();

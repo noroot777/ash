@@ -117,6 +117,7 @@ export function mountReviewerProfileRoutes(api: Hono): void {
     await db.update(freeWorkflowStates).set({
       selectedReviewerId: null,
       reviewArmed: false,
+      reviewNote: null,
       updatedAt: at,
     }).where(eq(freeWorkflowStates.selectedReviewerId, profileId));
     await db.delete(reviewerProfiles).where(eq(reviewerProfiles.id, profileId));

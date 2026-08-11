@@ -29,11 +29,13 @@ export function FreeReviewDialog({
   notify: (message: string) => void;
 }) {
   const scrim = useRef<HTMLDivElement>(null);
+  const dialog = useRef<HTMLFormElement>(null);
   const [reviewers, setReviewers] = useState<ReviewerProfile[]>([]);
   const [profiles, setProfiles] = useState<AgentExecutorProfile[]>([]);
   const [selectedId, setSelectedId] = useState(state?.selectedReviewerId ?? "");
   const [checkMode, setCheckMode] = useState<FreeReviewCheckMode>(state?.reviewReservation?.checkMode ?? "logic");
   const [retryLimit, setRetryLimit] = useState(String(state?.reviewReservation?.retryLimit ?? 1));
+  const [note, setNote] = useState(state?.reviewReservation?.note ?? "");
   const [creating, setCreating] = useState(false);
   const [draft, setDraft] = useState<ReviewerDraft>(() => createReviewerDraft());
   const [loading, setLoading] = useState(true);
@@ -41,6 +43,8 @@ export function FreeReviewDialog({
   const dialogTitle = reservationMode ? (state?.reviewReservation?.armed ? "调整预约审查" : "预约审查") : "派审查";
   const types = useMemo(() => registeredAgentTypes(profiles), [profiles]);
   useDismissable({ enabled: !busy, containerRef: scrim, onClose });
+
+  useEffect(() => { dialog.current?.focus(); }, []);
 
   useEffect(() => {
     let alive = true;
@@ -55,11 +59,18 @@ export function FreeReviewDialog({
       setSelectedId(preferred);
       setCheckMode(state?.reviewReservation?.checkMode ?? "logic");
       setRetryLimit(String(state?.reviewReservation?.retryLimit ?? 1));
+      setNote(state?.reviewReservation?.note ?? "");
       setCreating(nextReviewers.length === 0);
     }).catch((error) => notify(error instanceof Error ? error.message : "审查者读取失败"))
       .finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
-  }, [notify, state?.reviewReservation?.checkMode, state?.reviewReservation?.retryLimit, state?.selectedReviewerId]);
+  }, [
+    notify,
+    state?.reviewReservation?.checkMode,
+    state?.reviewReservation?.note,
+    state?.reviewReservation?.retryLimit,
+    state?.selectedReviewerId,
+  ]);
 
   const create = async () => {
     if (!draft.name.trim() || busy) return;
@@ -78,13 +89,14 @@ export function FreeReviewDialog({
   };
 
   const submit = async () => {
-    if (!selectedId || busy) return;
+    if (!selectedId || busy || loading) return;
     setBusy(true);
     try {
       const input = {
         reviewerId: selectedId,
         checkMode,
         retryLimit: Number(retryLimit),
+        note,
       };
       const next = reservationMode
         ? await api.reserveFreeReview(taskId, input)
@@ -119,7 +131,23 @@ export function FreeReviewDialog({
     <div className="task-modal-scrim" ref={scrim} role="presentation" onMouseDown={(event) => {
       if (event.target === event.currentTarget && !busy) onClose();
     }}>
-      <section className="free-review-dialog" role="dialog" aria-modal="true" aria-labelledby="free-review-title">
+      <form
+        ref={dialog}
+        className="free-review-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="free-review-title"
+        tabIndex={-1}
+        onKeyDown={(event) => {
+          if (event.target !== event.currentTarget || event.key !== "Enter" || event.nativeEvent.isComposing) return;
+          event.preventDefault();
+          event.currentTarget.requestSubmit();
+        }}
+        onSubmit={(event) => {
+          event.preventDefault();
+          void submit();
+        }}
+      >
         <header>
           <span><MagnifyingGlass size={17} weight="bold" /></span>
           <div><h2 id="free-review-title">{dialogTitle}</h2><p>{reservationMode ? "选择审查者与检查深度；任务确认完成后自动开始。" : "选择一套审查者配置，再决定检查深度与失败后的自动复审次数。"}</p></div>
@@ -138,7 +166,11 @@ export function FreeReviewDialog({
                 ))}
               </div>
               {creating && (
-                <div className="free-review-create">
+                <div className="free-review-create" onKeyDown={(event) => {
+                  if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing || event.target instanceof HTMLButtonElement) return;
+                  event.preventDefault();
+                  void create();
+                }}>
                   <ReviewerProfileFields draft={draft} profiles={profiles} types={types} disabled={busy} onChange={setDraft} />
                   <button type="button" disabled={busy || !draft.name.trim() || !profiles.length} onClick={() => void create()}>{busy ? "创建中…" : "创建并选中"}</button>
                 </div>
@@ -147,6 +179,23 @@ export function FreeReviewDialog({
             <section className="free-review-options">
               <label><span>检查类型</span><select value={checkMode} onChange={(event) => setCheckMode(event.target.value as FreeReviewCheckMode)}><option value="logic">逻辑检查</option><option value="syntax">只做语法检查</option></select></label>
               <label><span>失败后自动复审</span><select value={retryLimit} onChange={(event) => setRetryLimit(event.target.value)}>{[0, 1, 2, 3, 5].map((value) => <option key={value} value={value}>{value} 轮</option>)}</select></label>
+              <label className="free-review-note">
+                <span>附言（可选）</span>
+                <textarea
+                  value={note}
+                  maxLength={2000}
+                  disabled={busy}
+                  placeholder="补充希望审查者重点关注的内容"
+                  aria-describedby="free-review-note-hint"
+                  onChange={(event) => setNote(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
+                    event.preventDefault();
+                    event.currentTarget.form?.requestSubmit();
+                  }}
+                />
+                <small id="free-review-note-hint">Enter 提交 · Shift+Enter 换行</small>
+              </label>
               <p>默认 1 轮：首次审查未通过后，执行方修完会自动再审一次。逻辑检查遇到可见前端改动时必须真实打开页面并截图。</p>
             </section>
           </div>
@@ -154,11 +203,11 @@ export function FreeReviewDialog({
         <footer>
           {state?.reviewReservation?.armed && <button type="button" disabled={busy} onClick={() => void cancelReservation()}>取消预约</button>}
           <button type="button" disabled={busy} onClick={onClose}>{state?.reviewReservation?.armed ? "关闭" : "取消"}</button>
-          <button className="is-primary" type="button" disabled={busy || loading || !selectedId} onClick={() => void submit()}>
+          <button className="is-primary" type="submit" aria-keyshortcuts="Enter" disabled={busy || loading || !selectedId}>
             {busy ? (reservationMode ? "保存中…" : "启动中…") : reservationMode ? (state?.reviewReservation?.armed ? "保存预约" : "预约审查") : "开始审查"}
           </button>
         </footer>
-      </section>
+      </form>
     </div>,
     document.body,
   );

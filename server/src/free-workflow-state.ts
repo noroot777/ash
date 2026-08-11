@@ -84,6 +84,7 @@ export async function freeWorkflowState(taskId: string): Promise<FreeWorkflowSta
     model: run.model,
     reasoningEffort: run.reasoningEffort,
     checkMode: run.checkMode as FreeReviewCheckMode,
+    note: run.note,
     retryLimit: run.retryLimit,
     currentRound: run.currentRound,
     status: run.status as FreeReviewRun["status"],
@@ -143,6 +144,7 @@ export async function freeWorkflowState(taskId: string): Promise<FreeWorkflowSta
       reviewerId: reservationReviewerId,
       checkMode: reservationArmed ? storedCheckMode(state?.reviewCheckMode) : null,
       retryLimit: reservationArmed ? storedRetryLimit(state?.reviewRetryLimit) : null,
+      note: reservationArmed ? state?.reviewNote ?? null : null,
     },
     preview: {
       running: !!preview,

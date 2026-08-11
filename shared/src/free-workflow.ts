@@ -49,6 +49,7 @@ export interface FreeReviewRun {
   model: string | null;
   reasoningEffort: string | null;
   checkMode: FreeReviewCheckMode;
+  note: string | null;
   retryLimit: number;
   currentRound: number;
   status: FreeReviewRunStatus;
@@ -101,6 +102,7 @@ export interface FreeWorkflowState {
     reviewerId: string | null;
     checkMode: FreeReviewCheckMode | null;
     retryLimit: number | null;
+    note: string | null;
   };
   preview: FreeWorkflowPreviewState;
   previewEvents: FreeWorkflowPreviewEvent[];
@@ -113,4 +115,5 @@ export interface FreeReviewDispatchInput {
   reviewerId: string;
   checkMode: FreeReviewCheckMode;
   retryLimit: number;
+  note?: string | null;
 }

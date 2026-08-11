@@ -69,7 +69,7 @@ try {
   const promptRun: Parameters<typeof freeReviewPrompt>[1] = {
     id: "skill-review", taskId: "free-task", reviewerId: "reviewer", reviewerName: "Codex logic",
     agentType: "codex", executorId: "reviewer-executor", model: null, reasoningEffort: "high",
-    checkMode: "logic", retryLimit: 1, currentRound: 1, status: "reviewing",
+    checkMode: "logic", note: "重点检查 Enter 快捷键", retryLimit: 1, currentRound: 1, status: "reviewing",
     createdAt: directiveAt, updatedAt: directiveAt, finishedAt: null,
   };
   const skillPrompt = await freeReviewPrompt({
@@ -79,6 +79,7 @@ try {
   }, promptRun, 1, root);
   assert.doesNotMatch(skillPrompt, /grill-me|把排队需求也一起做完/, "自由审查 prompt 不得原样夹带技能名或用户追问");
   assert.match(skillPrompt, /request-context\.md/, "自由审查应改为引用需求文件");
+  assert.match(skillPrompt, /用户附言[\s\S]*重点检查 Enter 快捷键/, "派审附言必须进入审查提示");
   const assertBrowserPolicy = (text: string, source: string) => {
     const groupedBrowser = text.indexOf("扩展具名分组后台标签");
     const headlessBrowser = text.indexOf("独立无头浏览器");
@@ -162,7 +163,7 @@ try {
   const exhaustedRun = {
     id: "exhausted-review", taskId: "free-exhausted-task", reviewerId: reviewer.id, reviewerName: "Codex logic",
     agentType: "codex", executorId: "reviewer-executor", model: "gpt-review", reasoningEffort: "high",
-    checkMode: "logic", retryLimit: 1, currentRound: 2, status: "exhausted",
+    checkMode: "logic", note: null, retryLimit: 1, currentRound: 2, status: "exhausted",
     createdAt: exhaustedAt, updatedAt: exhaustedAt, finishedAt: exhaustedAt,
   };
   await db.insert(freeReviewRuns).values(exhaustedRun);
@@ -189,7 +190,7 @@ try {
   );
   const repairReservation = await api.request("/tasks/free-exhausted-task/free-workflow/review-reservation", {
     method: "PUT", headers: { "content-type": "application/json" },
-    body: JSON.stringify({ reviewerId: reviewer.id, checkMode: "logic", retryLimit: 1 }),
+    body: JSON.stringify({ reviewerId: reviewer.id, checkMode: "logic", retryLimit: 1, note: "复审时关注按钮状态" }),
   });
   assert.equal(repairReservation.status, 200, "修复进行中必须允许预约复审");
   assert.equal((await repairReservation.json() as { reviewReservation: { armed: boolean } }).reviewReservation.armed, true);
@@ -220,25 +221,30 @@ try {
   reworkState = await api.request("/tasks/free-rework-task/free-workflow").then((response) => response.json()) as typeof reworkState;
   assert.equal(reworkState.reviews[0]?.status, "exhausted", "普通对话未确认完成时不能谎称旧结论已过期");
 
-  const reserveReview = async (checkMode: "logic" | "syntax", retryLimit: number) => api.request(
+  const reserveReview = async (checkMode: "logic" | "syntax", retryLimit: number, note: string | null = null) => api.request(
     "/tasks/free-reservation-task/free-workflow/review-reservation",
-    { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ reviewerId: reviewer.id, checkMode, retryLimit }) },
+    { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ reviewerId: reviewer.id, checkMode, retryLimit, note }) },
   );
-  let reserved = await reserveReview("logic", 1);
+  assert.equal((await reserveReview("logic", 1, "x".repeat(2001))).status, 409, "附言必须有后端长度上限");
+  let reserved = await reserveReview("logic", 1, " 重点检查窄屏布局 ");
   assert.equal(reserved.status, 200);
-  let reservedState = await reserved.json() as { reviewReservation: { armed: boolean; checkMode: string | null; retryLimit: number | null } };
-  assert.deepEqual(reservedState.reviewReservation, { armed: true, reviewerId: reviewer.id, checkMode: "logic", retryLimit: 1 });
+  let reservedState = await reserved.json() as { reviewReservation: { armed: boolean; checkMode: string | null; retryLimit: number | null; note: string | null } };
+  assert.deepEqual(reservedState.reviewReservation, {
+    armed: true, reviewerId: reviewer.id, checkMode: "logic", retryLimit: 1, note: "重点检查窄屏布局",
+  });
 
-  reserved = await reserveReview("syntax", 2);
+  reserved = await reserveReview("syntax", 2, "检查预约覆盖");
   assert.equal(reserved.status, 200);
   reservedState = await reserved.json() as typeof reservedState;
-  assert.deepEqual(reservedState.reviewReservation, { armed: true, reviewerId: reviewer.id, checkMode: "syntax", retryLimit: 2 }, "重复预约应覆盖同一份配置");
+  assert.deepEqual(reservedState.reviewReservation, {
+    armed: true, reviewerId: reviewer.id, checkMode: "syntax", retryLimit: 2, note: "检查预约覆盖",
+  }, "重复预约应覆盖同一份配置与附言");
 
   const canceledReservation = await api.request("/tasks/free-reservation-task/free-workflow/review-reservation", { method: "DELETE" });
   assert.equal(canceledReservation.status, 200);
   assert.equal((await canceledReservation.json() as { reviewReservation: { armed: boolean } }).reviewReservation.armed, false);
 
-  await reserveReview("logic", 2);
+  await reserveReview("logic", 2, "重点检查 Enter 快捷键");
   await db.update(tasks).set({ status: "failed" }).where(eq(tasks.id, "free-reservation-task"));
   await handleFreeWorkflowSettlement("free-reservation-task", "failed", false, false);
   assert.equal((await api.request("/tasks/free-reservation-task/free-workflow").then((response) => response.json()) as { reviewReservation: { armed: boolean } }).reviewReservation.armed, true, "失败结算应保留预约");
@@ -247,11 +253,14 @@ try {
   assert.equal(claimTurn("free-reservation-task"), true);
   await handleFreeWorkflowSettlement("free-reservation-task", "done", true, true);
   const triggered = await api.request("/tasks/free-reservation-task/free-workflow");
-  const triggeredState = await triggered.json() as { reviewReservation: { armed: boolean }; reviews: Array<{ status: string; checkMode: string; retryLimit: number }> };
+  const triggeredState = await triggered.json() as {
+    reviewReservation: { armed: boolean };
+    reviews: Array<{ status: string; checkMode: string; retryLimit: number; note: string | null }>;
+  };
   assert.equal(triggeredState.reviewReservation.armed, false);
-  assert.deepEqual(triggeredState.reviews.map(({ status, checkMode, retryLimit }) => ({ status, checkMode, retryLimit })), [
-    { status: "reviewing", checkMode: "logic", retryLimit: 2 },
-  ], "confirmed done 应按预约配置自动派出且只派一份审查");
+  assert.deepEqual(triggeredState.reviews.map(({ status, checkMode, retryLimit, note }) => ({ status, checkMode, retryLimit, note })), [
+    { status: "reviewing", checkMode: "logic", retryLimit: 2, note: "重点检查 Enter 快捷键" },
+  ], "confirmed done 应按预约配置与附言自动派出且只派一份审查");
   assertBrowserPolicy(await freeReviewReminder("free-reservation-task"), "自由审查续聊提醒");
 
   // 删除审查者时必须同步 disarm：否则 UI 仍显示已预约，结算因 reviewerId 为空静默不派审。
@@ -282,7 +291,7 @@ try {
   const afterDeleteState = await api.request("/tasks/free-deleted-reviewer-task/free-workflow").then((response) => response.json()) as {
     reviewReservation: { armed: boolean; reviewerId: string | null };
   };
-  assert.deepEqual(afterDeleteState.reviewReservation, { armed: false, reviewerId: null, checkMode: null, retryLimit: null },
+  assert.deepEqual(afterDeleteState.reviewReservation, { armed: false, reviewerId: null, checkMode: null, retryLimit: null, note: null },
     "删除审查者后预约必须取消，不能留下 armed 且 reviewerId 为空");
 
   await db.update(tasks).set({ status: "done" }).where(eq(tasks.id, "free-deleted-reviewer-task"));
@@ -307,7 +316,8 @@ try {
   const { freeWorkflowStates } = await import("../src/db/schema.js");
   await db.insert(freeWorkflowStates).values({
     taskId: "free-orphan-arm-task", selectedReviewerId: null, reviewArmed: true,
-    reviewCheckMode: "logic", reviewRetryLimit: 1, mergeStatus: "idle", mergeMessage: null, mergedAt: null,
+    reviewCheckMode: "logic", reviewRetryLimit: 1, reviewNote: "不应泄漏的脏附言",
+    mergeStatus: "idle", mergeMessage: null, mergedAt: null,
     updatedAt: new Date().toISOString(),
   });
   assert.equal(
@@ -439,6 +449,7 @@ try {
   console.log("✓ 显式修复与普通修改分态展示，修改中可预约且确认完成后按预约复审");
   console.log("✓ 审查者 CRUD 与自由工作流初始状态可用");
   console.log("✓ 运行中可预约、覆盖、取消，失败保留且 confirmed done 后只自动派出一次");
+  console.log("✓ 派审附言会校验、持久化并进入即时与预约审查提示");
   console.log("✓ 删除审查者会取消预约；脏 armed 状态读路径与结算路径均不会静默失效");
   console.log("✓ 预览打开与关闭事件持久保留且按发生顺序返回");
   console.log("✓ 每次自由任务执行都独立保留起止时间与状态");

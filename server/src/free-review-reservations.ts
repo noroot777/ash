@@ -10,16 +10,17 @@ export type ReservedFreeReview = {
   reviewerId: string | null;
   checkMode: unknown;
   retryLimit: unknown;
+  note: unknown;
 } | null | undefined;
 
 export async function startReservedFreeReview(
   taskId: string,
   reservation: ReservedFreeReview,
-  start: (input: { reviewerId: string; checkMode: unknown; retryLimit: unknown }) => Promise<unknown>,
+  start: (input: { reviewerId: string; checkMode: unknown; retryLimit: unknown; note: unknown }) => Promise<unknown>,
 ): Promise<void> {
   if (!reservation?.armed) return;
   if (!reservation.reviewerId) {
-    await db.update(freeWorkflowStates).set({ reviewArmed: false, updatedAt: now() })
+    await db.update(freeWorkflowStates).set({ reviewArmed: false, reviewNote: null, updatedAt: now() })
       .where(eq(freeWorkflowStates.taskId, taskId));
     await appendTaskTimeline(taskId, "完成后审查预约已取消：预约的审查者已不可用。");
     bus.publish({ type: "task.review", taskId });
@@ -30,6 +31,7 @@ export async function startReservedFreeReview(
       reviewerId: reservation.reviewerId,
       checkMode: reservation.checkMode,
       retryLimit: reservation.retryLimit,
+      note: reservation.note,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

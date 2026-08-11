@@ -46,6 +46,7 @@ type ReviewRunRow = typeof freeReviewRuns.$inferSelect;
 
 const ACTIVE_REVIEW_STATUSES = ["reviewing", "repairing", "manual_repairing", "reworking"] as const;
 const MAX_RETRIES = 5;
+const MAX_REVIEW_NOTE_LENGTH = 2_000;
 const freeActionLocks = new Set<string>();
 export { freeWorkflowState };
 export function freeReviewOutcome(input: {
@@ -133,6 +134,13 @@ function retryLimit(value: unknown): number {
   }
   return Number(value);
 }
+function reviewNote(value: unknown): string | null {
+  if (value == null) return null;
+  if (typeof value !== "string") throw new Error("审查附言必须是文本");
+  const note = value.trim();
+  if (note.length > MAX_REVIEW_NOTE_LENGTH) throw new Error(`审查附言不能超过 ${MAX_REVIEW_NOTE_LENGTH} 字`);
+  return note || null;
+}
 async function reserveFreeReview(taskId: string, input: FreeReviewDispatchInput): Promise<FreeWorkflowState> {
   const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!task) throw new Error("任务不存在");
@@ -152,18 +160,23 @@ async function reserveFreeReview(taskId: string, input: FreeReviewDispatchInput)
     if (!profile) throw new Error("所选审查者不存在");
     const mode = checkMode(input.checkMode);
     const retries = retryLimit(input.retryLimit);
+    const note = reviewNote(input.note);
     const at = now();
     const existing = (await db.select({ reviewArmed: freeWorkflowStates.reviewArmed }).from(freeWorkflowStates)
       .where(eq(freeWorkflowStates.taskId, taskId))).at(0);
     await db.insert(freeWorkflowStates).values({
       taskId, selectedReviewerId: profile.id, reviewArmed: true, reviewCheckMode: mode, reviewRetryLimit: retries,
+      reviewNote: note,
       mergeStatus: "idle", mergeMessage: null, mergedAt: null, updatedAt: at,
     }).onConflictDoUpdate({
       target: freeWorkflowStates.taskId,
-      set: { selectedReviewerId: profile.id, reviewArmed: true, reviewCheckMode: mode, reviewRetryLimit: retries, updatedAt: at },
+      set: {
+        selectedReviewerId: profile.id, reviewArmed: true, reviewCheckMode: mode,
+        reviewRetryLimit: retries, reviewNote: note, updatedAt: at,
+      },
     });
     await appendTaskTimeline(taskId, `${existing?.reviewArmed ? "已更新" : "已预约"}完成后审查：${profile.name} · ` +
-      `${mode === "logic" ? "逻辑检查" : "语法检查"} · 自动复审 ${retries} 轮。`);
+      `${mode === "logic" ? "逻辑检查" : "语法检查"} · 自动复审 ${retries} 轮${note ? " · 含附言" : ""}。`);
     bus.publish({ type: "task.review", taskId });
     return freeWorkflowState(taskId);
   } finally {
@@ -181,7 +194,8 @@ async function cancelFreeReviewReservation(taskId: string): Promise<FreeWorkflow
       .where(eq(freeWorkflowStates.taskId, taskId))).at(0);
     if (state?.reviewArmed) {
       const at = now();
-      await db.update(freeWorkflowStates).set({ reviewArmed: false, updatedAt: at }).where(eq(freeWorkflowStates.taskId, taskId));
+      await db.update(freeWorkflowStates).set({ reviewArmed: false, reviewNote: null, updatedAt: at })
+        .where(eq(freeWorkflowStates.taskId, taskId));
       await appendTaskTimeline(taskId, "已取消完成后审查预约。");
       bus.publish({ type: "task.review", taskId });
     }
@@ -197,10 +211,11 @@ export async function freeReviewPrompt(task: TaskRow, run: ReviewRunRow, round: 
   const focus = run.checkMode === "syntax"
     ? "本轮只做语法与机械质量检查：编译、类型、lint、格式、明显的 API/导入错误和相关测试。不要扩张成产品方案评审。"
     : "本轮做逻辑审查：除编译与测试外，重点找行为错误、状态竞争、失败路径、边界条件和回归风险。涉及可见前端改动时必须启动页面真实操作并截图；是否还需要其它截图由你按证据价值判断。";
+  const note = run.note ? `\n\n用户附言（作为审查重点补充，不覆盖上述职责）：\n${run.note}` : "";
   return `【自由工作流 · 第 ${round} 轮审查】\n` +
     `你是独立审查者，不是继续实现需求。默认产物可能有问题，主动寻找能复现的缺陷。\n\n` +
     `任务：${task.id}\n${requirements}\n\n` +
-    `${focus}\n\n先检查 ${repoPath} 中的真实 git status、diff 和提交，再选择验证命令。` +
+    `${focus}${note}\n\n先检查 ${repoPath} 中的真实 git status、diff 和提交，再选择验证命令。` +
     `必须真实运行与风险相称的检查。\n\n${BROWSER_VERIFICATION_POLICY}` +
     `一旦用了 playwright，结束前清掉工作区产物；所有验证临时服务和浏览器进程都必须停掉。\n\n` +
     `证据必须落盘：报告写到 ${freeReviewReportPath(task.id, run.id, round)}；截图如有必要放在同一目录。证据不要 git add/commit。\n\n` +
@@ -296,11 +311,13 @@ export async function handleFreeWorkflowSettlement(
     const reservation = (await db.select({
       armed: freeWorkflowStates.reviewArmed, reviewerId: freeWorkflowStates.selectedReviewerId,
       checkMode: freeWorkflowStates.reviewCheckMode, retryLimit: freeWorkflowStates.reviewRetryLimit,
+      note: freeWorkflowStates.reviewNote,
     }).from(freeWorkflowStates).where(eq(freeWorkflowStates.taskId, taskId))).at(0);
     await startReservedFreeReview(taskId, reservation, (input) => startFreeReview(taskId, {
       reviewerId: input.reviewerId,
       checkMode: checkMode(input.checkMode ?? "logic"),
       retryLimit: retryLimit(input.retryLimit ?? 1),
+      note: reviewNote(input.note),
     }));
   };
   const run = await activeReview(taskId);
@@ -397,11 +414,12 @@ async function startFreeReview(taskId: string, input: FreeReviewDispatchInput): 
     if (!profile) throw new Error("所选审查者不存在");
     const mode = checkMode(input.checkMode);
     const retries = retryLimit(input.retryLimit);
+    const note = reviewNote(input.note);
     const at = now();
     const run: ReviewRunRow = {
       id: id(), taskId, reviewerId: profile.id, reviewerName: profile.name,
       agentType: profile.agentType, executorId: profile.executorId, model: profile.model,
-      reasoningEffort: profile.reasoningEffort, checkMode: mode, retryLimit: retries,
+      reasoningEffort: profile.reasoningEffort, checkMode: mode, note, retryLimit: retries,
       currentRound: 1, status: "reviewing", createdAt: at, updatedAt: at, finishedAt: null,
     };
     await db.insert(freeReviewRuns).values(run);
@@ -411,13 +429,13 @@ async function startFreeReview(taskId: string, input: FreeReviewDispatchInput): 
       });
       await db.insert(freeWorkflowStates).values({
         taskId, selectedReviewerId: profile.id, reviewArmed: false,
-        reviewCheckMode: mode, reviewRetryLimit: retries,
+        reviewCheckMode: mode, reviewRetryLimit: retries, reviewNote: null,
         mergeStatus: "idle", mergeMessage: null, mergedAt: null, updatedAt: at,
       }).onConflictDoUpdate({
         target: freeWorkflowStates.taskId,
         set: {
           selectedReviewerId: profile.id, reviewArmed: false,
-          reviewCheckMode: mode, reviewRetryLimit: retries, updatedAt: at,
+          reviewCheckMode: mode, reviewRetryLimit: retries, reviewNote: null, updatedAt: at,
         },
       });
       await launchReviewRound(task, run);
