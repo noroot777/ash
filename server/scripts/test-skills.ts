@@ -12,7 +12,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { calibrateSkills, listSkills, resetSkillCache, scanOverview, withSkillInvocation } from "../src/skills.js";
+import { calibrateSkills, listSkills, nativeCliCommand, resetSkillCache, scanOverview, withSkillInvocation } from "../src/skills.js";
 
 const root = mkdtempSync(join(tmpdir(), "harness-skills-"));
 process.on("exit", () => rmSync(root, { recursive: true, force: true }));
@@ -95,11 +95,33 @@ assert.ok(find(list, ONLY_IN_INIT), "init 报了但磁盘上没有的(内置/插
 assert.equal(find(list, ONLY_IN_INIT)?.source, "builtin");
 assert.ok(find(list, BETA), "**并集**:init 那一轮之后新装的技能不能被交集抹掉");
 assert.ok(find(list, "review"), "白名单里的内置斜杠命令要放行");
-assert.ok(!find(list, "compact"), "白名单之外的内置命令不进技能菜单");
+assert.ok(find(list, "compact"), "compact 是白名单里的原生命令,同样要进菜单");
 assert.ok(!find(list, "cost"), "白名单之外的内置命令不进技能菜单");
 assert.equal(find(list, ALPHA)?.description, "改过的描述", "磁盘上有的以磁盘为准,别被 init 覆盖成占位文案");
 const builtinInvocation = withSkillInvocation({ agentType: "claude", cwd: root, text: "/review 检查改动" });
 assert.match(builtinInvocation, /CLI 已报告可用的内置 skill/, "没有磁盘路径的内置 skill 也要显式调用");
+
+// ── 原生命令(CLI 自己拦下的,不是 skill):必须保留原生消息形状 ────────────────
+// 前面垫一个字它就退化成普通模型请求,压缩不会发生;当成 skill 加前言更是白烧一轮
+// (模型去调 Skill({skill:"compact"}),CLI 回「built-in CLI command, not a skill」)。
+assert.equal(
+  withSkillInvocation({ agentType: "claude", cwd: root, text: "/compact" }),
+  "/compact",
+  "原生命令一个字都不能加",
+);
+assert.equal(
+  withSkillInvocation({ agentType: "claude", cwd: root, text: "/compact 重点保留结论" }),
+  "/compact 重点保留结论",
+  "带参数的原生命令同样原样发出",
+);
+assert.equal(nativeCliCommand("claude", "  /compact\n"), "compact", "识别时容忍首尾空白");
+assert.equal(nativeCliCommand("claude", `/${ALPHA}`), null, "真 skill 不是原生命令");
+assert.equal(nativeCliCommand("claude", "先压一下 /compact"), null, "不在开头就不是原生命令(CLI 也不会拦)");
+assert.equal(nativeCliCommand("codex", "/compact"), null, "codex 没有这个原生命令");
+// 正文中间提到原生命令时:它对 CLI 不生效,也不能写进前言让模型去「执行」。
+const mixed = withSkillInvocation({ agentType: "claude", cwd: root, text: `/${ALPHA} 做完后 /compact` });
+assert.ok(mixed.includes(`- /${ALPHA}：`), "同一句里的真 skill 照常调用");
+assert.ok(!mixed.includes("- /compact："), "原生命令不该出现在 skill 前言里");
 
 // ── 校准按 cwd 前缀认亲:任务多半跑在 <repo>/.worktrees/<id> 里 ───────────────
 

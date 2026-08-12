@@ -34,6 +34,7 @@ import type {
 } from "@harness/shared";
 import { DEFAULT_APP_SETTINGS } from "@harness/shared";
 import type { WorkflowDef, WorkflowItem } from "@harness/shared/workflow";
+import type { CliHostEnv } from "@harness/shared/cli-overrides";
 
 const API_ROOT = "/api";
 
@@ -545,6 +546,9 @@ export const api = {
     { type: AgentType; bin: string; available: boolean; path: string | null; version: string | null; resident: boolean }[]
   > => request("/agents/detect"),
   detectClis: (): Promise<DetectedCli[]> => request("/agents/catalog"),
+  // harness 起 CLI 时子进程会看到的环境事实(只读)。设置页拿它算压缩触发点 ——
+  // 那个换算里有一项在 server 的环境变量里,前端自己算不出来。
+  cliHostEnv: (): Promise<CliHostEnv> => request("/agents/cli-env"),
   // 这个执行器在这个项目下已经装了哪些 `/技能`。refresh=true 跳过服务端的指纹缓存。
   skills: (query: {
     agentType: string;

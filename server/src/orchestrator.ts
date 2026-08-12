@@ -28,7 +28,7 @@ import { recordTurnBaseline } from "./turn-baseline.js";
 import { recordTurnStart } from "./turn-output.js";
 import { railStalledAtRun } from "./workflows.js";
 import { freeReviewReminder, isFreeReviewTurn, markFreeReviewReworking } from "./free-workflow.js";
-import { withSkillInvocation } from "./skills.js";
+import { nativeCliCommand, withSkillInvocation } from "./skills.js";
 import { initialTaskObjective, invitedTaskBrief } from "./invited-task-brief.js";
 // Single tasks run headless — nobody can answer a mid-run prompt. Tell the agent
 // to act autonomously rather than stall waiting for confirmation; if it genuinely
@@ -289,7 +289,7 @@ export async function runTask(taskId: string): Promise<void> {
       cwd: ws.path,
       cliSessionId,
       resumeCommand: ex.resumeCommand(ws.path, cliSessionId),
-      relayEnv: ex.relayEnvHint ?? null,
+      resumeEnv: ex.resumeEnvHint ?? null,
       commandLine: handle.commandLine,
       startedAt: turnStart,
       turnStartedAt: turnStart,
@@ -467,7 +467,10 @@ export async function continueTask(
     // 一步,一个 done 的任务就会因为「验证没起来」被打成 failed。
     if (!opts.system && !opts.byBackend) await markFreeReviewReworking(taskId);
     const freeReviewTurn = await isFreeReviewTurn(taskId);
-    const sideTurn = !!opts.sideTurn || !!task.verifyRound || freeReviewTurn;
+    // `/compact` 这类 CLI 原生命令:整条消息归 CLI 本地执行,不进模型 —— 没有产出、
+    // 也不可能交卷,所以必须当旁路回合,否则「压一下上下文」会把任务打成 failed。
+    const nativeCommand = nativeCliCommand(agent, userText);
+    const sideTurn = !!opts.sideTurn || !!task.verifyRound || freeReviewTurn || !!nativeCommand;
     const followUpFrom = sideTurn
       ? (task.status === "running" || task.status === "queued" ? null : task.status)
       : !opts.system && ["done", "failed", "canceled"].includes(task.status)
@@ -556,15 +559,19 @@ export async function continueTask(
     // 验证轮/审查任务不提这条线：那一轮的产出是结论，不是新一版代码。
     const railNote = followUpFrom && !verifying ? await followUpRailNote(taskId) : "";
     const prompt =
-      (invited ? COLLAB_INVITE : "") +
-      invitedTaskBrief(task.body, invited, verifying) +
-      peerNotice +
-      promptedUserTurnText +
-      (workspaceReset ? WORKSPACE_RESET(cwd) : "") +
-      (followUpFrom
-        ? FOLLOW_UP_REMINDER(taskId, followUpFrom, sharedTeamWorker, verifying, railNote, freeWorkflow)
-        : COMPLETION_REMINDER(taskId, sharedTeamWorker, verifying, freeWorkflow)) +
-      (reviewReminder ? `\n${reviewReminder}` : "");
+      // 原生命令必须**独占整条 prompt**:前面垫一个字它就退化成普通模型请求,压缩不会
+      // 发生;后面跟的字则会被 CLI 整条丢弃,拼上去只是自欺(见 skills.ts NATIVE_COMMANDS)。
+      nativeCommand
+        ? promptedUserTurnText
+        : (invited ? COLLAB_INVITE : "") +
+          invitedTaskBrief(task.body, invited, verifying) +
+          peerNotice +
+          promptedUserTurnText +
+          (workspaceReset ? WORKSPACE_RESET(cwd) : "") +
+          (followUpFrom
+            ? FOLLOW_UP_REMINDER(taskId, followUpFrom, sharedTeamWorker, verifying, railNote, freeWorkflow)
+            : COMPLETION_REMINDER(taskId, sharedTeamWorker, verifying, freeWorkflow)) +
+          (reviewReminder ? `\n${reviewReminder}` : "");
     const turnStart = now();
     const sessId = resuming ? prev!.id : id();
     const runDir = join(RUNS_DIR, taskId);
@@ -597,7 +604,7 @@ export async function continueTask(
           endedAt: null,
           commandLine: handle.commandLine,
           executor: ex.label,
-          relayEnv: ex.relayEnvHint ?? null,
+          resumeEnv: ex.resumeEnvHint ?? null,
           // 这一轮的解绑线索。**必须整组刷新**:沿用上一轮的 pid/offset 会让重启
           // 去接一个早就没了的进程,或者从上一轮的字节位置读这一轮的新文件。
           agentPid: handle.detached?.pid ?? null,
@@ -622,7 +629,7 @@ export async function continueTask(
         cwd,
         cliSessionId,
         resumeCommand: ex.resumeCommand(cwd, cliSessionId),
-        relayEnv: ex.relayEnvHint ?? null,
+        resumeEnv: ex.resumeEnvHint ?? null,
         commandLine: handle.commandLine,
         startedAt: turnStart,
         turnStartedAt: turnStart,

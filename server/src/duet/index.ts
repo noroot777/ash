@@ -82,7 +82,7 @@ async function runTurn(args: {
       cwd,
       cliSessionId: cliId,
       resumeCommand: cliId ? executor.resumeCommand(cwd, cliId) : null,
-      relayEnv: executor.relayEnvHint ?? null,
+      resumeEnv: executor.resumeEnvHint ?? null,
       commandLine: handle.commandLine,
       startedAt: turnStart,
       turnStartedAt: turnStart,
@@ -101,7 +101,7 @@ async function runTurn(args: {
         endedAt: null,
         commandLine: handle.commandLine,
         executor: executor.label,
-        relayEnv: executor.relayEnvHint ?? null,
+        resumeEnv: executor.resumeEnvHint ?? null,
       })
       .where(eq(sessions.id, rowId));
   }

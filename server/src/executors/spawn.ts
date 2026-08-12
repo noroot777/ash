@@ -172,8 +172,10 @@ async function killEscapees(child: ChildProcess, sig: NodeJS.Signals): Promise<v
 // stdout/stderr 管道不死，流永远不 EOF，run loop 收不到 close → 任务永远停不掉
 // (真实案例：codex CLI 重装期间 resume，任务卡 running 且 stop 无效)。
 // 代价：dev 前台 Ctrl-C 不再连带杀掉 agent(生产是 nohup 跑法，不受影响)。
-// extraEnv: per-executor 的环境变量(供应商的 base_url / key)。本地合进 env,
-// ssh 拼成远程命令的 `KEY=值 ` 前缀 —— 二者对 CLI 是等价的。
+// extraEnv: per-executor 的环境变量(供应商的 base_url / key、覆盖 CLI 自己的配置)。
+// 本地合进 env,ssh 拼成远程命令的 `KEY=值 ` 前缀 —— 二者对 CLI 是等价的。
+// **值为 `undefined` = 把这个变量从子进程里删掉**(本地靠 Node 跳过 undefined,ssh 靠
+// `env -u`):harness 自己环境里带着的同名变量,不删就会盖掉「这里留空 = 跟随 CLI」。
 // keepStdin: 常驻会话(§Team 的调度台)用 —— 写完首条消息不关 stdin,管道留给
 // 调用方继续注入后续回合(见 executors/claude.ts 的 openResident)。
 export function spawnAgent(
@@ -182,16 +184,19 @@ export function spawnAgent(
   bin: string,
   args: string[],
   prompt: string,
-  extraEnv?: Record<string, string>,
+  extraEnv?: Record<string, string | undefined>,
   opts?: { keepStdin?: boolean },
 ): ChildProcess {
   const blocked = guardAgentSpawn(bin);
   if (blocked) return blocked;
-  const envPrefix = extraEnv
-    ? Object.entries(extraEnv)
-        .map(([k, v]) => `${k}=${shq(v)} `)
-        .join("")
-    : "";
+  const entries = Object.entries(extraEnv ?? {});
+  const unsets = entries.filter(([, v]) => v === undefined).map(([k]) => `-u ${shq(k)}`);
+  const assigns = entries.filter(([, v]) => v !== undefined).map(([k, v]) => `${k}=${shq(v!)}`);
+  // 有要删的就得借 `env -u`(shell 的 `K=v cmd` 只能赋值不能删);没有就维持原来的
+  // `K=v cmd` 形状,免得所有远端命令凭空多一层 env。
+  const envPrefix = unsets.length
+    ? `env ${[...unsets, ...assigns].join(" ")} `
+    : assigns.map((pair) => `${pair} `).join("");
   if (target.kind === "ssh") {
     const remote = `cd ${shq(cwd)} && ${envPrefix}${bin} ${args.map(shq).join(" ")}`;
     const child = spawn("ssh", [target.host, remote], { stdio: ["pipe", "pipe", "pipe"], env: augmentedEnv(), detached: true });

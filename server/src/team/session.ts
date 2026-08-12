@@ -292,7 +292,7 @@ async function openLead(taskId: string, rawText: string, kind: Kind): Promise<Le
       cwd: ws.path,
       cliSessionId,
       resumeCommand: ex.resumeCommand(ws.path, cliSessionId),
-      relayEnv: ex.relayEnvHint ?? null,
+      resumeEnv: ex.resumeEnvHint ?? null,
       commandLine: handle.commandLine,
       startedAt: turnStart,
       turnStartedAt: turnStart,

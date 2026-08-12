@@ -5,6 +5,7 @@ import type {
   LlmProvider,
 } from "@harness/shared";
 import { AGENT_TYPES } from "@harness/shared";
+import { hasCliConfigOverrides } from "@harness/shared/cli-overrides";
 import { MagnifyingGlass, Plus, Trash } from "@phosphor-icons/react";
 import { Button } from "../components/ui.tsx";
 import { api, type DetectedCli } from "../lib/api.ts";
@@ -120,13 +121,21 @@ function AgentProfileGroup({
           </button>
         </div>
       </header>
-      <div className="agent-profile-table" role="table" aria-label={`${type} 执行器`}>
+      {/* 「CLI 配置」这一列只有声明过可覆盖项的 CLI 才有（目前只有 claude）。表头和行里
+          的格子共用 hasCliConfigOverrides 这一个判据，列数才不会错位；栅格宽度由
+          .has-overrides 那条规则给。 */}
+      <div
+        className={`agent-profile-table${hasCliConfigOverrides(type) ? " has-overrides" : ""}`}
+        role="table"
+        aria-label={`${type} 执行器`}
+      >
         <div className="agent-profile-columns" role="row" aria-hidden="true">
           <span>Profile / 位置</span>
           <span>供应商</span>
           <span>模型</span>
           <span>思考</span>
           <span>速度</span>
+          {hasCliConfigOverrides(type) && <span>CLI 配置</span>}
           <span className="agent-profile-actions-heading">操作</span>
         </div>
         {profiles.map((profile) => (

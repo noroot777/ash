@@ -200,7 +200,7 @@ export function spawnDetachedAgent(
   args: string[],
   prompt: string,
   paths: DetachedPaths,
-  extraEnv?: Record<string, string>,
+  extraEnv?: Record<string, string | undefined>,
 ): DetachedChild | ChildProcess {
   const blocked = guardAgentSpawn(bin);
   if (blocked) return blocked;
@@ -273,7 +273,7 @@ export function spawnForRun(
   bin: string,
   args: string[],
   prompt: string,
-  extraEnv?: Record<string, string>,
+  extraEnv?: Record<string, string | undefined>,
   detach?: DetachedPaths,
 ): ChildProcess {
   if (detach && target.kind === "local") {

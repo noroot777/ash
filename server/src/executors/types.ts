@@ -87,9 +87,12 @@ export interface AgentExecutor {
   readonly model?: string;
   readonly reasoningEffort?: string;
   readonly target: ExecTarget;
-  // 挂了供应商时,恢复命令要带的 env 前缀(token 已换成 <你的key> 占位符)。
-  // 存进 sessions.relay_env —— 否则复制出来的命令会走 CLI 自己的官方账号。
-  readonly relayEnvHint?: string;
+  // 「复制到终端接着聊」那条命令要带的 env 前缀,存进 sessions.resumeEnv。两类:
+  //   · 盖掉 CLI 配置文件的那几项(见 shared/src/cli-overrides.ts)—— 不带就退回
+  //     settings.json,手跑那次的压缩行为跟 harness 里不是一回事;
+  //   · 供应商 base_url + key(token 换成 <你的key> 占位符)—— 不带就走 CLI 自己的
+  //     官方账号。
+  readonly resumeEnvHint?: string;
   run(opts: RunOpts): RunHandle;
   // 重启后接管一个**还活着**的 agent 进程：把它的输出流接回本执行器自己的
   // parser。child 是 detached.ts 造的合成 ChildProcess（按 pid+offset 接回来的）。

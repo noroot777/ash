@@ -1,8 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Sliders, X } from "@phosphor-icons/react";
 import type { AgentType } from "@harness/shared";
 import { cliConfigOverrideHints, cliConfigOverridesFor } from "@harness/shared/cli-overrides";
 import { Button } from "../components/ui.tsx";
+import { useDismissable } from "../lib/useDismissable.ts";
+import { useCliHostEnv } from "./useCliHostEnv.ts";
 
 // 「harness 替你写进 CLI 的配置」的编辑入口。这一档配置跟旁边那些(模型、档位、
 // 额外参数)有个本质区别:它**盖掉的是用户自己配置文件里的值**。所以这里的重点
@@ -12,7 +14,11 @@ import { Button } from "../components/ui.tsx";
 // 第二个重点是底下那行 hint:这几个数和它们的实际效果之间隔着一层 CLI 内部算法
 // (填 200k + 80% 到底在多少 token 压?),所以边填边把算出来的结果摆在旁边。
 //
-// 弹层结构与 ProfileArgsControl 一致(共用 .agent-profile-args-popover 那套样式)。
+// 所以行内那颗按钮是**常显的一枚胶囊**(写着当前值,没配就写「未覆盖」),不是缩成图标
+// 再靠 hover / 读屏器才读得到的东西 —— 盖了别人的配置却看不出来,等于没告诉他。
+//
+// 弹层外框复用 ProfileArgsControl 那套 .agent-profile-args-popover 样式;关闭语义走
+// useDismissable(点外面 / Esc / 焦点归还),打开时焦点进第一个输入框。
 
 const fmt = (n: number) => (n >= 1000 ? `${Math.round(n / 1000)}k` : String(n));
 const fmtWith = (n: number, unit?: string) => (unit === "%" ? `${n}%` : fmt(n));
@@ -33,6 +39,9 @@ export function ProfileOverridesControl({
   const specs = useMemo(() => cliConfigOverridesFor(type), [type]);
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState<Record<string, string>>({});
+  const hostEnv = useCliHostEnv();
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const popoverRef = useRef<HTMLDivElement>(null);
 
   const toDraft = useMemo(
     () => (source: Record<string, number>): Record<string, string> =>
@@ -43,6 +52,20 @@ export function ProfileOverridesControl({
   useEffect(() => {
     if (!open) setDraft(toDraft(value));
   }, [open, toDraft, value]);
+
+  const close = () => {
+    setDraft(toDraft(value));
+    setOpen(false);
+  };
+
+  // 点外面 / Esc / 关闭后把焦点还给触发按钮,统一交给这一摞层管(web-next/CLAUDE.md)。
+  useDismissable({ enabled: open, containerRef: popoverRef, restoreFocusRef: triggerRef, onClose: close });
+
+  // 打开后焦点要进弹层:停在触发按钮上的话,键盘用户按 Tab 是往同排别的操作跑,
+  // 而不是进这个 role=dialog 里 —— 弹层等于只对鼠标可用。
+  useEffect(() => {
+    if (open) popoverRef.current?.querySelector("input")?.focus();
+  }, [open]);
 
   if (!specs.length) return null;
 
@@ -64,6 +87,14 @@ export function ProfileOverridesControl({
     }
     parsed[spec.key] = Math.round(n);
   }
+  // 依赖项没配上时这一项**根本不会注入**(cliConfigOverrideEnv 会跳过它),所以不能让
+  // 它存下去:存了会显示成「已覆盖 80%」,而实际行为跟没配一模一样 —— 静默失败。
+  for (const spec of specs) {
+    if (parsed[spec.key] === undefined || !spec.requires) continue;
+    if (parsed[spec.requires] !== undefined) continue;
+    const required = specs.find((candidate) => candidate.key === spec.requires);
+    errors.push(`${spec.label}要配合「${required?.label ?? spec.requires}」一起填才生效`);
+  }
 
   const key = (source: Record<string, number>) =>
     specs.map((spec) => `${spec.key}=${source[spec.key] ?? ""}`).join("&");
@@ -71,13 +102,9 @@ export function ProfileOverridesControl({
 
   const active = specs.filter((spec) => value[spec.key] !== undefined);
   const summary = active.map((spec) => fmtWith(value[spec.key]!, spec.unit)).join(" · ");
+  const shadowed = active.map((spec) => spec.shadows).join("、");
   // hint 跟着草稿走,不是跟着已保存的值走 —— 这行字存在的意义就是「改之前先看看会变成什么」。
-  const hints = cliConfigOverrideHints(type, parsed);
-
-  const close = () => {
-    setDraft(toDraft(value));
-    setOpen(false);
-  };
+  const hints = cliConfigOverrideHints(type, parsed, hostEnv);
 
   const save = async () => {
     if (!dirty) {
@@ -91,29 +118,27 @@ export function ProfileOverridesControl({
     <div className="agent-profile-args-control">
       <button
         type="button"
-        className={`agent-profile-args-summary${summary ? " has-value" : ""}`}
+        ref={triggerRef}
+        className={`agent-profile-overrides-summary${summary ? " has-value" : ""}`}
         disabled={disabled}
         aria-haspopup="dialog"
         aria-expanded={open}
-        aria-label={summary ? `${profileName} 覆盖了 CLI 自己的配置：${summary}` : `编辑 ${profileName} 对 CLI 配置的覆盖`}
+        aria-label={
+          summary
+            ? `${profileName} 覆盖了 ${shadowed}：${summary}`
+            : `编辑 ${profileName} 对 CLI 配置的覆盖`
+        }
         onClick={() => {
           setDraft(toDraft(value));
           setOpen((current) => !current);
         }}
       >
         <Sliders size={12} aria-hidden="true" />
-        <span>{summary || "CLI 配置"}</span>
+        <span>{summary || "未覆盖"}</span>
       </button>
 
       {open && (
-        <div
-          className="agent-profile-args-popover"
-          role="dialog"
-          aria-label={`${profileName} 的 CLI 配置覆盖`}
-          onKeyDown={(event) => {
-            if (event.key === "Escape") close();
-          }}
-        >
+        <div className="agent-profile-args-popover" ref={popoverRef} role="dialog" aria-label={`${profileName} 的 CLI 配置覆盖`}>
           <div className="agent-profile-args-popover-head">
             <div>
               <b>覆盖 CLI 自己的配置</b>

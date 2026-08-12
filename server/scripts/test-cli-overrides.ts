@@ -172,6 +172,44 @@ assert.equal(
   "没配的 profile 不该注入这个变量(注入空串会被 CLI 当成配过)",
 );
 
+// ── ④ harness 自己环境里带着同名变量时,「留空」必须真的是空 ──────────────────
+// spawn 传的是 `{ ...process.env, ...补丁 }`。不显式删,这个变量就会穿过去盖掉 CLI 的
+// settings.json,而设置页还显示「未覆盖」—— 用户没有任何办法在界面上把它清掉。
+process.env[spec.env] = "123456";
+assert.equal(
+  await probeEnvFor("claude-plain"),
+  "<unset>",
+  "父进程带着同名变量时,留空的 profile 要把它从子进程里删掉",
+);
+assert.equal(
+  await probeEnvFor("claude-overridden"),
+  String(spec.max),
+  "配了的 profile 以自己的值为准,不受父进程那份影响",
+);
+delete process.env[spec.env];
+
+// ── ⑤ 「复制到终端接着聊」那条命令也得带上覆盖项 ────────────────────────────
+// 不带的话,用户手跑的那一次退回 settings.json:同一条会话在 harness 里会自动压缩、
+// 自己终端里不会 —— 而命令是从会话详情里原样复制走的,他不会想到还差两个变量。
+const overridden = await resolveExecutorFor({ executorId: "claude-overridden", type: "claude" });
+const hint = overridden.resumeEnvHint ?? "";
+assert.ok(hint.includes(`${spec.env}=${spec.max}`), `resumeEnvHint 要带上覆盖项,实际 ${hint || "(空)"}`);
+assert.ok(
+  overridden.resumeCommand?.(sandbox, "sid-1").includes(`${spec.env}=${spec.max}`),
+  "恢复命令本身要带上那截 env 前缀",
+);
+const plain = await resolveExecutorFor({ executorId: "claude-plain", type: "claude" });
+assert.equal(plain.resumeEnvHint, undefined, "没配覆盖项、也没挂供应商时,前缀该是空的");
+assert.ok(!plain.resumeCommand?.(sandbox, "sid-1").includes(spec.env), "没配就不该凭空多出变量");
+
+// 会话详情读取时是**重算**这条命令的(resumeCommandFor),前缀从库里那列接回来 ——
+// 这条链断了的话上面两条仍然过,但用户在页面上看到的还是不带前缀的命令。
+const { resumeCommandFor } = await import("../src/executors/resume.js");
+assert.ok(
+  resumeCommandFor("claude", "local", sandbox, "sid-1", hint).includes(`${spec.env}=${spec.max}`),
+  "重算时要把持久化的前缀接回去",
+);
+
 rmSync(sandbox, { recursive: true, force: true });
 console.log("test:cli-overrides ok");
 process.exit(0);

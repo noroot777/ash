@@ -55,7 +55,7 @@ export function mountTaskRunRoutes(api: Hono): void {
     agentType: r.agentType as Session["agentType"],
     transcriptPath: sessionTranscriptPath(r.taskId, r.id),
     resumeCommand: r.cliSessionId
-      ? resumeCommandFor(r.agentType, r.target, r.cwd ?? r.worktreePath ?? ".", r.cliSessionId, r.relayEnv)
+      ? resumeCommandFor(r.agentType, r.target, r.cwd ?? r.worktreePath ?? ".", r.cliSessionId, r.resumeEnv)
       : r.resumeCommand,
     ...run,
     usage: sessionUsage(r),

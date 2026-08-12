@@ -31,11 +31,24 @@ export interface CliConfigOverride {
   /** 单独配没用、必须同时配上的那一项(前端据此提示)。 */
   requires?: string;
   /**
-   * 落环境变量前的换算。缺省 = 原样。第二个参数是同一 profile 上的其它覆盖项。
+   * 落环境变量前的换算。缺省 = 原样。第二个参数是同一 profile 上的其它覆盖项,
+   * 第三个是「harness 起 CLI 时它会看到的环境」(见 CliHostEnv)。
    * 返回 null = 这一项在当前组合下不起作用,干脆不注入。
    */
-  toEnv?: (value: number, values: Record<string, number>) => string | null;
+  toEnv?: (value: number, values: Record<string, number>, host: CliHostEnv) => string | null;
 }
+
+/**
+ * harness 起 CLI 时,那个进程会看到的环境事实 —— **只读**,不是配置项。
+ * 前端算不出来(变量在 server 进程里),所以由服务端如实报一份给它,好让设置页
+ * 显示的触发水位和 CLI 真正的行为对得上。
+ */
+export interface CliHostEnv {
+  /** `CLAUDE_CODE_MAX_OUTPUT_TOKENS`;没设 = null(CLI 用模型自己的上限)。 */
+  maxOutputTokens: number | null;
+}
+
+export const NO_CLI_HOST_ENV: Readonly<CliHostEnv> = Object.freeze({ maxOutputTokens: null });
 
 // ── claude 的自动压缩是怎么算的(2.1.220 反编译核对) ──────────────────────────
 // 触发点不是「窗口」本身,中间垫了两层:
@@ -54,6 +67,18 @@ export interface CliConfigOverride {
 const CLAUDE_COMPACT_RESERVE = 20_000;
 const CLAUDE_COMPACT_FLOOR_GAP = 13_000;
 
+/**
+ * 预留给输出的那一段:`min(CLAUDE_CODE_MAX_OUTPUT_TOKENS, 20000)`(`CSe`/`wfo`)。
+ * 现役模型的 max_output 都 ≥ 20k,所以**只有用户把那个变量设到 20k 以下**时它才不是
+ * 20000 —— 但设了就真会变,硬编码 20k 会让页面上写的触发点比实际早 5% 左右。
+ */
+function claudeCompactReserve(host: CliHostEnv): number {
+  const max = host.maxOutputTokens;
+  return typeof max === "number" && Number.isFinite(max) && max > 0
+    ? Math.min(max, CLAUDE_COMPACT_RESERVE)
+    : CLAUDE_COMPACT_RESERVE;
+}
+
 export interface ClaudeCompactionPlan {
   /** 声明给 claude 的窗口。 */
   window: number;
@@ -71,10 +96,13 @@ export interface ClaudeCompactionPlan {
  * 按上面那套算法把用户填的两个数翻译成「实际会在多少 token 压缩」。
  * 前端拿它显示、`toEnv` 拿它落环境变量,一个公式两处用,不会漂。
  */
-export function claudeCompactionPlan(values: Record<string, number>): ClaudeCompactionPlan | null {
+export function claudeCompactionPlan(
+  values: Record<string, number>,
+  host: CliHostEnv = NO_CLI_HOST_ENV,
+): ClaudeCompactionPlan | null {
   const window = values.autoCompactWindow;
   if (typeof window !== "number" || !Number.isFinite(window)) return null;
-  const effective = window - CLAUDE_COMPACT_RESERVE;
+  const effective = window - claudeCompactReserve(host);
   const floor = effective - CLAUDE_COMPACT_FLOOR_GAP;
   const percent = typeof values.autoCompactPercent === "number" && Number.isFinite(values.autoCompactPercent)
     ? values.autoCompactPercent
@@ -119,8 +147,8 @@ const CLAUDE_OVERRIDES: CliConfigOverride[] = [
     requires: "autoCompactWindow",
     // 用户填的是「占窗口的比例」,claude 认的是「占有效窗口(窗口 − 20k)的比例」,
     // 差的就是那层 max_output 预留。这里换算一次,填 80 就真的在 80% 压。
-    toEnv: (_value, values) => {
-      const envPercent = claudeCompactionPlan(values)?.envPercent;
+    toEnv: (_value, values, host) => {
+      const envPercent = claudeCompactionPlan(values, host)?.envPercent;
       return typeof envPercent === "number" ? String(envPercent) : null;
     },
   },
@@ -167,6 +195,7 @@ export function normalizeCliConfigOverrides(
 export function cliConfigOverrideEnv(
   type: AgentType | string,
   values: Record<string, number> | null | undefined,
+  host: CliHostEnv = NO_CLI_HOST_ENV,
 ): Record<string, string> {
   if (!values) return {};
   const out: Record<string, string> = {};
@@ -175,10 +204,46 @@ export function cliConfigOverrideEnv(
     if (typeof value !== "number" || !Number.isFinite(value)) continue;
     // 依赖项没配上的,这一项对 CLI 毫无意义,注进去只会让人以为它在起作用。
     if (spec.requires && typeof values[spec.requires] !== "number") continue;
-    const encoded = spec.toEnv ? spec.toEnv(value, values) : String(value);
+    const encoded = spec.toEnv ? spec.toEnv(value, values, host) : String(value);
     if (encoded !== null) out[spec.env] = encoded;
   }
   return out;
+}
+
+/**
+ * 落成子进程环境的**补丁**:配了的给值,**没配的显式给 `undefined` = 从子进程里删掉**。
+ *
+ * 后半句不是多余的。spawn 传的是 `{ ...process.env, ...补丁 }`,harness 自己启动时若
+ * 环境里已经带着同名变量(用户在 shell 里 export 过、launchd plist 里写过),不删就等于
+ * 每个 profile 都被那份全局值悄悄覆盖 —— 而设置页还老老实实显示「留空 = 跟随 CLI」。
+ * 这一档配置的语义是「只有这里配的才算数」,所以留空必须是真的空。
+ */
+export function cliConfigOverrideEnvPatch(
+  type: AgentType | string,
+  values: Record<string, number> | null | undefined,
+  host: CliHostEnv = NO_CLI_HOST_ENV,
+): Record<string, string | undefined> {
+  const patch: Record<string, string | undefined> = {};
+  for (const spec of cliConfigOverridesFor(type)) patch[spec.env] = undefined;
+  return { ...patch, ...cliConfigOverrideEnv(type, values, host) };
+}
+
+/**
+ * 同一批变量拼成 shell 前缀(`K=v K2=v2 `),给「复制到终端接着聊」那条命令用。
+ * 不带它的话,用户手跑的那一次会退回 CLI 自己的 settings.json —— 压缩行为跟他在
+ * harness 里看到的不是一回事,而这恰恰是他复制命令时最不会想到的差异。
+ *
+ * 只出赋值、不出 `env -u`:harness 起子进程时会把没配的项从环境里删掉(见上面的
+ * 补丁),但用户自己终端里 export 了什么是他自己的事,替他 unset 属于越界。
+ */
+export function cliConfigOverrideEnvPrefix(
+  type: AgentType | string,
+  values: Record<string, number> | null | undefined,
+  host: CliHostEnv = NO_CLI_HOST_ENV,
+): string {
+  return Object.entries(cliConfigOverrideEnv(type, values, host))
+    .map(([key, value]) => `${key}=${value} `)
+    .join("");
 }
 
 const fmtTokens = (n: number) => (n >= 1000 ? `${Math.round(n / 1000)}k` : String(n));
@@ -191,9 +256,10 @@ const fmtTokens = (n: number) => (n >= 1000 ? `${Math.round(n / 1000)}k` : Strin
 export function cliConfigOverrideHints(
   type: AgentType | string,
   values: Record<string, number> | null | undefined,
+  host: CliHostEnv = NO_CLI_HOST_ENV,
 ): string[] {
   if (type !== "claude" || !values) return [];
-  const plan = claudeCompactionPlan(values);
+  const plan = claudeCompactionPlan(values, host);
   if (!plan) {
     return values.autoCompactPercent !== undefined
       ? ["只填百分比不起作用:窗口留空时 claude 会整段跳过自动压缩。"]

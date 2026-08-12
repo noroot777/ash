@@ -3,7 +3,8 @@ import type { ChildProcess } from "node:child_process";
 import { createInterface } from "node:readline";
 import type { AgentEvent, AgentType, ExecTarget, TokenUsage } from "@harness/shared";
 import { guessContextWindow } from "@harness/shared/usage";
-import { cliConfigOverrideEnv } from "@harness/shared/cli-overrides";
+import { cliConfigOverrideEnvPatch } from "@harness/shared/cli-overrides";
+import { cliHostEnv, resumeEnvHint } from "./cli-env.js";
 import type { AgentExecutor, RelayConfig, ResidentHandle, RunHandle, RunOpts } from "./types.js";
 import { spawnForRun, detachedInfo } from "./detached.js";
 import { spawnAgent, resumeFor, resumeInner, spawnErrorMessage, killChild, forceFinishOnExit, redactSecrets } from "./spawn.js";
@@ -17,8 +18,8 @@ import { persistMarkdownImages, persistToolResultImages } from "../agent-attachm
 export class ClaudeExecutor implements AgentExecutor {
   readonly type = "claude" as const;
   readonly label: string;
-  // 供应商的 env 前缀,token 已换成占位符 —— 存进 sessions.relay_env 供恢复命令展示。
-  readonly relayEnvHint?: string;
+  // 恢复命令要带的 env 前缀:覆盖项 + 供应商(token 已换成占位符)。存进 sessions。
+  readonly resumeEnvHint?: string;
   readonly target: ExecTarget;
   private bin: string;
   readonly model?: string;
@@ -36,9 +37,11 @@ export class ClaudeExecutor implements AgentExecutor {
     this.target = opts.target ?? { kind: "local" };
     this.relay = opts.relay;
     this.configOverrides = opts.configOverrides;
-    this.relayEnvHint = this.relay
-      ? `ANTHROPIC_BASE_URL=${relayRoot(this.relay.baseUrl)} ANTHROPIC_AUTH_TOKEN=<你的key> `
-      : undefined;
+    this.resumeEnvHint = resumeEnvHint(
+      this.type,
+      this.configOverrides,
+      this.relay ? `ANTHROPIC_BASE_URL=${relayRoot(this.relay.baseUrl)} ANTHROPIC_AUTH_TOKEN=<你的key> ` : undefined,
+    );
     const where = this.target.kind === "ssh" ? this.target.host : "local";
     this.label = opts.name ?? `claude@${where}${opts.model ? "·" + opts.model : ""}`;
   }
@@ -50,7 +53,7 @@ export class ClaudeExecutor implements AgentExecutor {
   }
 
   resumeCommand(cwd: string, sessionId: string): string {
-    return resumeFor(this.target, cwd, resumeInner.claude(sessionId), this.relayEnvHint ?? "");
+    return resumeFor(this.target, cwd, resumeInner.claude(sessionId), this.resumeEnvHint ?? "");
   }
 
   // 挂了供应商就顶掉 CLI 自己的登录态:BASE_URL 指到供应商根地址(SDK 自己会补 /v1,
@@ -60,13 +63,15 @@ export class ClaudeExecutor implements AgentExecutor {
   // 时 env 的优先级高于 settings(`aY()` 里 env 分支排第一),所以这样既能对 harness
   // 起的进程生效,又不动用户自己那份 ~/.claude/settings.json。哪一项盖掉了谁,声明在
   // shared/src/cli-overrides.ts,并原样显示在执行器设置里。
-  private env(): Record<string, string> | undefined {
-    const env: Record<string, string> = cliConfigOverrideEnv(this.type, this.configOverrides);
+  // 返回值里允许出现 `undefined`:那是「把这个变量从子进程里删掉」,不是「没配」
+  // (见 cliConfigOverrideEnvPatch)。所以这里不能再按 key 数量决定返不返回。
+  private env(): Record<string, string | undefined> {
+    const env: Record<string, string | undefined> = cliConfigOverrideEnvPatch(this.type, this.configOverrides, cliHostEnv());
     if (this.relay) {
       env.ANTHROPIC_BASE_URL = relayRoot(this.relay.baseUrl);
       env.ANTHROPIC_AUTH_TOKEN = this.relay.apiKey;
     }
-    return Object.keys(env).length ? env : undefined;
+    return env;
   }
 
   run(opts: RunOpts): RunHandle {

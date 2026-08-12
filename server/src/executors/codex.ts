@@ -1,7 +1,8 @@
 import type { ChildProcess } from "node:child_process";
 import { createInterface } from "node:readline";
 import type { AgentEvent, ExecTarget, TokenUsage } from "@harness/shared";
-import { cliConfigOverrideEnv } from "@harness/shared/cli-overrides";
+import { cliConfigOverrideEnvPatch } from "@harness/shared/cli-overrides";
+import { cliHostEnv, resumeEnvHint } from "./cli-env.js";
 import type { AgentExecutor, RelayConfig, ResidentHandle, RunHandle, RunOpts } from "./types.js";
 import { openCodexResident } from "./codex-resident.js";
 import { readCodexContext } from "./codex-rollout.js";
@@ -25,8 +26,8 @@ const RELAY_PROVIDER_ID = "harness_relay";
 export class CodexExecutor implements AgentExecutor {
   readonly type = "codex" as const;
   readonly label: string;
-  // 供应商的 env 前缀,token 已换成占位符 —— 存进 sessions.relay_env 供恢复命令展示。
-  readonly relayEnvHint?: string;
+  // 恢复命令要带的 env 前缀:覆盖项 + 供应商(token 已换成占位符)。存进 sessions。
+  readonly resumeEnvHint?: string;
   readonly target: ExecTarget;
   private bin: string;
   readonly model?: string;
@@ -44,7 +45,11 @@ export class CodexExecutor implements AgentExecutor {
     this.target = opts.target ?? { kind: "local" };
     this.relay = opts.relay;
     this.configOverrides = opts.configOverrides;
-    this.relayEnvHint = this.relay ? `${RELAY_ENV_KEY}=<你的key> ` : undefined;
+    this.resumeEnvHint = resumeEnvHint(
+      this.type,
+      this.configOverrides,
+      this.relay ? `${RELAY_ENV_KEY}=<你的key> ` : undefined,
+    );
     const where = this.target.kind === "ssh" ? this.target.host : "local";
     this.label = opts.name ?? `codex@${where}${opts.model ? "·" + opts.model : ""}`;
   }
@@ -52,7 +57,7 @@ export class CodexExecutor implements AgentExecutor {
   resumeCommand(cwd: string, sessionId: string): string {
     // Human-friendly copy command: interactive resume (shows the session + lets
     // you continue). The harness's own headless resume uses `exec resume` in run().
-    return resumeFor(this.target, cwd, resumeInner.codex(sessionId), this.relayEnvHint ?? "");
+    return resumeFor(this.target, cwd, resumeInner.codex(sessionId), this.resumeEnvHint ?? "");
   }
 
   // 挂了供应商就临时注册一个 provider 并切过去(-c 值按 TOML 解析,字符串须带引号)。
@@ -78,10 +83,11 @@ export class CodexExecutor implements AgentExecutor {
 
   // 供应商的 key + 盖过 CLI 自己配置文件的那几项(声明见 shared/src/cli-overrides.ts;
   // codex 目前一项都没声明,这里接住是为了「声明表加一项就生效」这句话是真的)。
-  private env(): Record<string, string> | undefined {
-    const env: Record<string, string> = cliConfigOverrideEnv(this.type, this.configOverrides);
+  // `undefined` 值 = 从子进程环境里删掉那个变量(见 cliConfigOverrideEnvPatch)。
+  private env(): Record<string, string | undefined> {
+    const env: Record<string, string | undefined> = cliConfigOverrideEnvPatch(this.type, this.configOverrides, cliHostEnv());
     if (this.relay) env[RELAY_ENV_KEY] = this.relay.apiKey;
-    return Object.keys(env).length ? env : undefined;
+    return env;
   }
 
   // 一次性 run 与常驻回合共用的参数装配。`-C`/`--json`/`-m`/sandbox 是

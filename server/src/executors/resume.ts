@@ -19,7 +19,7 @@ export function resumeCommandFor(
   targetStr: string | null | undefined,
   cwd: string,
   cliSessionId: string,
-  relayEnv?: string | null,
+  resumeEnv?: string | null,
 ): string {
   const spec = CLI_SPEC_BY_KEY[agentType as AgentType];
   if (!spec) return `# 未知的执行器类型 ${agentType}（sessionId ${cliSessionId || "未记录"} 仅供追溯）`;
@@ -28,5 +28,5 @@ export function resumeCommandFor(
   const target: ExecTarget = targetStr?.startsWith("ssh:")
     ? { kind: "ssh", host: targetStr.slice(4) }
     : { kind: "local" };
-  return resumeFor(target, cwd, inner, relayEnv ?? "");
+  return resumeFor(target, cwd, inner, resumeEnv ?? "");
 }

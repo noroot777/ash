@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { AgentExecutorProfile, LlmProvider } from "@harness/shared";
+import { hasCliConfigOverrides } from "@harness/shared/cli-overrides";
 import { Star, Trash } from "@phosphor-icons/react";
 import { Dropdown, type DropdownOption } from "../components/Dropdown.tsx";
 import { EffortPicker } from "../components/EffortPicker.tsx";
@@ -38,7 +39,6 @@ export function AgentProfileRow({
   const providerOptions = providersForAgent(profile.type, providers);
   const provider = providers.find((candidate) => candidate.id === profile.providerId);
   const protocol = providerProtocolForAgent(profile.type);
-  const overridden = Object.keys(profile.configOverrides ?? {}).length > 0;
 
   // 供应商候选：官方账号 + 本类型协议匹配的供应商；当前选的那家如果协议已经不匹配
   // （改过供应商协议），仍要留在列表里，否则下拉显示空白，看着像「没设过」。
@@ -199,10 +199,11 @@ export function AgentProfileRow({
             onChange={(speed) => void patch({ speed: speed as "standard" | "fast" })}
           />
         </div>
-        <div className="agent-profile-actions">
-          {/* 覆盖了 CLI 自身配置的 profile **不能**藏进 hover：这一档设置盖掉的是用户
-              自己配置文件里的值，不常显就等于「明明改了别人的配置却看不出来」。 */}
-          <div className={overridden ? undefined : "agent-profile-hover-action"}>
+        {/* 覆盖 CLI 自身配置的那一档**自己占一列**，不进右边那堆 hover 才现身的图标：
+            它盖掉的是用户自己配置文件里的值，看不见就等于「明明改了别人的配置却没说」。
+            表头那一格由 AgentProfilesSection 按同一个判据渲染，两边必须同进同出。 */}
+        {hasCliConfigOverrides(profile.type) && (
+          <div className="agent-profile-cell">
             <ProfileOverridesControl
               profileName={profile.name}
               type={profile.type}
@@ -215,6 +216,8 @@ export function AgentProfileRow({
               }}
             />
           </div>
+        )}
+        <div className="agent-profile-actions">
           <div className="agent-profile-hover-action">
             <ProfileArgsControl
               profileName={profile.name}

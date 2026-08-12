@@ -40,6 +40,38 @@ const isScannable = (type: string): type is Scannable =>
 // 其余(fable-5、经 anthropic 协议中转的 kimi/glm…)窗口来源落到 "auto",自动压缩整段跳过。
 const BUILTIN_SLASH_ALLOW = new Set(["review", "security-review", "compact"]);
 
+// 白名单里的这几个不是同一种东西,发的时候要分开对待:
+//   · review / security-review 是**真 skill** —— 由模型去读 SKILL.md 执行,需要前言点名
+//   · compact 是 **CLI 自己的原生命令** —— 由 CLI 在本地拦下,压根不进模型
+// 混为一谈的代价是后者白烧一轮:模型去调 `Skill({skill:"compact"})`,CLI 回一句
+// 「compact is a built-in CLI command, not a skill」,压缩根本没发生。
+//
+// 原生命令的边界实测(claude 2.1.220,2026-08-12):
+//   `/compact` 独占一条            → status:compacting,num_turns=0
+//   `/compact` 后面再跟正文        → 照样 compacting,**后面那段被整条丢弃**
+//   前面垫一行字再 `/compact`      → 退化成普通模型请求,不压缩
+// 于是这类命令有两条硬约束,缺一条就等于没做:
+//   ① 不加【已选择 skill】前言(下面 withSkillInvocation 直接放行)
+//   ② 它必须**独占整条 prompt**,harness 的前言和完成协议提醒一律让位
+//      (orchestrator 组装 prompt 时按 nativeCliCommand 分叉)
+// 又因为整条消息不进模型,这一轮不会有任何产出、也不可能交卷 —— 调用方还得把它
+// 当**旁路回合**,否则一个 done 的任务会被这一下压缩打成 failed。
+const NATIVE_COMMANDS: Partial<Record<AgentType, Set<string>>> = {
+  claude: new Set(["compact"]),
+};
+
+const isNativeCommandName = (agentType: string, name: string) =>
+  !!NATIVE_COMMANDS[agentType as AgentType]?.has(name);
+
+/**
+ * 这条消息是不是「CLI 原生命令」——即以某个原生命令打头(后面可以带参数,如
+ * `/compact 重点保留 X`)。是的话返回命令名,调用方必须原样发出去,并按旁路回合处理。
+ */
+export function nativeCliCommand(agentType: string, text: string): string | null {
+  const name = /^\/([a-zA-Z][\w-]*)(?:\s|$)/.exec(text.trim())?.[1];
+  return name && isNativeCommandName(agentType, name) ? name : null;
+}
+
 interface Root {
   dir: string;
   source: SkillSource;
@@ -343,6 +375,8 @@ export function withSkillInvocation(opts: {
   remote?: boolean;
 }): string {
   if (!opts.text.includes("/")) return opts.text;
+  // 原生命令由 CLI 自己拦下执行,前面垫一个字就不生效 —— 原样放行(见 NATIVE_COMMANDS)。
+  if (nativeCliCommand(opts.agentType, opts.text)) return opts.text;
   const neighbor = /[\p{L}\p{N}_./:\-]/u;
   const mentionAt = (command: string) => {
     let from = 0;
@@ -357,6 +391,8 @@ export function withSkillInvocation(opts: {
     return -1;
   };
   const selected = listSkills(opts).skills
+    // 原生命令不是 skill:出现在正文中间时它对 CLI 也不生效,更不该写进前言让模型去「执行」。
+    .filter((skill) => !isNativeCommandName(opts.agentType, skill.name))
     .map((skill) => ({ skill, at: mentionAt(skill.command) }))
     .filter((hit) => hit.at >= 0)
     .sort((a, b) => a.at - b.at)

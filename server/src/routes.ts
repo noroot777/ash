@@ -23,6 +23,7 @@ import { id, now } from "./util.js";
 import { listModels } from "./llm.js";
 import { mountQueueRoutes } from "./queues.js";
 import { detectKnownClis, detectLocalAgents } from "./detect.js";
+import { cliHostEnv } from "./executors/cli-env.js";
 import { searchAll } from "./search.js";
 import { projectHealthLight, projectHealthFull, tidyRepoPath, repoKey, listBranches } from "./git.js";
 import { getGitOverview } from "./git-overview.js";
@@ -183,6 +184,10 @@ api.get("/agents", async (c) => c.json((await db.select().from(agents)).map(toAg
 api.get("/agents/detect", async (c) => c.json(await detectLocalAgents()));
 // 已知 CLI 目录:含上面那几个可执行器(带 type),外加一批只做「装没装」展示的。
 api.get("/agents/catalog", async (c) => c.json(await detectKnownClis()));
+// harness 起 CLI 时它会看到的环境事实(只读,不是配置项)。设置页要拿它换算压缩触发点:
+// 有效窗口 = 窗口 − min(CLAUDE_CODE_MAX_OUTPUT_TOKENS, 20000),而那个变量在 server 进程里,
+// 前端算不出来 —— 不报过去的话,页面上写的水位和 CLI 的实际行为会对不上。
+api.get("/agents/cli-env", (c) => c.json(cliHostEnv()));
 
 // `/技能` 的三个端点在 `skill-routes.ts`(cwd 取项目仓库根、ssh 执行器不拿本机盘冒充)。
 mountSkillRoutes(api);

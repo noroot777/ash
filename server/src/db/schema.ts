@@ -284,9 +284,9 @@ export const sessions = sqliteTable("sessions", {
   cwd: text("cwd"),
   cliSessionId: text("cli_session_id"),
   resumeCommand: text("resume_command"),
-  // 本次运行挂的供应商在恢复命令里要带的 env 前缀(token 已是占位符)。
-  // null = 走 CLI 官方账号。只用于展示,不含真 key。
-  relayEnv: text("relay_env"),
+  // 恢复命令要带的 env 前缀:配置覆盖项 + 供应商(token 已是占位符)。null = 两样都没有。
+  // 只用于展示,不含真 key。列名 relay_env 是历史遗留 —— 建的时候只装供应商那一截。
+  resumeEnv: text("relay_env"),
   commandLine: text("command_line"),
   startedAt: text("started_at").notNull(),
   endedAt: text("ended_at"), // when this run finished (set with exit_status)
