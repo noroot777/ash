@@ -27,7 +27,7 @@ import { peerNoticeFor } from "./peer-context.js";
 import { recordTurnBaseline } from "./turn-baseline.js";
 import { recordTurnStart } from "./turn-output.js";
 import { railStalledAtRun } from "./workflows.js";
-import { freeReviewReminder, freeReviewResumeOptions } from "./free-workflow.js";
+import { freeReviewReminder } from "./free-workflow.js";
 import { withSkillInvocation } from "./skills.js";
 import { initialTaskObjective, invitedTaskBrief } from "./invited-task-brief.js";
 import { withGlobalBrowserPolicy } from "./browser-verification-policy.js";
@@ -51,7 +51,7 @@ const COLLAB_INVITE =
 // its existing CLI session with this nudge instead of re-running from scratch —
 // the agent already holds the full prior context via --resume, so no AUTONOMY
 // preamble.
-const RESUME_PROMPT =
+export const RESUME_PROMPT =
   "继续：你上一次的运行被中断了（可能是服务重启、被手动停止或所在分组被暂停）。请从中断处接着完成这个任务，先简要说明你已做到哪一步、还差什么，然后继续推进直到完成。";
 // Backend-initiated continue leaves this trace in the timeline (distinct from a
 // user reply), shown identically live (SSE) and on reload (.md).
@@ -335,47 +335,6 @@ export async function runTask(taskId: string): Promise<void> {
 
 
 
-// Decide between a fresh run and a resume when (re)starting a single task. A task
-// that was interrupted keeps a session row with a cliSessionId (server restart
-// leaves exitStatus null; manual stop / non-zero exit keep the id too) — resume
-// THAT session so the agent continues from where it stopped, like the user typing
-// 继续. A never-started task (no resumable session) runs fresh. paused 任务带着
-// agent 写下的 resumePrompt 进来 —— 把它当作 user 输入回灌给 CLI 会话再清空，所以
-// 不会反复触发同一段 prompt。Tail-returns the delegate so callers (esp. the
-// scheduler) keep chaining on the same promise.
-export async function resumeOrRunTask(
-  taskId: string,
-  opts: { reason?: ResumeReason } = {},
-): Promise<void> {
-  const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
-  if (!task || task.mode !== "single") return runTask(taskId); // duets/missing → unchanged path
-  // 检查点续跑：resumePrompt 当 user 消息回灌同一会话，先清空避免再次 settle 时又认成
-  // paused（调度器会先标 queued，不能只看 paused）。reviewing run 挂着 = 中断的是审查
-  // 回合：续跑必须带回 reviewer 身份与配置，否则以 single 恢复实现会话，审查链收不了尾。
-  if (task.resumePrompt) {
-    const rp = task.resumePrompt;
-    const reviewerRoute = await freeReviewResumeOptions(taskId);
-    await db.update(tasks).set({ resumePrompt: null, updatedAt: now() }).where(eq(tasks.id, taskId));
-    const started = await continueTask(taskId, rp, { system: opts.reason ?? "run", ...(reviewerRoute ?? {}) });
-    if (!started) {
-      // 回合被别人抢了（典型：上一回合的 turn 还没 release）：checkpoint 指令一个字都没
-      // 送出去，必须放回原位等下一次触发——清了不回写就是永久丢失（审查实测复现）。
-      await db.update(tasks).set({ resumePrompt: rp, updatedAt: now() }).where(eq(tasks.id, taskId));
-    }
-    return;
-  }
-  const agent = (task.agentType as AgentType) ?? "claude";
-  const prev = (await db.select().from(sessions).where(eq(sessions.taskId, taskId)))
-    .filter((s) => s.agentType === agent)
-    .sort((a, b) => b.startedAt.localeCompare(a.startedAt))
-    .at(0);
-  if (prev?.cliSessionId) {
-    const reviewerRoute = await freeReviewResumeOptions(taskId);
-    await continueTask(taskId, RESUME_PROMPT, { system: opts.reason ?? "run", ...(reviewerRoute ?? {}) });
-    return;
-  }
-  return runTask(taskId); // no resumable session → fresh
-}
 
 // Continue a single task. By default this resumes the task's own agent (answer
 // an agent that stopped to ask). With opts.agent it targets another agent: if
@@ -424,15 +383,19 @@ export async function continueTask(
     throwOnTeamUnavailable?: boolean;
   } = {},
 ): Promise<boolean> {
+  // 验收(含尾段的发布命令)正在进行:**必须排在 reopen 摘牌之前**——摘牌会清 stage、
+  // 合并快照与尾段进度,即使消息最终按「未投递」排队,验收事实也已经先被破坏了(审查
+  // 实测:尾段期间一条回复把 acceptedTailPending 清掉,崩溃后发布永久漏跑)。
+  if (isAcceptingTask(taskId)) return false;
   // 已验收的任务收到真人消息 = 旧验收不再覆盖新增改动,stage 清回「进行中」。
   // 只认真人消息:带 opts.system 的 retry / 手点运行 / 队列推进 / 上游唤醒不算,跟下面
   // followUpFrom 用的是同一条口径。放在最前面,确保 single/team/duet 走同一规则。
   //
   // 摘牌必须**立刻**发生(界面上任务当场从「已验收」挪回进行中),可这时还不知道这一轮
-  // 会不会真改东西 —— 纯询问也照摘。所以接住摘掉的是哪块牌子交给基线快照:结算发现
-  // 工作目录一个字节没变,就把它原样挂回去(turn-baseline.ts)。team 走下面的 stdin 分支、
+  // 会不会真改东西 —— 纯询问也照摘。所以接住摘掉的完整快照交给基线:结算发现工作目录
+  // 一个字节没变,就整套原样挂回去(turn-baseline.ts)。team 走下面的 stdin 分支、
   // 不拍照,维持原样(调度台本来就不走验收链)。
-  const reopenedStage = opts.system ? null : await reopenAcceptedStage(taskId);
+  const reopened = opts.system ? null : await reopenAcceptedStage(taskId);
   // 团队任务(§Team):插话直接写进常驻调度台的 stdin —— 即时、同一会话、用户侧
   // 感觉不断线。不占这里的单飞锁(那把锁是给「一次运行 = 一个回合」的单任务用的,
   // 调度台的一次运行是整段常驻)。于是 /reply、/answer、@提及全都自动生效。
@@ -447,9 +410,6 @@ export async function continueTask(
     }
     return true;
   }
-  // 验收(含尾段的发布命令)正在进行:这一轮消息会 reopen 摘牌、起新 agent 与发布命令
-  // 并发操作同一工作区(审查实测复现)。按「未投递」返回,调用方会把消息排队等验收结束。
-  if (isAcceptingTask(taskId)) return false;
   // 抢不到 = 这个任务此刻正跑着别的回合,这一句话没送出去。调用方必须知道(见函数注释)。
   const sessionRole = opts.sessionRole ?? "single";
   if (!claimTurn(taskId, sessionRole)) return false;
@@ -542,7 +502,7 @@ export async function continueTask(
     // 这一轮要是一个字节都没改，刚才清掉的原样放回 —— 纯询问不该重置任何东西。
     // 只给真人消息拍 —— 系统续跑、队列推进、验证打回后叫 agent 修，那些轮次改代码是
     // 本分，清账反而打断正在跑的流程。详见 turn-baseline.ts。
-    if (!opts.system && !sideTurn) await recordTurnBaseline(taskId, cwd, freshWorkspace, reopenedStage);
+    if (!opts.system && !sideTurn) await recordTurnBaseline(taskId, cwd, freshWorkspace, reopened);
     // 「有产出却没交卷」的探针跟上面那张照片是两回事:它只管通知怎么措辞,所以**每一轮都记**
     // (系统续跑、队列推进的回合同样会漏交卷)。详见 turn-output.ts。
     await recordTurnStart(taskId, cwd);

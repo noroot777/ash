@@ -15,7 +15,9 @@ export function FreeWorkflowToolbar({ task, notify }: { task: Task; notify: (mes
   const view = freeReviewView(free.state, task);
   const { latestRun, reviewing, stoppedRun, taskBusy, reservationArmed, repairing, stale } = view;
   const taskReady = task.status !== "backlog";
-  const locked = task.stage === "accepted" || task.stage === "merged" || task.archived;
+  // 等待答复/续跑期间派审与修复后端必拒（409），按钮同步禁用，不给假按钮。
+  const waiting = !!task.question || !!task.resumePrompt;
+  const locked = task.stage === "accepted" || task.stage === "merged" || task.archived || waiting;
   const reservationMode = taskBusy || reservationArmed;
   const reviewLabel = reviewing
     ? "审查中"

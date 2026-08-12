@@ -46,35 +46,69 @@ export async function clearTaskStage(taskId: string, note: string): Promise<void
 // 的外部协议入口(调度台没有实现/验证语义),挡的不是这条内部规则;广播必须保留,
 // 否则前端分组要等下次全量拉取才动。
 //
-// **返回摘掉的是哪块牌子**（没摘则 null）：摘牌发生在回合最前面，那时还不知道这一轮
-// 会不会真产出改动。调用方要能在结算时发现「白摘了」并原样挂回去（见 turn-baseline.ts
-// 与下面的 restoreTaskStage）。旧调用方只判真假的话语义不变 —— 摘到了就是真值。
-export async function reopenAcceptedStage(taskId: string): Promise<"accepted" | "merged" | null> {
-  const t = (await db.select({ stage: tasks.stage }).from(tasks).where(eq(tasks.id, taskId))).at(0);
+// **返回摘掉的完整快照**（没摘则 null）：摘牌发生在回合最前面，那时还不知道这一轮
+// 会不会真产出改动。stage 之外，合并快照三列与尾段进度也一起摘——它们同属上一验收
+// 生命周期。调用方要能在结算时发现「白摘了」并**整套**原样挂回（见 turn-baseline.ts
+// 与下面的 restoreTaskStage）；只挂回 stage 会留下「界面显示已验收、结构化快照却空了」
+// 的组合，下一次验收会按当时 checkout 重新解析目标（审查实测：同一任务被合进两个分支）。
+export type AcceptedSnapshot = {
+  target: string | null;
+  base: string | null;
+  merge: string | null;
+  tailPending: boolean;
+};
+export type ReopenedAcceptance = { stage: "accepted" | "merged"; snapshot: AcceptedSnapshot };
+
+export async function reopenAcceptedStage(taskId: string): Promise<ReopenedAcceptance | null> {
+  const t = (await db.select({
+    stage: tasks.stage,
+    target: tasks.acceptedTargetBranch,
+    base: tasks.acceptedBaseCommit,
+    merge: tasks.acceptedMergeCommit,
+    tailPending: tasks.acceptedTailPending,
+  }).from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!t || (t.stage !== "accepted" && t.stage !== "merged")) return null;
   // 摘牌 = 开启新的验收生命周期：上一周期的合并快照一并清空。留着的话，「本周期已锁定
   // 目标」的判定（task-accept 的 pre-merge 持久化）会把新验收错误冻结到旧目标，崩溃
-  // 重试还会复用旧区间（审查实测复现）。上一周期的合并事实在 git 历史与时间线里都有。
+  // 重试还会复用旧区间。上一周期的合并事实在 git 历史与时间线里都有。
   await db.update(tasks).set({
     acceptedTargetBranch: null, acceptedBaseCommit: null, acceptedMergeCommit: null,
     acceptedTailPending: false, updatedAt: now(),
   }).where(eq(tasks.id, taskId));
   await clearTaskStage(taskId, "任务又被唤醒，验收阶段清回进行中（完成后重新验收即可再次翻篇）");
-  return t.stage;
+  return {
+    stage: t.stage,
+    snapshot: { target: t.target, base: t.base, merge: t.merge, tailPending: t.tailPending },
+  };
 }
 
 /**
- * 把 `reopenAcceptedStage` 摘掉的牌子原样挂回去，与 clearTaskStage 对称（同样自带 note
- * 和广播）。用在「这一轮结算下来工作目录一个字节没变」——用户只是问了句话，摘牌是白摘的。
+ * 把 `reopenAcceptedStage` 摘掉的牌子**连同合并快照**原样挂回去，与 clearTaskStage 对称
+ * （同样自带 note 和广播）。用在「这一轮结算下来工作目录一个字节没变」——用户只是问了
+ * 句话，摘牌是白摘的。
  *
  * **只在牌子位还空着时放回**：这一轮 agent 自己上报过新阶段（report_stage）的话，那是更
  * 新的结论，不能被一张旧牌子盖掉。
  */
-export async function restoreTaskStage(taskId: string, stage: TaskStage, note: string): Promise<boolean> {
+export async function restoreTaskStage(
+  taskId: string,
+  stage: TaskStage,
+  note: string,
+  snapshot?: AcceptedSnapshot | null,
+): Promise<boolean> {
   const t = (await db.select({ stage: tasks.stage }).from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!t || t.stage) return false;
   const updatedAt = now();
-  await db.update(tasks).set({ stage, updatedAt }).where(eq(tasks.id, taskId));
+  await db.update(tasks).set({
+    stage,
+    ...(snapshot ? {
+      acceptedTargetBranch: snapshot.target,
+      acceptedBaseCommit: snapshot.base,
+      acceptedMergeCommit: snapshot.merge,
+      acceptedTailPending: snapshot.tailPending,
+    } : {}),
+    updatedAt,
+  }).where(eq(tasks.id, taskId));
   bus.publish({ type: "task.stage", taskId, stage, updatedAt });
   await appendTaskTimeline(taskId, note);
   return true;

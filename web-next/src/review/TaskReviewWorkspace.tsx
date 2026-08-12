@@ -69,23 +69,27 @@ export function TaskReviewWorkspace({
       ? freeReviewBlockingLabel(activeFreeReview)
       : task.stage !== "accepted" && task.stage !== "merged" && !freeTerminal
         ? "任务尚未结束"
-        : !free.state
-            ? (free.error ? "审查状态未知" : "读取审查状态")
+        : free.error
+          ? "审查状态未知"
+          : !free.state
+            ? "读取审查状态"
             : null;
   // 非阻塞警示：验收是用户主权，但「最后一轮没过 / 链异常断了 / 通过后代码又变了 /
   // 新鲜度无从判断」必须摆在明面上。失败向着「不确定」开，不向「没问题」开。
   const freeView = task.workflowMode === "free" ? freeReviewView(free.state, task) : null;
   const acceptanceWarning = !freeView || task.stage === "accepted"
     ? null
-    : freeView.stoppedRun
-      ? `最后一轮审查未通过（第 ${freeView.stoppedRun.currentRound} 轮）——验收合并即表示你接受该风险`
-      : freeView.failedRun
-        ? "最近一条审查链异常停止，没有产出有效结论——建议再派一轮审查后验收"
-        : freeView.stale
-          ? "审查通过后代码又有变化（新提交或未提交改动），结论可能已过期——可先「审查新改动」再验收"
-          : freeView.freshness === "unknown"
-            ? "无法确认审查结论对应当前代码（缺少审查基准或工作区不可读）——请自行核对 diff 后再验收"
-            : null;
+    : freeView.stoppedRun && (freeView.stale || freeView.freshness === "unknown")
+      ? "上一份未通过报告针对的是旧版代码，已过期；当前版本没有有效审查结论——建议再派一轮审查后验收"
+      : freeView.stoppedRun
+        ? `最后一轮审查未通过（第 ${freeView.stoppedRun.currentRound} 轮）——验收合并即表示你接受该风险`
+        : freeView.failedRun
+          ? "最近一条审查链异常停止，没有产出有效结论——建议再派一轮审查后验收"
+          : freeView.stale
+            ? "审查通过后代码又有变化（新提交或未提交改动），结论可能已过期——可先「审查新改动」再验收"
+            : freeView.freshness === "unknown"
+              ? "无法确认审查结论对应当前代码（缺少审查基准或工作区不可读）——请自行核对 diff 后再验收"
+              : null;
 
   useEffect(() => {
     let alive = true;

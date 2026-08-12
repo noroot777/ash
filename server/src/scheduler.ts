@@ -4,7 +4,7 @@ import { db } from "./db/index.js";
 import { tasks, groups, queueItems } from "./db/schema.js";
 import { setTaskStatus } from "./status.js";
 import { stopTask } from "./runs.js";
-import { resumeOrRunTask } from "./orchestrator.js";
+import { resumeOrRunTask } from "./task-resume.js";
 
 const MAX_PARALLEL = 4;
 

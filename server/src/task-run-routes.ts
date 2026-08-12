@@ -29,7 +29,8 @@ import { projects, queueItems, schedules, scheduledMessages, sessions, tasks } f
 import { resumeDuet, resumeAtGate, runDuet } from "./duet/index.js";
 import { resolveGate } from "./duet/gates.js";
 import { taskCommits } from "./git.js";
-import { continueTask, resumeOrRunTask, runTask } from "./orchestrator.js";
+import { continueTask, runTask } from "./orchestrator.js";
+import { resumeOrRunTask } from "./task-resume.js";
 import { RUNS_DIR } from "./paths.js";
 import { enqueueMessage } from "./pending-messages.js";
 import { isOvertaken, queueBlockers, repackQueue, tailOrder } from "./queues.js";

@@ -98,7 +98,21 @@ export async function workspaceStateOf(
   return { head, dirty };
 }
 
+// 快照必须与版本**一致**：读取分好几批（task/state/runs/rounds/Git），读取期间修订号变了
+// 说明快照可能新旧混杂——重读，直到读取前后修订号一致（上限 3 次，兜底返回**读取前**的
+// 小版本：宁可被更新的响应覆盖，不能拿旧内容配大版本反压新状态）。
 export async function freeWorkflowState(taskId: string): Promise<FreeWorkflowApiState> {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const before = revisionOf(taskId);
+    const snapshot = await readFreeWorkflowState(taskId);
+    if (revisionOf(taskId) === snapshot.stateVersion && snapshot.stateVersion >= before) return snapshot;
+  }
+  const before = revisionOf(taskId);
+  const snapshot = await readFreeWorkflowState(taskId);
+  return { ...snapshot, stateVersion: Math.min(before, snapshot.stateVersion) };
+}
+
+async function readFreeWorkflowState(taskId: string): Promise<FreeWorkflowApiState> {
 
   const [task, state, runs, profileRows, eventRows] = await Promise.all([
     db.select().from(tasks).where(eq(tasks.id, taskId)).then((rows) => rows.at(0)),

@@ -28,7 +28,7 @@ import { recordFreePreviewEvent } from "./free-workflow-events.js";
 import { releaseFreeWorkflowAction, tryAcquireFreeWorkflowAction } from "./free-workflow-lock.js";
 import { freeReviewFile, freeReviewReportPath, readFreeReviewReport } from "./free-review-files.js";
 import { freeWorkflowState, workspaceStateOf, type FreeWorkflowApiState } from "./free-workflow-state.js";
-import { continueWhenIdle, isTurnClaimed, turnRole, whenTurnIdle } from "./runs.js";
+import { claimTurn, continueWhenIdle, isTurnClaimed, releaseTurn, turnRole, whenTurnIdle } from "./runs.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { taskWorkspace } from "./task-workspace.js";
 import { headCommit } from "./git.js";
@@ -435,7 +435,11 @@ export async function handleFreeWorkflowSettlement(
   return true;
 }
 
-async function startFreeReview(taskId: string, input: FreeReviewDispatchInput): Promise<FreeWorkflowApiState> {
+async function startFreeReview(
+  taskId: string,
+  input: FreeReviewDispatchInput,
+  opts: { holdTurn?: boolean } = {},
+): Promise<FreeWorkflowApiState> {
   const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!task) throw new Error("任务不存在");
   if (task.mode !== "single" || task.parentId || task.reviewOf) throw new Error("自由工作流只适用于普通单任务");
@@ -447,6 +451,16 @@ async function startFreeReview(taskId: string, input: FreeReviewDispatchInput): 
   // 答复」的正常态，带着旧字段开审会让新审查链永远收不了尾（审查实测复现）。
   if (task.question || task.resumePrompt) throw new Error("任务正等待答复或续跑，处理后再派审");
   assertBeforeAcceptance(task);
+  // HTTP 派审必须与普通回合**原子互斥**：从校验到写入 reviewing run 的整段占住 turn
+  // （占位身份 dispatch，不冒充 reviewer——此刻还没有审查回合）。只查一次 isTurnClaimed
+  // 是 TOCTOU：检查后普通回合仍能 claim 成功，两边同时启动（审查实测五连中）。审查
+  // 投递（whenTurnIdle）在自己占着 turn 时排队，finally 释放后自然开跑。
+  // 结算内部的派审（预约消费）不走这里：那时收尾回合正占着 turn，天然互斥。
+  const holdingTurn = opts.holdTurn === true;
+  if (holdingTurn && !claimTurn(taskId, "dispatch")) {
+    throw new Error("任务回合正在进行，结束后再派审");
+  }
+  try {
   if (!tryAcquireFreeWorkflowAction(taskId)) throw new Error("当前已有自由工作流操作正在进行");
   try {
     if (await reviewingRun(taskId)) throw new Error("审查回合正在进行，结束后再派审");
@@ -486,6 +500,9 @@ async function startFreeReview(taskId: string, input: FreeReviewDispatchInput): 
     return freeWorkflowState(taskId);
   } finally {
     releaseFreeWorkflowAction(taskId);
+  }
+  } finally {
+    if (holdingTurn) releaseTurn(taskId);
   }
 }
 
@@ -608,15 +625,9 @@ export function mountFreeWorkflowRoutes(api: Hono): void {
 
   api.post("/tasks/:id/free-workflow/review", async (c) => {
     try {
-      // 先取完 body 再查 turn：body 可以是慢流，先查后读会留 TOCTOU 窗口（读 body 期间
-      // 回合被 claim，检查已过期）。turn 锁只拦**外部请求**——结算内部的预约派审发生在
-      // 回合收尾期（turn 占着），那条路不走这里，审查消息经 whenTurnIdle 排队是安全的。
-      // 检查过后仍可能被并发 claim，兜底在结算按 role 分流：普通回合不会碰 reviewing run。
       const input = await c.req.json<FreeReviewDispatchInput>();
-      if (isTurnClaimed(c.req.param("id"))) {
-        return c.json({ error: "任务回合正在进行（状态尚未落库），结束后再派审" }, 409);
-      }
-      return c.json(await startFreeReview(c.req.param("id"), input), 201);
+      // 原子互斥在 startFreeReview 内做（holdTurn 占住整段），不靠这里的一次性检查。
+      return c.json(await startFreeReview(c.req.param("id"), input, { holdTurn: true }), 201);
     } catch (error) {
       return c.json({ error: error instanceof Error ? error.message : String(error) }, 409);
     }

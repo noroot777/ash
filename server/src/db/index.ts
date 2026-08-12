@@ -336,6 +336,7 @@ async function migrateFreeReviewStatuses(): Promise<void> {
     await client.execute(
       `UPDATE scheduled_messages SET session_role='reviewer'
        WHERE status='pending' AND session_role IS NULL
+         AND mode='queued' AND text LIKE '【答复】%'
          AND task_id IN (SELECT task_id FROM free_review_runs WHERE status='reviewing')`,
     );
     // 已验收自由任务的遗留预约不自愈会变幽灵审查。

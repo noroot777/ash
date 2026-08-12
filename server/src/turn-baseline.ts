@@ -59,7 +59,7 @@ import { firstAnchor } from "@harness/shared/workflow-policy";
 import { db } from "./db/index.js";
 import { projects, tasks } from "./db/schema.js";
 import { RUNS_DIR } from "./paths.js";
-import { clearTaskStage, restoreTaskStage } from "./task-stage.js";
+import { clearTaskStage, restoreTaskStage, type AcceptedSnapshot, type ReopenedAcceptance } from "./task-stage.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { now } from "./util.js";
 import { setWorkflowAt } from "./workflow-advance.js";
@@ -79,6 +79,11 @@ interface TurnBaseline {
    * 可那时还不知道这一轮会不会真改东西；照片一样就说明白摘了，结算时按这个值挂回去。
    */
   stage?: "accepted" | "merged" | null;
+  /**
+   * 与 stage 同批摘走的合并快照（目标分支 + 合并区间 + 尾段进度）。纯询问挂回时必须
+   * 整套恢复；字段缺失 = 旧版基线，只挂回 stage（旧行为）。
+   */
+  acceptedSnapshot?: AcceptedSnapshot | null;
   /**
    * 回合开头清掉的账本原值，照片一样时原样放回。三种取值要分清：
    *   `LedgerSnapshot` → 开头清过账，结算时按它恢复
@@ -140,14 +145,15 @@ export async function recordTurnBaseline(
   taskId: string,
   cwd: string,
   fresh: boolean,
-  reopenedStage: "accepted" | "merged" | null = null,
+  reopened: ReopenedAcceptance | null = null,
 ): Promise<void> {
   try {
     const snapshot: TurnBaseline = {
       cwd,
       fingerprint: await fingerprint(cwd),
       fresh,
-      stage: reopenedStage,
+      stage: reopened?.stage ?? null,
+      acceptedSnapshot: reopened?.snapshot ?? null,
       ledger: await resetWorkflowLedger(taskId),
       at: now(),
     };
@@ -325,7 +331,12 @@ export async function reconcileTurnBaseline(taskId: string, confirmedDone: boole
     // `restoreTaskStage` 只在牌子位还空着时放 —— 这一轮 agent 自报过新阶段的话那是更新的
     // 结论，不能被旧牌子盖掉；那种情况下退回只写一行不带阶段的说明。
     const stageBack = base.stage ?? base.ledger?.stage ?? null;
-    const staged = stageBack ? await restoreTaskStage(taskId, stageBack, restoreStageNote(stageBack)) : false;
+    // reopen 摘走的不只是牌子：合并快照三列与尾段进度同属上一验收生命周期，纯询问的
+    // 挂回必须**整套**恢复——只挂回 stage 会留下「界面显示已验收、结构化快照却空了」，
+    // 下一次验收按当时 checkout 重新解析目标（审查实测：同一任务被合进两个分支）。
+    const staged = stageBack
+      ? await restoreTaskStage(taskId, stageBack, restoreStageNote(stageBack), base.acceptedSnapshot ?? null)
+      : false;
     if (!staged && base.ledger) await appendTaskTimeline(taskId, RESTORE_NOTE);
     if (base.fresh) await discardEmptyShell(taskId);
   } catch (error) {

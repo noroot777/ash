@@ -370,15 +370,25 @@ api.delete("/tasks/:id", async (c) => {
       status: busyChild.status,
     }, 409);
   }
-  for (const child of children) {
-    await db.delete(noteTasks).where(eq(noteTasks.taskId, child.id));
-    await db.delete(tasks).where(eq(tasks.id, child.id));
-  }
   const project = existing
     ? (await db.select().from(projects).where(eq(projects.id, existing.projectId))).at(0)
     : undefined;
   const wantWorktree = c.req.query("worktree") === "1";
   const wantBranch = c.req.query("branch") === "1";
+  // children 的 Git 工作区必须与它们的行一起处理：只删行的话，独立 worktree/分支会变成
+  // 数据库里查无此任务的孤儿资源，leftover 检测（按父任务 id）也看不到（审查实测）。
+  const childCleanups: TaskWorkspaceDiscardResult[] = [];
+  for (const child of children) {
+    await db.delete(noteTasks).where(eq(noteTasks.taskId, child.id));
+    await db.delete(tasks).where(eq(tasks.id, child.id));
+    if (project && child.useWorktree && (wantWorktree || wantBranch)) {
+      childCleanups.push(await discardTaskWorkspace(project.repoPath, child.id, {
+        worktree: wantWorktree,
+        branch: wantBranch,
+        force: c.req.query("force") === "1",
+      }));
+    }
+  }
   await db.delete(noteTasks).where(eq(noteTasks.taskId, tid));
   await db.delete(tasks).where(eq(tasks.id, tid));
   let cleanup: TaskWorkspaceDiscardResult | null = null;
@@ -390,8 +400,19 @@ api.delete("/tasks/:id", async (c) => {
     });
   }
   // 清理之后仍然剩下的东西:没勾选、或勾了但 git 拒绝。UI 据此决定要不要继续追问。
+  // children 的残留一并报（它们的行已删，之后没有别的入口能发现这些资源）。
   const leftover = project ? await detectTaskWorkspace(project.repoPath, tid) : null;
-  return c.json({ deleted: true, leftover, cleanup });
+  const childLeftovers = project
+    ? (await Promise.all(children.map(async (child) => ({
+        taskId: child.id,
+        leftover: await detectTaskWorkspace(project.repoPath, child.id),
+      })))).filter((entry) => entry.leftover && (entry.leftover.path || entry.leftover.branch))
+    : [];
+  return c.json({
+    deleted: true, leftover, cleanup,
+    ...(childCleanups.length ? { childCleanups } : {}),
+    ...(childLeftovers.length ? { childLeftovers } : {}),
+  });
 });
 
 // ── groups (transient batch containers, §3) ─────────────────────────────────

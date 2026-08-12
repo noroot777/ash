@@ -126,7 +126,8 @@ export function FreeWorkflowInspector({
   const view = freeReviewView(state, task);
   const { latestRun, reviewing, stoppedRun, taskBusy, reservationArmed, repairing, stale } = view;
   const taskReady = task.status !== "backlog";
-  const locked = task.stage === "accepted" || task.stage === "merged" || !!task.archived;
+  const waiting = !!task.question || !!task.resumePrompt;
+  const locked = task.stage === "accepted" || task.stage === "merged" || !!task.archived || waiting;
   const reservationMode = taskBusy || reservationArmed;
   const reviewActionLabel = reviewing
     ? "审查进行中"
