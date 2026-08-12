@@ -27,6 +27,7 @@ try {
     freeManualRepairPrompt,
     freeReviewResumeOptions,
     handleFreeWorkflowSettlement,
+    startManualFreeReviewRepair,
   } = await import("../src/free-workflow.js");
   const { releaseFreeWorkflowAction, tryAcquireFreeWorkflowAction } = await import("../src/free-workflow-lock.js");
   const {
@@ -217,22 +218,26 @@ try {
   assert.match(manualRepair, /预约了复审，完成后按预约开始/);
   assert.doesNotMatch(manualRepair, /随后会自动派同一位审查者复审/);
 
-  assert.equal(claimTurn("free-exhausted-task"), true, "测试应占住回合，避免真的启动执行器");
-  const repairStarted = await api.request("/tasks/free-exhausted-task/free-workflow/review/repair", { method: "POST" });
-  assert.equal(repairStarted.status, 200);
-  assert.equal(
-    (await repairStarted.json() as { reviews: Array<{ status: string }> }).reviews[0]?.status,
-    "stopped",
-    "一键修复只代发消息，不再翻转 run 状态（修复中由任务 running 推导）",
-  );
+  // HTTP 修复入口与普通回合**原子互斥**（holdTurn 占位身份 dispatch）：普通回合已
+  // claim、status 尚未落 running 的窗口里必须 409，不得把旧意见排到那个回合之后执行
+  // （审查实测：窗口里 200 排队，投递时 freshness 早已过期）。
+  assert.equal(claimTurn("free-exhausted-task"), true, "测试占住回合，模拟 claim→running 窗口");
+  const blockedRepair = await api.request("/tasks/free-exhausted-task/free-workflow/review/repair", { method: "POST" });
+  assert.equal(blockedRepair.status, 409, "回合已被占时修复入口必须拒绝");
+  // 内部入口（结算侧，不 holdTurn）沿用排队语义：投递滞留在 whenTurnIdle（turn 一直
+  // 占着），正好在不真正启动执行器的前提下验证「代发消息不翻转状态 + 在途去重」。
+  const repairState = await startManualFreeReviewRepair("free-exhausted-task");
+  assert.equal(repairState.reviews[0]?.status, "stopped",
+    "一键修复只代发消息，不再翻转 run 状态（修复中由任务 running 推导）");
+  await assert.rejects(startManualFreeReviewRepair("free-exhausted-task"), /在途/, "修复消息在途时不得重复发起");
+  // 预约是**控制类**动作：turn 占着（回合跑着）也允许写入——语义是「下一次确认完成时
+  // 消费」，不论那个回合何时开跑（free-workflow.ts reserveFreeReview 的注释）。
   const repairReservation = await api.request("/tasks/free-exhausted-task/free-workflow/review-reservation", {
     method: "PUT", headers: { "content-type": "application/json" },
     body: JSON.stringify({ reviewerId: reviewer.id, checkMode: "logic", retryLimit: 1, note: "复审时关注按钮状态" }),
   });
-  assert.equal(repairReservation.status, 200, "stopped 状态下必须允许预约复审（修复顺序不限）");
+  assert.equal(repairReservation.status, 200, "stopped 状态下必须允许预约复审（修复顺序不限，回合进行中同样允许）");
   assert.equal((await repairReservation.json() as { reviewReservation: { armed: boolean } }).reviewReservation.armed, true);
-  const duplicateRepair = await api.request("/tasks/free-exhausted-task/free-workflow/review/repair", { method: "POST" });
-  assert.equal(duplicateRepair.status, 409, "修复消息在途时不得重复发起");
   await handleFreeWorkflowSettlement("free-exhausted-task", "done", true, true);
   const afterRepair = await api.request("/tasks/free-exhausted-task/free-workflow").then((response) => response.json()) as {
     reviewReservation: { armed: boolean }; reviews: Array<{ id: string; status: string }>;

@@ -15,9 +15,11 @@ export function FreeWorkflowToolbar({ task, notify }: { task: Task; notify: (mes
   const view = freeReviewView(free.state, task);
   const { latestRun, reviewing, stoppedRun, taskBusy, reservationArmed, repairing, stale } = view;
   const taskReady = task.status !== "backlog";
-  // 等待答复/续跑期间派审与修复后端必拒（409），按钮同步禁用，不给假按钮。
+  // 等待答复/续跑期间**发起类**动作（派审/修复/打开预览）后端必拒（409），按钮同步禁用；
+  // 取消预约、关闭预览是控制类动作，后端不设 waiting 门禁，不能一并锁死——预约挂着时
+  // 用户必须能取消，预览开着时必须能收掉端口。
   const waiting = !!task.question || !!task.resumePrompt;
-  const locked = task.stage === "accepted" || task.stage === "merged" || task.archived || waiting;
+  const locked = task.stage === "accepted" || task.stage === "merged" || task.archived;
   const reservationMode = taskBusy || reservationArmed;
   const reviewLabel = reviewing
     ? "审查中"
@@ -64,17 +66,17 @@ export function FreeWorkflowToolbar({ task, notify }: { task: Task; notify: (mes
             run={stoppedRun}
             compact
             className="is-review is-repair"
-            disabled={!taskReady || locked}
+            disabled={!taskReady || locked || waiting}
             onChanged={free.setState}
             notify={notify}
           />
         ) : null}
-        <button type="button" className={`is-review${reviewing ? " is-busy" : ""}${reservationArmed ? " is-armed" : ""}`} data-state={reviewing ? "reviewing" : reservationArmed ? "armed" : latestRun?.status ?? "idle"} disabled={!taskReady || locked || !!reviewing} onClick={() => setReviewOpen(true)}>
+        <button type="button" className={`is-review${reviewing ? " is-busy" : ""}${reservationArmed ? " is-armed" : ""}`} data-state={reviewing ? "reviewing" : reservationArmed ? "armed" : latestRun?.status ?? "idle"} disabled={!taskReady || locked || !!reviewing || (waiting && !reservationArmed)} onClick={() => setReviewOpen(true)}>
           {reviewing ? <SpinnerGap size={13} className="is-spinning" /> : <MagnifyingGlass size={13} weight="regular" />}
           <span>{reviewLabel}</span>
           {reservationArmed && <i className="free-review-armed-dot" aria-hidden="true" />}
         </button>
-        <button type="button" className={`is-preview${previewBusy ? " is-busy" : ""}`} aria-pressed={!!free.state?.preview.running} disabled={!taskReady || taskBusy || locked || !!reviewing || previewBusy} onClick={() => void togglePreview()}>
+        <button type="button" className={`is-preview${previewBusy ? " is-busy" : ""}`} aria-pressed={!!free.state?.preview.running} disabled={!taskReady || taskBusy || locked || !!reviewing || previewBusy || (waiting && !free.state?.preview.running)} onClick={() => void togglePreview()}>
           {previewBusy ? <SpinnerGap size={13} className="is-spinning" /> : free.state?.preview.running ? <StopCircle size={13} weight="regular" /> : <MonitorPlay size={13} weight="regular" />}
           <span>{previewBusy ? "处理中" : free.state?.preview.running ? "关闭预览" : "打开预览"}</span>
         </button>

@@ -99,21 +99,28 @@ export async function workspaceStateOf(
 }
 
 // 快照必须与版本**一致**：读取分好几批（task/state/runs/rounds/Git），读取期间修订号变了
-// 说明快照可能新旧混杂——重读，直到读取前后修订号一致（上限 3 次，兜底返回**读取前**的
-// 小版本：宁可被更新的响应覆盖，不能拿旧内容配大版本反压新状态）。
+// 说明快照可能新旧混杂。判据是**读取开始前与结束后的修订号相同**——不能拿「结束后的
+// revision === 快照自带版本」当判据：快照的版本取在读取末尾，事件落在「DB 已读旧、Git
+// 未读完」的窗口时末尾自然拿到新号，旧 DB 内容反而配上新版本被放行（审查实测：旧
+// reviews=[] 与随后正确响应版本完全相同）。指纹 bump（读取中发现工作区变了）同样打破
+// 「前后相同」，自动进重读。版本一律用**读取前**的号：内容至少包含该时刻已发布的全部
+// 状态，配读取前的号只会低报——旧响应盖它时用的是更大的版本，方向安全。
 export async function freeWorkflowState(taskId: string): Promise<FreeWorkflowApiState> {
-  for (let attempt = 0; attempt < 2; attempt++) {
+  let last: FreeWorkflowApiState | null = null;
+  let lastBefore = 0;
+  for (let attempt = 0; attempt < 3; attempt++) {
     const before = revisionOf(taskId);
     const snapshot = await readFreeWorkflowState(taskId);
-    if (revisionOf(taskId) === snapshot.stateVersion && snapshot.stateVersion >= before) return snapshot;
+    if (revisionOf(taskId) === before) return { ...snapshot, stateVersion: before };
+    last = snapshot;
+    lastBefore = before;
   }
-  const before = revisionOf(taskId);
-  const snapshot = await readFreeWorkflowState(taskId);
-  return { ...snapshot, stateVersion: Math.min(before, snapshot.stateVersion) };
+  // 持续高频变更下的兜底：内容可能混杂，配读取前的小版本——宁可被更新的响应覆盖，
+  // 不能拿可能混杂的内容反压新状态。
+  return { ...last!, stateVersion: lastBefore };
 }
 
 async function readFreeWorkflowState(taskId: string): Promise<FreeWorkflowApiState> {
-
   const [task, state, runs, profileRows, eventRows] = await Promise.all([
     db.select().from(tasks).where(eq(tasks.id, taskId)).then((rows) => rows.at(0)),
     db.select().from(freeWorkflowStates).where(eq(freeWorkflowStates.taskId, taskId)).then((rows) => rows.at(0)),

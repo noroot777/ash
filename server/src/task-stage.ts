@@ -59,7 +59,15 @@ export type AcceptedSnapshot = {
 };
 export type ReopenedAcceptance = { stage: "accepted" | "merged"; snapshot: AcceptedSnapshot };
 
-export async function reopenAcceptedStage(taskId: string): Promise<ReopenedAcceptance | null> {
+/**
+ * 只读探一眼：这个任务身上挂着的验收牌子与合并快照（没有则 null），**不做任何改写**。
+ *
+ * 与 `commitReopenAcceptedStage` 配对成 write-ahead 顺序：调用方先把这份快照持久化
+ * （turn-baseline），**然后**才执行清空——两步之间任何一处崩溃，磁盘上都有完整快照可供
+ * 结算挂回；反过来先清后存，崩在中间快照就永久丢了（审查实测：尾段进度被抹掉，
+ * 崩溃补跑凭据不可恢复）。
+ */
+export async function peekAcceptedStage(taskId: string): Promise<ReopenedAcceptance | null> {
   const t = (await db.select({
     stage: tasks.stage,
     target: tasks.acceptedTargetBranch,
@@ -68,18 +76,37 @@ export async function reopenAcceptedStage(taskId: string): Promise<ReopenedAccep
     tailPending: tasks.acceptedTailPending,
   }).from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!t || (t.stage !== "accepted" && t.stage !== "merged")) return null;
-  // 摘牌 = 开启新的验收生命周期：上一周期的合并快照一并清空。留着的话，「本周期已锁定
-  // 目标」的判定（task-accept 的 pre-merge 持久化）会把新验收错误冻结到旧目标，崩溃
-  // 重试还会复用旧区间。上一周期的合并事实在 git 历史与时间线里都有。
-  await db.update(tasks).set({
-    acceptedTargetBranch: null, acceptedBaseCommit: null, acceptedMergeCommit: null,
-    acceptedTailPending: false, updatedAt: now(),
-  }).where(eq(tasks.id, taskId));
-  await clearTaskStage(taskId, "任务又被唤醒，验收阶段清回进行中（完成后重新验收即可再次翻篇）");
   return {
     stage: t.stage,
     snapshot: { target: t.target, base: t.base, merge: t.merge, tailPending: t.tailPending },
   };
+}
+
+/** write-ahead 的第二步：真正执行摘牌（清 stage + 合并快照 + 尾段进度）并广播。 */
+export async function commitReopenAcceptedStage(taskId: string): Promise<void> {
+  await clearAcceptedSnapshot(taskId);
+  await clearTaskStage(taskId, "任务又被唤醒，验收阶段清回进行中（完成后重新验收即可再次翻篇）");
+}
+
+/**
+ * 摘牌里「合并快照」那一半：只清三列 + 尾段进度，不动 stage、不写时间线。
+ * 给 continueTask 的 write-ahead 路径用——stage 那一半由 turn-baseline 的清账摘下并广播，
+ * 这里只收掉同生命周期的快照。留着的话，「本周期已锁定目标」的判定（task-accept 的
+ * pre-merge 持久化）会把新验收错误冻结到旧目标，崩溃重试还会复用旧区间。
+ */
+export async function clearAcceptedSnapshot(taskId: string): Promise<void> {
+  // 上一周期的合并事实在 git 历史与时间线里都有。
+  await db.update(tasks).set({
+    acceptedTargetBranch: null, acceptedBaseCommit: null, acceptedMergeCommit: null,
+    acceptedTailPending: false, updatedAt: now(),
+  }).where(eq(tasks.id, taskId));
+}
+
+/** peek + commit 的组合（没有 write-ahead 需求的调用方用，如团队派活）。 */
+export async function reopenAcceptedStage(taskId: string): Promise<ReopenedAcceptance | null> {
+  const peeked = await peekAcceptedStage(taskId);
+  if (peeked) await commitReopenAcceptedStage(taskId);
+  return peeked;
 }
 
 /**

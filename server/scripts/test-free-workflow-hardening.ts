@@ -2,7 +2,7 @@
 // turn 锁窗口、结论证据门禁、证据路径 symlink、验收重试快照、旧状态迁移语义。
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { linkSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, linkSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
@@ -452,7 +452,104 @@ try {
   const afterBump = (await freeWorkflowState("free-stale-task")).stateVersion;
   assert.equal(afterBump > beforeBump, true, "状态变更后修订号必须严格递增（不能依赖 wall-clock）");
 
-  console.log("✓ turn 锁窗口拦验收与派审；结论必须携报告且出自活跃审查回合；symlink/硬链接被拒；验收快照按生命周期冻结且崩溃窗口不伪造区间；快路验证合并结果可达；归档只读；旧状态迁移保语义；重启对账收拾孤儿审查；过期意见与遗留提问受控；squash 重试可越过；排队消息保身份；stateVersion 为修订号");
+  // ── 第 6 轮审查修复回归：摘牌 write-ahead + 双锁互斥 + 解析失败不破坏验收事实 ──
+  const { continueTask } = await import("../src/orchestrator.js");
+  const { beginAccepting, endAccepting } = await import("../src/acceptance-lock.js");
+  await createTasks([{
+    id: "free-reopen-guard", projectId: "p", groupId: null, parentId: null,
+    title: "reopen guard", body: "test", mode: "single", status: "done",
+    labels: "[]", dependsOn: "[]", resumeDependsOn: "[]", agentType: "codex",
+    executorId: "reviewer-executor", model: null, reasoningEffort: null, autoTitle: false,
+    duet: null, team: null, reportBack: false, scheduleId: null,
+    createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    useWorktree: false, worktreeBase: null, originTaskId: null, workflowMode: "free",
+  }]);
+  const seedAccepted = () => db.update(tasks).set({
+    stage: "accepted", acceptedTargetBranch: "main", acceptedBaseCommit: "b1",
+    acceptedMergeCommit: "m1", acceptedTailPending: true,
+  }).where(eq(tasks.id, "free-reopen-guard"));
+  const acceptedRow = async () => (await db.select({
+    status: tasks.status, stage: tasks.stage, target: tasks.acceptedTargetBranch,
+    base: tasks.acceptedBaseCommit, merge: tasks.acceptedMergeCommit, pending: tasks.acceptedTailPending,
+  }).from(tasks).where(eq(tasks.id, "free-reopen-guard"))).at(0);
+
+  // ① turn 被其它回合占用：消息按「未投递」排队，验收事实必须原封不动（摘牌已挪到
+  //    claim 成功之后）。
+  await seedAccepted();
+  assert.equal(claimTurn("free-reopen-guard"), true);
+  assert.equal(await continueTask("free-reopen-guard", "改一下"), false, "回合被占时消息按未投递排队");
+  let guardRow = await acceptedRow();
+  assert.equal(guardRow?.stage, "accepted", "claim 失败的消息不得摘牌");
+  assert.equal(guardRow?.pending, true, "claim 失败的消息不得清尾段补跑凭据");
+  assert.equal(guardRow?.target, "main", "claim 失败的消息不得清合并快照");
+  releaseTurn("free-reopen-guard");
+
+  // ② 验收锁 TOCTOU：验收已开始（beginAccepting 已占）时投递必须退避——continueTask
+  //    先占 turn 再查验收锁（两步无 await），与 acceptTask「beginAccepting 后查
+  //    isTurnClaimed」互为镜像，任意交错至少一方退避。
+  assert.equal(beginAccepting("free-reopen-guard"), true);
+  assert.equal(await continueTask("free-reopen-guard", "插一句"), false, "验收进行中消息必须退避");
+  guardRow = await acceptedRow();
+  assert.equal(guardRow?.stage, "accepted", "验收互斥退避不得摘牌");
+  assert.equal(guardRow?.pending, true);
+  endAccepting("free-reopen-guard");
+  assert.equal(claimTurn("free-reopen-guard"), true, "退避不得泄漏 turn 锁");
+  releaseTurn("free-reopen-guard");
+
+  // ③ 执行器前置解析失败（非法思考强度档位）：摘牌在解析之后，catch 恢复 status 的
+  //    同时验收事实原封——不再出现「status 恢复了、stage/快照回不来」（审查探针）。
+  const parseFailDelivered = await continueTask("free-reopen-guard", "再改点", {
+    agent: "codex", reasoningEffort: "ultra-fake",
+  });
+  assert.equal(parseFailDelivered, true, "解析失败由本次调用接管（catch 落状态）");
+  guardRow = await acceptedRow();
+  assert.equal(guardRow?.status, "done", "续聊失败回落原终态");
+  assert.equal(guardRow?.stage, "accepted", "解析失败不得破坏验收牌子");
+  assert.equal(guardRow?.target, "main", "解析失败不得清合并快照");
+  assert.equal(guardRow?.pending, true, "解析失败不得清尾段补跑凭据");
+
+  // ── 第 6 轮审查修复回归：DELETE 连带 children 的探测与行同步 ──
+  await createTasks([{
+    id: "team-del-lead", projectId: "p-git", groupId: null, parentId: null,
+    title: "team lead", body: "test", mode: "team", status: "done",
+    labels: "[]", dependsOn: "[]", resumeDependsOn: "[]", agentType: "codex",
+    executorId: "reviewer-executor", model: null, reasoningEffort: null, autoTitle: false,
+    duet: null, team: null, reportBack: false, scheduleId: null,
+    createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    useWorktree: false, worktreeBase: null, originTaskId: null, workflowMode: "preset",
+  }, {
+    id: "team-del-child", projectId: "p-git", groupId: null, parentId: "team-del-lead",
+    title: "isolated child", body: "test", mode: "single", status: "done",
+    labels: "[]", dependsOn: "[]", resumeDependsOn: "[]", agentType: "codex",
+    executorId: "reviewer-executor", model: null, reasoningEffort: null, autoTitle: false,
+    duet: null, team: null, reportBack: false, scheduleId: null,
+    createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    useWorktree: true, worktreeBase: null, originTaskId: null, workflowMode: "preset",
+  }]);
+  const childWorktree = await prepareWorktree(repo, "team-del-child", "main");
+  writeFileSync(join(childWorktree.path, "dirty.txt"), "uncommitted\n");
+  // 父任务双 null 也必须把 child 的残留探出来——否则确认框不带清理参数，删完成孤儿。
+  const probe = await api.request("/tasks/team-del-lead/workspace").then((r) => r.json()) as {
+    path: string | null; branch: string | null;
+    children?: Array<{ taskId: string; path: string | null; branch: string | null }>;
+  };
+  assert.equal(probe.path, null, "lead 自己没有 worktree");
+  assert.equal(probe.children?.length, 1, "workspace 探测必须带出 children 的 Git 残留");
+  assert.equal(probe.children?.[0]?.taskId, "team-del-child");
+  assert.ok(probe.children?.[0]?.path, "child worktree 路径要露出来");
+  const delRes = await api.request("/tasks/team-del-lead?worktree=1&branch=1", { method: "DELETE" });
+  assert.equal(delRes.status, 200);
+  const delBody = await delRes.json() as {
+    deletedTaskIds?: string[];
+    childLeftovers?: Array<{ taskId: string; leftover: { path: string | null; branch: string | null } }>;
+  };
+  assert.deepEqual(delBody.deletedTaskIds?.sort(), ["team-del-child", "team-del-lead"],
+    "DELETE 必须报出连删的全部行，前端按它同步本地集合");
+  assert.equal(delBody.childLeftovers?.[0]?.taskId, "team-del-child",
+    "child 脏 worktree 普通清理被拒时必须如实报残留");
+  assert.ok(existsSync(childWorktree.path), "普通清理不得强删脏 worktree");
+
+  console.log("✓ turn 锁窗口拦验收与派审；结论必须携报告且出自活跃审查回合；symlink/硬链接被拒；验收快照按生命周期冻结且崩溃窗口不伪造区间；快路验证合并结果可达；归档只读；旧状态迁移保语义；重启对账收拾孤儿审查；过期意见与遗留提问受控；squash 重试可越过；排队消息保身份；stateVersion 为修订号；摘牌 write-ahead（claim 失败/验收互斥/解析失败三路不破坏验收事实）；DELETE 连带 children 探测与行同步");
 } finally {
   rmSync(root, { recursive: true, force: true });
 }

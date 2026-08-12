@@ -91,10 +91,21 @@ function json(method: string, body?: unknown): RequestInit {
 
 const id = encodeURIComponent;
 
+export type ChildWorkspaceLeftover = TaskWorkspaceLeftover & { taskId: string; title?: string };
+
+export type TaskWorkspaceProbe = TaskWorkspaceLeftover & {
+  /** 有 Git 残留的 children（团队执行者 / duet 搭档），删除会连行一起删，探测必须一并报。 */
+  children?: ChildWorkspaceLeftover[];
+};
+
 export type DeleteTaskResult = {
   deleted: true;
   leftover: TaskWorkspaceLeftover | null;
   cleanup: TaskWorkspaceDiscardResult | null;
+  /** 连删的全部行（父 + children）；前端按它同步本地任务集合。 */
+  deletedTaskIds?: string[];
+  childCleanups?: (TaskWorkspaceDiscardResult & { taskId: string })[];
+  childLeftovers?: { taskId: string; leftover: TaskWorkspaceLeftover }[];
 };
 
 export type FreeWorkflowApiState = Omit<FreeWorkflowState, "merge">;
@@ -446,7 +457,7 @@ export const api = {
   iterateTeamDuet: (taskId: string): Promise<Task> =>
     request(`/tasks/${id(taskId)}/team/iterate-duet`, { method: "POST" }),
 
-  taskWorkspace: (taskId: string): Promise<TaskWorkspaceLeftover> =>
+  taskWorkspace: (taskId: string): Promise<TaskWorkspaceProbe> =>
     request(`/tasks/${id(taskId)}/workspace`),
   taskReview: (taskId: string): Promise<TaskReviewInfo> =>
     request(`/tasks/${id(taskId)}/review`),

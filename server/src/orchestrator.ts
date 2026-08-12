@@ -21,10 +21,10 @@ import { writeTurn, runTracePaths } from "./transcript.js";
 import { recordUserConversationTurn } from "./conversation-turn.js";
 import { startTeam, deliverToLead } from "./team/session.js";
 import { workerPreambleFor } from "./team/dispatch.js";
-import { reopenAcceptedStage } from "./task-stage.js";
+import { clearAcceptedSnapshot, peekAcceptedStage } from "./task-stage.js";
 import { reviewProtocolFor, reviewReminderFor, verifyReminderFor } from "./review-prompts.js";
 import { peerNoticeFor } from "./peer-context.js";
-import { recordTurnBaseline } from "./turn-baseline.js";
+import { reconcileTurnBaseline, recordTurnBaseline } from "./turn-baseline.js";
 import { recordTurnStart } from "./turn-output.js";
 import { railStalledAtRun } from "./workflows.js";
 import { freeReviewReminder } from "./free-workflow.js";
@@ -383,24 +383,14 @@ export async function continueTask(
     throwOnTeamUnavailable?: boolean;
   } = {},
 ): Promise<boolean> {
-  // 验收(含尾段的发布命令)正在进行:**必须排在 reopen 摘牌之前**——摘牌会清 stage、
-  // 合并快照与尾段进度,即使消息最终按「未投递」排队,验收事实也已经先被破坏了(审查
-  // 实测:尾段期间一条回复把 acceptedTailPending 清掉,崩溃后发布永久漏跑)。
-  if (isAcceptingTask(taskId)) return false;
-  // 已验收的任务收到真人消息 = 旧验收不再覆盖新增改动,stage 清回「进行中」。
-  // 只认真人消息:带 opts.system 的 retry / 手点运行 / 队列推进 / 上游唤醒不算,跟下面
-  // followUpFrom 用的是同一条口径。放在最前面,确保 single/team/duet 走同一规则。
-  //
-  // 摘牌必须**立刻**发生(界面上任务当场从「已验收」挪回进行中),可这时还不知道这一轮
-  // 会不会真改东西 —— 纯询问也照摘。所以接住摘掉的完整快照交给基线:结算发现工作目录
-  // 一个字节没变,就整套原样挂回去(turn-baseline.ts)。team 走下面的 stdin 分支、
-  // 不拍照,维持原样(调度台本来就不走验收链)。
-  const reopened = opts.system ? null : await reopenAcceptedStage(taskId);
   // 团队任务(§Team):插话直接写进常驻调度台的 stdin —— 即时、同一会话、用户侧
   // 感觉不断线。不占这里的单飞锁(那把锁是给「一次运行 = 一个回合」的单任务用的,
   // 调度台的一次运行是整段常驻)。于是 /reply、/answer、@提及全都自动生效。
+  // 验收互斥对 team 只能靠这一次检查（调度台没有 turn 锁）；调度台不走验收链，
+  // 摘牌对它本来就是 no-op，破坏面只有消息时序。
   const teamMode = (await db.select({ mode: tasks.mode }).from(tasks).where(eq(tasks.id, taskId))).at(0)?.mode;
   if (teamMode === "team") {
+    if (isAcceptingTask(taskId)) return false;
     await deliverToLead(taskId, userText, {
       attachments: opts.attachments,
       throwOnOpenFailure: opts.throwOnTeamUnavailable,
@@ -413,6 +403,14 @@ export async function continueTask(
   // 抢不到 = 这个任务此刻正跑着别的回合,这一句话没送出去。调用方必须知道(见函数注释)。
   const sessionRole = opts.sessionRole ?? "single";
   if (!claimTurn(taskId, sessionRole)) return false;
+  // 验收互斥：**先占己锁（turn），再查彼锁（acceptance），两步之间没有 await**——
+  // acceptTask 那边是镜像（beginAccepting 先占，acceptanceGuard 再查 isTurnClaimed）。
+  // 任意交错下至少一方看到对方已占而退避；只查不占是 TOCTOU（审查实测 40/40：检查刚
+  // 通过验收就开始，回复照样启动并摘牌）。退避 = 消息按「未投递」排队，验收事实原封不动。
+  if (isAcceptingTask(taskId)) {
+    releaseTurn(taskId);
+    return false;
+  }
   const agentType = opts.agent ?? "claude"; // re-derived below once the task loads; kept for the catch handler
   let handle: RunHandle | undefined;
   try {
@@ -496,13 +494,28 @@ export async function continueTask(
     }
 
     await setStatus(taskId, "running");
+    // 已验收的任务收到真人消息 = 旧验收不再覆盖新增改动,stage 清回「进行中」。摘牌
+    // 刻意排在**所有可能抛错的解析之后**(执行器解析、工作目录解析都会抛):解析失败时
+    // 什么都还没破坏,catch 恢复 status 就是完整恢复(审查实测:claude+haiku+high 在
+    // 执行器解析处抛错,stage 与合并快照被清了回不来)。
+    // 三步是 write-ahead:①只读探快照(peek)→ ②快照随基线**先落盘**→ ③才执行清空
+    // (commit)。中间任何一处崩溃,磁盘上都有完整快照供结算挂回;先清后存的老顺序,
+    // 崩在中间快照就永久丢了。纯询问的挂回同样吃这份基线(turn-baseline.ts)。
+    // 只认真人消息(!opts.system),旁路回合(sideTurn:就地验证/审查轮)也不摘——
+    // 那些回合的约定就是「维持原状」,摘了牌又不落基线,挂回机制够不着。
+    const reopened = opts.system || sideTurn ? null : await peekAcceptedStage(taskId);
     // 起跑前给工作目录拍一张照，**并当场把上一版的验证/验收记录清掉**：新指令一到，
     // 上一版的成绩就作废，线退回「让 AI 干活」那一站（不然这几十分钟里线路图还写着
     // 「已过关口、停在验证站」，那两颗会真合并的按钮此刻就能点）。结算时再拍一张比对，
     // 这一轮要是一个字节都没改，刚才清掉的原样放回 —— 纯询问不该重置任何东西。
     // 只给真人消息拍 —— 系统续跑、队列推进、验证打回后叫 agent 修，那些轮次改代码是
     // 本分，清账反而打断正在跑的流程。详见 turn-baseline.ts。
-    if (!opts.system && !sideTurn) await recordTurnBaseline(taskId, cwd, freshWorkspace, reopened);
+    if (!opts.system && !sideTurn) {
+      const recorded = await recordTurnBaseline(taskId, cwd, freshWorkspace, reopened);
+      // 基线内的清账已把 stage 摘下并广播；这里收掉同生命周期的合并快照列——且**只在
+      // 基线确实落盘后**才清（失败关闭：快照没持久化就不动验收事实）。
+      if (reopened && recorded) await clearAcceptedSnapshot(taskId);
+    }
     // 「有产出却没交卷」的探针跟上面那张照片是两回事:它只管通知怎么措辞,所以**每一轮都记**
     // (系统续跑、队列推进的回合同样会漏交卷)。详见 turn-output.ts。
     await recordTurnStart(taskId, cwd);
@@ -652,6 +665,12 @@ export async function continueTask(
       type: "agent.event", taskId, sessionId: "", role: sessionRole, agentType,
       event: { kind: "error", message: String(err instanceof Error ? err.message : err) },
     });
+    // 这一轮已拍过基线的话(资源都解析成功、spawn 才挂),先按基线对账:失败回合的工作
+    // 目录多半一个字节没动,开头摘掉的验收事实(stage + 合并快照 + 尾段进度)会整套挂回。
+    // 不对账的话,下一轮的 recordTurnBaseline 会直接覆盖这份基线,快照永久丢失(审查
+    // 实测:解析失败后 stage/快照回不来)。必须在 afterSettlement 之前(turn-baseline.ts
+    // 的约定);正常路径的结算已经对过账时,基线文件已被消费,这里是 no-op。
+    await reconcileTurnBaseline(taskId, false).catch(() => undefined);
     // 续聊回合里出的岔子(典型:worktree 建不出来)不该把任务状态打差 —— 同
     // settleTaskStatus 的约定:续聊只能让任务变好,不能让它变坏。
     const row = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);

@@ -126,8 +126,9 @@ export function FreeWorkflowInspector({
   const view = freeReviewView(state, task);
   const { latestRun, reviewing, stoppedRun, taskBusy, reservationArmed, repairing, stale } = view;
   const taskReady = task.status !== "backlog";
+  // waiting 只锁发起类动作（派审/修复），取消预约的入口不能一并锁死（同 Toolbar）。
   const waiting = !!task.question || !!task.resumePrompt;
-  const locked = task.stage === "accepted" || task.stage === "merged" || !!task.archived || waiting;
+  const locked = task.stage === "accepted" || task.stage === "merged" || !!task.archived;
   const reservationMode = taskBusy || reservationArmed;
   const reviewActionLabel = reviewing
     ? "审查进行中"
@@ -211,14 +212,14 @@ export function FreeWorkflowInspector({
                   taskId={task.id}
                   run={stoppedRun}
                   className="is-repair"
-                  disabled={!taskReady || locked}
+                  disabled={!taskReady || locked || waiting}
                   onChanged={free.setState}
                   notify={notify}
                 />
               )}
               <button
                 type="button"
-                disabled={!taskReady || locked || !!reviewing || !notify}
+                disabled={!taskReady || locked || !!reviewing || !notify || (waiting && !reservationArmed)}
                 onClick={() => setReviewDialogOpen(true)}
               >
                 {reviewing ? <SpinnerGap size={13} className="is-spinning" /> : <MagnifyingGlass size={13} />}

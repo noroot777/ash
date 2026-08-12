@@ -330,12 +330,22 @@ api.patch("/tasks/:id", async (c) => {
 // 确认框在打开时先问一次:有残留才提示「要不要连它们一起删」,没有就是一句普通
 // 的确认。任务不在 worktree 模式下跑过也照查 —— useWorktree 后来被关掉、目录和
 // 分支却还在,是最容易被漏掉的那种残留。
+// children 一并探测：团队/duet 删除会连 children 行一起删，它们的 worktree/分支若不在
+// 这里露脸，确认框就不会带清理参数，删完变成数据库里查无此任务的孤儿资源（审查实测：
+// 父任务双 null、isolated child 有脏 worktree，请求根本不带清理参数）。
 api.get("/tasks/:id/workspace", async (c) => {
   const tid = c.req.param("id");
   const t = (await db.select().from(tasks).where(eq(tasks.id, tid))).at(0);
   if (!t) return c.json({ error: "not found" }, 404);
   const project = (await db.select().from(projects).where(eq(projects.id, t.projectId))).at(0);
-  return c.json(await detectTaskWorkspace(project?.repoPath, tid));
+  const own = await detectTaskWorkspace(project?.repoPath, tid);
+  const childRows = await db.select().from(tasks).where(eq(tasks.parentId, tid));
+  const children = (await Promise.all(childRows.map(async (child) => ({
+    taskId: child.id,
+    title: child.title,
+    ...(await detectTaskWorkspace(project?.repoPath, child.id)),
+  })))).filter((entry) => entry.path || entry.branch);
+  return c.json({ ...own, ...(children.length ? { children } : {}) });
 });
 
 // 删除任务。`worktree=1` / `branch=1` 表示用户在确认框里勾了「连 worktree 和分支
@@ -377,16 +387,19 @@ api.delete("/tasks/:id", async (c) => {
   const wantBranch = c.req.query("branch") === "1";
   // children 的 Git 工作区必须与它们的行一起处理：只删行的话，独立 worktree/分支会变成
   // 数据库里查无此任务的孤儿资源，leftover 检测（按父任务 id）也看不到（审查实测）。
-  const childCleanups: TaskWorkspaceDiscardResult[] = [];
+  const childCleanups: (TaskWorkspaceDiscardResult & { taskId: string })[] = [];
   for (const child of children) {
     await db.delete(noteTasks).where(eq(noteTasks.taskId, child.id));
     await db.delete(tasks).where(eq(tasks.id, child.id));
     if (project && child.useWorktree && (wantWorktree || wantBranch)) {
-      childCleanups.push(await discardTaskWorkspace(project.repoPath, child.id, {
-        worktree: wantWorktree,
-        branch: wantBranch,
-        force: c.req.query("force") === "1",
-      }));
+      childCleanups.push({
+        taskId: child.id,
+        ...await discardTaskWorkspace(project.repoPath, child.id, {
+          worktree: wantWorktree,
+          branch: wantBranch,
+          force: c.req.query("force") === "1",
+        }),
+      });
     }
   }
   await db.delete(noteTasks).where(eq(noteTasks.taskId, tid));
@@ -410,6 +423,9 @@ api.delete("/tasks/:id", async (c) => {
     : [];
   return c.json({
     deleted: true, leftover, cleanup,
+    // 连删的全部行（父 + children）：前端按它同步本地任务集合——只摘父 id 会把
+    // children 留成刷新前的幽灵任务（审查实测）。
+    deletedTaskIds: [tid, ...children.map((child) => child.id)],
     ...(childCleanups.length ? { childCleanups } : {}),
     ...(childLeftovers.length ? { childLeftovers } : {}),
   });

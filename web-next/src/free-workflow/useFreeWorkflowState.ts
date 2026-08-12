@@ -11,12 +11,14 @@ const inFlight = new Map<string, Promise<FreeWorkflowApiState>>();
 // 唯一的新旧判据是**服务端的状态修订号**（stateVersion：task.review 事件驱动的单调计数，
 // 不是 wall-clock）：mutation 响应先在服务端生成、之后才有 SSE 触发的 GET，即使它更晚
 // 到达，修订号也更小——按到达顺序或请求发起顺序猜都会把新状态盖回旧值（审查实测两轮）。
-// 相等修订号 = 期间没有任何变更，内容等价，后到覆盖无害。
+// **相等修订号也拒收**：服务端的一致性重试有一条兜底路径会给可能混杂的内容配「读取前」
+// 的小版本，同版本不再保证同内容——保留现值最保守，真有更新的状态必然带着更大的版本
+// （事件 bump 后的 SSE 重取）跟进。
 function publish(taskId: string, state: FreeWorkflowApiState): void {
   const taskListeners = listeners.get(taskId);
   if (!taskListeners?.size) return;
   const current = states.get(taskId);
-  if (current && current.stateVersion > state.stateVersion) return; // 更旧的快照，丢弃
+  if (current && current.stateVersion >= state.stateVersion) return; // 不比现值新，丢弃
   states.set(taskId, state);
   for (const listener of taskListeners) listener(state);
 }

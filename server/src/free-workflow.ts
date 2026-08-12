@@ -1,5 +1,5 @@
-import { existsSync, readFileSync } from "node:fs";
-import { extname, join } from "node:path";
+import { readFileSync } from "node:fs";
+import { extname } from "node:path";
 import type {
   AgentType,
   FreeReviewCheckMode,
@@ -24,7 +24,7 @@ import {
 import { disarmFreeReviewReservation, startReservedFreeReview } from "./free-review-reservations.js";
 import { freeManualRepairPrompt, freeRepairPrompt, freeReviewPrompt } from "./free-review-prompts.js";
 export { freeManualRepairPrompt, freeRepairPrompt, freeReviewPrompt } from "./free-review-prompts.js";
-import { recordFreePreviewEvent } from "./free-workflow-events.js";
+import { mountFreePreviewRoutes } from "./free-workflow-preview.js";
 import { releaseFreeWorkflowAction, tryAcquireFreeWorkflowAction } from "./free-workflow-lock.js";
 import { freeReviewFile, freeReviewReportPath, readFreeReviewReport } from "./free-review-files.js";
 import { freeWorkflowState, workspaceStateOf, type FreeWorkflowApiState } from "./free-workflow-state.js";
@@ -32,7 +32,6 @@ import { claimTurn, continueWhenIdle, isTurnClaimed, releaseTurn, turnRole, when
 import { appendTaskTimeline } from "./task-timeline.js";
 import { taskWorkspace } from "./task-workspace.js";
 import { headCommit } from "./git.js";
-import { startPreview, stopPreview, type PreviewStep } from "./preview.js";
 import { REVIEW_MIME } from "./review-evidence.js";
 import { BROWSER_VERIFICATION_REMINDER } from "./browser-verification-policy.js";
 import { id, now } from "./util.js";
@@ -73,7 +72,7 @@ export async function hasActiveFreeReview(taskId: string): Promise<boolean> {
   return !!(await reviewingRun(taskId));
 }
 
-function assertBeforeAcceptance(task: TaskRow): void {
+export function assertBeforeAcceptance(task: { stage: string | null }): void {
   if (task.stage === "accepted" || task.stage === "merged") {
     throw new Error("任务已进入验收结果；如需继续修改，请先重新运行任务");
   }
@@ -120,6 +119,10 @@ function reviewNote(value: unknown): string | null {
   if (note.length > MAX_REVIEW_NOTE_LENGTH) throw new Error(`审查附言不能超过 ${MAX_REVIEW_NOTE_LENGTH} 字`);
   return note || null;
 }
+// 预约的产品语义：**下一次确认完成（confirmedDone → done）时消费**，不论那个回合是在
+// 预约之前还是之后开跑的——任务正在跑（含已 claim、status 尚未落 running 的窗口）时挂
+// 预约，本回合完成即触发审查，这正是「修复中先把复审预约上」的常规用法。所以这里刻意
+// **不与 turn 互斥**；预约不动工作区、不投消息，写入本身没有并发危害。
 async function reserveFreeReview(taskId: string, input: FreeReviewDispatchInput): Promise<FreeWorkflowApiState> {
   const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!task) throw new Error("任务不存在");
@@ -511,7 +514,60 @@ async function startFreeReview(
 // 在途标记只防「双击发两条」：消息真正投出（continueTask 开跑）就清掉，之后的重复
 // 点击由 running 校验拦。内存即可——重启后排队回调本来就一起丢。
 const pendingRepairs = new Set<string>();
-async function startManualFreeReviewRepair(taskId: string): Promise<FreeWorkflowApiState> {
+
+/**
+ * 「这份未通过报告仍对应当前代码」的完整证明，返回错误文案或 null（可修复）。
+ * 入口校验与**投递回调**各跑一遍：入口占着 turn 校验（下面），但修复消息可能排在别的
+ * 回合之后才真正投递——那个回合可以改代码，排队前的证明到投递时已经过期，不重验就会
+ * 让实现 agent 按旧版报告改新版代码（审查实测：占住 turn 的普通回合结束后旧意见照发）。
+ */
+async function manualRepairBlocker(taskId: string): Promise<string | null> {
+  const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
+  if (!task) return "任务不存在";
+  if (task.stage === "accepted" || task.stage === "merged") return "任务已进入验收结果";
+  if (await reviewingRun(taskId)) return "审查回合正在进行";
+  const run = await latestRun(taskId);
+  if (!run || run.status !== "stopped") return "最近一轮审查没有停在未通过状态";
+  // 报告读取走安全解析（拒 symlink 祖先），且必须有非空正文——raw existsSync 会被
+  // 换成 symlink 的 round 目录骗过，把外部路径写进发给实现 agent 的提示。
+  if (!readFreeReviewReport(taskId, run.id, run.currentRound).trim()) {
+    return "最近一轮审查报告不存在或为空";
+  }
+  // 只有能**证明**意见仍对应当前代码才放行修复（失败向「不确定」开，不向「没问题」开）：
+  // 锚点缺失（老数据）、工作区读不到（已清理/非 git）都无从证明——正确动作是再派一轮
+  // 「审查新改动」，而不是按一份无法核对的报告唤醒实现 agent 改代码。
+  const concluded = (await db.select().from(freeReviewRounds)
+    .where(and(eq(freeReviewRounds.runId, run.id), eq(freeReviewRounds.round, run.currentRound)))).at(0);
+  if (!concluded?.reviewedCommit) return "这轮审查缺少基准 commit，无法确认意见仍对应当前代码";
+  const workspace = await workspaceStateOf(task);
+  if (!workspace.head || workspace.dirty == null) return "工作区不可读，无法确认审查意见仍对应当前代码";
+  if (workspace.head !== concluded.reviewedCommit || workspace.dirty) {
+    return "审查意见针对的代码已变化（新提交或未提交改动）";
+  }
+  return null;
+}
+
+async function deliverManualRepair(taskId: string, run: ReviewRunRow): Promise<void> {
+  const abort = async (message: string) => {
+    pendingRepairs.delete(taskId);
+    await appendTaskTimeline(taskId, `自由工作流审查意见修复已取消：${message}；请再派一轮审查。`);
+    bus.publish({ type: "task.review", taskId });
+  };
+  try {
+    const blocker = await manualRepairBlocker(taskId);
+    if (blocker) return void await abort(blocker);
+    const { continueTask } = await import("./orchestrator.js");
+    const delivered = await continueTask(taskId, freeManualRepairPrompt(taskId, run), { byBackend: true });
+    if (delivered === false) await abort("回合被其它执行抢占，消息未能投递");
+  } catch (error) {
+    await abort(error instanceof Error ? error.message : String(error));
+  }
+}
+
+export async function startManualFreeReviewRepair(
+  taskId: string,
+  opts: { holdTurn?: boolean } = {},
+): Promise<FreeWorkflowApiState> {
   const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!task) throw new Error("任务不存在");
   if (task.mode !== "single" || task.parentId || task.reviewOf || task.workflowMode !== "free") {
@@ -521,101 +577,43 @@ async function startManualFreeReviewRepair(taskId: string): Promise<FreeWorkflow
   if (task.status === "backlog") throw new Error("任务尚未运行，没有可修复的审查意见");
   if (task.status === "running" || task.status === "queued") throw new Error("任务正在运行或排队，结束后再发起修复");
   if (task.question || task.resumePrompt) throw new Error("任务正等待答复或续跑，处理后再发起修复");
-  if (!tryAcquireFreeWorkflowAction(taskId)) throw new Error("当前已有自由工作流操作正在进行");
-  try {
-    assertBeforeAcceptance(task);
-    if (pendingRepairs.has(taskId)) throw new Error("修复消息已在途，等它开始执行后再操作");
-    if (await reviewingRun(taskId)) throw new Error("审查回合正在进行，结束后再发起修复");
-    const run = await latestRun(taskId);
-    if (!run || run.status !== "stopped") throw new Error("最近一轮审查没有停在未通过状态");
-    // 报告读取走安全解析（拒 symlink 祖先），且必须有非空正文——raw existsSync 会被
-    // 换成 symlink 的 round 目录骗过，把外部路径写进发给实现 agent 的提示。
-    if (!readFreeReviewReport(taskId, run.id, run.currentRound).trim()) {
-      throw new Error("最近一轮审查报告不存在或为空，无法按意见发起修复");
-    }
-    // 只有能**证明**意见仍对应当前代码才放行修复（失败向「不确定」开，不向「没问题」开）：
-    // 锚点缺失（老数据）、工作区读不到（已清理/非 git）都无从证明——正确动作是再派一轮
-    // 「审查新改动」，而不是按一份无法核对的报告唤醒实现 agent 改代码。
-    const concluded = (await db.select().from(freeReviewRounds)
-      .where(and(eq(freeReviewRounds.runId, run.id), eq(freeReviewRounds.round, run.currentRound)))).at(0);
-    if (!concluded?.reviewedCommit) {
-      throw new Error("这轮审查缺少基准 commit，无法确认意见仍对应当前代码；请再派一轮审查");
-    }
-    const workspace = await workspaceStateOf(task);
-    if (!workspace.head || workspace.dirty == null) {
-      throw new Error("工作区不可读，无法确认审查意见仍对应当前代码；请再派一轮审查");
-    }
-    if (workspace.head !== concluded.reviewedCommit || workspace.dirty) {
-      throw new Error("审查意见针对的代码已变化（新提交或未提交改动）；请再派一轮审查，而不是按旧意见修复");
-    }
-    await appendTaskTimeline(taskId, `已按自由工作流第 ${run.currentRound} 轮审查意见发起修复。`);
-    bus.publish({ type: "task.review", taskId });
-    pendingRepairs.add(taskId);
-    continueWhenIdle(taskId, freeManualRepairPrompt(taskId, run), { byBackend: true }, async (error) => {
-      pendingRepairs.delete(taskId);
-      await appendTaskTimeline(taskId, `自由工作流审查意见修复启动失败：${error}`);
-      bus.publish({ type: "task.review", taskId });
-    });
-    // continueWhenIdle 的回调真正执行（continueTask 被调）时任务即进入 running；
-    // 在那之前的窗口全靠 pendingRepairs 挡。这里挂一个同队回调来清标记。
-    whenTurnIdle(taskId, () => pendingRepairs.delete(taskId));
-    return freeWorkflowState(taskId);
-  } finally {
-    releaseFreeWorkflowAction(taskId);
+  // 与即时派审同级的原子互斥：只查 DB status 挡不住「普通回合已 claim、尚未落 running」
+  // 的窗口（审查实测：窗口里修复照样 200 并排到那个回合之后）。占位身份 dispatch，
+  // 校验与排队注册整段占住；释放后修复消息才可能真正投递，投递回调里再重验一遍锚点。
+  const holdingTurn = opts.holdTurn === true;
+  if (holdingTurn && !claimTurn(taskId, "dispatch")) {
+    throw new Error("任务回合正在进行，结束后再发起修复");
   }
-}
-
-function previewCommand(cwd: string): string {
-  const packageJson = join(cwd, "package.json");
-  if (!existsSync(packageJson)) throw new Error("工作区没有 package.json，无法自动判断预览命令");
-  let scripts: Record<string, unknown> = {};
-  try { scripts = JSON.parse(readFileSync(packageJson, "utf8")).scripts ?? {}; }
-  catch { throw new Error("package.json 无法读取，无法自动判断预览命令"); }
-  const script = typeof scripts.dev === "string" ? "dev" : typeof scripts.start === "string" ? "start" : null;
-  if (!script) throw new Error("package.json 没有 dev 或 start 脚本，请先在项目中补充预览命令");
-  if (existsSync(join(cwd, "pnpm-lock.yaml"))) return `pnpm run ${script}`;
-  if (existsSync(join(cwd, "yarn.lock"))) return `yarn ${script}`;
-  return `npm run ${script}`;
-}
-
-async function startFreePreview(taskId: string) {
-  if (!tryAcquireFreeWorkflowAction(taskId)) throw new Error("当前已有自由工作流操作正在进行");
   try {
-    const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
-    if (!task || task.workflowMode !== "free" || task.mode !== "single" || task.parentId || task.reviewOf) {
-      throw new Error("当前任务不支持自由预览");
+    if (!tryAcquireFreeWorkflowAction(taskId)) throw new Error("当前已有自由工作流操作正在进行");
+    try {
+      if (pendingRepairs.has(taskId)) throw new Error("修复消息已在途，等它开始执行后再操作");
+      const blocker = await manualRepairBlocker(taskId);
+      if (blocker) {
+        throw new Error(blocker === "审查意见针对的代码已变化（新提交或未提交改动）"
+          ? `${blocker}；请再派一轮审查，而不是按旧意见修复`
+          : blocker === "最近一轮审查报告不存在或为空" ? `${blocker}，无法按意见发起修复`
+          : blocker.includes("无法确认") ? `${blocker}；请再派一轮审查` : blocker);
+      }
+      const run = (await latestRun(taskId))!;
+      await appendTaskTimeline(taskId, `已按自由工作流第 ${run.currentRound} 轮审查意见发起修复。`);
+      bus.publish({ type: "task.review", taskId });
+      pendingRepairs.add(taskId);
+      whenTurnIdle(taskId, () => { void deliverManualRepair(taskId, run); });
+      // 投递回调真正执行（continueTask 被调）时任务即进入 running；在那之前的窗口全靠
+      // pendingRepairs 挡。这里挂一个同队回调来清标记。
+      whenTurnIdle(taskId, () => pendingRepairs.delete(taskId));
+      return await freeWorkflowState(taskId);
+    } finally {
+      releaseFreeWorkflowAction(taskId);
     }
-    if (task.archived) throw new Error("归档任务不能打开预览");
-    if (task.status === "backlog") throw new Error("任务尚未运行，完成实现后再打开预览");
-    if (task.status === "running" || task.status === "queued") throw new Error("任务正在修改代码，结束后再打开预览");
-    if (isTurnClaimed(taskId)) throw new Error("任务回合正在进行（状态尚未落库），结束后再打开预览");
-    assertBeforeAcceptance(task);
-    const project = (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0);
-    if (!project) throw new Error("项目不存在");
-    const workspace = await taskWorkspace(task, project.repoPath);
-    const command = previewCommand(workspace.path);
-    const step: PreviewStep = {
-      id: "free-preview", kind: "preview",
-      p: { cmd: command, mode: "frontend", ready: "port+log", life: "task" },
-      fail: null,
-    };
-    const result = await startPreview(taskId, step, workspace.path);
-    if (!result.ok) throw new Error(result.reason);
-    await recordFreePreviewEvent(taskId, {
-      kind: "preview_opened",
-      source: "user",
-      detail: result.record.url ?? result.record.cmd,
-      occurredAt: result.record.startedAt,
-    });
-    await appendTaskTimeline(taskId, `自由工作流预览已打开：${result.record.url ?? command}`);
-    bus.publish({ type: "task.review", taskId });
-    return result.record;
   } finally {
-    releaseFreeWorkflowAction(taskId);
+    if (holdingTurn) releaseTurn(taskId);
   }
 }
 
 export function mountFreeWorkflowRoutes(api: Hono): void {
+  mountFreePreviewRoutes(api);
   api.get("/tasks/:id/free-workflow", async (c) => {
     const task = (await db.select({ workflowMode: tasks.workflowMode }).from(tasks).where(eq(tasks.id, c.req.param("id")))).at(0);
     if (!task) return c.json({ error: "not found" }, 404);
@@ -633,7 +631,8 @@ export function mountFreeWorkflowRoutes(api: Hono): void {
     }
   });
   api.post("/tasks/:id/free-workflow/review/repair", async (c) => {
-    try { return c.json(await startManualFreeReviewRepair(c.req.param("id"))); }
+    // 原子互斥在 startManualFreeReviewRepair 内做（holdTurn 占住整段），同派审。
+    try { return c.json(await startManualFreeReviewRepair(c.req.param("id"), { holdTurn: true })); }
     catch (error) { return c.json({ error: error instanceof Error ? error.message : String(error) }, 409); }
   });
   api.put("/tasks/:id/free-workflow/review-reservation", async (c) => {
@@ -644,33 +643,6 @@ export function mountFreeWorkflowRoutes(api: Hono): void {
     try { return c.json(await cancelFreeReviewReservation(c.req.param("id"))); }
     catch (error) { return c.json({ error: error instanceof Error ? error.message : String(error) }, 409); }
   });
-  api.post("/tasks/:id/free-workflow/preview", async (c) => {
-    try {
-      const record = await startFreePreview(c.req.param("id"));
-      return c.json({ running: true, url: record.url, port: record.port, command: record.cmd, startedAt: record.startedAt });
-    } catch (error) {
-      return c.json({ error: error instanceof Error ? error.message : String(error) }, 409);
-    }
-  });
-
-  api.delete("/tasks/:id/free-workflow/preview", async (c) => {
-    const taskId = c.req.param("id");
-    const task = (await db.select({
-      workflowMode: tasks.workflowMode, mode: tasks.mode, parentId: tasks.parentId, reviewOf: tasks.reviewOf,
-    }).from(tasks).where(eq(tasks.id, taskId))).at(0);
-    if (!task || task.workflowMode !== "free" || task.mode !== "single" || task.parentId || task.reviewOf) {
-      return c.json({ error: "当前任务不支持自由预览" }, 409);
-    }
-    if (!tryAcquireFreeWorkflowAction(taskId)) return c.json({ error: "当前已有自由工作流操作正在进行" }, 409);
-    try {
-      const stopped = await stopPreview(taskId, "用户关闭了自由工作流预览", "user");
-      bus.publish({ type: "task.review", taskId });
-      return c.json({ stopped });
-    } finally {
-      releaseFreeWorkflowAction(taskId);
-    }
-  });
-
   api.get("/tasks/:id/free-workflow/review-file", async (c) => {
     const taskId = c.req.param("id");
     const runId = c.req.query("run") ?? "";

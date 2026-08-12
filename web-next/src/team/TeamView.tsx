@@ -629,7 +629,7 @@ export function TeamView({
         <DeleteTaskDialog
           task={task}
           notify={notify}
-          onDeleted={() => onTaskDeleted(task.id)}
+          onDeleted={(ids) => ids.forEach(onTaskDeleted)}
           onClose={() => setDeleteOpen(false)}
         />
       )}

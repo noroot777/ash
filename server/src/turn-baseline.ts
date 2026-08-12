@@ -133,20 +133,23 @@ async function fingerprint(cwd: string): Promise<string | null> {
 }
 
 /**
- * 起跑前的第一张照 —— 顺手把上一版的账清了。
+ * 起跑前的第一张照 —— 顺手把上一版的账清了。返回基线**是否真的落了盘**：调用方只在
+ * true 时才执行摘牌的最后一步（清合并快照列），快照没持久化就不动验收事实。
  *
  * 落磁盘而不是内存：`data/runs/<taskId>/turn-baseline.json` 活得过 server 重启，
  * 重启后接管（reattach）那一路照样能比对上。
  *
- * **拍照必须排在清账前面**：清账会写 `tasks` 表，不碰工作目录，本来两边不相干；但真出了
- * 岔子（清账抛异常）时，先拍到的照还在，结算那头至少能照老路把账补清，不会连基线都没有。
+ * **写盘排在清账前面（write-ahead）**：`reopened` 里是刚从任务身上探到、马上要被清掉的
+ * 验收事实（stage + 合并快照 + 尾段进度），必须先持久化再破坏——清账会摘 stage，进程
+ * 死在「已清、未写」的窗口里快照就永久丢了（审查实测：尾段补跑凭据不可恢复）。清账
+ * 之后再补写一次把 ledger 带上；第二次写失败只丢 ledger 的恢复精度，验收快照仍在。
  */
 export async function recordTurnBaseline(
   taskId: string,
   cwd: string,
   fresh: boolean,
   reopened: ReopenedAcceptance | null = null,
-): Promise<void> {
+): Promise<boolean> {
   try {
     const snapshot: TurnBaseline = {
       cwd,
@@ -154,14 +157,18 @@ export async function recordTurnBaseline(
       fresh,
       stage: reopened?.stage ?? null,
       acceptedSnapshot: reopened?.snapshot ?? null,
-      ledger: await resetWorkflowLedger(taskId),
+      ledger: null,
       at: now(),
     };
     mkdirSync(join(RUNS_DIR, taskId), { recursive: true });
     writeFileSync(baselinePath(taskId), JSON.stringify(snapshot));
+    snapshot.ledger = await resetWorkflowLedger(taskId);
+    writeFileSync(baselinePath(taskId), JSON.stringify(snapshot));
+    return true;
   } catch (error) {
     // 拍照失败不该拖垮起跑：没有基线 = 这一轮不做任何判断，退回改动前的行为。
     console.warn(`[harness] failed to record turn baseline for ${taskId}:`, error);
+    return false;
   }
 }
 
@@ -326,8 +333,9 @@ export async function reconcileTurnBaseline(taskId: string, confirmedDone: boole
     // 放回去 —— 不然用户只是问一句「这段为什么这么做」，任务就从已验收掉回进行中，
     // 线路图也退回第一站，还得再点一次验收。
     if (base.ledger) await restoreWorkflowLedger(taskId, base.ledger);
-    // 牌子的两条来路互斥：accepted/merged 在开头就被 `reopenAcceptedStage` 摘走了，
-    // 轮到清账时 stage 已经是空的；其余阶段（verified / awaiting_acceptance…）才落在账里。
+    // 牌子的两条来路：accepted/merged 在开头由 peek 显式记进 `base.stage`（write-ahead
+    // 之后清账也会把同一块牌子记进 ledger.stage，两处一致，优先取显式那份）；其余阶段
+    // （verified / awaiting_acceptance…）只落在账里。
     // `restoreTaskStage` 只在牌子位还空着时放 —— 这一轮 agent 自报过新阶段的话那是更新的
     // 结论，不能被旧牌子盖掉；那种情况下退回只写一行不带阶段的说明。
     const stageBack = base.stage ?? base.ledger?.stage ?? null;
