@@ -29,11 +29,16 @@ type Scannable = (typeof SCANNABLE)[number];
 const isScannable = (type: string): type is Scannable =>
   (SCANNABLE as readonly string[]).includes(type);
 
-// init 的 `slash_commands` 比 `skills` 多一批**CLI 自己的**命令(clear/compact/model/
-// heapdump…),它们在 headless 下要么无意义要么有害。所以这里用**白名单**而不是黑名单:
+// init 的 `slash_commands` 比 `skills` 多一批**CLI 自己的**命令(clear/model/heapdump…),
+// 多数在 headless 下要么无意义要么有害。所以这里用**白名单**而不是黑名单:
 // 名单没跟上新版 CLI 的代价只是少露一个命令(静默 degrade),黑名单没跟上的代价却是
 // 把 `/heapdump` 递到用户面前、他发出去白烧一轮。
-const BUILTIN_SLASH_ALLOW = new Set(["review", "security-review"]);
+//
+// `compact` 在 headless 下**实测有效**(2026-08-12:11 万 token 的会话发过去,回来一条
+// `compact_boundary` trigger=manual,水位掉到 1136),而且它是白名单外模型唯一的救命手段
+// —— claude 2.1.220 的自动压缩只认 sonnet-4-6/opus-4-6/opus-4-8/opus-5/sonnet-5 这几个名字,
+// 其余(fable-5、经 anthropic 协议中转的 kimi/glm…)窗口来源落到 "auto",自动压缩整段跳过。
+const BUILTIN_SLASH_ALLOW = new Set(["review", "security-review", "compact"]);
 
 interface Root {
   dir: string;
