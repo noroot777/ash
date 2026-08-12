@@ -28,25 +28,101 @@ export interface CliConfigOverride {
   recommended: number;
   /** 数值单位后缀,展示用。 */
   unit?: string;
+  /** 单独配没用、必须同时配上的那一项(前端据此提示)。 */
+  requires?: string;
+  /**
+   * 落环境变量前的换算。缺省 = 原样。第二个参数是同一 profile 上的其它覆盖项。
+   * 返回 null = 这一项在当前组合下不起作用,干脆不注入。
+   */
+  toEnv?: (value: number, values: Record<string, number>) => string | null;
 }
 
-// claude 2.1.220 实测:自动压缩只对**白名单内的模型名**生效(sonnet-4-6 / opus-4-6 /
-// opus-4-8 / opus-5 / sonnet-5)。名单外的(fable-5、经 anthropic 协议中转的第三方模型)
-// 窗口来源落到 "auto",CLI 的 `toy()` 里 `if(wSe()&&!JGe(t,r))return!1` 直接把整段
-// 自动压缩跳过 —— 表现就是水位一路涨到几十万也不压,直到炸掉。给上这个环境变量后
-// 窗口来源变成 "env",压缩恢复,而且是**回合运行中途**压的(单次调用内压过 3 次)。
+// ── claude 的自动压缩是怎么算的(2.1.220 反编译核对) ──────────────────────────
+// 触发点不是「窗口」本身,中间垫了两层:
+//   有效窗口 T   = 声明窗口 W − min(CLAUDE_CODE_MAX_OUTPUT_TOKENS, 20000)
+//                  (`CSe`;现役模型 max_output 都 ≥ 20k,所以这一项恒等于 20000)
+//   触发水位     = min(floor(T × pct/100), T − 13000)      (`Sfo`)
+//   pct 从哪来   = CLAUDE_AUTOCOMPACT_PCT_OVERRIDE,不设就直接取 T − 13000
+// 也就是说:**只配窗口的话,压缩点被钉死在 W − 33000**;想更早压只能把窗口填小,
+// 而窗口填小的副作用是 claude 以为自己只有那么大 —— 剩余量显示、blocking 判定
+// 全跟着偏。所以这里把两件事拆开:窗口照实填,什么时候压交给百分比。
+//
+// 另外一条硬前提:`toy()` 里 `if(wSe()&&!JGe(t,r))return!1` —— 窗口来源是 "auto"
+// (没人显式配过)时,整段自动压缩直接跳过。白名单(sonnet-4-6 / opus-4-6 / opus-4-8 /
+// opus-5 / sonnet-5)外的模型(fable-5、经 anthropic 协议中转的第三方模型)就落在这一档。
+// 所以**百分比不能单独用**:不配窗口,来源仍是 auto,压缩根本不会被叫起来。
+const CLAUDE_COMPACT_RESERVE = 20_000;
+const CLAUDE_COMPACT_FLOOR_GAP = 13_000;
+
+export interface ClaudeCompactionPlan {
+  /** 声明给 claude 的窗口。 */
+  window: number;
+  /** 用户填的百分比(占**窗口**的比例)。 */
+  percent: number | null;
+  /** 换算成 claude 认的那个百分比(它是占「有效窗口」的比例)。 */
+  envPercent: number | null;
+  /** 实际触发水位。 */
+  trigger: number;
+  /** 填的百分比太晚,被 claude 自己的下限(T − 13000)顶掉了。 */
+  capped: boolean;
+}
+
+/**
+ * 按上面那套算法把用户填的两个数翻译成「实际会在多少 token 压缩」。
+ * 前端拿它显示、`toEnv` 拿它落环境变量,一个公式两处用,不会漂。
+ */
+export function claudeCompactionPlan(values: Record<string, number>): ClaudeCompactionPlan | null {
+  const window = values.autoCompactWindow;
+  if (typeof window !== "number" || !Number.isFinite(window)) return null;
+  const effective = window - CLAUDE_COMPACT_RESERVE;
+  const floor = effective - CLAUDE_COMPACT_FLOOR_GAP;
+  const percent = typeof values.autoCompactPercent === "number" && Number.isFinite(values.autoCompactPercent)
+    ? values.autoCompactPercent
+    : null;
+  if (percent === null || effective <= 0) {
+    return { window, percent: null, envPercent: null, trigger: Math.max(0, floor), capped: false };
+  }
+  const wanted = Math.floor((window * percent) / 100);
+  // claude 只认 0 < pct ≤ 100;换算后超过 100 说明用户想压得比它的下限还晚,
+  // 那就是「等于没设」,如实标 capped 而不是偷偷把数改小。
+  // 保留两位小数:claude 那边是 parseFloat,精度给够,触发点的误差就只剩几十 token。
+  const raw = (wanted / effective) * 100;
+  const envPercent = Math.min(100, Math.max(0.01, Math.round(raw * 100) / 100));
+  const trigger = Math.min(Math.floor((effective * envPercent) / 100), floor);
+  return { window, percent, envPercent, trigger, capped: wanted >= floor };
+}
+
 const CLAUDE_OVERRIDES: CliConfigOverride[] = [
   {
     key: "autoCompactWindow",
-    label: "自动压缩窗口",
+    label: "上下文窗口",
     env: "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
     shadows: "~/.claude/settings.json → autoCompactWindow",
-    help: "上下文涨到这个数附近时,claude 自己压缩历史。留空 = 跟随 CLI 判断;而 CLI 对白名单外的模型(fable-5、走中转的第三方模型)会整段跳过自动压缩,水位一路涨到炸。",
+    help: "照实填这个模型的上下文窗口。留空 = 跟随 CLI 判断,而 CLI 对白名单外的模型(fable-5、走中转的第三方模型)判不出来,会整段跳过自动压缩,水位一路涨到炸 —— 所以这一项是开关,不填下面的百分比也不生效。拿不准就往小了填:填小只是压得早一点,填大会压得太晚直接撞上限。",
     min: 100_000,
     max: 1_000_000,
     placeholder: "留空 = 跟随 CLI",
-    recommended: 160_000,
+    recommended: 200_000,
     unit: "token",
+  },
+  {
+    key: "autoCompactPercent",
+    label: "压缩触发点",
+    env: "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE",
+    shadows: "claude 内置的默认触发点(窗口 − 33k)",
+    help: "上下文用到窗口的百分之几时开始压缩。留空 = 用 claude 自己的默认,也就是离窗口顶还剩 33k 才压。",
+    min: 1,
+    max: 100,
+    placeholder: "留空 = 窗口 − 33k",
+    recommended: 80,
+    unit: "%",
+    requires: "autoCompactWindow",
+    // 用户填的是「占窗口的比例」,claude 认的是「占有效窗口(窗口 − 20k)的比例」,
+    // 差的就是那层 max_output 预留。这里换算一次,填 80 就真的在 80% 压。
+    toEnv: (_value, values) => {
+      const envPercent = claudeCompactionPlan(values)?.envPercent;
+      return typeof envPercent === "number" ? String(envPercent) : null;
+    },
   },
 ];
 
@@ -96,7 +172,35 @@ export function cliConfigOverrideEnv(
   const out: Record<string, string> = {};
   for (const spec of cliConfigOverridesFor(type)) {
     const value = values[spec.key];
-    if (typeof value === "number" && Number.isFinite(value)) out[spec.env] = String(value);
+    if (typeof value !== "number" || !Number.isFinite(value)) continue;
+    // 依赖项没配上的,这一项对 CLI 毫无意义,注进去只会让人以为它在起作用。
+    if (spec.requires && typeof values[spec.requires] !== "number") continue;
+    const encoded = spec.toEnv ? spec.toEnv(value, values) : String(value);
+    if (encoded !== null) out[spec.env] = encoded;
   }
   return out;
+}
+
+const fmtTokens = (n: number) => (n >= 1000 ? `${Math.round(n / 1000)}k` : String(n));
+
+/**
+ * 把「这几个数合起来会导致什么」翻译成人话,前端直接显示。
+ * 存在的理由:这一档配置的值和它的效果之间隔着一层 CLI 内部算法,只显示用户填的
+ * 数等于什么都没说 —— 得把算出来的触发水位摆在旁边,他才能判断填得对不对。
+ */
+export function cliConfigOverrideHints(
+  type: AgentType | string,
+  values: Record<string, number> | null | undefined,
+): string[] {
+  if (type !== "claude" || !values) return [];
+  const plan = claudeCompactionPlan(values);
+  if (!plan) {
+    return values.autoCompactPercent !== undefined
+      ? ["只填百分比不起作用:窗口留空时 claude 会整段跳过自动压缩。"]
+      : [];
+  }
+  const at = `上下文涨到 ~${fmtTokens(plan.trigger)} 时压缩(窗口 ${fmtTokens(plan.window)} 的 ${Math.round((plan.trigger / plan.window) * 100)}%)。`;
+  if (plan.percent === null) return [`${at}这是 claude 的默认触发点;想更早压就填下面的百分比。`];
+  if (plan.capped) return [`${at}填的 ${plan.percent}% 比 claude 自己的下限还晚,已经按下限算 —— 想更早压请往小了填。`];
+  return [at];
 }

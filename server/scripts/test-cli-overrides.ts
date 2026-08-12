@@ -24,7 +24,9 @@ if (!process.env.HARNESS_DB.startsWith("/tmp/")) {
 }
 
 const {
+  claudeCompactionPlan,
   cliConfigOverrideEnv,
+  cliConfigOverrideHints,
   cliConfigOverridesFor,
   normalizeCliConfigOverrides,
 } = await import("@harness/shared/cli-overrides");
@@ -64,6 +66,46 @@ assert.deepEqual(
   cliConfigOverrideEnv("claude", { [spec.key]: 160000 }),
   { [spec.env]: "160000" },
   "配了就该落成声明里的那个环境变量",
+);
+
+// ── ①b 百分比:用户填「占窗口的百分之几」,claude 认的是「占有效窗口的百分之几」 ──
+// 有效窗口 = 窗口 − 20k(max_output 预留),触发点还有个 −13k 的下限。这段换算错了
+// 不会报错,只会压得比用户以为的晚,所以按算例钉死。
+const plan = claudeCompactionPlan({ autoCompactWindow: 200_000, autoCompactPercent: 80 });
+assert.ok(plan, "填了窗口就该算得出方案");
+assert.ok(
+  Math.abs(plan.trigger - 160_000) <= 100,
+  `200k 的 80% 应当真的在 ~160k 触发,实际 ${plan.trigger}`,
+);
+assert.equal(plan.capped, false, "80% 没到 claude 自己的下限,不该标 capped");
+assert.equal(
+  cliConfigOverrideEnv("claude", { autoCompactWindow: 200_000, autoCompactPercent: 80 })
+    .CLAUDE_AUTOCOMPACT_PCT_OVERRIDE,
+  String(plan.envPercent),
+  "注入的百分比要用换算后的值,不是用户填的那个",
+);
+
+const late = claudeCompactionPlan({ autoCompactWindow: 200_000, autoCompactPercent: 95 });
+assert.ok(late?.capped, "95% 比 claude 的下限(窗口 − 33k)还晚,应如实标 capped");
+assert.equal(late.trigger, 167_000, "被顶掉时触发点就是那个下限");
+
+const bare = claudeCompactionPlan({ autoCompactWindow: 200_000 });
+assert.equal(bare?.trigger, 167_000, "只填窗口时用 claude 的默认触发点");
+
+// 百分比单独填对 CLI 毫无意义(窗口不配,来源仍是 auto,压缩整段跳过),不能注进去
+// 让人以为它在起作用。
+assert.deepEqual(
+  cliConfigOverrideEnv("claude", { autoCompactPercent: 80 }),
+  {},
+  "缺依赖项时这一项不该落成环境变量",
+);
+assert.ok(
+  cliConfigOverrideHints("claude", { autoCompactPercent: 80 })[0]?.includes("不起作用"),
+  "缺依赖项时要明说它不起作用",
+);
+assert.ok(
+  cliConfigOverrideHints("claude", { autoCompactWindow: 200_000, autoCompactPercent: 80 })[0]?.includes("160k"),
+  "填全了要把算出来的触发水位显示出来",
 );
 
 // ── ②③ 真的进到子进程了吗 ──────────────────────────────────────────────────

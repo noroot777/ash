@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Sliders, X } from "@phosphor-icons/react";
 import type { AgentType } from "@harness/shared";
-import { cliConfigOverridesFor } from "@harness/shared/cli-overrides";
+import { cliConfigOverrideHints, cliConfigOverridesFor } from "@harness/shared/cli-overrides";
 import { Button } from "../components/ui.tsx";
 
 // 「harness 替你写进 CLI 的配置」的编辑入口。这一档配置跟旁边那些(模型、档位、
@@ -9,9 +9,13 @@ import { Button } from "../components/ui.tsx";
 // 不是表单好不好填,而是那行 `shadows` —— 不写明白「这一项盖掉了 xxx」,用户在
 // settings.json 里改了不生效,只会以为 CLI 坏了。
 //
+// 第二个重点是底下那行 hint:这几个数和它们的实际效果之间隔着一层 CLI 内部算法
+// (填 200k + 80% 到底在多少 token 压?),所以边填边把算出来的结果摆在旁边。
+//
 // 弹层结构与 ProfileArgsControl 一致(共用 .agent-profile-args-popover 那套样式)。
 
 const fmt = (n: number) => (n >= 1000 ? `${Math.round(n / 1000)}k` : String(n));
+const fmtWith = (n: number, unit?: string) => (unit === "%" ? `${n}%` : fmt(n));
 
 export function ProfileOverridesControl({
   profileName,
@@ -66,7 +70,9 @@ export function ProfileOverridesControl({
   const dirty = key(parsed) !== key(value);
 
   const active = specs.filter((spec) => value[spec.key] !== undefined);
-  const summary = active.map((spec) => `${spec.label} ${fmt(value[spec.key]!)}`).join(" · ");
+  const summary = active.map((spec) => fmtWith(value[spec.key]!, spec.unit)).join(" · ");
+  // hint 跟着草稿走,不是跟着已保存的值走 —— 这行字存在的意义就是「改之前先看看会变成什么」。
+  const hints = cliConfigOverrideHints(type, parsed);
 
   const close = () => {
     setDraft(toDraft(value));
@@ -140,13 +146,19 @@ export function ProfileOverridesControl({
                     disabled={disabled}
                     onClick={() => setDraft((current) => ({ ...current, [spec.key]: String(spec.recommended) }))}
                   >
-                    用 {fmt(spec.recommended)}
+                    用 {fmtWith(spec.recommended, spec.unit)}
                   </Button>
                 </div>
                 <p>{spec.help}</p>
               </div>
             ))}
           </div>
+
+          {hints.length > 0 && (
+            <div className="agent-profile-override-hint">
+              {hints.map((hint) => <p key={hint}>{hint}</p>)}
+            </div>
+          )}
 
           <div className="agent-profile-args-popover-actions">
             <span>

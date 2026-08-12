@@ -258,6 +258,25 @@
   line-height: 1.5;
 }
 
+/* 「这几个数合起来会变成什么」——比用户填的数本身更重要，所以给它一块底色，
+   不跟上面那些灰色说明文字混在一起。 */
+.agent-profile-override-hint {
+  display: grid;
+  gap: 4px;
+  margin-top: 12px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--panel);
+  border: 1px solid var(--line2);
+}
+
+.agent-profile-override-hint p {
+  margin: 0;
+  color: var(--ink);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
 .agent-args-editor {
   display: grid;
   gap: 6px;
