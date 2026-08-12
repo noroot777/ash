@@ -589,6 +589,15 @@ api.post("/tasks/:id/archive", async (c) => {
   if (r.workflowMode === "free" && await hasActiveFreeReview(r.id)) {
     return c.json({ error: "自由审查正在进行，结束后再归档" }, 409);
   }
+  // 团队归档会连 children 一起冻结：任一执行者还在验收(含发布尾段)/回合中时归档，
+  // 冻结的任务会继续产生外部副作用(审查实测:child beginAccepting 后归档 lead 200)。
+  if (r.mode === "team") {
+    const children = await db.select({ id: tasks.id, title: tasks.title }).from(tasks).where(eq(tasks.parentId, r.id));
+    const busy = children.find((child) => isAcceptingTask(child.id) || isTurnClaimed(child.id));
+    if (busy) {
+      return c.json({ error: `执行者「${busy.title}」正在验收或回合中，结束后再归档`, childId: busy.id }, 409);
+    }
+  }
   const ts = now();
   // 团队(§Team):归档才是「这件事结束了」—— 先停掉调度台进程和所有在跑的执行者,
   // 再把执行者一并归档(不管它们各自停在什么状态:团队没了,散在列表里的执行者只是

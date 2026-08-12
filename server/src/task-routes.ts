@@ -4,10 +4,10 @@ import { isReasoningEffortSupported, normalizeReasoningEffort, reasoningEffortsF
 import { inheritExecutorOverrides, pickExecutor, sameExecutor } from "@harness/shared/executors";
 import { normalizeWorkflowDef } from "@harness/shared/workflow";
 import { TASK_WORKFLOW_MODES } from "@harness/shared/free-workflow";
-import { asc, eq } from "drizzle-orm";
+import { asc, eq, inArray } from "drizzle-orm";
 import type { Hono } from "hono";
 import { db } from "./db/index.js";
-import { agents, groups, noteTasks, projects, queueItems, tasks } from "./db/schema.js";
+import { agents, freeReviewRounds, freeReviewRuns, freeWorkflowEvents, freeWorkflowStates, groups, noteTasks, projects, queueItems, scheduledMessages, tasks } from "./db/schema.js";
 import { repoKey } from "./git.js";
 import { detectTaskWorkspace, discardTaskWorkspace } from "./workspace-cleanup.js";
 import { followUpsFor } from "./task-follow-up.js";
@@ -348,6 +348,20 @@ api.get("/tasks/:id/workspace", async (c) => {
   return c.json({ ...own, ...(children.length ? { children } : {}) });
 });
 
+// 任务行删除时连关联状态一起收：自由审查链(run/round)、预约槽、事件、排队/定时消息、
+// 随手记回链。没有 FK cascade,只删任务行会留下孤儿——审查实测:等答复的审查在任务
+// 删除后永远停在 reviewing,答复消息永远 pending(投递时任务已不存在)。
+async function deleteTaskAssociations(taskId: string): Promise<void> {
+  const runIds = (await db.select({ id: freeReviewRuns.id }).from(freeReviewRuns)
+    .where(eq(freeReviewRuns.taskId, taskId))).map((run) => run.id);
+  if (runIds.length) await db.delete(freeReviewRounds).where(inArray(freeReviewRounds.runId, runIds));
+  await db.delete(freeReviewRuns).where(eq(freeReviewRuns.taskId, taskId));
+  await db.delete(freeWorkflowStates).where(eq(freeWorkflowStates.taskId, taskId));
+  await db.delete(freeWorkflowEvents).where(eq(freeWorkflowEvents.taskId, taskId));
+  await db.delete(scheduledMessages).where(eq(scheduledMessages.taskId, taskId));
+  await db.delete(noteTasks).where(eq(noteTasks.taskId, taskId));
+}
+
 // 删除任务。`worktree=1` / `branch=1` 表示用户在确认框里勾了「连 worktree 和分支
 // 一起删」,`force=1` 是看过第一次失败之后的再来一次(--force / -D)。
 //
@@ -370,8 +384,11 @@ api.delete("/tasks/:id", async (c) => {
   // 团队：执行者跟着 lead 活。任何 child 在飞就拒删（否则活着的 worker 失去父任务，
   // 还可能连带清掉它正在用的共享工作区）；都停了则连 children 行一并删，不留悬空 parentId。
   const children = existing ? await db.select().from(tasks).where(eq(tasks.parentId, tid)) : [];
+  // child 的验收锁也要传播:执行者的发布尾段还在跑时删掉整个团队,结算会写向不存在
+  // 的任务行(审查实测:child beginAccepting 后删除 lead 返回 200)。
   const busyChild = children.find(
-    (child) => child.status === "running" || child.status === "queued" || isTurnClaimed(child.id),
+    (child) => child.status === "running" || child.status === "queued"
+      || isTurnClaimed(child.id) || isAcceptingTask(child.id),
   );
   if (busyChild) {
     return c.json({
@@ -389,7 +406,7 @@ api.delete("/tasks/:id", async (c) => {
   // 数据库里查无此任务的孤儿资源，leftover 检测（按父任务 id）也看不到（审查实测）。
   const childCleanups: (TaskWorkspaceDiscardResult & { taskId: string })[] = [];
   for (const child of children) {
-    await db.delete(noteTasks).where(eq(noteTasks.taskId, child.id));
+    await deleteTaskAssociations(child.id);
     await db.delete(tasks).where(eq(tasks.id, child.id));
     if (project && child.useWorktree && (wantWorktree || wantBranch)) {
       childCleanups.push({
@@ -402,7 +419,7 @@ api.delete("/tasks/:id", async (c) => {
       });
     }
   }
-  await db.delete(noteTasks).where(eq(noteTasks.taskId, tid));
+  await deleteTaskAssociations(tid);
   await db.delete(tasks).where(eq(tasks.id, tid));
   let cleanup: TaskWorkspaceDiscardResult | null = null;
   if (project && (wantWorktree || wantBranch)) {

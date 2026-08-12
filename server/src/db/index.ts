@@ -264,6 +264,7 @@ export async function ensureSchema() {
     "ALTER TABLE tasks ADD COLUMN accepted_base_commit TEXT",
     "ALTER TABLE tasks ADD COLUMN accepted_merge_commit TEXT",
     "ALTER TABLE tasks ADD COLUMN accepted_tail_pending INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE tasks ADD COLUMN accepted_tail_done TEXT NOT NULL DEFAULT '[]'",
     // Token 用量:一条会话行按回合累加(口径统一在 shared/src/usage.ts)。全 null
     // = 这条会话建在本功能之前、或那家 CLI 不报账——**不能当 0 展示**。
     "ALTER TABLE sessions ADD COLUMN usage_input INTEGER",

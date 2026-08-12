@@ -21,7 +21,7 @@ import { writeTurn, runTracePaths } from "./transcript.js";
 import { recordUserConversationTurn } from "./conversation-turn.js";
 import { startTeam, deliverToLead } from "./team/session.js";
 import { workerPreambleFor } from "./team/dispatch.js";
-import { clearAcceptedSnapshot, peekAcceptedStage } from "./task-stage.js";
+import { clearAcceptedSnapshot, peekAcceptedStage, reopenAcceptedStage } from "./task-stage.js";
 import { reviewProtocolFor, reviewReminderFor, verifyReminderFor } from "./review-prompts.js";
 import { peerNoticeFor } from "./peer-context.js";
 import { reconcileTurnBaseline, recordTurnBaseline } from "./turn-baseline.js";
@@ -172,6 +172,11 @@ export async function reconcileInterrupted(): Promise<void> {
         .set({ followUpFrom: null, completeConfirmedAt: null, updatedAt: now() })
         .where(eq(tasks.id, t.id));
     }
+    // 被打断的回合可能已经走完 write-ahead（基线落盘、验收快照清空）：这里就是它的
+    // 结算，必须把基线消费掉——工作目录没动过就整套挂回 stage/合并快照/尾段进度。
+    // 只恢复 status 的话，基线躺在磁盘上等下一个真人回合 recordTurnBaseline 直接覆盖，
+    // 已验收事实从「暂时不显示」变成永久丢失（审查实测复现）。
+    await reconcileTurnBaseline(t.id, false);
     await setTaskStatus(t.id, back);
   }
   for (const teamId of teamIds) await setTaskStatus(teamId, "idle");
@@ -234,6 +239,12 @@ export async function runTask(taskId: string): Promise<void> {
       .set({ followUpFrom: null, completeConfirmedAt: null, updatedAt: now() })
       .where(eq(tasks.id, taskId));
     await setStatus(taskId, "running");
+    // 已验收任务被 fresh 重跑（Cron 到点 / fire）：旧「已验收」牌子当场摘掉——新一版
+    // 产出不能躲在旧牌子下继续改（enterHumanGate 见 merged 会静默放行；审查实测：
+    // fire 后任务 failed 而 stage 仍 accepted）。fresh 重跑是「再做一版」的明确意图，
+    // 没有「纯询问挂回」一说，启动即摘；后续启动失败牌子也不放回——方向是保守的
+    // 「要求重新验收」，不是丢数据（合并事实在 git 历史与时间线里都有）。
+    await reopenAcceptedStage(taskId);
 
     // Ordinary tasks resolve exactly as before. Team workers additionally inherit
     // their lead's shared workspace unless they explicitly request another worktree.

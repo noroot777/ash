@@ -56,6 +56,8 @@ export type AcceptedSnapshot = {
   base: string | null;
   merge: string | null;
   tailPending: boolean;
+  /** 尾段逐站进度（step id 清单）；缺省 = 旧版基线，按空清单恢复。 */
+  tailDone?: string[];
 };
 export type ReopenedAcceptance = { stage: "accepted" | "merged"; snapshot: AcceptedSnapshot };
 
@@ -74,11 +76,14 @@ export async function peekAcceptedStage(taskId: string): Promise<ReopenedAccepta
     base: tasks.acceptedBaseCommit,
     merge: tasks.acceptedMergeCommit,
     tailPending: tasks.acceptedTailPending,
+    tailDone: tasks.acceptedTailDone,
   }).from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!t || (t.stage !== "accepted" && t.stage !== "merged")) return null;
+  let tailDone: string[] = [];
+  try { tailDone = JSON.parse(t.tailDone ?? "[]") as string[]; } catch { /* 按空清单 */ }
   return {
     stage: t.stage,
-    snapshot: { target: t.target, base: t.base, merge: t.merge, tailPending: t.tailPending },
+    snapshot: { target: t.target, base: t.base, merge: t.merge, tailPending: t.tailPending, tailDone },
   };
 }
 
@@ -98,7 +103,7 @@ export async function clearAcceptedSnapshot(taskId: string): Promise<void> {
   // 上一周期的合并事实在 git 历史与时间线里都有。
   await db.update(tasks).set({
     acceptedTargetBranch: null, acceptedBaseCommit: null, acceptedMergeCommit: null,
-    acceptedTailPending: false, updatedAt: now(),
+    acceptedTailPending: false, acceptedTailDone: "[]", updatedAt: now(),
   }).where(eq(tasks.id, taskId));
 }
 
@@ -133,6 +138,7 @@ export async function restoreTaskStage(
       acceptedBaseCommit: snapshot.base,
       acceptedMergeCommit: snapshot.merge,
       acceptedTailPending: snapshot.tailPending,
+      acceptedTailDone: JSON.stringify(snapshot.tailDone ?? []),
     } : {}),
     updatedAt,
   }).where(eq(tasks.id, taskId));

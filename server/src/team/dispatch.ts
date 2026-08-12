@@ -18,6 +18,7 @@ import { runGroup } from "../scheduler.js";
 import { TEAM_WORKER_PREAMBLE } from "./prompts.js";
 import { createTasks } from "../task-store.js";
 import { reopenAcceptedStage } from "../task-stage.js";
+import { isAcceptingTask } from "../acceptance-lock.js";
 
 export interface DispatchSpec {
   body: string;
@@ -47,6 +48,11 @@ export async function dispatchWorkers(
   if (!lead) throw new Error("调度者任务不存在");
   if (lead.mode !== "team") throw new Error("只有团队任务(mode:\"team\")能派活");
   if (lead.archived) throw new Error("团队已归档,不能再派活");
+  // 验收(含发布尾段)正在进行:此刻派活会在合并/清理还没收尾时就重新开工,并把
+  // reopen 摘牌用于崩溃补跑的验收事实清空(审查实测:锁内派活,快照全空+新 worker
+  // 立即启动)。团队没有 turn 锁可与验收原子互斥,这一次检查即是全部防线,所以放在
+  // 一切写入(建组/建任务/摘牌)之前。
+  if (isAcceptingTask(leadTaskId)) throw new Error("团队正在验收(含发布尾段),结束后再派活");
   const cfg: TeamConfig = lead.team ? JSON.parse(lead.team) : TEAM_DEFAULTS;
   const mode = opts.mode ?? (specs.length > 1 ? "serial" : "parallel");
   const profileTypes = new Map(

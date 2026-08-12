@@ -213,8 +213,17 @@ export async function reconcileFreeReviews(): Promise<void> {
   const stuck = await db.select().from(freeReviewRuns).where(eq(freeReviewRuns.status, "reviewing"));
   for (const run of stuck) {
     const task = (await db.select().from(tasks).where(eq(tasks.id, run.taskId))).at(0);
-    if (!task) continue;
-    // 已交卷（当前 round 有结论）的审查不需要回合活着：直接补结算，不能因遗留的
+    if (!task) {
+      // 任务行已不存在（旧版删除没做级联）：审查链永远无人结算，原地收尸自愈。
+      await db.delete(freeReviewRounds).where(eq(freeReviewRounds.runId, run.id));
+      await db.delete(freeReviewRuns).where(eq(freeReviewRuns.id, run.id));
+      continue;
+    }
+    // **回合活着就不碰**——这一条必须排在最前面：reviewer 可能已上报结论、但回合被
+    // reattach 接回还在跑，此刻按 turnOk=true 补结算是提前放行——reviewer 随后非零
+    // 退出/被停止时，正常结算已找不到 reviewing run，错误结论无法撤销（审查实测）。
+    if (task.status === "running" || task.status === "queued" || isTurnClaimed(task.id)) continue;
+    // 已交卷（当前 round 有结论）且回合确实死了：直接补结算，不能因遗留的
     // question/等待态被永远跳过——那会让验收持续被 active review 409 挡住（审查实测）。
     const round = (await db.select().from(freeReviewRounds)
       .where(and(eq(freeReviewRounds.runId, run.id), eq(freeReviewRounds.round, run.currentRound)))).at(0);
@@ -222,7 +231,6 @@ export async function reconcileFreeReviews(): Promise<void> {
       await handleFreeWorkflowSettlement(run.taskId, task.status as TaskStatus, false, true, "reviewer");
       continue;
     }
-    if (task.status === "running" || task.status === "queued" || isTurnClaimed(task.id)) continue;
     if (task.question || task.resumePrompt) continue;
     // /answer 可能已清掉 question、答复正躺在排队消息里等投递（reviewer 提问回合还没
     // release turn 时的正常路径）：那条链在等答案，不是孤儿——对账先于 scheduler 恢复

@@ -161,6 +161,10 @@ export const tasks = sqliteTable("tasks", {
   // 尾段跑完（无论成败，结果已报告）清 0。进程死在两者之间时，重启后的重复验收会发现
   // 它还挂着并补跑——否则发布步骤被 already_accepted 快路静默永久漏掉（审查实测复现）。
   acceptedTailPending: integer("accepted_tail_pending", { mode: "boolean" }).notNull().default(false),
+  // 尾段的**逐站** durable 进度（JSON string[]：已完成的 step id）。只有 pending 一个
+  // 布尔位时，崩溃重试会整段重跑——已经执行过的发布/部署命令再来一遍（at-least-once
+  // 变 at-least-twice，审查实测复现）。补跑按这份清单跳过已完成的站；随 pending 一起清。
+  acceptedTailDone: text("accepted_tail_done").notNull().default("[]"),
 });
 
 export const agents = sqliteTable("agents", {
