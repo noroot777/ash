@@ -301,8 +301,9 @@
 .workspace-spread-dot--accepted { --spread-dot: var(--cyan); }
 
 /* 星标那颗画成星形:它是手动记号不是状态桶,跟五颗状态圆点分开认。
-   盒保持通用的 7px 圆(星形 svg 溢出居中),这样选中态的圈(box-shadow)和 hover
-   放大的几何与旁边的状态圆点完全一致,不会显得圈大一号。 */
+   星形 svg 和圆点同为 7px、同住通用盒,hover/选中的几何与旁边圆点完全一致。
+   选中态不能让星悬在空心环里(星和环之间露一圈底色,看着像圆圈套星):
+   跟普通点同构——通用规则把 i 填成实心圆贴住光环,星形反白刻在圆里。 */
 .workspace-spread-dot--starred { --spread-dot: var(--muted); }
 
 .workspace-spread-dot--starred i {
@@ -312,7 +313,9 @@
   color: var(--muted);
 }
 
-.workspace-spread-dot--starred.is-on i { background: transparent; }
+.workspace-spread-dot--starred.is-on i { color: var(--chrome); }
+
+.workspace-spread-dot--starred.is-on i svg { transform: scale(0.86); }
 
 .workspace-spread-dot--starred i svg { display: block; flex: 0 0 auto; }
 

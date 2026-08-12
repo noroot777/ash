@@ -85,7 +85,7 @@ function SpreadFilterDot({
       >
         {/* 星标是手动记号不是状态桶,画成星形跟那排状态圆点分开 */}
         <i aria-hidden="true">
-          {bucketKey === "starred" && <Star size={9} weight="fill" />}
+          {bucketKey === "starred" && <Star size={7} weight="fill" />}
         </i>
       </button>
       {tip && createPortal(
