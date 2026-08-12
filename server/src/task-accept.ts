@@ -594,10 +594,15 @@ export async function acceptTask(
       if (result.kind === "gate_released") await releaseGate(taskId, advanceOpts);
       else if (result.kind !== "already_accepted" || tailStillPending) {
         if (tailStillPending) {
-          await appendTaskTimeline(taskId, "上次验收在「点头之后」那一段执行前中断，本次补跑该段。");
+          await appendTaskTimeline(taskId, "上次验收的「点头之后」段没有跑完（中断或有站失败），本次只补跑未完成的站。");
         }
         const tail = await runAcceptedTail(taskId, by);
-        await db.update(tasks).set({ acceptedTailPending: false, acceptedTailDone: "[]", updatedAt: now() }).where(eq(tasks.id, taskId));
+        // 只有尾段**全部跑完**（或线上根本没有尾段）才清补跑凭据。失败时 pending 留着、
+        // 已完成的站留在逐站清单里——时间线承诺「要不要补跑由你定」，再次验收会从失败站
+        // 接着跑；无条件清空的话失败站和后续站永久失去补跑入口（审查实测）。
+        if (!tail || tail.ok) {
+          await db.update(tasks).set({ acceptedTailPending: false, acceptedTailDone: "[]", updatedAt: now() }).where(eq(tasks.id, taskId));
+        }
         if (tail) result = { ...result, tail };
       }
     }

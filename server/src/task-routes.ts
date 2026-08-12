@@ -7,7 +7,7 @@ import { TASK_WORKFLOW_MODES } from "@harness/shared/free-workflow";
 import { asc, eq, inArray } from "drizzle-orm";
 import type { Hono } from "hono";
 import { db } from "./db/index.js";
-import { agents, freeReviewRounds, freeReviewRuns, freeWorkflowEvents, freeWorkflowStates, groups, noteTasks, projects, queueItems, scheduledMessages, tasks } from "./db/schema.js";
+import { agents, freeReviewRounds, freeReviewRuns, freeWorkflowEvents, freeWorkflowStates, groups, noteTasks, projects, queueItems, schedules, scheduledMessages, sessions, tasks } from "./db/schema.js";
 import { repoKey } from "./git.js";
 import { detectTaskWorkspace, discardTaskWorkspace } from "./workspace-cleanup.js";
 import { followUpsFor } from "./task-follow-up.js";
@@ -17,6 +17,25 @@ import { isTurnClaimed } from "./runs.js";
 import { isAcceptingTask } from "./acceptance-lock.js";
 import { createTasks, enrichTasks, publishTaskUpdated } from "./task-store.js";
 import { attachmentsPrompt, id, now } from "./util.js";
+
+// 任务行删除时连关联状态一起收：自由审查链(run/round)、预约槽、事件、排队/定时消息、
+// 随手记回链。没有 FK cascade,只删任务行会留下孤儿——审查实测:等答复的审查在任务
+// 删除后永远停在 reviewing,答复消息永远 pending(投递时任务已不存在)。
+export async function deleteTaskAssociations(taskId: string): Promise<void> {
+  const runIds = (await db.select({ id: freeReviewRuns.id }).from(freeReviewRuns)
+    .where(eq(freeReviewRuns.taskId, taskId))).map((run) => run.id);
+  if (runIds.length) await db.delete(freeReviewRounds).where(inArray(freeReviewRounds.runId, runIds));
+  await db.delete(freeReviewRuns).where(eq(freeReviewRuns.taskId, taskId));
+  await db.delete(freeWorkflowStates).where(eq(freeWorkflowStates.taskId, taskId));
+  await db.delete(freeWorkflowEvents).where(eq(freeWorkflowEvents.taskId, taskId));
+  await db.delete(scheduledMessages).where(eq(scheduledMessages.taskId, taskId));
+  await db.delete(noteTasks).where(eq(noteTasks.taskId, taskId));
+  // 会话行、定时计划、队列位也一起收：孤儿 cron 每个 tick 都会被扫到再查不到任务，
+  // 队列残位会顶住后续推进（审查实测：删除后 sessionRows/scheduleRows 各剩 1）。
+  await db.delete(sessions).where(eq(sessions.taskId, taskId));
+  await db.delete(schedules).where(eq(schedules.taskId, taskId));
+  await db.delete(queueItems).where(eq(queueItems.taskId, taskId));
+}
 
 export function mountTaskRoutes(api: Hono): void {
   // 一次最多问这么多任务的追问 —— 每个都要摸一次盘，别让一个手抖的请求
@@ -348,19 +367,6 @@ api.get("/tasks/:id/workspace", async (c) => {
   return c.json({ ...own, ...(children.length ? { children } : {}) });
 });
 
-// 任务行删除时连关联状态一起收：自由审查链(run/round)、预约槽、事件、排队/定时消息、
-// 随手记回链。没有 FK cascade,只删任务行会留下孤儿——审查实测:等答复的审查在任务
-// 删除后永远停在 reviewing,答复消息永远 pending(投递时任务已不存在)。
-async function deleteTaskAssociations(taskId: string): Promise<void> {
-  const runIds = (await db.select({ id: freeReviewRuns.id }).from(freeReviewRuns)
-    .where(eq(freeReviewRuns.taskId, taskId))).map((run) => run.id);
-  if (runIds.length) await db.delete(freeReviewRounds).where(inArray(freeReviewRounds.runId, runIds));
-  await db.delete(freeReviewRuns).where(eq(freeReviewRuns.taskId, taskId));
-  await db.delete(freeWorkflowStates).where(eq(freeWorkflowStates.taskId, taskId));
-  await db.delete(freeWorkflowEvents).where(eq(freeWorkflowEvents.taskId, taskId));
-  await db.delete(scheduledMessages).where(eq(scheduledMessages.taskId, taskId));
-  await db.delete(noteTasks).where(eq(noteTasks.taskId, taskId));
-}
 
 // 删除任务。`worktree=1` / `branch=1` 表示用户在确认框里勾了「连 worktree 和分支
 // 一起删」,`force=1` 是看过第一次失败之后的再来一次(--force / -D)。

@@ -100,4 +100,3 @@ export async function runAcceptedTail(taskId: string, by: AcceptBy): Promise<Acc
   }
   return { ok: false, step: label, reason: result.reason };
 }
-

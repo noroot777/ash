@@ -16,7 +16,7 @@ import type {
 import { maxBytesFor, attachmentKind } from "@harness/shared";
 import { isReasoningEffortSupported, normalizeReasoningEffort, reasoningEffortsFor } from "@harness/shared/cli-presets";
 import { db } from "./db/index.js";
-import { projects, groups, tasks, sessions, schedules, agents, llmProviders, notes, noteTasks } from "./db/schema.js";
+import { projects, groups, tasks, agents, llmProviders, notes, noteTasks } from "./db/schema.js";
 import { bus } from "./bus.js";
 import { id, now } from "./util.js";
 import { listModels } from "./llm.js";
@@ -26,6 +26,9 @@ import { searchAll } from "./search.js";
 import { projectHealthLight, projectHealthFull, tidyRepoPath, repoKey, listBranches } from "./git.js";
 import { getGitOverview } from "./git-overview.js";
 import { discardTaskWorkspace } from "./workspace-cleanup.js";
+import { deleteTaskAssociations } from "./task-routes.js";
+import { isTurnClaimed } from "./runs.js";
+import { isAcceptingTask } from "./acceptance-lock.js";
 import { mountDuetIterationRoutes } from "./duet/iteration.js";
 import { mountNoteRoutes } from "./notes.js";
 import { mountTeamPresetRoutes } from "./team-presets.js";
@@ -341,15 +344,19 @@ api.patch("/projects/:id", async (c) => {
 api.delete("/projects/:id", async (c) => {
   const pid = c.req.param("id");
   const ptasks = await db.select().from(tasks).where(eq(tasks.projectId, pid));
-  const live = ptasks.find((t) => t.status === "running" || t.status === "queued");
-  if (live) return c.json({ error: "项目有正在运行/排队的任务，无法删除", taskId: live.id }, 409);
+  // 单任务 DELETE 的生命周期锁在这里同样成立：turn 已占（status 未落 running）、验收
+  // （含发布尾段）进行中删掉任务行，结算/尾段会写向不存在的任务（审查实测：项目入口
+  // 完全绕过了任务级门禁）。
+  const live = ptasks.find((t) =>
+    t.status === "running" || t.status === "queued" || isTurnClaimed(t.id) || isAcceptingTask(t.id));
+  if (live) return c.json({ error: "项目有正在运行/排队/验收中的任务，无法删除", taskId: live.id }, 409);
   for (const t of ptasks) {
-    await db.delete(sessions).where(eq(sessions.taskId, t.id));
-    await db.delete(schedules).where(eq(schedules.taskId, t.id));
+    // 与单任务 DELETE 同一份级联（审查链/预约/事件/消息/会话/计划/队列位），不留
+    // reconcile 收不掉的孤儿（state/event/message/queue item 都没有自愈入口）。
+    await deleteTaskAssociations(t.id);
     rmSync(join(RUNS_DIR, t.id), { recursive: true, force: true });
     rmSync(join(DATA_DIR, "scratch", t.id), { recursive: true, force: true });
   }
-  if (ptasks.length) await db.delete(noteTasks).where(inArray(noteTasks.taskId, ptasks.map((task) => task.id)));
   await db.delete(tasks).where(eq(tasks.projectId, pid));
   await db.delete(groups).where(eq(groups.projectId, pid));
   const projectNotes = await db.select({ id: notes.id }).from(notes).where(eq(notes.projectId, pid));

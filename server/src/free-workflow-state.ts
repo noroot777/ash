@@ -43,8 +43,11 @@ function revisionOf(taskId: string): number {
   revisions.set(taskId, initial);
   return initial;
 }
+// task.status 也要 bump：executions 一列是从任务 status 推导的，只订阅 task.review 的话
+// 「completed → failed」这类变化拿到同一版本，前端拒收相等版本的新快照——2.5s 轮询到的
+// 正确状态被永久丢弃（审查实测）。下面的指纹核对是同一件事的自愈兜底。
 bus.subscribe((event) => {
-  if (event.type !== "task.review") return;
+  if (event.type !== "task.review" && event.type !== "task.status") return;
   revisions.set(event.taskId, Math.max(revisionOf(event.taskId) + 1, Date.now()));
 });
 
@@ -207,7 +210,7 @@ async function readFreeWorkflowState(taskId: string): Promise<FreeWorkflowApiSta
   // 变化时也 bump，否则两份不同内容的快照拿同一版本、迟到的旧响应能抹掉「结论过期」
   // 警示（审查实测）。版本在指纹核对后取——DB 读取期间的变更会由随后的事件 bump +
   // SSE 重取覆盖，方向自愈。
-  const fp = `${workspace.head}|${workspace.dirty}`;
+  const fp = `${workspace.head}|${workspace.dirty}|${task.status}`;
   if (workspaceFingerprints.get(taskId) !== fp) {
     workspaceFingerprints.set(taskId, fp);
     revisions.set(taskId, Math.max(revisionOf(taskId) + 1, Date.now()));

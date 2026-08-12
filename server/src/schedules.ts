@@ -1,5 +1,6 @@
 import { eq } from "drizzle-orm";
 import { db } from "./db/index.js";
+import { isAcceptingTask } from "./acceptance-lock.js";
 import { schedules, tasks, groups } from "./db/schema.js";
 import { runTask } from "./orchestrator.js";
 import { runDuet } from "./duet/index.js";
@@ -56,21 +57,29 @@ const sameMinute = (a: string, b: Date) => {
 // the manual run/retry/group path's job, and "continue at a future time" is what
 // scheduledMessages (定时发消息 → continueTask) is for. (See the bug where a daily
 // cron kept appending 〔系统〕继续 into the same session instead of running anew.)
-async function fire(taskId: string) {
+// 返回**这一班有没有真的开跑**：跳过(任务在跑/归档/组暂停/验收中)一律 false——
+// 调用方只在 true 时才消费班次(写 lastRunAt、once 禁用)。先记账后开火的老顺序会把
+// 被跳过的班永久记作已跑:once 被消费、cron 同一分钟 sameMinute 拦住不再试(审查实测:
+// 验收锁内 fire,班次静默丢失)。
+async function fire(taskId: string): Promise<boolean> {
   const t = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
-  if (!t || t.status === "running" || t.status === "queued") return;
+  if (!t || t.status === "running" || t.status === "queued") return false;
   // Archived = frozen: a schedule never fires an archived task. We skip here
   // rather than disabling the schedule, so unarchiving restores it automatically.
-  if (t.archived) return;
+  if (t.archived) return false;
+  // 验收(含发布尾段)正在进行:fresh 重跑会与合并/清理抢工作区(runTask 里也会被
+  // 静默挡回)。不消费班次,下个 tick 再试。
+  if (isAcceptingTask(taskId)) return false;
   // Respect a paused group: a pause means "halt this group", so the scheduler
   // must not sneak a group member past it. The task fires on the next due tick
   // once the group is resumed.
   if (t.groupId) {
     const g = (await db.select().from(groups).where(eq(groups.id, t.groupId))).at(0);
-    if (g?.paused) return;
+    if (g?.paused) return false;
   }
   if (t.mode === "duet") void runDuet(taskId);
   else void runTask(taskId); // 全新一轮(新 session),不接续上次会话
+  return true;
 }
 
 export async function tick() {
@@ -78,16 +87,18 @@ export async function tick() {
   const rows = await db.select().from(schedules).where(eq(schedules.enabled, true));
   for (const s of rows) {
     try {
+      // 先问 fire 能不能跑、真跑了才记账:fire 决定与写 lastRunAt 之间没有 await 间隙,
+      // 同一分钟 double-fire 的旧防线不受影响;被跳过的班次不消费,下个 tick 重试。
       if (s.kind === "once") {
-        if (s.at && new Date(s.at) <= now && !s.lastRunAt) {
+        if (s.at && new Date(s.at) <= now && !s.lastRunAt && await fire(s.taskId)) {
           await db.update(schedules).set({ lastRunAt: now.toISOString(), enabled: false }).where(eq(schedules.id, s.id));
-          await fire(s.taskId);
         }
       } else if (s.kind === "cron" && s.cron && cronMatches(s.cron, now)) {
         // guard against double-fire within the same minute (tick runs more often)
         if (s.lastRunAt && sameMinute(s.lastRunAt, now)) continue;
-        await db.update(schedules).set({ lastRunAt: now.toISOString() }).where(eq(schedules.id, s.id));
-        await fire(s.taskId);
+        if (await fire(s.taskId)) {
+          await db.update(schedules).set({ lastRunAt: now.toISOString() }).where(eq(schedules.id, s.id));
+        }
       }
     } catch {
       /* keep ticking */
