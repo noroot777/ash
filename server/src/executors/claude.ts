@@ -3,6 +3,7 @@ import type { ChildProcess } from "node:child_process";
 import { createInterface } from "node:readline";
 import type { AgentEvent, AgentType, ExecTarget, TokenUsage } from "@harness/shared";
 import { guessContextWindow } from "@harness/shared/usage";
+import { cliConfigOverrideEnv } from "@harness/shared/cli-overrides";
 import type { AgentExecutor, RelayConfig, ResidentHandle, RunHandle, RunOpts } from "./types.js";
 import { spawnForRun, detachedInfo } from "./detached.js";
 import { spawnAgent, resumeFor, resumeInner, spawnErrorMessage, killChild, forceFinishOnExit, redactSecrets } from "./spawn.js";
@@ -25,7 +26,8 @@ export class ClaudeExecutor implements AgentExecutor {
   readonly reasoningEffort?: string;
   private speed?: "fast";
   private relay?: RelayConfig;
-  constructor(opts: { model?: string; extraArgs?: string[]; reasoningEffort?: string; speed?: "fast"; bin?: string; target?: ExecTarget; name?: string; relay?: RelayConfig } = {}) {
+  private configOverrides?: Record<string, number>;
+  constructor(opts: { model?: string; extraArgs?: string[]; reasoningEffort?: string; speed?: "fast"; bin?: string; target?: ExecTarget; name?: string; relay?: RelayConfig; configOverrides?: Record<string, number> } = {}) {
     this.model = opts.model;
     this.extraArgs = opts.extraArgs ?? [];
     this.reasoningEffort = opts.reasoningEffort;
@@ -33,6 +35,7 @@ export class ClaudeExecutor implements AgentExecutor {
     this.bin = opts.bin ?? "claude";
     this.target = opts.target ?? { kind: "local" };
     this.relay = opts.relay;
+    this.configOverrides = opts.configOverrides;
     this.relayEnvHint = this.relay
       ? `ANTHROPIC_BASE_URL=${relayRoot(this.relay.baseUrl)} ANTHROPIC_AUTH_TOKEN=<你的key> `
       : undefined;
@@ -52,9 +55,18 @@ export class ClaudeExecutor implements AgentExecutor {
 
   // 挂了供应商就顶掉 CLI 自己的登录态:BASE_URL 指到供应商根地址(SDK 自己会补 /v1,
   // 库里那份要是带了 /v1 得剥掉,否则打到 /v1/v1),AUTH_TOKEN 给它的 key。
+  //
+  // configOverrides 落成的那几个变量是**盖 settings.json 用的**:claude 解析窗口配置
+  // 时 env 的优先级高于 settings(`aY()` 里 env 分支排第一),所以这样既能对 harness
+  // 起的进程生效,又不动用户自己那份 ~/.claude/settings.json。哪一项盖掉了谁,声明在
+  // shared/src/cli-overrides.ts,并原样显示在执行器设置里。
   private env(): Record<string, string> | undefined {
-    if (!this.relay) return undefined;
-    return { ANTHROPIC_BASE_URL: relayRoot(this.relay.baseUrl), ANTHROPIC_AUTH_TOKEN: this.relay.apiKey };
+    const env: Record<string, string> = cliConfigOverrideEnv(this.type, this.configOverrides);
+    if (this.relay) {
+      env.ANTHROPIC_BASE_URL = relayRoot(this.relay.baseUrl);
+      env.ANTHROPIC_AUTH_TOKEN = this.relay.apiKey;
+    }
+    return Object.keys(env).length ? env : undefined;
   }
 
   run(opts: RunOpts): RunHandle {

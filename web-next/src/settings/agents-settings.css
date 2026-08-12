@@ -202,6 +202,62 @@
   margin-right: auto;
 }
 
+/* 覆盖 CLI 自身配置的编辑区（弹层外框复用上面那套 args-popover 样式）。 */
+.agent-profile-overrides-list {
+  display: grid;
+  gap: 14px;
+}
+
+.agent-profile-override {
+  display: grid;
+  gap: 5px;
+}
+
+.agent-profile-override > label {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.agent-profile-override > label b {
+  font-size: 12px;
+}
+
+.agent-profile-override-shadows {
+  color: var(--faint);
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 10px;
+}
+
+.agent-profile-override-input {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.agent-profile-override-input input {
+  width: 120px;
+  border: 1px solid var(--line2);
+  border-radius: 7px;
+  background: var(--panel);
+  color: var(--ink);
+  font-size: 12px;
+  padding: 5px 8px;
+}
+
+.agent-profile-override-input > small {
+  color: var(--faint);
+  font-size: 10px;
+}
+
+.agent-profile-override > p {
+  margin: 0;
+  color: var(--faint);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
 .agent-args-editor {
   display: grid;
   gap: 6px;

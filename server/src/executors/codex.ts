@@ -1,6 +1,7 @@
 import type { ChildProcess } from "node:child_process";
 import { createInterface } from "node:readline";
 import type { AgentEvent, ExecTarget, TokenUsage } from "@harness/shared";
+import { cliConfigOverrideEnv } from "@harness/shared/cli-overrides";
 import type { AgentExecutor, RelayConfig, ResidentHandle, RunHandle, RunOpts } from "./types.js";
 import { openCodexResident } from "./codex-resident.js";
 import { readCodexContext } from "./codex-rollout.js";
@@ -33,7 +34,8 @@ export class CodexExecutor implements AgentExecutor {
   readonly reasoningEffort?: string;
   private speed?: "fast";
   private relay?: RelayConfig;
-  constructor(opts: { model?: string; extraArgs?: string[]; reasoningEffort?: string; speed?: "fast"; bin?: string; target?: ExecTarget; name?: string; relay?: RelayConfig } = {}) {
+  private configOverrides?: Record<string, number>;
+  constructor(opts: { model?: string; extraArgs?: string[]; reasoningEffort?: string; speed?: "fast"; bin?: string; target?: ExecTarget; name?: string; relay?: RelayConfig; configOverrides?: Record<string, number> } = {}) {
     this.model = opts.model;
     this.extraArgs = opts.extraArgs ?? [];
     this.reasoningEffort = opts.reasoningEffort;
@@ -41,6 +43,7 @@ export class CodexExecutor implements AgentExecutor {
     this.bin = opts.bin ?? "codex";
     this.target = opts.target ?? { kind: "local" };
     this.relay = opts.relay;
+    this.configOverrides = opts.configOverrides;
     this.relayEnvHint = this.relay ? `${RELAY_ENV_KEY}=<你的key> ` : undefined;
     const where = this.target.kind === "ssh" ? this.target.host : "local";
     this.label = opts.name ?? `codex@${where}${opts.model ? "·" + opts.model : ""}`;
@@ -73,8 +76,12 @@ export class CodexExecutor implements AgentExecutor {
     ];
   }
 
+  // 供应商的 key + 盖过 CLI 自己配置文件的那几项(声明见 shared/src/cli-overrides.ts;
+  // codex 目前一项都没声明,这里接住是为了「声明表加一项就生效」这句话是真的)。
   private env(): Record<string, string> | undefined {
-    return this.relay ? { [RELAY_ENV_KEY]: this.relay.apiKey } : undefined;
+    const env: Record<string, string> = cliConfigOverrideEnv(this.type, this.configOverrides);
+    if (this.relay) env[RELAY_ENV_KEY] = this.relay.apiKey;
+    return Object.keys(env).length ? env : undefined;
   }
 
   // 一次性 run 与常驻回合共用的参数装配。`-C`/`--json`/`-m`/sandbox 是

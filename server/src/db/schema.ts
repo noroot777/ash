@@ -165,6 +165,9 @@ export const agents = sqliteTable("agents", {
   // 挂载的供应商(llm_providers.id)。null=用 CLI 自己的官方登录账号。
   // 非空时启动 CLI 前注入 base_url + key(claude: env;codex: -c model_providers)。
   providerId: text("provider_id"),
+  // 覆盖 CLI 自己配置文件里的设置(json Record<string, number>,以 env 注入)。
+  // 声明表在 @harness/shared/cli-overrides —— 没在那儿声明过的 key 一律不落库。
+  configOverrides: text("config_overrides").notNull().default("{}"),
   isDefault: integer("is_default", { mode: "boolean" }).notNull().default(false),
 });
 

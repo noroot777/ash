@@ -1,6 +1,7 @@
 import type { ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import type { AgentType, ExecTarget } from "@harness/shared";
+import { cliConfigOverrideEnv } from "@harness/shared/cli-overrides";
 import type { AgentExecutor, ExecutorBuildOpts, RelayConfig, RunHandle, RunOpts } from "./types.js";
 import { spawnForRun, detachedInfo } from "./detached.js";
 import { killChild, redactSecrets, resumeFor } from "./spawn.js";
@@ -29,6 +30,7 @@ export class GenericCliExecutor implements AgentExecutor {
   readonly reasoningEffort?: string;
   private speed?: "fast";
   private relay?: RelayConfig;
+  private configOverrides?: Record<string, number>;
 
   constructor(spec: CliSpec, opts: ExecutorBuildOpts = {}) {
     this.spec = spec;
@@ -39,6 +41,7 @@ export class GenericCliExecutor implements AgentExecutor {
     this.speed = opts.speed;
     this.bin = opts.bin ?? spec.bins[0];
     this.target = opts.target ?? { kind: "local" };
+    this.configOverrides = opts.configOverrides;
     // relay 只在 spec 声明了注入方式时才生效 —— 半截配置去撞一个必然 401 的端点,
     // 不如老老实实用 CLI 自己的官方账号(同 executors/index.ts 的 loadRelay 口径)。
     this.relay = spec.exec.relay ? opts.relay : undefined;
@@ -129,9 +132,12 @@ export class GenericCliExecutor implements AgentExecutor {
     return { sessionId: s?.resumeArgs ? "" : randomUUID(), sessionArgs: [] };
   }
 
+  // 供应商注入 + 盖过 CLI 自己配置文件的那几项(声明见 shared/src/cli-overrides.ts)。
+  // 两者都可能为空,全空时返回 undefined —— spawn 那边据此走「不额外注入」的路径。
   private env(): Record<string, string> | undefined {
-    if (!this.relay || !this.spec.exec.relay) return undefined;
-    return this.spec.exec.relay(this.relay).env;
+    const env: Record<string, string> = cliConfigOverrideEnv(this.type, this.configOverrides);
+    if (this.relay && this.spec.exec.relay) Object.assign(env, this.spec.exec.relay(this.relay).env);
+    return Object.keys(env).length ? env : undefined;
   }
 }
 

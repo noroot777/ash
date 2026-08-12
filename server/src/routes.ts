@@ -15,6 +15,7 @@ import type {
 } from "@harness/shared";
 import { maxBytesFor, attachmentKind } from "@harness/shared";
 import { isReasoningEffortSupported, normalizeReasoningEffort, reasoningEffortsFor } from "@harness/shared/cli-presets";
+import { normalizeCliConfigOverrides } from "@harness/shared/cli-overrides";
 import { db } from "./db/index.js";
 import { projects, groups, tasks, sessions, schedules, agents, llmProviders, notes, noteTasks } from "./db/schema.js";
 import { bus } from "./bus.js";
@@ -172,6 +173,7 @@ const toAgent = (r: typeof agents.$inferSelect) => ({
   reasoningEffort: r.reasoningEffort ?? undefined,
   speed: r.speed ?? undefined,
   providerId: r.providerId ?? null,
+  configOverrides: JSON.parse(r.configOverrides ?? "{}"),
   isDefault: r.isDefault,
 });
 
@@ -206,6 +208,7 @@ api.post("/agents", async (c) => {
     // 只落 "fast";"standard"/空 归一成 null(标准=不传参,单一表示)
     speed: b.speed === "fast" ? "fast" : null,
     providerId: b.providerId || null,
+    configOverrides: JSON.stringify(normalizeCliConfigOverrides(type, b.configOverrides)),
     isDefault: !!b.isDefault,
   };
   // a type has at most one default
@@ -238,6 +241,9 @@ api.patch("/agents/:id", async (c) => {
   }
   if (b.speed !== undefined) patch.speed = b.speed === "fast" ? "fast" : null;
   if (b.providerId !== undefined) patch.providerId = b.providerId || null;
+  if (b.configOverrides !== undefined) {
+    patch.configOverrides = JSON.stringify(normalizeCliConfigOverrides(type, b.configOverrides));
+  }
   if (b.isDefault === true) {
     await db.update(agents).set({ isDefault: false }).where(eq(agents.type, existing.type));
     patch.isDefault = true;

@@ -10,6 +10,7 @@ import {
   providersForAgent,
 } from "./agentProviderRules.ts";
 import { ProfileArgsControl } from "./ProfileArgsControl.tsx";
+import { ProfileOverridesControl } from "./ProfileOverridesControl.tsx";
 import { ProviderModelInput } from "./ProviderModelInput.tsx";
 
 const SPEED_CHOICES: DropdownOption[] = [
@@ -37,6 +38,7 @@ export function AgentProfileRow({
   const providerOptions = providersForAgent(profile.type, providers);
   const provider = providers.find((candidate) => candidate.id === profile.providerId);
   const protocol = providerProtocolForAgent(profile.type);
+  const overridden = Object.keys(profile.configOverrides ?? {}).length > 0;
 
   // 供应商候选：官方账号 + 本类型协议匹配的供应商；当前选的那家如果协议已经不匹配
   // （改过供应商协议），仍要留在列表里，否则下拉显示空白，看着像「没设过」。
@@ -198,6 +200,21 @@ export function AgentProfileRow({
           />
         </div>
         <div className="agent-profile-actions">
+          {/* 覆盖了 CLI 自身配置的 profile **不能**藏进 hover：这一档设置盖掉的是用户
+              自己配置文件里的值，不常显就等于「明明改了别人的配置却看不出来」。 */}
+          <div className={overridden ? undefined : "agent-profile-hover-action"}>
+            <ProfileOverridesControl
+              profileName={profile.name}
+              type={profile.type}
+              value={profile.configOverrides ?? {}}
+              disabled={busy}
+              onSave={async (configOverrides) => {
+                const saved = await patch({ configOverrides });
+                if (saved) notify(`${profile.name} 的 CLI 配置覆盖已保存`);
+                return saved;
+              }}
+            />
+          </div>
           <div className="agent-profile-hover-action">
             <ProfileArgsControl
               profileName={profile.name}

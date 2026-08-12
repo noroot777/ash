@@ -69,6 +69,7 @@ export async function ensureSchema() {
       id TEXT PRIMARY KEY, name TEXT NOT NULL, type TEXT NOT NULL,
       target TEXT NOT NULL DEFAULT '{"kind":"local"}', model TEXT,
       extra_args TEXT NOT NULL DEFAULT '[]', reasoning_effort TEXT, speed TEXT,
+      config_overrides TEXT NOT NULL DEFAULT '{}',
       is_default INTEGER NOT NULL DEFAULT 0
     );
     CREATE TABLE IF NOT EXISTS team_presets (
@@ -271,6 +272,9 @@ export async function ensureSchema() {
     // Codex 旧 trace 不完整时没有可信累计基线：下一回合只采基线，宁可少记一轮，也不
     // 把整条线程累计值再次加进 sessions。
     "ALTER TABLE usage_cumulative_snapshots ADD COLUMN baseline_ready INTEGER NOT NULL DEFAULT 1",
+    // 覆盖 CLI 自己配置文件里的设置(json,以 env 注入进程)。声明表在
+    // shared/src/cli-overrides.ts,那里同时写明每一项盖掉的是谁。
+    "ALTER TABLE agents ADD COLUMN config_overrides TEXT NOT NULL DEFAULT '{}'",
   ]) {
     try {
       await client.execute(sql);

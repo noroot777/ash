@@ -29,6 +29,7 @@
     "test:executor-resolution": "tsx scripts/test-executor-resolution.ts",
     "test:answer-routing": "tsx scripts/test-answer-routing.ts",
     "test:executor-overrides": "tsx scripts/test-executor-overrides.ts",
+    "test:cli-overrides": "tsx scripts/test-cli-overrides.ts",
     "test:cli-catalog": "tsx scripts/test-cli-catalog.ts",
     "test:task-derivation": "tsx scripts/test-task-derivation-policy.ts",
     "test:duet-iteration": "tsx scripts/test-duet-iteration.ts",

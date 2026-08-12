@@ -72,6 +72,11 @@ export interface ExecutorBuildOpts {
   bin?: string;
   target?: ExecTarget;
   relay?: RelayConfig;
+  /**
+   * 盖过 CLI 自己配置文件的那几项(以 env 注入)。已按 @harness/shared/cli-overrides
+   * 的声明归一过,执行器直接 `cliConfigOverrideEnv()` 落成环境变量即可。
+   */
+  configOverrides?: Record<string, number>;
 }
 
 // Hand-rolled adapter (no Vercel AI SDK). Each CLI type gets

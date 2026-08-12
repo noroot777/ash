@@ -54,6 +54,10 @@
       "types": "./src/cli-presets.ts",
       "default": "./src/cli-presets.ts"
     },
+    "./cli-overrides": {
+      "types": "./src/cli-overrides.ts",
+      "default": "./src/cli-overrides.ts"
+    },
     "./mcp-delivery": {
       "types": "./src/mcp-delivery.ts",
       "default": "./src/mcp-delivery.ts"

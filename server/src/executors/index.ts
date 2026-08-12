@@ -1,6 +1,7 @@
 import { eq } from "drizzle-orm";
 import type { AgentType, ExecTarget } from "@harness/shared";
 import { isReasoningEffortSupported, reasoningEffortsFor } from "@harness/shared/cli-presets";
+import { normalizeCliConfigOverrides } from "@harness/shared/cli-overrides";
 import { db } from "../db/index.js";
 import { agents, llmProviders } from "../db/schema.js";
 import type { AgentExecutor, ExecutorBuildOpts, RelayConfig } from "./types.js";
@@ -76,6 +77,10 @@ async function build(
         target,
         bin: undefined as string | undefined,
         relay: await loadRelay(profile.providerId),
+        // 存库时已归一过一次；这里再走一遍，是为了让「profile 建于该覆盖项声明之前 /
+        // 声明后来改了范围」的老值也按当前声明夹一遍，而不是把一个 CLI 会静默忽略的
+        // 数原样注进去。
+        configOverrides: normalizeCliConfigOverrides(type, JSON.parse(profile.configOverrides ?? "{}")),
       }
     : {
         model,
