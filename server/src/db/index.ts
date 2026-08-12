@@ -291,7 +291,9 @@ export async function ensureSchema() {
   await migrateLegacyNoteTaskLinks();
   await migrateDebateToDuet();
   await migrateFreeReviewStatuses();
-  await dropRetiredColumns();
+  const mergeStatesMigrated = await migrateFreeWorkflowMergeStates();
+  await reclaimOrphanOwnerGroups();
+  await dropRetiredColumns(mergeStatesMigrated ? undefined : MERGE_STATE_COLUMNS);
   await dropRetiredTables();
 }
 
@@ -411,8 +413,70 @@ const RETIRED_TABLES: { table: string; why: string }[] = [
   { table: "issues", why: "事项中心已移除" },
 ];
 
-async function dropRetiredColumns(): Promise<void> {
+// 旧自由工作流「合并&清理」的三列（merge_status/message/merged_at）在 DROP 前必须把
+// 事实迁走——旧实现先写 merging、Git 合并成功后才落 stage=accepted，「Git 已合、进程在
+// 落 stage 前退出」是可达窗口；直接删列就是删掉唯一恢复凭据（审查实测：升级后合并已
+// 发生的任务永久卡在未验收，failed 的错误原因也静默丢失）。规则：
+// - merged：合并确实完成过 → task.stage 还空着就补成 accepted（不伪造 commit 区间，
+//   acceptedMergeCommit 留空，快路验证自会按「无证据」保守处理）。
+// - merging：Git 状态不可知 → 不动 stage，只留一条可见的时间线说明，让用户从验收页
+//   重新验收（already_merged 走保留式判定，不会重复合并也不会伪造）。
+// - failed：把原错误信息留进时间线，不再静默蒸发。
+const MERGE_STATE_COLUMNS = new Set(["free_workflow_states.merge_status", "free_workflow_states.merge_message", "free_workflow_states.merged_at"]);
+
+async function migrateFreeWorkflowMergeStates(): Promise<boolean> {
+  const info = await client.execute("PRAGMA table_info(free_workflow_states)");
+  if (!info.rows.some((r) => r.name === "merge_status")) return true; // 旧列已清，迁移早做完了
+  const rows = await client.execute(
+    "SELECT task_id, merge_status, merge_message FROM free_workflow_states WHERE merge_status IS NOT NULL AND merge_status != ''",
+  );
+  if (!rows.rows.length) return true;
+  let allMigrated = true;
+  const { appendTaskTimeline } = await import("../task-timeline.js");
+  for (const row of rows.rows) {
+    const taskId = String(row.task_id ?? "");
+    const status = String(row.merge_status ?? "");
+    if (!taskId) continue;
+    try {
+      if (status === "merged") {
+        await client.execute({
+          sql: "UPDATE tasks SET stage = 'accepted' WHERE id = ? AND (stage IS NULL OR stage = '')",
+          args: [taskId],
+        });
+        await appendTaskTimeline(taskId, "升级迁移：上一版「合并&清理」已记录合并完成，验收标记已补上（合并区间无从考证，未伪造）。");
+      } else if (status === "merging") {
+        await appendTaskTimeline(taskId, "升级迁移：上一版验收停在「合并进行中」，Git 合并可能已完成也可能没有；请从验收页重新验收——已合并的会被安全识别（不会重复合并，也不会伪造区间）。");
+      } else if (status === "failed") {
+        const message = String(row.merge_message ?? "").trim();
+        await appendTaskTimeline(taskId, `升级迁移：上一版「合并&清理」失败${message ? `，原始错误：${message}` : ""}；请从验收页重新验收或人工处理。`);
+      }
+      console.log(`[harness] 迁移旧自由工作流合并状态 ${taskId}: ${status}`);
+    } catch (e) {
+      // 单条失败不拦启动，但这一轮不许删旧列（证据还没迁走），下次启动重试。
+      console.warn(`[harness] 旧合并状态迁移失败 ${taskId}(${status})，本轮保留旧列：`, e);
+      allMigrated = false;
+    }
+  }
+  return allMigrated;
+}
+
+// 团队派活自建的内部组：owner 任务已不存在的（旧版删除没做级联）没有任何入口可见或
+// 清理，启动时幂等回收（审查实测：真实主库存量 1 条挂 6 个成员）。
+async function reclaimOrphanOwnerGroups(): Promise<void> {
+  try {
+    const gone = await client.execute(
+      "DELETE FROM groups WHERE owner_task_id IS NOT NULL AND owner_task_id NOT IN (SELECT id FROM tasks) RETURNING id",
+    );
+    if (gone.rows.length) console.log(`[harness] 回收 ${gone.rows.length} 个 owner 任务已不存在的内部组`);
+  } catch (e) {
+    console.warn("[harness] 孤儿内部组回收失败，忽略：", e);
+  }
+}
+
+async function dropRetiredColumns(skip?: ReadonlySet<string>): Promise<void> {
   for (const { table, column, why } of RETIRED_COLUMNS) {
+    if (skip?.has(`${table}.${column}`)) continue; // 事实还没迁走，证据列留到下次启动
+
     const info = await client.execute(`PRAGMA table_info(${table})`);
     if (!info.rows.some((r) => r.name === column)) continue; // 早就清过了
     try {

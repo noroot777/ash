@@ -366,7 +366,107 @@ try {
   assert.equal(archChild?.archived, true);
   assert.equal(archChild?.status, "failed", "无 handle 的 running 执行者按重启残留口径落格，不得 archived+running");
 
-  console.log("✓ 生命周期交错窗口：对账不提前结算活 reviewer；尾段逐站补跑不重复副作用；重启消费 write-ahead 基线整套挂回；fresh 重跑启动即摘牌；团队派活/删除/归档与验收互斥；删除级联收走审查链孤儿；派活占位互斥对称释放；验收锁内班次不丢不谎报；尾段失败保留补跑凭据；项目删除锁+级联；租约中消息不可取消；stateVersion 覆盖 status；并发 answer CAS；归档不留 archived+running");
+  // ── 第 9 轮审查修复回归 ──
+  const { acceptSharedTeamWorkers } = await import("../src/task-accept-shared-workers.js");
+  const { groups: groupRows } = await import("../src/db/schema.js");
+  const { mountReviewRoutes } = await import("../src/review.js");
+  const reviewApi = new Hono();
+  mountReviewRoutes(reviewApi);
+
+  // ⑯ turn 已占（claim→running 窗口）时 run/retry/fire 必须 409，班次不消费。
+  await createTasks([{ ...baseTask, id: "turn-window-task", title: "turn window", status: "failed" }]);
+  assert.equal(claimTurn("turn-window-task"), true);
+  const runBlocked = await runApi.request("/tasks/turn-window-task/run", { method: "POST" });
+  assert.equal(runBlocked.status, 409, "turn 被占时 /run 不得谎报 202");
+  const retryBlocked = await runApi.request("/tasks/turn-window-task/retry", { method: "POST" });
+  assert.equal(retryBlocked.status, 409, "turn 被占时 /retry 不得谎报 202");
+  const fireBlockedTurn = await runApi.request("/tasks/turn-window-task/fire", { method: "POST" });
+  assert.equal(fireBlockedTurn.status, 409, "turn 被占时 /fire 不得谎报 202");
+  const turnPast = new Date(Date.now() - 60_000).toISOString();
+  await db.insert(schedules).values({
+    id: "turn-once", taskId: "turn-window-task", kind: "once", at: turnPast, cron: null,
+    enabled: true, lastRunAt: null, createdAt: turnPast,
+  });
+  await tick();
+  let turnSched = (await db.select().from(schedules).where(eq(schedules.id, "turn-once"))).at(0);
+  assert.equal(turnSched?.enabled, true, "turn 被占时 once 班次不得被消费");
+  assert.equal(turnSched?.lastRunAt, null);
+  releaseTurn("turn-window-task");
+  await db.update(schedules).set({ enabled: false }).where(eq(schedules.id, "turn-once"));
+
+  // ⑰ 团队验收不得把 backlog/paused 的共享执行者盖成 accepted。
+  await createTasks([
+    { ...baseTask, id: "cover-lead", title: "cover lead", mode: "team" },
+    { ...baseTask, id: "cover-done", title: "done worker", parentId: "cover-lead" },
+    { ...baseTask, id: "cover-backlog", title: "backlog worker", parentId: "cover-lead", status: "backlog" },
+  ]);
+  const coverAccept = await acceptTask("cover-lead");
+  assert.equal(coverAccept.accepted, false, "有 backlog 共享执行者时团队验收必须被挡");
+  if (!coverAccept.accepted) assert.equal(coverAccept.reason, "shared_team_workers_in_flight");
+  await db.update(tasks).set({ status: "paused" }).where(eq(tasks.id, "cover-backlog"));
+  const coverAccept2 = await acceptTask("cover-lead");
+  assert.equal(coverAccept2.accepted, false, "有 paused 共享执行者时团队验收必须被挡");
+  // 联动纵深防御：即使绕过 guard 直接联动，也只盖终态的执行者。
+  await db.update(tasks).set({ status: "backlog" }).where(eq(tasks.id, "cover-backlog"));
+  const linked = await acceptSharedTeamWorkers("cover-lead");
+  assert.equal(
+    (await db.select({ stage: tasks.stage }).from(tasks).where(eq(tasks.id, "cover-backlog"))).at(0)?.stage,
+    null, "联动绝不给非终态执行者盖验收章",
+  );
+  assert.equal(linked.updated, 1, "done 的执行者照常联动");
+
+  // ⑱ preset 手动派验证与普通回合原子互斥（holdTurn）。
+  await createTasks([{ ...baseTask, id: "verify-window-task", title: "verify window" }]);
+  assert.equal(claimTurn("verify-window-task"), true);
+  const verifyBlocked = await reviewApi.request("/tasks/verify-window-task/review/dispatch", {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({}),
+  });
+  assert.equal(verifyBlocked.status, 400, "turn 被占时手动派验证必须被拒");
+  const verifyRow = (await db.select({ verifyRound: tasks.verifyRound, stage: tasks.stage })
+    .from(tasks).where(eq(tasks.id, "verify-window-task"))).at(0);
+  assert.equal(verifyRow?.verifyRound, null, "被拒的派验证不得写 verifyRound");
+  assert.equal(verifyRow?.stage, null, "被拒的派验证不得写 stage=verifying");
+  releaseTurn("verify-window-task");
+
+  // ⑲ 删除团队 lead 级联收走内部组；启动迁移回收存量孤儿组。
+  await createTasks([{ ...baseTask, id: "grp-lead", title: "grp lead", mode: "team" }]);
+  await dispatchWorkers("grp-lead", [{ body: "活" }], { run: false });
+  assert.equal(
+    (await db.select().from(groupRows).where(eq(groupRows.ownerTaskId, "grp-lead"))).length, 1,
+    "派活会建内部组",
+  );
+  const grpDel = await api.request("/tasks/grp-lead", { method: "DELETE" });
+  assert.equal(grpDel.status, 200);
+  assert.equal(
+    (await db.select().from(groupRows).where(eq(groupRows.ownerTaskId, "grp-lead"))).length, 0,
+    "删除 lead 必须级联收走内部组",
+  );
+
+  // ⑳ 旧自由工作流合并状态迁移：merged 补 stage，merging/failed 留可见说明，不删证据。
+  const { ensureSchema: ensureAgain } = await import("../src/db/index.js");
+  for (const sql of [
+    "ALTER TABLE free_workflow_states ADD COLUMN merge_status TEXT",
+    "ALTER TABLE free_workflow_states ADD COLUMN merge_message TEXT",
+    "ALTER TABLE free_workflow_states ADD COLUMN merged_at TEXT",
+  ]) {
+    try { await db.run(sql as never); } catch { /* 已存在 */ }
+  }
+  await createTasks([
+    { ...baseTask, id: "mig-merged", title: "mig merged", workflowMode: "free" },
+    { ...baseTask, id: "mig-merging", title: "mig merging", workflowMode: "free" },
+  ]);
+  const migAt = new Date().toISOString();
+  for (const [tid, ms] of [["mig-merged", "merged"], ["mig-merging", "merging"]] as const) {
+    await db.run(`INSERT INTO free_workflow_states (task_id, review_armed, updated_at, merge_status, merge_message)
+      VALUES ('${tid}', 0, '${migAt}', '${ms}', NULL)` as never);
+  }
+  await ensureAgain();
+  const migMerged = (await db.select({ stage: tasks.stage }).from(tasks).where(eq(tasks.id, "mig-merged"))).at(0);
+  assert.equal(migMerged?.stage, "accepted", "旧 merge_status=merged 必须补上验收标记");
+  const migMerging = (await db.select({ stage: tasks.stage }).from(tasks).where(eq(tasks.id, "mig-merging"))).at(0);
+  assert.equal(migMerging?.stage, null, "merging 不可知，不得伪造 stage");
+
+  console.log("✓ 生命周期交错窗口：对账不提前结算活 reviewer；尾段逐站补跑不重复副作用；重启消费 write-ahead 基线整套挂回；fresh 重跑启动即摘牌；团队派活/删除/归档与验收互斥；删除级联收走审查链孤儿；派活占位互斥对称释放；验收锁内班次不丢不谎报；尾段失败保留补跑凭据；项目删除锁+级联；租约中消息不可取消；stateVersion 覆盖 status；并发 answer CAS；归档不留 archived+running；turn 窗口 run/retry/fire/班次不谎报不消费；团队验收不盖未执行的执行者；手动派验证原子互斥；内部组级联+孤儿回收；旧合并状态迁移不丢证据");
 } finally {
   rmSync(root, { recursive: true, force: true });
 }

@@ -18,6 +18,9 @@ export async function acceptSharedTeamWorkers(leadId: string): Promise<SharedWor
   let updated = 0;
   for (const worker of sharedWorkers) {
     if (worker.stage === "accepted") continue;
+    // 只盖真正结束了的（guard 已挡 backlog/paused，这里是纵深防御）：验收章不能落在
+    // 从未执行或还等续跑的工作上。
+    if (!["done", "failed", "canceled"].includes(worker.status)) continue;
     await setTaskStage(worker.id, "accepted");
     await publishTaskUpdated(worker.id);
     updated += 1;

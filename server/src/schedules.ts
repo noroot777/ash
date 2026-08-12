@@ -1,6 +1,7 @@
 import { eq } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { isAcceptingTask } from "./acceptance-lock.js";
+import { isTurnClaimed } from "./runs.js";
 import { schedules, tasks, groups } from "./db/schema.js";
 import { runTask } from "./orchestrator.js";
 import { runDuet } from "./duet/index.js";
@@ -70,6 +71,9 @@ async function fire(taskId: string): Promise<boolean> {
   // 验收(含发布尾段)正在进行:fresh 重跑会与合并/清理抢工作区(runTask 里也会被
   // 静默挡回)。不消费班次,下个 tick 再试。
   if (isAcceptingTask(taskId)) return false;
+  // turn 已被占(claim 到 status 落 running 的窗口):runTask 的 claimTurn 会失败并静默
+  // 返回,这一班等于没跑——不消费,下个 tick 再试(审查实测:once 被永久消费)。
+  if (isTurnClaimed(taskId)) return false;
   // Respect a paused group: a pause means "halt this group", so the scheduler
   // must not sneak a group member past it. The task fires on the next due tick
   // once the group is resumed.

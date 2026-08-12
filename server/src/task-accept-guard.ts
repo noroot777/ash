@@ -62,7 +62,12 @@ export async function acceptanceState(taskId: string): Promise<{
   if (task.mode === "team") {
     const workers = related.filter((row) => row.parentId === task.id);
     for (const worker of workers) {
-      if (!worker.useWorktree && inFlight(worker)) {
+      // 共享执行者除了「正在跑」，「从未执行(backlog)/停在检查点(paused)」同样挡验收：
+      // 团队验收会把全部共享执行者的 stage 联动置 accepted——盖到没跑过/待续跑的活上，
+      // 「团队整体验收完成」就包含了从未发生的工作（审查实测：backlog/paused 都被盖成
+      // accepted）。
+      const notSettled = worker.status === "backlog" || worker.status === "paused";
+      if (!worker.useWorktree && (inFlight(worker) || notSettled)) {
         inFlightTasks.push({ id: worker.id, title: worker.title, status: worker.status, role: "shared_worker" });
       }
     }
@@ -109,7 +114,7 @@ export async function acceptanceGuard(
       taskId,
       reason: sharedWorkers.length > 0 ? "shared_team_workers_in_flight" : "task_in_flight",
       error: sharedWorkers.length > 0
-        ? `共享团队 worktree 仍被 running/queued 执行者使用，必须等它们结束后再验收：${listed}`
+        ? `共享执行者仍在进行或尚未完成（running/queued/backlog/paused），先运行完或停掉再验收：${listed}`
         : `任务正在 running/queued，必须等当前执行结束后再验收：${listed}`,
       status: state.task.status,
       phase,

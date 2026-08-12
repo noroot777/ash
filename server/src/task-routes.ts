@@ -35,6 +35,9 @@ export async function deleteTaskAssociations(taskId: string): Promise<void> {
   await db.delete(sessions).where(eq(sessions.taskId, taskId));
   await db.delete(schedules).where(eq(schedules.taskId, taskId));
   await db.delete(queueItems).where(eq(queueItems.taskId, taskId));
+  // 团队派活自建的内部组（groups.owner_task_id=本任务）：GET /groups 默认过滤掉它们，
+  // 留下来就是永远不可见也没入口清理的孤儿（审查实测：删 lead 后两个内部组原样保留）。
+  await db.delete(groups).where(eq(groups.ownerTaskId, taskId));
 }
 
 export function mountTaskRoutes(api: Hono): void {

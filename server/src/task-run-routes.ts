@@ -34,7 +34,7 @@ import { mountTaskArchiveRoutes } from "./task-archive-routes.js";
 import { RUNS_DIR } from "./paths.js";
 import { enqueueMessage } from "./pending-messages.js";
 import { isOvertaken, queueBlockers, repackQueue, tailOrder } from "./queues.js";
-import { confirmDone, stopTask } from "./runs.js";
+import { confirmDone, isTurnClaimed, stopTask } from "./runs.js";
 import { advanceQueue } from "./scheduler.js";
 import { setTaskStatus } from "./status.js";
 import { dispatchWorkers, type DispatchSpec } from "./team/dispatch.js";
@@ -141,6 +141,11 @@ api.post("/tasks/:id/run", async (c) => {
       ? !["running", "queued", "awaiting_review"].includes(r.status)
       : canSingleRun(r.status as TaskStatus);
   if (!runnable) return c.json({ error: "任务当前状态不可运行", status: r.status }, 409);
+  // turn 已被占（claim 到 status 落 running 的窗口）：runTask/continueTask 会被单飞锁
+  // 静默挡回，202 就成了谎报「已启动」（审查实测）。团队调度台不占 turn，不受影响。
+  if (isTurnClaimed(taskId)) {
+    return c.json({ error: "任务回合正在进行（状态尚未落库），结束后再运行", status: r.status }, 409);
+  }
   const blockedBy = await queueBlockers(taskId);
   if (blockedBy.length) {
     return c.json(
@@ -167,9 +172,11 @@ api.post("/tasks/:id/fire", async (c) => {
     return c.json({ error: "任务正在进行，等它结束再触发新一轮", status: r.status }, 409);
   if (r.status === "awaiting_review")
     return c.json({ error: "任务等待裁决中，先处理裁决再触发", status: r.status }, 409);
-  // runTask 遇验收锁会静默 return——202 就成了谎报「已触发一轮全新运行」（审查实测）。
+  // runTask 遇验收锁/单飞锁会静默 return——202 就成了谎报「已触发一轮全新运行」（审查实测）。
   if (isAcceptingTask(taskId))
     return c.json({ error: "任务正在验收（含发布尾段），结束后再触发", status: r.status }, 409);
+  if (isTurnClaimed(taskId))
+    return c.json({ error: "任务回合正在进行（状态尚未落库），结束后再触发", status: r.status }, 409);
   const blockedBy = await queueBlockers(taskId);
   if (blockedBy.length) {
     return c.json(
@@ -537,6 +544,9 @@ api.post("/tasks/:id/retry", async (c) => {
   if (!r) return c.json({ error: "not found" }, 404);
   if (r.archived) return c.json({ error: "任务已归档，先取消归档再重试", archived: true }, 409);
   if (r.status !== "failed") return c.json({ error: "只有失败的任务可以重试", status: r.status }, 409);
+  if (isTurnClaimed(taskId)) {
+    return c.json({ error: "任务回合正在进行（状态尚未落库），结束后再重试", status: r.status }, 409);
+  }
   if (r.mode === "duet") void resumeDuet(taskId);
   else void resumeOrRunTask(taskId, { reason: "retry" });
   return c.json({ started: true }, 202);

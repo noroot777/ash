@@ -56,7 +56,7 @@ import {
   withVerifyExecutor,
   type Settlement,
 } from "./review-policy.js";
-import { continueWhenIdle } from "./runs.js";
+import { claimTurn, continueWhenIdle, releaseTurn } from "./runs.js";
 import { taskWorkflowDef } from "./workflows.js";
 import { advanceWorkflowFrom, settleFrom } from "./workflow-advance.js";
 import { applyRunFailPolicy } from "./workflow-steps.js";
@@ -147,7 +147,18 @@ export async function reviewRoundsOf(target: TaskRow): Promise<number> {
 export async function startVerifyRound(
   targetId: string,
   override: ReviewDispatchInput = {},
+  opts: { holdTurn?: boolean } = {},
 ): Promise<{ round: number }> {
+  // HTTP 手动派验证与自由派审同级的原子互斥：普通回合已 claim、status 尚未落 running
+  // 时，只看 DB status 会先永久写下 verifyRound/stage=verifying/时间线，再把验证消息排
+  // 到那个回合之后——UI 与验收门禁提前宣称「正在验证」（审查实测）。占位身份 dispatch
+  // 覆盖校验到排队注册，finally 释放后验证投递自然开跑。结算内部的自动触发不走这里
+  //（那时收尾回合正占着 turn，天然互斥；gate 放行路径由验收锁互斥）。
+  const holdingTurn = opts.holdTurn === true;
+  if (holdingTurn && !claimTurn(targetId, "dispatch")) {
+    throw new Error("任务回合正在进行，结束后再派验证");
+  }
+  try {
   const target = (await db.select().from(tasks).where(eq(tasks.id, targetId))).at(0);
   if (!target) throw new Error("被验任务不存在");
   if (target.reviewOf) throw new Error("审查任务自身不能再验");
@@ -200,6 +211,9 @@ export async function startVerifyRound(
     },
   );
   return { round };
+  } finally {
+    if (holdingTurn) releaseTurn(targetId);
+  }
 }
 
 async function reviewCoverageFor(target: TaskRow): Promise<ReviewCoverageFinding | null> {
@@ -576,7 +590,7 @@ export function mountReviewRoutes(api: Hono): void {
       }
     }
     try {
-      return c.json(await startVerifyRound(taskId, body), 201);
+      return c.json(await startVerifyRound(taskId, body, { holdTurn: true }), 201);
     } catch (error) {
       return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);
     }
