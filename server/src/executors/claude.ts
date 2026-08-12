@@ -3,7 +3,7 @@ import type { ChildProcess } from "node:child_process";
 import { createInterface } from "node:readline";
 import type { AgentEvent, AgentType, ExecTarget, TokenUsage } from "@harness/shared";
 import { guessContextWindow } from "@harness/shared/usage";
-import { cliConfigOverrideEnvPatch } from "@harness/shared/cli-overrides";
+import { cliConfigOverrideEnvPatch, cliConfigOverrideSettings } from "@harness/shared/cli-overrides";
 import { cliHostEnv, resumeEnvHint } from "./cli-env.js";
 import type { AgentExecutor, RelayConfig, ResidentHandle, RunHandle, RunOpts } from "./types.js";
 import { spawnForRun, detachedInfo } from "./detached.js";
@@ -60,9 +60,12 @@ export class ClaudeExecutor implements AgentExecutor {
   // 挂了供应商就顶掉 CLI 自己的登录态:BASE_URL 指到供应商根地址(SDK 自己会补 /v1,
   // 库里那份要是带了 /v1 得剥掉,否则打到 /v1/v1),AUTH_TOKEN 给它的 key。
   //
-  // configOverrides 落成的那几个变量是**盖 settings.json 用的**:claude 解析窗口配置
-  // 时 env 的优先级高于 settings(`aY()` 里 env 分支排第一),所以这样既能对 harness
-  // 起的进程生效,又不动用户自己那份 ~/.claude/settings.json。哪一项盖掉了谁,声明在
+  // configOverrides 落成的那几个变量在这里只是**第二道**:claude 启动时会把各层
+  // settings 的 `env` 写回自己的进程环境,用户 `~/.claude/settings.json` 里的同名
+  // 变量会反过来盖掉这里注进去的值(第 1 轮审查 finding 1)。真正赢下这一局的是
+  // buildArgs 里那个 `--settings` —— 它是优先级最高的一档。留着这一道是因为它
+  // 覆盖面更广(ssh 前缀、恢复命令提示、以及 CLI 将来若改成只认 env 的情形),
+  // 两道给的是同一份值,不会打架。哪一项盖掉了谁,声明在
   // shared/src/cli-overrides.ts,并原样显示在执行器设置里。
   // 返回值里允许出现 `undefined`:那是「把这个变量从子进程里删掉」,不是「没配」
   // (见 cliConfigOverrideEnvPatch)。所以这里不能再按 key 数量决定返不返回。
@@ -143,10 +146,20 @@ export class ClaudeExecutor implements AgentExecutor {
     else args.push("--session-id", sessionId);
     if (model) args.push("--model", model);
     if (this.reasoningEffort) args.push("--effort", this.reasoningEffort);
-    // 1.5x 加速档:headless 下开 fast mode 的唯一官方通道是 --settings 传
-    // fastMode(无 --fast flag、无启用型环境变量;仅 Opus 系列生效,其余模型
-    // CLI 自行忽略)。放在 extraArgs 之前,用户如自带 --settings 以后者为准。
-    if (this.speed === "fast") args.push("--settings", '{"fastMode": true}');
+    // `--settings` 是 claude 优先级最高的一档配置(之上只剩企业策略文件),1.5x 加速档
+    // 和「覆盖 CLI 自己的配置」都只能从这里进。**两个 --settings 不合并、最后一个整份
+    // 胜出**(2026-08-12 实测 2.1.220:前一份连同它的 env 被静默丢掉),所以两件事必须
+    // 拼进同一个参数,不能各推一个。
+    //   • fastMode:headless 下开 fast mode 的唯一官方通道(无 --fast flag、无启用型
+    //     环境变量;仅 Opus 系列生效,其余模型 CLI 自行忽略)。
+    //   • env:压过用户 settings.json 里的同名变量 —— 同一次实测里各层 env 是按 key
+    //     合并的,他其余的变量原样保留(详见 shared/src/cli-overrides.ts)。
+    // 放在 extraArgs 之前:用户自带 --settings 时以他那份为准(设置页会警告本覆盖被顶掉)。
+    const settings = {
+      ...(this.speed === "fast" ? { fastMode: true } : {}),
+      ...cliConfigOverrideSettings(this.type, this.configOverrides, cliHostEnv(this.target)),
+    };
+    if (Object.keys(settings).length) args.push("--settings", JSON.stringify(settings));
     // 注册表配置的固定参数在前,单次调用的 opts.extraArgs 在后(后者可覆盖前者)。
     if (this.extraArgs.length) args.push(...this.extraArgs);
     if (opts.extraArgs?.length) args.push(...opts.extraArgs);

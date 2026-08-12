@@ -15,7 +15,7 @@ import type {
 } from "@harness/shared";
 import { maxBytesFor, attachmentKind } from "@harness/shared";
 import { isReasoningEffortSupported, normalizeReasoningEffort, reasoningEffortsFor } from "@harness/shared/cli-presets";
-import { normalizeCliConfigOverrides, cliConfigOverrideErrors } from "@harness/shared/cli-overrides";
+import { normalizeCliConfigOverrides, cliConfigOverrideErrors, readCliConfigOverrides } from "@harness/shared/cli-overrides";
 import { db } from "./db/index.js";
 import { projects, groups, tasks, sessions, schedules, agents, llmProviders, notes, noteTasks } from "./db/schema.js";
 import { bus } from "./bus.js";
@@ -174,7 +174,10 @@ const toAgent = (r: typeof agents.$inferSelect) => ({
   reasoningEffort: r.reasoningEffort ?? undefined,
   speed: r.speed ?? undefined,
   providerId: r.providerId ?? null,
-  configOverrides: JSON.parse(r.configOverrides ?? "{}"),
+  // 读端不直接 JSON.parse:库里可能躺着升级前写下的越界值、甚至被手工改坏的
+  // JSON —— 前者会让页面显示的数跟执行器实际注入的不是一个,后者直接把这个接口
+  // 打成 500(设置页整页打不开)。跟执行器读的是同一份判据。
+  configOverrides: readCliConfigOverrides(r.type, r.configOverrides),
   isDefault: r.isDefault,
 });
 

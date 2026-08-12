@@ -169,12 +169,36 @@ await db.insert(agents).values([
     configOverrides: JSON.stringify({ autoCompactWindow: 200_000, autoCompactPercent: 80 }),
     isDefault: false,
   },
+  // 1.5x 加速档 + 覆盖项:两件事都只能从 `--settings` 进,而 claude 只认最后一个
+  // `--settings` —— 各推一个的话先推的那份连同它的 env 会被静默丢掉。
+  {
+    id: "claude-fast-overridden",
+    name: "claude@fast",
+    type: "claude",
+    target: JSON.stringify({ kind: "local" }),
+    extraArgs: "[]",
+    speed: "fast",
+    configOverrides: JSON.stringify({ autoCompactWindow: 200_000, autoCompactPercent: 80 }),
+    isDefault: false,
+  },
+  // 库里躺着一份坏 JSON(手工改过 / 早期写入):读端不能因此整个炸掉。
+  {
+    id: "claude-broken",
+    name: "claude@broken",
+    type: "claude",
+    target: JSON.stringify({ kind: "local" }),
+    extraArgs: "[]",
+    configOverrides: "{不是 JSON",
+    isDefault: false,
+  },
 ]);
 
+let lastCommandLine = "";
 async function probeEnvFor(executorId: string): Promise<string> {
   rmSync(probe, { force: true });
   const executor = await resolveExecutorFor({ executorId, type: "claude" });
   const handle = executor.run({ cwd: sandbox, prompt: "noop" });
+  lastCommandLine = handle.commandLine;
   for (let i = 0; i < 100 && !existsSync(probe); i++) {
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
@@ -310,6 +334,70 @@ assert.ok(
   resumeCommandFor("claude", "ssh:build.example", sandbox, "sid-1", "").startsWith("ssh "),
   "库里记着 ssh:<host> 时,重算出来的命令要真的走 ssh",
 );
+
+// ── ⑧ 光有环境变量赢不了:必须同时走 claude 的 `--settings` ──────────────────
+// claude 启动时会把各层 settings 的 `env` 写回自己的进程环境,用户 settings.json 里的
+// 同名变量于是反过来盖掉我们注进去的那份(第 1 轮审查 finding 1)。`--settings` 是优先级
+// 最高的一档,这一档配置对外承诺的正是「覆盖 settings.json」,所以命令行里必须有它。
+const settingsOf = (commandLine: string): Record<string, any> => {
+  const m = commandLine.match(/--settings (\{.*?\})(?: |$)/);
+  assert.ok(m, `命令行里应有 --settings,实际:${commandLine}`);
+  return JSON.parse(m![1]!);
+};
+await probeEnvFor("claude-pct-local");
+const injected = settingsOf(lastCommandLine);
+assert.equal(
+  injected.env?.[spec.env],
+  "200000",
+  "覆盖项要以 --settings 的 env 形式进命令行(只靠进程环境会被 settings.json 盖回去)",
+);
+assert.ok(injected.env?.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE, "换算后的百分比同样要走这一档");
+
+await probeEnvFor("claude-plain");
+assert.ok(!lastCommandLine.includes("--settings"), "没配覆盖项、也没开加速档时不该凭空多一个 --settings");
+
+// 加速档和覆盖项必须在**同一个** --settings 里:claude 只认最后一个,分开推等于二选一。
+await probeEnvFor("claude-fast-overridden");
+assert.equal(
+  lastCommandLine.match(/--settings /g)?.length,
+  1,
+  `--settings 只能出现一次,实际:${lastCommandLine}`,
+);
+const merged = settingsOf(lastCommandLine);
+assert.equal(merged.fastMode, true, "加速档不能因为合并而丢");
+assert.equal(merged.env?.[spec.env], "200000", "覆盖项也不能因为合并而丢");
+
+// 用户自己在额外参数里写了 --settings 时,我们这份会被整份顶掉 —— 设置页得说出来,
+// 不然界面上写着「已覆盖」而 CLI 那边一个字没收到。
+const { cliConfigOverrideConflict } = await import("@harness/shared/cli-overrides");
+assert.ok(cliConfigOverrideConflict("claude", ["--settings", "{}"]), "自带 --settings 要给出警告");
+assert.ok(cliConfigOverrideConflict("claude", ["--settings={}"]), "= 形式的写法同样要认出来");
+assert.equal(cliConfigOverrideConflict("claude", ["--model", "opus"]), null, "无关参数不该报警");
+assert.equal(cliConfigOverrideConflict("codex", ["--settings"]), null, "别的 CLI 没有这一档,不适用");
+
+// ── ⑨ 库里的坏数据:读端一律按「没配」算,别把整页/整次执行拖下水 ───────────────
+const { readCliConfigOverrides } = await import("@harness/shared/cli-overrides");
+assert.deepEqual(readCliConfigOverrides("claude", "{不是 JSON"), {}, "坏 JSON 按没配算");
+assert.deepEqual(readCliConfigOverrides("claude", null), {}, "空值按没配算");
+assert.deepEqual(
+  readCliConfigOverrides("claude", JSON.stringify({ [spec.key]: spec.max * 2 })),
+  { [spec.key]: spec.max },
+  "越界的老值要夹回去 —— 显示的和真跑的必须是同一个数",
+);
+const listed = await api.request("/agents");
+assert.equal(listed.status, 200, "库里有坏 JSON 时 GET /agents 仍要能返回(以前整条 500)");
+const rows = (await listed.json()) as Array<{ id: string; configOverrides?: Record<string, number> }>;
+assert.deepEqual(
+  rows.find((r) => r.id === "claude-broken")?.configOverrides,
+  {},
+  "坏数据的 profile 在设置页显示成「未覆盖」",
+);
+assert.deepEqual(
+  rows.find((r) => r.id === "claude-overridden")?.configOverrides,
+  { [spec.key]: spec.max },
+  "页面读到的值要跟执行器真正注入的那份一致(都夹过范围)",
+);
+assert.equal(await probeEnvFor("claude-broken"), "<unset>", "坏数据的 profile 照样能派任务,只是不注入");
 
 rmSync(sandbox, { recursive: true, force: true });
 console.log("test:cli-overrides ok");

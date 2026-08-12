@@ -208,6 +208,7 @@ export function AgentProfileRow({
               profileName={profile.name}
               type={profile.type}
               value={profile.configOverrides ?? {}}
+              extraArgs={profile.extraArgs ?? []}
               disabled={busy}
               remote={profile.target.kind === "ssh"}
               onSave={async (configOverrides) => {

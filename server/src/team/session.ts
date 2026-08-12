@@ -90,12 +90,15 @@ export function teamIsLive(taskId: string): boolean {
 }
 
 // 用户插话(continueTask 顶部分流过来)。
+// **返回值 = 这句话有没有真的进到调度台**。false 只有一种来源:离线时收到 CLI 原生
+// 命令,被下面明确拒收(理由写进了会话)。上层拿它决定要不要记「已送达」—— 记了就
+// 等于把一句从未送出的话标成 sent(见 continueTask 里那段)。
 export async function deliverToLead(
   taskId: string,
   text: string,
   opts: { attachments?: string[]; throwOnOpenFailure?: boolean } = {},
-): Promise<void> {
-  await deliver(taskId, text + attachmentsPrompt(opts.attachments), "user", opts.throwOnOpenFailure);
+): Promise<boolean> {
+  return deliver(taskId, text + attachmentsPrompt(opts.attachments), "user", opts.throwOnOpenFailure);
 }
 
 // 执行者汇报/提问,以及 harness 自己的唤醒语(inbox.ts 用)。
@@ -106,7 +109,10 @@ export async function sendInbound(taskId: string, text: string): Promise<void> {
 // 开台:第一次运行装前言+目标;已有历史会话则 --resume 接回(用 LEAD_NUDGE
 // 当唤醒语);已经在线就只当一次唤醒,绝不开第二个进程。
 export async function startTeam(taskId: string): Promise<void> {
-  if (teamIsLive(taskId)) return deliver(taskId, LEAD_NUDGE, "inbound");
+  if (teamIsLive(taskId)) {
+    await deliver(taskId, LEAD_NUDGE, "inbound");
+    return;
+  }
   await deliver(taskId, "", "start");
 }
 
@@ -125,12 +131,14 @@ export async function haltTeam(taskId: string): Promise<void> {
 }
 
 // ── 投递 ────────────────────────────────────────────────────────────────────
+// 返回 true = 这句话进了调度台(或者由 open 带着它开台);false = **明确拒收**,
+// 一个字都没送出去(见下面的原生命令分支)。调用方必须分得清这两者。
 async function deliver(
   taskId: string,
   text: string,
   kind: Kind,
   throwOnOpenFailure = false,
-): Promise<void> {
+): Promise<boolean> {
   let lead = leads.get(taskId);
   // 进程还活着,但它脚下的目录已经没了 —— 典型情形:调度者按用户吩咐删掉了自己
   // 所在的那个 worktree(它嘴上说"我已回落到主检出",实际 cwd 还钉在被删的路径
@@ -157,23 +165,27 @@ async function deliver(
       // 把原因写回会话:让用户先用一句普通消息把调度者接回来,再发 `/compact`。
       const native = kind === "user" ? nativeCliCommand(await leadTypeOf(taskId), text) : null;
       if (native) {
-        await noteToLead(
-          taskId,
+        const why =
           `/${native} 没有送出：调度台当前不在线（进程已回收或还没开台）。` +
-            `这类 CLI 原生命令必须是消息的第一个字才生效，而接回调度台时前面一定会带上唤醒前言。` +
-            `请先随便说一句普通消息把调度者接回来，再单独发 /${native}。`,
-        );
-        return;
+          `这类 CLI 原生命令必须是消息的第一个字才生效，而接回调度台时前面一定会带上唤醒前言。` +
+          `请先随便说一句普通消息把调度者接回来，再单独发 /${native}。`;
+        await noteToLead(taskId, why);
+        // 定时/排队消息还要把「送不出去」传回 scheduler:它得让那条 pending 明确落
+        // canceled 并把原文写回时间线,而不是留在托盘里每个 tick 被重新拒绝一次。
+        if (throwOnOpenFailure) throw new Error(why);
+        return false;
       }
       // 开台失败(典型:worktree 建不出来)不能静默 —— 路由是 void 调用的,抛出去
       // 只会变成被兜底吞掉的 unhandledRejection,用户什么都看不到。
+      // 这一档仍算「接管了」(true):失败原因已经如实写进会话,消息本身是随开台一起
+      // 送出去的,退回队列重试只会把同一份错误再演一遍。
       try {
         await open(taskId, text, kind);
       } catch (err) {
         await reportOpenFailure(taskId, err);
         if (throwOnOpenFailure) throw err;
       }
-      return;
+      return true;
     }
     try {
       lead = await inflight; // 别开第二个进程:等它开完,这条按普通消息送
@@ -181,10 +193,11 @@ async function deliver(
       // 发起 open 的那条消息负责记录失败；定时消息还要把失败传回 scheduler，
       // 让 pending 明确落 canceled，而不是到点后静默消失。
       if (throwOnOpenFailure) throw err;
-      return;
+      return true;
     }
   }
   push(lead, text, kind);
+  return true;
 }
 
 // 调度台此刻不在线时,配置里写的是哪种 CLI(判定 `/compact` 这类原生命令要用)。

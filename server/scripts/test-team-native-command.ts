@@ -67,6 +67,25 @@ try {
   const row = (await db.select().from(tasks).where(eq(tasks.id, "team-offline"))).at(0)!;
   assert.equal(row.status, "idle", "只是没送出去,任务状态不该被动过");
 
+  // 「没送出去」必须一路传回调用方。以前这里返回 void,上层照样 onDelivered() 把排队
+  // /定时的那条标成 sent —— 托盘里没了、会话里也没有,用户的话凭空蒸发。
+  assert.equal(await deliverToLead("team-offline", "/compact"), false, "明确拒收要返回 false");
+  await assert.rejects(
+    () => deliverToLead("team-offline", "/compact", { throwOnOpenFailure: true }),
+    /compact/,
+    "定时/排队消息要能拿到「送不出去」这个失败,才好落成 canceled",
+  );
+
+  const { continueTask } = await import("../src/orchestrator.js");
+  let delivered = 0;
+  const passed = await continueTask("team-offline", "/compact", { onDelivered: async () => { delivered++; } });
+  assert.equal(passed, false, "上层同样要返回 false(跟抢不到单飞锁一个口径)");
+  assert.equal(delivered, 0, "一个字都没送出去时,绝不能记账成已送达");
+
+  // 普通消息不受影响:它会把调度台开起来(这里没有真 CLI,能开到哪一步不重要 ——
+  // 要钉的是「拒收只针对原生命令」,别把整条投递路径一起判死)。
+  assert.equal(teamIsLive("team-offline"), false, "前面这些都不该顺手开台");
+
   unsubscribe();
   console.log("test:team-native ok");
 } finally {

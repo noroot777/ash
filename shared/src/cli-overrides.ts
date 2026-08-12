@@ -235,6 +235,29 @@ export function cliConfigOverrideErrors(
   });
 }
 
+/**
+ * 从库里读回来的那一侧的唯一入口(`agents.config_overrides` 存的是一段 JSON 文本)。
+ *
+ * 写入端已经归一过,但**库里躺着的那份不一定过过今天这道闸**:升级前写下的、手工
+ * 改坏的、声明范围后来改小的。读端直接 `JSON.parse` 有两种炸法 ——
+ *   · 非法 JSON:`GET /agents` 整个 500(设置页打不开),执行器解析同样抛,这个
+ *     profile 从此派不出任务;
+ *   · 合法但越界:API 原样返给页面显示 2M,执行器那边却按当前声明夹成 1M ——
+ *     显示与行为分叉,而这一档配置的全部意义就是「看得见」。
+ * 所以两端一律走这里:解析不了当没配,解析得了也按当前声明夹一遍。
+ */
+export function readCliConfigOverrides(
+  type: AgentType | string,
+  raw: string | null | undefined,
+): Record<string, number> {
+  if (!raw) return {};
+  try {
+    return normalizeCliConfigOverrides(type, JSON.parse(raw));
+  } catch {
+    return {}; // 坏数据按「没配」算:页面显示「未覆盖」,CLI 也真的没被注入
+  }
+}
+
 /** 落成启动进程时要注入的环境变量。没配的项不出现(不是注入空串)。 */
 export function cliConfigOverrideEnv(
   type: AgentType | string,
@@ -270,6 +293,46 @@ export function cliConfigOverrideEnvPatch(
   const patch: Record<string, string | undefined> = {};
   for (const spec of cliConfigOverridesFor(type)) patch[spec.env] = undefined;
   return { ...patch, ...cliConfigOverrideEnv(type, values, host) };
+}
+
+/**
+ * 同一批变量落成 **CLI 自己的配置形态**(claude 的 `--settings`)。没配就返回 null。
+ *
+ * 为什么光有环境变量不够(2026-08-12 实测 claude 2.1.220):CLI 初始化时会把各层
+ * settings 的 `env` 对象**再写回自己的进程环境**,于是用户 `~/.claude/settings.json`
+ * 或项目 `.claude/settings.json` 里的同名变量反过来盖掉 harness 注入的那份 —— 设置页
+ * 上写着 200k · 80%,实际按他文件里的数跑,而且一声不吭。这一档配置对外的承诺正是
+ * 「覆盖 settings.json」,所以必须赢下它。
+ *
+ * `--settings` 是优先级最高的那一档(之上只剩企业策略文件),且各层 `env` 是**按 key
+ * 合并**的:只写我们声明的这几个 key,用户 env 里的其它变量原样保留(同一次实测)。
+ */
+export function cliConfigOverrideSettings(
+  type: AgentType | string,
+  values: Record<string, number> | null | undefined,
+  host: CliHostEnv = NO_CLI_HOST_ENV,
+): { env: Record<string, string> } | null {
+  const env = cliConfigOverrideEnv(type, values, host);
+  return Object.keys(env).length ? { env } : null;
+}
+
+/**
+ * profile 自带的额外参数会不会把这一档覆盖整个顶掉 —— 会就返回一句人话,否则 null。
+ *
+ * 只有 claude 需要判:它的覆盖是靠 `--settings` 注入的,而**两个 `--settings` 不合并、
+ * 最后一个整份胜出**(2026-08-12 实测 2.1.220)。额外参数排在我们那份之后,所以用户
+ * 只要自己写了一个 `--settings`,这里填的数就一个都不会到 CLI 手上。不提示的话,设置
+ * 页上明晃晃写着「已覆盖 200k · 80%」而实际行为毫无变化 —— 又是一次静默失败。
+ */
+export function cliConfigOverrideConflict(
+  type: AgentType | string,
+  extraArgs: readonly string[] | null | undefined,
+): string | null {
+  if (type !== "claude" || !extraArgs?.length) return null;
+  const hit = extraArgs.some((arg) => arg === "--settings" || arg.startsWith("--settings="));
+  return hit
+    ? "额外参数里已有 --settings：claude 只认最后一个，这里的覆盖会被它整份顶掉。要保留覆盖，请把那条 --settings 去掉。"
+    : null;
 }
 
 /**

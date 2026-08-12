@@ -3,6 +3,7 @@ import { Sliders, X } from "@phosphor-icons/react";
 import type { AgentType } from "@harness/shared";
 import {
   UNKNOWN_CLI_HOST_ENV,
+  cliConfigOverrideConflict,
   cliConfigOverrideErrors,
   cliConfigOverrideHints,
   cliConfigOverridesFor,
@@ -33,6 +34,7 @@ export function ProfileOverridesControl({
   profileName,
   type,
   value,
+  extraArgs,
   disabled,
   remote,
   onSave,
@@ -40,6 +42,8 @@ export function ProfileOverridesControl({
   profileName: string;
   type: AgentType;
   value: Record<string, number>;
+  /** 同一个 profile 的额外参数 —— 里面自带 `--settings` 时这一档会被整份顶掉。 */
+  extraArgs: readonly string[];
   disabled: boolean;
   /** 这个 profile 跑在 ssh 远端吗 —— 远端的环境读不到,换算得按「未知」走。 */
   remote: boolean;
@@ -113,9 +117,13 @@ export function ProfileOverridesControl({
   // 已存下的值里也可能有空转的(这道校验是后加的,老数据没过过闸)。胶囊上必须看得出
   // 来 —— 否则用户看到「80%」会以为它在生效,而 CLI 那边压根没收到这个变量。
   const dead = new Set(ineffectiveCliConfigOverrides(type, value));
+  // 额外参数自带 --settings 时整档都到不了 CLI 手上(claude 只认最后一个)。跟上面
+  // 那个「空转项」一样,得在胶囊上就看得出来 —— 只写在弹层里等于要求用户先怀疑它。
+  const conflict = cliConfigOverrideConflict(type, extraArgs);
   const summary = active
     .map((spec) => `${fmtWith(value[spec.key]!, spec.unit)}${dead.has(spec.key) ? "（未生效）" : ""}`)
-    .join(" · ");
+    .join(" · ")
+    + (active.length && conflict ? "（被额外参数顶掉）" : "");
   const shadowed = active.map((spec) => spec.shadows).join("、");
   // hint 跟着草稿走,不是跟着已保存的值走 —— 这行字存在的意义就是「改之前先看看会变成什么」。
   const hints = cliConfigOverrideHints(type, parsed, hostEnv);
@@ -156,7 +164,7 @@ export function ProfileOverridesControl({
           <div className="agent-profile-args-popover-head">
             <div>
               <b>覆盖 CLI 自己的配置</b>
-              <small>{profileName} · 以环境变量注入，只对 harness 起的进程生效</small>
+              <small>{profileName} · 写进 harness 起的这次 CLI 调用，压过它自己的配置文件</small>
             </div>
             <button type="button" onClick={close} aria-label="关闭配置编辑">
               <X size={13} aria-hidden="true" />
@@ -193,8 +201,9 @@ export function ProfileOverridesControl({
             ))}
           </div>
 
-          {hints.length > 0 && (
+          {(conflict || hints.length > 0) && (
             <div className="agent-profile-override-hint">
+              {conflict && <p><b>{conflict}</b></p>}
               {hints.map((hint) => <p key={hint}>{hint}</p>)}
             </div>
           )}

@@ -102,6 +102,11 @@ async function runTurn(args: {
         endedAt: null,
         commandLine: handle.commandLine,
         executor: executor.label,
+        // duet 每一轮都按当前 profile 重新解析执行器,profile 可能在门禁等待期间被改到
+        // 另一台机器上。这一列是「复制到终端接着聊」唯一的「这活在哪台机器上干」凭据
+        // (读取端 resumeCommandFor 每次按它重算),不跟着刷新就会给出一条在本机执行的
+        // 错命令(真实续跑用的是新 target)。
+        target: sessionTargetKey(executor.target),
         resumeEnv: executor.resumeEnvHint ?? null,
       })
       .where(eq(sessions.id, rowId));

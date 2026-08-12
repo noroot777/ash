@@ -1,7 +1,7 @@
 import { eq } from "drizzle-orm";
 import type { AgentType, ExecTarget } from "@harness/shared";
 import { isReasoningEffortSupported, reasoningEffortsFor } from "@harness/shared/cli-presets";
-import { normalizeCliConfigOverrides } from "@harness/shared/cli-overrides";
+import { readCliConfigOverrides } from "@harness/shared/cli-overrides";
 import { db } from "../db/index.js";
 import { agents, llmProviders } from "../db/schema.js";
 import type { AgentExecutor, ExecutorBuildOpts, RelayConfig } from "./types.js";
@@ -79,8 +79,9 @@ async function build(
         relay: await loadRelay(profile.providerId),
         // 存库时已归一过一次；这里再走一遍，是为了让「profile 建于该覆盖项声明之前 /
         // 声明后来改了范围」的老值也按当前声明夹一遍，而不是把一个 CLI 会静默忽略的
-        // 数原样注进去。
-        configOverrides: normalizeCliConfigOverrides(type, JSON.parse(profile.configOverrides ?? "{}")),
+        // 数原样注进去。JSON 坏掉的老数据同样在这里被吃掉(否则整个 profile 派不出
+        // 任务),判据跟设置页读的是同一份。
+        configOverrides: readCliConfigOverrides(type, profile.configOverrides),
       }
     : {
         model,
