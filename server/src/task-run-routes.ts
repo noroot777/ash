@@ -24,7 +24,7 @@ import { bus } from "./bus.js";
 import { forceKillCuaService, lastCuaResidualStatus, refreshCuaResidualStatus } from "./cua.js";
 import { db } from "./db/index.js";
 import { freeReviewResumeOptions, hasActiveFreeReview } from "./free-workflow.js";
-import { isAcceptingTask } from "./task-accept.js";
+import { isAcceptingTask } from "./acceptance-lock.js";
 import { projects, queueItems, schedules, scheduledMessages, sessions, tasks } from "./db/schema.js";
 import { resumeDuet, resumeAtGate, runDuet } from "./duet/index.js";
 import { resolveGate } from "./duet/gates.js";

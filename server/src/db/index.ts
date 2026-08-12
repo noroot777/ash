@@ -263,6 +263,7 @@ export async function ensureSchema() {
     "ALTER TABLE tasks ADD COLUMN accepted_target_branch TEXT",
     "ALTER TABLE tasks ADD COLUMN accepted_base_commit TEXT",
     "ALTER TABLE tasks ADD COLUMN accepted_merge_commit TEXT",
+    "ALTER TABLE tasks ADD COLUMN accepted_tail_pending INTEGER NOT NULL DEFAULT 0",
     // Token 用量:一条会话行按回合累加(口径统一在 shared/src/usage.ts)。全 null
     // = 这条会话建在本功能之前、或那家 CLI 不报账——**不能当 0 展示**。
     "ALTER TABLE sessions ADD COLUMN usage_input INTEGER",
@@ -328,6 +329,14 @@ async function migrateFreeReviewStatuses(): Promise<void> {
       `UPDATE free_review_runs
        SET status='stopped', finished_at=COALESCE(finished_at, updated_at)
        WHERE status IN ('repairing','manual_repairing','reworking','exhausted','superseded')`,
+    );
+    // 升级前已排队的答复没有 session_role：该任务有 reviewing 链的话，pending 消息几乎
+    // 只可能是给审查者的答复（实现回合在审查挂着时进不来）——补成 reviewer，投递才能
+    // 送回审查会话（启发式，注释于此备查）。
+    await client.execute(
+      `UPDATE scheduled_messages SET session_role='reviewer'
+       WHERE status='pending' AND session_role IS NULL
+         AND task_id IN (SELECT task_id FROM free_review_runs WHERE status='reviewing')`,
     );
     // 已验收自由任务的遗留预约不自愈会变幽灵审查。
     await client.execute(

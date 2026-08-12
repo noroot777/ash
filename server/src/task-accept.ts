@@ -25,6 +25,7 @@ import { acceptanceGuard, type AcceptFailure, type AcceptWarning } from "./task-
 import { appendTaskTimeline } from "./task-timeline.js";
 import { now } from "./util.js";
 import type { WorkflowAdvanceOptions } from "./workflow-advance.js";
+import { beginAccepting, endAccepting } from "./acceptance-lock.js";
 
 type AcceptSuccess = {
   accepted: true;
@@ -71,11 +72,13 @@ const mergeLabel: Record<string, string> = {
   tagged: "只打标签，未合并",
 };
 
-const acceptingTaskIds = new Set<string>();
 
-/** 验收是否正在进行（归档路由用：验收中途归档会形成「已冻结却继续合并写入」）。 */
-export function isAcceptingTask(taskId: string): boolean {
-  return acceptingTaskIds.has(taskId);
+
+/** 线上「点头之后」是否真有要跑的站（发布/命令…）。尾段 durable 进度与补跑都用这一份判定。 */
+function hasAcceptedTail(task: typeof tasks.$inferSelect): boolean {
+  const def = taskWorkflowDef(task.workflow);
+  const gate = anchorAt(def, task.workflowAt, "human")?.id ?? null;
+  return segmentAfter(def, gate).some((step) => step.kind !== "accept");
 }
 
 async function finalizeAcceptance(
@@ -83,6 +86,12 @@ async function finalizeAcceptance(
   message: string,
 ): Promise<SharedWorkerAcceptance | null> {
   await setTaskStage(task.id, "accepted");
+  // 尾段 durable 进度：stage=accepted 先落、尾段后跑，进程死在中间的话重试会走
+  // already_accepted 快路——不留痕迹，发布步骤就被静默永久漏掉。置位在这里、清零在
+  // 尾段真正跑完之后，重试发现它还挂着就补跑。
+  if (hasAcceptedTail(task)) {
+    await db.update(tasks).set({ acceptedTailPending: true, updatedAt: now() }).where(eq(tasks.id, task.id));
+  }
   // 人工关口到此结束，这条线也走到终点了：线上写着「下一个人工关口结束时回收」和
   // 「任务结束时回收」的预览都在这儿收掉。「点头之后」那一段还没开跑，所以那一段
   // 特意编排的预览不会被这一下误伤。
@@ -291,12 +300,23 @@ async function acceptTaskUnlocked(taskId: string, by: AcceptBy): Promise<AcceptT
     await appendTaskTimeline(taskId, `验收暂缓：${mergeGuard.failure.error}`);
     return mergeGuard.failure;
   }
-  // 一次验收生命周期内目标分支必须冻结：合并成功、清理失败停在 merged 后重试时，
-  // 用 worktreeBase=null 动态解析会跟着项目当前 checkout 漂移——把同一任务再合进
-  // 另一条分支（审查实测复现）。重试一律回到首次记录的目标。
+  // 一次验收生命周期内目标分支必须冻结，且**在动 Git 之前先持久化**：崩溃可能发生在
+  // 「合并已改 Git、DB 还没写」的窗口里，重试若按 worktreeBase=null 动态解析会跟着项目
+  // 当前 checkout 漂移——同一任务被合进两个分支（审查实测复现）。acceptedTargetBranch
+  // 非空即「本生命周期已锁定的目标」（reopen 摘牌时清空，见 task-stage.ts）。
   const retrying = task.stage === "merged";
-  const frozenTarget = retrying && task.acceptedTargetBranch ? task.acceptedTargetBranch : task.worktreeBase;
-  const merge = await mergeTaskBranch(project.repoPath, taskId, frozenTarget, plan.merge);
+  const intendedTarget = task.acceptedTargetBranch
+    ?? await resolveTaskMergeTarget(project.repoPath, task.worktreeBase);
+  if (!intendedTarget) {
+    return {
+      accepted: false, httpStatus: 409, taskId, reason: "target_unresolved",
+      error: "目标分支为空且项目当前处于 detached HEAD", status: task.status,
+    };
+  }
+  if (!task.acceptedTargetBranch) {
+    await db.update(tasks).set({ acceptedTargetBranch: intendedTarget, updatedAt: now() }).where(eq(tasks.id, taskId));
+  }
+  const merge = await mergeTaskBranch(project.repoPath, taskId, intendedTarget, plan.merge);
 
   // Retry after a previous partial success: stage=merged plus an already-removed
   // source branch means `git branch -d` did its job; finish the stage transition.
@@ -307,8 +327,11 @@ async function acceptTaskUnlocked(taskId: string, by: AcceptBy): Promise<AcceptT
     const targetBranch = merge.targetBranch ?? await resolveTaskMergeTarget(project.repoPath, task.worktreeBase);
     // 目标分支「名字存在」不够：内容可能已被 reset 回合并前——已记录的合并结果必须
     // 仍能从目标分支到达，否则 accepted 就是在为一份不存在的产物盖章（审查实测复现）。
+    // acceptedMergeCommit 为 null（旧版部分成功没记录）时**不是**验证通过——没有证据
+    // 不能当有证据。走不了快路就落通用失败，由用户人工确认，绝不为无从核对的产物盖章。
     const mergeReachable = targetBranch && await localBranchExists(project.repoPath, targetBranch)
-      && (!task.acceptedMergeCommit || await isAncestor(project.repoPath, task.acceptedMergeCommit, targetBranch));
+      && !!task.acceptedMergeCommit
+      && await isAncestor(project.repoPath, task.acceptedMergeCommit, targetBranch);
     if (mergeReachable) {
       const guard = await acceptanceGuard(taskId, "before_accept");
       if (guard.failure) return guard.failure;
@@ -418,7 +441,10 @@ async function acceptTaskUnlocked(taskId: string, by: AcceptBy): Promise<AcceptT
   // 提交，标签压根没合），所以 `git branch -d` 一定会被拒。删分支这一项在这两档里直接
   // 不做并说清楚原因——绝不改用 `-D`：自动流程强删分支是不可逆的，那是用户自己按的活。
   const cleanPlan = cleanupPlanFor(plan.clean);
-  const branchUnmergeable = merge.method === "squash" || tagged;
+  // 按**计划**判而不是按本次 method：squash 计划的重试会拿到 already_merged，但分支
+  // 依旧不是目标的祖先，`git branch -d` 一样删不掉——按 method 判会让重试卡死在清理
+  // （审查实测：worktree 已删、分支删不动、任务永久停 merged）。
+  const branchUnmergeable = plan.merge === "squash" || plan.merge === "tag" || merge.method === "squash" || tagged;
   const branchKeptReason = !cleanPlan.branch
     ? `线上写的是「${ACCEPT_CLEAN_LABELS[plan.clean]}」`
     : branchUnmergeable
@@ -525,7 +551,7 @@ export async function acceptTask(
       error: previewRefusal("验收通过"),
     };
   }
-  if (acceptingTaskIds.has(taskId)) {
+  if (!beginAccepting(taskId)) {
     return {
       accepted: false,
       httpStatus: 409,
@@ -534,7 +560,6 @@ export async function acceptTask(
       error: "该任务正在验收中，请等待当前验收动作结束后再试",
     };
   }
-  acceptingTaskIds.add(taskId);
   let result: AcceptTaskResult;
   let freeWorkflowLocked = false;
   try {
@@ -571,15 +596,24 @@ export async function acceptTask(
       // 验收干等），但仍在 acceptingTaskIds **之内**——尾段是本次验收的一部分，期间的
       // 重复验收和归档都必须被挡（尾段命令重复执行 = 发布/部署跑两遍；归档 = 冻结后
       // 继续写，审查实测两个方向都复现过）。
-      // 幂等：already_accepted 是「本次什么验收动作都没执行」的快路，绝不重跑尾段。
+      // 幂等：already_accepted 是「本次什么验收动作都没执行」的快路，正常不重跑尾段；
+      // **唯一例外**是 durable 进度显示尾段从没跑完（进程死在 stage=accepted 与尾段
+      // 之间）——那不是重复执行，是补跑一次从未发生过的发布。
+      const tailStillPending = result.kind === "already_accepted"
+        && !!(await db.select({ pending: tasks.acceptedTailPending }).from(tasks)
+          .where(eq(tasks.id, taskId))).at(0)?.pending;
       if (result.kind === "gate_released") await releaseGate(taskId, advanceOpts);
-      else if (result.kind !== "already_accepted") {
+      else if (result.kind !== "already_accepted" || tailStillPending) {
+        if (tailStillPending) {
+          await appendTaskTimeline(taskId, "上次验收在「点头之后」那一段执行前中断，本次补跑该段。");
+        }
         const tail = await runAcceptedTail(taskId, by);
+        await db.update(tasks).set({ acceptedTailPending: false, updatedAt: now() }).where(eq(tasks.id, taskId));
         if (tail) result = { ...result, tail };
       }
     }
   } finally {
-    acceptingTaskIds.delete(taskId);
+    endAccepting(taskId);
   }
   return result;
 }

@@ -35,6 +35,7 @@ export type FreeWorkflowApiState = Omit<FreeWorkflowState, "merge">;
 // 做单点递增；与 Date.now() 取 max 是为了跨 server 重启仍近似单调（重启后计数从当前
 // 时刻起跳，必大于旧进程发出的任何版本）。
 const revisions = new Map<string, number>();
+const workspaceFingerprints = new Map<string, string>();
 function revisionOf(taskId: string): number {
   const current = revisions.get(taskId);
   if (current != null) return current;
@@ -98,10 +99,7 @@ export async function workspaceStateOf(
 }
 
 export async function freeWorkflowState(taskId: string): Promise<FreeWorkflowApiState> {
-  // 版本在**读取开始前**取：读期间发生的变更会让修订号先行递增，这份快照便携带较小
-  // 版本、稍后被携带更大版本的重取覆盖——方向安全（新数据配小版本只多一次等价覆盖，
-  // 绝不会旧数据配大版本反向压新，那正是 wall-clock 版本的病）。
-  const stateVersion = revisionOf(taskId);
+
   const [task, state, runs, profileRows, eventRows] = await Promise.all([
     db.select().from(tasks).where(eq(tasks.id, taskId)).then((rows) => rows.at(0)),
     db.select().from(freeWorkflowStates).where(eq(freeWorkflowStates.taskId, taskId)).then((rows) => rows.at(0)),
@@ -184,6 +182,16 @@ export async function freeWorkflowState(taskId: string): Promise<FreeWorkflowApi
   const reservationReviewerId = state?.reviewArmed ? state.selectedReviewerId ?? null : null;
   const reservationArmed = !!reservationRunId || !!reservationReviewerId;
   const workspace = await workspaceStateOf(task);
+  // workspace（HEAD/dirty）不经 task.review 事件也会变（agent/用户直接改工作区）：指纹
+  // 变化时也 bump，否则两份不同内容的快照拿同一版本、迟到的旧响应能抹掉「结论过期」
+  // 警示（审查实测）。版本在指纹核对后取——DB 读取期间的变更会由随后的事件 bump +
+  // SSE 重取覆盖，方向自愈。
+  const fp = `${workspace.head}|${workspace.dirty}`;
+  if (workspaceFingerprints.get(taskId) !== fp) {
+    workspaceFingerprints.set(taskId, fp);
+    revisions.set(taskId, Math.max(revisionOf(taskId) + 1, Date.now()));
+  }
+  const stateVersion = revisionOf(taskId);
   return {
     taskId,
     selectedReviewerId: state?.selectedReviewerId ?? null,

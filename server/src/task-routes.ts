@@ -14,6 +14,7 @@ import { followUpsFor } from "./task-follow-up.js";
 import { advanceQueue, pauseGroup, runGroup } from "./scheduler.js";
 import { setTaskStatus } from "./status.js";
 import { isTurnClaimed } from "./runs.js";
+import { isAcceptingTask } from "./acceptance-lock.js";
 import { createTasks, enrichTasks, publishTaskUpdated } from "./task-store.js";
 import { attachmentsPrompt, id, now } from "./util.js";
 
@@ -350,6 +351,11 @@ api.delete("/tasks/:id", async (c) => {
   // 常驻调度台 idle 时不受影响（status 不匹配、turn 未占）。
   if (existing && (existing.status === "running" || existing.status === "queued" || isTurnClaimed(tid))) {
     return c.json({ error: "任务正在执行，请先停止再删除", status: existing.status }, 409);
+  }
+  // 验收（含尾段发布命令）期间删除任务行：命令还在跑、结算还要写这一行（审查实测：
+  // 删除返回 200、尾段继续写、验收最后还报成功）。
+  if (existing && isAcceptingTask(tid)) {
+    return c.json({ error: "任务正在验收中，结束后再删除" }, 409);
   }
   // 团队：执行者跟着 lead 活。任何 child 在飞就拒删（否则活着的 worker 失去父任务，
   // 还可能连带清掉它正在用的共享工作区）；都停了则连 children 行一并删，不留悬空 parentId。

@@ -31,6 +31,7 @@ import { freeReviewReminder, freeReviewResumeOptions } from "./free-workflow.js"
 import { withSkillInvocation } from "./skills.js";
 import { initialTaskObjective, invitedTaskBrief } from "./invited-task-brief.js";
 import { withGlobalBrowserPolicy } from "./browser-verification-policy.js";
+import { isAcceptingTask } from "./acceptance-lock.js";
 // Single tasks run headless — nobody can answer a mid-run prompt. Tell the agent
 // to act autonomously rather than stall waiting for confirmation; if it genuinely
 // needs input it can still ask, and the user replies via continueTask (resume).
@@ -216,6 +217,7 @@ export async function runTask(taskId: string): Promise<void> {
   // 不是一个回合。放在最前面,于是 /tasks/:id/run、retry、queue 推进都自动生效。
   const mode = (await db.select({ mode: tasks.mode }).from(tasks).where(eq(tasks.id, taskId))).at(0)?.mode;
   if (mode === "team") return startTeam(taskId);
+  if (isAcceptingTask(taskId)) return; // 验收(含尾段)进行中,不与合并/清理抢工作区
   if (!claimTurn(taskId)) return;
   let handle: RunHandle | undefined;
   try {
@@ -354,7 +356,12 @@ export async function resumeOrRunTask(
     const rp = task.resumePrompt;
     const reviewerRoute = await freeReviewResumeOptions(taskId);
     await db.update(tasks).set({ resumePrompt: null, updatedAt: now() }).where(eq(tasks.id, taskId));
-    await continueTask(taskId, rp, { system: opts.reason ?? "run", ...(reviewerRoute ?? {}) });
+    const started = await continueTask(taskId, rp, { system: opts.reason ?? "run", ...(reviewerRoute ?? {}) });
+    if (!started) {
+      // 回合被别人抢了（典型：上一回合的 turn 还没 release）：checkpoint 指令一个字都没
+      // 送出去，必须放回原位等下一次触发——清了不回写就是永久丢失（审查实测复现）。
+      await db.update(tasks).set({ resumePrompt: rp, updatedAt: now() }).where(eq(tasks.id, taskId));
+    }
     return;
   }
   const agent = (task.agentType as AgentType) ?? "claude";
@@ -440,6 +447,9 @@ export async function continueTask(
     }
     return true;
   }
+  // 验收(含尾段的发布命令)正在进行:这一轮消息会 reopen 摘牌、起新 agent 与发布命令
+  // 并发操作同一工作区(审查实测复现)。按「未投递」返回,调用方会把消息排队等验收结束。
+  if (isAcceptingTask(taskId)) return false;
   // 抢不到 = 这个任务此刻正跑着别的回合,这一句话没送出去。调用方必须知道(见函数注释)。
   const sessionRole = opts.sessionRole ?? "single";
   if (!claimTurn(taskId, sessionRole)) return false;

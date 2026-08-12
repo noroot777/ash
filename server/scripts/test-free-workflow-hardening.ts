@@ -196,6 +196,9 @@ try {
   // reopen = 新验收生命周期：摘牌后再验收，快照三列必须整体换成第二版的值。
   const { reopenAcceptedStage } = await import("../src/task-stage.js");
   assert.equal(await reopenAcceptedStage("free-retry-task"), "accepted");
+  const reopenedRow = (await db.select().from(tasks).where(eq(tasks.id, "free-retry-task"))).at(0);
+  assert.equal(reopenedRow?.acceptedTargetBranch, null, "reopen 应清空上一生命周期的目标锁定");
+  assert.equal(reopenedRow?.acceptedBaseCommit, null, "reopen 应清空上一生命周期的合并快照");
   const secondWorktree = await prepareWorktree(repo, "free-retry-task", "main");
   writeFileSync(join(secondWorktree.path, "retry2.txt"), "second life\n");
   git(secondWorktree.path, "add", "retry2.txt");

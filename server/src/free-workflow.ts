@@ -18,17 +18,15 @@ import {
   freeWorkflowStates,
   projects,
   reviewerProfiles,
+  scheduledMessages,
   tasks,
 } from "./db/schema.js";
 import { disarmFreeReviewReservation, startReservedFreeReview } from "./free-review-reservations.js";
+import { freeManualRepairPrompt, freeRepairPrompt, freeReviewPrompt } from "./free-review-prompts.js";
+export { freeManualRepairPrompt, freeRepairPrompt, freeReviewPrompt } from "./free-review-prompts.js";
 import { recordFreePreviewEvent } from "./free-workflow-events.js";
 import { releaseFreeWorkflowAction, tryAcquireFreeWorkflowAction } from "./free-workflow-lock.js";
-import {
-  freeReviewEvidenceDir,
-  freeReviewFile,
-  freeReviewReportPath,
-  readFreeReviewReport,
-} from "./free-review-files.js";
+import { freeReviewFile, freeReviewReportPath, readFreeReviewReport } from "./free-review-files.js";
 import { freeWorkflowState, workspaceStateOf, type FreeWorkflowApiState } from "./free-workflow-state.js";
 import { continueWhenIdle, isTurnClaimed, turnRole, whenTurnIdle } from "./runs.js";
 import { appendTaskTimeline } from "./task-timeline.js";
@@ -36,8 +34,7 @@ import { taskWorkspace } from "./task-workspace.js";
 import { headCommit } from "./git.js";
 import { startPreview, stopPreview, type PreviewStep } from "./preview.js";
 import { REVIEW_MIME } from "./review-evidence.js";
-import { reviewRequestReference } from "./review-request-context.js";
-import { BROWSER_VERIFICATION_POLICY, BROWSER_VERIFICATION_REMINDER } from "./browser-verification-policy.js";
+import { BROWSER_VERIFICATION_REMINDER } from "./browser-verification-policy.js";
 import { id, now } from "./util.js";
 
 type TaskRow = typeof tasks.$inferSelect;
@@ -188,41 +185,6 @@ async function cancelFreeReviewReservation(taskId: string): Promise<FreeWorkflow
   }
 }
 
-export async function freeReviewPrompt(task: TaskRow, run: ReviewRunRow, round: number, repoPath: string): Promise<string> {
-  const dir = freeReviewEvidenceDir(task.id, run.id, round);
-  const requirements = await reviewRequestReference(task, dir);
-  const focus = run.checkMode === "syntax"
-    ? "本轮只做语法与机械质量检查：编译、类型、lint、格式、明显的 API/导入错误和相关测试。不要扩张成产品方案评审。"
-    : "本轮做逻辑审查：除编译与测试外，重点找行为错误、状态竞争、失败路径、边界条件和回归风险。涉及可见前端改动时必须启动页面真实操作并截图；是否还需要其它截图由你按证据价值判断。";
-  const note = run.note ? `\n\n用户附言（作为审查重点补充，不覆盖上述职责）：\n${run.note}` : "";
-  return `【自由工作流 · 第 ${round} 轮审查】\n` +
-    `你是独立审查者，不是继续实现需求。默认产物可能有问题，主动寻找能复现的缺陷。\n\n` +
-    `任务：${task.id}\n${requirements}\n\n` +
-    `${focus}${note}\n\n先检查 ${repoPath} 中的真实 git status、diff 和提交，再选择验证命令。` +
-    `必须真实运行与风险相称的检查。\n\n${BROWSER_VERIFICATION_POLICY}` +
-    `一旦用了 playwright，结束前清掉工作区产物；所有验证临时服务和浏览器进程都必须停掉。\n\n` +
-    `证据必须落盘：报告写到 ${freeReviewReportPath(task.id, run.id, round)}；截图如有必要放在同一目录。证据不要 git add/commit。\n\n` +
-    `结束前调用 report_stage(taskId="${task.id}", stage="verified"|"verify_failed") 给出结论。` +
-    `这是旁路审查回合，不要调用 complete_task，也不要调用 accept_task。`;
-}
-
-export function freeRepairPrompt(taskId: string, run: ReviewRunRow): string {
-  const dir = freeReviewEvidenceDir(taskId, run.id, run.currentRound);
-  return `【自由工作流审查未通过 · 第 ${run.currentRound} 轮】\n` +
-    `请先完整读取 [report.md](${freeReviewReportPath(taskId, run.id, run.currentRound)})，再按报告修复，不要扩大原任务边界。` +
-    `修复完成并验证后调用 complete_task(taskId="${taskId}")；harness 随后会自动派同一位审查者复审。\n\n` +
-    `证据目录：${dir}`;
-}
-
-export function freeManualRepairPrompt(taskId: string, run: ReviewRunRow): string {
-  const dir = freeReviewEvidenceDir(taskId, run.id, run.currentRound);
-  return `【自由工作流审查未通过 · 自动复审已停止】\n` +
-    `请先完整读取 [report.md](${freeReviewReportPath(taskId, run.id, run.currentRound)})，再按第 ${run.currentRound} 轮意见修复，不要扩大原任务边界。` +
-    `修复完成并验证后调用 complete_task(taskId="${taskId}")。本次不会擅自增加审查轮数；` +
-    `如果用户在修复期间预约了复审，完成后按预约开始，否则等待用户决定再次审查或验收。\n\n` +
-    `证据目录：${dir}`;
-}
-
 async function failReviewStart(run: ReviewRunRow, message: string): Promise<void> {
   const at = now();
   await db.update(freeReviewRounds).set({ status: "error", endedAt: at })
@@ -249,8 +211,26 @@ export async function reconcileFreeReviews(): Promise<void> {
   for (const run of stuck) {
     const task = (await db.select().from(tasks).where(eq(tasks.id, run.taskId))).at(0);
     if (!task) continue;
+    // 已交卷（当前 round 有结论）的审查不需要回合活着：直接补结算，不能因遗留的
+    // question/等待态被永远跳过——那会让验收持续被 active review 409 挡住（审查实测）。
+    const round = (await db.select().from(freeReviewRounds)
+      .where(and(eq(freeReviewRounds.runId, run.id), eq(freeReviewRounds.round, run.currentRound)))).at(0);
+    if (round?.conclusion) {
+      await handleFreeWorkflowSettlement(run.taskId, task.status as TaskStatus, false, true, "reviewer");
+      continue;
+    }
     if (task.status === "running" || task.status === "queued" || isTurnClaimed(task.id)) continue;
     if (task.question || task.resumePrompt) continue;
+    // /answer 可能已清掉 question、答复正躺在排队消息里等投递（reviewer 提问回合还没
+    // release turn 时的正常路径）：那条链在等答案，不是孤儿——对账先于 scheduler 恢复
+    // 投递，杀了它答复就无处可去了（审查实测）。
+    const pendingReviewerAnswer = (await db.select({ id: scheduledMessages.id }).from(scheduledMessages)
+      .where(and(
+        eq(scheduledMessages.taskId, run.taskId),
+        eq(scheduledMessages.status, "pending"),
+        eq(scheduledMessages.sessionRole, "reviewer"),
+      )).limit(1)).at(0);
+    if (pendingReviewerAnswer) continue;
     await failReviewStart(run, "服务重启时审查回合尚未启动或已丢失；可再派一轮审查");
     await disarmFreeReviewReservation(run.taskId);
   }

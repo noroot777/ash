@@ -52,6 +52,13 @@ export async function clearTaskStage(taskId: string, note: string): Promise<void
 export async function reopenAcceptedStage(taskId: string): Promise<"accepted" | "merged" | null> {
   const t = (await db.select({ stage: tasks.stage }).from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!t || (t.stage !== "accepted" && t.stage !== "merged")) return null;
+  // 摘牌 = 开启新的验收生命周期：上一周期的合并快照一并清空。留着的话，「本周期已锁定
+  // 目标」的判定（task-accept 的 pre-merge 持久化）会把新验收错误冻结到旧目标，崩溃
+  // 重试还会复用旧区间（审查实测复现）。上一周期的合并事实在 git 历史与时间线里都有。
+  await db.update(tasks).set({
+    acceptedTargetBranch: null, acceptedBaseCommit: null, acceptedMergeCommit: null,
+    acceptedTailPending: false, updatedAt: now(),
+  }).where(eq(tasks.id, taskId));
   await clearTaskStage(taskId, "任务又被唤醒，验收阶段清回进行中（完成后重新验收即可再次翻篇）");
   return t.stage;
 }

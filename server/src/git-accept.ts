@@ -336,22 +336,24 @@ async function squashInCheckedOutTarget(
       targetBranch,
     };
   }
+  // 「内容已在目标里」的判定必须在 merge --squash 之后、commit 之前做：此刻 staged 为空
+  // = merge 结果与目标无差异，这是**内容证据**。commit 失败后再查 staged 不可信——恶意/
+  // 异常的 pre-commit hook 可以在失败前 reset 掉暂存区，把「什么都没合进去」伪装成
+  // already_merged（审查实测：目标 ref 没动、产物丢失，接口却返回 accepted）。
+  const stagedEmptyAfterMerge = await exec("git", ["-C", cwd, "diff", "--cached", "--quiet"])
+    .then(() => true)
+    .catch(() => false);
+  if (stagedEmptyAfterMerge) {
+    await exec("git", ["-C", cwd, "reset", "--hard"]).catch(() => {});
+    return { ok: true, sourceBranch, targetBranch, method: "already_merged" };
+  }
   try {
     await exec("git", ["-C", cwd, "commit", "-m", `squash 合并 ${sourceBranch}`]);
     return { ok: true, sourceBranch, targetBranch, method: "squash" };
   } catch (error) {
-    // 暂存区是空的：任务分支相对目标分支没有内容差异（典型是首次 squash 已进目标、
-    // 清理失败后重试）。这不是失败，按「已经合过了」报。**问 git 而不是猜错误文本**——
-    // 执行包装给出的可能只是泛化的 Command failed，靠正则匹配会漏（审查实测：重试
-    // 永远卡在 merged，只能手工介入）。diff --cached 要在 reset --hard 之前查。
+    // 到这里 staged 一定非空过：commit 失败就是真失败（hook 拒绝/环境问题），如实报错。
     const message = gitError(error);
-    const stagedEmpty = await exec("git", ["-C", cwd, "diff", "--cached", "--quiet"])
-      .then(() => true)
-      .catch(() => false);
     await exec("git", ["-C", cwd, "reset", "--hard"]).catch(() => {});
-    if (stagedEmpty || /nothing to commit|no changes added/i.test(message)) {
-      return { ok: true, sourceBranch, targetBranch, method: "already_merged" };
-    }
     return {
       ok: false,
       reason: "merge_failed",

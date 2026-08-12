@@ -157,6 +157,10 @@ export const tasks = sqliteTable("tasks", {
   acceptedTargetBranch: text("accepted_target_branch"),
   acceptedBaseCommit: text("accepted_base_commit"),
   acceptedMergeCommit: text("accepted_merge_commit"),
+  // 验收尾段（点头之后的发布/命令步骤）的 durable 进度：finalize 时线上真有尾段就置 1，
+  // 尾段跑完（无论成败，结果已报告）清 0。进程死在两者之间时，重启后的重复验收会发现
+  // 它还挂着并补跑——否则发布步骤被 already_accepted 快路静默永久漏掉（审查实测复现）。
+  acceptedTailPending: integer("accepted_tail_pending", { mode: "boolean" }).notNull().default(false),
 });
 
 export const agents = sqliteTable("agents", {
