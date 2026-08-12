@@ -50,6 +50,7 @@ export class GenericCliExecutor implements AgentExecutor {
       this.type,
       this.configOverrides,
       this.relay ? spec.exec.relay!(this.relay).envHint : undefined,
+      this.target,
     );
     const where = this.target.kind === "ssh" ? this.target.host : "local";
     this.label = opts.name ?? `${spec.key}@${where}${opts.model ? "·" + opts.model : ""}`;
@@ -141,7 +142,7 @@ export class GenericCliExecutor implements AgentExecutor {
   // 两者都可能为空,全空时返回 undefined —— spawn 那边据此走「不额外注入」的路径。
   // `undefined` 值 = 从子进程环境里删掉那个变量(见 cliConfigOverrideEnvPatch)。
   private env(): Record<string, string | undefined> {
-    const env: Record<string, string | undefined> = cliConfigOverrideEnvPatch(this.type, this.configOverrides, cliHostEnv());
+    const env: Record<string, string | undefined> = cliConfigOverrideEnvPatch(this.type, this.configOverrides, cliHostEnv(this.target));
     if (this.relay && this.spec.exec.relay) Object.assign(env, this.spec.exec.relay(this.relay).env);
     return env;
   }

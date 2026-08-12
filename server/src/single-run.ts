@@ -84,9 +84,16 @@ export async function settleTaskStatus(
   status: TaskStatus;
   note?: string;
   confirmedDone: boolean;
+  /** 这一轮是 CLI 原生命令（`/compact`）—— 调用方据此整段跳过结算钩子。 */
+  nativeTurn: boolean;
 }> {
   const memConfirmed = takeConfirmed(taskId); // 无条件消费,别让标记漏到下一回合
   const t = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
+  // 原生命令回合(`/compact`)的标记跟完成确认一样:读出来就清掉,只在本回合内有效。
+  const nativeTurn = !!t?.nativeTurn;
+  if (nativeTurn) {
+    await db.update(tasks).set({ nativeTurn: false, updatedAt: now() }).where(eq(tasks.id, taskId));
+  }
   // 完成确认有两条道:同进程的内存标记,和落库的时间戳(complete_confirmed_at)。
   // 任一命中即算确认 —— 确认与结算未必在同一个进程里(历史事故:僵尸实例在跑这
   // 个回合,agent 的 complete_task 走 HTTP 打到了监听进程,内存标记落在别人家,
@@ -116,7 +123,7 @@ export async function settleTaskStatus(
     if (confirmed) {
       await setStatus(taskId, "done");
       notify("done");
-      return { status: "done", confirmedDone: true };
+      return { status: "done", confirmedDone: true, nativeTurn };
     }
     await setStatus(taskId, back);
     const label = FOLLOW_UP_LABEL[back] ?? back;
@@ -124,20 +131,20 @@ export async function settleTaskStatus(
       // 提问照常通知/展示(问题卡片不看状态),但不把终态改成 paused —— 那会让它
       // 重新占住队列位置。答复走 /answer,又是一个续聊回合。
       notify("question", t.question);
-      return { status: back, note: `续聊回合以提问结束,等待答复:「${t.question}」(任务状态仍为「${label}」)`, confirmedDone: false };
+      return { status: back, note: `续聊回合以提问结束,等待答复:「${t.question}」(任务状态仍为「${label}」)`, confirmedDone: false, nativeTurn };
     }
     if (stopped) {
       const why = stopped === "paused" ? "分组被暂停" : "被手动停止";
-      return { status: back, note: `续聊回合${why},任务状态保持「${label}」不变。`, confirmedDone: false };
+      return { status: back, note: `续聊回合${why},任务状态保持「${label}」不变。`, confirmedDone: false, nativeTurn };
     }
     if (exitStatus !== 0) {
-      return { status: back, note: `续聊回合异常结束(退出码 ${exitStatus}),任务状态保持「${label}」不变。`, confirmedDone: false };
+      return { status: back, note: `续聊回合异常结束(退出码 ${exitStatus}),任务状态保持「${label}」不变。`, confirmedDone: false, nativeTurn };
     }
-    return { status: back, confirmedDone: false };
+    return { status: back, confirmedDone: false, nativeTurn };
   }
   if (stopped === "canceled") {
     await setStatus(taskId, "canceled");
-    return { status: "canceled", confirmedDone: false };
+    return { status: "canceled", confirmedDone: false, nativeTurn };
   }
   if (stopped === "paused") {
     // 组暂停打断:落 paused 占住队列位置(组是 paused 的,推进钩子不会动)。
@@ -148,37 +155,37 @@ export async function settleTaskStatus(
     await setStatus(taskId, "paused");
     if (t?.question) {
       notify("question", t.question);
-      return { status: "paused", note: `本回合以提问暂停,等待答复:「${t.question}」`, confirmedDone: false };
+      return { status: "paused", note: `本回合以提问暂停,等待答复:「${t.question}」`, confirmedDone: false, nativeTurn };
     }
-    return { status: "paused", note: GROUP_PAUSED_NOTE, confirmedDone: false };
+    return { status: "paused", note: GROUP_PAUSED_NOTE, confirmedDone: false, nativeTurn };
   }
   // 提问优先于检查点:question 非空 → paused,但队列不推进、不自动续跑
   // (pickNextLaunchable 会挡住),等 answer_question 带答复唤醒。
   if (t?.question) {
     await setStatus(taskId, "paused");
     notify("question", t.question);
-    return { status: "paused", note: `本回合以提问暂停,等待答复:「${t.question}」`, confirmedDone: false };
+    return { status: "paused", note: `本回合以提问暂停,等待答复:「${t.question}」`, confirmedDone: false, nativeTurn };
   }
   if (t?.resumePrompt) {
     await setStatus(taskId, "paused");
-    return { status: "paused", confirmedDone: false };
+    return { status: "paused", confirmedDone: false, nativeTurn };
   }
   if (exitStatus !== 0) {
     await setStatus(taskId, "failed");
     notify("failed");
-    return { status: "failed", confirmedDone: false };
+    return { status: "failed", confirmedDone: false, nativeTurn };
   }
   if (confirmed || !STRICT_DONE) {
     await setStatus(taskId, "done");
     notify("done");
-    return { status: "done", confirmedDone: confirmed };
+    return { status: "done", confirmedDone: confirmed, nativeTurn };
   }
   // 记 failed 之前先看一眼这一轮到底有没有产出:有就在通知里直说「你有 N 个新提交」,
   // 比通用文案快得多地指到病灶(多半只是漏了交卷)。**只影响措辞,不改落位**。
   const hint = await turnOutputHint(taskId);
   await setStatus(taskId, "failed");
   notify("failed_unconfirmed", undefined, hint);
-  return { status: "failed", note: UNCONFIRMED_NOTE + hint, confirmedDone: false };
+  return { status: "failed", note: UNCONFIRMED_NOTE + hint, confirmedDone: false, nativeTurn };
 }
 
 // 消费一次单飞运行的事件流，直到它结束，然后结算。
@@ -355,7 +362,13 @@ export async function consumeSingleRun(a: {
   await reconcileTurnBaseline(taskId, settled.confirmedDone);
   // turnOk = 这一回合本身干净收尾了(没被停、退出码 0)。跟落位状态不是一回事:旁路
   // 回合(就地验证)的落位是任务原来的终态,只有它说得清这一轮跑成没跑成。
-  await afterSettlement(taskId, settled.status, settled.confirmedDone, !stopped && exitStatus === 0);
+  //
+  // 原生命令回合(`/compact`)整段跳过:它是 CLI 本地的一次压缩,没有模型输出、没有
+  // 结论 —— 交给结算钩子的话,正在跑的那一轮就地验证会被当成「验完了」收掉(清轮次、
+  // 涨轮数、却给不出 verified/verify_failed),自由工作流那边同理。
+  if (!settled.nativeTurn) {
+    await afterSettlement(taskId, settled.status, settled.confirmedDone, !stopped && exitStatus === 0);
+  }
   if (settled.note) {
     // 诊断正文留在 .md 原始产物里；trace 负责刷新后的折叠块，SSE 负责实时显示。
     out.write(`\n> ${settled.note}\n`);

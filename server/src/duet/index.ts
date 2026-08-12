@@ -12,6 +12,7 @@ import { trackRun, untrackRun, isCanceling, takeCanceled, CanceledRun } from "..
 import { taskWorkspace } from "../task-workspace.js";
 import { resolveExecutorFor } from "../executors/index.js";
 import type { AgentExecutor } from "../executors/types.js";
+import { sessionTargetKey } from "../executors/resume.js";
 import { RUNS_DIR } from "../paths.js";
 import { recordSessionUsageEvent, setSessionContext } from "../usage.js";
 import * as P from "./prompts.js";
@@ -76,7 +77,7 @@ async function runTurn(args: {
       role,
       agentType: executor.type,
       executor: executor.label,
-      target: "local",
+      target: sessionTargetKey(executor.target),
       worktreePath: args.branch ? cwd : null,
       branch: args.branch ?? null,
       cwd,

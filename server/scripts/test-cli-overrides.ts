@@ -24,10 +24,13 @@ if (!process.env.HARNESS_DB.startsWith("/tmp/")) {
 }
 
 const {
+  UNKNOWN_CLI_HOST_ENV,
   claudeCompactionPlan,
   cliConfigOverrideEnv,
+  cliConfigOverrideErrors,
   cliConfigOverrideHints,
   cliConfigOverridesFor,
+  ineffectiveCliConfigOverrides,
   normalizeCliConfigOverrides,
 } = await import("@harness/shared/cli-overrides");
 
@@ -147,6 +150,25 @@ await db.insert(agents).values([
     configOverrides: "{}",
     isDefault: false,
   },
+  // 同一份覆盖项,一个跑本机、一个跑 ssh 远端 —— 用来钉「远端不拿本机环境换算」。
+  {
+    id: "claude-pct-local",
+    name: "claude@pct-local",
+    type: "claude",
+    target: JSON.stringify({ kind: "local" }),
+    extraArgs: "[]",
+    configOverrides: JSON.stringify({ autoCompactWindow: 200_000, autoCompactPercent: 80 }),
+    isDefault: false,
+  },
+  {
+    id: "claude-pct-ssh",
+    name: "claude@pct-ssh",
+    type: "claude",
+    target: JSON.stringify({ kind: "ssh", host: "build.example" }),
+    extraArgs: "[]",
+    configOverrides: JSON.stringify({ autoCompactWindow: 200_000, autoCompactPercent: 80 }),
+    isDefault: false,
+  },
 ]);
 
 async function probeEnvFor(executorId: string): Promise<string> {
@@ -204,10 +226,89 @@ assert.ok(!plain.resumeCommand?.(sandbox, "sid-1").includes(spec.env), "没配�
 
 // 会话详情读取时是**重算**这条命令的(resumeCommandFor),前缀从库里那列接回来 ——
 // 这条链断了的话上面两条仍然过,但用户在页面上看到的还是不带前缀的命令。
-const { resumeCommandFor } = await import("../src/executors/resume.js");
+const { resumeCommandFor, sessionTargetKey } = await import("../src/executors/resume.js");
 assert.ok(
   resumeCommandFor("claude", "local", sandbox, "sid-1", hint).includes(`${spec.env}=${spec.max}`),
   "重算时要把持久化的前缀接回去",
+);
+
+// ── ⑥ 依赖项没配上的组合,存不进去 ──────────────────────────────────────────
+// 只在前端拦是拦不住的:旧客户端、直接打 API、历史坏数据都能绕过去。判据必须是共用的
+// 那一份,否则两边措辞和口径迟早各说各话。
+assert.deepEqual(
+  ineffectiveCliConfigOverrides("claude", { autoCompactPercent: 80 }),
+  ["autoCompactPercent"],
+  "只填百分比 = 这一项空转,要能被点名",
+);
+assert.deepEqual(
+  ineffectiveCliConfigOverrides("claude", { autoCompactWindow: 200_000, autoCompactPercent: 80 }),
+  [],
+  "两项都填了就没有空转项",
+);
+assert.equal(cliConfigOverrideErrors("claude", { autoCompactPercent: 80 }).length, 1, "空转项要给出一句人话");
+assert.deepEqual(cliConfigOverrideErrors("claude", { autoCompactWindow: 200_000 }), [], "只填窗口是合法的");
+
+// 判据共用还不够,**权威那道闸得真的在服务端**:走真实路由打一遍。
+const { api } = await import("../src/routes.js");
+const postAgent = (body: unknown) =>
+  api.request("/agents", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+const rejected = await postAgent({
+  name: "claude@percent-only",
+  type: "claude",
+  configOverrides: { autoCompactPercent: 80 },
+});
+assert.equal(rejected.status, 400, "只有百分比的覆盖必须被服务端拒掉,不能存成「显示已覆盖、实际不生效」");
+const accepted = await postAgent({
+  name: "claude@percent-ok",
+  type: "claude",
+  configOverrides: { autoCompactWindow: 200_000, autoCompactPercent: 80 },
+});
+assert.equal(accepted.status, 201, "配全了要能正常存下");
+const createdId = ((await accepted.json()) as { id: string }).id;
+const patched = await api.request(`/agents/${createdId}`, {
+  method: "PATCH",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({ configOverrides: { autoCompactPercent: 80 } }),
+});
+assert.equal(patched.status, 400, "PATCH 是另一条口子,同样得拦(对称端点只改一个是老毛病)");
+
+// ── ⑦ ssh profile:换算不许拿本机环境凑数 ────────────────────────────────────
+// 远端 CLI 读的是远端那份环境。本机设了 10k 预留就按 10k 算的话,注给远端的百分比会
+// 直接偏几个百分点,而页面上还写得像个准数。
+process.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS = "10000";
+const localPct = (await resolveExecutorFor({ executorId: "claude-pct-local", type: "claude" })).resumeEnvHint ?? "";
+const remotePct = (await resolveExecutorFor({ executorId: "claude-pct-ssh", type: "claude" })).resumeEnvHint ?? "";
+const pctOf = (prefix: string) => prefix.match(/CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=([\d.]+)/)?.[1];
+assert.equal(
+  pctOf(localPct),
+  String(claudeCompactionPlan({ autoCompactWindow: 200_000, autoCompactPercent: 80 }, { maxOutputTokens: 10_000 })!.envPercent),
+  "本机 profile 要按真读到的预留量换算",
+);
+assert.equal(
+  pctOf(remotePct),
+  String(claudeCompactionPlan({ autoCompactWindow: 200_000, autoCompactPercent: 80 })!.envPercent),
+  "ssh profile 要按默认预留估算,不能沿用本机那个值",
+);
+assert.notEqual(pctOf(localPct), pctOf(remotePct), "两者本就该不同,相等说明 target 没传到换算里");
+delete process.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS;
+
+assert.ok(
+  cliConfigOverrideHints("claude", { autoCompactWindow: 200_000, autoCompactPercent: 80 }, UNKNOWN_CLI_HOST_ENV)
+    .some((line) => line.includes("估算")),
+  "读不到远端环境时要明说这个触发点是估的",
+);
+
+// ssh 会话存进库的 target 必须带上主机名 —— 恢复命令每次按它重算,存 "local" 就会给出
+// 一条在本机执行、cwd 还指向远端路径的命令。
+assert.equal(sessionTargetKey({ kind: "ssh", host: "build.example" }), "ssh:build.example");
+assert.equal(sessionTargetKey({ kind: "local" }), "local");
+assert.ok(
+  resumeCommandFor("claude", "ssh:build.example", sandbox, "sid-1", "").startsWith("ssh "),
+  "库里记着 ssh:<host> 时,重算出来的命令要真的走 ssh",
 );
 
 rmSync(sandbox, { recursive: true, force: true });

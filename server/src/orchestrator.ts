@@ -15,6 +15,7 @@ import { taskWorkspace } from "./task-workspace.js";
 import { resolveExecutorFor } from "./executors/index.js";
 import type { RunHandle } from "./executors/types.js";
 import { detachedPathsFor } from "./executors/detached.js";
+import { sessionTargetKey } from "./executors/resume.js";
 import { inspectProcess } from "./proc.js";
 import { RUNS_DIR } from "./paths.js";
 import { writeTurn, runTracePaths } from "./transcript.js";
@@ -167,7 +168,7 @@ export async function reconcileInterrupted(): Promise<void> {
     if (t.followUpFrom || t.completeConfirmedAt) {
       await db
         .update(tasks)
-        .set({ followUpFrom: null, completeConfirmedAt: null, updatedAt: now() })
+        .set({ followUpFrom: null, nativeTurn: false, completeConfirmedAt: null, updatedAt: now() })
         .where(eq(tasks.id, t.id));
     }
     await setTaskStatus(t.id, back);
@@ -225,10 +226,11 @@ export async function runTask(taskId: string): Promise<void> {
     const project = (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0);
     if (!project) throw new Error("project not found");
 
-    // 新回合起点:清掉上一轮可能残留的完成确认/续聊标记(fresh run 从来不是续聊)。
+    // 新回合起点:清掉上一轮可能残留的完成确认/续聊标记(fresh run 从来不是续聊,
+    // 也从来不是 CLI 原生命令 —— 上一轮崩在半路留下的标记必须在这里归零)。
     await db
       .update(tasks)
-      .set({ followUpFrom: null, completeConfirmedAt: null, updatedAt: now() })
+      .set({ followUpFrom: null, nativeTurn: false, completeConfirmedAt: null, updatedAt: now() })
       .where(eq(tasks.id, taskId));
     await setStatus(taskId, "running");
 
@@ -283,7 +285,7 @@ export async function runTask(taskId: string): Promise<void> {
       role: "single",
       agentType,
       executor: ex.label,
-      target: "local",
+      target: sessionTargetKey(ex.target),
       worktreePath: ws.isWorktree ? ws.path : null,
       branch: ws.branch,
       cwd: ws.path,
@@ -412,6 +414,18 @@ export async function continueTask(
     throwOnTeamUnavailable?: boolean;
   } = {},
 ): Promise<boolean> {
+  // 这条消息是不是 CLI 原生命令(`/compact`):整条归 CLI 本地执行,不进模型 —— 它既不是
+  // 任务的执行,也不是「新指令」。**必须先于摘牌算出来**:摘牌是不可逆的(把 accepted /
+  // merged 摘成进行中),而原生命令走旁路回合、不拍工作目录快照,没有任何基线能把摘掉的
+  // 牌子挂回去 —— 压一下上下文就永久丢掉一次验收。
+  const head = (await db
+    .select({ mode: tasks.mode, agentType: tasks.agentType })
+    .from(tasks)
+    .where(eq(tasks.id, taskId))).at(0);
+  const nativeCommand = nativeCliCommand(
+    opts.agent ?? (head?.agentType as AgentType) ?? "claude",
+    userText,
+  );
   // 已验收的任务收到真人消息 = 旧验收不再覆盖新增改动,stage 清回「进行中」。
   // 只认真人消息:带 opts.system 的 retry / 手点运行 / 队列推进 / 上游唤醒不算,跟下面
   // followUpFrom 用的是同一条口径。放在最前面,确保 single/team/duet 走同一规则。
@@ -420,12 +434,11 @@ export async function continueTask(
   // 会不会真改东西 —— 纯询问也照摘。所以接住摘掉的是哪块牌子交给基线快照:结算发现
   // 工作目录一个字节没变,就把它原样挂回去(turn-baseline.ts)。team 走下面的 stdin 分支、
   // 不拍照,维持原样(调度台本来就不走验收链)。
-  const reopenedStage = opts.system ? null : await reopenAcceptedStage(taskId);
+  const reopenedStage = opts.system || nativeCommand ? null : await reopenAcceptedStage(taskId);
   // 团队任务(§Team):插话直接写进常驻调度台的 stdin —— 即时、同一会话、用户侧
   // 感觉不断线。不占这里的单飞锁(那把锁是给「一次运行 = 一个回合」的单任务用的,
   // 调度台的一次运行是整段常驻)。于是 /reply、/answer、@提及全都自动生效。
-  const teamMode = (await db.select({ mode: tasks.mode }).from(tasks).where(eq(tasks.id, taskId))).at(0)?.mode;
-  if (teamMode === "team") {
+  if (head?.mode === "team") {
     await deliverToLead(taskId, userText, {
       attachments: opts.attachments,
       throwOnOpenFailure: opts.throwOnTeamUnavailable,
@@ -467,9 +480,9 @@ export async function continueTask(
     // 一步,一个 done 的任务就会因为「验证没起来」被打成 failed。
     if (!opts.system && !opts.byBackend) await markFreeReviewReworking(taskId);
     const freeReviewTurn = await isFreeReviewTurn(taskId);
-    // `/compact` 这类 CLI 原生命令:整条消息归 CLI 本地执行,不进模型 —— 没有产出、
-    // 也不可能交卷,所以必须当旁路回合,否则「压一下上下文」会把任务打成 failed。
-    const nativeCommand = nativeCliCommand(agent, userText);
+    // `/compact` 这类 CLI 原生命令(在函数顶部就算好了,摘牌之前要用):整条消息归 CLI
+    // 本地执行,不进模型 —— 没有产出、也不可能交卷,所以必须当旁路回合,否则「压一下
+    // 上下文」会把任务打成 failed。
     const sideTurn = !!opts.sideTurn || !!task.verifyRound || freeReviewTurn || !!nativeCommand;
     const followUpFrom = sideTurn
       ? (task.status === "running" || task.status === "queued" ? null : task.status)
@@ -477,9 +490,11 @@ export async function continueTask(
         ? task.status
         : null;
     // 新回合起点:顺手清掉上一轮残留的完成确认(确认只在本回合内有效)。
+    // nativeTurn 落库而不是只留在内存里:结算钩子跟这里可能不在同一个进程(重启后由
+    // reattach 接着消费同一条流),内存标记会丢,而丢了就等于「压缩被算成一轮验证跑完」。
     await db
       .update(tasks)
-      .set({ followUpFrom, completeConfirmedAt: null, updatedAt: now() })
+      .set({ followUpFrom, nativeTurn: !!nativeCommand, completeConfirmedAt: null, updatedAt: now() })
       .where(eq(tasks.id, taskId));
 
     const ex = await resolveExecutorFor({
@@ -604,6 +619,9 @@ export async function continueTask(
           endedAt: null,
           commandLine: handle.commandLine,
           executor: ex.label,
+          // profile 可能在两轮之间被改到别的机器上;这一列是恢复命令唯一的
+          // 「在哪台机器上跑」凭据,不刷新就会给出一条在本机执行的错命令。
+          target: sessionTargetKey(ex.target),
           resumeEnv: ex.resumeEnvHint ?? null,
           // 这一轮的解绑线索。**必须整组刷新**:沿用上一轮的 pid/offset 会让重启
           // 去接一个早就没了的进程,或者从上一轮的字节位置读这一轮的新文件。
@@ -623,7 +641,7 @@ export async function continueTask(
         role: sessionRole,
         agentType: agent,
         executor: ex.label,
-        target: "local",
+        target: sessionTargetKey(ex.target),
         worktreePath: base?.worktreePath ?? null,
         branch: base?.branch ?? null,
         cwd,

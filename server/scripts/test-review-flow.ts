@@ -421,6 +421,64 @@ assert.equal(failed.verifyRound, null, "起不来的那一轮不能永远占着�
 assert.equal(failed.verifyRounds, 1, "这一轮算跑过了（无结论），下一轮接着往下数");
 rmSync(resolve(reviewRoundDir(failId, 1), "../.."), { recursive: true, force: true });
 
+// ── CLI 原生命令(`/compact`)是旁路回合,结算钩子必须整段跳过 ─────────────────
+// 这一轮里 CLI 只是自己压缩上下文:没有模型输出、num_turns=0,任务本身一个字节都没
+// 动。可它走的是同一条续聊管道,所以两处会误伤:
+//   ① 回合开头的摘牌(reopenAcceptedStage)—— 已验收任务压一次上下文就永久掉牌
+//   ② 结算钩子里的收验证轮(finishVerifyRound)—— 正在验证的任务被当成「验完了」,
+//      白吃一轮配额还没有结论
+// 两条都只能在真跑一遍回合时才暴露,所以这里用一个立刻 exit 0 的假 claude 跑通全程。
+const { projects } = await import("../src/db/schema.js");
+const { chmodSync } = await import("node:fs");
+await db.insert(projects).values({ id: "project", name: "native-turn", repoPath: root, createdAt: at });
+const fakeBin = join(root, "bin");
+mkdirSync(fakeBin, { recursive: true });
+writeFileSync(join(fakeBin, "claude"), "#!/bin/sh\nexit 0\n");
+chmodSync(join(fakeBin, "claude"), 0o755);
+process.env.PATH = `${fakeBin}:${process.env.PATH ?? ""}`;
+
+const seedTurnTarget = async (rowId: string) => {
+  await db.insert(tasks).values({
+    id: rowId,
+    projectId: "project",
+    groupId: null,
+    parentId: null,
+    title: rowId,
+    body: "",
+    mode: "single",
+    status: "done",
+    stage: "accepted",
+    verifyRound: 1,
+    verifyRounds: 0,
+    reviewRequested: true,
+    labels: "[]",
+    dependsOn: "[]",
+    resumeDependsOn: "[]",
+    agentType: "claude",
+    useWorktree: false,
+    autoTitle: false,
+    createdAt: at,
+    updatedAt: at,
+  });
+};
+
+await seedTurnTarget("native-compact");
+await continueTask("native-compact", "/compact", { agent: "claude" });
+const compacted = (await db.select().from(tasks).where(eq(tasks.id, "native-compact"))).at(0)!;
+assert.equal(compacted.stage, "accepted", "压缩上下文不是改动,验收牌子必须还在");
+assert.equal(compacted.verifyRound, 1, "压缩不代表这一轮验证做完了");
+assert.equal(compacted.verifyRounds, 0, "更不能白吃一轮配额");
+assert.equal(compacted.nativeTurn, false, "标记只管这一轮,结算后必须清掉");
+
+// 对照组:同样的任务、同样的路径,换成一句普通消息就该照常摘牌 + 收轮 —— 缺了这一半,
+// 上面三条断言在「原生命令识别把所有消息都当原生」时同样会过。
+await seedTurnTarget("native-control");
+await continueTask("native-control", "顺手改一下文案", { agent: "claude" });
+const control = (await db.select().from(tasks).where(eq(tasks.id, "native-control"))).at(0)!;
+assert.equal(control.stage, null, "普通续聊要摘掉上一版的验收牌子");
+assert.equal(control.verifyRound, null, "普通回合结束 = 这一轮验证收口");
+assert.equal(control.verifyRounds, 1, "并且记账一轮");
+
 rmSync(resolve(base, "../.."), { recursive: true, force: true });
 rmSync(root, { recursive: true, force: true });
 console.log("review flow tests passed");

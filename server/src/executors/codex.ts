@@ -49,6 +49,7 @@ export class CodexExecutor implements AgentExecutor {
       this.type,
       this.configOverrides,
       this.relay ? `${RELAY_ENV_KEY}=<你的key> ` : undefined,
+      this.target,
     );
     const where = this.target.kind === "ssh" ? this.target.host : "local";
     this.label = opts.name ?? `codex@${where}${opts.model ? "·" + opts.model : ""}`;
@@ -85,7 +86,7 @@ export class CodexExecutor implements AgentExecutor {
   // codex 目前一项都没声明,这里接住是为了「声明表加一项就生效」这句话是真的)。
   // `undefined` 值 = 从子进程环境里删掉那个变量(见 cliConfigOverrideEnvPatch)。
   private env(): Record<string, string | undefined> {
-    const env: Record<string, string | undefined> = cliConfigOverrideEnvPatch(this.type, this.configOverrides, cliHostEnv());
+    const env: Record<string, string | undefined> = cliConfigOverrideEnvPatch(this.type, this.configOverrides, cliHostEnv(this.target));
     if (this.relay) env[RELAY_ENV_KEY] = this.relay.apiKey;
     return env;
   }

@@ -40,12 +40,13 @@ import { pauseGroup } from "../scheduler.js";
 import { taskWorkspace } from "../task-workspace.js";
 import { resolveExecutorFor } from "../executors/index.js";
 import type { ResidentHandle } from "../executors/types.js";
+import { sessionTargetKey } from "../executors/resume.js";
 import { RUNS_DIR } from "../paths.js";
 import { appendSessionTrace, writeTurn, writeTurnEnd, writeRunError } from "../transcript.js";
 import { recordUserConversationTurn } from "../conversation-turn.js";
 import { recordSessionUsageEvent, setSessionContext } from "../usage.js";
 import { LEAD_PREAMBLE, LEAD_NUDGE, LEAD_RESUMED, LEAD_WORKSPACE_RESET } from "./prompts.js";
-import { withSkillInvocation } from "../skills.js";
+import { withSkillInvocation, nativeCliCommand } from "../skills.js";
 
 // 空闲多久回收进程(0/负数 = 永不回收)。测试用 HARNESS_TEAM_IDLE_MS=5000。
 const IDLE_MS = Number(process.env.HARNESS_TEAM_IDLE_MS ?? 30 * 60_000);
@@ -150,6 +151,20 @@ async function deliver(
   if (!lead) {
     const inflight = opening.get(taskId);
     if (!inflight) {
+      // CLI 原生命令(claude 的 `/compact`)要求自己是消息的**第一个字**,而开台/接回
+      // 一定会在前面拼上前言或 LEAD_RESUMED —— 拼完就不再是命令,会被当成一句闲聊
+      // 发出去。调度台不在线时也压根没有「当前上下文」可压缩,所以这里不开台,直接
+      // 把原因写回会话:让用户先用一句普通消息把调度者接回来,再发 `/compact`。
+      const native = kind === "user" ? nativeCliCommand(await leadTypeOf(taskId), text) : null;
+      if (native) {
+        await noteToLead(
+          taskId,
+          `/${native} 没有送出：调度台当前不在线（进程已回收或还没开台）。` +
+            `这类 CLI 原生命令必须是消息的第一个字才生效，而接回调度台时前面一定会带上唤醒前言。` +
+            `请先随便说一句普通消息把调度者接回来，再单独发 /${native}。`,
+        );
+        return;
+      }
       // 开台失败(典型:worktree 建不出来)不能静默 —— 路由是 void 调用的,抛出去
       // 只会变成被兜底吞掉的 unhandledRejection,用户什么都看不到。
       try {
@@ -172,10 +187,20 @@ async function deliver(
   push(lead, text, kind);
 }
 
-// 开台失败:把原因写进最近一条调度台会话的 .md(刷新后仍可见)并广播(实时可见),
-// 状态落回 idle —— 团队没有终态,开不起来就是待命。
-async function reportOpenFailure(taskId: string, err: unknown): Promise<void> {
-  const message = `调度台启动失败：${err instanceof Error ? err.message : String(err)}`;
+// 调度台此刻不在线时,配置里写的是哪种 CLI(判定 `/compact` 这类原生命令要用)。
+async function leadTypeOf(taskId: string): Promise<AgentType> {
+  const row = (await db.select({ team: tasks.team }).from(tasks).where(eq(tasks.id, taskId))).at(0);
+  try {
+    if (row?.team) return (JSON.parse(row.team) as TeamConfig).lead ?? TEAM_DEFAULTS.lead;
+  } catch {
+    /* 脏数据按默认执行器算 */
+  }
+  return TEAM_DEFAULTS.lead;
+}
+
+// 没有进程可送的时候,把一条系统说明写进最近一条调度台会话的 .md(刷新后仍可见)
+// 并广播(实时可见)—— 只弹一个 toast 不算数,用户刷新后必须还看得见发生过什么。
+async function noteToLead(taskId: string, message: string): Promise<void> {
   const last = (await db.select().from(sessions).where(eq(sessions.taskId, taskId)))
     .filter((s) => s.role === "lead")
     .sort((a, b) => b.startedAt.localeCompare(a.startedAt))
@@ -194,6 +219,11 @@ async function reportOpenFailure(taskId: string, err: unknown): Promise<void> {
     agentType: (last?.agentType as AgentType) ?? "claude",
     event: { kind: "error", message },
   });
+}
+
+// 开台失败:原因照上面的通道写回去,状态落回 idle —— 团队没有终态,开不起来就是待命。
+async function reportOpenFailure(taskId: string, err: unknown): Promise<void> {
+  await noteToLead(taskId, `调度台启动失败：${err instanceof Error ? err.message : String(err)}`);
   await setTaskStatus(taskId, "idle");
 }
 
@@ -275,9 +305,22 @@ async function openLead(taskId: string, rawText: string, kind: Kind): Promise<Le
 
   const cliSessionId = prev?.cliSessionId ?? handle.sessionId;
   if (resuming) {
+    // 接回同一行会话:除了回合时间戳,**执行器那一组字段必须整组刷新** —— 用户完全
+    // 可以在两段常驻之间改掉团队的执行器 profile(换 CLI、换供应商、改 CLI 配置覆盖、
+    // 甚至改成 ssh 远端)。沿用上一段的值,会话详情就会拿旧 profile 的 env 前缀和
+    // 「在哪台机器上跑」去拼那条「复制去终端接着聊」的命令,直接是错的。
     await db
       .update(sessions)
-      .set({ turnStartedAt: turnStart, endedAt: null, exitStatus: null, commandLine: handle.commandLine })
+      .set({
+        turnStartedAt: turnStart,
+        endedAt: null,
+        exitStatus: null,
+        commandLine: handle.commandLine,
+        executor: ex.label,
+        target: sessionTargetKey(ex.target),
+        resumeCommand: ex.resumeCommand(ws.path, cliSessionId),
+        resumeEnv: ex.resumeEnvHint ?? null,
+      })
       .where(eq(sessions.id, sessId));
   } else {
     await db.insert(sessions).values({
@@ -286,7 +329,7 @@ async function openLead(taskId: string, rawText: string, kind: Kind): Promise<Le
       role: "lead",
       agentType: cfg.lead,
       executor: ex.label,
-      target: "local",
+      target: sessionTargetKey(ex.target),
       worktreePath: ws.isWorktree ? ws.path : null,
       branch: ws.branch,
       cwd: ws.path,

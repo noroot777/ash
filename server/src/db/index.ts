@@ -275,6 +275,9 @@ export async function ensureSchema() {
     // 覆盖 CLI 自己配置文件里的设置(json,以 env 注入进程)。声明表在
     // shared/src/cli-overrides.ts,那里同时写明每一项盖掉的是谁。
     "ALTER TABLE agents ADD COLUMN config_overrides TEXT NOT NULL DEFAULT '{}'",
+    // 这一轮是 CLI 原生命令(`/compact`):结算钩子整段跳过,别把一次本地压缩记成
+    // 一轮验证跑完(说明见 db/schema.ts 的 tasks.nativeTurn)。
+    "ALTER TABLE tasks ADD COLUMN native_turn INTEGER NOT NULL DEFAULT 0",
   ]) {
     try {
       await client.execute(sql);

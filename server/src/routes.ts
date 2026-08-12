@@ -15,7 +15,7 @@ import type {
 } from "@harness/shared";
 import { maxBytesFor, attachmentKind } from "@harness/shared";
 import { isReasoningEffortSupported, normalizeReasoningEffort, reasoningEffortsFor } from "@harness/shared/cli-presets";
-import { normalizeCliConfigOverrides } from "@harness/shared/cli-overrides";
+import { normalizeCliConfigOverrides, cliConfigOverrideErrors } from "@harness/shared/cli-overrides";
 import { db } from "./db/index.js";
 import { projects, groups, tasks, sessions, schedules, agents, llmProviders, notes, noteTasks } from "./db/schema.js";
 import { bus } from "./bus.js";
@@ -202,6 +202,11 @@ api.post("/agents", async (c) => {
       allowedReasoningEfforts: reasoningEffortsFor(type, model),
     }, 400);
   }
+  // CLI 配置覆盖:有的键单独填是空转的(claude 的触发百分比要配合窗口才生效)。
+  // 前端已经拦了一道,这里是权威那道 —— API 直连、旧前端、脚本改配置都过这里。
+  const configOverrides = normalizeCliConfigOverrides(type, b.configOverrides);
+  const overrideErrors = cliConfigOverrideErrors(type, configOverrides);
+  if (overrideErrors.length) return c.json({ error: overrideErrors.join("；") }, 400);
   const row = {
     id: id(),
     name: b.name,
@@ -213,7 +218,7 @@ api.post("/agents", async (c) => {
     // 只落 "fast";"standard"/空 归一成 null(标准=不传参,单一表示)
     speed: b.speed === "fast" ? "fast" : null,
     providerId: b.providerId || null,
-    configOverrides: JSON.stringify(normalizeCliConfigOverrides(type, b.configOverrides)),
+    configOverrides: JSON.stringify(configOverrides),
     isDefault: !!b.isDefault,
   };
   // a type has at most one default
@@ -247,7 +252,10 @@ api.patch("/agents/:id", async (c) => {
   if (b.speed !== undefined) patch.speed = b.speed === "fast" ? "fast" : null;
   if (b.providerId !== undefined) patch.providerId = b.providerId || null;
   if (b.configOverrides !== undefined) {
-    patch.configOverrides = JSON.stringify(normalizeCliConfigOverrides(type, b.configOverrides));
+    const configOverrides = normalizeCliConfigOverrides(type, b.configOverrides);
+    const overrideErrors = cliConfigOverrideErrors(type, configOverrides);
+    if (overrideErrors.length) return c.json({ error: overrideErrors.join("；") }, 400);
+    patch.configOverrides = JSON.stringify(configOverrides);
   }
   if (b.isDefault === true) {
     await db.update(agents).set({ isDefault: false }).where(eq(agents.type, existing.type));

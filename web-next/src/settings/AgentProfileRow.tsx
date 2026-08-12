@@ -209,6 +209,7 @@ export function AgentProfileRow({
               type={profile.type}
               value={profile.configOverrides ?? {}}
               disabled={busy}
+              remote={profile.target.kind === "ssh"}
               onSave={async (configOverrides) => {
                 const saved = await patch({ configOverrides });
                 if (saved) notify(`${profile.name} 的 CLI 配置覆盖已保存`);

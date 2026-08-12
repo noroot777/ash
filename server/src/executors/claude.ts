@@ -41,6 +41,7 @@ export class ClaudeExecutor implements AgentExecutor {
       this.type,
       this.configOverrides,
       this.relay ? `ANTHROPIC_BASE_URL=${relayRoot(this.relay.baseUrl)} ANTHROPIC_AUTH_TOKEN=<你的key> ` : undefined,
+      this.target,
     );
     const where = this.target.kind === "ssh" ? this.target.host : "local";
     this.label = opts.name ?? `claude@${where}${opts.model ? "·" + opts.model : ""}`;
@@ -66,7 +67,7 @@ export class ClaudeExecutor implements AgentExecutor {
   // 返回值里允许出现 `undefined`:那是「把这个变量从子进程里删掉」,不是「没配」
   // (见 cliConfigOverrideEnvPatch)。所以这里不能再按 key 数量决定返不返回。
   private env(): Record<string, string | undefined> {
-    const env: Record<string, string | undefined> = cliConfigOverrideEnvPatch(this.type, this.configOverrides, cliHostEnv());
+    const env: Record<string, string | undefined> = cliConfigOverrideEnvPatch(this.type, this.configOverrides, cliHostEnv(this.target));
     if (this.relay) {
       env.ANTHROPIC_BASE_URL = relayRoot(this.relay.baseUrl);
       env.ANTHROPIC_AUTH_TOKEN = this.relay.apiKey;

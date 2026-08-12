@@ -14,6 +14,16 @@ import { interactiveResumeInner, unknownResumeNote } from "./generic.js";
 //
 // 放在独立文件而不是 spawn.ts:spawn.ts 被目录里的 spec 间接 import(专用执行器
 // 用它 spawn),再让它反过来 import 目录就成环了。
+/**
+ * `sessions.target` 存的那个字符串。**写入端必须用它**:这一列是恢复命令唯一的
+ * 「这活在哪台机器上干」的凭据(读取端 `resumeCommandFor` 每次按它重算),硬写
+ * "local" 的话,ssh profile 跑出来的会话会给用户一条在本机执行的命令 —— 连不上
+ * 远端不说,cwd 还是远端的路径,本机压根不存在。
+ */
+export function sessionTargetKey(target: ExecTarget): string {
+  return target.kind === "ssh" ? `ssh:${target.host}` : "local";
+}
+
 export function resumeCommandFor(
   agentType: string,
   targetStr: string | null | undefined,

@@ -1,7 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Sliders, X } from "@phosphor-icons/react";
 import type { AgentType } from "@harness/shared";
-import { cliConfigOverrideHints, cliConfigOverridesFor } from "@harness/shared/cli-overrides";
+import {
+  UNKNOWN_CLI_HOST_ENV,
+  cliConfigOverrideErrors,
+  cliConfigOverrideHints,
+  cliConfigOverridesFor,
+  ineffectiveCliConfigOverrides,
+} from "@harness/shared/cli-overrides";
 import { Button } from "../components/ui.tsx";
 import { useDismissable } from "../lib/useDismissable.ts";
 import { useCliHostEnv } from "./useCliHostEnv.ts";
@@ -28,18 +34,25 @@ export function ProfileOverridesControl({
   type,
   value,
   disabled,
+  remote,
   onSave,
 }: {
   profileName: string;
   type: AgentType;
   value: Record<string, number>;
   disabled: boolean;
+  /** 这个 profile 跑在 ssh 远端吗 —— 远端的环境读不到,换算得按「未知」走。 */
+  remote: boolean;
   onSave: (value: Record<string, number>) => Promise<boolean>;
 }) {
   const specs = useMemo(() => cliConfigOverridesFor(type), [type]);
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState<Record<string, string>>({});
-  const hostEnv = useCliHostEnv();
+  const localEnv = useCliHostEnv();
+  // 远端 profile 的 CLI 跑在别的机器上,harness 只看得见自己这台的环境变量。拿本机的
+  // 值去算远端的触发点是编数,而且跟执行器真正注入的那份对不上(executors/cli-env.ts
+  // 同样按 UNKNOWN 走)—— 两边必须是同一个判断,提示里也会写明这是估的。
+  const hostEnv = remote ? UNKNOWN_CLI_HOST_ENV : localEnv;
   const triggerRef = useRef<HTMLButtonElement>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
 
@@ -89,19 +102,20 @@ export function ProfileOverridesControl({
   }
   // 依赖项没配上时这一项**根本不会注入**(cliConfigOverrideEnv 会跳过它),所以不能让
   // 它存下去:存了会显示成「已覆盖 80%」,而实际行为跟没配一模一样 —— 静默失败。
-  for (const spec of specs) {
-    if (parsed[spec.key] === undefined || !spec.requires) continue;
-    if (parsed[spec.requires] !== undefined) continue;
-    const required = specs.find((candidate) => candidate.key === spec.requires);
-    errors.push(`${spec.label}要配合「${required?.label ?? spec.requires}」一起填才生效`);
-  }
+  // 判定用 shared 的那份,跟后端 400 是同一句话,别在这儿再写一遍。
+  errors.push(...cliConfigOverrideErrors(type, parsed));
 
   const key = (source: Record<string, number>) =>
     specs.map((spec) => `${spec.key}=${source[spec.key] ?? ""}`).join("&");
   const dirty = key(parsed) !== key(value);
 
   const active = specs.filter((spec) => value[spec.key] !== undefined);
-  const summary = active.map((spec) => fmtWith(value[spec.key]!, spec.unit)).join(" · ");
+  // 已存下的值里也可能有空转的(这道校验是后加的,老数据没过过闸)。胶囊上必须看得出
+  // 来 —— 否则用户看到「80%」会以为它在生效,而 CLI 那边压根没收到这个变量。
+  const dead = new Set(ineffectiveCliConfigOverrides(type, value));
+  const summary = active
+    .map((spec) => `${fmtWith(value[spec.key]!, spec.unit)}${dead.has(spec.key) ? "（未生效）" : ""}`)
+    .join(" · ");
   const shadowed = active.map((spec) => spec.shadows).join("、");
   // hint 跟着草稿走,不是跟着已保存的值走 —— 这行字存在的意义就是「改之前先看看会变成什么」。
   const hints = cliConfigOverrideHints(type, parsed, hostEnv);

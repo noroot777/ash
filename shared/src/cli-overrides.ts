@@ -46,9 +46,20 @@ export interface CliConfigOverride {
 export interface CliHostEnv {
   /** `CLAUDE_CODE_MAX_OUTPUT_TOKENS`;没设 = null(CLI 用模型自己的上限)。 */
   maxOutputTokens: number | null;
+  /**
+   * 这份环境是**真读到的**吗。默认 true。
+   *
+   * false 的唯一来源是 ssh profile:CLI 跑在远端,harness 只能看见自己这台机器的
+   * 环境变量,拿本机的值去替远端算触发点是**编数**(本机没设、远端设了 10k,算出来
+   * 的水位能差 4~5 个百分点)。所以那种情况下一律按默认预留估算,并在提示里说明白
+   * 「这是估的」—— 宁可承认不知道,也不给一个看着精确的错数。
+   */
+  observed?: boolean;
 }
 
 export const NO_CLI_HOST_ENV: Readonly<CliHostEnv> = Object.freeze({ maxOutputTokens: null });
+/** 读不到的那份(ssh 远端)。换算跟「没设」一样,区别只在提示里会讲明这是估的。 */
+export const UNKNOWN_CLI_HOST_ENV: Readonly<CliHostEnv> = Object.freeze({ maxOutputTokens: null, observed: false });
 
 // ── claude 的自动压缩是怎么算的(2.1.220 反编译核对) ──────────────────────────
 // 触发点不是「窗口」本身,中间垫了两层:
@@ -191,6 +202,39 @@ export function normalizeCliConfigOverrides(
   return out;
 }
 
+/**
+ * 依赖项没配上的覆盖项:`cliConfigOverrideEnv` 会跳过它们,存进库也不会注入进程 ——
+ * 界面上却会照实显示成「已覆盖 80%」,这就是一次静默失败。返回这些项的 key。
+ */
+export function ineffectiveCliConfigOverrides(
+  type: AgentType | string,
+  values: Record<string, number> | null | undefined,
+): string[] {
+  if (!values) return [];
+  return cliConfigOverridesFor(type)
+    .filter((spec) => typeof values[spec.key] === "number"
+      && !!spec.requires
+      && typeof values[spec.requires!] !== "number")
+    .map((spec) => spec.key);
+}
+
+/**
+ * 上面那批的人话版。**服务端拒绝写入和前端禁用保存用的是同一份判据** —— 只在前端拦,
+ * 旧客户端、直接打 API、历史坏数据都能绕过去,库里于是躺着一份「显示已覆盖、实际
+ * 不生效」的配置。
+ */
+export function cliConfigOverrideErrors(
+  type: AgentType | string,
+  values: Record<string, number> | null | undefined,
+): string[] {
+  const specs = cliConfigOverridesFor(type);
+  return ineffectiveCliConfigOverrides(type, values).map((key) => {
+    const spec = specs.find((candidate) => candidate.key === key)!;
+    const required = specs.find((candidate) => candidate.key === spec.requires);
+    return `「${spec.label}」要配合「${required?.label ?? spec.requires}」一起填才生效`;
+  });
+}
+
 /** 落成启动进程时要注入的环境变量。没配的项不出现(不是注入空串)。 */
 export function cliConfigOverrideEnv(
   type: AgentType | string,
@@ -266,7 +310,11 @@ export function cliConfigOverrideHints(
       : [];
   }
   const at = `上下文涨到 ~${fmtTokens(plan.trigger)} 时压缩(窗口 ${fmtTokens(plan.window)} 的 ${Math.round((plan.trigger / plan.window) * 100)}%)。`;
-  if (plan.percent === null) return [`${at}这是 claude 的默认触发点;想更早压就填下面的百分比。`];
-  if (plan.capped) return [`${at}填的 ${plan.percent}% 比 claude 自己的下限还晚,已经按下限算 —— 想更早压请往小了填。`];
-  return [at];
+  // 远端读不到那个预留量,上面这个数是按默认 20k 估的 —— 不说清楚,用户会把它当准数。
+  const estimated = host.observed === false
+    ? ["这个 profile 跑在 ssh 远端:远端的 CLAUDE_CODE_MAX_OUTPUT_TOKENS 读不到,上面的触发点按默认 20k 预留估算,远端若设过这个变量会有几个百分点的偏差。"]
+    : [];
+  if (plan.percent === null) return [`${at}这是 claude 的默认触发点;想更早压就填下面的百分比。`, ...estimated];
+  if (plan.capped) return [`${at}填的 ${plan.percent}% 比 claude 自己的下限还晚,已经按下限算 —— 想更早压请往小了填。`, ...estimated];
+  return [at, ...estimated];
 }
