@@ -463,10 +463,74 @@ try {
   await ensureAgain();
   const migMerged = (await db.select({ stage: tasks.stage }).from(tasks).where(eq(tasks.id, "mig-merged"))).at(0);
   assert.equal(migMerged?.stage, "accepted", "旧 merge_status=merged 必须补上验收标记");
-  const migMerging = (await db.select({ stage: tasks.stage }).from(tasks).where(eq(tasks.id, "mig-merging"))).at(0);
-  assert.equal(migMerging?.stage, null, "merging 不可知，不得伪造 stage");
+  const migMerging = (await db.select({ stage: tasks.stage, target: tasks.acceptedTargetBranch, merge: tasks.acceptedMergeCommit })
+    .from(tasks).where(eq(tasks.id, "mig-merging"))).at(0);
+  assert.equal(migMerging?.stage, "merged", "merging 结构化恢复为「已合并待确认」，统一验收可接管");
+  assert.equal(migMerging?.target, "main", "目标分支按旧实现同一规则解析并冻结");
+  assert.equal(migMerging?.merge, null, "commit 区间无从考证必须留空，不得伪造");
 
-  console.log("✓ 生命周期交错窗口：对账不提前结算活 reviewer；尾段逐站补跑不重复副作用；重启消费 write-ahead 基线整套挂回；fresh 重跑启动即摘牌；团队派活/删除/归档与验收互斥；删除级联收走审查链孤儿；派活占位互斥对称释放；验收锁内班次不丢不谎报；尾段失败保留补跑凭据；项目删除锁+级联；租约中消息不可取消；stateVersion 覆盖 status；并发 answer CAS；归档不留 archived+running；turn 窗口 run/retry/fire/班次不谎报不消费；团队验收不盖未执行的执行者；手动派验证原子互斥；内部组级联+孤儿回收；旧合并状态迁移不丢证据");
+  // ── 第 10 轮审查修复回归 ──
+  const { startVerifyRound } = await import("../src/review.js");
+  const { whenTurnIdle, isTurnClaimed: isTurnClaimedFn } = await import("../src/runs.js");
+  const { symlinkSync, rmSync: rmSync2, mkdirSync: mkdirSync2 } = await import("node:fs");
+
+  // ㉑ turnHeld 占位传递：入口原子占位后 runTask 接管同一把锁并在结束时释放。
+  await createTasks([{ ...baseTask, id: "held-task", title: "held", reasoningEffort: "ultra-fake" }]);
+  assert.equal(claimTurn("held-task", "single"), true, "入口占位");
+  await runTask("held-task", { turnHeld: true }); // 解析必炸；接管的锁由 finally 释放
+  assert.equal(claimTurn("held-task"), true, "turnHeld 接管的锁必须在回合结束时释放");
+  releaseTurn("held-task");
+
+  // ㉒ 释放点竞争：先排队的竞争 waiter 抢到锁时，验证投递明确失败并**对称回滚**全部
+  //    半轮状态（verifyRound/reviewStep/stage）。
+  await createTasks([{ ...baseTask, id: "vr-race-task", title: "vr race" }]);
+  assert.equal(claimTurn("vr-race-task", "single"), true); // 外部回合进行中
+  whenTurnIdle("vr-race-task", () => { claimTurn("vr-race-task", "competitor"); }); // 竞争者排第一
+  const raceRound = await startVerifyRound("vr-race-task"); // 校验通过，状态写下，投递排第二
+  assert.equal(raceRound.round, 1);
+  releaseTurn("vr-race-task"); // 竞争者先拿到；验证 waiter 同步 claim 失败 → onError 回滚
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  const raceRow = (await db.select({ verifyRound: tasks.verifyRound, stage: tasks.stage, reviewStep: tasks.reviewStep })
+    .from(tasks).where(eq(tasks.id, "vr-race-task"))).at(0);
+  assert.equal(raceRow?.verifyRound, null, "验证没起来必须清 verifyRound");
+  assert.equal(raceRow?.stage, null, "对称回滚必须连 stage=verifying 一起恢复（UI 不能永久显示验证中）");
+  assert.equal(raceRow?.reviewStep, null, "station 字段一并回滚");
+  releaseTurn("vr-race-task"); // 竞争者的锁
+  const raceRetry = await startVerifyRound("vr-race-task");
+  assert.equal(raceRetry.round, 1, "回滚后可以重新派验证，不再报「已有一轮进行中」");
+  // 本轮投递（炸弹任务）自行结算并释放锁——不要手动 release 抢走它持有的锁。
+  for (let i = 0; i < 50 && isTurnClaimedFn("vr-race-task"); i++) await new Promise((r) => setTimeout(r, 100));
+  await db.update(tasks).set({ verifyRound: null, stage: null, reviewStep: null }).where(eq(tasks.id, "vr-race-task"));
+
+  // ㉓ 协议/证据准备失败发生在任何状态提交之前：不得留下「已有一轮验证进行中」的半轮。
+  await createTasks([{ ...baseTask, id: "vp-task", title: "vp task" }]);
+  mkdirSync2(join(root, "runs", "vp-task"), { recursive: true });
+  symlinkSync(join(root, "outside"), join(root, "runs", "vp-task", "review"));
+  await assert.rejects(startVerifyRound("vp-task"), /不安全|安全/, "symlink 证据目录必须被拒");
+  const vpRow = (await db.select({ verifyRound: tasks.verifyRound, stage: tasks.stage })
+    .from(tasks).where(eq(tasks.id, "vp-task"))).at(0);
+  assert.equal(vpRow?.verifyRound, null, "协议失败不得留下 verifyRound");
+  assert.equal(vpRow?.stage, null, "协议失败不得留下 stage=verifying");
+  rmSync2(join(root, "runs", "vp-task", "review"), { force: true });
+
+  // ㉔ 权威重查在占位之后：归档/等待答复的任务派验证必须被拒（路由预检查可被慢 body 过期）。
+  await createTasks([{ ...baseTask, id: "vr-archived", title: "vr archived" }]);
+  await db.update(tasks).set({ archived: true }).where(eq(tasks.id, "vr-archived"));
+  await assert.rejects(startVerifyRound("vr-archived"), /归档/, "归档任务不得派验证（startVerifyRound 内权威检查）");
+  await createTasks([{ ...baseTask, id: "vr-waiting", title: "vr waiting", status: "paused" }]);
+  await db.update(tasks).set({ question: "选 A 还是 B？" }).where(eq(tasks.id, "vr-waiting"));
+  await assert.rejects(startVerifyRound("vr-waiting"), /等待答复/, "挂着 question 的任务不得派验证（结算无法区分提问归属）");
+
+  // ㉕ 孤儿 worker 解绑：lead 行已不存在的执行者回到顶层可见，悬空 group 引用清空。
+  await createTasks([{ ...baseTask, id: "orphan-worker", title: "orphan worker" }]);
+  await db.update(tasks).set({ parentId: "ghost-lead-gone", groupId: "ghost-group-gone" }).where(eq(tasks.id, "orphan-worker"));
+  await ensureAgain();
+  const orphanRow = (await db.select({ parentId: tasks.parentId, groupId: tasks.groupId })
+    .from(tasks).where(eq(tasks.id, "orphan-worker"))).at(0);
+  assert.equal(orphanRow?.parentId, null, "悬空 parent 引用必须解绑（否则永久不可见）");
+  assert.equal(orphanRow?.groupId, null, "悬空 group 引用必须清空");
+
+  console.log("✓ 生命周期交错窗口：对账不提前结算活 reviewer；尾段逐站补跑不重复副作用；重启消费 write-ahead 基线整套挂回；fresh 重跑启动即摘牌；团队派活/删除/归档与验收互斥；删除级联收走审查链孤儿；派活占位互斥对称释放；验收锁内班次不丢不谎报；尾段失败保留补跑凭据；项目删除锁+级联；租约中消息不可取消；stateVersion 覆盖 status；并发 answer CAS；归档不留 archived+running；turn 窗口 run/retry/fire/班次不谎报不消费；团队验收不盖未执行的执行者；手动派验证原子互斥；内部组级联+孤儿回收；旧合并状态迁移不丢证据；turnHeld 占位传递；释放点竞争对称回滚；协议失败零半轮；权威重查挡归档/等待态；孤儿 worker 解绑");
 } finally {
   rmSync(root, { recursive: true, force: true });
 }

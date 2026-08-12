@@ -18,6 +18,7 @@ import type {
   ReviewDispatchInput,
   TaskReviewInfo,
   TaskReviewRound,
+  TaskStage,
   TaskStatus,
   TeamConfig,
 } from "@harness/shared";
@@ -45,7 +46,7 @@ import {
   writeConclusion,
 } from "./review-evidence.js";
 import { repairPrompt, verifyProtocolFor } from "./review-prompts.js";
-import { setTaskStage } from "./task-stage.js";
+import { setTaskStage, clearTaskStage } from "./task-stage.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { askAboutFailure } from "./task-question.js";
 import {
@@ -159,9 +160,24 @@ export async function startVerifyRound(
     throw new Error("任务回合正在进行，结束后再派验证");
   }
   try {
+  // 占位后重读+**权威校验**：路由的预检查在 await c.req.json() 等间隙之后可能已过期
+  // （审查实测：streaming body 停住解析，任务先被归档，继续 body 后验证照样 201）。
+  // 归档与这里互为镜像：归档检查 isTurnClaimed（占位期间归档 409），这里占位后重查
+  // archived（归档先完成则拒）。
   const target = (await db.select().from(tasks).where(eq(tasks.id, targetId))).at(0);
   if (!target) throw new Error("被验任务不存在");
   if (target.reviewOf) throw new Error("审查任务自身不能再验");
+  if (target.archived) throw new Error("任务已归档（只读），先取消归档再派验证");
+  if (target.mode !== "single") throw new Error("当前只支持验证 single 任务");
+  if (target.status === "running" || target.status === "queued") {
+    throw new Error("目标仍在运行或排队，结束后再验");
+  }
+  // 等待答复/续跑的任务不能派验证：验证结算把 question/resumePrompt 当「验证者本轮
+  // 中途提问」的正常等待态，派验证之前就存在的字段会让这一轮永远收不了尾——
+  // verifyRound 挂着、第二次派验证 400（审查实测）。与自由派审同一门禁。
+  if (target.question || target.resumePrompt) {
+    throw new Error("任务正等待答复或续跑，处理后再派验证");
+  }
   if (target.verifyRound) throw new Error("该任务已有一轮验证正在进行");
   const legacy = await legacyReviewTasks(targetId);
   if (legacy.some((review) => ["backlog", "queued", "running", "paused"].includes(review.status))) {
@@ -176,6 +192,11 @@ export async function startVerifyRound(
   const execution = await reviewExecution(target, withVerifyExecutor(target, override));
   const project = (await db.select().from(projects).where(eq(projects.id, target.projectId))).at(0);
 
+  // 协议/证据目录准备（可失败：目录被 symlink 换掉等）必须在**任何状态提交之前**——
+  // 先写 verifyRound/stage=verifying 再抛错会留下「已有一轮验证正在进行」的半轮状态，
+  // 任务永久无法再派验证（审查实测复现）。
+  const protocol = await verifyProtocolFor(target, round, project?.repoPath ?? "(项目已不存在)", station);
+
   await db
     .update(tasks)
     .set({
@@ -189,10 +210,6 @@ export async function startVerifyRound(
   await appendTaskTimeline(targetId, `第 ${round} 轮验证开始：就在这个任务的工作目录里跑，不另起审查任务。`);
   bus.publish({ type: "task.review", taskId: targetId });
 
-  // 协议正文要读会话正文（捞用户中途追加的需求），先 await 出来再排队。这不影响
-  // `continueWhenIdle` 的语义：它是「空着就立刻跑、在跑就排到这一轮之后」，多几次
-  // await 只会让判断发生得更晚一点，两条路都仍然正确。
-  const protocol = await verifyProtocolFor(target, round, project?.repoPath ?? "(项目已不存在)", station);
   continueWhenIdle(
     targetId,
     protocol,
@@ -205,7 +222,21 @@ export async function startVerifyRound(
       reasoningEffort: execution.reasoningEffort,
     },
     async (error) => {
-      await db.update(tasks).set({ verifyRound: null, updatedAt: now() }).where(eq(tasks.id, targetId));
+      // 对称回滚：验证没起来，这一轮写下的**全部**状态恢复原值——只清 verifyRound 会
+      // 留下 stage=verifying（taskDisplayStatus 里 stage 优先），UI 永久显示「验证中」
+      // 而轮数为空（审查实测：释放点被竞争 waiter 抢先后永久卡住）。
+      await db.update(tasks).set({
+        verifyRound: null,
+        reviewStep: target.reviewStep ?? null,
+        verifyStationRounds: target.verifyStationRounds ?? 0,
+        updatedAt: now(),
+      }).where(eq(tasks.id, targetId));
+      const current = (await db.select({ stage: tasks.stage }).from(tasks).where(eq(tasks.id, targetId))).at(0);
+      if (current?.stage === "verifying") {
+        // 只在还是本轮写下的 verifying 时回滚（期间有更新的结论就不碰）。
+        if (target.stage && target.stage !== "verifying") await setTaskStage(targetId, target.stage as TaskStage);
+        else await clearTaskStage(targetId, `第 ${round} 轮验证启动失败，验证状态已回滚。`);
+      }
       await appendTaskTimeline(targetId, `第 ${round} 轮验证启动失败：${error}`);
       bus.publish({ type: "task.review", taskId: targetId });
     },

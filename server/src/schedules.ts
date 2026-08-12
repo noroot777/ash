@@ -1,7 +1,7 @@
 import { eq } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { isAcceptingTask } from "./acceptance-lock.js";
-import { isTurnClaimed } from "./runs.js";
+import { claimTurn, releaseTurn } from "./runs.js";
 import { schedules, tasks, groups } from "./db/schema.js";
 import { runTask } from "./orchestrator.js";
 import { runDuet } from "./duet/index.js";
@@ -68,12 +68,6 @@ async function fire(taskId: string): Promise<boolean> {
   // Archived = frozen: a schedule never fires an archived task. We skip here
   // rather than disabling the schedule, so unarchiving restores it automatically.
   if (t.archived) return false;
-  // 验收(含发布尾段)正在进行:fresh 重跑会与合并/清理抢工作区(runTask 里也会被
-  // 静默挡回)。不消费班次,下个 tick 再试。
-  if (isAcceptingTask(taskId)) return false;
-  // turn 已被占(claim 到 status 落 running 的窗口):runTask 的 claimTurn 会失败并静默
-  // 返回,这一班等于没跑——不消费,下个 tick 再试(审查实测:once 被永久消费)。
-  if (isTurnClaimed(taskId)) return false;
   // Respect a paused group: a pause means "halt this group", so the scheduler
   // must not sneak a group member past it. The task fires on the next due tick
   // once the group is resumed.
@@ -81,8 +75,17 @@ async function fire(taskId: string): Promise<boolean> {
     const g = (await db.select().from(groups).where(eq(groups.id, t.groupId))).at(0);
     if (g?.paused) return false;
   }
-  if (t.mode === "duet") void runDuet(taskId);
-  else void runTask(taskId); // 全新一轮(新 session),不接续上次会话
+  if (t.mode === "duet") { void runDuet(taskId); return true; }
+  // 原子占位后启动:只读预检查在任何 await 之后都可能过期,占到才算这一班真的开跑
+  // (审查实测:验收/turn 窗口里 once 被永久消费)。占位后再查验收锁——与验收侧
+  // beginAccepting→isTurnClaimed 互为镜像,任意交错至少一方退避;退避不消费班次,
+  // 下个 tick 再试。
+  if (!claimTurn(taskId, "single")) return false;
+  if (isAcceptingTask(taskId)) {
+    releaseTurn(taskId);
+    return false;
+  }
+  void runTask(taskId, { turnHeld: true }); // 全新一轮(新 session),不接续上次会话
   return true;
 }
 

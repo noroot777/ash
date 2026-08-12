@@ -134,6 +134,15 @@ export function turnRole(taskId: string): string | null {
   return turns.get(taskId) ?? null;
 }
 
+/**
+ * 占位转正：入口在最后一个 await 检查之后原子占住 turn（turnHeld 传递给启动函数），
+ * 启动函数到位后用真实身份接管这把锁。只允许在**已持有**时调用——没占就转正是编程错。
+ */
+export function reclaimTurn(taskId: string, role: string): void {
+  if (!turns.has(taskId)) throw new Error(`reclaimTurn(${taskId}) without holding the turn`);
+  turns.set(taskId, role);
+}
+
 /** 回合结束：先放锁，再跑「等这一轮跑完」的回调（它们多半要立刻起下一轮）。 */
 export function releaseTurn(taskId: string): void {
   turns.delete(taskId);
@@ -176,20 +185,36 @@ export function continueWhenIdle(
   onError?: (message: string) => void | Promise<unknown>,
 ): void {
   whenTurnIdle(taskId, () => {
+    // 排到队头的一瞬间**同步**锁定所有权（turnHeld 传递给 continueTask 接管）：不占的
+    // 话，异步 import 的间隙里同一释放点的后续 waiter 能同步抢锁——投递「not delivered」
+    // 而调用方可能已提前写下状态（审查实测 3/3：dispatch 释放点被竞争 waiter 抢先，
+    // 任务留在 stage=verifying 而验证从未启动）。
+    const role = (opts.sessionRole as string | undefined) ?? "single";
+    if (!claimTurn(taskId, role)) {
+      console.error(`[harness] continueWhenIdle(${taskId}) not delivered: turn re-claimed`);
+      void onError?.("回合被其它执行抢占，消息未能投递");
+      return;
+    }
     void import("./orchestrator.js")
-      .then(async ({ continueTask }) => {
-        // continueTask 返回 false = 一个字都没送出去（回合又被别人抢了）。吞掉它，
-        // 调用方的时间线就会停在「意见已发回会话」而消息实际没了——必须当失败上报。
-        const delivered = await continueTask(taskId, text, opts);
-        if (delivered === false) {
-          console.error(`[harness] continueWhenIdle(${taskId}) not delivered: turn re-claimed`);
-          await onError?.("回合被其它执行抢占，消息未能投递");
-        }
-      })
-      .catch((error) => {
-        const message = error instanceof Error ? error.message : String(error);
-        console.error(`[harness] continueWhenIdle(${taskId}) failed:`, error);
-        return onError?.(message);
-      });
+      .then(({ continueTask }) => continueTask(taskId, text, { ...opts, turnHeld: true }))
+      .then(
+        async (delivered) => {
+          // continueTask 返回 false = 一个字都没送出去（验收互斥退避等）。吞掉它，
+          // 调用方的时间线就会停在「意见已发回会话」而消息实际没了——必须当失败上报。
+          if (delivered === false) {
+            console.error(`[harness] continueWhenIdle(${taskId}) not delivered`);
+            try { await onError?.("回合被其它执行抢占，消息未能投递"); } catch { /* 上报失败不再连锁 */ }
+          }
+        },
+        async (error) => {
+          // 只有 import 失败或 continueTask 进入自己的 try/finally 之前抛错才会到这——
+          // 那两种情况下锁还是这里占的那把，必须还回去（continueTask 一旦接管，正常与
+          // 失败路径都由它自己释放，不会落到这个分支）。
+          releaseTurn(taskId);
+          const message = error instanceof Error ? error.message : String(error);
+          console.error(`[harness] continueWhenIdle(${taskId}) failed:`, error);
+          try { await onError?.(message); } catch { /* 上报失败不再连锁 */ }
+        },
+      );
   });
 }

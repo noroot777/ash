@@ -34,7 +34,7 @@ import { mountTaskArchiveRoutes } from "./task-archive-routes.js";
 import { RUNS_DIR } from "./paths.js";
 import { enqueueMessage } from "./pending-messages.js";
 import { isOvertaken, queueBlockers, repackQueue, tailOrder } from "./queues.js";
-import { confirmDone, isTurnClaimed, stopTask } from "./runs.js";
+import { claimTurn, confirmDone, stopTask } from "./runs.js";
 import { advanceQueue } from "./scheduler.js";
 import { setTaskStatus } from "./status.js";
 import { dispatchWorkers, type DispatchSpec } from "./team/dispatch.js";
@@ -141,11 +141,6 @@ api.post("/tasks/:id/run", async (c) => {
       ? !["running", "queued", "awaiting_review"].includes(r.status)
       : canSingleRun(r.status as TaskStatus);
   if (!runnable) return c.json({ error: "任务当前状态不可运行", status: r.status }, 409);
-  // turn 已被占（claim 到 status 落 running 的窗口）：runTask/continueTask 会被单飞锁
-  // 静默挡回，202 就成了谎报「已启动」（审查实测）。团队调度台不占 turn，不受影响。
-  if (isTurnClaimed(taskId)) {
-    return c.json({ error: "任务回合正在进行（状态尚未落库），结束后再运行", status: r.status }, 409);
-  }
   const blockedBy = await queueBlockers(taskId);
   if (blockedBy.length) {
     return c.json(
@@ -154,8 +149,15 @@ api.post("/tasks/:id/run", async (c) => {
     );
   }
   // Fire-and-forget; progress streams over /api/events.
-  if (r.mode === "duet") void runDuet(taskId);
-  else void resumeOrRunTask(taskId, { reason: "run" });
+  if (r.mode === "duet") { void runDuet(taskId); return c.json({ started: true }, 202); }
+  if (r.mode === "team") { void resumeOrRunTask(taskId, { reason: "run" }); return c.json({ started: true }, 202); }
+  // **最后一个 await 之后**原子占位再启动：只读预检查后的任何 await 间隙里另一次启动
+  // 都可能抢先——两个并发请求会双双 202 而只有一个真的开跑（审查实测）。占到 = 202 是
+  // 真话；占不到 = 此刻确有回合在跑，409。
+  if (!claimTurn(taskId, "single")) {
+    return c.json({ error: "任务回合正在进行，结束后再运行", status: r.status }, 409);
+  }
+  void resumeOrRunTask(taskId, { reason: "run", turnHeld: true });
   return c.json({ started: true }, 202);
 });
 
@@ -175,8 +177,6 @@ api.post("/tasks/:id/fire", async (c) => {
   // runTask 遇验收锁/单飞锁会静默 return——202 就成了谎报「已触发一轮全新运行」（审查实测）。
   if (isAcceptingTask(taskId))
     return c.json({ error: "任务正在验收（含发布尾段），结束后再触发", status: r.status }, 409);
-  if (isTurnClaimed(taskId))
-    return c.json({ error: "任务回合正在进行（状态尚未落库），结束后再触发", status: r.status }, 409);
   const blockedBy = await queueBlockers(taskId);
   if (blockedBy.length) {
     return c.json(
@@ -184,8 +184,12 @@ api.post("/tasks/:id/fire", async (c) => {
       409,
     );
   }
-  if (r.mode === "duet") void runDuet(taskId);
-  else void runTask(taskId); // 全新一轮,永不 resume
+  if (r.mode === "duet") { void runDuet(taskId); return c.json({ started: true, fresh: true }, 202); }
+  // 同 /run:最后一个 await 之后原子占位,202 才是真话。
+  if (!claimTurn(taskId, "single")) {
+    return c.json({ error: "任务回合正在进行，结束后再触发", status: r.status }, 409);
+  }
+  void runTask(taskId, { turnHeld: true }); // 全新一轮,永不 resume
   return c.json({ started: true, fresh: true }, 202);
 });
 
@@ -544,11 +548,12 @@ api.post("/tasks/:id/retry", async (c) => {
   if (!r) return c.json({ error: "not found" }, 404);
   if (r.archived) return c.json({ error: "任务已归档，先取消归档再重试", archived: true }, 409);
   if (r.status !== "failed") return c.json({ error: "只有失败的任务可以重试", status: r.status }, 409);
-  if (isTurnClaimed(taskId)) {
-    return c.json({ error: "任务回合正在进行（状态尚未落库），结束后再重试", status: r.status }, 409);
+  if (r.mode === "duet") { void resumeDuet(taskId); return c.json({ started: true }, 202); }
+  // 同 /run:原子占位,并发重试只有一个能 202。
+  if (!claimTurn(taskId, "single")) {
+    return c.json({ error: "任务回合正在进行，结束后再重试", status: r.status }, 409);
   }
-  if (r.mode === "duet") void resumeDuet(taskId);
-  else void resumeOrRunTask(taskId, { reason: "retry" });
+  void resumeOrRunTask(taskId, { reason: "retry", turnHeld: true });
   return c.json({ started: true }, 202);
 });
 

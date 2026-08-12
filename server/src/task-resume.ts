@@ -18,10 +18,10 @@ import { freeReviewResumeOptions } from "./free-workflow.js";
 // scheduler) keep chaining on the same promise.
 export async function resumeOrRunTask(
   taskId: string,
-  opts: { reason?: ResumeReason } = {},
+  opts: { reason?: ResumeReason; turnHeld?: boolean } = {},
 ): Promise<void> {
   const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
-  if (!task || task.mode !== "single") return runTask(taskId); // duets/missing → unchanged path
+  if (!task || task.mode !== "single") return runTask(taskId, { turnHeld: opts.turnHeld }); // duets/missing → unchanged path
   // 检查点续跑：resumePrompt 当 user 消息回灌同一会话，先清空避免再次 settle 时又认成
   // paused（调度器会先标 queued，不能只看 paused）。reviewing run 挂着 = 中断的是审查
   // 回合：续跑必须带回 reviewer 身份与配置，否则以 single 恢复实现会话，审查链收不了尾。
@@ -29,7 +29,7 @@ export async function resumeOrRunTask(
     const rp = task.resumePrompt;
     const reviewerRoute = await freeReviewResumeOptions(taskId);
     await db.update(tasks).set({ resumePrompt: null, updatedAt: now() }).where(eq(tasks.id, taskId));
-    const started = await continueTask(taskId, rp, { system: opts.reason ?? "run", ...(reviewerRoute ?? {}) });
+    const started = await continueTask(taskId, rp, { system: opts.reason ?? "run", turnHeld: opts.turnHeld, ...(reviewerRoute ?? {}) });
     if (!started) {
       // 回合被别人抢了（典型：上一回合的 turn 还没 release）：checkpoint 指令一个字都没
       // 送出去，必须放回原位等下一次触发——清了不回写就是永久丢失（审查实测复现）。
@@ -44,8 +44,8 @@ export async function resumeOrRunTask(
     .at(0);
   if (prev?.cliSessionId) {
     const reviewerRoute = await freeReviewResumeOptions(taskId);
-    await continueTask(taskId, RESUME_PROMPT, { system: opts.reason ?? "run", ...(reviewerRoute ?? {}) });
+    await continueTask(taskId, RESUME_PROMPT, { system: opts.reason ?? "run", turnHeld: opts.turnHeld, ...(reviewerRoute ?? {}) });
     return;
   }
-  return runTask(taskId); // no resumable session → fresh
+  return runTask(taskId, { turnHeld: opts.turnHeld }); // no resumable session → fresh
 }
