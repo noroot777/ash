@@ -18,6 +18,7 @@
     "test:task-review-rounds": "node scripts/test-task-review-rounds.mjs",
     "test:review-diff-zoom": "node scripts/test-review-diff-zoom.mjs",
     "test:data-layer": "node --experimental-strip-types scripts/test-data-layer.mjs",
+    "test:task-sync": "node --experimental-strip-types scripts/test-task-sync.mjs",
     "test:run-activity": "node --experimental-strip-types scripts/test-run-activity.mjs",
     "test:tool-summary": "node --experimental-strip-types scripts/test-tool-summary.mjs",
     "test:duet-timeline": "node --experimental-strip-types scripts/test-duet-timeline.mjs",

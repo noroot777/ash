@@ -1,7 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
 import type { Group, GroupMode, ProjectView, Task, TaskMode } from "@harness/shared";
 import { api } from "../lib/api.ts";
-import { applyStarredAt, useTasks } from "../lib/useTasks.ts";
+import { useTasks } from "../lib/useTasks.ts";
 import { TaskDetail } from "../task-detail/TaskDetail.tsx";
 import { TeamView } from "../team/TeamView.tsx";
 import { DuetView } from "../duet/DuetView.tsx";
@@ -61,7 +61,7 @@ export function WorkspaceShell() {
   const [sidebarWidth, setSidebarWidth] = useState(readWorkspaceSidebarWidth);
   const [toast, setToast] = useState<string | null>(null);
   const [terminalOpen, setTerminalOpen] = useState(false);
-  const { tasks, setTasks, loading: tasksLoading, error: tasksError, connected, settlementVersion } = useTasks();
+  const { tasks, setTasks, loading: tasksLoading, error: tasksError, connected, settlementVersion, applyStar } = useTasks();
   const spread = useSidebarSpread(tasks, projectId, settlementVersion);
 
   const notify = useCallback((message: string) => {
@@ -149,9 +149,6 @@ export function WorkspaceShell() {
   const updateTask = useCallback((updated: Task) => setTasks((current) => current.some((task) => task.id === updated.id)
     ? current.map((task) => task.id === updated.id ? updated : task)
     : [updated, ...current]), [setTasks]);
-  const starTask = useCallback((starTaskId: string, starredAt: number | null) => {
-    setTasks((current) => applyStarredAt(current, starTaskId, starredAt));
-  }, [setTasks]);
   const deleteTask = useCallback((deletedId: string) => {
     setTasks((current) => current.filter((task) => task.id !== deletedId));
     setTaskId((current) => current === deletedId ? null : current);
@@ -244,7 +241,7 @@ export function WorkspaceShell() {
 
   return (
     <><div className={`workspace-shell${spread.laidOut ? " is-spread" : ""}`} style={{ "--workspace-sidebar-width": `${sidebarWidth}px` } as CSSProperties}>
-      <WorkspaceSidebar projects={projects} currentProject={currentProject} tasks={tasks} selectedTaskId={taskId} connected={connected} collapsed={collapsed} spread={spread} width={sidebarWidth} onWidthChange={setSidebarWidth} onProject={selectProject} onTask={selectTask} onTaskStarred={starTask} notify={notify} onToggleCollapsed={() => { spread.close(); setCollapsed((value) => !value); }} onSearch={() => setPaletteOpen(true)} onNotes={() => openNotes()} onGroups={() => setGroupsPanelOpen(true)} onCreate={() => openComposer("single")} onNewProject={() => setCreateDialog("project")} onSettings={() => openSettings("executors")} />
+      <WorkspaceSidebar projects={projects} currentProject={currentProject} tasks={tasks} selectedTaskId={taskId} connected={connected} collapsed={collapsed} spread={spread} width={sidebarWidth} onWidthChange={setSidebarWidth} onProject={selectProject} onTask={selectTask} onTaskStarred={applyStar} notify={notify} onToggleCollapsed={() => { spread.close(); setCollapsed((value) => !value); }} onSearch={() => setPaletteOpen(true)} onNotes={() => openNotes()} onGroups={() => setGroupsPanelOpen(true)} onCreate={() => openComposer("single")} onNewProject={() => setCreateDialog("project")} onSettings={() => openSettings("executors")} />
       <main className="workspace-main">
         {loadError && <div className="workspace-load-error">{loadError.message}</div>}
         {composer && currentProject ? <TaskComposerPanel project={currentProject} groups={groups} initialDraft={composer.draft} mode={composer.mode} onModeChange={(mode) => setComposer((current) => current ? { ...current, mode } : null)} onCancel={() => setComposer(null)} onCreated={createTask} onCreateGroup={createComposerGroup} notify={notify} /> : selectedTask?.mode === "team" ? (

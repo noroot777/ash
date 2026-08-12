@@ -3,7 +3,6 @@ import { mergeFeed, timeMs } from "@harness/shared/team";
 import { ApiError, api } from "../src/lib/api.ts";
 import { mergeUserTimeline } from "../src/lib/useConversation.ts";
 import { deriveTaskStatusIndicator, readEventForTask, readTaskIds } from "../src/lib/useTaskReadState.ts";
-import { applyStarredAt, applyTaskMetadataEvent, applyTaskStatusEvent, mergeFetchedTasks } from "../src/lib/useTasks.ts";
 import { buildConversationItems, conversationToMarkdown } from "../src/task-detail/conversationModel.ts";
 import { taskDurationInfo } from "../src/task-detail/utils.ts";
 import { stickStateAfterScroll } from "../src/lib/useStickToBottom.ts";
@@ -74,62 +73,8 @@ try {
     liveSince: "2026-07-30T01:00:00.000Z",
     updatedAt: "2026-07-30T01:10:00.000Z",
   };
-  const updated = applyTaskStatusEvent(task, {
-    type: "task.status",
-    taskId: "task-1",
-    status: "running",
-    updatedAt: "2026-07-30T01:11:00.000Z",
-    endedAt: null,
-    liveSince: null,
-  });
-
-  assert.equal(updated.startedAt, task.startedAt);
-  assert.equal(updated.activeMs, task.activeMs);
-  assert.equal(updated.endedAt, null);
-  assert.equal(updated.liveSince, null);
-  assert.equal(updated.updatedAt, "2026-07-30T01:11:00.000Z");
-  assert.equal(applyTaskMetadataEvent(task, {
-    type: "task.stage",
-    taskId: task.id,
-    stage: "awaiting_acceptance",
-    updatedAt: "2026-07-30T01:12:00.000Z",
-  }).updatedAt, "2026-07-30T01:12:00.000Z");
-  assert.equal(applyTaskMetadataEvent(task, {
-    type: "task.title",
-    taskId: task.id,
-    title: "新标题",
-    updatedAt: "2026-07-30T01:13:00.000Z",
-  }).updatedAt, "2026-07-30T01:13:00.000Z");
-  assert.equal(applyTaskMetadataEvent(task, {
-    type: "task.question",
-    taskId: task.id,
-    question: "需要确认吗？",
-    questionOptions: ["确认"],
-    questionItems: null,
-    updatedAt: "2026-07-30T01:14:00.000Z",
-  }).updatedAt, "2026-07-30T01:14:00.000Z");
-
-  // 星标回写与 GET 快照都可能比 SSE 晚到：这两个纯函数钉住「旧快照不许覆盖新状态」。
-  // applyStarredAt 只合并 starredAt —— 任务在星标请求 in-flight 期间完成/改名，迟到的
-  // PATCH 响应不能把它回滚；任务已删除时不复活。
-  const doneMeanwhile = { ...task, status: "done", title: "跑完了", starredAt: null };
-  const starMerged = applyStarredAt([doneMeanwhile], "task-1", 1754900000000);
-  assert.equal(starMerged[0].starredAt, 1754900000000);
-  assert.equal(starMerged[0].status, "done", "stale star response must not roll back status");
-  assert.equal(starMerged[0].title, "跑完了");
-  assert.deepEqual(applyStarredAt([], "task-1", 1754900000000), [], "must not revive a deleted task");
-
-  // mergeFetchedTasks 按行比 updatedAt：本地行更新（SSE 已推进）就保留本地行，
-  // 其余以快照为准；快照里没有的行按删除处理。
-  const localNewer = { ...task, id: "t-new", status: "done", updatedAt: "2026-07-30T02:00:00.000Z" };
-  const fetchedOlder = { ...task, id: "t-new", status: "running", updatedAt: "2026-07-30T01:00:00.000Z" };
-  const fetchedNewer = { ...task, id: "t-fresh", title: "快照更新", updatedAt: "2026-07-30T03:00:00.000Z" };
-  const localStale = { ...task, id: "t-fresh", title: "本地陈旧", updatedAt: "2026-07-30T01:00:00.000Z" };
-  const localDeleted = { ...task, id: "t-gone" };
-  const merged = mergeFetchedTasks([localNewer, localStale, localDeleted], [fetchedOlder, fetchedNewer]);
-  assert.deepEqual(merged.map((row) => row.id), ["t-new", "t-fresh"]);
-  assert.equal(merged[0].status, "done", "stale GET row must not overwrite newer local row");
-  assert.equal(merged[1].title, "快照更新");
+  // useTasks 数据同步纯函数（SSE 事件应用 / 星标回写 / GET 快照合并）的用例在
+  // scripts/test-task-sync.mjs（npm -w web-next run test:task-sync）。
 
   const session = {
     id: "session-1",
