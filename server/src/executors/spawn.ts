@@ -254,8 +254,14 @@ export function registerTrackFd(child: ChildProcess, track: { fd: number | null;
 // Wrap a resume command for the target so it is copy-paste runnable (§13).
 // envPrefix(供应商的 `KEY=值 `,token 已换成占位符)拼在 CLI 前面 —— 不带它,
 // 粘到终端的命令会走 CLI 自己的官方账号,跟这次运行不是同一个来源。
+//
+// ssh 那支要把整条远端命令再包一层双引号,所以里面出现的 `"`(claude 的
+// `--settings '{"env":…}'` 就带着一串)必须转义,否则用户粘过去的命令在本机 shell
+// 就断在半截 —— `$` 和反引号一并转,免得本机 shell 抢先展开本该发给远端的字。
+const dq = (s: string) => s.replace(/([\\"$`])/g, "\\$1");
+
 export function resumeFor(target: ExecTarget, cwd: string, inner: string, envPrefix = ""): string {
-  if (target.kind === "ssh") return `ssh ${target.host} "cd ${shq(cwd)} && ${envPrefix}${inner}"`;
+  if (target.kind === "ssh") return `ssh ${target.host} "${dq(`cd ${shq(cwd)} && ${envPrefix}${inner}`)}"`;
   return `cd ${shq(cwd)} && ${envPrefix}${inner}`;
 }
 

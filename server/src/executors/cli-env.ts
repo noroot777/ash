@@ -1,21 +1,24 @@
 import { cliConfigOverrideEnvPrefix, UNKNOWN_CLI_HOST_ENV, type CliHostEnv } from "@harness/shared/cli-overrides";
 import type { ExecTarget } from "@harness/shared";
+import { claudeMaxOutputTokens } from "./claude-settings.js";
 
 // harness 起 CLI 时,那个子进程会看到的环境事实。**只读**,不是配置项 —— 它由 harness
-// 自己的启动环境决定(shell 里 export 过、launchd plist 里写过)。
+// 自己的启动环境**和用户自己的 claude 配置文件**共同决定。
 //
 // 为什么要单拎出来:覆盖项里那个百分比要换算成 claude 认的「占有效窗口的比例」,而有效
-// 窗口 = 窗口 − min(CLAUDE_CODE_MAX_OUTPUT_TOKENS, 20000)。这个变量在 **server 进程**里,
-// 前端算不出来;不如实报一份过去,设置页写的触发水位就会跟 CLI 的实际行为对不上。
+// 窗口 = 窗口 − min(CLAUDE_CODE_MAX_OUTPUT_TOKENS, 20000)。这个值前端算不出来;不如实
+// 报一份过去,设置页写的触发水位就会跟 CLI 的实际行为对不上。
 //
-// **ssh profile 例外**:CLI 在远端跑,读的是远端那份环境,本机这个值跟它没关系。拿本机的
-// 值替远端换算等于编数,所以那种情况一律回「读不到」,按默认预留估算并在提示里说明。
-export function cliHostEnv(target?: ExecTarget): CliHostEnv {
+// 只看 `process.env` 是不够的:CLI 会把各层 settings 的 `env` 写回自己的进程环境,用户
+// 在 `~/.claude/settings.json` 里写的那份**压过**我们看到的环境变量(第 2 轮审查
+// finding 3)。所以按 claude 自己的分层顺序解一遍,见 claude-settings.ts。
+//
+// **ssh profile 例外**:CLI 在远端跑,读的是远端那份环境和远端的配置文件,本机这些跟它
+// 没关系。拿本机的值替远端换算等于编数,所以那种情况一律回「读不到」,按默认预留估算并
+// 在提示里说明。
+export function cliHostEnv(target?: ExecTarget, cwd?: string): CliHostEnv {
   if (target?.kind === "ssh") return UNKNOWN_CLI_HOST_ENV;
-  const raw = Number(process.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS);
-  return {
-    maxOutputTokens: Number.isFinite(raw) && raw > 0 ? Math.round(raw) : null,
-  };
+  return { maxOutputTokens: claudeMaxOutputTokens(cwd) };
 }
 
 /**

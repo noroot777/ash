@@ -201,7 +201,9 @@ async function deliver(
 }
 
 // 调度台此刻不在线时,配置里写的是哪种 CLI(判定 `/compact` 这类原生命令要用)。
-async function leadTypeOf(taskId: string): Promise<AgentType> {
+// 导出给路由层用:立即回复端点要先认出「这是发给调度台的原生命令」,才能把「送不出去」
+// 当场答成失败,而不是排队等一个永远不该发生的补发(第 2 轮审查 finding 5)。
+export async function leadTypeOf(taskId: string): Promise<AgentType> {
   const row = (await db.select({ team: tasks.team }).from(tasks).where(eq(tasks.id, taskId))).at(0);
   try {
     if (row?.team) return (JSON.parse(row.team) as TeamConfig).lead ?? TEAM_DEFAULTS.lead;
@@ -333,6 +335,7 @@ async function openLead(taskId: string, rawText: string, kind: Kind): Promise<Le
         target: sessionTargetKey(ex.target),
         resumeCommand: ex.resumeCommand(ws.path, cliSessionId),
         resumeEnv: ex.resumeEnvHint ?? null,
+        resumeArgs: ex.resumeArgsHint ?? null,
       })
       .where(eq(sessions.id, sessId));
   } else {
@@ -349,6 +352,7 @@ async function openLead(taskId: string, rawText: string, kind: Kind): Promise<Le
       cliSessionId,
       resumeCommand: ex.resumeCommand(ws.path, cliSessionId),
       resumeEnv: ex.resumeEnvHint ?? null,
+      resumeArgs: ex.resumeArgsHint ?? null,
       commandLine: handle.commandLine,
       startedAt: turnStart,
       turnStartedAt: turnStart,

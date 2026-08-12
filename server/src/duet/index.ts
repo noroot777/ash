@@ -30,6 +30,26 @@ async function setStatus(taskId: string, status: TaskStatus) {
   await setTaskStatus(taskId, status);
 }
 
+/**
+ * 复用同一条 session 行接着跑下一轮时,必须跟着刷新的那几列。
+ *
+ * duet 每一轮都按当前 profile 重新解析执行器,而门禁可以等很久 —— 这期间 profile 可能
+ * 被改到另一台机器上、worktree 可能被删后重建。这几列合起来正是「复制到终端接着聊」
+ * 那条命令的全部依据(读取端 `resumeCommandFor` 每次按它们重算):漏掉 target 会给出一条
+ * 在本机跑的错命令,漏掉 cwd 会给出一条 `cd` 到不存在目录的命令(第 2 轮审查 finding 6)。
+ * 单独拎出来是为了让「哪些列会随轮次变」有一个能被测试钉住的地方。
+ */
+export function reusedSessionPatch(executor: AgentExecutor, cwd: string, commandLine: string) {
+  return {
+    commandLine,
+    executor: executor.label,
+    target: sessionTargetKey(executor.target),
+    cwd,
+    resumeEnv: executor.resumeEnvHint ?? null,
+    resumeArgs: executor.resumeArgsHint ?? null,
+  };
+}
+
 interface Turn {
   rowId: string;
   cliId: string;
@@ -76,15 +96,13 @@ async function runTurn(args: {
       taskId,
       role,
       agentType: executor.type,
-      executor: executor.label,
-      target: sessionTargetKey(executor.target),
+      // 开新行和复用旧行共用同一份「随执行器/工作目录走」的列,免得两条分支各写各的、
+      // 时间一长只有一边跟得上(finding 6 就是这么来的)。
+      ...reusedSessionPatch(executor, cwd, handle.commandLine),
       worktreePath: args.branch ? cwd : null,
       branch: args.branch ?? null,
-      cwd,
       cliSessionId: cliId,
       resumeCommand: cliId ? executor.resumeCommand(cwd, cliId) : null,
-      resumeEnv: executor.resumeEnvHint ?? null,
-      commandLine: handle.commandLine,
       startedAt: turnStart,
       turnStartedAt: turnStart,
       activeMs: 0,
@@ -93,22 +111,10 @@ async function runTurn(args: {
   } else {
     // Resuming the same session row for a new turn (e.g. after a gate the
     // user took a while to resolve): stamp this turn's start and clear the prior
-    // end, so the gate wait is excluded from execution time. Persist the latest
-    // command too because task-level model/effort may have changed before resume.
+    // end, so the gate wait is excluded from execution time.
     await db
       .update(sessions)
-      .set({
-        turnStartedAt: turnStart,
-        endedAt: null,
-        commandLine: handle.commandLine,
-        executor: executor.label,
-        // duet 每一轮都按当前 profile 重新解析执行器,profile 可能在门禁等待期间被改到
-        // 另一台机器上。这一列是「复制到终端接着聊」唯一的「这活在哪台机器上干」凭据
-        // (读取端 resumeCommandFor 每次按它重算),不跟着刷新就会给出一条在本机执行的
-        // 错命令(真实续跑用的是新 target)。
-        target: sessionTargetKey(executor.target),
-        resumeEnv: executor.resumeEnvHint ?? null,
-      })
+      .set({ turnStartedAt: turnStart, endedAt: null, ...reusedSessionPatch(executor, cwd, handle.commandLine) })
       .where(eq(sessions.id, rowId));
   }
 

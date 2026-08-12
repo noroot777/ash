@@ -87,12 +87,14 @@ export interface AgentExecutor {
   readonly model?: string;
   readonly reasoningEffort?: string;
   readonly target: ExecTarget;
-  // 「复制到终端接着聊」那条命令要带的 env 前缀,存进 sessions.resumeEnv。两类:
-  //   · 盖掉 CLI 配置文件的那几项(见 shared/src/cli-overrides.ts)—— 不带就退回
-  //     settings.json,手跑那次的压缩行为跟 harness 里不是一回事;
-  //   · 供应商 base_url + key(token 换成 <你的key> 占位符)—— 不带就走 CLI 自己的
-  //     官方账号。
+  // 「复制到终端接着聊」那条命令要带的 env 前缀,存进 sessions.resumeEnv:供应商
+  // base_url + key(token 换成 <你的key> 占位符)—— 不带就走 CLI 自己的官方账号。
   readonly resumeEnvHint?: string;
+  // 同一条命令里跟在 CLI 后面的参数(claude 的 `--settings '{…}'`),存进
+  // sessions.resumeArgs。盖掉 CLI 配置文件的那几项走这里而**不是** env 前缀:CLI 会把
+  // 各层 settings 的 env 写回自己的进程环境,前缀那份打不过用户的 settings.json,手跑
+  // 那次的压缩行为于是跟 harness 里不是一回事(第 2 轮审查 finding 2)。
+  readonly resumeArgsHint?: string;
   run(opts: RunOpts): RunHandle;
   // 重启后接管一个**还活着**的 agent 进程：把它的输出流接回本执行器自己的
   // parser。child 是 detached.ts 造的合成 ChildProcess（按 pid+offset 接回来的）。

@@ -185,6 +185,7 @@ export async function ensureSchema() {
     "ALTER TABLE tasks ADD COLUMN question TEXT",
     "ALTER TABLE agents ADD COLUMN provider_id TEXT",
     "ALTER TABLE sessions ADD COLUMN relay_env TEXT",
+    "ALTER TABLE sessions ADD COLUMN resume_args TEXT",
     // §Team：团队模式（替掉旧的「编排组/协调者」）
     "ALTER TABLE tasks ADD COLUMN team TEXT",
     "ALTER TABLE tasks ADD COLUMN report_back INTEGER NOT NULL DEFAULT 0",

@@ -10,7 +10,7 @@
 // 跑法:
 //   HARNESS_DB=/tmp/test-cli-overrides-$RANDOM.db npx tsx server/scripts/test-cli-overrides.ts
 import assert from "node:assert/strict";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -29,7 +29,9 @@ const {
   cliConfigOverrideEnv,
   cliConfigOverrideErrors,
   cliConfigOverrideHints,
+  cliConfigOverrideSettings,
   cliConfigOverridesFor,
+  cliSpeedOverrideConflict,
   ineffectiveCliConfigOverrides,
   normalizeCliConfigOverrides,
 } = await import("@harness/shared/cli-overrides");
@@ -67,8 +69,52 @@ assert.deepEqual(
 assert.deepEqual(cliConfigOverrideEnv("claude", {}), {}, "没配就不该有任何环境变量");
 assert.deepEqual(
   cliConfigOverrideEnv("claude", { [spec.key]: 160000 }),
-  { [spec.env]: "160000" },
-  "配了就该落成声明里的那个环境变量",
+  { [spec.env]: "160000", DISABLE_AUTO_COMPACT: "" },
+  "配了就该落成声明里的那个环境变量,并连自动压缩总开关一起摁住",
+);
+
+// ── ①a 总开关:配了窗口就得把用户那两把 kill switch 一起摁住 ──────────────────
+// claude 的 JI():`DISABLE_AUTO_COMPACT` 非空 或 `autoCompactEnabled:false` 任意一个成立,
+// 窗口和百分比全都还在、自动压缩却一次都不会被叫起来(第 2 轮审查 finding 1)。
+const forced = cliConfigOverrideSettings("claude", { autoCompactWindow: 200_000, autoCompactPercent: 80 });
+assert.equal(forced?.autoCompactEnabled, true, "配了窗口就要在 --settings 里显式打开自动压缩");
+assert.equal(
+  (forced?.env as Record<string, string>).DISABLE_AUTO_COMPACT,
+  "",
+  "环境变量那把 kill switch 要被空串盖掉(各层 env 按 key 合并)",
+);
+// 反向:没配窗口就一个字都不许碰用户的开关。
+assert.equal(cliConfigOverrideSettings("claude", {}), null, "没配覆盖项时不该凭空生成 settings");
+assert.equal(
+  cliConfigOverrideEnv("claude", { autoCompactPercent: 80 }).DISABLE_AUTO_COMPACT,
+  undefined,
+  "窗口没配(这一档整体不生效)时不该去摁用户的总开关",
+);
+assert.ok(
+  cliConfigOverrideHints("claude", { autoCompactWindow: 200_000, autoCompactPercent: 80 })
+    .some((line) => line.includes("强制打开自动压缩")),
+  "摁住别人的开关必须在界面上说出来",
+);
+assert.ok(
+  cliConfigOverridesFor("claude").find((s) => s.key === "autoCompactWindow")!.help.includes("总开关"),
+  "窗口那一项的说明要讲明白它会连总开关一起摁住",
+);
+
+// ── ①c 换算分母也得钉住,否则算完还能被 settings.env 改掉 ────────────────────
+// 触发点 = f(窗口, 百分比, min(CLAUDE_CODE_MAX_OUTPUT_TOKENS, 20000))。harness 按自己读到的
+// 值算完百分比,用户 settings.env 再把这个变量改小,有效窗口就变大、真实触发点比页面写的
+// 晚几个百分点(第 2 轮审查 finding 3)。所以把「我们读到的那个赢家值」原样钉进 settings。
+const pinned = cliConfigOverrideEnv(
+  "claude",
+  { autoCompactWindow: 200_000, autoCompactPercent: 80 },
+  { maxOutputTokens: 10_000 },
+);
+assert.equal(pinned.CLAUDE_CODE_MAX_OUTPUT_TOKENS, "10000", "读到多少就钉多少(对用户是原地不动)");
+assert.equal(
+  cliConfigOverrideEnv("claude", { autoCompactWindow: 200_000 }, UNKNOWN_CLI_HOST_ENV)
+    .CLAUDE_CODE_MAX_OUTPUT_TOKENS,
+  undefined,
+  "读不到(ssh 远端)就不钉 —— 编一个数比不钉更糟",
 );
 
 // ── ①b 百分比:用户填「占窗口的百分之几」,claude 认的是「占有效窗口的百分之几」 ──
@@ -236,24 +282,40 @@ delete process.env[spec.env];
 
 // ── ⑤ 「复制到终端接着聊」那条命令也得带上覆盖项 ────────────────────────────
 // 不带的话,用户手跑的那一次退回 settings.json:同一条会话在 harness 里会自动压缩、
-// 自己终端里不会 —— 而命令是从会话详情里原样复制走的,他不会想到还差两个变量。
+// 自己终端里不会 —— 而命令是从会话详情里原样复制走的,他不会想到还差一截参数。
+// **必须是 `--settings` 而不是 env 前缀**:CLI 会把各层 settings 的 env 写回自己的进程
+// 环境,命令行上的 env 前缀反而输给用户的 settings.json(第 2 轮审查 finding 2)。
 const overridden = await resolveExecutorFor({ executorId: "claude-overridden", type: "claude" });
-const hint = overridden.resumeEnvHint ?? "";
-assert.ok(hint.includes(`${spec.env}=${spec.max}`), `resumeEnvHint 要带上覆盖项,实际 ${hint || "(空)"}`);
+const args = overridden.resumeArgsHint ?? "";
+assert.ok(args.includes("--settings"), `resumeArgsHint 要带上 --settings,实际 ${args || "(空)"}`);
+assert.ok(args.includes(`${spec.env}`), `--settings 里要有覆盖项本身,实际 ${args}`);
+const overriddenResume = overridden.resumeCommand?.(sandbox, "sid-1") ?? "";
+assert.ok(overriddenResume.includes("--settings"), "恢复命令本身要带上那截参数");
 assert.ok(
-  overridden.resumeCommand?.(sandbox, "sid-1").includes(`${spec.env}=${spec.max}`),
-  "恢复命令本身要带上那截 env 前缀",
+  overriddenResume.includes(`${spec.env}`) && overriddenResume.includes(String(spec.max)),
+  `恢复命令里要能看到真正生效的那个值,实际 ${overriddenResume}`,
 );
 const plain = await resolveExecutorFor({ executorId: "claude-plain", type: "claude" });
 assert.equal(plain.resumeEnvHint, undefined, "没配覆盖项、也没挂供应商时,前缀该是空的");
-assert.ok(!plain.resumeCommand?.(sandbox, "sid-1").includes(spec.env), "没配就不该凭空多出变量");
+assert.equal(plain.resumeArgsHint, undefined, "没配覆盖项、也没开加速档时不该多出一截参数");
+assert.ok(!plain.resumeCommand?.(sandbox, "sid-1").includes("--settings"), "没配就不该凭空多出参数");
 
-// 会话详情读取时是**重算**这条命令的(resumeCommandFor),前缀从库里那列接回来 ——
-// 这条链断了的话上面两条仍然过,但用户在页面上看到的还是不带前缀的命令。
+// 会话详情读取时是**重算**这条命令的(resumeCommandFor),那截参数从库里那列接回来 ——
+// 这条链断了的话上面两条仍然过,但用户在页面上看到的还是不带 --settings 的命令。
 const { resumeCommandFor, sessionTargetKey } = await import("../src/executors/resume.js");
 assert.ok(
-  resumeCommandFor("claude", "local", sandbox, "sid-1", hint).includes(`${spec.env}=${spec.max}`),
-  "重算时要把持久化的前缀接回去",
+  resumeCommandFor("claude", "local", sandbox, "sid-1", null, args).includes("--settings"),
+  "重算时要把持久化的那截参数接回去",
+);
+// ssh 目标下整条命令被裹进一层双引号,而 --settings 的 JSON 自带双引号 —— 不转义的话
+// 引号在这里断开,复制出去的命令直接是语法错的。
+const sshResume = resumeCommandFor("claude", "ssh:build.example", sandbox, "sid-1", null, args);
+assert.ok(sshResume.startsWith("ssh "), "ssh 目标要走 ssh");
+assert.ok(sshResume.includes('\\"'), `JSON 里的双引号要转义,实际 ${sshResume}`);
+assert.equal(
+  (sshResume.match(/(?<!\\)"/g) ?? []).length,
+  2,
+  `未转义的双引号只该是最外层那对,实际 ${sshResume}`,
 );
 
 // ── ⑥ 依赖项没配上的组合,存不进去 ──────────────────────────────────────────
@@ -303,10 +365,17 @@ assert.equal(patched.status, 400, "PATCH 是另一条口子,同样得拦(对称�
 // ── ⑦ ssh profile:换算不许拿本机环境凑数 ────────────────────────────────────
 // 远端 CLI 读的是远端那份环境。本机设了 10k 预留就按 10k 算的话,注给远端的百分比会
 // 直接偏几个百分点,而页面上还写得像个准数。
+//
+// HOME 先支到一个空沙箱:分母的解析优先读 `~/.claude/settings.json`(那才是 CLI 的
+// 真实优先级),开发机上恰好写过这一项的话,下面这个 process.env 就赢不了,断言会变成
+// 「看谁的机器」。分层本身另有 ⑦b 直测。
+const realHome = process.env.HOME;
+process.env.HOME = join(sandbox, "empty-home");
+mkdirSync(process.env.HOME, { recursive: true });
 process.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS = "10000";
-const localPct = (await resolveExecutorFor({ executorId: "claude-pct-local", type: "claude" })).resumeEnvHint ?? "";
-const remotePct = (await resolveExecutorFor({ executorId: "claude-pct-ssh", type: "claude" })).resumeEnvHint ?? "";
-const pctOf = (prefix: string) => prefix.match(/CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=([\d.]+)/)?.[1];
+const localPct = (await resolveExecutorFor({ executorId: "claude-pct-local", type: "claude" })).resumeArgsHint ?? "";
+const remotePct = (await resolveExecutorFor({ executorId: "claude-pct-ssh", type: "claude" })).resumeArgsHint ?? "";
+const pctOf = (hint: string) => hint.match(/CLAUDE_AUTOCOMPACT_PCT_OVERRIDE\\?"[:=]\\?"?([\d.]+)/)?.[1];
 assert.equal(
   pctOf(localPct),
   String(claudeCompactionPlan({ autoCompactWindow: 200_000, autoCompactPercent: 80 }, { maxOutputTokens: 10_000 })!.envPercent),
@@ -319,6 +388,30 @@ assert.equal(
 );
 assert.notEqual(pctOf(localPct), pctOf(remotePct), "两者本就该不同,相等说明 target 没传到换算里");
 delete process.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS;
+
+// ── ⑦b 分母按 claude 自己的分层解:文件层压过继承来的环境变量 ──────────────────
+// 用户在 `~/.claude/settings.json` 里写了 10000,CLI 启动时会把它写回自己的进程环境 ——
+// harness 只看 process.env 就会按 32000 默认值算,填 80% 实际约 84% 才压(第 2 轮 finding 3)。
+const { claudeMaxOutputTokens } = await import("../src/executors/claude-settings.js");
+const fakeHome = join(sandbox, "home");
+const fakeProject = join(sandbox, "proj");
+mkdirSync(join(fakeHome, ".claude"), { recursive: true });
+mkdirSync(join(fakeProject, ".claude"), { recursive: true });
+writeFileSync(join(fakeHome, ".claude", "settings.json"), JSON.stringify({ env: { CLAUDE_CODE_MAX_OUTPUT_TOKENS: "12000" } }));
+process.env.HOME = fakeHome;
+process.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS = "30000";
+assert.equal(claudeMaxOutputTokens(), 12000, "~/.claude/settings.json 的 env 压过继承来的环境变量");
+writeFileSync(join(fakeProject, ".claude", "settings.json"), JSON.stringify({ env: { CLAUDE_CODE_MAX_OUTPUT_TOKENS: 9000 } }));
+assert.equal(claudeMaxOutputTokens(fakeProject), 9000, "项目层压过用户层(数字写法也要认)");
+writeFileSync(join(fakeProject, ".claude", "settings.local.json"), JSON.stringify({ env: { CLAUDE_CODE_MAX_OUTPUT_TOKENS: "8000" } }));
+assert.equal(claudeMaxOutputTokens(fakeProject), 8000, "settings.local.json 又压过 settings.json");
+rmSync(join(fakeHome, ".claude", "settings.json"));
+rmSync(join(fakeProject, ".claude"), { recursive: true, force: true });
+assert.equal(claudeMaxOutputTokens(fakeProject), 30000, "哪一层都没写过时才回落到进程环境");
+delete process.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS;
+assert.equal(claudeMaxOutputTokens(fakeProject), null, "全都没有 = 读不到(按默认预留估算)");
+if (realHome === undefined) delete process.env.HOME;
+else process.env.HOME = realHome;
 
 assert.ok(
   cliConfigOverrideHints("claude", { autoCompactWindow: 200_000, autoCompactPercent: 80 }, UNKNOWN_CLI_HOST_ENV)
@@ -374,6 +467,28 @@ assert.ok(cliConfigOverrideConflict("claude", ["--settings", "{}"]), "自带 --s
 assert.ok(cliConfigOverrideConflict("claude", ["--settings={}"]), "= 形式的写法同样要认出来");
 assert.equal(cliConfigOverrideConflict("claude", ["--model", "opus"]), null, "无关参数不该报警");
 assert.equal(cliConfigOverrideConflict("codex", ["--settings"]), null, "别的 CLI 没有这一档,不适用");
+// 合并 token(整段粘贴、老配置里常见):执行器那边会拆词后再拼进命令行,所以判定也必须
+// 先拆 —— 只比对原始 token 的话页面看不出冲突、跑起来却真的被顶掉(第 2 轮 finding 4)。
+assert.ok(cliConfigOverrideConflict("claude", ["--settings {}"]), "合并成一个 token 的写法也要认出来");
+assert.ok(
+  cliConfigOverrideConflict("claude", ['--model opus --settings {"env":{}}']),
+  "混在一长串里的 --settings 同样要认出来",
+);
+assert.equal(
+  cliConfigOverrideConflict("claude", ["--append-system-prompt", "别把 --settings 当参数"]),
+  null,
+  "引号里的字面量不是参数,不该误报",
+);
+
+// 加速档共用同一个 `--settings`,所以它自己也会被顶掉 —— 速度那一列得单独说一句。
+assert.ok(
+  cliSpeedOverrideConflict("claude", ["--settings", "{}"], "fast"),
+  "选了 1.5x 又自带 --settings 时要提示加速档失效",
+);
+assert.ok(cliSpeedOverrideConflict("claude", ["--settings {}"], "fast"), "合并 token 同样适用于加速档");
+assert.equal(cliSpeedOverrideConflict("claude", ["--settings", "{}"], "standard"), null, "没开加速档就没这回事");
+assert.equal(cliSpeedOverrideConflict("claude", ["--model", "opus"], "fast"), null, "无关参数不该报警");
+assert.equal(cliSpeedOverrideConflict("codex", ["--settings"], "fast"), null, "别的 CLI 不走这一档");
 
 // ── ⑨ 库里的坏数据:读端一律按「没配」算,别把整页/整次执行拖下水 ───────────────
 const { readCliConfigOverrides } = await import("@harness/shared/cli-overrides");

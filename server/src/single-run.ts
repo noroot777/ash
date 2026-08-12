@@ -209,7 +209,13 @@ export async function consumeSingleRun(a: {
 }): Promise<void> {
   const { taskId, sessId, agentType, ex, out } = a;
   const role = a.role ?? "single";
-  const executionEventId = role === "single"
+  // 原生 CLI 命令回合(`/compact` 一类)不记「任务执行」:那一轮压根没在推进任务,记下来
+  // 自由工作流时间线上就多出一条凭空的「任务执行 · 已完成」(第 2 轮审查 finding 7)。
+  // 读的是 tasks.native_turn 而不是新加一个入参:结算那边(settleTaskStatus)看的就是
+  // 这一列,同一个真相来源,重启后被接管的那一轮也照样认得出来。
+  const nativeTurn = !!(await db.select({ nativeTurn: tasks.nativeTurn })
+    .from(tasks).where(eq(tasks.id, taskId))).at(0)?.nativeTurn;
+  const executionEventId = role === "single" && !nativeTurn
     ? await recordFreeTaskExecutionStartIfFree(taskId, a.turnStart).catch((error) => {
         console.warn(`[harness] failed to record free workflow execution start for ${taskId}:`, error);
         return null;

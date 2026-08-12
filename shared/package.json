@@ -54,6 +54,10 @@
       "types": "./src/cli-presets.ts",
       "default": "./src/cli-presets.ts"
     },
+    "./cli-args": {
+      "types": "./src/cli-args.ts",
+      "default": "./src/cli-args.ts"
+    },
     "./cli-overrides": {
       "types": "./src/cli-overrides.ts",
       "default": "./src/cli-overrides.ts"

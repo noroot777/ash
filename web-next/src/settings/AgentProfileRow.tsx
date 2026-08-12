@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { AgentExecutorProfile, LlmProvider } from "@harness/shared";
-import { hasCliConfigOverrides } from "@harness/shared/cli-overrides";
+import { hasCliConfigOverrides, cliSpeedOverrideConflict } from "@harness/shared/cli-overrides";
 import { Star, Trash } from "@phosphor-icons/react";
 import { Dropdown, type DropdownOption } from "../components/Dropdown.tsx";
 import { EffortPicker } from "../components/EffortPicker.tsx";
@@ -39,6 +39,9 @@ export function AgentProfileRow({
   const providerOptions = providersForAgent(profile.type, providers);
   const provider = providers.find((candidate) => candidate.id === profile.providerId);
   const protocol = providerProtocolForAgent(profile.type);
+  // 速度那一列的静默失效:1.5x 和「覆盖 CLI 配置」都靠 --settings 注入,而 claude 只认
+  // 最后一个 —— profile 自己的额外参数里写了一条,加速档就一个字也到不了 CLI 手上。
+  const speedConflict = cliSpeedOverrideConflict(profile.type, profile.extraArgs ?? [], profile.speed);
 
   // 供应商候选：官方账号 + 本类型协议匹配的供应商；当前选的那家如果协议已经不匹配
   // （改过供应商协议），仍要留在列表里，否则下拉显示空白，看着像「没设过」。
@@ -260,6 +263,10 @@ export function AgentProfileRow({
             <Trash size={13} aria-hidden="true" />
           </button>
         </div>
+        {/* 「选了 1.5x，其实被自己那条 --settings 顶掉了」这类静默失效必须在行里看得见。
+            整行跨列显示：速度那一格只有 56px，塞不下一句人话，而缩成一个记号等于要求
+            用户先怀疑它。覆盖那一档的同类冲突由胶囊自己显示（它有值可写）。 */}
+        {speedConflict && <p className="agent-profile-row-warning">{speedConflict}</p>}
       </article>
       {confirmDelete && (
         <ConfirmDialog

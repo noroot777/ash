@@ -86,6 +86,31 @@ try {
   // 要钉的是「拒收只针对原生命令」,别把整条投递路径一起判死)。
   assert.equal(teamIsLive("team-offline"), false, "前面这些都不该顺手开台");
 
+  // ── HTTP 那一层:拒收要当场答成失败,且**不留下任何排队消息** ──────────────────
+  // /reply 有一条兜底:continueTask 返回 false 就把这句话落成 pending,等任务空下来再
+  // 发。原生命令不适用 —— 它必须是消息的第一个字,而调度台离线后接回来一定带唤醒前言。
+  // 排进队里只会有两个结果:被 scheduler 标成 canceled(用户先收到「已发送」再被打脸),
+  // 或者用户按提示先发一句普通消息把台接回来、这条 pending 随即被暗中送出并标 sent ——
+  // 跟系统刚写下的「没有送出,请接回后再单独发」正面矛盾(第 2 轮审查 finding 5)。
+  const { api } = await import("../src/routes.js");
+  const reply = async (text: string) =>
+    api.request(`/tasks/team-offline/reply`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text }),
+    });
+
+  const rejected = await reply("/compact");
+  assert.equal(rejected.status, 409, "调度台接不住时要当场答成失败,不能先答 202 再暗中排队");
+  assert.match(
+    ((await rejected.json()) as { error?: string }).error ?? "",
+    /compact/,
+    "错误里要点明是哪条命令没送出去(前端原样显示在输入框下面)",
+  );
+
+  const pendingAfter = await (await api.request("/tasks/team-offline/scheduled-messages")).json();
+  assert.deepEqual(pendingAfter, [], "拒收的原生命令绝不能留在托盘里等着被暗中补发");
+
   unsubscribe();
   console.log("test:team-native ok");
 } finally {

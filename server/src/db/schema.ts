@@ -289,9 +289,12 @@ export const sessions = sqliteTable("sessions", {
   cwd: text("cwd"),
   cliSessionId: text("cli_session_id"),
   resumeCommand: text("resume_command"),
-  // 恢复命令要带的 env 前缀:配置覆盖项 + 供应商(token 已是占位符)。null = 两样都没有。
-  // 只用于展示,不含真 key。列名 relay_env 是历史遗留 —— 建的时候只装供应商那一截。
+  // 恢复命令要带的 env 前缀:供应商那一截(token 已是占位符)。null = 没有。
+  // 只用于展示,不含真 key。列名 relay_env 跟它现在装的东西正好对上。
   resumeEnv: text("relay_env"),
+  // 恢复命令里跟在 CLI 后面的参数(claude 的 `--settings '{…}'`)。配置覆盖项走这一列:
+  // env 前缀打不过用户自己的 settings.json,只有 --settings 这一层压得住(finding 2)。
+  resumeArgs: text("resume_args"),
   commandLine: text("command_line"),
   startedAt: text("started_at").notNull(),
   endedAt: text("ended_at"), // when this run finished (set with exit_status)

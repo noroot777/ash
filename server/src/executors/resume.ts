@@ -30,6 +30,7 @@ export function resumeCommandFor(
   cwd: string,
   cliSessionId: string,
   resumeEnv?: string | null,
+  resumeArgs?: string | null,
 ): string {
   const spec = CLI_SPEC_BY_KEY[agentType as AgentType];
   if (!spec) return `# 未知的执行器类型 ${agentType}（sessionId ${cliSessionId || "未记录"} 仅供追溯）`;
@@ -38,5 +39,8 @@ export function resumeCommandFor(
   const target: ExecTarget = targetStr?.startsWith("ssh:")
     ? { kind: "ssh", host: targetStr.slice(4) }
     : { kind: "local" };
-  return resumeFor(target, cwd, inner, resumeEnv ?? "");
+  // resumeArgs 是执行器当初拼好的那截参数(claude 的 `--settings '{…}'`)。它必须跟着
+  // 恢复命令走:harness 每一轮都带着它跑,不带就等于让用户手跑的那次退回自己的
+  // settings.json —— 压缩行为跟他在 harness 里看到的不是一回事(第 2 轮审查 finding 2)。
+  return resumeFor(target, cwd, resumeArgs ? `${inner} ${resumeArgs}` : inner, resumeEnv ?? "");
 }

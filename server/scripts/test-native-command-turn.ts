@@ -91,6 +91,56 @@ try {
   assert.equal(run.status, "exhausted", "压缩不是返工:一个字都没改,审查结论不该被翻回 reworking");
   assert.equal(run.finishedAt, at, "finishedAt 也不该被清掉");
 
+  // ── ③ 自由工作流时间线上不许多出一条凭空的「任务执行」(第 2 轮审查 finding 7)──────
+  // 上面两条走的是「CLI 还没起来就抛错」那条路。CLI 真起来了的话,记账在 consumeSingleRun
+  // 开头:它照旧会开一条 task_execution 事件,那一轮明明只是让 CLI 把上下文压一压,时间线
+  // 上却多出一条「任务执行 · 已完成」—— 用户按它去找改了什么,什么都找不到。
+  const { sessions, freeWorkflowEvents } = await import("../src/db/schema.js");
+  const { consumeSingleRun } = await import("../src/single-run.js");
+  const { createWriteStream } = await import("node:fs");
+
+  const runTurn = async (taskId: string, nativeTurn: boolean) => {
+    await db.insert(tasks).values({
+      id: taskId, projectId: "project", title: taskId, body: "做点什么",
+      mode: "single", status: "running", workflowMode: "free", nativeTurn,
+      labels: "[]", dependsOn: "[]", resumeDependsOn: "[]",
+      agentType: "claude", autoTitle: false, createdAt: at, updatedAt: at,
+    });
+    await db.insert(sessions).values({
+      id: `${taskId}-sess`, taskId, role: "single", agentType: "claude",
+      executor: "claude", target: "local", cwd: root, startedAt: at,
+    });
+    const out = createWriteStream(join(root, `${taskId}.md`));
+    await consumeSingleRun({
+      taskId,
+      sessId: `${taskId}-sess`,
+      agentType: "claude",
+      // consumeSingleRun 只从执行器上读这三样,没必要为了记账测试真起一个 CLI。
+      ex: { model: null, reasoningEffort: null, resumeCommand: () => "" } as unknown as Parameters<typeof consumeSingleRun>[0]["ex"],
+      cwd: root,
+      handle: {
+        sessionId: `${taskId}-sess`,
+        commandLine: "fake",
+        events: (async function* () { yield { kind: "done", exitStatus: 0 } as const; })(),
+        kill: () => {},
+      },
+      out,
+      turnStart: at,
+      cliSessionId: "cli-1",
+      autoTitle: false,
+    });
+    // .md 是异步开的:不等它落完就 rmSync 掉临时目录,进程会死在一个 ENOENT 上
+    // (断言全过了、退出码却非 0)。
+    if (!out.closed) await new Promise((resolve) => out.once("close", resolve));
+    return (await db.select().from(freeWorkflowEvents).where(eq(freeWorkflowEvents.taskId, taskId)))
+      .filter((event) => event.kind === "task_execution");
+  };
+
+  assert.equal((await runTurn("native-free-task", true)).length, 0, "原生命令回合不该在自由工作流时间线上留下「任务执行」");
+  // 对照组:同样是自由工作流任务、同样一轮跑完,只是这次不是原生命令 —— 必须照记,
+  // 否则上面那条断言用「记账整个坏掉了」也能过。
+  assert.equal((await runTurn("normal-free-task", false)).length, 1, "普通回合照旧要记一条任务执行");
+
   console.log("test:native-turn ok");
 } finally {
   rmSync(root, { recursive: true, force: true });

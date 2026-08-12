@@ -178,6 +178,17 @@
   background: color-mix(in lch, var(--raised) 40%, transparent);
 }
 
+/* 行内的静默失效警告(如「1.5x 被额外参数里的 --settings 顶掉」)。跨满整行:速度那
+   一格只有 56–60px,一句人话塞不进去,而缩成一个记号等于要求用户先怀疑它。 */
+.agent-profile-row-warning {
+  grid-column: 1 / -1;
+  margin: 0;
+  padding: 2px 0 3px;
+  color: var(--amber);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
 .agent-profile-identity {
   display: flex;
   min-width: 0;

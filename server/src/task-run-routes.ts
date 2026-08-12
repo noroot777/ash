@@ -35,8 +35,9 @@ import { isOvertaken, queueBlockers, repackQueue, tailOrder } from "./queues.js"
 import { confirmDone, stopTask } from "./runs.js";
 import { advanceQueue } from "./scheduler.js";
 import { setTaskStatus } from "./status.js";
+import { nativeCliCommand } from "./skills.js";
 import { dispatchWorkers, type DispatchSpec } from "./team/dispatch.js";
-import { haltTeam } from "./team/session.js";
+import { haltTeam, leadTypeOf } from "./team/session.js";
 import { enrichTasks } from "./task-store.js";
 import { askingAgentFor, setTaskQuestion } from "./task-question.js";
 import { parseSessionTrace, readableRunPath, sessionTracePath, sessionTranscriptPath } from "./transcript.js";
@@ -55,7 +56,7 @@ export function mountTaskRunRoutes(api: Hono): void {
     agentType: r.agentType as Session["agentType"],
     transcriptPath: sessionTranscriptPath(r.taskId, r.id),
     resumeCommand: r.cliSessionId
-      ? resumeCommandFor(r.agentType, r.target, r.cwd ?? r.worktreePath ?? ".", r.cliSessionId, r.resumeEnv)
+      ? resumeCommandFor(r.agentType, r.target, r.cwd ?? r.worktreePath ?? ".", r.cliSessionId, r.resumeEnv, r.resumeArgs)
       : r.resumeCommand,
     ...run,
     usage: sessionUsage(r),
@@ -475,6 +476,25 @@ api.post("/tasks/:id/reply", async (c) => {
   // 上面那两道挡板看的是 tasks.status,而单飞锁是内存态的:结算已经把状态落成终态、
   // 这一轮却还没退干净的那道缝里,continueTask 会被挡回并返回 false。**不能就这么把
   // 用户的字丢了** —— 原样落成一条排队消息,任务一空下来照常发出去(托盘也会显示)。
+  //
+  // **但发给调度台的 CLI 原生命令不适用这条兜底**:它必须是消息的第一个字才生效,而
+  // 调度台离线时接回来一定会带唤醒前言 —— 拒收是**终局**,不是「等一会再试」。排进
+  // 队里只会有两个结果:要么 scheduler 稍后把它标成 canceled(用户先收到「已发送」再
+  // 被打脸),要么用户按提示先发一句普通消息把调度台接回来、那条 pending 随即被暗中
+  // 送出并标 sent —— 跟系统刚写下的「没有送出,请接回后再单独发」正面矛盾(第 2 轮
+  // 审查 finding 5)。所以这一类当场 await 出结果,拒收就答 409,前端的输入框会原样
+  // 留住用户的字并把理由显示在下面。
+  const teamNative = isTeam ? nativeCliCommand(await leadTypeOf(taskId), (b.text ?? "").trim()) : null;
+  if (teamNative) {
+    // 在线时这一条就是往 stdin 里写一行,await 不会拖慢;离线时是立刻抛,更快。
+    try {
+      const started = await continueTask(taskId, (b.text ?? "").trim(), { ...route, throwOnTeamUnavailable: true });
+      if (!started) return c.json({ error: `/${teamNative} 没有送出:调度台此刻接不住这条原生命令。`, started: false }, 409);
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err), started: false }, 409);
+    }
+    return c.json({ started: true }, 202);
+  }
   void continueTask(taskId, (b.text ?? "").trim(), route).then(async (started) => {
     if (started) return;
     await enqueueMessage({ taskId, text: (b.text ?? "").trim(), ...route, agent: b.agent ?? null });
