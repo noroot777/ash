@@ -57,11 +57,19 @@ try {
   assert.equal(task.starredAt, 1754900001000);
   assert.notEqual(task.updatedAt, seededAt, "content PATCH must bump updatedAt");
 
-  // UI 只给顶层任务画星标入口：child/worker 拒收，不留「筛选不计数、界面清不掉」的隐形星标。
+  // UI 只给顶层任务画星标入口：child/worker 拒收非 null，不留「筛选不计数、界面清不掉」
+  // 的隐形星标；null（清除）放行 —— 老数据里已有的 child 星标得留一条从 API 清理的路。
   response = await patch("worker", { starredAt: 1754900000000 });
   assert.equal(response.status, 400);
   const worker = (await db.select().from(tasks).where(eq(tasks.id, "worker"))).at(0);
   assert.equal(worker?.starredAt ?? null, null);
+
+  await db.update(tasks).set({ starredAt: 123 }).where(eq(tasks.id, "worker"));
+  response = await patch("worker", { starredAt: null });
+  assert.equal(response.status, 200, "clearing a legacy child star must be allowed");
+  const cleared = (await db.select().from(tasks).where(eq(tasks.id, "worker"))).at(0);
+  assert.equal(cleared?.starredAt ?? null, null);
+  assert.equal(cleared?.updatedAt, seededAt, "clearing star must not bump updatedAt either");
 
   // 非法值仍被校验拦下。
   for (const bad of [-1, 1.5, "soon"]) {

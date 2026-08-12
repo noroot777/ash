@@ -18,14 +18,14 @@ type TaskTreeProps = {
   selectedTaskId: string | null;
   spread: SidebarSpread;
   onTask: (task: Task) => void;
-  onTaskUpdated: (task: Task) => void;
+  onTaskStarred: (taskId: string, starredAt: number | null) => void;
   notify: (message: string) => void;
 };
 
 // 星标按钮埋在 TaskRow 里、TaskRow 又埋在三种列表里：回写和报错的通道用 context 递，
 // 免得每层组件都为它多两个 props。
 const TaskTreeActionsContext = createContext<{
-  onTaskUpdated: (task: Task) => void;
+  onStarred: (taskId: string, starredAt: number | null) => void;
   notify: (message: string) => void;
 } | null>(null);
 
@@ -67,9 +67,10 @@ function StatusMarker({ indicator }: { indicator: ReturnType<IndicatorForTask> }
 }
 
 // 星标：用户手动的软记号（与自动状态正交）。已标的常驻行尾，未标的 hover 才浮出。
-// PATCH 的成功返回直接回写本地列表 —— SSE 是补充通道不是唯一通道，断线窗口里点的星
-// 也得立刻落到界面上；失败走 notify 让用户看得见。in-flight 期间忽略重复点击，
-// 避免拿同一份旧 props 连发同方向请求。
+// 成功回写只取响应里的 starredAt（onStarred 合并进列表）—— HTTP 响应可能晚于更新
+// 的 SSE 到达，整条 Task 快照直接替换会把状态/标题回滚到点星那一刻。SSE 断线窗口
+// 里点的星也因此能立刻落到界面上；失败走 notify 让用户看得见。in-flight 期间忽略
+// 重复点击，避免拿同一份旧 props 连发同方向请求。
 function TaskStarButton({ task }: { task: Task }) {
   const actions = useContext(TaskTreeActionsContext);
   const [busy, setBusy] = useState(false);
@@ -84,7 +85,7 @@ function TaskStarButton({ task }: { task: Task }) {
         if (busy) return;
         setBusy(true);
         api.patchTask(task.id, { starredAt: starred ? null : Date.now() })
-          .then((updated) => actions?.onTaskUpdated(updated))
+          .then((updated) => actions?.onStarred(task.id, updated.starredAt ?? null))
           .catch(() => actions?.notify(starred ? "取消星标失败" : "加星标失败"))
           .finally(() => setBusy(false));
       }}
@@ -414,7 +415,7 @@ function OtherProject({
   );
 }
 
-export function TaskTree({ projects, currentProjectId, tasks, selectedTaskId, spread, onTask, onTaskUpdated, notify }: TaskTreeProps) {
+export function TaskTree({ projects, currentProjectId, tasks, selectedTaskId, spread, onTask, onTaskStarred, notify }: TaskTreeProps) {
   const { indicatorForTask } = useTaskReadState(tasks, selectedTaskId);
   const activeTasks = useMemo(() => tasks.filter((task) => !task.archived), [tasks]);
   const currentTasks = useMemo(
@@ -424,7 +425,7 @@ export function TaskTree({ projects, currentProjectId, tasks, selectedTaskId, sp
   const otherProjects = projects.filter((project) => project.id !== currentProjectId);
   const { peek, peekAt, peekOut, hold, hide } = useSpreadPeek(spread.laidOut);
   const rowContext = useMemo(() => ({ spread, peekAt, peekOut }), [peekAt, peekOut, spread]);
-  const treeActions = useMemo(() => ({ onTaskUpdated, notify }), [notify, onTaskUpdated]);
+  const treeActions = useMemo(() => ({ onStarred: onTaskStarred, notify }), [notify, onTaskStarred]);
   return (
     <TaskTreeActionsContext.Provider value={treeActions}>
     <SpreadRowProvider value={rowContext}>

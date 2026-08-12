@@ -256,7 +256,8 @@ api.patch("/tasks/:id", async (c) => {
     return c.json({ error: "starredAt 必须是非负整数时间戳或 null" }, 400);
   }
   // UI 只给顶层任务画星标入口:child/worker 一旦被标上就成了看不见也清不掉的隐形状态。
-  if (b.starredAt !== undefined && existing.parentId != null) {
+  // null(清除)放行 —— 老数据里已有的 child 星标得留一条从 API 清理的路。
+  if (b.starredAt !== undefined && b.starredAt !== null && existing.parentId != null) {
     return c.json({ error: "星标只支持顶层任务，执行者/子任务不能设置 starredAt" }, 400);
   }
   const patch: Record<string, unknown> = {};
