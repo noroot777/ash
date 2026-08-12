@@ -19,6 +19,15 @@ export function applyStarredAt(tasks: Task[], taskId: string, starredAt: number 
   return tasks.map((task) => (task.id === taskId ? { ...task, starredAt } : task));
 }
 
+// SSE 行带来的 starredAt 变化也要登记 starEdits 保护（这是登记判据）：星标 PATCH 成功
+// 后服务端同时回 HTTP 响应和发 task.updated，两条连接没有顺序保证 —— SSE 先到时
+// PATCH 回写（applyStar）还没登记，这个窗口里晚到的旧 GET 快照（同 updatedAt）会把
+// 星标清回去，直到 PATCH 响应到达才恢复。新行（本地还没有）不算变化，不用保护。
+export function starredAtChanged(current: Task[], incoming: Task): boolean {
+  const local = current.find((task) => task.id === incoming.id);
+  return local !== undefined && local.starredAt !== incoming.starredAt;
+}
+
 // GET 快照与 SSE/本地回写之间同样没有到达顺序保证：整表替换会让旧快照盖掉新状态。
 // 逐行按 updatedAt 合并，本地行更新就保留本地行。快照里没有的行照快照删（任务删除
 // 没有专门的 SSE 事件，快照是删除的权威来源）。
@@ -133,7 +142,14 @@ export function useTasks(projectId?: string) {
   const connected = useServerEvents(
     useCallback((event) => {
       if (event.type === "task.created" || event.type === "task.updated") {
-        setTasks((current) => upsert(current, event.task, projectId));
+        setTasks((current) => {
+          // SSE 星标变化的保护登记放在 updater 里（判定需要 current）；updater 可能被
+          // React 调两次，Map.set 幂等无害。
+          if (starredAtChanged(current, event.task)) {
+            starEdits.current.set(event.task.id, Date.now());
+          }
+          return upsert(current, event.task, projectId);
+        });
         return;
       }
       if (event.type === "task.status") {

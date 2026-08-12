@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { applyStarredAt, applyTaskMetadataEvent, applyTaskStatusEvent, mergeFetchedTasks } from "../src/lib/useTasks.ts";
+import { applyStarredAt, applyTaskMetadataEvent, applyTaskStatusEvent, mergeFetchedTasks, starredAtChanged } from "../src/lib/useTasks.ts";
 
 // useTasks 数据同步纯函数的回归：SSE 事件应用、星标回写、GET 快照合并。
 // 共同主题是「三条通道（SSE / PATCH 响应 / GET 快照）没有到达顺序保证，
@@ -117,6 +117,38 @@ assert.deepEqual(
 assert.equal(
   mergeFetchedTasks([], [staleSnapshotRow], new Set(["t-star"]))[0].starredAt, null,
   "protection without a local row keeps the snapshot value",
+);
+
+// ── SSE 先于 PATCH 响应到达 ──────────────────────────────────
+// 星标 PATCH 成功后服务端同时回 HTTP 响应和发 task.updated,两条连接没有顺序保证。
+// SSE 先到时 applyStar(PATCH 回写)还没登记保护,所以 SSE upsert 也要用
+// starredAtChanged 判定登记 —— 否则这个窗口里晚到的旧 GET(同 updatedAt)会把星标清回去。
+
+const sseStarredRow = { ...task, id: "t-sse", starredAt: 1754900000000 };
+const localBeforeSse = { ...task, id: "t-sse", starredAt: null };
+assert.equal(
+  starredAtChanged([localBeforeSse], sseStarredRow), true,
+  "SSE row starring an existing task must register protection",
+);
+assert.equal(
+  starredAtChanged([sseStarredRow], { ...task, id: "t-sse", starredAt: null }), true,
+  "SSE row unstarring must register protection too",
+);
+assert.equal(
+  starredAtChanged([sseStarredRow], sseStarredRow), false,
+  "no starredAt change, no registration",
+);
+assert.equal(
+  starredAtChanged([], sseStarredRow), false,
+  "a brand-new row has no local star to protect",
+);
+
+// 登记后的完整链条:SSE 已把本地行点亮,晚到的旧 GET(同 updatedAt、无星标)在保护下清不掉。
+const afterSse = [sseStarredRow];
+const staleGetRow = { ...task, id: "t-sse", starredAt: null };
+assert.equal(
+  mergeFetchedTasks(afterSse, [staleGetRow], new Set(["t-sse"]))[0].starredAt, 1754900000000,
+  "stale same-updatedAt GET must not clear star received via SSE before PATCH response",
 );
 
 console.log("test-task-sync: all assertions passed");
