@@ -143,6 +143,9 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* 「CLI 默认已是 X」比来源说明更值得看(它是唯一的行动线索),所以颜色重一档;但仍然
+   可截断 —— 挤到没地方时先保住行尾那颗刷新按钮,86a3f06 修的就是按钮被挤没。 */
+.agent-model-control > small > span.model-behind-default { color: var(--muted); }
 
 .agent-model-control > small.is-error,
 .provider-model-field > small.is-error {

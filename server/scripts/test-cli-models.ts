@@ -8,7 +8,7 @@
 //   ② 去重保序 + CLI 报告的默认模型排首位;
 //   ③ 每个 AgentType 都拿得到 catalog,`probeSupported` 与 spec.models 严格一致;
 //   ④ 没有清单命令 / 没装 CLI 时诚实降级:source==="preset" 且 models 等于内置快照;
-//   ⑤ 缓存命中不重复起子进程,force 会绕过缓存;
+//   ⑤ 缓存命中不重复起子进程,force 会绕过缓存,降级结果比成功结果短命;
 //   ⑥ 本机装了 grok 时的**真实**探测(装了才断言,没装就跳过并说明——不拿本机环境当硬前提)。
 import assert from "node:assert/strict";
 import { AGENT_TYPES } from "@harness/shared";
@@ -16,7 +16,7 @@ import { CLI_MODEL_PRESETS, CLI_MODEL_PROBE_TYPES } from "@harness/shared/cli-pr
 import { CLI_SPEC_BY_KEY } from "../src/executors/catalog/index.js";
 import { parseGrokModels } from "../src/executors/catalog/grok.js";
 import { parsePiModels } from "../src/executors/catalog/pi.js";
-import { modelCatalogFor, modelCatalogs, normalizeModelList, resetModelCatalogCache } from "../src/executors/model-probe.js";
+import { catalogTtlMs, modelCatalogFor, modelCatalogs, normalizeModelList, resetModelCatalogCache } from "../src/executors/model-probe.js";
 import { probeBins } from "../src/executors/bin-probe.js";
 
 // ── ① 解析器:真实输出 ────────────────────────────────────────────────────
@@ -150,6 +150,26 @@ for (const catalog of all) {
   const staleResult = await stale;
   const next = await modelCatalogFor("grok");
   assert.notEqual(next, staleResult, "已被顶掉的探测不该把结果写进缓存");
+}
+
+// ── ⑤c 降级结果不许和成功结果一样保鲜 ────────────────────────────────────
+// 一次超时/抖动若按成功那档缓存,内置快照就钉住半天;界面只写「内置清单」,用户没
+// 理由知道该去点刷新。没有清单命令的 CLI 是另一回事:重探不会有新结果,别反复问。
+{
+  const presetShape = {
+    type: "grok" as const,
+    models: ["grok-4.6"],
+    defaultModel: null,
+    available: false,
+    probedAt: null,
+    cliVersion: null,
+    error: null,
+  };
+  const ok = { ...presetShape, source: "probe" as const, probeSupported: true };
+  const failed = { ...presetShape, source: "preset" as const, probeSupported: true };
+  const noCommand = { ...presetShape, source: "preset" as const, probeSupported: false };
+  assert.ok(catalogTtlMs(failed) < catalogTtlMs(ok), "探测失败的缓存必须比成功的短命");
+  assert.equal(catalogTtlMs(noCommand), catalogTtlMs(ok), "没有清单命令的 CLI 不该被反复重探");
 }
 
 // ── ⑥ 本机真实探测(装了才断言) ────────────────────────────────────────

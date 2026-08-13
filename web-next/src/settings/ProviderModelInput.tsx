@@ -101,6 +101,9 @@ export function ProviderModelInput({
   const groupName = provider ? provider.name : `${type} 预设`;
   // 供应商那条走探测状态,CLI 那条走服务端现问的结果。
   const candidates = provider ? models : cli.catalog ? [...cli.catalog.models] : [];
+  // 「默认」两边都有:供应商是用户自己配的,CLI 是它自己报的(`Default model:` 那行)。
+  const defaultModel = provider ? provider.model : cli.catalog?.defaultModel ?? "";
+  const defaultDetail = provider ? "供应商默认" : "CLI 默认";
   const followLabel = provider
     ? `跟随供应商默认${provider.model ? `（${provider.model}）` : ""}`
     : "跟随 CLI";
@@ -109,7 +112,7 @@ export function ProviderModelInput({
   const options = useMemo<DropdownOption[]>(() => {
     const seen = new Set<string>();
     const rows: DropdownOption[] = [];
-    for (const model of [...(provider?.model ? [provider.model] : []), ...candidates, ...(value ? [value] : [])]) {
+    for (const model of [...(defaultModel ? [defaultModel] : []), ...candidates, ...(value ? [value] : [])]) {
       if (!model || seen.has(model)) continue;
       seen.add(model);
       rows.push({
@@ -117,17 +120,22 @@ export function ProviderModelInput({
         label: model,
         group: groupName,
         mono: true,
-        detail: model === provider?.model ? "供应商默认" : "",
+        detail: model === defaultModel ? defaultDetail : "",
       });
     }
     return rows;
-  }, [candidates, groupName, provider, value]);
+  }, [candidates, defaultDetail, defaultModel, groupName, value]);
 
   const note = status === "loading"
     ? `正在从「${provider?.name ?? type}」探测模型…`
     : status === "failed"
       ? `探测失败：${error}（仍可手填模型名）`
       : "";
+
+  // 这个执行器钉着的模型不是 CLI 现在的默认(比如还钉在 grok-4.5,而 CLI 已经默认 4.6)。
+  // 只在**实时清单**里成立:拿滞后的内置快照去说「默认已是」会反过来误导人。
+  const behindDefault =
+    !provider && cli.catalog?.source === "probe" && !!cli.catalog.defaultModel && !!value && value !== cli.catalog.defaultModel;
 
   // 换模型不动档位：新模型支不支持已选档位由旁边那颗胶囊如实提示，静默改掉会让
   // 用户下次打开时看见一个自己没设过的值。
@@ -184,6 +192,9 @@ export function ProviderModelInput({
       {!provider && (
         <small className={cli.catalog?.error ? "is-error" : ""}>
           <span>{cliCatalogNote(cli.catalog)}</span>
+          {/* 「能选到新模型」不等于「这个执行器已经在用它」:钉死的旧模型会一直跑下去,
+              而清单刷新得再勤也不会去改用户的配置。差异只如实说一句,改不改由用户定。 */}
+          {behindDefault && <span className="model-behind-default">· CLI 默认已是 {cli.catalog?.defaultModel}</span>}
           {cli.catalog?.probeSupported && (
             <button
               type="button"

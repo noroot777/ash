@@ -27,6 +27,13 @@ const exec = promisify(execFile);
 /** 探测结果的保鲜期。到点后下一次读取会**等**一次重探(不做后台预热那套复杂度)。 */
 const TTL_MS = 6 * 60 * 60 * 1000;
 
+/**
+ * **降级结果**的保鲜期,短得多。一次超时或网络抖动若按成功那档存着,内置快照就会钉住
+ * 半天;界面上只写「内置清单」,用户没理由知道自己看的是一次抖动的后果、更没理由想到
+ * 去点刷新。探不到的那一次重探本来就很便宜(多半在 probeBins 那步就返回了)。
+ */
+const DEGRADED_TTL_MS = 2 * 60 * 1000;
+
 /** 清单命令的默认超时。登录态查询要一次网络往返,给够;卡住不该拖垮页面。 */
 const DEFAULT_TIMEOUT_MS = 10_000;
 
@@ -126,8 +133,17 @@ async function probe(type: AgentType): Promise<CliModelCatalog> {
   }
 }
 
+/**
+ * 一条缓存能存多久。导出只为回归测试钉住「降级结果不许和成功结果一样保鲜」。
+ * 没有清单命令的 CLI 除外:它永远只有快照,重探不会有新结果,没必要反复问。
+ */
+export function catalogTtlMs(catalog: CliModelCatalog): number {
+  if (!catalog.probeSupported) return TTL_MS;
+  return catalog.source === "probe" ? TTL_MS : DEGRADED_TTL_MS;
+}
+
 function fresh(entry: CacheEntry | undefined): boolean {
-  return !!entry && Date.now() - entry.at < TTL_MS;
+  return !!entry && Date.now() - entry.at < catalogTtlMs(entry.catalog);
 }
 
 /**
