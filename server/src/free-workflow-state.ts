@@ -205,6 +205,16 @@ async function readFreeWorkflowState(taskId: string): Promise<FreeWorkflowApiSta
   const reservationRunId = state?.reviewArmed ? state.reviewRunId ?? null : null;
   const reservationReviewerId = state?.reviewArmed ? state.selectedReviewerId ?? null : null;
   const reservationArmed = !!reservationRunId || !!reservationReviewerId;
+  // 执行器覆盖只对「新链」预约有意义：续轮的执行器早已冻结在 run 行里，槽里也不该有。
+  // 四列一套读，agentType 为空即没有覆盖。
+  const reservationOverride = reservationArmed && !reservationRunId && state?.reviewAgentType
+    ? {
+      agentType: state.reviewAgentType as AgentType,
+      executorId: state.reviewExecutorId ?? null,
+      model: state.reviewModel ?? null,
+      reasoningEffort: state.reviewReasoningEffort ?? null,
+    }
+    : null;
   const workspace = await workspaceStateOf(task);
   // workspace（HEAD/dirty）不经 task.review 事件也会变（agent/用户直接改工作区）：指纹
   // 变化时也 bump，否则两份不同内容的快照拿同一版本、迟到的旧响应能抹掉「结论过期」
@@ -228,6 +238,7 @@ async function readFreeWorkflowState(taskId: string): Promise<FreeWorkflowApiSta
       checkMode: reservationArmed ? storedCheckMode(state?.reviewCheckMode) : null,
       retryLimit: reservationArmed ? storedRetryLimit(state?.reviewRetryLimit) : null,
       note: reservationArmed ? state?.reviewNote ?? null : null,
+      override: reservationOverride,
       runId: reservationRunId,
     },
     preview: {

@@ -27,6 +27,20 @@ export interface ReviewerProfile {
   updatedAt: string;
 }
 
+/**
+ * 「这一次审查实际用谁跑」——相对审查者配置的整套覆盖，**不写回审查者本身**。
+ *
+ * 是整套而不是单个字段：选执行器的形状是一颗三段胶囊（智能体 · 模型 · 智能水平），
+ * 换智能体会把后两段打回「跟随执行器」，拆成可选字段就没法表达「这次显式跟随」。
+ * null/空 = 跟随该执行器自己的默认，与审查者配置里的同名字段语义一致。
+ */
+export interface FreeReviewExecutorOverride {
+  agentType: AgentType;
+  executorId: string | null;
+  model: string | null;
+  reasoningEffort: string | null;
+}
+
 export interface FreeReviewRound {
   round: number;
   status: FreeReviewRoundStatus;
@@ -103,6 +117,8 @@ export interface FreeWorkflowState {
     checkMode: FreeReviewCheckMode | null;
     retryLimit: number | null;
     note: string | null;
+    /** 非空 = 本次预约要用的执行器覆盖（审查者配置没被改，只有这一次这么跑）。 */
+    override: FreeReviewExecutorOverride | null;
     /** 非空 = 这是自动复审链的续轮预约（修复确认完成后在该 run 上续下一轮）。 */
     runId: string | null;
   };
@@ -117,4 +133,6 @@ export interface FreeReviewDispatchInput {
   checkMode: FreeReviewCheckMode;
   retryLimit: number;
   note?: string | null;
+  /** 本次审查的执行器覆盖；缺省/null = 就按审查者自己的配置跑。 */
+  override?: FreeReviewExecutorOverride | null;
 }

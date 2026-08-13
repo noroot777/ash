@@ -236,6 +236,13 @@ export const freeWorkflowStates = sqliteTable("free_workflow_states", {
   reviewCheckMode: text("review_check_mode"),
   reviewRetryLimit: integer("review_retry_limit"),
   reviewNote: text("review_note"),
+  // 预约要用的执行器覆盖（相对审查者配置，只作用于这一次）。四列一起写、一起清：
+  // 智能体换了、模型/智能水平就得跟着重来，拆开写会拼出审查者从未有过的组合。
+  // agent_type 为空 = 没有覆盖，照审查者自己的配置跑。
+  reviewAgentType: text("review_agent_type"),
+  reviewExecutorId: text("review_executor_id"),
+  reviewModel: text("review_model"),
+  reviewReasoningEffort: text("review_reasoning_effort"),
   // 非空 = 自动复审链的续轮预约：修复确认完成后在这条 run 上续下一轮，而不是开新 run。
   reviewRunId: text("review_run_id"),
   updatedAt: text("updated_at").notNull(),
