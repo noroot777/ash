@@ -113,7 +113,12 @@ export function ReviewDispatchControl({
   if (task.mode !== "single" || task.reviewOf || task.archived) return null;
 
   const activeRound = rounds.find((round) => REVIEW_IN_FLIGHT.has(round.reviewTaskStatus));
-  const targetBusy = task.status === "running" || task.status === "queued";
+  // running/queued 之外，「停在待答/待续跑」同样派不动：startVerifyRound 明确拒绝
+  // question/resumePrompt 非空的任务（那两个字段会被验证结算当成「验证者本轮中途提问」，
+  // 派验证之前就存在的话这一轮永远收不了尾）。前端不同步这道门禁，暂停待答的任务上就会
+  // 出现一个可点但必失败的「开始验证」（审查实测）。判据与 server/src/review.ts 同源。
+  const pendingAnswer = !!task.question || !!task.resumePrompt;
+  const targetBusy = task.status === "running" || task.status === "queued" || pendingAnswer;
   const availabilityPending = !profilesReady;
   const noExecutor = profilesReady && nothingRunnable(profiles);
   const selectionPickable = isExecutorPickable(selection, workerTypes, profiles);
@@ -166,7 +171,7 @@ export function ReviewDispatchControl({
         <span><MagnifyingGlass size={13} weight="bold" /></span>
         <div>
           <b>{dispatchLocked ? "验证正在进行" : actionLabel}</b>
-          <small>{targetBusy ? "目标仍在运行或排队，结束后才能验证。" : dispatchLocked ? "当前轮次结束后可再验一轮。" : `将就在这个任务上立即开始第 ${nextRound} 轮真实运行验证。`}</small>
+          <small>{pendingAnswer ? "任务正等待答复或续跑，处理完才能验证。" : targetBusy ? "目标仍在运行或排队，结束后才能验证。" : dispatchLocked ? "当前轮次结束后可再验一轮。" : `将就在这个任务上立即开始第 ${nextRound} 轮真实运行验证。`}</small>
         </div>
         <button
           type="button"

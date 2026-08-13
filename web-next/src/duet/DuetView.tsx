@@ -402,7 +402,7 @@ export function DuetView({
         <DuetProgressBar round={currentRound} maxRounds={config.maxRounds} gateEnabled={config.gateG1 === "on"} />
       )}
       {teamModal && <DuetHandoffModal busy={teamBusy} onClose={() => setTeamModal(false)} onConfirm={handoff} />}
-      {deleteOpen && <DeleteTaskDialog task={task} notify={notify} onDeleted={() => onTaskDeleted(task.id)} onClose={() => setDeleteOpen(false)} />}
+      {deleteOpen && <DeleteTaskDialog task={task} notify={notify} onDeleted={(ids) => ids.forEach(onTaskDeleted)} onClose={() => setDeleteOpen(false)} />}
     </div>
   );
 }

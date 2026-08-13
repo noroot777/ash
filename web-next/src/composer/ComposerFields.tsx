@@ -138,7 +138,7 @@ export function ComposerFields({
         <section className="composer-config-section is-workflow-mode">
           <header className="composer-section-heading">
             <span><SlidersHorizontal size={14} /></span>
-            <div><h2>工作方式</h2><p>自由模式按需派审、预览和合并；起手式按预设线路自动推进。</p></div>
+            <div><h2>工作方式</h2><p>自由模式按需派审和预览，完成后统一验收；起手式按预设线路自动推进。</p></div>
           </header>
           <PillTabs
             label="工作方式"

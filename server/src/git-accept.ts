@@ -73,6 +73,9 @@ export type TaskMergeResult =
       method: TaskMergeMethod;
       /** 只在「只打标签不合并」那一档有值 */
       tag?: string;
+      /** 合并前后目标分支的 commit（结构化落账，供合并后基线审查用）。already_merged/tagged 时两者相等。 */
+      beforeCommit?: string | null;
+      afterCommit?: string | null;
       warnings?: TaskMergeWarning[];
     }
   | {
@@ -106,7 +109,7 @@ export type TaskCleanupResult =
       dirtyFiles?: string[];
     };
 
-async function isAncestor(repo: string, ancestor: string, descendant: string): Promise<boolean> {
+export async function isAncestor(repo: string, ancestor: string, descendant: string): Promise<boolean> {
   try {
     await exec("git", ["-C", repo, "merge-base", "--is-ancestor", ancestor, descendant]);
     return true;
@@ -229,7 +232,15 @@ export async function mergeTaskBranch(
   // 预览实例上一律拒绝：合的是**真**分支（见 preview-instance.ts）。acceptTask 那头已经
   // 结构化挡了一道，这里是给其它调用路径兜的底。
   assertNotPreviewInstance("合并任务分支");
-  return withRepoLock(repoPath, () => mergeTaskBranchLocked(repoPath, taskId, requestedTarget, strategy));
+  return withRepoLock(repoPath, async () => {
+    // 合并前后目标分支的 commit 在锁内取，保证「before → 合并 → after」之间没有别人插队。
+    const repo = expandHome(repoPath);
+    const target = await resolveTaskMergeTarget(repo, requestedTarget);
+    const beforeCommit = target ? await commitOf(repo, target) : null;
+    const result = await mergeTaskBranchLocked(repoPath, taskId, requestedTarget, strategy);
+    if (!result.ok) return result;
+    return { ...result, beforeCommit, afterCommit: await commitOf(repo, result.targetBranch) };
+  });
 }
 
 // 目标分支得有个检出的地方才跑得了 merge。三种情况按危险程度排：目标就在项目目录上
@@ -325,17 +336,24 @@ async function squashInCheckedOutTarget(
       targetBranch,
     };
   }
+  // 「内容已在目标里」的判定必须在 merge --squash 之后、commit 之前做：此刻 staged 为空
+  // = merge 结果与目标无差异，这是**内容证据**。commit 失败后再查 staged 不可信——恶意/
+  // 异常的 pre-commit hook 可以在失败前 reset 掉暂存区，把「什么都没合进去」伪装成
+  // already_merged（审查实测：目标 ref 没动、产物丢失，接口却返回 accepted）。
+  const stagedEmptyAfterMerge = await exec("git", ["-C", cwd, "diff", "--cached", "--quiet"])
+    .then(() => true)
+    .catch(() => false);
+  if (stagedEmptyAfterMerge) {
+    await exec("git", ["-C", cwd, "reset", "--hard"]).catch(() => {});
+    return { ok: true, sourceBranch, targetBranch, method: "already_merged" };
+  }
   try {
     await exec("git", ["-C", cwd, "commit", "-m", `squash 合并 ${sourceBranch}`]);
     return { ok: true, sourceBranch, targetBranch, method: "squash" };
   } catch (error) {
-    // 暂存区是空的：任务分支相对目标分支没有内容差异（典型是内容早就以别的方式进去了）。
-    // 这不是失败，按「已经合过了」报，免得用户对着一条报错找不出哪儿不对。
+    // 到这里 staged 一定非空过：commit 失败就是真失败（hook 拒绝/环境问题），如实报错。
     const message = gitError(error);
     await exec("git", ["-C", cwd, "reset", "--hard"]).catch(() => {});
-    if (/nothing to commit|no changes added/i.test(message)) {
-      return { ok: true, sourceBranch, targetBranch, method: "already_merged" };
-    }
     return {
       ok: false,
       reason: "merge_failed",
