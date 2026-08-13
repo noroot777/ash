@@ -197,9 +197,7 @@ export async function runTask(taskId: string): Promise<void> {
       branch: ws.branch,
       cwd: ws.path,
       cliSessionId,
-      resumeCommand: ex.resumeCommand(ws.path, cliSessionId),
-      resumeEnv: ex.resumeEnvHint ?? null,
-      resumeArgs: ex.resumeArgsHint ?? null,
+      ...ex.resumeFields(ws.path, cliSessionId),
       commandLine: handle.commandLine,
       startedAt: turnStart,
       turnStartedAt: turnStart,
@@ -539,8 +537,9 @@ export async function continueTask(
           // profile 可能在两轮之间被改到别的机器上;这一列是恢复命令唯一的
           // 「在哪台机器上跑」凭据,不刷新就会给出一条在本机执行的错命令。
           target: sessionTargetKey(ex.target),
-          resumeEnv: ex.resumeEnvHint ?? null,
-          resumeArgs: ex.resumeArgsHint ?? null,
+          // 恢复命令三件套整组刷新(cwd 也可能在两轮之间变):少刷一列就是一条
+          // 恢复不了的恢复命令,见 ResumeFields。
+          ...ex.resumeFields(cwd, cliSessionId),
           // 这一轮的解绑线索。**必须整组刷新**:沿用上一轮的 pid/offset 会让重启
           // 去接一个早就没了的进程,或者从上一轮的字节位置读这一轮的新文件。
           agentPid: handle.detached?.pid ?? null,
@@ -564,9 +563,7 @@ export async function continueTask(
         branch: base?.branch ?? null,
         cwd,
         cliSessionId,
-        resumeCommand: ex.resumeCommand(cwd, cliSessionId),
-        resumeEnv: ex.resumeEnvHint ?? null,
-        resumeArgs: ex.resumeArgsHint ?? null,
+        ...ex.resumeFields(cwd, cliSessionId),
         commandLine: handle.commandLine,
         startedAt: turnStart,
         turnStartedAt: turnStart,

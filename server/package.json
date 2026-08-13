@@ -32,6 +32,7 @@
     "test:native-turn": "tsx scripts/test-native-command-turn.ts",
     "test:executor-overrides": "tsx scripts/test-executor-overrides.ts",
     "test:cli-overrides": "tsx scripts/test-cli-overrides.ts",
+    "test:claude-settings-live": "tsx scripts/test-claude-settings-live.ts",
     "test:cli-catalog": "tsx scripts/test-cli-catalog.ts",
     "test:task-derivation": "tsx scripts/test-task-derivation-policy.ts",
     "test:duet-iteration": "tsx scripts/test-duet-iteration.ts",

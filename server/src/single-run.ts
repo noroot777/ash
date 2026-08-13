@@ -286,7 +286,7 @@ export async function consumeSingleRun(a: {
           cliSessionId = event.cliSessionId;
           await db
             .update(sessions)
-            .set({ cliSessionId, resumeCommand: ex.resumeCommand(a.cwd, cliSessionId) })
+            .set({ cliSessionId, ...ex.resumeFields(a.cwd, cliSessionId) })
             .where(eq(sessions.id, sessId));
         }
         publishEvent(event);
