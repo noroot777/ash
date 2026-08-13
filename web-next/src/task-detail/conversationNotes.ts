@@ -30,14 +30,43 @@ export function noteTone(text: string): ConversationEventTone {
   return FAILED_HINTS.some((hint) => text.includes(hint)) ? "error" : "neutral";
 }
 
-// 「这条旁注在讲验证轮的事吗」—— 会话里验证段的起止就是这两条旁注（第 N 轮验证开始 /
-// 未通过·打回修复），跟审查者的气泡同一套青色，读者才看得出它们是一段。
+// 「这条旁注在讲一轮审查的事吗，是开头还是结尾，第几轮」—— 会话里验证段的起止就是
+// 这两条旁注，跟审查者的气泡同一套青色，读者才看得出它们是一段；轮次号还要拿来补给
+// 气泡上的徽标。
 //
-// 跟 noteTone 一样**只认关键词**：写这些字的地方在 review.ts,措辞由那边定,判错了最多
-// 是竖条颜色不对,不会把会话切错段。验证轮的旁注一律带「第 N 轮验证」;「验证打回失败」
-// 是打回那一步自己的报错,同属这一段。
-const VERIFY_NOTE = /第\s*\d+\s*轮验证|验证打回/;
+// 两种审查在时间线上各写各的话：就地验证写「第 N 轮验证…」（review.ts），自由派审写
+// 「自由工作流第 N 轮审查…」（free-workflow.ts）。两边分开认，因为它们能推出的东西不
+// 一样：就地验证是搭在被验任务自己会话上的，区间内说话的那个人**就是**审查者；自由
+// 派审另开一条 reviewer 会话，区间只能用来补轮次，不能拿来改别人的身份。
+//
+// 跟 noteTone 一样**只认关键词**：措辞由服务端那两处定，判错了最多是竖条颜色不对，
+// 不会把会话切错段。
+export type VerifyNoteMark = {
+  kind: "inline" | "free";
+  round: number | null;
+  phase: "start" | "end";
+};
+
+const VERIFY_NOTE = /(自由工作流)?第\s*(\d+)\s*轮(验证|审查)/;
+// 收尾时不带轮号的那几条：复审次数用完、验证打回本身报错。
+const TAILS = /自由工作流审查仍未通过|验证打回/;
+
+export function verifyNoteOf(text: string): VerifyNoteMark | null {
+  const matched = VERIFY_NOTE.exec(text);
+  if (matched) {
+    const round = Number(matched[2]);
+    return {
+      kind: matched[1] ? "free" : "inline",
+      round: Number.isFinite(round) ? round : null,
+      // 「开始」是唯一开区间的词：通过 / 未通过 / 以…结束 / 启动失败 / 按意见发起修复
+      // 全都是收区间，其中「启动失败」收的是一个根本没跑起来的区间。
+      phase: text.includes("开始") ? "start" : "end",
+    };
+  }
+  if (TAILS.test(text)) return { kind: "free", round: null, phase: "end" };
+  return null;
+}
 
 export function isVerifyNote(text: string): boolean {
-  return VERIFY_NOTE.test(text);
+  return !!verifyNoteOf(text);
 }

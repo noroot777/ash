@@ -6,6 +6,7 @@
 //   3) 换身份是 continuation 的断点 —— 否则验证回合会被当成「同一个人接着说」，
 //      连头像和执行器名都不重报，比完全不区分更糟
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { buildConversationItems, conversationToMarkdown } from "../src/task-detail/conversationModel.ts";
 import { isVerifyNote } from "../src/task-detail/conversationNotes.ts";
 
@@ -99,6 +100,157 @@ const live = buildConversationItems([], [session], [
   },
 ]);
 assert.deepEqual(live.at(-1).reviewer, { round: 3 }, "直播态也要认出审查者身份");
+
+// —— 换身份必须切气泡：同一条会话上，实现正文和审查正文不能被合成一条 ——
+// 用户在验证回合中途打开任务页就是这个形状:「第 N 轮验证开始」在订阅之前就播完了,
+// 手上只有落盘的上一段实现正文 + 本轮验证的后半段事件。合进去的话,正在进行的审查
+// 既没有盾形头像也没有徽标,正文还挂在实现者名下 —— 正是本需求要解决的那种混淆。
+const liveEvent = (verifyRound, text) => ({
+  kind: "server",
+  id: `live:${text}`,
+  event: {
+    type: "agent.event",
+    taskId: "t1",
+    sessionId: "s1",
+    role: "single",
+    agentType: "codex",
+    ...(verifyRound ? { verifyRound } : {}),
+    event: { kind: "text", text },
+  },
+});
+
+const mixed = buildConversationItems(
+  [{ session, output: "上一轮实现正文", trace: [run("2026-08-10T03:23:00.000Z")] }],
+  [session],
+  [liveEvent(2, "当前审查正文")],
+);
+assert.deepEqual(mixed.map((item) => item.markdown), ["上一轮实现正文", "当前审查正文"]);
+assert.deepEqual(mixed.at(-1).reviewer, { round: 2 }, "落盘尾气泡之后来的审查事件要另起一条");
+assert.equal(mixed.at(-1).continuation, false);
+
+const liveOnly = buildConversationItems([], [session], [liveEvent(1, "审查输出"), liveEvent(null, "普通输出")]);
+assert.deepEqual(liveOnly.map((item) => item.markdown), ["审查输出", "普通输出"]);
+assert.deepEqual(liveOnly[0].reviewer, { round: 1 });
+assert.equal(liveOnly[1].reviewer, undefined, "验证轮结束后回到实现者，不能续在审查气泡里");
+
+// —— 自由派审的直播:reviewer 会话要等下一次拉取才进 sessions,身份得认 SSE 自带的 role ——
+// 通用 textParser 那类执行器从不发 session 事件,只认 sessions 快照的话整轮都没有徽标。
+const liveReviewer = buildConversationItems([], [], [
+  {
+    kind: "server",
+    id: "live:reviewer",
+    event: {
+      type: "agent.event",
+      taskId: "t1",
+      sessionId: "s9",
+      role: "reviewer",
+      agentType: "claude",
+      event: { kind: "text", text: "审查意见。" },
+    },
+  },
+]);
+assert.deepEqual(liveReviewer.at(-1).reviewer, { round: null }, "sessions 还没跟上时也要认出审查者");
+
+// —— 自由派审:轮次号只写在时间线旁注里,从不进 run 事件,只能按区间补 ——
+const freeSession = { ...session, id: "s3", role: "reviewer", startedAt: "2026-08-11T02:00:00.000Z" };
+const freeNotes = [
+  "自由工作流第 1 轮审查开始：5.5审查 · 逻辑检查。",
+  "自由工作流第 1 轮审查未通过，意见已发回会话；修复确认完成后自动复审。",
+];
+assert.equal(isVerifyNote(freeNotes[0]), true, "自由派审的起止旁注同样跟审查者一个颜色");
+assert.equal(isVerifyNote(freeNotes[1]), true);
+assert.equal(isVerifyNote("已按自由工作流第 2 轮审查意见发起修复。"), true);
+
+const freeItems = buildConversationItems(
+  [
+    {
+      session: { ...session, endedAt: null },
+      output: [
+        "实现回合说的话。",
+        turn("system", freeNotes[0], "2026-08-11T02:00:00.000Z"),
+      ].join("\n"),
+      trace: [],
+    },
+    { session: freeSession, output: "审查意见正文。", trace: [] },
+  ],
+  [{ ...session, endedAt: null }, freeSession],
+  [],
+);
+assert.deepEqual(freeItems.at(-1).reviewer, { round: 1 }, "自由派审也要报出第几轮");
+assert.equal(freeItems[0].reviewer, undefined, "区间前的实现回合不受影响");
+
+// 自由派审的区间只补轮次、不改身份:它另开一条会话,主任务的发言也可能落在同一段时间里。
+const freeMain = buildConversationItems(
+  [
+    {
+      session: { ...session, endedAt: null },
+      output: [
+        turn("system", freeNotes[0], "2026-08-11T02:00:00.000Z"),
+        "主任务在审查期间说的话。",
+      ].join("\n"),
+      trace: [],
+    },
+  ],
+  [{ ...session, endedAt: null }],
+  [],
+);
+assert.equal(freeMain.at(-1).reviewer, undefined, "自由派审区间不能把主任务的发言变成审查者");
+
+// —— 存量会话:trace 里一个 run marker 都没有(这次改动才开始写),身份只能按区间推 ——
+// 用的是真实历史会话 data/runs/eFjv9houajxX/lFGPlOrSnqt-.md 的原样拷贝,它那条 trace
+// 实测 34 行、0 个 run 事件。
+const legacySession = {
+  ...session,
+  id: "legacy",
+  startedAt: "2026-08-05T14:21:48.822Z",
+  endedAt: "2026-08-06T04:05:45.485Z",
+};
+const legacy = buildConversationItems(
+  [{
+    session: legacySession,
+    output: readFileSync(new URL("./fixtures/legacy-verify-session.md", import.meta.url), "utf8"),
+    trace: [],
+  }],
+  [legacySession],
+  [],
+);
+const legacyStart = legacy.findIndex((item) => item.kind === "event" && item.text.startsWith("第 2 轮验证开始"));
+assert.ok(legacyStart > 0, "真实历史会话里就有这条「第 2 轮验证开始」");
+const legacyAgents = legacy.slice(legacyStart).filter((item) => item.kind === "agent");
+assert.ok(legacyAgents.length >= 2, "区间里有两段审查正文");
+for (const agent of legacyAgents) {
+  assert.deepEqual(agent.reviewer, { round: 2 }, "存量会话的验证正文也要认出审查者和轮次");
+}
+assert.equal(legacyAgents[0].continuation, false, "换身份要重新报头像和执行器名");
+// 区间外的实现正文不能被顺手染成审查者。
+for (const item of legacy.slice(0, legacyStart)) {
+  if (item.kind === "agent") assert.equal(item.reviewer, undefined);
+}
+
+// 通过的那条路收尾时不写「第 N 轮验证…」旁注(concludeRound 直接往下推线),而
+// 「验收阶段更新：已验证」是审查者自己在回合中间调 report_stage 写的、还在它的回合里。
+// 收口只能认「回合真的换了人」：审查者说完话之后的那条新回合标记。
+const passed = buildConversationItems(
+  [{
+    session: { ...session, endedAt: null },
+    output: [
+      turn("system", "第 4 轮验证开始：就在这个任务的工作目录里跑。", "2026-08-12T01:00:00.000Z"),
+      "验证正文。",
+      turn("system", "验收阶段更新：已验证（verified）", "2026-08-12T01:20:00.000Z"),
+      "第 4 轮验证通过。",
+      turn("system", "〔系统〕继续（从中断处）", "2026-08-12T02:00:00.000Z"),
+      "后续实现正文。",
+    ].join("\n"),
+    trace: [],
+  }],
+  [{ ...session, endedAt: null }],
+  [],
+);
+const passedAgents = passed.filter((item) => item.kind === "agent");
+assert.deepEqual(passedAgents[0].reviewer, { round: 4 });
+assert.deepEqual(passedAgents[1].reviewer, { round: 4 }, "阶段通告是审查者自己回合里写的，不能拿它收口");
+assert.equal(passedAgents[2].reviewer, undefined, "换回合之后的发言回到实现者");
+
 
 // —— 复制出去的会话同样要认得出审查者，否则界面上分得开、粘出去又混成一团 ——
 const markdown = conversationToMarkdown(items, { title: "t", body: "" });

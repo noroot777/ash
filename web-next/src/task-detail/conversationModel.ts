@@ -5,6 +5,7 @@ import type { SessionTraceEntry } from "../lib/api.ts";
 import type { ExecutionEvent } from "../lib/executionTrace.ts";
 import type { ConversationEventTone, ConversationEventVariant } from "./conversationNotes.ts";
 import { isVerifyNote, noteTone } from "./conversationNotes.ts";
+import { applyVerifySpans, reviewerKey, reviewerKeyOf, reviewerOf, traceVerifyRound } from "./conversationReviewer.ts";
 import { formatInstant, parseAttachmentText } from "./utils.ts";
 
 export type LiveAgentEvent = Extract<ServerEvent, { type: "agent.event" }>;
@@ -230,29 +231,6 @@ function liveRun(event: LiveAgentEvent): { model: string | null; reasoningEffort
   };
 }
 
-// 「这一回合是审查者在说话吗」的唯一判据，落盘与直播两条路读同一份语义：
-// ① 就地验证轮 —— 服务端按回合把轮次号写进 trace 的 run 事件、并随 agent.event 广播；
-// ② 自由派审的独立审查回合 —— 它自己开一条 role=reviewer 的会话，没有轮次号。
-// 轮次号优先：reviewer 会话上跑的验证轮同样该报出「第 N 轮」。
-function reviewerOf(verifyRound: number | null | undefined, session: Session | undefined) {
-  if (verifyRound) return { round: verifyRound };
-  return session?.role === "reviewer" ? { round: null } : undefined;
-}
-
-function traceVerifyRound(entries: SessionTraceEntry[]): number | null {
-  for (let index = entries.length - 1; index >= 0; index -= 1) {
-    const event = entries[index]?.event;
-    if (event?.kind === "run") return event.verifyRound ?? null;
-  }
-  return null;
-}
-
-// 「说话的是同一个身份吗」的比较键：换一轮验证也算换人（第 1 轮和第 2 轮之间隔着
-// 一次修复，不该排成一段连续发言）。
-function reviewerKey(item: Extract<ConversationItem, { kind: "agent" }>): string {
-  return item.reviewer ? `reviewer:${item.reviewer.round ?? "free"}` : "";
-}
-
 function sessionRun(session: Session | undefined): { model: string | null; reasoningEffort: string | null } | undefined {
   if (!session || (session.model === undefined && session.reasoningEffort === undefined)) return undefined;
   return {
@@ -363,7 +341,11 @@ function appendAgent(
   const session = sessions.find((candidate) => candidate.id === event.sessionId);
   const last = items[items.length - 1];
   const explicitRun = liveRun(event);
-  if (last?.kind === "agent" && last.sessionId === event.sessionId) {
+  // 同一条会话**且同一个身份**才算「还是刚才那条气泡」。少了身份这一半，用户在验证
+  // 回合中途打开任务页时（快照的末尾还是上一轮实现正文，「第 N 轮验证开始」在订阅前
+  // 就播完了），接着到的审查正文会直接写进实现者的气泡里 —— 正是这个功能要治的病。
+  const reviewer = reviewerOf(event.verifyRound, event.role ?? session?.role);
+  if (last?.kind === "agent" && last.sessionId === event.sessionId && reviewerKey(last) === reviewerKeyOf(reviewer)) {
     if (explicitRun) last.run = explicitRun;
     return last;
   }
@@ -378,7 +360,7 @@ function appendAgent(
     markerEndedAt: null,
     session,
     run,
-    reviewer: reviewerOf(event.verifyRound, session),
+    reviewer,
     usage: null,
     markdown: "",
     segments: [],
@@ -474,7 +456,7 @@ export function buildConversationItems(
           markerEndedAt: segment.endedAt ?? null,
           session,
           run: traceRun(traceEntries) ?? sessionRun(session),
-          reviewer: reviewerOf(traceVerifyRound(traceEntries), session),
+          reviewer: reviewerOf(traceVerifyRound(traceEntries), session?.role),
           usage: traceUsage(traceEntries),
           markdown: segment.text,
           segments: contentSegments(traceEntries, segment.text, `persisted:segment:${session.id}:${index}`),
@@ -497,7 +479,7 @@ export function buildConversationItems(
         markerEndedAt: null,
         session,
         run: traceRun(entries) ?? sessionRun(session),
-        reviewer: reviewerOf(traceVerifyRound(entries), session),
+        reviewer: reviewerOf(traceVerifyRound(entries), session?.role),
         usage: traceUsage(entries),
         markdown: segments.map((segment) => segment.markdown).join(""),
         segments,
@@ -566,6 +548,10 @@ export function buildConversationItems(
       appendAgentAux(agent, event);
     }
   }
+
+  // 时间线到这里才排完（落盘排好序 + 直播按到达追加），身份也才补得齐。必须排在下面
+  // 那轮 continuation 判定之前：那一轮拿 reviewer 当断点用。
+  applyVerifySpans(items);
 
   const orderedSessions = [...sessions].sort((left, right) => left.startedAt.localeCompare(right.startedAt));
   const runBounds = new Map<string, SessionRunBounds>();

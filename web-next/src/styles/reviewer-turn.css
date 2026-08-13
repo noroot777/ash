@@ -23,7 +23,10 @@
   border-radius: 5px;
   background: color-mix(in lch, var(--cyan) 8%, var(--panel));
   padding: 0 5px;
-  color: color-mix(in lch, var(--cyan) 82%, var(--muted));
+  /* 掺的是 --ink 不是 --muted：这几个字号只有 9.5–11px，掺灰会掉到 3.4:1，
+     恰好把本功能唯一的新信息（谁在说话 / 哪一轮）变成最看不清的那几个字。
+     现在这几处都压在 WCAG AA 的 4.5:1 之上，由 test:reviewer-turn-dom 实测钉住。 */
+  color: color-mix(in lch, var(--cyan) 70%, var(--ink));
   font-size: 9.5px;
   font-weight: 650;
   line-height: 15px;
@@ -35,9 +38,9 @@
    成败比「它属于验证段」更要紧。 */
 .conversation-note.is-verify {
   border-left-color: color-mix(in lch, var(--cyan) 62%, var(--line2));
-  color: color-mix(in lch, var(--cyan) 48%, var(--faint));
+  color: color-mix(in lch, var(--cyan) 70%, var(--ink));
 }
 .conversation-note.is-verify.is-error {
   border-left-color: color-mix(in lch, var(--red) 45%, var(--line2));
-  color: color-mix(in lch, var(--red) 76%, var(--faint));
+  color: color-mix(in lch, var(--red) 76%, var(--ink));
 }
