@@ -3,6 +3,10 @@
 // （模块内 running Set 已删）；once 班次撞上验收锁不被消费；就地验证轮挂着时不许归档、
 // 归档任务不许答复；预约槽 CAS 消费不会抹掉用户中途保存的新预约；resumePrompt 的
 // 取走/回填 CAS；旧 merge 列升级后 accepted/merged 上的遗留预约被清干净。
+//
+// 第 12 轮（ciajLs3YZ08S r1）续：未收尾的验证轮 / 待答复的提问不许验收、也不许 /fire
+// 另起一轮；已验收任务不接受 agent 自报 stage；team 的 /run 同样受验收锁管；预约启动
+// 失败要把槽还回去（但不许盖掉用户中途存的新预约）；自动续轮只在槽空着时挂。
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -22,9 +26,12 @@ const { beginAccepting, endAccepting } = await import("../src/acceptance-lock.js
 const { mountTaskRunRoutes } = await import("../src/task-run-routes.js");
 const { runDuet, resumeDuet } = await import("../src/duet/index.js");
 const { tick } = await import("../src/schedules.js");
-const { readFreeReviewReservation, consumeFreeReviewReservation, startReservedFreeReview } =
-  await import("../src/free-review-reservations.js");
+const {
+  armFollowUpFreeReview, readFreeReviewReservation, consumeFreeReviewReservation, startReservedFreeReview,
+} = await import("../src/free-review-reservations.js");
 const { resumeOrRunTask } = await import("../src/task-resume.js");
+const { acceptTask } = await import("../src/task-accept.js");
+const { mountTaskStageRoutes } = await import("../src/task-stage.js");
 
 await ensureSchema();
 const stamp = new Date().toISOString();
@@ -122,7 +129,7 @@ assert.equal(snapshotA?.reviewerId, "rev-A");
 await db.update(freeWorkflowStates)
   .set({ selectedReviewerId: "rev-B", updatedAt: new Date(Date.now() + 1000).toISOString() })
   .where(eq(freeWorkflowStates.taskId, "t-slot"));
-assert.equal(await consumeFreeReviewReservation("t-slot", snapshotA), false, "过期快照不许消费");
+assert.equal(await consumeFreeReviewReservation("t-slot", snapshotA), null, "过期快照不许消费");
 const afterStale = (await db.select().from(freeWorkflowStates).where(eq(freeWorkflowStates.taskId, "t-slot"))).at(0)!;
 assert.equal(afterStale.reviewArmed, true, "用户新存的预约必须还在");
 assert.equal(afterStale.selectedReviewerId, "rev-B");
@@ -208,6 +215,128 @@ for (const [taskId, expectedStage] of [["old-merged", "accepted"], ["old-merging
   assert.equal(state.reviewArmed, false, `${taskId} 的遗留预约必须在 stage 补完后被清掉`);
   assert.equal(state.reviewNote, null);
 }
+
+// ── ⑧ 未收尾的验证轮 / 提问态不许验收 ─────────────────────────────────────────
+// 两者都不体现在 status 上（旁路结算把 status 放回原终态），只看 status/turn 锁的门禁
+// 会放行：验证轮回来会拿结论盖掉 accepted，答复会 resume 会话继续往一个已经合并、
+// 已经删掉的 worktree 里写（审查实测：验收后 done|accepted|verify_round=1|question 仍在，
+// 再 POST /answer 仍 200）。
+await createTasks([
+  { ...baseTask, id: "t-acc-verify", title: "accept during verify", status: "done" },
+  { ...baseTask, id: "t-acc-ask", title: "accept while asking", status: "paused" },
+]);
+await db.update(tasks).set({ verifyRound: 2, stage: "verifying" }).where(eq(tasks.id, "t-acc-verify"));
+await db.update(tasks).set({ question: "这两个方案选哪个" }).where(eq(tasks.id, "t-acc-ask"));
+const verifyAccept = await acceptTask("t-acc-verify");
+assert.equal(verifyAccept.accepted, false, "验证轮没出结论时不许验收");
+if (!verifyAccept.accepted) assert.equal(verifyAccept.reason, "verify_round_in_flight");
+const askAccept = await acceptTask("t-acc-ask");
+assert.equal(askAccept.accepted, false, "提问态不许验收");
+if (!askAccept.accepted) assert.equal(askAccept.reason, "question_pending");
+for (const id of ["t-acc-verify", "t-acc-ask"]) {
+  const row = (await db.select().from(tasks).where(eq(tasks.id, id))).at(0)!;
+  assert.notEqual(row.stage, "accepted", `${id} 被拒的验收不许留下 accepted`);
+}
+
+// ── ⑨ 已验收的任务不接受 agent 自报阶段 ───────────────────────────────────────
+// stage 是单值字段：一次 report_stage 就把 accepted 覆盖成 verified，验收事实无处可查。
+const stageApi = new Hono();
+mountTaskStageRoutes(stageApi);
+await createTasks([{ ...baseTask, id: "t-accepted", title: "already accepted", status: "done" }]);
+await db.update(tasks).set({ stage: "accepted" }).where(eq(tasks.id, "t-accepted"));
+const stageRes = await stageApi.request("/tasks/t-accepted/stage", {
+  method: "POST",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({ stage: "verified" }),
+});
+assert.equal(stageRes.status, 409, "已验收任务的 report_stage 必须 409");
+assert.equal(
+  (await db.select().from(tasks).where(eq(tasks.id, "t-accepted"))).at(0)!.stage,
+  "accepted",
+  "被拒的上报不许改动验收阶段",
+);
+
+// ── ⑩ /fire 不许顶着未收尾的验证轮 / 提问态另起一轮 ───────────────────────────
+// fresh 一轮下去，轮次号还挂在任务身上，新起的执行会被 sideTurn 判据当成这一轮验证的
+// 续跑，最后拿它的收尾当验证结论；提问态则是把 agent 停在半路等的那个问题一起丢掉。
+await createTasks([
+  { ...baseTask, id: "t-fire-verify", title: "fire during verify", status: "done" },
+  { ...baseTask, id: "t-fire-ask", title: "fire while asking", status: "paused" },
+]);
+await db.update(tasks).set({ verifyRound: 1 }).where(eq(tasks.id, "t-fire-verify"));
+await db.update(tasks).set({ question: "等你拍板" }).where(eq(tasks.id, "t-fire-ask"));
+for (const id of ["t-fire-verify", "t-fire-ask"]) {
+  const res = await post(`/tasks/${id}/fire`);
+  assert.equal(res.status, 409, `${id} 的 /fire 必须 409，实际 ${res.status}`);
+  assert.equal(isTurnClaimed(id), false, `${id} 被拒后不许留着占位`);
+}
+
+// ── ⑪ 团队 /run 同样受验收锁管 ────────────────────────────────────────────────
+// team 分支早先排在 claimTurn / isAcceptingTask **之前**直接 202，验收进行中照样
+// startTeam：用户看到「已启动」，调度台其实撞上验收锁（审查实测）。
+await createTasks([{ ...baseTask, id: "t-team-run", title: "team under acceptance", mode: "team", status: "idle" }]);
+assert.equal(beginAccepting("t-team-run"), true);
+const teamRun = await post("/tasks/t-team-run/run");
+assert.equal(teamRun.status, 409, "验收锁下 team 的 /run 必须 409");
+assert.equal(isTurnClaimed("t-team-run"), false, "team 退避后必须把占位放回去");
+endAccepting("t-team-run");
+
+// ── ⑫ 预约启动失败要把槽还回去 ────────────────────────────────────────────────
+// CAS 消费已经把槽清空了，启动又抛在半路 —— 不还回去这条预约就永久蒸发：既没跑也不在
+// 了，用户下次确认完成时什么都不会发生，界面上只剩一行失败时间线（审查实测）。
+await createTasks([{ ...baseTask, id: "t-arm-fail", title: "reservation rollback", workflowMode: "free" }]);
+await db.insert(freeWorkflowStates).values({
+  taskId: "t-arm-fail", selectedReviewerId: "rev-X", reviewArmed: true, reviewCheckMode: "logic",
+  reviewRetryLimit: 1, reviewNote: null, reviewRunId: null, updatedAt: stamp,
+});
+await startReservedFreeReview("t-arm-fail", await readFreeReviewReservation("t-arm-fail"), {
+  continueRun: async () => { throw new Error("不该走这条"); },
+  startNew: async () => { throw new Error("派审失败"); },
+});
+const rolledBack = (await db.select().from(freeWorkflowStates).where(eq(freeWorkflowStates.taskId, "t-arm-fail"))).at(0)!;
+assert.equal(rolledBack.reviewArmed, true, "启动失败必须把预约放回槽里");
+assert.equal(rolledBack.selectedReviewerId, "rev-X");
+// 但如果用户在启动失败之前就存了新预约，回滚不许把它盖掉（CAS 令牌对不上）。
+await startReservedFreeReview("t-arm-fail", await readFreeReviewReservation("t-arm-fail"), {
+  continueRun: async () => { throw new Error("不该走这条"); },
+  startNew: async () => {
+    await db.update(freeWorkflowStates)
+      .set({ reviewArmed: true, selectedReviewerId: "rev-Y", updatedAt: new Date(Date.now() + 5000).toISOString() })
+      .where(eq(freeWorkflowStates.taskId, "t-arm-fail"));
+    throw new Error("派审失败");
+  },
+});
+const afterUserEdit = (await db.select().from(freeWorkflowStates).where(eq(freeWorkflowStates.taskId, "t-arm-fail"))).at(0)!;
+assert.equal(afterUserEdit.selectedReviewerId, "rev-Y", "回滚不许盖掉用户中途存的新预约");
+assert.equal(afterUserEdit.reviewArmed, true);
+
+// ── ⑬ 自动续轮只在槽空着时挂 ──────────────────────────────────────────────────
+// 槽里已经 armed = 用户在这一轮审查期间自己预约了下一条，那是他的最新意思；无条件
+// onConflictDoUpdate 会把 reviewRunId 改写成本链的 run，用户预约的新审查链再也不会开。
+await createTasks([{ ...baseTask, id: "t-arm-follow", title: "follow-up reservation", workflowMode: "free" }]);
+const runA = { id: "run-A", reviewerId: "rev-A", checkMode: "logic", retryLimit: 1 };
+assert.equal(await armFollowUpFreeReview("t-arm-follow", runA, stamp), true, "空槽必须挂上续轮预约");
+await db.update(freeWorkflowStates)
+  .set({ reviewArmed: true, reviewRunId: null, selectedReviewerId: "rev-user", updatedAt: new Date(Date.now() + 1000).toISOString() })
+  .where(eq(freeWorkflowStates.taskId, "t-arm-follow"));
+assert.equal(
+  await armFollowUpFreeReview("t-arm-follow", { ...runA, id: "run-B" }, new Date(Date.now() + 2000).toISOString()),
+  false,
+  "槽里有用户预约时不许挂续轮",
+);
+const keptUser = (await db.select().from(freeWorkflowStates).where(eq(freeWorkflowStates.taskId, "t-arm-follow"))).at(0)!;
+assert.equal(keptUser.selectedReviewerId, "rev-user", "用户的预约必须原样留着");
+assert.equal(keptUser.reviewRunId, null, "用户预约的 runId 不许被续轮改写");
+await db.update(freeWorkflowStates).set({ reviewArmed: false }).where(eq(freeWorkflowStates.taskId, "t-arm-follow"));
+assert.equal(
+  await armFollowUpFreeReview("t-arm-follow", { ...runA, id: "run-C" }, new Date(Date.now() + 3000).toISOString()),
+  true,
+  "槽空出来之后照常挂",
+);
+assert.equal(
+  (await db.select().from(freeWorkflowStates).where(eq(freeWorkflowStates.taskId, "t-arm-follow"))).at(0)!.reviewRunId,
+  "run-C",
+);
 
 console.log("turn-ownership regressions ok");
 process.exit(0);

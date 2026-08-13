@@ -180,6 +180,18 @@ export function mountTaskStageRoutes(api: Hono): void {
       return c.json({ error: "自由工作流不使用起手式 stage；请按需派审或预览，完成后从验收页验收" }, 409);
     }
 
+    // 已验收/已合并的任务不再接受 agent 自报阶段。这是**上一版产物的终局**,而 stage 是
+    // 单值字段:一次 report_stage 就把 accepted 覆盖成 verified/implemented,验收事实无处
+    // 可查(审查实测:preset 任务验收后 agent 报一次 verified,列表就从「已验收」掉回去)。
+    // 正道是先让任务被真人唤醒 —— 那条路会走 `reopenAcceptedStage` 把牌子连同合并快照
+    // 整套摘下来存好,新一版干完再验收一次;摘牌之后 stage 为空,这道拦截自然放行。
+    if (task.stage === "accepted" || task.stage === "merged") {
+      return c.json(
+        { error: "任务已验收，验收结论不能被上报的阶段覆盖；如需继续改动，先在会话里发消息唤醒它", stage: task.stage },
+        409,
+      );
+    }
+
     const { updatedAt, timelineRecorded } = await setTaskStage(taskId, body.stage);
     return c.json({ reported: true, taskId, stage: body.stage, updatedAt, timelineRecorded });
   });

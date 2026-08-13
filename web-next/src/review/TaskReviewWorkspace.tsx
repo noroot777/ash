@@ -63,7 +63,21 @@ export function TaskReviewWorkspace({
   // 后端只在终态（done/failed/canceled）放行自由任务验收：paused/backlog 时按钮必须
   // 同步禁用并说明原因，不给「可点却必 409」的假按钮。
   const freeTerminal = ["done", "failed", "canceled"].includes(task.status);
-  const acceptanceBlock = task.workflowMode !== "free"
+  // 跟工作流无关的两道硬门禁（后端 acceptanceGuard 同款判据）：未收尾的就地验证轮、
+  // 待答复的提问。两者都不体现在 status 上——任务确实没有进程在跑，但这一版的生命
+  // 周期没结束：验证轮回来会拿结论盖掉 accepted，答复会 resume 会话继续往 worktree
+  // 里写，而那时分支已经合并、目录已经删了。
+  // 已验收/已合并的不再算：那一版早已定稿，此时挂着的验证轮或提问属于「被唤醒之后的
+  // 新一版」，拿它去禁上一版的验收视图只会让人以为验收没生效。
+  const settledStage = task.stage === "accepted" || task.stage === "merged";
+  const pendingTurnBlock = settledStage
+    ? null
+    : task.verifyRound != null
+      ? `第 ${task.verifyRound} 轮验证还没出结论`
+      : task.question
+        ? "有待答复的提问"
+        : null;
+  const acceptanceBlock = pendingTurnBlock ?? (task.workflowMode !== "free"
     ? null
     : activeFreeReview
       ? freeReviewBlockingLabel(activeFreeReview)
@@ -73,7 +87,7 @@ export function TaskReviewWorkspace({
           ? "审查状态未知"
           : !free.state
             ? "读取审查状态"
-            : null;
+            : null);
   // 非阻塞警示：验收是用户主权，但「最后一轮没过 / 链异常断了 / 通过后代码又变了 /
   // 新鲜度无从判断」必须摆在明面上。失败向着「不确定」开，不向「没问题」开。
   const freeView = task.workflowMode === "free" ? freeReviewView(free.state, task) : null;

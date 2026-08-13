@@ -58,13 +58,16 @@ export async function runTask(taskId: string, opts: { turnHeld?: boolean } = {})
   // 团队任务(§Team)走常驻调度台,不占单飞锁 —— 它的「一次运行」是整段常驻,
   // 不是一个回合。放在最前面,于是 /tasks/:id/run、retry、queue 推进都自动生效。
   const mode = (await db.select({ mode: tasks.mode }).from(tasks).where(eq(tasks.id, taskId))).at(0)?.mode;
-  if (mode === "team") {
-    if (opts.turnHeld) releaseTurn(taskId);
-    return startTeam(taskId);
-  }
+  // 验收互斥排在 team 分支**之前**:调度台同样会往工作目录里写(共享执行者跑在同一个
+  // cwd),验收正在合并/删 worktree 时把它拉起来,跟单飞撞上是同一类破坏。早先这道检查
+  // 排在 team 分支之后,team 完全绕过(审查实测:验收锁下仍真的 startTeam)。
   if (isAcceptingTask(taskId)) {
     if (opts.turnHeld) releaseTurn(taskId);
     return; // 验收(含尾段)进行中,不与合并/清理抢工作区
+  }
+  if (mode === "team") {
+    if (opts.turnHeld) releaseTurn(taskId);
+    return startTeam(taskId);
   }
   // turnHeld:入口已原子占位(见 continueTask 同名选项),接管而不是再抢。
   if (opts.turnHeld) reclaimTurn(taskId, "single");

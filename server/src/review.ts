@@ -431,6 +431,18 @@ async function finishVerifyRound(target: TaskRow, turnOk: boolean): Promise<void
     }
     return;
   }
+  // 任务在这一轮中途被验收:`concludeRound` 会写 stage(verified / verify_failed),把
+  // 验收结论覆盖掉 —— 一个比验收更早开始的回合,凭它的收尾把「已验收」抹了。验收门禁
+  // 现在挡着未收尾的验证轮(task-accept-guard.ts),这条是给存量数据和「验收与结算真正
+  // 同时发生」那一线窗口的兜底:轮次照收(上面的 CAS 已经把 verify_round 清了),只是
+  // 不再往下推线,并把这一轮的结论留在时间线上,免得用户看见一轮验证凭空消失。
+  if (frozen?.stage === "accepted" || frozen?.stage === "merged") {
+    await appendTaskTimeline(
+      target.id,
+      `第 ${round} 轮验证结束时任务已验收，结论不再覆盖验收阶段（这一轮${turnOk ? "正常收尾" : "未正常收尾"}）。`,
+    );
+    return;
+  }
   // 旁路回合的落位永远是任务原来的终态，说明不了验证跑成没跑成，所以这里用回合本身
   // 是否干净收尾来判：崩了/被手停 → 这一轮没结论，按 failed 收尾。
   await concludeRound(target, round, turnOk ? "done" : "failed", null, {

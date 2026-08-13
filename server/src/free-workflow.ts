@@ -21,7 +21,7 @@ import {
   scheduledMessages,
   tasks,
 } from "./db/schema.js";
-import { disarmFreeReviewReservation, readFreeReviewReservation, consumeFreeReviewReservation, startReservedFreeReview } from "./free-review-reservations.js";
+import { armFollowUpFreeReview, disarmFreeReviewReservation, readFreeReviewReservation, consumeFreeReviewReservation, startReservedFreeReview } from "./free-review-reservations.js";
 import { freeManualRepairPrompt, freeRepairPrompt, freeReviewPrompt } from "./free-review-prompts.js";
 export { freeManualRepairPrompt, freeRepairPrompt, freeReviewPrompt } from "./free-review-prompts.js";
 import { mountFreePreviewRoutes } from "./free-workflow-preview.js";
@@ -407,21 +407,19 @@ export async function handleFreeWorkflowSettlement(
   await db.update(freeReviewRuns).set({ status: "stopped", updatedAt: at, finishedAt: at })
     .where(eq(freeReviewRuns.id, run.id));
   if (outcome === "repair") {
-    await db.insert(freeWorkflowStates).values({
-      taskId, selectedReviewerId: run.reviewerId, reviewArmed: true,
-      reviewCheckMode: run.checkMode, reviewRetryLimit: run.retryLimit,
-      reviewNote: null, reviewRunId: run.id, updatedAt: at,
-    }).onConflictDoUpdate({
-      target: freeWorkflowStates.taskId,
-      set: { reviewArmed: true, reviewRunId: run.id, updatedAt: at },
-    });
-    await appendTaskTimeline(taskId, `自由工作流第 ${run.currentRound} 轮审查未通过，意见已发回会话；修复确认完成后自动复审。`);
+    // 只在槽空着时挂续轮预约（判据与理由见 armFollowUpFreeReview）：用户在这一轮审查
+    // 期间自己存的那条预约是更新的意思，不能被自动续轮顶掉。
+    const hooked = await armFollowUpFreeReview(taskId, run, at);
+    await appendTaskTimeline(taskId, hooked
+      ? `自由工作流第 ${run.currentRound} 轮审查未通过，意见已发回会话；修复确认完成后自动复审。`
+      : `自由工作流第 ${run.currentRound} 轮审查未通过，意见已发回会话；你已另外预约了一条审查，下次确认完成时按你的预约执行（本链不再自动续轮）。`);
     bus.publish({ type: "task.review", taskId });
     // 刚挂上的这条续轮预约的版本令牌：投递失败要撤销的是**它**。迟到的无条件清槽会把
-    // 用户在这期间保存的新预约一起删掉（审查实测同型交错）。
-    const armed = await readFreeReviewReservation(taskId);
+    // 用户在这期间保存的新预约一起删掉（审查实测同型交错）。没挂上时槽里那条是用户的，
+    // 一个字都不能动。
+    const armed = hooked ? await readFreeReviewReservation(taskId) : null;
     continueWhenIdle(taskId, freeRepairPrompt(taskId, run), { byBackend: true }, async (error) => {
-      const canceled = await consumeFreeReviewReservation(taskId, armed);
+      const canceled = armed ? await consumeFreeReviewReservation(taskId, armed) : null;
       await appendTaskTimeline(taskId, canceled
         ? `自由工作流审查意见投递失败：${error}；自动复审已取消，可手动按意见修复或再派审查。`
         : `自由工作流审查意见投递失败：${error}；请手动按意见修复或再派审查（预约已被更新，保留你最新的设置）。`);

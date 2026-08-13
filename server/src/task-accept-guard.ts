@@ -102,6 +102,34 @@ export async function acceptanceGuard(
       },
     };
   }
+  // 未收尾的就地验证轮 / 待答复的提问，同样算「这一版还没定稿」，不能验收：
+  // ① 验证轮的轮次号还挂在任务身上（`verifyRound` 非空 = 这一轮还没 concludeRound），
+  //    验收写下 accepted 之后那一轮回来结算，会拿验证结论把 accepted 盖成
+  //    verified/verify_failed（见 review.ts `finishVerifyRound`）——验收事实被一个
+  //    比它更早开始的回合覆盖掉。
+  // ② 提问态（`question` 非空）意味着 agent 停在半路等答复，答复会 resume 同一会话
+  //    继续往 worktree 里写。验收已经把分支合并、worktree 删掉了，于是「已验收」的
+  //    产物和 agent 手里正在写的那份对不上（审查实测：验收后库里 done|accepted|
+  //    verify_round=1|question 仍在，再 POST /answer 仍 200 并继续写）。
+  // 两者都是 running/queued/turn 锁看不见的状态——任务确实没有进程在跑，但它这一版
+  // 的生命周期没结束。先把它们收掉（答复 / 等验证轮出结论）再验收。
+  if (state.task.verifyRound !== null || state.task.question) {
+    const pendingQuestion = !!state.task.question;
+    return {
+      task: state.task,
+      failure: {
+        accepted: false,
+        httpStatus: 409,
+        taskId,
+        reason: pendingQuestion ? "question_pending" : "verify_round_in_flight",
+        error: pendingQuestion
+          ? "任务有待答复的提问，答复并等它跑完这一轮再验收"
+          : `第 ${state.task.verifyRound} 轮就地验证还没出结论，等它结束再验收`,
+        status: state.task.status,
+        phase,
+      },
+    };
+  }
   if (state.inFlightTasks.length === 0) return { task: state.task, failure: null };
 
   const sharedWorkers = state.inFlightTasks.filter((item) => item.role === "shared_worker");

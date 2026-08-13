@@ -7,7 +7,6 @@ import type {
   ScheduledMessage,
   ScheduledMessageMode,
   ScheduledMessageStatus,
-  Session,
   TaskStatus,
 } from "@harness/shared";
 import {
@@ -24,13 +23,14 @@ import { forceKillCuaService, lastCuaResidualStatus, refreshCuaResidualStatus } 
 import { db } from "./db/index.js";
 import { freeReviewResumeOptions } from "./free-workflow.js";
 import { isAcceptingTask } from "./acceptance-lock.js";
-import { queueItems, scheduledMessages, sessions, tasks } from "./db/schema.js";
+import { queueItems, scheduledMessages, tasks } from "./db/schema.js";
 import { resumeDuet, resumeAtGate, runDuet } from "./duet/index.js";
 import { resolveGate } from "./duet/gates.js";
 import { continueTask, runTask } from "./orchestrator.js";
 import { resumeOrRunTask } from "./task-resume.js";
 import { mountTaskArchiveRoutes } from "./task-archive-routes.js";
 import { mountTaskScheduleRoutes } from "./task-schedule-routes.js";
+import { mountTaskSessionRoutes } from "./task-session-routes.js";
 import { RUNS_DIR } from "./paths.js";
 import { enqueueMessage } from "./pending-messages.js";
 import { isOvertaken, queueBlockers, repackQueue, tailOrder } from "./queues.js";
@@ -42,30 +42,13 @@ import { dispatchWorkers, type DispatchSpec } from "./team/dispatch.js";
 import { haltTeam, leadTypeOf } from "./team/session.js";
 import { enrichTasks } from "./task-store.js";
 import { askingAgentFor, setTaskQuestion } from "./task-question.js";
-import { parseSessionTrace, readableRunPath, sessionTracePath, sessionTranscriptPath } from "./transcript.js";
-import { sessionContext, sessionUsage } from "./usage.js";
-import { resumeCommandFor } from "./executors/resume.js";
-import { sessionRunMeta } from "./session-run-meta.js";
+import { readableRunPath } from "./transcript.js";
 import { now } from "./util.js";
 
 export function mountTaskRunRoutes(api: Hono): void {
   mountTaskArchiveRoutes(api);
   mountTaskScheduleRoutes(api);
-  const toSession = (
-    r: typeof sessions.$inferSelect,
-    run: { model: string | null; reasoningEffort: string | null } = { model: null, reasoningEffort: null },
-  ): Session => ({
-    ...r,
-    role: r.role as Session["role"],
-    agentType: r.agentType as Session["agentType"],
-    transcriptPath: sessionTranscriptPath(r.taskId, r.id),
-    resumeCommand: r.cliSessionId
-      ? resumeCommandFor(r.agentType, r.target, r.cwd ?? r.worktreePath ?? ".", r.cliSessionId, r.resumeEnv, r.resumeArgs)
-      : r.resumeCommand,
-    ...run,
-    usage: sessionUsage(r),
-    context: sessionContext(r),
-  });
+  mountTaskSessionRoutes(api);
   const toScheduledMessage = (r: typeof scheduledMessages.$inferSelect): ScheduledMessage => ({
     ...r,
     attachments: JSON.parse(r.attachments),
@@ -73,41 +56,6 @@ export function mountTaskRunRoutes(api: Hono): void {
     mode: r.mode as ScheduledMessageMode,
     status: r.status as ScheduledMessageStatus,
   });
-
-// ── sessions (traceability credentials, §13) ───────────────────────────────
-api.get("/tasks/:id/sessions", async (c) => {
-  const taskId = c.req.param("id");
-  const rows = await db.select().from(sessions).where(eq(sessions.taskId, taskId));
-  const runMeta = await sessionRunMeta(taskId, rows);
-  return c.json(rows.map((row) => toSession(row, runMeta.get(row.id))));
-});
-
-// Persisted output of a session (for reloads; live output comes via SSE).
-api.get("/sessions/:id/output", async (c) => {
-  const sid = c.req.param("id");
-  const row = (await db.select().from(sessions).where(eq(sessions.id, sid))).at(0);
-  if (!row) return c.json({ error: "not found" }, 404);
-  try {
-    const text = await readFile(readableRunPath(sessionTranscriptPath(row.taskId, sid)), "utf8");
-    return c.text(text);
-  } catch {
-    return c.text("");
-  }
-});
-
-// Persisted non-body execution trace. It deliberately lives outside the
-// Markdown transcript so reasoning/tool events never become assistant prose.
-api.get("/sessions/:id/trace", async (c) => {
-  const sid = c.req.param("id");
-  const row = (await db.select().from(sessions).where(eq(sessions.id, sid))).at(0);
-  if (!row) return c.json({ error: "not found" }, 404);
-  try {
-    const raw = await readFile(readableRunPath(sessionTracePath(row.taskId, sid)), "utf8");
-    return c.json(parseSessionTrace(raw));
-  } catch {
-    return c.json([]);
-  }
-});
 
 // Persisted duet transcript (rebuilds the timeline on reload, §12). Old
 // transcripts predate the debate→duet rename — normalize their event types here
@@ -151,7 +99,20 @@ api.post("/tasks/:id/run", async (c) => {
     );
   }
   // Fire-and-forget; progress streams over /api/events.
-  if (r.mode === "team") { void resumeOrRunTask(taskId, { reason: "run" }); return c.json({ started: true }, 202); }
+  // team 也走「先占位、再镜像查验收锁」这一套（占位对常驻调度台本身没用途,runTask 的
+  // team 分支会立刻还回来）—— 它只为让 202 是真话:早先 team 分支排在这两道检查**之前**
+  // 直接 202,验收进行中照样 startTeam,用户看到「已启动」而调度台其实撞上验收锁(审查实测)。
+  if (r.mode === "team") {
+    if (!claimTurn(taskId, "team")) {
+      return c.json({ error: "任务回合正在进行，结束后再运行", status: r.status }, 409);
+    }
+    if (isAcceptingTask(taskId)) {
+      releaseTurn(taskId);
+      return c.json({ error: "任务正在验收（含发布尾段），结束后再运行", status: r.status }, 409);
+    }
+    void resumeOrRunTask(taskId, { reason: "run", turnHeld: true });
+    return c.json({ started: true }, 202);
+  }
   // **最后一个 await 之后**原子占位再启动：只读预检查后的任何 await 间隙里另一次启动
   // 都可能抢先——两个并发请求会双双 202 而只有一个真的开跑（审查实测）。占到 = 202 是
   // 真话；占不到 = 此刻确有回合在跑，409。duet 走同一把锁（它模块内那个 running Set
@@ -183,6 +144,15 @@ api.post("/tasks/:id/fire", async (c) => {
     return c.json({ error: "任务正在进行，等它结束再触发新一轮", status: r.status }, 409);
   if (r.status === "awaiting_review")
     return c.json({ error: "任务等待裁决中，先处理裁决再触发", status: r.status }, 409);
+  // 未收尾的就地验证轮 / 提问态:这两样都不是「在跑」,status 看不出来,可 fresh 一轮下去
+  // 就错了 —— 轮次号还挂在任务身上,新起的这一轮会被当成**这一轮验证的续跑**(sideTurn
+  // 判据只看 `verifyRound` 非空),于是一段全新的执行顶着验证轮号跑完,再拿它的收尾当成
+  // 验证结论;提问态则是把 agent 等着的那个问题连同它停在半路的会话一起丢掉(审查实测:
+  // 提问态 /fire 返回 202 并把新一轮当验证旁路)。
+  if (r.verifyRound !== null)
+    return c.json({ error: `第 ${r.verifyRound} 轮就地验证还没出结论，等它结束再触发新一轮`, status: r.status }, 409);
+  if (r.question)
+    return c.json({ error: "任务有待答复的提问，先答复再触发新一轮", status: r.status }, 409);
   // runTask 遇验收锁/单飞锁会静默 return——202 就成了谎报「已触发一轮全新运行」（审查实测）。
   if (isAcceptingTask(taskId))
     return c.json({ error: "任务正在验收（含发布尾段），结束后再触发", status: r.status }, 409);

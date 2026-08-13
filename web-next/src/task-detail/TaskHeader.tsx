@@ -28,6 +28,10 @@ function primaryAction(task: Task): { kind: PrimaryAction; label: string; danger
   if (task.archived) return { kind: "unarchive", label: "取消归档" };
   if (task.status === "running") return { kind: "stop", label: "停止", danger: true };
   if (task.stage === "accepted") return { kind: null, label: "已验收", disabled: true };
+  // 就地验证轮还没出结论：任务的 status 是它原来的终态（旁路回合不改 status），所以
+  // 光看 status 会给出一个「验收」主按钮，可后端门禁必然 409——这一版还没定稿，验收
+  // 写下的 accepted 会被这一轮的验证结论覆盖。给禁用态而不是假按钮。
+  if (task.verifyRound != null) return { kind: null, label: "验证中", disabled: true };
   if (task.parentId !== null && task.status === "done") return { kind: null, label: "已完成", disabled: true };
   if (task.status === "done" || task.stage === "awaiting_acceptance" || task.stage === "verified") {
     return { kind: "accept", label: "验收" };
