@@ -69,27 +69,34 @@ assert.deepEqual(
 assert.deepEqual(cliConfigOverrideEnv("claude", {}), {}, "没配就不该有任何环境变量");
 assert.deepEqual(
   cliConfigOverrideEnv("claude", { [spec.key]: 160000 }),
-  { [spec.env]: "160000", DISABLE_AUTO_COMPACT: "" },
-  "配了就该落成声明里的那个环境变量,并连自动压缩总开关一起摁住",
+  { [spec.env]: "160000", DISABLE_COMPACT: "", DISABLE_AUTO_COMPACT: "" },
+  "配了就该落成声明里的那个环境变量,并连自动压缩的两把总开关一起摁住",
 );
 
-// ── ①a 总开关:配了窗口就得把用户那两把 kill switch 一起摁住 ──────────────────
-// claude 的 JI():`DISABLE_AUTO_COMPACT` 非空 或 `autoCompactEnabled:false` 任意一个成立,
-// 窗口和百分比全都还在、自动压缩却一次都不会被叫起来(第 2 轮审查 finding 1)。
+// ── ①a 总开关:配了窗口就得把用户那**三**把 kill switch 一起摁住 ────────────────
+// claude 的 JI() 顺着查三条:`DISABLE_COMPACT` → `DISABLE_AUTO_COMPACT` → 设置项
+// `autoCompactEnabled`。任意一条成立,窗口和百分比全都还在、自动压缩却一次都不会被叫起来
+// (第 2 轮 finding 1 只摁住了后两条,第 3 轮 finding 1 补上第一条)。
+// 2.1.220 真机实测:`DISABLE_COMPACT=1` 时 slash_commands 里连手动 `/compact` 都消失,
+// 而只置空 `DISABLE_AUTO_COMPACT` 救不回来 —— 两个变量不是别名。
 const forced = cliConfigOverrideSettings("claude", { autoCompactWindow: 200_000, autoCompactPercent: 80 });
 assert.equal(forced?.autoCompactEnabled, true, "配了窗口就要在 --settings 里显式打开自动压缩");
-assert.equal(
-  (forced?.env as Record<string, string>).DISABLE_AUTO_COMPACT,
-  "",
-  "环境变量那把 kill switch 要被空串盖掉(各层 env 按 key 合并)",
-);
+for (const key of ["DISABLE_COMPACT", "DISABLE_AUTO_COMPACT"]) {
+  assert.equal(
+    (forced?.env as Record<string, string>)[key],
+    "",
+    `${key} 这把 kill switch 要被空串盖掉(各层 env 按 key 合并)`,
+  );
+}
 // 反向:没配窗口就一个字都不许碰用户的开关。
 assert.equal(cliConfigOverrideSettings("claude", {}), null, "没配覆盖项时不该凭空生成 settings");
-assert.equal(
-  cliConfigOverrideEnv("claude", { autoCompactPercent: 80 }).DISABLE_AUTO_COMPACT,
-  undefined,
-  "窗口没配(这一档整体不生效)时不该去摁用户的总开关",
-);
+for (const key of ["DISABLE_COMPACT", "DISABLE_AUTO_COMPACT"]) {
+  assert.equal(
+    cliConfigOverrideEnv("claude", { autoCompactPercent: 80 })[key],
+    undefined,
+    `窗口没配(这一档整体不生效)时不该去摁用户的 ${key}`,
+  );
+}
 assert.ok(
   cliConfigOverrideHints("claude", { autoCompactWindow: 200_000, autoCompactPercent: 80 })
     .some((line) => line.includes("强制打开自动压缩")),
@@ -240,10 +247,10 @@ await db.insert(agents).values([
 ]);
 
 let lastCommandLine = "";
-async function probeEnvFor(executorId: string): Promise<string> {
+async function probeEnvFor(executorId: string, cwd = sandbox): Promise<string> {
   rmSync(probe, { force: true });
   const executor = await resolveExecutorFor({ executorId, type: "claude" });
-  const handle = executor.run({ cwd: sandbox, prompt: "noop" });
+  const handle = executor.run({ cwd, prompt: "noop" });
   lastCommandLine = handle.commandLine;
   for (let i = 0; i < 100 && !existsSync(probe); i++) {
     await new Promise((resolve) => setTimeout(resolve, 50));
@@ -286,19 +293,25 @@ delete process.env[spec.env];
 // **必须是 `--settings` 而不是 env 前缀**:CLI 会把各层 settings 的 env 写回自己的进程
 // 环境,命令行上的 env 前缀反而输给用户的 settings.json(第 2 轮审查 finding 2)。
 const overridden = await resolveExecutorFor({ executorId: "claude-overridden", type: "claude" });
-const args = overridden.resumeArgsHint ?? "";
-assert.ok(args.includes("--settings"), `resumeArgsHint 要带上 --settings,实际 ${args || "(空)"}`);
+// 三件套一次算齐:落库的两列跟粘贴用的那条命令同源同一次算出来(第 2 轮 finding 6 /
+// 第 3 轮 finding 2 —— 先前 resumeArgs 是构造器里冻好的,不带本轮 cwd)。
+const overriddenFields = overridden.resumeFields(sandbox, "sid-1");
+const args = overriddenFields.resumeArgs ?? "";
+assert.ok(args.includes("--settings"), `resumeArgs 要带上 --settings,实际 ${args || "(空)"}`);
 assert.ok(args.includes(`${spec.env}`), `--settings 里要有覆盖项本身,实际 ${args}`);
-const overriddenResume = overridden.resumeCommand?.(sandbox, "sid-1") ?? "";
+const overriddenResume = overriddenFields.resumeCommand;
+assert.equal(overriddenResume, overridden.resumeCommand(sandbox, "sid-1"), "两个入口必须给出同一条命令");
+assert.ok(overriddenResume.includes(args), "落库的那截参数必须就是命令里的那截(读取端按它重算)");
 assert.ok(overriddenResume.includes("--settings"), "恢复命令本身要带上那截参数");
 assert.ok(
   overriddenResume.includes(`${spec.env}`) && overriddenResume.includes(String(spec.max)),
   `恢复命令里要能看到真正生效的那个值,实际 ${overriddenResume}`,
 );
 const plain = await resolveExecutorFor({ executorId: "claude-plain", type: "claude" });
-assert.equal(plain.resumeEnvHint, undefined, "没配覆盖项、也没挂供应商时,前缀该是空的");
-assert.equal(plain.resumeArgsHint, undefined, "没配覆盖项、也没开加速档时不该多出一截参数");
-assert.ok(!plain.resumeCommand?.(sandbox, "sid-1").includes("--settings"), "没配就不该凭空多出参数");
+const plainFields = plain.resumeFields(sandbox, "sid-1");
+assert.equal(plainFields.resumeEnv, null, "没配覆盖项、也没挂供应商时,前缀该是空的");
+assert.equal(plainFields.resumeArgs, null, "没配覆盖项、也没开加速档时不该多出一截参数");
+assert.ok(!plainFields.resumeCommand.includes("--settings"), "没配就不该凭空多出参数");
 
 // 会话详情读取时是**重算**这条命令的(resumeCommandFor),那截参数从库里那列接回来 ——
 // 这条链断了的话上面两条仍然过,但用户在页面上看到的还是不带 --settings 的命令。
@@ -373,8 +386,8 @@ const realHome = process.env.HOME;
 process.env.HOME = join(sandbox, "empty-home");
 mkdirSync(process.env.HOME, { recursive: true });
 process.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS = "10000";
-const localPct = (await resolveExecutorFor({ executorId: "claude-pct-local", type: "claude" })).resumeArgsHint ?? "";
-const remotePct = (await resolveExecutorFor({ executorId: "claude-pct-ssh", type: "claude" })).resumeArgsHint ?? "";
+const localPct = (await resolveExecutorFor({ executorId: "claude-pct-local", type: "claude" })).resumeFields(sandbox, "sid-1").resumeArgs ?? "";
+const remotePct = (await resolveExecutorFor({ executorId: "claude-pct-ssh", type: "claude" })).resumeFields(sandbox, "sid-1").resumeArgs ?? "";
 const pctOf = (hint: string) => hint.match(/CLAUDE_AUTOCOMPACT_PCT_OVERRIDE\\?"[:=]\\?"?([\d.]+)/)?.[1];
 assert.equal(
   pctOf(localPct),
@@ -393,6 +406,10 @@ delete process.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS;
 // 用户在 `~/.claude/settings.json` 里写了 10000,CLI 启动时会把它写回自己的进程环境 ——
 // harness 只看 process.env 就会按 32000 默认值算,填 80% 实际约 84% 才压(第 2 轮 finding 3)。
 const { claudeMaxOutputTokens } = await import("../src/executors/claude-settings.js");
+// 开发机 / CI 要是带着 CLAUDE_CONFIG_DIR,用户层就指到别处去了,下面每一条都会误红误绿。
+// 先摘掉,要测它的场景自己往上设(第 4 轮审查建议 3)。
+const realConfigDir = process.env.CLAUDE_CONFIG_DIR;
+delete process.env.CLAUDE_CONFIG_DIR;
 const fakeHome = join(sandbox, "home");
 const fakeProject = join(sandbox, "proj");
 mkdirSync(join(fakeHome, ".claude"), { recursive: true });
@@ -410,6 +427,53 @@ rmSync(join(fakeProject, ".claude"), { recursive: true, force: true });
 assert.equal(claudeMaxOutputTokens(fakeProject), 30000, "哪一层都没写过时才回落到进程环境");
 delete process.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS;
 assert.equal(claudeMaxOutputTokens(fakeProject), null, "全都没有 = 读不到(按默认预留估算)");
+
+// ── ⑦c 两条反直觉的实测事实,离线也得覆盖 ────────────────────────────────────
+// 这两条只在 test:claude-settings-live 里对过真 CLI,而那条本机没装 claude 就整条跳过 ——
+// 于是「没装 claude 的机器」等于完全没测(第 4 轮审查建议 3)。这里按同样的场景钉住
+// harness 这一侧的解析:live 那条负责「假设还对不对」,这条负责「代码有没有照假设做」。
+const layer = (dir: string, file: "settings.json" | "settings.local.json", value: number | null) => {
+  const path = join(dir, ".claude", file);
+  if (value === null) return rmSync(path, { force: true });
+  mkdirSync(join(dir, ".claude"), { recursive: true });
+  writeFileSync(path, JSON.stringify({ env: { CLAUDE_CODE_MAX_OUTPUT_TOKENS: String(value) } }));
+};
+
+// ① CLAUDE_CONFIG_DIR 整个取代 ~/.claude,不回落;settings.json 直接躺在它下面。
+const altConfig = join(sandbox, "alt-config");
+mkdirSync(altConfig, { recursive: true });
+writeFileSync(join(fakeHome, ".claude", "settings.json"), JSON.stringify({ env: { CLAUDE_CODE_MAX_OUTPUT_TOKENS: "12000" } }));
+assert.equal(claudeMaxOutputTokens(), 12000, "没设 CLAUDE_CONFIG_DIR 时读 ~/.claude");
+process.env.CLAUDE_CONFIG_DIR = altConfig;
+assert.equal(claudeMaxOutputTokens(), null, "指到空目录 = 读不到,不许退回 HOME 的那份(退回的话这里是 12000)");
+writeFileSync(join(altConfig, "settings.json"), JSON.stringify({ env: { CLAUDE_CODE_MAX_OUTPUT_TOKENS: "7000" } }));
+assert.equal(claudeMaxOutputTokens(), 7000, "settings.json 直接在 CLAUDE_CONFIG_DIR 下,不是再套一层 .claude");
+delete process.env.CLAUDE_CONFIG_DIR;
+
+// ② linked worktree 不是独立项目:local 档认主仓、shared 档认当前目录。
+// harness 默认就在 worktree 里干活,读漏主仓那份 settings.local.json = 分母整个错掉。
+const mainRepo = join(sandbox, "wt-main");
+const linkedWt = join(sandbox, "wt-linked"); // 跟主仓平级:目录树上互不包含,才测得出「按 git 关系找主仓」
+mkdirSync(join(mainRepo, ".git", "worktrees", "probe"), { recursive: true });
+mkdirSync(linkedWt, { recursive: true });
+writeFileSync(join(linkedWt, ".git"), `gitdir: ${join(mainRepo, ".git", "worktrees", "probe")}\n`);
+layer(mainRepo, "settings.local.json", 8000);
+layer(linkedWt, "settings.local.json", 5000);
+assert.equal(claudeMaxOutputTokens(linkedWt), 8000, "两边都有 local 档时主仓赢");
+layer(linkedWt, "settings.local.json", null);
+assert.equal(claudeMaxOutputTokens(linkedWt), 8000, "worktree 里看不见主仓那份 = 等于没配,不该漏读");
+layer(mainRepo, "settings.local.json", null);
+layer(linkedWt, "settings.local.json", 5000);
+assert.equal(claudeMaxOutputTokens(linkedWt), 5000, "主仓没写才轮到 worktree 自己那份");
+layer(linkedWt, "settings.local.json", null);
+layer(mainRepo, "settings.json", 8888);
+layer(linkedWt, "settings.json", 5000);
+assert.equal(claudeMaxOutputTokens(linkedWt), 5000, "shared 档反过来:就近赢");
+layer(mainRepo, "settings.local.json", 8000);
+assert.equal(claudeMaxOutputTokens(linkedWt), 8000, "local 档整体高于 shared 档");
+
+if (realConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+else process.env.CLAUDE_CONFIG_DIR = realConfigDir;
 if (realHome === undefined) delete process.env.HOME;
 else process.env.HOME = realHome;
 
@@ -489,6 +553,37 @@ assert.ok(cliSpeedOverrideConflict("claude", ["--settings {}"], "fast"), "合并
 assert.equal(cliSpeedOverrideConflict("claude", ["--settings", "{}"], "standard"), null, "没开加速档就没这回事");
 assert.equal(cliSpeedOverrideConflict("claude", ["--model", "opus"], "fast"), null, "无关参数不该报警");
 assert.equal(cliSpeedOverrideConflict("codex", ["--settings"], "fast"), null, "别的 CLI 不走这一档");
+
+// ── ⑧b 粘贴出去的那条命令 = harness 自己真跑的那条 ─────────────────────────────
+// 触发点是按「CLI 最终会看到的 max output tokens」换算的,而那个值要读**项目层**的
+// settings —— 于是同一个 profile 在不同 cwd 下算出来的百分比本就不同。先前恢复参数是
+// 建执行器时冻好的(没有 cwd),harness 按 pct=84.21 跑、复制出来的命令写着 pct=88.89,
+// 同一条会话两边压缩水位差了几千 token(第 3 轮审查 finding 2)。
+const pctProject = join(sandbox, "pct-proj");
+mkdirSync(join(pctProject, ".claude"), { recursive: true });
+writeFileSync(
+  join(pctProject, ".claude", "settings.json"),
+  JSON.stringify({ env: { CLAUDE_CODE_MAX_OUTPUT_TOKENS: "10000" } }),
+);
+await probeEnvFor("claude-pct-local", pctProject);
+const ranWith = settingsOf(lastCommandLine);
+const pctExecutor = await resolveExecutorFor({ executorId: "claude-pct-local", type: "claude" });
+const pasted = pctExecutor.resumeFields(pctProject, "sid-1");
+assert.deepEqual(
+  JSON.parse(pasted.resumeArgs!.match(/--settings '(.*)'$/)![1]!.replace(/'\\''/g, "'")),
+  ranWith,
+  "恢复参数必须跟本轮真跑的 --settings 一模一样(否则用户手跑的那次压缩水位不同)",
+);
+// 负向钉子:换个没写过项目层的目录,同一个 profile 算出来的百分比就该变 —— 相等说明
+// cwd 根本没参与换算,上面那条也就只是「两边一起错」。
+const pctElsewhere = pctExecutor.resumeFields(join(sandbox, "no-proj"), "sid-1");
+const pctIn = (args: string | null) => args?.match(/CLAUDE_AUTOCOMPACT_PCT_OVERRIDE\\?"?[:=]\\?"?([\d.]+)/)?.[1];
+assert.equal(pctIn(pasted.resumeArgs), String(ranWith.env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE));
+assert.notEqual(
+  pctIn(pasted.resumeArgs),
+  pctIn(pctElsewhere.resumeArgs),
+  "项目层写了预留量的目录 vs 没写的目录,换算结果本就该不同",
+);
 
 // ── ⑨ 库里的坏数据:读端一律按「没配」算,别把整页/整次执行拖下水 ───────────────
 const { readCliConfigOverrides } = await import("@harness/shared/cli-overrides");

@@ -529,9 +529,11 @@ try {
     executors = patchComposerExecutor(executors, role, { model: "gpt-5.6-sol", effort: "ultra" });
     executors = setComposerExecutorProfile(executors, role, "claude@ccb", follow);
     assert.deepEqual(executors[role], { profile: "claude@ccb", model: "", effort: "" });
-    // 选回同一个执行器并带上模型时,这份覆盖要原样留住(不能被当成"换人"清掉)。
-    executors = setComposerExecutorProfile(executors, role, "claude@ccb", { model: "opus", effort: "high" });
-    assert.deepEqual(executors[role], { profile: "claude@ccb", model: "opus", effort: "high" });
+    // 选回同一个执行器、只换模型:执行器与覆盖是同一次选择的结果,一起落地 —— 模型换成
+    // 新的,智能水平原样留着,不能被当成「换人」清掉。
+    executors = patchComposerExecutor(executors, role, { effort: "high" });
+    executors = setComposerExecutorProfile(executors, role, "claude@ccb", { model: "claude-opus-5", effort: "high" });
+    assert.deepEqual(executors[role], { profile: "claude@ccb", model: "claude-opus-5", effort: "high" });
   }
 
   const registeredProfiles = [

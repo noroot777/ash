@@ -25,9 +25,9 @@ import {
  * 的一个取值。
  *
  * **一次选择只回调一次**：选中一行同时决定「派给谁」和「模型/智能水平要不要清」，
- * 两者必须一起从 `onChange` 交出去。拆成两发会坏在消费方的常规写法上：从 props 上的
- * 旧值展开（`{...draft, model}`）时，同一 tick 里的后一发会把前一发刚选好的执行器
- * 盖回旧值。
+ * 两者必须一起从 `onChange` 交出去。拆成两发（曾经的 onChange + onOverrideChange）会
+ * 落在同一 tick 里，消费方从 props 旧值展开（`{...draft, model}`）时，后一发就把前一发
+ * 刚选好的执行器盖回去。
  */
 export function ExecutorPickerField({
   label,

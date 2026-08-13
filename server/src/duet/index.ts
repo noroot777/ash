@@ -39,14 +39,15 @@ async function setStatus(taskId: string, status: TaskStatus) {
  * 在本机跑的错命令,漏掉 cwd 会给出一条 `cd` 到不存在目录的命令(第 2 轮审查 finding 6)。
  * 单独拎出来是为了让「哪些列会随轮次变」有一个能被测试钉住的地方。
  */
-export function reusedSessionPatch(executor: AgentExecutor, cwd: string, commandLine: string) {
+export function reusedSessionPatch(executor: AgentExecutor, cwd: string, commandLine: string, cliSessionId: string) {
   return {
     commandLine,
     executor: executor.label,
     target: sessionTargetKey(executor.target),
     cwd,
-    resumeEnv: executor.resumeEnvHint ?? null,
-    resumeArgs: executor.resumeArgsHint ?? null,
+    // CLI 还没报出 session_id 时这三样都算不出来,那就一列都不碰 —— 写一条缺了 id 的
+    // 恢复命令,比留着上一轮那条更糟。
+    ...(cliSessionId ? executor.resumeFields(cwd, cliSessionId) : {}),
   };
 }
 
@@ -98,11 +99,10 @@ async function runTurn(args: {
       agentType: executor.type,
       // 开新行和复用旧行共用同一份「随执行器/工作目录走」的列,免得两条分支各写各的、
       // 时间一长只有一边跟得上(finding 6 就是这么来的)。
-      ...reusedSessionPatch(executor, cwd, handle.commandLine),
+      ...reusedSessionPatch(executor, cwd, handle.commandLine, cliId),
       worktreePath: args.branch ? cwd : null,
       branch: args.branch ?? null,
       cliSessionId: cliId,
-      resumeCommand: cliId ? executor.resumeCommand(cwd, cliId) : null,
       startedAt: turnStart,
       turnStartedAt: turnStart,
       activeMs: 0,
@@ -114,7 +114,7 @@ async function runTurn(args: {
     // end, so the gate wait is excluded from execution time.
     await db
       .update(sessions)
-      .set({ turnStartedAt: turnStart, endedAt: null, ...reusedSessionPatch(executor, cwd, handle.commandLine) })
+      .set({ turnStartedAt: turnStart, endedAt: null, ...reusedSessionPatch(executor, cwd, handle.commandLine, cliId) })
       .where(eq(sessions.id, rowId));
   }
 
@@ -141,7 +141,7 @@ async function runTurn(args: {
         cliId = event.cliSessionId;
         await db
           .update(sessions)
-          .set({ cliSessionId: cliId, resumeCommand: executor.resumeCommand(cwd, cliId) })
+          .set({ cliSessionId: cliId, ...executor.resumeFields(cwd, cliId) })
           .where(eq(sessions.id, rowId));
       } else if (event.kind === "text") {
         text += event.text;

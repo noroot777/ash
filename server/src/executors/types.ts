@@ -79,6 +79,30 @@ export interface ExecutorBuildOpts {
   configOverrides?: Record<string, number>;
 }
 
+/**
+ * 「复制到终端接着聊」那条命令的**全部依据**,一次给齐。三样东西同源同时算出来:
+ *   · resumeCommand —— 直接能粘的整条命令
+ *   · resumeEnv     —— 存进 `sessions.resume_env`:供应商 base_url + key 占位符
+ *   · resumeArgs    —— 存进 `sessions.resume_args`:跟在 CLI 后面的参数
+ *                      (claude 的 `--settings '{…}'`)。盖掉 CLI 配置文件的那几项走
+ *                      这里而**不是** env 前缀:CLI 会把各层 settings 的 env 写回自己的
+ *                      进程环境,前缀那份打不过用户的 settings.json(第 2 轮审查 finding 2)。
+ *
+ * 为什么是一个方法而不是三个字段:
+ *   ① 这三样**必须同时落库**。读取端 `resumeCommandFor` 是拿 resume_env + resume_args
+ *      重算命令的,少刷新一列就给出一条跑不起来的恢复命令 —— 第 2 轮 finding 6 就是
+ *      duet 复用 session 行时漏掉了其中两列。
+ *   ② `--settings` 的内容**跟会话 cwd 有关**(项目那几层 settings 文件参与换算),所以
+ *      cwd 是必填参数。先前它是构造器里算好的字段,executor 建出来时还不知道要在哪个
+ *      目录跑,于是 harness 自己带着项目层的值跑、复制出来的命令却少了那一截,两边压缩
+ *      水位差着几千 token(第 3 轮审查 finding 2)。签名里要 cwd,这个错就编译不过。
+ */
+export interface ResumeFields {
+  resumeCommand: string;
+  resumeEnv: string | null;
+  resumeArgs: string | null;
+}
+
 // Hand-rolled adapter (no Vercel AI SDK). Each CLI type gets
 // one implementation that knows its flags, stream-json format, and resume scheme.
 export interface AgentExecutor {
@@ -87,14 +111,6 @@ export interface AgentExecutor {
   readonly model?: string;
   readonly reasoningEffort?: string;
   readonly target: ExecTarget;
-  // 「复制到终端接着聊」那条命令要带的 env 前缀,存进 sessions.resumeEnv:供应商
-  // base_url + key(token 换成 <你的key> 占位符)—— 不带就走 CLI 自己的官方账号。
-  readonly resumeEnvHint?: string;
-  // 同一条命令里跟在 CLI 后面的参数(claude 的 `--settings '{…}'`),存进
-  // sessions.resumeArgs。盖掉 CLI 配置文件的那几项走这里而**不是** env 前缀:CLI 会把
-  // 各层 settings 的 env 写回自己的进程环境,前缀那份打不过用户的 settings.json,手跑
-  // 那次的压缩行为于是跟 harness 里不是一回事(第 2 轮审查 finding 2)。
-  readonly resumeArgsHint?: string;
   run(opts: RunOpts): RunHandle;
   // 重启后接管一个**还活着**的 agent 进程：把它的输出流接回本执行器自己的
   // parser。child 是 detached.ts 造的合成 ChildProcess（按 pid+offset 接回来的）。
@@ -110,4 +126,7 @@ export interface AgentExecutor {
   openResident?(opts: RunOpts): ResidentHandle;
   // Build the ready-to-paste resume command for a finished session (§13).
   resumeCommand(cwd: string, sessionId: string): string;
+  // 同一条命令 + 它落库要用的两列。写 sessions 行的地方一律整组 spread 这个返回值,
+  // 别再一列一列摘(见 ResumeFields)。
+  resumeFields(cwd: string, sessionId: string): ResumeFields;
 }
