@@ -78,9 +78,11 @@ export function ExecutionConfig({
   const modelValues = provider
     ? providerModels ?? []
     : cliCandidates ?? [...CLI_MODEL_PRESETS[selection.agentType]];
-  if (model && !modelValues.includes(model)) modelValues.unshift(model);
+  // 手填的模型补一条,但**必须新建数组**:cliCandidates / providerModels 是进程级
+  // 共享缓存里的那一份,就地 unshift 会把这个任务的自定义模型渗进后面每一个选择器。
+  const modelChoices = model && !modelValues.includes(model) ? [model, ...modelValues] : modelValues;
   const modelOptions = followOptions(
-    modelValues,
+    modelChoices,
     modelDetail(selection, profile),
   );
   // 档位跟着**当前模型**的能力规则收窄；模型没设或未登记时退回该 CLI 的并集。

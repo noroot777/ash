@@ -44,29 +44,30 @@ function publish(catalog: CliModelCatalog) {
 function fetchCatalog(type: AgentType, force: boolean): Promise<CliModelCatalog> {
   const inflight = requests.get(type);
   if (inflight && !force) return inflight;
-  const request = (force ? api.refreshCliModels(type) : api.cliModels(type))
+  // **只有当前那次请求有权 publish**。点刷新会另起一次并顶掉 requests,先前那次
+  // (服务端可能正卡在 10s 的 CLI 查询上)结算得更晚 —— 不拦住的话它会把刚刷出来的
+  // 实时清单盖回快照,用户看到的是「点了刷新,过两秒又变回去了」。
+  const settle = (catalog: CliModelCatalog) => {
+    if (requests.get(type) === request) publish(catalog);
+    return catalog;
+  };
+  const request: Promise<CliModelCatalog> = (force ? api.refreshCliModels(type) : api.cliModels(type))
     .then((list) => {
       // live 旧服务端没有这接口时会 200 回 SPA HTML;当成数组 .find 会炸,必须先认形状。
       if (!Array.isArray(list)) {
-        const catalog = presetFallback(type, {
+        return settle(presetFallback(type, {
           error: "模型清单接口不可用（当前连着的服务端还没有 /agents/models）",
-        });
-        publish(catalog);
-        return catalog;
+        }));
       }
-      const catalog = list.find((entry) => entry.type === type) ?? presetFallback(type);
-      publish(catalog);
-      return catalog;
+      return settle(list.find((entry) => entry.type === type) ?? presetFallback(type));
     })
     // 拿不到就退回快照:选择器不该因为一个后台接口抖动而变成空的。
     // 失败也 publish,界面才能用 error 说明「该点刷新 / 服务端还没合入」。
-    .catch((error) => {
-      const catalog = presetFallback(type, {
+    .catch((error) =>
+      settle(presetFallback(type, {
         error: error instanceof Error ? error.message : "模型清单请求失败",
-      });
-      publish(catalog);
-      return catalog;
-    })
+      })),
+    )
     .finally(() => {
       if (requests.get(type) === request) requests.delete(type);
     });

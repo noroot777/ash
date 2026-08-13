@@ -26,7 +26,7 @@ import { CLI_SPEC_BY_KEY } from "./catalog/index.js";
 
 const exec = promisify(execFile);
 
-/** 探测结果的保鲜期。到点后下一次读取会重探(读的人拿到的仍是旧值,不阻塞)。 */
+/** 探测结果的保鲜期。到点后下一次读取会**等**一次重探(不做后台预热那套复杂度)。 */
 const TTL_MS = 6 * 60 * 60 * 1000;
 
 /** 清单命令的默认超时。登录态查询要一次网络往返,给够;卡住不该拖垮页面。 */
@@ -145,9 +145,12 @@ export function modelCatalogFor(type: AgentType, force = false): Promise<CliMode
   const running = inflight.get(type);
   if (running && !force) return running;
 
-  const request = probe(type)
+  const request: Promise<CliModelCatalog> = probe(type)
     .then((catalog) => {
-      cache.set(type, { catalog, at: Date.now() });
+      // **只有当前那次探测有权写缓存**。force 会另起一次并顶掉 inflight,此时先前
+      // 那次(可能还在等 10s 超时)结算得更晚 —— 不拦住的话它会把用户刚刷出来的
+      // 实时清单覆盖回 preset,界面无缘无故退回快照,而且看着像「刷新按钮没用」。
+      if (inflight.get(type) === request) cache.set(type, { catalog, at: Date.now() });
       return catalog;
     })
     .catch(() => presetCatalog(type, { error: "探测过程异常" }))

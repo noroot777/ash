@@ -12,7 +12,7 @@
 //   ⑥ 本机装了 grok 时的**真实**探测(装了才断言,没装就跳过并说明——不拿本机环境当硬前提)。
 import assert from "node:assert/strict";
 import { AGENT_TYPES } from "@harness/shared";
-import { CLI_MODEL_PRESETS } from "@harness/shared/cli-presets";
+import { CLI_MODEL_PRESETS, CLI_MODEL_PROBE_TYPES } from "@harness/shared/cli-presets";
 import { CLI_SPEC_BY_KEY } from "../src/executors/catalog/index.js";
 import { parseGrokModels } from "../src/executors/catalog/grok.js";
 import { parsePiModels } from "../src/executors/catalog/pi.js";
@@ -86,6 +86,14 @@ assert.deepEqual(
 );
 
 // ── ③④ 每个类型都拿得到 catalog,不支持/没装的诚实降级 ────────────────────
+// 前端首帧画不画「刷新」按钮读的是 shared 里手抄的 CLI_MODEL_PROBE_TYPES(那时服务端
+// 还没回话),两份不一致的后果是「新加了能查清单的 CLI,按钮却要等接口回来才出现」——
+// 这正是 86a3f06 修过一次的症状,所以在这里钉死。
+assert.deepEqual(
+  [...CLI_MODEL_PROBE_TYPES].sort(),
+  AGENT_TYPES.filter((type) => !!CLI_SPEC_BY_KEY[type].models).sort(),
+  "CLI_MODEL_PROBE_TYPES 必须与填了 spec.models 的 type 完全一致(前端首帧据它画刷新按钮)",
+);
 resetModelCatalogCache();
 const all = await modelCatalogs();
 assert.equal(all.length, AGENT_TYPES.length, "每个 AgentType 都要有一条 catalog");
@@ -124,7 +132,24 @@ for (const catalog of all) {
   assert.equal(a, b, "并发请求应合并成一次探测");
   assert.equal(b, c, "并发请求应合并成一次探测");
   const forced = await modelCatalogFor("grok", true);
-  assert.notEqual(forced, first, "force 必须绕过缓存重新探测(这就是「刷新」按钮)");
+  assert.notEqual(forced, a, "force 必须绕过缓存重新探测(这就是「刷新」按钮)");
+  // 光看「换了个对象」证不了什么(每次探测本来就新建对象);要紧的是**结果写回了缓存**,
+  // 否则刷新只对点它的那一次可见,下一个打开选择器的人又拿到旧的。
+  assert.equal(await modelCatalogFor("grok"), forced, "force 的结果必须成为新的缓存值");
+}
+
+// ── ⑤b 陈旧探测不许覆盖新结果 ────────────────────────────────────────────
+// 用户点刷新时,先前那次探测可能还卡在 10s 超时上;它结算得更晚,若照写缓存就会把
+// 刚刷出来的实时清单盖回快照 —— 界面无缘无故退回旧值,看着像「刷新按钮没用」。
+// 这里不去制造真实竞态(时序不可控),而是直接钉住那条规则:**只有当前那次探测有权
+// 写缓存**。resetModelCatalogCache() 清掉 inflight,等价于「这次已经不是当前那次了」。
+{
+  resetModelCatalogCache();
+  const stale = modelCatalogFor("grok");
+  resetModelCatalogCache();
+  const staleResult = await stale;
+  const next = await modelCatalogFor("grok");
+  assert.notEqual(next, staleResult, "已被顶掉的探测不该把结果写进缓存");
 }
 
 // ── ⑥ 本机真实探测(装了才断言) ────────────────────────────────────────
