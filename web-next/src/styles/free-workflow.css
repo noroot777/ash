@@ -66,6 +66,19 @@
 .free-review-dialog > footer button:disabled { opacity:.5; }
 .free-review-loading { display:flex; min-height:260px; align-items:center; justify-content:center; gap:7px; color:var(--faint); }
 .reviewer-profile-fields { display:grid; gap:10px; }
+.free-review-run-override { display:grid; gap:9px; margin-top:10px; border-top:1px solid var(--line); padding-top:10px; }
+.free-review-run-override > label > span { color:var(--faint); font-size:9px; font-weight:700; letter-spacing:.05em; text-transform:uppercase; }
+.free-review-save-mode { display:grid; gap:5px; }
+.free-review-save-mode > button { display:grid; gap:1px; border:1px solid var(--line); border-radius:8px; background:var(--canvas); padding:7px 9px; text-align:left; }
+.free-review-save-mode > button[aria-checked="true"] { border-color:color-mix(in lch,var(--accent) 50%,var(--line)); background:color-mix(in lch,var(--accent) 5%,var(--panel)); }
+.free-review-save-mode > button b { overflow:hidden; color:var(--ink); font-size:10.5px; text-overflow:ellipsis; white-space:nowrap; }
+.free-review-save-mode > button small { color:var(--faint); font-size:9px; }
+.free-review-save-mode > button:disabled { opacity:.5; }
+.free-review-new-name { display:grid; gap:5px; margin-top:2px; }
+.free-review-new-name > span { color:var(--faint); font-size:9px; font-weight:700; letter-spacing:.05em; text-transform:uppercase; }
+.free-review-new-name input { width:100%; height:32px; border:1px solid var(--line2); border-radius:7px; background:var(--panel); padding:0 8px; outline:0; }
+.free-review-new-name input:focus { border-color:var(--accent); box-shadow:0 0 0 2px color-mix(in lch,var(--accent) 12%,transparent); }
+.free-review-save-hint { color:var(--faint); font-size:9px; line-height:1.45; }
 
 .free-workflow-inspector { min-height:100%; background:var(--canvas); }
 .free-workflow-inspector.is-loading { display:flex; min-height:180px; align-items:center; justify-content:center; gap:7px; color:var(--faint); font-size:10px; }
