@@ -27,6 +27,7 @@
     "test:task-tree-preview": "node scripts/test-task-tree-preview.mjs",
     "test:spread-filter": "node --experimental-strip-types scripts/test-spread-filter.mjs",
     "test:notes-filter": "node --experimental-strip-types scripts/test-notes-filter.mjs",
+    "test:slash-match": "node --experimental-strip-types scripts/test-slash-match.mjs",
     "test:workspace-history": "node --experimental-strip-types scripts/test-workspace-history.mjs",
     "test:reply-drafts": "node scripts/test-reply-drafts.mjs",
     "test:workflow-rail": "node --experimental-strip-types scripts/test-workflow-rail.mjs",
