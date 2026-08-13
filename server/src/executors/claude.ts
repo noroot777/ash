@@ -276,6 +276,28 @@ export async function* parseClaudeStream(
           /* 校准是锦上添花,坏了就还用扫描结果 */
         }
       }
+      // 压缩(手动 `/compact` 与自动压缩)的过程和成败**只在这条 status 事件里**。
+      // 不接住它的代价是压缩失败**看上去和成功一模一样**:收尾的 `result` 照样是
+      // `subtype:"success"` + `is_error:false` + 退出码 0,任务状态不动,时间线上只多
+      // 出 CLI 合成的一句英文 —— 而压缩失败恰恰是最要紧的一种失败:上下文原地不动,
+      // 下一句话照样撞「Prompt is too long」(2026-08-13 实测:中转网关连着三次 503,
+      // 手动 `/compact` 和自动压缩都没压成,用户只能得出「这个系统的 /compact 坏了」)。
+      // 所以这里把结论抬成显式事件:失败 → error(执行诊断块 + trace + SSE),开始/成功
+      // → 一行正文。三者都只管展示,不碰任务状态(原生命令本来就走旁路回合)。
+      if (ev.subtype === "status") {
+        if (typeof ev.compact_result === "string") {
+          if (ev.compact_result === "failed") {
+            const detail = typeof ev.compact_error === "string" && ev.compact_error.trim()
+              ? ev.compact_error.trim()
+              : "CLI 没有给出原因";
+            push({ kind: "error", message: `上下文压缩失败，会话大小原地不动：${detail}` });
+          } else {
+            push({ kind: "text", text: "\n> 上下文已压缩。\n\n" });
+          }
+        } else if (ev.status === "compacting") {
+          push({ kind: "text", text: "\n> 正在压缩上下文…\n\n" });
+        }
+      }
       push({ kind: "session", cliSessionId: ev.session_id });
     } else if (ev.type === "assistant" && ev.message?.content) {
       flushText(); // settle this message's text-delta tail before its tools
