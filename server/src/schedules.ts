@@ -1,5 +1,7 @@
 import { eq } from "drizzle-orm";
 import { db } from "./db/index.js";
+import { isAcceptingTask } from "./acceptance-lock.js";
+import { claimTurn, releaseTurn } from "./runs.js";
 import { schedules, tasks, groups } from "./db/schema.js";
 import { runTask } from "./orchestrator.js";
 import { runDuet } from "./duet/index.js";
@@ -56,21 +58,36 @@ const sameMinute = (a: string, b: Date) => {
 // the manual run/retry/group path's job, and "continue at a future time" is what
 // scheduledMessages (定时发消息 → continueTask) is for. (See the bug where a daily
 // cron kept appending 〔系统〕继续 into the same session instead of running anew.)
-async function fire(taskId: string) {
+// 返回**这一班有没有真的开跑**：跳过(任务在跑/归档/组暂停/验收中)一律 false——
+// 调用方只在 true 时才消费班次(写 lastRunAt、once 禁用)。先记账后开火的老顺序会把
+// 被跳过的班永久记作已跑:once 被消费、cron 同一分钟 sameMinute 拦住不再试(审查实测:
+// 验收锁内 fire,班次静默丢失)。
+async function fire(taskId: string): Promise<boolean> {
   const t = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
-  if (!t || t.status === "running" || t.status === "queued") return;
+  if (!t || t.status === "running" || t.status === "queued") return false;
   // Archived = frozen: a schedule never fires an archived task. We skip here
   // rather than disabling the schedule, so unarchiving restores it automatically.
-  if (t.archived) return;
+  if (t.archived) return false;
   // Respect a paused group: a pause means "halt this group", so the scheduler
   // must not sneak a group member past it. The task fires on the next due tick
   // once the group is resumed.
   if (t.groupId) {
     const g = (await db.select().from(groups).where(eq(groups.id, t.groupId))).at(0);
-    if (g?.paused) return;
+    if (g?.paused) return false;
   }
-  if (t.mode === "duet") void runDuet(taskId);
-  else void runTask(taskId); // 全新一轮(新 session),不接续上次会话
+  // 原子占位后启动:只读预检查在任何 await 之后都可能过期,占到才算这一班真的开跑
+  // (审查实测:验收/turn 窗口里 once 被永久消费)。占位后再查验收锁——与验收侧
+  // beginAccepting→isTurnClaimed 互为镜像,任意交错至少一方退避;退避不消费班次,
+  // 下个 tick 再试。duet 走同一把锁:它原来在占位之前就 fire-and-forget 并返回
+  // true,于是验收锁里的 duet 一步没跑、once 班次却被永久消费(审查实测)。
+  if (!claimTurn(taskId, t.mode === "duet" ? "duet" : "single")) return false;
+  if (isAcceptingTask(taskId)) {
+    releaseTurn(taskId);
+    return false;
+  }
+  if (t.mode === "duet") { void runDuet(taskId, { turnHeld: true }); return true; }
+  void runTask(taskId, { turnHeld: true }); // 全新一轮(新 session),不接续上次会话
+  return true;
 }
 
 export async function tick() {
@@ -78,16 +95,18 @@ export async function tick() {
   const rows = await db.select().from(schedules).where(eq(schedules.enabled, true));
   for (const s of rows) {
     try {
+      // 先问 fire 能不能跑、真跑了才记账:fire 决定与写 lastRunAt 之间没有 await 间隙,
+      // 同一分钟 double-fire 的旧防线不受影响;被跳过的班次不消费,下个 tick 重试。
       if (s.kind === "once") {
-        if (s.at && new Date(s.at) <= now && !s.lastRunAt) {
+        if (s.at && new Date(s.at) <= now && !s.lastRunAt && await fire(s.taskId)) {
           await db.update(schedules).set({ lastRunAt: now.toISOString(), enabled: false }).where(eq(schedules.id, s.id));
-          await fire(s.taskId);
         }
       } else if (s.kind === "cron" && s.cron && cronMatches(s.cron, now)) {
         // guard against double-fire within the same minute (tick runs more often)
         if (s.lastRunAt && sameMinute(s.lastRunAt, now)) continue;
-        await db.update(schedules).set({ lastRunAt: now.toISOString() }).where(eq(schedules.id, s.id));
-        await fire(s.taskId);
+        if (await fire(s.taskId)) {
+          await db.update(schedules).set({ lastRunAt: now.toISOString() }).where(eq(schedules.id, s.id));
+        }
       }
     } catch {
       /* keep ticking */

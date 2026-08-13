@@ -46,28 +46,102 @@ export async function clearTaskStage(taskId: string, note: string): Promise<void
 // 的外部协议入口(调度台没有实现/验证语义),挡的不是这条内部规则;广播必须保留,
 // 否则前端分组要等下次全量拉取才动。
 //
-// **返回摘掉的是哪块牌子**（没摘则 null）：摘牌发生在回合最前面，那时还不知道这一轮
-// 会不会真产出改动。调用方要能在结算时发现「白摘了」并原样挂回去（见 turn-baseline.ts
-// 与下面的 restoreTaskStage）。旧调用方只判真假的话语义不变 —— 摘到了就是真值。
-export async function reopenAcceptedStage(taskId: string): Promise<"accepted" | "merged" | null> {
-  const t = (await db.select({ stage: tasks.stage }).from(tasks).where(eq(tasks.id, taskId))).at(0);
+// **返回摘掉的完整快照**（没摘则 null）：摘牌发生在回合最前面，那时还不知道这一轮
+// 会不会真产出改动。stage 之外，合并快照三列与尾段进度也一起摘——它们同属上一验收
+// 生命周期。调用方要能在结算时发现「白摘了」并**整套**原样挂回（见 turn-baseline.ts
+// 与下面的 restoreTaskStage）；只挂回 stage 会留下「界面显示已验收、结构化快照却空了」
+// 的组合，下一次验收会按当时 checkout 重新解析目标（审查实测：同一任务被合进两个分支）。
+export type AcceptedSnapshot = {
+  target: string | null;
+  base: string | null;
+  merge: string | null;
+  tailPending: boolean;
+  /** 尾段逐站进度（step id 清单）；缺省 = 旧版基线，按空清单恢复。 */
+  tailDone?: string[];
+};
+export type ReopenedAcceptance = { stage: "accepted" | "merged"; snapshot: AcceptedSnapshot };
+
+/**
+ * 只读探一眼：这个任务身上挂着的验收牌子与合并快照（没有则 null），**不做任何改写**。
+ *
+ * 与 `commitReopenAcceptedStage` 配对成 write-ahead 顺序：调用方先把这份快照持久化
+ * （turn-baseline），**然后**才执行清空——两步之间任何一处崩溃，磁盘上都有完整快照可供
+ * 结算挂回；反过来先清后存，崩在中间快照就永久丢了（审查实测：尾段进度被抹掉，
+ * 崩溃补跑凭据不可恢复）。
+ */
+export async function peekAcceptedStage(taskId: string): Promise<ReopenedAcceptance | null> {
+  const t = (await db.select({
+    stage: tasks.stage,
+    target: tasks.acceptedTargetBranch,
+    base: tasks.acceptedBaseCommit,
+    merge: tasks.acceptedMergeCommit,
+    tailPending: tasks.acceptedTailPending,
+    tailDone: tasks.acceptedTailDone,
+  }).from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!t || (t.stage !== "accepted" && t.stage !== "merged")) return null;
+  let tailDone: string[] = [];
+  try { tailDone = JSON.parse(t.tailDone ?? "[]") as string[]; } catch { /* 按空清单 */ }
+  return {
+    stage: t.stage,
+    snapshot: { target: t.target, base: t.base, merge: t.merge, tailPending: t.tailPending, tailDone },
+  };
+}
+
+/** write-ahead 的第二步：真正执行摘牌（清 stage + 合并快照 + 尾段进度）并广播。 */
+export async function commitReopenAcceptedStage(taskId: string): Promise<void> {
+  await clearAcceptedSnapshot(taskId);
   await clearTaskStage(taskId, "任务又被唤醒，验收阶段清回进行中（完成后重新验收即可再次翻篇）");
-  return t.stage;
 }
 
 /**
- * 把 `reopenAcceptedStage` 摘掉的牌子原样挂回去，与 clearTaskStage 对称（同样自带 note
- * 和广播）。用在「这一轮结算下来工作目录一个字节没变」——用户只是问了句话，摘牌是白摘的。
+ * 摘牌里「合并快照」那一半：只清三列 + 尾段进度，不动 stage、不写时间线。
+ * 给 continueTask 的 write-ahead 路径用——stage 那一半由 turn-baseline 的清账摘下并广播，
+ * 这里只收掉同生命周期的快照。留着的话，「本周期已锁定目标」的判定（task-accept 的
+ * pre-merge 持久化）会把新验收错误冻结到旧目标，崩溃重试还会复用旧区间。
+ */
+export async function clearAcceptedSnapshot(taskId: string): Promise<void> {
+  // 上一周期的合并事实在 git 历史与时间线里都有。
+  await db.update(tasks).set({
+    acceptedTargetBranch: null, acceptedBaseCommit: null, acceptedMergeCommit: null,
+    acceptedTailPending: false, acceptedTailDone: "[]", updatedAt: now(),
+  }).where(eq(tasks.id, taskId));
+}
+
+/** peek + commit 的组合（没有 write-ahead 需求的调用方用，如团队派活）。 */
+export async function reopenAcceptedStage(taskId: string): Promise<ReopenedAcceptance | null> {
+  const peeked = await peekAcceptedStage(taskId);
+  if (peeked) await commitReopenAcceptedStage(taskId);
+  return peeked;
+}
+
+/**
+ * 把 `reopenAcceptedStage` 摘掉的牌子**连同合并快照**原样挂回去，与 clearTaskStage 对称
+ * （同样自带 note 和广播）。用在「这一轮结算下来工作目录一个字节没变」——用户只是问了
+ * 句话，摘牌是白摘的。
  *
  * **只在牌子位还空着时放回**：这一轮 agent 自己上报过新阶段（report_stage）的话，那是更
  * 新的结论，不能被一张旧牌子盖掉。
  */
-export async function restoreTaskStage(taskId: string, stage: TaskStage, note: string): Promise<boolean> {
+export async function restoreTaskStage(
+  taskId: string,
+  stage: TaskStage,
+  note: string,
+  snapshot?: AcceptedSnapshot | null,
+): Promise<boolean> {
   const t = (await db.select({ stage: tasks.stage }).from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!t || t.stage) return false;
   const updatedAt = now();
-  await db.update(tasks).set({ stage, updatedAt }).where(eq(tasks.id, taskId));
+  await db.update(tasks).set({
+    stage,
+    ...(snapshot ? {
+      acceptedTargetBranch: snapshot.target,
+      acceptedBaseCommit: snapshot.base,
+      acceptedMergeCommit: snapshot.merge,
+      acceptedTailPending: snapshot.tailPending,
+      acceptedTailDone: JSON.stringify(snapshot.tailDone ?? []),
+    } : {}),
+    updatedAt,
+  }).where(eq(tasks.id, taskId));
   bus.publish({ type: "task.stage", taskId, stage, updatedAt });
   await appendTaskTimeline(taskId, note);
   return true;
@@ -103,7 +177,19 @@ export function mountTaskStageRoutes(api: Hono): void {
       return c.json({ error: error instanceof Error ? error.message : String(error) }, 409);
     }
     if (task.workflowMode === "free") {
-      return c.json({ error: "自由工作流不使用起手式 stage；请由页面快捷按钮按需派审、预览或合并" }, 409);
+      return c.json({ error: "自由工作流不使用起手式 stage；请按需派审或预览，完成后从验收页验收" }, 409);
+    }
+
+    // 已验收/已合并的任务不再接受 agent 自报阶段。这是**上一版产物的终局**,而 stage 是
+    // 单值字段:一次 report_stage 就把 accepted 覆盖成 verified/implemented,验收事实无处
+    // 可查(审查实测:preset 任务验收后 agent 报一次 verified,列表就从「已验收」掉回去)。
+    // 正道是先让任务被真人唤醒 —— 那条路会走 `reopenAcceptedStage` 把牌子连同合并快照
+    // 整套摘下来存好,新一版干完再验收一次;摘牌之后 stage 为空,这道拦截自然放行。
+    if (task.stage === "accepted" || task.stage === "merged") {
+      return c.json(
+        { error: "任务已验收，验收结论不能被上报的阶段覆盖；如需继续改动，先在会话里发消息唤醒它", stage: task.stage },
+        409,
+      );
     }
 
     const { updatedAt, timelineRecorded } = await setTaskStage(taskId, body.stage);

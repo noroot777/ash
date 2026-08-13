@@ -3,9 +3,12 @@ import type { Task } from "@harness/shared";
 import {
   GitBranch,
   SpinnerGap,
+  WarningCircle,
   X,
 } from "@phosphor-icons/react";
 import { api, type TaskCommit, type TaskDiffResult } from "../lib/api.ts";
+import { freeReviewBlockingLabel, freeReviewView } from "../free-workflow/freeReviewCopy.ts";
+import { useFreeWorkflowState } from "../free-workflow/useFreeWorkflowState.ts";
 import { AcceptanceControls } from "../team/TeamReviewWorkspace.tsx";
 import { ChangeMetaBar } from "./ChangeMetaBar.tsx";
 import { ReviewDiffViewer } from "./ReviewDiffViewer.tsx";
@@ -52,6 +55,55 @@ export function TaskReviewWorkspace({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const sharedParent = sharedTeamParent(task, allTasks);
+  const free = useFreeWorkflowState(task.id, task.workflowMode === "free");
+  const activeFreeReview = free.state?.reviews.find((run) => freeReviewBlockingLabel(run) !== null);
+  // 失败关闭：拿不到自由工作流状态（加载中、出错、或任何原因的 state 为空）就不开放
+  // 不可逆的验收按钮——「state 空 + loading 已结束」的缝隙也一样（StrictMode 重挂载
+  // 曾在这个缝隙里放出过约 2.5 秒的假「验收通过」）。
+  // 后端只在终态（done/failed/canceled）放行自由任务验收：paused/backlog 时按钮必须
+  // 同步禁用并说明原因，不给「可点却必 409」的假按钮。
+  const freeTerminal = ["done", "failed", "canceled"].includes(task.status);
+  // 跟工作流无关的两道硬门禁（后端 acceptanceGuard 同款判据）：未收尾的就地验证轮、
+  // 待答复的提问。两者都不体现在 status 上——任务确实没有进程在跑，但这一版的生命
+  // 周期没结束：验证轮回来会拿结论盖掉 accepted，答复会 resume 会话继续往 worktree
+  // 里写，而那时分支已经合并、目录已经删了。
+  // 已验收/已合并的不再算：那一版早已定稿，此时挂着的验证轮或提问属于「被唤醒之后的
+  // 新一版」，拿它去禁上一版的验收视图只会让人以为验收没生效。
+  const settledStage = task.stage === "accepted" || task.stage === "merged";
+  const pendingTurnBlock = settledStage
+    ? null
+    : task.verifyRound != null
+      ? `第 ${task.verifyRound} 轮验证还没出结论`
+      : task.question
+        ? "有待答复的提问"
+        : null;
+  const acceptanceBlock = pendingTurnBlock ?? (task.workflowMode !== "free"
+    ? null
+    : activeFreeReview
+      ? freeReviewBlockingLabel(activeFreeReview)
+      : task.stage !== "accepted" && task.stage !== "merged" && !freeTerminal
+        ? "任务尚未结束"
+        : free.error
+          ? "审查状态未知"
+          : !free.state
+            ? "读取审查状态"
+            : null);
+  // 非阻塞警示：验收是用户主权，但「最后一轮没过 / 链异常断了 / 通过后代码又变了 /
+  // 新鲜度无从判断」必须摆在明面上。失败向着「不确定」开，不向「没问题」开。
+  const freeView = task.workflowMode === "free" ? freeReviewView(free.state, task) : null;
+  const acceptanceWarning = !freeView || task.stage === "accepted"
+    ? null
+    : freeView.stoppedRun && (freeView.stale || freeView.freshness === "unknown")
+      ? "上一份未通过报告针对的是旧版代码，已过期；当前版本没有有效审查结论——建议再派一轮审查后验收"
+      : freeView.stoppedRun
+        ? `最后一轮审查未通过（第 ${freeView.stoppedRun.currentRound} 轮）——验收合并即表示你接受该风险`
+        : freeView.failedRun
+          ? "最近一条审查链异常停止，没有产出有效结论——建议再派一轮审查后验收"
+          : freeView.stale
+            ? "审查通过后代码又有变化（新提交或未提交改动），结论可能已过期——可先「审查新改动」再验收"
+            : freeView.freshness === "unknown"
+              ? "无法确认审查结论对应当前代码（缺少审查基准或工作区不可读）——请自行核对 diff 后再验收"
+              : null;
 
   useEffect(() => {
     let alive = true;
@@ -81,13 +133,16 @@ export function TaskReviewWorkspace({
         <div><b>{sharedParent ? "共享执行者审查" : "改动与提交"}</b><small>{sharedParent ? "该执行者随父团队共享分支统一验收" : "验证证据见右侧审查记录；这里核对任务分支相对基线的提交与 diff"}</small></div>
         {sharedParent
           ? <span className="single-review-shared-badge">随团队验收</span>
-          : task.workflowMode === "free"
-            ? <span className="single-review-shared-badge">用会话上方“合并&清理”操作</span>
-            : <AcceptanceControls task={task} onTaskUpdated={onTaskUpdated} notify={notify} />}
+          : <AcceptanceControls task={task} onTaskUpdated={onTaskUpdated} notify={notify} acceptanceBlock={acceptanceBlock} />}
         <button type="button" onClick={onClose}><X size={13} />返回对话</button>
       </header>
       <div className="single-review-scroll">
         <div className="single-review-stack">
+          {acceptanceWarning && (
+            <p className="single-review-warning" role="alert">
+              <WarningCircle size={14} weight="fill" />{acceptanceWarning}
+            </p>
+          )}
           {sharedParent && <SharedWorkerFacts parent={sharedParent} branch={sharedBranch} />}
           {loading && <p className="single-review-loading"><SpinnerGap size={14} className="is-spinning" />{sharedParent ? "正在读取共享分支归属…" : "正在汇总提交与 diff…"}</p>}
           {!loading && error && <p className="single-review-error">{sharedParent ? "共享分支归属读取失败" : "提交与 diff 加载失败"}：{error}</p>}

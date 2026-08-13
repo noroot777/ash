@@ -49,6 +49,13 @@ export interface SegmentOptions {
    * 跑「点头之后那一段」——那一站正是刚刚做完的事，不能再做一遍。
    */
   skipAccept?: boolean;
+  /**
+   * 已经执行完成、这次直接跳过的站（验收尾段的崩溃补跑用）：没有它，补跑=整段重跑，
+   * 已发生过的发布/部署副作用会重复执行。
+   */
+  skipStepIds?: ReadonlySet<string>;
+  /** 每一站成功执行完后的落账回调（验收尾段把 step id 追加进 durable 清单）。 */
+  onStepDone?: (stepId: string) => Promise<void>;
 }
 
 function shorten(text: string, max = 600): string {
@@ -138,6 +145,7 @@ export async function runSegment(
   opts: SegmentOptions = {},
 ): Promise<SegmentResult> {
   for (const step of segmentAfter(def, fromStepId)) {
+    if (opts.skipStepIds?.has(step.id)) continue; // 崩溃补跑：这一站上次已经真的跑完了
     const result = step.kind === "command"
       ? await runCommand(task, step)
       : step.kind === "preview"
@@ -146,6 +154,7 @@ export async function runSegment(
           ? await runAccept(task, def, step)
           : { ok: true } as SegmentResult;
     if (!result.ok) return result;
+    await opts.onStepDone?.(step.id);
   }
   return { ok: true };
 }
