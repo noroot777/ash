@@ -96,5 +96,42 @@ console.log("3) 用户主动打断仍然不算故障");
   else fail("常驻模式没有 turnEnd");
 }
 
+// 起因(2026-08-13):563k tokens 的会话发 `/compact`,中转网关连着三次 503,压缩一次
+// 都没发生 —— 而这一轮的 result 是 `subtype:"success"` + 退出码 0,任务状态不动,
+// 时间线上只多出 CLI 合成的一句英文。用户的结论只能是「这个系统的 /compact 坏了」,
+// 下一句话继续撞 Prompt is too long。压缩的成败只在 system/status 这一条事件里。
+console.log("4) 压缩(/compact 与自动压缩)的过程与成败必须显式上报");
+{
+  const failed = await collect([
+    { type: "system", subtype: "status", status: "compacting", session_id: "sess-4" },
+    {
+      type: "system",
+      subtype: "status",
+      status: null,
+      compact_result: "failed",
+      compact_error: "Error during compaction: API Error: 503 upstream connect error",
+      session_id: "sess-4",
+    },
+    { type: "result", subtype: "success", session_id: "sess-4" },
+  ]);
+  const text = failed.filter((e) => e.kind === "text").map((e) => e.text).join("");
+  const errors = failed.filter((e) => e.kind === "error");
+  if (text.includes("正在压缩上下文")) ok("压缩开始时说了一声");
+  else fail(`压缩开始没有任何提示:${JSON.stringify(text)}`);
+  if (errors.length === 1 && errors[0].message.includes("503")) ok(`压缩失败抬成了 error:${errors[0].message}`);
+  else fail(`压缩失败没有报错(收到 ${errors.length} 条:${errors[0]?.message})`);
+
+  const succeeded = await collect([
+    { type: "system", subtype: "status", status: "compacting", session_id: "sess-5" },
+    { type: "system", subtype: "status", status: null, compact_result: "success", session_id: "sess-5" },
+    { type: "result", subtype: "success", session_id: "sess-5" },
+  ]);
+  const okText = succeeded.filter((e) => e.kind === "text").map((e) => e.text).join("");
+  if (okText.includes("上下文已压缩")) ok("压成了也说一声");
+  else fail(`压缩成功没有任何提示:${JSON.stringify(okText)}`);
+  if (!succeeded.filter((e) => e.kind === "error").length) ok("压缩成功不报错");
+  else fail("压缩成功却报了 error");
+}
+
 console.log(bad ? `\n✗ ${bad} 项未通过` : "\n✓ 全部通过");
 process.exit(bad ? 1 : 0);
