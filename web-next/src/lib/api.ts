@@ -5,7 +5,6 @@ import type {
   AttachmentKind,
   BatchCreateTasksBody,
   FreeReviewDispatchInput,
-  FreeWorkflowState,
   GateAction,
   Group,
   LlmProtocol,
@@ -27,294 +26,43 @@ import type {
   TaskFollowUp,
   TaskReviewInfo,
   TaskWorkspaceDiscardResult,
-  TaskWorkspaceLeftover,
   TeamPreset,
   TeamPresetConfig,
-  TokenUsage,
 } from "@harness/shared";
 import { DEFAULT_APP_SETTINGS } from "@harness/shared";
 import type { WorkflowDef, WorkflowItem } from "@harness/shared/workflow";
 import type { CliHostEnv } from "@harness/shared/cli-overrides";
 import type { CliModelCatalog } from "@harness/shared/cli-presets";
+import { ApiError, apiError, apiPath, id, json, parseBody, request } from "./apiClient.ts";
+import type {
+  AcceptTaskResult,
+  DeleteTaskResult,
+  DetectedCli,
+  FileContent,
+  FileListing,
+  FileWorkspaceRoot,
+  FreeWorkflowApiState,
+  GitOverview,
+  OpenerProbe,
+  ReplyTaskResult,
+  SessionTraceEntry,
+  TaskCommit,
+  TaskDiffResult,
+  TaskWorkspaceProbe,
+  TeamCuaStatus,
+  TerminalSessionInfo,
+  VerifyOverrideResult,
+} from "./apiTypes.ts";
 
-const API_ROOT = "/api";
-
-export class ApiError extends Error {
-  readonly status: number;
-  readonly body: unknown;
-
-  constructor(status: number, message: string, body: unknown) {
-    super(message);
-    this.name = "ApiError";
-    this.status = status;
-    this.body = body;
-  }
-}
-
-function apiPath(path: string): string {
-  return `${API_ROOT}${path.startsWith("/") ? path : `/${path}`}`;
-}
-
-async function parseBody(response: Response): Promise<unknown> {
-  if (response.status === 204) return undefined;
-  const text = await response.text();
-  if (!text) return undefined;
-  try {
-    return JSON.parse(text) as unknown;
-  } catch {
-    return text;
-  }
-}
-
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(apiPath(path), init);
-  const body = await parseBody(response);
-  if (!response.ok) {
-    throw apiError(response, body);
-  }
-  return body as T;
-}
-
-function apiError(response: Response, body: unknown): ApiError {
-  const message =
-    typeof body === "object" && body !== null && "error" in body && typeof body.error === "string"
-      ? body.error
-      : `${response.status} 请求失败`;
-  return new ApiError(response.status, message, body);
-}
-
-function json(method: string, body?: unknown): RequestInit {
-  return {
-    method,
-    headers: { "content-type": "application/json" },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  };
-}
-
-const id = encodeURIComponent;
-
-export type ChildWorkspaceLeftover = TaskWorkspaceLeftover & { taskId: string; title?: string };
-
-export type TaskWorkspaceProbe = TaskWorkspaceLeftover & {
-  /** 有 Git 残留的 children（团队执行者 / duet 搭档），删除会连行一起删，探测必须一并报。 */
-  children?: ChildWorkspaceLeftover[];
-};
-
-export type DeleteTaskResult = {
-  deleted: true;
-  leftover: TaskWorkspaceLeftover | null;
-  cleanup: TaskWorkspaceDiscardResult | null;
-  /** 连删的全部行（父 + children）；前端按它同步本地任务集合。 */
-  deletedTaskIds?: string[];
-  childCleanups?: (TaskWorkspaceDiscardResult & { taskId: string })[];
-  childLeftovers?: { taskId: string; leftover: TaskWorkspaceLeftover }[];
-};
-
-export type FreeWorkflowApiState = Omit<FreeWorkflowState, "merge">;
-
-export type TaskCommit = { sha: string; subject: string; at: string };
-
-export type SessionTraceEntry = {
-  at: string;
-  turnStartedAt: string;
-  event:
-    | { kind: "text"; text: string }
-    | { kind: "thinking"; text: string }
-    | { kind: "tool"; name: string; detail?: string }
-    | { kind: "attachment"; path: string }
-    | { kind: "error"; message: string }
-    | { kind: "run"; model: string | null; reasoningEffort: string | null }
-    // 这一回合的 token 账（服务端每轮至多写一条）。它不是执行过程里的一步，渲染时
-    // 要单独摘出去，别混进「执行过程」那串事件。
-    | { kind: "usage"; usage: TokenUsage; accounting?: "incremental" };
-};
-
-export type GitOverview = {
-  branches: string[];
-  current: string | null;
-  worktrees: {
-    path: string;
-    branch: string | null;
-    head: string | null;
-    detached: boolean;
-  }[];
-};
-
-export type TaskDiffResult = {
-  available: boolean;
-  sourceBranch: string;
-  targetBranch: string | null;
-  mergeBase: string | null;
-  diff: string;
-  files: { path: string; additions: number | null; deletions: number | null }[];
-  truncated: boolean;
-  limitBytes: number;
-  reason?: string;
-};
-
-/** 任务实际在哪干活。服务端只读地解析，绝不为了看文件而新建 worktree。 */
-export type FileWorkspaceRoot = {
-  path: string;
-  branch: string | null;
-  gitRepo: boolean;
-  source: "session" | "worktree" | "repo";
-};
-
-export type FileEntry = {
-  name: string;
-  path: string;
-  kind: "dir" | "file";
-  size: number;
-  mtime: string | null;
-  ignored: boolean;
-  symlink: boolean;
-};
-
-export type FileListing = {
-  root: FileWorkspaceRoot;
-  path: string;
-  entries: FileEntry[];
-  truncated: boolean;
-};
-
-export type FileContent = {
-  path: string;
-  name: string;
-  size: number;
-  mtime: string | null;
-  kind: "text" | "image" | "pdf" | "binary";
-  text: string | null;
-  truncated: boolean;
-  absPath: string;
-  mime: string | null;
-};
-
-/** 本机上能打开某个文件的一个应用。`match` 说明它凭什么被列进来。 */
-export type AppOpener = {
-  id: string;
-  name: string;
-  detail: string;
-  match: "extension" | "type" | "generic";
-  isDefault: boolean;
-};
-
-export type OpenerProbe = {
-  platform: string;
-  canReveal: boolean;
-  apps: AppOpener[];
-  note: string | null;
-};
-
-export type AcceptTaskWarning = {
-  reason: "temporary_cleanup_failed";
-  message: string;
-  worktreePath: string;
-};
-
-export type AcceptTaskSuccess = {
-  accepted: true;
-  taskId: string;
-  status: string;
-  /** 中途关口放行不是验收，stage 会被清回「进行中」 */
-  stage: "accepted" | null;
-  kind: "already_accepted" | "in_place" | "isolated_worktree" | "marked_only" | "gate_released";
-  sharedWorkersAccepted?: number;
-  targetBranch?: string;
-  merge?: string;
-  worktreePath?: string;
-  worktreeRemoved?: boolean;
-  branch?: string;
-  branchDeleted?: boolean;
-  warnings?: AcceptTaskWarning[];
-  /** 「点头之后」那一段（发布脚本之类）跑得怎么样；线上没写这一段就没有这个字段 */
-  tail?: { ok: boolean; step?: string; reason?: string };
-};
-
-export type AcceptTaskFailure = {
-  accepted: false;
-  taskId: string;
-  reason: string;
-  error: string;
-  status?: string;
-  sourceBranch?: string;
-  targetBranch?: string | null;
-  conflictFiles?: string[];
-  dirtyFiles?: string[];
-  targetPath?: string;
-  worktreePath?: string;
-  phase?: "initial" | "before_accept" | "before_merge" | "before_cleanup";
-  inFlightTasks?: {
-    id: string;
-    title: string;
-    status: string;
-    role: "task" | "shared_worker";
-  }[];
-  warnings?: AcceptTaskWarning[];
-  conflictHandoff?: { notified: boolean; message: string };
-};
-
-export type AcceptTaskResult = AcceptTaskSuccess | AcceptTaskFailure;
-
-// 人工强制通过一站「自动验证」之后的落点：签字之后线可能停在下一道关口、又开了一轮
-// 验证、也可能直接合并完了，所以回的是**推进之后**的游标与验收阶段。
-export type VerifyOverrideResult = {
-  forced: true;
-  taskId: string;
-  station: string;
-  workflowAt: string | null;
-  stage: string | null;
-  /** 签字落下了，但这一站之后那一段没跑完 —— 如实说，别报成一句「已放行」。 */
-  advanceError?: string;
-};
+// 调用点只认 `lib/api`：传输层（apiClient.ts）和返回体形状（apiTypes.ts）是这份端点
+// 清单为了守住 700 行上限拆出去的实现细节，不该逼着几十个 import 跟着改路径。
+export { ApiError } from "./apiClient.ts";
+export type * from "./apiTypes.ts";
 
 function isAcceptTaskResult(body: unknown): body is AcceptTaskResult {
   return typeof body === "object" && body !== null && "accepted" in body &&
     typeof body.accepted === "boolean";
 }
-
-export type DetectedCli = {
-  key: string;
-  name: string;
-  description: string;
-  bins: string[];
-  docsUrl: string;
-  installCommand: string;
-  type?: AgentType;
-  bin: string;
-  available: boolean;
-  path: string | null;
-  version: string | null;
-  resident: boolean;
-};
-
-export type CuaProcess = { pid: number; ppid: number; command: string };
-
-export type TeamCuaStatus = {
-  taskId: string;
-  current: {
-    checkedAt: string;
-    detected: boolean;
-    processes: CuaProcess[];
-    message: string;
-    sideEffect: string;
-  };
-};
-
-export type TerminalSessionInfo = {
-  id: string;
-  projectId: string;
-  cwd: string;
-  shell: string;
-  name: string;
-};
-
-export type TerminalEvent =
-  | { seq: number; type: "data"; data: string }
-  | { seq: number; type: "exit"; exitCode: number; signal?: number };
-
-export type ReplyTaskResult =
-  | { started: true }
-  | { scheduled: true; message: ScheduledMessage };
 
 export const api = {
   // 老服务端不认识新加的设置项时会漏字段,补上出厂默认再交出去 —— 界面上出现
