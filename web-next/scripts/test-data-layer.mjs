@@ -522,10 +522,16 @@ try {
   const roles = ["single", "lead", "worker", "reviewer"];
   for (const role of roles) {
     let executors = emptyComposerExecutorConfigs();
-    executors = setComposerExecutorProfile(executors, role, "codex@local");
+    executors = setComposerExecutorProfile(executors, role, "codex@local", { model: "", effort: "" });
     executors = patchComposerExecutor(executors, role, { model: "gpt-5.6-sol", effort: "ultra" });
-    executors = setComposerExecutorProfile(executors, role, "claude@ccb");
+    // 换执行器：选择器算出的覆盖是空串（= 跟随执行器），旧模型/档位不许留下来。
+    executors = setComposerExecutorProfile(executors, role, "claude@ccb", { model: "", effort: "" });
     assert.deepEqual(executors[role], { profile: "claude@ccb", model: "", effort: "" });
+    // 同一个执行器只换模型：模型换成新的，智能水平原样留着——执行器与覆盖是同一次
+    // 选择的结果，一起落地，不能拆成两次更新（后一次会带着旧值盖回执行器）。
+    executors = patchComposerExecutor(executors, role, { effort: "high" });
+    executors = setComposerExecutorProfile(executors, role, "claude@ccb", { model: "claude-opus-5", effort: "high" });
+    assert.deepEqual(executors[role], { profile: "claude@ccb", model: "claude-opus-5", effort: "high" });
   }
 
   const registeredProfiles = [
