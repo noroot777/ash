@@ -24,14 +24,16 @@ function AgentMessage({
 }) {
   const duration = durationBetween(item.at, item.endedAt);
   return (
-    <article className="task-message task-message--agent">
-      <span className="task-message-avatar" aria-hidden="true">{item.label.slice(0, 1).toUpperCase()}</span>
+    <article className={`task-message task-message--agent${item.continuation ? " is-continuation" : ""}`}>
+      <span className="task-message-avatar" aria-hidden="true">{item.continuation ? "" : item.label.slice(0, 1).toUpperCase()}</span>
       <div className="task-message-content">
         <header>
-          <span className="agent-run-identity">
-            <b>{item.label}</b>
-            <AgentRunMeta run={item.run} />
-          </span>
+          {!item.continuation && (
+            <span className="agent-run-identity">
+              <b>{item.label}</b>
+              <AgentRunMeta run={item.run} />
+            </span>
+          )}
           {item.at && <time>{formatInstant(item.at)}</time>}
           {duration && (
             <small className="task-turn-duration" title={`开始 ${formatInstant(item.at)} · 结束 ${formatInstant(item.endedAt)}`}>
@@ -122,12 +124,22 @@ export function ConversationFeed({
           {items.map((item) => {
             if (item.kind === "agent") return <AgentMessage key={item.id} item={item} />;
             if (item.kind === "user") return <UserMessage key={item.id} item={item} />;
+            // 回合边界才配得上一条横贯的分隔线；系统旁注只是贴在会话边上的一行小字，
+            // 它不该看起来像「这里换了一段对话」。
+            if (item.variant === "boundary") {
+              return (
+                <div className={`task-event-line${item.tone === "error" ? " is-error" : ""}`} key={item.id}>
+                  <span />
+                  <p>{item.text}{item.at ? ` · ${formatInstant(item.at)}` : ""}</p>
+                  <span />
+                </div>
+              );
+            }
             return (
-              <div className={`task-event-line${item.tone === "error" ? " is-error" : ""}`} key={item.id}>
-                <span />
-                <p>{item.text}{item.at ? ` · ${formatInstant(item.at)}` : ""}</p>
-                <span />
-              </div>
+              <p className={`conversation-note${item.tone === "error" ? " is-error" : ""}`} key={item.id}>
+                {item.text}
+                {item.at && <time>{formatInstant(item.at)}</time>}
+              </p>
             );
           })}
           {activityPhase && !loading && !error && (
