@@ -26,7 +26,7 @@ export function ComposerFields({
   availabilityMessage,
   availabilityTone,
   onExecutorChange,
-  onOverrideChange,
+  onEffortChange,
   currentTeamConfig,
   onApplyTeamPreset,
   notify,
@@ -61,8 +61,12 @@ export function ComposerFields({
   executorTypes: Record<ComposerExecutorRole, AgentType>;
   availabilityMessage: string | null;
   availabilityTone: "loading" | "warning" | "empty" | null;
-  onExecutorChange: (role: ComposerExecutorRole, value: string) => void;
-  onOverrideChange: (role: ComposerExecutorRole, patch: { model?: string; effort?: string }) => void;
+  onExecutorChange: (
+    role: ComposerExecutorRole,
+    value: string,
+    override: { model: string; effort: string },
+  ) => void;
+  onEffortChange: (role: ComposerExecutorRole, effort: string) => void;
   currentTeamConfig: TeamPresetConfig;
   onApplyTeamPreset: (config: TeamPresetConfig) => void;
   notify: (message: string) => void;
@@ -107,15 +111,15 @@ export function ComposerFields({
         <div className={`composer-executor-grid is-${mode}`}>
           {mode === "team" && (
             <>
-              <ExecutorPickerField label="调度者执行器" value={executors.lead.profile} types={leadTypes} profiles={leadProfiles} knownProfiles={profiles} fallbackType="claude" override={executors.lead} onChange={(value) => onExecutorChange("lead", value)} onOverrideChange={(patch) => onOverrideChange("lead", patch)} />
-              <ExecutorPickerField label="执行者执行器" value={executors.worker.profile} types={workerTypes} profiles={profiles} knownProfiles={profiles} fallbackType="codex" override={executors.worker} onChange={(value) => onExecutorChange("worker", value)} onOverrideChange={(patch) => onOverrideChange("worker", patch)} />
-              <ExecutorPickerField label="审查者执行器" value={executors.reviewer.profile} types={workerTypes} profiles={profiles} knownProfiles={profiles} fallbackType={executorTypes.worker} override={executors.reviewer} onChange={(value) => onExecutorChange("reviewer", value)} onOverrideChange={(patch) => onOverrideChange("reviewer", patch)} />
+              <ExecutorPickerField label="调度者执行器" value={executors.lead.profile} types={leadTypes} profiles={leadProfiles} knownProfiles={profiles} fallbackType="claude" override={executors.lead} onChange={(value, override) => onExecutorChange("lead", value, override)} onEffortChange={(effort) => onEffortChange("lead", effort)} />
+              <ExecutorPickerField label="执行者执行器" value={executors.worker.profile} types={workerTypes} profiles={profiles} knownProfiles={profiles} fallbackType="codex" override={executors.worker} onChange={(value, override) => onExecutorChange("worker", value, override)} onEffortChange={(effort) => onEffortChange("worker", effort)} />
+              <ExecutorPickerField label="审查者执行器" value={executors.reviewer.profile} types={workerTypes} profiles={profiles} knownProfiles={profiles} fallbackType={executorTypes.worker} override={executors.reviewer} onChange={(value, override) => onExecutorChange("reviewer", value, override)} onEffortChange={(effort) => onEffortChange("reviewer", effort)} />
             </>
           )}
           {mode === "duet" && (
             <>
-              <ExecutorPickerField label="讨论者 A" value={executors.voiceA.profile} types={workerTypes} profiles={profiles} knownProfiles={profiles} fallbackType="claude" override={executors.voiceA} onChange={(value) => onExecutorChange("voiceA", value)} onOverrideChange={(patch) => onOverrideChange("voiceA", patch)} />
-              <ExecutorPickerField label="讨论者 B" value={executors.voiceB.profile} types={workerTypes} profiles={profiles} knownProfiles={profiles} fallbackType="codex" override={executors.voiceB} onChange={(value) => onExecutorChange("voiceB", value)} onOverrideChange={(patch) => onOverrideChange("voiceB", patch)} />
+              <ExecutorPickerField label="讨论者 A" value={executors.voiceA.profile} types={workerTypes} profiles={profiles} knownProfiles={profiles} fallbackType="claude" override={executors.voiceA} onChange={(value, override) => onExecutorChange("voiceA", value, override)} onEffortChange={(effort) => onEffortChange("voiceA", effort)} />
+              <ExecutorPickerField label="讨论者 B" value={executors.voiceB.profile} types={workerTypes} profiles={profiles} knownProfiles={profiles} fallbackType="codex" override={executors.voiceB} onChange={(value, override) => onExecutorChange("voiceB", value, override)} onEffortChange={(effort) => onEffortChange("voiceB", effort)} />
             </>
           )}
         </div>
@@ -151,8 +155,8 @@ export function ComposerFields({
               knownProfiles={profiles}
               fallbackType="claude"
               override={executors.single}
-              onChange={(value) => onExecutorChange("single", value)}
-              onOverrideChange={(patch) => onOverrideChange("single", patch)}
+              onChange={(value, override) => onExecutorChange("single", value, override)}
+              onEffortChange={(effort) => onEffortChange("single", effort)}
             />
           )}
         </section>

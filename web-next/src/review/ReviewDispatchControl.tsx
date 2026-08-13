@@ -190,15 +190,12 @@ export function ReviewDispatchControl({
                 knownProfiles={profiles}
                 fallbackType={defaults.selection.agentType}
                 override={{ model, effort }}
-                onChange={(value) => {
+                onChange={(value, override) => {
                   setSelection(parseExecutorValue(value, profiles, selection));
-                  setModel("");
-                  setEffort("");
+                  setModel(override.model);
+                  setEffort(override.effort);
                 }}
-                onOverrideChange={(patch) => {
-                  if (patch.model !== undefined) setModel(patch.model);
-                  if (patch.effort !== undefined) setEffort(patch.effort);
-                }}
+                onEffortChange={setEffort}
               />
             </div>
             {availabilityMessage && (

@@ -20,12 +20,17 @@ export function emptyComposerExecutorConfigs(): ComposerExecutorConfigs {
   };
 }
 
+/**
+ * 选了执行器/模型：模型与智能水平由选择器一起算好（换了执行器就是空串 = 跟随执行器），
+ * 三项一次落地——拆成两次更新时，后一次会带着旧值把前一次刚选的执行器盖回去。
+ */
 export function setComposerExecutorProfile(
   configs: ComposerExecutorConfigs,
   role: ComposerExecutorRole,
   profile: string,
+  override: { model: string; effort: string },
 ): ComposerExecutorConfigs {
-  return { ...configs, [role]: { profile, model: "", effort: "" } };
+  return { ...configs, [role]: { profile, model: override.model, effort: override.effort } };
 }
 
 export function patchComposerExecutor(
