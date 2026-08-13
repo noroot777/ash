@@ -289,14 +289,16 @@ try {
   assert.equal(reserved.status, 200);
   let reservedState = await reserved.json() as { reviewReservation: { armed: boolean; checkMode: string | null; retryLimit: number | null; note: string | null } };
   assert.deepEqual(reservedState.reviewReservation, {
-    armed: true, reviewerId: reviewer.id, checkMode: "logic", retryLimit: 1, note: "重点检查窄屏布局", runId: null,
+    armed: true, reviewerId: reviewer.id, checkMode: "logic", retryLimit: 1, note: "重点检查窄屏布局",
+    override: null, runId: null,
   });
 
   reserved = await reserveReview("syntax", 2, "检查预约覆盖");
   assert.equal(reserved.status, 200);
   reservedState = await reserved.json() as typeof reservedState;
   assert.deepEqual(reservedState.reviewReservation, {
-    armed: true, reviewerId: reviewer.id, checkMode: "syntax", retryLimit: 2, note: "检查预约覆盖", runId: null,
+    armed: true, reviewerId: reviewer.id, checkMode: "syntax", retryLimit: 2, note: "检查预约覆盖",
+    override: null, runId: null,
   }, "重复预约应覆盖同一份配置与附言");
 
   const canceledReservation = await api.request("/tasks/free-reservation-task/free-workflow/review-reservation", { method: "DELETE" });
@@ -321,6 +323,50 @@ try {
     { status: "reviewing", checkMode: "logic", retryLimit: 2, note: "重点检查 Enter 快捷键" },
   ], "confirmed done 应按预约配置与附言自动派出且只派一份审查");
   assertBrowserPolicy(await freeReviewReminder("free-reservation-task"), "自由审查续聊提醒");
+
+  // 「这次换个模型/智能水平跑」：覆盖整套存进预约槽、整套落到 run 行，审查者配置一个字不动。
+  await createTasks([{
+    id: "free-override-task", projectId: "p", groupId: null, parentId: null,
+    title: "free override", body: "test", mode: "single", status: "running",
+    labels: "[]", dependsOn: "[]", resumeDependsOn: "[]", agentType: "codex",
+    executorId: "reviewer-executor", model: null, reasoningEffort: null, autoTitle: false,
+    duet: null, team: null, reportBack: false, scheduleId: null,
+    createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    useWorktree: false, worktreeBase: null, originTaskId: null, workflowMode: "free",
+  }]);
+  const reserveOverride = async (override: unknown) => api.request(
+    "/tasks/free-override-task/free-workflow/review-reservation",
+    {
+      method: "PUT", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ reviewerId: reviewer.id, checkMode: "logic", retryLimit: 1, override }),
+    },
+  );
+  assert.equal((await reserveOverride({ agentType: "claude", executorId: "reviewer-executor", model: null, reasoningEffort: null })).status, 409,
+    "覆盖的执行器与智能体类型对不上时必须当场拒绝，不能拖到开跑才炸");
+  assert.equal((await reserveOverride({ agentType: "codex", executorId: "ghost-executor", model: null, reasoningEffort: null })).status, 409,
+    "覆盖到不存在的执行器必须当场拒绝");
+  const overridden = await reserveOverride({ agentType: "codex", executorId: "reviewer-executor", model: "gpt-override", reasoningEffort: "low" });
+  assert.equal(overridden.status, 200);
+  assert.deepEqual((await overridden.json() as { reviewReservation: { override: unknown } }).reviewReservation.override,
+    { agentType: "codex", executorId: "reviewer-executor", model: "gpt-override", reasoningEffort: "low" },
+    "预约必须把「这次用什么跑」整套存下来");
+
+  await db.update(tasks).set({ status: "done" }).where(eq(tasks.id, "free-override-task"));
+  assert.equal(claimTurn("free-override-task"), true);
+  await handleFreeWorkflowSettlement("free-override-task", "done", true, true);
+  const overrideState = await api.request("/tasks/free-override-task/free-workflow").then((response) => response.json()) as {
+    reviewReservation: { armed: boolean; override: unknown };
+    reviews: Array<{ agentType: string; model: string | null; reasoningEffort: string | null }>;
+  };
+  assert.deepEqual(overrideState.reviews.map(({ agentType, model, reasoningEffort }) => ({ agentType, model, reasoningEffort })), [
+    { agentType: "codex", model: "gpt-override", reasoningEffort: "low" },
+  ], "预约里的覆盖必须真的落到 run 行，否则审查照旧按审查者的老配置跑");
+  assert.equal(overrideState.reviewReservation.armed, false);
+  assert.equal(overrideState.reviewReservation.override, null, "派审后覆盖必须随预约一起清掉，不能在下条预约的表单里复活");
+  const profilesAfterOverride = await api.request("/reviewer-profiles").then((response) => response.json()) as Array<{ id: string; model: string | null; reasoningEffort: string | null }>;
+  const untouched = profilesAfterOverride.find((profile) => profile.id === reviewer.id);
+  assert.deepEqual({ model: untouched?.model ?? null, reasoningEffort: untouched?.reasoningEffort ?? null },
+    { model: null, reasoningEffort: "high" }, "选了「不保存」的覆盖不得写回审查者配置");
 
   // 删除审查者时必须同步 disarm：否则 UI 仍显示已预约，结算因 reviewerId 为空静默不派审。
   await createTasks([{
@@ -350,7 +396,7 @@ try {
   const afterDeleteState = await api.request("/tasks/free-deleted-reviewer-task/free-workflow").then((response) => response.json()) as {
     reviewReservation: { armed: boolean; reviewerId: string | null };
   };
-  assert.deepEqual(afterDeleteState.reviewReservation, { armed: false, reviewerId: null, checkMode: null, retryLimit: null, note: null, runId: null },
+  assert.deepEqual(afterDeleteState.reviewReservation, { armed: false, reviewerId: null, checkMode: null, retryLimit: null, note: null, override: null, runId: null },
     "删除审查者后预约必须取消，不能留下 armed 且 reviewerId 为空");
 
   await db.update(tasks).set({ status: "done" }).where(eq(tasks.id, "free-deleted-reviewer-task"));

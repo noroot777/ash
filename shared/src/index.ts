@@ -17,6 +17,7 @@ export type {
 export type {
   FreeReviewCheckMode,
   FreeReviewDispatchInput,
+  FreeReviewExecutorOverride,
   FreeReviewRound,
   FreeReviewRun,
   FreeWorkflowExecution,

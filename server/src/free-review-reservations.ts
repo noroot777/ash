@@ -13,6 +13,8 @@ export type ReservedFreeReview = {
   checkMode: unknown;
   retryLimit: unknown;
   note: unknown;
+  /** 非空 = 预约时选的「这次换个人/模型跑」的覆盖（四列一套，agentType 为空即没有覆盖）。 */
+  override?: unknown;
   /** 非空 = 自动复审链的续轮预约：在该 run 上续下一轮，而不是开新 run。 */
   runId?: string | null;
   /** 读到这条预约时的版本令牌（updatedAt）；消费用它做 CAS。 */
@@ -29,7 +31,11 @@ export async function disarmFreeReviewReservation(taskId: string): Promise<boole
     .from(freeWorkflowStates).where(eq(freeWorkflowStates.taskId, taskId))).at(0);
   if (!state?.reviewArmed) return false;
   await db.update(freeWorkflowStates)
-    .set({ reviewArmed: false, reviewNote: null, reviewRunId: null, updatedAt: now() })
+    .set({
+      reviewArmed: false, reviewNote: null, reviewRunId: null, updatedAt: now(),
+      // 执行器覆盖跟着预约一起作废：留着它，下一条预约的表单会带上一套用户没选过的配置。
+      reviewAgentType: null, reviewExecutorId: null, reviewModel: null, reviewReasoningEffort: null,
+    })
     .where(eq(freeWorkflowStates.taskId, taskId));
   bus.publish({ type: "task.review", taskId });
   return true;
@@ -45,7 +51,16 @@ export async function readFreeReviewReservation(taskId: string): Promise<Reserve
     note: freeWorkflowStates.reviewNote,
     runId: freeWorkflowStates.reviewRunId,
     updatedAt: freeWorkflowStates.updatedAt,
-  }).from(freeWorkflowStates).where(eq(freeWorkflowStates.taskId, taskId))).at(0);
+    agentType: freeWorkflowStates.reviewAgentType,
+    executorId: freeWorkflowStates.reviewExecutorId,
+    model: freeWorkflowStates.reviewModel,
+    reasoningEffort: freeWorkflowStates.reviewReasoningEffort,
+  }).from(freeWorkflowStates).where(eq(freeWorkflowStates.taskId, taskId)))
+    .map(({ agentType, executorId, model, reasoningEffort, ...rest }) => ({
+      ...rest,
+      // agentType 为空 = 没有覆盖；四列一套，不拼半截。
+      override: agentType ? { agentType, executorId, model, reasoningEffort } : null,
+    })).at(0);
 }
 
 // null/undefined 要走 IS NULL：eq(col, null) 在 SQL 里恒为假，会让 CAS 永远失败。
@@ -133,6 +148,9 @@ export async function armFollowUpFreeReview(
   const slot = {
     selectedReviewerId: run.reviewerId, reviewArmed: true, reviewCheckMode: run.checkMode,
     reviewRetryLimit: run.retryLimit, reviewNote: null, reviewRunId: run.id, updatedAt: at,
+    // 续轮在同一个 run 上跑，执行器早已冻结在 run 行里；槽里留着上一条手动预约的覆盖，
+    // 只会在 UI 的「调整预约复审」表单里冒出来。
+    reviewAgentType: null, reviewExecutorId: null, reviewModel: null, reviewReasoningEffort: null,
   };
   const attached = await db.insert(freeWorkflowStates).values({ taskId, ...slot })
     .onConflictDoUpdate({
@@ -156,7 +174,9 @@ export async function startReservedFreeReview(
   reservation: ReservedFreeReview,
   handlers: {
     continueRun: (runId: string) => Promise<unknown>;
-    startNew: (input: { reviewerId: string; checkMode: unknown; retryLimit: unknown; note: unknown }) => Promise<unknown>;
+    startNew: (input: {
+      reviewerId: string; checkMode: unknown; retryLimit: unknown; note: unknown; override: unknown;
+    }) => Promise<unknown>;
   },
 ): Promise<void> {
   let snapshot = reservation;
@@ -187,6 +207,7 @@ export async function startReservedFreeReview(
           checkMode: consumed.checkMode,
           retryLimit: consumed.retryLimit,
           note: consumed.note,
+          override: consumed.override,
         });
       }
     } catch (error) {
