@@ -4,6 +4,9 @@
   overflow: auto;
   margin-top: 8px;
   padding-bottom: 14px;
+  /* 星标/来源徽标的 z-index 只在行里压标题。不关在这层，会跟侧栏顶栏
+     （项目菜单 z-index 关在顶栏里）比高低，从菜单上穿出来。铺开预览走 portal。 */
+  isolation: isolate;
 }
 
 .workspace-task-section + .workspace-task-section,
