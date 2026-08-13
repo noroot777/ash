@@ -24,17 +24,17 @@ import { forceKillCuaService, lastCuaResidualStatus, refreshCuaResidualStatus } 
 import { db } from "./db/index.js";
 import { freeReviewResumeOptions } from "./free-workflow.js";
 import { isAcceptingTask } from "./acceptance-lock.js";
-import { projects, queueItems, schedules, scheduledMessages, sessions, tasks } from "./db/schema.js";
+import { queueItems, scheduledMessages, sessions, tasks } from "./db/schema.js";
 import { resumeDuet, resumeAtGate, runDuet } from "./duet/index.js";
 import { resolveGate } from "./duet/gates.js";
-import { taskCommits } from "./git.js";
 import { continueTask, runTask } from "./orchestrator.js";
 import { resumeOrRunTask } from "./task-resume.js";
 import { mountTaskArchiveRoutes } from "./task-archive-routes.js";
+import { mountTaskScheduleRoutes } from "./task-schedule-routes.js";
 import { RUNS_DIR } from "./paths.js";
 import { enqueueMessage } from "./pending-messages.js";
 import { isOvertaken, queueBlockers, repackQueue, tailOrder } from "./queues.js";
-import { claimTurn, confirmDone, stopTask } from "./runs.js";
+import { claimTurn, confirmDone, releaseTurn, stopTask } from "./runs.js";
 import { advanceQueue } from "./scheduler.js";
 import { setTaskStatus } from "./status.js";
 import { dispatchWorkers, type DispatchSpec } from "./team/dispatch.js";
@@ -45,10 +45,11 @@ import { parseSessionTrace, readableRunPath, sessionTracePath, sessionTranscript
 import { sessionContext, sessionUsage } from "./usage.js";
 import { resumeCommandFor } from "./executors/resume.js";
 import { sessionRunMeta } from "./session-run-meta.js";
-import { id, now } from "./util.js";
+import { now } from "./util.js";
 
 export function mountTaskRunRoutes(api: Hono): void {
   mountTaskArchiveRoutes(api);
+  mountTaskScheduleRoutes(api);
   const toSession = (
     r: typeof sessions.$inferSelect,
     run: { model: string | null; reasoningEffort: string | null } = { model: null, reasoningEffort: null },
@@ -149,14 +150,21 @@ api.post("/tasks/:id/run", async (c) => {
     );
   }
   // Fire-and-forget; progress streams over /api/events.
-  if (r.mode === "duet") { void runDuet(taskId); return c.json({ started: true }, 202); }
   if (r.mode === "team") { void resumeOrRunTask(taskId, { reason: "run" }); return c.json({ started: true }, 202); }
   // **最后一个 await 之后**原子占位再启动：只读预检查后的任何 await 间隙里另一次启动
   // 都可能抢先——两个并发请求会双双 202 而只有一个真的开跑（审查实测）。占到 = 202 是
-  // 真话；占不到 = 此刻确有回合在跑，409。
-  if (!claimTurn(taskId, "single")) {
+  // 真话；占不到 = 此刻确有回合在跑，409。duet 走同一把锁（它模块内那个 running Set
+  // 调用方看不见，验收锁也挡不住它）。
+  if (!claimTurn(taskId, r.mode === "duet" ? "duet" : "single")) {
     return c.json({ error: "任务回合正在进行，结束后再运行", status: r.status }, 409);
   }
+  // 占位后镜像检查验收锁（验收侧先占己锁再查 turn）：runTask/runDuet 撞上验收锁只会
+  // 静默 return，202 就成了「已启动」的谎报（审查实测：/run 与 /retry 均复现）。
+  if (isAcceptingTask(taskId)) {
+    releaseTurn(taskId);
+    return c.json({ error: "任务正在验收（含发布尾段），结束后再运行", status: r.status }, 409);
+  }
+  if (r.mode === "duet") { void runDuet(taskId, { turnHeld: true }); return c.json({ started: true }, 202); }
   void resumeOrRunTask(taskId, { reason: "run", turnHeld: true });
   return c.json({ started: true }, 202);
 });
@@ -184,11 +192,16 @@ api.post("/tasks/:id/fire", async (c) => {
       409,
     );
   }
-  if (r.mode === "duet") { void runDuet(taskId); return c.json({ started: true, fresh: true }, 202); }
-  // 同 /run:最后一个 await 之后原子占位,202 才是真话。
-  if (!claimTurn(taskId, "single")) {
+  // 同 /run:最后一个 await 之后原子占位,202 才是真话。duet 与 single 共用这把锁。
+  if (!claimTurn(taskId, r.mode === "duet" ? "duet" : "single")) {
     return c.json({ error: "任务回合正在进行，结束后再触发", status: r.status }, 409);
   }
+  // 队列检查之后验收锁可能刚刚落下:占位后再查一遍(与验收侧互为镜像)。
+  if (isAcceptingTask(taskId)) {
+    releaseTurn(taskId);
+    return c.json({ error: "任务正在验收（含发布尾段），结束后再触发", status: r.status }, 409);
+  }
+  if (r.mode === "duet") { void runDuet(taskId, { turnHeld: true }); return c.json({ started: true, fresh: true }, 202); }
   void runTask(taskId, { turnHeld: true }); // 全新一轮,永不 resume
   return c.json({ started: true, fresh: true }, 202);
 });
@@ -342,6 +355,10 @@ api.post("/tasks/:id/answer", async (c) => {
   if (!a) return c.json({ error: "answer 不能为空" }, 400);
   const r = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!r) return c.json({ error: "not found" }, 404);
+  // 归档=冻结:答复会 resume 会话并继续写这个任务(还会推进就地验证轮的结算),
+  // 归档后再答复就成了「已冻结的任务还在动」(审查实测:archived=true 却停在
+  // stage=verifying)。先取消归档再答。
+  if (r.archived) return c.json({ error: "任务已归档，先取消归档再答复", archived: true }, 409);
   if (!r.question) return c.json({ error: "该任务没有待答复的问题", status: r.status }, 409);
   if (r.mode !== "team" && (r.status === "running" || r.status === "queued")) {
     return c.json({ error: "提问回合还没结束,等任务落 paused 再答复", status: r.status }, 409);
@@ -548,11 +565,16 @@ api.post("/tasks/:id/retry", async (c) => {
   if (!r) return c.json({ error: "not found" }, 404);
   if (r.archived) return c.json({ error: "任务已归档，先取消归档再重试", archived: true }, 409);
   if (r.status !== "failed") return c.json({ error: "只有失败的任务可以重试", status: r.status }, 409);
-  if (r.mode === "duet") { void resumeDuet(taskId); return c.json({ started: true }, 202); }
-  // 同 /run:原子占位,并发重试只有一个能 202。
-  if (!claimTurn(taskId, "single")) {
+  // 同 /run:原子占位,并发重试只有一个能 202;duet 走同一把锁。
+  if (!claimTurn(taskId, r.mode === "duet" ? "duet" : "single")) {
     return c.json({ error: "任务回合正在进行，结束后再重试", status: r.status }, 409);
   }
+  // 占位后镜像检查验收锁:否则 runTask/resumeDuet 撞上验收锁静默 return,202 是谎报。
+  if (isAcceptingTask(taskId)) {
+    releaseTurn(taskId);
+    return c.json({ error: "任务正在验收（含发布尾段），结束后再重试", status: r.status }, 409);
+  }
+  if (r.mode === "duet") { void resumeDuet(taskId, { turnHeld: true }); return c.json({ started: true }, 202); }
   void resumeOrRunTask(taskId, { reason: "retry", turnHeld: true });
   return c.json({ started: true }, 202);
 });
@@ -614,56 +636,18 @@ api.post("/tasks/:id/gate", async (c) => {
   // a decision, resume the duet from the gate and apply the action.
   const t = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (t?.status === "awaiting_review" && t.mode === "duet") {
-    void resumeAtGate(taskId, action);
+    // 同 /run:先原子占位再启动,占不到说明确有回合在跑(闸口重放会真的续跑讨论)。
+    if (!claimTurn(taskId, "duet")) {
+      return c.json({ error: "任务回合正在进行，稍后再处理裁决", status: t.status }, 409);
+    }
+    if (isAcceptingTask(taskId)) {
+      releaseTurn(taskId);
+      return c.json({ error: "任务正在验收（含发布尾段），结束后再处理裁决", status: t.status }, 409);
+    }
+    void resumeAtGate(taskId, action, { turnHeld: true });
     return c.json({ ok: true, resumed: true });
   }
   return c.json({ error: "no open gate for this task" }, 409);
-});
-
-// ── schedules (§9) — one schedule per task ──────────────────────────────────
-api.get("/tasks/:id/schedule", async (c) => {
-  const row = (await db.select().from(schedules).where(eq(schedules.taskId, c.req.param("id")))).at(0);
-  return c.json(row ?? null);
-});
-
-api.put("/tasks/:id/schedule", async (c) => {
-  const taskId = c.req.param("id");
-  const t = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
-  if (t?.archived) return c.json({ error: "任务已归档，不能设置定时", archived: true }, 409);
-  const b = await c.req.json<{ kind: "once" | "cron"; at?: string | null; cron?: string | null; enabled?: boolean }>();
-  const existing = (await db.select().from(schedules).where(eq(schedules.taskId, taskId))).at(0);
-  const row = {
-    id: existing?.id ?? id(),
-    taskId,
-    kind: b.kind,
-    at: b.at ?? null,
-    cron: b.cron ?? null,
-    enabled: b.enabled ?? true,
-    lastRunAt: null,
-    createdAt: existing?.createdAt ?? now(),
-  };
-  if (existing) await db.update(schedules).set(row).where(eq(schedules.id, existing.id));
-  else await db.insert(schedules).values(row);
-  await db.update(tasks).set({ scheduleId: row.id, updatedAt: now() }).where(eq(tasks.id, taskId));
-  return c.json(row);
-});
-
-api.delete("/tasks/:id/schedule", async (c) => {
-  await db.delete(schedules).where(eq(schedules.taskId, c.req.param("id")));
-  await db.update(tasks).set({ scheduleId: null, updatedAt: now() }).where(eq(tasks.id, c.req.param("id")));
-  return c.json({ deleted: true });
-});
-
-// Commits produced on a task's isolated worktree branch. Empty when the task ran
-// in place (no worktree).
-api.get("/tasks/:id/commits", async (c) => {
-  const tid = c.req.param("id");
-  const t = (await db.select().from(tasks).where(eq(tasks.id, tid))).at(0);
-  if (!t) return c.json({ error: "not found" }, 404);
-  const project = (await db.select().from(projects).where(eq(projects.id, t.projectId))).at(0);
-  const sess = (await db.select().from(sessions).where(eq(sessions.taskId, tid))).find((s) => s.worktreePath);
-  if (!sess?.worktreePath || !project) return c.json({ branch: null, commits: [] });
-  return c.json(await taskCommits(sess.worktreePath, project.repoPath, t.worktreeBase));
 });
 
 }

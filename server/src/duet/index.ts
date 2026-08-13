@@ -8,7 +8,9 @@ import { tasks, projects, sessions } from "../db/schema.js";
 import { bus } from "../bus.js";
 import { id, now } from "../util.js";
 import { setTaskStatus } from "../status.js";
-import { trackRun, untrackRun, isCanceling, takeCanceled, CanceledRun } from "../runs.js";
+import { trackRun, untrackRun, isCanceling, takeCanceled, CanceledRun, claimTurn, reclaimTurn, releaseTurn } from "../runs.js";
+import { isAcceptingTask } from "../acceptance-lock.js";
+import { reopenAcceptedStage } from "../task-stage.js";
 import { taskWorkspace } from "../task-workspace.js";
 import { resolveExecutorFor } from "../executors/index.js";
 import type { AgentExecutor } from "../executors/types.js";
@@ -24,7 +26,20 @@ import { recordGateEvent, recordTurnStart, recordUserTurn } from "./timeline.js"
 const RAISE_RE = /(^|\n)\s*\[可收敛\]/;
 const AGREE_RE = /与对方一致[：:]\s*是/; // self-declared agreement with the opponent's conclusion
 const CONC_RE = /结论[：:]\s*(.+)/; // one-line final conclusion
-const running = new Set<string>();
+
+// duet 的所有权与 single 共用 runs.ts 那把单飞锁。这里原来是个模块内的 `running`
+// Set:调用方看不见它,于是 /run、/fire、/retry、scheduler 都能声称「已启动」而第二次
+// 调用在函数入口静默返回(审查实测:双并发 retry 双双 202);验收锁也挡不住 duet,验收
+// 正在合并/清理 worktree 时 loadBase/taskWorkspace 还能与它并发跑。
+//   turnHeld  = 入口在最后一个 await 之后已原子占位(并已镜像检查过验收锁),这里接管;
+//   自己占    = 占不到 → 确有回合在跑;占到后再镜像检查验收锁,撞上就退位。
+// 返回是否取得所有权:false = 一步都没跑,调用方据此回 409 / 不消费调度班次。
+function acquireDuetTurn(taskId: string, turnHeld?: boolean): boolean {
+  if (turnHeld) { reclaimTurn(taskId, "duet"); return true; }
+  if (!claimTurn(taskId, "duet")) return false;
+  if (isAcceptingTask(taskId)) { releaseTurn(taskId); return false; }
+  return true;
+}
 
 async function setStatus(taskId: string, status: TaskStatus) {
   await setTaskStatus(taskId, status);
@@ -334,13 +349,15 @@ async function loadBase(taskId: string) {
 
 // Full /duet pipeline: blind opening (parallel) → serial rebuttal rounds
 // (A-first) → optional consensus gate G1 → conclusion.
-export async function runDuet(taskId: string): Promise<void> {
-  if (running.has(taskId)) return;
-  running.add(taskId);
+export async function runDuet(taskId: string, opts: { turnHeld?: boolean } = {}): Promise<boolean> {
+  if (!acquireDuetTurn(taskId, opts.turnHeld)) return false;
   try {
     const base = await loadBase(taskId);
     const { cfg, exA, exB, cwd } = base;
     await setStatus(taskId, "running");
+    // 与 single 的 fresh run 对齐:已验收任务被重跑(Cron 到点 / fire),旧「已验收」
+    // 牌子当场摘掉——新一版讨论不能躲在旧牌子下继续。
+    await reopenAcceptedStage(taskId);
 
     // Title the task from its topic (concurrent, non-blocking) like a single task.
     if (base.task.autoTitle) void genDuetTitle(taskId, cfg.topic, exA, cwd);
@@ -350,7 +367,7 @@ export async function runDuet(taskId: string): Promise<void> {
       runTurn({ taskId, role: "voiceA", speaker: "A", round: 1, executor: exA, prompt: P.opening(cfg.topic, cwd), cwd }),
       runTurn({ taskId, role: "voiceB", speaker: "B", round: 1, executor: exB, prompt: P.opening(cfg.topic, cwd), cwd }),
     ]);
-    if (failed(a) || failed(b)) return void (await setStatus(taskId, "failed"));
+    if (failed(a) || failed(b)) { await setStatus(taskId, "failed"); return true; }
 
     const ctx: Ctx = {
       taskId, cfg, exA, exB, cwd, cap: base.cap,
@@ -359,22 +376,24 @@ export async function runDuet(taskId: string): Promise<void> {
       agreesA: a.agrees, agreesB: b.agrees, conclusionA: a.conclusion, conclusionB: b.conclusion,
       planRound: null,
     };
-    if (!(await runRebuttalLoop(ctx))) return;
+    if (!(await runRebuttalLoop(ctx))) return true;
     await finishDiscussion(ctx);
   } catch (err) {
     failDuet(taskId, err);
   } finally {
-    running.delete(taskId);
+    releaseTurn(taskId);
   }
+  return true; // 取得所有权并跑完了(成败已落进任务状态),对调用方就是「真的启动过」
 }
 
 // Retry a FAILED duet by re-running only the failed (last) turn, then
 // continuing — instead of re-running the whole duet. State is rebuilt from the
 // persisted sessions + transcript; the failed turn is dropped from the transcript
 // and re-run (resuming the same CLI session so context is retained).
-export async function resumeDuet(taskId: string): Promise<void> {
-  if (running.has(taskId)) return;
-  running.add(taskId);
+export async function resumeDuet(taskId: string, opts: { turnHeld?: boolean } = {}): Promise<boolean> {
+  if (!acquireDuetTurn(taskId, opts.turnHeld)) return false;
+  // 交棒给 runDuet 时由它释放:两边都释放会把**下一次**运行占的锁误删。
+  let handedOff = false;
   try {
     const base = await loadBase(taskId);
     const { cfg, exA, exB, cwd } = base;
@@ -390,7 +409,7 @@ export async function resumeDuet(taskId: string): Promise<void> {
     try { rows = readFileSync(tpath, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)); } catch { /* none */ }
     const failedIndex = rows.findLastIndex((row) =>
       !row.type && ["A", "B", "impl", "review"].includes(row.speaker));
-    if (failedIndex < 0) { running.delete(taskId); return void runDuet(taskId); } // no completed turn → fresh
+    if (failedIndex < 0) { handedOff = true; void runDuet(taskId, { turnHeld: true }); return true; } // no completed turn → fresh
     const failedTurn = rows[failedIndex];
     rows.splice(failedIndex, 1); // drop the failed turn; it will be re-run
     writeFileSync(tpath, rows.length ? rows.map((r) => JSON.stringify(r)).join("\n") + "\n" : "");
@@ -416,7 +435,7 @@ export async function resumeDuet(taskId: string): Promise<void> {
       // A retired code-writing turn failed. The discussion itself is already a
       // valid /duet result, so retrying the historical task now settles it there.
       await setStatus(taskId, "done");
-      return;
+      return true;
     }
 
     // Voice-phase failure: re-run the failed turn(s) to complete its round,
@@ -447,7 +466,7 @@ export async function resumeDuet(taskId: string): Promise<void> {
     };
 
     const t1 = await re(sp, R);
-    if (failed(t1)) return void (await setStatus(taskId, "failed"));
+    if (failed(t1)) { await setStatus(taskId, "failed"); return true; }
     applyTurn(ctx, sp, t1);
     // A failed mid-round → B of the same round may still need to run. 补跑口径与
     // reDiscuss 对齐:inject/双向 ask 双方都要跑(不看 canSettle);定向介入只跑
@@ -456,18 +475,19 @@ export async function resumeDuet(taskId: string): Promise<void> {
       && (gateNote ? !gateNote.target : !canSettle(ctx));
     if (needB) {
       const t2 = await re("B", R);
-      if (failed(t2)) return void (await setStatus(taskId, "failed"));
+      if (failed(t2)) { await setStatus(taskId, "failed"); return true; }
       applyTurn(ctx, "B", t2);
     }
     ctx.round = R;
 
-    if (!(await runRebuttalLoop(ctx))) return;
+    if (!(await runRebuttalLoop(ctx))) return true;
     await finishDiscussion(ctx);
   } catch (err) {
     failDuet(taskId, err);
   } finally {
-    running.delete(taskId);
+    if (!handedOff) releaseTurn(taskId);
   }
+  return true;
 }
 
 function failDuet(taskId: string, err: unknown) {
@@ -511,9 +531,10 @@ async function genDuetTitle(taskId: string, topic: string, ex: AgentExecutor, cw
 // Resume a duet that is parked at a gate but whose in-memory gate was lost (the
 // server restarted). Rebuilds state from the persisted transcript + sessions and
 // applies the human's gate action, so the gate keeps working across restarts.
-export async function resumeAtGate(taskId: string, action: GateAction): Promise<void> {
-  if (running.has(taskId)) return; // a live duet is actually parked → resolveGate handled it
-  running.add(taskId);
+export async function resumeAtGate(taskId: string, action: GateAction, opts: { turnHeld?: boolean } = {}): Promise<boolean> {
+  // 占不到 = 确有回合在跑(活着的 duet 停在闸口时也占着这把锁,那种情况 resolveGate
+  // 已经就地处理了,根本走不到这儿)。
+  if (!acquireDuetTurn(taskId, opts.turnHeld)) return false;
   try {
     const base = await loadBase(taskId);
     const sess = await db.select().from(sessions).where(eq(sessions.taskId, taskId));
@@ -543,15 +564,16 @@ export async function resumeAtGate(taskId: string, action: GateAction): Promise<
     recordGateEvent({ type: "duet.gate", taskId, gate: "G1", open: false });
     await setStatus(taskId, "running");
 
-    if (action.kind === "reject") return void (await setStatus(taskId, "canceled"));
-    if (action.kind === "approve") return void (await setStatus(taskId, "done"));
+    if (action.kind === "reject") { await setStatus(taskId, "canceled"); return true; }
+    if (action.kind === "approve") { await setStatus(taskId, "done"); return true; }
     await reDiscuss(ctx, action.kind, action.text, action.kind === "ask" ? action.target : undefined, action.attachments);
     await finishDiscussion(ctx);
   } catch (err) {
     failDuet(taskId, err);
   } finally {
-    running.delete(taskId);
+    releaseTurn(taskId);
   }
+  return true;
 }
 
 // Serial rebuttal rounds (A-first). Returns false (and sets status=failed) if a

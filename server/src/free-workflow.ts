@@ -21,7 +21,7 @@ import {
   scheduledMessages,
   tasks,
 } from "./db/schema.js";
-import { disarmFreeReviewReservation, startReservedFreeReview } from "./free-review-reservations.js";
+import { disarmFreeReviewReservation, readFreeReviewReservation, consumeFreeReviewReservation, startReservedFreeReview } from "./free-review-reservations.js";
 import { freeManualRepairPrompt, freeRepairPrompt, freeReviewPrompt } from "./free-review-prompts.js";
 export { freeManualRepairPrompt, freeRepairPrompt, freeReviewPrompt } from "./free-review-prompts.js";
 import { mountFreePreviewRoutes } from "./free-workflow-preview.js";
@@ -284,10 +284,8 @@ async function nextRound(task: TaskRow, run: ReviewRunRow): Promise<void> {
     });
     await db.update(freeReviewRuns).set({ status: "reviewing", currentRound: round, updatedAt: at })
       .where(eq(freeReviewRuns.id, run.id));
-    // 续轮开跑即消费预约槽（自动续轮预约就是为这一步挂上的）。
-    await db.update(freeWorkflowStates)
-      .set({ reviewArmed: false, reviewRunId: null, updatedAt: at })
-      .where(eq(freeWorkflowStates.taskId, task.id));
+    // 预约槽已由 startReservedFreeReview 在调用本函数**之前**按 CAS 消费掉（消费成功才
+    // 会走到这里）。这里再无条件清一次，清掉的可能是用户中途保存的新预约（审查实测）。
     await launchReviewRound(task, nextRun);
   } catch (error) {
     await failReviewStart(nextRun, error instanceof Error ? error.message : String(error));
@@ -347,28 +345,17 @@ export async function handleFreeWorkflowSettlement(
     // 也不消费预约（审查在跑时消费预约会双开）。
     if (run) return true;
     if (confirmedDone && status === "done") {
-      const reservation = (await db.select({
-        armed: freeWorkflowStates.reviewArmed, reviewerId: freeWorkflowStates.selectedReviewerId,
-        checkMode: freeWorkflowStates.reviewCheckMode, retryLimit: freeWorkflowStates.reviewRetryLimit,
-        note: freeWorkflowStates.reviewNote, runId: freeWorkflowStates.reviewRunId,
-      }).from(freeWorkflowStates).where(eq(freeWorkflowStates.taskId, taskId))).at(0);
-      await startReservedFreeReview(taskId, reservation, {
+      // 槽由 startReservedFreeReview 按 CAS 消费（消费成功才启动），所以下面两条失败路径
+      // 都不再补 disarm——那时槽已经空了，再清一次清掉的会是用户新保存的那条。
+      await startReservedFreeReview(taskId, await readFreeReviewReservation(taskId), {
         continueRun: async (runId) => {
           const target = (await db.select().from(freeReviewRuns).where(eq(freeReviewRuns.id, runId))).at(0);
           if (!target || target.status !== "stopped") {
-            // 链已不在等待状态（比如部分写入后被判 failed）：预约必须一并注销，
-            // 否则之后每次确认完成都会重复撞同一个错误。
-            await disarmFreeReviewReservation(taskId);
             throw new Error("预约续审的审查链已不在等待状态，预约已取消");
           }
-          try {
-            await nextRound(task, target);
-          } catch (error) {
-            // 续轮起不来（典型：崩溃残留的半个 round 造成唯一键冲突，run 已被判 failed）
-            // 同样是永久性失败——留着预约就是一条永远执行不了的幽灵预约。
-            await disarmFreeReviewReservation(taskId);
-            throw error;
-          }
+          // 续轮起不来（典型：崩溃残留的半个 round 造成唯一键冲突，run 已被判 failed）是
+          // 永久性失败：槽已消费，不会再有幽灵预约反复撞同一个错误。
+          await nextRound(task, target);
         },
         startNew: (input) => startFreeReview(taskId, {
           reviewerId: input.reviewerId,
@@ -430,12 +417,14 @@ export async function handleFreeWorkflowSettlement(
     });
     await appendTaskTimeline(taskId, `自由工作流第 ${run.currentRound} 轮审查未通过，意见已发回会话；修复确认完成后自动复审。`);
     bus.publish({ type: "task.review", taskId });
+    // 刚挂上的这条续轮预约的版本令牌：投递失败要撤销的是**它**。迟到的无条件清槽会把
+    // 用户在这期间保存的新预约一起删掉（审查实测同型交错）。
+    const armed = await readFreeReviewReservation(taskId);
     continueWhenIdle(taskId, freeRepairPrompt(taskId, run), { byBackend: true }, async (error) => {
-      const failedAt = now();
-      await db.update(freeWorkflowStates)
-        .set({ reviewArmed: false, reviewRunId: null, updatedAt: failedAt })
-        .where(eq(freeWorkflowStates.taskId, taskId));
-      await appendTaskTimeline(taskId, `自由工作流审查意见投递失败：${error}；自动复审已取消，可手动按意见修复或再派审查。`);
+      const canceled = await consumeFreeReviewReservation(taskId, armed);
+      await appendTaskTimeline(taskId, canceled
+        ? `自由工作流审查意见投递失败：${error}；自动复审已取消，可手动按意见修复或再派审查。`
+        : `自由工作流审查意见投递失败：${error}；请手动按意见修复或再派审查（预约已被更新，保留你最新的设置）。`);
       bus.publish({ type: "task.review", taskId });
     });
     return true;

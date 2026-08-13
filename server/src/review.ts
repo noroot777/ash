@@ -26,7 +26,7 @@ import { AGENT_TYPES, TEAM_DEFAULTS } from "@harness/shared";
 import { inheritExecutorOverrides, pickExecutor } from "@harness/shared/executors";
 import { STEP_LABELS } from "@harness/shared/workflow";
 import { anchorAt, firstAnchor, workflowPolicy } from "@harness/shared/workflow-policy";
-import { asc, eq } from "drizzle-orm";
+import { and, asc, eq } from "drizzle-orm";
 import type { Hono } from "hono";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
@@ -407,7 +407,9 @@ async function finishVerifyRound(target: TaskRow, turnOk: boolean): Promise<void
   // 审查任务占掉的号（`nextReviewRound(legacy.length + verifyRounds)`），拿号当计数会
   // 让下一轮跳号。verify_station_rounds 则是「这一站」验过几轮，判定轮数上限用它。
   const stationRound = (target.verifyStationRounds ?? 0) + 1;
-  await db
+  // CAS 收轮:只有把 verify_round 从**本轮号**改成 null 的那一次算数。0 行 = 这一轮
+  // 已被别处收掉(并发结算/外部清理),此时再 concludeRound 会给同一轮下两次结论。
+  const closed = await db
     .update(tasks)
     .set({
       verifyRound: null,
@@ -415,7 +417,20 @@ async function finishVerifyRound(target: TaskRow, turnOk: boolean): Promise<void
       verifyStationRounds: stationRound,
       updatedAt: now(),
     })
-    .where(eq(tasks.id, target.id));
+    .where(and(eq(tasks.id, target.id), eq(tasks.verifyRound, round)))
+    .returning({ id: tasks.id });
+  if (!closed.length) return;
+  // 任务在这一轮中途被冻结(归档):线不能再往下推——concludeRound 会写 stage、发时间线、
+  // 甚至派下一轮/打回,全是「已冻结的任务还在动」。只把这一轮的 verifying 牌子收干净,
+  // 免得留下 archived=true + stage=verifying 的死局(审查实测)。
+  const frozen = (await db.select({ archived: tasks.archived, stage: tasks.stage })
+    .from(tasks).where(eq(tasks.id, target.id))).at(0);
+  if (frozen?.archived) {
+    if (frozen.stage === "verifying") {
+      await clearTaskStage(target.id, `第 ${round} 轮验证未出结论就被归档冻结，已收回「验证中」标记；取消归档后可重新发起验证。`);
+    }
+    return;
+  }
   // 旁路回合的落位永远是任务原来的终态，说明不了验证跑成没跑成，所以这里用回合本身
   // 是否干净收尾来判：崩了/被手停 → 这一轮没结论，按 failed 收尾。
   await concludeRound(target, round, turnOk ? "done" : "failed", null, {

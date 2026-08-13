@@ -38,6 +38,13 @@ export function mountTaskArchiveRoutes(api: Hono): void {
     if (r.workflowMode === "free" && await hasActiveFreeReview(r.id)) {
       return c.json({ error: "自由审查正在进行，结束后再归档" }, 409);
     }
+    // 就地验证轮中途提问后,旁路结算会把 status 放回原终态(done/failed),而 verifyRound
+    // 和 question 都还挂着——只看 status/turn 的门禁会放行,于是「已冻结」的任务被答复后
+    // 继续结算,最后留下 archived=true + stage=verifying 的死局(审查实测)。验证轮没结束
+    // 就是还在进行,先答复/停掉它再归档。
+    if (r.verifyRound !== null) {
+      return c.json({ error: "就地验证轮还没结束（可能正等你答复），处理完再归档", status: r.status }, 409);
+    }
     // 团队归档会连 children 一起冻结：任一执行者还在验收(含发布尾段)/回合中时归档，
     // 冻结的任务会继续产生外部副作用(审查实测:child beginAccepting 后归档 lead 200)。
     if (r.mode === "team") {

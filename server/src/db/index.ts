@@ -292,6 +292,14 @@ export async function ensureSchema() {
   await migrateDebateToDuet();
   await migrateFreeReviewStatuses();
   const mergeStatesMigrated = await migrateFreeWorkflowMergeStates();
+  // 合并状态迁移刚把老库的 stage 补成 accepted/merged —— 预约清理必须再跑一遍才能
+  // 命中它们(见 disarmReservationsOnAcceptedTasks 的注释)。无条件跑:部分失败
+  // (mergeStatesMigrated=false)时也已经有任务落了 stage,那几条同样得清。
+  try {
+    await disarmReservationsOnAcceptedTasks();
+  } catch (e) {
+    console.warn("[harness] 已验收任务遗留预约清理失败,忽略:", e);
+  }
   await reclaimOrphanOwnerGroups();
   await dropRetiredColumns(mergeStatesMigrated ? undefined : MERGE_STATE_COLUMNS);
   await dropRetiredTables();
@@ -342,16 +350,25 @@ async function migrateFreeReviewStatuses(): Promise<void> {
          AND mode='queued' AND text LIKE '【答复】%'
          AND task_id IN (SELECT task_id FROM free_review_runs WHERE status='reviewing')`,
     );
-    // 已验收自由任务的遗留预约不自愈会变幽灵审查。
-    await client.execute(
-      `UPDATE free_workflow_states SET review_armed=0, review_run_id=NULL, review_note=NULL
-       WHERE review_armed=1 AND task_id IN (
-         SELECT id FROM tasks WHERE workflow_mode='free' AND stage IN ('accepted','merged')
-       )`,
-    );
+    await disarmReservationsOnAcceptedTasks();
   } catch (e) {
     console.warn("[harness] 自由审查旧状态收敛失败,忽略:", e);
   }
+}
+
+// 已验收(accepted/merged)自由任务的遗留预约不自愈会变幽灵审查:任务日后被唤醒、再次
+// 确认完成时,那条上一个验收生命周期的预约就会启动一轮语境全变的审查。
+// **必须在 stage 定型之后再跑一次**:老库的 stage 是空的,accepted/merged 由后面的
+// migrateFreeWorkflowMergeStates() 从旧 merge_status 列恢复;只在它之前清一遍,匹配不到
+// 任何行,而旧 merge 列随后就被删了,预约永久留存(审查实测:old-merged/old-merging 两条
+// 升级后都还 armed)。幂等,匹配 0 行就是空转。
+async function disarmReservationsOnAcceptedTasks(): Promise<void> {
+  await client.execute(
+    `UPDATE free_workflow_states SET review_armed=0, review_run_id=NULL, review_note=NULL
+     WHERE review_armed=1 AND task_id IN (
+       SELECT id FROM tasks WHERE workflow_mode='free' AND stage IN ('accepted','merged')
+     )`,
+  );
 }
 
 // 辩论模式更名为讨论(duet,2026-08-07):列、mode 值、会话角色一起迁。全部幂等——

@@ -134,6 +134,18 @@ export function AcceptanceControls({
     if (acceptanceBlock && action === "accept") setAction(null);
   }, [acceptanceBlock, action]);
 
+  // 动作成功之后的「再拉一遍任务」是**另一件事**：POST 已经 200、合并/打回都已发生,
+  // 这一步只决定页面跟不跟得上。和 mutation 共用一个 try 就会把「已经打回」报成
+  // 「打回失败」——弹窗和意见都还留着,用户照提示一重试,同一条意见投递两遍
+  // (审查实测)。所以刷新单独 best-effort,失败只在成功提示后面缀一句。
+  const refreshAfterMutation = async (): Promise<string> => {
+    try {
+      onTaskUpdated(await api.task(task.id));
+      return "";
+    } catch {
+      return "（动作已生效，但页面没能刷新，手动刷新可看到最新状态）";
+    }
+  };
   const accept = async () => {
     // The confirmation is single-use. Keep progress on the action button so a
     // typed acceptance failure can render unobscured in the review record.
@@ -150,15 +162,15 @@ export function AcceptanceControls({
           : result.reason === "merge_conflict" ? "合并冲突，未能自动交接" : `验收未完成：${result.error}`);
         return;
       }
-      onTaskUpdated(await api.task(task.id));
       setAction(null);
+      const stale = await refreshAfterMutation();
       // 合并成了、但「点头之后」那一段（发布脚本之类）挂了，是两件事，得分开说：
       // 只报一句「验收通过」，用户下次知道发布挂了就是在线上出事的时候。
-      notify(result.kind === "gate_released"
+      notify((result.kind === "gate_released"
         ? "已放行，这条线继续往下走"
         : result.tail && !result.tail.ok
           ? `已合并，但「${result.tail.step ?? "点头之后那一段"}」没跑过，详情见任务时间线`
-          : result.warnings?.length ? `验收通过，但有 ${result.warnings.length} 条清理警告` : "验收通过");
+          : result.warnings?.length ? `验收通过，但有 ${result.warnings.length} 条清理警告` : "验收通过") + stale);
     } catch (reason) {
       notify(reason instanceof Error ? reason.message : String(reason));
     } finally {
@@ -171,13 +183,14 @@ export function AcceptanceControls({
     setBusy(true);
     try {
       const result = await api.replyTask(task.id, `【验收打回】请继续修改并完成后重新提交验收。\n\n${text}`);
-      onTaskUpdated(await api.task(task.id));
+      // 打回已经投递出去了:先把弹窗和已发出的意见收掉,再去刷新(见上面的注释)。
       setAction(null);
       setFeedback("");
+      const stale = await refreshAfterMutation();
       // 任务这会儿还在跑的话,后端会把意见排队,等它这一轮结束再送进去——如实说清楚。
-      notify("scheduled" in result
+      notify(("scheduled" in result
         ? "已打回；任务还在跑，意见已排队，跑完自动送入会话"
-        : "已打回，意见已送入原任务会话");
+        : "已打回，意见已送入原任务会话") + stale);
     } catch (reason) {
       notify(reason instanceof Error ? reason.message : String(reason));
     } finally {
@@ -345,14 +358,21 @@ export function TeamReviewWorkspace({
   // 证据在右侧审查侧边栏。这里只留一句摘要，因为「按下验收会联动标记它们」是不可逆动作
   // 的前提事实，用户在按之前该看得见（确认框里也说了同一件事）。
   const sharedFailed = sharedWorkers.filter((worker) => worker.stage === "verify_failed").length;
+  // 后端 acceptanceGuard 对共享执行者的 running/queued/backlog/paused 一律 409(团队验收
+  // 会把它们的 stage 联动置 accepted,盖到没跑过/待续跑的活上就是伪造)。按钮不同步这道
+  // 门禁就是「可点但必失败」(审查实测)——判据与 server/src/task-accept-guard.ts 同源。
+  const unsettledShared = sharedWorkers.filter((worker) =>
+    worker.status === "running" || worker.status === "queued" || worker.status === "backlog" || worker.status === "paused");
+  const leadAcceptanceBlock = unsettledShared.length ? `共享执行者未完成（${unsettledShared.length}）` : null;
   const sharedNote = sharedWorkers.length
-    ? `共享分支上还有 ${sharedWorkers.length} 个执行者${sharedFailed ? `（${sharedFailed} 个验证未通过）` : ""}，随团队整体验收联动标记；逐个证据见右侧审查。`
+    ? `共享分支上还有 ${sharedWorkers.length} 个执行者${sharedFailed ? `（${sharedFailed} 个验证未通过）` : ""}，随团队整体验收联动标记；逐个证据见右侧审查。${
+      unsettledShared.length ? `其中 ${unsettledShared.map((worker) => worker.title).join("、")} 还没跑完或没跑过，先处理完才能整体验收。` : ""}`
     : "核对共享分支与独立 worktree 后分别验收或打回。";
   return (
     <section className="team-review-workspace">
       <header className="team-review-subbar">
         <div><b>团队验收台</b><small>{sharedNote}</small></div>
-        <AcceptanceControls task={lead} onTaskUpdated={onTaskUpdated} notify={notify} />
+        <AcceptanceControls task={lead} onTaskUpdated={onTaskUpdated} notify={notify} acceptanceBlock={leadAcceptanceBlock} />
         <button type="button" onClick={onClose}><X size={13} />返回团队流</button>
       </header>
       <div className="team-review-scroll">

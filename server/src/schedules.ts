@@ -75,16 +75,17 @@ async function fire(taskId: string): Promise<boolean> {
     const g = (await db.select().from(groups).where(eq(groups.id, t.groupId))).at(0);
     if (g?.paused) return false;
   }
-  if (t.mode === "duet") { void runDuet(taskId); return true; }
   // 原子占位后启动:只读预检查在任何 await 之后都可能过期,占到才算这一班真的开跑
   // (审查实测:验收/turn 窗口里 once 被永久消费)。占位后再查验收锁——与验收侧
   // beginAccepting→isTurnClaimed 互为镜像,任意交错至少一方退避;退避不消费班次,
-  // 下个 tick 再试。
-  if (!claimTurn(taskId, "single")) return false;
+  // 下个 tick 再试。duet 走同一把锁:它原来在占位之前就 fire-and-forget 并返回
+  // true,于是验收锁里的 duet 一步没跑、once 班次却被永久消费(审查实测)。
+  if (!claimTurn(taskId, t.mode === "duet" ? "duet" : "single")) return false;
   if (isAcceptingTask(taskId)) {
     releaseTurn(taskId);
     return false;
   }
+  if (t.mode === "duet") { void runDuet(taskId, { turnHeld: true }); return true; }
   void runTask(taskId, { turnHeld: true }); // 全新一轮(新 session),不接续上次会话
   return true;
 }
