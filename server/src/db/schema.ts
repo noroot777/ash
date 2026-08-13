@@ -152,6 +152,11 @@ export const tasks = sqliteTable("tasks", {
   // 落库而不只放内存 —— 确认与结算若不在同一个进程里（历史事故：僵尸实例跑任务、
   // HTTP 打到监听进程），内存标记会静默丢掉，agent 明明确认了却记 failed。
   completeConfirmedAt: text("complete_confirmed_at"),
+  // 这一轮是 CLI 原生命令（`/compact`）：整条消息由 CLI 本地执行，不进模型 —— 既不是
+  // 任务的执行，也不是一轮验证。结算钩子（派验证 / 收验证轮 / 推工作流）必须整段跳过，
+  // 否则「压一下上下文」会被记成一轮验证跑完，还白吃一轮配额。开跑时写，结算后清空；
+  // 落库而不只放内存，理由同上一条（结算可能发生在另一个进程里）。
+  nativeTurn: integer("native_turn", { mode: "boolean" }).notNull().default(false),
 });
 
 export const agents = sqliteTable("agents", {
@@ -166,6 +171,9 @@ export const agents = sqliteTable("agents", {
   // 挂载的供应商(llm_providers.id)。null=用 CLI 自己的官方登录账号。
   // 非空时启动 CLI 前注入 base_url + key(claude: env;codex: -c model_providers)。
   providerId: text("provider_id"),
+  // 覆盖 CLI 自己配置文件里的设置(json Record<string, number>,以 env 注入)。
+  // 声明表在 @harness/shared/cli-overrides —— 没在那儿声明过的 key 一律不落库。
+  configOverrides: text("config_overrides").notNull().default("{}"),
   isDefault: integer("is_default", { mode: "boolean" }).notNull().default(false),
 });
 
@@ -282,9 +290,12 @@ export const sessions = sqliteTable("sessions", {
   cwd: text("cwd"),
   cliSessionId: text("cli_session_id"),
   resumeCommand: text("resume_command"),
-  // 本次运行挂的供应商在恢复命令里要带的 env 前缀(token 已是占位符)。
-  // null = 走 CLI 官方账号。只用于展示,不含真 key。
-  relayEnv: text("relay_env"),
+  // 恢复命令要带的 env 前缀:供应商那一截(token 已是占位符)。null = 没有。
+  // 只用于展示,不含真 key。列名 relay_env 跟它现在装的东西正好对上。
+  resumeEnv: text("relay_env"),
+  // 恢复命令里跟在 CLI 后面的参数(claude 的 `--settings '{…}'`)。配置覆盖项走这一列:
+  // env 前缀打不过用户自己的 settings.json,只有 --settings 这一层压得住(finding 2)。
+  resumeArgs: text("resume_args"),
   commandLine: text("command_line"),
   startedAt: text("started_at").notNull(),
   endedAt: text("ended_at"), // when this run finished (set with exit_status)

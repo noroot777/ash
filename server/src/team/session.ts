@@ -40,12 +40,13 @@ import { pauseGroup } from "../scheduler.js";
 import { taskWorkspace } from "../task-workspace.js";
 import { resolveExecutorFor } from "../executors/index.js";
 import type { ResidentHandle } from "../executors/types.js";
+import { sessionTargetKey } from "../executors/resume.js";
 import { RUNS_DIR } from "../paths.js";
 import { appendSessionTrace, writeTurn, writeTurnEnd, writeRunError } from "../transcript.js";
 import { recordUserConversationTurn } from "../conversation-turn.js";
 import { recordSessionUsageEvent, setSessionContext } from "../usage.js";
 import { LEAD_PREAMBLE, LEAD_NUDGE, LEAD_RESUMED, LEAD_WORKSPACE_RESET } from "./prompts.js";
-import { withSkillInvocation } from "../skills.js";
+import { withSkillInvocation, nativeCliCommand } from "../skills.js";
 
 // 空闲多久回收进程(0/负数 = 永不回收)。测试用 HARNESS_TEAM_IDLE_MS=5000。
 const IDLE_MS = Number(process.env.HARNESS_TEAM_IDLE_MS ?? 30 * 60_000);
@@ -89,12 +90,15 @@ export function teamIsLive(taskId: string): boolean {
 }
 
 // 用户插话(continueTask 顶部分流过来)。
+// **返回值 = 这句话有没有真的进到调度台**。false 只有一种来源:离线时收到 CLI 原生
+// 命令,被下面明确拒收(理由写进了会话)。上层拿它决定要不要记「已送达」—— 记了就
+// 等于把一句从未送出的话标成 sent(见 continueTask 里那段)。
 export async function deliverToLead(
   taskId: string,
   text: string,
   opts: { attachments?: string[]; throwOnOpenFailure?: boolean } = {},
-): Promise<void> {
-  await deliver(taskId, text + attachmentsPrompt(opts.attachments), "user", opts.throwOnOpenFailure);
+): Promise<boolean> {
+  return deliver(taskId, text + attachmentsPrompt(opts.attachments), "user", opts.throwOnOpenFailure);
 }
 
 // 执行者汇报/提问,以及 harness 自己的唤醒语(inbox.ts 用)。
@@ -105,7 +109,10 @@ export async function sendInbound(taskId: string, text: string): Promise<void> {
 // 开台:第一次运行装前言+目标;已有历史会话则 --resume 接回(用 LEAD_NUDGE
 // 当唤醒语);已经在线就只当一次唤醒,绝不开第二个进程。
 export async function startTeam(taskId: string): Promise<void> {
-  if (teamIsLive(taskId)) return deliver(taskId, LEAD_NUDGE, "inbound");
+  if (teamIsLive(taskId)) {
+    await deliver(taskId, LEAD_NUDGE, "inbound");
+    return;
+  }
   await deliver(taskId, "", "start");
 }
 
@@ -124,12 +131,14 @@ export async function haltTeam(taskId: string): Promise<void> {
 }
 
 // ── 投递 ────────────────────────────────────────────────────────────────────
+// 返回 true = 这句话进了调度台(或者由 open 带着它开台);false = **明确拒收**,
+// 一个字都没送出去(见下面的原生命令分支)。调用方必须分得清这两者。
 async function deliver(
   taskId: string,
   text: string,
   kind: Kind,
   throwOnOpenFailure = false,
-): Promise<void> {
+): Promise<boolean> {
   let lead = leads.get(taskId);
   // 进程还活着,但它脚下的目录已经没了 —— 典型情形:调度者按用户吩咐删掉了自己
   // 所在的那个 worktree(它嘴上说"我已回落到主检出",实际 cwd 还钉在被删的路径
@@ -150,15 +159,33 @@ async function deliver(
   if (!lead) {
     const inflight = opening.get(taskId);
     if (!inflight) {
+      // CLI 原生命令(claude 的 `/compact`)要求自己是消息的**第一个字**,而开台/接回
+      // 一定会在前面拼上前言或 LEAD_RESUMED —— 拼完就不再是命令,会被当成一句闲聊
+      // 发出去。调度台不在线时也压根没有「当前上下文」可压缩,所以这里不开台,直接
+      // 把原因写回会话:让用户先用一句普通消息把调度者接回来,再发 `/compact`。
+      const native = kind === "user" ? nativeCliCommand(await leadTypeOf(taskId), text) : null;
+      if (native) {
+        const why =
+          `/${native} 没有送出：调度台当前不在线（进程已回收或还没开台）。` +
+          `这类 CLI 原生命令必须是消息的第一个字才生效，而接回调度台时前面一定会带上唤醒前言。` +
+          `请先随便说一句普通消息把调度者接回来，再单独发 /${native}。`;
+        await noteToLead(taskId, why);
+        // 定时/排队消息还要把「送不出去」传回 scheduler:它得让那条 pending 明确落
+        // canceled 并把原文写回时间线,而不是留在托盘里每个 tick 被重新拒绝一次。
+        if (throwOnOpenFailure) throw new Error(why);
+        return false;
+      }
       // 开台失败(典型:worktree 建不出来)不能静默 —— 路由是 void 调用的,抛出去
       // 只会变成被兜底吞掉的 unhandledRejection,用户什么都看不到。
+      // 这一档仍算「接管了」(true):失败原因已经如实写进会话,消息本身是随开台一起
+      // 送出去的,退回队列重试只会把同一份错误再演一遍。
       try {
         await open(taskId, text, kind);
       } catch (err) {
         await reportOpenFailure(taskId, err);
         if (throwOnOpenFailure) throw err;
       }
-      return;
+      return true;
     }
     try {
       lead = await inflight; // 别开第二个进程:等它开完,这条按普通消息送
@@ -166,16 +193,29 @@ async function deliver(
       // 发起 open 的那条消息负责记录失败；定时消息还要把失败传回 scheduler，
       // 让 pending 明确落 canceled，而不是到点后静默消失。
       if (throwOnOpenFailure) throw err;
-      return;
+      return true;
     }
   }
   push(lead, text, kind);
+  return true;
 }
 
-// 开台失败:把原因写进最近一条调度台会话的 .md(刷新后仍可见)并广播(实时可见),
-// 状态落回 idle —— 团队没有终态,开不起来就是待命。
-async function reportOpenFailure(taskId: string, err: unknown): Promise<void> {
-  const message = `调度台启动失败：${err instanceof Error ? err.message : String(err)}`;
+// 调度台此刻不在线时,配置里写的是哪种 CLI(判定 `/compact` 这类原生命令要用)。
+// 导出给路由层用:立即回复端点要先认出「这是发给调度台的原生命令」,才能把「送不出去」
+// 当场答成失败,而不是排队等一个永远不该发生的补发(第 2 轮审查 finding 5)。
+export async function leadTypeOf(taskId: string): Promise<AgentType> {
+  const row = (await db.select({ team: tasks.team }).from(tasks).where(eq(tasks.id, taskId))).at(0);
+  try {
+    if (row?.team) return (JSON.parse(row.team) as TeamConfig).lead ?? TEAM_DEFAULTS.lead;
+  } catch {
+    /* 脏数据按默认执行器算 */
+  }
+  return TEAM_DEFAULTS.lead;
+}
+
+// 没有进程可送的时候,把一条系统说明写进最近一条调度台会话的 .md(刷新后仍可见)
+// 并广播(实时可见)—— 只弹一个 toast 不算数,用户刷新后必须还看得见发生过什么。
+async function noteToLead(taskId: string, message: string): Promise<void> {
   const last = (await db.select().from(sessions).where(eq(sessions.taskId, taskId)))
     .filter((s) => s.role === "lead")
     .sort((a, b) => b.startedAt.localeCompare(a.startedAt))
@@ -194,6 +234,11 @@ async function reportOpenFailure(taskId: string, err: unknown): Promise<void> {
     agentType: (last?.agentType as AgentType) ?? "claude",
     event: { kind: "error", message },
   });
+}
+
+// 开台失败:原因照上面的通道写回去,状态落回 idle —— 团队没有终态,开不起来就是待命。
+async function reportOpenFailure(taskId: string, err: unknown): Promise<void> {
+  await noteToLead(taskId, `调度台启动失败：${err instanceof Error ? err.message : String(err)}`);
   await setTaskStatus(taskId, "idle");
 }
 
@@ -275,9 +320,23 @@ async function openLead(taskId: string, rawText: string, kind: Kind): Promise<Le
 
   const cliSessionId = prev?.cliSessionId ?? handle.sessionId;
   if (resuming) {
+    // 接回同一行会话:除了回合时间戳,**执行器那一组字段必须整组刷新** —— 用户完全
+    // 可以在两段常驻之间改掉团队的执行器 profile(换 CLI、换供应商、改 CLI 配置覆盖、
+    // 甚至改成 ssh 远端)。沿用上一段的值,会话详情就会拿旧 profile 的 env 前缀和
+    // 「在哪台机器上跑」去拼那条「复制去终端接着聊」的命令,直接是错的。
     await db
       .update(sessions)
-      .set({ turnStartedAt: turnStart, endedAt: null, exitStatus: null, commandLine: handle.commandLine })
+      .set({
+        turnStartedAt: turnStart,
+        endedAt: null,
+        exitStatus: null,
+        commandLine: handle.commandLine,
+        executor: ex.label,
+        target: sessionTargetKey(ex.target),
+        resumeCommand: ex.resumeCommand(ws.path, cliSessionId),
+        resumeEnv: ex.resumeEnvHint ?? null,
+        resumeArgs: ex.resumeArgsHint ?? null,
+      })
       .where(eq(sessions.id, sessId));
   } else {
     await db.insert(sessions).values({
@@ -286,13 +345,14 @@ async function openLead(taskId: string, rawText: string, kind: Kind): Promise<Le
       role: "lead",
       agentType: cfg.lead,
       executor: ex.label,
-      target: "local",
+      target: sessionTargetKey(ex.target),
       worktreePath: ws.isWorktree ? ws.path : null,
       branch: ws.branch,
       cwd: ws.path,
       cliSessionId,
       resumeCommand: ex.resumeCommand(ws.path, cliSessionId),
-      relayEnv: ex.relayEnvHint ?? null,
+      resumeEnv: ex.resumeEnvHint ?? null,
+      resumeArgs: ex.resumeArgsHint ?? null,
       commandLine: handle.commandLine,
       startedAt: turnStart,
       turnStartedAt: turnStart,

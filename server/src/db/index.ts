@@ -69,6 +69,7 @@ export async function ensureSchema() {
       id TEXT PRIMARY KEY, name TEXT NOT NULL, type TEXT NOT NULL,
       target TEXT NOT NULL DEFAULT '{"kind":"local"}', model TEXT,
       extra_args TEXT NOT NULL DEFAULT '[]', reasoning_effort TEXT, speed TEXT,
+      config_overrides TEXT NOT NULL DEFAULT '{}',
       is_default INTEGER NOT NULL DEFAULT 0
     );
     CREATE TABLE IF NOT EXISTS team_presets (
@@ -184,6 +185,7 @@ export async function ensureSchema() {
     "ALTER TABLE tasks ADD COLUMN question TEXT",
     "ALTER TABLE agents ADD COLUMN provider_id TEXT",
     "ALTER TABLE sessions ADD COLUMN relay_env TEXT",
+    "ALTER TABLE sessions ADD COLUMN resume_args TEXT",
     // §Team：团队模式（替掉旧的「编排组/协调者」）
     "ALTER TABLE tasks ADD COLUMN team TEXT",
     "ALTER TABLE tasks ADD COLUMN report_back INTEGER NOT NULL DEFAULT 0",
@@ -273,6 +275,12 @@ export async function ensureSchema() {
     // Codex 旧 trace 不完整时没有可信累计基线：下一回合只采基线，宁可少记一轮，也不
     // 把整条线程累计值再次加进 sessions。
     "ALTER TABLE usage_cumulative_snapshots ADD COLUMN baseline_ready INTEGER NOT NULL DEFAULT 1",
+    // 覆盖 CLI 自己配置文件里的设置(json,以 env 注入进程)。声明表在
+    // shared/src/cli-overrides.ts,那里同时写明每一项盖掉的是谁。
+    "ALTER TABLE agents ADD COLUMN config_overrides TEXT NOT NULL DEFAULT '{}'",
+    // 这一轮是 CLI 原生命令(`/compact`):结算钩子整段跳过,别把一次本地压缩记成
+    // 一轮验证跑完(说明见 db/schema.ts 的 tasks.nativeTurn)。
+    "ALTER TABLE tasks ADD COLUMN native_turn INTEGER NOT NULL DEFAULT 0",
   ]) {
     try {
       await client.execute(sql);

@@ -178,6 +178,27 @@ try {
   const repeated = await app.request(`/tasks/${teamId}/team/iterate-duet`, { method: "POST" });
   assert.equal(repeated.status, 200);
   assert.equal(((await repeated.json()) as { id: string }).id, created.id);
+
+  // 复用同一条 session 行接着跑下一轮时,「这活在哪台机器、哪个目录、带什么参数跑」必须
+  // 整组跟着刷新:门禁能等很久,这期间 profile 可能被改到另一台机器、worktree 可能被删
+  // 后重建。漏掉哪一列,「复制到终端接着聊」就给出一条跑不起来的命令(第 2 轮 finding 6)。
+  const { reusedSessionPatch } = await import("../src/duet/index.js");
+  const executor = {
+    label: "claude@build",
+    type: "claude",
+    target: { kind: "ssh", host: "build.example" },
+    resumeEnvHint: "K=v ",
+    resumeArgsHint: "--settings '{}'",
+  } as unknown as Parameters<typeof reusedSessionPatch>[0];
+  assert.deepEqual(reusedSessionPatch(executor, "/repo/next", "claude --resume x"), {
+    commandLine: "claude --resume x",
+    executor: "claude@build",
+    target: "ssh:build.example",
+    cwd: "/repo/next",
+    resumeEnv: "K=v ",
+    resumeArgs: "--settings '{}'",
+  }, "换机器/换目录/换参数都要落库,少一列就是一条恢复不了的恢复命令");
+
   console.log("duet iteration endpoint: ok");
 } finally {
   rmSync(dirname(leadTranscript), { recursive: true, force: true });

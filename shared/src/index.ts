@@ -105,6 +105,9 @@ export interface AgentExecutorProfile {
   // 挂载的供应商(LlmProvider.id)。缺省/null = 用 CLI 自己的官方登录账号。
   // 非空时启动 CLI 前注入供应商的 base_url + key(见 executors/index.ts)。
   providerId?: string | null;
+  // 覆盖 CLI 自己配置文件里的设置(以环境变量注入,只对 harness 起的进程生效)。
+  // 可覆盖哪些项、各自盖掉谁,声明在 @harness/shared/cli-overrides。
+  configOverrides?: Record<string, number>;
   isDefault: boolean; // the default executor resolved for its type
 }
 

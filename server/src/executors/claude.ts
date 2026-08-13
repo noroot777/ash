@@ -3,9 +3,11 @@ import type { ChildProcess } from "node:child_process";
 import { createInterface } from "node:readline";
 import type { AgentEvent, AgentType, ExecTarget, TokenUsage } from "@harness/shared";
 import { guessContextWindow } from "@harness/shared/usage";
+import { cliConfigOverrideEnvPatch, cliConfigOverrideSettings } from "@harness/shared/cli-overrides";
+import { cliHostEnv, resumeEnvHint } from "./cli-env.js";
 import type { AgentExecutor, RelayConfig, ResidentHandle, RunHandle, RunOpts } from "./types.js";
 import { spawnForRun, detachedInfo } from "./detached.js";
-import { spawnAgent, resumeFor, resumeInner, spawnErrorMessage, killChild, forceFinishOnExit, redactSecrets } from "./spawn.js";
+import { spawnAgent, resumeFor, resumeInner, shq, spawnErrorMessage, killChild, forceFinishOnExit, redactSecrets } from "./spawn.js";
 import { relayRoot } from "../llm.js";
 import { calibrateSkills } from "../skills.js";
 import { persistMarkdownImages, persistToolResultImages } from "../agent-attachments.js";
@@ -16,8 +18,17 @@ import { persistMarkdownImages, persistToolResultImages } from "../agent-attachm
 export class ClaudeExecutor implements AgentExecutor {
   readonly type = "claude" as const;
   readonly label: string;
-  // 供应商的 env 前缀,token 已换成占位符 —— 存进 sessions.relay_env 供恢复命令展示。
-  readonly relayEnvHint?: string;
+  // 恢复命令要带的 env 前缀:**只剩供应商那一截**(token 已换成占位符)。存进 sessions。
+  //
+  // 覆盖项(窗口 / 压缩触发点 / 总开关)不走这里 —— 它们在下面的 resumeArgsHint 里以
+  // `--settings` 的形态出现。理由是同一条实测事实:CLI 会把各层 settings 的 `env` 写回
+  // 自己的进程环境,命令行前缀那一份**打不过**用户的 settings.json。第 2 轮审查
+  // finding 2 复现过:复制出来的命令带着 env 前缀跑,压缩行为退回用户文件里的那份数,
+  // 跟他在 harness 里看到的不是一回事。既然打不过,就别放上去骗人。
+  readonly resumeEnvHint?: string;
+  // 恢复命令里跟在 CLI 后面的参数(`--settings '{…}'`)。跟运行时那份是同一个装配函数,
+  // 所以「复制到终端接着聊」跑出来的压缩行为跟 harness 这一轮一致。
+  readonly resumeArgsHint?: string;
   readonly target: ExecTarget;
   private bin: string;
   readonly model?: string;
@@ -25,7 +36,8 @@ export class ClaudeExecutor implements AgentExecutor {
   readonly reasoningEffort?: string;
   private speed?: "fast";
   private relay?: RelayConfig;
-  constructor(opts: { model?: string; extraArgs?: string[]; reasoningEffort?: string; speed?: "fast"; bin?: string; target?: ExecTarget; name?: string; relay?: RelayConfig } = {}) {
+  private configOverrides?: Record<string, number>;
+  constructor(opts: { model?: string; extraArgs?: string[]; reasoningEffort?: string; speed?: "fast"; bin?: string; target?: ExecTarget; name?: string; relay?: RelayConfig; configOverrides?: Record<string, number> } = {}) {
     this.model = opts.model;
     this.extraArgs = opts.extraArgs ?? [];
     this.reasoningEffort = opts.reasoningEffort;
@@ -33,9 +45,17 @@ export class ClaudeExecutor implements AgentExecutor {
     this.bin = opts.bin ?? "claude";
     this.target = opts.target ?? { kind: "local" };
     this.relay = opts.relay;
-    this.relayEnvHint = this.relay
-      ? `ANTHROPIC_BASE_URL=${relayRoot(this.relay.baseUrl)} ANTHROPIC_AUTH_TOKEN=<你的key> `
-      : undefined;
+    this.configOverrides = opts.configOverrides;
+    this.resumeEnvHint = resumeEnvHint(
+      this.type,
+      // 覆盖项故意不进 env 前缀:它打不过用户的 settings.json(见 resumeEnvHint 字段注释),
+      // 真正带着走的是 resumeArgsHint 那个 `--settings`。
+      undefined,
+      this.relay ? `ANTHROPIC_BASE_URL=${relayRoot(this.relay.baseUrl)} ANTHROPIC_AUTH_TOKEN=<你的key> ` : undefined,
+      this.target,
+    );
+    const settings = this.settingsPayload();
+    this.resumeArgsHint = settings ? `--settings ${shq(JSON.stringify(settings))}` : undefined;
     const where = this.target.kind === "ssh" ? this.target.host : "local";
     this.label = opts.name ?? `claude@${where}${opts.model ? "·" + opts.model : ""}`;
   }
@@ -47,21 +67,61 @@ export class ClaudeExecutor implements AgentExecutor {
   }
 
   resumeCommand(cwd: string, sessionId: string): string {
-    return resumeFor(this.target, cwd, resumeInner.claude(sessionId), this.relayEnvHint ?? "");
+    const inner = resumeInner.claude(sessionId);
+    return resumeFor(
+      this.target,
+      cwd,
+      this.resumeArgsHint ? `${inner} ${this.resumeArgsHint}` : inner,
+      this.resumeEnvHint ?? "",
+    );
+  }
+
+  /**
+   * `--settings` 里那一整份。1.5x 加速档和「覆盖 CLI 自己的配置」都只能从这个参数进,
+   * 而**两个 `--settings` 不合并、最后一个整份胜出**(2026-08-12 实测 2.1.220:前一份
+   * 连同它的 env 被静默丢掉),所以两件事必须拼进同一份。运行时和「复制到终端接着聊」
+   * 共用它,两边不会漂。
+   *   • fastMode:headless 下开 fast mode 的唯一官方通道(无 --fast flag、无启用型
+   *     环境变量;仅 Opus 系列生效,其余模型 CLI 自行忽略)。
+   *   • autoCompactEnabled + env:压过用户 settings.json 里的同名开关与变量 —— 同一次
+   *     实测里各层 env 是按 key 合并的,他其余的变量原样保留(见 shared/cli-overrides)。
+   * cwd 只影响换算分母的解析(项目那两层 settings 文件),给不出来就按用户层解。
+   */
+  private settingsPayload(cwd?: string): Record<string, unknown> | null {
+    const settings = {
+      ...(this.speed === "fast" ? { fastMode: true } : {}),
+      ...cliConfigOverrideSettings(this.type, this.configOverrides, cliHostEnv(this.target, cwd)),
+    };
+    return Object.keys(settings).length ? settings : null;
   }
 
   // 挂了供应商就顶掉 CLI 自己的登录态:BASE_URL 指到供应商根地址(SDK 自己会补 /v1,
   // 库里那份要是带了 /v1 得剥掉,否则打到 /v1/v1),AUTH_TOKEN 给它的 key。
-  private env(): Record<string, string> | undefined {
-    if (!this.relay) return undefined;
-    return { ANTHROPIC_BASE_URL: relayRoot(this.relay.baseUrl), ANTHROPIC_AUTH_TOKEN: this.relay.apiKey };
+  //
+  // configOverrides 落成的那几个变量在这里只是**第二道**:claude 启动时会把各层
+  // settings 的 `env` 写回自己的进程环境,用户 `~/.claude/settings.json` 里的同名
+  // 变量会反过来盖掉这里注进去的值(第 1 轮审查 finding 1)。真正赢下这一局的是
+  // buildArgs 里那个 `--settings` —— 它是优先级最高的一档。留着这一道是因为「没配的
+  // 项要从子进程里删掉」只有环境变量这一层做得到(用户 shell / launchd 里 export 过的
+  // 同名变量,不删就等于每个 profile 都被那份全局值悄悄盖住),而且 CLI 将来若改成只认
+  // env 也还兜得住。两道给的是同一份值,不会打架。哪一项盖掉了谁,声明在
+  // shared/src/cli-overrides.ts,并原样显示在执行器设置里。
+  // 返回值里允许出现 `undefined`:那是「把这个变量从子进程里删掉」,不是「没配」
+  // (见 cliConfigOverrideEnvPatch)。所以这里不能再按 key 数量决定返不返回。
+  private env(cwd?: string): Record<string, string | undefined> {
+    const env: Record<string, string | undefined> = cliConfigOverrideEnvPatch(this.type, this.configOverrides, cliHostEnv(this.target, cwd));
+    if (this.relay) {
+      env.ANTHROPIC_BASE_URL = relayRoot(this.relay.baseUrl);
+      env.ANTHROPIC_AUTH_TOKEN = this.relay.apiKey;
+    }
+    return env;
   }
 
   run(opts: RunOpts): RunHandle {
     const sessionId = opts.sessionId ?? randomUUID();
     const args = this.buildArgs(opts, sessionId, false);
     const commandLine = redactSecrets(`${this.bin} ${args.join(" ")} <prompt via stdin>`);
-    const child = spawnForRun(this.target, opts.cwd, this.bin, args, opts.prompt, this.env(), opts.detach);
+    const child = spawnForRun(this.target, opts.cwd, this.bin, args, opts.prompt, this.env(opts.cwd), opts.detach);
     return { sessionId, commandLine, events: parseClaudeStream(child, undefined, this.bin, this.calibrateAs()), kill: () => killChild(child), detached: detachedInfo(child) };
   }
 
@@ -82,7 +142,7 @@ export class ClaudeExecutor implements AgentExecutor {
     const sessionId = opts.sessionId ?? randomUUID();
     const args = this.buildArgs(opts, sessionId, true);
     const commandLine = redactSecrets(`${this.bin} ${args.join(" ")} <messages via stdin>`);
-    const child = spawnAgent(this.target, opts.cwd, this.bin, args, userLine(opts.prompt), this.env(), {
+    const child = spawnAgent(this.target, opts.cwd, this.bin, args, userLine(opts.prompt), this.env(opts.cwd), {
       keepStdin: true,
     });
     const resident = { interruptPending: false };
@@ -125,10 +185,12 @@ export class ClaudeExecutor implements AgentExecutor {
     else args.push("--session-id", sessionId);
     if (model) args.push("--model", model);
     if (this.reasoningEffort) args.push("--effort", this.reasoningEffort);
-    // 1.5x 加速档:headless 下开 fast mode 的唯一官方通道是 --settings 传
-    // fastMode(无 --fast flag、无启用型环境变量;仅 Opus 系列生效,其余模型
-    // CLI 自行忽略)。放在 extraArgs 之前,用户如自带 --settings 以后者为准。
-    if (this.speed === "fast") args.push("--settings", '{"fastMode": true}');
+    // `--settings` 是 claude 优先级最高的一档配置(之上只剩企业策略文件),1.5x 加速档
+    // 和「覆盖 CLI 自己的配置」都从这里进;装配在 settingsPayload() 里,恢复命令共用同
+    // 一份。放在 extraArgs 之前:用户自带 --settings 时以他那份为准(设置页会警告本覆盖
+    // 被顶掉)。
+    const settings = this.settingsPayload(opts.cwd);
+    if (settings) args.push("--settings", JSON.stringify(settings));
     // 注册表配置的固定参数在前,单次调用的 opts.extraArgs 在后(后者可覆盖前者)。
     if (this.extraArgs.length) args.push(...this.extraArgs);
     if (opts.extraArgs?.length) args.push(...opts.extraArgs);
