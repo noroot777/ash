@@ -406,6 +406,10 @@ delete process.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS;
 // 用户在 `~/.claude/settings.json` 里写了 10000,CLI 启动时会把它写回自己的进程环境 ——
 // harness 只看 process.env 就会按 32000 默认值算,填 80% 实际约 84% 才压(第 2 轮 finding 3)。
 const { claudeMaxOutputTokens } = await import("../src/executors/claude-settings.js");
+// 开发机 / CI 要是带着 CLAUDE_CONFIG_DIR,用户层就指到别处去了,下面每一条都会误红误绿。
+// 先摘掉,要测它的场景自己往上设(第 4 轮审查建议 3)。
+const realConfigDir = process.env.CLAUDE_CONFIG_DIR;
+delete process.env.CLAUDE_CONFIG_DIR;
 const fakeHome = join(sandbox, "home");
 const fakeProject = join(sandbox, "proj");
 mkdirSync(join(fakeHome, ".claude"), { recursive: true });
@@ -423,6 +427,53 @@ rmSync(join(fakeProject, ".claude"), { recursive: true, force: true });
 assert.equal(claudeMaxOutputTokens(fakeProject), 30000, "哪一层都没写过时才回落到进程环境");
 delete process.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS;
 assert.equal(claudeMaxOutputTokens(fakeProject), null, "全都没有 = 读不到(按默认预留估算)");
+
+// ── ⑦c 两条反直觉的实测事实,离线也得覆盖 ────────────────────────────────────
+// 这两条只在 test:claude-settings-live 里对过真 CLI,而那条本机没装 claude 就整条跳过 ——
+// 于是「没装 claude 的机器」等于完全没测(第 4 轮审查建议 3)。这里按同样的场景钉住
+// harness 这一侧的解析:live 那条负责「假设还对不对」,这条负责「代码有没有照假设做」。
+const layer = (dir: string, file: "settings.json" | "settings.local.json", value: number | null) => {
+  const path = join(dir, ".claude", file);
+  if (value === null) return rmSync(path, { force: true });
+  mkdirSync(join(dir, ".claude"), { recursive: true });
+  writeFileSync(path, JSON.stringify({ env: { CLAUDE_CODE_MAX_OUTPUT_TOKENS: String(value) } }));
+};
+
+// ① CLAUDE_CONFIG_DIR 整个取代 ~/.claude,不回落;settings.json 直接躺在它下面。
+const altConfig = join(sandbox, "alt-config");
+mkdirSync(altConfig, { recursive: true });
+writeFileSync(join(fakeHome, ".claude", "settings.json"), JSON.stringify({ env: { CLAUDE_CODE_MAX_OUTPUT_TOKENS: "12000" } }));
+assert.equal(claudeMaxOutputTokens(), 12000, "没设 CLAUDE_CONFIG_DIR 时读 ~/.claude");
+process.env.CLAUDE_CONFIG_DIR = altConfig;
+assert.equal(claudeMaxOutputTokens(), null, "指到空目录 = 读不到,不许退回 HOME 的那份(退回的话这里是 12000)");
+writeFileSync(join(altConfig, "settings.json"), JSON.stringify({ env: { CLAUDE_CODE_MAX_OUTPUT_TOKENS: "7000" } }));
+assert.equal(claudeMaxOutputTokens(), 7000, "settings.json 直接在 CLAUDE_CONFIG_DIR 下,不是再套一层 .claude");
+delete process.env.CLAUDE_CONFIG_DIR;
+
+// ② linked worktree 不是独立项目:local 档认主仓、shared 档认当前目录。
+// harness 默认就在 worktree 里干活,读漏主仓那份 settings.local.json = 分母整个错掉。
+const mainRepo = join(sandbox, "wt-main");
+const linkedWt = join(sandbox, "wt-linked"); // 跟主仓平级:目录树上互不包含,才测得出「按 git 关系找主仓」
+mkdirSync(join(mainRepo, ".git", "worktrees", "probe"), { recursive: true });
+mkdirSync(linkedWt, { recursive: true });
+writeFileSync(join(linkedWt, ".git"), `gitdir: ${join(mainRepo, ".git", "worktrees", "probe")}\n`);
+layer(mainRepo, "settings.local.json", 8000);
+layer(linkedWt, "settings.local.json", 5000);
+assert.equal(claudeMaxOutputTokens(linkedWt), 8000, "两边都有 local 档时主仓赢");
+layer(linkedWt, "settings.local.json", null);
+assert.equal(claudeMaxOutputTokens(linkedWt), 8000, "worktree 里看不见主仓那份 = 等于没配,不该漏读");
+layer(mainRepo, "settings.local.json", null);
+layer(linkedWt, "settings.local.json", 5000);
+assert.equal(claudeMaxOutputTokens(linkedWt), 5000, "主仓没写才轮到 worktree 自己那份");
+layer(linkedWt, "settings.local.json", null);
+layer(mainRepo, "settings.json", 8888);
+layer(linkedWt, "settings.json", 5000);
+assert.equal(claudeMaxOutputTokens(linkedWt), 5000, "shared 档反过来:就近赢");
+layer(mainRepo, "settings.local.json", 8000);
+assert.equal(claudeMaxOutputTokens(linkedWt), 8000, "local 档整体高于 shared 档");
+
+if (realConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+else process.env.CLAUDE_CONFIG_DIR = realConfigDir;
 if (realHome === undefined) delete process.env.HOME;
 else process.env.HOME = realHome;
 

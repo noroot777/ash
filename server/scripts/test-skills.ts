@@ -10,7 +10,7 @@
 // 这样不会读写用户真实的 ~/.claude;末尾那段会开 DB,库也指在临时目录里。
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -180,11 +180,34 @@ assert.ok(!find(list, "cost"), "白名单之外的照旧不进菜单(落盘的�
   assert.ok(names.includes("compact"), `全新进程里也要有 /compact,实际:${names.join(", ")}`);
 }
 
-// 「手点重新扫描」是连冷启动来源一起清:那一档的语义就是「忘掉一切重来」。
+// worktree 被清掉之后,`/compact` 不能跟着一起消失 —— 校准几乎都记在
+// `<repo>/.worktrees/<id>` 上,而菜单是按项目根问的。落盘那边真按目录存在与否硬删的话,
+// 最后一个 worktree 被合并清理掉时这个模块就白做了(第 4 轮审查建议 2)。
+resetSkillCache();
+const merged = join(root, ".worktrees", "gone-after-merge");
+mkdirSync(merged, { recursive: true });
+calibrateSkills("claude", merged, [], ["compact"]);
+rmSync(join(root, ".worktrees"), { recursive: true, force: true }); // 验收合并后连 .worktrees 一起清
+const stillHere = join(root, "live-dir");
+mkdirSync(stillHere, { recursive: true });
+calibrateSkills("claude", stillHere, [ONLY_IN_INIT], []); // 任意一次新校准都会重写整份 JSON
+forgetLoadedCalibrations(); // = server 重启:只剩盘上那份
+list = listSkills({ agentType: "claude", cwd: root });
+assert.ok(find(list, "compact"), "worktree 清掉后,那次校准要上提到还活着的祖先目录上继续认亲");
+
+// 「忘掉一切重来」只有测试会走(界面上的「重新扫描」是 listSkills 的 force,不碰校准 ——
+// 照着这行去「对齐」路由的话,会把上面这一整段修复一键删掉)。
 resetSkillCache();
 forgetLoadedCalibrations();
 list = listSkills({ agentType: "claude", cwd: root });
 assert.ok(!find(list, "compact"), "resetSkillCache 之后连落盘那份也不该再冒出来");
+
+// 分隔符是裸 NUL 的话,git 会把整份 store 记成二进制:diff / blame / 审查者全打不开
+// (第 4 轮审查就是这么被挡在门外的)。按字节钉住。
+{
+  const store = fileURLToPath(new URL("../src/skill-calibration-store.ts", import.meta.url));
+  assert.ok(!readFileSync(store).includes(0), "skill-calibration-store.ts 里不能有裸 NUL:用 String.fromCharCode(0)");
+}
 
 // ── ssh 执行器 / 不认识的 CLI:宁可空,也不拿本机磁盘冒充 ─────────────────────
 

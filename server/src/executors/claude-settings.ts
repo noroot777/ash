@@ -37,7 +37,9 @@ import { dirname, join, resolve, sep } from "node:path";
 //
 // 上面这套顺序**不是照抄文档、是实测出来的**,CLI 换版本就可能漂。所以
 // `server/scripts/test-claude-settings-live.ts` 把同一组场景交给真 claude 跑一遍对答案
-// (本机装了 claude 才跑),漂了会当场红,不必等审查者再抓一次。
+// (本机装了 claude 才跑),漂了会当场红,不必等审查者再抓一次。而**没装 claude 的机器**
+// 由 `test:cli-overrides` 的 ⑦c 兜底:同一组场景只钉这边的解析 —— live 那条管「假设还对
+// 不对」,⑦c 管「代码有没有照假设做」,少哪条都会留出一段没人看的路。
 function readJsonFile(path: string): Record<string, unknown> | null {
   try {
     const parsed: unknown = JSON.parse(readFileSync(path, "utf8"));
