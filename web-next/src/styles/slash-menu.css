@@ -1,5 +1,5 @@
 /* 输入框敲 `/` 弹出来那张菜单的皮肤（components/SlashMenu.tsx）。
-   定位与外框各自归各自的容器类（composer.css / task-detail.css / team.css）;
+   定位与外框各自归各自的容器类（composer.css / task-reply.css / team.css）;
    这里只管几处一模一样的分隔线、角标、命中高亮和空态。 */
 
 .slash-menu-divider {

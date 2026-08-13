@@ -11,6 +11,9 @@
 @import "./terminal.css";
 @import "./sidebar-spread.css";
 @import "./task-detail.css";
+@import "./task-conversation.css";
+@import "./task-motion.css";
+@import "./task-reply.css";
 @import "./agent-run-meta.css";
 @import "./team.css";
 @import "./system-turn.css";
