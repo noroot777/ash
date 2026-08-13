@@ -151,17 +151,24 @@ export async function restoreFreeReviewReservation(
  * 派审即刻把预约槽清干净（含覆盖四列）：这条 run 已经把配置冻结在自己行里，槽里留着
  * 旧覆盖只会在下一条预约的表单里冒出来。
  *
- * `token` 非空 = 这次派审是在**消费一条预约**（`startReservedFreeReview` 刚 CAS 消费过）：
- * 那就沿用它的版本令牌，不推进 `updatedAt`。令牌是启动失败时还原这条预约的唯一凭据，
- * 被这次清槽推进掉，`restoreFreeReviewReservation` 的 CAS 就永远匹配不上，预约静默蒸发，
- * 而时间线上写的还是「预约期间已被更新，保留你最新的设置」（审查实测）。
+ * `token` 非空 = 这次派审是在**消费一条预约**（`startReservedFreeReview` 刚 CAS 消费过），
+ * 此时这次清槽也走 CAS，语义变成「只收拾我自己腾出来的那个空位」：
+ * - 沿用它的版本令牌、不推进 `updatedAt`。令牌是启动失败时还原这条预约的唯一凭据，被这
+ *   次清槽推进掉，`restoreFreeReviewReservation` 的 CAS 就永远匹配不上，预约静默蒸发，
+ *   而时间线上写的还是「预约期间已被更新，保留你最新的设置」（审查实测）。
+ * - 令牌对不上（或槽已 armed）就**整条不动**：CAS 消费和真正启动之间隔着建 run 行等好几
+ *   次 await，产品又允许用户在回合运行期间改预约，于是用户在这个窗口里保存的新预约会被
+ *   这条迟到的清槽连 armed 带附言、覆盖四列一起抹掉（审查实测）。它是下次确认完成该干
+ *   什么的最新意思，这一轮审查照跑，槽留给它。
+ *
+ * 返回是否真的清了槽（false = 槽里已是别人的新预约）。
  */
 export async function clearReservationForDispatch(taskId: string, slot: {
   reviewerId: string;
   checkMode: string;
   retryLimit: number;
   token?: string | null;
-}): Promise<void> {
+}): Promise<boolean> {
   const cleared = {
     selectedReviewerId: slot.reviewerId, reviewArmed: false,
     reviewCheckMode: slot.checkMode, reviewRetryLimit: slot.retryLimit,
@@ -169,10 +176,20 @@ export async function clearReservationForDispatch(taskId: string, slot: {
     reviewAgentType: null, reviewExecutorId: null, reviewModel: null, reviewReasoningEffort: null,
     updatedAt: slot.token || now(),
   };
-  await db.insert(freeWorkflowStates).values({ taskId, ...cleared }).onConflictDoUpdate({
+  const rows = await db.insert(freeWorkflowStates).values({ taskId, ...cleared }).onConflictDoUpdate({
     target: freeWorkflowStates.taskId,
     set: cleared,
-  });
+    // 无令牌 = 用户当场点的派审，清掉现有预约本就是这个动作的意思，不设条件。
+    ...(slot.token
+      ? {
+        setWhere: and(
+          eq(freeWorkflowStates.reviewArmed, false),
+          eq(freeWorkflowStates.updatedAt, slot.token),
+        ),
+      }
+      : {}),
+  }).returning({ taskId: freeWorkflowStates.taskId });
+  return rows.length > 0;
 }
 
 /**

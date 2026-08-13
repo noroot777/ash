@@ -426,6 +426,32 @@ try {
   }, { armed: true, checkMode: "logic", retryLimit: 0, note: "我改主意了", override: null },
     "回滚不得盖掉用户在这中间保存的新预约");
 
+  // 同一个窗口的另一半：用户抢在派审清槽**之前**保存。清槽只能收拾自己腾出的那个空位，
+  // 否则这条迟到的 upsert 会把新预约连 armed 带附言、覆盖一起抹平。
+  const raceDispatch = {
+    continueRun: async () => { throw new Error("本用例只走新建审查链"); },
+    startNew: async (input: { reviewerId: string; slotToken: string }) => {
+      await reserveRollback({
+        reviewerId: reviewer.id, checkMode: "syntax", retryLimit: 3,
+        note: "清槽前抢先保存", override: rollbackOverride,
+      });
+      await clearReservationForDispatch("free-rollback-task", {
+        reviewerId: input.reviewerId, checkMode: "logic", retryLimit: 0, token: input.slotToken,
+      });
+      throw new Error("投递失败");
+    },
+  };
+  await startReservedFreeReview("free-rollback-task", await readFreeReviewReservation("free-rollback-task"), raceDispatch);
+  const raced = await api.request("/tasks/free-rollback-task/free-workflow").then((response) => response.json()) as {
+    reviewReservation: { armed: boolean; checkMode: string | null; retryLimit: number | null; note: string | null; override: unknown };
+  };
+  assert.deepEqual({
+    armed: raced.reviewReservation.armed, checkMode: raced.reviewReservation.checkMode,
+    retryLimit: raced.reviewReservation.retryLimit, note: raced.reviewReservation.note,
+    override: raced.reviewReservation.override,
+  }, { armed: true, checkMode: "syntax", retryLimit: 3, note: "清槽前抢先保存", override: rollbackOverride },
+    "派审清槽不得抹掉消费之后、清槽之前保存的新预约");
+
   // 删除审查者时必须同步 disarm：否则 UI 仍显示已预约，结算因 reviewerId 为空静默不派审。
   await createTasks([{
     id: "free-deleted-reviewer-task", projectId: "p", groupId: null, parentId: null,

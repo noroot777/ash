@@ -479,7 +479,8 @@ async function startFreeReview(
         id: id(), runId: run.id, round: 1, status: "reviewing", conclusion: null, startedAt: at, endedAt: null,
       });
       // 派审即刻消费掉预约槽的一切（含覆盖四列）；从预约消费进来时沿用它的版本令牌，
-      // 好让下面启动失败的回滚还能认出这个空位是自己腾的（见 clearReservationForDispatch）。
+      // 好让下面启动失败的回滚还能认出这个空位是自己腾的，也好让用户抢在这之前保存的
+      // 新预约留在槽里不被抹掉（两者都在 clearReservationForDispatch 里靠同一次 CAS）。
       await clearReservationForDispatch(taskId, {
         reviewerId: profile.id, checkMode: mode, retryLimit: retries, token: opts.slotToken,
       });
