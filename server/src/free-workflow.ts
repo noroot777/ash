@@ -24,6 +24,7 @@ import {
   checkMode,
   overrideLabel,
   overrideSuffix,
+  reservedOverride,
   retryLimit,
   reviewNote,
   reviewOverride,
@@ -351,15 +352,24 @@ export async function handleFreeWorkflowSettlement(
           // 永久性失败：槽已消费，不会再有幽灵预约反复撞同一个错误。
           await nextRound(task, target);
         },
-        startNew: async (input) => startFreeReview(taskId, {
-          reviewerId: input.reviewerId,
-          checkMode: checkMode(input.checkMode ?? "logic"),
-          retryLimit: retryLimit(input.retryLimit ?? 1),
-          note: reviewNote(input.note),
-          // 预约时存下的「这次换个模型/智能水平跑」原样带上；执行器在这中间被删掉了
-          // 就整套丢弃、退回审查者自己的配置，而不是让整条预约启动失败。
-          override: await reviewOverride(input.override).catch(() => null),
-        }, { slotToken: input.slotToken }),
+        startNew: async (input) => {
+          // 预约时存下的「这次换个模型/智能水平跑」原样带上。执行器在这中间被删了就只摘
+          // 掉那一段（模型/智能水平仍按用户改的跑），并把降级写进时间线——见 reservedOverride。
+          const reserved = await reservedOverride(input.override);
+          const state = await startFreeReview(taskId, {
+            reviewerId: input.reviewerId,
+            checkMode: checkMode(input.checkMode ?? "logic"),
+            retryLimit: retryLimit(input.retryLimit ?? 1),
+            note: reviewNote(input.note),
+            override: reserved.override,
+          }, { slotToken: input.slotToken });
+          if (reserved.dropped === "executor") {
+            await appendTaskTimeline(taskId, `预约里选的执行器已不可用，这次改用 ${reserved.override!.agentType} 的默认执行器（模型与智能水平仍按你预约时改的跑）。`);
+          } else if (reserved.dropped === "all") {
+            await appendTaskTimeline(taskId, "预约里的执行器覆盖已失效，这次按审查者自己的配置跑。");
+          }
+          return state;
+        },
       });
     }
     return true;

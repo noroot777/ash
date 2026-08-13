@@ -70,6 +70,37 @@ export async function reviewOverride(value: unknown): Promise<FreeReviewExecutor
   };
 }
 
+type ReservedOverrideResult = {
+  override: FreeReviewExecutorOverride | null;
+  /** none=原样可用；executor=失效的执行器已摘掉，模型/智能水平照用；all=整套作废。 */
+  dropped: "none" | "executor" | "all";
+};
+
+/**
+ * 预约槽里躺了一段时间的覆盖：执行器可能在这中间被删掉、或被改成了别的类型，`reviewOverride`
+ * 到结算时才发现并抛错。**但不能因此整套丢弃**——executorId 只是「用哪个 profile 跑」，用户
+ * 显式改的模型和智能水平才是「回车后就用改后的审查」的本体；整套退回审查者旧配置，正是他
+ * 改配置想避开的那件事（审查实测：预约了 B 执行器 + gpt-b2 + high，B 被删之后审查静默按
+ * 审查者的 gpt-a2 + low 跑完，用户既没收到提示、预约也没保住）。
+ *
+ * 所以只摘掉失效的那一段：executorId 置空，按 agentType 的默认执行器解析，模型与智能水平
+ * 照用。连 agentType 都不合法（智能体类型退役）才整套作废。`dropped` 交给调用方写时间线
+ * ——降级可以做，但不能不吭声。
+ */
+export async function reservedOverride(value: unknown): Promise<ReservedOverrideResult> {
+  if (value == null) return { override: null, dropped: "none" };
+  try {
+    return { override: await reviewOverride(value), dropped: "none" };
+  } catch {
+    const raw = typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+    try {
+      return { override: await reviewOverride({ ...raw, executorId: null }), dropped: "executor" };
+    } catch {
+      return { override: null, dropped: "all" };
+    }
+  }
+}
+
 type ReviewerRunConfig = Pick<FreeReviewExecutorOverride, "agentType" | "executorId" | "model" | "reasoningEffort">;
 
 /** 这次审查实际要跑的执行器：有覆盖就整套用覆盖的，没有就整套用审查者自己的。 */
