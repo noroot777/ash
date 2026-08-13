@@ -39,8 +39,36 @@ function walk(dir, out = []) {
   return out;
 }
 
-const files = walk(SRC);
-const dialogHits = [];
+// 仓库里的 *.sh。优先问 git（快、天然跳过 node_modules 和构建产物），**但不能依赖它**：
+// 分发用的 tar 包解出来不是 git 仓库（`git archive` 不带 .git），那时 execFileSync 会
+// 直接抛 `not a git repository`，把整个前端 build 带崩——一个代码风格检查不该让「拿到
+// 源码包的人构建不出来」。所以拿不到 git 时退回自己走目录。
+function listShellFiles() {
+  try {
+    return execFileSync("git", ["ls-files", "*.sh"], {
+      cwd: ROOT,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    })
+      .split("\n")
+      .filter((rel) => rel.trim());
+  } catch {
+    const SKIP = new Set(["node_modules", "dist", ".git", "data", ".worktrees", ".expo"]);
+    const out = [];
+    const scan = (dir) => {
+      for (const name of readdirSync(dir)) {
+        if (SKIP.has(name)) continue;
+        const p = join(dir, name);
+        if (statSync(p).isDirectory()) scan(p);
+        else if (name.endsWith(".sh")) out.push(relative(ROOT, p));
+      }
+    };
+    scan(ROOT);
+    return out;
+  }
+}
+
+const files = walk(SRC);const dialogHits = [];
 let nativeTitle = 0;
 const titleHits = [];
 
@@ -90,7 +118,7 @@ let failed = false;
 // （2026-07-31 restart.sh 的安全闸就是这样断在最后一句提示上）。
 // 修法只有一个：加花括号 `${PORT}`。
 const shellHits = [];
-for (const rel of execFileSync("git", ["ls-files", "*.sh"], { cwd: ROOT, encoding: "utf8" }).split("\n")) {
+for (const rel of listShellFiles()) {
   if (!rel.trim()) continue;
   let src;
   try {
