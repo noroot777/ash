@@ -4,7 +4,7 @@ import { addUsage, sumUsage, usageTotal } from "@harness/shared/usage";
 import type { SessionTraceEntry } from "../lib/api.ts";
 import type { ExecutionEvent } from "../lib/executionTrace.ts";
 import type { ConversationEventTone, ConversationEventVariant } from "./conversationNotes.ts";
-import { noteTone } from "./conversationNotes.ts";
+import { isVerifyNote, noteTone } from "./conversationNotes.ts";
 import { formatInstant, parseAttachmentText } from "./utils.ts";
 
 export type LiveAgentEvent = Extract<ServerEvent, { type: "agent.event" }>;
@@ -38,6 +38,15 @@ export type ConversationItem =
       continuation?: boolean;
       session?: Session;
       run?: { model: string | null; reasoningEffort: string | null };
+      /**
+       * 这一回合是**审查者**在说话：就地验证轮带轮次号（`{ round: 2 }`），自由派审的
+       * 独立审查回合没有轮次（`{ round: null }`，靠会话的 reviewer 身份认出来）。
+       * undefined = 普通执行回合。
+       *
+       * 就地验证是搭在被验任务自己身上的旁路回合、还常复用同一条会话，所以它跟上一条
+       * 「我在做需求」的气泡本来长得一模一样（同执行器自审时连名字都一样）。
+       */
+      reviewer?: { round: number | null };
       /** 这一回合的 token 用量。null = 这家 CLI 不报账、或这轮跑在本功能之前。 */
       usage?: TokenUsage | null;
       /** 整条会话至今的累计用量。只挂在本会话最后一条气泡上（尾栏显示会话信息的那条）。 */
@@ -48,7 +57,16 @@ export type ConversationItem =
       segments: AgentContentSegment[];
     }
   | { kind: "user"; id: string; text: string; attachments: string[]; at?: string; isAnswer?: boolean; bySystem?: boolean }
-  | { kind: "event"; id: string; text: string; at?: string; tone?: ConversationEventTone; variant?: ConversationEventVariant };
+  | {
+      kind: "event";
+      id: string;
+      text: string;
+      at?: string;
+      tone?: ConversationEventTone;
+      variant?: ConversationEventVariant;
+      /** 这条旁注在讲验证轮的事（开始 / 未通过 / 打回修复）：跟审查者的气泡同一套配色。 */
+      verify?: boolean;
+    };
 
 export type PersistedConversation = { session: Session; output: string; trace?: SessionTraceEntry[] };
 
@@ -212,6 +230,29 @@ function liveRun(event: LiveAgentEvent): { model: string | null; reasoningEffort
   };
 }
 
+// 「这一回合是审查者在说话吗」的唯一判据，落盘与直播两条路读同一份语义：
+// ① 就地验证轮 —— 服务端按回合把轮次号写进 trace 的 run 事件、并随 agent.event 广播；
+// ② 自由派审的独立审查回合 —— 它自己开一条 role=reviewer 的会话，没有轮次号。
+// 轮次号优先：reviewer 会话上跑的验证轮同样该报出「第 N 轮」。
+function reviewerOf(verifyRound: number | null | undefined, session: Session | undefined) {
+  if (verifyRound) return { round: verifyRound };
+  return session?.role === "reviewer" ? { round: null } : undefined;
+}
+
+function traceVerifyRound(entries: SessionTraceEntry[]): number | null {
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const event = entries[index]?.event;
+    if (event?.kind === "run") return event.verifyRound ?? null;
+  }
+  return null;
+}
+
+// 「说话的是同一个身份吗」的比较键：换一轮验证也算换人（第 1 轮和第 2 轮之间隔着
+// 一次修复，不该排成一段连续发言）。
+function reviewerKey(item: Extract<ConversationItem, { kind: "agent" }>): string {
+  return item.reviewer ? `reviewer:${item.reviewer.round ?? "free"}` : "";
+}
+
 function sessionRun(session: Session | undefined): { model: string | null; reasoningEffort: string | null } | undefined {
   if (!session || (session.model === undefined && session.reasoningEffort === undefined)) return undefined;
   return {
@@ -337,6 +378,7 @@ function appendAgent(
     markerEndedAt: null,
     session,
     run,
+    reviewer: reviewerOf(event.verifyRound, session),
     usage: null,
     markdown: "",
     segments: [],
@@ -417,6 +459,7 @@ export function buildConversationItems(
           at: segment.at,
           tone: noteTone(segment.text),
           variant: "note",
+          verify: isVerifyNote(segment.text),
         });
         turnStartedAt = segment.at ?? turnStartedAt;
       } else {
@@ -431,6 +474,7 @@ export function buildConversationItems(
           markerEndedAt: segment.endedAt ?? null,
           session,
           run: traceRun(traceEntries) ?? sessionRun(session),
+          reviewer: reviewerOf(traceVerifyRound(traceEntries), session),
           usage: traceUsage(traceEntries),
           markdown: segment.text,
           segments: contentSegments(traceEntries, segment.text, `persisted:segment:${session.id}:${index}`),
@@ -453,6 +497,7 @@ export function buildConversationItems(
         markerEndedAt: null,
         session,
         run: traceRun(entries) ?? sessionRun(session),
+        reviewer: reviewerOf(traceVerifyRound(entries), session),
         usage: traceUsage(entries),
         markdown: segments.map((segment) => segment.markdown).join(""),
         segments,
@@ -483,7 +528,14 @@ export function buildConversationItems(
     }
     const event = entry.event.event;
     if (event.kind === "system") {
-      appendEvent(items, { kind: "event", id: entry.id, text: event.text, tone: noteTone(event.text), variant: "note" });
+      appendEvent(items, {
+        kind: "event",
+        id: entry.id,
+        text: event.text,
+        tone: noteTone(event.text),
+        variant: "note",
+        verify: isVerifyNote(event.text),
+      });
       continue;
     }
     if (event.kind === "done") {
@@ -567,16 +619,22 @@ export function buildConversationItems(
 
   // 旁注（预约审查、验收阶段更新、合并&清理完成…）不该把一段连续的发言劈成两半：
   // 后面那截还是同一个会话在说话，就接着上一段排版，不再重报头像、执行器名和模型。
-  // 打断续接的只有三种真断点：真人插话、回合边界事件、换了会话。
+  // 打断续接的只有四种真断点：真人插话、回合边界事件、换了会话，以及**换了身份**。
+  //
+  // 身份那一条是给就地验证用的：验证轮是搭在被验任务身上的旁路回合、常复用同一条
+  // 会话，中间只隔着一条「第 N 轮验证开始」的旁注 —— 按前三条判就成了「同一个人接着
+  // 说」，于是审查者的发言连头像和名字都不重报，反而比不区分更糟。
   let continuedSessionId: string | null = null;
+  let continuedReviewer: string | null = null;
   for (const item of items) {
     if (item.kind === "user") { continuedSessionId = null; continue; }
     if (item.kind === "event") {
       if (item.variant === "boundary") continuedSessionId = null;
       continue;
     }
-    item.continuation = continuedSessionId === item.sessionId;
+    item.continuation = continuedSessionId === item.sessionId && continuedReviewer === reviewerKey(item);
     continuedSessionId = item.sessionId;
+    continuedReviewer = reviewerKey(item);
   }
 
   const sessionMetaSeen = new Set<string>();
@@ -611,7 +669,12 @@ export function conversationToMarkdown(items: ConversationItem[], task: Task): s
       continue;
     }
     const body = item.markdown.trim();
-    if (body) parts.push(`## ${item.label}${item.at ? ` · ${formatInstant(item.at)}` : ""}\n\n${body}`);
+    // 审查者的身份要跟着导出走：复制出去的会话同样是同一个执行器名说了好几段，
+    // 界面上认得出、粘出去认不出，等于没做。
+    const who = item.reviewer
+      ? `${item.label}（审查者${item.reviewer.round ? ` · 第 ${item.reviewer.round} 轮` : ""}）`
+      : item.label;
+    if (body) parts.push(`## ${who}${item.at ? ` · ${formatInstant(item.at)}` : ""}\n\n${body}`);
   }
   return `${parts.join("\n\n")}\n`;
 }

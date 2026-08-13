@@ -123,7 +123,9 @@ export type SessionTraceEntry = {
     | { kind: "tool"; name: string; detail?: string }
     | { kind: "attachment"; path: string }
     | { kind: "error"; message: string }
-    | { kind: "run"; model: string | null; reasoningEffort: string | null }
+    // verifyRound：这一回合属于就地验证的第几轮（不是验证轮时缺省）。它是会话里
+    // 唯一能把审查者的发言跟实现回合分开的信号——两者常跑在同一条会话上。
+    | { kind: "run"; model: string | null; reasoningEffort: string | null; verifyRound?: number | null }
     // 这一回合的 token 账（服务端每轮至多写一条）。它不是执行过程里的一步，渲染时
     // 要单独摘出去，别混进「执行过程」那串事件。
     | { kind: "usage"; usage: TokenUsage; accounting?: "incremental" };

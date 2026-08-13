@@ -1,0 +1,43 @@
+/* 会话里的审查者回合。
+   就地验证是搭在被验任务自己身上的旁路回合：常复用同一条会话，换执行器时只有名字
+   不同，同一个执行器自审时连名字都一样 —— 不标出来，「在验我」和「在做需求」两种
+   发言在会话里长得完全一致。
+
+   配色用 --cyan 而不是 --accent：靛蓝在这套界面里已经被「你（真人）」占着（用户气泡、
+   系统代写消息的左竖线都是它），验证段再用会把「谁在说话」这条最要紧的线索搅混。
+
+   重量刻意压到最低：只改身份行（头像 + 一颗徽标）和旁注的竖线颜色，气泡本体、缩进、
+   宽度一律不动 —— 长审查的正文本来就够挤了。 */
+
+.task-message--agent.is-reviewer .task-message-avatar {
+  background: color-mix(in lch, var(--cyan) 13%, var(--overlay));
+  color: var(--cyan);
+}
+
+.verify-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex: 0 0 auto;
+  border: 1px solid color-mix(in lch, var(--cyan) 32%, var(--line2));
+  border-radius: 5px;
+  background: color-mix(in lch, var(--cyan) 8%, var(--panel));
+  padding: 0 5px;
+  color: color-mix(in lch, var(--cyan) 82%, var(--muted));
+  font-size: 9.5px;
+  font-weight: 650;
+  line-height: 15px;
+  white-space: nowrap;
+}
+
+/* 验证段的起止旁注（第 N 轮验证开始 / 未通过并打回）跟着审查者一个颜色，两条旁注
+   加中间的气泡才读得出是一段。未通过那条仍归红（.is-error 排在后面覆盖）—— 结论的
+   成败比「它属于验证段」更要紧。 */
+.conversation-note.is-verify {
+  border-left-color: color-mix(in lch, var(--cyan) 62%, var(--line2));
+  color: color-mix(in lch, var(--cyan) 48%, var(--faint));
+}
+.conversation-note.is-verify.is-error {
+  border-left-color: color-mix(in lch, var(--red) 45%, var(--line2));
+  color: color-mix(in lch, var(--red) 76%, var(--faint));
+}

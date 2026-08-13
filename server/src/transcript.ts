@@ -14,7 +14,9 @@ type TraceTextEvent = { kind: "text"; text: string };
 // 的记录,而 trace 天生就是这个形状。
 type TraceUsageEvent = Extract<AgentEvent, { kind: "usage" }>;
 type TraceAttachmentEvent = Extract<AgentEvent, { kind: "attachment" }>;
-type TraceRunEvent = { kind: "run"; model: string | null; reasoningEffort: string | null };
+// 本回合的执行器参数。verifyRound 记「这一回合是就地验证的第几轮」（不是验证轮时缺省），
+// 读端据此把审查者的发言跟同一条会话里的实现回合分开——它俩本来长得一模一样。
+type TraceRunEvent = { kind: "run"; model: string | null; reasoningEffort: string | null; verifyRound?: number | null };
 export type SessionTraceEvent = AgentTraceEvent | TraceTextEvent | TraceUsageEvent | TraceAttachmentEvent | TraceRunEvent;
 export type SessionTraceEntry = {
   at: string;

@@ -29,3 +29,15 @@ const FAILED_HINTS = [
 export function noteTone(text: string): ConversationEventTone {
   return FAILED_HINTS.some((hint) => text.includes(hint)) ? "error" : "neutral";
 }
+
+// 「这条旁注在讲验证轮的事吗」—— 会话里验证段的起止就是这两条旁注（第 N 轮验证开始 /
+// 未通过·打回修复），跟审查者的气泡同一套青色，读者才看得出它们是一段。
+//
+// 跟 noteTone 一样**只认关键词**：写这些字的地方在 review.ts,措辞由那边定,判错了最多
+// 是竖条颜色不对,不会把会话切错段。验证轮的旁注一律带「第 N 轮验证」;「验证打回失败」
+// 是打回那一步自己的报错,同属这一段。
+const VERIFY_NOTE = /第\s*\d+\s*轮验证|验证打回/;
+
+export function isVerifyNote(text: string): boolean {
+  return VERIFY_NOTE.test(text);
+}
