@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>普通任务会话 · 怎么区分审查者 · 五个方案</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main class="demo-page">
+    <header class="demo-intro">
+      <div>
+        <p class="eyebrow">Harness · 普通任务会话 · 讨论稿</p>
+        <h1>就地验证跑在同一条会话里，怎么让人一眼看出「这段是在审我」</h1>
+        <p class="lede">
+          现在的就地验证是<b>搭在被验任务身上的旁路回合</b>：协议正文渲染成系统代写消息，
+          审查者的产出渲染成一条普通 agent 气泡——跟它上面那条「我在做需求」的气泡长得一模一样。
+          换了执行器时只有执行器名不同，没换执行器时连名字都一样。
+          下面五个方案用<b>同一份会话内容</b>渲染，只有验证段的样式不同，可直接对比。
+        </p>
+      </div>
+      <aside>
+        <b>判据（按重要性）</b>
+        <span><i class="lg lg-edge"></i>起止边界清不清楚——验证段可能很长</span>
+        <span><i class="lg lg-scan"></i>滚到中段还认不认得出「仍在验证里」</span>
+        <span><i class="lg lg-weight"></i>会不会把会话变重、抢走正文的注意力</span>
+        <span><i class="lg lg-cost"></i>要不要模型层新给数据（段起止 / 单条标记）</span>
+      </aside>
+    </header>
+
+    <nav class="demo-nav" aria-label="方案筛选">
+      <span>看：</span>
+      <div class="demo-nav-list" role="group"></div>
+      <a class="demo-nav-note" href="#recommend">推荐组合 ↓</a>
+    </nav>
+
+    <div class="demo-stages"></div>
+
+    <section class="demo-outro" id="recommend">
+      <h2>推荐组合</h2>
+      <div class="demo-outro-grid">
+        <article>
+          <b>先落 A，再补 B</b>
+          <p>
+            A 只需要给气泡打一个「这条是验证轮」的标记，成本最低，且它和其余四个方案都能叠加——
+            先把「谁在说话」说清楚。真正的痛点是<b>长审查滚到中段认不出</b>，那要靠 B 的段落容器补上。
+            B 需要模型层给出验证段的起止，但数据本来就有（<code>verifyRound</code> +
+            时间线里那两条「第 N 轮验证开始 / 结论」旁注），是推导而不是新采集。
+          </p>
+        </article>
+        <article>
+          <b>D 留到「历史轮」再用</b>
+          <p>
+            折叠卡对<b>已经结束的旧轮次</b>很值——三轮验证的正文能把主线淹掉；
+            但对正在跑的那一轮必须默认展开，否则用户盯着一张不动的卡片不知道里面在干什么。
+            建议规则：非最后一轮、且已有结论 → 默认折叠；其余展开。
+          </p>
+        </article>
+        <article>
+          <b>C 和 E 的取舍</b>
+          <p>
+            C 的缩进语言和现有「系统代写消息 / 旁注」的左竖线撞车，同一屏里三种左竖线会互相稀释，
+            不建议单独用。E 是 B 加一条吸顶段头，只在验证正文特别长时才回本；
+            会话区已经有任务头，再吸一条要盯住层级和贴底逻辑，建议 B 落地跑一阵子再决定要不要加。
+          </p>
+        </article>
+      </div>
+      <p class="demo-outro-foot">
+        配色说明：验证段统一用 <code>--cyan</code>，不用 <code>--accent</code>——靛蓝在这套界面里
+        已经被「你（真人）」占着（用户气泡、系统代写消息的左竖线都是它），验证段再用会把
+        「谁在说话」这条最要紧的线索搅混。结论仍走 <code>--green</code> / <code>--red</code>。
+      </p>
+    </section>
+  </main>
+
+  <template id="feed-template">
+    <article class="task-message task-message--user">
+      <div class="task-user-bubble">
+        <header><b>你</b><time>14:02</time></header>
+        <p>controls.css 已经 780 行了，按职责拆一下，别靠删注释凑数。</p>
+      </div>
+    </article>
+
+    <article class="task-message task-message--agent">
+      <span class="task-message-avatar" aria-hidden="true">C</span>
+      <div class="task-message-content">
+        <header>
+          <span class="agent-run-identity">
+            <b>claude@local</b>
+            <span class="agent-run-meta"><code>claude-opus-5</code><i>·</i><code>high</code></span>
+          </span>
+          <time>14:02</time>
+          <small class="task-turn-duration">· ⏱ 11 分 04 秒 用时</small>
+        </header>
+        <section class="task-agent-segment">
+          <details class="task-execution-block">
+            <summary><span class="caret" aria-hidden="true">›</span><span class="task-execution-label">执行过程 · 4 分析 · 21 工具</span></summary>
+            <div class="task-execution-events">
+              <div class="task-tool-line is-flat"><span class="task-tool-head"><span aria-hidden="true">◌</span><span class="task-tool-name">思考过程</span><span class="task-tool-summary">按职责切：按钮 / 输入 / 选择器 / 胶囊</span></span></div>
+              <div class="task-tool-line is-flat"><span class="task-tool-head"><span aria-hidden="true">⛭</span><span class="task-tool-name">Bash</span><span class="task-tool-summary">wc -l web-next/src/styles/controls.css</span></span></div>
+              <div class="task-tool-line is-flat"><span class="task-tool-head"><span aria-hidden="true">⛭</span><span class="task-tool-name">Write</span><span class="task-tool-summary">web-next/src/styles/controls-buttons.css</span></span></div>
+            </div>
+          </details>
+          <div class="task-markdown">
+            <p>已把 <code>controls.css</code> 按职责拆成四份，原文件只留 <code>@import</code> 与共用变量：</p>
+            <ul>
+              <li><code>controls-buttons.css</code> — 按钮与图标按钮，216 行</li>
+              <li><code>controls-fields.css</code> — 输入 / 文本域 / 校验态，193 行</li>
+              <li><code>controls-select.css</code> — 下拉与选择器浮层，168 行</li>
+              <li><code>controls-chips.css</code> — 胶囊与标签，142 行</li>
+            </ul>
+            <p><code>npm -w web-next run build</code> 通过，没有新增视觉差异。</p>
+          </div>
+        </section>
+        <div class="task-message-footer">
+          <button type="button">sess_8f2c…</button>
+          <span class="token-usage-chip">↑ 92.4k</span>
+          <span class="token-usage-chip">↓ 7.1k</span>
+        </div>
+      </div>
+    </article>
+
+    <div class="verify-lane" data-round="2">
+      <div class="verify-lane-head">
+        <span class="verify-lane-mark" aria-hidden="true">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.6 13 3.4v4.2c0 3-2 5.4-5 6.8-3-1.4-5-3.8-5-6.8V3.4L8 1.6Z"/><path class="tick" d="M5.6 8.1 7.2 9.7l3.2-3.4"/></svg>
+        </span>
+        <b>第 2 轮验证</b>
+        <span class="verify-lane-by">codex@cpa 在审 · gpt-5.6-sol</span>
+        <span class="verify-lane-state is-failed">未通过 · 3 个问题</span>
+        <small class="verify-lane-time">14:14–14:21 · 6 分 47 秒</small>
+        <button type="button" class="verify-lane-toggle" aria-expanded="true">收起</button>
+      </div>
+
+      <div class="verify-lane-body">
+        <p class="conversation-note is-verify">
+          第 2 轮验证开始：就在这个任务的工作目录里跑，不另起审查任务。<time>14:14</time>
+        </p>
+
+        <article class="task-message task-message--user is-system-authored is-verify">
+          <div class="task-user-bubble">
+            <header><b>系统</b><time>14:14</time></header>
+            <div class="task-markdown">
+              <p><b>【自动验证 · 第 2 轮】</b>这一轮不是继续做需求，而是回过头验收你自己刚才的产物。请切换成审查者的立场：默认它有问题，去找出问题，而不是复述你做了什么。</p>
+              <p>必须真实运行验证：只读代码或只过编译不算。web 改动必须启动服务、用浏览器确认行为……</p>
+            </div>
+          </div>
+        </article>
+
+        <article class="task-message task-message--agent is-verify">
+          <span class="task-message-avatar" aria-hidden="true">
+            <span class="avatar-letter">X</span>
+            <svg class="avatar-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.6 13 3.4v4.2c0 3-2 5.4-5 6.8-3-1.4-5-3.8-5-6.8V3.4L8 1.6Z"/><path class="tick" d="M5.6 8.1 7.2 9.7l3.2-3.4"/></svg>
+          </span>
+          <div class="task-message-content">
+            <header>
+              <span class="agent-run-identity">
+                <b>codex@cpa</b>
+                <span class="agent-run-meta"><code>gpt-5.6-sol</code><i>·</i><code>xhigh</code></span>
+              </span>
+              <span class="verify-badge">审查者 · 第 2 轮</span>
+              <time>14:14</time>
+              <small class="task-turn-duration">· ⏱ 6 分 47 秒 用时</small>
+            </header>
+            <section class="task-agent-segment">
+              <details class="task-execution-block">
+                <summary><span class="caret" aria-hidden="true">›</span><span class="task-execution-label">执行过程 · 6 分析 · 33 工具</span></summary>
+                <div class="task-execution-events">
+                  <div class="task-tool-line is-flat"><span class="task-tool-head"><span aria-hidden="true">⛭</span><span class="task-tool-name">Bash</span><span class="task-tool-summary">git diff --stat HEAD~1</span></span></div>
+                  <div class="task-tool-line is-flat"><span class="task-tool-head"><span aria-hidden="true">⛭</span><span class="task-tool-name">Bash</span><span class="task-tool-summary">npm -w web-next run dev — 5174</span></span></div>
+                  <div class="task-tool-line is-flat"><span class="task-tool-head"><span aria-hidden="true">⛭</span><span class="task-tool-name">Browser</span><span class="task-tool-summary">后台标签打开 /tasks/7GM1 对比控件</span></span></div>
+                </div>
+              </details>
+              <div class="task-markdown">
+                <p><b>结论：未通过。</b>拆分本身干净，但有三处会在真实界面上出问题：</p>
+                <ol>
+                  <li><code>controls-select.css</code> 里 <code>.ui-select__menu</code> 的 <code>z-index</code> 跟着文件顺序变了，浮层被检查器盖住（已截图）。</li>
+                  <li>四份新文件都没被 <code>global.css</code> 引入，只有 <code>controls.css</code> 里的 <code>@import</code> 生效；构建过是因为 <code>@import</code> 链还在，删掉旧文件就白屏。</li>
+                  <li><code>controls-chips.css</code> 与 <code>composer-presets.css</code> 有两条同名规则冲突。</li>
+                </ol>
+                <p>报告与截图已落在 <code>data/runs/7GM1…/review/round-2/</code>。</p>
+              </div>
+            </section>
+            <div class="task-message-footer">
+              <button type="button">sess_be41…</button>
+              <button type="button">report.md</button>
+              <span class="token-usage-chip">↑ 143.8k</span>
+            </div>
+          </div>
+        </article>
+
+        <p class="conversation-note is-verify is-error">
+          第 2 轮验证未通过：3 个问题已写进报告，已交回原任务修复。<time>14:21</time>
+        </p>
+      </div>
+    </div>
+
+    <article class="task-message task-message--agent">
+      <span class="task-message-avatar" aria-hidden="true">C</span>
+      <div class="task-message-content">
+        <header>
+          <span class="agent-run-identity">
+            <b>claude@local</b>
+            <span class="agent-run-meta"><code>claude-opus-5</code><i>·</i><code>high</code></span>
+          </span>
+          <time>14:22</time>
+        </header>
+        <section class="task-agent-segment">
+          <div class="task-markdown">
+            <p>三条都认。已把四份新文件加进 <code>global.css</code> 的引入列表，把浮层 <code>z-index</code> 收敛到变量，并删掉与 <code>composer-presets.css</code> 重复的两条规则。</p>
+          </div>
+        </section>
+      </div>
+    </article>
+
+    <div class="task-event-line"><span></span><p>本轮执行结束 · 14:33</p><span></span></div>
+  </template>
+
+  <script src="app.js"></script>
+</body>
+</html>
