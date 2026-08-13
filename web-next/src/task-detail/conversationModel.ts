@@ -3,6 +3,8 @@ import { ANSWER_PREFIX, parseSessionOutput } from "@harness/shared";
 import { addUsage, sumUsage, usageTotal } from "@harness/shared/usage";
 import type { SessionTraceEntry } from "../lib/api.ts";
 import type { ExecutionEvent } from "../lib/executionTrace.ts";
+import type { ConversationEventTone, ConversationEventVariant } from "./conversationNotes.ts";
+import { noteTone } from "./conversationNotes.ts";
 import { formatInstant, parseAttachmentText } from "./utils.ts";
 
 export type LiveAgentEvent = Extract<ServerEvent, { type: "agent.event" }>;
@@ -32,6 +34,8 @@ export type ConversationItem =
       endedAt?: string | null;
       markerEndedAt?: string | null;
       showSessionMeta?: boolean;
+      /** 上一条说话的还是同一个会话、中间只隔着旁注：接着上一段说，不再重报头像和执行器名。 */
+      continuation?: boolean;
       session?: Session;
       run?: { model: string | null; reasoningEffort: string | null };
       /** 这一回合的 token 用量。null = 这家 CLI 不报账、或这轮跑在本功能之前。 */
@@ -44,7 +48,7 @@ export type ConversationItem =
       segments: AgentContentSegment[];
     }
   | { kind: "user"; id: string; text: string; attachments: string[]; at?: string; isAnswer?: boolean; bySystem?: boolean }
-  | { kind: "event"; id: string; text: string; at?: string; tone?: "neutral" | "error" };
+  | { kind: "event"; id: string; text: string; at?: string; tone?: ConversationEventTone; variant?: ConversationEventVariant };
 
 export type PersistedConversation = { session: Session; output: string; trace?: SessionTraceEntry[] };
 
@@ -411,6 +415,8 @@ export function buildConversationItems(
           id: `persisted:system:${session.id}:${index}`,
           text: segment.text,
           at: segment.at,
+          tone: noteTone(segment.text),
+          variant: "note",
         });
         turnStartedAt = segment.at ?? turnStartedAt;
       } else {
@@ -477,7 +483,7 @@ export function buildConversationItems(
     }
     const event = entry.event.event;
     if (event.kind === "system") {
-      appendEvent(items, { kind: "event", id: entry.id, text: event.text });
+      appendEvent(items, { kind: "event", id: entry.id, text: event.text, tone: noteTone(event.text), variant: "note" });
       continue;
     }
     if (event.kind === "done") {
@@ -486,11 +492,12 @@ export function buildConversationItems(
         id: entry.id,
         text: event.exitStatus === 0 ? "本轮执行结束" : `执行异常结束 · exit ${event.exitStatus}`,
         tone: event.exitStatus === 0 ? "neutral" : "error",
+        variant: "boundary",
       });
       continue;
     }
     if (event.kind === "turnEnd") {
-      appendEvent(items, { kind: "event", id: entry.id, text: "本回合结束，等待下一条消息" });
+      appendEvent(items, { kind: "event", id: entry.id, text: "本回合结束，等待下一条消息", variant: "boundary" });
       continue;
     }
     // session 是执行器的内部簿记事件(心跳/回合结束都会重发),旧 UI 就不渲染;
@@ -556,6 +563,20 @@ export function buildConversationItems(
     if (item.kind !== "agent" || !item.usage) continue;
     const previous = sessionTurnTotals.get(item.sessionId);
     sessionTurnTotals.set(item.sessionId, previous ? addUsage(previous, item.usage) : item.usage);
+  }
+
+  // 旁注（预约审查、验收阶段更新、合并&清理完成…）不该把一段连续的发言劈成两半：
+  // 后面那截还是同一个会话在说话，就接着上一段排版，不再重报头像、执行器名和模型。
+  // 打断续接的只有三种真断点：真人插话、回合边界事件、换了会话。
+  let continuedSessionId: string | null = null;
+  for (const item of items) {
+    if (item.kind === "user") { continuedSessionId = null; continue; }
+    if (item.kind === "event") {
+      if (item.variant === "boundary") continuedSessionId = null;
+      continue;
+    }
+    item.continuation = continuedSessionId === item.sessionId;
+    continuedSessionId = item.sessionId;
   }
 
   const sessionMetaSeen = new Set<string>();
