@@ -30,6 +30,15 @@ npm start        # 后端在 :4317 同时托管前端 dist 与 API
 
 环境变量：`PORT`（默认 4317）、`HARNESS_DB`（默认 `./data/harness.db`）。
 
+## 装到别的机器 / 发给别人
+
+```bash
+npm run package    # 打出 dist-package/harness-<日期>-<sha>.tar.gz（只含入库文件，不含 data/）
+```
+
+对方解包后 `bash scripts/setup.sh` 一条命令装完（依赖 → 构建 → 接上 harness MCP）。
+前置、MCP 为什么不能省、备份、排错见 [docs/install.md](docs/install.md)。
+
 ## 里程碑
 
 M0 项目骨架 ✅ → M1 单 agent 垂直切片。
