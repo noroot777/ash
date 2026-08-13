@@ -1,5 +1,7 @@
 @import "tailwindcss";
 @import "./controls.css";
+@import "./run-target-picker.css";
+@import "./slash-menu.css";
 @import "./conversation-scroll.css";
 @import "./image-preview.css";
 @import "./task-origin.css";
