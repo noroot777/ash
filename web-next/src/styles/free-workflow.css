@@ -12,16 +12,15 @@
 .free-workflow-toolbar button:focus-visible,.free-workflow-toolbar > a:focus-visible { outline:2px solid color-mix(in lch,var(--accent) 48%,transparent); outline-offset:1px; }
 .free-workflow-toolbar button:disabled { cursor:not-allowed; opacity:.38; }
 .free-review-progress { display:flex; min-height:31px; align-items:center; gap:6px; border-radius:7px; background:color-mix(in lch,var(--cyan) 8%,var(--panel)); padding:5px 7px; color:var(--cyan); font-size:10.5px; font-weight:650; }
-.free-review-progress.is-manual_repairing { background:color-mix(in lch,var(--amber) 9%,var(--panel)); color:var(--amber); }
+.free-review-progress.is-auto_rereview { background:color-mix(in lch,var(--amber) 9%,var(--panel)); color:var(--amber); }
 .free-review-progress.is-compact { height:26px; min-height:26px; flex:0 0 auto; padding:0 8px; font-size:11px; }
-.free-workflow-toolbar button.is-review.is-busy,.free-workflow-toolbar button.is-review.is-armed,.free-workflow-toolbar button.is-review[data-state="reviewing"],.free-workflow-toolbar button.is-review[data-state="repairing"] { background:color-mix(in lch,var(--accent) 8%,transparent); color:var(--accent); }
-.free-workflow-toolbar button.is-review[data-state="manual_repairing"] { background:color-mix(in lch,var(--amber) 9%,transparent); color:var(--amber); }
+.free-workflow-toolbar button.is-review.is-busy,.free-workflow-toolbar button.is-review.is-armed,.free-workflow-toolbar button.is-review[data-state="reviewing"] { background:color-mix(in lch,var(--accent) 8%,transparent); color:var(--accent); }
+.free-workflow-toolbar button.is-review[data-state="stopped"] { background:color-mix(in lch,var(--amber) 9%,transparent); color:var(--amber); }
 .free-workflow-toolbar button.is-review.is-repair { background:color-mix(in lch,var(--amber) 10%,transparent); box-shadow:inset 0 0 0 1px color-mix(in lch,var(--amber) 24%,transparent); color:var(--amber); }
 .free-workflow-toolbar button.is-review.is-repair:hover:not(:disabled) { background:color-mix(in lch,var(--amber) 16%,var(--panel)); color:var(--amber); }
 .free-review-armed-dot { width:6px; height:6px; border-radius:50%; background:var(--accent); box-shadow:0 0 0 2px color-mix(in lch,var(--accent) 18%,transparent); }
 .free-workflow-toolbar button.is-preview.is-busy,.free-workflow-toolbar button.is-preview[aria-pressed="true"] { background:color-mix(in lch,var(--cyan) 8%,transparent); color:var(--cyan); }
-.free-workflow-toolbar button.is-merge.is-busy,.free-workflow-toolbar button.is-merge[data-state="merging"],.free-workflow-toolbar button.is-merge[data-state="merged"] { background:color-mix(in lch,var(--green) 8%,transparent); color:var(--green); }
-.free-workflow-toolbar button.is-busy svg,.free-workflow-toolbar button[data-state="reviewing"] svg,.free-workflow-toolbar button[data-state="repairing"] svg,.free-workflow-toolbar button[aria-pressed="true"] svg,.free-workflow-toolbar button[data-state="merged"] svg { opacity:1; }
+.free-workflow-toolbar button.is-busy svg,.free-workflow-toolbar button[data-state="reviewing"] svg,.free-workflow-toolbar button[aria-pressed="true"] svg { opacity:1; }
 .free-workflow-toolbar > a { display:inline-flex; height:26px; flex:0 0 auto; align-items:center; gap:4px; margin-left:2px; border:0; border-radius:7px; padding:0 8px; color:var(--muted); font-size:11px; font-weight:600; text-decoration:none; white-space:nowrap; }
 .free-workflow-toolbar > a:hover { background:color-mix(in lch,var(--raised) 85%,var(--panel)); color:var(--ink); }
 
@@ -73,8 +72,8 @@
 .free-workflow-inspector.is-error { color:var(--red); }
 .free-workflow-review-inspector .review-inspector__actions button.is-repair { background:color-mix(in lch,var(--amber) 11%,var(--panel)); box-shadow:inset 0 0 0 1px color-mix(in lch,var(--amber) 24%,transparent); color:var(--amber); font-weight:700; }
 .free-workflow-review-inspector .review-inspector__actions button.is-repair:hover:not(:disabled) { background:color-mix(in lch,var(--amber) 17%,var(--panel)); color:var(--amber); }
-.free-workflow-review-inspector .review-inspector__status.is-manual_repairing { background:color-mix(in lch,var(--amber) 10%,var(--raised)); color:var(--amber); }
-.free-workflow-review-inspector .review-inspector__status.is-reworking,.free-workflow-review-inspector .review-inspector__status.is-superseded { background:color-mix(in lch,var(--cyan) 9%,var(--raised)); color:var(--cyan); }
+.free-workflow-review-inspector .review-inspector__status.is-repairing { background:color-mix(in lch,var(--amber) 10%,var(--raised)); color:var(--amber); }
+.free-workflow-review-inspector .review-inspector__status.is-stale { background:color-mix(in lch,var(--cyan) 9%,var(--raised)); color:var(--cyan); }
 .free-workflow-generated { border-bottom:1px solid var(--line); padding:13px 14px; }
 .free-workflow-generated > header { display:flex; align-items:baseline; justify-content:space-between; gap:8px; }
 .free-workflow-generated > header span { color:var(--ink); font-size:11px; font-weight:700; }

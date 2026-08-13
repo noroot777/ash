@@ -15,24 +15,26 @@ import {
   MAX_QUESTION_ITEMS,
   MAX_QUESTION_OPTION_LEN,
   MAX_QUESTION_OPTIONS,
-  canArchive,
   canSingleRun,
 } from "@harness/shared";
-import { asc, eq, inArray } from "drizzle-orm";
+import { and, asc, eq, inArray, isNotNull, isNull } from "drizzle-orm";
 import type { Hono } from "hono";
 import { bus } from "./bus.js";
 import { forceKillCuaService, lastCuaResidualStatus, refreshCuaResidualStatus } from "./cua.js";
 import { db } from "./db/index.js";
 import { freeReviewResumeOptions } from "./free-workflow.js";
-import { projects, queueItems, schedules, scheduledMessages, sessions, tasks } from "./db/schema.js";
+import { isAcceptingTask } from "./acceptance-lock.js";
+import { queueItems, scheduledMessages, sessions, tasks } from "./db/schema.js";
 import { resumeDuet, resumeAtGate, runDuet } from "./duet/index.js";
 import { resolveGate } from "./duet/gates.js";
-import { taskCommits } from "./git.js";
-import { continueTask, resumeOrRunTask, runTask } from "./orchestrator.js";
+import { continueTask, runTask } from "./orchestrator.js";
+import { resumeOrRunTask } from "./task-resume.js";
+import { mountTaskArchiveRoutes } from "./task-archive-routes.js";
+import { mountTaskScheduleRoutes } from "./task-schedule-routes.js";
 import { RUNS_DIR } from "./paths.js";
 import { enqueueMessage } from "./pending-messages.js";
 import { isOvertaken, queueBlockers, repackQueue, tailOrder } from "./queues.js";
-import { confirmDone, stopTask } from "./runs.js";
+import { claimTurn, confirmDone, releaseTurn, stopTask } from "./runs.js";
 import { advanceQueue } from "./scheduler.js";
 import { setTaskStatus } from "./status.js";
 import { nativeCliCommand } from "./skills.js";
@@ -44,9 +46,11 @@ import { parseSessionTrace, readableRunPath, sessionTracePath, sessionTranscript
 import { sessionContext, sessionUsage } from "./usage.js";
 import { resumeCommandFor } from "./executors/resume.js";
 import { sessionRunMeta } from "./session-run-meta.js";
-import { id, now } from "./util.js";
+import { now } from "./util.js";
 
 export function mountTaskRunRoutes(api: Hono): void {
+  mountTaskArchiveRoutes(api);
+  mountTaskScheduleRoutes(api);
   const toSession = (
     r: typeof sessions.$inferSelect,
     run: { model: string | null; reasoningEffort: string | null } = { model: null, reasoningEffort: null },
@@ -147,8 +151,22 @@ api.post("/tasks/:id/run", async (c) => {
     );
   }
   // Fire-and-forget; progress streams over /api/events.
-  if (r.mode === "duet") void runDuet(taskId);
-  else void resumeOrRunTask(taskId, { reason: "run" });
+  if (r.mode === "team") { void resumeOrRunTask(taskId, { reason: "run" }); return c.json({ started: true }, 202); }
+  // **最后一个 await 之后**原子占位再启动：只读预检查后的任何 await 间隙里另一次启动
+  // 都可能抢先——两个并发请求会双双 202 而只有一个真的开跑（审查实测）。占到 = 202 是
+  // 真话；占不到 = 此刻确有回合在跑，409。duet 走同一把锁（它模块内那个 running Set
+  // 调用方看不见，验收锁也挡不住它）。
+  if (!claimTurn(taskId, r.mode === "duet" ? "duet" : "single")) {
+    return c.json({ error: "任务回合正在进行，结束后再运行", status: r.status }, 409);
+  }
+  // 占位后镜像检查验收锁（验收侧先占己锁再查 turn）：runTask/runDuet 撞上验收锁只会
+  // 静默 return，202 就成了「已启动」的谎报（审查实测：/run 与 /retry 均复现）。
+  if (isAcceptingTask(taskId)) {
+    releaseTurn(taskId);
+    return c.json({ error: "任务正在验收（含发布尾段），结束后再运行", status: r.status }, 409);
+  }
+  if (r.mode === "duet") { void runDuet(taskId, { turnHeld: true }); return c.json({ started: true }, 202); }
+  void resumeOrRunTask(taskId, { reason: "run", turnHeld: true });
   return c.json({ started: true }, 202);
 });
 
@@ -165,6 +183,9 @@ api.post("/tasks/:id/fire", async (c) => {
     return c.json({ error: "任务正在进行，等它结束再触发新一轮", status: r.status }, 409);
   if (r.status === "awaiting_review")
     return c.json({ error: "任务等待裁决中，先处理裁决再触发", status: r.status }, 409);
+  // runTask 遇验收锁/单飞锁会静默 return——202 就成了谎报「已触发一轮全新运行」（审查实测）。
+  if (isAcceptingTask(taskId))
+    return c.json({ error: "任务正在验收（含发布尾段），结束后再触发", status: r.status }, 409);
   const blockedBy = await queueBlockers(taskId);
   if (blockedBy.length) {
     return c.json(
@@ -172,8 +193,17 @@ api.post("/tasks/:id/fire", async (c) => {
       409,
     );
   }
-  if (r.mode === "duet") void runDuet(taskId);
-  else void runTask(taskId); // 全新一轮,永不 resume
+  // 同 /run:最后一个 await 之后原子占位,202 才是真话。duet 与 single 共用这把锁。
+  if (!claimTurn(taskId, r.mode === "duet" ? "duet" : "single")) {
+    return c.json({ error: "任务回合正在进行，结束后再触发", status: r.status }, 409);
+  }
+  // 队列检查之后验收锁可能刚刚落下:占位后再查一遍(与验收侧互为镜像)。
+  if (isAcceptingTask(taskId)) {
+    releaseTurn(taskId);
+    return c.json({ error: "任务正在验收（含发布尾段），结束后再触发", status: r.status }, 409);
+  }
+  if (r.mode === "duet") { void runDuet(taskId, { turnHeld: true }); return c.json({ started: true, fresh: true }, 202); }
+  void runTask(taskId, { turnHeld: true }); // 全新一轮,永不 resume
   return c.json({ started: true, fresh: true }, 202);
 });
 
@@ -326,15 +356,26 @@ api.post("/tasks/:id/answer", async (c) => {
   if (!a) return c.json({ error: "answer 不能为空" }, 400);
   const r = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!r) return c.json({ error: "not found" }, 404);
+  // 归档=冻结:答复会 resume 会话并继续写这个任务(还会推进就地验证轮的结算),
+  // 归档后再答复就成了「已冻结的任务还在动」(审查实测:archived=true 却停在
+  // stage=verifying)。先取消归档再答。
+  if (r.archived) return c.json({ error: "任务已归档，先取消归档再答复", archived: true }, 409);
   if (!r.question) return c.json({ error: "该任务没有待答复的问题", status: r.status }, 409);
   if (r.mode !== "team" && (r.status === "running" || r.status === "queued")) {
     return c.json({ error: "提问回合还没结束,等任务落 paused 再答复", status: r.status }, 409);
   }
   const updatedAt = now();
-  await db
+  // CAS 清问题：两个并发答复都读到 question 后，只有第一个能把它清掉——第二个 UPDATE
+  // 影响 0 行，按「已被答复」拒绝。否则两个相互冲突的答案都会启动回合并行执行（审查
+  // 实测：两条 transcript 各含 A1/A2）。
+  const claimed = await db
     .update(tasks)
     .set({ question: null, questionOptions: null, questionItems: null, updatedAt })
-    .where(eq(tasks.id, taskId));
+    .where(and(eq(tasks.id, taskId), isNotNull(tasks.question)))
+    .returning({ id: tasks.id });
+  if (!claimed.length) {
+    return c.json({ error: "问题已被答复（可能有并发的另一次答复），本次未投递" }, 409);
+  }
   bus.publish({ type: "task.question", taskId, updatedAt, question: null, questionOptions: null, questionItems: null });
   // 调度台不说「完成任务」——它没有完成一说,只是拿到答案接着安排。
   const tail = r.mode === "team" ? "请据此接着安排。" : "请据此继续完成任务。";
@@ -516,11 +557,23 @@ api.delete("/scheduled-messages/:mid", async (c) => {
   const m = (await db.select().from(scheduledMessages).where(eq(scheduledMessages.id, mid))).at(0);
   if (!m) return c.json({ error: "not found" }, 404);
   if (m.status !== "pending") return c.json({ error: "只能取消待发送的消息", status: m.status }, 409);
-  // 一并清掉投递租约:它是「有人正在送」的记号,消息都取消了就不该留着。真撞上正在
-  // 投递的那一瞬间也不会出岔子——markSent 的 WHERE 带 status='pending',取消过的行不会
-  // 被它复活(见 pending-messages.ts 的租约一节)。
-  await db.update(scheduledMessages).set({ status: "canceled", deliveringSince: null })
-    .where(eq(scheduledMessages.id, mid));
+  // 投递租约挂着 = 有人**正在**把原话送进会话:此刻「取消成功」是谎报——原文可能已经
+  // 送达并启动了回合,撤不回来(审查实测:cancel 200 而 transcript 已含原文)。取消与
+  // beginDelivery 用同一对条件做 CAS(status=pending AND 租约为空),抢到租约的投递者
+  // 赢;投递失败会把租约还回来,那时再取消不迟。
+  if (m.deliveringSince) {
+    return c.json({ error: "消息正在投递中，无法取消；投递失败会自动回到待发送", status: m.status }, 409);
+  }
+  const canceled = await db.update(scheduledMessages).set({ status: "canceled", deliveringSince: null })
+    .where(and(
+      eq(scheduledMessages.id, mid),
+      eq(scheduledMessages.status, "pending"),
+      isNull(scheduledMessages.deliveringSince),
+    ))
+    .returning({ id: scheduledMessages.id });
+  if (!canceled.length) {
+    return c.json({ error: "消息刚被开始投递或已发送，本次取消未生效" }, 409);
+  }
   return c.json({ canceled: true });
 });
 
@@ -532,8 +585,17 @@ api.post("/tasks/:id/retry", async (c) => {
   if (!r) return c.json({ error: "not found" }, 404);
   if (r.archived) return c.json({ error: "任务已归档，先取消归档再重试", archived: true }, 409);
   if (r.status !== "failed") return c.json({ error: "只有失败的任务可以重试", status: r.status }, 409);
-  if (r.mode === "duet") void resumeDuet(taskId);
-  else void resumeOrRunTask(taskId, { reason: "retry" });
+  // 同 /run:原子占位,并发重试只有一个能 202;duet 走同一把锁。
+  if (!claimTurn(taskId, r.mode === "duet" ? "duet" : "single")) {
+    return c.json({ error: "任务回合正在进行，结束后再重试", status: r.status }, 409);
+  }
+  // 占位后镜像检查验收锁:否则 runTask/resumeDuet 撞上验收锁静默 return,202 是谎报。
+  if (isAcceptingTask(taskId)) {
+    releaseTurn(taskId);
+    return c.json({ error: "任务正在验收（含发布尾段），结束后再重试", status: r.status }, 409);
+  }
+  if (r.mode === "duet") { void resumeDuet(taskId, { turnHeld: true }); return c.json({ started: true }, 202); }
+  void resumeOrRunTask(taskId, { reason: "retry", turnHeld: true });
   return c.json({ started: true }, 202);
 });
 
@@ -584,45 +646,6 @@ api.post("/tasks/:id/requeue", async (c) => {
 });
 
 // ── archive / unarchive ──────────────────────────────────────────────────────
-// Archiving is orthogonal to status (a separate `archived` flag, not an 8th
-// status): a settled terminal task (done/failed/canceled) is frozen and tucked
-// away into the archive view. It does NOT go through setTaskStatus — the status
-// is preserved so unarchiving restores it. Both endpoints are idempotent (already
-// in the target state → just return the task) so a double-click never errors.
-api.post("/tasks/:id/archive", async (c) => {
-  const r = (await db.select().from(tasks).where(eq(tasks.id, c.req.param("id")))).at(0);
-  if (!r) return c.json({ error: "not found" }, 404);
-  if (r.archived) return c.json((await enrichTasks([r]))[0]); // idempotent
-  if (!canArchive(r.status as TaskStatus)) {
-    return c.json({ error: "只有已完成/失败/已取消的任务可以归档", status: r.status }, 409);
-  }
-  const ts = now();
-  // 团队(§Team):归档才是「这件事结束了」—— 先停掉调度台进程和所有在跑的执行者,
-  // 再把执行者一并归档(不管它们各自停在什么状态:团队没了,散在列表里的执行者只是
-  // 噪音;取消归档时整支队伍一起回来)。
-  if (r.mode === "team") {
-    await haltTeam(r.id);
-    const workers = await db.select({ id: tasks.id }).from(tasks).where(eq(tasks.parentId, r.id));
-    for (const w of workers) {
-      await db.update(tasks).set({ archived: true, archivedAt: ts, updatedAt: ts }).where(eq(tasks.id, w.id));
-    }
-  }
-  await db.update(tasks).set({ archived: true, archivedAt: ts, updatedAt: ts }).where(eq(tasks.id, r.id));
-  return c.json((await enrichTasks([(await db.select().from(tasks).where(eq(tasks.id, r.id))).at(0)!]))[0]);
-});
-
-api.post("/tasks/:id/unarchive", async (c) => {
-  const r = (await db.select().from(tasks).where(eq(tasks.id, c.req.param("id")))).at(0);
-  if (!r) return c.json({ error: "not found" }, 404);
-  if (!r.archived) return c.json((await enrichTasks([r]))[0]); // idempotent
-  const ts = now();
-  await db.update(tasks).set({ archived: false, archivedAt: null, updatedAt: ts }).where(eq(tasks.id, r.id));
-  // 对称:团队回来了,它的执行者也一起回来(归档时是整支队伍一起走的)
-  if (r.mode === "team") {
-    await db.update(tasks).set({ archived: false, archivedAt: null, updatedAt: ts }).where(eq(tasks.parentId, r.id));
-  }
-  return c.json((await enrichTasks([(await db.select().from(tasks).where(eq(tasks.id, r.id))).at(0)!]))[0]);
-});
 
 // ── HITL gate decision (§7) — 放行 / 打回 / 注入意见 / 提问 ───────────────────
 api.post("/tasks/:id/gate", async (c) => {
@@ -633,56 +656,18 @@ api.post("/tasks/:id/gate", async (c) => {
   // a decision, resume the duet from the gate and apply the action.
   const t = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (t?.status === "awaiting_review" && t.mode === "duet") {
-    void resumeAtGate(taskId, action);
+    // 同 /run:先原子占位再启动,占不到说明确有回合在跑(闸口重放会真的续跑讨论)。
+    if (!claimTurn(taskId, "duet")) {
+      return c.json({ error: "任务回合正在进行，稍后再处理裁决", status: t.status }, 409);
+    }
+    if (isAcceptingTask(taskId)) {
+      releaseTurn(taskId);
+      return c.json({ error: "任务正在验收（含发布尾段），结束后再处理裁决", status: t.status }, 409);
+    }
+    void resumeAtGate(taskId, action, { turnHeld: true });
     return c.json({ ok: true, resumed: true });
   }
   return c.json({ error: "no open gate for this task" }, 409);
-});
-
-// ── schedules (§9) — one schedule per task ──────────────────────────────────
-api.get("/tasks/:id/schedule", async (c) => {
-  const row = (await db.select().from(schedules).where(eq(schedules.taskId, c.req.param("id")))).at(0);
-  return c.json(row ?? null);
-});
-
-api.put("/tasks/:id/schedule", async (c) => {
-  const taskId = c.req.param("id");
-  const t = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
-  if (t?.archived) return c.json({ error: "任务已归档，不能设置定时", archived: true }, 409);
-  const b = await c.req.json<{ kind: "once" | "cron"; at?: string | null; cron?: string | null; enabled?: boolean }>();
-  const existing = (await db.select().from(schedules).where(eq(schedules.taskId, taskId))).at(0);
-  const row = {
-    id: existing?.id ?? id(),
-    taskId,
-    kind: b.kind,
-    at: b.at ?? null,
-    cron: b.cron ?? null,
-    enabled: b.enabled ?? true,
-    lastRunAt: null,
-    createdAt: existing?.createdAt ?? now(),
-  };
-  if (existing) await db.update(schedules).set(row).where(eq(schedules.id, existing.id));
-  else await db.insert(schedules).values(row);
-  await db.update(tasks).set({ scheduleId: row.id, updatedAt: now() }).where(eq(tasks.id, taskId));
-  return c.json(row);
-});
-
-api.delete("/tasks/:id/schedule", async (c) => {
-  await db.delete(schedules).where(eq(schedules.taskId, c.req.param("id")));
-  await db.update(tasks).set({ scheduleId: null, updatedAt: now() }).where(eq(tasks.id, c.req.param("id")));
-  return c.json({ deleted: true });
-});
-
-// Commits produced on a task's isolated worktree branch. Empty when the task ran
-// in place (no worktree).
-api.get("/tasks/:id/commits", async (c) => {
-  const tid = c.req.param("id");
-  const t = (await db.select().from(tasks).where(eq(tasks.id, tid))).at(0);
-  if (!t) return c.json({ error: "not found" }, 404);
-  const project = (await db.select().from(projects).where(eq(projects.id, t.projectId))).at(0);
-  const sess = (await db.select().from(sessions).where(eq(sessions.taskId, tid))).find((s) => s.worktreePath);
-  if (!sess?.worktreePath || !project) return c.json({ branch: null, commits: [] });
-  return c.json(await taskCommits(sess.worktreePath, project.repoPath, t.worktreeBase));
 });
 
 }

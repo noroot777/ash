@@ -18,6 +18,7 @@ import { runGroup } from "../scheduler.js";
 import { TEAM_WORKER_PREAMBLE } from "./prompts.js";
 import { createTasks } from "../task-store.js";
 import { reopenAcceptedStage } from "../task-stage.js";
+import { beginAccepting, endAccepting } from "../acceptance-lock.js";
 
 export interface DispatchSpec {
   body: string;
@@ -47,6 +48,13 @@ export async function dispatchWorkers(
   if (!lead) throw new Error("调度者任务不存在");
   if (lead.mode !== "team") throw new Error("只有团队任务(mode:\"team\")能派活");
   if (lead.archived) throw new Error("团队已归档,不能再派活");
+  // 派活与验收共用同一把任务级互斥(acceptance-lock),**占位而不是只查一次**:只查
+  // isAcceptingTask 是 TOCTOU——检查通过后的任何 await 间隙里验收都可能开始,dispatch
+  // 照样建 child 并摘牌(审查实测 20/20 交错复现)。占住之后:验收先开始→这里占不到,
+  // 拒;派活先开始→验收侧 beginAccepting 失败,按 acceptance_in_progress 409。派活期间
+  // 挂出去的执行者(runGroup)启动后,验收由 acceptanceGuard 的 busyChild 拦。
+  if (!beginAccepting(leadTaskId)) throw new Error("团队正在验收(含发布尾段),结束后再派活");
+  try {
   const cfg: TeamConfig = lead.team ? JSON.parse(lead.team) : TEAM_DEFAULTS;
   const mode = opts.mode ?? (specs.length > 1 ? "serial" : "parallel");
   const profileTypes = new Map(
@@ -148,6 +156,9 @@ export async function dispatchWorkers(
 
   if (opts.run !== false) void runGroup(groupId);
   return { groupId, mode, tasks: created };
+  } finally {
+    endAccepting(leadTaskId);
+  }
 }
 
 // 执行者的前言:只在 fresh run 时拼到 body 前面(不写进 tasks.body —— body 是调度者

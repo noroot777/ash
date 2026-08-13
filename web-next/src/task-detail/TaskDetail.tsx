@@ -406,7 +406,7 @@ export function TaskDetail({
               <DeleteTaskDialog
                 task={task}
                 notify={notify}
-                onDeleted={() => onDeleted(task.id)}
+                onDeleted={(ids) => ids.forEach(onDeleted)}
                 onClose={() => setDeleteOpen(false)}
               />
             )}

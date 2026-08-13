@@ -47,6 +47,7 @@ import { recordUserConversationTurn } from "../conversation-turn.js";
 import { recordSessionUsageEvent, setSessionContext } from "../usage.js";
 import { LEAD_PREAMBLE, LEAD_NUDGE, LEAD_RESUMED, LEAD_WORKSPACE_RESET } from "./prompts.js";
 import { withSkillInvocation, nativeCliCommand } from "../skills.js";
+import { withGlobalBrowserPolicy } from "../browser-verification-policy.js";
 
 // 空闲多久回收进程(0/负数 = 永不回收)。测试用 HARNESS_TEAM_IDLE_MS=5000。
 const IDLE_MS = Number(process.env.HARNESS_TEAM_IDLE_MS ?? 30 * 60_000);
@@ -260,7 +261,7 @@ function push(lead: Lead, text: string, kind: Kind): void {
     }
     const at = now();
     recordUserConversationTurn({ taskId: lead.taskId, sessionId: lead.sessId, role: "lead", agentType: lead.agentType, out: lead.out, text, at });
-    lead.handle.send(promptedText);
+    lead.handle.send(withGlobalBrowserPolicy(promptedText, "reminder"));
     void beginTurn(lead, at);
     return;
   }
@@ -270,7 +271,7 @@ function push(lead: Lead, text: string, kind: Kind): void {
   }
   const at = now();
   recordSystemTurn(lead, text, at);
-  lead.handle.send(text);
+  lead.handle.send(withGlobalBrowserPolicy(text, "reminder"));
   void beginTurn(lead, at);
 }
 
@@ -307,9 +308,10 @@ async function openLead(taskId: string, rawText: string, kind: Kind): Promise<Le
   // (哪怕这次是被一条消息带起来的,前言也必须有 —— 否则它不知道自己是调度者)。
   // ws.fresh = 原 worktree 连分支一起没了、这次是重建的空目录,接回的调度者记忆
   // 还在但文件已经不在,必须打断这个连续性。
-  const message = resuming
+  const rawMessage = resuming
     ? LEAD_RESUMED + promptedText + (ws.fresh ? LEAD_WORKSPACE_RESET(ws.path) : "")
     : LEAD_PREAMBLE(taskId, cfg.worker) + objective + (promptedText ? `\n\n【新消息】${promptedText}` : "");
+  const message = withGlobalBrowserPolicy(rawMessage, resuming ? "reminder" : "full");
 
   const turnStart = now();
   const sessId = resuming ? prev!.id : id();
@@ -495,7 +497,7 @@ async function endTurn(lead: Lead): Promise<void> {
     lead.pending = [];
     const at = now();
     recordSystemTurn(lead, merged, at);
-    lead.handle.send(merged);
+    lead.handle.send(withGlobalBrowserPolicy(merged, "reminder"));
     await beginTurn(lead, at);
     return;
   }

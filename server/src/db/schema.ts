@@ -157,6 +157,20 @@ export const tasks = sqliteTable("tasks", {
   // 否则「压一下上下文」会被记成一轮验证跑完，还白吃一轮配额。开跑时写，结算后清空；
   // 落库而不只放内存，理由同上一条（结算可能发生在另一个进程里）。
   nativeTurn: integer("native_turn", { mode: "boolean" }).notNull().default(false),
+  // 统一验收合并的结构化落账：目标分支 + 合并前后它的 commit。合并后基线审查（对
+  // base@before..after 派新任务）靠它，时间线文本反解不可靠。无合并动作（in_place /
+  // marked_only / 打标签）时保持 null 或 before==after。
+  acceptedTargetBranch: text("accepted_target_branch"),
+  acceptedBaseCommit: text("accepted_base_commit"),
+  acceptedMergeCommit: text("accepted_merge_commit"),
+  // 验收尾段（点头之后的发布/命令步骤）的 durable 进度：finalize 时线上真有尾段就置 1，
+  // 尾段跑完（无论成败，结果已报告）清 0。进程死在两者之间时，重启后的重复验收会发现
+  // 它还挂着并补跑——否则发布步骤被 already_accepted 快路静默永久漏掉（审查实测复现）。
+  acceptedTailPending: integer("accepted_tail_pending", { mode: "boolean" }).notNull().default(false),
+  // 尾段的**逐站** durable 进度（JSON string[]：已完成的 step id）。只有 pending 一个
+  // 布尔位时，崩溃重试会整段重跑——已经执行过的发布/部署命令再来一遍（at-least-once
+  // 变 at-least-twice，审查实测复现）。补跑按这份清单跳过已完成的站；随 pending 一起清。
+  acceptedTailDone: text("accepted_tail_done").notNull().default("[]"),
 });
 
 export const agents = sqliteTable("agents", {
@@ -222,9 +236,8 @@ export const freeWorkflowStates = sqliteTable("free_workflow_states", {
   reviewCheckMode: text("review_check_mode"),
   reviewRetryLimit: integer("review_retry_limit"),
   reviewNote: text("review_note"),
-  mergeStatus: text("merge_status").notNull().default("idle"),
-  mergeMessage: text("merge_message"),
-  mergedAt: text("merged_at"),
+  // 非空 = 自动复审链的续轮预约：修复确认完成后在这条 run 上续下一轮，而不是开新 run。
+  reviewRunId: text("review_run_id"),
   updatedAt: text("updated_at").notNull(),
 });
 
@@ -272,6 +285,8 @@ export const freeReviewRounds = sqliteTable(
     round: integer("round").notNull(),
     status: text("status").notNull(),
     conclusion: text("conclusion"),
+    // 本轮启动时任务工作区的 HEAD。结论新不新鲜靠它跟当前 HEAD 比，不靠状态字段。
+    reviewedCommit: text("reviewed_commit"),
     startedAt: text("started_at").notNull(),
     endedAt: text("ended_at"),
   },
@@ -371,6 +386,10 @@ export const scheduledMessages = sqliteTable("scheduled_messages", {
   executorId: text("executor_id"), // agents.id | null（null=按 agent 类型默认执行器）
   model: text("model"), // 模型覆盖 | null（跟随执行器）
   reasoningEffort: text("reasoning_effort"), // 思考强度覆盖 | null（跟随执行器）
+  // 投递时恢复的回合身份（"reviewer" 等）。审查者提问回合还没 release turn、用户就答复
+  // 时答案会落到这里排队——不存 role 的话投递会以 single 身份进实现会话，reviewer 永远
+  // 收不到答案（审查实测复现）。null = 普通消息。
+  sessionRole: text("session_role"),
   mode: text("mode").notNull().default("timed"), // timed | queued
   sendAt: text("send_at").notNull(), // timed=ISO 到期时间；queued=入队时刻（只用来排先后）
   status: text("status").notNull().default("pending"), // pending | sent | canceled

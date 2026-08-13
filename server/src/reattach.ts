@@ -9,7 +9,7 @@ import { eq, inArray } from "drizzle-orm";
 import type { AgentType, SessionRole } from "@harness/shared";
 import { db } from "./db/index.js";
 import { agents, tasks, sessions } from "./db/schema.js";
-import { trackRun, untrackRun } from "./runs.js";
+import { claimTurn, releaseTurn, trackRun, untrackRun } from "./runs.js";
 import { resolveExecutorFor } from "./executors/index.js";
 import { reattachDetachedAgent } from "./executors/detached.js";
 import { RUNS_DIR } from "./paths.js";
@@ -124,6 +124,9 @@ export async function reattachRunningTasks(): Promise<Set<string>> {
       });
       trackRun(task.id, handle);
       adopted.add(task.id);
+      // 接管也要恢复 turn 的运行时身份：report_stage 只认 turnRole（claimTurn 落下的），
+      // 不恢复的话接回的 reviewer 交卷必被拒，一条本可有结论的审查被错杀成异常失败。
+      const claimedTurn = claimTurn(task.id, sess.role);
       const out = createWriteStream(join(RUNS_DIR, task.id, `${sess.id}.md`), { flags: "a" });
       // 不 await：多个任务并行接管，各自跑各自的（跟正常运行时一样）。
       void consumeSingleRun({
@@ -141,6 +144,7 @@ export async function reattachRunningTasks(): Promise<Set<string>> {
         .catch((err) => console.error(`[harness] 接管 ${task.id} 的消费循环出错:`, err))
         .finally(() => {
           untrackRun(task.id, handle);
+          if (claimedTurn) releaseTurn(task.id);
         });
       console.log(`[harness] 接管仍在运行的 agent:任务 ${task.id} pid=${sess.agentPid}(从字节 ${sess.agentOffset ?? 0} 继续)`);
     } catch (err) {

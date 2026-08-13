@@ -29,7 +29,7 @@ import { isTaskStage } from "@harness/shared";
 import { isReplayableMcpTool, isUndeliveredMcpFailure } from "@harness/shared/mcp-delivery";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
-import { tasks } from "./db/schema.js";
+import { tasks, sessions } from "./db/schema.js";
 import { detachedPathsFor } from "./executors/detached.js";
 import { RUNS_DIR } from "./paths.js";
 import { confirmDone } from "./runs.js";
@@ -168,10 +168,34 @@ export function planReplay(calls: McpCallRecord[], taskId: string): McpCallRecor
 }
 
 /** 执行一笔补录。返回写进时间线的那句话；参数不合法就返回 null（跳过，不硬塞）。 */
-async function applyReplay(taskId: string, call: McpCallRecord): Promise<string | null> {
+async function applyReplay(taskId: string, sessId: string, call: McpCallRecord): Promise<string | null> {
   if (call.tool === "report_stage") {
     const stage = call.args.stage;
     if (!isTaskStage(stage)) return null;
+    // 必须复用与 HTTP 路由相同的业务入口：自由工作流的审查结论写在 round 上，
+    // 直接 setTaskStage 会把结论写进 tasks.stage（自由任务根本不用 preset stage），
+    // round 依旧无结论、结算把审查判失败（审查实测复现）。
+    // 身份必须核对**来源会话本身**的 role：补录豁免了业务入口的活跃回合检查，靠的是
+    // 「调用出自该回合自己的记录」——但那个回合要真是 reviewer 的才行，普通实现回合
+    // 记录里的 report_stage 不能被包装成审查结论（审查实测复现过 role=single 的绕过）。
+    const sourceRole = (await db.select({ role: sessions.role }).from(sessions)
+      .where(eq(sessions.id, sessId))).at(0)?.role;
+    if (sourceRole === "reviewer") {
+      const { reportFreeReviewConclusion } = await import("./free-workflow.js");
+      try {
+        const freeReview = await reportFreeReviewConclusion(taskId, stage, { bySessionRecovery: true });
+        if (freeReview) {
+          return `自由审查结论（${stage}）当时因 MCP 通道中断没能写回，已补录到第 ${freeReview.round} 轮。`;
+        }
+      } catch (error) {
+        // 补录不满足业务门禁（比如报告缺失）就如实跳过，让结算按「没有结论」处理。
+        console.warn(`[harness] replay report_stage(${taskId}) rejected:`, error);
+        return null;
+      }
+    }
+    const task = (await db.select({ workflowMode: tasks.workflowMode }).from(tasks)
+      .where(eq(tasks.id, taskId))).at(0);
+    if (task?.workflowMode === "free") return null; // 自由任务不写 preset stage
     await setTaskStage(taskId, stage);
     return `验证结论（${stage}）当时因 MCP 通道中断没能写回，已从本回合的调用记录中补录。`;
   }
@@ -209,7 +233,7 @@ export async function replayUndeliveredMcpCalls(a: {
   const plan = planReplay(calls, a.taskId);
   let done = 0;
   for (const call of plan) {
-    const note = await applyReplay(a.taskId, call).catch(() => null);
+    const note = await applyReplay(a.taskId, a.sessId, call).catch(() => null);
     if (!note) continue;
     done += 1;
     await appendTaskTimeline(a.taskId, note);
