@@ -67,6 +67,9 @@ export async function readFreeReviewReservation(taskId: string): Promise<Reserve
 const sameAs = (col: SQLiteColumn, value: unknown): SQL =>
   value === null || value === undefined ? isNull(col) : eq(col, value as never);
 
+// 快照里的列值都是 unknown（这张表的读写只在本文件里配对），写回时收窄一次。
+const textOrNull = (value: unknown): string | null => (typeof value === "string" && value ? value : null);
+
 /**
  * CAS 消费预约槽：只有「槽还是我读到的那一条」时才清空。消费成功返回**清空时写下的
  * 版本令牌**（`updatedAt`），失败返回 null——令牌是启动失败后还原这条预约的唯一凭据
@@ -98,7 +101,7 @@ export async function consumeFreeReviewReservation(
 }
 
 /**
- * 把刚消费掉的那条预约原样放回去（启动失败时的回滚），返回是否真的放回了。
+ * 把刚消费掉的那条预约**原样**放回去（启动失败时的回滚），返回是否真的放回了。
  *
  * 同样 CAS，条件是「槽还空着、而且空位上写的正是我消费时留下的那个令牌」：
  * - 令牌对不上 = 用户在这中间保存了新预约，那条是更新的意思，绝不能被这次回滚盖掉；
@@ -107,14 +110,32 @@ export async function consumeFreeReviewReservation(
  * 不回滚的后果是**预约永久蒸发**：CAS 消费已经把槽清空了，启动又抛在半路，于是用户
  * 那条「完成后自动派审」既没跑也不在了，下次确认完成什么都不会发生，界面上只剩一行
  * 失败时间线（审查实测）。
+ *
+ * 恢复的是**整条**预约而不只是 armed/runId：派审路径在启动前就把槽清成了空壳
+ * （`clearReservationForDispatch`，附言与覆盖四列全为 null），只翻回 armed 会得到一条
+ * 「审查者还在、附言和执行器覆盖都没了」的残缺预约——下次确认完成时按审查者自己的
+ * 配置跑，正好丢掉用户这次改的模型/智能水平（审查实测）。
  */
 export async function restoreFreeReviewReservation(
   taskId: string,
   consumed: ReservedFreeReview,
   token: string,
 ): Promise<boolean> {
+  const override = (consumed?.override ?? null) as Record<string, unknown> | null;
   const restored = await db.update(freeWorkflowStates)
-    .set({ reviewArmed: true, reviewRunId: consumed?.runId ?? null, updatedAt: now() })
+    .set({
+      reviewArmed: true,
+      selectedReviewerId: consumed?.reviewerId ?? null,
+      reviewCheckMode: textOrNull(consumed?.checkMode),
+      reviewRetryLimit: Number.isInteger(consumed?.retryLimit) ? Number(consumed?.retryLimit) : null,
+      reviewNote: textOrNull(consumed?.note),
+      reviewAgentType: textOrNull(override?.agentType),
+      reviewExecutorId: textOrNull(override?.executorId),
+      reviewModel: textOrNull(override?.model),
+      reviewReasoningEffort: textOrNull(override?.reasoningEffort),
+      reviewRunId: consumed?.runId ?? null,
+      updatedAt: now(),
+    })
     .where(and(
       eq(freeWorkflowStates.taskId, taskId),
       eq(freeWorkflowStates.reviewArmed, false),
@@ -124,6 +145,34 @@ export async function restoreFreeReviewReservation(
   if (!restored.length) return false;
   bus.publish({ type: "task.review", taskId });
   return true;
+}
+
+/**
+ * 派审即刻把预约槽清干净（含覆盖四列）：这条 run 已经把配置冻结在自己行里，槽里留着
+ * 旧覆盖只会在下一条预约的表单里冒出来。
+ *
+ * `token` 非空 = 这次派审是在**消费一条预约**（`startReservedFreeReview` 刚 CAS 消费过）：
+ * 那就沿用它的版本令牌，不推进 `updatedAt`。令牌是启动失败时还原这条预约的唯一凭据，
+ * 被这次清槽推进掉，`restoreFreeReviewReservation` 的 CAS 就永远匹配不上，预约静默蒸发，
+ * 而时间线上写的还是「预约期间已被更新，保留你最新的设置」（审查实测）。
+ */
+export async function clearReservationForDispatch(taskId: string, slot: {
+  reviewerId: string;
+  checkMode: string;
+  retryLimit: number;
+  token?: string | null;
+}): Promise<void> {
+  const cleared = {
+    selectedReviewerId: slot.reviewerId, reviewArmed: false,
+    reviewCheckMode: slot.checkMode, reviewRetryLimit: slot.retryLimit,
+    reviewNote: null, reviewRunId: null,
+    reviewAgentType: null, reviewExecutorId: null, reviewModel: null, reviewReasoningEffort: null,
+    updatedAt: slot.token || now(),
+  };
+  await db.insert(freeWorkflowStates).values({ taskId, ...cleared }).onConflictDoUpdate({
+    target: freeWorkflowStates.taskId,
+    set: cleared,
+  });
 }
 
 /**
@@ -176,6 +225,8 @@ export async function startReservedFreeReview(
     continueRun: (runId: string) => Promise<unknown>;
     startNew: (input: {
       reviewerId: string; checkMode: unknown; retryLimit: unknown; note: unknown; override: unknown;
+      /** 消费这条预约时留下的版本令牌：派审清槽要沿用它，否则启动失败没法回滚（见 clearReservationForDispatch）。 */
+      slotToken: string;
     }) => Promise<unknown>;
   },
 ): Promise<void> {
@@ -208,6 +259,7 @@ export async function startReservedFreeReview(
           retryLimit: consumed.retryLimit,
           note: consumed.note,
           override: consumed.override,
+          slotToken: token,
         });
       }
     } catch (error) {

@@ -38,6 +38,11 @@ try {
   const { claimTurn } = await import("../src/runs.js");
   const { prepareWorktree } = await import("../src/git.js");
   const { mountReviewerProfileRoutes } = await import("../src/reviewer-profiles.js");
+  const {
+    clearReservationForDispatch,
+    readFreeReviewReservation,
+    startReservedFreeReview,
+  } = await import("../src/free-review-reservations.js");
   const { mountTaskRoutes } = await import("../src/task-routes.js");
   const { mountTaskStageRoutes } = await import("../src/task-stage.js");
   const { acceptTask } = await import("../src/task-accept.js");
@@ -367,6 +372,59 @@ try {
   const untouched = profilesAfterOverride.find((profile) => profile.id === reviewer.id);
   assert.deepEqual({ model: untouched?.model ?? null, reasoningEffort: untouched?.reasoningEffort ?? null },
     { model: null, reasoningEffort: "high" }, "选了「不保存」的覆盖不得写回审查者配置");
+
+  // 预约启动失败必须把**整条**预约放回去。派审在启动前就把槽清成了空壳，只翻回 armed
+  // 会得到一条没有附言、没有覆盖的残缺预约，下次确认完成时按审查者老配置跑。
+  await createTasks([{
+    id: "free-rollback-task", projectId: "p", groupId: null, parentId: null,
+    title: "free rollback", body: "test", mode: "single", status: "running",
+    labels: "[]", dependsOn: "[]", resumeDependsOn: "[]", agentType: "codex",
+    executorId: "reviewer-executor", model: null, reasoningEffort: null, autoTitle: false,
+    duet: null, team: null, reportBack: false, scheduleId: null,
+    createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    useWorktree: false, worktreeBase: null, originTaskId: null, workflowMode: "free",
+  }]);
+  const rollbackOverride = { agentType: "codex", executorId: "reviewer-executor", model: "gpt-rollback", reasoningEffort: "xhigh" };
+  const reserveRollback = async (body: unknown) => api.request("/tasks/free-rollback-task/free-workflow/review-reservation", {
+    method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
+  });
+  assert.equal((await reserveRollback({
+    reviewerId: reviewer.id, checkMode: "syntax", retryLimit: 2,
+    note: "回滚要连附言一起回来", override: rollbackOverride,
+  })).status, 200);
+  // 复刻 startFreeReview 的真实副作用顺序：先按消费令牌清槽，再在启动环节抛错。
+  const failingDispatch = (extra?: () => Promise<unknown>) => ({
+    continueRun: async () => { throw new Error("本用例只走新建审查链"); },
+    startNew: async (input: { reviewerId: string; slotToken: string }) => {
+      await clearReservationForDispatch("free-rollback-task", {
+        reviewerId: input.reviewerId, checkMode: "syntax", retryLimit: 2, token: input.slotToken,
+      });
+      if (extra) await extra();
+      throw new Error("投递失败");
+    },
+  });
+  await startReservedFreeReview("free-rollback-task", await readFreeReviewReservation("free-rollback-task"), failingDispatch());
+  const rolledBack = await api.request("/tasks/free-rollback-task/free-workflow").then((response) => response.json()) as {
+    reviewReservation: { armed: boolean; reviewerId: string | null; checkMode: string | null; retryLimit: number | null; note: string | null; override: unknown; runId: string | null };
+  };
+  assert.deepEqual(rolledBack.reviewReservation, {
+    armed: true, reviewerId: reviewer.id, checkMode: "syntax", retryLimit: 2, note: "回滚要连附言一起回来",
+    override: rollbackOverride, runId: null,
+  }, "启动失败必须整条预约回滚：附言和执行器覆盖一起回来，否则下次自动审查会按老配置跑");
+
+  // 用户在启动失败前又保存了新预约：那条是他最新的意思，回滚一个字都不许碰。
+  await startReservedFreeReview("free-rollback-task", await readFreeReviewReservation("free-rollback-task"), failingDispatch(
+    () => reserveRollback({ reviewerId: reviewer.id, checkMode: "logic", retryLimit: 0, note: "我改主意了", override: null }),
+  ));
+  const kept = await api.request("/tasks/free-rollback-task/free-workflow").then((response) => response.json()) as {
+    reviewReservation: { armed: boolean; checkMode: string | null; retryLimit: number | null; note: string | null; override: unknown };
+  };
+  assert.deepEqual({
+    armed: kept.reviewReservation.armed, checkMode: kept.reviewReservation.checkMode,
+    retryLimit: kept.reviewReservation.retryLimit, note: kept.reviewReservation.note,
+    override: kept.reviewReservation.override,
+  }, { armed: true, checkMode: "logic", retryLimit: 0, note: "我改主意了", override: null },
+    "回滚不得盖掉用户在这中间保存的新预约");
 
   // 删除审查者时必须同步 disarm：否则 UI 仍显示已预约，结算因 reviewerId 为空静默不派审。
   await createTasks([{

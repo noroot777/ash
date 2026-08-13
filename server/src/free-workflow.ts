@@ -2,20 +2,15 @@ import { readFileSync } from "node:fs";
 import { extname } from "node:path";
 import type {
   AgentType,
-  FreeReviewCheckMode,
   FreeReviewDispatchInput,
-  FreeReviewExecutorOverride,
   SessionRole,
   TaskStatus,
 } from "@harness/shared";
-import { AGENT_TYPES } from "@harness/shared";
-import { FREE_REVIEW_CHECK_MODES } from "@harness/shared/free-workflow";
 import { and, desc, eq } from "drizzle-orm";
 import type { Hono } from "hono";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
 import {
-  agents,
   freeReviewRounds,
   freeReviewRuns,
   freeWorkflowStates,
@@ -24,7 +19,16 @@ import {
   scheduledMessages,
   tasks,
 } from "./db/schema.js";
-import { armFollowUpFreeReview, disarmFreeReviewReservation, readFreeReviewReservation, consumeFreeReviewReservation, startReservedFreeReview } from "./free-review-reservations.js";
+import { armFollowUpFreeReview, clearReservationForDispatch, disarmFreeReviewReservation, readFreeReviewReservation, consumeFreeReviewReservation, startReservedFreeReview } from "./free-review-reservations.js";
+import {
+  checkMode,
+  overrideLabel,
+  overrideSuffix,
+  retryLimit,
+  reviewNote,
+  reviewOverride,
+  reviewRunConfig,
+} from "./free-review-input.js";
 import { freeManualRepairPrompt, freeRepairPrompt, freeReviewPrompt } from "./free-review-prompts.js";
 export { freeManualRepairPrompt, freeRepairPrompt, freeReviewPrompt } from "./free-review-prompts.js";
 import { mountFreePreviewRoutes } from "./free-workflow-preview.js";
@@ -42,8 +46,6 @@ import { id, now } from "./util.js";
 type TaskRow = typeof tasks.$inferSelect;
 type ReviewRunRow = typeof freeReviewRuns.$inferSelect;
 
-const MAX_RETRIES = 5;
-const MAX_REVIEW_NOTE_LENGTH = 2_000;
 export { freeWorkflowState };
 export function freeReviewOutcome(input: {
   turnOk: boolean;
@@ -102,90 +104,6 @@ export async function freeReviewReminder(taskId: string): Promise<string> {
     `不要调用 complete_task 或 accept_task。`;
 }
 
-function checkMode(value: unknown): FreeReviewCheckMode {
-  if (typeof value !== "string" || !(FREE_REVIEW_CHECK_MODES as readonly string[]).includes(value)) {
-    throw new Error("审查类型只能是 syntax 或 logic");
-  }
-  return value as FreeReviewCheckMode;
-}
-
-function retryLimit(value: unknown): number {
-  if (!Number.isInteger(value) || Number(value) < 0 || Number(value) > MAX_RETRIES) {
-    throw new Error(`自动复审轮数必须是 0-${MAX_RETRIES} 的整数`);
-  }
-  return Number(value);
-}
-function reviewNote(value: unknown): string | null {
-  if (value == null) return null;
-  if (typeof value !== "string") throw new Error("审查附言必须是文本");
-  const note = value.trim();
-  if (note.length > MAX_REVIEW_NOTE_LENGTH) throw new Error(`审查附言不能超过 ${MAX_REVIEW_NOTE_LENGTH} 字`);
-  return note || null;
-}
-
-function overrideText(value: unknown, max: number, field: string): string | null {
-  if (value == null) return null;
-  if (typeof value !== "string") throw new Error(`${field}必须是文本或 null`);
-  const normalized = value.trim();
-  if (normalized.length > max) throw new Error(`${field}不能超过 ${max} 个字符`);
-  return normalized || null;
-}
-
-/**
- * 「这一次换个人/换个模型跑」的覆盖。**审查者配置一个字都不动**——用户在派审面上改了
- * 三段胶囊却选了「不保存」，改动就只能活在这一条审查里（预约则活在预约槽的四列里）。
- *
- * 校验与审查者配置同源（`reviewer-profiles.ts`）：执行器必须存在、且类型对得上，否则
- * 覆盖会把审查派给一个根本解析不出来的执行器，失败要等到真正开跑才暴露。
- */
-async function reviewOverride(value: unknown): Promise<FreeReviewExecutorOverride | null> {
-  if (value == null) return null;
-  if (typeof value !== "object" || Array.isArray(value)) throw new Error("审查执行器覆盖必须是对象");
-  const raw = value as Record<string, unknown>;
-  const type = raw.agentType;
-  if (typeof type !== "string" || !(AGENT_TYPES as readonly string[]).includes(type)) {
-    throw new Error("覆盖的智能体类型无效");
-  }
-  const agentType = type as AgentType;
-  const executorId = overrideText(raw.executorId, 100, "执行器");
-  if (executorId) {
-    const profile = (await db.select({ type: agents.type }).from(agents).where(eq(agents.id, executorId))).at(0);
-    if (!profile) throw new Error("覆盖所选的执行器不存在");
-    if (profile.type !== agentType) throw new Error(`覆盖所选的执行器属于 ${profile.type}，与 ${agentType} 不匹配`);
-  }
-  return {
-    agentType,
-    executorId,
-    model: overrideText(raw.model, 160, "模型"),
-    reasoningEffort: overrideText(raw.reasoningEffort, 60, "智能水平"),
-  };
-}
-
-type ReviewerRunConfig = Pick<FreeReviewExecutorOverride, "agentType" | "executorId" | "model" | "reasoningEffort">;
-
-/** 这次审查实际要跑的执行器：有覆盖就整套用覆盖的，没有就整套用审查者自己的。 */
-function reviewRunConfig(
-  profile: { agentType: string; executorId: string | null; model: string | null; reasoningEffort: string | null },
-  override: FreeReviewExecutorOverride | null,
-): ReviewerRunConfig {
-  return override ?? {
-    agentType: profile.agentType as AgentType,
-    executorId: profile.executorId,
-    model: profile.model,
-    reasoningEffort: profile.reasoningEffort,
-  };
-}
-
-/** 覆盖的人话形态：「codex · gpt-5.6-sol · high」，跟着有值的段走。 */
-function overrideLabel(override: FreeReviewExecutorOverride): string {
-  return `${override.agentType}${override.model ? ` · ${override.model}` : ""}` +
-    `${override.reasoningEffort ? ` · ${override.reasoningEffort}` : ""}`;
-}
-
-/** 时间线里点明「这次跟审查者存的配置不一样」，否则用户只看到审查者名字，读不出跑的是谁。 */
-function overrideSuffix(override: FreeReviewExecutorOverride | null): string {
-  return override ? `（本次用 ${overrideLabel(override)}）` : "";
-}
 // 预约的产品语义：**下一次确认完成（confirmedDone → done）时消费**，不论那个回合是在
 // 预约之前还是之后开跑的——任务正在跑（含已 claim、status 尚未落 running 的窗口）时挂
 // 预约，本回合完成即触发审查，这正是「修复中先把复审预约上」的常规用法。所以这里刻意
@@ -441,7 +359,7 @@ export async function handleFreeWorkflowSettlement(
           // 预约时存下的「这次换个模型/智能水平跑」原样带上；执行器在这中间被删掉了
           // 就整套丢弃、退回审查者自己的配置，而不是让整条预约启动失败。
           override: await reviewOverride(input.override).catch(() => null),
-        }),
+        }, { slotToken: input.slotToken }),
       });
     }
     return true;
@@ -515,7 +433,7 @@ export async function handleFreeWorkflowSettlement(
 async function startFreeReview(
   taskId: string,
   input: FreeReviewDispatchInput,
-  opts: { holdTurn?: boolean } = {},
+  opts: { holdTurn?: boolean; slotToken?: string } = {},
 ): Promise<FreeWorkflowApiState> {
   const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!task) throw new Error("任务不存在");
@@ -560,17 +478,10 @@ async function startFreeReview(
       await db.insert(freeReviewRounds).values({
         id: id(), runId: run.id, round: 1, status: "reviewing", conclusion: null, startedAt: at, endedAt: null,
       });
-      // 派审即刻消费掉预约槽的一切（含覆盖四列）：这条 run 已经把配置冻结在自己行里，
-      // 槽里留着旧覆盖只会在下次预约表单里冒出来。
-      const cleared = {
-        selectedReviewerId: profile.id, reviewArmed: false,
-        reviewCheckMode: mode, reviewRetryLimit: retries, reviewNote: null, reviewRunId: null,
-        reviewAgentType: null, reviewExecutorId: null, reviewModel: null, reviewReasoningEffort: null,
-        updatedAt: at,
-      };
-      await db.insert(freeWorkflowStates).values({ taskId, ...cleared }).onConflictDoUpdate({
-        target: freeWorkflowStates.taskId,
-        set: cleared,
+      // 派审即刻消费掉预约槽的一切（含覆盖四列）；从预约消费进来时沿用它的版本令牌，
+      // 好让下面启动失败的回滚还能认出这个空位是自己腾的（见 clearReservationForDispatch）。
+      await clearReservationForDispatch(taskId, {
+        reviewerId: profile.id, checkMode: mode, retryLimit: retries, token: opts.slotToken,
       });
       // 派审面上临时改过执行器：写一行，否则时间线只有审查者名字，读不出这一轮跑的是谁。
       if (override) {
