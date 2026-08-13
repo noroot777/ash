@@ -130,6 +130,20 @@
   gap: 3px;
 }
 
+/* 说明 + 刷新同一行:文字可被截断,按钮 flex 钉在右侧,避免紧表格拉长说明时把按钮挤没。 */
+.agent-model-control > small {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 4px;
+}
+.agent-model-control > small > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .agent-model-control > small.is-error,
 .provider-model-field > small.is-error {
   color: var(--red);
@@ -139,15 +153,17 @@
    不等发版就能拿到新模型的唯一入口，所以哪怕说明被截断它也要留在行内可见。 */
 .agent-model-control > small > button.model-refresh {
   display: inline-flex;
+  flex: 0 0 auto;
   align-items: center;
   gap: 2px;
   border: 0;
   border-radius: 4px;
-  margin-left: 5px;
-  background: transparent;
-  padding: 1px 4px;
+  margin-left: auto;
+  background: var(--raised);
+  padding: 1px 5px;
   color: var(--muted);
   font-size: 9px;
+  font-weight: 600;
 }
 .agent-model-control > small > button.model-refresh:hover:not(:disabled) { background: var(--sel-bg); color: var(--ink); }
 .agent-model-control > small > button.model-refresh:disabled { opacity: .55; }

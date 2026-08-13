@@ -249,7 +249,8 @@
 }
 
 .agent-profile-cell .agent-model-control {
-  gap: 0;
+  /* 原来 gap:0 把说明行贴死在下拉上;CLI 刷新行出现后需要一点点间距才读得出来。 */
+  gap: 2px;
 }
 
 /* 强度那一格跟同排的下拉长一个样：这一列只有 78px，边框和 34px 高度会顶出格子。 */

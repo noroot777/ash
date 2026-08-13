@@ -42,6 +42,15 @@ export interface CliModelCatalog {
   error: string | null;
 }
 
+/**
+ * 哪些 CLI 已有实测过的清单查询命令。
+ *
+ * 前端首帧 / 接口还没回 / 接口挂了时靠它决定要不要画「刷新」按钮;权威答案仍是
+ * 服务端现问 CLI 后返回的 `probeSupported`。必须与 server catalog 里填了 `models`
+ * 的 type 对齐(目前 grok / pi)。
+ */
+export const CLI_MODEL_PROBE_TYPES: ReadonlySet<AgentType> = new Set(["grok", "pi"]);
+
 // CLI-native model aliases used when an executor is on its official account.
 // Provider-backed executors replace these with that provider's /v1/models list.
 // 全键 Record 是刻意的:新类型不填就编译不过,免得漏登记后下拉框静默空着。

@@ -231,6 +231,7 @@ export function AgentModelPicker({
                         className={section.group.refreshing ? "is-spinning" : ""}
                         aria-hidden="true"
                       />
+                      刷新
                     </button>
                   )}
                 </header>

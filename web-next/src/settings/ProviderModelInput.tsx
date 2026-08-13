@@ -179,11 +179,11 @@ export function ProviderModelInput({
           {status === "failed" && `仍可手填模型：${error}`}
         </small>
       )}
-      {/* CLI 官方账号这条要把来源说清楚:实时问出来的还是内置兜底 —— 用户看见「内置清单」
-          才知道该点刷新,否则新模型没出现时只会以为是 CLI 还没发。 */}
-      {!provider && !compact && (
+      {/* CLI 官方账号:来源说明 + 刷新。执行器表用 compact 藏供应商状态行,但这条不能藏 ——
+          设置页唯一入口就是 AgentProfileRow(compact),藏掉等于按钮根本不存在。 */}
+      {!provider && (
         <small className={cli.catalog?.error ? "is-error" : ""}>
-          {cliCatalogNote(cli.catalog)}
+          <span>{cliCatalogNote(cli.catalog)}</span>
           {cli.catalog?.probeSupported && (
             <button
               type="button"

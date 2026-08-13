@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import type { AgentType } from "@harness/shared";
 import type { CliModelCatalog } from "@harness/shared/cli-presets";
-import { CLI_MODEL_PRESETS } from "@harness/shared/cli-presets";
+import { CLI_MODEL_PRESETS, CLI_MODEL_PROBE_TYPES } from "@harness/shared/cli-presets";
 import { api } from "./api.ts";
 
 /**
@@ -20,17 +20,19 @@ const requests = new Map<AgentType, Promise<CliModelCatalog>>();
 const subscribers = new Map<AgentType, Set<(catalog: CliModelCatalog) => void>>();
 
 /** 还没问到结果时的占位:内容等同于内置快照,`source` 照实写着 preset。 */
-export function presetFallback(type: AgentType): CliModelCatalog {
+export function presetFallback(type: AgentType, patch: Partial<CliModelCatalog> = {}): CliModelCatalog {
   return {
     type,
     models: [...CLI_MODEL_PRESETS[type]],
     defaultModel: null,
     source: "preset",
-    probeSupported: false,
+    // 首帧 / 接口失败也要按「这家能不能现问」画刷新按钮,不能等服务端回了才出现。
+    probeSupported: CLI_MODEL_PROBE_TYPES.has(type),
     available: false,
     probedAt: null,
     cliVersion: null,
     error: null,
+    ...patch,
   };
 }
 
@@ -44,12 +46,27 @@ function fetchCatalog(type: AgentType, force: boolean): Promise<CliModelCatalog>
   if (inflight && !force) return inflight;
   const request = (force ? api.refreshCliModels(type) : api.cliModels(type))
     .then((list) => {
+      // live 旧服务端没有这接口时会 200 回 SPA HTML;当成数组 .find 会炸,必须先认形状。
+      if (!Array.isArray(list)) {
+        const catalog = presetFallback(type, {
+          error: "模型清单接口不可用（当前连着的服务端还没有 /agents/models）",
+        });
+        publish(catalog);
+        return catalog;
+      }
       const catalog = list.find((entry) => entry.type === type) ?? presetFallback(type);
       publish(catalog);
       return catalog;
     })
     // 拿不到就退回快照:选择器不该因为一个后台接口抖动而变成空的。
-    .catch(() => cache.get(type) ?? presetFallback(type))
+    // 失败也 publish,界面才能用 error 说明「该点刷新 / 服务端还没合入」。
+    .catch((error) => {
+      const catalog = presetFallback(type, {
+        error: error instanceof Error ? error.message : "模型清单请求失败",
+      });
+      publish(catalog);
+      return catalog;
+    })
     .finally(() => {
       if (requests.get(type) === request) requests.delete(type);
     });
