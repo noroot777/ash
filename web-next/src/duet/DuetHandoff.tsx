@@ -111,8 +111,8 @@ export function DuetHandoffModal({
       <section className="duet-handoff-modal" role="dialog" aria-modal="true" aria-labelledby="duet-handoff-title">
         <header><span><UsersThree size={17} weight="fill" /></span><div><h2 id="duet-handoff-title">接力成团</h2><p>议题、共同方案和完整转写路径会一并交给新团队。</p></div></header>
         <div className="duet-handoff-grid">
-          <ExecutorPickerField label="调度者" value={lead.profile} types={leadTypes} profiles={leadProfiles} knownProfiles={profiles} fallbackType={TEAM_DEFAULTS.lead} override={lead} onChange={(profile) => setLead({ profile, model: "", effort: "" })} onOverrideChange={(patch) => setLead((current) => ({ ...current, ...patch }))} />
-          <ExecutorPickerField label="默认执行者" value={worker.profile} types={workerTypes} profiles={profiles} knownProfiles={profiles} fallbackType={TEAM_DEFAULTS.worker} override={worker} onChange={(profile) => setWorker({ profile, model: "", effort: "" })} onOverrideChange={(patch) => setWorker((current) => ({ ...current, ...patch }))} />
+          <ExecutorPickerField label="调度者" value={lead.profile} types={leadTypes} profiles={leadProfiles} knownProfiles={profiles} fallbackType={TEAM_DEFAULTS.lead} override={lead} onChange={(profile, override) => setLead({ profile, ...override })} onEffortChange={(effort) => setLead((current) => ({ ...current, effort }))} />
+          <ExecutorPickerField label="默认执行者" value={worker.profile} types={workerTypes} profiles={profiles} knownProfiles={profiles} fallbackType={TEAM_DEFAULTS.worker} override={worker} onChange={(profile, override) => setWorker({ profile, ...override })} onEffortChange={(effort) => setWorker((current) => ({ ...current, effort }))} />
         </div>
         {availabilityMessage && <p className="duet-handoff-warning"><Warning size={13} />{availabilityMessage}</p>}
         <label className="duet-handoff-note"><span>可选附言</span><textarea rows={4} value={note} placeholder="补充执行重点、边界或验收要求…" onChange={(event) => setNote(event.target.value)} /></label>

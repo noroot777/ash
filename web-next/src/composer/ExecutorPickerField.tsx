@@ -23,6 +23,13 @@ import {
  * 有的表面还多一档「不指定」（工作流的站点可以跟随任务的执行器）：传 `unsetText`
  * 就打开这一档，`onUnset` 是改回去的入口。别为这一档另做一副形状——它只是这副形状
  * 的一个取值。
+ *
+ * **一次选择只回调一次**：选中一行同时决定「派给谁」和「模型/智能水平要不要清」，
+ * 所以两者一起从 `onChange` 交出去。以前是 onChange + onOverrideChange 两发，落在
+ * 同一 tick 里；消费方只要从 props 上的旧值展开（`{...draft, model}`），后一发就会
+ * 把前一发刚选好的执行器盖回旧值——现象是「选了 grok，模型换成了 grok-4.5，智能体
+ * 却弹回 codex」。TeamPresetEditor 和工作流站点各自用一个 ref 兜过这个坑，说明是
+ * 形状不对而不是消费方不小心，于是收敛成一发。
  */
 export function ExecutorPickerField({
   label,
@@ -36,7 +43,7 @@ export function ExecutorPickerField({
   unsetText,
   onUnset,
   onChange,
-  onOverrideChange,
+  onEffortChange,
 }: {
   label: string;
   /** 空串 = 还没指定；只有传了 unsetText 的表面会用到这一档。 */
@@ -52,9 +59,13 @@ export function ExecutorPickerField({
   unsetText?: string;
   /** 传了就多给一个改回「不指定」的入口——不然选出去就回不来了。 */
   onUnset?: () => void;
-  onChange: (value: string) => void;
-  /** 不传就只落执行器（讨论者那种服务端根本不收模型的表面）。 */
-  onOverrideChange?: (patch: { model?: string; effort?: string }) => void;
+  /**
+   * 选了执行器或模型：`override` 是这次选择之后该存的模型与智能水平（换了执行器就
+   * 是空串 = 跟随执行器）。两者是同一次选择的结果，一起落进同一次状态更新即可。
+   */
+  onChange: (value: string, override: { model: string; effort: string }) => void;
+  /** 不传就只画前两段（讨论者那种服务端根本不收智能水平的表面）。 */
+  onEffortChange?: (effort: string) => void;
 }) {
   const unset = unsetText !== undefined && !value;
   const selection = unset
@@ -87,9 +98,6 @@ export function ExecutorPickerField({
           disabled={disabled}
           unsetText={unsetText}
           onCommit={(target) => {
-            // 先落执行器：切换执行器会把模型/智能水平清成「跟随」（executorOverrides.ts），
-            // 所以这一步必须在覆盖之前，否则刚选的模型当场被清掉。
-            onChange(executorValue({ agentType: target.agent, executorId: target.executorId }));
             // 执行器没换就把智能水平原样放回去：用户只是换了个模型，不该顺手把第三段
             // 清掉。真换了执行器才跟着清（旧档位在新 CLI 上多半根本不存在，见
             // shared/executor-overrides.ts）；原来压根没指定执行器的，同样按「换了」算。
@@ -97,9 +105,12 @@ export function ExecutorPickerField({
               { agentType: target.agent, executorId: target.executorId },
               selection,
             ) ? override?.effort ?? "" : "";
-            onOverrideChange?.({ model: target.model ?? "", effort: kept });
+            onChange(
+              executorValue({ agentType: target.agent, executorId: target.executorId }),
+              { model: target.model ?? "", effort: kept },
+            );
           }}
-          onEffortChange={onOverrideChange && ((effort) => onOverrideChange({ effort }))}
+          onEffortChange={onEffortChange}
         />
       </div>
       {onUnset && !unset && (

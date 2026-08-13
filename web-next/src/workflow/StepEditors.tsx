@@ -6,7 +6,6 @@
 // 例外是执行器那一组（谁来干 / 什么模型 / 多高的智能水平）：它们本来就是联动的一组，
 // 拆成三个弹层反而更烦，所以点其中任意一颗都开这一个编辑器。这一组不自己画控件，
 // 直接用全站统一的那副形状（composer/ExecutorPickerField.tsx 的三段胶囊）。
-import { useEffect, useRef } from "react";
 import type { FailPolicy, WorkflowStep } from "@harness/shared/workflow";
 import { FAIL_MODES, FAIL_MODE_LABELS, MAX_FAIL_ROUNDS } from "@harness/shared/workflow";
 import { ExecutorPickerField } from "../composer/ExecutorPickerField.tsx";
@@ -114,15 +113,6 @@ export function ExecutorEditor({
   const profile = executorProfile(catalog, params.executorId);
   const types = registeredAgentTypes(catalog.profiles);
   const missing = !!params.executorId && !profile;
-  // 选一次模型会连着触发 onChange + onOverrideChange，两次都在同一 tick 里落到还没
-  // 重渲的 def 上，后一次会把前一次盖掉（跟 TeamPresetEditor 里同一个坑）。所以把
-  // 这一轮的改动累起来一起交，渲染提交后再清空。
-  const pending = useRef<Record<string, string | null>>({});
-  useEffect(() => { pending.current = {}; });
-  const patch = (next: Record<string, string | null>) => {
-    pending.current = { ...pending.current, ...next };
-    onPatch(pending.current);
-  };
 
   return (
     <div className="wf-pop-form">
@@ -139,8 +129,8 @@ export function ExecutorEditor({
         // 换执行器就把模型和强度打回「跟随执行器」由 ExecutorPickerField 负责；改回
         // 跟随任务时三项一起清——这一站从此完全照任务的执行器跑，留着旧模型名多半
         // 跑不起来。
-        onUnset={() => patch({ executorId: null, model: null, reasoningEffort: null })}
-        onChange={(next) => {
+        onUnset={() => onPatch({ executorId: null, model: null, reasoningEffort: null })}
+        onChange={(next, override) => {
           const picked = parseExecutorValue(next, catalog.profiles, {
             agentType: profile?.type ?? types[0] ?? "claude",
             executorId: null,
@@ -150,12 +140,13 @@ export function ExecutorEditor({
           // 落到该类型的默认 Profile 上，别写成 null 把语义偷换了。
           const byType = catalog.profiles.find((p) => p.type === picked.agentType && p.isDefault)
             ?? catalog.profiles.find((p) => p.type === picked.agentType);
-          patch({ executorId: picked.executorId ?? byType?.id ?? null });
+          onPatch({
+            executorId: picked.executorId ?? byType?.id ?? null,
+            model: override.model.trim() || null,
+            reasoningEffort: override.effort || null,
+          });
         }}
-        onOverrideChange={(next) => patch({
-          ...(next.model !== undefined ? { model: next.model.trim() || null } : {}),
-          ...(next.effort !== undefined ? { reasoningEffort: next.effort || null } : {}),
-        })}
+        onEffortChange={(effort) => onPatch({ reasoningEffort: effort || null })}
       />
       {missing && (
         // 失效的 id 还在参数里（胶囊上没法照实显示一个不存在的执行器），得给条清掉它的路。
@@ -164,7 +155,7 @@ export function ExecutorEditor({
           <button
             type="button"
             className="composer-field-unset"
-            onClick={() => patch({ executorId: null, model: null, reasoningEffort: null })}
+            onClick={() => onPatch({ executorId: null, model: null, reasoningEffort: null })}
           >
             清掉它，跟随任务的执行器
           </button>

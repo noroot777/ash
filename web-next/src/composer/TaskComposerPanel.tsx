@@ -175,11 +175,15 @@ export function TaskComposerPanel({
     if (parsed) applySlash(parsed[1]!.toLowerCase() as TaskMode, parsed[2] ?? "");
     else setBody(value);
   };
-  const changeExecutor = (role: ComposerExecutorRole, profile: string) => {
-    setExecutors((current) => setComposerExecutorProfile(current, role, profile));
+  const changeExecutor = (
+    role: ComposerExecutorRole,
+    profile: string,
+    override: { model: string; effort: string },
+  ) => {
+    setExecutors((current) => setComposerExecutorProfile(current, role, profile, override));
   };
-  const changeOverride = (role: ComposerExecutorRole, patch: { model?: string; effort?: string }) => {
-    setExecutors((current) => patchComposerExecutor(current, role, patch));
+  const changeEffort = (role: ComposerExecutorRole, effort: string) => {
+    setExecutors((current) => patchComposerExecutor(current, role, { effort }));
   };
 
   const singleExecutor = parseExecutorValue(
@@ -627,7 +631,7 @@ export function TaskComposerPanel({
             availabilityMessage={availabilityMessage}
             availabilityTone={availabilityTone}
             onExecutorChange={changeExecutor}
-            onOverrideChange={changeOverride}
+            onEffortChange={changeEffort}
             currentTeamConfig={currentTeamConfig}
             onApplyTeamPreset={applyTeamPreset}
             notify={notify}
