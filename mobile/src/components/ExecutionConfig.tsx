@@ -21,6 +21,10 @@ export type ExecutorSelection = {
 
 type PickerKind = "executor" | "model" | "effort";
 const providerModelCache = new Map<string, string[]>();
+// CLI 官方账号那一档的候选:server 现问 CLI 的结果(`grok models` 之类)。整个 app
+// 共一份,打开哪个任务都不用重探。拿不到就退回 CLI_MODEL_PRESETS 那份内置快照 ——
+// 快照是发版时抄的,新模型上线后会滞后,所以只当兜底,不当第一来源。
+const cliModelCache = new Map<AgentType, string[]>();
 
 export function ExecutionConfig({
   role,
@@ -52,6 +56,13 @@ export function ExecutionConfig({
   const theme = useTheme();
   const [picker, setPicker] = useState<PickerKind | null>(null);
   const [providerModels, setProviderModels] = useState<string[] | null>(null);
+  // 连类型一起记:换了智能体但还没打开选择器时,不能把上一个 CLI 的清单继续显示。
+  const [cliModels, setCliModels] = useState<{ type: AgentType; models: string[] } | null>(
+    () => {
+      const cached = cliModelCache.get(selection.agentType);
+      return cached ? { type: selection.agentType, models: cached } : null;
+    },
+  );
   const [modelError, setModelError] = useState<string | null>(null);
   const [customModel, setCustomModel] = useState(model);
   const profile = profileForSelection(selection, profiles);
@@ -59,7 +70,14 @@ export function ExecutionConfig({
     ? providers.find((item) => item.id === profile.providerId)
     : undefined;
 
-  const modelValues = provider ? providerModels ?? [] : [...CLI_MODEL_PRESETS[selection.agentType]];
+  // 挂了供应商就用它的实时目录;没挂就是 CLI 官方账号那一档 —— 优先用 server 现问
+  // CLI 的结果,还没拿到(首帧/离线)才退回内置快照,免得下拉框先空一下。
+  const cliCandidates = cliModels?.type === selection.agentType
+    ? cliModels.models
+    : cliModelCache.get(selection.agentType);
+  const modelValues = provider
+    ? providerModels ?? []
+    : cliCandidates ?? [...CLI_MODEL_PRESETS[selection.agentType]];
   if (model && !modelValues.includes(model)) modelValues.unshift(model);
   const modelOptions = followOptions(
     modelValues,
@@ -101,6 +119,7 @@ export function ExecutionConfig({
     setModelError(null);
     if (!nextProvider) {
       setProviderModels(null);
+      loadCliModels(nextSelection.agentType);
       return;
     }
     const cached = providerModelCache.get(nextProvider.id);
@@ -118,6 +137,23 @@ export function ExecutionConfig({
       .catch((error) => setModelError(error instanceof Error ? error.message : String(error)));
   };
   const openModel = () => openModelFor(selection, model);
+
+  // CLI 那一档的候选。失败**不报错**:内置快照顶着,选择器照常能用 —— 为一个「清单
+  // 可能少两个」的问题弹红字,不如安静降级。
+  function loadCliModels(agentType: AgentType) {
+    const cached = cliModelCache.get(agentType);
+    setCliModels(cached ? { type: agentType, models: cached } : null);
+    if (cached) return;
+    api
+      .cliModels(agentType)
+      .then((list) => {
+        const models = list.find((entry) => entry.type === agentType)?.models;
+        if (!models?.length) return;
+        cliModelCache.set(agentType, [...models]);
+        setCliModels({ type: agentType, models: [...models] });
+      })
+      .catch(() => {});
+  }
 
   const options = picker === "executor"
     ? executorItems

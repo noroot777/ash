@@ -20,6 +20,7 @@ import type {
   TaskWorkspaceLeftover,
   TaskWorkspaceDiscardResult,
 } from "@harness/shared";
+import type { CliModelCatalog } from "@harness/shared/cli-presets";
 import { getBaseURL } from "./config";
 
 // 删除任务的返回:`leftover` 是清理之后**仍然剩下**的 worktree/分支(没勾选、或勾
@@ -219,6 +220,11 @@ export const api = {
 
   agents: (): Promise<AgentExecutorProfile[]> => req("/agents").then(j),
   detectAgents: (): Promise<DetectedAgent[]> => req("/agents/detect").then(j),
+  // 这个 CLI 现在有哪些模型:server 会去问 CLI 自己(`grok models` 之类)并缓存,
+  // 问不到就返回内置快照。手机端只读不刷新 —— 强制刷新是桌面端选择器上的动作,
+  // 这里跟着 server 的缓存走就够(它本来就会过期重探)。
+  cliModels: (type: AgentType): Promise<CliModelCatalog[]> =>
+    req(`/agents/models?type=${encodeURIComponent(type)}`).then(j),
 
   // 某个执行器在某个项目下已装的 `/技能`。手机只拿来做补全:选中一条就是把
   // `/名字` 写进输入框，原文保留；server 运行前会注入对应 SKILL.md。

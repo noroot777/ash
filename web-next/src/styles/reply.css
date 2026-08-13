@@ -80,6 +80,18 @@
 .agent-model-picker-rows header > b { color: var(--muted); font-size: 9.5px; font-weight: 650; letter-spacing: .04em; text-transform: uppercase; }
 .agent-model-picker-rows header > small { display: inline-flex; min-width: 0; align-items: center; gap: 3px; overflow: hidden; color: var(--faint); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
 .agent-model-picker-rows header > small.is-error { color: var(--red); }
+/* 分块标题里的「现问一次」：本身是 header 的一个 button，得把下面那条通用行样式
+   （width:100%、min-height:30px）压回去，否则它会把整条标题撑成一行按钮。 */
+.agent-model-picker-rows header > button.model-refresh {
+  width: auto;
+  min-height: 0;
+  flex: 0 0 auto;
+  border-radius: 5px;
+  padding: 2px;
+  color: var(--faint);
+}
+.agent-model-picker-rows header > button.model-refresh:hover:not(:disabled) { background: var(--sel-bg); color: var(--ink); }
+.agent-model-picker-rows header > button.model-refresh:disabled { opacity: .55; }
 .agent-model-picker-rows button {
   display: flex;
   width: 100%;

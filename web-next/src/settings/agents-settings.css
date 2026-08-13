@@ -135,6 +135,23 @@
   color: var(--red);
 }
 
+/* 说明行末尾的「现问一次 CLI」。CLI 上新模型跟 harness 发版无关，这颗按钮是用户
+   不等发版就能拿到新模型的唯一入口，所以哪怕说明被截断它也要留在行内可见。 */
+.agent-model-control > small > button.model-refresh {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  border: 0;
+  border-radius: 4px;
+  margin-left: 5px;
+  background: transparent;
+  padding: 1px 4px;
+  color: var(--muted);
+  font-size: 9px;
+}
+.agent-model-control > small > button.model-refresh:hover:not(:disabled) { background: var(--sel-bg); color: var(--ink); }
+.agent-model-control > small > button.model-refresh:disabled { opacity: .55; }
+
 .agent-profile-args-popover {
   position: absolute;
   z-index: 30;

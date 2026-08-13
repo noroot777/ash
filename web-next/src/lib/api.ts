@@ -35,6 +35,7 @@ import type {
 import { DEFAULT_APP_SETTINGS } from "@harness/shared";
 import type { WorkflowDef, WorkflowItem } from "@harness/shared/workflow";
 import type { CliHostEnv } from "@harness/shared/cli-overrides";
+import type { CliModelCatalog } from "@harness/shared/cli-presets";
 
 const API_ROOT = "/api";
 
@@ -549,6 +550,13 @@ export const api = {
   // harness 起 CLI 时子进程会看到的环境事实(只读)。设置页拿它算压缩触发点 ——
   // 那个换算里有一项在 server 的环境变量里,前端自己算不出来。
   cliHostEnv: (): Promise<CliHostEnv> => request("/agents/cli-env"),
+  // 这个 CLI 现在有哪些模型 —— 服务端会去问 CLI 自己(`grok models` 之类)并缓存,
+  // 问不到就返回内置快照并在 `source`/`error` 里说清楚。refresh 版是用户按的「刷新」,
+  // 绕过服务端缓存现问一次(所以是 POST:它真的会去起子进程,不是可重放的读)。
+  cliModels: (type?: AgentType): Promise<CliModelCatalog[]> =>
+    request(`/agents/models${type ? `?type=${encodeURIComponent(type)}` : ""}`),
+  refreshCliModels: (type?: AgentType): Promise<CliModelCatalog[]> =>
+    request(`/agents/models/refresh${type ? `?type=${encodeURIComponent(type)}` : ""}`, json("POST", {})),
   // 这个执行器在这个项目下已经装了哪些 `/技能`。refresh=true 跳过服务端的指纹缓存。
   skills: (query: {
     agentType: string;

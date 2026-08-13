@@ -1,7 +1,7 @@
 import { useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import type { AgentExecutorProfile, AgentType, LlmProvider } from "@harness/shared";
-import { ArrowLeft, CaretRight, Robot, SpinnerGap, Warning } from "@phosphor-icons/react";
+import { ArrowLeft, ArrowsClockwise, CaretRight, Robot, SpinnerGap, Warning } from "@phosphor-icons/react";
 import { useAgentModelCatalog } from "../lib/modelCatalog.ts";
 import { useDismissable } from "../lib/useDismissable.ts";
 import { placementStyle, usePanelPlacement } from "../lib/usePanelPlacement.ts";
@@ -212,6 +212,27 @@ export function AgentModelPicker({
                     {section.group.status === "failed" && <Warning size={10} aria-hidden="true" />}
                     {section.group.note}
                   </small>
+                  {/* 「现问一次」。CLI 上新模型跟 harness 发版无关，没有这个按钮就只能等下次发版。
+                      onMouseDown 拦掉是因为面板点外部即关：不拦的话按下去的瞬间面板就没了。 */}
+                  {section.group.onRefresh && (
+                    <button
+                      type="button"
+                      className="model-refresh"
+                      aria-label={`刷新 ${section.group.providerName} 的模型清单`}
+                      disabled={section.group.refreshing}
+                      onMouseDown={(event) => event.preventDefault()}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        section.group.onRefresh?.();
+                      }}
+                    >
+                      <ArrowsClockwise
+                        size={11}
+                        className={section.group.refreshing ? "is-spinning" : ""}
+                        aria-hidden="true"
+                      />
+                    </button>
+                  )}
                 </header>
                 {section.rows.map((row, rowIndex) => {
                   const flatIndex = offset + rowIndex;

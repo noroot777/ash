@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { AgentExecutorProfile, AgentType, LlmProvider } from "@harness/shared";
-import { CLI_MODEL_PRESETS } from "@harness/shared/cli-presets";
 import { providersForAgent } from "../settings/agentProviderRules.ts";
 import { api } from "./api.ts";
+import { cliCatalogNote, useCliModelCatalog } from "./cliModelCatalog.ts";
 
 /**
  * 「这个智能体能选哪些模型」的**唯一来源**。对话框的 @ 选择、任务信息里的模型下拉、
@@ -10,7 +10,7 @@ import { api } from "./api.ts";
  * 能一次管住所有选模型的地方。
  *
  * 分块按**供应商**：该智能体在执行器页面注册的 Profile，按各自挂载的供应商聚合；
- * 没挂供应商的走 CLI 官方账号那一块（模型来自 CLI_MODEL_PRESETS 的别名表）。
+ * 没挂供应商的走 CLI 官方账号那一块（模型由 lib/cliModelCatalog.ts 现问 CLI，问不到才是内置快照）。
  * 每块记住一个代表 Profile —— 选中模型时连它一起生效，用户才不用先挑 Profile 再挑模型。
  */
 export interface ModelGroup {
@@ -24,6 +24,13 @@ export interface ModelGroup {
   status: "ready" | "loading" | "failed";
   /** 这一块的来源说明，直接展示给用户（固定了几个 / 正在探测 / 失败原因）。 */
   note: string;
+  /**
+   * 「现问一次」。缺省 = 这一块没有可刷新的来源（固定清单是用户自己填的，没什么好问的）。
+   * 有它的两块：CLI 官方账号（问 CLI 自己）和 api 模式的供应商（问 /v1/models）——
+   * 它们的清单都会在 harness 之外变化，所以必须给用户一个不重启就能拿到新模型的动作。
+   */
+  onRefresh?: () => void;
+  refreshing?: boolean;
 }
 
 // ── provider /models 探测：全页共享一份缓存 ─────────────────────────────────
@@ -221,6 +228,30 @@ export function useAgentModelCatalog(
     [type, profiles, providers, currentExecutorId],
   );
   const [probes, setProbes] = useState<Record<string, { models?: string[]; error?: string }>>({});
+  // CLI 官方账号那块的候选:服务端现问 CLI 的结果(问不到才是内置快照)。
+  const { catalog: cliCatalog, refreshing: cliRefreshing, refresh: refreshCli } = useCliModelCatalog(type);
+  const [refreshingProvider, setRefreshingProvider] = useState<string | null>(null);
+
+  // 供应商那块的「现问一次」:作废这家的缓存再探一遍。清缓存是全页生效的,所以其它
+  // 已挂载的选择器下次读也拿新的,不会出现「这个框刷新了、那个框还是旧的」。
+  const refreshProvider = useCallback((provider: LlmProvider) => {
+    clearProviderModelCache(provider.id);
+    setProbes((current) => {
+      const next = { ...current };
+      delete next[provider.id];
+      return next;
+    });
+    setRefreshingProvider(provider.id);
+    void loadProviderModels(provider)
+      .then(
+        (models) => setProbes((current) => ({ ...current, [provider.id]: { models } })),
+        (error) => {
+          const message = error instanceof Error ? error.message : "模型探测失败";
+          setProbes((current) => ({ ...current, [provider.id]: { error: message } }));
+        },
+      )
+      .finally(() => setRefreshingProvider((current) => (current === provider.id ? null : current)));
+  }, []);
 
   useEffect(() => {
     let alive = true;
@@ -246,13 +277,19 @@ export function useAgentModelCatalog(
 
   return useMemo(() => seeds.map((seed) => {
     const provider = seed.provider;
-    const cliModels = type ? [...CLI_MODEL_PRESETS[type]] : [];
     if (!provider) {
+      // CLI 官方账号:清单来自服务端现问 CLI(探不到才是内置快照,note 会说清是哪种)。
+      // 不跟快照取并集 —— 探测成功就以 CLI 报的为准,已下线的模型不该继续留在下拉里。
+      const cliModels = cliCatalog ? [...cliCatalog.models] : [];
       return {
         ...seed,
         models: dedupe([seed.profileModel, ...cliModels]),
         status: "ready" as const,
-        note: cliModels.length ? "CLI 自带的模型别名" : "该 CLI 未公布模型别名，可手填",
+        note: cliCatalogNote(cliCatalog),
+        // 没有可查询的清单命令时不给刷新按钮:点了也只会再拿到同一份快照,
+        // 给一个什么都不会变的按钮比不给更让人困惑。
+        onRefresh: cliCatalog?.probeSupported ? refreshCli : undefined,
+        refreshing: cliRefreshing,
       };
     }
     if (provider.modelListMode === "pinned") {
@@ -265,12 +302,14 @@ export function useAgentModelCatalog(
       };
     }
     const probe = probes[provider.id];
+    const providerRefresh = { onRefresh: () => refreshProvider(provider), refreshing: refreshingProvider === provider.id };
     if (probe?.models) {
       return {
         ...seed,
         models: dedupe([seed.profileModel, ...probe.models]),
         status: "ready" as const,
         note: `实时目录 · ${probe.models.length} 个模型`,
+        ...providerRefresh,
       };
     }
     if (probe?.error) {
@@ -279,6 +318,7 @@ export function useAgentModelCatalog(
         models: dedupe([seed.profileModel]),
         status: "failed" as const,
         note: `模型目录读取失败：${probe.error}`,
+        ...providerRefresh,
       };
     }
     return {
@@ -286,8 +326,9 @@ export function useAgentModelCatalog(
       models: dedupe([seed.profileModel]),
       status: "loading" as const,
       note: "正在读取模型目录…",
+      ...providerRefresh,
     };
-  }), [probes, seeds, type]);
+  }), [cliCatalog, cliRefreshing, probes, refreshCli, refreshProvider, refreshingProvider, seeds]);
 }
 
 function dedupe(models: (string | null | undefined)[]): string[] {

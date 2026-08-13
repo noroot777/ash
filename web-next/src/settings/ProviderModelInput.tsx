@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import type { AgentType, LlmProvider } from "@harness/shared";
-import { CLI_MODEL_PRESETS } from "@harness/shared/cli-presets";
+import { ArrowsClockwise } from "@phosphor-icons/react";
 import { Dropdown, type DropdownOption } from "../components/Dropdown.tsx";
 import { EffortPicker } from "../components/EffortPicker.tsx";
+import { cliCatalogNote, useCliModelCatalog } from "../lib/cliModelCatalog.ts";
 import {
   cachedProviderModels,
   loadProviderModels,
@@ -46,9 +47,10 @@ export function ProviderModelInput({
   onCommit?: (value: string) => void;
 }) {
   const cacheVersion = provider ? providerCacheVersion(provider.id) : 0;
-  const [models, setModels] = useState<string[]>(() => (
-    provider ? cachedProviderModels(provider) ?? [] : [...CLI_MODEL_PRESETS[type]]
-  ));
+  // 没挂供应商 = 走 CLI 官方账号,候选由服务端现问 CLI(`grok models` 之类)。
+  // 挂了供应商就传 null:这个 hook 不发请求,免得每个设置页白探一次。
+  const cli = useCliModelCatalog(provider ? null : type);
+  const [models, setModels] = useState<string[]>(() => (provider ? cachedProviderModels(provider) ?? [] : []));
   const [status, setStatus] = useState<"idle" | "loading" | "ready" | "failed">(
     provider ? (cachedProviderModels(provider) ? "ready" : "loading") : "idle",
   );
@@ -59,7 +61,6 @@ export function ProviderModelInput({
 
   useEffect(() => {
     if (!provider) {
-      setModels([...CLI_MODEL_PRESETS[type]]);
       setStatus("idle");
       setError("");
       return;
@@ -98,6 +99,8 @@ export function ProviderModelInput({
   }, [provider?.id, provider?.protocol, provider?.baseUrl, provider?.modelListMode, provider?.pinnedModels, type, cacheVersion]);
 
   const groupName = provider ? provider.name : `${type} 预设`;
+  // 供应商那条走探测状态,CLI 那条走服务端现问的结果。
+  const candidates = provider ? models : cli.catalog ? [...cli.catalog.models] : [];
   const followLabel = provider
     ? `跟随供应商默认${provider.model ? `（${provider.model}）` : ""}`
     : "跟随 CLI";
@@ -106,7 +109,7 @@ export function ProviderModelInput({
   const options = useMemo<DropdownOption[]>(() => {
     const seen = new Set<string>();
     const rows: DropdownOption[] = [];
-    for (const model of [...(provider?.model ? [provider.model] : []), ...models, ...(value ? [value] : [])]) {
+    for (const model of [...(provider?.model ? [provider.model] : []), ...candidates, ...(value ? [value] : [])]) {
       if (!model || seen.has(model)) continue;
       seen.add(model);
       rows.push({
@@ -118,7 +121,7 @@ export function ProviderModelInput({
       });
     }
     return rows;
-  }, [groupName, models, provider, value]);
+  }, [candidates, groupName, provider, value]);
 
   const note = status === "loading"
     ? `正在从「${provider?.name ?? type}」探测模型…`
@@ -174,6 +177,25 @@ export function ProviderModelInput({
             ? `${provider.name} · 固定 ${models.length} 个模型`
             : `${provider.name} · ${models.length} 个完整模型名`)}
           {status === "failed" && `仍可手填模型：${error}`}
+        </small>
+      )}
+      {/* CLI 官方账号这条要把来源说清楚:实时问出来的还是内置兜底 —— 用户看见「内置清单」
+          才知道该点刷新,否则新模型没出现时只会以为是 CLI 还没发。 */}
+      {!provider && !compact && (
+        <small className={cli.catalog?.error ? "is-error" : ""}>
+          {cliCatalogNote(cli.catalog)}
+          {cli.catalog?.probeSupported && (
+            <button
+              type="button"
+              className="model-refresh"
+              aria-label={`刷新 ${type} 的模型清单`}
+              disabled={cli.refreshing || disabled}
+              onClick={cli.refresh}
+            >
+              <ArrowsClockwise size={11} className={cli.refreshing ? "is-spinning" : ""} aria-hidden="true" />
+              刷新
+            </button>
+          )}
         </small>
       )}
     </div>
