@@ -89,10 +89,17 @@ const CLAUDE_COMPACT_FLOOR_GAP = 13_000;
 // 自动压缩却一次都不会被叫起来 —— 而设置页上明晃晃写着「200k · 80% 已覆盖」。
 // 这一档配置对外的承诺就是「让它在这个水位压」,所以**配了窗口就连总开关一起摁住**:
 //   · `--settings` 顶层 `autoCompactEnabled:true`(压过用户各层 settings)
-//   · `env.DISABLE_AUTO_COMPACT=""`(空串是 falsy,等于把那条 kill switch 摁灭;
-//     顺带盖掉他 settings.env 里的 `1` —— 各层 env 是按 key 合并的)
+//   · 两条 kill switch 的 env 都置空串(空串是 falsy,等于把开关摁灭;顺带盖掉他
+//     settings.env 里的 `1` —— 各层 env 是按 key 合并的)
+// **两条都要摁**:上面那段反编译里 `DISABLE_COMPACT` 排在最前面,先前只摁了第二条,
+// 于是 shell / launchd / 任一 settings 层里留着 `DISABLE_COMPACT=1` 时,页面照旧写着
+// 「已覆盖」而压缩一次都不会发生(第 3 轮审查 finding 1)。2.1.220 真机实测:
+//   未设                                              → slash_commands 103 条,含 compact
+//   DISABLE_COMPACT=1                                 → 102 条,**连手动 /compact 都没了**
+//   DISABLE_COMPACT=1 + `--settings.env` 里置空        → 103 条,压缩回来了
+//   DISABLE_COMPACT=1 + 只置空 DISABLE_AUTO_COMPACT    → 102 条,救不回来
 // 没配窗口就一个字都不碰:用户在自己机器上关掉自动压缩是他的事。
-const CLAUDE_AUTO_COMPACT_KILL_SWITCH = "DISABLE_AUTO_COMPACT";
+const CLAUDE_AUTO_COMPACT_KILL_SWITCHES = ["DISABLE_COMPACT", "DISABLE_AUTO_COMPACT"] as const;
 
 // 百分比换算的分母(`min(它, 20000)` = 输出预留量)。harness 按自己读到的值算完触发点,
 // 就**把同一个值钉进 `--settings.env`**:不钉的话,用户 settings.json 里的同名变量会在
@@ -169,7 +176,7 @@ const CLAUDE_OVERRIDES: CliConfigOverride[] = [
     label: "上下文窗口",
     env: "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
     shadows: "~/.claude/settings.json → autoCompactWindow",
-    help: "照实填这个模型的上下文窗口。留空 = 跟随 CLI 判断,而 CLI 对白名单外的模型(fable-5、走中转的第三方模型)判不出来,会整段跳过自动压缩,水位一路涨到炸 —— 所以这一项是这一档的开关,不填下面的百分比也不生效。填上之后 harness 会连 claude 的自动压缩总开关一起摁住(你 settings.json 里的 autoCompactEnabled:false / DISABLE_AUTO_COMPACT=1 在这次调用里不算数),否则数填对了也一次都不会压。拿不准就往小了填:填小只是压得早一点,填大会压得太晚直接撞上限。",
+    help: `照实填这个模型的上下文窗口。留空 = 跟随 CLI 判断,而 CLI 对白名单外的模型(fable-5、走中转的第三方模型)判不出来,会整段跳过自动压缩,水位一路涨到炸 —— 所以这一项是这一档的开关,不填下面的百分比也不生效。填上之后 harness 会连 claude 的自动压缩总开关一起摁住(你 settings.json 里的 autoCompactEnabled:false / ${CLAUDE_AUTO_COMPACT_KILL_SWITCHES.map((key) => `${key}=1`).join(" / ")} 在这次调用里不算数),否则数填对了也一次都不会压。拿不准就往小了填:填小只是压得早一点,填大会压得太晚直接撞上限。`,
     min: 100_000,
     max: 1_000_000,
     placeholder: "留空 = 跟随 CLI",
@@ -306,10 +313,10 @@ export function cliConfigOverrideEnv(
     const encoded = spec.toEnv ? spec.toEnv(value, values, host) : String(value);
     if (encoded !== null) out[spec.env] = encoded;
   }
-  // 配了窗口才动这两个:一个是总开关(不摁住,上面这些数全是摆设),一个是换算分母
-  // (不钉住,算完还会被改)。理由见上面 CLAUDE_AUTO_COMPACT_KILL_SWITCH 那段。
+  // 配了窗口才动这几个:两条是总开关(不摁住,上面这些数全是摆设),一个是换算分母
+  // (不钉住,算完还会被改)。理由见上面 CLAUDE_AUTO_COMPACT_KILL_SWITCHES 那段。
   if (claudeCompactionConfigured(type, values)) {
-    out[CLAUDE_AUTO_COMPACT_KILL_SWITCH] = "";
+    for (const key of CLAUDE_AUTO_COMPACT_KILL_SWITCHES) out[key] = "";
     const reserveSource = host.maxOutputTokens;
     if (typeof reserveSource === "number" && Number.isFinite(reserveSource) && reserveSource > 0) {
       out[CLAUDE_MAX_OUTPUT_ENV] = String(Math.round(reserveSource));
@@ -443,7 +450,7 @@ export function cliConfigOverrideHints(
   const at = `上下文涨到 ~${fmtTokens(plan.trigger)} 时压缩(窗口 ${fmtTokens(plan.window)} 的 ${Math.round((plan.trigger / plan.window) * 100)}%)。`;
   // 摁住总开关这件事得说出来:它盖的是用户自己配置文件里的开关,不说明白就等于
   // 「悄悄改了别人的配置」;而不摁的话上面这个触发点根本不会发生(见 JI())。
-  const forced = ["这次调用里 harness 会强制打开自动压缩(顶掉 settings.json 的 autoCompactEnabled:false 与 DISABLE_AUTO_COMPACT),否则窗口和百分比填对了也一次都不会压。"];
+  const forced = [`这次调用里 harness 会强制打开自动压缩(顶掉 settings.json 的 autoCompactEnabled:false 与 ${CLAUDE_AUTO_COMPACT_KILL_SWITCHES.join(" / ")}),否则窗口和百分比填对了也一次都不会压。`];
   // 远端读不到那个预留量,上面这个数是按默认 20k 估的 —— 不说清楚,用户会把它当准数。
   const estimated = host.observed === false
     ? ["这个 profile 跑在 ssh 远端:远端的 CLAUDE_CODE_MAX_OUTPUT_TOKENS 读不到,上面的触发点按默认 20k 预留估算,远端若设过这个变量会有几个百分点的偏差。"]

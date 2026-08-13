@@ -3,7 +3,7 @@ import { createInterface } from "node:readline";
 import type { AgentEvent, ExecTarget, TokenUsage } from "@harness/shared";
 import { cliConfigOverrideEnvPatch } from "@harness/shared/cli-overrides";
 import { cliHostEnv, resumeEnvHint } from "./cli-env.js";
-import type { AgentExecutor, RelayConfig, ResidentHandle, RunHandle, RunOpts } from "./types.js";
+import type { AgentExecutor, RelayConfig, ResidentHandle, ResumeFields, RunHandle, RunOpts } from "./types.js";
 import { openCodexResident } from "./codex-resident.js";
 import { readCodexContext } from "./codex-rollout.js";
 import { spawnForRun, detachedInfo } from "./detached.js";
@@ -27,7 +27,7 @@ export class CodexExecutor implements AgentExecutor {
   readonly type = "codex" as const;
   readonly label: string;
   // 恢复命令要带的 env 前缀:覆盖项 + 供应商(token 已换成占位符)。存进 sessions。
-  readonly resumeEnvHint?: string;
+  private readonly resumeEnvHint?: string;
   readonly target: ExecTarget;
   private bin: string;
   readonly model?: string;
@@ -59,6 +59,11 @@ export class CodexExecutor implements AgentExecutor {
     // Human-friendly copy command: interactive resume (shows the session + lets
     // you continue). The harness's own headless resume uses `exec resume` in run().
     return resumeFor(this.target, cwd, resumeInner.codex(sessionId), this.resumeEnvHint ?? "");
+  }
+
+  // codex 没有「盖掉自己配置文件」那一档覆盖(声明表里只有 claude),所以这里不带参数。
+  resumeFields(cwd: string, sessionId: string): ResumeFields {
+    return { resumeCommand: this.resumeCommand(cwd, sessionId), resumeEnv: this.resumeEnvHint ?? null, resumeArgs: null };
   }
 
   // 挂了供应商就临时注册一个 provider 并切过去(-c 值按 TOML 解析,字符串须带引号)。

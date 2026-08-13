@@ -333,9 +333,7 @@ async function openLead(taskId: string, rawText: string, kind: Kind): Promise<Le
         commandLine: handle.commandLine,
         executor: ex.label,
         target: sessionTargetKey(ex.target),
-        resumeCommand: ex.resumeCommand(ws.path, cliSessionId),
-        resumeEnv: ex.resumeEnvHint ?? null,
-        resumeArgs: ex.resumeArgsHint ?? null,
+        ...ex.resumeFields(ws.path, cliSessionId),
       })
       .where(eq(sessions.id, sessId));
   } else {
@@ -350,9 +348,7 @@ async function openLead(taskId: string, rawText: string, kind: Kind): Promise<Le
       branch: ws.branch,
       cwd: ws.path,
       cliSessionId,
-      resumeCommand: ex.resumeCommand(ws.path, cliSessionId),
-      resumeEnv: ex.resumeEnvHint ?? null,
-      resumeArgs: ex.resumeArgsHint ?? null,
+      ...ex.resumeFields(ws.path, cliSessionId),
       commandLine: handle.commandLine,
       startedAt: turnStart,
       turnStartedAt: turnStart,
@@ -418,7 +414,7 @@ async function consume(lead: Lead): Promise<void> {
         });
         await db
           .update(sessions)
-          .set({ cliSessionId: event.cliSessionId, resumeCommand: ex.resumeCommand(lead.cwd, event.cliSessionId) })
+          .set({ cliSessionId: event.cliSessionId, ...ex.resumeFields(lead.cwd, event.cliSessionId) })
           .where(eq(sessions.id, lead.sessId));
       }
       publish(lead, event);

@@ -5,7 +5,7 @@ import type { AgentEvent, AgentType, ExecTarget, TokenUsage } from "@harness/sha
 import { guessContextWindow } from "@harness/shared/usage";
 import { cliConfigOverrideEnvPatch, cliConfigOverrideSettings } from "@harness/shared/cli-overrides";
 import { cliHostEnv, resumeEnvHint } from "./cli-env.js";
-import type { AgentExecutor, RelayConfig, ResidentHandle, RunHandle, RunOpts } from "./types.js";
+import type { AgentExecutor, RelayConfig, ResidentHandle, ResumeFields, RunHandle, RunOpts } from "./types.js";
 import { spawnForRun, detachedInfo } from "./detached.js";
 import { spawnAgent, resumeFor, resumeInner, shq, spawnErrorMessage, killChild, forceFinishOnExit, redactSecrets } from "./spawn.js";
 import { relayRoot } from "../llm.js";
@@ -20,15 +20,12 @@ export class ClaudeExecutor implements AgentExecutor {
   readonly label: string;
   // 恢复命令要带的 env 前缀:**只剩供应商那一截**(token 已换成占位符)。存进 sessions。
   //
-  // 覆盖项(窗口 / 压缩触发点 / 总开关)不走这里 —— 它们在下面的 resumeArgsHint 里以
-  // `--settings` 的形态出现。理由是同一条实测事实:CLI 会把各层 settings 的 `env` 写回
+  // 覆盖项(窗口 / 压缩触发点 / 总开关)不走这里 —— 它们在 resumeFields() 的
+  // `--settings` 里。理由是同一条实测事实:CLI 会把各层 settings 的 `env` 写回
   // 自己的进程环境,命令行前缀那一份**打不过**用户的 settings.json。第 2 轮审查
   // finding 2 复现过:复制出来的命令带着 env 前缀跑,压缩行为退回用户文件里的那份数,
   // 跟他在 harness 里看到的不是一回事。既然打不过,就别放上去骗人。
-  readonly resumeEnvHint?: string;
-  // 恢复命令里跟在 CLI 后面的参数(`--settings '{…}'`)。跟运行时那份是同一个装配函数,
-  // 所以「复制到终端接着聊」跑出来的压缩行为跟 harness 这一轮一致。
-  readonly resumeArgsHint?: string;
+  private readonly resumeEnvHint?: string;
   readonly target: ExecTarget;
   private bin: string;
   readonly model?: string;
@@ -49,13 +46,11 @@ export class ClaudeExecutor implements AgentExecutor {
     this.resumeEnvHint = resumeEnvHint(
       this.type,
       // 覆盖项故意不进 env 前缀:它打不过用户的 settings.json(见 resumeEnvHint 字段注释),
-      // 真正带着走的是 resumeArgsHint 那个 `--settings`。
+      // 真正带着走的是 resumeFields() 里那个 `--settings`。
       undefined,
       this.relay ? `ANTHROPIC_BASE_URL=${relayRoot(this.relay.baseUrl)} ANTHROPIC_AUTH_TOKEN=<你的key> ` : undefined,
       this.target,
     );
-    const settings = this.settingsPayload();
-    this.resumeArgsHint = settings ? `--settings ${shq(JSON.stringify(settings))}` : undefined;
     const where = this.target.kind === "ssh" ? this.target.host : "local";
     this.label = opts.name ?? `claude@${where}${opts.model ? "·" + opts.model : ""}`;
   }
@@ -67,13 +62,29 @@ export class ClaudeExecutor implements AgentExecutor {
   }
 
   resumeCommand(cwd: string, sessionId: string): string {
+    return this.resumeFields(cwd, sessionId).resumeCommand;
+  }
+
+  /**
+   * 恢复命令三件套。`--settings` 那截**按会话 cwd 现算**:项目那几层 settings 文件参与
+   * 换算分母,而 executor 建出来的时候还不知道这活要在哪个目录跑 —— 先前它是构造器里
+   * 冻好的字段,于是 harness 自己带着项目层的值跑、复制出来的命令却少了那一截,两边的
+   * 压缩水位差着几千 token(第 3 轮审查 finding 2)。
+   */
+  resumeFields(cwd: string, sessionId: string): ResumeFields {
+    const settings = this.settingsPayload(cwd);
+    const resumeArgs = settings ? `--settings ${shq(JSON.stringify(settings))}` : null;
     const inner = resumeInner.claude(sessionId);
-    return resumeFor(
-      this.target,
-      cwd,
-      this.resumeArgsHint ? `${inner} ${this.resumeArgsHint}` : inner,
-      this.resumeEnvHint ?? "",
-    );
+    return {
+      resumeCommand: resumeFor(
+        this.target,
+        cwd,
+        resumeArgs ? `${inner} ${resumeArgs}` : inner,
+        this.resumeEnvHint ?? "",
+      ),
+      resumeEnv: this.resumeEnvHint ?? null,
+      resumeArgs,
+    };
   }
 
   /**
@@ -85,9 +96,10 @@ export class ClaudeExecutor implements AgentExecutor {
    *     环境变量;仅 Opus 系列生效,其余模型 CLI 自行忽略)。
    *   • autoCompactEnabled + env:压过用户 settings.json 里的同名开关与变量 —— 同一次
    *     实测里各层 env 是按 key 合并的,他其余的变量原样保留(见 shared/cli-overrides)。
-   * cwd 只影响换算分母的解析(项目那两层 settings 文件),给不出来就按用户层解。
+   * cwd **必填**:换算分母要读项目那几层 settings 文件,少了它算出来的是另一个数
+   * (第 3 轮审查 finding 2 就是构造器里少这一个参数造成的)。
    */
-  private settingsPayload(cwd?: string): Record<string, unknown> | null {
+  private settingsPayload(cwd: string): Record<string, unknown> | null {
     const settings = {
       ...(this.speed === "fast" ? { fastMode: true } : {}),
       ...cliConfigOverrideSettings(this.type, this.configOverrides, cliHostEnv(this.target, cwd)),

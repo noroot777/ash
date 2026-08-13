@@ -14,6 +14,13 @@
 import { closeSync, openSync, readFileSync, readSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, sep } from "node:path";
+import {
+  KEY_SEP,
+  clearPersistedCalibrations,
+  loadCalibrations,
+  saveCalibrations,
+  type PersistedCalibration,
+} from "./skill-calibration-store.js";
 import type {
   AgentType,
   SkillEntry,
@@ -215,7 +222,6 @@ interface Scan {
 }
 
 // 分隔符用 NUL:路径里不可能出现它,cwd 带空格也不会串味。
-const KEY_SEP = "\u0000";
 const cacheKey = (agentType: string, cwd: string) => `${agentType}${KEY_SEP}${cwd}`;
 const scanCache = new Map<string, Scan>();
 
@@ -258,11 +264,13 @@ function scan(agentType: Scannable, cwd: string, force = false): Scan {
 // ── 第三层:claude 的 init 事件校准 ────────────────────────────────────────
 // 每次 claude 跑起来吐的第一行 JSON 带 `skills` / `slash_commands` 两个全量数组,
 // 含插件技能和 `/review` 这类**根本不在磁盘上**的内置技能 —— 这是拿到它们的唯一渠道。
-interface Calibration {
-  names: string[];
-  at: number;
+type Calibration = PersistedCalibration;
+// key = cacheKey(agentType, 那一轮真实的 cwd)。**进程内存 + 一份落盘**:server 重启后
+// 内置命令(`/compact` 这些磁盘上没有的)不该从菜单里消失 —— 冷启动来源见 store 顶部。
+let calibrations: Map<string, Calibration> | null = null;
+function loaded(): Map<string, Calibration> {
+  return (calibrations ??= loadCalibrations());
 }
-const calibrations = new Map<string, Calibration>(); // key = cacheKey(agentType, 那一轮真实的 cwd)
 
 export function calibrateSkills(
   agentType: AgentType,
@@ -277,7 +285,9 @@ export function calibrateSkills(
     if (BUILTIN_SLASH_ALLOW.has(command)) names.add(command);
   }
   if (!names.size) return;
-  calibrations.set(cacheKey(agentType, cwd), { names: [...names], at: Date.now() });
+  const all = loaded();
+  all.set(cacheKey(agentType, cwd), { names: [...names], at: Date.now() });
+  saveCalibrations(all);
 }
 
 // 任务多半跑在 `<repoPath>/.worktrees/<id>` 里,而菜单是按项目问的 —— 所以按前缀认亲,
@@ -285,7 +295,7 @@ export function calibrateSkills(
 function calibrationFor(agentType: AgentType, cwd: string): Calibration | null {
   const prefix = cwd.endsWith(sep) ? cwd : cwd + sep;
   let best: Calibration | null = null;
-  for (const [key, value] of calibrations) {
+  for (const [key, value] of loaded()) {
     const [type, ranIn] = key.split(KEY_SEP);
     if (type !== agentType || !ranIn) continue;
     if (ranIn !== cwd && !ranIn.startsWith(prefix)) continue;
@@ -294,10 +304,23 @@ function calibrationFor(agentType: AgentType, cwd: string): Calibration | null {
   return best;
 }
 
-/** 只给测试和「手点重新扫描」用:清掉所有缓存与校准。 */
+/**
+ * 只给测试用:清掉所有缓存与校准,**连落盘那份一起**(界面上的「重新扫描」走的是
+ * listSkills 的 force,不碰校准 —— 那是另一档语义)。
+ * 想模拟「server 重启」请用 forgetLoadedCalibrations():那才是只丢内存、留冷启动来源。
+ */
 export function resetSkillCache(): void {
   scanCache.clear();
-  calibrations.clear();
+  calibrations = null;
+  clearPersistedCalibrations();
+}
+
+/**
+ * 「server 重启了」的等价物:只丢进程内存那份,冷启动来源留在盘上。
+ * 生产代码不该调它 —— 存在的意义是让「重启后 `/compact` 还在不在菜单里」有得测。
+ */
+export function forgetLoadedCalibrations(): void {
+  calibrations = null;
 }
 
 export function listSkills(opts: {
