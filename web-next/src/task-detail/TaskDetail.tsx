@@ -329,6 +329,15 @@ export function TaskDetail({
                     pendingExecutor={pendingExecutor}
                     loading={conversation.refreshing}
                     error={conversation.error}
+                    onRetryTurn={async (sessionId) => {
+                      try {
+                        const result = await api.retryTurn(task.id, sessionId);
+                        notify(result.mode === "resend" ? "已重发上一条指令，任务续跑中" : "已从中断处续跑");
+                        await Promise.all([conversation.refetch(), refreshTask()]);
+                      } catch (reason) {
+                        notify(reason instanceof Error ? reason.message : String(reason));
+                      }
+                    }}
                     footer={task.question ? (
                       <QuestionCard
                         task={task}

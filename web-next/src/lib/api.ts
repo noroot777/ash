@@ -424,6 +424,10 @@ export const api = {
     request(`/tasks/${id(taskId)}/stop`, { method: "POST" }),
   retryTask: (taskId: string): Promise<unknown> =>
     request(`/tasks/${id(taskId)}/retry`, { method: "POST" }),
+  // 重跑**上一回合**（续聊/审查打回的那一句崩了，但任务还停在 done）。带上气泡上那条
+  // 会话 id：服务端据此确认「用户看到的就是最新一次」，页面旧了就拒绝而不是照跑。
+  retryTurn: (taskId: string, sessionId?: string): Promise<{ started: true; mode: "resend" | "resume" }> =>
+    request(`/tasks/${id(taskId)}/retry-turn`, json("POST", { sessionId })),
   requeueTask: (taskId: string): Promise<{ task: Task; movedToEnd: boolean }> =>
     request(`/tasks/${id(taskId)}/requeue`, { method: "POST" }),
   fireTask: (taskId: string): Promise<unknown> =>

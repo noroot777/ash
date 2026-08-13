@@ -10,7 +10,9 @@ import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
 import { RunActivity } from "../components/RunActivity.tsx";
 import { MessageFooter } from "../components/MessageFooter.tsx";
+import { TurnRetryButton } from "../components/TurnRetryButton.tsx";
 import { MessageAttachments } from "./Attachments.tsx";
+import { retryTurnSessionId } from "./turnRetry.ts";
 import { durationBetween, formatInstant, parseAttachmentText } from "./utils.ts";
 
 function copyText(text: string) {
@@ -19,8 +21,11 @@ function copyText(text: string) {
 
 function AgentMessage({
   item,
+  retry,
 }: {
   item: Extract<ConversationItem, { kind: "agent" }>;
+  /** 这条气泡是不是「上一回合崩了」的那一条：给了就在尾栏挂重试按钮。 */
+  retry?: React.ReactNode;
 }) {
   const duration = durationBetween(item.at, item.endedAt);
   return (
@@ -56,6 +61,7 @@ function AgentMessage({
           session={item.showSessionMeta ? item.session : null}
           sessionUsage={item.sessionUsage}
           sessionContext={item.sessionContext}
+          actions={retry}
         />
       </div>
     </article>
@@ -97,6 +103,7 @@ export function ConversationFeed({
   loading,
   error,
   footer,
+  onRetryTurn,
 }: {
   task: Task;
   items: ConversationItem[];
@@ -106,6 +113,8 @@ export function ConversationFeed({
   loading: boolean;
   error: Error | null;
   footer?: React.ReactNode;
+  /** 重跑上一回合。不给就不出重试按钮（只读的会话视图用得上）。 */
+  onRetryTurn?: (sessionId: string) => Promise<void> | void;
 }) {
   const scroll = useRef<HTMLDivElement>(null);
   const activityPhase = runActivityPhase(task.status, runActivityTail(items));
@@ -114,13 +123,29 @@ export function ConversationFeed({
     pending: pendingExecutor,
     fallback: task.executorLabel ?? task.agentType,
   });
+  // 崩掉的那一回合挂在会话最后一条 agent 气泡上；不满足条件时是 null，一颗按钮都不出。
+  const retrySessionId = onRetryTurn ? retryTurnSessionId(task, items) : null;
+  const retryItemId = retrySessionId
+    ? [...items].reverse().find((item) => item.kind === "agent")?.id ?? null
+    : null;
 
   return (
     <ImagePreviewGroup isolated>
       <div className="conversation-scroll-region task-conversation-wrap">
         <div className="task-conversation" ref={scroll}>
           {items.map((item) => {
-            if (item.kind === "agent") return <AgentMessage key={item.id} item={item} />;
+            if (item.kind === "agent") {
+              const exit = item.id === retryItemId ? item.session?.exitStatus : null;
+              return (
+                <AgentMessage
+                  key={item.id}
+                  item={item}
+                  retry={retrySessionId && exit != null ? (
+                    <TurnRetryButton exitStatus={exit} onRetry={() => onRetryTurn!(retrySessionId)} />
+                  ) : undefined}
+                />
+              );
+            }
             if (item.kind === "user") return <UserMessage key={item.id} item={item} />;
             return (
               <div className={`task-event-line${item.tone === "error" ? " is-error" : ""}`} key={item.id}>

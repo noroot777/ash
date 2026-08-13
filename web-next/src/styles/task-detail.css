@@ -343,6 +343,11 @@
 .task-message-footer { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; margin-top: 7px; }
 .task-message-footer button { max-width: 240px; overflow: hidden; border: 1px solid var(--line); border-radius: 5px; background: transparent; padding: 2px 6px; color: var(--faint); font-family: var(--font-mono); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
 .task-message-footer button:hover { border-color: var(--line2); background: var(--raised); color: var(--muted); }
+/* 「重跑上一回合」：同一行里唯一的**动作**，其余都是元信息，所以给它红色描边——
+   出现的前提本来就是「上一回合崩了」，不该跟会话 id 一样灰。 */
+.task-message-footer button.is-retry { display: inline-flex; align-items: center; gap: 3px; border-color: color-mix(in lch, var(--red) 45%, var(--line)); color: var(--red); }
+.task-message-footer button.is-retry:hover { border-color: var(--red); background: color-mix(in lch, var(--red) 12%, var(--raised)); color: var(--red); }
+.task-message-footer button.is-retry:disabled { opacity: 0.55; }
 
 /* Token 用量。三颗都在尾栏里，跟 .task-message-footer 的按钮同款外形。 */
 .token-usage-chip { display: inline-flex; align-items: center; gap: 3px; border: 1px solid var(--line); border-radius: 5px; background: transparent; padding: 2px 6px; color: var(--faint); font-family: var(--font-mono); font-size: 9px; white-space: nowrap; }
