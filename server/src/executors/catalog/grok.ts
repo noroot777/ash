@@ -140,6 +140,31 @@ const grokStreamingJsonParser: CliParser = async function* (ctx) {
   }
 };
 
+// `grok models` 的输出(v1.0.3 实测):
+//   You are logged in with grok.com.
+//   (空行)
+//   Default model: grok-4.6
+//   (空行)
+//   Available models:
+//     * grok-4.6 (default)
+//     - grok-4.5
+// 只认 "Available models:" 之后的条目行,免得把抬头里的 "grok.com" 当成模型名。
+// 未登录时它印的是登录提示、没有这一段,于是解析出空数组 —— 上层照实降级到内置快照。
+export function parseGrokModels(stdout: string): { models: string[]; defaultModel?: string | null } {
+  const lines = stripAnsi(stdout).split("\n");
+  const defaultModel = /^\s*Default model:\s*(\S+)/m.exec(stripAnsi(stdout))?.[1] ?? null;
+  const start = lines.findIndex((line) => /^\s*Available models:/i.test(line));
+  if (start < 0) return { models: [], defaultModel };
+  const models: string[] = [];
+  for (const line of lines.slice(start + 1)) {
+    if (!line.trim()) continue;
+    const item = /^\s*[*\-•]\s+(\S+)/.exec(line);
+    if (!item) break; // 条目段结束(后面可能还有别的抬头)
+    models.push(item[1]!);
+  }
+  return { models, defaultModel };
+}
+
 // 检测字段原样来自旧 detect.ts 的 KNOWN_CLIS。
 export const grokSpec: CliSpec = {
   key: "grok",
@@ -149,13 +174,18 @@ export const grokSpec: CliSpec = {
   docsUrl: "https://docs.x.ai/build/overview",
   installCommand: "curl -fsSL https://x.ai/cli/install.sh | bash",
   notes:
-    "实测于 2026-07-30,版本 grok 0.2.114 (0c785038798)。" +
-    "已确认 -p + --always-approve + --permission-mode bypassPermissions 可无交互写入文件;" +
+    "实测于 2026-08-13,版本 grok 1.0.3 (1a29d5bc12d4);首轮实测是 2026-07-30 的 0.2.114,两版行为一致的部分不再重复标注。" +
+    "已确认 -p + --always-approve + --permission-mode bypassPermissions 可无交互写入文件(1.0.3 复测:真的创建了文件);" +
     "streaming-json 按 token 输出 thought/text,end 带 sessionId,真实文件写入未输出工具调用事件,故内联 parser 只解析思考、正文、session 与错误。" +
-    "显式 --session-id 新建会话后用 --resume 可无头续跑并准确记住上回合内容;登录态 grok models 仅列出 grok-4.5。" +
-    "已实跑 --model grok-4.5 + --reasoning-effort low;成功事件的内部 modelUsage 名为 grok-4.5-build。" +
+    "1.0.3 新增了 available_commands 事件(每回合开头/工具集变化时各一条,内容是工具与 slash 命令全集)—— parser 的 default 分支原样忽略,不影响;" +
+    "同版还多了 streaming-messages-json(Anthropic Messages 线格式),本轮没切,因为现有 parser 在 streaming-json 上实测仍然正确。" +
+    "显式 --session-id 新建会话后用 --resume 可无头续跑并准确记住上回合内容;" +
+    "模型清单不再写死:spec.models 会跑 `grok models` 现问(1.0.3 实测输出 grok-4.6 默认 + grok-4.5),探不到才退回内置快照。" +
+    "已实跑 --model grok-4.6 + --reasoning-effort low;成功事件的内部 modelUsage 名为 grok-4.5-build(4.5 时代实测)。" +
     "未接 relay:根命令 grok -p 不接受 --xai-api-base-url,仅支持 XAI_API_KEY 认证提示;" +
     "agent 子命令虽有 base-url/stdio/headless,但不是单回合 prompt 通道。",
+  // `grok models` 是纯查询(登录态下一次网络往返),不产生会话、不烧任务 token。
+  models: { args: ["models"], parse: (stdout) => parseGrokModels(stdout) },
   exec: {
     baseArgs: [
       "--always-approve",

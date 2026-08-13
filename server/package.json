@@ -33,6 +33,7 @@
     "test:executor-overrides": "tsx scripts/test-executor-overrides.ts",
     "test:cli-overrides": "tsx scripts/test-cli-overrides.ts",
     "test:cli-catalog": "tsx scripts/test-cli-catalog.ts",
+    "test:cli-models": "tsx scripts/test-cli-models.ts",
     "test:task-derivation": "tsx scripts/test-task-derivation-policy.ts",
     "test:duet-iteration": "tsx scripts/test-duet-iteration.ts",
     "test:task-event-timestamps": "tsx scripts/test-task-event-timestamps.ts",

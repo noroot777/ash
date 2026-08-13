@@ -35,6 +35,7 @@ import { findWorkflow, mountWorkflowRoutes } from "./workflows.js";
 import { mountPreviewRoutes } from "./preview-routes.js";
 import { getAppSettings, parseAppSettingsPatch, patchAppSettings } from "./app-settings.js";
 import { mountSkillRoutes } from "./skill-routes.js";
+import { mountModelRoutes } from "./model-routes.js";
 import { mountTaskRoutes } from "./task-routes.js";
 import { mountTaskRunRoutes } from "./task-run-routes.js";
 import { mountFileRoutes } from "./file-routes.js";
@@ -194,6 +195,8 @@ api.get("/agents/cli-env", (c) => c.json(cliHostEnv()));
 
 // `/技能` 的三个端点在 `skill-routes.ts`(cwd 取项目仓库根、ssh 执行器不拿本机盘冒充)。
 mountSkillRoutes(api);
+// 模型清单(现问 CLI + 刷新)在 `model-routes.ts`。
+mountModelRoutes(api);
 
 api.post("/agents", async (c) => {
   const b = await c.req.json<any>();

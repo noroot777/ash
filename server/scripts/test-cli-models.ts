@@ -1,0 +1,150 @@
+// CLI 模型清单探测(server/src/executors/model-probe.ts + 各 spec 的 models 解析器)的回归测试:
+//   npm -w server run test:cli-models
+//
+// 钉住的是「刷新机制」这层的不变量,不是各家 CLI 到底有哪些模型(那随时会变,正是这套
+// 机制存在的理由):
+//   ① 解析器只认清单段落,抬头/提示语/表头不能被当成模型名;未登录那种输出解析成空数组
+//      (空数组是**降级信号**,上层据此退回快照——解析器硬凑一个假模型才是灾难);
+//   ② 去重保序 + CLI 报告的默认模型排首位;
+//   ③ 每个 AgentType 都拿得到 catalog,`probeSupported` 与 spec.models 严格一致;
+//   ④ 没有清单命令 / 没装 CLI 时诚实降级:source==="preset" 且 models 等于内置快照;
+//   ⑤ 缓存命中不重复起子进程,force 会绕过缓存;
+//   ⑥ 本机装了 grok 时的**真实**探测(装了才断言,没装就跳过并说明——不拿本机环境当硬前提)。
+import assert from "node:assert/strict";
+import { AGENT_TYPES } from "@harness/shared";
+import { CLI_MODEL_PRESETS } from "@harness/shared/cli-presets";
+import { CLI_SPEC_BY_KEY } from "../src/executors/catalog/index.js";
+import { parseGrokModels } from "../src/executors/catalog/grok.js";
+import { parsePiModels } from "../src/executors/catalog/pi.js";
+import { modelCatalogFor, modelCatalogs, normalizeModelList, resetModelCatalogCache } from "../src/executors/model-probe.js";
+import { probeBins } from "../src/executors/bin-probe.js";
+
+// ── ① 解析器:真实输出 ────────────────────────────────────────────────────
+// 2026-08-13 本机 `grok models`(v1.0.3)的原样输出。
+const GROK_REAL = `You are logged in with grok.com.
+
+Default model: grok-4.6
+
+Available models:
+  * grok-4.6 (default)
+  - grok-4.5
+`;
+{
+  const parsed = parseGrokModels(GROK_REAL);
+  assert.deepEqual(parsed.models, ["grok-4.6", "grok-4.5"], "grok:应只取清单段落里的模型 id");
+  assert.equal(parsed.defaultModel, "grok-4.6", "grok:应认出 Default model 行");
+  // 抬头里的 "grok.com" 长得很像模型名,是这个解析器最容易踩的坑。
+  assert.ok(!parsed.models.includes("grok.com"), "grok:抬头的登录域名不能被当成模型");
+}
+{
+  // 未登录:没有 Available models 段 → 空数组(降级信号),不是抛异常、也不是瞎猜。
+  const parsed = parseGrokModels("You are not logged in. Run `grok login` first.\n");
+  assert.deepEqual(parsed.models, [], "grok:未登录应解析成空数组,由上层降级到快照");
+  assert.equal(parsed.defaultModel, null);
+}
+{
+  // 段落后面还跟着别的抬头时,条目段要在第一个非条目行处收口。
+  const parsed = parseGrokModels("Available models:\n  * a\n  - b\nOther section:\n  * c\n");
+  assert.deepEqual(parsed.models, ["a", "b"], "grok:条目段应在非条目行处结束");
+}
+{
+  // ANSI 色码是 CLI 输出的常态(它并不总是判断 TTY),不能因此漏掉模型。
+  const parsed = parseGrokModels("Available models:\n  * [32mgrok-4.6[0m (default)\n");
+  assert.deepEqual(parsed.models, ["grok-4.6"], "grok:带色码的输出也要能解析");
+}
+
+{
+  // 2026-08-13 本机 `pi --list-models` 的原样形状:空格对齐的六列表格,首行是表头。
+  const parsed = parsePiModels(
+    [
+      "provider   model                       context  max-out  thinking  images",
+      "anthropic  claude-opus-5               1M       128K     yes       yes   ",
+      "openai     gpt-5.2                     400K     128K     yes       yes   ",
+      "",
+    ].join("\n"),
+  );
+  assert.deepEqual(parsed.models, ["anthropic/claude-opus-5", "openai/gpt-5.2"], "pi:前两列应拼成 provider/model");
+  assert.ok(!parsed.models.some((m) => m.startsWith("provider/")), "pi:表头行不能被当成模型");
+}
+assert.deepEqual(parsePiModels("").models, [], "pi:空输出解析成空数组");
+
+// ── ② 去重保序 + 默认模型排首位 ─────────────────────────────────────────
+assert.deepEqual(
+  normalizeModelList(["b", "a", "b", " a ", ""], null),
+  ["b", "a"],
+  "去重后应保持 CLI 报的顺序(默认/推荐档常在前)",
+);
+assert.deepEqual(
+  normalizeModelList(["old", "new"], "new"),
+  ["new", "old"],
+  "CLI 报告的默认模型应排到候选首位",
+);
+assert.deepEqual(
+  normalizeModelList(["a", "b"], "不在清单里的"),
+  ["a", "b"],
+  "默认模型不在清单里就别硬塞进去",
+);
+
+// ── ③④ 每个类型都拿得到 catalog,不支持/没装的诚实降级 ────────────────────
+resetModelCatalogCache();
+const all = await modelCatalogs();
+assert.equal(all.length, AGENT_TYPES.length, "每个 AgentType 都要有一条 catalog");
+for (const catalog of all) {
+  const spec = CLI_SPEC_BY_KEY[catalog.type];
+  assert.equal(
+    catalog.probeSupported,
+    !!spec.models,
+    `${catalog.type}:probeSupported 必须跟 spec.models 一致(界面据此决定要不要给刷新按钮)`,
+  );
+  if (!spec.models) {
+    assert.equal(catalog.source, "preset", `${catalog.type}:没有清单命令时只可能是快照`);
+    assert.deepEqual(
+      [...catalog.models],
+      [...CLI_MODEL_PRESETS[catalog.type]],
+      `${catalog.type}:降级时应原样给出内置快照`,
+    );
+    assert.equal(catalog.probedAt, null, `${catalog.type}:没探过就不该有探测时刻`);
+  }
+  if (catalog.source === "probe") {
+    assert.ok(catalog.models.length > 0, `${catalog.type}:探测成功却给空清单是不允许的`);
+    assert.ok(catalog.probedAt, `${catalog.type}:探测成功必须带时刻`);
+    assert.equal(catalog.error, null, `${catalog.type}:探测成功不该带错误`);
+  }
+}
+
+// ── ⑤ 缓存 ───────────────────────────────────────────────────────────────
+{
+  resetModelCatalogCache();
+  const first = await modelCatalogFor("grok");
+  const second = await modelCatalogFor("grok");
+  assert.equal(first, second, "缓存命中应返回同一份结果,而不是再起一次子进程");
+  // 并发去重:三个选择器同时打开只该探一次。
+  resetModelCatalogCache();
+  const [a, b, c] = await Promise.all([modelCatalogFor("grok"), modelCatalogFor("grok"), modelCatalogFor("grok")]);
+  assert.equal(a, b, "并发请求应合并成一次探测");
+  assert.equal(b, c, "并发请求应合并成一次探测");
+  const forced = await modelCatalogFor("grok", true);
+  assert.notEqual(forced, first, "force 必须绕过缓存重新探测(这就是「刷新」按钮)");
+}
+
+// ── ⑥ 本机真实探测(装了才断言) ────────────────────────────────────────
+{
+  const grok = CLI_SPEC_BY_KEY.grok;
+  const installed = await probeBins(grok.bins, grok.fallbackVersionMatch);
+  if (!installed) {
+    console.log("· 本机没装 grok,跳过真实探测断言(机制本身已由上面几条覆盖)");
+  } else {
+    const catalog = await modelCatalogFor("grok", true);
+    assert.ok(catalog.available, "探到了 bin 就该报 available");
+    if (catalog.source === "probe") {
+      assert.ok(catalog.models.length > 0, "grok 探测成功应给出非空清单");
+      console.log(`· grok ${catalog.cliVersion ?? "?"} 实探:${catalog.models.join(", ")}`);
+    } else {
+      // 没登录也是合法状态 —— 但必须说清楚为什么退回快照,不许装作实时目录。
+      assert.ok(catalog.error, "探测失败必须带上原因,否则界面只能显示一个假的实时清单");
+      console.log(`· grok 装着但没探到清单(${catalog.error}),已降级到快照 —— 符合预期`);
+    }
+  }
+}
+
+console.log("cli-models 回归测试通过");
