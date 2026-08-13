@@ -70,6 +70,25 @@ try {
   assert.equal(await messages.nth(4).locator(".agent-run-identity").count(), 1, "真人插话后必须重新报身份");
   assert.equal(await messages.nth(5).locator(".agent-run-identity").count(), 1, "回合边界之后必须重新报身份");
 
+  // agent 输出里的引用块（「正在压缩上下文…」这类 harness 注记）跟旁注是同一档，
+  // 字号行高得对上，前面那道竖线的高度才会一样。
+  const quote = page.locator(".task-markdown blockquote").first();
+  await quote.waitFor();
+  const metrics = await quote.evaluate((el) => {
+    const note = document.querySelector(".conversation-note");
+    const read = (node) => {
+      const s = getComputedStyle(node);
+      return { size: s.fontSize, line: s.lineHeight, height: node.getBoundingClientRect().height };
+    };
+    return { quote: read(el), note: read(note) };
+  });
+  assert.equal(metrics.quote.size, metrics.note.size, "引用块字号该跟旁注一样");
+  assert.equal(metrics.quote.line, metrics.note.line, "引用块行高该跟旁注一样");
+  assert.ok(
+    Math.abs(metrics.quote.height - metrics.note.height) < 1,
+    `引用块竖线高度该跟旁注一样（${metrics.quote.height} vs ${metrics.note.height}）`,
+  );
+
   if (process.env.SHOT) await page.screenshot({ path: process.env.SHOT, fullPage: true });
   console.log("conversation-notes-dom ok");
 } finally {

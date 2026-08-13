@@ -204,7 +204,10 @@
 .task-markdown h6 { color: var(--muted); font-size: 11px; font-weight: 680; }
 .task-markdown strong { color: var(--ink); font-weight: 650; }
 .task-markdown a { color: var(--accent); text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 2px; }
-.task-markdown blockquote { border-left: 2px solid var(--line2); padding: 1px 0 1px 11px; color: var(--faint); }
+/* 引用块跟系统旁注（.conversation-note）是同一档「不是正文在说话」的东西：agent 输出里
+   的引用多半就是 harness 自己插的注记（「正在压缩上下文…」之类）。字号行高跟旁注对齐，
+   竖线的高度才跟着一样——竖线高度就是行高加这两像素 padding 撑出来的。 */
+.task-markdown blockquote { border-left: 2px solid var(--line2); padding: 1px 0 1px 11px; color: var(--faint); font-size: 11px; line-height: 1.6; }
 .task-markdown blockquote > :first-child { margin-top: 0; }
 .task-markdown blockquote > :last-child { margin-bottom: 0; }
 .task-markdown hr { height: 1px; margin: 15px 0; border: 0; background: var(--line); }
