@@ -317,7 +317,7 @@ await createTasks([{ ...baseTask, id: "t-arm-follow", title: "follow-up reservat
 const runA = { id: "run-A", reviewerId: "rev-A", checkMode: "logic", retryLimit: 1 };
 assert.equal(await armFollowUpFreeReview("t-arm-follow", runA, stamp), true, "空槽必须挂上续轮预约");
 await db.update(freeWorkflowStates)
-  .set({ reviewArmed: true, reviewRunId: null, selectedReviewerId: "rev-user", updatedAt: new Date(Date.now() + 1000).toISOString() })
+  .set({ reviewArmed: true, reviewRunId: null, selectedReviewerId: "rev-user", reviewCheckMode: "syntax", reviewRetryLimit: 0, reviewNote: "用户备注", updatedAt: new Date(Date.now() + 1000).toISOString() })
   .where(eq(freeWorkflowStates.taskId, "t-arm-follow"));
 assert.equal(
   await armFollowUpFreeReview("t-arm-follow", { ...runA, id: "run-B" }, new Date(Date.now() + 2000).toISOString()),
@@ -327,16 +327,21 @@ assert.equal(
 const keptUser = (await db.select().from(freeWorkflowStates).where(eq(freeWorkflowStates.taskId, "t-arm-follow"))).at(0)!;
 assert.equal(keptUser.selectedReviewerId, "rev-user", "用户的预约必须原样留着");
 assert.equal(keptUser.reviewRunId, null, "用户预约的 runId 不许被续轮改写");
+// 抢到空槽时整套字段一起覆盖：槽里残留的是上一条已 disarmed 的手动预约（rev-user /
+// syntax / 0 / 备注），只写 armed+runId 会让这一行自相矛盾——启动路径按 runId 续对了
+// 链，UI 的「调整预约复审」却拿残留配置初始化表单，用户保存一次就换成那套旧配置。
 await db.update(freeWorkflowStates).set({ reviewArmed: false }).where(eq(freeWorkflowStates.taskId, "t-arm-follow"));
 assert.equal(
   await armFollowUpFreeReview("t-arm-follow", { ...runA, id: "run-C" }, new Date(Date.now() + 3000).toISOString()),
   true,
   "槽空出来之后照常挂",
 );
-assert.equal(
-  (await db.select().from(freeWorkflowStates).where(eq(freeWorkflowStates.taskId, "t-arm-follow"))).at(0)!.reviewRunId,
-  "run-C",
-);
+const followUp = (await db.select().from(freeWorkflowStates).where(eq(freeWorkflowStates.taskId, "t-arm-follow"))).at(0)!;
+assert.equal(followUp.reviewRunId, "run-C");
+assert.equal(followUp.selectedReviewerId, runA.reviewerId, "续轮必须覆盖残留的审查者");
+assert.equal(followUp.reviewCheckMode, runA.checkMode, "续轮必须覆盖残留的检查档");
+assert.equal(followUp.reviewRetryLimit, runA.retryLimit, "续轮必须覆盖残留的重试上限");
+assert.equal(followUp.reviewNote, null, "续轮必须清掉残留的预约备注");
 
 console.log("turn-ownership regressions ok");
 process.exit(0);

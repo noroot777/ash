@@ -119,21 +119,27 @@ export async function restoreFreeReviewReservation(
  * 下一条（可能换了审查者、换了检查档），那是他对「下次确认完成时干什么」的最新意思。
  * 早先这里是无条件 `onConflictDoUpdate`，把 reviewRunId 改写成本链的 run —— 用户预约
  * 的新审查链再也不会开，取而代之的是在旧 run 上续一轮（审查实测）。
+ *
+ * 抢到空槽时**整套字段一起覆盖**，不能只写 armed/runId：槽位常留着上一条已 disarmed
+ * 的手动预约，只改两个字段会让这一行自相矛盾——启动路径按 runId 续对了链，UI 的「调整
+ * 预约复审」却用残留的 reviewer/checkMode/retryLimit 初始化表单，用户保存一次就把自动
+ * 续轮换成了那套旧配置的手动预约（审查实测）。
  */
 export async function armFollowUpFreeReview(
   taskId: string,
   run: { id: string; reviewerId: string | null; checkMode: string; retryLimit: number },
   at: string,
 ): Promise<boolean> {
-  const attached = await db.insert(freeWorkflowStates).values({
-    taskId, selectedReviewerId: run.reviewerId, reviewArmed: true,
-    reviewCheckMode: run.checkMode, reviewRetryLimit: run.retryLimit,
-    reviewNote: null, reviewRunId: run.id, updatedAt: at,
-  }).onConflictDoUpdate({
-    target: freeWorkflowStates.taskId,
-    set: { reviewArmed: true, reviewRunId: run.id, updatedAt: at },
-    setWhere: eq(freeWorkflowStates.reviewArmed, false),
-  }).returning({ taskId: freeWorkflowStates.taskId });
+  const slot = {
+    selectedReviewerId: run.reviewerId, reviewArmed: true, reviewCheckMode: run.checkMode,
+    reviewRetryLimit: run.retryLimit, reviewNote: null, reviewRunId: run.id, updatedAt: at,
+  };
+  const attached = await db.insert(freeWorkflowStates).values({ taskId, ...slot })
+    .onConflictDoUpdate({
+      target: freeWorkflowStates.taskId,
+      set: slot,
+      setWhere: eq(freeWorkflowStates.reviewArmed, false),
+    }).returning({ taskId: freeWorkflowStates.taskId });
   return attached.length > 0;
 }
 
