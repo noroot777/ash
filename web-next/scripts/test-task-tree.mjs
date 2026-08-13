@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { buildTaskTree, orderedTopLevelTasks, previewTasksByAge } from "../src/workspace/taskTreeModel.ts";
+import { advanceHiddenReveal, buildTaskTree, orderedTopLevelTasks, previewTasksByAge } from "../src/workspace/taskTreeModel.ts";
 
 function task(id, mode, {
   pinnedAt = null,
@@ -85,5 +85,12 @@ const allOld = previewTasksByAge([
 ], now);
 assert.deepEqual(allOld.visible.map((row) => row.id), ["latest"]);
 assert.deepEqual(allOld.hidden.map((row) => row.id), ["older", "oldest"]);
+
+// 选中藏起来的旧任务只自动展开一次；同一条上点收起后不能再被顶开。
+assert.deepEqual(advanceHiddenReveal(null, "single:old"), { lastKey: "single:old", reveal: true });
+assert.deepEqual(advanceHiddenReveal("single:old", "single:old"), { lastKey: "single:old", reveal: false });
+assert.deepEqual(advanceHiddenReveal("single:old", null), { lastKey: null, reveal: false });
+assert.deepEqual(advanceHiddenReveal(null, "single:old"), { lastKey: "single:old", reveal: true });
+assert.deepEqual(advanceHiddenReveal("single:old", "single:older"), { lastKey: "single:older", reveal: true });
 
 console.log("task tree grouping tests passed");

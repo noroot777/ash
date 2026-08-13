@@ -24,6 +24,7 @@
     "test:tool-summary": "node --experimental-strip-types scripts/test-tool-summary.mjs",
     "test:duet-timeline": "node --experimental-strip-types scripts/test-duet-timeline.mjs",
     "test:task-tree": "node --experimental-strip-types scripts/test-task-tree.mjs",
+    "test:task-tree-preview": "node scripts/test-task-tree-preview.mjs",
     "test:spread-filter": "node --experimental-strip-types scripts/test-spread-filter.mjs",
     "test:notes-filter": "node --experimental-strip-types scripts/test-notes-filter.mjs",
     "test:workspace-history": "node --experimental-strip-types scripts/test-workspace-history.mjs",
