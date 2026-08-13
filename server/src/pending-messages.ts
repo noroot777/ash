@@ -18,6 +18,7 @@
 // (`delivering_since`,行本身仍是 pending),而不是提前把状态改成 sent。
 import { and, eq, isNotNull, isNull } from "drizzle-orm";
 import type { AgentType, ScheduledMessageMode } from "@harness/shared";
+import { bus } from "./bus.js";
 import { db } from "./db/index.js";
 import { scheduledMessages, tasks } from "./db/schema.js";
 import { continueTask } from "./orchestrator.js";
@@ -26,6 +27,14 @@ import { appendTaskTimeline } from "./task-timeline.js";
 import { id, now } from "./util.js";
 
 type Row = typeof scheduledMessages.$inferSelect;
+
+// 托盘变了就吱一声(入队 / 真的发出去 / 取消)。**每一处改动 status 的地方都得叫它**:
+// 前端托盘不该再从任务状态跃迁里反推自己该不该少一行 —— 排队消息发出去的那一瞬间
+// 任务立刻又回到 running,那个空档前端常常一次都观察不到,托盘就会挂着一条早已进了
+// 会话的「排队中」。租约变化(deliveringSince)不用发:行还是 pending,托盘不变。
+export function publishPendingMessages(taskId: string): void {
+  bus.publish({ type: "task.pendingMessages", taskId });
+}
 
 // 落一条待发送消息(排队/定时同一张表,见文件头)。**入队的单点**:`/reply` 的正常
 // 排队路径、以及「立刻发却被单飞锁挡回」的兜底都走它,免得两处各拼一份 row。
@@ -58,6 +67,7 @@ export async function enqueueMessage(input: {
     deliveringSince: null,
   };
   await db.insert(scheduledMessages).values(row);
+  publishPendingMessages(row.taskId);
   return row;
 }
 
@@ -125,6 +135,7 @@ export async function cancelPendingMessage(message: Row, reason: string): Promis
     .update(scheduledMessages)
     .set({ status: "canceled", sentAt: null, deliveringSince: null })
     .where(eq(scheduledMessages.id, message.id));
+  publishPendingMessages(message.taskId);
   const label = message.mode === "queued" ? "排队消息" : "定时消息";
   const when = message.mode === "queued" ? "" : `（原定 ${message.sendAt}）`;
   // 原文必须一起留下:这条消息取消之后就从托盘里消失了,不把用户打的字抄进时间线,
@@ -169,11 +180,12 @@ export async function beginDelivery(messageId: string): Promise<boolean> {
 
 // 原话已经进会话了,这才落 sent。用 status='pending' 兜一道:等待期间用户手动取消过的
 // 消息不该被这一步复活。
-async function markSent(messageId: string): Promise<void> {
+async function markSent(message: Row): Promise<void> {
   await db
     .update(scheduledMessages)
     .set({ status: "sent", sentAt: now(), deliveringSince: null })
-    .where(and(eq(scheduledMessages.id, messageId), eq(scheduledMessages.status, "pending")));
+    .where(and(eq(scheduledMessages.id, message.id), eq(scheduledMessages.status, "pending")));
+  publishPendingMessages(message.taskId);
 }
 
 // 开机时清空所有租约(startScheduler 在第一次 tick 之前调)。**不需要超时启发式**:
@@ -221,7 +233,7 @@ async function deliverWhenIdle(message: Row, options: ReturnType<typeof delivery
       ...options,
       onDelivered: async () => {
         delivered = true;
-        await markSent(message.id);
+        await markSent(message);
       },
     });
     if (!started) await abortDelivery(message);
@@ -271,7 +283,7 @@ export async function deliverPendingMessages(taskId?: string): Promise<void> {
             throwOnTeamUnavailable: true,
             onDelivered: async () => {
               delivered = true;
-              await markSent(m.id);
+              await markSent(m);
             },
           });
           if (!started) await abortDelivery(m); // 理论上团队路径不会被挡回,租约也不留悬

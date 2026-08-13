@@ -30,7 +30,7 @@ import { resolveGate } from "./duet/gates.js";
 import { taskCommits } from "./git.js";
 import { continueTask, resumeOrRunTask, runTask } from "./orchestrator.js";
 import { RUNS_DIR } from "./paths.js";
-import { enqueueMessage } from "./pending-messages.js";
+import { enqueueMessage, publishPendingMessages } from "./pending-messages.js";
 import { isOvertaken, queueBlockers, repackQueue, tailOrder } from "./queues.js";
 import { confirmDone, stopTask } from "./runs.js";
 import { advanceQueue } from "./scheduler.js";
@@ -521,6 +521,7 @@ api.delete("/scheduled-messages/:mid", async (c) => {
   // 被它复活(见 pending-messages.ts 的租约一节)。
   await db.update(scheduledMessages).set({ status: "canceled", deliveringSince: null })
     .where(eq(scheduledMessages.id, mid));
+  publishPendingMessages(m.taskId);
   return c.json({ canceled: true });
 });
 
