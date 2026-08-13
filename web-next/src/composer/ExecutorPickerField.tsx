@@ -25,11 +25,9 @@ import {
  * 的一个取值。
  *
  * **一次选择只回调一次**：选中一行同时决定「派给谁」和「模型/智能水平要不要清」，
- * 所以两者一起从 `onChange` 交出去。以前是 onChange + onOverrideChange 两发，落在
- * 同一 tick 里；消费方只要从 props 上的旧值展开（`{...draft, model}`），后一发就会
- * 把前一发刚选好的执行器盖回旧值——现象是「选了 grok，模型换成了 grok-4.5，智能体
- * 却弹回 codex」。TeamPresetEditor 和工作流站点各自用一个 ref 兜过这个坑，说明是
- * 形状不对而不是消费方不小心，于是收敛成一发。
+ * 两者必须一起从 `onChange` 交出去。拆成两发会坏在消费方的常规写法上：从 props 上的
+ * 旧值展开（`{...draft, model}`）时，同一 tick 里的后一发会把前一发刚选好的执行器
+ * 盖回旧值。
  */
 export function ExecutorPickerField({
   label,

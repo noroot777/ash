@@ -8,12 +8,9 @@ import { api } from "./api.ts";
  * 「CLI 官方账号」那一块的模型候选。跟 provider 的 `/models` 探测(见 modelCatalog.ts)
  * 是同一个套路的另一半:全页共享一份缓存,多个选择器同时打开只发一次请求。
  *
- * 为什么不再直接读 `CLI_MODEL_PRESETS`:那张表是 harness 发版时抄下来的快照,而各家
- * CLI 上新模型跟 harness 发版毫无关系 —— grok 4.6 发布后本机 CLI 早就能用了,下拉框里
- * 却只有 4.5。现在候选来自服务端现问 CLI 的结果(`grok models` 之类),快照只当兜底。
- *
- * 前端仍然 import 那张快照:**首帧不空**。请求在飞的那几百毫秒里先拿快照顶上,总比
- * 一个空下拉框强;拿到真结果就整体替换(而不是并集 —— 已下线的模型不该继续列)。
+ * 候选来自服务端现问 CLI 的结果,`CLI_MODEL_PRESETS` 那份发版快照只当兜底。仍然
+ * import 它是为了**首帧不空**:请求在飞的那几百毫秒里先拿快照顶上,总比一个空下拉框强;
+ * 拿到真结果就**整体替换**(而不是并集 —— 已下线的模型不该继续列)。
  */
 const cache = new Map<AgentType, CliModelCatalog>();
 const requests = new Map<AgentType, Promise<CliModelCatalog>>();

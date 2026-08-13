@@ -522,10 +522,16 @@ try {
   const roles = ["single", "lead", "worker", "reviewer"];
   for (const role of roles) {
     let executors = emptyComposerExecutorConfigs();
-    executors = setComposerExecutorProfile(executors, role, "codex@local");
+    // 换执行器时选择器算出来的覆盖就是这个空对象(= 跟随执行器);这里钉的是它**整份替换**
+    // 已有的 model/effort,而不是并进去 —— 后者正是「选了执行器又被旧值盖回去」那个 bug。
+    const follow = { model: "", effort: "" };
+    executors = setComposerExecutorProfile(executors, role, "codex@local", follow);
     executors = patchComposerExecutor(executors, role, { model: "gpt-5.6-sol", effort: "ultra" });
-    executors = setComposerExecutorProfile(executors, role, "claude@ccb");
+    executors = setComposerExecutorProfile(executors, role, "claude@ccb", follow);
     assert.deepEqual(executors[role], { profile: "claude@ccb", model: "", effort: "" });
+    // 选回同一个执行器并带上模型时,这份覆盖要原样留住(不能被当成"换人"清掉)。
+    executors = setComposerExecutorProfile(executors, role, "claude@ccb", { model: "opus", effort: "high" });
+    assert.deepEqual(executors[role], { profile: "claude@ccb", model: "opus", effort: "high" });
   }
 
   const registeredProfiles = [

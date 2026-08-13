@@ -212,8 +212,7 @@ export function AgentModelPicker({
                     {section.group.status === "failed" && <Warning size={10} aria-hidden="true" />}
                     {section.group.note}
                   </small>
-                  {/* 「现问一次」。CLI 上新模型跟 harness 发版无关，没有这个按钮就只能等下次发版。
-                      onMouseDown 拦掉是因为面板点外部即关：不拦的话按下去的瞬间面板就没了。 */}
+                  {/* onMouseDown 拦掉是因为面板点外部即关：不拦的话按下去的瞬间面板就没了。 */}
                   {section.group.onRefresh && (
                     <button
                       type="button"

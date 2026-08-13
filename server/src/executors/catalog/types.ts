@@ -86,11 +86,8 @@ export type CliParser = (ctx: CliParserContext) => AsyncIterable<AgentEvent>;
 
 /**
  * 「问这个 CLI 自己现在有哪些模型」的命令。缺省 = 该 CLI 没有(或还没实测出)清单命令,
- * 模型候选只能退回 shared 的 `CLI_MODEL_PRESETS` 这份发版快照。
- *
- * 有它的意义:各家上新模型跟 harness 发版毫无关系,硬编码清单必然滞后(grok 4.6 上线时
- * 预设里还是 4.5)。填了这个字段,`GET /agents/models` 就会现问 CLI 并缓存,界面上的
- * 「刷新」也才有东西可刷。
+ * 模型候选只能退回 shared 的 `CLI_MODEL_PRESETS` 这份发版快照(必然滞后)。填了它,
+ * `GET /agents/models` 才会现问 CLI,界面上的「刷新」也才有东西可刷。
  *
  * **只在本机实测过输出格式再填**:解析器按猜的写,失败是静默的(解析出空数组 → 悄悄
  * 退回快照),比不填更难查。没实测就把线索写进 `notes`。

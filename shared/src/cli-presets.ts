@@ -46,8 +46,8 @@ export interface CliModelCatalog {
  * 哪些 CLI 已有实测过的清单查询命令。
  *
  * 前端首帧 / 接口还没回 / 接口挂了时靠它决定要不要画「刷新」按钮;权威答案仍是
- * 服务端现问 CLI 后返回的 `probeSupported`。必须与 server catalog 里填了 `models`
- * 的 type 对齐(目前 grok / pi)。
+ * 服务端现问 CLI 后返回的 `probeSupported`。与 server catalog 里填了 `models` 的
+ * type 是否一致,由 `server/scripts/test-cli-models.ts` 断言,不靠自觉。
  */
 export const CLI_MODEL_PROBE_TYPES: ReadonlySet<AgentType> = new Set(["grok", "pi"]);
 
@@ -56,10 +56,8 @@ export const CLI_MODEL_PROBE_TYPES: ReadonlySet<AgentType> = new Set(["grok", "p
 // 全键 Record 是刻意的:新类型不填就编译不过,免得漏登记后下拉框静默空着。
 // 空数组 = 该 CLI 的模型别名还没实测(用户仍可在 profile 里手填任意模型名)。
 //
-// **这张表是兜底,不是权威**:各家 CLI 发新模型的节奏与 harness 的发版节奏无关,
-// 硬编码的清单必然滞后(grok 4.6 上线时这里还写着 4.5,就是这么发现的)。CLI 自己
-// 有清单命令的(`grok models` 等,见 spec 的 `models` 字段),harness 会现问 CLI 并
-// 缓存,前端也给了「刷新」入口;探不到才退回这里。
+// **这张表是兜底,不是权威**:CLI 自己有清单命令的(见 spec 的 `models` 字段),harness
+// 会现问 CLI 并缓存,前端也给了「刷新」入口;探不到才退回这里。
 export const CLI_MODEL_PRESETS: Record<AgentType, readonly string[]> = {
   claude: ["opus", "sonnet", "haiku", "fable"],
   codex: ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4"],
@@ -99,8 +97,6 @@ export const CLI_MODEL_PRESETS: Record<AgentType, readonly string[]> = {
   // 唯一有出处的取值是全局设置页的示例 `traecli -c model.name=kimi-k2`;手填照样接受。
   trae: [],
   // 2026-08-13 登录态 `grok models`(v1.0.3):grok-4.6(默认) + grok-4.5。
-  // 这份只是**离线兜底**——CLI 装着且能查询时,实际候选来自 `grok models` 的实时探测
-  // (server/src/executors/model-probe.ts),新模型上线不必等这里被人想起来改。
   grok: ["grok-4.6", "grok-4.5"],
   kimi: ["kimi-code/k3", "kimi-code/kimi-for-coding", "kimi-code/kimi-for-coding-highspeed"],
   cursor: ["auto", "grok-4.5", "composer-2.5", "claude-sonnet-5", "claude-opus-5", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gemini-3.1-pro", "gemini-3.6-flash"],

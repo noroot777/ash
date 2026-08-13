@@ -1,9 +1,6 @@
-// 「这个 CLI 现在有哪些模型」——现问 CLI,而不是只读发版时抄下的快照。
-//
-// 起因(2026-08-13):xAI 发了 grok-4.6,本机 `grok models` 早就列出来了,harness 的
-// 下拉框里却还是 grok-4.5 —— 因为候选唯一的来源是 `shared/src/cli-presets.ts` 里
-// 硬编码的 CLI_MODEL_PRESETS。那张表是**发版快照**,而各家上新模型跟 harness 发版
-// 毫无关系,所以它必然滞后,且滞后多久取决于「有没有人想起来改它」。
+// 「这个 CLI 现在有哪些模型」——现问 CLI,而不是只读发版时抄下的快照
+// (`shared/src/cli-presets.ts` 的 CLI_MODEL_PRESETS:各家上新模型跟 harness 发版
+// 毫无关系,那张表必然滞后,且滞后多久取决于「有没有人想起来改它」)。
 //
 // 三条设计约束,都来自这个系统里已有的先例:
 //  ① **只问,不跑**:探测走 spec.models 那条只读查询命令(`grok models` 之类),绝不
@@ -15,6 +12,7 @@
 //
 // 为什么不落库:清单是**本机 CLI 当下的事实**,不是用户配置。落库要额外处理「换了
 // CLI 版本 / 换了登录账号 / 卸载了」的失效,而重启后重探一次的代价只有几百毫秒。
+
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type { AgentType } from "@harness/shared";
