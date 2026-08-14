@@ -69,12 +69,12 @@
     "test:mcp-handoff": "tsx scripts/test-mcp-handoff.ts",
     "test:duet-gate-attachments": "tsx scripts/test-duet-gate-attachments.ts",
     "test:terminal": "tsx scripts/test-terminal.ts",
-    "test:win-launch": "tsx scripts/test-win-launch.ts"
+    "test:win-launch": "tsx scripts/test-win-launch.ts",
+    "test:no-libsql": "tsx scripts/test-no-libsql.ts"
   },
   "dependencies": {
     "@harness/shared": "*",
     "@hono/node-server": "^1.13.7",
-    "@libsql/client": "^0.14.0",
     "drizzle-orm": "^0.38.3",
     "hono": "^4.6.14",
     "nanoid": "^5.0.9",

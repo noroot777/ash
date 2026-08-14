@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Note, NoteSearchHit, TaskSearchHit } from "@harness/shared";
-import { createClient } from "@libsql/client";
+import { createClient } from "../src/db/node-sqlite-client.js";
 import { eq } from "drizzle-orm";
 import { Hono } from "hono";
 
@@ -12,7 +12,7 @@ const dbFile = join(root, "harness.db");
 process.env.HARNESS_DB = dbFile;
 
 // Start from the old single-link shape so this test also pins the startup migration.
-const legacy = createClient({ url: `file:${dbFile}` });
+const legacy = createClient({ url: dbFile });
 await legacy.executeMultiple(`
   CREATE TABLE notes (
     id TEXT PRIMARY KEY, project_id TEXT NOT NULL, body TEXT NOT NULL,

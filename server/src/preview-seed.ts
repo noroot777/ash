@@ -26,7 +26,7 @@
 // 执行器（本项目日常用的那几个正是）在预览里起不来 CLI —— 那就等于没播种。
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
-import { createClient, type Client } from "@libsql/client";
+import { createClient, type Client } from "./db/node-sqlite-client.js";
 import { dbClient } from "./db/index.js";
 import { resolveHarnessDbFile } from "./db/path.js";
 
@@ -197,7 +197,7 @@ export async function seedPreviewDb(sourceFile: string, mode: SeedMode = "snapsh
     return;
   }
   const tables = mode === "snapshot" ? [...CONFIG_TABLES, ...SNAPSHOT_TABLES] : CONFIG_TABLES;
-  const source = createClient({ url: `file:${src}` });
+  const source = createClient({ url: src });
   try {
     const copied = await copyTables(source, dbClient, tables);
     const summary = Object.entries(copied).map(([table, n]) => `${table} ${n}`).join("、");

@@ -1,15 +1,33 @@
-import { drizzle } from "drizzle-orm/libsql";
-import { createClient } from "@libsql/client";
+import * as driverCore from "drizzle-orm/libsql/driver-core";
+import type { LibSQLDatabase } from "drizzle-orm/libsql/driver-core";
+import { createClient } from "./node-sqlite-client.js";
 import * as schema from "./schema.js";
 import { ensureHarnessDbDir, resolveHarnessDbFile } from "./path.js";
 
 const dbFile = resolveHarnessDbFile();
 ensureHarnessDbDir(dbFile);
 
-// libsql: N-API prebuilt binary (no node-gyp), ABI-stable across Node versions.
-const client = createClient({ url: `file:${dbFile}` });
+// Node 自带的 `node:sqlite`，零原生编译（Windows 不需要 Visual Studio Build Tools）。
+// 外壳把它伪装成 libsql 的 Client，drizzle 那一侧的用法一行不用改；细节见 node-sqlite-client.ts。
+// 路径直接给裸路径：`file:C:\...` 在 Windows 上不是合法 URL。
+const client = createClient({ url: dbFile });
 
-export const db = drizzle(client, { schema });
+// **不能 `import { drizzle } from "drizzle-orm/libsql"`**：那个入口第一行就是
+// `import { createClient } from "@libsql/client"`（静态的、无条件的），只要引它，那个原生
+// 模块就会被真的加载——换掉驱动的意义（Windows 上不装 Visual Studio Build Tools 也能跑）
+// 当场归零。`driver-core` 是同一份实现里不碰 @libsql/client 的那半：`drizzle(client, cfg)`
+// 传对象时做的事就是直接调它的 `construct`。回归测试 `test:no-libsql` 钉住这条。
+//
+// 两处类型缝合，一并说明：
+// ① `construct` 只存在于 driver-core 的**实现**里，drizzle 没把它写进 .d.ts，所以签名在这
+//    自己声明一遍——照 `drizzle()` 的返回类型写，`db` 的 schema 类型一点不丢。
+// ② client 转 never：libsql 的 Client 类型声明 blob 是 ArrayBuffer，node:sqlite 给的是
+//    Uint8Array。drizzle 两边都当二进制透传，运行时无差别，只有类型咬不住。
+const construct = (driverCore as unknown as {
+  construct(client: unknown, config: { schema: typeof schema }): LibSQLDatabase<typeof schema>;
+}).construct;
+
+export const db = construct(client as never, { schema });
 
 // 原始连接。日常一律用上面的 `db`（drizzle，有类型）；只有「按运行时拿到的列名搬表」
 // 这种拿不到静态类型的活儿才需要它（preview-seed.ts）。

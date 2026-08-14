@@ -14,7 +14,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createClient } from "@libsql/client";
+import { createClient } from "../src/db/node-sqlite-client.js";
 
 const root = mkdtempSync(join(tmpdir(), "harness-preview-seed-"));
 // preview-seed 会 import db/index.js（模块加载时就打开库）。先把库指到临时目录，
@@ -53,8 +53,8 @@ check("快照会连 Codex 累计基线一起搬",
 check("快照会带上自由工作流实际记录",
   ["free_workflow_states", "free_workflow_events", "free_review_runs", "free_review_rounds"].every((t) => (SNAPSHOT_TABLES as readonly string[]).includes(t)), true);
 
-const source = createClient({ url: `file:${join(root, "live.db")}` });
-const dest = createClient({ url: `file:${join(root, "preview.db")}` });
+const source = createClient({ url: join(root, "live.db") });
+const dest = createClient({ url: join(root, "preview.db") });
 
 try {
   // 主库：设置有货，运行态也有货。
