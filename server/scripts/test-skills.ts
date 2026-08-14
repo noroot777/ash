@@ -188,9 +188,13 @@ const merged = join(root, ".worktrees", "gone-after-merge");
 mkdirSync(merged, { recursive: true });
 calibrateSkills("claude", merged, [], ["compact"]);
 rmSync(join(root, ".worktrees"), { recursive: true, force: true }); // 验收合并后连 .worktrees 一起清
-const stillHere = join(root, "live-dir");
-mkdirSync(stillHere, { recursive: true });
-calibrateSkills("claude", stillHere, [ONLY_IN_INIT], []); // 任意一次新校准都会重写整份 JSON
+// 触发重写的这次校准**必须落在 root 之外**:认亲是按前缀取最新的一条(skills.ts
+// calibrationFor),记在 `<root>/*` 底下的话它天然比上提来的那条新,会把上提结果盖掉 ——
+// 于是这条测试就只在「两次校准撞进同一毫秒」时才绿(macOS 上约 5/6,Windows 慢得多,
+// 基本常红)。它的作用只是「任意一次新校准都会重写整份 JSON」,落在哪无所谓。
+const stillHere = mkdtempSync(join(tmpdir(), "harness-skills-other-"));
+process.on("exit", () => rmSync(stillHere, { recursive: true, force: true }));
+calibrateSkills("claude", stillHere, [ONLY_IN_INIT], []);
 forgetLoadedCalibrations(); // = server 重启:只剩盘上那份
 list = listSkills({ agentType: "claude", cwd: root });
 assert.ok(find(list, "compact"), "worktree 清掉后,那次校准要上提到还活着的祖先目录上继续认亲");
