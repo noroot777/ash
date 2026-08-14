@@ -561,7 +561,7 @@ export function TeamView({
         notify={notify}
       />
       {reviewOpen ? (
-        <TeamReviewWorkspace lead={task} workers={workers} onClose={() => changeReviewOpen(false)} onTaskUpdated={onTaskUpdate} indicatorForTask={indicatorForTask} onReadTask={markTaskRead} notify={notify} />
+        <TeamReviewWorkspace lead={task} workers={workers} onTaskUpdated={onTaskUpdate} indicatorForTask={indicatorForTask} onReadTask={markTaskRead} notify={notify} />
       ) : openFilePath ? (
         <FileViewer
           taskId={task.id}

@@ -1,10 +1,11 @@
-/* 验收台外壳:普通任务(single)和团队(team)共用同一副形状——顶栏一行放标题、验收动作和
-   返回,主体一列只铺这一屏独有的东西(改动本身)。两边的选择器并排写在这一处,拆成两份迟早
-   只改一边就漂开了;team-review.css 那边只留团队独有的部分(可折叠的执行者记录卡等)。 */
+/* 验收台外壳:普通任务(single)和团队(team)共用同一副形状——顶栏一行放标题和验收动作,
+   主体一列只铺这一屏独有的东西(改动本身);返回口只在任务/团队顶栏留一个。两边的选择器并排
+   写在这一处,拆成两份迟早只改一边就漂开了;team-review.css 那边只留团队独有的部分(可折叠的
+   执行者记录卡等)。 */
 .single-review-workspace,.team-review-workspace { display:flex; min-height:0; flex:1; flex-direction:column; background:var(--canvas); }
 .single-review-subbar,.team-review-subbar { display:flex; min-height:52px; flex:0 0 auto; flex-wrap:wrap; align-items:center; gap:10px; border-bottom:.5px solid var(--line); background:var(--panel); padding:8px 16px; }
 /* 验收动作提到顶栏:它是这一屏唯一的动作,不该跟着卡片一起被折叠收走。失败详情排在
-   整行操作之后再换行铺满顶栏下沿，确保后写在 DOM 里的「返回」仍和验收按钮留在同一行。 */
+   整行操作之后再换行铺满顶栏下沿,不去挤验收按钮那一行。 */
 .single-review-subbar .team-accept-failure,.team-review-subbar .team-accept-failure { order:1; flex:1 0 100%; margin:0; }
 .single-review-subbar > div:first-child,.team-review-subbar > div:first-child { min-width:0; flex:1; }
 .single-review-subbar b,.single-review-subbar small,.team-review-subbar b,.team-review-subbar small { display:block; }
