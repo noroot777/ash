@@ -335,6 +335,39 @@ export function windowsPathRejection(absPath: string): string | null {
   return null;
 }
 
+// ── Windows 长路径(MAX_PATH) ──────────────────────────────────────────────
+//
+// harness 的 worktree 落在 `<repo>\.worktrees\<taskId>`,比主仓深两层,agent 进去
+// 再装一遍 node_modules —— 260 字符的老上限在这条链路上是**最容易先撞到的一堵墙**。
+// 要点是两个开关缺一不可,而且第二个经常被漏:
+//  · 系统侧 `HKLM\SYSTEM\CurrentControlSet\Control\FileSystem\LongPathsEnabled=1`
+//  · git 侧 `core.longpaths=true` —— Git for Windows 走自带的 msys 运行时,**不看**
+//    系统开关,只看这个配置。只开注册表的话 `git worktree add` 照样报 Filename too long。
+// Node 自己给 fs 调用加 `\\?\` 前缀,基本不受 260 限制,所以服务端只需要管 git 这侧。
+//
+// 探测放在 `scripts/setup.mjs`(那里用户能当场照着命令改);这里只在 git **已经报错**
+// 时补一句人话 —— 不预先拦截,因为路径长不等于一定失败,误判成硬失败比报错难懂更贵。
+
+const WINDOWS_MAX_PATH = 260;
+/** 超过这个长度就当「深到该提一句」——留 60 字符给 worktree 里面的相对路径。 */
+const LONG_PATH_ALERT = WINDOWS_MAX_PATH - 60;
+
+/**
+ * git 操作失败时,判断要不要补一段长路径的排查提示。非 Windows 一律 null。
+ * `stderr` 明说 too long 时是确定的;只是路径本身够深时也给,但措辞留有余地。
+ */
+export function windowsLongPathHint(targetPath: string, stderr = ""): string | null {
+  if (!IS_WINDOWS) return null;
+  const tooLong = /too long|ENAMETOOLONG|文件名(过|太)长/i.test(stderr);
+  if (!tooLong && targetPath.length <= LONG_PATH_ALERT) return null;
+  return [
+    `Windows 的 MAX_PATH 是 ${WINDOWS_MAX_PATH},这条路径已经 ${targetPath.length} 字符 —— 深路径是这里最常见的失败原因。两个开关缺一不可:`,
+    "  · 管理员 PowerShell:Set-ItemProperty 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\FileSystem' LongPathsEnabled 1",
+    "  · git config --global core.longpaths true",
+    "改完要重开终端和 harness;还不行就把项目挪到更短的路径下(比如 C:\\code\\<项目>)。",
+  ].join("\n");
+}
+
 // ── PATH 拆分 ──────────────────────────────────────────────────────────────
 
 /**

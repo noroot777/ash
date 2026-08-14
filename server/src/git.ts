@@ -5,7 +5,7 @@ import { homedir } from "node:os";
 import { mkdirSync, statSync, existsSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import type { ProjectHealth } from "@harness/shared";
 import { DATA_DIR } from "./paths.js";
-import { IS_WINDOWS } from "./platform.js";
+import { IS_WINDOWS, windowsLongPathHint } from "./platform.js";
 import { assertNotPreviewInstance } from "./preview-instance.js";
 import { withRepoLock } from "./repo-lock.js";
 
@@ -332,7 +332,10 @@ async function prepareWorktreeLocked(
     await exec("git", args);
   } catch (err) {
     const stderr = (err as { stderr?: string }).stderr?.trim() || (err as Error).message;
-    throw new Error(`git worktree add 失败：${stderr}`);
+    // Windows 上这里最常见的失败是撞 MAX_PATH,而 git 只会回一句 "Filename too long",
+    // 不说该去开哪两个开关 —— 补上,否则用户只能对着这句干瞪眼(见 platform.ts)。
+    const hint = windowsLongPathHint(path, stderr);
+    throw new Error(`git worktree add 失败：${stderr}${hint ? `\n${hint}` : ""}`);
   }
   return { path, branch, isWorktree: true, fresh: !restore };
 }

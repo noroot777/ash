@@ -13,6 +13,8 @@
 //   2. file-browser.resolveTarget：大小写不同的绝对路径要放行，兄弟目录要拒
 //   3. local-open-routes.resolveAllowedLocalPath：同上，外加白名单根的大小写
 //   4. 真实存在的 8.3 短名目录：realpath 展不开它，必须在界内也照拒
+//   5. 长路径提示：git 撞 MAX_PATH 时补的那段排查说明（不是安全边界，但同属
+//      「Windows 上一段路径能不能落地」，而且同住 platform.ts）
 // 跑：npm -w server run test:path-boundary
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
@@ -47,7 +49,7 @@ try {
   const caseInsensitiveFs = existsSync(join(stage, "repo", "src", "app.ts"));
   const lower = (p: string) => p.replace(`${stage}${"/"}Repo`, `${stage}${"/"}repo`);
 
-  const { boundaryKey, isInsidePath, windowsPathRejection } = await import("../src/platform.js");
+  const { boundaryKey, isInsidePath, windowsLongPathHint, windowsPathRejection } = await import("../src/platform.js");
 
   // ── 1. 纯函数 ──────────────────────────────────────────────────────────────
   assert.equal(boundaryKey("C:\\Repo\\Src"), "c:\\repo\\src", "Windows 上比较前统一小写");
@@ -145,8 +147,24 @@ try {
     "短名 + 文件不存在，仍然按越界报而不是 404",
   );
 
+  // ── 5. 长路径提示（MAX_PATH）─────────────────────────────────────────────
+  // 不是安全边界，是**同一个平台上的另一条路径长度约束**：git 只会回一句
+  // "Filename too long"，不说该开哪两个开关，harness 得替它补上。这里钉的是
+  // 「什么时候补、补的内容里有没有那两条命令」——开发机上永远走不到真分支。
+  const shortPath = "C:\\code\\p\\.worktrees\\abc123";
+  const deepPath = `C:\\Users\\someone\\Documents\\${"nested\\".repeat(30)}repo\\.worktrees\\abcdefgh`;
+  assert.equal(windowsLongPathHint(shortPath, "fatal: 'x' already exists"), null, "短路径 + 无关报错不该乱给提示");
+  const byError = windowsLongPathHint(shortPath, "error: unable to create file …: Filename too long");
+  assert.ok(byError, "git 明说 too long 时,路径再短也要给提示");
+  const byLength = windowsLongPathHint(deepPath, "fatal: 说不清的失败");
+  assert.ok(byLength, "路径本身已经够深时,任何失败都值得提一句");
+  assert.ok(byLength.includes(String(deepPath.length)), "要报出这条路径到底多长");
+  for (const needle of ["LongPathsEnabled 1", "core.longpaths true", "260"]) {
+    assert.ok(byError.includes(needle), `提示里必须有 ${needle}`);
+  }
+
   console.log(
-    `✅ 路径边界（大小写归一 / 兄弟目录 / UNC / 8.3）全部通过${caseInsensitiveFs ? "" : "（本机文件系统区分大小写，端到端的大小写用例已跳过）"}`,
+    `✅ 路径边界（大小写归一 / 兄弟目录 / UNC / 8.3 / 长路径提示）全部通过${caseInsensitiveFs ? "" : "（本机文件系统区分大小写，端到端的大小写用例已跳过）"}`,
   );
 } finally {
   rmSync(stage, { recursive: true, force: true });

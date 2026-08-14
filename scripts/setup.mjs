@@ -19,7 +19,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { NPM, NPM_SPAWN_OPTS } from "./npm.mjs";
-import { IS_WINDOWS, which } from "./platform.mjs";
+import { IS_WINDOWS, which, windowsLongPaths } from "./platform.mjs";
 
 const REPO = fileURLToPath(new URL("..", import.meta.url));
 process.chdir(REPO);
@@ -72,6 +72,21 @@ else bad("没有 npm");
 const gitVersion = run("git", ["--version"]);
 if (gitVersion.status === 0) ok(`git ${gitVersion.stdout.trim().split(/\s+/)[2] ?? ""}`);
 else bad("没有 git(worktree 隔离、审查 diff、验收合并全靠它)");
+
+// Windows 的 MAX_PATH=260:worktree 落在 `<repo>\.worktrees\<taskId>`,里面再装一遍
+// node_modules,不开长路径的话 `git worktree add` 会以 "Filename too long" 收场。
+// 只警告不阻断 —— 路径够短的项目本来就不受影响,不该拦着人装。
+const longPaths = windowsLongPaths();
+if (longPaths?.registry && longPaths.git) {
+  ok("长路径已开(系统开关 + git core.longpaths)");
+} else if (longPaths) {
+  warn("长路径没开全,worktree 深路径可能撞 MAX_PATH(260)。缺哪条补哪条:");
+  if (!longPaths.registry) {
+    say("      管理员 PowerShell:Set-ItemProperty 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\FileSystem' LongPathsEnabled 1");
+  }
+  if (!longPaths.git) say("      git config --global core.longpaths true");
+  say("      两条改完要重开终端;项目路径本来就短的话可以先不管。");
+}
 
 if (fail) {
   say();

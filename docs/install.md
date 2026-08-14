@@ -137,6 +137,7 @@ HARNESS_URL = "http://localhost:4317"
 | 派任务立刻 ENOENT | 那个 CLI 没装,或不在 server 进程的 PATH 里(从 GUI 启动的进程 PATH 常常更短——用终端起服务) |
 | `npm install` 卡住/失败 | 网络或 registry;node-pty、libsql 都要下预编译产物 |
 | 「在本机打开文件」点了没反应 | `HARNESS_LOCAL_OPEN_ROOTS` 没设成他自己的路径 |
+| Windows 上建 worktree 报 `Filename too long` | 撞了 MAX_PATH(260)。两个开关缺一不可:管理员 PowerShell 里 `Set-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem' LongPathsEnabled 1`,再 `git config --global core.longpaths true`(Git for Windows 走自带 msys 运行时,**不看**系统开关)。`npm run setup` 会替你查这两条 |
 
 ---
 

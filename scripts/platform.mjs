@@ -69,6 +69,23 @@ export function powerShell(script) {
   return "";
 }
 
+/**
+ * Windows 长路径的两个开关(非 Windows 返回 null —— 那边没有 MAX_PATH 这回事)。
+ * 两个缺一不可，理由见 `server/src/platform.ts` 的「Windows 长路径」一节：
+ * 系统开关管 Win32 API，`core.longpaths` 管 Git for Windows 自带的 msys 运行时。
+ */
+export function windowsLongPaths() {
+  if (!IS_WINDOWS) return null;
+  const value = powerShell(`$ErrorActionPreference = 'SilentlyContinue'
+$v = (Get-ItemProperty -LiteralPath 'Registry::HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\FileSystem' -Name LongPathsEnabled).LongPathsEnabled
+[Console]::Out.WriteLine([string]$v)`);
+  // `git config --get` 在没配过时退出码非 0，capture 会吞成空串 —— 空串 = 没开。
+  return {
+    registry: value.trim() === "1",
+    git: /^true$/i.test(capture("git", ["config", "--get", "core.longpaths"]).trim()),
+  };
+}
+
 function uniquePids(text) {
   return [...new Set(text.split(/\s+/).map(Number).filter((n) => Number.isInteger(n) && n > 0))];
 }
