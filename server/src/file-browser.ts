@@ -5,6 +5,7 @@ import { basename, dirname, extname, join, relative, resolve, sep } from "node:p
 import { desc, eq } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { projects, sessions, tasks } from "./db/schema.js";
+import { isInsidePath, windowsPathRejection } from "./platform.js";
 import { expandHome, isGitRepo, symbolicBranch, worktreePathFor } from "./git.js";
 
 // 任务的「文件浏览」只读地看一眼这个任务实际在哪干活。**绝不能调 prepareWorktree**：
@@ -90,12 +91,17 @@ export async function taskFileRoot(taskId: string): Promise<WorkspaceRoot | null
  * 外面的软链就是现成的越狱通道。**「越界」和「不存在」必须分开报**：realpath 要求路径
  * 真实存在，而 agent 随时在删文件，树上一个过期条目点下去若是回「路径不在这个任务的工
  * 作目录里」，读起来像在指控用户越权，实际只是文件没了。
+ *
+ * 前缀比较一律走 platform.ts 的 isInsidePath：NTFS 大小写不敏感，`C:\Foo` 和 `c:\foo`
+ * 是同一个目录，裸 startsWith 在那边**既误拒**(大小写不同的合法路径)**又是绕过面**。
+ * UNC(`\\server\share`、`\\?\C:\`)和 8.3 短名则是另一类 —— 前缀比较根本盖不住,
+ * 单独由 windowsPathRejection 拒掉。
  */
 async function resolveInRoot(root: string, relPath: string): Promise<string> {
   const outside = () => Object.assign(new Error("路径不在这个任务的工作目录里"), { status: 400 });
   const rootAbs = resolve(root);
   const target = resolve(rootAbs, relPath || ".");
-  if (target !== rootAbs && !target.startsWith(rootAbs + sep)) throw outside();
+  if (!isInsidePath(rootAbs, target, sep)) throw outside();
 
   const realRoot = await realpath(rootAbs).catch(() => null);
   if (!realRoot) throw Object.assign(new Error("这个任务的工作目录已经不在了"), { status: 404 });
@@ -103,11 +109,13 @@ async function resolveInRoot(root: string, relPath: string): Promise<string> {
   if (!realTarget) {
     // 目标不存在：父目录仍在界内才算「文件没了」，否则连位置都是界外的，照越界报。
     const realParent = await realpath(dirname(target)).catch(() => null);
-    const inside = realParent && (realParent === realRoot || realParent.startsWith(realRoot + sep));
-    if (!inside) throw outside();
+    if (!realParent || !isInsidePath(realRoot, realParent, sep)) throw outside();
+    // 不存在 = realpath 没机会把 8.3 短名展开,只能拿原样的路径查。
+    if (windowsPathRejection(target)) throw outside();
     throw Object.assign(new Error("文件不存在"), { status: 404 });
   }
-  if (realTarget !== realRoot && !realTarget.startsWith(realRoot + sep)) throw outside();
+  if (!isInsidePath(realRoot, realTarget, sep)) throw outside();
+  if (windowsPathRejection(realTarget)) throw outside();
   return target;
 }
 
