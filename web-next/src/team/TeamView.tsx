@@ -222,7 +222,9 @@ function CuaResidualNotice({ taskId, status, onStatus, notify }: { taskId: strin
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const current = status?.current;
-  if (!current?.detected) return null;
+  // applicable === false：非 macOS，这套机制根本不存在，这块提示连同「强制清理」
+  // 按钮一起不该出现（detected 本来也会是 false，这一条是防御性的第二道）。
+  if (!current?.detected || current.applicable === false) return null;
   const kill = async () => {
     setBusy(true);
     try {

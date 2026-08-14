@@ -206,6 +206,9 @@ export type TeamCuaStatus = {
   taskId: string;
   current: {
     checkedAt: string;
+    // false = 这个平台上没有 computer-use 旁路会话这套机制（macOS 独有），
+    // 不是「查过、是干净的」。老服务端不带这个字段，按 true 处理。
+    applicable?: boolean;
     detected: boolean;
     processes: CuaProcess[];
     message: string;
