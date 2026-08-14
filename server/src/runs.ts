@@ -15,6 +15,11 @@ export type StopSettle = "canceled" | "paused";
 
 const handles = new Map<string, Set<Killable>>();
 const stopping = new Map<string, StopSettle>();
+// 「回合已占位、进程还没起来」时收到的冻结请求。这一段窗口里 `handles` 是空的、
+// `tasks.status` 也可能还停在上一轮的终态 —— 只有回合锁看得见它，所以分组暂停既杀不到
+// 也拦不住（第 1 轮审查 finding 1：pause 已经 200 返回，重试仍把 CLI 拉起来了）。
+// 记在这里，由起跑前的最后一道闸在 spawn 之前消费（turn-freeze.ts）。
+const startFreeze = new Map<string, StopSettle>();
 
 export function trackRun(taskId: string, h: Killable): void {
   let set = handles.get(taskId);
@@ -52,6 +57,31 @@ export function stopTask(taskId: string, settle: StopSettle = "canceled"): boole
 
 export function isCanceling(taskId: string): boolean {
   return stopping.has(taskId);
+}
+
+/**
+ * 冻结一个**正在起跑**的回合：已 claim、还没 spawn，所以没有 handle 可杀。
+ * 返回 false = 这个任务根本没有回合在起跑（调用方无事可做）。
+ *
+ * 标记只对当前这一回合有效：回合退出时由 releaseTurn 清掉，绝不留给下一轮
+ * （留下来就是「下一次运行刚起跑就被上一次的暂停冻掉」）。
+ */
+export function freezeStartingTurn(taskId: string, settle: StopSettle = "paused"): boolean {
+  if (!turns.has(taskId)) return false;
+  startFreeze.set(taskId, settle);
+  return true;
+}
+
+/** 起跑前的最后一道闸消费它：非 null = 这一轮必须在 spawn 之前撤回，并按这个落位结算。 */
+export function takeStartFreeze(taskId: string): StopSettle | null {
+  const s = startFreeze.get(taskId) ?? null;
+  startFreeze.delete(taskId);
+  return s;
+}
+
+/** 把「这一轮是被停的」记下来，供本回合的结算读取（撤回起跑用；杀进程走 stopTask）。 */
+export function markStopped(taskId: string, settle: StopSettle): void {
+  stopping.set(taskId, settle);
 }
 
 // Check-and-clear: the run loop calls this after a kill to decide how to settle
@@ -146,6 +176,9 @@ export function reclaimTurn(taskId: string, role: string): void {
 /** 回合结束：先放锁，再跑「等这一轮跑完」的回调（它们多半要立刻起下一轮）。 */
 export function releaseTurn(taskId: string): void {
   turns.delete(taskId);
+  // 起跑冻结标记只属于刚结束的这一回合（没被消费 = 那一轮已经自己结束了）。留着它，
+  // 下一次运行会在起跑前被上一次的暂停莫名冻掉。
+  startFreeze.delete(taskId);
   const waiting = afterTurn.get(taskId);
   if (!waiting) return;
   afterTurn.delete(taskId);

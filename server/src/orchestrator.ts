@@ -10,7 +10,7 @@ import { setTaskStatus } from "./status.js";
 import { trackRun, untrackRun, takeStopped, claimTurn, reclaimTurn, releaseTurn } from "./runs.js";
 import { consumeSingleRun, afterSettlement } from "./single-run.js";
 import { taskWorkspace } from "./task-workspace.js";
-import { resolveExecutorFor } from "./executors/index.js";
+import { resolveExecutorWithProfile } from "./executors/index.js";
 import type { RunHandle } from "./executors/types.js";
 import { detachedPathsFor } from "./executors/detached.js";
 import { sessionTargetKey } from "./executors/resume.js";
@@ -25,6 +25,7 @@ import { reviewProtocolFor, reviewReminderFor, verifyReminderFor } from "./revie
 import { peerNoticeFor } from "./peer-context.js";
 import { reconcileTurnBaseline, recordTurnBaseline } from "./turn-baseline.js";
 import { recordTurnStart } from "./turn-output.js";
+import { abortIfFrozen } from "./turn-freeze.js";
 import { freeReviewReminder } from "./free-workflow.js";
 import { nativeCliCommand, withSkillInvocation } from "./skills.js";
 import { initialTaskObjective, invitedTaskBrief } from "./invited-task-brief.js";
@@ -102,7 +103,7 @@ export async function runTask(taskId: string, opts: { turnHeld?: boolean } = {})
     // 也要记 —— 漏交卷最常发生在这一路,而 turn-baseline 只给真人续聊拍照。
     await recordTurnStart(taskId, ws.path);
     const agentType = (task.agentType as AgentType) ?? "claude";
-    const ex = await resolveExecutorFor({
+    const { executor: ex, profileId, profileFingerprint } = await resolveExecutorWithProfile({
       executorId: task.executorId,
       type: agentType,
       model: task.model,
@@ -131,6 +132,10 @@ export async function runTask(taskId: string, opts: { turnHeld?: boolean } = {})
       (autoTitle ? TITLE_HINT + objective : objective),
       "full",
     );
+    // 起跑前的最后一道闸（说明见 turn-freeze.ts）：这一句之后到 spawn 之间没有 await，
+    // 所以「已 claim、还没 spawn」的窗口里收到的暂停请求一定在这里被消费。fresh run 的
+    // 冻结事实由调度侧（scheduler/queue）负责，这里只消费内存标记。
+    await abortIfFrozen(taskId);
     const turnStart = now();
     const sessId = id();
     const runDir = join(RUNS_DIR, taskId);
@@ -148,6 +153,16 @@ export async function runTask(taskId: string, opts: { turnHeld?: boolean } = {})
       role: "single",
       agentType,
       executor: ex.label,
+      // 这一轮真正跑在哪条 profile、哪个模型/思考强度上（见 db/schema.ts 的同名列）：
+      // 「原样再跑一遍上一回合」只认它们，不认可改名的展示名，也不认任务此刻的配置。
+      executorId: profileId,
+      turnModel: ex.model ?? null,
+      turnReasoningEffort: ex.reasoningEffort ?? null,
+      // 那一刻这套执行环境的指纹：重跑前用它认出「profile 后来被改过/删了」。
+      executorFingerprint: profileFingerprint,
+      // fresh run 从来不是旁路回合，也不可能带着上一轮的停止事实。
+      sideTurn: false,
+      stoppedAs: null as string | null,
       target: sessionTargetKey(ex.target),
       worktreePath: ws.isWorktree ? ws.path : null,
       branch: ws.branch,
@@ -226,6 +241,12 @@ export async function continueTask(
     /** 内部旁路回合可钉在一个准确工作目录（例如验收快照的 detached worktree）。 */
     cwd?: string;
     /**
+     * 指名续**这一条**会话行（而不是按 agentType+role 现挑）。给「重跑上一回合」用：
+     * 那条路的硬要求就是落回崩掉的那一条会话，挑错人 = 换个人重说一遍。
+     * 行已不存在时退回新开会话（读它的调用方刚读过库，正常不会发生）。
+     */
+    resumeSessionId?: string;
+    /**
      * 这一轮的字是**后端代写**的（验证打回的报告、验收冲突的交接说明），但它必须占一个
      * 真人回合 —— 带 system 会被当成「系统续跑」，followUpFrom 就护不住任务原来的终态。
      * 于是落盘时标一位 by:"system"，让读端（Inspector 的「后续追问」、侧边栏铺开那一列）
@@ -238,6 +259,15 @@ export async function continueTask(
      * 的唯一解——只读预检查后的任何 await 间隙都可能被另一次启动抢先。
      */
     turnHeld?: boolean;
+    /**
+     * 起跑前再查一遍冻结事实（分组暂停 / 任务被删或归档），命中就在 spawn 之前撤回。
+     *
+     * 给「预检查离 spawn 很远」的启动路径开：重试按钮、自由审查重跑 —— 它们从只读预检查
+     * 到真正拉起 CLI 之间隔着权威重读、执行器解析、工作目录准备、上一条输入的读取，中途
+     * 还会把回合锁交接一次。普通续聊不开：在一个排队中/分组暂停的任务上发消息本来就允许，
+     * 那不是被冻结的启动（说明见 turn-freeze.ts）。
+     */
+    freezeGuard?: boolean;
     /**
      * 「用户这句话已经**落盘**了」的回调 —— 在原话作为一个真人回合写进会话之后立刻调，
      * 不等这一轮跑完（`continueTask` 要等整轮结束才 resolve，那时早过了）。
@@ -346,7 +376,7 @@ export async function continueTask(
       .set({ followUpFrom, nativeTurn: !!nativeCommand, completeConfirmedAt: null, updatedAt: now() })
       .where(eq(tasks.id, taskId));
 
-    const ex = await resolveExecutorFor({
+    const { executor: ex, profileId, profileFingerprint } = await resolveExecutorWithProfile({
       executorId: summoned ? opts.executorId ?? null : task.executorId,
       type: agent,
       model: summoned ? opts.model ?? null : task.model,
@@ -358,7 +388,13 @@ export async function continueTask(
     // each invited via @-mention. Newest first.
     const all = (await db.select().from(sessions).where(eq(sessions.taskId, taskId)))
       .sort((a, b) => b.startedAt.localeCompare(a.startedAt));
-    const prev = opts.freshSession ? undefined : all.find((s) => s.agentType === agent && s.role === sessionRole);
+    const prev = opts.freshSession
+      ? undefined
+      // 指名道姓要续哪一条会话行（「重跑上一回合」）：按 agentType+role 挑会在同一位
+      // 智能体有多条会话时挑错人，而重投必须落回**崩掉的那一条**，否则等于换个人重说。
+      : opts.resumeSessionId
+        ? all.find((s) => s.id === opts.resumeSessionId)
+        : all.find((s) => s.agentType === agent && s.role === sessionRole);
     const resuming = !!prev?.cliSessionId;
 
     // Where the work lives: the agent's own cwd, else any session's cwd (so the
@@ -454,6 +490,11 @@ export async function continueTask(
           (reviewReminder ? `\n${reviewReminder}` : ""),
           resuming ? "reminder" : "full",
         );
+    // 起跑前的最后一道闸（说明见 turn-freeze.ts）：这一句之后到 `trackRun` 之间不再有
+    // await，暂停请求要么在这里被消费、要么之后才到——那时已有 handle 可杀。
+    // freezeGuard 的启动路径（重试按钮、自由审查重跑）还会再查一遍库：它们的预检查离
+    // spawn 隔着好几个 await，且中途会经过一次「先释放锁、排队再起」的交接。
+    await abortIfFrozen(taskId, { checkFacts: !!opts.freezeGuard, restorable: !!followUpFrom });
     const turnStart = now();
     const sessId = resuming ? prev!.id : id();
     const runDir = join(RUNS_DIR, taskId);
@@ -486,6 +527,15 @@ export async function continueTask(
           endedAt: null,
           commandLine: handle.commandLine,
           executor: ex.label,
+          // 回合保真四件套整组刷新（说明见 db/schema.ts）：profile / 环境指纹 / 模型 /
+          // 思考强度都可能在两轮之间被改，留着上一轮的值就会让重试按着别人的配置跑。
+          executorId: profileId,
+          executorFingerprint: profileFingerprint,
+          turnModel: ex.model ?? null,
+          turnReasoningEffort: ex.reasoningEffort ?? null,
+          sideTurn,
+          // 新回合开始 = 上一轮「是被停的」这件事翻篇，不清就会一直挡着重试入口。
+          stoppedAs: null,
           // profile 可能在两轮之间被改到别的机器上;这一列是恢复命令唯一的
           // 「在哪台机器上跑」凭据,不刷新就会给出一条在本机执行的错命令。
           target: sessionTargetKey(ex.target),
@@ -510,6 +560,11 @@ export async function continueTask(
         role: sessionRole,
         agentType: agent,
         executor: ex.label,
+        executorId: profileId,
+        executorFingerprint: profileFingerprint,
+        turnModel: ex.model ?? null,
+        turnReasoningEffort: ex.reasoningEffort ?? null,
+        sideTurn,
         target: sessionTargetKey(ex.target),
         worktreePath: base?.worktreePath ?? null,
         branch: base?.branch ?? null,

@@ -30,12 +30,14 @@ try {
   const { freeReviewRounds, freeReviewRuns, projects, tasks } = await import("../src/db/schema.js");
   const { acceptedCommitDiff } = await import("../src/git-diff.js");
   const { handleFreeWorkflowSettlement } = await import("../src/free-workflow.js");
+  const { cleanupAcceptedMergeRun, reopenFailedFreeReview } = await import("../src/free-review-round.js");
   const { createPostMergeRepairTask, startPostMergeReview } = await import("../src/post-merge-review.js");
   const {
     postMergeReviewWorktreePath,
     preparePostMergeReviewWorktree,
   } = await import("../src/post-merge-review-worktree.js");
   const { createTasks } = await import("../src/task-store.js");
+  const { claimTurn } = await import("../src/runs.js");
   await ensureSchema();
   await db.insert(projects).values({ id: "p", name: "project", repoPath: repo, createdAt: new Date().toISOString() });
 
@@ -110,6 +112,21 @@ try {
   const again = await createPostMergeRepairTask("accepted-task", runId);
   assert.equal(again.id, repair.id, "重复点击必须幂等返回同一修复任务");
   assert.equal((await db.select().from(tasks)).filter((task) => task.originTaskId === "accepted-task").length, 1);
+
+  // 目标分支新增的「重跑上一回合」也要兼容验收后审查：允许重跑 postmerge reviewer，
+  // 但仍不允许借它重开验收前工作区审查。占住 turn 让投递停在队列里，避免测试真起 CLI。
+  const retryRun = { ...settledRun!, id: "post-merge-retry", status: "failed", repairTaskId: null };
+  await db.insert(freeReviewRuns).values(retryRun);
+  await db.insert(freeReviewRounds).values({
+    id: "post-merge-retry-round", runId: retryRun.id, round: 1, status: "error", conclusion: null,
+    reviewedCommit: mergeCommit, startedAt: at, endedAt: at,
+  });
+  assert.equal(claimTurn("accepted-task"), true);
+  const retried = await reopenFailedFreeReview("accepted-task");
+  assert.equal(retried.reviews.find((run) => run.id === retryRun.id)?.status, "reviewing");
+  assert.equal(existsSync(postMergeReviewWorktreePath(repo, "accepted-task", retryRun.id)), true,
+    "验收后审查重跑必须重建准确 merge commit 的临时 worktree");
+  await cleanupAcceptedMergeRun(retryRun);
 
   console.log("post-merge review regression test passed");
 } finally {

@@ -354,6 +354,11 @@ export async function consumeSingleRun(a: {
     .update(sessions)
     .set({
       exitStatus,
+      // **这一轮是被停的，不是它自己崩的**。CLI 吃 SIGTERM 后按 signal 写非零退出，
+      // 光看 exitStatus 分不出「我停的」和「它崩了」，而停止事实只在内存里活一次
+      // （takeStopped 消费即清）。不落这一列，续聊被手动停止之后，那颗「上一回合崩了
+      // 快重试」的按钮就会稳定地把用户刚停下的指令再跑一遍（第 2 轮审查 finding 2）。
+      stoppedAs: stopped ?? null,
       endedAt: endIso,
       activeMs: sql`COALESCE(${sessions.activeMs}, 0) + ${Math.max(0, Date.parse(endIso) - Date.parse(a.turnStart))}`,
       // 这一轮结束了，pid 不再有意义——留着会让下次重启去接一个早就没了的

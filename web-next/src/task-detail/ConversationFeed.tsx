@@ -10,7 +10,9 @@ import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
 import { RunActivity } from "../components/RunActivity.tsx";
 import { MessageFooter } from "../components/MessageFooter.tsx";
+import { TurnRetryButton } from "../components/TurnRetryButton.tsx";
 import { MessageAttachments } from "./Attachments.tsx";
+import { type TurnRetryTarget, turnRetryTarget } from "./turnRetry.ts";
 import { durationBetween, formatInstant, parseAttachmentText } from "./utils.ts";
 
 function copyText(text: string) {
@@ -30,8 +32,11 @@ function ReviewerBadge({ round }: { round: number | null }) {
 
 function AgentMessage({
   item,
+  retry,
 }: {
   item: Extract<ConversationItem, { kind: "agent" }>;
+  /** 这条气泡是不是「上一回合崩了」的那一条：给了就在尾栏挂重试按钮。 */
+  retry?: React.ReactNode;
 }) {
   const duration = durationBetween(item.at, item.endedAt);
   const reviewer = item.reviewer;
@@ -75,6 +80,7 @@ function AgentMessage({
           session={item.showSessionMeta ? item.session : null}
           sessionUsage={item.sessionUsage}
           sessionContext={item.sessionContext}
+          actions={retry}
         />
       </div>
     </article>
@@ -116,6 +122,8 @@ export function ConversationFeed({
   loading,
   error,
   footer,
+  onRetryTurn,
+  reviewRetryable,
 }: {
   task: Task;
   items: ConversationItem[];
@@ -125,6 +133,10 @@ export function ConversationFeed({
   loading: boolean;
   error: Error | null;
   footer?: React.ReactNode;
+  /** 重跑上一回合。不给就不出重试按钮（只读的会话视图用得上）。 */
+  onRetryTurn?: (target: TurnRetryTarget) => Promise<void> | void;
+  /** 自由工作流的审查链停在「异常结束」——只有它为真，审查会话上才出重跑按钮。 */
+  reviewRetryable?: boolean;
 }) {
   const scroll = useRef<HTMLDivElement>(null);
   const activityPhase = runActivityPhase(task.status, runActivityTail(items));
@@ -133,13 +145,32 @@ export function ConversationFeed({
     pending: pendingExecutor,
     fallback: task.executorLabel ?? task.agentType,
   });
+  // 崩掉的那一回合挂在会话最后一条 agent 气泡上；不满足条件时是 null，一颗按钮都不出。
+  const retry = onRetryTurn ? turnRetryTarget(task, items, { reviewRetryable }) : null;
+  const retryItemId = retry
+    ? [...items].reverse().find((item) => item.kind === "agent")?.id ?? null
+    : null;
 
   return (
     <ImagePreviewGroup isolated>
       <div className="conversation-scroll-region task-conversation-wrap">
         <div className="task-conversation" ref={scroll}>
           {items.map((item) => {
-            if (item.kind === "agent") return <AgentMessage key={item.id} item={item} />;
+            if (item.kind === "agent") {
+              return (
+                <AgentMessage
+                  key={item.id}
+                  item={item}
+                  retry={retry && item.id === retryItemId ? (
+                    <TurnRetryButton
+                      exitStatus={retry.exitStatus}
+                      kind={retry.kind}
+                      onRetry={() => onRetryTurn!(retry)}
+                    />
+                  ) : undefined}
+                />
+              );
+            }
             if (item.kind === "user") return <UserMessage key={item.id} item={item} />;
             // 回合边界才配得上一条横贯的分隔线；系统旁注只是贴在会话边上的一行小字，
             // 它不该看起来像「这里换了一段对话」。

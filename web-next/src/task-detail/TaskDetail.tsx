@@ -34,6 +34,7 @@ import { FreeWorkflowInspector } from "../free-workflow/FreeWorkflowInspector.ts
 import { FreeWorkflowToolbar } from "../free-workflow/FreeWorkflowToolbar.tsx";
 import { FreeReviewDialog } from "../free-workflow/FreeReviewDialog.tsx";
 import { useFreeWorkflowState } from "../free-workflow/useFreeWorkflowState.ts";
+import { freeReviewRetryable } from "./turnRetry.ts";
 
 interface TaskInspectorContext {
   task: Task;
@@ -140,6 +141,8 @@ export function TaskDetail({
   const [pendingExecutor, setPendingExecutor] = useState<string | null>(null);
   const { indicatorForTask } = useTaskReadState(allTasks, task.id);
   const conversation = useConversation(task.id);
+  // 审查链状态同时服务验收后快照入口和会话尾栏的异常回合重试；共享一份缓存与订阅。
+  const free = useFreeWorkflowState(task.id, task.workflowMode === "free");
   const followUps = useMemo(
     () => conversation.items.flatMap((item) => (
       item.kind === "user" && isUserFollowUp(item)
@@ -157,8 +160,7 @@ export function TaskDetail({
     && task.acceptedTargetBranch && task.acceptedBaseCommit && task.acceptedMergeCommit
     ? { branch: task.acceptedTargetBranch, baseCommit: task.acceptedBaseCommit, mergeCommit: task.acceptedMergeCommit }
     : null;
-  const postMerge = useFreeWorkflowState(task.id, !!postMergeTarget);
-  const latestPostMerge = postMerge.state?.reviews.find((run) => run.target?.kind === "accepted_merge");
+  const latestPostMerge = free.state?.reviews.find((run) => run.target?.kind === "accepted_merge");
   const postMergeReviewLabel = postMergeTarget
     ? latestPostMerge?.status === "reviewing" ? "查看合并审查" : latestPostMerge ? "再次审查合并结果" : "审查合并结果"
     : null;
@@ -357,6 +359,21 @@ export function TaskDetail({
                     pendingExecutor={pendingExecutor}
                     loading={conversation.refreshing}
                     error={conversation.error}
+                    onRetryTurn={async (target) => {
+                      try {
+                        const result = await api.retryTurn(task.id, target.sessionId);
+                        notify(result.mode === "review"
+                          ? "已重跑这一轮审查"
+                          : result.mode === "resend" ? "已重发上一条指令，任务续跑中" : "已从中断处续跑");
+                        // 只重取会话正文。任务本身的 running 由 SSE 推过来 —— 这里再补一发
+                        // GET，回来的很可能还是重投前的 done，反手把跑起来的状态盖回去
+                        // （WorkspaceShell 按 onTaskUpdate 覆盖，没有版本门禁）。
+                        await conversation.refetch();
+                      } catch (reason) {
+                        notify(reason instanceof Error ? reason.message : String(reason));
+                      }
+                    }}
+                    reviewRetryable={freeReviewRetryable(free.state?.reviews)}
                     footer={task.question ? (
                       <QuestionCard
                         task={task}
@@ -441,10 +458,10 @@ export function TaskDetail({
             {postMergeDialogOpen && postMergeTarget && (
               <FreeReviewDialog
                 taskId={task.id}
-                state={postMerge.state}
+                state={free.state}
                 reservationMode={false}
                 postMergeTarget={postMergeTarget}
-                onChanged={postMerge.setState}
+                onChanged={free.setState}
                 onClose={() => setPostMergeDialogOpen(false)}
                 notify={notify}
               />

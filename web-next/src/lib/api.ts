@@ -33,92 +33,7 @@ import { DEFAULT_APP_SETTINGS } from "@harness/shared";
 import type { WorkflowDef, WorkflowItem } from "@harness/shared/workflow";
 import type { CliHostEnv } from "@harness/shared/cli-overrides";
 import type { CliModelCatalog } from "@harness/shared/cli-presets";
-
-const API_ROOT = "/api";
-
-export class ApiError extends Error {
-  readonly status: number;
-  readonly body: unknown;
-
-  constructor(status: number, message: string, body: unknown) {
-    super(message);
-    this.name = "ApiError";
-    this.status = status;
-    this.body = body;
-  }
-}
-
-function apiPath(path: string): string {
-  return `${API_ROOT}${path.startsWith("/") ? path : `/${path}`}`;
-}
-
-async function parseBody(response: Response): Promise<unknown> {
-  if (response.status === 204) return undefined;
-  const text = await response.text();
-  if (!text) return undefined;
-  try {
-    return JSON.parse(text) as unknown;
-  } catch {
-    return text;
-  }
-}
-
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(apiPath(path), init);
-  const body = await parseBody(response);
-  if (!response.ok) {
-    throw apiError(response, body);
-  }
-  return body as T;
-}
-
-function apiError(response: Response, body: unknown): ApiError {
-  const message =
-    typeof body === "object" && body !== null && "error" in body && typeof body.error === "string"
-      ? body.error
-      : `${response.status} 请求失败`;
-  return new ApiError(response.status, message, body);
-}
-
-function json(method: string, body?: unknown): RequestInit {
-  return {
-    method,
-    headers: { "content-type": "application/json" },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  };
-}
-
-const id = encodeURIComponent;
-
-// 响应形状都住在 api-types.ts（这份到了 700 行上限）。这里原样再导出一遍，
-// 现有 `from "../lib/api.ts"` 的导入不用动。
-export type {
-  AcceptTaskFailure,
-  AcceptTaskResult,
-  AcceptTaskSuccess,
-  AcceptTaskWarning,
-  AppOpener,
-  ChildWorkspaceLeftover,
-  CuaProcess,
-  DeleteTaskResult,
-  DetectedCli,
-  FileContent,
-  FileEntry,
-  FileListing,
-  FileWorkspaceRoot,
-  FreeWorkflowApiState,
-  GitOverview,
-  OpenerProbe,
-  ReplyTaskResult,
-  SessionTraceEntry,
-  TaskCommit,
-  TaskDiffResult,
-  TaskWorkspaceProbe,
-  TeamCuaStatus,
-  TerminalEvent,
-  TerminalSessionInfo,
-  VerifyOverrideResult,
-} from "./api-types.ts";
+import { ApiError, apiError, apiPath, id, json, parseBody, request } from "./apiClient.ts";
 import type {
   AcceptTaskResult,
   DeleteTaskResult,
@@ -137,7 +52,12 @@ import type {
   TeamCuaStatus,
   TerminalSessionInfo,
   VerifyOverrideResult,
-} from "./api-types.ts";
+} from "./apiTypes.ts";
+
+// 调用点只认 `lib/api`：传输层（apiClient.ts）和返回体形状（apiTypes.ts）是这份端点
+// 清单为了守住 700 行上限拆出去的实现细节，不该逼着几十个 import 跟着改路径。
+export { ApiError } from "./apiClient.ts";
+export type * from "./apiTypes.ts";
 
 function isAcceptTaskResult(body: unknown): body is AcceptTaskResult {
   return typeof body === "object" && body !== null && "accepted" in body &&
@@ -252,6 +172,11 @@ export const api = {
     request(`/tasks/${id(taskId)}/stop`, { method: "POST" }),
   retryTask: (taskId: string): Promise<unknown> =>
     request(`/tasks/${id(taskId)}/retry`, { method: "POST" }),
+  // 重跑**上一回合**（续聊/审查打回的那一句崩了，但任务还停在 done）。带上气泡上那条
+  // 会话 id：服务端据此确认「用户看到的就是最新一次」，页面旧了就拒绝而不是照跑。
+  // mode=review = 上一回合是自由工作流的审查回合，重跑的是**那一轮审查**（同一位审查者）。
+  retryTurn: (taskId: string, sessionId?: string): Promise<{ started: true; mode: "resend" | "resume" | "review" }> =>
+    request(`/tasks/${id(taskId)}/retry-turn`, json("POST", { sessionId })),
   requeueTask: (taskId: string): Promise<{ task: Task; movedToEnd: boolean }> =>
     request(`/tasks/${id(taskId)}/requeue`, { method: "POST" }),
   fireTask: (taskId: string): Promise<unknown> =>

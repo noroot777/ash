@@ -29,6 +29,7 @@ import { resolveGate } from "./duet/gates.js";
 import { continueTask, runTask } from "./orchestrator.js";
 import { resumeOrRunTask } from "./task-resume.js";
 import { mountTaskArchiveRoutes } from "./task-archive-routes.js";
+import { mountTaskRetryTurnRoutes } from "./task-retry-turn.js";
 import { mountTaskScheduleRoutes } from "./task-schedule-routes.js";
 import { mountTaskSessionRoutes } from "./task-session-routes.js";
 import { RUNS_DIR } from "./paths.js";
@@ -47,6 +48,7 @@ import { now } from "./util.js";
 
 export function mountTaskRunRoutes(api: Hono): void {
   mountTaskArchiveRoutes(api);
+  mountTaskRetryTurnRoutes(api);
   mountTaskScheduleRoutes(api);
   mountTaskSessionRoutes(api);
   const toScheduledMessage = (r: typeof scheduledMessages.$inferSelect): ScheduledMessage => ({
