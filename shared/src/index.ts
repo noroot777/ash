@@ -17,6 +17,7 @@ export type {
 export type {
   FreeReviewCheckMode,
   FreeReviewDispatchInput,
+  FreeReviewExecutorOverride,
   FreeReviewRound,
   FreeReviewRun,
   FreeWorkflowExecution,
@@ -332,6 +333,10 @@ export interface Task {
   originTaskId?: string | null;
   // §Pause 检查点续跑指令；非空时结算 paused，恢复后清空。
   resumePrompt?: string | null;
+  // 就地验证轮的轮次号；非空 = 这一轮验证还没出结论。任务此刻多半没有进程在跑
+  // （status 是它原来的终态），但这一版的生命周期没结束：验收、/fire 这类「给这一版
+  // 盖章 / 另起一版」的动作都得等它收尾，前端据此禁用按钮而不是靠 409 兜底。
+  verifyRound?: number | null;
   // §Team 待答问题；非空时 paused 且队列不推进，answer_question 后恢复并清空。
   question?: string | null;
   // ask_question 的可编辑候选快捷填充；null/[] = 纯自由作答。

@@ -20,12 +20,14 @@ function AgentRow({ row }: { row: Extract<TeamFeedRow, { kind: "conv" }>["item"]
   if (row.kind !== "agent") return null;
   const duration = durationBetween(row.at, row.endedAt);
   return (
-    <article className="team-feed-agent">
+    <article className={`team-feed-agent${row.continuation ? " is-continuation" : ""}`}>
       <header>
-        <span className="agent-run-identity">
-          <b>{row.label}</b>
-          <AgentRunMeta run={row.run} />
-        </span>
+        {!row.continuation && (
+          <span className="agent-run-identity">
+            <b>{row.label}</b>
+            <AgentRunMeta run={row.run} />
+          </span>
+        )}
         {row.at && <time>{formatInstant(row.at)}</time>}
         {duration && <small className="task-turn-duration" title={`开始 ${formatInstant(row.at)} · 结束 ${formatInstant(row.endedAt)}`}>· ⏱ {duration} 用时</small>}
       </header>
@@ -203,7 +205,10 @@ export function TeamFeed({
                 </div>
               );
             }
-            return <div className={`team-feed-event${item.tone === "error" ? " is-error" : ""}`} key={row.key}><span />{item.text}<span /></div>;
+            if (item.variant === "boundary") {
+              return <div className={`team-feed-event${item.tone === "error" ? " is-error" : ""}`} key={row.key}><span />{item.text}<span /></div>;
+            }
+            return <p className={`conversation-note${item.tone === "error" ? " is-error" : ""}`} key={row.key}>{item.text}</p>;
           })}
           {activityPhase && <RunActivity status={task.status} mode={task.mode} phase={activityPhase} executor={teamLeadLabel(task)} queuePosition={task.queuePosition} />}
         </section>

@@ -37,10 +37,10 @@ export const SYS_MARKER = "〔系统〕继续（从中断处）";
 // 消息尾部(每回合都提醒,上下文再长 agent 也不至于忘)。
 // 宽松模式(HARNESS_LAX_DONE,典型:预览实例)下这三段一律退化成空串 —— 那台 harness
 // 的 MCP 对 agent 不可达,交代了它也做不到,理由见 single-run.ts 的 STRICT_DONE_PROTOCOL。
-const ACCEPTANCE_REMINDER = (taskId: string, sharedTeamWorker: boolean, verifying: boolean, free = false) => verifying
+export const ACCEPTANCE_REMINDER = (taskId: string, sharedTeamWorker: boolean, verifying: boolean, free = false) => verifying
   ? "验收辅路:验证回合不适用 accept_task；这一轮只负责给出验证结论并留证。"
   : free
-    ? "自由工作流:完成实现后只调用 complete_task；不要调用 report_stage 或 accept_task，派审、预览、合并与清理由用户在页面快捷按钮中按需触发。"
+    ? "自由工作流:完成实现后只调用 complete_task；不要调用 report_stage 或 accept_task。派审和预览由用户按需触发，任务完成后由用户从统一验收页验收。"
   : sharedTeamWorker
     ? "验收辅路:本共享执行者不适用 accept_task；合并与验收由团队级处理。"
     : `验收辅路:准备交给人工验收前可调用 report_stage(taskId="${taskId}", stage="awaiting_acceptance")；` +

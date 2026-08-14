@@ -1,7 +1,7 @@
 import { useState } from "react";
-import type { FreeReviewRun, FreeWorkflowState } from "@harness/shared";
+import type { FreeReviewRun } from "@harness/shared";
 import { SpinnerGap, Wrench } from "@phosphor-icons/react";
-import { api } from "../lib/api.ts";
+import { api, type FreeWorkflowApiState } from "../lib/api.ts";
 
 export function FreeReviewRepairButton({
   taskId,
@@ -17,7 +17,7 @@ export function FreeReviewRepairButton({
   compact?: boolean;
   className?: string;
   disabled?: boolean;
-  onChanged: (state: FreeWorkflowState) => void;
+  onChanged: (state: FreeWorkflowApiState) => void;
   notify: (message: string) => void;
 }) {
   const [busy, setBusy] = useState(false);
@@ -39,7 +39,7 @@ export function FreeReviewRepairButton({
     <button
       type="button"
       className={className}
-      data-state={busy ? "starting-repair" : "exhausted"}
+      data-state={busy ? "starting-repair" : "stopped"}
       disabled={disabled || busy}
       onClick={() => void repair()}
     >

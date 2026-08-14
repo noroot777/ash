@@ -108,6 +108,14 @@ export function previewTasksByAge(tasks: Task[], nowMs = Date.now()): TaskPrevie
   };
 }
 
+// 选中被预览藏住的任务时，只自动展开一次。同一条选中项上用户点了收起，
+// 不能再拿「它还在 hidden 里」把列表顶开 —— 否则收起按钮看起来是坏的。
+export function advanceHiddenReveal(lastKey: string | null, revealKey: string | null): { lastKey: string | null; reveal: boolean } {
+  if (!revealKey) return { lastKey: null, reveal: false };
+  if (lastKey === revealKey) return { lastKey, reveal: false };
+  return { lastKey: revealKey, reveal: true };
+}
+
 export function buildTaskTree(tasks: Task[], options: TaskTreeOptions = {}): TaskTreeSection[] {
   const topLevel = tasks.filter((task) => task.parentId === null && !task.archived);
   const pinnedTasks = sortTasks(topLevel.filter((task) => task.pinnedAt != null), true);

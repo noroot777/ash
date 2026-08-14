@@ -14,6 +14,7 @@ import {
   SpinnerGap,
   Stop,
   Trash,
+  X,
 } from "@phosphor-icons/react";
 import { TaskStatusDot } from "../components/TaskStatusDot.tsx";
 import { useDismissable } from "../lib/useDismissable.ts";
@@ -28,9 +29,20 @@ function primaryAction(task: Task): { kind: PrimaryAction; label: string; danger
   if (task.archived) return { kind: "unarchive", label: "取消归档" };
   if (task.status === "running") return { kind: "stop", label: "停止", danger: true };
   if (task.stage === "accepted") return { kind: null, label: "已验收", disabled: true };
+  // 就地验证轮还没出结论、或有待答复的提问：任务的 status 是它原来的终态（旁路回合
+  // 不改 status，提问停在 paused/done 上也一样），所以光看 status 会给出一个「验收」
+  // 主按钮，可后端 acceptanceGuard 必然 409——这一版还没定稿：验证结论会覆盖 accepted，
+  // 而答复会 resume 会话继续往一个已合并、已删除的 worktree 里写。给禁用态而不是假按钮。
+  if (task.verifyRound != null) return { kind: null, label: "验证中", disabled: true };
+  if (task.question) return { kind: null, label: "等答复", disabled: true };
   if (task.parentId !== null && task.status === "done") return { kind: null, label: "已完成", disabled: true };
-  if (task.workflowMode === "free" && task.status === "done") return { kind: null, label: "已完成", disabled: true };
   if (task.status === "done" || task.stage === "awaiting_acceptance" || task.stage === "verified") {
+    return { kind: "accept", label: "验收" };
+  }
+  // 自由工作流的 failed/canceled 同样可验收（修复失败/手停后接受上一版直接合并，后端
+  // acceptTask 已放行；时间线也承诺「由你决定验收」）——主按钮给验收，重试/运行降为
+  // 旁边的次级按钮（terminalRerunAction），不能只藏在更多菜单里绕行。
+  if (task.workflowMode === "free" && (task.status === "failed" || task.status === "canceled")) {
     return { kind: "accept", label: "验收" };
   }
   if (task.status === "failed") return { kind: "retry", label: "重试" };
@@ -41,11 +53,20 @@ function primaryAction(task: Task): { kind: PrimaryAction; label: string; danger
   return { kind: null, label: task.status === "idle" ? "待命" : "进行中", disabled: true };
 }
 
+/** 自由任务终态主按钮让位给「验收」后，重试/运行保留为次级按钮（一键可达）。 */
+function terminalRerunAction(task: Task): { kind: "retry" | "run"; label: string } | null {
+  if (task.workflowMode !== "free" || task.archived) return null;
+  if (task.status === "failed") return { kind: "retry", label: "重试" };
+  if (task.status === "canceled") return { kind: "run", label: "运行" };
+  return null;
+}
+
 export function TaskHeader({
   task,
   conversationMarkdown,
   busy,
   refreshing,
+  reviewOpen,
   onTitle,
   onTogglePin,
   onPrimary,
@@ -63,6 +84,7 @@ export function TaskHeader({
   conversationMarkdown: string;
   busy: boolean;
   refreshing: boolean;
+  reviewOpen: boolean;
   onTitle: (title: string) => Promise<void>;
   onTogglePin: () => Promise<void>;
   onPrimary: (action: Exclude<PrimaryAction, null>) => void;
@@ -83,6 +105,11 @@ export function TaskHeader({
   const menuButton = useRef<HTMLButtonElement>(null);
   const pointerToggle = useRef(false);
   const action = primaryAction(task);
+  // 验收台开着时，「验收」主按钮点下去只是把一个已经开着的面板再开一次——这时顶栏这个
+  // 位置就是这一屏唯一的返回口，验收台自己那一行不再重复一个「返回对话」。其它主动作
+  // （停止 / 重试 / 运行）在验收台里照样有用，那时返回按钮补在主按钮旁边而不顶掉它。
+  const hidePrimaryForReview = reviewOpen && action.kind === "accept";
+  const rerun = terminalRerunAction(task);
   const canRequeue = task.parentId === null
     && !task.archived
     && !!task.queueId
@@ -158,20 +185,45 @@ export function TaskHeader({
         {display.label}
       </span>
       <TaskTimeMeta task={task} />
-      <button
-        className={`task-primary-action${action.danger ? " is-danger" : ""}`}
-        type="button"
-        data-workspace-run-action={action.kind === "run" || action.kind === "retry" ? action.kind : undefined}
-        disabled={busy || action.disabled || !action.kind}
-        onClick={() => action.kind && onPrimary(action.kind)}
-      >
-        {busy ? <SpinnerGap size={13} className="is-spinning" />
-          : action.kind === "stop" ? <Stop size={13} weight="fill" />
-            : action.kind === "accept" ? <CheckCircle size={14} weight="fill" />
-              : action.kind === "retry" || action.kind === "unarchive" ? <ArrowCounterClockwise size={13} />
-                : <Play size={13} weight="fill" />}
-        {action.label}
-      </button>
+      {!hidePrimaryForReview && (
+        <button
+          className={`task-primary-action${action.danger ? " is-danger" : ""}`}
+          type="button"
+          data-workspace-run-action={action.kind === "run" || action.kind === "retry" ? action.kind : undefined}
+          disabled={busy || action.disabled || !action.kind}
+          onClick={() => action.kind && onPrimary(action.kind)}
+        >
+          {busy ? <SpinnerGap size={13} className="is-spinning" />
+            : action.kind === "stop" ? <Stop size={13} weight="fill" />
+              : action.kind === "accept" ? <CheckCircle size={14} weight="fill" />
+                : action.kind === "retry" || action.kind === "unarchive" ? <ArrowCounterClockwise size={13} />
+                  : <Play size={13} weight="fill" />}
+          {action.label}
+        </button>
+      )}
+      {reviewOpen && (
+        <button
+          className="task-requeue-action"
+          type="button"
+          aria-label="返回对话"
+          onClick={onReview}
+        >
+          <X size={13} />
+          <span>返回对话</span>
+        </button>
+      )}
+      {rerun && (
+        <button
+          className="task-requeue-action"
+          type="button"
+          data-workspace-run-action={rerun.kind}
+          disabled={busy}
+          onClick={() => onPrimary(rerun.kind)}
+        >
+          <ArrowCounterClockwise size={13} />
+          <span>{rerun.label}</span>
+        </button>
+      )}
       {canRequeue && (
         <button
           className="task-requeue-action"

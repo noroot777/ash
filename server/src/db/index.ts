@@ -127,9 +127,10 @@ export async function ensureSchema() {
     CREATE TABLE IF NOT EXISTS free_workflow_states (
       task_id TEXT PRIMARY KEY, selected_reviewer_id TEXT,
       review_armed INTEGER NOT NULL DEFAULT 0, review_check_mode TEXT,
-      review_retry_limit INTEGER, review_note TEXT,
-      merge_status TEXT NOT NULL DEFAULT 'idle', merge_message TEXT,
-      merged_at TEXT, updated_at TEXT NOT NULL
+      review_retry_limit INTEGER, review_note TEXT, review_run_id TEXT,
+      review_agent_type TEXT, review_executor_id TEXT,
+      review_model TEXT, review_reasoning_effort TEXT,
+      updated_at TEXT NOT NULL
     );
     CREATE TABLE IF NOT EXISTS free_workflow_events (
       id TEXT PRIMARY KEY, task_id TEXT NOT NULL, kind TEXT NOT NULL,
@@ -147,7 +148,8 @@ export async function ensureSchema() {
     CREATE INDEX IF NOT EXISTS free_review_runs_task_idx ON free_review_runs (task_id, created_at);
     CREATE TABLE IF NOT EXISTS free_review_rounds (
       id TEXT PRIMARY KEY, run_id TEXT NOT NULL, round INTEGER NOT NULL,
-      status TEXT NOT NULL, conclusion TEXT, started_at TEXT NOT NULL, ended_at TEXT
+      status TEXT NOT NULL, conclusion TEXT, reviewed_commit TEXT,
+      started_at TEXT NOT NULL, ended_at TEXT
     );
     CREATE UNIQUE INDEX IF NOT EXISTS free_review_rounds_run_round_idx
       ON free_review_rounds (run_id, round);
@@ -253,12 +255,27 @@ export async function ensureSchema() {
     // 「已认领、还没送到」当口时，内存里的等待/在途标记全没了，只有库里这个标记能让
     // 开机扫描认出「这条得重新投递」（见 docs/incidents.md「排队消息凭空消失」）。
     "ALTER TABLE scheduled_messages ADD COLUMN delivering_since TEXT",
+    // 投递时恢复的回合身份（审查者提问期间排队的答复必须以 reviewer 身份送回）。
+    "ALTER TABLE scheduled_messages ADD COLUMN session_role TEXT",
     // 自由工作流预约审查：只保存一份配置，confirmed done 后复用现有派审链。
     "ALTER TABLE free_workflow_states ADD COLUMN review_armed INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE free_workflow_states ADD COLUMN review_check_mode TEXT",
     "ALTER TABLE free_workflow_states ADD COLUMN review_retry_limit INTEGER",
     "ALTER TABLE free_workflow_states ADD COLUMN review_note TEXT",
+    "ALTER TABLE free_workflow_states ADD COLUMN review_run_id TEXT",
+    // 预约里「这次换个模型/智能水平跑」的覆盖（不改审查者配置本身）。
+    "ALTER TABLE free_workflow_states ADD COLUMN review_agent_type TEXT",
+    "ALTER TABLE free_workflow_states ADD COLUMN review_executor_id TEXT",
+    "ALTER TABLE free_workflow_states ADD COLUMN review_model TEXT",
+    "ALTER TABLE free_workflow_states ADD COLUMN review_reasoning_effort TEXT",
     "ALTER TABLE free_review_runs ADD COLUMN note TEXT",
+    "ALTER TABLE free_review_rounds ADD COLUMN reviewed_commit TEXT",
+    // 统一验收的结构化合并落账（目标分支 + 合并前后 commit），合并后基线审查靠它。
+    "ALTER TABLE tasks ADD COLUMN accepted_target_branch TEXT",
+    "ALTER TABLE tasks ADD COLUMN accepted_base_commit TEXT",
+    "ALTER TABLE tasks ADD COLUMN accepted_merge_commit TEXT",
+    "ALTER TABLE tasks ADD COLUMN accepted_tail_pending INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE tasks ADD COLUMN accepted_tail_done TEXT NOT NULL DEFAULT '[]'",
     // Token 用量:一条会话行按回合累加(口径统一在 shared/src/usage.ts)。全 null
     // = 这条会话建在本功能之前、或那家 CLI 不报账——**不能当 0 展示**。
     "ALTER TABLE sessions ADD COLUMN usage_input INTEGER",
@@ -290,8 +307,85 @@ export async function ensureSchema() {
   }
   await migrateLegacyNoteTaskLinks();
   await migrateDebateToDuet();
-  await dropRetiredColumns();
+  await migrateFreeReviewStatuses();
+  const mergeStatesMigrated = await migrateFreeWorkflowMergeStates();
+  // 合并状态迁移刚把老库的 stage 补成 accepted/merged —— 预约清理必须再跑一遍才能
+  // 命中它们(见 disarmReservationsOnAcceptedTasks 的注释)。无条件跑:部分失败
+  // (mergeStatesMigrated=false)时也已经有任务落了 stage,那几条同样得清。
+  try {
+    await disarmReservationsOnAcceptedTasks();
+  } catch (e) {
+    console.warn("[harness] 已验收任务遗留预约清理失败,忽略:", e);
+  }
+  await reclaimOrphanOwnerGroups();
+  await dropRetiredColumns(mergeStatesMigrated ? undefined : MERGE_STATE_COLUMNS);
   await dropRetiredTables();
+}
+
+// 审查链状态瘦身（2026-08-11）：叙事状态改为推导，持久值只剩 reviewing/passed/failed/stopped。
+// 老库的中间态**按旧语义逐类转换**，不能枚举压平（第 1 轮审查抓过三条丢语义）：
+// - repairing：旧结算是「确认完成后直接续下一轮」，新结算只消费预约槽 → 必须回填
+//   自动续轮预约（review_armed=1 + review_run_id），否则升级期间正在自动修复的任务静默断链。
+// - superseded：旧语义「代码已改过，未通过结论已过期」。压成 stopped 会让前端重新露出
+//   「按意见修复/未通过等待处理」。给该 run 最新一轮回填哨兵 reviewed_commit（永不等于任何
+//   HEAD），新鲜度推导即显示「代码已有新修改」而不是把旧意见当成当前待办。
+// - manual_repairing / reworking / exhausted：本来就是「未通过后停住」→ stopped。
+// - 已验收（accepted/merged）自由任务的遗留预约一并注销，否则 reopen 后触发幽灵审查。
+// 全部幂等：匹配 0 行就是空转。
+export const LEGACY_SUPERSEDED_ANCHOR = "legacy-superseded";
+async function migrateFreeReviewStatuses(): Promise<void> {
+  try {
+    // repairing：回填自动续轮预约（先回填，再改状态，中途失败重启后仍能续上）。
+    const repairing = await client.execute(
+      `SELECT id, task_id FROM free_review_runs WHERE status='repairing'`,
+    );
+    for (const row of repairing.rows) {
+      await client.execute({
+        sql: `INSERT INTO free_workflow_states (task_id, selected_reviewer_id, review_armed, review_run_id, updated_at)
+              SELECT task_id, reviewer_id, 1, id, updated_at FROM free_review_runs WHERE id=:id
+              ON CONFLICT(task_id) DO UPDATE SET review_armed=1, review_run_id=excluded.review_run_id`,
+        args: { id: String(row.id) },
+      });
+    }
+    // superseded：最新一轮回填哨兵锚点 → 新鲜度推导为「已过期」。
+    await client.execute(
+      `UPDATE free_review_rounds SET reviewed_commit='${LEGACY_SUPERSEDED_ANCHOR}'
+       WHERE reviewed_commit IS NULL AND run_id IN (SELECT id FROM free_review_runs WHERE status='superseded')
+         AND round=(SELECT MAX(r2.round) FROM free_review_rounds r2 WHERE r2.run_id=free_review_rounds.run_id)`,
+    );
+    await client.execute(
+      `UPDATE free_review_runs
+       SET status='stopped', finished_at=COALESCE(finished_at, updated_at)
+       WHERE status IN ('repairing','manual_repairing','reworking','exhausted','superseded')`,
+    );
+    // 升级前已排队的答复没有 session_role：该任务有 reviewing 链的话，pending 消息几乎
+    // 只可能是给审查者的答复（实现回合在审查挂着时进不来）——补成 reviewer，投递才能
+    // 送回审查会话（启发式，注释于此备查）。
+    await client.execute(
+      `UPDATE scheduled_messages SET session_role='reviewer'
+       WHERE status='pending' AND session_role IS NULL
+         AND mode='queued' AND text LIKE '【答复】%'
+         AND task_id IN (SELECT task_id FROM free_review_runs WHERE status='reviewing')`,
+    );
+    await disarmReservationsOnAcceptedTasks();
+  } catch (e) {
+    console.warn("[harness] 自由审查旧状态收敛失败,忽略:", e);
+  }
+}
+
+// 已验收(accepted/merged)自由任务的遗留预约不自愈会变幽灵审查:任务日后被唤醒、再次
+// 确认完成时,那条上一个验收生命周期的预约就会启动一轮语境全变的审查。
+// **必须在 stage 定型之后再跑一次**:老库的 stage 是空的,accepted/merged 由后面的
+// migrateFreeWorkflowMergeStates() 从旧 merge_status 列恢复;只在它之前清一遍,匹配不到
+// 任何行,而旧 merge 列随后就被删了,预约永久留存(审查实测:old-merged/old-merging 两条
+// 升级后都还 armed)。幂等,匹配 0 行就是空转。
+async function disarmReservationsOnAcceptedTasks(): Promise<void> {
+  await client.execute(
+    `UPDATE free_workflow_states SET review_armed=0, review_run_id=NULL, review_note=NULL
+     WHERE review_armed=1 AND task_id IN (
+       SELECT id FROM tasks WHERE workflow_mode='free' AND stage IN ('accepted','merged')
+     )`,
+  );
 }
 
 // 辩论模式更名为讨论(duet,2026-08-07):列、mode 值、会话角色一起迁。全部幂等——
@@ -340,6 +434,10 @@ const RETIRED_COLUMNS: { table: string; column: string; why: string }[] = [
   { table: "tasks", column: "issue_id", why: "事项中心已移除" },
   // 任务列表不再区分人工优先级，统一按状态/分区和最后更新时间展示
   { table: "tasks", column: "priority", why: "任务优先级已移除" },
+  // 自由工作流专属「合并&清理」被统一验收（task-accept）取代，状态列一并退役
+  { table: "free_workflow_states", column: "merge_status", why: "自由工作流合并已统一走验收" },
+  { table: "free_workflow_states", column: "merge_message", why: "自由工作流合并已统一走验收" },
+  { table: "free_workflow_states", column: "merged_at", why: "自由工作流合并已统一走验收" },
 ];
 
 // 退役整表与退役列遵循同一原则：新库不创建，老库启动时幂等清理，失败只告警。
@@ -349,8 +447,104 @@ const RETIRED_TABLES: { table: string; why: string }[] = [
   { table: "issues", why: "事项中心已移除" },
 ];
 
-async function dropRetiredColumns(): Promise<void> {
+// 旧自由工作流「合并&清理」的三列（merge_status/message/merged_at）在 DROP 前必须把
+// 事实迁走——旧实现先写 merging、Git 合并成功后才落 stage=accepted，「Git 已合、进程在
+// 落 stage 前退出」是可达窗口；直接删列就是删掉唯一恢复凭据（审查实测：升级后合并已
+// 发生的任务永久卡在未验收，failed 的错误原因也静默丢失）。规则：
+// - merged：合并确实完成过 → task.stage 还空着就补成 accepted（不伪造 commit 区间，
+//   acceptedMergeCommit 留空，快路验证自会按「无证据」保守处理）。
+// - merging：Git 状态不可知 → 不动 stage，只留一条可见的时间线说明，让用户从验收页
+//   重新验收（already_merged 走保留式判定，不会重复合并也不会伪造）。
+// - failed：把原错误信息留进时间线，不再静默蒸发。
+const MERGE_STATE_COLUMNS = new Set(["free_workflow_states.merge_status", "free_workflow_states.merge_message", "free_workflow_states.merged_at"]);
+
+async function migrateFreeWorkflowMergeStates(): Promise<boolean> {
+  const info = await client.execute("PRAGMA table_info(free_workflow_states)");
+  if (!info.rows.some((r) => r.name === "merge_status")) return true; // 旧列已清，迁移早做完了
+  const rows = await client.execute(
+    "SELECT task_id, merge_status, merge_message FROM free_workflow_states WHERE merge_status IS NOT NULL AND merge_status != ''",
+  );
+  if (!rows.rows.length) return true;
+  let allMigrated = true;
+  const { appendTaskTimeline } = await import("../task-timeline.js");
+  for (const row of rows.rows) {
+    const taskId = String(row.task_id ?? "");
+    const status = String(row.merge_status ?? "");
+    if (!taskId) continue;
+    try {
+      if (status === "merged") {
+        await client.execute({
+          sql: "UPDATE tasks SET stage = 'accepted' WHERE id = ? AND (stage IS NULL OR stage = '')",
+          args: [taskId],
+        });
+        await appendTaskTimeline(taskId, "升级迁移：上一版「合并&清理」已记录合并完成，验收标记已补上（合并区间无从考证，未伪造）。");
+      } else if (status === "merging") {
+        // 结构化恢复，不依赖时间线（没跑过会话的任务时间线写不进去）：stage=merged 让
+        // 统一验收接管——source branch 还在会正常重合并/识别 already_merged；已清理的
+        // 走「stage=merged 人工确认」路径而不是 stage=null 的死路。目标分支按旧实现
+        // 同一条规则解析并冻结；commit 区间无从考证，留空（诚实，不伪造）。
+        const ctx = (await client.execute({
+          sql: "SELECT t.worktree_base AS wb, p.repo_path AS rp FROM tasks t LEFT JOIN projects p ON p.id = t.project_id WHERE t.id = ?",
+          args: [taskId],
+        })).rows.at(0);
+        let target: string | null = null;
+        if (ctx?.rp) {
+          const { resolveTaskMergeTarget } = await import("../git.js");
+          target = await resolveTaskMergeTarget(String(ctx.rp), ctx.wb == null ? null : String(ctx.wb)).catch(() => null) ?? null;
+        }
+        await client.execute({
+          sql: "UPDATE tasks SET stage = 'merged', accepted_target_branch = COALESCE(accepted_target_branch, ?) WHERE id = ? AND (stage IS NULL OR stage = '')",
+          args: [target, taskId],
+        });
+        await appendTaskTimeline(taskId, "升级迁移：上一版验收停在「合并进行中」，Git 合并可能已完成；已按「已合并待确认」恢复，请从验收页重新验收——已合并的会被安全识别，无法核对时会停下等人工确认，不会伪造区间。");
+      } else if (status === "failed") {
+        const message = String(row.merge_message ?? "").trim();
+        // 错误原文是唯一证据：时间线写不进去（任务从没跑过会话）就保留旧列，下次启动再试。
+        const wrote = await appendTaskTimeline(taskId, `升级迁移：上一版「合并&清理」失败${message ? `，原始错误：${message}` : ""}；请从验收页重新验收或人工处理。`);
+        if (!wrote) {
+          console.warn(`[harness] 旧合并失败原因写不进 ${taskId} 的时间线（无会话），本轮保留旧列`);
+          allMigrated = false;
+        }
+      }
+      console.log(`[harness] 迁移旧自由工作流合并状态 ${taskId}: ${status}`);
+    } catch (e) {
+      // 单条失败不拦启动，但这一轮不许删旧列（证据还没迁走），下次启动重试。
+      console.warn(`[harness] 旧合并状态迁移失败 ${taskId}(${status})，本轮保留旧列：`, e);
+      allMigrated = false;
+    }
+  }
+  return allMigrated;
+}
+
+// 团队派活自建的内部组：owner 任务已不存在的（旧版删除没做级联）没有任何入口可见或
+// 清理，启动时幂等回收（审查实测：真实主库存量 1 条挂 6 个成员）。
+async function reclaimOrphanOwnerGroups(): Promise<void> {
+  try {
+    const gone = await client.execute(
+      "DELETE FROM groups WHERE owner_task_id IS NOT NULL AND owner_task_id NOT IN (SELECT id FROM tasks) RETURNING id",
+    );
+    if (gone.rows.length) console.log(`[harness] 回收 ${gone.rows.length} 个 owner 任务已不存在的内部组`);
+    // 组的成员也要处理：lead 行已不存在的 worker 挂着悬空 parent_id，前端只把
+    // parentId===null 列为顶层，它们永久不可见（审查实测：主库 6 个 done+accepted 的
+    // worker 藏在已消失的团队下）。解绑而不是删除——数据（会话/产物）保留，回到顶层
+    // 由用户自行处置；悬空 group_id 一并清。
+    const unparented = await client.execute(
+      "UPDATE tasks SET parent_id = NULL WHERE parent_id IS NOT NULL AND parent_id NOT IN (SELECT id FROM tasks) RETURNING id",
+    );
+    if (unparented.rows.length) console.log(`[harness] 解绑 ${unparented.rows.length} 个 lead 已不存在的执行者（回到顶层可见）`);
+    const ungrouped = await client.execute(
+      "UPDATE tasks SET group_id = NULL WHERE group_id IS NOT NULL AND group_id NOT IN (SELECT id FROM groups) RETURNING id",
+    );
+    if (ungrouped.rows.length) console.log(`[harness] 清理 ${ungrouped.rows.length} 个悬空的 group 引用`);
+  } catch (e) {
+    console.warn("[harness] 孤儿内部组回收失败，忽略：", e);
+  }
+}
+
+async function dropRetiredColumns(skip?: ReadonlySet<string>): Promise<void> {
   for (const { table, column, why } of RETIRED_COLUMNS) {
+    if (skip?.has(`${table}.${column}`)) continue; // 事实还没迁走，证据列留到下次启动
+
     const info = await client.execute(`PRAGMA table_info(${table})`);
     if (!info.rows.some((r) => r.name === column)) continue; // 早就清过了
     try {

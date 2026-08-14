@@ -466,6 +466,7 @@ export function TaskDerivationComposer({
                     : "已装技能 · 回车补全，原样写进调度者的 prompt"}
                   items={noteSlash.items}
                   selectedIndex={noteSlash.selectedIndex}
+                  token={noteSlash.token}
                   emptyText="这台调度者跑在 ssh 远端，技能清单只有它自己看得见——照常写 /名字，它认得。"
                   onHover={noteSlash.setIndex}
                   onPick={noteSlash.pick}

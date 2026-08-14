@@ -2,12 +2,20 @@
 // repository; no checkout or ref update can escape into the harness repo.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { eq } from "drizzle-orm";
 
 const root = mkdtempSync(join(tmpdir(), "harness-accept-merge-test-"));
 process.env.HARNESS_DB = join(root, "harness.db");
+process.env.HARNESS_RUNS_DIR = join(root, "runs");
+// 用例 13 会真的跑一轮：立刻 exit 0 的假 claude 让唤醒走完整条 spawn 路径而不联网。
+const fakeBin = join(root, "bin");
+mkdirSync(fakeBin, { recursive: true });
+writeFileSync(join(fakeBin, "claude"), "#!/bin/sh\nexit 0\n");
+chmodSync(join(fakeBin, "claude"), 0o755);
+process.env.PATH = `${fakeBin}:${process.env.PATH ?? ""}`;
 const git = (cwd: string, ...args: string[]) =>
   execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" }).trim();
 
@@ -43,7 +51,10 @@ try {
   } = await import("../src/git-accept.js");
   const { taskBranchDiff } = await import("../src/git-diff.js");
   const { db, ensureSchema } = await import("../src/db/index.js");
-  const { projects, tasks } = await import("../src/db/schema.js");
+  const { projects, sessions, tasks } = await import("../src/db/schema.js");
+  const { sessionTranscriptPath } = await import("../src/transcript.js");
+  const { beginAccepting, endAccepting } = await import("../src/acceptance-lock.js");
+  const { flushConflictHandoff, handOffConflict } = await import("../src/accept-conflict.js");
   const { acceptTask } = await import("../src/task-accept.js");
   await ensureSchema();
 
@@ -427,7 +438,138 @@ try {
     assert.equal(existsSync(ws.path), false);
   }
 
-  console.log("accept merge: git 场景 / 三种合并档位 / 清理档位 / 清理警告 / 脏工作区点名 / team 并发守卫 / 共享执行者验收口径全部通过");
+  // 13. 撞冲突要**真的**把任务叫醒 —— 时间线写了「已叫醒」，就必须有一轮真的起来。
+  //     回归的是 2026-08-14 那个现场：唤醒发在验收锁**里面**，continueTask 一进门查
+  //     isAcceptingTask 就静默退避返回 false，而调用处是 `void` 掉的，退避连个响都没有：
+  //     任务纹丝不动，用户对着「已叫醒该任务去解冲突」干等了一早上。
+  {
+    const repo = makeRepo("conflict-handoff");
+    const taskId = "acceptch0013";
+    const createdAt = new Date().toISOString();
+    const ws = await prepareWorktree(repo, taskId, "main");
+    writeFileSync(join(ws.path, "shared.txt"), "source version\n");
+    git(ws.path, "add", "-A");
+    git(ws.path, "commit", "-m", "source conflict");
+    writeFileSync(join(repo, "shared.txt"), "target version\n");
+    git(repo, "add", "-A");
+    git(repo, "commit", "-m", "target conflict");
+    git(repo, "checkout", "-b", "parking"); // 让 main 不被占用，冲突才是唯一的拦路点
+
+    await db.insert(projects).values({ id: "handoff-project", name: "handoff", repoPath: repo, createdAt });
+    await db.insert(tasks).values({
+      id: taskId,
+      projectId: "handoff-project",
+      title: "conflict handoff",
+      body: "",
+      mode: "single",
+      status: "done",
+      stage: "verified",
+      labels: "[]",
+      dependsOn: "[]",
+      resumeDependsOn: "[]",
+      agentType: "claude",
+      useWorktree: true,
+      worktreeBase: "main",
+      autoTitle: false,
+      createdAt,
+      updatedAt: createdAt,
+    });
+    // 时间线只写得进**已有会话**（没跑过的任务没有落点），交接说明要能落盘就得先有这一行。
+    const seededSession = "handoffsess13";
+    await db.insert(sessions).values({
+      id: seededSession,
+      taskId,
+      role: "single",
+      agentType: "claude",
+      executor: "claude",
+      target: "local",
+      cwd: ws.path,
+      worktreePath: ws.path,
+      branch: worktreeBranchName(taskId),
+      startedAt: createdAt,
+      turnStartedAt: createdAt,
+      endedAt: createdAt,
+      activeMs: 0,
+    });
+
+    const result = await acceptTask(taskId);
+    assert.equal(result.accepted, false);
+    if (result.accepted) throw new Error("conflict unexpectedly accepted");
+    assert.equal(result.reason, "merge_conflict");
+    assert.equal(result.conflictHandoff?.notified, true, "撞冲突要交接给任务自己解");
+
+    // 「起了一轮」的硬证据：多出一行会话。轮询而不是等固定时长——唤醒是异步发出的。
+    const turnStarted = async () =>
+      (await db.select().from(sessions).where(eq(sessions.taskId, taskId))).length > 1;
+    for (let i = 0; i < 100 && !(await turnStarted()); i++) {
+      await new Promise((done) => setTimeout(done, 50));
+    }
+    assert.equal(await turnStarted(), true, "时间线说「已叫醒」，就必须真有一轮跑起来");
+    const timeline = readFileSync(sessionTranscriptPath(taskId, seededSession), "utf8");
+    assert.match(timeline, /冲突交接：/, "交接说明要留在时间线上（刷新后仍看得见）");
+    assert.equal(timeline.includes("冲突交接失败"), false, "真叫醒了就不该同时写着失败");
+  }
+
+  // 14. 交接**投递不出去**时必须留字。老代码是 `void continueTask(...)`：验收互斥让它
+  //     返回 false（不是抛错），`.catch` 接不到，于是「已叫醒」写在时间线上、任务却一动
+  //     没动。这里把锁按住不放，逼出那条投递失败路径：可以叫不醒，但不许没声音。
+  {
+    const taskId = "acceptcs0014";
+    const createdAt = new Date().toISOString();
+    const seededSession = "handoffsess14";
+    await db.insert(tasks).values({
+      id: taskId,
+      projectId: "handoff-project",
+      title: "conflict handoff silent",
+      body: "",
+      mode: "single",
+      status: "done",
+      labels: "[]",
+      dependsOn: "[]",
+      resumeDependsOn: "[]",
+      agentType: "claude",
+      useWorktree: true,
+      autoTitle: false,
+      createdAt,
+      updatedAt: createdAt,
+    });
+    await db.insert(sessions).values({
+      id: seededSession,
+      taskId,
+      role: "single",
+      agentType: "claude",
+      executor: "claude",
+      target: "local",
+      cwd: root,
+      startedAt: createdAt,
+      turnStartedAt: createdAt,
+      endedAt: createdAt,
+      activeMs: 0,
+    });
+
+    assert.equal(beginAccepting(taskId), true);
+    try {
+      const handoff = await handOffConflict({ id: taskId, title: "conflict handoff silent" }, {
+        reason: "merge_conflict",
+        sourceBranch: `harness/${taskId}`,
+        targetBranch: "main",
+        conflictFiles: ["shared.txt"],
+      });
+      assert.equal(handoff?.notified, true);
+      flushConflictHandoff(taskId);
+      const transcript = sessionTranscriptPath(taskId, seededSession);
+      const reported = () =>
+        existsSync(transcript) && readFileSync(transcript, "utf8").includes("冲突交接失败");
+      for (let i = 0; i < 100 && !reported(); i++) {
+        await new Promise((done) => setTimeout(done, 50));
+      }
+      assert.equal(reported(), true, "叫不醒就得说，绝不能只留下一句「已叫醒」");
+    } finally {
+      endAccepting(taskId);
+    }
+  }
+
+  console.log("accept merge: git 场景 / 三种合并档位 / 清理档位 / 清理警告 / 脏工作区点名 / team 并发守卫 / 共享执行者验收口径 / 冲突交接真唤醒 全部通过");
 } finally {
   rmSync(root, { recursive: true, force: true });
 }

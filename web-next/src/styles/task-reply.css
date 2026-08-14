@@ -1,0 +1,186 @@
+/* 对话框底部的回复框（含 `/` 命令与 @ 提及菜单），以及 /team、/duet 弹出的派生面板。 */
+.task-reply-shell { position: relative; flex: 0 0 auto; border-top: 0.5px solid var(--line); padding: 10px clamp(14px, 3vw, 34px) 14px; background: var(--canvas); }
+.task-reply-box { overflow: hidden; border: 1px solid var(--line2); border-radius: 12px; background: var(--panel); box-shadow: var(--surface-shadow); }
+.task-reply-box textarea { display: block; width: 100%; min-height: 58px; max-height: 230px; resize: vertical; border: 0; background: transparent; padding: 10px 12px 2px; color: var(--ink); font-size: 12.5px; line-height: 1.55; outline: 0; }
+.task-reply-actions { display: flex; height: 38px; align-items: center; gap: 8px; padding: 0 7px 6px 8px; color: var(--faint); font-size: 9.5px; }
+.task-reply-actions > span { margin-left: auto; }
+.task-reply-icon,
+.task-send-button { display: grid; width: 29px; height: 29px; place-items: center; border: 0; border-radius: 7px; background: transparent; color: var(--muted); }
+.task-reply-icon:hover:not(:disabled) { background: var(--raised); color: var(--ink); }
+.task-send-button { background: var(--accent); color: white; }
+.task-send-button:hover:not(:disabled) { background: #5560c4; }
+.task-upload-chip { position: relative; display: flex; height: 48px; max-width: 190px; align-items: center; gap: 7px; border: 1px solid var(--line2); border-radius: 7px; background: var(--panel); padding: 4px 24px 4px 6px; }
+.task-upload-chip > img { width: 38px; height: 38px; border-radius: 5px; object-fit: cover; }
+.task-upload-chip > span { min-width: 0; }
+.task-upload-chip b,
+.task-upload-chip small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task-upload-chip b { color: var(--ink); font-size: 10.5px; font-weight: 550; }
+.task-upload-chip small { color: var(--faint); font-size: 9px; }
+.task-upload-chip > button { position: absolute; top: 3px; right: 3px; display: grid; width: 17px; height: 17px; place-items: center; border: 0; border-radius: 4px; background: var(--raised); color: var(--faint); }
+.task-upload-error,
+.task-reply-error { width: 100%; margin: 0; color: var(--red); font-size: 10.5px; }
+.task-reply-error { margin-bottom: 5px; }
+.task-reply-command-menu,
+.task-reply-mention-menu,
+.task-reply-inline-panel {
+  position: absolute;
+  z-index: 24;
+  bottom: 100%;
+  left: clamp(14px, 3vw, 34px);
+  margin-bottom: 7px;
+}
+.task-reply-command-menu,
+.task-reply-mention-menu {
+  width: min(390px, calc(100% - 28px));
+  overflow: hidden;
+  border: 1px solid var(--line2);
+  border-radius: 11px;
+  background: var(--panel);
+  padding: 5px;
+  box-shadow: var(--menu-shadow);
+}
+.task-reply-command-menu > small,
+.task-reply-mention-menu > small { display: block; padding: 4px 7px 5px; color: var(--faint); font-size: 9.5px; }
+.task-reply-command-menu > button,
+.task-reply-mention-menu > button {
+  display: flex;
+  width: 100%;
+  min-height: 35px;
+  align-items: baseline;
+  gap: 9px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  padding: 7px 8px;
+  text-align: left;
+}
+.task-reply-command-menu > button:hover,
+.task-reply-command-menu > button[aria-selected="true"],
+.task-reply-mention-menu > button:hover,
+.task-reply-mention-menu > button[aria-selected="true"] { background: var(--sel-bg); }
+.task-reply-command-menu b { flex: 0 0 auto; color: var(--accent); font-family: var(--font-mono); font-size: 11.5px; }
+.task-reply-command-menu span { flex: 0 0 auto; font-size: 11.5px; font-weight: 600; }
+.task-reply-command-menu em { min-width: 0; overflow: hidden; color: var(--faint); font-size: 10px; font-style: normal; text-overflow: ellipsis; white-space: nowrap; }
+/* 技能一多这张菜单就得能滚（本机 57 条）；键盘选中项的 scrollIntoView 在 SlashMenu 里。 */
+.task-reply-command-menu { max-height: min(46vh, 340px); overflow-y: auto; }
+.task-reply-mention-menu { width: min(270px, calc(100% - 28px)); }
+.task-reply-mention-menu > p { margin: 4px 7px 7px; color: var(--faint); font-size: 10.5px; }
+.task-reply-mention-menu > button { align-items: center; }
+.task-reply-mention-menu > button > svg { color: var(--muted); }
+.task-reply-mention-menu b { color: var(--ink); font-family: var(--font-mono); font-size: 11.5px; }
+.task-reply-inline-panel {
+  right: clamp(14px, 3vw, 34px);
+  max-height: min(64vh, 610px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border-radius: 13px;
+  box-shadow: var(--shadow);
+}
+
+.task-derivation-card {
+  overflow: hidden;
+  border: 1px solid color-mix(in lch, var(--accent) 28%, var(--line));
+  border-radius: 13px;
+  background: var(--panel);
+}
+.task-derivation-card.is-team { border-color: color-mix(in lch, var(--cyan) 35%, var(--line)); }
+.task-derivation-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  border-bottom: 1px solid var(--line);
+  padding: 11px 12px;
+  background: color-mix(in lch, var(--accent) 4%, var(--panel));
+}
+.task-derivation-card.is-team .task-derivation-header { background: color-mix(in lch, var(--cyan) 4%, var(--panel)); }
+.task-derivation-header > span {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+  place-items: center;
+  border-radius: 8px;
+  background: color-mix(in lch, var(--accent) 12%, var(--panel));
+  color: var(--accent);
+}
+.task-derivation-card.is-team .task-derivation-header > span { background: color-mix(in lch, var(--cyan) 12%, var(--panel)); color: var(--cyan); }
+.task-derivation-header > div { display: grid; min-width: 0; gap: 1px; }
+.task-derivation-header b { font-size: 12px; font-weight: 650; }
+.task-derivation-header small { color: var(--faint); font-size: 9.5px; }
+.task-derivation-header .ui-button { margin-left: auto; }
+.task-derivation-body { display: grid; gap: 11px; padding: 12px; }
+.task-derivation-role-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.task-derivation-role { min-width: 0; border: 1px solid var(--line); border-radius: 9px; background: var(--canvas); padding: 9px; }
+.task-derivation-review { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 10.5px; font-weight: 600; }
+.task-derivation-note { position: relative; display: grid; gap: 6px; color: var(--muted); font-size: 10px; font-weight: 600; }
+.task-derivation-note textarea {
+  width: 100%;
+  resize: vertical;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--canvas);
+  padding: 8px 10px;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 450;
+  line-height: 1.55;
+  outline: 0;
+}
+.task-derivation-note textarea:focus { border-color: var(--accent); }
+/* 附言里的 `/` 补全：派生面板本身是滚动的，菜单贴着输入框往下挂，别用 bottom:100%
+   （附言在面板底部，往上弹会盖住执行器那排选择器）。 */
+.task-derivation-slash-menu {
+  position: absolute;
+  z-index: 24;
+  top: 100%;
+  left: 0;
+  width: min(390px, 100%);
+  max-height: min(38vh, 260px);
+  overflow-y: auto;
+  margin-top: 5px;
+  border: 1px solid var(--line2);
+  border-radius: 11px;
+  background: var(--panel);
+  padding: 5px;
+  box-shadow: var(--menu-shadow);
+  font-weight: 450;
+}
+.task-derivation-slash-menu > small { display: block; padding: 4px 7px 5px; color: var(--faint); font-size: 9.5px; }
+.task-derivation-slash-menu > button { display: flex; width: 100%; min-height: 35px; align-items: baseline; gap: 9px; border: 0; border-radius: 7px; background: transparent; padding: 7px 8px; text-align: left; }
+.task-derivation-slash-menu > button:hover,
+.task-derivation-slash-menu > button[aria-selected="true"] { background: var(--sel-bg); }
+.task-derivation-slash-menu b { flex: 0 0 auto; color: var(--accent); font-family: var(--font-mono); font-size: 11.5px; }
+.task-derivation-slash-menu em { min-width: 0; overflow: hidden; color: var(--faint); font-size: 10px; font-style: normal; text-overflow: ellipsis; white-space: nowrap; }
+.task-derivation-duet-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.task-derivation-gate { display: grid; gap: 6px; }
+.task-derivation-gate > span { color: var(--muted); font-size: 10px; font-weight: 550; }
+.task-derivation-gate .ui-choice { min-height: 34px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); padding: 0 9px; }
+.task-derivation-explainer { margin: -2px 0 0; color: var(--faint); font-size: 9.5px; }
+.task-derivation-footer {
+  display: flex;
+  min-height: 48px;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  border-top: 1px solid var(--line);
+  padding: 8px 10px 8px 12px;
+  background: var(--canvas);
+}
+.task-derivation-warning { display: flex; width: 100%; align-items: center; gap: 5px; margin: 0; color: var(--amber); font-size: 10px; }
+.task-derivation-worktree { display: inline-flex; min-width: 0; align-items: center; gap: 5px; overflow: hidden; color: var(--faint); font-size: 9.5px; text-overflow: ellipsis; white-space: nowrap; }
+.task-derivation-worktree svg { flex: 0 0 auto; color: var(--accent); }
+.task-derivation-actions { display: flex; margin-left: auto; gap: 5px; }
+.task-derivation-actions kbd { color: rgb(255 255 255 / 70%); font: 9px var(--font-mono); }
+
+@media (max-width: 880px) {
+  .task-derivation-role-grid { grid-template-columns: 1fr; }
+  .task-derivation-duet-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 620px) {
+  .task-reply-inline-panel { left: 8px; right: 8px; }
+  .task-derivation-duet-grid { grid-template-columns: 1fr; }
+  .task-derivation-footer { align-items: stretch; }
+  .task-derivation-worktree { width: 100%; }
+  .task-derivation-actions { width: 100%; justify-content: flex-end; }
+}

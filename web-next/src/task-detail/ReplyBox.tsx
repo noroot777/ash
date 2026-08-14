@@ -318,6 +318,7 @@ export function ReplyBox({
             : `${firstSkillIndex === 0 ? "技能" : "派生命令与技能"} · ↑↓ 选择，回车${selectedIsSkill ? "补全" : "确认"}，Esc 取消`}
           items={candidates}
           selectedIndex={selectedIndex}
+          token={slashToken(value)}
           onHover={setCommandIndex}
           onPick={pickCommand}
         />

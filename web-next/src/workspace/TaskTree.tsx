@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useMemo, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import type { ProjectView, Task } from "@harness/shared";
 import { statusCounts, workersOf } from "@harness/shared/team";
 import { CaretRight, ChatsCircle, Star, UsersThree } from "@phosphor-icons/react";
@@ -9,7 +9,7 @@ import { useTaskReadState, type IndicatorForTask } from "../lib/useTaskReadState
 import { ProjectAvatar } from "./ProjectAvatar.tsx";
 import { SpreadPeekLayer, SpreadRowCells, SpreadRowProvider, useSpreadPeek, useSpreadRow } from "./TaskSpread.tsx";
 import { matchesSpreadFilter, spreadBucket, SPREAD_FILTERS, type SidebarSpread, type SpreadFilter } from "./useSidebarSpread.ts";
-import { buildTaskTree, orderedTopLevelTasks, previewTasksByAge } from "./taskTreeModel.ts";
+import { advanceHiddenReveal, buildTaskTree, orderedTopLevelTasks, previewTasksByAge } from "./taskTreeModel.ts";
 
 type TaskTreeProps = {
   projects: ProjectView[];
@@ -31,6 +31,15 @@ const TaskTreeActionsContext = createContext<{
 
 const TASK_PREVIEW_LIMIT = 12;
 const COLLAPSED_SECTIONS_STORAGE_KEY = "harness-next:task-tree:collapsed-sections";
+
+function useRevealHiddenSelection(revealKey: string | null, onReveal: () => void) {
+  const lastKey = useRef<string | null>(null);
+  useEffect(() => {
+    const next = advanceHiddenReveal(lastKey.current, revealKey);
+    lastKey.current = next.lastKey;
+    if (next.reveal) onReveal();
+  }, [onReveal, revealKey]);
+}
 
 function readCollapsedSections(): Set<string> {
   try {
@@ -207,10 +216,13 @@ function TeamRow({
   const workers = workersOf(tasks, task.id);
   const selectedWorkerIndex = workers.findIndex((worker) => worker.id === selectedTaskId);
   const selectedWorker = selectedWorkerIndex >= 0;
+  const overflowSelectedId = selectedWorkerIndex >= TASK_PREVIEW_LIMIT ? workers[selectedWorkerIndex]?.id ?? null : null;
   const [expanded, setExpanded] = useState(selectedWorker);
-  const [showAllWorkers, setShowAllWorkers] = useState(false);
+  const [showAllWorkers, setShowAllWorkers] = useState(() => overflowSelectedId != null);
+  const revealOverflowWorkers = useCallback(() => setShowAllWorkers(true), []);
+  useRevealHiddenSelection(overflowSelectedId, revealOverflowWorkers);
   const indicator = indicatorForTask(task);
-  const workersExpanded = showAllWorkers || selectedWorkerIndex >= TASK_PREVIEW_LIMIT;
+  const workersExpanded = showAllWorkers;
   const visibleWorkers = workersExpanded ? workers : workers.slice(0, TASK_PREVIEW_LIMIT);
   useEffect(() => {
     if (selectedWorker) setExpanded(true);
@@ -291,17 +303,45 @@ function CurrentProjectTree({
 }) {
   const sections = useMemo(() => buildTaskTree(tasks, { unifiedPinned: true }), [tasks]);
   const { collapsed, toggle: toggleCollapsed } = useCollapsedSections();
-  const [previewExpandedSections, setPreviewExpandedSections] = useState<Set<string>>(new Set());
+  const keptBySection = useMemo(
+    () => sections.map((section) => ({
+      section,
+      kept: section.tasks.filter((task) => matchesSpreadFilter(task, filter)),
+    })),
+    [filter, sections],
+  );
+  const hiddenSelection = useMemo(() => {
+    if (!selectedTaskId) return null;
+    for (const { section, kept } of keptBySection) {
+      if (previewTasksByAge(kept).hidden.some((task) => task.id === selectedTaskId)) {
+        return { sectionKey: section.key, taskId: selectedTaskId };
+      }
+    }
+    return null;
+  }, [keptBySection, selectedTaskId]);
+  const [previewExpandedSections, setPreviewExpandedSections] = useState<Set<string>>(
+    () => hiddenSelection ? new Set([hiddenSelection.sectionKey]) : new Set(),
+  );
+  const revealHiddenSection = useCallback(() => {
+    const sectionKey = hiddenSelection?.sectionKey;
+    if (!sectionKey) return;
+    setPreviewExpandedSections((current) => {
+      if (current.has(sectionKey)) return current;
+      const next = new Set(current);
+      next.add(sectionKey);
+      return next;
+    });
+  }, [hiddenSelection?.sectionKey]);
+  useRevealHiddenSelection(
+    hiddenSelection ? `${hiddenSelection.sectionKey}:${hiddenSelection.taskId}` : null,
+    revealHiddenSection,
+  );
   const togglePreview = (sectionKey: string) => setPreviewExpandedSections((current) => {
     const next = new Set(current);
     if (next.has(sectionKey)) next.delete(sectionKey);
     else next.add(sectionKey);
     return next;
   });
-  const keptBySection = sections.map((section) => ({
-    section,
-    kept: section.tasks.filter((task) => matchesSpreadFilter(task, filter)),
-  }));
   // 一条不剩时必须自己说出来，还得给条退路：窄态那排点很小，不说清楚的话看着就是「任务全没了」。
   if (!keptBySection.some((entry) => entry.kept.length)) {
     const label = SPREAD_FILTERS.find((item) => item.key === filter)?.label ?? filter;
@@ -320,8 +360,7 @@ function CurrentProjectTree({
         const sectionCollapsed = collapsed.has(section.key);
         if (!kept.length) return null;
         const preview = previewTasksByAge(kept);
-        const selectedTaskIsHidden = preview.hidden.some((task) => task.id === selectedTaskId);
-        const previewExpanded = previewExpandedSections.has(section.key) || selectedTaskIsHidden;
+        const previewExpanded = previewExpandedSections.has(section.key);
         const visibleTasks = previewExpanded ? kept : preview.visible;
         const hiddenCount = preview.hidden.length;
         return (

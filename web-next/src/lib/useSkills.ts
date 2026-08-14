@@ -2,23 +2,17 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { AgentType, SkillEntry, SkillSource } from "@harness/shared";
 import { DEFAULT_APP_SETTINGS } from "@harness/shared";
 import { api } from "./api.ts";
+import type { SlashItem } from "./slashMatch.ts";
 
 // 输入框里 `/` 补全用的技能清单。三件事:拉、缓存、按设置的间隔重拉。
 //
 // 选中一条只是把 `/名字` 补进正文；确定调用由 server 运行前注入
 // 对应 SKILL.md。所以这里仍然只有「补全」，不直接执行技能。
-
-export interface SlashItem {
-  /** 补进正文的文本,含斜杠。 */
-  command: string;
-  label: string;
-  hint?: string;
-  /** harness 自己的派生命令(/team、/duet)vs CLI 已装的技能。 */
-  kind: "harness" | "skill";
-  source?: SkillSource;
-  /** 同一份技能还装在哪些别的 CLI 上(按物理路径认)。 */
-  alsoIn?: AgentType[];
-}
+//
+// 「哪些候选、按什么顺序」是纯逻辑,在 slashMatch.ts(能被 node 直接跑);
+// 这里原样转发,调用方仍从本文件拿。
+export type { SlashItem } from "./slashMatch.ts";
+export { mergeSlashItems, slashMatchIndex, slashToken, toSlashItems } from "./slashMatch.ts";
 
 export const SOURCE_LABEL: Record<SkillSource, string> = {
   project: "项目",
@@ -118,32 +112,6 @@ export function useSkills(query: {
   }, [enabled, seconds, pull]);
 
   return { skills: entry.skills, remote: entry.remote, refresh: () => pull(true) };
-}
-
-/** 正文里正在敲的那个斜杠 token(整段正文只有它时才算,免得句中的 `/` 也弹菜单)。 */
-export function slashToken(text: string): string | null {
-  return /^\s*(\/\S*)$/.exec(text)?.[1]?.toLowerCase() ?? null;
-}
-
-export function toSlashItems(skills: SkillEntry[]): SlashItem[] {
-  return skills.map((skill) => ({
-    command: skill.command,
-    label: skill.description || "技能",
-    kind: "skill" as const,
-    source: skill.source,
-    alsoIn: skill.alsoIn,
-  }));
-}
-
-/**
- * 合成候选:**harness 自己的命令永远排在最前**。它们改变的是「谁来干这件事」
- * (派生一个团队/一场讨论),技能只是给当前这轮加一句提示词 —— 前者点错了代价大得多,
- * 不能让某个 CLI 装了个叫 team 的技能就把它挤下去。
- */
-export function mergeSlashItems(harness: SlashItem[], skills: SkillEntry[], token: string | null): SlashItem[] {
-  const items = [...harness, ...toSlashItems(skills)];
-  if (!token) return [];
-  return items.filter((item) => item.command.toLowerCase().startsWith(token));
 }
 
 /** 供菜单画分隔线:harness 命令与技能之间的那个下标。 */

@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import type { AgentExecutorProfile, FreeReviewCheckMode, FreeWorkflowState, ReviewerProfile } from "@harness/shared";
+import type { AgentExecutorProfile, FreeReviewCheckMode, FreeReviewExecutorOverride, ReviewerProfile } from "@harness/shared";
 import { CheckCircle, MagnifyingGlass, Plus, SpinnerGap, X } from "@phosphor-icons/react";
 import { registeredAgentTypes } from "../lib/agentAvailability.ts";
-import { api } from "../lib/api.ts";
+import { api, type FreeWorkflowApiState } from "../lib/api.ts";
 import { useDismissable } from "../lib/useDismissable.ts";
 import {
   createReviewerDraft,
@@ -12,6 +12,15 @@ import {
   reviewerPayload,
   type ReviewerDraft,
 } from "./ReviewerProfileFields.tsx";
+import {
+  ReviewerRunOverride,
+  reviewerRunDraft,
+  reviewerRunDraftFrom,
+  reviewerRunPayload,
+  sameAsReviewer,
+  type ReviewerRunDraft,
+  type ReviewerRunSaveMode,
+} from "./ReviewerRunOverride.tsx";
 
 export function FreeReviewDialog({
   taskId,
@@ -22,9 +31,9 @@ export function FreeReviewDialog({
   notify,
 }: {
   taskId: string;
-  state: FreeWorkflowState | null;
+  state: FreeWorkflowApiState | null;
   reservationMode: boolean;
-  onChanged: (state: FreeWorkflowState) => void;
+  onChanged: (state: FreeWorkflowApiState) => void;
   onClose: () => void;
   notify: (message: string) => void;
 }) {
@@ -38,11 +47,27 @@ export function FreeReviewDialog({
   const [note, setNote] = useState(state?.reviewReservation?.note ?? "");
   const [creating, setCreating] = useState(false);
   const [draft, setDraft] = useState<ReviewerDraft>(() => createReviewerDraft());
+  // 「这一次用谁跑」：进来先等于选中审查者的配置，改动的去向由 saveMode 决定。
+  const [runDraft, setRunDraft] = useState<ReviewerRunDraft>(() => reviewerRunDraft(null));
+  const [saveMode, setSaveMode] = useState<ReviewerRunSaveMode>("once");
+  const [newName, setNewName] = useState("");
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const dialogTitle = reservationMode ? (state?.reviewReservation?.armed ? "调整预约审查" : "预约审查") : "派审查";
   const types = useMemo(() => registeredAgentTypes(profiles), [profiles]);
+  // 预约里的覆盖每次轮询都是新对象，直接进依赖会把用户正在改的草稿冲掉；按值序列化当键。
+  const reservedOverrideKey = JSON.stringify(state?.reviewReservation?.override ?? null);
+  const selectedReviewer = reviewers.find((item) => item.id === selectedId) ?? null;
+  const runChanged = !sameAsReviewer(runDraft, selectedReviewer);
   useDismissable({ enabled: !busy, containerRef: scrim, onClose });
+
+  // 换审查者 = 换了参照系：草稿、保存方式、新名字整套回到这位审查者的原配置。
+  const selectReviewer = (reviewer: ReviewerProfile) => {
+    setSelectedId(reviewer.id);
+    setRunDraft(reviewerRunDraft(reviewer));
+    setSaveMode("once");
+    setNewName("");
+  };
 
   useEffect(() => { dialog.current?.focus(); }, []);
 
@@ -60,12 +85,20 @@ export function FreeReviewDialog({
       setCheckMode(state?.reviewReservation?.checkMode ?? "logic");
       setRetryLimit(String(state?.reviewReservation?.retryLimit ?? 1));
       setNote(state?.reviewReservation?.note ?? "");
+      // 「调整预约审查」再打开时要看到上次改后的那套配置，而不是审查者的原配置——
+      // 预约里存着覆盖就回显它，保存方式跟着回到「仅本次使用」。
+      const reserved = JSON.parse(reservedOverrideKey) as FreeReviewExecutorOverride | null;
+      const reviewer = nextReviewers.find((item) => item.id === preferred) ?? null;
+      setRunDraft(reserved && reviewer ? reviewerRunDraftFrom(reserved) : reviewerRunDraft(reviewer));
+      setSaveMode("once");
+      setNewName("");
       setCreating(nextReviewers.length === 0);
     }).catch((error) => notify(error instanceof Error ? error.message : "审查者读取失败"))
       .finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
   }, [
     notify,
+    reservedOverrideKey,
     state?.reviewReservation?.checkMode,
     state?.reviewReservation?.note,
     state?.reviewReservation?.retryLimit,
@@ -78,7 +111,7 @@ export function FreeReviewDialog({
     try {
       const created = await api.createReviewerProfile(reviewerPayload(draft, profiles));
       setReviewers((current) => [created, ...current]);
-      setSelectedId(created.id);
+      selectReviewer(created);
       setCreating(false);
       notify(`已创建并选中审查者「${created.name}」`);
     } catch (error) {
@@ -90,19 +123,42 @@ export function FreeReviewDialog({
 
   const submit = async () => {
     if (!selectedId || busy || loading) return;
+    if (runChanged && saveMode === "new" && !newName.trim()) {
+      notify("请先给新审查者起个名字");
+      return;
+    }
     setBusy(true);
     try {
+      // 三种去向的共同点：这一次审查一定按改后的配置跑。前两种把改动落进审查者配置
+      // （落完就是它自己的配置，不必再带覆盖），「仅本次使用」才走 override。
+      const payload = runChanged ? reviewerRunPayload(runDraft, profiles) : null;
+      let reviewerId = selectedId;
+      let override: FreeReviewExecutorOverride | null = null;
+      if (payload && saveMode === "overwrite") {
+        const updated = await api.patchReviewerProfile(selectedId, payload);
+        setReviewers((current) => current.map((item) => (item.id === updated.id ? updated : item)));
+      } else if (payload && saveMode === "new") {
+        const created = await api.createReviewerProfile({ name: newName.trim(), ...payload });
+        setReviewers((current) => [created, ...current]);
+        setSelectedId(created.id);
+        reviewerId = created.id;
+      } else if (payload) {
+        override = payload;
+      }
       const input = {
-        reviewerId: selectedId,
+        reviewerId,
         checkMode,
         retryLimit: Number(retryLimit),
         note,
+        override,
       };
       const next = reservationMode
         ? await api.reserveFreeReview(taskId, input)
         : await api.dispatchFreeReview(taskId, input);
       onChanged(next);
-      const name = reviewers.find((item) => item.id === selectedId)?.name ?? "审查者";
+      const name = reviewerId === selectedId
+        ? reviewers.find((item) => item.id === selectedId)?.name ?? "审查者"
+        : newName.trim();
       notify(reservationMode ? `已预约完成后由「${name}」审查` : `已派出 ${name}`);
       onClose();
     } catch (error) {
@@ -159,12 +215,27 @@ export function FreeReviewDialog({
               <div className="free-review-section-title"><b>审查者</b><button type="button" onClick={() => setCreating((value) => !value)}><Plus size={11} />新建</button></div>
               <div className="free-review-reviewer-list">
                 {reviewers.map((reviewer) => (
-                  <button key={reviewer.id} type="button" aria-selected={selectedId === reviewer.id} onClick={() => { setSelectedId(reviewer.id); setCreating(false); }}>
+                  <button key={reviewer.id} type="button" aria-selected={selectedId === reviewer.id} onClick={() => { selectReviewer(reviewer); setCreating(false); }}>
                     <span><b>{reviewer.name}</b><ReviewerProfileSummary reviewer={reviewer} profiles={profiles} /></span>
                     {selectedId === reviewer.id && <CheckCircle size={16} weight="fill" />}
                   </button>
                 ))}
               </div>
+              {!creating && selectedReviewer && (
+                <ReviewerRunOverride
+                  reviewer={selectedReviewer}
+                  profiles={profiles}
+                  types={types}
+                  draft={runDraft}
+                  changed={runChanged}
+                  saveMode={saveMode}
+                  newName={newName}
+                  disabled={busy}
+                  onChange={setRunDraft}
+                  onSaveModeChange={setSaveMode}
+                  onNewNameChange={setNewName}
+                />
+              )}
               {creating && (
                 <div className="free-review-create" onKeyDown={(event) => {
                   if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing || event.target instanceof HTMLButtonElement) return;

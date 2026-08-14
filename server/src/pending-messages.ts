@@ -46,6 +46,7 @@ export async function enqueueMessage(input: {
   executorId?: string | null;
   model?: string | null;
   reasoningEffort?: string | null;
+  sessionRole?: string | null;
   mode?: ScheduledMessageMode;
   // 排队消息不看钟点,sendAt 只用来排先后,所以默认取此刻。
   sendAt?: Date;
@@ -59,6 +60,7 @@ export async function enqueueMessage(input: {
     executorId: input.executorId ?? null,
     model: input.model ?? null,
     reasoningEffort: input.reasoningEffort ?? null,
+    sessionRole: input.sessionRole ?? null,
     mode: input.mode ?? ("queued" satisfies ScheduledMessageMode),
     sendAt: (input.sendAt ?? new Date()).toISOString(),
     status: "pending" as const,
@@ -211,6 +213,7 @@ function deliveryOptions(m: Row) {
     executorId: m.executorId ?? null,
     model: m.model ?? null,
     reasoningEffort: m.reasoningEffort ?? null,
+    ...(m.sessionRole ? { sessionRole: m.sessionRole as "single" | "reviewer" } : {}),
   };
 }
 

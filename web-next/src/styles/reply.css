@@ -21,7 +21,7 @@
 .scheduled-send-panel button:disabled { opacity: .42; }
 .reply-schedule-button { display: grid; width: 29px; height: 29px; place-items: center; border: 0; border-radius: 7px; background: transparent; color: var(--muted); }
 .reply-schedule-button:hover:not(:disabled) { background: var(--raised); color: var(--ink); }
-/* 对话框底部那颗胶囊本体在 controls.css（`.run-target-picker.is-chip`）；这里只剩
+/* 对话框底部那颗胶囊本体在 run-target-picker.css（`.run-target-picker.is-chip`）；这里只剩
    「取消 @ 召唤」那颗小圆叉，它挂在胶囊外面，不属于三段中的任何一段。 */
 .task-reply-chip-reset { display: grid; width: 19px; height: 19px; place-items: center; border: 0; border-radius: 50%; background: transparent; color: var(--faint); }
 .task-reply-chip-reset:hover { background: var(--raised); color: var(--ink); }
