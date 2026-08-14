@@ -31,10 +31,11 @@ export type AgentEvent =
   // 本回合的 token 用量,由执行器从 CLI 的收尾事件(claude 的 result / codex 的
   // turn.completed)解析。每回合至多一条,恒在该回合的 turnEnd/done 之前。拿不到
   // 用量的 CLI 一条都不发 —— 展示端据此判断「这家报不报账」。
-  | { kind: "usage"; usage: TokenUsage }
+  // accounting 缺省只存在于旧 trace：Claude 旧账本来就是单轮值；Codex 旧账是累计
+  // 快照，读取侧要先求差。新事件经过服务端归一后恒标 incremental。
+  | { kind: "usage"; usage: TokenUsage; accounting?: "incremental" }
   // 上下文**水位**(不是流水,区别见 shared/src/usage.ts 的 ContextUsage)。每回合至多
   // 一条,恒在该回合的 turnEnd/done 之前。落库是**覆盖**不是累加。
-  // 眼下只有 claude 发得出:codex 的 `exec --json` 里没有水位,一条都不发。
   | { kind: "context"; context: ContextUsage }
   | { kind: "error"; message: string }
   // 常驻会话（team 调度台）专用：一个回合说完了，但进程还活着等下一条消息。
@@ -69,13 +70,38 @@ export type ServerEvent =
       questionOptions: string[] | null;
       questionItems: QuestionItem[] | null;
     }
+  // 待发送消息托盘(排队/定时)有变化：入队、真的发出去了、被取消。托盘的真值只能
+  // 来自服务端 —— 从前前端靠「任务从 running 变成别的状态」反推「排着的那条已经
+  // 发出去了」，可排队消息一投递任务立刻又回到 running，中间那个空档常常一次都没
+  // 被观察到，于是消息明明进了会话、托盘还挂着「排队中」(2026-08-13)。
+  | { type: "task.pendingMessages"; taskId: string }
   | {
       type: "agent.event";
       taskId: string;
       sessionId: string;
       role: SessionRole;
       agentType?: AgentType; // which agent produced it (single tasks can host several via @-mention)
+      model?: string | null;
+      reasoningEffort?: string | null;
+      // 这一回合是「就地验证」的第几轮。就地验证是搭在被验任务自己身上的旁路回合，
+      // 常常还复用同一条会话 —— 少了这个数，会话里审查者的发言跟它上面那条「我在做
+      // 需求」的发言长得一模一样（同执行器自审时连名字都一样）。跟 model/reasoningEffort
+      // 一样按回合随流广播，落盘那份在 trace 的 run 事件里，两条路读出来必须一致。
+      verifyRound?: number | null;
       event: AgentEvent;
+    }
+  // A user-channel turn after it has been persisted to the session transcript.
+  // bySystem marks backend-authored handoffs (review repair / merge conflict):
+  // they start a real follow-up turn, but the UI must not attribute them to the user.
+  | {
+      type: "conversation.turn";
+      taskId: string;
+      sessionId: string;
+      role: SessionRole;
+      agentType: AgentType;
+      text: string;
+      at: string;
+      bySystem?: true;
     }
   | {
       type: "duet.progress";

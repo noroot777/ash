@@ -1,7 +1,7 @@
 import { useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import type { AgentExecutorProfile, AgentType, LlmProvider } from "@harness/shared";
-import { ArrowLeft, CaretRight, Robot, SpinnerGap, Warning } from "@phosphor-icons/react";
+import { ArrowLeft, ArrowsClockwise, CaretRight, Robot, SpinnerGap, Warning } from "@phosphor-icons/react";
 import { useAgentModelCatalog } from "../lib/modelCatalog.ts";
 import { useDismissable } from "../lib/useDismissable.ts";
 import { placementStyle, usePanelPlacement } from "../lib/usePanelPlacement.ts";
@@ -17,7 +17,7 @@ import {
 /**
  * 「派谁 + 跑哪个模型」选择器。自带筛选框与键盘导航，用在三个入口：
  * ① 对话框里 @ 选中智能体之后，直接以第二步（选模型）打开；
- * ② 点三段胶囊的**智能体**那一段（`agentOnly`）：只列智能体，选完就落，不往下一步走；
+ * ② 点三段胶囊的**智能体**那一段（`agentOnly`）：只列智能体，选完由外层向右打开模型段；
  * ③ 点三段胶囊的**模型**那一段：直接以第二步打开当前智能体的模型列表。
  *
  * 第二步按**供应商分块**：块标题是供应商名，块内是它的模型——供应商和模型是同一
@@ -55,7 +55,7 @@ export function AgentModelPicker({
   initialAgent: AgentType;
   /**
    * 只选智能体：选完直接 onCommit（executorId / model 都给 null = 跟随该类型的默认
-   * 执行器），不再往「选模型」推。三段胶囊的第一段用它——那一段管的就只有智能体。
+   * 执行器），组件内不往「选模型」推；三段胶囊的外层会接着打开右边的模型段。
    */
   agentOnly?: boolean;
   /** 当前生效的执行器：它挂的供应商在第二步里排最前。 */
@@ -101,8 +101,8 @@ export function AgentModelPicker({
   const canGoBack = stage === "model" && initialStage === "agent";
 
   const openModels = (next: AgentType) => {
-    // agentOnly：这一段管的就只有智能体，选完即落。executorId 留空 = 跟随该类型的
-    // 默认执行器；模型给 null，由调用方按「换人了」把覆盖打回跟随。
+    // agentOnly：这一段只提交智能体，executorId 留空 = 跟随该类型的默认执行器；
+    // 模型给 null，由调用方清旧覆盖并向右打开模型段。
     if (agentOnly) {
       onCommit({ agent: next, executorId: null, model: null });
       return;
@@ -194,8 +194,7 @@ export function AgentModelPicker({
             >
               <b>@{row.agent}</b>
               <span>{row.detail}</span>
-              {/* 只有「还要接着选模型」时才画这个箭头：agentOnly 下点完就落，画了是骗人。 */}
-              {!agentOnly && <CaretRight size={11} aria-hidden="true" />}
+              <CaretRight size={11} aria-hidden="true" />
             </button>
           ))}
         </div>
@@ -213,6 +212,27 @@ export function AgentModelPicker({
                     {section.group.status === "failed" && <Warning size={10} aria-hidden="true" />}
                     {section.group.note}
                   </small>
+                  {/* onMouseDown 拦掉是因为面板点外部即关：不拦的话按下去的瞬间面板就没了。 */}
+                  {section.group.onRefresh && (
+                    <button
+                      type="button"
+                      className="model-refresh"
+                      aria-label={`刷新 ${section.group.providerName} 的模型清单`}
+                      disabled={section.group.refreshing}
+                      onMouseDown={(event) => event.preventDefault()}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        section.group.onRefresh?.();
+                      }}
+                    >
+                      <ArrowsClockwise
+                        size={11}
+                        className={section.group.refreshing ? "is-spinning" : ""}
+                        aria-hidden="true"
+                      />
+                      刷新
+                    </button>
+                  )}
                 </header>
                 {section.rows.map((row, rowIndex) => {
                   const flatIndex = offset + rowIndex;

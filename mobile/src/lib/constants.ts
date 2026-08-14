@@ -1,7 +1,7 @@
-// Status & priority metadata, ported from web/src/constants.ts. Tailwind class
-// names are replaced with plain hex colors for RN. `idle` is kept as precise
+// Status metadata, ported from web. Tailwind class names are replaced with
+// plain hex colors for RN. `idle` is kept as precise
 // metadata but folded into the running section by the task list, just like web.
-import type { TaskStatus, Priority } from "@harness/shared";
+import type { TaskStatus } from "@harness/shared";
 
 type StatusMeta = { key: TaskStatus; label: string; color: string };
 
@@ -29,19 +29,6 @@ export const STATUSES: StatusMeta[] = [
   STATUS_META.failed,
   STATUS_META.canceled,
 ];
-
-export const PRIORITIES: { key: Priority; label: string; bars: number; color: string }[] = [
-  { key: "urgent", label: "紧急", bars: 4, color: "#f87171" },
-  { key: "high", label: "高", bars: 3, color: "#fdba74" },
-  { key: "medium", label: "中", bars: 2, color: "#fcd34d" },
-  { key: "low", label: "低", bars: 1, color: "#a3a3a3" },
-  { key: "none", label: "无", bars: 0, color: "#525252" },
-];
-
-export const PRIORITY_META = Object.fromEntries(PRIORITIES.map((p) => [p.key, p])) as Record<
-  Priority,
-  (typeof PRIORITIES)[number]
->;
 
 // 创建任务时的「启动时机」——四种互斥:仅创建 / 立即执行 / 定时一次性 / 定时循环。
 // `btn` 是该模式下底部主按钮的文案。默认 run（与 web 端一致）。

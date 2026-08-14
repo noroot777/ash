@@ -59,7 +59,7 @@ import { firstAnchor } from "@harness/shared/workflow-policy";
 import { db } from "./db/index.js";
 import { projects, tasks } from "./db/schema.js";
 import { RUNS_DIR } from "./paths.js";
-import { clearTaskStage, restoreTaskStage } from "./task-stage.js";
+import { clearTaskStage, restoreTaskStage, type AcceptedSnapshot, type ReopenedAcceptance } from "./task-stage.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { now } from "./util.js";
 import { setWorkflowAt } from "./workflow-advance.js";
@@ -79,6 +79,11 @@ interface TurnBaseline {
    * 可那时还不知道这一轮会不会真改东西；照片一样就说明白摘了，结算时按这个值挂回去。
    */
   stage?: "accepted" | "merged" | null;
+  /**
+   * 与 stage 同批摘走的合并快照（目标分支 + 合并区间 + 尾段进度）。纯询问挂回时必须
+   * 整套恢复；字段缺失 = 旧版基线，只挂回 stage（旧行为）。
+   */
+  acceptedSnapshot?: AcceptedSnapshot | null;
   /**
    * 回合开头清掉的账本原值，照片一样时原样放回。三种取值要分清：
    *   `LedgerSnapshot` → 开头清过账，结算时按它恢复
@@ -128,34 +133,42 @@ async function fingerprint(cwd: string): Promise<string | null> {
 }
 
 /**
- * 起跑前的第一张照 —— 顺手把上一版的账清了。
+ * 起跑前的第一张照 —— 顺手把上一版的账清了。返回基线**是否真的落了盘**：调用方只在
+ * true 时才执行摘牌的最后一步（清合并快照列），快照没持久化就不动验收事实。
  *
  * 落磁盘而不是内存：`data/runs/<taskId>/turn-baseline.json` 活得过 server 重启，
  * 重启后接管（reattach）那一路照样能比对上。
  *
- * **拍照必须排在清账前面**：清账会写 `tasks` 表，不碰工作目录，本来两边不相干；但真出了
- * 岔子（清账抛异常）时，先拍到的照还在，结算那头至少能照老路把账补清，不会连基线都没有。
+ * **写盘排在清账前面（write-ahead）**：`reopened` 里是刚从任务身上探到、马上要被清掉的
+ * 验收事实（stage + 合并快照 + 尾段进度），必须先持久化再破坏——清账会摘 stage，进程
+ * 死在「已清、未写」的窗口里快照就永久丢了（审查实测：尾段补跑凭据不可恢复）。清账
+ * 之后再补写一次把 ledger 带上；第二次写失败只丢 ledger 的恢复精度，验收快照仍在。
  */
 export async function recordTurnBaseline(
   taskId: string,
   cwd: string,
   fresh: boolean,
-  reopenedStage: "accepted" | "merged" | null = null,
-): Promise<void> {
+  reopened: ReopenedAcceptance | null = null,
+): Promise<boolean> {
   try {
     const snapshot: TurnBaseline = {
       cwd,
       fingerprint: await fingerprint(cwd),
       fresh,
-      stage: reopenedStage,
-      ledger: await resetWorkflowLedger(taskId),
+      stage: reopened?.stage ?? null,
+      acceptedSnapshot: reopened?.snapshot ?? null,
+      ledger: null,
       at: now(),
     };
     mkdirSync(join(RUNS_DIR, taskId), { recursive: true });
     writeFileSync(baselinePath(taskId), JSON.stringify(snapshot));
+    snapshot.ledger = await resetWorkflowLedger(taskId);
+    writeFileSync(baselinePath(taskId), JSON.stringify(snapshot));
+    return true;
   } catch (error) {
     // 拍照失败不该拖垮起跑：没有基线 = 这一轮不做任何判断，退回改动前的行为。
     console.warn(`[harness] failed to record turn baseline for ${taskId}:`, error);
+    return false;
   }
 }
 
@@ -320,12 +333,18 @@ export async function reconcileTurnBaseline(taskId: string, confirmedDone: boole
     // 放回去 —— 不然用户只是问一句「这段为什么这么做」，任务就从已验收掉回进行中，
     // 线路图也退回第一站，还得再点一次验收。
     if (base.ledger) await restoreWorkflowLedger(taskId, base.ledger);
-    // 牌子的两条来路互斥：accepted/merged 在开头就被 `reopenAcceptedStage` 摘走了，
-    // 轮到清账时 stage 已经是空的；其余阶段（verified / awaiting_acceptance…）才落在账里。
+    // 牌子的两条来路：accepted/merged 在开头由 peek 显式记进 `base.stage`（write-ahead
+    // 之后清账也会把同一块牌子记进 ledger.stage，两处一致，优先取显式那份）；其余阶段
+    // （verified / awaiting_acceptance…）只落在账里。
     // `restoreTaskStage` 只在牌子位还空着时放 —— 这一轮 agent 自报过新阶段的话那是更新的
     // 结论，不能被旧牌子盖掉；那种情况下退回只写一行不带阶段的说明。
     const stageBack = base.stage ?? base.ledger?.stage ?? null;
-    const staged = stageBack ? await restoreTaskStage(taskId, stageBack, restoreStageNote(stageBack)) : false;
+    // reopen 摘走的不只是牌子：合并快照三列与尾段进度同属上一验收生命周期，纯询问的
+    // 挂回必须**整套**恢复——只挂回 stage 会留下「界面显示已验收、结构化快照却空了」，
+    // 下一次验收按当时 checkout 重新解析目标（审查实测：同一任务被合进两个分支）。
+    const staged = stageBack
+      ? await restoreTaskStage(taskId, stageBack, restoreStageNote(stageBack), base.acceptedSnapshot ?? null)
+      : false;
     if (!staged && base.ledger) await appendTaskTimeline(taskId, RESTORE_NOTE);
     if (base.fresh) await discardEmptyShell(taskId);
   } catch (error) {

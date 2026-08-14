@@ -14,7 +14,7 @@ export const MODES: { value: TaskMode; label: string; icon: typeof Robot }[] = [
 
 // harness 自己的三条切换命令。**这张表是固定的**:主文件 changeBody 那个「敲完空格
 // 就把命令从正文里吃掉」的正则只认这三个词,技能绝不能进这张表 —— 技能的 `/名字`
-// 必须原样留在正文里发下去(harness 一行提示词都不写,CLI 自己认)。
+// 必须原样留在正文里发下去，server 才能据此注入对应 SKILL.md。
 export const SLASHES = [
   { command: "/single", mode: "single" as const, label: "创建单任务" },
   { command: "/team", mode: "team" as const, label: "创建常驻团队" },

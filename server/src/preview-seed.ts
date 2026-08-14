@@ -39,6 +39,7 @@ export const CONFIG_TABLES = [
   "agents",
   "workflows",
   "team_presets",
+  "reviewer_profiles",
   "projects",
 ] as const;
 
@@ -55,7 +56,14 @@ export const SNAPSHOT_TABLES = [
   "notes",
   "note_tasks",
   "sessions",
+  // sessions 的 Codex 总账要靠这份累计基线继续求差；只搬前者不搬后者，预览里一续聊
+  // 就会把整条线程累计值再加一次。
+  "usage_cumulative_snapshots",
   "queue_items",
+  "free_workflow_states",
+  "free_workflow_events",
+  "free_review_runs",
+  "free_review_rounds",
 ] as const;
 
 /** 一次 INSERT 多少行。纯粹是别让单个 batch 撑太大，行数本身不多（千级）。 */
@@ -157,6 +165,12 @@ export async function sanitizeSnapshot(dest: Client): Promise<string[]> {
   }
   if (taskCols.includes("verify_round")) {
     await run("验证轮清零", `UPDATE tasks SET verify_round=NULL WHERE verify_round IS NOT NULL`);
+  }
+  if ((await columnsOf(dest, "free_review_runs")).length) {
+    await run("自由审查运行态清零", `UPDATE free_review_runs SET status='failed', finished_at=COALESCE(finished_at, updated_at) WHERE status='reviewing'`);;
+  }
+  if ((await columnsOf(dest, "free_review_rounds")).length) {
+    await run("自由审查轮次清零", `UPDATE free_review_rounds SET status='error', ended_at=COALESCE(ended_at, started_at) WHERE status='reviewing'`);
   }
 
   const agentCols = ["agent_pid", "agent_started_at", "agent_out_path", "agent_err_path", "agent_rc_path", "agent_offset"]

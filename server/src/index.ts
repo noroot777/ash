@@ -141,6 +141,13 @@ async function initializeServer() {
     const washed = await sanitizeSnapshot((await import("./db/index.js")).dbClient);
     console.log(`[harness] 预览库已洗运行态：${washed.join("、") || "无"}`);
   }
+  const usageRepair = await (await import("./usage-repair.js")).repairLegacyUsageAccounting();
+  if (!usageRepair.alreadyApplied) {
+    console.log(
+      `[harness] Token 历史账已校正：Codex ${usageRepair.repairedCodexSessions} 条，`
+      + `Claude ${usageRepair.repairedClaudeSessions} 条，证据不足跳过 ${usageRepair.skippedSessions} 条`,
+    );
+  }
   await migrateQueues(); // 一次性把 legacy depends_on / resume_depends_on 迁到 queue_items（幂等）
   // **顺序不能反**：先把还活着的 agent 接管回来（它们的输出走文件，压根没随上
   // 一个 server 进程一起死），再 reconcile 剩下那些真被打断的。反过来的话，一个
@@ -150,6 +157,10 @@ async function initializeServer() {
   if (!IS_PREVIEW_INSTANCE) {
     await reattachRunningTasks();
     await reconcileInterrupted(); // recover tasks left "running"/"queued" by a previous crash/restart
+    // 自由审查对账要排在 reattach 之后：它以「有没有接回的 reviewer 会话」为判据，
+    // 收拾死在投递链上的 reviewing run（详见 free-workflow.ts reconcileFreeReviews）。
+    const { reconcileFreeReviews } = await import("./free-workflow.js");
+    await reconcileFreeReviews().catch((err) => console.error("[harness] 自由审查对账失败（不影响启动）:", err));
   }
   // 回收上一轮遗留的原始输出文件（纯传输介质，正文早已进 .md）。放在接管之后：
   // 它靠 sessions 判断哪些文件仍在用，接管完那份名单才是准的。best-effort。

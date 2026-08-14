@@ -4,6 +4,9 @@
   overflow: auto;
   margin-top: 8px;
   padding-bottom: 14px;
+  /* 星标/来源徽标的 z-index 只在行里压标题。不关在这层，会跟侧栏顶栏
+     （项目菜单 z-index 关在顶栏里）比高低，从菜单上穿出来。铺开预览走 portal。 */
+  isolation: isolate;
 }
 
 .workspace-task-section + .workspace-task-section,
@@ -168,6 +171,57 @@
 .workspace-task-kind {
   flex: 0 0 auto;
   color: var(--faint);
+}
+
+/* ── 星标:用户手动软记号 ──────────────────────────────────
+   已标的常驻行尾;未标的 hover/选中/聚焦才浮出入口。圆点=系统状态,星形=手动记号。 */
+.workspace-task-star {
+  position: absolute;
+  z-index: 2;
+  top: 50%;
+  right: 3px;
+  display: grid;
+  width: 22px;
+  height: 24px;
+  place-items: center;
+  transform: translateY(-50%);
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  padding: 0;
+  color: var(--faint);
+  opacity: 0;
+  transition: opacity 130ms ease-out;
+}
+
+.workspace-task-star.is-starred {
+  opacity: 1;
+  color: var(--muted);
+}
+
+.workspace-task-row-wrap:hover .workspace-task-star,
+.workspace-task-row-wrap.is-selected .workspace-task-star,
+.workspace-task-star:focus-visible {
+  opacity: 1;
+}
+
+.workspace-task-star:hover,
+.workspace-task-star:focus-visible {
+  background: color-mix(in lch, var(--ink) 8%, transparent);
+  color: var(--muted);
+}
+
+/* 星标槽占掉行尾 24px:同一行的 hover 元素(meta、来源徽标)整体左移让位,
+   标题渐隐边界也提前,避免文字压到星星。只有可星标的行(顶层任务)让。 */
+.workspace-task-row-wrap.can-star > .task-origin-chip { right: 27px; }
+.workspace-task-row-wrap.can-star .workspace-task-row--has-origin { padding-right: 52px; }
+.workspace-task-row-wrap.can-star .workspace-task-meta { right: 29px; }
+.workspace-task-row-wrap.can-star .workspace-task-row--has-origin .workspace-task-meta { right: 52px; }
+
+.workspace-task-row-wrap.can-star:hover .workspace-task-title,
+.workspace-task-row-wrap.has-star .workspace-task-title {
+  -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 42px), transparent calc(100% - 22px));
+  mask-image: linear-gradient(90deg, #000 calc(100% - 42px), transparent calc(100% - 22px));
 }
 
 .workspace-status-dot {

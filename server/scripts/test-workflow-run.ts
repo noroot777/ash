@@ -387,7 +387,7 @@ const at = new Date("2026-01-01T00:00:00Z").toISOString();
 await db.insert(projects).values({ id: "p1", name: "wf", repoPath: repo, createdAt: at });
 await db.insert(tasks).values({
   id: "t1", projectId: "p1", groupId: null, parentId: null, title: "t", body: "",
-  mode: "single", status: "done", stage: null, reviewRequested: false, priority: "none",
+  mode: "single", status: "done", stage: null, reviewRequested: false,
   labels: "[]", dependsOn: "[]", resumeDependsOn: "[]", agentType: "claude",
   autoTitle: false, useWorktree: false, createdAt: at, updatedAt: at,
 });

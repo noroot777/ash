@@ -56,10 +56,10 @@ const toTask = (r: TaskRow, profiles: AgentLabelRow[] = []): Task => ({
   status: r.status as TaskStatus,
   stage: (r.stage as TaskStage | null) ?? null,
   pinnedAt: r.pinnedAt ?? null,
+  starredAt: r.starredAt ?? null,
   reviewOf: r.reviewOf ?? null,
   reviewRound: r.reviewRound ?? null,
   reviewRequested: r.reviewRequested,
-  priority: r.priority as Task["priority"],
   labels: JSON.parse(r.labels),
   dependsOn: JSON.parse(r.dependsOn),
   resumeDependsOn: JSON.parse(r.resumeDependsOn),
@@ -82,10 +82,15 @@ const toTask = (r: TaskRow, profiles: AgentLabelRow[] = []): Task => ({
   archivedAt: r.archivedAt,
   useWorktree: r.useWorktree,
   worktreeBase: r.worktreeBase,
+  acceptedTargetBranch: r.acceptedTargetBranch ?? null,
+  acceptedBaseCommit: r.acceptedBaseCommit ?? null,
+  acceptedMergeCommit: r.acceptedMergeCommit ?? null,
   workflow: r.workflow ? JSON.parse(r.workflow) : null,
+  workflowMode: r.workflowMode as Task["workflowMode"],
   workflowAt: r.workflowAt ?? null,
   originTaskId: r.originTaskId ?? null,
   resumePrompt: r.resumePrompt ?? null,
+  verifyRound: r.verifyRound ?? null,
   question: r.question ?? null,
   questionOptions: r.questionOptions ? (JSON.parse(r.questionOptions) as string[]) : null,
   questionItems: r.questionItems ? (JSON.parse(r.questionItems) as QuestionItem[]) : null,
@@ -174,9 +179,11 @@ export async function createTasks(
       worktreeBase: useWorktree ? row.worktreeBase ?? null : null,
       // 审查任务（reviewOf 非空）不拷线：它本身就是别人那条线上「验证」那一站长出来的
       // 产物，再给它配一条自己的线就成了「审查任务的审查任务」。
-      workflow: row.workflow ?? (row.reviewOf
+      workflow: row.workflowMode === "free"
         ? null
-        : await snapshotWorkflow(workflowId, row.projectId, useWorktree)),
+        : row.workflow ?? (row.reviewOf
+          ? null
+          : await snapshotWorkflow(workflowId, row.projectId, useWorktree)),
     };
   }));
   await db.insert(tasks).values(normalizedRows);

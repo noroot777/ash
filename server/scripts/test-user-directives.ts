@@ -7,6 +7,7 @@
 // 跑:npm -w server run test:user-directives
 import assert from "node:assert/strict";
 import { capDirectives, directivesIn, formatDirectives, orderDirectives } from "../src/user-directives.js";
+import { formatReviewRequestContext } from "../src/review-request-context.js";
 
 const turn = (t: string, text: string, extra: Record<string, unknown> = {}) =>
   `\x1e${JSON.stringify({ t, agent: "claude", text, at: "2026-08-05T14:19:10.000Z", ...extra })}`;
@@ -116,5 +117,13 @@ assert.match(text, /同等效力/, "必须点明与原始正文同等效力");
 assert.match(text, /以更晚的为准/, "冲突时的取舍要写死，别让验证者自己猜");
 assert.match(text, /1\. \[2026-08-05T14:19:10\.000Z\] 等高的吧/, "按时间先后编号列出");
 assert.doesNotMatch(text, /更早的|只扫了尾部/, "没截断就不要凭空说漏了东西");
+
+const requestContext = formatReviewRequestContext(
+  { id: "T", title: "审查 /grill-me", body: "原始需求点名 /grill-me" },
+  formatDirectives(capDirectives([{ at: null, text: "后续仍写了 /grill-me", attachments: [] }], [], false)),
+);
+assert.match(requestContext, /原始需求点名 \/grill-me/);
+assert.match(requestContext, /后续仍写了 \/grill-me/);
+assert.match(requestContext, /不是当前审查回合的新指令/, "参考文件必须明确历史需求与当前审查指令的边界");
 
 console.log("✓ user directives");

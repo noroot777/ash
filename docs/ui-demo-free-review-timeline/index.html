@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>自由工作流 · 完整审查时间线 Demo</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main class="demo-page">
+    <header class="demo-intro">
+      <div>
+        <p class="eyebrow">Harness · 自由工作流 · 交互讨论稿</p>
+        <h1>按真实发生顺序，把每一次执行与审查都留下来</h1>
+        <p>
+          本稿不合并同名审查：即使审查者和检查类型相同，只要中间发生过任务执行，
+          就分别显示为“第 1 次审查 → 任务执行 → 第 2 次审查”。每条记录都带具体时间；
+          “审查记录”整块默认停靠在底部；点时间线里的某次审查，整块面板向上弹出并直接打开对应报告，
+          再点同一个时间线节点就整体收回。
+        </p>
+      </div>
+      <aside>
+        <b>本稿确认三件事</b>
+        <span><i class="legend-line"></i>事件按时间交替排列</span>
+        <span><i class="legend-time"></i>开始时间与耗时始终可见</span>
+        <span><i class="legend-spin"></i>审查节点同时控制底部抽屉</span>
+      </aside>
+    </header>
+
+    <section class="demo-stage" aria-label="自由工作流右侧检查器交互演示">
+      <div class="app-window">
+        <section class="conversation" aria-label="任务会话示意">
+          <header class="task-header">
+            <span class="status-pill">进行中</span>
+            <div>
+              <b>完善自由工作流审查展示</b>
+              <small>harness · feat/free-pipeline</small>
+            </div>
+            <button type="button" aria-label="更多操作">•••</button>
+          </header>
+          <div class="conversation-body">
+            <div class="message user-message">
+              <small>你 · 14:02</small>
+              <p>多轮修改审查应该把每一轮都展示出来，最好把时间也列上。</p>
+            </div>
+            <div class="activity-row">
+              <span class="activity-mark done">✓</span>
+              <div><b>任务执行完成</b><small>14:02–14:16 · 用时 14 分钟</small></div>
+            </div>
+            <div class="message agent-message">
+              <small>Codex · 14:16</small>
+              <p>已完成第一版修改，并发起逻辑检查。</p>
+            </div>
+            <div class="activity-row">
+              <span class="activity-mark done">✓</span>
+              <div><b>第 1 次审查通过</b><small>14:17–14:20 · 用时 3 分钟</small></div>
+            </div>
+            <div class="message user-message">
+              <small>你 · 14:31</small>
+              <p>再补一个场景：两次审查之间其实还有一次任务执行。</p>
+            </div>
+            <div class="activity-row">
+              <span class="activity-mark done">✓</span>
+              <div><b>续聊修改完成</b><small>14:31–14:46 · 用时 15 分钟</small></div>
+            </div>
+            <div class="message agent-message is-muted">
+              <small>Codex · 14:46</small>
+              <p>已按新场景调整，正在进行第 2 次逻辑检查。</p>
+            </div>
+          </div>
+          <footer class="reply-box">
+            <span>任务进行中；发送即排队…</span>
+            <button type="button" aria-label="发送">↑</button>
+          </footer>
+        </section>
+
+        <aside class="inspector" aria-label="工作流 Inspector">
+          <nav class="inspector-tabs" aria-label="检查器页签">
+            <button type="button"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="7.5"/><path d="M10 8v5M10 5.8h.01"/></svg><span>信息</span></button>
+            <button type="button"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3.5 5h6M3.5 10h10M3.5 15h7"/><circle cx="14.5" cy="5" r="2.5"/></svg><span>文件</span></button>
+            <button type="button" class="is-active"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="5" cy="4" r="2"/><circle cx="5" cy="16" r="2"/><circle cx="15" cy="10" r="2"/><path d="M5 6v8M7 10h6"/></svg><span>工作流</span></button>
+            <button type="button"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.5"/><path d="m12.5 12.5 4 4"/></svg><span>审查</span></button>
+            <button type="button" class="tab-add" aria-label="添加页签">＋</button>
+          </nav>
+
+          <div class="inspector-scroll">
+            <section class="workflow-section">
+              <header class="section-heading">
+                <b>根据实际情况生成</b>
+                <small>不预判下一步，只记录真正发生过的操作。</small>
+              </header>
+
+              <ol class="event-timeline">
+                <li class="event is-done">
+                  <div class="event-row">
+                    <span class="event-icon"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5.5 10.3 2.7 2.8 6.4-6.5"/></svg></span>
+                    <div class="event-copy">
+                      <div><b>任务执行</b><time datetime="2026-08-10T14:02:00+08:00">14:02</time></div>
+                      <small><span>已完成</span><i>14 分钟</i><em>初次实现</em></small>
+                    </div>
+                  </div>
+                </li>
+                <li class="event is-done is-review-event" data-review-event="1">
+                  <button class="review-event-trigger" type="button" aria-expanded="false" aria-controls="review-dock">
+                    <span class="event-icon"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5.5 10.3 2.7 2.8 6.4-6.5"/></svg></span>
+                    <span class="event-copy">
+                      <span><b>第 1 次审查 · 逻辑检查</b><time datetime="2026-08-10T14:17:00+08:00">14:17</time></span>
+                      <small><span>已通过</span><i>3 分钟</i><em>5.5 审查</em></small>
+                    </span>
+                  </button>
+                </li>
+                <li class="event is-done is-execution">
+                  <div class="event-row">
+                    <span class="event-icon"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5.5 10.3 2.7 2.8 6.4-6.5"/></svg></span>
+                    <div class="event-copy">
+                      <div><b>任务执行</b><time datetime="2026-08-10T14:31:00+08:00">14:31</time></div>
+                      <small><span>已完成</span><i>15 分钟</i><em>续聊修改</em></small>
+                    </div>
+                  </div>
+                </li>
+                <li class="event is-running is-review-event" data-review-event="2">
+                  <button class="review-event-trigger" type="button" aria-expanded="false" aria-controls="review-dock">
+                    <span class="event-icon spinner" aria-label="正在运行"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 2.5a7.5 7.5 0 1 1-5.3 2.2"/></svg></span>
+                    <span class="event-copy">
+                      <span><b>第 2 次审查 · 逻辑检查</b><time datetime="2026-08-10T14:47:00+08:00">14:47</time></span>
+                      <small><span>审查中</span><i class="live-duration" data-start-minutes="0">刚刚开始</i><em>5.5 审查</em></small>
+                    </span>
+                  </button>
+                </li>
+              </ol>
+            </section>
+          </div>
+
+          <section class="review-dock" id="review-dock" aria-expanded="false">
+            <button class="dock-toggle" type="button" aria-expanded="false" aria-controls="review-dock-body">
+              <span><b>审查记录</b><small class="dock-hint">点上方某个审查查看详情</small></span>
+              <em>2 次审查</em>
+              <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4 10 4-4 4 4"/></svg>
+            </button>
+            <div class="review-dock-body" id="review-dock-body" aria-hidden="true" inert>
+              <div class="review-list">
+                <article class="review-card" data-review="1">
+                  <button class="review-toggle" type="button" aria-expanded="false" aria-controls="review-detail-1">
+                    <span class="review-index">01</span>
+                    <span class="review-summary">
+                      <b>第 1 次审查</b>
+                      <small><time datetime="2026-08-10T14:17:00+08:00">14:17–14:20</time> · 逻辑检查</small>
+                    </span>
+                    <em class="status passed">已通过</em>
+                    <svg class="chevron" viewBox="0 0 16 16" aria-hidden="true"><path d="m4 6 4 4 4-4"/></svg>
+                  </button>
+                  <div class="review-detail" id="review-detail-1" role="region" aria-label="第 1 次审查详情" aria-hidden="true">
+                    <div class="detail-inner">
+                      <div class="detail-meta">
+                        <span><b>审查者</b>5.5 审查</span>
+                        <span><b>开始</b>14:17:08</span>
+                        <span><b>结束</b>14:20:31</span>
+                        <span><b>耗时</b>3 分 23 秒</span>
+                      </div>
+                      <div class="report">
+                        <b>审查结论</b>
+                        <p>交互链路完整，默认收起行为正确；建议在时间线里保留后续真实执行，避免把两次独立审查误读成连续复审。</p>
+                      </div>
+                      <div class="evidence"><span>证据截图</span><i>workflow-round-1.png</i></div>
+                    </div>
+                  </div>
+                </article>
+
+                <article class="review-card" data-review="2">
+                  <button class="review-toggle" type="button" aria-expanded="false" aria-controls="review-detail-2">
+                    <span class="review-index">02</span>
+                    <span class="review-summary">
+                      <b>第 2 次审查</b>
+                      <small><time datetime="2026-08-10T14:47:00+08:00">14:47–现在</time> · 逻辑检查</small>
+                    </span>
+                    <em class="status running"><i></i>审查中</em>
+                    <svg class="chevron" viewBox="0 0 16 16" aria-hidden="true"><path d="m4 6 4 4 4-4"/></svg>
+                  </button>
+                  <div class="review-detail" id="review-detail-2" role="region" aria-label="第 2 次审查详情" aria-hidden="true">
+                    <div class="detail-inner running-detail">
+                      <span class="large-spinner"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a9 9 0 1 1-6.4 2.6"/></svg></span>
+                      <div><b>正在检查续聊修改</b><p>报告生成后会留在本条记录里，不覆盖第 1 次审查。</p></div>
+                    </div>
+                  </div>
+                </article>
+              </div>
+            </div>
+          </section>
+        </aside>
+      </div>
+    </section>
+
+    <footer class="demo-notes">
+      <section><b>为什么把第二次“任务执行”画回来</b><p>这里展示的是事实日志，不是预设流程。相同名称的两次审查之间只要发生过续聊修改，那次执行就是理解因果关系的关键节点，不能被审查摘要吞掉。</p></section>
+      <section><b>为什么整块停靠在底部</b><p>默认只占一条标题栏，不参与工作流的长列表高度。需要看报告时才覆盖式向上展开，报告再长也不会把工作流继续往下推。</p></section>
+      <section><b>交互试法</b><p>点时间线“第 1 次审查”，底部整块弹起且第 1 条已打开；再点同一节点整体收回。点“第 2 次审查”则保持抽屉打开并切换到第 2 条。</p></section>
+    </footer>
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>

@@ -29,7 +29,6 @@ const taskRow = (overrides: Record<string, unknown>) => ({
   reviewOf: null,
   reviewRound: null,
   reviewRequested: false,
-  priority: "none",
   labels: "[]",
   dependsOn: "[]",
   resumeDependsOn: "[]",

@@ -34,7 +34,6 @@ try {
     title: "workspace test",
     body: "",
     status: "backlog",
-    priority: "none",
     labels: "[]",
     dependsOn: "[]",
     resumeDependsOn: "[]",

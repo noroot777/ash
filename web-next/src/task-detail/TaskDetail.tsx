@@ -30,6 +30,11 @@ import { TaskReviewWorkspace } from "../review/TaskReviewWorkspace.tsx";
 import { WorkflowInspector } from "../workflow/WorkflowInspector.tsx";
 import { OriginTaskBar } from "../components/TaskOrigin.tsx";
 import { DerivedTaskLinks } from "../components/DerivedTaskLinks.tsx";
+import { FreeWorkflowInspector } from "../free-workflow/FreeWorkflowInspector.tsx";
+import { FreeWorkflowToolbar } from "../free-workflow/FreeWorkflowToolbar.tsx";
+import { FreeReviewDialog } from "../free-workflow/FreeReviewDialog.tsx";
+import { useFreeWorkflowState } from "../free-workflow/useFreeWorkflowState.ts";
+import { freeReviewRetryable } from "./turnRetry.ts";
 
 interface TaskInspectorContext {
   task: Task;
@@ -53,6 +58,7 @@ const TASK_INSPECTORS: readonly InspectorDescriptor<TaskInspectorContext>[] = [
     title: "信息",
     icon: <Info size={14} />,
     defaultOpen: true,
+    shortcut: "i",
     render: (context) => <TaskInspector {...context} />,
   },
   {
@@ -60,6 +66,7 @@ const TASK_INSPECTORS: readonly InspectorDescriptor<TaskInspectorContext>[] = [
     title: "文件",
     icon: <FolderOpen size={14} />,
     defaultOpen: true,
+    shortcut: "f",
     render: (context) => (
       <FileTreeInspector
         taskId={context.task.id}
@@ -73,20 +80,20 @@ const TASK_INSPECTORS: readonly InspectorDescriptor<TaskInspectorContext>[] = [
     title: "工作流",
     icon: <GitBranch size={14} />,
     defaultOpen: true,
-    render: (context) => (
-      <WorkflowInspector
-        task={context.task}
-        onTaskUpdated={context.onTaskUpdated}
-        notify={context.notify}
-      />
-    ),
+    shortcut: "w",
+    render: (context) => context.task.workflowMode === "free"
+      ? <FreeWorkflowInspector task={context.task} />
+      : <WorkflowInspector task={context.task} onTaskUpdated={context.onTaskUpdated} notify={context.notify} />,
   },
   {
     id: "review",
     title: "审查",
     icon: <MagnifyingGlass size={14} />,
     defaultOpen: true,
-    render: (context) => <TaskReviewInspector {...context} />,
+    shortcut: "r",
+    render: (context) => context.task.workflowMode === "free"
+      ? <FreeWorkflowInspector task={context.task} reviewOnly onOpenReview={context.onOpenReview} onOpenTask={context.onOpenTask} notify={context.notify} />
+      : <TaskReviewInspector {...context} />,
   },
 ];
 
@@ -123,6 +130,7 @@ export function TaskDetail({
   // 中间那一栏同一时刻只放一样东西：会话 / 审查工作区 / 文件。
   const [openFilePath, setOpenFilePath] = useState<string | null>(null);
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const [postMergeDialogOpen, setPostMergeDialogOpen] = useState(false);
   const [derivation, setDerivation] = useState<{
     command: TaskDerivationCommand;
     committed: boolean;
@@ -133,6 +141,8 @@ export function TaskDetail({
   const [pendingExecutor, setPendingExecutor] = useState<string | null>(null);
   const { indicatorForTask } = useTaskReadState(allTasks, task.id);
   const conversation = useConversation(task.id);
+  // 审查链状态同时服务验收后快照入口和会话尾栏的异常回合重试；共享一份缓存与订阅。
+  const free = useFreeWorkflowState(task.id, task.workflowMode === "free");
   const followUps = useMemo(
     () => conversation.items.flatMap((item) => (
       item.kind === "user" && isUserFollowUp(item)
@@ -146,6 +156,14 @@ export function TaskDetail({
     [conversation.items, task],
   );
   const hasConversation = conversation.sessions.length > 0 || conversation.items.length > 0;
+  const postMergeTarget = task.stage === "accepted" && task.workflowMode === "free"
+    && task.acceptedTargetBranch && task.acceptedBaseCommit && task.acceptedMergeCommit
+    ? { branch: task.acceptedTargetBranch, baseCommit: task.acceptedBaseCommit, mergeCommit: task.acceptedMergeCommit }
+    : null;
+  const latestPostMerge = free.state?.reviews.find((run) => run.target?.kind === "accepted_merge");
+  const postMergeReviewLabel = postMergeTarget
+    ? latestPostMerge?.status === "reviewing" ? "查看合并审查" : latestPostMerge ? "再次审查合并结果" : "审查合并结果"
+    : null;
   const derivationAllowed = canDeriveTask(task);
   const reviewFocused = REVIEW_FOCUS_STAGES.has(task.stage ?? "")
     || allTasks.some((candidate) => candidate.reviewOf === task.id);
@@ -173,6 +191,7 @@ export function TaskDetail({
   useEffect(() => {
     setReviewOpen(initialReviewOpen);
     setDeleteOpen(false);
+    setPostMergeDialogOpen(false);
     setDerivation(null);
     setOpenFilePath(null);
   }, [initialReviewOpen, task.id]);
@@ -284,7 +303,7 @@ export function TaskDetail({
       defaultVisible={inspectorMode === "page"}
       tabPolicy={inspectorPolicy}
     >
-      {({ toggleButton }) => (
+      {({ toggleButton, openTab }) => (
         <>
           <div className="task-detail">
             <OriginTaskBar task={task} allTasks={allTasks} onOpen={onOpenTask} />
@@ -293,6 +312,7 @@ export function TaskDetail({
               conversationMarkdown={markdown}
               busy={busy}
               refreshing={conversation.refreshing}
+              reviewOpen={reviewOpen}
               onTitle={(title) => patch({ title, autoTitle: false })}
               onTogglePin={() => patch({ pinnedAt: task.pinnedAt != null ? null : Date.now() })}
               onPrimary={(action) => void perform(action)}
@@ -300,6 +320,11 @@ export function TaskDetail({
               onArchive={() => void archive()}
               onRefresh={() => void refresh()}
               onReview={() => changeReviewOpen(!reviewOpen)}
+              postMergeReviewLabel={postMergeReviewLabel}
+              onPostMergeReview={postMergeTarget ? () => {
+                if (latestPostMerge?.status === "reviewing") openTab("review");
+                else setPostMergeDialogOpen(true);
+              } : undefined}
               onDelete={() => setDeleteOpen(true)}
               indicatorForTask={indicatorForTask}
               terminalToggle={terminalToggle}
@@ -307,7 +332,16 @@ export function TaskDetail({
               notify={notify}
             />
             {reviewOpen ? (
-              <TaskReviewWorkspace task={task} allTasks={allTasks} onClose={() => changeReviewOpen(false)} onTaskUpdated={onTaskUpdate} notify={notify} />
+              <TaskReviewWorkspace
+                task={task}
+                allTasks={allTasks}
+                onTaskUpdated={onTaskUpdate}
+                notify={notify}
+                onPostMergeReview={postMergeTarget ? () => {
+                  if (latestPostMerge?.status === "reviewing") openTab("review");
+                  else setPostMergeDialogOpen(true);
+                } : undefined}
+              />
             ) : openFilePath ? (
               <FileViewer
                 taskId={task.id}
@@ -325,12 +359,26 @@ export function TaskDetail({
                     pendingExecutor={pendingExecutor}
                     loading={conversation.refreshing}
                     error={conversation.error}
+                    onRetryTurn={async (target) => {
+                      try {
+                        const result = await api.retryTurn(task.id, target.sessionId);
+                        notify(result.mode === "review"
+                          ? "已重跑这一轮审查"
+                          : result.mode === "resend" ? "已重发上一条指令，任务续跑中" : "已从中断处续跑");
+                        // 只重取会话正文。任务本身的 running 由 SSE 推过来 —— 这里再补一发
+                        // GET，回来的很可能还是重投前的 done，反手把跑起来的状态盖回去
+                        // （WorkspaceShell 按 onTaskUpdate 覆盖，没有版本门禁）。
+                        await conversation.refetch();
+                      } catch (reason) {
+                        notify(reason instanceof Error ? reason.message : String(reason));
+                      }
+                    }}
+                    reviewRetryable={freeReviewRetryable(free.state?.reviews)}
                     footer={task.question ? (
                       <QuestionCard
                         task={task}
                         onAnswer={async (answer) => {
                           await api.answerTask(task.id, answer);
-                          conversation.addUser(answer, [], { answer: true });
                           notify("已发送答复，任务正在续跑");
                         }}
                       />
@@ -340,6 +388,9 @@ export function TaskDetail({
                   <ReplyBox
                     task={task}
                     hasConversation={hasConversation}
+                    topRail={task.workflowMode === "free" && task.mode === "single" && !task.parentId && !task.reviewOf
+                      ? <FreeWorkflowToolbar task={task} notify={notify} />
+                      : undefined}
                     skills={skills.skills}
                     skillsRemote={skills.remote}
                     onSend={async (text, attachments, { executorLabel, ...options }) => {
@@ -400,8 +451,19 @@ export function TaskDetail({
               <DeleteTaskDialog
                 task={task}
                 notify={notify}
-                onDeleted={() => onDeleted(task.id)}
+                onDeleted={(ids) => ids.forEach(onDeleted)}
                 onClose={() => setDeleteOpen(false)}
+              />
+            )}
+            {postMergeDialogOpen && postMergeTarget && (
+              <FreeReviewDialog
+                taskId={task.id}
+                state={free.state}
+                reservationMode={false}
+                postMergeTarget={postMergeTarget}
+                onChanged={free.setState}
+                onClose={() => setPostMergeDialogOpen(false)}
+                notify={notify}
               />
             )}
           </div>

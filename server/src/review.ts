@@ -18,6 +18,7 @@ import type {
   ReviewDispatchInput,
   TaskReviewInfo,
   TaskReviewRound,
+  TaskStage,
   TaskStatus,
   TeamConfig,
 } from "@harness/shared";
@@ -25,7 +26,7 @@ import { AGENT_TYPES, TEAM_DEFAULTS } from "@harness/shared";
 import { inheritExecutorOverrides, pickExecutor } from "@harness/shared/executors";
 import { STEP_LABELS } from "@harness/shared/workflow";
 import { anchorAt, firstAnchor, workflowPolicy } from "@harness/shared/workflow-policy";
-import { asc, eq } from "drizzle-orm";
+import { and, asc, eq } from "drizzle-orm";
 import type { Hono } from "hono";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
@@ -45,7 +46,7 @@ import {
   writeConclusion,
 } from "./review-evidence.js";
 import { repairPrompt, verifyProtocolFor } from "./review-prompts.js";
-import { setTaskStage } from "./task-stage.js";
+import { setTaskStage, clearTaskStage } from "./task-stage.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { askAboutFailure } from "./task-question.js";
 import {
@@ -56,7 +57,7 @@ import {
   withVerifyExecutor,
   type Settlement,
 } from "./review-policy.js";
-import { continueWhenIdle } from "./runs.js";
+import { claimTurn, continueWhenIdle, releaseTurn } from "./runs.js";
 import { taskWorkflowDef } from "./workflows.js";
 import { advanceWorkflowFrom, settleFrom } from "./workflow-advance.js";
 import { applyRunFailPolicy } from "./workflow-steps.js";
@@ -147,10 +148,36 @@ export async function reviewRoundsOf(target: TaskRow): Promise<number> {
 export async function startVerifyRound(
   targetId: string,
   override: ReviewDispatchInput = {},
+  opts: { holdTurn?: boolean } = {},
 ): Promise<{ round: number }> {
+  // HTTP 手动派验证与自由派审同级的原子互斥：普通回合已 claim、status 尚未落 running
+  // 时，只看 DB status 会先永久写下 verifyRound/stage=verifying/时间线，再把验证消息排
+  // 到那个回合之后——UI 与验收门禁提前宣称「正在验证」（审查实测）。占位身份 dispatch
+  // 覆盖校验到排队注册，finally 释放后验证投递自然开跑。结算内部的自动触发不走这里
+  //（那时收尾回合正占着 turn，天然互斥；gate 放行路径由验收锁互斥）。
+  const holdingTurn = opts.holdTurn === true;
+  if (holdingTurn && !claimTurn(targetId, "dispatch")) {
+    throw new Error("任务回合正在进行，结束后再派验证");
+  }
+  try {
+  // 占位后重读+**权威校验**：路由的预检查在 await c.req.json() 等间隙之后可能已过期
+  // （审查实测：streaming body 停住解析，任务先被归档，继续 body 后验证照样 201）。
+  // 归档与这里互为镜像：归档检查 isTurnClaimed（占位期间归档 409），这里占位后重查
+  // archived（归档先完成则拒）。
   const target = (await db.select().from(tasks).where(eq(tasks.id, targetId))).at(0);
   if (!target) throw new Error("被验任务不存在");
   if (target.reviewOf) throw new Error("审查任务自身不能再验");
+  if (target.archived) throw new Error("任务已归档（只读），先取消归档再派验证");
+  if (target.mode !== "single") throw new Error("当前只支持验证 single 任务");
+  if (target.status === "running" || target.status === "queued") {
+    throw new Error("目标仍在运行或排队，结束后再验");
+  }
+  // 等待答复/续跑的任务不能派验证：验证结算把 question/resumePrompt 当「验证者本轮
+  // 中途提问」的正常等待态，派验证之前就存在的字段会让这一轮永远收不了尾——
+  // verifyRound 挂着、第二次派验证 400（审查实测）。与自由派审同一门禁。
+  if (target.question || target.resumePrompt) {
+    throw new Error("任务正等待答复或续跑，处理后再派验证");
+  }
   if (target.verifyRound) throw new Error("该任务已有一轮验证正在进行");
   const legacy = await legacyReviewTasks(targetId);
   if (legacy.some((review) => ["backlog", "queued", "running", "paused"].includes(review.status))) {
@@ -165,6 +192,11 @@ export async function startVerifyRound(
   const execution = await reviewExecution(target, withVerifyExecutor(target, override));
   const project = (await db.select().from(projects).where(eq(projects.id, target.projectId))).at(0);
 
+  // 协议/证据目录准备（可失败：目录被 symlink 换掉等）必须在**任何状态提交之前**——
+  // 先写 verifyRound/stage=verifying 再抛错会留下「已有一轮验证正在进行」的半轮状态，
+  // 任务永久无法再派验证（审查实测复现）。
+  const protocol = await verifyProtocolFor(target, round, project?.repoPath ?? "(项目已不存在)", station);
+
   await db
     .update(tasks)
     .set({
@@ -178,10 +210,6 @@ export async function startVerifyRound(
   await appendTaskTimeline(targetId, `第 ${round} 轮验证开始：就在这个任务的工作目录里跑，不另起审查任务。`);
   bus.publish({ type: "task.review", taskId: targetId });
 
-  // 协议正文要读会话正文（捞用户中途追加的需求），先 await 出来再排队。这不影响
-  // `continueWhenIdle` 的语义：它是「空着就立刻跑、在跑就排到这一轮之后」，多几次
-  // await 只会让判断发生得更晚一点，两条路都仍然正确。
-  const protocol = await verifyProtocolFor(target, round, project?.repoPath ?? "(项目已不存在)", station);
   continueWhenIdle(
     targetId,
     protocol,
@@ -194,12 +222,29 @@ export async function startVerifyRound(
       reasoningEffort: execution.reasoningEffort,
     },
     async (error) => {
-      await db.update(tasks).set({ verifyRound: null, updatedAt: now() }).where(eq(tasks.id, targetId));
+      // 对称回滚：验证没起来，这一轮写下的**全部**状态恢复原值——只清 verifyRound 会
+      // 留下 stage=verifying（taskDisplayStatus 里 stage 优先），UI 永久显示「验证中」
+      // 而轮数为空（审查实测：释放点被竞争 waiter 抢先后永久卡住）。
+      await db.update(tasks).set({
+        verifyRound: null,
+        reviewStep: target.reviewStep ?? null,
+        verifyStationRounds: target.verifyStationRounds ?? 0,
+        updatedAt: now(),
+      }).where(eq(tasks.id, targetId));
+      const current = (await db.select({ stage: tasks.stage }).from(tasks).where(eq(tasks.id, targetId))).at(0);
+      if (current?.stage === "verifying") {
+        // 只在还是本轮写下的 verifying 时回滚（期间有更新的结论就不碰）。
+        if (target.stage && target.stage !== "verifying") await setTaskStage(targetId, target.stage as TaskStage);
+        else await clearTaskStage(targetId, `第 ${round} 轮验证启动失败，验证状态已回滚。`);
+      }
       await appendTaskTimeline(targetId, `第 ${round} 轮验证启动失败：${error}`);
       bus.publish({ type: "task.review", taskId: targetId });
     },
   );
   return { round };
+  } finally {
+    if (holdingTurn) releaseTurn(targetId);
+  }
 }
 
 async function reviewCoverageFor(target: TaskRow): Promise<ReviewCoverageFinding | null> {
@@ -323,11 +368,7 @@ async function concludeRound(
     return;
   }
 
-  const [report, images, coverage] = await Promise.all([
-    readReport(target.id, round),
-    screenshots(target.id, round),
-    reviewCoverageFor(target),
-  ]);
+  const coverage = await reviewCoverageFor(target);
   const plan = reviewPlan({
     parentIsTeam: await parentIsTeam(target),
     reviewRequested: target.reviewRequested,
@@ -343,8 +384,6 @@ async function concludeRound(
       target,
       round,
       reviewTaskId,
-      report,
-      images,
       coverage,
       autoNext: plan.auto && stationRound < plan.maxRounds,
     }),
@@ -368,7 +407,9 @@ async function finishVerifyRound(target: TaskRow, turnOk: boolean): Promise<void
   // 审查任务占掉的号（`nextReviewRound(legacy.length + verifyRounds)`），拿号当计数会
   // 让下一轮跳号。verify_station_rounds 则是「这一站」验过几轮，判定轮数上限用它。
   const stationRound = (target.verifyStationRounds ?? 0) + 1;
-  await db
+  // CAS 收轮:只有把 verify_round 从**本轮号**改成 null 的那一次算数。0 行 = 这一轮
+  // 已被别处收掉(并发结算/外部清理),此时再 concludeRound 会给同一轮下两次结论。
+  const closed = await db
     .update(tasks)
     .set({
       verifyRound: null,
@@ -376,7 +417,32 @@ async function finishVerifyRound(target: TaskRow, turnOk: boolean): Promise<void
       verifyStationRounds: stationRound,
       updatedAt: now(),
     })
-    .where(eq(tasks.id, target.id));
+    .where(and(eq(tasks.id, target.id), eq(tasks.verifyRound, round)))
+    .returning({ id: tasks.id });
+  if (!closed.length) return;
+  // 任务在这一轮中途被冻结(归档):线不能再往下推——concludeRound 会写 stage、发时间线、
+  // 甚至派下一轮/打回,全是「已冻结的任务还在动」。只把这一轮的 verifying 牌子收干净,
+  // 免得留下 archived=true + stage=verifying 的死局(审查实测)。
+  const frozen = (await db.select({ archived: tasks.archived, stage: tasks.stage })
+    .from(tasks).where(eq(tasks.id, target.id))).at(0);
+  if (frozen?.archived) {
+    if (frozen.stage === "verifying") {
+      await clearTaskStage(target.id, `第 ${round} 轮验证未出结论就被归档冻结，已收回「验证中」标记；取消归档后可重新发起验证。`);
+    }
+    return;
+  }
+  // 任务在这一轮中途被验收:`concludeRound` 会写 stage(verified / verify_failed),把
+  // 验收结论覆盖掉 —— 一个比验收更早开始的回合,凭它的收尾把「已验收」抹了。验收门禁
+  // 现在挡着未收尾的验证轮(task-accept-guard.ts),这条是给存量数据和「验收与结算真正
+  // 同时发生」那一线窗口的兜底:轮次照收(上面的 CAS 已经把 verify_round 清了),只是
+  // 不再往下推线,并把这一轮的结论留在时间线上,免得用户看见一轮验证凭空消失。
+  if (frozen?.stage === "accepted" || frozen?.stage === "merged") {
+    await appendTaskTimeline(
+      target.id,
+      `第 ${round} 轮验证结束时任务已验收，结论不再覆盖验收阶段（这一轮${turnOk ? "正常收尾" : "未正常收尾"}）。`,
+    );
+    return;
+  }
   // 旁路回合的落位永远是任务原来的终态，说明不了验证跑成没跑成，所以这里用回合本身
   // 是否干净收尾来判：崩了/被手停 → 这一轮没结论，按 failed 收尾。
   await concludeRound(target, round, turnOk ? "done" : "failed", null, {
@@ -582,7 +648,7 @@ export function mountReviewRoutes(api: Hono): void {
       }
     }
     try {
-      return c.json(await startVerifyRound(taskId, body), 201);
+      return c.json(await startVerifyRound(taskId, body, { holdTurn: true }), 201);
     } catch (error) {
       return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);
     }

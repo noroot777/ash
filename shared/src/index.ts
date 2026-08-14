@@ -2,6 +2,7 @@
 import type { TeamConfig } from "./team.ts";
 import type { DuetConfig } from "./duet.ts";
 import type { WorkflowDef } from "./workflow.ts";
+import type { TaskWorkflowMode } from "./free-workflow.ts";
 export type { Session, SessionRole } from "./session.ts";
 // 归一化后的 token 用量。运行时函数(累加/格式化)走 "@harness/shared/usage" 子路径
 // 导出,这里同上只再导出类型。
@@ -13,6 +14,21 @@ export type {
   TaskReviewRound,
   TeamConfig,
 } from "./team.ts";
+export type {
+  FreeReviewCheckMode,
+  FreeReviewDispatchInput,
+  FreeReviewExecutorOverride,
+  FreeReviewRound,
+  FreeReviewRun,
+  FreeWorkflowExecution,
+  FreeWorkflowExecutionStatus,
+  FreeWorkflowPreviewEvent,
+  FreeWorkflowPreviewEventKind,
+  FreeWorkflowPreviewEventSource,
+  FreeWorkflowState,
+  ReviewerProfile,
+  TaskWorkflowMode,
+} from "./free-workflow.ts";
 // 执行器覆盖的继承规则住在 ./executor-overrides.ts,走 "@harness/shared/executors"
 // 子路径导出(跟 "@harness/shared/team" 同一套):index.ts 只做类型再导出,不能在这里
 // 转发运行时函数 —— 服务端直接跑 .ts 源码,而 Node 的类型擦除不会把 "./x.js" 映射
@@ -90,6 +106,9 @@ export interface AgentExecutorProfile {
   // 挂载的供应商(LlmProvider.id)。缺省/null = 用 CLI 自己的官方登录账号。
   // 非空时启动 CLI 前注入供应商的 base_url + key(见 executors/index.ts)。
   providerId?: string | null;
+  // 覆盖 CLI 自己配置文件里的设置(以环境变量注入,只对 harness 起的进程生效)。
+  // 可覆盖哪些项、各自盖掉谁,声明在 @harness/shared/cli-overrides。
+  configOverrides?: Record<string, number>;
   isDefault: boolean; // the default executor resolved for its type
 }
 
@@ -220,8 +239,6 @@ export function taskDisplayStatus(
   return { key: status, label: TASK_STATUS_LABELS[status] };
 }
 
-export type Priority = "none" | "low" | "medium" | "high" | "urgent";
-
 // Single-task user-Run guard (POST /tasks/:id/run). User explicitly clicked Run,
 // so `canceled` is allowed here — they want to redo it. running/queued = already
 // in flight; awaiting_review = waiting on a gate; done = finished (must not be
@@ -261,10 +278,10 @@ export interface Task {
   status: TaskStatus;
   stage?: TaskStage | null;
   pinnedAt?: number | null; // null=未置顶；整数毫秒时间戳用于置顶区排序
+  starredAt?: number | null; // 星标：用户手动的软记号，与自动状态正交。null=未标
   reviewOf?: string | null;
   reviewRound?: number | null;
   reviewRequested?: boolean;
-  priority: Priority;
   labels: string[];
   dependsOn: string[]; // [废弃,保留为 []] 旧的指针依赖,被 queue 模型取代
   resumeDependsOn: string[]; // [废弃,保留为 []] 同上
@@ -303,9 +320,15 @@ export interface Task {
   // Existing worktrees are reused; cleanup is an explicit user action.
   useWorktree?: boolean;
   worktreeBase?: string | null;
+  // 统一验收冻结的合并快照。三项齐全时才能发起合并结果审查。
+  acceptedTargetBranch?: string | null;
+  acceptedBaseCommit?: string | null;
+  acceptedMergeCommit?: string | null;
   // §Workflow 这个任务当初挑的那条线，**创建时拷下来的快照**（改起手式库不会追着改
   // 它）。老任务为 null —— 那时还没有这个概念，按写死的老流程走。
   workflow?: WorkflowDef | null;
+  // 普通任务的执行方式。preset 读取上面的起手式快照；free 完全由显式操作驱动。
+  workflowMode?: TaskWorkflowMode;
   // §Workflow 这条线此刻停在哪一站（step id）。有了它，「自动验证」「等我点头」才能在
   // 一条线上出现多次——唤醒事件落回来时才知道是**第几个**验证站有了结论、用户在**哪
   // 一道**关口点了头。null = 还没走到任何锚点，或者是没有线的老任务。
@@ -314,6 +337,10 @@ export interface Task {
   originTaskId?: string | null;
   // §Pause 检查点续跑指令；非空时结算 paused，恢复后清空。
   resumePrompt?: string | null;
+  // 就地验证轮的轮次号；非空 = 这一轮验证还没出结论。任务此刻多半没有进程在跑
+  // （status 是它原来的终态），但这一版的生命周期没结束：验收、/fire 这类「给这一版
+  // 盖章 / 另起一版」的动作都得等它收尾，前端据此禁用按钮而不是靠 409 兜底。
+  verifyRound?: number | null;
   // §Team 待答问题；非空时 paused 且队列不推进，answer_question 后恢复并清空。
   question?: string | null;
   // ask_question 的可编辑候选快捷填充；null/[] = 纯自由作答。
@@ -451,7 +478,6 @@ export interface BatchTaskInput {
   useWorktree?: boolean; // overrides defaults.useWorktree; omitted follows the global setting
   worktreeBase?: string | null; // base ref when this task uses a worktree
   workflowId?: string | null; // 起手式 id；省略则按项目→全局默认解析，并拷成快照
-  priority?: Priority;
   labels?: string[];
   // Each entry is resolved against sibling `key`s first; anything that doesn't
   // match a sibling key is treated as an existing task id and passed through.
@@ -473,7 +499,6 @@ export interface BatchCreateTasksBody {
     useWorktree?: boolean; // omitted follows DEFAULT_APP_SETTINGS.worktreeDefault
     workflowId?: string | null; // 这一批默认走哪条起手式
     worktreeBase?: string | null;
-    priority?: Priority;
     labels?: string[];
   };
 }

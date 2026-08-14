@@ -1,0 +1,327 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>任务记号形态对比 — 四种方案</title>
+<style>
+  :root {
+    color-scheme: light;
+    --chrome: lch(94.44% 0.5 282);
+    --canvas: lch(97.94% 0.5 282);
+    --panel: lch(100% 0 282);
+    --raised: lch(96.914% 0 282);
+    --line: lch(90.55% 0 282);
+    --line2: lch(86.5% 0 282);
+    --ink: lch(9.794% 0 282);
+    --muted: lch(39.176% 1.25 282);
+    --faint: lch(64.64% 1.25 282);
+    --accent: #5e6ad2;
+    --green: #168466;
+    --red: #d93d4c;
+    --amber: #b57b00;
+    --cyan: #0e9db8;
+    --hover-bg: lch(91.64% 0.5 282);
+    --sel-bg: lch(89.54% 0.5 282);
+    --menu-shadow: lch(0 0 0 / 0.06) 0 6px 18px, lch(0 0 0 / 0.06) 0 3px 9px, lch(0 0 0 / 0.05) 0 1px 1px, lch(0 0 0 / 0.1) 0 0 0 1px;
+    --flag-red: #e5484d;
+    --flag-orange: #ee7c2b;
+    --flag-green: #30a46c;
+    --flag-blue: #2f8af5;
+    --flag-purple: #9d5bd2;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    background: var(--chrome);
+    color: var(--ink);
+    font-family: "Inter", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    font-size: 13px;
+    font-weight: 450;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    padding: 22px 26px 30px;
+  }
+  button { font: inherit; color: inherit; cursor: pointer; border: 0; background: transparent; padding: 0; }
+
+  .page-head { margin: 0 0 4px; font-size: 15px; font-weight: 650; }
+  .page-sub { margin: 0 0 18px; color: var(--muted); font-size: 12.5px; }
+  .page-sub b { font-weight: 600; }
+
+  .variants { display: flex; flex-wrap: wrap; gap: 18px; align-items: flex-start; }
+  .variant {
+    width: 268px;
+    background: var(--canvas);
+    border-radius: 12px;
+    box-shadow: lch(0 0 0 / 0.05) 0 1px 2px, lch(0 0 0 / 0.06) 0 0 0 0.5px;
+    padding: 12px 10px 10px;
+  }
+  .variant h2 { margin: 0 2px 2px; font-size: 12.5px; font-weight: 650; }
+  .variant .caption { margin: 0 2px 10px; min-height: 54px; color: var(--muted); font-size: 11px; line-height: 1.6; }
+
+  /* ---------- 行(对齐真实实现) ---------- */
+  .row-wrap {
+    position: relative;
+    display: grid;
+    min-height: 34px;
+    grid-template-columns: 22px minmax(0, 1fr);
+    align-items: center;
+    border-radius: 7px;
+    --task-row-surface: var(--canvas);
+  }
+  .row-wrap:hover:not(.is-selected) { --task-row-surface: var(--hover-bg); background: var(--hover-bg); }
+  .row-wrap.is-selected { --task-row-surface: var(--sel-bg); background: var(--sel-bg); }
+  .row-leading { display: grid; width: 22px; height: 34px; place-items: center; }
+  .row-btn {
+    position: relative;
+    display: flex; width: 100%; height: 34px; min-width: 0;
+    align-items: center; overflow: hidden;
+    padding: 0 8px 0 1px; text-align: left;
+  }
+  .row-title {
+    min-width: 0; flex: 1; overflow: hidden; white-space: nowrap;
+    color: color-mix(in lch, var(--ink) 52%, var(--muted));
+    font-size: 13px; font-weight: 400;
+    mask-image: linear-gradient(90deg, #000 calc(100% - 18px), transparent);
+    -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 18px), transparent);
+  }
+  .row-wrap:hover .row-title, .row-wrap.is-selected .row-title { color: var(--ink); }
+  .row-wrap:hover .row-title, .row-wrap:has(.row-mark-btn.is-set:not(.is-quiet-entry)) .row-title {
+    mask-image: linear-gradient(90deg, #000 calc(100% - 48px), transparent calc(100% - 27px));
+    -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 48px), transparent calc(100% - 27px));
+  }
+
+  .dot { width: 7px; height: 7px; border-radius: 50%; }
+  .dot--quiet { background: transparent; border: 1px solid color-mix(in lch, var(--faint) 72%, transparent); }
+  .dot--active { background: var(--muted); animation: pulse 1.35s ease-in-out infinite; }
+  .dot--attention { background: var(--amber); }
+  .dot--success { background: var(--green); }
+  .dot--error { background: var(--red); }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+
+  /* ---------- 记号入口按钮(行尾,hover 浮出;A/D 里同时也是显示本体) ---------- */
+  .row-mark-btn {
+    position: absolute; z-index: 2;
+    top: 50%; right: 5px; transform: translateY(-50%);
+    display: grid; place-items: center;
+    width: 22px; height: 24px; border-radius: 6px;
+    opacity: 0; transition: opacity 120ms ease-out;
+    color: var(--faint);
+  }
+  .row-mark-btn svg { display: block; }
+  .row-mark-btn.is-set:not(.is-quiet-entry) { opacity: 1; }
+  .row-wrap:hover .row-mark-btn, .row-mark-btn[aria-expanded="true"] { opacity: 1; }
+  .row-mark-btn:hover, .row-mark-btn[aria-expanded="true"] { background: color-mix(in lch, var(--ink) 8%, transparent); }
+
+  .flag-red { color: var(--flag-red); }
+  .flag-orange { color: var(--flag-orange); }
+  .flag-green { color: var(--flag-green); }
+  .flag-blue { color: var(--flag-blue); }
+  .flag-purple { color: var(--flag-purple); }
+
+  /* B · 左缘色条:显示本体是行块左缘一根 3px 圆头短条 */
+  .mark-bar {
+    position: absolute; z-index: 1;
+    left: 0; top: 8px; bottom: 8px; width: 3px;
+    border-radius: 3px;
+  }
+
+  /* C · 整行淡染:显示本体是行背景一层极淡的色 */
+  .row-wrap[data-tint] { background: color-mix(in srgb, var(--tint-color) 9%, transparent); }
+  .row-wrap[data-tint]:hover:not(.is-selected) { background: color-mix(in srgb, var(--tint-color) 15%, transparent); }
+  .row-wrap[data-tint].is-selected { background: color-mix(in srgb, var(--tint-color) 20%, transparent); }
+
+  /* ---------- 色板弹层 ---------- */
+  .flag-palette {
+    position: fixed; z-index: 50;
+    display: flex; align-items: center; gap: 2px;
+    padding: 5px;
+    border-radius: 10px;
+    background: var(--panel);
+    box-shadow: var(--menu-shadow);
+  }
+  .flag-palette button { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 7px; }
+  .flag-palette button:hover { background: var(--raised); }
+  .flag-palette button.is-current { background: var(--sel-bg); }
+  .flag-palette .palette-sep { width: 1px; height: 16px; margin: 0 3px; background: var(--line2); }
+  .flag-palette .palette-clear { color: var(--faint); }
+  .flag-palette .palette-clear:hover { color: var(--muted); }
+  .flag-palette .palette-swatch { width: 14px; height: 14px; border-radius: 50%; }
+
+  .footnote { margin-top: 18px; color: var(--faint); font-size: 11.5px; }
+</style>
+</head>
+<body>
+
+<h1 class="page-head">手动记号:四种形态对比</h1>
+<p class="page-sub">同一份任务列表。每一列都是活的:<b>hover 行尾出入口</b>,点开色板换色/清除(D 是单档,点了直接标/取消)。</p>
+
+<div class="variants" id="variants"></div>
+
+<p class="footnote">四列的数据互相独立,可以分别把玩;Esc 或点空白处关闭色板。</p>
+
+<script>
+const FLAG_COLORS = ["red", "orange", "green", "blue", "purple"];
+const FLAG_LABELS = { red: "红", orange: "橙", green: "绿", blue: "蓝", purple: "紫" };
+const CSS_COLOR = {
+  red: "var(--flag-red)", orange: "var(--flag-orange)", green: "var(--flag-green)",
+  blue: "var(--flag-blue)", purple: "var(--flag-purple)",
+};
+
+function flagSvg(size) {
+  return `<svg width="${size}" height="${size}" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+    <path d="M3.75 1.25c.41 0 .75.34.75.75v.42c1.5-.66 3.02-.71 4.57-.2 1.5.5 2.88.44 4.18-.16.5-.23 1.05.13 1.05.68v6.07c0 .32-.18.62-.47.77-1.6.84-3.37.94-5.26.31-1.4-.46-2.74-.39-4.07.22V14a.75.75 0 0 1-1.5 0V2c0-.41.34-.75.75-.75Z"/>
+  </svg>`;
+}
+
+const BASE_TASKS = [
+  { title: "worktree-agent-survives-restart 验收", status: "success", flag: "red" },
+  { title: "着色功能 UI 讨论", status: "attention", flag: "blue", selected: true },
+  { title: "review note + enter 快捷键", status: "success", flag: null },
+  { title: "inspector tab 快捷键", status: "success", flag: "orange" },
+  { title: "任务按最后更新排序,去掉优先级", status: "quiet", flag: null },
+  { title: "duet 合稿轮兼容层", status: "error", flag: null },
+  { title: "移动端会话轮询降频", status: "quiet", flag: null },
+  { title: "CUA 旁路会话状态上报", status: "active", flag: "green" },
+];
+
+const VARIANTS = [
+  {
+    key: "flag", name: "A · 彩色旗标(上一版)",
+    caption: "已标记的旗子常驻行尾。信息最直白,但列表里多一排彩色图标,任务多、标得多时最闹。",
+  },
+  {
+    key: "bar", name: "B · 左缘细色条",
+    caption: "行块左缘一根 3px 短色条,不加任何图标,扫一眼能分堆但几乎不占注意力。行尾入口只在 hover 时出现。",
+  },
+  {
+    key: "tint", name: "C · 整行淡染",
+    caption: "整行铺一层极淡的底色,分堆感最强、最像「分类」。代价是和 hover/选中高亮叠在一起,列表整体会显花。",
+  },
+  {
+    key: "single", name: "D · 单档记号(不分色)",
+    caption: "只有「标/不标」一档,一面固定色的小旗,点一下标、再点取消,连色板都没有。最简,但区分不了不同事项。",
+  },
+];
+
+// 每列一份独立数据
+const state = VARIANTS.map((variant) => ({
+  variant,
+  tasks: BASE_TASKS.map((task) => ({ ...task, flag: variant.key === "single" ? (task.flag ? "orange" : null) : task.flag })),
+}));
+
+const rootEl = document.getElementById("variants");
+
+function renderAll() {
+  closePalette();
+  rootEl.innerHTML = "";
+  for (const column of state) renderColumn(column);
+}
+
+function renderColumn(column) {
+  const { variant, tasks } = column;
+  const section = document.createElement("section");
+  section.className = "variant";
+  section.innerHTML = `<h2>${variant.name}</h2><p class="caption">${variant.caption}</p>`;
+  for (const task of tasks) {
+    const wrap = document.createElement("div");
+    wrap.className = "row-wrap" + (task.selected ? " is-selected" : "");
+    if (variant.key === "tint" && task.flag) {
+      wrap.dataset.tint = task.flag;
+      wrap.style.setProperty("--tint-color", CSS_COLOR[task.flag]);
+    }
+    // 入口按钮:A/D 里它同时就是显示本体;B/C 里它只是编辑入口(hover 才出现),显示本体在别处
+    const quietEntry = variant.key === "bar" || variant.key === "tint";
+    const btnColor = task.flag ? ` flag-${task.flag}` : "";
+    wrap.innerHTML = `
+      <span class="row-leading"><i class="dot dot--${task.status}"></i></span>
+      <button class="row-btn" type="button"><span class="row-title">${task.title}</span></button>
+      ${variant.key === "bar" && task.flag ? `<i class="mark-bar" style="background:${CSS_COLOR[task.flag]}"></i>` : ""}
+      <button class="row-mark-btn${task.flag ? " is-set" : ""}${quietEntry ? " is-quiet-entry" : ""}${btnColor}"
+        type="button" aria-expanded="false"
+        title="${task.flag ? `记号:${FLAG_LABELS[task.flag] ?? ""}(点击修改)` : "加记号"}">${flagSvg(13)}</button>`;
+    wrap.querySelector(".row-btn").addEventListener("click", () => {
+      column.tasks.forEach((item) => { item.selected = item === task; });
+      renderAll();
+    });
+    wrap.querySelector(".row-mark-btn").addEventListener("click", (event) => {
+      event.stopPropagation();
+      if (variant.key === "single") {
+        task.flag = task.flag ? null : "orange";
+        renderAll();
+        return;
+      }
+      openPalette(event.currentTarget, column, task);
+    });
+    section.appendChild(wrap);
+  }
+  rootEl.appendChild(section);
+}
+
+// ---------- 色板 ----------
+let palette = null;
+let paletteAnchorKey = null;
+function closePalette() {
+  if (!palette) return;
+  palette.remove();
+  palette = null;
+  paletteAnchorKey = null;
+}
+function openPalette(anchor, column, task) {
+  const key = `${column.variant.key}:${task.title}`;
+  const reopen = paletteAnchorKey === key;
+  closePalette();
+  if (reopen) return;
+  palette = document.createElement("div");
+  palette.className = "flag-palette";
+  palette.setAttribute("role", "menu");
+  const useSwatch = column.variant.key !== "flag"; // B/C 的色板用色块,和它们的显示形态一致
+  for (const color of FLAG_COLORS) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = `flag-${color}` + (task.flag === color ? " is-current" : "");
+    btn.title = FLAG_LABELS[color];
+    btn.innerHTML = useSwatch
+      ? `<i class="palette-swatch" style="background:${CSS_COLOR[color]}"></i>`
+      : flagSvg(14);
+    btn.addEventListener("click", () => {
+      task.flag = task.flag === color ? null : color;
+      renderAll();
+    });
+    palette.appendChild(btn);
+  }
+  const sep = document.createElement("i");
+  sep.className = "palette-sep";
+  palette.appendChild(sep);
+  const clear = document.createElement("button");
+  clear.type = "button";
+  clear.className = "palette-clear";
+  clear.title = "清除记号";
+  clear.innerHTML = `<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="m4 4 8 8M12 4l-8 8"/></svg>`;
+  clear.addEventListener("click", () => { task.flag = null; renderAll(); });
+  palette.appendChild(clear);
+
+  document.body.appendChild(palette);
+  const rect = anchor.getBoundingClientRect();
+  const width = palette.offsetWidth;
+  const left = Math.min(Math.max(8, rect.left + rect.width / 2 - width / 2), window.innerWidth - width - 8);
+  const top = rect.bottom + 6 + palette.offsetHeight > window.innerHeight - 8
+    ? rect.top - 6 - palette.offsetHeight
+    : rect.bottom + 6;
+  palette.style.left = `${Math.round(left)}px`;
+  palette.style.top = `${Math.round(top)}px`;
+  anchor.setAttribute("aria-expanded", "true");
+  paletteAnchorKey = key;
+}
+document.addEventListener("click", (event) => {
+  if (palette && !palette.contains(event.target)) closePalette();
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") closePalette();
+});
+
+renderAll();
+</script>
+</body>
+</html>

@@ -74,7 +74,7 @@ function ExecutorField({
   profiles: AgentExecutorProfile[];
   knownProfiles: AgentExecutorProfile[];
   fallbackType: AgentType;
-  /** 必须是 setState 本人：选执行器与写覆盖是同一轮里的两次更新，函数式更新才不会互相盖掉。 */
+  /** 必须是 setState 本人：只改智能水平时要在最新值上合并。 */
   onChange: Dispatch<SetStateAction<ExecutorChoice>>;
 }) {
   return (
@@ -87,8 +87,8 @@ function ExecutorField({
         knownProfiles={knownProfiles}
         fallbackType={fallbackType}
         override={choice}
-        onChange={(profile) => onChange({ profile, model: "", effort: "" })}
-        onOverrideChange={(patch) => onChange((current) => ({ ...current, ...patch }))}
+        onChange={(profile, override) => onChange({ profile, ...override })}
+        onEffortChange={(effort) => onChange((current) => ({ ...current, effort }))}
       />
     </div>
   );
@@ -466,6 +466,7 @@ export function TaskDerivationComposer({
                     : "已装技能 · 回车补全，原样写进调度者的 prompt"}
                   items={noteSlash.items}
                   selectedIndex={noteSlash.selectedIndex}
+                  token={noteSlash.token}
                   emptyText="这台调度者跑在 ssh 远端，技能清单只有它自己看得见——照常写 /名字，它认得。"
                   onHover={noteSlash.setIndex}
                   onPick={noteSlash.pick}

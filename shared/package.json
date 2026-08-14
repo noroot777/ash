@@ -46,9 +46,21 @@
       "types": "./src/workflow-presets.ts",
       "default": "./src/workflow-presets.ts"
     },
+    "./free-workflow": {
+      "types": "./src/free-workflow.ts",
+      "default": "./src/free-workflow.ts"
+    },
     "./cli-presets": {
       "types": "./src/cli-presets.ts",
       "default": "./src/cli-presets.ts"
+    },
+    "./cli-args": {
+      "types": "./src/cli-args.ts",
+      "default": "./src/cli-args.ts"
+    },
+    "./cli-overrides": {
+      "types": "./src/cli-overrides.ts",
+      "default": "./src/cli-overrides.ts"
     },
     "./mcp-delivery": {
       "types": "./src/mcp-delivery.ts",

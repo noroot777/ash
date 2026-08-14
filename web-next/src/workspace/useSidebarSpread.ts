@@ -1,16 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Task, TaskFollowUp } from "@harness/shared";
 import { api } from "../lib/api.ts";
+import { orderedTopLevelTasks } from "./taskTreeModel.ts";
 
 // 收起动画的时长，必须和 sidebar-spread.css 里 .workspace-sidebar 的 width 过渡对齐：
 // 动画期间仍按铺开态排版，否则列会先「啪」地塌回去、侧边栏再慢慢滑窄，看着像闪了一下。
 export const SPREAD_ANIM_MS = 260;
 
 export type SpreadBucket = "todo" | "run" | "wait" | "done" | "accepted";
-export type SpreadFilter = "all" | SpreadBucket;
+export type SpreadFilter = "all" | "starred" | SpreadBucket;
 
 export const SPREAD_FILTERS: { key: SpreadFilter; label: string }[] = [
   { key: "all", label: "全部" },
+  { key: "starred", label: "星标" },
   { key: "todo", label: "需要你处理" },
   { key: "run", label: "在跑" },
   { key: "wait", label: "排着 / 暂停" },
@@ -18,9 +20,10 @@ export const SPREAD_FILTERS: { key: SpreadFilter; label: string }[] = [
   { key: "accepted", label: "验收完成" },
 ];
 
-// 窄态那排点只画五个桶：「全部」在点上表现为「一个都没选中」，不占一个点位。
-export const SPREAD_BUCKET_FILTERS = SPREAD_FILTERS.filter(
-  (item): item is { key: SpreadBucket; label: string } => item.key !== "all",
+// 窄态那排点：「全部」在点上表现为「一个都没选中」，不占一个点位；
+// 星标不是状态桶（见 matchesSpreadFilter），画成星形而不是圆点。
+export const SPREAD_DOT_FILTERS = SPREAD_FILTERS.filter(
+  (item): item is { key: Exclude<SpreadFilter, "all">; label: string } => item.key !== "all",
 );
 
 export type SpreadCounts = Record<SpreadFilter, number>;
@@ -44,16 +47,35 @@ export function spreadBucket(task: Task): SpreadBucket {
   return "wait";
 }
 
+// 星标不是第六个桶：它是用户手动的软记号，与自动状态正交（同一个任务既可以
+// 「在跑」也可以带星标）。所以筛选判据单独一条，不进 spreadBucket。
+export function matchesSpreadFilter(task: Task, filter: SpreadFilter): boolean {
+  if (filter === "all") return true;
+  if (filter === "starred") return task.starredAt != null;
+  return spreadBucket(task) === filter;
+}
+
 // 筛选按钮（铺开态的胶囊、窄态的点）共用同一份计数：口径分两处写，早晚会对不上。
 // 口径 = 当前项目的顶层活任务，跟任务树里被筛的那批行是同一批。
 export function spreadCounts(tasks: Task[], projectId: string | null): SpreadCounts {
-  const counts: SpreadCounts = { all: 0, todo: 0, run: 0, wait: 0, done: 0, accepted: 0 };
+  const counts: SpreadCounts = { all: 0, starred: 0, todo: 0, run: 0, wait: 0, done: 0, accepted: 0 };
   for (const task of tasks) {
     if (task.projectId !== projectId || task.archived || task.parentId) continue;
     counts.all += 1;
+    if (task.starredAt != null) counts.starred += 1;
     counts[spreadBucket(task)] += 1;
   }
   return counts;
+}
+
+// J/K 快捷键遍历的「屏幕上可见的那份顶层列表」。筛选判据必须走 matchesSpreadFilter,
+// 别在调用点自己拼 `spreadBucket(task) === filter` —— starred 不是桶,那样星标筛选下
+// 快捷键会拿到空数组,按键被吞但选中不动。
+export function spreadVisibleTasks(tasks: Task[], projectId: string | null, filter: SpreadFilter): Task[] {
+  return orderedTopLevelTasks(
+    tasks.filter((task) => task.projectId === projectId && !task.archived),
+    { unifiedPinned: true },
+  ).filter((task) => matchesSpreadFilter(task, filter));
 }
 
 export type SidebarSpread = {

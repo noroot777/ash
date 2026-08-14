@@ -7,7 +7,7 @@ function copy(value: string) {
 }
 
 /**
- * 一条 agent 气泡的尾栏：**所有元信息都在这一行**，气泡头部只留名字、时间、⏱ 用时。
+ * 一条 agent 气泡的尾栏：账目元信息都在这一行，气泡头部保留执行器、模型、智能水平、时间与用时。
  *
  * 三颗账目胶囊并排（用户 2026-08-07 定的位置）：
  *   🪙 本轮 —— 每条气泡都有，这一轮烧了多少
@@ -23,6 +23,7 @@ export function MessageFooter({
   session,
   sessionUsage,
   sessionContext,
+  actions,
 }: {
   /** 这一轮的账。每条气泡都该给。 */
   turnUsage?: TokenUsage | null;
@@ -32,10 +33,12 @@ export function MessageFooter({
   sessionUsage?: TokenUsage | null;
   /** 会话此刻的上下文水位。同上，默认取会话行、调用方可覆盖成直播里更新的那份。 */
   sessionContext?: ContextUsage | null;
+  /** 尾栏右侧的动作位（目前只有「重跑上一回合」）。给了就一定渲染，不受账目有无影响。 */
+  actions?: React.ReactNode;
 }) {
   const total = session ? (sessionUsage !== undefined ? sessionUsage : session.usage) : null;
   const water = session ? (sessionContext !== undefined ? sessionContext : session.context) : null;
-  if (!session?.cliSessionId && !session?.resumeCommand && !turnUsage && !total && !water) return null;
+  if (!actions && !session?.cliSessionId && !session?.resumeCommand && !turnUsage && !total && !water) return null;
   return (
     <footer className="task-message-footer">
       {session?.cliSessionId && (
@@ -51,6 +54,7 @@ export function MessageFooter({
       <TokenUsageChip turn={turnUsage} />
       <TokenUsageChip session={total} />
       <ContextMeterChip context={water} />
+      {actions}
     </footer>
   );
 }

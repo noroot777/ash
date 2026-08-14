@@ -35,7 +35,7 @@ const rounds: TaskReviewRound[] = [
     where: "inline",
     conclusion: "verified",
     reportMarkdown: "第 3 轮的验证报告",
-    screenshots: ["one.png", "two.png"],
+    screenshots: ["one.png", "two.png", "three.png", "four.png", "five.png", "six.png", "seven.png", "eight.png"],
   }),
 ];
 

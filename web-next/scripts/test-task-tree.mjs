@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
-import { buildTaskTree, orderedTopLevelTasks } from "../src/workspace/taskTreeModel.ts";
+import { advanceHiddenReveal, buildTaskTree, orderedTopLevelTasks, previewTasksByAge } from "../src/workspace/taskTreeModel.ts";
 
-function task(id, mode, { pinnedAt = null, status = "done", stage = null, createdAt = "2026-08-01T00:00:00.000Z" } = {}) {
+function task(id, mode, {
+  pinnedAt = null,
+  status = "done",
+  stage = null,
+  createdAt = "2026-08-01T00:00:00.000Z",
+  updatedAt = createdAt,
+} = {}) {
   return {
     id,
     mode,
@@ -9,7 +15,7 @@ function task(id, mode, { pinnedAt = null, status = "done", stage = null, create
     status,
     stage,
     createdAt,
-    priority: "none",
+    updatedAt,
     parentId: null,
     archived: false,
   };
@@ -46,9 +52,45 @@ const withoutPinned = buildTaskTree([
 ], { unifiedPinned: true });
 assert.deepEqual(withoutPinned.map((section) => section.key), ["collab", "single"]);
 
+const byLastUpdate = buildTaskTree([
+  task("created-later", "single", {
+    createdAt: "2026-08-11T10:00:00.000Z",
+    updatedAt: "2026-08-11T10:00:00.000Z",
+  }),
+  task("updated-later", "single", {
+    createdAt: "2026-08-10T10:00:00.000Z",
+    updatedAt: "2026-08-11T11:00:00.000Z",
+  }),
+]);
+assert.deepEqual(byLastUpdate[0].tasks.map((row) => row.id), ["updated-later", "created-later"]);
+
 const onlyPinned = buildTaskTree([
   task("only-collab", "team", { pinnedAt: 300 }),
 ], { unifiedPinned: true });
 assert.deepEqual(onlyPinned.map((section) => section.key), ["pinned"]);
+
+const now = Date.parse("2026-08-11T12:00:00.000Z");
+const byAge = previewTasksByAge([
+  task("old", "single", { updatedAt: "2026-08-10T11:59:59.999Z" }),
+  task("recent", "single", { updatedAt: "2026-08-11T11:00:00.000Z" }),
+  task("boundary", "single", { updatedAt: "2026-08-10T12:00:00.000Z" }),
+], now);
+assert.deepEqual(byAge.visible.map((row) => row.id), ["recent", "boundary"]);
+assert.deepEqual(byAge.hidden.map((row) => row.id), ["old"]);
+
+const allOld = previewTasksByAge([
+  task("older", "single", { updatedAt: "2026-08-08T12:00:00.000Z" }),
+  task("latest", "single", { updatedAt: "2026-08-10T11:00:00.000Z" }),
+  task("oldest", "single", { updatedAt: "2026-08-07T12:00:00.000Z" }),
+], now);
+assert.deepEqual(allOld.visible.map((row) => row.id), ["latest"]);
+assert.deepEqual(allOld.hidden.map((row) => row.id), ["older", "oldest"]);
+
+// 选中藏起来的旧任务只自动展开一次；同一条上点收起后不能再被顶开。
+assert.deepEqual(advanceHiddenReveal(null, "single:old"), { lastKey: "single:old", reveal: true });
+assert.deepEqual(advanceHiddenReveal("single:old", "single:old"), { lastKey: "single:old", reveal: false });
+assert.deepEqual(advanceHiddenReveal("single:old", null), { lastKey: null, reveal: false });
+assert.deepEqual(advanceHiddenReveal(null, "single:old"), { lastKey: "single:old", reveal: true });
+assert.deepEqual(advanceHiddenReveal("single:old", "single:older"), { lastKey: "single:older", reveal: true });
 
 console.log("task tree grouping tests passed");

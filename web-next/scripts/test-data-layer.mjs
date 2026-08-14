@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { mergeFeed, timeMs } from "@harness/shared/team";
 import { ApiError, api } from "../src/lib/api.ts";
+import { mergeUserTimeline } from "../src/lib/useConversation.ts";
 import { deriveTaskStatusIndicator, readEventForTask, readTaskIds } from "../src/lib/useTaskReadState.ts";
-import { applyTaskMetadataEvent, applyTaskStatusEvent } from "../src/lib/useTasks.ts";
 import { buildConversationItems, conversationToMarkdown } from "../src/task-detail/conversationModel.ts";
 import { taskDurationInfo } from "../src/task-detail/utils.ts";
 import { stickStateAfterScroll } from "../src/lib/useStickToBottom.ts";
@@ -12,11 +12,12 @@ import { emptyComposerExecutorConfigs, patchComposerExecutor, setComposerExecuto
 import { activeGroupTasks, resumeQueueModel } from "../src/settings/groupQueueModel.ts";
 import { leadTurns, teamFeedOptions } from "../src/team/teamModel.ts";
 import {
+  executorRunSummary,
   executorOptions,
   registeredAgentTypes,
   teamExecutorCandidates,
 } from "../src/lib/agentAvailability.ts";
-import { isLocalDiskImagePath } from "../src/components/markdownPolicy.ts";
+import { isLocalDiskImagePath, localDiskPath } from "../src/components/markdownPolicy.ts";
 import { createTerminalTab, withoutTerminalTab } from "../src/workspace/terminalTabs.ts";
 
 const originalFetch = globalThis.fetch;
@@ -25,6 +26,11 @@ try {
   assert.equal(isLocalDiskImagePath("/tmp/cli-drawer.jpg"), true);
   assert.equal(isLocalDiskImagePath("file:///Users/fjh/cli-drawer.png"), true);
   assert.equal(isLocalDiskImagePath("/api/uploads/cli-drawer.jpg"), false);
+  assert.equal(localDiskPath("/Users/fjh/My%20Demo/index.html"), "/Users/fjh/My Demo/index.html");
+  assert.equal(localDiskPath("file:///Volumes/demo/My%20Demo/index.html"), "/Volumes/demo/My Demo/index.html");
+  assert.equal(localDiskPath("C:\\work\\demo\\index.html"), "C:\\work\\demo\\index.html");
+  assert.equal(localDiskPath("/api/tasks/demo/file"), null);
+  assert.equal(localDiskPath("https://example.com/index.html"), null);
   const terminalTabs = [
     createTerminalTab("cli-1", 1, "harness", "/repo"),
     createTerminalTab("cli-2", 2, "harness", "/repo"),
@@ -67,40 +73,8 @@ try {
     liveSince: "2026-07-30T01:00:00.000Z",
     updatedAt: "2026-07-30T01:10:00.000Z",
   };
-  const updated = applyTaskStatusEvent(task, {
-    type: "task.status",
-    taskId: "task-1",
-    status: "running",
-    updatedAt: "2026-07-30T01:11:00.000Z",
-    endedAt: null,
-    liveSince: null,
-  });
-
-  assert.equal(updated.startedAt, task.startedAt);
-  assert.equal(updated.activeMs, task.activeMs);
-  assert.equal(updated.endedAt, null);
-  assert.equal(updated.liveSince, null);
-  assert.equal(updated.updatedAt, "2026-07-30T01:11:00.000Z");
-  assert.equal(applyTaskMetadataEvent(task, {
-    type: "task.stage",
-    taskId: task.id,
-    stage: "awaiting_acceptance",
-    updatedAt: "2026-07-30T01:12:00.000Z",
-  }).updatedAt, "2026-07-30T01:12:00.000Z");
-  assert.equal(applyTaskMetadataEvent(task, {
-    type: "task.title",
-    taskId: task.id,
-    title: "新标题",
-    updatedAt: "2026-07-30T01:13:00.000Z",
-  }).updatedAt, "2026-07-30T01:13:00.000Z");
-  assert.equal(applyTaskMetadataEvent(task, {
-    type: "task.question",
-    taskId: task.id,
-    question: "需要确认吗？",
-    questionOptions: ["确认"],
-    questionItems: null,
-    updatedAt: "2026-07-30T01:14:00.000Z",
-  }).updatedAt, "2026-07-30T01:14:00.000Z");
+  // useTasks 数据同步纯函数（SSE 事件应用 / 星标回写 / GET 快照合并）的用例在
+  // scripts/test-task-sync.mjs（npm -w web-next run test:task-sync）。
 
   const session = {
     id: "session-1",
@@ -108,6 +82,8 @@ try {
     role: "single",
     agentType: "codex",
     executor: "codex@local",
+    model: "gpt-5.5",
+    reasoningEffort: "medium",
     target: "local",
     worktreePath: null,
     branch: null,
@@ -128,6 +104,10 @@ try {
         at: "2026-07-30T01:01:02.000Z",
         turnStartedAt: "2026-07-30T01:01:00.000Z",
         event: { kind: "tool", name: "exec", detail: "rg -n trace" },
+      }, {
+        at: "2026-07-30T01:01:00.000Z",
+        turnStartedAt: "2026-07-30T01:01:00.000Z",
+        event: { kind: "run", model: "gpt-5.6-sol", reasoningEffort: "high" },
       }],
     }],
     [session],
@@ -147,11 +127,88 @@ try {
   assert.deepEqual(conversation.map((item) => item.kind), ["agent", "user", "agent"]);
   assert.equal(conversation[2].kind === "agent" ? conversation[2].markdown : "", "正在处理。 已完成。");
   assert.equal(conversation[2].kind === "agent" ? conversation[2].segments[0]?.events.length : 0, 1);
+  assert.deepEqual(conversation[2].kind === "agent" ? conversation[2].run : null, { model: "gpt-5.6-sol", reasoningEffort: "high" });
   assert.equal(conversation[0].kind === "agent" ? conversation[0].at : null, "2026-07-30T01:00:00.000Z");
+  assert.deepEqual(conversation[0].kind === "agent" ? conversation[0].run : null, { model: "gpt-5.5", reasoningEffort: "medium" });
   assert.equal(conversation[0].kind === "agent" ? conversation[0].endedAt : null, "2026-07-30T01:01:00.000Z");
   assert.equal(conversation[2].kind === "agent" ? conversation[2].at : null, "2026-07-30T01:01:00.000Z");
   assert.equal(conversation[0].kind === "agent" ? conversation[0].showSessionMeta : null, false);
   assert.equal(conversation[2].kind === "agent" ? conversation[2].showSessionMeta : null, true);
+
+  const optimisticReply = {
+    kind: "user",
+    id: "optimistic-reply",
+    text: "请继续",
+    attachments: ["/tmp/proof.png"],
+    at: "2026-07-30T01:01:00.000Z",
+    source: "optimistic",
+  };
+  const serverReply = {
+    kind: "user",
+    id: "server-reply",
+    text: "请继续\n\n[用户附带的文件，请用 Read 工具查看以下本地文件]\n- /tmp/proof.png",
+    attachments: [],
+    at: "2026-07-30T01:01:00.020Z",
+    source: "server",
+  };
+  assert.deepEqual(mergeUserTimeline([optimisticReply], serverReply), [serverReply], "服务端落盘事件应替换同一条乐观消息");
+  assert.deepEqual(mergeUserTimeline([serverReply], optimisticReply), [serverReply], "事件先到时，后来的乐观消息不能重复追加");
+
+  const systemHandoff = { ...serverReply, id: "system-handoff", text: "请读取 report.md", bySystem: true };
+  const handoffConversation = buildConversationItems([], [session], mergeUserTimeline([], systemHandoff));
+  assert.equal(handoffConversation[0]?.kind === "user" ? handoffConversation[0].bySystem : false, true);
+  assert.match(conversationToMarkdown(handoffConversation, { ...task, title: "test", body: "" }), /## 系统/);
+
+  const cumulative1 = { input: 10, output: 5, cacheRead: 90, cacheWrite: 0, reasoning: 3, costUsd: null, turns: 1 };
+  const cumulative2 = { input: 20, output: 10, cacheRead: 180, cacheWrite: 0, reasoning: 6, costUsd: null, turns: 1 };
+  const repairedSession = { ...session, usage: { ...cumulative2, turns: 2 } };
+  const repairedConversation = buildConversationItems(
+    [{
+      session: repairedSession,
+      output: `第一轮。\n\u001e${JSON.stringify({ t: "user", text: "继续", at: "2026-07-30T01:01:00.000Z" })}\n第二轮。`,
+      trace: [
+        { at: "2026-07-30T01:00:30.000Z", turnStartedAt: session.startedAt, event: { kind: "usage", usage: cumulative1 } },
+        { at: "2026-07-30T01:01:30.000Z", turnStartedAt: "2026-07-30T01:01:00.000Z", event: { kind: "usage", usage: cumulative2 } },
+      ],
+    }],
+    [repairedSession],
+    [],
+  );
+  const repairedAgentTurns = repairedConversation.filter((item) => item.kind === "agent");
+  assert.equal(repairedAgentTurns[0]?.usage && repairedAgentTurns[0].usage.input + repairedAgentTurns[0].usage.cacheRead + repairedAgentTurns[0].usage.output, 105);
+  assert.equal(repairedAgentTurns[1]?.usage && repairedAgentTurns[1].usage.input + repairedAgentTurns[1].usage.cacheRead + repairedAgentTurns[1].usage.output, 105);
+  assert.deepEqual(
+    repairedAgentTurns.at(-1)?.sessionUsage,
+    { ...cumulative2, turns: 2 },
+    "Codex 旧 trace 要在读侧从累计快照换算成单轮差值，不能刷新后又显示 315",
+  );
+  const markedConversation = buildConversationItems(
+    [{
+      session: repairedSession,
+      output: `第一轮。\n\u001e${JSON.stringify({ t: "user", text: "继续", at: "2026-07-30T01:01:00.000Z" })}\n第二轮。`,
+      trace: [
+        { at: "2026-07-30T01:00:30.000Z", turnStartedAt: session.startedAt, event: { kind: "usage", usage: cumulative1, accounting: "incremental" } },
+        { at: "2026-07-30T01:01:30.000Z", turnStartedAt: "2026-07-30T01:01:00.000Z", event: { kind: "usage", usage: cumulative1, accounting: "incremental" } },
+      ],
+    }],
+    [repairedSession],
+    [],
+  ).filter((item) => item.kind === "agent");
+  assert.equal(markedConversation[1]?.usage?.cacheRead, 90, "新 trace 已是增量，不能被历史兼容逻辑二次求差");
+
+  const clearedContext = buildConversationItems([], [{
+    ...session,
+    context: { used: 117_016, window: 353_400, windowEstimated: false },
+  }], [
+    { kind: "server", id: "context-text", event: { type: "agent.event", taskId: "task-1", sessionId: session.id, role: "single", event: { kind: "text", text: "新一轮。" } } },
+    { kind: "server", id: "context-clear", event: { type: "agent.event", taskId: "task-1", sessionId: session.id, role: "single", event: { kind: "context", context: { used: 0, window: null, windowEstimated: false } } } },
+  ]);
+  assert.deepEqual(
+    clearedContext.at(-1)?.kind === "agent" ? clearedContext.at(-1)?.sessionContext : undefined,
+    { used: 0, window: null, windowEstimated: false },
+    "直播没采到哨兵必须压过 sessions 行上的旧水位，渲染层会因 used=0 隐藏胶囊",
+  );
+
   const exported = conversationToMarkdown(conversation, { ...task, title: "测试会话", body: "目标" });
   assert.match(exported, /## 你 ·/);
   assert.doesNotMatch(exported, /rg -n trace/);
@@ -177,7 +234,7 @@ try {
   assert.equal(interleavedTrace[0]?.kind === "agent" ? interleavedTrace[0].segments[1]?.events[0]?.kind : null, "tool");
 
   const liveInterleaved = buildConversationItems([], [session], [
-    { kind: "server", id: "think-1", event: { type: "agent.event", taskId: "task-1", sessionId: session.id, role: "single", event: { kind: "thinking", text: "分析一" } } },
+    { kind: "server", id: "think-1", event: { type: "agent.event", taskId: "task-1", sessionId: session.id, role: "single", model: "gpt-5.6-sol", reasoningEffort: "high", event: { kind: "thinking", text: "分析一" } } },
     { kind: "server", id: "text-1", event: { type: "agent.event", taskId: "task-1", sessionId: session.id, role: "single", event: { kind: "text", text: "正文一" } } },
     { kind: "server", id: "tool-1", event: { type: "agent.event", taskId: "task-1", sessionId: session.id, role: "single", event: { kind: "tool", name: "exec", detail: "命令二" } } },
     { kind: "server", id: "text-2", event: { type: "agent.event", taskId: "task-1", sessionId: session.id, role: "single", event: { kind: "text", text: "正文二" } } },
@@ -187,6 +244,7 @@ try {
     liveInterleaved[0]?.kind === "agent" ? liveInterleaved[0].segments.map(({ markdown, events }) => [markdown, events[0]?.kind]) : [],
     [["正文一", "thinking"], ["正文二", "tool"]],
   );
+  assert.deepEqual(liveInterleaved[0]?.kind === "agent" ? liveInterleaved[0].run : null, { model: "gpt-5.6-sol", reasoningEffort: "high" });
 
   const persistedAttachmentPath = "/tmp/harness/data/uploads/persisted-agent-image.png";
   const attachmentConversation = buildConversationItems(
@@ -464,16 +522,39 @@ try {
   const roles = ["single", "lead", "worker", "reviewer"];
   for (const role of roles) {
     let executors = emptyComposerExecutorConfigs();
-    executors = setComposerExecutorProfile(executors, role, "codex@local");
+    // 换执行器时选择器算出来的覆盖就是这个空对象(= 跟随执行器);这里钉的是它**整份替换**
+    // 已有的 model/effort,而不是并进去 —— 后者正是「选了执行器又被旧值盖回去」那个 bug。
+    const follow = { model: "", effort: "" };
+    executors = setComposerExecutorProfile(executors, role, "codex@local", follow);
     executors = patchComposerExecutor(executors, role, { model: "gpt-5.6-sol", effort: "ultra" });
-    executors = setComposerExecutorProfile(executors, role, "claude@ccb");
+    executors = setComposerExecutorProfile(executors, role, "claude@ccb", follow);
     assert.deepEqual(executors[role], { profile: "claude@ccb", model: "", effort: "" });
+    // 选回同一个执行器、只换模型:执行器与覆盖是同一次选择的结果,一起落地 —— 模型换成
+    // 新的,智能水平原样留着,不能被当成「换人」清掉。
+    executors = patchComposerExecutor(executors, role, { effort: "high" });
+    executors = setComposerExecutorProfile(executors, role, "claude@ccb", { model: "claude-opus-5", effort: "high" });
+    assert.deepEqual(executors[role], { profile: "claude@ccb", model: "claude-opus-5", effort: "high" });
   }
 
   const registeredProfiles = [
-    { id: "codex-local", name: "codex@local", type: "codex", model: null, isDefault: true },
+    { id: "codex-local", name: "codex@local", type: "codex", model: "gpt-5.6-sol", reasoningEffort: "ultra", isDefault: true },
     { id: "qwen-ssh", name: "qwen@remote", type: "qwen", model: "qwen3", isDefault: true },
   ];
+  assert.deepEqual(
+    executorRunSummary({ agentType: "codex", executorId: null }, registeredProfiles),
+    { model: "gpt-5.6-sol", effort: "ultra", overridden: false },
+    "类型默认审查者应展示实际继承的模型与智能水平",
+  );
+  assert.deepEqual(
+    executorRunSummary({ agentType: "codex", executorId: "codex-local" }, registeredProfiles, { effort: "high" }),
+    { model: "gpt-5.6-sol", effort: "high", overridden: true },
+    "审查者覆盖的智能水平应优先于执行器默认值",
+  );
+  assert.deepEqual(
+    executorRunSummary({ agentType: "codex", executorId: "deleted-profile" }, registeredProfiles),
+    { model: "gpt-5.6-sol", effort: "ultra", overridden: false },
+    "失效的执行器引用应与服务端一致回退到类型默认值",
+  );
   assert.deepEqual(registeredAgentTypes(registeredProfiles), ["codex", "qwen"]);
   const candidates = teamExecutorCandidates({
     status: "ready",

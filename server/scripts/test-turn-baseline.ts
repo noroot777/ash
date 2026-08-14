@@ -80,7 +80,6 @@ try {
       mode: "single",
       status: "done",
       stage,
-      priority: "none",
       labels: "[]",
       dependsOn: "[]",
       resumeDependsOn: "[]",
@@ -150,7 +149,7 @@ try {
   // 用户问一句话就得重新点一次验收（第 2 轮验收 P1）。新增函数时别再图省事跳过入口。
   await makeSettledTask("tb-asked", "merged");
   const reopened = await reopenAcceptedStage("tb-asked");
-  assert.equal(reopened, "merged", "回合开头照旧摘牌（既有行为），但要把摘掉的是哪块交出来");
+  assert.equal(reopened?.stage, "merged", "回合开头照旧摘牌（既有行为），但要把摘掉的是哪块交出来");
   assert.equal((await row("tb-asked")).stage, null, "前置条件：这时候牌子确实已经被摘掉了");
   await recordTurnBaseline("tb-asked", repo, false, reopened);
   assert.equal(
@@ -292,7 +291,6 @@ try {
     mode: "single",
     status: "done",
     stage: null,
-    priority: "none",
     labels: "[]",
     dependsOn: "[]",
     resumeDependsOn: "[]",

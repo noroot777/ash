@@ -1,8 +1,9 @@
 import { useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { Task } from "@harness/shared";
+import { Star } from "@phosphor-icons/react";
 import {
-  SPREAD_BUCKET_FILTERS,
+  SPREAD_DOT_FILTERS,
   SPREAD_FILTERS,
   spreadCounts,
   type SidebarSpread,
@@ -82,7 +83,10 @@ function SpreadFilterDot({
         onBlur={hideTip}
         onClick={onToggle}
       >
-        <i aria-hidden="true" />
+        {/* 星标是手动记号不是状态桶,画成星形跟那排状态圆点分开 */}
+        <i aria-hidden="true">
+          {bucketKey === "starred" && <Star size={7} weight="fill" />}
+        </i>
       </button>
       {tip && createPortal(
         <span className="workspace-spread-tip" role="tooltip" style={{ left: tip.x, top: tip.y }}>{text}</span>,
@@ -98,7 +102,7 @@ export function SpreadFilterDots({ spread, counts }: { spread: SidebarSpread; co
   const toggle = filterToggler(spread);
   return (
     <div className="workspace-spread-dots" role="group" aria-label="按状态筛选任务">
-      {SPREAD_BUCKET_FILTERS.map((item) => (
+      {SPREAD_DOT_FILTERS.map((item) => (
         <SpreadFilterDot
           key={item.key}
           bucketKey={item.key}

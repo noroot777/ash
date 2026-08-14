@@ -100,4 +100,28 @@ try {
   spec.bins = originalBins;
 }
 
+// ── 环境指纹：「原样再跑一遍上一回合」的保真前提 ──────────────────────────────
+// profile 是可编辑可删的：改一次 target 就换了台机器，改一次供应商就换了套账号。只存主键
+// 时，重试会拿着旧 CLI 会话 id 去连一台从没跑过它的机器（第 1 轮审查 finding 2）。所以解析
+// 时要顺带记下那一刻的环境指纹，重跑前对不上就让上层 409。
+const { profileDrift, resolveExecutorWithProfile } = await import("../src/executors/index.js");
+await db.insert(agents).values({
+  id: "codex-fp", name: "codex@fp", type: "codex", target: localTarget, model: "gpt-fp",
+  extraArgs: "[]", reasoningEffort: null, speed: null, providerId: null, isDefault: false,
+});
+const stamped = await resolveExecutorWithProfile({ executorId: "codex-fp", type: "codex" });
+assert.equal(stamped.profileId, "codex-fp", "解析要还回真正选中的 profile 主键");
+assert.ok(stamped.profileFingerprint, "解析要顺带还回那一刻的环境指纹");
+assert.equal(await profileDrift("codex-fp", stamped.profileFingerprint), null, "什么都没动 → 还是同一套环境");
+// 展示名不进指纹：agents.name 非唯一、可随时改，改个名字不该把重试按钮堵死。
+await db.update(agents).set({ name: "codex@renamed" }).where(eq(agents.id, "codex-fp"));
+assert.equal(await profileDrift("codex-fp", stamped.profileFingerprint), null, "改展示名不算换执行环境");
+await db.update(agents).set({ target: JSON.stringify({ kind: "ssh", host: "elsewhere", user: "x" }) }).where(eq(agents.id, "codex-fp"));
+assert.equal(await profileDrift("codex-fp", stamped.profileFingerprint), "changed", "换了台机器必须认出来");
+await db.delete(agents).where(eq(agents.id, "codex-fp"));
+assert.equal(await profileDrift("codex-fp", stamped.profileFingerprint), "missing", "profile 被删了必须认出来");
+// 老会话行没有这两列：无从核对，按老行为放行（判据同 executorId 悬空时的降级）。
+assert.equal(await profileDrift(null, stamped.profileFingerprint), null, "没记 profile 的老会话行照旧放行");
+assert.equal(await profileDrift("codex-fp", null), null, "没记指纹的老会话行照旧放行");
+
 console.log("executor resolution tests passed");

@@ -5,10 +5,10 @@ import type {
   AgentType,
   Group,
   GroupMode,
-  Priority,
   ProjectView,
   Task,
   TaskMode,
+  TaskWorkflowMode,
   TeamPresetConfig,
 } from "@harness/shared";
 import { DEFAULT_APP_SETTINGS } from "@harness/shared";
@@ -46,7 +46,6 @@ import {
   setComposerExecutorProfile,
   type ComposerExecutorRole,
 } from "./executorOverrides.ts";
-
 export type ComposerDraft = { body: string; attachments: string[]; noteIds?: string[] };
 
 export function TaskComposerPanel({
@@ -79,7 +78,6 @@ export function TaskComposerPanel({
   const [review, setReview] = useState(true);
   const [rounds, setRounds] = useState("3");
   const [gate, setGate] = useState(true);
-  const [priority, setPriority] = useState<Priority>("none");
   const [groupId, setGroupId] = useState("");
   const [labels, setLabels] = useState<string[]>([]);
   const [useWorktree, setUseWorktree] = useState(DEFAULT_APP_SETTINGS.worktreeDefault);
@@ -87,6 +85,7 @@ export function TaskComposerPanel({
   const [base, setBase] = useState("");
   const [busy, setBusy] = useState(false);
   const [launchMode, setLaunchMode] = useState<LaunchMode>("run");
+  const [workflowMode, setWorkflowMode] = useState<TaskWorkflowMode>("free");
   const [scheduleAt, setScheduleAt] = useState("");
   const [scheduleCron, setScheduleCron] = useState(DEFAULT_CRON);
   const [groupDialogOpen, setGroupDialogOpen] = useState(false);
@@ -161,7 +160,6 @@ export function TaskComposerPanel({
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);
   }, [onCancel]);
-
   const allAttachments = useMemo(
     () => [...new Set([...seedAttachments, ...uploads.attachments.map((item) => item.path)])],
     [seedAttachments, uploads.attachments],
@@ -177,11 +175,15 @@ export function TaskComposerPanel({
     if (parsed) applySlash(parsed[1]!.toLowerCase() as TaskMode, parsed[2] ?? "");
     else setBody(value);
   };
-  const changeExecutor = (role: ComposerExecutorRole, profile: string) => {
-    setExecutors((current) => setComposerExecutorProfile(current, role, profile));
+  const changeExecutor = (
+    role: ComposerExecutorRole,
+    profile: string,
+    override: { model: string; effort: string },
+  ) => {
+    setExecutors((current) => setComposerExecutorProfile(current, role, profile, override));
   };
-  const changeOverride = (role: ComposerExecutorRole, patch: { model?: string; effort?: string }) => {
-    setExecutors((current) => patchComposerExecutor(current, role, patch));
+  const changeEffort = (role: ComposerExecutorRole, effort: string) => {
+    setExecutors((current) => patchComposerExecutor(current, role, { effort }));
   };
 
   const singleExecutor = parseExecutorValue(
@@ -189,10 +191,9 @@ export function TaskComposerPanel({
     profiles,
     { agentType: "claude", executorId: null },
   );
-  // 单任务面板上没有执行器选择器了：谁来干活写在起手式「让 AI 干活」那一站上。
-  // 那一站留空（executorId=null）的意思是「跟随任务的执行器」，此时才回落到这里
-  // 算出来的默认执行器——它照样参与可用性校验，只是不出现在界面上。
-  const runStep = mode === "single" ? workflow.def?.steps.find((step) => step.kind === "run") ?? null : null;
+  const runStep = mode === "single" && workflowMode === "preset"
+    ? workflow.def?.steps.find((step) => step.kind === "run") ?? null
+    : null;
   const runStepParams = runStep?.p as
     { executorId: string | null; model: string | null; reasoningEffort: string | null } | undefined;
   const runStepProfile = runStepParams?.executorId
@@ -246,7 +247,8 @@ export function TaskComposerPanel({
     executorId: slashRun.executorId,
     enabled: mode !== "duet",
   });
-  const slashCandidates = mergeSlashItems(HARNESS_SLASH_ITEMS, skills.skills, slashDismissed ? null : slashToken(body));
+  const slashQuery = slashDismissed ? null : slashToken(body);
+  const slashCandidates = mergeSlashItems(HARNESS_SLASH_ITEMS, skills.skills, slashQuery);
   const slashSelected = Math.min(slashIndex, Math.max(0, slashCandidates.length - 1));
   const pickSlash = (item: SlashItem) => {
     const harness = SLASHES.find((entry) => entry.command === item.command);
@@ -254,7 +256,7 @@ export function TaskComposerPanel({
       applySlash(harness.mode);
       return;
     }
-    // 技能只是补全:补进正文,原样跟着任务正文发下去。
+    // 技能只是补全:命令留在正文里，server 运行前据此注入 SKILL.md。
     setBody(`${item.command} `);
     setSlashIndex(0);
   };
@@ -379,12 +381,12 @@ export function TaskComposerPanel({
   const availabilityMessage = noExecutor
     ? "还没有已注册执行器，暂不能创建任务；请先到执行器设置注册本地 CLI 或新增 SSH 执行器。"
     : unavailableRole
-      // 单任务的执行器只有起手式那一处能改，提示就得把人指到那儿去，别说「请更换执行器」
-      // 却在面板上找不到可换的地方。
       ? mode === "single"
-        ? runStepParams?.executorId
-          ? "起手式「让 AI 干活」那一站选的执行器未注册，请展开编排换一个。"
-          : "默认执行器未注册，请到执行器设置注册，或在起手式「让 AI 干活」那一站指定一个。"
+        ? workflowMode === "free"
+          ? "当前任务执行器未注册，请在上方工作方式中换一个。"
+          : runStepParams?.executorId
+            ? "起手式「让 AI 干活」那一站选的执行器未注册，请展开编排换一个。"
+            : "默认执行器未注册，请到执行器设置注册，或在起手式「让 AI 干活」那一站指定一个。"
         : `${unavailableRole}当前未注册或不支持该角色，请更换执行器。`
       : mode === "team" && detection.status === "loading"
         ? "正在确认已注册调度者的常驻会话能力…"
@@ -404,7 +406,6 @@ export function TaskComposerPanel({
     setLaunchMode(next);
     if (next === "once" && !scheduleAt) setScheduleAt(defaultOnceTime());
   };
-
   const submit = async () => {
     if (!canSubmit) return;
     setBusy(true);
@@ -417,7 +418,6 @@ export function TaskComposerPanel({
         projectId: project.id,
         title: explicitTitle || provisionalTitle,
         autoTitle: !explicitTitle && mode === "single",
-        priority,
         groupId: groupId || null,
         labels,
       };
@@ -473,11 +473,12 @@ export function TaskComposerPanel({
           reasoningEffort: singleRun.reasoningEffort,
           useWorktree: project.health.isRepo && useWorktree,
           worktreeBase: useWorktree && base ? base : null,
-          workflowId: workflow.workflowId,
+          workflowMode,
+          workflowId: workflowMode === "preset" ? workflow.workflowId : null,
           // 送的是**快照**而不是引用：面板上看到的那条线,原样落进这个任务。
           // workspace 以「任务选项」里的 worktree 开关为准 —— 那是同一件事的唯一开关,
           // 起手式里带的那个只负责在挑中它的时候把开关拨过去(见 pickWorkflow)。
-          workflow: workflow.def
+          workflow: workflowMode === "preset" && workflow.def
             ? { ...workflow.def, workspace: project.health.isRepo && useWorktree ? "isolated" : "shared" }
             : null,
         });
@@ -603,6 +604,7 @@ export function TaskComposerPanel({
                   : "↑↓ 选择，回车确认，Esc 关闭"}
                 items={slashCandidates}
                 selectedIndex={slashSelected}
+                token={slashQuery}
                 onHover={setSlashIndex}
                 onPick={pickSlash}
               />
@@ -631,7 +633,7 @@ export function TaskComposerPanel({
             availabilityMessage={availabilityMessage}
             availabilityTone={availabilityTone}
             onExecutorChange={changeExecutor}
-            onOverrideChange={changeOverride}
+            onEffortChange={changeEffort}
             currentTeamConfig={currentTeamConfig}
             onApplyTeamPreset={applyTeamPreset}
             notify={notify}
@@ -650,12 +652,12 @@ export function TaskComposerPanel({
             groups={groups}
             groupId={groupId}
             onGroupChange={setGroupId}
-            priority={priority}
-            onPriorityChange={setPriority}
             labels={labels}
             onLabelsChange={setLabels}
             onCreateGroup={() => setGroupDialogOpen(true)}
             workflowSlot={mode === "single" && workflow.slot}
+            workflowMode={workflowMode}
+            onWorkflowModeChange={setWorkflowMode}
           />
         </div>
       </div>

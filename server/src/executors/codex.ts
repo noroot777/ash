@@ -1,8 +1,11 @@
 import type { ChildProcess } from "node:child_process";
 import { createInterface } from "node:readline";
 import type { AgentEvent, ExecTarget, TokenUsage } from "@harness/shared";
-import type { AgentExecutor, RelayConfig, ResidentHandle, RunHandle, RunOpts } from "./types.js";
+import { cliConfigOverrideEnvPatch } from "@harness/shared/cli-overrides";
+import { cliHostEnv, resumeEnvHint } from "./cli-env.js";
+import type { AgentExecutor, RelayConfig, ResidentHandle, ResumeFields, RunHandle, RunOpts } from "./types.js";
 import { openCodexResident } from "./codex-resident.js";
+import { readCodexContext } from "./codex-rollout.js";
 import { spawnForRun, detachedInfo } from "./detached.js";
 import { spawnAgent, resumeFor, resumeInner, spawnErrorMessage, killChild, forceFinishOnExit, redactSecrets } from "./spawn.js";
 import { relayApi } from "../llm.js";
@@ -23,16 +26,17 @@ const RELAY_PROVIDER_ID = "harness_relay";
 export class CodexExecutor implements AgentExecutor {
   readonly type = "codex" as const;
   readonly label: string;
-  // 供应商的 env 前缀,token 已换成占位符 —— 存进 sessions.relay_env 供恢复命令展示。
-  readonly relayEnvHint?: string;
-  private target: ExecTarget;
+  // 恢复命令要带的 env 前缀:覆盖项 + 供应商(token 已换成占位符)。存进 sessions。
+  private readonly resumeEnvHint?: string;
+  readonly target: ExecTarget;
   private bin: string;
-  private model?: string;
+  readonly model?: string;
   private extraArgs: string[];
-  private reasoningEffort?: string;
+  readonly reasoningEffort?: string;
   private speed?: "fast";
   private relay?: RelayConfig;
-  constructor(opts: { model?: string; extraArgs?: string[]; reasoningEffort?: string; speed?: "fast"; bin?: string; target?: ExecTarget; name?: string; relay?: RelayConfig } = {}) {
+  private configOverrides?: Record<string, number>;
+  constructor(opts: { model?: string; extraArgs?: string[]; reasoningEffort?: string; speed?: "fast"; bin?: string; target?: ExecTarget; name?: string; relay?: RelayConfig; configOverrides?: Record<string, number> } = {}) {
     this.model = opts.model;
     this.extraArgs = opts.extraArgs ?? [];
     this.reasoningEffort = opts.reasoningEffort;
@@ -40,7 +44,13 @@ export class CodexExecutor implements AgentExecutor {
     this.bin = opts.bin ?? "codex";
     this.target = opts.target ?? { kind: "local" };
     this.relay = opts.relay;
-    this.relayEnvHint = this.relay ? `${RELAY_ENV_KEY}=<你的key> ` : undefined;
+    this.configOverrides = opts.configOverrides;
+    this.resumeEnvHint = resumeEnvHint(
+      this.type,
+      this.configOverrides,
+      this.relay ? `${RELAY_ENV_KEY}=<你的key> ` : undefined,
+      this.target,
+    );
     const where = this.target.kind === "ssh" ? this.target.host : "local";
     this.label = opts.name ?? `codex@${where}${opts.model ? "·" + opts.model : ""}`;
   }
@@ -48,7 +58,12 @@ export class CodexExecutor implements AgentExecutor {
   resumeCommand(cwd: string, sessionId: string): string {
     // Human-friendly copy command: interactive resume (shows the session + lets
     // you continue). The harness's own headless resume uses `exec resume` in run().
-    return resumeFor(this.target, cwd, resumeInner.codex(sessionId), this.relayEnvHint ?? "");
+    return resumeFor(this.target, cwd, resumeInner.codex(sessionId), this.resumeEnvHint ?? "");
+  }
+
+  // codex 没有「盖掉自己配置文件」那一档覆盖(声明表里只有 claude),所以这里不带参数。
+  resumeFields(cwd: string, sessionId: string): ResumeFields {
+    return { resumeCommand: this.resumeCommand(cwd, sessionId), resumeEnv: this.resumeEnvHint ?? null, resumeArgs: null };
   }
 
   // 挂了供应商就临时注册一个 provider 并切过去(-c 值按 TOML 解析,字符串须带引号)。
@@ -72,8 +87,13 @@ export class CodexExecutor implements AgentExecutor {
     ];
   }
 
-  private env(): Record<string, string> | undefined {
-    return this.relay ? { [RELAY_ENV_KEY]: this.relay.apiKey } : undefined;
+  // 供应商的 key + 盖过 CLI 自己配置文件的那几项(声明见 shared/src/cli-overrides.ts;
+  // codex 目前一项都没声明,这里接住是为了「声明表加一项就生效」这句话是真的)。
+  // `undefined` 值 = 从子进程环境里删掉那个变量(见 cliConfigOverrideEnvPatch)。
+  private env(): Record<string, string | undefined> {
+    const env: Record<string, string | undefined> = cliConfigOverrideEnvPatch(this.type, this.configOverrides, cliHostEnv(this.target));
+    if (this.relay) env[RELAY_ENV_KEY] = this.relay.apiKey;
+    return env;
   }
 
   // 一次性 run 与常驻回合共用的参数装配。`-C`/`--json`/`-m`/sandbox 是
@@ -96,6 +116,7 @@ export class CodexExecutor implements AgentExecutor {
   }
 
   run(opts: RunOpts): RunHandle {
+    const contextNotBeforeMs = Date.now();
     const args = this.execArgs(opts, opts.sessionId ?? "");
     const commandLine = redactSecrets(`${this.bin} ${args.join(" ")} <prompt via stdin>`);
     const child = spawnForRun(this.target, opts.cwd, this.bin, args, opts.prompt, this.env(), opts.detach);
@@ -103,7 +124,10 @@ export class CodexExecutor implements AgentExecutor {
     return {
       sessionId: opts.sessionId ?? "",
       commandLine,
-      events: parseCodexStream(child, opts.trace, lifecycle),
+      events: parseCodexStream(child, opts.trace, lifecycle, {
+        initialThreadId: opts.sessionId ?? "",
+        contextNotBeforeMs,
+      }),
       kill: () => {
         lifecycle.stopRequested = true;
         killChild(child);
@@ -118,7 +142,11 @@ export class CodexExecutor implements AgentExecutor {
       sessionId: opts.sessionId,
       commandLine: opts.commandLine,
       // 接管的是上一轮留下的进程，trace 那份诊断在它自己那一轮已经写过了。
-      events: parseCodexStream(child, undefined, lifecycle),
+      // 重启接管拿不到原回合起点；从接管时刻算下界，宁可少一轮水位也不复用旧值。
+      events: parseCodexStream(child, undefined, lifecycle, {
+        initialThreadId: opts.sessionId,
+        contextNotBeforeMs: Date.now(),
+      }),
       kill: () => {
         lifecycle.stopRequested = true;
         child.kill();
@@ -136,6 +164,7 @@ export class CodexExecutor implements AgentExecutor {
       initialSessionId: opts.sessionId ?? "",
       initialPrompt: opts.prompt,
       startTurn: (prompt, sessionId) => {
+        const contextNotBeforeMs = Date.now();
         const args = this.execArgs(opts, sessionId);
         const lifecycle = { stopRequested: false };
         // 常驻的每一轮都是**新进程**,所以 stdin 照旧读完即关(keepStdin 是
@@ -145,7 +174,10 @@ export class CodexExecutor implements AgentExecutor {
           child,
           commandLine: redactSecrets(`${this.bin} ${args.join(" ")} <prompt via stdin>`),
           lifecycle,
-          events: parseCodexStream(child, undefined, lifecycle),
+          events: parseCodexStream(child, undefined, lifecycle, {
+            initialThreadId: sessionId,
+            contextNotBeforeMs,
+          }),
         };
       },
       killTurn: (child) => killChild(child),
@@ -153,10 +185,11 @@ export class CodexExecutor implements AgentExecutor {
   }
 }
 
-async function* parseCodexStream(
+export async function* parseCodexStream(
   child: ReturnType<typeof spawnAgent>,
   tracePaths: RunTracePaths | undefined,
   lifecycle: { stopRequested: boolean },
+  contextOptions: { initialThreadId: string; contextNotBeforeMs: number },
 ): AsyncIterable<AgentEvent> {
   const queue: AgentEvent[] = [];
   let resolve: (() => void) | null = null;
@@ -166,6 +199,7 @@ async function* parseCodexStream(
   let lastEventType: string | null = null;
   let lastEventSummary: string | null = null;
   let agentMessageCount = 0;
+  let threadId = contextOptions.initialThreadId;
   const seenImages = new Set<string>();
   const structuredErrors: string[] = [];
   const trace = new RunTraceRecorder(tracePaths);
@@ -191,6 +225,7 @@ async function* parseCodexStream(
     lastEventType = codexEventType(ev);
     lastEventSummary = codexEventSummary(ev);
     if (ev.type === "thread.started" && ev.thread_id) {
+      threadId = ev.thread_id;
       push({ kind: "session", cliSessionId: ev.thread_id });
     } else if (ev.type === "turn.completed") {
       turnCompleted = true;
@@ -261,13 +296,23 @@ async function* parseCodexStream(
     finish({ exitStatus: exit, exitSignal: child.signalCode, forceFinished: true });
   });
 
-  // codex **不报上下文水位**：`exec --json` 的 stdout 里只有整回合累加的 usage，没有
-  // 「此刻装了多少」。曾经从它的 rollout 文件（~/.codex/sessions/…）里捞过，但那是私有
-  // 格式、升级即失效，用户 2026-08-07 拍板不要。所以这条流里没有 `context` 事件，
-  // codex 会话的水位胶囊不显示 —— 缺了就是缺了，别拿整回合累加去冒充水位。
+  // stdout 没有水位；在 done 前 best-effort 读取本回合 rollout。私有格式变化时读取器
+  // 返回 null，界面自然不显示，任务结算仍照常进行。
+  let contextDone = false;
   while (true) {
     if (queue.length) {
-      yield queue.shift()!;
+      const next = queue.shift()!;
+      if (next.kind === "done" && !contextDone) {
+        contextDone = true;
+        const context = await readCodexContext(threadId, contextOptions.contextNotBeforeMs);
+        // used=0 的哨兵也必须发：它会清掉 sessions 行上的上一轮旧水位。否则私有格式
+        // 变化后读取器虽已失败关闭，界面却仍拿数据库里的陈旧数字冒充当前值。
+        yield {
+          kind: "context",
+          context: context ?? { used: 0, window: null, windowEstimated: false },
+        };
+      }
+      yield next;
       continue;
     }
     if (finished) return;
@@ -277,10 +322,11 @@ async function* parseCodexStream(
 
 const num = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) ? v : 0);
 
-// `turn.completed` 自带这一回合的账单:
+// `turn.completed` 在 resume 后报的是**整条 Codex 线程累计账**，不是本轮增量：
 //   {"usage":{"input_tokens":N,"cached_input_tokens":N,"output_tokens":N,"reasoning_output_tokens":N}}
-// 跟 claude 的口径差一处:codex 的 `input_tokens` **已经包含**命中缓存的那部分,
-// 所以要减出来,否则缓存读会被算两遍。codex 不报价 → costUsd 恒 null(不是 0)。
+// 这里只做供应商字段归一；server/usage.ts 按 cli_session_id 跟上一份累计快照求差，
+// 才得到真正的本轮账。另一个口径差异是 input_tokens 已含缓存命中，必须先减出来。
+// codex 不报价 → costUsd 恒 null(不是 0)。
 export function codexUsage(u: any): TokenUsage | null {
   if (!u || typeof u !== "object") return null;
   const cacheRead = num(u.cached_input_tokens);

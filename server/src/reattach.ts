@@ -6,10 +6,10 @@
 import { createWriteStream } from "node:fs";
 import { join } from "node:path";
 import { eq, inArray } from "drizzle-orm";
-import type { AgentType } from "@harness/shared";
+import type { AgentType, SessionRole } from "@harness/shared";
 import { db } from "./db/index.js";
-import { tasks, sessions } from "./db/schema.js";
-import { trackRun, untrackRun } from "./runs.js";
+import { agents, tasks, sessions } from "./db/schema.js";
+import { claimTurn, releaseTurn, trackRun, untrackRun } from "./runs.js";
 import { resolveExecutorFor } from "./executors/index.js";
 import { reattachDetachedAgent } from "./executors/detached.js";
 import { RUNS_DIR } from "./paths.js";
@@ -54,7 +54,7 @@ export async function restartImpact(): Promise<RestartImpact> {
       continue;
     }
     const sess = (await db.select().from(sessions).where(eq(sessions.taskId, t.id)))
-      .filter((s) => s.role === "single" && !s.endedAt)
+      .filter((s) => (s.role === "single" || s.role === "reviewer") && !s.endedAt)
       .sort((a, b) => b.startedAt.localeCompare(a.startedAt))
       .at(0);
     if (!sess?.agentPid) {
@@ -93,7 +93,7 @@ export async function reattachRunningTasks(): Promise<Set<string>> {
   for (const task of candidates) {
     if (task.mode !== "single") continue; // 团队调度台走 --resume 自动接回，不在这条路上
     const sess = (await db.select().from(sessions).where(eq(sessions.taskId, task.id)))
-      .filter((s) => s.role === "single" && s.agentPid && s.agentOutPath && !s.endedAt)
+      .filter((s) => (s.role === "single" || s.role === "reviewer") && s.agentPid && s.agentOutPath && !s.endedAt)
       .sort((a, b) => b.startedAt.localeCompare(a.startedAt))
       .at(0);
     if (!sess?.agentPid || !sess.agentOutPath || !sess.agentErrPath || !sess.agentRcPath) continue;
@@ -107,11 +107,12 @@ export async function reattachRunningTasks(): Promise<Set<string>> {
     if (!child) continue; // 它已经不在了 → 交给 reconcileInterrupted
 
     try {
+      const profile = (await db.select({ id: agents.id }).from(agents).where(eq(agents.name, sess.executor))).at(0);
       const ex = await resolveExecutorFor({
-        executorId: task.executorId,
-        type: task.agentType as AgentType,
-        model: task.model,
-        reasoningEffort: task.reasoningEffort,
+        executorId: profile?.id ?? task.executorId,
+        type: sess.agentType as AgentType,
+        model: null,
+        reasoningEffort: null,
       });
       if (!ex.attach) {
         child.kill();
@@ -123,23 +124,27 @@ export async function reattachRunningTasks(): Promise<Set<string>> {
       });
       trackRun(task.id, handle);
       adopted.add(task.id);
+      // 接管也要恢复 turn 的运行时身份：report_stage 只认 turnRole（claimTurn 落下的），
+      // 不恢复的话接回的 reviewer 交卷必被拒，一条本可有结论的审查被错杀成异常失败。
+      const claimedTurn = claimTurn(task.id, sess.role);
       const out = createWriteStream(join(RUNS_DIR, task.id, `${sess.id}.md`), { flags: "a" });
       // 不 await：多个任务并行接管，各自跑各自的（跟正常运行时一样）。
       void consumeSingleRun({
         taskId: task.id,
         sessId: sess.id,
-        agentType: task.agentType as AgentType,
+        agentType: sess.agentType as AgentType,
         ex,
         cwd: sess.cwd ?? "",
         handle,
         out,
         turnStart: sess.turnStartedAt ?? sess.startedAt,
         cliSessionId: sess.cliSessionId ?? "",
-        autoTitle: false, // 标题在被打断之前那一段就已经解析过了
+        autoTitle: false, role: sess.role as SessionRole, // 标题在被打断之前那一段就已经解析过了
       })
         .catch((err) => console.error(`[harness] 接管 ${task.id} 的消费循环出错:`, err))
         .finally(() => {
           untrackRun(task.id, handle);
+          if (claimedTurn) releaseTurn(task.id);
         });
       console.log(`[harness] 接管仍在运行的 agent:任务 ${task.id} pid=${sess.agentPid}(从字节 ${sess.agentOffset ?? 0} 继续)`);
     } catch (err) {

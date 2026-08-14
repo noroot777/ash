@@ -1,10 +1,11 @@
-/* 验收台外壳:普通任务(single)和团队(team)共用同一副形状——顶栏一行放标题、验收动作和
-   返回,主体一列只铺这一屏独有的东西(改动本身)。两边的选择器并排写在这一处,拆成两份迟早
-   只改一边就漂开了;team-review.css 那边只留团队独有的部分(可折叠的执行者记录卡等)。 */
+/* 验收台外壳:普通任务(single)和团队(team)共用同一副形状——顶栏一行放标题和验收动作,
+   主体一列只铺这一屏独有的东西(改动本身);返回口只在任务/团队顶栏留一个。两边的选择器并排
+   写在这一处,拆成两份迟早只改一边就漂开了;team-review.css 那边只留团队独有的部分(可折叠的
+   执行者记录卡等)。 */
 .single-review-workspace,.team-review-workspace { display:flex; min-height:0; flex:1; flex-direction:column; background:var(--canvas); }
 .single-review-subbar,.team-review-subbar { display:flex; min-height:52px; flex:0 0 auto; flex-wrap:wrap; align-items:center; gap:10px; border-bottom:.5px solid var(--line); background:var(--panel); padding:8px 16px; }
 /* 验收动作提到顶栏:它是这一屏唯一的动作,不该跟着卡片一起被折叠收走。失败详情排在
-   整行操作之后再换行铺满顶栏下沿，确保后写在 DOM 里的「返回」仍和验收按钮留在同一行。 */
+   整行操作之后再换行铺满顶栏下沿,不去挤验收按钮那一行。 */
 .single-review-subbar .team-accept-failure,.team-review-subbar .team-accept-failure { order:1; flex:1 0 100%; margin:0; }
 .single-review-subbar > div:first-child,.team-review-subbar > div:first-child { min-width:0; flex:1; }
 .single-review-subbar b,.single-review-subbar small,.team-review-subbar b,.team-review-subbar small { display:block; }
@@ -24,6 +25,7 @@
 .single-review-shared-note > a { display:inline-flex; height:27px; flex:0 0 auto; align-items:center; border:1px solid var(--line2); border-radius:7px; background:var(--panel); padding:0 8px; color:var(--accent); font-size:9.5px; font-weight:600; }
 .single-review-loading,.single-review-error { display:flex; align-items:center; gap:6px; margin:0; border:1px dashed var(--line2); border-radius:8px; padding:18px; color:var(--faint); font-size:10.5px; }
 .single-review-error { color:var(--red); }
+.accepted-snapshot-card { display:grid; gap:9px; border:1px solid var(--line); border-radius:9px; background:var(--panel); padding:10px 11px; }.accepted-snapshot-card > header { display:grid; min-width:0; grid-template-columns:27px minmax(0,1fr) auto; align-items:center; gap:8px; }.accepted-snapshot-card > header > span { display:grid; width:27px; height:27px; place-items:center; border-radius:8px; background:color-mix(in lch,var(--cyan) 8%,var(--raised)); color:var(--cyan); }.accepted-snapshot-card header b,.accepted-snapshot-card header small { display:block; }.accepted-snapshot-card header b { font-size:10.5px; }.accepted-snapshot-card header small { margin-top:1px; color:var(--faint); font-size:9px; }.accepted-snapshot-card header em { color:var(--green); font-size:9px; font-style:normal; }.accepted-snapshot-card dl { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:7px; margin:0; }.accepted-snapshot-card dl > div { min-width:0; border-radius:7px; background:var(--canvas); padding:6px 7px; }.accepted-snapshot-card dt { color:var(--faint); font-size:8.5px; }.accepted-snapshot-card dd { overflow:hidden; margin:2px 0 0; color:var(--muted); font-family:var(--font-mono); font-size:9px; text-overflow:ellipsis; white-space:nowrap; }.accepted-snapshot-card > button { justify-self:start; border:0; background:transparent; padding:0; color:var(--accent); font-size:9.5px; text-align:left; }.accepted-snapshot-card > button:hover { text-decoration:underline; }
 /* 提交横铺一条，宽度全留给下面的「改动文件 + diff」（理由见 CommitStrip.tsx）。 */
 .single-review-content { display:grid; min-width:0; gap:10px; }
 /* 分支 → 合入目标 + 提交，压成一条元信息行（理由见 ChangeMetaBar.tsx）。 */
@@ -103,5 +105,5 @@
 .single-review-line.is-hunk > code { color:#4f58a8; }
 .single-review-line.is-meta > code { color:#a1a1aa; }
 .single-review-more-lines { position:sticky; left:0; width:100%; min-width:612px; height:32px; border:0; border-top:1px solid var(--line); background:var(--panel); color:var(--accent); font-size:9.5px; }
-@media (max-width:760px) { .single-review-facts,.single-review-diff-layout { grid-template-columns:1fr; } .single-review-files > div { max-height:220px; } }
+@media (max-width:760px) { .single-review-facts,.single-review-diff-layout,.accepted-snapshot-card dl { grid-template-columns:1fr; } .single-review-files > div { max-height:220px; } }
 @media (prefers-reduced-motion:reduce) { .single-review-workspace * { scroll-behavior:auto; } .review-meta-bar__toggle > svg:last-child { transition:none; } }

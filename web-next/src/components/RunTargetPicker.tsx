@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import type { AgentExecutorProfile, AgentType } from "@harness/shared";
 import { CaretDown, Robot } from "@phosphor-icons/react";
+import { reasoningEffortsFor } from "@harness/shared/cli-presets";
 import { AgentModelPicker } from "../task-detail/AgentModelPicker.tsx";
 import { EffortPicker } from "./EffortPicker.tsx";
 import { useProviders } from "../lib/modelCatalog.ts";
@@ -9,10 +10,10 @@ import type { AgentModelSelection } from "../task-detail/mentionPicker.ts";
 /**
  * 「这活儿谁来跑」的**唯一形状**：一颗胶囊、三段——**智能体 · 模型 · 智能水平**。
  *
- * 三段各管一件事，点哪段只改哪段：
- * ① 智能体：列已注册的 CLI，选完就落，不再顺手把你拖进选模型；
+ * 三段各管一件事，点哪段只改哪段；从左往右配置时则自动接续展开下一段：
+ * ① 智能体：列已注册的 CLI，选定后向右打开模型；
  * ② 模型：直接开当前智能体的模型列表（按供应商分块），不必先重选一遍智能体；
- * ③ 智能水平：档位候选跟着模型的能力收窄（EffortPicker）。
+ * ③ 智能水平：选定模型后向右打开，档位候选跟着模型的能力收窄（EffortPicker）。
  *
  * 以前是两颗：「执行器 · 模型」合成一颗、思考强度另起一颗。合着的那颗有两个毛病——
  * 想换个智能体得连着把模型也选一遍，想换个模型又得先从智能体那一步走过去；而且
@@ -72,7 +73,8 @@ export function RunTargetPicker({
   /** 不传就只画前两段——讨论者那种服务端根本不收智能水平的表面。 */
   onEffortChange?: (effort: string) => void;
 }) {
-  const [open, setOpen] = useState<"agent" | "model" | null>(null);
+  const [open, setOpen] = useState<"agent" | "model" | "effort" | null>(null);
+  const [modelAgent, setModelAgent] = useState<AgentType | null>(null);
   const agentRef = useRef<HTMLButtonElement>(null);
   const modelRef = useRef<HTMLButtonElement>(null);
   const providers = useProviders();
@@ -129,7 +131,10 @@ export function RunTargetPicker({
         aria-haspopup="dialog"
         aria-expanded={open === "model"}
         aria-label={`模型：${modelText}；点击更改`}
-        onClick={() => setOpen((current) => (current === "model" ? null : "model"))}
+        onClick={() => {
+          setModelAgent(openAt);
+          setOpen((current) => (current === "model" ? null : "model"));
+        }}
       >
         <code>{modelText}</code>
         <CaretDown size={9} weight="bold" className="run-target-caret" aria-hidden="true" />
@@ -144,6 +149,8 @@ export function RunTargetPicker({
           variant="segment"
           label="智能水平"
           followLabel={effortFollowLabel ?? "跟随执行器"}
+          open={open === "effort"}
+          onOpenChange={(next) => setOpen(next ? "effort" : null)}
           onChange={onEffortChange}
         />
       )}
@@ -160,11 +167,11 @@ export function RunTargetPicker({
           triggerRef={agentRef}
           anchorRef={agentRef}
           onCommit={(next) => {
-            close(agentRef);
             // 点回同一个智能体 = 什么都没改。照常提交会把模型/智能水平当成「换了人」
-            // 一并清掉，等于惩罚了「点开看看又关上」。
-            if (selection && next.agent === selection.agentType) return;
-            onCommit(next);
+            // 一并清掉，等于惩罚了「点开看看又关上」；但连续配置仍应向右打开模型。
+            if (!selection || next.agent !== selection.agentType) onCommit(next);
+            setModelAgent(next.agent);
+            setOpen("model");
           }}
           onCancel={() => close(agentRef)}
         />
@@ -175,13 +182,16 @@ export function RunTargetPicker({
           profiles={profiles}
           providers={providers}
           initialStage="model"
-          initialAgent={openAt}
-          currentExecutorId={selection?.executorId ?? null}
+          initialAgent={modelAgent ?? openAt}
+          currentExecutorId={(modelAgent ?? openAt) === selection?.agentType ? selection.executorId : null}
           triggerRef={modelRef}
           anchorRef={modelRef}
           onCommit={(next) => {
-            close(modelRef);
             onCommit(next);
+            const canContinue = !!onEffortChange
+              && (reasoningEffortsFor(next.agent, next.model).length > 0 || !!effort);
+            if (canContinue) setOpen("effort");
+            else close(modelRef);
           }}
           onCancel={() => close(modelRef)}
         />

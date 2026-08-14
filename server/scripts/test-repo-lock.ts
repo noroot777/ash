@@ -129,7 +129,6 @@ try {
     const common = {
       projectId,
       body: "",
-      priority: "none",
       labels: "[]",
       dependsOn: "[]",
       resumeDependsOn: "[]",
@@ -191,7 +190,6 @@ try {
     const common = {
       projectId,
       body: "",
-      priority: "none",
       labels: "[]",
       dependsOn: "[]",
       resumeDependsOn: "[]",

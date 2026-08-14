@@ -9,6 +9,7 @@
 import { useMemo, useRef, useState } from "react";
 import { SpinnerGap } from "@phosphor-icons/react";
 import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
+import { api } from "../lib/api.ts";
 import {
   ReviewRoundBody,
   roundState,
@@ -16,6 +17,7 @@ import {
   type TaskReviewState,
 } from "../team/ReviewEvidence.tsx";
 import { ReviewEvidenceDrawer } from "./ReviewEvidenceDrawer.tsx";
+import { ReviewScreenshotStrip } from "./ReviewScreenshotStrip.tsx";
 
 // 同一个轮次号可以既有独立审查又有就地验证两条记录，光靠 round 认不出是哪一条。
 function roundKey(round: { round: number; where: string }) {
@@ -83,20 +85,28 @@ export function TaskReviewRounds({
       </section>
 
       {opened && (
-        <ReviewEvidenceDrawer
-          anchorRef={rootRef}
-          keepOpenRef={listRef}
-          title={`第 ${opened.round} 轮验证`}
-          subtitle={`${roundState(opened).label} · ${roundWhere(opened)}`}
-          onClose={() => setOpenKey(null)}
-        >
-          {/* 图片分组要隔离：抽屉里翻大图时左右键只该在这一轮的截图之间走。 */}
-          <ImagePreviewGroup isolated>
+        // 图片分组包住正文和底部截图带：翻大图时左右键只在这一轮证据之间走。
+        <ImagePreviewGroup isolated>
+          <ReviewEvidenceDrawer
+            anchorRef={rootRef}
+            keepOpenRef={listRef}
+            title={`第 ${opened.round} 轮验证`}
+            subtitle={`${roundState(opened).label} · ${roundWhere(opened)}`}
+            onClose={() => setOpenKey(null)}
+            footer={opened.screenshots.length ? (
+              <ReviewScreenshotStrip items={opened.screenshots.map((name) => ({
+                key: name,
+                name,
+                src: api.taskReviewFileUrl(taskId, opened.round, name),
+                label: `第 ${opened.round} 轮 · ${name}`,
+              }))} />
+            ) : undefined}
+          >
             <div className="review-round-body">
-              <ReviewRoundBody taskId={taskId} round={opened} onOpenTask={onOpenTask} />
+              <ReviewRoundBody taskId={taskId} round={opened} onOpenTask={onOpenTask} includeScreenshots={false} />
             </div>
-          </ImagePreviewGroup>
-        </ReviewEvidenceDrawer>
+          </ReviewEvidenceDrawer>
+        </ImagePreviewGroup>
       )}
     </div>
   );

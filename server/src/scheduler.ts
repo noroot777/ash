@@ -3,8 +3,8 @@ import type { TaskStatus } from "@harness/shared";
 import { db } from "./db/index.js";
 import { tasks, groups, queueItems } from "./db/schema.js";
 import { setTaskStatus } from "./status.js";
-import { stopTask } from "./runs.js";
-import { resumeOrRunTask } from "./orchestrator.js";
+import { freezeStartingTurn, stopTask } from "./runs.js";
+import { resumeOrRunTask } from "./task-resume.js";
 
 const MAX_PARALLEL = 4;
 
@@ -12,12 +12,18 @@ const MAX_PARALLEL = 4;
 // 把还没起跑的 queued 退回 backlog、把正在跑的杀掉并**结算 paused**(不是
 // canceled——canceled 会被队列透明跳过,恢复分组时就错启下一个;paused 占住
 // head,恢复时从原 CLI 会话续跑被打断的那个)。
+//
+// 第三种成员：**回合已占位、进程还没起来**（重试按钮/派审刚 claim 完，正在解析执行器、
+// 准备 worktree）。它既没有 handle 可杀，status 也还停在上一轮的终态 —— 只扫这两样的话
+// pause 会 200 返回、CLI 随后照样被拉起来（第 1 轮审查复现 20/20）。所以扫描时**只要
+// 杀不到就补一个起跑冻结标记**，由 spawn 前的最后一道闸消费（turn-freeze.ts）。
 export async function pauseGroup(groupId: string): Promise<void> {
   await db.update(groups).set({ paused: true }).where(eq(groups.id, groupId));
   const members = await db.select().from(tasks).where(eq(tasks.groupId, groupId));
   for (const t of members) {
     if (t.status === "queued") await setTaskStatus(t.id, "backlog");
-    else if (t.status === "running") stopTask(t.id, "paused");
+    else if (t.status === "running" && stopTask(t.id, "paused")) continue;
+    else freezeStartingTurn(t.id, "paused");
   }
 }
 

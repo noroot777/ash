@@ -1,22 +1,32 @@
-import { eq, or } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import type { Hono } from "hono";
-import { acceptPlan, anchorAt, hasAcceptStation, isFinalHumanGate, nextAnchor, segmentAfter } from "@harness/shared/workflow-policy";
+import { acceptPlan, hasAcceptStation, isFinalHumanGate, nextAnchor } from "@harness/shared/workflow-policy";
 import type { AcceptBy } from "@harness/shared/workflow-policy";
 import { ACCEPT_CLEAN_LABELS, ACCEPT_STRATEGY_LABELS, STEP_LABELS } from "@harness/shared/workflow";
+import { STAGE_LABELS } from "@harness/shared";
+import { bus } from "./bus.js";
 import { db } from "./db/index.js";
 import { projects, tasks } from "./db/schema.js";
-import { handOffConflict, type ConflictHandoff } from "./accept-conflict.js";
-import { resolveTaskMergeTarget } from "./git.js";
-import { cleanupAcceptedTask, cleanupPlanFor, mergeTaskBranch } from "./git-accept.js";
+import { flushConflictHandoff, handOffConflict } from "./accept-conflict.js";
+import { localBranchExists, resolveTaskMergeTarget } from "./git.js";
+import { cleanupAcceptedTask, cleanupPlanFor, isAncestor, mergeTaskBranch } from "./git-accept.js";
+import { hasActiveFreeReview } from "./free-workflow.js";
+import { disarmFreeReviewReservation } from "./free-review-reservations.js";
+import { releaseFreeWorkflowAction, tryAcquireFreeWorkflowAction } from "./free-workflow-lock.js";
 import { taskWorkflowDef } from "./workflows.js";
-import { taskBranchDiff } from "./git-diff.js";
+import { acceptedCommitDiff, taskBranchDiff } from "./git-diff.js";
 import { publishTaskUpdated } from "./task-store.js";
 import { stopPreviewAtAccept } from "./preview.js";
 import { IS_PREVIEW_INSTANCE, previewRefusal } from "./preview-instance.js";
 import { withRepoLock } from "./repo-lock.js";
 import { setTaskStage, clearTaskStage } from "./task-stage.js";
+import { hasAcceptedTail, releaseGate, runAcceptedTail, type AcceptTail } from "./task-accept-tail.js";
+import { acceptSharedTeamWorkers, sharedWorkerAcceptanceMessage, type SharedWorkerAcceptance } from "./task-accept-shared-workers.js";
+import { acceptanceGuard, type AcceptFailure, type AcceptWarning } from "./task-accept-guard.js";
 import { appendTaskTimeline } from "./task-timeline.js";
+import { now } from "./util.js";
 import type { WorkflowAdvanceOptions } from "./workflow-advance.js";
+import { beginAccepting, endAccepting } from "./acceptance-lock.js";
 
 type AcceptSuccess = {
   accepted: true;
@@ -45,45 +55,7 @@ type AcceptSuccess = {
   tail?: AcceptTail;
 };
 
-type AcceptTail = {
-  ok: boolean;
-  /** 卡在哪一站（用中文站名，直接能显示） */
-  step?: string;
-  reason?: string;
-};
 
-type AcceptWarning = {
-  reason: "temporary_cleanup_failed";
-  message: string;
-  worktreePath: string;
-};
-
-type InFlightTask = {
-  id: string;
-  title: string;
-  status: string;
-  role: "task" | "shared_worker";
-};
-
-type AcceptFailure = {
-  accepted: false;
-  httpStatus: 404 | 409;
-  taskId: string;
-  reason: string;
-  error: string;
-  status?: string;
-  sourceBranch?: string;
-  targetBranch?: string | null;
-  conflictFiles?: string[];
-  dirtyFiles?: string[];
-  targetPath?: string;
-  worktreePath?: string;
-  /** 冲突已交给来源任务的 agent 去解(只在 merge_conflict 时出现) */
-  conflictHandoff?: ConflictHandoff;
-  phase?: "initial" | "before_accept" | "before_merge" | "before_cleanup";
-  inFlightTasks?: InFlightTask[];
-  warnings?: AcceptWarning[];
-};
 
 export type AcceptTaskResult = AcceptSuccess | AcceptFailure;
 
@@ -95,42 +67,29 @@ const mergeLabel: Record<string, string> = {
   tagged: "只打标签，未合并",
 };
 
-const acceptingTaskIds = new Set<string>();
 
-type SharedWorkerAcceptance = {
-  total: number;
-  updated: number;
-  skipped: number;
-};
 
-async function acceptSharedTeamWorkers(leadId: string): Promise<SharedWorkerAcceptance> {
-  const sharedWorkers = (await db.select().from(tasks).where(eq(tasks.parentId, leadId)))
-    .filter((worker) => !worker.useWorktree);
-  let updated = 0;
-  for (const worker of sharedWorkers) {
-    if (worker.stage === "accepted") continue;
-    await setTaskStage(worker.id, "accepted");
-    await publishTaskUpdated(worker.id);
-    updated += 1;
-  }
-  return { total: sharedWorkers.length, updated, skipped: sharedWorkers.length - updated };
-}
-
-function sharedWorkerAcceptanceMessage(result: SharedWorkerAcceptance): string {
-  if (result.total === 0) return "团队级验收联动：未发现共享执行者，无需同步阶段。";
-  return `团队级验收联动：已将 ${result.updated} 个共享执行者的 stage 置为 accepted` +
-    `${result.skipped ? `，另有 ${result.skipped} 个此前已是 accepted、已跳过` : ""}。`;
-}
 
 async function finalizeAcceptance(
   task: typeof tasks.$inferSelect,
   message: string,
 ): Promise<SharedWorkerAcceptance | null> {
   await setTaskStage(task.id, "accepted");
+  // 尾段 durable 进度：stage=accepted 先落、尾段后跑，进程死在中间的话重试会走
+  // already_accepted 快路——不留痕迹，发布步骤就被静默永久漏掉。置位在这里、清零在
+  // 尾段真正跑完之后，重试发现它还挂着就补跑。
+  if (hasAcceptedTail(task)) {
+    await db.update(tasks).set({ acceptedTailPending: true, acceptedTailDone: "[]", updatedAt: now() }).where(eq(tasks.id, task.id));
+  }
   // 人工关口到此结束，这条线也走到终点了：线上写着「下一个人工关口结束时回收」和
   // 「任务结束时回收」的预览都在这儿收掉。「点头之后」那一段还没开跑，所以那一段
   // 特意编排的预览不会被这一下误伤。
   await stopPreviewAtAccept(task.id);
+  // 自由工作流：验收即终局，挂着的复审预约一并注销 —— 否则它会在任务日后被唤醒的
+  // 某个回合里突然触发一场语境全变的审查（幽灵预约）。
+  if (task.workflowMode === "free" && await disarmFreeReviewReservation(task.id)) {
+    await appendTaskTimeline(task.id, "验收已完成，未消费的复审预约已一并取消。");
+  }
   const sharedWorkers = task.mode === "team" ? await acceptSharedTeamWorkers(task.id) : null;
   await appendTaskTimeline(
     task.id,
@@ -140,63 +99,6 @@ async function finalizeAcceptance(
   return sharedWorkers;
 }
 
-async function acceptanceState(taskId: string): Promise<{
-  task: typeof tasks.$inferSelect | null;
-  inFlightTasks: InFlightTask[];
-}> {
-  const related = await db
-    .select()
-    .from(tasks)
-    .where(or(eq(tasks.id, taskId), eq(tasks.parentId, taskId)));
-  const task = related.find((row) => row.id === taskId) ?? null;
-  if (!task) return { task: null, inFlightTasks: [] };
-
-  const inFlightTasks: InFlightTask[] = [];
-  if (task.status === "running" || task.status === "queued") {
-    inFlightTasks.push({ id: task.id, title: task.title, status: task.status, role: "task" });
-  }
-  if (task.mode === "team") {
-    const workers = related.filter((row) => row.parentId === task.id);
-    for (const worker of workers) {
-      if (!worker.useWorktree && (worker.status === "running" || worker.status === "queued")) {
-        inFlightTasks.push({ id: worker.id, title: worker.title, status: worker.status, role: "shared_worker" });
-      }
-    }
-  }
-  return { task, inFlightTasks };
-}
-
-async function acceptanceGuard(
-  taskId: string,
-  phase: AcceptFailure["phase"],
-): Promise<{ task: typeof tasks.$inferSelect | null; failure: AcceptFailure | null }> {
-  const state = await acceptanceState(taskId);
-  if (!state.task) {
-    return {
-      task: null,
-      failure: { accepted: false, httpStatus: 404, taskId, reason: "not_found", error: "not found", phase },
-    };
-  }
-  if (state.inFlightTasks.length === 0) return { task: state.task, failure: null };
-
-  const sharedWorkers = state.inFlightTasks.filter((item) => item.role === "shared_worker");
-  const listed = state.inFlightTasks.map((item) => `${item.title}（${item.id}，${item.status}）`).join("、");
-  return {
-    task: state.task,
-    failure: {
-      accepted: false,
-      httpStatus: 409,
-      taskId,
-      reason: sharedWorkers.length > 0 ? "shared_team_workers_in_flight" : "task_in_flight",
-      error: sharedWorkers.length > 0
-        ? `共享团队 worktree 仍被 running/queued 执行者使用，必须等它们结束后再验收：${listed}`
-        : `任务正在 running/queued，必须等当前执行结束后再验收：${listed}`,
-      status: state.task.status,
-      phase,
-      inFlightTasks: state.inFlightTasks,
-    },
-  };
-}
 
 async function acceptWithoutCleanup(
   task: typeof tasks.$inferSelect,
@@ -219,6 +121,53 @@ async function acceptTaskUnlocked(taskId: string, by: AcceptBy): Promise<AcceptT
   if (!requestedTask) {
     return { accepted: false, httpStatus: 404, taskId, reason: "not_found", error: "not found", phase: "initial" };
   }
+  // Archived = frozen/read-only（task-routes 的约定）：验收会合并、清理、改 stage，
+  // 全是写操作，归档任务一律拒——run/reply/review/repair/preview 的门禁都这么做。
+  if (requestedTask.archived) {
+    return {
+      accepted: false,
+      httpStatus: 409,
+      taskId,
+      reason: "task_archived",
+      error: "任务已归档（只读）；先取消归档再验收",
+      status: requestedTask.status,
+      phase: "initial",
+    };
+  }
+  // 自由任务在任何**终态**都可验收：done 是正常路径；failed/canceled 是「修复失败/被
+  // 手停后我接受上一版直接合并」——轮数用尽的时间线明确承诺过「由你决定验收」，只放行
+  // done 会让那句话在修复失败分支变成假承诺（验收页按钮可见却 409）。
+  if (
+    requestedTask.workflowMode === "free"
+    && requestedTask.stage !== "accepted"
+    && requestedTask.stage !== "merged"
+    && !["done", "failed", "canceled"].includes(requestedTask.status)
+  ) {
+    return {
+      accepted: false,
+      httpStatus: 409,
+      taskId,
+      reason: "free_workflow_not_ready_for_acceptance",
+      error: "自由工作流尚未到可验收的状态；任务结束后再进入验收页处理",
+      status: requestedTask.status,
+      phase: "initial",
+    };
+  }
+  if (
+    requestedTask.workflowMode === "free"
+    && requestedTask.stage !== "accepted"
+    && await hasActiveFreeReview(taskId)
+  ) {
+    return {
+      accepted: false,
+      httpStatus: 409,
+      taskId,
+      reason: "free_review_in_progress",
+      error: "自由工作流审查回合正在进行，结束后再验收",
+      status: requestedTask.status,
+      phase: "initial",
+    };
+  }
   const requestedParent = requestedTask.parentId
     ? (await db.select().from(tasks).where(eq(tasks.id, requestedTask.parentId))).at(0)
     : null;
@@ -238,6 +187,11 @@ async function acceptTaskUnlocked(taskId: string, by: AcceptBy): Promise<AcceptT
   if (initial.failure) return initial.failure;
   const task = initial.task!;
   if (task.stage === "accepted") {
+    // 幂等快路也要补清预约：历史上可能形成 accepted + armed 的组合（旧版合并入口、
+    // 或写 accepted 与清预约之间进程退出），不自愈的话 reopen 后会触发幽灵审查。
+    if (task.workflowMode === "free" && await disarmFreeReviewReservation(task.id)) {
+      await appendTaskTimeline(task.id, "任务已验收，检测到遗留的复审预约，已补清。");
+    }
     const sharedWorkers = task.mode === "team" ? await acceptSharedTeamWorkers(task.id) : null;
     await appendTaskTimeline(
       taskId,
@@ -323,7 +277,9 @@ async function acceptTaskUnlocked(taskId: string, by: AcceptBy): Promise<AcceptT
   await appendTaskTimeline(
     taskId,
     (offScript
-      ? `开始验收：这条线上没画「合并并清理」，但你亲手点了验收通过 —— 手动验收按默认规矩`
+      ? task.workflowMode === "free"
+        ? `开始验收：自由工作流没有预设合并站，手动验收按默认规矩`
+        : `开始验收：这条线上没画「合并并清理」，但你亲手点了验收通过 —— 手动验收按默认规矩`
       : `开始验收：按线上写的`) +
       `「${ACCEPT_STRATEGY_LABELS[plan.merge]}、${ACCEPT_CLEAN_LABELS[plan.clean]}」处理，` +
       `目标 ${task.worktreeBase?.trim() || "项目当前分支"}；冲突时只报告并回滚，不会强制合并。`,
@@ -333,13 +289,39 @@ async function acceptTaskUnlocked(taskId: string, by: AcceptBy): Promise<AcceptT
     await appendTaskTimeline(taskId, `验收暂缓：${mergeGuard.failure.error}`);
     return mergeGuard.failure;
   }
-  const merge = await mergeTaskBranch(project.repoPath, taskId, task.worktreeBase, plan.merge);
+  // 一次验收生命周期内目标分支必须冻结，且**在动 Git 之前先持久化**：崩溃可能发生在
+  // 「合并已改 Git、DB 还没写」的窗口里，重试若按 worktreeBase=null 动态解析会跟着项目
+  // 当前 checkout 漂移——同一任务被合进两个分支（审查实测复现）。acceptedTargetBranch
+  // 非空即「本生命周期已锁定的目标」（reopen 摘牌时清空，见 task-stage.ts）。
+  const retrying = task.stage === "merged";
+  const intendedTarget = task.acceptedTargetBranch
+    ?? await resolveTaskMergeTarget(project.repoPath, task.worktreeBase);
+  if (!intendedTarget) {
+    return {
+      accepted: false, httpStatus: 409, taskId, reason: "target_unresolved",
+      error: "目标分支为空且项目当前处于 detached HEAD", status: task.status,
+    };
+  }
+  if (!task.acceptedTargetBranch) {
+    await db.update(tasks).set({ acceptedTargetBranch: intendedTarget, updatedAt: now() }).where(eq(tasks.id, taskId));
+  }
+  const merge = await mergeTaskBranch(project.repoPath, taskId, intendedTarget, plan.merge);
 
   // Retry after a previous partial success: stage=merged plus an already-removed
   // source branch means `git branch -d` did its job; finish the stage transition.
+  // 快路也要验证冻结目标**仍然存在**：mergeTaskBranchLocked 在检查目标之前就返回
+  // source_branch_missing，目标被删/改名时这里若只看字符串非空就 finalize，会把任务
+  // 盖成 accepted 而返回值宣称一个不存在的分支（审查实测复现）。
   if (!merge.ok && merge.reason === "source_branch_missing" && task.stage === "merged") {
     const targetBranch = merge.targetBranch ?? await resolveTaskMergeTarget(project.repoPath, task.worktreeBase);
-    if (targetBranch) {
+    // 目标分支「名字存在」不够：内容可能已被 reset 回合并前——已记录的合并结果必须
+    // 仍能从目标分支到达，否则 accepted 就是在为一份不存在的产物盖章（审查实测复现）。
+    // acceptedMergeCommit 为 null（旧版部分成功没记录）时**不是**验证通过——没有证据
+    // 不能当有证据。走不了快路就落通用失败，由用户人工确认，绝不为无从核对的产物盖章。
+    const mergeReachable = targetBranch && await localBranchExists(project.repoPath, targetBranch)
+      && !!task.acceptedMergeCommit
+      && await isAncestor(project.repoPath, task.acceptedMergeCommit, targetBranch);
+    if (mergeReachable) {
       const guard = await acceptanceGuard(taskId, "before_accept");
       if (guard.failure) return guard.failure;
       const sharedWorkers = await finalizeAcceptance(
@@ -386,7 +368,42 @@ async function acceptTaskUnlocked(taskId: string, by: AcceptBy): Promise<AcceptT
   }
 
   const tagged = merge.method === "tagged";
-  if (!tagged) await setTaskStage(taskId, "merged");
+  // stage=merged 与快照三列**同一条 UPDATE** 落库（SQLite 单语句原子）：分两次写的话，
+  // 进程死在中间会留下「stage=merged、快照还是上一生命周期」的组合，重试便把第二版
+  // 产物合回旧目标分支（审查实测复现）。
+  // 快照按**一次验收生命周期**冻结：全新验收（stage 不是 merged）三列整体覆盖——
+  // reopen 后的第二次验收是新生命周期，不能沿用上一版的 base。
+  // already_merged 与重试（stage=merged）都走「保留式」：这次没有真的动 ref，已有快照
+  // 描述的才是上一次真实合并；没有已有快照（Git 合并成功后、DB 落库前崩溃的窗口）时
+  // base 写 null——「不可知」是诚实的，before==after 的空区间是伪造（审查实测复现：
+  // 按空区间派合并结果审查会漏掉真正合入的全部代码）。
+  const preserveSnapshot = retrying || merge.method === "already_merged";
+  const snapshot = preserveSnapshot ? {
+    acceptedTargetBranch: task.acceptedTargetBranch ?? merge.targetBranch,
+    acceptedBaseCommit: task.acceptedBaseCommit
+      ?? (merge.method === "already_merged" ? null : merge.beforeCommit ?? null),
+    acceptedMergeCommit: task.acceptedMergeCommit ?? merge.afterCommit ?? null,
+  } : {
+    acceptedTargetBranch: merge.targetBranch,
+    acceptedBaseCommit: merge.beforeCommit ?? null,
+    acceptedMergeCommit: merge.afterCommit ?? null,
+  };
+  if (merge.method === "already_merged" && !task.acceptedBaseCommit) {
+    await appendTaskTimeline(
+      taskId,
+      "合并早已发生但没有留下本生命周期的快照（可能是上次验收中断）：合并前基准 commit 无法确认，已按「不可知」记录而不是伪造空区间。",
+    );
+  }
+  const mergedAt = now();
+  await db.update(tasks).set({
+    ...snapshot,
+    ...(tagged ? {} : { stage: "merged" }),
+    updatedAt: mergedAt,
+  }).where(eq(tasks.id, taskId));
+  if (!tagged) {
+    bus.publish({ type: "task.stage", taskId, stage: "merged", updatedAt: mergedAt });
+    await appendTaskTimeline(taskId, `验收阶段更新：${STAGE_LABELS.merged}（merged）`);
+  }
   await appendTaskTimeline(
     taskId,
     tagged
@@ -413,7 +430,10 @@ async function acceptTaskUnlocked(taskId: string, by: AcceptBy): Promise<AcceptT
   // 提交，标签压根没合），所以 `git branch -d` 一定会被拒。删分支这一项在这两档里直接
   // 不做并说清楚原因——绝不改用 `-D`：自动流程强删分支是不可逆的，那是用户自己按的活。
   const cleanPlan = cleanupPlanFor(plan.clean);
-  const branchUnmergeable = merge.method === "squash" || tagged;
+  // 按**计划**判而不是按本次 method：squash 计划的重试会拿到 already_merged，但分支
+  // 依旧不是目标的祖先，`git branch -d` 一样删不掉——按 method 判会让重试卡死在清理
+  // （审查实测：worktree 已删、分支删不动、任务永久停 merged）。
+  const branchUnmergeable = plan.merge === "squash" || plan.merge === "tag" || merge.method === "squash" || tagged;
   const branchKeptReason = !cleanPlan.branch
     ? `线上写的是「${ACCEPT_CLEAN_LABELS[plan.clean]}」`
     : branchUnmergeable
@@ -483,12 +503,23 @@ async function acceptTaskUnlocked(taskId: string, by: AcceptBy): Promise<AcceptT
 // 冲进同一个 `.git`(见 repo-lock.ts 的三类事故)。整段而非只锁 merge 的原因是
 // 守卫判断不能过期 —— acceptTaskUnlocked 拿到锁后才重新读任务与项目,所以排在
 // 后面的验收看到的是前一个合并完成后的世界(目标分支已前进、stage 已更新)。
-async function acceptanceRepoPath(taskId: string): Promise<string | null> {
+async function acceptanceContext(taskId: string): Promise<{
+  repoPath: string | null;
+  freeWorkflow: boolean;
+  status?: string;
+}> {
   const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   // 没有独立 worktree 的任务只改 stage,不碰 git,不必占用仓库锁。
-  if (!task?.useWorktree) return null;
+  if (!task) return { repoPath: null, freeWorkflow: false };
+  if (!task.useWorktree) {
+    return { repoPath: null, freeWorkflow: task.workflowMode === "free", status: task.status };
+  }
   const project = (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0);
-  return project?.repoPath ?? null;
+  return {
+    repoPath: project?.repoPath ?? null,
+    freeWorkflow: task.workflowMode === "free",
+    status: task.status,
+  };
 }
 
 // `by` 默认 human：这个函数的调用方绝大多数是「用户按了验收通过」（HTTP 路由、MCP
@@ -509,7 +540,7 @@ export async function acceptTask(
       error: previewRefusal("验收通过"),
     };
   }
-  if (acceptingTaskIds.has(taskId)) {
+  if (!beginAccepting(taskId)) {
     return {
       accepted: false,
       httpStatus: 409,
@@ -518,94 +549,70 @@ export async function acceptTask(
       error: "该任务正在验收中，请等待当前验收动作结束后再试",
     };
   }
-  acceptingTaskIds.add(taskId);
   let result: AcceptTaskResult;
+  let freeWorkflowLocked = false;
   try {
-    const repoPath = await acceptanceRepoPath(taskId);
-    result = await withRepoLock(repoPath, async (wait) => {
-      if (wait.queued) {
-        // 排队是刷新后仍看得见的事实,不只是"点了没反应"。
-        await appendTaskTimeline(
+    try {
+      const context = await acceptanceContext(taskId);
+      if (context.freeWorkflow && !tryAcquireFreeWorkflowAction(taskId)) {
+        result = {
+          accepted: false,
+          httpStatus: 409,
           taskId,
-          `验收排队：同一仓库有其它验收/worktree 操作正在执行，已等待 ${(wait.waitedMs / 1000).toFixed(1)}s 后开始本次验收。`,
-        );
+          reason: "free_workflow_action_in_progress",
+          error: "当前已有自由工作流操作正在进行，结束后再验收",
+          status: context.status,
+          phase: "initial",
+        };
+      } else {
+        freeWorkflowLocked = context.freeWorkflow;
+        result = await withRepoLock(context.repoPath, async (wait) => {
+          if (wait.queued) {
+            // 排队是刷新后仍看得见的事实,不只是"点了没反应"。
+            await appendTaskTimeline(
+              taskId,
+              `验收排队：同一仓库有其它验收/worktree 操作正在执行，已等待 ${(wait.waitedMs / 1000).toFixed(1)}s 后开始本次验收。`,
+            );
+          }
+          return acceptTaskUnlocked(taskId, by);
+        });
       }
-      return acceptTaskUnlocked(taskId, by);
-    });
-  } finally {
-    acceptingTaskIds.delete(taskId);
-  }
-  if (result.accepted) {
-    // 两条尾巴，都在仓库锁**之外**跑（这些命令可能好几分钟，占着锁会让同仓库的其它
-    // 验收干等）：中途关口放行 = 让这条线接着往下走；真正的验收 = 跑「点头之后」那一段。
-    if (result.kind === "gate_released") await releaseGate(taskId, advanceOpts);
-    else {
-      const tail = await runAcceptedTail(taskId, by);
-      if (tail) result = { ...result, tail };
+    } finally {
+      if (freeWorkflowLocked) releaseFreeWorkflowAction(taskId);
     }
+    if (result.accepted) {
+      // 两条尾巴，都在**仓库锁之外**跑（这些命令可能好几分钟，占着锁会让同仓库的其它
+      // 验收干等），但仍在 acceptingTaskIds **之内**——尾段是本次验收的一部分，期间的
+      // 重复验收和归档都必须被挡（尾段命令重复执行 = 发布/部署跑两遍；归档 = 冻结后
+      // 继续写，审查实测两个方向都复现过）。
+      // 幂等：already_accepted 是「本次什么验收动作都没执行」的快路，正常不重跑尾段；
+      // **唯一例外**是 durable 进度显示尾段从没跑完（进程死在 stage=accepted 与尾段
+      // 之间）——那不是重复执行，是补跑一次从未发生过的发布。
+      const tailStillPending = result.kind === "already_accepted"
+        && !!(await db.select({ pending: tasks.acceptedTailPending }).from(tasks)
+          .where(eq(tasks.id, taskId))).at(0)?.pending;
+      if (result.kind === "gate_released") await releaseGate(taskId, advanceOpts);
+      else if (result.kind !== "already_accepted" || tailStillPending) {
+        if (tailStillPending) {
+          await appendTaskTimeline(taskId, "上次验收的「点头之后」段没有跑完（中断或有站失败），本次只补跑未完成的站。");
+        }
+        const tail = await runAcceptedTail(taskId, by);
+        // 只有尾段**全部跑完**（或线上根本没有尾段）才清补跑凭据。失败时 pending 留着、
+        // 已完成的站留在逐站清单里——时间线承诺「要不要补跑由你定」，再次验收会从失败站
+        // 接着跑；无条件清空的话失败站和后续站永久失去补跑入口（审查实测）。
+        if (!tail || tail.ok) {
+          await db.update(tasks).set({ acceptedTailPending: false, acceptedTailDone: "[]", updatedAt: now() }).where(eq(tasks.id, taskId));
+        }
+        if (tail) result = { ...result, tail };
+      }
+    }
+  } finally {
+    endAccepting(taskId);
+    // 撞冲突时登记的「叫任务自己去解」必须**在验收锁释放之后**才发:锁还锁着时
+    // continueTask 会因验收互斥静默退避(accept-conflict.ts 顶部注释)。
+    flushConflictHandoff(taskId);
   }
   return result;
-}
-
-// 中途关口放行之后接着往下走：跑完这一段，再按下一个锚点是什么决定（又一站验证、
-// 下一道关口、还是这条线走到头）。**不传 skipAccept** —— 这一按没有做任何合并，
-// 线上真画了「合并并清理」就该由它自己走到那一站时执行。
-async function releaseGate(taskId: string, opts: WorkflowAdvanceOptions): Promise<void> {
-  const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
-  if (!task) return;
-  const { advanceWorkflowFrom } = await import("./workflow-advance.js");
-  await advanceWorkflowFrom(task, taskWorkflowDef(task.workflow), task.workflowAt, opts)
-    .catch((error) => appendTaskTimeline(
-      taskId,
-      `放行之后想接着往下走，但出错了（${error instanceof Error ? error.message : String(error)}），请手动续跑。`,
-    ));
-}
-
-// 点头之后线上还写着的那几站（跑一条发布命令、把预览再开起来之类）。
-// 放在仓库锁**之外**跑：这些命令可能跑好几分钟，占着锁会让同仓库的其它验收干等。
-// skipAccept 是因为「合并并清理」正是刚做完的这件事,不能再做一遍。
-//
-// 跑砸了**不会把验收改成失败**（合并确实做完了），但要如实带回去，并按这一站写的失败
-// 策略收尾——线路图上给它挂了「问我一句」，就得真的问出来。
-async function runAcceptedTail(taskId: string, by: AcceptBy): Promise<AcceptTail | null> {
-  const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
-  if (!task) return null;
-  const def = taskWorkflowDef(task.workflow);
-  // 「点头之后」是**哪一道**点头之后：读游标（`tasks.workflow_at`），游标丢了回落到线上
-  // 第一道关口——那正是只有一道关口时的老行为。
-  const gate = anchorAt(def, task.workflowAt, "human")?.id ?? null;
-  if (!segmentAfter(def, gate).some((step) => step.kind !== "accept")) return null;
-  const { runSegment } = await import("./workflow-steps.js");
-  const result = await runSegment(task, def, gate, { skipAccept: true });
-  if (result.ok) return { ok: true };
-
-  const step = result.failed!;
-  const label = STEP_LABELS[step.kind];
-  await appendTaskTimeline(
-    taskId,
-    `合并已经做完了，卡住的是「点头之后」那一段：「${label}」没跑过。产物已经合进去，这一段要不要补跑由你定。`,
-  );
-  // 「打回给 AI 重做」在这一段有个真做不到的情况：清理那一档刚把 worktree 和分支收掉，
-  // 唤醒 agent 也没有地方可干活。这时不假装打回，改成把问题挂给用户并说明为什么。
-  // 这里必须带上 `by`：人工验收在线上没画这一站时照样清了工作区，用默认口径会算成
-  // 「工作区还在」，于是打回一个已经不存在的 worktree。
-  const workspaceGone = task.useWorktree && acceptPlan(def, by, task.workflowAt).clean !== "none";
-  if (step.fail?.mode === "back" && workspaceGone) {
-    await appendTaskTimeline(taskId, `「${label}」写的是「打回给 AI 重做」，但工作区刚随验收清掉了，没法再打回；改成问你一句。`);
-    const { askAboutFailure } = await import("./task-question.js");
-    await askAboutFailure(taskId, label, result.reason);
-  } else {
-    const { applyFailPolicy } = await import("./workflow-steps.js");
-    await applyFailPolicy(
-      task,
-      step,
-      result.reason,
-      (round) => `验收之后的「${label}」这一站没跑过（第 ${round} 次）：\n\n`
-        + `${"```"}\n${result.reason ?? ""}\n${"```"}\n\n`
-        + "产物已经合并，请把这一段修到能跑过，然后照常确认完成。",
-    );
-  }
-  return { ok: false, step: label, reason: result.reason };
 }
 
 export function mountTaskAcceptanceRoutes(api: Hono): void {
@@ -622,6 +629,14 @@ export function mountTaskAcceptanceRoutes(api: Hono): void {
     if (!task) return c.json({ error: "not found" }, 404);
     const project = (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0);
     if (!project) return c.json({ error: "project not found", projectId: task.projectId }, 404);
+    if (task.stage === "accepted" && task.acceptedTargetBranch && task.acceptedBaseCommit && task.acceptedMergeCommit) {
+      return c.json(await acceptedCommitDiff(
+        project.repoPath,
+        task.acceptedTargetBranch,
+        task.acceptedBaseCommit,
+        task.acceptedMergeCommit,
+      ));
+    }
     return c.json(await taskBranchDiff(project.repoPath, taskId, task.worktreeBase));
   });
 }

@@ -25,7 +25,12 @@ export type TaskTreeOptions = {
   unifiedPinned?: boolean;
 };
 
-const PRIORITY_ORDER: Task["priority"][] = ["urgent", "high", "medium", "low", "none"];
+export type TaskPreview = {
+  visible: Task[];
+  hidden: Task[];
+};
+
+export const TASK_PREVIEW_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 const COLLAB_GROUPS: TaskGroup[] = [
   {
@@ -80,9 +85,35 @@ function sortTasks(tasks: Task[], pinned: boolean): Task[] {
   return [...tasks].sort(
     (a, b) =>
       (pinned ? (b.pinnedAt ?? 0) - (a.pinnedAt ?? 0) : 0) ||
-      PRIORITY_ORDER.indexOf(a.priority) - PRIORITY_ORDER.indexOf(b.priority) ||
-      b.createdAt.localeCompare(a.createdAt),
+      b.updatedAt.localeCompare(a.updatedAt),
   );
+}
+
+export function previewTasksByAge(tasks: Task[], nowMs = Date.now()): TaskPreview {
+  const cutoff = nowMs - TASK_PREVIEW_MAX_AGE_MS;
+  const visible: Task[] = [];
+  const hidden: Task[] = [];
+  for (const task of tasks) {
+    const updatedAt = Date.parse(task.updatedAt);
+    (Number.isFinite(updatedAt) && updatedAt < cutoff ? hidden : visible).push(task);
+  }
+  if (visible.length > 0 || hidden.length === 0) return { visible, hidden };
+
+  const latest = hidden.reduce((candidate, task) => (
+    Date.parse(task.updatedAt) > Date.parse(candidate.updatedAt) ? task : candidate
+  ));
+  return {
+    visible: [latest],
+    hidden: hidden.filter((task) => task.id !== latest.id),
+  };
+}
+
+// 选中被预览藏住的任务时，只自动展开一次。同一条选中项上用户点了收起，
+// 不能再拿「它还在 hidden 里」把列表顶开 —— 否则收起按钮看起来是坏的。
+export function advanceHiddenReveal(lastKey: string | null, revealKey: string | null): { lastKey: string | null; reveal: boolean } {
+  if (!revealKey) return { lastKey: null, reveal: false };
+  if (lastKey === revealKey) return { lastKey, reveal: false };
+  return { lastKey: revealKey, reveal: true };
 }
 
 export function buildTaskTree(tasks: Task[], options: TaskTreeOptions = {}): TaskTreeSection[] {

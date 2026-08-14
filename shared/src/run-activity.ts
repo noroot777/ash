@@ -18,7 +18,7 @@ export type RunActivityCopy = {
 };
 
 /** 会话流里的一条:只关心它是不是「消息」,以及 agent 那条收没收口。 */
-export type RunActivityMessage = { kind: string; endedAt?: string | null };
+export type RunActivityMessage = { kind: string; endedAt?: string | null; bySystem?: boolean };
 
 /** 一条会话行(sessions 表的形状),用来判断此刻是谁在跑。 */
 export type RunActivityActor = {
@@ -31,13 +31,13 @@ export type RunActivityActor = {
 
 /**
  * 尾巴看的是最后一条**消息**,不是最后一行。事件行(「任务又被唤醒」「本轮执行结束」)
- * 夹在末尾会把「已收到你的消息」冲成「正在继续处理」——用户刚说完话,横幅却像在自言自语。
+ * 夹在末尾会把「已收到你的消息」冲成「委派中」——用户刚说完话,横幅却像在自言自语。
  */
 export function runActivityTail(items: readonly RunActivityMessage[]): RunActivityTail {
   if (!items.length) return "empty";
   for (let index = items.length - 1; index >= 0; index -= 1) {
     const item = items[index]!;
-    if (item.kind === "user") return "user";
+    if (item.kind === "user") return item.bySystem ? "other" : "user";
     if (item.kind === "agent") return item.endedAt ? "agent-ended" : "agent-active";
   }
   return "other";
@@ -140,7 +140,8 @@ export function runActivityCopy({
     detail: "正在恢复原会话并读取你的补充，下一条回复会自动出现在这里。",
   };
   if (phase === "continuing") return {
-    title: `${executor || "智能体"} 正在继续处理`,
+    // 固定文案,不带执行器名(用户 2026-08-14 指定):这一段说的是「活儿已经委派出去」这件事本身。
+    title: "智能体委派中",
     detail: "当前回合仍在进行；新的输出会自动追加到会话末尾。",
   };
   return {

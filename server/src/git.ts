@@ -70,6 +70,32 @@ export async function isGitRepo(repoPath: string): Promise<boolean> {
   }
 }
 
+/** 某个工作目录此刻的 HEAD commit；目录不存在/不是 git 目录返回 null。纯只读。 */
+export async function headCommit(path: string): Promise<string | null> {
+  try {
+    const { stdout } = await exec("git", ["-C", expandHome(path), "rev-parse", "HEAD"]);
+    return stdout.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+/** 工作目录是否有未提交改动（含未跟踪文件）；取不到返回 null（调用方按未知处理，不当干净）。
+ *  harness 自己的 `.worktrees/` 目录不算脏——它是本工具放任务 worktree 的惯例位置，
+ *  不属于这个项目的改动（不滤掉的话，项目根跑过任何 worktree 任务后 dirty 永远 true）。 */
+export async function workspaceDirty(path: string): Promise<boolean | null> {
+  try {
+    const { stdout } = await exec("git", ["-C", expandHome(path), "status", "--porcelain"]);
+    return stdout.split("\n").some((line) => {
+      if (!line.trim()) return false;
+      const file = line.slice(3);
+      return !(file === ".worktrees" || file.startsWith(".worktrees/"));
+    });
+  } catch {
+    return null;
+  }
+}
+
 // Cheap, synchronous health for a repoPath — exists + is-it-a-git-repo. Drives
 // the at-a-glance health dot everywhere a project is listed; no git spawn.
 // `.git` is a *file* in worktrees/submodules, so existsSync (not isDir).

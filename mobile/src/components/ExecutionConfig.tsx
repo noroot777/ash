@@ -21,6 +21,10 @@ export type ExecutorSelection = {
 
 type PickerKind = "executor" | "model" | "effort";
 const providerModelCache = new Map<string, string[]>();
+// CLI 官方账号那一档的候选:server 现问 CLI 的结果(`grok models` 之类)。整个 app
+// 共一份,打开哪个任务都不用重探。拿不到就退回 CLI_MODEL_PRESETS 那份内置快照 ——
+// 快照是发版时抄的,新模型上线后会滞后,所以只当兜底,不当第一来源。
+const cliModelCache = new Map<AgentType, string[]>();
 
 export function ExecutionConfig({
   role,
@@ -52,6 +56,13 @@ export function ExecutionConfig({
   const theme = useTheme();
   const [picker, setPicker] = useState<PickerKind | null>(null);
   const [providerModels, setProviderModels] = useState<string[] | null>(null);
+  // 连类型一起记:换了智能体但还没打开选择器时,不能把上一个 CLI 的清单继续显示。
+  const [cliModels, setCliModels] = useState<{ type: AgentType; models: string[] } | null>(
+    () => {
+      const cached = cliModelCache.get(selection.agentType);
+      return cached ? { type: selection.agentType, models: cached } : null;
+    },
+  );
   const [modelError, setModelError] = useState<string | null>(null);
   const [customModel, setCustomModel] = useState(model);
   const profile = profileForSelection(selection, profiles);
@@ -59,10 +70,19 @@ export function ExecutionConfig({
     ? providers.find((item) => item.id === profile.providerId)
     : undefined;
 
-  const modelValues = provider ? providerModels ?? [] : [...CLI_MODEL_PRESETS[selection.agentType]];
-  if (model && !modelValues.includes(model)) modelValues.unshift(model);
+  // 挂了供应商就用它的实时目录;没挂就是 CLI 官方账号那一档 —— 优先用 server 现问
+  // CLI 的结果,还没拿到(首帧/离线)才退回内置快照,免得下拉框先空一下。
+  const cliCandidates = cliModels?.type === selection.agentType
+    ? cliModels.models
+    : cliModelCache.get(selection.agentType);
+  const modelValues = provider
+    ? providerModels ?? []
+    : cliCandidates ?? [...CLI_MODEL_PRESETS[selection.agentType]];
+  // 手填的模型补一条,但**必须新建数组**:cliCandidates / providerModels 是进程级
+  // 共享缓存里的那一份,就地 unshift 会把这个任务的自定义模型渗进后面每一个选择器。
+  const modelChoices = model && !modelValues.includes(model) ? [model, ...modelValues] : modelValues;
   const modelOptions = followOptions(
-    modelValues,
+    modelChoices,
     modelDetail(selection, profile),
   );
   // 档位跟着**当前模型**的能力规则收窄；模型没设或未登记时退回该 CLI 的并集。
@@ -81,34 +101,61 @@ export function ExecutionConfig({
   // 模型和强度是两件独立的事：换模型不静默改强度，对不上就在下面写清楚，让用户
   // 自己决定改哪一边。静默清空会让人以为自己没点中。
   const effortSupported = isReasoningEffortSupported(selection.agentType, model, reasoningEffort);
-  const commitModel = (next: string) => onModelChange(next);
+  const commitModel = (next: string) => {
+    onModelChange(next);
+    const canContinue = reasoningEffortsFor(selection.agentType, next).length > 0 || !!reasoningEffort;
+    setPicker(canContinue ? "effort" : null);
+  };
   const executorItems = useMemo(
     () => executorOptions(types, profiles, selection),
     [types, profiles, selection],
   );
 
-  const openModel = () => {
-    setCustomModel(model);
+  const openModelFor = (nextSelection: ExecutorSelection, nextModel: string) => {
+    const nextProfile = profileForSelection(nextSelection, profiles);
+    const nextProvider = nextProfile?.providerId
+      ? providers.find((item) => item.id === nextProfile.providerId)
+      : undefined;
+    setCustomModel(nextModel);
     setPicker("model");
     setModelError(null);
-    if (!provider) {
+    if (!nextProvider) {
       setProviderModels(null);
+      loadCliModels(nextSelection.agentType);
       return;
     }
-    const cached = providerModelCache.get(provider.id);
+    const cached = providerModelCache.get(nextProvider.id);
     if (cached) {
       setProviderModels(cached);
       return;
     }
     setProviderModels(null);
     api
-      .probeModels({ protocol: provider.protocol, baseUrl: provider.baseUrl, id: provider.id })
+      .probeModels({ protocol: nextProvider.protocol, baseUrl: nextProvider.baseUrl, id: nextProvider.id })
       .then(({ models }) => {
-        providerModelCache.set(provider.id, models);
+        providerModelCache.set(nextProvider.id, models);
         setProviderModels(models);
       })
       .catch((error) => setModelError(error instanceof Error ? error.message : String(error)));
   };
+  const openModel = () => openModelFor(selection, model);
+
+  // CLI 那一档的候选。失败**不报错**:内置快照顶着,选择器照常能用 —— 为一个「清单
+  // 可能少两个」的问题弹红字,不如安静降级。
+  function loadCliModels(agentType: AgentType) {
+    const cached = cliModelCache.get(agentType);
+    setCliModels(cached ? { type: agentType, models: cached } : null);
+    if (cached) return;
+    api
+      .cliModels(agentType)
+      .then((list) => {
+        const models = list.find((entry) => entry.type === agentType)?.models;
+        if (!models?.length) return;
+        cliModelCache.set(agentType, [...models]);
+        setCliModels({ type: agentType, models: [...models] });
+      })
+      .catch(() => {});
+  }
 
   const options = picker === "executor"
     ? executorItems
@@ -137,8 +184,8 @@ export function ExecutionConfig({
         <Ionicons name={icon} size={15} color={theme.accent} />
         <Text style={{ color: theme.faint, fontSize: 11, fontFamily: fonts.mono }}>{role}</Text>
       </View>
-      {/* 跟 web 同一副形状：一颗三段胶囊「智能体 · 模型 · 智能水平」，一段管一件事。
-          三段挤一行在手机上偏窄，所以中间那段（模型名最长）多分一点宽，各自单行省略。 */}
+      {/* 跟 web 同一副形状：一颗三段胶囊「智能体 · 模型 · 智能水平」，选定前一段后
+          默认向右接着打开后一段。手机上给模型多一点宽，各段都保持单行省略。 */}
       <View
         style={{
           flexDirection: "row",
@@ -189,10 +236,13 @@ export function ExecutionConfig({
                 onReasoningEffortChange("");
               }
               onSelectionChange(selected);
+              openModelFor(selected, sameExecutor(selected, selection) ? model : "");
             } else if (picker === "model") commitModel(next);
             else onReasoningEffortChange(next);
           }}
-          onClose={() => setPicker(null)}
+          // 选中前一段时会先把 picker 推到后一段；只关闭仍停在原段的 sheet，避免
+          // SelectSheet 随后的默认关闭把刚接续打开的下一段覆盖掉。
+          onClose={() => setPicker((current) => current === picker ? null : current)}
           header={picker === "model" ? (
             <View style={{ gap: 8 }}>
               <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
@@ -205,14 +255,12 @@ export function ExecutionConfig({
                   style={{ flex: 1, fontFamily: fonts.mono, fontSize: 13 }}
                   onSubmitEditing={() => {
                     commitModel(customModel.trim());
-                    setPicker(null);
                   }}
                 />
                 <Button
                   label="使用"
                   onPress={() => {
                     commitModel(customModel.trim());
-                    setPicker(null);
                   }}
                 />
               </View>

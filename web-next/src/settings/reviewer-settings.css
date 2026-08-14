@@ -1,0 +1,22 @@
+.reviewer-settings-card { overflow:hidden; }
+.reviewer-settings-status { display:flex; min-height:240px; align-items:center; justify-content:center; gap:8px; color:var(--faint); }
+.reviewer-settings-status.is-error { color:var(--red); }
+.reviewer-settings-layout { display:grid; min-height:480px; grid-template-columns:230px minmax(0,1fr); }
+.reviewer-settings-layout > aside { border-right:1px solid var(--line); background:color-mix(in lch,var(--raised) 45%,var(--panel)); }
+.reviewer-settings-layout > aside > header { display:flex; min-height:44px; align-items:center; justify-content:space-between; border-bottom:1px solid var(--line); padding:0 10px 0 12px; }
+.reviewer-settings-layout > aside > header b { font-size:11px; }
+.reviewer-settings-layout > aside > header button { display:inline-flex; align-items:center; gap:4px; border:0; border-radius:6px; background:transparent; padding:5px 7px; color:var(--accent); font-size:9.5px; font-weight:650; }
+.reviewer-settings-layout > aside > p { display:grid; min-height:150px; place-content:center; justify-items:center; gap:7px; margin:0; color:var(--faint); font-size:10px; }
+.reviewer-settings-layout > aside > button { display:grid; width:100%; gap:3px; border:0; border-bottom:1px solid var(--line); background:transparent; padding:10px 12px; text-align:left; }
+.reviewer-settings-layout > aside > button:hover { background:var(--hover-bg); }
+.reviewer-settings-layout > aside > button[aria-selected="true"] { background:var(--panel); box-shadow:inset 3px 0 var(--accent); }
+.reviewer-settings-layout > aside > button b { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.reviewer-settings-layout > aside > button b { font-size:11px; }
+.reviewer-settings-layout > aside .reviewer-profile-summary { margin-top:0; }
+.reviewer-settings-editor > header { display:flex; min-height:64px; align-items:center; justify-content:space-between; gap:12px; border-bottom:1px solid var(--line); padding:10px 14px; }
+.reviewer-settings-editor > header b,.reviewer-settings-editor > header small { display:block; }
+.reviewer-settings-editor > header b { font-size:12px; }
+.reviewer-settings-editor > header small { margin-top:2px; color:var(--faint); font-size:9px; }
+.reviewer-settings-editor > header > div:last-child { display:flex; gap:7px; }
+.reviewer-settings-editor > .reviewer-profile-fields { padding:16px; }
+@media (max-width:760px) { .reviewer-settings-layout { grid-template-columns:1fr; }.reviewer-settings-layout > aside { border-right:0; border-bottom:1px solid var(--line); } }

@@ -1,11 +1,9 @@
 import { Hono } from "hono";
-import { getConnInfo } from "@hono/node-server/conninfo";
 import { streamSSE } from "hono/streaming";
 import { eq, inArray } from "drizzle-orm";
 import { readFile } from "node:fs/promises";
-import { existsSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
-import { spawn } from "node:child_process";
-import { join, basename, extname, resolve, sep } from "node:path";
+import { rmSync, mkdirSync, writeFileSync } from "node:fs";
+import { join, basename, extname } from "node:path";
 import { RUNS_DIR, DATA_DIR, UPLOADS_DIR } from "./paths.js";
 import type {
   Project,
@@ -17,17 +15,22 @@ import type {
 } from "@harness/shared";
 import { maxBytesFor, attachmentKind } from "@harness/shared";
 import { isReasoningEffortSupported, normalizeReasoningEffort, reasoningEffortsFor } from "@harness/shared/cli-presets";
+import { normalizeCliConfigOverrides, cliConfigOverrideErrors, readCliConfigOverrides } from "@harness/shared/cli-overrides";
 import { db } from "./db/index.js";
-import { projects, groups, tasks, sessions, schedules, agents, llmProviders, notes, noteTasks } from "./db/schema.js";
+import { projects, groups, tasks, agents, llmProviders, notes, noteTasks } from "./db/schema.js";
 import { bus } from "./bus.js";
 import { id, now } from "./util.js";
 import { listModels } from "./llm.js";
 import { mountQueueRoutes } from "./queues.js";
 import { detectKnownClis, detectLocalAgents } from "./detect.js";
+import { cliHostEnv } from "./executors/cli-env.js";
 import { searchAll } from "./search.js";
 import { projectHealthLight, projectHealthFull, tidyRepoPath, repoKey, listBranches } from "./git.js";
 import { getGitOverview } from "./git-overview.js";
 import { discardTaskWorkspace } from "./workspace-cleanup.js";
+import { deleteTaskAssociations } from "./task-routes.js";
+import { isTurnClaimed } from "./runs.js";
+import { isAcceptingTask } from "./acceptance-lock.js";
 import { mountDuetIterationRoutes } from "./duet/iteration.js";
 import { mountNoteRoutes } from "./notes.js";
 import { mountTeamPresetRoutes } from "./team-presets.js";
@@ -35,15 +38,20 @@ import { findWorkflow, mountWorkflowRoutes } from "./workflows.js";
 import { mountPreviewRoutes } from "./preview-routes.js";
 import { getAppSettings, parseAppSettingsPatch, patchAppSettings } from "./app-settings.js";
 import { mountSkillRoutes } from "./skill-routes.js";
+import { mountModelRoutes } from "./model-routes.js";
 import { mountTaskRoutes } from "./task-routes.js";
 import { mountTaskRunRoutes } from "./task-run-routes.js";
 import { mountFileRoutes } from "./file-routes.js";
 import { mountOpenAiConverterRoutes } from "./openai-converter/routes.js";
 import { mountProviderTestRoutes } from "./provider-test.js";
 import { mountTerminalRoutes } from "./terminal.js";
+import { mountFreeWorkflowRoutes } from "./free-workflow-routes.js";
+import { mountReviewerProfileRoutes } from "./reviewer-profiles.js";
+import { mountLocalOpenRoutes } from "./local-open-routes.js";
 
 export const api = new Hono();
 mountNoteRoutes(api);
+mountLocalOpenRoutes(api);
 
 // ── health ───────────────────────────────────────────────────────────────
 api.get("/health", (c) => c.json({ ok: true, ts: now() }));
@@ -82,43 +90,6 @@ api.get("/search", async (c) => {
   }
   const searchType = type === "tasks" || type === "notes" ? type : undefined;
   return c.json(await searchAll(q, { projectId, type: searchType }));
-});
-
-const LOCAL_OPEN_ROOTS = (process.env.HARNESS_LOCAL_OPEN_ROOTS ??
-  "/Users/fjh/code/daily-report/videos:/Users/fjh/code/harness/review")
-  .split(":")
-  .map((p) => resolve(p))
-  .filter(Boolean);
-
-// open-local 信任的是「连接来源 IP」而非 Host 头(Host 可随意伪造):本机 loopback
-// 或 Tailscale 网段(100.64.0.0/10 CGNAT + 其 IPv6 fd7a:115c:a1e0::/48)放行——
-// tailnet 里全是自己的设备,从手机/别的电脑点开也应该能在 Mac 上打开文件。
-const isTrustedRemote = (addr: string | undefined): boolean => {
-  const a = (addr ?? "").replace(/^::ffff:/i, "");
-  if (a === "127.0.0.1" || a === "::1") return true;
-  if (a.toLowerCase().startsWith("fd7a:115c:a1e0:")) return true;
-  const m = /^100\.(\d+)\./.exec(a);
-  return m !== null && Number(m[1]) >= 64 && Number(m[1]) <= 127;
-};
-
-const isAllowedLocalPath = (path: string): boolean =>
-  LOCAL_OPEN_ROOTS.some((root) => path === root || path.startsWith(root + sep));
-
-api.all("/open-local", async (c) => {
-  if (!isTrustedRemote(getConnInfo(c).remote.address)) {
-    return c.text("只允许本机或 Tailscale 网内设备调用 open-local", 403);
-  }
-  const raw = c.req.query("path") ?? "";
-  const target = resolve(raw);
-  if (!raw || !isAllowedLocalPath(target) || !existsSync(target)) {
-    return c.text("local path is missing, outside the allowlist, or does not exist", 400);
-  }
-  const child = spawn("open", [target], { detached: true, stdio: "ignore" });
-  child.unref();
-  return c.html(
-    `<!doctype html><meta charset=utf-8><title>Opened</title>` +
-      `<body style="font:14px -apple-system,system-ui,sans-serif;padding:20px">已打开：<code>${target}</code></body>`,
-  );
 });
 
 // ── attachment uploads (pasted into the composer / reply box) ────────────────
@@ -207,6 +178,10 @@ const toAgent = (r: typeof agents.$inferSelect) => ({
   reasoningEffort: r.reasoningEffort ?? undefined,
   speed: r.speed ?? undefined,
   providerId: r.providerId ?? null,
+  // 读端不直接 JSON.parse:库里可能躺着升级前写下的越界值、甚至被手工改坏的
+  // JSON —— 前者会让页面显示的数跟执行器实际注入的不是一个,后者直接把这个接口
+  // 打成 500(设置页整页打不开)。跟执行器读的是同一份判据。
+  configOverrides: readCliConfigOverrides(r.type, r.configOverrides),
   isDefault: r.isDefault,
 });
 
@@ -216,9 +191,15 @@ api.get("/agents", async (c) => c.json((await db.select().from(agents)).map(toAg
 api.get("/agents/detect", async (c) => c.json(await detectLocalAgents()));
 // 已知 CLI 目录:含上面那几个可执行器(带 type),外加一批只做「装没装」展示的。
 api.get("/agents/catalog", async (c) => c.json(await detectKnownClis()));
+// harness 起 CLI 时它会看到的环境事实(只读,不是配置项)。设置页要拿它换算压缩触发点:
+// 有效窗口 = 窗口 − min(CLAUDE_CODE_MAX_OUTPUT_TOKENS, 20000),而那个变量在 server 进程里,
+// 前端算不出来 —— 不报过去的话,页面上写的水位和 CLI 的实际行为会对不上。
+api.get("/agents/cli-env", (c) => c.json(cliHostEnv()));
 
 // `/技能` 的三个端点在 `skill-routes.ts`(cwd 取项目仓库根、ssh 执行器不拿本机盘冒充)。
 mountSkillRoutes(api);
+// 模型清单(现问 CLI + 刷新)在 `model-routes.ts`。
+mountModelRoutes(api);
 
 api.post("/agents", async (c) => {
   const b = await c.req.json<any>();
@@ -230,6 +211,11 @@ api.post("/agents", async (c) => {
       allowedReasoningEfforts: reasoningEffortsFor(type, model),
     }, 400);
   }
+  // CLI 配置覆盖:有的键单独填是空转的(claude 的触发百分比要配合窗口才生效)。
+  // 前端已经拦了一道,这里是权威那道 —— API 直连、旧前端、脚本改配置都过这里。
+  const configOverrides = normalizeCliConfigOverrides(type, b.configOverrides);
+  const overrideErrors = cliConfigOverrideErrors(type, configOverrides);
+  if (overrideErrors.length) return c.json({ error: overrideErrors.join("；") }, 400);
   const row = {
     id: id(),
     name: b.name,
@@ -241,6 +227,7 @@ api.post("/agents", async (c) => {
     // 只落 "fast";"standard"/空 归一成 null(标准=不传参,单一表示)
     speed: b.speed === "fast" ? "fast" : null,
     providerId: b.providerId || null,
+    configOverrides: JSON.stringify(configOverrides),
     isDefault: !!b.isDefault,
   };
   // a type has at most one default
@@ -273,6 +260,12 @@ api.patch("/agents/:id", async (c) => {
   }
   if (b.speed !== undefined) patch.speed = b.speed === "fast" ? "fast" : null;
   if (b.providerId !== undefined) patch.providerId = b.providerId || null;
+  if (b.configOverrides !== undefined) {
+    const configOverrides = normalizeCliConfigOverrides(type, b.configOverrides);
+    const overrideErrors = cliConfigOverrideErrors(type, configOverrides);
+    if (overrideErrors.length) return c.json({ error: overrideErrors.join("；") }, 400);
+    patch.configOverrides = JSON.stringify(configOverrides);
+  }
   if (b.isDefault === true) {
     await db.update(agents).set({ isDefault: false }).where(eq(agents.type, existing.type));
     patch.isDefault = true;
@@ -376,15 +369,19 @@ api.patch("/projects/:id", async (c) => {
 api.delete("/projects/:id", async (c) => {
   const pid = c.req.param("id");
   const ptasks = await db.select().from(tasks).where(eq(tasks.projectId, pid));
-  const live = ptasks.find((t) => t.status === "running" || t.status === "queued");
-  if (live) return c.json({ error: "项目有正在运行/排队的任务，无法删除", taskId: live.id }, 409);
+  // 单任务 DELETE 的生命周期锁在这里同样成立：turn 已占（status 未落 running）、验收
+  // （含发布尾段）进行中删掉任务行，结算/尾段会写向不存在的任务（审查实测：项目入口
+  // 完全绕过了任务级门禁）。
+  const live = ptasks.find((t) =>
+    t.status === "running" || t.status === "queued" || isTurnClaimed(t.id) || isAcceptingTask(t.id));
+  if (live) return c.json({ error: "项目有正在运行/排队/验收中的任务，无法删除", taskId: live.id }, 409);
   for (const t of ptasks) {
-    await db.delete(sessions).where(eq(sessions.taskId, t.id));
-    await db.delete(schedules).where(eq(schedules.taskId, t.id));
+    // 与单任务 DELETE 同一份级联（审查链/预约/事件/消息/会话/计划/队列位），不留
+    // reconcile 收不掉的孤儿（state/event/message/queue item 都没有自愈入口）。
+    await deleteTaskAssociations(t.id);
     rmSync(join(RUNS_DIR, t.id), { recursive: true, force: true });
     rmSync(join(DATA_DIR, "scratch", t.id), { recursive: true, force: true });
   }
-  if (ptasks.length) await db.delete(noteTasks).where(inArray(noteTasks.taskId, ptasks.map((task) => task.id)));
   await db.delete(tasks).where(eq(tasks.projectId, pid));
   await db.delete(groups).where(eq(groups.projectId, pid));
   const projectNotes = await db.select({ id: notes.id }).from(notes).where(eq(notes.projectId, pid));
@@ -649,6 +646,8 @@ mountDuetIterationRoutes(api);
 mountTeamPresetRoutes(api);
 mountWorkflowRoutes(api);
 mountPreviewRoutes(api);
+mountReviewerProfileRoutes(api);
+mountFreeWorkflowRoutes(api);
 
 // ── SSE stream (§12) ───────────────────────────────────────────────────────
 api.get("/events", (c) =>

@@ -14,7 +14,10 @@ type TraceTextEvent = { kind: "text"; text: string };
 // 的记录,而 trace 天生就是这个形状。
 type TraceUsageEvent = Extract<AgentEvent, { kind: "usage" }>;
 type TraceAttachmentEvent = Extract<AgentEvent, { kind: "attachment" }>;
-export type SessionTraceEvent = AgentTraceEvent | TraceTextEvent | TraceUsageEvent | TraceAttachmentEvent;
+// 本回合的执行器参数。verifyRound 记「这一回合是就地验证的第几轮」（不是验证轮时缺省），
+// 读端据此把审查者的发言跟同一条会话里的实现回合分开——它俩本来长得一模一样。
+type TraceRunEvent = { kind: "run"; model: string | null; reasoningEffort: string | null; verifyRound?: number | null };
+export type SessionTraceEvent = AgentTraceEvent | TraceTextEvent | TraceUsageEvent | TraceAttachmentEvent | TraceRunEvent;
 export type SessionTraceEntry = {
   at: string;
   turnStartedAt: string;
@@ -70,11 +73,16 @@ export function parseSessionTrace(raw: string): SessionTraceEntry[] {
     try {
       const entry = JSON.parse(line) as Partial<SessionTraceEntry>;
       const event = entry.event;
+      const validRun = event?.kind !== "run" || (
+        (event.model === null || typeof event.model === "string")
+        && (event.reasoningEffort === null || typeof event.reasoningEffort === "string")
+      );
       if (
         typeof entry.at !== "string"
         || typeof entry.turnStartedAt !== "string"
         || !event
-        || !["text", "thinking", "tool", "error", "usage", "attachment"].includes(event.kind)
+        || !["text", "thinking", "tool", "error", "usage", "attachment", "run"].includes(event.kind)
+        || !validRun
         || (event.kind === "text" && typeof event.text !== "string")
         || (event.kind === "attachment" && typeof event.path !== "string")
         || (event.kind === "usage" && (!event.usage || typeof event.usage !== "object"))

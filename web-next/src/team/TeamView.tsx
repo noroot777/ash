@@ -23,6 +23,7 @@ import { QuestionCard } from "../task-detail/QuestionCard.tsx";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import { DeleteTaskDialog } from "../task-detail/DeleteTaskDialog.tsx";
 import { TaskDetail } from "../task-detail/TaskDetail.tsx";
+import { useTaskReplyDraft } from "../task-detail/TaskReplyDrafts.tsx";
 import { conversationToMarkdown } from "../task-detail/conversationModel.ts";
 import { TeamFeed } from "./TeamFeed.tsx";
 import { TeamAttentionBar } from "./TeamAttentionBar.tsx";
@@ -75,14 +76,21 @@ function TeamReplyBox({
   task: Task;
   onSend: (text: string, attachments: string[], options: { sendAt?: string }) => Promise<ReplyTaskResult>;
 }) {
-  const [value, setValue] = useState("");
+  const draft = useTaskReplyDraft(task.id);
+  const value = draft.text;
+  const setValue = draft.setText;
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [scheduleOpen, setScheduleOpen] = useState(false);
   const [sendAt, setSendAt] = useState("");
   const scheduleTriggerRef = useRef<HTMLButtonElement>(null);
   const scheduled = useScheduledMessages(task.id);
-  const uploads = useAttachments();
+  const uploads = useAttachments({
+    value: draft.attachments,
+    onChange: draft.setAttachments,
+    pending: draft.pendingUploads,
+    onPendingChange: draft.setPendingUploads,
+  });
   const disabled = !!task.archived;
   // 技能按**调度者自己的执行器**算：这句话是发给调度台那个会话的，执行者手上装的
   // 技能跟它不是一回事（派活时该带什么由调度者自己在 dispatch 里写）。
@@ -94,12 +102,10 @@ function TeamReplyBox({
   });
   const slash = useSlashCompletion({ value, setValue, skills: skills.skills, remote: skills.remote, disabled });
   useEffect(() => {
-    setValue("");
     setError(null);
     setScheduleOpen(false);
     setSendAt("");
-    uploads.clear();
-  }, [task.id, uploads.clear]);
+  }, [task.id]);
   const send = async (scheduledAt?: string) => {
     if (disabled || sending || uploads.uploading || (!value.trim() && !uploads.attachments.length)) return;
     setSending(true);
@@ -136,6 +142,7 @@ function TeamReplyBox({
             : "已装技能 · 回车补全，原样发给调度者的 CLI"}
           items={slash.items}
           selectedIndex={slash.selectedIndex}
+          token={slash.token}
           emptyText="这台调度者跑在 ssh 远端，技能清单只有它自己看得见——照常敲 /名字 发过去，它认得。"
           onHover={slash.setIndex}
           onPick={slash.pick}
@@ -554,7 +561,7 @@ export function TeamView({
         notify={notify}
       />
       {reviewOpen ? (
-        <TeamReviewWorkspace lead={task} workers={workers} onClose={() => changeReviewOpen(false)} onTaskUpdated={onTaskUpdate} indicatorForTask={indicatorForTask} onReadTask={markTaskRead} notify={notify} />
+        <TeamReviewWorkspace lead={task} workers={workers} onTaskUpdated={onTaskUpdate} indicatorForTask={indicatorForTask} onReadTask={markTaskRead} notify={notify} />
       ) : openFilePath ? (
         <FileViewer
           taskId={task.id}
@@ -568,7 +575,6 @@ export function TeamView({
             <div className="team-lead-question">
               <QuestionCard task={task} onAnswer={async (answer) => {
                 await api.answerTask(task.id, answer);
-                conversation.addUser(answer);
                 await refreshTask();
                 notify("已答复调度者，原会话正在续跑");
               }} />
@@ -624,7 +630,7 @@ export function TeamView({
         <DeleteTaskDialog
           task={task}
           notify={notify}
-          onDeleted={() => onTaskDeleted(task.id)}
+          onDeleted={(ids) => ids.forEach(onTaskDeleted)}
           onClose={() => setDeleteOpen(false)}
         />
       )}

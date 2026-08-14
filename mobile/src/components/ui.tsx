@@ -1,6 +1,6 @@
 import { View, Text, TextInput, Pressable, type ViewStyle, type StyleProp, type TextInputProps } from "react-native";
-import type { TaskStatus, Priority } from "@harness/shared";
-import { STATUS_META, PRIORITY_META } from "@/lib/constants";
+import type { TaskStatus } from "@harness/shared";
+import { STATUS_META } from "@/lib/constants";
 import { useTheme, radius, fonts } from "@/lib/theme";
 
 // Solid colored dot for a task status.
@@ -17,28 +17,6 @@ export function ConnDot({ connected, size = 8 }: { connected: boolean; size?: nu
     <View
       style={{ width: size, height: size, borderRadius: size / 2, backgroundColor: connected ? theme.ok : theme.faint }}
     />
-  );
-}
-
-// The little 1–4 bar priority glyph (matches the web's bar count).
-export function PriorityBars({ priority }: { priority: Priority }) {
-  const theme = useTheme();
-  const meta = PRIORITY_META[priority];
-  if (!meta || meta.bars === 0) return null;
-  return (
-    <View style={{ flexDirection: "row", alignItems: "flex-end", gap: 1.5, height: 11 }}>
-      {[1, 2, 3, 4].map((n) => (
-        <View
-          key={n}
-          style={{
-            width: 2.5,
-            height: 3 + n * 2,
-            borderRadius: 1,
-            backgroundColor: n <= meta.bars ? meta.color : theme.line2,
-          }}
-        />
-      ))}
-    </View>
   );
 }
 

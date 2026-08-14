@@ -17,6 +17,7 @@ import { AttachmentPicker, UploadAttachmentList, useAttachments } from "./Attach
 import { SlashMenu } from "../components/SlashMenu.tsx";
 import { mergeSlashItems, slashToken, type SlashItem } from "../lib/useSkills.ts";
 import type { AgentModelSelection, MentionTarget } from "./mentionPicker.ts";
+import { useTaskReplyDraft } from "./TaskReplyDrafts.tsx";
 
 const EMPTY_SKILLS: SkillEntry[] = [];
 
@@ -28,6 +29,7 @@ export function ReplyBox({
   skills = EMPTY_SKILLS,
   skillsRemote = false,
   inlinePanel,
+  topRail,
 }: {
   task: Task;
   hasConversation: boolean;
@@ -53,15 +55,18 @@ export function ReplyBox({
     resetKey?: number;
     items: { command: string; label: string; hint?: string }[];
   };
-  // 当前执行器已装的技能。选中只把 `/名字` 补进正文——harness 不替它写任何提示词,
-  // 也不把这条文本当成派生命令截走。
+  // 当前执行器已装的技能。选中只把 `/名字` 补进正文，不把它当派生命令截走；
+  // server 会在运行这一回合前注入对应 SKILL.md。
   skills?: SkillEntry[];
   // 执行器在 ssh 那头:技能装在远端盘上,本机扫不到。这时候如实说一句,
   // 别让空菜单看起来像「这台机器没装技能」。
   skillsRemote?: boolean;
   inlinePanel?: ReactNode;
+  topRail?: ReactNode;
 }) {
-  const [value, setValue] = useState("");
+  const draft = useTaskReplyDraft(task.id);
+  const value = draft.text;
+  const setValue = draft.setText;
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
   const [commandIndex, setCommandIndex] = useState(0);
@@ -81,7 +86,12 @@ export function ReplyBox({
   const [profilesFailed, setProfilesFailed] = useState(false);
   const providers = useProviders();
   const scheduled = useScheduledMessages(task.id);
-  const uploads = useAttachments();
+  const uploads = useAttachments({
+    value: draft.attachments,
+    onChange: draft.setAttachments,
+    pending: draft.pendingUploads,
+    onPendingChange: draft.setPendingUploads,
+  });
   // 任务正在跑不再是「不能说话」,而是「说了先排队」:发出去的消息落成一条待发送
   // 消息(mode=queued),这一轮一结束由服务端自动送进同一个会话。所以 disabled 只留
   // 真正没得说的情况——不是单任务、已归档、以及从没跑过因而没有会话可续。
@@ -98,8 +108,7 @@ export function ReplyBox({
           ? command ? "可输入 /team 创建团队，或输入 /duet 发起讨论…" : "先运行任务，再继续回复"
           : command ? "回复并继续；输入 /team 或 /duet 可派生新任务…" : "回复并继续（⌘↵ 发送，可粘贴图片或文件）…";
 
-  const resetComposer = () => {
-    setValue("");
+  const resetComposerState = () => {
     setCommandIndex(0);
     setMenuDismissed(false);
     setMentionIndex(0);
@@ -111,15 +120,21 @@ export function ReplyBox({
   };
 
   useEffect(() => {
-    resetComposer();
+    resetComposerState();
     setSendError(null);
-    uploads.clear();
-  }, [task.id, uploads.clear]);
+  }, [task.id]);
 
-  useEffect(() => { resetComposer(); }, [command?.resetKey]);
+  const commandReset = useRef({ taskId: task.id, key: command?.resetKey });
+  useEffect(() => {
+    const previous = commandReset.current;
+    commandReset.current = { taskId: task.id, key: command?.resetKey };
+    if (previous.taskId !== task.id || previous.key === command?.resetKey) return;
+    setValue("");
+    resetComposerState();
+  }, [command?.resetKey, task.id]);
 
-  // 任务从「在跑」变成别的状态 = 排着的那条这会儿已经被投递进会话了（服务端在结算
-  // 那一刻就发）。托盘得跟着少一行，否则它会一直挂在那儿像是没发出去。
+  // 托盘该少一行由服务端的 task.pendingMessages 事件说了算（useScheduledMessages 里
+  // 订阅）。这里只留一道兜底：SSE 断过线时，任务从「在跑」变成别的状态也重拉一次。
   const wasQueueing = useRef(queueing);
   useEffect(() => {
     if (wasQueueing.current && !queueing) void scheduled.reload({ quiet: true });
@@ -184,7 +199,7 @@ export function ReplyBox({
 
   const pickCommand = (item: SlashItem) => {
     // 技能不是派生命令:它只是**补全**。`/名字` 原样留在正文里跟着这一轮发下去,
-    // 由 CLI 自己认——harness 一行提示词都不写,所以这里绝不能把它截走。
+    // server 会据此注入 SKILL.md，所以这里绝不能把它截走。
     if (item.kind === "skill") {
       const next = `${item.command} `;
       setValue(next);
@@ -293,7 +308,7 @@ export function ReplyBox({
     && (!!value.trim() || uploads.attachments.length > 0);
 
   return (
-    <div className="task-reply-shell">
+    <div className={`task-reply-shell${topRail ? " has-top-rail" : ""}`}>
       {menuOpen && (
         <SlashMenu
           className="task-reply-command-menu"
@@ -303,6 +318,7 @@ export function ReplyBox({
             : `${firstSkillIndex === 0 ? "技能" : "派生命令与技能"} · ↑↓ 选择，回车${selectedIsSkill ? "补全" : "确认"}，Esc 取消`}
           items={candidates}
           selectedIndex={selectedIndex}
+          token={slashToken(value)}
           onHover={setCommandIndex}
           onPick={pickCommand}
         />
@@ -365,6 +381,7 @@ export function ReplyBox({
       />
       <UploadAttachmentList attachments={uploads.attachments} error={uploads.error} onRemove={uploads.remove} />
       {sendError && <p className="task-reply-error">{sendError}</p>}
+      {topRail}
       <div className="task-reply-box">
         <textarea
           ref={textareaRef}
@@ -455,8 +472,8 @@ export function ReplyBox({
           >
             <Clock size={14} />
           </button>
-          {/* 一颗三段胶囊：智能体 · 模型 · 智能水平。三段各管一件事，点哪段只改哪段，
-              跟新建面板、工作流站点用的是同一副形状（components/RunTargetPicker.tsx）。 */}
+          {/* 一颗三段胶囊：智能体 · 模型 · 智能水平。可单独改任一段，也可选完前一段后
+              向右接着配置；跟新建面板、工作流站点用同一组件。 */}
           <RunTargetPicker
             label="本回合由谁来跑"
             types={registeredTypes.length ? registeredTypes : [activeAgent]}

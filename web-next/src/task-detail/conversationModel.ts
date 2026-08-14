@@ -3,12 +3,15 @@ import { ANSWER_PREFIX, parseSessionOutput } from "@harness/shared";
 import { addUsage, sumUsage, usageTotal } from "@harness/shared/usage";
 import type { SessionTraceEntry } from "../lib/api.ts";
 import type { ExecutionEvent } from "../lib/executionTrace.ts";
+import type { ConversationEventTone, ConversationEventVariant } from "./conversationNotes.ts";
+import { isVerifyNote, noteTone } from "./conversationNotes.ts";
+import { applyVerifySpans, reviewerKey, reviewerKeyOf, reviewerOf, traceVerifyRound } from "./conversationReviewer.ts";
 import { formatInstant, parseAttachmentText } from "./utils.ts";
 
 export type LiveAgentEvent = Extract<ServerEvent, { type: "agent.event" }>;
 
 export type TimelineEntry =
-  | { kind: "user"; id: string; text: string; attachments: string[]; at: string; isAnswer?: boolean }
+  | { kind: "user"; id: string; text: string; attachments: string[]; at: string; isAnswer?: boolean; bySystem?: boolean; source?: "optimistic" | "server" }
   | { kind: "server"; id: string; event: LiveAgentEvent; receivedAt?: string };
 
 // 「执行过程」块里的一行(工具 / 思考 / 异常)。形状与渲染都归 lib/executionTrace,
@@ -32,7 +35,19 @@ export type ConversationItem =
       endedAt?: string | null;
       markerEndedAt?: string | null;
       showSessionMeta?: boolean;
+      /** 上一条说话的还是同一个会话、中间只隔着旁注：接着上一段说，不再重报头像和执行器名。 */
+      continuation?: boolean;
       session?: Session;
+      run?: { model: string | null; reasoningEffort: string | null };
+      /**
+       * 这一回合是**审查者**在说话：就地验证轮带轮次号（`{ round: 2 }`），自由派审的
+       * 独立审查回合没有轮次（`{ round: null }`，靠会话的 reviewer 身份认出来）。
+       * undefined = 普通执行回合。
+       *
+       * 就地验证是搭在被验任务自己身上的旁路回合、还常复用同一条会话，所以它跟上一条
+       * 「我在做需求」的气泡本来长得一模一样（同执行器自审时连名字都一样）。
+       */
+      reviewer?: { round: number | null };
       /** 这一回合的 token 用量。null = 这家 CLI 不报账、或这轮跑在本功能之前。 */
       usage?: TokenUsage | null;
       /** 整条会话至今的累计用量。只挂在本会话最后一条气泡上（尾栏显示会话信息的那条）。 */
@@ -43,14 +58,25 @@ export type ConversationItem =
       segments: AgentContentSegment[];
     }
   | { kind: "user"; id: string; text: string; attachments: string[]; at?: string; isAnswer?: boolean; bySystem?: boolean }
-  | { kind: "event"; id: string; text: string; at?: string; tone?: "neutral" | "error" };
+  | {
+      kind: "event";
+      id: string;
+      text: string;
+      at?: string;
+      /** 这条旁注是写在哪条会话上的。验证区间靠它认「时间线走到别人家了」（见 conversationReviewer）。 */
+      sessionId?: string;
+      tone?: ConversationEventTone;
+      variant?: ConversationEventVariant;
+      /** 这条旁注在讲验证轮的事（开始 / 未通过 / 打回修复）：跟审查者的气泡同一套配色。 */
+      verify?: boolean;
+    };
 
 export type PersistedConversation = { session: Session; output: string; trace?: SessionTraceEntry[] };
 
 type ConversationEventItem = Extract<ConversationItem, { kind: "event" }>;
 type AgentTraceEvent = Extract<AgentEvent, { kind: "thinking" | "tool" | "error" }>;
 type TracedContentEntry = SessionTraceEntry & {
-  event: Exclude<SessionTraceEntry["event"], { kind: "usage" }>;
+  event: Exclude<SessionTraceEntry["event"], { kind: "usage" | "run" }>;
 };
 type TracedAttachmentEntry = TracedContentEntry & {
   event: Extract<SessionTraceEntry["event"], { kind: "attachment" }>;
@@ -127,6 +153,40 @@ function groupedTrace(trace: SessionTraceEntry[]): Map<string, SessionTraceEntry
   return groups;
 }
 
+function legacyCodexUsageDelta(current: TokenUsage, previous: TokenUsage | null): TokenUsage {
+  const reset = !!previous && (
+    current.input < previous.input
+    || current.output < previous.output
+    || current.cacheRead < previous.cacheRead
+    || current.cacheWrite < previous.cacheWrite
+    || current.reasoning < previous.reasoning
+  );
+  if (!previous || reset) return { ...current, turns: 1 };
+  return {
+    input: current.input - previous.input,
+    output: current.output - previous.output,
+    cacheRead: current.cacheRead - previous.cacheRead,
+    cacheWrite: current.cacheWrite - previous.cacheWrite,
+    reasoning: current.reasoning - previous.reasoning,
+    costUsd: null,
+    turns: 1,
+  };
+}
+
+// 7c274c0 之前的 Codex trace 保存的是 turn.completed 的线程累计快照。sessions 汇总
+// 虽已由启动迁移校正，旧气泡若仍把这些快照相加，刷新后又会显示虚高。新 trace 带
+// accounting=incremental；只有无标记的 Codex 历史事件需要在读侧求差。
+function normalizedPersistedTrace(trace: SessionTraceEntry[], session: Session): SessionTraceEntry[] {
+  if (session.agentType !== "codex") return trace;
+  let previous: TokenUsage | null = null;
+  return trace.map((entry) => {
+    if (entry.event.kind !== "usage" || entry.event.accounting === "incremental") return entry;
+    const usage = legacyCodexUsageDelta(entry.event.usage, previous);
+    previous = entry.event.usage;
+    return { ...entry, event: { ...entry.event, usage, accounting: "incremental" } };
+  });
+}
+
 function takeTraceGroup(
   groups: Map<string, SessionTraceEntry[]>,
   consumed: Set<string>,
@@ -157,6 +217,30 @@ function traceUsage(entries: SessionTraceEntry[]): TokenUsage | null {
   return sumUsage(entries.map((entry) => (entry.event.kind === "usage" ? entry.event.usage : null)));
 }
 
+function traceRun(entries: SessionTraceEntry[]): { model: string | null; reasoningEffort: string | null } | undefined {
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const event = entries[index]?.event;
+    if (event?.kind === "run") return { model: event.model, reasoningEffort: event.reasoningEffort };
+  }
+  return undefined;
+}
+
+function liveRun(event: LiveAgentEvent): { model: string | null; reasoningEffort: string | null } | undefined {
+  if (event.model === undefined && event.reasoningEffort === undefined) return undefined;
+  return {
+    model: event.model?.trim() || null,
+    reasoningEffort: event.reasoningEffort?.trim() || null,
+  };
+}
+
+function sessionRun(session: Session | undefined): { model: string | null; reasoningEffort: string | null } | undefined {
+  if (!session || (session.model === undefined && session.reasoningEffort === undefined)) return undefined;
+  return {
+    model: session.model?.trim() || null,
+    reasoningEffort: session.reasoningEffort?.trim() || null,
+  };
+}
+
 function contentSegments(
   traced: SessionTraceEntry[],
   fallbackMarkdown: string,
@@ -164,7 +248,9 @@ function contentSegments(
 ): AgentContentSegment[] {
   // usage 只是这一回合的账,不是执行过程的一步 —— 漏掉这道过滤它会被 auxEvent
   // 当成未知事件渲染成一行异常。
-  const entries = traced.filter((entry): entry is TracedContentEntry => entry.event.kind !== "usage");
+  const entries = traced.filter((entry): entry is TracedContentEntry => (
+    entry.event.kind !== "usage" && entry.event.kind !== "run"
+  ));
   const auxEntries = entries.filter((entry) => entry.event.kind !== "text" && entry.event.kind !== "attachment");
   const attachmentEntries = entries.filter(
     (entry): entry is TracedAttachmentEntry => entry.event.kind === "attachment",
@@ -256,7 +342,16 @@ function appendAgent(
 ): Extract<ConversationItem, { kind: "agent" }> {
   const session = sessions.find((candidate) => candidate.id === event.sessionId);
   const last = items[items.length - 1];
-  if (last?.kind === "agent" && last.sessionId === event.sessionId) return last;
+  const explicitRun = liveRun(event);
+  // 同一条会话**且同一个身份**才算「还是刚才那条气泡」。少了身份这一半，用户在验证
+  // 回合中途打开任务页时（快照的末尾还是上一轮实现正文，「第 N 轮验证开始」在订阅前
+  // 就播完了），接着到的审查正文会直接写进实现者的气泡里 —— 正是这个功能要治的病。
+  const reviewer = reviewerOf(event.verifyRound, event.role ?? session?.role);
+  if (last?.kind === "agent" && last.sessionId === event.sessionId && reviewerKey(last) === reviewerKeyOf(reviewer)) {
+    if (explicitRun) last.run = explicitRun;
+    return last;
+  }
+  const run = explicitRun ?? sessionRun(session);
   const item: Extract<ConversationItem, { kind: "agent" }> = {
     kind: "agent",
     id: `live:${event.sessionId}:${items.length}`,
@@ -266,6 +361,8 @@ function appendAgent(
     endedAt: null,
     markerEndedAt: null,
     session,
+    run,
+    reviewer,
     usage: null,
     markdown: "",
     segments: [],
@@ -319,7 +416,7 @@ export function buildConversationItems(
 
   for (const { session, output, trace = [] } of ordered) {
     const segments = parseSessionOutput(output);
-    const traceGroups = groupedTrace(trace);
+    const traceGroups = groupedTrace(normalizedPersistedTrace(trace, session));
     const consumedTrace = new Set<string>();
     let turnStartedAt = session.startedAt;
     segments.forEach((segment, index) => {
@@ -344,6 +441,10 @@ export function buildConversationItems(
           id: `persisted:system:${session.id}:${index}`,
           text: segment.text,
           at: segment.at,
+          sessionId: session.id,
+          tone: noteTone(segment.text),
+          variant: "note",
+          verify: isVerifyNote(segment.text),
         });
         turnStartedAt = segment.at ?? turnStartedAt;
       } else {
@@ -357,6 +458,8 @@ export function buildConversationItems(
           endedAt: null,
           markerEndedAt: segment.endedAt ?? null,
           session,
+          run: traceRun(traceEntries) ?? sessionRun(session),
+          reviewer: reviewerOf(traceVerifyRound(traceEntries), session?.role),
           usage: traceUsage(traceEntries),
           markdown: segment.text,
           segments: contentSegments(traceEntries, segment.text, `persisted:segment:${session.id}:${index}`),
@@ -367,6 +470,7 @@ export function buildConversationItems(
     // its execution block visible instead of dropping the persisted trace.
     for (const [traceTurn, entries] of traceGroups) {
       if (consumedTrace.has(traceTurn)) continue;
+      if (!entries.some((entry) => entry.event.kind !== "run" && entry.event.kind !== "usage")) continue;
       const segments = contentSegments(entries, "", `persisted:trace-segment:${session.id}:${traceTurn}`);
       items.push({
         kind: "agent",
@@ -377,6 +481,8 @@ export function buildConversationItems(
         endedAt: null,
         markerEndedAt: null,
         session,
+        run: traceRun(entries) ?? sessionRun(session),
+        reviewer: reviewerOf(traceVerifyRound(entries), session?.role),
         usage: traceUsage(entries),
         markdown: segments.map((segment) => segment.markdown).join(""),
         segments,
@@ -401,12 +507,21 @@ export function buildConversationItems(
         attachments: entry.attachments,
         at: entry.at,
         isAnswer: entry.isAnswer,
+        bySystem: entry.bySystem,
       });
       continue;
     }
     const event = entry.event.event;
     if (event.kind === "system") {
-      appendEvent(items, { kind: "event", id: entry.id, text: event.text });
+      appendEvent(items, {
+        kind: "event",
+        id: entry.id,
+        text: event.text,
+        sessionId: entry.event.sessionId,
+        tone: noteTone(event.text),
+        variant: "note",
+        verify: isVerifyNote(event.text),
+      });
       continue;
     }
     if (event.kind === "done") {
@@ -415,11 +530,12 @@ export function buildConversationItems(
         id: entry.id,
         text: event.exitStatus === 0 ? "本轮执行结束" : `执行异常结束 · exit ${event.exitStatus}`,
         tone: event.exitStatus === 0 ? "neutral" : "error",
+        variant: "boundary",
       });
       continue;
     }
     if (event.kind === "turnEnd") {
-      appendEvent(items, { kind: "event", id: entry.id, text: "本回合结束，等待下一条消息" });
+      appendEvent(items, { kind: "event", id: entry.id, text: "本回合结束，等待下一条消息", variant: "boundary" });
       continue;
     }
     // session 是执行器的内部簿记事件(心跳/回合结束都会重发),旧 UI 就不渲染;
@@ -436,6 +552,10 @@ export function buildConversationItems(
       appendAgentAux(agent, event);
     }
   }
+
+  // 时间线到这里才排完（落盘排好序 + 直播按到达追加），身份也才补得齐。必须排在下面
+  // 那轮 continuation 判定之前：那一轮拿 reviewer 当断点用。
+  applyVerifySpans(items);
 
   const orderedSessions = [...sessions].sort((left, right) => left.startedAt.localeCompare(right.startedAt));
   const runBounds = new Map<string, SessionRunBounds>();
@@ -487,6 +607,26 @@ export function buildConversationItems(
     sessionTurnTotals.set(item.sessionId, previous ? addUsage(previous, item.usage) : item.usage);
   }
 
+  // 旁注（预约审查、验收阶段更新、合并&清理完成…）不该把一段连续的发言劈成两半：
+  // 后面那截还是同一个会话在说话，就接着上一段排版，不再重报头像、执行器名和模型。
+  // 打断续接的只有四种真断点：真人插话、回合边界事件、换了会话，以及**换了身份**。
+  //
+  // 身份那一条是给就地验证用的：验证轮是搭在被验任务身上的旁路回合、常复用同一条
+  // 会话，中间只隔着一条「第 N 轮验证开始」的旁注 —— 按前三条判就成了「同一个人接着
+  // 说」，于是审查者的发言连头像和名字都不重报，反而比不区分更糟。
+  let continuedSessionId: string | null = null;
+  let continuedReviewer: string | null = null;
+  for (const item of items) {
+    if (item.kind === "user") { continuedSessionId = null; continue; }
+    if (item.kind === "event") {
+      if (item.variant === "boundary") continuedSessionId = null;
+      continue;
+    }
+    item.continuation = continuedSessionId === item.sessionId && continuedReviewer === reviewerKey(item);
+    continuedSessionId = item.sessionId;
+    continuedReviewer = reviewerKey(item);
+  }
+
   const sessionMetaSeen = new Set<string>();
   for (let index = items.length - 1; index >= 0; index -= 1) {
     const item = items[index]!;
@@ -515,11 +655,16 @@ export function conversationToMarkdown(items: ConversationItem[], task: Task): s
       const parsed = parseAttachmentText(item.text);
       const paths = [...parsed.paths, ...item.attachments];
       const body = [parsed.body, ...paths.map((path) => `- ${path}`)].filter(Boolean).join("\n");
-      if (body) parts.push(`## 你${item.at ? ` · ${formatInstant(item.at)}` : ""}\n\n${body}`);
+      if (body) parts.push(`## ${item.bySystem ? "系统" : "你"}${item.at ? ` · ${formatInstant(item.at)}` : ""}\n\n${body}`);
       continue;
     }
     const body = item.markdown.trim();
-    if (body) parts.push(`## ${item.label}${item.at ? ` · ${formatInstant(item.at)}` : ""}\n\n${body}`);
+    // 审查者的身份要跟着导出走：复制出去的会话同样是同一个执行器名说了好几段，
+    // 界面上认得出、粘出去认不出，等于没做。
+    const who = item.reviewer
+      ? `${item.label}（审查者${item.reviewer.round ? ` · 第 ${item.reviewer.round} 轮` : ""}）`
+      : item.label;
+    if (body) parts.push(`## ${who}${item.at ? ` · ${formatInstant(item.at)}` : ""}\n\n${body}`);
   }
   return `${parts.join("\n\n")}\n`;
 }

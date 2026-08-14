@@ -1,4 +1,5 @@
 import { PreviewBadge } from "./components/PreviewBadge.tsx";
+import { TaskReplyDraftProvider } from "./task-detail/TaskReplyDrafts.tsx";
 import { WorkspaceShell } from "./workspace/WorkspaceShell.tsx";
 
 export function App() {
@@ -7,7 +8,9 @@ export function App() {
   }
   return (
     <>
-      <WorkspaceShell />
+      <TaskReplyDraftProvider>
+        <WorkspaceShell />
+      </TaskReplyDraftProvider>
       <PreviewBadge />
     </>
   );

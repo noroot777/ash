@@ -3,17 +3,42 @@ import { AGENT_TYPES, isUserSettableStatus } from "@harness/shared";
 import { isReasoningEffortSupported, normalizeReasoningEffort, reasoningEffortsFor } from "@harness/shared/cli-presets";
 import { inheritExecutorOverrides, pickExecutor, sameExecutor } from "@harness/shared/executors";
 import { normalizeWorkflowDef } from "@harness/shared/workflow";
-import { asc, eq } from "drizzle-orm";
+import { TASK_WORKFLOW_MODES } from "@harness/shared/free-workflow";
+import { asc, eq, inArray } from "drizzle-orm";
 import type { Hono } from "hono";
 import { db } from "./db/index.js";
-import { agents, groups, noteTasks, projects, queueItems, tasks } from "./db/schema.js";
+import { agents, freeReviewRounds, freeReviewRuns, freeWorkflowEvents, freeWorkflowStates, groups, noteTasks, projects, queueItems, schedules, scheduledMessages, sessions, tasks } from "./db/schema.js";
 import { repoKey } from "./git.js";
 import { detectTaskWorkspace, discardTaskWorkspace } from "./workspace-cleanup.js";
 import { followUpsFor } from "./task-follow-up.js";
 import { advanceQueue, pauseGroup, runGroup } from "./scheduler.js";
 import { setTaskStatus } from "./status.js";
+import { isTurnClaimed } from "./runs.js";
+import { isAcceptingTask } from "./acceptance-lock.js";
 import { createTasks, enrichTasks, publishTaskUpdated } from "./task-store.js";
 import { attachmentsPrompt, id, now } from "./util.js";
+
+// 任务行删除时连关联状态一起收：自由审查链(run/round)、预约槽、事件、排队/定时消息、
+// 随手记回链。没有 FK cascade,只删任务行会留下孤儿——审查实测:等答复的审查在任务
+// 删除后永远停在 reviewing,答复消息永远 pending(投递时任务已不存在)。
+export async function deleteTaskAssociations(taskId: string): Promise<void> {
+  const runIds = (await db.select({ id: freeReviewRuns.id }).from(freeReviewRuns)
+    .where(eq(freeReviewRuns.taskId, taskId))).map((run) => run.id);
+  if (runIds.length) await db.delete(freeReviewRounds).where(inArray(freeReviewRounds.runId, runIds));
+  await db.delete(freeReviewRuns).where(eq(freeReviewRuns.taskId, taskId));
+  await db.delete(freeWorkflowStates).where(eq(freeWorkflowStates.taskId, taskId));
+  await db.delete(freeWorkflowEvents).where(eq(freeWorkflowEvents.taskId, taskId));
+  await db.delete(scheduledMessages).where(eq(scheduledMessages.taskId, taskId));
+  await db.delete(noteTasks).where(eq(noteTasks.taskId, taskId));
+  // 会话行、定时计划、队列位也一起收：孤儿 cron 每个 tick 都会被扫到再查不到任务，
+  // 队列残位会顶住后续推进（审查实测：删除后 sessionRows/scheduleRows 各剩 1）。
+  await db.delete(sessions).where(eq(sessions.taskId, taskId));
+  await db.delete(schedules).where(eq(schedules.taskId, taskId));
+  await db.delete(queueItems).where(eq(queueItems.taskId, taskId));
+  // 团队派活自建的内部组（groups.owner_task_id=本任务）：GET /groups 默认过滤掉它们，
+  // 留下来就是永远不可见也没入口清理的孤儿（审查实测：删 lead 后两个内部组原样保留）。
+  await db.delete(groups).where(eq(groups.ownerTaskId, taskId));
+}
 
 export function mountTaskRoutes(api: Hono): void {
   // 一次最多问这么多任务的追问 —— 每个都要摸一次盘，别让一个手抖的请求
@@ -56,6 +81,16 @@ api.post("/tasks", async (c) => {
     appendToQueue?: string; // 可选:把新任务追加到指定 queue 的尾部
     workflowId?: string | null; // 挑哪条起手式;省略则按项目→全局默认解析
   }>();
+  const workflowMode = b.workflowMode ?? "preset";
+  if (!(TASK_WORKFLOW_MODES as readonly string[]).includes(workflowMode)) {
+    return c.json({ error: "workflowMode 只能是 free 或 preset" }, 400);
+  }
+  if (workflowMode === "free" && ((b.mode ?? "single") !== "single" || b.parentId != null || b.reviewOf != null)) {
+    return c.json({ error: "自由工作流只适用于普通单任务" }, 409);
+  }
+  if (workflowMode === "free" && (b.workflow != null || b.workflowId != null)) {
+    return c.json({ error: "自由工作流不能同时携带起手式" }, 400);
+  }
   // 新建面板允许**就地改这条线**（挑一个起手式再动两下），改完的那份直接随任务提交，
   // 不用先在库里存一条。收下来的仍然只是一份快照,跟 workflowId 那条路殊途同归。
   let inlineWorkflow: string | null = null;
@@ -136,7 +171,6 @@ api.post("/tasks", async (c) => {
     body: taskBody(b.body, taskId) + attachmentsPrompt(b.attachments),
     mode: b.mode ?? "single",
     status: (b.status && isUserSettableStatus(b.status) ? b.status : "backlog") as TaskStatus,
-    priority: b.priority ?? "none",
     labels: JSON.stringify(b.labels ?? []),
     // dependsOn / resumeDependsOn 字段保留为 []。新模型用 queue_items
     // 表达顺序依赖;input 上的这俩字段已不再接受。
@@ -163,6 +197,7 @@ api.post("/tasks", async (c) => {
     // 就地改过的线已经是快照了,直接落 workflow,createTasks 不会再去库里查。
     workflowId: b.workflowId ?? null,
     workflow: inlineWorkflow,
+    workflowMode,
   };
   // 可选:追加到现有 queue 的尾部。要求:queue 已存在,且新 task 跟
   // queue 已有任务的 groupId 一致(违反就 400,不静默)。
@@ -206,7 +241,7 @@ api.post("/tasks", async (c) => {
   return c.json(created!, 201);
 });
 
-// Partial update: title/body/status/pinnedAt/priority/labels/groupId/agentType/executorId/model/reasoningEffort/mode/duet.
+// Partial update: title/body/status/pinnedAt/labels/groupId/agentType/executorId/model/reasoningEffort/mode/duet.
 api.patch("/tasks/:id", async (c) => {
   const tid = c.req.param("id");
   const existing = (await db.select().from(tasks).where(eq(tasks.id, tid))).at(0);
@@ -237,12 +272,24 @@ api.patch("/tasks/:id", async (c) => {
   ) {
     return c.json({ error: "pinnedAt 必须是非负整数时间戳或 null" }, 400);
   }
-  const patch: Record<string, unknown> = { updatedAt: now() };
+  if (
+    b.starredAt !== undefined &&
+    b.starredAt !== null &&
+    (!Number.isSafeInteger(b.starredAt) || b.starredAt < 0)
+  ) {
+    return c.json({ error: "starredAt 必须是非负整数时间戳或 null" }, 400);
+  }
+  // UI 只给顶层任务画星标入口:child/worker 一旦被标上就成了看不见也清不掉的隐形状态。
+  // null(清除)放行 —— 老数据里已有的 child 星标得留一条从 API 清理的路。
+  if (b.starredAt !== undefined && b.starredAt !== null && existing.parentId != null) {
+    return c.json({ error: "星标只支持顶层任务，执行者/子任务不能设置 starredAt" }, 400);
+  }
+  const patch: Record<string, unknown> = {};
   if (b.title !== undefined) patch.title = b.title;
   if (b.body !== undefined) patch.body = b.body;
   if (b.autoTitle !== undefined) patch.autoTitle = b.autoTitle;
   if (b.pinnedAt !== undefined) patch.pinnedAt = b.pinnedAt;
-  if (b.priority !== undefined) patch.priority = b.priority;
+  if (b.starredAt !== undefined) patch.starredAt = b.starredAt;
   if (b.labels !== undefined) patch.labels = JSON.stringify(b.labels);
   if (b.groupId !== undefined) patch.groupId = b.groupId;
   const requestedExecutorId = b.executorId === "" ? null : b.executorId;
@@ -302,6 +349,12 @@ api.patch("/tasks/:id", async (c) => {
   if (b.resumePrompt !== undefined) {
     patch.resumePrompt = b.resumePrompt && String(b.resumePrompt).trim() ? String(b.resumePrompt) : null;
   }
+  // updatedAt 在产品里是「最后活动时间」:同组排序、24 小时折叠、未读完成/失败事件键、
+  // 铺开态时间列都读它。星标是与活动正交的手动软记号 —— 只动 starredAt 的 PATCH 不推进
+  // updatedAt,否则给旧任务点星会让它跳到组首、解除折叠、把已读终态伪装成新事件。
+  // task.updated 事件照发(下方 publishTaskUpdated),前端仍实时回流。
+  const starOnly = "starredAt" in patch && Object.keys(patch).length === 1 && b.status === undefined;
+  if (!starOnly) patch.updatedAt = now();
   await db.update(tasks).set(patch).where(eq(tasks.id, tid));
   // Status goes through the shared helper so manual changes maintain the run-time
   // columns (startedAt/endedAt) and broadcast them just like a real run does.
@@ -318,13 +371,24 @@ api.patch("/tasks/:id", async (c) => {
 // 确认框在打开时先问一次:有残留才提示「要不要连它们一起删」,没有就是一句普通
 // 的确认。任务不在 worktree 模式下跑过也照查 —— useWorktree 后来被关掉、目录和
 // 分支却还在,是最容易被漏掉的那种残留。
+// children 一并探测：团队/duet 删除会连 children 行一起删，它们的 worktree/分支若不在
+// 这里露脸，确认框就不会带清理参数，删完变成数据库里查无此任务的孤儿资源（审查实测：
+// 父任务双 null、isolated child 有脏 worktree，请求根本不带清理参数）。
 api.get("/tasks/:id/workspace", async (c) => {
   const tid = c.req.param("id");
   const t = (await db.select().from(tasks).where(eq(tasks.id, tid))).at(0);
   if (!t) return c.json({ error: "not found" }, 404);
   const project = (await db.select().from(projects).where(eq(projects.id, t.projectId))).at(0);
-  return c.json(await detectTaskWorkspace(project?.repoPath, tid));
+  const own = await detectTaskWorkspace(project?.repoPath, tid);
+  const childRows = await db.select().from(tasks).where(eq(tasks.parentId, tid));
+  const children = (await Promise.all(childRows.map(async (child) => ({
+    taskId: child.id,
+    title: child.title,
+    ...(await detectTaskWorkspace(project?.repoPath, child.id)),
+  })))).filter((entry) => entry.path || entry.branch);
+  return c.json({ ...own, ...(children.length ? { children } : {}) });
 });
+
 
 // 删除任务。`worktree=1` / `branch=1` 表示用户在确认框里勾了「连 worktree 和分支
 // 一起删」,`force=1` 是看过第一次失败之后的再来一次(--force / -D)。
@@ -334,12 +398,56 @@ api.get("/tasks/:id/workspace", async (c) => {
 api.delete("/tasks/:id", async (c) => {
   const tid = c.req.param("id");
   const existing = (await db.select().from(tasks).where(eq(tasks.id, tid))).at(0);
+  // 正在执行的任务不能整行删掉：进程还活着、turn 还占着，删行会让回合结算写向不存在的
+  // 任务（审查实测：claimTurn 到 status 落库的窗口里 DELETE 直接 200）。turn 锁一并看，
+  // 常驻调度台 idle 时不受影响（status 不匹配、turn 未占）。
+  if (existing && (existing.status === "running" || existing.status === "queued" || isTurnClaimed(tid))) {
+    return c.json({ error: "任务正在执行，请先停止再删除", status: existing.status }, 409);
+  }
+  // 验收（含尾段发布命令）期间删除任务行：命令还在跑、结算还要写这一行（审查实测：
+  // 删除返回 200、尾段继续写、验收最后还报成功）。
+  if (existing && isAcceptingTask(tid)) {
+    return c.json({ error: "任务正在验收中，结束后再删除" }, 409);
+  }
+  // 团队：执行者跟着 lead 活。任何 child 在飞就拒删（否则活着的 worker 失去父任务，
+  // 还可能连带清掉它正在用的共享工作区）；都停了则连 children 行一并删，不留悬空 parentId。
+  const children = existing ? await db.select().from(tasks).where(eq(tasks.parentId, tid)) : [];
+  // child 的验收锁也要传播:执行者的发布尾段还在跑时删掉整个团队,结算会写向不存在
+  // 的任务行(审查实测:child beginAccepting 后删除 lead 返回 200)。
+  const busyChild = children.find(
+    (child) => child.status === "running" || child.status === "queued"
+      || isTurnClaimed(child.id) || isAcceptingTask(child.id),
+  );
+  if (busyChild) {
+    return c.json({
+      error: `执行者「${busyChild.title}」正在执行，请先停止团队再删除`,
+      childId: busyChild.id,
+      status: busyChild.status,
+    }, 409);
+  }
   const project = existing
     ? (await db.select().from(projects).where(eq(projects.id, existing.projectId))).at(0)
     : undefined;
   const wantWorktree = c.req.query("worktree") === "1";
   const wantBranch = c.req.query("branch") === "1";
-  await db.delete(noteTasks).where(eq(noteTasks.taskId, tid));
+  // children 的 Git 工作区必须与它们的行一起处理：只删行的话，独立 worktree/分支会变成
+  // 数据库里查无此任务的孤儿资源，leftover 检测（按父任务 id）也看不到（审查实测）。
+  const childCleanups: (TaskWorkspaceDiscardResult & { taskId: string })[] = [];
+  for (const child of children) {
+    await deleteTaskAssociations(child.id);
+    await db.delete(tasks).where(eq(tasks.id, child.id));
+    if (project && child.useWorktree && (wantWorktree || wantBranch)) {
+      childCleanups.push({
+        taskId: child.id,
+        ...await discardTaskWorkspace(project.repoPath, child.id, {
+          worktree: wantWorktree,
+          branch: wantBranch,
+          force: c.req.query("force") === "1",
+        }),
+      });
+    }
+  }
+  await deleteTaskAssociations(tid);
   await db.delete(tasks).where(eq(tasks.id, tid));
   let cleanup: TaskWorkspaceDiscardResult | null = null;
   if (project && (wantWorktree || wantBranch)) {
@@ -350,8 +458,22 @@ api.delete("/tasks/:id", async (c) => {
     });
   }
   // 清理之后仍然剩下的东西:没勾选、或勾了但 git 拒绝。UI 据此决定要不要继续追问。
+  // children 的残留一并报（它们的行已删，之后没有别的入口能发现这些资源）。
   const leftover = project ? await detectTaskWorkspace(project.repoPath, tid) : null;
-  return c.json({ deleted: true, leftover, cleanup });
+  const childLeftovers = project
+    ? (await Promise.all(children.map(async (child) => ({
+        taskId: child.id,
+        leftover: await detectTaskWorkspace(project.repoPath, child.id),
+      })))).filter((entry) => entry.leftover && (entry.leftover.path || entry.leftover.branch))
+    : [];
+  return c.json({
+    deleted: true, leftover, cleanup,
+    // 连删的全部行（父 + children）：前端按它同步本地任务集合——只摘父 id 会把
+    // children 留成刷新前的幽灵任务（审查实测）。
+    deletedTaskIds: [tid, ...children.map((child) => child.id)],
+    ...(childCleanups.length ? { childCleanups } : {}),
+    ...(childLeftovers.length ? { childLeftovers } : {}),
+  });
 });
 
 // ── groups (transient batch containers, §3) ─────────────────────────────────
@@ -509,7 +631,6 @@ api.post("/groups/:groupId/tasks/batch", async (c) => {
       body: taskBody(s.body, ids[i]),
       mode: "single",
       status: "backlog",
-      priority: s.priority ?? b.defaults?.priority ?? "none",
       labels: JSON.stringify(s.labels ?? b.defaults?.labels ?? []),
       dependsOn: "[]", // 字段保留为空(legacy)
       resumeDependsOn: "[]",

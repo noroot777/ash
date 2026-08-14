@@ -18,8 +18,6 @@
 - 背景 `#0F1419`，抬升表面 `#1A1F26`，分割线 `#2A3038`
 - 主文字 `#E8EAED`，次文字 `#8A8F96`，浅文字 `#5F646D`
 - 状态色：完成=`#10B981`(青绿)，进行中=`#3B82F6`(蓝)，待办=`#F59E0B`(琥珀)，锁定=`#6B7280`(灰)
-- 优先级强调：紧急=`#EC4899`(品红)，高=`#F97316`，中=`#EAB308`，低=`#94A3B8`
-  （优先级用 1-4 根竖条表示强度，放在卡片右侧）
 - 字体：clean grotesk / SF Pro 风格；标题 600 字重，正文 400；字号要够大、易读，绝不要小字
 - 圆角：卡片 12px，按钮 10px；间距大气透气 (16/24px)
 - 背景加极微弱的 film grain 质感，不能影响可读性
@@ -32,15 +30,15 @@
 - 项目切换条：横向滚动的 pill 标签 `[All] [Frontend] [Backend] [+]`，active 态有清晰高亮
 - 按状态分组的任务列表，组头形如「IN PROGRESS · 4」带状态色小圆点
 - 任务卡片（约 80px 高，12px 圆角，抬升表面色）：
-  左侧彩色状态圆点 + 中间(标题两行内 + 下方 `@codex #auth #security` 浅灰元信息) + 右侧优先级竖条
+  左侧彩色状态圆点 + 中间(标题两行内 + 下方 `@codex #auth #security` 浅灰元信息) + 右侧更新时间
   示例任务：「Fix auth middleware」「Design mobile home screen」「Write API docs」「Refactor token store」
 - 右下角悬浮 `+` 新建按钮（56px 圆形，品红强调色）
 - 首屏要干净、可快速扫读，不要塞满
 
 ### 2) screen-2-task-detail.png — 任务详情
 - 顶部导航：`< 返回   Task Details   ⋯`
-- 大标题区：状态徽章 + 大标题「Fix authentication middleware」+ 一行 `in_progress · high priority`，下面 `@codex · updated 2h ago`
-- 元数据分组：标签 `#auth #security #backend`；优先级竖条；指派的 agent 头像/名
+- 大标题区：状态徽章 + 大标题「Fix authentication middleware」，下面 `@codex · updated 2h ago`
+- 元数据分组：标签 `#auth #security #backend`；指派的 agent 头像/名
 - 描述区：DESCRIPTION 小标题 + 2-3 行说明文字
 - 内嵌「对话/活动流」区块（2 条消息气泡，区分 你 vs @codex）
 - 底部粘性操作栏：`Edit` / `Start Debate` / `Complete` 三个按钮，Complete 用青绿强调
@@ -50,7 +48,7 @@
 - 顶部进度「Step 2 of 3」
 - 表单分组：
   - Assign To：一组可选 agent（@codex 选中态、@claude、@antigravity）
-  - Priority：Low / Medium / High / Urgent 分段选择，Urgent 选中（品红）
+  - Labels：`auth` / `security` / `backend` 标签编辑
   - Group / Project：下拉选择「Frontend Redesign」
 - 底部 `← Back` / `Next →` 按钮
 - sheet 后面能隐约看到被压暗的任务列表

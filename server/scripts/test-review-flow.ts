@@ -4,12 +4,13 @@
 // Run: npm -w server run test:review
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 const root = mkdtempSync(join(tmpdir(), "harness-review-flow-"));
 process.env.HARNESS_DB = join(root, "harness.db");
+process.env.HARNESS_RUNS_DIR = join(root, "runs");
 
 const { mountReviewRoutes } = await import("../src/review.js");
 // 证据落盘（路径边界、结论文件）住在 review-evidence.ts，措辞住在 review-prompts.ts。
@@ -18,7 +19,15 @@ const {
   reviewRoundDir,
   safeReviewFilePath,
 } = await import("../src/review-evidence.js");
-const { REVIEW_OVERWRITE_CHECK } = await import("../src/review-prompts.js");
+const {
+  REVIEW_OVERWRITE_CHECK,
+  repairPrompt,
+  reviewReminderFor,
+  verifyProtocolFor,
+  verifyReminderFor,
+} = await import("../src/review-prompts.js");
+const { withGlobalBrowserPolicy } = await import("../src/browser-verification-policy.js");
+const { initialTaskObjective, invitedTaskBrief } = await import("../src/invited-task-brief.js");
 // 判定（该不该派、几轮、找谁验）住在 review-policy.ts，是纯函数，所以这一段全程不起
 // 数据库、不起 CLI。
 const {
@@ -88,6 +97,19 @@ assert.equal(nextReviewRound(0), 1);
 assert.equal(nextReviewRound(1), 2);
 assert.equal(nextReviewRound(2), 3, "手动派审不受两轮自动上限限制");
 assert.match(REVIEW_OVERWRITE_CHECK, /ask_question/, "审查 prompt 必须要求覆盖场景先等人工拍板");
+assert.equal(invitedTaskBrief("原始需求 /grill-me", true, true), "", "新审查者入场时不能从通用任务简介漏回技能名");
+assert.match(invitedTaskBrief("普通协作需求", true, false), /普通协作需求/, "普通中途协作者仍须拿到任务简介");
+assert.equal(initialTaskObjective("历史审查正文 /grill-me", "审查", true), "", "历史独立审查任务的 fresh prompt 也不能重复夹带正文");
+const repair = repairPrompt({
+  target: { id: "review-target" } as never,
+  round: 2,
+  reviewTaskId: null,
+  coverage: null,
+  autoNext: true,
+});
+assert.match(repair, /\[report\.md\]\([^\n]+report\.md\)/, "验证打回应只引用 report.md");
+assert.doesNotMatch(repair, /browser\.png|截图：/, "截图已收进报告，不应在验证打回里重复列出");
+assert.doesNotMatch(repair, /验证报告：/, "验证打回不再复制报告正文");
 
 assert.equal(
   reviewOutcomeAction({ reviewStatus: "done", conclusion: "verify_failed", reviewRequested: true, round: 1 }),
@@ -213,13 +235,12 @@ await db.insert(tasks).values({
   projectId: "project",
   groupId: null,
   parentId: null,
-  title: "path target",
-  body: "",
+  title: "path target /grill-me",
+  body: "原始需求里点名 /grill-me",
   mode: "single",
   status: "done",
   stage: null,
   reviewRequested: true,
-  priority: "none",
   labels: "[]",
   dependsOn: "[]",
   resumeDependsOn: "[]",
@@ -228,6 +249,43 @@ await db.insert(tasks).values({
   createdAt: at,
   updatedAt: at,
 });
+const promptTarget = (await db.select().from(tasks)).find((row) => row.id === taskId)!;
+const reviewPrompt = await verifyProtocolFor(promptTarget, 1, root);
+assert.doesNotMatch(reviewPrompt, /grill-me|原始需求里点名/, "自动验证 prompt 不得原样夹带被审需求里的技能名");
+assert.match(reviewPrompt, /request-context\.md/, "自动验证应通过文件交付需求上下文");
+const assertBrowserOrder = (text: string, source: string) => {
+  const grouped = text.indexOf("扩展具名分组后台标签");
+  const headless = text.indexOf("独立无头浏览器");
+  const headed = text.indexOf("独立有头浏览器");
+  assert.ok(grouped >= 0 && grouped < headless && headless < headed, `${source} 必须保留三级浏览器降级顺序`);
+  assert.match(text, /不得操作用户普通 Chrome 标签|不得接管、复用或直连用户的普通标签/, `${source} 必须保护用户普通标签`);
+  assert.match(text, /Playwright.*headless/i, `${source} 必须把 Playwright 默认限制为无头`);
+};
+assertBrowserOrder(reviewPrompt, "自动验证 prompt");
+assertBrowserOrder(verifyReminderFor(taskId, 1), "自动验证续跑提醒");
+assertBrowserOrder(reviewReminderFor({ id: "legacy-review", reviewOf: taskId, reviewRound: 1 }), "历史审查续跑提醒");
+const globalFreshPrompt = withGlobalBrowserPolicy("普通任务正文", "full");
+assert.match(globalFreshPrompt, /【全局浏览器操作规范】/, "普通新会话必须收到全局浏览器规范");
+assertBrowserOrder(globalFreshPrompt, "普通新会话");
+assert.match(globalFreshPrompt, /无报告则写进本轮最终回复|没有专门报告产物时/, "普通任务降级原因必须有可见落点");
+const globalResumePrompt = withGlobalBrowserPolicy("用户续聊", "reminder");
+assert.match(globalResumePrompt, /【全局浏览器操作提醒】/, "续聊与修复回合必须重贴浏览器提醒");
+assert.match(globalResumePrompt, /标签保持后台.*禁止激活 Chrome/, "续聊提醒必须保留非打扰约束");
+assert.match(globalResumePrompt, /截图、布局检查或页面点击不算理由/, "续聊提醒必须限制有头浏览器");
+assert.equal(withGlobalBrowserPolicy(reviewPrompt, "full"), reviewPrompt, "审查 prompt 已含完整策略时不得重复注入");
+
+const globalPromptCallsites = [
+  ["普通任务", new URL("../src/orchestrator.ts", import.meta.url), 2],
+  ["团队调度台", new URL("../src/team/session.ts", import.meta.url), 4],
+  ["duet 讨论者", new URL("../src/duet/index.ts", import.meta.url), 1],
+] as const;
+for (const [source, file, expected] of globalPromptCallsites) {
+  const calls = [...readFileSync(file, "utf8").matchAll(/withGlobalBrowserPolicy\(/g)].length;
+  assert.equal(calls, expected, `${source} 的所有 prompt 入口必须经过全局浏览器策略`);
+}
+const requestContext = readFileSync(join(base, "request-context.md"), "utf8");
+assert.match(requestContext, /path target \/grill-me/);
+assert.match(requestContext, /原始需求里点名 \/grill-me/, "需求文件不能为了避免误触而删掉验收信息");
 const api = new Hono();
 mountReviewRoutes(api);
 const traversal = await api.request(
@@ -275,7 +333,6 @@ await db.insert(tasks).values({
   verifyRound: 1,
   verifyRounds: 0,
   reviewRequested: true,
-  priority: "none",
   labels: "[]",
   dependsOn: "[]",
   resumeDependsOn: "[]",
@@ -337,7 +394,7 @@ await db.insert(tasks).values({
   id: "verify-legacy-row", projectId: "project", groupId: null, parentId: null,
   title: "legacy review", body: "", mode: "single", status: "done",
   reviewOf: inlineId, reviewRound: 1, reviewStep: "v-second",
-  priority: "none", labels: "[]", dependsOn: "[]", resumeDependsOn: "[]",
+  labels: "[]", dependsOn: "[]", resumeDependsOn: "[]",
   agentType: "claude", autoTitle: false, createdAt: at, updatedAt: at,
 });
 assert.equal(await stationRounds(inlineId, "v-second"), 3, "两种载体的轮数要加在一起");
@@ -361,7 +418,6 @@ await db.insert(tasks).values({
   verifyRound: 1,
   verifyRounds: 0,
   reviewRequested: true,
-  priority: "none",
   labels: "[]",
   dependsOn: "[]",
   resumeDependsOn: "[]",
@@ -384,6 +440,77 @@ assert.equal(failed.followUpFrom, null, "结算后要清掉 followUpFrom");
 assert.equal(failed.verifyRound, null, "起不来的那一轮不能永远占着「正在验证」");
 assert.equal(failed.verifyRounds, 1, "这一轮算跑过了（无结论），下一轮接着往下数");
 rmSync(resolve(reviewRoundDir(failId, 1), "../.."), { recursive: true, force: true });
+
+// ── CLI 原生命令(`/compact`)是旁路回合,结算钩子必须整段跳过 ─────────────────
+// 这一轮里 CLI 只是自己压缩上下文:没有模型输出、num_turns=0,任务本身一个字节都没
+// 动。可它走的是同一条续聊管道,所以两处会误伤:
+//   ① 回合开头的摘牌(peekAcceptedStage + 基线清账)—— 已验收任务压一次上下文就掉牌,
+//      而原生命令走旁路、不拍基线,掉了的牌子没有任何东西能挂回来
+//   ② 结算钩子里的收验证轮(finishVerifyRound)—— 正在验证的任务被当成「验完了」,
+//      白吃一轮配额还没有结论
+// 两条都只能在真跑一遍回合时才暴露,所以这里用一个立刻 exit 0 的假 claude 跑通全程。
+const { projects } = await import("../src/db/schema.js");
+const { chmodSync } = await import("node:fs");
+await db.insert(projects).values({ id: "project", name: "native-turn", repoPath: root, createdAt: at });
+const fakeBin = join(root, "bin");
+mkdirSync(fakeBin, { recursive: true });
+writeFileSync(join(fakeBin, "claude"), "#!/bin/sh\nexit 0\n");
+chmodSync(join(fakeBin, "claude"), 0o755);
+process.env.PATH = `${fakeBin}:${process.env.PATH ?? ""}`;
+
+const seedTurnTarget = async (rowId: string, verifyRound: number | null = 1) => {
+  await db.insert(tasks).values({
+    id: rowId,
+    projectId: "project",
+    groupId: null,
+    parentId: null,
+    title: rowId,
+    body: "",
+    mode: "single",
+    status: "done",
+    stage: "accepted",
+    verifyRound,
+    verifyRounds: 0,
+    reviewRequested: true,
+    labels: "[]",
+    dependsOn: "[]",
+    resumeDependsOn: "[]",
+    agentType: "claude",
+    useWorktree: false,
+    autoTitle: false,
+    createdAt: at,
+    updatedAt: at,
+  });
+};
+
+await seedTurnTarget("native-compact");
+await continueTask("native-compact", "/compact", { agent: "claude" });
+const compacted = (await db.select().from(tasks).where(eq(tasks.id, "native-compact"))).at(0)!;
+assert.equal(compacted.stage, "accepted", "压缩上下文不是改动,验收牌子必须还在");
+assert.equal(compacted.verifyRound, 1, "压缩不代表这一轮验证做完了");
+assert.equal(compacted.verifyRounds, 0, "更不能白吃一轮配额");
+assert.equal(compacted.nativeTurn, false, "标记只管这一轮,结算后必须清掉");
+
+// 对照组:同样的任务、同样的路径,换成一句普通消息就该照常收轮 —— 缺了这一半,
+// 上面几条断言在「原生命令识别把所有消息都当原生」时同样会过。
+await seedTurnTarget("native-control");
+await continueTask("native-control", "顺手改一下文案", { agent: "claude" });
+const control = (await db.select().from(tasks).where(eq(tasks.id, "native-control"))).at(0)!;
+assert.equal(control.verifyRound, null, "普通回合结束 = 这一轮验证收口");
+assert.equal(control.verifyRounds, 1, "并且记账一轮");
+// 验证轮挂着的那两个用例都是旁路回合,牌子谁都不摘(旁路不拍基线,摘了挂不回来),
+// 所以「原生命令不摘牌」这条得在**没有验证轮**的任务上单独钉 —— 否则 sideTurn 自己
+// 就把断言喂饱了,原生识别整个失效也照样过。
+await seedTurnTarget("native-compact-plain", null);
+await continueTask("native-compact-plain", "/compact", { agent: "claude" });
+const compactedPlain = (await db.select().from(tasks).where(eq(tasks.id, "native-compact-plain"))).at(0)!;
+assert.equal(compactedPlain.stage, "accepted", "压缩上下文不是改动,验收牌子必须还在");
+assert.equal(compactedPlain.nativeTurn, false, "标记只管这一轮,结算后必须清掉");
+
+await seedTurnTarget("native-control-plain", null);
+await continueTask("native-control-plain", "顺手改一下文案", { agent: "claude" });
+const controlPlain = (await db.select().from(tasks).where(eq(tasks.id, "native-control-plain"))).at(0)!;
+assert.equal(controlPlain.stage, null, "普通续聊要摘掉上一版的验收牌子");
 
 rmSync(resolve(base, "../.."), { recursive: true, force: true });
 rmSync(root, { recursive: true, force: true });

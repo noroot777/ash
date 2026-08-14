@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useEffect,
   useId,
   useMemo,
@@ -10,6 +11,7 @@ import {
 import { Plus, Sidebar, SidebarSimple, X } from "@phosphor-icons/react";
 import { Menu, MenuItem } from "../components/ui.tsx";
 import { useDismissable } from "../lib/useDismissable.ts";
+import { inspectorShortcutLabel, registerInspectorShortcutTarget } from "./shortcuts.ts";
 import type { InspectorDescriptor, InspectorHostControls, InspectorTabPolicy } from "./types.ts";
 
 export const INSPECTOR_MIN_WIDTH = 280;
@@ -184,8 +186,6 @@ function InspectorHostState<Context>({
     .map((id) => descriptorById.get(id))
     .filter((descriptor): descriptor is InspectorDescriptor<Context> => descriptor !== undefined);
   const activeDescriptor = descriptorById.get(state.activeTab ?? "") ?? openedDescriptors[0] ?? null;
-  const openIds = new Set(openedDescriptors.map((descriptor) => descriptor.id));
-  const availableDescriptors = descriptors.filter((descriptor) => !openIds.has(descriptor.id));
   const panelVisible = state.visible && activeDescriptor !== null;
   const menuRoot = useRef<HTMLDivElement>(null);
   const menuButton = useRef<HTMLButtonElement>(null);
@@ -290,7 +290,7 @@ function InspectorHostState<Context>({
     });
   };
 
-  const openTab = (id: string) => {
+  const openTab = useCallback((id: string) => {
     setState((current) => ({
       ...current,
       openTabs: orderedValidTabs([...current.openTabs, id], descriptors),
@@ -298,7 +298,14 @@ function InspectorHostState<Context>({
       visible: true,
     }));
     setMenuOpen(false);
-  };
+  }, [descriptors]);
+
+  useEffect(() => registerInspectorShortcutTarget((shortcut) => {
+    const descriptor = descriptors.find((candidate) => candidate.shortcut === shortcut);
+    if (!descriptor) return false;
+    openTab(descriptor.id);
+    return true;
+  }), [descriptors, openTab]);
 
   const toggleButton = (
     <button
@@ -319,7 +326,7 @@ function InspectorHostState<Context>({
   return (
     <div className="inspector-layout">
       <div className="inspector-layout__main">
-        {children({ visible: panelVisible, toggle, toggleButton })}
+        {children({ visible: panelVisible, toggle, openTab, toggleButton })}
       </div>
       {panelVisible && activeDescriptor && (
         <aside
@@ -365,6 +372,9 @@ function InspectorHostState<Context>({
                       role="tab"
                       aria-selected={active}
                       aria-controls={contentId}
+                      aria-label={descriptor.shortcut
+                        ? `${descriptor.title}，快捷键 ${inspectorShortcutLabel(descriptor.shortcut)}`
+                        : descriptor.title}
                       tabIndex={active ? 0 : -1}
                       title={descriptor.title}
                       onClick={() => setState((current) => ({ ...current, activeTab: descriptor.id }))}
@@ -390,19 +400,27 @@ function InspectorHostState<Context>({
                 ref={menuButton}
                 type="button"
                 className="inspector-host__add"
-                aria-label="打开 Inspector 面板"
+                aria-label="切换 Inspector 面板"
                 aria-haspopup="menu"
                 aria-expanded={menuOpen}
-                disabled={availableDescriptors.length === 0}
-                title={availableDescriptors.length > 0 ? "打开面板" : "所有面板均已打开"}
+                disabled={descriptors.length === 0}
+                title={descriptors.length > 0 ? "切换面板" : "没有可用面板"}
                 onClick={() => setMenuOpen((open) => !open)}
               >
                 <Plus size={14} weight="bold" aria-hidden="true" />
               </button>
               {menuOpen && (
                 <Menu className="inspector-host__menu">
-                  {availableDescriptors.map((descriptor) => (
-                    <MenuItem key={descriptor.id} onClick={() => openTab(descriptor.id)}>
+                  {descriptors.map((descriptor) => (
+                    <MenuItem
+                      key={descriptor.id}
+                      selected={descriptor.id === activeDescriptor?.id}
+                      shortcut={descriptor.shortcut ? inspectorShortcutLabel(descriptor.shortcut) : undefined}
+                      aria-label={descriptor.shortcut
+                        ? `${descriptor.title}，快捷键 ${inspectorShortcutLabel(descriptor.shortcut)}`
+                        : descriptor.title}
+                      onClick={() => openTab(descriptor.id)}
+                    >
                       <span className="inspector-host__menu-label">
                         <span aria-hidden="true">{descriptor.icon}</span>
                         {descriptor.title}

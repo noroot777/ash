@@ -29,7 +29,6 @@ import { DuetTaskDetail } from "@/components/DuetTaskDetail";
 import { TeamTaskDetail } from "@/components/team/TeamTaskDetail";
 import { WorkerTeamLink } from "@/components/WorkerTeamLink";
 import { MarkdownText } from "@/components/MarkdownText";
-import { PriorityBars } from "@/components/ui";
 import { SignalBar } from "@/components/SignalBar";
 import { SkillSuggestions } from "@/components/SkillSuggestions";
 import { DateTimeButton } from "@/components/DateTimeField";
@@ -437,12 +436,11 @@ export default function TaskDetail() {
             />
           ) : null}
 
-          {/* Metadata: agent + priority + labels */}
+          {/* Metadata: agent + labels */}
           <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
             {task.agentType ? (
               <Text style={{ color: theme.muted, fontSize: 12, fontFamily: fonts.mono }}>@{task.agentType}</Text>
             ) : null}
-            <PriorityBars priority={task.priority} />
             {task.labels.map((l) => (
               <Text key={l} style={{ color: theme.faint, fontSize: 12, fontFamily: fonts.mono }}>
                 #{l}

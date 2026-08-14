@@ -1,5 +1,7 @@
 @import "tailwindcss";
 @import "./controls.css";
+@import "./run-target-picker.css";
+@import "./slash-menu.css";
 @import "./conversation-scroll.css";
 @import "./image-preview.css";
 @import "./task-origin.css";
@@ -9,7 +11,13 @@
 @import "./terminal.css";
 @import "./sidebar-spread.css";
 @import "./task-detail.css";
+@import "./task-conversation.css";
+@import "./task-motion.css";
+@import "./task-reply.css";
+@import "./agent-run-meta.css";
 @import "./team.css";
+@import "./system-turn.css";
+@import "./reviewer-turn.css";
 @import "./inspector.css";
 @import "./team-review.css";
 @import "./review.css";
@@ -24,6 +32,7 @@
 @import "./reply.css";
 @import "./workflow.css";
 @import "./workflow-composer.css";
+@import "./free-workflow.css";
 @import "./parity.css";
 
 @theme {

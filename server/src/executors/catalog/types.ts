@@ -84,6 +84,26 @@ export interface CliParserContext {
 /** 输出解析器:把 CLI 的 stdout 变成事件流。缺省用 parsers.ts 的 textParser。 */
 export type CliParser = (ctx: CliParserContext) => AsyncIterable<AgentEvent>;
 
+/**
+ * 「问这个 CLI 自己现在有哪些模型」的命令。缺省 = 该 CLI 没有(或还没实测出)清单命令,
+ * 模型候选只能退回 shared 的 `CLI_MODEL_PRESETS` 这份发版快照(必然滞后)。填了它,
+ * `GET /agents/models` 才会现问 CLI,界面上的「刷新」也才有东西可刷。
+ *
+ * **只在本机实测过输出格式再填**:解析器按猜的写,失败是静默的(解析出空数组 → 悄悄
+ * 退回快照),比不填更难查。没实测就把线索写进 `notes`。
+ */
+export interface CliModelsSpec {
+  /** 查询用 argv,如 `["models"]`、`["--list-models"]`。 */
+  args: string[];
+  /** 默认 10s。登录态查询多半要一次网络往返,给够;卡住不该拖垮请求。 */
+  timeoutMs?: number;
+  /**
+   * stdout(+stderr)→ 模型 id 清单。**解析不出来就返回空数组**,由上层如实降级到快照,
+   * 别硬凑或抛异常。`defaultModel` 是 CLI 报告的默认值(会被排到候选首位),没有就省略。
+   */
+  parse: (stdout: string, stderr: string) => { models: string[]; defaultModel?: string | null };
+}
+
 /** 非交互一次性运行的命令构造。 */
 export interface CliExecSpec {
   /** 一次性非交互运行的子命令,如 codex 的 `["exec"]`;多数 CLI 直接跟 flag。 */
@@ -137,6 +157,12 @@ export interface CliCatalogEntry {
 /** 一个 CLI 的完整 spec。 */
 export interface CliSpec extends CliCatalogEntry {
   exec: CliExecSpec;
+  /**
+   * 「现问这个 CLI 有哪些模型」的命令(见 CliModelsSpec)。缺省 = 只有内置快照。
+   * 它跟 `exec` 是两回事:`exec` 是派活时怎么起进程,这个是**只读查询**,由
+   * `executors/model-probe.ts` 直接跑,不进任务时间线、不写会话。
+   */
+  models?: CliModelsSpec;
   /**
    * 自定义执行器。有 factory 就完全由它接管(claude 的常驻会话、codex 的诊断
    * 链路都在专用类里),此时 `exec` 只作说明与 resume 展示之用;没有 factory

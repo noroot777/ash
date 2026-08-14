@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>单档记号 icon 候选 — 无色版</title>
+<style>
+  :root {
+    color-scheme: light;
+    --chrome: lch(94.44% 0.5 282);
+    --canvas: lch(97.94% 0.5 282);
+    --raised: lch(96.914% 0 282);
+    --line: lch(90.55% 0 282);
+    --ink: lch(9.794% 0 282);
+    --muted: lch(39.176% 1.25 282);
+    --faint: lch(64.64% 1.25 282);
+    --green: #168466;
+    --red: #d93d4c;
+    --amber: #b57b00;
+    --hover-bg: lch(91.64% 0.5 282);
+    --sel-bg: lch(89.54% 0.5 282);
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    background: var(--chrome);
+    color: var(--ink);
+    font-family: "Inter", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    font-size: 13px;
+    font-weight: 450;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    padding: 22px 26px 30px;
+  }
+  button { font: inherit; color: inherit; cursor: pointer; border: 0; background: transparent; padding: 0; }
+
+  .page-head { margin: 0 0 4px; font-size: 15px; font-weight: 650; }
+  .page-sub { margin: 0 0 18px; color: var(--muted); font-size: 12.5px; }
+
+  .variants { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start; }
+  .variant {
+    width: 252px;
+    background: var(--canvas);
+    border-radius: 12px;
+    box-shadow: lch(0 0 0 / 0.05) 0 1px 2px, lch(0 0 0 / 0.06) 0 0 0 0.5px;
+    padding: 12px 10px 10px;
+  }
+  .variant h2 { margin: 0 2px 1px; display: flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 650; }
+  .variant h2 svg { color: var(--muted); }
+  .variant .caption { margin: 0 2px 9px; min-height: 34px; color: var(--muted); font-size: 11px; line-height: 1.6; }
+
+  .row-wrap {
+    position: relative;
+    display: grid;
+    min-height: 34px;
+    grid-template-columns: 22px minmax(0, 1fr);
+    align-items: center;
+    border-radius: 7px;
+  }
+  .row-wrap:hover:not(.is-selected) { background: var(--hover-bg); }
+  .row-wrap.is-selected { background: var(--sel-bg); }
+  .row-leading { display: grid; width: 22px; height: 34px; place-items: center; }
+  .row-btn {
+    position: relative;
+    display: flex; width: 100%; height: 34px; min-width: 0;
+    align-items: center; overflow: hidden;
+    padding: 0 8px 0 1px; text-align: left;
+  }
+  .row-title {
+    min-width: 0; flex: 1; overflow: hidden; white-space: nowrap;
+    color: color-mix(in lch, var(--ink) 52%, var(--muted));
+    font-size: 13px; font-weight: 400;
+    mask-image: linear-gradient(90deg, #000 calc(100% - 18px), transparent);
+    -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 18px), transparent);
+  }
+  .row-wrap:hover .row-title, .row-wrap.is-selected .row-title { color: var(--ink); }
+  .row-wrap:hover .row-title, .row-wrap:has(.row-mark-btn.is-set) .row-title {
+    mask-image: linear-gradient(90deg, #000 calc(100% - 48px), transparent calc(100% - 27px));
+    -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 48px), transparent calc(100% - 27px));
+  }
+
+  .dot { width: 7px; height: 7px; border-radius: 50%; }
+  .dot--quiet { background: transparent; border: 1px solid color-mix(in lch, var(--faint) 72%, transparent); }
+  .dot--active { background: var(--muted); animation: pulse 1.35s ease-in-out infinite; }
+  .dot--attention { background: var(--amber); }
+  .dot--success { background: var(--green); }
+  .dot--error { background: var(--red); }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+
+  /* 记号:已标 = 中性灰常驻;未标 = hover 才浮出的更淡入口 */
+  .row-mark-btn {
+    position: absolute; z-index: 2;
+    top: 50%; right: 5px; transform: translateY(-50%);
+    display: grid; place-items: center;
+    width: 22px; height: 24px; border-radius: 6px;
+    opacity: 0; transition: opacity 120ms ease-out;
+    color: var(--faint);
+  }
+  .row-mark-btn svg { display: block; }
+  .row-mark-btn.is-set { opacity: 1; color: var(--muted); }
+  .row-wrap:hover .row-mark-btn { opacity: 1; }
+  .row-mark-btn:hover { background: color-mix(in lch, var(--ink) 8%, transparent); color: var(--muted); }
+
+  .footnote { margin-top: 16px; color: var(--faint); font-size: 11.5px; }
+</style>
+</head>
+<body>
+
+<h1 class="page-head">单档记号:icon 候选(无色)</h1>
+<p class="page-sub">都是「点一下标、再点取消」,已标的常驻行尾(中性灰),未标的 hover 才浮出。每列独立,可分别点着玩。</p>
+
+<div class="variants" id="variants"></div>
+
+<p class="footnote">同一图形同时用在:行尾记号、详情页 header 按钮、(以后如果做)筛选入口。</p>
+
+<script>
+// 候选 icon:全部 16x16、笔画感对齐 phosphor
+const ICONS = {
+  bookmark: {
+    name: "书签",
+    caption: "「回头看」的经典隐喻,形状在 13px 下最清楚。",
+    svg: (s) => `<svg width="${s}" height="${s}" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M4.75 1.75h6.5a1 1 0 0 1 1 1v11.06a.5.5 0 0 1-.79.41L8 11.62l-3.46 2.6a.5.5 0 0 1-.79-.4V2.75a1 1 0 0 1 1-1Z"/></svg>`,
+  },
+  star: {
+    name: "星星",
+    caption: "通用「重点」,一眼可认;语义略偏「收藏/喜欢」。",
+    svg: (s) => `<svg width="${s}" height="${s}" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 1.9c.19 0 .36.11.44.28l1.72 3.5 3.86.56c.4.06.55.55.26.83l-2.79 2.72.66 3.84a.49.49 0 0 1-.71.52L8 12.33l-3.44 1.82a.49.49 0 0 1-.71-.52l.66-3.84-2.79-2.72a.49.49 0 0 1 .26-.83l3.86-.56 1.72-3.5A.49.49 0 0 1 8 1.9Z"/></svg>`,
+  },
+  asterisk: {
+    name: "星号 ✱",
+    caption: "纯记号,不带任何具体隐喻,最中性。",
+    svg: (s) => `<svg width="${s}" height="${s}" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><path d="M8 2.6v10.8M3.32 5.3l9.36 5.4M12.68 5.3 3.32 10.7"/></svg>`,
+  },
+  flag: {
+    name: "旗子",
+    caption: "上一版的形状,只是去了颜色,对照用。",
+    svg: (s) => `<svg width="${s}" height="${s}" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M3.75 1.25c.41 0 .75.34.75.75v.42c1.5-.66 3.02-.71 4.57-.2 1.5.5 2.88.44 4.18-.16.5-.23 1.05.13 1.05.68v6.07c0 .32-.18.62-.47.77-1.6.84-3.37.94-5.26.31-1.4-.46-2.74-.39-4.07.22V14a.75.75 0 0 1-1.5 0V2c0-.41.34-.75.75-.75Z"/></svg>`,
+  },
+  tag: {
+    name: "标签",
+    caption: "偏「分类」隐喻;斜置小孔,小尺寸下稍碎。",
+    svg: (s) => `<svg width="${s}" height="${s}" viewBox="0 0 16 16" fill="currentColor" fill-rule="evenodd" aria-hidden="true"><path d="M3.75 2.75h4.13c.27 0 .52.11.71.29l5.24 5.24a1 1 0 0 1 0 1.42l-3.83 3.83a1 1 0 0 1-1.42 0L3.34 8.29a1 1 0 0 1-.29-.7V3.45a.7.7 0 0 1 .7-.7Zm2.3 2.2a1.15 1.15 0 1 0 0 2.3 1.15 1.15 0 0 0 0-2.3Z"/></svg>`,
+  },
+  clock: {
+    name: "时钟",
+    caption: "「稍后处理」隐喻最贴;笔画多,13px 下略糊。",
+    svg: (s) => `<svg width="${s}" height="${s}" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="8" cy="8" r="5.65"/><path d="M8 5.1V8l2.1 1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
+  },
+};
+
+const BASE_TASKS = [
+  { title: "worktree-agent-survives-restart 验收", status: "success", marked: true },
+  { title: "着色功能 UI 讨论", status: "attention", marked: false, selected: true },
+  { title: "review note + enter 快捷键", status: "success", marked: false },
+  { title: "inspector tab 快捷键", status: "success", marked: true },
+  { title: "任务按最后更新排序,去掉优先级", status: "quiet", marked: false },
+  { title: "duet 合稿轮兼容层", status: "error", marked: true },
+  { title: "移动端会话轮询降频", status: "quiet", marked: false },
+];
+
+const state = Object.entries(ICONS).map(([key, icon]) => ({
+  key, icon,
+  tasks: BASE_TASKS.map((task) => ({ ...task })),
+}));
+
+const rootEl = document.getElementById("variants");
+function renderAll() {
+  rootEl.innerHTML = "";
+  for (const column of state) {
+    const section = document.createElement("section");
+    section.className = "variant";
+    section.innerHTML = `<h2>${column.icon.svg(14)}${column.icon.name}</h2><p class="caption">${column.icon.caption}</p>`;
+    for (const task of column.tasks) {
+      const wrap = document.createElement("div");
+      wrap.className = "row-wrap" + (task.selected ? " is-selected" : "");
+      wrap.innerHTML = `
+        <span class="row-leading"><i class="dot dot--${task.status}"></i></span>
+        <button class="row-btn" type="button"><span class="row-title">${task.title}</span></button>
+        <button class="row-mark-btn${task.marked ? " is-set" : ""}" type="button"
+          aria-pressed="${task.marked}"
+          title="${task.marked ? "取消记号" : "加记号"}">${column.icon.svg(13)}</button>`;
+      wrap.querySelector(".row-btn").addEventListener("click", () => {
+        column.tasks.forEach((item) => { item.selected = item === task; });
+        renderAll();
+      });
+      wrap.querySelector(".row-mark-btn").addEventListener("click", (event) => {
+        event.stopPropagation();
+        task.marked = !task.marked;
+        renderAll();
+      });
+      section.appendChild(wrap);
+    }
+    rootEl.appendChild(section);
+  }
+}
+renderAll();
+</script>
+</body>
+</html>
