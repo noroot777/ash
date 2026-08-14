@@ -253,7 +253,8 @@ code, kbd { font-family: var(--mono); }
 .task-state.is-failed { color: var(--red); }
 .task-state.is-failed i { background: var(--red); box-shadow: 0 0 0 2px var(--red-soft); }
 .primary-action,
-.back-action {
+.back-action,
+.acceptance-result-action {
   display: inline-flex;
   height: 29px;
   align-items: center;
@@ -268,8 +269,10 @@ code, kbd { font-family: var(--mono); }
 }
 .primary-action svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.8; }
 .primary-action:disabled { border-color: var(--line-strong); background: var(--raised); color: var(--faint); cursor: default; }
-.back-action { border-color: var(--line-strong); background: var(--panel); color: var(--muted); }
-.back-action:hover { background: var(--raised); color: var(--ink); }
+.back-action,
+.acceptance-result-action { border-color: var(--line-strong); background: var(--panel); color: var(--muted); }
+.back-action:hover,
+.acceptance-result-action:hover { background: var(--raised); color: var(--ink); }
 
 .conversation-view { display: flex; min-height: 0; flex: 1; flex-direction: column; background: var(--canvas); }
 .conversation-feed { width: min(680px, calc(100% - 40px)); margin: 0 auto; flex: 1; padding: 42px 0 28px; }
@@ -566,7 +569,8 @@ code, kbd { font-family: var(--mono); }
 @media (max-width: 560px) {
   .task-heading small,
   .more-button,
-  .back-action span { display: none; }
+  .back-action span,
+  .acceptance-result-action { display: none; }
   .acceptance-subbar { align-items: flex-start; flex-direction: column; }
   .acceptance-actions,
   .post-accept-actions { width: 100%; }

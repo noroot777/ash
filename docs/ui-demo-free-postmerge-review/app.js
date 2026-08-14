@@ -5,7 +5,10 @@ const el = {
   conversationView: $("#conversationView"),
   acceptanceView: $("#acceptanceView"),
   openAcceptance: $("#openAcceptance"),
+  openAcceptanceResult: $("#openAcceptanceResult"),
   primaryLabel: $("#primaryLabel"),
+  acceptIcon: $("#acceptIcon"),
+  headerReviewIcon: $("#headerReviewIcon"),
   backConversation: $("#backConversation"),
   taskState: $("#taskState"),
   sideStatus: $("#sideStatus"),
@@ -160,9 +163,18 @@ function render() {
   el.conversationView.classList.toggle("is-hidden", acceptanceOpen);
   el.acceptanceView.classList.toggle("is-hidden", !acceptanceOpen);
   el.openAcceptance.classList.toggle("is-hidden", acceptanceOpen);
+  el.openAcceptanceResult.classList.toggle("is-hidden", acceptanceOpen || !accepted);
   el.backConversation.classList.toggle("is-hidden", !acceptanceOpen);
   el.openAcceptance.disabled = accepting;
-  el.primaryLabel.textContent = accepted ? "验收结果" : accepting ? "验收中" : "验收";
+  el.acceptIcon.classList.toggle("is-hidden", accepted);
+  el.headerReviewIcon.classList.toggle("is-hidden", !accepted);
+  el.primaryLabel.textContent = !accepted
+    ? accepting ? "验收中" : "验收"
+    : reviewStatus === "reviewing"
+      ? "查看审查进度"
+      : reviewStatus === "idle"
+        ? "审查合并结果"
+        : "查看合并审查";
 
   el.taskState.className = `task-state${stateClass ? ` ${stateClass}` : ""}`;
   el.taskState.querySelector("b").textContent = stateLabel;
@@ -222,6 +234,20 @@ function reset() {
 }
 
 el.openAcceptance.addEventListener("click", () => {
+  if (!accepted) {
+    acceptanceOpen = true;
+    render();
+    return;
+  }
+  if (reviewStatus === "idle") {
+    openDialog(el.postReviewDialog);
+    return;
+  }
+  acceptanceOpen = true;
+  render();
+});
+
+el.openAcceptanceResult.addEventListener("click", () => {
   acceptanceOpen = true;
   render();
 });
@@ -249,6 +275,7 @@ el.reviewMergedButton.addEventListener("click", () => openDialog(el.postReviewDi
 $("#confirmPostReview").addEventListener("click", () => {
   closeDialog(el.postReviewDialog);
   reviewStatus = "reviewing";
+  acceptanceOpen = true;
   render();
   el.reviewRun.scrollIntoView({ behavior: "smooth", block: "center" });
   showToast("已在 main@8f41c2d 的临时只读 worktree 启动审查");

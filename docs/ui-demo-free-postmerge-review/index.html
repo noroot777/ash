@@ -64,9 +64,11 @@
           </div>
           <span class="task-state" id="taskState"><i></i><b>已完成</b></span>
           <button type="button" class="primary-action" id="openAcceptance">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"></circle><path d="m8.5 12 2.2 2.2 4.8-5"></path></svg>
+            <svg id="acceptIcon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"></circle><path d="m8.5 12 2.2 2.2 4.8-5"></path></svg>
+            <svg class="is-hidden" id="headerReviewIcon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"></circle><path d="m15.5 15.5 4 4"></path></svg>
             <span id="primaryLabel">验收</span>
           </button>
+          <button type="button" class="acceptance-result-action is-hidden" id="openAcceptanceResult">验收结果</button>
           <button type="button" class="back-action is-hidden" id="backConversation">× <span>返回对话</span></button>
           <button type="button" class="more-button" aria-label="更多">•••</button>
         </header>
