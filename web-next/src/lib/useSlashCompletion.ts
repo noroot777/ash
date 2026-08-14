@@ -74,5 +74,5 @@ export function useSlashCompletion({
     return false;
   };
 
-  return { open, items, selectedIndex, setIndex, pick, onKeyDown, onValueChange };
+  return { open, items, selectedIndex, setIndex, pick, onKeyDown, onValueChange, token };
 }

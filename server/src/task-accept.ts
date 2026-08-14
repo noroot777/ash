@@ -7,7 +7,7 @@ import { STAGE_LABELS } from "@harness/shared";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
 import { projects, tasks } from "./db/schema.js";
-import { handOffConflict } from "./accept-conflict.js";
+import { flushConflictHandoff, handOffConflict } from "./accept-conflict.js";
 import { localBranchExists, resolveTaskMergeTarget } from "./git.js";
 import { cleanupAcceptedTask, cleanupPlanFor, isAncestor, mergeTaskBranch } from "./git-accept.js";
 import { hasActiveFreeReview } from "./free-workflow.js";
@@ -608,6 +608,9 @@ export async function acceptTask(
     }
   } finally {
     endAccepting(taskId);
+    // 撞冲突时登记的「叫任务自己去解」必须**在验收锁释放之后**才发:锁还锁着时
+    // continueTask 会因验收互斥静默退避(accept-conflict.ts 顶部注释)。
+    flushConflictHandoff(taskId);
   }
   return result;
 }

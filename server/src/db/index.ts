@@ -128,6 +128,8 @@ export async function ensureSchema() {
       task_id TEXT PRIMARY KEY, selected_reviewer_id TEXT,
       review_armed INTEGER NOT NULL DEFAULT 0, review_check_mode TEXT,
       review_retry_limit INTEGER, review_note TEXT, review_run_id TEXT,
+      review_agent_type TEXT, review_executor_id TEXT,
+      review_model TEXT, review_reasoning_effort TEXT,
       updated_at TEXT NOT NULL
     );
     CREATE TABLE IF NOT EXISTS free_workflow_events (
@@ -261,6 +263,11 @@ export async function ensureSchema() {
     "ALTER TABLE free_workflow_states ADD COLUMN review_retry_limit INTEGER",
     "ALTER TABLE free_workflow_states ADD COLUMN review_note TEXT",
     "ALTER TABLE free_workflow_states ADD COLUMN review_run_id TEXT",
+    // 预约里「这次换个模型/智能水平跑」的覆盖（不改审查者配置本身）。
+    "ALTER TABLE free_workflow_states ADD COLUMN review_agent_type TEXT",
+    "ALTER TABLE free_workflow_states ADD COLUMN review_executor_id TEXT",
+    "ALTER TABLE free_workflow_states ADD COLUMN review_model TEXT",
+    "ALTER TABLE free_workflow_states ADD COLUMN review_reasoning_effort TEXT",
     "ALTER TABLE free_review_runs ADD COLUMN note TEXT",
     "ALTER TABLE free_review_rounds ADD COLUMN reviewed_commit TEXT",
     // 统一验收的结构化合并落账（目标分支 + 合并前后 commit），合并后基线审查靠它。

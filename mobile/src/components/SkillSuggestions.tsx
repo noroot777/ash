@@ -24,6 +24,19 @@ export function slashToken(text: string): string | null {
   return /^\s*(\/\S*)$/.exec(text)?.[1]?.toLowerCase() ?? null;
 }
 
+/**
+ * 敲的这几个字落在命令名的第几位;-1 = 不匹配。
+ *
+ * 是**子串**匹配而不是前缀匹配:技能名的关键词经常不在开头(插件前缀 `codex:rescue`、
+ * 动宾结构 `high-end-visual-design`),从头匹配等于逼人先背全名。桌面那份在
+ * `web-next/src/lib/useSkills.ts`,两边口径要一致。
+ */
+export function slashMatchIndex(command: string, token: string): number {
+  const needle = token.replace(/^\/+/, "").toLowerCase();
+  if (!needle) return 0;
+  return command.toLowerCase().replace(/^\/+/, "").indexOf(needle);
+}
+
 export function SkillSuggestions({
   agentType,
   projectId,
@@ -73,8 +86,13 @@ export function SkillSuggestions({
       </Text>
     );
   }
-  const matches = state.skills.filter((skill) => skill.command.toLowerCase().startsWith(token));
+  // 命中位置升序:前缀命中排在中段命中前面;位置相同的保持原顺序(sort 稳定)。
+  const matches = state.skills
+    .map((skill) => ({ skill, at: slashMatchIndex(skill.command, token) }))
+    .filter((row) => row.at >= 0)
+    .sort((a, b) => a.at - b.at);
   if (!matches.length) return null;
+  const needle = token.replace(/^\/+/, "");
 
   return (
     <View style={{ gap: 6 }}>
@@ -88,7 +106,10 @@ export function SkillSuggestions({
         keyboardShouldPersistTaps="always"
         contentContainerStyle={{ gap: 6, paddingRight: 12 }}
       >
-        {matches.map((skill) => (
+        {matches.map(({ skill, at }) => {
+          // 命中的那几个字加粗:命中常落在名字中段,不标就看不出这条为什么在带子里。
+          const start = at + skill.command.length - skill.command.replace(/^\/+/, "").length;
+          return (
           <Pressable
             key={`${skill.source}:${skill.command}`}
             onPress={() => onPick(skill.command)}
@@ -104,7 +125,9 @@ export function SkillSuggestions({
             }}
           >
             <Text style={{ color: theme.accent, fontSize: 13, fontFamily: fonts.mono }}>
-              {skill.command}
+              {skill.command.slice(0, start)}
+              <Text style={{ fontWeight: "700" }}>{skill.command.slice(start, start + needle.length)}</Text>
+              {skill.command.slice(start + needle.length)}
             </Text>
             {!!skill.description && (
               <Text numberOfLines={1} style={{ flexShrink: 1, color: theme.muted, fontSize: 12 }}>
@@ -113,7 +136,8 @@ export function SkillSuggestions({
             )}
             <Text style={{ color: theme.faint, fontSize: 10 }}>{SOURCE_LABEL[skill.source]}</Text>
           </Pressable>
-        ))}
+          );
+        })}
       </ScrollView>
     </View>
   );

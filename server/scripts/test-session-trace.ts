@@ -48,6 +48,23 @@ try {
     kind: "attachment",
     path: "/tmp/data/uploads/agent-result.png",
   });
+
+  // 就地验证轮:run 事件多带一个轮次号。它是会话里唯一能把审查者的发言跟实现回合
+  // 分开的信号(两者常跑在同一条会话上),落盘丢了它,读端就只能显示成同一个人接着说。
+  appendSessionTrace(taskId, sessionId, "2026-08-01T02:00:00.000Z", {
+    kind: "run",
+    model: "gpt-5.6-sol",
+    reasoningEffort: "xhigh",
+    verifyRound: 2,
+  }, "2026-08-01T02:00:00.000Z");
+  const withVerify = parseSessionTrace(readFileSync(path, "utf8"));
+  assert.deepEqual(withVerify.at(-1)?.event, {
+    kind: "run",
+    model: "gpt-5.6-sol",
+    reasoningEffort: "xhigh",
+    verifyRound: 2,
+  });
+
   console.log("会话执行轨迹持久化验证通过");
 } finally {
   rmSync(dirname(path), { recursive: true, force: true });

@@ -247,7 +247,8 @@ export function TaskComposerPanel({
     executorId: slashRun.executorId,
     enabled: mode !== "duet",
   });
-  const slashCandidates = mergeSlashItems(HARNESS_SLASH_ITEMS, skills.skills, slashDismissed ? null : slashToken(body));
+  const slashQuery = slashDismissed ? null : slashToken(body);
+  const slashCandidates = mergeSlashItems(HARNESS_SLASH_ITEMS, skills.skills, slashQuery);
   const slashSelected = Math.min(slashIndex, Math.max(0, slashCandidates.length - 1));
   const pickSlash = (item: SlashItem) => {
     const harness = SLASHES.find((entry) => entry.command === item.command);
@@ -603,6 +604,7 @@ export function TaskComposerPanel({
                   : "↑↓ 选择，回车确认，Esc 关闭"}
                 items={slashCandidates}
                 selectedIndex={slashSelected}
+                token={slashQuery}
                 onHover={setSlashIndex}
                 onPick={pickSlash}
               />

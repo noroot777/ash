@@ -3,7 +3,7 @@ import type { Session, Task } from "@harness/shared";
 import { taskDisplayStatus } from "@harness/shared";
 import { acceptPlan, hasAcceptStation, isFinalHumanGate, nextAnchor } from "@harness/shared/workflow-policy";
 import { STEP_LABELS } from "@harness/shared/workflow";
-import { ArrowsClockwise, CaretDown, CheckCircle, SpinnerGap, WarningCircle, X } from "@phosphor-icons/react";
+import { ArrowsClockwise, CaretDown, CheckCircle, SpinnerGap, WarningCircle } from "@phosphor-icons/react";
 import { TaskStatusDot } from "../components/TaskStatusDot.tsx";
 import { api, type AcceptTaskFailure, type TaskCommit, type TaskDiffResult } from "../lib/api.ts";
 import type { IndicatorForTask } from "../lib/useTaskReadState.ts";
@@ -338,7 +338,6 @@ function ReviewRecord({
 export function TeamReviewWorkspace({
   lead,
   workers,
-  onClose,
   onTaskUpdated,
   indicatorForTask,
   onReadTask,
@@ -346,7 +345,6 @@ export function TeamReviewWorkspace({
 }: {
   lead: Task;
   workers: Task[];
-  onClose: () => void;
   onTaskUpdated: (task: Task) => void;
   indicatorForTask: IndicatorForTask;
   onReadTask: (task: Task) => void;
@@ -373,7 +371,6 @@ export function TeamReviewWorkspace({
       <header className="team-review-subbar">
         <div><b>团队验收台</b><small>{sharedNote}</small></div>
         <AcceptanceControls task={lead} onTaskUpdated={onTaskUpdated} notify={notify} acceptanceBlock={leadAcceptanceBlock} />
-        <button type="button" onClick={onClose}><X size={13} />返回团队流</button>
       </header>
       <div className="team-review-scroll">
         <div className="team-review-stack">

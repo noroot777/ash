@@ -289,14 +289,16 @@ try {
   assert.equal(reserved.status, 200);
   let reservedState = await reserved.json() as { reviewReservation: { armed: boolean; checkMode: string | null; retryLimit: number | null; note: string | null } };
   assert.deepEqual(reservedState.reviewReservation, {
-    armed: true, reviewerId: reviewer.id, checkMode: "logic", retryLimit: 1, note: "重点检查窄屏布局", runId: null,
+    armed: true, reviewerId: reviewer.id, checkMode: "logic", retryLimit: 1, note: "重点检查窄屏布局",
+    override: null, runId: null,
   });
 
   reserved = await reserveReview("syntax", 2, "检查预约覆盖");
   assert.equal(reserved.status, 200);
   reservedState = await reserved.json() as typeof reservedState;
   assert.deepEqual(reservedState.reviewReservation, {
-    armed: true, reviewerId: reviewer.id, checkMode: "syntax", retryLimit: 2, note: "检查预约覆盖", runId: null,
+    armed: true, reviewerId: reviewer.id, checkMode: "syntax", retryLimit: 2, note: "检查预约覆盖",
+    override: null, runId: null,
   }, "重复预约应覆盖同一份配置与附言");
 
   const canceledReservation = await api.request("/tasks/free-reservation-task/free-workflow/review-reservation", { method: "DELETE" });
@@ -350,7 +352,7 @@ try {
   const afterDeleteState = await api.request("/tasks/free-deleted-reviewer-task/free-workflow").then((response) => response.json()) as {
     reviewReservation: { armed: boolean; reviewerId: string | null };
   };
-  assert.deepEqual(afterDeleteState.reviewReservation, { armed: false, reviewerId: null, checkMode: null, retryLimit: null, note: null, runId: null },
+  assert.deepEqual(afterDeleteState.reviewReservation, { armed: false, reviewerId: null, checkMode: null, retryLimit: null, note: null, override: null, runId: null },
     "删除审查者后预约必须取消，不能留下 armed 且 reviewerId 为空");
 
   await db.update(tasks).set({ status: "done" }).where(eq(tasks.id, "free-deleted-reviewer-task"));

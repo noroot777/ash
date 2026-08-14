@@ -133,8 +133,8 @@ export function ReplyBox({
     resetComposerState();
   }, [command?.resetKey, task.id]);
 
-  // 任务从「在跑」变成别的状态 = 排着的那条这会儿已经被投递进会话了（服务端在结算
-  // 那一刻就发）。托盘得跟着少一行，否则它会一直挂在那儿像是没发出去。
+  // 托盘该少一行由服务端的 task.pendingMessages 事件说了算（useScheduledMessages 里
+  // 订阅）。这里只留一道兜底：SSE 断过线时，任务从「在跑」变成别的状态也重拉一次。
   const wasQueueing = useRef(queueing);
   useEffect(() => {
     if (wasQueueing.current && !queueing) void scheduled.reload({ quiet: true });
@@ -318,6 +318,7 @@ export function ReplyBox({
             : `${firstSkillIndex === 0 ? "技能" : "派生命令与技能"} · ↑↓ 选择，回车${selectedIsSkill ? "补全" : "确认"}，Esc 取消`}
           items={candidates}
           selectedIndex={selectedIndex}
+          token={slashToken(value)}
           onHover={setCommandIndex}
           onPick={pickCommand}
         />

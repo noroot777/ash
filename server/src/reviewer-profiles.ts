@@ -123,6 +123,11 @@ export function mountReviewerProfileRoutes(api: Hono): void {
       selectedReviewerId: null,
       reviewArmed: false,
       reviewNote: null,
+      // 覆盖是「相对这位审查者的这一次改动」，审查者没了它就没有参照系，跟着预约一起清。
+      reviewAgentType: null,
+      reviewExecutorId: null,
+      reviewModel: null,
+      reviewReasoningEffort: null,
       updatedAt: at,
     }).where(and(eq(freeWorkflowStates.selectedReviewerId, profileId), isNull(freeWorkflowStates.reviewRunId)));
     await db.update(freeWorkflowStates).set({

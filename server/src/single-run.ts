@@ -217,8 +217,13 @@ export async function consumeSingleRun(a: {
   // 自由工作流时间线上就多出一条凭空的「任务执行 · 已完成」(第 2 轮审查 finding 7)。
   // 读的是 tasks.native_turn 而不是新加一个入参:结算那边(settleTaskStatus)看的就是
   // 这一列,同一个真相来源,重启后被接管的那一轮也照样认得出来。
-  const nativeTurn = !!(await db.select({ nativeTurn: tasks.nativeTurn })
-    .from(tasks).where(eq(tasks.id, taskId))).at(0)?.nativeTurn;
+  // verify_round 同理**从库里读**而不是让调用方传:三条起跑路径(fresh run / continueTask /
+  // 重启接回)都汇到这儿,由库来答就不会漏标其中一条。验证中途提问、答复回来续跑的那一
+  // 回合库里仍挂着轮次号,于是它照样归这一轮验证——跟 orchestrator 的 sideTurn 判据同源。
+  const taskRow = (await db.select({ nativeTurn: tasks.nativeTurn, verifyRound: tasks.verifyRound })
+    .from(tasks).where(eq(tasks.id, taskId))).at(0);
+  const nativeTurn = !!taskRow?.nativeTurn;
+  const verifyRound = taskRow?.verifyRound ?? null;
   const executionEventId = role === "single" && !nativeTurn
     ? await recordFreeTaskExecutionStartIfFree(taskId, a.turnStart).catch((error) => {
         console.warn(`[harness] failed to record free workflow execution start for ${taskId}:`, error);
@@ -241,7 +246,11 @@ export async function consumeSingleRun(a: {
   let titleDone = !a.autoTitle; // when autoTitle, swallow text until the title line is parsed
   let head = "";
   let pendingTraceText = "";
-  const runMeta = { model: ex.model ?? null, reasoningEffort: ex.reasoningEffort ?? null };
+  const runMeta = {
+    model: ex.model ?? null,
+    reasoningEffort: ex.reasoningEffort ?? null,
+    ...(verifyRound ? { verifyRound } : {}),
+  };
   appendSessionTrace(taskId, sessId, a.turnStart, { kind: "run", ...runMeta });
   const publishEvent = (event: AgentEvent) => bus.publish({
     type: "agent.event", taskId, sessionId: sessId, role, agentType, ...runMeta, event,

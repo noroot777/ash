@@ -33,7 +33,7 @@ import { mountTaskRetryTurnRoutes } from "./task-retry-turn.js";
 import { mountTaskScheduleRoutes } from "./task-schedule-routes.js";
 import { mountTaskSessionRoutes } from "./task-session-routes.js";
 import { RUNS_DIR } from "./paths.js";
-import { enqueueMessage } from "./pending-messages.js";
+import { enqueueMessage, publishPendingMessages } from "./pending-messages.js";
 import { isOvertaken, queueBlockers, repackQueue, tailOrder } from "./queues.js";
 import { claimTurn, confirmDone, releaseTurn, stopTask } from "./runs.js";
 import { advanceQueue } from "./scheduler.js";
@@ -546,6 +546,7 @@ api.delete("/scheduled-messages/:mid", async (c) => {
   if (!canceled.length) {
     return c.json({ error: "消息刚被开始投递或已发送，本次取消未生效" }, 409);
   }
+  publishPendingMessages(m.taskId);
   return c.json({ canceled: true });
 });
 

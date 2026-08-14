@@ -1,5 +1,5 @@
 import { useRef } from "react";
-import { Copy, File } from "@phosphor-icons/react";
+import { Copy, File, ShieldCheck } from "@phosphor-icons/react";
 import type { Session, Task } from "@harness/shared";
 import { runActivityExecutor, runActivityPhase, runActivityTail } from "@harness/shared/run-activity";
 import type { ConversationItem } from "./conversationModel.ts";
@@ -19,6 +19,17 @@ function copyText(text: string) {
   void navigator.clipboard.writeText(text);
 }
 
+// 审查者的身份标：这一回合不是在做需求，是在验收刚才的产物。就地验证跑在被验任务
+// 自己的会话里（常常还是同一个执行器），不标出来的话它跟上一条实现回合长得一模一样。
+function ReviewerBadge({ round }: { round: number | null }) {
+  return (
+    <span className="verify-badge">
+      <ShieldCheck size={11} weight="fill" aria-hidden="true" />
+      审查者{round ? ` · 第 ${round} 轮` : ""}
+    </span>
+  );
+}
+
 function AgentMessage({
   item,
   retry,
@@ -28,15 +39,23 @@ function AgentMessage({
   retry?: React.ReactNode;
 }) {
   const duration = durationBetween(item.at, item.endedAt);
+  const reviewer = item.reviewer;
   return (
-    <article className="task-message task-message--agent">
-      <span className="task-message-avatar" aria-hidden="true">{item.label.slice(0, 1).toUpperCase()}</span>
+    <article
+      className={`task-message task-message--agent${item.continuation ? " is-continuation" : ""}${reviewer ? " is-reviewer" : ""}`}
+    >
+      <span className="task-message-avatar" aria-hidden="true">
+        {item.continuation ? "" : reviewer ? <ShieldCheck size={13} weight="fill" /> : item.label.slice(0, 1).toUpperCase()}
+      </span>
       <div className="task-message-content">
         <header>
-          <span className="agent-run-identity">
-            <b>{item.label}</b>
-            <AgentRunMeta run={item.run} />
-          </span>
+          {!item.continuation && (
+            <span className="agent-run-identity">
+              <b>{item.label}</b>
+              <AgentRunMeta run={item.run} />
+            </span>
+          )}
+          {reviewer && !item.continuation && <ReviewerBadge round={reviewer.round} />}
           {item.at && <time>{formatInstant(item.at)}</time>}
           {duration && (
             <small className="task-turn-duration" title={`开始 ${formatInstant(item.at)} · 结束 ${formatInstant(item.endedAt)}`}>
@@ -153,12 +172,25 @@ export function ConversationFeed({
               );
             }
             if (item.kind === "user") return <UserMessage key={item.id} item={item} />;
+            // 回合边界才配得上一条横贯的分隔线；系统旁注只是贴在会话边上的一行小字，
+            // 它不该看起来像「这里换了一段对话」。
+            if (item.variant === "boundary") {
+              return (
+                <div className={`task-event-line${item.tone === "error" ? " is-error" : ""}`} key={item.id}>
+                  <span />
+                  <p>{item.text}{item.at ? ` · ${formatInstant(item.at)}` : ""}</p>
+                  <span />
+                </div>
+              );
+            }
             return (
-              <div className={`task-event-line${item.tone === "error" ? " is-error" : ""}`} key={item.id}>
-                <span />
-                <p>{item.text}{item.at ? ` · ${formatInstant(item.at)}` : ""}</p>
-                <span />
-              </div>
+              <p
+                className={`conversation-note${item.tone === "error" ? " is-error" : ""}${item.verify ? " is-verify" : ""}`}
+                key={item.id}
+              >
+                {item.text}
+                {item.at && <time>{formatInstant(item.at)}</time>}
+              </p>
             );
           })}
           {activityPhase && !loading && !error && (

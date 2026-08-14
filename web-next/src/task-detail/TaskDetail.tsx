@@ -302,6 +302,7 @@ export function TaskDetail({
               conversationMarkdown={markdown}
               busy={busy}
               refreshing={conversation.refreshing}
+              reviewOpen={reviewOpen}
               onTitle={(title) => patch({ title, autoTitle: false })}
               onTogglePin={() => patch({ pinnedAt: task.pinnedAt != null ? null : Date.now() })}
               onPrimary={(action) => void perform(action)}
@@ -316,7 +317,7 @@ export function TaskDetail({
               notify={notify}
             />
             {reviewOpen ? (
-              <TaskReviewWorkspace task={task} allTasks={allTasks} onClose={() => changeReviewOpen(false)} onTaskUpdated={onTaskUpdate} notify={notify} />
+              <TaskReviewWorkspace task={task} allTasks={allTasks} onTaskUpdated={onTaskUpdate} notify={notify} />
             ) : openFilePath ? (
               <FileViewer
                 taskId={task.id}

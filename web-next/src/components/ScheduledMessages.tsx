@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, type RefObject } from "react"
 import type { ScheduledMessage } from "@harness/shared";
 import { Clock, Queue, SpinnerGap, X } from "@phosphor-icons/react";
 import { api } from "../lib/api.ts";
+import { useServerEvents } from "../lib/events.ts";
 import { useDismissable } from "../lib/useDismissable.ts";
 import { toLocalDateTime } from "./ScheduleControl.tsx";
 import { formatInstant } from "../task-detail/utils.ts";
@@ -54,6 +55,14 @@ export function useScheduledMessages(taskId: string) {
   const add = useCallback((message: ScheduledMessage) => {
     setMessages((current) => bySendTime([...current.filter((item) => item.id !== message.id), message]));
   }, []);
+
+  // 托盘该少一行的唯一权威信号:服务端在入队/投递/取消时发的 task.pendingMessages。
+  // 排队消息一发出去任务立刻又回到 running,「任务不在跑了」那个空档前端常常一次都
+  // 看不到 —— 靠它反推就会把已经进了会话的消息一直挂在托盘上。
+  useServerEvents((event) => {
+    if (event.type !== "task.pendingMessages" || event.taskId !== taskId) return;
+    void reload({ quiet: true });
+  });
 
   const cancel = useCallback(async (messageId: string) => {
     setCancelingIds((current) => new Set(current).add(messageId));

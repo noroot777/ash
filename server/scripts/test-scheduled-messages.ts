@@ -41,7 +41,7 @@ printf '%s\\n' '{"type":"result","subtype":"success","session_id":"scheduled-mes
   { mode: 0o755 },
 );
 
-const [{ db, ensureSchema }, schema, schedulesModule, pending, runs, status, transcript, paths] = await Promise.all([
+const [{ db, ensureSchema }, schema, schedulesModule, pending, runs, status, transcript, paths, { bus }] = await Promise.all([
   import("../src/db/index.js"),
   import("../src/db/schema.js"),
   import("../src/schedules.js"),
@@ -50,9 +50,19 @@ const [{ db, ensureSchema }, schema, schedulesModule, pending, runs, status, tra
   import("../src/status.js"),
   import("../src/transcript.js"),
   import("../src/paths.js"),
+  import("../src/bus.js"),
 ]);
 const { projects, scheduledMessages, sessions, tasks } = schema;
 await ensureSchema();
+
+// 托盘靠这条事件收口。**没有它,前端只能从任务状态跃迁里猜**:排队消息一发出去任务
+// 立刻又回到 running,那个空档常常一次都观察不到,于是已经进了会话的消息还在托盘上
+// 挂着「排队中」(2026-08-13)。所以每一次 status 变化都必须吱一声。
+const trayEvents: string[] = [];
+bus.subscribe((event) => {
+  if (event.type === "task.pendingMessages") trayEvents.push(event.taskId);
+});
+const trayEventCount = (taskId: string) => trayEvents.filter((id) => id === taskId).length;
 
 const now = new Date();
 const at = now.toISOString();
@@ -211,6 +221,10 @@ try {
   console.log("✓ 团队定时消息到期后进入 lead 常驻会话并标记 sent");
   console.log("✓ lead 不可用时消息安全取消并把原因写入时间线");
 
+  // 投递成功和取消都得让托盘知道 —— 这两条是它「少一行」的唯一权威信号。
+  assert.ok(trayEventCount(deliveredTaskId) > 0, "消息标成 sent 却没通知托盘,前端会一直挂着「排队中」");
+  assert.ok(trayEventCount(unavailableTaskId) > 0, "消息取消了却没通知托盘");
+
   // ── 排队追问:运行中不插队,任务一落终态由 status 钩子立刻发出 ────────────
   const queuedAfterTick = (await db.select().from(scheduledMessages)
     .where(eq(scheduledMessages.id, "scheduled-queued"))).at(0)!;
@@ -243,6 +257,12 @@ try {
     "排队消息投递出去的那一轮没有结算",
   );
   await new Promise((resolve) => setTimeout(resolve, 200));
+  // 这正是 bug 的现场:任务从 running 落终态、投递、又回到 running,前端多半一次
+  // 非 running 都没看到。托盘能少一行,靠的只能是这条事件。
+  assert.ok(
+    trayEventCount(queuedTaskId) > 0,
+    "排队消息发出去了却没通知托盘——前端会同时显示「已收到你的消息」和「排队中」",
+  );
   console.log("✓ 排队追问:运行中原地等待,任务一空闲立即投递进原会话");
 
   // ── 结算钩子里投递:单飞锁还锁着,消息也一个字都不能丢 ────────────────────
