@@ -8,6 +8,11 @@ import type { ConversationItem } from "./conversationModel.ts";
 
 export type ReviewerMark = { round: number | null };
 
+// 「这一轮有结论了」的服务端信号：report_stage 写进时间线的那条（task-stage.ts,
+// 文案 `验收阶段更新：${STAGE_LABELS[stage]}（${stage}）`）。认括号里的英文 key 而不认
+// 中文标签 —— 标签是给人看的、随时可改，key 是 TaskStage 本身。
+const CONCLUDED_STAGE = /验收阶段更新：.*（(?:verified|verify_failed)）/;
+
 // 「这一回合是审查者在说话吗」的唯一判据，落盘与直播两条路读同一份语义：
 // ① 就地验证轮 —— 服务端按回合把轮次号写进 trace 的 run 事件、并随 agent.event 广播；
 // ② 自由派审的独立审查回合 —— 它自己开一条 role=reviewer 的会话，没有轮次号。
@@ -52,28 +57,46 @@ export function reviewerKey(item: Extract<ConversationItem, { kind: "agent" }>):
 //   认出是 reviewer 的气泡补轮次，绝不拿它改别人的身份。
 // 两种情形都让位给 run.verifyRound：那是服务端按回合直接标的，比旁注推断准。
 //
-// 收口比开口难：**跑通**的那条路根本不写「第 N 轮验证…」收尾旁注（`concludeRound`
-// 直接往下推线），而「验收阶段更新：已验证」是审查者自己在回合中间调 report_stage
-// 写的、还在它的回合里 —— 拿它收口会把审查者最后那段结论踢回实现者名下。所以收口认
-// 的是**回合真的换了人**：结论旁注、真人插话、回合边界，以及审查者已经说完话之后再
-// 出现的「继续（从中断处）」新回合标记。
+// 收口比开口难。一轮审查**不是**一个回合：审查者提问要等答复、checkpoint 要等续跑，
+// 服务端把这两种续跑都算在同一轮里（free-workflow 只暂停结算、`/answer` 与 task-resume
+// 都带着 sessionRole=reviewer 回到当前 round）。所以回合结束、答复、「继续（从中断处）」
+// 这些**回合级**信号都不能单独收口 —— 拿它们收，用户答完问题后徽标就从「审查者 ·
+// 第 N 轮」退回「审查者」，存量 inline 甚至整个变回普通执行者。
+//
+// 真正标志这一轮走完的是服务端自己写的那两个信号，缺一不可：
+// ① 结论：收尾旁注，或 report_stage 写的「验收阶段更新：…（verified / verify_failed）」
+//    —— 后者是审查者在自己回合中间调的，写完还要继续说结论，所以它只**待收**（concluded），
+//    要等下一个回合级信号才真的收口，否则最后那段结论会被踢回实现者名下；
+// ② 换会话：inline 验证是搭在被验任务自己会话上的旁路回合，时间线一旦走到别的
+//    sessionId，说话的就不可能还是这一轮的审查者了（自由派审反过来 —— 它本来就另开
+//    一条会话、主任务可能同时在说话，所以只按 ① 收）。
+//
+// 剩下的：真人插话（不含【答复】）照旧收口，那是人接管了。
 export function applyVerifySpans(items: ConversationItem[]): void {
-  let span: VerifyNoteMark | null = null;
+  let span: (VerifyNoteMark & { sessionId?: string }) | null = null;
   let spoke = false;
-  const close = () => { span = null; spoke = false; };
+  let concluded = false;
+  const close = () => { span = null; spoke = false; concluded = false; };
   for (const item of items) {
-    if (item.kind === "user") { close(); continue; }
+    // 【答复】是审查者提问的回答，答完还是这一轮；真人另起话头才算接管。
+    if (item.kind === "user") { if (!item.isAnswer) close(); continue; }
     if (item.kind === "event") {
       const mark = verifyNoteOf(item.text);
       if (mark) {
-        span = mark.phase === "start" ? mark : null;
-        spoke = false;
-      } else if (span && (item.variant === "boundary" || (spoke && item.text.includes(LEGACY_SYS_MARKER)))) {
+        close();
+        if (mark.phase === "start") span = { ...mark, sessionId: item.sessionId };
+      } else if (span && CONCLUDED_STAGE.test(item.text)) {
+        concluded = true;
+      } else if (
+        span && concluded && spoke
+        && (item.variant === "boundary" || item.text.includes(LEGACY_SYS_MARKER))
+      ) {
         close();
       }
       continue;
     }
     if (item.kind !== "agent" || !span) continue;
+    if (span.kind === "inline" && span.sessionId && item.sessionId !== span.sessionId) { close(); continue; }
     spoke = true;
     if (!item.reviewer) {
       if (span.kind === "inline") item.reviewer = { round: span.round };

@@ -14,7 +14,7 @@
 
 阻塞问题：设置页“立即重新扫描”按钮被压缩成逐字竖排，影响可用性。已留截图和报告：
 
-[验收报告](/Users/fjh/code/harness/data/runs/eFjv9houajxX/review/round-1/report.md)  
+[验收报告](/Users/fjh/code/harness/data/runs/eFjv9houajxX/review/round-1/report.md)
 [问题截图](/Users/fjh/code/harness/data/runs/eFjv9houajxX/review/round-1/settings-scan.jpg)
 
 已停止验收服务、释放端口，证据未加入 Git，并已上报 `verify_failed`。
@@ -39,7 +39,7 @@
 
 已复验上一轮的按钮布局修复；构建、类型检查、技能回归测试和真实 Chrome 交互均通过。服务与临时数据库已清理，证据未入 Git。
 
-[第 2 轮报告](/Users/fjh/code/harness/data/runs/eFjv9houajxX/review/round-2/report.md)  
+[第 2 轮报告](/Users/fjh/code/harness/data/runs/eFjv9houajxX/review/round-2/report.md)
 [设置页截图](/Users/fjh/code/harness/data/runs/eFjv9houajxX/review/round-2/settings-button-fixed.jpg)
 
 

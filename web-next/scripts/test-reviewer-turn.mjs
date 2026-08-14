@@ -251,6 +251,121 @@ assert.deepEqual(passedAgents[0].reviewer, { round: 4 });
 assert.deepEqual(passedAgents[1].reviewer, { round: 4 }, "阶段通告是审查者自己回合里写的，不能拿它收口");
 assert.equal(passedAgents[2].reviewer, undefined, "换回合之后的发言回到实现者");
 
+// 通过的那一轮之后另起一条会话:inline 验证是搭在被验任务自己会话上的旁路回合,
+// 时间线一旦走到别的 sessionId,说话的就不可能还是这一轮的审查者。少了这一条,
+// 「通过」路径上没有收尾旁注,区间会一路开着,把次日新会话的普通执行正文也染成审查者。
+const freshSession = { ...session, id: "s-fresh", startedAt: "2026-08-13T01:00:00.000Z", endedAt: null };
+const acrossSessions = buildConversationItems(
+  [
+    {
+      session: { ...session, endedAt: "2026-08-12T02:00:00.000Z" },
+      output: [
+        turn("system", "第 2 轮验证开始：就在这个任务的工作目录里跑。", "2026-08-12T01:00:00.000Z"),
+        "验证正文。",
+        turn("system", "验收阶段更新：已验证（verified）", "2026-08-12T01:20:00.000Z"),
+        "第 2 轮验证通过。",
+      ].join("\n"),
+      trace: [],
+    },
+    { session: freshSession, output: "次日新会话的普通执行正文。", trace: [] },
+  ],
+  [{ ...session, endedAt: "2026-08-12T02:00:00.000Z" }, freshSession],
+  [],
+);
+const acrossAgents = acrossSessions.filter((item) => item.kind === "agent");
+assert.deepEqual(acrossAgents[0].reviewer, { round: 2 });
+assert.deepEqual(acrossAgents[1].reviewer, { round: 2 }, "结论仍在审查者自己的回合里");
+assert.equal(acrossAgents.at(-1).reviewer, undefined, "换了会话就不可能还是上一轮的审查者");
+assert.equal(acrossAgents.at(-1).continuation, false);
+
+// —— 一轮审查不是一个回合:提问等答复、checkpoint 等续跑,服务端都算在同一轮里 ——
+// 收口要是认回合级信号(答复 / 回合结束 / 继续标记),用户答完问题后徽标就会从
+// 「审查者 · 第 N 轮」退回「审查者」,存量 inline 甚至整个变回普通执行者。
+const answered = buildConversationItems(
+  [{
+    session: { ...session, endedAt: null },
+    output: [
+      turn("system", "第 3 轮验证开始：就在这个任务的工作目录里跑。", "2026-08-12T03:00:00.000Z"),
+      "验证前段：有个地方要确认。",
+      turn("user", "【答复】你之前的提问:「…」\n\n直接通过就行。", "2026-08-12T03:30:00.000Z"),
+      "验证后段：那就按你说的过。",
+    ].join("\n"),
+    trace: [],
+  }],
+  [{ ...session, endedAt: null }],
+  [],
+);
+const answeredAgents = answered.filter((item) => item.kind === "agent");
+assert.deepEqual(answeredAgents[0].reviewer, { round: 3 });
+assert.deepEqual(answeredAgents[1].reviewer, { round: 3 }, "【答复】只是回答审查者的提问，还是同一轮");
+// 真人另起话头才算接管。
+const interjected = buildConversationItems(
+  [{
+    session: { ...session, endedAt: null },
+    output: [
+      turn("system", "第 3 轮验证开始：就在这个任务的工作目录里跑。", "2026-08-12T03:00:00.000Z"),
+      "验证正文。",
+      turn("user", "先别验了，改个别的。", "2026-08-12T03:30:00.000Z"),
+      "好，改别的。",
+    ].join("\n"),
+    trace: [],
+  }],
+  [{ ...session, endedAt: null }],
+  [],
+);
+assert.equal(interjected.filter((item) => item.kind === "agent").at(-1).reviewer, undefined);
+
+// 自由派审的 checkpoint 续跑:reviewer 会话只有 role、没有轮次号,区间一关就补不回来了。
+const resumedReview = buildConversationItems(
+  [
+    {
+      session: { ...session, endedAt: null },
+      output: turn("system", freeNotes[0], "2026-08-11T02:00:00.000Z"),
+      trace: [],
+    },
+    {
+      session: freeSession,
+      output: [
+        "审查前段。",
+        turn("system", "〔系统〕继续（从中断处）", "2026-08-11T02:30:00.000Z"),
+        "审查后段。",
+      ].join("\n"),
+      trace: [],
+    },
+  ],
+  [{ ...session, endedAt: null }, freeSession],
+  [],
+);
+const resumedAgents = resumedReview.filter((item) => item.kind === "agent");
+assert.deepEqual(resumedAgents[0].reviewer, { round: 1 });
+assert.deepEqual(resumedAgents[1].reviewer, { round: 1 }, "checkpoint 续跑回来还是同一轮审查");
+
+// 同样的形状在真实历史会话里就有:data/runs/6xhkF69AgfIr/h03Yf-2Eezw_.md(原样拷贝,
+// 只去掉行尾空白)——第 1 轮验证中途审查者提问、用户答复后接着验完,trace 实测 0 个
+// run 事件,身份和轮次全靠这个区间。
+const answerLegacySession = {
+  ...session,
+  id: "legacy-answer",
+  startedAt: "2026-08-05T08:14:46.369Z",
+  endedAt: "2026-08-08T06:52:40.113Z",
+};
+const answerLegacy = buildConversationItems(
+  [{
+    session: answerLegacySession,
+    output: readFileSync(new URL("./fixtures/legacy-answer-verify-session.md", import.meta.url), "utf8"),
+    trace: [],
+  }],
+  [answerLegacySession],
+  [],
+);
+const answerStart = answerLegacy.findIndex((item) => item.kind === "event" && item.text.startsWith("第 1 轮验证开始"));
+assert.ok(answerStart > 0, "真实历史会话里就有这条「第 1 轮验证开始」");
+const answerAgents = answerLegacy.slice(answerStart).filter((item) => item.kind === "agent");
+assert.ok(answerAgents.length >= 3, "答复前一段、答复后两段");
+for (const agent of answerAgents) {
+  assert.deepEqual(agent.reviewer, { round: 1 }, "同一轮审查里前后身份不能自相矛盾");
+}
+
 
 // —— 复制出去的会话同样要认得出审查者，否则界面上分得开、粘出去又混成一团 ——
 const markdown = conversationToMarkdown(items, { title: "t", body: "" });

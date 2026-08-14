@@ -63,6 +63,8 @@ export type ConversationItem =
       id: string;
       text: string;
       at?: string;
+      /** 这条旁注是写在哪条会话上的。验证区间靠它认「时间线走到别人家了」（见 conversationReviewer）。 */
+      sessionId?: string;
       tone?: ConversationEventTone;
       variant?: ConversationEventVariant;
       /** 这条旁注在讲验证轮的事（开始 / 未通过 / 打回修复）：跟审查者的气泡同一套配色。 */
@@ -439,6 +441,7 @@ export function buildConversationItems(
           id: `persisted:system:${session.id}:${index}`,
           text: segment.text,
           at: segment.at,
+          sessionId: session.id,
           tone: noteTone(segment.text),
           variant: "note",
           verify: isVerifyNote(segment.text),
@@ -514,6 +517,7 @@ export function buildConversationItems(
         kind: "event",
         id: entry.id,
         text: event.text,
+        sessionId: entry.event.sessionId,
         tone: noteTone(event.text),
         variant: "note",
         verify: isVerifyNote(event.text),
