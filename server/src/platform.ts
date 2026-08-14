@@ -17,7 +17,6 @@
 //    并在各自调用点写明降级后剩什么。
 
 import { execFile, execFileSync } from "node:child_process";
-import { delimiter } from "node:path";
 
 export const IS_WINDOWS = process.platform === "win32";
 export const IS_MAC = process.platform === "darwin";
@@ -331,9 +330,24 @@ export function windowsPathRejection(absPath: string): string | null {
 // ── PATH 拆分 ──────────────────────────────────────────────────────────────
 
 /**
- * 拆 PATH。**必须用 path.delimiter**:Windows 是 `;`,按 `:` 拆会把 `C:\...` 的
+ * PATH 的分隔符。**故意不用 `path.delimiter`** —— 那个值由 Node 启动时的真实平台
+ * 定死,测试里没法把它跟 IS_WINDOWS 一起翻转,于是 Windows 分支在 mac 上就成了
+ * 「跑得到但测的是混血逻辑」。这里显式跟着 IS_WINDOWS 走,两边同时可控。
+ */
+export const PATH_DELIMITER = IS_WINDOWS ? ";" : ":";
+
+/**
+ * 拆 PATH。**必须用 PATH_DELIMITER**:Windows 是 `;`,按 `:` 拆会把 `C:\...` 的
  * 盘符切成两半 —— 每个目录都变成不存在的路径,所有 CLI 一律「找不到」。
  */
 export function splitPathList(value: string | undefined | null): string[] {
-  return (value ?? "").split(delimiter).map((s) => s.trim()).filter(Boolean);
+  return (value ?? "").split(PATH_DELIMITER).map((s) => s.trim()).filter(Boolean);
+}
+
+/** 路径分隔符。同样跟着 IS_WINDOWS 走,理由见 PATH_DELIMITER。 */
+export const PATH_SEP = IS_WINDOWS ? "\\" : "/";
+
+/** 按两种分隔符一起切路径 —— Windows 上 `/` 和 `\` 都合法,只认一种会漏。 */
+export function splitPathSegments(p: string): string[] {
+  return p.split(IS_WINDOWS ? /[\\/]+/ : /\/+/).filter(Boolean);
 }

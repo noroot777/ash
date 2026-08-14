@@ -68,7 +68,8 @@
     "test:local-open": "tsx scripts/test-local-open.ts",
     "test:mcp-handoff": "tsx scripts/test-mcp-handoff.ts",
     "test:duet-gate-attachments": "tsx scripts/test-duet-gate-attachments.ts",
-    "test:terminal": "tsx scripts/test-terminal.ts"
+    "test:terminal": "tsx scripts/test-terminal.ts",
+    "test:win-launch": "tsx scripts/test-win-launch.ts"
   },
   "dependencies": {
     "@harness/shared": "*",
