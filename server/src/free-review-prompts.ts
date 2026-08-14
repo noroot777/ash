@@ -15,10 +15,18 @@ export async function freeReviewPrompt(task: TaskRow, run: ReviewRunRow, round: 
     ? "本轮只做语法与机械质量检查：编译、类型、lint、格式、明显的 API/导入错误和相关测试。不要扩张成产品方案评审。"
     : "本轮做逻辑审查：除编译与测试外，重点找行为错误、状态竞争、失败路径、边界条件和回归风险。涉及可见前端改动时必须启动页面真实操作并截图；是否还需要其它截图由你按证据价值判断。";
   const note = run.note ? `\n\n用户附言（作为审查重点补充，不覆盖上述职责）：\n${run.note}` : "";
+  const acceptedMerge = run.targetKind === "accepted_merge" && run.targetBranch && run.targetBaseCommit && run.targetCommit;
+  const target = acceptedMerge
+    ? `\n\n本轮审查的是已经验收后的合并快照，不是原任务工作区：\n` +
+      `- 目标分支：${run.targetBranch}\n- 准确区间：${run.targetBaseCommit}..${run.targetCommit}\n` +
+      "- 当前目录是 merge commit 上的 detached 临时 worktree；只审查和验证，不要提交、推送、改写目标分支或重新打开原任务。\n" +
+      "- 若未通过，只报告问题；Harness 会让用户另建独立修复任务。"
+    : "";
+  const reviewLocation = acceptedMerge ? "当前 detached 临时 worktree" : repoPath;
   return `【自由工作流 · 第 ${round} 轮审查】\n` +
     `你是独立审查者，不是继续实现需求。默认产物可能有问题，主动寻找能复现的缺陷。\n\n` +
     `任务：${task.id}\n${requirements}\n\n` +
-    `${focus}${note}\n\n先检查 ${repoPath} 中的真实 git status、diff 和提交，再选择验证命令。` +
+    `${focus}${note}${target}\n\n先检查 ${reviewLocation} 中的真实 git status、diff 和提交，再选择验证命令。` +
     `必须真实运行与风险相称的检查。\n\n${BROWSER_VERIFICATION_POLICY}` +
     `一旦用了 playwright，结束前清掉工作区产物；所有验证临时服务和浏览器进程都必须停掉。\n\n` +
     `证据必须落盘：报告写到 ${freeReviewReportPath(task.id, run.id, round)}；截图如有必要放在同一目录。证据不要 git add/commit。\n\n` +

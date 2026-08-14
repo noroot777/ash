@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import type { Task } from "@harness/shared";
 import {
   GitBranch,
+  GitCommit,
   SpinnerGap,
   WarningCircle,
 } from "@phosphor-icons/react";
@@ -41,11 +42,13 @@ export function TaskReviewWorkspace({
   allTasks,
   onTaskUpdated,
   notify,
+  onPostMergeReview,
 }: {
   task: Task;
   allTasks: Task[];
   onTaskUpdated: (task: Task) => void;
   notify: (message: string) => void;
+  onPostMergeReview?: () => void;
 }) {
   const [data, setData] = useState<ReviewData | null>(null);
   const [sharedBranch, setSharedBranch] = useState<string | null>(null);
@@ -53,6 +56,10 @@ export function TaskReviewWorkspace({
   const [error, setError] = useState<string | null>(null);
   const sharedParent = sharedTeamParent(task, allTasks);
   const free = useFreeWorkflowState(task.id, task.workflowMode === "free");
+  const latestPostMerge = free.state?.reviews.find((run) => run.target?.kind === "accepted_merge");
+  const acceptedSnapshot = task.stage === "accepted" && task.acceptedTargetBranch && task.acceptedBaseCommit && task.acceptedMergeCommit
+    ? { branch: task.acceptedTargetBranch, baseCommit: task.acceptedBaseCommit, mergeCommit: task.acceptedMergeCommit }
+    : null;
   const activeFreeReview = free.state?.reviews.find((run) => freeReviewBlockingLabel(run) !== null);
   // 失败关闭：拿不到自由工作流状态（加载中、出错、或任何原因的 state 为空）就不开放
   // 不可逆的验收按钮——「state 空 + loading 已结束」的缝隙也一样（StrictMode 重挂载
@@ -140,6 +147,22 @@ export function TaskReviewWorkspace({
             <p className="single-review-warning" role="alert">
               <WarningCircle size={14} weight="fill" />{acceptanceWarning}
             </p>
+          )}
+          {acceptedSnapshot && (
+            <section className="accepted-snapshot-card" aria-label="验收合并快照">
+              <header><span><GitCommit size={13} /></span><div><b>验收快照</b><small>合并完成时冻结，后续分支移动不会改变本次审查范围</small></div><em>已验收</em></header>
+              <dl>
+                <div><dt>目标分支</dt><dd>{acceptedSnapshot.branch}</dd></div>
+                <div><dt>合并区间</dt><dd>{acceptedSnapshot.baseCommit.slice(0, 8)} → {acceptedSnapshot.mergeCommit.slice(0, 8)}</dd></div>
+              </dl>
+              {onPostMergeReview && (
+                <button type="button" onClick={onPostMergeReview}>
+                  {latestPostMerge?.status === "reviewing"
+                    ? "合并结果正在审查，查看进度"
+                    : latestPostMerge ? "需要额外确认最终集成状态？再次审查本次合并" : "需要额外确认最终集成状态？审查本次合并"}
+                </button>
+              )}
+            </section>
           )}
           {sharedParent && <SharedWorkerFacts parent={sharedParent} branch={sharedBranch} />}
           {loading && <p className="single-review-loading"><SpinnerGap size={14} className="is-spinning" />{sharedParent ? "正在读取共享分支归属…" : "正在汇总提交与 diff…"}</p>}

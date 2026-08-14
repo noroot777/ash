@@ -1,5 +1,3 @@
-import { readFileSync } from "node:fs";
-import { extname } from "node:path";
 import type {
   AgentType,
   FreeReviewDispatchInput,
@@ -7,7 +5,6 @@ import type {
   TaskStatus,
 } from "@harness/shared";
 import { and, desc, eq } from "drizzle-orm";
-import type { Hono } from "hono";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
 import {
@@ -32,16 +29,15 @@ import {
 } from "./free-review-input.js";
 import { freeManualRepairPrompt, freeRepairPrompt, freeReviewPrompt } from "./free-review-prompts.js";
 export { freeManualRepairPrompt, freeRepairPrompt, freeReviewPrompt } from "./free-review-prompts.js";
-import { mountFreePreviewRoutes } from "./free-workflow-preview.js";
 import { releaseFreeWorkflowAction, tryAcquireFreeWorkflowAction } from "./free-workflow-lock.js";
-import { freeReviewFile, freeReviewReportPath, readFreeReviewReport } from "./free-review-files.js";
+import { freeReviewReportPath, readFreeReviewReport } from "./free-review-files.js";
 import { freeWorkflowState, workspaceStateOf, type FreeWorkflowApiState } from "./free-workflow-state.js";
 import { claimTurn, continueWhenIdle, isTurnClaimed, releaseTurn, turnRole, whenTurnIdle } from "./runs.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { taskWorkspace } from "./task-workspace.js";
 import { headCommit } from "./git.js";
-import { REVIEW_MIME } from "./review-evidence.js";
 import { BROWSER_VERIFICATION_REMINDER } from "./browser-verification-policy.js";
+import { cleanupPostMergeReviewWorktree, preparePostMergeReviewWorktree } from "./post-merge-review-worktree.js";
 import { id, now } from "./util.js";
 
 type TaskRow = typeof tasks.$inferSelect;
@@ -69,7 +65,10 @@ async function reviewingRun(taskId: string): Promise<ReviewRunRow | null> {
 }
 
 async function latestRun(taskId: string): Promise<ReviewRunRow | null> {
-  return (await db.select().from(freeReviewRuns).where(eq(freeReviewRuns.taskId, taskId))
+  return (await db.select().from(freeReviewRuns).where(and(
+    eq(freeReviewRuns.taskId, taskId),
+    eq(freeReviewRuns.targetKind, "workspace"),
+  ))
     .orderBy(desc(freeReviewRuns.createdAt)).limit(1)).at(0) ?? null;
 }
 
@@ -109,7 +108,7 @@ export async function freeReviewReminder(taskId: string): Promise<string> {
 // 预约之前还是之后开跑的——任务正在跑（含已 claim、status 尚未落 running 的窗口）时挂
 // 预约，本回合完成即触发审查，这正是「修复中先把复审预约上」的常规用法。所以这里刻意
 // **不与 turn 互斥**；预约不动工作区、不投消息，写入本身没有并发危害。
-async function reserveFreeReview(taskId: string, input: FreeReviewDispatchInput): Promise<FreeWorkflowApiState> {
+export async function reserveFreeReview(taskId: string, input: FreeReviewDispatchInput): Promise<FreeWorkflowApiState> {
   const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!task) throw new Error("任务不存在");
   if (task.mode !== "single" || task.parentId || task.reviewOf) throw new Error("自由工作流只适用于普通单任务");
@@ -157,7 +156,7 @@ async function reserveFreeReview(taskId: string, input: FreeReviewDispatchInput)
     releaseFreeWorkflowAction(taskId);
   }
 }
-async function cancelFreeReviewReservation(taskId: string): Promise<FreeWorkflowApiState> {
+export async function cancelFreeReviewReservation(taskId: string): Promise<FreeWorkflowApiState> {
   const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!task) throw new Error("任务不存在");
   if (task.mode !== "single" || task.parentId || task.reviewOf || task.workflowMode !== "free") throw new Error("当前任务不支持自由审查");
@@ -183,13 +182,28 @@ async function cancelFreeReviewReservation(taskId: string): Promise<FreeWorkflow
   }
 }
 
+async function cleanupAcceptedMergeRun(run: ReviewRunRow): Promise<void> {
+  if (run.targetKind !== "accepted_merge") return;
+  const task = (await db.select({ projectId: tasks.projectId }).from(tasks).where(eq(tasks.id, run.taskId))).at(0);
+  const project = task
+    ? (await db.select({ repoPath: projects.repoPath }).from(projects).where(eq(projects.id, task.projectId))).at(0)
+    : null;
+  if (!project) return;
+  try {
+    await cleanupPostMergeReviewWorktree(project.repoPath, run.taskId, run.id);
+  } catch (error) {
+    await appendTaskTimeline(run.taskId, `合并结果审查临时工作区清理失败：${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
 async function failReviewStart(run: ReviewRunRow, message: string): Promise<void> {
   const at = now();
   await db.update(freeReviewRounds).set({ status: "error", endedAt: at })
     .where(and(eq(freeReviewRounds.runId, run.id), eq(freeReviewRounds.round, run.currentRound)));
   await db.update(freeReviewRuns).set({ status: "failed", updatedAt: at, finishedAt: at })
     .where(eq(freeReviewRuns.id, run.id));
-  await appendTaskTimeline(run.taskId, `自由工作流第 ${run.currentRound} 轮审查启动失败：${message}`);
+  await appendTaskTimeline(run.taskId, `${run.targetKind === "accepted_merge" ? "合并结果" : `自由工作流第 ${run.currentRound} 轮`}审查启动失败：${message}`);
+  await cleanupAcceptedMergeRun(run);
   bus.publish({ type: "task.review", taskId: run.taskId });
 }
 
@@ -244,9 +258,15 @@ export async function reconcileFreeReviews(): Promise<void> {
 
 async function launchReviewRound(task: TaskRow, run: ReviewRunRow): Promise<void> {
   const project = (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0);
+  let cwd: string | undefined;
   // 锚定本轮结论的基准：审查启动时工作区的 HEAD。之后代码变没变、结论新不新鲜，
   // 全靠它跟当前 HEAD 比，不靠任何状态字段。取不到（工作区缺失）就留 null。
-  if (project) {
+  if (run.targetKind === "accepted_merge") {
+    if (!project || !run.targetCommit) throw new Error("合并结果审查缺少项目或验收 commit");
+    cwd = await preparePostMergeReviewWorktree(project.repoPath, task.id, run.id, run.targetCommit);
+    await db.update(freeReviewRounds).set({ reviewedCommit: run.targetCommit })
+      .where(and(eq(freeReviewRounds.runId, run.id), eq(freeReviewRounds.round, run.currentRound)));
+  } else if (project) {
     const workspace = await taskWorkspace(task, project.repoPath).catch(() => null);
     const head = workspace ? await headCommit(workspace.path) : null;
     if (head) {
@@ -255,7 +275,9 @@ async function launchReviewRound(task: TaskRow, run: ReviewRunRow): Promise<void
     }
   }
   const prompt = await freeReviewPrompt(task, run, run.currentRound, project?.repoPath ?? "(项目已不存在)");
-  await appendTaskTimeline(task.id, `自由工作流第 ${run.currentRound} 轮审查开始：${run.reviewerName} · ${run.checkMode === "logic" ? "逻辑检查" : "语法检查"}。`);
+  await appendTaskTimeline(task.id, run.targetKind === "accepted_merge"
+    ? `合并结果审查开始：${run.reviewerName} · ${run.targetBranch}@${run.targetCommit?.slice(0, 8)} · ${run.checkMode === "logic" ? "逻辑检查" : "语法检查"}。`
+    : `自由工作流第 ${run.currentRound} 轮审查开始：${run.reviewerName} · ${run.checkMode === "logic" ? "逻辑检查" : "语法检查"}。`);
   bus.publish({ type: "task.review", taskId: task.id });
   continueWhenIdle(task.id, prompt, {
     system: "run",
@@ -265,7 +287,8 @@ async function launchReviewRound(task: TaskRow, run: ReviewRunRow): Promise<void
     model: run.model,
     reasoningEffort: run.reasoningEffort,
     sessionRole: "reviewer",
-    freshSession: run.currentRound === 1,
+    freshSession: run.currentRound === 1 || run.targetKind === "accepted_merge",
+    cwd,
   }, (error) => failReviewStart(run, error));
 }
 
@@ -394,7 +417,10 @@ export async function handleFreeWorkflowSettlement(
   if (outcome === "failed") {
     await db.update(freeReviewRounds).set({ status: "error", endedAt: at }).where(eq(freeReviewRounds.id, round.id));
     await db.update(freeReviewRuns).set({ status: "failed", updatedAt: at, finishedAt: at }).where(eq(freeReviewRuns.id, run.id));
-    await appendTaskTimeline(taskId, `自由工作流第 ${run.currentRound} 轮审查未能正常给出结论，已停止自动链。`);
+    await appendTaskTimeline(taskId, run.targetKind === "accepted_merge"
+      ? "合并结果审查未能正常给出结论；原任务保持已验收，可重新发起审查。"
+      : `自由工作流第 ${run.currentRound} 轮审查未能正常给出结论，已停止自动链。`);
+    await cleanupAcceptedMergeRun(run);
     bus.publish({ type: "task.review", taskId });
     return true;
   }
@@ -405,7 +431,10 @@ export async function handleFreeWorkflowSettlement(
   if (passed) {
     await db.update(freeReviewRuns).set({ status: "passed", updatedAt: at, finishedAt: at })
       .where(eq(freeReviewRuns.id, run.id));
-    await appendTaskTimeline(taskId, `自由工作流第 ${run.currentRound} 轮审查通过（${run.reviewerName}）。`);
+    await appendTaskTimeline(taskId, run.targetKind === "accepted_merge"
+      ? `合并结果审查通过（${run.reviewerName}）；原任务继续保持已验收。`
+      : `自由工作流第 ${run.currentRound} 轮审查通过（${run.reviewerName}）。`);
+    await cleanupAcceptedMergeRun(run);
     bus.publish({ type: "task.review", taskId });
     return true;
   }
@@ -413,6 +442,12 @@ export async function handleFreeWorkflowSettlement(
   // 未通过：run 一律落 stopped。链要不要自动续，看轮数——还有就发修复消息 + 挂续轮预约。
   await db.update(freeReviewRuns).set({ status: "stopped", updatedAt: at, finishedAt: at })
     .where(eq(freeReviewRuns.id, run.id));
+  if (run.targetKind === "accepted_merge") {
+    await appendTaskTimeline(taskId, "合并结果审查未通过；原任务保持已验收，可从审查记录创建独立修复任务。");
+    await cleanupAcceptedMergeRun(run);
+    bus.publish({ type: "task.review", taskId });
+    return true;
+  }
   if (outcome === "repair") {
     // 只在槽空着时挂续轮预约（判据与理由见 armFollowUpFreeReview）：用户在这一轮审查
     // 期间自己存的那条预约是更新的意思，不能被自动续轮顶掉。
@@ -440,10 +475,17 @@ export async function handleFreeWorkflowSettlement(
   return true;
 }
 
-async function startFreeReview(
+export type AcceptedMergeReviewTarget = {
+  kind: "accepted_merge";
+  branch: string;
+  baseCommit: string;
+  mergeCommit: string;
+};
+
+export async function startFreeReview(
   taskId: string,
   input: FreeReviewDispatchInput,
-  opts: { holdTurn?: boolean; slotToken?: string } = {},
+  opts: { holdTurn?: boolean; slotToken?: string; target?: AcceptedMergeReviewTarget } = {},
 ): Promise<FreeWorkflowApiState> {
   const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!task) throw new Error("任务不存在");
@@ -455,7 +497,11 @@ async function startFreeReview(
   // 遗留的提问/续跑指令必须先处理：审查回合结算与启动对账都把这两个字段当「审查在等
   // 答复」的正常态，带着旧字段开审会让新审查链永远收不了尾（审查实测复现）。
   if (task.question || task.resumePrompt) throw new Error("任务正等待答复或续跑，处理后再派审");
-  assertBeforeAcceptance(task);
+  if (opts.target) {
+    if (task.stage !== "accepted") throw new Error("任务尚未完成验收，不能审查合并结果");
+  } else {
+    assertBeforeAcceptance(task);
+  }
   // HTTP 派审必须与普通回合**原子互斥**：从校验到写入 reviewing run 的整段占住 turn
   // （占位身份 dispatch，不冒充 reviewer——此刻还没有审查回合）。只查一次 isTurnClaimed
   // 是 TOCTOU：检查后普通回合仍能 claim 成功，两边同时启动（审查实测五连中）。审查
@@ -472,7 +518,7 @@ async function startFreeReview(
     const profile = (await db.select().from(reviewerProfiles).where(eq(reviewerProfiles.id, input.reviewerId))).at(0);
     if (!profile) throw new Error("所选审查者不存在");
     const mode = checkMode(input.checkMode);
-    const retries = retryLimit(input.retryLimit);
+    const retries = opts.target ? 0 : retryLimit(input.retryLimit);
     const note = reviewNote(input.note);
     const override = await reviewOverride(input.override);
     const config = reviewRunConfig(profile, override);
@@ -481,6 +527,11 @@ async function startFreeReview(
       id: id(), taskId, reviewerId: profile.id, reviewerName: profile.name,
       agentType: config.agentType, executorId: config.executorId, model: config.model,
       reasoningEffort: config.reasoningEffort, checkMode: mode, note, retryLimit: retries,
+      targetKind: opts.target?.kind ?? "workspace",
+      targetBranch: opts.target?.branch ?? null,
+      targetBaseCommit: opts.target?.baseCommit ?? null,
+      targetCommit: opts.target?.mergeCommit ?? null,
+      repairTaskId: null,
       currentRound: 1, status: "reviewing", createdAt: at, updatedAt: at, finishedAt: null,
     };
     await db.insert(freeReviewRuns).values(run);
@@ -491,9 +542,11 @@ async function startFreeReview(
       // 派审即刻消费掉预约槽的一切（含覆盖四列）；从预约消费进来时沿用它的版本令牌，
       // 好让下面启动失败的回滚还能认出这个空位是自己腾的，也好让用户抢在这之前保存的
       // 新预约留在槽里不被抹掉（两者都在 clearReservationForDispatch 里靠同一次 CAS）。
-      await clearReservationForDispatch(taskId, {
-        reviewerId: profile.id, checkMode: mode, retryLimit: retries, token: opts.slotToken,
-      });
+      if (!opts.target) {
+        await clearReservationForDispatch(taskId, {
+          reviewerId: profile.id, checkMode: mode, retryLimit: retries, token: opts.slotToken,
+        });
+      }
       // 派审面上临时改过执行器：写一行，否则时间线只有审查者名字，读不出这一轮跑的是谁。
       if (override) {
         await appendTaskTimeline(taskId, `本次审查改用 ${overrideLabel(override)}（${profile.name} 的配置未改动）。`);
@@ -613,53 +666,4 @@ export async function startManualFreeReviewRepair(
   } finally {
     if (holdingTurn) releaseTurn(taskId);
   }
-}
-
-export function mountFreeWorkflowRoutes(api: Hono): void {
-  mountFreePreviewRoutes(api);
-  api.get("/tasks/:id/free-workflow", async (c) => {
-    const task = (await db.select({ workflowMode: tasks.workflowMode }).from(tasks).where(eq(tasks.id, c.req.param("id")))).at(0);
-    if (!task) return c.json({ error: "not found" }, 404);
-    if (task.workflowMode !== "free") return c.json({ error: "当前任务不是自由工作流" }, 409);
-    return c.json(await freeWorkflowState(c.req.param("id")));
-  });
-
-  api.post("/tasks/:id/free-workflow/review", async (c) => {
-    try {
-      const input = await c.req.json<FreeReviewDispatchInput>();
-      // 原子互斥在 startFreeReview 内做（holdTurn 占住整段），不靠这里的一次性检查。
-      return c.json(await startFreeReview(c.req.param("id"), input, { holdTurn: true }), 201);
-    } catch (error) {
-      return c.json({ error: error instanceof Error ? error.message : String(error) }, 409);
-    }
-  });
-  api.post("/tasks/:id/free-workflow/review/repair", async (c) => {
-    // 原子互斥在 startManualFreeReviewRepair 内做（holdTurn 占住整段），同派审。
-    try { return c.json(await startManualFreeReviewRepair(c.req.param("id"), { holdTurn: true })); }
-    catch (error) { return c.json({ error: error instanceof Error ? error.message : String(error) }, 409); }
-  });
-  api.put("/tasks/:id/free-workflow/review-reservation", async (c) => {
-    try { return c.json(await reserveFreeReview(c.req.param("id"), await c.req.json<FreeReviewDispatchInput>())); }
-    catch (error) { return c.json({ error: error instanceof Error ? error.message : String(error) }, 409); }
-  });
-  api.delete("/tasks/:id/free-workflow/review-reservation", async (c) => {
-    try { return c.json(await cancelFreeReviewReservation(c.req.param("id"))); }
-    catch (error) { return c.json({ error: error instanceof Error ? error.message : String(error) }, 409); }
-  });
-  api.get("/tasks/:id/free-workflow/review-file", async (c) => {
-    const taskId = c.req.param("id");
-    const runId = c.req.query("run") ?? "";
-    const round = Number(c.req.query("round"));
-    const name = c.req.query("name") ?? "";
-    const owned = Number.isInteger(round) && round > 0
-      ? (await db.select({ id: freeReviewRounds.id }).from(freeReviewRounds)
-        .innerJoin(freeReviewRuns, eq(freeReviewRounds.runId, freeReviewRuns.id))
-        .where(and(eq(freeReviewRuns.id, runId), eq(freeReviewRuns.taskId, taskId), eq(freeReviewRounds.round, round)))
-        .limit(1)).at(0)
-      : null;
-    const file = owned ? freeReviewFile(taskId, runId, round, name) : null;
-    if (!file) return c.json({ error: "not found" }, 404);
-    const mime = REVIEW_MIME[extname(file).toLowerCase()] ?? "application/octet-stream";
-    return c.body(Uint8Array.from(readFileSync(file)), 200, { "content-type": mime });
-  });
 }

@@ -64,6 +64,16 @@ export interface FreeReviewRun {
   reasoningEffort: string | null;
   checkMode: FreeReviewCheckMode;
   note: string | null;
+  /** 省略视为老数据的任务工作区审查。 */
+  target?:
+    | { kind: "workspace" }
+    | {
+        kind: "accepted_merge";
+        branch: string;
+        baseCommit: string;
+        mergeCommit: string;
+        repairTaskId: string | null;
+      };
   retryLimit: number;
   currentRound: number;
   status: FreeReviewRunStatus;

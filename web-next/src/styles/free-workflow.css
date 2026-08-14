@@ -52,6 +52,8 @@
 .free-review-create { display:grid; gap:10px; margin-top:10px; border:1px dashed color-mix(in lch,var(--accent) 38%,var(--line)); border-radius:10px; background:color-mix(in lch,var(--accent) 2%,var(--panel)); padding:11px; }
 .free-review-create > button { justify-self:end; height:28px; border:0; border-radius:7px; background:var(--accent); padding:0 10px; color:white; font-size:10px; font-weight:650; }
 .free-review-options { display:grid; align-content:start; gap:12px; background:color-mix(in lch,var(--raised) 50%,var(--panel)); padding:14px; }
+.free-review-target { display:grid; gap:6px; margin:0; border:1px solid var(--line); border-radius:8px; background:var(--panel); padding:8px 9px; }
+.free-review-target > div { display:grid; min-width:0; grid-template-columns:58px minmax(0,1fr); gap:7px; }.free-review-target dt { color:var(--faint); font-size:9px; }.free-review-target dd { overflow:hidden; margin:0; color:var(--muted); font-family:var(--font-mono); font-size:9px; text-overflow:ellipsis; white-space:nowrap; }
 .free-review-options label,.reviewer-profile-fields > label { display:grid; gap:5px; }
 .free-review-options label > span,.reviewer-profile-fields > label > span { color:var(--faint); font-size:9px; font-weight:700; letter-spacing:.05em; text-transform:uppercase; }
 .free-review-options select,.free-review-options textarea,.reviewer-profile-fields input { width:100%; border:1px solid var(--line2); border-radius:7px; background:var(--panel); outline:0; }
@@ -87,6 +89,10 @@
 .free-workflow-review-inspector .review-inspector__actions button.is-repair:hover:not(:disabled) { background:color-mix(in lch,var(--amber) 17%,var(--panel)); color:var(--amber); }
 .free-workflow-review-inspector .review-inspector__status.is-repairing { background:color-mix(in lch,var(--amber) 10%,var(--raised)); color:var(--amber); }
 .free-workflow-review-inspector .review-inspector__status.is-stale { background:color-mix(in lch,var(--cyan) 9%,var(--raised)); color:var(--cyan); }
+.post-merge-review-card { display:grid; gap:8px; border-bottom:1px solid var(--line); background:color-mix(in lch,var(--cyan) 2.5%,var(--panel)); padding:12px 14px; }
+.post-merge-review-card > header { display:grid; min-width:0; grid-template-columns:28px minmax(0,1fr) auto; align-items:center; gap:8px; }.post-merge-review-card > header > span { display:grid; width:28px; height:28px; place-items:center; border:1px solid color-mix(in lch,var(--cyan) 24%,var(--line)); border-radius:8px; background:var(--panel); color:var(--cyan); }.post-merge-review-card header b,.post-merge-review-card header small { display:block; }.post-merge-review-card header b { font-size:11px; }.post-merge-review-card header small { overflow:hidden; margin-top:1px; color:var(--faint); font-family:var(--font-mono); font-size:8.5px; text-overflow:ellipsis; white-space:nowrap; }.post-merge-review-card header em { border:1px solid var(--line); border-radius:999px; padding:2px 6px; color:var(--faint); font-size:8.5px; font-style:normal; }
+.post-merge-review-card > p { margin:0; color:var(--muted); font-size:9.5px; line-height:1.5; }.post-merge-review-card > div { display:flex; flex-wrap:wrap; gap:5px; }.post-merge-review-card > div > button { display:inline-flex; height:27px; align-items:center; gap:4px; border:1px solid var(--line2); border-radius:7px; background:var(--panel); padding:0 8px; color:var(--muted); font-size:9.5px; }.post-merge-review-card > div > button:hover:not(:disabled) { background:var(--raised); color:var(--ink); }.post-merge-review-card > div > button:disabled { opacity:.5; }
+.post-merge-review-records { border-top:1px solid var(--line); }
 .free-workflow-generated { border-bottom:1px solid var(--line); padding:13px 14px; }
 .free-workflow-generated > header { display:flex; align-items:baseline; justify-content:space-between; gap:8px; }
 .free-workflow-generated > header span { color:var(--ink); font-size:11px; font-weight:700; }

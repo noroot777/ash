@@ -223,6 +223,8 @@ export async function continueTask(
     /** 旁路回合结束后恢复进入旁路前的任务状态。 */
     sideTurn?: boolean;
     sessionRole?: Extract<SessionRole, "single" | "reviewer">; freshSession?: boolean;
+    /** 内部旁路回合可钉在一个准确工作目录（例如验收快照的 detached worktree）。 */
+    cwd?: string;
     /**
      * 这一轮的字是**后端代写**的（验证打回的报告、验收冲突的交接说明），但它必须占一个
      * 真人回合 —— 带 system 会被当成「系统续跑」，followUpFrom 就护不住任务原来的终态。
@@ -361,7 +363,7 @@ export async function continueTask(
 
     // Where the work lives: the agent's own cwd, else any session's cwd (so the
     // invitee sees prior output), else materialize the task workdir.
-    const recorded = prev?.cwd || prev?.worktreePath || all[0]?.cwd || all[0]?.worktreePath || "";
+    const recorded = opts.cwd || prev?.cwd || prev?.worktreePath || all[0]?.cwd || all[0]?.worktreePath || "";
     // A recorded cwd that has since vanished (worktree cleaned up, project moved)
     // used to be handed to spawn as-is — which stuck the task in 'running' forever.
     // Re-resolve through the same path a fresh run takes: it RESTORES the worktree

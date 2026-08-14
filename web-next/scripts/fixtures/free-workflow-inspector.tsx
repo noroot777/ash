@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import type { Task } from "@harness/shared";
 import { FreeWorkflowInspector } from "../../src/free-workflow/FreeWorkflowInspector.tsx";
 import { FreeWorkflowToolbar } from "../../src/free-workflow/FreeWorkflowToolbar.tsx";
+import { FreeReviewDialog } from "../../src/free-workflow/FreeReviewDialog.tsx";
 import type { FreeWorkflowApiState } from "../../src/lib/api.ts";
 import { TaskReviewWorkspace } from "../../src/review/TaskReviewWorkspace.tsx";
 import { TaskHeader } from "../../src/task-detail/TaskHeader.tsx";
@@ -119,6 +120,50 @@ const reviewingAcceptanceState = {
   }],
 };
 
+const postMergeState: FreeWorkflowApiState = {
+  ...acceptanceState,
+  taskId: "post-merge-ui",
+  workspaceHead: null,
+  workspaceDirty: null,
+  reviews: [],
+};
+
+const postMergeRun = () => ({
+  id: "post-merge-run",
+  reviewerId: reviewer.id,
+  reviewerName: reviewer.name,
+  agentType: "codex" as const,
+  executorId: reviewer.executorId,
+  executorLabel: reviewer.executorLabel,
+  model: reviewer.model,
+  reasoningEffort: reviewer.reasoningEffort,
+  checkMode: "logic" as const,
+  note: null,
+  target: {
+    kind: "accepted_merge" as const,
+    branch: "main",
+    baseCommit: "11111111aaaaaaaa",
+    mergeCommit: "22222222bbbbbbbb",
+    repairTaskId: null,
+  },
+  retryLimit: 0,
+  currentRound: 1,
+  status: "reviewing" as const,
+  rounds: [{
+    round: 1,
+    status: "reviewing" as const,
+    conclusion: null,
+    reviewedCommit: "22222222bbbbbbbb",
+    reportMarkdown: "",
+    screenshots: [],
+    startedAt: "2026-08-09T02:00:00.000Z",
+    endedAt: null,
+  }],
+  createdAt: "2026-08-09T02:00:00.000Z",
+  updatedAt: "2026-08-09T02:00:00.000Z",
+  finishedAt: null,
+});
+
 const repairState: FreeWorkflowApiState = {
   taskId: "free-repair-task",
   selectedReviewerId: null,
@@ -214,6 +259,20 @@ window.fetch = (input, init) => {
       headers: { "content-type": "application/json" },
     }));
   }
+  if (url.pathname === "/api/tasks/post-merge-ui/free-workflow/post-merge-review" && init?.method === "POST") {
+    postMergeState.stateVersion += 1;
+    postMergeState.reviews = [postMergeRun()];
+    (window as Window & { __postMergeRequests?: number }).__postMergeRequests =
+      ((window as Window & { __postMergeRequests?: number }).__postMergeRequests ?? 0) + 1;
+    return Promise.resolve(new Response(JSON.stringify(postMergeState), {
+      status: 201, headers: { "content-type": "application/json" },
+    }));
+  }
+  if (url.pathname === "/api/tasks/post-merge-ui/free-workflow") {
+    return Promise.resolve(new Response(JSON.stringify(postMergeState), {
+      status: 200, headers: { "content-type": "application/json" },
+    }));
+  }
   if (url.pathname.startsWith("/api/tasks/free-chat-rework-task/free-workflow")) {
     if (init?.method === "PUT" && url.pathname.endsWith("/review-reservation")) {
       const body = JSON.parse(String(init.body ?? "{}")) as { note?: string | null };
@@ -232,18 +291,18 @@ window.fetch = (input, init) => {
       headers: { "content-type": "application/json" },
     }));
   }
-  if (url.pathname === "/api/tasks/free-accept-ui/commits" || url.pathname === "/api/tasks/free-reviewing-ui/commits") {
+  if (url.pathname === "/api/tasks/free-accept-ui/commits" || url.pathname === "/api/tasks/free-reviewing-ui/commits" || url.pathname === "/api/tasks/post-merge-ui/commits") {
     return Promise.resolve(new Response(JSON.stringify({ branch: "harness/free-accept-ui", commits: [] }), {
       status: 200,
       headers: { "content-type": "application/json" },
     }));
   }
-  if (url.pathname === "/api/tasks/free-accept-ui/diff" || url.pathname === "/api/tasks/free-reviewing-ui/diff") {
+  if (url.pathname === "/api/tasks/free-accept-ui/diff" || url.pathname === "/api/tasks/free-reviewing-ui/diff" || url.pathname === "/api/tasks/post-merge-ui/diff") {
     return Promise.resolve(new Response(JSON.stringify({
       available: true,
-      sourceBranch: "harness/free-accept-ui",
-      targetBranch: "main",
-      mergeBase: "0123456789abcdef",
+      sourceBranch: url.pathname.includes("post-merge-ui") ? "main@11111111" : "harness/free-accept-ui",
+      targetBranch: url.pathname.includes("post-merge-ui") ? "main@22222222" : "main",
+      mergeBase: url.pathname.includes("post-merge-ui") ? "11111111aaaaaaaa" : "0123456789abcdef",
       diff: "",
       files: [],
       truncated: false,
@@ -302,6 +361,16 @@ const reviewingAcceptanceTask = {
   title: "自由任务审查中",
 } as Task;
 
+const postMergeTask = {
+  ...acceptanceTask,
+  id: "post-merge-ui",
+  title: "已验收的自由任务",
+  stage: "accepted",
+  acceptedTargetBranch: "main",
+  acceptedBaseCommit: "11111111aaaaaaaa",
+  acceptedMergeCommit: "22222222bbbbbbbb",
+} as Task;
+
 function AcceptanceFixture({ task, className }: { task: Task; className: string }) {
   const [reviewOpen, setReviewOpen] = useState(false);
   return (
@@ -325,6 +394,43 @@ function AcceptanceFixture({ task, className }: { task: Task; className: string 
       {reviewOpen
         ? <TaskReviewWorkspace task={task} allTasks={[task]} onClose={() => setReviewOpen(false)} onTaskUpdated={() => undefined} notify={() => undefined} />
         : <FreeWorkflowToolbar task={task} notify={() => undefined} />}
+    </section>
+  );
+}
+
+function PostMergeFixture() {
+  const [reviewOpen, setReviewOpen] = useState(false);
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [workflowState, setWorkflowState] = useState(postMergeState);
+  const latest = workflowState.reviews.find((run) => run.target?.kind === "accepted_merge");
+  const target = {
+    branch: postMergeTask.acceptedTargetBranch!,
+    baseCommit: postMergeTask.acceptedBaseCommit!,
+    mergeCommit: postMergeTask.acceptedMergeCommit!,
+  };
+  return (
+    <section className="post-merge-fixture">
+      <TaskHeader
+        task={postMergeTask}
+        conversationMarkdown=""
+        busy={false}
+        refreshing={false}
+        reviewOpen={reviewOpen}
+        onTitle={async () => undefined}
+        onTogglePin={async () => undefined}
+        onPrimary={() => undefined}
+        onRequeue={() => undefined}
+        onArchive={() => undefined}
+        onRefresh={() => undefined}
+        onReview={() => setReviewOpen((open) => !open)}
+        postMergeReviewLabel={latest?.status === "reviewing" ? "查看合并审查" : latest ? "再次审查合并结果" : "审查合并结果"}
+        onPostMergeReview={() => setDialogOpen(true)}
+        onDelete={() => undefined}
+        indicatorForTask={() => null}
+        notify={() => undefined}
+      />
+      {reviewOpen && <TaskReviewWorkspace task={postMergeTask} allTasks={[postMergeTask]} onTaskUpdated={() => undefined} notify={() => undefined} onPostMergeReview={() => setDialogOpen(true)} />}
+      {dialogOpen && <FreeReviewDialog taskId={postMergeTask.id} state={workflowState} reservationMode={false} postMergeTarget={target} onChanged={setWorkflowState} onClose={() => setDialogOpen(false)} notify={() => undefined} />}
     </section>
   );
 }
@@ -367,6 +473,10 @@ createRoot(document.getElementById("root")!).render(
       </div>
       <AcceptanceFixture task={acceptanceTask} className="acceptance-fixture" />
       <AcceptanceFixture task={reviewingAcceptanceTask} className="acceptance-blocked-fixture" />
+      <PostMergeFixture />
+      <aside className="inspector-host post-merge-inspector-fixture" style={{ width: 380, height: 420, marginTop: 20, marginLeft: "auto" }}>
+        <FreeWorkflowInspector task={postMergeTask} reviewOnly onOpenReview={() => undefined} onOpenTask={() => undefined} notify={() => undefined} />
+      </aside>
       <aside className="inspector-host repair-fixture" style={{ width: 380, height: 360, marginTop: 20, marginLeft: "auto" }}>
         <FreeWorkflowInspector task={repairTask} reviewOnly notify={() => undefined} />
       </aside>

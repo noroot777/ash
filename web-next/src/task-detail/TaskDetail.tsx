@@ -32,6 +32,8 @@ import { OriginTaskBar } from "../components/TaskOrigin.tsx";
 import { DerivedTaskLinks } from "../components/DerivedTaskLinks.tsx";
 import { FreeWorkflowInspector } from "../free-workflow/FreeWorkflowInspector.tsx";
 import { FreeWorkflowToolbar } from "../free-workflow/FreeWorkflowToolbar.tsx";
+import { FreeReviewDialog } from "../free-workflow/FreeReviewDialog.tsx";
+import { useFreeWorkflowState } from "../free-workflow/useFreeWorkflowState.ts";
 
 interface TaskInspectorContext {
   task: Task;
@@ -89,7 +91,7 @@ const TASK_INSPECTORS: readonly InspectorDescriptor<TaskInspectorContext>[] = [
     defaultOpen: true,
     shortcut: "r",
     render: (context) => context.task.workflowMode === "free"
-      ? <FreeWorkflowInspector task={context.task} reviewOnly onOpenReview={context.onOpenReview} notify={context.notify} />
+      ? <FreeWorkflowInspector task={context.task} reviewOnly onOpenReview={context.onOpenReview} onOpenTask={context.onOpenTask} notify={context.notify} />
       : <TaskReviewInspector {...context} />,
   },
 ];
@@ -127,6 +129,7 @@ export function TaskDetail({
   // 中间那一栏同一时刻只放一样东西：会话 / 审查工作区 / 文件。
   const [openFilePath, setOpenFilePath] = useState<string | null>(null);
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const [postMergeDialogOpen, setPostMergeDialogOpen] = useState(false);
   const [derivation, setDerivation] = useState<{
     command: TaskDerivationCommand;
     committed: boolean;
@@ -150,6 +153,15 @@ export function TaskDetail({
     [conversation.items, task],
   );
   const hasConversation = conversation.sessions.length > 0 || conversation.items.length > 0;
+  const postMergeTarget = task.stage === "accepted" && task.workflowMode === "free"
+    && task.acceptedTargetBranch && task.acceptedBaseCommit && task.acceptedMergeCommit
+    ? { branch: task.acceptedTargetBranch, baseCommit: task.acceptedBaseCommit, mergeCommit: task.acceptedMergeCommit }
+    : null;
+  const postMerge = useFreeWorkflowState(task.id, !!postMergeTarget);
+  const latestPostMerge = postMerge.state?.reviews.find((run) => run.target?.kind === "accepted_merge");
+  const postMergeReviewLabel = postMergeTarget
+    ? latestPostMerge?.status === "reviewing" ? "查看合并审查" : latestPostMerge ? "再次审查合并结果" : "审查合并结果"
+    : null;
   const derivationAllowed = canDeriveTask(task);
   const reviewFocused = REVIEW_FOCUS_STAGES.has(task.stage ?? "")
     || allTasks.some((candidate) => candidate.reviewOf === task.id);
@@ -177,6 +189,7 @@ export function TaskDetail({
   useEffect(() => {
     setReviewOpen(initialReviewOpen);
     setDeleteOpen(false);
+    setPostMergeDialogOpen(false);
     setDerivation(null);
     setOpenFilePath(null);
   }, [initialReviewOpen, task.id]);
@@ -288,7 +301,7 @@ export function TaskDetail({
       defaultVisible={inspectorMode === "page"}
       tabPolicy={inspectorPolicy}
     >
-      {({ toggleButton }) => (
+      {({ toggleButton, openTab }) => (
         <>
           <div className="task-detail">
             <OriginTaskBar task={task} allTasks={allTasks} onOpen={onOpenTask} />
@@ -305,6 +318,11 @@ export function TaskDetail({
               onArchive={() => void archive()}
               onRefresh={() => void refresh()}
               onReview={() => changeReviewOpen(!reviewOpen)}
+              postMergeReviewLabel={postMergeReviewLabel}
+              onPostMergeReview={postMergeTarget ? () => {
+                if (latestPostMerge?.status === "reviewing") openTab("review");
+                else setPostMergeDialogOpen(true);
+              } : undefined}
               onDelete={() => setDeleteOpen(true)}
               indicatorForTask={indicatorForTask}
               terminalToggle={terminalToggle}
@@ -312,7 +330,16 @@ export function TaskDetail({
               notify={notify}
             />
             {reviewOpen ? (
-              <TaskReviewWorkspace task={task} allTasks={allTasks} onTaskUpdated={onTaskUpdate} notify={notify} />
+              <TaskReviewWorkspace
+                task={task}
+                allTasks={allTasks}
+                onTaskUpdated={onTaskUpdate}
+                notify={notify}
+                onPostMergeReview={postMergeTarget ? () => {
+                  if (latestPostMerge?.status === "reviewing") openTab("review");
+                  else setPostMergeDialogOpen(true);
+                } : undefined}
+              />
             ) : openFilePath ? (
               <FileViewer
                 taskId={task.id}
@@ -409,6 +436,17 @@ export function TaskDetail({
                 notify={notify}
                 onDeleted={(ids) => ids.forEach(onDeleted)}
                 onClose={() => setDeleteOpen(false)}
+              />
+            )}
+            {postMergeDialogOpen && postMergeTarget && (
+              <FreeReviewDialog
+                taskId={task.id}
+                state={postMerge.state}
+                reservationMode={false}
+                postMergeTarget={postMergeTarget}
+                onChanged={postMerge.setState}
+                onClose={() => setPostMergeDialogOpen(false)}
+                notify={notify}
               />
             )}
           </div>

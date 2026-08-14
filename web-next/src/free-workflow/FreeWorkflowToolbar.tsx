@@ -29,7 +29,7 @@ export function FreeWorkflowToolbar({ task, notify }: { task: Task; notify: (mes
         ? "预约复审"
         : stale
           ? "审查新改动"
-          : free.state?.reviews.length
+          : free.state?.reviews.some((run) => run.target?.kind !== "accepted_merge")
             ? (stoppedRun ? "直接再审" : "再审")
             : "派审查";
   // 未通过的意见只在结论**可证明仍然新鲜**时才是「当前待办」：stale（代码变过）和

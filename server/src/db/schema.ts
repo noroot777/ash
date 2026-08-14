@@ -274,6 +274,13 @@ export const freeReviewRuns = sqliteTable(
     reasoningEffort: text("reasoning_effort"),
     checkMode: text("check_mode").notNull(),
     note: text("note"),
+    // workspace = 验收前任务工作区；accepted_merge = 验收时冻结的目标分支 commit 区间。
+    targetKind: text("target_kind").notNull().default("workspace"),
+    targetBranch: text("target_branch"),
+    targetBaseCommit: text("target_base_commit"),
+    targetCommit: text("target_commit"),
+    // 合并结果审查未通过后创建的独立修复任务；非空即幂等返回同一任务。
+    repairTaskId: text("repair_task_id"),
     retryLimit: integer("retry_limit").notNull().default(1),
     currentRound: integer("current_round").notNull().default(1),
     status: text("status").notNull(),

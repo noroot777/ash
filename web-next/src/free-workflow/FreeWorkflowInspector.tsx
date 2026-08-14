@@ -9,11 +9,13 @@ import type {
 import {
   CaretRight,
   CheckCircle,
+  GitCommit,
   MagnifyingGlass,
   MonitorPlay,
   SpinnerGap,
   StopCircle,
   WarningCircle,
+  Wrench,
 } from "@phosphor-icons/react";
 import { ImagePreviewGroup } from "../components/ImagePreview.tsx";
 import { MarkdownBody } from "../components/MarkdownBody.tsx";
@@ -102,27 +104,43 @@ export function FreeWorkflowInspector({
   task,
   reviewOnly = false,
   onOpenReview,
+  onOpenTask,
   notify,
 }: {
   task: Task;
   reviewOnly?: boolean;
   onOpenReview?: () => void;
+  onOpenTask?: (taskId: string) => void;
   notify?: (message: string) => void;
 }) {
   const free = useFreeWorkflowState(task.id);
   const [selectedReviewKey, setSelectedReviewKey] = useState<string | null>(null);
   const [reviewDialogOpen, setReviewDialogOpen] = useState(false);
+  const [postMergeDialogOpen, setPostMergeDialogOpen] = useState(false);
+  const [repairBusy, setRepairBusy] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const workflowListRef = useRef<HTMLOListElement>(null);
   const reviewListRef = useRef<HTMLDivElement>(null);
+  const postMergeReviewListRef = useRef<HTMLDivElement>(null);
   const state = free.state;
   const activities = useMemo(() => actualActivities(state), [state]);
   const latestPreviewEvent = state?.previewEvents.at(-1);
   const reviewActivities = activities.filter((activity): activity is ReviewActivity => activity.type === "review");
+  const workspaceReviewActivities = reviewActivities.filter((activity) => activity.run.target?.kind !== "accepted_merge");
+  const postMergeReviewActivities = reviewActivities.filter((activity) => activity.run.target?.kind === "accepted_merge");
   const opened = selectedReviewKey
     ? reviewActivities.find((activity) => reviewKey(activity.run.id, activity.round.round) === selectedReviewKey) ?? null
     : null;
-  const latestReview = reviewActivities.at(-1);
+  const latestReview = workspaceReviewActivities.at(-1);
+  const postMergeRuns = state?.reviews.filter((run) => run.target?.kind === "accepted_merge") ?? [];
+  const latestPostMerge = postMergeRuns[0];
+  const latestPostMergeRound = latestPostMerge?.rounds.at(-1);
+  const postMergeRepairTaskId = latestPostMerge?.target?.kind === "accepted_merge"
+    ? latestPostMerge.target.repairTaskId
+    : null;
+  const acceptedTarget = task.stage === "accepted" && task.acceptedTargetBranch && task.acceptedBaseCommit && task.acceptedMergeCommit
+    ? { branch: task.acceptedTargetBranch, baseCommit: task.acceptedBaseCommit, mergeCommit: task.acceptedMergeCommit }
+    : null;
   const view = freeReviewView(state, task);
   const { latestRun, reviewing, stoppedRun, taskBusy, reservationArmed, repairing, stale } = view;
   const taskReady = task.status !== "backlog";
@@ -138,7 +156,7 @@ export function FreeWorkflowInspector({
         ? "预约复审"
         : stale
           ? "审查新改动"
-          : reviewActivities.length ? "再审一轮" : "派审查";
+          : workspaceReviewActivities.length ? "再审一轮" : "派审查";
   const exhausted = stoppedRun && stoppedRun.currentRound > stoppedRun.retryLimit;
   const overviewDetail = reviewing
     ? `第 ${reviewing.currentRound} 轮审查中`
@@ -163,12 +181,35 @@ export function FreeWorkflowInspector({
     setSelectedReviewKey((current) => current === key ? null : key);
   };
 
+  const openLatestPostMerge = () => {
+    if (latestPostMerge && latestPostMergeRound) selectReview(latestPostMerge, latestPostMergeRound);
+  };
+
+  const createPostMergeRepair = async () => {
+    if (!latestPostMerge || repairBusy || !notify || !onOpenTask) return;
+    setRepairBusy(true);
+    try {
+      const repair = await api.createPostMergeRepairTask(task.id, latestPostMerge.id);
+      await free.reload(true);
+      notify(`已创建独立修复任务「${repair.title}」`);
+      onOpenTask(repair.id);
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "修复任务创建失败");
+    } finally {
+      setRepairBusy(false);
+    }
+  };
+
   const drawer = opened && (
     <ImagePreviewGroup isolated>
       <ReviewEvidenceDrawer
         anchorRef={rootRef}
-        keepOpenRef={reviewOnly ? reviewListRef : workflowListRef}
-        title={`第 ${opened.round.round} 轮审查`}
+        keepOpenRef={reviewOnly
+          ? opened.run.target?.kind === "accepted_merge" ? postMergeReviewListRef : reviewListRef
+          : workflowListRef}
+        title={opened.run.target?.kind === "accepted_merge"
+          ? `合并结果审查 · ${opened.run.target.mergeCommit.slice(0, 8)}`
+          : `第 ${opened.round.round} 轮审查`}
         subtitle={`${reviewRoundLabel(opened.round)} · ${opened.run.reviewerName} · ${opened.run.checkMode === "logic" ? "逻辑检查" : "语法检查"}`}
         onClose={() => setSelectedReviewKey(null)}
         footer={opened.round.screenshots.length ? (
@@ -191,6 +232,47 @@ export function FreeWorkflowInspector({
     return (
       <>
         <div className="review-inspector free-workflow-review-inspector" aria-label="自由任务审查" ref={rootRef}>
+          {acceptedTarget && (
+            <section className="post-merge-review-card" aria-label="合并结果审查">
+              <header>
+                <span><GitCommit size={13} /></span>
+                <div>
+                  <b>合并结果</b>
+                  <small>{acceptedTarget.branch} · {acceptedTarget.baseCommit.slice(0, 8)} → {acceptedTarget.mergeCommit.slice(0, 8)}</small>
+                </div>
+                <em>可选</em>
+              </header>
+              <p>{latestPostMerge?.status === "reviewing"
+                ? "正在冻结的验收快照上审查，原任务仍保持已验收。"
+                : latestPostMerge?.status === "passed"
+                  ? "最近一次合并结果审查已通过。"
+                  : latestPostMerge?.status === "stopped"
+                    ? "最近一次审查未通过；可另建修复任务，不会重开原任务。"
+                    : latestPostMerge?.status === "failed"
+                      ? "最近一次审查异常停止，可重新发起。"
+                      : "需要时再检查最终集成状态，不影响已完成验收。"}</p>
+              <div>
+                {latestPostMergeRound && (
+                  <button type="button" onClick={openLatestPostMerge}>
+                    <MagnifyingGlass size={12} />{latestPostMerge?.status === "reviewing" ? "查看审查进度" : "查看审查结果"}
+                  </button>
+                )}
+                {latestPostMerge?.status === "stopped" && !postMergeRepairTaskId && onOpenTask && (
+                  <button type="button" disabled={repairBusy} onClick={() => void createPostMergeRepair()}>
+                    {repairBusy ? <SpinnerGap size={12} className="is-spinning" /> : <Wrench size={12} />}{repairBusy ? "创建中…" : "创建修复任务"}
+                  </button>
+                )}
+                {postMergeRepairTaskId && onOpenTask && (
+                  <button type="button" onClick={() => onOpenTask(postMergeRepairTaskId)}><CaretRight size={12} />打开修复任务</button>
+                )}
+                {latestPostMerge?.status !== "reviewing" && (
+                  <button type="button" onClick={() => setPostMergeDialogOpen(true)}>
+                    <MagnifyingGlass size={12} />{latestPostMerge ? "再审一次" : "开始审查"}
+                  </button>
+                )}
+              </div>
+            </section>
+          )}
           <section className="review-inspector__overview">
             <header>
               <span className={`review-inspector__status${overviewStatus ? ` is-${overviewStatus}` : latestReview?.round.conclusion ? ` is-${latestReview.round.conclusion}` : ""}`}>
@@ -201,7 +283,7 @@ export function FreeWorkflowInspector({
                     : latestReview ? reviewStatusIcon(latestReview.round) : <MagnifyingGlass size={13} />}
               </span>
               <div>
-                <b>{reviewActivities.length ? `${reviewActivities.length} 轮审查` : "自由审查"}</b>
+                <b>{workspaceReviewActivities.length ? `${workspaceReviewActivities.length} 轮审查` : "实现阶段审查"}</b>
                 <small>{overviewDetail}</small>
               </div>
             </header>
@@ -217,14 +299,14 @@ export function FreeWorkflowInspector({
                   notify={notify}
                 />
               )}
-              <button
+              {!locked && <button
                 type="button"
                 disabled={!taskReady || locked || !!reviewing || !notify || (waiting && !reservationArmed)}
                 onClick={() => setReviewDialogOpen(true)}
               >
                 {reviewing ? <SpinnerGap size={13} className="is-spinning" /> : <MagnifyingGlass size={13} />}
                 <span>{reviewActionLabel}</span>
-              </button>
+              </button>}
               {onOpenReview && <button type="button" onClick={onOpenReview}><span>打开改动工作区</span><CaretRight size={13} /></button>}
             </div>
           </section>
@@ -232,11 +314,11 @@ export function FreeWorkflowInspector({
           <section className="review-inspector__targets" aria-label="自由审查轮次">
             <header>
               <b>审查记录</b>
-              <small>{reviewActivities.length ? `已记录 ${reviewActivities.length} 轮审查，点开在左侧看报告与截图` : "结论、报告与截图集中保存在这里"}</small>
+              <small>{workspaceReviewActivities.length ? `已记录 ${workspaceReviewActivities.length} 轮审查，点开在左侧看报告与截图` : "结论、报告与截图集中保存在这里"}</small>
             </header>
             <div ref={reviewListRef}>
-              {!reviewActivities.length && <p className="review-inspector__empty">点击上方“派审查”，选择审查者、检查类型和自动复审次数。</p>}
-              {reviewActivities.map((activity) => {
+              {!workspaceReviewActivities.length && <p className="review-inspector__empty">{locked ? "该任务在验收前没有实现阶段审查记录。" : "点击上方“派审查”，选择审查者、检查类型和自动复审次数。"}</p>}
+              {workspaceReviewActivities.map((activity) => {
                 const key = reviewKey(activity.run.id, activity.round.round);
                 const failed = activity.round.status !== "reviewing" && activity.round.conclusion !== "verified";
                 return (
@@ -257,6 +339,23 @@ export function FreeWorkflowInspector({
               })}
             </div>
           </section>
+          {postMergeReviewActivities.length > 0 && (
+            <section className="review-inspector__targets post-merge-review-records" aria-label="合并结果审查记录">
+              <header><b>合并结果审查</b><small>固定针对验收快照；失败不会重开原任务</small></header>
+              <div ref={postMergeReviewListRef}>
+                {postMergeReviewActivities.map((activity) => {
+                  const key = reviewKey(activity.run.id, activity.round.round);
+                  const failed = activity.round.status !== "reviewing" && activity.round.conclusion !== "verified";
+                  return (
+                    <button type="button" key={key} className={key === selectedReviewKey ? "is-selected" : failed ? "is-failed" : ""} aria-expanded={key === selectedReviewKey} onClick={() => selectReview(activity.run, activity.round)}>
+                      <span><b>{activity.run.target?.kind === "accepted_merge" ? `${activity.run.target.branch}@${activity.run.target.mergeCommit.slice(0, 8)}` : "验收快照"}</b><small>{activity.run.reviewerName} · {timing(activity.round.startedAt, activity.round.endedAt)}</small></span>
+                      <em>{reviewStatusIcon(activity.round)}{reviewRoundLabel(activity.round)}</em>
+                    </button>
+                  );
+                })}
+              </div>
+            </section>
+          )}
         </div>
         {drawer}
         {reviewDialogOpen && notify && (
@@ -268,6 +367,9 @@ export function FreeWorkflowInspector({
             onClose={() => setReviewDialogOpen(false)}
             notify={notify}
           />
+        )}
+        {postMergeDialogOpen && notify && acceptedTarget && (
+          <FreeReviewDialog taskId={task.id} state={state} reservationMode={false} postMergeTarget={acceptedTarget} onChanged={free.setState} onClose={() => setPostMergeDialogOpen(false)} notify={notify} />
         )}
       </>
     );

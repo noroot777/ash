@@ -23,6 +23,17 @@ export interface TaskDiffResult {
   reason?: string;
 }
 
+function parseNumstat(numstat: string): TaskDiffFile[] {
+  return numstat.split("\n").filter(Boolean).map((line): TaskDiffFile => {
+    const [additions, deletions, ...pathParts] = line.split("\t");
+    return {
+      path: pathParts.join("\t"),
+      additions: additions === "-" ? null : Number(additions),
+      deletions: deletions === "-" ? null : Number(deletions),
+    };
+  });
+}
+
 async function localBranchExists(repo: string, branch: string): Promise<boolean> {
   try {
     await exec("git", ["-C", repo, "show-ref", "--verify", "--quiet", `refs/heads/${branch}`]);
@@ -104,17 +115,7 @@ export async function taskBranchDiff(
     exec("git", ["-C", repo, "diff", "--numstat", mergeBase, sourceBranch], { maxBuffer: 16 * 1024 * 1024 }),
     cappedGitStdout(repo, ["diff", "--no-ext-diff", "--no-color", "--unified=3", mergeBase, sourceBranch], limitBytes),
   ]);
-  const files = numstat
-    .split("\n")
-    .filter(Boolean)
-    .map((line): TaskDiffFile => {
-      const [additions, deletions, ...pathParts] = line.split("\t");
-      return {
-        path: pathParts.join("\t"),
-        additions: additions === "-" ? null : Number(additions),
-        deletions: deletions === "-" ? null : Number(deletions),
-      };
-    });
+  const files = parseNumstat(numstat);
   return {
     available: true,
     sourceBranch,
@@ -125,4 +126,47 @@ export async function taskBranchDiff(
     truncated: diff.truncated,
     limitBytes,
   };
+}
+
+/** 验收后原任务分支/worktree 已清理，按冻结的准确 commit 区间读取合并结果。 */
+export async function acceptedCommitDiff(
+  repoPath: string,
+  branch: string,
+  baseCommit: string,
+  mergeCommit: string,
+  limitBytes = DIFF_LIMIT_BYTES,
+): Promise<TaskDiffResult> {
+  const repo = expandHome(repoPath);
+  const sourceBranch = `${branch}@${baseCommit.slice(0, 8)}`;
+  const targetBranch = `${branch}@${mergeCommit.slice(0, 8)}`;
+  const empty = (reason: string): TaskDiffResult => ({
+    available: false,
+    sourceBranch,
+    targetBranch,
+    mergeBase: baseCommit,
+    diff: "",
+    files: [],
+    truncated: false,
+    limitBytes,
+    reason,
+  });
+  if (!(await isGitRepo(repo))) return empty("not_git_repo");
+  try {
+    const [{ stdout: numstat }, diff] = await Promise.all([
+      exec("git", ["-C", repo, "diff", "--numstat", baseCommit, mergeCommit], { maxBuffer: 16 * 1024 * 1024 }),
+      cappedGitStdout(repo, ["diff", "--no-ext-diff", "--no-color", "--unified=3", baseCommit, mergeCommit], limitBytes),
+    ]);
+    return {
+      available: true,
+      sourceBranch,
+      targetBranch,
+      mergeBase: baseCommit,
+      diff: diff.text,
+      files: parseNumstat(numstat),
+      truncated: diff.truncated,
+      limitBytes,
+    };
+  } catch {
+    return empty("accepted_snapshot_unreadable");
+  }
 }

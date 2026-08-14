@@ -150,6 +150,15 @@ async function readFreeWorkflowState(taskId: string): Promise<FreeWorkflowApiSta
     reasoningEffort: run.reasoningEffort,
     checkMode: run.checkMode as FreeReviewCheckMode,
     note: run.note,
+    target: run.targetKind === "accepted_merge" && run.targetBranch && run.targetBaseCommit && run.targetCommit
+      ? {
+          kind: "accepted_merge" as const,
+          branch: run.targetBranch,
+          baseCommit: run.targetBaseCommit,
+          mergeCommit: run.targetCommit,
+          repairTaskId: run.repairTaskId ?? null,
+        }
+      : { kind: "workspace" as const },
     retryLimit: run.retryLimit,
     currentRound: run.currentRound,
     status: run.status as FreeReviewRun["status"],

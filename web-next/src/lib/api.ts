@@ -303,6 +303,10 @@ export const api = {
     request(`/tasks/${id(taskId)}/free-workflow`),
   dispatchFreeReview: (taskId: string, input: FreeReviewDispatchInput): Promise<FreeWorkflowApiState> =>
     request(`/tasks/${id(taskId)}/free-workflow/review`, json("POST", input)),
+  dispatchPostMergeReview: (taskId: string, input: FreeReviewDispatchInput): Promise<FreeWorkflowApiState> =>
+    request(`/tasks/${id(taskId)}/free-workflow/post-merge-review`, json("POST", input)),
+  createPostMergeRepairTask: (taskId: string, runId: string): Promise<Task> =>
+    request(`/tasks/${id(taskId)}/free-workflow/post-merge-review/repair`, json("POST", { runId })),
   repairFreeReview: (taskId: string): Promise<FreeWorkflowApiState> =>
     request(`/tasks/${id(taskId)}/free-workflow/review/repair`, { method: "POST" }),
   reserveFreeReview: (taskId: string, input: FreeReviewDispatchInput): Promise<FreeWorkflowApiState> =>

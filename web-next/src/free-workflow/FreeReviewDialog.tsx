@@ -26,6 +26,7 @@ export function FreeReviewDialog({
   taskId,
   state,
   reservationMode,
+  postMergeTarget,
   onChanged,
   onClose,
   notify,
@@ -33,6 +34,7 @@ export function FreeReviewDialog({
   taskId: string;
   state: FreeWorkflowApiState | null;
   reservationMode: boolean;
+  postMergeTarget?: { branch: string; baseCommit: string; mergeCommit: string } | null;
   onChanged: (state: FreeWorkflowApiState) => void;
   onClose: () => void;
   notify: (message: string) => void;
@@ -53,7 +55,10 @@ export function FreeReviewDialog({
   const [newName, setNewName] = useState("");
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
-  const dialogTitle = reservationMode ? (state?.reviewReservation?.armed ? "调整预约审查" : "预约审查") : "派审查";
+  const postMerge = !!postMergeTarget;
+  const dialogTitle = postMerge
+    ? "审查合并结果"
+    : reservationMode ? (state?.reviewReservation?.armed ? "调整预约审查" : "预约审查") : "派审查";
   const types = useMemo(() => registeredAgentTypes(profiles), [profiles]);
   // 预约里的覆盖每次轮询都是新对象，直接进依赖会把用户正在改的草稿冲掉；按值序列化当键。
   const reservedOverrideKey = JSON.stringify(state?.reviewReservation?.override ?? null);
@@ -148,21 +153,23 @@ export function FreeReviewDialog({
       const input = {
         reviewerId,
         checkMode,
-        retryLimit: Number(retryLimit),
+        retryLimit: postMerge ? 0 : Number(retryLimit),
         note,
         override,
       };
-      const next = reservationMode
-        ? await api.reserveFreeReview(taskId, input)
-        : await api.dispatchFreeReview(taskId, input);
+      const next = postMerge
+        ? await api.dispatchPostMergeReview(taskId, input)
+        : reservationMode
+          ? await api.reserveFreeReview(taskId, input)
+          : await api.dispatchFreeReview(taskId, input);
       onChanged(next);
       const name = reviewerId === selectedId
         ? reviewers.find((item) => item.id === selectedId)?.name ?? "审查者"
         : newName.trim();
-      notify(reservationMode ? `已预约完成后由「${name}」审查` : `已派出 ${name}`);
+      notify(postMerge ? `已派出 ${name} 审查合并结果` : reservationMode ? `已预约完成后由「${name}」审查` : `已派出 ${name}`);
       onClose();
     } catch (error) {
-      notify(error instanceof Error ? error.message : reservationMode ? "预约审查失败" : "派审失败");
+      notify(error instanceof Error ? error.message : postMerge ? "合并结果审查启动失败" : reservationMode ? "预约审查失败" : "派审失败");
     } finally {
       setBusy(false);
     }
@@ -206,7 +213,7 @@ export function FreeReviewDialog({
       >
         <header>
           <span><MagnifyingGlass size={17} weight="bold" /></span>
-          <div><h2 id="free-review-title">{dialogTitle}</h2><p>{reservationMode ? "选择审查者与检查深度；任务确认完成后自动开始。" : "选择一套审查者配置，再决定检查深度与失败后的自动复审次数。"}</p></div>
+          <div><h2 id="free-review-title">{dialogTitle}</h2><p>{postMerge ? "在验收时冻结的目标分支快照上做一次可选检查；未通过时另建修复任务。" : reservationMode ? "选择审查者与检查深度；任务确认完成后自动开始。" : "选择一套审查者配置，再决定检查深度与失败后的自动复审次数。"}</p></div>
           <button type="button" aria-label={`关闭${dialogTitle}`} disabled={busy} onClick={onClose}><X size={15} /></button>
         </header>
         {loading ? <div className="free-review-loading"><SpinnerGap size={15} className="is-spinning" />正在读取审查者…</div> : (
@@ -248,8 +255,14 @@ export function FreeReviewDialog({
               )}
             </section>
             <section className="free-review-options">
+              {postMergeTarget && (
+                <dl className="free-review-target">
+                  <div><dt>目标分支</dt><dd>{postMergeTarget.branch}</dd></div>
+                  <div><dt>审查区间</dt><dd>{postMergeTarget.baseCommit.slice(0, 8)} → {postMergeTarget.mergeCommit.slice(0, 8)}</dd></div>
+                </dl>
+              )}
               <label><span>检查类型</span><select value={checkMode} onChange={(event) => setCheckMode(event.target.value as FreeReviewCheckMode)}><option value="logic">逻辑检查</option><option value="syntax">只做语法检查</option></select></label>
-              <label><span>失败后自动复审</span><select value={retryLimit} onChange={(event) => setRetryLimit(event.target.value)}>{[0, 1, 2, 3, 5].map((value) => <option key={value} value={value}>{value} 轮</option>)}</select></label>
+              {!postMerge && <label><span>失败后自动复审</span><select value={retryLimit} onChange={(event) => setRetryLimit(event.target.value)}>{[0, 1, 2, 3, 5].map((value) => <option key={value} value={value}>{value} 轮</option>)}</select></label>}
               <label className="free-review-note">
                 <span>附言（可选）</span>
                 <textarea
@@ -267,15 +280,15 @@ export function FreeReviewDialog({
                 />
                 <small id="free-review-note-hint">Enter 提交 · Shift+Enter 换行</small>
               </label>
-              <p>默认 1 轮：首次审查未通过后，执行方修完会自动再审一次。逻辑检查遇到可见前端改动时必须真实打开页面并截图。</p>
+              <p>{postMerge ? "这次只检查冻结的合并快照，不改动原任务。若发现问题，可从审查记录创建基于该 merge commit 的独立修复任务。" : "默认 1 轮：首次审查未通过后，执行方修完会自动再审一次。逻辑检查遇到可见前端改动时必须真实打开页面并截图。"}</p>
             </section>
           </div>
         )}
         <footer>
-          {state?.reviewReservation?.armed && <button type="button" disabled={busy} onClick={() => void cancelReservation()}>取消预约</button>}
-          <button type="button" disabled={busy} onClick={onClose}>{state?.reviewReservation?.armed ? "关闭" : "取消"}</button>
+          {!postMerge && state?.reviewReservation?.armed && <button type="button" disabled={busy} onClick={() => void cancelReservation()}>取消预约</button>}
+          <button type="button" disabled={busy} onClick={onClose}>{!postMerge && state?.reviewReservation?.armed ? "关闭" : "取消"}</button>
           <button className="is-primary" type="submit" aria-keyshortcuts="Enter" disabled={busy || loading || !selectedId}>
-            {busy ? (reservationMode ? "保存中…" : "启动中…") : reservationMode ? (state?.reviewReservation?.armed ? "保存预约" : "预约审查") : "开始审查"}
+            {busy ? (reservationMode && !postMerge ? "保存中…" : "启动中…") : postMerge ? "开始审查" : reservationMode ? (state?.reviewReservation?.armed ? "保存预约" : "预约审查") : "开始审查"}
           </button>
         </footer>
       </form>

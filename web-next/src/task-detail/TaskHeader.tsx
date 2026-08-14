@@ -9,6 +9,7 @@ import {
   DotsThree,
   DownloadSimple,
   GitDiff,
+  GitCommit,
   ListNumbers,
   Play,
   SpinnerGap,
@@ -74,6 +75,8 @@ export function TaskHeader({
   onArchive,
   onRefresh,
   onReview,
+  postMergeReviewLabel,
+  onPostMergeReview,
   onDelete,
   indicatorForTask,
   terminalToggle,
@@ -92,6 +95,8 @@ export function TaskHeader({
   onArchive: () => void;
   onRefresh: () => void;
   onReview: () => void;
+  postMergeReviewLabel?: string | null;
+  onPostMergeReview?: () => void;
   onDelete: () => void;
   indicatorForTask: IndicatorForTask;
   terminalToggle?: ReactNode;
@@ -263,6 +268,11 @@ export function TaskHeader({
             <button type="button" role="menuitem" onClick={() => { setMenu(false); onReview(); }}>
               <GitDiff size={14} />查看改动与审查
             </button>
+            {postMergeReviewLabel && onPostMergeReview && (
+              <button type="button" role="menuitem" onClick={() => { setMenu(false); onPostMergeReview(); }}>
+                <GitCommit size={14} />{postMergeReviewLabel}
+              </button>
+            )}
             <button type="button" role="menuitem" onClick={() => void copy(conversationMarkdown, "已复制全部对话")} disabled={!conversationMarkdown.trim()}>
               <Copy size={14} />复制全部对话
             </button>

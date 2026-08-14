@@ -16,7 +16,8 @@ try {
   const { ensureSchema, db } = await import("../src/db/index.js");
   const { agents, projects, sessions, tasks } = await import("../src/db/schema.js");
   const { createTasks } = await import("../src/task-store.js");
-  const { mountFreeWorkflowRoutes, handleFreeWorkflowSettlement } = await import("../src/free-workflow.js");
+  const { handleFreeWorkflowSettlement } = await import("../src/free-workflow.js");
+  const { mountFreeWorkflowRoutes } = await import("../src/free-workflow-routes.js");
   const {
     clearReservationForDispatch,
     readFreeReviewReservation,

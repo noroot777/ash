@@ -20,7 +20,7 @@ try {
   const { ensureSchema, db } = await import("../src/db/index.js");
   const { agents, freeReviewRounds, freeReviewRuns, freeWorkflowStates, projects, sessions, tasks } = await import("../src/db/schema.js");
   const { createTasks } = await import("../src/task-store.js");
-  const { mountFreeWorkflowRoutes } = await import("../src/free-workflow.js");
+  const { mountFreeWorkflowRoutes } = await import("../src/free-workflow-routes.js");
   const { claimTurn, releaseTurn } = await import("../src/runs.js");
   const { prepareWorktree } = await import("../src/git.js");
   const { mountReviewerProfileRoutes } = await import("../src/reviewer-profiles.js");

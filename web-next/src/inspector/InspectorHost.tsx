@@ -326,7 +326,7 @@ function InspectorHostState<Context>({
   return (
     <div className="inspector-layout">
       <div className="inspector-layout__main">
-        {children({ visible: panelVisible, toggle, toggleButton })}
+        {children({ visible: panelVisible, toggle, openTab, toggleButton })}
       </div>
       {panelVisible && activeDescriptor && (
         <aside

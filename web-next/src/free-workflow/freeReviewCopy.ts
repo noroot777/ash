@@ -68,7 +68,8 @@ export type FreeReviewView = {
 };
 
 export function freeReviewView(state: FreeWorkflowState | null | undefined, task: Task): FreeReviewView {
-  const reviews = state?.reviews ?? [];
+  // 合并结果审查是验收后的独立只读链，不参与验收前的修复、新鲜度和预约语义。
+  const reviews = (state?.reviews ?? []).filter((run) => run.target?.kind !== "accepted_merge");
   const latestRun = reviews[0];
   const reviewing = reviews.find((run) => run.status === "reviewing");
   const stoppedRun = latestRun?.status === "stopped" ? latestRun : null;

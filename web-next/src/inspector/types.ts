@@ -24,5 +24,6 @@ export interface InspectorTabPolicy {
 export interface InspectorHostControls {
   visible: boolean;
   toggle: () => void;
+  openTab: (id: string) => void;
   toggleButton: ReactNode;
 }

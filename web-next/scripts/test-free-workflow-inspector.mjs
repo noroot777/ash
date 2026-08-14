@@ -161,6 +161,40 @@ try {
   assert.equal(await blockedButton.isDisabled(), true, "自由审查进行中应在验收页禁用验收按钮");
   assert.equal(await blockedWorkspace.getByRole("button", { name: "验收通过", exact: true }).count(), 0);
 
+  const postMergeFixture = page.locator(".post-merge-fixture");
+  const postMergeHeader = postMergeFixture.locator(".task-detail-header");
+  assert.equal(await postMergeHeader.getByRole("button", { name: "已验收", exact: true }).count(), 1, "合并结果审查不能抢占已验收主按钮");
+  assert.equal(await postMergeHeader.getByRole("button", { name: "审查合并结果", exact: true }).count(), 0, "合并审查默认只藏在更多菜单里");
+  await postMergeHeader.getByRole("button", { name: "更多任务操作" }).click();
+  const menuReview = postMergeHeader.getByRole("menuitem", { name: "审查合并结果" });
+  await menuReview.waitFor();
+  await menuReview.click();
+  await reviewDialog.getByRole("heading", { name: "审查合并结果" }).waitFor();
+  await reviewDialog.getByRole("button", { name: /Codex 审查/ }).waitFor();
+  assert.match(await reviewDialog.innerText(), /main/);
+  assert.match(await reviewDialog.innerText(), /11111111.*22222222/);
+  assert.equal(await reviewDialog.getByText("失败后自动复审", { exact: true }).count(), 0, "合并后审查固定单轮，不显示自动复审设置");
+  await reviewDialog.getByRole("button", { name: "关闭审查合并结果" }).click();
+
+  await postMergeHeader.getByRole("button", { name: "更多任务操作" }).click();
+  await postMergeHeader.getByRole("menuitem", { name: "查看改动与审查" }).click();
+  const postMergeWorkspace = postMergeFixture.locator(".single-review-workspace");
+  await postMergeWorkspace.getByRole("region", { name: "验收合并快照" }).waitFor();
+  const snapshotLink = postMergeWorkspace.getByRole("button", { name: /审查本次合并/ });
+  assert.equal(await snapshotLink.count(), 1, "统一验收快照卡应提供低调文字入口");
+  await snapshotLink.click();
+  await reviewDialog.getByRole("heading", { name: "审查合并结果" }).waitFor();
+  await reviewDialog.getByRole("button", { name: /Codex 审查/ }).waitFor();
+  await reviewDialog.getByRole("button", { name: "开始审查", exact: true }).click();
+  await page.waitForFunction(() => window.__postMergeRequests === 1);
+  assert.equal(await page.evaluate(() => window.__postMergeRequests), 1, "快照入口应发起一次合并结果审查");
+
+  const postMergeInspector = page.locator(".post-merge-inspector-fixture");
+  await postMergeInspector.getByRole("region", { name: "合并结果审查", exact: true }).waitFor();
+  await postMergeInspector.getByRole("button", { name: "查看审查进度" }).waitFor({ timeout: 5000 });
+  assert.equal(await postMergeInspector.getByText("可选", { exact: true }).count(), 1, "Inspector 应明确标注合并结果审查是可选操作");
+  assert.match(await postMergeInspector.getByRole("region", { name: "合并结果审查", exact: true }).innerText(), /原任务仍保持已验收/);
+
   console.log("free workflow inspector preview test passed");
 } finally {
   await browser?.close();

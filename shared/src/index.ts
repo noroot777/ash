@@ -320,6 +320,10 @@ export interface Task {
   // Existing worktrees are reused; cleanup is an explicit user action.
   useWorktree?: boolean;
   worktreeBase?: string | null;
+  // 统一验收冻结的合并快照。三项齐全时才能发起合并结果审查。
+  acceptedTargetBranch?: string | null;
+  acceptedBaseCommit?: string | null;
+  acceptedMergeCommit?: string | null;
   // §Workflow 这个任务当初挑的那条线，**创建时拷下来的快照**（改起手式库不会追着改
   // 它）。老任务为 null —— 那时还没有这个概念，按写死的老流程走。
   workflow?: WorkflowDef | null;

@@ -142,6 +142,8 @@ export async function ensureSchema() {
       id TEXT PRIMARY KEY, task_id TEXT NOT NULL, reviewer_id TEXT,
       reviewer_name TEXT NOT NULL, agent_type TEXT NOT NULL, executor_id TEXT,
       model TEXT, reasoning_effort TEXT, check_mode TEXT NOT NULL, note TEXT,
+      target_kind TEXT NOT NULL DEFAULT 'workspace', target_branch TEXT,
+      target_base_commit TEXT, target_commit TEXT, repair_task_id TEXT,
       retry_limit INTEGER NOT NULL DEFAULT 1, current_round INTEGER NOT NULL DEFAULT 1,
       status TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, finished_at TEXT
     );
@@ -269,6 +271,11 @@ export async function ensureSchema() {
     "ALTER TABLE free_workflow_states ADD COLUMN review_model TEXT",
     "ALTER TABLE free_workflow_states ADD COLUMN review_reasoning_effort TEXT",
     "ALTER TABLE free_review_runs ADD COLUMN note TEXT",
+    "ALTER TABLE free_review_runs ADD COLUMN target_kind TEXT NOT NULL DEFAULT 'workspace'",
+    "ALTER TABLE free_review_runs ADD COLUMN target_branch TEXT",
+    "ALTER TABLE free_review_runs ADD COLUMN target_base_commit TEXT",
+    "ALTER TABLE free_review_runs ADD COLUMN target_commit TEXT",
+    "ALTER TABLE free_review_runs ADD COLUMN repair_task_id TEXT",
     "ALTER TABLE free_review_rounds ADD COLUMN reviewed_commit TEXT",
     // 统一验收的结构化合并落账（目标分支 + 合并前后 commit），合并后基线审查靠它。
     "ALTER TABLE tasks ADD COLUMN accepted_target_branch TEXT",

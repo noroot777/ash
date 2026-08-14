@@ -14,7 +14,7 @@ import { hasActiveFreeReview } from "./free-workflow.js";
 import { disarmFreeReviewReservation } from "./free-review-reservations.js";
 import { releaseFreeWorkflowAction, tryAcquireFreeWorkflowAction } from "./free-workflow-lock.js";
 import { taskWorkflowDef } from "./workflows.js";
-import { taskBranchDiff } from "./git-diff.js";
+import { acceptedCommitDiff, taskBranchDiff } from "./git-diff.js";
 import { publishTaskUpdated } from "./task-store.js";
 import { stopPreviewAtAccept } from "./preview.js";
 import { IS_PREVIEW_INSTANCE, previewRefusal } from "./preview-instance.js";
@@ -629,6 +629,14 @@ export function mountTaskAcceptanceRoutes(api: Hono): void {
     if (!task) return c.json({ error: "not found" }, 404);
     const project = (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0);
     if (!project) return c.json({ error: "project not found", projectId: task.projectId }, 404);
+    if (task.stage === "accepted" && task.acceptedTargetBranch && task.acceptedBaseCommit && task.acceptedMergeCommit) {
+      return c.json(await acceptedCommitDiff(
+        project.repoPath,
+        task.acceptedTargetBranch,
+        task.acceptedBaseCommit,
+        task.acceptedMergeCommit,
+      ));
+    }
     return c.json(await taskBranchDiff(project.repoPath, taskId, task.worktreeBase));
   });
 }

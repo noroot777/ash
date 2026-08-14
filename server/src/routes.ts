@@ -45,7 +45,7 @@ import { mountFileRoutes } from "./file-routes.js";
 import { mountOpenAiConverterRoutes } from "./openai-converter/routes.js";
 import { mountProviderTestRoutes } from "./provider-test.js";
 import { mountTerminalRoutes } from "./terminal.js";
-import { mountFreeWorkflowRoutes } from "./free-workflow.js";
+import { mountFreeWorkflowRoutes } from "./free-workflow-routes.js";
 import { mountReviewerProfileRoutes } from "./reviewer-profiles.js";
 import { mountLocalOpenRoutes } from "./local-open-routes.js";
 

@@ -19,7 +19,6 @@ try {
   const { agents, freeReviewRounds, freeReviewRuns, freeWorkflowStates, projects, sessions, tasks } = await import("../src/db/schema.js");
   const { createTasks } = await import("../src/task-store.js");
   const {
-    mountFreeWorkflowRoutes,
     freeReviewOutcome,
     freeReviewPrompt,
     freeReviewReminder,
@@ -29,6 +28,7 @@ try {
     handleFreeWorkflowSettlement,
     startManualFreeReviewRepair,
   } = await import("../src/free-workflow.js");
+  const { mountFreeWorkflowRoutes } = await import("../src/free-workflow-routes.js");
   const { releaseFreeWorkflowAction, tryAcquireFreeWorkflowAction } = await import("../src/free-workflow-lock.js");
   const {
     finishFreeTaskExecution,
