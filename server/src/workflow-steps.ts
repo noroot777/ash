@@ -20,6 +20,7 @@ import { db } from "./db/index.js";
 import { projects, tasks } from "./db/schema.js";
 import { augmentedEnv } from "./executors/spawn.js";
 import { RUNS_DIR } from "./paths.js";
+import { userShellLaunch } from "./platform.js";
 import { readPreview, startPreview, type PreviewStep } from "./preview.js";
 import { appendTaskTimeline } from "./task-timeline.js";
 import { askAboutFailure } from "./task-question.js";
@@ -80,8 +81,14 @@ async function runCommand(task: TaskRow, step: CommandStep): Promise<SegmentResu
   const cwd = await cwdFor(task, step.p.where);
   if (!cwd) return { ok: false, failed: step, reason: "找不到这个任务的工作目录" };
   try {
-    const { stdout, stderr } = await run("sh", ["-lc", step.p.cmd], {
-      cwd, env: augmentedEnv(), timeout: COMMAND_TIMEOUT_MS, maxBuffer: 8 * 1024 * 1024,
+    // 同 preview:用户那条命令行该交给哪个 shell,由 platform.userShellLaunch 收口。
+    const launch = userShellLaunch(step.p.cmd);
+    const { stdout, stderr } = await run(launch.file, launch.args, {
+      cwd,
+      env: augmentedEnv(),
+      windowsVerbatimArguments: launch.windowsVerbatimArguments,
+      timeout: COMMAND_TIMEOUT_MS,
+      maxBuffer: 8 * 1024 * 1024,
     });
     const out = shorten(`${stdout}${stderr}`, 400);
     await appendTaskTimeline(task.id, `跑了一条命令：\`${step.p.cmd}\`（通过）${out ? `\n${out}` : ""}`);

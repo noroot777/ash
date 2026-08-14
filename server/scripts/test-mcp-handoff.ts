@@ -162,6 +162,20 @@ assert.equal(
 );
 assert.equal(isMcpProcess("node /repo/server/dist/index.js"), false, "server 自己不算");
 
+// Windows 形状:解释器带 .exe、分隔符是 `\`、而且 node 的默认安装位置**路径带空格**
+// (`C:\Program Files\nodejs`),命令行里因此是带引号的。按空白硬切会把它切成两段,
+// 结果一个 MCP 都认不出来 —— 预警于是永远报平安,一种不会有人发现的假阴性。
+assert.ok(
+  isMcpProcess('"C:\\Program Files\\nodejs\\node.exe" "C:\\Users\\me\\harness\\mcp\\dist\\index.js"'),
+  "带引号且路径含空格的 Windows 命令行要能认出来",
+);
+assert.ok(isMcpProcess("C:\\nodejs\\node.exe C:\\repo\\mcp\\dist\\index.js"), "不带引号的 Windows 形状同样算");
+assert.equal(
+  isMcpProcess('"C:\\bin\\claude.exe" --mcp-config "C:\\repo\\mcp\\dist\\index.js"'),
+  false,
+  "Windows 侧同样不能把参数里带这个路径的 CLI 本体算进来",
+);
+
 const psTable = parsePsTable([
   "  100     1 codex exec --json",
   "  101   100 node /Users/x/harness/mcp/dist/index.js",   // 直接子进程

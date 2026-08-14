@@ -19,6 +19,7 @@ import type { FreeWorkflowPreviewEventSource } from "@harness/shared";
 import { augmentedEnv, killByPid } from "./executors/spawn.js";
 import { recordFreePreviewEventIfFree } from "./free-workflow-events.js";
 import { RUNS_DIR } from "./paths.js";
+import { userShellLaunch } from "./platform.js";
 import { portConflict, pickPreviewUrl, portHint } from "./preview-log.js";
 import { ready } from "./preview-probe.js";
 import { appendTaskTimeline } from "./task-timeline.js";
@@ -134,9 +135,16 @@ export async function startPreview(
   const fd = openSync(log, "a");
   let pid: number;
   try {
-    const child = spawn("sh", ["-lc", step.p.cmd], {
+    // 用户那条命令行交给谁跑,由 platform 收口(POSIX 是 `sh -lc`,Windows 是
+    // `cmd /d /s /c`)。**detached 两边都留着**:预览是有意要活过 server 重启的
+    // (pid 落盘就是为这个),而 Windows 上 detached 只意味着「不挂控制台、自成
+    // 进程组」——这里 stdio 早就重定向到文件了,没控制台反而正好;杀它走
+    // killByPid → taskkill /T,不依赖进程组。
+    const launch = userShellLaunch(step.p.cmd);
+    const child = spawn(launch.file, launch.args, {
       cwd,
       detached: true,
+      windowsVerbatimArguments: launch.windowsVerbatimArguments,
       stdio: ["ignore", fd, fd],
       // BROWSER=none：dev server 的 `--open` 会去拉一个真浏览器窗口，预览是后台起的，
       // 那扇窗户没人要。PORT 的来由见 freePort 的注释。

@@ -29,6 +29,14 @@ export type FieldSpec =
 const opts = <T extends string>(values: readonly T[], labels: Record<T, string>): FieldOption[] =>
   values.map((value) => ({ value, label: labels[value] }));
 
+// 命令这一栏交给谁跑,是**跨平台会变的契约**,所以写在提示里而不是只写进文档:
+// macOS/Linux 是 `sh -lc`(登录 shell,吃得到用户的 nvm/rbenv 那套 PATH),Windows 是
+// `cmd /d /s /c`。写成这两句是因为一条工作流会被两边的人共用 —— 只说当前这台机器
+// 的规矩,等于让另一边的人自己去撞。
+const SHELL_HINT = "\n命令交给系统 shell 跑：macOS/Linux 是 `sh -lc`，Windows 是 `cmd /d /s /c`。"
+  + "POSIX 专有写法（`FOO=1 cmd` 前缀、`$(…)`、`2>/dev/null`）在 Windows 上不成立，"
+  + "要跨平台就写成 npm scripts 再调。";
+
 export const STEP_FIELDS: Record<StepKind, FieldSpec[]> = {
   run: [
     { key: "instruction", label: "额外交代", type: "text", placeholder: "留空就照任务描述做", emptyText: "照任务描述做" },
@@ -53,7 +61,8 @@ export const STEP_FIELDS: Record<StepKind, FieldSpec[]> = {
       key: "cmd", label: "启动命令", type: "text", placeholder: "npm run dev", emptyText: "还没填命令",
       hint: "harness 会把上面的选择作为 $HARNESS_PREVIEW_MODE 传给命令；项目不识别它时，"
         + "就是普通自定义命令。同时每次借一个空闲端口，用 $PORT 传入。端口写死的话，"
-        + "同一个项目已经有一份在跑时必然撞车 —— 写成认 $PORT 的形式（例如 npm run dev -- --port $PORT）才错得开。",
+        + "同一个项目已经有一份在跑时必然撞车 —— 写成认 $PORT 的形式（例如 npm run dev -- --port $PORT）才错得开。"
+        + SHELL_HINT,
     },
     { key: "ready", label: "怎么算起来了", type: "select", options: opts(PREVIEW_READY, PREVIEW_READY_LABELS) },
     { key: "life", label: "什么时候关掉", type: "select", options: opts(PREVIEW_LIFE, PREVIEW_LIFE_LABELS) },
@@ -71,7 +80,7 @@ export const STEP_FIELDS: Record<StepKind, FieldSpec[]> = {
     },
   ],
   command: [
-    { key: "cmd", label: "命令", type: "text", placeholder: "npm run lint", emptyText: "还没填命令" },
+    { key: "cmd", label: "命令", type: "text", placeholder: "npm run lint", emptyText: "还没填命令", hint: SHELL_HINT.trim() },
     { key: "where", label: "在哪跑", type: "select", options: opts(COMMAND_WHERE, COMMAND_WHERE_LABELS) },
   ],
   accept: [

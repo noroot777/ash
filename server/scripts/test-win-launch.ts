@@ -14,6 +14,7 @@
 //   4. npm `.cmd` 垫片拆封成 `node <script>`，拆不开才退 cmd.exe
 //   5. cmd.exe 的参数引号规则（CVE-2024-24576 那套），含换行直接拒
 //   6. augmentedEnv 去掉 Path/PATH 的大小写重影
+//   7. 用户自己写的整条命令行走 `cmd /d /s /c` + verbatim（跟 5 的转义规则相反）
 // 跑：npm -w server run test:win-launch
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -72,7 +73,7 @@ try {
   process.env.PATH = ["C:\\Windows\\System32", sysDir, binDir].join(";");
   delete process.env.PATHEXT; // 用默认值 .COM;.EXE;.BAT;.CMD
 
-  const { PATH_DELIMITER, splitPathList, splitPathSegments } = await import("../src/platform.js");
+  const { PATH_DELIMITER, splitPathList, splitPathSegments, userShellLaunch } = await import("../src/platform.js");
   const { augmentedEnv, resolveBin, resolveLaunch } = await import("../src/executors/bin-resolve.js");
   const { UnquotableArgumentError } = await import("../src/executors/win-command.js");
 
@@ -146,7 +147,25 @@ try {
   assert.ok(env.PATH?.startsWith(process.env.PATH!), "补充目录追加在原 PATH 之后");
   delete process.env.Path;
 
-  console.log("✅ Windows 启动链（PATH/PATHEXT/垫片拆封/cmd 引号）全部通过");
+  // ── 7. 用户自己写的那条命令行（预览 / workflow 的 command 站）────────────────
+  // 这一条跟上面 5 不是同一件事：那边是**我们**拼 program+args（所以要按
+  // CVE-2024-24576 的规则逐个转义），这边是用户已经写好的一整条命令行，只能原样
+  // 递给 cmd —— 再转义一轮就把他自己的引号弄坏了。所以 verbatim 必须开，而外面
+  // 那一层引号正好被 `/s` 剥掉。
+  process.env.COMSPEC = "C:\\Windows\\System32\\cmd.exe";
+  const shellRun = userShellLaunch('npm run dev -- --port %PORT% --name "my app"');
+  assert.equal(shellRun.file, "C:\\Windows\\System32\\cmd.exe", "认 COMSPEC，别写死 cmd.exe");
+  assert.deepEqual(shellRun.args.slice(0, 3), ["/d", "/s", "/c"]);
+  assert.equal(
+    shellRun.args[3],
+    '"npm run dev -- --port %PORT% --name "my app""',
+    "用户命令原样进去，只在最外面包一层引号（/s 恰好只剥这一层）",
+  );
+  assert.equal(shellRun.windowsVerbatimArguments, true);
+  delete process.env.COMSPEC;
+  assert.equal(userShellLaunch("ls").file, "cmd.exe", "COMSPEC 没设时回退 cmd.exe");
+
+  console.log("✅ Windows 启动链（PATH/PATHEXT/垫片拆封/cmd 引号/用户命令行）全部通过");
 } finally {
   rmSync(stage, { recursive: true, force: true });
 }

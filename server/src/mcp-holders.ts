@@ -13,9 +13,9 @@
 // 兜底不是替代：`mcp-handoff.ts` 会在回合结算时把「确定没送达」的交卷调用补录回
 // 来，但白名单只有三个工具，其余（dispatch/ask_question…）丢了就是丢了。能不掐
 // 断当然更好。
-import { execFile } from "node:child_process";
 import { join } from "node:path";
 import { REPO_DIR } from "./paths.js";
+import { boundaryKey, listProcesses } from "./platform.js";
 
 /** 本仓库那份 MCP 的入口路径。 */
 const MCP_ENTRY = join(REPO_DIR, "mcp", "dist", "index.js");
@@ -23,9 +23,36 @@ const MCP_ENTRY = join(REPO_DIR, "mcp", "dist", "index.js");
 export type PsRow = { pid: number; ppid: number; command: string };
 
 /**
+ * 把一条命令行切成 token。**必须认双引号**:Windows 上 node 的常驻位置是
+ * `C:\Program Files\nodejs\node.exe`,命令行里带引号且**路径含空格** —— 按空白
+ * 硬切会把它切成 `"C:\Program` 和 `Files\nodejs\node.exe"` 两段,下面的形状判据
+ * 直接全盘失效(一个 MCP 都认不出来,预警永远说「没人受影响」)。
+ * POSIX 上带引号的命令行少见,但认了也不会错。
+ */
+function tokenize(command: string): string[] {
+  const tokens: string[] = [];
+  let cur = "";
+  let quoted = false;
+  for (const ch of command.trim()) {
+    if (ch === '"') {
+      quoted = !quoted;
+      continue;
+    }
+    if (!quoted && /\s/.test(ch)) {
+      if (cur) tokens.push(cur);
+      cur = "";
+      continue;
+    }
+    cur += ch;
+  }
+  if (cur) tokens.push(cur);
+  return tokens;
+}
+
+/**
  * 这一行是不是一个 harness MCP 子进程。
  *
- * 判据比 restart.sh 的 `pkill -f "$REPO/mcp/dist/index.js\$"` 再紧一格：**必须是
+ * 判据比 restart 脚本的 `pkill -f "$REPO/mcp/dist/index.js\$"` 再紧一格：**必须是
  * `<node> <…/mcp/dist/index.js>` 这个形状**（脚本路径正好是第一个参数）。光靠
  * 「命令行里含这个路径」会连 claude/codex 本体一起算进去——它们把同一个路径写在
  * `--mcp-config` 之类的参数里；光靠末尾锚定也不够，`claude … --mcp-config <路径>`
@@ -33,14 +60,21 @@ export type PsRow = { pid: number; ppid: number; command: string };
  *
  * 路径本身放宽到「任意 `…/mcp/dist/index.js`」而不是死磕本仓库：worktree、软链、
  * 用户手动配到别处的副本都还是同一份 MCP，而误判的代价只是多提示一句。
+ *
+ * Windows 三处差异,都在这里收口:解释器名带 `.exe`、分隔符是 `\`、NTFS 不分大小写。
  */
+function baseName(p: string): string {
+  return p.split(/[\\/]/).pop() ?? "";
+}
+
 export function isMcpProcess(command: string): boolean {
-  const tokens = command.trim().split(/\s+/);
+  const tokens = tokenize(command);
   const script = tokens.at(1);
   if (!script) return false;
-  const runner = tokens[0]!.split("/").pop() ?? "";
-  if (!/^(node|nodejs|bun|deno)$/.test(runner)) return false;
-  return script === MCP_ENTRY || /(^|\/)mcp\/dist\/index\.js$/.test(script);
+  const runner = baseName(tokens[0]!).replace(/\.exe$/i, "");
+  if (!/^(node|nodejs|bun|deno)$/i.test(runner)) return false;
+  if (boundaryKey(script) === boundaryKey(MCP_ENTRY)) return true;
+  return /(^|[\\/])mcp[\\/]dist[\\/]index\.js$/i.test(script);
 }
 
 /**
@@ -86,12 +120,14 @@ export function parsePsTable(text: string): PsRow[] {
 
 const PS_TIMEOUT_MS = 3000;
 
-/** 实际去问一遍系统。ps 挂了/超时一律返回空——预警拿不到不该拖垮重启这条路。 */
+/**
+ * 实际去问一遍系统。进程表拿不到/超时一律返回空——预警拿不到不该拖垮重启这条路。
+ *
+ * 走 platform.listProcesses 而不是自己 `execFile("ps", …)`:Windows 上压根没有
+ * `ps`,那条路会静默返回空集,于是预警**永远说「没人受影响」** —— 一个报平安的
+ * 假阳性，比报错还难发现。
+ */
 export async function findMcpChannelHolders(agentPids: number[]): Promise<Set<number>> {
   if (!agentPids.length) return new Set();
-  const text = await new Promise<string>((resolve) => {
-    execFile("ps", ["-ww", "-axo", "pid=,ppid=,command="], { timeout: PS_TIMEOUT_MS, maxBuffer: 8 << 20 },
-      (_err, stdout) => resolve(stdout || ""));
-  });
-  return new Set(holdersOf(parsePsTable(text), agentPids));
+  return new Set(holdersOf(await listProcesses(PS_TIMEOUT_MS), agentPids));
 }
