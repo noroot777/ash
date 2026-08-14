@@ -17,6 +17,11 @@ export interface Session {
   role: SessionRole;
   agentType: AgentType;
   executor: string; // executor profile name
+  // 这一轮真正跑的执行器 profile 主键与生效覆盖值（`executor` 只是可改的展示名）。
+  // null = 会话建在该功能之前，重跑只能退回按任务当前配置。
+  executorId?: string | null;
+  turnModel?: string | null;
+  turnReasoningEffort?: string | null;
   model?: string | null; // execution metadata; historical rows are best-effort enriched by the API
   reasoningEffort?: string | null;
   target: string; // "local" | "ssh:host"
@@ -31,6 +36,11 @@ export interface Session {
   turnStartedAt?: string | null; // latest turn on a reusable session row
   endedAt: string | null; // when this run finished (set with exitStatus); null while live
   exitStatus: number | null;
+  // 这一轮**是被停的**（"canceled" / "paused"），不是它自己崩的。CLI 吃 SIGTERM 后按
+  // signal 写非零退出，光看 exitStatus 两者一模一样；停止事实只在服务端内存里活一次。
+  stoppedAs?: string | null;
+  // 这一轮是旁路回合（审查 / 就地验证 / 斜杠命令），不是任务本体的执行。
+  sideTurn?: boolean;
   // 这条会话行累计的 token 用量(会话可复用,跨多个回合累加)。null = 这家 CLI
   // 不报账,或这条会话建在该功能之前 —— 两种都不该显示成 0。
   usage: TokenUsage | null;

@@ -36,20 +36,39 @@ export async function resolveExecutorById(id: string): Promise<AgentExecutor> {
   return build(row, row.type as AgentType);
 }
 
-// Task/team execution resolver. executorId is the precise user-selected profile;
-// if it is empty or stale, degrade to the type's current default executor.
-export async function resolveExecutorFor(opts: {
+export type ExecutorResolveOpts = {
   executorId?: string | null;
   type?: AgentType | null;
   model?: string | null;
   reasoningEffort?: string | null;
-}): Promise<AgentExecutor> {
+};
+
+// 「这次到底选中了哪一条 profile」的单点：executorId 命中就用它（类型跟着这条 profile
+// 走），否则退回该类型的默认 profile。降级逻辑只有这一份 —— 复制一份出去，两条路迟早
+// 会在「id 悬空」这种边角上分叉。
+async function pickProfile(opts: ExecutorResolveOpts): Promise<{ profile: AgentRow | null; type: AgentType }> {
   if (opts.executorId) {
     const [row] = await db.select().from(agents).where(eq(agents.id, opts.executorId));
-    if (row) return build(row, row.type as AgentType, opts);
+    if (row) return { profile: row, type: row.type as AgentType };
   }
   const type = opts.type ?? "claude";
-  return build(await defaultProfile(type), type, opts);
+  return { profile: await defaultProfile(type), type };
+}
+
+// 同 resolveExecutorFor，另外把**真正选中的 profile 主键**一起还回来。
+// 记账用：`agents.name` 非唯一、可随时改名，拿显示名反查 profile 会选中同名的另一位；
+// 「把上一回合原样再跑一遍」只能认 id（见 sessions.executor_id）。
+export async function resolveExecutorWithProfile(
+  opts: ExecutorResolveOpts,
+): Promise<{ executor: AgentExecutor; profileId: string | null }> {
+  const { profile, type } = await pickProfile(opts);
+  return { executor: await build(profile, type, opts), profileId: profile?.id ?? null };
+}
+
+// Task/team execution resolver. executorId is the precise user-selected profile;
+// if it is empty or stale, degrade to the type's current default executor.
+export async function resolveExecutorFor(opts: ExecutorResolveOpts): Promise<AgentExecutor> {
+  return (await resolveExecutorWithProfile(opts)).executor;
 }
 
 async function build(

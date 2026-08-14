@@ -291,6 +291,13 @@ export async function ensureSchema() {
     // 这一轮是 CLI 原生命令(`/compact`):结算钩子整段跳过,别把一次本地压缩记成
     // 一轮验证跑完(说明见 db/schema.ts 的 tasks.nativeTurn)。
     "ALTER TABLE tasks ADD COLUMN native_turn INTEGER NOT NULL DEFAULT 0",
+    // 回合保真三件套(说明见 db/schema.ts 的 sessions 同名列):这一轮跑在哪个 profile
+    // 上、是被停的还是崩的、是不是旁路回合。少一件,「重跑上一回合」就只能靠猜。
+    "ALTER TABLE sessions ADD COLUMN executor_id TEXT",
+    "ALTER TABLE sessions ADD COLUMN turn_model TEXT",
+    "ALTER TABLE sessions ADD COLUMN turn_reasoning_effort TEXT",
+    "ALTER TABLE sessions ADD COLUMN stopped_as TEXT",
+    "ALTER TABLE sessions ADD COLUMN side_turn INTEGER NOT NULL DEFAULT 0",
   ]) {
     try {
       await client.execute(sql);

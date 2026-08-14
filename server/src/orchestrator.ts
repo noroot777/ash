@@ -10,7 +10,7 @@ import { setTaskStatus } from "./status.js";
 import { trackRun, untrackRun, takeStopped, claimTurn, reclaimTurn, releaseTurn } from "./runs.js";
 import { consumeSingleRun, afterSettlement } from "./single-run.js";
 import { taskWorkspace } from "./task-workspace.js";
-import { resolveExecutorFor } from "./executors/index.js";
+import { resolveExecutorWithProfile } from "./executors/index.js";
 import type { RunHandle } from "./executors/types.js";
 import { detachedPathsFor } from "./executors/detached.js";
 import { sessionTargetKey } from "./executors/resume.js";
@@ -102,7 +102,7 @@ export async function runTask(taskId: string, opts: { turnHeld?: boolean } = {})
     // 也要记 —— 漏交卷最常发生在这一路,而 turn-baseline 只给真人续聊拍照。
     await recordTurnStart(taskId, ws.path);
     const agentType = (task.agentType as AgentType) ?? "claude";
-    const ex = await resolveExecutorFor({
+    const { executor: ex, profileId } = await resolveExecutorWithProfile({
       executorId: task.executorId,
       type: agentType,
       model: task.model,
@@ -148,6 +148,14 @@ export async function runTask(taskId: string, opts: { turnHeld?: boolean } = {})
       role: "single",
       agentType,
       executor: ex.label,
+      // 这一轮真正跑在哪条 profile、哪个模型/思考强度上（见 db/schema.ts 的同名列）：
+      // 「原样再跑一遍上一回合」只认它们，不认可改名的展示名，也不认任务此刻的配置。
+      executorId: profileId,
+      turnModel: ex.model ?? null,
+      turnReasoningEffort: ex.reasoningEffort ?? null,
+      // fresh run 从来不是旁路回合，也不可能带着上一轮的停止事实。
+      sideTurn: false,
+      stoppedAs: null as string | null,
       target: sessionTargetKey(ex.target),
       worktreePath: ws.isWorktree ? ws.path : null,
       branch: ws.branch,
@@ -223,6 +231,12 @@ export async function continueTask(
     /** 旁路回合结束后恢复进入旁路前的任务状态。 */
     sideTurn?: boolean;
     sessionRole?: Extract<SessionRole, "single" | "reviewer">; freshSession?: boolean;
+    /**
+     * 指名续**这一条**会话行（而不是按 agentType+role 现挑）。给「重跑上一回合」用：
+     * 那条路的硬要求就是落回崩掉的那一条会话，挑错人 = 换个人重说一遍。
+     * 行已不存在时退回新开会话（读它的调用方刚读过库，正常不会发生）。
+     */
+    resumeSessionId?: string;
     /**
      * 这一轮的字是**后端代写**的（验证打回的报告、验收冲突的交接说明），但它必须占一个
      * 真人回合 —— 带 system 会被当成「系统续跑」，followUpFrom 就护不住任务原来的终态。
@@ -344,7 +358,7 @@ export async function continueTask(
       .set({ followUpFrom, nativeTurn: !!nativeCommand, completeConfirmedAt: null, updatedAt: now() })
       .where(eq(tasks.id, taskId));
 
-    const ex = await resolveExecutorFor({
+    const { executor: ex, profileId } = await resolveExecutorWithProfile({
       executorId: summoned ? opts.executorId ?? null : task.executorId,
       type: agent,
       model: summoned ? opts.model ?? null : task.model,
@@ -356,7 +370,13 @@ export async function continueTask(
     // each invited via @-mention. Newest first.
     const all = (await db.select().from(sessions).where(eq(sessions.taskId, taskId)))
       .sort((a, b) => b.startedAt.localeCompare(a.startedAt));
-    const prev = opts.freshSession ? undefined : all.find((s) => s.agentType === agent && s.role === sessionRole);
+    const prev = opts.freshSession
+      ? undefined
+      // 指名道姓要续哪一条会话行（「重跑上一回合」）：按 agentType+role 挑会在同一位
+      // 智能体有多条会话时挑错人，而重投必须落回**崩掉的那一条**，否则等于换个人重说。
+      : opts.resumeSessionId
+        ? all.find((s) => s.id === opts.resumeSessionId)
+        : all.find((s) => s.agentType === agent && s.role === sessionRole);
     const resuming = !!prev?.cliSessionId;
 
     // Where the work lives: the agent's own cwd, else any session's cwd (so the
@@ -484,6 +504,14 @@ export async function continueTask(
           endedAt: null,
           commandLine: handle.commandLine,
           executor: ex.label,
+          // 回合保真三件套整组刷新（说明见 db/schema.ts）：profile / 模型 / 思考强度
+          // 都可能在两轮之间被改，留着上一轮的值就会让重试按着别人的配置跑。
+          executorId: profileId,
+          turnModel: ex.model ?? null,
+          turnReasoningEffort: ex.reasoningEffort ?? null,
+          sideTurn,
+          // 新回合开始 = 上一轮「是被停的」这件事翻篇，不清就会一直挡着重试入口。
+          stoppedAs: null,
           // profile 可能在两轮之间被改到别的机器上;这一列是恢复命令唯一的
           // 「在哪台机器上跑」凭据,不刷新就会给出一条在本机执行的错命令。
           target: sessionTargetKey(ex.target),
@@ -508,6 +536,10 @@ export async function continueTask(
         role: sessionRole,
         agentType: agent,
         executor: ex.label,
+        executorId: profileId,
+        turnModel: ex.model ?? null,
+        turnReasoningEffort: ex.reasoningEffort ?? null,
+        sideTurn,
         target: sessionTargetKey(ex.target),
         worktreePath: base?.worktreePath ?? null,
         branch: base?.branch ?? null,

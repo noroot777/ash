@@ -12,7 +12,7 @@ import { RunActivity } from "../components/RunActivity.tsx";
 import { MessageFooter } from "../components/MessageFooter.tsx";
 import { TurnRetryButton } from "../components/TurnRetryButton.tsx";
 import { MessageAttachments } from "./Attachments.tsx";
-import { retryTurnSessionId } from "./turnRetry.ts";
+import { type TurnRetryTarget, turnRetryTarget } from "./turnRetry.ts";
 import { durationBetween, formatInstant, parseAttachmentText } from "./utils.ts";
 
 function copyText(text: string) {
@@ -104,6 +104,7 @@ export function ConversationFeed({
   error,
   footer,
   onRetryTurn,
+  reviewRetryable,
 }: {
   task: Task;
   items: ConversationItem[];
@@ -114,7 +115,9 @@ export function ConversationFeed({
   error: Error | null;
   footer?: React.ReactNode;
   /** 重跑上一回合。不给就不出重试按钮（只读的会话视图用得上）。 */
-  onRetryTurn?: (sessionId: string) => Promise<void> | void;
+  onRetryTurn?: (target: TurnRetryTarget) => Promise<void> | void;
+  /** 自由工作流的审查链停在「异常结束」——只有它为真，审查会话上才出重跑按钮。 */
+  reviewRetryable?: boolean;
 }) {
   const scroll = useRef<HTMLDivElement>(null);
   const activityPhase = runActivityPhase(task.status, runActivityTail(items));
@@ -124,8 +127,8 @@ export function ConversationFeed({
     fallback: task.executorLabel ?? task.agentType,
   });
   // 崩掉的那一回合挂在会话最后一条 agent 气泡上；不满足条件时是 null，一颗按钮都不出。
-  const retrySessionId = onRetryTurn ? retryTurnSessionId(task, items) : null;
-  const retryItemId = retrySessionId
+  const retry = onRetryTurn ? turnRetryTarget(task, items, { reviewRetryable }) : null;
+  const retryItemId = retry
     ? [...items].reverse().find((item) => item.kind === "agent")?.id ?? null
     : null;
 
@@ -135,13 +138,16 @@ export function ConversationFeed({
         <div className="task-conversation" ref={scroll}>
           {items.map((item) => {
             if (item.kind === "agent") {
-              const exit = item.id === retryItemId ? item.session?.exitStatus : null;
               return (
                 <AgentMessage
                   key={item.id}
                   item={item}
-                  retry={retrySessionId && exit != null ? (
-                    <TurnRetryButton exitStatus={exit} onRetry={() => onRetryTurn!(retrySessionId)} />
+                  retry={retry && item.id === retryItemId ? (
+                    <TurnRetryButton
+                      exitStatus={retry.exitStatus}
+                      kind={retry.kind}
+                      onRetry={() => onRetryTurn!(retry)}
+                    />
                   ) : undefined}
                 />
               );

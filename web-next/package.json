@@ -31,6 +31,7 @@
     "test:reply-drafts": "node scripts/test-reply-drafts.mjs",
     "test:workflow-rail": "node --experimental-strip-types scripts/test-workflow-rail.mjs",
     "test:workflow-edit": "node --experimental-strip-types scripts/test-workflow-edit.mjs",
+    "test:turn-retry": "node --experimental-strip-types scripts/test-turn-retry.mjs",
     "typecheck": "tsc -p tsconfig.json",
     "preview": "vite preview"
   },

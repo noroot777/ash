@@ -299,6 +299,13 @@ export const sessions = sqliteTable("sessions", {
   role: text("role").notNull(),
   agentType: text("agent_type").notNull(),
   executor: text("executor").notNull(),
+  // 这一轮真正跑的**执行器 profile 主键**，以及生效的 model/思考强度。上面那个
+  // `executor` 只是展示名（agents.name 非唯一、可改名），拿它反查 profile 会选中
+  // 同名的另一个人；要「按上一回合原样再跑一遍」只能认 id + 这一轮的覆盖值。
+  // 全 null = 这条会话建在本功能之前，只能退回按任务当前配置跑。
+  executorId: text("executor_id"),
+  turnModel: text("turn_model"),
+  turnReasoningEffort: text("turn_reasoning_effort"),
   target: text("target").notNull(),
   worktreePath: text("worktree_path"),
   branch: text("branch"),
@@ -315,6 +322,15 @@ export const sessions = sqliteTable("sessions", {
   startedAt: text("started_at").notNull(),
   endedAt: text("ended_at"), // when this run finished (set with exit_status)
   exitStatus: integer("exit_status"),
+  // 这一轮**是被停下来的**（canceled = 手动停止 / paused = 分组暂停），不是它自己崩的。
+  // 非空时 exit_status 多半也是非零：CLI 吃 SIGTERM 按 signal 退出。光看 exit_status
+  // 区分不了「我停的」和「它崩了」，而这两件事的入口完全不同（运行 vs 重试），所以停止
+  // 的口径只能在结算时落在这里。每回合开头清空。
+  stoppedAs: text("stopped_as"),
+  // 旁路回合：就地验证、审查、`/compact` 这类「不算任务执行」的回合（判据见
+  // orchestrator.ts 的 sideTurn）。它们收尾后任务回到原状态，光看 status + exit_status
+  // 分辨不出来——而重跑一个旁路回合要走它自己那条路，不能按普通回合重投。
+  sideTurn: integer("side_turn", { mode: "boolean" }).notNull().default(false),
   // Execution-time accounting. active_ms accumulates each turn's active span
   // [prompt sent → turn done], so idle waits between turns are excluded;
   // turn_started_at marks the current/last turn's start (set when a turn begins,

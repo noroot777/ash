@@ -8,7 +8,7 @@ import type {
   TaskStatus,
 } from "@harness/shared";
 import { FREE_REVIEW_CHECK_MODES } from "@harness/shared/free-workflow";
-import { and, desc, eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import type { Hono } from "hono";
 import { bus } from "./bus.js";
 import { db } from "./db/index.js";
@@ -16,27 +16,26 @@ import {
   freeReviewRounds,
   freeReviewRuns,
   freeWorkflowStates,
-  projects,
   reviewerProfiles,
   scheduledMessages,
   tasks,
 } from "./db/schema.js";
 import { armFollowUpFreeReview, disarmFreeReviewReservation, readFreeReviewReservation, consumeFreeReviewReservation, startReservedFreeReview } from "./free-review-reservations.js";
-import { freeManualRepairPrompt, freeRepairPrompt, freeReviewPrompt } from "./free-review-prompts.js";
+import { freeManualRepairPrompt, freeRepairPrompt } from "./free-review-prompts.js";
 export { freeManualRepairPrompt, freeRepairPrompt, freeReviewPrompt } from "./free-review-prompts.js";
+// 一轮审查的生命周期（起一轮 / 续下一轮 / 启动失败收尾 / 重跑崩掉的那一轮）住在
+// free-review-round.ts；这里只做「派/预约/结算」这一层的编排。
+import { failReviewStart, latestRun, launchReviewRound, nextRound, reviewingRun } from "./free-review-round.js";
 import { mountFreePreviewRoutes } from "./free-workflow-preview.js";
 import { releaseFreeWorkflowAction, tryAcquireFreeWorkflowAction } from "./free-workflow-lock.js";
 import { freeReviewFile, freeReviewReportPath, readFreeReviewReport } from "./free-review-files.js";
 import { freeWorkflowState, workspaceStateOf, type FreeWorkflowApiState } from "./free-workflow-state.js";
 import { claimTurn, continueWhenIdle, isTurnClaimed, releaseTurn, turnRole, whenTurnIdle } from "./runs.js";
 import { appendTaskTimeline } from "./task-timeline.js";
-import { taskWorkspace } from "./task-workspace.js";
-import { headCommit } from "./git.js";
 import { REVIEW_MIME } from "./review-evidence.js";
 import { BROWSER_VERIFICATION_REMINDER } from "./browser-verification-policy.js";
 import { id, now } from "./util.js";
 
-type TaskRow = typeof tasks.$inferSelect;
 type ReviewRunRow = typeof freeReviewRuns.$inferSelect;
 
 const MAX_RETRIES = 5;
@@ -55,18 +54,6 @@ export function freeReviewOutcome(input: {
 
 // 唯一的「活」状态是 reviewing（审查旁路回合正在跑）。修复中/等待复审这些叙事不落库，
 // 由「任务在跑 + 预约槽」推导（见 shared/free-workflow.ts 状态注释）。
-async function reviewingRun(taskId: string): Promise<ReviewRunRow | null> {
-  return (await db.select().from(freeReviewRuns)
-    .where(and(eq(freeReviewRuns.taskId, taskId), eq(freeReviewRuns.status, "reviewing")))
-    .orderBy(desc(freeReviewRuns.createdAt))
-    .limit(1)).at(0) ?? null;
-}
-
-async function latestRun(taskId: string): Promise<ReviewRunRow | null> {
-  return (await db.select().from(freeReviewRuns).where(eq(freeReviewRuns.taskId, taskId))
-    .orderBy(desc(freeReviewRuns.createdAt)).limit(1)).at(0) ?? null;
-}
-
 /** 审查旁路回合是否正在进行（验收等不可逆操作要等它结束）。 */
 export async function hasActiveFreeReview(taskId: string): Promise<boolean> {
   return !!(await reviewingRun(taskId));
@@ -188,16 +175,6 @@ async function cancelFreeReviewReservation(taskId: string): Promise<FreeWorkflow
   }
 }
 
-async function failReviewStart(run: ReviewRunRow, message: string): Promise<void> {
-  const at = now();
-  await db.update(freeReviewRounds).set({ status: "error", endedAt: at })
-    .where(and(eq(freeReviewRounds.runId, run.id), eq(freeReviewRounds.round, run.currentRound)));
-  await db.update(freeReviewRuns).set({ status: "failed", updatedAt: at, finishedAt: at })
-    .where(eq(freeReviewRuns.id, run.id));
-  await appendTaskTimeline(run.taskId, `自由工作流第 ${run.currentRound} 轮审查启动失败：${message}`);
-  bus.publish({ type: "task.review", taskId: run.taskId });
-}
-
 /**
  * 启动对账（排在 reattach 与 reconcileInterrupted 之后）：`reviewing` 是持久状态，真正的
  * 审查会话却在内存投递链上——进程死在「run 已落 reviewing、reviewer 回合还没起」的当口，
@@ -244,52 +221,6 @@ export async function reconcileFreeReviews(): Promise<void> {
     if (pendingReviewerAnswer) continue;
     await failReviewStart(run, "服务重启时审查回合尚未启动或已丢失；可再派一轮审查");
     await disarmFreeReviewReservation(run.taskId);
-  }
-}
-
-async function launchReviewRound(task: TaskRow, run: ReviewRunRow): Promise<void> {
-  const project = (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0);
-  // 锚定本轮结论的基准：审查启动时工作区的 HEAD。之后代码变没变、结论新不新鲜，
-  // 全靠它跟当前 HEAD 比，不靠任何状态字段。取不到（工作区缺失）就留 null。
-  if (project) {
-    const workspace = await taskWorkspace(task, project.repoPath).catch(() => null);
-    const head = workspace ? await headCommit(workspace.path) : null;
-    if (head) {
-      await db.update(freeReviewRounds).set({ reviewedCommit: head })
-        .where(and(eq(freeReviewRounds.runId, run.id), eq(freeReviewRounds.round, run.currentRound)));
-    }
-  }
-  const prompt = await freeReviewPrompt(task, run, run.currentRound, project?.repoPath ?? "(项目已不存在)");
-  await appendTaskTimeline(task.id, `自由工作流第 ${run.currentRound} 轮审查开始：${run.reviewerName} · ${run.checkMode === "logic" ? "逻辑检查" : "语法检查"}。`);
-  bus.publish({ type: "task.review", taskId: task.id });
-  continueWhenIdle(task.id, prompt, {
-    system: "run",
-    sideTurn: true,
-    agent: run.agentType as AgentType,
-    executorId: run.executorId,
-    model: run.model,
-    reasoningEffort: run.reasoningEffort,
-    sessionRole: "reviewer",
-    freshSession: run.currentRound === 1,
-  }, (error) => failReviewStart(run, error));
-}
-
-async function nextRound(task: TaskRow, run: ReviewRunRow): Promise<void> {
-  const round = run.currentRound + 1;
-  const at = now();
-  const nextRun = { ...run, status: "reviewing", currentRound: round, updatedAt: at };
-  try {
-    await db.insert(freeReviewRounds).values({
-      id: id(), runId: run.id, round, status: "reviewing", conclusion: null, startedAt: at, endedAt: null,
-    });
-    await db.update(freeReviewRuns).set({ status: "reviewing", currentRound: round, updatedAt: at })
-      .where(eq(freeReviewRuns.id, run.id));
-    // 预约槽已由 startReservedFreeReview 在调用本函数**之前**按 CAS 消费掉（消费成功才
-    // 会走到这里）。这里再无条件清一次，清掉的可能是用户中途保存的新预约（审查实测）。
-    await launchReviewRound(task, nextRun);
-  } catch (error) {
-    await failReviewStart(nextRun, error instanceof Error ? error.message : String(error));
-    throw error;
   }
 }
 

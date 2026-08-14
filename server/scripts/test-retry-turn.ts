@@ -3,8 +3,8 @@
 // 没把指令交给 CLI —— 用户点了重试，agent 却什么都没收到。所以在这里钉住。
 // 跑:npm -w server run test:retry-turn
 import assert from "node:assert/strict";
-import type { RetryTurnSession, RetryTurnTask } from "../src/task-retry-turn.js";
-import { lastInputOf, latestSessionOf, retryTurnRejection } from "../src/task-retry-turn.js";
+import type { RetryTurnFacts, RetryTurnSession, RetryTurnTask } from "../src/task-retry-turn.js";
+import { lastInputOf, latestSessionOf, retryTurnKindOf, retryTurnRejection } from "../src/task-retry-turn.js";
 
 const turn = (t: string, text: string, extra: Record<string, unknown> = {}) =>
   `\x1e${JSON.stringify({ t, agent: "claude", text, at: "2026-08-13T01:00:00.000Z", ...extra })}`;
@@ -77,8 +77,8 @@ const task = (over: Partial<RetryTurnTask> = {}): RetryTurnTask => ({
   verifyRound: null,
   ...over,
 });
-const why = (t: RetryTurnTask, s: RetryTurnSession | null, wanted?: string) =>
-  retryTurnRejection(t, s, wanted)?.error ?? null;
+const why = (t: RetryTurnTask, s: RetryTurnSession | null, extra: Partial<RetryTurnFacts> = {}) =>
+  retryTurnRejection({ task: t, latest: s, ...extra })?.error ?? null;
 
 assert.equal(why(task(), sess({ id: "a" })), null, "停在 done、上一回合非零退出 → 放行");
 // 主动停止/暂停的真实形状:CLI 吃 SIGTERM 按 signal 写 exit 1,任务正常落 canceled/paused。
@@ -87,17 +87,49 @@ assert.ok(why(task({ status: "canceled" }), sess({ id: "a" })), "主动停止不
 assert.ok(why(task({ status: "paused" }), sess({ id: "a" })), "暂停不是异常结束");
 assert.ok(why(task({ status: "backlog" }), sess({ id: "a" })), "手工改回 backlog 也不给");
 assert.ok(why(task({ status: "failed" }), sess({ id: "a" })), "failed 归头部那颗重试");
+assert.ok(why(task({ status: "running" }), sess({ id: "a" })), "正在跑的不给重投");
+assert.ok(why(task({ status: "queued" }), sess({ id: "a" })), "排队中的不给重投");
 assert.ok(why(task({ archived: true }), sess({ id: "a" })), "归档任务不跑");
 assert.ok(why(task({ mode: "team" }), sess({ id: "a" })), "只接单飞");
 assert.ok(why(task({ verifyRound: 2 }), sess({ id: "a" })), "验证轮还挂着号,那是旁路回合");
-// reviewer 会话崩了要 409:重投只会落回同一条会话,而 resume 兜底会启动任务自己的 agent
-// (审查者 codex → 变成 claude 跑,还把 done 改成 failed)。
-assert.ok(why(task(), sess({ id: "a", role: "reviewer" })), "审查旁路会话不归这颗按钮");
+assert.ok(why(task({ question: "选 A 还是 B?" }), sess({ id: "a" })), "还在等答复,先答复");
+assert.ok(why(task({ resumePrompt: "继续做第二步" }), sess({ id: "a" })), "挂着续跑指令,该继续而不是重投");
 assert.ok(why(task(), sess({ id: "a", exitStatus: 0 })), "正常结束不用重跑");
 assert.ok(why(task(), sess({ id: "a", exitStatus: null })), "没结算的回合不算崩溃");
 assert.ok(why(task(), null), "没跑过就没有上一回合");
-assert.ok(why(task(), sess({ id: "a" }), "b"), "页面上那条不是最新会话 → 拒绝而不是照跑");
-assert.equal(why(task(), sess({ id: "a" }), "a"), null, "页面上那条就是最新会话 → 放行");
+assert.ok(why(task(), sess({ id: "a" }), { wantedSessionId: "b" }), "页面上那条不是最新会话 → 拒绝而不是照跑");
+assert.equal(why(task(), sess({ id: "a" }), { wantedSessionId: "a" }), null, "页面上那条就是最新会话 → 放行");
+// 手动停止:CLI 按 signal 写非零退出码,跟崩溃在 exitStatus 上完全一样,只有 stoppedAs 分得开。
+// 认不出来 = 用户刚亲手停下的那句话被按钮又跑了一遍。
+assert.ok(why(task(), sess({ id: "a", stoppedAs: "canceled" })), "手动停止的回合不是崩溃");
+assert.ok(why(task(), sess({ id: "a", stoppedAs: "paused" })), "手动暂停的回合不是崩溃");
+// 旁路回合(就地验证、/compact):重投会按任务当前配置跑普通回合,跑的不是那一轮的验证者。
+assert.ok(why(task(), sess({ id: "a", sideTurn: true })), "旁路回合有自己的入口");
+assert.ok(why(task(), sess({ id: "a" }), { groupPaused: true }), "分组暂停时不许从这里插队开跑");
+assert.ok(why(task(), sess({ id: "a" }), { blockedBy: ["前面那个"] }), "队列前面没跑完就不许抢跑");
+
+// ── 审查会话崩了：走审查那条路重跑，而不是拒绝，也不是拿实现 agent 顶上 ──────
+const reviewer = sess({ id: "a", role: "reviewer" });
+assert.equal(retryTurnKindOf(reviewer), "review", "reviewer 会话走审查档");
+assert.equal(retryTurnKindOf(sess({ id: "a" })), "turn", "普通会话走重投档");
+assert.equal(
+  why(task({ workflowMode: "free", status: "done" }), reviewer, { reviewBlocker: null }),
+  null,
+  "自由工作流里崩掉的审查回合 → 放行(交给审查链重跑这一轮)",
+);
+assert.ok(why(task(), reviewer, { reviewBlocker: null }), "不是自由工作流的审查会话没有可重跑的链");
+assert.ok(
+  why(task({ workflowMode: "free" }), reviewer, { reviewBlocker: "最近一轮审查没有停在异常结束状态" }),
+  "审查链本身不可重跑时,原样把理由抛给前端",
+);
+// 审查档不看 done：审查回合是旁路回合,任务停在哪个终态都可能(paused 上派审也合法)。
+assert.equal(
+  why(task({ workflowMode: "free", status: "canceled" }), reviewer, { reviewBlocker: null }),
+  null,
+  "审查档不要求任务停在 done",
+);
+// 其余身份(团队调度台、duet 双声道)连「上一回合」的形状都不一样。
+assert.ok(why(task(), sess({ id: "a", role: "lead" })), "调度台会话不归这颗按钮");
+assert.ok(why(task(), sess({ id: "a", role: "voiceA" })), "duet 会话不归这颗按钮");
 
 console.log("✓ retry-turn gate");
-

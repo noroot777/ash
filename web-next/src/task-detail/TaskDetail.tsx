@@ -32,6 +32,8 @@ import { OriginTaskBar } from "../components/TaskOrigin.tsx";
 import { DerivedTaskLinks } from "../components/DerivedTaskLinks.tsx";
 import { FreeWorkflowInspector } from "../free-workflow/FreeWorkflowInspector.tsx";
 import { FreeWorkflowToolbar } from "../free-workflow/FreeWorkflowToolbar.tsx";
+import { useFreeWorkflowState } from "../free-workflow/useFreeWorkflowState.ts";
+import { freeReviewRetryable } from "./turnRetry.ts";
 
 interface TaskInspectorContext {
   task: Task;
@@ -174,6 +176,9 @@ export function TaskDetail({
     api.groups(task.projectId).then((rows) => { if (alive) setGroups(rows); }).catch(() => undefined);
     return () => { alive = false; };
   }, [task.projectId]);
+  // 审查链状态：和底下 FreeWorkflowToolbar 共用同一份缓存（module 级 states + 去重的
+  // in-flight），多订阅一次不多发请求。会话尾栏那颗重试按钮靠它分辨「审查回合崩了」。
+  const free = useFreeWorkflowState(task.id, task.workflowMode === "free");
   useEffect(() => {
     setReviewOpen(initialReviewOpen);
     setDeleteOpen(false);
@@ -329,15 +334,21 @@ export function TaskDetail({
                     pendingExecutor={pendingExecutor}
                     loading={conversation.refreshing}
                     error={conversation.error}
-                    onRetryTurn={async (sessionId) => {
+                    onRetryTurn={async (target) => {
                       try {
-                        const result = await api.retryTurn(task.id, sessionId);
-                        notify(result.mode === "resend" ? "已重发上一条指令，任务续跑中" : "已从中断处续跑");
-                        await Promise.all([conversation.refetch(), refreshTask()]);
+                        const result = await api.retryTurn(task.id, target.sessionId);
+                        notify(result.mode === "review"
+                          ? "已重跑这一轮审查"
+                          : result.mode === "resend" ? "已重发上一条指令，任务续跑中" : "已从中断处续跑");
+                        // 只重取会话正文。任务本身的 running 由 SSE 推过来 —— 这里再补一发
+                        // GET，回来的很可能还是重投前的 done，反手把跑起来的状态盖回去
+                        // （WorkspaceShell 按 onTaskUpdate 覆盖，没有版本门禁）。
+                        await conversation.refetch();
                       } catch (reason) {
                         notify(reason instanceof Error ? reason.message : String(reason));
                       }
                     }}
+                    reviewRetryable={freeReviewRetryable(free.state?.reviews)}
                     footer={task.question ? (
                       <QuestionCard
                         task={task}
