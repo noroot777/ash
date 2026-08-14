@@ -25,12 +25,13 @@ import { existsSync } from "node:fs";
 import { createServer } from "node:net";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { NPM, NPM_SPAWN_OPTS } from "./npm.mjs";
 
 const REPO = fileURLToPath(new URL("..", import.meta.url));
 
 const lent = process.env.PORT;
 if (!lent) {
-  const child = spawn("npm", ["run", "dev:all"], { stdio: "inherit" });
+  const child = spawn(NPM, ["run", "dev:all"], { stdio: "inherit", ...NPM_SPAWN_OPTS });
   child.on("exit", (code, signal) => process.exit(signal ? 1 : code ?? 0));
 } else {
   const requested = process.env.HARNESS_PREVIEW_MODE;
@@ -42,7 +43,7 @@ if (!lent) {
 function startFrontendOnly(webPort) {
   const proxy = process.env.HARNESS_PROXY ?? "http://127.0.0.1:4317";
   console.log(`[dev] 预览：只起前端 ${webPort}，/api 打到 ${proxy}。`);
-  const web = spawn("npm", ["-w", "web-next", "run", "dev"], {
+  const web = spawn(NPM, ["-w", "web-next", "run", "dev"], {
     cwd: REPO,
     stdio: "inherit",
     env: {
@@ -51,6 +52,7 @@ function startFrontendOnly(webPort) {
       HARNESS_PROXY: proxy,
       VITE_HARNESS_PREVIEW: "预览实例 · 只启动这个分支的前端 · API 连本机 4317",
     },
+    ...NPM_SPAWN_OPTS,
   });
   watchChildren([["前端", web]]);
 }
@@ -85,7 +87,7 @@ async function startPreviewStack(webPort, mode) {
   // HARNESS_LAX_DONE：预览里退回「exit 0 即 done」，理由见下面 MCP 那段。
   // 前四个用 `??` 让外面覆盖得了（`??` 而不是 `||`：空串是「不要播种」这个明确意思）；
   // 后两个是闸不是配置，一律写死——外面能关掉的闸不叫闸。
-  const api = spawn("npm", ["-w", "server", "run", "dev"], {
+  const api = spawn(NPM, ["-w", "server", "run", "dev"], {
     cwd: REPO,
     stdio: ["ignore", "pipe", "pipe"],
     env: {
@@ -99,11 +101,12 @@ async function startPreviewStack(webPort, mode) {
       HARNESS_PREVIEW: "1",
       HARNESS_LAX_DONE: "1",
     },
+    ...NPM_SPAWN_OPTS,
   });
   forward(api.stdout);
   forward(api.stderr);
 
-  const web = spawn("npm", ["-w", "web-next", "run", "dev"], {
+  const web = spawn(NPM, ["-w", "web-next", "run", "dev"], {
     cwd: REPO,
     stdio: "inherit",
     env: {
@@ -114,12 +117,16 @@ async function startPreviewStack(webPort, mode) {
         ? "预览实例 · 这个分支的前端 + 后端 · 自己的测试库快照"
         : "预览实例 · 这个分支的前端 + 后端 · 自己的独立新库",
     },
+    ...NPM_SPAWN_OPTS,
   });
 
   watchChildren([["后端", api], ["前端", web]]);
 }
 
+let tracked = [];
+
 function watchChildren(children) {
+  tracked = children;
   for (const [name, child] of children) {
     child.on("exit", (code, signal) => {
       console.error(`[dev] 预览的${name}退出了（code=${code} signal=${signal ?? "-"}），整套一起收。`);
@@ -157,11 +164,23 @@ let down = false;
  * （preview.ts 用 `sh -lc` detached 起的那个组），所以直接对**整组**发信号——一发全中，
  * 包括我们自己，正好就是「一个死了整套收」。只在预览分支这么干：你自己开发时那个组是
  * 终端的前台作业组，轰整组会连着把别的东西一起带走。
+ *
+ * Windows 上没有进程组信号（`process.kill(0, …)` 打不出去），换成对每个直接子进程
+ * `taskkill /T /F`——它靠 ppid 关系往下走，够得着 npm → tsx/vite 这一层。
  */
 function teardown() {
   if (down) return;
   down = true;
-  try { process.kill(0, "SIGTERM"); } catch { /* 组已经空了 */ }
+  if (process.platform === "win32") {
+    for (const [, child] of tracked) {
+      if (!child.pid) continue;
+      try {
+        execFileSync("taskkill", ["/PID", String(child.pid), "/T", "/F"], { stdio: "ignore" });
+      } catch { /* 已经没了 */ }
+    }
+  } else {
+    try { process.kill(0, "SIGTERM"); } catch { /* 组已经空了 */ }
+  }
   setTimeout(() => process.exit(1), 300);
 }
 

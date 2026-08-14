@@ -12,7 +12,7 @@
   "scripts": {
     "dev": "node scripts/dev.mjs",
     "dev:all": "concurrently -n server,web -c blue,magenta \"npm:dev:server\" \"npm:dev:web\"",
-    "dev:server": "PORT=4317 npm -w server run dev",
+    "dev:server": "node scripts/dev-server.mjs",
     "dev:web": "npm -w web-next run dev",
     "build": "npm -w shared run build && npm -w web-next run build && npm -w server run build && npm -w mcp run build",
     "build:mobile": "cd mobile && npx expo export -p web",

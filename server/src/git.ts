@@ -5,6 +5,7 @@ import { homedir } from "node:os";
 import { mkdirSync, statSync, existsSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import type { ProjectHealth } from "@harness/shared";
 import { DATA_DIR } from "./paths.js";
+import { IS_WINDOWS } from "./platform.js";
 import { assertNotPreviewInstance } from "./preview-instance.js";
 import { withRepoLock } from "./repo-lock.js";
 
@@ -21,10 +22,11 @@ const isFile = (p: string) => {
 // Users type `~/code/foo`, but Node's fs/git APIs don't understand `~` (only
 // shells do) — so expand a leading `~` to the home dir before any filesystem
 // use. Applied at every repoPath boundary below so `~` works system-wide.
+// Windows 上用户会写成 `~\code\foo`，反斜杠是那边的正规分隔符，一并认。
 export function expandHome(p: string | null | undefined): string {
   if (!p) return "";
   if (p === "~") return homedir();
-  if (p.startsWith("~/")) return join(homedir(), p.slice(2));
+  if (p.startsWith("~/") || (IS_WINDOWS && p.startsWith("~\\"))) return join(homedir(), p.slice(2));
   return p;
 }
 
@@ -34,6 +36,14 @@ export function expandHome(p: string | null | undefined): string {
 export function tidyRepoPath(p: string | null | undefined): string {
   const t = (p ?? "").trim();
   if (!t) return "";
+  if (IS_WINDOWS) {
+    // 两种分隔符都要剥，否则 `C:\code\foo\` 和 `C:\code\foo` 会存成两个项目。
+    // 唯独盘符根后面那个不能剥：`C:` 在 Windows 上是「C 盘的当前目录」，
+    // 跟 `C:\`(C 盘根)是两个完全不同的位置。
+    const stripped = t.replace(/[\\/]+$/, "");
+    if (/^[A-Za-z]:$/.test(stripped)) return `${stripped}\\`;
+    return stripped || "\\";
+  }
   const stripped = t.replace(/\/+$/, "");
   return stripped || "/"; // a path of only slashes is root
 }
