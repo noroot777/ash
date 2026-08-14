@@ -191,7 +191,10 @@ export type DetectedCli = {
   description: string;
   bins: string[];
   docsUrl: string;
+  /** 服务端已按**它自己那台机器**的平台选好的安装命令；空串 = 本平台没有官方版本。 */
   installCommand: string;
+  /** 本平台特有的前提/限制（目前只有 Windows 侧会有）。 */
+  platformNote?: string;
   type?: AgentType;
   bin: string;
   available: boolean;

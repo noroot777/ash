@@ -173,6 +173,10 @@ export const grokSpec: CliSpec = {
   bins: ["grok"],
   docsUrl: "https://docs.x.ai/build/overview",
   installCommand: "curl -fsSL https://x.ai/cli/install.sh | bash",
+  // docs.x.ai/build/overview 的 Windows 页签(2026-08-14 核对,并下到 install.ps1 确认
+  // 文件头就写着「Grok CLI installer for PowerShell」)。同页还写了 Windows 上配置文件
+  // 在 %USERPROFILE%\.grok\config.toml —— 官方确有原生 Windows 版,不是让人去 WSL。
+  installCommandWindows: "irm https://x.ai/cli/install.ps1 | iex",
   notes:
     "实测于 2026-08-13,版本 grok 1.0.3 (1a29d5bc12d4);首轮实测是 2026-07-30 的 0.2.114,两版行为一致的部分不再重复标注。" +
     "已确认 -p + --always-approve + --permission-mode bypassPermissions 可无交互写入文件(1.0.3 复测:真的创建了文件);" +

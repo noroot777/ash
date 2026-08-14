@@ -32,6 +32,7 @@ import { GenericCliExecutor, hasTrustedSessionId, interactiveResumeInner } from 
 import { execBinFor, probeBins } from "../src/executors/bin-probe.js";
 import { resumeCommandFor } from "../src/executors/resume.js";
 import { normalizeProfileExtraArgs } from "../src/executors/args.js";
+import { installCommandFor } from "../src/detect.js";
 import type { CliSpec } from "../src/executors/catalog/types.js";
 
 const MISSING_BIN = "harness-definitely-not-installed-cli";
@@ -136,12 +137,38 @@ for (const s of CLI_SPECS) {
   assert.ok(s.name && s.description, `${s.key}: name/description 不能空`);
   assert.ok(/^https?:\/\//.test(s.docsUrl), `${s.key}: docsUrl 要是完整链接`);
   assert.ok(s.installCommand.trim(), `${s.key}: installCommand 不能空`);
+  // Windows 侧三态(见 CliCatalogEntry.installCommandWindows):不写 = 与 POSIX 同一条;
+  // 字符串 = 必须真有内容(空串会在界面上变成一个复制不出东西的按钮);
+  // null = 声明「官方没有 Windows 版」,那 windowsNote 就是用户能看到的唯一理由,不能空。
+  if (typeof s.installCommandWindows === "string")
+    assert.ok(s.installCommandWindows.trim(), `${s.key}: installCommandWindows 给了就不能是空串`);
+  if (s.installCommandWindows === null)
+    assert.ok(
+      (s.windowsNote ?? "").trim(),
+      `${s.key}: installCommandWindows=null(没有 Windows 版)必须在 windowsNote 里写明原因`,
+    );
+  if (s.windowsNote !== undefined) assert.ok(s.windowsNote.trim(), `${s.key}: windowsNote 给了就不能是空串`);
+  // 真实 spec 上跑一遍平台解析:Windows 侧发出去的要么是一条能跑的命令,要么是空串
+  // (= 没有官方版本)。别出现「curl … | bash 原样端给 Windows 用户」这种第三种情况。
+  const winCmd = installCommandFor(s, true);
+  if (s.installCommandWindows === null) assert.equal(winCmd, "", `${s.key}: 声明没有 Windows 版就该发空串`);
+  else assert.ok(winCmd.trim() && !/^\s*(curl|sh )/.test(winCmd), `${s.key}: Windows 侧不能发 POSIX 安装命令(${winCmd})`);
+  assert.equal(installCommandFor(s, false), s.installCommand, `${s.key}: POSIX 侧必须原样用 installCommand`);
   if (s.fallbackVersionMatch) assert.ok(s.bins.length > 1, `${s.key}: fallbackVersionMatch 只对备用 bin 有意义`);
   const p = s.exec.prompt;
   if (p.via === "flag") assert.ok(p.flag, `${s.key}: prompt.via="flag" 必须给 flag 名`);
   if (p.stdinArg) assert.equal(p.via, "stdin", `${s.key}: stdinArg 只在 via="stdin" 时有意义`);
   // untested 的必须留下「要核实什么」,否则 B 阶段接手的人只能重新猜一遍。
   if (s.untested) assert.ok((s.notes ?? "").length > 20, `${s.key}: 标了 untested 就得在 notes 里写清待核实的点`);
+}
+
+// 平台解析的三态本身(不依赖真实 spec,免得哪天全目录碰巧都填了就测不到 null 分支)
+{
+  const posix = { installCommand: "curl x | bash" };
+  assert.equal(installCommandFor(posix, false), "curl x | bash", "非 Windows 一律用 installCommand");
+  assert.equal(installCommandFor(posix, true), "curl x | bash", "不写 Windows 版 = 两边同一条");
+  assert.equal(installCommandFor({ ...posix, installCommandWindows: "irm y | iex" }, true), "irm y | iex", "写了就用 Windows 那条");
+  assert.equal(installCommandFor({ ...posix, installCommandWindows: null }, true), "", "null = 本平台没有官方版本,发空串");
 }
 
 // ③ 常驻会话只有专用类实现 —— 团队调度者的过滤就靠这一条,破了它下拉里会冒出跑不了的 CLI。

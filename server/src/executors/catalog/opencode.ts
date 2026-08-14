@@ -14,6 +14,12 @@ export const opencodeSpec: CliSpec = {
   bins: ["opencode"],
   docsUrl: "https://opencode.ai/docs/cli/",
   installCommand: "curl -fsSL https://opencode.ai/install | bash",
+  // 官方 Windows 段给了 choco / scoop / npm / mise / docker 五条,这里取 npm 那条:
+  // 其余四条都得先装另一个包管理器,而 harness 本身就跑在 Node 上,npm 一定在。
+  installCommandWindows: "npm install -g opencode-ai",
+  // 官方安装页在 Windows 段挂了一条 "Recommended: Use WSL" 的提示 —— 原生能装,
+  // 但他们自己更推荐 WSL,如实转述,别替官方打包票。
+  windowsNote: "原生可装,但官方安装页仍建议在 WSL 里用。",
   untested: true,
   notes:
     "依据(2026-07-30 查阅 opencode.ai/docs/cli 与 GitHub dev 分支 packages/opencode/src/cli/cmd/run.ts," +

@@ -135,6 +135,12 @@ export const kimiSpec: CliSpec = {
   bins: ["kimi"],
   docsUrl: "https://github.com/MoonshotAI/kimi-code",
   installCommand: "curl -fsSL https://code.kimi.com/kimi-code/install.sh | bash",
+  // install.ps1 文件头:「kimi-code installer for Windows (PowerShell 5.1+)」
+  // (2026-08-14 拉取确认)。
+  installCommandWindows: "irm https://code.kimi.com/kimi-code/install.ps1 | iex",
+  // kimi-code 在 Windows 上把 Git for Windows 自带的 bash 当执行 shell 用
+  // (`KIMI_SHELL_PATH` 可改指向),没装 Git 它跑不了带命令的工具调用。
+  windowsNote: "需要先装 Git for Windows:它自带的 bash 是 kimi 的执行 shell(可用 KIMI_SHELL_PATH 覆盖)。",
   untested: true,
   notes:
     "2026-07-30 按官方 kimi-code 文档及 main 源码 apps/kimi-code/src/cli/{commands,options,run-prompt,prompt-render}.ts 核对;" +

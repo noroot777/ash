@@ -14,6 +14,11 @@ export const claudeSpec: CliSpec = {
   bins: ["claude"],
   docsUrl: "https://docs.claude.com/en/docs/claude-code/overview",
   installCommand: "npm install -g @anthropic-ai/claude-code",
+  // npm 那条本来就跨平台,不用另给 Windows 版。这里只提 Git for Windows:
+  // 官方 setup 页(2026-08-14 核对)说原生 Windows 上它是可选的,但装了才有 Bash 工具
+  // (否则退到 PowerShell 工具);路径可用 CLAUDE_CODE_GIT_BASH_PATH 指定。harness 自己
+  // 大量派 claude 干活,这条直接决定 agent 能不能跑 shell 命令,值得在界面上说一句。
+  windowsNote: "可选装 Git for Windows:装了才有 Bash 工具(否则退到 PowerShell),路径可用 CLAUDE_CODE_GIT_BASH_PATH 指定。",
   factory: (opts) => new ClaudeExecutor(opts),
   exec: {
     // claude -p --output-format stream-json --verbose --include-partial-messages

@@ -143,8 +143,26 @@ export interface CliCatalogEntry {
    */
   fallbackVersionMatch?: string;
   docsUrl: string;
-  /** 官方安装命令原文。只给用户复制,**服务端永不执行**。 */
+  /** 官方安装命令原文(POSIX 侧)。只给用户复制,**服务端永不执行**。 */
   installCommand: string;
+  /**
+   * Windows 上的安装命令。`detect.ts` 按**宿主平台**在这两条里挑一条发给前端,所以
+   * 界面上永远只出现「这台机器上能用的那条」——半数 CLI 的 `installCommand` 是
+   * `curl … | bash`,原样端给 Windows 用户就是一条注定跑不通的命令。
+   *
+   * 三种取值:
+   *  · 不写   = `installCommand` 本身就跨平台(`npm install -g …` 那种),两边同一条;
+   *  · 字符串 = Windows 专用那条(PowerShell / winget / choco …),官方原文照抄;
+   *  · `null` = 官方没有 Windows 版。此时目录发出去的安装命令是空串,前端据此标
+   *             「本平台不可用」,理由取 `windowsNote` —— 别让用户装完才发现。
+   */
+  installCommandWindows?: string | null;
+  /**
+   * Windows 上的前提或限制,一句话(「只支持 Win11」「要先装 Git for Windows」)。
+   * 只在 Windows 宿主上发给前端。`installCommandWindows: null` 时这里写的就是
+   * 「为什么没有」,是用户看到的唯一理由,别留空。
+   */
+  windowsNote?: string;
   /**
    * true = 执行部分(exec)**按官方文档写、本机未实测**。前端据此打标,用户
    * 心里有数;B 阶段实测校准后把它去掉。检测部分(bins 等)另有注释交代来源。

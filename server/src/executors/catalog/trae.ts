@@ -12,6 +12,9 @@ export const traeSpec: CliSpec = {
   // 照录官方快速开始的整条命令:安装脚本跑在 `sh -c` 子进程里,它写进 shell
   // profile 的 PATH 传不回用户当前 shell,少了后半段就得重开终端才敲得动 traecli。
   installCommand: 'sh -c "$(curl -L https://trae.cn/trae-cli/install.sh)" && export PATH=~/.local/bin:$PATH',
+  // PS 脚本自己写 PATH,所以不像 POSIX 那条还要跟一截 `&& export PATH=…`
+  // (2026-08-14 拉取确认;脚本里 x64/ARM64 两个架构都有分支)。
+  installCommandWindows: "irm https://trae.cn/trae-cli/install.ps1 | iex",
   untested: true,
   notes:
     "2026-07-30 依据官方中文文档 docs.trae.cn 的 TRAE CLI 章节核对(/cli_use-cases 的参数表是唯一一处" +

@@ -2,6 +2,7 @@ import type { AgentType } from "@harness/shared";
 import { probeBins } from "./executors/bin-probe.js";
 import { CLI_SPECS } from "./executors/catalog/index.js";
 import { resolveExecutorFor } from "./executors/index.js";
+import { IS_WINDOWS } from "./platform.js";
 
 export interface DetectedAgent {
   type: AgentType;
@@ -34,8 +35,18 @@ export interface KnownCli {
   /** 备用命令名的自证要求(见 CliCatalogEntry.fallbackVersionMatch)。 */
   fallbackVersionMatch?: string;
   docsUrl: string;
-  /** 官方安装命令原文。只给用户复制,**服务端永不执行**。 */
+  /**
+   * 官方安装命令原文,**已按本机平台选好那一条**(Windows 上给 PowerShell 那条,
+   * 见 CliCatalogEntry.installCommandWindows)。只给用户复制,**服务端永不执行**。
+   * 空串 = 这个 CLI 在本平台没有官方版本,理由在 platformNote 里。
+   */
   installCommand: string;
+  /**
+   * 本平台特有的前提或限制,一句话。目前只有 Windows 侧填得上(spec 的 windowsNote);
+   * 别的平台一律 undefined —— 这个字段的意思是「你这台机器上额外要注意什么」,
+   * 不是「各平台注意事项的合集」。
+   */
+  platformNote?: string;
   /** 可作为 harness 执行器的 AgentType(= key)。 */
   type: AgentType;
   /** true = 执行参数按官方文档写、本机未实测(前端据此打标)。 */
@@ -59,6 +70,23 @@ export interface DetectedCli extends KnownCli {
   resident: boolean;
 }
 
+// 安装命令在**这里**按宿主平台定死,而不是把两条都发给前端让浏览器挑:CLI 要装在
+// 跑 server 的这台机器上,只有服务端知道那是什么系统(用 Windows 浏览器连 mac 上的
+// harness 完全正常,那时该显示的是 mac 那条)。
+//
+// 单独抽成函数是为了能测 —— `IS_WINDOWS` 是模块级常量,mac 上跑的测试没法翻转它,
+// 内联写就等于 Windows 分支永远没人验。
+export function installCommandFor(
+  spec: { installCommand: string; installCommandWindows?: string | null },
+  isWindows: boolean,
+): string {
+  if (!isWindows) return spec.installCommand;
+  // 三态(见 CliCatalogEntry.installCommandWindows):不写 = 跟 POSIX 同一条(npm 那种);
+  // 字符串 = 用它;null = 官方没 Windows 版,发空串,前端据此标不可用。
+  if (spec.installCommandWindows === undefined) return spec.installCommand;
+  return spec.installCommandWindows ?? "";
+}
+
 // 目录 → 展示面。挑字段而不是整份 spread:spec 里有 parser / factory 这些函数,
 // 一起 spread 出去会被 JSON.stringify 静默丢掉,还把执行细节泄给了界面。
 const KNOWN_CLIS: KnownCli[] = CLI_SPECS.map((s) => ({
@@ -69,7 +97,8 @@ const KNOWN_CLIS: KnownCli[] = CLI_SPECS.map((s) => ({
   bins: s.bins,
   fallbackVersionMatch: s.fallbackVersionMatch,
   docsUrl: s.docsUrl,
-  installCommand: s.installCommand,
+  installCommand: installCommandFor(s, IS_WINDOWS),
+  platformNote: IS_WINDOWS ? s.windowsNote : undefined,
   untested: s.untested,
   notes: s.notes,
 }));

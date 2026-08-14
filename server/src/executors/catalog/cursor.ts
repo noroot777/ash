@@ -16,6 +16,10 @@ export const cursorSpec: CliSpec = {
   fallbackVersionMatch: "cursor",
   docsUrl: "https://cursor.com/docs/cli/installation",
   installCommand: "curl https://cursor.com/install -fsS | bash",
+  // Windows 走同一个端点带 `win32=true` —— 官方就是靠这个查询参数换发 PowerShell 脚本
+  // (2026-08-14 拉下来确认返回的确实是 PS 安装器,不是 sh)。引号是必须的:
+  // PowerShell 里裸写 `?` 后面那段会被当参数解析。
+  installCommandWindows: "irm 'https://cursor.com/install?win32=true' | iex",
   untested: true,
   notes:
     "依据 2026-07-30 查阅 cursor.com/docs/cli/{using,headless,reference/parameters,reference/output-format," +

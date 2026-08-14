@@ -232,6 +232,10 @@ export const antigravitySpec: CliSpec = {
   bins: ["antigravity", "agy"],
   docsUrl: "https://antigravity.google/docs/cli/headless",
   installCommand: "curl -fsSL https://antigravity.google/cli/install.sh | bash",
+  // 官方 docs/cli/install 原话是「runs natively on macOS, Linux, and Windows」,Windows
+  // 段给 PowerShell 与 CMD 两条,这里取 PowerShell 那条(2026-08-14 核对文档,并下到
+  // install.ps1 确认是真的安装脚本;装完落在 %LOCALAPPDATA%\agy\bin)。
+  installCommandWindows: "irm https://antigravity.google/cli/install.ps1 | iex",
   untested: true,
   notes:
     "按官方 docs/cli/headless + antigravity.google/changelog 核准于 2026-07-30(最新 CLI 1.1.8,2026-07-28 发版);" +

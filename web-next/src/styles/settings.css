@@ -409,6 +409,13 @@
   white-space: nowrap;
 }
 
+/* 平台提示要能读全：上面那行是版本号/路径，截一半还认得出；这句是「装之前/之后要注意
+   什么」，被 ellipsis 截掉半句等于没提示，所以单独放开换行。 */
+.settings-cli-grid .settings-cli-note {
+  overflow: visible;
+  white-space: normal;
+}
+
 .settings-cli-grid article > button {
   margin-left: auto;
   border: 0;

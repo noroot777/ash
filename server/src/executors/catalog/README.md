@@ -4,7 +4,7 @@ harness 能派任务的 CLI 全部登记在这个目录里,**一个 CLI 一个 s
 
 | 链路 | 用到的字段 | 出口 |
 |---|---|---|
-| 检测与展示 | `key` / `name` / `description` / `bins` / `fallbackVersionMatch` / `docsUrl` / `installCommand` / `untested` / `notes` | `server/src/detect.ts` → `GET /api/agents/catalog`、`GET /api/agents/detect` |
+| 检测与展示 | `key` / `name` / `description` / `bins` / `fallbackVersionMatch` / `docsUrl` / `installCommand` / `installCommandWindows` / `windowsNote` / `untested` / `notes` | `server/src/detect.ts` → `GET /api/agents/catalog`、`GET /api/agents/detect` |
 | 派任务(命令行构造 + 输出解析) | `exec` / `factory` | `GenericCliExecutor`(`server/src/executors/generic.ts`)、`executors/index.ts` 的 `build()` |
 | 会话恢复命令展示 | `exec.session.interactive` | `server/src/executors/resume.ts` |
 
@@ -60,7 +60,9 @@ export const fooSpec: CliSpec = {
   bins: ["foo", "foo-cli"],// 候选命令名,按顺序探测,第一个探到的算数
   fallbackVersionMatch: "foo",   // 仅备用 bin(bins[1..])需自证:--version 输出须含这个词
   docsUrl: "https://…",
-  installCommand: "npm install -g foo",  // 官方原文,只给用户复制,服务端永不执行
+  installCommand: "npm install -g foo",  // 官方原文(POSIX 侧),只给用户复制,服务端永不执行
+  installCommandWindows: "irm https://…/install.ps1 | iex",  // 三态,见下;`npm -g` 那种跨平台的不写
+  windowsNote: "需要先装 Git for Windows",   // Windows 上的前提/限制,一句话;只发给 Windows 宿主
   untested: true,          // 执行参数按文档写、本机未实测
   notes: "待核实:…",       // 未定的点、踩过的坑。标了 untested 就必须写(测试会拦)
   exec: { … },
@@ -68,6 +70,16 @@ export const fooSpec: CliSpec = {
 ```
 
 **`bins` 是踩坑核对过的,别顺手改**:产品名和终端里敲的那个词经常对不上(`trae` → `traecli`、`qoder` → `qodercli`、`kiro` → `kiro-cli`、cursor 官方现在的 bin 叫 `agent`)。改它要有实测依据,并在注释里写清依据是什么。
+
+**安装命令是按平台发的**:`detect.ts` 的 `installCommandFor` 按**跑 server 那台机器**的平台在两条里挑一条,界面上只出现能用的那条(浏览器在哪个系统上开的不算数 —— CLI 要装在服务端那台)。`installCommandWindows` 三态:
+
+| 取值 | 含义 |
+|---|---|
+| 不写 | `installCommand` 本身跨平台(`npm install -g …`),两边同一条 |
+| 字符串 | Windows 专用那条(PowerShell / winget / choco…),**官方原文照抄** |
+| `null` | 官方没有 Windows 版。发出去的安装命令是空串,`windowsNote` 就是用户看到的唯一理由,**不能空**(测试会拦) |
+
+半数 CLI 的 `installCommand` 是 `curl … | bash`,原样端给 Windows 用户就是一条注定跑不通的命令 —— 所以测试还会拦「Windows 侧发 POSIX 命令」。
 
 `fallbackVersionMatch` 存在的原因:`agent` 这种通用名在本机实测里命中的其实是 grok —— 备用名不自证身份就会把别家的命令连版本号一起认成自己。
 

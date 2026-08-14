@@ -8,6 +8,12 @@ export const kiroSpec: CliSpec = {
   bins: ["kiro-cli"], // `kiro` 是拉起 IDE 的。官方明确不支持 Homebrew。
   docsUrl: "https://kiro.dev/docs/cli/installation/",
   installCommand: "curl -fsSL https://cli.kiro.dev/install | bash",
+  // install.ps1 的文件头自己写着 `# Usage: irm https://cli.kiro.dev/install.ps1 | iex`
+  // (2026-08-14 拉取确认)。
+  installCommandWindows: "irm https://cli.kiro.dev/install.ps1 | iex",
+  // 官方安装页的 Windows 段只列 Windows 11;脚本里的包名写死
+  // `kiro-cli-x86_64-pc-windows-msvc.msi`,所以 ARM 机器上跑的是模拟的 x64。
+  windowsNote: "官方只列 Windows 11;安装包仅 x64(ARM 机器走模拟)。",
   untested: true,
   notes:
     "2026-07-30 核对 Kiro 官方 headless/CLI commands/models/effort/session/auth 文档（当前 changelog 2.15.0）及 Amazon Q Developer CLI 前身公开源码与迁移说明:" +
