@@ -43,15 +43,29 @@ function walk(dir, out = []) {
 // 分发用的 tar 包解出来不是 git 仓库（`git archive` 不带 .git），那时 execFileSync 会
 // 直接抛 `not a git repository`，把整个前端 build 带崩——一个代码风格检查不该让「拿到
 // 源码包的人构建不出来」。所以拿不到 git 时退回自己走目录。
+// 2026-08-14：`scripts/*.sh` 全改成 `.mjs` 之后，仓库里一个 `.sh` 都不剩了 —— 只按扩展名
+// 找会让这条检查静默地扫不到任何文件。剩下的 shell 是 `.githooks/*`（没有扩展名，由
+// Git for Windows 自带的 bash 执行），必须显式带上，否则闸还在、覆盖面已经是零。
 function listShellFiles() {
+  const hooks = [];
   try {
-    return execFileSync("git", ["ls-files", "*.sh"], {
-      cwd: ROOT,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    })
-      .split("\n")
-      .filter((rel) => rel.trim());
+    for (const name of readdirSync(join(ROOT, ".githooks"))) {
+      if (statSync(join(ROOT, ".githooks", name)).isFile()) hooks.push(join(".githooks", name));
+    }
+  } catch {
+    /* 没有这个目录就算了 */
+  }
+  try {
+    return [
+      ...execFileSync("git", ["ls-files", "*.sh"], {
+        cwd: ROOT,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+      })
+        .split("\n")
+        .filter((rel) => rel.trim()),
+      ...hooks,
+    ];
   } catch {
     const SKIP = new Set(["node_modules", "dist", ".git", "data", ".worktrees", ".expo"]);
     const out = [];
@@ -64,7 +78,7 @@ function listShellFiles() {
       }
     };
     scan(ROOT);
-    return out;
+    return [...out, ...hooks];
   }
 }
 
@@ -115,7 +129,7 @@ let failed = false;
 // `echo ":$PORT。"` 里的变量名成了 `PORT\xe3`，在 `set -u` 下直接 unbound
 // variable 退出。实测复现：bash -c 'set -u; PORT=1; echo ":$PORT。"'
 // 症状很坑：脚本前面的输出都正常，到这一行才突然报错退出，看着像别处的问题
-// （2026-07-31 restart.sh 的安全闸就是这样断在最后一句提示上）。
+// （2026-07-31 当时还是 shell 的 restart.sh，安全闸就是这样断在最后一句提示上）。
 // 修法只有一个：加花括号 `${PORT}`。
 const shellHits = [];
 for (const rel of listShellFiles()) {

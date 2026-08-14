@@ -57,7 +57,7 @@ mountLocalOpenRoutes(api);
 // ── health ───────────────────────────────────────────────────────────────
 api.get("/health", (c) => c.json({ ok: true, ts: now() }));
 
-// 「现在重启会打断谁」。scripts/restart.sh 的安全闸靠它决定拦不拦 —— 只数
+// 「现在重启会打断谁」。scripts/restart.mjs 的安全闸靠它决定拦不拦 —— 只数
 // running/queued 的个数已经不对了：agent 输出走文件之后，多数单飞任务重启不会断。
 // 动态 import：这条路只在人工重启时被打一次，没必要把 reattach 那条链拉进启动路径。
 api.get("/restart-impact", async (c) => {

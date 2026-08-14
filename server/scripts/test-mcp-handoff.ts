@@ -150,7 +150,7 @@ assert.equal(
   0,
 );
 
-// ── ⑫ 事前预警：谁手里还握着 MCP 通道（restart.sh 第 3 步的闸）──────────────
+// ── ⑫ 事前预警：谁手里还握着 MCP 通道（restart.mjs 第 3 步的闸）──────────────
 // 这一段跟上面的补捞是同一件事的两头：能不掐断就别掐断，掐断了才谈补捞。
 const { holdersOf, isMcpProcess, parsePsTable } = await import("../src/mcp-holders.js");
 

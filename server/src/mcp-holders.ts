@@ -1,4 +1,4 @@
-// 「现在刷新 MCP，会掐断谁手里的通道」——给 `scripts/restart.sh` 第 3 步的预警。
+// 「现在刷新 MCP，会掐断谁手里的通道」——给 `scripts/restart.mjs` 第 3 步的预警。
 //
 // 背景（2026-08-06 事故）：harness MCP 不是常驻端口，而是**每个 agent 会话各自
 // spawn 的 stdio 子进程**（`node <repo>/mcp/dist/index.js`）。restart 的第 3 步会

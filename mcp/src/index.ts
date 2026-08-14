@@ -30,7 +30,7 @@ const BASE = (process.env.HARNESS_URL ?? "http://localhost:4317").replace(/\/+$/
   process.env.no_proxy = merged;
 }
 
-// 重启窗口的等待上限。scripts/restart.sh 是「杀掉 → 等端口释放 → 起新进程 →
+// 重启窗口的等待上限。scripts/restart.mjs 是「杀掉 → 等端口释放 → 起新进程 →
 // 轮询 /api/health」,正常几秒内回来;给到 60s 是留足构建慢、机器忙的余量。
 const RECONNECT_WINDOW_MS = Number(process.env.HARNESS_RECONNECT_MS ?? 60_000);
 

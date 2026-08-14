@@ -1,7 +1,7 @@
 // 交卷丢了就回头补捞：把 agent 那些「确定没送达」的 harness MCP 调用，在回合结算前替它重放。
 //
 // 起因（2026-08-06）：codex 跑完一轮就地验证，报告写着「通过」，可 `report_stage(verified)`
-// 连调两次都撞上 `Transport closed` —— `scripts/restart.sh` 那一刻正好重建并杀掉了所有
+// 连调两次都撞上 `Transport closed` —— `scripts/restart.mjs` 那一刻正好重建并杀掉了所有
 // `node mcp/dist/index.js` 子进程。于是 `concludeRound` 读不到 stage，判「无结论，等待人工
 // 处理」，12 分钟的验证白跑。同一条路上更常见的受害者是 `complete_task`：它丢了，严格结算
 // 就把一个**干完了活**的任务记成 failed。
