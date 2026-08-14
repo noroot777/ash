@@ -83,6 +83,7 @@ export const tasks = sqliteTable("tasks", {
   status: text("status").notNull().default("backlog"),
   stage: text("stage"), // 正交验收阶段；不参与 status 调度/结算语义
   pinnedAt: integer("pinned_at"), // null=未置顶；多个置顶任务按时间戳排序
+  starredAt: integer("starred_at"), // 星标（用户手动软记号）；null=未标
   reviewOf: text("review_of"), // 审查任务 → 被审任务 id；普通任务为 null
   reviewRound: integer("review_round"), // 审查任务针对该目标的轮次（从 1 开始）
   // 就地验证：验证轮不再另起一个任务，而是在这个任务自己身上多跑一个旁路回合。
@@ -97,7 +98,6 @@ export const tasks = sqliteTable("tasks", {
   // 线上第一站。历史那批独立审查任务把它记在自己身上，就地验证轮记在被验任务身上。
   reviewStep: text("review_step"),
   reviewRequested: integer("review_requested", { mode: "boolean" }).notNull().default(false),
-  priority: text("priority").notNull().default("none"),
   labels: text("labels").notNull().default("[]"), // json
   dependsOn: text("depends_on").notNull().default("[]"), // json
   resumeDependsOn: text("resume_depends_on").notNull().default("[]"), // json
@@ -152,6 +152,25 @@ export const tasks = sqliteTable("tasks", {
   // 落库而不只放内存 —— 确认与结算若不在同一个进程里（历史事故：僵尸实例跑任务、
   // HTTP 打到监听进程），内存标记会静默丢掉，agent 明明确认了却记 failed。
   completeConfirmedAt: text("complete_confirmed_at"),
+  // 这一轮是 CLI 原生命令（`/compact`）：整条消息由 CLI 本地执行，不进模型 —— 既不是
+  // 任务的执行，也不是一轮验证。结算钩子（派验证 / 收验证轮 / 推工作流）必须整段跳过，
+  // 否则「压一下上下文」会被记成一轮验证跑完，还白吃一轮配额。开跑时写，结算后清空；
+  // 落库而不只放内存，理由同上一条（结算可能发生在另一个进程里）。
+  nativeTurn: integer("native_turn", { mode: "boolean" }).notNull().default(false),
+  // 统一验收合并的结构化落账：目标分支 + 合并前后它的 commit。合并后基线审查（对
+  // base@before..after 派新任务）靠它，时间线文本反解不可靠。无合并动作（in_place /
+  // marked_only / 打标签）时保持 null 或 before==after。
+  acceptedTargetBranch: text("accepted_target_branch"),
+  acceptedBaseCommit: text("accepted_base_commit"),
+  acceptedMergeCommit: text("accepted_merge_commit"),
+  // 验收尾段（点头之后的发布/命令步骤）的 durable 进度：finalize 时线上真有尾段就置 1，
+  // 尾段跑完（无论成败，结果已报告）清 0。进程死在两者之间时，重启后的重复验收会发现
+  // 它还挂着并补跑——否则发布步骤被 already_accepted 快路静默永久漏掉（审查实测复现）。
+  acceptedTailPending: integer("accepted_tail_pending", { mode: "boolean" }).notNull().default(false),
+  // 尾段的**逐站** durable 进度（JSON string[]：已完成的 step id）。只有 pending 一个
+  // 布尔位时，崩溃重试会整段重跑——已经执行过的发布/部署命令再来一遍（at-least-once
+  // 变 at-least-twice，审查实测复现）。补跑按这份清单跳过已完成的站；随 pending 一起清。
+  acceptedTailDone: text("accepted_tail_done").notNull().default("[]"),
 });
 
 export const agents = sqliteTable("agents", {
@@ -166,6 +185,9 @@ export const agents = sqliteTable("agents", {
   // 挂载的供应商(llm_providers.id)。null=用 CLI 自己的官方登录账号。
   // 非空时启动 CLI 前注入 base_url + key(claude: env;codex: -c model_providers)。
   providerId: text("provider_id"),
+  // 覆盖 CLI 自己配置文件里的设置(json Record<string, number>,以 env 注入)。
+  // 声明表在 @harness/shared/cli-overrides —— 没在那儿声明过的 key 一律不落库。
+  configOverrides: text("config_overrides").notNull().default("{}"),
   isDefault: integer("is_default", { mode: "boolean" }).notNull().default(false),
 });
 
@@ -213,9 +235,16 @@ export const freeWorkflowStates = sqliteTable("free_workflow_states", {
   reviewArmed: integer("review_armed", { mode: "boolean" }).notNull().default(false),
   reviewCheckMode: text("review_check_mode"),
   reviewRetryLimit: integer("review_retry_limit"),
-  mergeStatus: text("merge_status").notNull().default("idle"),
-  mergeMessage: text("merge_message"),
-  mergedAt: text("merged_at"),
+  reviewNote: text("review_note"),
+  // 预约要用的执行器覆盖（相对审查者配置，只作用于这一次）。四列一起写、一起清：
+  // 智能体换了、模型/智能水平就得跟着重来，拆开写会拼出审查者从未有过的组合。
+  // agent_type 为空 = 没有覆盖，照审查者自己的配置跑。
+  reviewAgentType: text("review_agent_type"),
+  reviewExecutorId: text("review_executor_id"),
+  reviewModel: text("review_model"),
+  reviewReasoningEffort: text("review_reasoning_effort"),
+  // 非空 = 自动复审链的续轮预约：修复确认完成后在这条 run 上续下一轮，而不是开新 run。
+  reviewRunId: text("review_run_id"),
   updatedAt: text("updated_at").notNull(),
 });
 
@@ -244,6 +273,7 @@ export const freeReviewRuns = sqliteTable(
     model: text("model"),
     reasoningEffort: text("reasoning_effort"),
     checkMode: text("check_mode").notNull(),
+    note: text("note"),
     retryLimit: integer("retry_limit").notNull().default(1),
     currentRound: integer("current_round").notNull().default(1),
     status: text("status").notNull(),
@@ -262,6 +292,8 @@ export const freeReviewRounds = sqliteTable(
     round: integer("round").notNull(),
     status: text("status").notNull(),
     conclusion: text("conclusion"),
+    // 本轮启动时任务工作区的 HEAD。结论新不新鲜靠它跟当前 HEAD 比，不靠状态字段。
+    reviewedCommit: text("reviewed_commit"),
     startedAt: text("started_at").notNull(),
     endedAt: text("ended_at"),
   },
@@ -280,9 +312,12 @@ export const sessions = sqliteTable("sessions", {
   cwd: text("cwd"),
   cliSessionId: text("cli_session_id"),
   resumeCommand: text("resume_command"),
-  // 本次运行挂的供应商在恢复命令里要带的 env 前缀(token 已是占位符)。
-  // null = 走 CLI 官方账号。只用于展示,不含真 key。
-  relayEnv: text("relay_env"),
+  // 恢复命令要带的 env 前缀:供应商那一截(token 已是占位符)。null = 没有。
+  // 只用于展示,不含真 key。列名 relay_env 跟它现在装的东西正好对上。
+  resumeEnv: text("relay_env"),
+  // 恢复命令里跟在 CLI 后面的参数(claude 的 `--settings '{…}'`)。配置覆盖项走这一列:
+  // env 前缀打不过用户自己的 settings.json,只有 --settings 这一层压得住(finding 2)。
+  resumeArgs: text("resume_args"),
   commandLine: text("command_line"),
   startedAt: text("started_at").notNull(),
   endedAt: text("ended_at"), // when this run finished (set with exit_status)
@@ -358,6 +393,10 @@ export const scheduledMessages = sqliteTable("scheduled_messages", {
   executorId: text("executor_id"), // agents.id | null（null=按 agent 类型默认执行器）
   model: text("model"), // 模型覆盖 | null（跟随执行器）
   reasoningEffort: text("reasoning_effort"), // 思考强度覆盖 | null（跟随执行器）
+  // 投递时恢复的回合身份（"reviewer" 等）。审查者提问回合还没 release turn、用户就答复
+  // 时答案会落到这里排队——不存 role 的话投递会以 single 身份进实现会话，reviewer 永远
+  // 收不到答案（审查实测复现）。null = 普通消息。
+  sessionRole: text("session_role"),
   mode: text("mode").notNull().default("timed"), // timed | queued
   sendAt: text("send_at").notNull(), // timed=ISO 到期时间；queued=入队时刻（只用来排先后）
   status: text("status").notNull().default("pending"), // pending | sent | canceled

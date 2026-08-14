@@ -70,12 +70,24 @@ export type ServerEvent =
       questionOptions: string[] | null;
       questionItems: QuestionItem[] | null;
     }
+  // 待发送消息托盘(排队/定时)有变化：入队、真的发出去了、被取消。托盘的真值只能
+  // 来自服务端 —— 从前前端靠「任务从 running 变成别的状态」反推「排着的那条已经
+  // 发出去了」，可排队消息一投递任务立刻又回到 running，中间那个空档常常一次都没
+  // 被观察到，于是消息明明进了会话、托盘还挂着「排队中」(2026-08-13)。
+  | { type: "task.pendingMessages"; taskId: string }
   | {
       type: "agent.event";
       taskId: string;
       sessionId: string;
       role: SessionRole;
       agentType?: AgentType; // which agent produced it (single tasks can host several via @-mention)
+      model?: string | null;
+      reasoningEffort?: string | null;
+      // 这一回合是「就地验证」的第几轮。就地验证是搭在被验任务自己身上的旁路回合，
+      // 常常还复用同一条会话 —— 少了这个数，会话里审查者的发言跟它上面那条「我在做
+      // 需求」的发言长得一模一样（同执行器自审时连名字都一样）。跟 model/reasoningEffort
+      // 一样按回合随流广播，落盘那份在 trace 的 run 事件里，两条路读出来必须一致。
+      verifyRound?: number | null;
       event: AgentEvent;
     }
   // A user-channel turn after it has been persisted to the session transcript.

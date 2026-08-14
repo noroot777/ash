@@ -3,7 +3,6 @@ import type {
   AgentExecutorProfile,
   AgentType,
   Group,
-  Priority,
   TaskMode,
   TaskWorkflowMode,
   TeamPresetConfig,
@@ -16,14 +15,6 @@ import type { ComposerExecutorConfigs, ComposerExecutorRole } from "./executorOv
 import { ExecutorPickerField } from "./ExecutorPickerField.tsx";
 import { PresetBar } from "./PresetBar.tsx";
 
-const PRIORITIES: { value: Priority; label: string }[] = [
-  { value: "none", label: "无优先级" },
-  { value: "low", label: "低" },
-  { value: "medium", label: "中" },
-  { value: "high", label: "高" },
-  { value: "urgent", label: "紧急" },
-];
-
 export function ComposerFields({
   mode,
   profiles,
@@ -35,7 +26,7 @@ export function ComposerFields({
   availabilityMessage,
   availabilityTone,
   onExecutorChange,
-  onOverrideChange,
+  onEffortChange,
   currentTeamConfig,
   onApplyTeamPreset,
   notify,
@@ -54,8 +45,6 @@ export function ComposerFields({
   groups,
   groupId,
   onGroupChange,
-  priority,
-  onPriorityChange,
   labels,
   onLabelsChange,
   onCreateGroup,
@@ -72,8 +61,12 @@ export function ComposerFields({
   executorTypes: Record<ComposerExecutorRole, AgentType>;
   availabilityMessage: string | null;
   availabilityTone: "loading" | "warning" | "empty" | null;
-  onExecutorChange: (role: ComposerExecutorRole, value: string) => void;
-  onOverrideChange: (role: ComposerExecutorRole, patch: { model?: string; effort?: string }) => void;
+  onExecutorChange: (
+    role: ComposerExecutorRole,
+    value: string,
+    override: { model: string; effort: string },
+  ) => void;
+  onEffortChange: (role: ComposerExecutorRole, effort: string) => void;
   currentTeamConfig: TeamPresetConfig;
   onApplyTeamPreset: (config: TeamPresetConfig) => void;
   notify: (message: string) => void;
@@ -92,8 +85,6 @@ export function ComposerFields({
   groups: Group[];
   groupId: string;
   onGroupChange: (value: string) => void;
-  priority: Priority;
-  onPriorityChange: (value: Priority) => void;
   labels: string[];
   onLabelsChange: (labels: string[]) => void;
   onCreateGroup: () => void;
@@ -120,15 +111,15 @@ export function ComposerFields({
         <div className={`composer-executor-grid is-${mode}`}>
           {mode === "team" && (
             <>
-              <ExecutorPickerField label="调度者执行器" value={executors.lead.profile} types={leadTypes} profiles={leadProfiles} knownProfiles={profiles} fallbackType="claude" override={executors.lead} onChange={(value) => onExecutorChange("lead", value)} onOverrideChange={(patch) => onOverrideChange("lead", patch)} />
-              <ExecutorPickerField label="执行者执行器" value={executors.worker.profile} types={workerTypes} profiles={profiles} knownProfiles={profiles} fallbackType="codex" override={executors.worker} onChange={(value) => onExecutorChange("worker", value)} onOverrideChange={(patch) => onOverrideChange("worker", patch)} />
-              <ExecutorPickerField label="审查者执行器" value={executors.reviewer.profile} types={workerTypes} profiles={profiles} knownProfiles={profiles} fallbackType={executorTypes.worker} override={executors.reviewer} onChange={(value) => onExecutorChange("reviewer", value)} onOverrideChange={(patch) => onOverrideChange("reviewer", patch)} />
+              <ExecutorPickerField label="调度者执行器" value={executors.lead.profile} types={leadTypes} profiles={leadProfiles} knownProfiles={profiles} fallbackType="claude" override={executors.lead} onChange={(value, override) => onExecutorChange("lead", value, override)} onEffortChange={(effort) => onEffortChange("lead", effort)} />
+              <ExecutorPickerField label="执行者执行器" value={executors.worker.profile} types={workerTypes} profiles={profiles} knownProfiles={profiles} fallbackType="codex" override={executors.worker} onChange={(value, override) => onExecutorChange("worker", value, override)} onEffortChange={(effort) => onEffortChange("worker", effort)} />
+              <ExecutorPickerField label="审查者执行器" value={executors.reviewer.profile} types={workerTypes} profiles={profiles} knownProfiles={profiles} fallbackType={executorTypes.worker} override={executors.reviewer} onChange={(value, override) => onExecutorChange("reviewer", value, override)} onEffortChange={(effort) => onEffortChange("reviewer", effort)} />
             </>
           )}
           {mode === "duet" && (
             <>
-              <ExecutorPickerField label="讨论者 A" value={executors.voiceA.profile} types={workerTypes} profiles={profiles} knownProfiles={profiles} fallbackType="claude" override={executors.voiceA} onChange={(value) => onExecutorChange("voiceA", value)} onOverrideChange={(patch) => onOverrideChange("voiceA", patch)} />
-              <ExecutorPickerField label="讨论者 B" value={executors.voiceB.profile} types={workerTypes} profiles={profiles} knownProfiles={profiles} fallbackType="codex" override={executors.voiceB} onChange={(value) => onExecutorChange("voiceB", value)} onOverrideChange={(patch) => onOverrideChange("voiceB", patch)} />
+              <ExecutorPickerField label="讨论者 A" value={executors.voiceA.profile} types={workerTypes} profiles={profiles} knownProfiles={profiles} fallbackType="claude" override={executors.voiceA} onChange={(value, override) => onExecutorChange("voiceA", value, override)} onEffortChange={(effort) => onEffortChange("voiceA", effort)} />
+              <ExecutorPickerField label="讨论者 B" value={executors.voiceB.profile} types={workerTypes} profiles={profiles} knownProfiles={profiles} fallbackType="codex" override={executors.voiceB} onChange={(value, override) => onExecutorChange("voiceB", value, override)} onEffortChange={(effort) => onEffortChange("voiceB", effort)} />
             </>
           )}
         </div>
@@ -147,7 +138,7 @@ export function ComposerFields({
         <section className="composer-config-section is-workflow-mode">
           <header className="composer-section-heading">
             <span><SlidersHorizontal size={14} /></span>
-            <div><h2>工作方式</h2><p>自由模式按需派审、预览和合并；起手式按预设线路自动推进。</p></div>
+            <div><h2>工作方式</h2><p>自由模式按需派审和预览，完成后统一验收；起手式按预设线路自动推进。</p></div>
           </header>
           <PillTabs
             label="工作方式"
@@ -164,8 +155,8 @@ export function ComposerFields({
               knownProfiles={profiles}
               fallbackType="claude"
               override={executors.single}
-              onChange={(value) => onExecutorChange("single", value)}
-              onOverrideChange={(patch) => onOverrideChange("single", patch)}
+              onChange={(value, override) => onExecutorChange("single", value, override)}
+              onEffortChange={(effort) => onEffortChange("single", effort)}
             />
           )}
         </section>
@@ -176,7 +167,7 @@ export function ComposerFields({
       <section className="composer-config-section is-options">
         <header className="composer-section-heading">
           <span><GearSix size={14} /></span>
-          <div><h2>任务选项</h2><p>运行位置、组织方式与调度优先级。</p></div>
+          <div><h2>任务选项</h2><p>运行位置、组织方式与标签。</p></div>
         </header>
         <div className="composer-option-grid">
           {mode === "team" && (
@@ -256,16 +247,6 @@ export function ComposerFields({
               />
             </div>
           )}
-          <div className="composer-field">
-            <span>优先级</span>
-            <Dropdown
-              label="优先级"
-              value={priority}
-              options={PRIORITIES.map((item) => ({ value: item.value, label: item.label }))}
-              filterable={false}
-              onChange={(value) => onPriorityChange(value as Priority)}
-            />
-          </div>
           <div className="composer-label-field">
             <span>标签</span>
             <TaskLabelsEditor labels={labels} onChange={onLabelsChange} />

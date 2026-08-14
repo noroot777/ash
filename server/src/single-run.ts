@@ -32,14 +32,18 @@ async function setStatus(taskId: string, status: Parameters<typeof setTaskStatus
 // status 是 TaskStatus 而不是四个终态：**旁路回合（就地验证）结算时恢复的是进这一轮
 // 之前的原状态**，可能是 paused、backlog 一类非终态。收窄在这里没有任何保护作用，只会
 // 逼调用方 as 一下。
+// role 是**这一回合自己的身份**（session 行里那份），自由工作流结算靠它分流「审查回合
+// 的结算」与「普通回合的结算」——不能靠查库猜（并发插入的 reviewing run 会把普通回合
+// 冒充成审查回合，审查实测复现）。
 export async function afterSettlement(
   taskId: string,
   status: TaskStatus,
   confirmedDone: boolean,
   turnOk = true,
+  role: SessionRole = "single",
 ) {
   try {
-    if (await handleFreeWorkflowSettlement(taskId, status, confirmedDone, turnOk)) return;
+    if (await handleFreeWorkflowSettlement(taskId, status, confirmedDone, turnOk, role)) return;
     await handleTaskSettlement(taskId, status, confirmedDone, turnOk);
   } catch (error) {
     // Review orchestration is a post-settlement side effect. A failure here must
@@ -84,9 +88,16 @@ export async function settleTaskStatus(
   status: TaskStatus;
   note?: string;
   confirmedDone: boolean;
+  /** 这一轮是 CLI 原生命令（`/compact`）—— 调用方据此整段跳过结算钩子。 */
+  nativeTurn: boolean;
 }> {
   const memConfirmed = takeConfirmed(taskId); // 无条件消费,别让标记漏到下一回合
   const t = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
+  // 原生命令回合(`/compact`)的标记跟完成确认一样:读出来就清掉,只在本回合内有效。
+  const nativeTurn = !!t?.nativeTurn;
+  if (nativeTurn) {
+    await db.update(tasks).set({ nativeTurn: false, updatedAt: now() }).where(eq(tasks.id, taskId));
+  }
   // 完成确认有两条道:同进程的内存标记,和落库的时间戳(complete_confirmed_at)。
   // 任一命中即算确认 —— 确认与结算未必在同一个进程里(历史事故:僵尸实例在跑这
   // 个回合,agent 的 complete_task 走 HTTP 打到了监听进程,内存标记落在别人家,
@@ -116,7 +127,7 @@ export async function settleTaskStatus(
     if (confirmed) {
       await setStatus(taskId, "done");
       notify("done");
-      return { status: "done", confirmedDone: true };
+      return { status: "done", confirmedDone: true, nativeTurn };
     }
     await setStatus(taskId, back);
     const label = FOLLOW_UP_LABEL[back] ?? back;
@@ -124,20 +135,20 @@ export async function settleTaskStatus(
       // 提问照常通知/展示(问题卡片不看状态),但不把终态改成 paused —— 那会让它
       // 重新占住队列位置。答复走 /answer,又是一个续聊回合。
       notify("question", t.question);
-      return { status: back, note: `续聊回合以提问结束,等待答复:「${t.question}」(任务状态仍为「${label}」)`, confirmedDone: false };
+      return { status: back, note: `续聊回合以提问结束,等待答复:「${t.question}」(任务状态仍为「${label}」)`, confirmedDone: false, nativeTurn };
     }
     if (stopped) {
       const why = stopped === "paused" ? "分组被暂停" : "被手动停止";
-      return { status: back, note: `续聊回合${why},任务状态保持「${label}」不变。`, confirmedDone: false };
+      return { status: back, note: `续聊回合${why},任务状态保持「${label}」不变。`, confirmedDone: false, nativeTurn };
     }
     if (exitStatus !== 0) {
-      return { status: back, note: `续聊回合异常结束(退出码 ${exitStatus}),任务状态保持「${label}」不变。`, confirmedDone: false };
+      return { status: back, note: `续聊回合异常结束(退出码 ${exitStatus}),任务状态保持「${label}」不变。`, confirmedDone: false, nativeTurn };
     }
-    return { status: back, confirmedDone: false };
+    return { status: back, confirmedDone: false, nativeTurn };
   }
   if (stopped === "canceled") {
     await setStatus(taskId, "canceled");
-    return { status: "canceled", confirmedDone: false };
+    return { status: "canceled", confirmedDone: false, nativeTurn };
   }
   if (stopped === "paused") {
     // 组暂停打断:落 paused 占住队列位置(组是 paused 的,推进钩子不会动)。
@@ -148,37 +159,37 @@ export async function settleTaskStatus(
     await setStatus(taskId, "paused");
     if (t?.question) {
       notify("question", t.question);
-      return { status: "paused", note: `本回合以提问暂停,等待答复:「${t.question}」`, confirmedDone: false };
+      return { status: "paused", note: `本回合以提问暂停,等待答复:「${t.question}」`, confirmedDone: false, nativeTurn };
     }
-    return { status: "paused", note: GROUP_PAUSED_NOTE, confirmedDone: false };
+    return { status: "paused", note: GROUP_PAUSED_NOTE, confirmedDone: false, nativeTurn };
   }
   // 提问优先于检查点:question 非空 → paused,但队列不推进、不自动续跑
   // (pickNextLaunchable 会挡住),等 answer_question 带答复唤醒。
   if (t?.question) {
     await setStatus(taskId, "paused");
     notify("question", t.question);
-    return { status: "paused", note: `本回合以提问暂停,等待答复:「${t.question}」`, confirmedDone: false };
+    return { status: "paused", note: `本回合以提问暂停,等待答复:「${t.question}」`, confirmedDone: false, nativeTurn };
   }
   if (t?.resumePrompt) {
     await setStatus(taskId, "paused");
-    return { status: "paused", confirmedDone: false };
+    return { status: "paused", confirmedDone: false, nativeTurn };
   }
   if (exitStatus !== 0) {
     await setStatus(taskId, "failed");
     notify("failed");
-    return { status: "failed", confirmedDone: false };
+    return { status: "failed", confirmedDone: false, nativeTurn };
   }
   if (confirmed || !STRICT_DONE) {
     await setStatus(taskId, "done");
     notify("done");
-    return { status: "done", confirmedDone: confirmed };
+    return { status: "done", confirmedDone: confirmed, nativeTurn };
   }
   // 记 failed 之前先看一眼这一轮到底有没有产出:有就在通知里直说「你有 N 个新提交」,
   // 比通用文案快得多地指到病灶(多半只是漏了交卷)。**只影响措辞,不改落位**。
   const hint = await turnOutputHint(taskId);
   await setStatus(taskId, "failed");
   notify("failed_unconfirmed", undefined, hint);
-  return { status: "failed", note: UNCONFIRMED_NOTE + hint, confirmedDone: false };
+  return { status: "failed", note: UNCONFIRMED_NOTE + hint, confirmedDone: false, nativeTurn };
 }
 
 // 消费一次单飞运行的事件流，直到它结束，然后结算。
@@ -202,7 +213,18 @@ export async function consumeSingleRun(a: {
 }): Promise<void> {
   const { taskId, sessId, agentType, ex, out } = a;
   const role = a.role ?? "single";
-  const executionEventId = role === "single"
+  // 原生 CLI 命令回合(`/compact` 一类)不记「任务执行」:那一轮压根没在推进任务,记下来
+  // 自由工作流时间线上就多出一条凭空的「任务执行 · 已完成」(第 2 轮审查 finding 7)。
+  // 读的是 tasks.native_turn 而不是新加一个入参:结算那边(settleTaskStatus)看的就是
+  // 这一列,同一个真相来源,重启后被接管的那一轮也照样认得出来。
+  // verify_round 同理**从库里读**而不是让调用方传:三条起跑路径(fresh run / continueTask /
+  // 重启接回)都汇到这儿,由库来答就不会漏标其中一条。验证中途提问、答复回来续跑的那一
+  // 回合库里仍挂着轮次号,于是它照样归这一轮验证——跟 orchestrator 的 sideTurn 判据同源。
+  const taskRow = (await db.select({ nativeTurn: tasks.nativeTurn, verifyRound: tasks.verifyRound })
+    .from(tasks).where(eq(tasks.id, taskId))).at(0);
+  const nativeTurn = !!taskRow?.nativeTurn;
+  const verifyRound = taskRow?.verifyRound ?? null;
+  const executionEventId = role === "single" && !nativeTurn
     ? await recordFreeTaskExecutionStartIfFree(taskId, a.turnStart).catch((error) => {
         console.warn(`[harness] failed to record free workflow execution start for ${taskId}:`, error);
         return null;
@@ -224,6 +246,15 @@ export async function consumeSingleRun(a: {
   let titleDone = !a.autoTitle; // when autoTitle, swallow text until the title line is parsed
   let head = "";
   let pendingTraceText = "";
+  const runMeta = {
+    model: ex.model ?? null,
+    reasoningEffort: ex.reasoningEffort ?? null,
+    ...(verifyRound ? { verifyRound } : {}),
+  };
+  appendSessionTrace(taskId, sessId, a.turnStart, { kind: "run", ...runMeta });
+  const publishEvent = (event: AgentEvent) => bus.publish({
+    type: "agent.event", taskId, sessionId: sessId, role, agentType, ...runMeta, event,
+  });
   const flushTraceText = () => {
     if (!pendingTraceText) return;
     appendSessionTrace(taskId, sessId, a.turnStart, { kind: "text", text: pendingTraceText });
@@ -233,7 +264,7 @@ export async function consumeSingleRun(a: {
     if (!text) return;
     out.write(text);
     pendingTraceText += text;
-    bus.publish({ type: "agent.event", taskId, sessionId: sessId, role, agentType, event: { kind: "text", text } });
+    publishEvent({ kind: "text", text });
   };
   const persistTrace = (event: AgentEvent, at?: string) => {
     // `context` 刻意不进 trace：trace 是「按回合回放各自的气泡」，而水位属于整条会话的
@@ -268,10 +299,10 @@ export async function consumeSingleRun(a: {
           cliSessionId = event.cliSessionId;
           await db
             .update(sessions)
-            .set({ cliSessionId, resumeCommand: ex.resumeCommand(a.cwd, cliSessionId) })
+            .set({ cliSessionId, ...ex.resumeFields(a.cwd, cliSessionId) })
             .where(eq(sessions.id, sessId));
         }
-        bus.publish({ type: "agent.event", taskId, sessionId: sessId, role, agentType, event });
+        publishEvent(event);
         continue;
       }
       if (event.kind === "text" && !titleDone) {
@@ -303,7 +334,7 @@ export async function consumeSingleRun(a: {
         if (emittedEvent.kind === "error") writeRunError(out, emittedEvent.message);
         // 水位相反：**覆盖**。它属于整条会话的此刻，不属于某一个回合，所以也不进 trace。
         if (emittedEvent.kind === "context") await setSessionContext(sessId, emittedEvent.context);
-        bus.publish({ type: "agent.event", taskId, sessionId: sessId, role, agentType, event: emittedEvent });
+        publishEvent(emittedEvent);
         if (emittedEvent.kind === "done") exitStatus = emittedEvent.exitStatus;
       }
     }
@@ -350,12 +381,18 @@ export async function consumeSingleRun(a: {
   await reconcileTurnBaseline(taskId, settled.confirmedDone);
   // turnOk = 这一回合本身干净收尾了(没被停、退出码 0)。跟落位状态不是一回事:旁路
   // 回合(就地验证)的落位是任务原来的终态,只有它说得清这一轮跑成没跑成。
-  await afterSettlement(taskId, settled.status, settled.confirmedDone, !stopped && exitStatus === 0);
+  //
+  // 原生命令回合(`/compact`)整段跳过:它是 CLI 本地的一次压缩,没有模型输出、没有
+  // 结论 —— 交给结算钩子的话,正在跑的那一轮就地验证会被当成「验完了」收掉(清轮次、
+  // 涨轮数、却给不出 verified/verify_failed),自由工作流那边同理。
+  if (!settled.nativeTurn) {
+    await afterSettlement(taskId, settled.status, settled.confirmedDone, !stopped && exitStatus === 0, role);
+  }
   if (settled.note) {
     // 诊断正文留在 .md 原始产物里；trace 负责刷新后的折叠块，SSE 负责实时显示。
     out.write(`\n> ${settled.note}\n`);
     persistTrace({ kind: "error", message: settled.note }, endIso);
-    bus.publish({ type: "agent.event", taskId, sessionId: sessId, role, agentType, event: { kind: "error", message: settled.note } });
+    publishEvent({ kind: "error", message: settled.note });
   }
   writeTurnEnd(out, endIso); // fence this turn's real end before closing the .md
   out.end();

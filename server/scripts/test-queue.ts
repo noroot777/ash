@@ -83,7 +83,6 @@ async function seedTask(
     body: "",
     mode: "single",
     status: (opts.status as string) ?? "backlog",
-    priority: "none",
     labels: "[]",
     dependsOn: opts.dependsOn ?? "[]",
     resumeDependsOn: opts.resumeDependsOn ?? "[]",

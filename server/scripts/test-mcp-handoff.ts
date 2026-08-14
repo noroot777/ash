@@ -121,7 +121,7 @@ const at = new Date().toISOString();
 await db.insert(projects).values({ id: "p1", name: "handoff", repoPath: root, createdAt: at, updatedAt: at });
 await db.insert(tasks).values({
   id: TASK, projectId: "p1", title: "验证结论丢了", body: "", mode: "single", status: "running",
-  stage: "verifying", priority: "none", labels: "[]", dependsOn: "[]", resumeDependsOn: "[]",
+  stage: "verifying", labels: "[]", dependsOn: "[]", resumeDependsOn: "[]",
   agentType: "codex", autoTitle: false, useWorktree: false, createdAt: at, updatedAt: at,
 });
 // 时间线是写进「最近一条 session」的会话 Markdown 的（appendTaskTimeline），没有 session

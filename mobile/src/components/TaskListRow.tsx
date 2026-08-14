@@ -3,7 +3,6 @@ import type { Task } from "@harness/shared";
 import { statusCounts } from "@harness/shared/team";
 import { Ionicons } from "@expo/vector-icons";
 import { SignalBar } from "@/components/SignalBar";
-import { PriorityBars } from "@/components/ui";
 import { TaskTimeChip } from "@/lib/time";
 import { useTheme, radius, fonts } from "@/lib/theme";
 
@@ -107,7 +106,6 @@ function TeamCard({
           <TaskTimeChip task={task} />
         </View>
       </View>
-      <PriorityBars priority={task.priority} />
     </Pressable>
   );
 }
@@ -165,7 +163,6 @@ function TaskCard({ task, parentTitle, onPress }: { task: Task; parentTitle?: st
           <TaskTimeChip task={task} />
         </View>
       </View>
-      <PriorityBars priority={task.priority} />
     </Pressable>
   );
 }

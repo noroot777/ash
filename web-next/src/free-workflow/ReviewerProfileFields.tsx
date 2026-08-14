@@ -99,12 +99,13 @@ export function ReviewerProfileFields({
         fallbackType="codex"
         override={{ model: draft.model, effort: draft.effort }}
         disabled={disabled}
-        onChange={(target) => onChange({ ...draft, target, model: "", effort: "" })}
-        onOverrideChange={(patch) => onChange({
+        onChange={(target, override) => onChange({
           ...draft,
-          model: patch.model === undefined ? draft.model : patch.model,
-          effort: patch.effort === undefined ? draft.effort : patch.effort,
+          target,
+          model: override.model,
+          effort: override.effort,
         })}
+        onEffortChange={(effort) => onChange({ ...draft, effort })}
       />
     </div>
   );

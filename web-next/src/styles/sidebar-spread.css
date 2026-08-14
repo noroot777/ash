@@ -87,6 +87,17 @@
   transform: translate(-100%, -50%);
 }
 
+/* 星标同理拉回标题列末尾；行里同时有来源徽标（它也占着列末）时，星标让到它左边。 */
+.workspace-sidebar.is-spread .workspace-task-row-wrap > .workspace-task-star {
+  right: auto;
+  left: calc(22px + var(--spread-title-w) - 3px);
+  transform: translate(-100%, -50%);
+}
+
+.workspace-sidebar.is-spread .workspace-task-row-wrap:has(> .task-origin-chip) > .workspace-task-star {
+  left: calc(22px + var(--spread-title-w) - 27px);
+}
+
 /* 轮到你处理的那些行淡淡染一层琥珀：铺开是拿来「找出该我动的活」的。 */
 .workspace-sidebar.is-spread .workspace-task-row-wrap.is-todo:not(.is-selected) {
   background: color-mix(in lch, var(--amber) 6%, transparent);
@@ -289,6 +300,25 @@
 .workspace-spread-dot--done { --spread-dot: var(--green); }
 .workspace-spread-dot--accepted { --spread-dot: var(--cyan); }
 
+/* 星标那颗画成星形:它是手动记号不是状态桶,跟五颗状态圆点分开认。
+   星形 svg 和圆点同为 7px、同住通用盒,hover/选中的几何与旁边圆点完全一致。
+   选中态不能让星悬在空心环里(星和环之间露一圈底色,看着像圆圈套星):
+   跟普通点同构——通用规则把 i 填成实心圆贴住光环,星形反白刻在圆里。 */
+.workspace-spread-dot--starred { --spread-dot: var(--muted); }
+
+.workspace-spread-dot--starred i {
+  display: grid;
+  place-items: center;
+  background: transparent;
+  color: var(--muted);
+}
+
+.workspace-spread-dot--starred.is-on i { color: var(--chrome); }
+
+.workspace-spread-dot--starred.is-on i svg { transform: scale(0.86); }
+
+.workspace-spread-dot--starred i svg { display: block; flex: 0 0 auto; }
+
 .workspace-spread-tip {
   position: fixed;
   z-index: 180;
@@ -388,7 +418,12 @@
 
 @container (max-width: 900px) {
   .workspace-sidebar.is-spread .workspace-task-row-wrap {
-    grid-template-columns: 22px minmax(0, 1fr) 0 minmax(0, 1.6fr) 0;
+    /* 标题列在窄容器里从固定 300px 改成弹性摊分:1fr 对 1.6fr 分掉 (行宽 - 22px 状态列)。
+       把 --spread-title-w 改写成同一笔账(差值 / 2.6),星标和来源徽标的「拉回标题列末尾」
+       定位才继续跟着实际列宽走,不会按 300px 悬在信息列里。声明在行上而不是侧栏上,
+       让缩进子列表各自覆盖过的 --spread-row-w 也能参与计算。 */
+    --spread-title-w: calc((var(--spread-row-w) - 22px) / 2.6);
+    grid-template-columns: 22px var(--spread-title-w) 0 minmax(0, 1.6fr) 0;
   }
   .workspace-spread-cell--body { display: none; }
   .workspace-spread-hint { display: none; }

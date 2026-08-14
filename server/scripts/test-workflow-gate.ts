@@ -61,7 +61,6 @@ async function makeTask(id: string): Promise<void> {
     mode: "single",
     status: "done",
     stage: null,
-    priority: "none",
     labels: "[]",
     dependsOn: "[]",
     resumeDependsOn: "[]",

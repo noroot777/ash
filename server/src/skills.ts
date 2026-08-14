@@ -14,6 +14,13 @@
 import { closeSync, openSync, readFileSync, readSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, sep } from "node:path";
+import {
+  KEY_SEP,
+  clearPersistedCalibrations,
+  loadCalibrations,
+  saveCalibrations,
+  type PersistedCalibration,
+} from "./skill-calibration-store.js";
 import type {
   AgentType,
   SkillEntry,
@@ -29,11 +36,48 @@ type Scannable = (typeof SCANNABLE)[number];
 const isScannable = (type: string): type is Scannable =>
   (SCANNABLE as readonly string[]).includes(type);
 
-// init 的 `slash_commands` 比 `skills` 多一批**CLI 自己的**命令(clear/compact/model/
-// heapdump…),它们在 headless 下要么无意义要么有害。所以这里用**白名单**而不是黑名单:
+// init 的 `slash_commands` 比 `skills` 多一批**CLI 自己的**命令(clear/model/heapdump…),
+// 多数在 headless 下要么无意义要么有害。所以这里用**白名单**而不是黑名单:
 // 名单没跟上新版 CLI 的代价只是少露一个命令(静默 degrade),黑名单没跟上的代价却是
 // 把 `/heapdump` 递到用户面前、他发出去白烧一轮。
-const BUILTIN_SLASH_ALLOW = new Set(["review", "security-review"]);
+//
+// `compact` 在 headless 下**实测有效**(2026-08-12:11 万 token 的会话发过去,回来一条
+// `compact_boundary` trigger=manual,水位掉到 1136),而且它是白名单外模型唯一的救命手段
+// —— claude 2.1.220 的自动压缩只认 sonnet-4-6/opus-4-6/opus-4-8/opus-5/sonnet-5 这几个名字,
+// 其余(fable-5、经 anthropic 协议中转的 kimi/glm…)窗口来源落到 "auto",自动压缩整段跳过。
+const BUILTIN_SLASH_ALLOW = new Set(["review", "security-review", "compact"]);
+
+// 白名单里的这几个不是同一种东西,发的时候要分开对待:
+//   · review / security-review 是**真 skill** —— 由模型去读 SKILL.md 执行,需要前言点名
+//   · compact 是 **CLI 自己的原生命令** —— 由 CLI 在本地拦下,压根不进模型
+// 混为一谈的代价是后者白烧一轮:模型去调 `Skill({skill:"compact"})`,CLI 回一句
+// 「compact is a built-in CLI command, not a skill」,压缩根本没发生。
+//
+// 原生命令的边界实测(claude 2.1.220,2026-08-12):
+//   `/compact` 独占一条            → status:compacting,num_turns=0
+//   `/compact` 后面再跟正文        → 照样 compacting,**后面那段被整条丢弃**
+//   前面垫一行字再 `/compact`      → 退化成普通模型请求,不压缩
+// 于是这类命令有两条硬约束,缺一条就等于没做:
+//   ① 不加【已选择 skill】前言(下面 withSkillInvocation 直接放行)
+//   ② 它必须**独占整条 prompt**,harness 的前言和完成协议提醒一律让位
+//      (orchestrator 组装 prompt 时按 nativeCliCommand 分叉)
+// 又因为整条消息不进模型,这一轮不会有任何产出、也不可能交卷 —— 调用方还得把它
+// 当**旁路回合**,否则一个 done 的任务会被这一下压缩打成 failed。
+const NATIVE_COMMANDS: Partial<Record<AgentType, Set<string>>> = {
+  claude: new Set(["compact"]),
+};
+
+const isNativeCommandName = (agentType: string, name: string) =>
+  !!NATIVE_COMMANDS[agentType as AgentType]?.has(name);
+
+/**
+ * 这条消息是不是「CLI 原生命令」——即以某个原生命令打头(后面可以带参数,如
+ * `/compact 重点保留 X`)。是的话返回命令名,调用方必须原样发出去,并按旁路回合处理。
+ */
+export function nativeCliCommand(agentType: string, text: string): string | null {
+  const name = /^\/([a-zA-Z][\w-]*)(?:\s|$)/.exec(text.trim())?.[1];
+  return name && isNativeCommandName(agentType, name) ? name : null;
+}
 
 interface Root {
   dir: string;
@@ -178,7 +222,6 @@ interface Scan {
 }
 
 // 分隔符用 NUL:路径里不可能出现它,cwd 带空格也不会串味。
-const KEY_SEP = "\u0000";
 const cacheKey = (agentType: string, cwd: string) => `${agentType}${KEY_SEP}${cwd}`;
 const scanCache = new Map<string, Scan>();
 
@@ -221,11 +264,13 @@ function scan(agentType: Scannable, cwd: string, force = false): Scan {
 // ── 第三层:claude 的 init 事件校准 ────────────────────────────────────────
 // 每次 claude 跑起来吐的第一行 JSON 带 `skills` / `slash_commands` 两个全量数组,
 // 含插件技能和 `/review` 这类**根本不在磁盘上**的内置技能 —— 这是拿到它们的唯一渠道。
-interface Calibration {
-  names: string[];
-  at: number;
+type Calibration = PersistedCalibration;
+// key = cacheKey(agentType, 那一轮真实的 cwd)。**进程内存 + 一份落盘**:server 重启后
+// 内置命令(`/compact` 这些磁盘上没有的)不该从菜单里消失 —— 冷启动来源见 store 顶部。
+let calibrations: Map<string, Calibration> | null = null;
+function loaded(): Map<string, Calibration> {
+  return (calibrations ??= loadCalibrations());
 }
-const calibrations = new Map<string, Calibration>(); // key = cacheKey(agentType, 那一轮真实的 cwd)
 
 export function calibrateSkills(
   agentType: AgentType,
@@ -240,7 +285,9 @@ export function calibrateSkills(
     if (BUILTIN_SLASH_ALLOW.has(command)) names.add(command);
   }
   if (!names.size) return;
-  calibrations.set(cacheKey(agentType, cwd), { names: [...names], at: Date.now() });
+  const all = loaded();
+  all.set(cacheKey(agentType, cwd), { names: [...names], at: Date.now() });
+  saveCalibrations(all);
 }
 
 // 任务多半跑在 `<repoPath>/.worktrees/<id>` 里,而菜单是按项目问的 —— 所以按前缀认亲,
@@ -248,7 +295,7 @@ export function calibrateSkills(
 function calibrationFor(agentType: AgentType, cwd: string): Calibration | null {
   const prefix = cwd.endsWith(sep) ? cwd : cwd + sep;
   let best: Calibration | null = null;
-  for (const [key, value] of calibrations) {
+  for (const [key, value] of loaded()) {
     const [type, ranIn] = key.split(KEY_SEP);
     if (type !== agentType || !ranIn) continue;
     if (ranIn !== cwd && !ranIn.startsWith(prefix)) continue;
@@ -257,10 +304,23 @@ function calibrationFor(agentType: AgentType, cwd: string): Calibration | null {
   return best;
 }
 
-/** 只给测试和「手点重新扫描」用:清掉所有缓存与校准。 */
+/**
+ * 只给测试用:清掉所有缓存与校准,**连落盘那份一起**(界面上的「重新扫描」走的是
+ * listSkills 的 force,不碰校准 —— 那是另一档语义)。
+ * 想模拟「server 重启」请用 forgetLoadedCalibrations():那才是只丢内存、留冷启动来源。
+ */
 export function resetSkillCache(): void {
   scanCache.clear();
-  calibrations.clear();
+  calibrations = null;
+  clearPersistedCalibrations();
+}
+
+/**
+ * 「server 重启了」的等价物:只丢进程内存那份,冷启动来源留在盘上。
+ * 生产代码不该调它 —— 存在的意义是让「重启后 `/compact` 还在不在菜单里」有得测。
+ */
+export function forgetLoadedCalibrations(): void {
+  calibrations = null;
 }
 
 export function listSkills(opts: {
@@ -338,6 +398,8 @@ export function withSkillInvocation(opts: {
   remote?: boolean;
 }): string {
   if (!opts.text.includes("/")) return opts.text;
+  // 原生命令由 CLI 自己拦下执行,前面垫一个字就不生效 —— 原样放行(见 NATIVE_COMMANDS)。
+  if (nativeCliCommand(opts.agentType, opts.text)) return opts.text;
   const neighbor = /[\p{L}\p{N}_./:\-]/u;
   const mentionAt = (command: string) => {
     let from = 0;
@@ -352,6 +414,8 @@ export function withSkillInvocation(opts: {
     return -1;
   };
   const selected = listSkills(opts).skills
+    // 原生命令不是 skill:出现在正文中间时它对 CLI 也不生效,更不该写进前言让模型去「执行」。
+    .filter((skill) => !isNativeCommandName(opts.agentType, skill.name))
     .map((skill) => ({ skill, at: mentionAt(skill.command) }))
     .filter((hit) => hit.at >= 0)
     .sort((a, b) => a.at - b.at)

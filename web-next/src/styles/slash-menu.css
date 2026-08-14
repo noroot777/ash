@@ -1,0 +1,40 @@
+/* 输入框敲 `/` 弹出来那张菜单的皮肤（components/SlashMenu.tsx）。
+   定位与外框各自归各自的容器类（composer.css / task-reply.css / team.css）;
+   这里只管几处一模一样的分隔线、角标、命中高亮和空态。 */
+
+.slash-menu-divider {
+  display: block;
+  margin-top: 3px;
+  border-top: 1px solid var(--line2);
+  padding: 6px 7px 4px;
+  color: var(--faint);
+  font-size: 9.5px;
+}
+.slash-menu-tag {
+  flex: 0 0 auto;
+  margin-left: auto;
+  border-radius: 4px;
+  background: var(--raised);
+  padding: 1px 5px;
+  color: var(--faint);
+  font-size: 9px;
+  font-style: normal;
+  white-space: nowrap;
+}
+.slash-menu-tag + .slash-menu-tag { margin-left: 4px; }
+.slash-menu-empty { margin: 4px 7px 7px; color: var(--faint); font-size: 10.5px; }
+/* 命中的那几个字：子串匹配下命中常落在名字中段，不标出来就看不出这条为什么在列表里。 */
+.slash-menu-hit {
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  padding: 0 1px;
+  color: inherit;
+}
+/* 命令名不参与挤压：让长描述先省略号，别把 `/design-taste-frontend` 折成三行。 */
+.slash-menu-command {
+  flex: 0 0 auto;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

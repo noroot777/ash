@@ -1,7 +1,9 @@
 import type { ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import type { AgentType, ExecTarget } from "@harness/shared";
-import type { AgentExecutor, ExecutorBuildOpts, RelayConfig, RunHandle, RunOpts } from "./types.js";
+import { cliConfigOverrideEnvPatch } from "@harness/shared/cli-overrides";
+import { cliHostEnv, resumeEnvHint } from "./cli-env.js";
+import type { AgentExecutor, ExecutorBuildOpts, RelayConfig, ResumeFields, RunHandle, RunOpts } from "./types.js";
 import { spawnForRun, detachedInfo } from "./detached.js";
 import { killChild, redactSecrets, resumeFor } from "./spawn.js";
 import { textParser } from "./catalog/parsers.js";
@@ -20,15 +22,16 @@ import { valueArgs, type CliSpec } from "./catalog/types.js";
 export class GenericCliExecutor implements AgentExecutor {
   readonly type: AgentType;
   readonly label: string;
-  readonly relayEnvHint?: string;
+  private readonly resumeEnvHint?: string;
   private spec: CliSpec;
   readonly target: ExecTarget;
   private bin: string;
-  private model?: string;
+  readonly model?: string;
   private extraArgs: string[];
-  private reasoningEffort?: string;
+  readonly reasoningEffort?: string;
   private speed?: "fast";
   private relay?: RelayConfig;
+  private configOverrides?: Record<string, number>;
 
   constructor(spec: CliSpec, opts: ExecutorBuildOpts = {}) {
     this.spec = spec;
@@ -39,10 +42,16 @@ export class GenericCliExecutor implements AgentExecutor {
     this.speed = opts.speed;
     this.bin = opts.bin ?? spec.bins[0];
     this.target = opts.target ?? { kind: "local" };
+    this.configOverrides = opts.configOverrides;
     // relay 只在 spec 声明了注入方式时才生效 —— 半截配置去撞一个必然 401 的端点,
     // 不如老老实实用 CLI 自己的官方账号(同 executors/index.ts 的 loadRelay 口径)。
     this.relay = spec.exec.relay ? opts.relay : undefined;
-    this.relayEnvHint = this.relay ? spec.exec.relay!(this.relay).envHint : undefined;
+    this.resumeEnvHint = resumeEnvHint(
+      this.type,
+      this.configOverrides,
+      this.relay ? spec.exec.relay!(this.relay).envHint : undefined,
+      this.target,
+    );
     const where = this.target.kind === "ssh" ? this.target.host : "local";
     this.label = opts.name ?? `${spec.key}@${where}${opts.model ? "·" + opts.model : ""}`;
   }
@@ -90,7 +99,13 @@ export class GenericCliExecutor implements AgentExecutor {
     // 诚实优先:拼不出可信的恢复命令时给一句说明,而不是一条跑不通(或跑到别家
     // CLI 上、或引用一个不存在的会话)的命令 —— 那种命令会被用户当真复制去执行。
     if (!inner) return unknownResumeNote(this.spec, sessionId);
-    return resumeFor(this.target, cwd, inner, this.relayEnvHint ?? "");
+    return resumeFor(this.target, cwd, inner, this.resumeEnvHint ?? "");
+  }
+
+  // 目录里的 spec 没有「盖掉 CLI 自己配置文件」那一档覆盖(声明表里只有 claude),
+  // 所以这里不带参数。
+  resumeFields(cwd: string, sessionId: string): ResumeFields {
+    return { resumeCommand: this.resumeCommand(cwd, sessionId), resumeEnv: this.resumeEnvHint ?? null, resumeArgs: null };
   }
 
   // 命令行装配。顺序:subcommand → baseArgs → 会话参数 → model / effort / 加速档
@@ -129,9 +144,13 @@ export class GenericCliExecutor implements AgentExecutor {
     return { sessionId: s?.resumeArgs ? "" : randomUUID(), sessionArgs: [] };
   }
 
-  private env(): Record<string, string> | undefined {
-    if (!this.relay || !this.spec.exec.relay) return undefined;
-    return this.spec.exec.relay(this.relay).env;
+  // 供应商注入 + 盖过 CLI 自己配置文件的那几项(声明见 shared/src/cli-overrides.ts)。
+  // 两者都可能为空,全空时返回 undefined —— spawn 那边据此走「不额外注入」的路径。
+  // `undefined` 值 = 从子进程环境里删掉那个变量(见 cliConfigOverrideEnvPatch)。
+  private env(): Record<string, string | undefined> {
+    const env: Record<string, string | undefined> = cliConfigOverrideEnvPatch(this.type, this.configOverrides, cliHostEnv(this.target));
+    if (this.relay && this.spec.exec.relay) Object.assign(env, this.spec.exec.relay(this.relay).env);
+    return env;
   }
 }
 

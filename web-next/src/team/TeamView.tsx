@@ -142,6 +142,7 @@ function TeamReplyBox({
             : "已装技能 · 回车补全，原样发给调度者的 CLI"}
           items={slash.items}
           selectedIndex={slash.selectedIndex}
+          token={slash.token}
           emptyText="这台调度者跑在 ssh 远端，技能清单只有它自己看得见——照常敲 /名字 发过去，它认得。"
           onHover={slash.setIndex}
           onPick={slash.pick}
@@ -560,7 +561,7 @@ export function TeamView({
         notify={notify}
       />
       {reviewOpen ? (
-        <TeamReviewWorkspace lead={task} workers={workers} onClose={() => changeReviewOpen(false)} onTaskUpdated={onTaskUpdate} indicatorForTask={indicatorForTask} onReadTask={markTaskRead} notify={notify} />
+        <TeamReviewWorkspace lead={task} workers={workers} onTaskUpdated={onTaskUpdate} indicatorForTask={indicatorForTask} onReadTask={markTaskRead} notify={notify} />
       ) : openFilePath ? (
         <FileViewer
           taskId={task.id}
@@ -629,7 +630,7 @@ export function TeamView({
         <DeleteTaskDialog
           task={task}
           notify={notify}
-          onDeleted={() => onTaskDeleted(task.id)}
+          onDeleted={(ids) => ids.forEach(onTaskDeleted)}
           onClose={() => setDeleteOpen(false)}
         />
       )}

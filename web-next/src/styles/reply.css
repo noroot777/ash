@@ -21,7 +21,7 @@
 .scheduled-send-panel button:disabled { opacity: .42; }
 .reply-schedule-button { display: grid; width: 29px; height: 29px; place-items: center; border: 0; border-radius: 7px; background: transparent; color: var(--muted); }
 .reply-schedule-button:hover:not(:disabled) { background: var(--raised); color: var(--ink); }
-/* 对话框底部那颗胶囊本体在 controls.css（`.run-target-picker.is-chip`）；这里只剩
+/* 对话框底部那颗胶囊本体在 run-target-picker.css（`.run-target-picker.is-chip`）；这里只剩
    「取消 @ 召唤」那颗小圆叉，它挂在胶囊外面，不属于三段中的任何一段。 */
 .task-reply-chip-reset { display: grid; width: 19px; height: 19px; place-items: center; border: 0; border-radius: 50%; background: transparent; color: var(--faint); }
 .task-reply-chip-reset:hover { background: var(--raised); color: var(--ink); }
@@ -80,6 +80,23 @@
 .agent-model-picker-rows header > b { color: var(--muted); font-size: 9.5px; font-weight: 650; letter-spacing: .04em; text-transform: uppercase; }
 .agent-model-picker-rows header > small { display: inline-flex; min-width: 0; align-items: center; gap: 3px; overflow: hidden; color: var(--faint); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
 .agent-model-picker-rows header > small.is-error { color: var(--red); }
+/* 分块标题里的「现问一次」：本身是 header 的一个 button，得把下面那条通用行样式
+   （width:100%、min-height:30px）压回去，否则它会把整条标题撑成一行按钮。 */
+.agent-model-picker-rows header > button.model-refresh {
+  display: inline-flex;
+  width: auto;
+  min-height: 0;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 2px;
+  border-radius: 5px;
+  padding: 1px 5px;
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 600;
+}
+.agent-model-picker-rows header > button.model-refresh:hover:not(:disabled) { background: var(--sel-bg); color: var(--ink); }
+.agent-model-picker-rows header > button.model-refresh:disabled { opacity: .55; }
 .agent-model-picker-rows button {
   display: flex;
   width: 100%;

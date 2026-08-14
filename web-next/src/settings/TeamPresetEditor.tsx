@@ -1,6 +1,5 @@
 import type { AgentExecutorProfile, AgentType, TeamPresetConfig } from "@harness/shared";
 import { CrownSimple, MagnifyingGlass, Robot } from "@phosphor-icons/react";
-import { useRef } from "react";
 import { ExecutorPickerField } from "../composer/ExecutorPickerField.tsx";
 import { Toggle } from "../components/ui.tsx";
 import {
@@ -140,15 +139,6 @@ function TeamRoleFields({
     ? "未注册"
     : "不支持常驻会话";
   const typeProfiles = profiles.filter((profile) => typeOptions.includes(profile.type));
-  // 选一次模型会连着触发 onChange + onOverrideChange 两个回调，两者都在同一 tick 里,
-  // 从 props 上的 value 展开会让后一个把前一个的执行器改动盖回去。
-  const latest = useRef(value);
-  latest.current = value;
-  const patch = (next: Partial<RoleDraft>) => {
-    latest.current = { ...latest.current, ...next };
-    onChange(latest.current);
-  };
-
   return (
     <section className={`team-preset-role is-${role}`}>
       <header>
@@ -168,14 +158,13 @@ function TeamRoleFields({
           fallbackType={value.agentType}
           override={{ model: value.model, effort: value.reasoningEffort }}
           disabled={disabled}
-          onChange={(next) => patch(parseExecutorValue(next, profiles, {
-            agentType: latest.current.agentType,
-            executorId: null,
-          }))}
-          onOverrideChange={(next) => patch({
-            ...(next.model !== undefined ? { model: next.model } : {}),
-            ...(next.effort !== undefined ? { reasoningEffort: next.effort } : {}),
+          onChange={(next, override) => onChange({
+            ...value,
+            ...parseExecutorValue(next, profiles, { agentType: value.agentType, executorId: null }),
+            model: override.model,
+            reasoningEffort: override.effort,
           })}
+          onEffortChange={(effort) => onChange({ ...value, reasoningEffort: effort })}
         />
       </div>
       {staleType && (

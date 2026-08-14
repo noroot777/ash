@@ -1,131 +1,41 @@
 import { mkdirSync, createWriteStream, existsSync } from "node:fs";
 import { join } from "node:path";
-import { eq, inArray } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import type { AgentType, SessionRole, TaskStatus } from "@harness/shared";
-import { STEP_LABELS } from "@harness/shared/workflow";
 import { db } from "./db/index.js";
 import { tasks, projects, sessions } from "./db/schema.js";
 import { bus } from "./bus.js";
 import { id, now, attachmentsPrompt } from "./util.js";
 import { setTaskStatus } from "./status.js";
-import { trackRun, untrackRun, isRunning, takeStopped, claimTurn, releaseTurn } from "./runs.js";
-import { consumeSingleRun, afterSettlement, STRICT_DONE_PROTOCOL } from "./single-run.js";
-import { FOLLOW_UP_LABEL } from "./labels.js";
+import { trackRun, untrackRun, takeStopped, claimTurn, reclaimTurn, releaseTurn } from "./runs.js";
+import { consumeSingleRun, afterSettlement } from "./single-run.js";
 import { taskWorkspace } from "./task-workspace.js";
 import { resolveExecutorFor } from "./executors/index.js";
 import type { RunHandle } from "./executors/types.js";
 import { detachedPathsFor } from "./executors/detached.js";
+import { sessionTargetKey } from "./executors/resume.js";
 import { inspectProcess } from "./proc.js";
 import { RUNS_DIR } from "./paths.js";
 import { writeTurn, runTracePaths } from "./transcript.js";
 import { recordUserConversationTurn } from "./conversation-turn.js";
 import { startTeam, deliverToLead } from "./team/session.js";
 import { workerPreambleFor } from "./team/dispatch.js";
-import { reopenAcceptedStage } from "./task-stage.js";
+import { clearAcceptedSnapshot, peekAcceptedStage, reopenAcceptedStage } from "./task-stage.js";
 import { reviewProtocolFor, reviewReminderFor, verifyReminderFor } from "./review-prompts.js";
 import { peerNoticeFor } from "./peer-context.js";
-import { recordTurnBaseline } from "./turn-baseline.js";
+import { reconcileTurnBaseline, recordTurnBaseline } from "./turn-baseline.js";
 import { recordTurnStart } from "./turn-output.js";
-import { railStalledAtRun } from "./workflows.js";
-import { freeReviewReminder, isFreeReviewTurn } from "./free-workflow.js";
-import { withSkillInvocation } from "./skills.js";
+import { freeReviewReminder } from "./free-workflow.js";
+import { nativeCliCommand, withSkillInvocation } from "./skills.js";
 import { initialTaskObjective, invitedTaskBrief } from "./invited-task-brief.js";
-// Single tasks run headless — nobody can answer a mid-run prompt. Tell the agent
-// to act autonomously rather than stall waiting for confirmation; if it genuinely
-// needs input it can still ask, and the user replies via continueTask (resume).
-const AUTONOMY =
-  "你在一个无人值守的自动化环境中运行，没有人能实时回复你。请尽量自主完成：遇到多个合理方案时，选最稳妥的一个并在结果中说明假设与取舍；不要停下来等待人工确认，除非信息确实不足以继续。\n\n";
-// Prefix for an agent invited into an existing task via @-mention. It joins in
-// the SAME working directory, so it should read the current state before acting.
-const COLLAB_INVITE =
-  "你被叫来加入这个任务的协作。当前工作目录里可能已经有其他 agent 的产出，请先了解现状再动手。\n\n";
-// 被召唤进来的智能体只收到用户 @ 它的那一句话 —— 任务本身是干什么的，它一无所知
-// （task.body 只进 fresh run 的 prompt，而它走的是 continueTask 这条路）。撞上
-// 「审一下上面的提交」这种自带上下文的召唤还能靠工作目录补齐，换成依赖任务描述的
-// 活就只能靠猜。所以首次入场时把原始描述一并给它，之后的回合不再重复（它自己的
-// 会话里已经有了）。
-// When a task that was interrupted (server restart → failed, manual stop →
-// canceled, group pause → paused, or a non-zero exit) is (re)started, we RESUME
-// its existing CLI session with this nudge instead of re-running from scratch —
-// the agent already holds the full prior context via --resume, so no AUTONOMY
-// preamble.
-const RESUME_PROMPT =
-  "继续：你上一次的运行被中断了（可能是服务重启、被手动停止或所在分组被暂停）。请从中断处接着完成这个任务，先简要说明你已做到哪一步、还差什么，然后继续推进直到完成。";
-// Backend-initiated continue leaves this trace in the timeline (distinct from a
-// user reply), shown identically live (SSE) and on reload (.md).
-const SYS_MARKER = "〔系统〕继续（从中断处）";
-
-// 完成协议前言(严格 done):告诉 agent 它的 taskId 和「必须亲口确认完成」的
-// 规则。fresh run 用长版(第一回合,完整交代);reply/resume 回合用短版追加在
-// 消息尾部(每回合都提醒,上下文再长 agent 也不至于忘)。
-// 宽松模式(HARNESS_LAX_DONE,典型:预览实例)下这三段一律退化成空串 —— 那台 harness
-// 的 MCP 对 agent 不可达,交代了它也做不到,理由见 single-run.ts 的 STRICT_DONE_PROTOCOL。
-const ACCEPTANCE_REMINDER = (taskId: string, sharedTeamWorker: boolean, verifying: boolean, free = false) => verifying
-  ? "验收辅路:验证回合不适用 accept_task；这一轮只负责给出验证结论并留证。"
-  : free
-    ? "自由工作流:完成实现后只调用 complete_task；不要调用 report_stage 或 accept_task，派审、预览、合并与清理由用户在页面快捷按钮中按需触发。"
-  : sharedTeamWorker
-    ? "验收辅路:本共享执行者不适用 accept_task；合并与验收由团队级处理。"
-    : `验收辅路:准备交给人工验收前可调用 report_stage(taskId="${taskId}", stage="awaiting_acceptance")；` +
-      `只有用户明确表示「验收通过/可以合并」时，调用 accept_task(taskId="${taskId}")，不要自行运行 git merge、worktree remove 或 branch -d。`;
-const COMPLETION_PROTOCOL = (taskId: string, sharedTeamWorker: boolean, reviewTask: boolean, free = false) =>
-  !STRICT_DONE_PROTOCOL ? "" :
-  `【完成协议】本任务在 harness 的 taskId 是 ${taskId}。当且仅当你确定任务目标已经达成时,在结束前调用 harness MCP 的 complete_task(taskId="${taskId}")确认完成;未确认就结束,本回合会按未完成记为 failed。跑到需要等待外部条件的检查点时,改用 pause_task 写下续跑指令。\n\n${ACCEPTANCE_REMINDER(taskId, sharedTeamWorker, reviewTask, free)}\n\n`;
-const COMPLETION_REMINDER = (taskId: string, sharedTeamWorker: boolean, reviewTask: boolean, free = false) =>
-  !STRICT_DONE_PROTOCOL ? "" :
-  `\n\n(harness 完成协议:taskId=${taskId}。若本回合结束时任务目标已达成,先调用 complete_task 确认再结束,否则按未完成记 failed;到等待检查点则用 pause_task。${ACCEPTANCE_REMINDER(taskId, sharedTeamWorker, reviewTask, free)})`;
-
-// 续聊(follow-up)回合的尾巴:任务早就到终态了,这一轮是「完成之后的对话」,
-// 不该拿严格完成协议吓唬 agent(不确认就 failed)—— 这一轮不确认,任务状态原样
-// 不动。只有它真把任务推进到新的完成时才需要确认。
-const FOLLOW_UP_REMINDER = (
-  taskId: string, from: string, sharedTeamWorker: boolean, reviewTask: boolean, rail: string, free = false,
-) =>
-  !STRICT_DONE_PROTOCOL ? "" :
-  `\n\n(harness:这是任务在「${FOLLOW_UP_LABEL[from] ?? from}」之后的续聊,taskId=${taskId}。任务状态不会因为本回合而改变,本回合不需要 complete_task;只有当你在这一轮把任务推进到了新的完成状态时,才调用 complete_task(taskId="${taskId}")确认。${rail}${ACCEPTANCE_REMINDER(taskId, sharedTeamWorker, reviewTask, free)})`;
-
-// 「你这一轮要是改了代码,这条线在等你确认」—— 只在续聊回合、且任务身上真挂着一条
-// 还有后续站的线时追加。
-//
-// 补它是因为上面那句「不需要 complete_task」在有线的任务上会把 agent 引进一个洼地:
-// 用户续聊说「改成 XXX」,agent 改完、按验收辅路那句调了 report_stage(awaiting_acceptance)
-// 就收工 —— 它以为已经交给人工验收了,可**线的推进只认 complete_task**
-// (`handleTaskSettlement` 的 `confirmedDone && status === "done"`),于是新一版代码躺在
-// 那儿,预览没开、人工关口没到,游标停在「让 AI 干活」原地不动,用户看到的是「怎么第一步
-// 就停了」(实测任务 1rojF5Tjau91)。改代码这一档本来就属于「把任务推进到了新的完成状态」,
-// 只是没人对 agent 明说过 —— 它得同时知道这条线存在、以及不确认的后果是线不走。
-const FOLLOW_UP_RAIL_NOTE = (taskId: string, summary: string) =>
-  `\n本任务身上挂着一条执行链(${summary}),它停在「让 AI 干活」这一站等你确认:` +
-  `你这一轮**改了代码**就属于上面说的「推进到了新的完成状态」,做完请调 complete_task(taskId="${taskId}")确认,` +
-  `后面的站才会自己往下跑;只调 report_stage 不会推动这条线。纯回答问题、没动代码则不用确认。`;
-
-/**
- * 线上除了「让 AI 干活」还有别的站、且游标此刻真停在那一站时,给续聊回合补一句上面那段。
- *
- * 判据本体在 `railStalledAtRun`,跟结算后写给用户的那句同源 —— 各写各的那一版里,这头
- * 漏了游标判断,验证打回(verify_failed)的轮次上就会对 agent 说假话:那一档故意不清账、
- * 游标还停在验证站,提醒里却写着「停在让 AI 干活」。
- *
- * 必须排在 `recordTurnBaseline` 之后:清账会把游标搬回起点,搬之前读到的是旧值。
- */
-async function followUpRailNote(taskId: string): Promise<string> {
-  const def = await railStalledAtRun(taskId);
-  if (!def) return "";
-  return FOLLOW_UP_RAIL_NOTE(taskId, def.steps.map((step) => STEP_LABELS[step.kind]).join(" → "));
-}
-
-// The task's worktree was gone AND its branch with it, so we rebuilt an empty one.
-// The CLI conversation lives outside the worktree (~/.claude/projects/<escaped
-// cwd>/), so `--resume` hands the agent a full memory of files that no longer
-// exist — it would happily "finish the last bit" on top of nothing. Break that
-// continuity explicitly: the agent must re-read reality before acting. Shown to
-// the user too (its own timeline bubble), since a silently reset workspace is
-// exactly the kind of thing you must not discover at review time.
-const WORKSPACE_RESET = (path: string) =>
-  `\n\n〔重要·工作目录已重建〕本任务原来的 worktree 和分支都已不存在(被删除了),harness 刚在 ${path} 建了一个空的工作目录:` +
-  `你在上文里创建或修改过的文件**现在全都不在了**,git 历史也回到了基线。请不要相信上文中「我已经改过某某文件」的记忆——` +
-  `动手之前先实际看一遍当前目录(ls / git status / git log),据此重新判断还要做什么。`;
-const WORKSPACE_RESET_MARKER = "〔系统〕原工作目录(worktree 与分支)已不存在，已重建为空目录并提醒 agent 重新确认现状";
+import { withGlobalBrowserPolicy } from "./browser-verification-policy.js";
+import { isAcceptingTask } from "./acceptance-lock.js";
+// 每一轮 prompt 上下拼的固定措辞(前言、完成协议、续聊尾巴、工作目录重建告警)。
+import {
+  AUTONOMY, COLLAB_INVITE, SYS_MARKER,
+  COMPLETION_PROTOCOL, COMPLETION_REMINDER, FOLLOW_UP_REMINDER, followUpRailNote,
+  WORKSPACE_RESET, WORKSPACE_RESET_MARKER,
+} from "./run-prompts.js";
 
 // Why a task is being (re)started — only used to label the resume; all reasons
 // behave the same (resume if there's a resumable session, else fresh). Note: a
@@ -139,83 +49,29 @@ async function setStatus(taskId: string, status: Parameters<typeof setTaskStatus
 }
 
 
-// On (re)start nothing is actually running, so any task still in an in-flight
-// status was interrupted (e.g. the server restarted mid-run). Mark those failed
-// so they're recoverable via retry/reply instead of being stuck forever.
-// awaiting_review is left alone — its gate can still be resolved after a restart.
-// 例外一:团队任务(mode:"team")没有「失败」这回事 —— 调度台进程随 server 一起
-// 死了,但 CLI 会话还在,下次有人说话就 --resume 接回。落 idle(待命)。
-// 例外二:被打断的是续聊回合(followUpFrom 非空)→ 回到续聊前的终态,别把一个
-// 早就完成的任务记成 failed。
-// **逐个走 setTaskStatus 单点**(而不是一条 UPDATE 批量改):它维护
-// startedAt/endedAt、广播 task.status,并且触发队列推进 —— 否则重启把队列 head
-// 打成 failed 之后没有任何人去推,整条串行队列就一直停在那等(实测:重启后
-// 后面的任务再也不会自动开始,得手点一次「运行分组」)。
-export async function reconcileInterrupted(): Promise<void> {
-  // **必须在 reattachRunningTasks 之后调用**（index.ts 保证顺序）。被成功接管的
-  // 任务此刻有活的 handle，isRunning 为真 —— 它们绝不能再被当成「被打断」判
-  // failed：那会让一个正在干活的 agent 在界面上显示失败，用户一点重试就会有
-  // 第二个 agent 进同一个 worktree。
-  // 用 isRunning（runs.ts，中立模块）而不是回头 import reattach，依赖保持单向。
-  const orphaned = (await db.select().from(tasks).where(inArray(tasks.status, ["running", "queued"])))
-    .filter((t) => !isRunning(t.id));
-  if (!orphaned.length) return;
-  const teamIds = orphaned.filter((t) => t.mode === "team").map((t) => t.id);
-  const others = orphaned.filter((t) => t.mode !== "team");
-  for (const t of others) {
-    const back = (t.followUpFrom as TaskStatus | null) ?? "failed";
-    if (t.followUpFrom || t.completeConfirmedAt) {
-      await db
-        .update(tasks)
-        .set({ followUpFrom: null, completeConfirmedAt: null, updatedAt: now() })
-        .where(eq(tasks.id, t.id));
-    }
-    await setTaskStatus(t.id, back);
-  }
-  for (const teamId of teamIds) await setTaskStatus(teamId, "idle");
-  const followUps = others.filter((t) => t.followUpFrom).length;
-  console.log(
-    `[harness] reconciled ${others.length - followUps} interrupted task(s) → failed` +
-      (followUps ? `, ${followUps} follow-up turn(s) → 原终态` : "") +
-      (teamIds.length ? `, ${teamIds.length} team task(s) → idle` : ""),
-  );
-  wakeInterruptedLeads(teamIds);
-}
+export { reconcileInterrupted } from "./task-reconcile.js";
 
-// 被打断在「正在思考/派活」当口的团队调度台，重启后必须主动叫醒一次。
-//
-// 平时调度台是被执行者事件唤醒的（提问 / 失败 / reportBack 完成，见
-// team/inbox.ts）。但如果它被打断时手头那批执行者**已经全部跑完**，就再也没有
-// 人会来敲它的门了 —— 它会一直 idle 躺着，只能等用户自己去戳一下。这是重启在
-// 团队链路上唯一真正会「卡住」的地方。
-//
-// 只叫醒 teamIds（重启时正好是 running/queued 的那些，即确实被打断在半途）。
-// 本来就 idle 的不动：它没有未竟的一轮，叫它等于白烧一次模型调用。
-// startTeam 走的是 deliver → 内存里没有 lead → openLead 的 --resume 接回，
-// 调度者会收到「你被中断过」的提示，自己 list_tasks 看现状。
-function wakeInterruptedLeads(teamIds: string[]): void {
-  if (!teamIds.length) return;
-  // 稍等一下再叫：让 server 先把启动流程走完（含上面的接管），调度者一睁眼
-  // 看到的执行者状态才是最终的，不会基于半截快照做决策。
-  const t = setTimeout(() => {
-    for (const teamId of teamIds) {
-      void startTeam(teamId).catch((err) =>
-        console.error(`[harness] 唤醒被打断的团队调度台 ${teamId} 失败:`, err),
-      );
-    }
-    console.log(`[harness] 已叫醒 ${teamIds.length} 个被打断的团队调度台`);
-  }, 3000);
-  (t as { unref?: () => void }).unref?.();
-}
 
 // M1: execute a single-agent task in the project's working dir, stream output over
 // SSE, and persist a session credential.
-export async function runTask(taskId: string): Promise<void> {
+export async function runTask(taskId: string, opts: { turnHeld?: boolean } = {}): Promise<void> {
   // 团队任务(§Team)走常驻调度台,不占单飞锁 —— 它的「一次运行」是整段常驻,
   // 不是一个回合。放在最前面,于是 /tasks/:id/run、retry、queue 推进都自动生效。
   const mode = (await db.select({ mode: tasks.mode }).from(tasks).where(eq(tasks.id, taskId))).at(0)?.mode;
-  if (mode === "team") return startTeam(taskId);
-  if (!claimTurn(taskId)) return;
+  // 验收互斥排在 team 分支**之前**:调度台同样会往工作目录里写(共享执行者跑在同一个
+  // cwd),验收正在合并/删 worktree 时把它拉起来,跟单飞撞上是同一类破坏。早先这道检查
+  // 排在 team 分支之后,team 完全绕过(审查实测:验收锁下仍真的 startTeam)。
+  if (isAcceptingTask(taskId)) {
+    if (opts.turnHeld) releaseTurn(taskId);
+    return; // 验收(含尾段)进行中,不与合并/清理抢工作区
+  }
+  if (mode === "team") {
+    if (opts.turnHeld) releaseTurn(taskId);
+    return startTeam(taskId);
+  }
+  // turnHeld:入口已原子占位(见 continueTask 同名选项),接管而不是再抢。
+  if (opts.turnHeld) reclaimTurn(taskId, "single");
+  else if (!claimTurn(taskId)) return;
   let handle: RunHandle | undefined;
   try {
     const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
@@ -225,12 +81,19 @@ export async function runTask(taskId: string): Promise<void> {
     const project = (await db.select().from(projects).where(eq(projects.id, task.projectId))).at(0);
     if (!project) throw new Error("project not found");
 
-    // 新回合起点:清掉上一轮可能残留的完成确认/续聊标记(fresh run 从来不是续聊)。
+    // 新回合起点:清掉上一轮可能残留的完成确认/续聊标记(fresh run 从来不是续聊,
+    // 也从来不是 CLI 原生命令 —— 上一轮崩在半路留下的标记必须在这里归零)。
     await db
       .update(tasks)
-      .set({ followUpFrom: null, completeConfirmedAt: null, updatedAt: now() })
+      .set({ followUpFrom: null, nativeTurn: false, completeConfirmedAt: null, updatedAt: now() })
       .where(eq(tasks.id, taskId));
     await setStatus(taskId, "running");
+    // 已验收任务被 fresh 重跑（Cron 到点 / fire）：旧「已验收」牌子当场摘掉——新一版
+    // 产出不能躲在旧牌子下继续改（enterHumanGate 见 merged 会静默放行；审查实测：
+    // fire 后任务 failed 而 stage 仍 accepted）。fresh 重跑是「再做一版」的明确意图，
+    // 没有「纯询问挂回」一说，启动即摘；后续启动失败牌子也不放回——方向是保守的
+    // 「要求重新验收」，不是丢数据（合并事实在 git 历史与时间线里都有）。
+    await reopenAcceptedStage(taskId);
 
     // Ordinary tasks resolve exactly as before. Team workers additionally inherit
     // their lead's shared workspace unless they explicitly request another worktree.
@@ -262,10 +125,12 @@ export async function runTask(taskId: string): Promise<void> {
     // 于是在场的都算新面孔；任务里只有它自己时返回空串，fresh run 一如往常。
     const priorSessions = await db.select().from(sessions).where(eq(sessions.taskId, taskId));
     const peerNotice = peerNoticeFor({ taskId, self: agentType, all: priorSessions, prev: undefined });
-    const prompt =
+    const prompt = withGlobalBrowserPolicy(
       AUTONOMY + COMPLETION_PROTOCOL(taskId, sharedTeamWorker, reviewTask, task.workflowMode === "free") + teamPreamble + reviewProtocol +
       peerNotice +
-      (autoTitle ? TITLE_HINT + objective : objective);
+      (autoTitle ? TITLE_HINT + objective : objective),
+      "full",
+    );
     const turnStart = now();
     const sessId = id();
     const runDir = join(RUNS_DIR, taskId);
@@ -283,13 +148,12 @@ export async function runTask(taskId: string): Promise<void> {
       role: "single",
       agentType,
       executor: ex.label,
-      target: "local",
+      target: sessionTargetKey(ex.target),
       worktreePath: ws.isWorktree ? ws.path : null,
       branch: ws.branch,
       cwd: ws.path,
       cliSessionId,
-      resumeCommand: ex.resumeCommand(ws.path, cliSessionId),
-      relayEnv: ex.relayEnvHint ?? null,
+      ...ex.resumeFields(ws.path, cliSessionId),
       commandLine: handle.commandLine,
       startedAt: turnStart,
       turnStartedAt: turnStart,
@@ -330,40 +194,6 @@ export async function runTask(taskId: string): Promise<void> {
 
 
 
-// Decide between a fresh run and a resume when (re)starting a single task. A task
-// that was interrupted keeps a session row with a cliSessionId (server restart
-// leaves exitStatus null; manual stop / non-zero exit keep the id too) — resume
-// THAT session so the agent continues from where it stopped, like the user typing
-// 继续. A never-started task (no resumable session) runs fresh. paused 任务带着
-// agent 写下的 resumePrompt 进来 —— 把它当作 user 输入回灌给 CLI 会话再清空，所以
-// 不会反复触发同一段 prompt。Tail-returns the delegate so callers (esp. the
-// scheduler) keep chaining on the same promise.
-export async function resumeOrRunTask(
-  taskId: string,
-  opts: { reason?: ResumeReason } = {},
-): Promise<void> {
-  const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
-  if (!task || task.mode !== "single") return runTask(taskId); // duets/missing → unchanged path
-  // 检查点续跑：把 agent 写好的 resumePrompt 当作 user 消息丢回 continueTask，
-  // 跑同一会话同一目录；先清空字段避免回合内再次 settle 时又被认成 paused。
-  // 调度器会先把可启动任务标成 queued，因此这里不能只看 status === "paused"。
-  if (task.resumePrompt) {
-    const rp = task.resumePrompt;
-    await db.update(tasks).set({ resumePrompt: null, updatedAt: now() }).where(eq(tasks.id, taskId));
-    await continueTask(taskId, rp, { system: opts.reason ?? "run" });
-    return;
-  }
-  const agent = (task.agentType as AgentType) ?? "claude";
-  const prev = (await db.select().from(sessions).where(eq(sessions.taskId, taskId)))
-    .filter((s) => s.agentType === agent)
-    .sort((a, b) => b.startedAt.localeCompare(a.startedAt))
-    .at(0);
-  if (prev?.cliSessionId) {
-    await continueTask(taskId, RESUME_PROMPT, { system: opts.reason ?? "run" });
-    return;
-  }
-  return runTask(taskId); // no resumable session → fresh
-}
 
 // Continue a single task. By default this resumes the task's own agent (answer
 // an agent that stopped to ask). With opts.agent it targets another agent: if
@@ -401,6 +231,12 @@ export async function continueTask(
      */
     byBackend?: boolean;
     /**
+     * 调用方已在入口**原子占住** turn（claimTurn 成功后传 true）：这里不再抢锁，用
+     * sessionRole 接管（reclaimTurn）并照常在 finally 释放。入口占位是并发双 202 谎报
+     * 的唯一解——只读预检查后的任何 await 间隙都可能被另一次启动抢先。
+     */
+    turnHeld?: boolean;
+    /**
      * 「用户这句话已经**落盘**了」的回调 —— 在原话作为一个真人回合写进会话之后立刻调，
      * 不等这一轮跑完（`continueTask` 要等整轮结束才 resolve，那时早过了）。
      *
@@ -412,33 +248,55 @@ export async function continueTask(
     throwOnTeamUnavailable?: boolean;
   } = {},
 ): Promise<boolean> {
-  // 已验收的任务收到真人消息 = 旧验收不再覆盖新增改动,stage 清回「进行中」。
-  // 只认真人消息:带 opts.system 的 retry / 手点运行 / 队列推进 / 上游唤醒不算,跟下面
-  // followUpFrom 用的是同一条口径。放在最前面,确保 single/team/duet 走同一规则。
-  //
-  // 摘牌必须**立刻**发生(界面上任务当场从「已验收」挪回进行中),可这时还不知道这一轮
-  // 会不会真改东西 —— 纯询问也照摘。所以接住摘掉的是哪块牌子交给基线快照:结算发现
-  // 工作目录一个字节没变,就把它原样挂回去(turn-baseline.ts)。team 走下面的 stdin 分支、
-  // 不拍照,维持原样(调度台本来就不走验收链)。
-  const reopenedStage = opts.system ? null : await reopenAcceptedStage(taskId);
+  // 这条消息是不是 CLI 原生命令(`/compact`):整条归 CLI 本地执行,不进模型 —— 它既不是
+  // 任务的执行,也不是「新指令」。这一轮必须当旁路回合(下面的 sideTurn),否则「压一下
+  // 上下文」既会被打成 failed,也会顺手把已验收的牌子摘掉——旁路回合不拍工作目录快照,
+  // 没有任何基线能把摘掉的牌子挂回去,压一次就永久丢掉一次验收。
+  const head = (await db
+    .select({ mode: tasks.mode, agentType: tasks.agentType })
+    .from(tasks)
+    .where(eq(tasks.id, taskId))).at(0);
+  const nativeCommand = nativeCliCommand(
+    opts.agent ?? (head?.agentType as AgentType) ?? "claude",
+    userText,
+  );
   // 团队任务(§Team):插话直接写进常驻调度台的 stdin —— 即时、同一会话、用户侧
   // 感觉不断线。不占这里的单飞锁(那把锁是给「一次运行 = 一个回合」的单任务用的,
   // 调度台的一次运行是整段常驻)。于是 /reply、/answer、@提及全都自动生效。
-  const teamMode = (await db.select({ mode: tasks.mode }).from(tasks).where(eq(tasks.id, taskId))).at(0)?.mode;
-  if (teamMode === "team") {
-    await deliverToLead(taskId, userText, {
+  // 验收互斥对 team 只能靠这一次检查（调度台没有 turn 锁）；调度台不走验收链，
+  // 摘牌对它本来就是 no-op，破坏面只有消息时序。
+  if (head?.mode === "team") {
+    if (opts.turnHeld) releaseTurn(taskId); // 占位对常驻调度台无意义，原样还回
+    if (isAcceptingTask(taskId)) return false;
+    // 调度台明确拒收(离线时收到 `/compact` 这类原生命令,拼上唤醒前言就不再是命令)
+    // 时,这一句**一个字都没送出去** —— 绝不能顺手 onDelivered():那是 pending → sent
+    // 的唯一写点,标了 sent 排队/定时的那条就从托盘里消失、会话里也没有,用户的话凭空
+    // 蒸发(docs/incidents.md「排队消息凭空消失」)。跟单飞锁挡回同一口径:返回 false。
+    const delivered = await deliverToLead(taskId, userText, {
       attachments: opts.attachments,
       throwOnOpenFailure: opts.throwOnTeamUnavailable,
     });
+    if (!delivered) return false;
     if (opts.onDelivered) {
       try { await opts.onDelivered(); } catch { /* 记账失败不拖累这一轮 */ }
     }
     return true;
   }
   // 抢不到 = 这个任务此刻正跑着别的回合,这一句话没送出去。调用方必须知道(见函数注释)。
-  if (!claimTurn(taskId)) return false;
-  const agentType = opts.agent ?? "claude"; // re-derived below once the task loads; kept for the catch handler
+  // turnHeld = 调用方已在入口原子占好位(consulted continueWhenIdle / run 路由),这里
+  // 用真实身份接管——只读预检查代替不了原子所有权(审查实测:两个并发启动双双 202)。
   const sessionRole = opts.sessionRole ?? "single";
+  if (opts.turnHeld) reclaimTurn(taskId, sessionRole);
+  else if (!claimTurn(taskId, sessionRole)) return false;
+  // 验收互斥：**先占己锁（turn），再查彼锁（acceptance），两步之间没有 await**——
+  // acceptTask 那边是镜像（beginAccepting 先占，acceptanceGuard 再查 isTurnClaimed）。
+  // 任意交错下至少一方看到对方已占而退避；只查不占是 TOCTOU（审查实测 40/40：检查刚
+  // 通过验收就开始，回复照样启动并摘牌）。退避 = 消息按「未投递」排队，验收事实原封不动。
+  if (isAcceptingTask(taskId)) {
+    releaseTurn(taskId);
+    return false;
+  }
+  const agentType = opts.agent ?? "claude"; // re-derived below once the task loads; kept for the catch handler
   let handle: RunHandle | undefined;
   try {
     const task = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
@@ -465,17 +323,25 @@ export async function continueTask(
     // **这一段必须排在所有可能抛错的解析之前**(执行器解析、工作目录解析都会抛:模型与
     // 思考强度不兼容、worktree 建不出来),catch 那边只认库里的 followUpFrom —— 落库晚
     // 一步,一个 done 的任务就会因为「验证没起来」被打成 failed。
-    const freeReviewTurn = await isFreeReviewTurn(taskId);
-    const sideTurn = !!opts.sideTurn || !!task.verifyRound || freeReviewTurn;
+    // 自由审查回合的身份**只认 opts 显式传递**（派审投递、/answer 路由、checkpoint 续跑
+    // 各自带上 sessionRole=reviewer），不查库猜——库里的 reviewing run 可能是并发派审刚
+    // 插入的，按它猜会把一个普通用户回合整套套上 reviewer 语义（审查实测）。
+    const freeReviewTurn = sessionRole === "reviewer";
+    // `/compact` 这类 CLI 原生命令(在函数顶部就算好了):整条消息归 CLI 本地执行,不进
+    // 模型 —— 没有产出、也不可能交卷,所以必须当旁路回合,否则「压一下上下文」会把任务
+    // 打成 failed。
+    const sideTurn = !!opts.sideTurn || !!task.verifyRound || freeReviewTurn || !!nativeCommand;
     const followUpFrom = sideTurn
       ? (task.status === "running" || task.status === "queued" ? null : task.status)
       : !opts.system && ["done", "failed", "canceled"].includes(task.status)
         ? task.status
         : null;
     // 新回合起点:顺手清掉上一轮残留的完成确认(确认只在本回合内有效)。
+    // nativeTurn 落库而不是只留在内存里:结算钩子跟这里可能不在同一个进程(重启后由
+    // reattach 接着消费同一条流),内存标记会丢,而丢了就等于「压缩被算成一轮验证跑完」。
     await db
       .update(tasks)
-      .set({ followUpFrom, completeConfirmedAt: null, updatedAt: now() })
+      .set({ followUpFrom, nativeTurn: !!nativeCommand, completeConfirmedAt: null, updatedAt: now() })
       .where(eq(tasks.id, taskId));
 
     const ex = await resolveExecutorFor({
@@ -518,13 +384,28 @@ export async function continueTask(
     }
 
     await setStatus(taskId, "running");
+    // 已验收的任务收到真人消息 = 旧验收不再覆盖新增改动,stage 清回「进行中」。摘牌
+    // 刻意排在**所有可能抛错的解析之后**(执行器解析、工作目录解析都会抛):解析失败时
+    // 什么都还没破坏,catch 恢复 status 就是完整恢复(审查实测:claude+haiku+high 在
+    // 执行器解析处抛错,stage 与合并快照被清了回不来)。
+    // 三步是 write-ahead:①只读探快照(peek)→ ②快照随基线**先落盘**→ ③才执行清空
+    // (commit)。中间任何一处崩溃,磁盘上都有完整快照供结算挂回;先清后存的老顺序,
+    // 崩在中间快照就永久丢了。纯询问的挂回同样吃这份基线(turn-baseline.ts)。
+    // 只认真人消息(!opts.system),旁路回合(sideTurn:就地验证/审查轮)也不摘——
+    // 那些回合的约定就是「维持原状」,摘了牌又不落基线,挂回机制够不着。
+    const reopened = opts.system || sideTurn ? null : await peekAcceptedStage(taskId);
     // 起跑前给工作目录拍一张照，**并当场把上一版的验证/验收记录清掉**：新指令一到，
     // 上一版的成绩就作废，线退回「让 AI 干活」那一站（不然这几十分钟里线路图还写着
     // 「已过关口、停在验证站」，那两颗会真合并的按钮此刻就能点）。结算时再拍一张比对，
     // 这一轮要是一个字节都没改，刚才清掉的原样放回 —— 纯询问不该重置任何东西。
     // 只给真人消息拍 —— 系统续跑、队列推进、验证打回后叫 agent 修，那些轮次改代码是
     // 本分，清账反而打断正在跑的流程。详见 turn-baseline.ts。
-    if (!opts.system && !sideTurn) await recordTurnBaseline(taskId, cwd, freshWorkspace, reopenedStage);
+    if (!opts.system && !sideTurn) {
+      const recorded = await recordTurnBaseline(taskId, cwd, freshWorkspace, reopened);
+      // 基线内的清账已把 stage 摘下并广播；这里收掉同生命周期的合并快照列——且**只在
+      // 基线确实落盘后**才清（失败关闭：快照没持久化就不动验收事实）。
+      if (reopened && recorded) await clearAcceptedSnapshot(taskId);
+    }
     // 「有产出却没交卷」的探针跟上面那张照片是两回事:它只管通知怎么措辞,所以**每一轮都记**
     // (系统续跑、队列推进的回合同样会漏交卷)。详见 turn-output.ts。
     await recordTurnStart(taskId, cwd);
@@ -554,16 +435,23 @@ export async function continueTask(
     const peerNotice = peerNoticeFor({ taskId, self: agent, all, prev });
     // 验证轮/审查任务不提这条线：那一轮的产出是结论，不是新一版代码。
     const railNote = followUpFrom && !verifying ? await followUpRailNote(taskId) : "";
-    const prompt =
-      (invited ? COLLAB_INVITE : "") +
-      invitedTaskBrief(task.body, invited, verifying) +
-      peerNotice +
-      promptedUserTurnText +
-      (workspaceReset ? WORKSPACE_RESET(cwd) : "") +
-      (followUpFrom
-        ? FOLLOW_UP_REMINDER(taskId, followUpFrom, sharedTeamWorker, verifying, railNote, freeWorkflow)
-        : COMPLETION_REMINDER(taskId, sharedTeamWorker, verifying, freeWorkflow)) +
-      (reviewReminder ? `\n${reviewReminder}` : "");
+    // 原生命令必须**独占整条 prompt**:前面垫一个字它就退化成普通模型请求,压缩不会
+    // 发生;后面跟的字则会被 CLI 整条丢弃,拼上去只是自欺(见 skills.ts NATIVE_COMMANDS)。
+    // 浏览器策略那段同理 —— 它也是拼在正文外面的字。
+    const prompt = nativeCommand
+      ? promptedUserTurnText
+      : withGlobalBrowserPolicy(
+          (invited ? COLLAB_INVITE : "") +
+          invitedTaskBrief(task.body, invited, verifying) +
+          peerNotice +
+          promptedUserTurnText +
+          (workspaceReset ? WORKSPACE_RESET(cwd) : "") +
+          (followUpFrom
+            ? FOLLOW_UP_REMINDER(taskId, followUpFrom, sharedTeamWorker, verifying, railNote, freeWorkflow)
+            : COMPLETION_REMINDER(taskId, sharedTeamWorker, verifying, freeWorkflow)) +
+          (reviewReminder ? `\n${reviewReminder}` : ""),
+          resuming ? "reminder" : "full",
+        );
     const turnStart = now();
     const sessId = resuming ? prev!.id : id();
     const runDir = join(RUNS_DIR, taskId);
@@ -596,7 +484,12 @@ export async function continueTask(
           endedAt: null,
           commandLine: handle.commandLine,
           executor: ex.label,
-          relayEnv: ex.relayEnvHint ?? null,
+          // profile 可能在两轮之间被改到别的机器上;这一列是恢复命令唯一的
+          // 「在哪台机器上跑」凭据,不刷新就会给出一条在本机执行的错命令。
+          target: sessionTargetKey(ex.target),
+          // 恢复命令三件套整组刷新(cwd 也可能在两轮之间变):少刷一列就是一条
+          // 恢复不了的恢复命令,见 ResumeFields。
+          ...ex.resumeFields(cwd, cliSessionId),
           // 这一轮的解绑线索。**必须整组刷新**:沿用上一轮的 pid/offset 会让重启
           // 去接一个早就没了的进程,或者从上一轮的字节位置读这一轮的新文件。
           agentPid: handle.detached?.pid ?? null,
@@ -615,13 +508,12 @@ export async function continueTask(
         role: sessionRole,
         agentType: agent,
         executor: ex.label,
-        target: "local",
+        target: sessionTargetKey(ex.target),
         worktreePath: base?.worktreePath ?? null,
         branch: base?.branch ?? null,
         cwd,
         cliSessionId,
-        resumeCommand: ex.resumeCommand(cwd, cliSessionId),
-        relayEnv: ex.relayEnvHint ?? null,
+        ...ex.resumeFields(cwd, cliSessionId),
         commandLine: handle.commandLine,
         startedAt: turnStart,
         turnStartedAt: turnStart,
@@ -672,14 +564,32 @@ export async function continueTask(
       type: "agent.event", taskId, sessionId: "", role: sessionRole, agentType,
       event: { kind: "error", message: String(err instanceof Error ? err.message : err) },
     });
+    // 这一轮已拍过基线的话(资源都解析成功、spawn 才挂),先按基线对账:失败回合的工作
+    // 目录多半一个字节没动,开头摘掉的验收事实(stage + 合并快照 + 尾段进度)会整套挂回。
+    // 不对账的话,下一轮的 recordTurnBaseline 会直接覆盖这份基线,快照永久丢失(审查
+    // 实测:解析失败后 stage/快照回不来)。必须在 afterSettlement 之前(turn-baseline.ts
+    // 的约定);正常路径的结算已经对过账时,基线文件已被消费,这里是 no-op。
+    await reconcileTurnBaseline(taskId, false).catch(() => undefined);
     // 续聊回合里出的岔子(典型:worktree 建不出来)不该把任务状态打差 —— 同
     // settleTaskStatus 的约定:续聊只能让任务变好,不能让它变坏。
     const row = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
     const back = row?.followUpFrom as TaskStatus | null | undefined;
-    if (back) await db.update(tasks).set({ followUpFrom: null, updatedAt: now() }).where(eq(tasks.id, taskId));
+    // 原生命令标记跟 followUpFrom 一样**只在本回合内有效**:CLI 还没起来就抛错时,
+    // 正常那条清理路(settleTaskStatus)根本没跑过 —— 不在这儿清掉,标记就漏给下一轮,
+    // 下一轮的真实结算会被整段跳过(当成「那是次压缩」)。
+    const nativeTurn = !!row?.nativeTurn;
+    if (back || nativeTurn) {
+      await db
+        .update(tasks)
+        .set({ ...(back ? { followUpFrom: null } : {}), ...(nativeTurn ? { nativeTurn: false } : {}), updatedAt: now() })
+        .where(eq(tasks.id, taskId));
+    }
     const status = takeStopped(taskId) ?? back ?? "failed";
     await setStatus(taskId, status);
-    await afterSettlement(taskId, status, false, false);
+    // 压缩连启动都没启动,更谈不上有结论 —— 跟正常结算同一口径(single-run.ts):整段
+    // 跳过结算钩子。交给它的话,正在跑的那轮就地验证会被当成「验完了」收掉(清 verifyRound、
+    // 涨 verifyRounds,却给不出 verified/verify_failed),白耗用户一轮验证配额。
+    if (!nativeTurn) await afterSettlement(taskId, status, false, false, sessionRole);
   } finally {
     if (handle) untrackRun(taskId, handle);
     releaseTurn(taskId);

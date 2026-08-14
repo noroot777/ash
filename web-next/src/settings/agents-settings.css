@@ -130,10 +130,46 @@
   gap: 3px;
 }
 
+/* 说明 + 刷新同一行:文字可被截断,按钮 flex 钉在右侧,避免紧表格拉长说明时把按钮挤没。 */
+.agent-model-control > small {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 4px;
+}
+.agent-model-control > small > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* 「CLI 默认已是 X」比来源说明更值得看(它是唯一的行动线索),所以颜色重一档;但仍然
+   可截断 —— 挤到没地方时先保住行尾那颗刷新按钮,86a3f06 修的就是按钮被挤没。 */
+.agent-model-control > small > span.model-behind-default { color: var(--muted); }
+
 .agent-model-control > small.is-error,
 .provider-model-field > small.is-error {
   color: var(--red);
 }
+
+/* 说明行末尾的「现问一次 CLI」。CLI 上新模型跟 harness 发版无关，这颗按钮是用户
+   不等发版就能拿到新模型的唯一入口，所以哪怕说明被截断它也要留在行内可见。 */
+.agent-model-control > small > button.model-refresh {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 2px;
+  border: 0;
+  border-radius: 4px;
+  margin-left: auto;
+  background: var(--raised);
+  padding: 1px 5px;
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 600;
+}
+.agent-model-control > small > button.model-refresh:hover:not(:disabled) { background: var(--sel-bg); color: var(--ink); }
+.agent-model-control > small > button.model-refresh:disabled { opacity: .55; }
 
 .agent-profile-args-popover {
   position: absolute;
@@ -200,6 +236,81 @@
 
 .agent-profile-args-popover-actions > span {
   margin-right: auto;
+}
+
+/* 覆盖 CLI 自身配置的编辑区（弹层外框复用上面那套 args-popover 样式）。 */
+.agent-profile-overrides-list {
+  display: grid;
+  gap: 14px;
+}
+
+.agent-profile-override {
+  display: grid;
+  gap: 5px;
+}
+
+.agent-profile-override > label {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.agent-profile-override > label b {
+  font-size: 12px;
+}
+
+.agent-profile-override-shadows {
+  color: var(--faint);
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 10px;
+}
+
+.agent-profile-override-input {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.agent-profile-override-input input {
+  width: 120px;
+  border: 1px solid var(--line2);
+  border-radius: 7px;
+  background: var(--panel);
+  color: var(--ink);
+  font-size: 12px;
+  padding: 5px 8px;
+}
+
+.agent-profile-override-input > small {
+  color: var(--faint);
+  font-size: 10px;
+}
+
+.agent-profile-override > p {
+  margin: 0;
+  color: var(--faint);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+/* 「这几个数合起来会变成什么」——比用户填的数本身更重要，所以给它一块底色，
+   不跟上面那些灰色说明文字混在一起。 */
+.agent-profile-override-hint {
+  display: grid;
+  gap: 4px;
+  margin-top: 12px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--panel);
+  border: 1px solid var(--line2);
+}
+
+.agent-profile-override-hint p {
+  margin: 0;
+  color: var(--ink);
+  font-size: 11px;
+  line-height: 1.5;
 }
 
 .agent-args-editor {
@@ -307,25 +418,6 @@
   padding: 14px 14px 14px 11px;
 }
 
-/* 正在被编辑的那一行留在原位当锚点；收起后原地闪一下，找得回来。 */
-.provider-row.is-editing {
-  background: color-mix(in lch, var(--accent-soft) 40%, var(--panel));
-  box-shadow: inset 3px 0 0 var(--accent);
-}
-
-.provider-row.is-just-edited {
-  animation: provider-row-flash 2.6s ease-out;
-}
-
-@keyframes provider-row-flash {
-  0%, 45% { background: color-mix(in lch, var(--accent-soft) 62%, var(--panel)); }
-  100% { background: transparent; }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .provider-row.is-just-edited { animation: none; background: color-mix(in lch, var(--accent-soft) 45%, var(--panel)); }
-}
-
 .agent-profile-create-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -358,342 +450,6 @@
   gap: 7px;
 }
 
-.providers-intro {
-  display: flex;
-  min-height: 64px;
-  align-items: center;
-  justify-content: space-between;
-  gap: 20px;
-  border-bottom: 1px solid var(--line);
-  padding: 12px 14px;
-}
-
-.providers-intro > div {
-  display: grid;
-  gap: 4px;
-}
-
-.providers-intro b {
-  font-size: 12px;
-  font-weight: 600;
-  letter-spacing: -0.01em;
-}
-
-.providers-intro small {
-  color: var(--faint);
-  font-size: 10px;
-}
-
-.provider-row {
-  display: grid;
-  min-height: 62px;
-  grid-template-columns: 30px minmax(180px, 1fr) auto minmax(130px, 0.7fr) 28px 28px;
-  align-items: center;
-  gap: 10px;
-  border-bottom: 1px solid var(--line);
-  padding: 10px 14px;
-}
-
-.provider-protocol {
-  display: grid;
-  width: 28px;
-  height: 28px;
-  place-items: center;
-  border-radius: 8px;
-  background: #eee4f5;
-  color: #6b4389;
-  font-size: 11px;
-  font-weight: 750;
-}
-
-.provider-protocol.is-openai {
-  background: #dcece8;
-  color: #24685a;
-}
-
-.provider-copy {
-  display: grid;
-  min-width: 0;
-  gap: 3px;
-}
-
-.provider-copy b {
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.provider-copy small,
-.provider-default-model {
-  overflow: hidden;
-  color: var(--faint);
-  font-size: 10px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.provider-key-state {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  border-radius: 999px;
-  background: rgb(181 123 0 / 9%);
-  padding: 3px 7px;
-  color: var(--amber);
-  font-size: 9px;
-  white-space: nowrap;
-}
-
-.provider-key-state.is-ready {
-  background: var(--green-bg);
-  color: var(--green);
-}
-
-.provider-icon-action {
-  display: grid;
-  width: 28px;
-  height: 28px;
-  place-items: center;
-  border: 0;
-  border-radius: 7px;
-  background: transparent;
-  color: var(--faint);
-}
-
-.provider-icon-action:hover {
-  background: var(--raised);
-  color: var(--ink);
-}
-
-.provider-form-grid {
-  display: grid;
-  grid-template-columns: minmax(160px, 1fr) minmax(150px, 0.7fr);
-  gap: 10px;
-}
-
-.provider-form-grid .is-wide {
-  grid-column: 1 / -1;
-}
-
-.provider-conversion-field {
-  display: flex;
-  min-height: 58px;
-  align-items: center;
-  justify-content: space-between;
-  gap: 18px;
-  border: 1px solid color-mix(in lch, var(--accent) 24%, var(--line));
-  border-radius: 9px;
-  background: color-mix(in lch, var(--accent-soft) 34%, transparent);
-  padding: 10px 12px;
-}
-
-.provider-conversion-field > div {
-  display: grid;
-  gap: 3px;
-}
-
-.provider-conversion-field b {
-  font-size: 11px;
-  font-weight: 650;
-}
-
-.provider-conversion-field small {
-  color: var(--faint);
-  font-size: 10px;
-  line-height: 1.45;
-}
-
-.provider-conversion-field .ui-choice {
-  flex: none;
-}
-
-.provider-mono-input,
-.provider-model-field input {
-  font-family: var(--font-mono);
-}
-
-.provider-model-field > div {
-  display: flex;
-  gap: 7px;
-}
-
-.provider-model-field > div input {
-  flex: 1;
-}
-
-.provider-model-field > div .ui-button {
-  flex: none;
-}
-
-.provider-test-result {
-  color: var(--green);
-}
-
-/* 「选择器里列什么模型」：模式开关 + 固定模型清单。 */
-.provider-pinned-field {
-  display: grid;
-  gap: 10px;
-  border: 1px solid var(--line);
-  border-radius: 9px;
-  background: var(--overlay);
-  padding: 10px 12px;
-}
-
-.provider-pinned-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 18px;
-}
-
-/* 只命中左边那段文案：写成 `> div` 会连 PillTabs 的 .ui-tabs 一起改成 grid，
-   两个模式按钮就竖着堆起来并溢出到卡片外。 */
-.provider-pinned-copy {
-  display: grid;
-  min-width: 0;
-  gap: 3px;
-}
-
-.provider-pinned-head b {
-  font-size: 11px;
-  font-weight: 650;
-}
-
-.provider-pinned-head small {
-  color: var(--faint);
-  font-size: 10px;
-  line-height: 1.45;
-}
-
-.provider-pinned-head .ui-tabs {
-  flex: none;
-}
-
-.provider-pinned-body {
-  display: grid;
-  gap: 8px;
-}
-
-.provider-pinned-add {
-  display: flex;
-  gap: 7px;
-}
-
-.provider-pinned-add input {
-  flex: 1;
-  font-family: var(--font-mono);
-}
-
-.provider-pinned-add .ui-button {
-  flex: none;
-}
-
-.provider-pinned-suggest {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 5px;
-}
-
-.provider-pinned-suggest > button {
-  display: inline-flex;
-  height: 23px;
-  align-items: center;
-  gap: 4px;
-  border: 1px solid var(--line2);
-  border-radius: 999px;
-  background: var(--panel);
-  padding: 0 9px 0 7px;
-  color: var(--muted);
-  font-family: var(--font-mono);
-  font-size: 10px;
-}
-
-.provider-pinned-suggest > button:hover {
-  border-color: color-mix(in lch, var(--accent) 42%, var(--line2));
-  color: var(--ink);
-}
-
-.provider-pinned-suggest > small {
-  color: var(--faint);
-  font-size: 9.5px;
-}
-
-.provider-pinned-list {
-  display: grid;
-  gap: 4px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.provider-pinned-list > li {
-  display: flex;
-  min-height: 30px;
-  align-items: center;
-  gap: 8px;
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  background: var(--panel);
-  padding: 3px 5px 3px 9px;
-}
-
-.provider-pinned-list code {
-  flex: none;
-  color: var(--ink);
-  font-family: var(--font-mono);
-  font-size: 10.5px;
-}
-
-.provider-pinned-list small {
-  min-width: 0;
-  flex: 1;
-  overflow: hidden;
-  color: var(--green);
-  font-size: 9.5px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.provider-pinned-list small.is-error {
-  color: var(--red);
-}
-
-/* 固定模型列表里每行的「测试」按钮（供应商列表行上的那颗已经撤掉了，但这里还留着，
-   钉一个模型时能就地验一下它到底通不通）。 */
-.provider-test-action {
-  display: inline-flex;
-  min-width: 54px;
-  height: 28px;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  background: var(--panel);
-  color: var(--muted);
-  font-size: 9px;
-}
-.provider-test-action:hover:not(:disabled) {
-  border-color: color-mix(in lch, var(--accent) 40%, var(--line));
-  background: var(--accent-soft);
-  color: var(--accent);
-}
-.provider-test-action:disabled {
-  opacity: 0.55;
-}
-.provider-pinned-list small:not(.is-error) + .provider-test-action,
-.provider-pinned-list code + .provider-test-action {
-  margin-left: auto;
-}
-
-@keyframes provider-model-spin {
-  to { transform: rotate(360deg); }
-}
-
-.provider-spin {
-  animation: provider-model-spin 0.8s linear infinite;
-}
-
 @media (max-width: 900px) {
   .agent-profile-args-popover {
     position: fixed;
@@ -706,14 +462,6 @@
 
   .agent-profile-create-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .provider-row {
-    grid-template-columns: 30px minmax(160px, 1fr) auto auto 28px 28px;
-  }
-
-  .provider-default-model {
-    display: none;
   }
 }
 
@@ -743,44 +491,6 @@
 
   .agent-profile-foot,
   .providers-intro {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-
-  .provider-row {
-    grid-template-columns: 30px minmax(0, 1fr) auto 28px 28px;
-  }
-
-  .provider-key-state {
-    display: none;
-  }
-
-  .provider-test-action {
-    min-width: 28px;
-    font-size: 0;
-  }
-
-  .provider-form-grid .is-wide {
-    grid-column: auto;
-  }
-
-  .provider-model-field > div {
-    flex-wrap: wrap;
-  }
-
-  .provider-model-field > div input {
-    flex-basis: 100%;
-  }
-
-  .provider-model-field > div .ui-button {
-    flex: 1;
-    min-width: 0;
-    gap: 4px;
-    padding-inline: 6px;
-    white-space: nowrap;
-  }
-
-  .provider-conversion-field {
     align-items: flex-start;
     flex-direction: column;
   }

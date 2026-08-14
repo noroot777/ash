@@ -14,7 +14,6 @@ const task = (id: string, title: string): Task => ({
   body: title,
   mode: "single",
   status: "idle",
-  priority: "normal",
   labels: [],
   dependsOn: [],
   resumeDependsOn: [],

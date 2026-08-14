@@ -58,6 +58,8 @@ export const piSpec: CliSpec = {
     "③没用 `--tools` 收紧工具集:它是**allowlist**且同时作用于扩展/自定义工具,写死会把用户装的扩展工具一起关掉;" +
     "默认开 read/bash/edit/write(grep/find/ls 默认关,可用 bash 代替);" +
     "④auto_retry_* / compaction_* 事件只落 trace 不进时间线(长时间重试时界面会显得静默,实测后可再补)。" +
+    "2026-08-13 补:本机确实装着这个 pi,`pi --list-models` 已实测(输出定宽表,前两列 provider/model)," +
+    "所以模型清单走实时探测;但**执行链路仍未实测**,untested 保留。" +
     "harness 这一半已验证(用一个假 `pi` 走完 GenericCliExecutor 全程):argv 装配为 " +
     "`-p --mode json --session-id <uuid> --model … --thinking …`(-p 后面紧跟 flag,不会误吃参数)、" +
     "prompt 确实经 stdin 送达且子进程侧 isTTY=false、新建/续跑共用 --session-id、" +
@@ -87,7 +89,32 @@ export const piSpec: CliSpec = {
     },
     parser: (ctx) => piEvents(ctx),
   },
+  // `pi --list-models` 是纯本地查询(读它自带的 models 目录 + 已认证 provider),
+  // 不起会话、不烧 token。2026-08-13 本机实测(v0.83.x)输出是一张定宽表:
+  //   provider   model                       context  max-out  thinking  images
+  //   anthropic  claude-fable-5              1M       128K     yes       yes
+  // pi 的 --model 收 `provider/id`,所以前两列拼起来才是能直接填进去的取值。
+  models: { args: ["--list-models"], parse: (stdout) => parsePiModels(stdout) },
 };
+
+/**
+ * `pi --list-models` 的表格 → `provider/model` 清单。
+ *
+ * 只认「前两列都是模型 id 长相」的行:表头(provider/model)与任何说明性文字都不满足,
+ * 于是格式一变就是解析出空数组、如实降级到内置快照,而不是把 "context" 当模型名端上去。
+ */
+export function parsePiModels(stdout: string): { models: string[]; defaultModel?: string | null } {
+  const models: string[] = [];
+  for (const line of stdout.split("\n")) {
+    const cols = line.trim().split(/\s{2,}/);
+    if (cols.length < 2) continue;
+    const [provider, model] = cols as [string, string];
+    if (provider === "provider" || model === "model") continue; // 表头
+    if (!/^[a-z0-9][\w.-]*$/i.test(provider) || !/^[a-z0-9][\w.:-]*$/i.test(model)) continue;
+    models.push(`${provider}/${model}`);
+  }
+  return { models, defaultModel: null };
+}
 
 /**
  * `pi --mode json` 的 JSONL 解析(schema 见 docs/json.md;发送处是 print-mode.ts 里

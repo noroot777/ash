@@ -1,18 +1,63 @@
 // CLI 各自的模型别名与思考强度档位。**从 index.ts 拆出来**的理由有两条:
 // ①它随「目录里有几个 CLI」线性增长,每个 type 一条带出处的注释,留在 index 里
 //   会把它顶过 700 行硬上限(2026-07-30 就顶过一次);
-// ②只有前端的两个选择器用它(web 的 ModelConfigPicker、mobile 的 ExecutionConfig),
-//   服务端一处都不读 —— 没必要让每个 import shared 的地方都带上这一大坨。
+// ②它主要给前端的模型选择器用(web-next 的 modelCatalog、mobile 的 ExecutionConfig);
+//   服务端只有 `executors/model-probe.ts` 一处读它当兜底 —— 没必要让每个 import
+//   shared 的地方都带上这一大坨。
 //
 // 走子路径导出 `@harness/shared/cli-presets`,**不从 index 转发**:服务端直接跑
 // shared 的 .ts 源码,Node 的类型擦除不会把 "./x.js" 说明符映射回 "./x.ts",
 // index 里转发运行时值会让 server 进程起不来(同 `@harness/shared/executors`)。
 import type { AgentType } from "./index.ts";
 
+/**
+ * 「这个 CLI 现在到底有哪些模型」的一次回答。`GET /api/agents/models` 与
+ * `POST /api/agents/models/refresh` 的元素形状。
+ *
+ * 为什么要有它:`CLI_MODEL_PRESETS` 是发版时抄下来的**快照**,而各家 CLI 上新模型
+ * 跟 harness 发版毫无关系 —— grok 4.6 上线后本机 CLI 早就能用,系统里却只有 4.5。
+ * 所以凡是 CLI 自己给得出清单的(`grok models` 之类),一律现问 CLI;问不到才退回快照。
+ *
+ * 字段的诚实边界:`source` 说清这批模型是**问出来的**还是**兜底的**,`error` 保留
+ * 失败原因(没登录 / 网络不通 / 命令改了)。界面必须把这两个照实展示 —— 拿一份
+ * 兜底清单假装是实时目录,比清单短一点更坏。
+ */
+export interface CliModelCatalog {
+  type: AgentType;
+  /** 候选模型。`source==="probe"` 时就是 CLI 报的全集,不再叠加 preset(下线的模型不该继续列)。 */
+  models: readonly string[];
+  /** CLI 报告的默认模型(排在候选首位);问不到就是 null。 */
+  defaultModel: string | null;
+  /** probe = 现问 CLI 的结果;preset = 内置兜底快照。 */
+  source: "probe" | "preset";
+  /** 这个 CLI 有没有已实测的清单命令。false = 只可能有 preset。 */
+  probeSupported: boolean;
+  /** 本机装没装这个 CLI。 */
+  available: boolean;
+  /** 探测完成时刻(ISO);从未成功探过则为 null。 */
+  probedAt: string | null;
+  /** 探测时用的 CLI 版本,用于「换了版本要不要重探」的判断与展示。 */
+  cliVersion: string | null;
+  /** 探测失败的原因原文(截断)。成功或不支持时为 null。 */
+  error: string | null;
+}
+
+/**
+ * 哪些 CLI 已有实测过的清单查询命令。
+ *
+ * 前端首帧 / 接口还没回 / 接口挂了时靠它决定要不要画「刷新」按钮;权威答案仍是
+ * 服务端现问 CLI 后返回的 `probeSupported`。与 server catalog 里填了 `models` 的
+ * type 是否一致,由 `server/scripts/test-cli-models.ts` 断言,不靠自觉。
+ */
+export const CLI_MODEL_PROBE_TYPES: ReadonlySet<AgentType> = new Set(["grok", "pi"]);
+
 // CLI-native model aliases used when an executor is on its official account.
 // Provider-backed executors replace these with that provider's /v1/models list.
 // 全键 Record 是刻意的:新类型不填就编译不过,免得漏登记后下拉框静默空着。
 // 空数组 = 该 CLI 的模型别名还没实测(用户仍可在 profile 里手填任意模型名)。
+//
+// **这张表是兜底,不是权威**:CLI 自己有清单命令的(见 spec 的 `models` 字段),harness
+// 会现问 CLI 并缓存,前端也给了「刷新」入口;探不到才退回这里。
 export const CLI_MODEL_PRESETS: Record<AgentType, readonly string[]> = {
   claude: ["opus", "sonnet", "haiku", "fable"],
   codex: ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4"],
@@ -51,7 +96,8 @@ export const CLI_MODEL_PRESETS: Record<AgentType, readonly string[]> = {
   // 也没公布内置模型 id 清单 —— 可选项 = 内置模型 + 企业管理员在控制台加的自定义模型,每家租户不一样。
   // 唯一有出处的取值是全局设置页的示例 `traecli -c model.name=kimi-k2`;手填照样接受。
   trae: [],
-  grok: ["grok-4.5"], // 2026-07-30 登录态 `grok models` 的唯一可用模型(v0.2.114)
+  // 2026-08-13 登录态 `grok models`(v1.0.3):grok-4.6(默认) + grok-4.5。
+  grok: ["grok-4.6", "grok-4.5"],
   kimi: ["kimi-code/k3", "kimi-code/kimi-for-coding", "kimi-code/kimi-for-coding-highspeed"],
   cursor: ["auto", "grok-4.5", "composer-2.5", "claude-sonnet-5", "claude-opus-5", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gemini-3.1-pro", "gemini-3.6-flash"],
   // qwen-code 的 Coding Plan 可选模型(2026-07-30 官方 auth 文档);同一菜单里还有

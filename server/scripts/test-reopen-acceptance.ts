@@ -32,7 +32,6 @@ try {
         mode,
         status: "done",
         stage,
-        priority: "none",
         labels: "[]",
         dependsOn: "[]",
         resumeDependsOn: "[]",
@@ -47,7 +46,7 @@ try {
       // 返回值不是布尔而是**摘掉的那块牌子**：摘牌在回合最前面发生，那时还不知道这一轮
       // 会不会真改东西。结算发现工作目录一个字节没变（纯询问）时，turn-baseline.ts 要靠
       // 这个值把牌子原样挂回去 —— 不然问一句话就得重新点一次验收。
-      assert.equal(await reopenAcceptedStage(id), stage, `${mode} 的 ${stage} 续聊时应撤销旧结论并交出摘掉的牌子`);
+      assert.equal((await reopenAcceptedStage(id))?.stage, stage, `${mode} 的 ${stage} 续聊时应撤销旧结论并交出摘掉的牌子`);
       const row = (await db.select({ stage: tasks.stage, updatedAt: tasks.updatedAt }).from(tasks).where(eq(tasks.id, id))).at(0);
       assert.equal(row?.stage, null);
       const stageEvent = events.find((event) => event.type === "task.stage" && event.taskId === id && event.stage === null);
@@ -67,7 +66,6 @@ try {
     mode: "single",
     status: "done",
     stage: "verified",
-    priority: "none",
     labels: "[]",
     dependsOn: "[]",
     resumeDependsOn: "[]",

@@ -24,7 +24,6 @@ import { STATUS_META } from "@/lib/constants";
 import { formatInstant, TaskTimeChip } from "@/lib/time";
 import { fonts, radius, useTheme, type Theme } from "@/lib/theme";
 import { MarkdownText } from "@/components/MarkdownText";
-import { PriorityBars } from "@/components/ui";
 import { SignalBar } from "@/components/SignalBar";
 
 const DUET_COLOR = "#8B5CF6";
@@ -139,7 +138,6 @@ export function DuetTaskDetail({
             <Text style={{ color: theme.muted, fontSize: 12, fontFamily: fonts.mono }}>
               A @{cfg.voiceA} ↔ B @{cfg.voiceB}
             </Text>
-            <PriorityBars priority={task.priority} />
             <TaskTimeChip task={task} />
           </View>
         </View>

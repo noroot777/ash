@@ -16,8 +16,6 @@ import { SideDrawer } from "@/components/SideDrawer";
 import { TaskListRow } from "@/components/TaskListRow";
 import { Ionicons } from "@expo/vector-icons";
 
-const PRIORITY_RANK: Record<string, number> = { urgent: 0, high: 1, medium: 2, low: 3, none: 4 };
-
 function groupedStatus(task: Task): TaskStatus {
   // A resident team console remains active while idle; keep it in the running
   // section while its own signal bar still communicates the precise idle state.
@@ -101,11 +99,7 @@ function TaskList() {
     const mine = tasks.filter((t) => t.projectId === projectId);
     // 与 web 一致：执行者只挂在所属团队卡片下面，不独占状态/分组列表位置。
     const topLevel = mine.filter((task) => task.parentId === null);
-    // 与网页端对齐(web/src/TaskList.tsx):同优先级用 createdAt 倒序,而非
-    // updatedAt —— 后者会让任何状态/正文改动都把卡片顶起,列表顺序飘。
-    const byPriority = (a: Task, b: Task) =>
-      (PRIORITY_RANK[a.priority] ?? 9) - (PRIORITY_RANK[b.priority] ?? 9) ||
-      b.createdAt.localeCompare(a.createdAt);
+    const byLastUpdate = (a: Task, b: Task) => b.updatedAt.localeCompare(a.updatedAt);
 
     // 分组视图:每个分组一区(含空组,便于整组运行/查看结构) + 末尾「未分组」区。归档任务不出现。
     if (view === "group") {
@@ -118,9 +112,9 @@ function TaskList() {
         kind: "group" as const,
         key: g.id,
         group: g,
-        data: active.filter((t) => t.groupId === g.id).sort(byPriority),
+        data: active.filter((t) => t.groupId === g.id).sort(byLastUpdate),
       }));
-      const ungrouped = active.filter((t) => !t.groupId).sort(byPriority);
+      const ungrouped = active.filter((t) => !t.groupId).sort(byLastUpdate);
       return ungrouped.length
         ? [...groupSections, { kind: "ungrouped" as const, key: "ungrouped", data: ungrouped }]
         : groupSections;
@@ -130,7 +124,7 @@ function TaskList() {
     const statusSections = STATUSES.map((s) => ({
       kind: "status" as const,
       key: s.key,
-      data: topLevel.filter((t) => !t.archived && groupedStatus(t) === s.key).sort(byPriority),
+      data: topLevel.filter((t) => !t.archived && groupedStatus(t) === s.key).sort(byLastUpdate),
     })).filter((s) => s.data.length > 0);
     const archived = topLevel
       .filter((t) => t.archived)

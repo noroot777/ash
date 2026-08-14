@@ -1,13 +1,5 @@
 import type { Task } from "@harness/shared";
 
-export const PRIORITY_LABELS: Record<Task["priority"], string> = {
-  none: "无",
-  low: "低",
-  medium: "中",
-  high: "高",
-  urgent: "紧急",
-};
-
 export function formatInstant(value?: string | null): string {
   if (!value) return "";
   const date = new Date(value);

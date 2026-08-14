@@ -5,7 +5,6 @@ import type {
   AttachmentKind,
   BatchCreateTasksBody,
   FreeReviewDispatchInput,
-  FreeWorkflowState,
   GateAction,
   Group,
   LlmProtocol,
@@ -27,13 +26,13 @@ import type {
   TaskFollowUp,
   TaskReviewInfo,
   TaskWorkspaceDiscardResult,
-  TaskWorkspaceLeftover,
   TeamPreset,
   TeamPresetConfig,
-  TokenUsage,
 } from "@harness/shared";
 import { DEFAULT_APP_SETTINGS } from "@harness/shared";
 import type { WorkflowDef, WorkflowItem } from "@harness/shared/workflow";
+import type { CliHostEnv } from "@harness/shared/cli-overrides";
+import type { CliModelCatalog } from "@harness/shared/cli-presets";
 
 const API_ROOT = "/api";
 
@@ -91,214 +90,59 @@ function json(method: string, body?: unknown): RequestInit {
 
 const id = encodeURIComponent;
 
-export type DeleteTaskResult = {
-  deleted: true;
-  leftover: TaskWorkspaceLeftover | null;
-  cleanup: TaskWorkspaceDiscardResult | null;
-};
-
-export type TaskCommit = { sha: string; subject: string; at: string };
-
-export type SessionTraceEntry = {
-  at: string;
-  turnStartedAt: string;
-  event:
-    | { kind: "text"; text: string }
-    | { kind: "thinking"; text: string }
-    | { kind: "tool"; name: string; detail?: string }
-    | { kind: "attachment"; path: string }
-    | { kind: "error"; message: string }
-    // 这一回合的 token 账（服务端每轮至多写一条）。它不是执行过程里的一步，渲染时
-    // 要单独摘出去，别混进「执行过程」那串事件。
-    | { kind: "usage"; usage: TokenUsage; accounting?: "incremental" };
-};
-
-export type GitOverview = {
-  branches: string[];
-  current: string | null;
-  worktrees: {
-    path: string;
-    branch: string | null;
-    head: string | null;
-    detached: boolean;
-  }[];
-};
-
-export type TaskDiffResult = {
-  available: boolean;
-  sourceBranch: string;
-  targetBranch: string | null;
-  mergeBase: string | null;
-  diff: string;
-  files: { path: string; additions: number | null; deletions: number | null }[];
-  truncated: boolean;
-  limitBytes: number;
-  reason?: string;
-};
-
-/** 任务实际在哪干活。服务端只读地解析，绝不为了看文件而新建 worktree。 */
-export type FileWorkspaceRoot = {
-  path: string;
-  branch: string | null;
-  gitRepo: boolean;
-  source: "session" | "worktree" | "repo";
-};
-
-export type FileEntry = {
-  name: string;
-  path: string;
-  kind: "dir" | "file";
-  size: number;
-  mtime: string | null;
-  ignored: boolean;
-  symlink: boolean;
-};
-
-export type FileListing = {
-  root: FileWorkspaceRoot;
-  path: string;
-  entries: FileEntry[];
-  truncated: boolean;
-};
-
-export type FileContent = {
-  path: string;
-  name: string;
-  size: number;
-  mtime: string | null;
-  kind: "text" | "image" | "pdf" | "binary";
-  text: string | null;
-  truncated: boolean;
-  absPath: string;
-  mime: string | null;
-};
-
-/** 本机上能打开某个文件的一个应用。`match` 说明它凭什么被列进来。 */
-export type AppOpener = {
-  id: string;
-  name: string;
-  detail: string;
-  match: "extension" | "type" | "generic";
-  isDefault: boolean;
-};
-
-export type OpenerProbe = {
-  platform: string;
-  canReveal: boolean;
-  apps: AppOpener[];
-  note: string | null;
-};
-
-export type AcceptTaskWarning = {
-  reason: "temporary_cleanup_failed";
-  message: string;
-  worktreePath: string;
-};
-
-export type AcceptTaskSuccess = {
-  accepted: true;
-  taskId: string;
-  status: string;
-  /** 中途关口放行不是验收，stage 会被清回「进行中」 */
-  stage: "accepted" | null;
-  kind: "already_accepted" | "in_place" | "isolated_worktree" | "marked_only" | "gate_released";
-  sharedWorkersAccepted?: number;
-  targetBranch?: string;
-  merge?: string;
-  worktreePath?: string;
-  worktreeRemoved?: boolean;
-  branch?: string;
-  branchDeleted?: boolean;
-  warnings?: AcceptTaskWarning[];
-  /** 「点头之后」那一段（发布脚本之类）跑得怎么样；线上没写这一段就没有这个字段 */
-  tail?: { ok: boolean; step?: string; reason?: string };
-};
-
-export type AcceptTaskFailure = {
-  accepted: false;
-  taskId: string;
-  reason: string;
-  error: string;
-  status?: string;
-  sourceBranch?: string;
-  targetBranch?: string | null;
-  conflictFiles?: string[];
-  dirtyFiles?: string[];
-  targetPath?: string;
-  worktreePath?: string;
-  phase?: "initial" | "before_accept" | "before_merge" | "before_cleanup";
-  inFlightTasks?: {
-    id: string;
-    title: string;
-    status: string;
-    role: "task" | "shared_worker";
-  }[];
-  warnings?: AcceptTaskWarning[];
-  conflictHandoff?: { notified: boolean; message: string };
-};
-
-export type AcceptTaskResult = AcceptTaskSuccess | AcceptTaskFailure;
-
-// 人工强制通过一站「自动验证」之后的落点：签字之后线可能停在下一道关口、又开了一轮
-// 验证、也可能直接合并完了，所以回的是**推进之后**的游标与验收阶段。
-export type VerifyOverrideResult = {
-  forced: true;
-  taskId: string;
-  station: string;
-  workflowAt: string | null;
-  stage: string | null;
-  /** 签字落下了，但这一站之后那一段没跑完 —— 如实说，别报成一句「已放行」。 */
-  advanceError?: string;
-};
+// 响应形状都住在 api-types.ts（这份到了 700 行上限）。这里原样再导出一遍，
+// 现有 `from "../lib/api.ts"` 的导入不用动。
+export type {
+  AcceptTaskFailure,
+  AcceptTaskResult,
+  AcceptTaskSuccess,
+  AcceptTaskWarning,
+  AppOpener,
+  ChildWorkspaceLeftover,
+  CuaProcess,
+  DeleteTaskResult,
+  DetectedCli,
+  FileContent,
+  FileEntry,
+  FileListing,
+  FileWorkspaceRoot,
+  FreeWorkflowApiState,
+  GitOverview,
+  OpenerProbe,
+  ReplyTaskResult,
+  SessionTraceEntry,
+  TaskCommit,
+  TaskDiffResult,
+  TaskWorkspaceProbe,
+  TeamCuaStatus,
+  TerminalEvent,
+  TerminalSessionInfo,
+  VerifyOverrideResult,
+} from "./api-types.ts";
+import type {
+  AcceptTaskResult,
+  DeleteTaskResult,
+  DetectedCli,
+  FileContent,
+  FileListing,
+  FileWorkspaceRoot,
+  FreeWorkflowApiState,
+  GitOverview,
+  OpenerProbe,
+  ReplyTaskResult,
+  SessionTraceEntry,
+  TaskCommit,
+  TaskDiffResult,
+  TaskWorkspaceProbe,
+  TeamCuaStatus,
+  TerminalSessionInfo,
+  VerifyOverrideResult,
+} from "./api-types.ts";
 
 function isAcceptTaskResult(body: unknown): body is AcceptTaskResult {
   return typeof body === "object" && body !== null && "accepted" in body &&
     typeof body.accepted === "boolean";
 }
-
-export type DetectedCli = {
-  key: string;
-  name: string;
-  description: string;
-  bins: string[];
-  docsUrl: string;
-  installCommand: string;
-  type?: AgentType;
-  bin: string;
-  available: boolean;
-  path: string | null;
-  version: string | null;
-  resident: boolean;
-};
-
-export type CuaProcess = { pid: number; ppid: number; command: string };
-
-export type TeamCuaStatus = {
-  taskId: string;
-  current: {
-    checkedAt: string;
-    detected: boolean;
-    processes: CuaProcess[];
-    message: string;
-    sideEffect: string;
-  };
-};
-
-export type TerminalSessionInfo = {
-  id: string;
-  projectId: string;
-  cwd: string;
-  shell: string;
-  name: string;
-};
-
-export type TerminalEvent =
-  | { seq: number; type: "data"; data: string }
-  | { seq: number; type: "exit"; exitCode: number; signal?: number };
-
-export type ReplyTaskResult =
-  | { started: true }
-  | { scheduled: true; message: ScheduledMessage };
 
 export const api = {
   // 老服务端不认识新加的设置项时会漏字段,补上出厂默认再交出去 —— 界面上出现
@@ -443,7 +287,7 @@ export const api = {
   iterateTeamDuet: (taskId: string): Promise<Task> =>
     request(`/tasks/${id(taskId)}/team/iterate-duet`, { method: "POST" }),
 
-  taskWorkspace: (taskId: string): Promise<TaskWorkspaceLeftover> =>
+  taskWorkspace: (taskId: string): Promise<TaskWorkspaceProbe> =>
     request(`/tasks/${id(taskId)}/workspace`),
   taskReview: (taskId: string): Promise<TaskReviewInfo> =>
     request(`/tasks/${id(taskId)}/review`),
@@ -455,20 +299,20 @@ export const api = {
     request(`/tasks/${id(taskId)}/review/dispatch`, json("POST", input)),
   taskReviewFileUrl: (taskId: string, round: number, name: string): string =>
     apiPath(`/tasks/${id(taskId)}/review/file?round=${id(String(round))}&name=${id(name)}`),
-  freeWorkflow: (taskId: string): Promise<FreeWorkflowState> =>
+  freeWorkflow: (taskId: string): Promise<FreeWorkflowApiState> =>
     request(`/tasks/${id(taskId)}/free-workflow`),
-  dispatchFreeReview: (taskId: string, input: FreeReviewDispatchInput): Promise<FreeWorkflowState> =>
+  dispatchFreeReview: (taskId: string, input: FreeReviewDispatchInput): Promise<FreeWorkflowApiState> =>
     request(`/tasks/${id(taskId)}/free-workflow/review`, json("POST", input)),
-  reserveFreeReview: (taskId: string, input: FreeReviewDispatchInput): Promise<FreeWorkflowState> =>
+  repairFreeReview: (taskId: string): Promise<FreeWorkflowApiState> =>
+    request(`/tasks/${id(taskId)}/free-workflow/review/repair`, { method: "POST" }),
+  reserveFreeReview: (taskId: string, input: FreeReviewDispatchInput): Promise<FreeWorkflowApiState> =>
     request(`/tasks/${id(taskId)}/free-workflow/review-reservation`, json("PUT", input)),
-  cancelFreeReviewReservation: (taskId: string): Promise<FreeWorkflowState> =>
+  cancelFreeReviewReservation: (taskId: string): Promise<FreeWorkflowApiState> =>
     request(`/tasks/${id(taskId)}/free-workflow/review-reservation`, { method: "DELETE" }),
-  startFreePreview: (taskId: string): Promise<FreeWorkflowState["preview"]> =>
+  startFreePreview: (taskId: string): Promise<FreeWorkflowApiState["preview"]> =>
     request(`/tasks/${id(taskId)}/free-workflow/preview`, { method: "POST" }),
   stopFreePreview: (taskId: string): Promise<{ stopped: boolean }> =>
     request(`/tasks/${id(taskId)}/free-workflow/preview`, { method: "DELETE" }),
-  mergeFreeWorkflow: (taskId: string): Promise<{ merged: true; message: string }> =>
-    request(`/tasks/${id(taskId)}/free-workflow/merge`, { method: "POST" }),
   freeReviewFileUrl: (taskId: string, runId: string, round: number, name: string): string =>
     apiPath(`/tasks/${id(taskId)}/free-workflow/review-file?run=${id(runId)}&round=${id(String(round))}&name=${id(name)}`),
   // 人工替这一站「自动验证」签字放行。**后端会接着把这一站之后那一段跑掉**——线上
@@ -542,6 +386,16 @@ export const api = {
     { type: AgentType; bin: string; available: boolean; path: string | null; version: string | null; resident: boolean }[]
   > => request("/agents/detect"),
   detectClis: (): Promise<DetectedCli[]> => request("/agents/catalog"),
+  // harness 起 CLI 时子进程会看到的环境事实(只读)。设置页拿它算压缩触发点 ——
+  // 那个换算里有一项在 server 的环境变量里,前端自己算不出来。
+  cliHostEnv: (): Promise<CliHostEnv> => request("/agents/cli-env"),
+  // 这个 CLI 现在有哪些模型 —— 服务端会去问 CLI 自己(`grok models` 之类)并缓存,
+  // 问不到就返回内置快照并在 `source`/`error` 里说清楚。refresh 版是用户按的「刷新」,
+  // 绕过服务端缓存现问一次(所以是 POST:它真的会去起子进程,不是可重放的读)。
+  cliModels: (type?: AgentType): Promise<CliModelCatalog[]> =>
+    request(`/agents/models${type ? `?type=${encodeURIComponent(type)}` : ""}`),
+  refreshCliModels: (type?: AgentType): Promise<CliModelCatalog[]> =>
+    request(`/agents/models/refresh${type ? `?type=${encodeURIComponent(type)}` : ""}`, json("POST", {})),
   // 这个执行器在这个项目下已经装了哪些 `/技能`。refresh=true 跳过服务端的指纹缓存。
   skills: (query: {
     agentType: string;

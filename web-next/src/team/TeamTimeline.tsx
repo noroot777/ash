@@ -80,7 +80,7 @@ export function TeamTimeline({
         from: turn.from,
         to: turn.to ?? openEnd,
         tone: turn.to === null && live ? "green" : "indigo",
-        title: turn.to === null && live ? "正在处理" : `回合用时 ${formatDuration((turn.to ?? openEnd) - turn.from)}`,
+        title: turn.to === null && live ? "委派中" : `回合用时 ${formatDuration((turn.to ?? openEnd) - turn.from)}`,
       })),
     },
     ...workers.map((worker, index) => {

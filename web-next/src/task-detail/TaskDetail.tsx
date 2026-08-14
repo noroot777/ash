@@ -55,6 +55,7 @@ const TASK_INSPECTORS: readonly InspectorDescriptor<TaskInspectorContext>[] = [
     title: "信息",
     icon: <Info size={14} />,
     defaultOpen: true,
+    shortcut: "i",
     render: (context) => <TaskInspector {...context} />,
   },
   {
@@ -62,6 +63,7 @@ const TASK_INSPECTORS: readonly InspectorDescriptor<TaskInspectorContext>[] = [
     title: "文件",
     icon: <FolderOpen size={14} />,
     defaultOpen: true,
+    shortcut: "f",
     render: (context) => (
       <FileTreeInspector
         taskId={context.task.id}
@@ -75,6 +77,7 @@ const TASK_INSPECTORS: readonly InspectorDescriptor<TaskInspectorContext>[] = [
     title: "工作流",
     icon: <GitBranch size={14} />,
     defaultOpen: true,
+    shortcut: "w",
     render: (context) => context.task.workflowMode === "free"
       ? <FreeWorkflowInspector task={context.task} />
       : <WorkflowInspector task={context.task} onTaskUpdated={context.onTaskUpdated} notify={context.notify} />,
@@ -84,6 +87,7 @@ const TASK_INSPECTORS: readonly InspectorDescriptor<TaskInspectorContext>[] = [
     title: "审查",
     icon: <MagnifyingGlass size={14} />,
     defaultOpen: true,
+    shortcut: "r",
     render: (context) => context.task.workflowMode === "free"
       ? <FreeWorkflowInspector task={context.task} reviewOnly onOpenReview={context.onOpenReview} notify={context.notify} />
       : <TaskReviewInspector {...context} />,
@@ -293,6 +297,7 @@ export function TaskDetail({
               conversationMarkdown={markdown}
               busy={busy}
               refreshing={conversation.refreshing}
+              reviewOpen={reviewOpen}
               onTitle={(title) => patch({ title, autoTitle: false })}
               onTogglePin={() => patch({ pinnedAt: task.pinnedAt != null ? null : Date.now() })}
               onPrimary={(action) => void perform(action)}
@@ -307,7 +312,7 @@ export function TaskDetail({
               notify={notify}
             />
             {reviewOpen ? (
-              <TaskReviewWorkspace task={task} allTasks={allTasks} onClose={() => changeReviewOpen(false)} onTaskUpdated={onTaskUpdate} notify={notify} />
+              <TaskReviewWorkspace task={task} allTasks={allTasks} onTaskUpdated={onTaskUpdate} notify={notify} />
             ) : openFilePath ? (
               <FileViewer
                 taskId={task.id}
@@ -402,7 +407,7 @@ export function TaskDetail({
               <DeleteTaskDialog
                 task={task}
                 notify={notify}
-                onDeleted={() => onDeleted(task.id)}
+                onDeleted={(ids) => ids.forEach(onDeleted)}
                 onClose={() => setDeleteOpen(false)}
               />
             )}

@@ -5,7 +5,6 @@ import type {
   AgentType,
   Group,
   GroupMode,
-  Priority,
   ProjectView,
   Task,
   TaskMode,
@@ -79,7 +78,6 @@ export function TaskComposerPanel({
   const [review, setReview] = useState(true);
   const [rounds, setRounds] = useState("3");
   const [gate, setGate] = useState(true);
-  const [priority, setPriority] = useState<Priority>("none");
   const [groupId, setGroupId] = useState("");
   const [labels, setLabels] = useState<string[]>([]);
   const [useWorktree, setUseWorktree] = useState(DEFAULT_APP_SETTINGS.worktreeDefault);
@@ -177,11 +175,15 @@ export function TaskComposerPanel({
     if (parsed) applySlash(parsed[1]!.toLowerCase() as TaskMode, parsed[2] ?? "");
     else setBody(value);
   };
-  const changeExecutor = (role: ComposerExecutorRole, profile: string) => {
-    setExecutors((current) => setComposerExecutorProfile(current, role, profile));
+  const changeExecutor = (
+    role: ComposerExecutorRole,
+    profile: string,
+    override: { model: string; effort: string },
+  ) => {
+    setExecutors((current) => setComposerExecutorProfile(current, role, profile, override));
   };
-  const changeOverride = (role: ComposerExecutorRole, patch: { model?: string; effort?: string }) => {
-    setExecutors((current) => patchComposerExecutor(current, role, patch));
+  const changeEffort = (role: ComposerExecutorRole, effort: string) => {
+    setExecutors((current) => patchComposerExecutor(current, role, { effort }));
   };
 
   const singleExecutor = parseExecutorValue(
@@ -245,7 +247,8 @@ export function TaskComposerPanel({
     executorId: slashRun.executorId,
     enabled: mode !== "duet",
   });
-  const slashCandidates = mergeSlashItems(HARNESS_SLASH_ITEMS, skills.skills, slashDismissed ? null : slashToken(body));
+  const slashQuery = slashDismissed ? null : slashToken(body);
+  const slashCandidates = mergeSlashItems(HARNESS_SLASH_ITEMS, skills.skills, slashQuery);
   const slashSelected = Math.min(slashIndex, Math.max(0, slashCandidates.length - 1));
   const pickSlash = (item: SlashItem) => {
     const harness = SLASHES.find((entry) => entry.command === item.command);
@@ -415,7 +418,6 @@ export function TaskComposerPanel({
         projectId: project.id,
         title: explicitTitle || provisionalTitle,
         autoTitle: !explicitTitle && mode === "single",
-        priority,
         groupId: groupId || null,
         labels,
       };
@@ -602,6 +604,7 @@ export function TaskComposerPanel({
                   : "↑↓ 选择，回车确认，Esc 关闭"}
                 items={slashCandidates}
                 selectedIndex={slashSelected}
+                token={slashQuery}
                 onHover={setSlashIndex}
                 onPick={pickSlash}
               />
@@ -630,7 +633,7 @@ export function TaskComposerPanel({
             availabilityMessage={availabilityMessage}
             availabilityTone={availabilityTone}
             onExecutorChange={changeExecutor}
-            onOverrideChange={changeOverride}
+            onEffortChange={changeEffort}
             currentTeamConfig={currentTeamConfig}
             onApplyTeamPreset={applyTeamPreset}
             notify={notify}
@@ -649,8 +652,6 @@ export function TaskComposerPanel({
             groups={groups}
             groupId={groupId}
             onGroupChange={setGroupId}
-            priority={priority}
-            onPriorityChange={setPriority}
             labels={labels}
             onLabelsChange={setLabels}
             onCreateGroup={() => setGroupDialogOpen(true)}

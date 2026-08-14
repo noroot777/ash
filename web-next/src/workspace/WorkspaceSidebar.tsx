@@ -27,6 +27,8 @@ export function WorkspaceSidebar({
   onWidthChange,
   onProject,
   onTask,
+  onTaskStarred,
+  notify,
   onToggleCollapsed,
   onSearch,
   onNotes,
@@ -46,6 +48,8 @@ export function WorkspaceSidebar({
   onWidthChange: (width: number) => void;
   onProject: (projectId: string) => void;
   onTask: (task: Task) => void;
+  onTaskStarred: (taskId: string, starredAt: number | null) => void;
+  notify: (message: string) => void;
   onToggleCollapsed: () => void;
   onSearch: () => void;
   onNotes: () => void;
@@ -101,6 +105,8 @@ export function WorkspaceSidebar({
         selectedTaskId={selectedTaskId}
         spread={spread}
         onTask={onTask}
+        onTaskStarred={onTaskStarred}
+        notify={notify}
       />
 
       <div className="workspace-sidebar-bottom">

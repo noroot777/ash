@@ -22,6 +22,9 @@ import { ProvidersSettings } from "./ProvidersSettings.tsx";
 import { WorkflowsSettings } from "./WorkflowsSettings.tsx";
 import { ReviewerProfilesSettings } from "./ReviewerProfilesSettings.tsx";
 import "./agents-settings.css";
+// 必须排在 agents-settings.css 之后:两边有几组共用的表单基础样式留在那边,
+// 顺序换了层叠结果就变了(见 providers-settings.css 顶部)。
+import "./providers-settings.css";
 import "./executors-settings.css";
 import "./reviewer-settings.css";
 

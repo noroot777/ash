@@ -18,6 +18,7 @@ import { workflowPolicy } from "@harness/shared/workflow-policy";
 import { taskWorkflowDef } from "./workflows.js";
 import { reviewRoundDir } from "./review-evidence.js";
 import { reviewRequestReference } from "./review-request-context.js";
+import { BROWSER_VERIFICATION_POLICY, BROWSER_VERIFICATION_REMINDER } from "./browser-verification-policy.js";
 import type { Workspace } from "./git.js";
 
 type TaskRow = typeof tasks.$inferSelect;
@@ -45,7 +46,7 @@ function requiredChecks(target: TaskRow, at: string | null | undefined): string 
 function verifyRules(evidenceDir: string): string {
   return `必须真实运行验证：只读代码或只过编译不算。web 改动必须启动服务、用浏览器确认行为；` +
     `其它改动也必须运行与风险相称的测试或产物。\n\n` +
-    `浏览器验证优先走 CDP（Chrome DevTools Protocol）直连/复用浏览器；确实走不通才允许退回 playwright 一类工具。` +
+    BROWSER_VERIFICATION_POLICY +
     `一旦用了 playwright，验证结束前必须把它落在仓库工作区里的产物删干净（.playwright-cli/、playwright-report/、test-results/ 等），` +
     `并用 git status 确认没有留下未跟踪文件——残留会把工作区弄脏，直接导致后续验收合并被拒。\n\n` +
     `验证收尾必须清场：结束前把你为验证启动的所有服务/进程全部停掉（dev server、mock server、throwaway 实例等），` +
@@ -96,7 +97,8 @@ export function verifyReminderFor(taskId: string, round: number): string {
   const dir = reviewRoundDir(taskId, round);
   return `验证提醒:你正在跑本任务的第 ${round} 轮自动验证（不是继续做需求）。必须真实运行验证并把报告写到 ${join(dir, "report.md")}，` +
     `改动看得见（界面/渲染结果）才截图、放同目录，看不见的改动不用截（都只落盘，绝不 commit 进仓库）；` +
-    `浏览器验证优先 CDP，退回 playwright 的话结束前必须删掉它在工作区的产物（.playwright-cli/ 等）；` +
+    BROWSER_VERIFICATION_REMINDER +
+    `用了 playwright 的话结束前必须删掉它在工作区的产物（.playwright-cli/ 等）；` +
     `验证完停掉自己启动的所有服务/进程；` +
     `结束前调 report_stage(taskId="${taskId}", stage="verified"|"verify_failed") 给出结论，本回合不要调 complete_task。`;
 }
@@ -132,7 +134,8 @@ export function reviewReminderFor(review: Pick<TaskRow, "id" | "reviewOf" | "rev
   const dir = reviewRoundDir(review.reviewOf, review.reviewRound);
   return `审查提醒:这是第 ${review.reviewRound} 轮审查；必须真实运行验证并把报告写到 ${join(dir, "report.md")}，` +
     `改动看得见（界面/渲染结果）才截图、放同目录，看不见的改动不用截（都只落盘，绝不 commit 进仓库）；` +
-    `浏览器验证优先 CDP，退回 playwright 的话结束前必须删掉它在工作区的产物（.playwright-cli/ 等）；` +
+    BROWSER_VERIFICATION_REMINDER +
+    `用了 playwright 的话结束前必须删掉它在工作区的产物（.playwright-cli/ 等）；` +
     `验证完停掉自己启动的所有服务/进程；` +
     `结束前对被审任务 ${review.reviewOf} 调 report_stage(verified|verify_failed)，` +
     `再对审查任务自身 ${review.id} 调 complete_task。`;
@@ -143,16 +146,11 @@ export function repairPrompt(input: {
   target: TaskRow;
   round: number;
   reviewTaskId: string | null;
-  images: string[];
   coverage: ReviewCoverageFinding | null;
   autoNext: boolean;
 }): string {
   const { target, round, reviewTaskId } = input;
   const dir = reviewRoundDir(target.id, round);
-  // 没截图不是缺证据：截图按需，看不见的改动本来就不该有图（见 verifyRules）。
-  const evidence = input.images.length
-    ? input.images.map((name) => `- [${name}](${join(dir, name)})`).join("\n")
-    : "- (本轮无截图，报告即全部证据)";
   const coverageGuard = repairCoverageGuard(input.coverage);
   return `【自动验证未通过 · 第 ${round} 轮】\n` +
     (reviewTaskId
@@ -160,7 +158,7 @@ export function repairPrompt(input: {
       : `第 ${round} 轮验证结论是 verify_failed。`) +
     `请先完整读取 [report.md](${join(dir, "report.md")})，再按报告修复，不要扩大原任务边界。\n\n` +
     (coverageGuard ? `${coverageGuard}\n\n` : "") +
-    `证据目录：${dir}\n${evidence}\n\n` +
+    `证据目录：${dir}\n\n` +
     `修完必须调用 complete_task(taskId="${target.id}") 确认完成；` +
     (input.autoNext ? "确认后 harness 会自动再验一轮。" : "本轮不自动续验，确认后可由用户手动再验一轮。");
 }

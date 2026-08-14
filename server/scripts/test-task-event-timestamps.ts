@@ -24,7 +24,6 @@ try {
     body: "",
     mode: "single",
     status: "backlog",
-    priority: "none",
     labels: "[]",
     dependsOn: "[]",
     resumeDependsOn: "[]",
