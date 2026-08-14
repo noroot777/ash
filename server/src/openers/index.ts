@@ -3,6 +3,7 @@ import { dirname, extname } from "node:path";
 import { promisify } from "node:util";
 import { linuxOpenCommand, linuxRevealCommand, probeLinuxOpeners } from "./linux.js";
 import { macOpenCommand, macRevealCommand, probeMacOpeners } from "./macos.js";
+import { probeWindowsOpeners, windowsOpenCommand } from "./windows.js";
 import type { OpenerProbe } from "./types.js";
 
 export type { AppOpener, OpenerProbe } from "./types.js";
@@ -20,9 +21,10 @@ export async function probeOpeners(absPath: string, force = false): Promise<Open
   const ext = extname(absPath).replace(/^\./, "").toLowerCase();
   if (process.platform === "darwin") return probeMacOpeners(absPath, ext, force);
   if (process.platform === "linux") return probeLinuxOpeners(absPath);
+  if (process.platform === "win32") return probeWindowsOpeners(ext, force);
   return {
     platform: process.platform,
-    canReveal: process.platform === "win32",
+    canReveal: false,
     apps: [],
     note: "这个平台还没做应用探测，只能用系统默认方式打开",
   };
@@ -67,7 +69,7 @@ export async function openWithApp(absPath: string, appId: string | null): Promis
   if (process.platform === "darwin") return run(macOpenCommand(absPath, appId));
   if (process.platform === "linux") return run(linuxOpenCommand(absPath, appId));
   if (process.platform === "win32") {
-    return run({ file: "cmd", args: ["/c", "start", "", absPath], fallback: null });
+    return run(await windowsOpenCommand(absPath, extname(absPath).replace(/^\./, "").toLowerCase(), appId));
   }
   throw new Error(`${process.platform} 上没有可用的打开方式`);
 }

@@ -97,8 +97,15 @@ export type ProcessRow = {
 // Win32_Process 的 CreationDate 在 CIM 下已是 DateTime,在旧 WMI 下是 DMTF 字符串
 // (20260814123045.123456+480),两种都归一成 ISO;命令行里的换行/制表一律压成空格,
 // 否则会把「一行一个进程」的约定撕开。
+//
+// 两条容易踩空的:
+//  · 输出一律走 [Console]::Out.WriteLine —— 直接把字符串丢进管道的话,Windows
+//    PowerShell 5.1 的格式化器会按控制台宽度**硬折行**,而 agent 的命令行动辄
+//    两三百字符,折了就再也拼不回去(症状是 ppid 那一列突然变成路径片段)。
+//  · OutputEncoding 钉成 UTF-8 —— 默认是 OEM 代码页,中文路径过来就是乱码。
 const PS_PROCESS_SCRIPT = `
 $ErrorActionPreference = 'SilentlyContinue'
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 function ConvStart($v) {
   if ($null -eq $v) { return '' }
   if ($v -is [datetime]) { return $v.ToUniversalTime().ToString('o') }
@@ -110,7 +117,7 @@ foreach ($p in $procs) {
   $cmd = [string]$p.CommandLine
   if (-not $cmd) { $cmd = [string]$p.Name }
   $cmd = $cmd -replace '[\\r\\n\\t]', ' '
-  "$($p.ProcessId)\`t$($p.ParentProcessId)\`t$(ConvStart $p.CreationDate)\`t$cmd"
+  [Console]::Out.WriteLine("$($p.ProcessId)\`t$($p.ParentProcessId)\`t$(ConvStart $p.CreationDate)\`t$cmd")
 }
 `;
 

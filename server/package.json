@@ -66,6 +66,7 @@
     "test:skills": "tsx scripts/test-skills.ts",
     "test:file-browser": "tsx scripts/test-file-browser.ts",
     "test:local-open": "tsx scripts/test-local-open.ts",
+    "test:openers-windows": "tsx scripts/test-openers-windows.ts",
     "test:mcp-handoff": "tsx scripts/test-mcp-handoff.ts",
     "test:duet-gate-attachments": "tsx scripts/test-duet-gate-attachments.ts",
     "test:terminal": "tsx scripts/test-terminal.ts",

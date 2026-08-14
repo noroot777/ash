@@ -2,7 +2,7 @@
 export interface AppOpener {
   id: string;
   name: string;
-  /** 次要信息：macOS 给 bundle id，Linux 给 .desktop 文件名。 */
+  /** 次要信息：macOS 给 bundle id，Linux 给 .desktop 文件名，Windows 给 ProgID。 */
   detail: string;
   /** 凭什么算它能开：扩展名 > 文件类型 > 它什么都收。 */
   match: "extension" | "type" | "generic";
