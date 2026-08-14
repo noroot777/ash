@@ -107,6 +107,15 @@ assert.ok(why(task(), sess({ id: "a", stoppedAs: "paused" })), "手动暂停的�
 assert.ok(why(task(), sess({ id: "a", sideTurn: true })), "旁路回合有自己的入口");
 assert.ok(why(task(), sess({ id: "a" }), { groupPaused: true }), "分组暂停时不许从这里插队开跑");
 assert.ok(why(task(), sess({ id: "a" }), { blockedBy: ["前面那个"] }), "队列前面没跑完就不许抢跑");
+// profile 可编辑可删:改一次 target 就换了台机器,改一次供应商就换了套账号。「原样再跑一遍」
+// 的前提是那套执行环境还在,对不上就得让用户明确决定,不能拿新环境冒充原样重放。
+assert.ok(why(task(), sess({ id: "a" }), { profileDrift: "missing" }), "执行器被删了,重跑不了");
+assert.ok(why(task(), sess({ id: "a" }), { profileDrift: "changed" }), "执行器配置被改过,不是原样重放");
+assert.equal(why(task(), sess({ id: "a" }), { profileDrift: null }), null, "环境没变(或老会话行无从核对)→ 放行");
+assert.ok(
+  why(task({ workflowMode: "free" }), sess({ id: "a", role: "reviewer" }), { reviewBlocker: null, profileDrift: "changed" }),
+  "审查档同吃这一条:它重跑引的是同一条可变 profile",
+);
 
 // ── 审查会话崩了：走审查那条路重跑，而不是拒绝，也不是拿实现 agent 顶上 ──────
 const reviewer = sess({ id: "a", role: "reviewer" });

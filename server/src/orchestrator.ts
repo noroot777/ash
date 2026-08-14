@@ -25,6 +25,7 @@ import { reviewProtocolFor, reviewReminderFor, verifyReminderFor } from "./revie
 import { peerNoticeFor } from "./peer-context.js";
 import { reconcileTurnBaseline, recordTurnBaseline } from "./turn-baseline.js";
 import { recordTurnStart } from "./turn-output.js";
+import { abortIfFrozen } from "./turn-freeze.js";
 import { freeReviewReminder } from "./free-workflow.js";
 import { nativeCliCommand, withSkillInvocation } from "./skills.js";
 import { initialTaskObjective, invitedTaskBrief } from "./invited-task-brief.js";
@@ -102,7 +103,7 @@ export async function runTask(taskId: string, opts: { turnHeld?: boolean } = {})
     // 也要记 —— 漏交卷最常发生在这一路,而 turn-baseline 只给真人续聊拍照。
     await recordTurnStart(taskId, ws.path);
     const agentType = (task.agentType as AgentType) ?? "claude";
-    const { executor: ex, profileId } = await resolveExecutorWithProfile({
+    const { executor: ex, profileId, profileFingerprint } = await resolveExecutorWithProfile({
       executorId: task.executorId,
       type: agentType,
       model: task.model,
@@ -131,6 +132,10 @@ export async function runTask(taskId: string, opts: { turnHeld?: boolean } = {})
       (autoTitle ? TITLE_HINT + objective : objective),
       "full",
     );
+    // 起跑前的最后一道闸（说明见 turn-freeze.ts）：这一句之后到 spawn 之间没有 await，
+    // 所以「已 claim、还没 spawn」的窗口里收到的暂停请求一定在这里被消费。fresh run 的
+    // 冻结事实由调度侧（scheduler/queue）负责，这里只消费内存标记。
+    await abortIfFrozen(taskId);
     const turnStart = now();
     const sessId = id();
     const runDir = join(RUNS_DIR, taskId);
@@ -153,6 +158,8 @@ export async function runTask(taskId: string, opts: { turnHeld?: boolean } = {})
       executorId: profileId,
       turnModel: ex.model ?? null,
       turnReasoningEffort: ex.reasoningEffort ?? null,
+      // 那一刻这套执行环境的指纹：重跑前用它认出「profile 后来被改过/删了」。
+      executorFingerprint: profileFingerprint,
       // fresh run 从来不是旁路回合，也不可能带着上一轮的停止事实。
       sideTurn: false,
       stoppedAs: null as string | null,
@@ -250,6 +257,15 @@ export async function continueTask(
      * 的唯一解——只读预检查后的任何 await 间隙都可能被另一次启动抢先。
      */
     turnHeld?: boolean;
+    /**
+     * 起跑前再查一遍冻结事实（分组暂停 / 任务被删或归档），命中就在 spawn 之前撤回。
+     *
+     * 给「预检查离 spawn 很远」的启动路径开：重试按钮、自由审查重跑 —— 它们从只读预检查
+     * 到真正拉起 CLI 之间隔着权威重读、执行器解析、工作目录准备、上一条输入的读取，中途
+     * 还会把回合锁交接一次。普通续聊不开：在一个排队中/分组暂停的任务上发消息本来就允许，
+     * 那不是被冻结的启动（说明见 turn-freeze.ts）。
+     */
+    freezeGuard?: boolean;
     /**
      * 「用户这句话已经**落盘**了」的回调 —— 在原话作为一个真人回合写进会话之后立刻调，
      * 不等这一轮跑完（`continueTask` 要等整轮结束才 resolve，那时早过了）。
@@ -358,7 +374,7 @@ export async function continueTask(
       .set({ followUpFrom, nativeTurn: !!nativeCommand, completeConfirmedAt: null, updatedAt: now() })
       .where(eq(tasks.id, taskId));
 
-    const { executor: ex, profileId } = await resolveExecutorWithProfile({
+    const { executor: ex, profileId, profileFingerprint } = await resolveExecutorWithProfile({
       executorId: summoned ? opts.executorId ?? null : task.executorId,
       type: agent,
       model: summoned ? opts.model ?? null : task.model,
@@ -472,6 +488,11 @@ export async function continueTask(
           (reviewReminder ? `\n${reviewReminder}` : ""),
           resuming ? "reminder" : "full",
         );
+    // 起跑前的最后一道闸（说明见 turn-freeze.ts）：这一句之后到 `trackRun` 之间不再有
+    // await，暂停请求要么在这里被消费、要么之后才到——那时已有 handle 可杀。
+    // freezeGuard 的启动路径（重试按钮、自由审查重跑）还会再查一遍库：它们的预检查离
+    // spawn 隔着好几个 await，且中途会经过一次「先释放锁、排队再起」的交接。
+    await abortIfFrozen(taskId, { checkFacts: !!opts.freezeGuard, restorable: !!followUpFrom });
     const turnStart = now();
     const sessId = resuming ? prev!.id : id();
     const runDir = join(RUNS_DIR, taskId);
@@ -504,9 +525,10 @@ export async function continueTask(
           endedAt: null,
           commandLine: handle.commandLine,
           executor: ex.label,
-          // 回合保真三件套整组刷新（说明见 db/schema.ts）：profile / 模型 / 思考强度
-          // 都可能在两轮之间被改，留着上一轮的值就会让重试按着别人的配置跑。
+          // 回合保真四件套整组刷新（说明见 db/schema.ts）：profile / 环境指纹 / 模型 /
+          // 思考强度都可能在两轮之间被改，留着上一轮的值就会让重试按着别人的配置跑。
           executorId: profileId,
+          executorFingerprint: profileFingerprint,
           turnModel: ex.model ?? null,
           turnReasoningEffort: ex.reasoningEffort ?? null,
           sideTurn,
@@ -537,6 +559,7 @@ export async function continueTask(
         agentType: agent,
         executor: ex.label,
         executorId: profileId,
+        executorFingerprint: profileFingerprint,
         turnModel: ex.model ?? null,
         turnReasoningEffort: ex.reasoningEffort ?? null,
         sideTurn,

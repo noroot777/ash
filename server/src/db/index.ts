@@ -298,6 +298,9 @@ export async function ensureSchema() {
     "ALTER TABLE sessions ADD COLUMN turn_reasoning_effort TEXT",
     "ALTER TABLE sessions ADD COLUMN stopped_as TEXT",
     "ALTER TABLE sessions ADD COLUMN side_turn INTEGER NOT NULL DEFAULT 0",
+    // profile 是可编辑可删除的,光记主键说不清「当时那套执行环境」。这一列存指纹,
+    // 重跑前对不上就 409(说明见 db/schema.ts 的 sessions.executor_fingerprint)。
+    "ALTER TABLE sessions ADD COLUMN executor_fingerprint TEXT",
   ]) {
     try {
       await client.execute(sql);

@@ -84,6 +84,10 @@ export async function launchReviewRound(
     sessionRole: "reviewer",
     freshSession: !opts.retry && run.currentRound === 1,
     resumeSessionId: opts.resumeSessionId,
+    // 重跑这一路的预检查（freeReviewRetryBlocker）离真正拉起 CLI 很远，中间还要经过
+    // 「先释放重试路由那把锁、排队再起」的交接——那段时间里分组可能已经被暂停。起跑前
+    // 再核一遍冻结事实（turn-freeze.ts）；命中就撤回，这条链留在 failed，仍可再重试。
+    freezeGuard: !!opts.retry,
   }, (error) => failReviewStart(run, error));
 }
 

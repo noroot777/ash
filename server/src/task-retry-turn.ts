@@ -18,7 +18,9 @@
 // 「同一条会话」是这条路的**硬要求**，不是锦上添花：`resumeOrRunTask` 按任务自身的
 // agentType 挑实现会话，@召唤别的执行器续聊、就地验证的验证者，跑的都不是那一条。所以
 // 重投一律按崩掉那条会话自己记下的 profile（`sessions.executor_id` + 那一轮生效的
-// 模型/思考强度）路由，并用 `resumeSessionId` 钉死续哪一行。
+// 模型/思考强度）路由，并用 `resumeSessionId` 钉死续哪一行。profile 是可编辑可删的，所以
+// 还要核一遍那条会话记下的**环境指纹**（`sessions.executor_fingerprint`）：对不上就 409，
+// 不拿一套新环境冒充「原样重放」。
 //
 // 三个「看起来像崩了、其实不是」的形状必须挡在门外，判据都在库里，不靠猜：
 // ① 手动停止/暂停 → CLI 吃 SIGTERM 后按 signal 写非零退出码，跟崩溃一模一样，认
@@ -35,6 +37,7 @@ import type { Hono } from "hono";
 import { isAcceptingTask } from "./acceptance-lock.js";
 import { db } from "./db/index.js";
 import { groups, sessions, tasks } from "./db/schema.js";
+import { profileDrift } from "./executors/index.js";
 import { freeReviewRetryBlocker, latestRun, reopenFailedFreeReview, roundOf } from "./free-review-round.js";
 import { continueTask } from "./orchestrator.js";
 import { queueBlockers } from "./queues.js";
@@ -111,6 +114,11 @@ export type RetryTurnFacts = {
   blockedBy?: string[];
   /** 所在分组被暂停（`scheduler.ts` 同样拒绝拉起暂停组的成员）。 */
   groupPaused?: boolean;
+  /**
+   * 上一回合那条 profile 后来被删了（missing）／被改过（changed）。
+   * 判据是会话行里存的**环境指纹**，不是主键（见 `executors/index.ts` 的 profileDrift）。
+   */
+  profileDrift?: "missing" | "changed" | null;
   /** 审查档专用：这条审查链能不能重跑（`freeReviewRetryBlocker` 的结论）。 */
   reviewBlocker?: string | null;
 };
@@ -171,6 +179,17 @@ export function retryTurnRejection(facts: RetryTurnFacts): { error: string; deta
   if (facts.blockedBy?.length) {
     return { error: "队列前面还有未完成的任务，先把它们处理完或把本任务移出队列", detail: { blockedBy: facts.blockedBy } };
   }
+  // 「原样再跑一遍上一回合」的**保真前提**：那条 profile 还是当时那套执行环境。profile 是
+  // 可编辑可删的（改 target 就换了台机器、改供应商就换了套账号），只存主键说不清这件事 ——
+  // 于是「重投同一句话」会拿着旧 CLI 会话 id 去连一台从没跑过它的机器（第 1 轮审查
+  // finding 2）。变了就 409，由用户明确决定要不要按新配置另起一回合（对话框 @ 它重发）。
+  // 审查档同吃这一条：它重跑用的 `free_review_runs.executor_id` 引的是同一条可变 profile。
+  if (facts.profileDrift === "missing") {
+    return { error: "上一回合用的执行器已被删除，重跑不再是原样重放；请在对话框里 @ 一个执行器重新发一遍", detail: { profileDrift: "missing" } };
+  }
+  if (facts.profileDrift === "changed") {
+    return { error: "上一回合用的执行器配置已被改过，重跑不再是原样重放；请在对话框里 @ 它重新发一遍", detail: { profileDrift: "changed" } };
+  }
   if (retryTurnKindOf(latest) === "review") {
     if (task.workflowMode !== "free") {
       return { error: "上一回合是审查旁路会话，重跑它请走审查那条路", detail: { role: latest.role } };
@@ -222,6 +241,8 @@ async function readFacts(
       wantedSessionId,
       blockedBy: await queueBlockers(taskId),
       groupPaused: !!group?.paused,
+      // 老会话行没记指纹（null）时返回 null = 无从核对，按老行为放行。
+      profileDrift: latest ? await profileDrift(latest.executorId, latest.executorFingerprint) : null,
       reviewBlocker,
     },
   };
@@ -326,6 +347,10 @@ export function mountTaskRetryTurnRoutes(api: Hono): void {
             byBackend: !!seg.bySystem,
             resumeSessionId: latest.id,
             turnHeld: true,
+            // 判据是在这里读的，CLI 却要到几个 await 之后才真正起来（执行器解析、worktree
+            // 准备）：起跑前再核一遍冻结事实，不然「暂停分组已经 200 返回」和「重试把 CLI
+            // 拉起来」会同时成立（第 1 轮审查 finding 1）。
+            freezeGuard: true,
           }), "重跑上一回合");
           return c.json({ started: true, mode: "resend" }, 202);
         }
@@ -335,7 +360,7 @@ export function mountTaskRetryTurnRoutes(api: Hono): void {
       // agentType 挑会话，跟界面头部那颗「运行」同一条路）。
       handoff(
         latest.executorId
-          ? continueTask(taskId, RESUME_PROMPT, { ...route, system: "retry", resumeSessionId: latest.id, turnHeld: true })
+          ? continueTask(taskId, RESUME_PROMPT, { ...route, system: "retry", resumeSessionId: latest.id, turnHeld: true, freezeGuard: true })
           : resumeOrRunTask(taskId, { reason: "retry", turnHeld: true }),
         "重跑上一回合",
       );

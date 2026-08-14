@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { eq } from "drizzle-orm";
 import type { AgentType, ExecTarget } from "@harness/shared";
 import { isReasoningEffortSupported, reasoningEffortsFor } from "@harness/shared/cli-presets";
@@ -55,14 +56,55 @@ async function pickProfile(opts: ExecutorResolveOpts): Promise<{ profile: AgentR
   return { profile: await defaultProfile(type), type };
 }
 
-// 同 resolveExecutorFor，另外把**真正选中的 profile 主键**一起还回来。
+// profile 主键只说得清「选中了谁」，说不清「它当时长什么样」——一条 profile 是可编辑、
+// 可删除的：改一次 target 就换了台机器，改一次 extraArgs / 供应商就换了套账号。所以
+// 「把上一回合原样再跑一遍」还要一个**当时那套执行环境的指纹**，两轮之间被改过就认得出来
+// （第 1 轮审查 finding 2：只存 id 时，重试拿旧 CLI session id 去连新 SSH 主机）。
+//
+// 进指纹的是**决定运行环境**的字段，不含展示名 —— 改个名字不该挡住重试。供应商只取
+// 「上游是谁、协议怎么说」，不取 key 本身：轮换密钥是用户明确要生效的事，不是换环境。
+async function fingerprintOf(profile: AgentRow): Promise<string> {
+  const provider = profile.providerId
+    ? (await db.select().from(llmProviders).where(eq(llmProviders.id, profile.providerId))).at(0)
+    : undefined;
+  const material = JSON.stringify([
+    profile.type,
+    profile.target,
+    profile.extraArgs,
+    profile.model ?? null,
+    profile.reasoningEffort ?? null,
+    profile.speed ?? null,
+    profile.configOverrides ?? null,
+    profile.providerId ?? null,
+    provider ? [provider.baseUrl, provider.protocol, provider.protocolConversionEnabled, !!provider.apiKey] : null,
+  ]);
+  return createHash("sha256").update(material).digest("hex").slice(0, 16);
+}
+
+/** 上一回合记下的 profile 指纹跟现在还对不对得上。null = 没变（或无从核对）。 */
+export async function profileDrift(
+  executorId: string | null | undefined,
+  fingerprint: string | null | undefined,
+): Promise<"missing" | "changed" | null> {
+  // 老会话行没记指纹：无从核对，按老行为放行（判据同 executor_id 为 null 时的降级）。
+  if (!executorId || !fingerprint) return null;
+  const [row] = await db.select().from(agents).where(eq(agents.id, executorId));
+  if (!row) return "missing";
+  return (await fingerprintOf(row)) === fingerprint ? null : "changed";
+}
+
+// 同 resolveExecutorFor，另外把**真正选中的 profile 主键**与那一刻的环境指纹一起还回来。
 // 记账用：`agents.name` 非唯一、可随时改名，拿显示名反查 profile 会选中同名的另一位；
-// 「把上一回合原样再跑一遍」只能认 id（见 sessions.executor_id）。
+// 「把上一回合原样再跑一遍」只能认 id + 指纹（见 sessions.executor_id / executor_fingerprint）。
 export async function resolveExecutorWithProfile(
   opts: ExecutorResolveOpts,
-): Promise<{ executor: AgentExecutor; profileId: string | null }> {
+): Promise<{ executor: AgentExecutor; profileId: string | null; profileFingerprint: string | null }> {
   const { profile, type } = await pickProfile(opts);
-  return { executor: await build(profile, type, opts), profileId: profile?.id ?? null };
+  return {
+    executor: await build(profile, type, opts),
+    profileId: profile?.id ?? null,
+    profileFingerprint: profile ? await fingerprintOf(profile) : null,
+  };
 }
 
 // Task/team execution resolver. executorId is the precise user-selected profile;

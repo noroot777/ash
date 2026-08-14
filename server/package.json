@@ -48,6 +48,7 @@
     "test:session-trace": "tsx scripts/test-session-trace.ts",
     "test:conversation-turn": "tsx scripts/test-conversation-turn.ts",
     "test:retry-turn": "tsx scripts/test-retry-turn.ts",
+    "test:turn-freeze": "tsx scripts/test-turn-freeze.ts",
     "test:agent-attachments": "tsx scripts/test-agent-attachments.ts",
     "test:usage": "tsx scripts/test-usage-accounting.ts",
     "test:peer-context": "tsx scripts/test-peer-context.ts",

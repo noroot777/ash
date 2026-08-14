@@ -12,8 +12,8 @@ import type { ConversationItem } from "./conversationModel.ts";
 // 只挂在**最后一条 agent 气泡**上：会话尾巴才是「上一回合」，中间那些崩过的回合后面早
 // 已经跑过别的了，给它们按钮等于骗人。
 //
-// 服务端另有两道闸这里判不了（分组暂停、同队列前面还没跑完）：那两样前端手上没有权威
-// 数据，按钮照出，点下去由 409 如实说明原因。
+// 服务端另有三道闸这里判不了（分组暂停、同队列前面还没跑完、上一回合那条执行器 profile
+// 后来被改过或删了）：那三样前端手上没有权威数据，按钮照出，点下去由 409 如实说明原因。
 
 export type TurnRetryKind = "turn" | "review";
 export type TurnRetryTarget = { sessionId: string; kind: TurnRetryKind; exitStatus: number };
