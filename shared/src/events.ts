@@ -78,6 +78,11 @@ export type ServerEvent =
       agentType?: AgentType; // which agent produced it (single tasks can host several via @-mention)
       model?: string | null;
       reasoningEffort?: string | null;
+      // 这一回合是「就地验证」的第几轮。就地验证是搭在被验任务自己身上的旁路回合，
+      // 常常还复用同一条会话 —— 少了这个数，会话里审查者的发言跟它上面那条「我在做
+      // 需求」的发言长得一模一样（同执行器自审时连名字都一样）。跟 model/reasoningEffort
+      // 一样按回合随流广播，落盘那份在 trace 的 run 事件里，两条路读出来必须一致。
+      verifyRound?: number | null;
       event: AgentEvent;
     }
   // A user-channel turn after it has been persisted to the session transcript.
