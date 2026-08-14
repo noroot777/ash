@@ -1,50 +1,22 @@
 import { spawn, execFile } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
-import { homedir, tmpdir } from "node:os";
-import { statSync, accessSync, constants, openSync, closeSync, unlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { statSync, openSync, closeSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { EventEmitter } from "node:events";
 import { Readable } from "node:stream";
 import type { ExecTarget } from "@harness/shared";
+import { IS_WINDOWS, isPidAlive, killOne, killTree, listProcesses } from "../platform.js";
+import { augmentedEnv, resolveBin, resolveLaunch } from "./bin-resolve.js";
+
+// PATH 补全与命令名解析住在 bin-resolve.ts(Windows 的 PATHEXT / `.cmd` 垫片够写
+// 一整个文件)。这里转出去,是因为已有近二十处从 spawn.ts import 它们。
+export { augmentedEnv, resolveBin, resolveLaunch };
+export type { LaunchPlan } from "./bin-resolve.js";
 
 // shell-quote a single argument for a remote (ssh) command line
 export const shq = (s: string) => (/^[\w./:@=-]+$/.test(s) ? s : `'${s.replace(/'/g, "'\\''")}'`);
 
-// When the server is launched from a GUI / preview (not a login shell), PATH may
-// miss the dirs where CLIs live (Homebrew etc.), causing `spawn claude ENOENT`.
-// Augment PATH with the common locations so local executors resolve.
-const EXTRA_PATHS = [
-  "/opt/homebrew/bin",
-  "/opt/homebrew/sbin",
-  "/usr/local/bin",
-  `${homedir()}/.local/bin`,
-  `${homedir()}/.bun/bin`,
-  `${homedir()}/.deno/bin`,
-];
-export function augmentedEnv() {
-  const cur = process.env.PATH ?? "";
-  const have = new Set(cur.split(":"));
-  const extra = EXTRA_PATHS.filter((p) => !have.has(p));
-  return { ...process.env, PATH: extra.length ? `${cur}:${extra.join(":")}` : cur };
-}
-
-// Resolve a bare command name to an absolute executable path by scanning PATH +
-// EXTRA_PATHS. Returns null if it can't be found anywhere. Spawning the absolute
-// path removes all dependence on the child's inherited PATH — so a remaining
-// ENOENT can only mean a bad cwd, never a missing binary.
-// 导出是为了让「候选 bin 探测」(bin-probe.ts,检测与执行共用的单点)跟真正
-// spawn 时的查找口径**完全一致** —— 检测说可用、执行却 ENOENT,根因就是两套查找。
-export function resolveBin(bin: string): string | null {
-  if (bin.includes("/")) {
-    try { accessSync(bin, constants.X_OK); return bin; } catch { return null; }
-  }
-  const dirs = [...(process.env.PATH ?? "").split(":"), ...EXTRA_PATHS].filter(Boolean);
-  for (const d of dirs) {
-    const p = join(d, bin);
-    try { accessSync(p, constants.X_OK); return p; } catch { /* keep looking */ }
-  }
-  return null;
-}
 
 const isDir = (p: string) => {
   try { return statSync(p).isDirectory(); } catch { return false; }
@@ -112,6 +84,15 @@ export function spawnErrorMessage(bin: string, err: NodeJS.ErrnoException): stri
 // 时 `lsof -t <file>` 反查持有者,再从每个持有者向下走 ppid 树补上被 python
 // close_fds 掐断继承的孙进程。局限:ssh 目标不适用(远端进程);双 fork 且中间
 // 层已死、又恰好隔着一层 close_fds 的深孤儿仍可能漏(实践中极少)。
+//
+// **Windows 上这一层是残的,而且必须承认它是残的。** 两个缺口都堵不上:
+//  · 继承 fd 反查没有零依赖等价物(handle.exe 要单独装、要管理员),所以
+//    Windows 上根本不开追踪文件,只剩 ppid 树遍历这一半。
+//  · Windows 不做 reparent,孤儿的 ParentProcessId 保留着已死父进程的号 ——
+//    ppid 树从活着的根走不到它们。也就是说 codex 用 `start /b` 之类甩出去的
+//    孙进程,停止时**杀不到**。
+// 结论:Windows 上 stop 覆盖「CLI 及其还连着的后代」,不覆盖已经甩脱的孤儿。
+// 这是能力缺口,不是 bug —— 别在别处写「Windows 上停止等价」。
 const trackFiles = new WeakMap<ChildProcess, string>();
 
 async function killEscapees(child: ChildProcess, sig: NodeJS.Signals): Promise<void> {
@@ -130,16 +111,11 @@ async function killEscapees(child: ChildProcess, sig: NodeJS.Signals): Promise<v
   const roots = [...targets];
   if (child.pid) roots.push(child.pid);
   if (roots.length) {
-    const psOut = await new Promise<string>((res) =>
-      execFile("ps", ["-eo", "pid=,ppid="], (_e, so) => res(so || "")),
-    );
     const kids = new Map<number, number[]>();
-    for (const line of psOut.split("\n")) {
-      const [pidS, ppidS] = line.trim().split(/\s+/);
-      const pid = Number(pidS), ppid = Number(ppidS);
-      if (!pid || !ppid) continue;
-      if (!kids.has(ppid)) kids.set(ppid, []);
-      kids.get(ppid)!.push(pid);
+    for (const row of await listProcesses()) {
+      if (!row.ppid) continue;
+      if (!kids.has(row.ppid)) kids.set(row.ppid, []);
+      kids.get(row.ppid)!.push(row.pid);
     }
     const stack = [...roots];
     while (stack.length) {
@@ -156,11 +132,7 @@ async function killEscapees(child: ChildProcess, sig: NodeJS.Signals): Promise<v
   if (child.pid) targets.delete(child.pid); // CLI 本体走进程组信号,不重复补刀
   for (const pid of targets) {
     if (pid <= 1) continue;
-    try {
-      process.kill(pid, sig);
-    } catch {
-      /* already gone */
-    }
+    killOne(pid, sig);
   }
 }
 
@@ -199,7 +171,7 @@ export function spawnAgent(
     : assigns.map((pair) => `${pair} `).join("");
   if (target.kind === "ssh") {
     const remote = `cd ${shq(cwd)} && ${envPrefix}${bin} ${args.map(shq).join(" ")}`;
-    const child = spawn("ssh", [target.host, remote], { stdio: ["pipe", "pipe", "pipe"], env: augmentedEnv(), detached: true });
+    const child = spawn("ssh", [target.host, remote], { stdio: ["pipe", "pipe", "pipe"], env: augmentedEnv(), detached: true, windowsHide: true });
     child.stdin?.write(prompt);
     if (!opts?.keepStdin) child.stdin?.end();
     return child;
@@ -207,11 +179,24 @@ export function spawnAgent(
   // Local pre-flight: distinguish "cwd missing" from "binary missing" so the
   // error never lies (both raise ENOENT from spawn, indistinguishable by code).
   if (!isDir(cwd)) return failedChild(`工作目录不存在：${cwd}`);
-  const abs = resolveBin(bin);
-  if (!abs) return failedChild(`找不到 ${bin} 命令(不在 PATH，也不在常见目录)`);
+  let plan;
+  try {
+    plan = resolveLaunch(bin, args);
+  } catch (e) {
+    // Windows 上必须过 cmd.exe、而某个参数带换行 —— 转义不了,如实报出来。
+    return failedChild(e instanceof Error ? e.message : String(e));
+  }
+  if (!plan) return failedChild(`找不到 ${bin} 命令(不在 PATH，也不在常见目录)`);
   const track = openTrackFd();
   const stdio: Array<"pipe" | number> = track.fd === null ? ["pipe", "pipe", "pipe"] : ["pipe", "pipe", "pipe", track.fd];
-  const child = spawn(abs, args, { cwd, stdio, env: { ...augmentedEnv(), ...extraEnv }, detached: true });
+  const child = spawn(plan.file, plan.args, {
+    cwd,
+    stdio,
+    env: { ...augmentedEnv(), ...extraEnv },
+    detached: true,
+    windowsHide: true,
+    windowsVerbatimArguments: plan.windowsVerbatimArguments,
+  });
   registerTrackFd(child, track);
   child.stdin?.write(prompt);
   if (!opts?.keepStdin) child.stdin?.end();
@@ -223,7 +208,10 @@ export function spawnAgent(
 // best-effort:开不出来就照旧 spawn,只是丢掉逃逸追踪能力。
 // 抽成一对函数是为了让 detached.ts 那条路(输出走文件)复用同一套逃逸追踪,
 // 而不是各写一份 —— 少一份就意味着那条路上的孤儿没人管。
+// Windows 上直接返回空:反查手段不存在(见 killEscapees 顶部),开了也没人用,
+// 还会平白留下一堆临时文件。
 export function openTrackFd(): { fd: number | null; path: string | null } {
+  if (IS_WINDOWS) return { fd: null, path: null };
   try {
     const path = join(tmpdir(), `harness-track-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
     return { fd: openSync(path, "w"), path };
@@ -282,16 +270,18 @@ export function redactSecrets(s: string): string {
 // 三层击杀:①信号发给整个进程组(-pid,spawn 时 detached 使 child 为组长);
 // ②killEscapees 按继承 fd 反查逃出进程组的后代(nohup 孤儿等)一并处理;
 // ③2s 后对残存者(含期间新逃逸的)统一补 SIGKILL。
+//
+// **Windows 上第①层换成 `taskkill /T /F`,而且没有「优雅」这一档。** Windows 只有
+// GUI 窗口收得到 WM_CLOSE,控制台程序不吃;Ctrl+C 只能发给同一个控制台组,而 agent
+// 是 DETACHED_PROCESS 起的(没有控制台)。所以第一发就是强杀,CLI 没有落盘/收尾的
+// 机会 —— 这是平台限制,如实记在这里。第②层退化成纯 ppid 树遍历(见 killEscapees),
+// 第③层仍在(确认死透)。
 export function killChild(child: ChildProcess): void {
   if (typeof child.kill !== "function") return;
   const signal = (sig: NodeJS.Signals) => {
     if (child.pid) {
-      try {
-        process.kill(-child.pid, sig);
-        return;
-      } catch {
-        /* 进程组已不在 → 退回单进程 */
-      }
+      killTree(child.pid, sig);
+      return;
     }
     try {
       child.kill(sig);
@@ -317,26 +307,9 @@ export function killChild(child: ChildProcess): void {
 // 如实记在这里,别让以后的人以为这条路和 killChild 等价。
 export function killByPid(pid: number): void {
   if (!Number.isInteger(pid) || pid <= 1) return;
-  const signal = (sig: NodeJS.Signals) => {
-    try {
-      process.kill(-pid, sig); // 组杀:spawn 时 detached,agent 就是组长
-    } catch {
-      try {
-        process.kill(pid, sig);
-      } catch {
-        /* already gone */
-      }
-    }
-  };
-  signal("SIGTERM");
+  killTree(pid, "SIGTERM");
   const t = setTimeout(() => {
-    let alive = true;
-    try {
-      process.kill(pid, 0);
-    } catch {
-      alive = false;
-    }
-    if (alive) signal("SIGKILL");
+    if (isPidAlive(pid)) killTree(pid, "SIGKILL");
   }, 2000);
   (t as { unref?: () => void }).unref?.();
 }

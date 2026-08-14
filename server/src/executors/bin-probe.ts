@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type { ExecTarget } from "@harness/shared";
-import { resolveBin } from "./spawn.js";
+import { resolveBin, resolveLaunch } from "./spawn.js";
 import type { CliSpec } from "./catalog/types.js";
 
 const exec = promisify(execFile);
@@ -29,21 +29,35 @@ export async function probeBins(bins: string[], fallbackVersionMatch?: string): 
   for (const [i, candidate] of bins.entries()) {
     const found = resolveBin(candidate);
     if (!found) continue;
-    const ver = await versionOf(found);
+    const ver = await versionOf(candidate);
     if (i > 0 && want && !(ver ?? "").toLowerCase().includes(want)) continue;
     return { bin: candidate, path: found, version: ver };
   }
   return null;
 }
 
-// 版本自证跑的是 resolveBin **已经解析出来的绝对路径**,不是裸命令名。
-// 裸命令名只走子进程继承的 process.env.PATH,而 resolveBin 额外扫了 EXTRA_PATHS
+// 版本自证跑的是 resolveLaunch **已经解析出来的绝对路径**,不是裸命令名。
+// 裸命令名只走子进程继承的 process.env.PATH,而解析额外扫了补充目录
 // (/opt/homebrew/bin、~/.local/bin、~/.bun/bin…)—— 从 GUI/预览启动 server 时
 // PATH 常常缺这些目录,于是「找得到文件、却证不了身份」,cursor 的官方备用名 agent
-// 会被误判为不可用。用绝对路径执行,检测与 spawnAgent 就是同一条解析口径。
-async function versionOf(absPath: string): Promise<string | null> {
+// 会被误判为不可用。用同一条解析口径,检测与 spawnAgent 就不会打架。
+// 走 resolveLaunch 而不是 resolveBin,是因为 Windows 上命中的多半是 `.cmd` 垫片:
+// 直接 execFile 一个批处理会被 Node 拒(CVE-2024-27980),必须由它决定是拆成
+// `node <script>` 还是过 cmd.exe。
+async function versionOf(bin: string): Promise<string | null> {
+  let plan;
   try {
-    const { stdout } = await exec(absPath, ["--version"], { timeout: 4000 });
+    plan = resolveLaunch(bin, ["--version"]);
+  } catch {
+    return null;
+  }
+  if (!plan) return null;
+  try {
+    const { stdout } = await exec(plan.file, plan.args, {
+      timeout: 4000,
+      windowsHide: true,
+      windowsVerbatimArguments: plan.windowsVerbatimArguments,
+    });
     return (stdout.split("\n")[0] || "").trim() || null;
   } catch {
     return null;
