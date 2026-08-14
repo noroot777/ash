@@ -65,12 +65,19 @@
           <span class="task-state" id="taskState"><i></i><b>已完成</b></span>
           <button type="button" class="primary-action" id="openAcceptance">
             <svg id="acceptIcon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"></circle><path d="m8.5 12 2.2 2.2 4.8-5"></path></svg>
-            <svg class="is-hidden" id="headerReviewIcon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"></circle><path d="m15.5 15.5 4 4"></path></svg>
             <span id="primaryLabel">验收</span>
           </button>
           <button type="button" class="acceptance-result-action is-hidden" id="openAcceptanceResult">验收结果</button>
           <button type="button" class="back-action is-hidden" id="backConversation">× <span>返回对话</span></button>
-          <button type="button" class="more-button" aria-label="更多">•••</button>
+          <div class="more-wrap">
+            <button type="button" class="more-button" id="moreButton" aria-label="更多" aria-expanded="false">•••</button>
+            <div class="task-menu is-hidden" id="taskMenu" role="menu">
+              <button type="button" role="menuitem">复制任务链接</button>
+              <button type="button" class="is-hidden" id="menuReviewMerged" role="menuitem"><span>⌕</span><b>审查合并结果</b></button>
+              <button type="button" role="menuitem">导出对话</button>
+              <button type="button" role="menuitem">归档任务</button>
+            </div>
+          </div>
         </header>
 
         <section class="conversation-view" id="conversationView">
@@ -112,10 +119,6 @@
             </div>
             <div class="post-accept-actions is-hidden" id="postAcceptActions">
               <span class="accepted-badge">✓ 验收完成</span>
-              <button type="button" class="review-merged-button" id="reviewMergedButton">
-                <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"></circle><path d="m15.5 15.5 4 4"></path></svg>
-                <span>审查合并结果</span>
-              </button>
             </div>
           </header>
 
@@ -127,6 +130,7 @@
                   <span>ACCEPTANCE RECEIPT</span>
                   <h2>已安全合并到 main</h2>
                   <p>验收快照已冻结。后续 main 即使继续移动，本次审查仍固定在这次真实合并结果上。</p>
+                  <button type="button" class="receipt-review-link" id="receiptReviewButton"><span>需要额外确认最终集成状态？</span><b>审查本次合并 →</b></button>
                 </div>
                 <dl>
                   <div><dt>目标分支</dt><dd>main</dd></div>
@@ -216,12 +220,14 @@
             <dl><div><dt>分支</dt><dd>main</dd></div><div><dt>before</dt><dd>5a13d70</dd></div><div><dt>after</dt><dd>8f41c2d</dd></div><div><dt>diff</dt><dd>5a13d70..8f41c2d</dd></div></dl>
           </section>
           <section class="inspector-card post-review-card is-hidden" id="postReviewCard">
-            <header><span class="post-review-icon">⌕</span><div><b>合并结果审查</b><small id="postReviewMeta">main@8f41c2d · 运行中</small></div><em id="postReviewBadge">运行中</em></header>
-            <div class="review-checklist">
+            <header><span class="post-review-icon">⌕</span><div><b>合并结果审查</b><small id="postReviewMeta">未发起 · 可选</small></div><em id="postReviewBadge">可选</em></header>
+            <p class="post-review-description" id="postReviewDescription">用于确认代码合并到 main 后的最终集成状态，不影响本次验收结果。</p>
+            <div class="review-checklist is-hidden" id="reviewChecklist">
               <p><span>✓</span>固定 acceptedMergeCommit</p>
               <p><span>✓</span>创建临时 detached worktree</p>
               <p id="finalCheck"><span>…</span>检查最终集成状态</p>
             </div>
+            <button type="button" class="inspector-review-action" id="inspectorReviewButton">开始审查</button>
           </section>
           <section class="inspector-card created-task-card is-hidden" id="createdTaskCard">
             <header><span class="created-icon">↳</span><div><b>修复任务 FIX-204</b><small>原验收结果保持不变</small></div><em>已创建</em></header>

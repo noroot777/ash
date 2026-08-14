@@ -8,15 +8,17 @@ const el = {
   openAcceptanceResult: $("#openAcceptanceResult"),
   primaryLabel: $("#primaryLabel"),
   acceptIcon: $("#acceptIcon"),
-  headerReviewIcon: $("#headerReviewIcon"),
   backConversation: $("#backConversation"),
+  moreButton: $("#moreButton"),
+  taskMenu: $("#taskMenu"),
+  menuReviewMerged: $("#menuReviewMerged"),
   taskState: $("#taskState"),
   sideStatus: $("#sideStatus"),
   sideDot: $("#sideDot"),
   preAcceptActions: $("#preAcceptActions"),
   postAcceptActions: $("#postAcceptActions"),
   acceptButton: $("#acceptButton"),
-  reviewMergedButton: $("#reviewMergedButton"),
+  receiptReviewButton: $("#receiptReviewButton"),
   workspaceTitle: $("#workspaceTitle"),
   workspaceSubtitle: $("#workspaceSubtitle"),
   mergeReceipt: $("#mergeReceipt"),
@@ -37,6 +39,9 @@ const el = {
   postReviewCard: $("#postReviewCard"),
   postReviewMeta: $("#postReviewMeta"),
   postReviewBadge: $("#postReviewBadge"),
+  postReviewDescription: $("#postReviewDescription"),
+  reviewChecklist: $("#reviewChecklist"),
+  inspectorReviewButton: $("#inspectorReviewButton"),
   finalCheck: $("#finalCheck"),
   reviewCount: $("#reviewCount"),
   createdTaskCard: $("#createdTaskCard"),
@@ -55,6 +60,7 @@ let accepted = false;
 let reviewStatus = "idle";
 let previewOpen = false;
 let fixCreated = false;
+let menuOpen = false;
 let acceptTimer;
 let toastTimer;
 
@@ -133,7 +139,8 @@ function renderReviewRun() {
 function renderInspector() {
   const hasReview = reviewStatus !== "idle";
   el.snapshotCard.classList.toggle("is-hidden", !accepted);
-  el.postReviewCard.classList.toggle("is-hidden", !hasReview);
+  el.postReviewCard.classList.toggle("is-hidden", !accepted);
+  el.postReviewCard.classList.toggle("is-idle", !hasReview);
   el.createdTaskCard.classList.toggle("is-hidden", !fixCreated);
   el.fixTaskRow.classList.toggle("is-hidden", !fixCreated);
   el.reviewCount.textContent = hasReview ? "2" : "1";
@@ -141,17 +148,27 @@ function renderInspector() {
 
   el.postReviewCard.classList.toggle("is-failed", reviewStatus === "failed");
   el.postReviewCard.classList.toggle("is-passed", reviewStatus === "passed");
-  if (reviewStatus === "reviewing") {
+  el.postReviewDescription.classList.toggle("is-hidden", hasReview);
+  el.reviewChecklist.classList.toggle("is-hidden", !hasReview);
+  el.inspectorReviewButton.classList.toggle("is-active", hasReview);
+  if (reviewStatus === "idle") {
+    el.postReviewMeta.textContent = "未发起 · 可选";
+    el.postReviewBadge.textContent = "可选";
+    el.inspectorReviewButton.textContent = "开始审查";
+  } else if (reviewStatus === "reviewing") {
     el.postReviewMeta.textContent = "main@8f41c2d · 运行中";
     el.postReviewBadge.textContent = "运行中";
+    el.inspectorReviewButton.textContent = "查看审查进度";
     el.finalCheck.innerHTML = "<span>…</span>检查最终集成状态";
   } else if (reviewStatus === "failed") {
     el.postReviewMeta.textContent = "main@8f41c2d · 发现问题";
     el.postReviewBadge.textContent = "未通过";
+    el.inspectorReviewButton.textContent = "查看审查结果";
     el.finalCheck.innerHTML = "<span>!</span>发现 1 个集成问题";
   } else if (reviewStatus === "passed") {
     el.postReviewMeta.textContent = "main@8f41c2d · 审查通过";
     el.postReviewBadge.textContent = "已通过";
+    el.inspectorReviewButton.textContent = "查看审查结果";
     el.finalCheck.innerHTML = "<span>✓</span>最终集成状态通过";
   }
 }
@@ -162,19 +179,16 @@ function render() {
 
   el.conversationView.classList.toggle("is-hidden", acceptanceOpen);
   el.acceptanceView.classList.toggle("is-hidden", !acceptanceOpen);
-  el.openAcceptance.classList.toggle("is-hidden", acceptanceOpen);
+  el.openAcceptance.classList.toggle("is-hidden", acceptanceOpen || accepted);
   el.openAcceptanceResult.classList.toggle("is-hidden", acceptanceOpen || !accepted);
   el.backConversation.classList.toggle("is-hidden", !acceptanceOpen);
   el.openAcceptance.disabled = accepting;
   el.acceptIcon.classList.toggle("is-hidden", accepted);
-  el.headerReviewIcon.classList.toggle("is-hidden", !accepted);
-  el.primaryLabel.textContent = !accepted
-    ? accepting ? "验收中" : "验收"
-    : reviewStatus === "reviewing"
-      ? "查看审查进度"
-      : reviewStatus === "idle"
-        ? "审查合并结果"
-        : "查看合并审查";
+  el.primaryLabel.textContent = accepting ? "验收中" : "验收";
+  el.taskMenu.classList.toggle("is-hidden", !menuOpen);
+  el.moreButton.setAttribute("aria-expanded", String(menuOpen));
+  el.menuReviewMerged.classList.toggle("is-hidden", !accepted);
+  el.menuReviewMerged.querySelector("b").textContent = reviewStarted ? "查看合并审查" : "审查合并结果";
 
   el.taskState.className = `task-state${stateClass ? ` ${stateClass}` : ""}`;
   el.taskState.querySelector("b").textContent = stateLabel;
@@ -198,12 +212,11 @@ function render() {
   el.acceptButton.disabled = accepting;
   el.acceptButton.textContent = accepting ? "⟳ 正在验收合并…" : "✓ 验收通过";
   el.mergeReceipt.classList.toggle("is-hidden", !accepted);
-  el.reviewMergedButton.disabled = reviewStatus === "reviewing";
-  el.reviewMergedButton.querySelector("span").textContent = reviewStatus === "reviewing"
-    ? "审查中…"
+  el.receiptReviewButton.querySelector("b").textContent = reviewStatus === "reviewing"
+    ? "查看审查进度 →"
     : reviewStarted
-      ? "再审合并结果"
-      : "审查合并结果";
+      ? "查看审查结果 →"
+      : "审查本次合并 →";
   el.workspaceTitle.textContent = accepted ? "验收结果与改动" : "改动与提交";
   el.workspaceSubtitle.textContent = accepted
     ? "本次合并快照已冻结；可以继续审查目标分支上的最终集成状态"
@@ -229,20 +242,12 @@ function reset() {
   reviewStatus = "idle";
   previewOpen = false;
   fixCreated = false;
+  menuOpen = false;
   [el.acceptDialog, el.postReviewDialog, el.fixDialog].forEach(closeDialog);
   render();
 }
 
 el.openAcceptance.addEventListener("click", () => {
-  if (!accepted) {
-    acceptanceOpen = true;
-    render();
-    return;
-  }
-  if (reviewStatus === "idle") {
-    openDialog(el.postReviewDialog);
-    return;
-  }
   acceptanceOpen = true;
   render();
 });
@@ -256,6 +261,17 @@ el.backConversation.addEventListener("click", () => {
   acceptanceOpen = false;
   render();
 });
+
+function usePostReviewEntry() {
+  menuOpen = false;
+  if (reviewStatus === "idle") {
+    render();
+    openDialog(el.postReviewDialog);
+    return;
+  }
+  acceptanceOpen = true;
+  render();
+}
 
 el.acceptButton.addEventListener("click", () => openDialog(el.acceptDialog));
 $("#confirmAccept").addEventListener("click", () => {
@@ -271,7 +287,13 @@ $("#confirmAccept").addEventListener("click", () => {
   }, 950);
 });
 
-el.reviewMergedButton.addEventListener("click", () => openDialog(el.postReviewDialog));
+el.receiptReviewButton.addEventListener("click", usePostReviewEntry);
+el.inspectorReviewButton.addEventListener("click", usePostReviewEntry);
+el.menuReviewMerged.addEventListener("click", usePostReviewEntry);
+el.moreButton.addEventListener("click", () => {
+  menuOpen = !menuOpen;
+  render();
+});
 $("#confirmPostReview").addEventListener("click", () => {
   closeDialog(el.postReviewDialog);
   reviewStatus = "reviewing";
@@ -326,7 +348,18 @@ $$('.dialog-layer').forEach((layer) => {
 });
 
 document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape") $$('.dialog-layer:not(.is-hidden)').forEach(closeDialog);
+  if (event.key === "Escape") {
+    $$('.dialog-layer:not(.is-hidden)').forEach(closeDialog);
+    menuOpen = false;
+    render();
+  }
+});
+
+document.addEventListener("click", (event) => {
+  if (!event.target.closest(".more-wrap") && menuOpen) {
+    menuOpen = false;
+    render();
+  }
 });
 
 render();

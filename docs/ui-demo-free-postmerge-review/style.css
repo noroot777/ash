@@ -240,6 +240,15 @@ code, kbd { font-family: var(--mono); }
 .task-kind { border-radius: 5px; background: var(--raised); padding: 2px 6px; color: var(--muted); font-size: 8px; }
 .pin-button,
 .more-button { border: 0; background: transparent; color: var(--faint); }
+.more-wrap { position: relative; }
+.more-button { width: 29px; height: 29px; border-radius: 7px; }
+.more-button:hover,
+.more-button[aria-expanded="true"] { background: var(--raised); color: var(--ink); }
+.task-menu { position: absolute; z-index: 18; top: 34px; right: 0; width: 160px; overflow: hidden; border: 1px solid var(--line-strong); border-radius: 9px; background: var(--panel); padding: 4px; box-shadow: 0 12px 34px rgb(28 28 38 / 16%); }
+.task-menu button { display: flex; width: 100%; min-height: 29px; align-items: center; gap: 7px; border: 0; border-radius: 6px; background: transparent; padding: 0 8px; color: var(--muted); text-align: left; font-size: 8.5px; }
+.task-menu button:hover { background: var(--raised); color: var(--ink); }
+.task-menu button span { color: var(--accent); }
+.task-menu button b { font-weight: 650; }
 .task-heading { min-width: 0; flex: 1; }
 .task-heading b,
 .task-heading small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -316,8 +325,7 @@ code, kbd { font-family: var(--mono); }
 .acceptance-subbar small { color: var(--faint); font-size: 8.5px; }
 .acceptance-actions,
 .post-accept-actions { display: flex; align-items: center; gap: 6px; }
-.acceptance-actions button,
-.review-merged-button {
+.acceptance-actions button {
   display: inline-flex;
   height: 29px;
   align-items: center;
@@ -331,10 +339,6 @@ code, kbd { font-family: var(--mono); }
 }
 .acceptance-actions button.is-primary { border-color: var(--accent); background: var(--accent); color: #fff; }
 .accepted-badge { display: inline-flex; height: 28px; align-items: center; border-radius: 7px; background: var(--green-soft); padding: 0 8px; color: var(--green); font-size: 9px; font-weight: 700; }
-.review-merged-button { border-color: #b9bde5; background: var(--accent-soft); color: var(--accent); font-weight: 700; }
-.review-merged-button:hover { border-color: var(--accent); background: var(--accent); color: #fff; }
-.review-merged-button:disabled { border-color: var(--line-strong); background: var(--raised); color: var(--faint); cursor: default; }
-.review-merged-button svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 1.8; }
 .acceptance-scroll { min-height: 0; flex: 1; overflow-y: auto; padding: 16px clamp(14px, 2.5vw, 28px) 32px; }
 .acceptance-stack { display: grid; width: 100%; max-width: 1040px; margin: 0 auto; gap: 11px; }
 
@@ -360,6 +364,10 @@ code, kbd { font-family: var(--mono); }
 .merge-receipt dl div { min-width: 0; border-left: 1px solid rgb(23 124 97 / 14%); padding-left: 8px; }
 .merge-receipt dt { color: #638276; font-size: 7px; }
 .merge-receipt dd { overflow: hidden; margin: 2px 0 0; color: #245f4d; font-size: 8px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
+.receipt-review-link { position: relative; z-index: 1; display: inline-flex; width: max-content; align-items: center; gap: 5px; margin-top: 5px; border: 0; background: transparent; padding: 0; color: #638276; font-size: 7.5px; }
+.receipt-review-link span { color: #638276; font-family: var(--font); font-weight: 500; letter-spacing: 0; }
+.receipt-review-link b { color: var(--green); font-size: 7.5px; }
+.receipt-review-link:hover b { text-decoration: underline; }
 
 .review-run { overflow: hidden; border: 1px solid #c6c9e8; border-radius: 10px; background: var(--panel); box-shadow: 0 2px 8px rgb(60 60 90 / 4%); }
 .review-run > header { display: grid; grid-template-columns: 38px minmax(0, 1fr) auto; align-items: center; gap: 10px; border-bottom: 1px solid var(--line); padding: 10px 12px; }
@@ -469,12 +477,18 @@ code, kbd { font-family: var(--mono); }
 .snapshot-card dt { color: var(--faint); font-size: 6.5px; }
 .snapshot-card dd { margin: 2px 0 0; font-family: var(--mono); font-size: 7.5px; }
 .post-review-card header em { background: var(--accent-soft); color: var(--accent); }
+.post-review-card.is-idle { border-style: dashed; }
+.post-review-card.is-idle header em { background: var(--amber-soft); color: var(--amber); }
 .post-review-card.is-failed header em { background: var(--red-soft); color: var(--red); }
 .post-review-card.is-passed header em { background: var(--green-soft); color: var(--green); }
+.post-review-description { line-height: 1.5; }
 .review-checklist { display: grid; gap: 5px; padding: 8px 9px; }
 .review-checklist p { display: flex; align-items: center; gap: 6px; margin: 0; color: var(--muted); font-size: 7.5px; }
 .review-checklist p span { display: grid; width: 15px; height: 15px; place-items: center; border-radius: 50%; background: var(--green-soft); color: var(--green); font-size: 6px; }
 .review-checklist p:last-child span { background: var(--accent-soft); color: var(--accent); }
+.inspector-review-action { width: calc(100% - 18px); height: 27px; margin: 0 9px 9px; border: 1px solid var(--line-strong); border-radius: 7px; background: var(--panel); color: var(--muted); font-size: 7.5px; font-weight: 650; }
+.inspector-review-action:hover { border-color: #bdc1e4; background: var(--accent-soft); color: var(--accent); }
+.inspector-review-action.is-active { border-color: #bdc1e4; background: var(--accent-soft); color: var(--accent); }
 .created-icon { background: var(--blue-soft); color: var(--blue); }
 .created-task-card header em { background: var(--blue-soft); color: var(--blue); }
 .created-task-card p code { color: var(--blue); }
