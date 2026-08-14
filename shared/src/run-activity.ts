@@ -140,7 +140,8 @@ export function runActivityCopy({
     detail: "正在恢复原会话并读取你的补充，下一条回复会自动出现在这里。",
   };
   if (phase === "continuing") return {
-    title: `${executor || "智能体"} 委派中`,
+    // 固定文案,不带执行器名(用户 2026-08-14 指定):这一段说的是「活儿已经委派出去」这件事本身。
+    title: "智能体委派中",
     detail: "当前回合仍在进行；新的输出会自动追加到会话末尾。",
   };
   return {
