@@ -21,6 +21,7 @@ import { Readable } from "node:stream";
 import { closeSync, openSync, readFileSync, readSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import type { ExecTarget } from "@harness/shared";
+import { IS_WINDOWS } from "../platform.js";
 import { isSameProcess } from "../proc.js";
 import {
   shq, resolveBin, augmentedEnv, failedChild, guardAgentSpawn,
@@ -267,6 +268,14 @@ export function spawnDetachedAgent(
 // 没给(或 ssh 目标)就退回原来的匿名管道。放在这里而不是 spawn.ts,是因为
 // detached.ts 已经依赖 spawn.ts,反过来会成环。
 // **常驻会话不要用它** —— openResident 必须保留可写的 stdin。
+//
+// **Windows 走管道**:这条路的实现是 `/bin/sh -c '"$@" >>out 2>>err; …'`,一个
+// 无 shell 的等价物在那边写不出来(cmd.exe 的重定向拼不出同样的语义,PowerShell
+// 又会插手编码)。所以那边只保留「输出落盘」——把 out 文件交给 spawnAgent 的 tee
+// (见那里的注释:交卷补捞靠这个文件,砍了会让干完活的任务被记成 failed),
+// 「活得过 server 重启」这一档如实放弃:重启时在跑的任务按 reconcileInterrupted
+// 老语义判 failed,用户重试即可。reattach.ts 那边也一并短路,免得它去认一个从来
+// 就不是这么起的进程。
 export function spawnForRun(
   target: ExecTarget,
   cwd: string,
@@ -276,10 +285,10 @@ export function spawnForRun(
   extraEnv?: Record<string, string | undefined>,
   detach?: DetachedPaths,
 ): ChildProcess {
-  if (detach && target.kind === "local") {
+  if (detach && target.kind === "local" && !IS_WINDOWS) {
     return spawnDetachedAgent(target, cwd, bin, args, prompt, detach, extraEnv);
   }
-  return spawnAgent(target, cwd, bin, args, prompt, extraEnv);
+  return spawnAgent(target, cwd, bin, args, prompt, extraEnv, { teeOut: detach?.out });
 }
 
 // 把「这个 child 是不是 detached 的」这一判断收在一处,executor 里不必各写一遍

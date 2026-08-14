@@ -70,6 +70,7 @@
     "test:duet-gate-attachments": "tsx scripts/test-duet-gate-attachments.ts",
     "test:terminal": "tsx scripts/test-terminal.ts",
     "test:win-launch": "tsx scripts/test-win-launch.ts",
+    "test:agent-tee": "tsx scripts/test-agent-tee.ts",
     "test:no-libsql": "tsx scripts/test-no-libsql.ts"
   },
   "dependencies": {

@@ -1,10 +1,10 @@
 import { spawn, execFile } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
 import { tmpdir } from "node:os";
-import { statSync, openSync, closeSync, unlinkSync } from "node:fs";
-import { join } from "node:path";
+import { statSync, openSync, closeSync, unlinkSync, createWriteStream, mkdirSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { EventEmitter } from "node:events";
-import { Readable } from "node:stream";
+import { PassThrough, Readable } from "node:stream";
 import type { ExecTarget } from "@harness/shared";
 import { IS_WINDOWS, isPidAlive, killOne, killTree, listProcesses } from "../platform.js";
 import { augmentedEnv, resolveBin, resolveLaunch } from "./bin-resolve.js";
@@ -136,6 +136,17 @@ async function killEscapees(child: ChildProcess, sig: NodeJS.Signals): Promise<v
   }
 }
 
+// Windows 上一律不 detached。三点理由:
+//  · 白拿不到好处 —— 那边的组杀是 `taskkill /T`,按进程表的父子关系走,不需要进程
+//    组;POSIX 上 detached 的唯一用途(让 kill(-pid) 打得到整棵树)在这里不存在。
+//  · 有实打实的坏处 —— libuv 把 detached 翻译成
+//    `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP`:前者让子进程**完全没有控制台**
+//    (个别 CLI 会据此改变输出形态),后者让它脱离本控制台的 Ctrl-C 组。
+//  · 方向也不对 —— Windows 上「活得过 server 重启」这一档本来就砍掉了(见
+//    detached.ts 的 spawnForRun),再让 agent 脱离父进程只会攒出没人管的孤儿。
+// 额外收益:dev 终端 Ctrl-C 会连带把 agent 带走,正好补上下面那条「代价」的缺口。
+const DETACH = !IS_WINDOWS;
+
 // Spawn an agent CLI either locally or over ssh, feeding the prompt via stdin
 // (avoids escaping large prompts in argv, and works identically for both
 // targets: local spawn vs `ssh host "cd repo && <cli> …"`).
@@ -144,6 +155,7 @@ async function killEscapees(child: ChildProcess, sig: NodeJS.Signals): Promise<v
 // stdout/stderr 管道不死，流永远不 EOF，run loop 收不到 close → 任务永远停不掉
 // (真实案例：codex CLI 重装期间 resume，任务卡 running 且 stop 无效)。
 // 代价：dev 前台 Ctrl-C 不再连带杀掉 agent(生产是 nohup 跑法，不受影响)。
+// Windows 上反过来 —— 一律不 detached，理由见 DETACH。
 // extraEnv: per-executor 的环境变量(供应商的 base_url / key、覆盖 CLI 自己的配置)。
 // 本地合进 env,ssh 拼成远程命令的 `KEY=值 ` 前缀 —— 二者对 CLI 是等价的。
 // **值为 `undefined` = 把这个变量从子进程里删掉**(本地靠 Node 跳过 undefined,ssh 靠
@@ -157,7 +169,7 @@ export function spawnAgent(
   args: string[],
   prompt: string,
   extraEnv?: Record<string, string | undefined>,
-  opts?: { keepStdin?: boolean },
+  opts?: { keepStdin?: boolean; teeOut?: string },
 ): ChildProcess {
   const blocked = guardAgentSpawn(bin);
   if (blocked) return blocked;
@@ -171,7 +183,8 @@ export function spawnAgent(
     : assigns.map((pair) => `${pair} `).join("");
   if (target.kind === "ssh") {
     const remote = `cd ${shq(cwd)} && ${envPrefix}${bin} ${args.map(shq).join(" ")}`;
-    const child = spawn("ssh", [target.host, remote], { stdio: ["pipe", "pipe", "pipe"], env: augmentedEnv(), detached: true, windowsHide: true });
+    const child = spawn("ssh", [target.host, remote], { stdio: ["pipe", "pipe", "pipe"], env: augmentedEnv(), detached: DETACH, windowsHide: true });
+    teeStdout(child, opts?.teeOut);
     child.stdin?.write(prompt);
     if (!opts?.keepStdin) child.stdin?.end();
     return child;
@@ -193,14 +206,57 @@ export function spawnAgent(
     cwd,
     stdio,
     env: { ...augmentedEnv(), ...extraEnv },
-    detached: true,
+    detached: DETACH,
     windowsHide: true,
     windowsVerbatimArguments: plan.windowsVerbatimArguments,
   });
   registerTrackFd(child, track);
+  teeStdout(child, opts?.teeOut);
   child.stdin?.write(prompt);
   if (!opts?.keepStdin) child.stdin?.end();
   return child;
+}
+
+// 管道路径上的「输出同时落盘」。
+//
+// detached.ts 那条路(输出直接写文件)顺带满足了一个**跟活得过重启无关**的需求:
+// 回合结算前 `replayUndeliveredMcpCalls`(mcp-handoff.ts)要回头扫一遍 agent 的
+// 输出,把没送达的 `complete_task` 补录进库。走匿名管道时那个文件根本不存在,补捞
+// 静默变成空操作 —— 一个干完活的任务会被记成 failed,且失败得无声无息。
+//
+// Windows 上「活得过重启」这一档整个砍掉了(spawnForRun),所以那个 out 文件得由
+// 这里补上。顺带也覆盖了 ssh 目标 —— 它一直走管道,补捞在那条路上同样是空的。
+//
+// 实现上不用 `stdout.pipe(ws)`:pipe 会立刻把原流切进 flowing 模式,而各 executor
+// 的解析器是**之后**才挂 'data' 的,中间这几个 tick 冒出来的字节就永久丢了。改成
+// 接管原流、转发给一个 PassThrough 顶替 child.stdout,顺便把背压一起转发。
+// 开不出文件就当没这回事(best-effort):补捞退回原来的空操作,不该把这轮跑挂掉。
+function teeStdout(child: ChildProcess, file: string | undefined): void {
+  const src = child.stdout;
+  if (!file || !src) return;
+  let sink;
+  try {
+    mkdirSync(dirname(file), { recursive: true });
+    sink = createWriteStream(file, { flags: "a" });
+  } catch {
+    return;
+  }
+  sink.on("error", () => {}); // 盘满/被删:同上,降级不报错
+  const relay = new PassThrough();
+  src.on("data", (chunk: Buffer) => {
+    sink.write(chunk);
+    if (!relay.write(chunk)) src.pause();
+  });
+  relay.on("drain", () => src.resume());
+  src.on("end", () => {
+    relay.end();
+    sink.end();
+  });
+  src.on("error", (e) => {
+    relay.destroy(e);
+    sink.end();
+  });
+  Object.defineProperty(child, "stdout", { value: relay, configurable: true, writable: true });
 }
 
 // 追踪 fd(见 killEscapees):打开一个本次运行专属文件,把 fd 作为 stdio[3] 传给
