@@ -43,6 +43,7 @@ import type {
   FileWorkspaceRoot,
   FreeWorkflowApiState,
   GitOverview,
+  HostInfo,
   OpenerProbe,
   ReplyTaskResult,
   SessionTraceEntry,
@@ -75,6 +76,9 @@ export const api = {
     ...DEFAULT_APP_SETTINGS,
     ...(await request<AppSettings>("/settings", json("PATCH", patch))),
   }),
+  // 只读的运行时事实（平台/分隔符/家目录），跟可写的 `/settings` 是两回事。
+  // 调用点走 `useHostInfo.ts`：整个前端只该拉一次。
+  host: (): Promise<HostInfo> => request("/host"),
 
   projects: (): Promise<ProjectView[]> => request("/projects"),
   createProject: (name: string, repoPath: string): Promise<ProjectView> =>

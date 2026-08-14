@@ -11,6 +11,19 @@ import type {
 
 export type ChildWorkspaceLeftover = TaskWorkspaceLeftover & { taskId: string; title?: string };
 
+/**
+ * server 跑在哪台机器上（`GET /api/host`）。路径提示一律按它给 —— 浏览器所在的系统
+ * 不算数：用 Windows 上的浏览器连 mac 上的 harness 是正常用法，项目目录在服务端。
+ */
+export type HostInfo = {
+  /** `process.platform` 原文，如 `darwin` / `win32` / `linux`。 */
+  platform: string;
+  /** 路径分隔符（`\` 或 `/`）。 */
+  sep: string;
+  /** 服务端当前用户的家目录绝对路径。 */
+  home: string;
+};
+
 export type TaskWorkspaceProbe = TaskWorkspaceLeftover & {
   /** 有 Git 残留的 children（团队执行者 / duet 搭档），删除会连行一起删，探测必须一并报。 */
   children?: ChildWorkspaceLeftover[];

@@ -17,6 +17,7 @@
 //    并在各自调用点写明降级后剩什么。
 
 import { execFile, execFileSync } from "node:child_process";
+import { homedir } from "node:os";
 
 export const IS_WINDOWS = process.platform === "win32";
 export const IS_MAC = process.platform === "darwin";
@@ -346,6 +347,26 @@ export function splitPathList(value: string | undefined | null): string[] {
 
 /** 路径分隔符。同样跟着 IS_WINDOWS 走,理由见 PATH_DELIMITER。 */
 export const PATH_SEP = IS_WINDOWS ? "\\" : "/";
+
+// ── 「server 跑在哪台机器上」 ──────────────────────────────────────────────
+
+export interface HostInfo {
+  /** `process.platform` 原文;前端只用它分「Windows / 其它」。 */
+  platform: string;
+  /** 路径分隔符(`\` 或 `/`)。 */
+  sep: string;
+  /** 当前用户家目录绝对路径。 */
+  home: string;
+}
+
+/**
+ * 前端要按**这台机器**给路径提示(新建项目的占位符、把家目录缩写成 `~`)。
+ * 浏览器自己的 `navigator.platform` 不算数 —— 用 Windows 上的浏览器连 mac 上的
+ * harness 是完全正常的用法,那时该显示的是 mac 的路径形状:项目目录在服务端。
+ */
+export function hostInfo(): HostInfo {
+  return { platform: process.platform, sep: PATH_SEP, home: homedir() };
+}
 
 /** 按两种分隔符一起切路径 —— Windows 上 `/` 和 `\` 都合法,只认一种会漏。 */
 export function splitPathSegments(p: string): string[] {

@@ -37,6 +37,7 @@ import { mountTeamPresetRoutes } from "./team-presets.js";
 import { findWorkflow, mountWorkflowRoutes } from "./workflows.js";
 import { mountPreviewRoutes } from "./preview-routes.js";
 import { getAppSettings, parseAppSettingsPatch, patchAppSettings } from "./app-settings.js";
+import { hostInfo } from "./platform.js";
 import { mountSkillRoutes } from "./skill-routes.js";
 import { mountModelRoutes } from "./model-routes.js";
 import { mountTaskRoutes } from "./task-routes.js";
@@ -65,6 +66,11 @@ api.get("/restart-impact", async (c) => {
 });
 
 // ── global settings ──────────────────────────────────────────────────────
+// 「server 跑在哪台机器上」。**不进 /settings** —— 那是一张可写的持久化设置表
+// (`app-settings.ts` 用 satisfies 钉住了键集),这条是只读的运行时事实。前端拿它
+// 决定路径提示按什么形状给(浏览器所在系统不算数,项目目录在服务端这台机器上)。
+api.get("/host", (c) => c.json(hostInfo()));
+
 api.get("/settings", async (c) => c.json(await getAppSettings()));
 
 api.patch("/settings", async (c) => {

@@ -2,15 +2,9 @@ import { useMemo, useRef, useState } from "react";
 import type { ProjectView } from "@harness/shared";
 import { CaretDown, Check, FolderPlus, GearSix, MagnifyingGlass } from "@phosphor-icons/react";
 import { useDismissable } from "../lib/useDismissable.ts";
+import { shortenHomePath, useHostInfo } from "../lib/useHostInfo.ts";
 import { ProjectAvatar } from "./ProjectAvatar.tsx";
 import { ProjectGitContext } from "./ProjectGitContext.tsx";
-
-function shortPath(path: string): string {
-  const home = "/Users/";
-  if (!path.startsWith(home)) return path;
-  const afterUser = path.indexOf("/", home.length);
-  return afterUser < 0 ? path : `~${path.slice(afterUser)}`;
-}
 
 export function ProjectSwitcher({
   projects,
@@ -27,6 +21,7 @@ export function ProjectSwitcher({
 }) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
+  const host = useHostInfo();
   const root = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
   const results = useMemo(() => {
@@ -71,7 +66,7 @@ export function ProjectSwitcher({
               <ProjectAvatar project={current} size="large" />
               <span>
                 <b>{current.name}</b>
-                <small>{shortPath(current.repoPath) || "未设置工作目录"}</small>
+                <small>{shortenHomePath(current.repoPath, host) || "未设置工作目录"}</small>
               </span>
             </div>
           )}
@@ -123,7 +118,7 @@ export function ProjectSwitcher({
                   <ProjectAvatar project={project} />
                   <span>
                     <b>{project.name}</b>
-                    <small>{shortPath(project.repoPath)}</small>
+                    <small>{shortenHomePath(project.repoPath, host)}</small>
                   </span>
                   {selected && <Check size={13} weight="bold" aria-hidden="true" />}
                 </button>

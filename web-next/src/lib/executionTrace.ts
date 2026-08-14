@@ -52,12 +52,21 @@ function clip(text: string): string {
   return text.length > MAX ? `${text.slice(0, MAX - 1)}…` : text;
 }
 
-/** 长路径只留末两段:`/Users/…/server/src/db/index.ts` → `db/index.ts`。 */
+/**
+ * 长路径只留末两段:`/Users/…/server/src/db/index.ts` → `db/index.ts`。
+ *
+ * 两种分隔符都认:这里的值是 agent 报上来的**本机绝对路径**,server 跑在 Windows 上
+ * 时就是 `C:\repo\server\src\db\index.ts` —— 只按 `/` 切的话既切不动、又因为
+ * `includes("/")` 为假直接原样返回,一整条盘符路径糊在行内摘要里。
+ */
 export function shortenPath(value: string): string {
   const clean = value.trim();
-  if (clean.length <= 44 || !clean.includes("/")) return clean;
-  const parts = clean.split("/").filter(Boolean);
-  return parts.length <= 2 ? clean : `…/${parts.slice(-2).join("/")}`;
+  if (clean.length <= 44 || !/[\\/]/.test(clean)) return clean;
+  const parts = clean.split(/[\\/]+/).filter(Boolean);
+  if (parts.length <= 2) return clean;
+  // 末两段用原路径里那种分隔符拼回去,免得 Windows 路径显示成半 POSIX 的混血。
+  const sep = clean.includes("\\") && !clean.includes("/") ? "\\" : "/";
+  return `…${sep}${parts.slice(-2).join(sep)}`;
 }
 
 function stringify(value: unknown, key: string): string {
