@@ -14,7 +14,7 @@ assert.equal(runActivityPhase("running", "agent-active"), null);
 assert.equal(runActivityPhase("backlog", "user"), null);
 
 // 尾巴按最后一条**消息**算：末尾的事件行（「任务又被唤醒」之类）不该把
-// 「已收到你的消息」冲成「正在继续处理」。
+// 「已收到你的消息」冲成「委派中」。
 assert.equal(runActivityTail([]), "empty");
 assert.equal(runActivityTail([{ kind: "event" }]), "other");
 assert.equal(runActivityTail([{ kind: "user" }, { kind: "event" }]), "user");
@@ -61,6 +61,12 @@ assert.deepEqual(runActivityCopy({ status: "running", mode: "single", phase: "re
 });
 assert.match(runActivityCopy({ status: "running", mode: "team", phase: "replying" }).detail, /调整方向/);
 assert.match(runActivityCopy({ status: "running", mode: "duet", phase: "replying" }).title, /收到你的补充/);
+// 单飞任务回合仍在跑时报「委派中」（活儿已经交到智能体手上），主语仍是此刻在跑的那个执行器。
+assert.deepEqual(runActivityCopy({ status: "running", mode: "single", phase: "continuing", executor: "claude@ccb" }), {
+  title: "claude@ccb 委派中",
+  detail: "当前回合仍在进行；新的输出会自动追加到会话末尾。",
+});
+assert.equal(runActivityCopy({ status: "running", mode: "single", phase: "continuing" }).title, "智能体 委派中");
 assert.equal(runActivityCopy({ status: "done", mode: "single", phase: "continuing" }), null);
 
 const openingStarts = [
