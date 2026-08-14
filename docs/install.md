@@ -7,8 +7,11 @@
 ## 一、你这边:打包
 
 ```bash
-npm run package          # 产物落 dist-package/harness-<日期>-<sha>.tar.gz
+npm run package                 # 产物落 dist-package/harness-<日期>-<sha>.tar.gz
+FORMAT=zip npm run package      # 改打 .zip(收件人是 Windows 时更省事:双击就能解)
 ```
+
+格式默认跟着**打包机**走(Windows 上默认 zip,其余默认 tar.gz),`FORMAT=` 可以明写。两种都由 `git archive` 直接产出,没有第三方打包器;没做安装器(MSI/NSIS)——包解开之后还要 `npm install` + 构建,不是「装完即用」的形态,签名/卸载/升级三条链路的代价换不来对应的便利。
 
 打的是 `git archive HEAD`,所以包里**只有入库的文件**。这几样不可能混进去:
 
@@ -54,6 +57,8 @@ tar xzf harness-<日期>-<sha>.tar.gz
 cd harness-<日期>-<sha>
 node scripts/setup.mjs
 ```
+
+> 拿到的是 `.zip` 就换成资源管理器右键「全部解压缩」,或 PowerShell 里 `Expand-Archive harness-<日期>-<sha>.zip .`;后面两条命令一样。
 
 这一条命令做了 5 件事:检查环境 → `npm install` → `npm run build` → **接上 harness MCP** → 列出可派活的 CLI。幂等,重复跑不会重复写配置。
 
