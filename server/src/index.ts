@@ -1,6 +1,5 @@
 import { serve } from "@hono/node-server";
 import { Hono } from "hono";
-import { execFileSync } from "node:child_process";
 import { existsSync, statSync, createReadStream, readdirSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { Readable } from "node:stream";
@@ -12,6 +11,7 @@ import {
   SingletonConflictError,
   type SingletonLock,
 } from "./singleton.js";
+import { inspectPortCommand, inspectProcessSync, killPidsCommand, listenerPidsSync } from "./platform.js";
 // 纯粹读一个环境变量，不碰 DB，所以可以静态 import（其余会打开库的模块一律等拿到锁之后）。
 import { IS_PREVIEW_INSTANCE } from "./preview-instance.js";
 
@@ -57,44 +57,16 @@ function exitAfterStartupFailure(message: string, error?: unknown): never {
 }
 
 function portConflictMessage(conflictingPort: number) {
-  const inspectCommand = `lsof -nP -iTCP:${conflictingPort} -sTCP:LISTEN`;
-  let pids: number[] = [];
-  try {
-    const output = execFileSync(
-      "lsof",
-      ["-nP", `-iTCP:${conflictingPort}`, "-sTCP:LISTEN", "-t"],
-      { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
-    );
-    pids = [
-      ...new Set(
-        output
-          .split(/\s+/)
-          .map(Number)
-          .filter((pid) => Number.isInteger(pid) && pid > 0),
-      ),
-    ];
-  } catch {
-    // The copy-pasteable lsof command below remains useful if inspection races
-    // with the listener exiting or lsof itself is unavailable to this process.
-  }
-
+  const pids = listenerPidsSync(conflictingPort);
   const lines = [`port ${conflictingPort} is already in use.`, `  Port: ${conflictingPort}`];
   for (const pid of pids) {
-    let detail = "unknown command";
-    try {
-      detail =
-        execFileSync("ps", ["-p", String(pid), "-o", "user=", "-o", "command=", "-ww"], {
-          encoding: "utf8",
-          stdio: ["ignore", "pipe", "ignore"],
-        }).trim() || detail;
-    } catch {
-      // PID is still actionable even if ps inspection fails.
-    }
-    lines.push(`  Listener PID ${pid}: ${detail}`);
+    const info = inspectProcessSync(pid);
+    lines.push(`  Listener PID ${pid}: ${info?.command ?? "unknown command"}`);
   }
   if (pids.length === 0) lines.push("  Listener: PID could not be determined");
-  lines.push("Inspect the listener with:", `  ${inspectCommand}`);
-  if (pids.length > 0) lines.push("Stop it, then retry:", `  kill ${pids.join(" ")}`);
+  // 探测跟监听者退出赛跑、或者探测命令本身不可用时,下面这条可复制的命令仍然有用。
+  lines.push("Inspect the listener with:", `  ${inspectPortCommand(conflictingPort)}`);
+  if (pids.length > 0) lines.push("Stop it, then retry:", `  ${killPidsCommand(pids)}`);
   return lines.join("\n");
 }
 

@@ -9,6 +9,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { resolveHarnessDbFile, ensureHarnessDbDir } from "./db/path.js";
+import { IS_WINDOWS, isPidAlive, killPidsCommand } from "./platform.js";
 import { inspectProcess as inspectProcessInfo, type ProcessInfo } from "./proc.js";
 
 const LOCK_VERSION = 1;
@@ -195,20 +196,19 @@ function readLock(lockFile: string): Partial<LockFile> | null {
   }
 }
 
-function isPidAlive(pid: number) {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (e: any) {
-    return e?.code === "EPERM";
-  }
-}
-
 function inspectProcess(pid: number): ProcessInfo | null {
   return inspectProcessInfo(pid);
 }
 
+// 锁文件之外的**第二道网**:锁文件可能被人手删、可能被别的工具覆盖,而「谁把这个
+// DB 文件打开着」是操作系统的事实,骗不了。
+//
+// **Windows 上这道网是空的**:没有零依赖的 `lsof -t <file>` 等价物 —— Sysinternals
+// 的 handle.exe 要单独装且要管理员权限,不能当成必备依赖。所以 Windows 上单实例保护
+// 只剩锁文件那一道(pid + 进程启动时间 + token,足以识别 pid 复用和陈旧锁),失去的是
+// 「锁文件被删掉之后还能兜住」这一层。如实降级,不假装有覆盖。
 function findLiveHarnessDbHolders(dbFile: string): ProcessInfo[] {
+  if (IS_WINDOWS) return [];
   if (!existsSync(dbFile)) return [];
   let out = "";
   try {
@@ -225,17 +225,29 @@ function findLiveHarnessDbHolders(dbFile: string): ProcessInfo[] {
     .filter((info): info is ProcessInfo => Boolean(info && isHarnessServerCommand(info.command)));
 }
 
+// 命令行长什么样两个平台差很远,分隔符、`.exe` 后缀、带空格路径的引号全不一样:
+//   POSIX:   /opt/homebrew/bin/node /Users/fjh/code/harness/server/dist/index.js
+//   Windows: "C:\Program Files\nodejs\node.exe" C:\Users\fjh\harness\server\dist\index.js
+// 所以路径分隔符两种都认,可执行名允许 `.exe` 和前置引号。宁可放宽也不能收窄 ——
+// 认不出来的后果是「把活着的 server 判成陈旧锁然后覆盖掉」,那就双实例了。
 function isHarnessServerCommand(command: string | null) {
   if (!command) return false;
   return (
-    /(?:^|\s)(?:\S*\/)?(?:node|tsx)(?:\s|$)/.test(command) &&
-    /(?:server\/)?(?:dist|src)\/index\.(?:js|ts)\b/.test(command)
+    /(?:^|[\s"'])(?:[^\s"']*[\\/])?(?:node|tsx)(?:\.exe|\.cmd)?(?:[\s"']|$)/i.test(command) &&
+    /(?:server[\\/])?(?:dist|src)[\\/]index\.(?:js|ts)\b/i.test(command)
   );
 }
 
+// Windows 不投递 SIGTERM(注册了也永远不会触发,留着无害);Ctrl+C 会有 SIGINT,
+// Ctrl+Break 是 SIGBREAK,关掉控制台窗口是 SIGHUP。三条都接上,否则关窗口会留下
+// 一把不会被清掉的锁,下次启动只能靠陈旧检测兜。
+const EXIT_SIGNALS = (IS_WINDOWS
+  ? ["SIGINT", "SIGBREAK", "SIGHUP"]
+  : ["SIGINT", "SIGTERM"]) as readonly NodeJS.Signals[];
+
 function installCleanup(lock: SingletonLock) {
   process.once("exit", lock.release);
-  for (const signal of ["SIGINT", "SIGTERM"] as const) {
+  for (const signal of EXIT_SIGNALS) {
     process.once(signal, () => {
       lock.release();
       process.exit(signal === "SIGINT" ? 130 : 143);
@@ -258,9 +270,10 @@ function formatConflictMessage(
     `  Port: ${holder.port ?? "unknown"}`,
     `  Command: ${holder.command ?? "unknown"}`,
     "Stop the existing harness server first, then retry:",
-    `  kill ${holder.pid}`,
-    "If it does not exit, use:",
-    `  kill -9 ${holder.pid}`,
+    `  ${killPidsCommand([holder.pid])}`,
+    ...(IS_WINDOWS
+      ? []
+      : ["If it does not exit, use:", `  kill -9 ${holder.pid}`]),
     "Emergency bypass: HARNESS_ALLOW_MULTI=1 (this can create duplicate schedulers for the same DB).",
   ];
   return lines.join("\n");

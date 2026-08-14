@@ -5,7 +5,9 @@
 // 两个使用方:
 //  · singleton.ts —— 锁文件里那个 pid 还是不是当初拿锁的 server
 //  · executors/detached.ts —— 重启后接管时,DB 里记的 agent pid 还是不是那个 agent
-import { execFileSync } from "node:child_process";
+//
+// 「怎么问操作系统」在 platform.ts,这里只管「问到之后怎么判」。
+import { inspectProcessSync } from "./platform.js";
 
 export type ProcessInfo = {
   pid: number;
@@ -31,25 +33,14 @@ function parseStartedAt(raw: string): number | null {
 // (那会让 harness 一直等一个永远不会有输出的进程)。
 export function inspectProcess(pid: number): ProcessInfo | null {
   if (!Number.isInteger(pid) || pid <= 0) return null;
-  try {
-    const out = execFileSync("ps", ["-p", String(pid), "-o", "lstart=", "-o", "command=", "-ww"], {
-      encoding: "utf8",
-      env: { ...process.env, LC_ALL: "C", LANG: "C" },
-      stdio: ["ignore", "pipe", "ignore"],
-    }).trim();
-    if (!out) return null;
-    const m = /^(.{24})\s+(.*)$/.exec(out);
-    const startedAt = m ? m[1]!.trim() : null;
-    const parsed = startedAt ? parseStartedAt(startedAt) : null;
-    return {
-      pid,
-      startedAt,
-      startedAtMs: parsed,
-      command: m ? m[2]!.trim() : out,
-    };
-  } catch {
-    return null;
-  }
+  const raw = inspectProcessSync(pid);
+  if (!raw) return null;
+  return {
+    pid,
+    startedAt: raw.startedAt,
+    startedAtMs: raw.startedAt ? parseStartedAt(raw.startedAt) : null,
+    command: raw.command,
+  };
 }
 
 // 「这个 pid 还是当初那个进程吗」。expectedStartedAt 为空时退化成单纯的存在性
