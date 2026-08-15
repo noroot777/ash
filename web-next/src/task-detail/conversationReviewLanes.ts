@@ -39,7 +39,7 @@ function conclusionOf(item: ConversationItem): ReviewLaneConclusion {
   const mark = verifyNoteOf(item.text);
   if (mark?.kind !== "inline" || mark.phase !== "end") return null;
   if (item.tone === "error") return "verify_failed";
-  return item.text.includes("通过") ? "verified" : "inconclusive";
+  return /第\s*\d+\s*轮验证通过(?:$|[。，；：\s])/.test(item.text) ? "verified" : "inconclusive";
 }
 
 function inlineStart(item: ConversationItem): number | null {
@@ -55,11 +55,17 @@ function matchingInlineEnd(item: ConversationItem, round: number): boolean {
 }
 
 function closeBefore(lane: ActiveLane, item: ConversationItem): boolean {
-  if (inlineStart(item) !== null) return true;
   if (item.kind === "user") return !item.bySystem && !item.isAnswer;
   if (item.kind === "agent") return lane.reviewerSpoke && item.reviewer?.round !== lane.round;
   return !!lane.conclusion && lane.reviewerSpoke
-    && (item.variant === "boundary" || item.text.includes(LEGACY_SYS_MARKER));
+    && (
+      item.variant === "boundary"
+      || item.text.includes(LEGACY_SYS_MARKER)
+      // verified 阶段通告之后，审查者还会继续写最终结论；真正跟在它后面的第一条普通
+      // 生命周期旁注（开始验收 / 合并 / 清理 / 唤醒）才是 D 卡的稳定收口。历史落盘稿
+      // 没有直播 turnEnd，这条判据同时覆盖刷新后的存量会话。
+      || conclusionOf(item) === null
+    );
 }
 
 function addToLane(lane: ActiveLane, item: ConversationItem): void {
@@ -73,8 +79,12 @@ function addToLane(lane: ActiveLane, item: ConversationItem): void {
   lane.reviewerModel ??= item.run?.model ?? null;
 }
 
-function finishLane(lane: ActiveLane, complete = false): ConversationReviewLane {
-  lane.complete = complete || lane.conclusion !== null;
+function finishLane(
+  lane: ActiveLane,
+  { complete = false, superseded = false }: { complete?: boolean; superseded?: boolean } = {},
+): ConversationReviewLane {
+  if (superseded && lane.conclusion === null) lane.conclusion = "inconclusive";
+  lane.complete = complete || superseded || lane.conclusion !== null;
   lane.reportAvailable = lane.complete && lane.reviewerSpoke;
   const { reviewerSpoke: _reviewerSpoke, ...finished } = lane;
   return finished;
@@ -85,15 +95,16 @@ function finishLane(lane: ActiveLane, complete = false): ConversationReviewLane 
 export function conversationFeedRows(items: ConversationItem[]): ConversationFeedRow[] {
   const rows: ConversationFeedRow[] = [];
   let active: ActiveLane | null = null;
-  const pushActive = (complete = false) => {
+  const pushActive = (options?: { complete?: boolean; superseded?: boolean }) => {
     if (!active) return;
-    rows.push(finishLane(active, complete));
+    rows.push(finishLane(active, options));
     active = null;
   };
 
   for (const item of items) {
-    if (active && closeBefore(active, item)) pushActive();
     const round = inlineStart(item);
+    if (active && round !== null) pushActive({ superseded: true });
+    else if (active && closeBefore(active, item)) pushActive();
     if (!active && round !== null) {
       active = {
         kind: "review-lane",
@@ -116,7 +127,7 @@ export function conversationFeedRows(items: ConversationItem[]): ConversationFee
       continue;
     }
     addToLane(active, item);
-    if (matchingInlineEnd(item, active.round)) pushActive(true);
+    if (matchingInlineEnd(item, active.round)) pushActive({ complete: true });
   }
   pushActive();
 
