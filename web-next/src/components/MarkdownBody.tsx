@@ -96,7 +96,7 @@ function MarkdownDocument({ text, onReviewReport, onActionError }: {
   );
 }
 
-function ReviewReportDialog({ target, onReviewReport, onClose }: {
+export function ReviewReportDialog({ target, onReviewReport, onClose }: {
   target: ReviewFileTarget;
   onReviewReport: (target: ReviewFileTarget) => void;
   onClose: () => void;
