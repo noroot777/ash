@@ -105,7 +105,19 @@ async function cmdTest(args) {
   const results = [];
   for (const s of suites) {
     process.stdout.write(`  ${s} … `);
-    const res = await rexec(`npm -w server run test:${s} 2>&1`, { cwd, projectId: p.id, timeout: 10 * 60_000 });
+    // 好几条回归要求调用者自己给 HARNESS_DB(`tmp-db.ts` 的 requireTmpDb 会拦下来,
+    // 免得测试写进用户的真库),没给就直接拒跑。那不是 Windows 的毛病 —— mac 上不设
+    // 照样红,只是从这里跑的人看到的是「Windows 上失败了」,白查一轮。统一在这儿给一个
+    // 临时库,跑完删掉;`$__code` 先接住退出码,免得 Remove-Item 把它冲掉。
+    const db = `harness-wintest-${s}-${Date.now()}.db`;
+    const cmd = [
+      `$env:HARNESS_DB = Join-Path $env:TEMP '${db}'`,
+      `npm -w server run test:${s} 2>&1`,
+      `$__code = $LASTEXITCODE`,
+      `Remove-Item $env:HARNESS_DB -Force -ErrorAction SilentlyContinue`,
+      `exit $__code`,
+    ].join("\n");
+    const res = await rexec(cmd, { cwd, projectId: p.id, timeout: 10 * 60_000 });
     const ok = res.code === 0;
     console.log(ok ? green("通过") : red(`失败 (exit ${res.code})`));
     if (!ok) console.log(res.out.split("\n").slice(-40).map((l) => `    ${l}`).join("\n"));

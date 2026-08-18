@@ -8,6 +8,44 @@
 「实测」的是在那台机器上跑出来的,其余仍是读代码的推断。怎么在开发机上改、在那台机器上跑,
 见 `docs/win-remote.md`。
 
+## 〇、当前基线:14/14 绿(2026-08-18 实测)
+
+一轮跑完的那 14 条,以及各自当初红在哪:
+
+| 测试 | 首次上真机 | 红的是什么 |
+|---|---|---|
+| `win-launch` | 红 → 绿 | 夹具写死 `cmd.exe`,真机 `COMSPEC` 是全路径 |
+| `path-boundary` | 红 → 绿 | 收尾 `EBUSY: unlink harness.db`(A 类) |
+| `openers-windows` | 绿 | |
+| `agent-tee` | 绿 | |
+| `terminal` | 绿 | (留一个孤儿进程,见第五节) |
+| `file-browser` | 绿 | |
+| `local-open` | 绿 | |
+| `review` | 绿 | |
+| `accept-merge` | 绿 | |
+| `free-workflow` | 红 → 绿 | **产品 bug**:`free-review-files.ts` 拼 `/` 判边界 + 夹具是 POSIX 方言(B 类) |
+| `skills` | 红 → 绿 | 动态 `import` 说明符不是 `file://`(Windows 上 `d:` 被当协议拒);随后 A 类 |
+| `cli-catalog` | 红 → 绿 | 夹具依赖 `echo`/`sh`(B 类) |
+| `cli-overrides` | 红 → 绿 | 假 CLI 是 `#!/bin/sh` + 写死 `:`;夹具只设 `HOME`(Windows 认 `USERPROFILE`) |
+| `scheduled-messages` | 红 → 绿 | 假 CLI 是 sh 脚本(B 类),而且被 A 类盖住了 |
+
+真机红的原因基本只有两类,认出类别比逐条查快得多:
+
+- **A 类:收尾 EBUSY。**断言全过,却在 `finally` / `process.on("exit")` 里删不掉临时目录或库文件。
+  POSIX 删得掉还开着的文件,Windows 删不掉。危害不止于「多留个临时目录」——**它抛在收尾路径上,
+  会把 try 里真正的断言错整个顶掉**,于是产品 bug 显示成「删不掉临时目录」。松库句柄用
+  `tmp-db.ts` 的 `releaseTmpDb()`;`process.on("exit")` 是同步的,句柄得提前拿在手里。
+- **B 类:夹具写的是 POSIX 方言。**`#!/bin/sh` 桩(Windows 不认 shebang,PATH 查找只认 PATHEXT
+  后缀)、`echo`/`sh`/`test -f`/`sleep`(前者是 cmd 内建、PATH 上没这个文件,后三个压根没有)、
+  PATH 拼接写死 `:`、只设 `HOME`。**两边通吃的写法是转手交给 `node`**:测试本身就是它跑起来的,
+  必然在、必然是 PATH 上的真文件,而且 execFile 直起是亲子进程(不像 `.cmd` 垫片中间垫一层
+  cmd.exe,手停的击杀语义两边就不一样了)。
+
+**A/B 之外真找出来的产品 bug 只有一类,但它有五处**:`startsWith(x + "/")` 判路径边界。
+`path.resolve` 在 Windows 上还的是反斜杠,这个前缀比较**恒为假** —— 不是安全收紧,是整条功能
+静默失效:审查报告一律读成空串(「按意见修复」被挡死)、`/review/*` 全部 404、SPA 的每个 js/css
+都判成界外回退 index.html(整个前端白屏)、assets 拿不到 immutable 缓存头。改用 `path.sep`。
+
 ## 一、专为 Windows 写的三条(在 macOS/Linux 上也跑绿)
 
 它们靠伪造 `process.platform` 走真分支,不需要 Windows 机器 —— 改动对应逻辑时在开发机上就该跑:
@@ -35,11 +73,15 @@
 起不来时的报错已经是人话,照着升级即可,别去查测试本身。
 
 **开发者模式**(或以管理员身份跑):下面几条用 `symlinkSync` 造夹具,Windows 默认不允许普通用户
-建符号链接 —— 在「设置 → 隐私和安全性 → 开发者选项」里打开。**实测 `192.168.1.187` 上是关的**
-(`AllowDevelopmentWithoutDevLicense` 未设),所以这几条在那台机器上现在必红:
+建符号链接 —— 在「设置 → 隐私和安全性 → 开发者选项」里打开。**`192.168.1.187` 上已于 2026-08-18
+打开,这几条现已实测绿**:
 
 `test-file-browser.ts`、`test-local-open.ts`、`test-skills.ts`、`test-review-flow.ts`、
 `test-free-workflow-hardening.ts`、`test-free-workflow-lifecycle.ts`
+
+探测这个开关**别读注册表**:那台机器开关早就打开了,`AllowDevelopmentWithoutDevLicense` 却仍读不到
+值,据此报过一次假警。要回答的问题其实是「symlink 建不建得出来」—— 直接建一个再删掉最准
+(`scripts/win-remote.mjs` 的 doctor 就是这么做的)。
 
 **`HARNESS_DB` 指向临时目录**:下面几条会真写库,入口有守卫(`server/scripts/tmp-db.ts`)——
 
@@ -47,21 +89,25 @@
 `test-duet-iteration.ts`
 
 守卫认 `os.tmpdir()`(POSIX 上额外认 `/tmp`)。Windows 上**别再照抄注释里的 `HARNESS_DB=/tmp/x.db`**:
-那会落到当前盘的 `\tmp\`,多半不存在。改用 `HARNESS_DB=%TEMP%\test-queue.db`。
+那会落到当前盘的 `\tmp\`,多半不存在。改用 `HARNESS_DB=%TEMP%\test-queue.db`。`win-remote.mjs test`
+已经统一代跑的人给一个临时库并在跑完删掉 —— 不给的话,红出来的样子是「Windows 上失败了」,
+而其实 mac 上不设照样红。
 
-## 三、需要改夹具才能跑(现在会红,不是产品 bug)
+## 三、假 CLI 夹具(已全部改成两边通吃)
 
-这几条往 PATH 里塞一个**假 CLI** 来验执行链路,而那个假 CLI 是 `#!/bin/sh` 脚本 + `chmod 755`——
-Windows 既不认 shebang 也不认 `chmod`;它们拼 PATH 用的还是写死的 `:`。要跑得换成 `.cmd` 桩
-(或改成 `node <js>` 桩,两边通吃),并把 `:` 换成 `path.delimiter`:
+这几条往 PATH 里塞一个**假 CLI** 来验执行链路。原先那批是 `#!/bin/sh` 脚本 + `chmod 755` + 写死
+的 `:`,在 Windows 上一句都跑不起来;现已逐条改成「壳按平台换(`.cmd` / shebang),本体交给 node」:
 
 | 测试 | 假 CLI 干什么 |
 |---|---|
 | `test-accept-merge.ts` | `exit 0` |
-| `test-cli-catalog.ts` | 打印一行版本号 |
-| `test-cli-overrides.ts` | 把收到的参数/环境变量写进探针文件 |
+| `test-cli-catalog.ts` | 回显第一个参数(`%~1` / `"$1"`);另有三段直接用 `node -e` 当被测命令 |
+| `test-cli-overrides.ts` | 把收到的环境变量写进探针文件 |
 | `test-review-flow.ts` | `exit 0`(同时还用符号链接,见上一节) |
-| `test-scheduled-messages.ts` | 多行脚本,模拟一次完整回合 |
+| `test-scheduled-messages.ts` | 读一行 stdin、回两条 JSON,模拟一次完整回合 |
+
+`cli-catalog` 的回显桩在 Windows 上顺带多验了一段产品逻辑:命中的是批处理垫片,`resolveLaunch`
+必须把它拆成 cmd.exe 调用而不是直接 execFile(`bin-resolve.ts` 里 CVE-2024-27980 那段)。
 
 ## 四、验的是 Windows 上**有意不做**的功能
 
