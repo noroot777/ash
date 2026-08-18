@@ -49,6 +49,12 @@
 
 浏览器/CDP/GUI 自动化这类「操作电脑」任务,一律派 codex(codex@cpa·gpt-5.6-sol)执行,不派 claude(用户 2026-07-30 指定)。
 
+## Windows 真机在 192.168.1.187（用户 2026-08-18 指定）
+
+跨平台的东西（路径分隔符、PowerShell、原生窗口、`.cmd` 启动）不许只在 macOS 上读代码断言「Windows 应该也对」。那台机器上跑着一套 harness（`:4317`，仓库 `D:\ai_workspace\ash`），碰了 win32 分支就上去真跑一遍再交付。
+
+它没开 SSH/WinRM，远程 shell 就用 harness 自己的终端 API：`POST /api/projects/<id>/terminal/sessions` 开会话 → `/input` 送命令 → `/events`(SSE) 收输出。控制台是 GBK，命令和结果都走 base64 进出，否则中文全是乱码。代码别 push 到 GitHub 中转，用 `git format-patch` + 局域网 `python3 -m http.server` 传，落进 `git worktree add --detach` 的独立目录（`node_modules` 用 `mklink /J` 借主仓的），别碰用户的检出。完事把会话、worktree、测试服务、临时文件全清掉。
+
 ## 任务完成协议
 
 **exit 0 ≠ done**，规则本体由 prompt 前言注入（fresh run）/ 消息尾部提醒（reply/resume 回合），此处不复述——**别再往任何 md 里加第四份拷贝**。改结算逻辑看 `server/CLAUDE.md`。
