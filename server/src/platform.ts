@@ -49,9 +49,15 @@ function powerShellExe(): string | null {
   return cachedShell;
 }
 
-function encodeCommand(script: string): string {
+/**
+ * `-EncodedCommand` 的载荷。导出是因为不止这个文件要跑 PowerShell —— dir-picker.ts 得自己
+ * 挑 exe（GUI 对话框要 STA，候选顺序跟这里相反），但编码规则只该有一份。
+ */
+export function encodePowerShellCommand(script: string): string {
   return Buffer.from(script, "utf16le").toString("base64");
 }
+
+const encodeCommand = encodePowerShellCommand;
 
 /** 同步跑一段 PowerShell,拿 stdout。失败(含 PowerShell 不可用)一律空串。 */
 export function powerShellSync(script: string, timeoutMs = 10_000): string {

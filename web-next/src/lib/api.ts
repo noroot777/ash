@@ -38,6 +38,7 @@ import type {
   AcceptTaskResult,
   DeleteTaskResult,
   DetectedCli,
+  DirectoryPick,
   FileContent,
   FileListing,
   FileWorkspaceRoot,
@@ -79,6 +80,10 @@ export const api = {
   // 只读的运行时事实（平台/分隔符/家目录），跟可写的 `/settings` 是两回事。
   // 调用点走 `useHostInfo.ts`：整个前端只该拉一次。
   host: (): Promise<HostInfo> => request("/host"),
+  // 在**服务端那台机器**上弹一个系统文件选择窗口。请求会一直挂到用户点完或取消，
+  // 所以调用点必须给出「正在选择」的反馈；`canPickDirectory` 为假时别调。
+  pickDirectory: (startIn: string): Promise<DirectoryPick> =>
+    request("/host/pick-directory", json("POST", { startIn })),
 
   projects: (): Promise<ProjectView[]> => request("/projects"),
   createProject: (name: string, repoPath: string): Promise<ProjectView> =>

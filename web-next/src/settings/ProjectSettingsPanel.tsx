@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { ProjectView } from "@harness/shared";
 import { Button } from "../components/ui.tsx";
+import { DirectoryPickerButton } from "../components/DirectoryPickerButton.tsx";
 import { api } from "../lib/api.ts";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import { PathHealthStatus, useDebouncedPathHealth } from "./PathHealthStatus.tsx";
@@ -44,7 +45,7 @@ export function ProjectSettingsPanel({ project, onUpdated, onDeleted, notify }: 
       <header className="settings-heading"><div><h1>项目设置</h1><p>项目目录是所有任务的默认运行位置，也是 worktree 与 diff 的根。</p></div></header>
       <section className="settings-section"><h2>基本信息</h2><div className="settings-card">
         <label className="settings-field"><span>项目名称</span><input value={name} onChange={(event) => setName(event.target.value)} /></label>
-        <label className="settings-field"><span>工作目录</span><input className="mono" value={repoPath} onChange={(event) => setRepoPath(event.target.value)} /></label>
+        <label className="settings-field"><span>工作目录</span><span className="path-field"><input className="mono" value={repoPath} onChange={(event) => setRepoPath(event.target.value)} /><DirectoryPickerButton startIn={repoPath} onPick={setRepoPath} disabled={busy} notify={notify} /></span></label>
         <PathHealthStatus path={repoPath} state={pathHealth} />
         <div className="settings-card-foot"><span>修改目录不会移动磁盘文件，只会改变后续任务的 cwd。</span><Button variant="primary" disabled={!dirty || !name.trim() || !repoPath.trim() || busy} onClick={() => void save()}>{busy ? "保存中…" : "保存更改"}</Button></div>
       </div></section>

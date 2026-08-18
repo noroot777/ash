@@ -480,6 +480,19 @@
 .ui-dropdown-row.is-current > b { color: var(--accent); }
 .ui-dropdown-row.is-disabled { opacity: 0.5; }
 .ui-dropdown-row.is-disabled[aria-selected="true"] { background: transparent; }
+/* 路径输入框 + 「浏览…」按钮。放在 controls.css 而不是某个页面样式里，是因为它同时长在
+   新建项目弹层（`.quick-create-fields`，输入框 width:100%）和项目设置（`.settings-field`，
+   输入框 width:min(520px,100%)）里——两处的输入框都会把按钮挤出行外，得靠 min-width:0
+   让它可压缩。按钮在服务端不支持时整个不渲染，这时 flex 行退化成单个输入框，无副作用。 */
+.path-field {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+.path-field > input { min-width: 0; flex: 1; }
+.path-field > .ui-button { flex: none; }
+
 @media (prefers-reduced-motion: reduce) {
   .task-pin { transition: none; }
 }
