@@ -4,10 +4,9 @@ import { dirname } from "node:path";
 import { Hono } from "hono";
 import { eq } from "drizzle-orm";
 import { DUET_DEFAULTS } from "@harness/shared";
+import { requireTmpDb } from "./tmp-db.js";
 
-if (!process.env.HARNESS_DB?.startsWith("/tmp/")) {
-  throw new Error("test-duet-iteration requires HARNESS_DB under /tmp");
-}
+requireTmpDb("test-duet-iteration");
 
 const [{ db, ensureSchema }, schema, iteration, transcript] = await Promise.all([
   import("../src/db/index.js"),

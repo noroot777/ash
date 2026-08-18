@@ -5,15 +5,9 @@
 // 用 pickNextLaunchable 来验证"队列下一个该跑哪个"——绕开 resumeOrRunTask
 // 实际拉起 agent 的副作用(测试环境无 executor)。少量端到端走 advanceQueue。
 import { asc, eq } from "drizzle-orm";
+import { requireTmpDb } from "./tmp-db.js";
 
-if (!process.env.HARNESS_DB) {
-  console.error("先设 HARNESS_DB=/tmp/test-queue-<rand>.db 再跑");
-  process.exit(1);
-}
-if (!process.env.HARNESS_DB.startsWith("/tmp/")) {
-  console.error("HARNESS_DB 必须在 /tmp/ 下(防止误改真实数据)");
-  process.exit(1);
-}
+requireTmpDb("test-queue");
 
 const { db } = await import("../src/db/index.js");
 const { tasks, groups, projects, queueItems } = await import("../src/db/schema.js");

@@ -13,15 +13,9 @@ import assert from "node:assert/strict";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { requireTmpDb } from "./tmp-db.js";
 
-if (!process.env.HARNESS_DB) {
-  console.error("先设 HARNESS_DB=/tmp/test-cli-overrides-<rand>.db 再跑");
-  process.exit(1);
-}
-if (!process.env.HARNESS_DB.startsWith("/tmp/")) {
-  console.error("HARNESS_DB 必须在 /tmp/ 下(防止误改真实数据)");
-  process.exit(1);
-}
+requireTmpDb("test-cli-overrides");
 
 const {
   UNKNOWN_CLI_HOST_ENV,

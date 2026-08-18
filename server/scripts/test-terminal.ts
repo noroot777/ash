@@ -1,16 +1,27 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
+import { IS_WINDOWS } from "../src/platform.js";
 import { resolveTerminalDirectory, TerminalSessionManager } from "../src/terminal.js";
 
-const cwd = mkdtempSync(join(tmpdir(), "harness-terminal-"));
+// realpath 一次:Windows 的 %TEMP% 常常是 8.3 短名(`C:\Users\RUNNER~1\…`),而
+// cmd 的 `cd` 回的是长名 —— 不展开的话下面那句 output.includes(cwd) 永远不成立。
+const cwd = realpathSync(mkdtempSync(join(tmpdir(), "harness-terminal-")));
 const manager = new TerminalSessionManager();
+
+// 起一个**确定的** shell(不走 shellCommand() 的回退链):这条测试要验的是会话管理
+// 与 ConPTY/pty 的收发,不是「这台机器上默认该用哪个 shell」。探针命令跟着 shell 走 ——
+// cmd 里 `printf`/`pwd` 都不存在,得换成 `echo` 和 `cd`(cmd 的 `cd` 不带参数就是打印当前目录)。
+const shell = IS_WINDOWS ? "cmd.exe" : "/bin/sh";
+const probeCommand = IS_WINDOWS
+  ? "echo __HARNESS_TERMINAL_OK__& cd\r\n"
+  : "printf '__HARNESS_TERMINAL_OK__\\n'; pwd\n";
 
 try {
   assert.equal(resolveTerminalDirectory("~"), homedir());
   const session = manager.create("project-test", cwd, {
-    shell: "/bin/sh",
+    shell,
     shellArgs: [],
     cols: 80,
     rows: 20,
@@ -33,7 +44,7 @@ try {
   assert.ok(unsubscribe);
   assert.equal(manager.get(session.id, "wrong-project"), null);
   assert.equal(manager.resize(session.id, "project-test", 110, 32), true);
-  assert.equal(manager.write(session.id, "project-test", "printf '__HARNESS_TERMINAL_OK__\\n'; pwd\n"), true);
+  assert.equal(manager.write(session.id, "project-test", probeCommand), true);
   await received;
   assert.ok(manager.eventsAfter(session.id, "project-test", 0)?.length);
   assert.equal(manager.sweepIdleSessions(Date.now() + 31 * 60 * 1000), 0);

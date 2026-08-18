@@ -7,15 +7,9 @@
 // 跑法:
 //   HARNESS_DB=/tmp/test-answer-routing-$RANDOM.db npx tsx server/scripts/test-answer-routing.ts
 import assert from "node:assert/strict";
+import { requireTmpDb } from "./tmp-db.js";
 
-if (!process.env.HARNESS_DB) {
-  console.error("先设 HARNESS_DB=/tmp/test-answer-routing-<rand>.db 再跑");
-  process.exit(1);
-}
-if (!process.env.HARNESS_DB.startsWith("/tmp/")) {
-  console.error("HARNESS_DB 必须在 /tmp/ 下(防止误改真实数据)");
-  process.exit(1);
-}
+requireTmpDb("test-answer-routing");
 
 const { db, ensureSchema } = await import("../src/db/index.js");
 const { agents, sessions } = await import("../src/db/schema.js");
