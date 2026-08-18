@@ -122,13 +122,22 @@ try {
   assert.equal(exe.windowsVerbatimArguments, undefined);
 
   // ── 5. 退回 cmd.exe 的引号规则 ────────────────────────────────────────────
+  // COMSPEC 必须自己钉死（跟第 6 节同一个道理）：真 Windows 上它是
+  // `C:\WINDOWS\system32\cmd.exe`，开发机上压根没这个变量。不钉的话同一条断言在两台
+  // 机器上结论不同 —— 开发机绿、真机红，而产品逻辑（win-command.ts 的
+  // `process.env.COMSPEC || "cmd.exe"`）两边都是对的。
+  const comspec = "C:\\Windows\\System32\\cmd.exe";
+  process.env.COMSPEC = comspec;
   for (const bin of ["plain", "ghost"]) {
     const plan = resolveLaunch(bin, ["a b"]);
     assert.ok(plan, `${bin} 应该能解析`);
-    assert.equal(plan.file, "cmd.exe");
+    assert.equal(plan.file, comspec, "认 COMSPEC 的全路径，别写死 cmd.exe");
     assert.equal(plan.windowsVerbatimArguments, true, "verbatim 必须开，否则 Node 会再转义一轮");
     assert.deepEqual(plan.args.slice(0, 3), ["/d", "/s", "/c"], "/d 跳过 AutoRun，/s 只剥最外层引号");
   }
+  delete process.env.COMSPEC;
+  assert.equal(resolveLaunch("plain", ["a b"])?.file, "cmd.exe", "COMSPEC 没设时回退裸名，交给 PATH 找");
+  process.env.COMSPEC = comspec;
 
   const quoted = resolveLaunch("plain", ["a b", 'q"x', "C:\\dir\\", ""]);
   assert.ok(quoted);

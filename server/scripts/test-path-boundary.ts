@@ -167,5 +167,10 @@ try {
     `✅ 路径边界（大小写归一 / 兄弟目录 / UNC / 8.3 / 长路径提示）全部通过${caseInsensitiveFs ? "" : "（本机文件系统区分大小写，端到端的大小写用例已跳过）"}`,
   );
 } finally {
+  // Windows 删不掉「还开着的文件」。stage 里那个 harness.db 是上面 import
+  // file-browser / local-open-routes 时连上的（HARNESS_DB 指向它），不先关就是 EBUSY ——
+  // 断言全过了，却在收尾这一步把整条测试判红。POSIX 上删已打开的文件是合法的，
+  // 所以这一句只在真 Windows 上才救得到命。
+  await import("../src/db/index.js").then(({ dbClient }) => dbClient.close()).catch(() => undefined);
   rmSync(stage, { recursive: true, force: true });
 }
