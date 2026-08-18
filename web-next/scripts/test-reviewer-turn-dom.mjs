@@ -41,30 +41,72 @@ try {
 
   browser = await chromium.launch({ executablePath: await executablePath(), headless: true });
   const page = await browser.newPage({ viewport: { width: 1000, height: 1200 } });
+  await page.route(/\/api\/tasks\/t1\/review\/file/, async (route) => {
+    const round = new URL(route.request().url()).searchParams.get("round") ?? "?";
+    await route.fulfill({
+      status: 200,
+      contentType: "text/markdown; charset=utf-8",
+      body: `# 第 ${round} 轮审查报告\n\n报告已在应用内打开。`,
+    });
+  });
   await page.goto(`http://127.0.0.1:${address.port}/scripts/fixtures/reviewer-turn.html`);
 
   const messages = page.locator(".task-message--agent");
   await messages.first().waitFor();
-  assert.equal(await messages.count(), 4, "三段就地验证前后的发言 + 一段自由派审");
+  assert.equal(await messages.count(), 5, "四段就地验证前后的发言 + 一段自由派审");
 
-  // 只有审查者那两条挂 is-reviewer：中间那段就地验证，最后那段是 reviewer 会话。
+  // 两轮就地验证 + 最后一段 reviewer 会话挂 is-reviewer，修复正文仍是普通执行者。
   const reviewer = page.locator(".task-message--agent.is-reviewer");
-  assert.equal(await reviewer.count(), 2);
+  assert.equal(await reviewer.count(), 3);
   assert.equal(await messages.nth(0).evaluate((el) => el.classList.contains("is-reviewer")), false);
   assert.equal(await messages.nth(1).evaluate((el) => el.classList.contains("is-reviewer")), true);
   assert.equal(await messages.nth(2).evaluate((el) => el.classList.contains("is-reviewer")), false);
   assert.equal(await messages.nth(3).evaluate((el) => el.classList.contains("is-reviewer")), true);
+  assert.equal(await messages.nth(4).evaluate((el) => el.classList.contains("is-reviewer")), true);
 
   // 徽标要说清是第几轮，两种审查各有各的轮次来源。
   const badges = page.locator(".verify-badge");
-  assert.equal(await badges.count(), 2);
+  assert.equal(await badges.count(), 3);
   assert.match(await badges.nth(0).innerText(), /审查者\s*·\s*第 2 轮/);
+  assert.match(await badges.nth(1).innerText(), /审查者\s*·\s*第 3 轮/);
   // 自由派审的轮次只写在时间线旁注里、从不进 run 事件，靠区间补上。
-  assert.match(await badges.nth(1).innerText(), /审查者\s*·\s*第 1 轮/);
+  assert.match(await badges.nth(2).innerText(), /审查者\s*·\s*第 1 轮/);
+
+  // D：有后续轮次且已有结论的历史卡默认折叠，最新轮展开；自由派审仍在卡片外。
+  const lanes = page.locator(".verify-lane");
+  assert.equal(await lanes.count(), 2);
+  assert.equal(await lanes.nth(0).evaluate((el) => el.classList.contains("is-collapsed")), true);
+  assert.equal(await lanes.nth(1).evaluate((el) => el.classList.contains("is-collapsed")), false);
+  assert.equal(await lanes.nth(0).locator(".verify-lane-body").isHidden(), true);
+  assert.equal(await lanes.nth(1).locator(".verify-lane-body").isVisible(), true);
+  assert.deepEqual(
+    await lanes.nth(0).locator(".verify-lane-actions > button").allInnerTexts(),
+    ["审查报告", "展开"],
+    "审查报告必须在展开按钮左边",
+  );
+  assert.deepEqual(
+    await lanes.nth(1).locator(".verify-lane-actions > button").allInnerTexts(),
+    ["审查报告", "收起"],
+  );
+  assert.equal(await messages.nth(4).evaluate((el) => el.closest(".verify-lane") === null), true);
+
+  // 折叠状态不妨碍直接看报告；报告沿用现有应用内 Markdown 弹层，不另开标签页。
+  const pageCount = page.context().pages().length;
+  await lanes.nth(0).getByRole("button", { name: "审查报告" }).click();
+  const reportDialog = page.getByRole("dialog", { name: /report\.md/ });
+  await reportDialog.waitFor();
+  assert.match(await reportDialog.innerText(), /第 2 轮审查报告/);
+  assert.equal(page.context().pages().length, pageCount);
+  assert.equal(await lanes.nth(0).evaluate((el) => el.classList.contains("is-collapsed")), true);
+  await reportDialog.getByRole("button", { name: "关闭审查报告" }).click();
+
+  await lanes.nth(0).getByRole("button", { name: "展开" }).click();
+  assert.equal(await lanes.nth(0).locator(".verify-lane-body").isVisible(), true);
+  assert.equal(await lanes.nth(0).getByRole("button", { name: "收起" }).count(), 1);
 
   // 换身份是断点：验证回合和它后面的修复回合都得重新报执行器名，
   // 否则读者只看见「同一个人一口气说了三段」。
-  for (const index of [0, 1, 2, 3]) {
+  for (const index of [0, 1, 2, 3, 4]) {
     assert.equal(
       await messages.nth(index).locator(".agent-run-identity").count(),
       1,
@@ -74,22 +116,24 @@ try {
 
   // 验证段的起止旁注跟审查者同一套颜色；打回那条仍归红。
   const verifyNotes = page.locator(".conversation-note.is-verify");
-  assert.equal(await verifyNotes.count(), 3, "就地验证的起止两条 + 自由派审的开始那条");
+  assert.equal(await verifyNotes.count(), 5, "两轮就地验证的起止四条 + 自由派审的开始那条");
   assert.match(await verifyNotes.nth(0).innerText(), /第 2 轮验证开始/);
   assert.equal(await verifyNotes.nth(1).evaluate((el) => el.classList.contains("is-error")), true);
   const noteColors = await verifyNotes.evaluateAll((els) =>
     els.map((el) => getComputedStyle(el).borderLeftColor));
   assert.notEqual(noteColors[0], noteColors[1], "开始是青的、打回是红的，两条不能同色");
 
-  // 徽标是加出来的，不是挤出来的：气泡本体的左边界和宽度一律不动。
+  // D 的正文统一收进同一层泳道内边距；自由派审不属于 D，仍保持普通会话的原始宽度。
   const boxes = await messages.evaluateAll((els) =>
     els.map((el) => {
       const body = el.querySelector(".task-message-content");
       const rect = body.getBoundingClientRect();
       return { x: Math.round(rect.x), width: Math.round(rect.width) };
     }));
-  assert.equal(boxes[1].x, boxes[0].x, "审查者的气泡不该被推进去");
-  assert.equal(boxes[1].width, boxes[0].width, "审查者的气泡不该被挤窄");
+  assert.equal(boxes[3].x, boxes[1].x, "两轮验证正文应使用同一条泳道内边距");
+  assert.equal(boxes[3].width, boxes[1].width, "两轮验证正文宽度应一致");
+  assert.equal(boxes[4].x, boxes[0].x, "自由派审不能被就地验证泳道推进去");
+  assert.equal(boxes[4].width, boxes[0].width, "自由派审仍保持普通会话宽度");
 
   // 头像换了个东西（盾形图标而不是首字母），但盘子本身大小不变。
   const avatars = await page.locator(".task-message-avatar").evaluateAll((els) =>
@@ -98,8 +142,8 @@ try {
       return { size: `${Math.round(rect.width)}x${Math.round(rect.height)}`, svg: !!el.querySelector("svg") };
     }));
   assert.equal(avatars[0].svg, false, "普通回合还是首字母");
-  assert.equal(avatars[1].svg, true, "审查者换成盾形");
-  assert.equal(avatars[1].size, avatars[0].size, "头像盘子大小不变");
+  assert.equal(avatars[3].svg, true, "审查者换成盾形");
+  assert.equal(avatars[3].size, avatars[2].size, "头像盘子大小不变");
 
   // 新增的这几处小字承载的正是本功能的全部信息（谁在说话 / 哪一轮 / 验证段的边界），
   // 淡一点就等于没做。按 WCAG 相对亮度实测，普通小号文本至少要 4.5:1。

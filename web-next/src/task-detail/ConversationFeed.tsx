@@ -12,6 +12,8 @@ import { RunActivity } from "../components/RunActivity.tsx";
 import { MessageFooter } from "../components/MessageFooter.tsx";
 import { TurnRetryButton } from "../components/TurnRetryButton.tsx";
 import { MessageAttachments } from "./Attachments.tsx";
+import { conversationFeedRows } from "./conversationReviewLanes.ts";
+import { ReviewerLane } from "./ReviewerLane.tsx";
 import { type TurnRetryTarget, turnRetryTarget } from "./turnRetry.ts";
 import { durationBetween, formatInstant, parseAttachmentText } from "./utils.ts";
 
@@ -150,49 +152,58 @@ export function ConversationFeed({
   const retryItemId = retry
     ? [...items].reverse().find((item) => item.kind === "agent")?.id ?? null
     : null;
+  const rows = conversationFeedRows(items);
+
+  const renderItem = (item: ConversationItem) => {
+    if (item.kind === "agent") {
+      return (
+        <AgentMessage
+          key={item.id}
+          item={item}
+          retry={retry && item.id === retryItemId ? (
+            <TurnRetryButton
+              exitStatus={retry.exitStatus}
+              kind={retry.kind}
+              onRetry={() => onRetryTurn!(retry)}
+            />
+          ) : undefined}
+        />
+      );
+    }
+    if (item.kind === "user") return <UserMessage key={item.id} item={item} />;
+    // 回合边界才配得上一条横贯的分隔线；系统旁注只是贴在会话边上的一行小字，
+    // 它不该看起来像「这里换了一段对话」。
+    if (item.variant === "boundary") {
+      return (
+        <div className={`task-event-line${item.tone === "error" ? " is-error" : ""}`} key={item.id}>
+          <span />
+          <p>{item.text}{item.at ? ` · ${formatInstant(item.at)}` : ""}</p>
+          <span />
+        </div>
+      );
+    }
+    return (
+      <p
+        className={`conversation-note${item.tone === "error" ? " is-error" : ""}${item.verify ? " is-verify" : ""}`}
+        key={item.id}
+      >
+        {item.text}
+        {item.at && <time>{formatInstant(item.at)}</time>}
+      </p>
+    );
+  };
 
   return (
     <ImagePreviewGroup isolated>
       <div className="conversation-scroll-region task-conversation-wrap">
         <div className="task-conversation" ref={scroll}>
-          {items.map((item) => {
-            if (item.kind === "agent") {
-              return (
-                <AgentMessage
-                  key={item.id}
-                  item={item}
-                  retry={retry && item.id === retryItemId ? (
-                    <TurnRetryButton
-                      exitStatus={retry.exitStatus}
-                      kind={retry.kind}
-                      onRetry={() => onRetryTurn!(retry)}
-                    />
-                  ) : undefined}
-                />
-              );
-            }
-            if (item.kind === "user") return <UserMessage key={item.id} item={item} />;
-            // 回合边界才配得上一条横贯的分隔线；系统旁注只是贴在会话边上的一行小字，
-            // 它不该看起来像「这里换了一段对话」。
-            if (item.variant === "boundary") {
-              return (
-                <div className={`task-event-line${item.tone === "error" ? " is-error" : ""}`} key={item.id}>
-                  <span />
-                  <p>{item.text}{item.at ? ` · ${formatInstant(item.at)}` : ""}</p>
-                  <span />
-                </div>
-              );
-            }
-            return (
-              <p
-                className={`conversation-note${item.tone === "error" ? " is-error" : ""}${item.verify ? " is-verify" : ""}`}
-                key={item.id}
-              >
-                {item.text}
-                {item.at && <time>{formatInstant(item.at)}</time>}
-              </p>
-            );
-          })}
+          {rows.map((row) => row.kind === "item"
+            ? renderItem(row.item)
+            : (
+              <ReviewerLane key={row.id} taskId={task.id} lane={row}>
+                {row.items.map(renderItem)}
+              </ReviewerLane>
+            ))}
           {activityPhase && !loading && !error && (
             <RunActivity
               status={task.status}

@@ -9,6 +9,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { buildConversationItems, conversationToMarkdown } from "../src/task-detail/conversationModel.ts";
 import { isVerifyNote } from "../src/task-detail/conversationNotes.ts";
+import { conversationFeedRows } from "../src/task-detail/conversationReviewLanes.ts";
 
 // —— 旁注：验证段的起止跟着审查者一个颜色，别的通告不受影响 ——
 assert.equal(isVerifyNote("第 2 轮验证开始：就在这个任务的工作目录里跑。"), true);
@@ -74,6 +75,58 @@ assert.equal(verify.continuation, false, "验证回合必须重新报身份，�
 assert.equal(fix.continuation, false, "验证结束回到实现者，同样要重新报身份");
 assert.equal(impl.sessionId, verify.sessionId, "这三段本来就跑在同一条会话上");
 
+// —— D 折叠卡：就地验证的起止旁注和正文必须成为同一行结构，自由派审不进来 ——
+const firstLane = conversationFeedRows(items).find((row) => row.kind === "review-lane");
+assert.ok(firstLane, "第 2 轮就地验证应整理成验证卡");
+assert.equal(firstLane.round, 2);
+assert.deepEqual(firstLane.items.map((item) => item.id), [startNote.id, verify.id, failNote.id]);
+assert.equal(firstLane.conclusion, "verify_failed");
+assert.equal(firstLane.complete, true);
+assert.equal(firstLane.reportAvailable, true, "跑完且审查者确实说过话，才有可看的 report.md");
+assert.equal(firstLane.defaultCollapsed, false, "唯一一轮仍是最新轮，默认展开");
+
+const twoRoundItems = buildConversationItems([{
+  session,
+  output: [
+    "实现。",
+    turn("system", "第 1 轮验证开始：就在这个任务的工作目录里跑。", "2026-08-10T03:30:00.000Z"),
+    "第一轮审查。",
+    turn("system", "第 1 轮验证未通过。", "2026-08-10T03:40:00.000Z"),
+    "修复。",
+    turn("system", "第 2 轮验证开始：就在这个任务的工作目录里跑。", "2026-08-10T04:00:00.000Z"),
+    "第二轮审查仍在跑。",
+  ].join("\n"),
+  trace: [
+    run("2026-08-10T03:23:00.000Z"),
+    run("2026-08-10T03:30:00.000Z", 1),
+    run("2026-08-10T03:40:00.000Z"),
+    run("2026-08-10T04:00:00.000Z", 2),
+  ],
+}], [session], []);
+const twoLanes = conversationFeedRows(twoRoundItems).filter((row) => row.kind === "review-lane");
+assert.equal(twoLanes.length, 2);
+assert.equal(twoLanes[0].defaultCollapsed, true, "有结论且后面已有新一轮的历史卡默认折叠");
+assert.equal(twoLanes[1].defaultCollapsed, false, "正在跑的最新轮必须默认展开");
+assert.equal(twoLanes[1].complete, false);
+assert.equal(twoLanes[1].reportAvailable, false, "进行中的报告尚未必写完，不给死入口");
+
+const abandonedItems = buildConversationItems([{
+  session,
+  output: [
+    turn("system", "第 1 轮验证开始：就在这个任务的工作目录里跑。", "2026-08-10T03:30:00.000Z"),
+    "第一轮审查中途停止。",
+    turn("system", "第 2 轮验证开始：就在这个任务的工作目录里跑。", "2026-08-10T04:00:00.000Z"),
+    "第二轮审查仍在跑。",
+  ].join("\n"),
+  trace: [run("2026-08-10T03:30:00.000Z", 1), run("2026-08-10T04:00:00.000Z", 2)],
+}], [session], []);
+const abandonedLanes = conversationFeedRows(abandonedItems).filter((row) => row.kind === "review-lane");
+assert.equal(abandonedLanes[0].conclusion, "inconclusive", "被下一轮顶掉的旧轮不能继续显示进行中");
+assert.equal(abandonedLanes[0].complete, true);
+assert.equal(abandonedLanes[0].defaultCollapsed, true, "无结论旧轮同样是历史卡，应默认折叠");
+assert.equal(abandonedLanes[1].conclusion, null);
+assert.equal(abandonedLanes[1].defaultCollapsed, false);
+
 // —— 自由派审的独立审查回合：身份写在会话的 role 上，没有轮次号 ——
 const reviewSession = { ...session, id: "s2", role: "reviewer", startedAt: "2026-08-10T15:00:00.000Z" };
 const reviewed = buildConversationItems(
@@ -82,6 +135,11 @@ const reviewed = buildConversationItems(
   [],
 );
 assert.deepEqual(reviewed.at(-1).reviewer, { round: null }, "reviewer 会话是审查者，但没有验证轮次");
+assert.equal(
+  conversationFeedRows(reviewed).some((row) => row.kind === "review-lane"),
+  false,
+  "自由派审已有独立 reviewer 会话，不套进就地验证折叠卡",
+);
 
 // —— 直播路径：SSE 的 agent.event 自带 verifyRound，跟落盘那份读出来必须一致 ——
 const live = buildConversationItems([], [session], [
@@ -226,6 +284,14 @@ assert.equal(legacyAgents[0].continuation, false, "换身份要重新报头像�
 for (const item of legacy.slice(0, legacyStart)) {
   if (item.kind === "agent") assert.equal(item.reviewer, undefined);
 }
+const legacyLane = conversationFeedRows(legacy).find((row) => row.kind === "review-lane" && row.round === 2);
+assert.ok(legacyLane);
+assert.equal(legacyLane.conclusion, "verified");
+assert.equal(
+  legacyLane.items.some((item) => item.kind === "event" && /合并完成|验收完成|开始验收/.test(item.text)),
+  false,
+  "历史通过轮不能把后续合并 / 验收生命周期吞进 D 卡",
+);
 
 // 通过的那条路收尾时不写「第 N 轮验证…」旁注(concludeRound 直接往下推线),而
 // 「验收阶段更新：已验证」是审查者自己在回合中间调 report_stage 写的、还在它的回合里。
@@ -250,6 +316,58 @@ const passedAgents = passed.filter((item) => item.kind === "agent");
 assert.deepEqual(passedAgents[0].reviewer, { round: 4 });
 assert.deepEqual(passedAgents[1].reviewer, { round: 4 }, "阶段通告是审查者自己回合里写的，不能拿它收口");
 assert.equal(passedAgents[2].reviewer, undefined, "换回合之后的发言回到实现者");
+const passedLane = conversationFeedRows(passed).find((row) => row.kind === "review-lane");
+assert.ok(passedLane);
+assert.equal(passedLane.conclusion, "verified", "通过路径没有收尾旁注，要从 verified 阶段通告得出结论");
+assert.equal(passedLane.complete, true);
+assert.equal(
+  passedLane.items.some((item) => item.kind === "event" && item.text.includes("继续（从中断处）")),
+  false,
+  "验证通过后的实现续跑标记应留在卡片外",
+);
+assert.equal(
+  passedLane.items.some((item) => item.kind === "agent" && item.reviewer === undefined),
+  false,
+  "后续实现正文不能被收进已通过的验证卡",
+);
+
+// 生产通过路径不会写「继续（从中断处）」或「第 N 轮验证通过」，而是阶段通告后直接
+// 推进工作流，依次写验收 / 合并旁注。D 卡必须在第一条生命周期旁注前收口。
+const productionPassed = buildConversationItems([{
+  session,
+  output: [
+    turn("system", "第 5 轮验证开始：就在这个任务的工作目录里跑。", "2026-08-12T03:00:00.000Z"),
+    "验证正文。",
+    turn("system", "验收阶段更新：已验证（verified）", "2026-08-12T03:20:00.000Z"),
+    "第 5 轮验证结论：通过。",
+    turn("system", "这条线上没写等我点头，开始验收。", "2026-08-12T03:20:15.000Z"),
+    turn("system", "已合并到 feat/example。", "2026-08-12T03:20:16.000Z"),
+    turn("system", "验收完成：目标分支 feat/example；任务 status 保持 done。", "2026-08-12T03:20:17.000Z"),
+  ].join("\n"),
+  trace: [run("2026-08-12T03:00:00.000Z", 5)],
+}], [session], []);
+const productionLane = conversationFeedRows(productionPassed).find((row) => row.kind === "review-lane");
+assert.ok(productionLane);
+assert.equal(productionLane.conclusion, "verified");
+assert.equal(productionLane.items.at(-1).kind, "agent", "审查者最终结论留在卡内");
+assert.equal(
+  productionLane.items.some((item) => item.kind === "event" && /开始验收|已合并|验收完成/.test(item.text)),
+  false,
+  "生产通过路径的生命周期旁注必须留在卡外",
+);
+
+const forcedPass = buildConversationItems([{
+  session,
+  output: [
+    turn("system", "第 6 轮验证开始：就在这个任务的工作目录里跑。", "2026-08-12T04:00:00.000Z"),
+    "验证没有给出结论。",
+    turn("system", "第 6 轮验证没有给出结论就停了，人工强制通过时一并收尾。", "2026-08-12T04:20:00.000Z"),
+  ].join("\n"),
+  trace: [run("2026-08-12T04:00:00.000Z", 6)],
+}], [session], []);
+const forcedLane = conversationFeedRows(forcedPass).find((row) => row.kind === "review-lane");
+assert.ok(forcedLane);
+assert.equal(forcedLane.conclusion, "inconclusive", "人工强制通过不是验证器给出的通过结论");
 
 // 通过的那一轮之后另起一条会话:inline 验证是搭在被验任务自己会话上的旁路回合,
 // 时间线一旦走到别的 sessionId,说话的就不可能还是这一轮的审查者。少了这一条,

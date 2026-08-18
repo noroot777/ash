@@ -52,6 +52,9 @@ const output = [
   "起了无头浏览器复核，盾形头像和「审查者 · 第 2 轮」都在，但打回那条旁注仍是灰的。",
   turn("system", "第 2 轮验证未通过，意见已发回会话；修复完成后自动复验。", "2026-08-10T04:10:00.000Z"),
   "收到，改成红色竖条。",
+  turn("system", "第 3 轮验证开始：就在这个任务的工作目录里跑。", "2026-08-10T05:00:00.000Z"),
+  "复验确认身份、边界和对比度都正常，这一轮通过。",
+  turn("system", "第 3 轮验证通过。", "2026-08-10T05:20:00.000Z"),
   // 自由派审的轮次只写在时间线旁注里、从不进 run 事件，只能按这对旁注划出的区间补。
   turn("system", "自由工作流第 1 轮审查开始：5.5审查 · 逻辑检查。", "2026-08-10T14:59:00.000Z"),
 ].join("\n");
@@ -63,6 +66,7 @@ const trace = [
   { at: "2026-08-10T03:23:01.000Z", turnStartedAt: "2026-08-10T03:23:00.000Z", event: { kind: "run", model: "gpt-5.6-sol", reasoningEffort: "xhigh" } },
   { at: "2026-08-10T03:40:01.000Z", turnStartedAt: "2026-08-10T03:40:00.000Z", event: { kind: "run", model: "gpt-5.6-sol", reasoningEffort: "xhigh", verifyRound: 2 } },
   { at: "2026-08-10T04:10:01.000Z", turnStartedAt: "2026-08-10T04:10:00.000Z", event: { kind: "run", model: "gpt-5.6-sol", reasoningEffort: "xhigh" } },
+  { at: "2026-08-10T05:00:01.000Z", turnStartedAt: "2026-08-10T05:00:00.000Z", event: { kind: "run", model: "gpt-5.6-sol", reasoningEffort: "xhigh", verifyRound: 3 } },
 ];
 
 const items = buildConversationItems(
