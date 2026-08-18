@@ -94,7 +94,11 @@ function isFile(p: string): boolean {
 }
 
 function isExecutableFile(p: string): boolean {
-  if (IS_WINDOWS) return isFile(p);
+  // Windows 上「是个文件」还不够(见文件头 ③):`notes.txt` 也是文件,但 CreateProcess
+  // 起不来它。扩展名必须在 PATHEXT 里 —— 裸命令名那条路靠 candidatesIn 拼出来的候选
+  // 天然满足,**显式路径**(用户/执行器 profile 里直接填的 `C:\...\notes.txt`)只有这里
+  // 判得到。漏了的话检测层会报「找到了命令」,真正的失败推迟到 spawn。
+  if (IS_WINDOWS) return isFile(p) && pathExts().includes(extname(p).toLowerCase());
   try {
     accessSync(p, constants.X_OK);
     return true;
@@ -135,7 +139,7 @@ export function resolveBin(bin: string): string | null {
     if (IS_WINDOWS) {
       const { dir, base } = splitDir(bin);
       for (const c of candidatesIn(dir, base)) {
-        if (isFile(c)) return c;
+        if (isExecutableFile(c)) return c;
       }
     }
     return null;

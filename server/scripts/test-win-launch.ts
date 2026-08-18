@@ -100,6 +100,12 @@ try {
   // 带路径但没写扩展名的形式同样要补
   assert.equal(resolveBin(join(binDir, "claude")), join(binDir, "claude.cmd"));
   assert.equal(resolveBin(join(binDir, "fake")), null, "带路径时同样只认文件");
+  // 显式路径**同样要过 PATHEXT**。这条曾经漏掉:带路径的分支只判了「是个文件」,于是
+  // 用户在执行器 profile 里填错一个 `.txt`,目录里会显示「这个命令可用」,直到派任务
+  // 才 spawn 失败 —— 报错离原因十万八千里。
+  assert.equal(resolveBin(join(binDir, "notes.txt")), null, "显式路径指到 .txt 不算找到命令");
+  assert.equal(resolveBin(join(binDir, "fake.exe")), null, "扩展名对但那是个目录,同样不算");
+  assert.equal(resolveBin(join(binDir, "claude.cmd")), join(binDir, "claude.cmd"), "显式路径 + 合法扩展名照常命中");
 
   // ── 4. 垫片拆封 ───────────────────────────────────────────────────────────
   const claude = resolveLaunch("claude", ["-p", "hi"]);
