@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
+import { releaseTmpDb } from "./tmp-db.js";
 
 const root = mkdtempSync(join(tmpdir(), "harness-post-merge-review-"));
 process.env.HARNESS_DB = join(root, "harness.db");
@@ -130,5 +131,7 @@ try {
 
   console.log("post-merge review regression test passed");
 } finally {
+  // 删舞台前先松开库文件,否则 Windows 上必然 EBUSY(理由见 tmp-db.ts 的 releaseTmpDb)。
+  await releaseTmpDb();
   rmSync(root, { recursive: true, force: true });
 }

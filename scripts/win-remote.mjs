@@ -45,7 +45,13 @@ async function cmdDoctor() {
     `Write-Output ('node=' + (node -v))`,
     `Write-Output ('git=' + ((git --version) -replace 'git version ',''))`,
     `Write-Output ('pwsh=' + $PSVersionTable.PSVersion.ToString())`,
-    `Write-Output ('devmode=' + (try { (Get-ItemProperty 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModelUnlock' -ErrorAction Stop).AllowDevelopmentWithoutDevLicense } catch { 0 }))`,
+    // 开发者模式**别读注册表**:实测那台机器上开关已经打开,
+    // HKLM:\…\AppModelUnlock\AllowDevelopmentWithoutDevLicense 却仍读不到值,于是报了假警。
+    // 真正要回答的问题是「symlink 建不建得出来」—— 那就直接建一个。
+    `$__st = Join-Path $env:TEMP ('symprobe-' + [guid]::NewGuid())`,
+    `New-Item -ItemType Directory -Path $__st -Force | Out-Null`,
+    `try { New-Item -ItemType SymbolicLink -Path (Join-Path $__st 'l') -Target $__st -ErrorAction Stop | Out-Null; Write-Output 'symlink=ok' } catch { Write-Output 'symlink=no' }`,
+    `Remove-Item $__st -Recurse -Force -ErrorAction SilentlyContinue`,
     `Write-Output ('temp=' + $env:TEMP)`,
     `Write-Output ('worktree=' + (Test-Path '${p.repoPath}\\.worktrees\\win-remote'))`,
   ].join("\n");
@@ -57,7 +63,7 @@ async function cmdDoctor() {
   const nodeVersionOk = nodeOk && (Number(nodeOk[1]) > 22 || (Number(nodeOk[1]) === 22 && Number(nodeOk[2]) >= 16));
   console.log(`  node ${kv.node ?? "?"} ${nodeVersionOk ? green("✓") : red("✗ 需 >= 22.16.0(node:sqlite)")}`);
   console.log(`  git ${kv.git ?? "?"}   pwsh ${kv.pwsh ?? "?"}`);
-  console.log(`  开发者模式 ${kv.devmode === "1" ? green("✓ 已开(symlink 夹具可用)") : red("✗ 未开 —— 用 symlink 造夹具的测试会红")}`);
+  console.log(`  symlink ${kv.symlink === "ok" ? green("✓ 建得出来(夹具可用)") : red("✗ 建不出来 —— 开发者模式没开,symlink 夹具会红")}`);
   console.log(`  测试 worktree ${kv.worktree === "True" ? green("已就绪") : dim("尚未创建(首次 sync 时建)")}`);
   console.log(bold("\n通道") + `  ${green("✓")} 终端 API 可用,输出回传正常`);
   return 0;

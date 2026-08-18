@@ -45,7 +45,11 @@ export function freeReviewFile(taskId: string, runId: string, round: number, nam
   const base = resolve(freeReviewEvidenceDir(taskId, runId, round));
   if (!safeEvidenceDir(base)) return null;
   const file = resolve(base, name);
-  if (!file.startsWith(base + "/") || !existsSync(file)) return null;
+  // 分隔符必须用 `sep` 而不是写死 `/`：`resolve` 在 Windows 上还的是反斜杠，拼 `/` 去比
+  // 前缀**恒为假**，于是这个函数在 Windows 上永远返回 null——审查报告一律读成空串，
+  // 「按意见修复」被 manualRepairBlocker 一句「最近一轮审查报告不存在或为空」挡死。
+  // 不是安全收紧，是整条功能失效，而且失败得很安静（2026-08-18 真机 test:free-workflow 实测）。
+  if (!file.startsWith(base + sep) || !existsSync(file)) return null;
   const info = lstatSync(file);
   if (!info.isFile() || info.isSymbolicLink()) return null;
   // 硬链接 lstat 探测不出来（它就是普通文件）：nlink>1 说明同一 inode 还有别的名字，
@@ -53,7 +57,7 @@ export function freeReviewFile(taskId: string, runId: string, round: number, nam
   if (info.nlink > 1) return null;
   const realBase = realpathSync(base);
   const realFile = realpathSync(file);
-  return realFile.startsWith(realBase + "/") ? realFile : null;
+  return realFile.startsWith(realBase + sep) ? realFile : null;
 }
 
 export function readFreeReviewReport(taskId: string, runId: string, round: number): string {

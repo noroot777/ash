@@ -98,7 +98,13 @@ export async function rexec(cmd, { cwd = null, timeout = 15 * 60_000, onLine = n
     body: JSON.stringify({ cols: 200, rows: 50 }),
   }, host);
 
-  const b64 = Buffer.from(cmd, "utf8").toString("base64");
+  // `pwsh -File x.ps1` **不会**把脚本里最后一条外部命令的退出码当成自己的退出码 ——
+  // 脚本正常跑完就是 0。不显式收尾的话,`npm test` 明明断言失败(exit 1),这里照样报 0,
+  // 于是整批回归全绿而实际全红 —— 比假超时更坏,因为它不吵。
+  // 开头先把 $LASTEXITCODE 清零(没跑过外部命令时它是 $null),末尾原样交出去;
+  // 中途 throw 走不到这行,pwsh 自己会退 1。
+  const script = `$LASTEXITCODE=0\n${cmd}\nexit $LASTEXITCODE`;
+  const b64 = Buffer.from(script, "utf8").toString("base64");
   const secs = Math.max(5, Math.floor(timeout / 1000) - 20);
   // 为什么起独立进程而不是 `<cmd> *>&1 | Out-File`:管道要等**所有**持有 stdout 的句柄关闭
   // 才算结束,而 Windows 上留一个孙进程是常事 —— node-pty 的 conpty_console_list_agent

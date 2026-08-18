@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { eq } from "drizzle-orm";
+import { releaseTmpDb } from "./tmp-db.js";
 import { TEAM_DEFAULTS } from "@harness/shared";
 
 // ── 子进程分支:制造「进程死在投递中途」的真实现场 ────────────────────────────
@@ -378,6 +379,8 @@ try {
   rmSync(join(paths.RUNS_DIR, queuedTaskId), { recursive: true, force: true });
   rmSync(join(paths.RUNS_DIR, lockedTaskId), { recursive: true, force: true });
   rmSync(join(paths.RUNS_DIR, crashTaskId), { recursive: true, force: true });
+  // 删舞台前先松开库文件,否则 Windows 上必然 EBUSY(理由见 tmp-db.ts 的 releaseTmpDb)。
+  await releaseTmpDb();
   rmSync(root, { recursive: true, force: true });
   process.exit(0); // startScheduler 的 interval 还挂着,不然进程不会自己退
 }

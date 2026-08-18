@@ -7,6 +7,7 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { releaseTmpDb } from "./tmp-db.js";
 
 const root = mkdtempSync(join(tmpdir(), "harness-review-flow-"));
 process.env.HARNESS_DB = join(root, "harness.db");
@@ -512,6 +513,8 @@ await continueTask("native-control-plain", "顺手改一下文案", { agent: "cl
 const controlPlain = (await db.select().from(tasks).where(eq(tasks.id, "native-control-plain"))).at(0)!;
 assert.equal(controlPlain.stage, null, "普通续聊要摘掉上一版的验收牌子");
 
+// 删舞台前先松开库文件,否则 Windows 上必然 EBUSY(理由见 tmp-db.ts 的 releaseTmpDb)。
+await releaseTmpDb();
 rmSync(resolve(base, "../.."), { recursive: true, force: true });
 rmSync(root, { recursive: true, force: true });
 console.log("review flow tests passed");

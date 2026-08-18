@@ -12,6 +12,7 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { releaseTmpDb } from "./tmp-db.js";
 
 const stage = mkdtempSync(join(tmpdir(), "harness-file-browser-"));
 const repo = join(stage, "repo");
@@ -102,5 +103,7 @@ try {
 
   console.log("✓ file-browser：越界拦截、越界/不存在分辨、文本二进制识别、忽略标记与排序");
 } finally {
+  // 删舞台前先松开库文件,否则 Windows 上必然 EBUSY(理由见 tmp-db.ts 的 releaseTmpDb)。
+  await releaseTmpDb();
   rmSync(stage, { recursive: true, force: true });
 }

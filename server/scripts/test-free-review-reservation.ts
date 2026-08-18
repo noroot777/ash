@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import { Hono } from "hono";
+import { releaseTmpDb } from "./tmp-db.js";
 
 const root = mkdtempSync(join(tmpdir(), "harness-free-reservation-"));
 process.env.HARNESS_DB = join(root, "harness.db");
@@ -201,5 +202,7 @@ try {
   console.log("✓ 预约里的执行器失效只摘执行器那一段，模型与智能水平照用且时间线有交代");
   console.log("✓ 预约启动失败整条回滚；消费与清槽窗口内用户新保存的预约不被抹掉");
 } finally {
+  // 删舞台前先松开库文件,否则 Windows 上必然 EBUSY(理由见 tmp-db.ts 的 releaseTmpDb)。
+  await releaseTmpDb();
   rmSync(root, { recursive: true, force: true });
 }
