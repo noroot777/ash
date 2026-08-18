@@ -103,3 +103,14 @@ export const WORKSPACE_RESET = (path: string) =>
   `你在上文里创建或修改过的文件**现在全都不在了**,git 历史也回到了基线。请不要相信上文中「我已经改过某某文件」的记忆——` +
   `动手之前先实际看一遍当前目录(ls / git status / git log),据此重新判断还要做什么。`;
 export const WORKSPACE_RESET_MARKER = "〔系统〕原工作目录(worktree 与分支)已不存在，已重建为空目录并提醒 agent 重新确认现状";
+// 重建工作目录时，任务登记的 base ref 已经不存在了（验收合并后目标分支被删是最常见的
+// 一种），这一轮按仓库当前 HEAD 起。跟上面那条一样要落进会话：分支基线换了人得知道。
+export const WORKSPACE_BASE_FALLBACK_MARKER = (requested: string, used: string) =>
+  `〔系统〕任务登记的基线分支 ${requested} 已不存在，本次工作目录改按仓库当前 ${used} 重建`;
+// 这一轮**根本没起跑**（worktree 建不出来、执行器解析失败……）时留给用户的交代。走
+// appendTaskTimeline 落进会话，所以不带 〔系统〕 前缀（那是 writeTurn 直写那条路的写法）。
+// 真人发的话一并附上原文：它一个字都没送到 agent 那儿，会话里也不会有它的气泡，不写下来
+// 就真的凭空消失了 —— 这正是「发出去没反应」的现场。
+export const TURN_FAILED_TO_START = (reason: string, text?: string) =>
+  `这一轮没能起跑：${reason}` +
+  (text ? `\n\n你刚发的这条消息**没有送达** agent，原文如下，修好后可以重发：\n\n${text}` : "");

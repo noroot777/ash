@@ -1,11 +1,13 @@
 // worktree 被删之后再动这个任务，会发生什么。
 //
-// 覆盖三条曾经出过问题的路径：
+// 覆盖四条曾经出过问题的路径：
 //   1. 分支还在、只是目录没了 → 必须「恢复」，文件和提交原样回来
 //   2. 目录被 rm -rf、git 里仍注册着 → prune 之后同样能恢复
 //   3. 目录和分支都没了 → 重建空壳，并且标记 fresh，让接回旧会话的调用方
 //      有机会打断 agent 的记忆连续性
-//   4. cwd 不存在时 spawn 的预检不能把任务卡死（历史事故：'error' 没人监听 →
+//   4. 登记的 base ref 已经不存在（验收合并后目标分支被删）→ 退回仓库当前 HEAD 重建，
+//      并把降级如实带回给调用方，而不是整轮起不来
+//   5. cwd 不存在时 spawn 的预检不能把任务卡死（历史事故：'error' 没人监听 →
 //      uncaughtException 被兜底吞掉 → 任务永久 running、停不掉）
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
@@ -78,7 +80,25 @@ try {
     assert.equal(existsSync(join(rebuilt.path, "seed.txt")), true, "应从 base 拉出干净副本");
   }
 
-  // ── 4. cwd 不存在时，预检必须干净地失败，而不是卡死 ─────────────────────
+  // ── 4. 登记的 base 分支已被删 → 退回仓库当前 HEAD，并如实交代 ────────────
+  // 现场：任务验收合并之后目标分支被删，几天后用户又在这个任务里发了句话。老做法是
+  // `git worktree add ... <已删的 base>` 当场抛 invalid reference，整轮起不来，而用户
+  // 侧一点反馈都没有（实测任务 gsppwUacwZnn）。
+  {
+    const taskId = "basegone004";
+    git(repo, "branch", "feat/temp-base");
+    const ws = await prepareWorktree(repo, taskId, "feat/temp-base");
+    git(repo, "worktree", "remove", "--force", ws.path);
+    git(repo, "branch", "-D", worktreeBranchName(taskId));
+    git(repo, "branch", "-D", "feat/temp-base"); // 合并后被删
+
+    const rebuilt = await prepareWorktree(repo, taskId, "feat/temp-base");
+    assert.equal(existsSync(join(rebuilt.path, "seed.txt")), true, "base 没了也必须建得出来");
+    assert.equal(rebuilt.baseFallback?.requested, "feat/temp-base", "要说清原本想用哪个 base");
+    assert.ok(rebuilt.baseFallback?.used, "要说清实际按什么起的");
+  }
+
+  // ── 5. cwd 不存在时，预检必须干净地失败，而不是卡死 ─────────────────────
   {
     const { spawnAgent } = await import("../src/executors/spawn.js");
     const child = spawnAgent({ kind: "local" }, join(root, "does-not-exist"), "claude", [], "hi");

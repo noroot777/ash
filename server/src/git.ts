@@ -151,6 +151,11 @@ export interface Workspace {
   // the worktree (~/.claude/projects/<escaped cwd>/), so a resumed agent would
   // otherwise keep building on files that no longer exist.
   fresh?: boolean;
+  // 请求的 base ref 已经不存在，这次是按仓库当前 HEAD 建的。典型现场：任务验收合并后
+  // 目标分支被删，几天后用户又在这个任务里发了一句话 —— 老做法是 `git worktree add`
+  // 直接抛 "invalid reference"，整轮起不来，用户侧只看到「显示已发送，然后没反应」。
+  // 调用方拿它写一条持久可见的说明，别让分支基线被悄悄换掉。
+  baseFallback?: { requested: string; used: string };
 }
 
 // Resolve where a run executes — and REPORT its git context, never creating
@@ -321,12 +326,22 @@ async function prepareWorktreeLocked(
   await ensureWorktreesIgnored(repo);
   const restore = await branchExists(repo, branch);
   const args = ["-C", repo, "worktree", "add"];
+  let baseFallback: Workspace["baseFallback"];
   if (restore) {
     args.push(path, branch);
   } else {
     args.push("-b", branch, path);
     const trimmedBase = (base ?? "").trim();
-    if (trimmedBase) args.push(trimmedBase);
+    // base 是**登记在任务上的一个名字**，到用它的这一刻可能早就没了：任务验收合并之后
+    // 目标分支被删是最常见的一种。拿它去 `worktree add` 只会换来一句 "invalid reference"
+    // 并让整轮起不来，而这一轮想做的事（在这个任务里接着说句话）跟 base 是谁其实无关。
+    // 解析不出来就退回仓库当前 HEAD，并把这件事如实带回给调用方去说明——失败关闭在这里
+    // 是错的方向：用户要的是能接着干活，不是一个精确但起不来的 base。
+    if (trimmedBase && !(await commitExists(repo, trimmedBase))) {
+      baseFallback = { requested: trimmedBase, used: (await currentBranch(repo)) ?? "HEAD" };
+    } else if (trimmedBase) {
+      args.push(trimmedBase);
+    }
   }
   try {
     await exec("git", args);
@@ -337,7 +352,7 @@ async function prepareWorktreeLocked(
     const hint = windowsLongPathHint(path, stderr);
     throw new Error(`git worktree add 失败：${stderr}${hint ? `\n${hint}` : ""}`);
   }
-  return { path, branch, isWorktree: true, fresh: !restore };
+  return { path, branch, isWorktree: true, fresh: !restore, ...(baseFallback ? { baseFallback } : {}) };
 }
 
 // `git worktree remove [--force] <path>` — wired to the one-click cleanup button
@@ -463,6 +478,17 @@ export async function listBranches(repoPath: string): Promise<{ branches: string
 async function branchExists(repo: string, branch: string): Promise<boolean> {
   try {
     await exec("git", ["-C", repo, "show-ref", "--verify", "--quiet", `refs/heads/${branch}`]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// 这个名字现在还能解析成一个提交吗？分支、tag、远程分支、裸 SHA 一视同仁 —— 问的就是
+// `worktree add <base>` 会不会当场报 "invalid reference"。
+async function commitExists(repo: string, ref: string): Promise<boolean> {
+  try {
+    await exec("git", ["-C", repo, "rev-parse", "--verify", "--quiet", `${ref}^{commit}`]);
     return true;
   } catch {
     return false;
