@@ -11,11 +11,14 @@
 //
 // 跑：npm -w server run test:turn-visibility
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const root = mkdtempSync(join(tmpdir(), "harness-turn-visibility-"));
+// 断言失败是直接抛的，清理因此挂在进程退出上而不是写在末尾：写末尾的话失败一次就在
+// os.tmpdir() 下留一份 DB + runs 目录，反复跑越堆越多。
+process.on("exit", () => rmSync(root, { recursive: true, force: true }));
 process.env.HARNESS_DB = join(root, "harness.db");
 process.env.HARNESS_RUNS_DIR = join(root, "runs");
 

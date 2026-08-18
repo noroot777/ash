@@ -103,10 +103,13 @@ export const WORKSPACE_RESET = (path: string) =>
   `你在上文里创建或修改过的文件**现在全都不在了**,git 历史也回到了基线。请不要相信上文中「我已经改过某某文件」的记忆——` +
   `动手之前先实际看一遍当前目录(ls / git status / git log),据此重新判断还要做什么。`;
 export const WORKSPACE_RESET_MARKER = "〔系统〕原工作目录(worktree 与分支)已不存在，已重建为空目录并提醒 agent 重新确认现状";
-// 重建工作目录时，任务登记的 base ref 已经不存在了（验收合并后目标分支被删是最常见的
-// 一种），这一轮按仓库当前 HEAD 起。跟上面那条一样要落进会话：分支基线换了人得知道。
-export const WORKSPACE_BASE_FALLBACK_MARKER = (requested: string, used: string, persisted: boolean) =>
-  `〔系统〕任务登记的基线分支 ${requested} 已不存在，本次工作目录改按仓库当前 ${used} 重建` +
+// 任务登记的 base ref 已经不存在了（验收合并后目标分支被删是最常见的一种）。跟上面那条
+// 一样要落进会话：分支基线换了人得知道。
+export const WORKSPACE_BASE_FALLBACK_MARKER = (requested: string, used: string, rebuilt: boolean, persisted: boolean) =>
+  `〔系统〕任务登记的基线分支 ${requested} 已不存在，` +
+  // 只有真按 used 建过工作目录才敢说「重建」。worktree 本来就在（或按任务分支恢复回来）
+  // 时是顺带查出来的，说成已重建就是假话 —— 用户会以为自己的改动被挪到了另一个基线上。
+  (rebuilt ? `本次工作目录改按仓库当前 ${used} 重建` : `本次沿用原有的工作目录，未改动其内容`) +
   // 说到底用户关心的是「那我这一轮做的东西还交得掉吗」。基线跟着落了库，diff 和验收就
   // 跟这次重建走同一个目标；没落库(团队执行者继承的共享分支、detached HEAD)时不能这么
   // 说 —— 那句话会变成一个到验收时才被戳穿的承诺。

@@ -1,7 +1,7 @@
 import { eq } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { tasks } from "./db/schema.js";
-import { prepareWorktree, resolveWorkspace, type Workspace } from "./git.js";
+import { prepareWorktree, resolveWorkspace, staleBaseFallback, type Workspace } from "./git.js";
 import { now } from "./util.js";
 
 type WorkspaceTask = Pick<
@@ -29,6 +29,22 @@ async function persistBaseFallback(task: WorkspaceTask, ws: Workspace): Promise<
     .set({ worktreeBase: fallback.used, updatedAt: now() })
     .where(eq(tasks.id, task.id));
   fallback.persisted = true;
+}
+
+/**
+ * 工作目录还在、这一轮压根没经过 `taskWorkspace` 的续聊，同样要查一遍登记的基线还在不在。
+ *
+ * 续聊只在 cwd 消失时才重新解析工作目录（见 orchestrator.ts），而「worktree 好端端地在、
+ * 登记的 base 分支被删了」正是最常见的一档：这一轮跑得好好的，直到用户去看 diff 或点验收
+ * 才撞上 target_branch_missing。降级决策跟 `prepareWorktree` 是同一套（`staleBaseFallback`），
+ * 这次没有重建任何目录，所以 `rebuilt: false`。
+ */
+export async function refreshTaskBase(task: WorkspaceTask, repoPath: string): Promise<Workspace["baseFallback"]> {
+  if (!task.useWorktree) return undefined;
+  const fallback = await staleBaseFallback(repoPath, task.worktreeBase, false);
+  if (!fallback) return undefined;
+  await persistBaseFallback(task, { path: "", branch: null, isWorktree: true, baseFallback: fallback });
+  return fallback;
 }
 
 async function directWorkspace(task: WorkspaceTask, repoPath: string): Promise<Workspace> {

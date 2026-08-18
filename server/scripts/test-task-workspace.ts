@@ -20,7 +20,7 @@ try {
   git(repo, "add", "seed.txt");
   git(repo, "commit", "-m", "seed");
 
-  const [{ db, ensureSchema }, { tasks }, { taskWorkspace }] = await Promise.all([
+  const [{ db, ensureSchema }, { tasks }, { refreshTaskBase, taskWorkspace }] = await Promise.all([
     import("../src/db/index.js"),
     import("../src/db/schema.js"),
     import("../src/task-workspace.js"),
@@ -150,6 +150,72 @@ try {
     assert.equal(diff.available, true, `降级后 diff 必须能出来，实际 ${JSON.stringify(diff)}`);
   }
 
+  // ── worktree 没被清掉、base 后来被删 ────────────────────────────────────────
+  // 上面那档走的是「目录不在了，重新建」。真实现场更常见的是目录好端端地留着（验收清理
+  // 策略保留 worktree、清理失败、或用户自己留着），只有 base 分支没了：复用路径要是不查
+  // 一遍，这一轮跑得好好的，用户到 diff / 验收那头才撞上 target_branch_missing。
+  {
+    git(repo, "branch", "feat/gone-while-worktree-stays");
+    await db.insert(tasks).values([{
+      ...common, id: "keptwt-task", parentId: null, mode: "single",
+      useWorktree: true, worktreeBase: "feat/gone-while-worktree-stays",
+    }]);
+    const first = await taskWorkspace(await load("keptwt-task"), repo);
+    assert.equal(first.baseFallback, undefined, "前提：这一步 base 还在，不该报降级");
+
+    git(repo, "branch", "-D", "feat/gone-while-worktree-stays");
+    const again = await taskWorkspace(await load("keptwt-task"), repo);
+    assert.equal(again.path, first.path, "前提：worktree 还在，这次走的是复用");
+    assert.equal(again.baseFallback?.requested, "feat/gone-while-worktree-stays");
+    assert.equal(again.baseFallback?.rebuilt, false, "复用路径什么都没重建，别说成重建了");
+    assert.equal(again.baseFallback?.persisted, true, "复用路径同样要把降级落回任务行");
+    assert.equal((await load("keptwt-task")).worktreeBase, "main", "库里不能继续留着已删的名字");
+
+    const { taskBranchDiff } = await import("../src/git-diff.js");
+    writeFileSync(join(again.path, "kept.txt"), "worktree kept\n");
+    git(again.path, "add", "-A");
+    git(again.path, "commit", "-m", "work in kept worktree");
+    const reloaded = await load("keptwt-task");
+    const diff = await taskBranchDiff(repo, reloaded.id, reloaded.worktreeBase);
+    assert.equal(diff.available, true, `复用路径降级后 diff 也必须能出来，实际 ${JSON.stringify(diff)}`);
+  }
+
+  // ── 续聊压根不重新解析工作目录，也得查一遍 ──────────────────────────────────
+  // orchestrator 的续聊只在 cwd 消失时才调 taskWorkspace。目录还在的那条路上没人查 base，
+  // 「起得来但交不掉」就会原样留着 —— 所以那条路直接调 refreshTaskBase。
+  {
+    git(repo, "branch", "feat/gone-during-chat");
+    await db.update(tasks).set({ worktreeBase: "feat/gone-during-chat" }).where(eq(tasks.id, "keptwt-task"));
+    git(repo, "branch", "-D", "feat/gone-during-chat");
+
+    const fallback = await refreshTaskBase(await load("keptwt-task"), repo);
+    assert.equal(fallback?.requested, "feat/gone-during-chat", "要说清原本想用哪个 base");
+    assert.equal(fallback?.rebuilt, false, "这条路径连工作目录都没碰");
+    assert.equal(fallback?.persisted, true, "续聊路径同样要落库");
+    assert.equal((await load("keptwt-task")).worktreeBase, "main");
+
+    assert.equal(
+      await refreshTaskBase(await load("keptwt-task"), repo), undefined,
+      "基线本来就解析得出来时不该报降级，更不该反复改它",
+    );
+  }
+
+  // ── 恢复档（目录没了、任务分支还在）同样别说成「按 base 重建」 ────────────────
+  // 这一档是拿任务分支把工作原样接回来，跟 base 是谁毫无关系；措辞里说成「改按 X 重建」
+  // 会让用户以为自己的改动被挪到了另一个基线上。
+  {
+    git(repo, "branch", "feat/gone-before-restore");
+    await db.update(tasks).set({ worktreeBase: "feat/gone-before-restore" }).where(eq(tasks.id, "keptwt-task"));
+    git(repo, "branch", "-D", "feat/gone-before-restore");
+    rmSync(join(repo, ".worktrees", "keptwt-task"), { recursive: true, force: true });
+
+    const restored = await taskWorkspace(await load("keptwt-task"), repo);
+    assert.equal(existsSync(join(restored.path, "kept.txt")), true, "前提：分支还在，工作被接回来了");
+    assert.equal(restored.fresh, false, "前提：这是恢复，不是建空壳");
+    assert.equal(restored.baseFallback?.rebuilt, false, "恢复回来的目录跟 base 无关，别说成按它重建");
+    assert.equal(restored.baseFallback?.persisted, true, "但登记的验收目标照样得修回来");
+  }
+
   // ── 没登记过基线的任务不该被写上一个 ────────────────────────────────────────
   // 团队执行者默认就是这样：它传给 prepareWorktree 的是**领队的**分支，不是自己的登记
   // 值；跟着降级写库等于凭空给它按上一个显式基线，往后 diff/验收都会照着它走。
@@ -164,6 +230,8 @@ try {
   console.log("✓ explicitly isolated worker branches from the shared team branch");
   console.log("✓ reviewers reuse the exact shared or isolated workspace under review");
   console.log("✓ deleted base falls back to the repo branch AND persists it for diff/accept");
+  console.log("✓ a kept worktree (and a plain follow-up turn) still notice a deleted base");
+  console.log("✓ reuse/restore report the fallback without claiming a rebuild");
 } finally {
   rmSync(root, { recursive: true, force: true });
 }

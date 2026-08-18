@@ -151,13 +151,15 @@ export interface Workspace {
   // the worktree (~/.claude/projects/<escaped cwd>/), so a resumed agent would
   // otherwise keep building on files that no longer exist.
   fresh?: boolean;
-  // 请求的 base ref 已经不存在，这次是按仓库当前 HEAD 建的。典型现场：任务验收合并后
-  // 目标分支被删，几天后用户又在这个任务里发了一句话 —— 老做法是 `git worktree add`
-  // 直接抛 "invalid reference"，整轮起不来，用户侧只看到「显示已发送，然后没反应」。
+  // 请求的 base ref 已经不存在。典型现场：任务验收合并后目标分支被删，几天后用户又在
+  // 这个任务里发了一句话 —— 老做法是 `git worktree add` 直接抛 "invalid reference"，
+  // 整轮起不来，用户侧只看到「显示已发送，然后没反应」。
   // 调用方拿它写一条持久可见的说明，别让分支基线被悄悄换掉。
+  // `rebuilt` 分开「这次真按 used 建了工作目录」和「工作目录是复用/恢复来的，只是登记的
+  // base 顺带查出来已经没了」两档 —— 后者说成「已按 X 重建」是假话（措辞见 run-prompts.ts）。
   // `persisted` 由 task-workspace.ts 在把降级结果写回任务登记值之后打上 —— 只有落了库，
   // 后面的 diff / 验收才会跟着走同一个目标，给用户的说明也才敢那么写。
-  baseFallback?: { requested: string; used: string; persisted?: boolean };
+  baseFallback?: { requested: string; used: string; rebuilt: boolean; persisted?: boolean };
 }
 
 // Resolve where a run executes — and REPORT its git context, never creating
@@ -289,6 +291,29 @@ async function ensureWorktreesIgnored(repo: string): Promise<void> {
   }
 }
 
+/**
+ * 「任务登记的那个 base 现在还解析得出来吗」。之所以单独拎出来，是因为它跟「这一次要不要
+ * 拿它建分支」是两件事：复用 / 恢复现成 worktree 的路径压根用不到 base —— 可它同时还是
+ * **验收目标**（diff 与合并各自拿 `tasks.worktreeBase` 再解析一次），只在「建新分支」那条
+ * 路上报降级的话，「worktree 还在、base 被删」的任务会一路正常跑，直到用户点验收才撞墙
+ * （审查实测：worktree 复用成功，`taskBranchDiff` 仍是 target_branch_missing）。
+ *
+ * 判据用 `commitExists` 而不是「本地分支存在」：`origin/main`、某个 tag 或裸 sha 都仍然
+ * 解析得出来，它们只是不能当合并目标，不该在这里被改写成别的名字。
+ */
+export async function staleBaseFallback(
+  repoPath: string,
+  base: string | null | undefined,
+  rebuilt: boolean,
+): Promise<Workspace["baseFallback"]> {
+  const repo = expandHome(repoPath);
+  const requested = (base ?? "").trim();
+  if (!requested) return undefined;
+  if (!(await isGitRepo(repo))) return undefined;
+  if (await commitExists(repo, requested)) return undefined;
+  return { requested, used: (await currentBranch(repo)) ?? "HEAD", rebuilt };
+}
+
 // 仓库级串行(见 repo-lock.ts):prune/add 改的是全仓共用的 worktree 注册表,
 // 两个任务同时起跑就会互相看见对方半成品的注册状态。
 export async function prepareWorktree(
@@ -314,11 +339,17 @@ async function prepareWorktreeLocked(
   // 一个不是 worktree 的目录里干活，它的 git 命令会上溯到主仓。清掉之后走下面的恢复
   // 路径，分支还在就把工作原样接回来。
   if (worktreeLeftoverAt(repo, path)) await discardWorktreeLeftover(repo, path);
+  // base 的死活先问一遍，再分路：三条路径（复用 / 恢复 / 新建）都要如实报出来，只有
+  // 「这次是不是真按它重建了工作目录」各不相同。
+  const stale = await staleBaseFallback(repo, base, false);
   if (isDir(path)) {
     // Re-use: read whatever branch the existing worktree is actually on (might
     // differ if the user manipulated it manually). isWorktree=true so callers
     // know it's a linked worktree.
-    return { path, branch: (await currentBranch(path)) ?? branch, isWorktree: true };
+    return {
+      path, branch: (await currentBranch(path)) ?? branch, isWorktree: true,
+      ...(stale ? { baseFallback: stale } : {}),
+    };
   }
   // Drop registrations whose directory is gone. Without this, git still considers
   // the branch "checked out" at the missing path and refuses to touch it.
@@ -328,22 +359,17 @@ async function prepareWorktreeLocked(
   await ensureWorktreesIgnored(repo);
   const restore = await branchExists(repo, branch);
   const args = ["-C", repo, "worktree", "add"];
-  let baseFallback: Workspace["baseFallback"];
   if (restore) {
+    // 恢复：工作原样接回任务分支，跟 base 是谁无关（base 只在建分支那一刻用得上）。
     args.push(path, branch);
   } else {
     args.push("-b", branch, path);
     const trimmedBase = (base ?? "").trim();
-    // base 是**登记在任务上的一个名字**，到用它的这一刻可能早就没了：任务验收合并之后
-    // 目标分支被删是最常见的一种。拿它去 `worktree add` 只会换来一句 "invalid reference"
-    // 并让整轮起不来，而这一轮想做的事（在这个任务里接着说句话）跟 base 是谁其实无关。
-    // 解析不出来就退回仓库当前 HEAD，并把这件事如实带回给调用方去说明——失败关闭在这里
-    // 是错的方向：用户要的是能接着干活，不是一个精确但起不来的 base。
-    if (trimmedBase && !(await commitExists(repo, trimmedBase))) {
-      baseFallback = { requested: trimmedBase, used: (await currentBranch(repo)) ?? "HEAD" };
-    } else if (trimmedBase) {
-      args.push(trimmedBase);
-    }
+    // 拿一个已经没了的 base 去 `worktree add` 只会换来一句 "invalid reference" 并让整轮
+    // 起不来，而这一轮想做的事（在这个任务里接着说句话）跟 base 是谁其实无关。解析不
+    // 出来就退回仓库当前 HEAD —— 失败关闭在这里是错的方向：用户要的是能接着干活，不是
+    // 一个精确但起不来的 base。
+    if (trimmedBase && !stale) args.push(trimmedBase);
   }
   try {
     await exec("git", args);
@@ -354,7 +380,12 @@ async function prepareWorktreeLocked(
     const hint = windowsLongPathHint(path, stderr);
     throw new Error(`git worktree add 失败：${stderr}${hint ? `\n${hint}` : ""}`);
   }
-  return { path, branch, isWorktree: true, fresh: !restore, ...(baseFallback ? { baseFallback } : {}) };
+  return {
+    path, branch, isWorktree: true, fresh: !restore,
+    // 只有「新建分支」那条路是真按 used 重建的；恢复回来的工作目录跟 base 无关，别把
+    // 「顺带查出来 base 没了」说成「已按它重建」。
+    ...(stale ? { baseFallback: { ...stale, rebuilt: !restore } } : {}),
+  };
 }
 
 // `git worktree remove [--force] <path>` — wired to the one-click cleanup button
