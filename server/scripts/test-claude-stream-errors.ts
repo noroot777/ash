@@ -37,6 +37,17 @@ async function collect(lines: unknown[], resident?: { interruptPending: boolean 
   return events;
 }
 
+/** 跑一段非零退出的假 CLI stderr。 */
+async function collectStderr(stderr: string) {
+  const script = join(dir, `stub-${Math.random().toString(36).slice(2, 8)}.mjs`);
+  writeFileSync(script, `process.stderr.write(${JSON.stringify(stderr)}); process.exitCode = 1;`);
+  const child = spawn(process.execPath, [script], { stdio: ["pipe", "pipe", "pipe"] });
+  child.stdin?.end();
+  const events: any[] = [];
+  for await (const event of parseClaudeStream(child as any)) events.push(event);
+  return events;
+}
+
 const SYNTHETIC_404 = [
   { type: "system", session_id: "sess-1" },
   {
@@ -131,6 +142,16 @@ console.log("4) 压缩(/compact 与自动压缩)的过程与成败必须显式�
   else fail(`压缩成功没有任何提示:${JSON.stringify(okText)}`);
   if (!succeeded.filter((e) => e.kind === "error").length) ok("压缩成功不报错");
   else fail("压缩成功却报了 error");
+}
+
+console.log("5) 旧版 Claude Code 的 --effort 参数错误要给出可操作提示");
+{
+  const events = await collectStderr("error: unknown option '--effort'\n");
+  const message = events.find((e) => e.kind === "error")?.message ?? "";
+  if (message.includes("claude update") && message.includes("跟随执行器")) ok("参数错误已转换成升级/绕过提示");
+  else fail(`没有给出可操作提示:${JSON.stringify(message)}`);
+  if (!message.includes("unknown option")) ok("不再透传生硬的 CLI 原始错误");
+  else fail(`仍在透传原始错误:${JSON.stringify(message)}`);
 }
 
 console.log(bad ? `\n✗ ${bad} 项未通过` : "\n✓ 全部通过");
