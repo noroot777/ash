@@ -70,6 +70,8 @@ export interface ExecutorBuildOpts {
   speed?: "fast";
   /** 覆盖默认命令名(缺省用 spec.bins[0])。 */
   bin?: string;
+  /** 预检已经确认无法启动时，由执行器走 failedChild 留下持久错误，不再起真实 CLI。 */
+  startupError?: string;
   target?: ExecTarget;
   relay?: RelayConfig;
   /**

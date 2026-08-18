@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { statSync } from "node:fs";
 import { promisify } from "node:util";
 import type { ExecTarget } from "@harness/shared";
 import { resolveBin, resolveLaunch } from "./spawn.js";
@@ -12,6 +13,19 @@ export interface BinProbe {
   /** 绝对路径(与 spawn 时用的是同一套查找,见 resolveBin)。 */
   path: string;
   version: string | null;
+}
+
+export interface BinFlagProbe extends BinProbe {
+  /** true/false = help 已成功读取并完成判断；null = help 本身探测失败。 */
+  supported: boolean | null;
+}
+
+const flagProbeCache = new Map<string, Promise<boolean | null>>();
+
+/** 精确匹配长参数名，避免把 `--effortless` 误认成 `--effort`。 */
+export function cliHelpHasFlag(help: string, flag: string): boolean {
+  const escaped = flag.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(^|[^\\w-])${escaped}(?=$|[\\s=,<[\\]])`, "m").test(help);
 }
 
 // ── 候选命令名的探测:检测与执行的**同一个**判定 ────────────────────────────
@@ -34,6 +48,52 @@ export async function probeBins(bins: string[], fallbackVersionMatch?: string): 
     return { bin: candidate, path: found, version: ver };
   }
   return null;
+}
+
+/**
+ * 用 CLI 自己的 `--help` 判断某个参数是否存在。结果跟二进制路径、mtime、版本绑定，
+ * 同一个 server 进程里后续派活不再重复启动 help 子进程；原地升级后二进制 mtime 变化，
+ * 会自然换一条缓存键重新探测。
+ */
+export async function probeBinFlag(
+  bins: string[],
+  fallbackVersionMatch: string | undefined,
+  flag: string,
+): Promise<BinFlagProbe | null> {
+  const found = await probeBins(bins, fallbackVersionMatch);
+  if (!found) return null;
+  let mtime = "unknown";
+  try {
+    mtime = String(statSync(found.path).mtimeMs);
+  } catch {
+    /* 路径刚好在 version 与 stat 之间消失：help 探测会返回 null，spawn 再报真实原因。 */
+  }
+  const key = `${found.path}\0${mtime}\0${found.version ?? ""}\0${flag}`;
+  let pending = flagProbeCache.get(key);
+  if (!pending) {
+    pending = (async () => {
+      let plan;
+      try {
+        plan = resolveLaunch(found.bin, ["--help"]);
+      } catch {
+        return null;
+      }
+      if (!plan) return null;
+      try {
+        const { stdout, stderr } = await exec(plan.file, plan.args, {
+          timeout: 4000,
+          maxBuffer: 1024 * 1024,
+          windowsHide: true,
+          windowsVerbatimArguments: plan.windowsVerbatimArguments,
+        });
+        return cliHelpHasFlag(`${stdout}\n${stderr}`, flag);
+      } catch {
+        return null;
+      }
+    })();
+    flagProbeCache.set(key, pending);
+  }
+  return { ...found, supported: await pending };
 }
 
 // 版本自证跑的是 resolveLaunch **已经解析出来的绝对路径**,不是裸命令名。

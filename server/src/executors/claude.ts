@@ -7,7 +7,7 @@ import { cliConfigOverrideEnvPatch, cliConfigOverrideSettings } from "@harness/s
 import { cliHostEnv, resumeEnvHint } from "./cli-env.js";
 import type { AgentExecutor, RelayConfig, ResidentHandle, ResumeFields, RunHandle, RunOpts } from "./types.js";
 import { spawnForRun, detachedInfo } from "./detached.js";
-import { spawnAgent, resumeFor, resumeInner, shq, spawnErrorMessage, killChild, forceFinishOnExit, redactSecrets } from "./spawn.js";
+import { spawnAgent, resumeFor, resumeInner, shq, spawnErrorMessage, killChild, forceFinishOnExit, redactSecrets, failedChild } from "./spawn.js";
 import { relayRoot } from "../llm.js";
 import { calibrateSkills } from "../skills.js";
 import { persistMarkdownImages, persistToolResultImages } from "../agent-attachments.js";
@@ -28,18 +28,20 @@ export class ClaudeExecutor implements AgentExecutor {
   private readonly resumeEnvHint?: string;
   readonly target: ExecTarget;
   private bin: string;
+  private startupError?: string;
   readonly model?: string;
   private extraArgs: string[];
   readonly reasoningEffort?: string;
   private speed?: "fast";
   private relay?: RelayConfig;
   private configOverrides?: Record<string, number>;
-  constructor(opts: { model?: string; extraArgs?: string[]; reasoningEffort?: string; speed?: "fast"; bin?: string; target?: ExecTarget; name?: string; relay?: RelayConfig; configOverrides?: Record<string, number> } = {}) {
+  constructor(opts: { model?: string; extraArgs?: string[]; reasoningEffort?: string; speed?: "fast"; bin?: string; startupError?: string; target?: ExecTarget; name?: string; relay?: RelayConfig; configOverrides?: Record<string, number> } = {}) {
     this.model = opts.model;
     this.extraArgs = opts.extraArgs ?? [];
     this.reasoningEffort = opts.reasoningEffort;
     this.speed = opts.speed;
     this.bin = opts.bin ?? "claude";
+    this.startupError = opts.startupError;
     this.target = opts.target ?? { kind: "local" };
     this.relay = opts.relay;
     this.configOverrides = opts.configOverrides;
@@ -133,7 +135,9 @@ export class ClaudeExecutor implements AgentExecutor {
     const sessionId = opts.sessionId ?? randomUUID();
     const args = this.buildArgs(opts, sessionId, false);
     const commandLine = redactSecrets(`${this.bin} ${args.join(" ")} <prompt via stdin>`);
-    const child = spawnForRun(this.target, opts.cwd, this.bin, args, opts.prompt, this.env(opts.cwd), opts.detach);
+    const child = this.startupError
+      ? failedChild(this.startupError)
+      : spawnForRun(this.target, opts.cwd, this.bin, args, opts.prompt, this.env(opts.cwd), opts.detach);
     return { sessionId, commandLine, events: parseClaudeStream(child, undefined, this.bin, this.calibrateAs()), kill: () => killChild(child), detached: detachedInfo(child) };
   }
 
@@ -154,9 +158,11 @@ export class ClaudeExecutor implements AgentExecutor {
     const sessionId = opts.sessionId ?? randomUUID();
     const args = this.buildArgs(opts, sessionId, true);
     const commandLine = redactSecrets(`${this.bin} ${args.join(" ")} <messages via stdin>`);
-    const child = spawnAgent(this.target, opts.cwd, this.bin, args, userLine(opts.prompt), this.env(opts.cwd), {
-      keepStdin: true,
-    });
+    const child = this.startupError
+      ? failedChild(this.startupError)
+      : spawnAgent(this.target, opts.cwd, this.bin, args, userLine(opts.prompt), this.env(opts.cwd), {
+          keepStdin: true,
+        });
     const resident = { interruptPending: false };
     let reqSeq = 0;
     return {
@@ -397,7 +403,7 @@ export async function* parseClaudeStream(
     if (finished) return;
     flushText(); // emit any text tail that never hit the flush threshold
     const exit = code ?? 0;
-    if (exit !== 0 && stderr.trim()) push({ kind: "error", message: stderr.trim().slice(0, 2000) });
+    if (exit !== 0 && stderr.trim()) push({ kind: "error", message: normalizeClaudeCliError(stderr).slice(0, 2000) });
     push({ kind: "done", exitStatus: exit });
     finished = true;
     resolve?.();
@@ -420,6 +426,26 @@ export async function* parseClaudeStream(
     if (finished) return;
     await new Promise<void>((r) => (resolve = r));
   }
+}
+
+export function claudeEffortUnsupportedMessage(version?: string | null, effort?: string | null): string {
+  const parsedVersion = version?.match(/\d+\.\d+\.\d+/)?.[0] ?? version?.trim() ?? "";
+  const installed = parsedVersion ? `当前 Claude Code ${parsedVersion}` : "当前 Claude Code";
+  const selected = effort ? `，无法使用智能水平 ${effort}` : "";
+  return `${installed} 不支持 --effort${selected}。请先执行 claude update，或把智能水平改为“跟随执行器”后重试。`;
+}
+
+/** 远端目标或 help 探测失败时，仍把 CLI 的生硬参数错误翻成可操作提示。 */
+export function normalizeClaudeCliError(stderr: string): string {
+  const message = stderr.trim();
+  const lower = message.toLowerCase();
+  const unsupported = lower.includes("--effort") && (
+    lower.includes("unknown option")
+    || lower.includes("unrecognized option")
+    || lower.includes("unexpected argument")
+    || lower.includes("wasn't expected")
+  );
+  return unsupported ? claudeEffortUnsupportedMessage() : message;
 }
 
 const shortJson = (v: unknown) => {

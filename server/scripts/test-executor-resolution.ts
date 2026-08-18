@@ -74,21 +74,45 @@ assert.equal(validModelEffort.type, "codex", "模型能力规则允许的组合�
 // build() 必须把「检测命中的备用命令名」一路传给 GenericCliExecutor。死认 bins[0]
 // 时,只装了备用名的机器会被 /agents/catalog 判为可用、派任务却稳定 ENOENT
 // (cursor 的 cursor-agent → agent、antigravity 的 antigravity → agy)。
-// 这里临时把某个 generic spec 的候选改成「主 bin 不存在 + 备用 bin 是 echo」,
+// 这里临时把某个 generic spec 的候选改成「主 bin 不存在 + 备用 bin 是 node」,
 // 只改运行时值、跑完就还原,不碰任何 spec 文件(B 阶段有人在并行改它们)。
 const { AGENT_TYPES } = await import("@harness/shared");
 const { CLI_SPEC_BY_KEY } = await import("../src/executors/catalog/index.js");
+const { cliHelpHasFlag } = await import("../src/executors/bin-probe.js");
+assert.equal(cliHelpHasFlag("  --effort <level>", "--effort"), true, "help 里的完整 flag 应命中");
+assert.equal(cliHelpHasFlag("  --effortless", "--effort"), false, "不能把更长的参数名前缀误认成目标 flag");
+
+// 用 node 充当一份「存在、能报版本、但没有 --effort」的旧 Claude Code。解析阶段读
+// --help 后应把执行器标成预检失败；run 只产出 failedChild 事件，不启动 node 去吃
+// Claude 的参数，更不会把原始 unknown option 甩给用户。
+const claudeSpec = CLI_SPEC_BY_KEY.claude;
+const originalClaudeBins = claudeSpec.bins;
+claudeSpec.bins = ["node"];
+try {
+  const oldClaude = await resolveExecutorFor({ type: "claude", reasoningEffort: "high" });
+  const handle = oldClaude.run({ prompt: "不应送到真实进程", cwd: process.cwd() });
+  const events = [];
+  for await (const event of handle.events) events.push(event);
+  const message = events.find((event) => event.kind === "error")?.message ?? "";
+  assert.match(message, /当前 Claude Code \d+\.\d+\.\d+ 不支持 --effort/);
+  assert.match(message, /claude update/);
+  assert.match(message, /跟随执行器/);
+  assert.doesNotMatch(message, /unknown option/i);
+} finally {
+  claudeSpec.bins = originalClaudeBins;
+}
+
 const genericType = AGENT_TYPES.find((t) => !CLI_SPEC_BY_KEY[t].factory);
 if (!genericType) throw new Error("目录里没有一个走 GenericCliExecutor 的 spec,这条用例失去意义");
 const spec = CLI_SPEC_BY_KEY[genericType];
 const originalBins = spec.bins;
-spec.bins = ["harness-missing-primary-bin", "echo"];
+spec.bins = ["harness-missing-primary-bin", "node"];
 try {
   const ex = await resolveExecutorFor({ type: genericType });
   const handle = ex.run({ prompt: "probe", cwd: process.cwd() });
   handle.kill();
-  if (!handle.commandLine.startsWith("echo ")) {
-    throw new Error(`主 bin 缺失时应改用可用的备用名 echo, got: ${handle.commandLine}`);
+  if (!handle.commandLine.startsWith("node ")) {
+    throw new Error(`主 bin 缺失时应改用可用的备用名 node, got: ${handle.commandLine}`);
   }
 } finally {
   spec.bins = originalBins;

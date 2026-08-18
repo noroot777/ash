@@ -7,9 +7,10 @@ import { db } from "../db/index.js";
 import { agents, llmProviders } from "../db/schema.js";
 import type { AgentExecutor, ExecutorBuildOpts, RelayConfig } from "./types.js";
 import { cliSpec } from "./catalog/index.js";
-import { execBinFor } from "./bin-probe.js";
+import { execBinFor, probeBinFlag } from "./bin-probe.js";
 import { GenericCliExecutor } from "./generic.js";
 import { normalizeProfileExtraArgs } from "./args.js";
+import { claudeEffortUnsupportedMessage } from "./claude.js";
 
 type AgentRow = typeof agents.$inferSelect;
 type ExecutorOverrides = { model?: string | null; reasoningEffort?: string | null };
@@ -149,10 +150,21 @@ async function build(
         reasoningEffort,
       };
 
+  const spec = cliSpec(type);
+  // Claude Code 旧版会在真正读 prompt 之前直接拒绝 --effort。对本机目标先问它自己的
+  // help；不支持时仍构造执行器，但 run/openResident 走 failedChild，把错误留进会话记录，
+  // 同时完全不启动真实 Claude 进程。SSH 的版本在远端，运行时 parser 另有同文案兜底。
+  if (type === "claude" && reasoningEffort && target?.kind !== "ssh") {
+    const capability = await probeBinFlag(spec.bins, spec.fallbackVersionMatch, "--effort");
+    if (capability) opts.bin ??= capability.bin;
+    if (capability?.supported === false) {
+      opts.startupError = claudeEffortUnsupportedMessage(capability.version, reasoningEffort);
+    }
+  }
+
   // 目录是唯一的分派表:有 factory 的走专用类(claude 的常驻会话、codex 的诊断
   // 链路),其余全部由 GenericCliExecutor 按 spec.exec 装配命令行。所以「新增一个
   // 可派任务的 CLI」不需要碰这里 —— 加一个 spec 文件就行。
-  const spec = cliSpec(type);
   if (spec.factory) return spec.factory(opts);
   // 检测能命中备用命令名(cursor 的 agent、antigravity 的 agy),执行就必须用同一个
   // —— 死认 bins[0] 会让「目录显示可用」的环境派任务稳定 ENOENT(第 1 轮审查)。
