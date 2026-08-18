@@ -155,7 +155,9 @@ export interface Workspace {
   // 目标分支被删，几天后用户又在这个任务里发了一句话 —— 老做法是 `git worktree add`
   // 直接抛 "invalid reference"，整轮起不来，用户侧只看到「显示已发送，然后没反应」。
   // 调用方拿它写一条持久可见的说明，别让分支基线被悄悄换掉。
-  baseFallback?: { requested: string; used: string };
+  // `persisted` 由 task-workspace.ts 在把降级结果写回任务登记值之后打上 —— 只有落了库，
+  // 后面的 diff / 验收才会跟着走同一个目标，给用户的说明也才敢那么写。
+  baseFallback?: { requested: string; used: string; persisted?: boolean };
 }
 
 // Resolve where a run executes — and REPORT its git context, never creating

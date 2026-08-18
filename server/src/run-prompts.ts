@@ -105,8 +105,14 @@ export const WORKSPACE_RESET = (path: string) =>
 export const WORKSPACE_RESET_MARKER = "〔系统〕原工作目录(worktree 与分支)已不存在，已重建为空目录并提醒 agent 重新确认现状";
 // 重建工作目录时，任务登记的 base ref 已经不存在了（验收合并后目标分支被删是最常见的
 // 一种），这一轮按仓库当前 HEAD 起。跟上面那条一样要落进会话：分支基线换了人得知道。
-export const WORKSPACE_BASE_FALLBACK_MARKER = (requested: string, used: string) =>
-  `〔系统〕任务登记的基线分支 ${requested} 已不存在，本次工作目录改按仓库当前 ${used} 重建`;
+export const WORKSPACE_BASE_FALLBACK_MARKER = (requested: string, used: string, persisted: boolean) =>
+  `〔系统〕任务登记的基线分支 ${requested} 已不存在，本次工作目录改按仓库当前 ${used} 重建` +
+  // 说到底用户关心的是「那我这一轮做的东西还交得掉吗」。基线跟着落了库，diff 和验收就
+  // 跟这次重建走同一个目标；没落库(团队执行者继承的共享分支、detached HEAD)时不能这么
+  // 说 —— 那句话会变成一个到验收时才被戳穿的承诺。
+  (persisted
+    ? `，任务登记的基线也已一并更新为 ${used}（后续查看 diff 与验收都以它为目标）`
+    : `，任务登记的基线未改动`);
 // 这一轮**根本没起跑**（worktree 建不出来、执行器解析失败……）时留给用户的交代。走
 // appendTaskTimeline 落进会话，所以不带 〔系统〕 前缀（那是 writeTurn 直写那条路的写法）。
 // 真人发的话一并附上原文：它一个字都没送到 agent 那儿，会话里也不会有它的气泡，不写下来

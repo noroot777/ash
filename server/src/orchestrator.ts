@@ -10,6 +10,7 @@ import { setTaskStatus } from "./status.js";
 import { trackRun, untrackRun, takeStopped, claimTurn, reclaimTurn, releaseTurn } from "./runs.js";
 import { consumeSingleRun, afterSettlement } from "./single-run.js";
 import { taskWorkspace } from "./task-workspace.js";
+import type { Workspace } from "./git.js";
 import { resolveExecutorWithProfile } from "./executors/index.js";
 import type { RunHandle } from "./executors/types.js";
 import { detachedPathsFor } from "./executors/detached.js";
@@ -31,12 +32,12 @@ import { nativeCliCommand, withSkillInvocation } from "./skills.js";
 import { initialTaskObjective, invitedTaskBrief } from "./invited-task-brief.js";
 import { withGlobalBrowserPolicy } from "./browser-verification-policy.js";
 import { isAcceptingTask } from "./acceptance-lock.js";
-import { appendTaskTimeline } from "./task-timeline.js";
+import { reportTurnFailure } from "./turn-failure.js";
 // 每一轮 prompt 上下拼的固定措辞(前言、完成协议、续聊尾巴、工作目录重建告警)。
 import {
   AUTONOMY, COLLAB_INVITE, SYS_MARKER,
   COMPLETION_PROTOCOL, COMPLETION_REMINDER, FOLLOW_UP_REMINDER, followUpRailNote,
-  WORKSPACE_RESET, WORKSPACE_RESET_MARKER, WORKSPACE_BASE_FALLBACK_MARKER, TURN_FAILED_TO_START,
+  WORKSPACE_RESET, WORKSPACE_RESET_MARKER, WORKSPACE_BASE_FALLBACK_MARKER,
 } from "./run-prompts.js";
 
 // Why a task is being (re)started — only used to label the resume; all reasons
@@ -187,24 +188,21 @@ export async function runTask(taskId: string, opts: { turnHeld?: boolean } = {})
     await db.insert(sessions).values(sessRow);
 
     const out = createWriteStream(join(runDir, `${sessId}.md`), { flags: "a" });
+    if (ws.baseFallback) {
+      // fresh run 也会撞上「登记的 base 已经没了」（任务验收合并后分支被删，用户又点了
+      // 一次运行）。这一档不像续聊那样起不来，但基线被换掉、甚至跟着改了任务登记值，
+      // 只在日志里发生就等于没发生 —— 同样落一条持久可见的气泡。
+      const note = WORKSPACE_BASE_FALLBACK_MARKER(ws.baseFallback.requested, ws.baseFallback.used, !!ws.baseFallback.persisted);
+      writeTurn(out, { t: "system", agent: agentType, text: note }, turnStart);
+      bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: "single", agentType, event: { kind: "system", text: note } });
+    }
     await consumeSingleRun({
       taskId, sessId, agentType, ex, cwd: ws.path,
       handle, out, turnStart, cliSessionId, autoTitle,
     });
   } catch (err) {
     const message = String(err instanceof Error ? err.message : err);
-    bus.publish({
-      type: "agent.event",
-      taskId,
-      sessionId: "",
-      role: "single",
-      event: { kind: "error", message },
-    });
-    // 同 continueTask 的 catch：这条 SSE 事件的 sessionId 是空串，落不进任何一条对话，
-    // 刷新即消失。起跑失败在这里至少还会把任务打成 failed（状态是可见的），但「为什么」
-    // 仍然只有开着页面的那一刻能看到，所以原因也补进会话。第一轮起跑失败时任务还没有
-    // 任何会话，appendTaskTimeline 会如实返回 false，不额外处理。
-    await appendTaskTimeline(taskId, TURN_FAILED_TO_START(message));
+    await reportTurnFailure({ taskId, message, role: "single" });
     const status = takeStopped(taskId) ?? "failed";
     await setStatus(taskId, status);
     await afterSettlement(taskId, status, false, false);
@@ -417,7 +415,7 @@ export async function continueTask(
     let cwd = recorded;
     let workspaceReset = false;
     let freshWorkspace = false;
-    let baseFallback: { requested: string; used: string } | undefined;
+    let baseFallback: Workspace["baseFallback"];
     if (!existsSync(cwd)) {
       if (project) {
         const ws = await taskWorkspace(task, project.repoPath);
@@ -623,7 +621,7 @@ export async function continueTask(
       // 同上,这一条说的是「按哪个 base 重建的」:任务登记的 base 已经没了(验收合并后
       // 分支被删是最常见的一种),这一轮是按仓库当前 HEAD 起的。不说的话用户只能自己
       // 发现分支基线换了。
-      const note = WORKSPACE_BASE_FALLBACK_MARKER(baseFallback.requested, baseFallback.used);
+      const note = WORKSPACE_BASE_FALLBACK_MARKER(baseFallback.requested, baseFallback.used, !!baseFallback.persisted);
       writeTurn(out, { t: "system", agent, text: note }, turnStart);
       bus.publish({ type: "agent.event", taskId, sessionId: sessId, role: sessionRole, agentType: agent, event: { kind: "system", text: note } });
     }
@@ -637,22 +635,13 @@ export async function continueTask(
     });
   } catch (err) {
     const message = String(err instanceof Error ? err.message : err);
-    bus.publish({
-      type: "agent.event", taskId, sessionId: "", role: sessionRole, agentType,
-      event: { kind: "error", message },
+    // handle 还没赋值 = 连 spawn 都没到，这句话一个字都没送出去（判据与措辞见
+    // turn-failure.ts）；这条交代要落到被 @ 的那位、或指名续的那条会话上。
+    await reportTurnFailure({
+      taskId, message, role: sessionRole, agentType,
+      undelivered: handle || opts.system ? undefined : userText + attachmentsPrompt(opts.attachments),
+      target: { sessionId: opts.resumeSessionId, agentType, role: sessionRole },
     });
-    // 上面那条 SSE 事件是**唯一**的用户侧反馈时，等于没有反馈：它带的 sessionId 是空串，
-    // 前端按会话分发根本落不到任何一条对话上；刷新一次更是什么都不剩。而这条路径最常见的
-    // 走法恰恰是「用户在一个已验收的任务里发了句话，worktree 建不出来」——他看到的就是
-    // 「显示已发送，然后没反应」（实测任务 gsppwUacwZnn：/reply 返回 202，会话里什么
-    // 都没有，状态也一动不动）。所以按
-    // AGENTS.md 的持久可见约定补一条真气泡。
-    // handle 还没赋值 = 连 spawn 都没到，这句话一个字都没送出去，原文得还给用户（它的
-    // user 气泡也没写进 .md，不附上就真丢了）；spawn 之后才挂的不提原文，那是消费阶段
-    // 出的岔子，话已经在 agent 手里了。
-    if (!handle) {
-      await appendTaskTimeline(taskId, TURN_FAILED_TO_START(message, opts.system ? undefined : userText));
-    }
     // 这一轮已拍过基线的话(资源都解析成功、spawn 才挂),先按基线对账:失败回合的工作
     // 目录多半一个字节没动,开头摘掉的验收事实(stage + 合并快照 + 尾段进度)会整套挂回。
     // 不对账的话,下一轮的 recordTurnBaseline 会直接覆盖这份基线,快照永久丢失(审查
