@@ -211,8 +211,34 @@ function tokenize(template: string): string[] {
 const PLACEHOLDER = /%(?:1|l|d|v|\*)/i;
 const PLACEHOLDER_ALL = /%(?:1|l|d|v|\*)/gi;
 
+// 注册表里的命令行**是给 shell 读的**,`%SystemRoot%\system32\NOTEPAD.EXE` 这种写法
+// 到处都是;而我们走的是 execFile(不过 shell),它不会展开这些变量,结果是「找不到程序」
+// 然后静默退回系统默认 —— 界面上看起来接受了你选的应用,打开的却是另一个。
+// 所以在这里自己展开。
+//
+// 只认 `%名字%` 这一种形状,而且名字必须以字母/下划线开头:占位符 `%1` `%L` `%*` 长得
+// 不一样,不会被误伤。展开在替换占位符**之前**做 —— 反过来的话,文件名里真有 `%X%`
+// 的文档会被当成变量展开掉。
+const ENV_VAR = /%([A-Za-z_][A-Za-z0-9_().#$-]*)%/g;
+
+/** Windows 的环境变量名不区分大小写,而 `process.env` 在别的平台上区分,自己兜一层。 */
+function envValue(name: string): string | undefined {
+  const direct = process.env[name];
+  if (direct !== undefined) return direct;
+  const want = name.toLowerCase();
+  for (const [k, v] of Object.entries(process.env)) {
+    if (k.toLowerCase() === want) return v;
+  }
+  return undefined;
+}
+
+/** 认不出来的变量原样留着,跟 cmd 一个脾气:宁可让它跑不起来退回默认,也不要拼出一条错路径。 */
+function expandEnv(token: string): string {
+  return token.replace(ENV_VAR, (whole, name: string) => envValue(name) ?? whole);
+}
+
 export function buildWindowsCommand(template: string, absPath: string) {
-  const tokens = tokenize(template);
+  const tokens = tokenize(template).map(expandEnv);
   // 模板是空的就别拼了:接下去 `applied` 会只剩文件路径,变成「把这个文档本身当程序执行」。
   if (!tokens.length) return null;
   let replaced = false;

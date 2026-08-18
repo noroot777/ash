@@ -70,9 +70,27 @@ const vscode = buildWindowsCommand(scan.entries.find((e) => e.id === "VSCode.md"
 assert.deepEqual(vscode, { file: "C:\\Program Files\\Microsoft VS Code\\Code.exe", args: [doc] },
   "带空格的 exe 路径要被引号合成一个词，%1 换成文件路径");
 
+// 注册表里的命令行是给 shell 读的,`%SystemRoot%` 这类变量到处都是;我们走 execFile
+// 不过 shell,不自己展开就是「找不到程序 → 静默退回系统默认」:界面上看着接受了你选的
+// 应用,打开的却是另一个。这里把两台机器上都会遇到的三种情形钉住。
+process.env.SystemRoot = "C:\\WINDOWS";
 const notepad = buildWindowsCommand(scan.entries.find((e) => e.id === "Applications\\notepad.exe")!.command, doc);
-assert.deepEqual(notepad, { file: "%SystemRoot%\\system32\\NOTEPAD.EXE", args: [doc] },
-  "不带引号的模板同样切得开");
+assert.deepEqual(notepad, { file: "C:\\WINDOWS\\system32\\NOTEPAD.EXE", args: [doc] },
+  "不带引号的模板同样切得开，%SystemRoot% 要展开成真路径");
+delete process.env.SystemRoot;
+assert.deepEqual(
+  buildWindowsCommand("%HARNESS_NO_SUCH_VAR%\\x.exe %1", doc),
+  { file: "%HARNESS_NO_SUCH_VAR%\\x.exe", args: [doc] },
+  "认不出来的变量原样留着（跑不起来会退回系统默认），不能展成一条错路径",
+);
+// 展开必须发生在替换 %1 **之前**：否则文件名里真带 %VAR% 的文档会被当成变量吃掉。
+process.env.HARNESS_OPENER_PROBE = "被展开了";
+assert.deepEqual(
+  buildWindowsCommand('"C:\\a\\b.exe" "%1"', "C:\\docs\\%HARNESS_OPENER_PROBE%.md"),
+  { file: "C:\\a\\b.exe", args: ["C:\\docs\\%HARNESS_OPENER_PROBE%.md"] },
+  "文件路径本身不参与变量展开",
+);
+delete process.env.HARNESS_OPENER_PROBE;
 
 const legacy = buildWindowsCommand(scan.entries.find((e) => e.id === "Legacy.md")!.command, doc);
 assert.deepEqual(legacy, { file: "C:\\Tools\\viewer.exe", args: ["--view", doc] },
