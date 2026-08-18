@@ -130,6 +130,37 @@ if (Test-Path (Join-Path $wt '.git')) {
   git -C $repo worktree add --detach --force $wt '${sha}'
 }
 if ($LASTEXITCODE -ne 0) { throw 'checkout 失败' }
+# 那个 worktree 是**跨所有调用复用的固定目录**,而 checkout --force 只管 Git 跟踪的文件:
+# 上一次跑测试/构建留下的未跟踪与 ignored 产物(data\harness.db、dist\、*.tsbuildinfo)
+# 原样活到下一次快照里。SHA 和 junction 全绿也照不出这类污染 —— 而 server 的生产入口直接跑
+# server\dist\index.js,验的可能是上一版构建产物,「测的就是这份快照」对文件树并不成立。
+# 两个前提缺一不可:
+#  ① 先确认这真是个**链接式** worktree(自己的 git-dir 不等于 common-dir),不敢在谁的
+#     主工作区上跑 git clean;
+#  ② 先把目录型 reparse point 摘掉再 clean —— git clean 的递归删除会**穿过** junction 去删
+#     目标目录里的东西(那头是主仓源码),而 [IO.Directory]::Delete($link,$false) 只删链接本体。
+#     摘掉的正是下面那四个 @harness junction,紧接着就原地重建。
+$gd = ([string](git -C $wt rev-parse --git-dir)).Trim()
+$gc = ([string](git -C $wt rev-parse --git-common-dir)).Trim()
+if ($LASTEXITCODE -ne 0 -or -not $gd -or $gd -eq $gc) {
+  throw ('拒绝清理:' + $wt + ' 看着不是链接式 worktree(git-dir=' + $gd + ' common-dir=' + $gc + '),不在它上面跑 git clean')
+}
+$__links = 0
+$__stack = New-Object System.Collections.Stack
+$__stack.Push($wt)
+while ($__stack.Count -gt 0) {
+  $__d = $__stack.Pop()
+  foreach ($__sub in [IO.Directory]::GetDirectories($__d)) {
+    $__di = New-Object IO.DirectoryInfo $__sub
+    # 命中 reparse point 就地摘掉,**并且不往里走** —— 枚举本身也会穿过 junction,
+    # 走进去就是在遍历主仓。
+    if ($__di.Attributes -band [IO.FileAttributes]::ReparsePoint) { [IO.Directory]::Delete($__sub, $false); $__links++ }
+    else { $__stack.Push($__sub) }
+  }
+}
+$__cleaned = @(git -C $wt clean -xdff)
+if ($LASTEXITCODE -ne 0) { throw ('git clean 失败:' + ($__cleaned -join '; ')) }
+Write-Output ('CLEAN=' + $__cleaned.Count + '|' + $__links)
 # 不补这几个软链,@harness/shared 会向上解析到主仓那份 —— 改了 shared 却测旧代码。
 # 「缺了就建」不够:junction **在**、却指着主仓,是同一个坑的另一半,而且更隐蔽 —— 检出、
 # SHA 校验全绿,测的却仍是主仓旧代码。所以每次同步都把四个目标读出来核对,并把它们回传给
@@ -158,6 +189,11 @@ foreach ($p in @(${HARNESS_LINKS.map((p) => `'${p}'`).join(",")})) {
 }
 Write-Output ('WORKTREE=' + $wt)
 Write-Output ('HEAD=' + (git -C $wt rev-parse HEAD))
+# 干不干净不靠「我调过 clean 了」自证 —— 回读一遍工作区状态。除了我们自己建的 node_modules
+# (那四个 junction 的家,本来就 ignored)之外还剩东西,就说明这次的文件树不是这份快照,
+# 和 SHA / junction 一样当场算失败。
+$__st = @(git -C $wt status --porcelain=v1 --ignored | Where-Object { $_ -and ($_ -notmatch '^!!\s+node_modules[/\\]') })
+Write-Output ('RESIDUE=' + $__st.Count + '|' + (($__st | Select-Object -First 12) -join ' ;; '))
 } finally {
   git -C $repo update-ref -d '${ref}' 2>$null
 }
@@ -191,7 +227,22 @@ Write-Output ('HEAD=' + (git -C $wt rev-parse HEAD))
           `\n  已中止:这么跑下去 @harness/* 解析到的是别处的代码,测了也不算数。\n${res.out}`,
       );
     }
-    return { localSha: sha.slice(0, 7), remoteSha: remoteSha.slice(0, 7), sha, worktree, links, out: res.out };
+    // 清理和 junction 一样是成功判据:固定 worktree 复用了几十次,残留一份旧 dist\ 就够让
+    // 「测的是当前快照」变成假话,而 SHA 全绿照不出来。
+    const clean = /CLEAN=(\d+)\|(\d+)/.exec(res.out);
+    if (!clean) throw new Error(`同步没回传清理结果(工作区可能没被清理干净):\n${res.out}`);
+    const residue = /RESIDUE=(\d+)\|([^\r\n]*)/.exec(res.out);
+    if (!residue) throw new Error(`同步没回传残留检查结果,输出不完整:\n${res.out}`);
+    if (Number(residue[1]) > 0) {
+      throw new Error(
+        `对端 worktree 清理后仍有 ${residue[1]} 项不属于本次快照:\n  ${residue[2].split(" ;; ").join("\n  ")}\n` +
+          `  已中止:这些是上次跑测试/构建留下的东西,测下去可能验的是旧产物。\n${res.out}`,
+      );
+    }
+    return {
+      localSha: sha.slice(0, 7), remoteSha: remoteSha.slice(0, 7), sha, worktree, links,
+      cleaned: Number(clean[1]), relinked: Number(clean[2]), out: res.out,
+    };
   } finally {
     daemon?.stop();
     // 本地这个 ref 只为这次运输而存在:对端已经把快照 checkout 出来了(detached HEAD 撑着

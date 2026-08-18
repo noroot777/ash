@@ -83,6 +83,7 @@ async function cmdSync() {
     syncToRemote({ repoPath: p.repoPath, projectId: p.id, onLine: live, guard }));
   console.log(`  本地 ${r.localSha} → 对端 ${green(r.remoteSha)}`);
   console.log(`  工作区 ${r.worktree}`);
+  console.log(`  清理 ${r.cleaned} 项快照外内容,重建 ${r.relinked} 个软链`);
   return 0;
 }
 
@@ -108,7 +109,7 @@ async function cmdTest(args) {
     if (!args.includes("--no-sync")) {
       console.log(bold("① 同步"));
       const r = await syncToRemote({ repoPath: p.repoPath, projectId: p.id, onLine: live, guard });
-      console.log(`  ${r.localSha} → ${green(r.remoteSha)}\n`);
+      console.log(`  ${r.localSha} → ${green(r.remoteSha)}(清理 ${r.cleaned} 项快照外内容)\n`);
     }
 
     console.log(bold("② 在真 Windows 上跑回归"));

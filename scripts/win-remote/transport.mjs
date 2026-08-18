@@ -30,6 +30,8 @@ export function detectLocalAddress() {
   throw new Error("找不到可被对端访问的本机 IPv4,请用 WIN_REMOTE_SELF=<ip> 指定");
 }
 
+// 控制面的每一跳都走这里。**调用方必须在 init 里带 signal** —— 裸 fetch 没有任何超时,
+// 对端只接连接不回包时它能永远不返回,调用者传的 timeout 就成了摆设。
 async function api(path, init = {}, host = DEFAULT_HOST) {
   const res = await fetch(`${host}/api${path}`, init);
   if (!res.ok) throw new Error(`${init.method ?? "GET"} ${path} → ${res.status} ${await res.text().catch(() => "")}`);
@@ -37,8 +39,8 @@ async function api(path, init = {}, host = DEFAULT_HOST) {
 }
 
 /** 找到对端 harness 里指向 harness 仓库自己的那个项目(终端会话必须挂在某个项目上)。 */
-export async function resolveProject(host = DEFAULT_HOST) {
-  const projects = await api("/projects", {}, host);
+export async function resolveProject(host = DEFAULT_HOST, signal = null) {
+  const projects = await api("/projects", signal ? { signal } : {}, host);
   if (!projects.length) throw new Error("对端 harness 里一个项目都没有,先在它的界面上添加 harness 仓库");
   const pick = process.env.WIN_REMOTE_PROJECT;
   if (pick) {
@@ -103,24 +105,32 @@ const isNoise = (line) => NOISE.test(line);
  *
  * @param cmd      PowerShell 命令(可多行)
  * @param cwd      在哪个目录跑;默认项目目录
- * @param timeout  毫秒,超时按失败返回而不是抛
+ * @param timeout  毫秒,整次调用的期限(含查项目/建会话/发输入/收回传);超时按失败返回而不是抛
  * @param onLine   实时预览回调 —— 传的是 PTY 画面(脏),只用来看进度,别拿它当结果
  */
 export async function rexec(cmd, { cwd = null, timeout = 15 * 60_000, onLine = null, host = DEFAULT_HOST, projectId = null } = {}) {
-  const pid = projectId ?? (await resolveProject(host)).id;
   const token = randomBytes(9).toString("hex");
   const sink = collector(token);
+
+  // deadline 从**第一次远端请求之前**开始,而且只有这一个。
+  // 原来它是在 session 建成之后才起算的,于是「对端 harness 卡死、代理只接连接不回包、
+  // 半开连接」这类**永不返回**的失败全都漏在保护之外:查项目、建会话、两次 /input 用的都是
+  // 裸 fetch,调用者传的 timeout 一点约束力都没有,进程能挂到底层 TCP 自己想通为止。
+  // 上一轮只修了「fetch 立刻抛错之后要清理」,没修「fetch 根本不返回」。
+  // 现在同一个 signal 串起控制面的每一跳,连收回传的兜底也挂在它的 abort 上 ——
+  // 一次调用最多活 timeout 那么久,不管卡在哪一步。
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), timeout);
 
   // 下面这一整段都得在 try 里:回传服务一 listen 就是个活着的 handle,只要还开着,
   // Node 事件循环就不会空 —— 而**建会话之前**的每一步都可能抛(对端重启、地址写错、
   // 网络闪断都够)。错误确实交还给了调用者,进程却再也不退,用户看到的是
   // 「报了个错然后永远不结束」。清理必须覆盖每条失败路径,不能只挂在正常路径末尾。
   let session = null;
-  let ac = null;
+  let pid = projectId;
   let pump = null;
-  let timer = null;
-  let raceTimer = null;
   try {
+    pid = projectId ?? (await resolveProject(host, ac.signal)).id;
     const port = await sink.listen();
     const self = detectLocalAddress();
 
@@ -128,6 +138,7 @@ export async function rexec(cmd, { cwd = null, timeout = 15 * 60_000, onLine = n
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ cols: 200, rows: 50 }),
+      signal: ac.signal,
     }, host);
 
     // `pwsh -File x.ps1` **不会**把脚本里最后一条外部命令的退出码当成自己的退出码 ——
@@ -177,8 +188,6 @@ export async function rexec(cmd, { cwd = null, timeout = 15 * 60_000, onLine = n
       `try { Invoke-WebRequest -Uri "http://${self}:${port}/${token}?code=$__e" -Method PUT -Body $__b -ContentType 'text/plain; charset=utf-8' -TimeoutSec 60 -UseBasicParsing | Out-Null } catch { }`,
     ].filter(Boolean).join("; ");
 
-    ac = new AbortController();
-    timer = setTimeout(() => ac.abort(), timeout);
     let preview = "";
     pump = (async () => {
       const res = await fetch(`${host}/api/projects/${pid}/terminal/sessions/${session.id}/events?after=0`, {
@@ -216,27 +225,44 @@ export async function rexec(cmd, { cwd = null, timeout = 15 * 60_000, onLine = n
     await new Promise((r) => setTimeout(r, 400));
     const send = (data) => api(`/projects/${pid}/terminal/sessions/${session.id}/input`, {
       method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ data }),
+      signal: ac.signal,
     }, host);
     await send("Set-PSReadLineOption -PredictionSource None\r");
     await new Promise((r) => setTimeout(r, 300));
     await send(`${wrapper}\r`);
 
+    // 兜底不再自己起一个 timeout 那么长的定时器 —— 那是**第二个** deadline,从命令发出去
+    // 才起算,总时长能到两倍。改挂在同一个 signal 的 abort 上:整次调用只有一个期限。
     return await Promise.race([
       sink.done,
       new Promise((r) => {
-        raceTimer = setTimeout(() => r({ code: 124, out: `[win-remote] 超时 ${timeout}ms,未收到回传`, timedOut: true }), timeout);
+        const fire = () => r({ code: 124, out: `[win-remote] 超时 ${timeout}ms,未收到回传`, timedOut: true });
+        if (ac.signal.aborted) fire();
+        else ac.signal.addEventListener("abort", fire, { once: true });
       }),
     ]);
+  } catch (e) {
+    // deadline 到点时,卡住的那一跳会以 AbortError 抛出来。但 rexec 对调用者的承诺是
+    // 「超时按失败返回而不是抛」(收回传那条路径一直是这么做的),控制面卡住没道理换一种。
+    if (ac.signal.aborted) {
+      return { code: 124, out: `[win-remote] 超时 ${timeout}ms,对端 harness 的控制面请求没在期限内返回`, timedOut: true };
+    }
+    throw e;
   } finally {
     clearTimeout(timer);
-    clearTimeout(raceTimer); // 抢跑赢了的那个定时器没人关,它自己也能把进程吊住 timeout 那么久
-    ac?.abort();
+    ac.abort();
     await sink.close();
     // pump 的失败只影响预览(实时画面),不该顶掉真正的结果或真正的错误 —— 但也不能
     // 静静吞掉,否则 SSE 那头坏了永远没人知道。
     await pump?.catch((e) => console.warn(`⚠︎ 预览流中断(不影响结果):${e.message}`));
     if (session) {
-      await api(`/projects/${pid}/terminal/sessions/${session.id}`, { method: "DELETE" }, host).catch(() => {});
+      // 清理不能用主 signal:走到这儿它多半已经 abort 了(正常结束也会),那样这条 DELETE
+      // 必然失败,会话就留在对端。给它自己的期限 —— 同样不能没有期限,否则「对端卡死」只是
+      // 从上面挪到了这里;取 min(5s, timeout) 是因为它加在调用者的等待时间**之后**,
+      // 不该让一次 timeout=500ms 的调用变成等 5 秒半。
+      await api(`/projects/${pid}/terminal/sessions/${session.id}`, {
+        method: "DELETE", signal: AbortSignal.timeout(Math.min(5_000, timeout)),
+      }, host).catch(() => {});
     }
   }
 }
