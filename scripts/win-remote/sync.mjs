@@ -31,6 +31,8 @@ import { rexec, detectLocalAddress } from "./transport.mjs";
 // 报告却记在 A 的改动名下。这个工具的全部意义就是「验当前工作区快照」,拉错快照即根本失效。
 const WIP_PREFIX = "refs/win-remote/snap-";
 const WORKSPACE = process.env.WIN_REMOTE_WORKSPACE ?? ".worktrees/win-remote";
+// 这四个包在 workspace 里互相 import,靠 `node_modules/@harness/<pkg>` 找到对方。
+const HARNESS_LINKS = ["shared", "server", "web-next", "mcp"];
 
 const git = (args, opts = {}) =>
   execFileSync("git", args, { encoding: "utf8", ...opts }).trim();
@@ -115,6 +117,10 @@ export async function syncToRemote({ repoPath, onLine = null, projectId = null, 
     const ps = String.raw`${guard ? `${guard}\n` : ""}
 $repo = '${repoPath}'
 $wt   = Join-Path $repo '${WORKSPACE.replace(/\//g, "\\")}'
+# 整段包在 try/finally 里,只为一件事:**这个 ref 无论怎么失败都不许留在对端**。
+# 它指着一个含未提交/未跟踪内容的快照 —— checkout 撞占用、junction 位置被真目录占了、
+# 输出校验不过,任何一条早退路径把它留下,那份内容就无限期躺在别人机器的仓库里。
+try {
 git -C $repo fetch --force --no-tags '${daemon.url}' '${ref}:${ref}'
 if ($LASTEXITCODE -ne 0) { throw 'fetch 失败:对端连不回开发机的 git daemon' }
 # 检出**钉死在 SHA 上**而不是 ref 名:ref 只是运输容器,认 SHA 才谈得上「测的就是这份快照」。
@@ -124,16 +130,37 @@ if (Test-Path (Join-Path $wt '.git')) {
   git -C $repo worktree add --detach --force $wt '${sha}'
 }
 if ($LASTEXITCODE -ne 0) { throw 'checkout 失败' }
-git -C $repo update-ref -d '${ref}' 2>$null
 # 不补这几个软链,@harness/shared 会向上解析到主仓那份 —— 改了 shared 却测旧代码。
+# 「缺了就建」不够:junction **在**、却指着主仓,是同一个坑的另一半,而且更隐蔽 —— 检出、
+# SHA 校验全绿,测的却仍是主仓旧代码。所以每次同步都把四个目标读出来核对,并把它们回传给
+# 开发机当成功判据的一部分(见下面的 LINK= 解析)。
 $scope = Join-Path $wt 'node_modules\@harness'
 New-Item -ItemType Directory -Force -Path $scope | Out-Null
-foreach ($p in @('shared','server','web-next','mcp')) {
+foreach ($p in @(${HARNESS_LINKS.map((p) => `'${p}'`).join(",")})) {
   $link = Join-Path $scope $p
-  if (-not (Test-Path $link)) { cmd /c mklink /J "$link" (Join-Path $wt $p) | Out-Null }
+  $want = ([string](Join-Path $wt $p)).TrimEnd('\')
+  $it = Get-Item -LiteralPath $link -Force -ErrorAction SilentlyContinue
+  # 真目录/真文件占了位置就停手报错:那可能是别人装的依赖或手工放的东西,自动删属于越权。
+  if ($it -and $it.LinkType -ne 'Junction') { throw ('node_modules\@harness\' + $p + ' 已存在且不是 junction(' + $it.LinkType + '),不敢自动删,请人工处理') }
+  if ($it) {
+    $cur = ([string]($it.Target | Select-Object -First 1)) -replace '^\\\\\?\\',''
+    if ($cur.TrimEnd('\') -ne $want) {
+      # 只删链接本体。Remove-Item -Recurse 会**穿过** junction 去删目标目录里的东西 ——
+      # 这里的目标要么是 worktree 要么是主仓,两个都删不起。
+      [IO.Directory]::Delete($link, $false)
+      $it = $null
+    }
+  }
+  if (-not $it) { cmd /c mklink /J "$link" "$want" | Out-Null }
+  $now = Get-Item -LiteralPath $link -Force -ErrorAction SilentlyContinue
+  if ($now -and $now.LinkType -eq 'Junction') { $tgt = ([string]($now.Target | Select-Object -First 1)) -replace '^\\\\\?\\','' } else { $tgt = '(不是 junction)' }
+  Write-Output ('LINK=' + $p + '|' + $tgt.TrimEnd('\'))
 }
 Write-Output ('WORKTREE=' + $wt)
 Write-Output ('HEAD=' + (git -C $wt rev-parse HEAD))
+} finally {
+  git -C $repo update-ref -d '${ref}' 2>$null
+}
 `;
     const res = await rexec(ps, { cwd: repoPath, onLine, projectId, timeout: 5 * 60_000 });
     if (res.code !== 0) throw new Error(`同步失败(exit ${res.code}):\n${res.out}`);
@@ -147,7 +174,24 @@ Write-Output ('HEAD=' + (git -C $wt rev-parse HEAD))
           `  已中止:继续测下去,结果会被记在一份并不存在于对端的改动上。\n${res.out}`,
       );
     }
-    return { localSha: sha.slice(0, 7), remoteSha: remoteSha.slice(0, 7), sha, worktree, out: res.out };
+    // SHA 对上只说明 worktree 自己是对的,不说明 Node 会从这儿解析 `@harness/*`。
+    // junction 指着主仓时:fetch、checkout、SHA 校验全绿,`import '@harness/shared'` 拿到的
+    // 却是主仓旧代码 —— 一个「全部通过」的假绿。所以四个目标同样是成功判据。
+    if (!worktree) throw new Error(`同步没回传 worktree 路径,输出不完整:\n${res.out}`);
+    const links = new Map(
+      [...res.out.matchAll(/LINK=([^|\r\n]+)\|([^\r\n]*)/g)].map((m) => [m[1].trim(), m[2].trim()]),
+    );
+    const norm = (s) => s.replace(/\\+$/, "").toLowerCase(); // NTFS 不分大小写,比较也别分
+    const bad = HARNESS_LINKS.map((p) => ({ p, want: `${worktree}\\${p}`, got: links.get(p) ?? "(没回传)" }))
+      .filter(({ want, got }) => norm(got) !== norm(want));
+    if (bad.length) {
+      throw new Error(
+        `对端 node_modules/@harness 没指向本次 worktree:\n` +
+          bad.map(({ p, want, got }) => `  ${p}: ${got}\n    应为 ${want}`).join("\n") +
+          `\n  已中止:这么跑下去 @harness/* 解析到的是别处的代码,测了也不算数。\n${res.out}`,
+      );
+    }
+    return { localSha: sha.slice(0, 7), remoteSha: remoteSha.slice(0, 7), sha, worktree, links, out: res.out };
   } finally {
     daemon?.stop();
     // 本地这个 ref 只为这次运输而存在:对端已经把快照 checkout 出来了(detached HEAD 撑着

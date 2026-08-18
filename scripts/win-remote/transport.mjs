@@ -150,6 +150,10 @@ export async function rexec(cmd, { cwd = null, timeout = 15 * 60_000, onLine = n
       // 外部程序(npm/node/tsx)吐的是 UTF-8 字节,PowerShell 默认按活动代码页(中文机器是 936)解,
       // 中文输出会变成「鉁?璺緞」这种乱码 —— 测试断言里的中文全糊掉。这两行把两端都钉成 UTF-8。
       `$OutputEncoding=[Console]::OutputEncoding=[Text.Encoding]::UTF8`,
+      // 顺手扫掉一小时前的同格式残留:wrapper 中途崩了、机器断电、会话被掐,下面那套「上传前
+      // 就删干净」都执行不到,总得有个不依赖任何一次会话的兜底。名字是 18 位 hex + 三种固定
+      // 后缀,不会碰到别人的东西;一小时的门槛保证不会误删**正在跑**的另一条命令(单条上限 10 分钟)。
+      `Get-ChildItem -LiteralPath $env:TEMP -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '^[0-9a-f]{18}\\.(ps1|out|err)$' -and $_.LastWriteTime -lt (Get-Date).AddHours(-1) } | Remove-Item -Force -ErrorAction SilentlyContinue`,
       `$__d='${(cwd ?? "").replace(/'/g, "''")}'`,
       `$__o=Join-Path $env:TEMP '${token}.out'; $__r=Join-Path $env:TEMP '${token}.err'; $__s=Join-Path $env:TEMP '${token}.ps1'`,
       `[IO.File]::WriteAllText($__s,[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${b64}')),(New-Object Text.UTF8Encoding $false))`,
@@ -163,9 +167,14 @@ export async function rexec(cmd, { cwd = null, timeout = 15 * 60_000, onLine = n
       `$__g=[string](Get-Content $__r -Raw -ErrorAction SilentlyContinue)`,
       `if($__g){ $__t = $__t + $__nl + '--- stderr ---' + $__nl + $__g }`,
       `if($__e -eq 124){ $__t = $__t + $__nl + '[win-remote] 超时 ${secs}s,已杀掉进程' }`,
-      `[IO.File]::WriteAllText($__o,[string]$__t,(New-Object Text.UTF8Encoding $false))`,
-      `try { Invoke-WebRequest -Uri "http://${self}:${port}/${token}?code=$__e" -Method PUT -InFile $__o -ContentType 'text/plain' -TimeoutSec 60 -UseBasicParsing | Out-Null } catch { }`,
+      // 三个临时文件在**上传之前**就删光,上传改从内存发字节(而不是 `-InFile` 指着磁盘)。
+      // 原来的顺序是「先上传、再 Remove-Item」,而开发机一收到 body 就往下走、随手把终端
+      // 会话 DELETE 掉 —— 删文件那句和杀会话是在赛跑,输的时候 `%TEMP%` 里就留下一份
+      // **明文的远程命令**(`.ps1` 里是完整脚本,不只是磁盘垃圾)。现在删在前、发在后,
+      // 本地收到回传时对端磁盘上已经一个 token 文件都没有,竞争这件事从根上不存在。
       `Remove-Item -LiteralPath $__o,$__r,$__s -Force -ErrorAction SilentlyContinue`,
+      `$__b=[Text.Encoding]::UTF8.GetBytes([string]$__t)`,
+      `try { Invoke-WebRequest -Uri "http://${self}:${port}/${token}?code=$__e" -Method PUT -Body $__b -ContentType 'text/plain; charset=utf-8' -TimeoutSec 60 -UseBasicParsing | Out-Null } catch { }`,
     ].filter(Boolean).join("; ");
 
     ac = new AbortController();

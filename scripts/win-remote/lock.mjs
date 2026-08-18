@@ -17,6 +17,7 @@ import { rexec } from "./transport.mjs";
 
 const LOCK_REL = ".worktrees\\win-remote.lock";
 const STALE_MS = 25 * 60_000;
+const HEARTBEAT_MS = 30_000; // 命令跑着的时候由 ThreadJob 一直刷,远小于 STALE_MS
 const WAIT_MS = 5_000;
 const WAIT_TRIES = 24; // 最多等 2 分钟,再久就该去看看那边到底谁在跑
 
@@ -24,8 +25,13 @@ const lockPath = (repoPath) => `${repoPath.replace(/[\\/]+$/, "")}\\${LOCK_REL}`
 const q = (s) => `'${s.replace(/'/g, "''")}'`;
 
 /**
- * 每条远端命令的前置守卫:确认锁还在自己手里,并刷新 mtime(心跳)。
+ * 每条远端命令的前置守卫:确认锁还在自己手里,并在**整条命令期间**持续刷新 mtime(心跳)。
  * 不在自己手里就 throw —— 那条命令连带整次调用一起失败,这是想要的。
+ *
+ * 心跳必须跟着命令跑完,而不是开头点一下:守卫只在命令开头查一次 owner,一条 10 分钟的测试
+ * 进了临界区之后就再没人回头看了。心跳停在开头意味着「跑够 TTL 那么久的命令」会被判过期、
+ * 被别人正当接管,而它自己还在往同一个 worktree 里写 —— 恰好是这把锁要防的那件事。
+ * 用 ThreadJob 而不是 Start-Job:同进程另开一个线程,脚本一退它跟着没,不会留下孤儿进程。
  */
 export function lockGuardPs(repoPath, owner) {
   const lock = lockPath(repoPath);
@@ -33,6 +39,18 @@ export function lockGuardPs(repoPath, owner) {
     `$__c = [string](Get-Content ${q(lock)} -Raw -ErrorAction SilentlyContinue)`,
     `if ($__c -notlike 'owner=${owner}*') { throw '[win-remote] 对端工作区的锁已易主(现在是: ' + $__c + '),本次结果不可信,已中止' }`,
     `(Get-Item ${q(lock)}).LastWriteTime = Get-Date`,
+    `if (Get-Command Start-ThreadJob -ErrorAction SilentlyContinue) {`,
+    `  $null = Start-ThreadJob -ArgumentList ${q(lock)},'${owner}' -ScriptBlock {`,
+    `    param($p,$o)`,
+    `    while ($true) {`,
+    `      Start-Sleep -Seconds ${Math.floor(HEARTBEAT_MS / 1000)}`,
+    // 心跳自己也核对 owner:锁真的易主了就停手,别把别人的锁刷成「还活着」。
+    `      try { $c = [IO.File]::ReadAllText($p) } catch { break }`,
+    `      if ($c -notlike "owner=$o*") { break }`,
+    `      try { (Get-Item -LiteralPath $p).LastWriteTime = Get-Date } catch { break }`,
+    `    }`,
+    `  }`,
+    `}`,
   ].join("\n");
 }
 
@@ -43,20 +61,36 @@ async function tryAcquire(repoPath, owner, opts) {
     `$__l = ${q(lock)}`,
     `New-Item -ItemType Directory -Force -Path (Split-Path -Parent $__l) | Out-Null`,
     `$__me = ${q(me)}`,
-    `try {`,
-    `  $__f = [IO.File]::Open($__l,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)`,
-    `  $__b = [Text.Encoding]::UTF8.GetBytes($__me); $__f.Write($__b,0,$__b.Length); $__f.Close()`,
-    `  Write-Output 'LOCK=acquired'`,
-    `} catch {`,
+    // 建锁这一步是原子的:CreateNew 已存在就抛,内核保证只有一个人建得出来。
+    `function New-WinRemoteLock { try { $f = [IO.File]::Open($__l,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None); $b = [Text.Encoding]::UTF8.GetBytes($__me); $f.Write($b,0,$b.Length); $f.Close(); $true } catch { $false } }`,
+    `if (New-WinRemoteLock) { Write-Output 'LOCK=acquired' }`,
+    `else {`,
     `  $__was = [string](Get-Content $__l -Raw -ErrorAction SilentlyContinue)`,
-    `  $__it = Get-Item $__l -ErrorAction SilentlyContinue`,
+    `  $__it = Get-Item $__l -Force -ErrorAction SilentlyContinue`,
+    `  $__state = 'busy'`,
     `  if ($__it -and ((Get-Date) - $__it.LastWriteTime).TotalMilliseconds -gt ${STALE_MS}) {`,
-    `    [IO.File]::WriteAllText($__l,$__me,(New-Object Text.UTF8Encoding $false))`,
-    // 抢的动作本身不原子(两个抢锁的可能同时判定过期),所以写完再读回来认一次 ——
-    // 认输的那个退回去继续等,总有一个是真拿到了。
-    `    $__now = [string](Get-Content $__l -Raw -ErrorAction SilentlyContinue)`,
-    `    if ($__now -eq $__me) { Write-Output 'LOCK=stolen' } else { Write-Output 'LOCK=busy' }`,
-    `  } else { Write-Output 'LOCK=busy' }`,
+    // 接管过期锁**也必须是原子的**,而且必须认「接管的还是我当初判定为过期的那一把」。
+    // 老写法是「覆盖 owner,再读回来认一次」:两个竞争者可以先后覆盖、各自读到自己刚写的内容,
+    // 于是双双自认接管成功、一起进临界区 ——「测到别人的快照」那个坑在这条路径上原样复活。
+    // 光把覆盖换成原子改名也不够:A 接管后重建了锁,晚 2 秒动手的 B 一样能把**新锁**移走。
+    // 所以这里做的是真 CAS:拿 FileShare::None 的独占句柄(同一时刻只有一个人拿得到),
+    // 在句柄里回读内容,确认还等于当初读到的那份(owner 里带随机 id + ISO 时间戳,不会 ABA),
+    // 才就地改写成自己的 owner。别人在此期间连打开都打不开,读-判-写整段不可能被插进来。
+    `    $__fs = $null`,
+    `    try { $__fs = [IO.File]::Open($__l,[IO.FileMode]::Open,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None) } catch { }`,
+    `    if ($__fs) {`,
+    `      try {`,
+    `        $__buf = New-Object byte[] $__fs.Length`,
+    `        $null = $__fs.Read($__buf,0,$__buf.Length)`,
+    `        if ([Text.Encoding]::UTF8.GetString($__buf) -ceq $__was) {`,
+    `          $__nb = [Text.Encoding]::UTF8.GetBytes($__me)`,
+    `          $__fs.SetLength(0); $__fs.Position = 0; $__fs.Write($__nb,0,$__nb.Length)`,
+    `          $__state = 'stolen'`,
+    `        }`,
+    `      } finally { $__fs.Close() }`,
+    `    }`,
+    `  }`,
+    `  Write-Output ('LOCK=' + $__state)`,
     `  Write-Output ('HELD=' + $__was)`,
     `}`,
   ].join("\n");
