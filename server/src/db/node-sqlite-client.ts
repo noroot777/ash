@@ -20,7 +20,53 @@
 // 和 `length` 不可枚举。少一样就有一条路读到空。join 出重名列（`t.id` 和 `p.id` 都叫
 // `id`）时位置读法是唯一正确的那条，因此取值一律走 `setReturnArrays(true)` 的数组结果，
 // 具名属性只是在数组之上再贴一层。
-import { DatabaseSync, type SQLInputValue, type StatementSync } from "node:sqlite";
+import { createRequire } from "node:module";
+import type { DatabaseSync as Db, SQLInputValue, StatementSync } from "node:sqlite";
+
+/**
+ * 能跑起来的最低 Node。这个下限**不是**「node:sqlite 从哪版开始有」(22.5 就有了),
+ * 而是「`StatementSync.setReturnArrays` 从哪版开始有」—— 见 prepare() 里那段。
+ * 同一个数字还写在 `package.json` 的 engines 和 `scripts/setup.mjs` 的环境检查里。
+ */
+const MIN_NODE = "22.16.0";
+
+// 为什么不用静态 import:ESM 的静态 import 在**链接期**就解析完,Node 20 上整张模块图
+// 一行都还没开始执行就抛 ERR_UNKNOWN_BUILTIN_MODULE —— 实测连 import 语句上面的
+// console.log 都不会打印,任何写在代码里的提示都来不及说。改成执行期 require,才有机会
+// 把「Node 太旧」这句人话递出去,而不是让人对着一个内置模块名发愣。
+const nodeRequire = createRequire(import.meta.url);
+
+function loadSqlite(): typeof import("node:sqlite") {
+  try {
+    return nodeRequire("node:sqlite") as typeof import("node:sqlite");
+  } catch {
+    throw new Error(
+      `harness 的数据库用的是 Node 自带的 node:sqlite,当前 Node ${process.version} 没有这个模块。` +
+      `升级到 >= ${MIN_NODE} 就好(node -v 看当前版本)。`,
+    );
+  }
+}
+
+const { DatabaseSync } = loadSqlite();
+assertUsable();
+
+function assertUsable(): void {
+  // 有模块还不够。22.13~22.15 有 node:sqlite,却还没有 `StatementSync.setReturnArrays`
+  // (22.16 才加)。缺了它就只能按列名读,join 出的重名列(`t.id` 和 `p.id` 都叫 `id`)
+  // 会互相覆盖 —— 那是**静默**读到错行,比起不来危险得多。所以花一次 in-memory prepare
+  // 当场问清楚,而不是靠版本号推断。
+  const probe = new DatabaseSync(":memory:");
+  try {
+    if (typeof probe.prepare("select 1").setReturnArrays !== "function") {
+      throw new Error(
+        `当前 Node ${process.version} 自带的 node:sqlite 还没有 StatementSync.setReturnArrays,` +
+        `harness 读多表 join 会拿到错的列。升级到 >= ${MIN_NODE}。`,
+      );
+    }
+  } finally {
+    probe.close();
+  }
+}
 
 export type SqlValue = null | string | number | bigint | Uint8Array;
 export type InValue = SqlValue | undefined | boolean | Date;
@@ -119,7 +165,7 @@ const STMT_CACHE_MAX = 512;
 const CACHEABLE = /^\s*(?:select|insert|update|delete|with)\b/i;
 
 class NodeSqliteClient implements Client {
-  private db: DatabaseSync;
+  private db: Db;
   private cache = new Map<string, StatementSync>();
   closed = false;
 

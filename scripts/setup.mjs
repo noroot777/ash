@@ -15,6 +15,7 @@
 // 而 Windows 没有 bash。平台差异集中在 scripts/platform.mjs。
 import { spawnSync } from "node:child_process";
 import { appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -61,9 +62,30 @@ say("▶ 1/5 检查运行环境");
 // scripts/platform.mjs / server/src/platform.ts 里分了平台。
 ok(`系统 ${process.platform} (${process.arch})`);
 
-const nodeMajor = Number(process.versions.node.split(".")[0]);
-if (nodeMajor >= 20) ok(`node v${process.versions.node}`);
-else bad(`node v${process.versions.node} 太旧,需要 >= 20(建议 22 或更新)`);
+// Node 不比版本号,直接问能力:harness 的数据库是 Node 内置的 `node:sqlite`,而它到位的
+// 时间比大版本号细得多 —— 22.13~22.15 有模块却没有 `StatementSync.setReturnArrays`
+// (缺了它 join 出的重名列会**静默**读错),23.x 一路到 23.7 也还不行,22.16 和 24 才是全的。
+// 所以这里当场跑一遍 harness 真正用到的调用;版本号只在报错时出场,给个说得出口的目标。
+//
+// 另外这段必须用 createRequire 而不是 import:ESM 的静态 import 在链接期就解析,Node 20
+// 上整个脚本一行都执行不到就先抛 ERR_UNKNOWN_BUILTIN_MODULE —— 那正是这条检查要替用户
+// 翻译掉的错。
+const NODE_MIN = "22.16.0";
+function sqliteUsable() {
+  try {
+    const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite");
+    const db = new DatabaseSync(":memory:");
+    try {
+      return typeof db.prepare("select 1").setReturnArrays === "function";
+    } finally {
+      db.close();
+    }
+  } catch {
+    return false;
+  }
+}
+if (sqliteUsable()) ok(`node v${process.versions.node}`);
+else bad(`node v${process.versions.node} 带不动内置的 node:sqlite(harness 的数据库),需要 >= ${NODE_MIN}(建议 24)`);
 
 const npmVersion = run(NPM, ["-v"]);
 if (npmVersion.status === 0) ok(`npm ${npmVersion.stdout.trim()}`);

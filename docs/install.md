@@ -37,7 +37,7 @@ FORMAT=zip npm run package      # 改打 .zip(收件人是 Windows 时更省事:
 | 依赖 | 要求 | 说明 |
 |---|---|---|
 | **macOS / Linux / Windows** | — | 三个平台都能原生跑,Windows 不需要 WSL2(脚本全是 `.mjs`,系统调用按平台分了实现) |
-| **Node.js** | >= 20,建议 22+ | `node -v` |
+| **Node.js** | >= 22.16.0,建议 24 | `node -v`。数据库用的是 Node 内置的 `node:sqlite`,22.16 之前那几个版本要么没这个模块、要么缺 `setReturnArrays`;`node scripts/setup.mjs` 会当场实测,不是比版本号 |
 | **git** | 任意近版 | worktree 隔离、审查 diff、验收合并全靠它 |
 | **至少一个 agent CLI** | 已安装**并登录过** | 见下 |
 
