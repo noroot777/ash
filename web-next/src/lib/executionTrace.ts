@@ -131,8 +131,12 @@ export function traceSummary(event: ExecutionEvent): string {
     }
   }
   // 纯文本 detail:codex 的 exec 给命令原文、edit 给文件路径,后者缩成末两段。
+  // 「像不像路径」跟 shortenPath 用同一把尺子(两种分隔符都认)—— 只认 `/` 的话,
+  // server 跑在 Windows 上时 codex 报的 `C:\repo\server\src\db\index.ts` 判不成路径,
+  // 一整条盘符路径原样糊在行内摘要里;同一个路径包在 JSON 的 file_path 里却是缩过的,
+  // 同一份 trace 两种长相。
   const single = collapse(detail);
-  const looksLikePath = single.includes("/") && !single.includes(" ");
+  const looksLikePath = /[\\/]/.test(single) && !single.includes(" ");
   return clip(looksLikePath ? shortenPath(single) : single);
 }
 

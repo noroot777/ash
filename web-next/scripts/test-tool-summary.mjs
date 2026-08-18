@@ -32,6 +32,14 @@ assert.equal(traceSummary(tool("Bash", truncated)), 'grep -rn "ExecutionDetails"
 // codex:detail 是纯文本(exec 给命令原文、edit 给路径)。
 assert.equal(traceSummary(tool("exec", "bash -lc 'npm test'")), "bash -lc 'npm test'");
 assert.equal(traceSummary(tool("edit", "/Users/fjh/code/harness/web-next/src/lib/executionTrace.ts")), "…/lib/executionTrace.ts");
+// server 跑在 Windows 上时,同一个 edit 报上来的是盘符路径。纯文本这条路曾经只认 `/`,
+// 于是整条 `C:\...` 糊在行内摘要里,而包在 JSON 里的同一个路径是缩过的 —— 同一份 trace
+// 两种长相。JSON 与纯文本两条路都钉在这里。
+const winPath = "C:\\Users\\fjh\\code\\harness\\server\\src\\db\\index.ts";
+assert.equal(traceSummary(tool("edit", winPath)), "…\\db\\index.ts");
+assert.equal(traceSummary(tool("Edit", JSON.stringify({ file_path: winPath }))), "…\\db\\index.ts");
+// 带空格的命令原文照旧当命令,不因为里面有反斜杠就被当成路径切掉。
+assert.equal(traceSummary(tool("exec", 'cmd /c dir C:\\Users')), "cmd /c dir C:\\Users");
 
 // 认不出的形状不能报错,也不能吐 undefined:退回原文/空串。
 assert.equal(traceSummary(tool("Wat", JSON.stringify({ foo: 12, bar: "值" }))), "12");
