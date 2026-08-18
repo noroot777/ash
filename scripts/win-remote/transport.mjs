@@ -38,9 +38,23 @@ async function api(path, init = {}, host = DEFAULT_HOST) {
 
 /** 找到对端 harness 里指向 harness 仓库自己的那个项目(终端会话必须挂在某个项目上)。 */
 export async function resolveProject(host = DEFAULT_HOST) {
-  if (process.env.WIN_REMOTE_PROJECT) return { id: process.env.WIN_REMOTE_PROJECT, repoPath: null };
   const projects = await api("/projects", {}, host);
   if (!projects.length) throw new Error("对端 harness 里一个项目都没有,先在它的界面上添加 harness 仓库");
+  const pick = process.env.WIN_REMOTE_PROJECT;
+  if (pick) {
+    // 指定了 id 也照样得把项目取回来:`repoPath` 是后面每条命令的 cwd,给不出来的话
+    // 所有子命令都会撞上「拿不到对端仓库路径,请用 WIN_REMOTE_PROJECT 指定」——
+    // 而那正是你刚照做过的事。这个覆盖项本来就是给「自动猜歪了」救场的,
+    // 恰好在最需要它的时候不可用。
+    const hit = projects.find((p) => p.id === pick);
+    if (!hit) {
+      throw new Error(
+        `WIN_REMOTE_PROJECT=${pick} 在对端 harness 里不存在。现有项目:\n` +
+          projects.map((p) => `  ${p.id}  ${p.repoPath ?? "(无路径)"}`).join("\n"),
+      );
+    }
+    return { id: hit.id, repoPath: hit.repoPath };
+  }
   const hit = projects.find((p) => /harness|ash/i.test(p.repoPath ?? "")) ?? projects[0];
   return { id: hit.id, repoPath: hit.repoPath };
 }
@@ -65,7 +79,14 @@ function collector(token) {
   return {
     done,
     listen: () => new Promise((r) => server.listen(0, "0.0.0.0", () => r(server.address().port))),
-    close: () => server.close(),
+    // `server.close()` 只是停止接受新连接,已建立的 keep-alive 连接会把回调吊住 ——
+    // Windows 那边 `Invoke-WebRequest` 收完 204 并不会立刻断开。先掐连接再关,
+    // 否则「关掉服务器」这一步本身会挂住整个进程。
+    close: () =>
+      new Promise((r) => {
+        server.closeAllConnections?.();
+        server.close(() => r());
+      }),
   };
 }
 
@@ -89,106 +110,124 @@ export async function rexec(cmd, { cwd = null, timeout = 15 * 60_000, onLine = n
   const pid = projectId ?? (await resolveProject(host)).id;
   const token = randomBytes(9).toString("hex");
   const sink = collector(token);
-  const port = await sink.listen();
-  const self = detectLocalAddress();
 
-  const session = await api(`/projects/${pid}/terminal/sessions`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ cols: 200, rows: 50 }),
-  }, host);
+  // 下面这一整段都得在 try 里:回传服务一 listen 就是个活着的 handle,只要还开着,
+  // Node 事件循环就不会空 —— 而**建会话之前**的每一步都可能抛(对端重启、地址写错、
+  // 网络闪断都够)。错误确实交还给了调用者,进程却再也不退,用户看到的是
+  // 「报了个错然后永远不结束」。清理必须覆盖每条失败路径,不能只挂在正常路径末尾。
+  let session = null;
+  let ac = null;
+  let pump = null;
+  let timer = null;
+  let raceTimer = null;
+  try {
+    const port = await sink.listen();
+    const self = detectLocalAddress();
 
-  // `pwsh -File x.ps1` **不会**把脚本里最后一条外部命令的退出码当成自己的退出码 ——
-  // 脚本正常跑完就是 0。不显式收尾的话,`npm test` 明明断言失败(exit 1),这里照样报 0,
-  // 于是整批回归全绿而实际全红 —— 比假超时更坏,因为它不吵。
-  // 开头先把 $LASTEXITCODE 清零(没跑过外部命令时它是 $null),末尾原样交出去;
-  // 中途 throw 走不到这行,pwsh 自己会退 1。
-  const script = `$LASTEXITCODE=0\n${cmd}\nexit $LASTEXITCODE`;
-  const b64 = Buffer.from(script, "utf8").toString("base64");
-  const secs = Math.max(5, Math.floor(timeout / 1000) - 20);
-  // 为什么起独立进程而不是 `<cmd> *>&1 | Out-File`:管道要等**所有**持有 stdout 的句柄关闭
-  // 才算结束,而 Windows 上留一个孙进程是常事 —— node-pty 的 conpty_console_list_agent
-  // 崩了却不退,整条命令就永远等不到 EOF。实测 `npm run test:terminal` 明明 exit 0,
-  // 管道模式却挂满 10 分钟报假超时。改成 Start-Process 之后,结束判据是**进程退出**,
-  // 跟残留句柄无关;超时还能 Kill 掉并把已经写下的输出捞回来。
-  // 代价是 stdout/stderr 只能分开重定向(Start-Process 不许两路指向同一个文件),
-  // 所以下面把 stderr 单独拼在后面,而不是交错。
-  const wrapper = [
-    `$ErrorActionPreference='Continue'`,
-    // 外部程序(npm/node/tsx)吐的是 UTF-8 字节,PowerShell 默认按活动代码页(中文机器是 936)解,
-    // 中文输出会变成「鉁?璺緞」这种乱码 —— 测试断言里的中文全糊掉。这两行把两端都钉成 UTF-8。
-    `$OutputEncoding=[Console]::OutputEncoding=[Text.Encoding]::UTF8`,
-    `$__d='${(cwd ?? "").replace(/'/g, "''")}'`,
-    `$__o=Join-Path $env:TEMP '${token}.out'; $__r=Join-Path $env:TEMP '${token}.err'; $__s=Join-Path $env:TEMP '${token}.ps1'`,
-    `[IO.File]::WriteAllText($__s,[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${b64}')),(New-Object Text.UTF8Encoding $false))`,
-    `$__x=[Diagnostics.Process]::GetCurrentProcess().Path`,
-    `$__nl=[Environment]::NewLine`,
-    `$__p=Start-Process -FilePath $__x -ArgumentList '-NoProfile','-NonInteractive','-File',$__s -RedirectStandardOutput $__o -RedirectStandardError $__r -PassThru -NoNewWindow` + (cwd ? ` -WorkingDirectory $__d` : ``),
-    `$null=$__p|Wait-Process -Timeout ${secs} -ErrorAction SilentlyContinue`,
-    `if(-not $__p.HasExited){ try{$__p.Kill()}catch{}; $__e=124 } else { $__e=$__p.ExitCode }`,
-    `Start-Sleep -Milliseconds 300`,
-    `$__t=[string](Get-Content $__o -Raw -ErrorAction SilentlyContinue)`,
-    `$__g=[string](Get-Content $__r -Raw -ErrorAction SilentlyContinue)`,
-    `if($__g){ $__t = $__t + $__nl + '--- stderr ---' + $__nl + $__g }`,
-    `if($__e -eq 124){ $__t = $__t + $__nl + '[win-remote] 超时 ${secs}s,已杀掉进程' }`,
-    `[IO.File]::WriteAllText($__o,[string]$__t,(New-Object Text.UTF8Encoding $false))`,
-    `try { Invoke-WebRequest -Uri "http://${self}:${port}/${token}?code=$__e" -Method PUT -InFile $__o -ContentType 'text/plain' -TimeoutSec 60 -UseBasicParsing | Out-Null } catch { }`,
-    `Remove-Item -LiteralPath $__o,$__r,$__s -Force -ErrorAction SilentlyContinue`,
-  ].filter(Boolean).join("; ");
+    session = await api(`/projects/${pid}/terminal/sessions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ cols: 200, rows: 50 }),
+    }, host);
 
-  const ac = new AbortController();
-  const timer = setTimeout(() => ac.abort(), timeout);
-  let preview = "";
-  const pump = (async () => {
-    const res = await fetch(`${host}/api/projects/${pid}/terminal/sessions/${session.id}/events?after=0`, {
-      headers: { accept: "text/event-stream" },
-      signal: ac.signal,
-    });
-    const reader = res.body.getReader();
-    const dec = new TextDecoder();
-    let buf = "";
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      buf += dec.decode(value, { stream: true });
-      let i;
-      while ((i = buf.indexOf("\n\n")) >= 0) {
-        const frame = buf.slice(0, i);
-        buf = buf.slice(i + 2);
-        const line = frame.split("\n").find((l) => l.startsWith("data:"));
-        if (!line) continue;
-        try {
-          const ev = JSON.parse(line.slice(5).trim());
-          if (!ev.data) continue;
-          preview += stripAnsi(ev.data);
-          if (onLine) {
-            const parts = preview.split("\n");
-            preview = parts.pop() ?? "";
-            for (const p of parts) if (p.trim() && !isNoise(p)) onLine(p);
-          }
-        } catch { /* 非 JSON 帧忽略 */ }
+    // `pwsh -File x.ps1` **不会**把脚本里最后一条外部命令的退出码当成自己的退出码 ——
+    // 脚本正常跑完就是 0。不显式收尾的话,`npm test` 明明断言失败(exit 1),这里照样报 0,
+    // 于是整批回归全绿而实际全红 —— 比假超时更坏,因为它不吵。
+    // 开头先把 $LASTEXITCODE 清零(没跑过外部命令时它是 $null),末尾原样交出去;
+    // 中途 throw 走不到这行,pwsh 自己会退 1。
+    const script = `$LASTEXITCODE=0\n${cmd}\nexit $LASTEXITCODE`;
+    const b64 = Buffer.from(script, "utf8").toString("base64");
+    const secs = Math.max(5, Math.floor(timeout / 1000) - 20);
+    // 为什么起独立进程而不是 `<cmd> *>&1 | Out-File`:管道要等**所有**持有 stdout 的句柄关闭
+    // 才算结束,而 Windows 上留一个孙进程是常事 —— node-pty 的 conpty_console_list_agent
+    // 崩了却不退,整条命令就永远等不到 EOF。实测 `npm run test:terminal` 明明 exit 0,
+    // 管道模式却挂满 10 分钟报假超时。改成 Start-Process 之后,结束判据是**进程退出**,
+    // 跟残留句柄无关;超时还能 Kill 掉并把已经写下的输出捞回来。
+    // 代价是 stdout/stderr 只能分开重定向(Start-Process 不许两路指向同一个文件),
+    // 所以下面把 stderr 单独拼在后面,而不是交错。
+    const wrapper = [
+      `$ErrorActionPreference='Continue'`,
+      // 外部程序(npm/node/tsx)吐的是 UTF-8 字节,PowerShell 默认按活动代码页(中文机器是 936)解,
+      // 中文输出会变成「鉁?璺緞」这种乱码 —— 测试断言里的中文全糊掉。这两行把两端都钉成 UTF-8。
+      `$OutputEncoding=[Console]::OutputEncoding=[Text.Encoding]::UTF8`,
+      `$__d='${(cwd ?? "").replace(/'/g, "''")}'`,
+      `$__o=Join-Path $env:TEMP '${token}.out'; $__r=Join-Path $env:TEMP '${token}.err'; $__s=Join-Path $env:TEMP '${token}.ps1'`,
+      `[IO.File]::WriteAllText($__s,[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${b64}')),(New-Object Text.UTF8Encoding $false))`,
+      `$__x=[Diagnostics.Process]::GetCurrentProcess().Path`,
+      `$__nl=[Environment]::NewLine`,
+      `$__p=Start-Process -FilePath $__x -ArgumentList '-NoProfile','-NonInteractive','-File',$__s -RedirectStandardOutput $__o -RedirectStandardError $__r -PassThru -NoNewWindow` + (cwd ? ` -WorkingDirectory $__d` : ``),
+      `$null=$__p|Wait-Process -Timeout ${secs} -ErrorAction SilentlyContinue`,
+      `if(-not $__p.HasExited){ try{$__p.Kill()}catch{}; $__e=124 } else { $__e=$__p.ExitCode }`,
+      `Start-Sleep -Milliseconds 300`,
+      `$__t=[string](Get-Content $__o -Raw -ErrorAction SilentlyContinue)`,
+      `$__g=[string](Get-Content $__r -Raw -ErrorAction SilentlyContinue)`,
+      `if($__g){ $__t = $__t + $__nl + '--- stderr ---' + $__nl + $__g }`,
+      `if($__e -eq 124){ $__t = $__t + $__nl + '[win-remote] 超时 ${secs}s,已杀掉进程' }`,
+      `[IO.File]::WriteAllText($__o,[string]$__t,(New-Object Text.UTF8Encoding $false))`,
+      `try { Invoke-WebRequest -Uri "http://${self}:${port}/${token}?code=$__e" -Method PUT -InFile $__o -ContentType 'text/plain' -TimeoutSec 60 -UseBasicParsing | Out-Null } catch { }`,
+      `Remove-Item -LiteralPath $__o,$__r,$__s -Force -ErrorAction SilentlyContinue`,
+    ].filter(Boolean).join("; ");
+
+    ac = new AbortController();
+    timer = setTimeout(() => ac.abort(), timeout);
+    let preview = "";
+    pump = (async () => {
+      const res = await fetch(`${host}/api/projects/${pid}/terminal/sessions/${session.id}/events?after=0`, {
+        headers: { accept: "text/event-stream" },
+        signal: ac.signal,
+      });
+      const reader = res.body.getReader();
+      const dec = new TextDecoder();
+      let buf = "";
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        let i;
+        while ((i = buf.indexOf("\n\n")) >= 0) {
+          const frame = buf.slice(0, i);
+          buf = buf.slice(i + 2);
+          const line = frame.split("\n").find((l) => l.startsWith("data:"));
+          if (!line) continue;
+          try {
+            const ev = JSON.parse(line.slice(5).trim());
+            if (!ev.data) continue;
+            preview += stripAnsi(ev.data);
+            if (onLine) {
+              const parts = preview.split("\n");
+              preview = parts.pop() ?? "";
+              for (const p of parts) if (p.trim() && !isNoise(p)) onLine(p);
+            }
+          } catch { /* 非 JSON 帧忽略 */ }
+        }
       }
+    })().catch((e) => { if (e.name !== "AbortError") throw e; });
+
+    // PSReadLine 的预测建议会把历史命令混进画面,先关掉(只影响预览可读性)。
+    await new Promise((r) => setTimeout(r, 400));
+    const send = (data) => api(`/projects/${pid}/terminal/sessions/${session.id}/input`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ data }),
+    }, host);
+    await send("Set-PSReadLineOption -PredictionSource None\r");
+    await new Promise((r) => setTimeout(r, 300));
+    await send(`${wrapper}\r`);
+
+    return await Promise.race([
+      sink.done,
+      new Promise((r) => {
+        raceTimer = setTimeout(() => r({ code: 124, out: `[win-remote] 超时 ${timeout}ms,未收到回传`, timedOut: true }), timeout);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+    clearTimeout(raceTimer); // 抢跑赢了的那个定时器没人关,它自己也能把进程吊住 timeout 那么久
+    ac?.abort();
+    await sink.close();
+    // pump 的失败只影响预览(实时画面),不该顶掉真正的结果或真正的错误 —— 但也不能
+    // 静静吞掉,否则 SSE 那头坏了永远没人知道。
+    await pump?.catch((e) => console.warn(`⚠︎ 预览流中断(不影响结果):${e.message}`));
+    if (session) {
+      await api(`/projects/${pid}/terminal/sessions/${session.id}`, { method: "DELETE" }, host).catch(() => {});
     }
-  })().catch((e) => { if (e.name !== "AbortError") throw e; });
-
-  // PSReadLine 的预测建议会把历史命令混进画面,先关掉(只影响预览可读性)。
-  await new Promise((r) => setTimeout(r, 400));
-  const send = (data) => api(`/projects/${pid}/terminal/sessions/${session.id}/input`, {
-    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ data }),
-  }, host);
-  await send("Set-PSReadLineOption -PredictionSource None\r");
-  await new Promise((r) => setTimeout(r, 300));
-  await send(`${wrapper}\r`);
-
-  const result = await Promise.race([
-    sink.done,
-    new Promise((r) => setTimeout(() => r({ code: 124, out: `[win-remote] 超时 ${timeout}ms,未收到回传`, timedOut: true }), timeout)),
-  ]);
-
-  clearTimeout(timer);
-  ac.abort();
-  sink.close();
-  await pump;
-  await api(`/projects/${pid}/terminal/sessions/${session.id}`, { method: "DELETE" }, host).catch(() => {});
-  return result;
+  }
 }

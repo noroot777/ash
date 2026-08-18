@@ -11,14 +11,17 @@
 //   WIN_REMOTE_HOST=http://192.168.1.187:4317   对端 harness 地址(默认就是它)
 //   WIN_REMOTE_SELF=<ip>                        本机对外 IP(自动探测不准时用)
 //   WIN_REMOTE_PROJECT=<projectId>              对端项目 id(默认按 repoPath 猜)
+//   WIN_REMOTE_GIT_PORT=<port>                  钉死 git daemon 端口(默认每次现挑空闲端口)
 //
-// 为什么是这套通道、为什么不动对端主工作区,见 scripts/win-remote/{transport,sync}.mjs 顶部。
+// 为什么是这套通道、为什么不动对端主工作区,见 scripts/win-remote/{transport,sync}.mjs 顶部;
+// 对端那个 worktree 是全局单份的,所以整段 sync+test 上锁,见 scripts/win-remote/lock.mjs 顶部。
 //
 // 一个必须知道的边界:**通道本身就跑在被测的 harness 里**。改了 server 代码想看真实行为
 // 而不是测试结果,就得重启对端的 harness —— 那会连着把这条通道一起掐了(重启完自己会回来)。
 // 所以默认路线是「跑回归测试」,它是独立进程,不需要重启对端服务。
 import { rexec, resolveProject } from "./win-remote/transport.mjs";
 import { syncToRemote } from "./win-remote/sync.mjs";
+import { withRemoteLock } from "./win-remote/lock.mjs";
 
 // Windows 上「伪造 platform 也验不了」的那几条,才值得占用真机(docs/windows-testing.md)。
 const WINDOWS_SUITES = ["win-launch", "path-boundary", "openers-windows"];
@@ -29,12 +32,16 @@ const red = (s) => `\x1b[31m${s}\x1b[0m`;
 const green = (s) => `\x1b[32m${s}\x1b[0m`;
 
 const live = (line) => process.stdout.write(dim(`  │ ${line}\n`));
+const note = (line) => console.log(dim(`  · ${line}`));
 
 async function target() {
   const p = await resolveProject();
   if (!p.repoPath) throw new Error("拿不到对端仓库路径,请用 WIN_REMOTE_PROJECT 指定正确的项目");
   return p;
 }
+
+/** 凡是要动对端那个共享 worktree 的命令,整段都在锁里跑(见 win-remote/lock.mjs 顶部)。 */
+const inWorkspace = (p, fn) => withRemoteLock({ repoPath: p.repoPath, projectId: p.id, onNote: note }, fn);
 
 async function cmdDoctor() {
   console.log(bold("对端 harness"));
@@ -72,7 +79,8 @@ async function cmdDoctor() {
 async function cmdSync() {
   const p = await target();
   console.log(bold("同步工作区快照 →"), p.repoPath);
-  const r = await syncToRemote({ repoPath: p.repoPath, projectId: p.id, onLine: live });
+  const r = await inWorkspace(p, ({ guard }) =>
+    syncToRemote({ repoPath: p.repoPath, projectId: p.id, onLine: live, guard }));
   console.log(`  本地 ${r.localSha} → 对端 ${green(r.remoteSha)}`);
   console.log(`  工作区 ${r.worktree}`);
   return 0;
@@ -83,7 +91,7 @@ async function cmdExec(args) {
   const cmd = args.join(" ");
   if (!cmd) throw new Error("exec 需要一条命令");
   const cwd = `${p.repoPath}\\.worktrees\\win-remote`;
-  const res = await rexec(cmd, { cwd, projectId: p.id, onLine: live });
+  const res = await inWorkspace(p, ({ guard }) => rexec(`${guard}\n${cmd}`, { cwd, projectId: p.id, onLine: live }));
   console.log(res.out);
   console.log(res.code === 0 ? green(`[exit 0]`) : red(`[exit ${res.code}]`));
   return res.code;
@@ -94,40 +102,45 @@ async function cmdTest(args) {
   if (!suites.length) throw new Error(`test 需要测试名,或 --all(= ${WINDOWS_SUITES.join(", ")})`);
   const p = await target();
 
-  if (!args.includes("--no-sync")) {
-    console.log(bold("① 同步"));
-    const r = await syncToRemote({ repoPath: p.repoPath, projectId: p.id, onLine: live });
-    console.log(`  ${r.localSha} → ${green(r.remoteSha)}\n`);
-  }
+  // 锁罩的是**同步 + 跑完所有测试**这一整段,而不只是同步那几秒:中途被别人 checkout 掉,
+  // 后面几条测的就已经不是这份快照了。
+  return await inWorkspace(p, async ({ guard }) => {
+    if (!args.includes("--no-sync")) {
+      console.log(bold("① 同步"));
+      const r = await syncToRemote({ repoPath: p.repoPath, projectId: p.id, onLine: live, guard });
+      console.log(`  ${r.localSha} → ${green(r.remoteSha)}\n`);
+    }
 
-  console.log(bold("② 在真 Windows 上跑回归"));
-  const cwd = `${p.repoPath}\\.worktrees\\win-remote`;
-  const results = [];
-  for (const s of suites) {
-    process.stdout.write(`  ${s} … `);
-    // 好几条回归要求调用者自己给 HARNESS_DB(`tmp-db.ts` 的 requireTmpDb 会拦下来,
-    // 免得测试写进用户的真库),没给就直接拒跑。那不是 Windows 的毛病 —— mac 上不设
-    // 照样红,只是从这里跑的人看到的是「Windows 上失败了」,白查一轮。统一在这儿给一个
-    // 临时库,跑完删掉;`$__code` 先接住退出码,免得 Remove-Item 把它冲掉。
-    const db = `harness-wintest-${s}-${Date.now()}.db`;
-    const cmd = [
-      `$env:HARNESS_DB = Join-Path $env:TEMP '${db}'`,
-      `npm -w server run test:${s} 2>&1`,
-      `$__code = $LASTEXITCODE`,
-      `Remove-Item $env:HARNESS_DB -Force -ErrorAction SilentlyContinue`,
-      `exit $__code`,
-    ].join("\n");
-    const res = await rexec(cmd, { cwd, projectId: p.id, timeout: 10 * 60_000 });
-    const ok = res.code === 0;
-    console.log(ok ? green("通过") : red(`失败 (exit ${res.code})`));
-    if (!ok) console.log(res.out.split("\n").slice(-40).map((l) => `    ${l}`).join("\n"));
-    results.push({ s, ok, out: res.out });
-  }
+    console.log(bold("② 在真 Windows 上跑回归"));
+    const cwd = `${p.repoPath}\\.worktrees\\win-remote`;
+    const results = [];
+    for (const s of suites) {
+      process.stdout.write(`  ${s} … `);
+      // 好几条回归要求调用者自己给 HARNESS_DB(`tmp-db.ts` 的 requireTmpDb 会拦下来,
+      // 免得测试写进用户的真库),没给就直接拒跑。那不是 Windows 的毛病 —— mac 上不设
+      // 照样红,只是从这里跑的人看到的是「Windows 上失败了」,白查一轮。统一在这儿给一个
+      // 临时库,跑完删掉;`$__code` 先接住退出码,免得 Remove-Item 把它冲掉。
+      const db = `harness-wintest-${s}-${Date.now()}.db`;
+      const cmd = [
+        guard,
+        `$env:HARNESS_DB = Join-Path $env:TEMP '${db}'`,
+        `npm -w server run test:${s} 2>&1`,
+        `$__code = $LASTEXITCODE`,
+        `Remove-Item $env:HARNESS_DB -Force -ErrorAction SilentlyContinue`,
+        `exit $__code`,
+      ].join("\n");
+      const res = await rexec(cmd, { cwd, projectId: p.id, timeout: 10 * 60_000 });
+      const ok = res.code === 0;
+      console.log(ok ? green("通过") : red(`失败 (exit ${res.code})`));
+      if (!ok) console.log(res.out.split("\n").slice(-40).map((l) => `    ${l}`).join("\n"));
+      results.push({ s, ok, out: res.out });
+    }
 
-  const failed = results.filter((r) => !r.ok);
-  console.log(`\n${bold("结果")} ${results.length - failed.length}/${results.length} 通过`);
-  if (failed.length) console.log(dim("  红了先对 docs/windows-testing.md —— 有几条是「本来就跑不了」而不是 bug"));
-  return failed.length ? 1 : 0;
+    const failed = results.filter((r) => !r.ok);
+    console.log(`\n${bold("结果")} ${results.length - failed.length}/${results.length} 通过`);
+    if (failed.length) console.log(dim("  红了先对 docs/windows-testing.md —— 有几条是「本来就跑不了」而不是 bug"));
+    return failed.length ? 1 : 0;
+  });
 }
 
 const [cmd, ...rest] = process.argv.slice(2);

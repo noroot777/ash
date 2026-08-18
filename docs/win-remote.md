@@ -14,7 +14,8 @@ node scripts/win-remote.mjs test x --no-sync    # 跳过同步,重跑上次那�
 ```
 
 环境变量:`WIN_REMOTE_HOST`(默认 `http://192.168.1.187:4317`)、`WIN_REMOTE_SELF`(本机对外 IP,
-自动探测不准时用)、`WIN_REMOTE_PROJECT`(对端项目 id)。
+自动探测不准时用)、`WIN_REMOTE_PROJECT`(对端项目 id,自动按 `repoPath` 猜歪了时用;给了不存在的
+id 会把现有项目列出来)、`WIN_REMOTE_GIT_PORT`(钉死 git daemon 端口,默认每次现挑一个空闲的)。
 
 ## 它是怎么通的
 
@@ -24,7 +25,7 @@ node scripts/win-remote.mjs test x --no-sync    # 跳过同步,重跑上次那�
 
 ```
 开发机                                          Windows 192.168.1.187
-  git daemon :9418  ──── 对端 fetch 快照 ───▶   .worktrees/win-remote
+  git daemon :随机   ──── 对端 fetch 快照 ───▶   .worktrees/win-remote
   终端 API 调用      ──── POST 一条命令 ─────▶   ConPTY + pwsh
   一次性 HTTP :随机  ◀─── PUT 输出+退出码 ────   命令的真实 stdout/stderr
 ```
@@ -38,14 +39,23 @@ node scripts/win-remote.mjs test x --no-sync    # 跳过同步,重跑上次那�
 
 **同步的是工作区快照,不是 HEAD。** 调 Windows 功能时改一行就想看结果,要求先 commit 太别扭。
 用一个临时 `GIT_INDEX_FILE` 做 `read-tree` + `add -A` + `write-tree` + `commit-tree`,造出一个
-不进任何分支的游离提交挂在 `refs/win-remote/head` 上 —— 未提交的改动和新增文件都在里面,而你的
-分支、index、stash 全程没被碰过。传输走临时只读 `git daemon`(只在 sync 那几秒活着),不经 GitHub。
+不进任何分支的游离提交,挂在一个**按次唯一**的 `refs/win-remote/snap-<随机>` 上 —— 未提交的改动和
+新增文件都在里面,而你的分支、index、stash 全程没被碰过。传输走临时只读 `git daemon`(只在 sync
+那几秒活着,端口也是每次现挑的空闲端口),不经 GitHub。ref 和端口都按次唯一是**正确性**要求而不是
+洁癖:共享一个固定 ref 时,两次调用交错会让 A 拉到 B 的快照,而 A 照样把结果记在自己的改动名下。
+同步完还会核对**完整** SHA,对端不是这份快照就当场中止,不往下跑测试。
 
 **落到对端的 `.worktrees/win-remote`,绝不动它的主工作区。** 那台机器上的 `D:\ai_workspace\ash`
 是**正在跑着的 harness 自己**,而且有未提交的本地改动。往那儿 checkout 等于既覆盖别人的活、又把
 live 服务的源码换掉。放在主仓内部还白捡一个好处:Node 解析 node_modules 会逐级向上,worktree 里
 不装依赖也能跑。唯一要补的是 `node_modules/@harness/*` 的 junction —— 不补的话 `@harness/shared`
 会解析到**主仓那份**,于是你改了 shared 却测的是旧代码。
+
+**那个 worktree 是全局单份的,所以整段 sync+test 上锁。** 锁是对端的
+`.worktrees\win-remote.lock`(`CreateNew` 原子创建),被占时最多等 2 分钟;25 分钟没心跳算过期,
+可被接管 —— 持锁进程在开发机上,它崩了对端不会知道,没有过期就等于把那台机器永久锁死。锁里写着
+本次调用的 owner id,**locked 区间内每条命令都先核对**,易主就当场中止(而不是接着往一个已经被
+别人 checkout 过的工作区里写)。真要手工解锁,删掉那个文件即可。
 
 ## 两个边界
 
