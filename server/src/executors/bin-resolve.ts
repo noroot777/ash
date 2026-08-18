@@ -36,6 +36,11 @@ function extraPaths(): string[] {
     ];
   }
   const { APPDATA, LOCALAPPDATA, ProgramFiles, ChocolateyInstall } = process.env;
+  // `Program Files` 在 Windows 上不止一个:ARM64 机器上原生 ARM 程序在 `Program Files`、
+  // x64 程序在 `Program Files (x86)`、32 位 ARM 在 `Program Files (Arm)`,而 `%ProgramFiles%`
+  // 只指向**与当前进程架构相同**的那一个 —— 一个 x64 版 node 起的 harness,看不见装在
+  // 原生 ARM 目录里的 node/CLI。三个都扫,不存在的目录 resolveBin 自会跳过。
+  const programFiles = [ProgramFiles, process.env["ProgramFiles(x86)"], process.env["ProgramFiles(Arm)"]];
   return [
     APPDATA && join(APPDATA, "npm"), // npm -g 的垫片就装在这里
     LOCALAPPDATA && join(LOCALAPPDATA, "pnpm"),
@@ -44,7 +49,7 @@ function extraPaths(): string[] {
     join(home, ".deno", "bin"),
     join(home, ".local", "bin"),
     join(home, "scoop", "shims"),
-    ProgramFiles && join(ProgramFiles, "nodejs"),
+    ...programFiles.map((dir) => dir && join(dir, "nodejs")),
     ChocolateyInstall ? join(ChocolateyInstall, "bin") : "C:\\ProgramData\\chocolatey\\bin",
   ].filter((p): p is string => Boolean(p));
 }

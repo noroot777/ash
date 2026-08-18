@@ -147,6 +147,19 @@ try {
   assert.ok(env.PATH?.startsWith(process.env.PATH!), "补充目录追加在原 PATH 之后");
   delete process.env.Path;
 
+  // ARM64 上三个 Program Files 各装各的架构;`%ProgramFiles%` 只指向与当前进程同架构
+  // 的那一个,少扫另外两个 = 一个 x64 版 node 起的 harness 看不见原生 ARM 装的 CLI。
+  process.env.ProgramFiles = "C:\\Program Files";
+  process.env["ProgramFiles(x86)"] = "C:\\Program Files (x86)";
+  process.env["ProgramFiles(Arm)"] = "C:\\Program Files (Arm)";
+  const armEnv = augmentedEnv().PATH ?? "";
+  // 用 join 拼期望值:开发机上 path.sep 是 `/`,写死反斜杠会红在分隔符上而不是逻辑上。
+  for (const root of ["C:\\Program Files", "C:\\Program Files (x86)", "C:\\Program Files (Arm)"]) {
+    assert.ok(armEnv.includes(join(root, "nodejs")), `补充目录里要有 ${root} 下的 nodejs`);
+  }
+  delete process.env["ProgramFiles(x86)"];
+  delete process.env["ProgramFiles(Arm)"];
+
   // ── 7. 用户自己写的那条命令行（预览 / workflow 的 command 站）────────────────
   // 这一条跟上面 5 不是同一件事：那边是**我们**拼 program+args（所以要按
   // CVE-2024-24576 的规则逐个转义），这边是用户已经写好的一整条命令行，只能原样

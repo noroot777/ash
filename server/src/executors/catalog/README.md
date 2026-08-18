@@ -81,6 +81,8 @@ export const fooSpec: CliSpec = {
 
 半数 CLI 的 `installCommand` 是 `curl … | bash`,原样端给 Windows 用户就是一条注定跑不通的命令 —— 所以测试还会拦「Windows 侧发 POSIX 命令」。
 
+**Windows ARM64 的产物可用性(2026-08-14 逐家读了官方安装脚本,结论记在这里省得再查一遍)**:装原生二进制的那几家里,只有 **kiro** 写死 `kiro-cli-x86_64-pc-windows-msvc.msi`、manifest 过滤也钉在 `x86_64`,全程没有架构探测 —— ARM 机器上只能走 x64 模拟,它的 `windowsNote` 已经如实标了。其余都会在运行时取 arm64 产物:grok 把 `ARM64` 映射成 `aarch64` 拼 `windows-aarch64` 资产名,antigravity 直接请求 `/manifests/windows_arm64.json`,cursor 用 WMI 的 `SystemType` 拼 `…/windows/arm64/agent-cli-package.zip`,kimi 算出 `win32-arm64` 再查服务端 manifest(这几家若上游没传对应产物会自己报错,不是我们能兜的)。opencode 走 `npm install -g opencode-ai`,和 claude/codex/gemini/copilot/qwen/kilo/qoder/pi 一样是纯 JS,无架构差异。
+
 `fallbackVersionMatch` 存在的原因:`agent` 这种通用名在本机实测里命中的其实是 grok —— 备用名不自证身份就会把别家的命令连版本号一起认成自己。
 
 **候选顺序对执行也生效**:检测和执行共用 `probeBins`/`execBinFor`(`server/src/executors/bin-probe.ts`)—— 主 bin 不在本机、备用名可用时,派任务会自动用那个备用名(以前执行侧死认 `bins[0]`,于是「目录显示可用、派任务 ENOENT」)。例外是 ssh 目标:候选探测查的是本机 PATH,拿本机结果决定远端命令名只会更错,所以 ssh 一律用 `bins[0]`。
