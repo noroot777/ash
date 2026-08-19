@@ -53,28 +53,41 @@ export const COMPLETION_REMINDER = (taskId: string, sharedTeamWorker: boolean, r
   `\n\n(harness 完成协议:taskId=${taskId}。若本回合结束时任务目标已达成,先调用 complete_task 确认再结束,否则按未完成记 failed;到等待检查点则用 pause_task。${ACCEPTANCE_REMINDER(taskId, sharedTeamWorker, reviewTask, free)})`;
 
 // 续聊(follow-up)回合的尾巴:任务早就到终态了,这一轮是「完成之后的对话」,
-// 不该拿严格完成协议吓唬 agent(不确认就 failed)—— 这一轮不确认,任务状态原样
-// 不动。只有它真把任务推进到新的完成时才需要确认。
+// 不该拿严格完成协议吓唬 agent(不确认就 failed)—— 这一轮不确认,任务状态原样不动。
+//
+// 但反过来说「本回合不需要 complete_task」也是个坑:任务身上可能挂着**只认
+// complete_task 才往下走**的东西(自由工作流的预约审查、标准工作流执行链的下一站),
+// 而它们要么 agent 根本看不见,要么是在这一轮跑到一半才被用户挂上的 —— prompt 发出去
+// 的那一刻还不存在,再怎么在这里描述任务现状都盖不住(实测:nRVt1IkkB7TA、gsppwUacwZnn
+// 的预约审查都是开跑 4 分钟后才挂上的,两个任务的预约至今停在「已预约」)。
+//
+// 所以判据不能是「你自己判断任务要不要往下走」,只能落在 agent 百分之百知道、且跟挂没挂
+// 东西无关的那件事上:**这一轮动没动代码**。动了就确认 —— 反正续聊回合确认的代价是
+// done→done,不会把任何状态变差。
 export const FOLLOW_UP_REMINDER = (
   taskId: string, from: string, sharedTeamWorker: boolean, reviewTask: boolean, rail: string, free = false,
 ) =>
   !STRICT_DONE_PROTOCOL ? "" :
-  `\n\n(harness:这是任务在「${FOLLOW_UP_LABEL[from] ?? from}」之后的续聊,taskId=${taskId}。任务状态不会因为本回合而改变,本回合不需要 complete_task;只有当你在这一轮把任务推进到了新的完成状态时,才调用 complete_task(taskId="${taskId}")确认。${rail}${ACCEPTANCE_REMINDER(taskId, sharedTeamWorker, reviewTask, free)})`;
+  `\n\n(harness:这是任务在「${FOLLOW_UP_LABEL[from] ?? from}」之后的续聊,taskId=${taskId}。` +
+  `不确认不会把这一轮判失败 —— 没调 complete_task,任务状态就原样留在「${FOLLOW_UP_LABEL[from] ?? from}」。` +
+  `但**只要你这一轮动了代码(改了文件、提交),结束前就必须调用 complete_task(taskId="${taskId}")确认**:` +
+  `任务身上可能挂着等这声确认才往下跑的东西(完成后的预约审查、执行链的下一站),你未必看得见它们,` +
+  `不确认它们就一直停在原地。纯回答问题、没动代码则不用确认。` +
+  `${rail}${ACCEPTANCE_REMINDER(taskId, sharedTeamWorker, reviewTask, free)})`;
 
-// 「你这一轮要是改了代码,这条线在等你确认」—— 只在续聊回合、且任务身上真挂着一条
-// 还有后续站的线时追加。
+// 上面那句「动了代码就确认」是通用规则,这里再把**具体这条线停在哪**说清楚 —— 只在
+// 续聊回合、且任务身上真挂着一条还有后续站的线时追加。
 //
-// 补它是因为上面那句「不需要 complete_task」在有线的任务上会把 agent 引进一个洼地:
-// 用户续聊说「改成 XXX」,agent 改完、按验收辅路那句调了 report_stage(awaiting_acceptance)
-// 就收工 —— 它以为已经交给人工验收了,可**线的推进只认 complete_task**
-// (`handleTaskSettlement` 的 `confirmedDone && status === "done"`),于是新一版代码躺在
-// 那儿,预览没开、人工关口没到,游标停在「让 AI 干活」原地不动,用户看到的是「怎么第一步
-// 就停了」(实测任务 1rojF5Tjau91)。改代码这一档本来就属于「把任务推进到了新的完成状态」,
-// 只是没人对 agent 明说过 —— 它得同时知道这条线存在、以及不确认的后果是线不走。
+// 补它是因为通用规则之前那一版(「本回合不需要 complete_task」)在有线的任务上会把 agent
+// 引进一个洼地:用户续聊说「改成 XXX」,agent 改完、按验收辅路那句调了
+// report_stage(awaiting_acceptance)就收工 —— 它以为已经交给人工验收了,可**线的推进只认
+// complete_task**(`handleTaskSettlement` 的 `confirmedDone && status === "done"`),于是新一版
+// 代码躺在那儿,预览没开、人工关口没到,游标停在「让 AI 干活」原地不动,用户看到的是
+// 「怎么第一步就停了」(实测任务 1rojF5Tjau91)。通用规则堵住了洼地本身,这一句负责让
+// agent 知道**代价具体是什么**:不确认,后面这几站一站都不走。
 const FOLLOW_UP_RAIL_NOTE = (taskId: string, summary: string) =>
-  `\n本任务身上挂着一条执行链(${summary}),它停在「让 AI 干活」这一站等你确认:` +
-  `你这一轮**改了代码**就属于上面说的「推进到了新的完成状态」,做完请调 complete_task(taskId="${taskId}")确认,` +
-  `后面的站才会自己往下跑;只调 report_stage 不会推动这条线。纯回答问题、没动代码则不用确认。`;
+  `\n具体到本任务:它身上挂着一条执行链(${summary}),此刻停在「让 AI 干活」这一站等你确认 —— ` +
+  `调了 complete_task(taskId="${taskId}")后面的站才会自己往下跑,只调 report_stage 不会推动这条线。`;
 
 /**
  * 线上除了「让 AI 干活」还有别的站、且游标此刻真停在那一站时,给续聊回合补一句上面那段。
