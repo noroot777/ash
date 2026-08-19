@@ -29,7 +29,7 @@ const reviewSession = {
   executor: "claude@5.5审查",
   model: "claude-opus-5",
   reasoningEffort: "high",
-  startedAt: "2026-08-10T15:00:00.000Z",
+  startedAt: "2026-08-10T15:02:00.000Z",
   endedAt: "2026-08-10T15:12:00.000Z",
 } as unknown as Session;
 
@@ -57,6 +57,8 @@ const output = [
   turn("system", "第 3 轮验证通过。", "2026-08-10T05:20:00.000Z"),
   // 自由派审的轮次只写在时间线旁注里、从不进 run 事件，只能按这对旁注划出的区间补。
   turn("system", "自由工作流第 1 轮审查开始：5.5审查 · 逻辑检查。", "2026-08-10T14:59:00.000Z"),
+  turn("system", "自由工作流第 1 轮审查启动失败：执行器起不来", "2026-08-10T15:00:00.000Z"),
+  turn("system", "自由工作流第 1 轮审查重跑上一回合：5.5审查。", "2026-08-10T15:01:00.000Z"),
   turn("system", "自由工作流第 1 轮审查通过（5.5审查）。", "2026-08-10T15:13:00.000Z"),
 ].join("\n");
 

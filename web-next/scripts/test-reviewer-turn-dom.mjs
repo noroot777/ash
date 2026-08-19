@@ -81,20 +81,21 @@ try {
   // 自由派审的轮次只写在时间线旁注里、从不进 run 事件，靠区间补上。
   assert.match(await badges.nth(2).innerText(), /审查者\s*·\s*第 1 轮/);
 
-  // D：有后续轮次且已有结论的历史卡默认折叠，最新一张展开。自由派审同样折成一张卡，
-  // 只是它的报告要靠 free-workflow 状态反查 runId。
+  // D：有后续轮次且已有结论的历史卡默认折叠，最新一张展开。自由派审启动失败后重跑
+  // 仍是同一 round，但要分成旧失败卡 + 新结果卡；报告只能挂到后者。
   const lanes = page.locator(".verify-lane");
-  assert.equal(await lanes.count(), 3, "两轮就地验证 + 一轮自由派审");
+  assert.equal(await lanes.count(), 4, "两轮就地验证 + 自由派审失败旧卡 / 重跑结果卡");
   assert.deepEqual(
     await lanes.evaluateAll((els) => els.map((el) => el.getAttribute("aria-label"))),
-    ["第 2 轮验证", "第 3 轮验证", "第 1 轮审查"],
+    ["第 2 轮验证", "第 3 轮验证", "第 1 轮审查", "第 1 轮审查"],
     "自由派审的卡不能沿用就地验证的「第 N 轮验证」标题",
   );
   assert.equal(await lanes.nth(0).evaluate((el) => el.classList.contains("is-collapsed")), true);
   assert.equal(await lanes.nth(1).evaluate((el) => el.classList.contains("is-collapsed")), true);
-  assert.equal(await lanes.nth(2).evaluate((el) => el.classList.contains("is-collapsed")), false);
+  assert.equal(await lanes.nth(2).evaluate((el) => el.classList.contains("is-collapsed")), true);
+  assert.equal(await lanes.nth(3).evaluate((el) => el.classList.contains("is-collapsed")), false);
   assert.equal(await lanes.nth(0).locator(".verify-lane-body").isHidden(), true);
-  assert.equal(await lanes.nth(2).locator(".verify-lane-body").isVisible(), true);
+  assert.equal(await lanes.nth(3).locator(".verify-lane-body").isVisible(), true);
   assert.deepEqual(
     await lanes.nth(0).locator(".verify-lane-actions > button").allInnerTexts(),
     ["审查报告", "展开"],
@@ -102,6 +103,11 @@ try {
   );
   assert.deepEqual(
     await lanes.nth(2).locator(".verify-lane-actions > button").allInnerTexts(),
+    ["展开"],
+    "启动失败旧卡不能占用后来重跑生成的报告",
+  );
+  assert.deepEqual(
+    await lanes.nth(3).locator(".verify-lane-actions > button").allInnerTexts(),
     ["审查报告", "收起"],
   );
   assert.equal(
@@ -122,7 +128,7 @@ try {
   await reportDialog.getByRole("button", { name: "关闭审查报告" }).click();
 
   // 自由派审走的是另一条带 runId 的路由，报告内容必须是它自己那份。
-  await lanes.nth(2).getByRole("button", { name: "审查报告" }).click();
+  await lanes.nth(3).getByRole("button", { name: "审查报告" }).click();
   const freeDialog = page.getByRole("dialog", { name: /report\.md/ });
   await freeDialog.waitFor();
   await freeDialog.getByText(/自由派审报告 fr1 第 1 轮/).waitFor();
@@ -147,7 +153,7 @@ try {
 
   // 验证段的起止旁注跟审查者同一套颜色；打回那条仍归红。
   const verifyNotes = page.locator(".conversation-note.is-verify");
-  assert.equal(await verifyNotes.count(), 6, "两轮就地验证的起止四条 + 自由派审的起止两条");
+  assert.equal(await verifyNotes.count(), 8, "两轮就地验证四条 + 自由派审失败 / 重跑四条");
   assert.match(await verifyNotes.nth(0).innerText(), /第 2 轮验证开始/);
   assert.equal(await verifyNotes.nth(1).evaluate((el) => el.classList.contains("is-error")), true);
   const noteColors = await verifyNotes.evaluateAll((els) =>

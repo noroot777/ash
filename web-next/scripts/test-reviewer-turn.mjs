@@ -349,11 +349,15 @@ const rerunLanes = conversationFeedRows(buildFreeLane([
   turn("system", "自由工作流第 3 轮审查启动失败：执行器起不来", "2026-08-11T07:01:00.000Z"),
   turn("system", rerunNote, "2026-08-11T07:10:00.000Z"),
   turn("system", "自由工作流第 3 轮审查通过（5.5审查）。", "2026-08-11T07:40:00.000Z"),
-])).filter((row) => row.kind === "review-lane");
+]), { reviews: [{ ...freeReviews[0], id: "fr3", rounds: [
+  { round: 3, startedAt: "2026-08-11T07:00:00.000Z", reportMarkdown: "# 重跑报告" },
+] }] }).filter((row) => row.kind === "review-lane");
 assert.equal(rerunLanes.length, 2, "启动失败自成一张卡，重跑另起一张，不会互相顶掉");
 assert.equal(rerunLanes[0].conclusion, "inconclusive", "启动失败收的是一个根本没跑起来的区间");
 assert.equal(rerunLanes[1].conclusion, "verified");
 assert.equal(rerunLanes[1].title, "第 3 轮审查");
+assert.equal(rerunLanes[0].report, null, "失败旧卡不能占用后来重跑生成的报告");
+assert.deepEqual(rerunLanes[1].report, { kind: "free", runId: "fr3", round: 3 });
 
 // 多轮 + 重开的审查里轮号会重复，runId 只能按起始时间一一配对，配过的不复用。
 const twoRunReviews = [
@@ -399,8 +403,10 @@ assert.equal(
 );
 assert.equal(isVerifyNote("已从合并结果审查创建独立修复任务：t2"), false);
 
-const mergeLane = conversationFeedRows(buildFreeLane([
+const mergeLanes = conversationFeedRows(buildFreeLane([
   turn("system", "合并结果审查开始：5.5审查 · feat/x@abc12345 · 逻辑检查。", "2026-08-14T01:00:00.000Z"),
+  turn("system", "合并结果审查启动失败：执行器起不来", "2026-08-14T01:01:00.000Z"),
+  turn("system", "合并结果审查重跑上一回合：5.5审查。", "2026-08-14T01:10:00.000Z"),
   turn("system", "合并结果审查通过（5.5审查）；原任务继续保持已验收。", "2026-08-14T01:30:00.000Z"),
   turn("system", "合并结果审查临时工作区清理失败：目录被占用", "2026-08-14T01:31:00.000Z"),
 ]), {
@@ -410,7 +416,10 @@ const mergeLane = conversationFeedRows(buildFreeLane([
       target: { kind: "accepted_merge", branch: "feat/x", baseCommit: "a", mergeCommit: "b", repairTaskId: null },
       rounds: [{ round: 1, startedAt: "2026-08-14T01:00:00.000Z", reportMarkdown: "# 合并后复核" }] },
   ],
-}).find((row) => row.kind === "review-lane" && row.source === "merge");
+}).filter((row) => row.kind === "review-lane" && row.source === "merge");
+assert.equal(mergeLanes.length, 2);
+assert.equal(mergeLanes[0].report, null, "合并审查的失败旧卡同样不能抢报告");
+const mergeLane = mergeLanes[1];
 assert.ok(mergeLane, "合并结果审查也要折成结论卡");
 assert.equal(mergeLane.round, null, "它跑在验收后的只读快照上，没有轮号");
 assert.equal(mergeLane.title, "合并结果审查");

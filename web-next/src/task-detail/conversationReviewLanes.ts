@@ -144,30 +144,39 @@ function attachReports(lanes: ConversationReviewLane[], reviews: readonly FreeRe
     .flatMap((run) => (run.rounds ?? []).map((round) => ({
       runId: run.id,
       round: round.round,
-      merge: run.target?.kind === "accepted_merge",
+      source: run.target?.kind === "accepted_merge" ? "merge" as const : "free" as const,
       startedAt: round.startedAt ?? "",
       hasReport: (round.reportMarkdown ?? "").trim().length > 0,
       reviewerName: run.reviewerName,
       model: run.model,
     })))
     .sort((left, right) => left.startedAt.localeCompare(right.startedAt));
-  const used = new Set<string>();
-  for (const lane of lanes) {
-    if (lane.source === "inline") continue;
-    const wantMerge = lane.source === "merge";
-    const hit = candidates.find((candidate) => (
-      !used.has(`${candidate.runId}:${candidate.round}`)
-      && candidate.merge === wantMerge
-      && (wantMerge || candidate.round === lane.round)
-    ));
-    if (!hit) continue;
-    used.add(`${hit.runId}:${hit.round}`);
+  const assigned = new Set<string>();
+  for (const [index, candidate] of candidates.entries()) {
+    // 重跑异常回合沿用同一个 runId + round，数据库也只保留这一条 round；时间线上却有
+    // 「启动失败旧卡 + 重跑结果卡」两张。候选应落到本次 run 的时间窗口内最后一次尝试，
+    // 下一条同类 round 的 startedAt 就是窗口右边界。否则旧卡会抢走后来生成的报告。
+    const nextAt = candidates.slice(index + 1)
+      .find((next) => next.source === candidate.source)?.startedAt ?? null;
+    const started = Date.parse(candidate.startedAt);
+    const ended = nextAt ? Date.parse(nextAt) : Number.NaN;
+    const matching = lanes.filter((lane) => {
+      if (assigned.has(lane.id) || lane.source !== candidate.source) return false;
+      if (candidate.source === "free" && lane.round !== candidate.round) return false;
+      const at = lane.startedAt ? Date.parse(lane.startedAt) : Number.NaN;
+      if (Number.isFinite(started) && Number.isFinite(at) && at < started) return false;
+      if (Number.isFinite(ended) && Number.isFinite(at) && at >= ended) return false;
+      return true;
+    });
+    const lane = matching.at(-1);
+    if (!lane) continue;
+    assigned.add(lane.id);
     // 审查者会话还没落盘时卡上没有气泡可推名字，用配到的这一 run 补齐。
-    lane.reviewerLabel ??= hit.reviewerName || null;
-    lane.reviewerModel ??= hit.model;
-    if (!hit.hasReport) continue;
+    lane.reviewerLabel ??= candidate.reviewerName || null;
+    lane.reviewerModel ??= candidate.model;
+    if (!candidate.hasReport) continue;
     lane.reportAvailable = true;
-    lane.report = { kind: "free", runId: hit.runId, round: hit.round };
+    lane.report = { kind: "free", runId: candidate.runId, round: candidate.round };
   }
 }
 
