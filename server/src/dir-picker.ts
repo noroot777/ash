@@ -293,14 +293,66 @@ export async function pickDirectory(startIn: string | undefined): Promise<PickRe
   }
 }
 
+/** 请求体读取结果：要么拿到 `startIn`，要么带着状态码原样回给调用方。 */
+export type PickRequest =
+  | { ok: true; startIn: string | undefined }
+  | { ok: false; error: string; status: 400 | 403 | 415 };
+
+/**
+ * 这个端点的副作用不是写库，是**在服务端桌面上弹一个模态窗口**——弹出去就占住单飞闸，
+ * 一直到有人去点或者四分钟封顶。所以请求本身也得先过一道闸，不能「解析不了就当 {} 继续」。
+ *
+ * 三道，从外往里：
+ * ① `Sec-Fetch-Site`：浏览器自己盖的章，页面伪造不了。不是 `same-origin`/`none` 就是别的
+ *    站点在指使这次请求，直接 403。非浏览器调用方（curl、手机端、测试）根本不带这个头，
+ *    缺头放行，不影响它们。
+ * ② `Content-Type` 必须是 JSON。这条挡的是浏览器的**简单请求**：`no-cors` 的 fetch / 表单
+ *    提交只能带 `text/plain`、`multipart/form-data`、`application/x-www-form-urlencoded`
+ *    三种类型，换成 `application/json` 就得先过预检，而预检这边不给放行。响应读不到没用，
+ *    弹窗这个副作用是照样会发生的。
+ * ③ body 必须真的是个 JSON 对象，`startIn` 要么没有要么是字符串。到这一步还错就是调用方
+ *    写错了，回 400 让它改，别拿默认值把窗口弹出去。
+ */
+export function readPickRequest(
+  headers: { contentType?: string | null; secFetchSite?: string | null },
+  raw: string,
+): PickRequest {
+  const site = (headers.secFetchSite ?? "").trim().toLowerCase();
+  if (site && site !== "same-origin" && site !== "none") {
+    return { ok: false, error: "文件选择窗口只接受本页面自己发起的请求", status: 403 };
+  }
+  const type = (headers.contentType ?? "").split(";")[0]!.trim().toLowerCase();
+  if (type !== "application/json") {
+    return { ok: false, error: "请求体必须是 application/json", status: 415 };
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return { ok: false, error: "请求体不是合法的 JSON", status: 400 };
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    return { ok: false, error: "请求体必须是一个 JSON 对象", status: 400 };
+  }
+  const startIn = (parsed as { startIn?: unknown }).startIn;
+  if (startIn !== undefined && typeof startIn !== "string") {
+    return { ok: false, error: "startIn 必须是字符串", status: 400 };
+  }
+  return { ok: true, startIn };
+}
+
 export function mountDirectoryPickerRoutes(api: Hono): void {
   api.post("/host/pick-directory", async (c) => {
     const support = directoryPickerSupport(getConnInfo(c).remote.address);
     // 403 而不是 400：这是「你这个来源不该调它」，跟参数没关系。
     if (!support.available) return c.json({ error: support.reason }, 403);
-    const body = await c.req.json<{ startIn?: string }>().catch(() => ({} as { startIn?: string }));
+    const parsed = readPickRequest(
+      { contentType: c.req.header("content-type"), secFetchSite: c.req.header("sec-fetch-site") },
+      await c.req.text(),
+    );
+    if (!parsed.ok) return c.json({ error: parsed.error }, parsed.status);
     try {
-      return c.json(await pickDirectory(body.startIn));
+      return c.json(await pickDirectory(parsed.startIn));
     } catch (error) {
       const status = (error as { status?: number }).status ?? 500;
       return c.json(

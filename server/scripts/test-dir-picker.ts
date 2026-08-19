@@ -14,6 +14,7 @@ import {
   macScript,
   normalizePickedPath,
   parseMarker,
+  readPickRequest,
   startDirectory,
   windowsPickerScript,
 } from "../src/dir-picker.js";
@@ -125,5 +126,54 @@ assert.equal(await startDirectory(join(dir, "no-such", "deeper")), homedir(), "�
 assert.equal(await startDirectory(""), homedir(), "空值退到家目录");
 assert.equal(await startDirectory(undefined), homedir(), "没给也退到家目录");
 assert.equal(await startDirectory("~"), homedir(), "~ 要展开");
+
+// ── 请求体闸 ─────────────────────────────────────────────────────────────────
+// 这道闸的分量跟上面那条 loopback 判据一样:过了它就会在服务端桌面上弹出一个模态窗口,
+// 并占住单飞闸直到有人去点。所以「解析不了就当 {} 继续」是不行的——放宽一格,任何一个
+// 本机浏览器页面都能靠一次简单 POST 在用户桌面上弹窗。
+const jsonHeaders = { contentType: "application/json" };
+
+assert.deepEqual(readPickRequest(jsonHeaders, '{"startIn":"/tmp/x"}'), { ok: true, startIn: "/tmp/x" });
+assert.deepEqual(readPickRequest(jsonHeaders, "{}"), { ok: true, startIn: undefined });
+// 前端带的是 `application/json; charset=utf-8` 这类写法,参数部分不能影响判断。
+assert.deepEqual(readPickRequest({ contentType: "application/json; charset=utf-8" }, "{}"), {
+  ok: true,
+  startIn: undefined,
+});
+assert.deepEqual(readPickRequest({ contentType: "application/json", secFetchSite: "same-origin" }, "{}"), {
+  ok: true,
+  startIn: undefined,
+});
+
+// 解析失败必须当场回 400,不许落到 pickDirectory。
+for (const bad of ["{bad json", "", "not json", "[1,2]", '"just a string"', "null"]) {
+  const result = readPickRequest(jsonHeaders, bad);
+  assert.equal(result.ok, false, `「${bad}」不该被放进 picker`);
+  if (!result.ok) assert.equal(result.status, 400, `「${bad}」应当回 400`);
+}
+// startIn 类型不对也一样:拿默认值把窗口弹出去是最坏的处理方式。
+for (const bad of ['{"startIn":123}', '{"startIn":null}', '{"startIn":["/tmp"]}']) {
+  const result = readPickRequest(jsonHeaders, bad);
+  assert.equal(result.ok, false, `${bad} 的 startIn 类型不对`);
+  if (!result.ok) assert.equal(result.status, 400);
+}
+
+// 简单请求(no-cors fetch / 表单提交)只能带这三种 Content-Type,换成 JSON 就得先过预检。
+// 挡住它们,跨站页面就没法拿这个端点在用户桌面上弹窗——响应读不到,副作用照样会发生。
+for (const type of ["text/plain", "application/x-www-form-urlencoded", "multipart/form-data", undefined, ""]) {
+  const result = readPickRequest({ contentType: type }, '{"startIn":"/tmp/x"}');
+  assert.equal(result.ok, false, `Content-Type「${String(type)}」不该被放行`);
+  if (!result.ok) assert.equal(result.status, 415, `Content-Type「${String(type)}」应当回 415`);
+}
+
+// Sec-Fetch-Site 是浏览器盖的章,页面伪造不了。缺头(curl / 手机端 / 测试)照常放行。
+for (const site of ["cross-site", "same-site"]) {
+  const result = readPickRequest({ ...jsonHeaders, secFetchSite: site }, "{}");
+  assert.equal(result.ok, false, `Sec-Fetch-Site: ${site} 不该被放行`);
+  if (!result.ok) assert.equal(result.status, 403);
+}
+for (const site of ["none", "same-origin", "SAME-ORIGIN", undefined, null]) {
+  assert.equal(readPickRequest({ ...jsonHeaders, secFetchSite: site }, "{}").ok, true, `Sec-Fetch-Site: ${String(site)} 应当放行`);
+}
 
 console.log("dir-picker 测试通过");
