@@ -72,6 +72,27 @@ async function importGitBundle(
   notes: string[],
 ): Promise<void> {
   const repo = expandHome(repoPath);
+  // 空 bundle = 源机确认本机已有全部提交(见 handoff.ts packGitState),只需对齐分支。
+  if (!git.bundleBase64) {
+    await withRepoLock(repoPath, async () => {
+      try {
+        await exec("git", ["-C", repo, "cat-file", "-e", `${git.head}^{commit}`]);
+      } catch {
+        throw new HandoffError(
+          `对端说本机已有提交 ${git.head.slice(0, 8)},但本机仓库里找不到——两边仓库状态漂了,重新预检再试`,
+          409,
+        );
+      }
+      try {
+        await exec("git", ["-C", repo, "branch", "-f", git.branch, git.head]);
+        notes.push(`本机已有分支全部提交,分支 ${git.branch} 已对齐(未传输 git 数据)`);
+      } catch {
+        // 分支正被某个 worktree 检出时 branch -f 会拒绝;提交都在,如实记录即可。
+        notes.push(`本机已有分支全部提交,但 ${git.branch} 正被占用无法强制对齐,以本机分支现状为准`);
+      }
+    });
+    return;
+  }
   const tmpDir = join(DATA_DIR, "tmp");
   mkdirSync(tmpDir, { recursive: true });
   const bundlePath = join(tmpDir, `handoff-in-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.bundle`);

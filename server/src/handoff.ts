@@ -138,6 +138,7 @@ export interface HandoffManifest {
     // full = 没协商出公共前置提交,bundle 含分支全部历史（体积大但独立可用）。
     full: boolean;
     prereqs: string[];
+    // 空串 = 对端已有分支全部提交,不传数据,导入侧只把分支对齐到 head。
     bundleBase64: string;
   };
   files: HandoffFilePayload[];
@@ -376,6 +377,13 @@ async function packGitState(
         await git(repo, ["merge-base", "--is-ancestor", ref.commit, head]);
         prereqs.push(ref.commit);
       } catch { /* 对端这个提交本机没有,或不在本分支历史上 */ }
+    }
+    // 对端已有分支尖本身(重复接力/仓库已完全同步):`git bundle create ^HEAD HEAD`
+    // 会以 "Refusing to create empty bundle" 拒绝——用空 bundleBase64 表示「提交都在,
+    // 只需对齐分支指向」,导入侧不做 verify/fetch。
+    if (prereqs.includes(head)) {
+      notes.push("对端仓库已有本分支全部提交,git 数据无需传输");
+      return { branch, head, full: false, prereqs, bundleBase64: "" };
     }
     const tmpDir = join(DATA_DIR, "tmp");
     mkdirSync(tmpDir, { recursive: true });
