@@ -11,7 +11,7 @@ import type { ScmChange, ScmDiffSource, ScmGroupId } from "../lib/api.ts";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import { ROOT_SOURCE_LABEL } from "../files/fileModel.ts";
 import { ScmChangeGroup } from "./ScmChangeGroup.tsx";
-import { OPERATION_LABEL, diffSourceOf, useScmWorkspace, type ScmAction } from "./scmModel.ts";
+import { OPERATION_LABEL, diffSourceOf, pathsOf, useScmWorkspace, type ScmAction } from "./scmModel.ts";
 
 // 任务工作目录的「源代码管理」。
 //
@@ -134,8 +134,8 @@ export function ScmInspector({
   /** 丢弃一律先问。未跟踪文件走 deleteUntracked——「改回原样」和「把文件删掉」是两种后果。 */
   const askDiscard = (changes: ScmChange[], group: ScmGroupId) => {
     const untracked = group === "untracked";
-    const paths = changes.map((change) => change.path);
-    const names = paths.length === 1 ? paths[0] : `${paths.length} 个文件`;
+    const paths = pathsOf(changes);
+    const names = changes.length === 1 ? changes[0].path : `${changes.length} 个文件`;
     setConfirm({
       action: untracked
         ? { kind: "discard", paths: [], deleteUntracked: paths }
@@ -164,7 +164,7 @@ export function ScmInspector({
   const clean = !status.merge.length && !status.staged.length && !status.unstaged.length && !status.untracked.length;
   const commitPaths = status.staged.length
     ? undefined
-    : [...status.unstaged, ...status.untracked].map((change) => change.path);
+    : pathsOf([...status.unstaged, ...status.untracked]);
   const canCommit = message.trim().length > 0 && (status.staged.length > 0 || (commitPaths?.length ?? 0) > 0);
 
   return (

@@ -199,7 +199,16 @@ export function useScmWorkspace(taskId: string) {
   return { overview, error, loading, busy, refresh, run };
 }
 
-/** 分组里全部条目的路径，按显示顺序——「全部暂存」传的正是用户此刻看见的那些。 */
+/**
+ * 分组里这些条目要送到后端的全部路径，按显示顺序。
+ *
+ * **重命名会展开成两条**（新路径 + 原路径）：`git mv old new` 在索引里是「删 old + 加
+ * new」两条记录，status 才把它们合成一条 R 显示。只送 new 去取消暂存，索引里那条 old
+ * 的删除会原地留下——界面报「已取消暂存」，用户下一次提交却只提交了一个删除。
+ *
+ * 「用户丢掉的正是他看见的那些」这条边界不受影响：origPath 本来就是那一行上写着的
+ * `← old.txt`，是同一个改动的另一半，不是额外的文件。
+ */
 export function pathsOf(changes: readonly ScmChange[]): string[] {
-  return changes.map((change) => change.path);
+  return changes.flatMap((change) => (change.origPath ? [change.path, change.origPath] : [change.path]));
 }

@@ -1,6 +1,6 @@
 import { ArrowCounterClockwise, Minus, Plus, Trash } from "@phosphor-icons/react";
 import type { ScmChange, ScmGroupId } from "../lib/api.ts";
-import { CONFLICT_LABEL, KIND_BADGE, KIND_LABEL, dirName, fileName } from "./scmModel.ts";
+import { CONFLICT_LABEL, KIND_BADGE, KIND_LABEL, dirName, fileName, pathsOf } from "./scmModel.ts";
 
 // 一个改动分组（冲突 / 已暂存 / 更改 / 未跟踪）。条目本身是按钮——点它开 diff，跟
 // 文件树点文件开查看器是同一套手势；逐条的操作按钮浮在右侧，不抢主点击区。
@@ -37,7 +37,7 @@ function RowActions({
         <button
           type="button"
           aria-label={`取消暂存 ${name}`}
-          onClick={() => actions.onUnstage?.([change.path])}
+          onClick={() => actions.onUnstage?.(pathsOf([change]))}
         >
           <Minus size={13} />
         </button>
@@ -46,7 +46,7 @@ function RowActions({
         <button
           type="button"
           aria-label={group === "merge" ? `把 ${name} 标记为已解决并暂存` : `暂存 ${name}`}
-          onClick={() => actions.onStage?.([change.path])}
+          onClick={() => actions.onStage?.(pathsOf([change]))}
         >
           <Plus size={13} />
         </button>
@@ -92,7 +92,7 @@ export function ScmChangeGroup({
             <button
               type="button"
               aria-label={`${title}：全部取消暂存`}
-              onClick={() => actions.onUnstage?.(changes.map((change) => change.path))}
+              onClick={() => actions.onUnstage?.(pathsOf(changes))}
             >
               <Minus size={13} />
             </button>
@@ -101,7 +101,7 @@ export function ScmChangeGroup({
             <button
               type="button"
               aria-label={`${title}：全部暂存`}
-              onClick={() => actions.onStage?.(changes.map((change) => change.path))}
+              onClick={() => actions.onStage?.(pathsOf(changes))}
             >
               <Plus size={13} />
             </button>

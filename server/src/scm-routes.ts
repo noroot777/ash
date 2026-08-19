@@ -16,15 +16,23 @@ import {
   stagePaths,
   unstagePaths,
 } from "./git-workspace-ops.js";
+import { IS_PREVIEW_INSTANCE, previewRefusal } from "./preview-instance.js";
+import { assertInsideRoot, assertPathShape, gateScmPaths } from "./scm-paths.js";
 
 // 任务工作区的「源代码管理」面板。工作目录的解析**复用 taskFileRoot**（会话 cwd >
 // 约定 worktree 目录 > 项目仓库），绝不调 prepareWorktree：为了看一眼 git 状态而凭空
 // 建出 worktree 和分支来，是 file-browser.ts 顶部那条注释写死的禁忌，这里同样适用。
 //
-// 写操作在任务**正在跑**时默认拒绝，要带 `force` 才放行。理由是 agent 此刻正在同一个
-// 工作目录里写文件：这时候提交，提交进去的是它写到一半的中间状态；这时候丢弃，丢掉的
-// 可能是它三秒前刚写出来、还没来得及提交的成果。这不是禁止，是要求用户明知故犯——
-// 前端据此弹一次说明后果的确认框。
+// 写操作有两道门禁，管的是两件不同的事：
+//
+//   • **预览实例一律拒绝**。预览连的是主库的快照，但库里那些任务行的 `worktree_path`
+//     指向的是**真仓库**（`preview-instance.ts` 顶部）。用户以为自己在沙盒里点着玩，
+//     一次 discard 就不可逆地删掉了真实工作区里没提交的东西。读侧不拦——看是安全的。
+//   • **任务正在跑**时默认拒绝，要带 `force` 才放行。理由是 agent 此刻正在同一个工作
+//     目录里写文件：这时候提交，提交进去的是它写到一半的中间状态；这时候丢弃，丢掉的
+//     可能是它三秒前刚写出来、还没来得及提交的成果。这不是禁止，是要求用户明知故犯——
+//     前端据此弹一次说明后果的确认框。
+
 
 const RUNNING_STATES = new Set(["running", "queued"]);
 
@@ -89,29 +97,33 @@ export function mountScmRoutes(api: Hono) {
     if ("error" in context) return c.json({ error: context.error }, context.status);
     const path = c.req.query("path") ?? "";
     const source = c.req.query("source") ?? "";
+    const origPath = c.req.query("origPath") || null;
     if (!path) return c.json({ error: "缺少 path" }, 400);
     if (source !== "staged" && source !== "unstaged" && source !== "untracked") {
       return c.json({ error: "source 必须是 staged / unstaged / untracked" }, 400);
     }
     try {
-      const diff = await readScmFileDiff(
-        context.root.path,
-        path,
-        source as ScmDiffSource,
-        c.req.query("origPath") || null,
-      );
+      // 读也要过路径闸。`source=untracked` 的预览走 `git diff --no-index -- /dev/null
+      // <path>`，是四条路里唯一绕开 git pathspec、直接按文件系统路径读盘的——不挡的话
+      // 一个 `../` 就能把 harness 进程读得到的任何文本文件读出来。白名单闸挡住仓库外的
+      // 路径，realpath 闸再挡住工作区里指向外面的软链。
+      const targets = assertPathShape(origPath ? [path, origPath] : [path]);
+      await gateScmPaths(context.root.path, { paths: targets });
+      if (source === "untracked") await assertInsideRoot(context.root.path, path);
+      const diff = await readScmFileDiff(context.root.path, path, source as ScmDiffSource, origPath);
       return c.json(diff);
     } catch (error) {
-      return c.json({ error: errorMessage(error) }, 500);
+      return c.json({ error: errorMessage(error) }, errorStatus(error) as 400);
     }
   });
 
-  /** 写操作的公共外壳：解析目录 → running 门禁 → 跑 → 回一份刷新后的状态。 */
+  /** 写操作的公共外壳：预览门禁 → 解析目录 → running 门禁 → 跑 → 回一份刷新后的状态。 */
   const write = (
     path: string,
     run: (root: WorkspaceRoot, body: ScmRequestBody) => Promise<unknown>,
   ) => {
     api.post(path, async (c) => {
+      if (IS_PREVIEW_INSTANCE) return c.json({ error: previewRefusal("改任务的工作区") }, 403);
       // 路径是变量，Hono 推不出参数名，取值补一个空串兜底（空 id 走 taskFileRoot 的 404）。
       const context = await gitRootOr(c.req.param("id") ?? "");
       if ("error" in context) return c.json({ error: context.error }, context.status);

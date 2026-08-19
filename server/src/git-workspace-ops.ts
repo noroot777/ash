@@ -1,7 +1,8 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { gitError } from "./git.js";
-import { literalPathspec, readScmStatus } from "./git-status.js";
+import { literalPathspec } from "./git-status.js";
+import { assertPathShape, gateScmPaths, ScmOperationError } from "./scm-paths.js";
 import { withRepoLock } from "./repo-lock.js";
 
 // ── 工作区 SCM 的写侧：暂存 / 取消暂存 / 丢弃 / 提交 ─────────────────────────
@@ -11,11 +12,14 @@ import { withRepoLock } from "./repo-lock.js";
 // ① **只按显式路径清单动手，不支持「全部」通配。** 面板上看到的状态和点下按钮之间
 //    隔着网络往返和一个还在干活的 agent，中间新冒出来的文件不该被这次点击波及。
 //    「丢弃全部」由前端把当时列出的路径逐条传上来——用户丢掉的正是他看见的那些。
+//    这条不是靠自觉：每个写操作都在锁内过 `gateScmPaths`，路径必须出现在此刻的
+//    git status 里。目录（`dir`、`.`）永远不在 status 里，所以「一次丢掉整个目录」
+//    在那道闸上就被关掉了——`:(literal)` 只关 glob，关不掉目录递归。
 //
 // ② **写操作一律走 withRepoLock。** index 虽然每个 worktree 一份，refs 却是全仓共用：
 //    提交要写 refs，和验收合并撞车会互相拆台（`repo-lock.ts` 顶部有完整原因）。
 //    暂存/丢弃本身不写 refs，但让它们和验收排同一条队是有意的——验收合并到一半时
-//    读到的工作区状态本来就不该拿来操作。
+//    读到的工作区状态本来就不该拿来操作。白名单闸的那次 status 读也必须在锁内。
 //
 // ③ **不做 push / pull / fetch / 切分支。** 前两个是外发到远程，后两个会把正在干活的
 //    agent 的脚下抽掉（harness 的整个 worktree 模型建立在「一个任务一条分支」上）。
@@ -23,34 +27,12 @@ import { withRepoLock } from "./repo-lock.js";
 
 const exec = promisify(execFile);
 
+export { ScmOperationError };
+
 export interface ScmWriteResult {
   ok: true;
   /** 实际处理的路径数——前端据此报「已暂存 3 个文件」。 */
   affected: number;
-}
-
-export class ScmOperationError extends Error {
-  constructor(message: string, readonly status = 400) {
-    super(message);
-    this.name = "ScmOperationError";
-  }
-}
-
-/**
- * 路径必须是仓库相对的、不越界的。
- *
- * 后端再挡一次而不是只信前端：这些路径最终会进 `git clean` 和 `git restore` 的
- * pathspec，写错方向就是删用户的文件。三条都拒：空串、绝对路径、含 `..` 段。
- */
-export function assertRepoRelative(paths: readonly string[]): string[] {
-  if (!paths.length) throw new ScmOperationError("没有指定文件");
-  return paths.map((raw) => {
-    const path = raw.replace(/\\/g, "/").trim();
-    if (!path) throw new ScmOperationError("文件路径为空");
-    if (path.startsWith("/") || /^[A-Za-z]:/.test(path)) throw new ScmOperationError(`路径必须是仓库相对路径：${raw}`);
-    if (path.split("/").some((segment) => segment === "..")) throw new ScmOperationError(`路径越界：${raw}`);
-    return path;
-  });
 }
 
 async function git(root: string, args: string[]): Promise<string> {
@@ -70,17 +52,27 @@ async function inBatches(paths: string[], size: number, run: (batch: string[]) =
 const BATCH = 200;
 
 export async function stagePaths(root: string, repoPath: string | null, paths: readonly string[]): Promise<ScmWriteResult> {
-  const targets = assertRepoRelative(paths);
+  const targets = assertPathShape(paths);
   return withRepoLock(repoPath, async () => {
+    await gateScmPaths(root, { paths: targets });
     // `add -A` 而不是 `add`：只有前者会把「文件被删了」也记进索引，否则删除永远暂存不上。
     await inBatches(targets, BATCH, (batch) => git(root, ["add", "-A", "--", ...batch.map(literalPathspec)]));
     return { ok: true as const, affected: targets.length };
   });
 }
 
+/**
+ * 取消暂存。
+ *
+ * **重命名要连原路径一起传**：`git mv old new` 之后索引里是两条记录（`old` 删除、`new`
+ * 新增，status 合成一条 R 显示给用户）。只 restore `new`，索引里那条 `old` 的删除会原地
+ * 留下——用户看到的是「取消暂存成功」，下一次提交却只提交了一个删除。前端 `pathsOf`
+ * 因此对每个条目同时送 `path` 和 `origPath`。
+ */
 export async function unstagePaths(root: string, repoPath: string | null, paths: readonly string[]): Promise<ScmWriteResult> {
-  const targets = assertRepoRelative(paths);
+  const targets = assertPathShape(paths);
   return withRepoLock(repoPath, async () => {
+    await gateScmPaths(root, { paths: targets });
     await inBatches(targets, BATCH, async (batch) => {
       const pathspecs = batch.map(literalPathspec);
       try {
@@ -111,18 +103,13 @@ export async function discardPaths(
   paths: readonly string[],
   deleteUntracked: readonly string[] = [],
 ): Promise<ScmWriteResult> {
-  const tracked = paths.length ? assertRepoRelative(paths) : [];
-  const untracked = deleteUntracked.length ? assertRepoRelative(deleteUntracked) : [];
+  const tracked = paths.length ? assertPathShape(paths) : [];
+  const untracked = deleteUntracked.length ? assertPathShape(deleteUntracked) : [];
   if (!tracked.length && !untracked.length) throw new ScmOperationError("没有指定文件");
   return withRepoLock(repoPath, async () => {
+    // 一次读，两道闸：路径得在列表里，且不许是冲突中的文件。锁内读到的才是即将被操作的那份。
+    await gateScmPaths(root, { paths: [...tracked, ...untracked], rejectConflicted: true });
     if (tracked.length) {
-      // 冲突文件挡在这里而不是靠前端不显示按钮：这是不可逆操作，唯一一次机会就在动手前。
-      // 拿锁之后再读状态，读到的才是即将被操作的那一份。
-      const conflicted = new Set((await readScmStatus(root)).merge.map((change) => change.path));
-      const hit = tracked.filter((path) => conflicted.has(path));
-      if (hit.length) {
-        throw new ScmOperationError(`这些文件正处在冲突中，先解决冲突再操作：${hit.join("、")}`);
-      }
       // `--worktree` 而不是连 `--staged` 一起：面板上「丢弃」丢的是未暂存那一份，
       // 已经暂存的内容要先取消暂存再丢——和 VSCode 一致，也让两步都可以停在中间。
       await inBatches(tracked, BATCH, (batch) =>
@@ -157,9 +144,10 @@ export async function commitWorkspace(
 ): Promise<ScmCommitResult> {
   const message = options.message.trim();
   if (!message) throw new ScmOperationError("提交信息不能为空");
-  const toStage = options.stagePaths?.length ? assertRepoRelative(options.stagePaths) : [];
+  const toStage = options.stagePaths?.length ? assertPathShape(options.stagePaths) : [];
   return withRepoLock(repoPath, async () => {
     if (toStage.length) {
+      await gateScmPaths(root, { paths: toStage });
       await inBatches(toStage, BATCH, (batch) => git(root, ["add", "-A", "--", ...batch.map(literalPathspec)]));
     }
     // 消息走 stdin（`-F -`）而不是 argv：提交信息里的换行、引号、以及 Windows 上的
