@@ -2,14 +2,20 @@
 // HARNESS_DB 指向临时源库),再真 spawn 一个 harness server 当**对端**(PORT=0 随机端口、
 // 独立临时库),两边走真 HTTP 协议。验的是:
 //   1. preflight 探测/项目匹配/会话文件盘点
-//   2. export 的 WIP 提交、bundle 前置提交协商、会话文件与 runs 产物打包
-//   3. import 的 bundle 落库、worktree 恢复、行落库、resumePrompt 前言、文件归位
-//   4. 重复接力的两道闸(本机 out 标记 409、对端同 id 任务 409)
+//   2. 应答丢失:pending 标记落库、本机启动被硬拦、重试沿用同一个 transferId
+//   3. export 的 WIP 提交、bundle 前置提交协商、会话文件与 runs 产物打包
+//      + import 的 bundle 落库、worktree 恢复、行落库、resumePrompt 前言、文件归位
+//   4. 幂等收口:pending 重试撞上「对端已导入」按成功收敛、零副作用
+//   5. 重复接力的两道闸(本机 out 标记 409、对端同 id 任务 409)+ 拒收后标记回滚
+//   6. 导入原子性:会话 id 冲突预检 409 零副作用;落库半路炸掉整体回滚不留半截任务
+//   7. 跨平台路径:Windows 源机的反斜杠 rel 按段重组归位;codex rollout 定位不到
+//      (findRollout 找不着)时 cliSessionId 必须置空
 // HARNESS_RUNS_DIR 指到临时目录顺带打开 guardAgentSpawn,即使哪里失手触发续跑也
 // 不会真拉起 CLI 烧额度;接力本身用 autoResume:false。
 import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
 import { execFileSync } from "node:child_process";
+import { createServer } from "node:http";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -88,6 +94,8 @@ try {
   const { projects, sessions, tasks } = await import("../src/db/schema.js");
   const { prepareWorktree, worktreeBranchName, worktreePathFor } = await import("../src/git.js");
   const { claudeProjectSlug, exportHandoff, HandoffError, preflightHandoff } = await import("../src/handoff.js");
+  const { handoffBlockReason } = await import("../src/handoff-guard.js");
+  const { resumeOrRunTask } = await import("../src/task-resume.js");
   const { createTasks } = await import("../src/task-store.js");
   const { sessionTranscriptPath } = await import("../src/transcript.js");
   const { createClient } = await import("../src/db/node-sqlite-client.js");
@@ -161,7 +169,50 @@ try {
   assert.equal(probe.local.git, "bundle");
   assert.ok(probe.local.notes.some((n) => n.includes("找不到 CLI 会话文件")), "s2 缺文件应记 note");
 
-  // ── 2. export → import ───────────────────────────────────────────────────
+  // ── 2. 应答丢失:pending 标记落库 + 本机启动硬拦 ─────────────────────────
+  // 假对端:ping/refs 正常应答,import 一来就掐断 socket——制造「对端可能已收到、
+  // 应答没回来」的网络类失败(审查缺陷 2 的第一半 + 缺陷 1 的启动硬拦)。
+  const flaky = createServer((req, res) => {
+    res.setHeader("content-type", "application/json");
+    if (req.url?.endsWith("/api/handoff/ping")) {
+      res.end(JSON.stringify({
+        ok: true, service: "harness", host: "flaky",
+        projects: [{ id: "p1", name: "acme", repoPath: dstRepo, isRepo: true }],
+      }));
+    } else if (req.url?.includes("/refs")) {
+      res.end(JSON.stringify({ refs: [] }));
+    } else {
+      req.socket.destroy();
+    }
+  });
+  await new Promise<void>((r) => flaky.listen(0, "127.0.0.1", r));
+  const flakyPort = (flaky.address() as { port: number }).port;
+  await assert.rejects(
+    exportHandoff(taskId, { targetUrl: `http://127.0.0.1:${flakyPort}`, targetProjectId: "p1", autoResume: false }),
+    (e: unknown) => e instanceof HandoffError && e.network && /对端可能已经收到/.test(e.message),
+    "应答丢失应按「可能已送达」提示重试收口,而不是当确认失败",
+  );
+  await new Promise<void>((r) => flaky.close(() => r()));
+
+  const pendingMarker = JSON.parse(
+    ((await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0)!).handoff!,
+  ) as { direction: string; pending?: boolean; transferId?: string };
+  assert.equal(pendingMarker.direction, "out");
+  assert.equal(pendingMarker.pending, true, "应答丢失后必须留下「接力未确认」的持久标记");
+  assert.ok(pendingMarker.transferId, "pending 标记要带 transferId,重试才有幂等身份");
+  assert.ok(handoffBlockReason(JSON.stringify(pendingMarker)), "pending 态必须触发启动硬拦");
+
+  // 硬拦生效:resumeOrRunTask(队列推进/调度/HTTP 路由全汇到这条路)一个副作用都不留。
+  await resumeOrRunTask(taskId, { reason: "run" });
+  const blockedTask = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0)!;
+  assert.equal(blockedTask.status, "paused", "接力中的任务不该被本机拉起");
+  assert.equal(blockedTask.resumePrompt, "继续:完成第二步", "被拦下的续跑要把 checkpoint 指令放回原位");
+  assert.equal(
+    (await db.select().from(sessions).where(eq(sessions.taskId, taskId))).length, 2,
+    "被拦下的启动不该新建会话",
+  );
+
+  // ── 3. 重试收口:export → import ──────────────────────────────────────────
   const result = await exportHandoff(taskId, {
     targetUrl: peerUrl, targetProjectId: peerProject.id, targetName: "测试机", autoResume: false,
   });
@@ -175,8 +226,12 @@ try {
   assert.equal(git(ws.path, "status", "--porcelain"), "");
   assert.match(git(ws.path, "log", "-1", "--format=%s"), /chore\(handoff\)/);
   const srcTask = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0)!;
-  const marker = JSON.parse(srcTask.handoff!) as { direction: string; peerTaskId: string; peerName: string };
+  const marker = JSON.parse(srcTask.handoff!) as {
+    direction: string; peerTaskId: string; peerName: string; pending?: boolean; transferId?: string;
+  };
   assert.equal(marker.direction, "out");
+  assert.ok(!marker.pending, "确认送达后 pending 必须改写成确认态");
+  assert.equal(marker.transferId, pendingMarker.transferId, "重试必须沿用同一个 transferId(幂等身份)");
   assert.equal(marker.peerTaskId, taskId);
   assert.equal(marker.peerName, "测试机");
   assert.match(
@@ -223,7 +278,28 @@ try {
   assert.equal(dstSessions[1]!.cli, null, "文件没到货的会话 cliSessionId 必须置空,否则 --resume 会当场报错");
   assert.ok(dstSessions.every((s) => s.cwd === dstWs));
 
-  // ── 3. 重复接力的两道闸 ──────────────────────────────────────────────────
+  // ── 4. 幂等收口:pending 重试撞上「对端已导入」→ 按成功收敛,零副作用 ──────
+  // 模拟「上次 POST 其实送达了,只是应答丢了」:把源机标记改回 pending,原样重试。
+  // 对端凭同一个 transferId 识别成同一次接力,直接返回成功,不重复导入。
+  await db.update(tasks)
+    .set({ handoff: JSON.stringify({ ...marker, pending: true }) })
+    .where(eq(tasks.id, taskId));
+  const replay = await exportHandoff(taskId, {
+    targetUrl: peerUrl, targetProjectId: peerProject.id, targetName: "测试机", autoResume: false,
+  });
+  assert.equal(replay.ok, true);
+  assert.ok(replay.notes.some((n) => n.includes("幂等收口")), "对端应按同 transferId 识别成同一次接力");
+  const settled = JSON.parse(
+    ((await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0)!).handoff!,
+  ) as { pending?: boolean; transferId?: string };
+  assert.ok(!settled.pending, "重试成功后 pending 必须收口成确认态");
+  assert.equal(settled.transferId, marker.transferId);
+  const replayCount = (await dstDb.execute({
+    sql: "select count(*) as n from sessions where task_id = ?", args: [taskId],
+  })).rows as unknown as { n: number }[];
+  assert.equal(Number(replayCount[0]!.n), 2, "幂等重放不该在对端重复插会话");
+
+  // ── 5. 重复接力的两道闸 + 拒收回滚 ───────────────────────────────────────
   await assert.rejects(
     exportHandoff(taskId, { targetUrl: peerUrl, targetProjectId: peerProject.id, autoResume: false }),
     (e: unknown) => e instanceof HandoffError && e.status === 409 && /已经接力出去/.test(e.message),
@@ -235,6 +311,88 @@ try {
     (e: unknown) => e instanceof HandoffError && /已有同 id 任务/.test(e.message),
     "对端同 id 任务应挡住重复导入",
   );
+  // 对端明确拒收(4xx 应答)≠ 应答丢失:源机要恢复接力前的标记(此处为 null),本机照常可跑。
+  const afterReject = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0)!;
+  assert.equal(afterReject.handoff, null, "对端明确拒收后应恢复接力前的标记,而不是留 pending");
+
+  // ── 6. 导入原子性:冲突预检 409 零副作用;落库半路炸掉整体回滚 ────────────
+  const rawImport = (body: unknown) =>
+    fetch(`${peerUrl}/api/handoff/import`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
+    });
+  const manifestBase = {
+    version: 1, sourceHost: "test-src", sourceWorkspace: null,
+    targetProjectId: peerProject.id, autoResume: false, git: null, files: [] as unknown[],
+    task: {
+      id: "handoff-e2e-task-02", title: "原子性用例", body: "probe",
+      status: "paused", createdAt: "2026-08-19T09:00:00.000Z",
+    },
+  };
+  const probeSession = {
+    role: "implementer", agentType: "claude", executor: "claude",
+    startedAt: "2026-08-19T09:01:00.000Z",
+  };
+  // 会话 id 撞上对端已有会话(handoffsess1 刚随任务 01 导入过):预检 409,什么都不落。
+  const conflictRes = await rawImport({
+    ...manifestBase, transferId: "transfer-conflict-1",
+    sessions: [{ ...probeSession, id: "handoffsess1" }],
+  });
+  assert.equal(conflictRes.status, 409);
+  assert.match(((await conflictRes.json()) as { error: string }).error, /会话 id 与本机已有会话冲突/);
+  assert.equal((await fetch(`${peerUrl}/api/tasks/handoff-e2e-task-02`)).status, 404, "预检拦下的导入不该留任务行");
+  // 载荷内部两条同 id 会话:预检查不出(对端库里还没有),落库时 UNIQUE 炸 → 整体回滚。
+  const dupRes = await rawImport({
+    ...manifestBase, transferId: "transfer-dup-1",
+    sessions: [
+      { ...probeSession, id: "handoffdup1" },
+      { ...probeSession, id: "handoffdup1", startedAt: "2026-08-19T09:02:00.000Z" },
+    ],
+  });
+  assert.equal(dupRes.status, 500);
+  assert.match(((await dupRes.json()) as { error: string }).error, /已回滚/);
+  assert.equal((await fetch(`${peerUrl}/api/tasks/handoff-e2e-task-02`)).status, 404, "落库失败必须回滚任务行,不留半截任务");
+  const dupRows = (await dstDb.execute({
+    sql: "select count(*) as n from sessions where task_id = ?", args: ["handoff-e2e-task-02"],
+  })).rows as unknown as { n: number }[];
+  assert.equal(Number(dupRows[0]!.n), 0, "回滚要连已插入的会话行一起清掉");
+
+  // ── 7. 跨平台路径:Windows 源机的反斜杠 rel 也要正确归位 ──────────────────
+  // codex rollout 深度对(YYYY/MM/DD)→ findRollout 定位得到,cliSessionId 保留;
+  // 深度不对 → 文件在盘上但 codex 自己找不到,必须按未迁移处理(置空 + note)。
+  const threadA = "33333333-aaaa-4bbb-8ccc-000000000003";
+  const threadB = "44444444-aaaa-4bbb-8ccc-000000000004";
+  const b64 = (s: string) => Buffer.from(s).toString("base64");
+  const winRes = await rawImport({
+    ...manifestBase, transferId: "transfer-win-1",
+    task: { ...manifestBase.task, id: "handoff-e2e-task-03", title: "Windows 源机用例", agentType: "codex" },
+    sessions: [
+      { ...probeSession, id: "handoffcodexa", agentType: "codex", executor: "codex", cliSessionId: threadA },
+      { ...probeSession, id: "handoffcodexb", agentType: "codex", executor: "codex", cliSessionId: threadB, startedAt: "2026-08-19T09:03:00.000Z" },
+    ],
+    files: [
+      { kind: "codex-rollout", rel: `2026\\08\\19\\rollout-2026-08-19T10-00-00-${threadA}.jsonl`, dataBase64: b64('{"turn":1}\n') },
+      { kind: "codex-rollout", rel: `rollout-2026-08-19T10-05-00-${threadB}.jsonl`, dataBase64: b64('{"turn":2}\n') },
+      { kind: "run-artifact", rel: "sub\\dir\\note.md", dataBase64: b64("# 产物\n") },
+    ],
+  });
+  const winBody = (await winRes.json()) as { sessionsMigrated: number; notes: string[]; error?: string };
+  assert.equal(winRes.status, 200, `Windows rel 导入应成功:${winBody.error ?? ""}`);
+  assert.equal(winBody.sessionsMigrated, 1, "只有 findRollout 定位得到的 codex 会话算迁移成功");
+  assert.ok(winBody.notes.some((n) => n.includes("无法按标准目录定位")), "定位不到的 rollout 要留 note");
+  assert.equal(
+    existsSync(join(home, ".codex", "sessions", "2026", "08", "19", `rollout-2026-08-19T10-00-00-${threadA}.jsonl`)),
+    true, "反斜杠 rel 应按段重组后落进 codex 标准目录",
+  );
+  assert.equal(
+    existsSync(join(root, "runs-dst", "handoff-e2e-task-03", "sub", "dir", "note.md")),
+    true, "产物的反斜杠 rel 同样按段重组归位",
+  );
+  const codexRows = (await dstDb.execute({
+    sql: "select id, cli_session_id as cli from sessions where task_id = ? order by started_at",
+    args: ["handoff-e2e-task-03"],
+  })).rows as unknown as { id: string; cli: string | null }[];
+  assert.equal(codexRows[0]!.cli, threadA, "定位得到的 codex 会话保留 cliSessionId");
+  assert.equal(codexRows[1]!.cli, null, "定位不到的必须置空,否则续跑是假恢复");
 
   console.log("test-handoff ok");
 } finally {

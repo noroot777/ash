@@ -9,7 +9,7 @@ import { homedir } from "node:os";
 import { mkdirSync, rmSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { projects, sessions, tasks } from "./db/schema.js";
 import {
@@ -19,7 +19,7 @@ import {
 import { ensureWorkdir, expandHome, prepareWorktree, projectHealthLight, worktreePathFor } from "./git.js";
 import { withRepoLock } from "./repo-lock.js";
 import { DATA_DIR, RUNS_DIR } from "./paths.js";
-import { codexHome } from "./executors/codex-rollout.js";
+import { codexHome, findRollout } from "./executors/codex-rollout.js";
 import { createTasks } from "./task-store.js";
 import { resumeOrRunTask } from "./task-resume.js";
 import { now } from "./util.js";
@@ -48,6 +48,9 @@ function validate(input: unknown): HandoffManifest {
   if (!m || typeof m !== "object") throw new HandoffError("导入体必须是 JSON 对象");
   if (m.version !== 1) throw new HandoffError(`不认识的接力协议版本 ${String((m as { version?: unknown }).version)},两边 harness 版本差太远`);
   if (!isStr(m.targetProjectId)) throw new HandoffError("缺 targetProjectId");
+  // transferId 宽容校验:老版本导出没有这个字段,缺了照收(只是失去幂等重放能力)。
+  const tid = (m as { transferId?: unknown }).transferId;
+  if (tid != null && (!isStr(tid) || tid.length > 64)) throw new HandoffError("transferId 非法");
   const t = m.task;
   if (!t || !isStr(t.id) || !/^[A-Za-z0-9_-]{6,64}$/.test(t.id)) throw new HandoffError("task.id 非法");
   if (!isStr(t.title) || !isStr(t.body) || !isStr(t.createdAt)) throw new HandoffError("task 关键字段缺失");
@@ -120,14 +123,24 @@ async function importGitBundle(
   }
 }
 
+/**
+ * 把 manifest 里的文件落到本机对应位置,返回**真正写盘成功**的会话文件名(basename)集合。
+ * cliSessionId 只认这个集合——manifest 里声称带了文件、但被跳过/写失败的会话,一律按
+ * 未迁移处理,否则续跑时 CLI 按 id 找不到历史就成了假恢复。
+ */
 async function writePayloadFiles(
   files: HandoffFilePayload[],
   taskId: string,
   remoteCwd: string,
   notes: string[],
-): Promise<void> {
+): Promise<Set<string>> {
   const claudeDir = join(homedir(), ".claude", "projects", claudeProjectSlug(remoteCwd));
+  const arrived = new Set<string>();
   for (const f of files) {
+    // 协议约定 rel 用 `/` 分隔,但老版本 Windows 源机导出的是 `\`——两种都按段拆开重组,
+    // 否则整串反斜杠在 POSIX 上是一个文件名,写进错误位置后 findRollout 永远找不到
+    // (审查实测:跨平台假迁移)。
+    const segs = f.rel.split(/[\\/]/);
     let dest: string;
     if (f.kind === "claude-session") {
       // 会话文件名就是 `<uuid>.jsonl`,不允许带任何目录成分。
@@ -135,16 +148,18 @@ async function writePayloadFiles(
       dest = join(claudeDir, f.rel);
     } else if (f.kind === "codex-rollout") {
       if (!safeRel(f.rel)) { notes.push(`codex rollout 路径非法,跳过:${f.rel}`); continue; }
-      dest = join(codexHome(), "sessions", f.rel);
+      dest = join(codexHome(), "sessions", ...segs);
     } else {
       if (!safeRel(f.rel)) { notes.push(`产物路径非法,跳过:${f.rel}`); continue; }
-      dest = join(RUNS_DIR, taskId, f.rel);
+      dest = join(RUNS_DIR, taskId, ...segs);
     }
     const data = Buffer.from(f.dataBase64, "base64");
     if (data.byteLength > MAX_FILE_BYTES) { notes.push(`${f.rel} 解码后超限,跳过`); continue; }
     mkdirSync(dirname(dest), { recursive: true });
     await writeFile(dest, data);
+    if (f.kind !== "run-artifact") arrived.add(segs.at(-1)!);
   }
+  return arrived;
 }
 
 export interface HandoffImportResult {
@@ -161,9 +176,42 @@ export async function importHandoff(input: unknown): Promise<HandoffImportResult
   const notes: string[] = [];
   const project = (await db.select().from(projects).where(eq(projects.id, m.targetProjectId))).at(0);
   if (!project) throw new HandoffError("目标项目不存在(对端项目清单可能过期,重新预检)", 404);
-  const existing = (await db.select({ id: tasks.id }).from(tasks).where(eq(tasks.id, m.task.id))).at(0);
+  const existing = (await db
+    .select({ id: tasks.id, handoff: tasks.handoff })
+    .from(tasks)
+    .where(eq(tasks.id, m.task.id))).at(0);
   if (existing) {
+    // 应答丢失后的原样重试:同一个 transferId 说明就是同一次接力,按成功收口、零副作用,
+    // 让源机把 pending 标记改写成「已接力」。没有 transferId(老版本)或对不上才是真冲突。
+    let h: TaskHandoff | null = null;
+    if (existing.handoff) {
+      try { h = JSON.parse(existing.handoff) as TaskHandoff; } catch { h = null; }
+    }
+    if (h?.direction === "in" && m.transferId && h.transferId === m.transferId) {
+      return {
+        ok: true,
+        taskId: m.task.id,
+        workspace: null,
+        sessionsMigrated: h.sessions,
+        autoResume: false,
+        notes: ["本机已有这次接力导入的任务(应答曾丢失,本次为幂等收口),未重复导入"],
+      };
+    }
     throw new HandoffError("本机已有同 id 任务(可能已经接力过一次)。要重新接力,先在本机删掉那个任务。", 409);
+  }
+  // 会话 id 冲突预检:必须在任何副作用之前拦下,否则落库落到一半 UNIQUE 炸掉,
+  // 留下没有会话的半截任务(审查实测:import 500 后 GET 200、重试永远 409)。
+  if (m.sessions.length) {
+    const conflicts = await db
+      .select({ id: sessions.id })
+      .from(sessions)
+      .where(inArray(sessions.id, m.sessions.map((s) => s.id)));
+    if (conflicts.length) {
+      throw new HandoffError(
+        `会话 id 与本机已有会话冲突(${conflicts.map((c) => c.id).join(", ")}),什么都没导入。这份任务可能曾从本机接力出去——先在本机删掉旧任务再试。`,
+        409,
+      );
+    }
   }
 
   const isRepo = projectHealthLight(project.repoPath).isRepo;
@@ -191,16 +239,29 @@ export async function importHandoff(input: unknown): Promise<HandoffImportResult
     workspace = ensureWorkdir(project.repoPath, m.task.id);
   }
 
-  // ── cliSessionId 只认「文件真的到货」的会话 ─────────────────────────────
+  // ── 文件先落盘,再落库 ──────────────────────────────────────────────────
+  // 顺序有讲究:文件写一半崩了只留下无害的磁盘残留(重试会原样覆盖);反过来先落库
+  // 再写文件,「任务行在、文件没到」就是半截任务。arrived 是真正写盘成功的会话文件名。
+  const arrived = await writePayloadFiles(m.files, m.task.id, workspace ?? expandHome(project.repoPath), notes);
+
+  // ── cliSessionId 只认「文件写盘成功、且 CLI 自己找得到」的会话 ────────────
   // claude 的文件名是 `<cliSessionId>.jsonl`,codex 是 `rollout-<ts>-<threadId>.jsonl`。
-  const arrivedNames = m.files
-    .filter((f) => f.kind === "claude-session" || f.kind === "codex-rollout")
-    .map((f) => f.rel.split("/").pop()!);
+  // codex 还要过 findRollout:它只按 sessions/YYYY/MM/DD 的标准深度扫描,rel 深度不对时
+  // 文件在盘上但 codex 定位不到,保留 cliSessionId 就是假恢复(续跑报找不到线程)。
   const hasFile = (s: HandoffManifest["sessions"][number]): boolean =>
-    !!s.cliSessionId && arrivedNames.some(
+    !!s.cliSessionId && [...arrived].some(
       (name) => name === `${s.cliSessionId}.jsonl` || name.endsWith(`-${s.cliSessionId}.jsonl`),
     );
-  const migrated = m.sessions.filter(hasFile);
+  const usable = new Map<string, boolean>();
+  for (const s of m.sessions) {
+    let ok = hasFile(s);
+    if (ok && s.agentType === "codex") {
+      ok = !!(await findRollout(s.cliSessionId!));
+      if (!ok) notes.push(`codex 会话 ${s.id} 的 rollout 已写盘但无法按标准目录定位,按未迁移处理`);
+    }
+    usable.set(s.id, ok);
+  }
+  const migrated = m.sessions.filter((s) => usable.get(s.id));
 
   // ── resumePrompt:告诉续跑的 agent 它被搬过机器了 ───────────────────────
   const agentType = m.task.agentType ?? "claude";
@@ -208,7 +269,7 @@ export async function importHandoff(input: unknown): Promise<HandoffImportResult
     .filter((s) => s.agentType === agentType)
     .sort((a, b) => a.startedAt.localeCompare(b.startedAt))
     .at(-1);
-  const resumable = !!latest && hasFile(latest);
+  const resumable = !!latest && !!usable.get(latest.id);
   const preamble = [
     `【任务接力】本任务从另一台机器(${m.sourceHost})接力到本机继续。`,
     m.git ? "git 分支和已提交的改动已随任务迁移。" : "代码没有随任务迁移,以本机仓库当前状态为准。",
@@ -232,6 +293,9 @@ export async function importHandoff(input: unknown): Promise<HandoffImportResult
 
   const marker: TaskHandoff = {
     direction: "in",
+    // 源机生成的接力身份证:应答丢失后源机原样重试时,靠它把「已有同 id 任务」识别成
+    // 同一次接力并幂等收口(见上面 existing 分支)。
+    transferId: m.transferId ?? null,
     peerUrl: null,
     peerName: m.sourceHost || null,
     peerTaskId: m.task.id,
@@ -240,83 +304,94 @@ export async function importHandoff(input: unknown): Promise<HandoffImportResult
     git: useWorktree && m.git ? "bundle" : "none",
   };
   const status = SETTLED.has(m.task.status) ? m.task.status : "canceled";
-  await createTasks([{
-    id: m.task.id,
-    projectId: project.id,
-    title: m.task.title,
-    body: m.task.body,
-    mode: "single",
-    status,
-    stage: m.task.stage,
-    labels: jsonOr(m.task.labels, "[]"),
-    agentType: m.task.agentType,
-    // executorId 是本机 agents 表的外键语义,对端的 id 在这边没有意义 → 走 agentType 默认。
-    executorId: null,
-    model: m.task.model,
-    reasoningEffort: m.task.reasoningEffort,
-    autoTitle: m.task.autoTitle,
-    useWorktree,
-    worktreeBase: useWorktree ? m.task.worktreeBase : null,
-    workflow: jsonOr(m.task.workflow, "") || null,
-    workflowMode: (m.task.workflowMode as "free" | "workflow" | undefined) ?? "workflow",
-    workflowAt: m.task.workflowAt,
-    reviewStep: m.task.reviewStep,
-    verifyRounds: m.task.verifyRounds ?? 0,
-    verifyStationRounds: m.task.verifyStationRounds ?? 0,
-    resumePrompt,
-    question: m.task.question,
-    questionOptions: jsonOr(m.task.questionOptions, "") || null,
-    questionItems: jsonOr(m.task.questionItems, "") || null,
-    pinnedAt: m.task.pinnedAt,
-    starredAt: m.task.starredAt,
-    createdAt: m.task.createdAt,
-    updatedAt: now(),
-    startedAt: m.task.startedAt,
-    endedAt: m.task.endedAt,
-    handoff: JSON.stringify(marker),
-    reportBack: false,
-  }]);
-
-  if (m.sessions.length) {
-    await db.insert(sessions).values(m.sessions.map((s) => ({
-      id: s.id,
-      taskId: m.task.id,
-      role: s.role,
-      agentType: s.agentType,
-      executor: s.executor,
-      // 本机档案/指纹/续跑命令全部重算或悬空:resumeCommand 读取时按目录重建,
-      // fingerprint 留空避免「换机器 = 换执行器」误报。
+  try {
+    // sessions 作为 afterInsert 塞进 createTasks:会话插入失败时 task.created 广播还没发,
+    // 回滚后前端不会闪过「幽灵任务」;成功时广播出去的任务已带全会话。
+    await createTasks([{
+      id: m.task.id,
+      projectId: project.id,
+      title: m.task.title,
+      body: m.task.body,
+      mode: "single",
+      status,
+      stage: m.task.stage,
+      labels: jsonOr(m.task.labels, "[]"),
+      agentType: m.task.agentType,
+      // executorId 是本机 agents 表的外键语义,对端的 id 在这边没有意义 → 走 agentType 默认。
       executorId: null,
-      executorFingerprint: null,
-      turnModel: s.turnModel,
-      turnReasoningEffort: s.turnReasoningEffort,
-      target: "local",
-      worktreePath: useWorktree ? workspace : null,
-      branch: s.branch,
-      cwd: workspace,
-      cliSessionId: hasFile(s) ? s.cliSessionId : null,
-      commandLine: s.commandLine,
-      startedAt: s.startedAt,
-      endedAt: s.endedAt,
-      exitStatus: s.exitStatus,
-      stoppedAs: s.stoppedAs,
-      sideTurn: s.sideTurn ?? false,
-      activeMs: s.activeMs,
-      turnStartedAt: s.turnStartedAt,
-      usageInput: s.usageInput,
-      usageOutput: s.usageOutput,
-      usageCacheRead: s.usageCacheRead,
-      usageCacheWrite: s.usageCacheWrite,
-      usageReasoning: s.usageReasoning,
-      usageCostUsd: s.usageCostUsd,
-      usageTurns: s.usageTurns,
-      contextUsed: s.contextUsed,
-      contextWindow: s.contextWindow,
-      contextWindowEstimated: s.contextWindowEstimated,
-    })));
+      model: m.task.model,
+      reasoningEffort: m.task.reasoningEffort,
+      autoTitle: m.task.autoTitle,
+      useWorktree,
+      worktreeBase: useWorktree ? m.task.worktreeBase : null,
+      workflow: jsonOr(m.task.workflow, "") || null,
+      workflowMode: (m.task.workflowMode as "free" | "workflow" | undefined) ?? "workflow",
+      workflowAt: m.task.workflowAt,
+      reviewStep: m.task.reviewStep,
+      verifyRounds: m.task.verifyRounds ?? 0,
+      verifyStationRounds: m.task.verifyStationRounds ?? 0,
+      resumePrompt,
+      question: m.task.question,
+      questionOptions: jsonOr(m.task.questionOptions, "") || null,
+      questionItems: jsonOr(m.task.questionItems, "") || null,
+      pinnedAt: m.task.pinnedAt,
+      starredAt: m.task.starredAt,
+      createdAt: m.task.createdAt,
+      updatedAt: now(),
+      startedAt: m.task.startedAt,
+      endedAt: m.task.endedAt,
+      handoff: JSON.stringify(marker),
+      reportBack: false,
+    }], async () => {
+      if (!m.sessions.length) return;
+      await db.insert(sessions).values(m.sessions.map((s) => ({
+        id: s.id,
+        taskId: m.task.id,
+        role: s.role,
+        agentType: s.agentType,
+        executor: s.executor,
+        // 本机档案/指纹/续跑命令全部重算或悬空:resumeCommand 读取时按目录重建,
+        // fingerprint 留空避免「换机器 = 换执行器」误报。
+        executorId: null,
+        executorFingerprint: null,
+        turnModel: s.turnModel,
+        turnReasoningEffort: s.turnReasoningEffort,
+        target: "local",
+        worktreePath: useWorktree ? workspace : null,
+        branch: s.branch,
+        cwd: workspace,
+        cliSessionId: usable.get(s.id) ? s.cliSessionId : null,
+        commandLine: s.commandLine,
+        startedAt: s.startedAt,
+        endedAt: s.endedAt,
+        exitStatus: s.exitStatus,
+        stoppedAs: s.stoppedAs,
+        sideTurn: s.sideTurn ?? false,
+        activeMs: s.activeMs,
+        turnStartedAt: s.turnStartedAt,
+        usageInput: s.usageInput,
+        usageOutput: s.usageOutput,
+        usageCacheRead: s.usageCacheRead,
+        usageCacheWrite: s.usageCacheWrite,
+        usageReasoning: s.usageReasoning,
+        usageCostUsd: s.usageCostUsd,
+        usageTurns: s.usageTurns,
+        contextUsed: s.contextUsed,
+        contextWindow: s.contextWindow,
+        contextWindowEstimated: s.contextWindowEstimated,
+      })));
+    });
+  } catch (e) {
+    // 补偿回滚:任务行 + 已插入的会话行一起清掉,不留半截任务(审查实测:UNIQUE 炸在
+    // 会话插入后,GET 200 但任务残废、重试永远 409)。git 分支/worktree/已写盘文件的
+    // 残留无害——重试会原样覆盖。
+    try {
+      await db.delete(sessions).where(eq(sessions.taskId, m.task.id));
+      await db.delete(tasks).where(eq(tasks.id, m.task.id));
+    } catch { /* 回滚自身失败没有更好的办法,错误照抛,让对端看到失败 */ }
+    const msg = e instanceof Error ? e.message : String(e);
+    throw new HandoffError(`导入落库失败,已回滚,本机没有留下半截任务,可直接重试。原始错误:${msg.slice(0, 300)}`, 500);
   }
-
-  await writePayloadFiles(m.files, m.task.id, workspace ?? expandHome(project.repoPath), notes);
 
   if (m.autoResume) {
     // 火后不管:失败会照常走任务自己的失败结算,在界面上可见。

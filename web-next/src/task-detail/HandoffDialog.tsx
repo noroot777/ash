@@ -10,6 +10,7 @@ import type {
 import { ArrowSquareOut, PaperPlaneTilt, SpinnerGap, Warning } from "@phosphor-icons/react";
 import { api } from "../lib/api.ts";
 import { useDismissable } from "../lib/useDismissable.ts";
+import { ConfirmDialog } from "./ConfirmDialog.tsx";
 
 // 任务接力对话框:选目标机 → 预检(探测对端、匹配项目、盘点可搬运的东西)→ 执行。
 // 执行会先停掉正在跑的任务,再打包 git 分支和 CLI 会话文件推给对端,所以预检结果里
@@ -95,6 +96,13 @@ export function HandoffDialog({
       }
     } catch (reason) {
       notify(reason instanceof Error ? reason.message : String(reason));
+      // 网络类失败会在本机留下「接力未确认」的 pending 标记——照样拉回任务,
+      // 让横幅立刻可见,用户按横幅上的指引重试或移除。
+      try {
+        onTaskUpdate(await api.task(task.id));
+      } catch {
+        // SSE 大概率也会把更新推过来。
+      }
     } finally {
       setBusy(false);
     }
@@ -230,25 +238,76 @@ export function HandoffDialog({
 }
 
 // 任务详情顶部的持久横幅:接力标记落在 tasks.handoff 上,刷新后仍然看得出这个任务
-// 已经交出去了(或是从别的机器接过来的)。
-export function HandoffBanner({ handoff }: { handoff: TaskHandoff }) {
+// 已经交出去了(或是从别的机器接过来的)。接力出去的任务被服务端硬拦启动,横幅上的
+// 「在本机继续」是唯一逃生门——走确认框,因为对端那份不会消失,两边并跑会分叉。
+export function HandoffBanner({
+  taskId,
+  handoff,
+  notify,
+  onTaskUpdate,
+}: {
+  taskId: string;
+  handoff: TaskHandoff;
+  notify: (message: string) => void;
+  onTaskUpdate: (task: Task) => void;
+}) {
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
   const out = handoff.direction === "out";
-  const link = out && handoff.peerUrl
+  const link = out && handoff.peerUrl && !handoff.pending
     ? `${handoff.peerUrl.replace(/\/+$/, "")}/tasks/${encodeURIComponent(handoff.peerTaskId)}`
     : null;
   const peer = handoff.peerName ? `「${handoff.peerName}」` : "另一台机器";
+  const clear = async () => {
+    setBusy(true);
+    try {
+      await api.clearHandoff(taskId);
+      onTaskUpdate(await api.task(taskId));
+      notify("已移除接力标记,任务恢复为本机可运行");
+      setConfirmOpen(false);
+    } catch (reason) {
+      notify(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setBusy(false);
+    }
+  };
   return (
-    <div className="task-handoff-banner">
-      <PaperPlaneTilt size={13} aria-hidden="true" />
+    <div className={`task-handoff-banner${handoff.pending ? " is-pending" : ""}`}>
+      {handoff.pending ? <Warning size={13} aria-hidden="true" /> : <PaperPlaneTilt size={13} aria-hidden="true" />}
       <span>
         {out
-          ? `${new Date(handoff.at).toLocaleString()} 已接力到${peer},本机这份只是历史存档。`
+          ? handoff.pending
+            ? `${new Date(handoff.at).toLocaleString()} 接力到${peer}后没收到确认,对端可能已收到这份任务。原样再接力一次会自动幂等收口;确认对端没收到,再移除标记在本机继续。`
+            : `${new Date(handoff.at).toLocaleString()} 已接力到${peer},本机这份只是历史存档。`
           : `${new Date(handoff.at).toLocaleString()} 从${peer}接力而来(会话文件 ${handoff.sessions} 份,代码${handoff.git === "bundle" ? "已随分支带来" : "未随任务携带"})。`}
       </span>
       {link && (
         <a href={link} target="_blank" rel="noreferrer">
           在对端打开<ArrowSquareOut size={12} aria-hidden="true" />
         </a>
+      )}
+      {out && (
+        <button
+          type="button"
+          className="task-handoff-clear"
+          disabled={busy}
+          onClick={() => setConfirmOpen(true)}
+        >
+          在本机继续…
+        </button>
+      )}
+      {confirmOpen && (
+        <ConfirmDialog
+          title="移除接力标记"
+          message={handoff.pending
+            ? "对端可能已经收到这份任务。移除标记后本机恢复可运行,但如果对端其实收到了,两台机器会各跑一份、改动会分叉。确定要在本机继续吗?"
+            : `任务已接力到${peer},对端那份不会消失。移除标记后本机恢复可运行,两边同时跑会分叉。确定要在本机继续吗?`}
+          confirmLabel="移除标记,在本机继续"
+          danger
+          busy={busy}
+          onConfirm={() => void clear()}
+          onClose={() => setConfirmOpen(false)}
+        />
       )}
     </div>
   );

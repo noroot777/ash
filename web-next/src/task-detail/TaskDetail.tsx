@@ -329,7 +329,8 @@ export function TaskDetail({
                 else setPostMergeDialogOpen(true);
               } : undefined}
               onDelete={() => setDeleteOpen(true)}
-              onHandoff={task.mode === "single" && !task.archived && task.handoff?.direction !== "out"
+              onHandoff={task.mode === "single" && !task.archived
+                && (task.handoff?.direction !== "out" || task.handoff.pending)
                 ? () => setHandoffOpen(true)
                 : undefined}
               indicatorForTask={indicatorForTask}
@@ -337,7 +338,9 @@ export function TaskDetail({
               inspectorToggle={inspectorMode === "drawer" && inspectorToggleTarget ? undefined : toggleButton}
               notify={notify}
             />
-            {task.handoff && <HandoffBanner handoff={task.handoff} />}
+            {task.handoff && (
+              <HandoffBanner taskId={task.id} handoff={task.handoff} notify={notify} onTaskUpdate={onTaskUpdate} />
+            )}
             {reviewOpen ? (
               <TaskReviewWorkspace
                 task={task}

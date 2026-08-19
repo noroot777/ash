@@ -1,6 +1,7 @@
 import { eq } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { isAcceptingTask } from "./acceptance-lock.js";
+import { handoffBlockReason } from "./handoff-guard.js";
 import { claimTurn, releaseTurn } from "./runs.js";
 import { schedules, tasks, groups } from "./db/schema.js";
 import { runTask } from "./orchestrator.js";
@@ -68,6 +69,8 @@ async function fire(taskId: string): Promise<boolean> {
   // Archived = frozen: a schedule never fires an archived task. We skip here
   // rather than disabling the schedule, so unarchiving restores it automatically.
   if (t.archived) return false;
+  // 接力出去的任务同理:跳过而不消费班次,用户移除接力标记后定时自动恢复。
+  if (handoffBlockReason(t.handoff)) return false;
   // Respect a paused group: a pause means "halt this group", so the scheduler
   // must not sneak a group member past it. The task fires on the next due tick
   // once the group is resumed.

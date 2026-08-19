@@ -39,6 +39,7 @@ import { db } from "./db/index.js";
 import { groups, sessions, tasks } from "./db/schema.js";
 import { profileDrift } from "./executors/index.js";
 import { freeReviewRetryBlocker, latestRun, reopenFailedFreeReview, roundOf } from "./free-review-round.js";
+import { handoffBlockReason } from "./handoff-guard.js";
 import { continueTask } from "./orchestrator.js";
 import { queueBlockers } from "./queues.js";
 import { claimTurn, releaseTurn } from "./runs.js";
@@ -93,6 +94,7 @@ export type RetryTurnTask = {
   question?: string | null;
   resumePrompt?: string | null;
   workflowMode?: string | null;
+  handoff?: string | null;
 };
 
 export type RetryTurnSession = {
@@ -143,6 +145,10 @@ export function latestSessionOf<T extends RetryTurnSession>(rows: T[]): T | null
 export function retryTurnRejection(facts: RetryTurnFacts): { error: string; detail?: Record<string, unknown> } | null {
   const { task, latest } = facts;
   if (task.archived) return { error: "任务已归档，先取消归档再重试", detail: { archived: true } };
+  {
+    const blocked = handoffBlockReason(task.handoff);
+    if (blocked) return { error: blocked, detail: { handoff: true } };
+  }
   // 只做单飞任务：duet 有自己的 gate 语义、团队调度台是常驻会话，两边的「上一回合」
   // 都不是这里这套 user/agent 交替的形状，硬套只会把它们的状态机搅乱。
   if (task.mode !== "single") return { error: "只有单飞任务支持重跑上一回合", detail: { mode: task.mode } };

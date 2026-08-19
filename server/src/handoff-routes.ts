@@ -5,16 +5,21 @@
 // 由源机的 harness 服务端来调,不给浏览器用——server→server 顺带绕开了 CORS。
 // V1 与 harness 其它端点一样没有鉴权,只在可信内网使用(终端 API 本身就是个 shell)。
 import { hostname } from "node:os";
+import { appendFile } from "node:fs/promises";
 import type { Hono } from "hono";
 import type { Context } from "hono";
+import { eq } from "drizzle-orm";
 import { db } from "./db/index.js";
-import { projects } from "./db/schema.js";
+import { projects, sessions, tasks } from "./db/schema.js";
 import { projectHealthLight } from "./git.js";
 import {
   exportHandoff, HandoffError, preflightHandoff, repoRefTips,
   type HandoffPingResponse,
 } from "./handoff.js";
 import { importHandoff } from "./handoff-import.js";
+import { publishTaskUpdated } from "./task-store.js";
+import { sessionTranscriptPath, TURN_SENTINEL } from "./transcript.js";
+import { now } from "./util.js";
 
 type ErrorStatus = 400 | 404 | 409 | 500 | 502;
 
@@ -102,5 +107,40 @@ export function mountHandoffRoutes(api: Hono): void {
     } catch (e) {
       return fail(c, e);
     }
+  });
+
+  // 移除接力标记:「在本机继续」的唯一逃生门(接力出去/接力未确认的任务被硬拦后走这里)。
+  // 只清本机标记,对端那份任务不动——两边并跑的风险由用户自担,所以前端必须走确认框,
+  // 时间线也留一条持久可见的系统说明。
+  api.delete("/tasks/:id/handoff", async (c) => {
+    const taskId = c.req.param("id");
+    const row = (await db
+      .select({ id: tasks.id, handoff: tasks.handoff })
+      .from(tasks)
+      .where(eq(tasks.id, taskId))).at(0);
+    if (!row) return c.json({ error: "任务不存在" }, 404);
+    let marker: { direction?: string } | null = null;
+    if (row.handoff) {
+      try { marker = JSON.parse(row.handoff) as { direction?: string }; } catch { marker = null; }
+    }
+    if (marker?.direction !== "out") {
+      return c.json({ error: "任务没有「接力出去」的标记;接力进来的任务本来就在本机跑,不用移除" }, 409);
+    }
+    await db.update(tasks).set({ handoff: null, updatedAt: now() }).where(eq(tasks.id, taskId));
+    const latest = (await db
+      .select({ id: sessions.id, agentType: sessions.agentType })
+      .from(sessions)
+      .where(eq(sessions.taskId, taskId))
+      .orderBy(sessions.startedAt)).at(-1);
+    if (latest) {
+      const line = {
+        t: "system" as const, agent: latest.agentType, by: "system" as const, at: now(),
+        text: "🔁 用户移除了接力标记,任务恢复为本机可运行(对端那份仍存在,注意别两边同时跑)。",
+      };
+      await appendFile(sessionTranscriptPath(taskId, latest.id), `\n${TURN_SENTINEL}${JSON.stringify(line)}\n`)
+        .catch(() => { /* 从未跑过就没有产物目录,标记已清,不阻塞 */ });
+    }
+    await publishTaskUpdated(taskId);
+    return c.json({ cleared: true });
   });
 }

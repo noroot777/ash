@@ -69,6 +69,12 @@ export interface HandoffTarget {
 // 本地这份只是历史），导入侧 direction:"in"（从别的机器接过来的）。刷新后横幅靠它。
 export interface TaskHandoff {
   direction: "out" | "in";
+  // out 专用:true = 请求已发出但没收到对端确认(应答丢失/源机中途退出)。pending 态
+  // 同样硬拦本机启动;原样重试接力会按 transferId 幂等收口,确认没送到也可手动移除标记。
+  pending?: boolean;
+  // 这一次接力的身份证(源机生成并持久化,导入侧存进 in 标记):重试时对端据此把
+  // 「已有同 id 任务」识别成同一次接力。老版本导出的标记没有这个字段。
+  transferId?: string | null;
   // out: 对端 harness 根地址（横幅可点过去）；in: 源机自述不了地址,为 null。
   peerUrl: string | null;
   // out: 目标配置里的名字；in: 源机主机名。

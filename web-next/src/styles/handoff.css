@@ -48,6 +48,28 @@
 }
 .task-handoff-banner > svg { flex: none; color: var(--accent); }
 .task-handoff-banner a { display: inline-flex; flex: none; align-items: center; gap: 3px; color: var(--accent); }
+.task-handoff-banner span { flex: 1 1 auto; min-width: 0; }
+
+/* 接力未确认(应答丢失):琥珀色警示,提醒用户先重试收口或确认后移除标记。 */
+.task-handoff-banner.is-pending {
+  border-color: color-mix(in lch, var(--amber) 45%, var(--line));
+  background: color-mix(in lch, var(--amber) 9%, var(--panel));
+}
+.task-handoff-banner.is-pending > svg { color: var(--amber); }
+
+/* 「在本机继续」逃生门:走确认框,不做成醒目主按钮。 */
+.task-handoff-clear {
+  flex: none;
+  border: 1px solid var(--line2);
+  border-radius: 7px;
+  background: var(--canvas);
+  padding: 3px 9px;
+  color: var(--ink);
+  font-size: 11px;
+  cursor: pointer;
+}
+.task-handoff-clear:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.task-handoff-clear:disabled { cursor: not-allowed; opacity: 0.55; }
 
 /* 设置页的接力目标编辑行:名字窄、地址宽、删除按钮贴右。 */
 .handoff-target-row { gap: 7px; }

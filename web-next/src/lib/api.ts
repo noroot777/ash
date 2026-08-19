@@ -232,6 +232,9 @@ export const api = {
     body: { targetUrl: string; targetProjectId: string; targetName?: string; autoResume?: boolean },
   ): Promise<HandoffExportResult> =>
     request(`/tasks/${id(taskId)}/handoff`, json("POST", body)),
+  // 移除接力标记(「在本机继续」的逃生门):只清本机标记,对端那份任务不动。
+  clearHandoff: (taskId: string): Promise<{ cleared: true }> =>
+    request(`/tasks/${id(taskId)}/handoff`, { method: "DELETE" }),
 
   taskWorkspace: (taskId: string): Promise<TaskWorkspaceProbe> =>
     request(`/tasks/${id(taskId)}/workspace`),

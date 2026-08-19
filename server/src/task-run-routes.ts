@@ -36,6 +36,7 @@ import { RUNS_DIR } from "./paths.js";
 import { enqueueMessage, publishPendingMessages } from "./pending-messages.js";
 import { isOvertaken, queueBlockers, repackQueue, tailOrder } from "./queues.js";
 import { claimTurn, confirmDone, releaseTurn, stopTask } from "./runs.js";
+import { handoffBlockReason } from "./handoff-guard.js";
 import { advanceQueue } from "./scheduler.js";
 import { setTaskStatus } from "./status.js";
 import { nativeCliCommand } from "./skills.js";
@@ -86,6 +87,12 @@ api.post("/tasks/:id/run", async (c) => {
   const r = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!r) return c.json({ error: "not found" }, 404);
   if (r.archived) return c.json({ error: "任务已归档，先取消归档再运行", archived: true }, 409);
+  // 接力出去的任务是历史存档,本机启动就是双机并跑(审查实测:横幅说着存档,点「运行」
+  // 真的新建了 session)。硬拦在服务端,前端隐藏按钮只是补充。
+  {
+    const blocked = handoffBlockReason(r.handoff);
+    if (blocked) return c.json({ error: blocked, handoff: true }, 409);
+  }
   // 单条手动 Run：普通任务允许 backlog / canceled / failed / paused。team 的
   // idle 也可运行:它不是终态,只是常驻调度台待命,点击会接回同一 CLI 会话。
   const runnable =
@@ -142,6 +149,10 @@ api.post("/tasks/:id/fire", async (c) => {
   const r = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!r) return c.json({ error: "not found" }, 404);
   if (r.archived) return c.json({ error: "任务已归档，先取消归档再触发", archived: true }, 409);
+  {
+    const blocked = handoffBlockReason(r.handoff);
+    if (blocked) return c.json({ error: blocked, handoff: true }, 409);
+  }
   if (r.status === "running" || r.status === "queued")
     return c.json({ error: "任务正在进行，等它结束再触发新一轮", status: r.status }, 409);
   if (r.status === "awaiting_review")
@@ -332,6 +343,12 @@ api.post("/tasks/:id/answer", async (c) => {
   // 归档后再答复就成了「已冻结的任务还在动」(审查实测:archived=true 却停在
   // stage=verifying)。先取消归档再答。
   if (r.archived) return c.json({ error: "任务已归档，先取消归档再答复", archived: true }, 409);
+  // 接力出去的任务连同它挂着的提问一起属于对端了 —— 拦在清问题的 CAS 之前,
+  // 否则答复会把问题清掉再启动本机会话,双机并跑还外加把问题弄丢。
+  {
+    const blocked = handoffBlockReason(r.handoff);
+    if (blocked) return c.json({ error: blocked, handoff: true }, 409);
+  }
   if (!r.question) return c.json({ error: "该任务没有待答复的问题", status: r.status }, 409);
   if (r.mode !== "team" && (r.status === "running" || r.status === "queued")) {
     return c.json({ error: "提问回合还没结束,等任务落 paused 再答复", status: r.status }, 409);
@@ -454,6 +471,10 @@ api.post("/tasks/:id/reply", async (c) => {
   const r = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!r) return c.json({ error: "not found" }, 404);
   if (r.archived) return c.json({ error: "任务已归档，先取消归档再回复", archived: true }, 409);
+  {
+    const blocked = handoffBlockReason(r.handoff);
+    if (blocked) return c.json({ error: blocked, handoff: true }, 409);
+  }
   const isTeam = r.mode === "team";
   if (!isTeam && r.mode !== "single") return c.json({ error: "仅单任务支持回复" }, 409);
   // 定时发送 / 排队追问:都只是"现在不发",落库交给 pending-messages 投递。
@@ -557,6 +578,10 @@ api.post("/tasks/:id/retry", async (c) => {
   const r = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!r) return c.json({ error: "not found" }, 404);
   if (r.archived) return c.json({ error: "任务已归档，先取消归档再重试", archived: true }, 409);
+  {
+    const blocked = handoffBlockReason(r.handoff);
+    if (blocked) return c.json({ error: blocked, handoff: true }, 409);
+  }
   if (r.status !== "failed") return c.json({ error: "只有失败的任务可以重试", status: r.status }, 409);
   // 同 /run:原子占位,并发重试只有一个能 202;duet 走同一把锁。
   if (!claimTurn(taskId, r.mode === "duet" ? "duet" : "single")) {
@@ -586,6 +611,10 @@ api.post("/tasks/:id/requeue", async (c) => {
   const r = (await db.select().from(tasks).where(eq(tasks.id, taskId))).at(0);
   if (!r) return c.json({ error: "not found" }, 404);
   if (r.archived) return c.json({ error: "任务已归档，先取消归档再重新排队", archived: true }, 409);
+  {
+    const blocked = handoffBlockReason(r.handoff);
+    if (blocked) return c.json({ error: blocked, handoff: true }, 409);
+  }
   if (r.status === "running" || r.status === "queued")
     return c.json({ error: "任务正在进行，不需要重新排队", status: r.status }, 409);
   if (r.status !== "failed" && r.status !== "canceled")

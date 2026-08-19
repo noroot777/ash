@@ -20,7 +20,7 @@ import { promisify } from "node:util";
 import { hostname, homedir } from "node:os";
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { readdir, readFile, appendFile } from "node:fs/promises";
-import { isAbsolute, join, relative } from "node:path";
+import { isAbsolute, join, relative, sep } from "node:path";
 import { eq } from "drizzle-orm";
 import { db } from "./db/index.js";
 import { projects, sessions, tasks } from "./db/schema.js";
@@ -32,7 +32,7 @@ import { DATA_DIR, RUNS_DIR } from "./paths.js";
 import { codexHome, findRollout } from "./executors/codex-rollout.js";
 import { sessionTranscriptPath, TURN_SENTINEL } from "./transcript.js";
 import { publishTaskUpdated } from "./task-store.js";
-import { now } from "./util.js";
+import { id, now } from "./util.js";
 import type {
   HandoffExportResult, HandoffPingProject, HandoffPreflightResult, TaskHandoff,
 } from "@harness/shared";
@@ -43,7 +43,9 @@ export type { HandoffExportResult, HandoffPingProject, HandoffPreflightResult } 
 const exec = promisify(execFile);
 
 export class HandoffError extends Error {
-  constructor(message: string, public status: number = 400) {
+  // network=true:请求没送达或应答没读全 —— 对端**可能已经**处理成功,调用方不能
+  // 当「确认失败」处理(exportHandoff 靠它决定保留 pending 标记还是回滚)。
+  constructor(message: string, public status: number = 400, public network = false) {
     super(message);
   }
 }
@@ -51,10 +53,11 @@ export class HandoffError extends Error {
 // ── 两端共用的传输协议 ───────────────────────────────────────────────────────
 
 export interface HandoffFilePayload {
-  // claude-session 的 rel 是 `<cliSessionId>.jsonl`（不含目录,目的目录由对端按它
-  // 自己的 cwd 重新算 slug）;codex-rollout 是相对 <codexHome>/sessions 的路径
-  // （日期目录结构原样保留,codex 按后缀扫描,放哪天的目录都找得到）;run-artifact
-  // 是相对 data/runs/<taskId>/ 的路径。
+  // rel 一律用 `/` 作分隔符(源机是 Windows 也一样,导出侧负责归一;导入侧按段重新
+  // join 成本平台路径)。claude-session 的 rel 是 `<cliSessionId>.jsonl`（不含目录,
+  // 目的目录由对端按它自己的 cwd 重新算 slug）;codex-rollout 是相对
+  // <codexHome>/sessions 的路径（日期目录结构原样保留,codex 按后缀扫描,放哪天的
+  // 目录都找得到）;run-artifact 是相对 data/runs/<taskId>/ 的路径。
   kind: "claude-session" | "codex-rollout" | "run-artifact";
   rel: string;
   dataBase64: string;
@@ -97,6 +100,9 @@ export interface HandoffManifest {
   version: 1;
   sourceHost: string;
   targetProjectId: string;
+  // 这一次接力的身份证:源机在发送前生成并持久化。应答丢失后重试会带**同一个**
+  // transferId,导入侧据此把「已有同 id 任务」识别成同一次接力并幂等返回成功。
+  transferId: string;
   // 导入完成后要不要立刻在对端续跑（会真的拉起一个 agent）。
   autoResume: boolean;
   // 源机的工作目录（会话行里的 cwd 基准）,对端用它写「路径从 X 迁到 Y」的前言。
@@ -208,11 +214,16 @@ async function fetchPeer<T>(url: string, init?: RequestInit & { timeoutMs?: numb
     res = await fetch(url, { ...init, signal: AbortSignal.timeout(init?.timeoutMs ?? 15_000) });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    throw new HandoffError(`连不上对端 harness（${url}）：${msg}`, 502);
+    throw new HandoffError(`连不上对端 harness（${url}）：${msg}`, 502, true);
   }
   const body = (await res.json().catch(() => null)) as { error?: string } | null;
   if (!res.ok) {
     throw new HandoffError(`对端返回 ${res.status}：${body?.error ?? "未知错误"}`, 502);
+  }
+  if (body === null) {
+    // 2xx 但应答体读不出来:对端多半已经处理成功,只是应答在路上断了——按网络类失败
+    // 处理(network=true),让调用方按「可能已送达」收口而不是当确认失败。
+    throw new HandoffError(`对端应答不完整（${url}）:连接中断或应答不是 JSON`, 502, true);
   }
   return body as T;
 }
@@ -283,7 +294,9 @@ async function collectSessionFiles(
     } else if (s.agentType === "codex") {
       kind = "codex-rollout";
       abs = await findRollout(s.cliSessionId);
-      if (abs) rel = relative(join(codexHome(), "sessions"), abs);
+      // 协议里 rel 一律 `/` 分隔:Windows 上 relative 产出反斜杠,POSIX 导入侧会把
+      // 整串当成一个文件名落错地方(codex 按目录深度扫描,从此找不到这份会话)。
+      if (abs) rel = relative(join(codexHome(), "sessions"), abs).split(sep).join("/");
     } else {
       notes.push(`会话 ${s.id}（${s.agentType}）:该执行器的会话文件迁移暂不支持,对端只能全新起跑`);
       continue;
@@ -319,7 +332,7 @@ async function collectRunArtifacts(taskId: string, notes: string[]): Promise<Han
         notes.push(`会话产物 ${entry.name} ${Math.round(size / MB)}MB 超限,跳过`);
         continue;
       }
-      out.push({ kind: "run-artifact", rel: relative(root, abs), dataBase64: (await readFile(abs)).toString("base64") });
+      out.push({ kind: "run-artifact", rel: relative(root, abs).split(sep).join("/"), dataBase64: (await readFile(abs)).toString("base64") });
     }
   };
   await walk(root);
@@ -457,9 +470,19 @@ export async function exportHandoff(
   const loaded = await loadSingleTask(taskId);
   const project = loaded.project;
   let task = loaded.task;
-  if (task.handoff && JSON.parse(task.handoff).direction === "out") {
+  // 上一次接力留下的标记:已确认送达(非 pending)= 别重复接力;pending = 上次应答
+  // 丢了,这次是重试收口——沿用同一个 transferId,对端据此把「已有同 id 任务」识别成
+  // 同一次接力,幂等返回成功而不是 409。
+  const prevHandoffRaw = task.handoff;
+  let prevMarker: TaskHandoff | null = null;
+  if (prevHandoffRaw) {
+    try { prevMarker = JSON.parse(prevHandoffRaw) as TaskHandoff; } catch { prevMarker = null; }
+  }
+  if (prevMarker?.direction === "out" && !prevMarker.pending) {
     throw new HandoffError("任务已经接力出去了,别重复接力（对端已有一份同 id 任务）", 409);
   }
+  const transferId =
+    (prevMarker?.direction === "out" && prevMarker.pending && prevMarker.transferId) || id();
   // 先探测对端与目标项目,确认可行再停任务——反过来会白停一个正在跑的任务。
   const ping = await fetchPeer<HandoffPingResponse>(`${targetUrl}/api/handoff/ping`);
   if (!ping?.ok || ping.service !== "harness") throw new HandoffError("对端不是 harness", 502);
@@ -494,6 +517,7 @@ export async function exportHandoff(
       version: 1,
       sourceHost: hostname(),
       targetProjectId: targetProject.id,
+      transferId,
       autoResume: opts.autoResume ?? true,
       sourceWorkspace,
       task: {
@@ -526,21 +550,57 @@ export async function exportHandoff(
       files: [...sessionFiles, ...artifacts],
     };
 
-    const result = await fetchPeer<{ ok: boolean; taskId: string; notes?: string[]; error?: string }>(
-      `${targetUrl}/api/handoff/import`,
-      {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(manifest),
-        timeoutMs: 600_000,
-      },
-    );
-    if (!result?.ok) throw new HandoffError(`对端导入失败：${result?.error ?? "未知错误"}`, 502);
+    // POST 出去的那一刻起对端就可能已经收下这份任务——应答丢了/源进程死在半路都不能
+    // 让本机毫无痕迹(否则重试撞对端 409、本机任务还能再跑,正是双机分叉)。所以**先**
+    // 落一个「接力未确认」的 pending 标记(它同样触发 handoff-guard 的启动硬拦),成功
+    // 后改写成确认态;只有对端**明确应答失败**(没收下)才回滚到接力前的样子。
+    const pendingMarker: TaskHandoff = {
+      direction: "out",
+      pending: true,
+      transferId,
+      peerUrl: targetUrl,
+      peerName: opts.targetName ?? ping.host,
+      peerTaskId: taskId,
+      at: now(),
+      sessions: found.size,
+      git: gitState ? "bundle" : "none",
+    };
+    await db.update(tasks)
+      .set({ handoff: JSON.stringify(pendingMarker), updatedAt: now() })
+      .where(eq(tasks.id, taskId));
+    await publishTaskUpdated(taskId);
+
+    let result: { ok: boolean; taskId: string; notes?: string[]; error?: string };
+    try {
+      result = await fetchPeer<{ ok: boolean; taskId: string; notes?: string[]; error?: string }>(
+        `${targetUrl}/api/handoff/import`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(manifest),
+          timeoutMs: 600_000,
+        },
+      );
+      if (!result.ok) throw new HandoffError(`对端导入失败：${result.error ?? "未知错误"}`, 502);
+    } catch (e) {
+      if (e instanceof HandoffError && e.network) {
+        // 送没送到说不清:保留 pending 标记,把收口方法一并告诉用户。
+        e.message += "。对端可能已经收到这份任务:本机保留「接力未确认」标记,原样重试会自动幂等收口;确认对端没收到的话,在任务横幅上移除接力标记即可在本机继续。";
+        throw e;
+      }
+      // 对端明确说没收下(4xx/5xx 应答、或 ok:false):恢复接力前的标记,本机照常可跑。
+      await db.update(tasks)
+        .set({ handoff: prevHandoffRaw, updatedAt: now() })
+        .where(eq(tasks.id, taskId));
+      await publishTaskUpdated(taskId);
+      throw e;
+    }
     notes.push(...(result.notes ?? []));
 
-    // 本地落一个持久可见的接力标记（横幅靠它,刷新后仍在）+ 时间线一条系统说明。
+    // 确认送达:把 pending 标记改写成持久可见的「已接力」标记 + 时间线一条系统说明。
     const marker: TaskHandoff = {
       direction: "out",
+      transferId,
       peerUrl: targetUrl,
       peerName: opts.targetName ?? ping.host,
       peerTaskId: result.taskId,

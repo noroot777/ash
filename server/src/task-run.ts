@@ -29,6 +29,7 @@ import { withSkillInvocation } from "./skills.js";
 import { initialTaskObjective } from "./invited-task-brief.js";
 import { withGlobalBrowserPolicy } from "./browser-verification-policy.js";
 import { isAcceptingTask } from "./acceptance-lock.js";
+import { handoffBlockReason } from "./handoff-guard.js";
 import { reportTurnFailure } from "./turn-failure.js";
 import { AUTONOMY, COMPLETION_PROTOCOL } from "./run-prompts.js";
 import { announceBaseFallback, baseFallbackNote } from "./base-fallback-notice.js";
@@ -42,7 +43,11 @@ import { announceBaseFallback, baseFallbackNote } from "./base-fallback-notice.j
 export async function runTask(taskId: string, opts: { turnHeld?: boolean } = {}): Promise<void> {
   // 团队任务(§Team)走常驻调度台,不占单飞锁 —— 它的「一次运行」是整段常驻,
   // 不是一个回合。放在最前面,于是 /tasks/:id/run、retry、queue 推进都自动生效。
-  const mode = (await db.select({ mode: tasks.mode }).from(tasks).where(eq(tasks.id, taskId))).at(0)?.mode;
+  const head = (await db
+    .select({ mode: tasks.mode, handoff: tasks.handoff })
+    .from(tasks)
+    .where(eq(tasks.id, taskId))).at(0);
+  const mode = head?.mode;
   // 验收互斥排在 team 分支**之前**:调度台同样会往工作目录里写(共享执行者跑在同一个
   // cwd),验收正在合并/删 worktree 时把它拉起来,跟单飞撞上是同一类破坏。早先这道检查
   // 排在 team 分支之后,team 完全绕过(审查实测:验收锁下仍真的 startTeam)。
@@ -53,6 +58,12 @@ export async function runTask(taskId: string, opts: { turnHeld?: boolean } = {})
   if (mode === "team") {
     if (opts.turnHeld) releaseTurn(taskId);
     return startTeam(taskId);
+  }
+  // 接力出去的任务在本机只是历史存档 —— 路由层各有 409,但队列推进/定时班次/重试
+  // 等程序化路径全都汇到这里,必须在 spawn 之前收口,否则就是双机并跑。
+  if (handoffBlockReason(head?.handoff)) {
+    if (opts.turnHeld) releaseTurn(taskId);
+    return;
   }
   // turnHeld:入口已原子占位(见 continueTask 同名选项),接管而不是再抢。
   if (opts.turnHeld) reclaimTurn(taskId, "single");
