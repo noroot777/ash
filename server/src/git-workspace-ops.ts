@@ -1,4 +1,6 @@
 import { execFile } from "node:child_process";
+import { access, constants } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
 import { promisify } from "node:util";
 import { gitError } from "./git.js";
 import { literalPathspec } from "./git-status.js";
@@ -7,7 +9,7 @@ import { withRepoLock } from "./repo-lock.js";
 
 // ── 工作区 SCM 的写侧：暂存 / 取消暂存 / 丢弃 / 提交 ─────────────────────────
 //
-// 三条贯穿全文件的决定：
+// 四条贯穿全文件的决定：
 //
 // ① **只按显式路径清单动手，不支持「全部」通配。** 面板上看到的状态和点下按钮之间
 //    隔着网络往返和一个还在干活的 agent，中间新冒出来的文件不该被这次点击波及。
@@ -21,13 +23,49 @@ import { withRepoLock } from "./repo-lock.js";
 //    暂存/丢弃本身不写 refs，但让它们和验收排同一条队是有意的——验收合并到一半时
 //    读到的工作区状态本来就不该拿来操作。白名单闸的那次 status 读也必须在锁内。
 //
-// ③ **不做 push / pull / fetch / 切分支。** 前两个是外发到远程，后两个会把正在干活的
+// ③ **分批是没得选的，所以「跑到一半失败」必须如实报账。** 路径多到一定程度会顶爆
+//    命令行长度上限（Windows 约 32K），只能拆成几次 git 调用；git 不提供跨调用的
+//    事务，前一批成功、后一批失败时前面那些是**真的已经生效了**——`git clean` 删掉
+//    的文件更是不进 reflog 也不进 stash，找不回来。这时候只回一句「失败」，用户会
+//    合理地以为整次操作没做。所以 `runAll` 在这种情况下抛 `ScmPartialError`，带上
+//    「哪些已生效、哪些没动」，路由再连同刷新后的状态一起回给面板。
+//
+// ④ **不做 push / pull / fetch / 切分支。** 前两个是外发到远程，后两个会把正在干活的
 //    agent 的脚下抽掉（harness 的整个 worktree 模型建立在「一个任务一条分支」上）。
 //    面板的职责边界是「看清楚并收尾本地改动」，越过这条线的动作应该由用户显式发起。
 
 const exec = promisify(execFile);
 
 export { ScmOperationError };
+
+/**
+ * 批量操作跑到一半失败。
+ *
+ * `done` 里的路径**已经生效了**，不是「本来要做的」——消息本身就得把这件事说清楚，
+ * 因为它最终会原样出现在用户眼前的那条提示里。状态用 409：请求本身没错，是这次
+ * 操作没能整个做完，客户端拿到清单后该做的是重看一眼状态、决定要不要重试剩下的。
+ */
+export class ScmPartialError extends ScmOperationError {
+  constructor(
+    action: string,
+    readonly done: readonly string[],
+    readonly pending: readonly string[],
+    cause: string,
+  ) {
+    super(
+      `${action}只做成了一部分：${done.length} 个已经生效、${pending.length} 个没动。`
+      + `失败原因：${oneLine(cause)}`,
+      409,
+    );
+    this.name = "ScmPartialError";
+  }
+}
+
+/** git 的报错常有三四行（error/fatal 各一行），这条消息要进一句提示语，压成一行。 */
+function oneLine(text: string): string {
+  const joined = text.split("\n").map((line) => line.trim()).filter(Boolean).join("；");
+  return joined.length > 300 ? `${joined.slice(0, 300)}…` : joined;
+}
 
 export interface ScmWriteResult {
   ok: true;
@@ -45,19 +83,81 @@ async function git(root: string, args: string[]): Promise<string> {
 }
 
 /** pathspec 分批：一次塞几千个路径会顶爆命令行长度上限（Windows 约 32K）。 */
-async function inBatches(paths: string[], size: number, run: (batch: string[]) => Promise<unknown>): Promise<void> {
-  for (let i = 0; i < paths.length; i += size) await run(paths.slice(i, i + size));
+const BATCH = 200;
+
+interface ScmBatchGroup {
+  paths: readonly string[];
+  run: (batch: string[]) => Promise<unknown>;
 }
 
-const BATCH = 200;
+/**
+ * 按顺序跑完若干组路径，返回处理总数。
+ *
+ * 一批都没成功就原样把错误抛出去（那才是「整次操作没生效」，多包一层只会让消息更绕）；
+ * 已经落地过至少一批才升级成 `ScmPartialError`。分组之间也接着算——丢弃是先 restore
+ * 已跟踪、再 clean 未跟踪，clean 中途炸了的时候，前面那些 restore 同样已经生效。
+ */
+async function runAll(action: string, groups: readonly ScmBatchGroup[]): Promise<number> {
+  const all = groups.flatMap((group) => [...group.paths]);
+  let done = 0;
+  try {
+    for (const group of groups) {
+      for (let i = 0; i < group.paths.length; i += BATCH) {
+        const batch = group.paths.slice(i, i + BATCH);
+        await group.run([...batch]);
+        done += batch.length;
+      }
+    }
+  } catch (error) {
+    if (!done) throw error;
+    throw new ScmPartialError(action, all.slice(0, done), all.slice(done), (error as Error).message);
+  }
+  return all.length;
+}
+
+/**
+ * `git clean` 之前的可删性预检：**要么全删，要么一个都不删**。
+ *
+ * 未跟踪文件的删除是这个面板里唯一找不回来的操作，而它偏偏又必须分批。审查里复现过
+ * 的场景是最后一批落在不可写目录上：前 200 个已经永久没了，用户只收到一句报错。
+ * 提前把整份清单的父目录问一遍，就能在**动手之前**把这类失败变成「全不动 + 说清楚
+ * 是哪几个」。
+ *
+ * **这是尽力预检，不是保证**：Windows 的 ACL 不体现在 `access` 上，文件被别的进程占用
+ * 也测不出来，两次调用之间 agent 还可能把目录改掉。真漏过去了由 `ScmPartialError`
+ * 兜底如实报账——两层各管一半，缺一个都不够。反过来说预检也不能省：一批之内 `git clean`
+ * 是删到哪算哪的，`runAll` 只数得清「跑完几批」，单批内删了一半这件事它看不见。
+ */
+async function assertRemovable(root: string, paths: readonly string[]): Promise<void> {
+  const writable = new Map<string, boolean>();
+  const blocked: string[] = [];
+  for (const path of paths) {
+    const dir = dirname(resolve(root, path));
+    let ok = writable.get(dir);
+    if (ok === undefined) {
+      ok = await access(dir, constants.W_OK).then(() => true, () => false);
+      writable.set(dir, ok);
+    }
+    if (!ok) blocked.push(path);
+  }
+  if (blocked.length) {
+    throw new ScmOperationError(
+      `这些文件所在的目录不可写，为免删到一半停下，这次一个都没删：${blocked.join("、")}`,
+      409,
+    );
+  }
+}
 
 export async function stagePaths(root: string, repoPath: string | null, paths: readonly string[]): Promise<ScmWriteResult> {
   const targets = assertPathShape(paths);
   return withRepoLock(repoPath, async () => {
     await gateScmPaths(root, { paths: targets });
     // `add -A` 而不是 `add`：只有前者会把「文件被删了」也记进索引，否则删除永远暂存不上。
-    await inBatches(targets, BATCH, (batch) => git(root, ["add", "-A", "--", ...batch.map(literalPathspec)]));
-    return { ok: true as const, affected: targets.length };
+    const affected = await runAll("暂存", [{
+      paths: targets,
+      run: (batch) => git(root, ["add", "-A", "--", ...batch.map(literalPathspec)]),
+    }]);
+    return { ok: true as const, affected };
   });
 }
 
@@ -73,18 +173,21 @@ export async function unstagePaths(root: string, repoPath: string | null, paths:
   const targets = assertPathShape(paths);
   return withRepoLock(repoPath, async () => {
     await gateScmPaths(root, { paths: targets });
-    await inBatches(targets, BATCH, async (batch) => {
-      const pathspecs = batch.map(literalPathspec);
-      try {
-        await git(root, ["restore", "--staged", "--", ...pathspecs]);
-      } catch (error) {
-        // 还没有任何提交的仓库没有 HEAD 可以 restore 回去，此时「取消暂存」就是把
-        // 条目从索引里摘掉（文件留在工作区，于是它回到未跟踪）。
-        if (!/HEAD|initial commit|unknown revision/i.test((error as Error).message)) throw error;
-        await git(root, ["rm", "--cached", "-r", "--", ...pathspecs]);
-      }
-    });
-    return { ok: true as const, affected: targets.length };
+    const affected = await runAll("取消暂存", [{
+      paths: targets,
+      run: async (batch) => {
+        const pathspecs = batch.map(literalPathspec);
+        try {
+          await git(root, ["restore", "--staged", "--", ...pathspecs]);
+        } catch (error) {
+          // 还没有任何提交的仓库没有 HEAD 可以 restore 回去，此时「取消暂存」就是把
+          // 条目从索引里摘掉（文件留在工作区，于是它回到未跟踪）。
+          if (!/HEAD|initial commit|unknown revision/i.test((error as Error).message)) throw error;
+          await git(root, ["rm", "--cached", "-r", "--", ...pathspecs]);
+        }
+      },
+    }]);
+    return { ok: true as const, affected };
   });
 }
 
@@ -96,6 +199,7 @@ export async function unstagePaths(root: string, repoPath: string | null, paths:
  *     「改回原样」和「把文件删掉」是两种后果，不该共用一个按钮的语义。
  *   • 冲突中的文件一律拒绝：`git restore` 对未合并条目的行为取决于给没给 --ours/
  *     --theirs，猜错就是把用户已经解了一半的冲突抹掉。让他先解决冲突。
+ *   • 动手之前先过 `assertRemovable`，把「删到一半卡住」尽量变成「一个都没删」。
  */
 export async function discardPaths(
   root: string,
@@ -109,18 +213,15 @@ export async function discardPaths(
   return withRepoLock(repoPath, async () => {
     // 一次读，两道闸：路径得在列表里，且不许是冲突中的文件。锁内读到的才是即将被操作的那份。
     await gateScmPaths(root, { paths: [...tracked, ...untracked], rejectConflicted: true });
-    if (tracked.length) {
+    if (untracked.length) await assertRemovable(root, untracked);
+    const affected = await runAll("丢弃", [
       // `--worktree` 而不是连 `--staged` 一起：面板上「丢弃」丢的是未暂存那一份，
       // 已经暂存的内容要先取消暂存再丢——和 VSCode 一致，也让两步都可以停在中间。
-      await inBatches(tracked, BATCH, (batch) =>
-        git(root, ["restore", "--worktree", "--", ...batch.map(literalPathspec)]));
-    }
-    if (untracked.length) {
+      { paths: tracked, run: (batch) => git(root, ["restore", "--worktree", "--", ...batch.map(literalPathspec)]) },
       // `-f` 是必须的（clean 默认拒绝动手），`-d` 不给：只删点名的文件，不递归清目录。
-      await inBatches(untracked, BATCH, (batch) =>
-        git(root, ["clean", "-f", "--", ...batch.map(literalPathspec)]));
-    }
-    return { ok: true as const, affected: tracked.length + untracked.length };
+      { paths: untracked, run: (batch) => git(root, ["clean", "-f", "--", ...batch.map(literalPathspec)]) },
+    ]);
+    return { ok: true as const, affected };
   });
 }
 
@@ -148,7 +249,10 @@ export async function commitWorkspace(
   return withRepoLock(repoPath, async () => {
     if (toStage.length) {
       await gateScmPaths(root, { paths: toStage });
-      await inBatches(toStage, BATCH, (batch) => git(root, ["add", "-A", "--", ...batch.map(literalPathspec)]));
+      await runAll("提交前的暂存", [{
+        paths: toStage,
+        run: (batch) => git(root, ["add", "-A", "--", ...batch.map(literalPathspec)]),
+      }]);
     }
     // 消息走 stdin（`-F -`）而不是 argv：提交信息里的换行、引号、以及 Windows 上的
     // 命令行长度上限都不必再操心，而且它不会出现在进程列表里。

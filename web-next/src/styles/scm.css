@@ -22,6 +22,11 @@
 .scm-banner { display:flex; align-items:flex-start; gap:5px; margin:8px 9px 0; border:1px solid var(--line2); border-radius:7px; background:var(--overlay); padding:6px 8px; color:var(--muted); font-size:10px; line-height:1.55; }
 .scm-banner > svg { flex:0 0 auto; margin-top:1px; }
 .scm-banner.is-warning { border-color:color-mix(in lch,var(--amber) 30%,var(--line)); background:color-mix(in lch,var(--amber) 8%,var(--panel)); }
+.scm-banner.is-danger { border-color:color-mix(in lch,var(--red) 32%,var(--line)); background:color-mix(in lch,var(--red) 8%,var(--panel)); color:var(--ink); }
+.scm-banner__body { display:flex; min-width:0; flex:1 1 auto; flex-direction:column; gap:3px; }
+.scm-banner__body code { overflow:hidden; color:var(--muted); font-size:9.5px; text-overflow:ellipsis; white-space:nowrap; }
+.scm-banner__dismiss { flex:0 0 auto; align-self:flex-start; border:1px solid var(--line2); border-radius:6px; background:var(--panel); padding:1px 6px; color:var(--muted); font-size:9.5px; }
+.scm-banner__dismiss:hover { color:var(--ink); }
 
 .scm-commit { display:flex; flex:0 0 auto; flex-direction:column; gap:6px; padding:9px; }
 .scm-commit textarea { width:100%; min-height:46px; resize:vertical; border:1px solid var(--line2); border-radius:7px; background:var(--panel); padding:6px 8px; color:var(--ink); font-size:11px; line-height:1.5; }

@@ -7,19 +7,23 @@
 //     「暂存之后又改了什么」
 //   • 文件名里的 `*` `[` `]` 不能被当成 glob——丢弃是不可逆的，误伤没有找回的路
 //   • 目录 pathspec 必须被拒：`:(literal)` 只关 glob，关不掉目录递归
-//   • 合法文件名（前后带空格、POSIX 上带反斜杠）不能被路径闸改写掉
+//   • 合法文件名（前后带空格、POSIX 上带反斜杠和反斜杠开头）不能被路径闸改写或拒掉
 //   • 仓库外的路径不能被预览读出来
 //   • 空仓库（还没有任何提交）取消暂存要能走通，那条路上没有 HEAD 可以 restore
+//   • 分批操作跑到一半失败时，不许悄悄留下部分结果——删除整批拦下，索引如实报账
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { access, constants } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseStatusV2, readScmFileDiff, readScmStatus } from "../src/git-status.js";
+import { IS_WINDOWS } from "../src/platform.js";
 import { assertInsideRoot, assertPathShape, gateScmPaths, ScmOperationError } from "../src/scm-paths.js";
 import {
   commitWorkspace,
   discardPaths,
+  ScmPartialError,
   stagePaths,
   unstagePaths,
 } from "../src/git-workspace-ops.js";
@@ -217,13 +221,37 @@ const paths = (list: { path: string }[]) => list.map((item) => item.path).sort()
 }
 
 // ── 6. 路径校验：越界一律拒绝，合法文件名一律不许改写 ───────────────────────
-for (const bad of ["", "/etc/passwd", "\\\\server\\share", "../outside.txt", "sub/../../escape.txt", "C:/Windows/x", "dir/", "a//b", "."]) {
+for (const bad of ["", "/etc/passwd", "../outside.txt", "sub/../../escape.txt", "C:/Windows/x", "dir/", "a//b", "."]) {
   assert.throws(() => assertPathShape([bad]), ScmOperationError, `应拒绝非法路径：${JSON.stringify(bad)}`);
 }
 assert.throws(() => assertPathShape([]), ScmOperationError, "空清单应拒绝");
+// 反斜杠是**平台相关**的：Windows 上是分隔符（根路径、`..` 段都要按它拆），POSIX 上是
+// 文件名里的普通字符。同一批字符串因此在两个平台上是两种结论——一刀切成「都拒」，
+// POSIX 上那些文件就成了面板上看得见、却既不能预览也不能操作的死条目。
+for (const backslash of ["\\\\server\\share", "\\leading.txt", "sub\\..\\..\\escape.txt"]) {
+  if (IS_WINDOWS) {
+    assert.throws(() => assertPathShape([backslash]), ScmOperationError, `Windows 上应拒绝：${backslash}`);
+  } else {
+    assert.deepEqual(assertPathShape([backslash]), [backslash], `POSIX 上这是合法文件名：${backslash}`);
+  }
+}
 // 形状闸只判断不改写：前后空格和（POSIX 上的）反斜杠都是文件名的一部分，
 // 早先那版 trim + 替换分隔符，会把界面上看得见的文件变成一个不存在的路径。
 assert.deepEqual(assertPathShape([" spaced.txt ", "a\\b.txt"]), [" spaced.txt ", "a\\b.txt"]);
+
+// ── 6.5 POSIX：以反斜杠开头的文件名要能走完预览 → 暂存全程 ──────────────────
+if (!IS_WINDOWS) {
+  const repo = makeRepo("backslash");
+  write(repo, "\\leading.txt", "hi\n");
+  assert.deepEqual(paths((await readScmStatus(repo)).untracked), ["\\leading.txt"]);
+  // 预览这条路要过三道闸（形状 → 白名单 → realpath），任何一道把它当绝对路径都会断在这里。
+  await gateScmPaths(repo, { paths: ["\\leading.txt"] });
+  await assertInsideRoot(repo, "\\leading.txt");
+  const diff = await readScmFileDiff(repo, "\\leading.txt", "untracked");
+  assert.ok(diff.diff.includes("+hi"), "反斜杠开头的文件要能预览");
+  await stagePaths(repo, repo, ["\\leading.txt"]);
+  assert.deepEqual(paths((await readScmStatus(repo)).staged), ["\\leading.txt"]);
+}
 
 // ── 7. 白名单闸：目录递归、仓库外路径、合法怪名 ─────────────────────────────
 {
@@ -281,7 +309,57 @@ assert.deepEqual(assertPathShape([" spaced.txt ", "a\\b.txt"]), [" spaced.txt ",
   );
 }
 
-// ── 8. 截断标记 ─────────────────────────────────────────────────────────────
+// ── 9. 分批跑到一半失败：不许悄悄留下部分结果 ───────────────────────────────
+//
+// 路径超过 BATCH（200）就得拆成多次 git 调用，而 git 没有跨调用的事务。这两块钉住的
+// 是「失败之后用户看到的和实际发生的必须一致」：能提前拦的（删除）一个都不做，拦不住
+// 的（索引）如实报出哪些已经生效。
+//
+// 两块都只在 POSIX 上跑：Windows 的 ACL 不体现在 chmod/access 上，用同一套手法既造不出
+// 失败也验不了预检——那正是 `assertRemovable` 注释里说的「尽力预检」的边界。
+if (!IS_WINDOWS) {
+  // 9a. 未跟踪文件的删除：预检发现有一个删不掉，就一个都不删。
+  {
+    const repo = makeRepo("clean-guard");
+    write(repo, "ok.tmp", "a\n");
+    write(repo, "ro/blocked.tmp", "b\n");
+    chmodSync(join(repo, "ro"), 0o500);
+    await assert.rejects(
+      () => discardPaths(repo, repo, [], ["ok.tmp", "ro/blocked.tmp"]),
+      (error: unknown) => error instanceof ScmOperationError && /一个都没删/.test(error.message),
+      "有文件删不掉时必须在动手之前整批拒绝",
+    );
+    // 审查复现的原状是：前面的已经永久没了，用户只收到一句失败。现在它必须还在。
+    assert.ok(existsSync(join(repo, "ok.tmp")), "预检不通过时，能删的那些也一个都不许删");
+    chmodSync(join(repo, "ro"), 0o700);
+  }
+
+  // 9b. 索引操作拦不住半途失败，那就如实报账：done 里的路径是真的已经生效了。
+  {
+    const repo = makeRepo("partial-stage");
+    const good = Array.from({ length: 200 }, (_, i) => `f${i}.txt`);
+    for (const name of good) write(repo, name, `${name}\n`);
+    write(repo, "unreadable.txt", "secret\n");
+    chmodSync(join(repo, "unreadable.txt"), 0o000);
+    // root 能无视权限位，那样这个用例造不出失败——如实跳过，不假装通过。
+    const enforced = await access(join(repo, "unreadable.txt"), constants.R_OK).then(() => false, () => true);
+    if (!enforced) {
+      console.log("scm: 当前用户可无视权限位，跳过分批报账用例");
+    } else {
+      await assert.rejects(
+        () => stagePaths(repo, repo, [...good, "unreadable.txt"]),
+        (error: unknown) => error instanceof ScmPartialError
+          && error.done.length === 200 && error.pending.length === 1
+          && error.pending[0] === "unreadable.txt",
+        "第二批失败时必须报出前一批已经生效",
+      );
+      assert.equal((await readScmStatus(repo)).staged.length, 200, "报账里说已生效的，索引里就得真有");
+    }
+    chmodSync(join(repo, "unreadable.txt"), 0o600);
+  }
+}
+
+// ── 10. 截断标记 ────────────────────────────────────────────────────────────
 {
   const many = Array.from({ length: 2100 }, (_, i) => `? f${i}.txt`).join("\0");
   const parsed = parseStatusV2(`# branch.head main\0${many}\0`);

@@ -37,15 +37,21 @@ export class ScmOperationError extends Error {
 /**
  * 路径的形状闸。**只判断，不改写**——返回的就是传进来的那些字符串。
  *
- * 分隔符按平台取：Windows 上 `\` 是货真价实的分隔符，必须一起拆开查 `..`；POSIX 上它
- * 是文件名里的合法字符，拆开反而会把 `a\b.txt` 误判成两段。
+ * 「反斜杠」这件事在两个平台上是两种东西，两处都得跟着平台走：
+ *   • **分隔符**：Windows 上 `\` 是货真价实的分隔符，必须一起拆开查 `..`；POSIX 上它
+ *     是文件名里的合法字符，拆开反而会把 `a\b.txt` 误判成两段。
+ *   • **绝对路径的开头**：`\leading.txt` 在 Windows 上是根路径，在 POSIX 上就只是一个
+ *     开头有点怪的普通文件名——它能正常出现在 git status 里，无条件拒掉就等于面板上
+ *     看得见、却既不能预览也不能操作。
+ * 盘符（`C:/…`）两个平台都拒：POSIX 上叫 `C:` 的目录理论上合法，但真出现时白名单闸
+ * 也放不过去，宁可在这里就把这个歧义形状挡掉。
  */
 export function assertPathShape(paths: readonly string[]): string[] {
   if (!paths.length) throw new ScmOperationError("没有指定文件");
   for (const path of paths) {
     if (!path) throw new ScmOperationError("文件路径为空");
     if (path.includes("\0")) throw new ScmOperationError("文件路径含非法字符");
-    if (path.startsWith("/") || path.startsWith("\\") || /^[A-Za-z]:/.test(path)) {
+    if (path.startsWith("/") || (IS_WINDOWS && path.startsWith("\\")) || /^[A-Za-z]:/.test(path)) {
       throw new ScmOperationError(`路径必须是仓库相对路径：${path}`);
     }
     const segments = IS_WINDOWS ? path.split(/[\\/]/) : path.split("/");

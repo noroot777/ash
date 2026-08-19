@@ -11,7 +11,15 @@ import type { ScmChange, ScmDiffSource, ScmGroupId } from "../lib/api.ts";
 import { ConfirmDialog } from "../task-detail/ConfirmDialog.tsx";
 import { ROOT_SOURCE_LABEL } from "../files/fileModel.ts";
 import { ScmChangeGroup } from "./ScmChangeGroup.tsx";
-import { OPERATION_LABEL, diffSourceOf, pathsOf, useScmWorkspace, type ScmAction } from "./scmModel.ts";
+import {
+  OPERATION_LABEL,
+  diffSourceOf,
+  pathsOf,
+  useScmWorkspace,
+  type ScmAction,
+  type ScmActionKind,
+  type ScmPartialNotice,
+} from "./scmModel.ts";
 
 // 任务工作目录的「源代码管理」。
 //
@@ -26,6 +34,39 @@ import { OPERATION_LABEL, diffSourceOf, pathsOf, useScmWorkspace, type ScmAction
 //      写到一半的中间态提交进去。后端为此回 409 + needsForce，前端弹框说清后果再带 force。
 
 const DISCARD_HINT = "丢弃不可逆：restore 覆盖回原样、clean 直接删文件，都不进 reflog 也不进 stash。";
+
+const PARTIAL_VERB: Record<ScmActionKind, string> = {
+  stage: "暂存",
+  unstage: "取消暂存",
+  discard: "丢弃",
+  commit: "提交前的暂存",
+};
+
+/**
+ * 「上一次批量操作只做成了一半」的横幅。
+ *
+ * 路径多到要分批时 git 给不了事务，中途失败就是**前面那些已经真的生效了**——丢弃未跟踪
+ * 文件时它们已经从磁盘上没了。这种结果不能只靠一条飘过去的提示交代：横幅留在面板上，
+ * 直到用户自己按「知道了」，或者下一次写操作成功。
+ */
+function PartialBanner({ notice, onDismiss }: { notice: ScmPartialNotice; onDismiss: () => void }) {
+  const sample = notice.done.slice(0, 3).join("、");
+  return (
+    <p className="scm-banner is-danger">
+      <WarningCircle size={13} />
+      <span className="scm-banner__body">
+        <span>
+          上一次「{PARTIAL_VERB[notice.action]}」只做成了一部分：
+          <b>{notice.done.length} 个已经生效</b>
+          {notice.action === "discard" && "（文件已删除或已还原，找不回来）"}
+          ，{notice.pending.length} 个没动。下面的列表已经是实际结果。
+        </span>
+        <code>已生效：{sample}{notice.done.length > 3 ? ` 等 ${notice.done.length} 个` : ""}</code>
+      </span>
+      <button type="button" className="scm-banner__dismiss" onClick={onDismiss}>知道了</button>
+    </p>
+  );
+}
 
 interface PendingConfirm {
   action: ScmAction;
@@ -177,6 +218,7 @@ export function ScmInspector({
         onRefresh={() => void scm.refresh()}
       />
 
+      {scm.partial && <PartialBanner notice={scm.partial} onDismiss={scm.dismissPartial} />}
       {status.operation && (
         <p className="scm-banner is-warning">
           <ArrowsClockwise size={13} />

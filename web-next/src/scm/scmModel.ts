@@ -5,8 +5,10 @@ import {
   type ScmChange,
   type ScmChangeKind,
   type ScmDiffSource,
+  type ScmErrorBody,
   type ScmOverview,
   type ScmStatus,
+  type ScmWritePartial,
 } from "../lib/api.ts";
 
 // 工作区源代码管理面板的数据层。
@@ -106,6 +108,13 @@ function isNeedsForce(reason: unknown): boolean {
     && "needsForce" in reason.body && reason.body.needsForce === true;
 }
 
+/** 批量操作跑到一半失败的 409。同上，认 `partial` 这个标记而不是认状态码。 */
+function partialOf(reason: unknown): ScmErrorBody | null {
+  if (!(reason instanceof ApiError) || typeof reason.body !== "object" || reason.body === null) return null;
+  const body = reason.body as ScmErrorBody;
+  return body.partial ? body : null;
+}
+
 async function runOne(taskId: string, action: ScmAction, force: boolean) {
   switch (action.kind) {
     case "stage": {
@@ -131,11 +140,15 @@ async function runOne(taskId: string, action: ScmAction, force: boolean) {
   }
 }
 
+/** 部分生效的那次操作，留在面板上直到用户自己关掉——见 `run` 的注释。 */
+export type ScmPartialNotice = ScmWritePartial & { action: ScmActionKind };
+
 export function useScmWorkspace(taskId: string) {
   const [overview, setOverview] = useState<ScmOverview | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [partial, setPartial] = useState<ScmPartialNotice | null>(null);
   // 写操作进行中不轮询：中途插进来的 GET 会拿到写到一半的状态，把刚点掉的条目闪回来。
   const busyRef = useRef(false);
   busyRef.current = busy;
@@ -177,6 +190,10 @@ export function useScmWorkspace(taskId: string) {
    *
    * 被 running 门禁挡下时**不抛错**，而是回一个 `needsForce`：那不是失败，是「这一步
    * 需要用户明知故犯」，调用点据此弹确认框再带 force 重来。其它错误照常抛。
+   *
+   * 但「部分生效」这一种在抛出去之前先落一份 `partial`：一句 toast 飘过去就没了，而
+   * 已经被删掉的文件是找不回来的，用户得能在刷完屏之后还看得见「上次那下只做了一半、
+   * 是哪几个」。横幅由他自己关掉，不随下一次轮询消失。
    */
   const run = useCallback(async (action: ScmAction, force = false): Promise<ScmActionOutcome> => {
     setBusy(true);
@@ -187,16 +204,26 @@ export function useScmWorkspace(taskId: string) {
       setOverview((current) => (current ? { ...current, status: result.status } : current));
       if (action.kind === "commit") void refresh(true);
       setError(null);
+      setPartial(null);
       return { ok: true, message: result.message };
     } catch (reason) {
       if (isNeedsForce(reason)) return { ok: false, needsForce: true, error: messageOf(reason) };
+      const body = partialOf(reason);
+      if (body?.partial) {
+        setPartial({ ...body.partial, action: action.kind });
+        // 已经生效的那部分必须立刻反映到列表上，否则界面停在旧状态，用户会以为整次都没做。
+        if (body.status) setOverview((current) => (current ? { ...current, status: body.status! } : current));
+        else void refresh(true);
+      }
       throw reason;
     } finally {
       setBusy(false);
     }
   }, [refresh, taskId]);
 
-  return { overview, error, loading, busy, refresh, run };
+  const dismissPartial = useCallback(() => setPartial(null), []);
+
+  return { overview, error, loading, busy, partial, refresh, run, dismissPartial };
 }
 
 /**

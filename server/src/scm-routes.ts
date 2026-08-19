@@ -13,6 +13,7 @@ import {
   commitWorkspace,
   discardPaths,
   ScmOperationError,
+  ScmPartialError,
   stagePaths,
   unstagePaths,
 } from "./git-workspace-ops.js";
@@ -140,6 +141,16 @@ export function mountScmRoutes(api: Hono) {
         // 「按钮已响应、列表还是旧的」那一帧。
         return c.json({ ...(result as object), status: await readScmStatus(context.root.path) });
       } catch (error) {
+        // 跑到一半失败的批量操作要额外回两样东西：**已经生效的清单**（`git clean` 删掉
+        // 的文件找不回来，只回一句「失败」等于把它藏了），以及**刷新后的状态**——否则
+        // 面板停在旧列表上，用户看到的是「操作失败了，所以什么都没变」。
+        if (error instanceof ScmPartialError) {
+          return c.json({
+            error: errorMessage(error),
+            partial: { done: error.done, pending: error.pending },
+            status: await readScmStatus(context.root.path).catch(() => undefined),
+          }, error.status as 409);
+        }
         return c.json({ error: errorMessage(error) }, errorStatus(error) as 400);
       }
     });

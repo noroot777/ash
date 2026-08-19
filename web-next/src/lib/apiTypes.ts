@@ -225,6 +225,26 @@ export type ScmCommitResult = {
   status: ScmStatus;
 };
 
+/**
+ * 批量操作跑到一半失败时，409 响应体里额外带的东西。
+ *
+ * `done` 里的路径**已经生效了**——丢弃未跟踪文件时它们是真的被删掉了，没有 reflog 也没有
+ * stash。所以这份清单不是调试信息，是必须让用户看到的结果；面板据此在收到错误之后继续
+ * 显示「哪些已经动了、哪些还没动」，而不是只弹一句「失败」了事。
+ */
+export type ScmWritePartial = {
+  done: string[];
+  pending: string[];
+};
+
+export type ScmErrorBody = {
+  error?: string;
+  needsForce?: boolean;
+  partial?: ScmWritePartial;
+  /** 部分生效时一并回来的刷新后状态。 */
+  status?: ScmStatus;
+};
+
 export type AcceptTaskWarning = {
   reason: "temporary_cleanup_failed";
   message: string;
